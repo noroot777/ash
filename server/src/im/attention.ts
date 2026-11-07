@@ -64,6 +64,30 @@ export function acceptIdentityOf(generation: string): { resultVersion: string; h
 /** 卡片上带按钮的那几种（verify_failed 只是通知）。 */
 export const DECISION_KINDS: ReadonlySet<HumanTurnKind> = new Set(["question", "failed", "dispute", "duet_gate", "accept"]);
 
+/** 这张卡（种类 + 代次）管的那件事此刻还在：同一件事、同一代。 */
+export function sameTurn(view: TaskView | null | undefined, kind: string, generation: string | null): view is TaskView & { turn: Turn } {
+  return !!view?.turn && view.turn.kind === kind && view.turn.generation === generation;
+}
+
+/**
+ * 卡上那件事此刻还等着人按：还是同一件事、同一代，而且没有一件已经开跑的事在替他办（验收前置命令在跑，卡上正显示
+ * 着「在跑」）。点下去办成了不等于这件事了结了：中途那道关放行了、线却没能走过去（往下那一段没跑成、下一站验证轮数
+ * 用尽、出错了），系统还停在同一道关上等人，卡上就还得有能点的按钮。按钮的收尾和对账都按它判（actions.ts settle、
+ * reconcile.ts refresh / settleTask）；重启后的接管只看前半句（actions.ts recoverOne：那里卡上没有「在跑」要护着）。
+ */
+export function awaitsPress(view: TaskView | null | undefined, kind: string, generation: string | null): view is TaskView & { turn: Turn } {
+  return sameTurn(view, kind, generation) && !view.task.acceptGateRunning;
+}
+
+/** 一个任务此刻的样子：undefined = 这一下没读清（同 viewsOf 的约定，调用方什么都别动），null = 任务没了。 */
+export async function viewOf(taskId: string): Promise<TaskView | null | undefined> {
+  const views = await viewsOf([taskId]).catch((error) => {
+    console.warn(`[ash] 读不清任务现状（${taskId}）:`, (error as Error).message);
+    return null;
+  });
+  return views?.has(taskId) ? views.get(taskId) ?? null : undefined;
+}
+
 /** 最近一条工作区审查没通过（自由工作流）。待验收卡上据此要求二次确认。 */
 async function latestReviewFailed(taskId: string): Promise<boolean> {
   const run = (await db.select({ status: freeReviewRuns.status }).from(freeReviewRuns)

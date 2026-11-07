@@ -4,7 +4,8 @@
 //   · 快的动作（答复、重试、裁定、闸口）当场做完，结果卡随回应带回去；
 //   · 慢的（验收要合并、可能还要跑十几分钟的前置命令、建任务）先回一张「处理中」，做完再改卡
 //     （这一次改卡记 result 用途，额度见底也照发）。
-// 决策卡和 /new、/stop 的确认卡走同一条路：限时回执、异步收尾、没办成就把原卡改回去能再点。
+// 决策卡和 /new、/stop 的确认卡走同一条路：限时回执、异步收尾、没办成就把原卡改回去能再点。办成了、卡上那件事
+// 却还等着人按（放行之后线没能走过去），卡也不收：换个新信封重新能点（attention.ts awaitsPress，对账同一个判据）。
 // 校验顺序见 envelopes.ts 顶部；第④关（是不是还是那件事）在这里现算。
 //
 // 结局只在一个事务里落（commit）：信封的结局 + 卡上该显示的样子 + 待改卡标记（+ 没办成时的原因回复）
@@ -25,7 +26,7 @@ import { now } from "../util.js";
 import type { Actor } from "../auth/context.js";
 import { imActorFor, type ImPrincipal } from "../auth/im-actor.js";
 import { canSeeProject } from "../auth/visibility.js";
-import { acceptIdentityOf, versionOf, viewsOf, type TaskView } from "./attention.js";
+import { acceptIdentityOf, awaitsPress, DECISION_KINDS, sameTurn, versionOf, viewOf, viewsOf, type TaskView } from "./attention.js";
 import { taskPath, type AshClient, type AshResult } from "./ash-client.js";
 import { CHANNEL } from "./binding.js";
 import { acceptLabel, settledCard, taskLink } from "./cards.js";
@@ -56,7 +57,10 @@ export interface CallbackResponse {
   card?: { type: "raw"; data: Record<string, unknown> };
 }
 
-/** 一次动作的结局。final = 这张卡的事办完了（收起来，不许再被对账复活）。 */
+/**
+ * 一次动作的结局。final = 这一下的事办完了（不是还在办，比如验收前置命令在跑）。卡收不收不由它一个说了算：办完了、
+ * 卡上那件事却还等着人按，卡就留着、重新给出能点的按钮（settle）。
+ */
 export interface Outcome {
   ok: boolean;
   text: string;
@@ -224,9 +228,10 @@ export class CardActions {
   /**
    * 上一次运行里点下去、没办完的按钮（进程在执行途中退出）。不能一股脑放回去 —— 办成了的再点一遍
    * 就是重复执行；也不能一直挂着「已经处理过了」。按现状判：
-   *   · 决策卡：事情还停在点之前（同一件事、同一代）= 那一下没生效，放回去能再点；已经变了 = 办成了
-   *     （或别处处理了），记完、交给对账收卡。再点一遍也不会重复执行：答复带题目的那一次（代次）、
-   *     裁定带轮次、闸口带版本号，接口都在写入那一刻按条件判。
+   *   · 决策卡：同一件事、同一代还在（attention.ts sameTurn）= 那一下没生效，或者生效了这件事却没了结（放行之后
+   *     线没能走过去），放回去能再点；已经变了 = 办成了（或别处处理了），记完、交给对账收卡。再点一遍也不会
+   *     重复执行：答复带题目的那一次（代次）、裁定带轮次、闸口带版本号、放行带关口身份，接口都在写入那一刻按
+   *     条件判；放行再点一次就是从那一道重走（task-human-gate.ts）。
    *   · 确认卡：建任务 / 停任务办没办成从现状认不出来，记成中断，照实告诉用户。
    * 哪一支都把库里那份重新改上卡（可能正停在只随回执发过的「处理中」），和结局同一个事务。
    */
@@ -263,13 +268,12 @@ export class CardActions {
       });
       return;
     }
-    const views = envelope.taskId ? await viewsOf([envelope.taskId]) : null;
+    const view = envelope.taskId ? await viewOf(envelope.taskId) : null;
     // 看不清现状就先不结：信封留着占用，下一次 recover() 再判（同 viewsOf 的约定）。
-    if (views && !views.has(envelope.taskId!)) return;
-    const view = views?.get(envelope.taskId!) ?? null;
-    const untouched = !!view?.turn && view.turn.kind === envelope.action && view.turn.generation === envelope.generation;
+    if (view === undefined) return;
+    const open = sameTurn(view, envelope.action, envelope.generation);
     await commit(this.deps.reconciler, async (tx) => {
-      const concluded = untouched ? await releaseEnvelope(tx, claim, "interrupted") : await finishEnvelope(tx, claim, "interrupted");
+      const concluded = open ? await releaseEnvelope(tx, claim, "interrupted") : await finishEnvelope(tx, claim, "interrupted");
       if (concluded && row?.messageId) await restoreIn(tx, row.id);
     });
     if (envelope.taskId) this.deps.reconciler.mark(envelope.taskId);
@@ -405,15 +409,35 @@ export class CardActions {
     const tone = outcome.tone ?? "green";
     const full = renderCard(settledCard(header, said, { link }, tone));
     const brief = outcome.brief ? renderCard(settledCard(header, outcome.brief, { link }, tone)) : null;
-    const shown = !verdict.ok ? JSON.parse(NEUTRAL_CONTENT(verdict.why)) as Record<string, unknown> : verdict.titleOnly && brief ? brief : full;
-    const spare = verdict.ok && !verdict.titleOnly && brief ? JSON.stringify(brief) : null;
+    let card = verdict.ok && verdict.titleOnly && brief ? brief : full;
+    let spare = verdict.ok && !verdict.titleOnly && brief ? JSON.stringify(brief) : null;
+    let renderKey: string | null = null;
+    let renewed = false;
+    // 办成了不等于卡上那件事了结了（attention.ts awaitsPress）：按这一下之后的现状定卡怎么收。
+    //   · 这件事还等着人按（典型：中途那道关放行了，线却没能走过去）：卡不收，换一个新信封重渲染成能点的样子，
+    //     这一下的结局写在按钮上面 —— 修好原因再点一次就是从那一道重走；
+    //   · 这件事没了（换了下一步、验收落下了）：收起来，不许对账复活成原样；
+    //   · 读不清现状，或者还有事在替他办（验收前置命令在跑）：先显示这一下的结局、不收，由对账按现状定
+    //     （reconcile.ts refresh 到时换新信封，或者收起来）。
+    let resolved = outcome.final;
+    if ((DECISION_KINDS as ReadonlySet<string>).has(row.kind) && job.taskId) {
+      const view = await viewOf(job.taskId);
+      if (outcome.final && awaitsPress(view, row.kind, row.subject)) {
+        ({ card, renderKey } = await this.deps.reconciler.renewed(row, view, { full: said, brief: outcome.brief ?? said }));
+        spare = null;
+        renewed = true;
+      }
+      resolved = outcome.final && view !== undefined && !sameTurn(view, row.kind, row.subject);
+    }
+    const shown = !verdict.ok ? JSON.parse(NEUTRAL_CONTENT(verdict.why)) as Record<string, unknown> : card;
     const auditText = outcome.audit && job.taskId ? `经飞书（${click.actorName}）${outcome.audit}` : null;
     const committed = await commit(this.deps.reconciler, async (tx) => {
       if (!await finishEnvelope(tx, claim, said, auditText)) return false;
       const at = now();
       await tx.update(imOutbox).set({
         content: JSON.stringify(shown), brief: spare, updatedAt: at,
-        ...(outcome.final ? { state: "resolved", resolution: ACTED, resolvedAt: at } : {}),
+        ...(renderKey ? { renderKey } : {}),
+        ...(resolved ? { state: "resolved", resolution: ACTED, resolvedAt: at } : {}),
         ...(!row.messageId ? {}
           : via === "patch" ? { patchState: "result", nextAt: null }
             : { patchState: "acking", nextAt: new Date(Date.now() + ACK_GRACE_MS).toISOString() }),
@@ -426,7 +450,7 @@ export class CardActions {
     if (auditText && job.taskId) void audit(job.taskId, claim.id, auditText);
     if (job.taskId) this.deps.reconciler.mark(job.taskId);
     const line = !verdict.ok ? "已处理。" : verdict.titleOnly ? outcome.brief ?? "已处理。" : said;
-    return { toast: { type: "success", content: line.slice(0, 60) }, card: { type: "raw", data: shown } };
+    return { toast: { type: renewed ? "warning" : "success", content: line.slice(0, 60) }, card: { type: "raw", data: shown } };
   }
 }
 
@@ -458,7 +482,7 @@ function acceptOutcome(result: AshResult, pressed: string): Outcome {
  * 导出只为回归测试钉住只推标题那一版不带分支名、标签名（test-im-gates.ts）。
  */
 export function acceptedOutcome(data: Record<string, unknown>): Pick<Outcome, "text" | "tone" | "brief"> {
-  const tail = data.tail && typeof data.tail === "object" ? data.tail as { ok?: unknown; step?: unknown; reason?: unknown } : null;
+  const tail = data.tail && typeof data.tail === "object" ? data.tail as { ok?: unknown; step?: unknown; reason?: unknown; movedOn?: unknown } : null;
   const tailFailed = tail?.ok === false;
   const step = typeof tail?.step === "string" ? tail.step : null;
   const reason = typeof tail?.reason === "string" ? tail.reason : null;
@@ -474,10 +498,13 @@ export function acceptedOutcome(data: Record<string, unknown>): Pick<Outcome, "t
               : `已验收合并${target ? `（合入 ${target}）` : ""}。`;
   const done = said(typeof data.targetBranch === "string" ? data.targetBranch : null, typeof data.tag === "string" ? data.tag : null);
   const plain = said(null, null);
-  // 尾段原因是命令的原话：只推标题那一版不带。
-  const stuck = (withReason: boolean) => released
-    ? `但线没能接着往下走${step ? `：「${step}」没跑成${withReason && reason ? `（${reason}）` : ""}` : ""}，停在这一道上，详情在 ash 里。`
-    : `但「${step ?? "点头之后那一段"}」没跑成${withReason && reason ? `：${reason}` : ""}，详情在 ash 里。`;
+  // 尾段原因是命令的原话：只推标题那一版不带。放行之后停在这一道上，卡留着、按钮还能点（settle）：照实说再点一次是什么。
+  // 线已经离开这一道、下一站验证没开起来（movedOn）：那一站修好之后在那一站接着走，这张卡不用再点。
+  const why = (withReason: boolean) => (withReason && reason ? `（${reason}）` : "");
+  const stuck = (withReason: boolean) => !released ? `但「${step ?? "点头之后那一段"}」没跑成${withReason && reason ? `：${reason}` : ""}，详情在 ash 里。`
+    : tail?.movedOn === true ? `但下一站「${step ?? "验证"}」没开起来${why(withReason)}，线停在那一站，详情在 ash 里。`
+      : `但线没能接着往下走${step ? `：「${step}」没跑成${why(withReason)}` : ""}，停在这一道上，详情在 ash 里。`
+        + "修好之后再点一次「放行，继续下一站」，会从这一道重新往下走。";
   const warnings = Array.isArray(data.warnings) ? data.warnings.length : 0;
   const autoCommit = data.autoCommit && typeof data.autoCommit === "object" ? acceptanceAutoCommitMessage(data.autoCommit as AcceptanceAutoCommitOutcome) : "";
   const notes = [

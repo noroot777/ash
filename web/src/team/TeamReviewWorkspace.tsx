@@ -256,7 +256,9 @@ export function AcceptanceControls({
       notify((result.kind === "gate_released"
         // 放行之后线没能走过去，服务端会带回 tail.ok=false：照实说停住了，别说「继续往下走」。
         ? result.tail && !result.tail.ok
-          ? `已放行，但线没能接着往下走${result.tail.step ? `：「${result.tail.step}」没跑过` : ""}，停在这一道上，详情见任务时间线`
+          ? result.tail.movedOn
+            ? `已放行，但下一站「${result.tail.step ?? "验证"}」没开起来，线停在那一站，详情见任务时间线`
+            : `已放行，但线没能接着往下走${result.tail.step ? `：「${result.tail.step}」没跑过` : ""}，停在这一道上，详情见任务时间线`
           : "已放行，这条线继续往下走"
         : result.tail && !result.tail.ok
           ? `已合并，但「${result.tail.step ?? "点头之后那一段"}」没跑过，详情见任务时间线`

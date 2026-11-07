@@ -25,7 +25,7 @@ import { imActions, imOutbox } from "../db/schema-im.js";
 import { tasks } from "../db/schema.js";
 import { openDisputeTargets } from "../free-review-dispute.js";
 import { now } from "../util.js";
-import { acceptIdentityOf, DECISION_KINDS, viewsOf, withTeamLeads, type TaskView, type Turn } from "./attention.js";
+import { acceptIdentityOf, awaitsPress, DECISION_KINDS, viewsOf, withTeamLeads, type TaskView, type Turn } from "./attention.js";
 import { acceptedLabel, KIND_LABEL, settledCard, summaryCard, taskLink, turnCard } from "./cards.js";
 import { createEnvelope } from "./envelopes.js";
 import { OutboxExits, summaryItems } from "./exits.js";
@@ -174,7 +174,10 @@ export class Reconciler {
     for (const dest of dests) {
       const existing = rows.find((row) => row.receiveId === dest.receiveId && row.kind === turn.kind && row.subject === turn.generation);
       if (!existing) out.push({ view: view as Creation["view"], dest });
-      else if (existing.state === "resolved" && existing.resolution !== ACTED) await this.revive(existing, view as Creation["view"], dest, base, titleOnly);
+      // 点过收起来的（ACTED）不复活成原样，除非这件事还等着人按（awaitsPress）：那样收起来的卡上就再也没有能点的按钮了。
+      else if (existing.state === "resolved" && (existing.resolution !== ACTED || awaitsPress(view, existing.kind, existing.subject))) {
+        await this.revive(existing, view as Creation["view"], dest, base, titleOnly);
+      }
     }
     return out;
   }
@@ -219,19 +222,27 @@ export class Reconciler {
     return scopeFor(this.appId, dest, { kind: "task", taskId: view.task.id });
   }
 
-  /** 还是同一件事、同一个收件人：渲染输入变了就原地重渲染（信封沿用，按钮照样有效）。 */
+  /**
+   * 还是同一件事、同一个收件人：渲染输入变了就原地重渲染（信封沿用，按钮照样有效）。按钮已经用掉、那一下也办完了，
+   * 这件事却还等着人按（awaitsPress）：换个新信封重渲染，不让卡停在一张没有能点按钮的结果卡上。
+   */
   private async refresh(row: OutboxRow, view: Creation["view"], dest: Destination, base: string | null, titleOnly: string[]): Promise<void> {
-    if (row.renderKey === renderKeyOf(view, dest, base, titleOnly)) return;
     let envelope = "";
+    let renew = false;
     if (DECISION_KINDS.has(view.turn.kind)) {
-      const latest = (await db.select({ id: imActions.id, usedAt: imActions.usedAt }).from(imActions)
+      const latest = (await db.select({ id: imActions.id, usedAt: imActions.usedAt, result: imActions.result }).from(imActions)
         .where(and(eq(imActions.outboxId, row.id), eq(imActions.action, view.turn.kind)))
         .orderBy(desc(imActions.createdAt)).limit(1)).at(0);
-      // 按钮已经点下去了（正在办，或者卡上正显示着办的结果）：卡面归那一下管，不拿原样盖掉它。
-      if (latest?.usedAt) return;
-      envelope = latest?.id ?? await this.envelopeFor(row.id, view, dest);
+      if (latest?.usedAt) {
+        // 那一下还在办（占着、还没结局），或者办完了、还有事在替他办（验收前置命令在跑，卡上正显示着）：卡面归那一下管。
+        if (latest.result === null || !awaitsPress(view, row.kind, row.subject)) return;
+        renew = true;
+      } else envelope = latest?.id ?? "";
     }
-    const { content, renderKey } = await this.render(view, dest, envelope, base, titleOnly);
+    if (!renew && row.renderKey === renderKeyOf(view, dest, base, titleOnly)) return;
+    if (DECISION_KINDS.has(view.turn.kind) && !envelope) envelope = await this.envelopeFor(row.id, view, dest);
+    const { content, renderKey } = await this.render(view, dest, envelope, base, titleOnly,
+      renew ? "上一次点下去的那件事办完了，这件事还等着你：可以再点一次，经过在 ash 里。" : undefined);
     await db.update(imOutbox).set({
       content,
       renderKey,
@@ -254,13 +265,28 @@ export class Reconciler {
     return createEnvelope({ outboxId: rowId, taskId: view.task.id, action: turn.kind, payload, recipientOpenId: dest.recipientOpenId, generation: turn.generation });
   }
 
+  /**
+   * 卡上那件事还等着人按，这张卡上的按钮却已经用掉了（按钮回调办成了、事情没了结，actions.ts settle）：换一个新信封、
+   * 按现状重渲染成能点的样子，lastPress 是那一下的结局（只推标题的项目给不带原话的那一句）。只算不写：调用方把它和
+   * 那一下的结局放进同一个事务。
+   */
+  async renewed(row: OutboxRow, view: Creation["view"], lastPress: { full: string; brief: string }): Promise<{ card: Record<string, unknown>; renderKey: string }> {
+    const options = await readOptions();
+    const dest: Destination = { receiveType: row.receiveType as Destination["receiveType"], receiveId: row.receiveId, recipientOpenId: row.recipientOpenId };
+    const titleOnly = options.titleOnlyProjectIds.includes(view.task.projectId);
+    const envelope = await this.envelopeFor(row.id, view, dest);
+    const { content, renderKey } = await this.render(view, dest, envelope, options.publicBaseUrl, options.titleOnlyProjectIds,
+      titleOnly ? lastPress.brief : lastPress.full);
+    return { card: JSON.parse(content) as Record<string, unknown>, renderKey };
+  }
+
   private async render(
-    view: Creation["view"], dest: Destination, envelope: string, base: string | null, titleOnly: string[],
+    view: Creation["view"], dest: Destination, envelope: string, base: string | null, titleOnly: string[], lastPress?: string,
   ): Promise<{ content: string; renderKey: string }> {
     const ctx = { link: taskLink(base, view), titleOnly: titleOnly.includes(view.task.projectId) };
     const extras = await extrasFor(view);
     return {
-      content: JSON.stringify(renderCard(turnCard(view, view.turn, ctx, envelope, extras))),
+      content: JSON.stringify(renderCard(turnCard(view, view.turn, ctx, envelope, { ...extras, ...(lastPress ? { lastPress } : {}) }))),
       // 补充内容这一下没读到：指纹故意对不上，下一次对账重读、读到了就改卡（不然这张缺内容的卡一直挂着）。
       renderKey: `${renderKeyOf(view, dest, base, titleOnly)}${extras.unread ? "|extras-unread" : ""}`,
     };

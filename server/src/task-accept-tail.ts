@@ -19,6 +19,8 @@ export type AcceptTail = {
   /** 卡在哪一站（用中文站名，直接能显示） */
   step?: string;
   reason?: string;
+  /** 放行之后线已经离开了这一道，卡在后面那一站上（那一站验证没开起来）；没有 = 还停在这一道上 */
+  movedOn?: boolean;
 };
 
 export async function finishAcceptedTail(result: AcceptSuccess, by: AcceptBy, opts: WorkflowAdvanceOptions,
@@ -52,7 +54,8 @@ export function hasAcceptedTail(task: typeof tasks.$inferSelect): boolean {
 // 线上真画了「合并并清理」就该由它自己走到那一站时执行。
 //
 // 走完游标还停在这一道上 = 线没能走过去（这一段没跑成、下一站验证轮数用尽、出错了）：返回 ok:false 如实带回去，
-// 别让点放行的那一端以为线在往下走（飞书的结果卡、网页的提示都读它）。再放一次就从这一道重走。
+// 别让点放行的那一端以为线在往下走（飞书的结果卡、网页的提示都读它）。再放一次就从这一道重走。游标挪到了下一站
+// 验证、那一轮却没开起来，也是没走通：ok:false + movedOn，那一站修好之后在那一站接着走，不是再放一次。
 export async function releaseGate(taskId: string, opts: WorkflowAdvanceOptions): Promise<AcceptTail | null> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return null;
@@ -66,11 +69,13 @@ export async function releaseGate(taskId: string, opts: WorkflowAdvanceOptions):
   // 「在等一件已经开跑的事」不是没走过去，那件事完了会自己接着走（SegmentResult.halted）。
   if (stuck?.halted) return null;
   const after = (await db.select({ workflowAt: tasks.workflowAt }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (after?.workflowAt !== task.workflowAt) return null;
+  const movedOn = after?.workflowAt !== task.workflowAt;
+  if (movedOn && !stuck) return null;
   return {
     ok: false,
     ...(stuck?.failed ? { step: STEP_LABELS[stuck.failed.kind] } : {}),
     ...(stuck?.reason ? { reason: stuck.reason } : {}),
+    ...(movedOn ? { movedOn } : {}),
   };
 }
 

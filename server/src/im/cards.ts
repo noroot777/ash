@@ -22,6 +22,11 @@ export interface CardExtras {
   conclusions?: { a: string | null; b: string | null; consensus: boolean } | null;
   /** 上面这两样这一下没读到（不是本来就没有）：卡上说一句，对账过一会儿重读、读到了改卡（reconcile.ts render）。 */
   unread?: boolean;
+  /**
+   * 这张卡上一下点的结局：那一下办成了，这件事却还等着人按（attention.ts awaitsPress），卡换了新信封重新给出按钮，
+   * 这一句写在最上面，免得看着像什么都没发生（reconcile.ts renewed）。
+   */
+  lastPress?: string;
 }
 
 const EXTRAS_UNREAD = "（这张卡的补充内容这一下没读到，稍后自动补上；也可以回 ash 里看）";
@@ -101,7 +106,7 @@ function questionBlocks(turn: Extract<Turn, { kind: "question" }>, ctx: CardCont
 
 /** 一件事刚推出来时的那张卡。 */
 export function turnCard(view: TaskView, turn: Turn, ctx: CardContext, envelope: string, extras: CardExtras = {}): CardModel {
-  const blocks: CardBlock[] = [];
+  const blocks: CardBlock[] = extras.lastPress ? [{ type: "text", text: scrubText(extras.lastPress, 800) }] : [];
   switch (turn.kind) {
     case "question":
       blocks.push(...questionBlocks(turn, ctx, envelope));

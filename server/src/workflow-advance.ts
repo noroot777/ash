@@ -82,12 +82,16 @@ async function parentIsTeam(task: TaskRow): Promise<boolean> {
   return parent?.mode === "team";
 }
 
+/**
+ * 走到一站验证：true = 跳过这一站、接着往下走；undefined = 开了一轮，停在这一站等它；返回卡住的那一段 = 轮数用完了
+ * （游标没挪过去），或者想开一轮却没开起来（放行之后要如实告诉点的人，task-accept-tail.ts releaseGate）。
+ */
 async function atVerifyStation(
   task: TaskRow,
   def: WorkflowDef,
   station: WorkflowStep,
   opts: WorkflowAdvanceOptions,
-): Promise<boolean> {
+): Promise<true | SegmentResult | undefined> {
   const rounds = await stationRounds(task.id, station.id);
   const action = verifyStationAction({
     parentIsTeam: await parentIsTeam(task),
@@ -104,7 +108,7 @@ async function atVerifyStation(
       task.id,
       `这条线停在「${STEP_LABELS.verify}」这一站：自动复审轮数已经用完，等你处理后再手动派一轮。`,
     );
-    return false;
+    return { ok: false, failed: station, reason: "自动复审轮数已经用完" };
   }
   // 先挪游标再开验证：开那一步要读游标才知道该用哪一站写的执行器去验。
   await setWorkflowAt(task.id, station.id, opts.reviewAuthority);
@@ -112,16 +116,16 @@ async function atVerifyStation(
     ?? ((taskId: string) => import("./review.js").then((review) => review.startVerifyRound(taskId, {}, { reviewAuthority: opts.reviewAuthority })));
   // 这一步会被重放：验证收尾（review-finalization）没走完就每半分钟重试一遍整段。同一次尝试
   // （同一站、同一轮数、同一次结算、同一个原因）只说一句，靠 eventKey 去重。
-  await startVerifyRound(task.id).catch((error) => {
+  return startVerifyRound(task.id).then(() => undefined, async (error): Promise<SegmentResult> => {
     const reason = error instanceof Error ? error.message : String(error);
-    return appendTaskTimeline(
+    await appendTaskTimeline(
       task.id,
       `想在「${STEP_LABELS.verify}」这一站开一轮验证，但没开起来（${reason}）。`
         + (error instanceof AshMcpUnreachable ? "线停在这一站：把 ash MCP 接好之后点「再验一轮」，会从这一站接着走。" : ""),
       { eventKey: `verify-start-failed:${station.id}:${rounds}:${task.endedAt ?? ""}:${reason}` },
     );
+    return { ok: false, failed: station, reason };
   });
-  return false;
 }
 
 /**
@@ -158,7 +162,8 @@ export async function advanceWorkflowFrom(
       return;
     }
     if (next.kind === "verify") {
-      if (!(await atVerifyStation(task, def, next, opts))) return;
+      const verify = await atVerifyStation(task, def, next, opts);
+      if (verify !== true) return verify;
       // 跳过这一站：游标照样挪过去，免得下一次事件落回来又从头判一遍。
       await setWorkflowAt(task.id, next.id, opts.reviewAuthority);
       from = next.id;

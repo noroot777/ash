@@ -13,7 +13,12 @@
 // ⑧ 先验证、再点头：验证还在跑时发的卡走到关口原地换成放行的样子、不另推；放行进了下一站验证是新的一段、新卡，
 //    旧卡收成「这一关已经放行过了」、不会被翻回来；走到下一道关又是原地换。
 // ⑨ 验收结果的说法：只推标题那一版不带分支名、标签名、尾段原话；「合并后不提交」事后提交了就说合并了；
-// ⑩ 放行之后往下走那一段没跑成：结果卡照实说线停住了、不说「接着往下走」，网页那一端拿到的响应也带着停住了。
+// ⑩ 放行之后往下走那一段没跑成：结果卡照实说线停住了、不说「接着往下走」，网页那一端拿到的响应也带着停住了；
+//    这件事还等着人按，卡不收、换了新信封，对账也不收它；原因修好之后再点同一张卡，线从这一道走过去；
+// ⑪ 对账、重启接管同一个判据（im/attention.ts awaitsPress）：卡上显示着上一下的结局、还有验收前置命令在替他跑，
+//    不动；跑完了这件事还等着人按，换新信封重新能点；点过收起来的卡这件事还等着人按就复活；重启前占着没结局的信封，
+//    同一件事还在就放回去；
+// ⑫ 放行之后线挪到了下一站验证、那一轮却没开起来：照实说没开起来、停在那一站，不说「接着往下走」，也不叫人再放一次。
 // 接力导入一律新领身份，钉在 test-handoff-local.ts。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -30,7 +35,12 @@ let failure: unknown = null;
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, tasks } = await import("../src/db/schema.js");
-  const { imBindings, imOutbox } = await import("../src/db/schema-im.js");
+  const { imActions, imBindings, imOutbox } = await import("../src/db/schema-im.js");
+  const { acceptGateRuns } = await import("../src/db/schema-accept-gate.js");
+  const { releaseGate } = await import("../src/task-accept-tail.js");
+  const { ACTED } = await import("../src/im/reconcile.js");
+  const { cardHeaderOf } = await import("../src/im/outbox.js");
+  const { renderCard } = await import("../src/im/feishu/cards.js");
   const { and, asc, eq } = await import("drizzle-orm");
   const { api } = await import("../src/routes.js");
   const { mountTaskAcceptanceRoutes } = await import("../src/task-accept-routes.js");
@@ -41,7 +51,7 @@ try {
   const { resultVersionOf } = await import("../src/task-result-version.js");
   const { parseChoices } = await import("../src/accept-gate-handoff.js");
   const { acceptIdentityOf, viewsOf } = await import("../src/im/attention.js");
-  const { acceptedLabel, turnCard } = await import("../src/im/cards.js");
+  const { acceptedLabel, settledCard, turnCard } = await import("../src/im/cards.js");
   const { acceptedOutcome } = await import("../src/im/actions.js");
   const { patchOptions } = await import("../src/im/meta.js");
   const { makeStep } = await import("@ash/shared/workflow");
@@ -299,10 +309,11 @@ try {
 
   // ── ⑩ 放行之后往下走那一段没跑成 ────────────────────────────────────────
   {
-    const deploy = { ...makeStep("command", "deploy"), p: { cmd: "echo boom-deploy >&2; exit 3", where: "workspace" } };
-    const line = JSON.stringify({ workspace: "shared", steps: [
-      makeStep("run", "run"), makeStep("human", "first"), deploy, makeStep("human", "second"), makeStep("accept", "accept"),
+    const lineWith = (cmd: string) => JSON.stringify({ workspace: "shared", steps: [
+      makeStep("run", "run"), makeStep("human", "first"), { ...makeStep("command", "deploy"), p: { cmd, where: "workspace" } },
+      makeStep("human", "second"), makeStep("accept", "accept"),
     ] });
+    const line = lineWith("echo boom-deploy >&2; exit 3");
     await db.insert(tasks).values({
       id: "g10", projectId: "p1", title: "关口 g10", body: "", status: "done", useWorktree: false, workflow: line, workflowAt: "run",
       endedAt: at, createdAt: at, updatedAt: at,
@@ -314,11 +325,111 @@ try {
     const pressed = await im.click(OWNER, acceptButton(card!).value!);
     const said = textOf(pressed.card?.data);
     assert.match(said, /已放行这一关，但线没能接着往下走：「跑一条命令」没跑成（boom-deploy/, said);
+    assert.match(said, /修好之后再点一次「放行，继续下一站」/, "照实说再点一次是什么");
     assert.doesNotMatch(said, /这条线接着往下走/);
+    assert.equal(pressed.toast?.type, "warning");
     assert.equal((await row("g10")).workflowAt, "first", "确实停在这一道上");
+    // 放行办成了，这件事却还等着人按：卡不收，换了新信封，按钮还能点。
+    const again = buttonsOf(pressed.card?.data).find((button) => button.value?.op === "accept");
+    assert.equal(again?.text, "放行，继续下一站", `卡上还有能点的放行：${JSON.stringify(pressed)}`);
+    assert.notEqual(again!.value!.e, acceptButton(card!).value!.e, "换了新信封");
+    let kept = await cards("g10");
+    assert.equal(kept.length, 1);
+    assert.notEqual(kept[0]!.state, "resolved", "卡没收起来");
+    assert.equal(kept[0]!.content, JSON.stringify(pressed.card!.data), "库里那份就是带回去的那张");
+    assert.match((await im.click(OWNER, acceptButton(card!).value!)).toast!.content, /已经处理过了/, "点过的那个信封照旧算用过了");
+
+    // 对账按同一个判据：不收、不另推，停住了那一句也还在。
+    fake.reset();
+    await im.reconciler.reconcile(["g10"]);
+    await im.settle();
+    kept = await cards("g10");
+    assert.equal(kept.length, 1);
+    assert.notEqual(kept[0]!.state, "resolved");
+    assert.match(kept[0]!.content, /没能接着往下走/);
+    assert.equal(acceptButton(kept[0]!).value!.e, again!.value!.e, "按钮还是那个新信封");
+    assert.equal(fake.sends().length, 0, "不另推");
+
     const web = await acceptTask("g10");
     assert.equal(web.accepted && web.kind, "gate_released", "网页那一端照样能重放");
     assert.equal(web.accepted && web.tail?.ok, false, "响应带回停住了");
+    assert.ok(web.accepted && !web.tail?.movedOn, "还停在这一道上");
+
+    // 原因修好了（命令改成能过），再点同一张卡：从这一道重新往下走，这张卡这才收起来。
+    await db.update(tasks).set({ workflow: lineWith("echo deploy-ok") }).where(eq(tasks.id, "g10"));
+    const fixed = await im.click(OWNER, acceptButton((await cards("g10"))[0]!).value!);
+    assert.match(textOf(fixed.card?.data), /已放行这一关，这条线接着往下走/, JSON.stringify(fixed));
+    assert.equal((await row("g10")).workflowAt, "second", "这一次走过去了");
+    const closed = (await cards("g10")).find((item) => item.id === card!.id)!;
+    assert.equal(closed.state, "resolved");
+    assert.equal(closed.resolution, ACTED);
+  }
+
+  // ── ⑪ 对账、重启接管同一个判据 ──────────────────────────────────────────
+  {
+    await seed("g11", ["first", "second"]);
+    const [card] = await cards("g11");
+    const envelope = acceptButton(card!).value!.e as string;
+    // 一下点击办完了、卡上显示着它的结局（没有按钮），验收前置命令还在替他跑：accept_gate_running 留下的样子。
+    const result = JSON.stringify(renderCard(settledCard(cardHeaderOf(card!.content), "验收前置命令在跑。", { link: null }, "wathet")));
+    await db.update(imActions).set({ usedAt: at, claimedBy: "gone:1", result: "验收前置命令在跑。" }).where(eq(imActions.id, envelope));
+    await db.update(imOutbox).set({ content: result }).where(eq(imOutbox.id, card!.id));
+    await db.insert(acceptGateRuns).values({
+      id: "run-g11", taskId: "g11", projectId: "p1", command: "true", cwd: stage, status: "running", logPath: join(stage, "g11.log"), startedAt: at,
+    } as never);
+    await im.reconciler.reconcile(["g11"]);
+    await im.settle();
+    let now = (await cards("g11"))[0]!;
+    assert.equal(now.content, result, "还在替他跑：卡面归那一下管");
+
+    // 跑完了，这件事却还等着人按（比如没能交回任务）：换新信封，按钮又能点了。
+    await db.update(acceptGateRuns).set({ status: "failed" }).where(eq(acceptGateRuns.id, "run-g11"));
+    await im.reconciler.reconcile(["g11"]);
+    await im.settle();
+    now = (await cards("g11"))[0]!;
+    assert.notEqual(now.state, "resolved");
+    assert.notEqual(acceptButton(now)?.value?.e ?? envelope, envelope, `换了新信封：${now.content}`);
+    assert.match(now.content, /上一次点下去的那件事办完了/);
+    await db.delete(acceptGateRuns).where(eq(acceptGateRuns.id, "run-g11"));
+
+    // 点过收起来的卡（ACTED），这件事还等着人按：对账复活它，不让它停在一张没有按钮的卡上。
+    await db.update(imOutbox).set({ state: "resolved", resolution: ACTED, content: result }).where(eq(imOutbox.id, now.id));
+    await im.reconciler.reconcile(["g11"]);
+    await im.settle();
+    now = (await cards("g11"))[0]!;
+    assert.notEqual(now.state, "resolved", "复活了");
+    assert.ok(acceptButton(now), "按钮回来了");
+
+    // 重启接管：上一次运行占着、没结局的信封，同一件事还在就放回去。
+    const live = acceptButton(now).value!.e as string;
+    await db.update(imActions).set({ usedAt: at, claimedBy: "gone:2", result: null }).where(eq(imActions.id, live));
+    assert.equal(await im.actions.recover(), 1);
+    assert.equal((await db.select().from(imActions).where(eq(imActions.id, live))).at(0)!.usedAt, null, "放回去了");
+    const pressed = await im.click(OWNER, acceptButton(now).value!);
+    assert.match(textOf(pressed.card?.data), /已放行这一关，这条线接着往下走/, JSON.stringify(pressed));
+    assert.equal((await row("g11")).workflowAt, "second");
+  }
+
+  // ── ⑫ 放行之后下一站验证没开起来 ────────────────────────────────────────
+  {
+    const line = JSON.stringify({ workspace: "shared", steps: [
+      makeStep("run", "run"), makeStep("human", "first"), makeStep("verify", "v2"), makeStep("human", "second"), makeStep("accept", "accept"),
+    ] });
+    await db.insert(tasks).values({
+      id: "g12", projectId: "p1", title: "关口 g12", body: "", status: "done", useWorktree: false, workflow: line, workflowAt: "run",
+      endedAt: at, createdAt: at, updatedAt: at,
+    } as never);
+    await advanceWorkflowFrom(await row("g12"), taskWorkflowDef(line), "run");
+    assert.equal((await row("g12")).workflowAt, "first");
+    await releaseHumanGate(await row("g12"), taskWorkflowDef(line), null);
+    const offline = { startVerifyRound: async () => { throw new Error("verifier-offline"); } };
+    const tail = await releaseGate("g12", offline);
+    assert.deepEqual(tail, { ok: false, step: "自动验证", reason: "verifier-offline", movedOn: true }, JSON.stringify(tail));
+    assert.equal((await row("g12")).workflowAt, "v2", "游标挪到了那一站");
+    const told = acceptedOutcome({ kind: "gate_released", tail });
+    assert.match(told.text!, /已放行这一关，但下一站「自动验证」没开起来（verifier-offline），线停在那一站/, told.text);
+    assert.doesNotMatch(told.text!, /接着往下走|再点一次/);
+    assert.ok(told.brief && !told.brief.includes("verifier-offline"), "只推标题不带原话");
   }
 
   im.reconciler.stop();
