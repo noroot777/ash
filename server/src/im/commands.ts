@@ -11,6 +11,7 @@
 // 那一刻的绑定实例盖（scope.ts requestScope），不按办完时的现状。个人的东西（能看哪些项目）不进群；
 // 群里看任务、建任务都只落在这个群绑定的项目上。
 import type { Project } from "@ash/shared";
+import { provisionalTitle } from "@ash/shared/provisional-title";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { imOutbox } from "../db/schema-im.js";
@@ -67,7 +68,7 @@ export const HELP = [
   "单聊里直接说话 = 跟 ash 助手聊（它能帮你查任务、建任务）。",
   "/todo —— 还有哪些事等你；积压的卡逐张推过来",
   "/tasks —— 看某个项目的任务：先选项目，点任务直接打开；/tasks 项目名 直接看",
-  "/new —— 弹出建任务卡片：选项目、填标题和要求，提交就开跑；/new 标题（换行写要求）会替你先填好",
+  "/new —— 弹出建任务卡片：选项目、写要做什么，提交就开跑（标题由智能体起）；/new 后面直接跟一段话会替你先填好",
   "/stop —— 回复某张任务卡发送：停掉那个任务（会先让你确认）",
   "/retry —— 回复某张失败卡发送：重试",
   "/help —— 显示这段说明",
@@ -242,7 +243,7 @@ export class CommandRunner {
 
   /**
    * /new 回一张建任务表单：单聊列出他能看的项目（不替他选，只有一个时才选好），群里只有群绑定的那一个。
-   * /new 标题（换行写要求）把这两样先填进表单；要求比输入框长就不放进框里，随信封带着、提交时一并带上。
+   * /new 后面那段话先填进表单；比输入框长就不放进框里，随信封带着、提交时一并带上。
    */
   private async newForm(ctx: InboundContext, rest: string): Promise<void> {
     const inGroup = ctx.chatType !== "p2p";
@@ -252,26 +253,28 @@ export class CommandRunner {
     if (!list) return;
     const shown = inGroup ? list.filter((project) => project.id === fixed) : list.slice(0, FORM_LIMIT);
     if (!shown.length) return this.say(ctx, inGroup ? "你看不到这个群绑定的项目，建不了任务。" : "你还看不到任何项目。", SYSTEM_SCOPE);
-    const [first = "", ...others] = rest.split("\n");
-    const title = first.trim().slice(0, 120);
-    const body = others.join("\n").trim().slice(0, 20_000);
+    const body = rest.trim().slice(0, 20_000);
     const held = body.length > INPUT_MAX;
     const scope = shown.length === 1
       ? this.scoped(ctx, { kind: "project", projectId: shown[0]!.id })
       : this.scoped(ctx, { kind: "projects", projectIds: shown.map((project) => project.id) });
     return this.buttons(ctx, (envelope) => newTaskCard(shown.map((project) => project.name), inGroup ? 0 : list.length - shown.length, envelope,
-      { title, body: held ? "" : body, heldBody: held ? body.length : 0 }),
+      { body: held ? "" : body, heldBody: held ? body.length : 0 }),
     { command: "newform", projectIds: shown.map((project) => project.id), ...(held ? { body } : {}) }, scope, FORM_TTL_MS);
   }
 
-  /** 建任务表单提交了：选的是信封里记着的第几个项目（建任务那一下接口按他的身份核还看不看得见）。 */
+  /**
+   * 建任务表单提交了：选的是信封里记着的第几个项目（建任务那一下接口按他的身份核还看不看得见）。
+   * 首行当临时标题、首轮由智能体起正式标题，同网页上只写正文建任务；升级前发出的表单带着他填的标题，照用。
+   */
   submitted(principal: ImPrincipal, payload: Record<string, unknown>, form: { project: number; title: string; body: string }): Promise<Outcome> {
     const ids = Array.isArray(payload.projectIds) ? payload.projectIds as unknown[] : [];
     const projectId = ids[form.project];
     if (typeof projectId !== "string") return Promise.resolve({ ok: false, text: "认不出选的是哪个项目", final: false });
-    const title = form.title.slice(0, 120);
     const held = typeof payload.body === "string" ? payload.body : "";
-    return this.createAndRun(principal, projectId, title, (form.body || held || title).slice(0, 20_000));
+    const title = form.title.slice(0, 120);
+    const body = (form.body || held || title).slice(0, 20_000);
+    return this.createAndRun(principal, projectId, title || provisionalTitle(body), body, !title);
   }
 
   /** 确认卡上点了「确定」（/stop；/new 早先也走确认卡，升级前发出的那几张照样认）。 */
@@ -287,8 +290,8 @@ export class CommandRunner {
   }
 
   /** 建任务并开跑（确认卡的「确定」、表单的提交）。 */
-  private async createAndRun(principal: ImPrincipal, projectId: string, title: string, body: unknown): Promise<Outcome> {
-    const created = await this.deps.ash.post<{ id: string }>(principal, "/api/tasks", { projectId, title, body });
+  private async createAndRun(principal: ImPrincipal, projectId: string, title: string, body: unknown, autoTitle = false): Promise<Outcome> {
+    const created = await this.deps.ash.post<{ id: string }>(principal, "/api/tasks", { projectId, title, body, autoTitle });
     // 请求本身被拒（参数、权限）才放回信封让他再点；5xx、没调通的任务可能已经建出来了，再点一下就是第二个：
     // 按「办完了、结局不明」收起，跟 ash 重启打断确认卡同一个说法（actions.ts recoverOne）。
     if (!created.ok && failureOf(created) === "transient") {

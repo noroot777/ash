@@ -11,8 +11,8 @@
 // ③ 命令：/help；/tasks（只有一个项目就直接列，先后同网页侧栏，首屏 5 个、「再显示 5 个」，整行点开任务链接，
 //    子任务、归档的不列；卡能反复点，库里那份跟着换；卡上「在这里建任务」换成表单，从此翻看按钮作废；
 //    双击「在这里建任务」、慢的那一下在表单交了之后才回来，不盖掉结果卡、不再配表单信封）；
-//    /new（表单卡：选项目、填标题和要求，提交就建任务并开跑；/new 标题 换行写要求 替他先填好，太长的要求随信封
-//    带着；没填标题不建、表单还能再提交，提交过的不能再交）/stop（先确认，取消就不停）/todo；
+//    /new（表单卡：选项目、写要做什么，提交就建任务并开跑，首行当临时标题、首轮由智能体起标题；/new 后面那段话
+//    替他先填好，太长的随信封带着；什么都没写不建、表单还能再提交，提交过的不能再交；升级前发出的带标题的表单照用那个标题）/stop（先确认，取消就不停）/todo；
 //    不认识的消息类型回一句说明；
 // ④ 助手房间：单聊里直接说话 → 照最近一间助手房间的配置建一间「飞书」，投进去；回复按 reply_to
 //    对上、发回飞书（回在用户那条消息下面）；同一条飞书消息重复推送只投一次；
@@ -275,7 +275,7 @@ try {
     const form = await im.click(OWNER, here.value!);
     assert.match(JSON.stringify(form.card?.data), /"initial_option":"0"/, "只有这一个项目：选好了");
     const submitHere = buttonsOf(form.card?.data).find((button) => button.value?.op === "submit")!;
-    const madeHere = await im.click(OWNER, submitHere.value!, { project: "0", title: "卡上建的任务", body: "" }, "submit");
+    const madeHere = await im.click(OWNER, submitHere.value!, { project: "0", body: "卡上建的任务" }, "submit");
     assert.equal(madeHere.toast?.type, "success", JSON.stringify(madeHere));
     const hereTask = (await db.select().from(tasks).where(eq(tasks.title, "卡上建的任务"))).at(0);
     assert.equal(hereTask?.projectId, "p1");
@@ -301,7 +301,7 @@ try {
     await entered;
     const fast = await im.click(OWNER, racedNew.value!);
     const racedSubmit = buttonsOf(fast.card?.data).find((button) => button.value?.op === "submit")!;
-    assert.equal((await im.click(OWNER, racedSubmit.value!, { project: "0", title: "只建一次", body: "" }, "submit")).toast?.type, "success");
+    assert.equal((await im.click(OWNER, racedSubmit.value!, { project: "0", body: "只建一次" }, "submit")).toast?.type, "success");
     const settledCard = (await racedRow()).content;
     releaseSlow();
     const late = await slow;
@@ -315,30 +315,31 @@ try {
     assert.equal(onlyOnce.length, 1);
     await waitIdle(() => statusOf(onlyOnce[0]!.id));
 
-    // /new 标题（换行写要求）：替他填进表单，没点提交不建。
+    // /new 后面那段话：整段替他填进表单（不分标题），没点提交不建。
     const create = await im.say({ text: "/new 修个 bug\n登录页点了没反应" });
     await im.settle();
     const prefilled = contentOf(repliesTo(create)[0]!);
-    assert.match(JSON.stringify(prefilled), /"default_value":"修个 bug"/);
-    assert.match(JSON.stringify(prefilled), /"default_value":"登录页点了没反应"/);
+    assert.match(JSON.stringify(prefilled), /"default_value":"修个 bug\\n登录页点了没反应"/);
+    assert.doesNotMatch(JSON.stringify(prefilled), /"name":"title"/, "表单上没有标题框");
     assert.equal((await db.select().from(tasks).where(eq(tasks.title, "修个 bug"))).length, 0, "没提交不建任务");
     const submitFilled = buttonsOf(prefilled).find((button) => button.value?.op === "submit")!;
-    const created = await im.click(OWNER, submitFilled.value!, { project: "0", title: "修个 bug", body: "登录页点了没反应" }, "submit");
+    const created = await im.click(OWNER, submitFilled.value!, { project: "0", body: "修个 bug\n登录页点了没反应" }, "submit");
     assert.equal(created.toast?.type, "success", JSON.stringify(created));
     const newTask = (await db.select().from(tasks).where(eq(tasks.title, "修个 bug"))).at(0);
     assert.equal(newTask?.projectId, "p1");
-    assert.equal(newTask?.body, "登录页点了没反应");
+    assert.equal(newTask?.body, "修个 bug\n登录页点了没反应");
+    assert.equal(newTask?.autoTitle, true, "首行只是临时标题：首轮由智能体起标题");
     await waitIdle(() => statusOf(newTask!.id));
 
-    // 要求比输入框长：不放进框里，随信封带着，提交时一并带上。
+    // 比输入框长：不放进框里，随信封带着，提交时一并带上。
     const long = "很长的要求。".repeat(300);
-    const heldCommand = await im.say({ text: `/new 长要求\n${long}` });
+    const heldCommand = await im.say({ text: `/new ${long}` });
     await im.settle();
     const heldForm = contentOf(repliesTo(heldCommand)[0]!);
-    assert.match(textOf(heldForm), new RegExp(`要求（${long.length} 字）已收下`));
+    assert.match(textOf(heldForm), new RegExp(`已收下 ${long.length} 字`));
     const submitHeld = buttonsOf(heldForm).find((button) => button.value?.op === "submit")!;
-    assert.equal((await im.click(OWNER, submitHeld.value!, { project: "0", title: "长要求" }, "submit")).toast?.type, "success");
-    const heldTask = (await db.select().from(tasks).where(eq(tasks.title, "长要求"))).at(0);
+    assert.equal((await im.click(OWNER, submitHeld.value!, { project: "0" }, "submit")).toast?.type, "success");
+    const heldTask = (await db.select().from(tasks).where(eq(tasks.title, long.slice(0, 42)))).at(0);
     assert.equal(heldTask?.body, long);
     await waitIdle(() => statusOf(heldTask!.id));
 
@@ -347,16 +348,18 @@ try {
     const blankForm = contentOf(repliesTo(formCommand)[0]!);
     assert.match(textOf(blankForm), /飞书项目/);
     const submit = buttonsOf(blankForm).find((button) => button.value?.op === "submit")!;
-    const blank = await im.click(OWNER, submit.value!, { project: "0", title: " ", body: "" }, "submit");
-    assert.equal(blank.toast?.type, "warning", "没填标题不建");
+    const blank = await im.click(OWNER, submit.value!, { project: "0", body: " " }, "submit");
+    assert.equal(blank.toast?.type, "warning", "什么都没写不建");
+    // 升级前发出的表单还带着标题框：照用他填的标题，不让智能体改名。
     const submitted = await im.click(OWNER, submit.value!, { project: "0", title: "表单建的任务", body: "从卡片上填的要求" }, "submit");
     assert.equal(submitted.toast?.type, "success", JSON.stringify(submitted));
     assert.match(textOf(submitted.card?.data), /已建任务「表单建的任务」并开跑/);
     const formTask = (await db.select().from(tasks).where(eq(tasks.title, "表单建的任务"))).at(0);
     assert.equal(formTask?.projectId, "p1", "建在表单上选的项目");
     assert.equal(formTask?.body, "从卡片上填的要求");
+    assert.equal(formTask?.autoTitle, false);
     await waitIdle(() => statusOf(formTask!.id));
-    assert.match((await im.click(OWNER, submit.value!, { project: "0", title: "再交一次" }, "submit")).toast?.content ?? "", /已经处理过了/, "提交过的表单不能再交");
+    assert.match((await im.click(OWNER, submit.value!, { project: "0", body: "再交一次" }, "submit")).toast?.content ?? "", /已经处理过了/, "提交过的表单不能再交");
 
     const stopBare = await im.say({ text: "/stop" });
     const stopCard = await im.say({ text: "/stop", parentId: (await cardOf("tm"))?.messageId ?? (await db.select().from(imOutbox).where(eq(imOutbox.taskId, "tm"))).at(0)!.messageId! });
