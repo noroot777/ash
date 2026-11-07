@@ -7,6 +7,7 @@ import type { ReviewConclusion } from "@ash/shared";
 import { CodeBlock } from "./CodeBlock.tsx";
 import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./ImagePreview.tsx";
 import { splitReviewReport } from "./reviewReportSections.ts";
+import { isLocalFileHref } from "./fileLinkTarget.ts";
 import { CodeBlockScope, MarkdownCode, TaskFileLinkBase, useTaskFileHref } from "./TaskFileLink.tsx";
 import {
   insertIndexOf,
@@ -256,7 +257,8 @@ function MarkdownDocument({ text, resolveFile, layout, onReviewReport, onActionE
         // 报不出「哪个文件取不到」(连路径都没了,审查第 2 轮 F2 的失败分支)。img 的 src
         // 不会被当成可执行地址,分类与越界判定全在 markdownPolicy + 服务端那道门禁;链接
         // (href)仍走默认清理,那条才是 `javascript:` 的入口。
-        urlTransform={(url, key) => (key === "src" ? url : defaultUrlTransform(url))}
+        // 链接里的本机文件地址(`file://`、盘符)同样原样留着,见 fileLinkTarget 的 isLocalFileHref。
+        urlTransform={(url, key) => (key === "src" || isLocalFileHref(url) ? url : defaultUrlTransform(url))}
       >
         {text}
       </ReactMarkdown>

@@ -10,7 +10,7 @@
     "test:native-work": "npm -w @ash/server run test:native-work && tsx scripts/test-native-work-metadata.ts && tsx scripts/test-native-work-presentation.tsx && node scripts/test-native-work-dom.mjs",
     "//test:upstream-retry-placement": "上游重试这类过程提示排在执行过程里它发生的那一步下面，而不是会话结尾那一坨；落盘/直播/折叠/duet 四路一致。",
     "test:native-agent-segments": "node --experimental-strip-types scripts/test-native-agent-segments.mjs",
-    "test:file-link-target": "node --experimental-strip-types scripts/test-file-link-target.mjs",
+    "test:file-link-target": "node --experimental-strip-types scripts/test-file-link-target.mjs && node --experimental-strip-types scripts/test-task-file-locator.mjs",
     "test:upstream-retry-placement": "tsx scripts/test-upstream-retry-placement.tsx",
     "test:chat": "node scripts/test-chat-browser.mjs",
     "dev": "vite",

@@ -13,8 +13,12 @@ import { destinationFilePath, hasUrlScheme, isNetworkDestination } from "@ash/sh
 const LINE_SUFFIX = /(?::\d+(?::\d+)?(?:-\d+)?|#L\d+(?:C\d+)?(?:-L?\d+(?:C\d+)?)?)$/;
 /** 扩展名得字母开头：`v1.2`、`1.0.3` 不是文件。 */
 const EXTENSION = /\.[A-Za-z][\w-]{0,9}$/;
-/** 路径里不会出现、命令和代码里常见的字符。 */
-const NOT_PATH = /[\s`'"<>|*?{}$;,()=#!]/;
+/**
+ * 文件名里几乎不会出现、代码和 glob 里常见的字符。空格、括号都**不在**这里：
+ * `docs/release notes.md`、`docs/plan(final).md` 是真文件名，有没有这个文件由服务端答，
+ * 这里挡掉就是漏报；命令 `npm run build`、调用 `fileView.openFile()` 照样被下面的形状判据挡住。
+ */
+const NOT_PATH = /[\n`'"<>|*?{}$;,=]/;
 const DRIVE = /^[A-Za-z]:[\\/]/;
 /** ash 自己建的任务工作区：`<仓库>/.worktrees/<任务>/<相对路径>`。 */
 const WORKTREE = /(?:^|[/\\])\.worktrees[/\\]([^/\\]+)[/\\](.+)$/;
@@ -54,6 +58,16 @@ function fileUrlPath(raw: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * 这个链接目的地是本机文件（`file://…`、`C:\…`）——Markdown 的地址清理（react-markdown 的
+ * `defaultUrlTransform`）不认这两种协议，会把它们清成空串，于是 `linkFilePath` 收到的是空的，
+ * 认 `file://` 的那一支永远到不了（审查第 1 轮 F2）。它们放过去也执行不了任何东西：真正的
+ * 入口（`javascript:` 那一类）仍由默认清理挡着，放过去的地址还要经工作区 / 本机打开那道门禁。
+ */
+export function isLocalFileHref(url: string): boolean {
+  return /^file:\/\//i.test(url) || DRIVE.test(url);
 }
 
 /** markdown 链接的目的地指着工作区里哪条路径（相对的按 `baseDir` 解）。 */
