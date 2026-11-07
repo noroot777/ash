@@ -8,10 +8,10 @@
 //
 //   system     不含 ash 业务数据（绑定提示、用法说明、静态回执、接口报错）—— 给谁都能发，包括还没绑定的人；
 //   task       某个任务的内容 —— 任务还在，收件人此刻能看它所在的项目（群：群此刻绑着这个项目）；
-//   project    某个项目的内容（/new 的确认卡）；
-//   principal  只属于这个人的（他能看哪些项目、他的当前项目）—— 只发单聊；
+//   project    某个项目的内容（/new 的确认卡、/project 切换的回执）；
+//   projects   列了一串项目（/project 的清单）—— 只发单聊，列着的每一个他此刻都还看得见；
 //   room       聊天房间里智能体的回复 —— 房间还在、还归他、他还看得见；群聊房间还要群还绑着那个项目、
-//              这间还是他在这个群里的那一间；
+//              这间还是他在这个群里的那一间；回复下面列出的任务（taskIds）也逐个核他还看得见；
 //   digest     列了一串别的卡（汇总卡、/todo）—— 逐行按那几行自己的来源核。
 //   reply      回给发话人的、他自己这次操作的结局（接口报错、拒绝的原因）—— 话是接口以他的身份算出来的，可报错
 //              原文常带着项目名、命令、路径，所以出口照样核：还是请求进来那一刻的那个人（单聊的绑定 / 群的绑定
@@ -22,8 +22,14 @@
 // 「还是那个收件人」按绑定实例认：入队时记下收件去处（单聊的个人绑定 / 群绑定）的 boundAt，解绑重绑、
 // 换了人绑同一个飞书账号，boundAt 都会变（binding.ts confirmUserCode 每次重写）。群里由某个人发起的
 // 内容（他点出来的确认卡、他的群聊房间的回复）还要这个人的绑定也还是那一个、还看得见。
-// task 不认实例、只认此刻：任务的内容谁看得见项目谁就能看，换了绑定的人此刻能看就照发（决策卡的去处
+// 任务通知（task）不认实例、只认此刻：任务的内容谁看得见项目谁就能看，换了绑定的人此刻能看就照发（决策卡的去处
 // 本来就由对账按此刻的绑定算，recipients.ts）；其余几种是替某一个人做出来的东西，换了人就不给。
+//
+// 回给一次请求的东西（命令回执、确认卡、/todo 清单、房间回复、报错 —— request）一律按请求进来那一刻盖
+// （requestScope，Origin），连 task 也认那一刻的实例：活是替那一次绑定的那个人办的，办着的时候换绑给了
+// 另一个账号，此刻的绑定就是另一个人（审查第 2 轮实测：/project 取完列表时换绑，列表盖上新账号的实例照发）。
+// 只有给此刻订阅者的通知（决策卡、汇总卡，reconcile.ts）才按此刻的绑定盖（scopeFor）。正文里列着哪些
+// 资源也要记进来（projects、room 的 taskIds），出口逐个现核：只记「是谁」核不出列表里哪一项已经看不到了。
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { chatRooms, tasks } from "../db/schema.js";
@@ -45,13 +51,16 @@ export interface Origin { bound: string; by: Person }
 export type ScopeBody =
   | { kind: "task"; taskId: string }
   | { kind: "project"; projectId: string }
-  | { kind: "principal" }
-  | { kind: "room"; roomId: string; projectId: string | null }
+  | { kind: "projects"; projectIds: string[] }
+  | { kind: "room"; roomId: string; projectId: string | null; taskIds?: string[] }
   | { kind: "digest"; rowIds: string[] }
   | { kind: "reply"; projectId: string | null };
 
-/** bound = 入队时收件去处那一次绑定的 boundAt；null 只出现在旧版本入队、按 taskId 推出来的那种。 */
-export type OutboxScope = { kind: "system" } | (ScopeBody & { bound: string | null; by?: Person });
+/**
+ * bound = 入队时收件去处那一次绑定的 boundAt；null 只出现在旧版本入队、按 taskId 推出来的那种。
+ * request = 回给一次请求的（见顶部）：实例按请求进来那一刻认，核不过换成固定说明（exits.ts withhold）。
+ */
+export type OutboxScope = { kind: "system" } | (ScopeBody & { bound: string | null; by?: Person; request?: true });
 
 export const SYSTEM_SCOPE: OutboxScope = { kind: "system" };
 
@@ -60,7 +69,7 @@ export type Admission = { ok: true; titleOnly: boolean } | { ok: false; why: str
 const deny = (why: string): Admission => ({ ok: false, why });
 const pass = (titleOnly = false): Admission => ({ ok: true, titleOnly });
 
-/** 给一个收件去处盖上此刻的绑定实例。去处没有绑定时记空串 —— 出口一律不放行。 */
+/** 给一个收件去处盖上此刻的绑定实例（给此刻订阅者的通知用）。去处没有绑定时记空串 —— 出口一律不放行。 */
 export async function scopeFor(appId: string, dest: Destination, body: ScopeBody, by?: BindingRow | null): Promise<OutboxScope> {
   const bound = dest.receiveType === "chat_id"
     ? (await groupOf(appId, dest.receiveId))?.boundAt
@@ -89,6 +98,16 @@ export function originOfScope(scope: OutboxScope, openId: string): Origin {
   return { bound: scope.bound, by: scope.by ?? { openId, boundAt: scope.bound } };
 }
 
+/** 回给一次请求的东西：按请求进来那一刻的来源盖（见顶部），不按办完时的现状。 */
+export function requestScope(origin: Origin, body: ScopeBody): OutboxScope {
+  return { ...body, bound: origin.bound, by: origin.by, request: true };
+}
+
+/** 这一行是不是回给一次请求的（reply 天生是；旧版本入队的 reply 没记 request）。 */
+export function answersRequest(scope: OutboxScope | null): boolean {
+  return !!scope && scope.kind !== "system" && (scope.request === true || scope.kind === "reply");
+}
+
 /**
  * 回给发话人的那一句（reply）：授权按请求进来那一刻（origin）；项目也按那一刻 —— 调用方在办之前算好，办着的时候任务被删了，
  * 出口照样核他还看不看得见那个项目（办完再查就查不到项目，核不了，审查对抗复核实测：删任务 + 移出项目，报错原文照发）。
@@ -98,7 +117,7 @@ export async function replyScope(origin: Origin, about: { taskId?: string | null
   const projectId = about.projectId ?? (about.taskId
     ? (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, about.taskId))).at(0)?.projectId ?? null
     : null);
-  return { kind: "reply", projectId, bound: origin.bound, by: origin.by };
+  return requestScope(origin, { kind: "reply", projectId });
 }
 
 /** 行上记的授权来源。旧版本入队的行没有：上线通知 / 测试卡当 system，挂着任务的当 task，其余不认。 */
@@ -131,8 +150,13 @@ export async function admit(appId: string, row: OutboxRow, titleOnly: readonly s
     }
     case "project":
       return projectAdmission(viewer, scope.projectId, titleOnly);
-    case "principal":
-      return viewer.group ? deny("个人的信息不发到群里") : pass();
+    case "projects": {
+      if (viewer.group) return deny("个人的信息不发到群里");
+      for (const projectId of scope.projectIds) {
+        if (!(await projectAdmission(viewer, projectId, [])).ok) return deny("列出的某个项目已看不到了");
+      }
+      return pass();
+    }
     case "room":
       return roomAdmission(appId, viewer, scope);
     case "reply":
@@ -148,16 +172,19 @@ export async function admit(appId: string, row: OutboxRow, titleOnly: readonly s
       return pass();
     }
   }
+  return deny("认不出的授权来源");
 }
 
 async function viewerOf(appId: string, row: OutboxRow, scope: Exclude<OutboxScope, { kind: "system" }>): Promise<Viewer | { ok: false; why: string }> {
-  const instance = scope.kind === "task" ? null : scope.bound;
+  // 给此刻订阅者的任务通知不认实例（见顶部）；回给一次请求的、替某一个人做的都认那一次。
+  const loose = scope.kind === "task" && !scope.request;
+  const instance = loose ? null : scope.bound;
   if (row.receiveType === "chat_id") {
     const group = await groupOf(appId, row.receiveId);
     if (!group) return { ok: false, why: "群已解绑" };
     if (instance !== null && group.boundAt !== instance) return { ok: false, why: "群换过绑定" };
     if (!scope.by) return { group, actor: null, userKey: null };
-    const person = await personOf(appId, scope.by.openId, scope.kind === "task" ? null : scope.by.boundAt);
+    const person = await personOf(appId, scope.by.openId, loose ? null : scope.by.boundAt);
     return person ? { group, ...person } : { ok: false, why: "发起的人已解绑或换了绑定" };
   }
   const person = await personOf(appId, row.receiveId, instance);
@@ -177,13 +204,21 @@ async function projectAdmission(viewer: Viewer, projectId: string, titleOnly: re
   return pass(titleOnly.includes(projectId));
 }
 
-async function roomAdmission(appId: string, viewer: Viewer, scope: { roomId: string; projectId: string | null }): Promise<Admission> {
+async function roomAdmission(
+  appId: string, viewer: Viewer, scope: { roomId: string; projectId: string | null; taskIds?: string[] },
+): Promise<Admission> {
   if (!viewer.actor) return deny("没有发起人");
   const room = (await db.select().from(chatRooms).where(eq(chatRooms.id, scope.roomId))).at(0);
   if (!room || !await roomVisibleTo(room, viewer.actor)) return deny("房间已不在或看不到了");
   if (viewer.group) {
     if (viewer.group.projectId !== scope.projectId || room.projectId !== scope.projectId) return deny("群绑的已不是这个项目");
     if (await groupRoomOf(appId, viewer.group.chatId, viewer.userKey ?? "") !== scope.roomId) return deny("这间已不是他在这个群里的房间");
+  }
+  // 回复下面列着的任务（标题 + 链接）：助手房间不限项目，列出来的可能在别的项目里。
+  for (const taskId of scope.taskIds ?? []) {
+    const task = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (!task) return deny("列出的任务已删除");
+    if (!(await projectAdmission(viewer, task.projectId, [])).ok) return deny("列出的某个任务已看不到了");
   }
   return pass();
 }

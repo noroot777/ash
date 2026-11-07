@@ -525,10 +525,11 @@ try {
     assert.equal(await groupRoomOf(APP, "oc_race", ""), groupRoom, "群里的映射也原样");
     assert.equal(serial, created + 1, "读不到的那两次都没另建房间");
 
-    // 等回复时读不到房间：下一圈再看；房间真没了才说没拿到回复。
+    // 等回复时读不到房间：下一圈再看；房间真没了才说没拿到回复（来源照投进房间那一刻盖：没有来源的旧行出口不放行）。
     await db.insert(imInbound).values({
       id: "msg:om_wait", channel: "feishu", appId: APP, openId: OWNER, chatId: "oc_p2p", chatType: "p2p", kind: "assistant",
       roomId: "gone-room", detail: "im-x", state: "sent", createdAt: at, updatedAt: new Date().toISOString(),
+      scope: JSON.stringify({ kind: "room", roomId: "gone-room", projectId: null, bound: (await bindingOf(APP, OWNER))!.boundAt, request: true }),
     } as never);
     fake.reset();
     await relay.poll();

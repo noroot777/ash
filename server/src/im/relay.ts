@@ -7,8 +7,9 @@
 //
 // 智能体回复对上用户那条消息靠 chat_messages.reply_to（同一事务里插入的那条回复）。
 //
-// 房间里的回复带着 ash 里的东西：投进房间那一刻按房间盖下授权来源（scope.ts room），记在 im_inbound 上，
-// 回复发回飞书时出口按它现核（房间还在、还归他、群还绑着那个项目）。投不进去、拿不到回复、等超时这几句
+// 房间里的回复带着 ash 里的东西：按这句话进来那一刻的来源盖下房间的授权（scope.ts room、requestScope），记在
+// im_inbound 上，回复发回飞书时出口按它现核（还是那一次绑定、房间还在、还归他、群还绑着那个项目，回复下面
+// 列出的任务他也都还看得见）。投不进去、拿不到回复、等超时这几句
 // 说明不带房间里的东西，按他自己这次操作的结局（reply）发 —— 房间没了正是它们要说的事；可报错原文里
 // 可能有项目里的字，照样按那一刻的绑定实例、他此刻还看不看得见项目核（scope.ts reply）。
 import { createHash } from "node:crypto";
@@ -24,10 +25,10 @@ import { failureOf, type AshClient, type AshResult } from "./ash-client.js";
 import { bindingOf, CHANNEL, claimAssistantRoom } from "./binding.js";
 import { taskLink } from "./cards.js";
 import type { CommandRunner, InboundContext } from "./commands.js";
-import { claimGroupRoom, groupOf, groupRoomOf, type GroupRow } from "./groups.js";
+import { claimGroupRoom, groupRoomOf, type GroupRow } from "./groups.js";
 import { readOptions } from "./meta.js";
 import type { Destination } from "./outbox.js";
-import { originOfScope, scopeFor, type OutboxScope } from "./scope.js";
+import { originOfScope, type OutboxScope } from "./scope.js";
 import { scrubText, scrubTitle } from "./scrub.js";
 
 const POLL_MS = 2_000;
@@ -145,7 +146,7 @@ export class RoomRelay {
     ctx: InboundContext, inboundId: string, roomId: string, text: string, paths: string[], mentionName: string | null, projectId: string | null,
   ): Promise<boolean> {
     const messageId = chatMessageIdOf(inboundId);
-    const scope = await this.deps.commands.scoped(ctx, { kind: "room", roomId, projectId });
+    const scope = this.deps.commands.scoped(ctx, { kind: "room", roomId, projectId });
     const body = mentionName ? `@${mentionName} ${text}` : text;
     const current = ctx.chatType === "p2p" && ctx.binding.projectId ? { projectId: ctx.binding.projectId } : {};
     const sent = await this.deps.ash.post(ctx.principal, `/api/chats/${encodeURIComponent(roomId)}/messages`, {
@@ -204,26 +205,25 @@ export class RoomRelay {
       ? { receiveType: "open_id", receiveId: row.openId, recipientOpenId: row.openId }
       : { receiveType: "chat_id", receiveId: row.chatId, recipientOpenId: null };
     const feishuMessageId = row.id.replace(/^msg:/, "");
-    const scope = await this.scopeOf(row, dest);
+    const scope = scopeOf(row);
     // 说明句按投进房间那一刻的来源（就是房间来源里记着的那份实例）：等回复的这段时间里解绑、换绑都不算数。
     const origin = { origin: originOfScope(scope, row.openId) };
-    const reply = async (text: string, notice = false) => this.deps.commands.say({ messageId: feishuMessageId, dest }, text,
-      notice ? await this.deps.commands.answered(origin, { projectId: scope.kind === "room" ? scope.projectId : null }) : scope,
-      { subject: `relay:${row.id}` });
+    const notice = async (text: string) => this.deps.commands.say({ messageId: feishuMessageId, dest }, text,
+      await this.deps.commands.answered(origin, { projectId: scope.kind === "room" ? scope.projectId : null }), { subject: `relay:${row.id}` });
     const snapshot = await this.deps.ash.get<Snapshot>(principal, `/api/chats/${encodeURIComponent(row.roomId)}`);
     const timedOut = Date.parse(row.updatedAt) + REPLY_TIMEOUT_MS < Date.now();
     // 先把回复入队、再记结局：中间退出，下一圈还会再看这一行，同一个 subject 的回复入不了第二次。
     // 这一下没读到（不是房间没了）不算结局：下一圈再看，等满时限还读不到才告诉他。
     if (!snapshot.ok) {
       if (!roomGone(snapshot) && !timedOut) return;
-      await reply(`没拿到回复：${scrubText(snapshot.error, 300)}`, true);
+      await notice(`没拿到回复：${scrubText(snapshot.error, 300)}`);
       return this.mark(row.id, "failed", snapshot.error);
     }
     const answers = snapshot.data.messages.filter((message) => message.role === "agent" && message.replyTo === row.detail);
     if (!answers.length) {
       // 没有任何成员被点到（群聊里没 @ 到人）就不会有回复。
       if (timedOut || snapshot.data.messages.some((message) => message.id === row.detail && !message.mentions.length)) {
-        if (timedOut) await reply("等了 20 分钟没等到回复，去 ash 里看看吧。", true);
+        if (timedOut) await notice("等了 20 分钟没等到回复，去 ash 里看看吧。");
         await this.mark(row.id, "replied", null);
       }
       return;
@@ -232,25 +232,30 @@ export class RoomRelay {
     const base = (await readOptions()).publicBaseUrl;
     const titleOf = new Map(snapshot.data.tasks.map((task) => [task.id, task] as const));
     const lines: string[] = [];
+    const listed = new Set<string>();
     for (const message of answers) {
       lines.push(scrubText(message.body, 3000) || (message.status === "done" ? "（空回复）" : "（回复中断）"));
       const linked = [...(message.taskId ? [message.taskId] : []), ...(message.assistant?.matches.map((match) => match.taskId) ?? [])];
       for (const taskId of [...new Set(linked)].slice(0, 5)) {
         const task = titleOf.get(taskId);
         if (!task) continue;
+        listed.add(taskId);
         const link = taskLink(base, { task: task as never });
         lines.push(`· ${scrubTitle(task.title, 50)}${message.taskId === taskId ? "（新建）" : ""}${link ? ` ${link}` : ""}`);
       }
     }
-    await reply(lines.join("\n"));
+    // 列出来的任务（标题 + 链接）记进来源，出口逐个核：快照是以此刻的绑定读的，房间的授权管不到别的项目里的任务。
+    await this.deps.commands.say({ messageId: feishuMessageId, dest }, lines.join("\n"),
+      scope.kind === "room" && listed.size ? { ...scope, taskIds: [...listed] } : scope, { subject: `relay:${row.id}` });
     await this.mark(row.id, "replied", null);
   }
+}
 
-  /** 投进房间时盖下的来源。旧版本投的没有：按此刻的绑定补一份（群里的房间按群此刻绑的项目）。 */
-  private async scopeOf(row: typeof imInbound.$inferSelect, dest: Destination): Promise<OutboxScope> {
-    if (row.scope) return JSON.parse(row.scope) as OutboxScope;
-    const group = row.chatType === "p2p" ? null : await groupOf(this.deps.appId, row.chatId!);
-    return scopeFor(this.deps.appId, dest, { kind: "room", roomId: row.roomId!, projectId: group?.projectId ?? null },
-      row.chatType === "p2p" ? null : await bindingOf(this.deps.appId, row.openId!));
-  }
+/**
+ * 投进房间时盖下的来源。旧版本投的没有：认不出是哪一次绑定投的，不按此刻的绑定补（补上的就是此刻那个人，可能已经换了账号）——
+ * 记成认不出的那一次，出口一律不放行，回复和说明都换成固定说明。
+ */
+function scopeOf(row: typeof imInbound.$inferSelect): OutboxScope {
+  if (row.scope) return JSON.parse(row.scope) as OutboxScope;
+  return { kind: "room", roomId: row.roomId!, projectId: null, bound: "", request: true };
 }

@@ -2,7 +2,8 @@
 //
 // 钉住的几件事（理由见 server/src/im/scope.ts、exits.ts、outbox.ts、actions.ts 的文件头）：
 // ① 删了任务：挂着它的通知不发；
-// ② 解绑：助手回复、/project 回执、/new 确认卡、/todo 清单、决策卡一条都不发，只有不含 ash 数据的静态句照发；
+// ② 解绑：助手回复、/project 回执、/new 确认卡、/todo 清单、决策卡的原文一条都不发（回给请求的换成一句固定说明），
+//    不含 ash 数据的静态句照发；
 // ③ 解绑重绑（同一个飞书账号、新的一次绑定）：替旧那一次做的个人回执不发；任务的决策卡按此刻的资格照发；
 // ④ 改卡也过出口：排着的结果回写，项目改成只推标题 → 改上去的是短的那一版；收件人没资格了 → 改成
 //    中性的收起卡；这两种改卡在额度见底时照发，「没办成」的原因回复也照发；
@@ -99,7 +100,7 @@ try {
     await db.insert(tasks).values(task({ id: "tr", title: "重绑前排的提问", status: "paused", question: "选哪个？", questionOptions: JSON.stringify(["甲", "乙"]) }) as never);
     im.sender.stop();
     await im.reconciler.reconcile(["tr"]);
-    await im.commands.say({ messageId: "om_old", dest }, "PRIVATE-OLD-INSTANCE", await scopeFor(APP, dest, { kind: "principal" }));
+    await im.commands.say({ messageId: "om_old", dest }, "PRIVATE-OLD-INSTANCE", await scopeFor(APP, dest, { kind: "projects", projectIds: ["p1"] }));
     await unbind();
     await bind(new Date(Date.now() + 1000).toISOString());
     fake.reset();

@@ -243,11 +243,15 @@ export async function claimAssistantRoom(
   }, { behavior: "immediate" });
 }
 
+/** boundAt = 只改这一次绑定（替某一次请求改的：中途换了绑就不改，返回 false）。 */
 export async function updateBinding(
   key: { appId: string; openId: string },
   patch: Partial<Pick<BindingRow, "chatId" | "assistantRoomId" | "projectId">>,
-): Promise<void> {
-  await db.update(imBindings).set(patch).where(and(
+  boundAt?: string,
+): Promise<boolean> {
+  const updated = await db.update(imBindings).set(patch).where(and(
     eq(imBindings.channel, CHANNEL), eq(imBindings.appId, key.appId), eq(imBindings.openId, key.openId),
-  ));
+    ...(boundAt === undefined ? [] : [eq(imBindings.boundAt, boundAt)]),
+  )).returning({ openId: imBindings.openId });
+  return updated.length > 0;
 }
