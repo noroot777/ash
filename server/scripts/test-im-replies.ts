@@ -37,7 +37,7 @@ try {
   const { bindingOf, unbindOwner } = await import("../src/im/binding.js");
   const { createEnvelope } = await import("../src/im/envelopes.js");
   const { patchOptions } = await import("../src/im/meta.js");
-  const { originOf, scopeFor } = await import("../src/im/scope.js");
+  const { originOf, requestScope } = await import("../src/im/scope.js");
   const { APP, OWNER, FakeFeishu, buildApp, assemble, contentOf, buttonsOf } = await import("./im-fixture.js");
 
   await ensureSchema();
@@ -139,10 +139,12 @@ try {
     const member = { agentType: "claude", name: "Claude" };
     await db.insert(chatRooms).values({ id: "room-del", projectId: "", ownerUserId: null, name: "飞书", members: JSON.stringify([member]), kind: "assistant", createdAt: at } as never);
     const { imInbound } = await import("../src/db/schema-im.js");
+    /** 投进房间时盖下的那份底子（relay.ts post）：按此刻这一次绑定。 */
+    const posted = async () => requestScope(await originOf(APP, dest, (await bindingOf(APP, OWNER))!), { kind: "room", roomId: "room-del", projectId: null });
     await db.insert(imInbound).values({
       id: "msg:om_relay_poll", channel: "feishu", appId: APP, openId: OWNER, chatId: "oc_p2p", chatType: "p2p", kind: "assistant",
       roomId: "room-del", state: "sent", detail: "im-chat-message", createdAt: at, updatedAt: at,
-      scope: JSON.stringify(await scopeFor(APP, dest, { kind: "room", roomId: "room-del", projectId: null })),
+      scope: JSON.stringify(await posted()),
     } as never);
     await db.delete(chatRooms).where(eq(chatRooms.id, "room-del"));
     fake.reset();
@@ -155,7 +157,7 @@ try {
     await db.insert(imInbound).values({
       id: "msg:om_relay_gone", channel: "feishu", appId: APP, openId: OWNER, chatId: "oc_p2p", chatType: "p2p", kind: "assistant",
       roomId: "room-del", state: "sent", detail: "im-chat-message-2", createdAt: long, updatedAt: long,
-      scope: JSON.stringify(await scopeFor(APP, dest, { kind: "room", roomId: "room-del", projectId: null })),
+      scope: JSON.stringify(await posted()),
     } as never);
     await unbindOwner("");
     fake.reset();
@@ -169,7 +171,7 @@ try {
     await db.insert(imInbound).values({
       id: "msg:om_relay_rebound", channel: "feishu", appId: APP, openId: OWNER, chatId: "oc_p2p", chatType: "p2p", kind: "assistant",
       roomId: "room-del", state: "sent", detail: "im-chat-message-3", createdAt: at, updatedAt: at,
-      scope: JSON.stringify(await scopeFor(APP, dest, { kind: "room", roomId: "room-del", projectId: null })),
+      scope: JSON.stringify(await posted()),
     } as never);
     await unbindOwner("");
     await db.insert(imBindings).values({ channel: "feishu", appId: APP, openId: OWNER, userId: null, boundAt: new Date(Date.now() + 500).toISOString() });
@@ -351,11 +353,13 @@ try {
     assert.doesNotMatch(repliesTo(retry), /没能重试：|内部客户甲/, "群换了项目：原项目的报错不发");
     assert.equal(WITHHELD.exec(repliesTo(retry))?.[1], "群绑的已不是这个项目", "只发固定说明");
 
-    // 旧版本入队、群里没记发起人的那种：认不出是谁发起的，不发原文。
+    // 群里没记发起人的：认不出是谁发起的，不发原文；旧版本入队的（没有 request，办完才盖的）同样认不出。
     const group = (await db.select().from(imGroups).where(eq(imGroups.chatId, "oc_pa"))).at(0)!;
     const sample = (await db.select().from(imOutbox).where(eq(imOutbox.replyTo, retry))).at(0)!;
+    const unsigned = { ...sample, receiveType: "chat_id", receiveId: "oc_pa", scope: JSON.stringify({ kind: "reply", projectId: null, bound: group.boundAt, request: true }) };
+    assert.deepEqual(await im.reconciler.exits.admission(unsigned as never), { ok: false, why: "没记下是谁发起的" });
     const legacy = { ...sample, receiveType: "chat_id", receiveId: "oc_pa", scope: JSON.stringify({ kind: "reply", projectId: null, bound: group.boundAt }) };
-    assert.deepEqual(await im.reconciler.exits.admission(legacy as never), { ok: false, why: "没记下是谁发起的" });
+    assert.deepEqual(await im.reconciler.exits.admission(legacy as never), { ok: false, why: "旧版本入队，没记下是哪一次请求" });
   }
 
   // ── ③ 续：办着的时候任务删了，他也被移出了项目 ─────────────────────────

@@ -30,7 +30,8 @@ try {
   const { imActions, imBindings, imOutbox } = await import("../src/db/schema-im.js");
   const { and, eq } = await import("drizzle-orm");
   const { patchOptions } = await import("../src/im/meta.js");
-  const { scopeFor, SYSTEM_SCOPE } = await import("../src/im/scope.js");
+  const { originOf, requestScope, scopeFor, SYSTEM_SCOPE } = await import("../src/im/scope.js");
+  const { bindingOf } = await import("../src/im/binding.js");
   const { APP, OWNER, FakeFeishu, buildApp, assemble, contentOf, textOf, buttonsOf, waitIdle } = await import("./im-fixture.js");
 
   await ensureSchema();
@@ -75,7 +76,7 @@ try {
     await db.insert(tasks).values(task({ id: "tq", title: "排队时解绑的提问", status: "paused", question: "PRIVATE-QUESTION 要删吗？" }) as never);
     im.sender.stop();
     await im.reconciler.reconcile(["tq"]);
-    await im.commands.say({ messageId: "om_assist", dest }, "PRIVATE-ASSISTANT-REPLY", await scopeFor(APP, dest, { kind: "room", roomId: "room-x", projectId: null }));
+    await im.commands.say({ messageId: "om_assist", dest }, "PRIVATE-ASSISTANT-REPLY", requestScope(await originOf(APP, dest, (await bindingOf(APP, OWNER))!), { kind: "room", roomId: "room-x", projectId: null, taskIds: [] }));
     await im.commands.say({ messageId: "om_static", dest }, "STATIC-HINT", SYSTEM_SCOPE);
     await im.say({ text: "/project 1" });
     await im.say({ text: "/new PRIVATE-NEW-TITLE\nPRIVATE-NEW-BODY" });
@@ -100,7 +101,8 @@ try {
     await db.insert(tasks).values(task({ id: "tr", title: "重绑前排的提问", status: "paused", question: "选哪个？", questionOptions: JSON.stringify(["甲", "乙"]) }) as never);
     im.sender.stop();
     await im.reconciler.reconcile(["tr"]);
-    await im.commands.say({ messageId: "om_old", dest }, "PRIVATE-OLD-INSTANCE", await scopeFor(APP, dest, { kind: "projects", projectIds: ["p1"] }));
+    const old = await originOf(APP, dest, (await bindingOf(APP, OWNER))!);
+    await im.commands.say({ messageId: "om_old", dest }, "PRIVATE-OLD-INSTANCE", requestScope(old, { kind: "projects", projectIds: ["p1"] }));
     await unbind();
     await bind(new Date(Date.now() + 1000).toISOString());
     fake.reset();

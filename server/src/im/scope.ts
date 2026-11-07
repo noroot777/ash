@@ -30,6 +30,11 @@
 // 另一个账号，此刻的绑定就是另一个人（审查第 2 轮实测：/project 取完列表时换绑，列表盖上新账号的实例照发）。
 // 只有给此刻订阅者的通知（决策卡、汇总卡，reconcile.ts）才按此刻的绑定盖（scopeFor）。正文里列着哪些
 // 资源也要记进来（projects、room 的 taskIds），出口逐个现核：只记「是谁」核不出列表里哪一项已经看不到了。
+//
+// 来源落了库（im_outbox / im_inbound 的 scope 列），会跨重启、跨升级活着：旧版本写下的那份缺什么，就当认不出
+// 什么，不能当「没有」（gapOf）—— 没记列出的任务不等于没列任务（审查第 3 轮实测：升级前积压的助手回复按
+// 空清单放行，发出了已经看不到的任务标题），没记 request 不等于实例就是请求进来那一刻（旧版本是办完才按
+// 此刻的绑定盖的）。哪些行是回给请求的按 kind 列认：每一版都写这一列，来源 JSON 里的标记旧版本没有。
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { chatRooms, tasks } from "../db/schema.js";
@@ -58,7 +63,8 @@ export type ScopeBody =
 
 /**
  * bound = 入队时收件去处那一次绑定的 boundAt；null 只出现在旧版本入队、按 taskId 推出来的那种。
- * request = 回给一次请求的（见顶部）：实例按请求进来那一刻认，核不过换成固定说明（exits.ts withhold）。
+ * request = requestScope 写的（见顶部）：实例是请求进来那一刻的、正文列着的资源都记全了。
+ * room 的 taskIds 缺 = 没记（旧版本，或投进房间时的那份底子 —— 回复来了才按回复填），不是「没列任务」。
  */
 export type OutboxScope = { kind: "system" } | (ScopeBody & { bound: string | null; by?: Person; request?: true });
 
@@ -92,9 +98,12 @@ export async function originOf(appId: string, dest: Destination, binding: Pick<B
   return { bound, by: { openId: binding.openId, boundAt: binding.boundAt } };
 }
 
-/** 已经盖好的来源（投进房间时按房间盖的那份，relay.ts）里记着的那一刻；单聊的收件人就是发起人。 */
+/**
+ * 已经盖好的来源（投进房间时按房间盖的那份，relay.ts）里记着的那一刻；单聊的收件人就是发起人。只认 requestScope 写的：
+ * 旧版本那份是办完才按此刻的绑定盖的，拿它当「请求进来那一刻」就把认不出的来源洗成了可信的 —— 记空串，出口一律不放行。
+ */
 export function originOfScope(scope: OutboxScope, openId: string): Origin {
-  if (scope.kind === "system" || scope.bound === null) return { bound: "", by: { openId, boundAt: "" } };
+  if (scope.kind === "system" || scope.bound === null || scope.request !== true) return { bound: "", by: { openId, boundAt: "" } };
   return { bound: scope.bound, by: scope.by ?? { openId, boundAt: scope.bound } };
 }
 
@@ -103,9 +112,32 @@ export function requestScope(origin: Origin, body: ScopeBody): OutboxScope {
   return { ...body, bound: origin.bound, by: origin.by, request: true };
 }
 
-/** 这一行是不是回给一次请求的（reply 天生是；旧版本入队的 reply 没记 request）。 */
-export function answersRequest(scope: OutboxScope | null): boolean {
-  return !!scope && scope.kind !== "system" && (scope.request === true || scope.kind === "reply");
+/** 回给一次请求的行：commands.ts 的回执（reply）和确认卡（confirm）、actions.ts 按钮没办成的原因（fail）。 */
+const REQUEST_ROW_KINDS: readonly string[] = ["reply", "confirm", "fail"];
+/** 给此刻订阅者的通知用的来源（reconcile.ts），写法从第一版起没变过；其余几种只该由 requestScope 写。 */
+const SUBSCRIBER_SCOPES: readonly string[] = ["task", "digest"];
+
+/** 这一行是不是回给一次请求的（核不过换成固定说明，exits.ts withhold）：按 kind 列认，旧版本的来源里没有标记。 */
+export function answersRequest(row: Pick<OutboxRow, "scope" | "kind" | "taskId">): boolean {
+  if (REQUEST_ROW_KINDS.includes(row.kind)) return true;
+  const scope = scopeOfRow(row);
+  return !!scope && scope.kind !== "system" && scope.request === true;
+}
+
+/**
+ * 这份来源缺了放行要用的东西（见顶部）：返回缺的是什么，出口一律不放行。回给请求的（按行的 kind，或者来源本身
+ * 只该由 requestScope 写）没有 request 标记 = 旧版本办完才盖的；列着资源的那几种，清单本身得在。
+ */
+function gapOf(row: Pick<OutboxRow, "kind">, scope: Exclude<OutboxScope, { kind: "system" }>): string | null {
+  const requested = REQUEST_ROW_KINDS.includes(row.kind) || !SUBSCRIBER_SCOPES.includes(scope.kind);
+  if (requested && scope.request !== true) return "旧版本入队，没记下是哪一次请求";
+  switch (scope.kind) {
+    case "room": return Array.isArray(scope.taskIds) ? null : "没记下列出的任务";
+    case "projects": return Array.isArray(scope.projectIds) ? null : "没记下列出的项目";
+    case "digest": return Array.isArray(scope.rowIds) ? null : "没记下列出的卡";
+    case "reply": return scope.projectId === undefined ? "没记下是哪个项目" : null;
+    default: return null;
+  }
 }
 
 /**
@@ -120,7 +152,10 @@ export async function replyScope(origin: Origin, about: { taskId?: string | null
   return requestScope(origin, { kind: "reply", projectId });
 }
 
-/** 行上记的授权来源。旧版本入队的行没有：上线通知 / 测试卡当 system，挂着任务的当 task，其余不认。 */
+/**
+ * 行上记的授权来源。旧版本入队的行没有：上线通知 / 测试卡当 system，挂着任务的当 task（回给请求的推出来也过不了
+ * gapOf：taskId 列只管回复路由到哪个任务，那句话不一定只说了这个任务），其余不认。
+ */
 export function scopeOfRow(row: Pick<OutboxRow, "scope" | "kind" | "taskId">): OutboxScope | null {
   if (row.scope) {
     try {
@@ -140,6 +175,8 @@ export async function admit(appId: string, row: OutboxRow, titleOnly: readonly s
   const scope = scopeOfRow(row);
   if (!scope) return deny("没有授权来源（旧版本入队）");
   if (scope.kind === "system") return pass();
+  const gap = gapOf(row, scope);
+  if (gap) return deny(gap);
   const viewer = await viewerOf(appId, row, scope);
   if ("why" in viewer) return viewer;
   switch (scope.kind) {

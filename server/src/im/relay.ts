@@ -245,17 +245,19 @@ export class RoomRelay {
       }
     }
     // 列出来的任务（标题 + 链接）记进来源，出口逐个核：快照是以此刻的绑定读的，房间的授权管不到别的项目里的任务。
+    // 一个都没列也照记（空清单）：缺了 taskIds 出口当「没记」拦下（scope.ts gapOf）。投进去时那份底子缺的东西
+    // （旧版本没有 request）照样缺着，不在这里补。
     await this.deps.commands.say({ messageId: feishuMessageId, dest }, lines.join("\n"),
-      scope.kind === "room" && listed.size ? { ...scope, taskIds: [...listed] } : scope, { subject: `relay:${row.id}` });
+      scope.kind === "room" ? { ...scope, taskIds: [...listed] } : scope, { subject: `relay:${row.id}` });
     await this.mark(row.id, "replied", null);
   }
 }
 
 /**
- * 投进房间时盖下的来源。旧版本投的没有：认不出是哪一次绑定投的，不按此刻的绑定补（补上的就是此刻那个人，可能已经换了账号）——
- * 记成认不出的那一次，出口一律不放行，回复和说明都换成固定说明。
+ * 投进房间时盖下的来源（那份底子不带 taskIds）。旧版本投的没有：认不出是哪一次绑定投的，不按此刻的绑定补（补上的就是
+ * 此刻那个人，可能已经换了账号）—— 记成认不出的那一次，出口一律不放行，回复和说明都换成固定说明。
  */
 function scopeOf(row: typeof imInbound.$inferSelect): OutboxScope {
   if (row.scope) return JSON.parse(row.scope) as OutboxScope;
-  return { kind: "room", roomId: row.roomId!, projectId: null, bound: "", request: true };
+  return { kind: "room", roomId: row.roomId!, projectId: null, bound: "" };
 }

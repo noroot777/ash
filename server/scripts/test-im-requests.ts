@@ -7,7 +7,10 @@
 // ② /project 清单：取完列表之后被移出了其中一个项目（没换绑）—— 清单不发；
 // ③ /project 名字：取完列表之后换绑 —— 不改新绑定的当前项目，说一句「刚换过绑定」；没换绑照常切；
 // ④ /new 确认卡、/stop 确认卡、/todo 清单：办着的时候换绑 —— 原文不发，只发固定说明（bob 也看得见那个项目）；
-// ⑤ 房间回复：下面列着的任务发出去之前看不到了 —— 回复不发；看得到照发；旧版本投的、没记来源的不按此刻的绑定补。
+// ⑤ 房间回复：下面列着的任务发出去之前看不到了 —— 回复不发；看得到照发、一个任务都没列也照发；旧版本投进房间的
+//    （没记来源、或来源是办完才盖的）不按此刻的绑定补，回复和说明句都只发固定说明；
+// ⑥ 旧版本落库、升级后还排着的发件行：没记列出的任务 / 项目 / 卡、没记是哪一次请求（确认卡、挂着任务的回执）——
+//    缺了什么就当认不出什么，原文不发、只发固定说明，不当成「没有」放行。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +27,7 @@ try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { chatMessages, chatRooms, projects, tasks } = await import("../src/db/schema.js");
   const { imBindings, imInbound, imOutbox } = await import("../src/db/schema-im.js");
+  const { nanoid } = await import("nanoid");
   const { eq } = await import("drizzle-orm");
   const mode = await import("../src/auth/mode.js");
   const store = await import("../src/auth/store.js");
@@ -190,18 +194,25 @@ try {
     const origin = await originOf(APP, dest, binding);
     const member = { id: "m1", name: "助手", agentType: "claude", executorId: null, model: null, reasoningEffort: null };
     await db.insert(chatRooms).values({ id: "room-a", projectId: "", ownerUserId: alice.id, name: "飞书", members: JSON.stringify([member]), kind: "assistant", createdAt: at });
-    /** 房间里一问一答（回复挂着 tq），在等回复的那一行投进来时按 scope 盖（null = 旧版本投的，没记）。 */
-    const answered = async (n: number, scope: string | null) => {
-      await db.insert(chatMessages).values([
-        { id: `im-u${n}`, roomId: "room-a", role: "user", author: "alice", body: `问 ${n}`, createdAt: new Date(Date.now() + n * 10).toISOString() },
-        { id: `im-a${n}`, roomId: "room-a", role: "agent", memberId: "m1", author: "助手", body: `ROOM-ANSWER-${n}`, taskId: "tq", replyTo: `im-u${n}`, createdAt: new Date(Date.now() + n * 10 + 5).toISOString() },
-      ]);
+    /**
+     * 房间里一问一答（linked：回复挂着 tq），在等回复的那一行投进来时按 scope 盖（null = 旧版本投的，没记）。
+     * roomId 是不在的房间时只投那一行（等回复时读不到房间）。
+     */
+    const answered = async (n: number, scope: string | null, linked = true, roomId = "room-a") => {
+      if (roomId === "room-a") {
+        await db.insert(chatMessages).values([
+          { id: `im-u${n}`, roomId, role: "user", author: "alice", body: `问 ${n}`, createdAt: new Date(Date.now() + n * 10).toISOString() },
+          { id: `im-a${n}`, roomId, role: "agent", memberId: "m1", author: "助手", body: `ROOM-ANSWER-${n}`, taskId: linked ? "tq" : null, replyTo: `im-u${n}`, createdAt: new Date(Date.now() + n * 10 + 5).toISOString() },
+        ]);
+      }
       await db.insert(imInbound).values({
         id: `msg:om_room${n}`, channel: "feishu", appId: APP, openId: OWNER, chatId: "oc_p2p", chatType: "p2p", kind: "assistant",
-        roomId: "room-a", detail: `im-u${n}`, state: "sent", scope, createdAt: at, updatedAt: new Date().toISOString(),
+        roomId, detail: `im-u${n}`, state: "sent", scope, createdAt: at, updatedAt: new Date().toISOString(),
       } as never);
     };
     const roomScope = JSON.stringify(requestScope(origin, { kind: "room", roomId: "room-a", projectId: null }));
+    /** 旧版本投进房间时盖的（办完才按此刻的绑定盖、没有 request）：实例碰巧还对得上。 */
+    const legacyScope = (roomId: string) => JSON.stringify({ kind: "room", roomId, projectId: null, bound: binding.boundAt });
 
     await answered(1, roomScope);
     fake.reset();
@@ -222,11 +233,72 @@ try {
     await join_("pq", alice.id);
 
     await answered(3, null);
+    await answered(4, roomScope, false);
+    await answered(5, legacyScope("room-a"));
+    await answered(6, legacyScope("room-legacy-gone"), true, "room-legacy-gone");
     fake.reset();
     await im.relay.poll();
     await im.settle();
+    assert.match(repliesTo("om_room4"), /ROOM-ANSWER-4/, "一个任务都没列：照发（空清单照记）");
     assert.doesNotMatch(sentText(), /ROOM-ANSWER-3/, "旧版本投的、没记来源：不按此刻的绑定补一份照发");
-    assert.equal(WITHHELD.exec(repliesTo("om_room3"))?.[1], "收件人已解绑或换了绑定");
+    assert.equal(WITHHELD.exec(repliesTo("om_room3"))?.[1], "旧版本入队，没记下是哪一次请求");
+    assert.doesNotMatch(sentText(), /ROOM-ANSWER-5/, "旧版本投的、办完才盖的来源：回复不发");
+    assert.equal(WITHHELD.exec(repliesTo("om_room5"))?.[1], "旧版本入队，没记下是哪一次请求");
+    assert.doesNotMatch(repliesTo("om_room6"), /没拿到回复：/, "旧版本投的：说明句也不拿它当请求进来那一刻");
+    assert.equal(WITHHELD.exec(repliesTo("om_room6"))?.[1], "收件人已解绑或换了绑定");
+  }
+
+  // ── ⑥ 旧版本落库、升级后还排着的发件行 ─────────────────────────────────
+  {
+    await bindTo(alice.id);
+    const binding = (await bindingOf(APP, OWNER))!;
+    const origin = await originOf(APP, dest, binding);
+    const bound = binding.boundAt;
+    const by = origin.by;
+    fake.reset();
+    im.sender.stop();
+    /** 照旧版本的样子排一句回执。 */
+    const queue = (messageId: string, text: string, scope: unknown) =>
+      im.commands.say({ messageId, dest }, text, scope as never);
+    // 审查第 3 轮的复现：升级前积压的助手回复，房间还在、还归他，正文列着任务标题，来源里没有任务清单。
+    await queue("om_legacy_room", "之前查询的结果\n· PRIVATE-LEGACY-ROOM", { kind: "room", roomId: "room-a", projectId: null, bound });
+    // 新版本的样子、只是清单没记（投进房间时的那份底子原样发出去）。
+    await queue("om_bare_room", "PRIVATE-BARE-ROOM", { kind: "room", roomId: "room-a", projectId: null, bound, by, request: true });
+    await queue("om_bare_projects", "PRIVATE-BARE-PROJECTS", { kind: "projects", bound, by, request: true });
+    await queue("om_bare_digest", "PRIVATE-BARE-DIGEST", { kind: "digest", bound, by, request: true });
+    await queue("om_bare_reply", "PRIVATE-BARE-REPLY", { kind: "reply", bound, by, request: true });
+    // 旧版本的 /stop 确认卡：按任务记、办完才盖的实例，没有 request（当成订阅者通知就不认实例了）。
+    await im.reconciler.run(() => im.reconciler.insert({
+      dest, taskId: null, kind: "confirm", subject: "om_legacy_confirm", replyTo: "om_legacy_confirm",
+      content: JSON.stringify({ elements: [{ tag: "markdown", content: "停掉「共享任务 Q」？PRIVATE-LEGACY-CONFIRM" }] }),
+      scope: { kind: "task", taskId: "tq", bound } as never,
+    }));
+    // 种类不是回执、来源却是只该由 requestScope 写的那几种：照样当旧版本办完才盖的。
+    await im.reconciler.run(() => im.reconciler.insert({
+      dest, taskId: null, kind: "notice", subject: "legacy:project", msgType: "text",
+      content: JSON.stringify({ text: "PRIVATE-LEGACY-PROJECT" }), scope: { kind: "project", projectId: "pq", bound } as never,
+    }));
+    // 更早的版本：scope 列还没有，挂着任务的回执（taskId 只管回复路由）。
+    await db.insert(imOutbox).values({
+      id: nanoid(20), channel: "feishu", appId: APP, receiveType: "open_id", receiveId: OWNER, recipientOpenId: OWNER, taskId: "tq",
+      kind: "reply", subject: "r:om_legacy_bare", msgType: "text", content: JSON.stringify({ text: "没答上：PRIVATE-LEGACY-NOSCOPE" }),
+      replyTo: "om_legacy_bare", state: "pending", createdAt: at, updatedAt: at,
+    } as never);
+    im.sender.start();
+    await im.settle();
+    assert.doesNotMatch(sentText(), /PRIVATE-/, "旧版本落库的发件行：原文一条都不发");
+    for (const [messageId, why] of [
+      ["om_legacy_room", "旧版本入队，没记下是哪一次请求"],
+      ["om_bare_room", "没记下列出的任务"],
+      ["om_bare_projects", "没记下列出的项目"],
+      ["om_bare_digest", "没记下列出的卡"],
+      ["om_bare_reply", "没记下是哪个项目"],
+      ["om_legacy_confirm", "旧版本入队，没记下是哪一次请求"],
+      ["om_legacy_bare", "旧版本入队，没记下是哪一次请求"],
+    ] as const) {
+      assert.equal(WITHHELD.exec(repliesTo(messageId))?.[1], why, `${messageId}：只发固定说明`);
+    }
+    assert.equal((await db.select().from(imOutbox).where(eq(imOutbox.state, "pending"))).length, 0, "都落了结局，不卡在队列里");
   }
 
   im.relay.stop();
