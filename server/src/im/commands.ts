@@ -86,7 +86,7 @@ export class CommandRunner {
     return scopeFor(this.deps.appId, ctx.dest, body, ctx.chatType === "group" ? ctx.binding : null);
   }
 
-  /** 回给他的、他这次操作的结局（scope.ts reply）：按消息进来那一刻的来源。about = 这次操作落在哪个任务 / 项目上。 */
+  /** 回给他的、他这次操作的结局（scope.ts reply）：按消息进来那一刻的来源。about = 这次操作落在哪个任务 / 项目上，办之前就算好。 */
   answered(ctx: Pick<InboundContext, "origin">, about: { taskId?: string | null; projectId?: string | null }): Promise<OutboxScope> {
     return replyScope(ctx.origin, about);
   }
@@ -116,10 +116,11 @@ export class CommandRunner {
       case "stop": {
         if (!ctx.card?.taskId) return this.say(ctx, "回复某张任务卡片再发 /stop，才知道要停哪个任务。", SYSTEM_SCOPE);
         const taskId = ctx.card.taskId;
+        const answer = await this.answered(ctx, { taskId });
         // 确认卡带着任务标题、按任务记来源：任务删了或他看不到时出口会把它拦下，所以先以他的身份问一句，
         // 不行就把原因回给他（否则只剩沉默）。
         const seen = await this.deps.ash.get(ctx.principal, taskPath(taskId));
-        if (!seen.ok) return this.say(ctx, `停不了：${scrubText(seen.error, 300)}`, await this.answered(ctx, { taskId }),
+        if (!seen.ok) return this.say(ctx, `停不了：${scrubText(seen.error, 300)}`, answer,
           { taskId, brief: "停不了，原因见 ash。" });
         const title = cardHeaderOf(ctx.card.content).title;
         return this.card(ctx, "停掉任务？", `「${title}」会被停掉（可以之后在 ash 里重试续跑）。`, { command: "stop", taskId }, true,
@@ -130,8 +131,9 @@ export class CommandRunner {
         if (!ctx.card?.taskId || ctx.card.kind !== "failed") return this.say(ctx, "回复那张失败卡片再发 /retry（发 /todo 能找到它）。", SYSTEM_SCOPE);
         const taskId = ctx.card.taskId;
         await ctx.commit?.(taskId);
+        const answer = await this.answered(ctx, { taskId });
         const result = await this.deps.ash.post(ctx.principal, taskPath(taskId, "/retry"), { expectedFailure: versionOf(ctx.card.subject) });
-        return this.say(ctx, result.ok ? "已重试，任务重新开始跑了。" : `没能重试：${scrubText(result.error, 300)}`, await this.answered(ctx, { taskId }),
+        return this.say(ctx, result.ok ? "已重试，任务重新开始跑了。" : `没能重试：${scrubText(result.error, 300)}`, answer,
           { taskId, ...(result.ok ? {} : { brief: "没能重试，原因见 ash。" }) });
       }
       default:

@@ -312,9 +312,9 @@ export class InboundRouter {
     const views = await viewsOf([taskId]);
     const view = views.get(taskId) ?? null;
     const say = (line: string) => this.deps.commands.say(ctx, line, SYSTEM_SCOPE, { taskId });
-    /** 任务接口的报错：他自己这次操作的结局（scope.ts reply），只推标题的项目换成短句。 */
-    const sayError = async (line: string) => this.deps.commands.say(ctx, line, await this.deps.commands.answered(ctx, { taskId }),
-      { taskId, brief: "没办成，原因见 ash。" });
+    /** 任务接口的报错：他自己这次操作的结局（scope.ts reply），只推标题的项目换成短句。项目按办之前的那一刻。 */
+    const answer = await this.deps.commands.answered(ctx, { taskId });
+    const sayError = (line: string) => this.deps.commands.say(ctx, line, answer, { taskId, brief: "没办成，原因见 ash。" });
     // 先把回话入队再记结局：中间退出，重办时同一句回话入不了第二次（同 subject）。
     const refuse = async (detail: string, line: string) => {
       await say(line);

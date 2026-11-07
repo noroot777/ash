@@ -89,7 +89,11 @@ export function originOfScope(scope: OutboxScope, openId: string): Origin {
   return { bound: scope.bound, by: scope.by ?? { openId, boundAt: scope.bound } };
 }
 
-/** 回给发话人的那一句（reply）：授权按请求进来那一刻（origin）；项目按这次操作落在的任务查，任务已经删了就不挂项目。 */
+/**
+ * 回给发话人的那一句（reply）：授权按请求进来那一刻（origin）；项目也按那一刻 —— 调用方在办之前算好，办着的时候任务被删了，
+ * 出口照样核他还看不看得见那个项目（办完再查就查不到项目，核不了，审查对抗复核实测：删任务 + 移出项目，报错原文照发）。
+ * 请求进来时任务就已经不在了才不挂项目。
+ */
 export async function replyScope(origin: Origin, about: { taskId?: string | null; projectId?: string | null }): Promise<OutboxScope> {
   const projectId = about.projectId ?? (about.taskId
     ? (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, about.taskId))).at(0)?.projectId ?? null

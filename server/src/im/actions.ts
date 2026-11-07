@@ -39,7 +39,7 @@ import { renderCard, type CardTone } from "./feishu/cards.js";
 import { readOptions } from "./meta.js";
 import { cardHeaderOf, type Destination, type OutboxRow, type OutboxSender } from "./outbox.js";
 import { ACTED, type Reconciler } from "./reconcile.js";
-import { originOf, replyScope, scopeOfRow, type Origin } from "./scope.js";
+import { originOf, replyScope, scopeOfRow, type OutboxScope } from "./scope.js";
 import { scrubText } from "./scrub.js";
 import type { CommandRunner } from "./commands.js";
 import { acceptanceAutoCommitMessage, type AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
@@ -82,8 +82,8 @@ interface Job {
 }
 
 /** 这一下点击收尾要用到的全部现场。 */
-/** origin = 点下去那一刻的绑定实例（scope.ts originOf）：没办成时回给他的那一句按它核，不按办完时的现状。 */
-interface Click { claim: Claim; row: OutboxRow; job: Job; actorName: string; origin: Origin }
+/** answer = 没办成时回给他的那一句的来源（scope.ts replyScope）：按点下去那一刻的绑定实例和那一刻卡上的任务 / 项目，不按办完时的现状。 */
+interface Click { claim: Claim; row: OutboxRow; job: Job; actorName: string; answer: OutboxScope }
 
 const FAST_MS = 2_400;
 /** 结果卡随回执带回去之后，等「回执已发出」的确认这么久；过了还没确认就改一次卡。 */
@@ -138,7 +138,10 @@ export class CardActions {
     if (!binding || !actor) return toast("error", "你还没绑定 ash（或绑定已失效）：请在 ash 网页 设置 → 飞书 里绑定");
     const row = (await db.select().from(imOutbox).where(eq(imOutbox.id, check.envelope.outboxId))).at(0);
     if (!row) return toast("error", REJECT_TEXT.missing!);
-    const origin = await originOf(this.deps.appId, destOf(row), binding);
+    const source = scopeOfRow(row);
+    const answer = await replyScope(await originOf(this.deps.appId, destOf(row), binding), {
+      taskId: row.taskId ?? (source?.kind === "task" ? source.taskId : null), projectId: source?.kind === "project" ? source.projectId : null,
+    });
 
     if (check.envelope.action === "summary") {
       if (op !== "push") return toast("error", "认不出这个按钮");
@@ -151,7 +154,7 @@ export class CardActions {
     if (!("run" in job)) return job;
     const claim = await claimEnvelope(envelopeId);
     if (!claim) return toast("info", "这张卡片正在处理");
-    const click: Click = { claim, row, job, actorName: actor.name, origin };
+    const click: Click = { claim, row, job, actorName: actor.name, answer };
 
     // 从占上信封起到挂上收尾之间不能有能抛错的 await：那件事已经起跑，这时抛出去，结局就没人落了 —— 信封永远
     // 停在「已占用、没结果」，卡上一直是原样、再点只说「已经处理过了」；同进程的 recover() 有意不接本进程占着的
@@ -389,10 +392,7 @@ export class CardActions {
       // 换成一句固定说明（任务删了、他看不到了正是常见的原因，一声不吭他只会以为没收到）。
       const repair = via === "patch" && !!row.messageId;
       const dest = destOf(row);
-      const source = scopeOfRow(row);
-      const scope = await replyScope(click.origin, {
-        taskId: row.taskId ?? (source?.kind === "task" ? source.taskId : null), projectId: source?.kind === "project" ? source.projectId : null,
-      });
+      const scope = click.answer;
       const told = await this.deps.reconciler.exits.admission({ ...row, scope: JSON.stringify(scope) });
       const terse = !told.ok || told.titleOnly;
       const released = await commit(this.deps.reconciler, async (tx) => {

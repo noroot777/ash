@@ -358,6 +358,56 @@ try {
     assert.deepEqual(await im.reconciler.exits.admission(legacy as never), { ok: false, why: "没记下是谁发起的" });
   }
 
+  // ── ③ 续：办着的时候任务删了，他也被移出了项目 ─────────────────────────
+  // 项目按请求进来那一刻定（scope.ts replyScope）：办完再按任务查就查不到项目，核不了他还看不看得见。
+  {
+    await db.update(imGroups).set({ projectId: "pa" }).where(eq(imGroups.chatId, "oc_pa"));
+    const groupFailedCard = async (id: string) => {
+      await db.insert(tasks).values({ id, projectId: "pa", title: `群里的 ${id}`, body: "", status: "failed", createdAt: at, updatedAt: at, endedAt: at, ownerUserId: alice.id } as never);
+      await im.reconciler.run(() => im.reconciler.reconcile([id]));
+      await im.settle();
+      const row = (await db.select().from(imOutbox).where(and(eq(imOutbox.taskId, id), eq(imOutbox.receiveId, "oc_pa")))).at(0)!;
+      assert.ok(row.messageId, `${id} 的失败卡发到群里了`);
+      return row;
+    };
+    const dropBob = (id: string) => async () => {
+      await visibility.removeProjectMember("pa", bob.id);
+      await db.delete(tasks).where(eq(tasks.id, id));
+    };
+
+    const said = await groupFailedCard("tgd");
+    fake.reset();
+    const retry = await during(() => asBob("/retry", said.messageId!), dropBob("tgd"));
+    await im.settle();
+    assert.doesNotMatch(sentText(), /内部客户甲/, "任务删了、他也看不到了：/retry 的报错原文不发");
+    assert.equal(WITHHELD.exec(repliesTo(retry))?.[1], "看不到这个项目了", "照样按那个项目核");
+
+    // 回复任务卡（/reply）：报错那一句同样按办之前的项目核。
+    await visibility.addProjectMember({ projectId: "pa", userId: bob.id, role: "member", addedBy: alice.id });
+    const replied = await groupFailedCard("tgr");
+    const realReply = im.ash.post;
+    im.ash.post = (async (who: never, path: `/api/${string}`, body?: unknown) => {
+      if (!path.endsWith("/reply")) return realReply(who, path, body);
+      if (stall) { stall.reached(); await stall.opened; }
+      return { ok: false, status: 409, error: SECRET, data: {} };
+    }) as typeof im.ash.post;
+    fake.reset();
+    const reply = await during(() => asBob("/reply 换个思路", replied.messageId!), dropBob("tgr"));
+    await im.settle();
+    im.ash.post = realReply;
+    assert.doesNotMatch(sentText(), /内部客户甲/, "/reply：任务删了、他也看不到了，报错原文不发");
+    assert.equal(WITHHELD.exec(repliesTo(reply))?.[1], "看不到这个项目了");
+
+    await visibility.addProjectMember({ projectId: "pa", userId: bob.id, role: "member", addedBy: alice.id });
+    const pressed = await groupFailedCard("tgb");
+    const value = buttonsOf(JSON.parse(pressed.content)).find((button) => button.value?.op === "retry")!.value!;
+    fake.reset();
+    const toast = await during(() => im.click("ou_bob", value), dropBob("tgb"));
+    await im.settle();
+    assert.doesNotMatch(JSON.stringify(toast) + sentText(), /内部客户甲/, "按钮：任务删了、他也看不到了，不带原文");
+    assert.match(JSON.stringify(toast), /没办成，原因见 ash。/);
+  }
+
   im.reconciler.stop();
   im.sender.stop();
   console.log("test-im-replies: ok");
