@@ -186,6 +186,7 @@ export function RemoteTaskDetail({
         <section className="task-detail-main" aria-label="远程任务会话">
           <ConversationFeed
             task={task}
+            requirement={snapshot ? { text: snapshot.task.body, at: snapshot.task.createdAt } : null}
             items={items}
             questionHistory={snapshot?.task.questionHistory ?? []}
             sessions={snapshot?.sessions ?? []}

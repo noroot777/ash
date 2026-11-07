@@ -78,6 +78,9 @@ const tasks: Task[] = [
 // 「问一次持有机」的闸门：用例按住它，就能在应答回来之前再做别的动作。
 let holding = false;
 let pending: (() => void)[] = [];
+// 已经把应答交回调用方的次数（含没被按住的那些）。用例拿它当「迟到的应答已经落地」的
+// 正向信号：交回之后调用方那串 await 全是微任务，下一轮宏任务之前就跑完了。
+let answered = 0;
 const report = () => {
   const node = document.getElementById("pending");
   if (node) node.textContent = String(pending.length);
@@ -94,6 +97,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
   __holdTargets: hold,
   __releaseTargets: release,
   __pendingTargets: () => pending.length,
+  __answeredTargets: () => answered,
 });
 
 api.projects = async () => [project];
@@ -104,6 +108,7 @@ api.handoffTargets = async () => {
   if (holding) {
     await new Promise<void>((resolve) => { pending.push(resolve); report(); });
   }
+  answered += 1;
   return [far];
 };
 api.handoffPeers = async () => [];

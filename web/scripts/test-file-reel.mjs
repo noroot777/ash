@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage } from "./wait-until.mjs";
 
 // 生成物点开之后能一张接一张地翻（左右方向键 + 顶栏那两颗按钮）。
 //
@@ -144,7 +145,9 @@ try {
   await page.locator("#fixture-input").click();
   await page.keyboard.type("abc");
   await page.keyboard.press("ArrowLeft");
-  await page.waitForTimeout(80);
+  // 翻页是 keydown 监听里同步 setState 的；press 返回时它已派发完，冲刷掉排下的渲染，
+  // 要翻的话此刻已经翻了（正向那几条也是同一条路，见上面的 waitForFunction）。
+  await settlePage(page);
   assert.equal(await shownPath(), "three.png", "输入框里按方向键不该翻页");
 
   // 组是分开的：网页那一组翻的是网页，不会窜进图片里。
@@ -157,7 +160,7 @@ try {
   // 非图片不接管方向键：那一屏是横向滚得动的正文，键留给它。
   await page.locator(".file-viewer__body").click({ position: { x: 40, y: 40 } });
   await page.keyboard.press("ArrowLeft");
-  await page.waitForTimeout(80);
+  await settlePage(page);
   assert.equal(await shownPath(), "second.html", "非图片上方向键不该翻页");
 
   // 一组只有一个：整组控件都不出现。

@@ -3,9 +3,9 @@
   align-items: safe center;
   padding: clamp(18px, 4vw, 48px);
   background:
-    radial-gradient(circle at 12% 16%, rgb(94 106 210 / 14%), transparent 29%),
-    radial-gradient(circle at 88% 82%, rgb(22 132 102 / 10%), transparent 28%),
-    #ececf0;
+    radial-gradient(circle at 12% 16%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 29%),
+    radial-gradient(circle at 88% 82%, color-mix(in srgb, var(--green) 10%, transparent), transparent 28%),
+    var(--chrome);
 }
 
 .auth-stage {
@@ -15,7 +15,7 @@
   min-height: min(720px, calc(100vh - clamp(36px, 8vw, 96px)));
   grid-template-columns: minmax(280px, .78fr) minmax(430px, 1.22fr);
   overflow: hidden;
-  border: 1px solid rgb(29 31 38 / 10%);
+  border: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
   border-radius: 28px;
   background: var(--panel);
   box-shadow: 0 34px 100px rgb(30 31 40 / 17%), 0 4px 16px rgb(30 31 40 / 8%);
@@ -28,13 +28,14 @@
   height: 180px;
   top: -112px;
   right: -92px;
-  border: 1px solid rgb(94 106 210 / 18%);
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
   border-radius: 50%;
-  box-shadow: 0 0 0 26px rgb(94 106 210 / 4%), 0 0 0 52px rgb(94 106 210 / 3%);
+  box-shadow: 0 0 0 26px color-mix(in srgb, var(--accent) 4%, transparent), 0 0 0 52px color-mix(in srgb, var(--accent) 3%, transparent);
   content: "";
   pointer-events: none;
 }
 
+/* 左侧品牌栏刻意始终是深色：浅色、深色两种模式下都是这套写死的墨色与暖黄，里面的半透明白也是配它的。 */
 .auth-brand {
   position: relative;
   display: flex;
@@ -148,7 +149,7 @@
   place-items: center;
   padding: clamp(34px, 6vw, 76px) clamp(26px, 5vw, 66px);
   background:
-    radial-gradient(circle at 84% 9%, rgb(94 106 210 / 7%), transparent 25%),
+    radial-gradient(circle at 84% 9%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 25%),
     var(--panel);
 }
 
@@ -194,7 +195,7 @@
   border-radius: 11px;
   background: color-mix(in lch, var(--canvas) 76%, var(--panel));
   padding-inline: 12px;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 70%);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel) 70%, transparent);
 }
 
 .auth-shell .auth-card > .ui-button--primary,
@@ -202,7 +203,7 @@
   min-height: 42px;
   border-radius: 11px;
   font-weight: 680;
-  box-shadow: 0 10px 24px rgb(94 106 210 / 20%);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 .auth-choice {
@@ -213,7 +214,7 @@
   padding: 18px 18px 18px 78px;
   border-radius: 16px;
   background: color-mix(in lch, var(--canvas) 66%, var(--panel));
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 72%);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel) 72%, transparent);
   transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
@@ -248,7 +249,7 @@
 .auth-recovery,
 .auth-shell .auth-key-value {
   border-radius: 13px;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 60%);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel) 60%, transparent);
 }
 
 .auth-shell .auth-key-value {
@@ -263,7 +264,7 @@
 .auth-shell .auth-link:hover { color: var(--accent); }
 
 .settings-shell {
-  background: #f6f6f8;
+  background: var(--canvas);
 }
 
 @media (min-width: 681px) {
@@ -272,7 +273,7 @@
 
 .settings-sidebar {
   border-right-color: color-mix(in lch, var(--line) 72%, transparent);
-  background: #efeff2;
+  background: var(--chrome);
   padding: 18px 13px 14px;
 }
 
@@ -283,14 +284,14 @@
 
 .settings-sidebar nav button[aria-selected="true"] {
   background: var(--panel);
-  box-shadow: 0 4px 16px rgb(35 37 48 / 7%), inset 0 0 0 1px rgb(35 37 48 / 5%);
+  box-shadow: 0 4px 16px rgb(35 37 48 / 7%), inset 0 0 0 1px color-mix(in srgb, var(--ink) 5%, transparent);
   color: var(--ink);
 }
 
 .settings-main {
   background:
-    radial-gradient(circle at 92% 4%, rgb(94 106 210 / 6%), transparent 24%),
-    #f8f8fa;
+    radial-gradient(circle at 92% 4%, color-mix(in srgb, var(--accent) 6%, transparent), transparent 24%),
+    var(--canvas);
 }
 
 .settings-heading { margin-bottom: 38px; }
@@ -301,7 +302,7 @@
 .settings-card {
   border-color: color-mix(in lch, var(--line) 82%, transparent);
   border-radius: 16px;
-  box-shadow: 0 9px 28px rgb(35 37 48 / 4%), inset 0 1px 0 rgb(255 255 255 / 75%);
+  box-shadow: 0 9px 28px rgb(35 37 48 / 4%), inset 0 1px 0 color-mix(in srgb, var(--panel) 75%, transparent);
 }
 
 .settings-card--pad > .auth-key-reveal > h2 {

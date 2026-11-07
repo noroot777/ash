@@ -155,9 +155,14 @@ const START_BODY_KEY = `${storageKey}:assist-start-body`;
 // 完全可以先往启动脚本里敲几行。这一段时序是第 13 轮审查的复现要件：终态到达时框里那份已经不是
 // 「点下去那一刻」的内容，谁拿它当基准谁就会把用户刚写的顶掉。标记同样得活过那次刷新，所以走
 // localStorage 而不是模块级变量。
+//
+// 压多久**由测试说了算**（assist-release-held-get），不是一个固定毫秒数：满载时页面加载、点击都
+// 可能比任何固定延迟都慢，延迟一到它自己落地，测试就读到「首次读取已经回来了」那一段，
+// 要测的乱序根本没排出来。
 const HOLD_GET_KEY = `${storageKey}:assist-hold-next-get`;
-let holdFirstGet = localStorage.getItem(HOLD_GET_KEY) ? 1800 : 0;
+let holdFirstGet = !!localStorage.getItem(HOLD_GET_KEY);
 localStorage.removeItem(HOLD_GET_KEY);
+const heldGet = Promise.withResolvers<void>();
 
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -206,9 +211,8 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     // 它却在点完按钮之后才落地)。
     const payload = { job: readAssist(), instance: assistInstance() };
     if (holdFirstGet) {
-      const wait = holdFirstGet;
-      holdFirstGet = 0;
-      await new Promise((done) => setTimeout(done, wait));
+      holdFirstGet = false;
+      await heldGet.promise;
     }
     return reply(payload);
   }
@@ -339,6 +343,10 @@ function Fixture() {
           onClick={() => { localStorage.setItem(HOLD_GET_KEY, "1"); }}
         >
           假装刷新后首次读取很慢
+        </button>
+        {/* 上面那颗压住的那一次读取，由测试在它要的那个时刻放行。 */}
+        <button type="button" data-testid="assist-release-held-get" onClick={() => heldGet.resolve()}>
+          放行压住的那次读取
         </button>
         <ProjectSettingsPanel
           project={current}

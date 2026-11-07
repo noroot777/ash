@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
+import { WAIT_TIMEOUT_MS, fetchLog, settlePage, trackFetches } from "./wait-until.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -23,6 +24,7 @@ function startBackend() {
   let stdout = "";
   let stderr = "";
   const ready = new Promise((resolve, reject) => {
+    // 不是睡眠：就绪那一行一到就 resolve 并清掉它；15 秒只是夹具起不来时的报错上限。
     const timer = setTimeout(
       () => reject(new Error(`fixture startup timeout\n${stderr}\n${stdout}`)),
       15_000,
@@ -51,6 +53,7 @@ function startBackend() {
     const exited = new Promise(resolve => child.once("exit", resolve));
     if (child.connected) child.send({ type: "close" });
     else child.kill("SIGTERM");
+    // 收尾兜底：子进程按时退出就不等；超时只是改用 SIGKILL，没有断言依赖它。
     await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 5_000))]);
     if (child.exitCode === null) child.kill("SIGKILL");
   };
@@ -174,6 +177,11 @@ try {
       host: "127.0.0.1",
       port: 0,
       watch: null,
+      // 光写 watch: null 不够：加载了 web/vite.config.ts 时，vite 合并配置会跳过值为 null 的项，
+      // watcher 照开。同一检出里任何文件一变它就推整页刷新，把测试做到一半的页面冲掉（实测：
+      // 别的执行者改 web/scripts 里的文件时，review / refresh-paths 两条因此中途被刷新）。
+      // 关掉 HMR 连接，刷新就推不到页面上。
+      hmr: false,
       proxy: { "/api": { target: `http://127.0.0.1:${info.port}` } },
     },
   });
@@ -196,6 +204,9 @@ try {
       actionPosts += 1;
     }
   });
+  // 页面那一侧发没发写操作（fetch 一调用就记下，比 Node 侧收到 request 事件早）。
+  await trackFetches(page, "/git/workbench/actions$");
+  const pagePosts = async () => (await fetchLog(page)).length;
   await page.goto(url.href);
   await page.getByRole("navigation", { name: "Git 工作台视图" }).waitFor();
   const submitSelectionDiscard = async (currentDialog, expectedLines) => {
@@ -242,13 +253,17 @@ try {
   assert.equal(await hunkDiscard.isDisabled(), true, "cancelled selection must keep hunk discard disabled");
 
   const postsBeforeWrong = actionPosts;
+  const pagePostsBeforeWrong = await pagePosts();
   await page.getByRole("button", { name: "丢弃所选改动", exact: true }).click();
   dialog = page.getByRole("dialog", { name: "丢弃所选改动" });
   await dialog.getByLabel("输入目标以确认").fill("错误确认");
   const selectionConfirm = dialog.getByRole("button", { name: "丢弃所选改动", exact: true });
   assert.equal(await selectionConfirm.isDisabled(), true, "wrong confirmation must not be actionable");
   await dialog.getByLabel("输入目标以确认").press("Enter");
-  await page.waitForTimeout(150);
+  // Enter 的处理在按键派发里同步跑完；冲刷掉它排下的提交/effect 后，页面若要发写操作，
+  // fetch 此刻已经调用过了（trackFetches 在调用那一刻就记下）。
+  await settlePage(page);
+  assert.equal(await pagePosts(), pagePostsBeforeWrong, "wrong confirmation must not send an action");
   assert.equal(actionPosts, postsBeforeWrong, "wrong confirmation must not send an action");
   assert.deepEqual(fingerprint(), beforeConfirm, "wrong confirmation must not change files or Git state");
   await dialog.getByLabel("输入目标以确认").fill("丢弃");
@@ -423,7 +438,8 @@ try {
     worktrees.push(path);
   }
   const pollingStarted = Date.now();
-  await worktreeMenu.getByRole("menuitem").nth(8).waitFor({ timeout: 12_000 });
+  // 新工作树要等下一轮 5 秒轮询才看得见：期限 = 一个轮询周期 + 满载余量。
+  await worktreeMenu.getByRole("menuitem").nth(8).waitFor({ timeout: 5_000 + WAIT_TIMEOUT_MS });
   await page.waitForFunction(() => {
     const menu = document.querySelector('[role="menu"][aria-label="选择工作树"]');
     return menu && menu.getBoundingClientRect().bottom <= window.innerHeight - 8;
@@ -456,7 +472,7 @@ try {
   for (const path of worktrees.slice(2)) git("worktree", "remove", "--force", path);
   await page.waitForFunction(() =>
     document.querySelectorAll('[role="menu"][aria-label="选择工作树"] [role="menuitem"]').length === 3,
-  undefined, { timeout: 12_000 });
+  undefined, { timeout: 5_000 + WAIT_TIMEOUT_MS });
   await page.waitForFunction(() => {
     const menu = document.querySelector('[role="menu"][aria-label="选择工作树"]');
     return menu && menu.getBoundingClientRect().bottom <= window.innerHeight - 8;

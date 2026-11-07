@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { resizeViewport } from "./wait-until.mjs";
 
 const web = await startWebServer();
 let browser;
@@ -142,7 +143,7 @@ try {
   await objective.press("Control+Enter");
   assert.equal(created.length, 0, "隐藏定时面板后快捷键也不能绕过门禁");
   for (const width of [320, 390, 700, 900]) {
-    await page.setViewportSize({ width, height: 800 });
+    await resizeViewport(page, { width, height: 800 });
     await page.getByRole("button", { name: /^组织与标签：/ }).click();
     const panel = page.getByRole("dialog", { name: "组织与标签", exact: true });
     assert.equal(await panel.getByRole("textbox", { name: "添加标签" }).isVisible(), true);
@@ -214,7 +215,7 @@ try {
   await page.getByRole("tab", { name: "起手式", exact: true }).click();
   assert.equal(await page.getByRole("button", { name: "展开编排" }).count(), 1);
   for (const width of [320, 390]) {
-    await page.setViewportSize({ width, height: 700 });
+    await resizeViewport(page, { width, height: 700 });
     const panel = page.getByRole("dialog", { name: "工作方式", exact: true });
     assert.equal(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth), true, "workflow overflow at " + width);
   }

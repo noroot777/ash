@@ -6,11 +6,17 @@
   margin: 0 2px 8px;
 }
 
+/* Claude 的品牌色（与 agents-settings.css 的 is-claude 同值），深色底上换亮一档。 */
+.claude-model-settings,
+.claude-model-mode-tabs { --claude-tone: #a76338; }
+[data-theme="dark"] .claude-model-settings,
+[data-theme="dark"] .claude-model-mode-tabs { --claude-tone: #d9915f; }
+
 .claude-model-settings {
   display: grid;
   gap: 10px;
   border-top: 1px solid var(--line);
-  background: color-mix(in lch, var(--agent-color, #a76338) 3%, var(--panel));
+  background: color-mix(in lch, var(--agent-color, var(--claude-tone)) 3%, var(--panel));
   padding: 13px 16px 15px;
 }
 
@@ -33,11 +39,11 @@
   cursor: pointer;
 }
 .claude-model-mode-tabs button[aria-pressed="true"] {
-  background: color-mix(in lch, #a76338 13%, var(--panel));
+  background: color-mix(in lch, var(--claude-tone) 13%, var(--panel));
   color: var(--ink);
   font-weight: 650;
 }
-.claude-model-mode-tabs button:focus-visible { outline: 2px solid #a76338; outline-offset: -2px; }
+.claude-model-mode-tabs button:focus-visible { outline: 2px solid var(--claude-tone); outline-offset: -2px; }
 
 .claude-model-settings-head,
 .claude-model-settings-foot {
@@ -77,7 +83,7 @@
 .claude-model-settings textarea { width: 100%; resize: vertical; }
 .claude-model-hours { display: flex; align-items: center; gap: 6px; }
 .claude-model-hours input { width: 72px; }
-.claude-model-settings :is(button, input, textarea):focus-visible { outline: 2px solid #a76338; outline-offset: 2px; }
+.claude-model-settings :is(button, input, textarea):focus-visible { outline: 2px solid var(--claude-tone); outline-offset: 2px; }
 
 @media (max-width: 650px) {
   .claude-model-settings-head, .claude-model-settings-foot { align-items: flex-start; flex-wrap: wrap; }

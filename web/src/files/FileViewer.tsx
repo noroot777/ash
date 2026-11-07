@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowSquareOut,
   CaretLeft,
@@ -12,9 +12,12 @@ import {
   Warning,
   X,
 } from "@phosphor-icons/react";
+import { ImageZoomControls } from "../components/ImageZoomControls.tsx";
+import { useImageZoom } from "../components/useImageZoom.ts";
 import { api, type FileContent } from "../lib/api.ts";
 import { useZoomLayer, ZoomToggle } from "../lib/zoomLayer.tsx";
 import { formatSize, isImageName } from "./fileModel.ts";
+import { MARKDOWN_PATTERN, MarkdownFileBody } from "./MarkdownFileBody.tsx";
 import { OpenWithMenu } from "./OpenWithMenu.tsx";
 import { useDeleteEntry } from "./useDeleteEntry.tsx";
 
@@ -26,6 +29,18 @@ function TextBody({ file }: { file: FileContent }) {
         {lines.map((_line, index) => <span key={index}>{index + 1}</span>)}
       </div>
       <pre className="file-viewer__text"><code>{file.text}</code></pre>
+    </div>
+  );
+}
+
+// 文件里的图片就在中栏原地缩放，跟大图灯箱同一套手势与工具条；左右键照旧留给连续翻图。
+function ImageBody({ src, name }: { src: string; name: string }) {
+  const box = useRef<HTMLDivElement>(null);
+  const zoom = useImageZoom(src, box);
+  return (
+    <div className="file-viewer__media file-viewer__media--image" ref={box}>
+      <img {...zoom.imageProps} ref={zoom.imageRef} src={src} alt={name} draggable={false} />
+      <ImageZoomControls zoom={zoom} />
     </div>
   );
 }
@@ -70,13 +85,7 @@ function Body({
   showSource: boolean;
 }) {
   const rawUrl = api.taskFileRawUrl(taskId, file.path);
-  if (file.kind === "image") {
-    return (
-      <div className="file-viewer__media">
-        <img src={rawUrl} alt={file.name} />
-      </div>
-    );
-  }
+  if (file.kind === "image") return <ImageBody src={rawUrl} name={file.name} />;
   if (file.kind === "pdf") {
     // iframe 的无障碍名用 aria-label 而不是 title：原生 title 在这个仓库是受管控的存量。
     return <iframe className="file-viewer__pdf" src={rawUrl} aria-label={`${file.name} 预览`} />;
@@ -96,6 +105,9 @@ function Body({
         <audio className="file-viewer__audio" src={rawUrl} controls preload="metadata" />
       </div>
     );
+  }
+  if (file.kind === "text" && MARKDOWN_PATTERN.test(file.path) && !showSource) {
+    return <MarkdownFileBody taskId={taskId} file={file} />;
   }
   if (file.kind === "binary") {
     return (
@@ -213,8 +225,10 @@ export function FileViewer({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [revealing, setRevealing] = useState(false);
-  // 网页默认渲染、可切回源码。默认摊开渲染那一面：点开一份 html 十有八九是想看它长什么样，
-  // 想读源码的人按一下就有；换文件时重置，不然上一个文件选的「源码」会跟着带到下一个。
+  // 网页和 Markdown 默认渲染、可切回源码。默认摊开渲染那一面：点开一份 html 十有八九是想看
+  // 它长什么样，想读源码的人按一下就有；换文件时重置，不然上一个文件选的「源码」会跟着带到
+  // 下一个。
+  const markdown = file?.kind === "text" && MARKDOWN_PATTERN.test(file.path);
   const [showSource, setShowSource] = useState(false);
   useEffect(() => setShowSource(false), [path]);
   const zoom = useZoomLayer({
@@ -297,7 +311,7 @@ export function FileViewer({
             onStep={step}
           />
         )}
-        {pageUrl && (
+        {(pageUrl || markdown) && (
           <button
             type="button"
             className="file-viewer__action"
@@ -305,7 +319,7 @@ export function FileViewer({
             onClick={() => setShowSource((current) => !current)}
           >
             <Code size={13} aria-hidden="true" />
-            {showSource ? "看页面" : "看源码"}
+            {showSource ? (markdown ? "看排版" : "看页面") : "看源码"}
           </button>
         )}
         {/* 沙箱预览做不到完全保真（打包后的 JS 里 fetch("/api/…") 改不动），所以网页多给一颗

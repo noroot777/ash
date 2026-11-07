@@ -10,6 +10,7 @@
 // 跑：npm -w web run test:open-with
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchLog, settlePage, trackFetches } from "./wait-until.mjs";
 
 const PROBE = {
   platform: "darwin",
@@ -30,10 +31,17 @@ try {
 
   const probeCalls = [];
   const openCalls = [];
+  // 第一次探测按住到测试亲眼看见加载态再放：「加载态 → 应用清单」这个过渡必须真的发生过，
+  // 而不是拿 120ms 赌测试来得及看见它（满载时测试这边一次往返就不止 120ms）。
+  let releaseProbe;
+  const probeHeld = new Promise((resolve) => { releaseProbe = resolve; });
+  let holdProbe = true;
   await page.route("**/api/tasks/*/file/openers**", async (route) => {
     probeCalls.push(new URL(route.request().url()).searchParams.get("path"));
-    // 慢一点，好让「加载态 → 应用清单」这个过渡真的发生过而不是一步到位
-    await new Promise((done) => setTimeout(done, 120));
+    if (holdProbe) {
+      holdProbe = false;
+      await probeHeld;
+    }
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(PROBE) });
   });
   await page.route("**/api/tasks/*/file/open", async (route) => {
@@ -41,6 +49,8 @@ try {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, absPath: "/tmp/AGENTS.md" }) });
   });
 
+  // 页面这边发出的探测：「重开不该再探」要按页面真发没发算，不靠路由那边的计数赶不赶得上。
+  await trackFetches(page, "/file/openers");
   await page.goto(`${web.origin}/scripts/fixtures/open-with-menu.html`);
 
   const trigger = page.getByRole("button", { name: /打开方式/ });
@@ -50,10 +60,11 @@ try {
   await trigger.click();
   const loading = page.getByText("正在查本机装了哪些应用…");
   await loading.waitFor();
+  releaseProbe();
 
   // 这就是回归点：加载态必须能走完，且落到真实的应用清单上
   const codeItem = page.getByRole("menuitem", { name: /Code/ });
-  await codeItem.waitFor({ timeout: 5000 });
+  await codeItem.waitFor({ timeout: 15_000 });
   assert.equal(await loading.count(), 0, "拿到清单后加载提示必须消失");
   assert.equal(await page.getByRole("menuitem", { name: /TextEdit/ }).count(), 1);
   assert.equal(await page.getByText("支持这种扩展名").count(), 1);
@@ -70,13 +81,16 @@ try {
   // 复开不该重复探测（清单缓存在组件里）
   await trigger.click();
   await page.getByRole("menuitem", { name: /Code/ }).waitFor();
+  // 重开那一下引起的 effect 都冲刷掉再数：要探的话 fetch 此刻已经发出，页面侧当场记得到。
+  await settlePage(page);
+  assert.equal((await fetchLog(page)).length, 1, "同一个文件重开菜单不该再探一次");
   assert.equal(probeCalls.length, 1, "同一个文件重开菜单不该再探一次");
   await page.keyboard.press("Escape");
 
   // 换文件：清单作废，重探一次，并且探的是新路径
   await page.getByRole("button", { name: "换文件" }).click();
   await trigger.click();
-  await page.getByRole("menuitem", { name: /Code/ }).waitFor({ timeout: 5000 });
+  await page.getByRole("menuitem", { name: /Code/ }).waitFor({ timeout: 15_000 });
   assert.deepEqual(probeCalls, ["AGENTS.md", "readme.md"], "换文件后要按新路径重探");
 
   console.log("✓ open-with 菜单：加载态能走完、应用可点、按 appId 发出打开、换文件重探");

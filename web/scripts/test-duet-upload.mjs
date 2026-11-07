@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage, waitUntil } from "./wait-until.mjs";
 
 // 讨论的 G1 收敛门也能粘图（注入意见/提问继续那个输入区）。这条钉住的是：输入区是可以
 // 再点一下收起来的，收起来之后在途上传既不能从界面上消失，也不能让「放行结束 / 打回终止」
@@ -22,8 +23,8 @@ try {
   const page = await browser.newPage();
   const held = new Map();
   const release = async (name) => {
-    for (let i = 0; i < 100 && !held.has(name); i++) await page.waitForTimeout(50);
-    held.get(name)?.();
+    await waitUntil(() => held.has(name), `${name} 的上传请求到达路由桩并被扣住`);
+    held.get(name)();
   };
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -73,8 +74,10 @@ try {
     "收起输入区后要写明为什么现在放不了行",
   );
   assert.equal(await approve.isDisabled(), true, "收起输入区不该把放行按钮放开");
+  // 强点一下：按钮若没真禁用，click 在页面处理完这次输入事件后才返回，处理函数是同步调
+  // onGate 的（夹具里 onGate 只是 setState）；冲刷一轮让那次提交落地再看门禁记录。
   await approve.click({ force: true });
-  await page.waitForTimeout(300);
+  await settlePage(page);
   assert.equal(await page.getByText("门禁：approve").count(), 0, "上传中点放行不能真的把门关掉");
 
   // ③ 传完了但还没提交：approve/reject 这两个 GateAction 带不了附件，这时候放行等于
@@ -89,7 +92,7 @@ try {
   );
   assert.equal(await approve.isDisabled(), true, "还捏着没提交的附件时不能放行结束");
   await approve.click({ force: true });
-  await page.waitForTimeout(300);
+  await settlePage(page);
   assert.equal(await page.getByText("门禁：approve").count(), 0, "附件没提交时点放行不能把门关掉");
 
   // ③b 重新展开输入区，把它提交出去：附件跟着 inject 走，门禁恢复。

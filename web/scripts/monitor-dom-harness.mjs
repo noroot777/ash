@@ -5,6 +5,7 @@
 // 条/切任务这一组用例，`test-monitor-composer-dom.mjs` 是「它什么时候算完」那一格 —— 两边起的
 // 是同一份台子，所以台子只写一处:哪天 fixture 的 API 形状变了，不会只改对一半。
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { trackFetches, WAIT_TIMEOUT_MS } from "./wait-until.mjs";
 
 export const LONG_CWD = "/Users/fjh/code/harness/.worktrees/S3Bp7iPC8wOe/server/scripts/fixtures/deeply/nested/working/directory";
 export const LONG_COMMAND = "tail -F /var/log/very-long-path/build-output-with-an-extremely-long-name.log | grep --line-buffered -E 'ERROR|FAILED|Traceback'";
@@ -37,6 +38,10 @@ export const monitor = (id, taskId, over = {}) => ({
  * `open(handler, query)` 开一个新页面并把 `/api/**` 全拦下来 —— `handler` 答得出的那几条按它
  * 的，剩下的落到这里的兜底（列表、恢复状态、日志）。页面里的 `pageerror` 一律记进 `failures`:
  * 判据在**每次渲染**里同步跑,它一抛整棵树就卸载 —— 那种事只有真壳子看得见。
+ *
+ * 页面上每一发 `/api/` 请求都由 `trackFetches` 记着（见 wait-until.mjs）：负向断言（「迟到的
+ * 那发不许落地」）要等的正向信号就是「它已经被页面读完或掐掉」，Node 侧的桩只知道自己送出去了。
+ * EventSource 是桩：`opened` 记下它已经替页面发过那次 open，用例据此知道「连上」这件事已经发生。
  */
 export async function openHarness() {
   const web = await startWebServer();
@@ -45,13 +50,16 @@ export async function openHarness() {
   const failures = [];
   const open = async (handler, query = "") => {
     const page = await browser.newPage();
-    page.setDefaultTimeout(5000);
+    // 条件等待的期限按满载给（门禁 8 路并行）：真坏了也只是晚几秒报，不会让慢机器闪红。
+    page.setDefaultTimeout(WAIT_TIMEOUT_MS);
     page.on("pageerror", (error) => failures.push(error.message));
     await page.addInitScript(() => {
       window.localStorage.clear();
       window.__sources = [];
       window.EventSource = class {
-        constructor(url) { this.url = url; this.closed = false; window.__sources.push(this); setTimeout(() => { if (!this.closed) this.onopen?.({}); }, 0); }
+        // setTimeout(0) 只是让 open 像真连接那样异步到达（订阅方先把 onopen 挂上），不是在等什么：
+        // 用例要的是「已经连上」这个事实，看 `opened`，不看过了多久。
+        constructor(url) { this.url = url; this.closed = false; this.opened = false; window.__sources.push(this); setTimeout(() => { if (!this.closed) { this.opened = true; this.onopen?.({}); } }, 0); }
         close() { this.closed = true; }
       };
     });
@@ -70,6 +78,7 @@ export async function openHarness() {
       failures.push(`unexpected API request: ${path}`);
       await route.fulfill({ status: 500, json: { error: "unexpected request" } });
     });
+    await trackFetches(page, "/api/");
     await page.goto(`${origin}/scripts/fixtures/monitor-inspector.html${query}`);
     return page;
   };

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { CATCH_UP_DEADLINE_MS } from "../src/lib/catchUp.ts";
+import { WAIT_TIMEOUT_MS } from "./wait-until.mjs";
 
 async function openFixture({ browser, base, hold = false, clock = false }) {
   const page = await browser.newPage({ viewport: { width: 1100, height: 820 } });
@@ -30,6 +32,7 @@ async function openFixture({ browser, base, hold = false, clock = false }) {
     };
     window.reconnectGateEvents = () => {
       for (const stream of streams) stream.onerror?.();
+      // 只是让「断开」和「连上」落在两个任务里；测试按读取信号的条数等，不靠这 50ms。
       setTimeout(() => { for (const stream of streams) stream.onopen?.(); }, 50);
     };
   }, hold);
@@ -81,7 +84,9 @@ export async function testAcceptGateReads({ browser, base }) {
           window.holdGateReads = false;
           window.emitGateEvent({ type: "task.acceptGate", taskId: "gate-task" });
         });
-        await dialog.getByText(/项目配置的前置命令：/).waitFor();
+        // 被扣住的那一发不会自己回来：事件触发的 run() 只记一笔欠账（不抢占），要等追平层的
+        // 期限把它掐掉、补发的那一趟才落地。所以预算是「期限 + 满载余量」，不是 locator 默认的 30 秒。
+        await dialog.getByText(/项目配置的前置命令：/).waitFor({ timeout: CATCH_UP_DEADLINE_MS + WAIT_TIMEOUT_MS });
         assert.equal(await page.evaluate(index => window.gateReadSignals[index].aborted, held), true);
       }
       await page.evaluate(() => { window.holdGateReads = true; window.emitGateEvent({ type: "task.acceptGate", taskId: "gate-task" }); });

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { resizeViewport } from "./wait-until.mjs";
 
 export async function checkPreviewServiceRegressions(browser, base) {
   const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
@@ -10,7 +11,7 @@ export async function checkPreviewServiceRegressions(browser, base) {
     await page.keyboard.press("Tab");
     assert(await page.locator(".preview-service-links a").first().evaluate((el) => el === document.activeElement), "日志入口之后应进入第二行的服务链接");
 
-    await page.setViewportSize({ width: 620, height: 900 });
+    await resizeViewport(page, { width: 620, height: 900 });
     assert.equal(await page.locator(".preview-service-links").isVisible(), false, "窄屏应统一收起多服务预览链接");
     await page.goto(`${base}?mode=single-short`);
     const singleLink = page.getByRole("link", { name: "在新窗口打开预览", includeHidden: true });
@@ -26,7 +27,9 @@ export async function checkPreviewServiceRegressions(browser, base) {
     await page.getByTestId("preview-log-open").click();
     await page.getByRole("tab", { name: /a4sms-icis/ }).click();
     await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent === "fresh api log");
-    await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent === "remaining services log", null, { timeout: 8000 });
+    // 下面几处等的都是日志弹窗 2 秒一轮的轮询往前走几轮（服务消失、读取失败再恢复、服务列表迟到），
+    // 用 Playwright 默认的 30 秒期限：从前写死 8～15 秒，满载时几轮轮询就能把它吃完。
+    await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent === "remaining services log");
     assert.equal(await page.getByRole("tab", { selected: true }).count(), 1, "选中服务消失后仍应有唯一选中项");
     assert.match(await page.getByRole("tab", { selected: true }).textContent(), /全部/);
     assert.equal(await page.locator('[role="tab"][tabindex="0"]').count(), 1, "服务消失后 Tab 条应仍可通过键盘进入");
@@ -44,7 +47,7 @@ export async function checkPreviewServiceRegressions(browser, base) {
     await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent?.includes("all service line 220"));
     assert.equal(await page.getByRole("tab").count(), 0);
     await page.getByRole("button", { name: "复制", exact: true }).focus();
-    await page.getByRole("tab", { name: /全部/ }).waitFor({ timeout: 15000 });
+    await page.getByRole("tab", { name: /全部/ }).waitFor();
     assert(await page.getByRole("button", { name: "复制", exact: true }).evaluate((el) => el === document.activeElement), "迟到的服务列表不能抢走复制按钮的焦点");
 
     const multiHeight = await page.locator(".preview-log-dialog").evaluate((el) => el.getBoundingClientRect().height);
@@ -69,10 +72,10 @@ export async function checkPreviewServiceRegressions(browser, base) {
     await page.goto(`${base}?mode=services-removed-error`);
     await page.getByTestId("preview-log-open").click();
     await page.getByRole("tab", { name: /a4sms-icis/ }).click();
-    await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent === "temporary log error #1", null, { timeout: 8000 });
+    await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent === "temporary log error #1");
     assert.match(await page.getByTestId("preview-log-state").textContent(), /正在运行/, "回退全部期间读取失败，不能把运行中的预览说成历史日志");
     assert.equal(await page.locator(".preview-log-meta").count(), 0, "回退全部后不应保留已移除服务的命令或链接");
-    await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent === "remaining services log", null, { timeout: 12000 });
+    await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent === "remaining services log");
     assert.match(await page.getByRole("tab", { selected: true }).textContent(), /全部/);
     assert.match(await page.getByTestId("preview-log-state").textContent(), /正在运行/);
 
@@ -88,7 +91,7 @@ export async function checkPreviewServiceRegressions(browser, base) {
     const beforeServices = await geometry();
     assert(beforeServices.height > 600, "服务数未知的启动预览应在列表到达前预留阅读空间");
     await page.getByRole("button", { name: "复制", exact: true }).focus();
-    await page.getByRole("tab", { name: /全部/ }).waitFor({ timeout: 15000 });
+    await page.getByRole("tab", { name: /全部/ }).waitFor();
     assert.deepEqual(await geometry(), beforeServices, "服务列表到达后窗口和底部按钮不能跳位");
     assert(await page.getByRole("button", { name: "复制", exact: true }).evaluate((el) => el === document.activeElement), "短日志的服务列表迟到也不能抢焦点");
   } finally {

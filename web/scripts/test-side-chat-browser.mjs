@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
+import { resizeViewport } from "./wait-until.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const fixture = spawn(process.execPath, ["--import", "tsx", "server/scripts/side-chat-browser-fixture.ts"], { cwd: fileURLToPath(new URL("../..", import.meta.url)), stdio: ["ignore", "pipe", "pipe"] });
@@ -16,6 +17,7 @@ let server;
 const artifacts = await mkdtemp(join(tmpdir(), "ash-side-chat-browser-"));
 try {
   const backend = await new Promise((resolve, reject) => {
+    // 这是启动期限，不是睡眠：读到 SIDE_FIXTURE_URL 当场清掉，只有夹具 20 秒都起不来才报错。
     const timer = setTimeout(() => reject(new Error(`fixture startup timeout: ${logs}`)), 20000);
     const consume = (chunk) => { logs += chunk; const match = logs.match(/SIDE_FIXTURE_URL=(http:\/\/[^\s]+)/); if (match) { clearTimeout(timer); resolve(match[1]); } };
     fixture.stdout.on("data", consume); fixture.stderr.on("data", consume);
@@ -26,7 +28,6 @@ try {
   const address = server.httpServer.address();
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
-  page.setDefaultTimeout(10000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const url = `http://127.0.0.1:${address.port}/scripts/fixtures/side-chat.html`;
@@ -232,7 +233,7 @@ try {
   assert.equal((await state()).kills, 0);
   await page.screenshot({ path: join(artifacts, "side-chat-deferral-preserved.png") });
   await control("forward-mode", {});
-  await page.setViewportSize({ width: 390, height: 844 });
+  await resizeViewport(page, { width: 390, height: 844 });
   const pane = await page.getByRole("region", { name: "任务侧聊", exact: true }).boundingBox();
   assert.ok(pane && pane.width > 250 && pane.x >= 0 && pane.x + pane.width <= 391);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));

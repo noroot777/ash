@@ -61,6 +61,50 @@ assert.equal(
   "只认最新结论轮自己的锚点，不得回退借用旧轮",
 );
 
+// 有内容指纹时按内容比，不再按「HEAD 相同且干净」：在没提交的改动上审出来的结论，
+// 落地时工作区本来就脏，照旧判法一出生就过期。
+const dirtyReviewed = {
+  ...run,
+  status: "stopped",
+  rounds: [{ round: 1, status: "failed", conclusion: "verify_failed", reviewedCommit: "aaa", reviewedFingerprint: "v1:review" }],
+};
+assert.equal(freeConclusionFreshness(dirtyReviewed, "aaa", true, "v1:review"), "fresh", "脏工作区上审的结论，内容没变就是新鲜");
+assert.equal(freeConclusionFreshness(dirtyReviewed, "aaa", true, "v1:other"), "stale", "内容变了就过期");
+assert.equal(freeConclusionFreshness(dirtyReviewed, "aaa", false, null), "unknown", "有指纹锚点却读不到当前指纹是未知");
+// 部分驳回：执行者先改掉认下的几条再驳剩下的，驳回那一版同样是这一轮的锚点。
+const partlyDisputed = {
+  ...dirtyReviewed,
+  rounds: [{ ...dirtyReviewed.rounds[0], disputedFingerprint: "v1:dispute" }],
+};
+assert.equal(freeConclusionFreshness(partlyDisputed, "aaa", true, "v1:dispute"), "fresh", "驳回那一版仍对应这轮意见");
+assert.equal(freeConclusionFreshness(partlyDisputed, "aaa", true, "v1:review"), "fresh", "审查那一版同样认");
+assert.equal(freeConclusionFreshness(partlyDisputed, "aaa", true, "v1:later"), "stale", "驳回之后又改过就过期");
+// 采纳执行者 / 转独立任务之后不再「接着修」，驳回前改的那部分没人审过：只认审查那一版。
+for (const resolution of ["withdrawn", "deferred"]) {
+  const ruled = {
+    ...partlyDisputed,
+    rounds: [{ ...partlyDisputed.rounds[0], dispute: { resolution } }],
+  };
+  assert.equal(freeConclusionFreshness(ruled, "aaa", true, "v1:dispute"), "stale", `${resolution} 之后驳回那一版不再算审过`);
+  assert.equal(freeConclusionFreshness(ruled, "aaa", true, "v1:review"), "fresh", `${resolution} 之后审查那一版照旧`);
+}
+assert.equal(freeConclusionFreshness({
+  ...partlyDisputed,
+  rounds: [{ ...partlyDisputed.rounds[0], dispute: { resolution: "upheld" } }],
+}, "aaa", true, "v1:dispute"), "fresh", "维持意见后接着修的就是驳回那一版");
+// 新审查采集失败记成 "unknown"：不能当老数据退回「HEAD 相同且干净」。
+const unknownAnchor = {
+  ...run,
+  status: "stopped",
+  rounds: [{ round: 1, status: "failed", conclusion: "verify_failed", reviewedCommit: "aaa", reviewedFingerprint: "unknown" }],
+};
+assert.equal(freeConclusionFreshness(unknownAnchor, "aaa", false, null), "unknown", "采集失败 + 干净工作区仍是未知");
+assert.equal(freeConclusionFreshness(unknownAnchor, "aaa", false, "v1:x"), "unknown", "能算出当前指纹也比不了");
+assert.equal(freeConclusionFreshness({
+  ...unknownAnchor,
+  rounds: [{ ...unknownAnchor.rounds[0], disputedFingerprint: "v1:dispute" }],
+}, "aaa", true, "v1:other"), "stale", "驳回那一版可证明时，对不上就是过期");
+
 // 叙事全部推导：修复中 = 任务在跑 + 未通过意见在身；自动复审 = 预约槽挂 runId。
 const stoppedState = {
   workspaceHead: "aaa",

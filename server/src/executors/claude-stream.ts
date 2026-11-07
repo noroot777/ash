@@ -20,7 +20,7 @@ import { ClaudeControlBridge } from "./claude-control.js";
 import { ClaudeBackgroundTrace } from "../claude-background-reaped.js";
 import { ClaudeMonitorTrace } from "../claude-monitors.js";
 import { runOriginOfChild } from "../claude-monitor-origin.js";
-import { consumedEvents, holdSince, interruptedResults, isOwnInterruptAck, startsTurn } from "./claude-recovery.js";
+import { consumedEvents, holdSince, startsTurn } from "./claude-recovery.js";
 import type { ConsumedOutput } from "./types.js";
 import { claudeRetryMessage, isClaudeRetry } from "./claude-retry-notice.js";
 import { normalizeClaudeCliError, shortJson, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
@@ -134,9 +134,9 @@ async function* claudeStreamEvents(
   // 接管时读不出水位之前那段:后台还有没有活、回合在不在进行,一概说不准(见 ./claude-recovery.ts)。
   // 回合结尾一律按「可能还有」先不收台,等到期限按未完成结算 —— 不能拿空账本判「没有后台工作」。
   let recoveryUnknown = false;
-  // 第几个回合结尾(孤儿回执不算)。等后台的起点按它落盘,重启接管时认得出是不是同一次等待。
-  let turns = 0;
   const outPath = (child as { ashPaths?: { out?: string } }).ashPaths?.out;
+  // 单飞判「后台超时/丢失」前要核对的就是这本实时账(见 singleRunFromResident)。
+  if (resident) resident.backgroundPending = () => ({ ...background.waiting(), ...(recoveryUnknown ? { unknown: true as const } : {}) });
 
   // 「在等上游回话」等到什么份上就该说一声。CLI 发请求时给一条 status:"requesting",
   // 之后连接要是挂住,那就是**彻底的静默**:不重试、不报错、一个事件都没有
@@ -231,8 +231,7 @@ async function* claudeStreamEvents(
       return;
     }
     if (ev.type === "control_response") {
-      // 重放里的回执配不上这一代的请求;它说明的「这条 result 是打断出来的」已经由
-      // interruptedResults 先认过了。
+      // 重放里的回执配不上这一代的请求;哪个结尾是打断出来的由打断记录认(ClaudeControlBridge)。
       if (!replaying) resident?.handleResponse(ev);
       return;
     }
@@ -394,7 +393,8 @@ async function* claudeStreamEvents(
       const failed = (!!ev.subtype && ev.subtype !== "success") || apiError;
       if (ev.origin?.kind === "task-notification" && !turnSpoke && !failed) return;
       turnSpoke = false;
-      turns += 1;
+      // 第几个回合结尾:等后台的起点和打断的认领都按它记,重启接管时认得出是哪一个。
+      if (resident) resident.turns += 1;
       // 这一个结尾推出的事件,重放时留着(见 `ending`);下一个回合一开始就作废。
       ending = [];
       capturing = true;
@@ -420,17 +420,27 @@ async function* claudeStreamEvents(
         });
       }
       // 我们自己发的 interrupt 会把本回合收成 error_during_execution —— 那是
-      // 「用户插话打断」的预期结果,不是故障,不报错。只吞掉紧跟其后的那一个
-      // result(标志立即清掉),所以最坏情况也只影响一个回合的错误上报。
-      const ownInterrupt = resident?.interruptPending === true;
-      if (resident) resident.interruptPending = false;
+      // 「用户插话打断」的预期结果,不是故障,不报错。每条打断只认领一个结尾(身份见
+      // ClaudeControlBridge.claimInterrupt),所以最坏情况也只影响一个回合的错误上报。
+      const claim = resident?.takeInterrupt(resident.turns) ?? null;
+      // 上一代发了插话的打断、正文没送进去就重启了:回合确实是我们打断的(不报错),但不会再有
+      // 插话开的下一回合,按这一回合结束处理,并告诉用户那条插话要重发。
+      const ownInterrupt = !!claim && !claim.abandoned;
+      const realFailure = failed && !claim;
+      // 上一代读完这个结尾、开始等后台之后,在空档里直接送进去过一条消息:这个结尾已经被那条消息开
+      // 的回合取代,不等后台、不收台,会话在忙(下面推完结尾就开新回合,这个结尾随之过期)。它落在
+      // 已消费水位之前还是之后的尾流里都一样认(见 claude-recovery.ts 的 SteerJournal)。
+      const superseded = !!resident && !claim && resident.takeSend(resident.turns);
+      if (claim?.abandoned) {
+        push({ kind: "system", text: "插话打断了这一回合，但 ash 恰在送出插话内容之前重启，那条消息没有送到，需要的话请重新发一次。", at: new Date().toISOString(), level: "notice" });
+      }
       // 我们自己打断的那一回合收尾时,插话那条消息已经(或马上就要)送进去开下一回合:会话
       // 仍算在忙。这里清成空闲,紧跟着的第二次插话就会走「空档直接送」、不再打断第一条。
       if (resident && !ownInterrupt) resident.turnActive = false;
       // claude CLI 把 **API 层**的失败(404 模型不存在、401、限流…)报成
       // `subtype:"success"` + `is_error:true` + `api_error_status` —— 只看 subtype
       // 会把它整条判成正常结束。两路判据都要算上,否则回合「成功」但一个字没说。
-      if (failed && !ownInterrupt) {
+      if (realFailure) {
         // CLI **自己**失败时(会话找不到、启动期崩)`result` 是空的,原因只在
         // `errors[]` 里。不读它就只剩一句 `result: error_during_execution`——用户看不出
         // 发生了什么,`session-lost.ts` 那条「no conversation found」的识别也永远匹配不上,
@@ -455,20 +465,21 @@ async function* claudeStreamEvents(
       // 它计成重试、页面会显示「在等上游」—— 而这里上游好好的,是我们在等自己的后台。
       //
       // 接管时状态未知(`recoveryUnknown`)就当后台可能还有活:账本是空的不等于没有。
-      const waiting = resident?.reapsAtTurnEnd && !ownInterrupt && !failed ? background.waiting() : null;
+      const waiting = resident?.reapsAtTurnEnd && !ownInterrupt && !realFailure && !superseded ? background.waiting() : null;
       const holding = !!waiting && (waiting.agent + waiting.workflow > 0 || recoveryUnknown);
       if (holding) {
         push({ kind: "system", text: backgroundHoldNotice(waiting, recoveryUnknown), at: new Date().toISOString(), level: "notice", aside: true });
-      } else if (resident?.reapsAtTurnEnd && !ownInterrupt) {
+      } else if (resident?.reapsAtTurnEnd && !ownInterrupt && !superseded) {
         for (const activity of nativeWork.reaped()) push(activity);
       }
       // 常驻:回合说完了,进程还活着等下一条消息 —— 流不结束。打断出来的那个结尾要标出来:
       // 单飞据此不收台(接管回来的这一代没有发过那次打断,只能靠这个认)。等后台的起点重放时
-      // 先不记,真要重发这个结尾时再定(见下面的 `deferred`)。
+      // 先不记,重放完真要重发这个结尾时再定(见下面的 `consumed`)。
       if (resident) {
         push(holding
-          ? { kind: "turnEnd", background: { ...waiting!, ...(replaying ? {} : { since: holdSince(outPath, turns) }) }, epoch: resident.epoch }
+          ? { kind: "turnEnd", background: { ...waiting!, ...(replaying ? {} : { since: holdSince(outPath, resident.turns) }) }, epoch: resident.epoch }
           : ownInterrupt ? { kind: "turnEnd", interrupted: true } : { kind: "turnEnd", epoch: resident.epoch });
+        if (superseded) resident.beginTurn(true);
       }
       // 只清字节去重表,不动 `refs`:引用身份在一条流里单调递增,复位会让两个回合的
       // 身份撞上。字节去重按回合清是故意的 —— 同一个路径在下一回合被重拍过,那是新的
@@ -482,34 +493,14 @@ async function* claudeStreamEvents(
     }
   };
 
-  // 重启接管:先把水位之前那段静音走一遍(见 ./claude-recovery.ts 文件头)。
-  let deferred: { events: AgentEvent[]; turn: number } | null = null;
-  const emitDeferred = () => {
-    if (!deferred) return;
-    const { events: held, turn } = deferred;
-    deferred = null;
-    const at = new Date().toISOString();
-    // 回合身份用重发这一刻的:重放里的计数跟这一代对不上;这之后再开回合,它照样过期。
-    const epoch = resident?.epoch;
-    for (const event of held) {
-      if (event.kind === "system") push({ ...event, at });
-      else if (event.kind === "turnEnd" && event.background) push({ ...event, background: { ...event.background, since: holdSince(outPath, turn) }, epoch });
-      else if (event.kind === "turnEnd" && !event.interrupted) push({ ...event, epoch });
-      else push(event);
-    }
-  };
-  if (consumed && consumed.offset > 0) {
+  // 重启接管:先把水位之前那段静音走一遍(见 ./claude-recovery.ts 文件头)。打断记录先读回来,
+  // 重放里的结尾才认得出哪个是打断出来的。
+  if (consumed) {
     replaying = true;
     background.quiet = true;
     try {
-      const own = interruptedResults(consumedEvents(consumed));
-      let index = 0;
-      for (const ev of consumedEvents(consumed)) {
-        if (resident && own.results.has(index)) resident.interruptPending = true;
-        handle(ev);
-        index += 1;
-      }
-      if (resident && own.pending) resident.interruptPending = true;
+      resident?.restore();
+      if (consumed.offset > 0) for (const ev of consumedEvents(consumed)) handle(ev);
     } catch (error) {
       recoveryUnknown = true;
       ending = null;
@@ -522,16 +513,31 @@ async function* claudeStreamEvents(
       capturing = false;
       background.quiet = false;
     }
+    // 读不出来时,单飞这一路就地开始「等后台」:不知道会不会还有下一个回合结尾,不能等到它来了
+    // 才承担期限 —— CLI 若正闲着等自己的后台,那个结尾可能永远不来(自由审查 ZbBv9az0Qgtf R1-A)。
+    // 说明当场给用户;期限到了按核实不了结算。真在回合中途,它一开口就开了新回合,这份等待随即
+    // 作废,那一回合的结尾再按未知判。
+    if (recoveryUnknown && resident?.reapsAtTurnEnd) {
+      const waiting = background.waiting();
+      push({ kind: "system", text: backgroundHoldNotice(waiting, true), at: new Date().toISOString(), level: "notice", aside: true });
+      // 起点同样落盘(按 -1 这个「接管时读不出」的结尾认),反复重启不重新给满。
+      push({ kind: "turnEnd", background: { ...waiting, since: holdSince(outPath, -1) }, epoch: resident.epoch });
+    }
     // 水位正停在一个回合结尾之后:上一代当时据它收台或开始等后台,这一代没见过,得照样重发。
-    // 收台的那种推迟到水位之后的第一行再定 —— 那一行若是 ash 那次打断的回执,这个结尾就是插话
-    // 打断出来的(CLI 的回执可以晚于那条 result,两种先后都有),不能拿它收台;水位之后一直没有
-    // 输出就等一秒照发。等后台的那种不必等:真是打断出来的,插话开的那一回合结尾会重新判。
-    if (ending && resident && !resident.turnActive) deferred = { events: ending, turn: turns };
+    // 打断出来的结尾不在此列(回合仍算在忙)。时刻与回合身份用重发这一刻的:重放里的计数跟这一代
+    // 对不上;这之后再开回合,它照样过期。
+    const last = ending as AgentEvent[] | null; // handle() 里写的,控制流分析看不见
+    if (last && resident && !resident.turnActive) {
+      const at = new Date().toISOString();
+      for (const event of last) {
+        if (event.kind === "system") push({ ...event, at });
+        else if (event.kind === "turnEnd" && event.background) push({ ...event, background: { ...event.background, since: holdSince(outPath, resident.turns) }, epoch: resident.epoch });
+        else if (event.kind === "turnEnd") push({ ...event, epoch: resident.epoch });
+        else push(event);
+      }
+    }
     ending = null;
-    if (deferred?.events.some((event) => event.kind === "turnEnd" && event.background)) emitDeferred();
   }
-  const deferTimer = deferred ? setTimeout(emitDeferred, 1_000) : null;
-  deferTimer?.unref?.();
 
   const rl = createInterface({ input: child.stdout! });
   rl.on("line", (line) => {
@@ -543,11 +549,6 @@ async function* claudeStreamEvents(
     } catch {
       return;
     }
-    if (deferred && isOwnInterruptAck(ev)) {
-      deferred = null;
-      resident?.beginTurn(); // 插话那条消息正在(或马上)送进去
-    }
-    emitDeferred();
     handle(ev);
   });
 
@@ -572,7 +573,6 @@ async function* claudeStreamEvents(
   });
   child.on("close", (code) => {
     if (events.closed) return;
-    emitDeferred();
     resident?.failPending(new Error("Claude 进程在 interrupt ACK 前退出"));
     flushText(); // emit any text tail that never hit the flush threshold
     const exit = code ?? 0;
@@ -583,7 +583,6 @@ async function* claudeStreamEvents(
     events.close();
   });
   forceFinishOnExit(child, () => events.closed, (exit) => {
-    emitDeferred();
     resident?.failPending(new Error("Claude 进程在 interrupt ACK 前异常收尾"));
     flushText();
     push({ kind: "error", message: "进程已退出但输出流未正常收尾(疑有残留子进程占用管道),已强制结束本回合" });
@@ -597,7 +596,6 @@ async function* claudeStreamEvents(
     yield* events.drain();
   } finally {
     clearInterval(waitTimer);
-    if (deferTimer) clearTimeout(deferTimer);
     // agent 进程结束 = 它名下的内置 Monitor 全都跟着没了（它们本来就在这棵进程树里）。
     // 不收尾的话面板上会永远留着几张「正在盯着」的僵尸卡。
     //

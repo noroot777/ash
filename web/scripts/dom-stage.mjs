@@ -32,14 +32,19 @@ export function viteCacheDir(name) {
   return join(root, "node_modules", ".vite-test", name);
 }
 
-// watch: null —— 测试页跑完就走，不需要 HMR；留着 watcher 收尾时会残留 FSEvent 句柄，进程
+// 不要 watcher、不要 HMR —— 测试页跑完就走；留着 watcher 收尾时会残留 FSEvent 句柄，进程
 // 偶发退不出去。共用那份还多一层理由：任何一次文件变动触发的整页刷新会同时打断所有在跑的测试。
+//
+// 光写 `watch: null` 关不掉：这里会加载 web/vite.config.ts，而 vite 合并配置时跳过值为 null 的
+// 项，解析出来是 undefined，watcher 照开（2026-11-06 实测）。于是同一检出里任何文件一变，
+// tailwind 插件就给所有连着的页面推一次 full-reload，页面状态清零、测试在莫名其妙的地方超时。
+// hmr: false 让 vite 不再往页面推任何东西，ignored 让 watcher 本身也不产生事件。
 async function viteServer(extra = {}) {
   const server = await createServer({
     root,
     logLevel: "error",
     cacheDir: viteCacheDir("stage"),
-    server: { host: "127.0.0.1", port: 0, strictPort: false, watch: null },
+    server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, watch: { ignored: () => true } },
     ...extra,
   });
   try {

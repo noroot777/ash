@@ -157,8 +157,14 @@ export const freeReviewRounds = sqliteTable(
     round: integer("round").notNull(),
     status: text("status").notNull(),
     conclusion: text("conclusion"),
-    // 本轮启动时任务工作区的 HEAD。结论新不新鲜靠它跟当前 HEAD 比，不靠状态字段。
+    // 本轮启动时任务工作区的 HEAD。结论新不新鲜靠锚点跟当前工作区比，不靠状态字段
+    // （判据见 shared 的 `reviewAnchorMatches`）。
     reviewedCommit: text("reviewed_commit"),
+    // 本轮启动时工作区的内容指纹（含未提交改动，workspace-fingerprint.ts）；null = 老数据，退回只比 HEAD；
+    // `UNKNOWN_FINGERPRINT` = 这一轮采集失败，永远判未知（不许冒充老数据退回 HEAD）。
+    reviewedFingerprint: text("reviewed_fingerprint"),
+    // 执行者驳回这一轮那一刻的内容指纹：维持意见后修复对应的是这一版（理由同上）。
+    disputedFingerprint: text("disputed_fingerprint"),
     // 写给用户的那一句人话（`PLAIN_SUMMARY_GUIDE`）：裁定屏的第一行字，时间线旁注也用它。
     // null = 加这列之前落的老驳回（界面降级成只显示正文，不编一句摘要糊上去）。
     disputeSummary: text("dispute_summary"),
@@ -289,7 +295,7 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
     CREATE TABLE IF NOT EXISTS free_review_rounds (
       id TEXT PRIMARY KEY, run_id TEXT NOT NULL, round INTEGER NOT NULL,
       status TEXT NOT NULL, conclusion TEXT, reviewed_commit TEXT,
-      dispute_summary TEXT,
+      reviewed_fingerprint TEXT, disputed_fingerprint TEXT, dispute_summary TEXT,
       dispute_reason TEXT, dispute_defer_reason TEXT, dispute_at TEXT,
       dispute_resolution TEXT, dispute_resolved_at TEXT, dispute_resolution_note TEXT,
       dispute_deferred_task_id TEXT, dispute_superseded_at TEXT, dispatch TEXT,
@@ -358,6 +364,9 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
     "ALTER TABLE free_review_rounds ADD COLUMN history_refs TEXT",
     "ALTER TABLE free_review_rounds ADD COLUMN carries TEXT",
     "ALTER TABLE free_review_rounds ADD COLUMN breaker_epoch INTEGER",
+    // 内容锚点（审查开始时 / 驳回时）；老行留 null = 退回只比 HEAD + 干净。
+    "ALTER TABLE free_review_rounds ADD COLUMN reviewed_fingerprint TEXT",
+    "ALTER TABLE free_review_rounds ADD COLUMN disputed_fingerprint TEXT",
     "ALTER TABLE free_review_debate_turns ADD COLUMN summary TEXT",
   ]) {
     try {

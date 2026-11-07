@@ -52,6 +52,8 @@ try {
     if (/same key|unique "key"/i.test(text)) keyWarnings.push(text.slice(0, 200));
   });
   await page.addInitScript(() => {
+    // setTimeout(0) 只是让 onopen 像真的那样异步到来（构造函数返回之后），不是睡眠：没有
+    // 断言依赖它的时长，下面先等两张卡真的画出来才开始数。
     window.EventSource = class {
       constructor(url) { this.url = url; this.closed = false; setTimeout(() => { if (!this.closed) this.onopen?.({}); }, 0); }
       close() { this.closed = true; }

@@ -196,9 +196,13 @@ try {
   rmSync(imageDir, { recursive: true, force: true });
 }
 
+// 整个回合一次写出：读端一块收齐、同步分完所有行之后，turn/start 应答的续体才轮得到。
+// 回合身份因此只能来自 turn/completed 自带的 turn.id（真协议总带），不能靠分块碰运气 ——
+// 曾经不带 id、又是逐条写，门禁 16 路满载时读端偶尔一块收齐，这条用例就永远等不到收尾。
 const app = openCodexAppServer({ bin: "codex", args: [], cwd: process.cwd(), prompt: "fixture", startProcess: () => spawn(process.execPath, ["-e", `
 const rl = require('node:readline').createInterface({ input: process.stdin });
-const send = (m) => process.stdout.write(JSON.stringify(m) + '\\n');
+let batch = '';
+const send = (m) => { batch += JSON.stringify(m) + '\\n'; };
 rl.on('line', (line) => {
   const m = JSON.parse(line);
   if (m.method === 'initialize') send({ id: m.id, result: {} });
@@ -213,10 +217,12 @@ rl.on('line', (line) => {
     send({ method: 'item/started', params: { threadId: 'child', item: { type: 'commandExecution', id: 'child-exec', command: 'npm run verify-child' } } });
     send({ method: 'item/completed', params: { threadId: 'child', item: { type: 'commandExecution', id: 'child-exec', aggregatedOutput: '验证成功', exitCode: 0 } } });
     send({ method: 'item/completed', params: { threadId: 'child', item: { type: 'agentMessage', id: 'child-msg', text: '子结果' } } });
-    send({ method: 'turn/completed', params: { threadId: 'child', turn: { status: 'completed' } } });
+    send({ method: 'turn/completed', params: { threadId: 'child', turn: { id: 'child-turn', status: 'completed' } } });
     send({ method: 'item/completed', params: { threadId: 'main', item: { type: 'agentMessage', id: 'main-msg', text: '主回复仍继续' } } });
-    send({ method: 'turn/completed', params: { threadId: 'main', turn: { status: 'completed' } } });
+    send({ method: 'turn/completed', params: { threadId: 'main', turn: { id: 'turn', status: 'completed' } } });
   }
+  process.stdout.write(batch);
+  batch = '';
 });
 `], { stdio: ["pipe", "pipe", "pipe"] }) });
 const appEvents: AgentEvent[] = [];
@@ -321,11 +327,19 @@ assert.deepEqual(wfReaped.map((row) => row.status), ["stopped", "stopped"], "进
 // 没有要等的后台活时收台，还挂着「进行中」的终态必须赶在 turnEnd 之前（之后 ash 就不读流了）。
 const endOfTurn = { type: "result", subtype: "success", result: "工作流已在后台跑起来" };
 const turnSlice = (events: AgentEvent[]) => events.slice(0, events.findIndex((event) => event.kind === "turnEnd") + 1);
-const singleTurn = turnSlice(await workflowRun([endOfTurn], new ClaudeControlBridge(true)));
-assert.deepEqual(singleTurn.at(-1), { kind: "turnEnd", background: { agent: 0, workflow: 1 } }, "单飞回合结尾带上还在等的工作流");
+// 结尾还带着回合身份(epoch,单飞据它认过期结尾)和开始等的时刻(since;没有落盘位置时就是这一刻)。
+const singleBridge = new ClaudeControlBridge(true);
+const holdStarted = Date.now();
+const singleTurn = turnSlice(await workflowRun([endOfTurn], singleBridge));
+const singleEnd = singleTurn.at(-1) as Extract<AgentEvent, { kind: "turnEnd" }>;
+const holdSince = Date.parse(singleEnd.background?.since ?? "");
+assert.ok(holdSince >= holdStarted && holdSince <= Date.now(), "开始等后台的时刻是结尾那一刻");
+assert.deepEqual({ ...singleEnd, background: { ...singleEnd.background!, since: undefined } },
+  { kind: "turnEnd", background: { agent: 0, workflow: 1, since: undefined }, epoch: singleBridge.epoch }, "单飞回合结尾带上还在等的工作流");
 assert.deepEqual(fromTools(singleTurn.filter((event) => event.kind === "tool")).map((row) => row.status), ["running", "running"], "等着的工作流不记停");
-const settledTurn = turnSlice(await workflowRun([{ type: "system", subtype: "task_notification", task_id: "w1", tool_use_id: "wf", status: "completed" }, endOfTurn], new ClaudeControlBridge(true)));
-assert.deepEqual(settledTurn.at(-1), { kind: "turnEnd" }, "工作流了结之后的回合结尾照常收台");
+const settledBridge = new ClaudeControlBridge(true);
+const settledTurn = turnSlice(await workflowRun([{ type: "system", subtype: "task_notification", task_id: "w1", tool_use_id: "wf", status: "completed" }, endOfTurn], settledBridge));
+assert.deepEqual(settledTurn.at(-1), { kind: "turnEnd", epoch: settledBridge.epoch }, "工作流了结之后的回合结尾照常收台");
 // 行身份在第一次见到工作流时就定下：后续消息缺不缺 tool_use_id，同一个子智能体都只有一行。
 const driftTrace = new NativeWorkTrace();
 const drift = [

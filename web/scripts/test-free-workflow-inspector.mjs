@@ -250,7 +250,7 @@ try {
 
   const postMergeInspector = page.locator(".post-merge-inspector-fixture");
   await postMergeInspector.getByRole("region", { name: "合并结果审查", exact: true }).waitFor();
-  await postMergeInspector.getByRole("button", { name: "查看审查进度" }).waitFor({ timeout: 5000 });
+  await postMergeInspector.getByRole("button", { name: "查看审查进度" }).waitFor();
   assert.equal(await postMergeInspector.getByText("可选", { exact: true }).count(), 1, "Inspector 应明确标注合并结果审查是可选操作");
   assert.match(await postMergeInspector.getByRole("region", { name: "合并结果审查", exact: true }).innerText(), /原任务仍保持已验收/);
 

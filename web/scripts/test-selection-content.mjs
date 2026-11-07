@@ -25,8 +25,37 @@ try {
   const taken = page.getByTestId("taken");
   const flush = () => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
   /* 等布局彻底平静下来。会话区会跟着内容高度自动贴底（useStickToBottom），那一下滚动是
-     异步来的，而滚动本来就该把浮条收走 —— 不等它停就选，刚排上的那一帧会被当场掐掉。 */
-  const settle = () => page.waitForTimeout(250);
+     异步来的，而滚动本来就该把浮条收走 —— 不等它停就选，刚排上的那一帧会被当场掐掉。
+     「停了」按帧数，不按毫秒：贴底在 rAF / ResizeObserver 里排、scroll 事件在下一帧派发，
+     所以连着 QUIET_FRAMES 帧既没有 scroll 事件、各滚动容器的 scrollTop 也没再变，这一串
+     连锁反应就已经走完了 —— 负载再重也只是每帧更慢，次序不变。 */
+  const QUIET_FRAMES = 3;
+  const settle = () => page.evaluate(async (quietFrames) => {
+    const deadline = performance.now() + 15_000;
+    const offsets = () => [document.scrollingElement, ...document.querySelectorAll("*")]
+      .filter((element) => element && element.scrollHeight > element.clientHeight)
+      .map((element) => element.scrollTop).join(",");
+    let scrolled = false;
+    const onScroll = () => { scrolled = true; };
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    try {
+      let last = offsets();
+      for (let quiet = 0; quiet < quietFrames;) {
+        if (performance.now() > deadline) throw new Error(`滚动 15 秒内没停下来（scrollTop：${last}）`);
+        await new Promise((done) => requestAnimationFrame(() => done()));
+        const now = offsets();
+        quiet = scrolled || now !== last ? 0 : quiet + 1;
+        scrolled = false;
+        last = now;
+      }
+    } finally {
+      document.removeEventListener("scroll", onScroll, { capture: true });
+    }
+  }, QUIET_FRAMES);
+  /* 在页面里等 n 个动画帧。用来给「每帧重算一轮」的那种空转留出观察窗：数的是帧，不是毫秒。 */
+  const frames = (n) => page.evaluate(async (count) => {
+    for (let i = 0; i < count; i += 1) await new Promise((done) => requestAnimationFrame(() => done()));
+  }, n);
 
   /* 选区按「第一个文本节点的第 from 个字」到「某个文本节点的第 to 个字」画,用真实的
      pointerup 收尾 —— 浮条就是靠它出来的。`anchor` 是那段文字所在元素的特征文案。 */
@@ -227,12 +256,15 @@ try {
   await page.getByText("Claude 2", { exact: true }).scrollIntoViewIfNeeded();
   await settle();
   await select({ text: "Claude 2" }, { text: "执行过程 · 2 工具" });
-  await page.waitForTimeout(300);
+  // 空转是「一帧一轮」（审查实测 1.1 秒 66 次），所以观察窗按帧数给：先让这一次选区自己
+  // 引起的那几下收完（约 18 帧 ≈ 原先的 300ms），再数接下来 30 帧（≈ 原先的 500ms）里还来了
+  // 几次。负载重时每帧更慢，但每帧一轮的空转照样每帧至少一次，数出来的不会因此变少。
+  await frames(18);
   const spun = await page.evaluate(() => window.__selectionEvents);
-  await page.waitForTimeout(500);
+  await frames(30);
   const stillSpinning = await page.evaluate(() => window.__selectionEvents) - spun;
   assert.equal(await memo.isVisible().catch(() => false), false, "只选到身份行和过程标题时不出浮条");
-  assert.ok(stillSpinning <= 2, `选区没再动过,却还在转:500ms 内又来了 ${stillSpinning} 次 selectionchange`);
+  assert.ok(stillSpinning <= 2, `选区没再动过,却还在转:30 帧内又来了 ${stillSpinning} 次 selectionchange`);
 
   // ⑯ 浮条上那颗按钮按下去必须兑现得了。Tab 聚到浮条上之后正文被流式续写换掉(结论从
   //    段落变列表,原来那个 `<p>` 当场卸载、选区里的文本节点脱离文档),此时 selectionchange

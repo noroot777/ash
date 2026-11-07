@@ -70,6 +70,9 @@ const serviceStates: PreviewServiceState[] = longNames ? [
   { id: "web", name: "网页前端", command: "npm run web", status: "ready" as const, url: "http://localhost:45841/", port: 45841 },
   { id: "api", name: "接口服务", command: "npm run api", status: "ready" as const, url: null, port: 45842 },
 ];
+/** 选中「web」那一路的日志读取扣在这里，见 serviceSwitch 分支。 */
+const staleWebGate = Promise.withResolvers<void>();
+(window as unknown as { __releaseStaleWeb: () => void }).__releaseStaleWeb = () => staleWebGate.resolve();
 const longServiceLog = Array.from({ length: 220 }, (_, index) => `all service line ${index + 1}`).join("\n");
 
 // 启动那一段是可以被**取消**的：DELETE 不跟 POST 抢锁（服务端 free-workflow-preview.ts），
@@ -155,7 +158,12 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
       const currentServices = serviceRemoved ? serviceStates.filter((service) => service.id !== "api")
         : lateServices && logReads++ < 5 ? (lateShort ? [] : serviceStates.slice(0, 1)) : serviceStates;
       if (selectedService === "web") {
-        return await new Promise<Response>((resolve) => setTimeout(() => resolve(reply({
+        // 这一份要**晚过**随后切到的那个服务才回来：扣到测试放行（window.__releaseStaleWeb）为止，
+        // 不赌一个固定延迟一定比下一发慢。window.__staleWebHeld 记扣下了几发。
+        const holder = window as unknown as { __staleWebHeld?: number; __releaseStaleWeb?: () => void };
+        holder.__staleWebHeld = (holder.__staleWebHeld ?? 0) + 1;
+        await staleWebGate.promise;
+        return reply({
           services: currentServices,
           text: "stale web log",
           truncated: false,
@@ -165,7 +173,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
           starting: false,
           command: "npm run web",
           url: "http://localhost:45841/",
-        })), 400));
+        });
       }
       const selected = currentServices.find((service) => service.id === selectedService);
       return reply({

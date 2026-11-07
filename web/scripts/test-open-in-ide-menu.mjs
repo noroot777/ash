@@ -12,6 +12,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchLog, settlePage, trackFetches } from "./wait-until.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const PROBE = {
@@ -46,6 +47,7 @@ try {
   await page.route("**/api/ides**", async (route) => {
     probeCalls.push(route.request().url());
     if (probeMode === "hang") return; // 既不 fulfill 也不 abort —— 就是卡住的那种
+    // 模拟探测的网络往返。下面每一步都等菜单项/文案出现再断言，没有谁依赖它恰好是 60ms。
     await new Promise((done) => setTimeout(done, 60));
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(PROBE) });
   });
@@ -64,6 +66,8 @@ try {
     });
   });
 
+  // 页面这边真发出的探测：「点一次只探一次」按页面侧的发出记录数，不赌路由那边的计数赶得上。
+  await trackFetches(page, "/api/ides");
   await page.goto(`${web.origin}/scripts/fixtures/open-in-ide-menu.html`);
 
   const menu = page.locator(".file-viewer").last();
@@ -74,7 +78,10 @@ try {
   // ── ① 确认过的那一档：说「已用 X 打开」────────────────────────────────
   await trigger.click();
   const cursor = page.getByRole("menuitem", { name: /Cursor/ });
-  await cursor.waitFor({ timeout: 5000 });
+  await cursor.waitFor({ timeout: 15_000 });
+  await settlePage(page);
+  const probesSent = (await fetchLog(page)).length;
+  assert.equal(probesSent, 1, `点一次只该探一次，页面实际发出 ${probesSent} 次`);
   assert.equal(probeCalls.length, 1, `点一次只该探一次，实际 ${probeCalls.length} 次`);
   await cursor.click();
   await page.waitForFunction(() => document.querySelector("[data-testid=toast]")?.textContent);
@@ -100,13 +107,13 @@ try {
   probeMode = "hang";
   await trigger.click();
   await page.getByRole("menuitem", { name: /重新探测/ }).click(); // force：作废缓存，发出会卡住的那一次
-  await page.getByText("正在看本机装了哪些 IDE…").waitFor({ timeout: 5000 });
+  await page.getByText("正在看本机装了哪些 IDE…").waitFor({ timeout: 15_000 });
   const stuckCalls = probeCalls.length;
   const retryWhileLoading = page.getByRole("menuitem", { name: /重新探测/ });
   assert.equal(await retryWhileLoading.count(), 1, "加载中必须留着出路，否则一次卡住的请求就把菜单锁死了");
   probeMode = "ok";
   await retryWhileLoading.click();
-  await page.getByRole("menuitem", { name: /Cursor/ }).waitFor({ timeout: 5000 });
+  await page.getByRole("menuitem", { name: /Cursor/ }).waitFor({ timeout: 15_000 });
   assert.ok(probeCalls.length > stuckCalls, "加载中点重试要真的再发一次，不是空按钮");
   await page.keyboard.press("Escape");
 

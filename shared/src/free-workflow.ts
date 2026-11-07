@@ -276,7 +276,44 @@ export const RECURS_SHAPE_ERROR = `recurs 要写成 ${RECURS_SHAPE_EXAMPLE}，�
 // 「修复中 / 等待复审 / 结论已过期」这些叙事一律**推导**，不落库：
 // - 修复中 = 任务本身 running（谁发起的都一样）
 // - 等待自动复审 = stopped + 预约槽里挂着 runId
-// - 结论过期 = round.reviewedCommit ≠ 当前工作区 HEAD
+// - 结论过期 = 当前工作区对不上这一轮的锚点（判据见 `reviewAnchorMatches`）
+/**
+ * 「这一轮审查意见还对应工作区里的代码吗」——服务端放行修复、前端判结论新鲜度共用这一个判据。
+ *
+ * 锚点是**内容**，不是 HEAD：执行者常常改完不提交，只比 HEAD 的话，在脏工作区上审出来的
+ * 结论一落地就算过期，「按意见修复」永远不放行。可接受的锚点有两个：
+ * - 审查开始那一刻的内容（`reviewedFingerprint`）；
+ * - 执行者驳回那一刻的内容（`disputedFingerprint`）。驳回工具要求「部分成立先把成立的改掉、
+ *   再只驳剩下的」，所以驳回时代码**必然**已经不同于审查那一版；用户维持意见后要修的是
+ *   余下那几条，对应的正是驳回时的这一版。只认审查那一版的话，「部分驳回 → 维持意见」
+ *   这条路每一次都会被判成过期（2026-11-07 EZk_VTsu4Lzb 实测）。
+ *   它只在驳回**还等着裁定或被维持**时算数：采纳执行者 / 转独立任务之后没有「接着修」这回事，
+ *   执行者驳回前改的那部分也没人审过，再认它就会把「这些改动还没审」的提醒吞掉。
+ * 两个指纹都没有（老数据）才退回「HEAD 相同且工作区干净」；取不到就是 null（未知，不当新鲜）。
+ * 新审查**采集失败**记成 `UNKNOWN_FINGERPRINT` 而不是 null：两者同形的话，「这一轮证明不了内容」
+ * 会被当成老数据退回只比 HEAD，未知就变成了放行。
+ */
+export const UNKNOWN_FINGERPRINT = "unknown";
+
+export function reviewAnchorMatches(
+  round: Pick<FreeReviewRound, "reviewedCommit" | "reviewedFingerprint" | "disputedFingerprint"> & {
+    disputeResolution?: string | null;
+  },
+  workspace: { head: string | null | undefined; dirty: boolean | null | undefined; fingerprint?: string | null },
+): boolean | null {
+  const disputeStands = round.disputeResolution == null || round.disputeResolution === "upheld";
+  const anchors = [round.reviewedFingerprint, disputeStands ? round.disputedFingerprint : null]
+    .filter((value): value is string => !!value);
+  if (anchors.length) {
+    const provable = anchors.filter((value) => value !== UNKNOWN_FINGERPRINT);
+    if (!workspace.fingerprint) return null;
+    if (provable.includes(workspace.fingerprint)) return true;
+    return provable.length ? false : null;
+  }
+  if (!round.reviewedCommit || !workspace.head || workspace.dirty == null) return null;
+  return round.reviewedCommit === workspace.head && !workspace.dirty;
+}
+
 export type FreeReviewRunStatus = "reviewing" | "passed" | "failed" | "stopped";
 export type FreeReviewRoundStatus = "reviewing" | "passed" | "failed" | "error";
 
@@ -427,8 +464,12 @@ export interface FreeReviewRound {
   round: number;
   status: FreeReviewRoundStatus;
   conclusion: "verified" | "verify_failed" | null;
-  /** 本轮启动时任务工作区的 HEAD；与当前 HEAD 不一致即「结论陈旧」。null = 未能取到（老数据/工作区缺失）。 */
+  /** 本轮启动时任务工作区的 HEAD。null = 未能取到（老数据/工作区缺失）。 */
   reviewedCommit: string | null;
+  /** 本轮启动时工作区的内容指纹（HEAD + 未提交改动的内容，见 server/workspace-fingerprint.ts）。省略/null = 老数据；`UNKNOWN_FINGERPRINT` = 采集失败。 */
+  reviewedFingerprint?: string | null;
+  /** 执行者驳回这一轮那一刻的内容指纹：部分成立时它先改掉了认下的那几条，余下的意见对应的是这一版。 */
+  disputedFingerprint?: string | null;
   reportMarkdown: string;
   screenshots: string[];
   /** 执行者对这一轮结论的驳回；null = 没驳回过（绝大多数轮次）。 */
@@ -524,6 +565,8 @@ export interface FreeWorkflowState {
   workspaceHead: string | null;
   /** 工作区是否有未提交改动；null = 取不到（按未知处理，不能当干净）。 */
   workspaceDirty: boolean | null;
+  /** 工作区此刻的内容指纹；null = 取不到。与各轮的锚点比对，见 `reviewAnchorMatches`。 */
+  workspaceFingerprint?: string | null;
   reviewReservation: {
     armed: boolean;
     reviewerId: string | null;

@@ -56,6 +56,8 @@ function Fixture() {
       <ConversationFeed task={state.task} items={state.items} sessions={[]} loading={false} error={null} questionHistory={state.records}
         dock={state.task.question ? <QuestionCard task={state.task} onAnswer={async (answer, input) => {
           setCalls((n) => n + 1);
+          // 模拟一次网络往返，让「发送中」那一段在人工点检时看得见。自动化回归不提交这张表单
+          // （test-question-history-dom 只看翻页与文案），没有断言依赖这段时长，负载下照样成立。
           await new Promise((resolve) => setTimeout(resolve, 400));
           if (fail) throw new Error("发送失败，请重试。你的答案已保留。");
           const record: QuestionRecord = { id: crypto.randomUUID(), question: state.task.question, questionOptions: state.task.questionOptions,

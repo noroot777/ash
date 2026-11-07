@@ -7,6 +7,8 @@ import type { ReviewConclusion } from "@ash/shared";
 import { CodeBlock } from "./CodeBlock.tsx";
 import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./ImagePreview.tsx";
 import { splitReviewReport } from "./reviewReportSections.ts";
+import { isLocalFileHref } from "./fileLinkTarget.ts";
+import { CodeBlockScope, MarkdownCode, TaskFileLinkBase, useTaskFileHref } from "./TaskFileLink.tsx";
 import {
   insertIndexOf,
   regionIndexOf,
@@ -114,7 +116,11 @@ function markdownComponents(latest: { current: MarkdownContext }): Components {
   const onActionError = (message: string | null) => latest.current.onActionError(message);
   return {
     a: ({ node: _node, href, onClick, ...props }) => {
-      const reviewFile = reviewFileTarget(href) ?? resolveFile(href ?? "") ?? null;
+      // 指着工作区里文件的链接(`[方案](docs/plan.md)`)摊在中间栏,见 TaskFileLink。
+      // 证据目录里的报告除外:它不在工作区里,还是那个报告弹窗。
+      const evidence = reviewFileTarget(href);
+      const fileLink = useTaskFileHref(evidence ? undefined : href);
+      const reviewFile = evidence ?? resolveFile(href ?? "") ?? null;
       const reviewMarkdown = reviewFile !== null && /\.md$/i.test(reviewFile.name);
       const localOpen = localOpenUrl(href);
       // 指向图片的链接跟内嵌图走同一个灯箱（也就跟同一条消息里的其它图编在一组，
@@ -131,6 +137,31 @@ function markdownComponents(latest: { current: MarkdownContext }): Components {
             label={image.name}
             onClick={onClick}
           />
+        );
+      }
+      if (fileLink) {
+        return (
+          <a
+            {...props}
+            href={href}
+            className="task-file-link-anchor"
+            onClick={(event) => {
+              onClick?.(event);
+              if (event.defaultPrevented) return;
+              event.preventDefault();
+              onActionError(null);
+              void fileLink.open().then((opened) => {
+                if (opened) return;
+                if (localOpen) return openLocalPath(href || localOpen);
+                onActionError("工作目录里找不到这个文件");
+              }).catch((reason: unknown) => {
+                onActionError(reason instanceof Error ? reason.message : String(reason));
+              });
+            }}
+          >
+            {fileLink.glyph}
+            {props.children}
+          </a>
         );
       }
       return (
@@ -176,8 +207,8 @@ function markdownComponents(latest: { current: MarkdownContext }): Components {
         <table {...props}>{children}</table>
       </div>
     ),
-    pre: ({ node, children }) => <CodeBlock node={node}>{children}</CodeBlock>,
-    code: ({ children, className }) => <code className={className}>{children}</code>,
+    pre: ({ node, children }) => <CodeBlockScope><CodeBlock node={node}>{children}</CodeBlock></CodeBlockScope>,
+    code: ({ children, className }) => <MarkdownCode className={className}>{children}</MarkdownCode>,
     // `div` 在这个应用里只可能是 markdownLayout 插的标记(没装 rehype-raw,正文里的
     // 裸 HTML 一个字都不解析),所以认标记之后原样兜底就够了。
     div: ({ node, children, ...props }) => {
@@ -226,7 +257,8 @@ function MarkdownDocument({ text, resolveFile, layout, onReviewReport, onActionE
         // 报不出「哪个文件取不到」(连路径都没了,审查第 2 轮 F2 的失败分支)。img 的 src
         // 不会被当成可执行地址,分类与越界判定全在 markdownPolicy + 服务端那道门禁;链接
         // (href)仍走默认清理,那条才是 `javascript:` 的入口。
-        urlTransform={(url, key) => (key === "src" ? url : defaultUrlTransform(url))}
+        // 链接里的本机文件地址(`file://`、盘符)同样原样留着,见 fileLinkTarget 的 isLocalFileHref。
+        urlTransform={(url, key) => (key === "src" || isLocalFileHref(url) ? url : defaultUrlTransform(url))}
       >
         {text}
       </ReactMarkdown>
@@ -452,14 +484,17 @@ export function ReviewReportBody({ text, reportKey, conclusion, resolveFile }: {
   const [actionError, setActionError] = useState<string | null>(null);
   return (
     <ImagePreviewGroup>
-      <ReviewReportSplit
-        text={text}
-        reportKey={reportKey}
-        conclusion={conclusion}
-        resolveFile={resolveFile}
-        onReviewReport={setReviewReport}
-        onActionError={setActionError}
-      />
+      {/* 报告里的相对链接指着证据目录，不是工作区（见 TaskFileLink 的 baseDir）。 */}
+      <TaskFileLinkBase dir={null}>
+        <ReviewReportSplit
+          text={text}
+          reportKey={reportKey}
+          conclusion={conclusion}
+          resolveFile={resolveFile}
+          onReviewReport={setReviewReport}
+          onActionError={setActionError}
+        />
+      </TaskFileLinkBase>
       {actionError && <p className="markdown-action-error" role="status">本地文件打开失败：{actionError}</p>}
       {reviewReport && (
         <ReviewReportDialog target={reviewReport} onReviewReport={setReviewReport} onClose={() => setReviewReport(null)} />
@@ -527,7 +562,9 @@ export function ReviewReportDialog({ target, onReviewReport, onClose }: {
               {/* 相对路径按**这份报告自己所在的目录**解：弹窗手上只有它的地址，run/round 都没有。
                   子目录里的报告按它自己那一层解（`notes/supplement.md` 里的 `shot.png` =
                   `notes/shot.png`），归属判据与另外两处表面同一份，见 reportFileResolver。 */}
-              <ReviewReportSplit text={text} reportKey={target.url} conclusion={null} resolveFile={siblingResolverForUrl(target.url)} onReviewReport={onReviewReport} onActionError={setActionError} />
+              <TaskFileLinkBase dir={null}>
+                <ReviewReportSplit text={text} reportKey={target.url} conclusion={null} resolveFile={siblingResolverForUrl(target.url)} onReviewReport={onReviewReport} onActionError={setActionError} />
+              </TaskFileLinkBase>
             </ImagePreviewGroup>
           ) : error ? (
             <p className="markdown-report-error">审查报告加载失败：{error}</p>

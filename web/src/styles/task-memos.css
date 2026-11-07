@@ -27,7 +27,7 @@
 .task-memo-composer__actions button { display: inline-flex; min-height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 10px; color: var(--muted); font-size: 10.5px; }
 .task-memo-composer__actions button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .task-memo-composer__actions button.is-primary { border-color: transparent; background: var(--accent); color: white; font-weight: 650; }
-.task-memo-composer__actions button.is-primary:hover:not(:disabled) { background: color-mix(in lch, var(--accent) 88%, black); color: white; }
+.task-memo-composer__actions button.is-primary:hover:not(:disabled) { background: var(--accent-hover); color: white; }
 .task-memo-composer__actions button:disabled { cursor: not-allowed; opacity: .48; }
 
 /* ── 一条备忘 ─────────────────────────────────────────────────────────────── */
@@ -62,7 +62,7 @@
 .task-memo-card__edit-actions button { display: inline-flex; min-height: 25px; align-items: center; gap: 4px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 9px; color: var(--muted); font-size: 10px; }
 .task-memo-card__edit-actions button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .task-memo-card__edit-actions button.is-primary { border-color: transparent; background: var(--accent); color: white; font-weight: 650; }
-.task-memo-card__edit-actions button.is-primary:hover:not(:disabled) { background: color-mix(in lch, var(--accent) 88%, black); color: white; }
+.task-memo-card__edit-actions button.is-primary:hover:not(:disabled) { background: var(--accent-hover); color: white; }
 .task-memo-card__edit-actions button:disabled { cursor: not-allowed; opacity: .48; }
 
 /* 图标条上那一格：这个任务有备忘时带底色（跟子智能体/哨兵「用过才浮现」那套同一个记号，

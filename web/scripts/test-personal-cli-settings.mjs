@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { resizeViewport } from "./wait-until.mjs";
 
 const web = await startWebServer();
 let browser;
@@ -18,7 +19,7 @@ try {
     await block(agent).locator(".pcli-memory-editor").waitFor();
   }
   for (const width of [1200, 390, 320]) {
-    await page.setViewportSize({ width, height: 1000 });
+    await resizeViewport(page, { width, height: 1000 });
     const geometry = await page.locator(".pcli-memory-editor").evaluateAll(nodes => nodes.map(node => ({
       height: node.getBoundingClientRect().height,
       resize: getComputedStyle(node).resize,

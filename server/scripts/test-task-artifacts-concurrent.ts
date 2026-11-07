@@ -144,8 +144,8 @@ rl.on('line', (line) => {
     send({ method: 'item/completed', params: { threadId: 'main', item: { ...command, status: 'completed', exitCode: 0 } } });
     change('child', 'f2', '/w/child.md', 'completed');
     change('child', 'f4', '/w/child-declined.md', 'declined');
-    send({ method: 'turn/completed', params: { threadId: 'child', turn: { status: 'completed' } } });
-    send({ method: 'turn/completed', params: { threadId: 'main', turn: { status: 'completed' } } });
+    send({ method: 'turn/completed', params: { threadId: 'child', turn: { id: 'child-turn', status: 'completed' } } });
+    send({ method: 'turn/completed', params: { threadId: 'main', turn: { id: 'turn', status: 'completed' } } });
   }
 });
 `], { stdio: ["pipe", "pipe", "pipe"] }) });

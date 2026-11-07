@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage } from "./wait-until.mjs";
 
 const output = fileURLToPath(new URL("../../output/playwright", import.meta.url));
 const web = await startWebServer();
@@ -30,6 +31,12 @@ try {
   assert.equal(await page.locator(".native-work__row").count(), 6);
   assert.deepEqual((await page.locator(".native-work__status").allInnerTexts()).sort(),
     ["进行中", "待处理", "已完成", "失败", "已停止", "状态未知"].sort());
+
+  // 每张卡片折叠着就能看到起止时间，与任务检查器同一个写法；一个时刻都没记下的不占位。
+  const when = (status) => page.locator(`.native-work__entry[data-status="${status}"] .native-work__when`);
+  assert.match(await when("completed").innerText(), /^09\/08 08:00 → 08:01$/, "同一天的结束只写时刻");
+  assert.match(await when("running").innerText(), /^09\/08 08:00 起$/, "还在跑的用「起」收尾");
+  assert.equal(await when("pending").count(), 0, "未开工的卡片不放时间");
 
   await mkdir(output, { recursive: true });
   const inspector = page.locator(".inspector-host");
@@ -93,6 +100,7 @@ try {
   assert.equal(await pending.locator(".native-work__duration-value").count(), 0);
   const activeSpan = await card.locator(".native-work__duration-value").innerText();
   await page.clock.fastForward(60_000);
+  await settlePage(page); // 假时钟触发的秒表 setState 还排在 React 调度里；冲刷掉再读 DOM
   assert.notEqual(await card.locator(".native-work__duration-value").innerText(), activeSpan, "运行项实时更新跨度");
   assert.equal(await pending.locator(".native-work__duration-value").count(), 0, "待处理项不会随时钟递增");
   assert.match(await page.locator(".native-work__detail").filter({ hasText: "所属子智能体" }).innerText(), /运行中的资料搜集/);
@@ -194,8 +202,9 @@ try {
   assert.equal(await page.locator(".native-work__title", { hasText: "运行中的资料搜集" }).locator("xpath=ancestor::details[1]").getAttribute("data-status"), "completed");
   await page.getByRole("button", { name: "查看执行：运行中的资料搜集", exact: true }).click();
   await conversation.getByText("刷新后仍应保留的完成结果", { exact: false }).waitFor();
-  assert.match(await headline.innerText(), /09\/08 08:00–08:08\s*·\s*8分 0秒/, "收工后抬头给出完整区间和跨度");
+  assert.match(await headline.innerText(), /09\/08 08:00 → 08:08\s*·\s*8分 0秒/, "收工后抬头给出完整区间和跨度");
   await page.clock.fastForward(60_000);
+  await settlePage(page); // 假时钟触发的秒表 setState 还排在 React 调度里；冲刷掉再读 DOM
   assert.match(await headline.innerText(), /8分 0秒/, "完成后跨度保持固定");
   assert.equal(await conversation.locator(".native-agent__live").count(), 0);
   await conversation.locator(".task-turn-process > summary").click();
@@ -220,6 +229,7 @@ try {
   await firstCompleted.locator(".native-work__timing > summary").click();
   assert.match(await firstCompleted.innerText(), /未记录开始时间，无法计算跨度/);
   await page.clock.fastForward(60_000);
+  await settlePage(page); // 假时钟触发的秒表 setState 还排在 React 调度里；冲刷掉再读 DOM
   assert.equal(await snapshotPending.locator(".native-work__duration-value").count(), 0);
   await page.screenshot({ path: `${output}/native-work-plan-timing.png`, fullPage: true });
   await snapshotPending.first().screenshot({ path: `${output}/native-work-pending-fixed.png` });

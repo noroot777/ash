@@ -7,6 +7,7 @@ import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
 import { MonitorWaitCard } from "../monitors/MonitorWaitCard.tsx";
 import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
 import { InspectorHost } from "../inspector/index.ts";
+import { TaskFileLinks } from "../components/TaskFileLink.tsx";
 import { FileViewer } from "../files/FileViewer.tsx";
 import { FolderViewer } from "../files/FolderViewer.tsx";
 import { useFileView } from "../files/useFileView.ts";
@@ -272,394 +273,401 @@ export function TaskDetail({
 
   const inspectorContextKey = inspectorMode === "drawer" ? `task-drawer:${task.id}` : `task:${task.id}`;
 
+  // 中间栏摊开一份文件 / 一个文件夹：侧栏的生成物、文件树，和正文里提到的路径（TaskFileLinks）同一个出口。
+  const openFileInCenter = (path: string, reel?: readonly string[]) => {
+    setPreviewOpen(false);
+    fileView.openFile(path, reel);
+    subagents.closeAgent();
+    if (reviewOpen) changeReviewOpen(false);
+  };
+  const openFolderInCenter = (path: string) => {
+    setPreviewOpen(false);
+    fileView.openFolder(path);
+    subagents.closeAgent();
+    if (reviewOpen) changeReviewOpen(false);
+  };
+
   return (
-    <InspectorHost
-      contextKey={inspectorContextKey}
-      descriptors={inspectors}
-      context={{
-        nativeWork: subagents.nativeWork,
-        monitors: monitorTab.monitors,
-        task,
-        groups,
-        sessions: conversation.sessions,
-        allTasks,
-        followUps,
-        onOpenTask,
-        onOpenReview: () => changeReviewOpen(true),
-        onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); fileView.close(); subagents.closeAgent(); },
-        onTaskUpdated: onTaskUpdate,
-        onPatch: patch,
-        onQueueChanged: (updatedTask) => {
-          // 带参分支也走按 updatedAt 的合并路径(applySnapshots),不做无条件覆盖:
-          // 迟到的旧响应不能反转 SSE 已送达的更晚状态(第 6 轮审查)。
-          if (updatedTask) applySnapshots([updatedTask]);
-          // 没带快照的兜底读取也要兜住失败:入队/排队本身已成功,GET 挂了只能
-          // 如实提示,不能让 rejection 裸冒(第 5 轮审查)。
-          else refreshTask().catch(() => notify("队列已更新，但刷新任务状态失败"));
-        },
-        onTasksSynced: applySnapshots,
-        onOpenFile: (path: string, reel?: readonly string[]) => {
-          setPreviewOpen(false);
-          fileView.openFile(path, reel);
-          subagents.closeAgent();
-          if (reviewOpen) changeReviewOpen(false);
-        },
-        onOpenFolder: (path: string) => {
-          setPreviewOpen(false);
-          fileView.openFolder(path);
-          subagents.closeAgent();
-          if (reviewOpen) changeReviewOpen(false);
-        },
-        activeFilePath: fileView.activePath,
-        openScmDiff: fileView.diff,
-        onOpenScmDiff: (target: ScmDiffTarget) => {
-          setPreviewOpen(false);
-          fileView.openDiff(target);
-          subagents.closeAgent();
-          if (reviewOpen) changeReviewOpen(false);
-        },
-        notify,
-      }}
-      defaultVisible={inspectorMode === "page"}
-      tabPolicy={inspectorPolicy}
-    >
-      {({ toggleButton, openTab }) => (
-        <>
-          <div className="task-detail">
-            <OriginTaskBar task={task} allTasks={allTasks} onOpen={onOpenTask} />
-            <TaskHeader
-              task={task}
-              conversationMarkdown={markdown}
-              busy={busy}
-              refreshing={conversation.refreshing}
-              reviewOpen={reviewOpen}
-              onTitle={(title) => patch({ title, autoTitle: false })}
-              onTogglePin={() => patch({ pinnedAt: task.pinnedAt != null ? null : Date.now() })}
-              onPrimary={(action) => void perform(action)}
-              onRequeue={() => void requeue()}
-              onMarkDone={() => setMarkDoneOpen(true)}
-              onArchive={() => void archive()}
-              onRefresh={() => void refresh()}
-              onReview={() => changeReviewOpen(!reviewOpen)}
-              postMergeReviewLabel={postMergeReviewLabel}
-              onPostMergeReview={postMergeTarget ? () => {
-                if (latestPostMerge?.status === "reviewing") openTab("review");
-                else setPostMergeDialogOpen(true);
-              } : undefined}
-              onDelete={() => setDeleteOpen(true)}
-              indicatorForTask={indicatorForTask}
-              inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
-              notify={notify}
-            />
-            {task.mode === "single" && task.codexPlanMode && (
-              <div className="task-plan-mode-notice" role="status" aria-label="Codex 计划模式">
-                <strong>Codex 计划模式</strong>
-                <span>已开启：{task.codexPlanScopes?.map((scope) => `${scope.executorLabel}（${scope.isTaskOwner ? "任务归属人" : "其他发起人"}）`).join("、") || task.executorLabel || "Codex"}。仅对应 Codex 执行器与发起人的普通回复只讨论方案，不实施或确认完成。</span>
-                <span>由同一发起人使用对应 Codex 执行器发送 <code>/plan off</code> 退出该作用域，或运行/重试任务退出全部计划模式。</span>
-              </div>
-            )}
-            {task.handoffAudit && <HandoffAuditBanner audit={task.handoffAudit} />}
-            {task.handoff && (
-              <HandoffBanner
-                taskId={task.id}
-                handoff={task.handoff}
-                notify={notify}
-                onTaskUpdate={onTaskUpdate}
-              />
-            )}
-            {previewOpen ? (
-              <PreviewWorkspace key={task.id} taskId={task.id} onClose={() => setPreviewOpen(false)} />
-            ) : reviewOpen ? (
-              <TaskReviewWorkspace
+    <TaskFileLinks taskId={task.id} onOpenFile={openFileInCenter} onOpenFolder={openFolderInCenter}>
+      <InspectorHost
+        contextKey={inspectorContextKey}
+        descriptors={inspectors}
+        context={{
+          nativeWork: subagents.nativeWork,
+          monitors: monitorTab.monitors,
+          task,
+          groups,
+          sessions: conversation.sessions,
+          allTasks,
+          followUps,
+          onOpenTask,
+          onOpenReview: () => changeReviewOpen(true),
+          onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); fileView.close(); subagents.closeAgent(); },
+          onTaskUpdated: onTaskUpdate,
+          onPatch: patch,
+          onQueueChanged: (updatedTask) => {
+            // 带参分支也走按 updatedAt 的合并路径(applySnapshots),不做无条件覆盖:
+            // 迟到的旧响应不能反转 SSE 已送达的更晚状态(第 6 轮审查)。
+            if (updatedTask) applySnapshots([updatedTask]);
+            // 没带快照的兜底读取也要兜住失败:入队/排队本身已成功,GET 挂了只能
+            // 如实提示,不能让 rejection 裸冒(第 5 轮审查)。
+            else refreshTask().catch(() => notify("队列已更新，但刷新任务状态失败"));
+          },
+          onTasksSynced: applySnapshots,
+          onOpenFile: openFileInCenter,
+          onOpenFolder: openFolderInCenter,
+          activeFilePath: fileView.activePath,
+          openScmDiff: fileView.diff,
+          onOpenScmDiff: (target: ScmDiffTarget) => {
+            setPreviewOpen(false);
+            fileView.openDiff(target);
+            subagents.closeAgent();
+            if (reviewOpen) changeReviewOpen(false);
+          },
+          notify,
+        }}
+        defaultVisible={inspectorMode === "page"}
+        tabPolicy={inspectorPolicy}
+      >
+        {({ toggleButton, openTab }) => (
+          <>
+            <div className="task-detail">
+              <OriginTaskBar task={task} allTasks={allTasks} onOpen={onOpenTask} />
+              <TaskHeader
                 task={task}
-                allTasks={allTasks}
-                onTaskUpdated={onTaskUpdate}
-                notify={notify}
+                conversationMarkdown={markdown}
+                busy={busy}
+                refreshing={conversation.refreshing}
+                reviewOpen={reviewOpen}
+                onTitle={(title) => patch({ title, autoTitle: false })}
+                onTogglePin={() => patch({ pinnedAt: task.pinnedAt != null ? null : Date.now() })}
+                onPrimary={(action) => void perform(action)}
+                onRequeue={() => void requeue()}
+                onMarkDone={() => setMarkDoneOpen(true)}
+                onArchive={() => void archive()}
+                onRefresh={() => void refresh()}
+                onReview={() => changeReviewOpen(!reviewOpen)}
+                postMergeReviewLabel={postMergeReviewLabel}
                 onPostMergeReview={postMergeTarget ? () => {
                   if (latestPostMerge?.status === "reviewing") openTab("review");
                   else setPostMergeDialogOpen(true);
                 } : undefined}
-              />
-            ) : fileView.filePath ? (
-              <FileViewer
-                taskId={task.id}
-                path={fileView.filePath}
-                reel={fileView.reel}
-                onStep={fileView.stepFile}
-                zoomed={fileView.zoomed}
-                onToggleZoom={fileView.toggleZoom}
-                onExitZoom={fileView.exitZoom}
-                onOpenDiff={fileView.canShowDiff ? fileView.showDiff : undefined}
-                onClose={fileView.close}
+                onDelete={() => setDeleteOpen(true)}
+                indicatorForTask={indicatorForTask}
+                inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
                 notify={notify}
               />
-            ) : fileView.folderPath ? (
-              <FolderViewer
-                taskId={task.id}
-                path={fileView.folderPath}
-                zoomed={fileView.zoomed}
-                onToggleZoom={fileView.toggleZoom}
-                onExitZoom={fileView.exitZoom}
-                onOpenFile={fileView.openFile}
-                onOpenFolder={fileView.openFolder}
-                onClose={fileView.close}
-                notify={notify}
-              />
-            ) : fileView.diff ? (
-              <ScmDiffViewer
-                taskId={task.id}
-                path={fileView.diff.path}
-                source={fileView.diff.source}
-                origPath={fileView.diff.origPath}
-                kind={fileView.diff.kind}
-                zoomed={fileView.zoomed}
-                onToggleZoom={fileView.toggleZoom}
-                onExitZoom={fileView.exitZoom}
-                onOpenFile={fileView.showFile}
-                onClose={fileView.close}
-              />
-            ) : (
-              <div className="task-detail-body">
-                <section className="task-detail-main" aria-label="任务会话">
-                  <MemoSelectionScope
-                    taskId={task.id}
-                    openTab={openTab}
-                    notify={notify}
-                    onAsk={() => openTab("side-chat")}
-                    onAddToReply={handedOut ? undefined : addToReply}
-                  >
-                  <ConversationFeed
-                    task={task}
-                    questionHistory={task.questionHistory}
-                    liveQuestionHistory
-                    historyReady={conversation.transcriptReady}
-                    items={conversation.items}
-                    sessions={conversation.sessions}
-                    pendingExecutor={pendingExecutor}
-                    loading={conversation.refreshing}
-                    error={conversation.error}
-                    forkBlockedReason={forkReadBlock(conversation)}
-                    onForkReply={
-                      // `!task.reviewOf`：历史那种独立审查任务整条会话都是审查，而逐条的
-                      // reviewer 标只认 verifyRound 与 role=reviewer，认不出它 —— 那条路上
-                      // 每一条发言都不是派生落点，在这里整体关掉。
-                      onForkTask && !task.reviewOf && !forkReadBlock(conversation) && !handedOut
-                      && conversation.sessions.every((session) => session.taskId === task.id) ? (replyId) => {
-                      try { onForkTask(snapshotConversationFork(task, conversation.items, replyId)); }
-                      catch (reason) { notify(reason instanceof Error ? reason.message : String(reason)); }
-                    } : undefined}
-                    onRetryTurn={async (target) => {
-                      try {
-                        if (!(await confirmExecutorSwap(task.id))) return;
-                        const result = await api.retryTurn(task.id, target);
-                        // 审查档同一颗按钮有两种结果：上下文还在就接着做，上下文是空的
-                        // （CLI 当时压根没起来）才重发整份任务书。别只说「已重跑」——
-                        // 用户按之前看到的承诺是「继续」，退回从头跑时必须当面说清楚。
-                        notify(result.mode === "review"
-                          ? result.resumed
-                            ? "已从中断处继续这一轮审查"
-                            : "上一轮没留下可接着做的上下文，已重新交代任务书跑这一轮"
-                          : result.mode === "resend" ? "已重发上一条指令，任务续跑中" : "已从中断处续跑");
-                        // 只重取会话正文。任务本身的 running 由 SSE 推过来 —— 这里再补一发
-                        // GET，回来的很可能还是重投前的 done，反手把跑起来的状态盖回去
-                        // （WorkspaceShell 按 onTaskUpdate 覆盖，没有版本门禁）。
-                        await conversation.refetch();
-                      } catch (reason) {
-                        notify(reason instanceof Error ? reason.message : String(reason));
-                      }
-                    }}
-                    // 只有单个智能体的任务、且此刻没在跑才能删：服务端同样会挡，这里不出按钮是
-                    // 为了不让人点了才知道（团队调度台、duet 还没接「下一轮重建上下文」）。
-                    onDeleteMessage={task.mode === "single" && !handedOut && task.status !== "running" && task.status !== "queued"
-                      ? async (sources) => {
+              {task.mode === "single" && task.codexPlanMode && (
+                <div className="task-plan-mode-notice" role="status" aria-label="Codex 计划模式">
+                  <strong>Codex 计划模式</strong>
+                  <span>已开启：{task.codexPlanScopes?.map((scope) => `${scope.executorLabel}（${scope.isTaskOwner ? "任务归属人" : "其他发起人"}）`).join("、") || task.executorLabel || "Codex"}。仅对应 Codex 执行器与发起人的普通回复只讨论方案，不实施或确认完成。</span>
+                  <span>由同一发起人使用对应 Codex 执行器发送 <code>/plan off</code> 退出该作用域，或运行/重试任务退出全部计划模式。</span>
+                </div>
+              )}
+              {task.handoffAudit && <HandoffAuditBanner audit={task.handoffAudit} />}
+              {task.handoff && (
+                <HandoffBanner
+                  taskId={task.id}
+                  handoff={task.handoff}
+                  notify={notify}
+                  onTaskUpdate={onTaskUpdate}
+                />
+              )}
+              {previewOpen ? (
+                <PreviewWorkspace key={task.id} taskId={task.id} onClose={() => setPreviewOpen(false)} />
+              ) : reviewOpen ? (
+                <TaskReviewWorkspace
+                  task={task}
+                  allTasks={allTasks}
+                  onTaskUpdated={onTaskUpdate}
+                  notify={notify}
+                  onPostMergeReview={postMergeTarget ? () => {
+                    if (latestPostMerge?.status === "reviewing") openTab("review");
+                    else setPostMergeDialogOpen(true);
+                  } : undefined}
+                />
+              ) : fileView.filePath ? (
+                <FileViewer
+                  taskId={task.id}
+                  path={fileView.filePath}
+                  reel={fileView.reel}
+                  onStep={fileView.stepFile}
+                  zoomed={fileView.zoomed}
+                  onToggleZoom={fileView.toggleZoom}
+                  onExitZoom={fileView.exitZoom}
+                  onOpenDiff={fileView.canShowDiff ? fileView.showDiff : undefined}
+                  onClose={fileView.close}
+                  notify={notify}
+                />
+              ) : fileView.folderPath ? (
+                <FolderViewer
+                  taskId={task.id}
+                  path={fileView.folderPath}
+                  zoomed={fileView.zoomed}
+                  onToggleZoom={fileView.toggleZoom}
+                  onExitZoom={fileView.exitZoom}
+                  onOpenFile={fileView.openFile}
+                  onOpenFolder={fileView.openFolder}
+                  onClose={fileView.close}
+                  notify={notify}
+                />
+              ) : fileView.diff ? (
+                <ScmDiffViewer
+                  taskId={task.id}
+                  path={fileView.diff.path}
+                  source={fileView.diff.source}
+                  origPath={fileView.diff.origPath}
+                  kind={fileView.diff.kind}
+                  zoomed={fileView.zoomed}
+                  onToggleZoom={fileView.toggleZoom}
+                  onExitZoom={fileView.exitZoom}
+                  onOpenFile={fileView.showFile}
+                  onClose={fileView.close}
+                />
+              ) : (
+                <div className="task-detail-body">
+                  <section className="task-detail-main" aria-label="任务会话">
+                    <MemoSelectionScope
+                      taskId={task.id}
+                      openTab={openTab}
+                      notify={notify}
+                      onAsk={() => openTab("side-chat")}
+                      onAddToReply={handedOut ? undefined : addToReply}
+                    >
+                    <ConversationFeed
+                      task={task}
+                      requirement={{ text: task.body, at: task.createdAt }}
+                      questionHistory={task.questionHistory}
+                      liveQuestionHistory
+                      historyReady={conversation.transcriptReady}
+                      items={conversation.items}
+                      sessions={conversation.sessions}
+                      pendingExecutor={pendingExecutor}
+                      loading={conversation.refreshing}
+                      error={conversation.error}
+                      forkBlockedReason={forkReadBlock(conversation)}
+                      onForkReply={
+                        // `!task.reviewOf`：历史那种独立审查任务整条会话都是审查，而逐条的
+                        // reviewer 标只认 verifyRound 与 role=reviewer，认不出它 —— 那条路上
+                        // 每一条发言都不是派生落点，在这里整体关掉。
+                        onForkTask && !task.reviewOf && !forkReadBlock(conversation) && !handedOut
+                        && conversation.sessions.every((session) => session.taskId === task.id) ? (replyId) => {
+                        try { onForkTask(snapshotConversationFork(task, conversation.items, replyId)); }
+                        catch (reason) { notify(reason instanceof Error ? reason.message : String(reason)); }
+                      } : undefined}
+                      onRetryTurn={async (target) => {
                         try {
-                          for (const sessionId of new Set(sources.map((source) => source.sessionId))) {
-                            await api.deleteConversationSegments(sessionId, sources.filter((source) => source.sessionId === sessionId)
-                              .map(({ sessionId: _, ...target }) => target));
-                          }
-                          notify("已删除。下一轮会换一条新的会话，只带着删除后留下的记录继续");
+                          if (!(await confirmExecutorSwap(task.id))) return;
+                          const result = await api.retryTurn(task.id, target);
+                          // 审查档同一颗按钮有两种结果：上下文还在就接着做，上下文是空的
+                          // （CLI 当时压根没起来）才重发整份任务书。别只说「已重跑」——
+                          // 用户按之前看到的承诺是「继续」，退回从头跑时必须当面说清楚。
+                          notify(result.mode === "review"
+                            ? result.resumed
+                              ? "已从中断处继续这一轮审查"
+                              : "上一轮没留下可接着做的上下文，已重新交代任务书跑这一轮"
+                            : result.mode === "resend" ? "已重发上一条指令，任务续跑中" : "已从中断处续跑");
+                          // 只重取会话正文。任务本身的 running 由 SSE 推过来 —— 这里再补一发
+                          // GET，回来的很可能还是重投前的 done，反手把跑起来的状态盖回去
+                          // （WorkspaceShell 按 onTaskUpdate 覆盖，没有版本门禁）。
+                          await conversation.refetch();
                         } catch (reason) {
                           notify(reason instanceof Error ? reason.message : String(reason));
                         }
-                        await conversation.refetch();
-                      }
-                      : undefined}
-                    reviewRetry={freeReviewRetryIdentity(free.state?.reviews)}
-                    reviews={free.state?.reviews}
-                    onOpenReviewPanel={() => openTab("review")}
-                    // 会话区底部的常驻卡。提问要人答，所以它留在会话里（答案就在那条
-                    // 对话上下文里）；哨兵是「它自己会回来」，一行就够，落在回复框上方
-                    // 那条 rail 上（见下面的 monitorWait）。
-                    dock={task.question ? (
-                      <QuestionCard
-                        task={task}
-                        onAnswer={async (answer, input) => {
-                          await api.answerTask(task.id, answer, input);
-                          notify("已发送答复，任务正在续跑");
-                        }}
-                      />
-                    ) : undefined}
-                  />
-                  </MemoSelectionScope>
-                  <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
-                  {!handedOut && <ReplyBox
-                    task={task}
-                    tasks={allTasks}
-                    hasConversation={hasConversation}
-                    conversationItems={conversation.items}
-                    // 哨兵那一条也住这儿:它跟派审/预览是同一类东西——任务正跑着也得
-                    // 看得见。所以 rail 的显示条件要连它一起算,否则「只有哨兵、没有那
-                    // 几个按钮」的任务（归档的、预设工作流的）会整条消失。
-                    topRail={freeToolbarVisible || canHandoff || liveMonitors.length || liveBuiltinCount
-                      || task.acceptGateRunning
-                      ? (
-                        <TaskReplyRail
+                      }}
+                      // 只有单个智能体的任务、且此刻没在跑才能删：服务端同样会挡，这里不出按钮是
+                      // 为了不让人点了才知道（团队调度台、duet 还没接「下一轮重建上下文」）。
+                      onDeleteMessage={task.mode === "single" && !handedOut && task.status !== "running" && task.status !== "queued"
+                        ? async (sources) => {
+                          try {
+                            for (const sessionId of new Set(sources.map((source) => source.sessionId))) {
+                              await api.deleteConversationSegments(sessionId, sources.filter((source) => source.sessionId === sessionId)
+                                .map(({ sessionId: _, ...target }) => target));
+                            }
+                            notify("已删除。下一轮会换一条新的会话，只带着删除后留下的记录继续");
+                          } catch (reason) {
+                            notify(reason instanceof Error ? reason.message : String(reason));
+                          }
+                          await conversation.refetch();
+                        }
+                        : undefined}
+                      reviewRetry={freeReviewRetryIdentity(free.state?.reviews)}
+                      reviews={free.state?.reviews}
+                      onOpenReviewPanel={() => openTab("review")}
+                      // 会话区底部的常驻卡。提问要人答，所以它留在会话里（答案就在那条
+                      // 对话上下文里）；哨兵是「它自己会回来」，一行就够，落在回复框上方
+                      // 那条 rail 上（见下面的 monitorWait）。
+                      dock={task.question ? (
+                        <QuestionCard
                           task={task}
-                          freeToolbar={freeToolbarVisible}
-                          canHandoff={canHandoff}
-                          monitorWait={(
-                            <MonitorWaitCard
-                              // 切任务时折叠回去:上一个任务展开过,不代表这一个也该展开。
-                              // 带上角色前缀:这两张卡是 rail 里的兄弟,光用 task.id 会跟
-                              // 下面那张门禁卡撞成同一个 key(后果见 TaskReplyRail 里那段)。
-                              key={`monitor-wait:${task.id}`}
-                              monitors={liveMonitors}
-                              builtinCount={liveBuiltinCount}
-                              status={task.status}
-                              resumePrompt={task.resumePrompt ?? null}
-                              reviewArmed={!!free.state?.reviewReservation.armed}
-                              onOpenPanel={() => openTab("monitors")}
-                            />
-                          )}
-                          // 验收前置命令那一条:点了验收之后它在工作区里跑十几分钟,而
-                          // 任务本身 status/stage 一个字都不变 —— 不摆在这儿,主会话页
-                          // 上就完全看不出有东西在跑(时间轴那行很快被顶走)。
-                          gateWait={(
-                            <AcceptGateWaitCard
-                              key={`accept-gate:${task.id}`}
-                              taskId={task.id}
-                              expected={!!task.acceptGateRunning}
-                              notify={notify}
-                            />
-                          )}
-                          onHandoff={() => onHandoff?.(task)}
+                          onAnswer={async (answer, input) => {
+                            await api.answerTask(task.id, answer, input);
+                            notify("已发送答复，任务正在续跑");
+                          }}
+                        />
+                      ) : undefined}
+                    />
+                    </MemoSelectionScope>
+                    <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
+                    {!handedOut && <ReplyBox
+                      task={task}
+                      tasks={allTasks}
+                      hasConversation={hasConversation}
+                      conversationItems={conversation.items}
+                      // 哨兵那一条也住这儿:它跟派审/预览是同一类东西——任务正跑着也得
+                      // 看得见。所以 rail 的显示条件要连它一起算,否则「只有哨兵、没有那
+                      // 几个按钮」的任务（归档的、预设工作流的）会整条消失。
+                      topRail={freeToolbarVisible || canHandoff || liveMonitors.length || liveBuiltinCount
+                        || task.acceptGateRunning
+                        ? (
+                          <TaskReplyRail
+                            task={task}
+                            freeToolbar={freeToolbarVisible}
+                            canHandoff={canHandoff}
+                            monitorWait={(
+                              <MonitorWaitCard
+                                // 切任务时折叠回去:上一个任务展开过,不代表这一个也该展开。
+                                // 带上角色前缀:这两张卡是 rail 里的兄弟,光用 task.id 会跟
+                                // 下面那张门禁卡撞成同一个 key(后果见 TaskReplyRail 里那段)。
+                                key={`monitor-wait:${task.id}`}
+                                monitors={liveMonitors}
+                                builtinCount={liveBuiltinCount}
+                                status={task.status}
+                                resumePrompt={task.resumePrompt ?? null}
+                                reviewArmed={!!free.state?.reviewReservation.armed}
+                                onOpenPanel={() => openTab("monitors")}
+                              />
+                            )}
+                            // 验收前置命令那一条:点了验收之后它在工作区里跑十几分钟,而
+                            // 任务本身 status/stage 一个字都不变 —— 不摆在这儿,主会话页
+                            // 上就完全看不出有东西在跑(时间轴那行很快被顶走)。
+                            gateWait={(
+                              <AcceptGateWaitCard
+                                key={`accept-gate:${task.id}`}
+                                taskId={task.id}
+                                expected={!!task.acceptGateRunning}
+                                notify={notify}
+                              />
+                            )}
+                            onHandoff={() => onHandoff?.(task)}
+                            notify={notify}
+                          />
+                        )
+                        : undefined}
+                      skills={skills.skills}
+                      onStandingExecutorChange={async (next, label) => {
+                        const updated = await api.patchTask(task.id, next);
+                        onTaskUpdate(updated);
+                        const run = [label, updated.model, updated.reasoningEffort]
+                          .filter(Boolean).join(" · ");
+                        // 已经在跑的那一轮换不了人（进程都起来了），说清楚从哪一句开始算数。
+                        notify(task.status === "running" || task.status === "queued"
+                          ? `以后这个任务交给 ${run}；当前这一轮跑完后生效`
+                          : `以后这个任务交给 ${run}`);
+                      }}
+                      onSend={async (text, attachments, { executorLabel, ...options }) => {
+                        if (!(await confirmExecutorSwap(task.id))) return null;
+                        const result = await api.replyTask(task.id, text, { attachments, ...options });
+                        // 按**结果**分支而不是按请求参数:任务正在跑时后端会把这条落成
+                        // 排队消息(前端没传 sendAt 也一样)。没真发出去就绝不能先贴进会话,
+                        // 否则用户看到自己的话已在时间线上、agent 却还没收到。
+                        if ("scheduled" in result) {
+                          // 同样按结果措辞:暂停/待办任务也会因排队未轮到被暂存(r3 审查),
+                          // 对它说「任务进行中」是错的。
+                          notify(result.message.mode === "queued"
+                            ? (task.status === "running" || task.status === "queued"
+                              ? "任务进行中，已排队；这一轮结束后自动发出"
+                              : "任务在队列中等待，已排队；轮到它时自动发出")
+                            : result.message.mode === "after"
+                              ? `已安排在「${allTasks.find((item) => item.id === result.message.afterTaskId)?.title || "所选任务"}」完成后发送`
+                              : `已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送`);
+                          return result;
+                        }
+                        if ("command" in result) {
+                          notify(result.recorded ? "原生命令已执行，结果见会话记录" : result.text);
+                          return result;
+                        }
+                        // 这一轮真发出去了,横幅先按这个名字报,等会话行落库再由它接管。
+                        setPendingExecutor(executorLabel ?? null);
+                        conversation.addUser(text, attachments);
+                        notify(options.agent
+                          ? `已召唤 @${options.agent}${options.model ? ` · ${options.model}` : ""}${options.reasoningEffort ? ` · ${options.reasoningEffort}` : ""} 继续任务`
+                          : "回复已发送");
+                        return result;
+                      }}
+                      command={derivationAllowed ? {
+                        matches: isTaskDerivationCommand,
+                        items: TASK_DERIVATION_COMMANDS,
+                        resetKey: derivationResetKey,
+                        onSubmit: (text) => {
+                          const parsed = parseTaskDerivationCommand(text);
+                          if (parsed) setDerivation({ command: parsed, committed: true });
+                        },
+                        onChange: (text) => {
+                          setDerivation((current) => {
+                            if (current?.committed) return current;
+                            const parsed = parseTaskDerivationCommand(text);
+                            return parsed ? { command: parsed, committed: false } : null;
+                          });
+                        },
+                        onCancel: closeDerivation,
+                      } : undefined}
+                      inlinePanel={derivationAllowed && derivation ? (
+                        <TaskDerivationComposer
+                          key={derivation.command.kind}
+                          task={task}
+                          command={derivation.command}
+                          live={!derivation.committed}
+                          onClose={closeDerivation}
+                          onCreated={(created) => {
+                            onTaskUpdate(created);
+                            onOpenTask(created.id);
+                          }}
                           notify={notify}
                         />
-                      )
-                      : undefined}
-                    skills={skills.skills}
-                    onStandingExecutorChange={async (next, label) => {
-                      const updated = await api.patchTask(task.id, next);
-                      onTaskUpdate(updated);
-                      const run = [label, updated.model, updated.reasoningEffort]
-                        .filter(Boolean).join(" · ");
-                      // 已经在跑的那一轮换不了人（进程都起来了），说清楚从哪一句开始算数。
-                      notify(task.status === "running" || task.status === "queued"
-                        ? `以后这个任务交给 ${run}；当前这一轮跑完后生效`
-                        : `以后这个任务交给 ${run}`);
-                    }}
-                    onSend={async (text, attachments, { executorLabel, ...options }) => {
-                      if (!(await confirmExecutorSwap(task.id))) return null;
-                      const result = await api.replyTask(task.id, text, { attachments, ...options });
-                      // 按**结果**分支而不是按请求参数:任务正在跑时后端会把这条落成
-                      // 排队消息(前端没传 sendAt 也一样)。没真发出去就绝不能先贴进会话,
-                      // 否则用户看到自己的话已在时间线上、agent 却还没收到。
-                      if ("scheduled" in result) {
-                        // 同样按结果措辞:暂停/待办任务也会因排队未轮到被暂存(r3 审查),
-                        // 对它说「任务进行中」是错的。
-                        notify(result.message.mode === "queued"
-                          ? (task.status === "running" || task.status === "queued"
-                            ? "任务进行中，已排队；这一轮结束后自动发出"
-                            : "任务在队列中等待，已排队；轮到它时自动发出")
-                          : result.message.mode === "after"
-                            ? `已安排在「${allTasks.find((item) => item.id === result.message.afterTaskId)?.title || "所选任务"}」完成后发送`
-                            : `已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送`);
-                        return result;
-                      }
-                      if ("command" in result) {
-                        notify(result.recorded ? "原生命令已执行，结果见会话记录" : result.text);
-                        return result;
-                      }
-                      // 这一轮真发出去了,横幅先按这个名字报,等会话行落库再由它接管。
-                      setPendingExecutor(executorLabel ?? null);
-                      conversation.addUser(text, attachments);
-                      notify(options.agent
-                        ? `已召唤 @${options.agent}${options.model ? ` · ${options.model}` : ""}${options.reasoningEffort ? ` · ${options.reasoningEffort}` : ""} 继续任务`
-                        : "回复已发送");
-                      return result;
-                    }}
-                    command={derivationAllowed ? {
-                      matches: isTaskDerivationCommand,
-                      items: TASK_DERIVATION_COMMANDS,
-                      resetKey: derivationResetKey,
-                      onSubmit: (text) => {
-                        const parsed = parseTaskDerivationCommand(text);
-                        if (parsed) setDerivation({ command: parsed, committed: true });
-                      },
-                      onChange: (text) => {
-                        setDerivation((current) => {
-                          if (current?.committed) return current;
-                          const parsed = parseTaskDerivationCommand(text);
-                          return parsed ? { command: parsed, committed: false } : null;
-                        });
-                      },
-                      onCancel: closeDerivation,
-                    } : undefined}
-                    inlinePanel={derivationAllowed && derivation ? (
-                      <TaskDerivationComposer
-                        key={derivation.command.kind}
-                        task={task}
-                        command={derivation.command}
-                        live={!derivation.committed}
-                        onClose={closeDerivation}
-                        onCreated={(created) => {
-                          onTaskUpdate(created);
-                          onOpenTask(created.id);
-                        }}
-                        notify={notify}
-                      />
-                    ) : undefined}
-                  />}
-                </section>
-              </div>
-            )}
-            {markDoneOpen && (
-              <ConfirmDialog
-                title="标记为已完成"
-                message={"把这个任务直接落成「已完成」。用在 agent 其实干完了、只是没调 complete_task 交卷的时候 —— 请先核对产物（提交、改动、产出文件）确实在。\n\n它跟「重试」是两条路：重试会从中断处接着跑，标记完成则就此收尾，队列里排在后面的任务会开始跑。"}
-                confirmLabel="标记完成"
-                busy={busy}
-                onConfirm={() => void markDone()}
-                onClose={() => setMarkDoneOpen(false)}
-              />
-            )}
-            {deleteOpen && (
-              <DeleteTaskDialog
-                task={task}
-                notify={notify}
-                onDeleted={(ids) => ids.forEach(onDeleted)}
-                onClose={() => setDeleteOpen(false)}
-              />
-            )}
-            {postMergeDialogOpen && postMergeTarget && (
-              <FreeReviewDialog
-                taskId={task.id}
-                state={free.state}
-                reservationMode={false}
-                postMergeTarget={postMergeTarget}
-                onChanged={free.setState}
-                onClose={() => setPostMergeDialogOpen(false)}
-                notify={notify}
-              />
-            )}
-            {/* 子智能体执行详情：盖住中间那一栏，右侧 Inspector 的列表仍然看得见。 */}
-            {subagents.drawer}
-          </div>
-          {inspectorMode === "drawer" && inspectorToggleTarget
-            ? createPortal(toggleButton, inspectorToggleTarget)
-            : null}
-        </>
-      )}
-    </InspectorHost>
+                      ) : undefined}
+                    />}
+                  </section>
+                </div>
+              )}
+              {markDoneOpen && (
+                <ConfirmDialog
+                  title="标记为已完成"
+                  message={"把这个任务直接落成「已完成」。用在 agent 其实干完了、只是没调 complete_task 交卷的时候 —— 请先核对产物（提交、改动、产出文件）确实在。\n\n它跟「重试」是两条路：重试会从中断处接着跑，标记完成则就此收尾，队列里排在后面的任务会开始跑。"}
+                  confirmLabel="标记完成"
+                  busy={busy}
+                  onConfirm={() => void markDone()}
+                  onClose={() => setMarkDoneOpen(false)}
+                />
+              )}
+              {deleteOpen && (
+                <DeleteTaskDialog
+                  task={task}
+                  notify={notify}
+                  onDeleted={(ids) => ids.forEach(onDeleted)}
+                  onClose={() => setDeleteOpen(false)}
+                />
+              )}
+              {postMergeDialogOpen && postMergeTarget && (
+                <FreeReviewDialog
+                  taskId={task.id}
+                  state={free.state}
+                  reservationMode={false}
+                  postMergeTarget={postMergeTarget}
+                  onChanged={free.setState}
+                  onClose={() => setPostMergeDialogOpen(false)}
+                  notify={notify}
+                />
+              )}
+              {/* 子智能体执行详情：盖住中间那一栏，右侧 Inspector 的列表仍然看得见。 */}
+              {subagents.drawer}
+            </div>
+            {inspectorMode === "drawer" && inspectorToggleTarget
+              ? createPortal(toggleButton, inspectorToggleTarget)
+              : null}
+          </>
+        )}
+      </InspectorHost>
+    </TaskFileLinks>
   );
 }

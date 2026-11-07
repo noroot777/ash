@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
+import { fetchesSettled, resizeViewport, trackFetches } from "./wait-until.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -38,6 +39,7 @@ function startBackend() {
     child.once("error", reject);
     child.once("exit", (code, signal) =>
       fail(`Fixture exited before readiness (${code ?? signal})`));
+    // 不是睡眠：就绪那一行一到就 resolve；15 秒只是夹具起不来时的报错上限。
     setTimeout(() => fail("Fixture did not become ready"), 15_000).unref();
   });
   const close = async () => {
@@ -50,6 +52,7 @@ function startBackend() {
     } else child.kill("SIGTERM");
     const didExit = await Promise.race([
       exited.then(() => true),
+      // 收尾兜底：子进程按时退出就不等；超时只是改用 SIGKILL，没有断言依赖它。
       new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
     ]);
     if (!didExit && child.exitCode === null) {
@@ -160,6 +163,10 @@ const refresh = async (throughDialog = false) => {
   else await button.click();
   const response = await pending;
   assert.equal(response.ok(), true, `refresh failed with ${response.status()}`);
+  // 等到的那一份响应可能是点刷新之前就在飞的那趟轮询（满载时常见）：它带的是改仓库之前的
+  // 快照，页面会按序号丢掉它，真正的刷新还在路上，这时往下点写操作就会被服务端以版本过期拒掉。
+  // 所以再等页面上所有工作台读取都消费完——刷新那一发在点击时就已发出，必在其中。
+  await fetchesSettled(page, 0, "刷新发出的工作台读取已被页面消费完");
   await page.getByLabel("选择工作树").waitFor({ state: "visible" });
 };
 const cleanAfterConflictEdits = (root) => {
@@ -190,6 +197,11 @@ try {
     server: {
       host: "127.0.0.1",
       port: 0,
+      // 光写 watch: null 不够：加载了 web/vite.config.ts 时，vite 合并配置会跳过值为 null 的项，
+      // watcher 照开。同一检出里任何文件一变它就推整页刷新，把测试做到一半的页面冲掉（实测：
+      // 别的执行者改 web/scripts 里的文件时，review / refresh-paths 两条因此中途被刷新）。
+      // 关掉 HMR 连接，刷新就推不到页面上。
+      hmr: false,
       proxy: { "/api": { target: `http://127.0.0.1:${info.port}` } },
     },
   });
@@ -198,6 +210,8 @@ try {
   assert(address && typeof address === "object", "Vite did not expose a port");
   browser = await launchChrome();
   page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+  // 页面上的工作台状态读取（refresh 要等「点刷新之后发出的那一发」真被页面消费完）。
+  await trackFetches(page, "/git/workbench\\?");
   page.on("pageerror", (error) => browserErrors.push(error.message));
   page.on("console", (message) => {
     if (message.type() === "error" && !message.text().startsWith("Failed to load resource:"))
@@ -263,7 +277,7 @@ try {
     0,
     "regular merge must keep its abort path instead of discard-conflicts",
   );
-  await page.setViewportSize({ width: 390, height: 844 });
+  await resizeViewport(page, { width: 390, height: 844 });
   assert(
     (await page.evaluate(() => document.documentElement.scrollWidth)) <= 390,
     "mobile conflict summary should not overflow horizontally",
@@ -572,7 +586,7 @@ try {
   const discardConflicts = page.getByRole("button", { name: "放弃冲突改动", exact: true });
   await expectEnabled(discardConflicts, "discard squash conflict");
   assert.doesNotMatch(await page.locator(".gwb-operation").innerText(), /贮藏等操作/);
-  await page.setViewportSize({ width: 390, height: 844 });
+  await resizeViewport(page, { width: 390, height: 844 });
   assert(
     (await page.evaluate(() => document.documentElement.scrollWidth)) <= 390,
     "mobile squash conflict actions should not overflow horizontally",

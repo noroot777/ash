@@ -26,7 +26,8 @@ import {
 import { freeReviewScreenshots, readFreeReviewReport } from "./free-review-files.js";
 import { debateViews } from "./free-review-debate.js";
 import { hasDispute } from "./free-review-dispute.js";
-import { headCommit, workspaceDirty, worktreePathFor } from "./git.js";
+import { worktreePathFor } from "./git.js";
+import { workspaceSnapshot, type WorkspaceSnapshot } from "./workspace-fingerprint.js";
 import { existsSync } from "node:fs";
 import { previewState } from "./preview-public.js";
 import { reviewTurnInFlight } from "./review-turn.js";
@@ -96,14 +97,16 @@ function parseExecutionDetail(detail: string | null): { status: FreeWorkflowExec
 // dirty 必须一起报：只比 HEAD 会把「审查后只改了工作区没提交」误判成新鲜（失败开放）。
 export async function workspaceStateOf(
   task: { id: string; projectId: string; useWorktree: boolean },
-): Promise<{ head: string | null; dirty: boolean | null }> {
+  // 拿结果去授权（打锚点、放行修复）时传 verify，理由见 workspace-fingerprint.ts。
+  opts: { verify?: boolean } = {},
+): Promise<WorkspaceSnapshot> {
+  const missing = { head: null, dirty: null, fingerprint: null };
   const project = (await db.select({ repoPath: projects.repoPath }).from(projects)
     .where(eq(projects.id, task.projectId))).at(0);
-  if (!project?.repoPath) return { head: null, dirty: null };
+  if (!project?.repoPath) return missing;
   const path = task.useWorktree ? worktreePathFor(project.repoPath, task.id) : project.repoPath;
-  if (task.useWorktree && !existsSync(path)) return { head: null, dirty: null };
-  const [head, dirty] = await Promise.all([headCommit(path), workspaceDirty(path)]);
-  return { head, dirty };
+  if (task.useWorktree && !existsSync(path)) return missing;
+  return workspaceSnapshot(path, opts);
 }
 
 // 快照必须与版本**一致**：读取分好几批（task/state/runs/rounds/Git），读取期间修订号变了
@@ -199,6 +202,8 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
       status: round.status as FreeReviewRound["status"],
       conclusion: round.conclusion as FreeReviewRound["conclusion"],
       reviewedCommit: round.reviewedCommit,
+      reviewedFingerprint: round.reviewedFingerprint,
+      disputedFingerprint: round.disputedFingerprint,
       reportMarkdown: readFreeReviewReport(taskId, run.id, round.round),
       screenshots: freeReviewScreenshots(taskId, run.id, round.round),
       dispute: hasDispute(round)
@@ -273,7 +278,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
   // 警示（审查实测）。版本在指纹核对后取——DB 读取期间的变更会由随后的事件 bump +
   // SSE 重取覆盖，方向自愈。reviewTurn 一并入指纹：它不落库、也不单独发事件，靠状态
   // 变更顺带 bump 的话，旁路回合起落那一下前端可能拿不到新版本。
-  const fp = `${workspace.head}|${workspace.dirty}|${task.status}|${reviewTurn}`;
+  const fp = `${workspace.head}|${workspace.dirty}|${workspace.fingerprint}|${task.status}|${reviewTurn}`;
   if (workspaceFingerprints.get(taskId) !== fp) {
     workspaceFingerprints.set(taskId, fp);
     revisions.set(taskId, Math.max(revisionOf(taskId) + 1, Date.now()));
@@ -285,6 +290,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
     stateVersion,
     workspaceHead: workspace.head,
     workspaceDirty: workspace.dirty,
+    workspaceFingerprint: workspace.fingerprint,
     reviewReservation: {
       armed: reservationArmed,
       reviewerId: reservationReviewerId,

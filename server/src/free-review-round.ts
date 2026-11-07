@@ -24,7 +24,6 @@ import {
 import { evidenceState, restartRegressionEvidence } from "./regression-evidence-lifecycle.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
-import { headCommit } from "./git.js";
 import { cleanupPostMergeReviewWorktree, preparePostMergeReviewWorktree } from "./post-merge-review-worktree.js";
 import type { SettlementFence } from "./regression-settlement.js";
 import { reviewInputHoldNow, reviewInputStillCurrent } from "./review-input-verdict.js";
@@ -35,6 +34,8 @@ import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { turnProducedWork } from "./transcript.js";
 import { id, now } from "./util.js";
+import { workspaceSnapshot } from "./workspace-fingerprint.js";
+import { UNKNOWN_FINGERPRINT } from "@ash/shared/free-workflow";
 
 type TaskRow = typeof tasks.$inferSelect;
 export type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
@@ -300,8 +301,8 @@ export async function launchReviewRound(
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   let cwd: string | undefined;
   let workspacePath: string | undefined;
-  // 锚定本轮结论的基准：审查启动时工作区的 HEAD。之后代码变没变、结论新不新鲜，
-  // 全靠它跟当前 HEAD 比，不靠任何状态字段。取不到（工作区缺失）就留 null。
+  // 锚定本轮结论的基准：审查启动时工作区的 HEAD 与内容指纹。之后代码变没变、结论新不新鲜，
+  // 全靠它跟当前工作区比（`reviewAnchorMatches`），不靠任何状态字段。取不到（工作区缺失）就留 null。
   if (run.targetKind === "accepted_merge") {
     if (!project || !run.targetCommit) throw new Error("合并结果审查缺少项目或验收 commit");
     cwd = await preparePostMergeReviewWorktree(project.repoPath, task.id, run.id, run.targetCommit);
@@ -310,9 +311,9 @@ export async function launchReviewRound(
   } else if (project) {
     const workspace = await taskWorkspace(task, project.repoPath).catch(() => null);
     workspacePath = workspace?.path;
-    const head = workspace ? await headCommit(workspace.path) : null;
-    if (head) {
-      await db.update(freeReviewRounds).set({ reviewedCommit: head })
+    const anchor = workspace ? await workspaceSnapshot(workspace.path, { verify: true }) : null;
+    if (anchor?.head) {
+      await db.update(freeReviewRounds).set({ reviewedCommit: anchor.head, reviewedFingerprint: anchor.fingerprint ?? UNKNOWN_FINGERPRINT })
         .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
     }
   }

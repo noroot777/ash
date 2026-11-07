@@ -9,6 +9,7 @@
 //      也不许在 B 的页面上弹通知、开新标签页 —— 用户此刻看的根本不是 A。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchLog, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -16,21 +17,21 @@ let browser;
 try {
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
+  // 夹具在页面里当假服务端：记下每一发预览启动请求，好知道 A 那趟什么时候被页面读完。
+  await trackFetches(page, "/free-workflow/preview$");
   await page.goto(`${web.origin}/scripts/fixtures/preview-task-switch.html`);
 
   // ① A 上点开预览，请求挂着 —— 这颗现在是可点的取消。
   await page.getByRole("button", { name: "打开预览" }).click();
-  await page.getByRole("button", { name: "启动中·点此取消" }).waitFor({ timeout: 5000 });
+  await page.getByRole("button", { name: "启动中·点此取消" }).waitFor();
 
   // ② 切到 B：B 从来没起过预览，快照也明说 running:false / starting:false。
   await page.getByTestId("to-b").click();
   await page.waitForFunction(
     () => document.querySelector("[data-testid=current-task]")?.textContent?.includes("T-B") ?? false,
-    null,
-    { timeout: 5000 },
   );
   const openOnB = page.getByRole("button", { name: "打开预览" });
-  await openOnB.waitFor({ timeout: 5000 });
+  await openOnB.waitFor();
   assert.equal(
     await page.getByRole("button", { name: "启动中·点此取消" }).count(), 0,
     "A 的在途动作漂到了 B 的按钮上",
@@ -38,9 +39,9 @@ try {
 
   // ③ 在 B 上点这颗：必须是「起 B 的预览」，不能是「停 B 的预览」。
   await openOnB.click();
-  await page.getByRole("button", { name: "启动中·点此取消" }).waitFor({ timeout: 5000 });
+  await page.getByRole("button", { name: "启动中·点此取消" }).waitFor();
   // B 正在冷启动，日志入口就是它此刻唯一能看见的东西。
-  await page.getByTestId("preview-log-open").waitFor({ timeout: 5000 });
+  await page.getByTestId("preview-log-open").waitFor();
   const afterClick = await page.evaluate(() => window.__calls);
   assert.equal(afterClick.postsB, 1, "在 B 上点「打开预览」没有起 B 的预览");
   assert.equal(afterClick.deletesB, 0, "在 B 上点下去反而给 B 发了停止请求");
@@ -51,7 +52,11 @@ try {
   // ④ A 的请求晚一步成功返回：它属于用户已经离开的那个任务，既不能清掉 B 的动作，
   //    也不能在 B 的页面上说话、开窗。
   await page.getByTestId("finish-a").click();
-  await page.waitForTimeout(500);
+  // A 那趟 200 已被页面读完（它的 then/finally 同一轮里就跑完了），再冲刷一轮渲染才读结果。
+  await waitUntil(async () => (await fetchLog(page))
+    .some((entry) => entry.url.includes("/T-A/") && entry.method === "POST" && entry.state === "settled"),
+  "A 那趟迟到的启动请求已被页面消费完");
+  await settlePage(page);
   const afterLate = await page.evaluate(() => ({
     calls: window.__calls,
     notices: document.querySelector("[data-testid=notices]")?.textContent ?? "",

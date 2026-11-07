@@ -366,12 +366,20 @@ async function disputeFreeReviewHeld(
   if (!round || round.conclusion !== "verify_failed") throw new Error("最近一轮审查没有未通过结论，无需驳回");
   if (hasDispute(round)) throw new Error("这一轮意见已经驳回过了；还有话要说就等用户开辩论，别重复驳回");
 
+  // 驳回这一刻的代码也是一个锚点：工具要求「部分成立先改掉成立的、再只驳剩下的」，所以
+  // 此刻的工作区必然已经不同于审查那一版。用户维持意见后，修复对应的就是这一版
+  // （判据见 shared 的 `reviewAnchorMatches`）。取不到就留 null，退回只认审查那一版。
+  const { workspaceStateOf } = await import("./free-workflow-state.js");
+  const disputedFingerprint = (await workspaceStateOf(task, { verify: true })).fingerprint;
   const at = now();
   // CAS：只有把两段理由从空写成非空的那一次算数。并发重试（MCP 的重连重试、用户手点
   // 两下）到这里都只会落一条驳回，而不是后写的盖掉先写的。两列一起判——只判一列的话，
   // 「只提转出」和「只提不成立」这两次并发调用会各自看到对方那列是空，双双写进去。
   const written = await db.update(freeReviewRounds)
-    .set({ disputeSummary: summary, disputeReason: reason || null, disputeDeferReason: deferReason, disputeAt: at })
+    .set({
+      disputeSummary: summary, disputeReason: reason || null, disputeDeferReason: deferReason, disputeAt: at,
+      disputedFingerprint,
+    })
     .where(and(
       eq(freeReviewRounds.id, round.id),
       not(disputeWritten),
@@ -575,8 +583,10 @@ export async function resolveFreeReviewDispute(
       });
     } catch (error) {
       repairError = error instanceof Error ? error.message : String(error);
-      await appendTaskTimeline(taskId,
-        `已裁定维持审查意见，但这次没能自动发起修复：${repairError}；可在审查面板里手动点「按意见修复」。`);
+      // 报错里已经指了出路（再派一轮审查）时，就别再叫用户去点「按意见修复」——那颗按钮过的
+      // 是同一道校验，只会再被拦一次。
+      await appendTaskTimeline(taskId, `已裁定维持审查意见，但这次没能自动发起修复：${repairError}` +
+        (repairError.includes("再派一轮审查") ? "。" : "；可在审查面板里手动点「按意见修复」。"));
       bus.publish({ type: "task.review", taskId });
     }
   }

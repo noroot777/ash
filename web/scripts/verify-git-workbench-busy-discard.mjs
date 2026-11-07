@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
+import { WAIT_TIMEOUT_MS, fetchesSettled, settlePage, trackFetches } from "./wait-until.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -23,6 +24,7 @@ function startBackend() {
   let stdout = "";
   let stderr = "";
   const ready = new Promise((resolve, reject) => {
+    // 不是睡眠：就绪那一行一到就 resolve 并清掉它；15 秒只是夹具起不来时的报错上限。
     const timer = setTimeout(
       () => reject(new Error(`fixture startup timeout\n${stderr}\n${stdout}`)),
       15_000,
@@ -51,12 +53,14 @@ function startBackend() {
     const exited = new Promise(resolve => child.once("exit", resolve));
     if (child.connected) child.send({ type: "close" });
     else child.kill("SIGTERM");
+    // 收尾兜底：子进程按时退出就不等；超时只是改用 SIGKILL，没有断言依赖它。
     await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 5_000))]);
     if (child.exitCode === null) child.kill("SIGKILL");
   };
   return { ready, close, diagnostics: () => ({ stdout, stderr }) };
 }
 
+// 条件等待的期限（不是睡眠）：promise 一兑现就往下走；期限按满载给足。
 const withTimeout = (promise, ms, label) => Promise.race([
   promise,
   new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timeout`)), ms)),
@@ -110,6 +114,11 @@ try {
       host: "127.0.0.1",
       port: 0,
       watch: null,
+      // 光写 watch: null 不够：加载了 web/vite.config.ts 时，vite 合并配置会跳过值为 null 的项，
+      // watcher 照开。同一检出里任何文件一变它就推整页刷新，把测试做到一半的页面冲掉（实测：
+      // 别的执行者改 web/scripts 里的文件时，review / refresh-paths 两条因此中途被刷新）。
+      // 关掉 HMR 连接，刷新就推不到页面上。
+      hmr: false,
       proxy: { "/api": { target: `http://127.0.0.1:${info.port}` } },
     },
   });
@@ -119,6 +128,8 @@ try {
   await mkdir(output, { recursive: true });
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1200, height: 760 } });
+  // 页面那一侧有没有把工作台状态 / 差异的响应消费完：「过一会儿也不该冒出过期提示」靠它判。
+  await trackFetches(page, "/git/workbench(?:/diff)?\\?");
 
   let slowAction = null;
   let readDiff = null;
@@ -223,13 +234,15 @@ try {
   const slowRow = rowFor("slow.txt");
   await slowRow.hover();
   await slowRow.getByLabel("暂存 slow.txt", { exact: true }).click();
-  await withTimeout(actionStarted.promise, 5_000, "slow action request");
+  await withTimeout(actionStarted.promise, WAIT_TIMEOUT_MS, "slow action request");
   const busyReadStarted = deferred();
   readDiff = { started: busyReadStarted };
   await rowFor("read.txt").getByLabel("read.txt", { exact: true }).click();
-  await withTimeout(busyReadStarted.promise, 5_000, "busy diff request");
+  await withTimeout(busyReadStarted.promise, WAIT_TIMEOUT_MS, "busy diff request");
   const readLine = page.getByRole("button", { name: /选择第 .* 行 \+READ-CHANGED$/ });
-  await readLine.waitFor({ timeout: 5_000 });
+  // 被测的是「慢写不挡读」：挡住的话这次读要等那条写放行才回，而写被测试一直扣着，所以期限
+  // 放宽到满载余量也照样能判出挡没挡。
+  await readLine.waitFor({ timeout: WAIT_TIMEOUT_MS });
   assert.equal(await page.getByText("正在读取差异…", { exact: true }).count(), 0);
   await assertSelectionLocked("busy diff result");
   await page.screenshot({ path: join(output, "busy-read-real-diff-locked.png") });
@@ -242,7 +255,7 @@ try {
   );
   actionRelease.resolve();
   assert.equal((await slowActionResponse).ok(), true);
-  await withTimeout(freshReadStarted.promise, 8_000, "post-write fresh diff request");
+  await withTimeout(freshReadStarted.promise, WAIT_TIMEOUT_MS, "post-write fresh diff request");
   await page.getByLabel("选择工作树", { exact: true }).waitFor({ state: "visible" });
   await page.waitForFunction(() => {
     const trigger = document.querySelector('[aria-label="选择工作树"]');
@@ -303,7 +316,7 @@ try {
   assert.deepEqual((await successRequest).postDataJSON().action.lines, [successIndex]);
   assert.equal((await successResponse).ok(), true);
   await dialog.waitFor({ state: "detached" });
-  await withTimeout(successfulDiffStarted.promise, 8_000, "successful discard fresh diff");
+  await withTimeout(successfulDiffStarted.promise, WAIT_TIMEOUT_MS, "successful discard fresh diff");
   await page.waitForFunction(() => ![...document.querySelectorAll("button")].some(button =>
     button.getAttribute("aria-pressed") === "true"),
   );
@@ -313,7 +326,9 @@ try {
   await successLine.waitFor({ state: "detached" });
   await page.getByRole("button", { name: /选择第 .* 行 \+SUCCESS-KEEP$/ }).waitFor();
   holdSuccessfulDiscardDiff = null;
-  await page.waitForTimeout(250);
+  // 扣住的那份差异与此后的状态/差异读取都已被页面消费完、渲染冲刷过，才断言「没有误报」。
+  await fetchesSettled(page, 0, "放行后的差异与状态读取都已被页面消费完");
+  await settlePage(page);
   assert.equal(await clearedStatus.count(), 0, "own successful discard must not report stale selection");
   assert.equal(
     readFileSync(join(info.root, "discard-success.txt"), "utf8"),
@@ -350,7 +365,8 @@ try {
   await selectAdded("RACE-ONE");
   dialog = await openDiscard();
   write("discard-race.txt", "race base\nRACE-TWO\n");
-  await clearedStatus.waitFor({ timeout: 12_000 });
+  // 外部写要等下一轮 5 秒轮询才看得见：期限 = 一个轮询周期 + 满载余量。
+  await clearedStatus.waitFor({ timeout: 5_000 + WAIT_TIMEOUT_MS });
   await page.getByRole("button", { name: /选择第 .* 行 \+RACE-TWO$/ }).waitFor();
   await dialog.getByLabel("输入目标以确认").fill("丢弃");
   const failedResponse = page.waitForResponse(response =>

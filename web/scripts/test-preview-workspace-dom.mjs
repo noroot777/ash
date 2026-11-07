@@ -10,6 +10,7 @@ import { parseAnnotationBatch } from "../../shared/src/page-annotation-batch.ts"
 import { checkFloatingPreview, previewClearRatio } from "./preview-floating-checks.mjs";
 import { checkExpandedPreviewShortcuts, checkPreviewControlShortcuts, checkPreviewPalette } from "./preview-shortcut-checks.mjs";
 import { checkPreviewPanelOverlap } from "./preview-panel-overlap-checks.mjs";
+import { resizeViewport, settlePage, waitUntil } from "./wait-until.mjs";
 
 export async function testPreviewWorkspaceDom() {
   const cacheDir = await mkdtemp(join(tmpdir(), "ash-preview-workspace-test-"));
@@ -23,6 +24,21 @@ export async function testPreviewWorkspaceDom() {
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
+    // 宿主页从标注通道（MessagePort）上收到的每一条消息按类型记下来（只记顶层页）：「帧里按
+    // Escape 不该收起工作区」要等的正向信号是「runtime 发出的每一条都已经被宿主页处理过」。
+    await page.addInitScript(() => {
+      if (window !== window.top) return;
+      const received = (window.__portReceived = []);
+      const slot = Object.getOwnPropertyDescriptor(MessagePort.prototype, "onmessage");
+      Object.defineProperty(MessagePort.prototype, "onmessage", {
+        ...slot,
+        set(handler) {
+          slot.set.call(this, typeof handler !== "function" ? handler : function (event) {
+            try { return handler.call(this, event); } finally { received.push(event.data?.type); }
+          });
+        },
+      });
+    });
     let record = null, iframeLoads = 0, running = false, realRuntime = false;
     const savedRecords = new Map();
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
@@ -48,6 +64,10 @@ export async function testPreviewWorkspaceDom() {
         if (realRuntime) return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<!doctype html><html><head><meta charset="utf-8"><script>
           const capture = Element.prototype.setPointerCapture;
           Element.prototype.setPointerCapture = function(id) { window.capturedPointerId = id; return capture.call(this, id); };
+          // runtime 在初始化时就把 postMessage 抓进了闭包，所以要记它发了什么，得在它之前包上。
+          const portPost = MessagePort.prototype.postMessage;
+          window.portSent = [];
+          MessagePort.prototype.postMessage = function(message, ...rest) { window.portSent.push(message?.type); return portPost.call(this, message, ...rest); };
           const attach = Element.prototype.attachShadow;
           Element.prototype.attachShadow = function(options) {
             const root = attach.call(this, options); window.annotationShadow = root; return root;
@@ -174,7 +194,7 @@ export async function testPreviewWorkspaceDom() {
     await button("打开预览指正").click();
     assert.deepEqual(await page.locator(".preview-workspace").boundingBox(), { x: 0, y: 0, width: 1400, height: 900 }, "the entry opens the expanded workspace directly, before preview launch");
     await checkExpandedPreviewShortcuts(page);
-    await button("按已保存配置启动").waitFor({ timeout: 10000 }).catch((error) => { throw new Error(`${error.message}\n${errors.join("\n")}`); });
+    await button("按已保存配置启动").waitFor().catch((error) => { throw new Error(`${error.message}\n${errors.join("\n")}`); });
     assert.equal(await button("启动 静态页面").isVisible(), false, "project configuration hides alternatives by default");
     assert.equal(await button("启动工作流预览").isVisible(), false);
     await page.getByText("换其它候选 / 自填命令", { exact: true }).click();
@@ -372,6 +392,23 @@ export async function testPreviewWorkspaceDom() {
     const runtimeFrame = page.frames().find((frame) => frame.url().includes("/preview/open/"));
     const target = await runtimeFrame.locator("#drag-target").boundingBox();
     assert(target, "real runtime fixture has a drawable target");
+    /** 帧里 runtime 发出、宿主页收到的 escape 各有几条（只比增量：页面上之前的通道也记在里面）。 */
+    const escapeTally = async () => ({
+      sent: await runtimeFrame.evaluate(() => window.portSent.filter((type) => type === "escape").length),
+      received: await page.evaluate(() => window.__portReceived.filter((type) => type === "escape").length),
+    });
+    /**
+     * 帧里这一下 Escape 引起的一切都已在宿主页落地：runtime 是 defer(…, 0) 之后才决定发不发
+     * （要看页面自己的监听器有没有 preventDefault），在帧里排一个同为 0ms 的定时器，它触发时那个
+     * 决定已经做完；发了几条就等宿主页的端口收齐几条，再冲刷一轮渲染。
+     */
+    const frameEscapeSettled = async (before) => {
+      await runtimeFrame.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+      const sent = (await escapeTally()).sent - before.sent;
+      await waitUntil(async () => (await escapeTally()).received - before.received >= sent,
+        `runtime 发出的 ${sent} 条 escape 都已被宿主页收到`);
+      await settlePage(page);
+    };
     const paint = () => runtimeFrame.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const drawn = () => runtimeFrame.evaluate(() => [...window.annotationShadow.querySelectorAll('rect')].map((rect) =>
       Object.fromEntries(['x', 'y', 'width', 'height'].map((key) => [key, Number(rect.getAttribute(key))]))));
@@ -404,8 +441,16 @@ export async function testPreviewWorkspaceDom() {
       await page.waitForFunction((mode) => [...document.querySelectorAll('.preview-workspace-modes button')]
         .some((button) => button.textContent === mode && button.getAttribute('aria-pressed') === 'true' && !button.disabled), mode);
       await button('放大预览').click();
-      await runtimeFrame.evaluate(() => parent.postMessage({ type: 'escape' }, '*'));
-      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 30)));
+      // 同一个来源发到同一个窗口的消息按序派发：哨兵到了，前面那条普通窗口消息就已经被处理过。
+      await page.evaluate(() => {
+        window.__sentinel = new Promise((resolve) => {
+          const on = (event) => { if (event.data?.type === '__ash-sentinel') { window.removeEventListener('message', on); resolve(); } };
+          window.addEventListener('message', on);
+        });
+      });
+      await runtimeFrame.evaluate(() => { parent.postMessage({ type: 'escape' }, '*'); parent.postMessage({ type: '__ash-sentinel' }, '*'); });
+      await page.evaluate(() => window.__sentinel);
+      await settlePage(page);
       assert.equal(await button('还原预览').isVisible(), true, 'ordinary window messages cannot dismiss the workspace');
       const input = runtimeFrame.locator('#page-input');
       for (const phase of ['target', 'document', 'window-capture', 'window']) {
@@ -413,9 +458,10 @@ export async function testPreviewWorkspaceDom() {
         await input.focus();
         assert.equal(await page.evaluate(() => document.activeElement?.tagName), 'IFRAME');
         const before = await runtimeFrame.evaluate(() => window.escapeCount);
+        const tally = await escapeTally();
         await input.press('Escape');
         await runtimeFrame.waitForFunction((before) => window.escapeCount === before + 1, before);
-        await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 30)));
+        await frameEscapeSettled(tally);
         assert.equal(await runtimeFrame.evaluate(() => window.escapePrevented), true, `${mode}: page can consume Escape at ${phase}`);
         assert.equal(await button('还原预览').isVisible(), true, `${mode}: defaultPrevented keeps the workspace expanded`);
       }
@@ -423,8 +469,9 @@ export async function testPreviewWorkspaceDom() {
       await input.press('Escape');
       await button('放大预览').waitFor();
       assert.equal(await runtimeFrame.evaluate(() => window.escapePrevented), false, `${mode}: runtime leaves Escape's default action alone`);
+      const compactTally = await escapeTally();
       await input.press('Escape');
-      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 30)));
+      await frameEscapeSettled(compactTally);
       assert.equal(await button('放大预览').isVisible(), true, 'Escape in compact view is idempotent');
       assert.equal(await page.evaluate(() => window.closeRequests), 0, 'frame Escape cannot close the workspace');
       assert.deepEqual(await draft(), preservedDraft, 'frame Escape cannot change annotation data');
@@ -433,7 +480,7 @@ export async function testPreviewWorkspaceDom() {
     await checkFloatingPreview(page, runtimeFrame, draft);
     await checkPreviewPanelOverlap(page, draft);
     for (const viewport of [{ width: 900, height: 600 }, { width: 760, height: 500 }, { width: 390, height: 844 }]) {
-      await page.setViewportSize(viewport);
+      await resizeViewport(page, viewport);
       assert.deepEqual(await iframe.boundingBox(), { x: 0, y: 0, ...viewport });
       await button('展开标注工具').waitFor();
       assert.equal(await page.locator('.preview-workspace-notes').isVisible(), false);

@@ -1,0 +1,228 @@
+/* 会话左侧的输入导航（components/ConversationInputRail.tsx）：每条横线是我说过的一句话。
+   整层铺满会话区但不接指针，只有刻度带、悬停卡片和 Q 摊开的列表接，正文照常能点能选。 */
+
+/* 刻度带占着会话区最左边 30px。挂着导航时正文至少从这儿往右起（各会话流的左内边距取
+   max(这个, 自己原来的)）：窄屏下正文的左边距比刻度带还窄，指着正文会弹卡片、点正文会跳走。 */
+.conversation-scroll-region:has(> .conversation-input-rail) { --conversation-input-gutter: 34px; }
+
+.conversation-input-rail {
+  position: absolute;
+  z-index: 9;
+  inset: 0;
+  pointer-events: none;
+}
+
+.conversation-input-strip {
+  position: absolute;
+  left: 0;
+  width: 30px;
+  overflow: hidden;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.conversation-input-tick {
+  position: absolute;
+  left: 8px;
+  height: 1.5px;
+  margin-top: -0.75px;
+  border: 0;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--faint) 55%, transparent);
+  padding: 0;
+  pointer-events: none;
+  transition: width 120ms ease-out, background-color 120ms ease-out;
+}
+
+/* 读到这一条：亮一些（长出的那一截在组件里算）。 */
+.conversation-input-tick.is-active { background: var(--muted); }
+.conversation-input-tick.is-hovered { background: var(--ink); }
+
+/* 悬停卡片和 Q 摊开的列表是同一种浮层：半透明的玻璃，后面的会话糊成色块透出来。模糊 16px，
+   后面的字糊开、不跟浮层上的字叠成重影；字周围再垫一圈同底色的柔光，后面正好压着截图这种
+   高对比的东西时也读得出来。 */
+.conversation-input-card > div,
+.conversation-input-menu {
+  --glass-tint: var(--panel);
+  --glass-alpha: 60%;
+  --glass-edge: lch(0 0 0 / 0.09);
+  --glass-highlight: lch(100 0 0 / 0.55);
+  --glass-shadow: lch(0 0 0 / 0.12) 0 18px 48px, lch(0 0 0 / 0.06) 0 4px 12px;
+  /* 挑中那一行、键帽的底：叠在玻璃上的一层薄墨，不是又一块实色。 */
+  --glass-row: color-mix(in srgb, var(--ink) 10%, transparent);
+  /* 最淡那档字（时间、附件名）在玻璃上提一级。写 --color-faint 不写 --faint：自己引用自己会作废。 */
+  --faint: color-mix(in lch, var(--muted) 50%, var(--color-faint));
+  border: 1px solid var(--glass-edge);
+  background: color-mix(in srgb, var(--glass-tint) var(--glass-alpha), transparent);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-shadow);
+  backdrop-filter: blur(16px) saturate(160%);
+  text-shadow: 0 0 6px var(--glass-tint), 0 0 12px var(--glass-tint);
+}
+
+/* 深色里玻璃要比画布亮一截才像浮起来（照搬 panel 像凹下去的洞），底也更实：后面压着浅色截图时，
+   同样的透明度在深色里掉对比掉得快得多。 */
+[data-theme="dark"] :is(.conversation-input-card > div, .conversation-input-menu) {
+  --glass-tint: lch(17% 2.5 282);
+  --glass-alpha: 70%;
+  --glass-edge: lch(100 0 0 / 0.1);
+  --glass-highlight: lch(100 0 0 / 0.07);
+  --glass-shadow: lch(0 0 0 / 0.5) 0 18px 48px, lch(0 0 0 / 0.3) 0 4px 12px;
+  --glass-row: color-mix(in srgb, var(--ink) 6%, transparent);
+  --faint: lch(60% 3 282);
+}
+
+/* 外面这一层左边留一截透明的边：指针从刻度带挪到卡片上的路上不算离开，点卡片也能跳。
+   全文都给：高过会话区（或 480px）的长输入在卡片里自己滚，读得到结尾。 */
+.conversation-input-card {
+  position: absolute;
+  left: 30px;
+  display: flex;
+  flex-direction: column;
+  width: min(320px, calc(100% - 46px));
+  max-height: min(calc(100% - 16px), 480px);
+  padding-left: 4px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.conversation-input-card > div {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  border-radius: 10px;
+  padding: 9px 12px 8px;
+}
+
+.conversation-input-card p {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.conversation-input-card footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.conversation-input-card footer span { display: inline-flex; align-items: center; gap: 2px; }
+
+.conversation-input-card kbd {
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--glass-row);
+  padding: 0 4px;
+  color: var(--faint);
+  font-size: 9px;
+  font-family: inherit;
+}
+
+.conversation-input-menu {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  width: min(760px, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
+  transform: translateY(-50%);
+  border-radius: 10px;
+  padding: 4px;
+  pointer-events: auto;
+  animation: conversation-input-menu-in 120ms ease-out;
+}
+
+/* 一条输入一块：第一行打头（右边是时间），后面的正文、附件名整段接在下面，不截断。 */
+.conversation-input-menu button {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 6px 8px 6px 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  /* 浏览器默认给按钮设了 text-shadow: none，那圈柔光得让它接着继承。 */
+  text-shadow: inherit;
+}
+
+/* 每块前面那一截横线就是导航条上的那一格：摊开前后认得出是同一排东西。 */
+.conversation-input-menu button::before {
+  align-self: start;
+  width: 8px;
+  height: 1.5px;
+  margin-top: calc(0.5lh - 0.75px);
+  border-radius: 1px;
+  background: color-mix(in srgb, currentColor 55%, transparent);
+  content: "";
+}
+
+.conversation-input-menu button > span:first-of-type { font-weight: 500; word-break: break-word; }
+.conversation-input-menu button > time { color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.conversation-input-menu-rest {
+  display: flex;
+  grid-column: 2 / -1;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.conversation-input-menu-rest > span { white-space: pre-wrap; word-break: break-word; }
+.conversation-input-menu-files { display: inline-flex; align-items: center; gap: 3px; color: var(--faint); }
+.conversation-input-menu button:hover,
+.conversation-input-menu button:focus-visible { outline: 0; background: var(--glass-row); color: var(--ink); }
+/* 挑中的那一行多垫了一层底，它的时间跟着提一级，不然反倒是最难读的一行。 */
+.conversation-input-menu button:is(:hover, :focus-visible) > time { color: var(--muted); }
+.conversation-input-menu button.is-current { color: var(--ink); }
+.conversation-input-menu button.is-current::before { width: 14px; background: currentColor; }
+
+/* 列表摊开时盖住会话区大半，上下那两颗回顶 / 回底按钮、系统提示方案开关隔着玻璃透成几块灰斑，
+   又点不着：先藏起来，收起再回来。 */
+.conversation-scroll-region:has(> .conversation-input-rail > .conversation-input-menu) :is(.conversation-scroll-button, .system-notice-mode-switch) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 跳过去之后闪一下落点那颗气泡；挂在气泡本身上（由导航条加、动画完自己摘）。 */
+.is-jump-target { animation: conversation-input-flash 1.6s ease-out; }
+
+@keyframes conversation-input-flash {
+  0%, 20% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+  100% { box-shadow: 0 0 0 2px transparent; }
+}
+
+@keyframes conversation-input-menu-in {
+  from { opacity: 0; transform: translate(-4px, -50%); }
+}
+
+/* 系统里开了「减少透明度」就退回实底（目前只有 Chromium 认这条）。 */
+@media (prefers-reduced-transparency: reduce) {
+  .conversation-input-card > div,
+  .conversation-input-menu {
+    background: var(--glass-tint);
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-input-tick { transition: none; }
+  .conversation-input-menu { animation: none; }
+}

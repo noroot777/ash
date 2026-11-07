@@ -4,6 +4,10 @@ import { testAcceptGateRecovery } from "./test-accept-gate-recovery.mjs";
 import { testAcceptGateActions } from "./test-accept-gate-actions.mjs";
 import { testAcceptGateWaitBar } from "./test-accept-gate-wait-bar.mjs";
 import { CATCH_UP_RETRY_MS } from "../src/lib/catchUp.ts";
+import { fetchesSettled, trackFetches, waitUntil } from "./wait-until.mjs";
+
+/** 页面上要记结算的读取：门禁状态（不含 /log、/cancel 这些子路径）、任务列表、项目（角色）。 */
+const TRACKED_READS = "/api/(tasks(/[^/]+/accept-gate)?|projects)$";
 
 // 验收台上那张「验收前置命令」卡。钉住的是四件在真实页面上才看得出来的事：
 //
@@ -71,7 +75,11 @@ try {
   browser = await launchChrome();
 
   // `states` 给的是**按请求次序**排好的几份响应（用来排并发/乱序那一类场面）：每份可以
-  // 带 delay（响应体迟到多久）或 status（直接给个 500）。不给就一直回 store.gate。
+  // 带 status（直接给个 500）、after（扣住这一份，等第 after 次读取的响应**送出去**之后
+  // 才回 —— 乱序靠这个排，不靠「迟到多少毫秒」：满载时后一发可能比任何固定延迟都晚才到）
+  // 或 hold（扣到测试放行这个 promise 才回）。
+  // 不给就一直回 store.gate。`store.served(i)` 在第 i 次读取的响应送出（或因页面已 abort
+  // 而送不出）之后兑现；页面那一侧有没有消费完看 fetchesSettled（只记 TRACKED_READS）。
   const open = async ({ gate, role = "admin", query = "", command, states, tasks = [], events = false, cancelOutcome = "canceled", projectDown = false } = {}) => {
     const page = await browser.newPage({ viewport: { width: 980, height: 820 } });
     if (events) await page.addInitScript(() => {
@@ -83,8 +91,15 @@ try {
       window.emitGateEvent = event => {
         for (const stream of streams) stream.onmessage?.({ data: JSON.stringify(event) });
       };
+      // 断线与重连分两步给：连在一起发，React 会把 false→true 批成一次渲染，「断线作废」就不发生。
+      window.dropGateStream = () => { for (const stream of streams) stream.onerror?.(); };
+      window.reopenGateStream = () => { for (const stream of streams) stream.onopen?.(); };
     });
+    await trackFetches(page, TRACKED_READS);
+    const served = [];
+    const servedAt = (index) => (served[index] ??= Promise.withResolvers());
     const store = { patches: [], canceled: 0, handoffs: 0, reads: 0, tasks, taskReads: 0, taskPlan: null,
+      served: (index) => servedAt(index).promise,
       requestIds: [], status: 0, logText: "checking 42 / 640", command: command === undefined ? gate?.command ?? null : command, gate,
       projectReads: 0, projectDown };
     await page.route("**/api/tasks", async route => {
@@ -92,7 +107,8 @@ try {
       const plan = store.taskPlan;
       store.taskPlan = null;
       store.taskReads += 1;
-      if (plan?.delay) await new Promise(resolve => setTimeout(resolve, plan.delay));
+      // hold：这一发的快照在发出那一刻就定了，扣到测试放行才回 —— 用来造「旧快照迟到」。
+      if (plan?.hold) await plan.hold;
       return json(route, snapshot);
     });
     await page.route("**/api/tasks/gate-task/accept-gate/log?*", route => route.fulfill({
@@ -140,12 +156,16 @@ try {
       return json(route, { ok: true, gate: store.gate.latest });
     });
     await page.route("**/api/tasks/*/accept-gate", async (route) => {
-      const plan = states?.[store.reads] ?? null;
+      const index = store.reads;
+      const plan = states?.[index] ?? null;
       store.reads += 1;
       store.requestIds.push(route.request().url().split("/").at(-2));
-      if (plan?.delay) await new Promise((resolve) => setTimeout(resolve, plan.delay));
-      if (plan?.status || store.status) return json(route, { error: "数据库忙" }, plan?.status || store.status);
-      return json(route, plan?.body ?? store.gate);
+      if (plan?.after !== undefined) await servedAt(plan.after).promise;
+      if (plan?.hold) await plan.hold;
+      const status = plan?.status || store.status;
+      // 被扣住的那一份送出去时，页面可能早已把这一发 abort 了（这正是被验的行为之一）。
+      await (status ? json(route, { error: "数据库忙" }, status) : json(route, plan?.body ?? store.gate)).catch(() => {});
+      servedAt(index).resolve();
     });
     await page.goto(`${base}${query}`);
     if (!query.includes("wait=1") && !query.includes("dots=1")) {
@@ -179,8 +199,8 @@ try {
   // ② 成员能看见未设置的状态，但没有修改项目配置的入口。
   {
     const { page } = await open({ gate: { command: null, running: null, latest: null }, role: "member" });
-    await page.locator("h1").waitFor();
-    await page.waitForTimeout(300);
+    // 「没有入口」只在**读到了** member 之后才有意义：等门禁和项目两发都落完再看。
+    await fetchesSettled(page, 2, "门禁状态与项目角色都已读到");
     assert.match(await page.locator(".accept-gate-command").innerText(), /未设置/);
     assert.equal(await page.getByRole("button", { name: "设一条" }).count(), 0);
     await page.close();
@@ -195,9 +215,8 @@ try {
     assert.match(await card.textContent(), /没设验收前置命令/, "角色没读到不该连卡一起不显示");
     // 先证「它真的在自己重试」：不碰页面，等到读取次数自己涨过首发那一拨。
     const baseline = store.projectReads;
-    const deadline = Date.now() + CATCH_UP_RETRY_MS + 10_000;
-    while (store.projectReads <= baseline && Date.now() < deadline) await page.waitForTimeout(200);
-    assert(store.projectReads > baseline, `读失败要自己重试(间隔 ${CATCH_UP_RETRY_MS}ms)，不是等下一次交互`);
+    await waitUntil(() => store.projectReads > baseline, { timeout: CATCH_UP_RETRY_MS + 10_000,
+      message: `读失败要自己重试(间隔 ${CATCH_UP_RETRY_MS}ms)，不是等下一次交互` });
     assert.equal(await card.getByRole("button", { name: "设一条" }).count(), 0, "还没读到角色时不摆必然 403 的按钮");
     // 服务端恢复之后那颗按钮要自己回来 —— 旧实现把 503 记成 `false`，它永远不再出现。
     store.projectDown = false;
@@ -314,8 +333,7 @@ try {
   // ⑨ 命令被撤掉了：这一按就是直接合并，这张卡不该再摆「重跑 / 这次跳过」。
   {
     const { page } = await open({ gate: { command: null, running: null, latest: run() } });
-    await page.locator("h1").waitFor();
-    await page.waitForTimeout(300);
+    await fetchesSettled(page, 2, "门禁状态与项目角色都已读到");
     const card = page.locator(".accept-gate-card");
     assert.match(await card.innerText(), /历史记录/);
     assert.equal(await card.getByRole("button", { name: "设一条" }).count(), 1);

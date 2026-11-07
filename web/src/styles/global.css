@@ -5,6 +5,7 @@
 @import "./slash-menu.css";
 @import "./mention-menu.css";
 @import "./conversation-scroll.css";
+@import "./conversation-input-rail.css";
 @import "./image-preview.css";
 @import "./hover-tip.css";
 @import "./task-origin.css";
@@ -47,6 +48,9 @@
 @import "./scm.css";
 @import "./duet.css";
 @import "./settings.css";
+/* 这两份从 settings.css 拆出来(单文件 700 行上限),紧跟其后引入，层叠顺序与拆之前一致。 */
+@import "./settings-project-git.css";
+@import "./settings-path-link.css";
 @import "./settings-skill-scan.css";
 /* 供应商表单与本地 CLI 检测结果这两个组件被首启向导复用了(web/src/onboarding/),
    所以这三份从 SettingsPage.tsx 搬到这里 —— 挂在组件文件上的话,「谁先 import」
@@ -137,6 +141,64 @@
   --control-hover-shadow: lch(0 0 0 / 0.147) 0 0 0 1px, var(--surface-shadow);
   --menu-shadow: lch(0 0 0 / 0.02) 0 6px 18px,
     lch(0 0 0 / 0.04) 0 3px 9px, lch(0 0 0 / 0.04) 0 1px 1px;
+  /* 下面这几个在深色里不必另写：它们从上面那几个色推出来，跟着一起翻面。 */
+  --red-bg: color-mix(in lch, var(--red) 9%, var(--panel));
+  --amber-bg: color-mix(in lch, var(--amber) 10%, var(--panel));
+  --cyan-bg: color-mix(in lch, var(--cyan) 9%, var(--panel));
+  --violet-bg: color-mix(in lch, var(--violet) 10%, var(--panel));
+  --violet: #7657b7;
+  --accent-hover: #5560c4;
+  --accent-active: #4d57b5;
+  --focus-ring: #6d78d5;
+  /* 「浮起来的那一块」:分段控件选中的那颗、浅灰列表里的选中行。浅色下就是卡片白;
+     深色下卡片反而比轨道暗，照搬会凹下去，所以单独一档、比轨道亮。 */
+  --lifted: var(--panel);
+  --scrollbar: rgb(55 57 63 / 28%);
+  --scrollbar-hover: rgb(55 57 63 / 44%);
+}
+
+/* 深色。由 lib/theme.ts(以及 index.html 首帧那段脚本)在根上拨 data-theme。
+   **只覆盖变量，不覆盖规则**:组件样式一律从变量取色，这里换一套值就整站翻面。
+   Tailwind 的工具类(text-muted、bg-accent/10 …)读的是 --color-*,所以覆盖落在那一层。
+   层次与浅色同向：chrome 最暗、canvas 次之、panel(卡片)最亮;raised / overlay 是卡片上
+   的填充，比 panel 再亮一点。index.html 里 theme-color 的深色值 = 这里的 --color-chrome。 */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-chrome: lch(7% 2 282);
+  --color-canvas: lch(9.5% 2 282);
+  --color-panel: lch(12.5% 2 282);
+  --color-raised: lch(15.5% 2 282);
+  --color-overlay: lch(18% 2 282);
+  --color-line: lch(20.5% 2 282);
+  --color-line2: lch(26% 2.5 282);
+  --color-ink: lch(92% 1 282);
+  --color-muted: lch(67% 3 282);
+  --color-faint: lch(48% 3 282);
+  --color-accent: #7480e0;
+  --color-accent-soft: lch(24% 20 286);
+  --color-green: #3fba8c;
+  --color-green-soft: lch(20% 12 165);
+  --color-red: #ef6b7b;
+  --color-amber: #dea43c;
+  --color-cyan: #3cbfd8;
+  --color-hover: lch(17% 2 282);
+  --color-selected: lch(21% 3 282);
+  --violet: #a48ce6;
+  --accent-hover: #828de6;
+  --accent-active: #6a75d8;
+  --focus-ring: #8790ec;
+  --lifted: lch(25% 2.5 282);
+  --scrollbar: rgb(200 202 212 / 22%);
+  --scrollbar-hover: rgb(200 202 212 / 36%);
+  --shadow: lch(0 0 0 / 0.4) 0 9px 48px,
+    lch(0 0 0 / 0.36) 0 6px 24px, lch(0 0 0 / 0.2) 0 1px 1px;
+  --surface-shadow: lch(0 0 0 / 0.16) 0 3px 6px -2px,
+    lch(0 0 0 / 0.24) 0 1px 1px;
+  /* 深色底上黑色描边看不见，控件轮廓改用一圈淡白。 */
+  --control-shadow: lch(100 0 0 / 0.08) 0 0 0 1px, var(--surface-shadow);
+  --control-hover-shadow: lch(100 0 0 / 0.13) 0 0 0 1px, var(--surface-shadow);
+  --menu-shadow: lch(0 0 0 / 0.3) 0 6px 18px,
+    lch(0 0 0 / 0.3) 0 3px 9px, lch(0 0 0 / 0.2) 0 1px 1px;
 }
 
 * {
@@ -245,7 +307,7 @@ code,
 
 :focus-visible,
 .is-focus {
-  outline: 1px solid #6d78d5;
+  outline: 1px solid var(--focus-ring);
   outline-offset: 0;
 }
 
@@ -269,7 +331,7 @@ select:focus-visible,
 }
 
 *:hover {
-  scrollbar-color: rgb(55 57 63 / 28%) transparent;
+  scrollbar-color: var(--scrollbar) transparent;
 }
 
 *::-webkit-scrollbar {
@@ -297,12 +359,12 @@ select:focus-visible,
 }
 
 *:hover::-webkit-scrollbar-thumb {
-  background: rgb(55 57 63 / 28%);
+  background: var(--scrollbar);
   background-clip: content-box;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: rgb(55 57 63 / 44%);
+  background: var(--scrollbar-hover);
   background-clip: content-box;
 }
 

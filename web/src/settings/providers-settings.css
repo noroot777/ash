@@ -64,15 +64,15 @@
   height: 28px;
   place-items: center;
   border-radius: 8px;
-  background: #eee4f5;
-  color: #6b4389;
+  background: color-mix(in lch, var(--violet) 16%, var(--panel));
+  color: color-mix(in lch, var(--violet) 72%, var(--ink));
   font-size: 11px;
   font-weight: 750;
 }
 
 .provider-protocol.is-openai {
-  background: #dcece8;
-  color: #24685a;
+  background: color-mix(in lch, var(--green) 14%, var(--panel));
+  color: color-mix(in lch, var(--green) 72%, var(--ink));
 }
 
 .provider-copy {
@@ -111,7 +111,7 @@
   gap: 4px;
   border: 0;
   border-radius: 999px;
-  background: rgb(181 123 0 / 9%);
+  background: color-mix(in srgb, var(--amber) 9%, transparent);
   padding: 3px 7px;
   color: var(--amber);
   font-family: inherit;
@@ -131,7 +131,7 @@ button.provider-mount-state {
 }
 
 button.provider-mount-state:hover {
-  background: rgb(181 123 0 / 20%);
+  background: color-mix(in srgb, var(--amber) 20%, transparent);
 }
 
 /* 卡片上那两句处境说明(供应商读失败 / 挂载情况未知),末尾带一颗重试。 */
@@ -503,7 +503,7 @@ button.provider-mount-state:hover {
 
 .provider-context-list li:hover,
 .provider-context-list li.is-enabled {
-  background: var(--panel);
+  background: var(--lifted);
 }
 
 .provider-context-list .ui-choice {

@@ -26,7 +26,7 @@ import { forgetRemovedPeerKeys } from "./handoff-scope.js";
 import { isMultiUser } from "./mode.js";
 
 /** 一人一份的那几项。加一项就往这里加,读写两侧同时生效。 */
-export const PERSONAL_SETTING_KEYS = ["defaultWorkflowId", "composerSendKey", "onboardedAt"] as const;
+export const PERSONAL_SETTING_KEYS = ["defaultWorkflowId", "composerSendKey", "colorTheme", "onboardedAt"] as const;
 export type PersonalSettingKey = (typeof PERSONAL_SETTING_KEYS)[number];
 
 const isPersonalKey = (key: string): key is PersonalSettingKey =>

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage, waitUntil } from "./wait-until.mjs";
 
 // 新建任务框是主工作区的一个内嵌状态：点一下侧栏的任务、开聊天、进设置，它就整个卸载。
 // 这条钉住「写到一半去看一眼别的」不等于清空——正文、传好的图、还在传的图都得留着，
@@ -23,8 +24,8 @@ try {
   const createdBodies = [];
   const held = new Map();
   const release = async (name) => {
-    for (let i = 0; i < 100 && !held.has(name); i++) await page.waitForTimeout(50);
-    held.get(name)?.();
+    await waitUntil(() => held.has(name), `${name} 的上传请求到达路由桩并被扣住`);
+    held.get(name)();
   };
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -134,7 +135,10 @@ try {
   //    —— 面板重挂时按引用判重，不能每回来一趟就多拼一段。
   await objective.fill("我自己写的那句");
   await page.getByRole("button", { name: "随手记转任务", exact: true }).click();
-  await page.waitForTimeout(200);
+  // 种子带着一个附件：它的卡片出现 = 这份种子已经并进草稿，再冲刷一轮读终态（并两遍的话
+  // 正文会多出一段，下面的断言照样抓得到）。
+  await page.locator(".task-upload-chip").first().waitFor();
+  await settlePage(page);
   assert.equal(
     await objective.inputValue(),
     "随手记带进来的内容\n\n我自己写的那句",

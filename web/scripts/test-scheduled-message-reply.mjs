@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { resizeViewport } from "./wait-until.mjs";
 
 const artifacts = fileURLToPath(new URL("../../output/playwright/", import.meta.url));
 const web = await startWebServer();
@@ -19,7 +20,6 @@ try {
   for (const variant of ["single", "team"]) {
     const context = await browser.newContext({ viewport: { width: 390, height: 400 } });
     const page = await context.newPage();
-    page.setDefaultTimeout(10000);
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
     await page.route("**/api/**", (route) => route.fulfill({ json: new URL(route.request().url()).pathname.endsWith("/scheduled-messages") ? messages : [] }));
@@ -59,7 +59,7 @@ try {
       await page.getByRole("button", { name: "加入附件", exact: true }).click();
       await page.locator(".task-upload-chip").first().waitFor();
       for (const [width, height] of [[320, 320], [390, 400], [1024, 500], [390, 700]]) {
-        await page.setViewportSize({ width, height });
+        await resizeViewport(page, { width, height });
         await settle();
         await visibleSend(`${width}×${height}，拉高且有附件`);
         assert.equal(await page.locator(".reply-context").evaluate((element) => element.scrollHeight > element.clientHeight), true, "辅助内容在共同预算内滚动");

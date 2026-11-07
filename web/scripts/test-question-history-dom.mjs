@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchLog, fetchesSettled, outlastPageTimers, settlePage, trackFetches, waitUntil, WAIT_TIMEOUT_MS } from "./wait-until.mjs";
 
 const web = await startWebServer();
 let browser;
@@ -9,9 +10,10 @@ const record = (id) => ({ id, question: `${id}的问题`, answer: `${id}的答�
 try {
   browser = await launchChrome();
   const origin = web.origin;
-  const open = async (query, { autoOpen = true, respond = async () => ({ json: [] }) } = {}) => {
+  const open = async (query, { autoOpen = true, clock = false, respond = async () => ({ json: [] }) } = {}) => {
     const page = await browser.newPage();
-    page.setDefaultTimeout(5000);
+    // 条件等待的期限按满载给（门禁 8 路并行），真坏了也只是晚几秒报。
+    page.setDefaultTimeout(WAIT_TIMEOUT_MS);
     page.on("pageerror", (error) => failures.push(error.message));
     const calls = [];
     await page.addInitScript(({ autoOpen }) => {
@@ -21,6 +23,7 @@ try {
           this.url = url;
           this.closed = false;
           window.__sources.push(this);
+          // 零延迟只是让 open 像真连接那样异步到达（订阅方先挂上 onopen），没有断言依赖它的时长。
           if (autoOpen) setTimeout(() => { if (!this.closed) this.onopen?.({}); }, 0);
         }
         close() { this.closed = true; }
@@ -42,6 +45,8 @@ try {
       }
       await route.fulfill(await respond(path, calls.length));
     });
+    await trackFetches(page, "/api/");
+    if (clock) await page.clock.install();
     await page.goto(`${origin}/scripts/fixtures/question-history.html?${query}`);
     await page.getByRole("button", { name: "挂载切换" }).waitFor();
     return { page, calls };
@@ -59,10 +64,29 @@ try {
   const count = async (page, expected) => {
     await page.waitForFunction((value) => document.querySelectorAll(".task-question-record").length === value, expected);
   };
-  const waitForCalls = async ({ page, calls }, expected) => {
-    const deadline = Date.now() + 5000;
-    while (calls.length < expected && Date.now() < deadline) await page.waitForTimeout(20);
+  const waitForCalls = async ({ calls }, expected) => {
+    await waitUntil(() => calls.length >= expected, `桩收到第 ${expected} 发问答历史读取`);
     assert.equal(calls.length, expected);
+  };
+  /** 页面这一侧发出的问答历史读取（桩那一侧会晚到）。 */
+  const historyFetches = async (page) => (await fetchLog(page)).filter((entry) => entry.url.includes("/question-history"));
+  /**
+   * 「只读一次」的正向信号：没连上时那条兜底读取排在 1 秒后（QuestionHistory.tsx），一个 1.1 秒
+   * 后到期的页面定时器触发时它要发早就发了 —— 发了的话页面这一侧立刻记得到，不必等桩。
+   */
+  /**
+   * 装了假时钟（`clock: true`）的页面：首发读取靠的是连上那两个零延迟定时器（桩的 open、
+   * useCatchUpLink 的发车），都在假时钟上 —— 一毫秒一毫秒地推、每推一下冲刷一轮渲染，直到
+   * 那一发到了桩上。推的总量只有几毫秒，追平层那条 5 秒后的重试不会被推到。
+   */
+  const kickFirstRead = ({ page, calls }) => waitUntil(async () => {
+    await page.clock.runFor(1);
+    await settlePage(page);
+    return calls.length >= 1;
+  }, "假时钟上推到首发问答历史读取到达桩");
+  const outlastFallback = async (page) => {
+    await outlastPageTimers(page, 1100);
+    return (await historyFetches(page)).length;
   };
 
   for (const mode of ["feed", "team"]) for (const supplied of ["seed", "empty"]) {
@@ -71,7 +95,8 @@ try {
     await sse(page, "open");
     await page.getByRole("button", { name: "挂载切换" }).click();
     await count(page, supplied === "seed" ? 1 : 0);
-    await page.waitForTimeout(1100);
+    assert.equal(await outlastFallback(page), 1, "已有快照也只读一次轻量历史（页面这一侧）");
+    await fetchesSettled(page, 0, "那一发问答历史已被页面读完");
     assert.deepEqual(calls, ["/api/tasks/history-a/question-history"], "已有快照也只读一次轻量历史，补齐可能过期的记录");
     const receipt = { ...record("live"), questionOptions: ["live的答案", "其他选项"], answers: ["live的答案"] };
     saved = [receipt];
@@ -96,7 +121,8 @@ try {
   await sse(first.page, "open");
   await first.page.getByRole("button", { name: "挂载切换" }).click();
   await count(first.page, 1);
-  await first.page.waitForTimeout(1100);
+  assert.equal(await outlastFallback(first.page), 1, "已连接后挂载也只读取一次轻量历史（页面这一侧）");
+  await fetchesSettled(first.page, 0, "那一发问答历史已被页面读完");
   assert.deepEqual(first.calls, ["/api/tasks/history-a/question-history"], "已连接后挂载也只读取一次轻量历史");
   await first.page.locator(".task-question-record summary").click();
   assert.equal(await first.page.getByText("loaded的问题", { exact: true }).isVisible(), true);
@@ -107,7 +133,8 @@ try {
   pending.push(() => release({ json: [] }));
   const reconnect = await open("", { respond: async (_path, n) => n === 1 ? { json: [record("old")] } : secondResponse });
   await count(reconnect.page, 1);
-  await reconnect.page.waitForTimeout(1100);
+  // 第二发会被桩扣住，所以这里只数页面这一侧发了几发，不等它们落完。
+  assert.equal(await outlastFallback(reconnect.page), 1, "挂载和初次 SSE 连接合成一次请求（页面这一侧）");
   assert.equal(reconnect.calls.length, 1, "挂载和初次 SSE 连接合成一次请求");
   await sse(reconnect.page, "error");
   await sse(reconnect.page, "open");
@@ -124,7 +151,10 @@ try {
   assert.equal(fallback.calls.length, 1, "事件流不可用时仍能读取历史");
   await fallback.page.close();
 
-  const retry = await open("", { respond: async (_path, n) => n === 1 ? { status: 503, json: { error: "暂时不可用" } } : { json: [record("retried")] } });
+  // 读失败之后追平层 5 秒后会自己重试一次：满载时这一段走得比 5 秒还慢，那一发就会抢在「点
+  // 重试」之前把记录读回来、把计数多算一发。用假时钟把那条重试按住，这里只验「点了就读」。
+  const retry = await open("", { clock: true, respond: async (_path, n) => n === 1 ? { status: 503, json: { error: "暂时不可用" } } : { json: [record("retried")] } });
+  await kickFirstRead(retry);
   await retry.page.getByText("问答记录加载失败").waitFor();
   await retry.page.getByRole("button", { name: "重试", exact: true }).click();
   await count(retry.page, 1);
@@ -150,8 +180,10 @@ try {
   await sse(cancelled.page, "open");
   await waitForCalls(cancelled, 2);
   // 掐断那一发的 rejection 是个微任务，第二发是 setTimeout(0) —— 读到第二发已经发车，就说明
-  // 那个 rejection 早已处理完；再留一段给 React 刷新（它的非紧急更新走宏任务）。
-  await cancelled.page.waitForTimeout(300);
+  // 那个 rejection 早已处理完。这里再按事实确认一遍「第一发在页面上已经结算（被掐掉）」，
+  // 然后冲刷 React 已排上的更新（它的非紧急更新走 MessageChannel）再读。
+  await waitUntil(async () => (await historyFetches(cancelled.page))[0]?.state === "settled", "断线掐断的第一发在页面上已结算");
+  await settlePage(cancelled.page);
   assert.equal(await cancelled.page.getByText("问答记录加载失败").count(), 0, "断线掐断在途那一发，不许显示成读取失败");
   releaseStale({ json: [record("stale-response")] });
   releaseSecond({ json: [record("reconnected")] });
@@ -162,7 +194,10 @@ try {
   await cancelled.page.close();
 
   for (const eventType of ["task.question", "task.updated"]) {
-    const recovered = await open("", { respond: async () => ({ status: 503, json: { error: "暂时不可用" } }) });
+    // 同上：5 秒后那条自动重试会多读一发（还会再写一遍失败），这里验的是「实时事件本身就能
+    // 恢复、不靠再读」，所以把重试按在假时钟上。
+    const recovered = await open("", { clock: true, respond: async () => ({ status: 503, json: { error: "暂时不可用" } }) });
+    await kickFirstRead(recovered);
     await recovered.page.getByText("问答记录加载失败").waitFor();
     await answer(recovered.page, record("other"), "another-task");
     assert.equal(await recovered.page.getByText("问答记录加载失败").count(), 1, "其他任务的事件不清除当前错误");
@@ -183,7 +218,9 @@ try {
   await count(switched.page, 1);
   releaseOld({ json: [record("task-a")] });
   await answer(switched.page, record("wrong-task"));
-  await switched.page.waitForTimeout(100);
+  // 旧任务那一发要么切任务时已被掐掉、要么此刻才回来：等它在页面上结算；事件是 evaluate 里
+  // 同步派发的，fetchesSettled 末尾那轮冲刷把它引起的渲染一并落掉。
+  await fetchesSettled(switched.page, 0, "旧任务那发迟到的问答历史已被页面读完或掐掉");
   assert.equal(await switched.page.locator(".task-question-record").count(), 1);
   assert.match(await switched.page.locator("main").textContent(), /task-b的问题/);
   assert.doesNotMatch(await switched.page.locator("main").textContent(), /task-a的问题|wrong-task/);

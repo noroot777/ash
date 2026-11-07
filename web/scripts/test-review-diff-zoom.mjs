@@ -47,7 +47,7 @@ try {
         const row = document.querySelector(".workspace-system-layout > .workspace-shell").getBoundingClientRect();
         return Math.round(layer.right) === Math.round(host ? host.left : window.innerWidth)
           && Math.round(layer.bottom) === Math.round(row.bottom);
-      }, undefined, { timeout: 2000 });
+      });
     } catch {
       assert.fail(`${what}：放大层没有贴上该让的位，实测 ${JSON.stringify(await alignment())}`);
     }
@@ -70,7 +70,6 @@ try {
     await page.waitForFunction(
       (expected) => Math.abs(document.querySelector(".inspector-host").getBoundingClientRect().width - expected) < 1.5,
       before + by,
-      { timeout: 2000 },
     );
   };
 
@@ -221,8 +220,6 @@ try {
   // 抽屉是 260ms 滑入，等它停下来再按位置点东西。
   await page.waitForFunction(
     () => document.querySelector("#fixture-drawer").getAnimations().every((animation) => animation.playState === "finished"),
-    undefined,
-    { timeout: 3000 },
   );
   // 后开的这一份也是并排：那是一份跨表面共用的阅读偏好，不是某块 diff 自己的状态。
   await drawer.locator(".single-review-code.is-split").waitFor();

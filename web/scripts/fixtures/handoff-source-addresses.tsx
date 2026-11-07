@@ -55,6 +55,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const method = init?.method ?? "GET";
   const body = init?.body ? JSON.parse(String(init.body)) as unknown : null;
   calls.push({ method, url: path, body });
+  // 模拟一次网络往返，好让「保存中」之类的中间态真实存在。测试每一步都等元素/文案出现再读，
+  // 没有断言依赖它恰好是 80ms，满载时更慢也只是晚点到。
   await new Promise((resolve) => setTimeout(resolve, 80));
 
   if (path === "/api/settings" && method === "GET") return response(200, settings());

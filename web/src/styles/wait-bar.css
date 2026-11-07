@@ -50,7 +50,7 @@
 /* 验收前置命令那条（AcceptGateWaitCard）：同一套骨架，换成琥珀 —— 跟侧栏那颗呼吸的
    黄点对上，一眼分得出「这一条不是智能体在跑」。色值自带 alpha 而不是跟 --line 混：
    --line 的色度是 0、色相却记着 282，lch 会沿短弧把黄插值成品红。 */
-.accept-gate-wait { --wait-tint: var(--amber); border-color: rgb(181 123 0 / 34%); background: rgb(181 123 0 / 5.5%); }
+.accept-gate-wait { --wait-tint: var(--amber); border-color: color-mix(in srgb, var(--amber) 34%, transparent); background: color-mix(in srgb, var(--amber) 5.5%, transparent); }
 /* 展开之后「已经跑了多久」要留着。共用骨架默认把它藏起来,是因为哨兵展开后下面那份
    列表把每一条的期限都重写了一遍;门禁只有一条,藏了就等于把这张卡**唯一会变的那个数**
    拿掉 —— 而用户点开它多半就是为了看这个数。 */

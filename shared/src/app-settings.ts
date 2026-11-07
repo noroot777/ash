@@ -12,6 +12,15 @@ import type { AcceptClean } from "./workflow.ts";
 export const COMPOSER_SEND_KEYS = ["enter", "mod-enter"] as const;
 export type ComposerSendKey = (typeof COMPOSER_SEND_KEYS)[number];
 
+/**
+ * 界面配色。`system` 跟随操作系统的深浅色(出厂默认,和手机端一致),另外两档钉死。
+ *
+ * 前端的单点实现在 `web/src/lib/theme.ts`:它把这一档解析成页面根上的
+ * `data-theme="light|dark"`,全站颜色都从 `web/src/styles/global.css` 的变量取。
+ */
+export const COLOR_THEMES = ["system", "light", "dark"] as const;
+export type ColorTheme = (typeof COLOR_THEMES)[number];
+
 export interface AppSettings {
   defaultWorkflowId: string;
   skillRefreshSeconds: number;
@@ -27,6 +36,7 @@ export interface AppSettings {
   // 所以「删」的实际效果受 git 自己的安全检查节制，见 task-archive-cleanup.ts。
   archiveClean: AcceptClean;
   composerSendKey: ComposerSendKey;
+  colorTheme: ColorTheme;
   instanceMode: "" | "single" | "multi";
   rootDir: string;
   sharedHostCli: boolean;
@@ -54,6 +64,7 @@ export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
   handoffMaxBodyMb: 512,
   archiveClean: "all",
   composerSendKey: "enter",
+  colorTheme: "system",
   instanceMode: "",
   rootDir: "",
   sharedHostCli: false,

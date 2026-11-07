@@ -4,6 +4,7 @@
 // 跑：npm -w web run test:sidebar-navigation
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -22,16 +23,19 @@ try {
     (rows) => rows.filter((row) => row.offsetParent !== null).map((row) => row.dataset.taskId),
   );
   const modelOrder = async () => (await page.getByTestId("model-order").textContent()).split(" ").filter(Boolean);
+  // 按一下 J/K 并等它的后果落进 DOM。导航整条是同步的（window 捕获阶段的 keydown →
+  // useSidebarTaskNavigation → onTask 里 setState），press 返回时那一下已经派发完，
+  // settlePage 再把 React 排上的提交冲刷掉 —— 所以「到头了不动」和「挪了一行」读到的都是
+  // 那一下之后的真结果，不用猜要等多久，也不用拿「跟上一下不一样」去等（到头那一下本来就不变）。
+  const press = async (key) => {
+    await page.keyboard.press(key);
+    await settlePage(page);
+  };
   // 从头按一路 J，记下每一下的落点。
   const walk = async (steps, key = "j") => {
     const visited = [];
     for (let at = 0; at < steps; at += 1) {
-      await page.keyboard.press(key);
-      await page.waitForFunction(
-        (previous) => document.querySelector('[data-testid="selected"]')?.textContent !== previous,
-        visited.at(-1) ?? "",
-        { timeout: 2_000 },
-      ).catch(() => {});
+      await press(key);
       visited.push(await selected.textContent());
     }
     return visited;
@@ -45,7 +49,7 @@ try {
     await page.waitForFunction(
       () => document.querySelector('[data-testid="selected"]')?.textContent === "",
       undefined,
-      { timeout: 2_000 },
+      { timeout: 15_000 },
     );
   };
 
@@ -126,7 +130,8 @@ try {
   const groupHead = page.locator(".workspace-task-project-head").first();
   const groupName = (await groupHead.locator("b").textContent()).trim();
   await groupHead.click();
-  await page.waitForTimeout(50);
+  await page.locator('.workspace-task-project-head[aria-expanded="false"]').first().waitFor();
+  await settlePage(page);
   const folded = await screenOrder();
   assert.ok(folded.length < screen.length, `折叠「${groupName}」后屏幕上的行应变少`);
   assert.deepEqual(await walk(folded.length), folded, "折叠起来的项目分组必须整组跳过");
@@ -153,16 +158,14 @@ try {
   await page.waitForFunction(() => document.querySelectorAll(".workspace-task-tree [data-task-id]").length === 0);
   assert.deepEqual(await screenOrder(), [], "全部收起后屏幕上一行都没有");
   assert.ok(await page.locator(".workspace-task-tree").count() > 0, "侧栏本身还在屏幕上");
-  await page.keyboard.press("j");
-  await page.waitForTimeout(400);
+  // 「不动」的正向信号就是那一下已经派发完、React 排上的提交已冲刷（见 press）。
+  await press("j");
   assert.equal(await selected.textContent(), anchored, "全部收起时 J 不得把选中挪到看不见的行上");
-  await page.keyboard.press("k");
-  await page.waitForTimeout(400);
+  await press("k");
   assert.equal(await selected.textContent(), anchored, "K 同理");
   // 一行都没有、也没选中时同样一动不动（别回落到模型顺序的第一行）。
   await reset();
-  await page.keyboard.press("j");
-  await page.waitForTimeout(400);
+  await press("j");
   assert.equal(await selected.textContent(), "", "全部收起且没选中时 J 不该凭空选一条");
 
   // 把组重新展开，交回给下一段。
@@ -181,7 +184,7 @@ try {
   await page.waitForFunction(
     (want) => document.querySelector('[data-testid="selected"]')?.textContent === want,
     fallback[0],
-    { timeout: 2_000 },
+    { timeout: 15_000 },
   ).catch(() => {});
   assert.equal(await selected.textContent(), fallback[0], "侧栏收起时 J 退回模型顺序的第一行");
 

@@ -16,8 +16,22 @@
 // `test-monitor-composer-dom.mjs`。
 import assert from "node:assert/strict";
 import { monitor, openHarness } from "./monitor-dom-harness.mjs";
+import { fetchLog, fetchesSettled, outlastPageTimers, settlePage, waitUntil } from "./wait-until.mjs";
 
 const { open, idsOf, waitIds, failures, close } = await openHarness();
+
+/**
+ * 「`fragment` 那个地址上的读取已经回来、页面上也没有别的在途请求了」—— 负向断言前要的正向
+ * 信号。先等它至少发出一发（切任务之后新任务那一发可能还没出门），再等页面上被记的请求全部
+ * 被消费完（读完或被掐掉）并冲刷一轮。
+ */
+const landed = async (page, fragment, message) => {
+  await waitUntil(async () => (await fetchLog(page)).some((entry) => entry.url.includes(fragment)), `${message}（等它发出）`);
+  return fetchesSettled(page, 0, message);
+};
+/** 页面上发往 `fragment` 的 GET 有几发（页面这一侧数，桩那一侧会晚到）。 */
+const getsTo = async (page, fragment) => (await fetchLog(page))
+  .filter((entry) => entry.method === "GET" && new URL(entry.url, "http://page.invalid").pathname === fragment).length;
 const pending = [];
 try {
   // ── 「用过才浮现」落到图标条上：没挂过不上条、挂过带底色 ────────────────────
@@ -32,7 +46,8 @@ try {
       return true;
     }, "?rail=1");
     await page.locator('.inspector-rail__tab[data-choice-value="info"]').waitFor();
-    await page.waitForTimeout(200);
+    // 「不该上条」要在 task-a 那份（空）列表落地之后才说得算。
+    await landed(page, "/api/tasks/task-a/monitors", "task-a 的哨兵列表已被页面读完");
     assert.equal(
       await page.locator('.inspector-rail__tab[data-choice-value="monitors"]').count(),
       0,
@@ -89,7 +104,7 @@ try {
     await page.locator('.inspector-rail__tab[data-choice-value="monitors"]').waitFor();
     await page.getByRole("button", { name: "切换任务" }).click();
     await page.waitForFunction(() => document.querySelector('[data-testid="task"]')?.textContent === "task-b");
-    await page.waitForTimeout(400);
+    await landed(page, "/api/tasks/task-b/monitors", "task-b 的哨兵列表已被页面读完");
     assert.equal(
       await page.locator('.inspector-rail__tab[data-choice-value="monitors"]').count(),
       0,
@@ -111,7 +126,7 @@ try {
       return true;
     }, "?rail=1");
     await page.locator('.inspector-rail__tab[data-choice-value="info"]').waitFor();
-    await page.waitForTimeout(400);
+    await landed(page, "/api/tasks/task-a/monitors", "task-a 的哨兵列表已被页面读完");
     assert.equal(
       await page.locator('.inspector-rail__tab[data-choice-value="monitors"]').count(),
       0,
@@ -123,9 +138,11 @@ try {
     aList = [monitor("m-task-a", "task-a")];
     await page.getByRole("button", { name: "切换任务" }).click();
     await waitIds(page, "m-task-a");
-    await page.waitForTimeout(300);
 
     const tab = page.locator('.inspector-rail__tab[data-choice-value="monitors"]');
+    // 正向的事等它出现；下面几条连带的记号与焦点要在读取都落完、渲染冲刷之后再读。
+    await tab.waitFor();
+    await fetchesSettled(page, 0, "切回 task-a 之后的读取都已被页面读完");
     assert.equal(await tab.count(), 1, "切回来时它已经挂上哨兵了，这一格必须自己冒出来");
     assert.equal(await tab.locator(".inspector-rail-icon--used").count(), 1, "冒出来就得带底色记号");
     assert.equal(await tab.locator(".monitor-rail-icon--live").count(), 1, "那条还在跑，活信号也得在");
@@ -187,14 +204,13 @@ try {
       await route.fulfill({ json: [monitor("m-task-a", "task-a")] }).catch(() => undefined);
       return true;
     });
-    const armed = Date.now() + 5000;
-    while (aCalls < 1 && Date.now() < armed) await page.waitForTimeout(20);
-    assert.ok(aCalls >= 1, "任务 A 的读取确实出门并卡住了");
+    await waitUntil(() => aCalls >= 1, "任务 A 的读取出门并卡在桩上");
 
     await page.getByRole("button", { name: "切换任务" }).click();
     await waitIds(page, "m-task-b");
     releaseA();
-    await page.waitForTimeout(300);
+    // 被扣住的 A 那一发：要么切任务时已被掐掉，要么此刻才回来 —— 等它被页面消费完再看。
+    await fetchesSettled(page, 0, "A 那发迟到的列表已被页面读完或掐掉");
     assert.equal(await idsOf(page), "m-task-b", "切走之后才回来的那发不许盖到当前任务的面板上");
     assert.match(await page.locator(".monitor-card b").innerText(), /task-b/);
     await page.close();
@@ -222,15 +238,21 @@ try {
     });
     await waitIds(page, "m-task-a");
     await page.getByRole("button", { name: /^停掉哨兵/ }).click();
-    const armed = Date.now() + 5000;
-    while (stopCalls < 1 && Date.now() < armed) await page.waitForTimeout(20);
+    await waitUntil(() => stopCalls >= 1, "停止请求出门并卡在桩上");
     assert.equal(stopCalls, 1, "停止请求已经出门并卡住");
 
     const listedBefore = aListCalls;
+    const pageListedBefore = await getsTo(page, "/api/tasks/task-a/monitors");
     await page.getByRole("button", { name: "切换任务" }).click();
     await waitIds(page, "m-task-b");
     releaseStop();
-    await page.waitForTimeout(300);
+    // 停止的回执被页面读完，收尾那一发 reload 若要出门此刻已经出门（页面侧记得到，等它也落完）。
+    await fetchesSettled(page, 0, "停止的回执与它之后的读取都已被页面消费完");
+    assert.equal(
+      await getsTo(page, "/api/tasks/task-a/monitors"),
+      pageListedBefore,
+      "停止收尾的 reload 带的是旧 taskId：切走之后它一发都不该出门（页面这一侧）",
+    );
     assert.equal(
       aListCalls,
       listedBefore,
@@ -255,13 +277,12 @@ try {
     });
     await waitIds(page, "m-task-a");
     await page.getByRole("button", { name: /^停掉哨兵/ }).click();
-    const armed = Date.now() + 5000;
-    while (stopCalls < 1 && Date.now() < armed) await page.waitForTimeout(20);
+    await waitUntil(() => stopCalls >= 1, "停止请求出门并卡在桩上");
 
     await page.getByRole("button", { name: "切换任务" }).click();
     await waitIds(page, "m-task-b");
     releaseStop();
-    await page.waitForTimeout(300);
+    await fetchesSettled(page, 0, "那发 500 的停止回执已被页面读完");
     assert.equal(await page.getByTestId("error").textContent(), "", "切走之后才回来的失败不该贴在新任务的面板上");
     assert.equal(await page.locator(".monitor-inspector__error").count(), 0);
     await page.close();
@@ -285,21 +306,21 @@ try {
       await route.fulfill({ json: [monitor("m-task-a", "task-a", { events: 11 })] });
       return true;
     });
-    const armed = Date.now() + 5000;
-    while (calls < 1 && Date.now() < armed) await page.waitForTimeout(20);
-    assert.ok(calls >= 1, "第一发读取确实出门并卡住了");
+    await waitUntil(() => calls >= 1, "第一发读取出门并卡在桩上");
     // 断线重连作废在途那一发、重读一遍，新的那份带回更新的计数。不能拿直播事件当这一发：
     // 追平层对它是合流（在途就记一笔，等那一发落地或到点再跑，见 lib/catchUp.ts），被卡住的
     // 要是真读取，新计数 15 秒内都不会来。以前用事件也能过，靠的是 StrictMode 开发态重挂把
     // 第一发作废了 —— 页面起得慢、那一发没来得及出门时（并行跑、冷编译）就露馅。
     await page.waitForFunction(() => window.__sources.some((item) => !item.closed));
     await page.evaluate(() => { for (const source of window.__sources) source.onerror?.({}); });
-    await page.waitForTimeout(80);
+    // 断线那一下（connected=false 的提交和它的 cleanup：作废代次、掐断在途）先落地，再发 open。
+    await settlePage(page);
     await page.evaluate(() => { for (const source of window.__sources) source.onopen?.({}); });
     await page.locator(".monitor-card__meta").filter({ hasText: "11 条事件" }).waitFor();
 
     releaseFirst();
-    await page.waitForTimeout(300);
+    // 先出门的那一发要么已被断线掐掉，要么此刻才回来：等它被页面消费完再看。
+    await fetchesSettled(page, 0, "先出门、后落地的那份已被页面读完或掐掉");
     assert.match(
       await page.locator(".monitor-card__meta").first().innerText(),
       /11 条事件/,
@@ -329,8 +350,7 @@ try {
     await page.getByRole("button", { name: "手动起一个哨兵" }).click();
     await page.locator(".monitor-composer textarea").fill("printf 'A\\n'; sleep 300");
     await page.getByRole("button", { name: "起一个哨兵", exact: true }).click();
-    const armed = Date.now() + 5000;
-    while (startCalls < 1 && Date.now() < armed) await page.waitForTimeout(20);
+    await waitUntil(() => startCalls >= 1, "A 的创建请求出门并卡在桩上");
     assert.equal(startCalls, 1, "A 的创建请求已经出门并卡住");
 
     // 切到 B，在 B 上重新开表单、填一份草稿。
@@ -347,7 +367,7 @@ try {
     );
 
     releaseStart();
-    await page.waitForTimeout(400);
+    await fetchesSettled(page, 0, "A 那发迟到的创建回执与它之后的读取都已被页面消费完");
     assert.equal(await page.locator(".monitor-composer").count(), 1, "当前任务的表单不该被上一个任务的成功回调收走");
     assert.equal(await draft.inputValue(), text, "没提交过的草稿一个字都不该丢");
     assert.equal(await idsOf(page), "m-task-b", "列表也还是当前任务的");
@@ -383,7 +403,7 @@ try {
     await submit.click();
 
     const alert = page.locator(".monitor-inspector__error");
-    await alert.waitFor({ timeout: 5000 });
+    await alert.waitFor();
     assert.match(await alert.innerText(), /创建哨兵失败/, "创建失败就得当场说出来，别等列表读完");
     assert.equal(await submit.isDisabled(), false, "提交按钮已经解锁了：这会儿没提示等于什么都没发生");
     assert.equal(await draft.inputValue(), text, "失败不该把草稿冲掉");
@@ -391,7 +411,7 @@ try {
     // 列表这才读完（而且是成功的空列表）：它不该把刚才那句报错抹掉。
     releaseList();
     await waitIds(page, "");
-    await page.waitForTimeout(300);
+    await fetchesSettled(page, 0, "那份迟到的空列表已被页面读完");
     assert.equal(
       await page.locator(".monitor-inspector__error").count(),
       1,
@@ -422,8 +442,7 @@ try {
     await page.getByRole("button", { name: "手动起一个哨兵" }).click();
     await page.locator(".monitor-composer textarea").fill("sleep 300");
     await page.getByRole("button", { name: "起一个哨兵", exact: true }).click();
-    const armed = Date.now() + 5000;
-    while (startCalls < 1 && Date.now() < armed) await page.waitForTimeout(20);
+    await waitUntil(() => startCalls >= 1, "第一张表单的创建出门并卡在桩上");
     assert.equal(startCalls, 1, "第一张表单的创建已经出门并卡住");
 
     // 点取消、重新打开，填一份新草稿——同一个任务，但是另一张表单。
@@ -441,7 +460,7 @@ try {
     );
 
     releaseStart();
-    await page.waitForTimeout(400);
+    await fetchesSettled(page, 0, "旧表单那发迟到的创建回执与它之后的读取都已被页面消费完");
     assert.equal(await page.locator(".monitor-composer").count(), 1, "旧请求的成功回执不该关掉新这张表单");
     assert.equal(await draft.inputValue(), text, "没提交过的草稿一个字都不该丢");
     await page.close();
@@ -470,19 +489,27 @@ try {
       return false;
     });
     await waitIds(page, "m-task-a");
-    await page.waitForFunction(() => window.__sources.length > 0);
-    await page.waitForTimeout(200);
+    // 首次连上的那次对账要先走完，下面记的「之前」才不会把它算成重连那一发：等桩替页面
+    // 发过 open，冲刷掉 connected=true 的提交，再越过对账发车用的那个零延迟定时器
+    // （useCatchUpLink），最后等它读完。
+    await page.waitForFunction(() => window.__sources.some((source) => source.opened));
+    await settlePage(page);
+    await outlastPageTimers(page, 1);
+    await fetchesSettled(page, 0, "首次连上的对账读取已被页面读完");
     const before = { listCalls, recoveryCalls };
 
     // 断线期间服务端那边又起了一条（页面收不到任何事件）。
     rows.push(["m-task-a-late", "task-a"]);
-    await page.waitForTimeout(150);
+    // 页面里此前排上、150ms 内到期的定时器都走过一次；它们若发了读取也得落完。
+    await outlastPageTimers(page, 150);
+    await fetchesSettled(page, 0, "页面上没有在途的读取");
     assert.equal(await idsOf(page), "m-task-a", "没有事件、没有重连，页面当然还是旧列表");
 
     // 原生 EventSource 的重连就是在同一个对象上再发一次 open（中间先 error）。两步分开发：
     // 真实断线之间隔着秒级，而同一个 task 里 false→true 会被 React 合批成「没变过」。
     await page.evaluate(() => { for (const source of window.__sources) source.onerror?.({}); });
-    await page.waitForTimeout(80);
+    // connected=false 的提交与它的 cleanup 先落地（React 把它排在 MessageChannel 上），再发 open。
+    await settlePage(page);
     await page.evaluate(() => { for (const source of window.__sources) source.onopen?.({}); });
     await waitIds(page, "m-task-a,m-task-a-late");
     assert.ok(

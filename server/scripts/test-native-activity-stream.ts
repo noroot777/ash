@@ -91,8 +91,8 @@ rl.on('line', (line) => {
     send({ id: message.id, result: { turn: { id: 'turn' } } });
     for (let index = 0; index < 2000; index++) send({ method: 'item/agentMessage/delta', params: { threadId: 'child', itemId: 'msg', delta: 'word' } });
     send({ method: 'item/completed', params: { threadId: 'child', item: { type: 'agentMessage', id: 'msg', text: 'word'.repeat(2000) } } });
-    send({ method: 'turn/completed', params: { threadId: 'child', turn: { status: 'completed' } } });
-    send({ method: 'turn/completed', params: { threadId: 'main', turn: { status: 'completed' } } });
+    send({ method: 'turn/completed', params: { threadId: 'child', turn: { id: 'child-turn', status: 'completed' } } });
+    send({ method: 'turn/completed', params: { threadId: 'main', turn: { id: 'turn', status: 'completed' } } });
   }
 });
 `], { stdio: ["pipe", "pipe", "pipe"] }) });
@@ -117,7 +117,7 @@ rl.on('line', (line) => {
     send({ id: message.id, result: { turn: { id: 'turn' } } });
     for (let index = 0; index < 2000; index++) send({ method: 'item/reasoning/textDelta', params: { threadId: 'main', itemId: 'rs', delta: 'word' } });
     send({ method: 'item/started', params: { threadId: 'main', item: { type: 'commandExecution', id: 'cmd', command: 'ls -la' } } });
-    send({ method: 'turn/completed', params: { threadId: 'main', turn: { status: 'completed' } } });
+    send({ method: 'turn/completed', params: { threadId: 'main', turn: { id: 'turn', status: 'completed' } } });
   }
 });
 `], { stdio: ["pipe", "pipe", "pipe"] }) });

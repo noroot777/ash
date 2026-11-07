@@ -38,7 +38,9 @@
 // 跑法：npm -w web run test:preview-assist-ui
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
-import { editorText } from "./preview-assist-shared.mjs";
+import {
+  assistGetsSettled, assistPollSettled, editorText, heldGetPending, releaseHeldGet, trackAssistFetches,
+} from "./preview-assist-shared.mjs";
 import { fallbackArbitrationCases } from "./preview-assist-fallback-cases.mjs";
 
 const web = await startWebServer();
@@ -49,6 +51,8 @@ try {
   // 一个 context 里开页面（不是 browser.newPage()，那样每页一份独立存储）：⑪ 要的正是
   // **同源、共享 localStorage 的两个标签页**，作业所有权不能在它们之间串。
   const context = await browser.newContext({ viewport: { width: 1000, height: 1200 } });
+  // 记下每一页（含 window.open 出来的副本）发出的状态读取，下面「过一拍也不该变」靠它判。
+  await trackAssistFetches(context);
   const page = await context.newPage();
   await page.emulateMedia({ reducedMotion: "reduce" });
   const errors = [];
@@ -130,7 +134,8 @@ try {
   await progress.waitFor({ state: "detached" });
   await page.reload();
   await script.waitFor();
-  await page.waitForTimeout(1500);
+  // 刷新后那一次「现在有作业吗」落地了，卡片要冒出来就已经冒出来了。
+  await assistGetsSettled(page, 1, "刷新后的首次状态读取已被页面消费完");
   assert.equal(await progress.count(), 0, "收掉的提示不该在刷新后又冒出来");
 
   // ④ 同样是 job: null，但 ash 没重启过：那是作业跑完之后终态自己过期了
@@ -173,7 +178,7 @@ try {
   await progress.getByText("没有直接覆盖", { exact: false }).waitFor();
   assert.equal(await editorText(script), mine, "运行期间手写的内容不能被成功结果顶掉");
   assert.equal((await notices()).filter((line) => line.includes("没有直接覆盖")).length, 1, "不覆盖这件事要说一声");
-  await page.waitForTimeout(1500);
+  await assistPollSettled(page);
   assert.equal(await editorText(script), mine, "下一拍轮询也不能把它盖回去");
   // 摆出来的那条脚本要看得见，而且换不换由用户点
   assert.match(await progress.innerText(), /npm run dev -- --port \$PORT/, "AI 试出来的那条要摆出来给人看");
@@ -214,7 +219,7 @@ try {
   assert.equal((await notices()).filter((line) => line.includes("脚本已填入")).length, filledBefore + 1, "同一个作业只提示一次");
   const handwritten = "npm run dev -- --port 8888 # 这条是我自己定的";
   await script.fill(handwritten);
-  await page.waitForTimeout(1500);
+  await assistPollSettled(page);
   assert.equal(await editorText(script), handwritten, "轮询不能反复把脚本盖回去");
   assert.equal((await notices()).filter((line) => line.includes("脚本已填入")).length, filledBefore + 1, "下一拍轮询也不该再提示一次");
 
@@ -226,7 +231,7 @@ try {
   await page.reload();
   await script.waitFor();
   await progress.getByText("没有动上面输入框里的内容", { exact: false }).waitFor();
-  await page.waitForTimeout(1500);
+  await assistPollSettled(page);
   assert.equal(await editorText(script), handwritten, "刷新后旧的成功结果不许再覆盖一次");
   const shown = await progress.innerText();
   assert.doesNotMatch(shown, /脚本已填进上面的输入框/, "没动输入框就不能说填了");
@@ -241,10 +246,11 @@ try {
   await script.waitFor();
   await progress.getByText("正在读这个项目", { exact: false }).waitFor();
   assert.equal(await editorText(script), handwritten, "别处在跑，输入框不该动");
-  await page.waitForTimeout(2000); // 至少跨一拍轮询：修好之前正是这一拍把它认成「我点的」
+  // 至少跨一拍轮询（首次读取之后又读了一次、落了地）：修好之前正是这一拍把它认成「我点的」
+  await assistGetsSettled(page, 2, "刷新后首次读取之后至少又轮询了一拍，并已落地");
   await page.getByTestId("assist-succeed").click();
   await progress.getByText("没有动上面输入框里的内容", { exact: false }).waitFor();
-  await page.waitForTimeout(1500);
+  await assistPollSettled(page);
   assert.equal(await editorText(script), handwritten, "别处跑出来的结果不许覆盖我已保存的脚本");
   assert.deepEqual((await notices()).filter((line) => line.includes("脚本已填入")), [], "没填就不该提示填入");
 
@@ -257,7 +263,7 @@ try {
   assert.equal(await editorText(script), handwritten, "这一次没开起来，输入框不该动");
   await page.getByTestId("assist-succeed").click();
   await progress.getByText("没有动上面输入框里的内容", { exact: false }).waitFor();
-  await page.waitForTimeout(1500);
+  await assistPollSettled(page);
   assert.equal(await editorText(script), handwritten, "服务端复用的那份别人的作业，成功了也不许覆盖");
   assert.deepEqual((await notices()).filter((line) => line.includes("脚本已填入")), [], "没填就不该提示填入");
 
@@ -284,7 +290,7 @@ try {
     [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
       .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
   await otherProgress.getByText("没有动上面输入框里的内容", { exact: false }).waitFor();
-  await other.waitForTimeout(1500);
+  await assistPollSettled(other);
   assert.equal(await editorText(otherScript), handwritten, "别的页面点出来的结果不许改这个标签页的脚本");
   assert.deepEqual((await otherNotices()).filter((line) => line.includes("脚本已填入")), [], "它没填就不该提示填入");
   assert.deepEqual(otherErrors, [], "另一个标签页也不应产生运行时异常");
@@ -317,7 +323,7 @@ try {
     [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
       .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
   await copyProgress.getByText("没有动上面输入框里的内容", { exact: false }).waitFor();
-  await copy.waitForTimeout(1500);
+  await assistPollSettled(copy);
   assert.equal(await editorText(copyScript), handwritten, "继承来的会话副本不许把结果填进自己的输入框");
   assert.deepEqual((await copyNotices()).filter((line) => line.includes("脚本已填入")), [], "它没填就不该提示填入");
   assert.deepEqual(copyErrors, [], "复制出来的标签也不应产生运行时异常");
@@ -357,7 +363,7 @@ try {
     [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
       .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
   await muteProgress.getByText("没有动上面输入框里的内容", { exact: false }).waitFor();
-  await mute.waitForTimeout(1500);
+  await assistPollSettled(mute);
   assert.equal(await editorText(muteScript), handwritten, "正主答不上话，也不等于副本可以认领它的作业");
   assert.deepEqual((await muteNotices()).filter((line) => line.includes("脚本已填入")), [], "它没填就不该提示填入");
   assert.deepEqual(muteErrors, [], "这一页也不应产生运行时异常");
@@ -370,11 +376,15 @@ try {
   await page.getByTestId("assist-hold-next-get").click(); // 下一次加载的首次读取压在路上
   await page.reload();
   await script.waitFor();
+  // 那次首次读取确实已经发出、答案（「还没有作业」）已经定下、被压在路上 —— 不等到这一步，
+  // 点按钮可能抢在它发出之前，那就排不出「旧响应晚到」。
+  const held = await heldGetPending(page);
   assert.equal(await progress.count(), 0, "这一条要的就是「首次读取还没回来」那一段");
   await startAssist.click();
   await progress.getByText("正在读这个项目", { exact: false }).waitFor();
   await stopAssist.waitFor();
-  await page.waitForTimeout(2500); // 放行那条旧响应，它带回来的是「还没有作业」
+  // 现在才放行那条旧响应（它带回来的是「还没有作业」），并等页面把它读完。
+  await releaseHeldGet(page, held);
   const afterStale = await progress.innerText();
   assert.match(afterStale, /正在读这个项目/, "旧响应晚到，不许把正在跑的那份盖掉");
   assert.doesNotMatch(afterStale, /已经过期|重启/, "作业还在跑，别报一句它已经没了");

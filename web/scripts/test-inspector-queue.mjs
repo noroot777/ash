@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage, waitUntil } from "./wait-until.mjs";
 
 // 真实 Inspector 回调链的迟到响应回归(第 6 轮审查两条拦验收):
 // ① insert 响应在途期间 SSE 送达更晚的「移出」,旧响应放行后不得反转回排队中;
@@ -64,12 +65,14 @@ try {
   await page.locator(".task-inspector-queue-after").waitFor();
   holdInsert = true;
   await pickA();
-  while (!releaseInsert) await new Promise((resolve) => setTimeout(resolve, 50)); // 入队请求已发出并被扣住
+  await waitUntil(() => releaseInsert, "入队请求已发出并被扣在桩上");
   await page.getByTestId("sse-remove-k2").click();
   await page.getByTestId("delete-b").click();
   assert.doesNotMatch(await rows.innerText(), /t-b:/, "删除后 B 行已消失");
   releaseInsert();
   await page.getByText(/已排在「前驱任务A」之后/).nth(1).waitFor();
+  // 迟到的那条响应已经被处理（第二条提示就是它落下的）；把随后排着的提交冲刷掉再断言「没被它改回去」。
+  await settlePage(page);
   // ① 旧响应(T6)不得反转 SSE 已送达的移出(T9):K2 仍是独立任务。
   assert.match(await rows.innerText(), new RegExp(`t-k2:独立:-:${T9}`), "迟到旧响应不得把已移出任务改回排队中");
   await page.locator(".task-inspector-queue-after").waitFor();

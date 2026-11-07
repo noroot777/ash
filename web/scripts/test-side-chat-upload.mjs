@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
+import { waitUntil } from "./wait-until.mjs";
 
 // 侧聊里 Ctrl/⌘V 粘图：跑的是真的 /uploads 路由 + 真的 /chats/:id/messages，所以这条
 // 用例同时钉住三段——传上去、拼进 prompt（attachmentsPrompt 那段固定文本）、在气泡里
@@ -16,6 +17,7 @@ let browser;
 let server;
 try {
   const backend = await new Promise((resolve, reject) => {
+    // 这是启动期限，不是睡眠：读到 SIDE_FIXTURE_URL 当场清掉，只有夹具 20 秒都起不来才报错。
     const timer = setTimeout(() => reject(new Error(`fixture startup timeout: ${logs}`)), 20000);
     const consume = (chunk) => { logs += chunk; const match = logs.match(/SIDE_FIXTURE_URL=(http:\/\/[^\s]+)/); if (match) { clearTimeout(timer); resolve(match[1]); } };
     fixture.stdout.on("data", consume); fixture.stderr.on("data", consume);
@@ -26,11 +28,15 @@ try {
   const address = server.httpServer.address();
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
-  page.setDefaultTimeout(10000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const url = `http://127.0.0.1:${address.port}/scripts/fixtures/side-chat.html`;
   const state = async () => await (await page.request.get(`${backend}/api/fixture/state`)).json();
+  // 夹具在跑侧聊那一轮时才把 prompt 记进 sources，比气泡上屏晚：等第 count 条记上再读。
+  const sourceAt = async (count) => (await waitUntil(async () => {
+    const { sources } = await state();
+    return sources.length >= count && sources;
+  }, `夹具记下第 ${count} 条侧聊 prompt`))[count - 1];
   const input = page.getByRole("textbox", { name: "侧聊消息输入" });
   const send = page.getByRole("button", { name: "发送侧聊消息" });
   const openSideChat = async () => {
@@ -64,7 +70,7 @@ try {
   await firstBubble.locator(".task-message-attachments img").waitFor();
   assert.doesNotMatch(await firstBubble.innerText(), /用户附带的文件|uploads/, "气泡里不该露出附件块原文或绝对路径");
   assert.equal(await page.locator(".side-chat-compose .task-upload-chip").count(), 0, "发完要把草稿里的附件摘掉");
-  const firstSource = (await state()).sources.at(-1);
+  const firstSource = await sourceAt(1);
   assert.match(firstSource, /\[用户附带的文件[^\]]*\]/, "prompt 里要带上附件块");
   assert.match(firstSource, /uploads[\\/][^\s]+screenshot\.png/, "附件块里是可以 Read 的绝对路径");
 
@@ -78,7 +84,7 @@ try {
   await second.locator(".task-message-attachments img").waitFor();
   assert.match(await second.innerText(), /这张图里的报错是什么？/);
   assert.doesNotMatch(await second.innerText(), /用户附带的文件|uploads/);
-  const secondSource = (await state()).sources.at(-1);
+  const secondSource = await sourceAt(2);
   assert.match(secondSource, /这张图里的报错是什么？[\s\S]*\[用户附带的文件/, "正文在前、附件块缀在末尾");
 
   // ④ 传到一半：发送按住，房间也不让切——在途那张传完会落进「当时那个侧聊」的草稿。
@@ -95,7 +101,7 @@ try {
   await page.locator(".side-chat-compose .task-upload-chip.is-uploading").waitFor();
   assert.equal(await send.isDisabled(), true, "还有在途上传时不能发，否则发出去的那条少几张图");
   assert.equal(await page.getByRole("combobox", { name: "切换侧聊" }).isDisabled(), true, "上传中不许切侧聊");
-  for (let i = 0; i < 100 && !release; i += 1) await page.waitForTimeout(50);
+  await waitUntil(() => release, "slow.png 的上传请求被扣住");
   release();
   await page.locator(".side-chat-compose .task-upload-chip.is-uploading").waitFor({ state: "detached" });
   await page.unroute("**/api/uploads");
@@ -138,7 +144,7 @@ try {
   await paste("race-a.png");
   await page.locator(".side-chat-compose .task-upload-chip img").waitFor();
   await send.click();
-  for (let i = 0; i < 100 && !releaseSend; i += 1) await page.waitForTimeout(50);
+  await waitUntil(() => releaseSend, "第一条带图的那次发送被扣住");
   await paste("race-b.png");
   await page.waitForFunction(() => document.querySelectorAll(".side-chat-compose .task-upload-chip img").length === 2);
   releaseSend();
@@ -151,7 +157,7 @@ try {
   await page.locator(".side-chat-message.is-agent.is-done").nth(2).waitFor();
   await send.click();
   await page.locator(".side-chat-message.is-user").nth(3).waitFor();
-  const raceSource = (await state()).sources.at(-1);
+  const raceSource = await sourceAt(4);
   assert.match(raceSource, /race-b\.png/, "留下的那张要跟着下一条发出去");
   assert.doesNotMatch(raceSource, /race-a\.png/, "上一条已经发过的图不能再带一遍");
 

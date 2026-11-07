@@ -16,6 +16,15 @@ let holdCheckout = false;
 let failCheckout = false;
 let releaseCheckout: (() => void) | null = null;
 const branchReplies: (() => void)[] = [];
+// 测试要断言「迟到的旧读取没覆盖新状态」，得先知道被扣住的那几发都已经回到面板、被读完：
+// released = 「释放分支读取」放走了几发，consumed = 其中几发的响应体已经被读完。
+const heldBranchReads = { released: 0, consumed: 0 };
+(window as unknown as { __heldBranchReads: typeof heldBranchReads }).__heldBranchReads = heldBranchReads;
+const countConsumed = (response: Response) => {
+  const read = response.text.bind(response);
+  response.text = () => read().finally(() => { heldBranchReads.consumed += 1; });
+  return response;
+};
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { "content-type": "application/json" },
 });
@@ -40,8 +49,9 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     if (match[2] === "branches") {
       const snapshot = { branches: branchNames[projectId], current: heads[projectId] };
       const fail = failBranches;
-      if (holdBranches) await new Promise<void>((resolve) => { branchReplies.push(resolve); });
-      return fail ? reply({ error: "旧分支读取失败" }, 503) : reply(snapshot);
+      if (!holdBranches) return fail ? reply({ error: "旧分支读取失败" }, 503) : reply(snapshot);
+      await new Promise<void>((resolve) => { branchReplies.push(resolve); });
+      return countConsumed(fail ? reply({ error: "旧分支读取失败" }, 503) : reply(snapshot));
     }
     if (match[2] === "git/checkout") {
       const body = JSON.parse(String(init?.body));
@@ -90,7 +100,12 @@ function Fixture() {
       <button onClick={() => { heads[project.id] = "version-upgrade"; }}>外部切到升级分支</button>
       <button onClick={() => { holdBranches = true; failBranches = false; setRound((value) => value + 1); }}>重开并延迟分支读取</button>
       <button onClick={() => { holdBranches = true; failBranches = true; setRound((value) => value + 1); }}>重开并延迟读取失败</button>
-      <button onClick={() => { holdBranches = false; failBranches = false; branchReplies.splice(0).forEach((release) => release()); }}>释放分支读取</button>
+      <button onClick={() => {
+        holdBranches = false; failBranches = false;
+        const released = branchReplies.splice(0);
+        heldBranchReads.released += released.length;
+        released.forEach((release) => release());
+      }}>释放分支读取</button>
       <button onClick={() => { holdCheckout = true; setHolding(true); }}>延迟下一次切换</button>
       <button onClick={() => { failCheckout = true; }}>下一次切换失败</button>
       <button onClick={() => { holdCheckout = false; releaseCheckout?.(); setHolding(false); }}>完成分支切换</button>

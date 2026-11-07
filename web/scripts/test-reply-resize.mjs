@@ -3,6 +3,7 @@
 // 跑法:npm -w web run test:reply-resize
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -43,9 +44,11 @@ try {
     );
 
     // 没拖过时高度跟着输入的行数走,撑到上限为止(再多就在框内滚)。
+    // 高度由 useAutoGrowTextarea 在 layout effect 里写：fill 返回时 input 事件已经派发完，
+    // 冲刷一轮让这次提交（连同它的 layout effect）落地，量到的就是这一版的高度。
     const fill = async (lines) => {
       await field.fill(Array.from({ length: lines }, (_, index) => `第 ${index + 1} 行`).join("\n"));
-      await page.waitForTimeout(60);
+      await settlePage(page);
       return fieldHeight();
     };
     const fiveLines = await fill(5);
@@ -60,7 +63,7 @@ try {
     );
     assert.ok(Math.abs((await fill(1)) - natural) < 2, `${label}：内容变少要能缩回自然高度`);
     await field.fill("");
-    await page.waitForTimeout(60);
+    await settlePage(page);
 
     // 往上拖 80px:回复框跟着高 80px。
     const drag = async (dy) => {
@@ -102,8 +105,9 @@ try {
     assert.ok(ceiling > autoCap, `${label}：手动拖动应能超过自动撑高的上限：自动 ${autoCap} / 拖到 ${ceiling}`);
     await fill(40);
     assert.ok(Math.abs((await fieldHeight()) - ceiling) < 2, `${label}：拖过之后输入不该改动高度`);
+    // 「清空也不该缩回去」：清空那次提交落地之后（layout effect 已经跑过）再量。
     await field.fill("");
-    await page.waitForTimeout(60);
+    await settlePage(page);
     assert.ok(Math.abs((await fieldHeight()) - ceiling) < 2, `${label}：拖过之后清空也不该缩回去`);
 
     // 刷新后高度还在。

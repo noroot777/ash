@@ -11,7 +11,7 @@ const POLL_MS = 8000;
 
 export type ArtifactGroup = { key: string; label: string; items: TaskArtifact[] };
 
-const KIND_ORDER: TaskArtifact["kind"][] = ["image", "page", "video", "audio", "pdf"];
+const KIND_ORDER: TaskArtifact["kind"][] = ["image", "page", "doc", "video", "audio", "pdf"];
 
 export const ARTIFACT_KIND_LABEL: Record<TaskArtifact["kind"], string> = {
   image: "图片",
@@ -19,6 +19,7 @@ export const ARTIFACT_KIND_LABEL: Record<TaskArtifact["kind"], string> = {
   video: "视频",
   audio: "音频",
   pdf: "PDF",
+  doc: "文档",
 };
 
 export const ARTIFACT_ORIGIN_LABEL: Record<TaskArtifact["origin"], string> = {

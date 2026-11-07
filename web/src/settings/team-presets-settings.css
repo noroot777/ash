@@ -150,6 +150,10 @@
 
 .team-presets-list-role.is-worker { --role-color: #287567; }
 .team-presets-list-role.is-reviewer { --role-color: #a76338; }
+/* 角色身份色偏深，深色底上看不清，提亮一档。 */
+[data-theme="dark"] .team-presets-list-role { --role-color: #a08ad6; }
+[data-theme="dark"] .team-presets-list-role.is-worker { --role-color: #4fb39e; }
+[data-theme="dark"] .team-presets-list-role.is-reviewer { --role-color: #d8915f; }
 
 .team-presets-list-role > svg {
   color: var(--role-color);
@@ -301,6 +305,9 @@
 
 .team-preset-role.is-worker { --role-color: #287567; }
 .team-preset-role.is-reviewer { --role-color: #a76338; }
+[data-theme="dark"] .team-preset-role { --role-color: #a08ad6; }
+[data-theme="dark"] .team-preset-role.is-worker { --role-color: #4fb39e; }
+[data-theme="dark"] .team-preset-role.is-reviewer { --role-color: #d8915f; }
 
 .team-preset-role > header {
   display: flex;
@@ -334,7 +341,7 @@
   margin: 0;
   grid-column: 1 / -1;
   border-radius: 7px;
-  background: rgb(181 123 0 / 8%);
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
   padding: 6px 8px;
   color: var(--amber);
   font-size: 10px;

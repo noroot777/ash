@@ -13,6 +13,7 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { checkPreviewServiceRegressions } from "./preview-service-review-checks.mjs";
+import { fetchLog, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -30,7 +31,8 @@ try {
 
   // ① 启动请求挂着不回（现场里它可以挂两分钟），入口必须已经在。
   await open.click();
-  await page.getByTestId("preview-log-open").waitFor({ timeout: 3000 });
+  // 那趟 POST 在这个夹具里永远不回，所以入口只要出现就证明它没等 POST —— 期限按负载给足，不必卡 3 秒。
+  await page.getByTestId("preview-log-open").waitFor();
   // 启动请求还挂着 —— 而这一段（装依赖 6 分钟 + 等就绪 2 分钟）必须有一颗**能点的取消**，
   // 不是一颗灰着的「处理中」：后端此刻确实收得掉（记录、pid、正在装依赖的进程都在盘上），
   // 界面点不到就等于那套取消不存在。
@@ -47,13 +49,9 @@ try {
   const body = page.locator(".preview-log-body");
   await page.waitForFunction(
     () => document.querySelector(".preview-log-body")?.textContent?.includes("Downloading") ?? false,
-    null,
-    { timeout: 8000 },
   );
   await page.waitForFunction(
     () => document.querySelector(".preview-log-body")?.textContent?.includes("Compiling 42 source files") ?? false,
-    null,
-    { timeout: 8000 },
   );
   assert.match(await body.textContent() ?? "", /npm run dev/, "命令回显那一行也该在");
 
@@ -64,13 +62,9 @@ try {
   await cancel.click();
   await page.waitForFunction(
     () => document.querySelector("[data-testid=notices]")?.textContent?.includes("已取消启动预览") ?? false,
-    null,
-    { timeout: 8000 },
   );
   await page.waitForFunction(
     () => [...document.querySelectorAll("button")].some((b) => b.textContent?.includes("打开预览")),
-    null,
-    { timeout: 8000 },
   );
 
   // ②c 反过来那一半：关一个**已经起来的**预览时，按钮不能说自己「正在启动」。
@@ -83,7 +77,7 @@ try {
   await closeButton.waitFor();
   await closeButton.click();
   const closingButton = closing.getByRole("button", { name: "关闭中" });
-  await closingButton.waitFor({ timeout: 5000 });
+  await closingButton.waitFor();
   assert.equal(await closingButton.isDisabled(), true, "关闭请求还挂着，这颗不该还能再点");
   assert.equal(
     await closing.getByRole("button", { name: "启动中·点此取消" }).count(), 0,
@@ -95,6 +89,8 @@ try {
   //     一个已经被停掉的地址。这条缝在服务端是真实存在的——POST 判定就绪后还要
   //     `await appendTaskTimeline` 才回 200，而 DELETE 故意不抢那把锁。
   const late = await browser.newPage({ viewport: { width: 1000, height: 900 } });
+  // 夹具在页面里当假服务端：记下页面发出的每一发预览请求，好知道那趟 POST 什么时候被读完。
+  await trackFetches(late, "/free-workflow/preview$");
   await late.goto(`${base}?mode=cancel-late-success`);
   const lateOpen = late.getByRole("button", { name: "打开预览" });
   await lateOpen.waitFor();
@@ -102,12 +98,13 @@ try {
   await late.getByRole("button", { name: "启动中·点此取消" }).click();
   await late.waitForFunction(
     () => document.querySelector("[data-testid=notices]")?.textContent?.includes("已取消启动预览") ?? false,
-    null,
-    { timeout: 8000 },
   );
   // 现在才让那趟启动请求成功返回。
   await late.getByTestId("finish-start").click();
-  await late.waitForTimeout(500);
+  // 那趟 200 已被页面读完（它的后续要做什么，同一轮里就做完了），再冲刷一轮渲染才读结果。
+  await waitUntil(async () => (await fetchLog(late)).some((entry) => entry.method === "POST" && entry.state === "settled"),
+    "迟到的启动 POST 已被页面消费完");
+  await settlePage(late);
   const afterLate = await late.evaluate(() => ({
     opens: window.__opens,
     notices: document.querySelector("[data-testid=notices]")?.textContent ?? "",
@@ -129,8 +126,6 @@ try {
   // 等这一轮结束（按钮从「处理中」变回「打开预览」）。
   await race.waitForFunction(
     () => [...document.querySelectorAll("button")].some((b) => b.textContent?.includes("打开预览")),
-    null,
-    { timeout: 8000 },
   );
   assert.match(await race.getByTestId("notices").textContent() ?? "", /认出了 3 个/, "409 的原因得如实说出来");
   assert.equal(
@@ -140,6 +135,7 @@ try {
   );
 
   const serviceSwitch = await browser.newPage({ viewport: { width: 1000, height: 900 } });
+  await trackFetches(serviceSwitch, "/free-workflow/preview/log");
   await serviceSwitch.goto(`${base}?mode=service-switch`);
   await serviceSwitch.getByTestId("preview-log-open").click();
   const serviceBody = serviceSwitch.locator(".preview-log-body");
@@ -165,12 +161,19 @@ try {
   assert(layout.bodyScrollHeight > layout.bodyClientHeight, "长日志应在正文区域内滚动");
   assert(layout.footerTop > 0 && layout.footerBottom <= layout.dialogBottom + 1, "长日志不应把底部操作按钮挤出对话框");
 
+  // 先切到「网页前端」：它那一发日志读取被夹具扣下（乱序是排出来的，不靠延迟赌谁先回）。
   await serviceSwitch.getByRole("tab", { name: "网页前端 · 运行中" }).click();
+  await serviceSwitch.waitForFunction(() => (window.__staleWebHeld ?? 0) > 0);
   await serviceSwitch.getByRole("tab", { name: "接口服务 · 运行中" }).click();
   await serviceSwitch.waitForFunction(
     () => document.querySelector(".preview-log-body")?.textContent === "fresh api log",
   );
-  await serviceSwitch.waitForTimeout(600);
+  // 现在才放上一服务那份旧日志回来，并等页面把扣下的每一发都读完（被 abort 也算）。
+  await serviceSwitch.evaluate(() => window.__releaseStaleWeb());
+  await waitUntil(async () => (await fetchLog(serviceSwitch))
+    .filter((entry) => entry.url.includes("service=web")).every((entry) => entry.state === "settled"),
+  "上一服务那份迟到的日志已被页面消费完");
+  await settlePage(serviceSwitch);
   assert.equal(await serviceBody.textContent(), "fresh api log", "上一服务的延迟响应覆盖了当前服务日志");
   await serviceSwitch.close();
 

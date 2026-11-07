@@ -30,9 +30,9 @@ export async function checkPreviewPalette(page) {
       await target.focus();
       await page.keyboard.press(key);
       const dialog = page.getByRole("dialog", { name: "命令面板", exact: true });
-      await dialog.waitFor({ timeout: 2000 });
+      await dialog.waitFor();
       const input = dialog.locator("input");
-      await input.click({ timeout: 2000 });
+      await input.click();
       assert(await input.evaluate(element => {
         const box = element.getBoundingClientRect();
         return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));

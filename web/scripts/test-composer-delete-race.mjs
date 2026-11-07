@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage, waitUntil } from "./wait-until.mjs";
 
 // 新建面板「创建并排队」在途提交期间删除刚建任务的迟到响应回归(第 7、8、9 轮审查)。
 // 夹具挂真实 useTasks + 真实面板开合接线(fixtures/composer-delete-race.tsx):
@@ -105,8 +106,14 @@ try {
     holdEnqueue = false;
     resolve();
   };
-  const waitHeld = async () => { while (!releaseEnqueue) await new Promise((resolve) => setTimeout(resolve, 50)); };
+  const waitHeld = () => waitUntil(() => releaseEnqueue, "排队请求到达路由桩并被扣住");
   const enqueuedToast = (target) => page.getByText(new RegExp(`已排在「${target}」之后`));
+  // 「已排在…之后」是迟到的那次完成回写自己报的：看到它 = 回写已经跑过；再冲刷一轮让它
+  // 同一段里排上的提交（插行、选中、收面板）落地，下面的「不复活 / 不关面板」读的才是终态。
+  const settledAfter = async (toast) => {
+    await toast.waitFor();
+    await settlePage(page);
+  };
 
   // ── 场景 0(对照):正常关面板再重开,草稿原样保留 ──
   await page.getByRole("button", { name: /^智能体：/ }).waitFor();
@@ -124,7 +131,7 @@ try {
   await page.getByTestId("delete-task-1").click();
   assert.doesNotMatch(await rows.innerText(), /task-1/, "本页删除后行已消失");
   release();
-  await enqueuedToast("存量待办任务").first().waitFor({ timeout: 5000 });
+  await settledAfter(enqueuedToast("存量待办任务").first());
   assert.doesNotMatch(await rows.innerText(), /task-1/, "迟到的创建完成回写不得复活本页删除的任务");
   assert.equal(await page.getByTestId("selected").innerText(), "无", "已删除的任务不得被自动选中");
   assert.equal(await composerOpen.innerText(), "关", "面板仍是提交那份时,守卫命中照常收面板");
@@ -142,7 +149,7 @@ try {
   await page.getByTestId("refetch").click();
   await page.waitForFunction(() => !document.querySelector('[data-testid="rows"]')?.innerText.includes("task-2"));
   release();
-  await enqueuedToast("存量待办任务").nth(1).waitFor({ timeout: 5000 });
+  await settledAfter(enqueuedToast("存量待办任务").nth(1));
   assert.doesNotMatch(await rows.innerText(), /task-2/, "权威刷新确认跨页删除后,迟到回写不得复活该任务");
   assert.equal(await page.getByTestId("selected").innerText(), "无", "跨页删除的任务不得被自动选中");
 
@@ -158,7 +165,7 @@ try {
   await page.getByTestId("open-composer").click();
   await objective.fill("第二个任务的草稿,这段字必须保留");
   release();
-  await enqueuedToast("存量待办任务").nth(2).waitFor({ timeout: 5000 });
+  await settledAfter(enqueuedToast("存量待办任务").nth(2));
   assert.equal(await composerOpen.innerText(), "开", "旧请求不得关闭用户新开的面板");
   assert.equal(await objective.inputValue(), "第二个任务的草稿,这段字必须保留", "旧请求不得清掉新面板的草稿");
   assert.doesNotMatch(await rows.innerText(), /task-3/, "已删除任务不复活");
@@ -180,7 +187,7 @@ try {
   await page.getByTestId("open-composer").click();
   await objective.fill("建队分支的新草稿,也必须保留");
   release();
-  await enqueuedToast("另一个待办任务").first().waitFor({ timeout: 5000 });
+  await settledAfter(enqueuedToast("另一个待办任务").first());
   assert.equal(await composerOpen.innerText(), "开", "建队分支:旧请求不得关闭新面板");
   assert.equal(await objective.inputValue(), "建队分支的新草稿,也必须保留", "建队分支:新草稿不得被清");
   assert.doesNotMatch(await rows.innerText(), /task-4/, "建队分支:已删除任务不复活");
@@ -195,9 +202,9 @@ try {
   await page.getByTestId("open-composer").click();
   assert.equal(await objective.inputValue(), "审查r1-正文不动只补附件", "新面板预填同一份共享草稿");
   await pasteFile("race-keep.png");
-  await page.getByText("race-keep.png").waitFor({ timeout: 5000 });
+  await page.getByText("race-keep.png").waitFor();
   release();
-  await enqueuedToast("存量待办任务").nth(3).waitFor({ timeout: 5000 });
+  await settledAfter(enqueuedToast("存量待办任务").nth(3));
   assert.equal(await composerOpen.innerText(), "开", "附件场景:旧请求不得关闭新面板");
   assert.equal(await objective.inputValue(), "审查r1-正文不动只补附件", "正文未变也必须保留");
   assert.equal(await page.getByText("race-keep.png").count() > 0, true, "刚补的附件不得被清");
@@ -215,14 +222,14 @@ try {
   await objective.fill("中途改成别的");
   await objective.fill("审查r1-改过又改回");
   release();
-  await enqueuedToast("存量待办任务").nth(4).waitFor({ timeout: 5000 });
+  await settledAfter(enqueuedToast("存量待办任务").nth(4));
   assert.equal(await composerOpen.innerText(), "开", "改回原值:旧请求不得关闭新面板");
   assert.equal(await objective.inputValue(), "审查r1-改过又改回", "改过又改回的草稿必须保留");
 
   // ── 场景 E(对照):没删过的首次创建照常回插并选中、面板收起。
   await objective.fill("");
   await submitQueued("正常创建的任务");
-  await enqueuedToast("存量待办任务").nth(5).waitFor({ timeout: 5000 });
+  await settledAfter(enqueuedToast("存量待办任务").nth(5));
   assert.match(await rows.innerText(), /task-7:q1:1/, "真正首次创建仍按入队快照插入");
   assert.equal(await page.getByTestId("selected").innerText(), "task-7", "正常创建仍自动选中");
   assert.equal(await composerOpen.innerText(), "关", "正常创建完成后面板照常收起");

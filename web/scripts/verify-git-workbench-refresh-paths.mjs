@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
+import { WAIT_TIMEOUT_MS, fetchesSettled, resizeViewport, settlePage, trackFetches } from "./wait-until.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -23,6 +24,7 @@ function startBackend() {
   let stdout = "";
   let stderr = "";
   const ready = new Promise((resolve, reject) => {
+    // 不是睡眠：就绪那一行一到就 resolve 并清掉它；15 秒只是夹具起不来时的报错上限。
     const timer = setTimeout(
       () => reject(new Error(`fixture startup timeout\n${stderr}\n${stdout}`)),
       15_000,
@@ -51,12 +53,15 @@ function startBackend() {
     const exited = new Promise(resolve => child.once("exit", resolve));
     if (child.connected) child.send({ type: "close" });
     else child.kill("SIGTERM");
+    // 收尾兜底：子进程按时退出就不等；超时只是改用 SIGKILL，没有断言依赖它。
     await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 5_000))]);
     if (child.exitCode === null) child.kill("SIGKILL");
   };
   return { ready, close, diagnostics: () => ({ stdout, stderr }) };
 }
 
+// 条件等待的期限（不是睡眠）：promise 一兑现就往下走。外部写文件要等工作台下一轮 5 秒轮询才看得见，
+// 所以期限不能比轮询周期加满载余量更短。
 const withTimeout = (promise, ms, label) => Promise.race([
   promise,
   new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timeout`)), ms)),
@@ -180,6 +185,11 @@ try {
       host: "127.0.0.1",
       port: 0,
       watch: null,
+      // 光写 watch: null 不够：加载了 web/vite.config.ts 时，vite 合并配置会跳过值为 null 的项，
+      // watcher 照开。同一检出里任何文件一变它就推整页刷新，把测试做到一半的页面冲掉（实测：
+      // 别的执行者改 web/scripts 里的文件时，review / refresh-paths 两条因此中途被刷新）。
+      // 关掉 HMR 连接，刷新就推不到页面上。
+      hmr: false,
       proxy: { "/api": { target: `http://127.0.0.1:${info.port}` } },
     },
   });
@@ -247,6 +257,8 @@ try {
   url.searchParams.set("view", "git");
   url.searchParams.set("gitView", "changes");
   url.searchParams.set("gitRoot", info.root);
+  // 页面那一侧有没有把差异响应消费完（读完或 abort）：迟到的旧差异那一条要靠它判。
+  await trackFetches(page, "/git/workbench/diff\\?");
   await page.goto(url.href);
   await page.getByRole("navigation", { name: "Git 工作台视图" }).waitFor();
   const rowFor = (path, group) => page
@@ -301,8 +313,9 @@ try {
   assert.match(await selectedCount(), /已选 1 行/);
 
   // Two unchanged polling cycles do not disturb the local line selection.
+  // 期限：两轮 5 秒轮询本身就要 10 秒，再给满载留足余量。
   const pollingStarted = Date.now();
-  await waitForResponses(isState, 2, 13_000);
+  await waitForResponses(isState, 2, 10_000 + WAIT_TIMEOUT_MS);
   const pollingElapsedMs = Date.now() - pollingStarted;
   assert.equal(await selectedA.getAttribute("aria-pressed"), "true");
   assert.match(await selectedCount(), /已选 1 行/);
@@ -312,7 +325,7 @@ try {
   const delayedNoise = armDelay();
   const postsBeforeRefreshSelection = actionPosts;
   write("noise.txt", "noise external one\n");
-  await withTimeout(delayedNoise.started, 8_000, "delayed noise diff");
+  await withTimeout(delayedNoise.started, WAIT_TIMEOUT_MS, "delayed noise diff");
   assert.equal(await selectedA.isVisible(), true, "old diff must remain visible while refreshing");
   assert.equal(await selectedA.isEnabled(), true, "local row selection must remain interactive");
   const refreshStatus = page.getByRole("status").filter({ hasText: "正在刷新差异；内容变化时需重新勾选" });
@@ -367,7 +380,7 @@ try {
   await otherRow.hover();
   await otherRow.getByLabel("暂存 other.txt", { exact: true }).click();
   assert.equal((await actionAfterOther).ok(), true);
-  await withTimeout(delayedAfterWrite.started, 8_000, "post-write diff refresh");
+  await withTimeout(delayedAfterWrite.started, WAIT_TIMEOUT_MS, "post-write diff refresh");
   await assertAllDisabled(page.getByRole("button", { name: /^选择(第|改动块)/ }), "post-write selection");
   assert.equal(await page.getByRole("button", { name: "清除选择", exact: true }).isDisabled(), true);
   assert.equal(await selectedStage.isDisabled(), true);
@@ -389,7 +402,7 @@ try {
   const postsBeforeChangedSelection = actionPosts;
   pickChanged[9] = "PICK-A-UPDATED";
   write("pick.txt", `${pickChanged.join("\n")}\nPICK-C\n`);
-  await withTimeout(delayedChange.started, 8_000, "changed pick diff");
+  await withTimeout(delayedChange.started, WAIT_TIMEOUT_MS, "changed pick diff");
   await refreshStatus.waitFor();
   await selectedA.click();
   assert.equal(await selectedA.getAttribute("aria-pressed"), "true");
@@ -464,7 +477,7 @@ try {
       await assertInsideViewport(apply, 1200, 760, "desktop staged selection button");
       await assertInsideViewport(note, 1200, 760, "desktop staged selection guidance");
       await page.screenshot({ path: join(output, "unstage-plus-guidance-desktop.png") });
-      await page.setViewportSize({ width: 390, height: 844 });
+      await resizeViewport(page, { width: 390, height: 844 });
       await assertInsideViewport(apply, 390, 844, "mobile staged selection button");
       await assertInsideViewport(note, 390, 844, "mobile staged selection guidance");
       await page.screenshot({ path: join(output, "unstage-plus-guidance-mobile.png") });
@@ -543,15 +556,15 @@ try {
   await selectedA.click();
   const stalePick = armDelay();
   write("noise.txt", "noise external two\n");
-  await withTimeout(stalePick.started, 8_000, "stale pick diff");
+  await withTimeout(stalePick.started, WAIT_TIMEOUT_MS, "stale pick diff");
   await rowFor("other.txt", "已暂存").getByLabel("other.txt", { exact: true }).click();
   await page.getByRole("button", { name: /选择第 .* 行 \+other changed$/ }).waitFor();
   const stalePickResponse = waitForPickDiff();
   stalePick.release();
   await (await stalePickResponse).finished();
-  await page.evaluate(() => new Promise(resolve => {
-    requestAnimationFrame(() => requestAnimationFrame(resolve));
-  }));
+  // 浏览器收完响应体不等于页面处理完：等页面把迟到的那份读完（或已 abort），再冲刷一轮渲染才读 DOM。
+  await fetchesSettled(page, 0, "迟到的 pick.txt 差异已被页面消费完");
+  await settlePage(page);
   assert.equal(await page.locator(".diff-path").textContent(), "other.txt");
   assert.equal(await page.getByRole("button", { name: /\+PICK-A-UPDATED$/ }).count(), 0);
 
@@ -560,7 +573,7 @@ try {
   await page.getByRole("button", { name: /选择第 .* 行 \+PICK-A-UPDATED$/ }).waitFor();
   const failedPick = armFailure();
   write("noise.txt", "noise external three\n");
-  await withTimeout(failedPick, 8_000, "failed pick diff");
+  await withTimeout(failedPick, WAIT_TIMEOUT_MS, "failed pick diff");
   const alert = page.getByRole("alert", { name: "" }).filter({ hasText: "forced diff failure" });
   await alert.waitFor();
   assert.equal(await page.locator(".gwb-diff-line").count(), 0);

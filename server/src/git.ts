@@ -165,17 +165,20 @@ export async function headCommit(path: string): Promise<string | null> {
 export async function workspaceDirty(path: string): Promise<boolean | null> {
   try {
     const { stdout } = await exec("git", ["-C", expandHome(path), "status", "--porcelain"]);
-    return stdout.split("\n").some((line) => {
-      if (!line.trim()) return false;
-      const file = line.slice(3);
-      if (file === ".worktrees" || file.startsWith(".worktrees/")) return false;
-      // 只放过**未跟踪**的依赖路径；已跟踪文件里真出现 node_modules 变更仍照常算脏。
-      if (line.startsWith("??") && file.replace(/\/$/, "").split("/").includes("node_modules")) return false;
-      return true;
-    });
+    return stdout.split("\n").some(countsAsProjectChange);
   } catch {
     return null;
   }
+}
+
+/** `git status --porcelain` 的一行（`XY path`）算不算这个项目的改动；滤掉哪两类、为什么，见 `workspaceDirty`。 */
+export function countsAsProjectChange(line: string): boolean {
+  if (!line.trim()) return false;
+  const file = line.slice(3);
+  if (file === ".worktrees" || file.startsWith(".worktrees/")) return false;
+  // 只放过**未跟踪**的依赖路径；已跟踪文件里真出现 node_modules 变更仍照常算脏。
+  if (line.startsWith("??") && file.replace(/\/$/, "").split("/").includes("node_modules")) return false;
+  return true;
 }
 
 /** 只检查已跟踪文件；给随后执行 reset --hard 的路径使用，未跟踪文件不会被该命令覆盖。 */

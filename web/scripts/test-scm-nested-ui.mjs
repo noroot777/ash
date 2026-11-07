@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchLog, settlePage, trackFetches } from "./wait-until.mjs";
 
 // **嵌套 Git 仓库那一行：看得见，但一个操作都不给。**
 //
@@ -64,6 +65,8 @@ try {
     }) });
   });
 
+  // 页面那一侧发没发 diff 请求：fetch 一调用就记下，比路由桩那一侧的计数早。
+  await trackFetches(page, "/api/tasks/t1/scm/diff");
   await page.goto(url);
   await page.getByRole("button", { name: "暂存 notes.txt", exact: true }).waitFor();
 
@@ -73,7 +76,10 @@ try {
   const nestedRow = page.locator(".scm-row", { hasText: "vendor-lib" });
   assert.match(await nestedRow.innerText(), /嵌套仓库/, "得说清楚它是什么、该去哪操作");
   await nestedRow.click();
-  await page.waitForTimeout(200);
+  // 点行要拉 diff 的话，是 click 处理里（或它排下的 effect 里）调的 fetch：click 返回时处理
+  // 已跑完，冲刷掉排下的提交与 effect，要发此刻就已经发了。
+  await settlePage(page);
+  assert.equal((await fetchLog(page)).length, 0, "嵌套仓没有 diff 可预览（后端 409），行本身就不该是按钮");
   assert.equal(diffRequests, 0, "嵌套仓没有 diff 可预览（后端 409），行本身就不该是按钮");
 
   // ③ 数字只数真会被提交的那些：两行未跟踪，能提交的只有一个。

@@ -26,8 +26,8 @@
 /* 发送按钮:主按钮带文案 + 连体的「发送设置」段(studio-submit-mode),跟新建面板的
    「创建并运行 ▸」同一套长相,只是按回复框的行高缩一号。浮层本身是 studio-popover。 */
 .send-split { display: inline-flex; flex: 0 0 auto; align-items: stretch; }
-.send-split-main { display: inline-flex; height: 29px; align-items: center; gap: 7px; border: 0; border-radius: 7px 0 0 7px; background: var(--accent); padding: 0 10px 0 11px; color: white; font-size: 11px; font-weight: 600; white-space: nowrap; box-shadow: 0 0 0 1px rgb(67 76 164 / 28%), 0 1px 2px rgb(40 42 48 / 12%); }
-.send-split-main:hover:not(:disabled) { background: #5560c4; }
+.send-split-main { display: inline-flex; height: 29px; align-items: center; gap: 7px; border: 0; border-radius: 7px 0 0 7px; background: var(--accent); padding: 0 10px 0 11px; color: white; font-size: 11px; font-weight: 600; white-space: nowrap; box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-active) 28%, transparent), 0 1px 2px rgb(40 42 48 / 12%); }
+.send-split-main:hover:not(:disabled) { background: var(--accent-hover); }
 .send-split-main:disabled { opacity: .5; }
 .send-split-main:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 55%, transparent); outline-offset: 1px; }
 .send-split .studio-submit-mode.studio-aux-button { height: 29px; gap: 4px; border-radius: 0 7px 7px 0; padding: 0 7px; }

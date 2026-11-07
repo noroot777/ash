@@ -11,7 +11,7 @@ import type { ConversationItem } from "../src/task-detail/conversationModel.ts";
 import { longAnswer, longLegacyReply, longQuestion } from "./fixtures/question-card-long-answer.ts";
 import { legacyQuestionRecord } from "@ash/shared/questions";
 
-const task = { id: "question-card", title: "问答卡", mode: "single", status: "paused", question: "两个细节", questionItems: [
+const task = { id: "question-card", title: "问答卡", body: "问答卡的原始需求", mode: "single", status: "paused", question: "两个细节", questionItems: [
   { question: "放在哪里？", options: ["会话里", "侧栏里"] },
   { question: "保留什么？", options: ["只留答案", "保留问题"] },
 ] } as Task;

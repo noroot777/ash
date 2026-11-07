@@ -20,7 +20,8 @@ const gateSource = readSource(new URL("../src/auth/AuthGate.tsx", import.meta.ur
 const indexSource = readSource(new URL("../index.html", import.meta.url));
 const probeSource = readSource(new URL("../src/lib/authProbe.ts", import.meta.url));
 
-// ③ 阈值从源码里读,测试的两个延迟按它算 —— 写死一个 400 就会在改阈值那天变成假绿。
+// ③ 阈值从源码里读 —— 写死一个 400 就会在改阈值那天变成假绿。慢路径不再拿「阈值 + 600ms」
+// 赌窗口:应答扣住到测试看完等待态才放(夹具的 `?delay=hold`),所以这里只校验它的形状与区间。
 const thresholdMatch = /setWaitedLong\(true\), (\d+)\)/.exec(gateSource);
 assert(thresholdMatch, "AuthGate 里那个「等多久才给等待态」的 setTimeout 没了或改了形状");
 const threshold = Number(thresholdMatch[1]);
@@ -104,8 +105,10 @@ try {
   assert.equal(fast.booting, false, "状态很快回来时不该出现等待态,它比什么都不显示更吵");
 
   // ② 慢路径:外壳仍然不许出现,但要有低调的等待态,而且状态到了要让位给工作台。
-  await page.goto(`${origin}/scripts/fixtures/auth-boot.html?delay=${threshold + 600}`);
-  await page.locator(".auth-booting").waitFor({ timeout: threshold + 3000 });
+  // 应答扣住:等待态由 AuthGate 自己的阈值定时器带出来,工作台要等测试放行才可能出现,
+  // 所以下面「工作台还没来」那条不会因为测试这边慢了几百毫秒而读到已放行的状态。
+  await page.goto(`${origin}/scripts/fixtures/auth-boot.html?delay=hold`);
+  await page.locator(".auth-booting").waitFor();
   assert.equal(
     await page.locator(".auth-booting").innerText(),
     "正在确认身份…",
@@ -117,7 +120,8 @@ try {
     "等待态这一屏只剩一行字,没有 role=status 读屏用户就什么都听不到",
   );
   assert.equal(await page.locator(".probe-workbench").count(), 0, "身份没确认完就不该放行工作台");
-  await page.locator(".probe-workbench").waitFor({ timeout: threshold + 3000 });
+  await page.evaluate(() => window.__releaseAuthState());
+  await page.locator(".probe-workbench").waitFor();
   const slow = await page.evaluate(() => window.__seen);
   assert.equal(slow.shell, false, "慢的时候也只给一行等待态,不许把整块品牌外壳搬出来");
   assert.equal(slow.booting, true, "等待态没出现过 —— 慢响应下用户会对着空屏猜");

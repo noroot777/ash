@@ -81,7 +81,7 @@ try {
     await page.close();
   }
 
-  // ④ 连着改两次（智能体 → 紧接着模型），第一次写回故意慢 1200ms。
+  // ④ 连着改两次（智能体 → 紧接着模型），第一次写回扣到下一次点击之后才放（夹具 ?slow=1）。
   {
     const page = await fixture("?slow=1");
     const agentTrigger = page.getByRole("button", { name: /智能体：/ });

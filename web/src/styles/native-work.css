@@ -22,6 +22,9 @@
 .native-work__row > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; border-radius: 8px; }
 .native-work__title { display: -webkit-box; flex: 1; min-width: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--ink); font-size: 12px; font-weight: 550; line-height: 18px; overflow-wrap: anywhere; }
 .native-work__full-title { margin: 0; padding: 2px 12px 8px; font-weight: 550; line-height: 1.5; overflow-wrap: anywhere; }
+/* 状态徽标和起止时间是一组：宽卡片里整组跟在标题后面不收缩，窄卡片里成为标题下的第二行。 */
+.native-work__state { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; min-width: 0; }
+.native-work__when { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; line-height: 1.4; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 .native-work__status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; width: fit-content; padding: 2px 6px; border-radius: 4px; background: var(--raised); color: var(--muted); font-size: 10px; font-weight: 450; line-height: 1.4; white-space: nowrap; }
 .native-work__status::before { width: 4px; height: 4px; border-radius: 50%; background: currentColor; content: ""; }
 .native-work__status[data-status="running"] { background: color-mix(in srgb, var(--accent) 9%, var(--panel)); color: var(--accent); }
@@ -65,11 +68,14 @@
 .native-work__open { position: absolute; top: 6px; right: 6px; display: inline-flex; align-items: center; gap: 4px; min-height: 26px; border: 0; border-radius: 5px; padding: 4px 6px; background: color-mix(in srgb, var(--accent) 7%, var(--panel)); color: var(--accent); font-size: 11px; white-space: nowrap; cursor: pointer; }
 .native-work__open:hover { background: color-mix(in srgb, var(--accent) 13%, var(--panel)); }
 .native-work__open:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-@container (max-width: 380px) {
-  .native-work__entry[data-kind="agent"] > .native-work__row > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title chevron" "status ."; gap: 2px 6px; padding: 7px 10px; }
-  .native-work__entry[data-kind="agent"] .native-work__title { grid-area: title; -webkit-line-clamp: 1; }
-  .native-work__entry[data-kind="agent"] .native-work__status { grid-area: status; }
-  .native-work__entry[data-kind="agent"] .native-work__chevron { grid-area: chevron; }
+/* 标题、状态、起止时间挤一行时标题会被压得太窄，卡片窄于这条线就把状态与时间放到第二行。 */
+@container (max-width: 520px) {
+  .native-work__entry[data-kind] > .native-work__row > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title chevron" "state ."; gap: 2px 6px; padding: 7px 10px; }
+  .native-work__title { grid-area: title; -webkit-line-clamp: 1; }
+  .native-work__state { grid-area: state; }
+  /* 第二行右侧让给「查看执行」，时间放不下就省略，逐项的开始与结束在展开的时间详情里。 */
+  .native-work__entry[data-kind="agent"] .native-work__state { margin-right: 58px; }
+  .native-work__chevron { grid-area: chevron; }
   .native-work__open { top: 26px; min-height: 22px; padding-block: 2px; }
 }
 .native-work__empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 38px 8px; color: var(--muted); text-align: center; }

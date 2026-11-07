@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchLog, fetchesSettled, outlastPageTimers, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 // 删除不再先落盘（「存不下去就不许删」是删除按钮点不动的来由），代价是点确认的那一刻
 // 草稿可能还脏着：确认框一关，800ms 自动保存就重新计时，于是一次 PATCH 和 DELETE 并排
@@ -13,9 +14,10 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 // 还钉住另一半：**那道闸关上之后得有人把它重新打开**。删除确认框开着的时候自动保存被挡
 // 掉，用户若取消确认（或删除失败），草稿还脏着却再没人排下一次定时器 —— 它就一直停在
 // 「等待自动保存」，不手动点一下永远不落盘（第 2 轮审查的非阻塞项）。
-// DELETE 比 PATCH 先发、后回：正是「保存回包迟到」那个顺序。
-const DELETE_DELAY_MS = 1400;
-const PATCH_DELAY_MS = 1600;
+// DELETE 比 PATCH 先发、后回：正是「保存回包迟到」那个顺序。这个顺序靠扣住造，不靠延时
+// 赌：DELETE 扣在路上，直到测试确认 800ms 自动保存那一档已经过去（并排的 PATCH 要发就已经
+// 发了）才放行；PATCH（如果有）扣到 DELETE 回完之后才回。
+const AUTOSAVE_MS = 800;
 
 const web = await startWebServer();
 
@@ -40,7 +42,9 @@ try {
   const requests = [];
   const started = Date.now();
   const at = () => Date.now() - started;
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const deleteArrived = Promise.withResolvers();
+  const releaseDelete = Promise.withResolvers();
+  const deleteReplied = Promise.withResolvers();
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -55,15 +59,17 @@ try {
       // 只是回包在路上」。这是迟到回包能复活记录的前提。
       const snapshot = { ...rows.get(single[1]), ...body, updatedAt: 1756000009000 };
       if (rows.has(single[1])) rows.set(single[1], snapshot);
-      await sleep(PATCH_DELAY_MS);
+      await deleteReplied.promise;
       await reply(snapshot);
       return;
     }
     if (single && request.method() === "DELETE") {
       requests.push({ method: "DELETE", id: single[1], sentAt: at() });
-      await sleep(DELETE_DELAY_MS);
+      deleteArrived.resolve();
+      await releaseDelete.promise;
       rows.delete(single[1]);
       await reply({ deleted: true });
+      deleteReplied.resolve();
       return;
     }
     if (path === "/api/notes" && request.method() === "GET") {
@@ -72,7 +78,11 @@ try {
     }
     await reply([]);
   });
+  // 页面这一侧记下每一发单条读写：「一条都没发」以页面调没调 fetch 为准，「迟到回包有没有
+  // 复活」以回包被页面消费完为准。
+  await trackFetches(page, "/api/notes/");
   await page.goto(`${web.origin}/scripts/fixtures/notes-panel.html`);
+  const pageWrites = async () => (await fetchLog(page)).map((entry) => `${entry.method} ${new URL(entry.url, web.origin).pathname}`);
 
   const row = (title) => page.getByRole("button", { name: new RegExp(title) });
   const editor = page.locator(".note-editor textarea");
@@ -87,9 +97,19 @@ try {
   await dialog.waitFor();
   await dialog.locator("footer button.is-danger").click();
 
-  await page.getByText("提示：随手记已删除").waitFor({ timeout: 8000 });
-  // 等过「自动保存重新计时 + PATCH 迟到回包」那整段窗口，复活要发生就在这里面发生。
-  await page.waitForTimeout(PATCH_DELAY_MS + 1200);
+  // DELETE 在路上的时候，确认框关掉后重新计时的那一档自动保存必须已经走完：页面里排一个
+  // 比它晚到期的定时器等它触发，并排的 PATCH 要发就已经调过 fetch 了。然后才放 DELETE 回去。
+  await waitUntil(() => requests.some((entry) => entry.method === "DELETE"), "DELETE 到达路由桩");
+  await deleteArrived.promise;
+  await outlastPageTimers(page, AUTOSAVE_MS + 200);
+  releaseDelete.resolve();
+  await page.getByText("提示：随手记已删除").waitFor();
+  // 复活要发生就发生在「删除落地之后又排的自动保存」或「并排 PATCH 的迟到回包」里：再等过
+  // 一档自动保存，然后等页面上每一发读写都被消费完（迟到的 PATCH 回包被读完），冲刷后再看。
+  await outlastPageTimers(page, AUTOSAVE_MS + 200);
+  await fetchesSettled(page, 1, "删除那一发（以及并排的保存，如果发了）都被页面消费完");
+  await settlePage(page);
+  assert.deepEqual(await pageWrites(), ["DELETE /api/notes/note-a"], "页面上只该发过这一次删除，一条保存都不该有");
 
   const deletes = requests.filter((entry) => entry.method === "DELETE");
   assert.deepEqual(deletes.map((entry) => entry.id), ["note-a"], "删除必须真的发出去，且只发一次");
@@ -122,14 +142,17 @@ try {
   await page.locator(".notes-footer-actions button", { hasText: "删除" }).click();
   await dialog.waitFor();
   const beforeCancel = requests.length;
+  const pageBeforeCancel = (await pageWrites()).length;
   // 确认框开着就是不许存（这一条两种实现下都该成立；万一这里红了，说明下面那条断言的
-  // 时序前提没站住，而不是悄悄放过）。
-  await page.waitForTimeout(1200);
+  // 时序前提没站住，而不是悄悄放过）。fill 时排上的那一档自动保存比这个页面定时器先到期，
+  // 它要发 PATCH 就已经发了。
+  await outlastPageTimers(page, AUTOSAVE_MS + 200);
+  assert.deepEqual((await pageWrites()).slice(pageBeforeCancel), [], "确认框开着的时候页面不许发请求");
   assert.equal(requests.length, beforeCancel, `确认框开着的时候不许发请求：${JSON.stringify(requests.slice(beforeCancel))}`);
   await dialog.locator("footer button:not(.is-danger)").first().click();
   await dialog.waitFor({ state: "detached" });
 
-  for (let i = 0; i < 60 && requests.length === beforeCancel; i++) await page.waitForTimeout(100);
+  await waitUntil(() => requests.length > beforeCancel, "取消删除之后那次自动保存到达路由桩");
   assert.deepEqual(
     requests.slice(beforeCancel).map((entry) => ({ method: entry.method, id: entry.id, body: entry.body?.body })),
     [{ method: "PATCH", id: "note-b", body: RESUMED }],

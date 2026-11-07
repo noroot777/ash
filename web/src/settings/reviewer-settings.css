@@ -9,7 +9,7 @@
 .reviewer-settings-layout > aside > p { display:grid; min-height:150px; place-content:center; justify-items:center; gap:7px; margin:0; color:var(--faint); font-size:10px; }
 .reviewer-settings-layout > aside > button { display:grid; width:100%; gap:3px; border:0; border-bottom:1px solid var(--line); background:transparent; padding:10px 12px; text-align:left; }
 .reviewer-settings-layout > aside > button:hover { background:var(--hover-bg); }
-.reviewer-settings-layout > aside > button[aria-selected="true"] { background:var(--panel); box-shadow:inset 3px 0 var(--accent); }
+.reviewer-settings-layout > aside > button[aria-selected="true"] { background:var(--lifted); box-shadow:inset 3px 0 var(--accent); }
 .reviewer-settings-layout > aside > button b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .reviewer-settings-layout > aside > button b { font-size:11px; }
 .reviewer-settings-layout > aside .reviewer-profile-summary { margin-top:0; }

@@ -71,6 +71,45 @@ try {
   await page.keyboard.press("ArrowLeft");
   assert.equal(await page.getByText("1 / 2", { exact: true }).count(), 1, "ArrowLeft should return to 1 / 2");
   assert.match(await dialog.locator("img").getAttribute("src"), /image-preview-one\.png$/);
+
+  // 缩放：读数按原图像素算，夹具图比窗口小，适应窗口就是 100%。
+  const zoomGroup = dialog.getByRole("group", { name: "缩放" });
+  const percent = zoomGroup.getByRole("button", { name: "适应窗口 / 实际大小" });
+  const zoomIn = zoomGroup.getByRole("button", { name: "放大图片", exact: true });
+  const zoomOut = zoomGroup.getByRole("button", { name: "缩小图片", exact: true });
+  const transform = () => dialog.locator("img").evaluate((image) => image.style.transform);
+  assert.equal(await percent.textContent(), "100%");
+  assert.equal(await zoomOut.isDisabled(), true, "fit-to-window is the floor, zoom-out starts disabled");
+  await zoomIn.click();
+  assert.equal(await percent.textContent(), "150%");
+  assert.match(await transform(), /scale\(1\.5\)/);
+  await page.keyboard.press("=");
+  assert.equal(await percent.textContent(), "225%", "= / + should zoom in");
+  await page.keyboard.press("-");
+  assert.equal(await percent.textContent(), "150%", "- should zoom out");
+  await page.keyboard.press("0");
+  assert.equal(await percent.textContent(), "100%", "0 should reset to fit");
+  assert.equal(await transform(), "");
+  await percent.click();
+  assert.equal(await percent.textContent(), "200%", "image smaller than the window toggles to 2x");
+  await percent.click();
+  assert.equal(await percent.textContent(), "100%");
+
+  const box = await dialog.locator("img").boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -300);
+  await page.waitForFunction(() => document.querySelector(".image-zoom-controls button:nth-child(2)")?.textContent !== "100%");
+  const wheeled = Number((await percent.textContent()).replace("%", ""));
+  assert(wheeled > 100, `wheel up should zoom in, got ${wheeled}%`);
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  assert.equal(await percent.textContent(), "100%", "clicking a zoomed image returns to fit");
+
+  await zoomIn.click();
+  await page.keyboard.press("ArrowRight");
+  assert.equal(await percent.textContent(), "100%", "switching images should reset the zoom");
+  assert.equal(await transform(), "");
+  await page.keyboard.press("ArrowLeft");
+
   await page.keyboard.press("Escape");
   await dialog.waitFor({ state: "detached" });
 

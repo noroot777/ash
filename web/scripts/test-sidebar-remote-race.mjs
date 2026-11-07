@@ -7,6 +7,7 @@
 // 跑：npm -w web run test:sidebar-remote-race
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -53,6 +54,19 @@ try {
     await page.waitForFunction((n) => window.__pendingTargets() === n, want);
     assert.equal(await pending(), want);
   };
+  // 放行按住的那几份应答，并等到它们**全都交回了调用方**、页面把随之而来的提交冲刷完。
+  // 交回之后 openOutboundTask 那串 await 全是微任务，所以 answered 到数 + settlePage 之后，
+  // 迟到的应答想写的东西（修好了的话什么也没有）都已经写完 —— 负向断言不靠睡够久。
+  const releaseAndSettle = async (order) => {
+    const { held, before } = await page.evaluate(() => ({
+      held: window.__pendingTargets(),
+      before: window.__answeredTargets(),
+    }));
+    await page.evaluate((how) => window.__releaseTargets(how), order);
+    await page.waitForFunction(() => window.__pendingTargets() === 0);
+    await page.waitForFunction((want) => window.__answeredTargets() >= want, before + held);
+    await settlePage(page);
+  };
   const waitSelected = async (want) => {
     await page.waitForFunction(
       (id) => (document.querySelector(
@@ -83,10 +97,8 @@ try {
   // 等答复期间点回本机那条（真实复现里就是这一步），再放行那份应答。
   await localRow.click();
   await waitSelected("local");
-  await page.evaluate(() => window.__releaseTargets());
-  await page.waitForFunction(() => window.__pendingTargets() === 0);
-  // 给迟到的应答足够时间把它想写的东西写进去 —— 修好了的话它什么都写不进来。
-  await page.waitForTimeout(600);
+  // 等迟到的应答真正交回、页面冲刷完，再看它有没有写东西 —— 修好了的话它什么都写不进来。
+  await releaseAndSettle();
   assert.equal(await selected(), "local", "迟到的远端应答不得把选中顶成远端那条");
   assert.equal(await urlTask(), "local", "URL 也得还指向本机那条");
 
@@ -99,9 +111,7 @@ try {
   await waitPending(1);
   await farRow("far-1").click();
   await waitSelected("far-1");
-  await page.evaluate(() => window.__releaseTargets());
-  await page.waitForFunction(() => window.__pendingTargets() === 0);
-  await page.waitForTimeout(600);
+  await releaseAndSettle();
   assert.equal(await selected(), "far-1", "迟到的应答不得把选中顶成它自己那条");
 
   // —— 三、两条都在途时只有**最后发起**的那条落地，先发起的那条哪怕后回来也不翻盘。
@@ -118,10 +128,9 @@ try {
   await listRow("far-2").click();
   await waitPending(2);
   // 倒序放行：far-2 先回来并落地，far-1 随后回来 —— 它必须认出自己已经过期。
-  await page.evaluate(() => window.__releaseTargets("lifo"));
-  await page.waitForFunction(() => window.__pendingTargets() === 0);
+  await releaseAndSettle("lifo");
   await waitRemoteTitle("mac-mini 上另一条");
-  await page.waitForTimeout(600);
+  await settlePage(page);
   assert.equal(
     await openedRemoteTitle(),
     "mac-mini 上另一条",
@@ -145,10 +154,9 @@ try {
   await page.keyboard.press("k");
   await waitPending(2);
   await waitSelected("local");
-  await page.evaluate(() => window.__releaseTargets());
-  await page.waitForFunction(() => window.__pendingTargets() === 0);
+  await releaseAndSettle();
   await waitSelected("far-1");
-  await page.waitForTimeout(400);
+  await settlePage(page);
   assert.equal(await selected(), "far-1", "连按两下 K 要走到第二行远端任务上，不能只挪一行");
 
   // 向下两下 J：从「一行都没选」开始，far-1 → far-2。
@@ -160,10 +168,9 @@ try {
   await waitPending(1);
   await page.keyboard.press("j");
   await waitPending(2);
-  await page.evaluate(() => window.__releaseTargets());
-  await page.waitForFunction(() => window.__pendingTargets() === 0);
+  await releaseAndSettle();
   await waitSelected("far-2");
-  await page.waitForTimeout(400);
+  await settlePage(page);
   assert.equal(await selected(), "far-2", "连按两下 J 要走到第二行，不能停在第一行");
 
   // 中间插一下别的动作，光标就该作废：点回本机那条之后按 K，要重新从它上面那行算起。

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
+import { resizeViewport } from "./wait-until.mjs";
 
 const workspace = fileURLToPath(new URL("../..", import.meta.url));
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -47,6 +48,7 @@ async function ensureSideChatOpen(page) {
 
 try {
   const backend = await new Promise((resolve, reject) => {
+    // 这是启动期限，不是睡眠：读到 SIDE_FIXTURE_URL 当场清掉，只有夹具 20 秒都起不来才报错。
     const timer = setTimeout(() => reject(new Error(`fixture startup timeout: ${logs}`)), 20_000);
     const consume = (chunk) => {
       logs += chunk;
@@ -72,7 +74,6 @@ try {
   const address = server.httpServer.address();
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
-  page.setDefaultTimeout(10_000);
   const errors = [];
   let messageRequests = 0;
   page.on("pageerror", (error) => errors.push(error.message));
@@ -298,7 +299,9 @@ try {
   assert.equal(await reference.locator("blockquote").innerText(), longSelection, "切回 parent 恢复自己的引用");
   assert.equal((await state()).delivered.length, 0, "所有选文操作都不直接投递主任务");
 
-  await page.setViewportSize({ width: 390, height: 844 });
+  // 窄屏下 inspector 宿主换成浮层宽度，`.inspector-host` 的 width 过渡要走 160ms：
+  // 面板和引用块分两次量，量在过渡中途就会拿到两个不同时刻的几何。
+  await resizeViewport(page, { width: 390, height: 844 });
   const pane = await page.getByRole("region", { name: "任务侧聊", exact: true }).boundingBox();
   assert.ok(pane && pane.width > 250 && pane.x >= 0 && pane.x + pane.width <= 391);
   const quoteBox = await reference.boundingBox();

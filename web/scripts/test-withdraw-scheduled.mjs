@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchLog, fetchesSettled, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 // 撤回一条待发送消息 = 把它从队列上取下来 + 原样放回对话框（正文、图片、文件）。
 // 这条用真浏览器点那颗按钮，钉住两件事：取消成功才回填、取消失败一个字都不动。
@@ -71,6 +72,8 @@ try {
     }
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
+  // 发送与托盘读取：④ 的负向断言要等「那一发发送的应答已被页面消费完」才算竞争结束。
+  await trackFetches(page, "/api/tasks/task-a/(reply|scheduled-messages)");
   await page.goto(`${web.origin}/scripts/fixtures/withdraw-scheduled.html`);
 
   const input = page.getByRole("textbox", { name: "回复任务" });
@@ -102,10 +105,11 @@ try {
   replyHeld = new Promise((resolve) => { release = resolve; });
   await sendButton.click();
   await page.getByRole("button", { name: /撤回.*迟到的原话/ }).click();
-  await page.waitForTimeout(400);
+  // 发送一直按着没放：取消请求要是排在发送后面，这里就等不到第三条，超时即红。
+  await waitUntil(() => deleted.length >= 3, "发送在途期间撤回「迟到的原话」的取消请求");
   assert.deepEqual(deleted, ["msg-fail", "msg-ok", "msg-late"], "在途期间的撤回要立刻真的取消掉，不必等发送");
   release();
-  for (let i = 0; i < 100 && await input.inputValue() !== "迟到的原话"; i++) await page.waitForTimeout(100);
+  await waitUntil(async () => await input.inputValue() === "迟到的原话", "发送结算后撤回来的正文落进草稿");
 
   assert.equal(await input.inputValue(), "迟到的原话", "发送结算后撤回来的正文必须原样落在草稿里");
   await page.getByText("late.pdf", { exact: true }).waitFor();
@@ -117,8 +121,15 @@ try {
   replyHeld = new Promise((resolve) => { release = resolve; });
   await sendButton.click();
   await input.fill("新方案细节");
+  // 那一发发送确实已经发出（被按在路由里），放行后等它的应答被页面消费完、结算冲刷掉，
+  // 再看新草稿有没有被它动过 —— 不靠睡够久。
+  await waitUntil(
+    async () => (await fetchLog(page)).filter((entry) => entry.url.endsWith("/reply")).length >= 2,
+    "④ 那一发发送已经发出",
+  );
   release();
-  await page.waitForTimeout(1500);
+  await fetchesSettled(page, 0, "④ 那一发发送（以及随后的托盘读取）都已被页面消费完");
+  await settlePage(page);
   assert.equal(await input.inputValue(), "新方案细节", "在途重写的新草稿必须一个字都不动");
 
   console.log("withdraw scheduled message test passed");

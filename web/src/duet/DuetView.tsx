@@ -34,6 +34,7 @@ import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { TaskPinButton } from "../task-detail/TaskPinButton.tsx";
 import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
 import { turnImageMarkdown } from "../task-detail/turnImages.ts";
+import { conversationInputAnchor, conversationInputs } from "../task-detail/conversationInputs.ts";
 import { formatDuration, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { DuetGateControls, DuetProgressBar } from "./DuetControls.tsx";
@@ -63,12 +64,15 @@ function TypingDots() {
 
 function TurnBubble({
   turn,
+  inputId,
   previousRound,
   session,
   fallback,
   taskId,
 }: {
   turn: DuetTurn;
+  /** 我插的话在左侧输入导航上的那一格（只有 speaker 是 user 的轮次有）。 */
+  inputId?: string;
   previousRound?: number;
   session?: Session;
   fallback: string;
@@ -82,7 +86,7 @@ function TurnBubble({
     return (
       <div className="duet-turn-wrap">
         {newRound && <div className="duet-round-divider"><span />第 {turn.round} 轮<span /></div>}
-        <article className="duet-user-turn">
+        <article className="duet-user-turn" {...(inputId ? conversationInputAnchor(inputId) : {})}>
           <header><b>你</b>{turn.target && <span>→ 讨论者 {turn.target}</span>}{turn.at && <time>{formatInstant(turn.at)}</time>}</header>
           {said.body && <p>{said.body}</p>}
           <MessageAttachments paths={said.paths} />
@@ -187,9 +191,22 @@ export function DuetView({
   // An unmatched persisted start means "active" only while the task itself is
   // running. After a server interruption the task becomes failed; hiding that
   // orphan prevents a stale thinking bubble from claiming the process survived.
-  const turns = task.status === "running"
+  const turns = useMemo(() => task.status === "running"
     ? duet.state.turns
-    : duet.state.turns.filter((turn) => turn.done);
+    : duet.state.turns.filter((turn) => turn.done), [duet.state.turns, task.status]);
+  // 我插的话没有条目 id，按「第几次插话」认：轮次只往后追加，插话本身也一定是 done 的，
+  // 上面那道过滤动不了它们的先后。
+  const userTurnIds = useMemo(() => {
+    let count = 0;
+    return new Map(turns.flatMap((turn) => turn.speaker === "user" ? [[turn, `duet-user:${count++}`] as const] : []));
+  }, [turns]);
+  const inputs = useMemo(() => conversationInputs(
+    { text: task.body || config.topic, at: task.createdAt },
+    turns.flatMap((turn) => {
+      const id = userTurnIds.get(turn);
+      return id ? [{ kind: "user", id, text: turn.text, at: turn.at }] : [];
+    }),
+  ), [config.topic, task.body, task.createdAt, turns, userTurnIds]);
   const currentRound = turns.reduce((max, turn) => Math.max(max, turn.round), 0);
   const gate = duet.state.gate ?? latestDuetGate(turns, task.status === "awaiting_review");
   const gateOpen = isOpenDuetGate(gate, task.status);
@@ -359,6 +376,7 @@ export function DuetView({
               <TurnBubble
                 key={`${turn.round}-${turn.speaker}-${index}`}
                 turn={turn}
+                inputId={userTurnIds.get(turn)}
                 previousRound={turns[index - 1]?.round}
                 session={turn.speaker === "A" ? sessionsByRole.voiceA : turn.speaker === "B" ? sessionsByRole.voiceB : undefined}
                 fallback={turn.speaker === "B" ? config.voiceB : config.voiceA}
@@ -384,7 +402,7 @@ export function DuetView({
           {/* resetKey 只认「换了哪个任务」。以前它还混着 turns.length,于是每开一轮都被
               当成换任务、无条件拽到底 —— 读历史读到一半就被打断(审查 B5)。新一轮该不该
               跟,现在由下面这个内容版本说了算:贴着底就跟,在上面读历史就不动。 */}
-          <ConversationScrollControls scrollRef={scrollRef} resetKey={task.id}
+          <ConversationScrollControls scrollRef={scrollRef} resetKey={task.id} inputs={inputs}
             tailKey={contentVersion(turns, duetTurnSize,
               (turn) => `${turn.round}:${turn.speaker}:${turn.done ? 1 : 0}`)} />
         </div>

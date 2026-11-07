@@ -8,6 +8,7 @@ import { TeamFeed } from "../src/team/TeamFeed.tsx";
 import { buildConversationItems, type TimelineEntry } from "../src/task-detail/conversationModel.ts";
 import { monitorWakeInput, monitorWakeReplyIds } from "../src/task-detail/monitorWakeModel.ts";
 import { outputEvent, endEvent, wakePayload } from "./fixtures/monitor-wake-data.ts";
+import { waitUntil } from "./wait-until.mjs";
 
 const fixture = await import("../../server/scripts/team-lead-resilience-fixture.ts");
 const { continueTask } = await import("../../server/src/orchestrator.ts");
@@ -100,13 +101,19 @@ try {
   assert.equal(prompts.length, 1);
   assert.ok(prompts[0].includes(payload.text));
   release();
-  const deadline = Date.now() + 10_000;
-  while (fixture.teamIsLive(taskId) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(fixture.teamIsLive(taskId), false);
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  const session = (await fixture.db.select().from(fixture.sessions).where(fixture.eq(fixture.sessions.taskId, taskId))).at(0)!;
-  const task = (await fixture.db.select().from(fixture.tasks).where(fixture.eq(fixture.tasks.id, taskId))).at(0)!;
-  await verify(task, session as Session, readFileSync(join(fixture.root, "runs", taskId, `${session.id}.md`), "utf8"));
+  await waitUntil(() => !fixture.teamIsLive(taskId), "冷启动那台调度台跑完这一轮、从 leads 摘牌");
+  // 摘牌是收尾的**第一步**：之后才写会话行的 endedAt、往 .md 补收尾那条 agentEnd 并 end()、
+  // 把任务落回 idle。三样都等到，读到的才是收完台的那一份（.md 走 WriteStream，end() 之后
+  // 才落盘，所以按正文里那条带 endedAt 的收尾标记认，不按时间认）。
+  const { session, task, output } = await waitUntil(async () => {
+    const session = (await fixture.db.select().from(fixture.sessions).where(fixture.eq(fixture.sessions.taskId, taskId))).at(0);
+    const task = (await fixture.db.select().from(fixture.tasks).where(fixture.eq(fixture.tasks.id, taskId))).at(0);
+    if (!session?.endedAt || task?.status !== "idle") return false;
+    let output = "";
+    try { output = readFileSync(join(fixture.root, "runs", taskId, `${session.id}.md`), "utf8"); } catch { return false; }
+    return output.includes(`"t":"agentEnd","at":${JSON.stringify(session.endedAt)}`) && { session, task, output };
+  }, "冷启动那一轮收完台：会话行写了 endedAt、任务落回 idle、.md 里有那条收尾标记");
+  await verify(task, session as Session, output);
   console.log("monitor delivery: real queue → continueTask → online/cold team → live + persisted UI passed");
 } finally {
   release();

@@ -7,7 +7,6 @@ try {
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   await page.route("**/api/events", route => route.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" }));
-  page.setDefaultTimeout(5000);
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   const fixture = `${web.origin}/scripts/fixtures/page-interactions.html`;

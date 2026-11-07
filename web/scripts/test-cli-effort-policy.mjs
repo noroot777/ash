@@ -11,6 +11,7 @@
 // page.route 顶掉,按「当前额度档」给出两套不同的目录,就像真服务端那样。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchLog, fetchesSettled, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 const MODEL = "codex-auto-review";
 // 共用档:服务端探到了 CLI 的原话。隔离档:一次都不问宿主机 CLI,只给内置快照,
@@ -68,7 +69,22 @@ try {
   await page.route("**/api/llm-providers", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
 
+  // 页面那一侧记下每一发目录请求是否已被读完：菜单该翻面，等的是新目录**落地**，不是请求发出。
+  await trackFetches(page, "/api/agents/models");
   await page.goto(`${web.origin}/scripts/fixtures/cli-effort-policy.html`);
+
+  /**
+   * 额度切换之后：新的目录请求已经到达桩（`message` 就是「必须重取」那条断言的原话），并且从第
+   * `from` 发起的每一发都已被页面消费完 —— 扣在手里的那一发排在 `from` 之前，不拦这里。
+   */
+  const refetched = async (before, message, from = before) => {
+    await waitUntil(() => catalogRequests.length > before, `${message}（实际请求序列：${catalogRequests.join(",")}）`);
+    await waitUntil(async () => {
+      const log = await fetchLog(page);
+      return log.length > from && log.slice(from).every((entry) => entry.state === "settled");
+    }, "额度切换后重取的目录已被页面消费完");
+    await settlePage(page);
+  };
 
   const effortTrigger = page.getByRole("button", { name: /智能水平：/ });
   const toggle = page.getByTestId("toggle-quota");
@@ -96,11 +112,7 @@ try {
   await toggle.click();
   await page.getByTestId("quota-note").filter({ hasText: "共用" }).waitFor();
   // 目录必须被重取（而不是继续用隔离档那份缓存）。
-  await page.waitForTimeout(400);
-  assert.ok(
-    catalogRequests.length > beforeSwitch,
-    `额度切换后必须重取目录，实际请求序列：${catalogRequests.join(",")}`,
-  );
+  await refetched(beforeSwitch, "额度切换后必须重取目录");
   const sharedOptions = await effortOptions();
   assert.ok(
     !sharedOptions.includes("ultra"),
@@ -112,8 +124,7 @@ try {
   const beforeBack = catalogRequests.length;
   await toggle.click();
   await page.getByTestId("quota-note").filter({ hasText: "隔离" }).waitFor();
-  await page.waitForTimeout(400);
-  assert.ok(catalogRequests.length > beforeBack, "改回隔离档同样要重取目录");
+  await refetched(beforeBack, "改回隔离档同样要重取目录");
   const backOptions = await effortOptions();
   assert.ok(
     backOptions.includes("ultra"),
@@ -125,19 +136,19 @@ try {
   holdNext = true;
   await toggle.click();
   await page.getByTestId("quota-note").filter({ hasText: "共用" }).waitFor();
-  await page.waitForFunction(() => true);
-  for (let i = 0; i < 40 && !held; i += 1) await page.waitForTimeout(50);
-  assert.ok(held, "切到共用档时应发出一次目录请求（被测试扣住）");
+  await waitUntil(() => held, "切到共用档时应发出一次目录请求（被测试扣住）");
 
   // 立刻改回隔离档:这一次正常结算,菜单回到含 ultra 的兜底并集。
+  const beforeRevert = catalogRequests.length;
   await toggle.click();
   await page.getByTestId("quota-note").filter({ hasText: "隔离" }).waitFor();
-  await page.waitForTimeout(400);
+  await refetched(beforeRevert, "改回隔离档要重取目录");
   assert.ok((await effortOptions()).includes("ultra"), "改回隔离档后菜单应已是兜底并集");
 
   // 现在才放那个迟到的「共用档」响应。
   await held.route.fulfill({ status: 200, contentType: "application/json", body: held.body });
-  await page.waitForTimeout(500);
+  // 它被页面读完（或者早已被 abort）之后，菜单该是什么就已经定了。
+  await fetchesSettled(page, catalogRequests.length, "迟到的「共用档」目录已被页面消费完");
   const afterLate = await effortOptions();
   assert.ok(
     afterLate.includes("ultra"),

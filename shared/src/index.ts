@@ -44,9 +44,9 @@ export type {
 // 回 "./x.ts",转发一加进程就起不来。
 
 // ── Global app settings ────────────────────────────────────────────────────
-export type { AppSettings, ComposerSendKey } from "./app-settings.ts";
+export type { AppSettings, ColorTheme, ComposerSendKey } from "./app-settings.ts";
 export { MAX_BROWSER_CDP_DOMAINS, normalizeBrowserCdpDomains, browserCdpHostOf, browserCdpDomainAllowed } from "./project.ts";
-export { COMPOSER_SEND_KEYS, DEFAULT_APP_SETTINGS } from "./app-settings.ts";
+export { COLOR_THEMES, COMPOSER_SEND_KEYS, DEFAULT_APP_SETTINGS } from "./app-settings.ts";
 export { HUMAN_ACTION_TOKEN_HEADER, HUMAN_ACTION_TOKEN_META, HUMAN_ACTION_TOKEN_NEXT_HEADER } from "./human-action.ts";
 
 // ── 多人模式 ────────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage, waitUntil } from "./wait-until.mjs";
 
 // 随手记里粘的图是「传完之后由 effect 折进当前草稿」的，所以上传没落地就切走/关掉，
 // 结果要么没人接住（附件白传），要么落到刚切过去的那条头上。这条钉住：这些动作一律
@@ -26,8 +27,8 @@ try {
   const patched = [];
   const held = new Map();
   const release = async (name) => {
-    for (let i = 0; i < 100 && !held.has(name); i++) await page.waitForTimeout(50);
-    held.get(name)?.();
+    await waitUntil(() => held.has(name), `${name} 的上传请求到达路由桩并被扣住`);
+    held.get(name)();
   };
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -75,13 +76,20 @@ try {
   await page.getByRole("button", { name: /第一条随手记/ }).waitFor();
   await pasteInto("note-a-shot.png");
   await page.getByRole("button", { name: /第二条随手记/ }).click();
-  await page.waitForTimeout(300);
+  // 「不许切走」要等这次点击确实被受理了才断言：受理 = 切换被排到上传落地之后，底栏随即
+  // 改说「传完就保存并继续」；坏掉的实现则是直接切走。等到两者之一，再冲刷一轮 —— 上传被
+  // 路由桩扣着，此后能让选中项变化的只有放行，读到的就是终态，不是「还没来得及切」。
+  const footer = page.locator(".notes-panel footer span").first();
+  const footerSays = async (pattern) => pattern.test(await footer.innerText().catch(() => ""));
+  await waitUntil(async () => await footerSays(/传完就保存并继续/) || !/第一条随手记/.test(await selectedRow.innerText()),
+    "点第二条这一下被受理（排到上传之后，或者直接切走了）");
+  await settlePage(page);
   assert.match(await selectedRow.innerText(), /第一条随手记/, "上传没落地不能切到别的随手记");
-  assert.match(await page.locator(".notes-panel footer span").first().innerText(), /传完就保存并继续/, "得说清楚在等什么");
+  assert.match(await footer.innerText(), /传完就保存并继续/, "得说清楚在等什么");
 
   // ② 传完之后：附件存进**粘它的那条**，然后刚才那次切换自动接着跑。
   await release("note-a-shot.png");
-  for (let i = 0; i < 100 && !patched.length; i++) await page.waitForTimeout(50);
+  await waitUntil(() => patched.length > 0, "附件落地后的那次 PATCH 到达路由桩");
   assert.equal(patched.at(0)?.id, "note-a", "附件必须存回粘它的那条随手记");
   assert.deepEqual(patched.at(0)?.attachments, ["/tmp/uploads/note-a-shot.png"], "存回去的就是刚传好的那张");
   await page.locator(".note-row.is-selected", { hasText: "第二条随手记" }).waitFor();
@@ -89,7 +97,10 @@ try {
   // ③ 在第二条里粘图，没传完就按 Esc：面板不许关（关了就没人接住上传结果）。
   await pasteInto("note-b-shot.png");
   await page.keyboard.press("Escape");
-  await page.waitForTimeout(300);
+  // 同 ①：Esc 被受理 = 关面板排到上传落地之后（底栏改说这句），坏掉的实现则是直接关掉。
+  await waitUntil(async () => await footerSays(/传完就保存并继续/) || await page.locator(".notes-panel").count() === 0,
+    "Esc 这一下被受理（排到上传之后，或者直接关掉了）");
+  await settlePage(page);
   assert.equal(await page.locator(".notes-panel").count(), 1, "上传没落地不能关掉面板");
   assert.equal(await page.getByText("面板已关闭").count(), 0, "面板不该在这时候关");
 

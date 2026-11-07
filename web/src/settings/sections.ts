@@ -83,7 +83,7 @@ export function settingsSectionByLabel(label: string): SettingsSection | null {
 export const SECTION_ANCHORS: Partial<Record<SettingsSection, Record<string, string>>> = {
   // 「预览命令」是这张卡的旧名字，存量文案里还有（改成「自定义脚本 / 选择服务」之前的说法）。
   project: { 预览: "preview", 预览命令: "preview", 工作目录: "worktree", 常用命令: "commands" },
-  defaults: { 输入框: "send-key", 发送键: "send-key" },
+  defaults: { 输入框: "send-key", 发送键: "send-key", 外观: "appearance", 深浅色: "appearance" },
   // 服务端报错里写「设置 → 飞书 → 绑定」这类路径时，点一下就停在那张卡上。
   feishu: { 连接: "feishu-connection", 绑定: "feishu-binding", 推送: "feishu-push", 群: "feishu-groups" },
 };

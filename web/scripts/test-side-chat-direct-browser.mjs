@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
+import { resizeViewport } from "./wait-until.mjs";
 
 const workspace = fileURLToPath(new URL("../..", import.meta.url));
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -21,6 +22,7 @@ let server;
 
 try {
   const backend = await new Promise((resolve, reject) => {
+    // 这是启动期限，不是睡眠：读到 SIDE_FIXTURE_URL 当场清掉，只有夹具 20 秒都起不来才报错。
     const timer = setTimeout(() => reject(new Error(`fixture startup timeout: ${logs}`)), 20_000);
     const consume = (chunk) => {
       logs += chunk;
@@ -46,7 +48,6 @@ try {
   const address = server.httpServer.address();
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
-  page.setDefaultTimeout(10_000);
   const errors = [];
   const createPayloads = [];
   const messagePayloads = [];
@@ -209,7 +210,7 @@ try {
   assert.equal(await roomPicker.inputValue(), "");
   assert.equal(await input.inputValue(), "尚未提交的新侧聊草稿");
 
-  await page.setViewportSize({ width: 390, height: 844 });
+  await resizeViewport(page, { width: 390, height: 844 });
   const paneBox = await pane.boundingBox();
   assert.ok(paneBox && paneBox.width > 250 && paneBox.x >= 0 && paneBox.x + paneBox.width <= 391);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));

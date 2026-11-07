@@ -6,13 +6,14 @@
 // 两套判据迟早分叉:上一版只补了后台账本,回合识别、忙闲、打断标志全是空的,于是通知回合
 // 的结果被当成孤儿回执吞掉、请求中途接回的插话不打断(自由审查 KqmEd8oQLV5_ 第 2 轮)。
 //
-// 输出流里**唯一看不见**的状态是 ash 自己的「我刚发过打断」(`interruptPending`,写在 stdin
-// 那一侧)。它留下的痕迹是 CLI 回的 `control_response`(request_id 是 ash 起的 `ash_int_*`),
-// 由 `interruptedResults` 在重放之前先扫一遍认出来。
+// 输出流里**看不见**的是 ash 自己写进 stdin 的那一侧:哪个回合结尾是我们打断出来的、插话正文送
+// 没送进去、空档里直接送进去的消息(它开的回合可能还一个字都没吐)。它们在写 stdin 之前就落在输出文件旁的 steer journal 里(`loadSteerJournal`,由
+// ClaudeControlBridge 记),重放按它认。上一版拿输出里的回执先后去猜(回执可以晚到、前面可以
+// 插进后台进度),猜错就把被打断的结尾当成自然结束、提前收台(自由审查 i8RAcPM3zvgD R1)。
 //
 // 读不出来(文件没了、权限、水位没落在换行上)= 状态未知,**不是**「什么都没有」:调用方按
 // 未知处理,不能拿空账本去判「没有后台工作」。
-import { closeSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, renameSync, writeFileSync } from "node:fs";
 import type { ConsumedOutput } from "./types.js";
 
 const CHUNK = 64 * 1024;
@@ -56,39 +57,61 @@ export function startsTurn(ev: any): boolean {
     || (ev?.type === "system" && (ev.subtype === "init" || ev.subtype === "status")));
 }
 
-/** CLI 对 ash 自己那条打断请求的成功回执(请求身份见 ClaudeControlBridge.request)。 */
-export function isOwnInterruptAck(ev: any): boolean {
-  if (ev?.type !== "control_response") return false;
-  const response = ev.response ?? ev;
-  const requestId = response?.request_id ?? ev.request_id;
-  return response?.subtype === "success" && typeof requestId === "string" && requestId.startsWith("ash_int_");
+/**
+ * 一条 ash 发出的打断:它认领第 `result` 个回合结尾(孤儿回执不算)。插话那种带 `sent`,正文写进
+ * stdin 之前置 true;纯打断不带。
+ */
+export interface SteerEntry {
+  id: string;
+  result: number;
+  sent?: boolean;
 }
 
+const journalOf = (outPath: string) => `${outPath}.steer.json`;
+
 /**
- * 重放之前先扫一遍:哪几条 `result` 是 ash 自己打断出来的(按事件序号),以及水位停下时是不是
- * 还有一条打断在等它的 `result`。直播里这件事由 `interruptPending` 记着 —— 发打断时置上,下一条
- * `result` 消费掉;输出里只剩回执,它和那条 `result` 谁先谁后都可能,所以两种顺序都认:回执
- * 之前紧挨着(中间没开新回合)有一条没认领的 `result` 就是它,否则就是回执之后的第一条。
+ * 写进 stdin 的那一侧,**一律按回合结尾的序号记**,接管时随着读到第几个结尾逐条认领 —— 输出的
+ * 已消费水位每秒才落一次库,它和这份同步写下的记录不是同一时刻的快照,结尾可能落在水位之前,
+ * 也可能落在之后的尾流里(自由审查 ZbBv9az0Qgtf 第 2 轮)。只在「前缀读完」那一刻核一次的话,
+ * 落在尾流里的那几条就认不回来。
+ *
+ * - `entries`:发过的打断,各自认领的是它**产生**的那个结尾(见 SteerEntry)。
+ * - `sends`:空档里直接送消息时已经读到第几个结尾 —— 那个结尾之后会话就因这条消息在忙,它不再
+ *   是「回合说完了」(上一代送消息时已经不再等它)。
  */
-export function interruptedResults(events: Iterable<any>): { results: Set<number>; pending: boolean } {
-  const results = new Set<number>();
-  let unclaimed = -1;
-  let pending = false;
-  let index = 0;
-  for (const ev of events) {
-    if (ev?.type === "result" && !ev.parent_tool_use_id) {
-      if (pending) {
-        results.add(index);
-        pending = false;
-      } else unclaimed = index;
-    } else if (isOwnInterruptAck(ev)) {
-      if (unclaimed >= 0) results.add(unclaimed);
-      else pending = true;
-      unclaimed = -1;
-    } else if (startsTurn(ev)) unclaimed = -1;
-    index += 1;
+export interface SteerJournal {
+  entries: SteerEntry[];
+  sends?: number[];
+}
+
+/** 读回打断记录。还没记过 = 没发过打断;别的读不出来一律抛(身份未知,不能当成没有)。 */
+export function loadSteerJournal(outPath: string): SteerJournal {
+  let raw: string;
+  try {
+    raw = readFileSync(journalOf(outPath), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { entries: [] };
+    throw error;
   }
-  return { results, pending };
+  const saved = JSON.parse(raw);
+  const entries = Array.isArray(saved?.entries) ? saved.entries : null;
+  const valid = (entry: any): entry is SteerEntry => typeof entry?.id === "string" && Number.isInteger(entry.result)
+    && (entry.sent === undefined || typeof entry.sent === "boolean");
+  const sends = saved?.sends;
+  if (!entries || !entries.every(valid) || (sends !== undefined && !(Array.isArray(sends) && sends.every(Number.isInteger)))) {
+    throw new Error(`打断记录 ${journalOf(outPath)} 格式不对`);
+  }
+  return {
+    entries: entries.map(({ id, result, sent }: SteerEntry) => ({ id, result, ...(sent === undefined ? {} : { sent }) })),
+    ...(sends === undefined ? {} : { sends: [...sends] }),
+  };
+}
+
+/** 整份重写(先写临时文件再改名,断电也不会留下半份)。写不进去就抛。 */
+export function saveSteerJournal(outPath: string, journal: SteerJournal): void {
+  const path = journalOf(outPath);
+  writeFileSync(`${path}.tmp`, JSON.stringify(journal));
+  renameSync(`${path}.tmp`, path);
 }
 
 /**

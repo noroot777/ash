@@ -164,6 +164,12 @@ export interface ResidentHandle {
    * 结尾就过期了。比「新回合开始时回调一声」可靠:回调与消费谁先跑说不准。
    */
   epoch?(): number;
+  /**
+   * 此刻名下还没了结的后台子代理 / 工作流(解析层的实时账本;`unknown`:接管时读不出之前的输出,
+   * 计数只是已知那部分)。单飞判「后台超时/丢失」之前拿它核对 —— 后台已经全跑完、只是 CLI 还没
+   * 开下一回合时,不能说成后台没做完。
+   */
+  backgroundPending?(): { agent: number; workflow: number; unknown?: true };
   kill(): void; // 硬杀,走 killChild 三层击杀
   /**
    * 覆盖这个句柄**已经启动过的所有回合/后代**的幂等 finalizer。`kill()` 只负责进程本体

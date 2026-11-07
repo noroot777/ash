@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { hasCliGoalHold, readCliState } from "@ash/shared/cli-commands";
 import { launchChrome } from "./dom-stage.mjs";
+import { waitUntil } from "./wait-until.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "ash-goal-lifecycle-ui-"));
 const workspace = join(root, "workspace");
@@ -85,6 +86,7 @@ const boot = `
         yield { kind: "text", text: isGoal ? "目标回合已启动：" + goal.objective : "普通回合已启动：" + taskId };
         if (taskId.endsWith("-busy")) {
           const signal = ${JSON.stringify(root)} + "/" + taskId + (isGoal ? ".goal-release" : ".ordinary-release");
+          // 轮询间隔：等测试写下放行信号文件（条件等待，不是睡完再断言）。
           while (!killed && !existsSync(signal)) await delay(20);
         }
         if (goal) { goal.status = "budgetLimited"; goal.tokensUsed = 150; }
@@ -119,21 +121,22 @@ const taskCliState = (taskId) => {
   finally { connection.close(); }
 };
 const waitForTask = async (taskId, predicate) => {
-  const deadline = Date.now() + 20_000;
-  while (true) {
-    const task = await request(`tasks/${taskId}`);
-    if (predicate(task)) return task;
-    assert.ok(Date.now() < deadline && backend.exitCode === null, `${taskId} did not settle\n${log}`);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
+  const task = await waitUntil(async () => {
+    if (backend.exitCode !== null) return { backendExited: true };
+    const current = await request(`tasks/${taskId}`);
+    return predicate(current) && current;
+  }, { timeout: 20_000, interval: 50, message: `${taskId} did not settle` })
+    .catch((error) => { throw new Error(`${error.message}\n${log}`); });
+  assert.ok(!task.backendExited, `${taskId} did not settle: 测试后端已退出\n${log}`);
+  return task;
 };
 try {
-  const deadline = Date.now() + 15_000;
-  while (true) {
-    try { if ((await fetch(`${base}/api/projects`)).ok) break; } catch {}
-    assert.ok(Date.now() < deadline && backend.exitCode === null, log);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
+  // 后端起来之前（或者它自己先退出了）一直等；满载时冷启动 server/dist 可能要十几秒。
+  await waitUntil(async () => backend.exitCode !== null
+    || await fetch(`${base}/api/projects`).then((response) => response.ok, () => false),
+  { timeout: 30_000, message: "测试后端开始应答 /api/projects" })
+    .catch((error) => { throw new Error(`${error.message}\n${log}`); });
+  assert.equal(backend.exitCode, null, log);
   browser = await launchChrome();
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   const pageErrors = [];
@@ -304,6 +307,7 @@ try {
   if (backend.exitCode === null) {
     const closed = once(backend, "close");
     backend.kill("SIGTERM");
+    // 收尾兜底：SIGTERM 收不掉才强杀，只决定最多等多久，不是睡完再断言。
     const force = setTimeout(() => backend.kill("SIGKILL"), 5000);
     await closed;
     clearTimeout(force);

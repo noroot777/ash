@@ -33,15 +33,18 @@ function Values({ row }: { row: NativeWorkItem }) {
   </dl>)}</>;
 }
 
-/** 列表卡片里那条：默认只给时间摘要，点开才是具体的开始与结束。 */
+/**
+ * 列表卡片展开后的那条：起止区间已经挂在卡片抬头上，这里摘要只报跨度（算不出跨度时才退回区间
+ * 那句说明），点开才是逐项的开始与结束。
+ */
 export function NativeWorkMeta({ row }: { row: NativeWorkItem }) {
   const { active, awaitingStart, range, duration, hasDuration } = useNativeWorkTiming(row);
   return <div className="native-work__meta">
     <Values row={row} />
     <details className="native-work__timing">
       <summary aria-label={`时间详情：${range}${hasDuration ? `，时间跨度：${duration}` : ""}`}>
-        <span className="native-work__time-range">{range}</span>
-        {hasDuration && <><span aria-hidden="true">·</span><span className="native-work__duration-value">{duration}</span></>}
+        {hasDuration ? <span className="native-work__duration-value">{duration}</span>
+          : <span className="native-work__time-range">{range}</span>}
         <CaretDown size={10} aria-hidden="true" />
       </summary>
       <dl className="native-work__times">

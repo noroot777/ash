@@ -39,19 +39,19 @@
 .ui-button--primary {
   background: var(--accent);
   color: white;
-  box-shadow: 0 0 0 1px rgb(67 76 164 / 28%), 0 1px 2px rgb(40 42 48 / 12%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-active) 28%, transparent), 0 1px 2px rgb(40 42 48 / 12%);
 }
 
 .ui-button--primary:hover,
 .ui-button--primary.is-hover {
-  background: #5560c4;
+  background: var(--accent-hover);
   color: white;
-  box-shadow: 0 0 0 1px rgb(67 76 164 / 38%), 0 2px 4px rgb(40 42 48 / 14%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-active) 38%, transparent), 0 2px 4px rgb(40 42 48 / 14%);
 }
 
 .ui-button--primary:active,
 .ui-button--primary.is-active {
-  background: #4d57b5;
+  background: var(--accent-active);
   box-shadow: inset 0 1px 2px rgb(20 24 80 / 24%);
 }
 
@@ -84,15 +84,15 @@
 }
 
 .ui-button--danger {
-  border-color: rgb(217 61 76 / 38%);
+  border-color: color-mix(in srgb, var(--red) 38%, transparent);
   background: var(--panel);
   color: var(--red);
 }
 
 .ui-button--danger:hover,
 .ui-button--danger.is-hover {
-  background: rgb(217 61 76 / 6%);
-  box-shadow: 0 0 0 1px rgb(217 61 76 / 22%);
+  background: color-mix(in srgb, var(--red) 6%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--red) 22%, transparent);
 }
 
 .task-pin {
@@ -131,7 +131,7 @@
 .ui-input.is-hover,
 .ui-input:focus,
 .ui-input.is-focus {
-  border-color: lch(78.5% 0 282);
+  border-color: color-mix(in lch, var(--line2) 62%, var(--faint));
 }
 
 .ui-select-trigger {
@@ -143,7 +143,7 @@
   border-radius: 8px;
   background: var(--panel);
   padding: 0 10px;
-  color: lch(20% 1 282);
+  color: color-mix(in lch, var(--ink) 65%, var(--muted));
   font-size: 13px;
   text-align: left;
   box-shadow: var(--control-shadow);
@@ -232,6 +232,8 @@
 
 .ui-tabs button {
   height: 22px;
+  /* 高度写死,折行只会把字挤出盒子(中文可逐字断行),同 .ui-button 那条。 */
+  white-space: nowrap;
   border: 0;
   border-radius: 9999px;
   background: transparent;
@@ -245,10 +247,20 @@
   color: var(--ink);
 }
 
-.ui-tabs button[aria-selected="true"] {
-  background: var(--panel);
+/* 同一副长相也给按钮单选用(role=radio,见 useRovingChoice):分页认 aria-selected,单选认 aria-checked。 */
+.ui-tabs button[aria-selected="true"],
+.ui-tabs button[aria-checked="true"] {
+  background: var(--lifted);
   color: var(--ink);
   box-shadow: 0 1px 3px rgb(40 42 48 / 14%);
+}
+
+/* 深浅色开关(components/ColorThemeChoice.tsx):图标 + 字。摆法(设置页那行靠右、项目下拉里
+   撑满一行)由摆它的地方定，这里不碰 display。 */
+.color-theme-choice button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .ui-choice {
@@ -260,6 +272,15 @@
   padding: 3px;
   color: var(--muted);
   text-align: left;
+}
+
+/* 开关的标签是「已开启 / 提交」这类状态短词，必须整块一行。它常被放在 space-between
+   的设置行右端，旁边说明一长，flex 收缩会把按钮压到 min-content；中文可逐字断行，
+   min-content 就只剩一个字宽，标签被挤成竖排。不换行 + 不收缩，挤压全交给左边说明。
+   复选框不加这条：它的标签可能是一整句话，确实该换行。 */
+.ui-choice--switch {
+  flex: none;
+  white-space: nowrap;
 }
 
 .ui-checkbox {
@@ -288,7 +309,7 @@
 }
 
 .ui-choice:hover .ui-checkbox {
-  border-color: lch(65% 2 282);
+  border-color: var(--faint);
 }
 
 .ui-toggle {
@@ -297,7 +318,7 @@
   height: 20px;
   flex: 0 0 30px;
   border-radius: 72px;
-  background: lch(82.484% 0.054 281.837);
+  background: color-mix(in lch, var(--line2) 82%, var(--faint));
   transition: background-color 150ms ease-out, opacity 150ms ease-out;
 }
 
@@ -309,6 +330,7 @@
   width: 16px;
   height: 16px;
   border-radius: 50%;
+  /* 拨钮两种模式都是白的：深色下关着的轨道是灰、开着是主色，白钮都看得清。 */
   background: white;
   box-shadow: 0 1px 2px rgb(0 0 0 / 18%);
   transition: transform 150ms ease-out;

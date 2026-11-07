@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { animationsSettled, fetchLog, fetchesSettled, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 // 派审对话框里删审查者。每一段一张干净页面：
 //
@@ -56,16 +57,9 @@ const reviewer = (id, name) => ({
 
 const initialReviewers = () => [reviewer("reviewer-1", "顶级审查"), reviewer("reviewer-2", "opus5"), reviewer("reviewer-3", "grok4.6")];
 const json = (route, body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-// 等测试进程这边那份「服务端」状态成立。比 waitForTimeout 稳：慢一点也不会误判。
-const waitFor = async (check, label, timeout = 8000) => {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    if (check()) return;
-    await sleep(50);
-  }
-  assert.fail(label);
-};
+// 页面上只记「读清单」那一种请求（`/api/reviewer-profiles` 本身，不含 `/<id>` 的删除）：
+// 负向断言前要等的是「那份可能贴回旧数据的清单读取已经被页面消费完」。
+const LIST_READS = "/api/reviewer-profiles(?:$|\\?)";
 
 let browser;
 try {
@@ -78,6 +72,7 @@ try {
   const open = async ({ query = "", onList, onDelete } = {}) => {
     const page = await browser.newPage({ viewport: { width: 1080, height: 820 } });
     const store = { reviewers: initialReviewers(), deleted: [], dispatched: [], listCalls: 0, deleteCalls: 0 };
+    await trackFetches(page, LIST_READS);
     await page.route("**/api/llm-providers", (route) => json(route, []));
     await page.route("**/api/agents", (route) => json(route, AGENTS));
     await page.route("**/api/reviewer-profiles*", async (route) => {
@@ -120,6 +115,16 @@ try {
       closeButton: () => dialog.getByRole("button", { name: "关闭派审查" }),
       // 用户切回这个标签页那一下：资源层拿它当「立刻跟权威清单对一次」的信号。
       refocus: () => page.evaluate(() => window.dispatchEvent(new Event("focus"))),
+      // 同一下，但还要证明**这一读是切回本页自己发出来的**（而不是 4 秒一拍的轮询）：
+      // 等到没有在飞的清单读（在飞时资源层会复用那一条，就分不清是谁发的），然后在同一个
+      // 页面任务里派发 focus 并当场数新发出的读 —— 轮询的定时器插不进一段同步代码里。
+      refocusIssuesRead: () => waitUntil(() => page.evaluate(() => {
+        const log = window.__ashFetches ?? [];
+        if (log.some((entry) => entry.state === "pending")) return false;
+        const before = log.length;
+        window.dispatchEvent(new Event("focus"));
+        return log.length - before;
+      }), "切回本页那一下没有当场发出清单读取"),
     };
   };
 
@@ -140,14 +145,15 @@ try {
     await page.waitForFunction(
       () => getComputedStyle(document.querySelector("[aria-label='删除审查者「顶级审查」']")).opacity === "1",
       null,
-      { timeout: 2000 },
+      { timeout: 15_000 },
     );
     await page.screenshot({ path: "/tmp/ash-free-review-rows.png", fullPage: true });
 
     // 取消不删；文案说清这是全局配置。
     await ui.trash("顶级审查").click();
     await confirm.waitFor();
-    await page.waitForTimeout(320);
+    // 只为截图：等确认框的入场动画走完再拍。下面的文案断言读的是已挂载的 DOM，跟动画走没走完无关。
+    await animationsSettled(page);
     await page.screenshot({ path: "/tmp/ash-free-review-delete-confirm.png", fullPage: true });
     const otherText = await confirm.innerText();
     assert.match(otherText, /确定删除“顶级审查”/);
@@ -214,8 +220,11 @@ try {
     await confirm.waitFor({ state: "detached" });
     await ui.row("opus5").waitFor({ state: "detached" });
     // 生产里这一步由 task.review 事件 → 重读状态完成：预约被撤、选中项被清空。
+    // 状态是在这次 evaluate 里同步换掉的：冲刷掉它排上的提交与 effect，再等 effect 可能
+    // 顺手发起的清单读被消费完，然后才断言「什么都没被打回」。
     await page.evaluate(() => window.freeReviewFixture.cancelReservation());
-    await page.waitForTimeout(150);
+    await settlePage(page);
+    await fetchesSettled(page, 0, "撤预约之后可能顺手发起的清单读取都已消费完");
 
     assert.equal(await ui.selectedName(), "grok4.6", "远端撤预约不该把我刚选的审查者换掉");
     assert.equal(await dialog.locator(".free-review-options select").inputValue(), "syntax");
@@ -311,7 +320,7 @@ try {
     const before = store.listCalls;
     gate.hold = true;
     await ui.refocus();
-    await waitFor(() => store.listCalls > before, "切回本页那一次清单读取没有发出来");
+    await waitUntil(() => store.listCalls > before, "切回本页那一次清单读取没有发出来");
     await ui.row("顶级审查").hover();
     await ui.trash("顶级审查").click();
     await confirm.waitFor();
@@ -320,7 +329,8 @@ try {
     await ui.row("顶级审查").waitFor({ state: "detached" });
 
     release();
-    await page.waitForTimeout(500);
+    // 那份旧清单真的被页面读完了（资源层认出它过期会再读一次，fetchesSettled 连那一次也等）。
+    await fetchesSettled(page, 0, "被按住的那份旧清单（以及资源层随后补的那一读）都已消费完");
     assert.equal(await ui.row("顶级审查").count(), 0, "删除之前发出的清单回来了，不能把删掉的那位贴回去");
     assert.deepEqual(store.reviewers.map((item) => item.name), ["opus5", "grok4.6"]);
     assert.equal(await page.locator(".free-review-reviewer-row").count(), 2);
@@ -329,11 +339,14 @@ try {
 
   // ── ⑦ 换任务面：草稿属于「这个任务的这一次打开」 ────────────────────────────
   {
-    const gate = { slow: false };
+    // 换任务之后的清单读按住到「那一瞬」的断言做完才放：那一瞬的表单收起与否不能取决于
+    // 清单恰好来得多快（从前是让它慢 400ms，满载时断言本身就可能晚过 400ms）。
+    let release;
+    const gate = { slow: false, held: new Promise((resolve) => { release = resolve; }) };
     const ui = await open({
       onList: async (store, route) => {
         if (!gate.slow) return false;
-        await sleep(400);
+        await gate.held;
         await json(route, store.reviewers);
         return true;
       },
@@ -348,15 +361,16 @@ try {
     assert.equal(await ui.note().count(), 0, "任务换了，不能继续摆着上一个任务的草稿");
     assert.equal(await ui.submit().isDisabled(), true);
 
+    gate.slow = false;
+    release();
     await page.locator(".free-review-reviewer-row").first().waitFor();
     assert.equal(await ui.note().inputValue(), "任务 B 自己的附言", "要按新任务自己的预约重新初始化");
     assert.equal(await ui.selectedName(), "grok4.6");
     assert.equal(await dialog.locator(".free-review-options select").inputValue(), "syntax");
     assert.equal(await dialog.locator(".free-review-retry-field input").inputValue(), "3");
 
-    gate.slow = false;
     await ui.submit().click();
-    await waitFor(() => store.dispatched.length === 1, "派审请求没发出来");
+    await waitUntil(() => store.dispatched.length === 1, "派审请求没发出来");
     assert.deepEqual(store.dispatched.map((item) => [item.taskId, item.body.note]), [["task-b", "任务 B 自己的附言"]]);
     await page.close();
   }
@@ -414,13 +428,13 @@ try {
     );
 
     release();
-    await waitFor(() => store.deleted.length === 1, "删除请求本身还是要照常完成");
+    await waitUntil(() => store.deleted.length === 1, "删除请求本身还是要照常完成");
     await ui.row("opus5").waitFor({ state: "detached" });
     assert.equal(await ui.selectedName(), "grok4.6", "A 上那次删除不许改掉 B 已经初始化好的选择");
     assert.equal(await ui.note().inputValue(), "任务 B 自己的附言");
 
     await ui.submit().click();
-    await waitFor(() => store.dispatched.length === 1, "派审请求没发出来");
+    await waitUntil(() => store.dispatched.length === 1, "派审请求没发出来");
     assert.deepEqual(
       store.dispatched.map((item) => [item.taskId, item.body.reviewerId, item.body.note]),
       [["task-b", "reviewer-3", "任务 B 自己的附言"]],
@@ -435,9 +449,10 @@ try {
     const { page, store } = ui;
     // 删的是**没被选中、也没被本任务预约**的那位：本任务的状态更不会变。
     store.reviewers = store.reviewers.filter((item) => item.id !== "reviewer-3");
-    await ui.refocus();
-    // 比轮询那一拍短：这一下必须是「切回本页」自己触发的。
-    await ui.row("grok4.6").waitFor({ state: "detached", timeout: 3000 });
+    // 这一下必须是「切回本页」自己触发的：refocusIssuesRead 当场数到了它发出的那一读，
+    // 之后不管这一读在满载下要多久回来，把那位摘掉的都是它（轮询会复用这条在飞的读）。
+    assert.equal(await ui.refocusIssuesRead(), 1, "切回本页要当场发出一次清单读取");
+    await ui.row("grok4.6").waitFor({ state: "detached", timeout: 15_000 });
     assert.equal(await page.locator(".free-review-reviewer-row").count(), 2);
     assert.equal(await ui.selectedName(), "opus5", "删的不是选中那位，选中项一个字都不该动");
     await page.close();
@@ -467,14 +482,16 @@ try {
 
     // 删除还挂着，另一个页面把 opus5 也删了；本页切回来先察觉到这一条。
     store.reviewers = store.reviewers.filter((item) => item.id !== "reviewer-2");
-    await ui.refocus();
-    await ui.row("opus5").waitFor({ state: "detached", timeout: 3000 });
+    assert.equal(await ui.refocusIssuesRead(), 1, "切回本页要当场发出一次清单读取");
+    await ui.row("opus5").waitFor({ state: "detached", timeout: 15_000 });
     assert.equal(await ui.selectedName(), "顶级审查", "opus5 没了，先回退到还在的第一位");
 
     release();
-    await waitFor(() => store.deleted.length === 1, "删除请求本身还是要照常完成");
+    await waitUntil(() => store.deleted.length === 1, "删除请求本身还是要照常完成");
     await ui.row("顶级审查").waitFor({ state: "detached" });
-    await sleep(400);
+    // 删除的应答已被消费（那一行正是它的后续摘掉的，同一轮微任务里发起时捕获的旧闭包也已跑完）；
+    // 再等它可能补发的清单读落地、冲刷，然后才看有没有谁被贴回来。
+    await fetchesSettled(page, 0, "删除之后补发的清单读取都已消费完");
     assert.deepEqual(
       await page.locator(".free-review-reviewer-pick b").allInnerTexts(),
       ["grok4.6"],
@@ -501,8 +518,9 @@ try {
     const { page, store } = ui;
     assert.equal(await ui.selectedName(), "opus5");
 
+    // 让这之前可能在飞的那次读先落地（页面消费完为准），之后发出的一律被压住。
+    await fetchesSettled(page, 0, "压住清单读取之前，在飞的那次读已消费完");
     gate.hold = true;
-    await sleep(200); // 让这之前可能在飞的那次读先落地，之后发出的一律被压住
     await ui.submit().click();
     // 点下去的这一瞬，另一个标签页把 opus5 删了。
     store.reviewers = store.reviewers.filter((item) => item.id !== "reviewer-2");
@@ -523,7 +541,7 @@ try {
     await ui.row("grok4.6").locator(".free-review-reviewer-pick").click();
     assert.equal(await ui.selectedName(), "grok4.6");
     await page.keyboard.press("Enter");
-    await waitFor(() => store.dispatched.length === 1, "点选审查者后按回车要发起派审");
+    await waitUntil(() => store.dispatched.length === 1, "点选审查者后按回车要发起派审");
     assert.equal(store.dispatched[0].body.reviewerId, "reviewer-3", "派出去的是刚点选的那位");
     await page.close();
   }
@@ -534,7 +552,7 @@ try {
     await page.keyboard.press("ArrowUp");
     assert.equal(await ui.selectedName(), "opus5", "方向键在审查者之间换选");
     await page.keyboard.press("Enter");
-    await waitFor(() => store.dispatched.length === 1, "方向键换选后按回车要发起派审");
+    await waitUntil(() => store.dispatched.length === 1, "方向键换选后按回车要发起派审");
     assert.equal(store.dispatched[0].body.reviewerId, "reviewer-2", "派出去的是换到的那位");
     await page.close();
   }
