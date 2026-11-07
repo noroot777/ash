@@ -262,6 +262,24 @@ export function summaryCard(items: SummaryItem[], envelope: string): CardModel {
   };
 }
 
+/** /project 的选单：每个项目一颗按钮，点一下就切成当前项目（按钮带的是第几个，项目 id 存在信封里）。 */
+export function projectCard(current: string | null, names: string[], currentIndex: number, envelope: string): CardModel {
+  return {
+    title: "切换当前项目",
+    tone: "blue",
+    blocks: [
+      { type: "text", text: `当前：${current ? scrubTitle(current, 40) : "未指定"}` },
+      {
+        type: "buttons",
+        buttons: names.map((name, index) => ({
+          text: scrubTitle(name, 24), ...(index === currentIndex ? { style: "primary" as const } : {}), value: value(envelope, "pick", { i: index }),
+        })),
+      },
+      { type: "note", text: "也可以发 /project 名字 切换。" },
+    ],
+  };
+}
+
 /** 需要再点一下才执行的命令（/stop、/new）。 */
 export function confirmCard(title: string, text: string, envelope: string, danger: boolean): CardModel {
   return {

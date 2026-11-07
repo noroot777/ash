@@ -8,7 +8,8 @@
 //    答复只认那张卡自己问的那一次：回旧提问卡、回别的卡都不答到眼下这道题上（带附件也一样）；
 //    回眼下这道题的卡带附件也是答复，附件跟着答复走；答复送到接口那一刻同一道题已经又问了一次
 //    （题面一模一样）→ 接口按那一次的身份拒收；回在机器人自己的文字回执下面，认话题根上那张卡；
-// ③ 命令：/help /project /new（先确认，点确定才建任务并开跑）/stop（先确认，取消就不停）/todo；
+// ③ 命令：/help /project（回一张项目选单，点一下就切；点过的卡不能再点）/project 编号
+//    /new（先确认，点确定才建任务并开跑）/stop（先确认，取消就不停）/todo；
 //    不认识的消息类型回一句说明；
 // ④ 助手房间：单聊里直接说话 → 照最近一间助手房间的配置建一间「飞书」，投进去；回复按 reply_to
 //    对上、发回飞书（回在用户那条消息下面）；同一条飞书消息重复推送只投一次；
@@ -228,11 +229,24 @@ try {
   {
     const help = await im.say({ text: "/help" });
     const list = await im.say({ text: "/project" });
-    const pick = await im.say({ text: "/project 1" });
     await im.settle();
     assert.match(textOf(contentOf(repliesTo(help)[0]!)), /\/todo/);
-    assert.match(textOf(contentOf(repliesTo(list)[0]!)), /1\. 飞书项目/);
-    assert.match(textOf(contentOf(repliesTo(pick)[0]!)), /已切到「飞书项目」/);
+    const picker = contentOf(repliesTo(list)[0]!);
+    assert.match(textOf(picker), /当前：未指定/);
+    const option = buttonsOf(picker).find((button) => button.text === "飞书项目");
+    assert.equal(option?.value?.op, "pick", "每个项目一颗按钮");
+    assert.equal((await bindingOf(APP, OWNER))!.projectId, null, "没点不切");
+    const chosen = await im.click(OWNER, option!.value!);
+    assert.equal(chosen.toast?.type, "success", JSON.stringify(chosen));
+    assert.match(textOf(chosen.card?.data), /已切到「飞书项目」/);
+    assert.equal(buttonsOf(chosen.card?.data).length, 0, "切完卡收起来，不留按钮");
+    assert.equal((await bindingOf(APP, OWNER))!.projectId, "p1", "点一下就切");
+    assert.match((await im.click(OWNER, option!.value!)).toast?.content ?? "", /已经处理过了/, "点过的卡不能再点");
+
+    await db.update(imBindings).set({ projectId: null }).where(eq(imBindings.openId, OWNER));
+    const pick = await im.say({ text: "/project 1" });
+    await im.settle();
+    assert.match(textOf(contentOf(repliesTo(pick)[0]!)), /已切到「飞书项目」/, "编号照样能切");
     assert.equal((await bindingOf(APP, OWNER))!.projectId, "p1");
 
     const create = await im.say({ text: "/new 修个 bug\n登录页点了没反应" });

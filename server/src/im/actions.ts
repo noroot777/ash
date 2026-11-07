@@ -149,7 +149,7 @@ export class CardActions {
       return toast("success", released ? `推送了 ${released} 张${left ? `，还剩 ${left} 张，再点一次继续` : ""}` : "没有积压的卡了");
     }
     const job = check.envelope.action === "confirm"
-      ? this.confirmJob(check.envelope, check.payload, op, principal)
+      ? this.confirmJob(check.envelope, check.payload, op, event, principal)
       : await this.turnJob(check.envelope, check.payload, op, event, row, actor);
     if (!("run" in job)) return job;
     const claim = await claimEnvelope(envelopeId);
@@ -226,8 +226,14 @@ export class CardActions {
     return { run: prepared, taskId: view.task.id, link };
   }
 
-  /** /new、/stop 的确认卡。 */
-  private confirmJob(envelope: EnvelopeRow, payload: Record<string, unknown>, op: string, principal: ImPrincipal): Job | CallbackResponse {
+  /** /new、/stop 的确认卡，/project 的选单。 */
+  private confirmJob(
+    envelope: EnvelopeRow, payload: Record<string, unknown>, op: string, event: CallbackEvent, principal: ImPrincipal,
+  ): Job | CallbackResponse {
+    if (payload.command === "project") {
+      if (op !== "pick") return toast("error", "认不出这个按钮");
+      return { run: () => this.deps.commands.picked(principal, payload, Number(event.value.i)), taskId: null, link: null };
+    }
     if (op === "cancel") return { run: async () => ({ ok: true, text: "已取消。", final: true, tone: "grey" }), taskId: null, link: null };
     if (op !== "confirm") return toast("error", "认不出这个按钮");
     return { run: () => this.deps.commands.confirmed(principal, payload), taskId: envelope.taskId, link: null };
@@ -265,7 +271,7 @@ export class CardActions {
     const claim = claimOf(envelope);
     const row = (await db.select().from(imOutbox).where(eq(imOutbox.id, envelope.outboxId))).at(0) ?? null;
     if (envelope.action === "confirm") {
-      const text = "点下「确定」时 ash 正好重启，不确定办成没有：请在 ash 里看一眼，需要的话重新发命令。";
+      const text = "点下按钮时 ash 正好重启，不确定办成没有：请在 ash 里看一眼，需要的话重新发命令。";
       const content = row ? JSON.stringify(renderCard(settledCard(cardHeaderOf(row.content), text, { link: null }, "orange"))) : null;
       await commit(this.deps.reconciler, async (tx) => {
         if (!await finishEnvelope(tx, claim, "interrupted") || !row || !content) return;

@@ -14,9 +14,9 @@ import { imOutbox } from "../db/schema-im.js";
 import type { ImPrincipal } from "../auth/im-actor.js";
 import { failureOf, taskPath, type AshClient } from "./ash-client.js";
 import { updateBinding, type BindingRow } from "./binding.js";
-import { confirmCard, taskLink, todoText } from "./cards.js";
+import { confirmCard, projectCard, taskLink, todoText } from "./cards.js";
 import { createEnvelope } from "./envelopes.js";
-import { renderCard } from "./feishu/cards.js";
+import { renderCard, type CardModel } from "./feishu/cards.js";
 import { groupOf } from "./groups.js";
 import { readOptions } from "./meta.js";
 import { cardHeaderOf, type Destination, type OutboxRow } from "./outbox.js";
@@ -43,12 +43,14 @@ export interface InboundContext {
 }
 
 const CONFIRM_TTL_MS = 10 * 60_000;
+/** 项目选单点了也只是切当前项目、点的那一刻还会重核：放久一点，发完过一阵再点也行。 */
+const PICK_TTL_MS = 24 * 3600_000;
 
 export const HELP = [
   "直接回复提问卡 = 答复它（附图片、文件也行）；回复别的任务卡要以 /reply 开头，才会发给那个任务。",
   "单聊里直接说话 = 跟 ash 助手聊（它能帮你查任务、建任务）。",
   "/todo —— 还有哪些事等你；积压的卡逐张推过来",
-  "/project —— 看看能选哪些项目；/project 2 或 /project 名字 —— 设为当前项目",
+  "/project —— 弹出项目卡片，点一下就切成当前项目；也可以 /project 名字",
   "/new 标题（换行写详细要求）—— 在当前项目建任务并开跑（会先让你确认）",
   "/stop —— 回复某张任务卡发送：停掉那个任务（会先让你确认）",
   "/retry —— 回复某张失败卡发送：重试",
@@ -92,18 +94,27 @@ export class CommandRunner {
     return replyScope(ctx.origin, about);
   }
 
-  private async card(
+  private card(
     ctx: InboundContext, title: string, text: string, payload: Record<string, unknown>, danger: boolean, scope: OutboxScope, brief?: string,
+  ): Promise<void> {
+    return this.buttons(ctx, (envelope) => confirmCard(title, text, envelope, danger), payload, scope, CONFIRM_TTL_MS,
+      brief === undefined ? undefined : (envelope) => confirmCard(title, brief, envelope, danger));
+  }
+
+  /** 回一张带按钮的卡（确认卡、项目选单）：按钮点下去走 actions.ts confirmJob，payload.command 说是哪一种。 */
+  private async buttons(
+    ctx: InboundContext, render: (envelope: string) => CardModel, payload: Record<string, unknown>, scope: OutboxScope, ttlMs: number,
+    brief?: (envelope: string) => CardModel,
   ): Promise<void> {
     const rowId = `cf${ctx.messageId}`.slice(0, 40);
     const envelope = await createEnvelope({
       outboxId: rowId, taskId: typeof payload.taskId === "string" ? payload.taskId : null, action: "confirm", payload,
-      recipientOpenId: ctx.principal.openId, generation: "c", ttlMs: CONFIRM_TTL_MS,
+      recipientOpenId: ctx.principal.openId, generation: "c", ttlMs,
     });
     await this.deps.reconciler.run(() => this.deps.reconciler.insert({
       id: rowId, dest: ctx.dest, taskId: null, kind: "confirm", subject: ctx.messageId,
-      content: JSON.stringify(renderCard(confirmCard(title, text, envelope, danger))), replyTo: ctx.messageId,
-      scope, brief: brief === undefined ? null : JSON.stringify(renderCard(confirmCard(title, brief, envelope, danger))),
+      content: JSON.stringify(renderCard(render(envelope))), replyTo: ctx.messageId,
+      scope, brief: brief === undefined ? null : JSON.stringify(renderCard(brief(envelope))),
     }));
     this.deps.reconciler.kick();
   }
@@ -171,6 +182,7 @@ export class CommandRunner {
   /**
    * 他能看哪些项目、他的当前项目是哪个：只属于他本人，只在单聊里答。清单列着哪几个项目就记哪几个（当前项目也在其中），
    * 出口逐个核他此刻还看得见；切换只改消息进来那一次的绑定 —— 列表取回来之前换了绑，写进去就是改了另一个人的当前项目。
+   * 不带参数回一张选单卡（点按钮切，见 picked）；带编号 / 名字直接切。
    */
   private async project(ctx: InboundContext, rest: string): Promise<void> {
     if (ctx.chatType !== "p2p") return this.say(ctx, "/project 请在和我的单聊里用：它会列出你个人能看到的项目。", SYSTEM_SCOPE);
@@ -181,11 +193,11 @@ export class CommandRunner {
       const current = list.find((project) => project.id === ctx.binding.projectId);
       const shown = list.slice(0, 30);
       const listed = [...new Set([...shown, ...(current ? [current] : [])].map((project) => project.id))];
-      return this.say(ctx, [
-        `当前项目：${current ? current.name : "未指定"}`,
-        ...shown.map((project, index) => `${index + 1}. ${project.name}`),
-        "发 /project 编号 或 /project 名字 切换。",
-      ].join("\n"), this.scoped(ctx, { kind: "projects", projectIds: listed }));
+      // 信封里记着按钮对应哪个项目、是哪一次绑定：点的时候按这一份切，不按点那一刻重新排出来的顺序。
+      return this.buttons(ctx, (envelope) => projectCard(current?.name ?? null, shown.map((project) => project.name),
+        shown.findIndex((project) => project.id === current?.id), envelope),
+      { command: "project", projectIds: shown.map((project) => project.id), boundAt: ctx.binding.boundAt },
+      this.scoped(ctx, { kind: "projects", projectIds: listed }), PICK_TTL_MS);
     }
     const index = /^\d+$/.test(rest) ? Number(rest) - 1 : -1;
     const lowered = rest.toLowerCase();
@@ -219,6 +231,24 @@ export class CommandRunner {
     return this.card(ctx, "建任务并开跑？", `${head}${body !== title ? `\n要求：${scrubText(body, 600)}` : ""}`,
       { command: "new", projectId: project.id, title, body }, false, this.scoped(ctx, { kind: "project", projectId: project.id }),
       body !== title ? `${head}\n（详细要求只在 ash 里看）` : undefined);
+  }
+
+  /**
+   * 项目选单上点了一个项目。点的那一刻以他的身份重读一遍项目列表：发卡之后被移出了那个项目就不切；绑定按发卡那一次
+   * 做 CAS（同 /project 名字），换过绑定这张卡就作废了。
+   */
+  async picked(principal: ImPrincipal, payload: Record<string, unknown>, index: number): Promise<Outcome> {
+    const ids = Array.isArray(payload.projectIds) ? payload.projectIds as unknown[] : [];
+    const projectId = ids[index];
+    if (typeof projectId !== "string" || typeof payload.boundAt !== "string") return { ok: false, text: "认不出点的是哪个项目", final: false };
+    const result = await this.deps.ash.get<Project[]>(principal, "/api/projects");
+    if (!result.ok) return { ok: false, text: `没读到你的项目列表：${scrubText(result.error, 200)}`, final: false };
+    const picked = (Array.isArray(result.data) ? result.data : []).find((project) => project.id === projectId);
+    if (!picked) return { ok: false, text: "这个项目你已经看不到了。", final: false };
+    if (!await updateBinding(principal, { projectId }, payload.boundAt)) {
+      return { ok: true, final: true, tone: "orange", text: "你换过绑定，这张卡作废了：请重新发 /project。" };
+    }
+    return { ok: true, final: true, tone: "green", text: `当前项目已切到「${picked.name}」。/new 建的任务、助手派的活都会落在这里；再发 /project 可以重新选。` };
   }
 
   /** 确认卡上点了「确定」。 */
