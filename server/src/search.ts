@@ -22,7 +22,6 @@
 // 以上是默认的 relevance 档。用户把 ⌘K 切到「最近更新」（`sort=recent`）时，排序里只剩
 // 更新时间一把钥匙（随手记也跟任务混在一起排），上面第 2、3 条的推导跟着失效 —— 那一档
 // 改成单段按 updatedAt 倒序扫，扫到「第 50 名比所有没扫的行都新」为止（见 searchAll 末尾）。
-import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SearchHit, SearchField, TaskStatus } from "@ash/shared";
 import { SEARCH_MAX_HITS, compareSearchHits, type SearchSort } from "@ash/shared/search";
@@ -33,13 +32,12 @@ import type { Actor } from "./auth/context.js";
 import { filterOwned } from "./auth/owned.js";
 import { visibleProjectIds, visibleTaskIds } from "./auth/visibility.js";
 import { RUNS_DIR } from "./paths.js";
+import { readRunCorpus, SearchCorpus, type RunSearchCorpus } from "./search-corpus.js";
 
 const SNIPPET_RADIUS = 60;
 const MAX_HITS = SEARCH_MAX_HITS;
 const TASK_PREVIEW_LIMIT = 2_000;
 const NOTE_PREVIEW_LIMIT = 4_000;
-// 同时读几个任务目录。这个数决定「一次最多有多少份会话全文同时待在内存里」——
-// 原先是全部 1123 份，几个 GB 的字符串一起进老生代，GC 和 swap 都得跟着遭殃。
 const SCAN_CONCURRENCY = 6;
 
 // 任务 id 是 nanoid(12),字母表 [A-Za-z0-9_-];ash 分支只带前 8 位
@@ -212,11 +210,6 @@ function termMatchesTaskId(term: SearchTerm, taskId: string): boolean {
   return idPartsOf(term).some((part) => isTaskIdMatch(taskId, part));
 }
 
-// 一个 OR 分组是否成立:组里每个词要么在语料里,要么就是这个任务的 id。
-function groupSatisfied(group: SearchTerm[], lower: string, taskId: string): boolean {
-  return group.every((term) => lower.includes(term.value) || termMatchesTaskId(term, taskId));
-}
-
 // 整串 id 或 8 位以上的前缀都算「就是这个任务」。两边都压小写:候选来自
 // tokenize 时已小写化的词,但导出的函数不该指望调用方记得这件事。
 export function isTaskIdMatch(taskId: string, candidate: string): boolean {
@@ -252,33 +245,6 @@ function findSnippet(text: string, terms: SearchTerm[]): string | null {
   const end = Math.min(text.length, index + length + SNIPPET_RADIUS);
   const body = text.slice(start, end).replace(/\s+/g, " ").trim();
   return `${start > 0 ? "…" : ""}${body}${end < text.length ? "…" : ""}`;
-}
-
-// Read a task's searchable run files as one logical conversation corpus.
-// `signal` 一定要往下传到 readFile：单个任务目录实测能到 586 MB，用户又敲了一个字之后
-// 还把它读完，正是「十几个全盘扫叠在一起」的那份 I/O（实测 6 × 60 MB：不传 signal 时
-// 掐掉之后仍要 682 ms 才收手，传了是 1 ms）。readdir 不收 signal（Node 没给这个口子），
-// 所以在它之后再问一次。
-async function readRunText(taskId: string, signal?: AbortSignal): Promise<string> {
-  let files: string[];
-  try {
-    files = await readdir(join(RUNS_DIR, taskId));
-  } catch {
-    return "";
-  }
-  if (signal?.aborted) return "";
-  const chunks = await Promise.all(
-    files
-      .filter((file) => file.endsWith(".md") || file.endsWith(".jsonl"))
-      .map(async (file) => {
-        try {
-          return await readFile(join(RUNS_DIR, taskId, file), { encoding: "utf8", signal });
-        } catch {
-          return ""; // file vanished mid-scan，或者这次搜索已经被掐掉（AbortError）
-        }
-      }),
-  );
-  return chunks.filter(Boolean).join("\n");
 }
 
 /**
@@ -339,17 +305,19 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
 
   type TaskRow = (typeof taskRows)[number];
   type TaskHit = Extract<SearchHit, { kind: "task" }>;
-  const hitOf = (task: TaskRow, conversation: string): TaskHit | null => {
-    const corpus = `${task.title}\n${task.body}\n${conversation}`;
-    // 大字符串只压一次小写。原先 matchesSearchQuery / isExcluded / matchingTerms /
-    // findSnippet 各压一遍，语料上了 GB 之后这四遍就是四份垃圾。
-    const lower = corpus.toLowerCase();
+  const termValues = dedupeTerms([...parsed.groups.flat(), ...parsed.excluded]).map((term) => term.value);
+  const taskPrefix = (task: TaskRow) => `${task.title}\n${task.body}\n`;
+  const readConversation = (task: TaskRow) =>
+    readRunCorpus(join(RUNS_DIR, task.id), termValues, taskPrefix(task), options.signal);
+  const hitOf = (task: TaskRow, run?: RunSearchCorpus): TaskHit | null => {
+    const corpus = run?.corpus ?? new SearchCorpus(termValues, taskPrefix(task));
     // 排除词优先:用户显式说了别看这条,按 id 钉也不行。
-    if (hasExcluded(lower, parsed)) return null;
+    if (parsed.excluded.some((term) => corpus.includes(term.value))) return null;
     // 按 id 命中的那个**词**要能凭空成立:任务自己的 id 不在自己的标题/正文里,
     // 还没跑过的任务连会话都没有,靠 corpus 匹配永远搜不到它自己。但它只满足自己
     // 那一个词 —— 同组的其他词照样得在语料里找到(见 termMatchesTaskId)。
-    const satisfied = parsed.groups.filter((group) => groupSatisfied(group, lower, task.id));
+    const satisfied = parsed.groups.filter((group) =>
+      group.every((term) => corpus.includes(term.value) || termMatchesTaskId(term, task.id)));
     if (parsed.groups.length ? !satisfied.length : !parsed.excluded.length) return null;
 
     const terms = dedupeTerms(satisfied.flat());
@@ -357,16 +325,18 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
     let field: SearchField = "id";
     let snippet = "";
     if (!byId) {
-      const bodyTerms = terms.filter((term) => task.body.toLowerCase().includes(term.value));
-      const conversationTerms = terms.filter((term) => conversation.toLowerCase().includes(term.value));
+      const bodyLower = task.body.toLowerCase();
+      const titleLower = task.title.toLowerCase();
+      const bodyTerms = terms.filter((term) => bodyLower.includes(term.value));
+      const conversationTerms = terms.filter((term) => run?.conversation.includes(term.value));
       field = "title";
-      if (!terms.some((term) => task.title.toLowerCase().includes(term.value))) {
+      if (!terms.some((term) => titleLower.includes(term.value))) {
         if (bodyTerms.length) {
           field = "body";
           snippet = findSnippet(task.body, bodyTerms) ?? "";
         } else if (conversationTerms.length) {
           field = "conversation";
-          snippet = findSnippet(conversation, conversationTerms) ?? "";
+          snippet = run!.conversation.snippet(conversationTerms.map((term) => term.value));
         }
       }
     }
@@ -478,7 +448,7 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
     for (let at = 0; at < rows.length; at += SCAN_CONCURRENCY) {
       if (options.signal?.aborted) return;
       const batch = rows.slice(at, at + SCAN_CONCURRENCY);
-      const batchHits = await Promise.all(batch.map(async (task) => hitOf(task, await readRunText(task.id, options.signal))));
+      const batchHits = await Promise.all(batch.map(async (task) => hitOf(task, await readConversation(task))));
       // 一批读完再问一次：这一批开跑之后用户很可能又敲了一个字，那这些命中已经没人要了。
       for (const hit of batchHits) {
         if (options.signal?.aborted) return;
@@ -501,7 +471,7 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
     } else {
       for (const task of settled) {
         if (options.signal?.aborted) return sink;
-        const hit = hitOf(task, "");
+        const hit = hitOf(task);
         if (hit) { sink.push(hit); emit(hit); }
       }
     }
@@ -535,7 +505,7 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
       if (cutoff && cutoff.localeCompare(ordered[at]!.updatedAt) > 0) break;
       const batch = ordered.slice(at, at + SCAN_CONCURRENCY);
       const batchHits = await Promise.all(batch.map(async (task) =>
-        hitOf(task, needsRunText(task) ? await readRunText(task.id, options.signal) : "")));
+        hitOf(task, needsRunText(task) ? await readConversation(task) : undefined)));
       for (const hit of batchHits) {
         // 每吐一条问一次：这一批开跑之后用户很可能又敲了一个字（吐出去这个动作本身也可能
         // 让客户端走人），那剩下的命中已经没人要了 —— 只在批次边界检查会把整批都吐出去。
