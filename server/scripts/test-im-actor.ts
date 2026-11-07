@@ -9,8 +9,9 @@
 //    看不到额度、改不了实例选项；群列表按项目可见性裁、别人绑的群改不动；
 // ⑥ 绑定码：认领只认对的地方（个人码在单聊、群码在群里且必须是码主本人发）、过期与重复认领；
 //    确认群绑定按确认那一刻重核：看不到项目了、本人飞书绑定换了人都不生效，别人绑的群只有管理员能覆盖；
-//    「原来是谁绑的」在写入的事务里再核：两个人同时确认同一个群只有一个算数，判过资格之后群被别人改绑了，
-//    拿着旧判断的改 / 解绑一律不写（审查实测：同时确认两边都成功、后一个覆盖了前一个）；
+//    判资格读到的那几样（绑定人、项目、哪一次绑定）在写入的事务里再核：两个人同时确认同一个群只有一个算数；
+//    判过资格之后群被改绑、或者只是被移到别的项目，拿着旧判断的确认 / 改 / 解绑一律不写；绑在看不到的项目上的群，
+//    绑它的人也覆盖不了（两轮审查各实测一条：同时确认后一个覆盖前一个；群被移走后旧请求打开了新项目的推送）；
 // ⑦ 源码扫描：im/ 下面一行都不许碰真人凭据（通道替人点按钮不等于真人在页面上点）。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -240,7 +241,40 @@ try {
     assert.deepEqual(await groupOf(APP, "oc_shared"), rebound, "新的绑定一个字都没动");
     assert.equal((await db.select().from(imGroupRooms).where(eq(imGroupRooms.chatId, "oc_shared"))).length, 1, "群聊房间映射也没被清");
     assert.equal(await patchGroup(rebound, { pushCards: true }), true, "对着现在这一份照常能改");
-    assert.equal(await deleteGroup((await groupOf(APP, "oc_shared"))!), true, "开关推卡不换绑定身份，照常能解绑");
+
+    // 只换项目（绑定人、绑定时间都不变）：判资格时看的是原项目，移走之后旧判断同样不作数（审查第 2 轮实测）。
+    const beforeMove = (await groupOf(APP, "oc_shared"))!;
+    const moved = { ...beforeMove, projectId: "p1" };
+    await db.update(imGroups).set({ projectId: "p1" }).where(and(eq(imGroups.appId, APP), eq(imGroups.chatId, "oc_shared")));
+    assert.equal(await patchGroup(beforeMove, { pushCards: false }), false, "移走之后旧判断关不了推送");
+    assert.equal(await patchGroup(beforeMove, { projectId: `p-${loser.who}` }), false, "也搬不回去");
+    assert.equal(await deleteGroup(beforeMove), false, "也解不了绑");
+    assert.deepEqual(await groupOf(APP, "oc_shared"), moved, "移过去的那份原样留着");
+    assert.equal((await db.select().from(imGroupRooms).where(eq(imGroupRooms.chatId, "oc_shared"))).length, 1, "群聊房间映射也没被清");
+
+    // 确认覆盖同理：判资格读到群之后、写入之前，群被移去了别的项目 → 不覆盖，码还在。
+    const admin = { canSeeProject: async () => true, admin: true };
+    const takeover = await createBindCode(loser.who, "group", `p-${loser.who}`);
+    assert.equal((await claimCode(takeover.code.replace(/^ASH-|-/g, ""), { ...inGroup, chatId: "oc_shared", openId: `ou_${loser.who}` })).kind, "claimed");
+    const midway = await confirmGroupCode(loser.who, takeover.codeId, APP, {
+      admin: true,
+      canSeeProject: async (projectId) => {
+        // 第二次问的是群此刻的项目（editRefusal）：就在这一下，别人把群移走。
+        if (projectId === "p1") await db.update(imGroups).set({ projectId: `p-${winners[0].who}` }).where(and(eq(imGroups.appId, APP), eq(imGroups.chatId, "oc_shared")));
+        return true;
+      },
+    });
+    assert.deepEqual(midway, { ok: false, status: 409, error: GROUP_CHANGED }, "判资格之后群换了项目：不覆盖");
+    assert.equal((await groupOf(APP, "oc_shared"))?.projectId, `p-${winners[0].who}`, "移过去的那份原样留着");
+    assert.equal((await db.select().from(imBindCodes).where(eq(imBindCodes.id, takeover.codeId))).at(0)?.state, "claimed", "码没被吃掉");
+
+    // 群绑在看不到的项目上：就算是绑它的人本人，也只有管理员能覆盖（和网页上改 / 解绑同一条）。
+    await db.update(imGroups).set({ boundBy: loser.who }).where(and(eq(imGroups.appId, APP), eq(imGroups.chatId, "oc_shared")));
+    const hidden = await confirmGroupCode(loser.who, takeover.codeId, APP, { canSeeProject: async (projectId) => projectId === `p-${loser.who}`, admin: false });
+    assert.equal(!hidden.ok && hidden.status, 403, "绑在看不到的项目上：本人也覆盖不了");
+    assert.equal((await groupOf(APP, "oc_shared"))?.projectId, `p-${winners[0].who}`);
+    assert.equal((await confirmGroupCode(loser.who, takeover.codeId, APP, admin)).ok, true, "管理员照常能覆盖");
+    assert.equal(await deleteGroup((await groupOf(APP, "oc_shared"))!), true, "对着现在这一份照常能解绑");
     assert.equal(await groupOf(APP, "oc_shared"), null);
   }
 

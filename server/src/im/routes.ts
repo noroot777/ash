@@ -21,7 +21,7 @@ import {
 import { clearCredentials, domainUrl, isValidAppId, readCredentials, writeCredentials } from "./config.js";
 import { FeishuApi } from "./feishu/api.js";
 import { renderCard } from "./feishu/cards.js";
-import { canEditGroup, confirmGroupCode, deleteGroup, GROUP_CHANGED, groupOf, groupsView, patchGroup } from "./groups.js";
+import { confirmGroupCode, deleteGroup, editRefusal, GROUP_CHANGED, groupOf, groupsView, patchGroup } from "./groups.js";
 import { optionsError, patchOptions, readOptions } from "./meta.js";
 import { outboxCounts } from "./outbox.js";
 import { SYSTEM_SCOPE } from "./scope.js";
@@ -265,10 +265,12 @@ export function mountImRoutes(api: Hono): void {
   const editableGroup = async (c: Context) => {
     const appId = currentAppId();
     const group = appId ? await groupOf(appId, c.req.param("chatId") ?? "") : null;
-    if (!group || !(await canSeeProject(actorOf(c), group.projectId))) return { error: c.json({ error: "没有这个群" }, 404) };
-    if (!canEditGroup(group, ownerOf(c), isAdminActor(actorOf(c)))) {
-      return { error: c.json({ error: "这个群是别人绑的，只有他本人或实例管理员能改" }, 403) };
-    }
+    const actor = actorOf(c);
+    const refusal = group
+      ? await editRefusal(group, { owner: ownerOf(c), admin: isAdminActor(actor), canSeeProject: (projectId) => canSeeProject(actor, projectId) })
+      : "hidden";
+    if (!group || refusal === "hidden") return { error: c.json({ error: "没有这个群" }, 404) };
+    if (refusal === "not_binder") return { error: c.json({ error: "这个群是别人绑的，只有他本人或实例管理员能改" }, 403) };
     return { group };
   };
 
