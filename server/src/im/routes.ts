@@ -21,7 +21,7 @@ import {
 import { clearCredentials, domainUrl, isValidAppId, readCredentials, writeCredentials } from "./config.js";
 import { FeishuApi } from "./feishu/api.js";
 import { renderCard } from "./feishu/cards.js";
-import { canEditGroup, confirmGroupCode, deleteGroup, groupOf, groupsView, patchGroup } from "./groups.js";
+import { canEditGroup, confirmGroupCode, deleteGroup, GROUP_CHANGED, groupOf, groupsView, patchGroup } from "./groups.js";
 import { optionsError, patchOptions, readOptions } from "./meta.js";
 import { outboxCounts } from "./outbox.js";
 import { SYSTEM_SCOPE } from "./scope.js";
@@ -261,7 +261,7 @@ export function mountImRoutes(api: Hono): void {
     return c.json(await groupsFor(c));
   });
 
-  /** 改/解绑群：绑它的人本人，或实例管理员。 */
+  /** 改/解绑群：绑它的人本人，或实例管理员。判过资格的这一份交给写入口，写之前在事务里再核一次没换过。 */
   const editableGroup = async (c: Context) => {
     const appId = currentAppId();
     const group = appId ? await groupOf(appId, c.req.param("chatId") ?? "") : null;
@@ -285,7 +285,7 @@ export function mountImRoutes(api: Hono): void {
       if (typeof body.pushCards !== "boolean") return c.json({ error: "pushCards 必须是布尔值" }, 400);
       patch.pushCards = body.pushCards;
     }
-    await patchGroup(found.group.appId, found.group.chatId, patch);
+    if (!await patchGroup(found.group, patch)) return c.json({ error: GROUP_CHANGED }, 409);
     refreshPushes();
     return c.json(await groupsFor(c));
   });
@@ -293,7 +293,7 @@ export function mountImRoutes(api: Hono): void {
   api.delete("/im/feishu/groups/:chatId", async (c) => {
     const found = await editableGroup(c);
     if ("error" in found) return found.error;
-    await deleteGroup(found.group.appId, found.group.chatId);
+    if (!await deleteGroup(found.group)) return c.json({ error: GROUP_CHANGED }, 409);
     refreshPushes();
     return c.json(await groupsFor(c));
   });

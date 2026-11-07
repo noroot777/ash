@@ -46,6 +46,25 @@ async function namesOf(ids: string[]): Promise<Map<string, string>> {
 export const canEditGroup = (group: GroupRow, owner: string, admin: boolean) => admin || (group.boundBy ?? "") === owner;
 
 /**
+ * 还是不是同一次绑定：比 boundAt + boundBy（改项目、开关推卡都不换这两样）。重绑会换 boundAt，换了人 boundBy 也跟着换；
+ * 改 / 解绑的资格只看绑的人（canEditGroup），所以同一毫秒里重绑撞上同一个 boundAt 时，只要人没换，原来那份判断照样成立。
+ *
+ * 为什么写入时要核这个：改 / 解绑 / 覆盖的资格是对着**读到的那一份**判的（canEditGroup），判完到真写之间隔着
+ * 好几次 await。这期间别人把群绑走了、改绑了、解绑了，那份判断就不作数了 —— 不核的话两个人同时确认同一个群，
+ * 两边都通过「群还没人绑」那道检查，后提交的那个无条件覆盖掉前一个刚绑好的（审查实测）。所以三个写入口都在
+ * 同一个事务里先核「此刻的绑定还是授权时那一份」，对不上就整笔不写：码不翻、群聊房间映射不清。
+ */
+const sameBinding = (a: GroupRow | null, b: GroupRow | null) =>
+  a === null || b === null ? a === b : a.boundAt === b.boundAt && (a.boundBy ?? null) === (b.boundBy ?? null);
+
+export const GROUP_CHANGED = "这个群的绑定刚刚变了（别人刚绑上、改过或解绑了），请刷新后按现在的样子再操作";
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+const groupIn = async (tx: Tx, appId: string, chatId: string): Promise<GroupRow | null> =>
+  (await tx.select().from(imGroups).where(and(eq(imGroups.channel, CHANNEL), eq(imGroups.appId, appId), eq(imGroups.chatId, chatId)))).at(0) ?? null;
+
+/**
  * 网页上的群列表。`visible` 为 null = 不设限（自用模式 / 管理员），否则只列这些项目的群。
  * claims 只列本人发起、还没确认的那张群码。
  */
@@ -75,7 +94,7 @@ export async function groupsView(owner: string, admin: boolean, appId: string | 
   return { groups, claims };
 }
 
-export type GroupConfirm = { ok: true; group: GroupRow } | { ok: false; error: string; status?: 403 };
+export type GroupConfirm = { ok: true; group: GroupRow } | { ok: false; error: string; status?: 403 | 409 };
 
 /** 确认那一刻确认人的权限（由路由按当前登录身份现算）。 */
 export interface GroupConfirmAuthz {
@@ -87,6 +106,7 @@ export interface GroupConfirmAuthz {
  * 网页上确认群绑定。生成码到确认之间可能隔了好几分钟，那时核过的都要按此刻重核一遍：
  * 还能不能看见这个项目、本人的飞书绑定还是不是认领时发码的那个账号。同一个群重绑到别的项目
  * = 覆盖（群聊房间随之换掉）；那个群原来是别人绑的，只有实例管理员能覆盖（与改 / 解绑同一道闸）。
+ * 「原来是谁绑的」在写入的事务里再核一次（sameBinding）：两个人同时确认同一个群，只有先提交的那个算数。
  */
 export async function confirmGroupCode(
   owner: string, codeId: string, currentAppId: string | null, authz: GroupConfirmAuthz,
@@ -117,40 +137,49 @@ export async function confirmGroupCode(
     boundAt: now(),
   };
   const done = await db.transaction(async (tx) => {
+    if (!sameBinding(await groupIn(tx, group.appId, group.chatId), existing)) return "changed";
     const flipped = await tx.update(imBindCodes).set({ state: "confirmed" })
       .where(and(eq(imBindCodes.id, code.id), eq(imBindCodes.state, "claimed"))).returning({ id: imBindCodes.id });
-    if (!flipped.length) return false;
+    if (!flipped.length) return "handled";
     await tx.delete(imGroups).where(and(eq(imGroups.channel, CHANNEL), eq(imGroups.appId, group.appId), eq(imGroups.chatId, group.chatId)));
     await tx.delete(imGroupRooms).where(and(eq(imGroupRooms.channel, CHANNEL), eq(imGroupRooms.appId, group.appId), eq(imGroupRooms.chatId, group.chatId)));
     await tx.insert(imGroups).values(group);
-    return true;
-  });
-  return done ? { ok: true, group } : { ok: false, error: "这张群绑定码刚刚已被处理过，请刷新" };
+    return "done";
+  }, { behavior: "immediate" });
+  if (done === "changed") return { ok: false, status: 409, error: GROUP_CHANGED };
+  return done === "done" ? { ok: true, group } : { ok: false, error: "这张群绑定码刚刚已被处理过，请刷新" };
 }
 
-export async function patchGroup(
-  appId: string,
-  chatId: string,
-  patch: { projectId?: string; pushCards?: boolean },
-): Promise<void> {
+/**
+ * 改群（换项目 / 开关推卡）。`authorized` = 判过改的资格的那一份（routes.ts editableGroup 读到的）；false = 这期间
+ * 群的绑定换过了（sameBinding），什么都没改。
+ */
+export async function patchGroup(authorized: GroupRow, patch: { projectId?: string; pushCards?: boolean }): Promise<boolean> {
+  const { appId, chatId } = authorized;
   const set: Partial<GroupRow> = {};
   if (patch.projectId !== undefined) set.projectId = patch.projectId;
   if (patch.pushCards !== undefined) set.pushCards = patch.pushCards ? 1 : 0;
-  if (!Object.keys(set).length) return;
-  await db.transaction(async (tx) => {
+  if (!Object.keys(set).length) return true;
+  return db.transaction(async (tx) => {
+    if (!sameBinding(await groupIn(tx, appId, chatId), authorized)) return false;
     await tx.update(imGroups).set(set).where(and(eq(imGroups.channel, CHANNEL), eq(imGroups.appId, appId), eq(imGroups.chatId, chatId)));
     // 换了项目：旧项目的群聊房间不再对应这个群。
     if (patch.projectId !== undefined) {
       await tx.delete(imGroupRooms).where(and(eq(imGroupRooms.channel, CHANNEL), eq(imGroupRooms.appId, appId), eq(imGroupRooms.chatId, chatId)));
     }
-  });
+    return true;
+  }, { behavior: "immediate" });
 }
 
-export async function deleteGroup(appId: string, chatId: string): Promise<void> {
-  await db.transaction(async (tx) => {
+/** 解绑群。`authorized` 同 patchGroup；false = 这期间群的绑定换过了，新的那份原样留着。 */
+export async function deleteGroup(authorized: GroupRow): Promise<boolean> {
+  const { appId, chatId } = authorized;
+  return db.transaction(async (tx) => {
+    if (!sameBinding(await groupIn(tx, appId, chatId), authorized)) return false;
     await tx.delete(imGroups).where(and(eq(imGroups.channel, CHANNEL), eq(imGroups.appId, appId), eq(imGroups.chatId, chatId)));
     await tx.delete(imGroupRooms).where(and(eq(imGroupRooms.channel, CHANNEL), eq(imGroupRooms.appId, appId), eq(imGroupRooms.chatId, chatId)));
-  });
+    return true;
+  }, { behavior: "immediate" });
 }
 
 export async function groupRoomOf(appId: string, chatId: string, userKey: string): Promise<string | null> {

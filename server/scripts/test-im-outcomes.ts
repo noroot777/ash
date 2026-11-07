@@ -486,7 +486,7 @@ try {
     assert.deepEqual(await Promise.all(["race-room-1", "race-room-2"].map(roomExists)).then((alive) => alive.filter(Boolean).length), 1, "多建的那间删掉了");
 
     // 建房间的时候群换了一次绑定：这间不落进新绑定的映射。
-    await deleteGroup(APP, "oc_race");
+    assert.equal(await deleteGroup(group), true);
     await db.insert(imGroups).values({ channel: "feishu", appId: APP, chatId: "oc_race", projectId: "p1", name: "竞速群", boundBy: null, pushCards: 0, boundAt: later(40) });
     onCreate = async () => { await db.update(imGroups).set({ boundAt: later(50) }).where(eq(imGroups.chatId, "oc_race")); };
     meet = async () => {};
