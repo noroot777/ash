@@ -13,6 +13,10 @@
 // （team/session.ts deliver）都先问 heldForAcceptance。它自己的 CLI 起的回合 ash 挡不住（team/session-consumer.ts
 // 「CLI 自己开的新一轮」），所以占住时记下这一版成果，之后每道守卫和盖章之前各核一次（holdDrift），变了就不验收。
 //
+// 成员集合在验收期间也不能长：建任务落库那一下、派活全程都占着「加成员」的位（team-admission.ts → acceptance-lock.ts
+// beginAdmitting），跟验收互斥。所以占位时读到的那一批就是验收全程的那一批；盖章再在同一个事务里核一次没有多出来的
+// 共享执行者（review-acceptance.ts commitAcceptanceStage）。
+//
 // 释放时排空「等这一轮跑完」的交接（被挡下的续跑、投递随即补上），再补推验收期间留在托盘里的消息、把调度台
 // 投递口拒收下来的执行者汇报送进去（team/session.ts resumeLeadAfterAcceptance）。
 import { eq } from "drizzle-orm";

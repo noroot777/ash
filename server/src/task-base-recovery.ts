@@ -10,7 +10,7 @@ import { recordCompletedBaseUpdate } from "./task-base-record.js";
 import { parseBaseUpdateIntent } from "./task-base-intent.js";
 import { readBaseUpdateBackups, retainBaseUpdateBackups } from "./task-base-backups.js";
 import { manualBaseProposal } from "./task-base-manual.js";
-import { beginAccepting, endAccepting } from "./acceptance-lock.js";
+import { acceptingBusyText, beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
 import { withRepoLock } from "./repo-lock.js";
 import { workspaceParticipants } from "./task-workspace.js";
@@ -74,7 +74,7 @@ export async function readBaseUpdateRecovery(taskId: string): Promise<BaseUpdate
 
 export async function abandonTaskBaseUpdate(taskId: string, fingerprint: string, resolution: "abandon" | "complete" | "manual", acknowledged = false): Promise<{ ok: boolean; error?: string; message?: string }> {
   assertNotPreviewInstance("处理未完成的基线更新");
-  if (!beginAccepting(taskId)) return { ok: false, error: "任务正在验收或更新基线，请稍后重试" };
+  if (!beginAccepting(taskId)) return { ok: false, error: acceptingBusyText(taskId, "任务正在验收或更新基线，请稍后重试") };
   try {
     const initial = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     const project = initial && (await db.select().from(projects).where(eq(projects.id, initial.projectId))).at(0);

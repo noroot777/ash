@@ -17,7 +17,7 @@ import { updateTaskBase } from "./task-base-update.js";
 import { abandonTaskBaseUpdate, readBaseUpdateRecovery } from "./task-base-recovery.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import type { AcceptTaskResult } from "./task-accept.js";
-import { beginAccepting, endAccepting } from "./acceptance-lock.js";
+import { acceptingBusyText, beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { now } from "./util.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
@@ -214,7 +214,7 @@ export function mountBranchPlanRoutes(api: Hono, accept: Accept): void {
     const taskId = c.req.param("id");
     const body = await c.req.json<{ fingerprint?: string }>();
     if (typeof body?.fingerprint !== "string") return c.json({ error: "fingerprint required" }, 400);
-    if (!beginAccepting(taskId)) return c.json({ error: "任务正在验收或更新工作区，请稍后重试" }, 409);
+    if (!beginAccepting(taskId)) return c.json({ error: acceptingBusyText(taskId, "任务正在验收或更新工作区，请稍后重试") }, 409);
     try {
       const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
       const project = task && (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
@@ -262,7 +262,7 @@ export function mountBranchPlanRoutes(api: Hono, accept: Accept): void {
     const taskId = c.req.param("id");
     const body = await c.req.json<{ branch?: string; fingerprint?: string }>();
     if (typeof body.branch !== "string" || !body.branch.trim() || typeof body.fingerprint !== "string") return c.json({ error: "branch and fingerprint required" }, 400);
-    if (!beginAccepting(taskId)) return c.json({ error: "任务正在验收或更新基线" }, 409);
+    if (!beginAccepting(taskId)) return c.json({ error: acceptingBusyText(taskId, "任务正在验收或更新基线") }, 409);
     try {
       const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
       const project = task && (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);

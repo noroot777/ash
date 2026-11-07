@@ -27,7 +27,7 @@ import { recordBranchReceipt } from "./task-branch-receipts.js";
 import { branchDependency, branchOwner, commitAt, dependentTasks, plannedMergeTarget } from "./task-branch-plan.js";
 import { resolveWorktreeBranchName } from "./git.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
-import { beginAccepting, endAccepting } from "./acceptance-lock.js";
+import { acceptingBusyText, beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { holdTeamForAcceptance } from "./team-acceptance-hold.js";
 import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js";
 import { unexecutedVerification } from "./task-accept-verification.js";
@@ -608,7 +608,7 @@ export async function acceptTask(
       httpStatus: 409,
       taskId,
       reason: "acceptance_in_progress",
-      error: "该任务正在验收中，请等待当前验收动作结束后再试",
+      error: acceptingBusyText(taskId, "该任务正在验收中，请等待当前验收动作结束后再试"),
     };
   }
   let result: AcceptTaskResult;

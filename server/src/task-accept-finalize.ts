@@ -3,7 +3,7 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { disarmFreeReviewReservation } from "./free-review-reservations.js";
 import { stopPreviewAtAccept } from "./preview.js";
-import { commitAcceptanceStage } from "./review-acceptance.js";
+import { commitAcceptanceStage, CrewChanged } from "./review-acceptance.js";
 import type { ReviewAuthority } from "./review-ownership.js";
 import { bus } from "./bus.js";
 import { hasAcceptedTail } from "./task-accept-tail.js";
@@ -11,7 +11,7 @@ import { acceptSharedTeamWorkers, sharedWorkerAcceptanceMessage, type SharedWork
 import type { AcceptFailure } from "./task-accept-guard.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { publishTaskUpdated } from "./task-store.js";
-import { holdDrift } from "./team-acceptance-hold.js";
+import { holdDrift, holdScope } from "./team-acceptance-hold.js";
 import { now } from "./util.js";
 import type { AcceptGateSnapshot } from "./accept-gate.js";
 
@@ -45,7 +45,16 @@ export async function finalizeAcceptance(
     await appendTaskTimeline(task.id, error);
     return { failure: { accepted: false, httpStatus: 409, taskId: task.id, reason: "result_changed", error, status: task.status, phase: "before_accept", ...completed } };
   }
-  await commitAcceptanceStage(task.id, "accepted", basis ?? {}, authority);
+  // 落章以占住时那一批成员为条件（同一个事务里核）：加成员与验收互斥，正常走不到这里，这一道是兜底。
+  const crew = holdScope(task.id);
+  try {
+    await commitAcceptanceStage(task.id, "accepted", basis ?? {}, authority, crew.size ? crew : undefined);
+  } catch (error) {
+    if (!(error instanceof CrewChanged)) throw error;
+    const reason = `${completed.completedMerge ? "合并已完成，结果已保留。" : ""}验收途中团队加进了新的执行者，这一次没有验收：看过最新的再验收`;
+    await appendTaskTimeline(task.id, reason);
+    return { failure: { accepted: false, httpStatus: 409, taskId: task.id, reason: "result_changed", error: reason, status: task.status, phase: "before_accept", ...completed } };
+  }
   bus.publish({ type: "task.stage", taskId: task.id, stage: "accepted", updatedAt: now() });
   await appendTaskTimeline(task.id, "验收阶段更新：已验收（accepted）");
   bus.publish({ type: "task.acceptGate", taskId: task.id });

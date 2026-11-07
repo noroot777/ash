@@ -6,6 +6,7 @@ import type { TaskWaitOwnership } from "./db/schema-task-wait.js";
 import { assertReviewAuthority, finalizationAuthority, ReviewSuperseded, type ReviewAuthority } from "./review-ownership.js";
 import { id, now } from "./util.js";
 import type { AcceptTail } from "./task-accept-tail.js";
+import { isSharedTeamWorker } from "./task-result-version.js";
 
 /**
  * agent 自报（report_stage）的 merged / accepted 领的身份带这个前缀：那只是它说合了，之后用户真去验收合并的
@@ -13,11 +14,19 @@ import type { AcceptTail } from "./task-accept-tail.js";
  */
 export const REPORTED_ACCEPTANCE_PREFIX = "reported-";
 
+/** 团队验收落章时，共享执行者比占住那一刻多了（team-acceptance-hold.ts）：这一章不盖。 */
+export class CrewChanged extends Error {}
+
+/** crew = 团队验收占住的那一批（holdScope）：给了就在同一个事务里核，没有多出来的共享执行者才盖。 */
 export async function commitAcceptanceStage(taskId: string, stage: "merged" | "accepted",
-  patch: Partial<typeof tasks.$inferInsert> = {}, authority?: ReviewAuthority): Promise<void> {
+  patch: Partial<typeof tasks.$inferInsert> = {}, authority?: ReviewAuthority, crew?: ReadonlySet<string>): Promise<void> {
   await db.transaction(async (transaction) => {
     const task = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0];
     if (!task) throw new ReviewSuperseded();
+    if (crew) {
+      const workers = await transaction.select({ id: tasks.id, useWorktree: tasks.useWorktree }).from(tasks).where(eq(tasks.parentId, taskId));
+      if (workers.some((worker) => isSharedTeamWorker(worker) && !crew.has(worker.id))) throw new CrewChanged();
+    }
     let ownership: TaskWaitOwnership = { ...task.waitOwnership, acceptedFinalization: undefined };
     if (authority) await assertReviewAuthority(transaction, authority);
     if (authority?.finalization) {

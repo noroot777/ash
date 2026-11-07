@@ -38,7 +38,7 @@ import { cleanupAcceptedTask, cleanupPlanFor } from "./git-accept-cleanup.js";
 import { execFileText as exec } from "./exec.js";
 import { gitError } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
-import { beginAccepting, endAccepting } from "./acceptance-lock.js";
+import { acceptingBusyText, beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { holdTeamForAcceptance } from "./team-acceptance-hold.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -312,7 +312,7 @@ export async function commitPendingMerge(taskId: string): Promise<PendingMergeAc
   }
   // 与真正的验收（含尾段）互斥：那边正合并/正清理时，这边一句 commit 会落在半个世界上。
   if (!beginAccepting(taskId)) {
-    return { ok: false, httpStatus: 409, reason: "acceptance_in_progress", error: "该任务正在验收中，等它结束再试" };
+    return { ok: false, httpStatus: 409, reason: "acceptance_in_progress", error: acceptingBusyText(taskId, "该任务正在验收中，等它结束再试") };
   }
   let releaseHold = () => {};
   try {
@@ -380,7 +380,7 @@ export async function remergePendingMerge(
     return { ok: false, httpStatus: 409, reason: "not_pending", error: "这个任务没有等着收尾的「已合并但未提交」改动" };
   }
   if (!beginAccepting(taskId)) {
-    return { ok: false, httpStatus: 409, reason: "acceptance_in_progress", error: "该任务正在验收中，等它结束再试" };
+    return { ok: false, httpStatus: 409, reason: "acceptance_in_progress", error: acceptingBusyText(taskId, "该任务正在验收中，等它结束再试") };
   }
   let releaseHold = () => {};
   try {

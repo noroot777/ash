@@ -15,6 +15,7 @@ import { followUpsFor } from "./task-follow-up.js";
 import { cachedModelEfforts } from "./executors/model-probe.js";
 import { monitorBlockedReason } from "@ash/shared/monitor";
 import { claimOwnTurn, heldForAcceptance, releaseTurn, turnBusyText } from "./runs.js";
+import { TeamAcceptingError } from "./team-admission.js";
 import { advanceQueueInBackground } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./task-store.js";
@@ -383,9 +384,11 @@ api.post("/tasks", async (c) => {
             createdAt: ts,
           });
         }
-      : undefined);
+      : undefined, undefined, [b.reviewOf]);
   } catch (error) {
     if (error instanceof CliCommandValidationError) return c.json({ error: error.message }, 400);
+    // 上面那一句只是早点拒；真正关住窗口的是落库那一下（createTasks 占着「加成员」的位，team-admission.ts）。
+    if (error instanceof TeamAcceptingError) return c.json({ error: error.message, parentId: b.parentId ?? null, reviewOf: b.reviewOf ?? null }, 409);
     throw error;
   }
   if (b.appendToQueue) {

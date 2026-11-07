@@ -7,6 +7,7 @@ import { bus } from "./bus.js";
 import { runsTiming } from "./util.js";
 import { projectHealthLight } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
+import { admissionKeysOf, admitMembers, TeamAcceptingError } from "./team-admission.js";
 import { execFileText as exec } from "./exec.js";
 import { expandHome } from "./git.js";
 import { baseRef, initializeBranchPlan } from "./task-branch-plan.js";
@@ -279,6 +280,8 @@ export async function createTasks(
   rows: NewTaskRow[],
   afterInsert?: () => Promise<void>,
   beforeInsert?: () => Promise<void> | void,
+  /** 行上没记、但这次创建也挂靠着的任务（POST /tasks 的 reviewOf）：一起占「加成员」的位。 */
+  alsoAdmit: (string | null | undefined)[] = [],
 ): Promise<Task[]> {
   if (rows.length === 0) return [];
   for (const row of rows) {
@@ -319,8 +322,19 @@ export async function createTasks(
     };
   }));
   const repos = [...new Set(projectRows.map(p => p.repoPath))].sort();
+  // 挂在团队名下的（执行者、审查）：落库那一下占着「加成员」的位，跟团队验收互斥（team-admission.ts）。
+  const admission = await admissionKeysOf([...rows.flatMap((row) => [row.parentId, row.reviewOf]), ...alsoAdmit]);
   const insert = async (index: number): Promise<void> => {
     if (index < repos.length) return withRepoLock(repos[index], () => insert(index + 1));
+    const admitted = admitMembers(admission);
+    if (!admitted) throw new TeamAcceptingError();
+    try {
+      await insertAdmitted();
+    } finally {
+      admitted();
+    }
+  };
+  const insertAdmitted = async (): Promise<void> => {
     await beforeInsert?.();
     const pinned: typeof normalizedRows = [];
     try {

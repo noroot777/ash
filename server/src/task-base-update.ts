@@ -11,7 +11,7 @@ import { recordCompletedBaseUpdate } from "./task-base-record.js";
 import { parseBaseUpdateIntent } from "./task-base-intent.js";
 import { retainBaseUpdateBackups } from "./task-base-backups.js";
 import { withRepoLock } from "./repo-lock.js";
-import { beginAccepting, endAccepting } from "./acceptance-lock.js";
+import { acceptingBusyText, beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
 import { workspaceParticipants } from "./task-workspace.js";
 import { isTurnClaimed, claimWorkspaceTurn } from "./runs.js";
@@ -45,7 +45,7 @@ async function finishBaseUpdate(task: typeof tasks.$inferSelect, repo: string, h
 
 export async function updateTaskBase(taskId: string, expectedHead: string): Promise<{ ok: boolean; error?: string }> {
   assertNotPreviewInstance("更新子分支基线");
-  if (!beginAccepting(taskId)) return { ok: false, error: "任务正在验收或更新基线" };
+  if (!beginAccepting(taskId)) return { ok: false, error: acceptingBusyText(taskId, "任务正在验收或更新基线") };
   try {
     let task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     const project = task && (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
