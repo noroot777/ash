@@ -59,7 +59,10 @@ export function freeConclusionFreshness(
   if (!run || (run.status !== "passed" && run.status !== "stopped")) return null;
   const concluded = [...run.rounds].reverse().find((round) => round.conclusion);
   const anchored = concluded
-    ? reviewAnchorMatches(concluded, { head: workspaceHead, dirty: workspaceDirty, fingerprint: workspaceFingerprint })
+    ? reviewAnchorMatches(
+        { ...concluded, disputeResolution: concluded.dispute?.resolution },
+        { head: workspaceHead, dirty: workspaceDirty, fingerprint: workspaceFingerprint },
+      )
     : null;
   return anchored == null ? "unknown" : anchored ? "fresh" : "stale";
 }

@@ -5,7 +5,7 @@
 // 拒绝发起修复——锚点只比 HEAD + 干净，这条路每一次都走不通。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -77,6 +77,62 @@ try {
   const plain = join(root, "not-git");
   mkdirSync(plain);
   assert.deepEqual(await workspaceSnapshot(plain), { head: null, dirty: null, fingerprint: null }, "不是 git 目录一律未知");
+
+  // 保留 mtime 的等长原位改写：拿去授权的 verify 每次重读字节；显示用的缓存也靠 ctime 看得出来。
+  const kept = makeRepo("kept-mtime");
+  const keptFile = join(kept, "a.txt");
+  const pinned = new Date(2020, 0, 1);
+  writeFileSync(keptFile, "AAAA\n");
+  utimesSync(keptFile, pinned, pinned);
+  const keptBefore = await workspaceSnapshot(kept, { verify: true });
+  assert.equal((await workspaceSnapshot(kept)).fingerprint, keptBefore.fingerprint, "缓存与重读同一份内容结果一致");
+  writeFileSync(keptFile, "BBBB\n");
+  utimesSync(keptFile, pinned, pinned);
+  assert.notEqual((await workspaceSnapshot(kept, { verify: true })).fingerprint, keptBefore.fingerprint,
+    "大小、mtime、inode 都被保持住的改写，授权用的指纹也要变");
+  assert.notEqual((await workspaceSnapshot(kept)).fingerprint, keptBefore.fingerprint, "显示用的缓存靠 ctime 也要认出来");
+
+  // 子模块里未提交的改动再变：父仓那一行一直是「M module」，指纹必须跟着里面的内容走。
+  const subSource = makeRepo("sub-src");
+  const parent = makeRepo("with-sub");
+  git(parent, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSource, "module");
+  git(parent, "commit", "-qm", "add sub");
+  writeFileSync(join(parent, "module", "a.txt"), "dirty 1\n");
+  const subBefore = await workspaceSnapshot(parent, { verify: true });
+  assert.ok(subBefore.fingerprint, "子模块可读时有指纹");
+  writeFileSync(join(parent, "module", "a.txt"), "dirty 2\n");
+  assert.notEqual((await workspaceSnapshot(parent, { verify: true })).fingerprint, subBefore.fingerprint,
+    "子模块里继续改代码，指纹要变");
+
+  // 未跟踪的嵌套仓库同理；顺带带换行的文件名（--stdin-paths 切不开，单独算）也要按内容算。
+  const host = makeRepo("host");
+  const nested = makeRepo("host/nested");
+  writeFileSync(join(nested, "a.txt"), "nested 1\n");
+  writeFileSync(join(host, "odd\nname.txt"), "1\n");
+  const hostBefore = await workspaceSnapshot(host, { verify: true });
+  assert.ok(hostBefore.fingerprint);
+  writeFileSync(join(nested, "a.txt"), "nested 2\n");
+  const hostNested = await workspaceSnapshot(host, { verify: true });
+  assert.notEqual(hostNested.fingerprint, hostBefore.fingerprint, "嵌套仓库里的改动要算进去");
+  writeFileSync(join(host, "odd\nname.txt"), "2\n");
+  assert.notEqual((await workspaceSnapshot(host, { verify: true })).fingerprint, hostNested.fingerprint,
+    "带换行的文件名也按内容算，不按 stat");
+
+  // 读不到 ≠ 删掉了：权限挡住的文件让整份指纹变未知，不能生成一个能反复匹配的串。
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    const locked = makeRepo("locked");
+    mkdirSync(join(locked, "locked"));
+    writeFileSync(join(locked, "locked", "a.txt"), "x\n");
+    git(locked, "add", "-A");
+    chmodSync(join(locked, "locked"), 0o000);
+    try {
+      const blocked = await workspaceSnapshot(locked, { verify: true });
+      assert.equal(blocked.dirty, true, "git 仍看得见这处改动");
+      assert.equal(blocked.fingerprint, null, "读不到的文件不能被当成已删除");
+    } finally {
+      chmodSync(join(locked, "locked"), 0o755);
+    }
+  }
 
   // ── ② 部分驳回 → 维持意见 → 修复放行 ──
   const { ensureSchema, db } = await import("../src/db/index.js");

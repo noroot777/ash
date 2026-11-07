@@ -287,13 +287,19 @@ export const RECURS_SHAPE_ERROR = `recurs 要写成 ${RECURS_SHAPE_EXAMPLE}，�
  *   再只驳剩下的」，所以驳回时代码**必然**已经不同于审查那一版；用户维持意见后要修的是
  *   余下那几条，对应的正是驳回时的这一版。只认审查那一版的话，「部分驳回 → 维持意见」
  *   这条路每一次都会被判成过期（2026-11-07 EZk_VTsu4Lzb 实测）。
+ *   它只在驳回**还等着裁定或被维持**时算数：采纳执行者 / 转独立任务之后没有「接着修」这回事，
+ *   执行者驳回前改的那部分也没人审过，再认它就会把「这些改动还没审」的提醒吞掉。
  * 两个指纹都没有（老数据）才退回「HEAD 相同且工作区干净」；取不到就是 null（未知，不当新鲜）。
  */
 export function reviewAnchorMatches(
-  round: Pick<FreeReviewRound, "reviewedCommit" | "reviewedFingerprint" | "disputedFingerprint">,
+  round: Pick<FreeReviewRound, "reviewedCommit" | "reviewedFingerprint" | "disputedFingerprint"> & {
+    disputeResolution?: string | null;
+  },
   workspace: { head: string | null | undefined; dirty: boolean | null | undefined; fingerprint?: string | null },
 ): boolean | null {
-  const anchors = [round.reviewedFingerprint, round.disputedFingerprint].filter((value): value is string => !!value);
+  const disputeStands = round.disputeResolution == null || round.disputeResolution === "upheld";
+  const anchors = [round.reviewedFingerprint, disputeStands ? round.disputedFingerprint : null]
+    .filter((value): value is string => !!value);
   if (anchors.length) return workspace.fingerprint ? anchors.includes(workspace.fingerprint) : null;
   if (!round.reviewedCommit || !workspace.head || workspace.dirty == null) return null;
   return round.reviewedCommit === workspace.head && !workspace.dirty;

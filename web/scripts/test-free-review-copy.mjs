@@ -79,6 +79,19 @@ const partlyDisputed = {
 assert.equal(freeConclusionFreshness(partlyDisputed, "aaa", true, "v1:dispute"), "fresh", "驳回那一版仍对应这轮意见");
 assert.equal(freeConclusionFreshness(partlyDisputed, "aaa", true, "v1:review"), "fresh", "审查那一版同样认");
 assert.equal(freeConclusionFreshness(partlyDisputed, "aaa", true, "v1:later"), "stale", "驳回之后又改过就过期");
+// 采纳执行者 / 转独立任务之后不再「接着修」，驳回前改的那部分没人审过：只认审查那一版。
+for (const resolution of ["withdrawn", "deferred"]) {
+  const ruled = {
+    ...partlyDisputed,
+    rounds: [{ ...partlyDisputed.rounds[0], dispute: { resolution } }],
+  };
+  assert.equal(freeConclusionFreshness(ruled, "aaa", true, "v1:dispute"), "stale", `${resolution} 之后驳回那一版不再算审过`);
+  assert.equal(freeConclusionFreshness(ruled, "aaa", true, "v1:review"), "fresh", `${resolution} 之后审查那一版照旧`);
+}
+assert.equal(freeConclusionFreshness({
+  ...partlyDisputed,
+  rounds: [{ ...partlyDisputed.rounds[0], dispute: { resolution: "upheld" } }],
+}, "aaa", true, "v1:dispute"), "fresh", "维持意见后接着修的就是驳回那一版");
 
 // 叙事全部推导：修复中 = 任务在跑 + 未通过意见在身；自动复审 = 预约槽挂 runId。
 const stoppedState = {

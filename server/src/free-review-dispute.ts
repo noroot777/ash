@@ -319,7 +319,7 @@ async function disputeFreeReviewHeld(
   // 此刻的工作区必然已经不同于审查那一版。用户维持意见后，修复对应的就是这一版
   // （判据见 shared 的 `reviewAnchorMatches`）。取不到就留 null，退回只认审查那一版。
   const { workspaceStateOf } = await import("./free-workflow-state.js");
-  const disputedFingerprint = (await workspaceStateOf(task)).fingerprint;
+  const disputedFingerprint = (await workspaceStateOf(task, { verify: true })).fingerprint;
   const at = now();
   // CAS：只有把两段理由从空写成非空的那一次算数。并发重试（MCP 的重连重试、用户手点
   // 两下）到这里都只会落一条驳回，而不是后写的盖掉先写的。两列一起判——只判一列的话，

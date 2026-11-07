@@ -97,6 +97,8 @@ function parseExecutionDetail(detail: string | null): { status: FreeWorkflowExec
 // dirty 必须一起报：只比 HEAD 会把「审查后只改了工作区没提交」误判成新鲜（失败开放）。
 export async function workspaceStateOf(
   task: { id: string; projectId: string; useWorktree: boolean },
+  // 拿结果去授权（打锚点、放行修复）时传 verify，理由见 workspace-fingerprint.ts。
+  opts: { verify?: boolean } = {},
 ): Promise<WorkspaceSnapshot> {
   const missing = { head: null, dirty: null, fingerprint: null };
   const project = (await db.select({ repoPath: projects.repoPath }).from(projects)
@@ -104,7 +106,7 @@ export async function workspaceStateOf(
   if (!project?.repoPath) return missing;
   const path = task.useWorktree ? worktreePathFor(project.repoPath, task.id) : project.repoPath;
   if (task.useWorktree && !existsSync(path)) return missing;
-  return workspaceSnapshot(path);
+  return workspaceSnapshot(path, opts);
 }
 
 // 快照必须与版本**一致**：读取分好几批（task/state/runs/rounds/Git），读取期间修订号变了

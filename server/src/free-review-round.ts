@@ -310,7 +310,7 @@ export async function launchReviewRound(
   } else if (project) {
     const workspace = await taskWorkspace(task, project.repoPath).catch(() => null);
     workspacePath = workspace?.path;
-    const anchor = workspace ? await workspaceSnapshot(workspace.path) : null;
+    const anchor = workspace ? await workspaceSnapshot(workspace.path, { verify: true }) : null;
     if (anchor?.head) {
       await db.update(freeReviewRounds).set({ reviewedCommit: anchor.head, reviewedFingerprint: anchor.fingerprint })
         .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
