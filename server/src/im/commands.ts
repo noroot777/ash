@@ -24,6 +24,7 @@ import { createEnvelope, ENVELOPE_TTL_MS } from "./envelopes.js";
 import { renderCard, type CardModel } from "./feishu/cards.js";
 import { groupOf } from "./groups.js";
 import { readOptions } from "./meta.js";
+import { formAttachments } from "./new-form.js";
 import { cardHeaderOf, type Destination, type OutboxRow } from "./outbox.js";
 import type { Outcome } from "./actions.js";
 import { versionOf } from "./attention.js";
@@ -68,7 +69,7 @@ export const HELP = [
   "单聊里直接说话 = 跟 ash 助手聊（它能帮你查任务、建任务）。",
   "/todo —— 还有哪些事等你；积压的卡逐张推过来",
   "/tasks —— 看某个项目的任务：先选项目，点任务直接打开；/tasks 项目名 直接看",
-  "/new —— 弹出建任务卡片：选项目、写要做什么，提交就开跑（标题由智能体起）；/new 后面直接跟一段话会替你先填好",
+  "/new —— 弹出建任务卡片：选项目、写要做什么，提交就开跑（标题由智能体起）；/new 后面直接跟一段话会替你先填好；要带图片、文件就和 /new 一起发，或者回复那张卡发过来",
   "/stop —— 回复某张任务卡发送：停掉那个任务（会先让你确认）",
   "/retry —— 回复某张失败卡发送：重试",
   "/help —— 显示这段说明",
@@ -145,13 +146,14 @@ export class CommandRunner {
     this.deps.reconciler.kick();
   }
 
-  async run(ctx: InboundContext, name: string, rest: string): Promise<void> {
+  /** attachments：这条消息里带的、已经转存好的附件（只有 /new 用：挂到表单上）。 */
+  async run(ctx: InboundContext, name: string, rest: string, attachments: string[] = []): Promise<void> {
     switch (name) {
       case "help": return this.say(ctx, HELP, SYSTEM_SCOPE);
       case "todo": return this.todo(ctx);
       case "tasks":
       case "project": return this.tasks(ctx, rest);
-      case "new": return this.newForm(ctx, rest);
+      case "new": return this.newForm(ctx, rest, attachments);
       case "stop": {
         if (!ctx.card?.taskId) return this.say(ctx, "回复某张任务卡片再发 /stop，才知道要停哪个任务。", SYSTEM_SCOPE);
         const taskId = ctx.card.taskId;
@@ -243,9 +245,10 @@ export class CommandRunner {
 
   /**
    * /new 回一张建任务表单：单聊列出他能看的项目（不替他选，只有一个时才选好），群里只有群绑定的那一个。
-   * /new 后面那段话先填进表单；比输入框长就不放进框里，随信封带着、提交时一并带上。
+   * /new 后面那段话先填进表单；比输入框长就不放进框里，随信封带着、提交时一并带上。那条消息里带的附件同样随信封带着，
+   * 之后回复这张表单发来的也挂上去（new-form.ts）。
    */
-  private async newForm(ctx: InboundContext, rest: string): Promise<void> {
+  private async newForm(ctx: InboundContext, rest: string, attachments: string[]): Promise<void> {
     const inGroup = ctx.chatType !== "p2p";
     const fixed = inGroup ? (await groupOf(this.deps.appId, ctx.chatId))?.projectId ?? null : null;
     if (inGroup && !fixed) return this.say(ctx, NO_GROUP_PROJECT, SYSTEM_SCOPE);
@@ -259,22 +262,26 @@ export class CommandRunner {
       ? this.scoped(ctx, { kind: "project", projectId: shown[0]!.id })
       : this.scoped(ctx, { kind: "projects", projectIds: shown.map((project) => project.id) });
     return this.buttons(ctx, (envelope) => newTaskCard(shown.map((project) => project.name), inGroup ? 0 : list.length - shown.length, envelope,
-      { body: held ? "" : body, heldBody: held ? body.length : 0 }),
-    { command: "newform", projectIds: shown.map((project) => project.id), ...(held ? { body } : {}) }, scope, FORM_TTL_MS);
+      { body: held ? "" : body, heldBody: held ? body.length : 0, attachments: attachments.length }),
+    { command: "newform", projectIds: shown.map((project) => project.id), ...(held ? { body } : {}), ...(attachments.length ? { attachments } : {}) },
+    scope, FORM_TTL_MS);
   }
 
   /**
    * 建任务表单提交了：选的是信封里记着的第几个项目（建任务那一下接口按他的身份核还看不看得见）。
    * 首行当临时标题、首轮由智能体起正式标题，同网页上只写正文建任务；升级前发出的表单带着他填的标题，照用。
    */
-  submitted(principal: ImPrincipal, payload: Record<string, unknown>, form: { project: number; title: string; body: string }): Promise<Outcome> {
+  async submitted(
+    principal: ImPrincipal, envelopeId: string, payload: Record<string, unknown>, form: { project: number; title: string; body: string },
+  ): Promise<Outcome> {
     const ids = Array.isArray(payload.projectIds) ? payload.projectIds as unknown[] : [];
     const projectId = ids[form.project];
-    if (typeof projectId !== "string") return Promise.resolve({ ok: false, text: "认不出选的是哪个项目", final: false });
+    if (typeof projectId !== "string") return { ok: false, text: "认不出选的是哪个项目", final: false };
     const held = typeof payload.body === "string" ? payload.body : "";
     const title = form.title.slice(0, 120);
+    const attachments = await formAttachments(envelopeId);
     const body = (form.body || held || title).slice(0, 20_000);
-    return this.createAndRun(principal, projectId, title || provisionalTitle(body), body, !title);
+    return this.createAndRun(principal, projectId, title || provisionalTitle(body), body, !title, attachments);
   }
 
   /** 确认卡上点了「确定」（/stop；/new 早先也走确认卡，升级前发出的那几张照样认）。 */
@@ -290,8 +297,11 @@ export class CommandRunner {
   }
 
   /** 建任务并开跑（确认卡的「确定」、表单的提交）。 */
-  private async createAndRun(principal: ImPrincipal, projectId: string, title: string, body: unknown, autoTitle = false): Promise<Outcome> {
-    const created = await this.deps.ash.post<{ id: string }>(principal, "/api/tasks", { projectId, title, body, autoTitle });
+  private async createAndRun(
+    principal: ImPrincipal, projectId: string, title: string, body: unknown, autoTitle = false, attachments: string[] = [],
+  ): Promise<Outcome> {
+    const created = await this.deps.ash.post<{ id: string }>(principal, "/api/tasks",
+      { projectId, title, body, autoTitle, ...(attachments.length ? { attachments } : {}) });
     // 请求本身被拒（参数、权限）才放回信封让他再点；5xx、没调通的任务可能已经建出来了，再点一下就是第二个：
     // 按「办完了、结局不明」收起，跟 ash 重启打断确认卡同一个说法（actions.ts recoverOne）。
     if (!created.ok && failureOf(created) === "transient") {
@@ -304,7 +314,7 @@ export class CommandRunner {
     const link = taskLink(base, { task: { id: created.data.id, projectId } });
     return {
       ok: true, final: true, tone: run.ok ? "green" : "orange", link,
-      text: run.ok ? `已建任务「${title}」并开跑。` : `任务已建好，但没能开跑：${scrubText(run.error, 300)}`,
+      text: run.ok ? `已建任务「${title}」${attachments.length ? `（带 ${attachments.length} 个附件）` : ""}并开跑。` : `任务已建好，但没能开跑：${scrubText(run.error, 300)}`,
       ...(run.ok ? {} : { brief: "任务已建好，但没能开跑，原因见 ash。" }),
     };
   }

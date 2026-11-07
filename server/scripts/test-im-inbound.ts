@@ -12,7 +12,7 @@
 //    子任务、归档的不列；卡能反复点，库里那份跟着换；卡上「在这里建任务」换成表单，从此翻看按钮作废；
 //    双击「在这里建任务」、慢的那一下在表单交了之后才回来，不盖掉结果卡、不再配表单信封）；
 //    /new（表单卡：选项目、写要做什么，提交就建任务并开跑，首行当临时标题、首轮由智能体起标题；/new 后面那段话
-//    替他先填好，太长的随信封带着；什么都没写不建、表单还能再提交，提交过的不能再交；升级前发出的带标题的表单照用那个标题）/stop（先确认，取消就不停）/todo；
+//    替他先填好，太长的随信封带着；和 /new 一起发的图片、回复表单发来的图片文件挂到表单上，提交时随正文建进任务，交过的表单不再收；什么都没写不建、表单还能再提交，提交过的不能再交；升级前发出的带标题的表单照用那个标题）/stop（先确认，取消就不停）/todo；
 //    不认识的消息类型回一句说明；
 // ④ 助手房间：单聊里直接说话 → 照最近一间助手房间的配置建一间「飞书」，投进去；回复按 reply_to
 //    对上、发回飞书（回在用户那条消息下面）；同一条飞书消息重复推送只投一次；
@@ -360,6 +360,34 @@ try {
     assert.equal(formTask?.autoTitle, false);
     await waitIdle(() => statusOf(formTask!.id));
     assert.match((await im.click(OWNER, submit.value!, { project: "0", body: "再交一次" }, "submit")).toast?.content ?? "", /已经处理过了/, "提交过的表单不能再交");
+
+    // 附件：和 /new 一起发的（富文本里插的图）、回复表单发来的，都挂到表单上，提交时随正文建进任务。
+    const withShot = await im.say({ messageType: "post", content: { title: "", content: [[{ tag: "text", text: "/new 看截图里的报错" }, { tag: "img", image_key: "img_new" }]] } });
+    await im.settle();
+    const shotForm = contentOf(repliesTo(withShot)[0]!);
+    assert.match(textOf(shotForm), /已收下 1 个附件/);
+    assert.match(JSON.stringify(shotForm), /"default_value":"看截图里的报错"/, "/new 后面的字照样填进表单");
+    const shotCard = (await db.select().from(imOutbox).where(eq(imOutbox.id, `cf${withShot}`))).at(0)!;
+    const moreFile = await im.say({ messageType: "file", content: { file_key: "file_log", file_name: "err.log" }, parentId: shotCard.messageId! });
+    const wordsOnly = await im.say({ text: "顺便看看日志", parentId: shotCard.messageId! });
+    await im.settle();
+    assert.match(textOf(contentOf(repliesTo(moreFile)[0]!)), /收下 1 个附件（这张表单一共 2 个）/);
+    assert.equal((await inboundOf(moreFile)).kind, "form", "回复表单不进助手房间");
+    assert.match(textOf(contentOf(repliesTo(wordsOnly)[0]!)), /只收图片和文件/);
+    const submitShot = buttonsOf(shotForm).find((button) => button.value?.op === "submit")!;
+    const shotDone = await im.click(OWNER, submitShot.value!, { project: "0", body: "看截图里的报错" }, "submit");
+    assert.match(textOf(shotDone.card?.data), /带 2 个附件/, JSON.stringify(shotDone));
+    const shotTask = (await db.select().from(tasks).where(eq(tasks.title, "看截图里的报错"))).at(0)!;
+    const attached = JSON.parse((await inboundOf(withShot)).attachments!).concat(JSON.parse((await inboundOf(moreFile)).attachments!)) as string[];
+    assert.equal(attached.length, 2);
+    for (const path of attached) assert.ok(shotTask.body.includes(path), `任务正文带上了附件 ${path}`);
+    const bound = await db.select().from(uploadRows).where(eq(uploadRows.taskId, shotTask.id));
+    assert.equal(bound.length, 2, "附件归到这个任务名下");
+    await waitIdle(() => statusOf(shotTask.id));
+    const tooLate = await im.say({ messageType: "image", content: { image_key: "img_late" }, parentId: shotCard.messageId! });
+    await im.settle();
+    assert.match(textOf(contentOf(repliesTo(tooLate)[0]!)), /已经提交过/, "交过的表单不再收附件，照实说");
+    assert.equal(JSON.parse((await inboundOf(tooLate)).attachments ?? "[]").length, 0, "没白转存");
 
     const stopBare = await im.say({ text: "/stop" });
     const stopCard = await im.say({ text: "/stop", parentId: (await cardOf("tm"))?.messageId ?? (await db.select().from(imOutbox).where(eq(imOutbox.taskId, "tm"))).at(0)!.messageId! });

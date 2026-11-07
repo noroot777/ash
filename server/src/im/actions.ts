@@ -245,7 +245,7 @@ export class CardActions {
       // 填得不对不占用信封：卡上填的字还在，改了再提交。
       if (!Number.isInteger(form.project)) return toast("warning", "先选一个项目");
       if (!form.title && !form.body && typeof payload.body !== "string") return toast("warning", "写上要做什么");
-      return { run: () => this.deps.commands.submitted(principal, payload, form), taskId: null, link: null };
+      return { run: () => this.deps.commands.submitted(principal, envelope.id, payload, form), taskId: null, link: null };
     }
     if (op === "cancel") return { run: async () => ({ ok: true, text: "已取消。", final: true, tone: "grey" }), taskId: null, link: null };
     if (op !== "confirm") return toast("error", "认不出这个按钮");
