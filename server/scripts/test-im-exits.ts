@@ -7,7 +7,8 @@
 // ④ 改卡也过出口：排着的结果回写，项目改成只推标题 → 改上去的是短的那一版；收件人没资格了 → 改成
 //    中性的收起卡；这两种改卡在额度见底时照发，「没办成」的原因回复也照发；
 // ⑤ 结局一个事务：结局写到一半失败（改卡那一步被拦）→ 整笔没发生，信封还是「已占用、没结果」，
-//    重启后 recover() 接管、照实改卡；结果卡随回执带回、没等到「已送到」就退出 → 过期后照样改一次。
+//    重启后 recover() 接管、照实改卡；结果卡随回执带回、没等到「已送到」就退出 → 过期后照样改一次；
+//    送到了、带回去的就是库里那份 → 不另改；改卡改到一半结局落库、结果卡随回执送到 → 旧的改出去之后再改一次。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -210,6 +211,51 @@ try {
     assert.match(textOf(late[0]), /已答复/);
     assert.equal((await rowById(tkRow.id)).patchState, "done");
     await waitIdle(() => statusOf("tk"), "paused");
+
+    // 回执带回去的就是库里那份、而且送到了：记成 done，不另花一次改卡。
+    await db.insert(tasks).values(["tk2", "tk3"].map((id) => task({ id, title: `回执 ${id}`, status: "paused", question: "要吗？", questionOptions: JSON.stringify(["要"]) })) as never);
+    await im.reconciler.reconcile(["tk2", "tk3"]);
+    await im.settle();
+    const optOf = (row: { content: string }) => buttonsOf(JSON.parse(row.content)).find((button) => button.value?.op === "opt")!.value!;
+    const tk2 = (await rowsOf("tk2"))[0]!;
+    fake.reset();
+    const delivered = await im.click(OWNER, optOf(tk2));
+    await im.actions.acknowledged({ messageId: tk2.messageId!, envelopeId: optOf(tk2).e as string, card: delivered.card!.data, delivered: true });
+    assert.equal((await rowById(tk2.id)).patchState, "done", "送到了：记成 done");
+    await im.sender.drainNow();
+    assert.equal(patchesOf(tk2.messageId!).length, 0, "不另花一次改卡");
+
+    // 改卡改到一半，按钮落了结局、结果卡随回执送到了：刚改出去的那份旧的可能后到，照库里那份再改一次。
+    const tk3 = (await rowsOf("tk3"))[0]!;
+    let reached!: () => void;
+    const entered = new Promise<void>((resolve) => { reached = resolve; });
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    let holding = true;
+    const patchCard = im.api.patchCard.bind(im.api);
+    im.api.patchCard = async (messageId, card, purpose) => {
+      if (holding && messageId === tk3.messageId) { holding = false; reached(); await released; }
+      return patchCard(messageId, card, purpose);
+    };
+    try {
+      await db.update(imOutbox).set({ patchState: "pending", nextAt: null }).where(eq(imOutbox.id, tk3.id)); // 对账排了一次改原卡
+      fake.reset();
+      im.sender.kick();
+      await entered;
+      const answered = await im.click(OWNER, optOf(tk3));
+      await im.actions.acknowledged({ messageId: tk3.messageId!, envelopeId: optOf(tk3).e as string, card: answered.card!.data, delivered: true });
+      release();
+      await im.settle();
+    } finally {
+      delete (im.api as { patchCard?: unknown }).patchCard;
+    }
+    const faces = patchesOf(tk3.messageId!);
+    assert.equal(faces.length, 2, "旧的那份改出去之后再改一次");
+    assert.doesNotMatch(textOf(faces[0]), /已答复/);
+    assert.match(textOf(faces[1]), /已答复/, "最后落到卡上的是库里那份");
+    assert.equal((await rowById(tk3.id)).patchState, "done");
+    await waitIdle(() => statusOf("tk2"), "paused");
+    await waitIdle(() => statusOf("tk3"), "paused");
   }
 
   im.reconciler.stop();

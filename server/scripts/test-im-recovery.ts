@@ -10,7 +10,8 @@
 //    确认卡照实说不确定；收下没办的消息照原文重办；正要答复的那一步不重办、告诉用户不确定；
 //    太旧的不补办、让用户重发；同 subject 的回执只入队一次；
 // ⑤ 确认卡与决策卡同一条路：慢了先回「处理中」，办完补写结果；没办成把原卡改回去、卡下说原因；「处理中」卡
-//    没拼出来、要办的事当场抛错，结局照样落下。
+//    没拼出来、要办的事当场抛错，结局照样落下；回执送到时还在办 → 不另改；结果先改上、「处理中」随回执后到 →
+//    回执之后再改一次，最后落到卡上的是结局。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -263,6 +264,10 @@ try {
     assert.ok(Date.now() - started < 3_600, "慢了先回执，不等办完");
     assert.match(textOf(first.card?.data), /处理中/);
     fake.reset();
+    // 回执送到时那件事还在办：不动卡面，结局落库之后才改（那一次一定发在回执之后）。
+    await im.actions.acknowledged({ messageId: slow.row.messageId!, envelopeId: slow.value.e as string, card: first.card!.data, delivered: true });
+    await im.sender.drainNow();
+    assert.equal(sentTo(slow.row).length, 0, "还在办：回执之后不另改");
     await sleep(2_000);
     await im.settle();
     assert.equal(sentTo(slow.row).length, 1, "办完补写一次");
@@ -302,6 +307,33 @@ try {
     }
     assert.equal((await db.select().from(imActions).where(eq(imActions.id, flaky.value.e as string))).at(0)!.result, "已停止。", "结局落了");
     assert.match(textOf(JSON.parse(sentTo(flaky.row)[0]!.body.content)), /已停止/, "结果卡改上了");
+
+    // 审查复现：结局在拼「处理中」卡期间就落了库、结果改卡先发了出去，「处理中」随回执后到，卡永久停在「处理中」。
+    // 回执出去之后对一次：带回去的不是库里那份，再改一次，最后落到卡上的是结局。
+    im.commands.confirmed = async () => { await sleep(2_500); return outcome; };
+    const raced = await stopCard();
+    fake.reset();
+    let held = false;
+    exits.admission = async (row) => {
+      if (row.id === raced.row.id && !held) {
+        held = true;
+        for (const deadline = Date.now() + 5_000; !sentTo(raced.row).length && Date.now() < deadline;) await sleep(20);
+      }
+      return admission.call(exits, row);
+    };
+    try {
+      const answered = await im.click(OWNER, raced.value);
+      assert.match(textOf(answered.card?.data), /处理中/, "回执里带的还是「处理中」");
+      assert.equal(sentTo(raced.row).length, 1, "结果先改上了");
+      await im.actions.acknowledged({ messageId: raced.row.messageId!, envelopeId: raced.value.e as string, card: answered.card!.data, delivered: true });
+      await im.settle();
+    } finally {
+      exits.admission = admission;
+    }
+    const faces = sentTo(raced.row).map((call) => textOf(JSON.parse(call.body.content)));
+    assert.equal(faces.length, 2, "回执之后再改一次");
+    assert.match(faces[1]!, /已停止/, "最后落到卡上的是结局");
+    assert.equal((await db.select().from(imOutbox).where(eq(imOutbox.id, raced.row.id))).at(0)!.patchState, "done");
 
     // 要办的事当场就抛（不是返回一个被拒的 promise）：同样落成「没办成」、信封放回去，不卡在已占用。
     im.commands.confirmed = (() => { throw new Error("当场抛错"); }) as never;

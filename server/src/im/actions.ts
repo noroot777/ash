@@ -11,7 +11,11 @@
 // 一起提交，中间退出就整笔没发生、信封还是「已占用、没结果」，重启后 recover() 接管。结果卡随回执
 // 带回去的那一路先记 acking：回执在时限内发出才算送到（channel.ts），没确认的过期后照样改一次卡。
 // 回执里带回去的卡也过发件出口的同一个判据（exits.ts outward）。
-import { eq } from "drizzle-orm";
+//
+// 卡面有两条互不排序的写入路：回执里带回去的卡（结果卡、「处理中」、「已过时」三处）和发件队列的改卡，
+// 飞书上谁后到显示谁。约定：**库里那份是卡上最终该有的样子，最后落到卡上的必须是它**。回执一出去就按
+// 这一条对一次（acknowledged）；发件队列改出去的是旧的那份时自己再补一次（outbox.ts patchOne）。
+import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { imInbound, imOutbox } from "../db/schema-im.js";
 import type { ConclusionTransaction } from "../regression-conclusion-commit.js";
@@ -26,7 +30,7 @@ import { taskPath, type AshClient, type AshResult } from "./ash-client.js";
 import { CHANNEL } from "./binding.js";
 import { settledCard, taskLink } from "./cards.js";
 import {
-  auditDone, checkEnvelope, claimEnvelope, claimOf, finishEnvelope, releaseEnvelope, unauditedEnvelopes, unfinishedEnvelopes,
+  auditDone, checkEnvelope, claimEnvelope, claimOf, finishEnvelope, isConcluding, releaseEnvelope, unauditedEnvelopes, unfinishedEnvelopes,
   type Claim, type EnvelopeRow,
 } from "./envelopes.js";
 import { NEUTRAL_CONTENT } from "./exits.js";
@@ -153,6 +157,35 @@ export class CardActions {
       renderCard(settledCard(cardHeaderOf(row.content), "处理中…结果出来会更新在这张卡上。", { link: job.link }, "wathet")))
       .catch((error) => { console.warn("[ash] 飞书「处理中」卡没拼出来，只回一句提示:", (error as Error).message); return null; });
     return processing ? { toast: { type: "info", content: "处理中" }, card: { type: "raw", data: processing } } : toast("info", "处理中");
+  }
+
+  /**
+   * 回执（带着一张卡）发出去了，或者没发出去：让库里那份最后落到卡上（理由见文件头）。
+   *
+   *   · 这一下的事还在办（信封占着、还没结局）：不动。结局落库在这之后（和这里排在同一条链上），那时排的
+   *     改卡一定发在这次回执之后 —— 慢路径的「处理中」就靠这一条不被它盖掉；
+   *   · 否则看回执带回去的是不是库里那份：是、而且送到了，不用再改（acking 记成 done）；不是（结局在拼
+   *     「处理中」期间就落库、改卡先发了出去，审查实测停止办成了、卡却永久变回「处理中」；或者结果卡带回去
+   *     期间对账又重渲染了一版），或者没送到：排一次改卡（结果回写的用途，额度见底也照改）。
+   *
+   * 这一次改卡在回执发出之后才排，是从这一侧能给的最强的先后。飞书那边按收到的先后应用 —— P0 实测的是回调先回
+   * 「处理中」、6 秒后改卡，生效的是改卡；间隔短到几百毫秒时的先后没在真租户上测过。
+   */
+  async acknowledged(ack: { messageId: string; envelopeId: string | null; card: unknown; delivered: boolean }): Promise<void> {
+    const repatch = await this.deps.reconciler.run(async () => {
+      const row = (await db.select().from(imOutbox)
+        .where(and(eq(imOutbox.appId, this.deps.appId), eq(imOutbox.messageId, ack.messageId)))).at(0);
+      if (!row || row.msgType !== "interactive") return false;
+      if (ack.envelopeId && await isConcluding(ack.envelopeId)) return false;
+      if (ack.delivered && row.content === JSON.stringify(ack.card)) {
+        await db.update(imOutbox).set({ patchState: "done", nextAt: null, updatedAt: now() })
+          .where(and(eq(imOutbox.id, row.id), eq(imOutbox.patchState, "acking"), eq(imOutbox.content, row.content)));
+        return false;
+      }
+      await db.update(imOutbox).set({ patchState: "result", nextAt: null, updatedAt: now() }).where(eq(imOutbox.id, row.id));
+      return true;
+    });
+    if (repatch) this.deps.sender.kick();
   }
 
   /**

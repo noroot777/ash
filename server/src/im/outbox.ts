@@ -246,9 +246,15 @@ export class OutboxSender {
     const res = await this.api.patchCard(row.messageId!, card, purpose);
     const at = now();
     if (res.ok) {
-      // 改卡期间 content 又变了（又一次对账）：CAS 落空，保持待改，下一圈再改一次。
-      await db.update(imOutbox).set({ patchState: "done", attempts: 0, nextAt: null, lastError: null, updatedAt: at })
-        .where(and(eq(imOutbox.id, row.id), eq(imOutbox.content, snapshot)));
+      // 改卡期间 content 又变了（又一次对账、按钮落了结局）：CAS 落空，保持待改，下一圈再改一次。
+      const done = await db.update(imOutbox).set({ patchState: "done", attempts: 0, nextAt: null, lastError: null, updatedAt: at })
+        .where(and(eq(imOutbox.id, row.id), eq(imOutbox.content, snapshot))).returning({ id: imOutbox.id });
+      // 新的那份若是随回执带回去的（acking），或已经按回执送到记成了 done，它可能先于刚改出去的这份旧的落到卡上：
+      // 不改就停在旧的。照样排一次结果回写，让库里那份最后落下（actions.ts 文件头的约定）。
+      if (!done.length) {
+        await db.update(imOutbox).set({ patchState: "result", nextAt: null, updatedAt: at })
+          .where(and(eq(imOutbox.id, row.id), inArray(imOutbox.patchState, ["acking", "done"])));
+      }
       return;
     }
     const lastError = `${res.code} ${res.msg}`.slice(0, 500);

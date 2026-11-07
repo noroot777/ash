@@ -88,6 +88,13 @@ export async function claimEnvelope(envelopeId: string): Promise<Claim | null> {
   return rows.length ? { id: envelopeId, claimedBy: CLAIMER, usedAt } : null;
 }
 
+/** 这个信封的那一下还在办：占着、还没有结局（结局落库之前卡面以后来的那次改卡为准，见 actions.ts acknowledged）。 */
+export async function isConcluding(envelopeId: string): Promise<boolean> {
+  const row = (await db.select({ usedAt: imActions.usedAt, result: imActions.result }).from(imActions)
+    .where(eq(imActions.id, envelopeId))).at(0);
+  return !!row?.usedAt && row.result === null;
+}
+
 export const claimOf = (envelope: EnvelopeRow): Claim => ({ id: envelope.id, claimedBy: envelope.claimedBy, usedAt: envelope.usedAt ?? "" });
 
 const stillClaimed = (claim: Claim) => and(

@@ -13,13 +13,9 @@
 import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import type { FeishuConnection, ImConnectionState, ImHealthState, ImUsage } from "@ash/shared";
-import { and, eq } from "drizzle-orm";
 import { bus } from "../bus.js";
-import { db } from "../db/index.js";
-import { imOutbox } from "../db/schema-im.js";
 import { resolveAshDbFile } from "../db/path.js";
 import { IS_PREVIEW_INSTANCE } from "../preview-instance.js";
-import { now } from "../util.js";
 import { isMultiUser } from "../auth/mode.js";
 import { getUser } from "../auth/store.js";
 import type { AppFetch } from "../auth/im-actor.js";
@@ -193,8 +189,8 @@ function assemble(credentials: FeishuCredentials, fetch: AppFetch): Running {
   const ws = new FeishuWsClient({
     appId, appSecret: credentials.appSecret, domain: domainUrl(credentials.domain),
     onEvent: (envelope) => dispatch(envelope, inbound, actions),
-    onAcked: (envelope, result, elapsedMs) => acked(envelope, result, elapsedMs <= ACK_WINDOW_MS, appId, reconciler, sender),
-    onAckLost: (envelope, result) => acked(envelope, result, false, appId, reconciler, sender),
+    onAcked: (envelope, result, elapsedMs) => acked(envelope, result, elapsedMs <= ACK_WINDOW_MS, actions),
+    onAckLost: (envelope, result) => acked(envelope, result, false, actions),
     onStatus: (status) => { if (status.state === "connected" && runtime) void announce(runtime); },
   });
   const unsubscribe = bus.subscribe((ev) => {
@@ -242,19 +238,18 @@ async function dispatch(envelope: FeishuEnvelope, inbound: InboundRouter, action
 const ACK_WINDOW_MS = 2_700;
 
 /**
- * 卡片回调的结果卡随回执带回去了（actions.ts 先记成 acking）。在时限内发出 → done；没发出去（处理
- * 期间连接断了）或者超时 → result，改走一次改卡补上。进程死在这之前就都没来得及：acking 的期限一过，
- * 发件队列照样会去改（outbox.ts nextPatch）。
+ * 卡片回调的回执里带着一张卡：在时限内发出算送到，没发出去（处理期间连接断了）或者超时算没送到，交给
+ * actions.ts acknowledged 让库里那份最后落到卡上。进程死在这之前就都没来得及：acking 的期限一过，发件队列
+ * 照样会去改（outbox.ts nextPatch）；还没结局的那一下重启后由 recover() 接管、改卡。
  */
-function acked(envelope: FeishuEnvelope, result: unknown, delivered: boolean, appId: string, reconciler: Reconciler, sender: OutboxSender): void {
+function acked(envelope: FeishuEnvelope, result: unknown, delivered: boolean, actions: CardActions): void {
   if (envelope.eventType !== "card.action.trigger" || !(result && typeof result === "object" && "card" in result)) return;
   const messageId = (envelope.event as { context?: { open_message_id?: unknown } }).context?.open_message_id;
   if (typeof messageId !== "string" || !messageId) return;
-  void reconciler.run(async () => {
-    await db.update(imOutbox).set({ patchState: delivered ? "done" : "result", nextAt: null, updatedAt: now() }).where(and(
-      eq(imOutbox.appId, appId), eq(imOutbox.messageId, messageId), eq(imOutbox.patchState, "acking"),
-    ));
-  }).then(() => { if (!delivered) sender.kick(); }).catch((error) => console.error("[ash] 飞书回执确认出错:", error));
+  const card = (result as { card?: { data?: unknown } }).card?.data;
+  const envelopeId = callbackOf(envelope)?.value.e;
+  void actions.acknowledged({ messageId, envelopeId: typeof envelopeId === "string" ? envelopeId : null, card, delivered })
+    .catch((error) => console.error("[ash] 飞书回执确认出错:", error));
 }
 
 export function callbackOf(envelope: FeishuEnvelope): CallbackEvent | null {
