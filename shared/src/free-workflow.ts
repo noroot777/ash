@@ -290,7 +290,11 @@ export const RECURS_SHAPE_ERROR = `recurs 要写成 ${RECURS_SHAPE_EXAMPLE}，�
  *   它只在驳回**还等着裁定或被维持**时算数：采纳执行者 / 转独立任务之后没有「接着修」这回事，
  *   执行者驳回前改的那部分也没人审过，再认它就会把「这些改动还没审」的提醒吞掉。
  * 两个指纹都没有（老数据）才退回「HEAD 相同且工作区干净」；取不到就是 null（未知，不当新鲜）。
+ * 新审查**采集失败**记成 `UNKNOWN_FINGERPRINT` 而不是 null：两者同形的话，「这一轮证明不了内容」
+ * 会被当成老数据退回只比 HEAD，未知就变成了放行。
  */
+export const UNKNOWN_FINGERPRINT = "unknown";
+
 export function reviewAnchorMatches(
   round: Pick<FreeReviewRound, "reviewedCommit" | "reviewedFingerprint" | "disputedFingerprint"> & {
     disputeResolution?: string | null;
@@ -300,7 +304,12 @@ export function reviewAnchorMatches(
   const disputeStands = round.disputeResolution == null || round.disputeResolution === "upheld";
   const anchors = [round.reviewedFingerprint, disputeStands ? round.disputedFingerprint : null]
     .filter((value): value is string => !!value);
-  if (anchors.length) return workspace.fingerprint ? anchors.includes(workspace.fingerprint) : null;
+  if (anchors.length) {
+    const provable = anchors.filter((value) => value !== UNKNOWN_FINGERPRINT);
+    if (!workspace.fingerprint) return null;
+    if (provable.includes(workspace.fingerprint)) return true;
+    return provable.length ? false : null;
+  }
   if (!round.reviewedCommit || !workspace.head || workspace.dirty == null) return null;
   return round.reviewedCommit === workspace.head && !workspace.dirty;
 }
@@ -457,7 +466,7 @@ export interface FreeReviewRound {
   conclusion: "verified" | "verify_failed" | null;
   /** 本轮启动时任务工作区的 HEAD。null = 未能取到（老数据/工作区缺失）。 */
   reviewedCommit: string | null;
-  /** 本轮启动时工作区的内容指纹（HEAD + 未提交改动的内容，见 server/workspace-fingerprint.ts）。省略/null = 老数据。 */
+  /** 本轮启动时工作区的内容指纹（HEAD + 未提交改动的内容，见 server/workspace-fingerprint.ts）。省略/null = 老数据；`UNKNOWN_FINGERPRINT` = 采集失败。 */
   reviewedFingerprint?: string | null;
   /** 执行者驳回这一轮那一刻的内容指纹：部分成立时它先改掉了认下的那几条，余下的意见对应的是这一版。 */
   disputedFingerprint?: string | null;

@@ -160,7 +160,8 @@ export const freeReviewRounds = sqliteTable(
     // 本轮启动时任务工作区的 HEAD。结论新不新鲜靠锚点跟当前工作区比，不靠状态字段
     // （判据见 shared 的 `reviewAnchorMatches`）。
     reviewedCommit: text("reviewed_commit"),
-    // 本轮启动时工作区的内容指纹（含未提交改动，workspace-fingerprint.ts）；null = 老数据，退回只比 HEAD。
+    // 本轮启动时工作区的内容指纹（含未提交改动，workspace-fingerprint.ts）；null = 老数据，退回只比 HEAD；
+    // `UNKNOWN_FINGERPRINT` = 这一轮采集失败，永远判未知（不许冒充老数据退回 HEAD）。
     reviewedFingerprint: text("reviewed_fingerprint"),
     // 执行者驳回这一轮那一刻的内容指纹：维持意见后修复对应的是这一版（理由同上）。
     disputedFingerprint: text("disputed_fingerprint"),

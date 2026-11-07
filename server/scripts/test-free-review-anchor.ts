@@ -247,6 +247,30 @@ try {
   occupy("a-legacy");
   await db.update(freeReviewRounds).set({ reviewedFingerprint: null }).where(eq(freeReviewRounds.id, legacy.roundId));
   await assert.rejects(() => startManualFreeReviewRepair("a-legacy"), /代码已变化/, "没有内容锚点的老数据照旧口径");
+
+  // 新审查采集失败（锚点记成 UNKNOWN_FINGERPRINT）：哪怕 HEAD 相同、工作区干净，也不能冒充老数据放行。
+  const { reviewAnchorMatches, UNKNOWN_FINGERPRINT } = await import("@ash/shared/free-workflow");
+  const unknown = await seedDirtyReview("a-unknown");
+  occupy("a-unknown");
+  git(unknown.repo, "checkout", "--", "a.txt");
+  await db.update(freeReviewRounds).set({ reviewedFingerprint: UNKNOWN_FINGERPRINT })
+    .where(eq(freeReviewRounds.id, unknown.roundId));
+  await assert.rejects(() => startManualFreeReviewRepair("a-unknown"), /无法确认/,
+    "审查时证明不了内容，之后也证明不了意见还对得上");
+  // 审查者现场：子模块丢了仓库标记时打锚点，之后改了里面的代码——共用判据必须给未知，不是 true。
+  const lostSource = makeRepo("lost-src");
+  const lost = makeRepo("lost-parent");
+  git(lost, "-c", "protocol.file.allow=always", "submodule", "add", "-q", lostSource, "module");
+  git(lost, "commit", "-qm", "add sub");
+  rmSync(join(lost, "module", ".git"));
+  const reviewedAt = await workspaceSnapshot(lost, { verify: true });
+  assert.equal(reviewedAt.fingerprint, null);
+  writeFileSync(join(lost, "module", "a.txt"), "changed later\n");
+  const now = await workspaceSnapshot(lost, { verify: true });
+  assert.equal(reviewAnchorMatches({
+    reviewedCommit: reviewedAt.head, reviewedFingerprint: reviewedAt.fingerprint ?? UNKNOWN_FINGERPRINT,
+    disputedFingerprint: null,
+  }, now), null, "采集失败的新审查永远判未知");
 } catch (error) {
   failure = error;
 } finally {

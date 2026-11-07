@@ -102,7 +102,7 @@ async function manualRepairSubject(taskId: string, target: RepairTarget | null):
   // 锚点认两个（审查那一版 / 执行者驳回那一版），判据与前端新鲜度共用 `reviewAnchorMatches`。
   if (!round.reviewedCommit && !round.reviewedFingerprint) return "这轮审查缺少基准 commit，无法确认意见仍对应当前代码";
   const anchored = reviewAnchorMatches(round, await workspaceStateOf(task, { verify: true }));
-  if (anchored == null) return "工作区不可读，无法确认审查意见仍对应当前代码";
+  if (anchored == null) return "工作区内容读不到（或审查时就没能记下内容），无法确认审查意见仍对应当前代码";
   if (!anchored) return STALE_SUBJECT;
   return subject;
 }

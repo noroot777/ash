@@ -92,6 +92,18 @@ assert.equal(freeConclusionFreshness({
   ...partlyDisputed,
   rounds: [{ ...partlyDisputed.rounds[0], dispute: { resolution: "upheld" } }],
 }, "aaa", true, "v1:dispute"), "fresh", "维持意见后接着修的就是驳回那一版");
+// 新审查采集失败记成 "unknown"：不能当老数据退回「HEAD 相同且干净」。
+const unknownAnchor = {
+  ...run,
+  status: "stopped",
+  rounds: [{ round: 1, status: "failed", conclusion: "verify_failed", reviewedCommit: "aaa", reviewedFingerprint: "unknown" }],
+};
+assert.equal(freeConclusionFreshness(unknownAnchor, "aaa", false, null), "unknown", "采集失败 + 干净工作区仍是未知");
+assert.equal(freeConclusionFreshness(unknownAnchor, "aaa", false, "v1:x"), "unknown", "能算出当前指纹也比不了");
+assert.equal(freeConclusionFreshness({
+  ...unknownAnchor,
+  rounds: [{ ...unknownAnchor.rounds[0], disputedFingerprint: "v1:dispute" }],
+}, "aaa", true, "v1:other"), "stale", "驳回那一版可证明时，对不上就是过期");
 
 // 叙事全部推导：修复中 = 任务在跑 + 未通过意见在身；自动复审 = 预约槽挂 runId。
 const stoppedState = {

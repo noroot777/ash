@@ -35,6 +35,7 @@ import { taskWorkspace } from "./task-workspace.js";
 import { turnProducedWork } from "./transcript.js";
 import { id, now } from "./util.js";
 import { workspaceSnapshot } from "./workspace-fingerprint.js";
+import { UNKNOWN_FINGERPRINT } from "@ash/shared/free-workflow";
 
 type TaskRow = typeof tasks.$inferSelect;
 export type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
@@ -312,7 +313,7 @@ export async function launchReviewRound(
     workspacePath = workspace?.path;
     const anchor = workspace ? await workspaceSnapshot(workspace.path, { verify: true }) : null;
     if (anchor?.head) {
-      await db.update(freeReviewRounds).set({ reviewedCommit: anchor.head, reviewedFingerprint: anchor.fingerprint })
+      await db.update(freeReviewRounds).set({ reviewedCommit: anchor.head, reviewedFingerprint: anchor.fingerprint ?? UNKNOWN_FINGERPRINT })
         .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
     }
   }
