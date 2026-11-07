@@ -1,7 +1,7 @@
 import { recordBranchReceipt } from "./task-branch-receipts.js";
 import type { TaskStage } from "@ash/shared";
 import { isTaskStage, STAGE_LABELS, STAGE_ORDER } from "@ash/shared";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -92,12 +92,18 @@ export async function reportTaskStage(taskId: string, stage: TaskStage, opts: {
  * 不止一道「等我点头」时，前面那几道点完只是放行，任务得从「待验收」回到进行中，不然
  * 它会一直挂着一句「待验收」而线其实已经往下走了）。广播一步都不能省，否则列表分组
  * 要等下次全量拉取才动。
+ *
+ * onlyIf：只在这一行此刻还满足它时才清（放行按「还是核过的那一道关」写，task-human-gate.ts sameGate）。
+ * 返回 false = 条件落空，什么都没动。
  */
-export async function clearTaskStage(taskId: string, note: string): Promise<void> {
+export async function clearTaskStage(taskId: string, note: string, onlyIf?: SQL): Promise<boolean> {
   const updatedAt = now();
-  await db.update(tasks).set({ stage: null, updatedAt }).where(eq(tasks.id, taskId));
+  const cleared = await db.update(tasks).set({ stage: null, updatedAt })
+    .where(onlyIf ? and(eq(tasks.id, taskId), onlyIf) : eq(tasks.id, taskId)).returning({ id: tasks.id });
+  if (!cleared.length) return false;
   bus.publish({ type: "task.stage", taskId, stage: null, updatedAt });
   await appendTaskTimeline(taskId, note);
+  return true;
 }
 
 // 已翻篇的任务又被唤醒 —— 用户发来真人消息、或调度者接着派活 —— 就把 stage 清回

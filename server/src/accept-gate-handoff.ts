@@ -30,7 +30,9 @@ type GateRow = typeof acceptGateRuns.$inferSelect;
 export type AcceptGateChoices = { by: AcceptBy; commit?: boolean; confirmUnverified?: boolean;
   reviewAuthority?: import("./review-ownership.js").ReviewAuthority;
   /** 他点的是哪一版成果（task-result-version.ts）：门禁跑着时任务又跑完一轮，绿了也不替他验后来那一版。 */
-  expectedResultVersion?: string };
+  expectedResultVersion?: string;
+  /** 他点的是哪一道「等我点头」（task-human-gate.ts）：门禁跑着时线换了一道关，绿了也不替他验。 */
+  expectedHumanGate?: string };
 
 /**
  * 当初那一下验收的选择。没记（老数据）按「人点的、什么都没另选」；记了却读不出来（坏了）返回 null ——
@@ -42,7 +44,8 @@ export function parseChoices(raw: string | null): AcceptGateChoices | null {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   return { by: parsed.by === "workflow" ? "workflow" : "human", commit: parsed.commit,
     confirmUnverified: parsed.confirmUnverified, reviewAuthority: parsed.reviewAuthority,
-    ...(typeof parsed.expectedResultVersion === "string" ? { expectedResultVersion: parsed.expectedResultVersion } : {}) };
+    ...(typeof parsed.expectedResultVersion === "string" ? { expectedResultVersion: parsed.expectedResultVersion } : {}),
+    ...(typeof parsed.expectedHumanGate === "string" ? { expectedHumanGate: parsed.expectedHumanGate } : {}) };
 }
 
 /**

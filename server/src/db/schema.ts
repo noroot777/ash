@@ -235,6 +235,8 @@ export const tasks = sqliteTable("tasks", {
   duetGateVersion: integer("duet_gate_version"),
   /** 上面那扇门开门时摆给人看的方案(JSON,duet/gate-version.ts 的 GateShown),和版本号同一条语句写。 */
   duetGateShown: text("duet_gate_shown"),
+  /** 这条线最近一次走到「等我点头」时领的关口身份，和游标同一条语句写，理由见 task-human-gate.ts。空 = 加列之后没走到过关口。 */
+  humanGateId: text("human_gate_id"),
   baseUpdateIntent: text("base_update_intent"),
   originTaskId: text("origin_task_id"), // 回链来源任务(null = 直接创建)
   creationOrigin: text("creation_origin"),

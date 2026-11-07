@@ -25,7 +25,9 @@ export function mountTaskAcceptanceRoutes(api: Hono): void {
     return c.json({ verification: await unexecutedVerification(task) });
   });
   api.post("/tasks/:id/accept", async (c) => {
-    const input = await c.req.json<{ confirmUnverified?: unknown; commit?: unknown; gate?: unknown; expectedResultVersion?: unknown }>().catch(() => null);
+    const input = await c.req.json<{
+      confirmUnverified?: unknown; commit?: unknown; gate?: unknown; expectedResultVersion?: unknown; expectedHumanGate?: unknown;
+    }>().catch(() => null);
     // commit 只认真正的布尔：别的一律当「没传」= 跟项目设置走。含糊的真值转换在这儿
     // 就是替用户决定要不要在他的目标分支上产生提交。
     const commit = typeof input?.commit === "boolean" ? input.commit : undefined;
@@ -34,8 +36,10 @@ export function mountTaskAcceptanceRoutes(api: Hono): void {
     const gate = input?.gate === "skip" || input?.gate === "rerun" ? input.gate : undefined;
     // 调用方看到的那一版（飞书卡片的代次，task-result-version.ts）；不是字符串一律当没传。
     const expectedResultVersion = typeof input?.expectedResultVersion === "string" ? input.expectedResultVersion : undefined;
+    // 调用方看到的那一道「等我点头」（同上，task-human-gate.ts）。
+    const expectedHumanGate = typeof input?.expectedHumanGate === "string" ? input.expectedHumanGate : undefined;
     const result = await acceptTask(c.req.param("id"), "human", {
-      confirmUnverified: input?.confirmUnverified === true, commit, acceptGate: gate, expectedResultVersion,
+      confirmUnverified: input?.confirmUnverified === true, commit, acceptGate: gate, expectedResultVersion, expectedHumanGate,
     });
     if (result.accepted) return c.json(result);
     const { httpStatus, ...body } = result;

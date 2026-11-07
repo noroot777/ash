@@ -1,4 +1,4 @@
-// 「验收合并了」「门禁出结果了」这两类通知的生产判据（设置页「完成也推」的承诺）。
+// 「验收了」「门禁出结果了」这两类通知的生产判据（设置页「完成也推」的承诺）。
 //
 // 不看决策卡：飞书上点验收成功时，那张待验收卡先被按钮的结果收起（actions.ts），对账再来时卡已经
 // 不在打开状态，以卡为判据就一条也发不出（审查实测）；门禁的结果更可能根本没有对应的卡。所以每个
@@ -22,6 +22,7 @@ import { tasks } from "../db/schema.js";
 import type { ConclusionTransaction } from "../regression-conclusion-commit.js";
 import { now } from "../util.js";
 import type { TaskView } from "./attention.js";
+import { acceptedLabel } from "./cards.js";
 import { scrubTitle } from "./scrub.js";
 
 type OutcomeKind = "result" | "gate";
@@ -47,7 +48,7 @@ export async function outcomesOf(view: TaskView): Promise<Outcome[]> {
     .orderBy(desc(acceptGateRuns.startedAt)).limit(1)).at(0);
   // 牌子和身份同一条语句现读，不拿视图快照里的 stage 配后读的身份：两次读之间摘了牌，配出来的是一个谁都不是的身份。
   const accepted = isAcceptedStage(task.stage)
-    ? (await db.select({ stage: tasks.stage, identity: acceptanceIdentity }).from(tasks).where(eq(tasks.id, task.id))).at(0)
+    ? (await db.select({ stage: tasks.stage, identity: acceptanceIdentity, method: tasks.acceptedMergeMethod }).from(tasks).where(eq(tasks.id, task.id))).at(0)
     : undefined;
   // 门禁在前：绿了紧接着自动合并时，两条按事情发生的先后发。
   return [
@@ -55,7 +56,8 @@ export async function outcomesOf(view: TaskView): Promise<Outcome[]> {
       ? { kind: "gate", value: `${run.id}:${run.status}`,
         text: run.status === "passed" ? `验收前置命令通过了：${title}` : `验收前置命令没通过：${title}，详情回 ash 看。` }
       : { kind: "gate", value: NONE, text: null },
-    ...(accepted && isAcceptedStage(accepted.stage as TaskStage | null) ? [{ kind: "result" as const, text: `已验收合并：${title}`, value: accepted.identity }] : []),
+    ...(accepted && isAcceptedStage(accepted.stage as TaskStage | null)
+      ? [{ kind: "result" as const, text: `${acceptedLabel(accepted.method)}：${title}`, value: accepted.identity }] : []),
   ];
 }
 

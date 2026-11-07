@@ -71,7 +71,7 @@ export async function followUpGate(row: GateRow, view: AcceptGateView, resumeNot
 /**
  * 绿了：把用户那一下点的验收接着做完。
  *
- * 必须带上当初的选择（commit / confirmUnverified / 他点的是哪一版）——他在确认框里选的是什么，
+ * 必须带上当初的选择（commit / confirmUnverified / 他点的是哪一版、哪一道关）——他在确认框里选的是什么，
  * 这一次就该发生什么；也必须带上 `passedRunId`，否则非 git 项目定不出 HEAD，会再触发一次门禁。
  */
 async function continueAcceptance(row: GateRow): Promise<void> {
@@ -89,6 +89,7 @@ async function continueAcceptance(row: GateRow): Promise<void> {
     acceptGatePassedRunId: row.id,
     reviewAuthority: choices.reviewAuthority,
     expectedResultVersion: choices.expectedResultVersion,
+    expectedHumanGate: choices.expectedHumanGate,
   }).catch(async (error) => {
     // 门禁跑着的时候任务换了方向：acceptTask 按当初那份审查权限拒绝，用的是抛而不是返回。
     // 它是结果不是故障 —— 下次启动再续一次只会再被拒一次，「这一步还欠着」也不属实。

@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
-import { acceptPlan, hasAcceptStation, isFinalHumanGate, nextAnchor } from "@ash/shared/workflow-policy";
+import { acceptPlan, hasAcceptStation, isFinalHumanGate } from "@ash/shared/workflow-policy";
 import type { AcceptBy } from "@ash/shared/workflow-policy";
-import { ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY_LABELS, STEP_LABELS } from "@ash/shared/workflow";
+import { ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY_LABELS } from "@ash/shared/workflow";
 import { STAGE_LABELS } from "@ash/shared";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -13,12 +13,10 @@ import { cleanupAcceptedTask, cleanupPlanFor } from "./git-accept-cleanup.js";
 import { disarmFreeReviewReservation } from "./free-review-reservations.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { taskWorkflowDef } from "./workflows.js";
-import { publishTaskUpdated } from "./task-store.js";
 import { stopPreviewForWorktreeCleanup } from "./preview.js";
 import { finalizeAcceptance } from "./task-accept-finalize.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
-import { clearTaskStage } from "./task-stage.js";
 import { finishAcceptedTail, type AcceptTail } from "./task-accept-tail.js";
 import { commitAcceptanceStage, reviewAcceptanceAuthority } from "./review-acceptance.js";
 import { acceptSharedTeamWorkers, sharedWorkerAcceptanceMessage } from "./task-accept-shared-workers.js";
@@ -40,7 +38,7 @@ import { gateMergeSource } from "./accept-gate-state.js";
 import { acceptGateCheck, type AcceptGateIntent, type AcceptGateSnapshot } from "./accept-gate.js";
 import { discardPendingAcceptanceGate, finishAcceptanceGate } from "./task-accept-gate-launch.js";
 import { acceptanceContext } from "./task-accept-context.js";
-import { resultVersionOf } from "./task-result-version.js";
+import { releaseHumanGate, staleAcceptance, type AcceptExpectation } from "./task-human-gate.js";
 import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
 import type { AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
 
@@ -116,7 +114,7 @@ async function acceptTaskUnlocked(
   gateIntent?: AcceptGateIntent,
   gatePassedRunId?: string,
   reviewAuthority?: ReviewAuthority,
-  expectedResultVersion?: string,
+  expected: AcceptExpectation = {},
   onAutoCommit?: (outcome: AcceptanceAutoCommitOutcome) => void,
 ): Promise<AcceptTaskResult> {
   const preflight = await acceptancePreflight(taskId);
@@ -124,15 +122,10 @@ async function acceptTaskUnlocked(
 
   const initial = await acceptanceGuard(taskId, "initial");
   if (initial.failure) return initial.failure;
-  // 调用方点的是它看到的那一版（飞书卡片）：已经不是那一版就不验收。核在验收互斥里 —— 占着它，任务
-  // 起不了新的一轮（task-result-version.ts）；门禁之后自动续的那一次带着同一个值再核一遍。
-  if (expectedResultVersion !== undefined && await resultVersionOf(initial.task!) !== expectedResultVersion) {
-    await appendTaskTimeline(taskId, "验收没有执行：点验收时看到的那一版之后，任务又跑出了新的结果。看过最新的再验收。");
-    return {
-      accepted: false, httpStatus: 409, taskId, reason: "result_changed", phase: "initial", status: initial.task!.status,
-      error: "要验收的那一版之后任务又跑出了新结果，这一次没有验收：请看过最新的再验收",
-    };
-  }
+  // 调用方点的是它看到的那一版、那一道关（飞书卡片）：已经不是就不验收。核在验收互斥里 —— 占着它，任务
+  // 起不了新的一轮（task-result-version.ts）；门禁之后自动续的那一次带着同样的值再核一遍。
+  const stale = await staleAcceptance(initial.task!, expected);
+  if (stale) return stale;
   // `let`:验收目标一旦冻结(mergePreflight / 合并段那一处领取),后面每一步都得拿**带着冻结值**
   // 的这一份往下走,见 task-accept-merge-preflight.ts 的 claimAcceptTarget。
   let task = initial.task!;
@@ -162,22 +155,11 @@ async function acceptTaskUnlocked(
   // 「这份产物我认了，去合吧」—— 后面还画着别的站呢（最常见的就是关口画在「自动验证」
   // 前面），顺手把不可逆的合并做掉，等于拿用户没表达过的意思替他做主，还把他亲手画的
   // 那一站整站跳过。所以这一档不合、不清、也不落 accepted，只把阶段清回进行中，让这条
-  // 线接着往下走（往下走那一步在锁外跑，见 acceptTask）。
+  // 线接着往下走（往下走那一步在锁外跑，见 acceptTask）。放行按「还是核过的那一道关」写，见 task-human-gate.ts。
   // 判定单点在 shared 的 isFinalHumanGate；前端确认框读同一个判定，措辞跟着变。
   const gateDef = taskWorkflowDef(task.workflow);
   const verification = await unexecutedVerification(task);
-  if (!isFinalHumanGate(gateDef, task.workflowAt)) {
-    const guard = await acceptanceGuard(taskId, "before_accept");
-    if (guard.failure) return guard.failure;
-    const next = nextAnchor(gateDef, task.workflowAt);
-    const where = next ? `后面还写着「${STEP_LABELS[next.kind]}」` : "这条线上后面还写着别的站";
-    await clearTaskStage(
-      taskId,
-      `你在这一道「等我点头」放行了：${where}，所以没有合并、也没有清理，接着往下走。`,
-    );
-    await publishTaskUpdated(taskId);
-    return { accepted: true, taskId, status: task.status, stage: null, kind: "gate_released", ...(verification ? { verification } : {}) };
-  }
+  if (!isFinalHumanGate(gateDef, task.workflowAt)) return releaseHumanGate(task, gateDef, verification);
 
   if (verification) {
     if (!confirmUnverified) {
@@ -207,7 +189,8 @@ async function acceptTaskUnlocked(
   }
   let gateBasis: AcceptGateSnapshot | null = null;
   const gate = await acceptGateCheck(task, gateProject, {
-    choices: { by, commit: commitOverride, confirmUnverified, reviewAuthority, expectedResultVersion },
+    choices: { by, commit: commitOverride, confirmUnverified, reviewAuthority, expectedResultVersion: expected.resultVersion,
+      expectedHumanGate: expected.humanGate },
     intent: gateIntent,
     passedRunId: gatePassedRunId,
     onBasis: basis => { gateBasis = basis; },
@@ -602,6 +585,8 @@ export async function acceptTask(
     acceptGatePassedRunId?: string;
     /** 调用方看到的那一版成果（task-result-version.ts）；此刻已经换了一版就拒绝。不传 = 验此刻这一版。 */
     expectedResultVersion?: string;
+    /** 调用方看到的那一道「等我点头」（task-human-gate.ts）；线已经不停在那一道就拒绝。不传 = 不核。 */
+    expectedHumanGate?: string;
   } = {},
 ): Promise<AcceptTaskResult> {
   const originalFinalizer = !!advanceOpts.reviewAuthority?.finalization && !advanceOpts.acceptGatePassedRunId;
@@ -659,7 +644,8 @@ export async function acceptTask(
           return acceptTaskUnlocked(
             taskId, by, advanceOpts.confirmUnverified === true, advanceOpts.commit,
             advanceOpts.acceptGate, advanceOpts.acceptGatePassedRunId,
-            advanceOpts.reviewAuthority, advanceOpts.expectedResultVersion,
+            advanceOpts.reviewAuthority,
+            { resultVersion: advanceOpts.expectedResultVersion, humanGate: advanceOpts.expectedHumanGate },
             outcome => { autoCommit = outcome; },
           );
         });

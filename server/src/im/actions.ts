@@ -25,10 +25,10 @@ import { now } from "../util.js";
 import type { Actor } from "../auth/context.js";
 import { imActorFor, type ImPrincipal } from "../auth/im-actor.js";
 import { canSeeProject } from "../auth/visibility.js";
-import { versionOf, viewsOf, type TaskView } from "./attention.js";
+import { acceptIdentityOf, versionOf, viewsOf, type TaskView } from "./attention.js";
 import { taskPath, type AshClient, type AshResult } from "./ash-client.js";
 import { CHANNEL } from "./binding.js";
-import { settledCard, taskLink } from "./cards.js";
+import { acceptLabel, settledCard, taskLink } from "./cards.js";
 import {
   auditDone, checkEnvelope, claimEnvelope, claimOf, finishEnvelope, isConcluding, releaseEnvelope, unauditedEnvelopes, unfinishedEnvelopes,
   type Claim, type EnvelopeRow,
@@ -41,6 +41,7 @@ import { ACTED, type Reconciler } from "./reconcile.js";
 import { replyScope, scopeOfRow } from "./scope.js";
 import { scrubText } from "./scrub.js";
 import type { CommandRunner } from "./commands.js";
+import { acceptanceAutoCommitMessage, type AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
 
 export interface CallbackEvent {
   eventId: string;
@@ -304,8 +305,8 @@ export class CardActions {
           ...body, questionKey: payload.questionKey, questionOccurrence: envelope.generation,
         }), `已答复：${scrubText(shown, 300)}`, "答复了提问", "已答复。");
       }
-      // 重试、验收带着卡上那一次失败 / 那一版成果进去（task-result-version.ts），接口占着互斥再核：
-      // 点下去之前另一端又跑完一轮，旧卡就重试不了、验收不了后来那一版。
+      // 重试、验收带着卡上那一次失败 / 那一版成果和那一道关进去（task-result-version.ts、task-human-gate.ts），接口
+      // 占着互斥再核：点下去之前另一端又跑完一轮、线换了一道关，旧卡就重试不了、验收或放行不了后来那一件。
       case "failed":
         if (op !== "retry") return "认不出这个按钮";
         return async () => outcomeOf(await ash.post(principal, taskPath(id, "/retry"), { expectedFailure: versionOf(envelope.generation) }),
@@ -326,9 +327,14 @@ export class CardActions {
           kind: op, ...(text && (op === "inject" || op === "ask") ? { text } : {}), expectedVersion: payload.version,
         }), labels[op]!, `在讨论闸口${{ approve: "放行", reject: "打回", inject: "注入意见", ask: "提问" }[op]}`);
       }
-      case "accept":
-        if (op !== "accept") return "认不出这个按钮";
-        return async () => acceptOutcome(await ash.post(principal, taskPath(id, "/accept"), { expectedResultVersion: versionOf(envelope.generation) }));
+      case "accept": {
+        if (op !== "accept" || view.turn?.kind !== "accept") return "认不出这个按钮";
+        const { resultVersion, humanGate } = acceptIdentityOf(envelope.generation);
+        const pressed = acceptLabel(view.turn);
+        return async () => acceptOutcome(await ash.post(principal, taskPath(id, "/accept"), {
+          expectedResultVersion: resultVersion, expectedHumanGate: humanGate,
+        }), pressed);
+      }
       default:
         return "认不出这个按钮";
     }
@@ -429,23 +435,52 @@ function outcomeOf(result: AshResult, text: string, audit: string, brief?: strin
   return { ok: false, text: scrubText(result.error, 300), final: false };
 }
 
-function acceptOutcome(result: AshResult): Outcome {
-  if (result.ok) {
-    const branch = typeof result.data.targetBranch === "string" ? `（合入 ${result.data.targetBranch}）` : "";
-    return { ok: true, text: `已验收合并${branch}。`, final: true, audit: "点了「验收合并」" };
-  }
+/** pressed = 卡上那个按钮的字（「验收通过」或「放行，继续下一站」），记进时间线。 */
+function acceptOutcome(result: AshResult, pressed: string): Outcome {
+  if (result.ok) return { ok: true, final: true, audit: `点了「${pressed}」`, ...acceptedOutcome(result.data) };
   const reason = result.data.reason;
   if (reason === "accept_gate_running") {
     return {
-      ok: true, final: false, tone: "wathet", audit: "点了「验收合并」，验收前置命令开始跑",
-      text: "验收前置命令在跑（可能要十几分钟）。跑完是绿的会自动合并，结果出来会更新这张卡。",
+      ok: true, final: false, tone: "wathet", audit: `点了「${pressed}」，验收前置命令开始跑`,
+      text: "验收前置命令在跑（可能要十几分钟）。跑完是绿的会自动接着验收，结果出来会更新这张卡。",
     };
   }
   if (reason === "accept_gate_failed") {
-    return { ok: true, final: true, tone: "red", audit: "点了「验收合并」，验收前置命令没通过", text: "验收前置命令没通过，日志已交回任务修复（详情在 ash 里）。" };
+    return { ok: true, final: true, tone: "red", audit: `点了「${pressed}」，验收前置命令没通过`, text: "验收前置命令没通过，日志已交回任务修复（详情在 ash 里）。" };
   }
   if (reason === "verify_not_run") return { ok: false, final: false, text: "独立验证还没跑：要不等验证、直接验收，只能在 ash 页面上确认。" };
   return { ok: false, final: false, text: scrubText(result.error, 400) };
+}
+
+/**
+ * 验收接口说「成了」时实际做了什么（task-accept.ts AcceptSuccess）：放行、就地、只记认可、只打标签、合进工作区没提交、
+ * 合并，各说各的；「点头之后」那一段没跑成、清理有提醒、验收前自动提交了，都另说一句（网页验收的提示同一套口径）。
+ */
+function acceptedOutcome(data: Record<string, unknown>): Pick<Outcome, "text" | "tone" | "brief"> {
+  const target = typeof data.targetBranch === "string" ? data.targetBranch : null;
+  const done = data.kind === "gate_released" ? "已放行这一关，这条线接着往下走。"
+    : data.kind === "already_accepted" ? "这个任务之前已经验收过了。"
+      : data.kind === "in_place" ? "已验收：改动就在原工作区里，没有动 git。"
+        : data.kind === "marked_only" ? "已验收：这条线上没有「合并并清理」，只记下了认可，任务分支和工作区都留着。"
+          : data.merge === "tagged" ? `已验收：只打了标签${typeof data.tag === "string" ? ` ${data.tag}` : ""}，没有合并。`
+            : data.merge === "no_commit" ? `已验收：改动已合进 ${target ?? "目标分支"} 的工作区并暂存，还没提交。`
+              : `已验收合并${target ? `（合入 ${target}）` : ""}。`;
+  const tail = data.tail && typeof data.tail === "object" ? data.tail as { ok?: unknown; step?: unknown; reason?: unknown } : null;
+  const tailFailed = tail?.ok === false;
+  const step = typeof tail?.step === "string" ? tail.step : "点头之后那一段";
+  const warnings = Array.isArray(data.warnings) ? data.warnings.length : 0;
+  const autoCommit = data.autoCommit && typeof data.autoCommit === "object" ? acceptanceAutoCommitMessage(data.autoCommit as AcceptanceAutoCommitOutcome) : "";
+  const notes = [
+    autoCommit ? `${autoCommit}。` : "",
+    warnings ? `清理时有 ${warnings} 条提醒，详情在 ash 里。` : "",
+  ].join("");
+  const failed = tailFailed ? `但「${step}」没跑成${typeof tail?.reason === "string" ? `：${tail.reason}` : ""}，详情在 ash 里。` : "";
+  return {
+    text: done + failed + notes,
+    tone: tailFailed ? "orange" : "green",
+    // 尾段原因、自动提交原因是命令和 git 的原话：只推标题时换成不带它们的那一句。
+    ...(failed || autoCommit ? { brief: `${done}${tailFailed ? `但「${step}」没跑成，` : ""}详情在 ash 里。` } : {}),
+  };
 }
 
 /**

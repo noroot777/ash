@@ -29,6 +29,7 @@ import { advanceSegment, type SegmentOptions } from "./workflow-steps.js";
 import { now } from "./util.js";
 import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js";
 import { AshMcpUnreachable } from "./ash-mcp-launch-gate.js";
+import { newHumanGate } from "./task-human-gate.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -37,10 +38,14 @@ export interface WorkflowAdvanceOptions extends SegmentOptions {
   startVerifyRound?: (taskId: string) => Promise<unknown>;
 }
 
-/** 把游标挪到某一站并广播。广播不能省，理由见文件头不变量①。 */
-export async function setWorkflowAt(taskId: string, stepId: string | null, authority?: ReviewAuthority): Promise<void> {
+/**
+ * 把游标挪到某一站并广播。广播不能省，理由见文件头不变量①。
+ * humanGate：挪到的是一道「等我点头」时，这一次到达的身份和游标同一条语句写（task-human-gate.ts）。
+ */
+export async function setWorkflowAt(taskId: string, stepId: string | null, authority?: ReviewAuthority, humanGate?: string): Promise<void> {
   await withReviewAuthority(authority, async (transaction) => {
-    await transaction.update(tasks).set({ workflowAt: stepId, updatedAt: now() }).where(eq(tasks.id, taskId));
+    await transaction.update(tasks).set({ workflowAt: stepId, ...(humanGate ? { humanGateId: humanGate } : {}), updatedAt: now() })
+      .where(eq(tasks.id, taskId));
   });
   await publishTaskUpdated(taskId);
 }
@@ -141,7 +146,7 @@ export async function advanceWorkflowFrom(
       return;
     }
     if (next.kind === "human") {
-      await setWorkflowAt(task.id, next.id, opts.reviewAuthority);
+      await setWorkflowAt(task.id, next.id, opts.reviewAuthority, newHumanGate());
       const { enterHumanGate } = await import("./review.js");
       await enterHumanGate(task.id, opts.reviewAuthority);
       return;

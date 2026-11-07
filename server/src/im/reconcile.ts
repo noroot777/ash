@@ -26,7 +26,7 @@ import { tasks } from "../db/schema.js";
 import { openDisputeTargets } from "../free-review-dispute.js";
 import { now } from "../util.js";
 import { DECISION_KINDS, viewsOf, withTeamLeads, type TaskView, type Turn } from "./attention.js";
-import { KIND_LABEL, settledCard, summaryCard, taskLink, turnCard } from "./cards.js";
+import { acceptedLabel, KIND_LABEL, settledCard, summaryCard, taskLink, turnCard } from "./cards.js";
 import { createEnvelope } from "./envelopes.js";
 import { OutboxExits, summaryItems } from "./exits.js";
 import { extrasFor } from "./extras.js";
@@ -392,7 +392,7 @@ async function resolutionText(row: OutboxRow, view: TaskView | null): Promise<st
   const task = view.task;
   if (task.archived) return "任务已归档。";
   if (task.handoff?.direction === "out") return "任务已接力到另一台机器。";
-  if (row.kind === "accept" && isAcceptedStage(task.stage)) return "已验收合并。";
+  if (row.kind === "accept" && isAcceptedStage(task.stage)) return `${acceptedLabel(task.acceptedMergeMethod)}。`;
   const next = view.turn;
   if (next && next.kind === row.kind) return row.kind === "question" ? "问题已更新，请看新的那张卡。" : "有了新的一轮，请看新的那张卡。";
   if (next) return `下一步变成了「${KIND_LABEL[next.kind]}」，请看新的那张卡。`;

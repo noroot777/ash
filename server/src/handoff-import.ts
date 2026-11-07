@@ -43,6 +43,7 @@ import { appendTaskTimeline } from "./task-timeline.js";
 import { isAcceptedStage, type TaskHandoff, type TaskStage } from "@ash/shared";
 import { importWaitOwnership, manifestCarriesReview } from "./handoff-wait.js";
 import { collectGateRuns, replaceGateRuns, returningAcceptanceId } from "./handoff-accept-gate.js";
+import { importedHumanGate } from "./task-human-gate.js";
 
 export interface HandoffImportResult {
   ok: true;
@@ -340,6 +341,7 @@ async function importValidated(
     notice: handoffNotice,
   };
   const status = SETTLED.has(m.task.status) ? m.task.status : "canceled";
+  const workflow = jsonOr(m.task.workflow, "") || null;
   const taskValues = {
     projectId: project.id,
     title: m.task.title,
@@ -358,9 +360,10 @@ async function importValidated(
     baseTaskId: m.task.baseTaskId ?? null,
     acceptedSourceCommit: m.task.acceptedSourceCommit ?? null,
     creationOrigin: m.task.creationOrigin ?? null,
-    workflow: jsonOr(m.task.workflow, "") || null,
+    workflow,
     workflowMode: (m.task.workflowMode as "free" | "workflow" | undefined) ?? "workflow",
     workflowAt: m.task.workflowAt,
+    humanGateId: importedHumanGate(workflow, m.task.workflowAt),
     reviewStep: m.task.reviewStep,
     verifyRounds: m.task.verifyRounds ?? 0,
     verifyStationRounds: m.task.verifyStationRounds ?? 0,

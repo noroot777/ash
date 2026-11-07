@@ -564,6 +564,7 @@ try {
     const { mountTaskAcceptanceRoutes } = await import("../src/task-accept-routes.js");
     const acceptanceApi = new Hono();
     mountTaskAcceptanceRoutes(acceptanceApi);
+    const importedGates = new Set<string>();
     for (const scenario of ["complete", "legacy", "empty", "malformed"] as const) {
       // 单库夹具用不同 id 表示目标机副本；其余任务字段来自实际导出的载荷。
       const manifest = structuredClone(exportedManifest);
@@ -579,6 +580,9 @@ try {
       assert.equal(imported.verifyCompletedSteps, scenario === "complete" ? completedSteps : "[]");
       assert.equal(imported.workflow, workflow);
       assert.equal(imported.workflowAt, "h2");
+      // 停在关口上导入：本机领一个新的关口身份，此前发出去的待验收卡一律落空（task-human-gate.ts importedHumanGate）。
+      assert.ok(imported.humanGateId && !importedGates.has(imported.humanGateId), "导入时领了一个新的关口身份");
+      importedGates.add(imported.humanGateId!);
       assert.equal(imported.stage, "awaiting_acceptance");
       assert.equal(imported.verifyRounds, 9);
       assert.equal(imported.reviewStep, "v2");

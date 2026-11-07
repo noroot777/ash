@@ -122,6 +122,10 @@
       "types": "./src/workflow-policy.ts",
       "default": "./src/workflow-policy.ts"
     },
+    "./accept-message": {
+      "types": "./src/accept-message.ts",
+      "default": "./src/accept-message.ts"
+    },
     "./workflow-presets": {
       "types": "./src/workflow-presets.ts",
       "default": "./src/workflow-presets.ts"

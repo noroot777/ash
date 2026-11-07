@@ -175,7 +175,7 @@ try {
     const acceptButton = buttonsOf(JSON.parse(acceptRow.content)).find((button) => button.value?.op === "accept")!;
     assert.equal(acceptButton.confirm, true, "验收按钮要二次确认");
     assert.match(textOf(JSON.parse(acceptRow.content)), /以 \/reply 开头/, "待验收卡提示以 /reply 开头回复");
-    await db.update(tasks).set({ stage: "accepted" }).where(eq(tasks.id, "ta"));
+    await db.update(tasks).set({ stage: "accepted", acceptedMergeMethod: "fast_forward" }).where(eq(tasks.id, "ta"));
     fake.reset();
     await im.reconciler.reconcile(["ta"]);
     await im.settle();

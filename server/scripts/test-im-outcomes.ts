@@ -4,7 +4,7 @@
 // ① 验收：按钮按下去、真正验收之前任务又跑出了新结果 → 不验收，卡上说明；门禁跑着的时候任务又跑出新结果
 //    → 门禁过了也不验收（延期的那次验收带着同一版身份）；团队调度台自己又跑一轮也算新结果；
 // ② 重试：按钮按下去之后任务又失败了一次 → 不重试；/retry 只认回复在失败卡上；
-// ③ 通知：飞书上点验收成功 → 回一条「已验收合并」；门禁通过 / 没通过各一条；重复对账不重发；同一次验收
+// ③ 通知：飞书上点验收成功 → 回一条「已验收」（真合并了才说「已验收合并」）；门禁通过 / 没通过各一条；重复对账不重发；同一次验收
 //    摘牌挂回、再跑一轮不重发（对账手里的视图过期了也不配出假身份），就地任务真的再验收一次照样推；agent 自报
 //    的 merged 之后真去验收合并另领身份；老对端移回来的任务不丢本机的身份；第一次看到的任务不补推；「完成也推」关着只记账，再打开也不补推；事件丢了由
 //    全量对账补上；
@@ -124,17 +124,17 @@ try {
     assert.match(JSON.stringify(response), /又跑出了新结果/, "卡上说清为什么没验收");
     assert.match(await timelineOf("ta"), /验收没有执行/, "时间线留一笔");
 
-    // 新卡上照常验收：合并 + 在卡下回一条「已验收合并」（不靠旧卡还开着）。直接改库不发事件，手动对一次账。
+    // 新卡上照常验收 + 在卡下回一条「已验收」（不靠旧卡还开着；就地任务没合并，不说「合并」）。直接改库不发事件，手动对一次账。
     await im.reconciler.reconcile(["ta"]);
     await im.settle();
     const fresh = await openCard("ta", "accept");
     assert.notEqual(fresh.id, card.id, "新一版推了新卡");
     fake.reset();
     const accepted = await press(im.actions, buttonOf(fresh, "accept").value!);
-    assert.match(JSON.stringify(accepted), /已验收合并/);
+    assert.match(JSON.stringify(accepted), /已验收：改动就在原工作区里/);
     await im.settle();
     assert.equal((await taskRow("ta")).stage, "accepted");
-    assert.match(await noticeText("ta"), /已验收合并：「没给人看过的第二版」/, "飞书上点验收成功也有完成通知");
+    assert.match(await noticeText("ta"), /已验收：「没给人看过的第二版」/, "飞书上点验收成功也有完成通知");
     assert.ok(fake.sends().some((call) => call.path.includes(`/messages/${fresh.messageId}/reply`)), "通知回复在那张待验收卡下面");
     await im.reconciler.reconcile(["ta"]);
     await im.reconciler.full();
@@ -169,11 +169,11 @@ try {
     await im.reconciler.reconcile(["ta"]);
     await im.settle();
     const again = await openCard("ta", "accept");
-    assert.match(JSON.stringify(await press(im.actions, buttonOf(again, "accept").value!)), /已验收合并/);
+    assert.match(JSON.stringify(await press(im.actions, buttonOf(again, "accept").value!)), /已验收：/);
     await im.settle();
     assert.notEqual((await taskRow("ta")).acceptanceId, firstAcceptance, "新的一次验收换了身份");
     assert.equal((await noticesOf("ta")).length, 2, "新的一次验收再推一条");
-    assert.match(await noticeText("ta"), /已验收合并：「改过的第三版」/);
+    assert.match(await noticeText("ta"), /已验收：「改过的第三版」/);
   }
 
   // ── ③ 续：哪些算同一次验收 ─────────────────────────────────────────────
@@ -365,7 +365,7 @@ try {
     await db.update(imOutbox).set({ state: "resolved", resolution: "acted" }).where(eq(imOutbox.taskId, "tlost"));
     await im.reconciler.full();
     await im.settle();
-    assert.match(await noticeText("tlost"), /已验收合并：「丢了事件」/, "全量对账补上丢了的验收通知");
+    assert.match(await noticeText("tlost"), /已验收：「丢了事件」/, "全量对账补上丢了的验收通知");
     await db.insert(acceptGateRuns).values({
       id: "run-lost", taskId: "tq", projectId: "p1", command: "true", cwd: stage, status: "failed",
       logPath: join(stage, "run-lost.log"), startedAt: later(100), finishedAt: later(101),
@@ -426,7 +426,7 @@ try {
     await press(im.actions, buttonOf(failing, "accept").value!);
     assert.equal(await finished("tgfail"), "failed");
     assert.match(await noticeText("tgfail"), /验收前置命令没通过：「门禁 tgfail」/, "门禁红了也推一条");
-    assert.doesNotMatch(await noticeText("tgfail"), /已验收合并/);
+    assert.doesNotMatch(await noticeText("tgfail"), /已验收/);
 
     const racing = await seed("gr", "sleep 1", "tgrace");
     await press(im.actions, buttonOf(racing, "accept").value!);
@@ -435,7 +435,7 @@ try {
     assert.equal(await finished("tgrace"), "passed");
     assert.notEqual((await taskRow("tgrace")).stage, "accepted", "门禁绿了，但验收的那一版已经不是点的那一版：不合并");
     assert.match(await timelineOf("tgrace"), /验收没有执行/);
-    assert.doesNotMatch(await noticeText("tgrace"), /已验收合并/);
+    assert.doesNotMatch(await noticeText("tgrace"), /已验收/);
   }
 
   // ── ④ 同时到的几句话建房间 ───────────────────────────────────────────────

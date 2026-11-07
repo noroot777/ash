@@ -10,12 +10,16 @@
 //   failed    这一次失败的结束时刻（重试后再失败就换了）
 //   dispute   那条驳回所在的审查链 + 轮次（就是裁定接口的 target）
 //   duet_gate 闸口版本（duet/gate-version.ts）
-//   verify_failed / accept  这一版成果的身份（task-result-version.ts：结束时刻；团队连同执行者和调度台
-//             自己的回合）
-// failed / accept 的代次与验收、重试接口收的期望值是同一份身份（task-result-version.ts），按钮带着它进去。
+//   verify_failed  这一版成果的身份（task-result-version.ts：结束时刻；团队连同执行者和调度台自己的回合）
+//   accept    这一版成果的身份 + 停在哪一道「等我点头」（task-human-gate.ts）：中途那几道放行不起新的一轮，
+//             只认成果的话上一道关的旧卡能放行下一道、下一道关也发不出新卡（审查实测）。不在关口上只有成果身份，
+//             和加关口身份之前发出去的卡同形
+// failed / accept 的代次与验收、重试接口收的期望值是同一份身份，按钮带着它进去（acceptIdentityOf 拆回两样）。
 import type { QuestionItem, Task } from "@ash/shared";
 import { questionItems, questionKey } from "@ash/shared/questions";
 import { humanTurnOf, type HumanTurnKind } from "@ash/shared/task-attention";
+import { acceptanceMessage } from "@ash/shared/accept-message";
+import { isFinalHumanGate } from "@ash/shared/workflow-policy";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { projects, tasks } from "../db/schema.js";
@@ -23,6 +27,7 @@ import { freeReviewRuns } from "../db/schema-free-workflow.js";
 import { currentGateVersion } from "../duet/gate-version.js";
 import { unresolvedDisputes } from "../free-review-dispute.js";
 import { enrichTasks, toTaskListItem } from "../task-store.js";
+import { humanGateOf, NO_GATE } from "../task-human-gate.js";
 import { failureVersionOf, resultVersionOf } from "../task-result-version.js";
 import { questionOccurrenceOf } from "../task-wait-ownership.js";
 
@@ -32,7 +37,8 @@ export type Turn =
   | { kind: "dispute"; generation: string; runId: string; round: number; summary: string | null; hasDefer: boolean }
   | { kind: "duet_gate"; generation: string; version: number }
   | { kind: "verify_failed"; generation: string }
-  | { kind: "accept"; generation: string; reviewFailed: boolean };
+  /** release = 停在一道后面还有站的「等我点头」上，这一按只是放行；confirm = 确认框上那句「这一按会发生什么」。 */
+  | { kind: "accept"; generation: string; reviewFailed: boolean; release: boolean; confirm: string };
 
 export interface TaskView {
   task: Task;
@@ -43,8 +49,17 @@ export interface TaskView {
   turn: Turn | null;
 }
 
-/** failed / accept 的代次去掉种类前缀，就是重试、验收接口认的那份身份。 */
+/** failed 的代次去掉种类前缀，就是重试接口认的那份身份。 */
 export const versionOf = (generation: string) => generation.replace(/^[a-z]:/, "");
+
+const acceptGeneration = (resultVersion: string, humanGate: string) =>
+  humanGate === NO_GATE ? `a:${resultVersion}` : `a:${resultVersion}|${humanGate}`;
+
+/** accept 的代次拆回验收接口认的两样：哪一版成果、哪一道关（没有关口那一截 = 不在关口上）。 */
+export function acceptIdentityOf(generation: string): { resultVersion: string; humanGate: string } {
+  const [resultVersion = "", humanGate = NO_GATE] = versionOf(generation).split("|");
+  return { resultVersion, humanGate };
+}
 
 /** 卡片上带按钮的那几种（verify_failed 只是通知）。 */
 export const DECISION_KINDS: ReadonlySet<HumanTurnKind> = new Set(["question", "failed", "dispute", "duet_gate", "accept"]);
@@ -74,8 +89,8 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
     ? new Map((await db.select({ id: tasks.id, mode: tasks.mode }).from(tasks).where(inArray(tasks.id, parentIds))).map((p) => [p.id, p.mode]))
     : new Map<string, string>();
   const [enriched, workers] = await Promise.all([enrichTasks(rows), enrichTasks(workerRows)]);
-  const projectNames = new Map((await db.select({ id: projects.id, name: projects.name }).from(projects)
-    .where(inArray(projects.id, [...new Set(rows.map((row) => row.projectId))]))).map((p) => [p.id, p.name]));
+  const projectRows = new Map((await db.select({ id: projects.id, name: projects.name, acceptCommit: projects.acceptCommit }).from(projects)
+    .where(inArray(projects.id, [...new Set(rows.map((row) => row.projectId))]))).map((p) => [p.id, p]));
   const rowById = new Map(rows.map((row) => [row.id, row]));
 
   for (const task of enriched) {
@@ -120,13 +135,17 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
         turn = { kind, generation: `v:${await resultVersionOf(task)}` };
         break;
       case "accept":
-        turn = { kind, generation: `a:${await resultVersionOf(task)}`, reviewFailed: await latestReviewFailed(task.id) };
+        turn = {
+          kind, generation: acceptGeneration(await resultVersionOf(task), humanGateOf(row)), reviewFailed: await latestReviewFailed(task.id),
+          release: !isFinalHumanGate(task.workflow, task.workflowAt),
+          confirm: acceptanceMessage(toTaskListItem(task), projectRows.get(task.projectId)?.acceptCommit ?? true),
+        };
         break;
     }
     out.set(task.id, {
       task,
       ownerUserId: row.ownerUserId ?? null,
-      projectName: projectNames.get(task.projectId) ?? "",
+      projectName: projectRows.get(task.projectId)?.name ?? "",
       teamWorker,
       turn,
     });

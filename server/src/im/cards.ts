@@ -54,11 +54,11 @@ function linkButton(ctx: CardContext): CardButton[] {
   return ctx.link ? [{ text: "在 ash 中打开", url: ctx.link }] : [];
 }
 
-function header(view: TaskView, kind: Turn["kind"], tone?: CardTone) {
+function header(view: TaskView, kind: Turn["kind"], tone?: CardTone, label = KIND_LABEL[kind]) {
   const project = scrubTitle(view.projectName, 30);
   return {
     title: scrubTitle(view.task.title),
-    subtitle: project ? `${project} · ${KIND_LABEL[kind]}` : KIND_LABEL[kind],
+    subtitle: project ? `${project} · ${label}` : label,
     tone: tone ?? KIND_TONE[kind],
   };
 }
@@ -166,17 +166,38 @@ export function turnCard(view: TaskView, turn: Turn, ctx: CardContext, envelope:
       if (ctx.link) blocks.push({ type: "buttons", buttons: linkButton(ctx) });
       return { ...header(view, turn.kind), blocks };
     case "accept": {
+      // 停在中途那道「等我点头」上时这一按是放行不是验收：按钮、确认框、副标题、提示一起改口，说法和网页确认框
+      // 同一份（shared accept-message.ts）。只推标题的项目不把确认框里的分支名这些带出去。
       if (turn.reviewFailed) blocks.push({ type: "text", text: "注意：最近一轮审查没通过。" });
+      const what = !ctx.titleOnly ? turn.confirm
+        : turn.release ? "这一按只是放行这一关：不合并、不清理，这条线接着往下走。" : "这一按会合并还是只记下认可、怎么清理，在 ash 里看得到。";
       const confirm = turn.reviewFailed
-        ? { title: "最近一轮审查没通过", text: "确定照样验收合并吗？" }
-        : { title: "验收合并", text: "会把任务分支合进目标分支并清理工作区。确定吗？" };
-      blocks.push({ type: "buttons", buttons: [{ text: "验收合并", style: "primary", value: value(envelope, "accept"), confirm }, ...linkButton(ctx)] });
-      blocks.push({ type: "note", text: "项目设了验收前置命令的话会先跑一遍（可能十几分钟），结果会更新在这张卡上。要给任务捎句话，回复这张卡片时以 /reply 开头。" });
-      return { ...header(view, turn.kind), blocks };
+        ? { title: "最近一轮审查没通过", text: `${what} 确定照样${turn.release ? "放行" : "验收"}吗？` }
+        : { title: turn.release ? "放行这一关？" : "确认验收通过？", text: what };
+      blocks.push({
+        type: "buttons",
+        buttons: [{ text: acceptLabel(turn), style: "primary", value: value(envelope, "accept"), confirm }, ...linkButton(ctx)],
+      });
+      blocks.push({
+        type: "note",
+        text: `${turn.release ? "" : "项目设了验收前置命令的话会先跑一遍（可能十几分钟），结果会更新在这张卡上。"}要给任务捎句话，回复这张卡片时以 /reply 开头。`,
+      });
+      return { ...header(view, turn.kind, undefined, turn.release ? "停在「等我点头」，等你放行" : undefined), blocks };
     }
   }
   if (ctx.link) blocks.push({ type: "buttons", buttons: linkButton(ctx) });
   return { ...header(view, turn.kind), blocks };
+}
+
+/** 待验收卡上那个按钮（结局里「点了哪个」也用它）：和网页验收按钮同一套说法。 */
+export const acceptLabel = (turn: Pick<Extract<Turn, { kind: "accept" }>, "release">): string =>
+  turn.release ? "放行，继续下一站" : "验收通过";
+
+/** 验收落下之后怎么称呼它：合并了才说「合并」（就地、只记认可、只打标签、合进工作区没提交的都不是）。 */
+export function acceptedLabel(method: string | null | undefined): string {
+  if (method === "tagged") return "已验收（只打了标签，没有合并）";
+  if (method === "no_commit") return "已验收（改动已合进目标分支工作区，还没提交）";
+  return method ? "已验收合并" : "已验收";
 }
 
 /** 事情已经过去了（别处处理掉、换了下一步、任务删了）：卡片收成一行说明，不留按钮。 */

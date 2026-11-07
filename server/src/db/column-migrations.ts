@@ -345,6 +345,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN duet_gate_version INTEGER",
   // 那扇门开门时摆出来的方案,和版本号一起写(见 duet/gate-version.ts)。存量行为空,读侧退回 transcript 里同版本的开门行。
   "ALTER TABLE tasks ADD COLUMN duet_gate_shown TEXT",
+  // 「等我点头」的关口身份(见 db/schema.ts 同名列)。存量行为空 = 按「不在关口上」认,已经发出去的待验收卡照旧有效。
+  "ALTER TABLE tasks ADD COLUMN human_gate_id TEXT",
   // 项目级浏览器登录态授权白名单（JSON 字符串数组）。空/null = 不授权,是默认。
   "ALTER TABLE projects ADD COLUMN browser_cdp_domains TEXT",
   // ── 多人模式(docs/multi-user-plan.md §八)──────────────────────────────
