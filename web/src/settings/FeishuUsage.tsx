@@ -33,7 +33,7 @@ export function FeishuUsage({ usage, outbox }: {
         </span>
       </div>
       <div className="feishu-meter" role="meter" aria-label="本月调用额度用量" aria-valuemin={0} aria-valuemax={usage.quota} aria-valuenow={usage.calls}>
-        <i data-level={usage.level} style={{ width: `${percent}%` }} />
+        {usage.calls > 0 && <i data-level={usage.level} style={{ width: `${percent}%` }} />}
       </div>
       <div className="feishu-levels" aria-label="额度水位">
         {QUOTA_LEVELS.map((item) => (

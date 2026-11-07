@@ -113,6 +113,12 @@
 
 /* ---- 额度 ---- */
 
+/* 额度这一节是「数字 → 进度条 → 四档水位」三块连着读的，分隔线只画在水位下面；
+   行自带的那条底线会把进度条从它的数字下面切出去。 */
+.settings-row.feishu-usage {
+  border-bottom: 0;
+}
+
 .feishu-usage-figure {
   flex: none;
   color: var(--muted);
@@ -139,8 +145,11 @@
   background: var(--raised);
 }
 
+/* 用量很小时按比例只有一两像素宽，圆角会把它削成一道月牙；至少画成一个圆点，
+   让「用过了」看得出来。一次没用时不渲染这根条。 */
 .feishu-meter i {
   display: block;
+  min-width: 6px;
   height: 100%;
   border-radius: inherit;
   background: var(--green);
