@@ -127,7 +127,9 @@ try {
 
   await input.fill("任务");
   await page.waitForFunction(() => document.querySelectorAll(".palette-results [data-search-key]").length === 1);
-  assert.ok(await rowAt(0).getAttribute("data-search-key"), "search results must precede matching commands");
+  assert.equal(await rowAt(0).getAttribute("data-search-key"), null, "matching commands must stay above ordinary search results");
+  await page.locator('[data-search-key="task:hit-00"]').click();
+  assert.ok((await preview.innerText()).includes("深处标记"));
 
   await input.fill("故障");
   assert.equal(await page.locator(".palette-results [data-search-key]").count(), 0, "old hits disappear immediately during debounce");
@@ -170,6 +172,38 @@ try {
   await preview.getByRole("button", { name: "打开任务" }).click();
   assert.equal(await page.locator("#opened").getAttribute("data-opened"), "hit-16,hit-00");
   await page.setViewportSize({ width: 1100, height: 700 });
+
+  for (const [query, action] of [["新建任务", "new:single"], ["harness", "project:p1"]]) {
+    await page.evaluate(() => { delete window.__releaseCommandSearch; });
+    await input.fill(query);
+    await page.waitForFunction(() => typeof window.__releaseCommandSearch === "function");
+    assert.equal(await selectedIndex(), "0");
+    assert.equal(await selected.getAttribute("data-search-key"), null);
+    assert.ok((await rowAt(0).innerText()).includes(query));
+    const openedBefore = await page.locator("#opened").getAttribute("data-opened");
+    await page.keyboard.press("Enter");
+    assert.ok((await page.locator("#actions").getAttribute("data-actions")).endsWith(action));
+    await page.evaluate(() => window.__releaseCommandSearch());
+    await page.waitForFunction(() => document.querySelectorAll(".palette-results [data-search-key]").length === 31);
+    assert.equal(await selectedIndex(), "0");
+    assert.equal(await selected.getAttribute("data-search-key"), null, "late search results must not replace the default command");
+    await page.keyboard.press("Enter");
+    assert.ok((await page.locator("#actions").getAttribute("data-actions")).endsWith(`${action},${action}`));
+    assert.equal(await page.locator("#opened").getAttribute("data-opened"), openedBefore);
+  }
+  if (process.env.ASH_SEARCH_SCREENSHOTS) await page.screenshot({ path: join(process.env.ASH_SEARCH_SCREENSHOTS, "command-priority.png") });
+  await input.fill("hit-00");
+  await page.waitForFunction(() => document.querySelectorAll(".palette-results [data-search-key]").length === 2);
+  assert.equal(await rowAt(0).getAttribute("data-search-key"), "task:hit-00", "an exact id stays pinned above commands");
+  assert.equal(await rowAt(1).getAttribute("data-search-key"), null);
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await selectedIndex(), "1");
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await selected.getAttribute("data-search-key"), "task:hit-01");
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Enter");
+  assert.ok((await page.locator("#opened").getAttribute("data-opened")).endsWith("hit-00"));
 
   // ── 5. /scope 这类选择步骤同一套规矩 ──────────────────────────────────
   // 它们跟结果列长得一样、也归上下键管，hover 在那儿点亮一行同样是在冒充选中。

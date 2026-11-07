@@ -19,7 +19,7 @@ const iso = (minute: number) => new Date(Date.parse("2026-08-01T00:00:00.000Z") 
 const project = {
   id: "p1",
   name: "harness",
-  repoPath: "/srv/harness",
+  repoPath: "/srv/harness/hit-00",
   createdAt: iso(0),
   health: { exists: true, isRepo: true },
   myRole: "admin",
@@ -86,6 +86,7 @@ const controls = window as unknown as {
   __releaseOldSearch?: () => void;
   __appendSearch?: () => void;
   __failSearch?: boolean;
+  __releaseCommandSearch?: () => void;
 };
 const deepHit: SearchHit = {
   ...taskHits[0]!, title: "很长的历史任务：检索范围与上下文展示的完整排查记录，命中位置在正文深处",
@@ -105,6 +106,10 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     const sort = url.searchParams.get("sort") ?? "relevance";
     requested.push(sort);
     const query = url.searchParams.get("q");
+    if (query === "新建任务" || query === "harness") return new Promise<Response>((resolve) => {
+      controls.__releaseCommandSearch = () => resolve(responseOf(hits));
+    });
+    if (query === "hit-00") return responseOf([{ ...taskHits[0]!, field: "id" }, taskHits[1]!]);
     if (query === "深处" || query === "图" || query === "任务") return responseOf([deepHit]);
     if (query === "故障") return controls.__failSearch === false ? responseOf([deepHit]) : new Response("unavailable", { status: 503 });
     if (query === "半截") return new Response(`${JSON.stringify(deepHit)}\n{broken`, { status: 200 });
@@ -135,9 +140,11 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
 function Fixture() {
   // 打开过哪些任务：单击只该选中，双击才该走到这里。
   const [opened, setOpened] = useState<string[]>([]);
+  const [actions, setActions] = useState<string[]>([]);
   return (
     <>
       <div id="opened" data-opened={opened.join(",")} />
+      <div id="actions" data-actions={actions.join(",")} />
       <CommandPalette
         open
         projects={[project]}
@@ -146,12 +153,12 @@ function Fixture() {
         selectedTask={null}
         groups={[]}
         onClose={() => {}}
-        onProject={() => {}}
+        onProject={(id) => setActions((all) => [...all, `project:${id}`])}
         onTaskMode={() => {}}
         onTask={(task) => setOpened((all) => [...all, task.id])}
         onTaskUpdated={() => {}}
         onNote={() => {}}
-        onComposer={() => {}}
+        onComposer={(mode) => setActions((all) => [...all, `new:${mode}`])}
         onNewGroup={() => {}}
         onNewProject={() => {}}
         onDeleteTask={() => {}}

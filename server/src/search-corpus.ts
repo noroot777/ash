@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { SearchLogText } from "./search-log-text.js";
 
 const SNIPPET_RADIUS = 60;
 const READ_CHUNK_BYTES = 64 * 1024;
@@ -81,7 +82,7 @@ export class SearchCorpus {
 
 export type RunSearchCorpus = {
   corpus: SearchCorpus;
-  conversation: SearchCorpus;
+  conversation: Pick<SearchCorpus, "includes" | "snippet" | "snippets">;
 };
 
 export async function readRunCorpus(
@@ -92,7 +93,17 @@ export async function readRunCorpus(
   radius = SNIPPET_RADIUS,
 ): Promise<RunSearchCorpus> {
   const corpus = new SearchCorpus(terms, prefix, radius);
-  const conversation = new SearchCorpus(terms, "", radius);
+  const raw = new SearchCorpus(terms, "", radius);
+  const markdown = new SearchCorpus(terms, "", radius);
+  const logs = new SearchCorpus(terms, "", radius);
+  const conversation = {
+    includes: (term: string) => raw.includes(term),
+    snippet: (values: string[]) => markdown.snippet(values) || logs.snippet(values),
+    snippets: (values: string[], limit = 3) => [
+      ...markdown.snippets(values, limit),
+      ...logs.snippets(values.filter((term) => !markdown.includes(term)), limit),
+    ].slice(0, limit),
+  };
   const result = { corpus, conversation };
   if (signal?.aborted) return result;
   let files: string[];
@@ -105,6 +116,9 @@ export async function readRunCorpus(
   for (const file of files) {
     if (signal?.aborted) break;
     if (!file.endsWith(".md") && !file.endsWith(".jsonl")) continue;
+    const readable = file.endsWith(".md") ? markdown : logs;
+    readable.append("\n");
+    const decoder = file.endsWith(".jsonl") ? new SearchLogText((text) => logs.append(text)) : null;
     let started = false;
     try {
       const stream = createReadStream(join(directory, file), {
@@ -116,12 +130,14 @@ export async function readRunCorpus(
         if (!text) continue;
         if (!started && hasConversation) {
           corpus.append("\n");
-          conversation.append("\n");
+          raw.append("\n");
         }
         started = true;
         hasConversation = true;
         corpus.append(text);
-        conversation.append(text);
+        raw.append(text);
+        if (decoder) decoder.append(text);
+        else markdown.append(text);
       }
     } catch {
       if (signal?.aborted) break;

@@ -309,12 +309,13 @@ export function CommandPalette({
     ? hits.find((hit) => hit.kind === "task" && hit.field === "id")
     : undefined;
   const restHits = idHit ? hits.filter((hit) => hit !== idHit) : hits;
-  const resultHits = idHit ? [idHit, ...restHits] : hits;
+  const pinnedHits = idHit ? [idHit] : [];
+  const hitStart = pinnedHits.length + items.length;
   const entryKeys = step === "scope-project" ? ["all-projects", ...projects.map((project) => project.id)]
     : step === "scope-type" ? SCOPE_TYPE_OPTIONS.map((option) => option.value ?? "all-types")
       : step === "git-project" ? projects.map((project) => project.id)
         : step === "git-overview" ? [] : slashMode ? slashCommands.map((command) => command.id)
-          : [...resultHits.map((hit) => `${hit.kind}:${hit.id}`), ...items.map((item) => `command:${item.key}`)];
+          : [...pinnedHits.map((hit) => `${hit.kind}:${hit.id}`), ...items.map((item) => `command:${item.key}`), ...restHits.map((hit) => `${hit.kind}:${hit.id}`)];
   const { active, select: setActive, reset: resetActive } = usePaletteSelection(entryKeys);
   const total = entryKeys.length;
   usePaletteActiveScroll(panel, active, step);
@@ -394,12 +395,13 @@ export function CommandPalette({
     }
     if (step === "git-overview") return;
     if (slashMode) return chooseSlashCommand(slashCommands[index]);
-    if (index < resultHits.length) openHit(resultHits[index]);
-    else runItem(items[index - resultHits.length]);
+    if (index < pinnedHits.length) openHit(pinnedHits[index]);
+    else if (index < hitStart) runItem(items[index - pinnedHits.length]);
+    else openHit(restHits[index - hitStart]);
   };
 
   const gitProject = projects.find((project) => project.id === gitProjectId);
-  const activeHit = resultHits[active];
+  const activeHit = active < pinnedHits.length ? pinnedHits[active] : active >= hitStart ? restHits[active - hitStart] : undefined;
   const hasHits = step === "search" && !slashMode && hits.length > 0;
   // 边扫边出的时候得说清楚现在扫到哪儿了，不然列表停住的那几秒看着就像搜完了。
   // 最近更新档不分段扫（服务端不发 local-done），所以那一档只会看到「搜索中…」。
@@ -494,9 +496,9 @@ export function CommandPalette({
         {step === "search" && !slashMode && (
           <div className="palette-body">
             <div className="palette-results">
-              <SearchHitList hits={resultHits} active={active} startIndex={0} query={query} sort={sort} onSelect={setActive} onOpen={openHit} />
+              <SearchHitList hits={pinnedHits} active={active} startIndex={0} query={query} sort={sort} onSelect={setActive} onOpen={openHit} />
               {items.map((item, position) => {
-                const index = position + resultHits.length;
+                const index = position + pinnedHits.length;
                 const header = position === 0 || items[position - 1]?.group !== item.group ? item.group : null;
                 return (
                   <div key={item.key}>
@@ -511,6 +513,7 @@ export function CommandPalette({
                   </div>
                 );
               })}
+              <SearchHitList hits={restHits} active={active} startIndex={hitStart} query={query} sort={sort} onSelect={setActive} onOpen={openHit} />
               {!normalTotal && !searchError && <p className="palette-empty">{searching ? searchNote : isSearchQueryReady(query) ? "没有匹配的命令、任务或随手记" : "无匹配命令"}</p>}
               {searching && normalTotal > 0 && <p className="px-4 py-2 text-center text-[10px] text-faint">{searchNote}</p>}
               {searchError && <div role="alert" className="palette-search-error"><span>{searchError}</span><button type="button" onClick={retry}>重试</button></div>}

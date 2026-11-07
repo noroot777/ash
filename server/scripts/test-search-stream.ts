@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getHeapStatistics } from "node:v8";
 import { readRunCorpus, SearchCorpus } from "../src/search-corpus.js";
+import { SearchLogText } from "../src/search-log-text.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-search-stream-"));
 process.env.ASH_DB = join(root, "ash.db");
@@ -40,16 +41,31 @@ try {
     assert.equal(corpus.snippet([...terms].reverse()), expectedSnippet(text, [...terms].reverse()));
   }
 
+  const escaped = '{"type":"tool_result","tool_use_id":"hidden-metadata","content":"\\u4f60\\u597d\\nquoted \\"text\\" C:\\\\work \\ud83e\\uddea"}\n';
+  const trace = JSON.stringify({ event: { kind: "text", text: "会话正文" }, session_id: "hidden-session" });
+  const agent = JSON.stringify({ message: { content: [{ type: "text", text: "agent 正文" }] } });
+  const codex = JSON.stringify({ item: { type: "command_execution", command: ["npm", "run build"], aggregated_output: "构建输出" } });
+  for (const width of [1, 2, 7, 64, 1024]) {
+    let decoded = "";
+    const decoder = new SearchLogText((value) => { decoded += value; });
+    const input = `${escaped}${trace}\n${agent}\n${codex}\nplain fallback\n`;
+    for (let offset = 0; offset < input.length; offset += width) decoder.append(input.slice(offset, offset + width));
+    assert.ok(decoded.includes('你好\nquoted "text" C:\\work 🧪'), `${width}: decode escapes across chunks`);
+    for (const value of ["会话正文", "agent 正文", "npm", "run build", "构建输出", "plain fallback"]) assert.ok(decoded.includes(value));
+    for (const value of ["hidden-metadata", "hidden-session", "tool_use_id", "command_execution"]) assert.ok(!decoded.includes(value));
+  }
+
   const runs = join(root, "runs");
   const largeDirectory = join(runs, "stream000001");
   mkdirSync(largeDirectory, { recursive: true });
   const largePath = join(largeDirectory, "00.jsonl");
   const boundary = Buffer.from("跨块关键词🧪MIXEDcase");
-  writeFileSync(largePath, Buffer.alloc(64 * 1024 - 2, 120));
+  writeFileSync(largePath, '{"type":"tool_result","tool_use_id":"hidden-large-metadata","content":"');
+  appendFileSync(largePath, Buffer.alloc(64 * 1024 - statSync(largePath).size - 2, 120));
   appendFileSync(largePath, boundary);
   const megabyte = Buffer.alloc(1024 * 1024, 120);
   for (let count = 0; count < 256; count += 1) appendFileSync(largePath, megabyte);
-  appendFileSync(largePath, "尾部 STREAM_END\nfirst-file-end");
+  appendFileSync(largePath, '尾部 STREAM_END"}\nfirst-file-end');
   writeFileSync(join(largeDirectory, "01.md"), "second-file-start\nFORBIDDEN");
   writeFileSync(join(largeDirectory, "02.md"), "");
   writeFileSync(join(largeDirectory, "ignored.txt"), "ignored-only");
@@ -62,6 +78,7 @@ try {
   for (const term of scanTerms.slice(0, -1)) assert.ok(scanned.corpus.includes(term), term);
   assert.equal(scanned.corpus.includes("ignored-only"), false);
   assert.ok(scanned.conversation.snippet([scanTerms[0]!]).includes("跨块关键词🧪MIXEDcase"));
+  assert.ok(!scanned.conversation.snippet([scanTerms[0]!]).includes("tool_use_id"));
   assert.ok(scanned.conversation.snippet(["stream_end"]).includes("STREAM_END"));
   assert.ok(scanned.conversation.snippet(scanTerms).length < 200);
 

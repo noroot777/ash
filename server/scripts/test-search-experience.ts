@@ -32,7 +32,10 @@ try {
   ]);
   const directory = join(root, "runs", "conversation");
   mkdirSync(directory, { recursive: true });
-  writeFileSync(join(directory, "session.md"), `会话第一词${"背景".repeat(800)}会话第二词`);
+  writeFileSync(join(directory, "00-agent.jsonl"), `${JSON.stringify({
+    type: "tool_result", tool_use_id: "metadata-only-marker", content: 'heap out of memory 机器轨迹\n轨迹独有词："可读引号" C:\\work\\file',
+  })}\n`);
+  writeFileSync(join(directory, "session.md"), `会话第一词${"背景".repeat(800)}会话第二词\nheap out of memory 人类可读的排查结论`);
   await db.insert(notes).values({
     id: "deep-note", projectId: "local", body: `${"开始".repeat(2500)}笔记深处标记`, createdAt: Date.parse(iso(0)), updatedAt: Date.parse(iso(1)),
   });
@@ -57,6 +60,20 @@ try {
   assert.equal(conversation?.field, "conversation");
   assert.equal(conversation?.excerpts?.length, 2);
   assert.ok(conversation?.excerpts?.some((text) => text.includes("会话第二词")));
+  const readable = (await query('"heap out of memory"'))[0];
+  assert.ok(readable?.snippet.includes("人类可读的排查结论"));
+  assert.ok(readable?.excerpts?.every((text) => !text.includes("机器轨迹") && !text.includes("tool_use_id")));
+  const fallback = (await query("轨迹独有词"))[0];
+  assert.equal(fallback?.field, "conversation");
+  assert.ok(fallback?.snippet.includes('轨迹独有词："可读引号" C:\\work\\file'));
+  assert.ok(!fallback?.snippet.includes("tool_use_id"));
+  assert.ok(!fallback?.snippet.includes("\\n"));
+  const mixed = (await query("会话第一词 轨迹独有词"))[0];
+  assert.equal(mixed?.excerpts?.length, 2);
+  assert.ok(mixed?.excerpts?.[0]?.includes("会话第一词"));
+  assert.ok(mixed?.excerpts?.[1]?.includes("轨迹独有词"));
+  assert.equal((await query("metadata-only-marker"))[0]?.id, "conversation", "raw matching must preserve metadata recall");
+  assert.equal((await query("会话第一词 -metadata-only-marker")).length, 0);
   const note = (await query("笔记深处标记", { type: "notes" }))[0];
   assert.ok(note?.excerpts?.[0]?.includes("笔记深处标记"));
   assert.equal((await query("跨字段标记 正文另一词"))[0]?.id, "cross-fields");
@@ -69,7 +86,7 @@ try {
   const corpus = new SearchCorpus(["alpha", "omega"], "", 180);
   for (const chunk of ["alpha", "x".repeat(3000), "omega"]) corpus.append(chunk);
   assert.equal(corpus.snippets(["alpha", "omega"]).length, 2);
-  console.log("search experience passed: cross-project exact id, cutoff, ranking, deep/multiple excerpts, notes, Han queries, exclusions");
+  console.log("search experience passed: exact id, ranking, excerpts, Markdown priority, decoded JSON fallback, raw exclusions, notes, Han queries");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
