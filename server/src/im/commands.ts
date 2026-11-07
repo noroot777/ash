@@ -14,9 +14,9 @@ import { imOutbox } from "../db/schema-im.js";
 import type { ImPrincipal } from "../auth/im-actor.js";
 import { failureOf, taskPath, type AshClient } from "./ash-client.js";
 import { updateBinding, type BindingRow } from "./binding.js";
-import { confirmCard, taskLink, todoText } from "./cards.js";
+import { confirmCard, newTaskCard, projectCard, taskLink, todoText } from "./cards.js";
 import { createEnvelope } from "./envelopes.js";
-import { renderCard } from "./feishu/cards.js";
+import { renderCard, type CardModel } from "./feishu/cards.js";
 import { groupOf } from "./groups.js";
 import { readOptions } from "./meta.js";
 import { cardHeaderOf, type Destination, type OutboxRow } from "./outbox.js";
@@ -43,12 +43,29 @@ export interface InboundContext {
 }
 
 const CONFIRM_TTL_MS = 10 * 60_000;
+/** 项目选单、建任务表单要选要填：放久一点，发完过一阵再点也行。点的那一刻按他的身份办，看不到的项目切不了也建不了。 */
+const FORM_TTL_MS = 24 * 3600_000;
+/** 一张卡上放几个项目：选单每个项目一颗按钮，表单是一个下拉框。 */
+const PICK_LIMIT = 30;
+const FORM_LIMIT = 100;
+
+/**
+ * 一张卡上列哪些项目：卡放不下全部，但当前项目一定在里面（排在后面就顶掉最后一个）—— 卡上标着「当前」的那个
+ * 必须点得到、选得到。hidden = 没列出来的个数，卡上要说出来、指明怎么选到它们（/project 名字）。
+ */
+function choicesOf(list: Project[], currentId: string | null, limit: number): { shown: Project[]; hidden: number } {
+  const shown = list.slice(0, limit);
+  const current = list.find((project) => project.id === currentId);
+  if (current && !shown.includes(current)) shown[shown.length - 1] = current;
+  return { shown, hidden: list.length - shown.length };
+}
 
 export const HELP = [
   "直接回复提问卡 = 答复它（附图片、文件也行）；回复别的任务卡要以 /reply 开头，才会发给那个任务。",
   "单聊里直接说话 = 跟 ash 助手聊（它能帮你查任务、建任务）。",
   "/todo —— 还有哪些事等你；积压的卡逐张推过来",
-  "/project —— 看看能选哪些项目；/project 2 或 /project 名字 —— 设为当前项目",
+  "/project —— 弹出项目卡片，点一下就切成当前项目；也可以 /project 名字",
+  "/new —— 弹出建任务卡片：选项目、填标题和要求，提交就开跑",
   "/new 标题（换行写详细要求）—— 在当前项目建任务并开跑（会先让你确认）",
   "/stop —— 回复某张任务卡发送：停掉那个任务（会先让你确认）",
   "/retry —— 回复某张失败卡发送：重试",
@@ -92,18 +109,27 @@ export class CommandRunner {
     return replyScope(ctx.origin, about);
   }
 
-  private async card(
+  private card(
     ctx: InboundContext, title: string, text: string, payload: Record<string, unknown>, danger: boolean, scope: OutboxScope, brief?: string,
+  ): Promise<void> {
+    return this.buttons(ctx, (envelope) => confirmCard(title, text, envelope, danger), payload, scope, CONFIRM_TTL_MS,
+      brief === undefined ? undefined : (envelope) => confirmCard(title, brief, envelope, danger));
+  }
+
+  /** 回一张带按钮的卡（确认卡、项目选单）：按钮点下去走 actions.ts confirmJob，payload.command 说是哪一种。 */
+  private async buttons(
+    ctx: InboundContext, render: (envelope: string) => CardModel, payload: Record<string, unknown>, scope: OutboxScope, ttlMs: number,
+    brief?: (envelope: string) => CardModel,
   ): Promise<void> {
     const rowId = `cf${ctx.messageId}`.slice(0, 40);
     const envelope = await createEnvelope({
       outboxId: rowId, taskId: typeof payload.taskId === "string" ? payload.taskId : null, action: "confirm", payload,
-      recipientOpenId: ctx.principal.openId, generation: "c", ttlMs: CONFIRM_TTL_MS,
+      recipientOpenId: ctx.principal.openId, generation: "c", ttlMs,
     });
     await this.deps.reconciler.run(() => this.deps.reconciler.insert({
       id: rowId, dest: ctx.dest, taskId: null, kind: "confirm", subject: ctx.messageId,
-      content: JSON.stringify(renderCard(confirmCard(title, text, envelope, danger))), replyTo: ctx.messageId,
-      scope, brief: brief === undefined ? null : JSON.stringify(renderCard(confirmCard(title, brief, envelope, danger))),
+      content: JSON.stringify(renderCard(render(envelope))), replyTo: ctx.messageId,
+      scope, brief: brief === undefined ? null : JSON.stringify(renderCard(brief(envelope))),
     }));
     this.deps.reconciler.kick();
   }
@@ -171,6 +197,7 @@ export class CommandRunner {
   /**
    * 他能看哪些项目、他的当前项目是哪个：只属于他本人，只在单聊里答。清单列着哪几个项目就记哪几个（当前项目也在其中），
    * 出口逐个核他此刻还看得见；切换只改消息进来那一次的绑定 —— 列表取回来之前换了绑，写进去就是改了另一个人的当前项目。
+   * 不带参数回一张选单卡（点按钮切，见 picked）；带编号 / 名字直接切。
    */
   private async project(ctx: InboundContext, rest: string): Promise<void> {
     if (ctx.chatType !== "p2p") return this.say(ctx, "/project 请在和我的单聊里用：它会列出你个人能看到的项目。", SYSTEM_SCOPE);
@@ -179,13 +206,13 @@ export class CommandRunner {
     if (!rest) {
       if (!list.length) return this.say(ctx, "你还看不到任何项目。", SYSTEM_SCOPE);
       const current = list.find((project) => project.id === ctx.binding.projectId);
-      const shown = list.slice(0, 30);
-      const listed = [...new Set([...shown, ...(current ? [current] : [])].map((project) => project.id))];
-      return this.say(ctx, [
-        `当前项目：${current ? current.name : "未指定"}`,
-        ...shown.map((project, index) => `${index + 1}. ${project.name}`),
-        "发 /project 编号 或 /project 名字 切换。",
-      ].join("\n"), this.scoped(ctx, { kind: "projects", projectIds: listed }));
+      const { shown, hidden } = choicesOf(list, ctx.binding.projectId, PICK_LIMIT);
+      const ids = shown.map((project) => project.id);
+      // 信封里记着按钮对应哪个项目、是哪一次绑定：点的时候按这一份切，不按点那一刻重新排出来的顺序。
+      return this.buttons(ctx, (envelope) => projectCard(current?.name ?? null, shown.map((project) => project.name),
+        shown.findIndex((project) => project.id === current?.id), hidden, envelope),
+      { command: "project", projectIds: ids, boundAt: ctx.binding.boundAt },
+      this.scoped(ctx, { kind: "projects", projectIds: ids }), FORM_TTL_MS);
     }
     const index = /^\d+$/.test(rest) ? Number(rest) - 1 : -1;
     const lowered = rest.toLowerCase();
@@ -200,9 +227,12 @@ export class CommandRunner {
       this.scoped(ctx, { kind: "project", projectId: picked.id }));
   }
 
-  /** 单聊里建到他的当前项目；群里只建到这个群绑定的项目（群里的人看得到确认卡，不能把别的项目带进来）。 */
+  /**
+   * 单聊里建到他的当前项目；群里只建到这个群绑定的项目（群里的人看得到确认卡，不能把别的项目带进来）。
+   * 不带参数回一张表单卡（项目在单聊里可选，见 newForm）。
+   */
   private async newTask(ctx: InboundContext, rest: string): Promise<void> {
-    if (!rest) return this.say(ctx, "用法：/new 标题（换行写详细要求）", SYSTEM_SCOPE);
+    if (!rest) return this.newForm(ctx);
     const inGroup = ctx.chatType !== "p2p";
     const projectId = inGroup ? (await groupOf(this.deps.appId, ctx.chatId))?.projectId ?? null : ctx.binding.projectId;
     if (inGroup && !projectId) return this.say(ctx, "这个群还没绑定 ash 项目：先在 ash 网页 设置 → 飞书 → 群 里绑定，或者在单聊里用 /new。", SYSTEM_SCOPE);
@@ -221,6 +251,52 @@ export class CommandRunner {
       body !== title ? `${head}\n（详细要求只在 ash 里看）` : undefined);
   }
 
+  /**
+   * 项目选单上点了一个项目。点的那一刻以他的身份重读一遍项目列表：发卡之后被移出了那个项目就不切；绑定按发卡那一次
+   * 做 CAS（同 /project 名字），换过绑定这张卡就作废了。
+   */
+  async picked(principal: ImPrincipal, payload: Record<string, unknown>, index: number): Promise<Outcome> {
+    const ids = Array.isArray(payload.projectIds) ? payload.projectIds as unknown[] : [];
+    const projectId = ids[index];
+    if (typeof projectId !== "string" || typeof payload.boundAt !== "string") return { ok: false, text: "认不出点的是哪个项目", final: false };
+    const result = await this.deps.ash.get<Project[]>(principal, "/api/projects");
+    if (!result.ok) return { ok: false, text: `没读到你的项目列表：${scrubText(result.error, 200)}`, final: false };
+    const picked = (Array.isArray(result.data) ? result.data : []).find((project) => project.id === projectId);
+    if (!picked) return { ok: false, text: "这个项目你已经看不到了。", final: false };
+    if (!await updateBinding(principal, { projectId }, payload.boundAt)) {
+      return { ok: true, final: true, tone: "orange", text: "你换过绑定，这张卡作废了：请重新发 /project。" };
+    }
+    return { ok: true, final: true, tone: "green", text: `当前项目已切到「${picked.name}」。/new 建的任务、助手派的活都会落在这里；再发 /project 可以重新选。` };
+  }
+
+  /** 建任务表单：单聊列出他能看的项目、默认选当前项目；群里只有群绑定的那一个。 */
+  private async newForm(ctx: InboundContext): Promise<void> {
+    const inGroup = ctx.chatType !== "p2p";
+    const fixed = inGroup ? (await groupOf(this.deps.appId, ctx.chatId))?.projectId ?? null : null;
+    if (inGroup && !fixed) return this.say(ctx, "这个群还没绑定 ash 项目：先在 ash 网页 设置 → 飞书 → 群 里绑定，或者在单聊里用 /new。", SYSTEM_SCOPE);
+    const list = await this.projects(ctx);
+    if (!list) return;
+    const { shown, hidden } = inGroup
+      ? { shown: list.filter((project) => project.id === fixed), hidden: 0 }
+      : choicesOf(list, ctx.binding.projectId, FORM_LIMIT);
+    if (!shown.length) return this.say(ctx, inGroup ? "你看不到这个群绑定的项目，建不了任务。" : "你还看不到任何项目。", SYSTEM_SCOPE);
+    const scope = inGroup
+      ? this.scoped(ctx, { kind: "project", projectId: fixed! })
+      : this.scoped(ctx, { kind: "projects", projectIds: shown.map((project) => project.id) });
+    return this.buttons(ctx, (envelope) => newTaskCard(shown.map((project) => project.name),
+      inGroup ? 0 : shown.findIndex((project) => project.id === ctx.binding.projectId), hidden, envelope),
+    { command: "newform", projectIds: shown.map((project) => project.id) }, scope, FORM_TTL_MS);
+  }
+
+  /** 建任务表单提交了：选的是信封里记着的第几个项目（建任务那一下接口按他的身份核还看不看得见）。 */
+  submitted(principal: ImPrincipal, payload: Record<string, unknown>, form: { project: number; title: string; body: string }): Promise<Outcome> {
+    const ids = Array.isArray(payload.projectIds) ? payload.projectIds as unknown[] : [];
+    const projectId = ids[form.project];
+    if (typeof projectId !== "string") return Promise.resolve({ ok: false, text: "认不出选的是哪个项目", final: false });
+    const title = form.title.slice(0, 120);
+    return this.createAndRun(principal, projectId, title, (form.body || title).slice(0, 20_000));
+  }
+
   /** 确认卡上点了「确定」。 */
   async confirmed(principal: ImPrincipal, payload: Record<string, unknown>): Promise<Outcome> {
     if (payload.command === "stop" && typeof payload.taskId === "string") {
@@ -228,25 +304,28 @@ export class CommandRunner {
       return result.ok ? { ok: true, text: "已停止。", final: true, tone: "grey" } : { ok: false, text: scrubText(result.error, 300), final: false };
     }
     if (payload.command === "new" && typeof payload.projectId === "string" && typeof payload.title === "string") {
-      const created = await this.deps.ash.post<{ id: string }>(principal, "/api/tasks", {
-        projectId: payload.projectId, title: payload.title, body: payload.body,
-      });
-      // 请求本身被拒（参数、权限）才放回信封让他再点；5xx、没调通的任务可能已经建出来了，再点一下就是第二个：
-      // 按「办完了、结局不明」收起，跟 ash 重启打断确认卡同一个说法（actions.ts recoverOne）。
-      if (!created.ok && failureOf(created) === "transient") {
-        return { ok: true, final: true, tone: "orange", text: `不确定建成没有（${scrubText(created.error, 120)}）：请在 ash 里看一眼，需要的话重新发 /new。` };
-      }
-      if (!created.ok) return { ok: false, text: scrubText(created.error, 300), final: false };
-      // 任务已经建出来了：后面再出什么错都不能算「没办成」—— 那会放回信封，再点一下就又建一个。
-      const run = await this.deps.ash.post(principal, taskPath(created.data.id, "/run"));
-      const base = await readOptions().then((options) => options.publicBaseUrl, () => null);
-      const link = taskLink(base, { task: { id: created.data.id, projectId: payload.projectId } as never });
-      return {
-        ok: true, final: true, tone: run.ok ? "green" : "orange", link,
-        text: run.ok ? `已建任务「${payload.title}」并开跑。` : `任务已建好，但没能开跑：${scrubText(run.error, 300)}`,
-        ...(run.ok ? {} : { brief: "任务已建好，但没能开跑，原因见 ash。" }),
-      };
+      return this.createAndRun(principal, payload.projectId, payload.title, payload.body);
     }
     return { ok: false, text: "认不出这张确认卡", final: false };
+  }
+
+  /** 建任务并开跑（确认卡的「确定」、表单的提交）。 */
+  private async createAndRun(principal: ImPrincipal, projectId: string, title: string, body: unknown): Promise<Outcome> {
+    const created = await this.deps.ash.post<{ id: string }>(principal, "/api/tasks", { projectId, title, body });
+    // 请求本身被拒（参数、权限）才放回信封让他再点；5xx、没调通的任务可能已经建出来了，再点一下就是第二个：
+    // 按「办完了、结局不明」收起，跟 ash 重启打断确认卡同一个说法（actions.ts recoverOne）。
+    if (!created.ok && failureOf(created) === "transient") {
+      return { ok: true, final: true, tone: "orange", text: `不确定建成没有（${scrubText(created.error, 120)}）：请在 ash 里看一眼，需要的话重新发 /new。` };
+    }
+    if (!created.ok) return { ok: false, text: scrubText(created.error, 300), final: false };
+    // 任务已经建出来了：后面再出什么错都不能算「没办成」—— 那会放回信封，再点一下就又建一个。
+    const run = await this.deps.ash.post(principal, taskPath(created.data.id, "/run"));
+    const base = await readOptions().then((options) => options.publicBaseUrl, () => null);
+    const link = taskLink(base, { task: { id: created.data.id, projectId } as never });
+    return {
+      ok: true, final: true, tone: run.ok ? "green" : "orange", link,
+      text: run.ok ? `已建任务「${title}」并开跑。` : `任务已建好，但没能开跑：${scrubText(run.error, 300)}`,
+      ...(run.ok ? {} : { brief: "任务已建好，但没能开跑，原因见 ash。" }),
+    };
   }
 }
