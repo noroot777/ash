@@ -113,6 +113,12 @@
 .task-markdown th > :last-child,
 .task-markdown td > :last-child { margin-bottom: 0; }
 .task-markdown code { border-radius: 4px; background: var(--raised); padding: 1px 4px; color: var(--ink); font-size: 11.5px; overflow-wrap: anywhere; }
+/* 正文里提到的工作区文件：点一下摊在中间栏（TaskFileLink）。跟链接同一个颜色，前面带个文件图标。 */
+.task-markdown code.task-file-link { color: var(--accent); cursor: pointer; }
+.task-markdown code.task-file-link:hover { text-decoration: underline; text-underline-offset: 2px; }
+.task-file-link__glyph { display: inline-block; margin-right: 3px; vertical-align: -1px; }
+.task-markdown a.task-file-link-anchor { text-decoration: none; }
+.task-markdown a.task-file-link-anchor:hover { text-decoration: underline; }
 /* 框（边框、底色、圆角）画在外层，外层分两栏：代码在左栏里自己横向滚动，复制按钮独占
    右侧一条窄栏。按钮不叠在代码上面，所以任何宽度、任何滚动位置都遮不住一个字——触屏上
    它常亮，叠上去就会永久挡住首行末尾。 */

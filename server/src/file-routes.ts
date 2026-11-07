@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { Readable } from "node:stream";
 import {
   listDirectory,
+  locateEntries,
   openRawStream,
   readFileContent,
   resolveTarget,
@@ -39,6 +40,8 @@ import {
 //   • 「这个东西本身能不能删」的三条硬拒在 `file-delete.ts`（根目录、`.git`、越界）。
 // 删除还要排进 `withRepoLock`：删文件不是 git 操作，但它改的是同一个工作区，跟正在跑的
 // 验收合并、discard 撞上就是互相拆台。
+
+const MAX_LOCATE_PATHS = 200;
 
 function statusOf(error: unknown): number {
   const status = (error as { status?: unknown } | null)?.status;
@@ -128,7 +131,7 @@ export function mountFileRoutes(api: Hono) {
   });
 
   /**
-   * 「这个任务做出来了什么可以直接看的东西」——图片、网页、音视频、PDF。
+   * 「这个任务做出来了什么可以直接看的东西」——图片、网页、音视频、PDF、文档。
    *
    * 跟文件树、改动面板是三个不同的问题，判据见 `task-artifacts.ts` 顶部。没有工作目录时
    * 回空表而不是 404：任务还没跑过就是「还没有产物」，那是正常状态，不是错误。
@@ -184,6 +187,19 @@ export function mountFileRoutes(api: Hono) {
     } catch (error) {
       return c.json({ error: messageOf(error) }, statusOf(error) as 400);
     }
+  });
+
+  // 会话正文里提到的那些路径，哪些是工作区里真有的文件 / 目录（见 locateEntries）。一次
+  // 问一批：一条长会话里能有上百处，逐条问就是上百个请求。
+  api.post("/tasks/:id/file/locate", async (c) => {
+    const body = await c.req.json().catch(() => ({})) as { paths?: unknown };
+    const paths = Array.isArray(body.paths)
+      ? [...new Set(body.paths.filter((path): path is string => typeof path === "string" && path.length > 0 && path.length <= 1024))]
+      : [];
+    if (paths.length > MAX_LOCATE_PATHS) return c.json({ error: `一次最多问 ${MAX_LOCATE_PATHS} 条路径` }, 400);
+    const root = await rootFor(c.req.param("id"));
+    if (!root) return c.json({ entries: Object.fromEntries(paths.map((path) => [path, null])) });
+    return c.json({ entries: await locateEntries(root, paths) });
   });
 
   api.post("/tasks/:id/file/reveal", async (c) => {

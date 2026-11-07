@@ -203,6 +203,11 @@ export type FileContent = {  path: string;
 };
 
 /** 读一份文件全文的返回。 */
+/** 一批路径里哪些真在工作区里：值是归一后的相对路径和它是文件还是目录，不在就是 null。 */
+export type TaskFileLocate = {
+  entries: Record<string, { path: string; kind: "file" | "dir" } | null>;
+};
+
 export type TaskFileRead = {
   root: FileWorkspaceRoot;
   file: FileContent;
@@ -310,7 +315,7 @@ export type IdeLaunchStatus = "opened" | "launching";
 // 「这个任务做出来了什么可以直接看的东西」。判据、三路线索和它们各自的可信区间都在服务端
 // `task-artifacts.ts` 顶部，这里只是它的形状。
 
-export type ArtifactKind = "image" | "video" | "audio" | "page" | "pdf";
+export type ArtifactKind = "image" | "video" | "audio" | "page" | "pdf" | "doc";
 /** 这份产物是从哪条线索认出来的：还没提交 / 已提交在任务分支上 / 被 .gitignore 挡着。 */
 export type ArtifactOrigin = "working" | "committed" | "ignored";
 

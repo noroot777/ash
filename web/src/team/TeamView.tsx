@@ -4,6 +4,7 @@ import { batchesOf, mergeFeed, teamGroupsOf, waitingWorkers, workersOf } from "@
 import { ArrowSquareOut } from "@phosphor-icons/react";
 import { SideDrawer } from "../components/SideDrawer.tsx";
 import { InspectorHost } from "../inspector/index.ts";
+import { TaskFileLinks } from "../components/TaskFileLink.tsx";
 import { FileViewer } from "../files/FileViewer.tsx";
 import { FolderViewer } from "../files/FolderViewer.tsx";
 import { useFileView } from "../files/useFileView.ts";
@@ -275,196 +276,202 @@ export function TeamView({
     }
   };
 
+  // 中间栏摊开一份文件 / 一个文件夹：侧栏的生成物、文件树，和正文里提到的路径（TaskFileLinks）同一个出口。
+  const openFileInCenter = (path: string, reel?: readonly string[]) => {
+    fileView.openFile(path, reel);
+    setSelectedWorkerId(null);
+    subagents.closeAgent();
+    if (reviewOpen) changeReviewOpen(false);
+  };
+  const openFolderInCenter = (path: string) => {
+    fileView.openFolder(path);
+    setSelectedWorkerId(null);
+    subagents.closeAgent();
+    if (reviewOpen) changeReviewOpen(false);
+  };
+
   return (
-    <InspectorHost
-      contextKey={`team:${task.id}`}
-      descriptors={inspectors}
-      context={{
-        nativeWork: subagents.nativeWork,
-        monitors: monitorTab.monitors,
-        task,
-        workers,
-        groups: teamGroups,
-        sessions: conversation.sessions,
-        leadTurns: turns,
-        selectedWorkerId,
-        onSelectWorker: selectWorker,
-        onOpenReview: () => changeReviewOpen(true),
-        onOpenTask: openTaskById,
-        indicatorForTask,
-        workerLiveLines,
-        activeFilePath: fileView.activePath,
-        onOpenFile: (path: string, reel?: readonly string[]) => {
-          fileView.openFile(path, reel);
-          setSelectedWorkerId(null);
-          subagents.closeAgent();
-          if (reviewOpen) changeReviewOpen(false);
-        },
-        onOpenFolder: (path: string) => {
-          fileView.openFolder(path);
-          setSelectedWorkerId(null);
-          subagents.closeAgent();
-          if (reviewOpen) changeReviewOpen(false);
-        },
-        onOpenDiff: (target: ScmDiffTarget) => {
-          fileView.openDiff(target);
-          setSelectedWorkerId(null);
-          subagents.closeAgent();
-          if (reviewOpen) changeReviewOpen(false);
-        },
-        notify,
-      } satisfies TeamInspectorContext}
-      tabPolicy={inspectorPolicy}
-    >
-      {({ toggleButton, openTab }) => <div className="team-view">
-      <OriginTaskBar task={task} allTasks={allTasks} onOpen={openTaskById} />
-      <TeamHeader
-        task={task}
-        workers={workers}
-        groups={teamGroups}
-        haltedByHistory={teamGroups.length === 0 && (historyHalt || localHalted)}
-        conversationMarkdown={markdown}
-        busy={busy}
-        reviewOpen={reviewOpen}
-        onTitle={async (title) => onTaskUpdate(await api.patchTask(task.id, { title, autoTitle: false }))}
-        onTogglePin={async () => onTaskUpdate(await api.patchTask(task.id, { pinnedAt: task.pinnedAt != null ? null : Date.now() }))}
-        onReview={() => { setSelectedWorkerId(null); changeReviewOpen(!reviewOpen); }}
-        onRun={() => void perform("run")}
-        onHalt={() => void perform("halt")}
-        onResume={() => void perform("resume")}
-        onArchive={() => void perform("archive")}
-        onDelete={() => setDeleteOpen(true)}
-        indicatorForTask={indicatorForTask}
-        inspectorToggle={toggleButton}
-        notify={notify}
-      />
-      {reviewOpen ? (
-        <TeamReviewWorkspace lead={task} workers={workers} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify} />
-      ) : fileView.filePath ? (
-        <FileViewer
-          taskId={task.id}
-          path={fileView.filePath}
-          reel={fileView.reel}
-          onStep={fileView.stepFile}
-          zoomed={fileView.zoomed}
-          onToggleZoom={fileView.toggleZoom}
-          onExitZoom={fileView.exitZoom}
-          onOpenDiff={fileView.canShowDiff ? fileView.showDiff : undefined}
-          onClose={fileView.close}
+    <TaskFileLinks taskId={task.id} onOpenFile={openFileInCenter} onOpenFolder={openFolderInCenter}>
+      <InspectorHost
+        contextKey={`team:${task.id}`}
+        descriptors={inspectors}
+        context={{
+          nativeWork: subagents.nativeWork,
+          monitors: monitorTab.monitors,
+          task,
+          workers,
+          groups: teamGroups,
+          sessions: conversation.sessions,
+          leadTurns: turns,
+          selectedWorkerId,
+          onSelectWorker: selectWorker,
+          onOpenReview: () => changeReviewOpen(true),
+          onOpenTask: openTaskById,
+          indicatorForTask,
+          workerLiveLines,
+          activeFilePath: fileView.activePath,
+          onOpenFile: openFileInCenter,
+          onOpenFolder: openFolderInCenter,
+          onOpenDiff: (target: ScmDiffTarget) => {
+            fileView.openDiff(target);
+            setSelectedWorkerId(null);
+            subagents.closeAgent();
+            if (reviewOpen) changeReviewOpen(false);
+          },
+          notify,
+        } satisfies TeamInspectorContext}
+        tabPolicy={inspectorPolicy}
+      >
+        {({ toggleButton, openTab }) => <div className="team-view">
+        <OriginTaskBar task={task} allTasks={allTasks} onOpen={openTaskById} />
+        <TeamHeader
+          task={task}
+          workers={workers}
+          groups={teamGroups}
+          haltedByHistory={teamGroups.length === 0 && (historyHalt || localHalted)}
+          conversationMarkdown={markdown}
+          busy={busy}
+          reviewOpen={reviewOpen}
+          onTitle={async (title) => onTaskUpdate(await api.patchTask(task.id, { title, autoTitle: false }))}
+          onTogglePin={async () => onTaskUpdate(await api.patchTask(task.id, { pinnedAt: task.pinnedAt != null ? null : Date.now() }))}
+          onReview={() => { setSelectedWorkerId(null); changeReviewOpen(!reviewOpen); }}
+          onRun={() => void perform("run")}
+          onHalt={() => void perform("halt")}
+          onResume={() => void perform("resume")}
+          onArchive={() => void perform("archive")}
+          onDelete={() => setDeleteOpen(true)}
+          indicatorForTask={indicatorForTask}
+          inspectorToggle={toggleButton}
           notify={notify}
         />
-      ) : fileView.folderPath ? (
-        <FolderViewer
-          taskId={task.id}
-          path={fileView.folderPath}
-          zoomed={fileView.zoomed}
-          onToggleZoom={fileView.toggleZoom}
-          onExitZoom={fileView.exitZoom}
-          onOpenFile={fileView.openFile}
-          onOpenFolder={fileView.openFolder}
-          onClose={fileView.close}
-          notify={notify}
-        />
-      ) : fileView.diff ? (
-        <ScmDiffViewer
-          taskId={task.id}
-          path={fileView.diff.path}
-          source={fileView.diff.source}
-          origPath={fileView.diff.origPath}
-          kind={fileView.diff.kind}
-          zoomed={fileView.zoomed}
-          onToggleZoom={fileView.toggleZoom}
-          onExitZoom={fileView.exitZoom}
-          onOpenFile={fileView.showFile}
-          onClose={fileView.close}
-        />
-      ) : (
-        <>
-          {task.question && (
-            <div className="team-lead-question">
-              <QuestionCard task={task} onAnswer={async (answer, input) => {
-                await api.answerTask(task.id, answer, input);
-                await refreshTask();
-                notify("已答复调度者，原会话正在续跑");
-              }} />
-            </div>
-          )}
-          {stopped && <HaltNotice workers={workers} groupCount={teamGroups.length} historyOnly={teamGroups.length === 0} />}
-          {stopped && <CuaResidualNotice taskId={task.id} status={cuaStatus} onStatus={setCuaStatus} notify={notify} />}
-          <TeamAttentionBar
-            waiting={waiting}
-            workers={workers}
-            delegatingIds={delegatingIds}
-            onOpenWorker={selectWorker}
-            onAskLead={askLead}
+        {reviewOpen ? (
+          <TeamReviewWorkspace lead={task} workers={workers} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify} />
+        ) : fileView.filePath ? (
+          <FileViewer
+            taskId={task.id}
+            path={fileView.filePath}
+            reel={fileView.reel}
+            onStep={fileView.stepFile}
+            zoomed={fileView.zoomed}
+            onToggleZoom={fileView.toggleZoom}
+            onExitZoom={fileView.exitZoom}
+            onOpenDiff={fileView.canShowDiff ? fileView.showDiff : undefined}
+            onClose={fileView.close}
+            notify={notify}
           />
-          <section className="team-flow-main" aria-label="团队会话">
-            {/* 选中调度台会话里的一段 →「添加到备忘」,跟普通任务详情页**同一个组件、同一张表**
-                (独立审查第 1 轮 F4:只接了面板、没接选文入口,等于逼人手抄)。团队这一页没有
-                侧聊那一格,所以 onAsk 不传 —— 浮条上只出「添加到备忘」一颗。 */}
-            <MemoSelectionScope taskId={task.id} openTab={openTab} notify={notify}>
-              <TeamFeed
-                task={task}
-                rows={rows}
-                workers={workers}
-                onOpenWorker={selectWorker}
-                onAskLead={askLead}
-                delegatingIds={delegatingIds}
-                indicatorForTask={indicatorForTask}
-                historyReady={conversation.transcriptReady}
-              />
-            </MemoSelectionScope>
-            {/* 验收前置命令那一条，跟普通任务详情页同一个组件、同一条 rail 几何（第 1 轮
-                审查 F4）：团队走的是这套独立的主会话 + 回复框，不经过 TaskDetail，于是
-                给团队点验收之后，命令在工作区里跑十几分钟而这一页上一个字都看不出来。 */}
-            {task.acceptGateRunning && (
-              <div className="task-reply-rail">
-                <AcceptGateWaitCard key={task.id} taskId={task.id} expected notify={notify} />
+        ) : fileView.folderPath ? (
+          <FolderViewer
+            taskId={task.id}
+            path={fileView.folderPath}
+            zoomed={fileView.zoomed}
+            onToggleZoom={fileView.toggleZoom}
+            onExitZoom={fileView.exitZoom}
+            onOpenFile={fileView.openFile}
+            onOpenFolder={fileView.openFolder}
+            onClose={fileView.close}
+            notify={notify}
+          />
+        ) : fileView.diff ? (
+          <ScmDiffViewer
+            taskId={task.id}
+            path={fileView.diff.path}
+            source={fileView.diff.source}
+            origPath={fileView.diff.origPath}
+            kind={fileView.diff.kind}
+            zoomed={fileView.zoomed}
+            onToggleZoom={fileView.toggleZoom}
+            onExitZoom={fileView.exitZoom}
+            onOpenFile={fileView.showFile}
+            onClose={fileView.close}
+          />
+        ) : (
+          <>
+            {task.question && (
+              <div className="team-lead-question">
+                <QuestionCard task={task} onAnswer={async (answer, input) => {
+                  await api.answerTask(task.id, answer, input);
+                  await refreshTask();
+                  notify("已答复调度者，原会话正在续跑");
+                }} />
               </div>
             )}
-            <TeamReplyBox task={task} tasks={allTasks} onSend={async (text, attachments, options) => {
-              // 回复也会起一轮(与普通任务详情页同口径)。
-              if (!(await confirmExecutorSwap(task.id))) return null;
-              const result = await api.replyTask(task.id, text, { attachments, ...options });
-              // 调度台是常驻会话,忙着也接得住,所以这里只可能是定时发送;仍按结果
-              // 分支(而不是按请求参数),口径与普通任务一致。
-              if ("scheduled" in result) {
-                notify(result.message.mode === "after"
-                  ? `已安排在「${allTasks.find((item) => item.id === result.message.afterTaskId)?.title || "所选任务"}」完成后发送给调度者`
-                  : `已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送给调度者`);
+            {stopped && <HaltNotice workers={workers} groupCount={teamGroups.length} historyOnly={teamGroups.length === 0} />}
+            {stopped && <CuaResidualNotice taskId={task.id} status={cuaStatus} onStatus={setCuaStatus} notify={notify} />}
+            <TeamAttentionBar
+              waiting={waiting}
+              workers={workers}
+              delegatingIds={delegatingIds}
+              onOpenWorker={selectWorker}
+              onAskLead={askLead}
+            />
+            <section className="team-flow-main" aria-label="团队会话">
+              {/* 选中调度台会话里的一段 →「添加到备忘」,跟普通任务详情页**同一个组件、同一张表**
+                  (独立审查第 1 轮 F4:只接了面板、没接选文入口,等于逼人手抄)。团队这一页没有
+                  侧聊那一格,所以 onAsk 不传 —— 浮条上只出「添加到备忘」一颗。 */}
+              <MemoSelectionScope taskId={task.id} openTab={openTab} notify={notify}>
+                <TeamFeed
+                  task={task}
+                  rows={rows}
+                  workers={workers}
+                  onOpenWorker={selectWorker}
+                  onAskLead={askLead}
+                  delegatingIds={delegatingIds}
+                  indicatorForTask={indicatorForTask}
+                  historyReady={conversation.transcriptReady}
+                />
+              </MemoSelectionScope>
+              {/* 验收前置命令那一条，跟普通任务详情页同一个组件、同一条 rail 几何（第 1 轮
+                  审查 F4）：团队走的是这套独立的主会话 + 回复框，不经过 TaskDetail，于是
+                  给团队点验收之后，命令在工作区里跑十几分钟而这一页上一个字都看不出来。 */}
+              {task.acceptGateRunning && (
+                <div className="task-reply-rail">
+                  <AcceptGateWaitCard key={task.id} taskId={task.id} expected notify={notify} />
+                </div>
+              )}
+              <TeamReplyBox task={task} tasks={allTasks} onSend={async (text, attachments, options) => {
+                // 回复也会起一轮(与普通任务详情页同口径)。
+                if (!(await confirmExecutorSwap(task.id))) return null;
+                const result = await api.replyTask(task.id, text, { attachments, ...options });
+                // 调度台是常驻会话,忙着也接得住,所以这里只可能是定时发送;仍按结果
+                // 分支(而不是按请求参数),口径与普通任务一致。
+                if ("scheduled" in result) {
+                  notify(result.message.mode === "after"
+                    ? `已安排在「${allTasks.find((item) => item.id === result.message.afterTaskId)?.title || "所选任务"}」完成后发送给调度者`
+                    : `已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送给调度者`);
+                  return result;
+                }
+                conversation.addUser(text, attachments);
+                notify("已发送给调度者");
                 return result;
-              }
-              conversation.addUser(text, attachments);
-              notify("已发送给调度者");
-              return result;
-            }} />
-          </section>
-        </>
-      )}
-      {!reviewOpen && selectedWorker && (
-        <WorkerDrawer
-          worker={selectedWorker}
-          allTasks={allTasks}
-          onClose={() => setSelectedWorkerId(null)}
-          onOpenFull={() => onSelectTask(selectedWorker)}
-          onOpenTask={openTaskById}
-          onTaskUpdate={onTaskUpdate}
-          onDeleted={onTaskDeleted}
-          notify={notify}
-        />
-      )}
-      {/* 子智能体抽屉不跟着验收台让位：那一格列表在验收台开着时也点得到，按了就得有反应
-          （反过来打开验收台会先收起它，见 changeReviewOpen）。 */}
-      {subagents.drawer}
-      {deleteOpen && (
-        <DeleteTaskDialog
-          task={task}
-          notify={notify}
-          onDeleted={(ids) => ids.forEach(onTaskDeleted)}
-          onClose={() => setDeleteOpen(false)}
-        />
-      )}
-      </div>}
-    </InspectorHost>
+              }} />
+            </section>
+          </>
+        )}
+        {!reviewOpen && selectedWorker && (
+          <WorkerDrawer
+            worker={selectedWorker}
+            allTasks={allTasks}
+            onClose={() => setSelectedWorkerId(null)}
+            onOpenFull={() => onSelectTask(selectedWorker)}
+            onOpenTask={openTaskById}
+            onTaskUpdate={onTaskUpdate}
+            onDeleted={onTaskDeleted}
+            notify={notify}
+          />
+        )}
+        {/* 子智能体抽屉不跟着验收台让位：那一格列表在验收台开着时也点得到，按了就得有反应
+            （反过来打开验收台会先收起它，见 changeReviewOpen）。 */}
+        {subagents.drawer}
+        {deleteOpen && (
+          <DeleteTaskDialog
+            task={task}
+            notify={notify}
+            onDeleted={(ids) => ids.forEach(onTaskDeleted)}
+            onClose={() => setDeleteOpen(false)}
+          />
+        )}
+        </div>}
+      </InspectorHost>
+    </TaskFileLinks>
   );
 }

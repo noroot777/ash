@@ -72,6 +72,10 @@
 .file-viewer__gutter { position:sticky; left:0; display:flex; flex:0 0 auto; flex-direction:column; border-right:.5px solid var(--line); background:var(--panel); padding:12px 8px 24px; color:var(--faint); font-family:var(--font-mono); font-size:11px; line-height:1.6; text-align:right; user-select:none; }
 .file-viewer__text { min-width:0; flex:1; margin:0; padding:12px 16px 24px; color:var(--ink); font-family:var(--font-mono); font-size:11px; line-height:1.6; white-space:pre; }
 
+/* Markdown 文档按正文的样式摊开，限一个读得舒服的行宽，宽屏上居中。 */
+.file-viewer__doc { flex:1; padding:22px 32px 48px; }
+.file-viewer__doc > .task-markdown { max-width:820px; margin:0 auto; color:var(--ink); font-size:13px; }
+
 .file-viewer__media { display:grid; min-height:0; flex:1; place-items:center; padding:20px; }
 .file-viewer__media img { max-width:100%; max-height:100%; border:1px solid var(--line); border-radius:8px; background:var(--panel); object-fit:contain; }
 /* 图片原地缩放：放大后的图被裁在这块里，工具条钉在底边，平移边界也按这块算。 */

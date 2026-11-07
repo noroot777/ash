@@ -15,7 +15,7 @@ import { committedInWindows, resolveArtifactScope, type CommitEvidence } from ".
 import { checkBranchVersions, checkCommitVersions, type CommitVersionCheck } from "./task-artifact-version.js";
 import { windowHit } from "./task-artifact-windows.js";
 
-// 「这个任务做出来的、值得看一眼的东西」——图片、网页、音视频、PDF。
+// 「这个任务做出来的、值得看一眼的东西」——图片、网页、音视频、PDF、文档。
 //
 // 跟文件树、改动面板刻意不是同一个问题：那两个回答「工作目录里现在有什么」和「代码
 // 改了哪几行」，而这里回答「跑完这一趟，产出了什么可以直接看的东西」。所以判据是两条

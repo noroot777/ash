@@ -17,6 +17,7 @@ import { useImageZoom } from "../components/useImageZoom.ts";
 import { api, type FileContent } from "../lib/api.ts";
 import { useZoomLayer, ZoomToggle } from "../lib/zoomLayer.tsx";
 import { formatSize, isImageName } from "./fileModel.ts";
+import { MARKDOWN_PATTERN, MarkdownFileBody } from "./MarkdownFileBody.tsx";
 import { OpenWithMenu } from "./OpenWithMenu.tsx";
 import { useDeleteEntry } from "./useDeleteEntry.tsx";
 
@@ -104,6 +105,9 @@ function Body({
         <audio className="file-viewer__audio" src={rawUrl} controls preload="metadata" />
       </div>
     );
+  }
+  if (file.kind === "text" && MARKDOWN_PATTERN.test(file.path) && !showSource) {
+    return <MarkdownFileBody taskId={taskId} file={file} />;
   }
   if (file.kind === "binary") {
     return (
@@ -221,8 +225,10 @@ export function FileViewer({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [revealing, setRevealing] = useState(false);
-  // 网页默认渲染、可切回源码。默认摊开渲染那一面：点开一份 html 十有八九是想看它长什么样，
-  // 想读源码的人按一下就有；换文件时重置，不然上一个文件选的「源码」会跟着带到下一个。
+  // 网页和 Markdown 默认渲染、可切回源码。默认摊开渲染那一面：点开一份 html 十有八九是想看
+  // 它长什么样，想读源码的人按一下就有；换文件时重置，不然上一个文件选的「源码」会跟着带到
+  // 下一个。
+  const markdown = file?.kind === "text" && MARKDOWN_PATTERN.test(file.path);
   const [showSource, setShowSource] = useState(false);
   useEffect(() => setShowSource(false), [path]);
   const zoom = useZoomLayer({
@@ -305,7 +311,7 @@ export function FileViewer({
             onStep={step}
           />
         )}
-        {pageUrl && (
+        {(pageUrl || markdown) && (
           <button
             type="button"
             className="file-viewer__action"
@@ -313,7 +319,7 @@ export function FileViewer({
             onClick={() => setShowSource((current) => !current)}
           >
             <Code size={13} aria-hidden="true" />
-            {showSource ? "看页面" : "看源码"}
+            {showSource ? (markdown ? "看排版" : "看页面") : "看源码"}
           </button>
         )}
         {/* 沙箱预览做不到完全保真（打包后的 JS 里 fetch("/api/…") 改不动），所以网页多给一颗

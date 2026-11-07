@@ -258,6 +258,33 @@ export async function resolveTarget(
   return { absPath: abs, directory: info.isDirectory() };
 }
 
+/**
+ * 一批「看上去像路径」的字符串里，哪些真是这个工作区里的文件或目录——会话正文里提到的
+ * 路径要不要画成可点的链接，只认这一问的答案。
+ *
+ * 判据交给 `resolveInRoot` 那道门禁（越界、软链出逃一律当不存在），字符串长得像不像
+ * 路径由前端粗筛：`api.taskFileRawUrl`、`origin/main` 这类只有服务端答得了「到底有没有」。
+ * 绝对路径也收，落在工作区里就换成相对路径交回去，跟文件树用的是同一个主键。
+ */
+export async function locateEntries(
+  root: WorkspaceRoot,
+  paths: readonly string[],
+): Promise<Record<string, { path: string; kind: FileEntryKind } | null>> {
+  const entries = await Promise.all(paths.map(async (input) => {
+    try {
+      const abs = await resolveInRoot(root.path, input);
+      const info = await stat(abs);
+      const path = relative(root.path, abs).split(sep).join("/");
+      // 根目录本身不算：`.`、`./` 指着整个工作区，点开它没有意义。
+      if (!path) return [input, null] as const;
+      return [input, { path, kind: info.isDirectory() ? "dir" as const : "file" as const }] as const;
+    } catch {
+      return [input, null] as const;
+    }
+  }));
+  return Object.fromEntries(entries);
+}
+
 export interface FileContent {
   path: string;
   name: string;

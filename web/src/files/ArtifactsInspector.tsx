@@ -7,6 +7,7 @@ import {
   CaretRight,
   FileAudio,
   FilePdf,
+  FileText,
   FileVideo,
   Images,
   SpinnerGap,
@@ -35,6 +36,7 @@ function KindGlyph({ kind }: { kind: TaskArtifact["kind"] }) {
   if (kind === "video") return <FileVideo size={20} aria-hidden="true" />;
   if (kind === "audio") return <FileAudio size={20} aria-hidden="true" />;
   if (kind === "pdf") return <FilePdf size={20} aria-hidden="true" />;
+  if (kind === "doc") return <FileText size={20} aria-hidden="true" />;
   return <Images size={20} aria-hidden="true" />;
 }
 
@@ -42,7 +44,7 @@ function KindGlyph({ kind }: { kind: TaskArtifact["kind"] }) {
  * 卡片上那块预览。
  *
  * 只有图片直接铺开——它是唯一「缩略图即内容」的一类，一眼就能认出是不是要找的那张。
- * 网页、音视频、PDF 给图标：在一条 280px 宽的侧栏里塞一个能播的播放器，既看不清也点不
+ * 网页、音视频、PDF、文档给图标：在一条 280px 宽的侧栏里塞一个能播的播放器，既看不清也点不
  * 准，那些都该在中间栏摊开。
  */
 function Thumb({ taskId, artifact }: { taskId: string; artifact: TaskArtifact }) {
@@ -63,7 +65,7 @@ function Thumb({ taskId, artifact }: { taskId: string; artifact: TaskArtifact })
 }
 
 /**
- * 「这个任务做出来了什么」——图片、网页、音视频、PDF。
+ * 「这个任务做出来了什么」——图片、网页、音视频、PDF、文档。
  *
  * 跟旁边的「文件」「改动」刻意不是同一个问题：文件树回答「工作目录里现在有什么」，改动
  * 回答「代码改了哪几行」，而产物回答「跑完这一趟，有什么可以直接看的东西」。一份生成的
@@ -138,7 +140,7 @@ export function ArtifactsInspector({
           <Images size={22} aria-hidden="true" />
           <b>{doubtful.length ? "没有能确定是它做的产物" : "还没有可以看的产物"}</b>
           <p>
-            这里收的是任务做出来的图片、网页、音视频和 PDF。
+            这里收的是任务做出来的图片、网页、音视频、PDF 和文档。
             {doubtful.length
               ? "下面那些拿不准是不是它做的，点开逐条看。"
               : result?.since

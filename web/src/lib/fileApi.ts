@@ -16,6 +16,7 @@ import type {
   IdeProbe,
   OpenerProbe,
   TaskArtifactsResult,
+  TaskFileLocate,
   TaskFileRead,
 } from "./apiTypes.ts";
 import { apiPath, id, json, request } from "./apiClient.ts";
@@ -49,6 +50,9 @@ export const fileApi = {
     request(`/tasks/${id(taskId)}/artifacts`, { signal }),
   taskFileOpeners: (taskId: string, path: string, refresh = false): Promise<OpenerProbe> =>
     request(`/tasks/${id(taskId)}/file/openers?path=${id(path)}${refresh ? "&refresh=1" : ""}`),
+  // 会话正文里提到的路径哪些真在工作区里（批量），见 lib/taskFileLocate.ts。
+  locateTaskFiles: (taskId: string, paths: readonly string[], signal?: AbortSignal): Promise<TaskFileLocate> =>
+    request(`/tasks/${id(taskId)}/file/locate`, { ...json("POST", { paths }), signal }),
   revealTaskFile: (taskId: string, path: string): Promise<{ ok: true; absPath: string }> =>
     request(`/tasks/${id(taskId)}/file/reveal`, json("POST", { path })),
   // 本机装了哪些编程 IDE。整台机器一份，跟任务无关，所以路径上没有 taskId。
