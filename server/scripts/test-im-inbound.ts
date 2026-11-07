@@ -16,7 +16,8 @@
 //    对上、发回飞书（回在用户那条消息下面）；同一条飞书消息重复推送只投一次；
 // ⑤ 附件：图片下载 → 转存进上传目录 → 路径随消息投进房间；
 // ⑥ 群：在群里 @ 机器人发群码 → 认领（带群名）→ 确认 → 群里 @ 机器人说话进项目群聊房间，
-//    自动补上 @成员名（群聊房间里不点名没人答）。
+//    自动补上 @成员名（群聊房间里不点名没人答）；
+// ⑦ 项目多到一张卡放不下：/project 选单、/new 表单上当前项目照样点得到、选得到，卡上说出还有几个没列出、怎么选到。
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -360,6 +361,37 @@ try {
     const groupMessage = (await db.select().from(chatMessages).where(eq(chatMessages.id, chatMessageIdOf(`msg:${talk}`)))).at(0)!;
     assert.equal(groupMessage.body, "@助手 今天谁在改登录页？", "群聊房间里自动点名");
     assert.equal(JSON.parse(groupMessage.mentions).length, 1, "点到了成员");
+  }
+
+  // ── ⑦ 项目多到一张卡放不下 ────────────────────────────────────────────────
+  {
+    const many = Array.from({ length: 105 }, (_, index) => {
+      const id = `pm${String(index).padStart(3, "0")}`;
+      mkdirSync(join(stage, "repos", id), { recursive: true });
+      return { id, name: `批量项目 ${id}`, repoPath: join(stage, "repos", id), apiKeys: null, createdAt: at };
+    });
+    await db.insert(projects).values(many as never);
+    const order = await im.ash.get<{ id: string; name: string }[]>({ channel: "feishu", appId: APP, openId: OWNER }, "/api/projects");
+    assert.ok(order.ok && order.data.length === 106, "106 个项目都看得见");
+    const last = order.data.at(-1)!;
+    await db.update(imBindings).set({ projectId: last.id }).where(eq(imBindings.openId, OWNER));
+
+    const list = await im.say({ text: "/project" });
+    const form = await im.say({ text: "/new" });
+    await im.settle();
+    const picker = contentOf(repliesTo(list)[0]!);
+    assert.equal(buttonsOf(picker).length, 30, "选单一张卡放 30 个");
+    const option = buttonsOf(picker).find((button) => button.text === last.name);
+    assert.ok(option, "排在最后的当前项目照样有按钮");
+    assert.match(textOf(picker), /还有 76 个项目没列出：发 \/project 名字 切过去/);
+    assert.match(textOf((await im.click(OWNER, option!.value!)).card?.data), new RegExp(`已切到「${last.name}」`));
+
+    const card = contentOf(repliesTo(form)[0]!);
+    const parsed = JSON.parse(JSON.stringify(card).match(/"options":(\[.*?\])/)![1]!) as { text: { content: string }; value: string }[];
+    assert.equal(parsed.length, 100, "下拉框放 100 个");
+    const initial = /"initial_option":"(\d+)"/.exec(JSON.stringify(card))?.[1];
+    assert.equal(parsed.find((entry) => entry.value === initial)?.text.content, last.name, "默认选中的就是排在最后的当前项目");
+    assert.match(textOf(card), /还有 6 个项目没列出：先发 \/project 名字 把它设成当前项目，再发 \/new/);
   }
 
   // 收尾：等聊天回复都落定，停掉部件再关库。

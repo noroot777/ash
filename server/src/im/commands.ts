@@ -45,6 +45,20 @@ export interface InboundContext {
 const CONFIRM_TTL_MS = 10 * 60_000;
 /** 项目选单、建任务表单要选要填：放久一点，发完过一阵再点也行。点的那一刻按他的身份办，看不到的项目切不了也建不了。 */
 const FORM_TTL_MS = 24 * 3600_000;
+/** 一张卡上放几个项目：选单每个项目一颗按钮，表单是一个下拉框。 */
+const PICK_LIMIT = 30;
+const FORM_LIMIT = 100;
+
+/**
+ * 一张卡上列哪些项目：卡放不下全部，但当前项目一定在里面（排在后面就顶掉最后一个）—— 卡上标着「当前」的那个
+ * 必须点得到、选得到。hidden = 没列出来的个数，卡上要说出来、指明怎么选到它们（/project 名字）。
+ */
+function choicesOf(list: Project[], currentId: string | null, limit: number): { shown: Project[]; hidden: number } {
+  const shown = list.slice(0, limit);
+  const current = list.find((project) => project.id === currentId);
+  if (current && !shown.includes(current)) shown[shown.length - 1] = current;
+  return { shown, hidden: list.length - shown.length };
+}
 
 export const HELP = [
   "直接回复提问卡 = 答复它（附图片、文件也行）；回复别的任务卡要以 /reply 开头，才会发给那个任务。",
@@ -192,13 +206,13 @@ export class CommandRunner {
     if (!rest) {
       if (!list.length) return this.say(ctx, "你还看不到任何项目。", SYSTEM_SCOPE);
       const current = list.find((project) => project.id === ctx.binding.projectId);
-      const shown = list.slice(0, 30);
-      const listed = [...new Set([...shown, ...(current ? [current] : [])].map((project) => project.id))];
+      const { shown, hidden } = choicesOf(list, ctx.binding.projectId, PICK_LIMIT);
+      const ids = shown.map((project) => project.id);
       // 信封里记着按钮对应哪个项目、是哪一次绑定：点的时候按这一份切，不按点那一刻重新排出来的顺序。
       return this.buttons(ctx, (envelope) => projectCard(current?.name ?? null, shown.map((project) => project.name),
-        shown.findIndex((project) => project.id === current?.id), envelope),
-      { command: "project", projectIds: shown.map((project) => project.id), boundAt: ctx.binding.boundAt },
-      this.scoped(ctx, { kind: "projects", projectIds: listed }), FORM_TTL_MS);
+        shown.findIndex((project) => project.id === current?.id), hidden, envelope),
+      { command: "project", projectIds: ids, boundAt: ctx.binding.boundAt },
+      this.scoped(ctx, { kind: "projects", projectIds: ids }), FORM_TTL_MS);
     }
     const index = /^\d+$/.test(rest) ? Number(rest) - 1 : -1;
     const lowered = rest.toLowerCase();
@@ -262,13 +276,15 @@ export class CommandRunner {
     if (inGroup && !fixed) return this.say(ctx, "这个群还没绑定 ash 项目：先在 ash 网页 设置 → 飞书 → 群 里绑定，或者在单聊里用 /new。", SYSTEM_SCOPE);
     const list = await this.projects(ctx);
     if (!list) return;
-    const shown = inGroup ? list.filter((project) => project.id === fixed) : list.slice(0, 30);
+    const { shown, hidden } = inGroup
+      ? { shown: list.filter((project) => project.id === fixed), hidden: 0 }
+      : choicesOf(list, ctx.binding.projectId, FORM_LIMIT);
     if (!shown.length) return this.say(ctx, inGroup ? "你看不到这个群绑定的项目，建不了任务。" : "你还看不到任何项目。", SYSTEM_SCOPE);
     const scope = inGroup
       ? this.scoped(ctx, { kind: "project", projectId: fixed! })
       : this.scoped(ctx, { kind: "projects", projectIds: shown.map((project) => project.id) });
     return this.buttons(ctx, (envelope) => newTaskCard(shown.map((project) => project.name),
-      inGroup ? 0 : shown.findIndex((project) => project.id === ctx.binding.projectId), envelope),
+      inGroup ? 0 : shown.findIndex((project) => project.id === ctx.binding.projectId), hidden, envelope),
     { command: "newform", projectIds: shown.map((project) => project.id) }, scope, FORM_TTL_MS);
   }
 
