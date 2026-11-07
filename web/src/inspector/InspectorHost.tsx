@@ -11,6 +11,7 @@ import {
 } from "react";
 import { Sidebar, SidebarSimple, X } from "@phosphor-icons/react";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
+import { useNarrowScreen } from "../lib/useNarrowScreen.ts";
 import { InspectorHeadSlotProvider } from "./headActions.tsx";
 import { InspectorRail } from "./InspectorRail.tsx";
 import { registerInspectorShortcutTarget } from "./shortcuts.ts";
@@ -191,7 +192,16 @@ function InspectorHostState<Context>({
     .map((id) => descriptorById.get(id))
     .filter((descriptor): descriptor is InspectorDescriptor<Context> => descriptor !== undefined);
   const activeDescriptor = descriptorById.get(state.activeTab ?? "") ?? openedDescriptors[0] ?? null;
-  const panelVisible = state.visible && activeDescriptor !== null;
+  // 窄屏上 Inspector 是盖在内容上的一层（inspector.css）：在手机上打开页面时不开，开关只算这一回，不改桌面上
+  // 记着的开 / 关。开着的时候窗口被拉窄，就照样开着（变成盖在上面的一层），不让正看着的东西凭空消失。
+  const narrow = useNarrowScreen();
+  const [narrowOpen, setNarrowOpen] = useState(false);
+  const [narrowSeen, setNarrowSeen] = useState(narrow);
+  if (narrow !== narrowSeen) {
+    setNarrowSeen(narrow);
+    if (narrow) setNarrowOpen(state.visible);
+  }
+  const panelVisible = (narrow ? narrowOpen : state.visible) && activeDescriptor !== null;
   const dragStart = useRef<{ x: number; width: number } | null>(null);
   const previousBodyStyle = useRef<{ cursor: string; userSelect: string } | null>(null);
   const instanceId = useId();
@@ -269,24 +279,38 @@ function InspectorHostState<Context>({
     };
   }, []);
 
+  /** 打开前把页签备好：一个都没开就开第一个，必开的那一格补上。 */
+  const withTabs = (current: InspectorState): InspectorState => {
+    const firstId = descriptors[0]?.id ?? null;
+    let openTabs = current.openTabs.length > 0
+      ? current.openTabs
+      : firstId ? [firstId] : [];
+    if (tabPolicy && descriptorById.has(tabPolicy.requiredTabId)
+      && !openTabs.includes(tabPolicy.requiredTabId)) {
+      openTabs = [...openTabs, tabPolicy.requiredTabId];
+    }
+    openTabs = orderedValidTabs(openTabs, descriptors);
+    return {
+      ...current,
+      openTabs,
+      activeTab: openTabs.includes(current.activeTab ?? "") ? current.activeTab : openTabs[0] ?? null,
+    };
+  };
+
   const toggle = () => {
+    if (narrow) {
+      if (panelVisible) {
+        setNarrowOpen(false);
+        return;
+      }
+      setState(withTabs);
+      setNarrowOpen(true);
+      return;
+    }
     setState((current) => {
       if (current.visible && current.openTabs.length > 0) return { ...current, visible: false };
-      const firstId = descriptors[0]?.id ?? null;
-      let openTabs = current.openTabs.length > 0
-        ? current.openTabs
-        : firstId ? [firstId] : [];
-      if (tabPolicy && descriptorById.has(tabPolicy.requiredTabId)
-        && !openTabs.includes(tabPolicy.requiredTabId)) {
-        openTabs = [...openTabs, tabPolicy.requiredTabId];
-      }
-      openTabs = orderedValidTabs(openTabs, descriptors);
-      return {
-        ...current,
-        openTabs,
-        activeTab: openTabs.includes(current.activeTab ?? "") ? current.activeTab : openTabs[0] ?? null,
-        visible: openTabs.length > 0,
-      };
+      const next = withTabs(current);
+      return { ...next, visible: next.openTabs.length > 0 };
     });
   };
 
@@ -306,9 +330,10 @@ function InspectorHostState<Context>({
       ...current,
       openTabs: orderedValidTabs([...current.openTabs, id], descriptors),
       activeTab: id,
-      visible: true,
+      ...(narrow ? {} : { visible: true }),
     }));
-  }, [descriptors]);
+    if (narrow) setNarrowOpen(true);
+  }, [descriptors, narrow]);
 
   // Registration order preserves drawer priority; changing icons/titles only refresh the callback data.
   const shortcutContext = useRef({ descriptors, openTab });
@@ -388,11 +413,12 @@ function InspectorHostState<Context>({
               <span className="inspector-host__panel-title">{activeDescriptor.title}</span>
               {/* 当前面板自己的入口挂这里（InspectorHeadActions），省掉面板内部那条常驻工具栏。 */}
               <div className="inspector-host__panel-actions" ref={setHeadSlot} />
+              {/* 窄屏上它盖着内容：这个叉是「收起、回到内容」，不是关掉这一格。 */}
               <button
                 type="button"
                 className="inspector-host__panel-close"
-                aria-label={`关闭${activeDescriptor.title}`}
-                onClick={() => closeTab(activeDescriptor.id)}
+                aria-label={narrow ? "收起 Inspector" : `关闭${activeDescriptor.title}`}
+                onClick={() => narrow ? setNarrowOpen(false) : closeTab(activeDescriptor.id)}
               >
                 <X size={12} weight="bold" aria-hidden="true" />
               </button>

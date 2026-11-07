@@ -395,6 +395,25 @@
   .team-header-actions > .inspector-toggle {
     display: grid;
   }
+
+  /* 窄屏摆不下并排的一栏：盖在内容上（InspectorHost 那边默认不开，关掉就回到内容）。 */
+  .inspector-layout {
+    position: relative;
+  }
+
+  .inspector-host,
+  .side-drawer > .inspector-layout > .inspector-host {
+    position: absolute;
+    z-index: 30;
+    inset: 0;
+    width: 100%;
+    min-width: 0;
+    border-left: 0;
+  }
+
+  .inspector-host__resize-handle {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

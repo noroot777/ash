@@ -543,3 +543,52 @@
     transition: none;
   }
 }
+
+/* 窄屏（手机、飞书里点开 ash 链接）：列表和内容一次只给一样（useNarrowPane.ts），不再挤成三栏。 */
+.workspace-narrow-back {
+  display: flex;
+  height: 36px;
+  flex: 0 0 36px;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  border-bottom: 0.5px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  padding: 0 12px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+
+@media (max-width: 720px) {
+  .workspace-shell {
+    min-height: 0;
+    padding: 0;
+  }
+
+  .workspace-main {
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .workspace-shell.is-narrow-list > .workspace-main,
+  .workspace-shell.is-narrow-content > .workspace-sidebar {
+    display: none;
+  }
+
+  .workspace-shell.is-narrow-list > .workspace-sidebar {
+    width: 100%;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .workspace-sidebar-resize-handle,
+  .workspace-spread-shortcut,
+  .workspace-sidebar-bottom > button[aria-label="收起侧边栏"],
+  .workspace-inspector-slot {
+    display: none;
+  }
+}
