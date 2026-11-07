@@ -94,6 +94,20 @@ const deepHit: SearchHit = {
   preview: "无关开头".repeat(500),
   excerpts: ["…正文第八千字附近的深处标记，包含真正需要查看的处理方案…", "…另一个很远的命中片段，解释为什么需要保留完整上下文…"],
 };
+const conversationHits: Record<string, SearchHit> = {
+  经常搜不出要找的东西: {
+    ...taskHits[0]!, title: "搜索体验排查", field: "conversation",
+    snippet: "…这个搜索现在的效果也很不好，经常搜不出要找的东西来，也看不清命中内容…",
+    excerpts: ["这个搜索现在的效果也很不好，经常搜不出要找的东西来，或者可能搜到了但 UI 上也不能合理地显示出来。"],
+    preview: "不相关的任务正文开头",
+  },
+  READ_CHUNK_BYTES: {
+    ...taskHits[0]!, title: "排查 ash 意外停止", field: "conversation",
+    snippet: "…const READ_CHUNK_BYTES = 64 * 1024;…",
+    excerpts: ["server/src/search-corpus.ts\n+const READ_CHUNK_BYTES = 64 * 1024;"],
+    preview: "为什么刚才 ash 无故自己停了两次了？",
+  },
+};
 const responseOf = (rows: SearchHit[]) => new Response(`${rows.map((hit) => JSON.stringify(hit)).join("\n")}\n`, {
   status: 200, headers: { "content-type": "application/x-ndjson" },
 });
@@ -106,6 +120,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     const sort = url.searchParams.get("sort") ?? "relevance";
     requested.push(sort);
     const query = url.searchParams.get("q");
+    if (query && conversationHits[query]) return responseOf([conversationHits[query]]);
     if (query === "新建任务" || query === "harness") return new Promise<Response>((resolve) => {
       controls.__releaseCommandSearch = () => resolve(responseOf(hits));
     });

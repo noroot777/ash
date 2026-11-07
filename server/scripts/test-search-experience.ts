@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Writable } from "node:stream";
 import { isSearchQueryReady, searchMatchQuality } from "@ash/shared/search";
 import { SearchCorpus } from "../src/search-corpus.js";
 
@@ -35,7 +36,23 @@ try {
   writeFileSync(join(directory, "00-agent.jsonl"), `${JSON.stringify({
     type: "tool_result", tool_use_id: "metadata-only-marker", content: 'heap out of memory 机器轨迹\n轨迹独有词："可读引号" C:\\work\\file',
   })}\n`);
-  writeFileSync(join(directory, "session.md"), `会话第一词${"背景".repeat(800)}会话第二词\nheap out of memory 人类可读的排查结论`);
+  const { writeTurn, writeTurnEnd } = await import("../src/transcript.js");
+  let transcript = "";
+  const output = new Writable({ write(chunk, _encoding, done) { transcript += String(chunk); done(); } });
+  writeTurn(output, { t: "user", agent: "codex", text: `会话第一词${"背景".repeat(800)}会话第二词\n${"上下文".repeat(90)}经常搜不出要找的东西\nheap out of memory 人类可读的排查结论` }, iso(0));
+  writeTurnEnd(output, iso(1));
+  writeTurn(output, { t: "system", agent: "codex", text: "哨兵的可读消息", aside: true }, iso(2));
+  output.end("\nagent 的正文回答\n");
+  writeFileSync(join(directory, "session.md"), transcript);
+  const toolInputs = {
+    file_path: "D:\\ai_workspace\\file-only.ts", old_string: "old-string-marker", new_string: "new-string-marker",
+    pattern: "pattern-marker", url: "https://example.test/url-marker", query: "query-marker", future_plugin_field: "future-field-marker",
+  };
+  writeFileSync(join(directory, "01-tools.jsonl"), [
+    { item: { type: "fileChange", changes: [{ path: "server/src/path-marker.ts", diff: "+const READ_CHUNK_BYTES = 65536;" }] } },
+    { item: { type: "file_change", changes: [{ diff: "+let hasConversation = false;" }] } },
+    { type: "assistant", message: { content: [{ type: "tool_use", name: "Edit", input: toolInputs }] } },
+  ].map((entry) => JSON.stringify(entry)).join("\n"));
   await db.insert(notes).values({
     id: "deep-note", projectId: "local", body: `${"开始".repeat(2500)}笔记深处标记`, createdAt: Date.parse(iso(0)), updatedAt: Date.parse(iso(1)),
   });
@@ -60,6 +77,19 @@ try {
   assert.equal(conversation?.field, "conversation");
   assert.equal(conversation?.excerpts?.length, 2);
   assert.ok(conversation?.excerpts?.some((text) => text.includes("会话第二词")));
+  const userTurn = (await query("经常搜不出要找的东西"))[0];
+  assert.equal(userTurn?.field, "conversation");
+  assert.ok(userTurn?.snippet.includes("经常搜不出要找的东西"));
+  assert.ok(userTurn!.snippet.indexOf("经常搜不出要找的东西") <= 33, "the list snippet must put the match within its first two lines");
+  assert.ok(userTurn?.excerpts?.every((text) => !text.includes("\x1e") && !text.includes('"t":') && !text.includes("agentEnd")));
+  for (const value of ["READ_CHUNK_BYTES", "hasConversation", "server/src/path-marker.ts", ...Object.values(toolInputs)]) {
+    const hit = (await query(value))[0];
+    assert.equal(hit?.field, "conversation", value);
+    assert.ok(hit?.snippet.toLowerCase().includes(value.toLowerCase()), `normalized match must have a snippet: ${value}`);
+    assert.ok(hit?.excerpts?.some((text) => text.toLowerCase().includes(value.toLowerCase())), `normalized match must have an excerpt: ${value}`);
+  }
+  assert.equal((await query("哨兵的可读消息"))[0]?.field, "conversation");
+  assert.equal((await query("agentEnd")).length, 0);
   const readable = (await query('"heap out of memory"'))[0];
   assert.ok(readable?.snippet.includes("人类可读的排查结论"));
   assert.ok(readable?.excerpts?.every((text) => !text.includes("机器轨迹") && !text.includes("tool_use_id")));
@@ -72,7 +102,7 @@ try {
   assert.equal(mixed?.excerpts?.length, 2);
   assert.ok(mixed?.excerpts?.[0]?.includes("会话第一词"));
   assert.ok(mixed?.excerpts?.[1]?.includes("轨迹独有词"));
-  assert.equal((await query("metadata-only-marker"))[0]?.id, "conversation", "raw matching must preserve metadata recall");
+  assert.equal((await query("metadata-only-marker")).length, 0, "raw metadata is not positive conversation evidence");
   assert.equal((await query("会话第一词 -metadata-only-marker")).length, 0);
   const note = (await query("笔记深处标记", { type: "notes" }))[0];
   assert.ok(note?.excerpts?.[0]?.includes("笔记深处标记"));
@@ -86,7 +116,7 @@ try {
   const corpus = new SearchCorpus(["alpha", "omega"], "", 180);
   for (const chunk of ["alpha", "x".repeat(3000), "omega"]) corpus.append(chunk);
   assert.equal(corpus.snippets(["alpha", "omega"]).length, 2);
-  console.log("search experience passed: exact id, ranking, excerpts, Markdown priority, decoded JSON fallback, raw exclusions, notes, Han queries");
+  console.log("search experience passed: real user/system/agent turns, tool inputs, changes and paths, match/evidence invariant, raw exclusions, ranking and snippets");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

@@ -125,6 +125,20 @@ try {
     await page.screenshot({ path: join(process.env.ASH_SEARCH_SCREENSHOTS, "search-desktop.png") });
   }
 
+  for (const [query, screenshot] of [["经常搜不出要找的东西", "readable-user-turn.png"], ["READ_CHUNK_BYTES", "readable-code-change.png"]]) {
+    await input.fill(query);
+    await page.waitForFunction((query) => document.querySelector(".palette-excerpt")?.textContent.includes(query), query);
+    const text = await preview.innerText();
+    assert.ok(!text.includes('"t":') && !text.includes("agentEnd") && !text.includes("不相关的任务正文开头"));
+    const visibleMatch = await rowAt(0).locator(".palette-hit-snippet mark").first().evaluate((node) => {
+      const mark = node.getBoundingClientRect();
+      const snippet = node.closest(".palette-hit-snippet").getBoundingClientRect();
+      return mark.top >= snippet.top - 1 && mark.bottom <= snippet.bottom + 1;
+    });
+    assert.ok(visibleMatch, `the list must show the matched words: ${query}`);
+    if (process.env.ASH_SEARCH_SCREENSHOTS) await page.screenshot({ path: join(process.env.ASH_SEARCH_SCREENSHOTS, screenshot) });
+  }
+
   await input.fill("任务");
   await page.waitForFunction(() => document.querySelectorAll(".palette-results [data-search-key]").length === 1);
   assert.equal(await rowAt(0).getAttribute("data-search-key"), null, "matching commands must stay above ordinary search results");

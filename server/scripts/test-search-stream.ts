@@ -45,14 +45,27 @@ try {
   const trace = JSON.stringify({ event: { kind: "text", text: "会话正文" }, session_id: "hidden-session" });
   const agent = JSON.stringify({ message: { content: [{ type: "text", text: "agent 正文" }] } });
   const codex = JSON.stringify({ item: { type: "command_execution", command: ["npm", "run build"], aggregated_output: "构建输出" } });
+  const tools = JSON.stringify({ item: { type: "fileChange", changes: [{ path: "file-path-only", diff: "diff-only" }] }, input: {
+    file_path: "claude-file-only", old_string: "old-string-only", new_string: "new-string-only", pattern: "pattern-only", url: "url-only", query: "query-only", future_plugin_field: "future-field-only",
+  } });
+  const turn = `\x1e${JSON.stringify({ t: "user", agent: "codex", text: '经常搜不出要找的东西\nWindows D:\\ai_workspace "引号" 🧪', at: "hidden-turn-time" })}\n`;
+  const ending = `\x1e${JSON.stringify({ t: "agentEnd", at: "hidden-ending-time" })}\n`;
+  const system = `\x1e${JSON.stringify({ t: "system", text: "系统正文", aside: true, at: "hidden-system-time" })}\n`;
   for (const width of [1, 2, 7, 64, 1024]) {
     let decoded = "";
     const decoder = new SearchLogText((value) => { decoded += value; });
-    const input = `${escaped}${trace}\n${agent}\n${codex}\nplain fallback\n`;
+    const input = `${escaped}${trace}\n${agent}\n${codex}\n${tools}\nplain fallback\n`;
     for (let offset = 0; offset < input.length; offset += width) decoder.append(input.slice(offset, offset + width));
     assert.ok(decoded.includes('你好\nquoted "text" C:\\work 🧪'), `${width}: decode escapes across chunks`);
     for (const value of ["会话正文", "agent 正文", "npm", "run build", "构建输出", "plain fallback"]) assert.ok(decoded.includes(value));
     for (const value of ["hidden-metadata", "hidden-session", "tool_use_id", "command_execution"]) assert.ok(!decoded.includes(value));
+    for (const value of ["file-path-only", "diff-only", "claude-file-only", "old-string-only", "new-string-only", "pattern-only", "url-only", "query-only", "future-field-only"]) assert.ok(decoded.includes(value));
+    let transcript = "";
+    const transcriptDecoder = new SearchLogText((value) => { transcript += value; }, "transcript");
+    const markdown = `agent 前文\n${turn}${ending}${system}agent 后文\n{"business":"原样代码"}\n`;
+    for (let offset = 0; offset < markdown.length; offset += width) transcriptDecoder.append(markdown.slice(offset, offset + width));
+    for (const value of ["agent 前文", "agent 后文", '经常搜不出要找的东西\nWindows D:\\ai_workspace "引号" 🧪', "系统正文", '{"business":"原样代码"}']) assert.ok(transcript.includes(value), `${width}: ${value}`);
+    for (const value of ["\x1e", '"t":', "agentEnd", "hidden-turn-time", "hidden-ending-time", "hidden-system-time"]) assert.ok(!transcript.includes(value), `${width}: ${value}`);
   }
 
   const runs = join(root, "runs");
@@ -81,6 +94,10 @@ try {
   assert.ok(!scanned.conversation.snippet([scanTerms[0]!]).includes("tool_use_id"));
   assert.ok(scanned.conversation.snippet(["stream_end"]).includes("STREAM_END"));
   assert.ok(scanned.conversation.snippet(scanTerms).length < 200);
+  for (const term of scanTerms) if (scanned.conversation.includes(term)) {
+    assert.ok(scanned.conversation.snippet([term]), `every normalized match has evidence: ${term}`);
+    assert.ok(scanned.conversation.snippets([term]).length > 0, `every normalized match has excerpts: ${term}`);
+  }
 
   const before = new AbortController();
   before.abort();

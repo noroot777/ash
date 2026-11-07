@@ -312,7 +312,7 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
   const hitOf = (task: TaskRow, run?: RunSearchCorpus): TaskHit | null => {
     const corpus = run?.corpus ?? new SearchCorpus(termValues, taskPrefix(task));
     // 排除词优先:用户显式说了别看这条,按 id 钉也不行。
-    if (parsed.excluded.some((term) => corpus.includes(term.value))) return null;
+    if (parsed.excluded.some((term) => corpus.includes(term.value) || run?.raw.includes(term.value))) return null;
     // 按 id 命中的那个**词**要能凭空成立:任务自己的 id 不在自己的标题/正文里,
     // 还没跑过的任务连会话都没有,靠 corpus 匹配永远搜不到它自己。但它只满足自己
     // 那一个词 —— 同组的其他词照样得在语料里找到(见 termMatchesTaskId)。
@@ -339,7 +339,7 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
           snippet = findSnippet(task.body, bodyTerms) ?? "";
         } else if (conversationTerms.length) {
           field = "conversation";
-          snippet = run!.conversation.snippet(conversationTerms.map((term) => term.value));
+          snippet = run!.conversation.snippet(conversationTerms.map((term) => term.value), 32);
         }
       }
     }

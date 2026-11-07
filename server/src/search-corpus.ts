@@ -8,6 +8,7 @@ const READ_CHUNK_BYTES = 64 * 1024;
 
 type Match = {
   position: number;
+  length: number;
   start: number;
   end: number;
   text: string;
@@ -43,9 +44,10 @@ export class SearchCorpus {
       const end = Math.min(text.length, index + term.length + this.radius);
       this.matches.set(term, {
         position: offset + index,
+        length: term.length,
         start: offset + start,
         end: offset + end,
-        text: text.slice(start, end).replace(/\s+/g, " ").trim(),
+        text: text.slice(start, end),
       });
     }
     this.tail = text.slice(-this.overlap);
@@ -55,14 +57,18 @@ export class SearchCorpus {
     return this.matches.has(term);
   }
 
-  snippet(terms: string[]): string {
+  snippet(terms: string[], radius = this.radius): string {
     let earliest: Match | undefined;
     for (const term of terms) {
       const match = this.matches.get(term);
       if (match && (!earliest || match.position < earliest.position)) earliest = match;
     }
     if (!earliest) return "";
-    return `${earliest.start > 0 ? "…" : ""}${earliest.text}${earliest.end < this.length ? "…" : ""}`;
+    const position = earliest.position - earliest.start;
+    const start = Math.max(0, position - radius);
+    const end = Math.min(earliest.text.length, position + earliest.length + radius);
+    const text = earliest.text.slice(start, end).replace(/\s+/g, " ").trim();
+    return `${earliest.start + start > 0 ? "…" : ""}${text}${earliest.start + end < this.length ? "…" : ""}`;
   }
 
   snippets(terms: string[], limit = 3): string[] {
@@ -82,6 +88,7 @@ export class SearchCorpus {
 
 export type RunSearchCorpus = {
   corpus: SearchCorpus;
+  raw: SearchCorpus;
   conversation: Pick<SearchCorpus, "includes" | "snippet" | "snippets">;
 };
 
@@ -93,18 +100,20 @@ export async function readRunCorpus(
   radius = SNIPPET_RADIUS,
 ): Promise<RunSearchCorpus> {
   const corpus = new SearchCorpus(terms, prefix, radius);
-  const raw = new SearchCorpus(terms, "", radius);
+  const raw = new SearchCorpus(terms, prefix, radius);
+  const normalized = new SearchCorpus(terms, "", radius);
   const markdown = new SearchCorpus(terms, "", radius);
   const logs = new SearchCorpus(terms, "", radius);
   const conversation = {
-    includes: (term: string) => raw.includes(term),
-    snippet: (values: string[]) => markdown.snippet(values) || logs.snippet(values),
+    includes: (term: string) => normalized.includes(term),
+    snippet: (values: string[], snippetRadius = radius) => markdown.snippet(values, snippetRadius) || logs.snippet(values, snippetRadius) || normalized.snippet(values, snippetRadius),
     snippets: (values: string[], limit = 3) => [
       ...markdown.snippets(values, limit),
       ...logs.snippets(values.filter((term) => !markdown.includes(term)), limit),
+      ...normalized.snippets(values.filter((term) => !markdown.includes(term) && !logs.includes(term)), limit),
     ].slice(0, limit),
   };
-  const result = { corpus, conversation };
+  const result = { corpus, raw, conversation };
   if (signal?.aborted) return result;
   let files: string[];
   try {
@@ -113,13 +122,22 @@ export async function readRunCorpus(
     return result;
   }
   let hasConversation = false;
+  let hasRaw = false;
   for (const file of files) {
     if (signal?.aborted) break;
     if (!file.endsWith(".md") && !file.endsWith(".jsonl")) continue;
     const readable = file.endsWith(".md") ? markdown : logs;
     readable.append("\n");
-    const decoder = file.endsWith(".jsonl") ? new SearchLogText((text) => logs.append(text)) : null;
     let started = false;
+    let rawStarted = false;
+    const decoder = new SearchLogText((text) => {
+      if (!started && hasConversation) { corpus.append("\n"); normalized.append("\n"); }
+      started = true;
+      hasConversation = true;
+      corpus.append(text);
+      normalized.append(text);
+      readable.append(text);
+    }, file.endsWith(".md") ? "transcript" : "jsonl");
     try {
       const stream = createReadStream(join(directory, file), {
         encoding: "utf8", highWaterMark: READ_CHUNK_BYTES, signal,
@@ -128,16 +146,11 @@ export async function readRunCorpus(
         if (signal?.aborted) break;
         const text = String(chunk);
         if (!text) continue;
-        if (!started && hasConversation) {
-          corpus.append("\n");
-          raw.append("\n");
-        }
-        started = true;
-        hasConversation = true;
-        corpus.append(text);
+        if (!rawStarted && hasRaw) raw.append("\n");
+        rawStarted = true;
+        hasRaw = true;
         raw.append(text);
-        if (decoder) decoder.append(text);
-        else markdown.append(text);
+        decoder.append(text);
       }
     } catch {
       if (signal?.aborted) break;
