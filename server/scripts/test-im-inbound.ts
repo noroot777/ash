@@ -9,7 +9,8 @@
 //    回眼下这道题的卡带附件也是答复，附件跟着答复走；答复送到接口那一刻同一道题已经又问了一次
 //    （题面一模一样）→ 接口按那一次的身份拒收；回在机器人自己的文字回执下面，认话题根上那张卡；
 // ③ 命令：/help；/tasks（只有一个项目就直接列，先后同网页侧栏，首屏 5 个、「再显示 5 个」，整行点开任务链接，
-//    子任务、归档的不列；卡能反复点，库里那份跟着换；卡上「在这里建任务」换成表单）；
+//    子任务、归档的不列；卡能反复点，库里那份跟着换；卡上「在这里建任务」换成表单，从此翻看按钮作废；
+//    双击「在这里建任务」、慢的那一下在表单交了之后才回来，不盖掉结果卡、不再配表单信封）；
 //    /new（表单卡：选项目、填标题和要求，提交就建任务并开跑；/new 标题 换行写要求 替他先填好，太长的要求随信封
 //    带着；没填标题不建、表单还能再提交，提交过的不能再交）/stop（先确认，取消就不停）/todo；
 //    不认识的消息类型回一句说明；
@@ -38,7 +39,7 @@ try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, tasks, uploads: uploadRows } = await import("../src/db/schema.js");
   const { chatMessages, chatRooms } = await import("../src/db/schema-chat.js");
-  const { imBindings, imInbound, imOutbox } = await import("../src/db/schema-im.js");
+  const { imActions, imBindings, imInbound, imOutbox } = await import("../src/db/schema-im.js");
   const { and, eq, inArray } = await import("drizzle-orm");
   const { bindingOf, bindingView, createBindCode, rejectCode } = await import("../src/im/binding.js");
   const { confirmGroupCode, groupOf } = await import("../src/im/groups.js");
@@ -279,6 +280,40 @@ try {
     const hereTask = (await db.select().from(tasks).where(eq(tasks.title, "卡上建的任务"))).at(0);
     assert.equal(hereTask?.projectId, "p1");
     await waitIdle(() => statusOf(hereTask!.id));
+    assert.equal((await im.click(OWNER, more.value!)).toast?.type, "info", "换成表单就用掉了翻看信封：迟到的点击不把卡翻回列表");
+
+    // 双击「在这里建任务」、慢的那一下在表单都交了之后才回来：不盖掉结果卡，也不再配一个能交的表单信封。
+    const raced = await im.say({ text: "/tasks" });
+    await im.settle();
+    const racedRow = async () => (await db.select().from(imOutbox).where(eq(imOutbox.replyTo, raced))).at(0)!;
+    const racedNew = buttonsOf(contentOf(repliesTo(raced)[0]!)).find((button) => button.value?.op === "new")!;
+    const projectsOf = im.commands.browser.projectsOf.bind(im.commands.browser);
+    let slowEntered!: () => void;
+    let releaseSlow!: () => void;
+    const entered = new Promise<void>((resolve) => { slowEntered = resolve; });
+    const held = new Promise<void>((resolve) => { releaseSlow = resolve; });
+    let reads = 0;
+    im.commands.browser.projectsOf = async (principal) => {
+      if (++reads === 1) { slowEntered(); await held; }
+      return projectsOf(principal);
+    };
+    const slow = im.click(OWNER, racedNew.value!);
+    await entered;
+    const fast = await im.click(OWNER, racedNew.value!);
+    const racedSubmit = buttonsOf(fast.card?.data).find((button) => button.value?.op === "submit")!;
+    assert.equal((await im.click(OWNER, racedSubmit.value!, { project: "0", title: "只建一次", body: "" }, "submit")).toast?.type, "success");
+    const settledCard = (await racedRow()).content;
+    releaseSlow();
+    const late = await slow;
+    im.commands.browser.projectsOf = projectsOf;
+    assert.equal(late.toast?.type, "warning", JSON.stringify(late));
+    assert.equal(late.card, undefined, "慢的那一下不换卡");
+    assert.equal((await racedRow()).content, settledCard, "结果卡没被盖回成表单");
+    const forms = await db.select().from(imActions).where(eq(imActions.outboxId, (await racedRow()).id));
+    assert.equal(forms.filter((envelope) => envelope.action === "confirm").length, 1, "只配过一个表单信封");
+    const onlyOnce = (await db.select().from(tasks).where(eq(tasks.title, "只建一次")));
+    assert.equal(onlyOnce.length, 1);
+    await waitIdle(() => statusOf(onlyOnce[0]!.id));
 
     // /new 标题（换行写要求）：替他填进表单，没点提交不建。
     const create = await im.say({ text: "/new 修个 bug\n登录页点了没反应" });

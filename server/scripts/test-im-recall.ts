@@ -5,7 +5,11 @@
 // ② 撤不回（发出超过一天，飞书回 230009）→ 退回成改卡，卡上换成收好的样子；
 // ③ 待验收的任务又跑了一轮、成果没变又回到待验收 → 撤回的那条在飞书上已经没了：作废那一行、另推一条新消息，
 //    不去改那条撤回的；
-// ④ 不是「接着跑」的了结（在别处答了、任务停着）照旧改卡，不撤回。
+// ④ 不是「接着跑」的了结（在别处答了、任务停着）照旧改卡，不撤回；
+// ⑤ 撤回成了、回执丢在路上 → 再撤回回「已撤回」也算撤回成了，不退回成改卡；同一件事回来照样另推新的；
+// ⑥ 回执丢了、还没再撤，同一件事就回来了（行被救回成能点的卡）→ 改卡回「已撤回」：作废那一行、另推新的，
+//    不一直去改那条没了的；
+// ⑦ 卡正在发的途中就收起（答了、接着跑）→ 发出去就撤回，不改成一张灰卡。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,10 +45,17 @@ try {
   ] as never);
   await im.reconciler.full();
   await im.settle();
+  // 分两批推：一口气积压太多只推一张汇总（outbox.ts 文件头）。
+  await db.insert(tasks).values([
+    task({ id: "tl", title: "回执丢了", status: "done", endedAt: at }),
+    task({ id: "tv", title: "回执丢了又回来", status: "done", endedAt: at }),
+  ] as never);
+  await im.reconciler.full();
+  await im.settle();
   const rowsOf = (taskId: string) => db.select().from(imOutbox).where(eq(imOutbox.taskId, taskId));
   const first = async (taskId: string) => (await rowsOf(taskId))[0]!;
-  const [trRow, toRow, tsRow, tbRow] = await Promise.all(["tr", "to", "ts", "tb"].map(first));
-  for (const row of [trRow, toRow, tsRow, tbRow]) assert.ok(row.messageId, `${row.taskId} 的卡发出去了`);
+  const [trRow, toRow, tsRow, tbRow, tlRow, tvRow] = await Promise.all(["tr", "to", "ts", "tb", "tl", "tv"].map(first));
+  for (const row of [trRow, toRow, tsRow, tbRow, tlRow, tvRow]) assert.ok(row.messageId, `${row.taskId} 的卡发出去了`);
   assert.equal(tbRow.kind, "accept");
   const recallsOf = (messageId: string) => fake.recalls().filter((call) => call.path.endsWith(`/messages/${messageId}`));
   const patchesOf = (messageId: string) => fake.patches().filter((call) => call.path.includes(messageId));
@@ -91,6 +102,57 @@ try {
   await settleTask("ts", { question: null });
   assert.equal(recallsOf(tsRow.messageId!).length, 0, "不是接着跑：不撤回");
   assert.match(textOf(JSON.parse(patchesOf(tsRow.messageId!)[0]!.body.content)), /已在别处答复/);
+
+  // ── ⑤ 撤回成了、回执丢了：再撤回「已撤回」就是撤回成了 ─────────────────────
+  fake.dropRecallReply = true;
+  await settleTask("tl", { status: "running" });
+  fake.dropRecallReply = false;
+  assert.equal(recallsOf(tlRow.messageId!).length, 1);
+  assert.equal((await first("tl")).patchState, "recall", "没收到回执：排着再撤");
+  await db.update(imOutbox).set({ nextAt: null }).where(eq(imOutbox.taskId, "tl"));
+  await im.sender.drainNow();
+  assert.equal(recallsOf(tlRow.messageId!).length, 2);
+  assert.equal((await first("tl")).patchState, "recalled", "回「已撤回」：就是撤回成了");
+  assert.equal(patchesOf(tlRow.messageId!).length, 0, "不退回成改卡（那条已经没了）");
+  await settleTask("tl", { status: "done" });
+  const tlBack = await rowsOf("tl");
+  assert.equal(tlBack.length, 1);
+  assert.notEqual(tlBack[0]!.messageId, tlRow.messageId, "同一件事回来：另推一条新消息");
+  assert.equal(fake.sends().length, 1);
+  assert.equal(patchesOf(tlRow.messageId!).length, 0, "不去改那条已经没了的");
+
+  // ── ⑥ 回执丢了、还没再撤就被救回：改卡才知道那条没了 → 另推新的 ─────────────
+  fake.dropRecallReply = true;
+  await settleTask("tv", { status: "running" });
+  fake.dropRecallReply = false;
+  assert.equal((await first("tv")).patchState, "recall");
+  await settleTask("tv", { status: "done" });
+  await im.settle();
+  const tvBack = await rowsOf("tv");
+  assert.equal(tvBack.length, 1);
+  assert.notEqual(tvBack[0]!.id, tvRow.id, "作废救回的那一行，换成新的一行");
+  assert.equal(tvBack[0]!.state, "sent");
+  assert.notEqual(tvBack[0]!.messageId, tvRow.messageId, "推的是一条新消息");
+  assert.equal(patchesOf(tvRow.messageId!).length, 1, "改了一次就不再改那条没了的");
+  assert.equal(fake.sends().length, 1);
+
+  // ── ⑦ 发的途中就收起：发出去就撤回 ───────────────────────────────────────
+  await db.insert(tasks).values(task({ id: "tf", title: "发的途中就答了", status: "paused", question: "要发吗？" }) as never);
+  let releaseSend!: () => void;
+  fake.holdSend = new Promise<void>((resolve) => { releaseSend = resolve; });
+  fake.reset();
+  await im.reconciler.reconcile(["tf"]);
+  while (!fake.sends().length) await new Promise((resolve) => setTimeout(resolve, 5));
+  await db.update(tasks).set({ question: null, status: "running" } as never).where(eq(tasks.id, "tf"));
+  await im.reconciler.reconcile(["tf"]);
+  fake.holdSend = null;
+  releaseSend();
+  await im.settle();
+  const tf = await first("tf");
+  assert.ok(tf.messageId, "发出去了");
+  assert.equal(tf.patchState, "recalled");
+  assert.equal(recallsOf(tf.messageId!).length, 1, "发出去就撤回");
+  assert.equal(patchesOf(tf.messageId!).length, 0, "不改成一张灰卡");
 
   im.reconciler.stop();
   im.sender.stop();

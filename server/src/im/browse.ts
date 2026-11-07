@@ -7,14 +7,15 @@
 // 这张卡上的按钮只读不写，所以信封不占用（browse 这一种可以反复点）：点的那一刻照样过信封的前三关（是不是发给
 // 他的、过没过期），再以他的身份重读项目和任务 —— 发卡之后被移出项目，翻不出那个项目的任何东西；发卡之后换过
 // 绑定（解绑重绑、换了人），这张卡就不再翻，让他重新发一次。按钮上带的
-// 「第几个项目、显示几个」只是在信封记着的那几个项目里挑，挑不出信封以外的项目。
+// 「第几个项目、显示几个」只是在信封记着的那几个项目里挑，挑不出信封以外的项目。换成建任务表单那一下例外：卡上
+// 从此只有表单的按钮，翻看信封随之用掉。
 // 换上去的卡和发件表里那一行同一份（actions.ts 文件头的约定：库里那份是卡上最终该有的样子），来源也跟着换成
 // 卡上此刻列着的东西，出口按它核。
 import { taskDisplayStatus, type Project, type TaskListItem } from "@ash/shared";
 import { orderedListTasks } from "@ash/shared/task-order";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { imOutbox } from "../db/schema-im.js";
+import { imActions, imOutbox } from "../db/schema-im.js";
 import type { ImPrincipal } from "../auth/im-actor.js";
 import { now } from "../util.js";
 import type { AshClient } from "./ash-client.js";
@@ -134,6 +135,8 @@ export class Browser {
     const byId = new Map(list.map((project) => [project.id, project] as const));
     let model: CardModel;
     let scope: ScopeBody;
+    /** 换成建任务表单时配的那个信封（这一下没换成就收回）。 */
+    let form: string | null = null;
     if (op === "back") {
       if (payload.picker !== true) return { warn: "认不出这个按钮" };
       // 下标跟着信封里那一份走（按钮上带的就是它）：已经看不到的项目空出来，不重新编号。
@@ -148,7 +151,7 @@ export class Browser {
       if (!project) return { warn: "这个项目你已经看不到了" };
       if (op === "new") {
         // 表单是另一种按钮（提交即建任务、只能交一次）：配一个新信封，挂在同一行上。
-        const form = await createEnvelope({
+        form = await createEnvelope({
           outboxId: row.id, taskId: null, action: "confirm", payload: { command: "newform", projectIds: [project.id] },
           recipientOpenId: envelope.recipientOpenId || null, generation: "c", ttlMs: 24 * 3600_000,
         });
@@ -163,10 +166,22 @@ export class Browser {
     }
     const content = JSON.stringify(renderCard(model));
     const next = { ...row, content, scope: JSON.stringify(requestScope(origin, scope)), brief: null };
-    await this.deps.reconciler.run(() => db.update(imOutbox).set({
-      content: next.content, scope: next.scope, brief: null, updatedAt: now(),
-      ...(row.messageId ? { patchState: "acking", nextAt: new Date(Date.now() + ACK_GRACE_MS).toISOString() } : {}),
-    }).where(eq(imOutbox.id, row.id)));
+    // 上面读项目、读任务都在锁外，这期间卡可能已经换过了（双击、表单都交了）：只在卡还是点下去那一刻的样子时才换，
+    // 否则旧的这一下会把结果卡盖回成一张新表单、再配一个能交的信封（审查实测：同一张卡建出两个任务）。
+    // 换成表单这一下同时用掉这张卡的翻看信封：卡上已经没有它的按钮了，迟到的点击一律「已经处理过了」。
+    const swapped = await this.deps.reconciler.run(() => db.transaction(async (tx) => {
+      const done = await tx.update(imOutbox).set({
+        content: next.content, scope: next.scope, brief: null, updatedAt: now(),
+        ...(row.messageId ? { patchState: "acking", nextAt: new Date(Date.now() + ACK_GRACE_MS).toISOString() } : {}),
+      }).where(and(eq(imOutbox.id, row.id), eq(imOutbox.content, row.content), ne(imOutbox.state, "resolved"))).returning({ id: imOutbox.id });
+      if (!done.length) {
+        if (form) await tx.delete(imActions).where(eq(imActions.id, form));
+        return false;
+      }
+      if (form) await tx.update(imActions).set({ usedAt: now(), result: "换成了建任务表单" }).where(eq(imActions.id, envelope.id));
+      return true;
+    }, { behavior: "immediate" }));
+    if (!swapped) return { warn: "这张卡刚换过了：请看卡上现在的样子" };
     return { card: await this.deps.reconciler.exits.outward(next, JSON.parse(content) as Record<string, unknown>) };
   }
 }

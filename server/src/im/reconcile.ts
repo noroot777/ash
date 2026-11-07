@@ -37,7 +37,7 @@ import type { FeishuApi } from "./feishu/api.js";
 import { renderCard } from "./feishu/cards.js";
 import { readOptions } from "./meta.js";
 import { advanceOutcomes, forgetOutcomes, outcomesOf, outcomesRecorded, staleOutcomeTasks } from "./outcomes.js";
-import { cardHeaderOf, OutboxSender, RECALLED, type Destination, type OutboxRow } from "./outbox.js";
+import { cardHeaderOf, OutboxSender, RECALL, RECALLED, type Destination, type OutboxRow } from "./outbox.js";
 import { destinationsFor } from "./recipients.js";
 import { scopeFor, type OutboxScope } from "./scope.js";
 
@@ -208,7 +208,8 @@ export class Reconciler {
       updatedAt: at,
       content: JSON.stringify(renderCard(settledCard(cardHeaderOf(row.content), text, { link }))),
       brief: null,
-      ...(patchable ? { patchState: repatch, nextAt: null } : {}),
+      // 还没发出去就要撤回的：可能正在发（outbox.ts sendOne），发出去就照这个标记撤回；不在发的就此作废，标记没人看。
+      ...(patchable ? { patchState: repatch, nextAt: null } : recall ? { patchState: RECALL, nextAt: null } : {}),
     }).where(eq(imOutbox.id, row.id));
   }
 

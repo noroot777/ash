@@ -246,6 +246,11 @@ export function isAnchorGone(result: ApiResult<unknown>): boolean {
   return !result.ok && ANCHOR_GONE_CODES.has(result.code);
 }
 
+/** 动手的那条消息（撤回、改卡）在飞书上已经没了：同一组错误码。 */
+export function isMessageGone(result: ApiResult<unknown>): boolean {
+  return isAnchorGone(result);
+}
+
 /** 败在取 token（见 ApiResult.stage）。 */
 export function isTokenFailure(result: ApiResult<unknown>): boolean {
   return !result.ok && result.stage === "token";

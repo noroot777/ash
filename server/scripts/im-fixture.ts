@@ -24,6 +24,12 @@ export class FakeFeishu {
   calls: FakeCall[] = [];
   /** 撤回消息回什么码（0 = 撤回成功；230009 = 发出超过一天、撤不回）。 */
   recallCode = 0;
+  /** 撤回成了、回执却丢在路上（超时、断网）：消息照样撤掉，调用方看到的是网络错误。 */
+  dropRecallReply = false;
+  /** 发消息时先等它（测「发的途中」）。 */
+  holdSend: Promise<void> | null = null;
+  /** 已经撤回的消息：再撤、再改都回 230011（与真飞书一致）。 */
+  private recalled = new Set<string>();
   private byUuid = new Map<string, string>();
   private serial = 0;
 
@@ -36,12 +42,20 @@ export class FakeFeishu {
     const json = (data: unknown) => Response.json(data);
     if (path.endsWith("/tenant_access_token/internal")) return json({ code: 0, tenant_access_token: "t-fake", expire: 7200 });
     if (method === "POST" && /\/im\/v1\/messages(\?|\/[^/]+\/reply$)/.test(path)) {
+      if (this.holdSend) await this.holdSend;
       const known = body?.uuid ? this.byUuid.get(body.uuid) : undefined;
       const messageId = known ?? `om_${++this.serial}`;
       if (body?.uuid) this.byUuid.set(body.uuid, messageId);
       return json({ code: 0, data: { message_id: messageId, chat_id: "oc_fake" } });
     }
-    if (method === "DELETE") return json(this.recallCode ? { code: this.recallCode, msg: "fake: 撤不回" } : { code: 0, data: {} });
+    const target = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+    if ((method === "DELETE" || method === "PATCH") && this.recalled.has(target)) return json({ code: 230011, msg: "fake: 消息已撤回" });
+    if (method === "DELETE") {
+      if (this.recallCode) return json({ code: this.recallCode, msg: "fake: 撤不回" });
+      this.recalled.add(target);
+      if (this.dropRecallReply) throw new Error("fake: 回执丢了");
+      return json({ code: 0, data: {} });
+    }
     if (method === "PATCH" || path.endsWith("/reactions")) return json({ code: 0, data: {} });
     if (path.includes("/resources/")) {
       return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]), { headers: { "content-type": "image/png" } });

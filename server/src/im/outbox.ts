@@ -21,7 +21,7 @@ import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-
 import { db } from "../db/index.js";
 import { imOutbox } from "../db/schema-im.js";
 import { now } from "../util.js";
-import { isAnchorGone, isQuotaBlocked, isTokenFailure, type FeishuApi } from "./feishu/api.js";
+import { isAnchorGone, isMessageGone, isQuotaBlocked, isTokenFailure, type FeishuApi } from "./feishu/api.js";
 import type { ImPurpose } from "./quota.js";
 
 export type OutboxRow = typeof imOutbox.$inferSelect;
@@ -223,7 +223,9 @@ export class OutboxSender {
         state: sql`CASE WHEN ${imOutbox.state} = 'pending' THEN 'sent' ELSE ${imOutbox.state} END`,
         // 文字消息改不了，不排改卡。
         ...(row.msgType !== "interactive" ? {} : {
+          // 发的途中就收起来、要撤回的（reconcile.ts resolve）：刚发出去就撤，不改成一张灰卡。
           patchState: sql`CASE WHEN ${imOutbox.patchState} IN ('result', 'acking') THEN 'result'
+            WHEN ${imOutbox.patchState} = 'recall' AND ${imOutbox.state} = 'resolved' THEN 'recall'
             WHEN ${imOutbox.state} = 'resolved' OR ${imOutbox.content} <> ${row.content} THEN 'pending' ELSE ${imOutbox.patchState} END`,
         }),
         attempts: 0,
@@ -253,15 +255,9 @@ export class OutboxSender {
   private async recallOne(row: OutboxRow): Promise<void> {
     const res = await this.api.recall(row.messageId!, "resolved");
     const at = now();
-    if (res.ok) {
-      const done = await db.update(imOutbox).set({ patchState: RECALLED, attempts: 0, nextAt: null, lastError: null, updatedAt: at })
-        .where(and(eq(imOutbox.id, row.id), eq(imOutbox.patchState, RECALL))).returning({ id: imOutbox.id });
-      // 撤回的同时这一行被对账救了回来（reconcile.ts revive 换成了能点的卡、排着改卡）：飞书上那条已经没了，改不回来，
-      // 照原 uuid 重发也只会拿回那条撤回的（飞书一小时内按 uuid 判重）。作废这一行，交给对账另起一行重推。
-      if (!done.length) {
-        await db.delete(imOutbox).where(and(eq(imOutbox.id, row.id), eq(imOutbox.messageId, row.messageId!)));
-        if (row.taskId) this.onLost(row.taskId);
-      }
+    // 230011 = 已经撤回了：上一次撤回其实成了、只是回执没收到（超时、断网），这一次照样算撤回成了。
+    if (res.ok || isMessageGone(res)) {
+      await this.gone(row, null);
       return;
     }
     const lastError = `${res.code} ${res.msg}`.slice(0, 500);
@@ -279,6 +275,21 @@ export class OutboxSender {
     // 撤回不了（超过一天、这类消息不支持）：退回成改卡，卡上换成库里那份收好的样子。
     await db.update(imOutbox).set({ patchState: "pending", attempts: 0, lastError, nextAt: null, updatedAt: at })
       .where(and(eq(imOutbox.id, row.id), eq(imOutbox.patchState, RECALL)));
+  }
+
+  /**
+   * 这一行的那条消息在飞书上已经没了（撤回成了，或者撤回 / 改卡回「消息已撤回」）。这一行还收着（resolved）：记成撤回了，
+   * 不再去改它；同一件事回来时对账看到 recalled 会另推一条（reconcile.ts settleTask）。这一行已经被对账救了回来（revive
+   * 换成了能点的卡、排着改卡）：改不回来，照原 uuid 重发也只会拿回那条撤回的（飞书一小时内按 uuid 判重）—— 作废这一行，
+   * 交给对账另起一行重推。
+   */
+  private async gone(row: OutboxRow, lastError: string | null): Promise<void> {
+    const that = and(eq(imOutbox.id, row.id), eq(imOutbox.messageId, row.messageId!));
+    const settled = await db.update(imOutbox).set({ patchState: RECALLED, attempts: 0, nextAt: null, lastError, updatedAt: now() })
+      .where(and(that, eq(imOutbox.state, "resolved"))).returning({ id: imOutbox.id });
+    if (settled.length) return;
+    await db.delete(imOutbox).where(that);
+    if (row.taskId) this.onLost(row.taskId);
   }
 
   private async patchOne(row: OutboxRow): Promise<void> {
@@ -301,6 +312,11 @@ export class OutboxSender {
       return;
     }
     const lastError = `${res.code} ${res.msg}`.slice(0, 500);
+    // 改的那条在飞书上已经没了（撤回成了却没收到回执、之后又被救回成能点的卡）：改多少次都是这个错。
+    if (isMessageGone(res)) {
+      await this.gone(row, lastError);
+      return;
+    }
     if (isQuotaBlocked(res)) {
       await db.update(imOutbox).set({ patchState: "skipped", lastError, updatedAt: at }).where(and(eq(imOutbox.id, row.id), eq(imOutbox.content, snapshot)));
       return;
