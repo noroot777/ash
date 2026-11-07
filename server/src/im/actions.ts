@@ -78,7 +78,7 @@ interface Click { claim: Claim; row: OutboxRow; job: Job; actorName: string }
 const FAST_MS = 2_400;
 /** 结果卡随回执带回去之后，等「回执已发出」的确认这么久；过了还没确认就改一次卡。 */
 const ACK_GRACE_MS = 15_000;
-/** 收尾的事务没提交上（数据库忙等）：活着的进程里按这个节奏再试，不等重启。 */
+/** 收尾的事务没提交上（数据库忙等）：活着的进程里按这个节奏再试（试完最后一档还不行就按它反复试），不等重启。 */
 const SETTLE_RETRY_MS = [1_000, 5_000, 30_000, 120_000];
 const toast = (type: NonNullable<CallbackResponse["toast"]>["type"], content: string): CallbackResponse => ({ toast: { type, content } });
 const sleep = (ms: number) => new Promise<void>((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); });
@@ -139,14 +139,20 @@ export class CardActions {
     if (!claim) return toast("info", "这张卡片正在处理");
     const click: Click = { claim, row, job, actorName: actor.name };
 
-    const work = job.run().catch((error): Outcome => ({ ok: false, text: `出错了：${scrubText((error as Error).message, 300)}`, final: false }));
+    // 从占上信封起到挂上收尾之间不能有能抛错的 await：那件事已经起跑，这时抛出去，结局就没人落了 —— 信封永远
+    // 停在「已占用、没结果」，卡上一直是原样、再点只说「已经处理过了」；同进程的 recover() 有意不接本进程占着的
+    // （那可能是还在跑的活，放回去就会被再点一次、执行两遍）。所以先挂收尾，再拼「处理中」那张：拼它要过出口
+    // 判据（读库），读失败只少一张「处理中」卡，不连累结局（审查实测：这里一次读库失败，停止办成了、卡永远没结果）。
+    const work = (async () => job.run())()
+      .catch((error): Outcome => ({ ok: false, text: `出错了：${scrubText((error as Error).message, 300)}`, final: false }));
     const quick = await Promise.race([work, new Promise<null>((resolve) => { const t = setTimeout(() => resolve(null), FAST_MS); t.unref?.(); })]);
     if (quick) return this.conclude(quick, click, "callback");
-    const processing = await this.deps.reconciler.exits.outward(row,
-      renderCard(settledCard(cardHeaderOf(row.content), "处理中…结果出来会更新在这张卡上。", { link: job.link }, "wathet")));
     void work.then((outcome) => this.conclude(outcome, click, "patch"))
       .catch((error) => console.error("[ash] 飞书按钮异步收尾出错:", error));
-    return { toast: { type: "info", content: "处理中" }, card: { type: "raw", data: processing } };
+    const processing = await this.deps.reconciler.exits.outward(row,
+      renderCard(settledCard(cardHeaderOf(row.content), "处理中…结果出来会更新在这张卡上。", { link: job.link }, "wathet")))
+      .catch((error) => { console.warn("[ash] 飞书「处理中」卡没拼出来，只回一句提示:", (error as Error).message); return null; });
+    return processing ? { toast: { type: "info", content: "处理中" }, card: { type: "raw", data: processing } } : toast("info", "处理中");
   }
 
   /**
@@ -306,9 +312,13 @@ export class CardActions {
     }
   }
 
+  /**
+   * 结局在手、只是没落进库：活着就一直按退避再试（最后一档反复用），直到落下或者这次占用已经不归它（settle 不抛、
+   * 回「已经处理过了」）。不能试几次就撒手：同进程的 recover() 不接本进程占着的信封，撒手就是停到下次重启。
+   */
   private async retrySettle(outcome: Outcome, click: Click): Promise<void> {
-    for (const ms of SETTLE_RETRY_MS) {
-      await sleep(ms);
+    for (let attempt = 0; ; attempt++) {
+      await sleep(SETTLE_RETRY_MS[Math.min(attempt, SETTLE_RETRY_MS.length - 1)]!);
       try {
         await this.settle(outcome, click, "patch");
         return;
@@ -316,7 +326,6 @@ export class CardActions {
         console.error("[ash] 飞书按钮收尾重试失败:", error);
       }
     }
-    // 还不行就留给下次启动的 recover()（信封仍是「已占用、没结果」）。
   }
 
   /** 把结局落到卡片和库里（一个事务）。via=callback 时结果卡随回应带回；patch 时排一次改卡。 */

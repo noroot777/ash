@@ -9,9 +9,11 @@
 // ④ 别处处理掉：在网页上答了 → 卡片改成「已在别处答复」（排一次改卡）；任务被删 →「任务已删除」；
 //    验收合并 → 收起 + 回复一条「已验收合并」（notifyCompleted 开着）；
 // ⑤ 一口气积压太多：只推一张汇总，点汇总按钮每次放 5 张；
-// ⑥ 额度见底：决策卡不发、留在 pending 等额度；回写点击结果照发。
+// ⑥ 额度见底：决策卡不发、留在 pending 等额度；回写点击结果照发；
+// ⑦ 闸口卡：正文和「放行」认同一扇门 —— 开门行没写进 transcript 也摆出这一扇的方案；找不到这一扇的方案
+//    就不给「放行」，不拿上一扇门的旧方案顶上（审查复现：看着旧方案放行了没看过的新方案）。
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
@@ -26,7 +28,7 @@ try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, tasks } = await import("../src/db/schema.js");
   const { imBindings, imOutbox } = await import("../src/db/schema-im.js");
-  const { eq, and } = await import("drizzle-orm");
+  const { eq, and, inArray } = await import("drizzle-orm");
   const { patchOptions } = await import("../src/im/meta.js");
   const { sessions, taskNotices } = await import("../src/db/schema.js");
   const { sessionTranscriptPath } = await import("../src/transcript.js");
@@ -225,6 +227,45 @@ try {
     im.meter.setQuota(1_000_000);
     await waitIdle(() => statusOf("tq2"), "paused");
   }
+
+  // ── ⑦ 闸口卡：正文和「放行」认同一扇门 ─────────────────────────────────────
+  {
+    const { waitForGate } = await import("../src/duet/gates.js");
+    const { nextGateVersion } = await import("../src/duet/gate-version.js");
+    const ids = ["tg-kept", "tg-lost"];
+    await db.insert(tasks).values(ids.map((id) => task({ id, title: `闸口 ${id}`, mode: "duet", status: "awaiting_review" })) as never);
+    const decisions = new Map<string, Promise<unknown>>();
+    for (const id of ids) {
+      // 第 1 扇门的开门行写的是旧方案；第 2 扇门领了号，开门行没写进文件。
+      mkdirSync(join(stage, "runs", id), { recursive: true });
+      writeFileSync(join(stage, "runs", id, "transcript.jsonl"), JSON.stringify({
+        type: "duet.gate", taskId: id, gate: "G1", open: true, version: 1, consensus: true, conclusionA: "OLD_PLAN_1", conclusionB: "OLD_PLAN_1",
+      }) + "\n");
+      // tg-lost：库里也没有这一扇的方案（加列之前开的门、或方案没落下）。
+      const version = await nextGateVersion(id, id === "tg-kept" ? { consensus: true, conclusionA: "NEW_PLAN_2", conclusionB: "NEW_PLAN_2" } : null);
+      decisions.set(id, waitForGate(id, version));
+    }
+    fake.reset();
+    await im.reconciler.reconcile(ids);
+    await im.settle();
+    const cardOf = (id: string) => contentOf(fake.sends().find((send) => textOf(contentOf(send)).includes(`闸口 ${id}`))!);
+    const kept = cardOf("tg-kept");
+    assert.match(textOf(kept), /NEW_PLAN_2/, "摆出来的是这一扇门的方案");
+    assert.doesNotMatch(textOf(kept), /OLD_PLAN_1/);
+    const approve = buttonsOf(kept).find((button) => button.value?.op === "approve")!;
+    assert.ok(approve, "看得到这一扇的方案才给放行");
+    assert.equal((await im.click(OWNER, approve.value!)).toast?.type, "success");
+    assert.deepEqual(await decisions.get("tg-kept"), { kind: "approve" });
+    const lost = cardOf("tg-lost");
+    assert.doesNotMatch(textOf(lost), /OLD_PLAN_1/, "找不到这一扇的方案：不拿上一扇门的顶上");
+    assert.match(textOf(lost), /方案没找到/);
+    assert.equal(buttonsOf(lost).some((button) => button.value?.op === "approve"), false, "没看到方案不给放行");
+    const reject = buttonsOf(lost).find((button) => button.value?.op === "reject")!;
+    assert.equal((await im.click(OWNER, reject.value!)).toast?.type, "success", "打回终止照常能点");
+    assert.deepEqual(await decisions.get("tg-lost"), { kind: "reject" });
+    await db.update(tasks).set({ status: "done" }).where(inArray(tasks.id, ids));
+  }
+
   await waitIdle(() => statusOf("tf"));
   im.reconciler.stop();
   im.sender.stop();

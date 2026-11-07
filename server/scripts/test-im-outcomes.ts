@@ -13,7 +13,8 @@
 //    读房间只是这一下没读到（500）→ 不换房间、映射原样，这句不投、叫他再发；等回复时读不到 → 下一圈再看，
 //    房间真没了（404）才说没拿到回复；库里的按钮记录坏了 → 拒掉、不按空的去验收；飞书传来的正文解析不了 →
 //    叫他重发；发件队列里一行坏的 → 标成放弃、后面的照发；门禁之后接着验收、当初的选择读不出来 → 不验收；
-//    存着的选项坏了 → 先核对「只推标题」才让改别的；卡片补充内容这一下没读到 → 卡上说明、下一次对账重读；
+//    存着的选项坏了 → 先核对「只推标题」才让改别的；两个页面同时保存不同的项 → 各自都留下；卡片补充内容这一下
+//    没读到 → 卡上说明、下一次对账重读；
 // ⑤ @ 占位去掉之后，正文的缩进原样；
 // ⑥ 团队验收占住全队（team-acceptance-hold.ts）：占着的时候共享执行者起不了跑、改不了状态、加不了新执行者、
 //    别人带 force 也写不了工作区、调度台不在线时用户的话不开台；验收自己的守卫不把这份占位当成在飞；占住之后
@@ -605,11 +606,21 @@ try {
     assert.equal(optionsError(), null);
     assert.ok("options" in await patchOptions({ ...saved }), "这之后照常改");
 
+    // 两个页面同时保存不同的项：各改各的，谁也不盖掉谁（审查复现：只推标题被月额度那一下整份覆盖掉）。
+    const [titled, quoted] = await Promise.all([patchOptions({ titleOnlyProjectIds: ["p-private"] }), patchOptions({ monthlyQuota: 20_000 })]);
+    assert.ok("options" in titled && "options" in quoted);
+    assert.deepEqual(quoted.before.titleOnlyProjectIds, ["p-private"], "后一下的 before 是紧挨着的上一份（据此判断要不要改卡）");
+    for (const options of [await readOptions(), (resetOptionsCache(), await readOptions())]) {
+      assert.deepEqual([options.titleOnlyProjectIds, options.monthlyQuota], [["p-private"], 20_000], "缓存和库里两项都在");
+    }
+    assert.ok("options" in await patchOptions({ ...saved }));
+
     // 卡片的补充内容这一下没读到（不是没有）：卡上说一句，指纹对不上，下一次对账重读。
     mkdirSync(join(stage, "runs", "tgate", "transcript.jsonl"), { recursive: true });
-    const gateView = { task: { id: "tgate" }, turn: { kind: "duet_gate" } } as never;
+    const gateView = { task: { id: "tgate" }, turn: { kind: "duet_gate", version: 1 } } as never;
     assert.deepEqual(await extrasFor(gateView), { unread: true }, "读到的是个目录（EISDIR）：不当成没有结论");
-    assert.deepEqual(await extrasFor({ task: { id: "tnone" }, turn: { kind: "duet_gate" } } as never), {}, "文件不在 = 还没有，不算没读到");
+    assert.deepEqual(await extrasFor({ task: { id: "tnone" }, turn: { kind: "duet_gate", version: 1 } } as never), { conclusions: null },
+      "没有这一扇门的方案 = null（卡上不给放行），不算没读到");
   }
 
   // ── ⑤ @ 占位与缩进 ───────────────────────────────────────────────────────

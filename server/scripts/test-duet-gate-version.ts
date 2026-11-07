@@ -9,7 +9,9 @@
 //    版本相符照常续上,关门那一行带着被关那扇门的版本;
 // ④ 讨论已经 done:带版本的注入/放行一律 409 stale,不走验收打回;
 // ⑤ 请求体:expectedVersion 不是正整数、kind 认不出、注入/提问是空的,一律 400;
-// ⑥ currentGateVersion(给飞书判断「此刻开着第几版」):内存里的门 > 重启后的门 > null。
+// ⑥ currentGateVersion(给飞书判断「此刻开着第几版」):内存里的门 > 重启后的门 > null;
+// ⑦ shownAtGate(飞书卡片按卡上的版本取正文):库里那份和版本同一条语句写,开门行没写进文件也取得到;
+//    取的是**这一扇**的,不拿最近一次开门的顶上;老讨论按开门序号认;下一扇门领号时不带方案就清空。
 //
 // 一个执行器都不起:ASH_RUNS_DIR 指向临时目录(executors/spawn.ts 的 guardAgentSpawn 据此
 // 拦住一切 spawn),走到的动作只有「放行」,它在 resumeAtGate 里只结算、不跑讨论者。
@@ -30,7 +32,7 @@ try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, tasks } = await import("../src/db/schema.js");
   const { openGateVersion, resolveGate, waitForGate } = await import("../src/duet/gates.js");
-  const { currentGateVersion, lastOpenedGateVersion, nextGateVersion } = await import("../src/duet/gate-version.js");
+  const { currentGateVersion, lastOpenedGateVersion, nextGateVersion, shownAtGate } = await import("../src/duet/gate-version.js");
   const { gateActionOf, mountDuetGateRoutes } = await import("../src/duet/gate-route.js");
   const { recordGateEvent } = await import("../src/duet/timeline.js");
   const { claimOwnTurn, isTurnClaimed, releaseTurn } = await import("../src/runs.js");
@@ -239,9 +241,27 @@ try {
   resolveGate("restart", { kind: "reject" }, 5);
   await inMemory;
 
+  // ── ⑦ shownAtGate:正文认的是哪一扇门 ─────────────────────────────────────
+  // 审查复现:第 1 扇门的开门行写的是旧方案,第 2 扇门领了号、开门行没写进文件 —— 卡片拿「最近一次开门」的正文,
+  // 摆出来的是旧方案,按钮放行的却是第 2 扇。
+  await duetTask("shown", "awaiting_review");
+  const oldPlan = { consensus: true, conclusionA: "OLD_PLAN_1", conclusionB: "OLD_PLAN_1" };
+  writeTranscript("shown", [{ type: "duet.gate", taskId: "shown", gate: "G1", open: true, version: 1, ...oldPlan }]);
+  const newPlan = { consensus: false, consensusBy: "A" as const, conclusionA: "NEW_PLAN_A", conclusionB: "NEW_PLAN_B" };
+  assert.equal(await nextGateVersion("shown", newPlan), 2);
+  assert.deepEqual(await shownAtGate("shown", 2), newPlan, "开门行没写进文件:库里和版本一起落下的那份照样取得到");
+  assert.deepEqual(await shownAtGate("shown", 1), { consensus: true, conclusionA: "OLD_PLAN_1", conclusionB: "OLD_PLAN_1" },
+    "库里已经是下一扇了:旧版本到 transcript 里找同版本那一行");
+  assert.equal(await shownAtGate("shown", 3), null, "没有这一扇的,不拿别的门顶上");
+  assert.equal(await nextGateVersion("shown"), 3, "下一扇门不带方案");
+  assert.equal(await shownAtGate("shown", 3), null, "不带方案就清空,不留着上一扇门的");
+  assert.deepEqual(await shownAtGate("legacy", 1), { consensus: true, conclusionA: null, conclusionB: null },
+    "老讨论(没有 version、debate.gate)按开门序号认");
+  await assert.rejects(shownAtGate("unreadable", 1), /EISDIR/, "读不了不当成没有");
+
   console.log("✓ 闸口版本:旧卡点不中新门、门继续等;不带版本的老客户端照旧");
   console.log("✓ 版本在库里领(老讨论按 transcript 垫底、开门行写丢再重启也不重号、领不到就抛);重启补救 stale 不占锁,对上版本照常续、关门行带版本");
-  console.log("✓ 已结束的讨论不被旧卡拉起;请求体非法一律 400;currentGateVersion 三档");
+  console.log("✓ 已结束的讨论不被旧卡拉起;请求体非法一律 400;currentGateVersion 三档;卡片正文按版本取、取不到不借");
 } catch (error) {
   failure = error;
 } finally {

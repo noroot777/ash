@@ -148,14 +148,15 @@ export function mountImRoutes(api: Hono): void {
 
   api.patch("/im/feishu/options", async (c) => {
     if (!canManage(actorOf(c))) return c.json({ error: "只有实例管理员可以改飞书推送选项" }, 403);
-    const before = await readOptions();
     const result = await patchOptions(await bodyOf(c));
     if ("error" in result) return c.json({ error: result.error }, 400);
-    (await quotaMeter()).setQuota(result.options.monthlyQuota);
-    if (result.options.enabled !== before.enabled) await restartFeishuChannel();
+    const { options, before } = result;
+    // 额度按此刻已经存下的那份设：两个保存同时来时，后到这一行的未必是后存的那个。
+    (await quotaMeter()).setQuota((await readOptions()).monthlyQuota);
+    if (options.enabled !== before.enabled) await restartFeishuChannel();
     // 只推标题、深链改了：已经推出去、还挂着按钮的卡也按新的样子改一遍（对账按渲染指纹判）。
-    else if (result.options.publicBaseUrl !== before.publicBaseUrl
-      || result.options.titleOnlyProjectIds.join() !== before.titleOnlyProjectIds.join()) refreshPushes();
+    else if (options.publicBaseUrl !== before.publicBaseUrl
+      || options.titleOnlyProjectIds.join() !== before.titleOnlyProjectIds.join()) refreshPushes();
     return c.json(await statusOf(actorOf(c)));
   });
 

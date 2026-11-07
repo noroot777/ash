@@ -36,11 +36,29 @@ let cached: ImOptions | null = null;
 let corrupt: string | null = null;
 
 /**
+ * 选项的读库、写库排成一队（缓存只有这一个进程里的这一份）。读改写中间隔着 await：两个页面同时保存
+ * （一个勾「只推标题」、一个改月额度）会各拿同一份旧选项改自己那一项，后写的整份盖掉先写的，两边都回
+ * 「保存成功」，勾上的只推标题就这么没了（审查实测）。缓存还空着时的那一次读库也排进来：写进缓存的那一份
+ * 一定不比已经存下的旧，不靠数据库按发出顺序执行来保证。
+ */
+let queue: Promise<unknown> = Promise.resolve();
+function serialized<T>(work: () => Promise<T>): Promise<T> {
+  const run = queue.then(work, work);
+  queue = run.catch(() => undefined);
+  return run;
+}
+
+/**
  * 存着的选项坏了（不是 JSON、不是对象、「只推标题」那张单子不是数组）不能按默认值来：默认是「全文都推」，
  * 设成只推标题的项目会开始推全文，发出去就收不回。坏了就先关掉通道（enabled: false），设置页报出原因
  * （optionsError），管理员重新保存一次选项就好了。坏的那份不缓存，库里修好了下一次就读得到。
  */
 export async function readOptions(): Promise<ImOptions> {
+  return cached ?? serialized(loadOptions);
+}
+
+/** 只在队里调（readOptions / patchOptions）。 */
+async function loadOptions(): Promise<ImOptions> {
   if (cached) return cached;
   const raw = await readMeta(OPTIONS_KEY);
   let parsed: unknown = {};
@@ -77,9 +95,16 @@ export function normalizeOptions(input: ImOptions): ImOptions {
   };
 }
 
-/** 校验并写入。返回错误文案或新选项。 */
-export async function patchOptions(patch: Record<string, unknown>): Promise<{ error: string } | { options: ImOptions }> {
-  const current = await readOptions();
+/**
+ * 校验并写入。返回错误文案，或新选项和被它替掉的那一份（before：调用方据此判断要不要重启通道、改卡，
+ * 必须是同一队里紧挨着的上一份，不能是排队之前自己读的）。
+ */
+export function patchOptions(patch: Record<string, unknown>): Promise<{ error: string } | { options: ImOptions; before: ImOptions }> {
+  return serialized(() => applyPatch(patch));
+}
+
+async function applyPatch(patch: Record<string, unknown>): Promise<{ error: string } | { options: ImOptions; before: ImOptions }> {
+  const current = await loadOptions();
   // 坏着的时候 current 是默认值（「只推标题」那张单子是空的）：改哪一项都会把空单子整份写回去、坏的记号跟着消掉，
   // 原来只推标题的项目再打开推送就推全文。先让他把单子核对一遍（改一次「只推标题」就存下整份），再改别的。
   if (corrupt && !("titleOnlyProjectIds" in patch)) {
@@ -116,7 +141,7 @@ export async function patchOptions(patch: Record<string, unknown>): Promise<{ er
   await writeMeta(OPTIONS_KEY, JSON.stringify(normalized));
   cached = normalized;
   corrupt = null;
-  return { options: normalized };
+  return { options: normalized, before: current };
 }
 
 /** 测试换库后清缓存用。 */

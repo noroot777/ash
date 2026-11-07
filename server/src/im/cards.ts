@@ -129,9 +129,13 @@ export function turnCard(view: TaskView, turn: Turn, ctx: CardContext, envelope:
       return { ...header(view, turn.kind), blocks };
     case "duet_gate": {
       const c = extras.conclusions;
+      // 「放行」认的是这张卡的版本号：这一扇门的方案没读到、或者找不到，就不给放行 —— 不能让人对着
+      // 别的门的方案（或什么都没看到）按下去，放行掉一份没给他看过的。只推标题是他自己选的不在飞书里看正文，照给。
+      const shown = ctx.titleOnly || (!extras.unread && !!c);
       if (ctx.titleOnly) blocks.push({ type: "note", text: TITLE_ONLY });
       else if (extras.unread) blocks.push({ type: "note", text: EXTRAS_UNREAD });
-      else if (c) {
+      else if (!c) blocks.push({ type: "note", text: "（这一版方案没找到，放行请到 ash 里看过方案再点）" });
+      else {
         if (c.consensus && c.a) blocks.push({ type: "text", text: `共识：${scrubText(c.a, 1500)}` });
         else {
           if (c.a) blocks.push({ type: "text", text: `A：${scrubText(c.a, 900)}` });
@@ -141,7 +145,7 @@ export function turnCard(view: TaskView, turn: Turn, ctx: CardContext, envelope:
       blocks.push({
         type: "buttons",
         buttons: [
-          { text: "放行", style: "primary", value: value(envelope, "approve") },
+          ...(shown ? [{ text: "放行", style: "primary" as const, value: value(envelope, "approve") }] : []),
           { text: "打回终止", style: "danger", value: value(envelope, "reject"), confirm: { title: "打回终止", text: "讨论会被终止，任务记为已取消。确定吗？" } },
           ...linkButton(ctx),
         ],

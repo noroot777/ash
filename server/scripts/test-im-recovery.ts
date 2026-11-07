@@ -9,7 +9,8 @@
 // ④ 重启接管：上一次运行点了一半的按钮 —— 事情没变就放回去（卡面改回原样、能再点），变了就记完收卡；
 //    确认卡照实说不确定；收下没办的消息照原文重办；正要答复的那一步不重办、告诉用户不确定；
 //    太旧的不补办、让用户重发；同 subject 的回执只入队一次；
-// ⑤ 确认卡与决策卡同一条路：慢了先回「处理中」，办完补写结果；没办成把原卡改回去、卡下说原因。
+// ⑤ 确认卡与决策卡同一条路：慢了先回「处理中」，办完补写结果；没办成把原卡改回去、卡下说原因；「处理中」卡
+//    没拼出来、要办的事当场抛错，结局照样落下。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -277,6 +278,36 @@ try {
     assert.equal((await db.select().from(imActions).where(eq(imActions.id, failing.value.e as string))).at(0)!.usedAt, null, "没办成：信封放回去");
     assert.ok(buttonsOf(JSON.parse(sentTo(failing.row)[0]!.body.content)).some((button) => button.value?.op === "confirm"), "卡面改回原样");
     assert.match(fake.sends().map((call) => textOf(contentOf(call))).join(), /没办成：接口拒了/, "卡下说原因");
+
+    // 拼「处理中」卡要过出口判据（读库），这一下读失败：已经起跑的那件事照样落下结局、改上结果卡，
+    // 不停在「已占用、没结果」（审查复现：停止办成了，卡永远是原样、再点只说已经处理过了）。
+    outcome = { ok: true, text: "已停止。", final: true, tone: "grey" as const };
+    const flaky = await stopCard();
+    const exits = im.reconciler.exits;
+    const admission = exits.admission;
+    let injected = false;
+    exits.admission = async (row) => {
+      if (row.id === flaky.row.id && !injected) { injected = true; throw new Error("SQLITE_BUSY（注入）"); }
+      return admission.call(exits, row);
+    };
+    try {
+      const answered = await im.click(OWNER, flaky.value);
+      assert.ok(injected, "注入的那一下落在「处理中」卡上");
+      assert.deepEqual(answered, { toast: { type: "info", content: "处理中" } }, "「处理中」卡没拼出来：只回一句提示");
+      fake.reset();
+      await sleep(2_000);
+      await im.settle();
+    } finally {
+      exits.admission = admission;
+    }
+    assert.equal((await db.select().from(imActions).where(eq(imActions.id, flaky.value.e as string))).at(0)!.result, "已停止。", "结局落了");
+    assert.match(textOf(JSON.parse(sentTo(flaky.row)[0]!.body.content)), /已停止/, "结果卡改上了");
+
+    // 要办的事当场就抛（不是返回一个被拒的 promise）：同样落成「没办成」、信封放回去，不卡在已占用。
+    im.commands.confirmed = (() => { throw new Error("当场抛错"); }) as never;
+    const thrown = await stopCard();
+    assert.match((await im.click(OWNER, thrown.value)).toast?.content ?? "", /当场抛错/);
+    assert.equal((await db.select().from(imActions).where(eq(imActions.id, thrown.value.e as string))).at(0)!.usedAt, null, "信封放回去");
   }
 
   im.reconciler.stop();

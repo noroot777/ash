@@ -583,9 +583,10 @@ async function runGate(
   while (true) {
     // 每开一次门领一个新版本(理由见 gate-version.ts),在库里落定了才往下开:领不到就抛出去由外层 failDuet
     // 落成失败,这扇门不开、卡片不推,状态也还没写成 awaiting_review(那样重启补救会拿上一扇门的号放行)。
-    const version = await nextGateVersion(taskId);
-    await setStatus(taskId, "awaiting_review");
+    // 这扇门摆给人看的方案跟号一起落库:飞书卡片按号去取正文,不从 transcript 里「最近一次开门」借。
     const info = getInfo?.();
+    const version = await nextGateVersion(taskId, info ?? null);
+    await setStatus(taskId, "awaiting_review");
     // 先登记门、再记开门事件:收到开门事件的那一侧(界面、飞书)马上就可能来点,这时门必须已经在等了。
     const decision = waitForGate(taskId, version);
     recordGateEvent({

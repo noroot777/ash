@@ -233,6 +233,8 @@ export const tasks = sqliteTable("tasks", {
   acceptanceId: text("acceptance_id"),
   /** duet 闸口最近发出去的版本号(第几次开门),开门之前在这里领号,理由见 duet/gate-version.ts。空 = 加列之后没开过门。 */
   duetGateVersion: integer("duet_gate_version"),
+  /** 上面那扇门开门时摆给人看的方案(JSON,duet/gate-version.ts 的 GateShown),和版本号同一条语句写。 */
+  duetGateShown: text("duet_gate_shown"),
   baseUpdateIntent: text("base_update_intent"),
   originTaskId: text("origin_task_id"), // 回链来源任务(null = 直接创建)
   creationOrigin: text("creation_origin"),
