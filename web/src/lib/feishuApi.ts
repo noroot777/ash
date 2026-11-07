@@ -42,8 +42,6 @@ export const feishuApi = {
     humanAction("/im/feishu/binding/confirm", json("POST", { codeId })),
   rejectFeishuBinding: (codeId: string): Promise<FeishuBinding> =>
     request("/im/feishu/binding/reject", json("POST", { codeId })),
-  setFeishuBindingProject: (projectId: string | null): Promise<FeishuBinding> =>
-    request("/im/feishu/binding", json("PATCH", { projectId })),
   unbindFeishu: (): Promise<FeishuBinding> =>
     request("/im/feishu/binding", { method: "DELETE" }),
 

@@ -92,8 +92,6 @@ export type FeishuBinding =
     boundAt: string;
     /** 绑定时的应用与当前凭证不是同一个：换过应用，需要重新绑定。 */
     stale: boolean;
-    /** 「当前项目」：飞书里派任务、/new 落在哪个项目。 */
-    projectId: string | null;
   };
 
 /** 生成绑定码的回应。明文码只在这一次回给页面，库里只存哈希。 */

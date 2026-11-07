@@ -197,6 +197,15 @@ export class FeishuApi {
     return res.ok ? { ok: true, data: undefined } : res;
   }
 
+  /**
+   * 撤回机器人自己发的一条消息（发出 24 小时内，过了回 230009）。聊天里留一行「撤回了一条消息」，不弹提醒。
+   * 计在 patch 那一类里：都是对一条已经发出去的消息动手。
+   */
+  async recall(messageId: string, purpose: ImPurpose): Promise<ApiResult<void>> {
+    const res = await this.call<void>("patch", purpose, "DELETE", `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`);
+    return res.ok ? { ok: true, data: undefined } : res;
+  }
+
   async react(messageId: string, emoji: string): Promise<ApiResult<void>> {
     const res = await this.call<void>("reaction", "reaction", "POST", `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reactions`, {
       reaction_type: { emoji_type: emoji },

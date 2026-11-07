@@ -51,7 +51,7 @@ const KIND_TONE: Record<Turn["kind"], CardTone> = {
 
 const TITLE_ONLY = "这个项目设成了只推标题：详细内容请在 ash 里看。";
 
-export function taskLink(base: string | null, view: Pick<TaskView, "task">): string | null {
+export function taskLink(base: string | null, view: { task: Pick<TaskView["task"], "id" | "projectId"> }): string | null {
   if (!base) return null;
   return `${base}/?project=${encodeURIComponent(view.task.projectId)}&task=${encodeURIComponent(view.task.id)}`;
 }
@@ -262,29 +262,15 @@ export function summaryCard(items: SummaryItem[], envelope: string): CardModel {
   };
 }
 
-/** /project 的选单：每个项目一颗按钮，点一下就切成当前项目（按钮带的是第几个，项目 id 存在信封里）。 */
-export function projectCard(current: string | null, names: string[], currentIndex: number, hidden: number, envelope: string): CardModel {
-  return {
-    title: "切换当前项目",
-    tone: "blue",
-    blocks: [
-      { type: "text", text: `当前：${current ? scrubTitle(current, 40) : "未指定"}` },
-      {
-        type: "buttons",
-        buttons: names.map((name, index) => ({
-          text: scrubTitle(name, 24), ...(index === currentIndex ? { style: "primary" as const } : {}), value: value(envelope, "pick", { i: index }),
-        })),
-      },
-      { type: "note", text: hidden ? `还有 ${hidden} 个项目没列出：发 /project 名字 切过去。` : "也可以发 /project 名字 切换。" },
-    ],
-  };
-}
+/** 建任务表单上预先填好的（/new 标题 换行写要求）。要求超过输入框上限时不放进框里，随信封带着，heldBody = 它有几个字。 */
+export interface NewTaskPrefill { title?: string; body?: string; heldBody?: number }
 
 /**
- * 不带参数的 /new：选项目、填标题和要求，提交就建任务并开跑（填表、点提交本身就是确认，不再弹确认卡）。
- * 下拉框的 value 是第几个项目，项目 id 存在信封里；群里只有群绑定的那一个项目可选。
+ * /new 的表单：选项目、填标题和要求，提交就建任务并开跑（填表、点提交本身就是确认，不再弹确认卡）。
+ * 下拉框的 value 是第几个项目，项目 id 存在信封里；不替他预选项目（只有一个可选时才选好）。
  */
-export function newTaskCard(names: string[], currentIndex: number, hidden: number, envelope: string): CardModel {
+export function newTaskCard(names: string[], hidden: number, envelope: string, prefill: NewTaskPrefill = {}): CardModel {
+  const held = prefill.heldBody ?? 0;
   return {
     title: "建任务并开跑",
     tone: "blue",
@@ -295,20 +281,23 @@ export function newTaskCard(names: string[], currentIndex: number, hidden: numbe
         {
           name: "project", placeholder: "选一个项目", required: true,
           options: names.map((name, index) => ({ text: scrubTitle(name, 40), value: String(index) })),
-          ...(currentIndex >= 0 ? { initial: String(currentIndex) } : {}),
+          ...(names.length === 1 ? { initial: "0" } : {}),
         },
-        { name: "title", label: "标题", placeholder: "一句话说清要做什么", maxLength: 120, required: true },
-        { name: "body", label: "要求", placeholder: "详细要求（可不填）", multiline: true },
+        { name: "title", label: "标题", placeholder: "一句话说清要做什么", maxLength: 120, required: true, ...(prefill.title ? { initial: prefill.title } : {}) },
+        ...(held ? [] : [{ name: "body", label: "要求", placeholder: "详细要求（可不填）", multiline: true, ...(prefill.body ? { initial: prefill.body } : {}) }]),
       ],
       buttons: [{ text: "建任务并开跑", style: "primary", name: "submit", value: value(envelope, "submit") }],
     }, {
       type: "note",
-      text: `${hidden ? `还有 ${hidden} 个项目没列出：先发 /project 名字 把它设成当前项目，再发 /new。` : ""}要求最多 1000 字；写得长就发 /new 标题，换行写要求。`,
+      text: [
+        held ? `要求（${held} 字）已收下，提交时一并带上。` : "要求最多 1000 字；更长的发 /new 标题，换行写要求。",
+        hidden ? `还有 ${hidden} 个项目没列出：发 /tasks 项目名 找到它，在那张卡上点「在这里建任务」。` : "",
+      ].join(""),
     }],
   };
 }
 
-/** 需要再点一下才执行的命令（/stop、/new）。 */
+/** 需要再点一下才执行的命令（/stop）。 */
 export function confirmCard(title: string, text: string, envelope: string, danger: boolean): CardModel {
   return {
     title,

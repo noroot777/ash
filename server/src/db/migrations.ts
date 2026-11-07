@@ -209,6 +209,8 @@ const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
   // 单槽会被后一条顶掉。这两列只在未合并的分支上存在过,没有值得迁走的事实。
   { table: "monitor_scan_cursors", column: "gap_from", why: "缺口改为 gaps 全集" },
   { table: "monitor_scan_cursors", column: "gap_need", why: "缺口改为 gaps 全集" },
+  // 飞书不再有「当前项目」：建任务在表单上选项目，助手按话里说的挑项目（im/commands.ts 顶部）
+  { table: "im_bindings", column: "project_id", why: "飞书不再固定一个当前项目" },
 ];
 
 // 退役整表与退役列遵循同一原则：新库不创建，老库启动时幂等清理，失败只告警。

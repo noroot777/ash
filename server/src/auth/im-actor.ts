@@ -66,6 +66,8 @@ const IM_ROUTES: ReadonlyArray<readonly [ImCall["method"], RegExp]> = [
   ["GET", /^\/api\/sessions\/[^/]+\/notices$/],
   ["GET", /^\/api\/tasks\/[^/]+\/free-workflow$/],
   ["GET", /^\/api\/projects$/],
+  // /tasks 列出一个项目的任务
+  ["GET", /^\/api\/tasks$/],
   // 决策卡上的按钮
   ["POST", /^\/api\/tasks\/[^/]+\/(?:answer|accept|retry)$/],
   ["POST", /^\/api\/tasks\/[^/]+\/free-workflow\/review\/dispute\/resolution$/],

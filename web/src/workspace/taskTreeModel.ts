@@ -1,12 +1,10 @@
 import type { TaskListItem } from "@ash/shared";
+import { isListedTopLevel, sortByUpdated, sortPinned, visibleOnThisMachine } from "@ash/shared/task-order";
 import { hasFailed, needsYourCommand } from "../lib/taskAttention.ts";
 import type { TaskStatusIndicator } from "../lib/useTaskReadState.ts";
 
-// 排序的第一原则：**更新时间倒序**，而且只有这一条。
-// 从前这里把列表按状态切成八大块（运行中 / 暂停中 / … / 失败 / 已取消），
-// 时间序只在块内生效，于是刚炸的任务被扔到列表最末，找它得一路滚到底。
-// 现在不按状态提升任何一档 —— 失败、待验收这些靠行首圆点的颜色认，不靠位置。
-// 置顶（pinnedAt）是唯一的例外，那是用户手动摁下去的。
+// 先后规则（更新时间倒序、置顶在前）住在 shared/src/task-order.ts：飞书的 /tasks 也按它排。
+export { visibleOnThisMachine };
 
 export type TaskTreeSectionKey = "pinned" | "rest";
 
@@ -31,23 +29,6 @@ export type TaskPreview<T extends TaskListItem = TaskListItem> = {
 };
 
 export const TASK_PREVIEW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-
-export function visibleOnThisMachine(task: TaskListItem): boolean {
-  return task.handoff?.direction !== "out" || Boolean(task.handoff.pending);
-}
-
-function byUpdatedDesc(a: TaskListItem, b: TaskListItem): number {
-  return b.updatedAt.localeCompare(a.updatedAt);
-}
-
-function sortByUpdated<T extends TaskListItem>(tasks: T[]): T[] {
-  return [...tasks].sort(byUpdatedDesc);
-}
-
-// 置顶区按用户置顶的先后，同刻再落回更新时间。
-function sortPinned<T extends TaskListItem>(tasks: T[]): T[] {
-  return [...tasks].sort((a, b) => (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0) || byUpdatedDesc(a, b));
-}
 
 // 24 小时年龄闸的豁免名单：哪些行**永不因为旧而被折叠**。
 //
@@ -136,8 +117,7 @@ export function advanceHiddenReveal(lastKey: string | null, revealKey: string | 
 }
 
 export function buildTaskTree<T extends TaskListItem>(tasks: T[], options: TaskTreeOptions = {}): TaskTreeSection<T>[] {
-  const topLevel = tasks.filter((task) => task.parentId === null && !task.archived
-    && (options.includeElsewhere || visibleOnThisMachine(task)));
+  const topLevel = tasks.filter((task) => isListedTopLevel(task, options.includeElsewhere));
   const pinned = sortPinned(topLevel.filter((task) => task.pinnedAt != null));
   const rest = sortByUpdated(topLevel.filter((task) => task.pinnedAt == null));
 

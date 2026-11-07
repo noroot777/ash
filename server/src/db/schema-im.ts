@@ -33,8 +33,6 @@ export const imBindings = sqliteTable("im_bindings", {
   chatId: text("chat_id"),
   /** 这个人在飞书里说话落进的助手房间（kind=assistant）。房间被网页删掉后会重建。 */
   assistantRoomId: text("assistant_room_id"),
-  /** 「当前项目」：助手派任务、/new 建任务落在哪个项目。 */
-  projectId: text("project_id"),
   boundAt: text("bound_at").notNull(),
 }, (t) => [
   primaryKey({ columns: [t.channel, t.appId, t.openId] }),
@@ -208,7 +206,7 @@ export async function ensureImSchema(client: Client): Promise<void> {
   await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS im_bindings (
       channel TEXT NOT NULL, app_id TEXT NOT NULL, open_id TEXT NOT NULL, user_id TEXT,
-      chat_id TEXT, assistant_room_id TEXT, project_id TEXT, bound_at TEXT NOT NULL,
+      chat_id TEXT, assistant_room_id TEXT, bound_at TEXT NOT NULL,
       PRIMARY KEY (channel, app_id, open_id)
     );
     CREATE INDEX IF NOT EXISTS im_bindings_user ON im_bindings(user_id);

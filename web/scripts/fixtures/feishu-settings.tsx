@@ -140,15 +140,11 @@ async function handle(method: string, path: string, body: Record<string, unknown
   if (path === "/api/im/feishu/binding/confirm") {
     const b = server.binding;
     if (b.state !== "pending" || b.codeId !== body.codeId) return reply({ error: "这串码不在待确认状态" }, 409, human);
-    server.binding = { state: "bound", appId: s.config?.appId ?? "", openIdTail: b.openIdTail, boundAt: at(0), stale: false, projectId: null };
+    server.binding = { state: "bound", appId: s.config?.appId ?? "", openIdTail: b.openIdTail, boundAt: at(0), stale: false };
     return reply(server.binding, 200, human);
   }
   if (path === "/api/im/feishu/binding/reject") {
     server.binding = { state: "none" };
-    return reply(server.binding);
-  }
-  if (path === "/api/im/feishu/binding" && method === "PATCH") {
-    if (server.binding.state === "bound") server.binding = { ...server.binding, projectId: (body.projectId as string | null) ?? null };
     return reply(server.binding);
   }
   if (path === "/api/im/feishu/binding" && method === "DELETE") {

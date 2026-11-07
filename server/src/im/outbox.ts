@@ -12,6 +12,8 @@
 // （result = 回写用户刚点的那一下，额度见底也照发）；acking = 结果卡已随卡片回调回执带回去、还没确认
 // 送到，next_at 到期还没确认就当 result 改一次（至少交付一次，同样的内容改两次没有副作用）；
 // done / skipped / failed 是结果。改卡失败按 next_at 退避，不在同一圈里连撞。
+// recall = 不改了、整条撤回（卡上那件事没了、任务只是又跑起来了：留一张「又开始跑了」的灰卡没人要看，reconcile.ts
+// resolve）；撤回不了（发出超过一天、类型不支持）就退回成改卡，改成库里那份收好的样子。recalled = 已撤回。
 //
 // 发出和改卡都要先过出口核对（OutboxGuard，构造时必须给，由对账器实现）：入队时的授权与隐私设置
 // 不是发出那一刻的 —— 排着队的时候收件人可能解了绑、被移出了项目，项目可能改成了只推标题（scope.ts）。
@@ -69,7 +71,9 @@ export interface OutboxGuard {
 
 const GUARD_RETRY_MS = 30_000;
 /** 还要改到飞书上的（acking 另按期限算）。 */
-const PATCHING = ["pending", "result"];
+const PATCHING = ["pending", "result", "recall"];
+export const RECALL = "recall";
+export const RECALLED = "recalled";
 
 export class OutboxSender {
   private running = false;
@@ -85,6 +89,8 @@ export class OutboxSender {
       now: () => Date.now(),
       sleep: (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); }),
     },
+    /** 撤回出去的那条消息，库里那一行却刚被救回成能点的卡：行已作废，叫对账按现状重推（recallOne）。 */
+    private readonly onLost: (taskId: string) => void = () => {},
   ) {}
 
   start(): void {
@@ -155,6 +161,12 @@ export class OutboxSender {
     while (!this.stopped) {
       // 改卡排在发新卡前面：回写结果是用户正盯着看的。
       const patch = await this.nextPatch();
+      if (patch?.patchState === RECALL) {
+        // 撤回只会收回内容，不用先过出口核对。
+        await this.recallOne(patch);
+        await this.clock.sleep(SPACING_MS);
+        continue;
+      }
       if (patch) {
         const vetted = await this.guarded(patch, "patch");
         if (vetted === "error") continue;
@@ -236,6 +248,37 @@ export class OutboxSender {
       updatedAt: at,
     }).where(and(eq(imOutbox.id, row.id), eq(imOutbox.state, "pending")));
     if (dead) console.warn(`[ash] 飞书消息放弃发送（${row.kind} ${row.taskId ?? ""}）：${res.code} ${res.msg}`);
+  }
+
+  private async recallOne(row: OutboxRow): Promise<void> {
+    const res = await this.api.recall(row.messageId!, "resolved");
+    const at = now();
+    if (res.ok) {
+      const done = await db.update(imOutbox).set({ patchState: RECALLED, attempts: 0, nextAt: null, lastError: null, updatedAt: at })
+        .where(and(eq(imOutbox.id, row.id), eq(imOutbox.patchState, RECALL))).returning({ id: imOutbox.id });
+      // 撤回的同时这一行被对账救了回来（reconcile.ts revive 换成了能点的卡、排着改卡）：飞书上那条已经没了，改不回来，
+      // 照原 uuid 重发也只会拿回那条撤回的（飞书一小时内按 uuid 判重）。作废这一行，交给对账另起一行重推。
+      if (!done.length) {
+        await db.delete(imOutbox).where(and(eq(imOutbox.id, row.id), eq(imOutbox.messageId, row.messageId!)));
+        if (row.taskId) this.onLost(row.taskId);
+      }
+      return;
+    }
+    const lastError = `${res.code} ${res.msg}`.slice(0, 500);
+    if (isQuotaBlocked(res)) {
+      await db.update(imOutbox).set({ patchState: "skipped", lastError, updatedAt: at }).where(and(eq(imOutbox.id, row.id), eq(imOutbox.patchState, RECALL)));
+      return;
+    }
+    const attempts = row.attempts + 1;
+    if (isTokenFailure(res) || (res.retryable && attempts <= BACKOFF_MS.length)) {
+      const wait = isTokenFailure(res) ? TOKEN_RETRY_MS : BACKOFF_MS[attempts - 1]!;
+      await db.update(imOutbox).set({ attempts: isTokenFailure(res) ? row.attempts : attempts, lastError, updatedAt: at, nextAt: new Date(this.clock.now() + wait).toISOString() })
+        .where(and(eq(imOutbox.id, row.id), eq(imOutbox.patchState, RECALL)));
+      return;
+    }
+    // 撤回不了（超过一天、这类消息不支持）：退回成改卡，卡上换成库里那份收好的样子。
+    await db.update(imOutbox).set({ patchState: "pending", attempts: 0, lastError, nextAt: null, updatedAt: at })
+      .where(and(eq(imOutbox.id, row.id), eq(imOutbox.patchState, RECALL)));
   }
 
   private async patchOne(row: OutboxRow): Promise<void> {

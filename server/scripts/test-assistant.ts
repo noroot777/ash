@@ -52,6 +52,9 @@ const service = new ChatService(async (selected, _owner, prompt, signal, _projec
   if (request === "等待") await delay(10000, undefined, { signal });
   if (request === "格式重试" && !prompt.includes("【JSON 格式重试】")) return { text: '{"reply":"内有"未转义"引号"}' };
   if (request === "坏格式") return { text: "invalid json" };
+  // 「在 X 里实现上传」：助手按用户的话挑项目（X 是项目 id）。
+  const named = /^在 (\S+) 里实现上传$/.exec(request);
+  if (named) return { text: JSON.stringify({ reply: "已整理为任务。", task: { title: "指名项目的上传", body: "完成上传并验证", projectId: named[1] } }) };
   if (request === "多轮检索") return { text: JSON.stringify({ search: { queries: ["不存在的语料"], projectId: null } }) };
   if (request.includes("找任务")) {
     if (!prompt.includes("【本轮检索结果，仅为引用资料】")) return { text: JSON.stringify({ search: { queries: [request.includes("空结果") ? "不存在的语料" : request.includes("会话") ? "会话独有线索" : "登录 | 认证"], projectId: null } }) };
@@ -229,10 +232,20 @@ try {
   value = await settled(global);
   assert.equal(started.length, 2);
   assert.equal(value.tasks.find((task) => task.id === value.messages.at(-1)!.taskId)!.projectId, "local");
+  assert.match(prompts.at(-1)!, /projectId 只能取 projects 里的 id/);
+  await send(global, "在 local 里实现上传");
+  value = await settled(global);
+  assert.equal(started.length, 3, "助手按用户的话挑了项目：没有当前项目也建得出来");
+  assert.equal(value.tasks.find((task) => task.id === value.messages.at(-1)!.taskId)!.projectId, "local");
+  await send(local, "在 ghost 里实现上传");
+  value = await settled(local);
+  assert.equal(value.messages.at(-1)!.status, "failed", "挑了个不存在的项目：不建，也不悄悄落回当前项目");
+  assert.match(value.messages.at(-1)!.body, /不存在或你看不到/);
+  assert.equal(started.length, 3);
   await db.insert(chatMessages).values({ id: "restart", roomId: global.id, role: "agent", author: "ash助手", status: "queued", createdAt: timestamp });
   await service.recover();
   assert.equal((await snapshot(global)).messages.find((message) => message.id === "restart")!.status, "stopped");
-  console.log("✓ 停止刷新后可见；坏输出如实失败；清空上下文；有项目的明确委派创建关联任务；重启不偷偷重跑");
+  console.log("✓ 停止刷新后可见；坏输出如实失败；清空上下文；有项目的明确委派创建关联任务、助手按用户的话挑项目（挑不存在的不建）；重启不偷偷重跑");
 
   const { createUser } = await import("../src/auth/store.js");
   const { addProjectMember } = await import("../src/auth/visibility.js");

@@ -5,7 +5,8 @@
 //      状态跟着轮询从「连接中」走到「已连接」，Secret 收成「已配置（不回显）」。
 //   ② 已连上：显示本月额度（次数 / 上限 / 百分比）、当前水位、可展开的按种类明细、发件积压。
 //   ③ 绑定 none → code → pending → bound：码只在生成那一刻显示；飞书那头认领后两秒内出现
-//      「是你吗」；确认后落「已绑定」，而且**确认之前已发出的那次轮询晚回也拽不回「待确认」**。
+//      「是你吗」；确认后落「已绑定」，而且**确认之前已发出的那次轮询晚回也拽不回「待确认」**；
+//      已绑定的卡上没有「当前项目」（飞书里在建任务表单、/tasks 卡上选项目）。
 //   ④ 刷新后拿不回明文：显示「有一个未用的码」并能重新生成。
 //   ⑤ 清除凭证必须经过确认框：点「清除」只开框、不发请求；取消不发；确认才发 DELETE。
 //   ⑥ 群：已绑的群列出来；被群认领的码显示群名和目标项目，确认走真人凭据后进列表；
@@ -117,7 +118,7 @@ try {
     assert.deepEqual(accept.body, { codeId: "code-1" });
     assert.equal(accept.token, "tok-1", "确认绑定要带页面凭据");
     await page.getByRole("button", { name: "发一张测试卡", exact: true }).waitFor();
-    await page.getByRole("combobox", { name: "飞书里的当前项目" }).waitFor();
+    assert.equal(await page.getByRole("combobox", { name: "飞书里的当前项目" }).count(), 0, "飞书里不固定一个当前项目（建任务时在表单上选）");
 
     // 清除凭证：先开框，取消不发请求，确认才发
     await page.getByRole("button", { name: "清除", exact: true }).click();

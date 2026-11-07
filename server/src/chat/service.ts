@@ -249,7 +249,8 @@ export class ChatService {
         const taskId = id();
         const timestamp = now();
         await createTasks([{
-          id: taskId, projectId: room.projectId, title: result.task.title,
+          // 助手的活落在它按话挑的项目（chat/assistant.ts taskProject）；群聊就是房间所在的项目。
+          id: taskId, projectId: (result.task as { projectId?: string }).projectId ?? room.projectId, title: result.task.title,
           creationOrigin: JSON.stringify({ kind: "agent", agentType: member.agentType, executorLabel: member.name,
             chatRoomId: room.id, chatMemberId: member.id }),
           body: `来源群聊：${room.name}；委派成员：${member.name}\n\n${result.task.body}\n\n【用户原始委派，供核对上下文】\n${context.source}`,

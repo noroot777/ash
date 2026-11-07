@@ -13,7 +13,7 @@ import { actorOf, isAccountHolder, isAdminActor, ownerIdOf, type Actor } from ".
 import { isMultiUser } from "../auth/mode.js";
 import { canSeeProject, visibleProjectIds } from "../auth/visibility.js";
 import {
-  bindingOfOwner, bindingView, confirmUserCode, createBindCode, ownerKeyOf, rejectCode, unbindOwner, updateBinding,
+  bindingOfOwner, bindingView, confirmUserCode, createBindCode, ownerKeyOf, rejectCode, unbindOwner,
 } from "./binding.js";
 import {
   channelConfigError, connectionOf, feishuRuntime, instanceTag, quotaMeter, quotaUsage, restartFeishuChannel,
@@ -205,17 +205,6 @@ export function mountImRoutes(api: Hono): void {
     const body = await bodyOf(c);
     if (typeof body.codeId !== "string") return c.json({ error: "缺少 codeId" }, 400);
     await rejectCode(ownerOf(c), "user", body.codeId);
-    return c.json(await bindingView(ownerOf(c), currentAppId()));
-  });
-
-  api.patch("/im/feishu/binding", async (c) => {
-    const body = await bodyOf(c);
-    const projectId = body.projectId;
-    if (projectId !== null && typeof projectId !== "string") return c.json({ error: "projectId 必须是项目 id 或 null" }, 400);
-    if (projectId && !(await canSeeProject(actorOf(c), projectId))) return c.json({ error: "看不到这个项目" }, 403);
-    const binding = await bindingOfOwner(ownerOf(c));
-    if (!binding) return c.json({ error: "还没绑定飞书" }, 409);
-    await updateBinding(binding, { projectId: projectId || null });
     return c.json(await bindingView(ownerOf(c), currentAppId()));
   });
 

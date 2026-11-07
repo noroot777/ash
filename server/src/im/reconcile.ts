@@ -14,6 +14,9 @@
 // 「同一代」只说明还是那件事，不说明卡片内容还对：标题改了、项目改成只推标题、深链换了，代次都
 // 不变。所以每张决策卡还记一个渲染指纹（render_key），对不上就原地重渲染（没发的直接换内容，
 // 发出去的排一次改卡）。发件、改卡前再核一次（exits.ts）：排队期间授权或隐私设置变了的，不按旧样子发。
+//
+// 卡上那件事没了、只是任务又跑起来了（答复了、重试了、续聊又开了一轮），没有下一张卡要看：旧卡直接撤回，不改成一张
+// 「任务又开始跑了」的灰卡留在聊天里 —— 开跑这件事不用告诉人，跑完要他管的时候自然有新卡。
 import { createHash } from "node:crypto";
 import { isAcceptedStage } from "@ash/shared";
 import { and, desc, eq, gt, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
@@ -34,7 +37,7 @@ import type { FeishuApi } from "./feishu/api.js";
 import { renderCard } from "./feishu/cards.js";
 import { readOptions } from "./meta.js";
 import { advanceOutcomes, forgetOutcomes, outcomesOf, outcomesRecorded, staleOutcomeTasks } from "./outcomes.js";
-import { cardHeaderOf, OutboxSender, type Destination, type OutboxRow } from "./outbox.js";
+import { cardHeaderOf, OutboxSender, RECALLED, type Destination, type OutboxRow } from "./outbox.js";
 import { destinationsFor } from "./recipients.js";
 import { scopeFor, type OutboxScope } from "./scope.js";
 
@@ -67,7 +70,7 @@ export class Reconciler {
 
   constructor(readonly appId: string, api: FeishuApi, clock?: Clock) {
     this.exits = new OutboxExits(this);
-    this.sender = new OutboxSender(api, appId, this.exits, clock);
+    this.sender = new OutboxSender(api, appId, this.exits, clock, (taskId) => this.mark(taskId));
   }
 
   /** 发件表的所有改动都排进这一条链：对账和按钮回调不会交错改同一行。 */
@@ -166,14 +169,19 @@ export class Reconciler {
         await this.refresh(row, view as Creation["view"], dest, base, titleOnly);
         continue;
       }
-      const text = await resolutionText(row, view);
-      await this.resolve(row, text, view ? taskLink(base, view) : null);
+      const { text, recall } = await resolutionText(row, view);
+      await this.resolve(row, text, view ? taskLink(base, view) : null, text, recall);
     }
     if (!view || !turn) return [];
     const out: Creation[] = [];
     for (const dest of dests) {
       const existing = rows.find((row) => row.receiveId === dest.receiveId && row.kind === turn.kind && row.subject === turn.generation);
       if (!existing) out.push({ view: view as Creation["view"], dest });
+      // 撤回了的那条在飞书上已经没了：同一件事又回来了就作废那一行、另推一张新的（新行、新 uuid）。
+      else if (existing.state === "resolved" && existing.patchState === RECALLED) {
+        await db.delete(imOutbox).where(and(eq(imOutbox.id, existing.id), eq(imOutbox.patchState, RECALLED)));
+        out.push({ view: view as Creation["view"], dest });
+      }
       // 点过收起来的（ACTED）不复活成原样，除非这件事还等着人按（awaitsPress）：那样收起来的卡上就再也没有能点的按钮了。
       else if (existing.state === "resolved" && (existing.resolution !== ACTED || awaitsPress(view, existing.kind, existing.subject))) {
         await this.revive(existing, view as Creation["view"], dest, base, titleOnly);
@@ -186,9 +194,13 @@ export class Reconciler {
    * 把一张卡收成说明文字。库里一律换成收好的样子 —— 正在发的那一张发完会照库里这份改过去
    * （outbox.ts sendOne）；已经发出去的带按钮的卡排一次改卡；还没发的就此作废。
    */
-  async resolve(row: OutboxRow, text: string, link: string | null, resolution = text): Promise<void> {
+  async resolve(row: OutboxRow, text: string, link: string | null, resolution = text, recall = false): Promise<void> {
     const at = now();
     const patchable = row.state === "sent" && row.messageId && row.kind !== "verify_failed";
+    // 撤回：正在回写他刚点的那一下的（result / acking）照常改卡，那是他正盯着看的。
+    const repatch = recall
+      ? sql`CASE WHEN ${imOutbox.patchState} IN ('result', 'acking') THEN 'result' ELSE 'recall' END`
+      : REPATCH;
     await db.update(imOutbox).set({
       state: "resolved",
       resolution,
@@ -196,7 +208,7 @@ export class Reconciler {
       updatedAt: at,
       content: JSON.stringify(renderCard(settledCard(cardHeaderOf(row.content), text, { link }))),
       brief: null,
-      ...(patchable ? { patchState: REPATCH, nextAt: null } : {}),
+      ...(patchable ? { patchState: repatch, nextAt: null } : {}),
     }).where(eq(imOutbox.id, row.id));
   }
 
@@ -412,8 +424,16 @@ async function recentGateFailure(taskId: string, since: string | null): Promise<
   return run?.status === "failed";
 }
 
-/** 旧卡收起来时写的那一句：照实说「为什么这张卡不用再点了」。 */
-async function resolutionText(row: OutboxRow, view: TaskView | null): Promise<string> {
+/**
+ * 旧卡收起来时写的那一句：照实说「为什么这张卡不用再点了」。recall = 只是任务又跑起来了、没什么要他看的：
+ * 整条撤回（这一句只在撤回不了时改上卡）。
+ */
+async function resolutionText(row: OutboxRow, view: TaskView | null): Promise<{ text: string; recall: boolean }> {
+  const said = await resolutionLine(row, view);
+  return typeof said === "string" ? { text: said, recall: false } : said;
+}
+
+async function resolutionLine(row: OutboxRow, view: TaskView | null): Promise<string | { text: string; recall: true }> {
   if (!view) return "任务已删除。";
   const task = view.task;
   if (task.archived) return "任务已归档。";
@@ -428,14 +448,15 @@ async function resolutionText(row: OutboxRow, view: TaskView | null): Promise<st
   if (next && next.kind === row.kind) return row.kind === "question" ? "问题已更新，请看新的那张卡。" : "有了新的一轮，请看新的那张卡。";
   if (next) return `下一步变成了「${KIND_LABEL[next.kind]}」，请看新的那张卡。`;
   const live = task.status === "running" || task.status === "queued" || task.status === "awaiting_review";
+  const again = (text: string) => ({ text, recall: true as const });
   switch (row.kind) {
-    case "question": return live ? "已答复，任务继续在跑。" : "已在别处答复。";
-    case "failed": return live ? "已重试，任务在跑。" : "已在别处处理。";
+    case "question": return live ? again("已答复，任务继续在跑。") : "已在别处答复。";
+    case "failed": return live ? again("已重试，任务在跑。") : "已在别处处理。";
     case "dispute": return "驳回已裁定。";
     case "duet_gate": return "闸口已在别处处理。";
     case "accept":
       if (live && await recentGateFailure(task.id, row.sentAt)) return "验收前置命令没通过，已交回任务修复。";
-      return live ? "任务又开始跑了。" : "已在别处处理。";
+      return live ? again("任务又开始跑了。") : "已在别处处理。";
     default: return "已处理。";
   }
 }

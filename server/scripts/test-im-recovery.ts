@@ -192,10 +192,10 @@ try {
     await db.update(tasks).set({ question: "换了一道？", updatedAt: new Date().toISOString() }).where(eq(tasks.id, "tv"));
 
     await im.sender.drainNow();
-    const stuckCreate = await im.say({ text: "/project 1" }).then(() => im.say({ text: "/new 重启时建的任务" }));
+    const stuckCreate = await im.say({ text: "/new 重启时建的任务" });
     await im.settle();
     const createCard = fake.sends().find((call) => call.path.includes(`/messages/${stuckCreate}/reply`))!;
-    const createConfirm = buttonsOf(contentOf(createCard)).find((button) => button.value?.op === "confirm")!.value!;
+    const createConfirm = buttonsOf(contentOf(createCard)).find((button) => button.value?.op === "submit")!.value!;
     await crash(createConfirm.e as string);
 
     fake.reset();

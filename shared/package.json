@@ -221,6 +221,10 @@
     "./markdown-images": {
       "types": "./src/markdown-images.ts",
       "default": "./src/markdown-images.ts"
+    },
+    "./task-order": {
+      "types": "./src/task-order.ts",
+      "default": "./src/task-order.ts"
     }
   },
   "scripts": {

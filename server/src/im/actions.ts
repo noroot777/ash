@@ -139,7 +139,14 @@ export class CardActions {
     const row = (await db.select().from(imOutbox).where(eq(imOutbox.id, check.envelope.outboxId))).at(0);
     if (!row) return toast("error", REJECT_TEXT.missing!);
     const source = scopeOfRow(row);
-    const answer = await replyScope(await originOf(this.deps.appId, destOf(row), binding), {
+    const origin = await originOf(this.deps.appId, destOf(row), binding);
+    // /tasks 的卡：只读，不占信封，点一下原地换卡（browse.ts）。
+    if (check.envelope.action === "browse") {
+      const shown = await this.deps.commands.browser.click(row, check.envelope, check.payload, op, event.value, principal, origin);
+      if ("warn" in shown) return toast("warning", shown.warn);
+      return { card: { type: "raw", data: shown.card } };
+    }
+    const answer = await replyScope(origin, {
       taskId: row.taskId ?? (source?.kind === "task" ? source.taskId : null), projectId: source?.kind === "project" ? source.projectId : null,
     });
 
@@ -226,14 +233,10 @@ export class CardActions {
     return { run: prepared, taskId: view.task.id, link };
   }
 
-  /** /new、/stop 的确认卡，/project 的选单，/new 的表单。 */
+  /** /stop 的确认卡（还有升级前发出的 /new 确认卡），/new 的表单。 */
   private confirmJob(
     envelope: EnvelopeRow, payload: Record<string, unknown>, op: string, event: CallbackEvent, principal: ImPrincipal,
   ): Job | CallbackResponse {
-    if (payload.command === "project") {
-      if (op !== "pick") return toast("error", "认不出这个按钮");
-      return { run: () => this.deps.commands.picked(principal, payload, Number(event.value.i)), taskId: null, link: null };
-    }
     if (payload.command === "newform") {
       if (op !== "submit") return toast("error", "认不出这个按钮");
       const field = (key: string) => (typeof event.formValue[key] === "string" ? (event.formValue[key] as string).trim() : "");

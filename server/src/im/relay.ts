@@ -148,9 +148,8 @@ export class RoomRelay {
     const messageId = chatMessageIdOf(inboundId);
     const scope = this.deps.commands.scoped(ctx, { kind: "room", roomId, projectId });
     const body = mentionName ? `@${mentionName} ${text}` : text;
-    const current = ctx.chatType === "p2p" && ctx.binding.projectId ? { projectId: ctx.binding.projectId } : {};
     const sent = await this.deps.ash.post(ctx.principal, `/api/chats/${encodeURIComponent(roomId)}/messages`, {
-      id: messageId, body, ...(paths.length ? { attachments: paths } : {}), ...current,
+      id: messageId, body, ...(paths.length ? { attachments: paths } : {}),
     });
     if (!sent.ok) {
       const landed = failureOf(sent) === "transient" || sent.status === 409 ? await this.landed(ctx.principal, roomId, messageId) : false;

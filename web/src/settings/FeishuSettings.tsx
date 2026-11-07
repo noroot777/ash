@@ -72,7 +72,7 @@ export function FeishuSettings({ notify, onOpen }: {
         <Pending title="连接" error={status.error} text="读取飞书状态…" />
       )}
       {binding.data ? (
-        <FeishuBindingCard binding={binding.data} online={online} projects={projects} onBinding={binding.apply} notify={notify} />
+        <FeishuBindingCard binding={binding.data} online={online} onBinding={binding.apply} notify={notify} />
       ) : (
         <Pending title="绑定" error={binding.error} text="读取绑定状态…" />
       )}

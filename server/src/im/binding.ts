@@ -173,7 +173,6 @@ export async function bindingView(owner: string, currentAppId: string | null): P
     openIdTail: openIdTail(binding.openId),
     boundAt: binding.boundAt,
     stale: binding.appId !== currentAppId,
-    projectId: binding.projectId,
   };
 }
 
@@ -199,9 +198,8 @@ export async function confirmUserCode(owner: string, codeId: string, currentAppI
     openId: code.claimedOpenId,
     userId: owner || null,
     chatId: code.claimedChatId,
-    // 换绑同一个飞书账号时沿用原来的助手房间与当前项目。
+    // 换绑同一个飞书账号时沿用原来的助手房间。
     assistantRoomId: previous?.openId === code.claimedOpenId ? previous.assistantRoomId : null,
-    projectId: previous?.projectId ?? null,
     boundAt: now(),
   };
   const done = await db.transaction(async (tx) => {
@@ -246,7 +244,7 @@ export async function claimAssistantRoom(
 /** boundAt = 只改这一次绑定（替某一次请求改的：中途换了绑就不改，返回 false）。 */
 export async function updateBinding(
   key: { appId: string; openId: string },
-  patch: Partial<Pick<BindingRow, "chatId" | "assistantRoomId" | "projectId">>,
+  patch: Partial<Pick<BindingRow, "chatId" | "assistantRoomId">>,
   boundAt?: string,
 ): Promise<boolean> {
   const updated = await db.update(imBindings).set(patch).where(and(

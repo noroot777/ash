@@ -8,16 +8,19 @@
 //    答复只认那张卡自己问的那一次：回旧提问卡、回别的卡都不答到眼下这道题上（带附件也一样）；
 //    回眼下这道题的卡带附件也是答复，附件跟着答复走；答复送到接口那一刻同一道题已经又问了一次
 //    （题面一模一样）→ 接口按那一次的身份拒收；回在机器人自己的文字回执下面，认话题根上那张卡；
-// ③ 命令：/help /project（回一张项目选单，点一下就切；点过的卡不能再点）/project 编号
-//    /new（先确认，点确定才建任务并开跑）/new 不带参数（表单卡：选项目、填标题和要求，提交就建任务并开跑；
-//    没填标题不建、表单还能再提交）/stop（先确认，取消就不停）/todo；
+// ③ 命令：/help；/tasks（只有一个项目就直接列，先后同网页侧栏，首屏 5 个、「再显示 5 个」，整行点开任务链接，
+//    子任务、归档的不列；卡能反复点，库里那份跟着换；卡上「在这里建任务」换成表单）；
+//    /new（表单卡：选项目、填标题和要求，提交就建任务并开跑；/new 标题 换行写要求 替他先填好，太长的要求随信封
+//    带着；没填标题不建、表单还能再提交，提交过的不能再交）/stop（先确认，取消就不停）/todo；
 //    不认识的消息类型回一句说明；
 // ④ 助手房间：单聊里直接说话 → 照最近一间助手房间的配置建一间「飞书」，投进去；回复按 reply_to
 //    对上、发回飞书（回在用户那条消息下面）；同一条飞书消息重复推送只投一次；
 // ⑤ 附件：图片下载 → 转存进上传目录 → 路径随消息投进房间；
 // ⑥ 群：在群里 @ 机器人发群码 → 认领（带群名）→ 确认 → 群里 @ 机器人说话进项目群聊房间，
 //    自动补上 @成员名（群聊房间里不点名没人答）；
-// ⑦ 项目多到一张卡放不下：/project 选单、/new 表单上当前项目照样点得到、选得到，卡上说出还有几个没列出、怎么选到。
+//    群里 /tasks、/new 只落在群绑定的那个项目上；
+// ⑦ 项目多到一张卡放不下：/tasks 选单、/new 表单卡上说出还有几个没列出、怎么找到；点选单上的项目就列它的任务，
+//    「换个项目」回到选单。
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,7 +45,9 @@ try {
   const { chatMessageIdOf } = await import("../src/im/relay.js");
   const { AshClient } = await import("../src/im/ash-client.js");
   const { InboundRouter } = await import("../src/im/inbound.js");
-  const { APP, OWNER, FakeFeishu, buildApp, assemble, contentOf, textOf, buttonsOf, waitIdle } = await import("./im-fixture.js");
+  const { APP, OWNER, FakeFeishu, buildApp, assemble, contentOf, textOf, buttonsOf, linksOf, waitIdle } = await import("./im-fixture.js");
+  const { patchOptions } = await import("../src/im/meta.js");
+  const { TASK_STATUS_LABELS } = await import("@ash/shared");
 
   await ensureSchema();
   const app = buildApp();
@@ -230,48 +235,83 @@ try {
   // ── ③ 命令 ───────────────────────────────────────────────────────────────
   {
     const help = await im.say({ text: "/help" });
-    const list = await im.say({ text: "/project" });
     await im.settle();
+    assert.match(textOf(contentOf(repliesTo(help)[0]!)), /\/tasks/);
     assert.match(textOf(contentOf(repliesTo(help)[0]!)), /\/todo/);
-    const picker = contentOf(repliesTo(list)[0]!);
-    assert.match(textOf(picker), /当前：未指定/);
-    const option = buttonsOf(picker).find((button) => button.text === "飞书项目");
-    assert.equal(option?.value?.op, "pick", "每个项目一颗按钮");
-    assert.equal((await bindingOf(APP, OWNER))!.projectId, null, "没点不切");
-    const chosen = await im.click(OWNER, option!.value!);
-    assert.equal(chosen.toast?.type, "success", JSON.stringify(chosen));
-    assert.match(textOf(chosen.card?.data), /已切到「飞书项目」/);
-    assert.equal(buttonsOf(chosen.card?.data).length, 0, "切完卡收起来，不留按钮");
-    assert.equal((await bindingOf(APP, OWNER))!.projectId, "p1", "点一下就切");
-    assert.match((await im.click(OWNER, option!.value!)).toast?.content ?? "", /已经处理过了/, "点过的卡不能再点");
 
-    await db.update(imBindings).set({ projectId: null }).where(eq(imBindings.openId, OWNER));
-    const pick = await im.say({ text: "/project 1" });
+    // /tasks：只看得到一个项目 → 直接列它，先后同网页侧栏（置顶在前，其余按更新时间倒序）。
+    await patchOptions({ publicBaseUrl: "http://mac.tailnet:4317" });
+    const later = (hours: number) => new Date(Date.now() + hours * 3600_000).toISOString();
+    await db.insert(tasks).values([
+      ...Array.from({ length: 8 }, (_, n) => task({ id: `tl${n}`, title: `列表 ${n}`, status: "backlog", updatedAt: later(n + 1) })),
+      task({ id: "tpin", title: "置顶的", status: "backlog", pinnedAt: 1 }),
+      task({ id: "tsub", title: "子任务不单列", status: "backlog", parentId: "tl7", updatedAt: later(100) }),
+      task({ id: "tarc", title: "归档的不列", status: "backlog", archived: true, updatedAt: later(100) }),
+    ] as never);
+    const listed = (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.projectId, "p1"))).length - 2;
+    const browse = await im.say({ text: "/tasks" });
     await im.settle();
-    assert.match(textOf(contentOf(repliesTo(pick)[0]!)), /已切到「飞书项目」/, "编号照样能切");
-    assert.equal((await bindingOf(APP, OWNER))!.projectId, "p1");
+    const first = contentOf(repliesTo(browse)[0]!);
+    assert.match(textOf(first), /飞书项目/);
+    assert.match(textOf(first), new RegExp(`${listed} 个任务`), "数的是列表里那些行：子任务、归档的不算");
+    assert.deepEqual(linksOf(first).map((link) => link.text.split("\n")[0]), ["置顶的", "列表 7", "列表 6", "列表 5", "列表 4"], "首屏 5 个");
+    assert.equal(linksOf(first)[0]!.url, "http://mac.tailnet:4317/?project=p1&task=tpin", "整行点一下打开这个任务");
+    assert.ok(linksOf(first)[1]!.text.includes(`${TASK_STATUS_LABELS.backlog} · `), "第二行写状态和多久前更新");
+    const more = buttonsOf(first).find((button) => button.value?.op === "more")!;
+    assert.equal(more.text, "再显示 5 个");
+    const second = await im.click(OWNER, more.value!);
+    const rows = linksOf(second.card?.data);
+    assert.equal(rows.length, 10, "再显示 5 个");
+    assert.deepEqual(rows.slice(5, 9).map((link) => link.text.split("\n")[0]), ["列表 3", "列表 2", "列表 1", "列表 0"]);
+    assert.doesNotMatch(textOf(second.card?.data), /子任务不单列|归档的不列/);
+    const stored = (await db.select().from(imOutbox).where(eq(imOutbox.replyTo, browse))).at(0)!;
+    assert.equal(linksOf(JSON.parse(stored.content)).length, 10, "库里那份跟着换（重渲染、补发都是这一版）");
+    const again = await im.click(OWNER, more.value!);
+    assert.equal(linksOf(again.card?.data).length, 10, "只读的卡能反复点");
 
+    // 卡上「在这里建任务」：换成落在这个项目上的建任务表单。
+    const here = buttonsOf(second.card?.data).find((button) => button.value?.op === "new")!;
+    const form = await im.click(OWNER, here.value!);
+    assert.match(JSON.stringify(form.card?.data), /"initial_option":"0"/, "只有这一个项目：选好了");
+    const submitHere = buttonsOf(form.card?.data).find((button) => button.value?.op === "submit")!;
+    const madeHere = await im.click(OWNER, submitHere.value!, { project: "0", title: "卡上建的任务", body: "" }, "submit");
+    assert.equal(madeHere.toast?.type, "success", JSON.stringify(madeHere));
+    const hereTask = (await db.select().from(tasks).where(eq(tasks.title, "卡上建的任务"))).at(0);
+    assert.equal(hereTask?.projectId, "p1");
+    await waitIdle(() => statusOf(hereTask!.id));
+
+    // /new 标题（换行写要求）：替他填进表单，没点提交不建。
     const create = await im.say({ text: "/new 修个 bug\n登录页点了没反应" });
     await im.settle();
-    const confirmCard = contentOf(repliesTo(create)[0]!);
-    assert.match(textOf(confirmCard), /修个 bug/);
-    const confirm = buttonsOf(confirmCard).find((button) => button.value?.op === "confirm")!;
-    assert.equal((await db.select().from(tasks).where(eq(tasks.title, "修个 bug"))).length, 0, "没点确定不建任务");
-    const created = await im.click(OWNER, confirm.value!);
+    const prefilled = contentOf(repliesTo(create)[0]!);
+    assert.match(JSON.stringify(prefilled), /"default_value":"修个 bug"/);
+    assert.match(JSON.stringify(prefilled), /"default_value":"登录页点了没反应"/);
+    assert.equal((await db.select().from(tasks).where(eq(tasks.title, "修个 bug"))).length, 0, "没提交不建任务");
+    const submitFilled = buttonsOf(prefilled).find((button) => button.value?.op === "submit")!;
+    const created = await im.click(OWNER, submitFilled.value!, { project: "0", title: "修个 bug", body: "登录页点了没反应" }, "submit");
     assert.equal(created.toast?.type, "success", JSON.stringify(created));
     const newTask = (await db.select().from(tasks).where(eq(tasks.title, "修个 bug"))).at(0);
-    assert.ok(newTask, "点确定才建任务");
-    assert.equal(newTask!.projectId, "p1");
-    assert.equal(newTask!.body, "登录页点了没反应");
+    assert.equal(newTask?.projectId, "p1");
+    assert.equal(newTask?.body, "登录页点了没反应");
     await waitIdle(() => statusOf(newTask!.id));
+
+    // 要求比输入框长：不放进框里，随信封带着，提交时一并带上。
+    const long = "很长的要求。".repeat(300);
+    const heldCommand = await im.say({ text: `/new 长要求\n${long}` });
+    await im.settle();
+    const heldForm = contentOf(repliesTo(heldCommand)[0]!);
+    assert.match(textOf(heldForm), new RegExp(`要求（${long.length} 字）已收下`));
+    const submitHeld = buttonsOf(heldForm).find((button) => button.value?.op === "submit")!;
+    assert.equal((await im.click(OWNER, submitHeld.value!, { project: "0", title: "长要求" }, "submit")).toast?.type, "success");
+    const heldTask = (await db.select().from(tasks).where(eq(tasks.title, "长要求"))).at(0);
+    assert.equal(heldTask?.body, long);
+    await waitIdle(() => statusOf(heldTask!.id));
 
     const formCommand = await im.say({ text: "/new" });
     await im.settle();
-    const form = contentOf(repliesTo(formCommand)[0]!);
-    const select = JSON.stringify(form).match(/"tag":"select_static".*?"initial_option":"(\d+)"/);
-    assert.equal(select?.[1], "0", "下拉框默认选当前项目");
-    assert.match(textOf(form), /飞书项目/);
-    const submit = buttonsOf(form).find((button) => button.value?.op === "submit")!;
+    const blankForm = contentOf(repliesTo(formCommand)[0]!);
+    assert.match(textOf(blankForm), /飞书项目/);
+    const submit = buttonsOf(blankForm).find((button) => button.value?.op === "submit")!;
     const blank = await im.click(OWNER, submit.value!, { project: "0", title: " ", body: "" }, "submit");
     assert.equal(blank.toast?.type, "warning", "没填标题不建");
     const submitted = await im.click(OWNER, submit.value!, { project: "0", title: "表单建的任务", body: "从卡片上填的要求" }, "submit");
@@ -363,7 +403,7 @@ try {
     assert.equal(JSON.parse(groupMessage.mentions).length, 1, "点到了成员");
   }
 
-  // ── ⑦ 项目多到一张卡放不下 ────────────────────────────────────────────────
+  // ── ⑦ 项目多到一张卡放不下；群里只落在群绑定的项目上 ─────────────────────
   {
     const many = Array.from({ length: 105 }, (_, index) => {
       const id = `pm${String(index).padStart(3, "0")}`;
@@ -373,25 +413,40 @@ try {
     await db.insert(projects).values(many as never);
     const order = await im.ash.get<{ id: string; name: string }[]>({ channel: "feishu", appId: APP, openId: OWNER }, "/api/projects");
     assert.ok(order.ok && order.data.length === 106, "106 个项目都看得见");
-    const last = order.data.at(-1)!;
-    await db.update(imBindings).set({ projectId: last.id }).where(eq(imBindings.openId, OWNER));
 
-    const list = await im.say({ text: "/project" });
+    const list = await im.say({ text: "/tasks" });
+    const named = await im.say({ text: "/tasks 批量项目 pm104" });
     const form = await im.say({ text: "/new" });
     await im.settle();
     const picker = contentOf(repliesTo(list)[0]!);
     assert.equal(buttonsOf(picker).length, 30, "选单一张卡放 30 个");
-    const option = buttonsOf(picker).find((button) => button.text === last.name);
-    assert.ok(option, "排在最后的当前项目照样有按钮");
-    assert.match(textOf(picker), /还有 76 个项目没列出：发 \/project 名字 切过去/);
-    assert.match(textOf((await im.click(OWNER, option!.value!)).card?.data), new RegExp(`已切到「${last.name}」`));
+    assert.match(textOf(picker), /还有 76 个项目没列出：发 \/tasks 项目名 直接看/);
+    const option = buttonsOf(picker).find((button) => button.text.startsWith("批量项目"))!;
+    const opened = await im.click(OWNER, option.value!);
+    assert.match(textOf(opened.card?.data), new RegExp(option.text));
+    assert.match(textOf(opened.card?.data), /这个项目里还没有任务/);
+    const back = buttonsOf(opened.card?.data).find((button) => button.value?.op === "back");
+    assert.ok(back, "从选单进来的列表能换个项目");
+    assert.equal(buttonsOf((await im.click(OWNER, back!.value!)).card?.data).length, 30, "换个项目：回到选单");
+    assert.match(textOf(contentOf(repliesTo(named)[0]!)), /批量项目 pm104/, "选单上没列出的，按名字直接看");
+    assert.equal(buttonsOf(contentOf(repliesTo(named)[0]!)).some((button) => button.value?.op === "back"), false, "不是从选单进来的：不给换个项目");
 
     const card = contentOf(repliesTo(form)[0]!);
     const parsed = JSON.parse(JSON.stringify(card).match(/"options":(\[.*?\])/)![1]!) as { text: { content: string }; value: string }[];
     assert.equal(parsed.length, 100, "下拉框放 100 个");
-    const initial = /"initial_option":"(\d+)"/.exec(JSON.stringify(card))?.[1];
-    assert.equal(parsed.find((entry) => entry.value === initial)?.text.content, last.name, "默认选中的就是排在最后的当前项目");
-    assert.match(textOf(card), /还有 6 个项目没列出：先发 \/project 名字 把它设成当前项目，再发 \/new/);
+    assert.doesNotMatch(JSON.stringify(card), /"initial_option"/, "不替他选项目");
+    assert.match(textOf(card), /还有 6 个项目没列出：发 \/tasks 项目名 找到它，在那张卡上点「在这里建任务」/);
+
+    const groupList = await im.say({ chatType: "group", chatId: "oc_team", text: "/tasks 批量项目 pm104", mentionBot: true });
+    const groupForm = await im.say({ chatType: "group", chatId: "oc_team", text: "/new", mentionBot: true });
+    await im.settle();
+    const inGroup = contentOf(repliesTo(groupList)[0]!);
+    assert.match(textOf(inGroup), /飞书项目/, "群里只看这个群绑定的项目");
+    assert.doesNotMatch(textOf(inGroup), /批量项目/, "个人能看哪些项目不进群");
+    assert.ok(linksOf(inGroup).length >= 5);
+    const groupCard = contentOf(repliesTo(groupForm)[0]!);
+    const groupOptions = JSON.parse(JSON.stringify(groupCard).match(/"options":(\[.*?\])/)![1]!) as { text: { content: string } }[];
+    assert.deepEqual(groupOptions.map((entry) => entry.text.content), ["飞书项目"], "群里建任务只落在群绑定的项目上");
   }
 
   // 收尾：等聊天回复都落定，停掉部件再关库。

@@ -1,21 +1,25 @@
 // 飞书里的斜杠命令。全部以发命令那个人的身份执行（ash-client.ts），能做的事不超过他在网页上能做的。
 //
-// 会改东西、而且改了收不回来的（/new 建任务并开跑、/stop 停任务）先回一张确认卡，点「确定」
-// 才执行 —— 手机上误触、输入法联想补全都很常见。确认卡 10 分钟有效。
+// 会改东西、而且改了收不回来的先要他再点一下 —— 手机上误触、输入法联想补全都很常见：/stop 回一张确认卡（10 分钟
+// 有效），/new 回一张建任务表单（选项目、填好再点提交，提交本身就是确认）。
+//
+// 飞书里没有「当前项目」：建任务时在表单上选，看任务时 /tasks 先选项目，助手派活由它按你说的话挑项目
+// （chat/assistant.ts）。都只在他此刻看得见的项目里挑。
 //
 // 每一句回执都要说清凭什么能发给这个人（scope.ts）：不含 ash 数据的静态句是 system，他自己这次操作的
 // 结局（接口报错）是 reply，带着任务、项目的按各自来源记、列着的项目逐个记，出口照此现核；都按消息进来
-// 那一刻的绑定实例盖（scope.ts requestScope），不按办完时的现状。个人的东西（能看哪些项目、当前项目）不进群；
-// 群里建任务只建到这个群绑定的项目上。
+// 那一刻的绑定实例盖（scope.ts requestScope），不按办完时的现状。个人的东西（能看哪些项目）不进群；
+// 群里看任务、建任务都只落在这个群绑定的项目上。
 import type { Project } from "@ash/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { imOutbox } from "../db/schema-im.js";
 import type { ImPrincipal } from "../auth/im-actor.js";
 import { failureOf, taskPath, type AshClient } from "./ash-client.js";
-import { updateBinding, type BindingRow } from "./binding.js";
-import { confirmCard, newTaskCard, projectCard, taskLink, todoText } from "./cards.js";
-import { createEnvelope } from "./envelopes.js";
+import type { BindingRow } from "./binding.js";
+import { BROWSE_PAGE, browseCard, Browser, browseScope, PICK_LIMIT, type BrowseView } from "./browse.js";
+import { confirmCard, newTaskCard, taskLink, todoText } from "./cards.js";
+import { createEnvelope, ENVELOPE_TTL_MS } from "./envelopes.js";
 import { renderCard, type CardModel } from "./feishu/cards.js";
 import { groupOf } from "./groups.js";
 import { readOptions } from "./meta.js";
@@ -43,36 +47,34 @@ export interface InboundContext {
 }
 
 const CONFIRM_TTL_MS = 10 * 60_000;
-/** 项目选单、建任务表单要选要填：放久一点，发完过一阵再点也行。点的那一刻按他的身份办，看不到的项目切不了也建不了。 */
+/** 建任务表单要填：放久一点，发完过一阵再点也行。提交那一刻按他的身份建，看不到的项目建不了。 */
 const FORM_TTL_MS = 24 * 3600_000;
-/** 一张卡上放几个项目：选单每个项目一颗按钮，表单是一个下拉框。 */
-const PICK_LIMIT = 30;
+/** 表单上一个下拉框最多放几个项目。 */
 const FORM_LIMIT = 100;
+/** 飞书输入框的上限（feishu/cards.ts INPUT_MAX）：更长的要求不放进框里，随信封带着。 */
+const INPUT_MAX = 1000;
+const NO_GROUP_PROJECT = "这个群还没绑定 ash 项目：先在 ash 网页 设置 → 飞书 → 群 里绑定，或者在单聊里用。";
 
-/**
- * 一张卡上列哪些项目：卡放不下全部，但当前项目一定在里面（排在后面就顶掉最后一个）—— 卡上标着「当前」的那个
- * 必须点得到、选得到。hidden = 没列出来的个数，卡上要说出来、指明怎么选到它们（/project 名字）。
- */
-function choicesOf(list: Project[], currentId: string | null, limit: number): { shown: Project[]; hidden: number } {
-  const shown = list.slice(0, limit);
-  const current = list.find((project) => project.id === currentId);
-  if (current && !shown.includes(current)) shown[shown.length - 1] = current;
-  return { shown, hidden: list.length - shown.length };
+/** 按名字认项目：先认一模一样的，再认包含这几个字的（不分大小写）。 */
+function projectNamed(list: Project[], name: string): Project | undefined {
+  const lowered = name.toLowerCase();
+  return list.find((project) => project.name.toLowerCase() === lowered)
+    ?? list.find((project) => project.name.toLowerCase().includes(lowered));
 }
 
 export const HELP = [
   "直接回复提问卡 = 答复它（附图片、文件也行）；回复别的任务卡要以 /reply 开头，才会发给那个任务。",
   "单聊里直接说话 = 跟 ash 助手聊（它能帮你查任务、建任务）。",
   "/todo —— 还有哪些事等你；积压的卡逐张推过来",
-  "/project —— 弹出项目卡片，点一下就切成当前项目；也可以 /project 名字",
-  "/new —— 弹出建任务卡片：选项目、填标题和要求，提交就开跑",
-  "/new 标题（换行写详细要求）—— 在当前项目建任务并开跑（会先让你确认）",
+  "/tasks —— 看某个项目的任务：先选项目，点任务直接打开；/tasks 项目名 直接看",
+  "/new —— 弹出建任务卡片：选项目、填标题和要求，提交就开跑；/new 标题（换行写要求）会替你先填好",
   "/stop —— 回复某张任务卡发送：停掉那个任务（会先让你确认）",
   "/retry —— 回复某张失败卡发送：重试",
   "/help —— 显示这段说明",
 ].join("\n");
 
-const KNOWN = new Set(["help", "todo", "project", "new", "stop", "retry", "answer", "reply"]);
+// project 是 /tasks 的旧名（机器人菜单里可能还配着它）。
+const KNOWN = new Set(["help", "todo", "tasks", "project", "new", "stop", "retry", "answer", "reply"]);
 
 export function parseCommand(text: string): { name: string; rest: string } | null {
   const match = /^\/([a-z]+)\b[ \t]*([\s\S]*)$/i.exec(text.trim());
@@ -81,7 +83,12 @@ export function parseCommand(text: string): { name: string; rest: string } | nul
 }
 
 export class CommandRunner {
-  constructor(private readonly deps: { appId: string; ash: AshClient; reconciler: Reconciler }) {}
+  /** /tasks 那张卡上的翻页、建任务（actions.ts 按信封的 browse 交给它）。 */
+  readonly browser: Browser;
+
+  constructor(private readonly deps: { appId: string; ash: AshClient; reconciler: Reconciler }) {
+    this.browser = new Browser(deps);
+  }
 
   /**
    * 回一句文字（回复用户那条消息）。scope = 这句话凭什么能发给他；brief = 项目设成只推标题时换上的那一句；
@@ -116,14 +123,17 @@ export class CommandRunner {
       brief === undefined ? undefined : (envelope) => confirmCard(title, brief, envelope, danger));
   }
 
-  /** 回一张带按钮的卡（确认卡、项目选单）：按钮点下去走 actions.ts confirmJob，payload.command 说是哪一种。 */
+  /**
+   * 回一张带按钮的卡：确认卡、建任务表单（action=confirm，按钮点下去走 actions.ts confirmJob，payload.command 说是哪一种），
+   * /tasks 的卡（action=browse，按钮只读、能反复点，走 browse.ts）。
+   */
   private async buttons(
     ctx: InboundContext, render: (envelope: string) => CardModel, payload: Record<string, unknown>, scope: OutboxScope, ttlMs: number,
-    brief?: (envelope: string) => CardModel,
+    brief?: (envelope: string) => CardModel, action: "confirm" | "browse" = "confirm",
   ): Promise<void> {
     const rowId = `cf${ctx.messageId}`.slice(0, 40);
     const envelope = await createEnvelope({
-      outboxId: rowId, taskId: typeof payload.taskId === "string" ? payload.taskId : null, action: "confirm", payload,
+      outboxId: rowId, taskId: typeof payload.taskId === "string" ? payload.taskId : null, action, payload,
       recipientOpenId: ctx.principal.openId, generation: "c", ttlMs,
     });
     await this.deps.reconciler.run(() => this.deps.reconciler.insert({
@@ -138,8 +148,9 @@ export class CommandRunner {
     switch (name) {
       case "help": return this.say(ctx, HELP, SYSTEM_SCOPE);
       case "todo": return this.todo(ctx);
-      case "project": return this.project(ctx, rest);
-      case "new": return this.newTask(ctx, rest);
+      case "tasks":
+      case "project": return this.tasks(ctx, rest);
+      case "new": return this.newForm(ctx, rest);
       case "stop": {
         if (!ctx.card?.taskId) return this.say(ctx, "回复某张任务卡片再发 /stop，才知道要停哪个任务。", SYSTEM_SCOPE);
         const taskId = ctx.card.taskId;
@@ -195,97 +206,62 @@ export class CommandRunner {
   }
 
   /**
-   * 他能看哪些项目、他的当前项目是哪个：只属于他本人，只在单聊里答。清单列着哪几个项目就记哪几个（当前项目也在其中），
-   * 出口逐个核他此刻还看得见；切换只改消息进来那一次的绑定 —— 列表取回来之前换了绑，写进去就是改了另一个人的当前项目。
-   * 不带参数回一张选单卡（点按钮切，见 picked）；带编号 / 名字直接切。
+   * /tasks（旧名 /project）：群里直接列这个群绑定的项目；单聊带项目名就直接列它，不带就先给一张项目选单（只有一个项目时
+   * 直接列）。个人能看哪些项目只在单聊里说。卡上此后的翻页、建任务都在原地换（browse.ts）。
    */
-  private async project(ctx: InboundContext, rest: string): Promise<void> {
-    if (ctx.chatType !== "p2p") return this.say(ctx, "/project 请在和我的单聊里用：它会列出你个人能看到的项目。", SYSTEM_SCOPE);
-    const list = await this.projects(ctx);
-    if (!list) return;
-    if (!rest) {
-      if (!list.length) return this.say(ctx, "你还看不到任何项目。", SYSTEM_SCOPE);
-      const current = list.find((project) => project.id === ctx.binding.projectId);
-      const { shown, hidden } = choicesOf(list, ctx.binding.projectId, PICK_LIMIT);
-      const ids = shown.map((project) => project.id);
-      // 信封里记着按钮对应哪个项目、是哪一次绑定：点的时候按这一份切，不按点那一刻重新排出来的顺序。
-      return this.buttons(ctx, (envelope) => projectCard(current?.name ?? null, shown.map((project) => project.name),
-        shown.findIndex((project) => project.id === current?.id), hidden, envelope),
-      { command: "project", projectIds: ids, boundAt: ctx.binding.boundAt },
-      this.scoped(ctx, { kind: "projects", projectIds: ids }), FORM_TTL_MS);
-    }
-    const index = /^\d+$/.test(rest) ? Number(rest) - 1 : -1;
-    const lowered = rest.toLowerCase();
-    const picked = index >= 0 ? list[index] : list.find((project) => project.name.toLowerCase() === lowered)
-      ?? list.find((project) => project.name.toLowerCase().includes(lowered));
-    // 只回显他自己刚打的字。
-    if (!picked) return this.say(ctx, `没找到「${scrubTitle(rest, 30)}」。发 /project 看看能选哪些。`, SYSTEM_SCOPE);
-    if (!await updateBinding(ctx.principal, { projectId: picked.id }, ctx.binding.boundAt)) {
-      return this.say(ctx, "你刚换过绑定，这次没切：请再发一次。", SYSTEM_SCOPE);
-    }
-    return this.say(ctx, `当前项目已切到「${picked.name}」。/new 建的任务、助手派的活都会落在这里。`,
-      this.scoped(ctx, { kind: "project", projectId: picked.id }));
-  }
-
-  /**
-   * 单聊里建到他的当前项目；群里只建到这个群绑定的项目（群里的人看得到确认卡，不能把别的项目带进来）。
-   * 不带参数回一张表单卡（项目在单聊里可选，见 newForm）。
-   */
-  private async newTask(ctx: InboundContext, rest: string): Promise<void> {
-    if (!rest) return this.newForm(ctx);
-    const inGroup = ctx.chatType !== "p2p";
-    const projectId = inGroup ? (await groupOf(this.deps.appId, ctx.chatId))?.projectId ?? null : ctx.binding.projectId;
-    if (inGroup && !projectId) return this.say(ctx, "这个群还没绑定 ash 项目：先在 ash 网页 设置 → 飞书 → 群 里绑定，或者在单聊里用 /new。", SYSTEM_SCOPE);
-    const list = projectId ? await this.projects(ctx) : [];
-    if (!list) return;
-    const project = list.find((item) => item.id === projectId);
-    if (!project) {
-      return this.say(ctx, inGroup ? "你看不到这个群绑定的项目，建不了任务。" : "还没选当前项目（或你已经看不到它了）：先发 /project 选一个。", SYSTEM_SCOPE);
-    }
-    const [first, ...others] = rest.split("\n");
-    const title = first!.trim().slice(0, 120);
-    const body = (others.join("\n").trim() || title).slice(0, 20_000);
-    const head = `项目：${project.name}\n标题：${title}`;
-    return this.card(ctx, "建任务并开跑？", `${head}${body !== title ? `\n要求：${scrubText(body, 600)}` : ""}`,
-      { command: "new", projectId: project.id, title, body }, false, this.scoped(ctx, { kind: "project", projectId: project.id }),
-      body !== title ? `${head}\n（详细要求只在 ash 里看）` : undefined);
-  }
-
-  /**
-   * 项目选单上点了一个项目。点的那一刻以他的身份重读一遍项目列表：发卡之后被移出了那个项目就不切；绑定按发卡那一次
-   * 做 CAS（同 /project 名字），换过绑定这张卡就作废了。
-   */
-  async picked(principal: ImPrincipal, payload: Record<string, unknown>, index: number): Promise<Outcome> {
-    const ids = Array.isArray(payload.projectIds) ? payload.projectIds as unknown[] : [];
-    const projectId = ids[index];
-    if (typeof projectId !== "string" || typeof payload.boundAt !== "string") return { ok: false, text: "认不出点的是哪个项目", final: false };
-    const result = await this.deps.ash.get<Project[]>(principal, "/api/projects");
-    if (!result.ok) return { ok: false, text: `没读到你的项目列表：${scrubText(result.error, 200)}`, final: false };
-    const picked = (Array.isArray(result.data) ? result.data : []).find((project) => project.id === projectId);
-    if (!picked) return { ok: false, text: "这个项目你已经看不到了。", final: false };
-    if (!await updateBinding(principal, { projectId }, payload.boundAt)) {
-      return { ok: true, final: true, tone: "orange", text: "你换过绑定，这张卡作废了：请重新发 /project。" };
-    }
-    return { ok: true, final: true, tone: "green", text: `当前项目已切到「${picked.name}」。/new 建的任务、助手派的活都会落在这里；再发 /project 可以重新选。` };
-  }
-
-  /** 建任务表单：单聊列出他能看的项目、默认选当前项目；群里只有群绑定的那一个。 */
-  private async newForm(ctx: InboundContext): Promise<void> {
+  private async tasks(ctx: InboundContext, rest: string): Promise<void> {
     const inGroup = ctx.chatType !== "p2p";
     const fixed = inGroup ? (await groupOf(this.deps.appId, ctx.chatId))?.projectId ?? null : null;
-    if (inGroup && !fixed) return this.say(ctx, "这个群还没绑定 ash 项目：先在 ash 网页 设置 → 飞书 → 群 里绑定，或者在单聊里用 /new。", SYSTEM_SCOPE);
+    if (inGroup && !fixed) return this.say(ctx, NO_GROUP_PROJECT, SYSTEM_SCOPE);
     const list = await this.projects(ctx);
     if (!list) return;
-    const { shown, hidden } = inGroup
-      ? { shown: list.filter((project) => project.id === fixed), hidden: 0 }
-      : choicesOf(list, ctx.binding.projectId, FORM_LIMIT);
+    let project: Project | undefined;
+    if (inGroup) {
+      project = list.find((item) => item.id === fixed);
+      if (!project) return this.say(ctx, "你看不到这个群绑定的项目。", SYSTEM_SCOPE);
+    } else if (rest) {
+      project = projectNamed(list, rest);
+      // 只回显他自己刚打的字。
+      if (!project) return this.say(ctx, `没找到「${scrubTitle(rest, 30)}」。发 /tasks 看看有哪些项目。`, SYSTEM_SCOPE);
+    } else if (!list.length) return this.say(ctx, "你还看不到任何项目。", SYSTEM_SCOPE);
+    else if (list.length === 1) project = list[0];
+
+    if (!project) {
+      const shown = list.slice(0, PICK_LIMIT);
+      const view: BrowseView = { kind: "picker", entries: shown.map((item, index) => ({ project: item, index })), hidden: list.length - shown.length };
+      return this.buttons(ctx, (envelope) => browseCard(view, envelope), { command: "browse", projectIds: shown.map((item) => item.id), picker: true },
+        this.scoped(ctx, browseScope(view)), ENVELOPE_TTL_MS, undefined, "browse");
+    }
+    const view = await this.browser.tasksView(ctx.principal, project, 0, BROWSE_PAGE, false);
+    if ("error" in view) {
+      return this.say(ctx, `这一下没读到任务列表（${scrubText(view.error, 120)}）：请稍后再试。`, await this.answered(ctx, { projectId: project.id }));
+    }
+    return this.buttons(ctx, (envelope) => browseCard(view, envelope), { command: "browse", projectIds: [project.id], picker: false },
+      this.scoped(ctx, browseScope(view)), ENVELOPE_TTL_MS, undefined, "browse");
+  }
+
+  /**
+   * /new 回一张建任务表单：单聊列出他能看的项目（不替他选，只有一个时才选好），群里只有群绑定的那一个。
+   * /new 标题（换行写要求）把这两样先填进表单；要求比输入框长就不放进框里，随信封带着、提交时一并带上。
+   */
+  private async newForm(ctx: InboundContext, rest: string): Promise<void> {
+    const inGroup = ctx.chatType !== "p2p";
+    const fixed = inGroup ? (await groupOf(this.deps.appId, ctx.chatId))?.projectId ?? null : null;
+    if (inGroup && !fixed) return this.say(ctx, NO_GROUP_PROJECT, SYSTEM_SCOPE);
+    const list = await this.projects(ctx);
+    if (!list) return;
+    const shown = inGroup ? list.filter((project) => project.id === fixed) : list.slice(0, FORM_LIMIT);
     if (!shown.length) return this.say(ctx, inGroup ? "你看不到这个群绑定的项目，建不了任务。" : "你还看不到任何项目。", SYSTEM_SCOPE);
-    const scope = inGroup
-      ? this.scoped(ctx, { kind: "project", projectId: fixed! })
+    const [first = "", ...others] = rest.split("\n");
+    const title = first.trim().slice(0, 120);
+    const body = others.join("\n").trim().slice(0, 20_000);
+    const held = body.length > INPUT_MAX;
+    const scope = shown.length === 1
+      ? this.scoped(ctx, { kind: "project", projectId: shown[0]!.id })
       : this.scoped(ctx, { kind: "projects", projectIds: shown.map((project) => project.id) });
-    return this.buttons(ctx, (envelope) => newTaskCard(shown.map((project) => project.name),
-      inGroup ? 0 : shown.findIndex((project) => project.id === ctx.binding.projectId), hidden, envelope),
-    { command: "newform", projectIds: shown.map((project) => project.id) }, scope, FORM_TTL_MS);
+    return this.buttons(ctx, (envelope) => newTaskCard(shown.map((project) => project.name), inGroup ? 0 : list.length - shown.length, envelope,
+      { title, body: held ? "" : body, heldBody: held ? body.length : 0 }),
+    { command: "newform", projectIds: shown.map((project) => project.id), ...(held ? { body } : {}) }, scope, FORM_TTL_MS);
   }
 
   /** 建任务表单提交了：选的是信封里记着的第几个项目（建任务那一下接口按他的身份核还看不看得见）。 */
@@ -294,10 +270,11 @@ export class CommandRunner {
     const projectId = ids[form.project];
     if (typeof projectId !== "string") return Promise.resolve({ ok: false, text: "认不出选的是哪个项目", final: false });
     const title = form.title.slice(0, 120);
-    return this.createAndRun(principal, projectId, title, (form.body || title).slice(0, 20_000));
+    const held = typeof payload.body === "string" ? payload.body : "";
+    return this.createAndRun(principal, projectId, title, (form.body || held || title).slice(0, 20_000));
   }
 
-  /** 确认卡上点了「确定」。 */
+  /** 确认卡上点了「确定」（/stop；/new 早先也走确认卡，升级前发出的那几张照样认）。 */
   async confirmed(principal: ImPrincipal, payload: Record<string, unknown>): Promise<Outcome> {
     if (payload.command === "stop" && typeof payload.taskId === "string") {
       const result = await this.deps.ash.post(principal, taskPath(payload.taskId, "/stop"));
@@ -321,7 +298,7 @@ export class CommandRunner {
     // 任务已经建出来了：后面再出什么错都不能算「没办成」—— 那会放回信封，再点一下就又建一个。
     const run = await this.deps.ash.post(principal, taskPath(created.data.id, "/run"));
     const base = await readOptions().then((options) => options.publicBaseUrl, () => null);
-    const link = taskLink(base, { task: { id: created.data.id, projectId } as never });
+    const link = taskLink(base, { task: { id: created.data.id, projectId } });
     return {
       ok: true, final: true, tone: run.ok ? "green" : "orange", link,
       text: run.ok ? `已建任务「${title}」并开跑。` : `任务已建好，但没能开跑：${scrubText(run.error, 300)}`,

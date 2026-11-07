@@ -22,6 +22,8 @@ export interface FakeCall { method: string; path: string; body: any }
 /** 假开放平台：记下每一次调用；发消息按 uuid 幂等（与真飞书一致）。 */
 export class FakeFeishu {
   calls: FakeCall[] = [];
+  /** 撤回消息回什么码（0 = 撤回成功；230009 = 发出超过一天、撤不回）。 */
+  recallCode = 0;
   private byUuid = new Map<string, string>();
   private serial = 0;
 
@@ -39,6 +41,7 @@ export class FakeFeishu {
       if (body?.uuid) this.byUuid.set(body.uuid, messageId);
       return json({ code: 0, data: { message_id: messageId, chat_id: "oc_fake" } });
     }
+    if (method === "DELETE") return json(this.recallCode ? { code: this.recallCode, msg: "fake: 撤不回" } : { code: 0, data: {} });
     if (method === "PATCH" || path.endsWith("/reactions")) return json({ code: 0, data: {} });
     if (path.includes("/resources/")) {
       return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]), { headers: { "content-type": "image/png" } });
@@ -52,6 +55,7 @@ export class FakeFeishu {
     return this.calls.filter((call) => call.method === "POST" && /\/im\/v1\/messages(\?|\/[^/]+\/reply$)/.test(call.path));
   }
   patches() { return this.calls.filter((call) => call.method === "PATCH"); }
+  recalls() { return this.calls.filter((call) => call.method === "DELETE" && /\/im\/v1\/messages\/[^/]+$/.test(call.path)); }
   reactions() { return this.calls.filter((call) => call.path.endsWith("/reactions")); }
   reset() { this.calls = []; }
 }
@@ -83,6 +87,23 @@ export function buttonsOf(content: any): { text: string; value?: Record<string, 
     if (record.tag === "button") {
       const behavior = record.behaviors?.[0];
       out.push({ text: record.text?.content, value: behavior?.value, url: behavior?.default_url, confirm: !!record.confirm });
+    }
+    Object.values(record).forEach(walk);
+  };
+  walk(content);
+  return out;
+}
+
+/** 卡片上整行可点的链接（interactive_container）：这一行的字 + 打开的地址。 */
+export function linksOf(content: any): { text: string; url: string }[] {
+  const out: { text: string; url: string }[] = [];
+  const walk = (node: unknown) => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    const record = node as Record<string, any>;
+    if (record.tag === "interactive_container") {
+      out.push({ text: textOf(record.elements), url: record.behaviors?.[0]?.default_url });
+      return;
     }
     Object.values(record).forEach(walk);
   };

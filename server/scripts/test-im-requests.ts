@@ -1,13 +1,13 @@
 // 回给一次请求的业务内容（scope.ts requestScope）：命令回执、确认卡、/todo 清单、房间回复都按消息进来那一刻的
-// 绑定实例盖，不按办完时的现状；正文列着的资源（/project 的项目、房间回复下面的任务）出口逐个现核。核不过
+// 绑定实例盖，不按办完时的现状；正文列着的资源（/tasks 的项目、房间回复下面的任务）出口逐个现核。核不过
 // 不发原文，换成一句固定说明（卡片也换成文字）。
 //
 // 钉住的几件事（多人模式，同一个飞书账号先绑 alice、办着的时候换绑给 bob）：
-// ① /project 清单：取完列表、发出去之前换绑 —— 一个项目名都不发；什么都没变照发；
-// ② /project 清单：取完列表之后被移出了其中一个项目（没换绑）—— 清单不发；
-// ③ /project 名字：取完列表之后换绑 —— 不改新绑定的当前项目，说一句「刚换过绑定」；没换绑照常切；
-//    项目选单：发卡之后换绑再点 —— 不改新绑定的当前项目；发卡之后被移出了那个项目再点 —— 不切；
-// ④ /new 确认卡、/stop 确认卡、/todo 清单：办着的时候换绑 —— 原文不发，只发固定说明（bob 也看得见那个项目）；
+// ① /tasks 项目选单：取完列表、发出去之前换绑 —— 一个项目名都不发；什么都没变照发；
+// ② /tasks 项目选单：取完列表之后被移出了其中一个项目（没换绑）—— 选单不发；
+// ③ /tasks 名字：取完列表之后换绑 —— 任务列表不发；没换绑照常列；
+//    选单：发卡之后换绑再点 —— 不翻，让他重发；发卡之后被移出了那个项目再点 —— 翻不出来；
+// ④ /new 表单、/stop 确认卡、/todo 清单：办着的时候换绑 —— 原文不发，只发固定说明（bob 也看得见那个项目）；
 // ⑤ 房间回复：下面列着的任务发出去之前看不到了 —— 回复不发；看得到照发、一个任务都没列也照发；旧版本投进房间的
 //    （没记来源、或来源是办完才盖的）不按此刻的绑定补，回复和说明句都只发固定说明；
 // ⑥ 旧版本落库、升级后还排着的发件行：没记列出的任务 / 项目 / 卡、没记是哪一次请求（确认卡、挂着任务的回执）——
@@ -35,7 +35,7 @@ try {
   const visibility = await import("../src/auth/visibility.js");
   const { bindingOf, unbindOwner } = await import("../src/im/binding.js");
   const { originOf, requestScope } = await import("../src/im/scope.js");
-  const { APP, OWNER, FakeFeishu, buildApp, assemble, buttonsOf, contentOf } = await import("./im-fixture.js");
+  const { APP, OWNER, FakeFeishu, buildApp, assemble, buttonsOf, contentOf, textOf } = await import("./im-fixture.js");
 
   await ensureSchema();
   const at = new Date().toISOString();
@@ -70,11 +70,11 @@ try {
 
   let generation = 0;
   /** 同一个飞书账号绑给 userId（每次都是新的一次绑定）。 */
-  const bindTo = async (userId: string, projectId: string | null = null) => {
+  const bindTo = async (userId: string) => {
     await unbindOwner(alice.id);
     await unbindOwner(bob.id);
     await db.insert(imBindings).values({
-      channel: "feishu", appId: APP, openId: OWNER, userId, projectId, boundAt: new Date(Date.now() + ++generation * 1_000).toISOString(),
+      channel: "feishu", appId: APP, openId: OWNER, userId, boundAt: new Date(Date.now() + ++generation * 1_000).toISOString(),
     });
   };
 
@@ -105,52 +105,51 @@ try {
   };
   const PROJECTS = /^\/api\/projects$/;
 
-  // ── ① /project 清单：办着的时候换绑 ──────────────────────────────────────
+  // ── ① /tasks 项目选单：办着的时候换绑 ──────────────────────────────────────
   {
     await bindTo(alice.id);
     fake.reset();
-    const kept = await during(PROJECTS, () => im.say({ text: "/project" }), async () => {});
+    const kept = await during(PROJECTS, () => im.say({ text: "/tasks" }), async () => {});
     await im.settle();
     assert.match(repliesTo(kept), /Alice 内部客户甲收购计划/, "什么都没变：清单照发");
     assert.match(repliesTo(kept), /共享项目/);
 
     fake.reset();
-    const switched = await during(PROJECTS, () => im.say({ text: "/project" }), () => bindTo(bob.id));
+    const switched = await during(PROJECTS, () => im.say({ text: "/tasks" }), () => bindTo(bob.id));
     await im.settle();
     assert.doesNotMatch(sentText(), /内部客户甲|共享项目/, "换绑给了 bob：alice 的项目清单一个字不发");
     assert.equal(WITHHELD.exec(repliesTo(switched))?.[1], "收件人已解绑或换了绑定", "只回一句固定说明");
   }
 
-  // ── ② /project 清单：取完列表之后被移出了其中一个项目 ───────────────────
+  // ── ② /tasks 项目选单：取完列表之后被移出了其中一个项目 ───────────────────
   {
     await bindTo(alice.id);
     fake.reset();
-    const revoked = await during(PROJECTS, () => im.say({ text: "/project" }), () => visibility.removeProjectMember("pq", alice.id));
+    const revoked = await during(PROJECTS, () => im.say({ text: "/tasks" }), () => visibility.removeProjectMember("pq", alice.id));
     await im.settle();
     assert.doesNotMatch(sentText(), /共享项目/, "列着的项目看不到了：清单不发");
     assert.equal(WITHHELD.exec(repliesTo(revoked))?.[1], "列出的某个项目已看不到了");
     await join_("pq", alice.id);
   }
 
-  // ── ③ /project 名字：取完列表之后换绑 ────────────────────────────────────
+  // ── ③ /tasks 名字：取完列表之后换绑；/tasks 卡：发卡之后换绑、被移出项目再点 ──
   {
     await bindTo(alice.id);
     fake.reset();
-    const switched = await during(PROJECTS, () => im.say({ text: "/project 共享项目" }), () => bindTo(bob.id));
+    const switched = await during(PROJECTS, () => im.say({ text: "/tasks 共享项目" }), () => bindTo(bob.id));
     await im.settle();
-    assert.equal((await bindingOf(APP, OWNER))!.projectId, null, "不改 bob 那一次绑定的当前项目");
-    assert.match(repliesTo(switched), /你刚换过绑定，这次没切/);
+    assert.doesNotMatch(sentText(), /共享任务 Q/, "换绑给了 bob：替 alice 列的任务一条不发");
+    assert.equal(WITHHELD.exec(repliesTo(switched))?.[1], "收件人已解绑或换了绑定");
 
     await bindTo(alice.id);
     fake.reset();
-    const picked = await during(PROJECTS, () => im.say({ text: "/project 共享项目" }), async () => {});
+    const listed = await im.say({ text: "/tasks 共享项目" });
     await im.settle();
-    assert.equal((await bindingOf(APP, OWNER))!.projectId, "pq", "没换绑：照常切");
-    assert.match(repliesTo(picked), /当前项目已切到「共享项目」/);
+    assert.match(repliesTo(listed), /共享任务 Q/, "没换绑：照常列");
 
     const pickerFor = async () => {
       fake.reset();
-      const message = await im.say({ text: "/project" });
+      const message = await im.say({ text: "/tasks" });
       await im.settle();
       const reply = fake.sends().find((call) => call.path.includes(`/messages/${message}/reply`))!;
       return buttonsOf(contentOf(reply)).find((button) => button.text === "共享项目")!.value!;
@@ -159,50 +158,52 @@ try {
     const stale = await pickerFor();
     await bindTo(bob.id);
     const voided = await im.click(OWNER, stale);
-    assert.equal((await bindingOf(APP, OWNER))!.projectId, null, "选单发给 alice 那一次：换绑之后点，不改 bob 的当前项目");
-    assert.doesNotMatch(JSON.stringify(voided), /已切到/, JSON.stringify(voided));
+    assert.equal(voided.toast?.type, "warning", JSON.stringify(voided));
+    assert.match(voided.toast?.content ?? "", /换绑定之前发的/);
+    assert.doesNotMatch(JSON.stringify(voided), /共享任务 Q/, "选单发给 alice 那一次：换绑之后点，不替 bob 翻");
 
     await bindTo(alice.id);
     const revoked = await pickerFor();
+    assert.match(textOf((await im.click(OWNER, revoked)).card?.data), /共享任务 Q/, "看得到：点开就是任务列表");
     await visibility.removeProjectMember("pq", alice.id);
     const refused = await im.click(OWNER, revoked);
-    assert.equal(refused.toast?.type, "error", JSON.stringify(refused));
-    assert.equal((await bindingOf(APP, OWNER))!.projectId, null, "发卡之后被移出了那个项目：不切");
+    assert.equal(refused.toast?.type, "warning", JSON.stringify(refused));
+    assert.doesNotMatch(JSON.stringify(refused), /共享任务 Q/, "发卡之后被移出了那个项目：翻不出来");
     await join_("pq", alice.id);
   }
 
-  // ── ④ /new、/stop 确认卡、/todo 清单：办着的时候换绑 ─────────────────────
+  // ── ④ /new 表单、/stop 确认卡、/todo 清单：办着的时候换绑 ─────────────────────
   {
-    await bindTo(alice.id, "pq");
+    await bindTo(alice.id);
     await im.reconciler.run(() => im.reconciler.reconcile(["tq"]));
     await im.settle();
     const card = (await db.select().from(imOutbox).where(eq(imOutbox.taskId, "tq"))).find((row) => row.state === "sent");
     assert.ok(card?.messageId, "tq 的提问卡发给了 alice");
 
     fake.reset();
-    const created = await during(PROJECTS, () => im.say({ text: "/new PRIVATE-NEW-TITLE\nPRIVATE-NEW-BODY" }), () => bindTo(bob.id, "pq"));
+    const created = await during(PROJECTS, () => im.say({ text: "/new PRIVATE-NEW-TITLE\nPRIVATE-NEW-BODY" }), () => bindTo(bob.id));
     await im.settle();
-    assert.doesNotMatch(sentText(), /PRIVATE-NEW/, "/new：alice 打的确认卡不发给 bob");
+    assert.doesNotMatch(sentText(), /PRIVATE-NEW/, "/new：替 alice 填好的表单不发给 bob");
     assert.equal(WITHHELD.exec(repliesTo(created))?.[1], "收件人已解绑或换了绑定", "/new：卡片换成固定说明");
     const confirm = (await db.select().from(imOutbox).where(eq(imOutbox.replyTo, created))).at(0)!;
     assert.equal(confirm.msgType, "text", "换成的是一句文字");
     assert.doesNotMatch(confirm.content, /PRIVATE-NEW/, "库里那份也换掉了");
 
-    await bindTo(alice.id, "pq");
+    await bindTo(alice.id);
     fake.reset();
-    const stopped = await during(/^\/api\/tasks\/tq$/, () => im.say({ text: "/stop", parentId: card!.messageId! }), () => bindTo(bob.id, "pq"));
+    const stopped = await during(/^\/api\/tasks\/tq$/, () => im.say({ text: "/stop", parentId: card!.messageId! }), () => bindTo(bob.id));
     await im.settle();
     assert.doesNotMatch(repliesTo(stopped), /共享任务 Q/, "/stop：替 alice 出的确认卡不发给 bob");
     assert.equal(WITHHELD.exec(repliesTo(stopped))?.[1], "收件人已解绑或换了绑定");
 
     // /todo 不读接口：消息进来时是 alice，办之前换绑给 bob。
-    await bindTo(alice.id, "pq");
+    await bindTo(alice.id);
     const binding = (await bindingOf(APP, OWNER))!;
     const ctx = {
       messageId: "om_todo", chatId: "oc_p2p", chatType: "p2p" as const, principal: { channel: "feishu" as const, appId: APP, openId: OWNER },
       binding, dest, card: null, origin: await originOf(APP, dest, binding),
     };
-    await bindTo(bob.id, "pq");
+    await bindTo(bob.id);
     fake.reset();
     await im.commands.run(ctx, "todo", "");
     await im.settle();

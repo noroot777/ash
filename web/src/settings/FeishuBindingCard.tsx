@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { FeishuBinding, ImBindCode, ProjectView } from "@ash/shared";
+import type { FeishuBinding, ImBindCode } from "@ash/shared";
 import { Button } from "../components/ui.tsx";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { api } from "../lib/api.ts";
@@ -16,12 +16,10 @@ import { useNow } from "./useFeishuPoll.ts";
 // 状态以服务端为准（none → code → pending → bound），刷新后照样看得出走到了哪一步。唯一拿
 // 不回来的是码的明文：库里只存哈希，它只在生成那一刻回给页面一次，所以只记在这个组件里。
 
-export function FeishuBindingCard({ binding, online, projects, onBinding, notify }: {
+export function FeishuBindingCard({ binding, online, onBinding, notify }: {
   binding: FeishuBinding;
   /** 机器人此刻在不在线；不在线时码发过去没人收，要提前说。 */
   online: { ok: boolean; label: string };
-  /** null = 项目清单还没读到（不是没有项目）。 */
-  projects: ProjectView[] | null;
   onBinding: (next: FeishuBinding) => void;
   notify: (message: string) => void;
 }) {
@@ -145,24 +143,6 @@ export function FeishuBindingCard({ binding, online, projects, onBinding, notify
             {binding.stale && <Button variant="primary" disabled={busy} onClick={() => void generate()}>重新绑定</Button>}
             <Button variant="danger" disabled={busy} onClick={() => setConfirmUnbind(true)}>解除绑定</Button>
           </span>
-        </div>
-        <div className="settings-row">
-          <div>
-            <b>当前项目</b>
-            <small>在飞书里新建任务时落在哪个项目。飞书单聊里发 /project 也能切。</small>
-          </div>
-          <select
-            aria-label="飞书里的当前项目"
-            value={binding.projectId ?? ""}
-            disabled={busy}
-            onChange={(event) => void run(() => api.setFeishuBindingProject(event.target.value || null), "当前项目已切换", "当前项目保存失败")}
-          >
-            <option value="">未指定</option>
-            {binding.projectId && !(projects ?? []).some((project) => project.id === binding.projectId) && (
-              <option value={binding.projectId}>{projects ? "（已看不到的项目）" : "（项目名没读到）"}</option>
-            )}
-            {(projects ?? []).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-          </select>
         </div>
         <div className="settings-row">
           <div>
