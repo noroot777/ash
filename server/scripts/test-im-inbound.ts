@@ -9,7 +9,8 @@
 //    回眼下这道题的卡带附件也是答复，附件跟着答复走；答复送到接口那一刻同一道题已经又问了一次
 //    （题面一模一样）→ 接口按那一次的身份拒收；回在机器人自己的文字回执下面，认话题根上那张卡；
 // ③ 命令：/help /project（回一张项目选单，点一下就切；点过的卡不能再点）/project 编号
-//    /new（先确认，点确定才建任务并开跑）/stop（先确认，取消就不停）/todo；
+//    /new（先确认，点确定才建任务并开跑）/new 不带参数（表单卡：选项目、填标题和要求，提交就建任务并开跑；
+//    没填标题不建、表单还能再提交）/stop（先确认，取消就不停）/todo；
 //    不认识的消息类型回一句说明；
 // ④ 助手房间：单聊里直接说话 → 照最近一间助手房间的配置建一间「飞书」，投进去；回复按 reply_to
 //    对上、发回飞书（回在用户那条消息下面）；同一条飞书消息重复推送只投一次；
@@ -262,6 +263,24 @@ try {
     assert.equal(newTask!.projectId, "p1");
     assert.equal(newTask!.body, "登录页点了没反应");
     await waitIdle(() => statusOf(newTask!.id));
+
+    const formCommand = await im.say({ text: "/new" });
+    await im.settle();
+    const form = contentOf(repliesTo(formCommand)[0]!);
+    const select = JSON.stringify(form).match(/"tag":"select_static".*?"initial_option":"(\d+)"/);
+    assert.equal(select?.[1], "0", "下拉框默认选当前项目");
+    assert.match(textOf(form), /飞书项目/);
+    const submit = buttonsOf(form).find((button) => button.value?.op === "submit")!;
+    const blank = await im.click(OWNER, submit.value!, { project: "0", title: " ", body: "" }, "submit");
+    assert.equal(blank.toast?.type, "warning", "没填标题不建");
+    const submitted = await im.click(OWNER, submit.value!, { project: "0", title: "表单建的任务", body: "从卡片上填的要求" }, "submit");
+    assert.equal(submitted.toast?.type, "success", JSON.stringify(submitted));
+    assert.match(textOf(submitted.card?.data), /已建任务「表单建的任务」并开跑/);
+    const formTask = (await db.select().from(tasks).where(eq(tasks.title, "表单建的任务"))).at(0);
+    assert.equal(formTask?.projectId, "p1", "建在表单上选的项目");
+    assert.equal(formTask?.body, "从卡片上填的要求");
+    await waitIdle(() => statusOf(formTask!.id));
+    assert.match((await im.click(OWNER, submit.value!, { project: "0", title: "再交一次" }, "submit")).toast?.content ?? "", /已经处理过了/, "提交过的表单不能再交");
 
     const stopBare = await im.say({ text: "/stop" });
     const stopCard = await im.say({ text: "/stop", parentId: (await cardOf("tm"))?.messageId ?? (await db.select().from(imOutbox).where(eq(imOutbox.taskId, "tm"))).at(0)!.messageId! });

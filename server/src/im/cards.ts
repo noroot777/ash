@@ -280,6 +280,31 @@ export function projectCard(current: string | null, names: string[], currentInde
   };
 }
 
+/**
+ * 不带参数的 /new：选项目、填标题和要求，提交就建任务并开跑（填表、点提交本身就是确认，不再弹确认卡）。
+ * 下拉框的 value 是第几个项目，项目 id 存在信封里；群里只有群绑定的那一个项目可选。
+ */
+export function newTaskCard(names: string[], currentIndex: number, envelope: string): CardModel {
+  return {
+    title: "建任务并开跑",
+    tone: "blue",
+    blocks: [{
+      type: "form",
+      name: "new",
+      inputs: [
+        {
+          name: "project", placeholder: "选一个项目", required: true,
+          options: names.map((name, index) => ({ text: scrubTitle(name, 40), value: String(index) })),
+          ...(currentIndex >= 0 ? { initial: String(currentIndex) } : {}),
+        },
+        { name: "title", label: "标题", placeholder: "一句话说清要做什么", maxLength: 120, required: true },
+        { name: "body", label: "要求", placeholder: "详细要求（可不填）", multiline: true },
+      ],
+      buttons: [{ text: "建任务并开跑", style: "primary", name: "submit", value: value(envelope, "submit") }],
+    }, { type: "note", text: "要求最多 1000 字；写得长就发 /new 标题，换行写要求。" }],
+  };
+}
+
 /** 需要再点一下才执行的命令（/stop、/new）。 */
 export function confirmCard(title: string, text: string, envelope: string, danger: boolean): CardModel {
   return {

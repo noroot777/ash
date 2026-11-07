@@ -226,13 +226,22 @@ export class CardActions {
     return { run: prepared, taskId: view.task.id, link };
   }
 
-  /** /new、/stop 的确认卡，/project 的选单。 */
+  /** /new、/stop 的确认卡，/project 的选单，/new 的表单。 */
   private confirmJob(
     envelope: EnvelopeRow, payload: Record<string, unknown>, op: string, event: CallbackEvent, principal: ImPrincipal,
   ): Job | CallbackResponse {
     if (payload.command === "project") {
       if (op !== "pick") return toast("error", "认不出这个按钮");
       return { run: () => this.deps.commands.picked(principal, payload, Number(event.value.i)), taskId: null, link: null };
+    }
+    if (payload.command === "newform") {
+      if (op !== "submit") return toast("error", "认不出这个按钮");
+      const field = (key: string) => (typeof event.formValue[key] === "string" ? (event.formValue[key] as string).trim() : "");
+      const form = { project: Number(field("project") || NaN), title: field("title"), body: field("body") };
+      // 填得不对不占用信封：卡上填的字还在，改了再提交。
+      if (!Number.isInteger(form.project)) return toast("warning", "先选一个项目");
+      if (!form.title) return toast("warning", "标题要填");
+      return { run: () => this.deps.commands.submitted(principal, payload, form), taskId: null, link: null };
     }
     if (op === "cancel") return { run: async () => ({ ok: true, text: "已取消。", final: true, tone: "grey" }), taskId: null, link: null };
     if (op !== "confirm") return toast("error", "认不出这个按钮");
