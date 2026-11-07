@@ -22,7 +22,7 @@ import { cardHeaderOf, type Destination, type OutboxRow } from "./outbox.js";
 import type { Outcome } from "./actions.js";
 import { versionOf } from "./attention.js";
 import type { Reconciler } from "./reconcile.js";
-import { admit, replyScope, scopeFor, SYSTEM_SCOPE, type OutboxScope, type ScopeBody } from "./scope.js";
+import { admit, replyScope, scopeFor, SYSTEM_SCOPE, type Origin, type OutboxScope, type ScopeBody } from "./scope.js";
 import { scrubText, scrubTitle } from "./scrub.js";
 
 export interface InboundContext {
@@ -33,6 +33,8 @@ export interface InboundContext {
   binding: BindingRow;
   /** 回给这个人的去处：单聊按 open_id，群按 chat_id。 */
   dest: Destination;
+  /** 这条消息进来那一刻的绑定实例（scope.ts originOf）：回给他这次操作结局的那一句按它核，不按办完时的现状。 */
+  origin: Origin;
   /** 这条消息回复的是哪张任务卡（没回复卡片为 null）。 */
   card: OutboxRow | null;
   /** 马上要做一件不幂等的事（重启后不能照原文重办）：先把这一步记下来（inbound.ts 顶部）。 */
@@ -84,9 +86,9 @@ export class CommandRunner {
     return scopeFor(this.deps.appId, ctx.dest, body, ctx.chatType === "group" ? ctx.binding : null);
   }
 
-  /** 回给他的、他这次操作的结局（scope.ts reply）。about = 这次操作落在哪个任务 / 项目上。 */
-  answered(ctx: Pick<InboundContext, "dest">, about: { taskId?: string | null; projectId?: string | null }): Promise<OutboxScope> {
-    return replyScope(this.deps.appId, ctx.dest, about);
+  /** 回给他的、他这次操作的结局（scope.ts reply）：按消息进来那一刻的来源。about = 这次操作落在哪个任务 / 项目上。 */
+  answered(ctx: Pick<InboundContext, "origin">, about: { taskId?: string | null; projectId?: string | null }): Promise<OutboxScope> {
+    return replyScope(ctx.origin, about);
   }
 
   private async card(

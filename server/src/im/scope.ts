@@ -13,10 +13,11 @@
 //   room       聊天房间里智能体的回复 —— 房间还在、还归他、他还看得见；群聊房间还要群还绑着那个项目、
 //              这间还是他在这个群里的那一间；
 //   digest     列了一串别的卡（汇总卡、/todo）—— 逐行按那几行自己的来源核。
-//   reply      回给发话人的、他自己这次操作的结局（接口报错、拒绝的原因）—— 话是接口以他的身份算出来的，
-//              入队那一刻就过了授权；出口不再核他此刻能不能看项目、任务和房间还在不在：报错说的常常正是
-//              这件事，照核就永远发不出去。只核群此刻还绑着这个项目（话里可能带着项目里的字）、项目此刻
-//              是不是只推标题（换短句）。
+//   reply      回给发话人的、他自己这次操作的结局（接口报错、拒绝的原因）—— 话是接口以他的身份算出来的，可报错
+//              原文常带着项目名、命令、路径，所以出口照样核：还是请求进来那一刻的那个人（单聊的绑定 / 群的绑定
+//              加发起人的绑定，都按那一刻的实例 —— Origin，不在操作办完之后按「现在的收件人」重新盖）、他此刻
+//              还看得见这个项目（群还绑着它）。核不过不发原文，换成一句不含 ash 数据的固定说明（exits.ts
+//              withhold）：报错说的常常正是「看不到了 / 解绑了」这件事，一声不吭他只会以为没收到。
 //
 // 「还是那个收件人」按绑定实例认：入队时记下收件去处（单聊的个人绑定 / 群绑定）的 boundAt，解绑重绑、
 // 换了人绑同一个飞书账号，boundAt 都会变（binding.ts confirmUserCode 每次重写）。群里由某个人发起的
@@ -35,8 +36,11 @@ import { bindingOf, CHANNEL, ownerKeyOf, type BindingRow } from "./binding.js";
 import { groupOf, groupRoomOf, type GroupRow } from "./groups.js";
 import type { Destination, OutboxRow } from "./outbox.js";
 
-/** 发起这条内容的那个人（群里的内容才记：单聊的收件人就是他自己）。 */
+/** 发起这条内容的那个人（群里的内容才记：单聊的收件人就是他自己；reply 两种都记）。 */
 export interface Person { openId: string; boundAt: string }
+
+/** 一次请求进来的那一刻：收件去处的绑定实例 + 发起的人。reply 按它在出口核。 */
+export interface Origin { bound: string; by: Person }
 
 export type ScopeBody =
   | { kind: "task"; taskId: string }
@@ -68,14 +72,29 @@ export async function scopeFor(appId: string, dest: Destination, body: ScopeBody
   };
 }
 
-/** 回给发话人的那一句（reply）：项目按这次操作落在的任务现查，任务已经删了就不挂项目。 */
-export async function replyScope(
-  appId: string, dest: Destination, about: { taskId?: string | null; projectId?: string | null },
-): Promise<OutboxScope> {
+/**
+ * 请求进来那一刻的来源。binding = 那一刻读到的发起人绑定（inbound.ts route、actions.ts handle）；群的实例也在这一刻读，
+ * 之后不管操作办多久，回给他的那一句都按这一份核。单聊的收件人不是他本人（不该出现）记空串，出口一律不放行。
+ */
+export async function originOf(appId: string, dest: Destination, binding: Pick<BindingRow, "openId" | "boundAt">): Promise<Origin> {
+  const bound = dest.receiveType === "chat_id"
+    ? (await groupOf(appId, dest.receiveId))?.boundAt ?? ""
+    : dest.receiveId === binding.openId ? binding.boundAt : "";
+  return { bound, by: { openId: binding.openId, boundAt: binding.boundAt } };
+}
+
+/** 已经盖好的来源（投进房间时按房间盖的那份，relay.ts）里记着的那一刻；单聊的收件人就是发起人。 */
+export function originOfScope(scope: OutboxScope, openId: string): Origin {
+  if (scope.kind === "system" || scope.bound === null) return { bound: "", by: { openId, boundAt: "" } };
+  return { bound: scope.bound, by: scope.by ?? { openId, boundAt: scope.bound } };
+}
+
+/** 回给发话人的那一句（reply）：授权按请求进来那一刻（origin）；项目按这次操作落在的任务查，任务已经删了就不挂项目。 */
+export async function replyScope(origin: Origin, about: { taskId?: string | null; projectId?: string | null }): Promise<OutboxScope> {
   const projectId = about.projectId ?? (about.taskId
     ? (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, about.taskId))).at(0)?.projectId ?? null
     : null);
-  return scopeFor(appId, dest, { kind: "reply", projectId });
+  return { kind: "reply", projectId, bound: origin.bound, by: origin.by };
 }
 
 /** 行上记的授权来源。旧版本入队的行没有：上线通知 / 测试卡当 system，挂着任务的当 task，其余不认。 */
@@ -98,7 +117,6 @@ export async function admit(appId: string, row: OutboxRow, titleOnly: readonly s
   const scope = scopeOfRow(row);
   if (!scope) return deny("没有授权来源（旧版本入队）");
   if (scope.kind === "system") return pass();
-  if (scope.kind === "reply") return replyAdmission(appId, row, scope.projectId, titleOnly);
   const viewer = await viewerOf(appId, row, scope);
   if ("why" in viewer) return viewer;
   switch (scope.kind) {
@@ -113,6 +131,10 @@ export async function admit(appId: string, row: OutboxRow, titleOnly: readonly s
       return viewer.group ? deny("个人的信息不发到群里") : pass();
     case "room":
       return roomAdmission(appId, viewer, scope);
+    case "reply":
+      // 群里的这一句要认得出是谁发起的：旧版本入队的没记，不发原文。
+      if (viewer.group && !viewer.actor) return deny("没记下是谁发起的");
+      return scope.projectId ? projectAdmission(viewer, scope.projectId, titleOnly) : pass();
     case "digest": {
       if (nested) return deny("汇总里套汇总");
       for (const id of scope.rowIds) {
@@ -124,7 +146,7 @@ export async function admit(appId: string, row: OutboxRow, titleOnly: readonly s
   }
 }
 
-async function viewerOf(appId: string, row: OutboxRow, scope: Exclude<OutboxScope, { kind: "system" | "reply" }>): Promise<Viewer | { ok: false; why: string }> {
+async function viewerOf(appId: string, row: OutboxRow, scope: Exclude<OutboxScope, { kind: "system" }>): Promise<Viewer | { ok: false; why: string }> {
   const instance = scope.kind === "task" ? null : scope.bound;
   if (row.receiveType === "chat_id") {
     const group = await groupOf(appId, row.receiveId);
@@ -143,15 +165,6 @@ async function personOf(appId: string, openId: string, boundAt: string | null): 
   if (!binding || (boundAt !== null && binding.boundAt !== boundAt)) return null;
   const actor = await imActorFor({ channel: CHANNEL, appId, openId });
   return actor ? { actor, userKey: ownerKeyOf(binding.userId) } : null;
-}
-
-async function replyAdmission(appId: string, row: OutboxRow, projectId: string | null, titleOnly: readonly string[]): Promise<Admission> {
-  if (row.receiveType === "chat_id") {
-    const group = await groupOf(appId, row.receiveId);
-    if (!group) return deny("群已解绑");
-    if (projectId && group.projectId !== projectId) return deny("群绑的已不是这个项目");
-  }
-  return pass(!!projectId && titleOnly.includes(projectId));
 }
 
 async function projectAdmission(viewer: Viewer, projectId: string, titleOnly: readonly string[]): Promise<Admission> {

@@ -9,7 +9,8 @@
 //
 // 房间里的回复带着 ash 里的东西：投进房间那一刻按房间盖下授权来源（scope.ts room），记在 im_inbound 上，
 // 回复发回飞书时出口按它现核（房间还在、还归他、群还绑着那个项目）。投不进去、拿不到回复、等超时这几句
-// 说明不带房间里的东西，按他自己这次操作的结局（reply）发 —— 房间没了正是它们要说的事。
+// 说明不带房间里的东西，按他自己这次操作的结局（reply）发 —— 房间没了正是它们要说的事；可报错原文里
+// 可能有项目里的字，照样按那一刻的绑定实例、他此刻还看不看得见项目核（scope.ts reply）。
 import { createHash } from "node:crypto";
 import type { TaskListItem } from "@ash/shared";
 import type { ChatMessage, ChatRoom } from "@ash/shared/chat";
@@ -26,7 +27,7 @@ import type { CommandRunner, InboundContext } from "./commands.js";
 import { claimGroupRoom, groupOf, groupRoomOf, type GroupRow } from "./groups.js";
 import { readOptions } from "./meta.js";
 import type { Destination } from "./outbox.js";
-import { scopeFor, type OutboxScope } from "./scope.js";
+import { originOfScope, scopeFor, type OutboxScope } from "./scope.js";
 import { scrubText, scrubTitle } from "./scrub.js";
 
 const POLL_MS = 2_000;
@@ -204,8 +205,10 @@ export class RoomRelay {
       : { receiveType: "chat_id", receiveId: row.chatId, recipientOpenId: null };
     const feishuMessageId = row.id.replace(/^msg:/, "");
     const scope = await this.scopeOf(row, dest);
+    // 说明句按投进房间那一刻的来源（就是房间来源里记着的那份实例）：等回复的这段时间里解绑、换绑都不算数。
+    const origin = { origin: originOfScope(scope, row.openId) };
     const reply = async (text: string, notice = false) => this.deps.commands.say({ messageId: feishuMessageId, dest }, text,
-      notice ? await this.deps.commands.answered({ dest }, { projectId: scope.kind === "room" ? scope.projectId : null }) : scope,
+      notice ? await this.deps.commands.answered(origin, { projectId: scope.kind === "room" ? scope.projectId : null }) : scope,
       { subject: `relay:${row.id}` });
     const snapshot = await this.deps.ash.get<Snapshot>(principal, `/api/chats/${encodeURIComponent(row.roomId)}`);
     const timedOut = Date.parse(row.updatedAt) + REPLY_TIMEOUT_MS < Date.now();

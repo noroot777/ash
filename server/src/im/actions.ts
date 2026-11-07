@@ -28,7 +28,7 @@ import { imActorFor, type ImPrincipal } from "../auth/im-actor.js";
 import { canSeeProject } from "../auth/visibility.js";
 import { acceptIdentityOf, awaitsPress, DECISION_KINDS, sameTurn, versionOf, viewOf, viewsOf, type TaskView } from "./attention.js";
 import { taskPath, type AshClient, type AshResult } from "./ash-client.js";
-import { CHANNEL } from "./binding.js";
+import { bindingOf, CHANNEL } from "./binding.js";
 import { acceptLabel, settledCard, taskLink } from "./cards.js";
 import {
   auditDone, checkEnvelope, claimEnvelope, claimOf, finishEnvelope, isConcluding, releaseEnvelope, unauditedEnvelopes, unfinishedEnvelopes,
@@ -39,7 +39,7 @@ import { renderCard, type CardTone } from "./feishu/cards.js";
 import { readOptions } from "./meta.js";
 import { cardHeaderOf, type Destination, type OutboxRow, type OutboxSender } from "./outbox.js";
 import { ACTED, type Reconciler } from "./reconcile.js";
-import { replyScope, scopeOfRow } from "./scope.js";
+import { originOf, replyScope, scopeOfRow, type Origin } from "./scope.js";
 import { scrubText } from "./scrub.js";
 import type { CommandRunner } from "./commands.js";
 import { acceptanceAutoCommitMessage, type AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
@@ -82,13 +82,16 @@ interface Job {
 }
 
 /** 这一下点击收尾要用到的全部现场。 */
-interface Click { claim: Claim; row: OutboxRow; job: Job; actorName: string }
+/** origin = 点下去那一刻的绑定实例（scope.ts originOf）：没办成时回给他的那一句按它核，不按办完时的现状。 */
+interface Click { claim: Claim; row: OutboxRow; job: Job; actorName: string; origin: Origin }
 
 const FAST_MS = 2_400;
 /** 结果卡随回执带回去之后，等「回执已发出」的确认这么久；过了还没确认就改一次卡。 */
 const ACK_GRACE_MS = 15_000;
 /** 收尾的事务没提交上（数据库忙等）：活着的进程里按这个节奏再试（试完最后一档还不行就按它反复试），不等重启。 */
 const SETTLE_RETRY_MS = [1_000, 5_000, 30_000, 120_000];
+const destOf = (row: OutboxRow): Destination =>
+  ({ receiveType: row.receiveType as Destination["receiveType"], receiveId: row.receiveId, recipientOpenId: row.recipientOpenId });
 const toast = (type: NonNullable<CallbackResponse["toast"]>["type"], content: string): CallbackResponse => ({ toast: { type, content } });
 const sleep = (ms: number) => new Promise<void>((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); });
 
@@ -130,10 +133,12 @@ export class CardActions {
     const check = await checkEnvelope(envelopeId, event.operatorOpenId);
     if (!check.ok) return toast(check.reason === "used" ? "info" : "error", REJECT_TEXT[check.reason]!);
     const principal: ImPrincipal = { channel: CHANNEL, appId: this.deps.appId, openId: event.operatorOpenId };
-    const actor = await imActorFor(principal);
-    if (!actor) return toast("error", "你还没绑定 ash（或绑定已失效）：请在 ash 网页 设置 → 飞书 里绑定");
+    const binding = await bindingOf(this.deps.appId, event.operatorOpenId);
+    const actor = binding ? await imActorFor(principal) : null;
+    if (!binding || !actor) return toast("error", "你还没绑定 ash（或绑定已失效）：请在 ash 网页 设置 → 飞书 里绑定");
     const row = (await db.select().from(imOutbox).where(eq(imOutbox.id, check.envelope.outboxId))).at(0);
     if (!row) return toast("error", REJECT_TEXT.missing!);
+    const origin = await originOf(this.deps.appId, destOf(row), binding);
 
     if (check.envelope.action === "summary") {
       if (op !== "push") return toast("error", "认不出这个按钮");
@@ -146,7 +151,7 @@ export class CardActions {
     if (!("run" in job)) return job;
     const claim = await claimEnvelope(envelopeId);
     if (!claim) return toast("info", "这张卡片正在处理");
-    const click: Click = { claim, row, job, actorName: actor.name };
+    const click: Click = { claim, row, job, actorName: actor.name, origin };
 
     // 从占上信封起到挂上收尾之间不能有能抛错的 await：那件事已经起跑，这时抛出去，结局就没人落了 —— 信封永远
     // 停在「已占用、没结果」，卡上一直是原样、再点只说「已经处理过了」；同进程的 recover() 有意不接本进程占着的
@@ -380,11 +385,12 @@ export class CardActions {
     const said = scrubText(outcome.text, 800);
     if (!outcome.ok) {
       // 「处理中」那张已经换上去了，用户看不到 toast：卡面改回原样、原因回复在卡片下面、放回信封，一起提交。
-      // 原因是他自己这一下的结局（scope.ts reply）：任务删了、他看不到了正是常见的原因，不能按卡的来源拦。
+      // 原因是他自己这一下的结局（scope.ts reply）：不按卡的来源拦，按他点下去那一刻的绑定实例核；核不过出口
+      // 换成一句固定说明（任务删了、他看不到了正是常见的原因，一声不吭他只会以为没收到）。
       const repair = via === "patch" && !!row.messageId;
-      const dest: Destination = { receiveType: row.receiveType as Destination["receiveType"], receiveId: row.receiveId, recipientOpenId: row.recipientOpenId };
+      const dest = destOf(row);
       const source = scopeOfRow(row);
-      const scope = await replyScope(this.deps.appId, dest, {
+      const scope = await replyScope(click.origin, {
         taskId: row.taskId ?? (source?.kind === "task" ? source.taskId : null), projectId: source?.kind === "project" ? source.projectId : null,
       });
       const told = await this.deps.reconciler.exits.admission({ ...row, scope: JSON.stringify(scope) });

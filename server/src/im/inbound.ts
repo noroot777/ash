@@ -38,7 +38,7 @@ import { groupOf } from "./groups.js";
 import type { Destination, OutboxRow } from "./outbox.js";
 import { TURN_KINDS, type Reconciler } from "./reconcile.js";
 import type { RoomRelay } from "./relay.js";
-import { SYSTEM_SCOPE } from "./scope.js";
+import { originOf, SYSTEM_SCOPE } from "./scope.js";
 import { scrubText } from "./scrub.js";
 
 const HINT_EVERY_MS = 24 * 3600_000;
@@ -233,6 +233,7 @@ export class InboundRouter {
 
     const ctx: InboundContext = {
       messageId: message.message_id, chatId: message.chat_id, chatType, principal, binding, dest,
+      origin: await originOf(this.deps.appId, dest, binding),
       card: await this.cardOf(message), commit: (taskId) => this.record(inboundId, { taskId, state: "dispatching" }),
     };
 
