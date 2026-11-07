@@ -149,7 +149,7 @@ export function FeishuBindingCard({ binding, online, projects, onBinding, notify
         <div className="settings-row">
           <div>
             <b>当前项目</b>
-            <small>在飞书里新建任务时落在哪个项目。</small>
+            <small>在飞书里新建任务时落在哪个项目。飞书单聊里发 /project 也能切。</small>
           </div>
           <select
             aria-label="飞书里的当前项目"

@@ -27,6 +27,12 @@ export interface CardInput {
   name: string;
   placeholder: string;
   label?: string;
+  /** 有选项就是下拉单选（select_static），提交时 form_value 里是选中那一项的 value。 */
+  options?: { text: string; value: string }[];
+  /** 下拉框默认选中的 value。 */
+  initial?: string;
+  /** 不填 / 不选不让提交（飞书客户端拦，只在表单里有效）。 */
+  required?: boolean;
   /** 飞书的上限就是 1000（2026-11-06 实测：填 4000 整张卡被拒，230099 / 11310），这里只能往小改。 */
   maxLength?: number;
   multiline?: boolean;
@@ -86,14 +92,23 @@ function renderBlock(block: CardBlock): Record<string, unknown> {
         tag: "form",
         name: block.name,
         elements: [
-          ...block.inputs.map((input) => ({
+          ...block.inputs.map((input) => input.options ? {
+            tag: "select_static",
+            name: input.name,
+            placeholder: plain(input.placeholder),
+            width: "fill",
+            options: input.options.map((option) => ({ text: plain(option.text), value: option.value })),
+            ...(input.initial !== undefined ? { initial_option: input.initial } : {}),
+            ...(input.required ? { required: true } : {}),
+          } : {
             tag: "input",
             name: input.name,
             placeholder: plain(input.placeholder),
             ...(input.label ? { label: plain(input.label), label_position: "top" } : {}),
             max_length: Math.min(input.maxLength ?? INPUT_MAX, INPUT_MAX),
+            ...(input.required ? { required: true } : {}),
             ...(input.multiline ? { input_type: "multiline_text", rows: 3, auto_resize: true, max_rows: 8 } : {}),
-          })),
+          }),
           buttonRow(block.buttons, true),
         ],
       };

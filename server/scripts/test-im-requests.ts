@@ -6,6 +6,7 @@
 // ① /project 清单：取完列表、发出去之前换绑 —— 一个项目名都不发；什么都没变照发；
 // ② /project 清单：取完列表之后被移出了其中一个项目（没换绑）—— 清单不发；
 // ③ /project 名字：取完列表之后换绑 —— 不改新绑定的当前项目，说一句「刚换过绑定」；没换绑照常切；
+//    项目选单：发卡之后换绑再点 —— 不改新绑定的当前项目；发卡之后被移出了那个项目再点 —— 不切；
 // ④ /new 确认卡、/stop 确认卡、/todo 清单：办着的时候换绑 —— 原文不发，只发固定说明（bob 也看得见那个项目）；
 // ⑤ 房间回复：下面列着的任务发出去之前看不到了 —— 回复不发；看得到照发、一个任务都没列也照发；旧版本投进房间的
 //    （没记来源、或来源是办完才盖的）不按此刻的绑定补，回复和说明句都只发固定说明；
@@ -34,7 +35,7 @@ try {
   const visibility = await import("../src/auth/visibility.js");
   const { bindingOf, unbindOwner } = await import("../src/im/binding.js");
   const { originOf, requestScope } = await import("../src/im/scope.js");
-  const { APP, OWNER, FakeFeishu, buildApp, assemble, contentOf } = await import("./im-fixture.js");
+  const { APP, OWNER, FakeFeishu, buildApp, assemble, buttonsOf, contentOf } = await import("./im-fixture.js");
 
   await ensureSchema();
   const at = new Date().toISOString();
@@ -146,6 +147,28 @@ try {
     await im.settle();
     assert.equal((await bindingOf(APP, OWNER))!.projectId, "pq", "没换绑：照常切");
     assert.match(repliesTo(picked), /当前项目已切到「共享项目」/);
+
+    const pickerFor = async () => {
+      fake.reset();
+      const message = await im.say({ text: "/project" });
+      await im.settle();
+      const reply = fake.sends().find((call) => call.path.includes(`/messages/${message}/reply`))!;
+      return buttonsOf(contentOf(reply)).find((button) => button.text === "共享项目")!.value!;
+    };
+    await bindTo(alice.id);
+    const stale = await pickerFor();
+    await bindTo(bob.id);
+    const voided = await im.click(OWNER, stale);
+    assert.equal((await bindingOf(APP, OWNER))!.projectId, null, "选单发给 alice 那一次：换绑之后点，不改 bob 的当前项目");
+    assert.doesNotMatch(JSON.stringify(voided), /已切到/, JSON.stringify(voided));
+
+    await bindTo(alice.id);
+    const revoked = await pickerFor();
+    await visibility.removeProjectMember("pq", alice.id);
+    const refused = await im.click(OWNER, revoked);
+    assert.equal(refused.toast?.type, "error", JSON.stringify(refused));
+    assert.equal((await bindingOf(APP, OWNER))!.projectId, null, "发卡之后被移出了那个项目：不切");
+    await join_("pq", alice.id);
   }
 
   // ── ④ /new、/stop 确认卡、/todo 清单：办着的时候换绑 ─────────────────────
