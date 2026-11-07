@@ -48,6 +48,14 @@ export function beginAdmitting(taskId: string): (() => void) | null {
   };
 }
 
+/**
+ * 有成员正在往这个任务名下加（建执行者 / 审查、派活）。处置整条任务（删除、归档）也要等它落完：不然新来的那位落在
+ * 已经删掉 / 归档了的团队名下（对抗复核实测：派活原来整趟占着 beginAccepting，顺带挡住了这两样，换成这个位之后没挡）。
+ */
+export function isAdmitting(taskId: string): boolean {
+  return admitting.has(taskId);
+}
+
 /** beginAccepting 没占到时对人怎么说：是有成员正在加进来，就说这个（几百毫秒的事），否则用调用方那一句。 */
 export function acceptingBusyText(taskId: string, otherwise: string): string {
   return admitting.has(taskId) ? "团队正在加入新的执行者，稍后再试" : otherwise;

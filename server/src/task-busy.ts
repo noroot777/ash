@@ -14,6 +14,7 @@
 //   · 在跑 / 占着 turn —— 进程还活着,回合结算还要写这一行(status 落库前 turn 就已占,
 //     所以光看 status 会漏)
 //   · 在验收 —— 尾段发布命令还在跑,结算还要写这一行
+//   · 在加成员 —— 派活 / 建执行者、审查正要落库(team-admission.ts),删了它,新来的就挂在一个没了的任务名下
 //   · 验收前置命令还在跑 —— 那条命令的 cwd 就是这个任务的工作区,目录被抽走时它还在
 //     往里写(它跑的是全量回归,动辄十几分钟)。`isAcceptingTask` 盖不住它:门禁是**在
 //     验收互斥之外**跑的(accept-gate.ts 文件头 ②),那把锁那时已经松开了。
@@ -24,7 +25,7 @@ import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { heldForAcceptance, isTurnClaimed } from "./runs.js";
-import { isAcceptingTask } from "./acceptance-lock.js";
+import { isAcceptingTask, isAdmitting } from "./acceptance-lock.js";
 import { hasLiveAcceptGate } from "./accept-gate.js";
 import { reconcileGateProcesses } from "./accept-gate-ownership.js";
 
@@ -38,7 +39,7 @@ export interface TaskBusyRejection {
 /** 这一行现在有人指望着吗。已经查出来的任务行直接用它,别再各自拼一遍这四个条件。 */
 export function isTaskBusy(row: { id: string; status: string }): boolean {
   return row.status === "running" || row.status === "queued" || isTurnClaimed(row.id)
-    || isAcceptingTask(row.id) || hasLiveAcceptGate(row.id);
+    || isAcceptingTask(row.id) || isAdmitting(row.id) || hasLiveAcceptGate(row.id);
 }
 
 /**
@@ -57,6 +58,7 @@ export async function taskBusyRejection(taskId: string, verb: string): Promise<T
     return { error: `任务正在执行，请先停止再${verb}`, status: row.status };
   }
   if (isAcceptingTask(taskId)) return { error: `任务正在验收中，结束后再${verb}` };
+  if (isAdmitting(taskId)) return { error: `团队正在加入新的执行者，结束后再${verb}` };
   // 跟「在验收」分开报:用户要做的事不一样 —— 这一条的出路是去验收台上把它收掉。
   if (hasLiveAcceptGate(taskId)) {
     return { error: `验收前置命令正在这个任务的工作区里跑，等它跑完或在验收台上收掉它再${verb}`, status: row.status };

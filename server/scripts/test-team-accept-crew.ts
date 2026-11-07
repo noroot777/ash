@@ -8,7 +8,8 @@
 //    普通任务派生的子任务不占（它的验收不管名下多了谁）；
 // ③ 审查任务那一支（reviewOf 指向团队的共享执行者）同样占住它所属的团队；
 // ④ 加成员之间不互斥：建执行者落库途中，调度台派活不会被当成「正在验收」拒掉；
-// ⑤ 兜底：绕过互斥直接多出一位共享执行者，落章那一个事务认得出来 —— 不盖章，说清原因。
+// ⑤ 兜底：绕过互斥直接多出一位共享执行者，落章那一个事务认得出来 —— 不盖章，说清原因；
+// ⑥ 加着成员的时候不删、不归档团队（不然新来的落在没了 / 归档了的团队名下）。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,6 +38,7 @@ try {
   const { projects, tasks } = await import("../src/db/schema.js");
   const { authGate } = await import("../src/auth/middleware.js");
   const { mountTaskRoutes } = await import("../src/task-routes.js");
+  const { mountTaskArchiveRoutes } = await import("../src/task-archive-routes.js");
   const { acceptTask } = await import("../src/task-accept.js");
   const { dispatchWorkers } = await import("../src/team/dispatch.js");
   const { commitAcceptanceStage, CrewChanged } = await import("../src/review-acceptance.js");
@@ -44,7 +46,8 @@ try {
   const { holdTeamForAcceptance, holdScope } = await import("../src/team-acceptance-hold.js");
   const { admissionKeysOf, admitMembers } = await import("../src/team-admission.js");
   const admitTeamMembers = async (refs: string[]) => admitMembers(await admissionKeysOf(refs));
-  const { beginAccepting, endAccepting } = await import("../src/acceptance-lock.js");
+  const { beginAccepting, beginAdmitting, endAccepting, isAdmitting } = await import("../src/acceptance-lock.js");
+  const { isTaskBusy, taskBusyRejection } = await import("../src/task-busy.js");
   const { updateTaskBase } = await import("../src/task-base-update.js");
   const { withRepoLock } = await import("../src/repo-lock.js");
 
@@ -58,6 +61,7 @@ try {
   app.use("*", authGate());
   const api = new Hono();
   mountTaskRoutes(api);
+  mountTaskArchiveRoutes(api);
   app.route("/api", api);
   const create = (body: Record<string, unknown>) => app.request("/api/tasks", {
     method: "POST", headers: { "content-type": "application/json" },
@@ -239,6 +243,34 @@ try {
     assert.equal(await stageOf("L5"), "accepted");
     release();
     await new Promise((resolve) => setTimeout(resolve, 150)); // 放开之后补送消息那一下还要读库
+  }
+
+  // ── ⑥ 派活途中归档、删除团队：等它落完（派活原来整趟占着验收锁，顺带挡住这两样）──────
+  {
+    await lead("L6");
+    const queued = gate();
+    const holding = withRepoLock(stage, async () => { queued.reached(); await queued.opened; });
+    await queued.arrived;
+    const dispatching = dispatchWorkers("L6", [{ body: "派的活" }], { run: false });
+    for (let i = 0; i < 200 && !isAdmitting("L6"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(isAdmitting("L6"), true, "派活占着加成员的位");
+    const archived = await app.request("/api/tasks/L6/archive", { method: "POST" });
+    assert.equal(archived.status, 409, "派活途中不归档");
+    assert.match(await archived.text(), /团队正在加入新的执行者/);
+    assert.match((await taskBusyRejection("L6", "删除"))?.error ?? "", /团队正在加入新的执行者，结束后再删除/, "派活途中不删");
+    queued.release();
+    await holding;
+    assert.equal((await dispatching).tasks.length, 1);
+    assert.equal(await taskBusyRejection("L6", "删除"), null, "落完就能删");
+    // 执行者名下正在加审查：归档团队同样等它。
+    const [worker] = await crewOf("L6");
+    const reviewing = beginAdmitting(worker!)!;
+    const blocked = await app.request("/api/tasks/L6/archive", { method: "POST" });
+    assert.equal(blocked.status, 409);
+    assert.match(await blocked.text(), /名下正在加入新的审查/);
+    assert.equal(isTaskBusy({ id: worker!, status: "backlog" }), true, "删项目、清残留那一道同一个判据");
+    reviewing();
+    assert.equal((await app.request("/api/tasks/L6/archive", { method: "POST" })).status, 200, "都落完了照常归档");
   }
 
   db.insert = originalInsert as typeof db.insert;

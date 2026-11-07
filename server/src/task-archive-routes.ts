@@ -10,7 +10,7 @@ import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
 import { stopMonitorsForTask } from "./monitor-reclaim.js";
-import { isAcceptingTask } from "./acceptance-lock.js";
+import { isAcceptingTask, isAdmitting } from "./acceptance-lock.js";
 import { claimWorkspaceTurn, isRunning, isTurnClaimed } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { cleanupArchivedWorkspaces } from "./task-archive-cleanup.js";
@@ -43,6 +43,10 @@ export function mountTaskArchiveRoutes(api: Hono): void {
     if (isAcceptingTask(r.id)) {
       return c.json({ error: "任务正在验收中，结束后再归档" }, 409);
     }
+    // 名下正在加成员（派活、建执行者 / 审查）：归档在它落库之前做完，新来的就落在已归档的团队名下、照样能跑。
+    if (isAdmitting(r.id)) {
+      return c.json({ error: "团队正在加入新的执行者，结束后再归档" }, 409);
+    }
     if (r.workflowMode === "free" && await hasActiveFreeReview(r.id)) {
       return c.json({ error: "自由审查正在进行，结束后再归档" }, 409);
     }
@@ -57,9 +61,10 @@ export function mountTaskArchiveRoutes(api: Hono): void {
     // 冻结的任务会继续产生外部副作用(审查实测:child beginAccepting 后归档 lead 200)。
     if (r.mode === "team") {
       const children = await db.select({ id: tasks.id, title: tasks.title }).from(tasks).where(eq(tasks.parentId, r.id));
-      const busy = children.find((child) => isAcceptingTask(child.id) || isTurnClaimed(child.id));
+      const busy = children.find((child) => isAcceptingTask(child.id) || isAdmitting(child.id) || isTurnClaimed(child.id));
       if (busy) {
-        return c.json({ error: `执行者「${busy.title}」正在验收或回合中，结束后再归档`, childId: busy.id }, 409);
+        const error = isAdmitting(busy.id) ? `执行者「${busy.title}」名下正在加入新的审查，结束后再归档` : `执行者「${busy.title}」正在验收或回合中，结束后再归档`;
+        return c.json({ error, childId: busy.id }, 409);
       }
     }
     const ts = now();
