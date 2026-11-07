@@ -5,11 +5,12 @@
 // ① 建执行者已经过了路由检查、正要落库，这时去验收团队 → 不验收（验收、更新基线都说清是在加执行者）；落库之后才放开；
 // ② 验收已经在进行（停在落章的事务门口），这时建执行者 → 409，验收照常落章，库里没有多出来的执行者；
 //    过了路由里那一句早拒、在落库前排队时验收开始了 → 落库那一道照样拒；加成员之间按计数，没占全就一个不占；
-//    普通任务派生的子任务不占（它的验收不管名下多了谁）；
+//    普通任务一样占（挂靠关系不会变，mode 会变）；
 // ③ 审查任务那一支（reviewOf 指向团队的共享执行者）同样占住它所属的团队；
 // ④ 加成员之间不互斥：建执行者落库途中，调度台派活不会被当成「正在验收」拒掉；
 // ⑤ 兜底：绕过互斥直接多出一位共享执行者，落章那一个事务认得出来 —— 不盖章，说清原因；
-// ⑥ 加着成员的时候不删、不归档团队（不然新来的落在没了 / 归档了的团队名下）。
+// ⑥ 加着成员的时候不删、不归档团队（不然新来的落在没了 / 归档了的团队名下）；
+// ⑦ 占哪几位不看 mode：落库排队期间普通任务改成团队并验收，落库那一道照样拒（第 2 轮审查的复现）。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -104,8 +105,8 @@ try {
     const { response, held } = await pausedCreate({ parentId: "L1" });
     const refused = await acceptTask("L1", "human", { expectedResultVersion: "-" });
     assert.equal(refused.accepted, false, "执行者正要落库：这时不验收");
-    assert.match(JSON.stringify(refused), /团队正在加入新的执行者/, "说清是在加执行者，不是「正在验收」");
-    assert.match((await updateTaskBase("L1", "-")).error ?? "", /团队正在加入新的执行者/, "更新基线撞上的也照实说");
+    assert.match(JSON.stringify(refused), /名下正在加入新的任务/, "说清是在加任务，不是「正在验收」");
+    assert.match((await updateTaskBase("L1", "-")).error ?? "", /名下正在加入新的任务/, "更新基线撞上的也照实说");
     held.release();
     assert.equal((await response).status, 201, "执行者照常建好");
     assert.equal((await crewOf("L1")).length, 1);
@@ -165,7 +166,7 @@ try {
     await holding;
     const refused = await response;
     assert.equal(refused.status, 409, "落库那一道拒：加不进来");
-    assert.match(JSON.stringify(await refused.json()), /所属团队正在验收/);
+    assert.match(JSON.stringify(await refused.json()), /挂靠的任务正在验收/);
     assert.deepEqual(await crewOf("L7"), [], "没有落库");
     endAccepting("L7");
     // 加成员之间按计数：一处放了，另一处还占着。
@@ -178,15 +179,18 @@ try {
     endAccepting("L7");
   }
 
-  // ── ②'' 普通任务派生的子任务不占：它的验收不管名下多了谁 ─────────────────
+  // ── ②'' 占哪几位只看挂靠关系，不看 mode：普通任务也一样占 ──────────────────
   {
     await db.insert(tasks).values({ id: "S1", projectId: "p", title: "普通任务", body: "", mode: "single", status: "done", useWorktree: false, endedAt: at, createdAt: at, updatedAt: at } as never);
-    assert.deepEqual(await admissionKeysOf(["S1"]), [], "不是团队：不占");
+    assert.deepEqual(await admissionKeysOf(["S1"]), ["S1"], "普通任务：占它自己");
     assert.deepEqual((await admissionKeysOf(["W2"])).sort(), ["L2", "W2"], "团队执行者连同调度台");
+    assert.deepEqual(await admissionKeysOf(["gone"]), ["gone"], "查不到的也占（它的上级查不到就不连）");
     assert.equal(beginAccepting("S1"), true);
     const derived = await create({ parentId: "S1", title: "派生的子任务" });
-    assert.equal(derived.status, 201, "普通任务验收期间照样能派生");
+    assert.equal(derived.status, 409, "普通任务验收期间也不往它名下落任务");
+    assert.match(JSON.stringify(await derived.json()), /挂靠的任务正在验收/);
     endAccepting("S1");
+    assert.equal((await create({ parentId: "S1", title: "派生的子任务" })).status, 201, "验收结束照常派生");
   }
 
   // ── ③ 审查任务那一支：reviewOf 指向团队的共享执行者 ─────────────────────
@@ -199,7 +203,7 @@ try {
     const { response, held } = await pausedCreate({ reviewOf: "W3", title: "审查" });
     const refused = await acceptTask("L3", "human", { expectedResultVersion: "-" });
     assert.equal(refused.accepted, false, "审查任务正要落库：它所属的团队不验收");
-    assert.match(JSON.stringify(refused), /团队正在加入新的执行者/);
+    assert.match(JSON.stringify(refused), /名下正在加入新的任务/);
     held.release();
     assert.equal((await response).status, 201);
     assert.equal(beginAccepting("L3"), true, "落库之后放开");
@@ -256,8 +260,8 @@ try {
     assert.equal(isAdmitting("L6"), true, "派活占着加成员的位");
     const archived = await app.request("/api/tasks/L6/archive", { method: "POST" });
     assert.equal(archived.status, 409, "派活途中不归档");
-    assert.match(await archived.text(), /团队正在加入新的执行者/);
-    assert.match((await taskBusyRejection("L6", "删除"))?.error ?? "", /团队正在加入新的执行者，结束后再删除/, "派活途中不删");
+    assert.match(await archived.text(), /名下正在加入新的任务/);
+    assert.match((await taskBusyRejection("L6", "删除"))?.error ?? "", /名下正在加入新的任务（执行者、子任务或审查），结束后再删除/, "派活途中不删");
     queued.release();
     await holding;
     assert.equal((await dispatching).tasks.length, 1);
@@ -267,10 +271,41 @@ try {
     const reviewing = beginAdmitting(worker!)!;
     const blocked = await app.request("/api/tasks/L6/archive", { method: "POST" });
     assert.equal(blocked.status, 409);
-    assert.match(await blocked.text(), /名下正在加入新的审查/);
+    assert.match(await blocked.text(), /名下正在加入新的任务，结束后再归档/);
     assert.equal(isTaskBusy({ id: worker!, status: "backlog" }), true, "删项目、清残留那一道同一个判据");
     reviewing();
     assert.equal((await app.request("/api/tasks/L6/archive", { method: "POST" })).status, 200, "都落完了照常归档");
+  }
+
+  // ── ⑦ 落库排队期间普通任务改成团队、开始验收：落库那一道照样拒（名单不按排队前的 mode 算）──
+  {
+    await db.insert(tasks).values({ id: "M7", projectId: "p", title: "起初是普通任务", body: "", mode: "single", status: "done", useWorktree: false, endedAt: at, createdAt: at, updatedAt: at } as never);
+    const queued = gate();
+    const holding = withRepoLock(stage, async () => { queued.reached(); await queued.opened; });
+    await queued.arrived;
+    const creating = create({ parentId: "M7", title: "后加的执行者" });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const patched = await app.request("/api/tasks/M7", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "team" }) });
+    assert.equal(patched.status, 200, "排队期间改成团队（这时还没在验收）");
+    // 验收落章之后、函数返回之前放开仓库锁：排着的那一次这才落库。
+    const originalTransaction = db.transaction.bind(db);
+    let attempt: Response | null = null;
+    db.transaction = (async (...args: unknown[]) => {
+      if (!new Error().stack?.includes("commitAcceptanceStage")) return (originalTransaction as (...rest: unknown[]) => Promise<unknown>)(...args);
+      db.transaction = originalTransaction as typeof db.transaction;
+      const result = await (originalTransaction as (...rest: unknown[]) => Promise<unknown>)(...args);
+      queued.release();
+      await holding;
+      attempt = await creating;
+      return result;
+    }) as typeof db.transaction;
+    const accepted = await acceptTask("M7", "human", { expectedResultVersion: at });
+    db.transaction = originalTransaction as typeof db.transaction;
+    assert.equal(accepted.accepted, true, `验收照常落章：${JSON.stringify(accepted)}`);
+    assert.ok(attempt, "确实在验收途中落库过一次");
+    assert.equal(attempt!.status, 409, "验收还没结束：落不进来");
+    assert.deepEqual(await crewOf("M7"), [], "库里没有多出来的执行者");
+    await new Promise((resolve) => setTimeout(resolve, 150)); // 放开之后补送消息那一下还要读库
   }
 
   db.insert = originalInsert as typeof db.insert;

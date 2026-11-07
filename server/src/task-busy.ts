@@ -58,7 +58,7 @@ export async function taskBusyRejection(taskId: string, verb: string): Promise<T
     return { error: `任务正在执行，请先停止再${verb}`, status: row.status };
   }
   if (isAcceptingTask(taskId)) return { error: `任务正在验收中，结束后再${verb}` };
-  if (isAdmitting(taskId)) return { error: `团队正在加入新的执行者，结束后再${verb}` };
+  if (isAdmitting(taskId)) return { error: `名下正在加入新的任务（执行者、子任务或审查），结束后再${verb}` };
   // 跟「在验收」分开报:用户要做的事不一样 —— 这一条的出路是去验收台上把它收掉。
   if (hasLiveAcceptGate(taskId)) {
     return { error: `验收前置命令正在这个任务的工作区里跑，等它跑完或在验收台上收掉它再${verb}`, status: row.status };

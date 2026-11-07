@@ -180,7 +180,7 @@ api.post("/tasks", async (c) => {
   }
   // 团队验收占着全队（team-acceptance-hold.ts）：这时加进来的执行者、审查任务不在占位里，能照常起跑、改共享目录。
   if ((b.parentId && heldForAcceptance(b.parentId)) || (b.reviewOf && heldForAcceptance(b.reviewOf))) {
-    return c.json({ error: "所属团队正在验收，结束后再添加执行者或审查", parentId: b.parentId ?? null, reviewOf: b.reviewOf ?? null }, 409);
+    return c.json({ error: "所属团队正在验收，结束后再建它名下的执行者或审查", parentId: b.parentId ?? null, reviewOf: b.reviewOf ?? null }, 409);
   }
   // 没显式指定就按**这个请求配不配自由工作流**推导（`freeWorkflowFits` 与下面三条门禁
   // 共用同一份判据）。以前这里写死 `preset`，于是同一件事从界面建和从 MCP/脚本建会落到

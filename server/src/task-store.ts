@@ -322,11 +322,10 @@ export async function createTasks(
     };
   }));
   const repos = [...new Set(projectRows.map(p => p.repoPath))].sort();
-  // 挂在团队名下的（执行者、审查）：落库那一下占着「加成员」的位，跟团队验收互斥（team-admission.ts）。
-  const admission = await admissionKeysOf([...rows.flatMap((row) => [row.parentId, row.reviewOf]), ...alsoAdmit]);
   const insert = async (index: number): Promise<void> => {
     if (index < repos.length) return withRepoLock(repos[index], () => insert(index + 1));
-    const admitted = admitMembers(admission);
+    // 挂在别的任务名下的（执行者、子任务、审查）：落库那一下占着「加成员」的位，跟挂靠任务的验收互斥（team-admission.ts）。
+    const admitted = admitMembers(await admissionKeysOf([...rows.flatMap((row) => [row.parentId, row.reviewOf]), ...alsoAdmit]));
     if (!admitted) throw new TeamAcceptingError();
     try {
       await insertAdmitted();
