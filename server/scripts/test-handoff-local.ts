@@ -580,7 +580,7 @@ try {
       assert.equal(imported.verifyCompletedSteps, scenario === "complete" ? completedSteps : "[]");
       assert.equal(imported.workflow, workflow);
       assert.equal(imported.workflowAt, "h2");
-      // 停在关口上导入：本机领一个新的关口身份，此前发出去的待验收卡一律落空（task-human-gate.ts importedHumanGate）。
+      // 接力导入一律领新的关口身份，本机此前发出去的待验收卡一律落空（task-human-gate.ts、handoff-import.ts）。
       assert.ok(imported.humanGateId && !importedGates.has(imported.humanGateId), "导入时领了一个新的关口身份");
       importedGates.add(imported.humanGateId!);
       assert.equal(imported.stage, "awaiting_acceptance");

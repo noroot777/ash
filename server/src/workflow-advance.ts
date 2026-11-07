@@ -25,11 +25,11 @@ import { tasks } from "./db/schema.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { verifyStationAction } from "./review-policy.js";
-import { advanceSegment, type SegmentOptions } from "./workflow-steps.js";
+import { advanceSegment, type SegmentOptions, type SegmentResult } from "./workflow-steps.js";
 import { now } from "./util.js";
 import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js";
 import { AshMcpUnreachable } from "./ash-mcp-launch-gate.js";
-import { newHumanGate } from "./task-human-gate.js";
+import { leavesHumanGate, newHumanGate } from "./task-human-gate.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -40,11 +40,14 @@ export interface WorkflowAdvanceOptions extends SegmentOptions {
 
 /**
  * 把游标挪到某一站并广播。广播不能省，理由见文件头不变量①。
- * humanGate：挪到的是一道「等我点头」时，这一次到达的身份和游标同一条语句写（task-human-gate.ts）。
+ * 挪走的是一道「等我点头」时，在同一个事务里给线上的下一段领新身份（为什么在离开时、不在到达时，见 task-human-gate.ts）。
  */
-export async function setWorkflowAt(taskId: string, stepId: string | null, authority?: ReviewAuthority, humanGate?: string): Promise<void> {
+export async function setWorkflowAt(taskId: string, stepId: string | null, authority?: ReviewAuthority): Promise<void> {
   await withReviewAuthority(authority, async (transaction) => {
-    await transaction.update(tasks).set({ workflowAt: stepId, ...(humanGate ? { humanGateId: humanGate } : {}), updatedAt: now() })
+    const before = (await transaction.select({ workflow: tasks.workflow, workflowAt: tasks.workflowAt })
+      .from(tasks).where(eq(tasks.id, taskId))).at(0);
+    const leaving = !!before && leavesHumanGate(before.workflow, before.workflowAt, stepId);
+    await transaction.update(tasks).set({ workflowAt: stepId, ...(leaving ? { humanGateId: newHumanGate() } : {}), updatedAt: now() })
       .where(eq(tasks.id, taskId));
   });
   await publishTaskUpdated(taskId);
@@ -127,18 +130,21 @@ async function atVerifyStation(
  * `fromStepId` 就是「我是从这一站回来的」：干活那一轮结算传 run 站、审查有结论传那一站
  * 验证、用户点头传那一道关口。传 null 或指到不存在的站（老任务、换过快照）时不动——
  * 调用方负责回落到 firstAnchor。
+ *
+ * 返回卡住的那一段（没卡住是 undefined）：放行之后要如实告诉点的人线没能走过去（task-accept-tail.ts releaseGate）。
  */
 export async function advanceWorkflowFrom(
   task: TaskRow,
   def: WorkflowDef | null,
   fromStepId: string | null | undefined,
   opts: WorkflowAdvanceOptions = {},
-): Promise<void> {
+): Promise<SegmentResult | undefined> {
   if (!def || !fromStepId) return;
   let from: string | null = fromStepId;
   // 循环而不是递归：跳过一站验证之后还要接着走下一段，可能连着跳好几站。
   while (from) {
-    if (!(await advanceSegment(task, def, from, opts))) return; // 这一段卡住了，别再往下推
+    const segment = await advanceSegment(task, def, from, opts);
+    if (!segment.ok) return segment; // 这一段卡住了，别再往下推
     const next: WorkflowStep | null = nextAnchor(def, from);
     if (!next) {
       // 走到头了。游标停在最后一站，前端据此知道这条线已经走完。
@@ -146,7 +152,7 @@ export async function advanceWorkflowFrom(
       return;
     }
     if (next.kind === "human") {
-      await setWorkflowAt(task.id, next.id, opts.reviewAuthority, newHumanGate());
+      await setWorkflowAt(task.id, next.id, opts.reviewAuthority);
       const { enterHumanGate } = await import("./review.js");
       await enterHumanGate(task.id, opts.reviewAuthority);
       return;

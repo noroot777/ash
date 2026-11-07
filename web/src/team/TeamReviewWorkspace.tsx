@@ -254,7 +254,10 @@ export function AcceptanceControls({
       // 合并成了、但「点头之后」那一段（发布脚本之类）挂了，是两件事，得分开说：
       // 只报一句「验收通过」，用户下次知道发布挂了就是在线上出事的时候。
       notify((result.kind === "gate_released"
-        ? "已放行，这条线继续往下走"
+        // 放行之后线没能走过去，服务端会带回 tail.ok=false：照实说停住了，别说「继续往下走」。
+        ? result.tail && !result.tail.ok
+          ? `已放行，但线没能接着往下走${result.tail.step ? `：「${result.tail.step}」没跑过` : ""}，停在这一道上，详情见任务时间线`
+          : "已放行，这条线继续往下走"
         : result.tail && !result.tail.ok
           ? `已合并，但「${result.tail.step ?? "点头之后那一段"}」没跑过，详情见任务时间线`
           // 不提交那一档必须在提示里就说破：否则用户看见「验收通过」就以为合完了，

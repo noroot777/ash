@@ -455,31 +455,41 @@ function acceptOutcome(result: AshResult, pressed: string): Outcome {
 /**
  * 验收接口说「成了」时实际做了什么（task-accept.ts AcceptSuccess）：放行、就地、只记认可、只打标签、合进工作区没提交、
  * 合并，各说各的；「点头之后」那一段没跑成、清理有提醒、验收前自动提交了，都另说一句（网页验收的提示同一套口径）。
+ * 导出只为回归测试钉住只推标题那一版不带分支名、标签名（test-im-gates.ts）。
  */
-function acceptedOutcome(data: Record<string, unknown>): Pick<Outcome, "text" | "tone" | "brief"> {
-  const target = typeof data.targetBranch === "string" ? data.targetBranch : null;
-  const done = data.kind === "gate_released" ? "已放行这一关，这条线接着往下走。"
+export function acceptedOutcome(data: Record<string, unknown>): Pick<Outcome, "text" | "tone" | "brief"> {
+  const tail = data.tail && typeof data.tail === "object" ? data.tail as { ok?: unknown; step?: unknown; reason?: unknown } : null;
+  const tailFailed = tail?.ok === false;
+  const step = typeof tail?.step === "string" ? tail.step : null;
+  const reason = typeof tail?.reason === "string" ? tail.reason : null;
+  // 放行之后线没能走过去（task-accept-tail.ts releaseGate）：不说「接着往下走」。
+  const released = data.kind === "gate_released";
+  // 分支名、标签名只进完整那一版；只推标题的项目拿 plain（和确认框换成不带细节的那一句同一个口径）。
+  const said = (target: string | null, tag: string | null) => released ? `已放行这一关，${tailFailed ? "" : "这条线接着往下走。"}`
     : data.kind === "already_accepted" ? "这个任务之前已经验收过了。"
       : data.kind === "in_place" ? "已验收：改动就在原工作区里，没有动 git。"
         : data.kind === "marked_only" ? "已验收：这条线上没有「合并并清理」，只记下了认可，任务分支和工作区都留着。"
-          : data.merge === "tagged" ? `已验收：只打了标签${typeof data.tag === "string" ? ` ${data.tag}` : ""}，没有合并。`
+          : data.merge === "tagged" ? `已验收：只打了标签${tag ? ` ${tag}` : ""}，没有合并。`
             : data.merge === "no_commit" ? `已验收：改动已合进 ${target ?? "目标分支"} 的工作区并暂存，还没提交。`
               : `已验收合并${target ? `（合入 ${target}）` : ""}。`;
-  const tail = data.tail && typeof data.tail === "object" ? data.tail as { ok?: unknown; step?: unknown; reason?: unknown } : null;
-  const tailFailed = tail?.ok === false;
-  const step = typeof tail?.step === "string" ? tail.step : "点头之后那一段";
+  const done = said(typeof data.targetBranch === "string" ? data.targetBranch : null, typeof data.tag === "string" ? data.tag : null);
+  const plain = said(null, null);
+  // 尾段原因是命令的原话：只推标题那一版不带。
+  const stuck = (withReason: boolean) => released
+    ? `但线没能接着往下走${step ? `：「${step}」没跑成${withReason && reason ? `（${reason}）` : ""}` : ""}，停在这一道上，详情在 ash 里。`
+    : `但「${step ?? "点头之后那一段"}」没跑成${withReason && reason ? `：${reason}` : ""}，详情在 ash 里。`;
   const warnings = Array.isArray(data.warnings) ? data.warnings.length : 0;
   const autoCommit = data.autoCommit && typeof data.autoCommit === "object" ? acceptanceAutoCommitMessage(data.autoCommit as AcceptanceAutoCommitOutcome) : "";
   const notes = [
     autoCommit ? `${autoCommit}。` : "",
     warnings ? `清理时有 ${warnings} 条提醒，详情在 ash 里。` : "",
   ].join("");
-  const failed = tailFailed ? `但「${step}」没跑成${typeof tail?.reason === "string" ? `：${tail.reason}` : ""}，详情在 ash 里。` : "";
   return {
-    text: done + failed + notes,
+    text: done + (tailFailed ? stuck(true) : "") + notes,
     tone: tailFailed ? "orange" : "green",
-    // 尾段原因、自动提交原因是命令和 git 的原话：只推标题时换成不带它们的那一句。
-    ...(failed || autoCommit ? { brief: `${done}${tailFailed ? `但「${step}」没跑成，` : ""}详情在 ash 里。` } : {}),
+    // 尾段原因、自动提交原因是命令和 git 的原话：只推标题时连同分支名、标签名一起换成不带它们的那一句。
+    ...(tailFailed || autoCommit || plain !== done
+      ? { brief: `${plain}${tailFailed ? stuck(false) : autoCommit ? "详情在 ash 里。" : ""}` } : {}),
   };
 }
 

@@ -10,6 +10,7 @@ import { taskWorkflowDef } from "./workflows.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
+import type { SegmentResult } from "./workflow-steps.js";
 import type { AcceptSuccess } from "./task-accept.js";
 import { resumeReviewAcceptedTail } from "./review-acceptance.js";
 
@@ -23,8 +24,8 @@ export type AcceptTail = {
 export async function finishAcceptedTail(result: AcceptSuccess, by: AcceptBy, opts: WorkflowAdvanceOptions,
   originalFinalizer: boolean): Promise<AcceptSuccess> {
   if (result.kind === "gate_released") {
-    await releaseGate(result.taskId, opts);
-    return result;
+    const tail = await releaseGate(result.taskId, opts);
+    return tail ? { ...result, tail } : result;
   }
   const reviewTail = await resumeReviewAcceptedTail(result.taskId, originalFinalizer);
   if (reviewTail !== undefined) return reviewTail ? { ...result, tail: reviewTail } : result;
@@ -49,15 +50,28 @@ export function hasAcceptedTail(task: typeof tasks.$inferSelect): boolean {
 // 中途关口放行之后接着往下走：跑完这一段，再按下一个锚点是什么决定（又一站验证、
 // 下一道关口、还是这条线走到头）。**不传 skipAccept** —— 这一按没有做任何合并，
 // 线上真画了「合并并清理」就该由它自己走到那一站时执行。
-export async function releaseGate(taskId: string, opts: WorkflowAdvanceOptions): Promise<void> {
+//
+// 走完游标还停在这一道上 = 线没能走过去（这一段没跑成、下一站验证轮数用尽、出错了）：返回 ok:false 如实带回去，
+// 别让点放行的那一端以为线在往下走（飞书的结果卡、网页的提示都读它）。再放一次就从这一道重走。
+export async function releaseGate(taskId: string, opts: WorkflowAdvanceOptions): Promise<AcceptTail | null> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task) return;
+  if (!task) return null;
   const { advanceWorkflowFrom } = await import("./workflow-advance.js");
-  await advanceWorkflowFrom(task, taskWorkflowDef(task.workflow), task.workflowAt, opts)
-    .catch((error) => appendTaskTimeline(
-      taskId,
-      `放行之后想接着往下走，但出错了（${error instanceof Error ? error.message : String(error)}），请手动续跑。`,
-    ));
+  const stuck = await advanceWorkflowFrom(task, taskWorkflowDef(task.workflow), task.workflowAt, opts)
+    .catch(async (error): Promise<SegmentResult> => {
+      const reason = error instanceof Error ? error.message : String(error);
+      await appendTaskTimeline(taskId, `放行之后想接着往下走，但出错了（${reason}），请手动续跑。`);
+      return { ok: false, reason };
+    });
+  // 「在等一件已经开跑的事」不是没走过去，那件事完了会自己接着走（SegmentResult.halted）。
+  if (stuck?.halted) return null;
+  const after = (await db.select({ workflowAt: tasks.workflowAt }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (after?.workflowAt !== task.workflowAt) return null;
+  return {
+    ok: false,
+    ...(stuck?.failed ? { step: STEP_LABELS[stuck.failed.kind] } : {}),
+    ...(stuck?.reason ? { reason: stuck.reason } : {}),
+  };
 }
 
 // 点头之后线上还写着的那几站（跑一条发布命令、把预览再开起来之类）。

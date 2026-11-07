@@ -48,7 +48,10 @@ export async function outcomesOf(view: TaskView): Promise<Outcome[]> {
     .orderBy(desc(acceptGateRuns.startedAt)).limit(1)).at(0);
   // 牌子和身份同一条语句现读，不拿视图快照里的 stage 配后读的身份：两次读之间摘了牌，配出来的是一个谁都不是的身份。
   const accepted = isAcceptedStage(task.stage)
-    ? (await db.select({ stage: tasks.stage, identity: acceptanceIdentity, method: tasks.acceptedMergeMethod }).from(tasks).where(eq(tasks.id, task.id))).at(0)
+    ? (await db.select({
+      stage: tasks.stage, identity: acceptanceIdentity,
+      acceptedMergeMethod: tasks.acceptedMergeMethod, acceptedMergeCommit: tasks.acceptedMergeCommit,
+    }).from(tasks).where(eq(tasks.id, task.id))).at(0)
     : undefined;
   // 门禁在前：绿了紧接着自动合并时，两条按事情发生的先后发。
   return [
@@ -57,7 +60,7 @@ export async function outcomesOf(view: TaskView): Promise<Outcome[]> {
         text: run.status === "passed" ? `验收前置命令通过了：${title}` : `验收前置命令没通过：${title}，详情回 ash 看。` }
       : { kind: "gate", value: NONE, text: null },
     ...(accepted && isAcceptedStage(accepted.stage as TaskStage | null)
-      ? [{ kind: "result" as const, text: `${acceptedLabel(accepted.method)}：${title}`, value: accepted.identity }] : []),
+      ? [{ kind: "result" as const, text: `${acceptedLabel(accepted)}：${title}`, value: accepted.identity }] : []),
   ];
 }
 

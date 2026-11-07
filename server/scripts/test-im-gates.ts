@@ -4,13 +4,17 @@
 // ① 点第一道关的卡：只放这一道，卡上照实说「已放行」不说「合并」；线走到第二道关时推一张新卡（不被上一张已处理的卡
 //    占住）；最后一道关的卡换回验收的说法，确认框和网页同一句；点它就地验收，结果和完成通知都不说「合并」；
 // ② 网页先放了第一道，再点飞书里第一道的旧卡：回「过时」，不放后来那一道；
-// ③ 接口自己也核：带着上一道关的身份进验收接口 → 409、线不动；不带关口那一截的老卡碰上已经领了身份的关也一样；
-//    带着此刻这道关就照常放；加列之前就停在关口上的老任务（没有身份）代次和以前同形，老卡照旧有效；
+// ③ 接口自己也核：带着上一段的身份（线还没离开过关口时是 NO_GATE，和加列之前的老卡同形）进验收接口 → 409、线不动；
+//    带着此刻这一段就照常放；
 // ④ 放行按「还是核过的那一道关」写：核过之后线才换了关，放行落空、阶段不动；
 // ⑤ 门禁跑完自动续验收的那一次带着关口身份：选择原样存、原样读回来；
 // ⑥ 只推标题的项目：待验收卡的确认框不带分支这些细节；
-// ⑦ 放行之后、线走到下一站之前（游标还在这一道上）：身份不变、不冒新卡；同一道关的卡再点不放第二遍；
-// ⑧ 接力导入停在关口上的任务：领新身份（不沿用带过来的），不在关口上不留。
+// ⑦ 放行之后线停在这一道上（往下走没成、或者被重启打断）：身份不变、不冒新卡；同一段的卡再点就是重走一遍，照常放；
+// ⑧ 先验证、再点头：验证还在跑时发的卡走到关口原地换成放行的样子、不另推；放行进了下一站验证是新的一段、新卡，
+//    旧卡收成「这一关已经放行过了」、不会被翻回来；走到下一道关又是原地换。
+// ⑨ 验收结果的说法：只推标题那一版不带分支名、标签名、尾段原话；「合并后不提交」事后提交了就说合并了；
+// ⑩ 放行之后往下走那一段没跑成：结果卡照实说线停住了、不说「接着往下走」，网页那一端拿到的响应也带着停住了。
+// 接力导入一律新领身份，钉在 test-handoff-local.ts。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,11 +37,12 @@ try {
   const { acceptTask } = await import("../src/task-accept.js");
   const { advanceWorkflowFrom } = await import("../src/workflow-advance.js");
   const { taskWorkflowDef } = await import("../src/workflows.js");
-  const { humanGateOf, importedHumanGate, NO_GATE, releaseHumanGate } = await import("../src/task-human-gate.js");
+  const { humanGateOf, NO_GATE, releaseHumanGate } = await import("../src/task-human-gate.js");
   const { resultVersionOf } = await import("../src/task-result-version.js");
   const { parseChoices } = await import("../src/accept-gate-handoff.js");
   const { acceptIdentityOf, viewsOf } = await import("../src/im/attention.js");
-  const { turnCard } = await import("../src/im/cards.js");
+  const { acceptedLabel, turnCard } = await import("../src/im/cards.js");
+  const { acceptedOutcome } = await import("../src/im/actions.js");
   const { patchOptions } = await import("../src/im/meta.js");
   const { makeStep } = await import("@ash/shared/workflow");
   const { APP, OWNER, FakeFeishu, buildApp, assemble, contentOf, textOf, buttonsOf } = await import("./im-fixture.js");
@@ -76,7 +81,7 @@ try {
     const first = await row("g2");
     assert.equal(first.workflowAt, "first");
     assert.equal(first.stage, "awaiting_acceptance");
-    assert.ok(first.humanGateId, "走到关口时领了身份");
+    assert.equal(first.humanGateId, null, "还没离开过关口：没有身份");
     const [card] = await cards("g2");
     assert.ok(card, "第一道关推了卡");
     assert.equal(acceptButton(card!).text, "放行，继续下一站", "中途那道关：按钮说放行");
@@ -90,7 +95,7 @@ try {
     const second = await row("g2");
     assert.equal(second.workflowAt, "second");
     assert.equal(second.stage, "awaiting_acceptance");
-    assert.notEqual(second.humanGateId, first.humanGateId, "第二道关领了新的身份");
+    assert.ok(second.humanGateId, "离开第一道关时领了新的一段");
     assert.equal(await resultVersionOf(second), await resultVersionOf(first), "成果身份没变：只靠它分不出两道关");
 
     fake.reset();
@@ -124,7 +129,8 @@ try {
     await seed("g3", ["first", "second", "third"]);
     const [old] = await cards("g3");
     const firstGate = acceptIdentityOf(old!.subject!).humanGate;
-    assert.equal(firstGate, (await row("g3")).humanGateId, "卡的代次里带着这一道关的身份");
+    assert.equal(firstGate, NO_GATE, "还没离开过关口：代次没有关口那一截，和加列之前的卡同形");
+    assert.equal(old!.subject, `a:${await resultVersionOf(await row("g3"))}`);
     const web = await acceptTask("g3");
     assert.equal(web.accepted && web.kind, "gate_released", JSON.stringify(web));
     assert.equal((await row("g3")).workflowAt, "second");
@@ -137,19 +143,12 @@ try {
     const resultVersion = await resultVersionOf(now);
     const older = await im.ash.post(principal, "/api/tasks/g3/accept", { expectedResultVersion: resultVersion, expectedHumanGate: firstGate });
     assert.equal(!older.ok && older.data.reason, "gate_changed", JSON.stringify(older));
-    const legacy = await im.ash.post(principal, "/api/tasks/g3/accept", { expectedResultVersion: resultVersion, expectedHumanGate: NO_GATE });
-    assert.equal(!legacy.ok && legacy.data.reason, "gate_changed", "不带关口那一截的老卡碰上已经领了身份的关也不放");
     now = await row("g3");
-    assert.equal(now.workflowAt, "second", "两次都没放");
+    assert.equal(now.workflowAt, "second", "没放");
     assert.equal(now.stage, "awaiting_acceptance");
     const current = await im.ash.post(principal, "/api/tasks/g3/accept", { expectedResultVersion: resultVersion, expectedHumanGate: humanGateOf(now) });
     assert.equal(current.ok && current.data.kind, "gate_released", "带着此刻这道关照常放");
     assert.equal((await row("g3")).workflowAt, "third");
-
-    // 加列之前就停在关口上的老任务：没有身份，代次和以前同形（老卡照旧有效）。
-    await db.update(tasks).set({ humanGateId: null }).where(eq(tasks.id, "g3"));
-    const view = (await viewsOf(["g3"])).get("g3")!;
-    assert.equal(view.turn?.generation, `a:${await resultVersionOf(await row("g3"))}`);
   }
 
   // ── ④ 放行按「还是核过的那一道关」写 ────────────────────────────────────
@@ -186,12 +185,12 @@ try {
     assert.ok(view.turn?.kind === "accept" && !shown.includes(view.turn.confirm), "只推标题时换成不带细节的那一句");
   }
 
-  // ── ⑦ 放行之后、线走到下一站之前 ─────────────────────────────────────────
+  // ── ⑦ 放行之后线停在这一道上 ─────────────────────────────────────────────
   {
     await seed("g7", ["first", "second"]);
     const [card] = await cards("g7");
     const seen = await row("g7");
-    // 只放行、不往下走：停在「放行之后、走到下一站之前」那一段（中间站跑着的时候就是这样）。
+    // 只放行、不往下走：和往下走那一段没跑成、或者跑到一半被重启打断之后一个样子。
     const released = await releaseHumanGate(seen, taskWorkflowDef(seen.workflow), null);
     assert.equal(released.accepted && released.kind, "gate_released");
     const between = await row("g7");
@@ -207,19 +206,119 @@ try {
     const twice = await im.ash.post(principal, "/api/tasks/g7/accept", {
       expectedResultVersion: acceptIdentityOf(card!.subject!).resultVersion, expectedHumanGate: acceptIdentityOf(card!.subject!).humanGate,
     });
-    assert.equal(!twice.ok && twice.data.reason, "gate_changed", `同一道关的卡不放第二遍：${JSON.stringify(twice)}`);
-    assert.match(JSON.stringify(twice.data), /已经放行过了/);
-    assert.equal((await row("g7")).workflowAt, "first", "没有再往下推一遍");
+    assert.equal(twice.ok && twice.data.kind, "gate_released", `同一段的卡再点就是重走：${JSON.stringify(twice)}`);
+    assert.equal((await row("g7")).workflowAt, "second", "这一次走过去了");
   }
 
-  // ── ⑧ 接力导入 ──────────────────────────────────────────────────────────
+  // ── ⑧ 先验证、再点头 ────────────────────────────────────────────────────
   {
-    const line = JSON.stringify({ workspace: "shared", steps: [makeStep("run", "run"), makeStep("human", "gate"), makeStep("accept", "accept")] });
-    const arrived = importedHumanGate(line, "gate");
-    assert.ok(arrived && arrived !== NO_GATE, "停在关口上：领一个身份");
-    assert.notEqual(importedHumanGate(line, "gate"), arrived, "每次导入都是新的一个");
-    assert.equal(importedHumanGate(line, "run"), null, "不在关口上不留");
-    assert.equal(importedHumanGate(null, "gate"), null);
+    const line = JSON.stringify({ workspace: "shared", steps: [
+      makeStep("run", "run"), makeStep("verify", "v1"), makeStep("human", "first"), makeStep("verify", "v2"), makeStep("human", "second"),
+      makeStep("accept", "accept"),
+    ] });
+    const def = taskWorkflowDef(line);
+    const noVerify = { startVerifyRound: async () => undefined }; // 只看游标和卡，不真开验证轮
+    await db.insert(tasks).values({
+      id: "g8", projectId: "p1", title: "关口 g8", body: "", status: "done", useWorktree: false, workflow: line, workflowAt: "run",
+      endedAt: at, createdAt: at, updatedAt: at,
+    } as never);
+    await advanceWorkflowFrom(await row("g8"), def, "run", noVerify);
+    assert.equal((await row("g8")).workflowAt, "v1");
+    await db.update(tasks).set({ stage: "verifying" }).where(eq(tasks.id, "g8"));
+    fake.reset();
+    await im.reconciler.reconcile(["g8"]);
+    await im.settle();
+    const [early] = await cards("g8");
+    assert.ok(early, "验证还在跑：待验收卡已经发了");
+    assert.equal(acceptButton(early!).text, "验收通过");
+
+    // 验证过了，走进第一道关：同一张卡原地换成放行的样子。
+    await db.update(tasks).set({ stage: "verified" }).where(eq(tasks.id, "g8"));
+    await advanceWorkflowFrom(await row("g8"), def, "v1", noVerify);
+    assert.equal((await row("g8")).workflowAt, "first");
+    fake.reset();
+    await im.reconciler.reconcile(["g8"]);
+    await im.settle();
+    let all = await cards("g8");
+    assert.equal(all.length, 1, "走到关口不另推一张");
+    assert.equal(fake.sends().length, 0, "不发新消息");
+    assert.notEqual(all[0]!.state, "resolved", "卡没被收起来");
+    assert.equal(acceptButton(all[0]!).text, "放行，继续下一站", "原地换成放行的样子");
+
+    // 放行，线走进下一站验证：新的一段、新卡；旧卡照实收起来，不被翻回来。
+    await releaseHumanGate(await row("g8"), def, null);
+    await advanceWorkflowFrom(await row("g8"), def, "first", noVerify);
+    assert.equal((await row("g8")).workflowAt, "v2");
+    await db.update(tasks).set({ stage: "verifying" }).where(eq(tasks.id, "g8"));
+    fake.reset();
+    await im.reconciler.reconcile(["g8"]);
+    await im.settle();
+    all = await cards("g8");
+    assert.equal(all.length, 2, "新的一段一张新卡");
+    const old = all.find((item) => item.id === early!.id)!;
+    assert.equal(old.state, "resolved");
+    assert.match(old.content, /这一关已经放行过了/, "不说成「有了新的一轮」");
+    const later = all.find((item) => item.id !== early!.id)!;
+    assert.ok(acceptIdentityOf(later.subject!).humanGate !== NO_GATE, "新的一段带着身份");
+
+    // 第二站验证过了，走进最后一道关：又是原地换，旧卡也还收着。
+    await db.update(tasks).set({ stage: "verified" }).where(eq(tasks.id, "g8"));
+    await advanceWorkflowFrom(await row("g8"), def, "v2", noVerify);
+    assert.equal((await row("g8")).workflowAt, "second");
+    fake.reset();
+    await im.reconciler.reconcile(["g8"]);
+    await im.settle();
+    all = await cards("g8");
+    assert.equal(all.length, 2);
+    assert.equal(fake.sends().length, 0);
+    assert.equal(all.find((item) => item.id === early!.id)!.state, "resolved", "旧卡没被翻回来");
+    assert.equal(acceptButton(all.find((item) => item.id === later.id)!).text, "验收通过");
+  }
+
+  // ── ⑨ 验收结果的说法 ────────────────────────────────────────────────────
+  {
+    const secret = "feature/secret-x";
+    const merged = acceptedOutcome({ kind: "isolated_worktree", merge: "fast_forward", targetBranch: secret });
+    assert.match(merged.text!, /已验收合并（合入 feature\/secret-x）/);
+    assert.equal(merged.brief, "已验收合并。", "只推标题：不带分支名");
+    const staged = acceptedOutcome({ kind: "isolated_worktree", merge: "no_commit", targetBranch: secret });
+    assert.ok(staged.text!.includes(secret) && !staged.brief!.includes(secret));
+    const tagged = acceptedOutcome({ kind: "isolated_worktree", merge: "tagged", tag: "ash-accepted/abc123" });
+    assert.ok(tagged.text!.includes("ash-accepted/abc123") && !tagged.brief!.includes("ash-accepted"), "只推标题：不带标签名");
+    const broken = acceptedOutcome({ kind: "isolated_worktree", merge: "fast_forward", targetBranch: secret, tail: { ok: false, step: "跑一条命令", reason: "npm ERR! token=abc" } });
+    assert.equal(broken.tone, "orange");
+    assert.ok(broken.text!.includes("npm ERR!"));
+    assert.ok(!broken.brief!.includes(secret) && !broken.brief!.includes("npm ERR!") && broken.brief!.includes("没跑成"), broken.brief);
+    assert.equal(acceptedOutcome({ kind: "in_place" }).brief, undefined, "没有细节可藏：不另备一版");
+
+    assert.match(acceptedLabel({ acceptedMergeMethod: "no_commit", acceptedMergeCommit: null }), /还没提交/);
+    assert.equal(acceptedLabel({ acceptedMergeMethod: "no_commit", acceptedMergeCommit: "abc123" }), "已验收合并", "事后提交了：就是合并了");
+    assert.match(acceptedLabel({ acceptedMergeMethod: "tagged", acceptedMergeCommit: null }), /只打了标签/);
+    assert.equal(acceptedLabel({ acceptedMergeMethod: null, acceptedMergeCommit: null }), "已验收");
+  }
+
+  // ── ⑩ 放行之后往下走那一段没跑成 ────────────────────────────────────────
+  {
+    const deploy = { ...makeStep("command", "deploy"), p: { cmd: "echo boom-deploy >&2; exit 3", where: "workspace" } };
+    const line = JSON.stringify({ workspace: "shared", steps: [
+      makeStep("run", "run"), makeStep("human", "first"), deploy, makeStep("human", "second"), makeStep("accept", "accept"),
+    ] });
+    await db.insert(tasks).values({
+      id: "g10", projectId: "p1", title: "关口 g10", body: "", status: "done", useWorktree: false, workflow: line, workflowAt: "run",
+      endedAt: at, createdAt: at, updatedAt: at,
+    } as never);
+    await advanceWorkflowFrom(await row("g10"), taskWorkflowDef(line), "run");
+    await im.reconciler.reconcile(["g10"]);
+    await im.settle();
+    const [card] = await cards("g10");
+    const pressed = await im.click(OWNER, acceptButton(card!).value!);
+    const said = textOf(pressed.card?.data);
+    assert.match(said, /已放行这一关，但线没能接着往下走：「跑一条命令」没跑成（boom-deploy/, said);
+    assert.doesNotMatch(said, /这条线接着往下走/);
+    assert.equal((await row("g10")).workflowAt, "first", "确实停在这一道上");
+    const web = await acceptTask("g10");
+    assert.equal(web.accepted && web.kind, "gate_released", "网页那一端照样能重放");
+    assert.equal(web.accepted && web.tail?.ok, false, "响应带回停住了");
   }
 
   im.reconciler.stop();

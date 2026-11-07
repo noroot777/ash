@@ -311,24 +311,24 @@ function stepFailPrompt(step: WorkflowStep, reason: string | null | undefined) {
     + "请修到它能过，然后照常确认完成。";
 }
 
-// 跑完一段并按线上写的失败策略收尾。返回 false = 这条线卡住了，调用方**不要再往下推**
-// （别在一条卡住的线上派审、也别把它送进人工关口）。
+// 跑完一段并按线上写的失败策略收尾。返回 ok:false = 这条线卡住了，调用方**不要再往下推**
+// （别在一条卡住的线上派审、也别把它送进人工关口）；卡在哪一站、为什么也一并带回去。
 export async function advanceSegment(
   task: TaskRow,
   def: WorkflowDef | null,
   fromStepId: string | null | undefined,
   opts: SegmentOptions = {},
-): Promise<boolean> {
+): Promise<SegmentResult> {
   const result = await runSegment(task, def, fromStepId, opts);
   if (result.ok) {
     clearAttempts(task.id);
-    return true;
+    return result;
   }
   // 「在等一件已经开跑的事」不走失败策略（见 SegmentResult.halted）：安静停下，等它自己回来。
-  if (result.halted) return false;
+  if (result.halted) return result;
   const step = result.failed!;
   await applyFailPolicy(task, step, result.reason, stepFailPrompt(step, result.reason), opts);
-  return false;
+  return result;
 }
 
 /**

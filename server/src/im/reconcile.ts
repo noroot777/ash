@@ -25,7 +25,7 @@ import { imActions, imOutbox } from "../db/schema-im.js";
 import { tasks } from "../db/schema.js";
 import { openDisputeTargets } from "../free-review-dispute.js";
 import { now } from "../util.js";
-import { DECISION_KINDS, viewsOf, withTeamLeads, type TaskView, type Turn } from "./attention.js";
+import { acceptIdentityOf, DECISION_KINDS, viewsOf, withTeamLeads, type TaskView, type Turn } from "./attention.js";
 import { acceptedLabel, KIND_LABEL, settledCard, summaryCard, taskLink, turnCard } from "./cards.js";
 import { createEnvelope } from "./envelopes.js";
 import { OutboxExits, summaryItems } from "./exits.js";
@@ -392,8 +392,13 @@ async function resolutionText(row: OutboxRow, view: TaskView | null): Promise<st
   const task = view.task;
   if (task.archived) return "任务已归档。";
   if (task.handoff?.direction === "out") return "任务已接力到另一台机器。";
-  if (row.kind === "accept" && isAcceptedStage(task.stage)) return `${acceptedLabel(task.acceptedMergeMethod)}。`;
+  if (row.kind === "accept" && isAcceptedStage(task.stage)) return `${acceptedLabel(task)}。`;
   const next = view.turn;
+  // 同一版成果、换了一段（task-human-gate.ts）：不是又跑了一轮，是线过了一道「等我点头」。
+  if (next?.kind === "accept" && row.kind === "accept" && row.subject
+    && acceptIdentityOf(row.subject).resultVersion === acceptIdentityOf(next.generation).resultVersion) {
+    return "这一关已经放行过了，请看新的那张卡。";
+  }
   if (next && next.kind === row.kind) return row.kind === "question" ? "问题已更新，请看新的那张卡。" : "有了新的一轮，请看新的那张卡。";
   if (next) return `下一步变成了「${KIND_LABEL[next.kind]}」，请看新的那张卡。`;
   const live = task.status === "running" || task.status === "queued" || task.status === "awaiting_review";

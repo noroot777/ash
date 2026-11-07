@@ -5,17 +5,21 @@
 // 上一道关的旧卡就能放行后来那一道（审查实测：网页先放了第一道，再点飞书里第一道的旧卡，第二道也被放了）；
 // 点过上一道关的卡之后，下一道关的代次和它一样、被那张已处理的卡占着，再也发不出能点的新卡。
 //
-// 所以线每走到一道「等我点头」，就在挪游标的同一条语句里领一个新身份（workflow-advance.ts setWorkflowAt），
-// 游标和身份之间没有空档：读到新游标就读到新身份。此刻的关口身份 = 游标停在一道「等我点头」上时领到的那一个——放行
-// 之后、走到下一站之前（中间可能跑着很久的命令站）游标还在这一道上，身份也还是这一道：那一段不该冒出一张新卡；
-// 这一道已经放过，同一道关的卡再点一下也不放第二遍（staleAcceptance），往下走失败了要重放，在网页上点。
-// 不在关口上（自由工作流、线走完了、跳过验证走到头）一律是 NO_GATE，那时这一按验的就是成果本身。
-// 加列之前就停在关口上的老任务也是 NO_GATE：已经发出去的待验收卡照旧有效。
+// 所以线每**离开**一道「等我点头」，就在挪游标的同一个事务里领一个新身份（workflow-advance.ts setWorkflowAt）。
+// 一个身份管的是两次离开关口之间那一段，不是某一道关本身：
+//   · 走到关口之前（验证还在跑，待验收卡已经发了）和停在关口上是同一段：卡留着、原地换成「放行」的样子。到达时就换
+//     的话，每条「先验证、再点头」的线都会多推一张，旧卡还写着假的「有了新的一轮」；放行进了下一站验证，代次又退回
+//     没有关口那一截，把放行之前那张旧卡翻回来（第 1 轮审查后的对抗复核实测）；
+//   · 放行之后、走到下一站之前（中间可能跑着很久的命令站）游标还在这一道上，也还是这一段：不冒新卡。这一段里再点
+//     不会并着把后面那一段再跑一遍：验收互斥一直占到往下走那一步跑完（task-accept.ts acceptTask）。走完游标还停在
+//     这一道上就是线没能走过去，再放一次就是重走，所以同一段的卡照样能点（放行的结果卡会照实说停住了）；
+//   · 离开这一道（去下一站验证、下一道关、或者线走完了）就是新的一段、新的卡；旧卡的身份再也对不上，不会被翻回来。
+// 加列之前的任务、还没离开过关口的任务没有身份（NO_GATE），代次和以前同形：已经发出去的待验收卡照旧有效。
 //
 // 飞书的待验收卡把它拼进代次（im/attention.ts），按钮带着它进验收接口；接口在验收互斥里现核（staleAcceptance），
-// 放行那一步再按「还是核过的那一道关」条件写（sameGate），核过之后才切的关也放不过去。
+// 放行那一步再按「还是核过的那一段」条件写（sameGate），核过之后线才离开这一道也放不过去。
 import { STEP_LABELS, type WorkflowDef } from "@ash/shared/workflow";
-import { isFinalHumanGate, nextAnchor, type UnexecutedVerification } from "@ash/shared/workflow-policy";
+import { nextAnchor, type UnexecutedVerification } from "@ash/shared/workflow-policy";
 import { and, sql, type SQL } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { tasks } from "./db/schema.js";
@@ -31,23 +35,17 @@ export const NO_GATE = "-";
 
 export const newHumanGate = (): string => nanoid(16);
 
-type GateFacts = { workflow: string | null; workflowAt: string | null; stage: string | null; humanGateId: string | null };
+type GateFacts = { workflowAt: string | null; stage: string | null; humanGateId: string | null };
 
 const atHumanStep = (workflow: string | null, workflowAt: string | null): boolean =>
   taskWorkflowDef(workflow)?.steps.find((item) => item.id === workflowAt)?.kind === "human";
 
-/** 此刻停着的那一道「等我点头」的身份；不在关口上是 NO_GATE。 */
-export function humanGateOf(task: GateFacts): string {
-  return atHumanStep(task.workflow, task.workflowAt) ? task.humanGateId ?? NO_GATE : NO_GATE;
-}
+/** 此刻这一段的身份；还没离开过关口是 NO_GATE。 */
+export const humanGateOf = (task: Pick<GateFacts, "humanGateId">): string => task.humanGateId ?? NO_GATE;
 
-/**
- * 不经 setWorkflowAt 就落下游标的那一处（接力导入，新来的和移回来的都是）：停在「等我点头」上就领一个新身份，
- * 否则不留。不沿用对端的、也不沿用本机离开前的——离开的这段时间里那道关可能已经放过、又走到了下一道，本机此前
- * 发出去的卡对的是哪一道已经说不清，换个身份让它们一律落空、重新发一张。
- */
-export const importedHumanGate = (workflow: string | null, workflowAt: string | null): string | null =>
-  atHumanStep(workflow, workflowAt) ? newHumanGate() : null;
+/** 游标从 from 挪到 to 是不是离开了一道「等我点头」：是就该领新身份（setWorkflowAt 在挪游标的同一个事务里写）。 */
+export const leavesHumanGate = (workflow: string | null, from: string | null, to: string | null): boolean =>
+  from !== to && atHumanStep(workflow, from);
 
 /** 调用方看到的那一版成果、那一道关（飞书卡片带进来）。没传的那一样不核：网页、MCP 点的是眼前这一版。 */
 export interface AcceptExpectation { resultVersion?: string; humanGate?: string }
@@ -64,28 +62,18 @@ export async function staleAcceptance(task: TaskRow, expected: AcceptExpectation
     };
   }
   if (expected.humanGate === undefined) return null;
-  const gate = humanGateOf(task);
-  if (gate !== expected.humanGate) {
-    await appendTaskTimeline(task.id, "这一下没有执行：点的是另一道「等我点头」上的卡，这条线已经不停在那一道了。看过它现在停在哪一站再点。");
+  if (humanGateOf(task) !== expected.humanGate) {
+    await appendTaskTimeline(task.id, "这一下没有执行：点的是这条线上一段的卡，它已经离开了那一道「等我点头」。看过它现在停在哪一站再点。");
     return {
       accepted: false, httpStatus: 409, taskId: task.id, reason: "gate_changed", phase: "initial", status: task.status,
-      error: "点的那一道「等我点头」已经不是这条线此刻停着的那一道，这一次没有执行：请看过它现在停在哪一站再点",
-    };
-  }
-  // 中途那一道、同一道关、但已经放过了（放行之后、走到下一站之前身份不变）：再放一遍会把后面那一段（发布命令之类）
-  // 并着再跑一遍。最后一道关点第二下不归这里管：已经验收过的走 task-accept.ts 的幂等快路，照实回「之前验收过了」。
-  if (gate !== NO_GATE && task.stage !== "awaiting_acceptance" && !isFinalHumanGate(taskWorkflowDef(task.workflow), task.workflowAt)) {
-    await appendTaskTimeline(task.id, "这一下没有执行：这一道「等我点头」已经放行过了，线正在往下走。");
-    return {
-      accepted: false, httpStatus: 409, taskId: task.id, reason: "gate_changed", phase: "initial", status: task.status,
-      error: "这一道「等我点头」已经放行过了，这一次没有再放一遍：请看过它现在停在哪一站再点",
+      error: "点的那张卡是这条线上一段的，它已经离开了那一道「等我点头」，这一次没有执行：请看过它现在停在哪一站再点",
     };
   }
   return null;
 }
 
-/** 放行那一步的写入条件：游标、阶段、关口身份都还是核过的那一份。 */
-function sameGate(task: Omit<GateFacts, "workflow">): SQL {
+/** 放行那一步的写入条件：游标、阶段、这一段的身份都还是核过的那一份。 */
+function sameGate(task: GateFacts): SQL {
   return and(
     sql`${tasks.workflowAt} IS ${task.workflowAt}`,
     sql`${tasks.stage} IS ${task.stage}`,
@@ -96,7 +84,7 @@ function sameGate(task: Omit<GateFacts, "workflow">): SQL {
 /**
  * 中途那道「等我点头」放行（后面还有站要走）：不合、不清、不落 accepted，只把阶段清回进行中（为什么见 task-accept.ts
  * 调用处；往下走那一步在锁外跑，task-accept-tail.ts releaseGate）。task 是核过身份的那一份：按它条件写，核过之后
- * 线才切到别的关，这一按就落空，不替他放后来那一道。
+ * 线才离开这一道、换了一段，这一按就落空，不替他放后来那一道。
  */
 export async function releaseHumanGate(
   task: TaskRow, def: WorkflowDef | null, verification: UnexecutedVerification | null,
@@ -108,7 +96,7 @@ export async function releaseHumanGate(
   if (!await clearTaskStage(task.id, `你在这一道「等我点头」放行了：${where}，所以没有合并、也没有清理，接着往下走。`, sameGate(task))) {
     return {
       accepted: false, httpStatus: 409, taskId: task.id, reason: "gate_changed", phase: "before_accept", status: task.status,
-      error: "放行的同时这条线换了一道「等我点头」（或已经不停在这里了），这一次没有放行：请看过它现在停在哪一站再点",
+      error: "放行的同时这条线离开了这一道「等我点头」（或已经放过了），这一次没有放行：请看过它现在停在哪一站再点",
     };
   }
   await publishTaskUpdated(task.id);

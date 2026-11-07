@@ -2,6 +2,7 @@
 //
 // 按钮上的 value 只放信封 id（e）和动作（op），收件人、代次、过期时间都在库里（envelopes.ts），
 // 卡片 JSON 被人转发、截图、抓包都伪造不出一次有效点击。
+import { hasPendingAcceptCommit, type Task } from "@ash/shared";
 import type { CardBlock, CardButton, CardModel, CardTone } from "./feishu/cards.js";
 import type { TaskView, Turn } from "./attention.js";
 import { scrubText, scrubTitle } from "./scrub.js";
@@ -193,10 +194,16 @@ export function turnCard(view: TaskView, turn: Turn, ctx: CardContext, envelope:
 export const acceptLabel = (turn: Pick<Extract<Turn, { kind: "accept" }>, "release">): string =>
   turn.release ? "放行，继续下一站" : "验收通过";
 
-/** 验收落下之后怎么称呼它：合并了才说「合并」（就地、只记认可、只打标签、合进工作区没提交的都不是）。 */
-export function acceptedLabel(method: string | null | undefined): string {
+/**
+ * 验收落下之后怎么称呼它：合并了才说「合并」（就地、只记认可、只打标签、合进工作区没提交的都不是）。
+ * 「合并后不提交」那一档事后提交了，方法还记着 no_commit、提交号补上了：那时就是合并了（判据只认 shared 那一份）。
+ */
+export function acceptedLabel(task: { acceptedMergeMethod?: string | null; acceptedMergeCommit?: string | null }): string {
+  const method = task.acceptedMergeMethod as Task["acceptedMergeMethod"];
   if (method === "tagged") return "已验收（只打了标签，没有合并）";
-  if (method === "no_commit") return "已验收（改动已合进目标分支工作区，还没提交）";
+  if (hasPendingAcceptCommit({ acceptedMergeMethod: method, acceptedMergeCommit: task.acceptedMergeCommit })) {
+    return "已验收（改动已合进目标分支工作区，还没提交）";
+  }
   return method ? "已验收合并" : "已验收";
 }
 
