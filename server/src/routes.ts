@@ -9,7 +9,7 @@ import type {
   LlmProtocol,
 } from "@ash/shared";
 import type { SearchStreamLine, SearchSort } from "@ash/shared/search";
-import { isSearchSort } from "@ash/shared/search";
+import { isSearchQueryReady, isSearchSort } from "@ash/shared/search";
 import { db } from "./db/index.js";
 import { projects, groups, agents, llmProviders } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -170,8 +170,6 @@ api.patch("/settings", async (c) => {
 
 // ── search ───────────────────────────────────────────────────────────────
 // Global search across tasks + session transcripts (see search.ts).
-// Sub-2-char queries return empty instead of erroring — the palette calls this
-// on every keystroke.
 type SearchParams = { error: string } | { q: string; projectId?: string; preferProjectId?: string; type?: "tasks" | "notes"; sort?: SearchSort };
 const searchParams = (c: Context): SearchParams => {
   const q = (c.req.query("q") ?? "").trim();
@@ -191,7 +189,7 @@ const searchParams = (c: Context): SearchParams => {
 api.get("/search", async (c) => {
   const params = searchParams(c);
   if ("error" in params) return c.json({ error: params.error }, 400);
-  if (params.q.length < 2) return c.json([]);
+  if (!isSearchQueryReady(params.q)) return c.json([]);
   const { q, ...options } = params;
   return c.json(await searchAll(q, actorOf(c), { ...options, signal: c.req.raw.signal }));
 });
@@ -209,17 +207,20 @@ api.get("/search/stream", async (c) => {
   c.header("Cache-Control", "no-store");
   c.header("X-Accel-Buffering", "no");
   return stream(c, async (writer) => {
-    if (q.length < 2) return;
+    if (!isSearchQueryReady(q)) return;
+    const controller = new AbortController();
+    writer.onAbort(() => controller.abort());
     // 写入串成一条链：onHit 是同步回调，直接 await 会把扫描卡住，各写各的又会乱序。
     let tail: Promise<unknown> = Promise.resolve();
     const push = (line: SearchStreamLine) => {
       tail = tail.then(() => writer.write(`${JSON.stringify(line)}\n`)).catch(() => {
+        controller.abort();
         // 客户端走了（又敲了一个字 / 关掉 ⌘K）。signal 会让扫描自己停下来，这里不用嚷嚷。
       });
     };
     await searchAll(q, actorOf(c), {
       ...options,
-      signal: c.req.raw.signal,
+      signal: AbortSignal.any([c.req.raw.signal, controller.signal]),
       onHit: (hit) => push(hit),
       onLocalDone: () => push({ marker: "local-done" }),
     });

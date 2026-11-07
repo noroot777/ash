@@ -82,6 +82,20 @@ const tasks = taskHits.map((hit) => ({
 // 每次搜索请求都记一笔，测试据此断言 sort 参数确实跟着开关走。
 const requested: string[] = [];
 (window as unknown as { __searchRequests: string[] }).__searchRequests = requested;
+const controls = window as unknown as {
+  __releaseOldSearch?: () => void;
+  __appendSearch?: () => void;
+  __failSearch?: boolean;
+};
+const deepHit: SearchHit = {
+  ...taskHits[0]!, title: "很长的历史任务：检索范围与上下文展示的完整排查记录，命中位置在正文深处",
+  field: "body", snippet: "…正文第八千字附近的深处标记，不能只看开头…",
+  preview: "无关开头".repeat(500),
+  excerpts: ["…正文第八千字附近的深处标记，包含真正需要查看的处理方案…", "…另一个很远的命中片段，解释为什么需要保留完整上下文…"],
+};
+const responseOf = (rows: SearchHit[]) => new Response(`${rows.map((hit) => JSON.stringify(hit)).join("\n")}\n`, {
+  status: 200, headers: { "content-type": "application/x-ndjson" },
+});
 
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -90,6 +104,25 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
   if (url.pathname === "/api/search/stream") {
     const sort = url.searchParams.get("sort") ?? "relevance";
     requested.push(sort);
+    const query = url.searchParams.get("q");
+    if (query === "深处" || query === "图" || query === "任务") return responseOf([deepHit]);
+    if (query === "故障") return controls.__failSearch === false ? responseOf([deepHit]) : new Response("unavailable", { status: 503 });
+    if (query === "半截") return new Response(`${JSON.stringify(deepHit)}\n{broken`, { status: 200 });
+    if (query === "旧查询") return new Promise<Response>((resolve) => {
+      controls.__releaseOldSearch = () => resolve(responseOf([{ ...deepHit, title: "不该出现的旧结果" }]));
+    });
+    if (query === "流式") {
+      const encoder = new TextEncoder();
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(`${JSON.stringify(taskHits[0])}\n${JSON.stringify(taskHits[1])}\n${JSON.stringify(taskHits[0])}\n`));
+          controls.__appendSearch = () => {
+            controller.enqueue(encoder.encode(`${JSON.stringify({ ...taskHits[2], updatedAt: iso(1000) })}\n`));
+            controller.close();
+          };
+        },
+      }), { status: 200 });
+    }
     const rows = sort === "recent" ? byRecent : byRelevance;
     return new Response(`${rows.map((hit) => JSON.stringify(hit)).join("\n")}\n`, {
       status: 200,

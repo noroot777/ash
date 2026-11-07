@@ -15,13 +15,15 @@ type Match = {
 export class SearchCorpus {
   private readonly terms: string[];
   private readonly overlap: number;
+  private readonly radius: number;
   private readonly matches = new Map<string, Match>();
   private tail = "";
   private length = 0;
 
-  constructor(terms: string[], initial = "") {
+  constructor(terms: string[], initial = "", radius = SNIPPET_RADIUS) {
+    this.radius = radius;
     this.terms = [...new Set(terms)];
-    this.overlap = Math.max(0, ...this.terms.map((term) => term.length)) + SNIPPET_RADIUS * 2 + 4;
+    this.overlap = Math.max(0, ...this.terms.map((term) => term.length)) + radius * 2 + 4;
     this.append(initial);
   }
 
@@ -33,11 +35,11 @@ export class SearchCorpus {
     this.length += chunk.length;
     for (const term of this.terms) {
       const previous = this.matches.get(term);
-      if (previous && previous.end >= previous.position + term.length + SNIPPET_RADIUS) continue;
+      if (previous && previous.end >= previous.position + term.length + this.radius) continue;
       const index = lower.indexOf(term);
       if (index < 0 || (previous && offset + index > previous.position)) continue;
-      const start = Math.max(0, index - SNIPPET_RADIUS);
-      const end = Math.min(text.length, index + term.length + SNIPPET_RADIUS);
+      const start = Math.max(0, index - this.radius);
+      const end = Math.min(text.length, index + term.length + this.radius);
       this.matches.set(term, {
         position: offset + index,
         start: offset + start,
@@ -61,6 +63,20 @@ export class SearchCorpus {
     if (!earliest) return "";
     return `${earliest.start > 0 ? "…" : ""}${earliest.text}${earliest.end < this.length ? "…" : ""}`;
   }
+
+  snippets(terms: string[], limit = 3): string[] {
+    const ordered = [...new Set(terms)].flatMap((term) => {
+      const match = this.matches.get(term);
+      return match ? [{ term, match }] : [];
+    }).sort((left, right) => left.match.position - right.match.position);
+    const selected: typeof ordered = [];
+    for (const entry of ordered) {
+      if (selected.some((previous) => entry.match.position + entry.term.length <= previous.match.end)) continue;
+      selected.push(entry);
+      if (selected.length >= limit) break;
+    }
+    return selected.map(({ term }) => this.snippet([term]));
+  }
 }
 
 export type RunSearchCorpus = {
@@ -73,9 +89,10 @@ export async function readRunCorpus(
   terms: string[],
   prefix: string,
   signal?: AbortSignal,
+  radius = SNIPPET_RADIUS,
 ): Promise<RunSearchCorpus> {
-  const corpus = new SearchCorpus(terms, prefix);
-  const conversation = new SearchCorpus(terms);
+  const corpus = new SearchCorpus(terms, prefix, radius);
+  const conversation = new SearchCorpus(terms, "", radius);
   const result = { corpus, conversation };
   if (signal?.aborted) return result;
   let files: string[];

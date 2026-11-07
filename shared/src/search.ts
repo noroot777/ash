@@ -25,6 +25,8 @@ export interface TaskSearchHit {
   snippet: string;
   // Task body prefix for the command-palette preview.
   preview?: string;
+  excerpts?: string[];
+  matchQuality?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -39,6 +41,8 @@ export interface NoteSearchHit {
   snippet: string;
   // Note body for the command-palette preview.
   preview?: string;
+  excerpts?: string[];
+  matchQuality?: number;
   createdAt: string;
   updatedAt: string;
   taskCount: number;
@@ -48,6 +52,25 @@ export type SearchHit = TaskSearchHit | NoteSearchHit;
 
 // 一次搜索最多回多少条。服务端据此早停，前端据此切片 —— 两边同一个数。
 export const SEARCH_MAX_HITS = 50;
+
+export function isSearchQueryReady(query: string): boolean {
+  const value = query.trim();
+  return value.length >= 2 || /^\p{Script=Han}$/u.test(value);
+}
+
+export function searchMatchQuality(text: string, groups: string[][]): number {
+  const lower = text.trim().toLowerCase();
+  let quality = 0;
+  for (const terms of groups) {
+    const phrase = terms.join(" ");
+    if (!phrase) continue;
+    const matched = terms.filter((term) => lower.includes(term)).length;
+    const score = lower === phrase ? 1000 : lower.startsWith(phrase) ? 800
+      : lower.includes(phrase) ? 600 : matched * 100 / terms.length;
+    quality = Math.max(quality, score);
+  }
+  return quality;
+}
 
 export const SEARCH_FIELD_RANK: Record<SearchField, number> = { id: 0, title: 1, body: 2, conversation: 3 };
 
@@ -97,10 +120,14 @@ export function compareSearchHits(
   if (sort === "recent") {
     return b.updatedAt.localeCompare(a.updatedAt) || kind(a) - kind(b) || a.id.localeCompare(b.id);
   }
-  return kind(a) - kind(b)
+  const identity = (hit: SearchHit) => hit.kind === "task" && hit.field === "id" ? 0 : 1;
+  return identity(a) - identity(b)
+    || kind(a) - kind(b)
     || local(a) - local(b)
     || field(a) - field(b)
-    || b.updatedAt.localeCompare(a.updatedAt);
+    || (b.matchQuality ?? 0) - (a.matchQuality ?? 0)
+    || b.updatedAt.localeCompare(a.updatedAt)
+    || a.id.localeCompare(b.id);
 }
 
 /**
@@ -110,4 +137,3 @@ export function compareSearchHits(
  * ——不然用户看到的是一个停在半路、不知道还有没有下文的列表。
  */
 export type SearchStreamLine = SearchHit | { marker: "local-done" };
-

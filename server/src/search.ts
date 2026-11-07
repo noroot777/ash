@@ -24,7 +24,7 @@
 // 改成单段按 updatedAt 倒序扫，扫到「第 50 名比所有没扫的行都新」为止（见 searchAll 末尾）。
 import { join } from "node:path";
 import type { SearchHit, SearchField, TaskStatus } from "@ash/shared";
-import { SEARCH_MAX_HITS, compareSearchHits, type SearchSort } from "@ash/shared/search";
+import { SEARCH_MAX_HITS, compareSearchHits, searchMatchQuality, type SearchSort } from "@ash/shared/search";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { notes, noteTasks, projects, tasks } from "./db/schema.js";
@@ -308,7 +308,7 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
   const termValues = dedupeTerms([...parsed.groups.flat(), ...parsed.excluded]).map((term) => term.value);
   const taskPrefix = (task: TaskRow) => `${task.title}\n${task.body}\n`;
   const readConversation = (task: TaskRow) =>
-    readRunCorpus(join(RUNS_DIR, task.id), termValues, taskPrefix(task), options.signal);
+    readRunCorpus(join(RUNS_DIR, task.id), termValues, taskPrefix(task), options.signal, 180);
   const hitOf = (task: TaskRow, run?: RunSearchCorpus): TaskHit | null => {
     const corpus = run?.corpus ?? new SearchCorpus(termValues, taskPrefix(task));
     // 排除词优先:用户显式说了别看这条,按 id 钉也不行。
@@ -321,6 +321,9 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
     if (parsed.groups.length ? !satisfied.length : !parsed.excluded.length) return null;
 
     const terms = dedupeTerms(satisfied.flat());
+    const values = terms.map((term) => term.value);
+    const bodyCorpus = new SearchCorpus(values, task.body, 180);
+    const excerpts = [...bodyCorpus.snippets(values), ...(run?.conversation.snippets(values) ?? [])].slice(0, 4);
     const byId = terms.some((term) => termMatchesTaskId(term, task.id));
     let field: SearchField = "id";
     let snippet = "";
@@ -350,6 +353,8 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
       archived: task.archived,
       field,
       snippet,
+      excerpts,
+      matchQuality: field === "conversation" ? 0 : searchMatchQuality(field === "title" ? task.title : task.body, satisfied.map((group) => group.map((term) => term.value))),
       preview: task.body.slice(0, TASK_PREVIEW_LIMIT),
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
@@ -359,15 +364,27 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
   const prefer = options.sort === "recent" ? null : options.preferProjectId || null;
   const sort = options.sort ?? "relevance";
   const hits: SearchHit[] = [];
+  const emitted = new Set<string>();
   // 收进来就按最终顺序插好，**只有还能挤进前 MAX_HITS 的那些才往外吐**。
   // 集合只增不减，所以插进来时就排在 50 名开外的，以后只会更靠后 —— 吐了也是白吐。
   // （实测：`?q=harness` 有 301 条命中，全吐是 643 KB，只吐进得了前 50 的是 ~50 行。）
   const emit = (hit: SearchHit) => {
+    const key = `${hit.kind}:${hit.id}`;
+    if (emitted.has(key)) return;
+    emitted.add(key);
     const at = hits.findIndex((existing) => compareSearchHits(hit, existing, prefer, sort) < 0);
     const index = at < 0 ? hits.length : at;
     hits.splice(index, 0, hit);
     if (index < MAX_HITS) options.onHit?.(hit);
   };
+
+  const candidates = taskIdCandidates(parsed);
+  for (const task of taskRows.filter((row) => candidates.some((candidate) => isTaskIdMatch(row.id, candidate)))) {
+    if (options.signal?.aborted) return hits.slice(0, MAX_HITS);
+    const hit = hitOf(task, parsed.excluded.length || !parsed.groups.some((group) => group.every((term) => termMatchesTaskId(term, task.id)))
+      ? await readConversation(task) : undefined);
+    if (hit) emit(hit);
+  }
 
   // 随手记只在库里，判定不下盘、几乎不要钱 —— 先出，⌘K 就不会有「敲完字空着一片」的
   // 那一秒。先到后到不影响最终顺序：emit 会按排序判据把它们插到该在的位置（相关度档它们
@@ -384,6 +401,9 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
       projectName: projName.get(note.projectId) ?? null,
       field: "body",
       snippet: findSnippet(note.body, matchingTerms(note.body, parsed)) ?? "",
+      excerpts: new SearchCorpus(matchingTerms(note.body, parsed).map((term) => term.value), note.body, 180)
+        .snippets(matchingTerms(note.body, parsed).map((term) => term.value)),
+      matchQuality: searchMatchQuality(note.body, parsed.groups.map((group) => group.map((term) => term.value))),
       preview: note.body.slice(0, NOTE_PREVIEW_LIMIT),
       createdAt: new Date(note.createdAt).toISOString(),
       updatedAt: new Date(note.updatedAt).toISOString(),
@@ -391,7 +411,7 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
     });
   }
 
-  const byRecent = (rows: TaskRow[]) => [...rows].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const byRecent = (rows: TaskRow[]) => [...rows].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
 
   // ── 谁必须下盘 ─────────────────────────────────────────────────────────
   //

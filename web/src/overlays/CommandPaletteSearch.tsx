@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import type { SearchHit } from "@ash/shared";
 import type { SearchSort } from "@ash/shared/search";
 import { NotePencil } from "@phosphor-icons/react";
@@ -91,16 +91,19 @@ export function Highlight({ text, query }: { text: string; query: string }) {
   return <>{parts}</>;
 }
 
-export function SearchPreview({ hit, query }: { hit: SearchHit | undefined; query: string }) {
+export function SearchPreview({ hit, query, onOpen }: { hit: SearchHit | undefined; query: string; onOpen?: (hit: SearchHit) => void }) {
+  const body = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (body.current) body.current.scrollTop = 0; }, [hit?.id, hit?.kind]);
   if (!hit) {
     return (
       <aside className="palette-preview grid place-items-center px-8 text-center">
-        <p className="m-0 max-w-[220px] p-0 text-xs leading-5 text-faint">选择一条搜索结果，在这里阅读全文</p>
+        <p className="m-0 max-w-[220px] p-0 text-xs leading-5 text-faint">选择一条结果查看命中内容</p>
       </aside>
     );
   }
   const previewLabel = hit.kind === "task" ? "任务正文" : "随手记正文";
   const preview = hit.preview ?? "";
+  const excerpts = hit.excerpts?.length ? hit.excerpts : hit.snippet ? [hit.snippet] : [];
   return (
     <aside className="palette-preview flex min-h-0 flex-col">
       <div className="flex-none border-b border-line px-[18px] py-4">
@@ -116,23 +119,18 @@ export function SearchPreview({ hit, query }: { hit: SearchHit | undefined; quer
             <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] leading-4 text-faint">
               {hit.kind === "task" && <><span className="font-mono text-muted"><Highlight text={hit.id} query={query} /></span><span aria-hidden="true">·</span></>}
               <span>{hit.projectName ?? "未知项目"}</span><span aria-hidden="true">·</span>
-              <span>创建于 {formatInstant(hit.createdAt)}</span><span aria-hidden="true">·</span>
               <span>更新于 {formatInstant(hit.updatedAt)}</span>
             </div>
           </div>
+          {onOpen && <button type="button" className="palette-open-hit" onClick={() => onOpen(hit)}>打开{hit.kind === "task" ? "任务" : "随手记"}</button>}
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-[18px] py-4">
-        {hit.kind === "task" && hit.field === "conversation" && hit.snippet && (
-          <section className="mb-4 rounded-lg border border-line bg-raised/70 p-3">
-            <div className="mb-1.5 text-[9px] font-bold uppercase tracking-[0.08em] text-faint">会话命中</div>
-            <div className="break-words font-mono text-[11px] leading-5 text-muted"><Highlight text={hit.snippet} query={query} /></div>
-          </section>
-        )}
-        <div className="mb-2 text-[9px] font-bold uppercase tracking-[0.08em] text-faint">{previewLabel}</div>
-        {preview ? (
+      <div ref={body} className="palette-preview-content min-h-0 flex-1 overflow-y-auto px-[18px] py-4">
+        {excerpts.length ? excerpts.map((excerpt, index) => (
+          <p key={`${hit.id}:${index}`} className="palette-excerpt"><Highlight text={excerpt} query={query} /></p>
+        )) : preview ? (
           <div className="whitespace-pre-wrap break-words text-xs leading-[1.8] text-muted"><Highlight text={preview} query={query} /></div>
-        ) : <div className="text-xs text-faint">暂无正文</div>}
+        ) : <div className="text-xs text-faint">暂无{previewLabel}</div>}
       </div>
     </aside>
   );
@@ -159,6 +157,7 @@ export function SearchHitRow({
       type="button"
       aria-selected={index === active}
       data-palette-index={index}
+      data-search-key={`${hit.kind}:${hit.id}`}
       // 单击只是选中（右边预览跟着换），双击才打开。鼠标划过不选中：指针经过一行不代表
       // 用户在挑它，而选中态一路跟着鼠标跑，键盘选到哪儿就全乱了。
       onMouseDown={(event) => event.preventDefault()} // 焦点留在输入框，点完还能继续按上下键
@@ -170,22 +169,20 @@ export function SearchHitRow({
         <span className="grid size-[15px] shrink-0 place-items-center">
           {hit.kind === "task" ? <SearchStatus hit={hit} /> : <NotePencil size={15} className="text-muted" />}
         </span>
-        <span className="min-w-0 truncate font-semibold text-ink"><Highlight text={hit.title} query={query} /></span>
+        <span className="palette-hit-title min-w-0 truncate font-semibold text-ink"><Highlight text={hit.title} query={query} /></span>
         {isIdMatch(hit) && <IdMatchBadge />}
         {hit.kind === "task" && hit.archived && <span className="shrink-0 rounded bg-overlay px-1 text-[9px] text-faint">已归档</span>}
         {hit.kind === "note" && hit.taskCount > 0 && <span className="shrink-0 rounded bg-overlay px-1 text-[9px] text-faint">已转 {hit.taskCount} 个任务</span>}
-        {hit.projectName && <span className="ml-auto shrink-0 text-[10px] text-faint">{hit.projectName}</span>}
       </span>
-      <span className="flex w-full min-w-0 items-center gap-1.5 pl-[23px] text-[9px] leading-4 text-faint">
+      <span className="palette-hit-meta flex w-full min-w-0 items-center gap-1.5 pl-[23px] text-[9px] leading-4 text-faint">
+        {hit.projectName && <><span className="truncate">{hit.projectName}</span><span aria-hidden="true">·</span></>}
         {hit.kind === "task" && <><span className="font-mono text-[10px] text-muted"><Highlight text={hit.id} query={query} /></span><span aria-hidden="true">·</span></>}
-        <span>创建于 {formatInstant(hit.createdAt)}</span>
-        <span aria-hidden="true">·</span>
         <span>更新于 {formatInstant(hit.updatedAt)}</span>
       </span>
       {hit.snippet && (
         <span className="flex w-full min-w-0 items-center gap-1.5 pl-[23px]">
           {fieldChip && <span className="shrink-0 rounded bg-overlay px-1 text-[9px] leading-4 text-faint">{fieldChip}</span>}
-          <span className="min-w-0 truncate font-mono text-[10px] text-muted"><Highlight text={hit.snippet} query={query} /></span>
+          <span className="palette-hit-snippet min-w-0 text-[11px] leading-4 text-muted"><Highlight text={hit.snippet} query={query} /></span>
         </span>
       )}
     </button>

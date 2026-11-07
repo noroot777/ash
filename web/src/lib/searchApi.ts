@@ -47,22 +47,30 @@ export const searchApi = {
       try {
         parsed = JSON.parse(trimmed) as SearchStreamLine;
       } catch {
-        return; // 半行/坏行:丢掉这一条，别把整条流拆了
+        throw new Error("搜索结果不完整，请重试");
       }
+      if (!parsed || typeof parsed !== "object") throw new Error("搜索结果格式错误，请重试");
       if ("marker" in parsed) {
         if (parsed.marker === "local-done") handlers.onLocalDone?.();
         return;
       }
+      if ((parsed.kind !== "task" && parsed.kind !== "note") || typeof parsed.id !== "string" || typeof parsed.title !== "string"
+        || typeof parsed.snippet !== "string" || typeof parsed.updatedAt !== "string") throw new Error("搜索结果格式错误，请重试");
       handlers.onHit(parsed);
     };
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffered += decoder.decode(value, { stream: true });
-      const lines = buffered.split("\n");
-      buffered = lines.pop() ?? "";
-      for (const line of lines) take(line);
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffered += decoder.decode(value, { stream: true });
+        const lines = buffered.split("\n");
+        buffered = lines.pop() ?? "";
+        for (const line of lines) take(line);
+      }
+      take(buffered + decoder.decode());
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
     }
-    take(buffered);
   },
 };

@@ -2,6 +2,8 @@
 // 排序档换了请求也跟着换。夹具在 fixtures/palette-search.tsx。
 // 跑：npm -w web run test:palette-search
 import assert from "node:assert/strict";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 const web = await startWebServer();
@@ -108,6 +110,66 @@ try {
   assert.deepEqual(await labels(), ["按更新时间"]);
   assert.equal(await selectedIndex(), "0", "换档后列表整个重排，选中回到第一行");
   assert.equal(await page.evaluate(() => document.activeElement?.tagName), "INPUT", "点开关不该把焦点从输入框拿走");
+
+  const input = page.locator(".palette-input input");
+  const preview = page.locator(".palette-preview");
+  await input.fill("深处");
+  await page.waitForFunction(() => document.querySelector(".palette-excerpt")?.textContent.includes("深处标记"));
+  assert.equal(await preview.locator(".palette-excerpt").count(), 2);
+  assert.ok(!(await preview.innerText()).includes("无关开头"), "preview must show the match, not an unrelated body prefix");
+  assert.ok(await preview.getByRole("button", { name: "打开任务" }).isVisible());
+  assert.equal(await preview.locator("mark").first().innerText(), "深处");
+  assert.equal(await selectedIndex(), "0");
+  if (process.env.ASH_SEARCH_SCREENSHOTS) {
+    mkdirSync(process.env.ASH_SEARCH_SCREENSHOTS, { recursive: true });
+    await page.screenshot({ path: join(process.env.ASH_SEARCH_SCREENSHOTS, "search-desktop.png") });
+  }
+
+  await input.fill("任务");
+  await page.waitForFunction(() => document.querySelectorAll(".palette-results [data-search-key]").length === 1);
+  assert.ok(await rowAt(0).getAttribute("data-search-key"), "search results must precede matching commands");
+
+  await input.fill("故障");
+  assert.equal(await page.locator(".palette-results [data-search-key]").count(), 0, "old hits disappear immediately during debounce");
+  await page.getByRole("alert").waitFor();
+  assert.ok((await page.getByRole("alert").innerText()).includes("503"));
+  assert.equal(await page.getByText("没有匹配的命令、任务或随手记", { exact: true }).count(), 0);
+  await page.evaluate(() => { window.__failSearch = false; });
+  await page.getByRole("button", { name: "重试", exact: true }).click();
+  await preview.getByRole("button", { name: "打开任务" }).waitFor();
+  assert.equal(await page.getByRole("alert").count(), 0);
+
+  await input.fill("半截");
+  await page.getByRole("alert").waitFor();
+  assert.equal(await page.locator(".palette-results [data-search-key]").count(), 1, "valid partial hits survive a truncated stream");
+  assert.ok((await page.getByRole("alert").innerText()).includes("不完整"));
+
+  await input.fill("旧查询");
+  await page.waitForFunction(() => typeof window.__releaseOldSearch === "function");
+  await input.fill("深处");
+  await preview.getByRole("button", { name: "打开任务" }).waitFor();
+  await page.evaluate(() => window.__releaseOldSearch());
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  assert.ok(!(await results.innerText()).includes("不该出现的旧结果"));
+
+  await input.fill("流式");
+  await page.waitForFunction(() => document.querySelectorAll(".palette-results [data-search-key]").length === 2);
+  await page.locator('[data-search-key="task:hit-00"]').click();
+  await page.evaluate(() => window.__appendSearch());
+  await page.waitForFunction(() => document.querySelectorAll(".palette-results [data-search-key]").length === 3);
+  assert.equal(await selected.getAttribute("data-search-key"), "task:hit-00", "a higher-ranked late hit must not steal selection");
+  assert.ok((await preview.innerText()).includes("链接命中 0"));
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await input.fill("图");
+  await preview.getByRole("button", { name: "打开任务" }).waitFor();
+  assert.equal(await preview.isVisible(), true, "mobile search must not hide the match preview");
+  assert.ok(await preview.locator(".palette-excerpt").first().isVisible());
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  if (process.env.ASH_SEARCH_SCREENSHOTS) await page.screenshot({ path: join(process.env.ASH_SEARCH_SCREENSHOTS, "search-mobile.png") });
+  await preview.getByRole("button", { name: "打开任务" }).click();
+  assert.equal(await page.locator("#opened").getAttribute("data-opened"), "hit-16,hit-00");
+  await page.setViewportSize({ width: 1100, height: 700 });
 
   // ── 5. /scope 这类选择步骤同一套规矩 ──────────────────────────────────
   // 它们跟结果列长得一样、也归上下键管，hover 在那儿点亮一行同样是在冒充选中。
