@@ -5,6 +5,7 @@
 // 的是审查链自己的状态机(预约、结算、换轮、收尾)。两边唯一的接口就是下面这几个 import。
 //
 // 这一段自己的不变量都在各函数的注释里,拆文件没有改动其中任何一条。
+import { reviewAnchorMatches } from "@ash/shared/free-workflow";
 import { and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -37,6 +38,7 @@ const pendingRepairs = new Set<string>();
  */
 type RepairTarget = DisputeTarget & { ruled: boolean };
 type RepairSubject = { run: ReviewRunRow; round: ReviewRoundRow };
+const STALE_SUBJECT = "审查意见针对的代码已变化（新提交或未提交改动）";
 
 async function pinnedSubject(taskId: string, target: RepairTarget): Promise<RepairSubject | string> {
   const run = (await db.select().from(freeReviewRuns).where(and(
@@ -97,12 +99,11 @@ async function manualRepairSubject(taskId: string, target: RepairTarget | null):
   // 只有能**证明**意见仍对应当前代码才放行修复（失败向「不确定」开，不向「没问题」开）：
   // 锚点缺失（老数据）、工作区读不到（已清理/非 git）都无从证明——正确动作是再派一轮
   // 「审查新改动」，而不是按一份无法核对的报告唤醒实现 agent 改代码。
-  if (!round.reviewedCommit) return "这轮审查缺少基准 commit，无法确认意见仍对应当前代码";
-  const workspace = await workspaceStateOf(task);
-  if (!workspace.head || workspace.dirty == null) return "工作区不可读，无法确认审查意见仍对应当前代码";
-  if (workspace.head !== round.reviewedCommit || workspace.dirty) {
-    return "审查意见针对的代码已变化（新提交或未提交改动）";
-  }
+  // 锚点认两个（审查那一版 / 执行者驳回那一版），判据与前端新鲜度共用 `reviewAnchorMatches`。
+  if (!round.reviewedCommit && !round.reviewedFingerprint) return "这轮审查缺少基准 commit，无法确认意见仍对应当前代码";
+  const anchored = reviewAnchorMatches(round, await workspaceStateOf(task));
+  if (anchored == null) return "工作区不可读，无法确认审查意见仍对应当前代码";
+  if (!anchored) return STALE_SUBJECT;
   return subject;
 }
 
@@ -168,7 +169,7 @@ export async function startManualFreeReviewRepair(
       if (pendingRepairs.has(taskId)) throw new Error("修复消息已在途，等它开始执行后再操作");
       const subject = await manualRepairSubject(taskId, opts.target ? { ...opts.target, ruled: true } : null);
       if (typeof subject === "string") {
-        throw new Error(subject === "审查意见针对的代码已变化（新提交或未提交改动）"
+        throw new Error(subject === STALE_SUBJECT
           ? `${subject}；请再派一轮审查，而不是按旧意见修复`
           : subject.endsWith("审查报告不存在或为空") ? `${subject}，无法按意见发起修复`
           : subject.includes("无法确认") ? `${subject}；请再派一轮审查` : subject);

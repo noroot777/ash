@@ -1,11 +1,12 @@
 import type { FreeReviewDebate, FreeReviewRound, FreeReviewRun, FreeWorkflowState, Task } from "@ash/shared";
+import { reviewAnchorMatches } from "@ash/shared/free-workflow";
 
 // 审查链只有四个持久状态；「修复中 / 等待复审 / 结论过期」全部在这里**推导**出来：
 // - 修复中 = 任务本身 running/queued 且最近一轮停在未通过（或挂着预约）
 // - 等待自动复审 = 预约槽 armed 且挂着 runId
-// - 结论新鲜度 = 三态：fresh（锚点等于 HEAD 且工作区干净）/ stale（HEAD 变过或有未提交
-//   改动）/ unknown（缺锚点或读不到工作区）。unknown 绝不能显示成新鲜——失败要向着
-//   「不确定」开，不能向着「没问题」开。
+// - 结论新鲜度 = 三态：fresh（工作区对得上这一轮的锚点）/ stale（对不上）/ unknown（缺锚点
+//   或读不到工作区）。判据与服务端放行修复共用 shared 的 `reviewAnchorMatches`。unknown 绝不能
+//   显示成新鲜——失败要向着「不确定」开，不能向着「没问题」开。
 export const FREE_REVIEW_RUN_LABELS: Record<FreeReviewRun["status"], string> = {
   reviewing: "审查中",
   passed: "已通过",
@@ -53,11 +54,14 @@ export function freeConclusionFreshness(
   run: FreeReviewRun | undefined,
   workspaceHead: string | null | undefined,
   workspaceDirty: boolean | null | undefined,
+  workspaceFingerprint?: string | null,
 ): FreeReviewFreshness | null {
   if (!run || (run.status !== "passed" && run.status !== "stopped")) return null;
   const concluded = [...run.rounds].reverse().find((round) => round.conclusion);
-  if (!concluded?.reviewedCommit || !workspaceHead || workspaceDirty == null) return "unknown";
-  return concluded.reviewedCommit === workspaceHead && !workspaceDirty ? "fresh" : "stale";
+  const anchored = concluded
+    ? reviewAnchorMatches(concluded, { head: workspaceHead, dirty: workspaceDirty, fingerprint: workspaceFingerprint })
+    : null;
+  return anchored == null ? "unknown" : anchored ? "fresh" : "stale";
 }
 
 export type FreeReviewView = {
@@ -179,7 +183,9 @@ export function freeReviewView(state: FreeWorkflowState | null | undefined, task
   const waiting = !!task.question || !!task.resumePrompt;
   const reservationArmed = !!state?.reviewReservation?.armed;
   const autoRereview = reservationArmed && !!state?.reviewReservation?.runId;
-  const freshness = freeConclusionFreshness(latestRun, state?.workspaceHead, state?.workspaceDirty);
+  const freshness = freeConclusionFreshness(
+    latestRun, state?.workspaceHead, state?.workspaceDirty, state?.workspaceFingerprint,
+  );
   const disputed = openDisputeEntryIn(state?.reviews);
   const disputedRound = disputed?.round ?? null;
   const debate = disputedRound?.dispute?.debates.at(-1) ?? null;

@@ -61,6 +61,25 @@ assert.equal(
   "只认最新结论轮自己的锚点，不得回退借用旧轮",
 );
 
+// 有内容指纹时按内容比，不再按「HEAD 相同且干净」：在没提交的改动上审出来的结论，
+// 落地时工作区本来就脏，照旧判法一出生就过期。
+const dirtyReviewed = {
+  ...run,
+  status: "stopped",
+  rounds: [{ round: 1, status: "failed", conclusion: "verify_failed", reviewedCommit: "aaa", reviewedFingerprint: "v1:review" }],
+};
+assert.equal(freeConclusionFreshness(dirtyReviewed, "aaa", true, "v1:review"), "fresh", "脏工作区上审的结论，内容没变就是新鲜");
+assert.equal(freeConclusionFreshness(dirtyReviewed, "aaa", true, "v1:other"), "stale", "内容变了就过期");
+assert.equal(freeConclusionFreshness(dirtyReviewed, "aaa", false, null), "unknown", "有指纹锚点却读不到当前指纹是未知");
+// 部分驳回：执行者先改掉认下的几条再驳剩下的，驳回那一版同样是这一轮的锚点。
+const partlyDisputed = {
+  ...dirtyReviewed,
+  rounds: [{ ...dirtyReviewed.rounds[0], disputedFingerprint: "v1:dispute" }],
+};
+assert.equal(freeConclusionFreshness(partlyDisputed, "aaa", true, "v1:dispute"), "fresh", "驳回那一版仍对应这轮意见");
+assert.equal(freeConclusionFreshness(partlyDisputed, "aaa", true, "v1:review"), "fresh", "审查那一版同样认");
+assert.equal(freeConclusionFreshness(partlyDisputed, "aaa", true, "v1:later"), "stale", "驳回之后又改过就过期");
+
 // 叙事全部推导：修复中 = 任务在跑 + 未通过意见在身；自动复审 = 预约槽挂 runId。
 const stoppedState = {
   workspaceHead: "aaa",
