@@ -262,12 +262,15 @@ export function summaryCard(items: SummaryItem[], envelope: string): CardModel {
   };
 }
 
-/** 建任务表单上预先填好的（/new 标题 换行写要求）。要求超过输入框上限时不放进框里，随信封带着，heldBody = 它有几个字。 */
-export interface NewTaskPrefill { title?: string; body?: string; heldBody?: number }
+/**
+ * 建任务表单上预先填好的（/new 后面那段话）。超过输入框上限时不放进框里，随信封带着，heldBody = 它有几个字；
+ * attachments = /new 那条消息里带着几个附件（同样随信封带着）。
+ */
+export interface NewTaskPrefill { body?: string; heldBody?: number; attachments?: number }
 
 /**
- * /new 的表单：选项目、填标题和要求，提交就建任务并开跑（填表、点提交本身就是确认，不再弹确认卡）。
- * 下拉框的 value 是第几个项目，项目 id 存在信封里；不替他预选项目（只有一个可选时才选好）。
+ * /new 的表单：选项目、写要做什么，提交就建任务并开跑（填表、点提交本身就是确认，不再弹确认卡）。不填标题：和网页上
+ * 只写正文建任务一样，首轮由智能体起标题。下拉框的 value 是第几个项目，项目 id 存在信封里；不替他预选项目（只有一个可选时才选好）。
  */
 export function newTaskCard(names: string[], hidden: number, envelope: string, prefill: NewTaskPrefill = {}): CardModel {
   const held = prefill.heldBody ?? 0;
@@ -283,14 +286,15 @@ export function newTaskCard(names: string[], hidden: number, envelope: string, p
           options: names.map((name, index) => ({ text: scrubTitle(name, 40), value: String(index) })),
           ...(names.length === 1 ? { initial: "0" } : {}),
         },
-        { name: "title", label: "标题", placeholder: "一句话说清要做什么", maxLength: 120, required: true, ...(prefill.title ? { initial: prefill.title } : {}) },
-        ...(held ? [] : [{ name: "body", label: "要求", placeholder: "详细要求（可不填）", multiline: true, ...(prefill.body ? { initial: prefill.body } : {}) }]),
+        ...(held ? [] : [{ name: "body", placeholder: "要做什么", multiline: true, required: true, ...(prefill.body ? { initial: prefill.body } : {}) }]),
       ],
       buttons: [{ text: "建任务并开跑", style: "primary", name: "submit", value: value(envelope, "submit") }],
     }, {
       type: "note",
       text: [
-        held ? `要求（${held} 字）已收下，提交时一并带上。` : "要求最多 1000 字；更长的发 /new 标题，换行写要求。",
+        held ? `已收下 ${held} 字，提交时一并带上。` : "超过 1000 字的直接发 /new 加上全文。",
+        prefill.attachments ? `已收下 ${prefill.attachments} 个附件。` : "",
+        "要带图片、文件就回复这张卡发过来。",
         hidden ? `还有 ${hidden} 个项目没列出：发 /tasks 项目名 找到它，在那张卡上点「在这里建任务」。` : "",
       ].join(""),
     }],

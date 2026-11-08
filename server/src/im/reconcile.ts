@@ -17,6 +17,12 @@
 //
 // 卡上那件事没了、只是任务又跑起来了（答复了、重试了、续聊又开了一轮），没有下一张卡要看：旧卡直接撤回，不改成一张
 // 「任务又开始跑了」的灰卡留在聊天里 —— 开跑这件事不用告诉人，跑完要他管的时候自然有新卡。
+//
+// 状态停下来了、回合锁却还占着 = 这一轮还在结算，或者下一轮已经占了位还没落 running：预约的审查、审查没过
+// 排着的修复都是在这把锁放开的那一下接上的。这时推「等你验收」，转眼就得撤回（飞书里就是一张卡闪一下）。
+// 所以这一刻不动它名下的卡，锁一放开再对一次。讨论的裁决门例外：runGate 就是持着这把锁等人点门（duet/index.ts），
+// 门开着时锁不会先放；而裁决门这一种下一步只在门真开着时才算得出来（duet/gate-version.ts currentGateVersion），
+// 不会是结算途中的过渡。其余占锁的（结算、预约审查接棒、验收、源码管理）都是机器在办事，办完就放。
 import { createHash } from "node:crypto";
 import { isAcceptedStage } from "@ash/shared";
 import { and, desc, eq, gt, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
@@ -27,6 +33,7 @@ import { acceptGateRuns } from "../db/schema-accept-gate.js";
 import { imActions, imOutbox } from "../db/schema-im.js";
 import { tasks } from "../db/schema.js";
 import { openDisputeTargets } from "../free-review-dispute.js";
+import { isTurnClaimed, whenTurnIdle } from "../turn-lock.js";
 import { now } from "../util.js";
 import { acceptIdentityOf, awaitsPress, DECISION_KINDS, viewsOf, withTeamLeads, type TaskView, type Turn } from "./attention.js";
 import { acceptedLabel, KIND_LABEL, settledCard, summaryCard, taskLink, turnCard } from "./cards.js";
@@ -63,6 +70,8 @@ export class Reconciler {
   private sweepTimer: ReturnType<typeof setTimeout> | null = null;
   private chain: Promise<unknown> = Promise.resolve();
   private stopped = false;
+  /** 等回合锁放开再对一次的任务（同一把锁只挂一个 waiter）。 */
+  private settling = new Set<string>();
 
   readonly sender: OutboxSender;
   readonly exits: OutboxExits;
@@ -145,12 +154,26 @@ export class Reconciler {
     for (let i = 0; i < ids.length; i += BATCH) {
       const views = await viewsOf(ids.slice(i, i + BATCH));
       for (const [taskId, view] of views) {
+        if (this.stillSettling(taskId, view)) continue;
         creations.push(...await this.settleTask(taskId, view, options.publicBaseUrl, options.titleOnlyProjectIds));
         await this.announce(taskId, view, options.notifyCompleted);
       }
     }
     await this.create(creations, options.publicBaseUrl, options.titleOnlyProjectIds);
     this.sender.kick();
+  }
+
+  /** 有事要人管、回合锁却还占着：先不动，锁放开再对（文件头）。没事要管的照常收卡 —— 又跑起来了就该撤回。 */
+  private stillSettling(taskId: string, view: TaskView | null): boolean {
+    if (!view?.turn || view.turn.kind === "duet_gate" || !isTurnClaimed(taskId)) return false;
+    if (!this.settling.has(taskId)) {
+      this.settling.add(taskId);
+      whenTurnIdle(taskId, () => {
+        this.settling.delete(taskId);
+        this.mark(taskId);
+      });
+    }
+    return true;
   }
 
   /** 对一个任务：收掉对不上的卡，返回该新推的。 */
@@ -448,7 +471,8 @@ async function resolutionLine(row: OutboxRow, view: TaskView | null): Promise<st
   }
   if (next && next.kind === row.kind) return row.kind === "question" ? "问题已更新，请看新的那张卡。" : "有了新的一轮，请看新的那张卡。";
   if (next) return `下一步变成了「${KIND_LABEL[next.kind]}」，请看新的那张卡。`;
-  const live = task.status === "running" || task.status === "queued" || task.status === "awaiting_review";
+  // 托盘里排着马上要送进去的消息也算：转眼就接着跑了。
+  const live = task.status === "running" || task.status === "queued" || task.status === "awaiting_review" || view.deliveryPending;
   const again = (text: string) => ({ text, recall: true as const });
   switch (row.kind) {
     case "question": return live ? again("已答复，任务继续在跑。") : "已在别处答复。";

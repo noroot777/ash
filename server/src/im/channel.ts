@@ -204,6 +204,7 @@ function assemble(credentials: FeishuCredentials, fetch: AppFetch): Running {
       case "task.question":
       case "task.acceptGate":
       case "task.review":
+      case "task.pendingMessages":
       case "duet.gate":
         reconciler.mark(ev.taskId);
         break;

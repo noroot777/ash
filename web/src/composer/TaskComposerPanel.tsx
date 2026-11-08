@@ -58,6 +58,7 @@ import { useComposerRunSummary } from "./composerRunSummary.ts";
 import { ComposerForkContext } from "./ComposerForkContext.tsx";
 import { forkTaskBody, forkBodyProblem } from "../task-detail/conversationFork.ts";
 import { useComposerBranches } from "./useComposerBranches.ts";
+import { provisionalTitle } from "@ash/shared/provisional-title";
 export type { ComposerDraft };
 
 export function TaskComposerPanel({
@@ -433,11 +434,9 @@ export function TaskComposerPanel({
     setBusy(true);
     let task: Task;
     try {
-      const provisionalTitle = body.trim().split(/\r?\n/)[0]!.slice(0, 42)
-        || (mode === "duet" ? "新建讨论" : "未命名任务");
       const common = {
         projectId: project.id,
-        title: provisionalTitle,
+        title: provisionalTitle(body, mode === "duet" ? "新建讨论" : undefined),
         autoTitle: mode === "single",
         groupId: groupId || null,
         labels,

@@ -1,7 +1,7 @@
 // 飞书发来的一条消息该去哪：
 //   ① 带绑定码 → 认领（binding.ts / groups.ts），回一句「回网页确认」；
 //   ② 发消息的人没绑定 → 单聊回一句怎么绑（一天最多一次），群里不理；
-//   ③ 斜杠命令 → commands.ts；
+//   ③ 斜杠命令 → commands.ts（/new 那条消息里带的附件挂到表单上）；回复建任务表单的图片、文件也挂上去（new-form.ts）；
 //   ④ 回复了某张任务卡 → 这张卡是眼下这道提问就答复；以 /reply 开头的才当成给任务发消息；
 //   ⑤ 其余：单聊进助手房间、群里 @ 进项目群聊房间（relay.ts）。
 // 群消息只处理 @ 了机器人的（开放平台只推这类，这里再判一次）。
@@ -33,11 +33,12 @@ import { saveAttachments } from "./attachments.js";
 import { bindingOf, CHANNEL, claimCode, extractCode, updateBinding } from "./binding.js";
 import { parseCommand, type CommandRunner, type InboundContext } from "./commands.js";
 import type { FeishuApi } from "./feishu/api.js";
-import { parseMessage, type FeishuMention } from "./feishu/message.js";
+import { parseMessage, type FeishuMention, type ParsedMessage } from "./feishu/message.js";
 import { groupOf } from "./groups.js";
 import type { Destination, OutboxRow } from "./outbox.js";
 import { TURN_KINDS, type Reconciler } from "./reconcile.js";
 import type { RoomRelay } from "./relay.js";
+import { attachToForm, FORM_ATTACHMENTS_MAX, formReplyOf, type FormReply } from "./new-form.js";
 import { originOf, SYSTEM_SCOPE } from "./scope.js";
 import { scrubText } from "./scrub.js";
 
@@ -239,30 +240,29 @@ export class InboundRouter {
 
     let text = parsed.text;
     const command = parseCommand(text);
+    if (command?.name === "new") {
+      // /new 那条消息里带的图片、文件（富文本里插的图）挂到表单上，提交时一并带上（new-form.ts）。
+      await this.record(inboundId, { kind: "command", detail: command.name });
+      const paths = await this.keep(row, ctx, parsed.attachments.slice(0, FORM_ATTACHMENTS_MAX), command.rest);
+      if (paths) await this.deps.commands.run(ctx, command.name, command.rest, paths);
+      return;
+    }
     if (command && command.name !== "answer" && command.name !== "reply") {
       await this.record(inboundId, { kind: "command", detail: command.name });
       return this.deps.commands.run(ctx, command.name, command.rest);
     }
     if (command) text = command.rest;
 
-    // 附件转存一次，路径记下来（重办时沿用同一份，不再下载、不再转存）。
-    const saved = row.attachments
-      ? { paths: JSON.parse(row.attachments) as string[], failures: [] as string[], transient: false }
-      : await saveAttachments(this.deps.api, this.deps.ash, principal, message.message_id, parsed.attachments);
-    if (saved.transient) {
-      // 不记路径：这一句整句没发，他再发一次是新的一条消息，重新下载。
-      const why = `附件这一下没收下（${scrubText(saved.failures.join("；"), 300)}），这句话没发出去：请稍后再发一次。`;
-      await this.deps.commands.say(ctx, why, SYSTEM_SCOPE, { subject: `r:${message.message_id}:att` });
-      return this.record(inboundId, { state: "failed", detail: why });
+    if (!command && !ctx.card) {
+      const form = await formReplyOf(this.deps.appId, [message.parent_id, message.root_id].filter((id): id is string => !!id), openId);
+      if (form) return this.toForm(row, ctx, form, text, parsed.attachments);
     }
-    await this.record(inboundId, { body: text, attachments: JSON.stringify(saved.paths) });
-    if (saved.failures.length) {
-      // 列的是他自己刚发的附件和下载 / 转存的报错，不含 ash 里的数据。
-      await this.deps.commands.say(ctx, `有附件没收下：\n${scrubText(saved.failures.join("\n"), 1500)}`, SYSTEM_SCOPE, { subject: `r:${message.message_id}:att` });
-    }
-    if (!text.trim() && !saved.paths.length) return this.record(inboundId, { kind: "ignored" });
 
-    if (ctx.card?.taskId) return this.toTask(inboundId, ctx, ctx.card, command?.name ?? null, text, saved.paths);
+    const paths = await this.keep(row, ctx, parsed.attachments, text);
+    if (!paths) return;
+    if (!text.trim() && !paths.length) return this.record(inboundId, { kind: "ignored" });
+
+    if (ctx.card?.taskId) return this.toTask(inboundId, ctx, ctx.card, command?.name ?? null, text, paths);
     if (chatType === "p2p") {
       const room = await this.deps.relay.assistantRoom(ctx);
       if (typeof room !== "string") {
@@ -270,7 +270,7 @@ export class InboundRouter {
         return this.record(inboundId, { kind: "assistant", state: "failed", detail: room.error });
       }
       await this.record(inboundId, { kind: "assistant" });
-      if (await this.deps.relay.post(ctx, inboundId, room, text, saved.paths, null, null)) void this.react(message.message_id);
+      if (await this.deps.relay.post(ctx, inboundId, room, text, paths, null, null)) void this.react(message.message_id);
       return;
     }
     const group = await groupOf(this.deps.appId, message.chat_id);
@@ -284,7 +284,47 @@ export class InboundRouter {
       return this.record(inboundId, { kind: "group", state: "failed", detail: room.error });
     }
     await this.record(inboundId, { kind: "group" });
-    if (await this.deps.relay.post(ctx, inboundId, room.roomId, text, saved.paths, room.mention, group.projectId)) void this.react(message.message_id);
+    if (await this.deps.relay.post(ctx, inboundId, room.roomId, text, paths, room.mention, group.projectId)) void this.react(message.message_id);
+  }
+
+  /**
+   * 附件转存一次，路径记下来（重办时沿用同一份，不再下载、不再转存）。返回 null = 这一下没收下，整句不办（已回过话、记了失败）。
+   */
+  private async keep(row: InboundRow, ctx: InboundContext, attachments: ParsedMessage["attachments"], text: string): Promise<string[] | null> {
+    const saved = row.attachments
+      ? { paths: JSON.parse(row.attachments) as string[], failures: [] as string[], transient: false }
+      : await saveAttachments(this.deps.api, this.deps.ash, ctx.principal, ctx.messageId, attachments);
+    if (saved.transient) {
+      // 不记路径：这一句整句没发，他再发一次是新的一条消息，重新下载。
+      const why = `附件这一下没收下（${scrubText(saved.failures.join("；"), 300)}），这句话没发出去：请稍后再发一次。`;
+      await this.deps.commands.say(ctx, why, SYSTEM_SCOPE, { subject: `r:${ctx.messageId}:att` });
+      await this.record(row.id, { state: "failed", detail: why });
+      return null;
+    }
+    await this.record(row.id, { body: text, attachments: JSON.stringify(saved.paths) });
+    if (saved.failures.length) {
+      // 列的是他自己刚发的附件和下载 / 转存的报错，不含 ash 里的数据。
+      await this.deps.commands.say(ctx, `有附件没收下：\n${scrubText(saved.failures.join("\n"), 1500)}`, SYSTEM_SCOPE, { subject: `r:${ctx.messageId}:att` });
+    }
+    return saved.paths;
+  }
+
+  /** 回复建任务表单：图片、文件挂到这张表单上，提交时一并带上；文字不收（要做什么写在卡上）。 */
+  private async toForm(row: InboundRow, ctx: InboundContext, form: FormReply, text: string, attachments: ParsedMessage["attachments"]): Promise<void> {
+    const say = (line: string) => this.deps.commands.say(ctx, line, SYSTEM_SCOPE);
+    await this.record(row.id, { kind: "form" });
+    if (form.kind === "not_yours") return say("这张表单是别人发起的，附件只能由发 /new 的人加。");
+    if (form.kind === "closed") return say("这张表单已经提交过（或过期）了，没带上：在 ash 里给那个任务补上，或者发 /new 重新建。");
+    if (!attachments.length) return say("回复建任务表单只收图片和文件；要做什么写在卡上的输入框里。");
+    const room = FORM_ATTACHMENTS_MAX - form.attachments.length;
+    if (room <= 0) return say(`这张表单已经带了 ${FORM_ATTACHMENTS_MAX} 个附件，放不下了。`);
+    const paths = await this.keep(row, ctx, attachments.slice(0, room), text);
+    if (!paths?.length) return;
+    const total = await attachToForm(form.envelopeId, paths);
+    if (total === null) return say("这张表单刚提交了，附件没赶上：在 ash 里给那个任务补上，或者发 /new 重新建。");
+    const skipped = attachments.length > room ? `，另有 ${attachments.length - room} 个超出 ${FORM_ATTACHMENTS_MAX} 个的上限没收` : "";
+    await say(`收下 ${paths.length} 个附件（这张表单一共 ${total} 个），提交时一并带上${skipped}。${text.trim() ? "文字没带上：要做什么写在卡上。" : ""}`);
+    void this.react(ctx.messageId);
   }
 
   /**
