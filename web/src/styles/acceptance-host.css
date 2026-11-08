@@ -16,7 +16,12 @@
    地板走的是 min-width 而不是 flex-basis:宿主竖过来时(duet 的窄屏档)主轴变成纵向,
    flex-basis:100% 会变成「高度占满」。
 
-   纵向排布的宿主(.wf-vgate 那种 block 流)天生每个成员一行,不需要也不该套这副形状。 */
+   纵向排布的宿主(.wf-vgate 那种 block 流)天生每个成员一行,不需要也不该套这副形状。
+
+   状态卡的总高度同样没有上限(门禁失败卡连说明带日志就有大半屏),而宿主有三处住在不滚动
+   的固定带里:两个验收台顶栏、讨论结论那条底栏。固定带被内容撑开时,同列里那块唯一会滚的
+   区域被挤成 0 高,超出视口的卡片既看不到也拖不动(2026-11-07 飞书手机现场)。所以这三条带
+   各自封顶 60% 并自己滚,同列的主内容至少留四成。 */
 .acceptance-host { flex-wrap: wrap; }
 .acceptance-host > * { min-width: 100%; margin: 0; }
 .acceptance-host > :is(button, a, span, i, .team-accept-actions) { min-width: 0; flex: 0 1 auto; }

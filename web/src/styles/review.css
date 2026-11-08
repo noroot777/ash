@@ -3,7 +3,7 @@
    写在这一处,拆成两份迟早只改一边就漂开了;team-review.css 那边只留团队独有的部分(可折叠的
    执行者记录卡等)。 */
 .single-review-workspace,.team-review-workspace { display:flex; min-height:0; flex:1; flex-direction:column; background:var(--canvas); }
-.single-review-subbar,.team-review-subbar { display:flex; min-height:52px; flex:0 0 auto; flex-wrap:wrap; align-items:center; gap:10px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
+.single-review-subbar,.team-review-subbar { display:flex; min-height:52px; max-height:60%; flex:0 0 auto; flex-wrap:wrap; overflow-y:auto; overscroll-behavior:contain; align-items:center; gap:10px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
 .accept-workspace-commit { display: flex; flex: 1 0 100%; align-items: flex-start; gap: 9px; border: 1px solid color-mix(in lch, var(--amber) 35%, var(--line)); border-radius: 9px; background: color-mix(in lch, var(--amber) 6%, var(--panel)); padding: 11px 12px; color: var(--amber); font-size: 11px; }
 .accept-workspace-commit > svg { flex-shrink: 0; margin-top: 2px; }
 .accept-workspace-commit > div:first-of-type { min-width: 0; flex: 1; }
