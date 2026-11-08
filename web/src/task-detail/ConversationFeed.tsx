@@ -208,6 +208,7 @@ export function ConversationFeed({
   questionHistory,
   liveQuestionHistory,
   historyReady = true,
+  bodyReady = true,
   onDeleteMessage,
 }: {
   task: TaskListItem;
@@ -252,15 +253,24 @@ export function ConversationFeed({
    * 每一条记录都像是没出现过，补渲染会把整段历史当成卡片糊在屏幕上。
    */
   historyReady?: boolean;
+  /**
+   * 这个任务的会话正文已经读完过一轮（读失败也算读完）。被挡回操作的记录走另一个接口、
+   * 回来得比正文快得多；正文还没到手时把它们先铺出来，屏幕上就只剩那几条旁注，看着像
+   * 「这个任务的全部历史」，还把「正在读取会话…」挤掉了。重读时不翻回 false。
+   */
+  bodyReady?: boolean;
   /** 删掉一条已落盘的消息。不给就一颗删除按钮都不出（正在跑、团队/研讨任务、只读视图）。 */
   onDeleteMessage?: (sources: ConversationSource[]) => Promise<void>;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
-  // 被挡回的用户操作合进同一条任务历史。**无条件合** —— 「有没有正文」跟「这段历史该不该
+  // 被挡回的用户操作合进同一条任务历史。正文读到手之后**无条件合** —— 「有没有正文」跟「这段历史该不该
   // 可见」没有关系,上一版拿它当判据,任务一跑出正文第一次被拒的记录就再也显示不出来
   // (第 2 轮审查 F4)。合流之后它和会话正文里的 aside 旁注走同一套渲染。
   const { items: noticeItems, remedy: turnRemedy, reload: reloadNotices } = useRejectionNotices(task.id);
-  const items = useMemo(() => mergeNoticeItems(feedItems, noticeItems), [feedItems, noticeItems]);
+  const items = useMemo(
+    () => bodyReady ? mergeNoticeItems(feedItems, noticeItems) : feedItems,
+    [bodyReady, feedItems, noticeItems],
+  );
   const requirementText = requirement?.text;
   const requirementAt = requirement?.at;
   const inputs = useMemo(

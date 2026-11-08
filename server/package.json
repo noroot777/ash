@@ -264,7 +264,8 @@
     "test:ash-mcp-file": "tsx scripts/test-ash-mcp-file.ts",
     "test:ash-mcp-launch": "tsx scripts/test-ash-mcp-launch.ts",
     "test:stall-journal": "tsx scripts/test-stall-journal.ts",
-    "test:conversation-redact": "tsx scripts/test-conversation-redact.ts"
+    "test:conversation-redact": "tsx scripts/test-conversation-redact.ts",
+    "test:response-compression": "tsx scripts/test-response-compression.ts"
   },
   "dependencies": {
     "@ash/shared": "*",

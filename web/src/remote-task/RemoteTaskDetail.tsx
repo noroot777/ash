@@ -188,6 +188,7 @@ export function RemoteTaskDetail({
             task={task}
             requirement={snapshot ? { text: snapshot.task.body, at: snapshot.task.createdAt } : null}
             items={items}
+            bodyReady={!!snapshot}
             questionHistory={snapshot?.task.questionHistory ?? []}
             sessions={snapshot?.sessions ?? []}
             loading={loading}

@@ -440,6 +440,7 @@ export function TaskDetail({
                       questionHistory={task.questionHistory}
                       liveQuestionHistory
                       historyReady={conversation.transcriptReady}
+                      bodyReady={conversation.ready}
                       items={conversation.items}
                       sessions={conversation.sessions}
                       pendingExecutor={pendingExecutor}

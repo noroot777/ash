@@ -19,6 +19,7 @@ import { IS_PREVIEW_INSTANCE } from "./preview-instance.js";
 import { recordListeningPort } from "./listening-port.js";
 import { guardMonitorHook } from "./monitor-hook-failsafe.js";
 import { mountPreviewProxy, attachPreviewUpgrades } from "./preview-proxy.js";
+import { responseCompression } from "./response-compression.js";
 import { mountPreviewOpenRoutes } from "./preview-access.js";
 
 let singletonLock: SingletonLock | null = null;
@@ -386,6 +387,9 @@ async function initializeServer() {
 const app = new Hono();
 // 预览资源凭证在已认证的任务入口签发；资源侧再核对有效期、运行代和项目权限。
 mountPreviewProxy(app);
+// 预览代理之后挂压缩:被代理的开发服务器自己管编码,其余接口与页面资源一律经它(为什么、
+// 哪些不压见 response-compression.ts)。
+app.use("*", responseCompression());
 // 其它路由统一经过身份闸；公开接口在 auth/middleware.ts 中列出。
 // 身份闸被 `guardMonitorHook` 包着：内置 Monitor 改道 hook 那条路径上，**身份闸自己**抛的
 // 异常（它要查库）也必须收口成一个明确的 deny —— 非 2xx 在 http hook 的契约里等于放行，
