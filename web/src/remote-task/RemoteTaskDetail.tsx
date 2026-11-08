@@ -31,6 +31,11 @@ export function RemoteTaskDetail({
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  // 哪个远程会话已经读完过一轮（成功或失败都算）。本机那几条被挡回操作的记录要等它才合进
+  // 会话流；不能拿 snapshot 在不在来猜——远端连不上时 snapshot 永远不来，本机的记录会
+  // 跟着一直藏着。带上身份，换任务/换目标时自然回到「还没读完」。
+  const [settledKey, setSettledKey] = useState<string | null>(null);
+  const remoteKey = `${archive.id}\n${target.url}`;
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -68,7 +73,10 @@ export function RemoteTaskDetail({
       }
       setError(reason instanceof Error ? reason : new Error(String(reason)));
     } finally {
-      if (!quiet && refreshVersion.current === version) setLoading(false);
+      if (refreshVersion.current === version) {
+        if (!quiet) setLoading(false);
+        setSettledKey(`${archive.id}\n${target.url}`);
+      }
     }
   }, [archive.id, onLocalOwnership, target.url]);
 
@@ -188,7 +196,7 @@ export function RemoteTaskDetail({
             task={task}
             requirement={snapshot ? { text: snapshot.task.body, at: snapshot.task.createdAt } : null}
             items={items}
-            bodyReady={!!snapshot}
+            bodyReady={settledKey === remoteKey}
             questionHistory={snapshot?.task.questionHistory ?? []}
             sessions={snapshot?.sessions ?? []}
             loading={loading}

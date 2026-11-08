@@ -31,10 +31,14 @@ for (const path of ["/api/sessions/s/trace", "/api/sessions/s/output", "/assets/
 }
 console.log("✓ 整份读的 JSON / 纯文本 / 页面脚本按 gzip 下发，解压后与原文一致");
 
-assert.equal((await get("/api/sessions/s/trace", null)).headers.get("content-encoding"), null);
-assert.equal((await get("/api/sessions/s/trace", "gzip;q=0")).headers.get("content-encoding"), null);
-assert.equal(await (await get("/api/sessions/s/trace", null)).text(), big);
-console.log("✓ 客户端没说接受 gzip 时原样下发");
+for (const encoding of [null, "identity", "gzip;q=0"]) {
+  const response = await get("/assets/index.js", encoding);
+  assert.equal(response.headers.get("content-encoding"), null, String(encoding));
+  // 原样那份也得声明随 Accept-Encoding 变，否则缓存会拿它应付之后会解 gzip 的请求。
+  assert.match(response.headers.get("vary") ?? "", /Accept-Encoding/, String(encoding));
+  assert.equal(await response.text(), big, String(encoding));
+}
+console.log("✓ 客户端没说接受 gzip 时原样下发，且同样声明 Vary: Accept-Encoding");
 
 for (const [path, method] of [
   ["/api/small", "GET"],
