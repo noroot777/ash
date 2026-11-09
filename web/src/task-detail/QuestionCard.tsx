@@ -110,6 +110,8 @@ function QuestionForm({ task, onAnswer }: Props) {
   const inFlight = useRef(false);
   const sendKeys = useSendKeyLabels();
   const answered = answers.filter((answer) => answer.trim()).length;
+  // 有提问又在跑：要么是提问的那一轮还在收尾，要么是哨兵事件这类后端代写的一轮（真人消息会撤下
+  // 旧提问，见 server/src/task-question-supersede.ts）。两种都只能等这一轮结束，不是「正在结束提问」。
   const settling = task.mode !== "team" && (task.status === "running" || task.status === "queued");
   const unavailable = settling || sending || sent;
   const current = Math.min(index, items.length - 1);
@@ -137,9 +139,9 @@ function QuestionForm({ task, onAnswer }: Props) {
   };
   const commit = () => { if (last) void submit(); else go(current + 1); };
 
-  const status = sent ? "已发送" : settling ? "正在结束提问…" : "待答复";
+  const status = sent ? "已发送" : settling ? "等这一轮结束" : "待答复";
   const hint = sent ? "答复已发送"
-    : settling ? "提问结束后即可答复"
+    : settling ? "这一轮结束后即可答复"
     : multi ? `已答 ${answered}/${items.length} · 留空的题会标记为未答`
     : `${sendKeys.send} 发送`;
 

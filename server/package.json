@@ -111,6 +111,7 @@
     "test:ssh-retire": "tsx scripts/test-ssh-profile-retire.ts",
     "test:answer-routing": "tsx scripts/test-answer-routing.ts",
     "test:question-history": "tsx scripts/test-question-history.ts",
+    "test:question-supersede": "tsx scripts/test-question-supersede.ts",
     "test:team-native": "tsx scripts/test-team-native-command.ts",
     "test:team-resilience": "tsx scripts/test-team-lead-resilience.ts && tsx scripts/test-team-inbound-resilience.ts && tsx scripts/test-team-user-interrupt.ts && tsx scripts/test-team-notice-trace.ts",
     "test:team-inbound-durability": "tsx scripts/test-team-inbound-durability.ts && tsx scripts/test-team-inbound-interleave.ts",
