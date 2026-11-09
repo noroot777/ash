@@ -33,7 +33,9 @@ export interface TurnInputSettlement {
   /**
    * 「这条输入确定进了 agent 手里」之后才做的事(当场确认或迟到确认都算,至多一次):拒收、
    * 结果不明都不做。凡是**要消费掉这条新输入所替代的旧等待**的(撤下旧提问),都挂在这里,
-   * 不许拿本地记账成功(会话落盘、run() 返回)冒充送达。要在 `settle` 之前登记。
+   * 不许拿本地记账成功(会话落盘、run() 返回)冒充送达。要在 `settle` 之前登记。这一层每个效果
+   * 只调一次、出错只记日志 —— **失败了还得做成的,效果自己负责持久化与重试**
+   * (撤旧提问见 ../task-question-supersede.ts `honorQuestionSupersede`)。
    */
   whenAccepted(effect: () => Promise<void>): void;
 }

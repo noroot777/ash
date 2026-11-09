@@ -177,6 +177,9 @@ async function initializeServer() {
   if (!IS_PREVIEW_INSTANCE) {
     await reattachRunningTasks();
     await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
+    // 上一个进程确认收下了新消息、却没来得及撤掉的旧提问补撤(task-question-supersede.ts)。
+    await (await import("./task-question-supersede.js")).sweepQuestionSupersedes()
+      .catch((err) => console.error("[ash] 补撤旧提问失败（不影响启动）:", err));
 
     // 撞在故障窗口里丢掉的那次队列推进补回来(判据与边界见 scheduler.ts 的
     // recoverQueueAdvances)。**必须排在 reconcileInterrupted 之后**:被打断的

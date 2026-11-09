@@ -42,6 +42,8 @@ export type TaskWaitOwnership = {
     items: string | null;
     history: string | null;
     occupancy: string | null;
+    /** 这一轮的输入已确认收下(撤卡失败、进程又没了时,开机补做认的就是它)。 */
+    accepted?: true;
   };
   question?: {
     occupancy: string;
