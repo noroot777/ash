@@ -27,6 +27,7 @@ import { withSkillInvocation } from "./skills.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { closeSessionTurns, markTurnActive } from "./session-turns.js";
 import { reconcileInterruptedTask } from "./task-reconcile.js";
+import { settleAdoptedQuestionSupersede } from "./task-question-supersede.js";
 
 // 「现在重启会打断谁」——给 scripts/restart.mjs 的安全闸用。
 //
@@ -271,6 +272,10 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         `[ash] 接管 ${task.id} 的输入回执本身出错:`,
         error instanceof Error ? error.message : error,
       ));
+      // 起跑前登记的「收下后撤旧提问」随原进程的回调一起没了,这里按库里那份记录兑现
+      // (task-question-supersede.ts);接回的还是同一轮,令牌就是库里这一个。
+      void settleAdoptedQuestionSupersede(task.id, task.activeTurnToken, adoptedHandle.inputAccepted)
+        .catch((error) => console.error(`[ash] 接管 ${task.id} 后撤下旧提问失败:`, error));
     } catch (err) {
       console.error(`[ash] 接管 ${task.id} 失败:`, err);
       adopted.delete(task.id);

@@ -56,7 +56,7 @@ import { enterTurn, withTurnPreflight } from "./turn-entry-guard.js";
 import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
 import { turnIdentityEnv } from "./turn-identity.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
-import { questionSupersededNote, supersedableQuestion, supersedeQuestion } from "./task-question-supersede.js";
+import { armQuestionSupersede, questionSupersededNote, supersedeQuestion } from "./task-question-supersede.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
   COLLAB_INVITE, SYS_MARKER,
@@ -278,8 +278,9 @@ export async function continueTask(
     }
     // 真人消息会撤下上一轮没答的提问(task-question-supersede.ts),要等计划模式定完旁路身份再判;
     // 撤只在输入**确认送达**之后(拒收、结果不明都留着那道题),任何出口都由回执那一层兑现。
-    const superseded = await supersedableQuestion(task, { system: !!opts.system, byBackend: opts.byBackend, sideTurn });
-    if (superseded) inputSettlement.whenAccepted(() => supersedeQuestion(superseded));
+    const supersededQuestion = await armQuestionSupersede(task, turnToken, { system: !!opts.system, byBackend: opts.byBackend, sideTurn })
+      .catch((error) => { console.error(`[ash] 登记撤下旧提问失败 ${taskId}:`, error); return null; });
+    if (supersededQuestion) inputSettlement.whenAccepted(() => supersedeQuestion(taskId, turnToken));
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
 
     // 这一轮续哪一条会话行(同一位智能体可能有好几条;接不接得上还要看 CLI 配置目录与
@@ -380,7 +381,7 @@ export async function continueTask(
         completion: (followUpFrom
           ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
           : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow))
-          + (superseded ? questionSupersededNote(superseded.question!) : ""),
+          + (supersededQuestion ? questionSupersededNote(supersededQuestion) : ""),
         backgroundWait: backgroundWaitFor(agent),
         direction: DIRECTION_PROTOCOL(directionToken),
         reviewReminder,

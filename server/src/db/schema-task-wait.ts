@@ -31,6 +31,18 @@ export type TaskWaitOwnership = {
     phase?: "prepared" | "launching" | "uncertain";
   };
   turn?: { identity: ReviewTargetIdentity; origin: WaitOrigin };
+  /**
+   * 回合令牌 `turnToken` 那一轮是真人消息：它的输入确认收下后，要撤起跑时挂着的这一问（题面、占位、
+   * 答复历史当场照下来，撤时逐项比对）。说明与兑现见 ../task-question-supersede.ts。
+   */
+  questionSupersede?: {
+    turnToken: string;
+    text: string;
+    options: string | null;
+    items: string | null;
+    history: string | null;
+    occupancy: string | null;
+  };
   question?: {
     occupancy: string;
     origin: WaitOrigin;

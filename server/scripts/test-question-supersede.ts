@@ -1,6 +1,6 @@
 // 用户没答提问、直接发新消息时，那道提问要撤下（task-question-supersede.ts）。
-// 钉住五件事：真人消息撤卡并告诉 agent；撤卡认执行器的输入回执（拒收、结果不明都不撤，迟到确认
-// 收下才撤）；哨兵这类后端代写的回合不撤；agent 在这一轮里重新问了（题面一字不差也算）不能被
+// 钉住六件事：真人消息撤卡并告诉 agent；撤卡认执行器的输入回执（拒收、结果不明都不撤，迟到确认
+// 收下才撤）；等回执期间重启、接管回来确认收下也要撤（撤卡记录在库里，不在进程回调里）；哨兵这类后端代写的回合不撤；agent 在这一轮里重新问了（题面一字不差也算）不能被
 // 误撤；归审查的提问不归这条路管。
 // 跑:npm -w server run test:question-supersede
 import assert from "node:assert/strict";
@@ -26,7 +26,7 @@ const { projects, tasks } = await import("../src/db/schema.js");
 const { continueTask } = await import("../src/orchestrator.js");
 const { replyToTask } = await import("../src/task-reply.js");
 const { setTaskQuestion } = await import("../src/task-question.js");
-const { supersedableQuestion, supersedeQuestion } = await import("../src/task-question-supersede.js");
+const { armQuestionSupersede, settleAdoptedQuestionSupersede, supersedeQuestion } = await import("../src/task-question-supersede.js");
 const { isTurnClaimed } = await import("../src/runs.js");
 const { bus } = await import("../src/bus.js");
 const { ClaudeExecutor } = await import("../src/executors/claude.js");
@@ -135,27 +135,47 @@ try {
   assert.equal(monitorPrompt.includes(NOTE), false);
   assert.equal((await row("monitor")).question, question, "后端代写的回合不撤提问");
 
-  // ⑤ 拿到快照之后 agent 又问了一次（题面一字不差）：占位换了，不许当成旧的那一问撤掉。
+  // ⑤ 起跑前登记之后 agent 又问了一次（题面一字不差）：占位换了，不许当成旧的那一问撤掉。
   await create("reasked", { status: "running" });
   await setTaskQuestion({ taskId: "reasked", question });
-  const snapshot = await supersedableQuestion(await row("reasked"), { sideTurn: false });
-  assert.ok(snapshot, "普通提问可以被撤");
+  assert.equal(await armQuestionSupersede(await row("reasked"), "turn-1", { sideTurn: false }), question, "普通提问可以被撤");
   await setTaskQuestion({ taskId: "reasked", question });
-  await supersedeQuestion(snapshot!);
+  await supersedeQuestion("reasked", "turn-1");
   assert.equal((await row("reasked")).question, question, "这一轮重新问的不能被误撤");
-  await supersedeQuestion(await row("reasked"));
+  assert.equal((await row("reasked")).waitOwnership?.questionSupersede, undefined, "兑现过的记录了结掉");
+  await armQuestionSupersede(await row("reasked"), "turn-2", { sideTurn: false });
+  await supersedeQuestion("reasked", "turn-1");
+  assert.equal((await row("reasked")).question, question, "别的回合的确认不兑现这一轮的记录");
+  await supersedeQuestion("reasked", "turn-2");
   assert.equal((await row("reasked")).question, null, "同一次占位照常撤下");
 
-  // ⑥ 归审查的提问由审查链收口；旁路回合也不碰。
+  // ⑥ 等回执期间服务重启：原进程里的回调没了，记录还在库里。接管入口拿到「收下了」就按它撤，
+  // 拒收不撤；接回的不是登记的那一轮（令牌对不上）也不撤。
+  for (const [id, fact, token, kept] of [
+    ["adopt-accepted", "accepted", "adopt-turn", false],
+    ["adopt-refused", "refused", "adopt-turn", true],
+    ["adopt-other-turn", "accepted", "another-turn", true],
+  ] as const) {
+    await create(id, { status: "running", activeTurnToken: "adopt-turn" });
+    await armQuestionSupersede(await row(id), "adopt-turn", { sideTurn: false });
+    await settleAdoptedQuestionSupersede(id, token, Promise.resolve(fact));
+    assert.equal((await row(id)).question, kept ? question : null, `${id}: 接管后按库里的记录兑现`);
+  }
+  await create("adopt-no-receipt", { status: "running" });
+  await armQuestionSupersede(await row("adopt-no-receipt"), "adopt-turn", { sideTurn: false });
+  await settleAdoptedQuestionSupersede("adopt-no-receipt", "adopt-turn", undefined);
+  assert.equal((await row("adopt-no-receipt")).question, null, "没有回执能力的执行器按收下算");
+
+  // ⑦ 归审查的提问由审查链收口；旁路回合也不碰。
   await create("review", {
     waitOwnership: { question: { occupancy: "review-q", origin: { kind: "review", directory: join(root, "review"), generation: "g1" },
       text: question, options: null, items: null } },
   });
-  assert.equal(await supersedableQuestion(await row("review"), { sideTurn: false }), null, "审查的提问不归这条路撤");
+  assert.equal(await armQuestionSupersede(await row("review"), "turn-r", { sideTurn: false }), null, "审查的提问不归这条路撤");
   await create("side");
-  assert.equal(await supersedableQuestion(await row("side"), { sideTurn: true }), null, "旁路回合维持原状");
+  assert.equal(await armQuestionSupersede(await row("side"), "turn-s", { sideTurn: true }), null, "旁路回合维持原状");
 
-  console.log("user messages supersede the pending question only once input is accepted; backend turns, re-asks and review questions keep it: passed");
+  console.log("user messages supersede the pending question only once input is accepted (also after restart adoption); backend turns, re-asks and review questions keep it: passed");
 } finally {
   unsubscribe();
   ClaudeExecutor.prototype.run = original.run;
