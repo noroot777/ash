@@ -30,6 +30,12 @@ export interface TurnInputSettlement {
   settle(handle: RunHandle): Promise<void>;
   /** 结过了没有(异常出口据此判断还欠不欠这一笔)。 */
   settled(): boolean;
+  /**
+   * 「这条输入确定进了 agent 手里」之后才做的事(当场确认或迟到确认都算,至多一次):拒收、
+   * 结果不明都不做。凡是**要消费掉这条新输入所替代的旧等待**的(撤下旧提问),都挂在这里,
+   * 不许拿本地记账成功(会话落盘、run() 返回)冒充送达。要在 `settle` 之前登记。
+   */
+  whenAccepted(effect: () => Promise<void>): void;
 }
 
 export function createTurnInputSettlement(taskId: string, opts: {
@@ -44,6 +50,15 @@ export function createTurnInputSettlement(taskId: string, opts: {
 reviewReceipt?: () => ReviewStartReceipt | undefined,
 ): TurnInputSettlement {
   let done = false;
+  const acceptedEffects: Array<() => Promise<void>> = [];
+  const runAccepted = async (fact: InputAcceptance): Promise<void> => {
+    if (fact !== "accepted") return;
+    for (const effect of acceptedEffects.splice(0)) {
+      try { await effect(); } catch (error) {
+        console.error(`[ash] 任务 ${taskId} 输入确认送达后的收尾出错，这一轮照常继续:`, error);
+      }
+    }
+  };
   const ids = opts.pendingMessageIds ?? [];
   // **先把协议层那个事实落盘,再去记账。** 进程内那一份只够当场处置:
   //   · refused  —— 判出拒收之后、归还落库之前进程没了,重启对账手上只有越线记号(线确实
@@ -64,12 +79,13 @@ reviewReceipt?: () => ReviewStartReceipt | undefined,
       opts.onInputReceipt?.(handle.inputAccepted ?? Promise.resolve<InputAcceptance>("accepted"));
     },
     settled: () => done,
+    whenAccepted: (effect) => { acceptedEffects.push(effect); },
     async settle(handle) {
       const settled = opts.onInputSettled;
       if (done) return;
       done = true;
       // 没有调用方要记账的回合也照样问回执:审查回合的结算要读它(见 `reviewReceipt`)。
-      if (!settled && !reviewReceipt?.()) return;
+      if (!settled && !reviewReceipt?.() && !acceptedEffects.length) return;
       const acceptance = await awaitTurnInput(handle);
       logTurnInputAcceptance(acceptance, `任务 ${taskId}`);
       // 有界等待超时 ≠ 回执落定:本体还悬着,定论就还可能到 —— 审查结算据此按住这一轮。
@@ -80,6 +96,7 @@ reviewReceipt?: () => ReviewStartReceipt | undefined,
       try { await settled?.(acceptance, reviewReceipt?.()); } catch (error) {
         console.error(`[ash] 任务 ${taskId} 的投递记账(${acceptance})出错，这一轮照常继续:`, error);
       }
+      await runAccepted(acceptance);
       if (acceptance === "unknown") {
         // **接着等那份凭据**(不阻塞这一轮),**三档一律转给调用方**:它最终落定成 `accepted`
         // 就是补记账,落定成 `refused` 就是归还重投 —— 上一版只转 accepted,于是迟到的拒收
@@ -89,6 +106,7 @@ reviewReceipt?: () => ReviewStartReceipt | undefined,
           try { await settled?.(late, reviewReceipt?.()); } catch (error) {
             console.error(`[ash] 任务 ${taskId} 的迟到投递记账(${late})出错:`, error); // 同上,不静默
           }
+          await runAccepted(late);
         });
         // 落定成 unknown 或者抛了:定论再也不会到。审查那一侧照样按住,只是从「等迟到的定论」
         // 换成「等用户拿主意」(review-input-verdict.ts 的 unconfirmed;定论那一档由上面先记)。

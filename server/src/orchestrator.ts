@@ -276,8 +276,10 @@ export async function continueTask(
       if (sessionRole === "single") reclaimTurn(taskId, turn, "side");
       await db.update(tasks).set({ nativeTurn: true, followUpFrom: ["running", "queued"].includes(task.status) ? null : task.status }).where(eq(tasks.id, taskId));
     }
-    // 真人消息会撤下上一轮没答的提问(task-question-supersede.ts),要等计划模式定完旁路身份再判。
+    // 真人消息会撤下上一轮没答的提问(task-question-supersede.ts),要等计划模式定完旁路身份再判;
+    // 撤只在输入**确认送达**之后(拒收、结果不明都留着那道题),任何出口都由回执那一层兑现。
     const superseded = await supersedableQuestion(task, { system: !!opts.system, byBackend: opts.byBackend, sideTurn });
+    if (superseded) inputSettlement.whenAccepted(() => supersedeQuestion(superseded));
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
 
     // 这一轮续哪一条会话行(同一位智能体可能有好几条;接不接得上还要看 CLI 配置目录与
@@ -571,8 +573,6 @@ export async function continueTask(
     if (!opts.system && !opts.byBackend && task.resumePrompt && task.status !== "paused") {
       await takeResumePrompt(taskId, task.resumePrompt);
     }
-    // 同理,原话落盘之后才撤提问;撤不掉不能让已经起跑的这一轮按起跑失败收掉。
-    if (superseded) await supersedeQuestion(superseded).catch((error) => console.error(`[ash] 撤下旧提问失败 ${taskId}:`, error));
     // 原文已经写进会话落盘文件了,但「落 sent」还缺最后一个事实:**agent 到底收下了没有**。
     // `run()` 返回只证明进程起来了 —— codex app-server 的回合输入是 spawn 之后才走协议发出去
     // 的,服务端死在那条缝里就会留下「进程活着、输入一个字没出去、消息却已经是终态 sent」的

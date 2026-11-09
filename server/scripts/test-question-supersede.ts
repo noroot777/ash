@@ -1,6 +1,7 @@
 // 用户没答提问、直接发新消息时，那道提问要撤下（task-question-supersede.ts）。
-// 钉住四件事：真人消息撤卡并告诉 agent；哨兵这类后端代写的回合不撤；agent 在这一轮里重新问了
-// （题面一字不差也算）不能被误撤；归审查的提问不归这条路管。
+// 钉住五件事：真人消息撤卡并告诉 agent；撤卡认执行器的输入回执（拒收、结果不明都不撤，迟到确认
+// 收下才撤）；哨兵这类后端代写的回合不撤；agent 在这一轮里重新问了（题面一字不差也算）不能被
+// 误撤；归审查的提问不归这条路管。
 // 跑:npm -w server run test:question-supersede
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -9,7 +10,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import type { RunHandle, RunOpts } from "../src/executors/types.js";
+import type { InputAcceptance, RunHandle, RunOpts } from "../src/executors/types.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-question-supersede-"));
@@ -17,6 +18,7 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_UPLOADS_DIR = join(root, "uploads");
 process.env.CLAUDE_CONFIG_DIR = join(root, "claude");
+process.env.ASH_TURN_INPUT_ACK_MS = "200";
 delete process.env.ASH_ALLOW_REAL_AGENT;
 
 const { db, ensureSchema } = await import("../src/db/index.js");
@@ -45,9 +47,15 @@ const create = (taskId: string, extra: Partial<typeof tasks.$inferInsert> = {}) 
   createdAt: at, updatedAt: at, ...extra,
 });
 
+/** 下一轮执行器给出的输入回执；不设 = 不提供回执（按收下算）。 */
+let nextReceipt: Promise<InputAcceptance> | undefined;
+
 function captureRun(opts: RunOpts): RunHandle {
   prompts.push(opts.prompt);
+  const inputAccepted = nextReceipt;
+  nextReceipt = undefined;
   return {
+    ...(inputAccepted ? { inputAccepted } : {}),
     sessionId: `fixture-${prompts.length}`,
     commandLine: "question supersede fixture",
     events: (async function* () {
@@ -100,7 +108,26 @@ try {
   assert.ok((await reply("plain", "先别管这个，回答我另一个问题")).includes(NOTE));
   assert.equal((await row("plain")).question, null);
 
-  // ③ 哨兵事件这类后端代写的回合不是用户在说话：提问原样留着，也不提撤卡。
+  // ③ 输入回执说了算：协议明确拒收、或者一直没有定论，这句话就不算送到，提问留着等答复。
+  await create("refused");
+  nextReceipt = Promise.resolve("refused");
+  await reply("refused", "先别管这个");
+  assert.equal((await row("refused")).question, question, "拒收的消息不能撤掉提问");
+  await create("unknown");
+  nextReceipt = new Promise<InputAcceptance>(() => {});
+  await reply("unknown", "先别管这个");
+  assert.equal((await row("unknown")).question, question, "结果不明时提问留着");
+  // 有界等待超时之后回执才落定成「收下了」：那时再撤。
+  await create("late");
+  let accept!: (fact: InputAcceptance) => void;
+  nextReceipt = new Promise<InputAcceptance>((resolve) => { accept = resolve; });
+  await reply("late", "先别管这个");
+  assert.equal((await row("late")).question, question, "回执还没到时不撤");
+  accept("accepted");
+  for (let attempt = 0; attempt < 200 && (await row("late")).question !== null; attempt++) await delay(10);
+  assert.equal((await row("late")).question, null, "迟到确认收下后撤卡");
+
+  // ④ 哨兵事件这类后端代写的回合不是用户在说话：提问原样留着，也不提撤卡。
   await create("monitor", { resumePrompt: "等哨兵" });
   const before = prompts.length;
   await continueTask("monitor", "【哨兵事件】构建结束", { byBackend: true });
@@ -108,7 +135,7 @@ try {
   assert.equal(monitorPrompt.includes(NOTE), false);
   assert.equal((await row("monitor")).question, question, "后端代写的回合不撤提问");
 
-  // ④ 拿到快照之后 agent 又问了一次（题面一字不差）：占位换了，不许当成旧的那一问撤掉。
+  // ⑤ 拿到快照之后 agent 又问了一次（题面一字不差）：占位换了，不许当成旧的那一问撤掉。
   await create("reasked", { status: "running" });
   await setTaskQuestion({ taskId: "reasked", question });
   const snapshot = await supersedableQuestion(await row("reasked"), { sideTurn: false });
@@ -119,7 +146,7 @@ try {
   await supersedeQuestion(await row("reasked"));
   assert.equal((await row("reasked")).question, null, "同一次占位照常撤下");
 
-  // ⑤ 归审查的提问由审查链收口；旁路回合也不碰。
+  // ⑥ 归审查的提问由审查链收口；旁路回合也不碰。
   await create("review", {
     waitOwnership: { question: { occupancy: "review-q", origin: { kind: "review", directory: join(root, "review"), generation: "g1" },
       text: question, options: null, items: null } },
@@ -128,7 +155,7 @@ try {
   await create("side");
   assert.equal(await supersedableQuestion(await row("side"), { sideTurn: true }), null, "旁路回合维持原状");
 
-  console.log("user messages supersede the pending question; backend turns, re-asks and review questions keep it: passed");
+  console.log("user messages supersede the pending question only once input is accepted; backend turns, re-asks and review questions keep it: passed");
 } finally {
   unsubscribe();
   ClaudeExecutor.prototype.run = original.run;
