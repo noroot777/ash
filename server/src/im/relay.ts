@@ -26,7 +26,7 @@ import { bindingOf, CHANNEL, claimAssistantRoom } from "./binding.js";
 import { taskLink } from "./cards.js";
 import type { CommandRunner, InboundContext } from "./commands.js";
 import { claimGroupRoom, groupRoomOf, type GroupRow } from "./groups.js";
-import { readOptions } from "./meta.js";
+import { cardLinkBase } from "./link-base.js";
 import type { Destination } from "./outbox.js";
 import { originOfScope, type OutboxScope } from "./scope.js";
 import { scrubText, scrubTitle } from "./scrub.js";
@@ -228,7 +228,7 @@ export class RoomRelay {
       return;
     }
     if (!answers.every((message) => DONE.has(message.status)) && !timedOut) return;
-    const base = (await readOptions()).publicBaseUrl;
+    const base = await cardLinkBase();
     const titleOf = new Map(snapshot.data.tasks.map((task) => [task.id, task] as const));
     const lines: string[] = [];
     const listed = new Set<string>();

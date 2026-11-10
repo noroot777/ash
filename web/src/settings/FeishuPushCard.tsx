@@ -90,14 +90,14 @@ export function FeishuPushCard({ status, projects, onStatus, notify }: {
               value={baseUrl}
               readOnly={!canManage}
               disabled={busy}
-              placeholder="https://my-mac.tailnet.ts.net:4317"
+              placeholder="http://my-mac.tailnet.ts.net:4317"
               aria-invalid={urlInvalid}
               onChange={(event) => setBaseUrl(event.target.value)}
             />
             <small className={urlInvalid ? "feishu-field-error" : undefined}>
               {urlInvalid
                 ? "要以 http:// 或 https:// 开头，中间不能有空格"
-                : "卡片上「在 ash 中打开」的地址前缀。填 Tailscale 等手机能打开的地址；为空则卡片不带链接。"}
+                : "卡片上「在 ash 中打开」的地址前缀，为空则卡片不带链接。飞书内置浏览器解析不了 Tailscale 的机器名，http 地址会自动换成它的 100.x IP；https 换不了，请填 http。"}
             </small>
           </span>
           {canManage && (

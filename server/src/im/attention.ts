@@ -23,7 +23,7 @@ import { isFinalHumanGate } from "@ash/shared/workflow-policy";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { projects, scheduledMessages, tasks } from "../db/schema.js";
-import { freeReviewRuns } from "../db/schema-free-workflow.js";
+import { freeReviewRuns, freeWorkflowStates } from "../db/schema-free-workflow.js";
 import { currentGateVersion } from "../duet/gate-version.js";
 import { unresolvedDisputes } from "../free-review-dispute.js";
 import { deliversOnItsOwn } from "../pending-delivery-facts.js";
@@ -38,8 +38,11 @@ export type Turn =
   | { kind: "dispute"; generation: string; runId: string; round: number; summary: string | null; hasDefer: boolean }
   | { kind: "duet_gate"; generation: string; version: number }
   | { kind: "verify_failed"; generation: string }
-  /** release = 停在一道后面还有站的「等我点头」上，这一按只是放行；confirm = 确认框上那句「这一按会发生什么」。 */
-  | { kind: "accept"; generation: string; reviewFailed: boolean; release: boolean; confirm: string };
+  /**
+   * release = 停在一道后面还有站的「等我点头」上，这一按只是放行；confirm = 确认框上那句「这一按会发生什么」。
+   * reviewPassed = 这一版成果刚审过、通过了（卡片据此说「审查通过」而不是「完成了」）；reviewFailed = 最近一条审查链没通过。
+   */
+  | { kind: "accept"; generation: string; reviewFailed: boolean; reviewPassed: boolean; release: boolean; confirm: string };
 
 export interface TaskView {
   task: Task;
@@ -49,6 +52,8 @@ export interface TaskView {
   teamWorker: boolean;
   /** 托盘里有此刻判得出「送」的消息（判据同投递扫描）：一空下来就送进去、接着跑。 */
   deliveryPending: boolean;
+  /** 自由工作流的审查链还没出结论（见 freeReviewFacts）。 */
+  reviewPending: boolean;
   turn: Turn | null;
 }
 
@@ -91,12 +96,39 @@ export async function viewOf(taskId: string): Promise<TaskView | null | undefine
   return views?.has(taskId) ? views.get(taskId) ?? null : undefined;
 }
 
-/** 最近一条工作区审查没通过（自由工作流）。待验收卡上据此要求二次确认。 */
-async function latestReviewFailed(taskId: string): Promise<boolean> {
-  const run = (await db.select({ status: freeReviewRuns.status }).from(freeReviewRuns)
-    .where(and(eq(freeReviewRuns.taskId, taskId), eq(freeReviewRuns.targetKind, "workspace")))
-    .orderBy(desc(freeReviewRuns.createdAt)).limit(1)).at(0);
-  return run?.status === "failed";
+interface ReviewFacts {
+  /** 审查链还没出结论：最近一条在审（reviewing），或预约着下一轮（修复完自动复审、跑着时预约的首审）。 */
+  pending: boolean;
+  /** 最近一条工作区审查链：没通过（stopped = 用完轮数或停下等修，failed = 跑出错）。口径同网页 freeReviewCopy.ts。 */
+  failed: boolean;
+  /** 最近一条通过了，而且之后执行者没再跑过（审查回合自己也会刷新 endedAt，结算在它之后落 finishedAt）。 */
+  passed: boolean;
+}
+
+const NO_REVIEW: ReviewFacts = { pending: false, failed: false, passed: false };
+
+/** 一批自由工作流任务的审查链现状（只看验收前的工作区审查，合并结果审查是验收后的另一条链）。 */
+async function freeReviewFacts(rows: { id: string; endedAt: string | null }[]): Promise<Map<string, ReviewFacts>> {
+  const out = new Map<string, ReviewFacts>();
+  if (!rows.length) return out;
+  const ids = rows.map((row) => row.id);
+  const [runs, armed] = await Promise.all([
+    db.select({ taskId: freeReviewRuns.taskId, status: freeReviewRuns.status, finishedAt: freeReviewRuns.finishedAt }).from(freeReviewRuns)
+      .where(and(inArray(freeReviewRuns.taskId, ids), eq(freeReviewRuns.targetKind, "workspace")))
+      .orderBy(desc(freeReviewRuns.createdAt)),
+    db.select({ taskId: freeWorkflowStates.taskId }).from(freeWorkflowStates)
+      .where(and(inArray(freeWorkflowStates.taskId, ids), eq(freeWorkflowStates.reviewArmed, true))),
+  ]);
+  const reserved = new Set(armed.map((row) => row.taskId));
+  for (const row of rows) {
+    const latest = runs.find((run) => run.taskId === row.id);
+    out.set(row.id, {
+      pending: reserved.has(row.id) || latest?.status === "reviewing",
+      failed: latest?.status === "stopped" || latest?.status === "failed",
+      passed: latest?.status === "passed" && !!latest.finishedAt && latest.finishedAt >= (row.endedAt ?? ""),
+    });
+  }
+  return out;
 }
 
 /**
@@ -123,6 +155,7 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
   const trayed = new Set((await db.selectDistinct({ taskId: scheduledMessages.taskId }).from(scheduledMessages)
     .where(and(inArray(scheduledMessages.taskId, rows.map((row) => row.id)), eq(scheduledMessages.status, "pending"))))
     .map((row) => row.taskId));
+  const reviews = await freeReviewFacts(rows.filter((row) => row.workflowMode === "free" && row.mode === "single" && !row.parentId));
 
   for (const task of enriched) {
     const row = rowById.get(task.id)!;
@@ -138,11 +171,13 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
     const disputes = task.workflowMode === "free" && task.mode === "single" ? await unresolvedDisputes(task.id) : [];
     const teamWorker = !!task.parentId && parents.get(task.parentId) === "team";
     const deliveryPending = trayed.has(task.id) && await deliversOnItsOwn(task.id);
+    const review = reviews.get(task.id) ?? NO_REVIEW;
     const kind = humanTurnOf(toTaskListItem(task), crew.map(toTaskListItem), {
       teamWorker,
       duetGateOpen: gateVersion !== null,
       disputeOpen: disputes.length > 0,
       deliveryPending,
+      reviewPending: review.pending,
     });
     let turn: Turn | null = null;
     switch (kind) {
@@ -169,7 +204,7 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
         break;
       case "accept":
         turn = {
-          kind, generation: acceptGeneration(await resultVersionOf(task), humanGateOf(row)), reviewFailed: await latestReviewFailed(task.id),
+          kind, generation: acceptGeneration(await resultVersionOf(task), humanGateOf(row)), reviewFailed: review.failed, reviewPassed: review.passed,
           release: !isFinalHumanGate(task.workflow, task.workflowAt),
           confirm: acceptanceMessage(toTaskListItem(task), projectRows.get(task.projectId)?.acceptCommit ?? true),
         };
@@ -181,6 +216,7 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
       projectName: projectRows.get(task.projectId)?.name ?? "",
       teamWorker,
       deliveryPending,
+      reviewPending: review.pending,
       turn,
     });
   }

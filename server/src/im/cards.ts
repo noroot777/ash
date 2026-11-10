@@ -174,7 +174,8 @@ export function turnCard(view: TaskView, turn: Turn, ctx: CardContext, envelope:
     case "accept": {
       // 停在中途那道「等我点头」上时这一按是放行不是验收：按钮、确认框、副标题、提示一起改口，说法和网页确认框
       // 同一份（shared accept-message.ts）。只推标题的项目不把确认框里的分支名这些带出去。
-      if (turn.reviewFailed) blocks.push({ type: "text", text: "注意：最近一轮审查没通过。" });
+      // 不在关口上时副标题已经说了审查的结论（acceptSubtitle），正文不再重复。
+      if (turn.reviewFailed && turn.release) blocks.push({ type: "text", text: "注意：最近一轮审查没通过。" });
       const what = !ctx.titleOnly ? turn.confirm
         : turn.release ? "这一按只是放行这一关：不合并、不清理，这条线接着往下走。" : "这一按会合并还是只记下认可、怎么清理，在 ash 里看得到。";
       const confirm = turn.reviewFailed
@@ -188,11 +189,19 @@ export function turnCard(view: TaskView, turn: Turn, ctx: CardContext, envelope:
         type: "note",
         text: `${turn.release ? "" : "项目设了验收前置命令的话会先跑一遍（可能十几分钟），结果会更新在这张卡上。"}要给任务捎句话，回复这张卡片时以 /reply 开头。`,
       });
-      return { ...header(view, turn.kind, undefined, turn.release ? "停在「等我点头」，等你放行" : undefined), blocks };
+      return { ...header(view, turn.kind, turn.reviewFailed && !turn.release ? "orange" : undefined, acceptSubtitle(turn)), blocks };
     }
   }
   if (ctx.link) blocks.push({ type: "buttons", buttons: linkButton(ctx) });
   return { ...header(view, turn.kind), blocks };
+}
+
+/** 待验收卡的副标题：审过的说审查的结论，「完成了」只留给没审过的。 */
+function acceptSubtitle(turn: Extract<Turn, { kind: "accept" }>): string {
+  if (turn.release) return "停在「等我点头」，等你放行";
+  if (turn.reviewPassed) return "审查通过，等你验收";
+  if (turn.reviewFailed) return "审查没通过，等你决定";
+  return KIND_LABEL.accept;
 }
 
 /** 待验收卡上那个按钮（结局里「点了哪个」也用它）：和网页验收按钮同一套说法。 */

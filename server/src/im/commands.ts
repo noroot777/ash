@@ -23,6 +23,7 @@ import { confirmCard, newTaskCard, taskLink, todoText } from "./cards.js";
 import { createEnvelope, ENVELOPE_TTL_MS } from "./envelopes.js";
 import { renderCard, type CardModel } from "./feishu/cards.js";
 import { groupOf } from "./groups.js";
+import { cardLinkBase } from "./link-base.js";
 import { readOptions } from "./meta.js";
 import { formAttachments } from "./new-form.js";
 import { cardHeaderOf, type Destination, type OutboxRow } from "./outbox.js";
@@ -310,7 +311,7 @@ export class CommandRunner {
     if (!created.ok) return { ok: false, text: scrubText(created.error, 300), final: false };
     // 任务已经建出来了：后面再出什么错都不能算「没办成」—— 那会放回信封，再点一下就又建一个。
     const run = await this.deps.ash.post(principal, taskPath(created.data.id, "/run"));
-    const base = await readOptions().then((options) => options.publicBaseUrl, () => null);
+    const base = await cardLinkBase();
     const link = taskLink(base, { task: { id: created.data.id, projectId } });
     return {
       ok: true, final: true, tone: run.ok ? "green" : "orange", link,
