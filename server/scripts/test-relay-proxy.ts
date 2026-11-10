@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { describeRoute, parseBypassRule, redactProxy, relayProxyPlan, routeFor } from "../src/proxy-route.js";
 import {
-  gvariantStrings, parseGnomeProxy, parseKdeProxy, parseScutilProxy, parseWindowsProxy,
+  decodeWindowsProxyOutput, gvariantStrings, parseGnomeProxy, parseKdeProxy, parseScutilProxy, parseWindowsProxy, readWindowsProxy,
   refreshSystemProxy, setSystemProxyReaderForTests, systemProxySettings, type SystemProxySettings,
 } from "../src/system-proxy.js";
 
@@ -98,6 +99,29 @@ try {
     assert.equal((await route(url)).bypass, "system", `${url} 应命中规范化后的绕过规则`);
   }
   assert.equal((await route("https://公司.测试/")).proxy, "http://proxy:8080", "`*.域名` 不含域名自身");
+
+  // 同一行规则在不同平台直连的范围不同，各按原平台的语义解释
+  const expectRoutes = async (label: string, direct: string[], proxied: string[]) => {
+    for (const url of direct) assert.equal((await route(url)).bypass, "system", `${label}：${url} 应直连`);
+    for (const url of proxied) assert.equal((await route(url)).proxy, "http://proxy:8080", `${label}：${url} 应走代理`);
+  };
+  // GNOME（GSimpleProxyResolver）：三种写法都配域名自身 + 点边界上的子域；端口只认 URL 里写明的
+  useSystem(settings({ https: "http://proxy:8080", http: "http://proxy:8080", bypassSyntax: "gnome",
+    bypass: ["corp.test", ".dot.test", "*.star.test", "port.test:8080", "10.1.2.3", "10.9.0.0/16", "[fd00::1]:8443", "Upper.TEST", "例子.测试", "<local>"] }));
+  await expectRoutes("GNOME",
+    ["https://corp.test/", "https://api.corp.test/", "https://dot.test/", "https://a.dot.test/", "https://star.test/", "https://b.star.test/",
+      "https://port.test:8080/", "https://api.port.test:8080/", "http://10.1.2.3:81/", "http://10.9.4.4/", "https://[fd00::1]:8443/", "https://upper.test/", "https://例子.测试/"],
+    ["https://notcorp.test/", "https://port.test/", "https://port.test:8081/", "http://10.1.2.4/", "https://[fd00::1]/", "https://intranet/"]);
+  // KDE（revmatch）：按字符做后缀比较、没有点边界、`*` 不是通配；写了端口的 URL 再拿「主机:端口」比；`scheme://主机` 只配整个主机
+  useSystem(settings({ https: "http://proxy:8080", http: "http://proxy:8080", bypassSyntax: "kde",
+    bypass: ["kde.org", ".dot.test", "*.star.test", "port.test:8080", "http://exact.test", "10.0.0.0/255.0.0.0", "<local>", "子.测试"] }));
+  await expectRoutes("KDE",
+    ["https://kde.org/", "https://bugs.kde.org/", "https://evilkde.org/", "https://a.dot.test/", "https://port.test:8080/", "https://api.port.test:8080/",
+      "https://exact.test/", "https://exact.test/x", "http://10.2.3.4/", "https://intranet/", "https://例子.测试/"],
+    ["https://dot.test/", "https://b.star.test/", "https://port.test/", "https://sub.exact.test/", "http://11.0.0.1/"]);
+  // macOS / Windows 的 Chromium 语义不受影响：裸域名精确匹配、`.域名` 只配子域
+  useSystem(settings({ https: "http://proxy:8080", bypass: ["corp.test", ".dot.test"] }));
+  await expectRoutes("Chromium", ["https://corp.test/", "https://a.dot.test/"], ["https://api.corp.test/", "https://dot.test/"]);
   console.log("  ✓ 绕过规则：本机三名单固定直连、NO_PROXY 语义不变、系统列表支持通配/子域/CIDR/端口/协议/<local>");
 
   // ---- 各平台解析 ----
@@ -135,20 +159,27 @@ try {
   assert.equal(macPac.http, null);
   assert.deepEqual(macPac.unsupported, ["PAC 自动配置（http://wpad.corp/proxy.pac）", "自动发现代理（WPAD）", "SOCKS 代理"]);
 
-  const winHeader = "\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\r\n";
-  const win = parseWindowsProxy(`${winHeader}    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    127.0.0.1:7890\r\n    ProxyOverride    REG_SZ    localhost;127.*;10.*;<local>\r\n`);
+  const win = parseWindowsProxy({ ProxyEnable: 1, ProxyServer: "127.0.0.1:7890", ProxyOverride: "localhost;127.*;10.*;<local>" });
   assert.deepEqual(win, { platform: "Windows", http: "http://127.0.0.1:7890", https: "http://127.0.0.1:7890", bypass: ["localhost", "127.*", "10.*", "<local>"], unsupported: [] });
-  const winSplit = parseWindowsProxy(`${winHeader}    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    http=web:80;https=secure:443;socks=s:1080\r\n`);
+  const winSplit = parseWindowsProxy({ ProxyEnable: 1, ProxyServer: "http=web:80;https=secure:443;socks=s:1080" });
   assert.equal(winSplit.http, "http://web", "URL 规范化去掉默认端口");
   assert.equal(winSplit.https, "http://secure:443");
   assert.deepEqual(winSplit.unsupported, []);
-  const winBroken = parseWindowsProxy(`${winHeader}    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    bad host:1\r\n`);
+  const winBroken = parseWindowsProxy({ ProxyEnable: 1, ProxyServer: "bad host:1" });
   assert.deepEqual(Object.keys(winBroken.invalid ?? {}).sort(), ["http", "https"], "Windows 单一代理写坏，两个协议都无法确定");
-  const winDisabled = parseWindowsProxy(`${winHeader}    ProxyEnable    REG_DWORD    0x0\r\n    ProxyServer    REG_SZ    127.0.0.1:7890\r\n    AutoConfigURL    REG_SZ    http://pac.corp/a.pac\r\n`,
-    "\r\n    DefaultConnectionSettings    REG_BINARY    460000000A0000000D000000\r\n");
+  const winDisabled = parseWindowsProxy({ ProxyEnable: 0, ProxyServer: "127.0.0.1:7890", AutoConfigURL: "http://pac.corp/a.pac",
+    DefaultConnectionSettings: Buffer.from("460000000A0000000D000000", "hex").toString("base64") });
   assert.equal(winDisabled.http, null, "ProxyEnable=0 时 ProxyServer 只是残留");
   assert.deepEqual(winDisabled.unsupported, ["PAC 自动配置（http://pac.corp/a.pac）", "自动检测设置（WPAD）"]);
-  assert.deepEqual(parseWindowsProxy(`${winHeader}    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    socks=s:1080\r\n`).unsupported, ["SOCKS 代理"]);
+  assert.deepEqual(parseWindowsProxy({ ProxyEnable: 1, ProxyServer: "socks=s:1080" }).unsupported, ["SOCKS 代理"]);
+  assert.equal(parseWindowsProxy({ ProxyEnable: "1", ProxyServer: "p:1" }).http, "http://p:1", "ProxyEnable 存成 REG_SZ 也认");
+  // 读取脚本的输出：JSON 包一层 UTF-8 base64，非 ASCII 值原样到达匹配器
+  const winOutput = Buffer.from(JSON.stringify({ ProxyEnable: 1, ProxyServer: "127.0.0.1:7890", ProxyOverride: "例子.测试;<local>", AutoConfigURL: null, DefaultConnectionSettings: null })).toString("base64");
+  const winUnicode = parseWindowsProxy(decodeWindowsProxyOutput(`${winOutput}\r\n`));
+  assert.deepEqual(winUnicode.bypass, ["例子.测试", "<local>"]);
+  useSystem(winUnicode);
+  assert.equal((await route("https://例子.测试/")).bypass, "system", "Windows 里写成中文的绕过规则生效");
+  assert.throws(() => decodeWindowsProxyOutput("not base64 json"), (error: { code?: string }) => error.code === "输出无法解析");
 
   const gnome = parseGnomeProxy([
     "org.gnome.system.proxy autoconfig-url ''",
@@ -166,6 +197,18 @@ try {
   assert.deepEqual([new URL(gnome.http!).host, new URL(gnome.http!).username], ["proxy.lan:3128", "me"]);
   assert.equal(decodeURIComponent(new URL(gnome.http!).password), "p@ss'w\\dé", "含单引号的密码按 GVariant 双引号写法原样解出");
   assert.equal(gnome.https, gnome.http, "GNOME 的 HTTPS 主机留空时沿用 HTTP 代理（含认证），同 glib-networking");
+  // 凭据原文进 URL 前转义：`%40` 不能在用的时候被解成 `@`；开了认证就带两个字段，哪个留空也照带
+  const gnomeAuth = (user: string, password: string) => {
+    const url = new URL(parseGnomeProxy([
+      "org.gnome.system.proxy mode 'manual'", "org.gnome.system.proxy.http host 'proxy.lan'", "org.gnome.system.proxy.http port 3128",
+      "org.gnome.system.proxy.http use-authentication true",
+      `org.gnome.system.proxy.http authentication-user '${user}'`, `org.gnome.system.proxy.http authentication-password '${password}'`,
+    ].join("\n")).http!);
+    return [decodeURIComponent(url.username), decodeURIComponent(url.password)];
+  };
+  assert.deepEqual(gnomeAuth("u%41:@", "p%40ss"), ["u%41:@", "p%40ss"]);
+  assert.deepEqual(gnomeAuth("me", ""), ["me", ""]);
+  assert.deepEqual(gnomeAuth("", "secret"), ["", "secret"], "用户名留空也照带密码");
   const gnomeSplit = parseGnomeProxy("org.gnome.system.proxy mode 'manual'\norg.gnome.system.proxy.http host 'h'\norg.gnome.system.proxy.http port 1\norg.gnome.system.proxy.https host 's'\norg.gnome.system.proxy.https port 2");
   assert.deepEqual([gnomeSplit.http, gnomeSplit.https], ["http://h:1", "http://s:2"]);
   const gnomeBroken = parseGnomeProxy("org.gnome.system.proxy mode 'manual'\norg.gnome.system.proxy.http host 'bad host'\norg.gnome.system.proxy.http port 1");
@@ -188,13 +231,39 @@ try {
   assert.equal(scutil("proxy.lan", "80").https, "http://proxy.lan", "默认端口不算无效");
   assert.equal(parseGnomeProxy("org.gnome.system.proxy mode 'manual'\norg.gnome.system.proxy.http host '::1'\norg.gnome.system.proxy.http port 3128").http, "http://[::1]:3128");
   assert.equal(parseKdeProxy("[Proxy Settings]\nProxyType=1\nhttpsProxy=http://[::1] 7890\n").https, "http://[::1]:7890");
-  assert.equal(parseWindowsProxy(`${winHeader}    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    [::1]:7890\r\n`).https, "http://[::1]:7890");
+  assert.equal(parseWindowsProxy({ ProxyEnable: 1, ProxyServer: "[::1]:7890" }).https, "http://[::1]:7890");
   for (const broken of [scutil("bad host", "1"), scutil("proxy.lan", "99999"), scutil("proxy.lan", "abc")]) {
     assert.equal(broken.https, null);
     assert.equal(broken.error, undefined, "地址写坏只记在那个协议上，不算整份没读到");
     assert.match(broken.invalid?.https ?? "", /系统 HTTPS 代理地址无法解析/);
   }
   console.log("  ✓ macOS scutil / Windows 注册表 / GNOME / KDE 的手动代理、绕过列表与不支持项解析正确");
+
+  // ---- Windows：经真实读取通道读一个临时键，非 ASCII 值原样到达（本机真实设置只读不改） ----
+  if (process.platform === "win32") {
+    const tempKey = `Software\\AshProxyTest_${process.pid}`;
+    const reg = (args: string[]) => execFileSync("reg.exe", args, { windowsHide: true, stdio: "ignore" });
+    try {
+      reg(["add", `HKCU\\${tempKey}`, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f"]);
+      reg(["add", `HKCU\\${tempKey}`, "/v", "ProxyServer", "/t", "REG_SZ", "/d", "http=127.0.0.1:7890;https=127.0.0.1:7891", "/f"]);
+      reg(["add", `HKCU\\${tempKey}`, "/v", "ProxyOverride", "/t", "REG_SZ", "/d", "例子.测试;<local>", "/f"]);
+      reg(["add", `HKCU\\${tempKey}`, "/v", "AutoConfigURL", "/t", "REG_SZ", "/d", "http://代理.例子/a.pac", "/f"]);
+      reg(["add", `HKCU\\${tempKey}\\Connections`, "/v", "DefaultConnectionSettings", "/t", "REG_BINARY", "/d", "460000000A0000000D000000", "/f"]);
+      const read = await readWindowsProxy(`HKCU:\\${tempKey}`);
+      assert.deepEqual(read, {
+        platform: "Windows", http: "http://127.0.0.1:7890", https: "http://127.0.0.1:7891", bypass: ["例子.测试", "<local>"],
+        unsupported: [`PAC 自动配置（http://${new URL("http://代理.例子/").host}/a.pac）`, "自动检测设置（WPAD）"],
+      });
+      useSystem(read);
+      assert.equal((await route("https://例子.测试/")).bypass, "system", "Windows 真实读取的中文绕过规则生效");
+    } finally {
+      execFileSync("reg.exe", ["delete", `HKCU\\${tempKey}`, "/f"], { windowsHide: true, stdio: "ignore" });
+    }
+    const startedAt = Date.now();
+    const real = await readWindowsProxy();
+    assert.equal(real.platform, "Windows");
+    console.log(`  ✓ Windows 注册表经 PowerShell 无损读取（含中文值），读本机真实设置耗时 ${Date.now() - startedAt}ms`);
+  }
 
   // ---- 不支持项要明说 ----
   clearEnv();

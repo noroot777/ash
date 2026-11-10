@@ -5,7 +5,7 @@ import { connect, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { MockAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { closeRelayDispatchers, relayErrorResponse, relayFetch, RelayRequestError } from "../src/llm-relay.js";
-import { refreshSystemProxy, setSystemProxyReaderForTests, type SystemProxySettings } from "../src/system-proxy.js";
+import { parseGnomeProxy, refreshSystemProxy, setSystemProxyReaderForTests, type SystemProxySettings } from "../src/system-proxy.js";
 
 const warnings: string[] = [];
 const originalWarn = console.warn;
@@ -110,9 +110,11 @@ let proxyAuthorization = "";
 const proxyTunnelPorts = new Set<number>();
 const lastCallViaProxy = () => proxyTunnelPorts.has(calls.at(-1)!.socket.remotePort ?? -1);
 const tunnelSockets = new Set<Duplex>();
+const proxyTunnels: { authorization: string; client: Duplex }[] = [];
 proxy.on("connect", (request, client, head) => {
   proxyAuthority = request.url ?? "";
   proxyAuthorization = request.headers["proxy-authorization"] ?? "";
+  proxyTunnels.push({ authorization: proxyAuthorization, client });
   const target = connect(address.port, "127.0.0.1", () => {
     if (target.localPort) proxyTunnelPorts.add(target.localPort);
     client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
@@ -297,6 +299,57 @@ try {
   assert(warnings.some((line) => line.includes("代理来源：系统代理（测试）") && line.includes("http://***@127.0.0.1")));
   assert(warnings.some((line) => line.includes("代理来源：未配置代理")));
   console.log("  ✓ 未配置环境变量时走系统代理（带凭据），系统代理变化刷新后立即切换，本机供应商始终直连");
+
+  // ---- 凭据原文送到代理（含 `%`、空字段）；换了凭据后旧 ProxyAgent 等在途请求结束再关 ----
+  const remoteProviderOrigin = `http://provider.test:${address.port}`;
+  const basic = (user: string, password: string) => `Basic ${Buffer.from(`${user}:${password}`).toString("base64")}`;
+  const gnomeProxy = (user: string, password: string) => parseGnomeProxy([
+    "org.gnome.system.proxy mode 'manual'", "org.gnome.system.proxy.http host '127.0.0.1'", `org.gnome.system.proxy.http port ${proxyAddress.port}`,
+    "org.gnome.system.proxy.http use-authentication true",
+    `org.gnome.system.proxy.http authentication-user '${user}'`, `org.gnome.system.proxy.http authentication-password '${password}'`,
+  ].join("\n"));
+  const useCredentials = async (user: string, password: string) => {
+    systemProxy = gnomeProxy(user, password);
+    await refreshSystemProxy();
+  };
+  const tunnelsClosed = async (authorization: string) => {
+    for (let waited = 0; waited < 2_000; waited += 20) {
+      if (proxyTunnels.filter((entry) => entry.authorization === authorization).every((entry) => entry.client.destroyed)) return true;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return false;
+  };
+  for (const [user, password] of [["relay%user", "p%40ss"], ["me", ""], ["", "only-password"]]) {
+    await useCredentials(user, password);
+    const viaCredentials = await relayFetch(`${remoteProviderOrigin}/healthy`, {});
+    assert.deepEqual(await viaCredentials.json(), { ok: true });
+    assert.equal(proxyAuthorization, basic(user, password), `代理收到的凭据与系统里的原文一致（${JSON.stringify([user, password])}）`);
+  }
+  assert(await tunnelsClosed(basic("relay%user", "p%40ss")), "换掉的凭据对应的 ProxyAgent 没人用了就关");
+  assert(await tunnelsClosed(basic("me", "")));
+  // 在途请求还在用旧凭据的 agent：换凭据不关它，重定向下一跳照常经它发出，结束后才关
+  const oldTunnels = () => proxyTunnels.filter((entry) => entry.authorization === basic("", "only-password")).length;
+  const heldOnOldCredentials = relayFetch(`${remoteProviderOrigin}/held-redirect`, {});
+  while (heldRedirects.length < 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  await useCredentials("next-user", "next-password");
+  const withNewCredentials = await relayFetch(`${remoteProviderOrigin}/healthy`, {});
+  assert.deepEqual(await withNewCredentials.json(), { ok: true });
+  assert.equal(proxyAuthorization, basic("next-user", "next-password"));
+  const tunnelsBeforeRedirect = oldTunnels();
+  const heldResponse = heldRedirects.splice(0)[0];
+  heldResponse.writeHead(302, { location: `${remoteProviderOrigin}/healthy` });
+  heldResponse.end();
+  const redirectedOnOld = await heldOnOldCredentials;
+  assert.equal(redirectedOnOld.status, 200, "换凭据时在途请求的下一跳仍能经旧 agent 发出");
+  assert.deepEqual(await redirectedOnOld.json(), { ok: true });
+  assert.equal(oldTunnels(), tunnelsBeforeRedirect, "下一跳用的是原来那个 agent（复用它的隧道），没有被关掉再重建");
+  assert(await tunnelsClosed(basic("", "only-password")), "在途请求结束后旧凭据的 agent 才关");
+  process.env.HTTP_PROXY = `http://env-user@127.0.0.1:${proxyAddress.port}`;
+  const envUserOnly = await relayFetch(`${remoteProviderOrigin}/healthy`, {});
+  assert.deepEqual(await envUserOnly.json(), { ok: true });
+  assert.equal(proxyAuthorization, basic("env-user", ""), "环境变量里只写了用户名的代理也照带认证");
+  delete process.env.HTTP_PROXY;
+  console.log("  ✓ 代理凭据原样送达（含百分号、空用户名/空密码），换掉的代理实例等在途请求结束后关闭");
 
   // ---- 读不到系统代理：不能把「没读到」当成「没配」去直连 ----
   systemProxy = { platform: "测试", http: systemProxyUrl, https: systemProxyUrl, bypass: [], unsupported: [] };

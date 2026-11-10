@@ -7,8 +7,10 @@ type RelayOptions = { headersTimeoutMs?: number; connectTimeoutMs?: number; body
 type RelayPool = {
   configuration: string;
   direct: Agent;
-  proxies: Map<string, ProxyAgent>;
-  agents: Dispatcher[];
+  /** 按完整代理地址（含凭据）分；users = 用过它、还没结束的请求数 */
+  proxies: Map<string, { agent: ProxyAgent; users: number }>;
+  /** 最近一个请求拿到的方案里的代理：不在这里、又没人在用的 ProxyAgent 就关掉（系统代理换了地址/密码） */
+  current: Set<string>;
   agentOptions: Agent.Options;
   /** 正在用这个池的请求数（从发出到重定向链走完、响应流结束） */
   users: number;
@@ -62,12 +64,27 @@ function positiveTimeout(value: unknown, fallback: number): number {
   return Number.isSafeInteger(configured) && configured > 0 && configured <= 2_147_483_647 ? configured : fallback;
 }
 
-function retireDispatcher(pool: RelayPool): Promise<void> {
-  openPools.delete(pool);
-  const closing = Promise.all(pool.agents.map((agent) => agent.close())).then(() => {}, () => {});
+function closeAgents(agents: Dispatcher[]): Promise<void> {
+  const closing = Promise.all(agents.map((agent) => agent.close())).then(() => {}, () => {});
   closingDispatchers.add(closing);
   void closing.finally(() => closingDispatchers.delete(closing));
   return closing;
+}
+
+function retireDispatcher(pool: RelayPool): Promise<void> {
+  openPools.delete(pool);
+  const agents = [pool.direct, ...[...pool.proxies.values()].map((entry) => entry.agent)];
+  pool.proxies.clear();
+  return closeAgents(agents);
+}
+
+/** 关掉当前方案已经不用、也没有在途请求的 ProxyAgent。之后还有旧方案的请求要走它，会按地址重建一个 */
+function pruneProxies(pool: RelayPool): void {
+  for (const [proxy, entry] of pool.proxies) {
+    if (entry.users > 0 || pool.current.has(proxy)) continue;
+    pool.proxies.delete(proxy);
+    void closeAgents([entry.agent]);
+  }
 }
 
 export async function closeRelayDispatchers(): Promise<void> {
@@ -78,16 +95,16 @@ export async function closeRelayDispatchers(): Promise<void> {
 
 // 每个供应商 origin 一个独立连接池（不和全局 fetch 抢连接）。池只取决于连接参数：走不走代理、走哪个，
 // 每一跳都按这个请求自己拿到的 plan 现判（routedDispatcher），所以代理/绕过配置变了不换池，
-// 代理地址变了只是在池里多一个 ProxyAgent。连接参数变了才换池，而旧池要等用它的请求（含整条重定向链和
+// 代理地址变了只是在池里多一个 ProxyAgent（旧的那个没人用了就关，见 pruneProxies）。连接参数变了才换池，而旧池要等用它的请求（含整条重定向链和
 // 响应流）全部结束才关 —— 提前关，在途请求的下一跳会撞上已关闭的 agent（UND_ERR_CLOSED）。
-function acquirePool(upstream: string, connectTimeoutMs: number, bodyTimeoutMs: number): RelayPool {
+function acquirePool(upstream: string, connectTimeoutMs: number, bodyTimeoutMs: number, plan: ProxyPlan): RelayPool {
   const configuration = JSON.stringify([connectTimeoutMs, bodyTimeoutMs]);
   let pool = dispatchers.get(upstream);
   if (pool?.configuration !== configuration) {
     const previous = pool;
     const agentOptions = { allowH2: false, connect: { timeout: connectTimeoutMs }, headersTimeout: 0, bodyTimeout: bodyTimeoutMs };
     const direct = new Agent(agentOptions);
-    pool = { configuration, direct, proxies: new Map(), agents: [direct], agentOptions, users: 0, retired: false };
+    pool = { configuration, direct, proxies: new Map(), current: new Set(), agentOptions, users: 0, retired: false };
     dispatchers.set(upstream, pool);
     openPools.add(pool);
     if (previous) {
@@ -96,32 +113,65 @@ function acquirePool(upstream: string, connectTimeoutMs: number, bodyTimeoutMs: 
     }
   }
   pool.users += 1;
+  if (!pool.retired) {
+    pool.current = new Set([plan.http, plan.https].filter((proxy): proxy is string => proxy !== null));
+    pruneProxies(pool);
+  }
   return pool;
 }
 
-function releasePool(pool: RelayPool): void {
+/** 一个请求对池的占用：池本身，加上它这一路用过的代理 */
+type PoolLease = { pool: RelayPool; proxies: Set<string> };
+
+function releasePool({ pool, proxies }: PoolLease): void {
   pool.users -= 1;
-  if (pool.retired && pool.users === 0 && openPools.has(pool)) void retireDispatcher(pool);
+  for (const proxy of proxies) {
+    const entry = pool.proxies.get(proxy);
+    if (entry) entry.users -= 1;
+  }
+  if (!openPools.has(pool)) return;
+  if (pool.retired && pool.users === 0) void retireDispatcher(pool);
+  else pruneProxies(pool);
 }
 
-function proxyAgent(pool: RelayPool, proxy: string): ProxyAgent {
-  let agent = pool.proxies.get(proxy);
-  if (!agent) {
-    agent = new ProxyAgent({ ...pool.agentOptions, uri: proxy });
-    pool.proxies.set(proxy, agent);
-    pool.agents.push(agent);
+/**
+ * 凭据由这里换成显式的 Proxy-Authorization，不交给 undici 从 URL 里取：它只在用户名和密码**都非空**时才发，
+ * 而「有用户名、密码为空」是合法配置（curl、GNOME 都照发）。URL 里的 userinfo 是转义形式，解出原文再编码；
+ * 解不开的（不是合法的 `%XX`）按原文用，不让一个字符拖垮整个请求。
+ */
+function proxyAgentOptions(proxy: string): { uri: string; token?: string } {
+  const url = new URL(proxy);
+  if (!url.username && !url.password) return { uri: proxy };
+  const decode = (value: string) => {
+    try { return decodeURIComponent(value); } catch { return value; }
+  };
+  const token = `Basic ${Buffer.from(`${decode(url.username)}:${decode(url.password)}`).toString("base64")}`;
+  url.username = "";
+  url.password = "";
+  return { uri: url.href, token };
+}
+
+function proxyAgent(lease: PoolLease, proxy: string): ProxyAgent {
+  let entry = lease.pool.proxies.get(proxy);
+  if (!entry) {
+    entry = { agent: new ProxyAgent({ ...lease.pool.agentOptions, ...proxyAgentOptions(proxy) }), users: 0 };
+    lease.pool.proxies.set(proxy, entry);
   }
-  return agent;
+  if (!lease.proxies.has(proxy)) {
+    lease.proxies.add(proxy);
+    entry.users += 1;
+  }
+  return entry.agent;
 }
 
 // 走不走代理按**每一跳的 origin** 判（重定向到别的主机也照样判），并把实际走的那条路报给这个请求的诊断；
 // 判成 blocked 的那一跳直接报错，不落到直连池上。代理池按地址懒建，连接在同一个 pool 里复用。
-function routedDispatcher(pool: RelayPool, plan: ProxyPlan, onRoute: (route: ProxyRoute) => void): Dispatcher {
-  return pool.direct.compose((dispatch) => (options, handler) => {
+function routedDispatcher(lease: PoolLease, plan: ProxyPlan, onRoute: (route: ProxyRoute) => void): Dispatcher {
+  return lease.pool.direct.compose((dispatch) => (options, handler) => {
     const route = routeFor(plan, new URL(String(options.origin)));
     onRoute(route);
     if (route.blocked) throw Object.assign(new Error("系统代理不可用，拒绝直连"), { code: "ASH_SYSTEM_PROXY_UNAVAILABLE" });
-    return route.proxy ? proxyAgent(pool, route.proxy).dispatch(options, handler) : dispatch(options, handler);
+    return route.proxy ? proxyAgent(lease, route.proxy).dispatch(options, handler) : dispatch(options, handler);
   });
 }
 
@@ -156,10 +206,10 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
   let timedOut = false;
   let plan: ProxyPlan | null = null;
   let route: ProxyRoute | null = null;
-  let pool: RelayPool | null = null;
+  let lease: PoolLease | null = null;
   const release = () => {
-    if (pool) releasePool(pool);
-    pool = null;
+    if (lease) releasePool(lease);
+    lease = null;
   };
   const routeFields = () => ({
     proxy: route?.blocked ? "blocked" : route?.proxy ? redactProxy(route.proxy) : "direct",
@@ -192,8 +242,8 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
     plan = await relayProxyPlan();
     try { route = routeFor(plan, new URL(url)); } catch { route = null; }
     if (route?.blocked) throw Object.assign(new Error("系统代理不可用，拒绝直连"), { code: "ASH_SYSTEM_PROXY_UNAVAILABLE" });
-    pool = acquirePool(upstream, positiveTimeout(options.connectTimeoutMs, 10_000), bodyTimeoutMs);
-    const dispatcher = routedDispatcher(pool, plan, (actual) => { route = actual; });
+    lease = { pool: acquirePool(upstream, positiveTimeout(options.connectTimeoutMs, 10_000), bodyTimeoutMs, plan), proxies: new Set() };
+    const dispatcher = routedDispatcher(lease, plan, (actual) => { route = actual; });
     const requestInit: RequestInit & { dispatcher: Dispatcher } = { ...init, signal, dispatcher };
     response = await fetch(url, requestInit);
   } catch (error) {

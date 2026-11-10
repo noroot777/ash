@@ -14,14 +14,23 @@ import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileText } from "./exec.js";
+import { encodePowerShellCommand } from "./platform.js";
+
+/**
+ * 绕过列表照哪个平台的语义解释（proxy-route.ts 按它编译规则）。不写 = macOS/Windows 那套
+ * （Chromium 的解释：精确主机、`*` 通配、`.域名` 只配子域）；GNOME、KDE 各有自己的匹配法，
+ * 同一行 `corp.test` 在三处直连的范围都不一样，不能统一成一种。
+ */
+export type BypassSyntax = "gnome" | "kde";
 
 export type SystemProxySettings = {
   /** 读的是哪一份配置，进诊断日志 */
   platform: string;
   http: string | null;
   https: string | null;
-  /** 统一语法的绕过规则：主机名/通配、`.域名`、CIDR、`主机:端口`、`<local>` */
+  /** 系统里写的绕过规则原文，按 bypassSyntax 解释 */
   bypass: string[];
+  bypassSyntax?: BypassSyntax;
   /** 读到了但 ash 不支持、因而没有生效的设置 */
   unsupported: string[];
   /**
@@ -40,6 +49,9 @@ export type SystemProxySettings = {
 
 const SYSTEM_PROXY_TTL_MS = 15_000;
 const READ_TIMEOUT_MS = 3_000;
+// Windows PowerShell 冷启动本身就要一两秒，不是读得慢
+const WINDOWS_READ_TIMEOUT_MS = 10_000;
+const readTimeoutMs = () => (process.platform === "win32" ? WINDOWS_READ_TIMEOUT_MS : READ_TIMEOUT_MS);
 const NONE = (platform: string): SystemProxySettings => ({ platform, http: null, https: null, bypass: [], unsupported: [] });
 
 /**
@@ -120,24 +132,45 @@ export function parseScutilProxy(text: string): SystemProxySettings {
 
 // ---- Windows ----
 
-function regValues(text: string): Map<string, string> {
-  const values = new Map<string, string>();
-  for (const line of text.split(/\r?\n/)) {
-    const match = line.match(/^\s{2,}(\S(?:.*?\S)?)\s{2,}(REG_\w+)(?:\s{2,}(.*))?$/);
-    if (match) values.set(match[1].toLowerCase(), (match[3] ?? "").trim());
-  }
-  return values;
+/** `Internet Settings` 键里用到的几个值，原样（DefaultConnectionSettings 是二进制，base64） */
+export type WindowsInternetSettings = {
+  ProxyEnable?: number | string | null;
+  ProxyServer?: string | null;
+  ProxyOverride?: string | null;
+  AutoConfigURL?: string | null;
+  DefaultConnectionSettings?: string | null;
+};
+
+// 不用 reg query：它按控制台代码页（中文系统是 GBK）输出，按什么解码都会把某种系统上的非 ASCII 值
+// （`例子.测试` 这种绕过规则、带中文的 PAC 地址）读坏，坏了之后下游再规范化也救不回来。
+// PowerShell 读到的是注册表里的 UTF-16 原值，转成 JSON 再包一层 UTF-8 base64，管道里只有 ASCII。
+const WINDOWS_PROXY_KEY = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+const windowsProxyScript = (key: string) => [
+  "$ErrorActionPreference = 'Stop'",
+  `$key = '${key.replace(/'/g, "''")}'`,
+  "$p = Get-ItemProperty -LiteralPath $key",
+  "$c = Get-ItemProperty -LiteralPath \"$key\\Connections\" -Name DefaultConnectionSettings -ErrorAction SilentlyContinue",
+  "$out = [ordered]@{ ProxyEnable = $p.ProxyEnable; ProxyServer = $p.ProxyServer; ProxyOverride = $p.ProxyOverride; AutoConfigURL = $p.AutoConfigURL",
+  "  DefaultConnectionSettings = $(if ($c) { [Convert]::ToBase64String([byte[]]$c.DefaultConnectionSettings) } else { $null }) }",
+  "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($out | ConvertTo-Json -Compress)))",
+].join("\n");
+
+/** windowsProxyScript 的输出 → 注册表值 */
+export function decodeWindowsProxyOutput(stdout: string): WindowsInternetSettings {
+  let decoded: unknown = null;
+  try {
+    decoded = JSON.parse(Buffer.from(stdout.trim(), "base64").toString("utf8"));
+  } catch { /* 下面统一报 */ }
+  if (!decoded || typeof decoded !== "object") throw Object.assign(new Error("bad output"), { code: "输出无法解析" });
+  return decoded as WindowsInternetSettings;
 }
 
-/**
- * `settingsText` 是 `Internet Settings` 键的 reg query 输出，`connectionsText` 是
- * `Connections\DefaultConnectionSettings`（第 8 字节是标志位：0x08=自动检测设置）。
- */
-export function parseWindowsProxy(settingsText: string, connectionsText = ""): SystemProxySettings {
-  const values = regValues(settingsText);
+/** DefaultConnectionSettings 第 8 字节是标志位：0x08=自动检测设置 */
+export function parseWindowsProxy(values: WindowsInternetSettings): SystemProxySettings {
+  const text = (value: unknown) => (typeof value === "string" ? value.trim() : "");
   const settings = NONE("Windows");
-  if (Number(values.get("proxyenable") ?? 0) !== 0) {
-    const server = values.get("proxyserver") ?? "";
+  if (Number(values.ProxyEnable ?? 0) !== 0) {
+    const server = text(values.ProxyServer);
     if (server.includes("=")) {
       // `http=h:p;https=h:p;socks=h:p`：按协议分配，没写的协议 WinINET 也是直连
       const byScheme = new Map<string, string>();
@@ -152,13 +185,21 @@ export function parseWindowsProxy(settingsText: string, connectionsText = ""): S
       settings.http = settings.https = proxyUrl(settings, "http", server);
       if (settings.invalid?.http) settings.invalid.https = settings.invalid.http.replace("HTTP", "HTTPS");
     }
-    settings.bypass = (values.get("proxyoverride") ?? "").split(";").map((item) => item.trim()).filter(Boolean);
+    settings.bypass = text(values.ProxyOverride).split(";").map((item) => item.trim()).filter(Boolean);
   }
-  const pac = values.get("autoconfigurl");
+  const pac = text(values.AutoConfigURL);
   if (pac) settings.unsupported.push(`PAC 自动配置（${describeUrl(pac)}）`);
-  const flags = Number.parseInt((regValues(connectionsText).get("defaultconnectionsettings") ?? "").replace(/\s/g, "").slice(16, 18), 16);
-  if (Number.isFinite(flags) && (flags & 0x08) !== 0) settings.unsupported.push("自动检测设置（WPAD）");
+  const flags = Buffer.from(text(values.DefaultConnectionSettings), "base64")[8];
+  if (flags !== undefined && (flags & 0x08) !== 0) settings.unsupported.push("自动检测设置（WPAD）");
   return settings;
+}
+
+/** 读 WinINET 代理设置。key 只给 Windows 上的回归测试换成临时键用 */
+export async function readWindowsProxy(key = WINDOWS_PROXY_KEY): Promise<SystemProxySettings> {
+  const exe = process.env.SystemRoot ? join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "powershell.exe";
+  const { stdout } = await execFileText(exe, ["-NoProfile", "-NonInteractive", "-EncodedCommand", encodePowerShellCommand(windowsProxyScript(key))],
+    { timeout: readTimeoutMs() });
+  return parseWindowsProxy(decodeWindowsProxyOutput(stdout));
 }
 
 // ---- Linux ----
@@ -217,22 +258,19 @@ export function parseGnomeProxy(text: string): SystemProxySettings {
     const port = (values.get(`${scheme}/port`) ?? "").replace(/^\D+/, "");
     const url = proxyUrl(settings, scheme, host, port);
     if (!url || scheme !== "http" || values.get("http/use-authentication") !== "true") return url;
-    const user = text1("http/authentication-user");
-    if (!user) return url;
-    try {
-      const parsed = new URL(url);
-      parsed.username = user;
-      parsed.password = text1("http/authentication-password");
-      return parsed.href.replace(/\/$/, "");
-    } catch {
-      return url;
-    }
+    // 同 glib-networking：开了认证就带上两个字段（哪个留空也照带），各自转义后进 URL —— URL 里的 userinfo
+    // 是转义形式，原文里的 `%`、`@`、`:` 直接塞进去会在用的时候被解码成别的密码。两个都空的 URL 表示不出来，等于不带
+    const parsed = new URL(url);
+    parsed.username = encodeURIComponent(text1("http/authentication-user"));
+    parsed.password = encodeURIComponent(text1("http/authentication-password"));
+    return parsed.href.replace(/\/$/, "");
   };
   settings.http = manual("http");
   // 同 glib-networking：HTTPS 主机留空时 HTTPS 也走 HTTP 代理（连同认证信息）
   settings.https = text1("https/host") ? manual("https") : settings.http;
   if (!text1("https/host") && settings.invalid?.http) settings.invalid.https = settings.invalid.http;
   settings.bypass = gvariantStrings(values.get("/ignore-hosts") ?? "");
+  settings.bypassSyntax = "gnome";
   if (text1("socks/host") && (!settings.http || !settings.https)) settings.unsupported.push("SOCKS 代理");
   return settings;
 }
@@ -263,6 +301,7 @@ export function parseKdeProxy(text: string): SystemProxySettings {
   settings.http = manual("httpProxy", "http");
   settings.https = manual("httpsProxy", "https");
   settings.bypass = (values.get("NoProxyFor") ?? "").split(/[,\s]+/).filter(Boolean);
+  settings.bypassSyntax = "kde";
   if (values.get("ReversedException") === "true") {
     // 「只有列表里的走代理」，这种反向语义不套用，宁可整份不生效也不猜
     settings.unsupported.push("反向例外列表（只代理列出的地址）");
@@ -279,15 +318,7 @@ export function parseKdeProxy(text: string): SystemProxySettings {
 async function readPlatformProxy(): Promise<SystemProxySettings> {
   const run = (file: string, args: string[]) => execFileText(file, args, { timeout: READ_TIMEOUT_MS }).then((result) => result.stdout);
   if (process.platform === "darwin") return parseScutilProxy(await run("/usr/sbin/scutil", ["--proxy"]));
-  if (process.platform === "win32") {
-    const reg = process.env.SystemRoot ? join(process.env.SystemRoot, "System32", "reg.exe") : "reg";
-    const key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
-    const [settings, connections] = await Promise.all([
-      run(reg, ["query", key]),
-      run(reg, ["query", `${key}\\Connections`, "/v", "DefaultConnectionSettings"]).catch(() => ""),
-    ]);
-    return parseWindowsProxy(settings, connections);
-  }
+  if (process.platform === "win32") return readWindowsProxy();
   if (process.platform === "linux") {
     if (/kde/i.test(process.env.XDG_CURRENT_DESKTOP ?? "")) {
       const configHome = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
@@ -322,7 +353,7 @@ export function refreshSystemProxy(): Promise<SystemProxySettings> {
     .catch((error: unknown): SystemProxySettings => {
       const code = (error as { code?: unknown })?.code;
       const killed = (error as { killed?: unknown })?.killed === true;
-      const reason = killed ? `读取超过 ${READ_TIMEOUT_MS}ms` : typeof code === "string" ? code : `退出码 ${String(code ?? "未知")}`;
+      const reason = killed ? `读取超过 ${readTimeoutMs()}ms` : typeof code === "string" ? code : `退出码 ${String(code ?? "未知")}`;
       // 读不到不等于没配：有上次读到的就接着用；第一次就失败则标成 error，远端请求拒绝而不是直连
       const previous = generation === readGeneration ? snapshot?.settings : undefined;
       if (previous && !previous.error) return { ...previous, staleError: reason };

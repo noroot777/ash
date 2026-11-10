@@ -7,8 +7,8 @@
 // 环境变量是整体优先：只配了 HTTP_PROXY 时 https 也走它，不会一半环境变量一半系统代理。
 // 选中的代理连不上就是连不上，这里不做「代理失败改直连」—— 那会让代理/直连哪条路坏了都看不出来。
 import { BlockList, isIP } from "node:net";
-import { domainToASCII } from "node:url";
-import { systemProxySettings, type SystemProxySettings } from "./system-proxy.js";
+import { domainToASCII, domainToUnicode } from "node:url";
+import { systemProxySettings, type BypassSyntax, type SystemProxySettings } from "./system-proxy.js";
 
 export type ProxySource = "env" | "system" | "none";
 export type ProxyPlan = {
@@ -39,9 +39,13 @@ export type ProxyRoute = {
 };
 
 type BypassRule =
-  | { kind: "simple" }
+  | { kind: "simple"; ipToo?: true }
   | { kind: "cidr"; list: BlockList }
-  | { kind: "host"; pattern: RegExp; port: number; scheme: string | null };
+  | { kind: "host"; pattern: RegExp; port: number; scheme: string | null }
+  /** GNOME：域名自身和点边界上的子域，可带端口 */
+  | { kind: "domain"; name: string; port: number }
+  /** KDE：原文按字符做后缀比较；exact 是 `scheme://主机` 那种只认整个主机的写法 */
+  | { kind: "suffix"; text: string; exact: boolean };
 
 const DEFAULT_PORTS: Record<string, number> = { "http:": 80, "https:": 443 };
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -70,15 +74,23 @@ export function redactProxy(value: string | null): string {
   }
 }
 
+/** 掩码可以写成前缀长度，也可以写成点分掩码（KDE 认 `10.0.0.0/255.0.0.0`）；没写掩码（undefined）的是单个地址 */
+function maskPrefix(mask: string | undefined, family: number): number {
+  if (mask === undefined) return family === 6 ? 128 : 32;
+  if (/^\d{1,3}$/.test(mask)) return Number(mask);
+  if (isIP(mask) !== 4) return NaN;
+  const bits = mask.split(".").map((part) => Number(part).toString(2).padStart(8, "0")).join("");
+  return /^1*0*$/.test(bits) ? bits.replace(/0+$/, "").length : NaN;
+}
+
 function cidrRule(entry: string): BypassRule | null {
-  const [address, prefixText] = entry.split("/", 2);
-  const prefix = Number(prefixText);
-  if (!Number.isInteger(prefix)) return null;
+  const [address, mask] = entry.split("/", 2);
   let base = address.replace(/^\[|\]$/g, "");
   // macOS 允许 `169.254/16` 这种省掉尾部 0 的写法
   if (/^\d+(\.\d+){0,2}$/.test(base)) base = [...base.split("."), "0", "0", "0"].slice(0, 4).join(".");
   const family = isIP(base);
-  if (!family || prefix < 0 || prefix > (family === 4 ? 32 : 128)) return null;
+  const prefix = maskPrefix(mask, family);
+  if (!family || !Number.isInteger(prefix) || prefix < 0 || prefix > (family === 4 ? 32 : 128)) return null;
   const list = new BlockList();
   list.addSubnet(base, prefix, family === 4 ? "ipv4" : "ipv6");
   return { kind: "cidr", list };
@@ -96,10 +108,46 @@ function canonicalHost(entry: string): string {
   return host.split(".").map((label) => (/[^\x00-\x7f]/.test(label) && !label.includes("*") ? domainToASCII(label) || label : label)).join(".");
 }
 
-/** 系统绕过列表的统一语法（参照 Chromium 对各平台列表的解释）：精确主机、`*` 通配、`.域名`=所有子域、可选 `scheme://` 与 `:端口`、CIDR、`<local>`=不带点的主机名 */
-export function parseBypassRule(raw: string): BypassRule | null {
+/**
+ * GNOME（GSimpleProxyResolver）：IP 和 `IP/长度` 按网段判；`[v6]:端口`、`主机:端口` 只配 URL 里写明的那个端口
+ * （没写端口的规则不限端口；URL 里写的默认端口会被 URL 规范化掉，按没写算）；其余去掉开头的 `*.` 或 `.`，
+ * 不分大小写地配域名自身和点边界上的子域。GLib 只把请求主机转成 ASCII、规则原文不转，于是写成中文的规则在 GLib 里
+ * 一条也配不上；这里规则也转，只多配上用户本来想直连的那些，GLib 判直连的一个不少。
+ */
+function gnomeBypassRule(entry: string): BypassRule | null {
+  const [address, mask] = entry.split("/", 2);
+  if (isIP(address) && (mask === undefined || /^\d+$/.test(mask))) return cidrRule(entry);
+  let port = 0;
+  const withPort = entry.match(/^\[([^\]]*)\]:(\d+)$/) ?? entry.match(/^([^:]*):(\d+)$/);
+  if (withPort) [entry, port] = [withPort[1], Number(withPort[2])];
+  const name = canonicalHost(isIP(entry) === 6 ? entry : entry.replace(/^\*?\./, ""));
+  return name ? { kind: "domain", name, port } : null;
+}
+
+/**
+ * KDE（KProtocolManager::shouldIgnoreProxyFor + revmatch）：每条从尾部逐字符比，规则先比完就算命中 ——
+ * 没有点边界（`kde.org` 也配 `evilkde.org`）、`*` 不是通配、`.kde.org` 不配 `kde.org` 本身；`http://主机`
+ * 只配整个主机。没配上且 URL 写了端口，再拿 `主机:端口` 比一次。`<local>` = 不带点的主机，网段只对 IP 字面量判
+ * （KDE 会先把主机名解析成 IP 再判网段，这里不在转发路径上做 DNS，所以这种情况会走代理而不是直连）。
+ */
+function kdeBypassRule(entry: string): BypassRule | null {
+  if (entry === "<local>") return { kind: "simple", ipToo: true };
+  const schemeMatch = entry.match(/^[a-z][a-z0-9+.-]*:\/\/(.+)$/);
+  if (schemeMatch) return { kind: "suffix", text: schemeMatch[1].replace(/\/+$/, ""), exact: true };
+  if (entry.includes("/")) return cidrRule(entry);
+  return { kind: "suffix", text: entry, exact: false };
+}
+
+/**
+ * 系统绕过列表的一条规则，照它所在平台的语义编译（见 BypassSyntax）。macOS/Windows 用 Chromium 对这两处列表的
+ * 解释：精确主机、`*` 通配、`.域名`=所有子域、可选 `scheme://` 与 `:端口`、CIDR、`<local>`=不带点的主机名
+ */
+export function parseBypassRule(raw: string, syntax?: BypassSyntax): BypassRule | null {
   let entry = raw.trim().toLowerCase();
-  if (!entry || entry === "<-loopback>") return null;
+  if (!entry) return null;
+  if (syntax === "gnome") return gnomeBypassRule(entry);
+  if (syntax === "kde") return kdeBypassRule(entry);
+  if (entry === "<-loopback>") return null;
   if (entry === "<local>") return { kind: "simple" };
   let scheme: string | null = null;
   const schemeMatch = entry.match(/^([a-z][a-z0-9+.-]*):\/\/(.*)$/);
@@ -123,9 +171,16 @@ export function parseBypassRule(raw: string): BypassRule | null {
 function systemBypassed(rules: BypassRule[], url: URL, port: number): boolean {
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
   const family = isIP(host);
+  // KDE 拿 Qt 显示用的主机名比（国际化域名是 Unicode），规则里写哪种形式都可能
+  const kdeHosts = [...new Set([host, domainToUnicode(host) || host])];
   return rules.some((rule) => {
-    if (rule.kind === "simple") return !family && !host.includes(".");
+    if (rule.kind === "simple") return (rule.ipToo || !family) && !host.includes(".");
     if (rule.kind === "cidr") return family !== 0 && rule.list.check(host, family === 4 ? "ipv4" : "ipv6");
+    if (rule.kind === "domain") return (!rule.port || rule.port === Number(url.port)) && (host === rule.name || host.endsWith(`.${rule.name}`));
+    if (rule.kind === "suffix") {
+      const candidates = url.port ? kdeHosts.flatMap((name) => [name, `${name}:${url.port}`]) : kdeHosts;
+      return candidates.some((name) => (rule.exact ? name === rule.text : name.endsWith(rule.text)));
+    }
     if (rule.scheme && rule.scheme !== url.protocol) return false;
     if (rule.port && rule.port !== port) return false;
     return rule.pattern.test(host);
@@ -222,9 +277,9 @@ export async function relayProxyPlan(): Promise<ProxyPlan> {
   }
   return remember({
     source: "system", label: `系统代理（${settings.platform}）`, http: settings.http, https: settings.https,
-    envNoProxy, systemBypass: settings.bypass.map(parseBypassRule).filter((rule): rule is BypassRule => rule !== null),
+    envNoProxy, systemBypass: settings.bypass.map((rule) => parseBypassRule(rule, settings.bypassSyntax)).filter((rule): rule is BypassRule => rule !== null),
     notice, unavailable: null, invalid,
-    key: JSON.stringify(["system", settings.platform, settings.http, settings.https, invalid, settings.bypass, envNoProxy, notice]),
+    key: JSON.stringify(["system", settings.platform, settings.http, settings.https, invalid, settings.bypassSyntax ?? null, settings.bypass, envNoProxy, notice]),
   });
 }
 
