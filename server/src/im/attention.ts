@@ -53,8 +53,8 @@ export interface TaskView {
   teamWorker: boolean;
   /** 托盘里有此刻判得出「送」的消息（判据同投递扫描）：一空下来就送进去、接着跑。 */
   deliveryPending: boolean;
-  /** 自由工作流的审查链还没出结论（见 freeReviewFacts）。 */
-  reviewPending: boolean;
+  /** 自由工作流的审查链现状（见 freeReviewFacts）。待验收卡和「审查通过」结局通知都读这同一份，不各自再查一遍。 */
+  review: ReviewFacts;
   turn: Turn | null;
 }
 
@@ -97,18 +97,18 @@ export async function viewOf(taskId: string): Promise<TaskView | null | undefine
   return views?.has(taskId) ? views.get(taskId) ?? null : undefined;
 }
 
-interface ReviewFacts {
+export interface ReviewFacts {
   /** 审查链还没出结论：最近一条在审（reviewing），或预约着下一轮（修复完自动复审、跑着时预约的首审）。 */
   pending: boolean;
   /** 最近一条工作区审查链：没通过（stopped = 用完轮数或停下等修，failed = 跑出错）。口径同网页 freeReviewCopy.ts。 */
   failed: boolean;
-  /** 最近一条通过了。 */
-  passed: boolean;
+  /** 最近一条通过了：是哪一条、什么时候落的结论。 */
+  passed: { runId: string; finishedAt: string } | null;
   /** 最近一条的结论说的就是这一版：之后执行者没再跑过（审查回合自己也会刷新 endedAt，结算在它之后落 finishedAt）。 */
   current: boolean;
 }
 
-const NO_REVIEW: ReviewFacts = { pending: false, failed: false, passed: false, current: false };
+const NO_REVIEW: ReviewFacts = { pending: false, failed: false, passed: null, current: false };
 
 /** 一批自由工作流任务的审查链现状（只看验收前的工作区审查，合并结果审查是验收后的另一条链）。 */
 async function freeReviewFacts(rows: { id: string; endedAt: string | null }[]): Promise<Map<string, ReviewFacts>> {
@@ -116,7 +116,8 @@ async function freeReviewFacts(rows: { id: string; endedAt: string | null }[]): 
   if (!rows.length) return out;
   const ids = rows.map((row) => row.id);
   const [runs, armed] = await Promise.all([
-    db.select({ taskId: freeReviewRuns.taskId, status: freeReviewRuns.status, finishedAt: freeReviewRuns.finishedAt }).from(freeReviewRuns)
+    db.select({ id: freeReviewRuns.id, taskId: freeReviewRuns.taskId, status: freeReviewRuns.status, finishedAt: freeReviewRuns.finishedAt })
+      .from(freeReviewRuns)
       .where(and(inArray(freeReviewRuns.taskId, ids), eq(freeReviewRuns.targetKind, "workspace")))
       .orderBy(desc(freeReviewRuns.createdAt)),
     db.select({ taskId: freeWorkflowStates.taskId }).from(freeWorkflowStates)
@@ -128,7 +129,7 @@ async function freeReviewFacts(rows: { id: string; endedAt: string | null }[]): 
     out.set(row.id, {
       pending: reserved.has(row.id) || latest?.status === "reviewing",
       failed: latest?.status === "stopped" || latest?.status === "failed",
-      passed: latest?.status === "passed",
+      passed: latest?.status === "passed" && latest.finishedAt ? { runId: latest.id, finishedAt: latest.finishedAt } : null,
       current: !!latest?.finishedAt && latest.finishedAt >= (row.endedAt ?? ""),
     });
   }
@@ -208,7 +209,7 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
         break;
       case "accept":
         turn = {
-          kind, generation: acceptGeneration(await resultVersionOf(task), humanGateOf(row)), reviewFailed: review.failed, reviewPassed: review.passed && review.current, reviewStale: review.failed && !review.current,
+          kind, generation: acceptGeneration(await resultVersionOf(task), humanGateOf(row)), reviewFailed: review.failed, reviewPassed: !!review.passed && review.current, reviewStale: review.failed && !review.current,
           release: !isFinalHumanGate(task.workflow, task.workflowAt),
           confirm: acceptanceMessage(toTaskListItem(task), projectRows.get(task.projectId)?.acceptCommit ?? true),
         };
@@ -220,7 +221,7 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
       projectName: projectRows.get(task.projectId)?.name ?? "",
       teamWorker,
       deliveryPending,
-      reviewPending: review.pending,
+      review,
       turn,
     });
   }

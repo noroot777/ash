@@ -11,9 +11,11 @@
 //           摘下的那段时间不记 —— 这一轮没改东西、原样挂回来的还是同一次验收，不算新的。
 //   gate    最近一次跑出结果（通过 / 没通过）的那一次门禁；被打断、取消的不算结果
 //   review  自由工作流最近一条工作区审查链通过了（哪一条）。审查不改任务状态：失败、取消、暂停着的任务也能派审，
-//           通过时没有待验收卡可以带上这句话，所以单独记一笔。待验收卡已经写着「审查通过」的不重复发；任务还在跑
-//           （审查回合本身、结算还没落回原状态）时先不记通过，落定了再看。这一样是后来加的：账上还没有它的
-//           老任务第一次看到只记不发，不把历史上的通过补推一遍
+//           通过时没有待验收卡可以带上这句话，所以单独记一笔。跟待验收卡读同一份视图（attention.ts TaskView.review）：
+//           这一刻的下一步是待验收卡的，由卡来说，不另发 —— 两边各查各的，结算正好落在两次读之间就会一次通过响两遍
+//           （审查第 2 轮实测）。任务还在跑（审查回合本身、结算还没落回原状态）时先不记通过，落定了再看。
+//           这一样是后来加的：通过结论落在它启用之前的（REVIEW_SINCE 水位）只记不发，不把历史上的通过补推一遍；
+//           不拿「账上没有这一行」去猜 —— 升级时正在审、启动后才通过的那一次也没有账行（审查第 2 轮实测）
 // 第一次看到一个任务只记下现状不发：刚绑定、刚升级时不把历史结局补推一遍。「任务完成」那一下由
 // 待验收卡本身负责（新卡就是一条新消息），这里不重复发。
 // 事件丢了（重启、通道重启正好落在对账前）由全量对账按「账和现状对不上」补（staleOutcomeTasks）。
@@ -21,13 +23,13 @@ import { isAcceptedStage, type TaskStage } from "@ash/shared";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { acceptGateRuns } from "../db/schema-accept-gate.js";
-import { freeReviewRuns } from "../db/schema-free-workflow.js";
 import { imOutcomes } from "../db/schema-im.js";
 import { tasks } from "../db/schema.js";
 import type { ConclusionTransaction } from "../regression-conclusion-commit.js";
 import { now } from "../util.js";
 import type { TaskView } from "./attention.js";
 import { acceptedLabel } from "./cards.js";
+import { readMeta, writeMeta } from "./meta.js";
 import { scrubTitle } from "./scrub.js";
 
 type OutcomeKind = "result" | "gate" | "review";
@@ -74,16 +76,32 @@ export async function outcomesOf(view: TaskView): Promise<Outcome[]> {
   ];
 }
 
+const REVIEW_SINCE = "review-outcomes-since";
+let reviewSince: Promise<string> | null = null;
+
+/**
+ * 「审查通过」这一样结局从什么时候起推：第一次调用时记下此刻，之后一直是这个时刻。启动时的全量对账先调一次
+ * （reconcile.ts full）把水位落下：等到第一次真用上才记的话，那一次通过本身就落在水位之前，被当成历史吞掉。
+ */
+export function reviewOutcomesSince(): Promise<string> {
+  reviewSince ??= (async () => {
+    const stored = await readMeta(REVIEW_SINCE);
+    if (stored) return stored;
+    const at = now();
+    await writeMeta(REVIEW_SINCE, at);
+    return at;
+  })().catch((error) => { reviewSince = null; throw error; });
+  return reviewSince;
+}
+
 async function reviewOutcome(view: TaskView, title: string): Promise<Outcome[]> {
   const task = view.task;
   if (task.workflowMode !== "free" || task.mode !== "single" || task.parentId) return [];
-  const run = (await db.select({ id: freeReviewRuns.id, status: freeReviewRuns.status }).from(freeReviewRuns)
-    .where(and(eq(freeReviewRuns.taskId, task.id), eq(freeReviewRuns.targetKind, "workspace")))
-    .orderBy(desc(freeReviewRuns.createdAt)).limit(1)).at(0);
-  if (run?.status !== "passed") return [{ kind: "review", value: NONE, text: null }];
+  const passed = view.review.passed;
+  if (!passed) return [{ kind: "review", value: NONE, text: null }];
   if (task.status === "running" || task.status === "queued" || task.status === "awaiting_review") return [];
-  const onCard = view.turn?.kind === "accept" && view.turn.reviewPassed;
-  return [{ kind: "review", value: `${run.id}:passed`, text: onCard ? null : `审查通过：${title}` }];
+  const quiet = view.turn?.kind === "accept" || passed.finishedAt <= await reviewOutcomesSince();
+  return [{ kind: "review", value: `${passed.runId}:passed`, text: quiet ? null : `审查通过：${title}` }];
 }
 
 /**
@@ -123,8 +141,7 @@ export async function advanceOutcomes(tx: ConclusionTransaction, appId: string, 
     if (before === outcome.value) continue;
     await tx.insert(imOutcomes).values({ appId, taskId, kind: outcome.kind, value: outcome.value, updatedAt: now() })
       .onConflictDoUpdate({ target: [imOutcomes.appId, imOutcomes.taskId, imOutcomes.kind], set: { value: outcome.value, updatedAt: now() } });
-    // review 是后来加的一样：账上没有它 = 老任务第一次记这一笔，只记不发（文件头）。
-    if (known.size && outcome.text && !(before === undefined && outcome.kind === "review")) changed.push(outcome);
+    if (known.size && outcome.text) changed.push(outcome);
   }
   return changed;
 }

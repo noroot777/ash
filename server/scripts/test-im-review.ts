@@ -13,7 +13,10 @@
 // ⑨ 失败、取消着的任务派审通过（审查不改任务状态，没有待验收卡）→ 单独发一条「审查通过」，重复对账不重发；
 //    审查回合还在跑（状态还没落回原样）时不发；
 // ⑩ 没通过之后执行者又跑了一轮、没复审 → 不说「审查没通过」，说完成了、注明新改动还没复审，验收照样二次确认；
-// ⑪ 账上还没记过审查这一样的老任务，历史上的通过不补推。
+// ⑪ 通过结论落在「审查通过」这一样启用之前的（水位），不补推；
+// ⑫ 升级时正在审、只有旧账（没有审查这一行）、启动后才通过 → 照样推；
+// ⑬ 待验收卡和「审查通过」通知读同一份视图：视图读的时候还在审、之后才落了通过 → 这一次两边都不出，
+//    下一次对账只出待验收卡，不会一次通过响两遍。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,6 +38,9 @@ try {
   const { APP, OWNER, FakeFeishu, buildApp, assemble, buttonsOf, contentOf, textOf } = await import("./im-fixture.js");
 
   await ensureSchema();
+  const { writeMeta } = await import("../src/im/meta.js");
+  const since = "2026-11-10T08:05:00.000Z";
+  await writeMeta("review-outcomes-since", since);
   const fake = new FakeFeishu();
   const im = await assemble(buildApp(), fake);
   const t0 = "2026-11-10T08:00:00.000Z";
@@ -160,13 +166,45 @@ try {
   assert.match(textOf(tdNew), /之后的改动还没复审/);
   assert.ok(buttonsOf(tdNew).find((button) => button.text === "验收通过")?.confirm, "最近一轮没通过：验收照样二次确认");
 
-  // ── ⑪ 老任务历史上的通过：不补推 ───────────────────────────────────────
+  // ── ⑪ 启用之前的通过：不补推 ───────────────────────────────────────────
   const { imOutcomes } = await import("../src/db/schema-im.js");
   await db.insert(tasks).values(task({ id: "th", title: "早就审过", status: "failed" }) as never);
-  await db.insert(freeReviewRuns).values(run({ id: "rh", taskId: "th", status: "passed", finishedAt: t1 }) as never);
+  await db.insert(freeReviewRuns).values(run({ id: "rh", taskId: "th", status: "passed", finishedAt: "2026-11-10T08:01:00.000Z" }) as never);
   await db.insert(imOutcomes).values({ appId: APP, taskId: "th", kind: "gate", value: "-", updatedAt: t0 } as never);
   await reconcile("th");
-  assert.equal((await noticesOf("th")).length, 0, "账上没记过审查这一样：只记不发");
+  assert.equal((await noticesOf("th")).length, 0, `通过落在 ${since} 之前：只记不发`);
+  assert.equal((await db.select().from(imOutcomes).where(eq(imOutcomes.taskId, "th"))).find((row) => row.kind === "review")?.value, "rh:passed");
+
+  // ── ⑫ 升级时正在审、启动后才通过：照样推 ──────────────────────────────────
+  await db.insert(tasks).values(task({ id: "ti", title: "升级时正在审", status: "running", followUpFrom: "canceled" }) as never);
+  await db.insert(freeReviewRuns).values(run({ id: "ri", taskId: "ti", status: "reviewing", createdAt: t1 }) as never);
+  await db.insert(imOutcomes).values({ appId: APP, taskId: "ti", kind: "gate", value: "-", updatedAt: t0 } as never);
+  await im.reconciler.full();
+  await im.settle();
+  await db.update(freeReviewRuns).set({ status: "passed", finishedAt: t1 } as never).where(eq(freeReviewRuns.id, "ri"));
+  await db.update(tasks).set({ status: "canceled", followUpFrom: null, endedAt: "2026-11-10T08:09:59.990Z" } as never).where(eq(tasks.id, "ti"));
+  await reconcile("ti");
+  await reconcile("ti");
+  assert.equal((await noticesOf("ti")).length, 1, "启动后才落的通过：账上没有这一行也照样推一条");
+
+  // ── ⑬ 卡和通知读同一份视图 ─────────────────────────────────────────────
+  const { viewOf } = await import("../src/im/attention.js");
+  const { outcomesOf } = await import("../src/im/outcomes.js");
+  await db.insert(tasks).values(task({ id: "tk", title: "结算正落在两次读之间" }) as never);
+  await db.insert(freeReviewRuns).values(run({ id: "rk", taskId: "tk", status: "reviewing", createdAt: t1 }) as never);
+  await reconcile("tk");
+  const before = await viewOf("tk");
+  assert.ok(before && before.review.pending && !before.turn, "视图读的时候还在审");
+  await db.update(freeReviewRuns).set({ status: "passed", finishedAt: t1 } as never).where(eq(freeReviewRuns.id, "rk"));
+  await db.update(tasks).set({ endedAt: "2026-11-10T08:09:59.990Z" } as never).where(eq(tasks.id, "tk"));
+  assert.equal((await outcomesOf(before)).find((outcome) => outcome.kind === "review")?.value, "-",
+    "结局按视图里的那一份算，不另去库里读一份更新的");
+  fake.reset();
+  await reconcile("tk");
+  await reconcile("tk");
+  assert.equal((await noticesOf("tk")).length, 0, "这一刻的下一步是待验收卡：由卡来说");
+  assert.equal(fake.sends().length, 1, "一次通过只响一次");
+  assert.match(textOf(lastCard()), /审查通过，等你验收/);
 
   im.reconciler.stop();
   im.sender.stop();
