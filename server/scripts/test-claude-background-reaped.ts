@@ -376,6 +376,57 @@ async function main(): Promise<void> {
   check(sharedLate.waiting().agent === 0 && sl?.total === 2 && sl.reaped === 0,
     "两条通知都到了就都了结，不说成被收走", `${JSON.stringify(sharedLate.waiting())} ${JSON.stringify(sl)}`);
 
+  // 带身份和不带身份的通知候选是重叠的，要一起收敛，等待与分档出自同一份结论（自由审查 wPbuPL7JvGGM R1）
+  const agentLife = (trace: Trace, id: string, task = "child") => {
+    call(trace, "Agent", id);
+    started(trace, task, id, "local_agent");
+    returned(trace, id);
+  };
+  const childDone = (trace: Trace, id?: string) => trace.event({
+    type: "system", subtype: "task_notification", task_id: "child", status: "completed", ...(id ? { tool_use_id: id } : {}),
+  });
+  const mixedIds = new ClaudeBackgroundTrace("mixed-ids");
+  agentLife(mixedIds, "toolu_m1");
+  agentLife(mixedIds, "toolu_m2");
+  childDone(mixedIds); // 认不出是谁的，先挂着
+  check(mixedIds.waiting().agent === 1, "挂着一条认不出的完成：只剩一条命还在跑", JSON.stringify(mixedIds.waiting()));
+  childDone(mixedIds, "toolu_m2"); // 它落地后，前面那条只剩一个候选，跟着认出来
+  const mx = mixedIds.tally().agent;
+  check(mixedIds.waiting().agent === 0 && mx?.finished === 2, "不同调用：两条完成到齐就不再等",
+    `${JSON.stringify(mixedIds.waiting())} ${JSON.stringify(mx)}`);
+  const mixedShared = new ClaudeBackgroundTrace("mixed-shared");
+  agentLife(mixedShared, "toolu_ms");
+  started(mixedShared, "child", "toolu_ms", "local_agent"); // 续上，沿用原调用的 id
+  childDone(mixedShared);
+  childDone(mixedShared, "toolu_ms");
+  const ms = mixedShared.tally().agent;
+  check(mixedShared.waiting().agent === 0 && ms?.finished === 2 && ms.reaped === 0, "同一调用：两条完成到齐就不再等",
+    `${JSON.stringify(mixedShared.waiting())} ${JSON.stringify(ms)}`);
+
+  // 带着身份、却对不上任何还没了结的命：重复或迟到的旧通知，不替别的调用起的命报终态（R2）
+  const stale = new ClaudeBackgroundTrace("stale-id");
+  agentLife(stale, "toolu_old");
+  childDone(stale, "toolu_old");
+  result(stale);
+  call(stale, "Read", "toolu_next"); // 下一回合：旧那条命清出账本
+  agentLife(stale, "toolu_current");
+  childDone(stale, "toolu_old");
+  check(stale.waiting().agent === 1 && !stale.tally().agent?.finished, "旧调用的重复通知不让当前那条命算完成",
+    `${JSON.stringify(stale.waiting())} ${JSON.stringify(stale.tally())}`);
+
+  // 跨主回合续上：原调用的回执早随清账回收了，续上的那条命照样是后台的、照样要等（审查 N1）
+  const crossTurn = new ClaudeBackgroundTrace("cross-turn");
+  agentLife(crossTurn, "toolu_orig");
+  childDone(crossTurn, "toolu_orig");
+  result(crossTurn);
+  call(crossTurn, "SendMessage", "toolu_resume");
+  returned(crossTurn, "toolu_resume");
+  started(crossTurn, "child", "toolu_orig", "local_agent");
+  check(crossTurn.waiting().agent === 1, "跨回合续上的那条命在跑：等它", JSON.stringify(crossTurn.waiting()));
+  childDone(crossTurn, "toolu_orig");
+  check(crossTurn.waiting().agent === 0 && crossTurn.tally().agent?.finished === 1, "续上那条命完成：不再等",
+    `${JSON.stringify(crossTurn.waiting())} ${JSON.stringify(crossTurn.tally())}`);
+
   // ── ②⁵ 停止回执本身就是证据，不靠终态通知来触发（第 4 次审查 R1）──────────────────
   for (const [tool, field, kind, type] of [
     ["TaskStop", "task_id", "agent", "local_agent"], ["KillShell", "shell_id", "bash", "local_bash"],

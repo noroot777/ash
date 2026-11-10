@@ -47,7 +47,9 @@
 //   只说明是哪次调用起的，不说明是哪一条命——续上的那条命沿用最初那次 Agent 调用的
 //   `tool_use_id`（2026-11-10 任务 tLDCWCOJ0cuO 实测：两次 task_started、两条完成通知全是同一个
 //   id。按它在全部命里取第一条，第二条完成通知就落到早已了结的旧命上，新命永远等不到终态，
-//   单飞回合收尾一直「等后台」）。候选不止一条时**不猜**（通知到达的先后不等于结束的先后）：
+//   单飞回合收尾一直「等后台」）。带着 id 却对不上任何还没了结的命，是重复或迟到的旧通知，丢掉，
+//   不拿去替别的调用起的命报终态。同一个 task_id 的待认通知挂在一处一起收敛（见 `settle`）。
+//   候选不止一条时**不猜**（通知到达的先后不等于结束的先后）：
 //   先挂着，等别的证据把范围缩到一条命，或者每条命都等到了通知；分档取决于是哪条命的（停止
 //   回执只给了其中一些）那几笔记「原因不明」，不断言是谁被收走。
 // - 没人请求停它、通知落在回合 `result` 之后、下一段助手输出之前 → 被收走：那个空档里
@@ -114,7 +116,7 @@ interface Tracked {
   background: boolean;
   /** 它的终态通知。没有 = 还没等到。 */
   note?: Note;
-  /** 整组一起落地时：这条通知其实是这几条命里不知哪一条的（见 `absorb`）。 */
+  /** 整组一起落地时：这条通知其实是这几条命里不知哪一条的（见 `settle`）。 */
   peers?: Tracked[];
   /** 有一次指名这条命的停止调用回执成功了。 */
   stopOk?: boolean;
@@ -143,6 +145,11 @@ export class ClaudeBackgroundTrace {
   /** 已经收到 tool_result 的调用。 */
   private returned = new Set<string>();
   /**
+   * 起过后台任务的调用，不随回合清账回收（量只有派出去的后台任务那么多）。续上的那条命沿用这次
+   * 调用的 tool_use_id，那时调用早就返回过、`returned` 里那一笔可能已经清掉了，它照样是后台的。
+   */
+  private launched = new Set<string>();
+  /**
    * 还没回执的停止调用：tool_use_id → 发请求那一刻它指名的那几条命（对象本身，不是 task_id，
    * 见文件头「是谁停的」）。**请求不等于停成了。**
    */
@@ -151,8 +158,11 @@ export class ClaudeBackgroundTrace {
   private tasks = new Map<string, Tracked>();
   /** 同一个 task_id 再起一次之前的那几条命（SendMessage 把停掉的子代理续上）——各算各的。 */
   private earlier: Tracked[] = [];
-  /** 认不出是哪条命、先挂着的终态通知，按通知自报的身份（task_id + 可选的 tool_use_id）归堆。 */
-  private loose = new Map<string, { taskId: string; toolUseId: string; notes: Note[] }>();
+  /**
+   * task_id → 认不出是哪条命、先挂着的终态通知（按到达先后），各带自报的 tool_use_id（空 = 没带）。
+   * 同一个 task_id 的全部挂一处：带身份和不带身份的候选是重叠的，得一起收敛（见 `settle`）。
+   */
+  private loose = new Map<string, { note: Note; toolUseId: string }[]>();
   /** 回合 `result` 之后、下一段助手输出之前（见文件头「是谁停的」）。 */
   private idle = false;
   /** 时间线写入串成一条链：回合边界那次和流结束那次不能乱序，`finish` 要等它写完。 */
@@ -181,7 +191,10 @@ export class ClaudeBackgroundTrace {
     if (typeof toolUseId !== "string" || !toolUseId) return;
     this.returned.add(toolUseId);
     for (const task of this.runs()) {
-      if (task.toolUseId === toolUseId && !task.note && !task.stopOk) task.background = true;
+      if (task.toolUseId === toolUseId && !task.note && !task.stopOk) {
+        task.background = true;
+        this.launched.add(toolUseId);
+      }
     }
     const targets = this.stopCalls.get(toolUseId);
     if (!targets) return;
@@ -208,9 +221,9 @@ export class ClaudeBackgroundTrace {
       if (!kind) return;
       const prior = this.tasks.get(taskId);
       if (prior) this.earlier.push(prior);
-      this.tasks.set(taskId, {
-        taskId, kind, toolUseId, background: !!toolUseId && this.returned.has(toolUseId),
-      });
+      const background = !!toolUseId && (this.returned.has(toolUseId) || this.launched.has(toolUseId));
+      if (background) this.launched.add(toolUseId);
+      this.tasks.set(taskId, { taskId, kind, toolUseId, background });
       return;
     }
     if (ev.subtype !== "task_notification") return;
@@ -219,32 +232,52 @@ export class ClaudeBackgroundTrace {
     const note: Note = {
       stopped: status === "stopped", sessionEnded: SESSION_ENDED_RE.test(String(ev.summary ?? "")), idle: this.idle,
     };
-    // 只在还没了结的命里认（见文件头「是谁停的」）：带着 `tool_use_id` 就缩到那次调用起的命，
-    // 账上没有哪条命出自那次调用的（id 口径对不上）按没带算。剩一条就是它，不止一条先挂着。
-    const raw = typeof ev.tool_use_id === "string" ? ev.tool_use_id : "";
-    const toolUseId = raw && this.runs().some((t) => t.taskId === taskId && t.toolUseId === raw) ? raw : "";
-    const open = this.open(taskId, toolUseId);
-    const key = `${taskId}\n${toolUseId}`;
-    if (open.length > 1) {
-      const pile = this.loose.get(key) ?? { taskId, toolUseId, notes: [] as Note[] };
-      pile.notes.push(note);
-      this.loose.set(key, pile);
-    } else if (open.length === 1) {
-      open[0].note = note;
-    }
-    this.absorb(key);
+    const toolUseId = typeof ev.tool_use_id === "string" ? ev.tool_use_id : "";
+    this.loose.set(taskId, [...this.loose.get(taskId) ?? [], { note, toolUseId }]);
+    this.settle(taskId);
   }
 
-  /** 挂着的通知能落地了就落：范围缩到一条命，或者每条命都等到了通知。 */
-  private absorb(key: string): void {
-    const pile = this.loose.get(key);
-    if (!pile) return;
-    const { notes } = pile;
-    const open = this.open(pile.taskId, pile.toolUseId);
-    if (open.length > 1 && notes.length < open.length) return;
-    if (open.length === 1) open[0].note = notes[0];
-    else open.forEach((task, i) => { task.note = notes[i]; task.peers = open; });
-    this.loose.delete(key);
+  /** 一条挂着的通知能落到的命：还没了结的，带着 `tool_use_id` 就只要那次调用起的。 */
+  private candidates(taskId: string, toolUseId: string): Tracked[] {
+    return this.open(taskId).filter((task) => !toolUseId || task.toolUseId === toolUseId);
+  }
+
+  /**
+   * 同一个 task_id 挂着的通知一起收敛（见文件头「是谁停的」），每条只落一次：
+   *
+   * 1. 反复挑出候选只剩一条的通知落到它身上——一条落了，别的通知候选跟着变少，可能也就认出来了
+   *    （不带身份的那条常常要等带身份的那条先落地才认得出）。
+   * 2. 候选为零的丢掉：带身份却没有那次调用起的命还没了结 = 重复或迟到的旧通知（它那条命早已了结，
+   *    甚至已随回合清账）；**不能**因为本地只剩一条命就让它替别的调用起的命报终态。
+   * 3. 剩下的都认不出是谁。每条命都等到了通知就整组落地（身份能对上的先对上），分档按「哪条都
+   *    一样」现算；还有命没等到就接着挂。
+   */
+  private settle(taskId: string): void {
+    let pile = this.loose.get(taskId) ?? [];
+    for (let progressed = true; progressed;) {
+      progressed = false;
+      for (const entry of pile) {
+        const found = this.candidates(taskId, entry.toolUseId);
+        if (found.length > 1) continue;
+        if (found.length === 1) found[0].note = entry.note;
+        pile = pile.filter((other) => other !== entry);
+        progressed = true;
+        break;
+      }
+    }
+    const open = this.open(taskId);
+    const slots = [...open];
+    const pairs: [Tracked, Note][] = [];
+    for (const entry of [...pile.filter((e) => e.toolUseId), ...pile.filter((e) => !e.toolUseId)]) {
+      const at = slots.findIndex((task) => !entry.toolUseId || task.toolUseId === entry.toolUseId);
+      if (at >= 0) pairs.push([slots.splice(at, 1)[0], entry.note]);
+    }
+    if (pile.length && !slots.length) {
+      for (const [task, note] of pairs) { task.note = note; task.peers = open; }
+      pile = [];
+    }
+    if (pile.length) this.loose.set(taskId, pile);
+    else this.loose.delete(taskId);
   }
 
   /**
@@ -271,9 +304,8 @@ export class ClaudeBackgroundTrace {
     return false;
   }
 
-  /** 还没等到终态的那几条命；`toolUseId` 非空就只要那次调用起的。 */
-  private open(taskId: string, toolUseId = ""): Tracked[] {
-    return this.runs().filter((task) => task.taskId === taskId && !task.note && (!toolUseId || task.toolUseId === toolUseId));
+  private open(taskId: string): Tracked[] {
+    return this.runs().filter((task) => task.taskId === taskId && !task.note);
   }
 
   /**
@@ -313,11 +345,16 @@ export class ClaudeBackgroundTrace {
    * 开发服务器一类压根不会自己结束，为它留着进程就是无限期挂住。
    */
   waiting(): { agent: number; workflow: number } {
-    const open = this.runs().filter((task) => task.background && !task.note && !task.stopOk);
-    return {
-      agent: open.filter((task) => task.kind === "agent").length,
-      workflow: open.filter((task) => task.kind === "workflow").length,
-    };
+    const out = { agent: 0, workflow: 0 };
+    for (const taskId of new Set(this.runs().map((task) => task.taskId))) {
+      const open = this.open(taskId);
+      const running = open.filter((task) => task.background && !task.stopOk);
+      const kind = running[0]?.kind;
+      if (kind !== "agent" && kind !== "workflow") continue;
+      // 挂着的通知认不出是谁的，但每条都说明有一条命已经结束：没等到终态的只剩 open − 挂着的那么多。
+      out[kind] += Math.min(running.length, Math.max(0, open.length - (this.loose.get(taskId)?.length ?? 0)));
+    }
+    return out;
   }
 
   /**
@@ -326,9 +363,9 @@ export class ClaudeBackgroundTrace {
    */
   tally(): Partial<Record<BackgroundKind, BackgroundTally>> {
     const outcomes = new Map(this.runs().map((task) => [task, this.outcomeOf(task)] as const));
-    for (const { taskId, toolUseId, notes } of this.loose.values()) {
-      const open = this.open(taskId, toolUseId);
-      open.forEach((task, i) => outcomes.set(task, this.verdict(notes[i], open)));
+    for (const [taskId, pile] of this.loose) {
+      const open = this.open(taskId);
+      open.forEach((task, i) => outcomes.set(task, this.verdict(pile[i]?.note, open)));
     }
     return tallyOf(outcomes);
   }
