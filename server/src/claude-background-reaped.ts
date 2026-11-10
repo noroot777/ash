@@ -163,6 +163,8 @@ export class ClaudeBackgroundTrace {
    * 同一个 task_id 的全部挂一处：带身份和不带身份的候选是重叠的，得一起收敛（见 `settle`）。
    */
   private loose = new Map<string, { note: Note; toolUseId: string }[]>();
+  /** 已经收过的终态通知（事件 uuid）。 */
+  private seenNotes = new Set<string>();
   /** 回合 `result` 之后、下一段助手输出之前（见文件头「是谁停的」）。 */
   private idle = false;
   /** 时间线写入串成一条链：回合边界那次和流结束那次不能乱序，`finish` 要等它写完。 */
@@ -232,52 +234,57 @@ export class ClaudeBackgroundTrace {
     const note: Note = {
       stopped: status === "stopped", sessionEnded: SESSION_ENDED_RE.test(String(ev.summary ?? "")), idle: this.idle,
     };
+    // 同一条事件投递了两次（uuid 相同）只算一次；不同事件之间的重复认不出，交给下面的身份分组兜。
+    const uuid = typeof ev.uuid === "string" ? ev.uuid : "";
+    if (uuid && this.seenNotes.has(uuid)) return;
+    if (uuid) this.seenNotes.add(uuid);
     const toolUseId = typeof ev.tool_use_id === "string" ? ev.tool_use_id : "";
     this.loose.set(taskId, [...this.loose.get(taskId) ?? [], { note, toolUseId }]);
     this.settle(taskId);
   }
 
-  /** 一条挂着的通知能落到的命：还没了结的，带着 `tool_use_id` 就只要那次调用起的。 */
-  private candidates(taskId: string, toolUseId: string): Tracked[] {
-    return this.open(taskId).filter((task) => !toolUseId || task.toolUseId === toolUseId);
-  }
-
   /**
-   * 同一个 task_id 挂着的通知一起收敛（见文件头「是谁停的」），每条只落一次：
+   * 同一个 task_id 挂着的通知一起收敛（见文件头「是谁停的」）。等待（`waiting`）、分档（`tally`）
+   * 都只读这里结算出的结果和剩下的 `pool`，不另算一套。
    *
-   * 1. 反复挑出候选只剩一条的通知落到它身上——一条落了，别的通知候选跟着变少，可能也就认出来了
-   *    （不带身份的那条常常要等带身份的那条先落地才认得出）。
-   * 2. 候选为零的丢掉：带身份却没有那次调用起的命还没了结 = 重复或迟到的旧通知（它那条命早已了结，
-   *    甚至已随回合清账）；**不能**因为本地只剩一条命就让它替别的调用起的命报终态。
-   * 3. 剩下的都认不出是谁。每条命都等到了通知就整组落地（身份能对上的先对上），分档按「哪条都
-   *    一样」现算；还有命没等到就接着挂。
+   * 带 `tool_use_id` 的通知只可能属于那次调用起的命，所以按调用分组：
+   *
+   * 1. 一组的通知条数不少于它还没了结的命数 = 这一组全都结束了，整组落地，`peers` 只是这一组
+   *    （不同调用起的命不互相掺停止证据），多出来的是重复通知、丢掉。不必等别的组。
+   * 2. 带身份却没有那次调用起的命还没了结 = 重复或迟到的旧通知（它那条命早已了结，甚至已随回合
+   *    清账），丢掉；**不能**拿它替别的调用起的命报终态。
+   * 3. 其余（不带身份的通知、还没凑齐的那几组）合成一个池：池里的通知不少于池里的命就整池落地
+   *    （身份能对上的先对上），`peers` 是整池；否则接着挂，等别的证据。
    */
   private settle(taskId: string): void {
     let pile = this.loose.get(taskId) ?? [];
-    for (let progressed = true; progressed;) {
-      progressed = false;
-      for (const entry of pile) {
-        const found = this.candidates(taskId, entry.toolUseId);
-        if (found.length > 1) continue;
-        if (found.length === 1) found[0].note = entry.note;
-        pile = pile.filter((other) => other !== entry);
-        progressed = true;
-        break;
-      }
-    }
     const open = this.open(taskId);
-    const slots = [...open];
+    for (const id of new Set(pile.map((entry) => entry.toolUseId).filter(Boolean))) {
+      const group = open.filter((task) => task.toolUseId === id);
+      const notes = pile.filter((entry) => entry.toolUseId === id);
+      if (group.length && notes.length < group.length) continue;
+      group.forEach((task, i) => { task.note = notes[i].note; task.peers = group; });
+      pile = pile.filter((entry) => entry.toolUseId !== id);
+    }
+    const pool = this.pool(taskId, pile);
+    if (pool.lives.length && pool.pairs.length === pool.lives.length) {
+      for (const [task, note] of pool.pairs) { task.note = note; task.peers = pool.lives; }
+      pile = [];
+    }
+    if (pile.length && pool.lives.length) this.loose.set(taskId, pile);
+    else this.loose.delete(taskId);
+  }
+
+  /** 认不出是谁的那个池：还没了结的命，和挂着的通知按身份能对上先对上、其余依次配上的结果。 */
+  private pool(taskId: string, pile = this.loose.get(taskId) ?? []): { lives: Tracked[]; pairs: [Tracked, Note][] } {
+    const lives = this.open(taskId);
+    const slots = [...lives];
     const pairs: [Tracked, Note][] = [];
     for (const entry of [...pile.filter((e) => e.toolUseId), ...pile.filter((e) => !e.toolUseId)]) {
       const at = slots.findIndex((task) => !entry.toolUseId || task.toolUseId === entry.toolUseId);
       if (at >= 0) pairs.push([slots.splice(at, 1)[0], entry.note]);
     }
-    if (pile.length && !slots.length) {
-      for (const [task, note] of pairs) { task.note = note; task.peers = open; }
-      pile = [];
-    }
-    if (pile.length) this.loose.set(taskId, pile);
-    else this.loose.delete(taskId);
+    return { lives, pairs };
   }
 
   /**
@@ -347,12 +354,13 @@ export class ClaudeBackgroundTrace {
   waiting(): { agent: number; workflow: number } {
     const out = { agent: 0, workflow: 0 };
     for (const taskId of new Set(this.runs().map((task) => task.taskId))) {
-      const open = this.open(taskId);
-      const running = open.filter((task) => task.background && !task.stopOk);
+      // 池里配上通知的那几条命里不知哪几条结束了，只知道没配上的那几条还没等到终态。停止回执成功的
+      // 不等；认不出谁停了时按多的那头算（宁可多等，不提前收台）。
+      const { lives, pairs } = this.pool(taskId);
+      const running = lives.filter((task) => task.background && !task.stopOk);
       const kind = running[0]?.kind;
       if (kind !== "agent" && kind !== "workflow") continue;
-      // 挂着的通知认不出是谁的，但每条都说明有一条命已经结束：没等到终态的只剩 open − 挂着的那么多。
-      out[kind] += Math.min(running.length, Math.max(0, open.length - (this.loose.get(taskId)?.length ?? 0)));
+      out[kind] += Math.min(running.length, lives.length - pairs.length);
     }
     return out;
   }
@@ -363,9 +371,10 @@ export class ClaudeBackgroundTrace {
    */
   tally(): Partial<Record<BackgroundKind, BackgroundTally>> {
     const outcomes = new Map(this.runs().map((task) => [task, this.outcomeOf(task)] as const));
-    for (const [taskId, pile] of this.loose) {
-      const open = this.open(taskId);
-      open.forEach((task, i) => outcomes.set(task, this.verdict(pile[i]?.note, open)));
+    for (const taskId of this.loose.keys()) {
+      const { lives, pairs } = this.pool(taskId);
+      const paired = new Map(pairs);
+      for (const task of lives) outcomes.set(task, this.verdict(paired.get(task), lives));
     }
     return tallyOf(outcomes);
   }
@@ -379,6 +388,7 @@ export class ClaudeBackgroundTrace {
     this.tasks.clear();
     this.earlier = [];
     this.loose.clear();
+    this.seenNotes.clear();
     await this.writes;
   }
 

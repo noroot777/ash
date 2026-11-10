@@ -427,6 +427,61 @@ async function main(): Promise<void> {
   check(crossTurn.waiting().agent === 0 && crossTurn.tally().agent?.finished === 1, "续上那条命完成：不再等",
     `${JSON.stringify(crossTurn.waiting())} ${JSON.stringify(crossTurn.tally())}`);
 
+  // 按调用分组结算，等待与分档都读同一份结算结果（自由审查 wPbuPL7JvGGM 第 2 轮 R1 的 A/B/C）
+  const childEnd = (trace: Trace, id: string, status = "completed", uuid?: string) => trace.event({
+    type: "system", subtype: "task_notification", task_id: "child", status, tool_use_id: id, ...(uuid ? { uuid } : {}),
+  });
+  const twoFirstThenSecond = (name: string) => {
+    const trace = new ClaudeBackgroundTrace(name);
+    agentLife(trace, "toolu_first");
+    started(trace, "child", "toolu_first", "local_agent"); // 续上，同一调用
+    agentLife(trace, "toolu_second");
+    return trace;
+  };
+  // A：first 那组两条都完成，second 那条停止回执成功（没有停止通知）：不必等 second 的通知
+  const groupA = twoFirstThenSecond("group-a");
+  call(groupA, "TaskStop", "toolu_stop_second", { task_id: "child" });
+  returned(groupA, "toolu_stop_second");
+  childEnd(groupA, "toolu_first");
+  childEnd(groupA, "toolu_first");
+  const ga = groupA.tally().agent;
+  check(groupA.waiting().agent === 0 && ga?.finished === 2 && ga.stopped === 1,
+    "一组到齐就结算，不等别的组；停掉的那条不再等", `${JSON.stringify(groupA.waiting())} ${JSON.stringify(ga)}`);
+  // B：first 那组到齐后又来一条 first 的通知：不能抵 second 的账
+  const groupB = twoFirstThenSecond("group-b");
+  childEnd(groupB, "toolu_first");
+  childEnd(groupB, "toolu_first");
+  childEnd(groupB, "toolu_first");
+  check(groupB.waiting().agent === 1 && groupB.tally().agent?.finished === 2,
+    "别的调用的重复通知不让 second 算结束", `${JSON.stringify(groupB.waiting())} ${JSON.stringify(groupB.tally())}`);
+  // C：first 那组两条都停掉（回执成功）、second 那组两条完成：停止证据不跨组掺
+  const groupC = new ClaudeBackgroundTrace("group-c");
+  agentLife(groupC, "toolu_first");
+  call(groupC, "TaskStop", "toolu_stop_1", { task_id: "child" });
+  returned(groupC, "toolu_stop_1");
+  started(groupC, "child", "toolu_first", "local_agent"); // 续上，同一调用
+  call(groupC, "TaskStop", "toolu_stop_2", { task_id: "child" });
+  returned(groupC, "toolu_stop_2");
+  childEnd(groupC, "toolu_first", "stopped");
+  childEnd(groupC, "toolu_first", "stopped");
+  agentLife(groupC, "toolu_second");
+  started(groupC, "child", "toolu_second", "local_agent");
+  childEnd(groupC, "toolu_second");
+  childEnd(groupC, "toolu_second");
+  const gc = groupC.tally().agent;
+  check(groupC.waiting().agent === 0 && gc?.total === 4 && gc.finished === 2 && gc.stopped === 2,
+    "各组按自己的停止证据分档", `${JSON.stringify(groupC.waiting())} ${JSON.stringify(gc)}`);
+  // 同一条通知事件投递两次（uuid 相同）只算一次
+  const redelivered = new ClaudeBackgroundTrace("redelivered");
+  agentLife(redelivered, "toolu_first");
+  started(redelivered, "child", "toolu_first", "local_agent");
+  childEnd(redelivered, "toolu_first", "completed", "evt-1");
+  childEnd(redelivered, "toolu_first", "completed", "evt-1");
+  check(redelivered.waiting().agent === 1, "重投的同一条通知不替另一条命报结束", JSON.stringify(redelivered.waiting()));
+  childEnd(redelivered, "toolu_first", "completed", "evt-2");
+  check(redelivered.waiting().agent === 0 && redelivered.tally().agent?.finished === 2, "两条不同通知到齐就都结束",
+    `${JSON.stringify(redelivered.waiting())} ${JSON.stringify(redelivered.tally())}`);
+
   // ── ②⁵ 停止回执本身就是证据，不靠终态通知来触发（第 4 次审查 R1）──────────────────
   for (const [tool, field, kind, type] of [
     ["TaskStop", "task_id", "agent", "local_agent"], ["KillShell", "shell_id", "bash", "local_bash"],
