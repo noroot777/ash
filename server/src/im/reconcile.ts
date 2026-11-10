@@ -43,7 +43,7 @@ import { extrasFor } from "./extras.js";
 import type { FeishuApi } from "./feishu/api.js";
 import { renderCard } from "./feishu/cards.js";
 import { readOptions } from "./meta.js";
-import { advanceOutcomes, forgetOutcomes, outcomesOf, outcomesRecorded, staleOutcomeTasks } from "./outcomes.js";
+import { advanceOutcomes, forgetOutcomes, outcomesOf, outcomesRecorded, reviewOutcomesSince, staleOutcomeTasks } from "./outcomes.js";
 import { cardHeaderOf, OutboxSender, RECALL, RECALLED, type Destination, type OutboxRow } from "./outbox.js";
 import { destinationsFor } from "./recipients.js";
 import { scopeFor, type OutboxScope } from "./scope.js";
@@ -131,6 +131,7 @@ export class Reconciler {
 
   /** 启动时、绑定刚生效时：把所有可能要人管的任务都对一遍。 */
   async full(): Promise<void> {
+    await reviewOutcomesSince();
     const candidates = await db.select({ id: tasks.id }).from(tasks).where(and(
       eq(tasks.archived, false),
       or(
@@ -481,6 +482,8 @@ async function resolutionLine(row: OutboxRow, view: TaskView | null): Promise<st
     case "duet_gate": return "闸口已在别处处理。";
     case "accept":
       if (live && await recentGateFailure(task.id, row.sentAt)) return "验收前置命令没通过，已交回任务修复。";
+      // 推出去之后才派审或预约了审查：「完成了」要等审查说了算，撤回，出了结论另推一张。
+      if (view.review.pending) return again("等审查出了结论再告诉你。");
       return live ? again("任务又开始跑了。") : "已在别处处理。";
     default: return "已处理。";
   }

@@ -10,7 +10,13 @@
 //           一样，第二次就推不出来（审查第 2 轮实测）。加列之前的老验收没有 id，才回落到合并事实。牌子
 //           摘下的那段时间不记 —— 这一轮没改东西、原样挂回来的还是同一次验收，不算新的。
 //   gate    最近一次跑出结果（通过 / 没通过）的那一次门禁；被打断、取消的不算结果
-// 第一次看到一个任务只记下现状不发：刚绑定、刚升级时不把历史结局补推一遍。「任务完成」那一下由
+//   review  自由工作流最近一条工作区审查链通过了（哪一条）。审查不改任务状态：失败、取消、暂停着的任务也能派审，
+//           通过时没有待验收卡可以带上这句话，所以单独记一笔。跟待验收卡读同一份视图（attention.ts TaskView.review）：
+//           这一刻的下一步是待验收卡的，由卡来说，不另发 —— 两边各查各的，结算正好落在两次读之间就会一次通过响两遍
+//           （审查第 2 轮实测）。任务还在跑（审查回合本身、结算还没落回原状态）时先不记通过，落定了再看。
+//           这一样是后来加的：通过结论落在它启用之前的（REVIEW_SINCE 水位）只记不发，不把历史上的通过补推一遍；
+//           不拿「账上没有这一行」去猜 —— 升级时正在审、启动后才通过的那一次也没有账行（审查第 2 轮实测）
+// result / gate 第一次看到一个任务只记下现状不发：刚绑定、刚升级时不把历史结局补推一遍。「任务完成」那一下由
 // 待验收卡本身负责（新卡就是一条新消息），这里不重复发。
 // 事件丢了（重启、通道重启正好落在对账前）由全量对账按「账和现状对不上」补（staleOutcomeTasks）。
 import { isAcceptedStage, type TaskStage } from "@ash/shared";
@@ -23,9 +29,10 @@ import type { ConclusionTransaction } from "../regression-conclusion-commit.js";
 import { now } from "../util.js";
 import type { TaskView } from "./attention.js";
 import { acceptedLabel } from "./cards.js";
+import { readMeta, writeMeta } from "./meta.js";
 import { scrubTitle } from "./scrub.js";
 
-type OutcomeKind = "result" | "gate";
+type OutcomeKind = "result" | "gate" | "review";
 const NONE = "-";
 
 /** 这一次验收的身份（db/schema.ts acceptanceId）；加列之前的老验收没有，按落章时写下的那几样合并事实认。 */
@@ -36,6 +43,10 @@ const acceptanceIdentity = sql<string>`CASE WHEN ${tasks.acceptanceId} IS NOT NU
 /** 最近一次跑出结果的门禁，跟 outcomesOf 里那一份同一个口径。 */
 const latestGate = sql<string>`coalesce((SELECT r.id || ':' || r.status FROM accept_gate_runs r
   WHERE r.task_id = ${imOutcomes.taskId} AND r.status IN ('passed', 'failed') ORDER BY r.started_at DESC LIMIT 1), '-')`;
+
+/** 最近一条工作区审查链通过了就是「那一条:passed」，否则 "-"。跟 outcomesOf 里那一份同一个口径。 */
+const latestReview = sql<string>`coalesce((SELECT CASE WHEN r.status = 'passed' THEN r.id || ':passed' ELSE '-' END FROM free_review_runs r
+  WHERE r.task_id = ${imOutcomes.taskId} AND r.target_kind = 'workspace' ORDER BY r.created_at DESC LIMIT 1), '-')`;
 
 /** 一样结局此刻的值，和它变成这个值时该发的那句话（null = 变成这样不用告诉人）。没验收时不出 result 这一样。 */
 export interface Outcome { kind: OutcomeKind; value: string; text: string | null }
@@ -55,6 +66,7 @@ export async function outcomesOf(view: TaskView): Promise<Outcome[]> {
     : undefined;
   // 门禁在前：绿了紧接着自动合并时，两条按事情发生的先后发。
   return [
+    ...await reviewOutcome(view, title),
     run
       ? { kind: "gate", value: `${run.id}:${run.status}`,
         text: run.status === "passed" ? `验收前置命令通过了：${title}` : `验收前置命令没通过：${title}，详情回 ash 看。` }
@@ -64,8 +76,37 @@ export async function outcomesOf(view: TaskView): Promise<Outcome[]> {
   ];
 }
 
+const REVIEW_SINCE = "review-outcomes-since";
+let reviewSince: Promise<string> | null = null;
+
 /**
- * 账和现状对不上的任务（全量对账带上它们）：已验收、账上却不是这一次验收的；最近一次门禁结果跟账上不同的。
+ * 「审查通过」这一样结局从什么时候起推：第一次调用时记下此刻，之后一直是这个时刻。启动时的全量对账先调一次
+ * （reconcile.ts full）把水位落下：等到第一次真用上才记的话，那一次通过本身就落在水位之前，被当成历史吞掉。
+ */
+export function reviewOutcomesSince(): Promise<string> {
+  reviewSince ??= (async () => {
+    const stored = await readMeta(REVIEW_SINCE);
+    if (stored) return stored;
+    const at = now();
+    await writeMeta(REVIEW_SINCE, at);
+    return at;
+  })().catch((error) => { reviewSince = null; throw error; });
+  return reviewSince;
+}
+
+async function reviewOutcome(view: TaskView, title: string): Promise<Outcome[]> {
+  const task = view.task;
+  if (task.workflowMode !== "free" || task.mode !== "single" || task.parentId) return [];
+  const passed = view.review.passed;
+  if (!passed) return [{ kind: "review", value: NONE, text: null }];
+  if (task.status === "running" || task.status === "queued" || task.status === "awaiting_review") return [];
+  const quiet = view.turn?.kind === "accept" || passed.finishedAt <= await reviewOutcomesSince();
+  return [{ kind: "review", value: `${passed.runId}:passed`, text: quiet ? null : `审查通过：${title}` }];
+}
+
+/**
+ * 账和现状对不上的任务（全量对账带上它们）：已验收、账上却不是这一次验收的；最近一次门禁 / 审查结果跟账上不同的；
+ * 水位之后审查通过、账上还没记过的。
  * 已验收的任务不在全量对账的常规候选里，那一次事件丢了就再没人来对。
  */
 export async function staleOutcomeTasks(appId: string): Promise<string[]> {
@@ -76,7 +117,17 @@ export async function staleOutcomeTasks(appId: string): Promise<string[]> {
   ));
   const gates = await db.select({ id: imOutcomes.taskId }).from(imOutcomes)
     .where(and(eq(imOutcomes.appId, appId), eq(imOutcomes.kind, "gate"), ne(imOutcomes.value, latestGate)));
-  return [...new Set([...accepted, ...gates].map((row) => row.id))];
+  const reviews = await db.select({ id: imOutcomes.taskId }).from(imOutcomes)
+    .where(and(eq(imOutcomes.appId, appId), eq(imOutcomes.kind, "review"), ne(imOutcomes.value, latestReview)));
+  // 水位之后通过、账上还没有 review 行的：取消着的任务不在全量对账的常规候选里，通过那一下的事件丢了就再没人来对
+  const since = await reviewOutcomesSince();
+  const unseen = await db.select({ id: tasks.id }).from(tasks).where(and(
+    eq(tasks.archived, false),
+    sql`(SELECT r.status = 'passed' AND r.finished_at > ${since} FROM free_review_runs r
+      WHERE r.task_id = ${tasks.id} AND r.target_kind = 'workspace' ORDER BY r.created_at DESC LIMIT 1)`,
+    sql`NOT EXISTS (SELECT 1 FROM im_outcomes o WHERE o.app_id = ${appId} AND o.task_id = ${tasks.id} AND o.kind = 'review')`,
+  ));
+  return [...new Set([...accepted, ...gates, ...reviews, ...unseen].map((row) => row.id))];
 }
 
 /** 账上已经是此刻的样子（绝大多数对账都是这样）：不必开事务、不必找收件人。 */
@@ -99,7 +150,8 @@ export async function advanceOutcomes(tx: ConclusionTransaction, appId: string, 
     if (before === outcome.value) continue;
     await tx.insert(imOutcomes).values({ appId, taskId, kind: outcome.kind, value: outcome.value, updatedAt: now() })
       .onConflictDoUpdate({ target: [imOutcomes.appId, imOutcomes.taskId, imOutcomes.kind], set: { value: outcome.value, updatedAt: now() } });
-    if (known.size && outcome.text) changed.push(outcome);
+    // review 是不是历史由水位判（reviewOutcome），不看账上有没有别的行：升级时正在审、从没被记过账的任务也要推
+    if (outcome.text && (known.size || outcome.kind === "review")) changed.push(outcome);
   }
   return changed;
 }

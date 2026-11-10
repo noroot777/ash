@@ -95,6 +95,8 @@ export function needsYourCommand(task: TaskListItem, workers: TaskListItem[] = [
 //   · status=failed：失败卡。retry 只收 failed。
 //   · 机器在动：不推。
 //   · 有待裁定的驳回：驳回卡（排在待验收前面：驳回不裁，验收就是在没看审查意见的情况下合并）。
+//   · 自由工作流的审查链还没出结论（审查在跑、或预约着下一轮）：不推。「完成了」要等审查说了算，
+//     审查通过时推的那张待验收卡就是「审查通过」；中途先推一张「完成了」，审查一开始就得撤回。
 //   · stage=verify_failed：只发通知、不给按钮（强制通过不可逆，见 docs/feishu-integration.md）。
 //   · 干完了没盖章：待验收卡。门禁正在跑、验证轮还没出结论这类「过一会儿就能按」的状态不算
 //     换了下一步 —— 卡片留着，按下去由验收接口如实说「还在跑」，免得一张卡来回收、发好几遍。
@@ -111,6 +113,8 @@ export interface HumanTurnFacts {
   disputeOpen?: boolean;
   /** 托盘里有此刻判得出「送」的消息：一空下来就送进去、接着跑（判据同投递扫描，server pending-delivery-facts.ts）。 */
   deliveryPending?: boolean;
+  /** 自由工作流的审查链还没出结论：有一轮在审，或预约着下一轮（含修复完自动复审）。 */
+  reviewPending?: boolean;
 }
 
 export function humanTurnOf(
@@ -125,6 +129,7 @@ export function humanTurnOf(
   if (task.status === "failed") return "failed";
   if (isTaskLive(task, workers)) return null;
   if (facts.disputeOpen) return "dispute";
+  if (facts.reviewPending) return null;
   if (task.stage === "verify_failed") return "verify_failed";
   if (isAcceptedStage(task.stage)) return null;
   const settled = task.status === "done" || isTeamSettledLead(task, workers);
