@@ -14,7 +14,8 @@
 //    审查回合还在跑（状态还没落回原样）时不发；
 // ⑩ 没通过之后执行者又跑了一轮、没复审 → 不说「审查没通过」，说完成了、注明新改动还没复审，验收照样二次确认；
 // ⑪ 通过结论落在「审查通过」这一样启用之前的（水位），不补推；
-// ⑫ 升级时正在审、只有旧账（没有审查这一行）、启动后才通过 → 照样推；
+// ⑫ 升级时正在审、启动后才通过 → 照样推：有旧账、一行账都没有都一样，取消、暂停着都一样；那一下的事件丢了
+//    （取消着的任务不在全量对账的常规候选里）由全量对账补上；
 // ⑬ 待验收卡和「审查通过」通知读同一份视图：视图读的时候还在审、之后才落了通过 → 这一次两边都不出，
 //    下一次对账只出待验收卡，不会一次通过响两遍。
 import assert from "node:assert/strict";
@@ -176,16 +177,28 @@ try {
   assert.equal((await db.select().from(imOutcomes).where(eq(imOutcomes.taskId, "th"))).find((row) => row.kind === "review")?.value, "rh:passed");
 
   // ── ⑫ 升级时正在审、启动后才通过：照样推 ──────────────────────────────────
-  await db.insert(tasks).values(task({ id: "ti", title: "升级时正在审", status: "running", followUpFrom: "canceled" }) as never);
-  await db.insert(freeReviewRuns).values(run({ id: "ri", taskId: "ti", status: "reviewing", createdAt: t1 }) as never);
-  await db.insert(imOutcomes).values({ appId: APP, taskId: "ti", kind: "gate", value: "-", updatedAt: t0 } as never);
-  await im.reconciler.full();
-  await im.settle();
-  await db.update(freeReviewRuns).set({ status: "passed", finishedAt: t1 } as never).where(eq(freeReviewRuns.id, "ri"));
-  await db.update(tasks).set({ status: "canceled", followUpFrom: null, endedAt: "2026-11-10T08:09:59.990Z" } as never).where(eq(tasks.id, "ti"));
-  await reconcile("ti");
-  await reconcile("ti");
-  assert.equal((await noticesOf("ti")).length, 1, "启动后才落的通过：账上没有这一行也照样推一条");
+  // 账上有没有别的行都一样；取消着的任务不在全量对账的常规候选里，通过那一下的事件丢了也要由全量对账补上。
+  for (const [id, status, oldLedger, via] of [
+    ["ti", "canceled", true, "event"], ["tj", "canceled", false, "event"],
+    ["tl", "paused", false, "event"], ["tm", "canceled", false, "full"],
+  ] as const) {
+    await db.insert(tasks).values(task({ id, title: `升级时正在审 ${id}`, status: "running", followUpFrom: status }) as never);
+    await db.insert(freeReviewRuns).values(run({ id: `r${id}`, taskId: id, status: "reviewing", createdAt: t1 }) as never);
+    if (oldLedger) await db.insert(imOutcomes).values({ appId: APP, taskId: id, kind: "gate", value: "-", updatedAt: t0 } as never);
+    await im.reconciler.full();
+    await im.settle();
+    await db.update(freeReviewRuns).set({ status: "passed", finishedAt: t1 } as never).where(eq(freeReviewRuns.id, `r${id}`));
+    await db.update(tasks).set({ status, followUpFrom: null, endedAt: "2026-11-10T08:09:59.990Z" } as never).where(eq(tasks.id, id));
+    if (via === "full") await im.reconciler.full();
+    else await im.reconciler.reconcile([id]);
+    await im.settle();
+    const label = `${id}（${status}、${oldLedger ? "有旧账" : "账上一行都没有"}、${via}）`;
+    assert.equal((await noticesOf(id)).length, 1, `${label}：启动后才落的通过照样推一条`);
+    await reconcile(id);
+    const notices = await noticesOf(id);
+    assert.equal(notices.length, 1, `${label}：重复对账不重发`);
+    assert.match(JSON.parse(notices[0]!.content).text, /^审查通过：/);
+  }
 
   // ── ⑬ 卡和通知读同一份视图 ─────────────────────────────────────────────
   const { viewOf } = await import("../src/im/attention.js");

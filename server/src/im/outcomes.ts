@@ -16,7 +16,7 @@
 //           （审查第 2 轮实测）。任务还在跑（审查回合本身、结算还没落回原状态）时先不记通过，落定了再看。
 //           这一样是后来加的：通过结论落在它启用之前的（REVIEW_SINCE 水位）只记不发，不把历史上的通过补推一遍；
 //           不拿「账上没有这一行」去猜 —— 升级时正在审、启动后才通过的那一次也没有账行（审查第 2 轮实测）
-// 第一次看到一个任务只记下现状不发：刚绑定、刚升级时不把历史结局补推一遍。「任务完成」那一下由
+// result / gate 第一次看到一个任务只记下现状不发：刚绑定、刚升级时不把历史结局补推一遍。「任务完成」那一下由
 // 待验收卡本身负责（新卡就是一条新消息），这里不重复发。
 // 事件丢了（重启、通道重启正好落在对账前）由全量对账按「账和现状对不上」补（staleOutcomeTasks）。
 import { isAcceptedStage, type TaskStage } from "@ash/shared";
@@ -105,7 +105,8 @@ async function reviewOutcome(view: TaskView, title: string): Promise<Outcome[]> 
 }
 
 /**
- * 账和现状对不上的任务（全量对账带上它们）：已验收、账上却不是这一次验收的；最近一次门禁结果跟账上不同的。
+ * 账和现状对不上的任务（全量对账带上它们）：已验收、账上却不是这一次验收的；最近一次门禁 / 审查结果跟账上不同的；
+ * 水位之后审查通过、账上还没记过的。
  * 已验收的任务不在全量对账的常规候选里，那一次事件丢了就再没人来对。
  */
 export async function staleOutcomeTasks(appId: string): Promise<string[]> {
@@ -118,7 +119,15 @@ export async function staleOutcomeTasks(appId: string): Promise<string[]> {
     .where(and(eq(imOutcomes.appId, appId), eq(imOutcomes.kind, "gate"), ne(imOutcomes.value, latestGate)));
   const reviews = await db.select({ id: imOutcomes.taskId }).from(imOutcomes)
     .where(and(eq(imOutcomes.appId, appId), eq(imOutcomes.kind, "review"), ne(imOutcomes.value, latestReview)));
-  return [...new Set([...accepted, ...gates, ...reviews].map((row) => row.id))];
+  // 水位之后通过、账上还没有 review 行的：取消着的任务不在全量对账的常规候选里，通过那一下的事件丢了就再没人来对
+  const since = await reviewOutcomesSince();
+  const unseen = await db.select({ id: tasks.id }).from(tasks).where(and(
+    eq(tasks.archived, false),
+    sql`(SELECT r.status = 'passed' AND r.finished_at > ${since} FROM free_review_runs r
+      WHERE r.task_id = ${tasks.id} AND r.target_kind = 'workspace' ORDER BY r.created_at DESC LIMIT 1)`,
+    sql`NOT EXISTS (SELECT 1 FROM im_outcomes o WHERE o.app_id = ${appId} AND o.task_id = ${tasks.id} AND o.kind = 'review')`,
+  ));
+  return [...new Set([...accepted, ...gates, ...reviews, ...unseen].map((row) => row.id))];
 }
 
 /** 账上已经是此刻的样子（绝大多数对账都是这样）：不必开事务、不必找收件人。 */
@@ -141,7 +150,8 @@ export async function advanceOutcomes(tx: ConclusionTransaction, appId: string, 
     if (before === outcome.value) continue;
     await tx.insert(imOutcomes).values({ appId, taskId, kind: outcome.kind, value: outcome.value, updatedAt: now() })
       .onConflictDoUpdate({ target: [imOutcomes.appId, imOutcomes.taskId, imOutcomes.kind], set: { value: outcome.value, updatedAt: now() } });
-    if (known.size && outcome.text) changed.push(outcome);
+    // review 是不是历史由水位判（reviewOutcome），不看账上有没有别的行：升级时正在审、从没被记过账的任务也要推
+    if (outcome.text && (known.size || outcome.kind === "review")) changed.push(outcome);
   }
   return changed;
 }
