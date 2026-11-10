@@ -40,9 +40,10 @@ export type Turn =
   | { kind: "verify_failed"; generation: string }
   /**
    * release = 停在一道后面还有站的「等我点头」上，这一按只是放行；confirm = 确认框上那句「这一按会发生什么」。
-   * reviewPassed = 这一版成果刚审过、通过了（卡片据此说「审查通过」而不是「完成了」）；reviewFailed = 最近一条审查链没通过。
+   * reviewPassed = 这一版成果刚审过、通过了（卡片据此说「审查通过」而不是「完成了」）；reviewFailed = 最近一条审查链没通过，
+   * reviewStale = 那次没通过之后执行者又跑过、新改动还没复审（不能说成这一版没通过）。
    */
-  | { kind: "accept"; generation: string; reviewFailed: boolean; reviewPassed: boolean; release: boolean; confirm: string };
+  | { kind: "accept"; generation: string; reviewFailed: boolean; reviewPassed: boolean; reviewStale: boolean; release: boolean; confirm: string };
 
 export interface TaskView {
   task: Task;
@@ -101,11 +102,13 @@ interface ReviewFacts {
   pending: boolean;
   /** 最近一条工作区审查链：没通过（stopped = 用完轮数或停下等修，failed = 跑出错）。口径同网页 freeReviewCopy.ts。 */
   failed: boolean;
-  /** 最近一条通过了，而且之后执行者没再跑过（审查回合自己也会刷新 endedAt，结算在它之后落 finishedAt）。 */
+  /** 最近一条通过了。 */
   passed: boolean;
+  /** 最近一条的结论说的就是这一版：之后执行者没再跑过（审查回合自己也会刷新 endedAt，结算在它之后落 finishedAt）。 */
+  current: boolean;
 }
 
-const NO_REVIEW: ReviewFacts = { pending: false, failed: false, passed: false };
+const NO_REVIEW: ReviewFacts = { pending: false, failed: false, passed: false, current: false };
 
 /** 一批自由工作流任务的审查链现状（只看验收前的工作区审查，合并结果审查是验收后的另一条链）。 */
 async function freeReviewFacts(rows: { id: string; endedAt: string | null }[]): Promise<Map<string, ReviewFacts>> {
@@ -125,7 +128,8 @@ async function freeReviewFacts(rows: { id: string; endedAt: string | null }[]): 
     out.set(row.id, {
       pending: reserved.has(row.id) || latest?.status === "reviewing",
       failed: latest?.status === "stopped" || latest?.status === "failed",
-      passed: latest?.status === "passed" && !!latest.finishedAt && latest.finishedAt >= (row.endedAt ?? ""),
+      passed: latest?.status === "passed",
+      current: !!latest?.finishedAt && latest.finishedAt >= (row.endedAt ?? ""),
     });
   }
   return out;
@@ -204,7 +208,7 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
         break;
       case "accept":
         turn = {
-          kind, generation: acceptGeneration(await resultVersionOf(task), humanGateOf(row)), reviewFailed: review.failed, reviewPassed: review.passed,
+          kind, generation: acceptGeneration(await resultVersionOf(task), humanGateOf(row)), reviewFailed: review.failed, reviewPassed: review.passed && review.current, reviewStale: review.failed && !review.current,
           release: !isFinalHumanGate(task.workflow, task.workflowAt),
           confirm: acceptanceMessage(toTaskListItem(task), projectRows.get(task.projectId)?.acceptCommit ?? true),
         };

@@ -10,6 +10,10 @@
 //           一样，第二次就推不出来（审查第 2 轮实测）。加列之前的老验收没有 id，才回落到合并事实。牌子
 //           摘下的那段时间不记 —— 这一轮没改东西、原样挂回来的还是同一次验收，不算新的。
 //   gate    最近一次跑出结果（通过 / 没通过）的那一次门禁；被打断、取消的不算结果
+//   review  自由工作流最近一条工作区审查链通过了（哪一条）。审查不改任务状态：失败、取消、暂停着的任务也能派审，
+//           通过时没有待验收卡可以带上这句话，所以单独记一笔。待验收卡已经写着「审查通过」的不重复发；任务还在跑
+//           （审查回合本身、结算还没落回原状态）时先不记通过，落定了再看。这一样是后来加的：账上还没有它的
+//           老任务第一次看到只记不发，不把历史上的通过补推一遍
 // 第一次看到一个任务只记下现状不发：刚绑定、刚升级时不把历史结局补推一遍。「任务完成」那一下由
 // 待验收卡本身负责（新卡就是一条新消息），这里不重复发。
 // 事件丢了（重启、通道重启正好落在对账前）由全量对账按「账和现状对不上」补（staleOutcomeTasks）。
@@ -17,6 +21,7 @@ import { isAcceptedStage, type TaskStage } from "@ash/shared";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { acceptGateRuns } from "../db/schema-accept-gate.js";
+import { freeReviewRuns } from "../db/schema-free-workflow.js";
 import { imOutcomes } from "../db/schema-im.js";
 import { tasks } from "../db/schema.js";
 import type { ConclusionTransaction } from "../regression-conclusion-commit.js";
@@ -25,7 +30,7 @@ import type { TaskView } from "./attention.js";
 import { acceptedLabel } from "./cards.js";
 import { scrubTitle } from "./scrub.js";
 
-type OutcomeKind = "result" | "gate";
+type OutcomeKind = "result" | "gate" | "review";
 const NONE = "-";
 
 /** 这一次验收的身份（db/schema.ts acceptanceId）；加列之前的老验收没有，按落章时写下的那几样合并事实认。 */
@@ -36,6 +41,10 @@ const acceptanceIdentity = sql<string>`CASE WHEN ${tasks.acceptanceId} IS NOT NU
 /** 最近一次跑出结果的门禁，跟 outcomesOf 里那一份同一个口径。 */
 const latestGate = sql<string>`coalesce((SELECT r.id || ':' || r.status FROM accept_gate_runs r
   WHERE r.task_id = ${imOutcomes.taskId} AND r.status IN ('passed', 'failed') ORDER BY r.started_at DESC LIMIT 1), '-')`;
+
+/** 最近一条工作区审查链通过了就是「那一条:passed」，否则 "-"。跟 outcomesOf 里那一份同一个口径。 */
+const latestReview = sql<string>`coalesce((SELECT CASE WHEN r.status = 'passed' THEN r.id || ':passed' ELSE '-' END FROM free_review_runs r
+  WHERE r.task_id = ${imOutcomes.taskId} AND r.target_kind = 'workspace' ORDER BY r.created_at DESC LIMIT 1), '-')`;
 
 /** 一样结局此刻的值，和它变成这个值时该发的那句话（null = 变成这样不用告诉人）。没验收时不出 result 这一样。 */
 export interface Outcome { kind: OutcomeKind; value: string; text: string | null }
@@ -55,6 +64,7 @@ export async function outcomesOf(view: TaskView): Promise<Outcome[]> {
     : undefined;
   // 门禁在前：绿了紧接着自动合并时，两条按事情发生的先后发。
   return [
+    ...await reviewOutcome(view, title),
     run
       ? { kind: "gate", value: `${run.id}:${run.status}`,
         text: run.status === "passed" ? `验收前置命令通过了：${title}` : `验收前置命令没通过：${title}，详情回 ash 看。` }
@@ -62,6 +72,18 @@ export async function outcomesOf(view: TaskView): Promise<Outcome[]> {
     ...(accepted && isAcceptedStage(accepted.stage as TaskStage | null)
       ? [{ kind: "result" as const, text: `${acceptedLabel(accepted)}：${title}`, value: accepted.identity }] : []),
   ];
+}
+
+async function reviewOutcome(view: TaskView, title: string): Promise<Outcome[]> {
+  const task = view.task;
+  if (task.workflowMode !== "free" || task.mode !== "single" || task.parentId) return [];
+  const run = (await db.select({ id: freeReviewRuns.id, status: freeReviewRuns.status }).from(freeReviewRuns)
+    .where(and(eq(freeReviewRuns.taskId, task.id), eq(freeReviewRuns.targetKind, "workspace")))
+    .orderBy(desc(freeReviewRuns.createdAt)).limit(1)).at(0);
+  if (run?.status !== "passed") return [{ kind: "review", value: NONE, text: null }];
+  if (task.status === "running" || task.status === "queued" || task.status === "awaiting_review") return [];
+  const onCard = view.turn?.kind === "accept" && view.turn.reviewPassed;
+  return [{ kind: "review", value: `${run.id}:passed`, text: onCard ? null : `审查通过：${title}` }];
 }
 
 /**
@@ -76,7 +98,9 @@ export async function staleOutcomeTasks(appId: string): Promise<string[]> {
   ));
   const gates = await db.select({ id: imOutcomes.taskId }).from(imOutcomes)
     .where(and(eq(imOutcomes.appId, appId), eq(imOutcomes.kind, "gate"), ne(imOutcomes.value, latestGate)));
-  return [...new Set([...accepted, ...gates].map((row) => row.id))];
+  const reviews = await db.select({ id: imOutcomes.taskId }).from(imOutcomes)
+    .where(and(eq(imOutcomes.appId, appId), eq(imOutcomes.kind, "review"), ne(imOutcomes.value, latestReview)));
+  return [...new Set([...accepted, ...gates, ...reviews].map((row) => row.id))];
 }
 
 /** 账上已经是此刻的样子（绝大多数对账都是这样）：不必开事务、不必找收件人。 */
@@ -99,7 +123,8 @@ export async function advanceOutcomes(tx: ConclusionTransaction, appId: string, 
     if (before === outcome.value) continue;
     await tx.insert(imOutcomes).values({ appId, taskId, kind: outcome.kind, value: outcome.value, updatedAt: now() })
       .onConflictDoUpdate({ target: [imOutcomes.appId, imOutcomes.taskId, imOutcomes.kind], set: { value: outcome.value, updatedAt: now() } });
-    if (known.size && outcome.text) changed.push(outcome);
+    // review 是后来加的一样：账上没有它 = 老任务第一次记这一笔，只记不发（文件头）。
+    if (known.size && outcome.text && !(before === undefined && outcome.kind === "review")) changed.push(outcome);
   }
   return changed;
 }

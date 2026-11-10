@@ -8,7 +8,12 @@
 // ④ 审查通过 → 推一张，副标题是「审查通过，等你验收」；
 // ⑤ 通过之后执行者又跑了一轮 → 那次通过不算这一版的，回到「完成了，等你验收」；
 // ⑥ 用完轮数没通过、没有下一轮 → 推，说「审查没通过，等你决定」，按钮要二次确认；
-// ⑦ 修完等自动复审（停着的链 + 续轮预约）→ 不推。
+// ⑦ 修完等自动复审（停着的链 + 续轮预约）→ 不推；
+// ⑧ 待验收卡已经写着「审查通过」→ 不另发一条通知；
+// ⑨ 失败、取消着的任务派审通过（审查不改任务状态，没有待验收卡）→ 单独发一条「审查通过」，重复对账不重发；
+//    审查回合还在跑（状态还没落回原样）时不发；
+// ⑩ 没通过之后执行者又跑了一轮、没复审 → 不说「审查没通过」，说完成了、注明新改动还没复审，验收照样二次确认；
+// ⑪ 账上还没记过审查这一样的老任务，历史上的通过不补推。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -120,6 +125,48 @@ try {
   await reserve("te", "re");
   await reconcile("te");
   assert.equal((await rowsOf("te")).length, 0, "下一轮马上就审：不推");
+
+  const noticesOf = async (taskId: string) => (await rowsOf(taskId)).filter((row) => row.kind === "notice");
+
+  // ── ⑧ 卡上已经说了：不另发 ─────────────────────────────────────────────
+  assert.equal((await noticesOf("tc")).length, 0, "待验收卡写着「审查通过」：不另发通知");
+
+  // ── ⑨ 失败、取消着的任务审查通过：单独一条 ─────────────────────────────
+  for (const [id, status] of [["tf", "failed"], ["tg", "canceled"]] as const) {
+    await db.insert(tasks).values(task({ id, title: `${status} 了再派审`, status }) as never);
+    await reconcile(id);
+    await db.insert(freeReviewRuns).values(run({ id: `r${id}`, taskId: id, status: "reviewing", createdAt: t1 }) as never);
+    await db.update(tasks).set({ status: "running" } as never).where(eq(tasks.id, id));
+    await reconcile(id);
+    await db.update(freeReviewRuns).set({ status: "passed", finishedAt: t1 } as never).where(eq(freeReviewRuns.id, `r${id}`));
+    await reconcile(id);
+    assert.equal((await noticesOf(id)).length, 0, `${status}：审查回合还没落回原状态，先不发`);
+    await db.update(tasks).set({ status, endedAt: "2026-11-10T08:09:59.990Z" } as never).where(eq(tasks.id, id));
+    await reconcile(id);
+    await reconcile(id);
+    const notices = await noticesOf(id);
+    assert.equal(notices.length, 1, `${status}：审查通过单独发一条，重复对账不重发`);
+    assert.match(JSON.parse(notices[0]!.content).text, /^审查通过：/);
+    assert.ok(notices[0]!.messageId, "发出去了");
+  }
+
+  // ── ⑩ 没通过之后又跑了一轮：不说这一版没通过 ───────────────────────────
+  fake.reset();
+  await db.update(tasks).set({ endedAt: t2 } as never).where(eq(tasks.id, "td"));
+  await reconcile("td");
+  const tdNew = lastCard();
+  assert.match(textOf(tdNew), /完成了，等你验收/);
+  assert.doesNotMatch(textOf(tdNew), /审查没通过，等你决定/);
+  assert.match(textOf(tdNew), /之后的改动还没复审/);
+  assert.ok(buttonsOf(tdNew).find((button) => button.text === "验收通过")?.confirm, "最近一轮没通过：验收照样二次确认");
+
+  // ── ⑪ 老任务历史上的通过：不补推 ───────────────────────────────────────
+  const { imOutcomes } = await import("../src/db/schema-im.js");
+  await db.insert(tasks).values(task({ id: "th", title: "早就审过", status: "failed" }) as never);
+  await db.insert(freeReviewRuns).values(run({ id: "rh", taskId: "th", status: "passed", finishedAt: t1 }) as never);
+  await db.insert(imOutcomes).values({ appId: APP, taskId: "th", kind: "gate", value: "-", updatedAt: t0 } as never);
+  await reconcile("th");
+  assert.equal((await noticesOf("th")).length, 0, "账上没记过审查这一样：只记不发");
 
   im.reconciler.stop();
   im.sender.stop();
