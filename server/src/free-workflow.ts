@@ -16,7 +16,7 @@ import {
   regressionEvidence,
   tasks,
 } from "./db/schema.js";
-import { clearReservationForDispatch, noteReservationStillWaiting, readFreeReviewReservation, consumeFreeReviewReservation, reservationWaitReason, startReservedFreeReview } from "./free-review-reservations.js";
+import { clearReservationForDispatch, noteReservationStillWaiting, readFreeReviewReservation, consumeFreeReviewReservation, reservationWaitReason, startReservedFreeReview, type ReservationTrigger } from "./free-review-reservations.js";
 import {
   checkMode,
   overrideLabel,
@@ -317,6 +317,7 @@ export async function launchReservedFreeReview(
   task: typeof tasks.$inferSelect,
   reservation: Awaited<ReturnType<typeof readFreeReviewReservation>>,
   afterDispatch: () => Promise<unknown>,
+  trigger?: ReservationTrigger,
 ): Promise<void> {
   const taskId = task.id;
   await startReservedFreeReview(taskId, reservation, {
@@ -349,7 +350,7 @@ export async function launchReservedFreeReview(
       await afterDispatch();
       return state;
     },
-  });
+  }, trigger);
 }
 
 // 自由工作流的回合结算只分两种回合，**按回合自己的 role 分流**，不按「库里有没有

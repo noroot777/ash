@@ -42,7 +42,10 @@ export function heldByRuling(reservation: ReservedFreeReview): boolean {
  * ① 一个**执行回合开跑**（orchestrator / task-run 落 running 之前）：资格只属于「最后一个执行
  *    回合正常结束」那一刻，之后再起任何执行回合——不论它正常结束、报错退出还是被重启打断收尾
  *    ——旧资格都不再证明工作区停在一个收尾的状态。挂在开跑而不是结算上，是因为被重启打断的
- *    回合根本不走自由工作流结算（task-reconcile.ts 直接落终态，第 2 轮审查实测）；
+ *    回合根本不走自由工作流结算（task-reconcile.ts 直接落终态，第 2 轮审查实测）。同理，重启
+ *    恢复那一侧**不再另作废**：执行回合开跑时已经作废过，而被打断的若是旁路回合（如 /compact），
+ *    资格本该留着，恢复入口一律作废会把它误清（第 3 轮审查实测）。「是不是执行回合」只在开跑
+ *    这一处判（orchestrator 的 sideTurn），不在恢复端按库里残留的标记再猜一遍；
  * ② 维持审查意见：预约改由那一轮修复的正常结束触发。与裁定写在**同一笔事务**里（传 query），
  *    两笔之间断电就会留下「已维持、资格还在」，启动补发会抢在修复前开审。
  * 审查 / 辩论 / 原生命令这类旁路回合不改代码，不作废。
@@ -327,6 +330,15 @@ export async function armFollowUpFreeReview(
 // 的那一条。CAS 失败 = 槽在这中间被改过（用户保存了新预约 / 别处已消费）：重读一次按
 // 最新那条再来，两次都抢不到就放手（此时槽里的预约仍然 armed，下次执行回合正常结束照常触发），
 // 绝不把用户的新配置当成自己的那条清掉。
+//
+// `trigger` 说清这次消费凭的是什么：
+// - settlement（缺省）：执行回合正常结束的结算本身就是触发时刻；
+// - ruling：裁定放行，凭的是「触发时刻早已到过、被闸按住」那份资格（heldByRuling）。资格
+//   是**这次消费的条件**，不只是调用入口的门槛：CAS 失配后重读到的可能是用户刚取消重挂的
+//   新预约，它的触发时刻还没到过，照常消费就会把它提前开审（第 3 轮审查实测）。所以每一次
+//   实际消费前都要重验，不成立就放手，留给它自己的下一个执行回合。
+export type ReservationTrigger = "settlement" | "ruling";
+
 export async function startReservedFreeReview(
   taskId: string,
   reservation: ReservedFreeReview,
@@ -338,19 +350,23 @@ export async function startReservedFreeReview(
       slotToken: string;
     }) => Promise<unknown>;
   },
+  trigger: ReservationTrigger = "settlement",
 ): Promise<void> {
   if (!reservation?.armed) return;
-  await withRulingGate(taskId, () => startReservedFreeReviewHeld(taskId, reservation, handlers));
+  await withRulingGate(taskId, () => startReservedFreeReviewHeld(taskId, reservation, handlers, trigger));
 }
 
 async function startReservedFreeReviewHeld(
   taskId: string,
   reservation: ReservedFreeReview,
   handlers: Parameters<typeof startReservedFreeReview>[2],
+  trigger: ReservationTrigger,
 ): Promise<void> {
   // 动态 import：驳回那一侧静态依赖本文件（撤自动续轮要用这里的 CAS 消费）。
   const { openDisputeOf } = await import("./free-review-dispute.js");
   if (await openDisputeOf(taskId)) {
+    // 裁定放行时又冒出一条待裁定的驳回：此刻不是触发时刻，不记资格，留给下一次裁定。
+    if (trigger === "ruling") return;
     // 这一刻就是预约该触发的时刻（调用方只在执行回合正常结束时走到这里），把它按当前槽版本
     // 记下来：裁定落地时凭它当场兑现，而不是再等一个不会来的执行回合。
     await db.update(freeWorkflowStates).set({ reviewHeldToken: sql`updated_at` })
@@ -362,6 +378,7 @@ async function startReservedFreeReviewHeld(
   let snapshot: ReservedFreeReview = reservation;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (!snapshot?.armed) return;
+    if (trigger === "ruling" && !heldByRuling(snapshot)) return;
     // 预约的审查者已被删除：这条预约永远执行不了，同样按 CAS 消费掉（消费不到就是
     // 被改过了，那条新预约自己会在下次执行回合正常结束时处理）。
     if (!snapshot.runId && !snapshot.reviewerId) {

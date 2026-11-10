@@ -51,7 +51,8 @@ export async function releaseReservationAfterRuling(taskId: string, opts: { retr
   if (!(await readFreeReviewReservation(taskId))?.armed) return;
   // **先占回合，再在锁里读全部判据**：资格只会在执行回合开跑时作废（forgetHeldTrigger ①），
   // 占住回合就没有执行回合能在「判完 → 开审」之间开跑；锁外读到的判据到消费那一刻可能已经
-  // 不成立（第 2 轮审查）。消费 CAS 另外也比对资格列，两道互为兜底。
+  // 不成立（第 2 轮审查）。消费那一侧（trigger=ruling）每次实际消费前还会重验资格，CAS 也
+  // 比对资格列，几道互为兜底。
   const turn = claimOwnTurn(taskId, "dispatch");
   if (!turn) {
     // 占不到 ≠ 之后还会有一次结算：占着锁的可能正是已经结算完、只差放锁的那一轮，它的消费点
@@ -87,7 +88,7 @@ export async function releaseReservationAfterRuling(taskId: string, opts: { retr
     if (await reviewingRun(taskId)) return;
     const { launchReservedFreeReview } = await import("./free-workflow.js");
     await launchReservedFreeReview(task, reservation, () =>
-      appendTaskTimeline(taskId, "裁定之后没有要等的执行回合，按预约开始审查。"));
+      appendTaskTimeline(taskId, "裁定之后没有要等的执行回合，按预约开始审查。"), "ruling");
   } finally {
     releaseTurn(taskId, turn);
   }
