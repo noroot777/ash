@@ -579,12 +579,15 @@ async function serveSpa(c: Context, dist: string, rel: string) {
   // 用 `sep` 而不是写死 `/`:Windows 上 `normalize` 还的是反斜杠,拼 `/` 比前缀恒为假,
   // 于是**每一个** js/css 都判成界外、统统回退 index.html——浏览器按 text/html 收到
   // 一份 HTML 当模块加载,整个前端白屏。判定本身没放松,只是让它在两个平台上都成立。
-  const file =
+  const found =
     (candidate === dist || candidate.startsWith(dist + sep)) &&
     existsSync(candidate) &&
-    statSync(candidate).isFile()
-      ? candidate
-      : join(dist, "index.html");
+    statSync(candidate).isFile();
+  // assets/ 下只有带 hash 的构建产物,不存在就是真不存在(多半是开着很久的旧页面在要
+  // 一份已被新 build 淘汰的分块)。回 index.html 只会让浏览器拿 HTML 当模块加载,
+  // 报一句 MIME 错,把「文件没了」藏起来。
+  if (!found && rel.startsWith("assets/")) return c.notFound();
+  const file = found ? candidate : join(dist, "index.html");
   const body = await readFile(file);
   if (extname(file) === ".html") {
     // 真人专属动作的凭据**只在交出页面文档这一刻发**(理由与能力边界见

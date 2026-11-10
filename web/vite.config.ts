@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { defineConfig, searchForWorkspaceRoot } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { retainPreviousAssets } from "./vite/asset-retention.ts";
 import { ashBackendUrl, pageTokenPlugin } from "./vite/page-token.ts";
 
 const require = createRequire(import.meta.url);
@@ -13,7 +14,7 @@ const interPackageRoot = dirname(require.resolve("@fontsource-variable/inter/pac
 
 export default defineConfig({
   // 真人动作凭据:dev / preview 交出的文档上也得有(理由见 vite/page-token.ts)。
-  plugins: [react(), tailwindcss(), pageTokenPlugin()],
+  plugins: [react(), tailwindcss(), pageTokenPlugin(), retainPreviousAssets()],
   server: {
     // 端口不写死。两件事都得让开：
     // ① ash 起预览时会借一个空闲端口用环境变量 PORT 递进来（server/src/preview.ts 的

@@ -8,9 +8,12 @@ import "./styles/global.css";
 // 配色开关在任何组件渲染之前就位(index.html 已经按镜像拨过一次，这里接管后续的翻面)。
 import "./lib/theme.ts";
 import { App } from "./App.tsx";
+import { AppCrash, ErrorBoundary } from "./components/ErrorBoundary.tsx";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary fallback={(error) => <AppCrash error={error} />}>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );

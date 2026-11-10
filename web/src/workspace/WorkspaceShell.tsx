@@ -61,6 +61,7 @@ import { AssistantView } from "../assistant/AssistantView.tsx";
 import { readGitLocation } from "../git-workbench/navigation.ts";
 import { useProjects } from "./useProjects.ts";
 import { useNarrowPane } from "./useNarrowPane.ts";
+import { ErrorBoundary, LoadFailure } from "../components/ErrorBoundary.tsx";
 const GitWorkbench = lazy(() => import("../git-workbench/GitWorkbench.tsx").then((module) => ({ default: module.GitWorkbench })));
 
 const ProjectTerminal = lazy(() => import("./ProjectTerminal.tsx").then((module) => ({ default: module.ProjectTerminal })));
@@ -579,7 +580,7 @@ export function WorkspaceShell() {
   // 三个视图分支都渲染它(和 statusBar 同进同出),项目不变就不重挂 —— 切到设置 / Git
   // 时终端里的现场原样留着。
   const terminalDock = terminal.open && currentProject
-    ? <Suspense fallback={null}><ProjectTerminal key={currentProject.id} project={currentProject} dock={terminal} notify={notify} /></Suspense>
+    ? <ErrorBoundary key={currentProject.id} fallback={() => <LoadFailure what="终端" onClose={terminal.hide} />}><Suspense fallback={null}><ProjectTerminal key={currentProject.id} project={currentProject} dock={terminal} notify={notify} /></Suspense></ErrorBoundary>
     : null;
   const overlays = <>
     <CommandPalette open={paletteOpen} projects={projects} currentProject={currentProject} tasks={tasks} selectedTask={selectedTask} groups={groups} onClose={() => setPaletteOpen(false)} onProject={selectProject} onTaskMode={() => { selectTaskMode(); setPaletteOpen(false); }} onTask={selectTask} onTaskUpdated={updateTask} onNote={openNotes} onComposer={openComposer} onNewGroup={() => { if (requireProject("新建分组")) setCreateDialog({ kind: "group" }); }} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onDeleteTask={setDeleteTarget} onSettings={openSettings} notify={notify} />
@@ -591,7 +592,7 @@ export function WorkspaceShell() {
     {createDialog?.kind === "group" && currentProject && <CreateGroupDialog onClose={() => setCreateDialog(null)} onCreate={async (name, mode) => { try { const created = await api.createGroup({ projectId: currentProject.id, name, mode }); setGroups((current) => [...current, created]); setCreateDialog(null); notify("分组已创建"); } catch (error) { notify(error instanceof Error ? error.message : "分组创建失败"); } }} />}
     <WorkspaceToast toasts={toasts} onDismiss={dismissToast} onOpenSettings={openSettings} />
   </>;
-  if (gitOpen && !settingsSection) return <><div className="workspace-system-layout"><div>{handoffAlert}</div><div className="workspace-git-page">{currentProject ? <Suspense fallback={<div className="workspace-load-error">正在打开 Git 工作台…</div>}><GitWorkbench key={`${currentProject.id}:${gitLocation.root || ""}:${gitLocation.taskId || ""}`} projectId={currentProject.id} projectName={currentProject.name} projects={projects} root={gitLocation.root} taskId={gitLocation.taskId} view={gitLocation.view} initialRef={gitLocation.ref} initialCommit={gitLocation.commit} onAssist={(body) => openComposer("single", { body, attachments: [] })} notify={notify} onExit={() => { setGitOpen(false); if (gitLocation.taskId) void selectTaskById(gitLocation.taskId); }} openTask={(id) => { setGitOpen(false); void selectTaskById(id); }} /></Suspense> : <div className="workspace-load-error">{loadError?.message || (projectsReady ? "项目不存在或不可访问" : "正在读取项目…")}<button onClick={() => setGitOpen(false)}>返回 ash</button></div>}</div>{terminalDock}{statusBar}</div>{overlays}</>;
+  if (gitOpen && !settingsSection) return <><div className="workspace-system-layout"><div>{handoffAlert}</div><div className="workspace-git-page">{currentProject ? <ErrorBoundary fallback={() => <LoadFailure what="Git 工作台" onClose={() => setGitOpen(false)} />}><Suspense fallback={<div className="workspace-load-error">正在打开 Git 工作台…</div>}><GitWorkbench key={`${currentProject.id}:${gitLocation.root || ""}:${gitLocation.taskId || ""}`} projectId={currentProject.id} projectName={currentProject.name} projects={projects} root={gitLocation.root} taskId={gitLocation.taskId} view={gitLocation.view} initialRef={gitLocation.ref} initialCommit={gitLocation.commit} onAssist={(body) => openComposer("single", { body, attachments: [] })} notify={notify} onExit={() => { setGitOpen(false); if (gitLocation.taskId) void selectTaskById(gitLocation.taskId); }} openTask={(id) => { setGitOpen(false); void selectTaskById(id); }} /></Suspense></ErrorBoundary> : <div className="workspace-load-error">{loadError?.message || (projectsReady ? "项目不存在或不可访问" : "正在读取项目…")}<button onClick={() => setGitOpen(false)}>返回 ash</button></div>}</div>{terminalDock}{statusBar}</div>{overlays}</>;
   if (settingsSection) return <><div className="workspace-system-layout"><div>{handoffAlert}</div><SettingsPage
     section={settingsSection}
     anchor={settingsAnchor}
