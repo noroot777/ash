@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
 import { bus } from "./bus.js";
@@ -22,7 +22,29 @@ export type ReservedFreeReview = {
   source?: FreeReviewReservationSource | null;
   /** 读到这条预约时的版本令牌（updatedAt）；消费用它做 CAS。 */
   updatedAt?: string | null;
+  /** 被裁定闸按住时记下的槽版本（见 schema 的 `reviewHeldToken`）；等于 updatedAt 才算数。 */
+  heldToken?: string | null;
 } | null | undefined;
+
+/**
+ * 「这条预约的触发时刻已经到过、只是被裁定闸按住了」此刻还成立吗：槽仍挂着，且记下的正是
+ * 当前这一版。裁定放行只认它，不拿任务状态去猜上一回合是不是正常结束的。
+ */
+export function heldByRuling(reservation: ReservedFreeReview): boolean {
+  return !!reservation?.armed && !!reservation.heldToken && reservation.heldToken === reservation.updatedAt;
+}
+
+/**
+ * 作废「被裁定闸按住的那次触发」。只动这一列、不推进 updatedAt——那是预约自己的版本令牌，
+ * 推进它会让正在途中的 CAS 消费 / 回滚全部失配。
+ *
+ * 调用点：每个执行回合结算的开头（后来的回合不论结果如何，都让之前那次触发过期）；维持审查
+ * 意见时（预约改由那一轮修复的正常结束来触发）。
+ */
+export async function forgetHeldTrigger(taskId: string): Promise<void> {
+  await db.update(freeWorkflowStates).set({ reviewHeldToken: null })
+    .where(and(eq(freeWorkflowStates.taskId, taskId), isNotNull(freeWorkflowStates.reviewHeldToken)));
+}
 
 /**
  * 注销一个自由任务的复审预约（幂等）。验收成功、重复验收快路和启动迁移都调它——
@@ -92,6 +114,7 @@ export async function readFreeReviewReservation(taskId: string): Promise<Reserve
     runId: freeWorkflowStates.reviewRunId,
     source: freeWorkflowStates.reviewSource,
     updatedAt: freeWorkflowStates.updatedAt,
+    heldToken: freeWorkflowStates.reviewHeldToken,
     agentType: freeWorkflowStates.reviewAgentType,
     executorId: freeWorkflowStates.reviewExecutorId,
     model: freeWorkflowStates.reviewModel,
@@ -319,6 +342,10 @@ async function startReservedFreeReviewHeld(
   // 动态 import：驳回那一侧静态依赖本文件（撤自动续轮要用这里的 CAS 消费）。
   const { openDisputeOf } = await import("./free-review-dispute.js");
   if (await openDisputeOf(taskId)) {
+    // 这一刻就是预约该触发的时刻（调用方只在执行回合正常结束时走到这里），把它按当前槽版本
+    // 记下来：裁定落地时凭它当场兑现，而不是再等一个不会来的执行回合。
+    await db.update(freeWorkflowStates).set({ reviewHeldToken: sql`updated_at` })
+      .where(and(eq(freeWorkflowStates.taskId, taskId), eq(freeWorkflowStates.reviewArmed, true)));
     await noteReservationStillWaiting(taskId, "执行者驳回了上一轮审查意见，正等你裁定",
       "裁定后自动开始（选「让它接着改」则等那一轮修复正常结束）");
     return;

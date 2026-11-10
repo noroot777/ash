@@ -46,6 +46,7 @@ import { freeReviewRounds, freeReviewRuns, tasks } from "./db/schema.js";
 import { latestWorkspaceRun } from "./free-review-round.js";
 import {
   consumeFreeReviewReservation,
+  forgetHeldTrigger,
   readFreeReviewReservation,
 } from "./free-review-reservations.js";
 import { withRulingGate } from "./free-review-ruling-gate.js";
@@ -485,6 +486,8 @@ export async function upholdDisputeOn(taskId: string, round: ReviewRoundRow): Pr
     ))
     .returning({ id: freeReviewRounds.id });
   if (!ruled.length) return false;
+  // 维持意见 = 预约改由那一轮修复的正常结束来触发，之前被闸按住的那次作废。
+  await forgetHeldTrigger(taskId);
   await appendTaskTimeline(taskId,
     `按第 ${round.round} 轮审查意见发起修复，即维持审查意见（执行者的驳回未被采纳）。`);
   bus.publish({ type: "task.review", taskId });
@@ -565,6 +568,7 @@ export async function resolveFreeReviewDispute(
     ))
     .returning({ id: freeReviewRounds.id });
   if (!ruled.length) throw new DisputeStaleError("这一轮驳回已经被裁定过了");
+  if (resolution === "upheld") await forgetHeldTrigger(taskId);
   await appendTaskTimeline(taskId, (resolution === "withdrawn"
     ? `你裁定第 ${open.round.round} 轮的未通过意见不用改了（采纳执行者的说法，报告与证据原样保留，审查结论本身不改写）。`
     // 写了要点时不能只说「照报告修复」：用户写要点，多半正是因为要改的不是报告那版。
