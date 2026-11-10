@@ -10,6 +10,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields } from "./session-turns.js";
+import { forgetHeldTrigger } from "./free-review-reservations.js";
 import type { ContinueTaskOptions, TurnStartDecline } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, discardStartingRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn, turnSourceReview, turnSourceRole } from "./runs.js";
@@ -298,6 +299,8 @@ export async function continueTask(
       task, project, recorded, resuming,
     });
     baseFallback = resolvedFallback;
+    // 执行回合开跑，被裁定闸按住的旧预约触发作废（旁路回合不改代码不算；理由见 forgetHeldTrigger ①）。
+    if (!sideTurn) await forgetHeldTrigger(taskId);
     await setTaskStatus(taskId, "running");
     // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。摘牌
     // 刻意排在**所有可能抛错的解析之后**(执行器解析、工作目录解析都会抛):解析失败时

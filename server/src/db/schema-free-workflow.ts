@@ -35,6 +35,12 @@ export const freeWorkflowStates = sqliteTable("free_workflow_states", {
   reviewRunId: text("review_run_id"),
   // 这条预约的来源（见 `FreeReviewReservationSource`）；只在 armed 时有意义，清槽时一并置空。
   reviewSource: text("review_source").$type<FreeReviewReservationSource>(),
+  // 「这条预约的触发时刻已经到过、只是被裁定闸按住了」：一个**正常结束**的执行回合在结算时
+  // 撞上未裁定的驳回，就把当时的槽版本（updated_at）记在这里。裁定放行只认它
+  // （free-review-ruling-release.ts）——任务的 done/failed 证明不了上一回合正常结束，异常退出
+  // 根本走不到闸上。等于 updated_at 才算数：槽被消费、取消、重挂都会推进版本，它随之作废；
+  // 执行回合开跑与维持意见也会作废它（见 free-review-reservations.ts `forgetHeldTrigger`）。
+  reviewHeldToken: text("review_held_token"),
   updatedAt: text("updated_at").notNull(),
 });
 
@@ -273,7 +279,7 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
       review_armed INTEGER NOT NULL DEFAULT 0, review_check_mode TEXT,
       review_retry_limit INTEGER, review_note TEXT, review_run_id TEXT,
       review_agent_type TEXT, review_executor_id TEXT,
-      review_model TEXT, review_reasoning_effort TEXT, review_source TEXT,
+      review_model TEXT, review_reasoning_effort TEXT, review_source TEXT, review_held_token TEXT,
       updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS free_workflow_events (
@@ -336,6 +342,8 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
     "ALTER TABLE free_workflow_states ADD COLUMN review_reasoning_effort TEXT",
     // 预约来源（自动续轮 / 用户手存 / 接力导入）；老行由 migrations.ts 按当时的形态回填。
     "ALTER TABLE free_workflow_states ADD COLUMN review_source TEXT",
+    // 被裁定闸按住的那次触发（正常结束的执行回合留下的槽版本），裁定放行只认它。
+    "ALTER TABLE free_workflow_states ADD COLUMN review_held_token TEXT",
     "ALTER TABLE free_review_runs ADD COLUMN note TEXT",
     "ALTER TABLE free_review_runs ADD COLUMN target_kind TEXT NOT NULL DEFAULT 'workspace'",
     "ALTER TABLE free_review_runs ADD COLUMN target_branch TEXT",

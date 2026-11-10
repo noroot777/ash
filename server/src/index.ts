@@ -276,6 +276,10 @@ async function initializeServer() {
     // 驳回后的辩论同理：`running` 落库，而推进它的投递链只活在内存里（见 free-review-debate.ts）。
     const { reconcileFreeReviewDebates } = await import("./free-review-debate.js");
     await reconcileFreeReviewDebates().catch((err) => console.error("[ash] 审查辩论对账失败（不影响启动）:", err));
+    // 裁定已落账、预约还没来得及当场兑现就重启了的那几条（见 free-review-ruling-release.ts）。
+    // 排在审查对账之后：它要先看清哪些审查链还在 reviewing。
+    const { releaseHeldReservations } = await import("./free-review-ruling-release.js");
+    await releaseHeldReservations().catch((err) => console.error("[ash] 裁定后预约补发失败（不影响启动）:", err));
   }
   // ash MCP 登记自检。放在这里是因为它跟任务能不能交卷直接相关：缺了它 agent 干完活
   // 也记 failed，而这一趟能在第一个任务起跑之前就说出来。两档各做一件事：隔离档的目录

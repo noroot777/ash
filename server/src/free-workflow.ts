@@ -5,7 +5,7 @@ import type {
   TaskStatus,
 } from "@ash/shared";
 import type { TurnReview } from "./runs.js";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import {
@@ -16,7 +16,7 @@ import {
   regressionEvidence,
   tasks,
 } from "./db/schema.js";
-import { clearReservationForDispatch, noteReservationStillWaiting, readFreeReviewReservation, consumeFreeReviewReservation, reservationWaitReason, startReservedFreeReview } from "./free-review-reservations.js";
+import { clearReservationForDispatch, noteReservationStillWaiting, readFreeReviewReservation, consumeFreeReviewReservation, reservationWaitReason, startReservedFreeReview, type ReservationTrigger } from "./free-review-reservations.js";
 import {
   checkMode,
   overrideLabel,
@@ -205,7 +205,13 @@ export async function reserveFreeReview(
     };
     await db.insert(freeWorkflowStates).values({ taskId, ...slot }).onConflictDoUpdate({
       target: freeWorkflowStates.taskId,
-      set: slot,
+      // 改的是配置，不是「触发时刻已经到过」这件事：被裁定闸按住的那次触发跟着新版本走。
+      // 判据在这条 UPDATE 里按**旧行**现算，不先读再写——读写之间一个执行回合开跑作废了它，
+      // 先读的那一版会把已经作废的资格又写回来（第 2 轮审查）。
+      set: {
+        ...slot,
+        reviewHeldToken: sql`CASE WHEN ${freeWorkflowStates.reviewArmed} = 1 AND ${freeWorkflowStates.reviewHeldToken} = ${freeWorkflowStates.updatedAt} THEN ${at} ELSE NULL END`,
+      },
     });
     await appendTaskTimeline(taskId, `${existing?.reviewArmed ? "已更新审查预约" : "已预约审查"}：${profile.name}${overrideSuffix(override)} · ` +
       `${mode === "logic" ? "逻辑检查" : "语法检查"} · 自动复审 ${retries} 轮${note ? " · 含附言" : ""}。执行回合正常结束后自动开始。`);
@@ -311,6 +317,7 @@ export async function launchReservedFreeReview(
   task: typeof tasks.$inferSelect,
   reservation: Awaited<ReturnType<typeof readFreeReviewReservation>>,
   afterDispatch: () => Promise<unknown>,
+  trigger?: ReservationTrigger,
 ): Promise<void> {
   const taskId = task.id;
   await startReservedFreeReview(taskId, reservation, {
@@ -343,7 +350,7 @@ export async function launchReservedFreeReview(
       await afterDispatch();
       return state;
     },
-  });
+  }, trigger);
 }
 
 // 自由工作流的回合结算只分两种回合，**按回合自己的 role 分流**，不按「库里有没有
