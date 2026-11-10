@@ -77,6 +77,9 @@ export async function reconcileInterrupted(): Promise<void> {
 // 一个被打断的任务怎么结算:状态回落、持续目标/续聊/原生回合各自的善后、基线消费。
 // 批量版(重启时扫全库)和单任务版(接管之后才暴露出来的那种中断)共用这一份。
 async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void> {
+  // 这一轮被打断、没有走到自由工作流结算：被裁定闸按住的旧预约触发不再证明工作区停在收尾
+  // 状态，先作废（开跑那一刻通常已经作废过，这里兜住开跑前就落库为 running 的那种）。
+  await (await import("./free-review-reservations.js")).forgetHeldTrigger(t.id);
   if (await (await import("./regression-settlement.js")).recordInterruptedRegressionReview(t)) return;
   // **这一路也要问一句「这一轮的权威结束原因是什么」**(第 5 轮审查 F3,已实测)。
   // 接管那条路问过了(single-run.ts),对账这条路原先没问 —— 于是一个被看门狗判了熔断、

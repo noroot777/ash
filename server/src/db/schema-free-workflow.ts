@@ -39,7 +39,7 @@ export const freeWorkflowStates = sqliteTable("free_workflow_states", {
   // 撞上未裁定的驳回，就把当时的槽版本（updated_at）记在这里。裁定放行只认它
   // （free-review-ruling-release.ts）——任务的 done/failed 证明不了上一回合正常结束，异常退出
   // 根本走不到闸上。等于 updated_at 才算数：槽被消费、取消、重挂都会推进版本，它随之作废；
-  // 每个执行回合结算开头都先清掉它，后来的回合（哪怕异常结束）都会让旧的那次作废。
+  // 执行回合开跑与维持意见也会作废它（见 free-review-reservations.ts `forgetHeldTrigger`）。
   reviewHeldToken: text("review_held_token"),
   updatedAt: text("updated_at").notNull(),
 });

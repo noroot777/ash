@@ -6,7 +6,8 @@
 // ① 驳回未裁定 + 任意来源的预约 + 执行回合正常结束 → 不开审、预约原样 armed、时间线留痕；
 // ② 裁定落地之后：不起执行回合的两档（采纳执行者 / 转独立任务）在没有回合会来时当场开审
 //    （现场 yosdiYlV_dD8：裁定完预约亮着、审查不来）；只认「正常结束的回合撞上了闸」这件持久
-//    事实，异常结束、或之后又有回合异常结束都不兑现；有回合在飞或在等待态时，留给那一轮
+//    事实，异常结束、之后又开跑过执行回合、被重启打断、维持意见都让它作废；裁定落在「已结算、
+//    未放锁」的缝里时放锁后重判；有回合在飞或在等待态时，留给那一轮
 //    正常结束再触发；裁定落账后没来得及兑现的，重启补发；
 
 // ③ 既有路径不变：没有驳回时照常触发；驳回按**来源**撤自动续轮、留用户手存；启动失败回滚
@@ -33,11 +34,13 @@ try {
   } = await import("../src/db/schema.js");
   type Source = typeof freeWorkflowStates.$inferSelect["reviewSource"];
   const { createTasks } = await import("../src/task-store.js");
-  const { claimTurn, releaseTurn } = await import("../src/runs.js");
-  const { disputeFreeReview, openDisputeOf, resolveFreeReviewDispute } = await import("../src/free-review-dispute.js");
+  const { claimTurn, releaseTurn, waitForTurnIdle } = await import("../src/runs.js");
+  const { continueTask } = await import("../src/orchestrator.js");
+  const { reconcileInterruptedTask } = await import("../src/task-reconcile.js");
+  const { disputeFreeReview, openDisputeOf, resolveFreeReviewDispute, upholdDisputeOn } = await import("../src/free-review-dispute.js");
   const { handleFreeWorkflowSettlement, reserveFreeReview, startFreeReview } = await import("../src/free-workflow.js");
   const {
-    armFollowUpFreeReview, readFreeReviewReservation, startReservedFreeReview,
+    armFollowUpFreeReview, consumeFreeReviewReservation, forgetHeldTrigger, readFreeReviewReservation, startReservedFreeReview,
   } = await import("../src/free-review-reservations.js");
   const { sessionTranscriptPath } = await import("../src/transcript.js");
   const { releaseHeldReservations } = await import("../src/free-review-ruling-release.js");
@@ -199,17 +202,57 @@ try {
   assert.equal((await slotOf("g-idle-abnormal"))?.reviewArmed, true, "预约留给下一个正常结束的回合");
   assert.match(timeline("g-idle-abnormal"), /预约审查仍在等待：上一个执行回合没有正常结束/);
 
-  // 被闸按住之后又跑了一个执行回合、而它异常结束：之前那次触发随之过期。
-  await seed("g-later-abnormal");
-  await reserveAsUser("g-later-abnormal");
-  await dispute("g-later-abnormal");
-  await settleTurn("g-later-abnormal");
-  const heldSlot = await slotOf("g-later-abnormal");
+  // 被闸按住之后又**开跑**了一个执行回合：不论它怎么收场，之前那次触发都随之作废（第 2 轮审查：
+  // 作废挂在结算上时，被重启打断的回合不走结算，旧资格原样留着）。这里走真实的续跑入口，
+  // 起真执行器由测试隔离闸拦着，回合以失败收场。
+  await seed("g-later-turn");
+  await reserveAsUser("g-later-turn");
+  await dispute("g-later-turn");
+  await settleTurn("g-later-turn");
+  const heldSlot = await slotOf("g-later-turn");
   assert.equal(heldSlot?.reviewHeldToken, heldSlot?.updatedAt, "正常结束撞上闸：按当前槽版本记下触发时刻");
-  await handleFreeWorkflowSettlement("g-later-abnormal", "failed", false, false, "single", true, true);
-  releaseTurn("g-later-abnormal");
-  await resolveFreeReviewDispute("g-later-abnormal", "withdrawn");
-  assert.equal((await runsOf("g-later-abnormal")).length, 1, "后来的回合异常结束，旧触发作废，裁定后不开审");
+  releaseTurn("g-later-turn");
+  await continueTask("g-later-turn", "再看一下第 3 行", { system: "run" }).catch(() => false);
+  await waitForTurnIdle("g-later-turn", 10_000);
+  assert.equal((await slotOf("g-later-turn"))?.reviewHeldToken, null, "执行回合开跑即作废旧触发");
+  await resolveFreeReviewDispute("g-later-turn", "withdrawn");
+  assert.equal((await runsOf("g-later-turn")).length, 1, "之后跑过执行回合，裁定后不凭旧触发开审");
+
+  // 审查实测原样：后来的执行回合被重启打断，由启动对账收尾（不走自由工作流结算）。哪怕开跑那一刻
+  // 没作废到（这里直接把状态写成 running 模拟），收尾时也要作废。
+  await seed("g-interrupted");
+  await reserveAsUser("g-interrupted");
+  await dispute("g-interrupted");
+  await settleTurn("g-interrupted");
+  releaseTurn("g-interrupted");
+  await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, "g-interrupted"));
+  assert.equal(await reconcileInterruptedTask("g-interrupted"), true);
+  assert.equal((await slotOf("g-interrupted"))?.reviewHeldToken, null, "被打断的回合收尾时作废旧触发");
+  await resolveFreeReviewDispute("g-interrupted", "withdrawn");
+  assert.equal((await runsOf("g-interrupted")).length, 1, "被重启打断之后裁定不开审");
+
+  // 消费 CAS 带上资格列：读到时还有资格、消费前被作废的旧快照消费不动。
+  await seed("g-stale-held");
+  await reserveAsUser("g-stale-held");
+  await dispute("g-stale-held");
+  await settleTurn("g-stale-held");
+  const staleSnapshot = await readFreeReviewReservation("g-stale-held");
+  await forgetHeldTrigger("g-stale-held");
+  assert.equal(await consumeFreeReviewReservation("g-stale-held", staleSnapshot), null, "资格被作废后旧快照不得消费");
+  assert.equal((await slotOf("g-stale-held"))?.reviewArmed, true);
+
+  // 裁定落在「那一轮已经结算完、只差放锁」的缝里（第 2 轮审查实测）：占不到锁不等于之后还有一次
+  // 结算，放锁后必须自己再判一次。
+  await seed("g-tail");
+  await reserveAsUser("g-tail");
+  await dispute("g-tail");
+  await settleTurn("g-tail");
+  await resolveFreeReviewDispute("g-tail", "withdrawn");
+  assert.equal((await runsOf("g-tail")).length, 1, "回合锁还占着：当场不开审");
+  releaseTurn("g-tail");
+  for (let i = 0; i < 50 && (await runsOf("g-tail")).length < 2; i++) await new Promise((r) => setTimeout(r, 20));
+  assert.equal((await runsOf("g-tail")).length, 2, "放锁之后按预约开审，不再挂着等一个不会来的结算");
+  assert.equal((await slotOf("g-tail"))?.reviewArmed, false);
 
   // 被闸按住后用户改了预约配置：改的是配置，不是「触发时刻到过」这件事，裁定后照样当场开审。
   const edited = await seed("g-held-edited");
@@ -230,6 +273,14 @@ try {
   await settleTurn("g-upheld-forget");
   await resolveFreeReviewDispute("g-upheld-forget", "upheld");
   assert.equal((await slotOf("g-upheld-forget"))?.reviewHeldToken, null, "维持意见作废之前被按住的触发");
+  // 另一处维持意见的入口（直接点「按意见修复」）同样作废。
+  const upheldDirect = await seed("g-upheld-direct");
+  await reserveAsUser("g-upheld-direct");
+  await dispute("g-upheld-direct");
+  await settleTurn("g-upheld-direct");
+  const directRound = (await db.select().from(freeReviewRounds).where(eq(freeReviewRounds.id, upheldDirect.roundId)))[0]!;
+  assert.equal(await upholdDisputeOn("g-upheld-direct", directRound), true);
+  assert.equal((await slotOf("g-upheld-direct"))?.reviewHeldToken, null, "按意见修复同样作废之前被按住的触发");
 
   // 启动补发：裁定 CAS 已落账、当场兑现没来得及做（进程死在中间）——直接把裁定写进库模拟。
   const crashed = await seed("g-crash-between");

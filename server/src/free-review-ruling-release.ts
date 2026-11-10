@@ -14,11 +14,13 @@
 // **兑现的依据是持久的「触发时刻到过」这件事本身**（槽上的 `reviewHeldToken`，由裁定闸在
 // 正常结算时记下），不是任务状态：执行者正常结束却没确认完成、和中途报错退出，落下的都是
 // failed，单看状态会把后者也补成一次触发，审查一份还没收尾的代码（第 1 轮审查实测）。
-// 异常结束的回合根本走不到闸上，记不下这件事，于是预约照旧等下一个正常结束的回合。
+// 异常结束的回合根本走不到闸上，记不下这件事，于是预约照旧等下一个正常结束的回合；之后
+// 再起任何执行回合、或者维持意见，都会把它作废（作废点见 forgetHeldTrigger）。
 //
 // 有这件事也只在「此刻确实没有执行回合会来」时兑现，判据与回合结算消费预约的那一段同口径
 // （free-workflow.ts `handleFreeWorkflowSettlement`）：等答复 / 停在检查点、托盘里还有
-// 消息、回合正在跑，都照旧留给那一轮结束时处理，并说清在等什么。
+// 消息、回合正在跑，都照旧留给那一轮结束时处理，并说清在等什么。回合锁被占着时不能当作
+// 「之后还有一次结算」，登记到放锁后重判（见 retryAfterTurn）。
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeWorkflowStates, tasks } from "./db/schema.js";
@@ -30,42 +32,58 @@ import {
 } from "./free-review-reservations.js";
 import { reviewingRun } from "./free-review-round.js";
 import { handoffBlockReason } from "./handoff-guard.js";
-import { claimOwnTurn, releaseTurn } from "./runs.js";
+import { claimOwnTurn, releaseTurn, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
 const AFTER_CURRENT_TURN = "当前执行回合正常结束后开始";
 
-export async function releaseReservationAfterRuling(taskId: string): Promise<void> {
-  const reservation = await readFreeReviewReservation(taskId);
-  if (!reservation?.armed) return;
-  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task) return;
-  if (task.question || task.resumePrompt) {
-    await noteReservationStillWaiting(taskId, await reservationWaitReason(task));
-    return;
-  }
-  // running/queued 由那一轮自己结算时消费。
-  if (task.status === "running" || task.status === "queued") {
-    await noteReservationStillWaiting(taskId, "任务此刻有回合在进行", AFTER_CURRENT_TURN);
-    return;
-  }
-  if (!heldByRuling(reservation)) {
-    await noteReservationStillWaiting(taskId, "上一个执行回合没有正常结束");
-    return;
-  }
-  const { hasDeliverablePendingMessages } = await import("./pending-messages.js");
-  if (await hasDeliverablePendingMessages(taskId)) {
-    await noteReservationStillWaiting(taskId, "还有排队消息没送进会话，先把它们发完");
-    return;
-  }
-  // 占住回合再开审：从这里到审查链切进 reviewing 之间，用户的一条消息就能起一个执行回合，
-  // 两边同时动工作区。占不到 = 已经有回合在飞，预约留给它结束时消费。
+/** 已经登记了「回合放锁后再判一次」的任务：同一轮锁上只挂一个，别每次裁定 / 重试各挂一份。 */
+const retryPending = new Set<string>();
+
+/**
+ * `retry` = 回合放锁之后的那次重判：不再往时间线里写「仍在等待」——第一次已经说过了，而
+ * 重判落空时多半是那一轮自己的结算已经交代过结局（正常结束会自己消费预约，异常结束会写明）。
+ */
+export async function releaseReservationAfterRuling(taskId: string, opts: { retry?: boolean } = {}): Promise<void> {
+  const note = opts.retry
+    ? async () => false
+    : (reason: string, resumes?: string) => noteReservationStillWaiting(taskId, reason, resumes);
+  if (!(await readFreeReviewReservation(taskId))?.armed) return;
+  // **先占回合，再在锁里读全部判据**：资格只会在执行回合开跑时作废（forgetHeldTrigger ①），
+  // 占住回合就没有执行回合能在「判完 → 开审」之间开跑；锁外读到的判据到消费那一刻可能已经
+  // 不成立（第 2 轮审查）。消费 CAS 另外也比对资格列，两道互为兜底。
   const turn = claimOwnTurn(taskId, "dispatch");
   if (!turn) {
-    await noteReservationStillWaiting(taskId, "任务此刻有回合在进行", AFTER_CURRENT_TURN);
+    // 占不到 ≠ 之后还会有一次结算：占着锁的可能正是已经结算完、只差放锁的那一轮，它的消费点
+    // 早过了（第 2 轮审查实测：只写一句「等当前回合结束」，放锁后什么都不会发生）。登记到
+    // 它放锁之后再判一次；若接着开跑的是新的执行回合，它会作废资格，预约交给它自己的结算。
+    retryAfterTurn(taskId);
+    await note("任务此刻有回合在进行", AFTER_CURRENT_TURN);
     return;
   }
   try {
+    const reservation = await readFreeReviewReservation(taskId);
+    if (!reservation?.armed) return;
+    const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (!task) return;
+    if (task.question || task.resumePrompt) {
+      await note(await reservationWaitReason(task));
+      return;
+    }
+    // running/queued 由那一轮自己结算时消费。
+    if (task.status === "running" || task.status === "queued") {
+      await note("任务此刻有回合在进行", AFTER_CURRENT_TURN);
+      return;
+    }
+    if (!heldByRuling(reservation)) {
+      await note("上一个执行回合没有正常结束");
+      return;
+    }
+    const { hasDeliverablePendingMessages } = await import("./pending-messages.js");
+    if (await hasDeliverablePendingMessages(taskId)) {
+      await note("还有排队消息没送进会话，先把它们发完");
+      return;
+    }
     if (await reviewingRun(taskId)) return;
     const { launchReservedFreeReview } = await import("./free-workflow.js");
     await launchReservedFreeReview(task, reservation, () =>
@@ -73,6 +91,16 @@ export async function releaseReservationAfterRuling(taskId: string): Promise<voi
   } finally {
     releaseTurn(taskId, turn);
   }
+}
+
+function retryAfterTurn(taskId: string): void {
+  if (retryPending.has(taskId)) return;
+  retryPending.add(taskId);
+  whenTurnIdle(taskId, () => {
+    retryPending.delete(taskId);
+    void releaseReservationAfterRuling(taskId, { retry: true })
+      .catch((error) => console.error(`[ash] 回合放锁后兑现预约审查失败 task=${taskId}:`, error));
+  });
 }
 
 /**

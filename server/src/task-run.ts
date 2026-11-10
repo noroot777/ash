@@ -16,6 +16,7 @@ import { snapshotReviewWait } from "./review-wait.js";
 import { consumeSingleRun } from "./single-run.js";
 import { afterSettlement } from "./settle-status.js";
 import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn } from "./session-turns.js";
+import { forgetHeldTrigger } from "./free-review-reservations.js";
 import { taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
@@ -131,6 +132,9 @@ export async function runTask(
     }, { behavior: "immediate" });
     // 跟 orchestrator 起一轮同一条规矩:令牌落库处顺手绑到内存里这一轮的身份上。
     bindTurnToken(taskId, turnToken);
+    // 执行回合开跑：被裁定闸按住的那次预约触发随之作废（见 free-review-reservations.ts
+    // `forgetHeldTrigger` ①；与 orchestrator 续跑那一处对称）。
+    await forgetHeldTrigger(taskId);
     await setTaskStatus(taskId, "running");
     // 已验收任务被 fresh 重跑（Cron 到点 / fire）：旧「已验收」牌子当场摘掉——新一版
     // 产出不能躲在旧牌子下继续改（enterHumanGate 见 merged 会静默放行；审查实测：

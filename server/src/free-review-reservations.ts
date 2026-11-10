@@ -38,11 +38,17 @@ export function heldByRuling(reservation: ReservedFreeReview): boolean {
  * 作废「被裁定闸按住的那次触发」。只动这一列、不推进 updatedAt——那是预约自己的版本令牌，
  * 推进它会让正在途中的 CAS 消费 / 回滚全部失配。
  *
- * 调用点：每个执行回合结算的开头（后来的回合不论结果如何，都让之前那次触发过期）；维持审查
- * 意见时（预约改由那一轮修复的正常结束来触发）。
+ * 作废点只有两类，各自都是**持久边界**上的一笔，不是某个结算分支里的顺手一句：
+ * ① 一个**执行回合开跑**（orchestrator / task-run 落 running 之前）：资格只属于「最后一个执行
+ *    回合正常结束」那一刻，之后再起任何执行回合——不论它正常结束、报错退出还是被重启打断收尾
+ *    ——旧资格都不再证明工作区停在一个收尾的状态。挂在开跑而不是结算上，是因为被重启打断的
+ *    回合根本不走自由工作流结算（task-reconcile.ts 直接落终态，第 2 轮审查实测）；
+ * ② 维持审查意见：预约改由那一轮修复的正常结束触发。与裁定写在**同一笔事务**里（传 query），
+ *    两笔之间断电就会留下「已维持、资格还在」，启动补发会抢在修复前开审。
+ * 审查 / 辩论 / 原生命令这类旁路回合不改代码，不作废。
  */
-export async function forgetHeldTrigger(taskId: string): Promise<void> {
-  await db.update(freeWorkflowStates).set({ reviewHeldToken: null })
+export async function forgetHeldTrigger(taskId: string, query: Pick<typeof db, "update"> = db): Promise<void> {
+  await query.update(freeWorkflowStates).set({ reviewHeldToken: null })
     .where(and(eq(freeWorkflowStates.taskId, taskId), isNotNull(freeWorkflowStates.reviewHeldToken)));
 }
 
@@ -161,6 +167,9 @@ export async function consumeFreeReviewReservation(
       sameAs(freeWorkflowStates.reviewRunId, snapshot.runId ?? null),
       sameAs(freeWorkflowStates.selectedReviewerId, snapshot.reviewerId),
       sameAs(freeWorkflowStates.updatedAt, snapshot.updatedAt ?? null),
+      // 资格作废不推进版本令牌（见 forgetHeldTrigger），所以单比 updatedAt 拦不住「读到时还有
+      // 资格、消费前被作废」的那条旧快照：裁定放行凭资格开审，这一列也得是 CAS 的一部分。
+      sameAs(freeWorkflowStates.reviewHeldToken, snapshot.heldToken ?? null),
     ))
     .returning({ taskId: freeWorkflowStates.taskId });
   if (!consumed.length) return null;

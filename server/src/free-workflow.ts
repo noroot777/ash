@@ -5,7 +5,7 @@ import type {
   TaskStatus,
 } from "@ash/shared";
 import type { TurnReview } from "./runs.js";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import {
@@ -16,7 +16,7 @@ import {
   regressionEvidence,
   tasks,
 } from "./db/schema.js";
-import { clearReservationForDispatch, forgetHeldTrigger, noteReservationStillWaiting, readFreeReviewReservation, consumeFreeReviewReservation, reservationWaitReason, startReservedFreeReview } from "./free-review-reservations.js";
+import { clearReservationForDispatch, noteReservationStillWaiting, readFreeReviewReservation, consumeFreeReviewReservation, reservationWaitReason, startReservedFreeReview } from "./free-review-reservations.js";
 import {
   checkMode,
   overrideLabel,
@@ -189,11 +189,8 @@ export async function reserveFreeReview(
     const note = reviewNote(input.note);
     const override = await reviewOverride(input.override, actor);
     const at = now();
-    const existing = (await db.select({
-      reviewArmed: freeWorkflowStates.reviewArmed,
-      updatedAt: freeWorkflowStates.updatedAt,
-      reviewHeldToken: freeWorkflowStates.reviewHeldToken,
-    }).from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
+    const existing = (await db.select({ reviewArmed: freeWorkflowStates.reviewArmed }).from(freeWorkflowStates)
+      .where(eq(freeWorkflowStates.taskId, taskId))).at(0);
     // 用户手动保存的预约是一条**新链**：清掉可能挂着的自动续轮 runId，改按新配置开新 run。
     // 覆盖四列同样整套写（没有覆盖就整套写 null），不能只写有值的那几个——留着上一条
     // 预约的残值会拼出用户从没选过的执行器组合。
@@ -204,14 +201,17 @@ export async function reserveFreeReview(
       reviewExecutorId: override?.executorId ?? null,
       reviewModel: override?.model ?? null,
       reviewReasoningEffort: override?.reasoningEffort ?? null,
-      // 改的是配置，不是「触发时刻已经到过」这件事：被裁定闸按住的那次触发跟着新版本走。
-      reviewHeldToken: existing?.reviewArmed && existing.reviewHeldToken && existing.reviewHeldToken === existing.updatedAt
-        ? at : null,
       updatedAt: at,
     };
     await db.insert(freeWorkflowStates).values({ taskId, ...slot }).onConflictDoUpdate({
       target: freeWorkflowStates.taskId,
-      set: slot,
+      // 改的是配置，不是「触发时刻已经到过」这件事：被裁定闸按住的那次触发跟着新版本走。
+      // 判据在这条 UPDATE 里按**旧行**现算，不先读再写——读写之间一个执行回合开跑作废了它，
+      // 先读的那一版会把已经作废的资格又写回来（第 2 轮审查）。
+      set: {
+        ...slot,
+        reviewHeldToken: sql`CASE WHEN ${freeWorkflowStates.reviewArmed} = 1 AND ${freeWorkflowStates.reviewHeldToken} = ${freeWorkflowStates.updatedAt} THEN ${at} ELSE NULL END`,
+      },
     });
     await appendTaskTimeline(taskId, `${existing?.reviewArmed ? "已更新审查预约" : "已预约审查"}：${profile.name}${overrideSuffix(override)} · ` +
       `${mode === "logic" ? "逻辑检查" : "语法检查"} · 自动复审 ${retries} 轮${note ? " · 含附言" : ""}。执行回合正常结束后自动开始。`);
@@ -391,9 +391,6 @@ export async function handleFreeWorkflowSettlement(
   if (await settleDebateTurn(taskId, turnOk === true)) return true;
   const run = await reviewingRun(taskId);
   if (role !== "reviewer") {
-    // 之前被裁定闸按住的那次触发随这一回合过期：它只证明**那一回合**正常结束了。这一回合
-    // 正常结束且仍被闸挡，下面的消费点会按新版本重新记一次；异常结束就不再记。
-    await forgetHeldTrigger(taskId);
     if (task.question || task.resumePrompt) {
       // 等待态照旧不消费预约,但**必须把「在等什么」留下来**:这一条 return 原先一句话都
       // 不写,于是界面上只剩一个亮着的「已预约审查」而审查迟迟不开始,用户只能得出「预约

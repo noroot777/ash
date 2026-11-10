@@ -476,18 +476,22 @@ function summarize(reason: string): string {
 export async function upholdDisputeOn(taskId: string, round: ReviewRoundRow): Promise<boolean> {
   // 只裁**要修的这一轮**自己身上的驳回。按任务去找「下一条未裁定」的话，别的轮次上的
   // 驳回会被这一下顺手记成维持——用户根本没看过那一条（第 2 轮审查实测）。
-  const ruled = await db.update(freeReviewRounds)
-    .set({ disputeResolution: "upheld", disputeResolvedAt: now() })
-    .where(and(
-      eq(freeReviewRounds.id, round.id),
-      disputeWritten,
-      isNull(freeReviewRounds.disputeResolution),
-      isNull(freeReviewRounds.disputeSupersededAt),
-    ))
-    .returning({ id: freeReviewRounds.id });
+  // 维持意见 = 预约改由那一轮修复的正常结束来触发，之前被闸按住的那次同一笔事务里作废
+  // （理由见 forgetHeldTrigger ②）。
+  const ruled = await db.transaction(async (transaction) => {
+    const rows = await transaction.update(freeReviewRounds)
+      .set({ disputeResolution: "upheld", disputeResolvedAt: now() })
+      .where(and(
+        eq(freeReviewRounds.id, round.id),
+        disputeWritten,
+        isNull(freeReviewRounds.disputeResolution),
+        isNull(freeReviewRounds.disputeSupersededAt),
+      ))
+      .returning({ id: freeReviewRounds.id });
+    if (rows.length) await forgetHeldTrigger(taskId, transaction);
+    return rows;
+  }, { behavior: "immediate" });
   if (!ruled.length) return false;
-  // 维持意见 = 预约改由那一轮修复的正常结束来触发，之前被闸按住的那次作废。
-  await forgetHeldTrigger(taskId);
   await appendTaskTimeline(taskId,
     `按第 ${round.round} 轮审查意见发起修复，即维持审查意见（执行者的驳回未被采纳）。`);
   bus.publish({ type: "task.review", taskId });
@@ -558,17 +562,21 @@ export async function resolveFreeReviewDispute(
   // 后写的会盖掉先写的 —— 先到的 upheld 已经起了修复，后到的 withdrawn 再把记录改成
   // 「不用改了」。输掉的那一路如实报「已经裁定过了」，与 deferred 那条路（free-review-defer.ts）
   // 同一个口径。
-  const ruled = await db.update(freeReviewRounds)
-    .set({ disputeResolution: resolution, disputeResolvedAt: at, disputeResolutionNote: note })
-    .where(and(
-      eq(freeReviewRounds.id, open.round.id),
-      disputeWritten,
-      isNull(freeReviewRounds.disputeResolution),
-      isNull(freeReviewRounds.disputeSupersededAt),
-    ))
-    .returning({ id: freeReviewRounds.id });
+  // upheld 时被闸按住的那次触发与裁定同一笔事务作废（理由见 forgetHeldTrigger ②）。
+  const ruled = await db.transaction(async (transaction) => {
+    const rows = await transaction.update(freeReviewRounds)
+      .set({ disputeResolution: resolution, disputeResolvedAt: at, disputeResolutionNote: note })
+      .where(and(
+        eq(freeReviewRounds.id, open.round.id),
+        disputeWritten,
+        isNull(freeReviewRounds.disputeResolution),
+        isNull(freeReviewRounds.disputeSupersededAt),
+      ))
+      .returning({ id: freeReviewRounds.id });
+    if (rows.length && resolution === "upheld") await forgetHeldTrigger(taskId, transaction);
+    return rows;
+  }, { behavior: "immediate" });
   if (!ruled.length) throw new DisputeStaleError("这一轮驳回已经被裁定过了");
-  if (resolution === "upheld") await forgetHeldTrigger(taskId);
   await appendTaskTimeline(taskId, (resolution === "withdrawn"
     ? `你裁定第 ${open.round.round} 轮的未通过意见不用改了（采纳执行者的说法，报告与证据原样保留，审查结论本身不改写）。`
     // 写了要点时不能只说「照报告修复」：用户写要点，多半正是因为要改的不是报告那版。
