@@ -18,6 +18,7 @@
 //  14. 恢复起点存不下来就保留分支，绝不报成「已清理」（同上）
 //  15. 整队归档取回后，隔离执行者按**自己**的完成提交重建，共用的按领队的（第 3 轮审查）
 //  16. 存好恢复起点之后外部又往分支上提交：分支整条留下，新提交不许跟着删（-D 那轮第 1 轮审查）
+//  17. 任务分支是指向 main 的符号引用：只删别名，main 不许跟着没；分支配置节一并清掉（第 2 轮审查）
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -591,6 +592,40 @@ try {
     assert.equal(await commitAt(repo, branch), lateTip, "新提交只剩这条分支保着,必须还在");
     assert.match(item.branchError ?? "", /新提交/, "要说清为什么留下");
     assert.equal(item.worktreeRemoved, true, "目录照常清理 —— 提交完它是干净的,内容都在分支里");
+  }
+
+  // ── 17. 只删任务分支这个名字本身,不顺着符号引用删到别的分支 ─────────────
+  // `git symbolic-ref refs/heads/ash/<id8> refs/heads/main` 是合法状态。update-ref -d 默认
+  // 解引用,删掉的会是 main;检出保护按别名查也查不到 main 正被主仓检出着。
+  {
+    await setClean("all");
+    const id = "arcPsymref7";
+    await seed({ id });
+    const branch = worktreeBranchName(id);
+    const mainBefore = git(repo, "rev-parse", "refs/heads/main");
+    git(repo, "symbolic-ref", `refs/heads/${branch}`, "refs/heads/main");
+
+    const body = await (await archive(id)).json() as { cleanup: { items: { branchDeleted: boolean; branchError: string | null }[] } };
+    const { commitAt } = await import("../src/task-branch-plan.js");
+    assert.equal(await commitAt(repo, "refs/heads/main"), mainBefore, "main 必须原样还在");
+    assert.equal(branchExists(branch), false, "别名本身该删掉");
+    assert.equal(body.cleanup.items[0].branchDeleted, true);
+  }
+
+  // ── 18. 删掉的分支不留 branch.<name>.* 配置:取回重建同名分支时别沿用旧上游 ─────
+  {
+    const id = "arcQconfig8";
+    await seed({ id });
+    const ws = await prepareWorktree(repo, id, "main");
+    commitIn(ws.path, "q.txt");
+    const branch = worktreeBranchName(id);
+    git(repo, "config", `branch.${branch}.description`, "旧描述");
+    git(repo, "config", `branch.${branch}.merge`, "refs/heads/stale-upstream");
+
+    await archive(id);
+    assert.equal(branchExists(branch), false, "前提:分支已删");
+    assert.throws(() => git(repo, "config", "--get-regexp", `^branch\\.${branch}\\.`),
+      "git branch -D 会清掉的配置节,这里也得清掉");
   }
 
   console.log("[archive-cleanup] 全部断言通过");

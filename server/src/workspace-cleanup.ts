@@ -109,15 +109,20 @@ export async function discardTaskWorkspace(
 }
 
 /**
- * 分支仍指向 `expected` 才删(见 `discardTaskWorkspace` 的 `forceBranchAt`)。`update-ref -d`
- * 不像 `git branch` 那样替检出着它的工作区把关,这一道得自己补:被检出的分支删掉后那个
- * 目录的 HEAD 就悬空了。
+ * 分支仍指向 `expected` 才删(见 `discardTaskWorkspace` 的 `forceBranchAt`)。换掉 `git branch -D`
+ * 之后,它原本替我们做的几件事都得自己补齐:
+ *  · 检出保护:被检出的分支删掉后那个目录的 HEAD 就悬空了。
+ *  · 只删这个名字本身(`--no-deref`):不加时 update-ref 会顺着符号引用删掉它指向的分支 ——
+ *    `ash/<id8>` 是指向 main 的别名时,删掉的是 main(第 2 轮审查实测)。
+ *  · 删掉 `branch.<name>.*` 配置节:否则取回后同名分支重建,会沿用旧的上游等设置。
  */
 async function deleteBranchAt(repo: string, branch: string, expected: string): Promise<void> {
   const checkout = await registeredCheckout(repo, branch);
   if (checkout.path) throw new Error(`分支 ${branch} 正被工作区 ${checkout.path} 检出，不能删除`);
   try {
-    await exec("git", ["-C", repo, "update-ref", "-d", `refs/heads/${branch}`, expected]);
+    await exec("git", ["-C", repo, "update-ref", "--no-deref", "-d", `refs/heads/${branch}`, expected]);
+    // 没有这个配置节时 git 报错退出,那正是「没什么要清」
+    await exec("git", ["-C", repo, "config", "--remove-section", `branch.${branch}`]).catch(() => {});
   } catch (error) {
     const tip = await exec("git", ["-C", repo, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`])
       .then((r) => r.stdout.trim(), () => null);
