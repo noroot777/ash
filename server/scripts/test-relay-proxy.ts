@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { describeRoute, parseBypassRule, redactProxy, relayProxyPlan, routeFor } from "../src/proxy-route.js";
+import { describeRoute, explicitPortOf, parseBypassRule, redactProxy, relayProxyPlan, routeFor, routeTarget } from "../src/proxy-route.js";
 import {
   decodeWindowsProxyOutput, gvariantStrings, parseGnomeProxy, parseKdeProxy, parseScutilProxy, parseWindowsProxy, readWindowsProxy,
   refreshSystemProxy, setSystemProxyReaderForTests, systemProxySettings, type SystemProxySettings,
@@ -22,7 +22,7 @@ const useSystem = (value: SystemProxySettings | (() => Promise<SystemProxySettin
   systemReads = 0;
   setSystemProxyReaderForTests(typeof value === "function" ? () => { systemReads += 1; return value(); } : async () => { systemReads += 1; return value; }, ttlMs);
 };
-const route = async (url: string) => routeFor(await relayProxyPlan(), new URL(url));
+const route = async (url: string) => routeFor(await relayProxyPlan(), routeTarget(url));
 // Windows 的环境变量不分大小写（no_proxy 和 NO_PROXY 是同一个），「小写优先」只在其它平台上可测
 const caseSensitiveEnv = process.platform !== "win32";
 
@@ -122,6 +122,16 @@ try {
   // macOS / Windows 的 Chromium 语义不受影响：裸域名精确匹配、`.域名` 只配子域
   useSystem(settings({ https: "http://proxy:8080", bypass: ["corp.test", ".dot.test"] }));
   await expectRoutes("Chromium", ["https://corp.test/", "https://a.dot.test/"], ["https://api.corp.test/", "https://dot.test/"]);
+  // 端口规则分「写了端口」和「没写」：显式写出的默认端口（URL 规范化会把它抹掉）也算写了
+  assert.deepEqual(["http://a:80/", "https://a:443", "http://a/", "//a:8080/x", "http://u:p@[::1]:80/", "http://[::1]/", "/relative", "http://a:/"].map(explicitPortOf),
+    [80, 443, 0, 8080, 80, 0, null, 0]);
+  for (const syntax of ["gnome", "kde"] as const) {
+    useSystem(settings({ https: "http://proxy:8080", http: "http://proxy:8080", bypassSyntax: syntax, bypass: ["port.test:80", "secure.test:443"] }));
+    await expectRoutes(syntax, ["http://port.test:80/", "https://secure.test:443/"], ["http://port.test/", "https://secure.test/", "http://port.test:81/"]);
+  }
+  // Chromium 的端口按实际端口比：写不写默认端口一样
+  useSystem(settings({ https: "http://proxy:8080", bypass: ["secure.test:443"] }));
+  await expectRoutes("Chromium", ["https://secure.test/", "https://secure.test:443/"], []);
   console.log("  ✓ 绕过规则：本机三名单固定直连、NO_PROXY 语义不变、系统列表支持通配/子域/CIDR/端口/协议/<local>");
 
   // ---- 各平台解析 ----
@@ -194,21 +204,35 @@ try {
     "org.gnome.system.proxy.https port 0",
     "org.gnome.system.proxy.socks host ''",
   ].join("\n"));
-  assert.deepEqual([new URL(gnome.http!).host, new URL(gnome.http!).username], ["proxy.lan:3128", "me"]);
-  assert.equal(decodeURIComponent(new URL(gnome.http!).password), "p@ss'w\\dé", "含单引号的密码按 GVariant 双引号写法原样解出");
+  assert.equal(gnome.http, "http://proxy.lan:3128", "凭据不进代理地址");
+  assert.deepEqual(gnome.credentials?.http, { user: "me", password: "p@ss'w\\dé" }, "含单引号的密码按 GVariant 双引号写法原样解出");
   assert.equal(gnome.https, gnome.http, "GNOME 的 HTTPS 主机留空时沿用 HTTP 代理（含认证），同 glib-networking");
-  // 凭据原文进 URL 前转义：`%40` 不能在用的时候被解成 `@`；开了认证就带两个字段，哪个留空也照带
-  const gnomeAuth = (user: string, password: string) => {
-    const url = new URL(parseGnomeProxy([
-      "org.gnome.system.proxy mode 'manual'", "org.gnome.system.proxy.http host 'proxy.lan'", "org.gnome.system.proxy.http port 3128",
-      "org.gnome.system.proxy.http use-authentication true",
-      `org.gnome.system.proxy.http authentication-user '${user}'`, `org.gnome.system.proxy.http authentication-password '${password}'`,
-    ].join("\n")).http!);
-    return [decodeURIComponent(url.username), decodeURIComponent(url.password)];
-  };
-  assert.deepEqual(gnomeAuth("u%41:@", "p%40ss"), ["u%41:@", "p%40ss"]);
-  assert.deepEqual(gnomeAuth("me", ""), ["me", ""]);
-  assert.deepEqual(gnomeAuth("", "secret"), ["", "secret"], "用户名留空也照带密码");
+  assert.deepEqual(gnome.credentials?.https, gnome.credentials?.http);
+  // 认证开关单独保存：开了就带两个字段的原文（`%40` 不被解成 `@`，哪个留空、两个都空也照发），没开就不带
+  const gnomeAuth = (enabled: boolean, user: string, password: string) => parseGnomeProxy([
+    "org.gnome.system.proxy mode 'manual'", "org.gnome.system.proxy.http host 'proxy.lan'", "org.gnome.system.proxy.http port 3128",
+    `org.gnome.system.proxy.http use-authentication ${enabled}`,
+    `org.gnome.system.proxy.http authentication-user '${user}'`, `org.gnome.system.proxy.http authentication-password '${password}'`,
+  ].join("\n"));
+  const basic = (user: string, password: string) => `Basic ${Buffer.from(`${user}:${password}`).toString("base64")}`;
+  for (const [user, password] of [["u%41:@", "p%40ss"], ["me", ""], ["", "secret"], ["", ""]]) {
+    useSystem(gnomeAuth(true, user, password));
+    const authed = await route("https://api.test/");
+    assert.deepEqual([authed.proxy, authed.authorization], ["http://proxy.lan:3128", basic(user, password)], `开了认证：${JSON.stringify([user, password])}`);
+  }
+  for (const [user, password] of [["", ""], ["me", "secret"]]) {
+    useSystem(gnomeAuth(false, user, password));
+    const unauthed = await route("https://api.test/");
+    assert.deepEqual([unauthed.proxy, unauthed.authorization], ["http://proxy.lan:3128", undefined], "没开认证就不发，哪怕字段里有残留");
+  }
+  useSystem(gnomeAuth(true, "", ""));
+  const enabledKey = (await relayProxyPlan()).key;
+  useSystem(gnomeAuth(false, "", ""));
+  assert.notEqual((await relayProxyPlan()).key, enabledKey, "开了认证、两项都空 和 没开认证 是两份不同的配置");
+  // 地址里自带 userinfo（环境变量、KDE 的写法）同样拆成认证头，解出原文
+  useSystem(settings({ https: "http://u%40x:p%25@proxy.lan:1" }));
+  const fromUserinfo = await route("https://api.test/");
+  assert.deepEqual([fromUserinfo.proxy, fromUserinfo.authorization], ["http://proxy.lan:1", basic("u@x", "p%")]);
   const gnomeSplit = parseGnomeProxy("org.gnome.system.proxy mode 'manual'\norg.gnome.system.proxy.http host 'h'\norg.gnome.system.proxy.http port 1\norg.gnome.system.proxy.https host 's'\norg.gnome.system.proxy.https port 2");
   assert.deepEqual([gnomeSplit.http, gnomeSplit.https], ["http://h:1", "http://s:2"]);
   const gnomeBroken = parseGnomeProxy("org.gnome.system.proxy mode 'manual'\norg.gnome.system.proxy.http host 'bad host'\norg.gnome.system.proxy.http port 1");
@@ -223,6 +247,8 @@ try {
   const kdeReversed = parseKdeProxy("[Proxy Settings]\nProxyType=1\nhttpProxy=http://p 1\nReversedException=true\n");
   assert.equal(kdeReversed.http, null);
   assert.deepEqual(kdeReversed.unsupported, ["反向例外列表（只代理列出的地址）"]);
+  assert.deepEqual(parseKdeProxy("[Proxy Settings]\nProxyType=1\nhttpProxy=http://p 1\nNoProxyFor=10.0.0.0/8,http://exact.test\n").unsupported,
+    ["网段例外对主机名的匹配（KDE 先解析成 IP 再判，ash 只判 IP 地址）"], "KDE 的网段例外不解析主机名，要明说");
 
   // IPv6 代理主机：单独给端口时补方括号，不拿末段「:1」当端口
   const scutil = (host: string, port: string) => parseScutilProxy(`<dictionary> {\n  HTTPSEnable : 1\n  HTTPSPort : ${port}\n  HTTPSProxy : ${host}\n}`);
@@ -271,7 +297,7 @@ try {
   plan = await relayProxyPlan();
   assert.equal(plan.source, "none");
   assert.match(plan.notice ?? "", /PAC 自动配置.*未生效，当前直连/);
-  assert.match(describeRoute(plan, routeFor(plan, new URL("https://api.test"))), /^直连（未配置代理）；系统代理里的PAC/);
+  assert.match(describeRoute(plan, routeFor(plan, routeTarget("https://api.test"))), /^直连（未配置代理）；系统代理里的PAC/);
   useSystem(settings({ https: "http://u:pw@manual:1", unsupported: ["PAC 自动配置（http://pac/x.pac）"] }));
   plan = await relayProxyPlan();
   assert.equal(plan.source, "system");
@@ -285,9 +311,9 @@ try {
   plan = await relayProxyPlan();
   assert.equal(plan.source, "system");
   assert.match(plan.unavailable ?? "", /读取系统代理失败（EACCES）.*不直连/);
-  assert.deepEqual(routeFor(plan, new URL("https://api.test/")), { proxy: null, source: "system", blocked: true, reason: plan.unavailable }, "第一次就读不到：远端请求拒绝");
-  assert.match(describeRoute(plan, routeFor(plan, new URL("https://api.test/"))), /^未转发（读取系统代理失败/);
-  assert.equal(routeFor(plan, new URL("http://localhost:1/")).bypass, "loopback", "本机供应商不受影响");
+  assert.deepEqual(routeFor(plan, routeTarget("https://api.test/")), { proxy: null, source: "system", blocked: true, reason: plan.unavailable }, "第一次就读不到：远端请求拒绝");
+  assert.match(describeRoute(plan, routeFor(plan, routeTarget("https://api.test/"))), /^未转发（读取系统代理失败/);
+  assert.equal(routeFor(plan, routeTarget("http://localhost:1/")).bypass, "loopback", "本机供应商不受影响");
   process.env.NO_PROXY = "direct-ok.test";
   assert.equal((await route("https://direct-ok.test/")).bypass, "no_proxy", "用户明说直连的地址照常直连");
   delete process.env.NO_PROXY;
@@ -298,15 +324,15 @@ try {
   good = settings({});
   await refreshSystemProxy();
   plan = await relayProxyPlan();
-  assert.equal(routeFor(plan, new URL("https://api.test/")).proxy, "http://good:1", "后来读失败：沿用上次读到的有效配置，不改直连");
+  assert.equal(routeFor(plan, routeTarget("https://api.test/")).proxy, "http://good:1", "后来读失败：沿用上次读到的有效配置，不改直连");
   assert.match(plan.notice ?? "", /这次读取系统代理失败（ETIMEDOUT），沿用上次读到的配置/);
   useSystem(settings({ http: "http://good-http:1", invalid: { https: "系统 HTTPS 代理地址无法解析（bad host 端口 1）" }, bypass: ["bypass.test"] }));
   plan = await relayProxyPlan();
-  const brokenHttps = routeFor(plan, new URL("https://api.test/"));
+  const brokenHttps = routeFor(plan, routeTarget("https://api.test/"));
   assert.equal(brokenHttps.blocked, true, "HTTPS 地址写坏了：HTTPS 请求拒绝，不直连");
   assert.match(describeRoute(plan, brokenHttps), /^未转发（系统 HTTPS 代理地址无法解析（bad host 端口 1），不能确定/);
-  assert.equal(routeFor(plan, new URL("http://api.test/")).proxy, "http://good-http:1", "HTTP 代理是好的，照常走");
-  assert.equal(routeFor(plan, new URL("https://bypass.test/")).bypass, "system", "已读到的绕过列表照常生效");
+  assert.equal(routeFor(plan, routeTarget("http://api.test/")).proxy, "http://good-http:1", "HTTP 代理是好的，照常走");
+  assert.equal(routeFor(plan, routeTarget("https://bypass.test/")).bypass, "system", "已读到的绕过列表照常生效");
   assert.match(logs.at(-1) ?? "", /HTTPS 地址无法解析（拒绝转发）/);
   console.log("  ✓ 系统代理读不到：首次即拒绝远端请求，之后失败沿用上次有效配置；某个协议地址写坏只拒绝那个协议，均不降级直连");
 

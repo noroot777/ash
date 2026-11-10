@@ -319,7 +319,7 @@ try {
     }
     return false;
   };
-  for (const [user, password] of [["relay%user", "p%40ss"], ["me", ""], ["", "only-password"]]) {
+  for (const [user, password] of [["relay%user", "p%40ss"], ["me", ""], ["", ""], ["", "only-password"]]) {
     await useCredentials(user, password);
     const viaCredentials = await relayFetch(`${remoteProviderOrigin}/healthy`, {});
     assert.deepEqual(await viaCredentials.json(), { ok: true });
@@ -327,6 +327,7 @@ try {
   }
   assert(await tunnelsClosed(basic("relay%user", "p%40ss")), "换掉的凭据对应的 ProxyAgent 没人用了就关");
   assert(await tunnelsClosed(basic("me", "")));
+  assert(await tunnelsClosed(basic("", "")));
   // 在途请求还在用旧凭据的 agent：换凭据不关它，重定向下一跳照常经它发出，结束后才关
   const oldTunnels = () => proxyTunnels.filter((entry) => entry.authorization === basic("", "only-password")).length;
   const heldOnOldCredentials = relayFetch(`${remoteProviderOrigin}/held-redirect`, {});
@@ -349,7 +350,23 @@ try {
   assert.deepEqual(await envUserOnly.json(), { ok: true });
   assert.equal(proxyAuthorization, basic("env-user", ""), "环境变量里只写了用户名的代理也照带认证");
   delete process.env.HTTP_PROXY;
-  console.log("  ✓ 代理凭据原样送达（含百分号、空用户名/空密码），换掉的代理实例等在途请求结束后关闭");
+  console.log("  ✓ 代理凭据原样送达（含百分号、空用户名/空密码/两项都空），换掉的代理实例等在途请求结束后关闭");
+
+  // ---- 端口写法：GNOME 的 `主机:80` 只配显式写了 :80 的地址（首跳看请求原文，重定向那跳看 Location 原文） ----
+  // 判成直连的那一跳直接连 provider.test:80（解析不了，失败）；走代理的那一跳由测试代理接到本机上游
+  systemProxy = { ...gnomeProxy("u", "p"), bypass: ["provider.test:80"], bypassSyntax: "gnome" };
+  await refreshSystemProxy();
+  const expectDirectFailure = (error: unknown) => {
+    assert(error instanceof RelayRequestError);
+    assert.deepEqual([error.diagnostic.proxy, error.diagnostic.bypass], ["direct", "system"], "显式 :80 命中 GNOME 的端口规则，直连");
+    return true;
+  };
+  await assert.rejects(relayFetch("http://provider.test:80/healthy", {}), expectDirectFailure);
+  await assert.rejects(relayFetch(`${remoteProviderOrigin}/redirect?to=${encodeURIComponent("http://provider.test:80/healthy")}`, {}), expectDirectFailure);
+  const implicitPort = await relayFetch(`${remoteProviderOrigin}/redirect?to=${encodeURIComponent("http://provider.test/healthy")}`, {});
+  assert.deepEqual(await implicitPort.json(), { ok: true }, "Location 没写端口：不命中 `主机:80`，照常经代理");
+  assert(lastCallViaProxy());
+  console.log("  ✓ GNOME 端口规则区分显式默认端口与没写端口，首跳与重定向那跳都按原文判");
 
   // ---- 读不到系统代理：不能把「没读到」当成「没配」去直连 ----
   systemProxy = { platform: "测试", http: systemProxyUrl, https: systemProxyUrl, bypass: [], unsupported: [] };

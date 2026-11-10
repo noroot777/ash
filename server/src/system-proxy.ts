@@ -22,12 +22,19 @@ import { encodePowerShellCommand } from "./platform.js";
  * 同一行 `corp.test` 在三处直连的范围都不一样，不能统一成一种。
  */
 export type BypassSyntax = "gnome" | "kde";
+/** 代理认证的原文。有这一项 = 开了认证，两项都空也照发（`Basic Og==`）；没有 = 不认证 */
+export type ProxyCredentials = { user: string; password: string };
 
 export type SystemProxySettings = {
   /** 读的是哪一份配置，进诊断日志 */
   platform: string;
   http: string | null;
   https: string | null;
+  /**
+   * 认证开关和凭据单独放，不塞进代理 URL：URL 的 userinfo 两项都空时会整段消失，「开了认证、两项留空」
+   * 就和「没开认证」变成同一个 URL。代理 URL 里自带 userinfo 的（KDE 允许这么写）由 proxy-route.ts 拆出来
+   */
+  credentials?: Partial<Record<"http" | "https", ProxyCredentials>>;
   /** 系统里写的绕过规则原文，按 bypassSyntax 解释 */
   bypass: string[];
   bypassSyntax?: BypassSyntax;
@@ -256,18 +263,16 @@ export function parseGnomeProxy(text: string): SystemProxySettings {
   const manual = (scheme: "http" | "https") => {
     const host = text1(`${scheme}/host`);
     const port = (values.get(`${scheme}/port`) ?? "").replace(/^\D+/, "");
-    const url = proxyUrl(settings, scheme, host, port);
-    if (!url || scheme !== "http" || values.get("http/use-authentication") !== "true") return url;
-    // 同 glib-networking：开了认证就带上两个字段（哪个留空也照带），各自转义后进 URL —— URL 里的 userinfo
-    // 是转义形式，原文里的 `%`、`@`、`:` 直接塞进去会在用的时候被解码成别的密码。两个都空的 URL 表示不出来，等于不带
-    const parsed = new URL(url);
-    parsed.username = encodeURIComponent(text1("http/authentication-user"));
-    parsed.password = encodeURIComponent(text1("http/authentication-password"));
-    return parsed.href.replace(/\/$/, "");
+    return proxyUrl(settings, scheme, host, port);
   };
   settings.http = manual("http");
+  // 同 glib-networking：只看 use-authentication，开了就带上两个字段的原文（哪个留空、两个都空也照带）
+  if (settings.http && values.get("http/use-authentication") === "true") {
+    settings.credentials = { http: { user: text1("http/authentication-user"), password: text1("http/authentication-password") } };
+  }
   // 同 glib-networking：HTTPS 主机留空时 HTTPS 也走 HTTP 代理（连同认证信息）
   settings.https = text1("https/host") ? manual("https") : settings.http;
+  if (!text1("https/host") && settings.credentials?.http) settings.credentials.https = settings.credentials.http;
   if (!text1("https/host") && settings.invalid?.http) settings.invalid.https = settings.invalid.http;
   settings.bypass = gvariantStrings(values.get("/ignore-hosts") ?? "");
   settings.bypassSyntax = "gnome";
@@ -309,6 +314,8 @@ export function parseKdeProxy(text: string): SystemProxySettings {
     settings.bypass = [];
     delete settings.invalid;
   }
+  // KDE 会先把主机名解析成 IP 再判网段；转发路径上不做 DNS，网段只对 IP 地址生效
+  if (settings.bypass.some((entry) => entry.includes("/") && !entry.includes("://"))) settings.unsupported.push("网段例外对主机名的匹配（KDE 先解析成 IP 再判，ash 只判 IP 地址）");
   if (manual("socksProxy", null) && (!settings.http || !settings.https)) settings.unsupported.push("SOCKS 代理");
   return settings;
 }

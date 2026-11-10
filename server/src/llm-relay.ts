@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { Agent, ProxyAgent, type Dispatcher } from "undici";
-import { describeRoute, redactProxy, relayProxyPlan, routeFor, type ProxyPlan, type ProxyRoute } from "./proxy-route.js";
+import {
+  describeRoute, explicitPortOf, redactProxy, relayProxyPlan, routeFor, routeTarget, type ProxyPlan, type ProxyRoute, type RouteTarget,
+} from "./proxy-route.js";
 import { refreshSystemProxy } from "./system-proxy.js";
 
 type RelayOptions = { headersTimeoutMs?: number; connectTimeoutMs?: number; bodyTimeoutMs?: number };
 type RelayPool = {
   configuration: string;
   direct: Agent;
-  /** 按完整代理地址（含凭据）分；users = 用过它、还没结束的请求数 */
+  /** 按代理地址 + 认证头分（agentKey）；users = 用过它、还没结束的请求数 */
   proxies: Map<string, { agent: ProxyAgent; users: number }>;
   /** 最近一个请求拿到的方案里的代理：不在这里、又没人在用的 ProxyAgent 就关掉（系统代理换了地址/密码） */
   current: Set<string>;
@@ -114,7 +116,7 @@ function acquirePool(upstream: string, connectTimeoutMs: number, bodyTimeoutMs: 
   }
   pool.users += 1;
   if (!pool.retired) {
-    pool.current = new Set([plan.http, plan.https].filter((proxy): proxy is string => proxy !== null));
+    pool.current = new Set((["http", "https"] as const).flatMap((scheme) => (plan[scheme] ? [agentKey(plan[scheme], plan.authorization[scheme])] : [])));
     pruneProxies(pool);
   }
   return pool;
@@ -134,44 +136,63 @@ function releasePool({ pool, proxies }: PoolLease): void {
   else pruneProxies(pool);
 }
 
-/**
- * 凭据由这里换成显式的 Proxy-Authorization，不交给 undici 从 URL 里取：它只在用户名和密码**都非空**时才发，
- * 而「有用户名、密码为空」是合法配置（curl、GNOME 都照发）。URL 里的 userinfo 是转义形式，解出原文再编码；
- * 解不开的（不是合法的 `%XX`）按原文用，不让一个字符拖垮整个请求。
- */
-function proxyAgentOptions(proxy: string): { uri: string; token?: string } {
-  const url = new URL(proxy);
-  if (!url.username && !url.password) return { uri: proxy };
-  const decode = (value: string) => {
-    try { return decodeURIComponent(value); } catch { return value; }
-  };
-  const token = `Basic ${Buffer.from(`${decode(url.username)}:${decode(url.password)}`).toString("base64")}`;
-  url.username = "";
-  url.password = "";
-  return { uri: url.href, token };
-}
+/** 同一个代理地址换了凭据（或开关了认证）是另一个 agent：认证头是建 agent 时定下的 */
+const agentKey = (proxy: string, authorization: string | undefined) => JSON.stringify([proxy, authorization ?? null]);
 
-function proxyAgent(lease: PoolLease, proxy: string): ProxyAgent {
-  let entry = lease.pool.proxies.get(proxy);
+// 认证头由 proxy-route.ts 按「开没开认证」给出，显式交给 ProxyAgent（token）。不让 undici 从 URL 里取：它只在
+// 用户名和密码都非空时才发，「开了认证、某项或两项留空」就漏了。
+function proxyAgent(lease: PoolLease, proxy: string, authorization: string | undefined): ProxyAgent {
+  const key = agentKey(proxy, authorization);
+  let entry = lease.pool.proxies.get(key);
   if (!entry) {
-    entry = { agent: new ProxyAgent({ ...lease.pool.agentOptions, ...proxyAgentOptions(proxy) }), users: 0 };
-    lease.pool.proxies.set(proxy, entry);
+    entry = { agent: new ProxyAgent({ ...lease.pool.agentOptions, uri: proxy, ...(authorization ? { token: authorization } : {}) }), users: 0 };
+    lease.pool.proxies.set(key, entry);
   }
-  if (!lease.proxies.has(proxy)) {
-    lease.proxies.add(proxy);
+  if (!lease.proxies.has(key)) {
+    lease.proxies.add(key);
     entry.users += 1;
   }
   return entry.agent;
 }
 
+/**
+ * 重定向时记下 Location 原文里端口的写法，下一跳按它判（undici 交给 dispatcher 的 origin 已经规范化，
+ * 显式的 `:80`/`:443` 没了）。相对地址沿用这一跳的写法；换了 origin 又没写主机部分的算没写端口。
+ */
+function recordRedirectPorts(handler: Dispatcher.DispatchHandler, hop: RouteTarget, ports: Map<string, number>): Dispatcher.DispatchHandler {
+  return new Proxy(handler, {
+    get(target, key) {
+      const value = Reflect.get(target, key, target);
+      if (key !== "onResponseStart" || typeof value !== "function") return typeof value === "function" ? value.bind(target) : value;
+      return (...args: Parameters<NonNullable<Dispatcher.DispatchHandler["onResponseStart"]>>) => {
+        const [, statusCode, headers] = args;
+        const location = headers.location;
+        if (statusCode >= 300 && statusCode < 400 && typeof location === "string") {
+          try {
+            const next = new URL(location, hop.url);
+            const written = explicitPortOf(location);
+            ports.set(next.origin, written ?? (next.origin === hop.url.origin ? hop.explicitPort : 0));
+          } catch { /* 解析不了的 Location 由 fetch 自己报错 */ }
+        }
+        return value.apply(target, args);
+      };
+    },
+  });
+}
+
 // 走不走代理按**每一跳的 origin** 判（重定向到别的主机也照样判），并把实际走的那条路报给这个请求的诊断；
 // 判成 blocked 的那一跳直接报错，不落到直连池上。代理池按地址懒建，连接在同一个 pool 里复用。
-function routedDispatcher(lease: PoolLease, plan: ProxyPlan, onRoute: (route: ProxyRoute) => void): Dispatcher {
+function routedDispatcher(lease: PoolLease, plan: ProxyPlan, first: RouteTarget, onRoute: (route: ProxyRoute) => void): Dispatcher {
+  // 每个 origin 的端口写法：首跳取请求原文，之后取各次重定向的 Location 原文
+  const ports = new Map([[first.url.origin, first.explicitPort]]);
   return lease.pool.direct.compose((dispatch) => (options, handler) => {
-    const route = routeFor(plan, new URL(String(options.origin)));
+    const url = new URL(String(options.path ?? "/"), String(options.origin));
+    const hop = { url, explicitPort: ports.get(url.origin) ?? 0 };
+    const route = routeFor(plan, hop);
     onRoute(route);
     if (route.blocked) throw Object.assign(new Error("系统代理不可用，拒绝直连"), { code: "ASH_SYSTEM_PROXY_UNAVAILABLE" });
-    return route.proxy ? proxyAgent(lease, route.proxy).dispatch(options, handler) : dispatch(options, handler);
+    const observed = recordRedirectPorts(handler, hop, ports);
+    return route.proxy ? proxyAgent(lease, route.proxy, route.authorization).dispatch(options, observed) : dispatch(options, observed);
   });
 }
 
@@ -212,7 +233,7 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
     lease = null;
   };
   const routeFields = () => ({
-    proxy: route?.blocked ? "blocked" : route?.proxy ? redactProxy(route.proxy) : "direct",
+    proxy: route?.blocked ? "blocked" : route?.proxy ? redactProxy(route.proxy, !!route.authorization) : "direct",
     proxySource: plan?.label ?? "未解析",
     ...(route?.bypass ? { bypass: route.bypass } : {}),
   });
@@ -240,10 +261,11 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
   let response: Response;
   try {
     plan = await relayProxyPlan();
-    try { route = routeFor(plan, new URL(url)); } catch { route = null; }
+    const target = routeTarget(url);
+    route = routeFor(plan, target);
     if (route?.blocked) throw Object.assign(new Error("系统代理不可用，拒绝直连"), { code: "ASH_SYSTEM_PROXY_UNAVAILABLE" });
     lease = { pool: acquirePool(upstream, positiveTimeout(options.connectTimeoutMs, 10_000), bodyTimeoutMs, plan), proxies: new Set() };
-    const dispatcher = routedDispatcher(lease, plan, (actual) => { route = actual; });
+    const dispatcher = routedDispatcher(lease, plan, target, (actual) => { route = actual; });
     const requestInit: RequestInit & { dispatcher: Dispatcher } = { ...init, signal, dispatcher };
     response = await fetch(url, requestInit);
   } catch (error) {

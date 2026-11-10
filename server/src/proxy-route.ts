@@ -8,15 +8,18 @@
 // 选中的代理连不上就是连不上，这里不做「代理失败改直连」—— 那会让代理/直连哪条路坏了都看不出来。
 import { BlockList, isIP } from "node:net";
 import { domainToASCII, domainToUnicode } from "node:url";
-import { systemProxySettings, type BypassSyntax, type SystemProxySettings } from "./system-proxy.js";
+import { systemProxySettings, type BypassSyntax, type ProxyCredentials, type SystemProxySettings } from "./system-proxy.js";
 
 export type ProxySource = "env" | "system" | "none";
 export type ProxyPlan = {
   source: ProxySource;
   /** 进日志的来源说明，如 `环境变量 HTTPS_PROXY`、`系统代理（macOS）` */
   label: string;
+  /** 代理地址，一律不含凭据 */
   http: string | null;
   https: string | null;
+  /** 有 = 这个协议的代理要认证，值就是 Proxy-Authorization 头；凭据不放进地址（见 SystemProxySettings.credentials） */
+  authorization: Partial<Record<"http" | "https", string>>;
   envNoProxy: string;
   systemBypass: BypassRule[];
   /** 系统里配了但没生效的设置（PAC 等），要原样告诉用户 */
@@ -30,6 +33,7 @@ export type ProxyPlan = {
 };
 export type ProxyRoute = {
   proxy: string | null;
+  authorization?: string;
   source: ProxySource;
   /** 直连的原因 */
   bypass?: "loopback" | "no_proxy" | "system";
@@ -63,12 +67,61 @@ function normalizeProxy(value: string): string {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `http://${value}`;
 }
 
-/** 日志/报错里的代理地址：只留协议和主机端口，凭据替换成 *** */
-export function redactProxy(value: string | null): string {
+/**
+ * 要路由的那一跳。URL 规范化会把显式写出的默认端口（`:80`/`:443`）抹掉，而 GNOME、KDE 的端口规则分「写了端口」
+ * 和「没写」（`port.test:80` 只配 `http://port.test:80/`，不配 `http://port.test/`），所以端口的写法从请求原文
+ * （重定向那一跳从 Location 原文）单独带过来；0 = 没写。
+ */
+export type RouteTarget = { url: URL; explicitPort: number };
+
+/** 地址原文里明写的端口；没有主机部分（相对地址）返回 null */
+export function explicitPortOf(raw: string): number | null {
+  const authority = raw.trim().match(/^(?:[a-z][a-z0-9+.-]*:)?[/\\]{2}([^/\\?#]*)/i)?.[1];
+  if (authority === undefined) return null;
+  const hostPort = authority.slice(authority.lastIndexOf("@") + 1);
+  const port = hostPort.startsWith("[") ? hostPort.match(/^\[[^\]]*\]:(\d+)$/)?.[1] : hostPort.match(/:(\d+)$/)?.[1];
+  return port ? Number(port) : 0;
+}
+
+export function routeTarget(raw: string): RouteTarget {
+  return { url: new URL(raw), explicitPort: explicitPortOf(raw) ?? 0 };
+}
+
+const basicAuthorization = ({ user, password }: ProxyCredentials) => `Basic ${Buffer.from(`${user}:${password}`).toString("base64")}`;
+
+/**
+ * 代理地址 → 不含凭据的地址 + 认证头。credentials 是系统单独给的认证（有就是开了认证，两项都空也照发）；
+ * 没给就看地址自己的 userinfo（环境变量、KDE 的写法），它是转义形式，解出原文再编码，解不开的按原文用。
+ * 地址本身解析不了的原样留着，由 ProxyAgent 报错。
+ */
+function proxyEndpoint(proxy: string | null, credentials?: ProxyCredentials): { proxy: string | null; authorization?: string } {
+  if (!proxy) return { proxy };
+  let url: URL;
+  try {
+    url = new URL(proxy);
+  } catch {
+    return { proxy };
+  }
+  const decode = (value: string) => {
+    try { return decodeURIComponent(value); } catch { return value; }
+  };
+  const auth = credentials ?? (url.username || url.password ? { user: decode(url.username), password: decode(url.password) } : null);
+  if (!auth) return { proxy };
+  url.username = "";
+  url.password = "";
+  return { proxy: url.pathname === "/" && !url.search ? url.href.replace(/\/$/, "") : url.href, authorization: basicAuthorization(auth) };
+}
+
+function authorizations(http: { authorization?: string }, https: { authorization?: string }): ProxyPlan["authorization"] {
+  return { ...(http.authorization ? { http: http.authorization } : {}), ...(https.authorization ? { https: https.authorization } : {}) };
+}
+
+/** 日志/报错里的代理地址：只留协议和主机端口，要认证的（地址里带凭据或 authorized）替换成 *** */
+export function redactProxy(value: string | null, authorized = false): string {
   if (!value) return "直连";
   try {
     const url = new URL(value);
-    return `${url.protocol}//${url.username || url.password ? "***@" : ""}${url.host}`;
+    return `${url.protocol}//${authorized || url.username || url.password ? "***@" : ""}${url.host}`;
   } catch {
     return "（无法解析的代理地址）";
   }
@@ -168,7 +221,7 @@ export function parseBypassRule(raw: string, syntax?: BypassSyntax): BypassRule 
   return { kind: "host", pattern, port, scheme: scheme ? `${scheme}:` : null };
 }
 
-function systemBypassed(rules: BypassRule[], url: URL, port: number): boolean {
+function systemBypassed(rules: BypassRule[], { url, explicitPort }: RouteTarget, port: number): boolean {
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
   const family = isIP(host);
   // KDE 拿 Qt 显示用的主机名比（国际化域名是 Unicode），规则里写哪种形式都可能
@@ -176,9 +229,9 @@ function systemBypassed(rules: BypassRule[], url: URL, port: number): boolean {
   return rules.some((rule) => {
     if (rule.kind === "simple") return (rule.ipToo || !family) && !host.includes(".");
     if (rule.kind === "cidr") return family !== 0 && rule.list.check(host, family === 4 ? "ipv4" : "ipv6");
-    if (rule.kind === "domain") return (!rule.port || rule.port === Number(url.port)) && (host === rule.name || host.endsWith(`.${rule.name}`));
+    if (rule.kind === "domain") return (!rule.port || rule.port === explicitPort) && (host === rule.name || host.endsWith(`.${rule.name}`));
     if (rule.kind === "suffix") {
-      const candidates = url.port ? kdeHosts.flatMap((name) => [name, `${name}:${url.port}`]) : kdeHosts;
+      const candidates = explicitPort ? kdeHosts.flatMap((name) => [name, `${name}:${explicitPort}`]) : kdeHosts;
       return candidates.some((name) => (rule.exact ? name === rule.text : name.endsWith(rule.text)));
     }
     if (rule.scheme && rule.scheme !== url.protocol) return false;
@@ -201,17 +254,19 @@ function envNoProxyBypassed(value: string, hostname: string, port: number): bool
   return false;
 }
 
-export function routeFor(plan: ProxyPlan, url: URL): ProxyRoute {
+export function routeFor(plan: ProxyPlan, target: RouteTarget): ProxyRoute {
+  const { url } = target;
   const hostname = url.host.replace(/:\d*$/, "").toLowerCase();
   const port = Number.parseInt(url.port, 10) || DEFAULT_PORTS[url.protocol] || 0;
   if (LOOPBACK.has(hostname)) return { proxy: null, source: plan.source, bypass: "loopback" };
   if (envNoProxyBypassed(plan.envNoProxy, hostname, port)) return { proxy: null, source: plan.source, bypass: "no_proxy" };
   if (plan.unavailable) return { proxy: null, source: plan.source, blocked: true, reason: plan.unavailable };
-  if (systemBypassed(plan.systemBypass, url, port)) return { proxy: null, source: plan.source, bypass: "system" };
+  if (systemBypassed(plan.systemBypass, target, port)) return { proxy: null, source: plan.source, bypass: "system" };
   const scheme = url.protocol === "https:" ? "https" : url.protocol === "http:" ? "http" : null;
   const invalid = scheme ? plan.invalid[scheme] : undefined;
   if (invalid) return { proxy: null, source: plan.source, blocked: true, reason: `${invalid}，不能确定这个请求该走哪个代理，为免绕过系统代理不直连` };
-  return { proxy: scheme ? plan[scheme] : null, source: plan.source };
+  const authorization = scheme ? plan.authorization[scheme] : undefined;
+  return { proxy: scheme ? plan[scheme] : null, ...(authorization ? { authorization } : {}), source: plan.source };
 }
 
 function systemNotice(settings: SystemProxySettings): string | null {
@@ -219,7 +274,7 @@ function systemNotice(settings: SystemProxySettings): string | null {
   if (settings.staleError) notices.push(`这次读取系统代理失败（${settings.staleError}），沿用上次读到的配置`);
   if (settings.unsupported.length) {
     const effective = settings.http || settings.https
-      ? `已按系统手动代理转发（HTTP ${redactProxy(settings.http)}，HTTPS ${redactProxy(settings.https)}）`
+      ? `已按系统手动代理转发（HTTP ${redactProxy(settings.http, !!settings.credentials?.http)}，HTTPS ${redactProxy(settings.https, !!settings.credentials?.https)}）`
       : "当前直连";
     notices.push(`系统代理里的${settings.unsupported.join("、")}ash 不支持、未生效，${effective}；需要时可设置 HTTPS_PROXY 指定代理`);
   }
@@ -229,7 +284,7 @@ function systemNotice(settings: SystemProxySettings): string | null {
 let lastPlan: ProxyPlan | null = null;
 
 function describePlan(plan: ProxyPlan): string {
-  const proxyFor = (scheme: "http" | "https") => (plan.invalid[scheme] ? "地址无法解析（拒绝转发）" : redactProxy(plan[scheme]));
+  const proxyFor = (scheme: "http" | "https") => (plan.invalid[scheme] ? "地址无法解析（拒绝转发）" : redactProxy(plan[scheme], !!plan.authorization[scheme]));
   const target = plan.unavailable ? `远端请求暂停转发：${plan.unavailable}`
     : plan.source === "none" ? "直连" : `HTTP ${proxyFor("http")}，HTTPS ${proxyFor("https")}`;
   return `代理来源：${plan.label}；${target}${plan.notice ? `；${plan.notice}` : ""}`;
@@ -251,8 +306,9 @@ export async function relayProxyPlan(): Promise<ProxyPlan> {
     const httpProxy = http.value ? normalizeProxy(http.value) : null;
     const httpsProxy = https.value ? normalizeProxy(https.value) : httpProxy;
     const names = [...new Set([https.value ? https.name : null, http.value ? http.name : null].filter(Boolean))];
+    const [httpEnd, httpsEnd] = [proxyEndpoint(httpProxy), proxyEndpoint(httpsProxy)];
     return remember({
-      source: "env", label: `环境变量 ${names.join("、")}`, http: httpProxy, https: httpsProxy,
+      source: "env", label: `环境变量 ${names.join("、")}`, http: httpEnd.proxy, https: httpsEnd.proxy, authorization: authorizations(httpEnd, httpsEnd),
       envNoProxy, systemBypass: [], notice: null, unavailable: null, invalid: {},
       key: JSON.stringify(["env", httpProxy, httpsProxy, envNoProxy]),
     });
@@ -262,7 +318,7 @@ export async function relayProxyPlan(): Promise<ProxyPlan> {
   if (settings.error) {
     const unavailable = `${settings.error}，无法确定该不该走代理，为免绕过系统代理不直连；可设置 HTTPS_PROXY 指定代理或 NO_PROXY 指定直连`;
     return remember({
-      source: "system", label: `系统代理（${settings.platform}）`, http: null, https: null,
+      source: "system", label: `系统代理（${settings.platform}）`, http: null, https: null, authorization: {},
       envNoProxy, systemBypass: [], notice, unavailable, invalid: {},
       key: JSON.stringify(["unavailable", settings.platform, envNoProxy, unavailable, notice]),
     });
@@ -271,22 +327,23 @@ export async function relayProxyPlan(): Promise<ProxyPlan> {
   if (!settings.http && !settings.https && !invalid.http && !invalid.https) {
     return remember({
       source: "none", label: "未配置代理",
-      http: null, https: null, envNoProxy, systemBypass: [], notice, unavailable: null, invalid: {},
+      http: null, https: null, authorization: {}, envNoProxy, systemBypass: [], notice, unavailable: null, invalid: {},
       key: JSON.stringify(["none", envNoProxy, notice]),
     });
   }
+  const [httpEnd, httpsEnd] = [proxyEndpoint(settings.http, settings.credentials?.http), proxyEndpoint(settings.https, settings.credentials?.https)];
   return remember({
-    source: "system", label: `系统代理（${settings.platform}）`, http: settings.http, https: settings.https,
+    source: "system", label: `系统代理（${settings.platform}）`, http: httpEnd.proxy, https: httpsEnd.proxy, authorization: authorizations(httpEnd, httpsEnd),
     envNoProxy, systemBypass: settings.bypass.map((rule) => parseBypassRule(rule, settings.bypassSyntax)).filter((rule): rule is BypassRule => rule !== null),
     notice, unavailable: null, invalid,
-    key: JSON.stringify(["system", settings.platform, settings.http, settings.https, invalid, settings.bypassSyntax ?? null, settings.bypass, envNoProxy, notice]),
+    key: JSON.stringify(["system", settings.platform, settings.http, settings.https, settings.credentials ?? null, invalid, settings.bypassSyntax ?? null, settings.bypass, envNoProxy, notice]),
   });
 }
 
 /** 报错里那半句「走的哪条路」 */
 export function describeRoute(plan: ProxyPlan, route: ProxyRoute): string {
   if (route.blocked) return `未转发（${route.reason}）`;
-  const path = route.proxy ? `经代理 ${redactProxy(route.proxy)}（${plan.label}）`
+  const path = route.proxy ? `经代理 ${redactProxy(route.proxy, !!route.authorization)}（${plan.label}）`
     : route.bypass === "loopback" ? "本机地址直连"
     : route.bypass ? `直连（命中${route.bypass === "no_proxy" ? " NO_PROXY" : "系统代理绕过列表"}）`
     : `直连（${plan.label}）`;
