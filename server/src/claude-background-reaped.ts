@@ -145,8 +145,9 @@ export class ClaudeBackgroundTrace {
   /** 已经收到 tool_result 的调用。 */
   private returned = new Set<string>();
   /**
-   * 起过后台任务的调用，不随回合清账回收（量只有派出去的后台任务那么多）。续上的那条命沿用这次
-   * 调用的 tool_use_id，那时调用早就返回过、`returned` 里那一笔可能已经清掉了，它照样是后台的。
+   * 起过子代理 / 工作流的调用（看到 task_started 就记，不管那条命后来是先完成还是先回执），不随回合
+   * 清账回收：量只有派出去的子代理、工作流那么多，后台 Bash 不会被续上、不记。续上的那条命沿用
+   * 这次调用的 tool_use_id，那时调用早就返回过、`returned` 里那一笔可能已经清掉了，它照样是后台的。
    */
   private launched = new Set<string>();
   /**
@@ -193,10 +194,7 @@ export class ClaudeBackgroundTrace {
     if (typeof toolUseId !== "string" || !toolUseId) return;
     this.returned.add(toolUseId);
     for (const task of this.runs()) {
-      if (task.toolUseId === toolUseId && !task.note && !task.stopOk) {
-        task.background = true;
-        this.launched.add(toolUseId);
-      }
+      if (task.toolUseId === toolUseId && !task.note && !task.stopOk) task.background = true;
     }
     const targets = this.stopCalls.get(toolUseId);
     if (!targets) return;
@@ -224,7 +222,7 @@ export class ClaudeBackgroundTrace {
       const prior = this.tasks.get(taskId);
       if (prior) this.earlier.push(prior);
       const background = !!toolUseId && (this.returned.has(toolUseId) || this.launched.has(toolUseId));
-      if (background) this.launched.add(toolUseId);
+      if (toolUseId && kind !== "bash") this.launched.add(toolUseId);
       this.tasks.set(taskId, { taskId, kind, toolUseId, background });
       return;
     }
@@ -234,10 +232,11 @@ export class ClaudeBackgroundTrace {
     const note: Note = {
       stopped: status === "stopped", sessionEnded: SESSION_ENDED_RE.test(String(ev.summary ?? "")), idle: this.idle,
     };
-    // 同一条事件投递了两次（uuid 相同）只算一次；不同事件之间的重复认不出，交给下面的身份分组兜。
+    // 同一条事件投递了两次（uuid 相同）只算一次。只有子代理 / 工作流会被续上、让重投落到新那条命
+    // 头上，只记它们的（量随它们的命数，不随全部通知涨）；不同事件之间的重复认不出，交给下面的身份分组兜。
     const uuid = typeof ev.uuid === "string" ? ev.uuid : "";
     if (uuid && this.seenNotes.has(uuid)) return;
-    if (uuid) this.seenNotes.add(uuid);
+    if (uuid && this.runs().some((task) => task.taskId === taskId && task.kind !== "bash")) this.seenNotes.add(uuid);
     const toolUseId = typeof ev.tool_use_id === "string" ? ev.tool_use_id : "";
     this.loose.set(taskId, [...this.loose.get(taskId) ?? [], { note, toolUseId }]);
     this.settle(taskId);
@@ -389,6 +388,7 @@ export class ClaudeBackgroundTrace {
     this.earlier = [];
     this.loose.clear();
     this.seenNotes.clear();
+    this.launched.clear();
     await this.writes;
   }
 

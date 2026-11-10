@@ -481,6 +481,18 @@ async function main(): Promise<void> {
   childEnd(redelivered, "toolu_first", "completed", "evt-2");
   check(redelivered.waiting().agent === 0 && redelivered.tally().agent?.finished === 2, "两条不同通知到齐就都结束",
     `${JSON.stringify(redelivered.waiting())} ${JSON.stringify(redelivered.tally())}`);
+  // 第一次完成得比调用回执还早（那条命不算后台），跨回合续上的那条命照样要等（自由审查 jTJUl1fEIRd- R2）
+  const quickFirst = new ClaudeBackgroundTrace("quick-first");
+  call(quickFirst, "Agent", "toolu_quick");
+  started(quickFirst, "child", "toolu_quick", "local_agent");
+  childEnd(quickFirst, "toolu_quick");
+  returned(quickFirst, "toolu_quick");
+  result(quickFirst);
+  call(quickFirst, "SendMessage", "toolu_more");
+  returned(quickFirst, "toolu_more");
+  started(quickFirst, "child", "toolu_quick", "local_agent");
+  check(quickFirst.waiting().agent === 1 && quickFirst.tally().agent?.total === 1,
+    "先完成后回执的子代理跨回合续上：等它、记账", `${JSON.stringify(quickFirst.waiting())} ${JSON.stringify(quickFirst.tally())}`);
 
   // ── ②⁵ 停止回执本身就是证据，不靠终态通知来触发（第 4 次审查 R1）──────────────────
   for (const [tool, field, kind, type] of [
