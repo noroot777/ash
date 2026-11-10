@@ -22,7 +22,7 @@ import type { AshClient } from "./ash-client.js";
 import { newTaskCard, taskLink } from "./cards.js";
 import { createEnvelope, type EnvelopeRow } from "./envelopes.js";
 import { renderCard, type CardBlock, type CardButton, type CardModel } from "./feishu/cards.js";
-import { cardLinkBase } from "./link-base.js";
+import { readOptions } from "./meta.js";
 import type { OutboxRow } from "./outbox.js";
 import type { Reconciler } from "./reconcile.js";
 import { originOfScope, requestScope, scopeOfRow, type Origin, type ScopeBody } from "./scope.js";
@@ -114,7 +114,7 @@ export class Browser {
     const result = await this.deps.ash.get<TaskListItem[]>(principal, "/api/tasks");
     if (!result.ok) return { error: result.error };
     const tasks = orderedListTasks((Array.isArray(result.data) ? result.data : []).filter((task) => task.projectId === project.id));
-    const base = await cardLinkBase();
+    const base = await readOptions().then((options) => options.publicBaseUrl, () => null);
     return { kind: "tasks", project, index, tasks, shown: Math.max(BROWSE_PAGE, Math.min(shown, BROWSE_MAX)), picker, base };
   }
 

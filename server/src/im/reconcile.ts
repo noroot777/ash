@@ -42,7 +42,6 @@ import { OutboxExits, summaryItems } from "./exits.js";
 import { extrasFor } from "./extras.js";
 import type { FeishuApi } from "./feishu/api.js";
 import { renderCard } from "./feishu/cards.js";
-import { cardLinkBase } from "./link-base.js";
 import { readOptions } from "./meta.js";
 import { advanceOutcomes, forgetOutcomes, outcomesOf, outcomesRecorded, staleOutcomeTasks } from "./outcomes.js";
 import { cardHeaderOf, OutboxSender, RECALL, RECALLED, type Destination, type OutboxRow } from "./outbox.js";
@@ -151,17 +150,16 @@ export class Reconciler {
   async reconcile(taskIds: string[]): Promise<void> {
     const ids = await withTeamLeads(taskIds);
     const options = await readOptions();
-    const base = await cardLinkBase();
     const creations: Creation[] = [];
     for (let i = 0; i < ids.length; i += BATCH) {
       const views = await viewsOf(ids.slice(i, i + BATCH));
       for (const [taskId, view] of views) {
         if (this.stillSettling(taskId, view)) continue;
-        creations.push(...await this.settleTask(taskId, view, base, options.titleOnlyProjectIds));
+        creations.push(...await this.settleTask(taskId, view, options.publicBaseUrl, options.titleOnlyProjectIds));
         await this.announce(taskId, view, options.notifyCompleted);
       }
     }
-    await this.create(creations, base, options.titleOnlyProjectIds);
+    await this.create(creations, options.publicBaseUrl, options.titleOnlyProjectIds);
     this.sender.kick();
   }
 
@@ -313,7 +311,7 @@ export class Reconciler {
     const dest: Destination = { receiveType: row.receiveType as Destination["receiveType"], receiveId: row.receiveId, recipientOpenId: row.recipientOpenId };
     const titleOnly = options.titleOnlyProjectIds.includes(view.task.projectId);
     const envelope = await this.envelopeFor(row.id, view, dest);
-    const { content, renderKey } = await this.render(view, dest, envelope, await cardLinkBase(), options.titleOnlyProjectIds,
+    const { content, renderKey } = await this.render(view, dest, envelope, options.publicBaseUrl, options.titleOnlyProjectIds,
       titleOnly ? lastPress.brief : lastPress.full);
     return { card: JSON.parse(content) as Record<string, unknown>, renderKey };
   }

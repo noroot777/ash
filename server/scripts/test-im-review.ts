@@ -1,5 +1,5 @@
 // 有审查的任务：审查出结论之前不推「完成了，等你验收」，审查通过时推的那张就说「审查通过」（理由见 shared
-// task-attention.ts humanTurnOf、reconcile.ts resolutionLine）；卡片深链不依赖飞书内置浏览器解析 Tailscale 的名字（link-base.ts）。
+// task-attention.ts humanTurnOf、reconcile.ts resolutionLine）。
 //
 // 钉住的几件事：
 // ① 预约着审查（跑着时预约、修完自动复审）的任务停下来 → 不推；
@@ -8,7 +8,7 @@
 // ④ 审查通过 → 推一张，副标题是「审查通过，等你验收」；
 // ⑤ 通过之后执行者又跑了一轮 → 那次通过不算这一版的，回到「完成了，等你验收」；
 // ⑥ 用完轮数没通过、没有下一轮 → 推，说「审查没通过，等你决定」，按钮要二次确认；
-// ⑦ 深链：http 的名字解析到 Tailscale 网段就换成 IP；https、公网地址、本来就是 IP 的不动；解析不出照原样。
+// ⑦ 修完等自动复审（停着的链 + 续轮预约）→ 不推。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,7 +26,6 @@ try {
   const { projects, tasks } = await import("../src/db/schema.js");
   const { freeReviewRuns, freeWorkflowStates } = await import("../src/db/schema-free-workflow.js");
   const { imBindings, imOutbox } = await import("../src/db/schema-im.js");
-  const { resolveLinkBase, resetLinkBaseCache } = await import("../src/im/link-base.js");
   const { eq } = await import("drizzle-orm");
   const { APP, OWNER, FakeFeishu, buildApp, assemble, buttonsOf, contentOf, textOf } = await import("./im-fixture.js");
 
@@ -121,22 +120,6 @@ try {
   await reserve("te", "re");
   await reconcile("te");
   assert.equal((await rowsOf("te")).length, 0, "下一轮马上就审：不推");
-
-  // ── ⑧ 深链前缀 ─────────────────────────────────────────────────────────
-  const lookups: string[] = [];
-  const tailnet = async (host: string) => { lookups.push(host); return "100.92.165.5"; };
-  assert.equal(await resolveLinkBase("http://mbp.tail97f3a6.ts.net:4317", tailnet), "http://100.92.165.5:4317");
-  assert.equal(await resolveLinkBase("http://mbp.tail97f3a6.ts.net:4317", tailnet), "http://100.92.165.5:4317");
-  assert.equal(lookups.length, 1, "解析结果缓存着，不是每张卡都去解析");
-  assert.equal(await resolveLinkBase("http://mbp:4317/ash", tailnet), "http://100.92.165.5:4317/ash", "短名、带路径的照样换");
-  assert.equal(await resolveLinkBase("https://mbp.tail97f3a6.ts.net", tailnet), "https://mbp.tail97f3a6.ts.net", "https 证书绑名字：不换");
-  assert.equal(await resolveLinkBase("http://100.92.165.5:4317", tailnet), "http://100.92.165.5:4317");
-  assert.equal(await resolveLinkBase("http://ash.example.com", async () => "93.184.216.34"), "http://ash.example.com", "公网地址不换");
-  resetLinkBaseCache();
-  assert.equal(await resolveLinkBase("http://mbp.tail97f3a6.ts.net:4317", async () => null), "http://mbp.tail97f3a6.ts.net:4317", "解析不出照原样");
-  assert.equal(await resolveLinkBase("http://mbp.tail97f3a6.ts.net:4317", tailnet), "http://100.92.165.5:4317", "解析不出不缓存，下一次再试");
-  assert.equal(await resolveLinkBase("http://mbp.tail97f3a6.ts.net:4317", async () => null), "http://100.92.165.5:4317", "缓存期内不重新解析");
-  assert.equal(await resolveLinkBase(null, tailnet), null);
 
   im.reconciler.stop();
   im.sender.stop();

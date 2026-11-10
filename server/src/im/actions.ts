@@ -36,7 +36,7 @@ import {
 } from "./envelopes.js";
 import { NEUTRAL_CONTENT } from "./exits.js";
 import { renderCard, type CardTone } from "./feishu/cards.js";
-import { cardLinkBase } from "./link-base.js";
+import { readOptions } from "./meta.js";
 import { cardHeaderOf, type Destination, type OutboxRow, type OutboxSender } from "./outbox.js";
 import { ACTED, type Reconciler } from "./reconcile.js";
 import { originOf, replyScope, scopeOfRow, type OutboxScope } from "./scope.js";
@@ -219,7 +219,7 @@ export class CardActions {
     if (!views.has(envelope.taskId ?? "")) return toast("warning", "这一下没读清任务现状，请稍后再点");
     const view = views.get(envelope.taskId ?? "") ?? null;
     if (view && !await canSeeProject(actor, view.task.projectId)) return toast("error", "你看不到这个任务所在的项目，点不了这张卡");
-    const link = view ? taskLink(await cardLinkBase(), view) : null;
+    const link = view ? taskLink((await readOptions()).publicBaseUrl, view) : null;
     if (!view?.turn || view.turn.kind !== envelope.action || view.turn.generation !== envelope.generation) {
       // 旧卡：顺手把它收起来，回应里带上收好的样子。
       const text = !view ? "任务已删除。" : "这张卡已经过时：事情已在别处处理，或者有了新的一轮。";
