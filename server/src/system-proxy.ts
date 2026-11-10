@@ -25,10 +25,15 @@ export type SystemProxySettings = {
   /** 读到了但 ash 不支持、因而没有生效的设置 */
   unsupported: string[];
   /**
-   * 不知道系统要走哪个代理：第一次就没读到，或读到的代理地址拼不成合法 URL。
-   * 这时远端请求一律拒绝而不是直连 —— 系统代理可能正开着，直连就是绕过它。
+   * 整份配置没读到（第一次读就失败）：不知道系统要走哪个代理，也不知道绕过列表，
+   * 远端请求一律拒绝而不是直连 —— 系统代理可能正开着，直连就是绕过它。
    */
   error?: string;
+  /**
+   * 读到了，但某个协议的代理地址拼不成合法 URL：只有这个协议的请求无法确定走法、要拒绝；
+   * 另一个协议的代理和绕过列表都是确知的，照常生效。
+   */
+  invalid?: Partial<Record<"http" | "https", string>>;
   /** 这次读取失败了、沿用的是上次读到的配置，记下失败原因 */
   staleError?: string;
 };
@@ -40,14 +45,15 @@ const NONE = (platform: string): SystemProxySettings => ({ platform, http: null,
 /**
  * 系统设置里的代理主机（+ 单独的端口）→ 代理 URL。单独给了端口时 host 只当主机名，裸 IPv6 补方括号
  * （不能拿末尾的「:数字」猜有没有端口，`::1` 的末段就长这样）；没给端口时 host 可以是 `主机:端口`、
- * `[v6]:端口` 或带 scheme 的完整地址。拼不成合法 URL 就记进 settings.error，绝不当成「没配代理」。
+ * `[v6]:端口` 或带 scheme 的完整地址。拼不成合法 URL 就按协议记进 settings.invalid，绝不当成「没配代理」。
+ * `scheme` 为 null 的（只用来判断「有没有配 SOCKS」）不记。
  */
-function proxyUrl(settings: SystemProxySettings, host: string, port?: string | number): string | null {
+function proxyUrl(settings: SystemProxySettings, scheme: "http" | "https" | null, host: string, port?: string | number): string | null {
   const raw = host.trim();
   if (!raw) return null;
   const portText = String(port ?? "").trim();
-  const scheme = raw.match(/^([a-z][a-z0-9+.-]*):\/\/(.*)$/i);
-  let authority = (scheme ? scheme[2] : raw).replace(/\/+$/, "");
+  const prefix = raw.match(/^([a-z][a-z0-9+.-]*):\/\/(.*)$/i);
+  let authority = (prefix ? prefix[2] : raw).replace(/\/+$/, "");
   if (portText && portText !== "0") {
     const hostname = authority.replace(/^\[(.*)\]$/, "$1");
     authority = `${isIP(hostname) === 6 ? `[${hostname}]` : hostname}:${portText}`;
@@ -55,11 +61,11 @@ function proxyUrl(settings: SystemProxySettings, host: string, port?: string | n
     authority = `[${authority}]`;
   }
   try {
-    const url = new URL(`${scheme ? scheme[1] : "http"}://${authority}`);
+    const url = new URL(`${prefix ? prefix[1] : "http"}://${authority}`);
     if (!url.hostname || url.pathname !== "/" || url.search || url.hash || (portText && !/^\d{1,5}$/.test(portText))) throw new Error("bad");
     return url.href.replace(/\/$/, "");
   } catch {
-    settings.error ??= `系统代理地址无法解析（${raw.includes("@") ? "含凭据，已隐藏" : raw}${portText && portText !== "0" ? ` 端口 ${portText}` : ""}）`;
+    if (scheme) (settings.invalid ??= {})[scheme] ??= `系统 ${scheme.toUpperCase()} 代理地址无法解析（${raw.includes("@") ? "含凭据，已隐藏" : raw}${portText && portText !== "0" ? ` 端口 ${portText}` : ""}）`;
     return null;
   }
 }
@@ -102,8 +108,8 @@ export function parseScutilProxy(text: string): SystemProxySettings {
   }
   const on = (key: string) => scalars.get(key) === "1";
   const settings = NONE("macOS");
-  if (on("HTTPEnable")) settings.http = proxyUrl(settings, scalars.get("HTTPProxy") ?? "", scalars.get("HTTPPort"));
-  if (on("HTTPSEnable")) settings.https = proxyUrl(settings, scalars.get("HTTPSProxy") ?? "", scalars.get("HTTPSPort"));
+  if (on("HTTPEnable")) settings.http = proxyUrl(settings, "http", scalars.get("HTTPProxy") ?? "", scalars.get("HTTPPort"));
+  if (on("HTTPSEnable")) settings.https = proxyUrl(settings, "https", scalars.get("HTTPSProxy") ?? "", scalars.get("HTTPSPort"));
   settings.bypass = [...(arrays.get("ExceptionsList") ?? [])];
   if (on("ExcludeSimpleHostnames")) settings.bypass.push("<local>");
   if (on("ProxyAutoConfigEnable")) settings.unsupported.push(`PAC 自动配置（${describeUrl(scalars.get("ProxyAutoConfigURLString") ?? "")}）`);
@@ -139,11 +145,12 @@ export function parseWindowsProxy(settingsText: string, connectionsText = ""): S
         const [scheme, address] = part.split("=", 2).map((item) => item.trim());
         if (scheme && address) byScheme.set(scheme.toLowerCase(), address);
       }
-      settings.http = proxyUrl(settings, byScheme.get("http") ?? "");
-      settings.https = proxyUrl(settings, byScheme.get("https") ?? "");
+      settings.http = proxyUrl(settings, "http", byScheme.get("http") ?? "");
+      settings.https = proxyUrl(settings, "https", byScheme.get("https") ?? "");
       if (byScheme.has("socks") && (!settings.http || !settings.https)) settings.unsupported.push("SOCKS 代理");
     } else {
-      settings.http = settings.https = proxyUrl(settings, server);
+      settings.http = settings.https = proxyUrl(settings, "http", server);
+      if (settings.invalid?.http) settings.invalid.https = settings.invalid.http.replace("HTTP", "HTTPS");
     }
     settings.bypass = (values.get("proxyoverride") ?? "").split(";").map((item) => item.trim()).filter(Boolean);
   }
@@ -208,7 +215,7 @@ export function parseGnomeProxy(text: string): SystemProxySettings {
   const manual = (scheme: "http" | "https") => {
     const host = text1(`${scheme}/host`);
     const port = (values.get(`${scheme}/port`) ?? "").replace(/^\D+/, "");
-    const url = proxyUrl(settings, host, port);
+    const url = proxyUrl(settings, scheme, host, port);
     if (!url || scheme !== "http" || values.get("http/use-authentication") !== "true") return url;
     const user = text1("http/authentication-user");
     if (!user) return url;
@@ -224,6 +231,7 @@ export function parseGnomeProxy(text: string): SystemProxySettings {
   settings.http = manual("http");
   // 同 glib-networking：HTTPS 主机留空时 HTTPS 也走 HTTP 代理（连同认证信息）
   settings.https = text1("https/host") ? manual("https") : settings.http;
+  if (!text1("https/host") && settings.invalid?.http) settings.invalid.https = settings.invalid.http;
   settings.bypass = gvariantStrings(values.get("/ignore-hosts") ?? "");
   if (text1("socks/host") && (!settings.http || !settings.https)) settings.unsupported.push("SOCKS 代理");
   return settings;
@@ -248,20 +256,21 @@ export function parseKdeProxy(text: string): SystemProxySettings {
   if (type === "3") settings.unsupported.push("自动发现代理（WPAD）");
   if (type !== "1") return settings; // 0=直连，4=「使用环境变量」—— 环境变量那一档 proxy-route.ts 已经先看过了
   // KDE 把端口用空格隔开写：`http://127.0.0.1 7890`
-  const manual = (key: string) => {
+  const manual = (key: string, scheme: "http" | "https" | null) => {
     const [host = "", port] = (values.get(key) ?? "").split(/\s+/);
-    return proxyUrl(settings, host, port);
+    return proxyUrl(settings, scheme, host, port);
   };
-  settings.http = manual("httpProxy");
-  settings.https = manual("httpsProxy");
+  settings.http = manual("httpProxy", "http");
+  settings.https = manual("httpsProxy", "https");
   settings.bypass = (values.get("NoProxyFor") ?? "").split(/[,\s]+/).filter(Boolean);
   if (values.get("ReversedException") === "true") {
     // 「只有列表里的走代理」，这种反向语义不套用，宁可整份不生效也不猜
     settings.unsupported.push("反向例外列表（只代理列出的地址）");
     settings.http = settings.https = null;
     settings.bypass = [];
+    delete settings.invalid;
   }
-  if (manual("socksProxy") && (!settings.http || !settings.https)) settings.unsupported.push("SOCKS 代理");
+  if (manual("socksProxy", null) && (!settings.http || !settings.https)) settings.unsupported.push("SOCKS 代理");
   return settings;
 }
 

@@ -4,8 +4,20 @@ import { describeRoute, redactProxy, relayProxyPlan, routeFor, type ProxyPlan, t
 import { refreshSystemProxy } from "./system-proxy.js";
 
 type RelayOptions = { headersTimeoutMs?: number; connectTimeoutMs?: number; bodyTimeoutMs?: number };
-type RelayPool = { configuration: string; direct: Agent; proxies: Map<string, ProxyAgent>; agents: Dispatcher[]; agentOptions: Agent.Options };
+type RelayPool = {
+  configuration: string;
+  direct: Agent;
+  proxies: Map<string, ProxyAgent>;
+  agents: Dispatcher[];
+  agentOptions: Agent.Options;
+  /** 正在用这个池的请求数（从发出到重定向链走完、响应流结束） */
+  users: number;
+  /** 已被新池顶替：没人用了就关 */
+  retired: boolean;
+};
 const dispatchers = new Map<string, RelayPool>();
+/** 还没关的池，含已被顶替、但仍有在途请求的旧池 */
+const openPools = new Set<RelayPool>();
 const closingDispatchers = new Set<Promise<void>>();
 type RelayPhase = "headers" | "stream";
 type RelayDiagnostic = {
@@ -51,6 +63,7 @@ function positiveTimeout(value: unknown, fallback: number): number {
 }
 
 function retireDispatcher(pool: RelayPool): Promise<void> {
+  openPools.delete(pool);
   const closing = Promise.all(pool.agents.map((agent) => agent.close())).then(() => {}, () => {});
   closingDispatchers.add(closing);
   void closing.finally(() => closingDispatchers.delete(closing));
@@ -58,22 +71,37 @@ function retireDispatcher(pool: RelayPool): Promise<void> {
 }
 
 export async function closeRelayDispatchers(): Promise<void> {
-  const current = [...dispatchers.values()];
+  const current = [...openPools];
   dispatchers.clear();
   await Promise.all([...closingDispatchers, ...current.map(retireDispatcher)]);
 }
 
-// 每个供应商 origin 一个独立连接池（不和全局 fetch 抢连接），代理方案一变就整池换掉。
-function relayPool(upstream: string, plan: ProxyPlan, connectTimeoutMs: number, bodyTimeoutMs: number): RelayPool {
-  const configuration = JSON.stringify([plan.key, connectTimeoutMs, bodyTimeoutMs]);
-  const existing = dispatchers.get(upstream);
-  if (existing?.configuration === configuration) return existing;
-  const agentOptions = { allowH2: false, connect: { timeout: connectTimeoutMs }, headersTimeout: 0, bodyTimeout: bodyTimeoutMs };
-  const direct = new Agent(agentOptions);
-  const pool: RelayPool = { configuration, direct, proxies: new Map(), agents: [direct], agentOptions };
-  dispatchers.set(upstream, pool);
-  if (existing) void retireDispatcher(existing);
+// 每个供应商 origin 一个独立连接池（不和全局 fetch 抢连接）。池只取决于连接参数：走不走代理、走哪个，
+// 每一跳都按这个请求自己拿到的 plan 现判（routedDispatcher），所以代理/绕过配置变了不换池，
+// 代理地址变了只是在池里多一个 ProxyAgent。连接参数变了才换池，而旧池要等用它的请求（含整条重定向链和
+// 响应流）全部结束才关 —— 提前关，在途请求的下一跳会撞上已关闭的 agent（UND_ERR_CLOSED）。
+function acquirePool(upstream: string, connectTimeoutMs: number, bodyTimeoutMs: number): RelayPool {
+  const configuration = JSON.stringify([connectTimeoutMs, bodyTimeoutMs]);
+  let pool = dispatchers.get(upstream);
+  if (pool?.configuration !== configuration) {
+    const previous = pool;
+    const agentOptions = { allowH2: false, connect: { timeout: connectTimeoutMs }, headersTimeout: 0, bodyTimeout: bodyTimeoutMs };
+    const direct = new Agent(agentOptions);
+    pool = { configuration, direct, proxies: new Map(), agents: [direct], agentOptions, users: 0, retired: false };
+    dispatchers.set(upstream, pool);
+    openPools.add(pool);
+    if (previous) {
+      previous.retired = true;
+      if (previous.users === 0) void retireDispatcher(previous);
+    }
+  }
+  pool.users += 1;
   return pool;
+}
+
+function releasePool(pool: RelayPool): void {
+  pool.users -= 1;
+  if (pool.retired && pool.users === 0 && openPools.has(pool)) void retireDispatcher(pool);
 }
 
 function proxyAgent(pool: RelayPool, proxy: string): ProxyAgent {
@@ -128,8 +156,13 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
   let timedOut = false;
   let plan: ProxyPlan | null = null;
   let route: ProxyRoute | null = null;
+  let pool: RelayPool | null = null;
+  const release = () => {
+    if (pool) releasePool(pool);
+    pool = null;
+  };
   const routeFields = () => ({
-    proxy: route?.proxy ? redactProxy(route.proxy) : "direct",
+    proxy: route?.blocked ? "blocked" : route?.proxy ? redactProxy(route.proxy) : "direct",
     proxySource: plan?.label ?? "未解析",
     ...(route?.bypass ? { bypass: route.bypass } : {}),
   });
@@ -159,11 +192,12 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
     plan = await relayProxyPlan();
     try { route = routeFor(plan, new URL(url)); } catch { route = null; }
     if (route?.blocked) throw Object.assign(new Error("系统代理不可用，拒绝直连"), { code: "ASH_SYSTEM_PROXY_UNAVAILABLE" });
-    const pool = relayPool(upstream, plan, positiveTimeout(options.connectTimeoutMs, 10_000), bodyTimeoutMs);
+    pool = acquirePool(upstream, positiveTimeout(options.connectTimeoutMs, 10_000), bodyTimeoutMs);
     const dispatcher = routedDispatcher(pool, plan, (actual) => { route = actual; });
     const requestInit: RequestInit & { dispatcher: Dispatcher } = { ...init, signal, dispatcher };
     response = await fetch(url, requestInit);
   } catch (error) {
+    release();
     throw failure(error, "headers");
   } finally {
     clearTimeout(timer);
@@ -174,6 +208,7 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
     logDiagnostic({ requestId, upstream, method, phase: "headers", status: response.status, elapsedMs: Date.now() - startedAt, codes: [`HTTP_${response.status}`], ...routeFields() });
   }
   if (!response.body) {
+    release();
     return new Response(null, { status: response.status, statusText: response.statusText, headers });
   }
   const reader = response.body.getReader();
@@ -184,18 +219,24 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
         const next = await reader.read();
         if (bodyCanceled) return;
         if (next.done) {
+          release();
           controller.close();
         } else {
           controller.enqueue(next.value);
         }
       } catch (error) {
+        release();
         if (bodyCanceled) return;
         controller.error(failure(error, "stream"));
       }
     },
     async cancel(reason) {
       bodyCanceled = true;
-      await reader.cancel(reason);
+      try {
+        await reader.cancel(reason);
+      } finally {
+        release();
+      }
     },
   });
   return new Response(body, { status: response.status, statusText: response.statusText, headers });

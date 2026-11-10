@@ -30,6 +30,7 @@ const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[ke
 const sockets = new Set<Socket>();
 const calls: { path: string; method: string; socket: Socket }[] = [];
 let slowStarted: (() => void) | undefined;
+const heldRedirects: import("node:http").ServerResponse[] = [];
 let abortClosed: (() => void) | undefined;
 const upstream = createServer(async (request, response) => {
   calls.push({ path: request.url ?? "", method: request.method ?? "", socket: request.socket });
@@ -37,6 +38,10 @@ const upstream = createServer(async (request, response) => {
   if (request.url?.startsWith("/redirect?to=")) {
     response.writeHead(302, { location: decodeURIComponent(request.url.slice("/redirect?to=".length)) });
     response.end();
+    return;
+  }
+  if (request.url === "/held-redirect") {
+    heldRedirects.push(response);
     return;
   }
   if (request.url === "/hang") {
@@ -100,11 +105,16 @@ const origin = `http://127.0.0.1:${address.port}`;
 const proxy = createServer();
 let proxyAuthority = "";
 let proxyAuthorization = "";
+// 代理 CONNECT 隧道打到上游的那一端端口：上游看到的来源端口在这里面 = 这个请求确实经过了代理。
+// 隧道会 keep-alive 复用，所以「有没有新的 CONNECT」不能代替这个判断
+const proxyTunnelPorts = new Set<number>();
+const lastCallViaProxy = () => proxyTunnelPorts.has(calls.at(-1)!.socket.remotePort ?? -1);
 const tunnelSockets = new Set<Duplex>();
 proxy.on("connect", (request, client, head) => {
   proxyAuthority = request.url ?? "";
   proxyAuthorization = request.headers["proxy-authorization"] ?? "";
   const target = connect(address.port, "127.0.0.1", () => {
+    if (target.localPort) proxyTunnelPorts.add(target.localPort);
     client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
     if (head.length) target.write(head);
     target.pipe(client);
@@ -283,6 +293,7 @@ try {
   const afterDisable = await relayFetch(mappedUrl, {});
   assert.deepEqual(await afterDisable.json(), { ok: true });
   assert.equal(proxyAuthority, "", "系统代理关掉并刷新后，同一供应商改为直连");
+  assert(!lastCallViaProxy());
   assert(warnings.some((line) => line.includes("代理来源：系统代理（测试）") && line.includes("http://***@127.0.0.1")));
   assert(warnings.some((line) => line.includes("代理来源：未配置代理")));
   console.log("  ✓ 未配置环境变量时走系统代理（带凭据），系统代理变化刷新后立即切换，本机供应商始终直连");
@@ -295,13 +306,14 @@ try {
   proxyAuthority = "";
   const keptProxy = await relayFetch(mappedUrl, {});
   assert.deepEqual(await keptProxy.json(), { ok: true });
-  assert.equal(proxyAuthority, `[::ffff:7f00:1]:${address.port}`, "刷新失败后仍经上次读到的系统代理，而不是直连");
+  assert(lastCallViaProxy(), "刷新失败后仍经上次读到的系统代理，而不是直连");
   setSystemProxyReaderForTests(systemProxyReader, 60_000);
   const callsBeforeBlocked = calls.length;
   await assert.rejects(relayFetch(mappedUrl, { method: "POST", body: "inference-request" }), (error: unknown) => {
     assert(error instanceof RelayRequestError);
     assert.equal(error.diagnostic.status, 502);
     assert.deepEqual(error.diagnostic.codes, ["ASH_SYSTEM_PROXY_UNAVAILABLE"]);
+    assert.equal(error.diagnostic.proxy, "blocked", "没发出去的请求诊断里不写成直连");
     assert.match(error.message, /系统代理不可用，未转发（读取系统代理失败（EACCES）/);
     return true;
   });
@@ -316,6 +328,57 @@ try {
   systemProxyFailure = null;
   await refreshSystemProxy();
   console.log("  ✓ 系统代理读取失败：沿用上次有效配置；第一次就失败则拒绝远端请求（含重定向那一跳），不偷偷直连");
+
+  // ---- 只有一个协议的地址写坏：另一个协议和绕过列表照常 ----
+  systemProxy = { platform: "测试", http: systemProxyUrl, https: null, bypass: ["[::ffff:7f00:1]"], unsupported: [], invalid: { https: "系统 HTTPS 代理地址无法解析（bad host 端口 1）" } };
+  await refreshSystemProxy();
+  proxyAuthority = "";
+  const httpStillProxied = await relayFetch(`http://provider.test:${address.port}/healthy`, {});
+  assert.deepEqual(await httpStillProxied.json(), { ok: true });
+  assert(lastCallViaProxy(), "HTTP 代理照常可用");
+  proxyAuthority = "";
+  const bypassStillDirect = await relayFetch(mappedUrl, {});
+  assert.deepEqual(await bypassStillDirect.json(), { ok: true });
+  assert(!lastCallViaProxy(), "系统绕过列表照常直连");
+  await assert.rejects(relayFetch(`https://provider.test:${address.port}/healthy`, {}), (error: unknown) => {
+    assert(error instanceof RelayRequestError);
+    assert.deepEqual(error.diagnostic.codes, ["ASH_SYSTEM_PROXY_UNAVAILABLE"]);
+    assert.match(error.message, /未转发（系统 HTTPS 代理地址无法解析/);
+    return true;
+  });
+  console.log("  ✓ 某个协议的系统代理地址写坏只拒绝那个协议的请求，另一协议与绕过列表照常");
+
+  // ---- 刷新配置、换连接池都不能打断在途请求的重定向链 ----
+  systemProxy = { platform: "测试", http: systemProxyUrl, https: systemProxyUrl, bypass: [], unsupported: [] };
+  await refreshSystemProxy();
+  // 两条在途请求：一条重定向回本机供应商（下一跳走直连 agent），一条经系统代理、重定向回同一远端（下一跳走代理 agent）。
+  // 两个池里的这两个 agent 在换池前就已存在 —— 换池时提前关掉，下一跳就是 UND_ERR_CLOSED
+  const remoteOrigin = `http://provider.test:${address.port}`;
+  const warmRemote = await relayFetch(`${remoteOrigin}/healthy`, {});
+  assert.deepEqual(await warmRemote.json(), { ok: true });
+  const inFlight = [relayFetch(`${origin}/held-redirect`, {}), relayFetch(`${remoteOrigin}/held-redirect`, {})];
+  while (heldRedirects.length < 2) await new Promise((resolve) => setTimeout(resolve, 10));
+  systemProxy = { ...systemProxy, bypass: ["unrelated.test"] };
+  await refreshSystemProxy();
+  for (const target of [origin, remoteOrigin]) {
+    const afterRefresh = await relayFetch(`${target}/healthy`, {});
+    assert.deepEqual(await afterRefresh.json(), { ok: true });
+    const otherTimeouts = await relayFetch(`${target}/healthy`, {}, { connectTimeoutMs: 9_999 });
+    assert.deepEqual(await otherTimeouts.json(), { ok: true }, "连接参数不同的请求换了新池");
+  }
+  for (const [response, target] of heldRedirects.splice(0).map((entry, index) => [entry, index === 0 ? origin : remoteOrigin] as const)) {
+    response.writeHead(302, { location: `${target}/healthy` });
+    response.end();
+  }
+  const [localRedirected, remoteRedirected] = await Promise.all(inFlight);
+  assert.equal(localRedirected.status, 200, "旧池被顶替后，在途请求的重定向下一跳（直连）仍能发出");
+  assert.deepEqual(await localRedirected.json(), { ok: true });
+  assert.equal(remoteRedirected.status, 200, "旧池被顶替后，在途请求的重定向下一跳（经代理）仍能发出");
+  assert.deepEqual(await remoteRedirected.json(), { ok: true });
+  assert(lastCallViaProxy(), "远端那条的重定向一跳照常经系统代理");
+  const backToDefault = await relayFetch(`${origin}/healthy`, {});
+  assert.deepEqual(await backToDefault.json(), { ok: true });
+  console.log("  ✓ 系统配置刷新、连接池更替都等在途请求（含重定向链）结束，旧请求不被打断");
 
   // ---- 代理连不上：报清楚走的哪条路，不偷偷改直连 ----
   const deadSystemProxy = "http://relay-user:system-proxy-secret@127.0.0.1:1";

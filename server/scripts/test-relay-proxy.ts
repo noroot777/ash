@@ -142,6 +142,8 @@ try {
   assert.equal(winSplit.http, "http://web", "URL 规范化去掉默认端口");
   assert.equal(winSplit.https, "http://secure:443");
   assert.deepEqual(winSplit.unsupported, []);
+  const winBroken = parseWindowsProxy(`${winHeader}    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    bad host:1\r\n`);
+  assert.deepEqual(Object.keys(winBroken.invalid ?? {}).sort(), ["http", "https"], "Windows 单一代理写坏，两个协议都无法确定");
   const winDisabled = parseWindowsProxy(`${winHeader}    ProxyEnable    REG_DWORD    0x0\r\n    ProxyServer    REG_SZ    127.0.0.1:7890\r\n    AutoConfigURL    REG_SZ    http://pac.corp/a.pac\r\n`,
     "\r\n    DefaultConnectionSettings    REG_BINARY    460000000A0000000D000000\r\n");
   assert.equal(winDisabled.http, null, "ProxyEnable=0 时 ProxyServer 只是残留");
@@ -166,6 +168,8 @@ try {
   assert.equal(gnome.https, gnome.http, "GNOME 的 HTTPS 主机留空时沿用 HTTP 代理（含认证），同 glib-networking");
   const gnomeSplit = parseGnomeProxy("org.gnome.system.proxy mode 'manual'\norg.gnome.system.proxy.http host 'h'\norg.gnome.system.proxy.http port 1\norg.gnome.system.proxy.https host 's'\norg.gnome.system.proxy.https port 2");
   assert.deepEqual([gnomeSplit.http, gnomeSplit.https], ["http://h:1", "http://s:2"]);
+  const gnomeBroken = parseGnomeProxy("org.gnome.system.proxy mode 'manual'\norg.gnome.system.proxy.http host 'bad host'\norg.gnome.system.proxy.http port 1");
+  assert.deepEqual(Object.keys(gnomeBroken.invalid ?? {}).sort(), ["http", "https"], "GNOME HTTPS 沿用的 HTTP 代理写坏了，HTTPS 也无法确定");
   assert.deepEqual(gvariantStrings(`['a', "it's", 'tab\\there', '\\'q\\'', 'emoji \\U0001f600', 'nl\\n']`), ["a", "it's", "tab\there", "'q'", "emoji 😀", "nl\n"]);
   assert.deepEqual(gnome.bypass, ["localhost", "127.0.0.0/8", "::1", "*.corp"]);
   assert.deepEqual(parseGnomeProxy("org.gnome.system.proxy mode 'auto'\norg.gnome.system.proxy autoconfig-url 'http://pac/x.pac'").unsupported, ["PAC 自动配置（http://pac/x.pac）"]);
@@ -187,7 +191,8 @@ try {
   assert.equal(parseWindowsProxy(`${winHeader}    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    [::1]:7890\r\n`).https, "http://[::1]:7890");
   for (const broken of [scutil("bad host", "1"), scutil("proxy.lan", "99999"), scutil("proxy.lan", "abc")]) {
     assert.equal(broken.https, null);
-    assert.match(broken.error ?? "", /系统代理地址无法解析/);
+    assert.equal(broken.error, undefined, "地址写坏只记在那个协议上，不算整份没读到");
+    assert.match(broken.invalid?.https ?? "", /系统 HTTPS 代理地址无法解析/);
   }
   console.log("  ✓ macOS scutil / Windows 注册表 / GNOME / KDE 的手动代理、绕过列表与不支持项解析正确");
 
@@ -211,7 +216,7 @@ try {
   plan = await relayProxyPlan();
   assert.equal(plan.source, "system");
   assert.match(plan.unavailable ?? "", /读取系统代理失败（EACCES）.*不直连/);
-  assert.deepEqual(routeFor(plan, new URL("https://api.test/")), { proxy: null, source: "system", blocked: true }, "第一次就读不到：远端请求拒绝");
+  assert.deepEqual(routeFor(plan, new URL("https://api.test/")), { proxy: null, source: "system", blocked: true, reason: plan.unavailable }, "第一次就读不到：远端请求拒绝");
   assert.match(describeRoute(plan, routeFor(plan, new URL("https://api.test/"))), /^未转发（读取系统代理失败/);
   assert.equal(routeFor(plan, new URL("http://localhost:1/")).bypass, "loopback", "本机供应商不受影响");
   process.env.NO_PROXY = "direct-ok.test";
@@ -226,9 +231,15 @@ try {
   plan = await relayProxyPlan();
   assert.equal(routeFor(plan, new URL("https://api.test/")).proxy, "http://good:1", "后来读失败：沿用上次读到的有效配置，不改直连");
   assert.match(plan.notice ?? "", /这次读取系统代理失败（ETIMEDOUT），沿用上次读到的配置/);
-  useSystem(settings({ https: null, error: "系统代理地址无法解析（bad host 端口 1）" }));
-  assert.equal((await route("https://api.test/")).blocked, true, "地址写坏了同样拒绝，不直连");
-  console.log("  ✓ 系统代理读不到或地址写坏：首次即拒绝远端请求，之后失败沿用上次有效配置，均不降级直连");
+  useSystem(settings({ http: "http://good-http:1", invalid: { https: "系统 HTTPS 代理地址无法解析（bad host 端口 1）" }, bypass: ["bypass.test"] }));
+  plan = await relayProxyPlan();
+  const brokenHttps = routeFor(plan, new URL("https://api.test/"));
+  assert.equal(brokenHttps.blocked, true, "HTTPS 地址写坏了：HTTPS 请求拒绝，不直连");
+  assert.match(describeRoute(plan, brokenHttps), /^未转发（系统 HTTPS 代理地址无法解析（bad host 端口 1），不能确定/);
+  assert.equal(routeFor(plan, new URL("http://api.test/")).proxy, "http://good-http:1", "HTTP 代理是好的，照常走");
+  assert.equal(routeFor(plan, new URL("https://bypass.test/")).bypass, "system", "已读到的绕过列表照常生效");
+  assert.match(logs.at(-1) ?? "", /HTTPS 地址无法解析（拒绝转发）/);
+  console.log("  ✓ 系统代理读不到：首次即拒绝远端请求，之后失败沿用上次有效配置；某个协议地址写坏只拒绝那个协议，均不降级直连");
 
   // ---- 缓存与刷新 ----
   let current = settings({ https: "http://first:1" });
