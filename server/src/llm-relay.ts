@@ -180,14 +180,26 @@ function recordRedirectPorts(handler: Dispatcher.DispatchHandler, hop: RouteTarg
   });
 }
 
+/**
+ * 这一跳真正要连的地址：主机只取 dispatch 的 origin（实际连接的就是它），path 只填进 pathname/search。
+ * 不能拿 path 当相对引用去解析 —— `//localhost/x` 这种路径会把主机换掉，代理按换掉的主机判，实际却连原来那个。
+ */
+function hopUrl(options: Dispatcher.DispatchOptions): URL {
+  const url = new URL(String(options.origin));
+  const path = String(options.path ?? "/");
+  const query = path.indexOf("?");
+  url.pathname = query === -1 ? path : path.slice(0, query);
+  if (query !== -1) url.search = path.slice(query);
+  return url;
+}
+
 // 走不走代理按**每一跳的 origin** 判（重定向到别的主机也照样判），并把实际走的那条路报给这个请求的诊断；
 // 判成 blocked 的那一跳直接报错，不落到直连池上。代理池按地址懒建，连接在同一个 pool 里复用。
 function routedDispatcher(lease: PoolLease, plan: ProxyPlan, first: RouteTarget, onRoute: (route: ProxyRoute) => void): Dispatcher {
   // 每个 origin 的端口写法：首跳取请求原文，之后取各次重定向的 Location 原文
   const ports = new Map([[first.url.origin, first.explicitPort]]);
   return lease.pool.direct.compose((dispatch) => (options, handler) => {
-    const url = new URL(String(options.path ?? "/"), String(options.origin));
-    const hop = { url, explicitPort: ports.get(url.origin) ?? 0 };
+    const hop = { url: hopUrl(options), explicitPort: ports.get(new URL(String(options.origin)).origin) ?? 0 };
     const route = routeFor(plan, hop);
     onRoute(route);
     if (route.blocked) throw Object.assign(new Error("系统代理不可用，拒绝直连"), { code: "ASH_SYSTEM_PROXY_UNAVAILABLE" });

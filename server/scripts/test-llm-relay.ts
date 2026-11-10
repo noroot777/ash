@@ -368,6 +368,23 @@ try {
   assert(lastCallViaProxy());
   console.log("  ✓ GNOME 端口规则区分显式默认端口与没写端口，首跳与重定向那跳都按原文判");
 
+  // ---- 路径不能换掉路由用的主机：判定只看这一跳实际连接的 origin，`//主机/` 开头的路径也只是路径 ----
+  process.env.NO_PROXY = "no-proxy-host.test";
+  const routedBy = async (url: string) => {
+    const response = await relayFetch(url, {});
+    assert.equal(response.status, 200, url);
+    await response.arrayBuffer();
+    return { viaProxy: lastCallViaProxy(), path: calls.at(-1)!.path };
+  };
+  for (const path of ["//localhost/private", "//127.0.0.1/private", "//no-proxy-host.test/private", "//provider.test:80/private"]) {
+    assert.deepEqual(await routedBy(`${remoteProviderOrigin}${path}`), { viaProxy: true, path }, `远端供应商的路径 ${path} 不能让它直连`);
+  }
+  assert.deepEqual(await routedBy(`${origin}//remote.invalid/private`), { viaProxy: false, path: "//remote.invalid/private" }, "本机供应商的路径不能让它走代理");
+  assert.deepEqual(await routedBy(`${remoteProviderOrigin}/redirect?to=${encodeURIComponent(`${remoteProviderOrigin}//localhost/next`)}`),
+    { viaProxy: true, path: "//localhost/next" }, "重定向那一跳同样只按实际连接的 origin 判");
+  delete process.env.NO_PROXY;
+  console.log("  ✓ 代理判定只看每一跳实际连接的 origin，路径（含 `//主机/` 开头的）改变不了走法");
+
   // ---- 读不到系统代理：不能把「没读到」当成「没配」去直连 ----
   systemProxy = { platform: "测试", http: systemProxyUrl, https: systemProxyUrl, bypass: [], unsupported: [] };
   await refreshSystemProxy();
