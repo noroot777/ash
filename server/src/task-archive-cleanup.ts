@@ -6,11 +6,15 @@
 //
 // 刻意的边界,改这里之前先读:
 //  ① **清理失败从不让归档失败**。归档是用户的主要意图,git 那边的拒绝(目录脏、分支
-//     未合并)如实回报给他,由他决定要不要去 git 里再处理 —— 跟删除任务那条路同一口径。
-//  ② **只用 `git branch -d`、`worktree remove` 不带 `--force`**,跟验收清理一样绝不
-//     升级成 `-D`/`--force`。这让归档保持「实质可逆」:未合并的分支一定留下来,取回归档
-//     后再跑一次,prepareWorktree 会照着分支把工作区重建出来。要强删有删除任务那条路,
-//     那里是用户看着报错又点了一次。
+//     被留下的目录检出着、被别的任务依赖)如实回报给他,由他决定要不要去 git 里再处理 —— 跟删除任务那条路同一口径。
+//  ② **分支未合并也删,worktree 不带 `--force`**,两样东西可逆的方式不一样。分支:先把末端
+//     存进 `acceptedHeadRef` 并读回核对(见⑤),再**只在分支仍指向那个提交时**原子删除
+//     (`forceBranchAt`,外部终端在这之间又提交了就整条留下)—— 提交仍由那条隐藏 ref
+//     保住、不会被 gc,取回后 `restoreAcceptedStart` 从它重建。原先只
+//     用 `-d`,而归档最常见的恰恰是没验收、没合并的任务,`all` 档对它们形同 `worktree`
+//     档,分支留在 `git branch` 里谁都能误合回主分支(用户 2026-11-10 追问「归档没删分支」)。
+//     worktree:目录里没提交的改动没有任何副本,脏了就留着,照实报给用户。分支被那个
+//     留下的目录检出着时也不删,两样一起留下。
 //  ③ **删 worktree 前必须先收预览**。预览进程的 cwd 就在那个目录里,先删目录它会原地
 //     变成一个指向空气的服务。收不掉就这一项不删,照实说。
 //  ④ **整个清理期间占住这个工作目录全部共用者的回合锁**(第 1 轮审查确定性复现):
@@ -18,10 +22,10 @@
 //     取回再点运行 —— 等我们拿到仓库锁时,那个目录里已经有一个 agent 在跑,删下去它当场
 //     读不到自己的文件。占锁挡住新回合,拿到锁后再复核 archived 仍然成立(用户取回了就
 //     是不想要这次清理了),两道一起才关得住这个窗口。
-//  ⑤ **删掉已合并的分支之前,把它的末端提交存进 `acceptedHeadRef`**(第 1 轮审查):
-//     手动 `git merge` 合入主分支的任务没有验收留下的恢复引用,分支一删,取回后重建只
-//     剩 `worktreeStartCommit` 这个**开工点**可用,任务自己做完的东西全不在工作区里。
-//     存了这个 ref,`restoreAcceptedStart` 会把起点抬到任务完成时的提交。
+//  ⑤ **删分支之前,把它的末端提交存进 `acceptedHeadRef`**(第 1 轮审查):没有验收留下
+//     的恢复引用时,分支一删,取回后重建只剩 `worktreeStartCommit` 这个**开工点**可用,
+//     任务自己做完的东西全不在工作区里。存了这个 ref,`restoreAcceptedStart` 会把起点
+//     抬到任务完成时的提交。未合并的分支更是只剩这一份副本,所以存不下就不删。
 //  ⑥ **预览实例一律不清理**。那台后端连的是主库快照,任务行指向的却是真仓库;
 //     `removeWorktree` 自带这道闸,`git branch -d` 没有,于是「目录已不在、只剩分支」
 //     的任务会把真分支删掉(第 1 轮审查确定性复现)。在入口直接挡住,不依赖下游。
@@ -136,6 +140,7 @@ async function discardOne(
   // 恢复起点必须在**删分支之前**就确实落盘(第 2 轮审查复现:写 ref 撞上 .lock 残留时,
   // 旧顺序是分支已经删掉、恢复点没存上,结果还报「已清理」)。存不下来就不删这条分支 ——
   // 分支本身就是那份改动最后的副本,宁可留着。
+  let savedTip: string | null = null;
   if (tryBranch && leftover.branch) {
     const tip = await commitAt(repo, leftover.branch);
     if (!tip) {
@@ -146,10 +151,12 @@ async function discardOne(
       if (failure) {
         tryBranch = false;
         branchNote = `未能保存恢复起点（${failure}），已保留分支 —— 否则这次归档就把它做完的东西变成找不回来的了`;
-      }
+      } else savedTip = tip;
     }
   }
-  const result = await discardTaskWorkspace(repo, target.id, { worktree: tryWorktree, branch: tryBranch });
+  // 只删「末端仍是刚存进恢复引用的那个提交」的分支(上一段):这之后外部终端或钩子再往上
+  // 提交,比较不过就整条留下,不会连新提交一起删(第 1 轮审查实测)。
+  const result = await discardTaskWorkspace(repo, target.id, { worktree: tryWorktree, branch: tryBranch, forceBranchAt: savedTip ?? undefined });
   return {
     taskId: target.id,
     title: target.title,

@@ -14,7 +14,7 @@ import { toggleArchive } from "../lib/archive.ts";
 // 归档的行为，多人模式下只有实例管理员能动 —— 真正的闸在服务端，这里只是别把改不动
 // 的东西显示成能改。
 const CLEAN_HINTS: Record<AcceptClean, string> = {
-  all: "分支只用 git branch -d：还有未合并提交的分支一定留下来，不会强删",
+  all: "删工作目录和任务分支，分支末端留作恢复点，取回后从它重建；有未提交改动的工作目录不删",
   worktree: "只删工作目录，分支一律保留（取回后重新运行会按分支重建工作区）",
   none: "归档只是从列表里收起来，磁盘上原样不动",
 };
