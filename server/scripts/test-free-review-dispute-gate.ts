@@ -4,7 +4,10 @@
 // 正常结束，结算照常消费了用户早先手存的预约，裁定还没做审查就开跑了。驳回只撤 runId 非空
 // 的自动续轮，而消费侧对「等裁定」一无所知。所以这里钉三件事：
 // ① 驳回未裁定 + 任意来源的预约 + 执行回合正常结束 → 不开审、预约原样 armed、时间线留痕；
-// ② 裁定落地之后，下一个执行回合正常结束 → 预约照常触发；
+// ② 裁定落地之后：不起执行回合的两档（采纳执行者 / 转独立任务）在没有回合会来时当场开审
+//    （现场 yosdiYlV_dD8：裁定完预约亮着、审查不来）；有回合在飞或在等待态时，留给那一轮
+//    正常结束再触发；
+
 // ③ 既有路径不变：没有驳回时照常触发；驳回按**来源**撤自动续轮、留用户手存；启动失败回滚
 //    把来源原样带回；修复回合异常结束只撤自动续轮。
 //
@@ -29,7 +32,7 @@ try {
   } = await import("../src/db/schema.js");
   type Source = typeof freeWorkflowStates.$inferSelect["reviewSource"];
   const { createTasks } = await import("../src/task-store.js");
-  const { claimTurn } = await import("../src/runs.js");
+  const { claimTurn, releaseTurn } = await import("../src/runs.js");
   const { disputeFreeReview, openDisputeOf, resolveFreeReviewDispute } = await import("../src/free-review-dispute.js");
   const { handleFreeWorkflowSettlement, reserveFreeReview, startFreeReview } = await import("../src/free-workflow.js");
   const {
@@ -137,16 +140,48 @@ try {
   assert.equal(started, false, "裁定闸在消费点本身，任何触发路径都绕不过去");
 
   // ── ② 裁定落地之后照常触发 ──
-  // 采纳执行者：这一档不起执行回合，预约等下一个执行回合正常结束；裁定时要说一声它去哪了。
+  // 采纳执行者、而此刻还有回合在飞（用例全程占着回合）：预约留给那一轮结束时消费，并说清在等什么。
   await resolveFreeReviewDispute("g-live", "withdrawn");
-  assert.equal((await slotOf("g-live"))?.reviewArmed, true, "裁定本身不消费预约");
-  assert.match(timeline("g-live"), /已预约的审查仍保留：下一个执行回合正常结束时开始/,
+  assert.equal((await slotOf("g-live"))?.reviewArmed, true, "有回合在飞时裁定不抢着开审");
+  assert.equal((await runsOf("g-live")).length, 1);
+  assert.match(timeline("g-live"), /预约审查仍在等待：任务此刻有回合在进行。预约已保留，当前执行回合正常结束后开始/,
     "裁定完要告诉用户那条被挡着的预约现在什么时候走");
   await settleTurn("g-live", "done");
   const afterRuling = await runsOf("g-live");
   assert.equal(afterRuling.length, 2, "裁定之后的执行回合正常结束，预约照常开出新链");
   assert.equal(afterRuling.find((run) => run.id !== live.runId)?.status, "reviewing");
   assert.equal((await slotOf("g-live"))?.reviewArmed, false, "开审即消费预约");
+
+  // 现场原样：驳回回合已经结束、回合空着，用户裁定「这一轮不用改了」——没有执行回合会再来，
+  // 被闸扣住的预约当场开审（审查的是执行者驳回前改掉的那几条）。投递起真执行器由测试隔离闸
+  // 拦着（ASH_ALLOW_REAL_AGENT 没设），这里只看新链开出来、槽被消费。
+  for (const resolution of ["withdrawn", "deferred"] as const) {
+    const id = `g-idle-${resolution}`;
+    const seeded = await seed(id);
+    await reserveAsUser(id);
+    await disputeFreeReview(id, resolution === "deferred"
+      ? { summary: "这一条认，但该另开任务。", reason: "", deferReason: "第 3 行是基线既有问题，不在本任务里改" }
+      : { summary: "报告看错了文件，这条我不认。", reason: "第 3 行是生成代码，不在本次改动里", deferReason: null });
+    await settleTurn(id);
+    assert.equal((await runsOf(id)).length, 1, `${resolution}：裁定前照旧被闸挡着`);
+    releaseTurn(id);
+    await resolveFreeReviewDispute(id, resolution);
+    const opened = (await runsOf(id)).filter((run) => run.id !== seeded.runId);
+    assert.equal(opened.length, 1, `${resolution}：裁定后没有执行回合会来，预约当场开出新链`);
+    assert.equal((await slotOf(id))?.reviewArmed, false, `${resolution}：开审即消费预约`);
+    assert.match(timeline(id), /裁定之后没有要等的执行回合，按预约开始审查/, `${resolution}：时间线说清为什么此刻开审`);
+  }
+  // 回合空着但任务在等答复：等待态照旧不开审（同结算口径）。
+  await seed("g-idle-waiting");
+  await reserveAsUser("g-idle-waiting");
+  await dispute("g-idle-waiting");
+  await settleTurn("g-idle-waiting");
+  releaseTurn("g-idle-waiting");
+  await db.update(tasks).set({ question: "要不要顺手改 README？" }).where(eq(tasks.id, "g-idle-waiting"));
+  await resolveFreeReviewDispute("g-idle-waiting", "withdrawn");
+  assert.equal((await runsOf("g-idle-waiting")).length, 1, "等答复时裁定不开审");
+  assert.equal((await slotOf("g-idle-waiting"))?.reviewArmed, true, "预约原样留着");
+  assert.match(timeline("g-idle-waiting"), /预约审查仍在等待：任务正在等你答复/);
 
   // 维持意见：顺带发起的修复回合正常结束 = 预约触发的那一刻（回合被占着，修复投不出去，
   // 这里直接结算一个执行回合代替它）。
@@ -299,7 +334,7 @@ try {
 
   console.log("✓ 预约各写入点记下来源；驳回按来源撤自动续轮、留用户手存");
   console.log("✓ 驳回未裁定时任意来源的预约都不开审，原样保留并在时间线留痕");
-  console.log("✓ 裁定落地后预约照常触发；既有触发、回滚、执行失败路径不变");
+  console.log("✓ 裁定落地后：没有回合会来就当场开审，有回合在飞/在等待就留给它；既有触发、回滚、执行失败路径不变");
   console.log("✓ 驳回与执行结算任意交错都不抢跑；旧驳回不被更新的链遮住，用户新派审查显式取代");
 } catch (error) {
   failure = error;

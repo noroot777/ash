@@ -286,7 +286,8 @@ export async function armFollowUpFreeReview(
 // 「这一刻能不能开审」，与谁来触发无关：驳回回合本身就是一个正常结束的执行回合，结算照常
 // 走到这儿——闸放在外面，下一个新加的触发点就会再漏一次（实例：MNW4en5L0iPP，驳回后 20 秒
 // 用户手存的那条预约照常开审，裁定还没做）。驳回只撤自动续轮（见 disputeFreeReview），用户
-// 手存的那条留着，等裁定落地后的下一个执行回合正常结束再走（选「让它接着改」就是那一轮修复）。
+// 手存的那条留着，等裁定落地：不起执行回合的那两档当场兑现（free-review-ruling-release.ts），
+// 「让它接着改」等那一轮修复正常结束再走。
 // 「查争议 → 消费 → 起审」整段与驳回写入互斥（withRulingGate，理由见 free-review-ruling-gate.ts）：
 // 只查一次再消费，驳回落在两者之间时预约照样被消费掉（第 1 轮审查实测）。
 //
@@ -319,7 +320,7 @@ async function startReservedFreeReviewHeld(
   const { openDisputeOf } = await import("./free-review-dispute.js");
   if (await openDisputeOf(taskId)) {
     await noteReservationStillWaiting(taskId, "执行者驳回了上一轮审查意见，正等你裁定",
-      "裁定之后的下一个执行回合正常结束时自动开始（选「让它接着改」就是那一轮修复）");
+      "裁定后自动开始（选「让它接着改」则等那一轮修复正常结束）");
     return;
   }
   let snapshot: ReservedFreeReview = reservation;

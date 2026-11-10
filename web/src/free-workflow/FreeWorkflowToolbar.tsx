@@ -108,15 +108,13 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Noti
   // 审查中带上「第几轮 / 最多几轮」：点它改的正是后面那个数。
   const reviewLabel = reviewing
     ? `审查中 ${reviewing.currentRound}/${reviewing.retryLimit + 1}`
-    : reservationArmed
-      ? "已预约复审"
-      : reservationMode
-        ? "预约复审"
-        : stale
-          ? "审查新改动"
-          : free.state?.reviews.some((run) => run.target?.kind !== "accepted_merge")
-            ? (stoppedRun ? "直接再审" : "再审")
-            : "派审查";
+    : reservationMode
+      ? (reservationArmed ? "已预约复审" : "预约复审")
+      : stale
+        ? "审查新改动"
+        : free.state?.reviews.some((run) => run.target?.kind !== "accepted_merge")
+          ? (stoppedRun ? "直接再审" : "再审")
+          : "派审查";
   // 未通过的意见只在结论**可证明仍然新鲜**时才是「当前待办」：stale（代码变过）和
   // unknown（缺锚点/工作区不可读）都不给修复入口——后端同样只在能核对时放行。
 

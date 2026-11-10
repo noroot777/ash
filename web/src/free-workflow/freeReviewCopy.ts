@@ -88,10 +88,14 @@ export type FreeReviewView = {
   waiting: boolean;
   reservationArmed: boolean;
   /** 派审按钮此刻的语义是「预约一轮跑完就审」而不是「立刻开审」。
-   *  判据是**这个任务后面还会再动**:正在跑(taskBusy)、停在检查点或等答复(waiting)、
-   *  或者已经挂着一条预约(armed,点进去是改预约)。后端 reserveFreeReview 对这三种
-   *  一律放行,所以这里必须一起认——只认 taskBusy 会把「暂停在检查点的任务」判成
-   *  「立刻开审」,再被 waiting 一票否决,入口就死了(第 1 轮审查实测)。 */
+   *  判据是**这个任务后面还会再动**:正在跑(taskBusy)、停在检查点或等答复(waiting)。
+   *  只认 taskBusy 会把「暂停在检查点的任务」判成「立刻开审」,再被 waiting 一票否决,
+   *  入口就死了(第 1 轮审查实测)。
+   *
+   *  **槽里挂着预约不算**:任务空闲、也不在等什么时,没有哪个回合会来触发它。把它也算进来
+   *  的话,按钮只剩「调整预约」,用户想审只能先取消预约再派——裁定「这一轮不用改了」之后
+   *  正是这个形状(用户 2026-11-10)。此时按钮回到直派语义,弹窗里仍可取消预约,直派会
+   *  顺带清掉槽(后端 clearReservationForDispatch)。 */
   reservationMode: boolean;
   /** armed 且挂着 runId = 自动复审链的续轮预约 */
   autoRereview: boolean;
@@ -201,7 +205,7 @@ export function freeReviewView(state: FreeWorkflowState | null | undefined, task
     reviewTurn: !!state?.reviewTurn,
     waiting,
     reservationArmed,
-    reservationMode: taskBusy || waiting || reservationArmed,
+    reservationMode: taskBusy || waiting,
     autoRereview,
     repairing: taskBusy && (!!stoppedRun || autoRereview),
     freshness,

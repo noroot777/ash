@@ -122,6 +122,13 @@ const autoState = {
 };
 assert.equal(freeReviewView(autoState, busyTask).autoRereview, true, "runId 预约 = 自动复审链");
 assert.equal(freeReviewView({ ...autoState, reviewReservation: { ...autoState.reviewReservation, runId: null } }, busyTask).autoRereview, false);
+// 预约模式只认「任务后面还会再动」：在跑或在等待。槽里挂着预约、任务却空闲着（裁定「这一轮
+// 不用改了」之后就是这样）时没有回合会来触发它，按钮必须回到直派，不能只剩「调整预约」。
+const userReserved = { ...stoppedState, reviewReservation: { ...autoState.reviewReservation, runId: null } };
+assert.equal(freeReviewView(userReserved, busyTask).reservationMode, true, "任务在跑 = 预约");
+assert.equal(freeReviewView(userReserved, { status: "failed", resumePrompt: "继续" }).reservationMode, true, "停在检查点 = 预约");
+assert.equal(freeReviewView(userReserved, { status: "failed" }).reservationMode, false, "空闲且不等待：挂着预约也是直派");
+assert.equal(freeReviewView(userReserved, { status: "failed" }).reservationArmed, true, "预约本身仍如实报出（弹窗里可取消）");
 
 console.log("free review activity copy tests passed");
 

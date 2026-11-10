@@ -202,13 +202,11 @@ export function FreeWorkflowInspector({
     || task.handoff?.direction === "out";
   const reviewActionLabel = reviewing
     ? "调整审查轮数"
-    : reservationArmed
-      ? "调整预约复审"
-      : reservationMode
-        ? "预约复审"
-        : stale
-          ? "审查新改动"
-          : workspaceReviewActivities.length ? "再审一轮" : "派审查";
+    : reservationMode
+      ? (reservationArmed ? "调整预约复审" : "预约复审")
+      : stale
+        ? "审查新改动"
+        : workspaceReviewActivities.length ? "再审一轮" : "派审查";
   const exhausted = stoppedRun && stoppedRun.currentRound > stoppedRun.retryLimit;
   const overviewDetail = reviewing
     ? `第 ${reviewing.currentRound} 轮审查中`

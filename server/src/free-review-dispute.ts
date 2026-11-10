@@ -446,15 +446,17 @@ export function disputeTimelineNote(input: {
 }
 
 /**
- * 裁定落地、而这一档不会顺带起一个执行回合（采纳执行者 / 转独立任务）时，告诉用户那条被
- * 裁定闸挡着的预约现在去哪了：它没有在裁定这一刻开审，而是回到「下一个执行回合正常结束时
- * 开始」。不说的话，用户裁定完看着亮着的「已预约」等一轮不会立刻来的审查。
+ * 这一档裁定不会顺带起执行回合（采纳执行者 / 转独立任务）：被裁定闸扣住的预约就地兑现
+ * （理由见 free-review-ruling-release.ts）。开审失败不回滚裁定——裁定是用户的决定，开审
+ * 起不来是另一件事，预约由 startReservedFreeReview 放回槽里并写进时间线。
  */
-async function noteHeldReservationAfterRuling(taskId: string): Promise<void> {
-  const reservation = await readFreeReviewReservation(taskId);
-  if (!reservation?.armed) return;
-  await appendTaskTimeline(taskId,
-    "已预约的审查仍保留：下一个执行回合正常结束时开始；不想等就在审查面板里取消预约后直接派审。");
+async function releaseHeldReservation(taskId: string): Promise<void> {
+  try {
+    const { releaseReservationAfterRuling } = await import("./free-review-ruling-release.js");
+    await releaseReservationAfterRuling(taskId);
+  } catch (error) {
+    console.error(`[ash] 裁定后兑现预约审查失败 task=${taskId}:`, error);
+  }
 }
 
 /** 时间线里只放一句话的摘要，全文留在审查记录里（时间线不是正文的第二个家）。 */
@@ -543,7 +545,7 @@ export async function resolveFreeReviewDispute(
   if (resolution === "deferred") {
     const { deferOpenDispute } = await import("./free-review-defer.js");
     const deferredTask = await deferOpenDispute(task, open, note);
-    await noteHeldReservationAfterRuling(taskId);
+    await releaseHeldReservation(taskId);
     return { resolution, repairError: null, deferredTask };
   }
 
@@ -570,8 +572,8 @@ export async function resolveFreeReviewDispute(
       `${note ? "按你写的要点和报告修复" : "照报告修复"}。`)
     // 时间线只放摘要，全文留在那一轮的审查记录里（时间线不是正文的第二个家）。
     + (note ? `你写下的裁定要点：${summarize(note)}` : ""));
-  if (resolution === "withdrawn") await noteHeldReservationAfterRuling(taskId);
   bus.publish({ type: "task.review", taskId });
+  if (resolution === "withdrawn") await releaseHeldReservation(taskId);
 
   let repairError: string | null = null;
   if (resolution === "upheld") {

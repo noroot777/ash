@@ -300,6 +300,52 @@ export async function reportFreeReviewConclusion(
   return { runId: run.id, round: run.currentRound };
 }
 
+/**
+ * 按预约开审：续轮预约在原链上续下一轮，手存预约开一条新链。结算与「裁定放行」
+ * （free-review-ruling-release.ts）两个触发点共用这一份，开审的细节只写一遍。
+ *
+ * 调用方负责「此刻没有别的回合会动这个任务」：结算时是正在收尾的那个回合占着，裁定放行
+ * 时由调用方自己占一个 dispatch 身份。`afterDispatch` 只在真的开出审查后调用。
+ */
+export async function launchReservedFreeReview(
+  task: typeof tasks.$inferSelect,
+  reservation: Awaited<ReturnType<typeof readFreeReviewReservation>>,
+  afterDispatch: () => Promise<unknown>,
+): Promise<void> {
+  const taskId = task.id;
+  await startReservedFreeReview(taskId, reservation, {
+    continueRun: async (runId) => {
+      const target = (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, runId))).at(0);
+      if (!target || target.status !== "stopped") {
+        throw new Error("预约续审的审查链已不在等待状态，预约已取消");
+      }
+      // 续轮起不来（典型：崩溃残留的半个 round 造成唯一键冲突，run 已被判 failed）是
+      // 永久性失败：槽已消费，不会再有幽灵预约反复撞同一个错误。
+      await nextRound(task, target);
+      await afterDispatch();
+    },
+    startNew: async (input) => {
+      // 预约时存下的「这次换个模型/智能水平跑」原样带上。执行器在这中间被删了就只摘
+      // 掉那一段（模型/智能水平仍按用户改的跑），并把降级写进时间线——见 reservedOverride。
+      const reserved = await reservedOverride(input.override);
+      const state = await startFreeReview(taskId, {
+        reviewerId: input.reviewerId,
+        checkMode: checkMode(input.checkMode ?? "logic"),
+        retryLimit: retryLimit(input.retryLimit ?? 1),
+        note: reviewNote(input.note),
+        override: reserved.override,
+      }, { slotToken: input.slotToken });
+      if (reserved.dropped === "executor") {
+        await appendTaskTimeline(taskId, `预约里选的执行器已不可用，这次改用 ${reserved.override!.agentType} 的默认执行器（模型与智能水平仍按你预约时改的跑）。`);
+      } else if (reserved.dropped === "all") {
+        await appendTaskTimeline(taskId, "预约里的执行器覆盖已失效，这次按审查者自己的配置跑。");
+      }
+      await afterDispatch();
+      return state;
+    },
+  });
+}
+
 // 自由工作流的回合结算只分两种回合，**按回合自己的 role 分流**，不按「库里有没有
 // reviewing run」猜——派审请求可能在普通回合 claimOwnTurn 之后才插入 reviewing run
 // （TOCTOU），靠查库会把普通回合冒充成审查回合、把没有结论的审查链错杀成 failed：
@@ -385,41 +431,10 @@ export async function handleFreeWorkflowSettlement(
           return true;
         }
       }
-      const noteDispatch = async () => {
+      // 槽由 startReservedFreeReview 按 CAS 消费（消费成功才启动），所以失败路径都不再补
+      // disarm——那时槽已经空了，再清一次清掉的会是用户新保存的那条。
+      await launchReservedFreeReview(task, reservation, async () => {
         if (!confirmedDone) await appendTaskTimeline(taskId, "执行回合已正常结束，按预约启动审查。本回合未确认任务完成，任务完成状态仍按原结算结果保留。");
-      };
-      // 槽由 startReservedFreeReview 按 CAS 消费（消费成功才启动），所以下面两条失败路径
-      // 都不再补 disarm——那时槽已经空了，再清一次清掉的会是用户新保存的那条。
-      await startReservedFreeReview(taskId, reservation, {
-        continueRun: async (runId) => {
-          const target = (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, runId))).at(0);
-          if (!target || target.status !== "stopped") {
-            throw new Error("预约续审的审查链已不在等待状态，预约已取消");
-          }
-          // 续轮起不来（典型：崩溃残留的半个 round 造成唯一键冲突，run 已被判 failed）是
-          // 永久性失败：槽已消费，不会再有幽灵预约反复撞同一个错误。
-          await nextRound(task, target);
-          await noteDispatch();
-        },
-        startNew: async (input) => {
-          // 预约时存下的「这次换个模型/智能水平跑」原样带上。执行器在这中间被删了就只摘
-          // 掉那一段（模型/智能水平仍按用户改的跑），并把降级写进时间线——见 reservedOverride。
-          const reserved = await reservedOverride(input.override);
-          const state = await startFreeReview(taskId, {
-            reviewerId: input.reviewerId,
-            checkMode: checkMode(input.checkMode ?? "logic"),
-            retryLimit: retryLimit(input.retryLimit ?? 1),
-            note: reviewNote(input.note),
-            override: reserved.override,
-          }, { slotToken: input.slotToken });
-          if (reserved.dropped === "executor") {
-            await appendTaskTimeline(taskId, `预约里选的执行器已不可用，这次改用 ${reserved.override!.agentType} 的默认执行器（模型与智能水平仍按你预约时改的跑）。`);
-          } else if (reserved.dropped === "all") {
-            await appendTaskTimeline(taskId, "预约里的执行器覆盖已失效，这次按审查者自己的配置跑。");
-          }
-          await noteDispatch();
-          return state;
-        },
       });
       return true;
     }
