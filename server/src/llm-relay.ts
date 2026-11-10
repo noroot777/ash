@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { EnvHttpProxyAgent, type Dispatcher } from "undici";
+import { Agent, ProxyAgent, type Dispatcher } from "undici";
+import { describeRoute, redactProxy, relayProxyPlan, routeFor, type ProxyPlan, type ProxyRoute } from "./proxy-route.js";
+import { refreshSystemProxy } from "./system-proxy.js";
 
 type RelayOptions = { headersTimeoutMs?: number; connectTimeoutMs?: number; bodyTimeoutMs?: number };
-const dispatchers = new Map<string, { configuration: string; dispatcher: EnvHttpProxyAgent }>();
+type RelayPool = { configuration: string; dispatcher: Dispatcher; agents: Dispatcher[] };
+const dispatchers = new Map<string, RelayPool>();
 const closingDispatchers = new Set<Promise<void>>();
 type RelayPhase = "headers" | "stream";
 type RelayDiagnostic = {
@@ -13,6 +16,10 @@ type RelayDiagnostic = {
   status: number;
   elapsedMs: number;
   codes: string[];
+  /** 走的哪条路：`direct` 或脱敏后的代理地址 */
+  proxy: string;
+  proxySource: string;
+  bypass?: ProxyRoute["bypass"];
 };
 
 export class RelayRequestError extends Error {
@@ -43,8 +50,8 @@ function positiveTimeout(value: unknown, fallback: number): number {
   return Number.isSafeInteger(configured) && configured > 0 && configured <= 2_147_483_647 ? configured : fallback;
 }
 
-function retireDispatcher(dispatcher: EnvHttpProxyAgent): Promise<void> {
-  const closing = dispatcher.close().catch(() => {});
+function retireDispatcher(pool: RelayPool): Promise<void> {
+  const closing = Promise.all(pool.agents.map((agent) => agent.close())).then(() => {}, () => {});
   closingDispatchers.add(closing);
   void closing.finally(() => closingDispatchers.delete(closing));
   return closing;
@@ -53,29 +60,33 @@ function retireDispatcher(dispatcher: EnvHttpProxyAgent): Promise<void> {
 export async function closeRelayDispatchers(): Promise<void> {
   const current = [...dispatchers.values()];
   dispatchers.clear();
-  await Promise.all([...closingDispatchers, ...current.map((entry) => retireDispatcher(entry.dispatcher))]);
+  await Promise.all([...closingDispatchers, ...current.map(retireDispatcher)]);
 }
 
-function relayDispatcher(upstream: string, connectTimeoutMs: number, bodyTimeoutMs: number): Dispatcher {
-  const httpProxy = process.env.http_proxy ?? process.env.HTTP_PROXY ?? "";
-  const httpsProxy = process.env.https_proxy ?? process.env.HTTPS_PROXY ?? "";
-  const configuredNoProxy = process.env.no_proxy ?? process.env.NO_PROXY ?? "";
-  const noProxy = configuredNoProxy.trim() === "*" ? "*" : [configuredNoProxy, "localhost", "127.0.0.1", "[::1]"].join(",");
-  const configuration = JSON.stringify([httpProxy, httpsProxy, noProxy, connectTimeoutMs, bodyTimeoutMs]);
+// 每个供应商 origin 一个独立连接池（不和全局 fetch 抢连接），代理方案一变就整池换掉。
+// 走不走代理按**每个请求的 origin** 判（重定向到别的主机也照样判），代理池按地址懒建。
+function relayDispatcher(upstream: string, plan: ProxyPlan, connectTimeoutMs: number, bodyTimeoutMs: number): Dispatcher {
+  const configuration = JSON.stringify([plan.key, connectTimeoutMs, bodyTimeoutMs]);
   const existing = dispatchers.get(upstream);
   if (existing?.configuration === configuration) return existing.dispatcher;
-  const dispatcher = new EnvHttpProxyAgent({
-    allowH2: false,
-    connect: { timeout: connectTimeoutMs },
-    headersTimeout: 0,
-    bodyTimeout: bodyTimeoutMs,
-    httpProxy,
-    httpsProxy,
-    noProxy,
+  const agentOptions = { allowH2: false, connect: { timeout: connectTimeoutMs }, headersTimeout: 0, bodyTimeout: bodyTimeoutMs };
+  const direct = new Agent(agentOptions);
+  const proxies = new Map<string, ProxyAgent>();
+  const pool: RelayPool = { configuration, agents: [direct], dispatcher: direct };
+  pool.dispatcher = direct.compose((dispatch) => (options, handler) => {
+    const proxy = routeFor(plan, new URL(String(options.origin))).proxy;
+    if (!proxy) return dispatch(options, handler);
+    let agent = proxies.get(proxy);
+    if (!agent) {
+      agent = new ProxyAgent({ ...agentOptions, uri: proxy });
+      proxies.set(proxy, agent);
+      pool.agents.push(agent);
+    }
+    return agent.dispatch(options, handler);
   });
-  dispatchers.set(upstream, { configuration, dispatcher });
-  if (existing) void retireDispatcher(existing.dispatcher);
-  return dispatcher;
+  dispatchers.set(upstream, pool);
+  if (existing) void retireDispatcher(existing);
+  return pool.dispatcher;
 }
 
 function upstreamOrigin(url: string): string {
@@ -107,6 +118,13 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
   const deadline = new AbortController();
   const signal = init.signal ? AbortSignal.any([init.signal, deadline.signal]) : deadline.signal;
   let timedOut = false;
+  let plan: ProxyPlan | null = null;
+  let route: ProxyRoute | null = null;
+  const routeFields = () => ({
+    proxy: route?.proxy ? redactProxy(route.proxy) : "direct",
+    proxySource: plan?.label ?? "未解析",
+    ...(route?.bypass ? { bypass: route.bypass } : {}),
+  });
   const failure = (error: unknown, phase: RelayPhase): RelayRequestError => {
     const canceled = init.signal?.aborted === true;
     const codes = canceled ? ["ABORT_ERR"] : timedOut ? ["ASH_RELAY_HEADERS_TIMEOUT"] : errorCodes(error);
@@ -116,9 +134,11 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
     const reason = canceled ? "请求已取消" : timedOut ? `等待响应头超过 ${timeoutMs}ms`
       : codes.includes("UND_ERR_BODY_TIMEOUT") ? `响应流空闲超过 ${bodyTimeoutMs}ms`
       : timeout ? "连接超时" : phase === "stream" ? "响应流中断" : "连接失败";
-    const diagnostic = { requestId, upstream, method, phase, status, elapsedMs: Date.now() - startedAt, codes };
+    const diagnostic = { requestId, upstream, method, phase, status, elapsedMs: Date.now() - startedAt, codes, ...routeFields() };
     logDiagnostic(diagnostic);
-    return new RelayRequestError(diagnostic, reason);
+    // 系统代理可能刚被关掉/换了端口：后台重读一次，下一个请求就按新配置走（这一个不重发，也不改直连）
+    if (!canceled && plan?.source === "system") void refreshSystemProxy();
+    return new RelayRequestError(diagnostic, plan && route && !canceled ? `${reason}，${describeRoute(plan, route)}` : reason);
   };
   const timer = setTimeout(() => {
     timedOut = true;
@@ -127,7 +147,9 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
   timer.unref();
   let response: Response;
   try {
-    const dispatcher = relayDispatcher(upstream, positiveTimeout(options.connectTimeoutMs, 10_000), bodyTimeoutMs);
+    plan = await relayProxyPlan();
+    try { route = routeFor(plan, new URL(url)); } catch { route = null; }
+    const dispatcher = relayDispatcher(upstream, plan, positiveTimeout(options.connectTimeoutMs, 10_000), bodyTimeoutMs);
     const requestInit: RequestInit & { dispatcher: Dispatcher } = { ...init, signal, dispatcher };
     response = await fetch(url, requestInit);
   } catch (error) {
@@ -138,7 +160,7 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
   const headers = new Headers(response.headers);
   headers.set("x-ash-relay-request-id", requestId);
   if (response.status >= 500) {
-    logDiagnostic({ requestId, upstream, method, phase: "headers", status: response.status, elapsedMs: Date.now() - startedAt, codes: [`HTTP_${response.status}`] });
+    logDiagnostic({ requestId, upstream, method, phase: "headers", status: response.status, elapsedMs: Date.now() - startedAt, codes: [`HTTP_${response.status}`], ...routeFields() });
   }
   if (!response.body) {
     return new Response(null, { status: response.status, statusText: response.statusText, headers });

@@ -5,11 +5,21 @@ import { connect, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { MockAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { closeRelayDispatchers, relayErrorResponse, relayFetch, RelayRequestError } from "../src/llm-relay.js";
+import { refreshSystemProxy, setSystemProxyReaderForTests, type SystemProxySettings } from "../src/system-proxy.js";
 
 const warnings: string[] = [];
 const originalWarn = console.warn;
 const originalFetch = globalThis.fetch;
+const originalLog = console.log;
 console.warn = (message: unknown) => { warnings.push(String(message)); };
+console.log = (...args: unknown[]) => {
+  const line = args.map(String).join(" ");
+  if (line.startsWith("[ash]")) warnings.push(line);
+  else originalLog(...args);
+};
+// 本测试不读本机真实的系统代理：默认「系统没配」，用到时逐段换
+let systemProxy: SystemProxySettings = { platform: "测试", http: null, https: null, bypass: [], unsupported: [] };
+setSystemProxyReaderForTests(async () => systemProxy, 60_000);
 const envKeys = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "ASH_LLM_RELAY_HEADERS_TIMEOUT_MS", "ASH_LLM_RELAY_BODY_TIMEOUT_MS"];
 const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
 const sockets = new Set<Socket>();
@@ -79,9 +89,11 @@ if (!address || typeof address === "string") throw new Error("upstream did not l
 const origin = `http://127.0.0.1:${address.port}`;
 const proxy = createServer();
 let proxyAuthority = "";
+let proxyAuthorization = "";
 const tunnelSockets = new Set<Duplex>();
 proxy.on("connect", (request, client, head) => {
   proxyAuthority = request.url ?? "";
+  proxyAuthorization = request.headers["proxy-authorization"] ?? "";
   const target = connect(address.port, "127.0.0.1", () => {
     client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
     if (head.length) target.write(head);
@@ -237,6 +249,64 @@ try {
   assert.deepEqual(await wildcardBypass.json(), { ok: true });
   assert.equal(proxyAuthority, "", "NO_PROXY=* 应保持全局直连，而不是绕进 HTTP_PROXY");
 
+  // ---- 系统代理：环境变量都没配时才生效，变化后刷新即切换 ----
+  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"]) delete process.env[key];
+  const systemProxyUrl = `http://relay-user:system-proxy-secret@127.0.0.1:${proxyAddress.port}`;
+  systemProxy = { platform: "测试", http: systemProxyUrl, https: systemProxyUrl, bypass: ["*.bypass.test"], unsupported: [] };
+  await refreshSystemProxy();
+  proxyAuthority = "";
+  const viaSystem = await relayFetch(`http://provider.test:${address.port}/healthy`, {});
+  assert.deepEqual(await viaSystem.json(), { ok: true });
+  assert.equal(proxyAuthority, `provider.test:${address.port}`, "没配环境变量时走系统代理");
+  assert.equal(proxyAuthorization, `Basic ${Buffer.from("relay-user:system-proxy-secret").toString("base64")}`);
+  proxyAuthority = "";
+  const localViaSystem = await relayFetch(`${origin}/healthy`, {});
+  assert.deepEqual(await localViaSystem.json(), { ok: true });
+  assert.equal(proxyAuthority, "", "系统代理开着时本机供应商仍直连");
+  const mappedViaSystem = await relayFetch(mappedUrl, {});
+  assert.deepEqual(await mappedViaSystem.json(), { ok: true });
+  assert.equal(proxyAuthority, `[::ffff:7f00:1]:${address.port}`);
+
+  systemProxy = { platform: "测试", http: null, https: null, bypass: [], unsupported: [] };
+  await refreshSystemProxy();
+  proxyAuthority = "";
+  const afterDisable = await relayFetch(mappedUrl, {});
+  assert.deepEqual(await afterDisable.json(), { ok: true });
+  assert.equal(proxyAuthority, "", "系统代理关掉并刷新后，同一供应商改为直连");
+  assert(warnings.some((line) => line.includes("代理来源：系统代理（测试）") && line.includes("http://***@127.0.0.1")));
+  assert(warnings.some((line) => line.includes("代理来源：未配置代理")));
+  console.log("  ✓ 未配置环境变量时走系统代理（带凭据），系统代理变化刷新后立即切换，本机供应商始终直连");
+
+  // ---- 代理连不上：报清楚走的哪条路，不偷偷改直连 ----
+  const deadSystemProxy = "http://relay-user:system-proxy-secret@127.0.0.1:1";
+  systemProxy = { platform: "测试", http: deadSystemProxy, https: deadSystemProxy, bypass: [], unsupported: [] };
+  await refreshSystemProxy();
+  const callsBefore = calls.length;
+  await assert.rejects(relayFetch(mappedUrl, { method: "POST", body: "inference-request" }), (error: unknown) => {
+    assert(error instanceof RelayRequestError);
+    assert.equal(error.diagnostic.status, 502);
+    assert.equal(error.diagnostic.proxy, "http://***@127.0.0.1:1");
+    assert.equal(error.diagnostic.proxySource, "系统代理（测试）");
+    assert.match(error.message, /经代理 http:\/\/\*\*\*@127\.0\.0\.1:1（系统代理（测试））/);
+    return true;
+  });
+  process.env.HTTP_PROXY = "http://127.0.0.1:1";
+  await assert.rejects(relayFetch(mappedUrl, {}), (error: unknown) => {
+    assert(error instanceof RelayRequestError);
+    assert.equal(error.diagnostic.proxySource, "环境变量 HTTP_PROXY");
+    assert.match(error.message, /经代理 http:\/\/127\.0\.0\.1:1（环境变量 HTTP_PROXY）/);
+    return true;
+  });
+  assert.equal(calls.length, callsBefore, "代理失败后不能绕过代理直连上游");
+  delete process.env.HTTP_PROXY;
+  systemProxy = { platform: "测试", http: null, https: null, bypass: [], unsupported: ["PAC 自动配置（http://pac.test/proxy.pac）"] };
+  await refreshSystemProxy();
+  const pacDirect = await relayFetch(mappedUrl, {});
+  assert.deepEqual(await pacDirect.json(), { ok: true });
+  assert(warnings.some((line) => line.includes("PAC 自动配置（http://pac.test/proxy.pac）ash 不支持、未生效，当前直连")));
+  assert.doesNotMatch(warnings.join("\n"), /system-proxy-secret/);
+  console.log("  ✓ 代理连不上时报出代理地址与来源（凭据打码）且不降级直连，PAC 明说未生效");
+
   const secret = "relay-secret-must-not-leak";
   globalThis.fetch = (async () => {
     throw new TypeError(`fetch failed with ${secret}`, {
@@ -262,6 +332,8 @@ try {
 } finally {
   globalThis.fetch = originalFetch;
   console.warn = originalWarn;
+  console.log = originalLog;
+  setSystemProxyReaderForTests();
   for (const key of envKeys) {
     if (originalEnv[key] === undefined) delete process.env[key];
     else process.env[key] = originalEnv[key];
