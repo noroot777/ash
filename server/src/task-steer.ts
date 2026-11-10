@@ -30,6 +30,7 @@ import { attachmentsPrompt, now } from "./util.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { nativeCliCommand } from "./skills.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
+import { isUserAuthoredMessage } from "@ash/shared/scheduled-message-author";
 import { DIRECTION_PROTOCOL } from "./run-prompts.js";
 import {
   clearPreviousDirectionState, discardLateDirectionState, restorePreviousCompletionState,
@@ -308,18 +309,23 @@ export async function steerQueuedMessage(messageId: string, options: { nativeOnl
     return { ok: false, status: 409, error: "任务正在验收，引导未执行，消息继续排队" };
   }
 
+  // 队首只在用户自己写的消息里排：排在前面的哨兵唤醒、审查交接不拦用户插话，它们等引导
+  // 出来的那一轮结束后照常投递；用户自己的几句话之间仍不许反序。
+  if (!isUserAuthoredMessage(message)) {
+    return { ok: false, status: 409, error: "只有你自己发的消息可以引导会话，这条会按排队顺序自动发送" };
+  }
   const first = (await db
-    .select({ id: scheduledMessages.id })
+    .select({ id: scheduledMessages.id, origin: scheduledMessages.origin, sessionRole: scheduledMessages.sessionRole })
     .from(scheduledMessages)
     .where(and(
       eq(scheduledMessages.taskId, task.id),
       eq(scheduledMessages.status, "pending"),
       eq(scheduledMessages.mode, "queued"),
     ))
-    .orderBy(asc(scheduledMessages.sendAt), asc(scheduledMessages.createdAt), asc(scheduledMessages.id))
-    .limit(1)).at(0);
+    .orderBy(asc(scheduledMessages.sendAt), asc(scheduledMessages.createdAt), asc(scheduledMessages.id)))
+    .find(isUserAuthoredMessage);
   if (first?.id !== message.id) {
-    return { ok: false, status: 409, error: "只能按排队顺序引导最早的一条消息" };
+    return { ok: false, status: 409, error: "只能按排队顺序引导你最早的一条消息" };
   }
 
   const native = reserveNativeSteerTask(task.id);

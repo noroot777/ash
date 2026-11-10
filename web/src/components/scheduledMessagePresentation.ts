@@ -1,5 +1,6 @@
 import type { ScheduledMessage } from "@ash/shared";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
+import { isUserAuthoredMessage } from "@ash/shared/scheduled-message-author";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 
 export type ScheduledMessageFilter = "all" | "mine" | "monitor" | "managed" | "system" | "attention";
@@ -19,11 +20,12 @@ export type ScheduledMessageFilter = "all" | "mine" | "monitor" | "managed" | "s
 export type ScheduledMessageSource = "mine" | "monitor" | "managed" | "system";
 
 export function scheduledMessageSource(message: ScheduledMessage): ScheduledMessageSource {
+  // 「mine」跟服务端引导找队首用的是同一个判定,托盘挂按钮的那条服务端一定认。
+  if (isUserAuthoredMessage(message)) return "mine";
   if (monitorIdFromOrigin(message.origin) !== null) return "monitor";
   // sessionRole 排在泛化的 origin 之前:它是前端认得的具体语义(投进审查会话),
   // 而剩下的 origin 按定义是「这里不认识的来源」。
-  if (message.sessionRole) return "managed";
-  return message.origin ? "system" : "mine";
+  return message.sessionRole ? "managed" : "system";
 }
 
 export function bySendTime(messages: ScheduledMessage[]): ScheduledMessage[] {

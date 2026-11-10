@@ -206,6 +206,10 @@
       "types": "./src/monitor.ts",
       "default": "./src/monitor.ts"
     },
+    "./scheduled-message-author": {
+      "types": "./src/scheduled-message-author.ts",
+      "default": "./src/scheduled-message-author.ts"
+    },
     "./monitor-silence": {
       "types": "./src/monitor-silence.ts",
       "default": "./src/monitor-silence.ts"

@@ -174,6 +174,7 @@ try {
     task("review-task", { reviewOf: "target" }),
     task("reviewer-role"),
     task("ordered"),
+    task("monitor-ahead"),
     task("claude-native-state", { activeTurnToken: "claude-native-token", activeDirectionToken: "claude-old-direction" }),
     task("codex-native-state", { activeTurnToken: "codex-native-token", activeDirectionToken: "codex-old-direction" }),
     task("claude-native-fallback", { activeTurnToken: "fallback-token", activeDirectionToken: "fallback-old-direction" }),
@@ -208,6 +209,8 @@ try {
     message("m-reviewer-role", "reviewer-role"),
     message("ordered-a", "ordered"),
     message("ordered-b", "ordered"),
+    { ...message("monitor-ahead-event", "monitor-ahead", "2000-01-01T00:00:00.000Z"), origin: "monitor:m1" },
+    message("monitor-ahead-mine", "monitor-ahead"),
     message("m-claude-native-state", "claude-native-state"),
     message("m-codex-native-state", "codex-native-state"),
     message("m-claude-native-fallback", "claude-native-fallback"),
@@ -260,6 +263,23 @@ try {
   runs.untrackRun("ordered", orderedHandle);
   runs.releaseTurn("ordered");
   console.log("✓ 引导只能消费队首，API 无法把较晚消息反序提前");
+
+  // 队首只在用户自己写的消息里排：排在前面的哨兵事件不拦用户插话，它本身也不能被引导。
+  const monitorSteer = await steer.steerQueuedMessage("monitor-ahead-event");
+  assert.equal(monitorSteer.ok, false, "哨兵事件不是用户的句子，不得被引导");
+  if (!monitorSteer.ok) assert.match(monitorSteer.error, /你自己发的/);
+  const mineBehindMonitor = await steer.steerQueuedMessage("monitor-ahead-mine");
+  assert.equal(mineBehindMonitor.ok, false, "没有活动回合时预约失败");
+  if (!mineBehindMonitor.ok) {
+    assert.doesNotMatch(mineBehindMonitor.error, /排队顺序|你自己发的/, "排在哨兵事件后面的用户消息必须通过队首判定");
+    assert.match(mineBehindMonitor.error, /正在启动、已经结束或正在引导/);
+  }
+  for (const id of ["monitor-ahead-event", "monitor-ahead-mine"]) {
+    const row = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, id))).at(0)!;
+    assert.equal(row.status, "pending");
+    assert.equal(row.deliveringSince, null);
+  }
+  console.log("✓ 排在前面的哨兵事件不挡用户引导，哨兵事件自身不可引导");
 
   assert.equal(runs.claimTurn("claude-native-state", "single"), true);
   const claudeNativeHandle = {
