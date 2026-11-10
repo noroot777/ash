@@ -42,7 +42,7 @@ const SETTING_SPECS = {
     hint: "必须是 {name,url,peerFp?}[]（url 以 http(s):// 开头，peerFp 是 64 位小写 hex 指纹，最多 20 个目标）",
   },
   // 归档时清到什么程度。三档语义与标签跟验收清理共用(ACCEPT_CLEAN),因为用户要决定的
-  // 是同一件事;实际能删到哪一步仍由 git 的安全检查说话(见 task-archive-cleanup.ts)。
+  // 是同一件事;worktree 有未提交改动时仍由 git 的安全检查说话(见 task-archive-cleanup.ts)。
   archiveClean: {
     ok: (v: unknown) => typeof v === "string" && (ACCEPT_CLEAN as readonly string[]).includes(v),
     hint: `必须是 ${ACCEPT_CLEAN.join(" / ")} 之一（删 worktree 和分支 / 只删 worktree / 都留着）`,

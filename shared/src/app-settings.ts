@@ -32,8 +32,8 @@ export interface AppSettings {
   handoffMaxBodyMb: number;
   // 归档时连 worktree/分支一起收到什么程度（用户 2026-10-08 要求「归档也删」）。
   // 复用验收清理那三档语义与标签：all=删 worktree 和任务分支、worktree=只删
-  // worktree、none=都留着（上线前的旧行为）。两处都只用 `-d`/不带 `--force`，
-  // 所以「删」的实际效果受 git 自己的安全检查节制，见 task-archive-cleanup.ts。
+  // worktree、none=都留着（上线前的旧行为）。归档删分支前先把末端存成恢复引用，
+  // 未合并的也删；worktree 不带 `--force`，有未提交改动就留着，见 task-archive-cleanup.ts。
   archiveClean: AcceptClean;
   composerSendKey: ComposerSendKey;
   colorTheme: ColorTheme;

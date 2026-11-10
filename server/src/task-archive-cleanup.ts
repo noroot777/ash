@@ -6,11 +6,14 @@
 //
 // 刻意的边界,改这里之前先读:
 //  ① **清理失败从不让归档失败**。归档是用户的主要意图,git 那边的拒绝(目录脏、分支
-//     未合并)如实回报给他,由他决定要不要去 git 里再处理 —— 跟删除任务那条路同一口径。
-//  ② **只用 `git branch -d`、`worktree remove` 不带 `--force`**,跟验收清理一样绝不
-//     升级成 `-D`/`--force`。这让归档保持「实质可逆」:未合并的分支一定留下来,取回归档
-//     后再跑一次,prepareWorktree 会照着分支把工作区重建出来。要强删有删除任务那条路,
-//     那里是用户看着报错又点了一次。
+//     被留下的目录检出着、被别的任务依赖)如实回报给他,由他决定要不要去 git 里再处理 —— 跟删除任务那条路同一口径。
+//  ② **分支用 `-D`,worktree 不带 `--force`**,两样东西可逆的方式不一样。分支:先把末端
+//     存进 `acceptedHeadRef` 并读回核对(见⑤),核对通过才删 —— 提交仍由那条隐藏 ref
+//     保住、不会被 gc,取回后 `restoreAcceptedStart` 从它重建,所以未合并也照删。原先只
+//     用 `-d`,而归档最常见的恰恰是没验收、没合并的任务,`all` 档对它们形同 `worktree`
+//     档,分支留在 `git branch` 里谁都能误合回主分支(用户 2026-11-10 追问「归档没删分支」)。
+//     worktree:目录里没提交的改动没有任何副本,脏了就留着,照实报给用户。分支被那个
+//     留下的目录检出着时 git 连 `-D` 也会拒,两样自然一起留下。
 //  ③ **删 worktree 前必须先收预览**。预览进程的 cwd 就在那个目录里,先删目录它会原地
 //     变成一个指向空气的服务。收不掉就这一项不删,照实说。
 //  ④ **整个清理期间占住这个工作目录全部共用者的回合锁**(第 1 轮审查确定性复现):
@@ -18,10 +21,10 @@
 //     取回再点运行 —— 等我们拿到仓库锁时,那个目录里已经有一个 agent 在跑,删下去它当场
 //     读不到自己的文件。占锁挡住新回合,拿到锁后再复核 archived 仍然成立(用户取回了就
 //     是不想要这次清理了),两道一起才关得住这个窗口。
-//  ⑤ **删掉已合并的分支之前,把它的末端提交存进 `acceptedHeadRef`**(第 1 轮审查):
-//     手动 `git merge` 合入主分支的任务没有验收留下的恢复引用,分支一删,取回后重建只
-//     剩 `worktreeStartCommit` 这个**开工点**可用,任务自己做完的东西全不在工作区里。
-//     存了这个 ref,`restoreAcceptedStart` 会把起点抬到任务完成时的提交。
+//  ⑤ **删分支之前,把它的末端提交存进 `acceptedHeadRef`**(第 1 轮审查):没有验收留下
+//     的恢复引用时,分支一删,取回后重建只剩 `worktreeStartCommit` 这个**开工点**可用,
+//     任务自己做完的东西全不在工作区里。存了这个 ref,`restoreAcceptedStart` 会把起点
+//     抬到任务完成时的提交。未合并的分支更是只剩这一份副本,所以存不下就不删。
 //  ⑥ **预览实例一律不清理**。那台后端连的是主库快照,任务行指向的却是真仓库;
 //     `removeWorktree` 自带这道闸,`git branch -d` 没有,于是「目录已不在、只剩分支」
 //     的任务会把真分支删掉(第 1 轮审查确定性复现)。在入口直接挡住,不依赖下游。
@@ -149,7 +152,8 @@ async function discardOne(
       }
     }
   }
-  const result = await discardTaskWorkspace(repo, target.id, { worktree: tryWorktree, branch: tryBranch });
+  // forceBranch:走到这里的分支末端已经存进恢复引用并核对过(上一段),未合并也能删。
+  const result = await discardTaskWorkspace(repo, target.id, { worktree: tryWorktree, branch: tryBranch, forceBranch: true });
   return {
     taskId: target.id,
     title: target.title,

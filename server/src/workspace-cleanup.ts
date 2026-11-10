@@ -47,11 +47,15 @@ export async function detectTaskWorkspace(
  * (有未提交改动时),分支用 `-D`(未合并时)。默认路径一律不带 force,让 git 自己
  * 的安全检查兜住「这里面还有没提交/没合并的东西」。这跟验收清理那条「绝不用 -D」
  * 不冲突 —— 那条管的是自动流程,这里是用户看着报错仍然要求删掉。
+ *
+ * `forceBranch` 只放开分支那一半(`-D`),worktree 照旧不带 `--force`:归档清理先把分支
+ * 末端存成恢复引用、核对过再删,未合并的提交仍然可达;目录里没提交的改动则没有任何副本,
+ * 那一半必须继续让 git 把关。
  */
 export async function discardTaskWorkspace(
   repoPath: string | null | undefined,
   taskId: string,
-  opts: { worktree: boolean; branch: boolean; force?: boolean },
+  opts: { worktree: boolean; branch: boolean; force?: boolean; forceBranch?: boolean },
 ): Promise<TaskWorkspaceDiscardResult> {
   const out: TaskWorkspaceDiscardResult = {
     path: null,
@@ -91,7 +95,7 @@ export async function discardTaskWorkspace(
         // `removeWorktree` 自带这道闸,这里原来没有 —— 于是「目录已不在、只剩分支」的
         // 任务能从预览实例里把真分支删掉(审查确定性复现)。两样东西同一道闸。
         assertNotPreviewInstance("删任务分支");
-        await exec("git", ["-C", repo, "branch", opts.force ? "-D" : "-d", branch]);
+        await exec("git", ["-C", repo, "branch", opts.force || opts.forceBranch ? "-D" : "-d", branch]);
         out.branchDeleted = true;
       } catch (error) {
         out.branchError = gitError(error);

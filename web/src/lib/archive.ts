@@ -1,5 +1,5 @@
 // 归档/取回的那一下 toast。摘要逻辑只能有一份：归档现在会按设置顺手删 worktree/分支，
-// 「删成了什么、什么因为未合并留下了」是用户当场唯一能看到的交代（持久那份在任务时间
+// 「删成了什么、什么因为没提交的改动留下了」是用户当场唯一能看到的交代（持久那份在任务时间
 // 线里）。四个入口（任务详情、团队、讨论、命令面板）都走这里，别在调用处自己拼文案。
 import type { Task } from "@ash/shared";
 import { summarizeArchiveCleanup } from "@ash/shared/project";

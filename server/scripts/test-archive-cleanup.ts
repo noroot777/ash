@@ -1,14 +1,14 @@
 // 归档时的 worktree/分支去留（server/src/task-archive-cleanup.ts + 归档路由）。
 //
 // 覆盖「归档也删」这条行为的全部不变量：
-//   1. 默认档 all：worktree 真的没了；分支还有未合并提交时**保留**（只用 `-d`，绝不 -D）
+//   1. 默认档 all：worktree 真的没了；分支有未合并提交也删（先存恢复起点），取回从它重建
 //   2. 分支已合并 → 连分支一起收掉
 //   3. 设置 worktree：只删目录，分支一律留着
 //   4. 设置 none：上线前的旧行为，磁盘一个字节不动
-//   5. 清理失败不影响归档：worktree 脏 → 任务照样 archived，报告里带 git 原话
+//   5. 清理失败不影响归档：worktree 脏 → 任务照样 archived，报告里带 git 原话，分支跟着留下
 //   6. 别的任务钉着这个分支（worktreeBase）→ 分支不删，照实说原因
 //   7. 团队：执行者的工作区跟着 lead 一起收
-//   8. 取回时如实交代工作区实情（目录已不在、分支还在 → 下次运行会重建）
+//   8. 取回时如实交代工作区实情（目录已不在、分支还在 → 下次运行会按分支重建）
 //   9. 清理排队期间被取回 → 这次清理作废，正在用的目录不许删（第 1 轮审查）
 //  9b. 同上，但取回后还没点运行：回合锁空着，靠占锁后复查 archived 挡住（同上）
 //  10. 删掉已合并的分支要留下恢复起点，取回重建回到任务完成时而不是开工点（同上）
@@ -82,12 +82,18 @@ try {
     git(path, "commit", "-m", `work ${name}`);
   };
 
-  // ── 1. 默认 all：目录删掉，未合并的分支留着 ──────────────────────────────
+  // ── 1. 默认 all：未合并的分支也删，末端留作恢复起点 ──────────────────────
+  // 归档最常见的就是没验收、没合并的任务。只用 `-d` 时这一档对它们形同「只删
+  // worktree」，分支留在 `git branch` 里谁都能误合回主分支（用户 2026-11-10 追问）。
   {
+    const { acceptedHeadRef, commitAt } = await import("../src/task-branch-plan.js");
+    const { taskWorkspace } = await import("../src/task-workspace.js");
     const id = "arcAplain01";
     await seed({ id });
+    await db.update(tasks).set({ useWorktree: true, worktreeBase: "main" }).where(eq(tasks.id, id));
     const ws = await prepareWorktree(repo, id, "main");
     commitIn(ws.path, "a.txt");
+    const finishedCommit = git(ws.path, "rev-parse", "HEAD");
     const branch = worktreeBranchName(id);
 
     const response = await archive(id);
@@ -96,19 +102,21 @@ try {
     const body = JSON.parse(raw) as { task: { archived: boolean }; cleanup: { items: { worktreeRemoved: boolean; branchDeleted: boolean; branch: string | null; branchError: string | null }[] } };
     assert.equal(body.task.archived, true, "归档本身必须成功");
     assert.equal(existsSync(ws.path), false, "worktree 目录应被删除");
-    assert.equal(branchExists(branch), true, "未合并的分支绝不能被删掉");
+    assert.equal(branchExists(branch), false, "未合并的分支也该收掉");
     const item = body.cleanup.items[0];
     assert.equal(item.worktreeRemoved, true);
-    assert.equal(item.branchDeleted, false, "git branch -d 必须拒绝未合并分支");
-    assert.equal(item.branch, branch, "保留下来的分支要在报告里露脸");
-    assert.match(item.branchError ?? "", /not fully merged|未合并/i, "要带上 git 原话");
-    assert.match(summarizeArchiveCleanup(body.cleanup as never), /^已清理 worktree；分支 .* 已保留（/, "单个任务别说「1 个 worktree」");
+    assert.equal(item.branchDeleted, true);
+    assert.equal(item.branchError, null);
+    assert.equal(await commitAt(repo, acceptedHeadRef(id)), finishedCommit, "未合并的提交只剩恢复起点这一份，必须存下来");
+    assert.equal(summarizeArchiveCleanup(body.cleanup as never), `已清理 worktree 和 分支 ${branch}`, "单个任务别说「1 个 worktree」");
 
-    // ── 8. 取回时交代实情：目录没了、分支还在 → 下次运行会重建
     const restored = await unarchive(id);
     const back = await restored.json() as { task: { archived: boolean }; restoreNote: string | null };
     assert.equal(back.task.archived, false);
-    assert.match(back.restoreNote ?? "", new RegExp(`按分支 ${branch} 重建`), "取回必须说清工作区状态");
+    assert.match(back.restoreNote ?? "", /任务完成时的提交/, "取回必须说清会从哪儿重建");
+    const rebuilt = await taskWorkspace((await db.select().from(tasks).where(eq(tasks.id, id))).at(0)! as never, repo);
+    assert.equal(git(rebuilt.path, "rev-parse", "HEAD"), finishedCommit, "重建要回到任务做完的那个提交");
+    assert.equal(existsSync(join(rebuilt.path, "a.txt")), true, "没合并过的改动取回后必须还在");
   }
 
   // ── 2. 分支已合并：两样都收掉 ───────────────────────────────────────────
@@ -141,6 +149,11 @@ try {
     assert.equal(existsSync(ws.path), false, "目录还是要删");
     assert.equal(branchExists(branch), true, "这一档不碰分支");
     assert.equal(body.cleanup.items[0].branch, null, "按设置不删 ≠ 删失败，不该报成保留项");
+
+    // ── 8. 取回时交代实情：目录没了、分支还在 → 下次运行会按分支重建
+    const back = await (await unarchive(id)).json() as { task: { archived: boolean }; restoreNote: string | null };
+    assert.equal(back.task.archived, false);
+    assert.match(back.restoreNote ?? "", new RegExp(`按分支 ${branch} 重建`), "取回必须说清工作区状态");
   }
 
   // ── 4. 设置 none：磁盘一个字节不动（上线前的旧行为）──────────────────────
@@ -166,6 +179,7 @@ try {
     const id = "arcEdirty05";
     await seed({ id });
     const ws = await prepareWorktree(repo, id, "main");
+    commitIn(ws.path, "e.txt");
     writeFileSync(join(ws.path, "dirty.txt"), "没提交的改动\n");
 
     const body = await (await archive(id)).json() as { task: { archived: boolean }; cleanup: { items: { worktreeRemoved: boolean; worktreeError: string | null }[] } };
@@ -173,6 +187,7 @@ try {
     assert.equal(existsSync(ws.path), true, "脏目录必须原样留着（不带 --force）");
     assert.equal(body.cleanup.items[0].worktreeRemoved, false);
     assert.match(body.cleanup.items[0].worktreeError ?? "", /dirty\.txt/, "挡路的文件要摆在用户面前");
+    assert.equal(branchExists(worktreeBranchName(id)), true, "留下的目录还检出着这条分支，-D 也不许删");
   }
 
   // ── 6. 别的任务钉着这个分支：不删分支，说清为什么 ─────────────────────────
@@ -181,8 +196,7 @@ try {
     await seed({ id });
     const ws = await prepareWorktree(repo, id, "main");
     const branch = worktreeBranchName(id);
-    commitIn(ws.path, "f.txt");
-    git(repo, "merge", "--no-edit", branch); // 已合并 → 否则 -d 本来就会拒，测不到这道闸
+    commitIn(ws.path, "f.txt"); // 不合并：归档用 -D，挡住它的只剩依赖这道闸
     await seed({ id: "arcFchild6c", status: "backlog", worktreeBase: branch });
 
     const body = await (await archive(id)).json() as { cleanup: { items: { branchDeleted: boolean; branchError: string | null }[] } };
