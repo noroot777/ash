@@ -7,6 +7,7 @@
 // 环境变量是整体优先：只配了 HTTP_PROXY 时 https 也走它，不会一半环境变量一半系统代理。
 // 选中的代理连不上就是连不上，这里不做「代理失败改直连」—— 那会让代理/直连哪条路坏了都看不出来。
 import { BlockList, isIP } from "node:net";
+import { domainToASCII } from "node:url";
 import { systemProxySettings, type SystemProxySettings } from "./system-proxy.js";
 
 export type ProxySource = "env" | "system" | "none";
@@ -20,6 +21,8 @@ export type ProxyPlan = {
   systemBypass: BypassRule[];
   /** 系统里配了但没生效的设置（PAC 等），要原样告诉用户 */
   notice: string | null;
+  /** 不知道系统要走哪个代理（读不到/地址写坏了）：除本机和 NO_PROXY 外一律拒绝，不能拿直连顶上 */
+  unavailable: string | null;
   /** 同一份配置同一个 key，dispatcher 按它判断要不要重建 */
   key: string;
 };
@@ -28,6 +31,8 @@ export type ProxyRoute = {
   source: ProxySource;
   /** 直连的原因 */
   bypass?: "loopback" | "no_proxy" | "system";
+  /** 不发出去：plan.unavailable */
+  blocked?: true;
 };
 
 type BypassRule =
@@ -76,6 +81,18 @@ function cidrRule(entry: string): BypassRule | null {
   return { kind: "cidr", list };
 }
 
+/**
+ * 规则里的字面主机和请求 URL 的 hostname 用同一种写法：国际化域名转 punycode（URL 本身就这么规范化），
+ * IPv6 写成压缩形式。带通配的只逐段转换不含 `*` 的非 ASCII 段；纯 ASCII 段只小写，免得 `192` 这种数字段被当成 IPv4 改写。
+ */
+function canonicalHost(entry: string): string {
+  if (isIP(entry) === 6) return new URL(`http://[${entry}]`).hostname.slice(1, -1);
+  const host = entry.replace(/\.$/, "");
+  if (!/[^\x00-\x7f]/.test(host)) return host;
+  if (!host.includes("*")) return domainToASCII(host) || host;
+  return host.split(".").map((label) => (/[^\x00-\x7f]/.test(label) && !label.includes("*") ? domainToASCII(label) || label : label)).join(".");
+}
+
 /** 系统绕过列表的统一语法（参照 Chromium 对各平台列表的解释）：精确主机、`*` 通配、`.域名`=所有子域、可选 `scheme://` 与 `:端口`、CIDR、`<local>`=不带点的主机名 */
 export function parseBypassRule(raw: string): BypassRule | null {
   let entry = raw.trim().toLowerCase();
@@ -94,6 +111,7 @@ export function parseBypassRule(raw: string): BypassRule | null {
     const withPort = entry.match(/^(.+):(\d+)$/);
     if (withPort) [entry, port] = [withPort[1], Number(withPort[2])];
   }
+  entry = canonicalHost(entry);
   if (entry.startsWith(".")) entry = `*${entry}`;
   const pattern = new RegExp(`^${entry.split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
   return { kind: "host", pattern, port, scheme: scheme ? `${scheme}:` : null };
@@ -130,23 +148,28 @@ export function routeFor(plan: ProxyPlan, url: URL): ProxyRoute {
   const port = Number.parseInt(url.port, 10) || DEFAULT_PORTS[url.protocol] || 0;
   if (LOOPBACK.has(hostname)) return { proxy: null, source: plan.source, bypass: "loopback" };
   if (envNoProxyBypassed(plan.envNoProxy, hostname, port)) return { proxy: null, source: plan.source, bypass: "no_proxy" };
+  if (plan.unavailable) return { proxy: null, source: plan.source, blocked: true };
   if (systemBypassed(plan.systemBypass, url, port)) return { proxy: null, source: plan.source, bypass: "system" };
   return { proxy: url.protocol === "https:" ? plan.https : url.protocol === "http:" ? plan.http : null, source: plan.source };
 }
 
 function systemNotice(settings: SystemProxySettings): string | null {
-  if (settings.error) return `读取系统代理失败（${settings.error}），按未配置处理`;
-  if (!settings.unsupported.length) return null;
-  const effective = settings.http || settings.https
-    ? `已按系统手动代理转发（HTTP ${redactProxy(settings.http)}，HTTPS ${redactProxy(settings.https)}）`
-    : "当前直连";
-  return `系统代理里的${settings.unsupported.join("、")}ash 不支持、未生效，${effective}；需要时可设置 HTTPS_PROXY 指定代理`;
+  const notices: string[] = [];
+  if (settings.staleError) notices.push(`这次读取系统代理失败（${settings.staleError}），沿用上次读到的配置`);
+  if (settings.unsupported.length) {
+    const effective = settings.http || settings.https
+      ? `已按系统手动代理转发（HTTP ${redactProxy(settings.http)}，HTTPS ${redactProxy(settings.https)}）`
+      : "当前直连";
+    notices.push(`系统代理里的${settings.unsupported.join("、")}ash 不支持、未生效，${effective}；需要时可设置 HTTPS_PROXY 指定代理`);
+  }
+  return notices.length ? notices.join("；") : null;
 }
 
 let lastPlan: ProxyPlan | null = null;
 
 function describePlan(plan: ProxyPlan): string {
-  const target = plan.source === "none" ? "直连" : `HTTP ${redactProxy(plan.http)}，HTTPS ${redactProxy(plan.https)}`;
+  const target = plan.unavailable ? `远端请求暂停转发：${plan.unavailable}`
+    : plan.source === "none" ? "直连" : `HTTP ${redactProxy(plan.http)}，HTTPS ${redactProxy(plan.https)}`;
   return `代理来源：${plan.label}；${target}${plan.notice ? `；${plan.notice}` : ""}`;
 }
 
@@ -168,28 +191,37 @@ export async function relayProxyPlan(): Promise<ProxyPlan> {
     const names = [...new Set([https.value ? https.name : null, http.value ? http.name : null].filter(Boolean))];
     return remember({
       source: "env", label: `环境变量 ${names.join("、")}`, http: httpProxy, https: httpsProxy,
-      envNoProxy, systemBypass: [], notice: null,
+      envNoProxy, systemBypass: [], notice: null, unavailable: null,
       key: JSON.stringify(["env", httpProxy, httpsProxy, envNoProxy]),
     });
   }
   const settings = await systemProxySettings();
   const notice = systemNotice(settings);
+  if (settings.error) {
+    const unavailable = `${settings.error}，无法确定该不该走代理，为免绕过系统代理不直连；可设置 HTTPS_PROXY 指定代理或 NO_PROXY 指定直连`;
+    return remember({
+      source: "system", label: `系统代理（${settings.platform}）`, http: null, https: null,
+      envNoProxy, systemBypass: [], notice, unavailable,
+      key: JSON.stringify(["unavailable", settings.platform, envNoProxy, unavailable, notice]),
+    });
+  }
   if (!settings.http && !settings.https) {
     return remember({
       source: "none", label: "未配置代理",
-      http: null, https: null, envNoProxy, systemBypass: [], notice,
+      http: null, https: null, envNoProxy, systemBypass: [], notice, unavailable: null,
       key: JSON.stringify(["none", envNoProxy, notice]),
     });
   }
   return remember({
     source: "system", label: `系统代理（${settings.platform}）`, http: settings.http, https: settings.https,
     envNoProxy, systemBypass: settings.bypass.map(parseBypassRule).filter((rule): rule is BypassRule => rule !== null),
-    notice, key: JSON.stringify(["system", settings.platform, settings.http, settings.https, settings.bypass, envNoProxy, notice]),
+    notice, unavailable: null, key: JSON.stringify(["system", settings.platform, settings.http, settings.https, settings.bypass, envNoProxy, notice]),
   });
 }
 
 /** 报错里那半句「走的哪条路」 */
 export function describeRoute(plan: ProxyPlan, route: ProxyRoute): string {
+  if (route.blocked) return `未转发（${plan.unavailable}）`;
   const path = route.proxy ? `经代理 ${redactProxy(route.proxy)}（${plan.label}）`
     : route.bypass === "loopback" ? "本机地址直连"
     : route.bypass ? `直连（命中${route.bypass === "no_proxy" ? " NO_PROXY" : "系统代理绕过列表"}）`

@@ -10,6 +10,7 @@
 // 读一次要起子进程，所以结果缓存 SYSTEM_PROXY_TTL_MS：过期后的请求先用旧值、后台刷新（不让任何一次
 // 转发等子进程），只有进程里的第一次读取要等。
 import { readFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileText } from "./exec.js";
@@ -23,22 +24,44 @@ export type SystemProxySettings = {
   bypass: string[];
   /** 读到了但 ash 不支持、因而没有生效的设置 */
   unsupported: string[];
-  /** 读取本身失败的原因（不含命令输出） */
+  /**
+   * 不知道系统要走哪个代理：第一次就没读到，或读到的代理地址拼不成合法 URL。
+   * 这时远端请求一律拒绝而不是直连 —— 系统代理可能正开着，直连就是绕过它。
+   */
   error?: string;
+  /** 这次读取失败了、沿用的是上次读到的配置，记下失败原因 */
+  staleError?: string;
 };
 
 const SYSTEM_PROXY_TTL_MS = 15_000;
 const READ_TIMEOUT_MS = 3_000;
 const NONE = (platform: string): SystemProxySettings => ({ platform, http: null, https: null, bypass: [], unsupported: [] });
 
-/** `host:port` → 代理 URL；host 自带 scheme 时保留（KDE/Windows 都可能写成 `http://host`） */
-function proxyUrl(host: string, port?: string | number): string | null {
-  const trimmed = host.trim();
-  if (!trimmed) return null;
-  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+/**
+ * 系统设置里的代理主机（+ 单独的端口）→ 代理 URL。单独给了端口时 host 只当主机名，裸 IPv6 补方括号
+ * （不能拿末尾的「:数字」猜有没有端口，`::1` 的末段就长这样）；没给端口时 host 可以是 `主机:端口`、
+ * `[v6]:端口` 或带 scheme 的完整地址。拼不成合法 URL 就记进 settings.error，绝不当成「没配代理」。
+ */
+function proxyUrl(settings: SystemProxySettings, host: string, port?: string | number): string | null {
+  const raw = host.trim();
+  if (!raw) return null;
   const portText = String(port ?? "").trim();
-  if (!portText || portText === "0") return withScheme;
-  return /:\d+\/?$/.test(withScheme.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")) ? withScheme : `${withScheme.replace(/\/$/, "")}:${portText}`;
+  const scheme = raw.match(/^([a-z][a-z0-9+.-]*):\/\/(.*)$/i);
+  let authority = (scheme ? scheme[2] : raw).replace(/\/+$/, "");
+  if (portText && portText !== "0") {
+    const hostname = authority.replace(/^\[(.*)\]$/, "$1");
+    authority = `${isIP(hostname) === 6 ? `[${hostname}]` : hostname}:${portText}`;
+  } else if (isIP(authority) === 6) {
+    authority = `[${authority}]`;
+  }
+  try {
+    const url = new URL(`${scheme ? scheme[1] : "http"}://${authority}`);
+    if (!url.hostname || url.pathname !== "/" || url.search || url.hash || (portText && !/^\d{1,5}$/.test(portText))) throw new Error("bad");
+    return url.href.replace(/\/$/, "");
+  } catch {
+    settings.error ??= `系统代理地址无法解析（${raw.includes("@") ? "含凭据，已隐藏" : raw}${portText && portText !== "0" ? ` 端口 ${portText}` : ""}）`;
+    return null;
+  }
 }
 
 function describeUrl(raw: string): string {
@@ -79,8 +102,8 @@ export function parseScutilProxy(text: string): SystemProxySettings {
   }
   const on = (key: string) => scalars.get(key) === "1";
   const settings = NONE("macOS");
-  if (on("HTTPEnable")) settings.http = proxyUrl(scalars.get("HTTPProxy") ?? "", scalars.get("HTTPPort"));
-  if (on("HTTPSEnable")) settings.https = proxyUrl(scalars.get("HTTPSProxy") ?? "", scalars.get("HTTPSPort"));
+  if (on("HTTPEnable")) settings.http = proxyUrl(settings, scalars.get("HTTPProxy") ?? "", scalars.get("HTTPPort"));
+  if (on("HTTPSEnable")) settings.https = proxyUrl(settings, scalars.get("HTTPSProxy") ?? "", scalars.get("HTTPSPort"));
   settings.bypass = [...(arrays.get("ExceptionsList") ?? [])];
   if (on("ExcludeSimpleHostnames")) settings.bypass.push("<local>");
   if (on("ProxyAutoConfigEnable")) settings.unsupported.push(`PAC 自动配置（${describeUrl(scalars.get("ProxyAutoConfigURLString") ?? "")}）`);
@@ -116,11 +139,11 @@ export function parseWindowsProxy(settingsText: string, connectionsText = ""): S
         const [scheme, address] = part.split("=", 2).map((item) => item.trim());
         if (scheme && address) byScheme.set(scheme.toLowerCase(), address);
       }
-      settings.http = proxyUrl(byScheme.get("http") ?? "");
-      settings.https = proxyUrl(byScheme.get("https") ?? "");
+      settings.http = proxyUrl(settings, byScheme.get("http") ?? "");
+      settings.https = proxyUrl(settings, byScheme.get("https") ?? "");
       if (byScheme.has("socks") && (!settings.http || !settings.https)) settings.unsupported.push("SOCKS 代理");
     } else {
-      settings.http = settings.https = proxyUrl(server);
+      settings.http = settings.https = proxyUrl(settings, server);
     }
     settings.bypass = (values.get("proxyoverride") ?? "").split(";").map((item) => item.trim()).filter(Boolean);
   }
@@ -133,9 +156,38 @@ export function parseWindowsProxy(settingsText: string, connectionsText = ""): S
 
 // ---- Linux ----
 
-/** GVariant 文本里的单引号字符串 */
-function gvariantStrings(value: string): string[] {
-  return [...value.matchAll(/'((?:[^'\\]|\\.)*)'/g)].map((match) => match[1].replace(/\\(.)/g, "$1"));
+const GVARIANT_ESCAPES: Record<string, string> = { a: "\x07", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v" };
+
+/**
+ * GVariant 文本格式里的全部字符串字面量。g_variant_print 的写法：串里有单引号就改用双引号包，
+ * 引号和反斜杠前加 `\`，不可打印字符写成 `\n`、`\uXXXX`、`\UXXXXXXXX`。密码里什么字符都可能有，得按完整语法解。
+ */
+export function gvariantStrings(value: string): string[] {
+  const strings: string[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const quote = value[index];
+    if (quote !== "'" && quote !== '"') continue;
+    let text = "";
+    for (index += 1; index < value.length && value[index] !== quote; index += 1) {
+      if (value[index] !== "\\") {
+        text += value[index];
+        continue;
+      }
+      const next = value[++index] ?? "";
+      const width = next === "u" ? 4 : next === "U" ? 8 : 0;
+      const hex = width ? value.slice(index + 1, index + 1 + width) : "";
+      if (GVARIANT_ESCAPES[next]) {
+        text += GVARIANT_ESCAPES[next];
+      } else if (width && hex.length === width && /^[0-9a-f]+$/i.test(hex) && Number.parseInt(hex, 16) <= 0x10ffff) {
+        text += String.fromCodePoint(Number.parseInt(hex, 16));
+        index += width;
+      } else {
+        text += next;
+      }
+    }
+    strings.push(text);
+  }
+  return strings;
 }
 
 /** `gsettings list-recursively org.gnome.system.proxy` 的输出 */
@@ -156,7 +208,7 @@ export function parseGnomeProxy(text: string): SystemProxySettings {
   const manual = (scheme: "http" | "https") => {
     const host = text1(`${scheme}/host`);
     const port = (values.get(`${scheme}/port`) ?? "").replace(/^\D+/, "");
-    const url = proxyUrl(host, port);
+    const url = proxyUrl(settings, host, port);
     if (!url || scheme !== "http" || values.get("http/use-authentication") !== "true") return url;
     const user = text1("http/authentication-user");
     if (!user) return url;
@@ -170,7 +222,8 @@ export function parseGnomeProxy(text: string): SystemProxySettings {
     }
   };
   settings.http = manual("http");
-  settings.https = manual("https");
+  // 同 glib-networking：HTTPS 主机留空时 HTTPS 也走 HTTP 代理（连同认证信息）
+  settings.https = text1("https/host") ? manual("https") : settings.http;
   settings.bypass = gvariantStrings(values.get("/ignore-hosts") ?? "");
   if (text1("socks/host") && (!settings.http || !settings.https)) settings.unsupported.push("SOCKS 代理");
   return settings;
@@ -197,7 +250,7 @@ export function parseKdeProxy(text: string): SystemProxySettings {
   // KDE 把端口用空格隔开写：`http://127.0.0.1 7890`
   const manual = (key: string) => {
     const [host = "", port] = (values.get(key) ?? "").split(/\s+/);
-    return proxyUrl(host, port);
+    return proxyUrl(settings, host, port);
   };
   settings.http = manual("httpProxy");
   settings.https = manual("httpsProxy");
@@ -260,7 +313,11 @@ export function refreshSystemProxy(): Promise<SystemProxySettings> {
     .catch((error: unknown): SystemProxySettings => {
       const code = (error as { code?: unknown })?.code;
       const killed = (error as { killed?: unknown })?.killed === true;
-      return { ...NONE(process.platform), error: killed ? `读取超过 ${READ_TIMEOUT_MS}ms` : typeof code === "string" ? code : `退出码 ${String(code ?? "未知")}` };
+      const reason = killed ? `读取超过 ${READ_TIMEOUT_MS}ms` : typeof code === "string" ? code : `退出码 ${String(code ?? "未知")}`;
+      // 读不到不等于没配：有上次读到的就接着用；第一次就失败则标成 error，远端请求拒绝而不是直连
+      const previous = generation === readGeneration ? snapshot?.settings : undefined;
+      if (previous && !previous.error) return { ...previous, staleError: reason };
+      return { ...NONE(process.platform), error: `读取系统代理失败（${reason}）` };
     })
     .then((settings) => {
       if (generation === readGeneration) snapshot = { settings, readAt: Date.now() };

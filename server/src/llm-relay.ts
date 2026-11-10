@@ -4,7 +4,7 @@ import { describeRoute, redactProxy, relayProxyPlan, routeFor, type ProxyPlan, t
 import { refreshSystemProxy } from "./system-proxy.js";
 
 type RelayOptions = { headersTimeoutMs?: number; connectTimeoutMs?: number; bodyTimeoutMs?: number };
-type RelayPool = { configuration: string; dispatcher: Dispatcher; agents: Dispatcher[] };
+type RelayPool = { configuration: string; direct: Agent; proxies: Map<string, ProxyAgent>; agents: Dispatcher[]; agentOptions: Agent.Options };
 const dispatchers = new Map<string, RelayPool>();
 const closingDispatchers = new Set<Promise<void>>();
 type RelayPhase = "headers" | "stream";
@@ -64,29 +64,37 @@ export async function closeRelayDispatchers(): Promise<void> {
 }
 
 // 每个供应商 origin 一个独立连接池（不和全局 fetch 抢连接），代理方案一变就整池换掉。
-// 走不走代理按**每个请求的 origin** 判（重定向到别的主机也照样判），代理池按地址懒建。
-function relayDispatcher(upstream: string, plan: ProxyPlan, connectTimeoutMs: number, bodyTimeoutMs: number): Dispatcher {
+function relayPool(upstream: string, plan: ProxyPlan, connectTimeoutMs: number, bodyTimeoutMs: number): RelayPool {
   const configuration = JSON.stringify([plan.key, connectTimeoutMs, bodyTimeoutMs]);
   const existing = dispatchers.get(upstream);
-  if (existing?.configuration === configuration) return existing.dispatcher;
+  if (existing?.configuration === configuration) return existing;
   const agentOptions = { allowH2: false, connect: { timeout: connectTimeoutMs }, headersTimeout: 0, bodyTimeout: bodyTimeoutMs };
   const direct = new Agent(agentOptions);
-  const proxies = new Map<string, ProxyAgent>();
-  const pool: RelayPool = { configuration, agents: [direct], dispatcher: direct };
-  pool.dispatcher = direct.compose((dispatch) => (options, handler) => {
-    const proxy = routeFor(plan, new URL(String(options.origin))).proxy;
-    if (!proxy) return dispatch(options, handler);
-    let agent = proxies.get(proxy);
-    if (!agent) {
-      agent = new ProxyAgent({ ...agentOptions, uri: proxy });
-      proxies.set(proxy, agent);
-      pool.agents.push(agent);
-    }
-    return agent.dispatch(options, handler);
-  });
+  const pool: RelayPool = { configuration, direct, proxies: new Map(), agents: [direct], agentOptions };
   dispatchers.set(upstream, pool);
   if (existing) void retireDispatcher(existing);
-  return pool.dispatcher;
+  return pool;
+}
+
+function proxyAgent(pool: RelayPool, proxy: string): ProxyAgent {
+  let agent = pool.proxies.get(proxy);
+  if (!agent) {
+    agent = new ProxyAgent({ ...pool.agentOptions, uri: proxy });
+    pool.proxies.set(proxy, agent);
+    pool.agents.push(agent);
+  }
+  return agent;
+}
+
+// 走不走代理按**每一跳的 origin** 判（重定向到别的主机也照样判），并把实际走的那条路报给这个请求的诊断；
+// 判成 blocked 的那一跳直接报错，不落到直连池上。代理池按地址懒建，连接在同一个 pool 里复用。
+function routedDispatcher(pool: RelayPool, plan: ProxyPlan, onRoute: (route: ProxyRoute) => void): Dispatcher {
+  return pool.direct.compose((dispatch) => (options, handler) => {
+    const route = routeFor(plan, new URL(String(options.origin)));
+    onRoute(route);
+    if (route.blocked) throw Object.assign(new Error("系统代理不可用，拒绝直连"), { code: "ASH_SYSTEM_PROXY_UNAVAILABLE" });
+    return route.proxy ? proxyAgent(pool, route.proxy).dispatch(options, handler) : dispatch(options, handler);
+  });
 }
 
 function upstreamOrigin(url: string): string {
@@ -133,6 +141,7 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
     const status = canceled ? 499 : timeout ? 504 : 502;
     const reason = canceled ? "请求已取消" : timedOut ? `等待响应头超过 ${timeoutMs}ms`
       : codes.includes("UND_ERR_BODY_TIMEOUT") ? `响应流空闲超过 ${bodyTimeoutMs}ms`
+      : codes.includes("ASH_SYSTEM_PROXY_UNAVAILABLE") ? "系统代理不可用"
       : timeout ? "连接超时" : phase === "stream" ? "响应流中断" : "连接失败";
     const diagnostic = { requestId, upstream, method, phase, status, elapsedMs: Date.now() - startedAt, codes, ...routeFields() };
     logDiagnostic(diagnostic);
@@ -149,7 +158,9 @@ export async function relayFetch(url: string, init: RequestInit, options: RelayO
   try {
     plan = await relayProxyPlan();
     try { route = routeFor(plan, new URL(url)); } catch { route = null; }
-    const dispatcher = relayDispatcher(upstream, plan, positiveTimeout(options.connectTimeoutMs, 10_000), bodyTimeoutMs);
+    if (route?.blocked) throw Object.assign(new Error("系统代理不可用，拒绝直连"), { code: "ASH_SYSTEM_PROXY_UNAVAILABLE" });
+    const pool = relayPool(upstream, plan, positiveTimeout(options.connectTimeoutMs, 10_000), bodyTimeoutMs);
+    const dispatcher = routedDispatcher(pool, plan, (actual) => { route = actual; });
     const requestInit: RequestInit & { dispatcher: Dispatcher } = { ...init, signal, dispatcher };
     response = await fetch(url, requestInit);
   } catch (error) {

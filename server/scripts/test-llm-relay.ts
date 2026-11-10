@@ -19,7 +19,12 @@ console.log = (...args: unknown[]) => {
 };
 // 本测试不读本机真实的系统代理：默认「系统没配」，用到时逐段换
 let systemProxy: SystemProxySettings = { platform: "测试", http: null, https: null, bypass: [], unsupported: [] };
-setSystemProxyReaderForTests(async () => systemProxy, 60_000);
+let systemProxyFailure: Error | null = null;
+const systemProxyReader = async () => {
+  if (systemProxyFailure) throw systemProxyFailure;
+  return systemProxy;
+};
+setSystemProxyReaderForTests(systemProxyReader, 60_000);
 const envKeys = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "ASH_LLM_RELAY_HEADERS_TIMEOUT_MS", "ASH_LLM_RELAY_BODY_TIMEOUT_MS"];
 const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
 const sockets = new Set<Socket>();
@@ -29,6 +34,11 @@ let abortClosed: (() => void) | undefined;
 const upstream = createServer(async (request, response) => {
   calls.push({ path: request.url ?? "", method: request.method ?? "", socket: request.socket });
   for await (const _chunk of request) { }
+  if (request.url?.startsWith("/redirect?to=")) {
+    response.writeHead(302, { location: decodeURIComponent(request.url.slice("/redirect?to=".length)) });
+    response.end();
+    return;
+  }
   if (request.url === "/hang") {
     slowStarted?.();
     return;
@@ -277,6 +287,36 @@ try {
   assert(warnings.some((line) => line.includes("代理来源：未配置代理")));
   console.log("  ✓ 未配置环境变量时走系统代理（带凭据），系统代理变化刷新后立即切换，本机供应商始终直连");
 
+  // ---- 读不到系统代理：不能把「没读到」当成「没配」去直连 ----
+  systemProxy = { platform: "测试", http: systemProxyUrl, https: systemProxyUrl, bypass: [], unsupported: [] };
+  await refreshSystemProxy();
+  systemProxyFailure = Object.assign(new Error("denied"), { code: "EACCES" });
+  await refreshSystemProxy();
+  proxyAuthority = "";
+  const keptProxy = await relayFetch(mappedUrl, {});
+  assert.deepEqual(await keptProxy.json(), { ok: true });
+  assert.equal(proxyAuthority, `[::ffff:7f00:1]:${address.port}`, "刷新失败后仍经上次读到的系统代理，而不是直连");
+  setSystemProxyReaderForTests(systemProxyReader, 60_000);
+  const callsBeforeBlocked = calls.length;
+  await assert.rejects(relayFetch(mappedUrl, { method: "POST", body: "inference-request" }), (error: unknown) => {
+    assert(error instanceof RelayRequestError);
+    assert.equal(error.diagnostic.status, 502);
+    assert.deepEqual(error.diagnostic.codes, ["ASH_SYSTEM_PROXY_UNAVAILABLE"]);
+    assert.match(error.message, /系统代理不可用，未转发（读取系统代理失败（EACCES）/);
+    return true;
+  });
+  await assert.rejects(relayFetch(`${origin}/redirect?to=${encodeURIComponent(mappedUrl)}`, {}), (error: unknown) => {
+    assert(error instanceof RelayRequestError);
+    assert(error.diagnostic.codes.includes("ASH_SYSTEM_PROXY_UNAVAILABLE"), "重定向到远端的那一跳同样拒绝");
+    return true;
+  });
+  assert.deepEqual(calls.slice(callsBeforeBlocked).map((entry) => entry.path), [`/redirect?to=${encodeURIComponent(mappedUrl)}`], "首次读取失败时远端请求一个都没直连出去");
+  const localWhileBlocked = await relayFetch(`${origin}/healthy`, {});
+  assert.deepEqual(await localWhileBlocked.json(), { ok: true }, "本机供应商不受影响");
+  systemProxyFailure = null;
+  await refreshSystemProxy();
+  console.log("  ✓ 系统代理读取失败：沿用上次有效配置；第一次就失败则拒绝远端请求（含重定向那一跳），不偷偷直连");
+
   // ---- 代理连不上：报清楚走的哪条路，不偷偷改直连 ----
   const deadSystemProxy = "http://relay-user:system-proxy-secret@127.0.0.1:1";
   systemProxy = { platform: "测试", http: deadSystemProxy, https: deadSystemProxy, bypass: [], unsupported: [] };
@@ -298,6 +338,14 @@ try {
     return true;
   });
   assert.equal(calls.length, callsBefore, "代理失败后不能绕过代理直连上游");
+  delete process.env.HTTP_PROXY;
+  await assert.rejects(relayFetch(`${origin}/redirect?to=${encodeURIComponent(mappedUrl)}`, {}), (error: unknown) => {
+    assert(error instanceof RelayRequestError);
+    assert.equal(error.diagnostic.proxy, "http://***@127.0.0.1:1", "诊断报的是重定向后实际走的代理，不是初始那跳的直连");
+    assert.equal(error.diagnostic.bypass, undefined);
+    assert.match(error.message, /经代理 http:\/\/\*\*\*@127\.0\.0\.1:1/);
+    return true;
+  });
   delete process.env.HTTP_PROXY;
   systemProxy = { platform: "测试", http: null, https: null, bypass: [], unsupported: ["PAC 自动配置（http://pac.test/proxy.pac）"] };
   await refreshSystemProxy();
