@@ -338,6 +338,44 @@ async function main(): Promise<void> {
   const lo = lateOld.tally().agent;
   check(lo?.finished === 1 && lo.reaped === 1, "旧那条命的迟到通知不替新那条命报完成", JSON.stringify(lo));
 
+  // 实测口径（2026-11-10 任务 tLDCWCOJ0cuO 的 run 文件原样）：续上的那条命沿用最初那次 Agent 调用的
+  // tool_use_id，两条完成通知也都带它。第二条曾落到早已了结的旧命上，新命永远没终态，单飞回合
+  // 收尾一直「等后台」到两小时超时。
+  const sharedId = (trace: Trace, status: string) => trace.event({
+    type: "system", subtype: "task_notification", task_id: "af5a", status, tool_use_id: "toolu_explore",
+  });
+  const resumed = new ClaudeBackgroundTrace("resumed-shared-id");
+  call(resumed, "Agent", "toolu_explore");
+  started(resumed, "af5a", "toolu_explore", "local_agent");
+  returned(resumed, "toolu_explore"); // "Async agent launched successfully…"
+  call(resumed, "SendMessage", "toolu_nudge");
+  returned(resumed, "toolu_nudge"); // "Message queued for delivery … at its next tool round."
+  sharedId(resumed, "completed");
+  started(resumed, "af5a", "toolu_explore", "local_agent"); // 为了送那条消息续上，id 还是原调用的
+  check(resumed.waiting().agent === 1, "续上的那条命在跑：等它", JSON.stringify(resumed.waiting()));
+  sharedId(resumed, "completed");
+  result(resumed);
+  check(resumed.waiting().agent === 0, "续上的那条命也完成了：不再等后台", JSON.stringify(resumed.waiting()));
+  const rs = resumed.tally().agent;
+  check(rs?.total === 2 && rs.finished === 2, "共用 tool_use_id 的两条命都算自己结束", JSON.stringify(rs));
+  check(backgroundReapedNotice(resumed.tally()) === "", "都完成了不写时间线");
+
+  // 同一口径下旧那条命停掉的通知晚于续上才到：两条命 id 相同，认不出是谁的，不猜，等齐再落地。
+  const sharedLate = new ClaudeBackgroundTrace("shared-late");
+  call(sharedLate, "Agent", "toolu_explore");
+  started(sharedLate, "af5a", "toolu_explore", "local_agent");
+  returned(sharedLate, "toolu_explore");
+  call(sharedLate, "TaskStop", "toolu_stop", { task_id: "af5a" });
+  returned(sharedLate, "toolu_stop");
+  started(sharedLate, "af5a", "toolu_explore", "local_agent");
+  sharedId(sharedLate, "stopped");
+  check(sharedLate.waiting().agent === 1, "认不出是哪条命停的：续上那条仍按在跑等", JSON.stringify(sharedLate.waiting()));
+  sharedId(sharedLate, "completed");
+  result(sharedLate);
+  const sl = sharedLate.tally().agent;
+  check(sharedLate.waiting().agent === 0 && sl?.total === 2 && sl.reaped === 0,
+    "两条通知都到了就都了结，不说成被收走", `${JSON.stringify(sharedLate.waiting())} ${JSON.stringify(sl)}`);
+
   // ── ②⁵ 停止回执本身就是证据，不靠终态通知来触发（第 4 次审查 R1）──────────────────
   for (const [tool, field, kind, type] of [
     ["TaskStop", "task_id", "agent", "local_agent"], ["KillShell", "shell_id", "bash", "local_bash"],

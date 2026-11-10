@@ -43,10 +43,13 @@
 //   没到都一样）。请求发了、回执还在路上 → 原因不明，回执到了再改判。
 //   只发了请求不算：回执带 `is_error`（权限拒绝、目标不存在）就当它没停成，按下面几条定。
 //   指名的是**发请求那一刻的那条命**：子代理被 SendMessage 续上后 task_id 不变，旧请求的
-//   回执哪怕晚到，也只结算旧的那条命。终态通知同理，按它自带的 `tool_use_id` 认是哪一条命；
-//   没带、同名又有几条命没了结时**不猜**（通知到达的先后不等于结束的先后）：先挂着，等别的
-//   证据把范围缩到一条命，或者每条命都等到了通知；分档取决于是哪条命的（停止回执只给了其中
-//   一些）那几笔记「原因不明」，不断言是谁被收走。
+//   回执哪怕晚到，也只结算旧的那条命。终态通知只在**还没了结**的命里认：它自带的 `tool_use_id`
+//   只说明是哪次调用起的，不说明是哪一条命——续上的那条命沿用最初那次 Agent 调用的
+//   `tool_use_id`（2026-11-10 任务 tLDCWCOJ0cuO 实测：两次 task_started、两条完成通知全是同一个
+//   id。按它在全部命里取第一条，第二条完成通知就落到早已了结的旧命上，新命永远等不到终态，
+//   单飞回合收尾一直「等后台」）。候选不止一条时**不猜**（通知到达的先后不等于结束的先后）：
+//   先挂着，等别的证据把范围缩到一条命，或者每条命都等到了通知；分档取决于是哪条命的（停止
+//   回执只给了其中一些）那几笔记「原因不明」，不断言是谁被收走。
 // - 没人请求停它、通知落在回合 `result` 之后、下一段助手输出之前 → 被收走：那个空档里
 //   唯一在动的是 CLI 收台（内置 Monitor 那边实测的行序）。
 // - 流结束时还没有终态、也没人请求停它 → 被收走（进程都没了）。
@@ -148,8 +151,8 @@ export class ClaudeBackgroundTrace {
   private tasks = new Map<string, Tracked>();
   /** 同一个 task_id 再起一次之前的那几条命（SendMessage 把停掉的子代理续上）——各算各的。 */
   private earlier: Tracked[] = [];
-  /** task_id → 认不出是哪条命、先挂着的终态通知。 */
-  private loose = new Map<string, Note[]>();
+  /** 认不出是哪条命、先挂着的终态通知，按通知自报的身份（task_id + 可选的 tool_use_id）归堆。 */
+  private loose = new Map<string, { taskId: string; toolUseId: string; notes: Note[] }>();
   /** 回合 `result` 之后、下一段助手输出之前（见文件头「是谁停的」）。 */
   private idle = false;
   /** 时间线写入串成一条链：回合边界那次和流结束那次不能乱序，`finish` 要等它写完。 */
@@ -216,28 +219,32 @@ export class ClaudeBackgroundTrace {
     const note: Note = {
       stopped: status === "stopped", sessionEnded: SESSION_ENDED_RE.test(String(ev.summary ?? "")), idle: this.idle,
     };
-    // 通知带着 `tool_use_id` 就只认那一条命：续上之后，旧那条命迟到的通知不能结算到新那条命
-    // 头上。没带的，同名只有一条命没了结才认得出；不止一条就先挂着（见文件头「是谁停的」）。
-    const toolUseId = typeof ev.tool_use_id === "string" ? ev.tool_use_id : "";
-    const open = this.open(taskId);
-    if (!toolUseId && open.length > 1) {
-      this.loose.set(taskId, [...this.loose.get(taskId) ?? [], note]);
-    } else {
-      const task = toolUseId ? this.runs().find((t) => t.taskId === taskId && t.toolUseId === toolUseId) : open[0];
-      if (task && !task.note) task.note = note;
+    // 只在还没了结的命里认（见文件头「是谁停的」）：带着 `tool_use_id` 就缩到那次调用起的命，
+    // 账上没有哪条命出自那次调用的（id 口径对不上）按没带算。剩一条就是它，不止一条先挂着。
+    const raw = typeof ev.tool_use_id === "string" ? ev.tool_use_id : "";
+    const toolUseId = raw && this.runs().some((t) => t.taskId === taskId && t.toolUseId === raw) ? raw : "";
+    const open = this.open(taskId, toolUseId);
+    const key = `${taskId}\n${toolUseId}`;
+    if (open.length > 1) {
+      const pile = this.loose.get(key) ?? { taskId, toolUseId, notes: [] as Note[] };
+      pile.notes.push(note);
+      this.loose.set(key, pile);
+    } else if (open.length === 1) {
+      open[0].note = note;
     }
-    this.absorb(taskId);
+    this.absorb(key);
   }
 
   /** 挂着的通知能落地了就落：范围缩到一条命，或者每条命都等到了通知。 */
-  private absorb(taskId: string): void {
-    const notes = this.loose.get(taskId);
-    if (!notes) return;
-    const open = this.open(taskId);
+  private absorb(key: string): void {
+    const pile = this.loose.get(key);
+    if (!pile) return;
+    const { notes } = pile;
+    const open = this.open(pile.taskId, pile.toolUseId);
     if (open.length > 1 && notes.length < open.length) return;
     if (open.length === 1) open[0].note = notes[0];
     else open.forEach((task, i) => { task.note = notes[i]; task.peers = open; });
-    this.loose.delete(taskId);
+    this.loose.delete(key);
   }
 
   /**
@@ -264,8 +271,9 @@ export class ClaudeBackgroundTrace {
     return false;
   }
 
-  private open(taskId: string): Tracked[] {
-    return this.runs().filter((task) => task.taskId === taskId && !task.note);
+  /** 还没等到终态的那几条命；`toolUseId` 非空就只要那次调用起的。 */
+  private open(taskId: string, toolUseId = ""): Tracked[] {
+    return this.runs().filter((task) => task.taskId === taskId && !task.note && (!toolUseId || task.toolUseId === toolUseId));
   }
 
   /**
@@ -318,8 +326,8 @@ export class ClaudeBackgroundTrace {
    */
   tally(): Partial<Record<BackgroundKind, BackgroundTally>> {
     const outcomes = new Map(this.runs().map((task) => [task, this.outcomeOf(task)] as const));
-    for (const [taskId, notes] of this.loose) {
-      const open = this.open(taskId);
+    for (const { taskId, toolUseId, notes } of this.loose.values()) {
+      const open = this.open(taskId, toolUseId);
       open.forEach((task, i) => outcomes.set(task, this.verdict(notes[i], open)));
     }
     return tallyOf(outcomes);
