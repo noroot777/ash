@@ -3,7 +3,7 @@ import type { TaskWorkspaceLeftover, TaskWorkspaceDiscardResult } from "@ash/sha
 import { dirtyFilesAt, expandHome, gitError, listFiles, localBranchExists, removeWorktree, resolveWorktreeBranchName, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { execFileText as exec } from "./exec.js";
-import { assertReadableWorktree, removeMissingWorktreeRegistrations, UnreadableWorktreeError } from "./git-worktree-state.js";
+import { assertReadableWorktree, registeredCheckout, removeMissingWorktreeRegistrations, UnreadableWorktreeError } from "./git-worktree-state.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 
 const isDir = (p: string) => {
@@ -48,14 +48,16 @@ export async function detectTaskWorkspace(
  * 的安全检查兜住「这里面还有没提交/没合并的东西」。这跟验收清理那条「绝不用 -D」
  * 不冲突 —— 那条管的是自动流程,这里是用户看着报错仍然要求删掉。
  *
- * `forceBranch` 只放开分支那一半(`-D`),worktree 照旧不带 `--force`:归档清理先把分支
- * 末端存成恢复引用、核对过再删,未合并的提交仍然可达;目录里没提交的改动则没有任何副本,
- * 那一半必须继续让 git 把关。
+ * `forceBranchAt` 只放开分支那一半,worktree 照旧不带 `--force`:调用方已把这个提交存进
+ * 别的 ref,所以未合并也能删;目录里没提交的改动则没有任何副本,那一半必须继续让 git 把关。
+ * 删的条件是**分支此刻仍指向这个提交**,由 `update-ref -d <ref> <旧值>` 在 ref 锁里比较,
+ * 不是删前再读一次:仓库锁只排得住本进程,外部终端、Git 钩子照样能在「存好恢复引用」之后
+ * 往分支上再提交,那时 `-D` 会连同已经没有任何 ref 保着的新提交一起删掉(第 1 轮审查实测)。
  */
 export async function discardTaskWorkspace(
   repoPath: string | null | undefined,
   taskId: string,
-  opts: { worktree: boolean; branch: boolean; force?: boolean; forceBranch?: boolean },
+  opts: { worktree: boolean; branch: boolean; force?: boolean; forceBranchAt?: string },
 ): Promise<TaskWorkspaceDiscardResult> {
   const out: TaskWorkspaceDiscardResult = {
     path: null,
@@ -95,7 +97,8 @@ export async function discardTaskWorkspace(
         // `removeWorktree` 自带这道闸,这里原来没有 —— 于是「目录已不在、只剩分支」的
         // 任务能从预览实例里把真分支删掉(审查确定性复现)。两样东西同一道闸。
         assertNotPreviewInstance("删任务分支");
-        await exec("git", ["-C", repo, "branch", opts.force || opts.forceBranch ? "-D" : "-d", branch]);
+        if (opts.forceBranchAt && !opts.force) await deleteBranchAt(repo, branch, opts.forceBranchAt);
+        else await exec("git", ["-C", repo, "branch", opts.force ? "-D" : "-d", branch]);
         out.branchDeleted = true;
       } catch (error) {
         out.branchError = gitError(error);
@@ -103,6 +106,26 @@ export async function discardTaskWorkspace(
     }
     return out;
   });
+}
+
+/**
+ * 分支仍指向 `expected` 才删(见 `discardTaskWorkspace` 的 `forceBranchAt`)。`update-ref -d`
+ * 不像 `git branch` 那样替检出着它的工作区把关,这一道得自己补:被检出的分支删掉后那个
+ * 目录的 HEAD 就悬空了。
+ */
+async function deleteBranchAt(repo: string, branch: string, expected: string): Promise<void> {
+  const checkout = await registeredCheckout(repo, branch);
+  if (checkout.path) throw new Error(`分支 ${branch} 正被工作区 ${checkout.path} 检出，不能删除`);
+  try {
+    await exec("git", ["-C", repo, "update-ref", "-d", `refs/heads/${branch}`, expected]);
+  } catch (error) {
+    const tip = await exec("git", ["-C", repo, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`])
+      .then((r) => r.stdout.trim(), () => null);
+    if (tip && tip !== expected) {
+      throw new Error(`分支 ${branch} 在保存恢复起点之后又有了新提交（${tip.slice(0, 8)}），已保留，没有删掉恢复起点之外的改动`);
+    }
+    throw error;
+  }
 }
 
 // ── 例外之三:任务接力(用户 2026-08-27 拍板)────────────────────────────────

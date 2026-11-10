@@ -17,9 +17,10 @@
 //  13. 没冻结过开工点的旧任务，取回也按保存的完成提交重建（同上）
 //  14. 恢复起点存不下来就保留分支，绝不报成「已清理」（同上）
 //  15. 整队归档取回后，隔离执行者按**自己**的完成提交重建，共用的按领队的（第 3 轮审查）
+//  16. 存好恢复起点之后外部又往分支上提交：分支整条留下，新提交不许跟着删（-D 那轮第 1 轮审查）
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -544,6 +545,52 @@ try {
     assert.equal(git(sharedBack.path, "rev-parse", "HEAD"), leadFinished, "共用者跟着领队的完成提交走");
     assert.equal(existsSync(join(sharedBack.path, "lead.txt")), true, "领队做完的文件要在共用目录里");
     assert.equal(existsSync(join(sharedBack.path, "later-team.txt")), false, "同样不该掺进主分支后来的改动");
+  }
+
+  // ── 16. 存好恢复起点后分支又被推进:比较不过就整条留下 ──────────────────
+  // 仓库锁只排得住本进程,外部终端、Git 钩子照样能在「写好恢复引用」和「删分支」之间
+  // 往分支上提交。旧实现无条件 -D,新提交连同分支一起没了,恢复引用还停在旧末端。
+  // 用 reference-transaction 钩子把这次提交精确地插进那个窗口。
+  {
+    await setClean("all");
+    const { acceptedHeadRef, commitAt } = await import("../src/task-branch-plan.js");
+    const id = "arcOrace016";
+    await seed({ id });
+    const ws = await prepareWorktree(repo, id, "main");
+    commitIn(ws.path, "o.txt");
+    const savedTip = git(ws.path, "rev-parse", "HEAD");
+    const branch = worktreeBranchName(id);
+
+    const hooks = join(stage, "hooks");
+    mkdirSync(hooks, { recursive: true });
+    const hook = join(hooks, "reference-transaction");
+    const lateTipFile = join(stage, "late-tip");
+    writeFileSync(hook, [
+      "#!/bin/sh",
+      '[ "$1" = committed ] || exit 0',
+      "while read old new ref; do",
+      `  if [ "$ref" = "${acceptedHeadRef(id)}" ]; then`,
+      `    printf 'late\n' > '${ws.path}/late.txt'`,
+      `    git -C '${ws.path}' add late.txt && git -C '${ws.path}' commit -q -m late`,
+      `    git -C '${ws.path}' rev-parse HEAD > '${lateTipFile}'`,
+      "  fi",
+      "done",
+      "",
+    ].join("\n"));
+    chmodSync(hook, 0o755);
+    git(repo, "config", "core.hooksPath", hooks);
+    let body: { cleanup: { items: { worktreeRemoved: boolean; branchDeleted: boolean; branchError: string | null }[] } };
+    try { body = await (await archive(id)).json() as typeof body; }
+    finally { git(repo, "config", "--unset", "core.hooksPath"); }
+
+    const lateTip = existsSync(lateTipFile) ? readFileSync(lateTipFile, "utf8").trim() : "";
+    assert.ok(lateTip && lateTip !== savedTip, "前提:钩子确实在存好恢复起点之后推进了分支");
+    assert.equal(await commitAt(repo, acceptedHeadRef(id)), savedTip, "前提:恢复起点存的是旧末端");
+    const item = body.cleanup.items[0];
+    assert.equal(item.branchDeleted, false, "分支已不在恢复起点上,不许删");
+    assert.equal(await commitAt(repo, branch), lateTip, "新提交只剩这条分支保着,必须还在");
+    assert.match(item.branchError ?? "", /新提交/, "要说清为什么留下");
+    assert.equal(item.worktreeRemoved, true, "目录照常清理 —— 提交完它是干净的,内容都在分支里");
   }
 
   console.log("[archive-cleanup] 全部断言通过");
