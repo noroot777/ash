@@ -47,6 +47,17 @@ export interface CliConfigOverride {
 export interface CliHostEnv {
   /** `CLAUDE_CODE_MAX_OUTPUT_TOKENS`;没设 = null(CLI 用模型自己的上限)。 */
   maxOutputTokens: number | null;
+  /**
+   * 用户/项目 settings 里写的 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`(env 原值,占有效窗口);没写 =
+   * null/缺省。profile 只填窗口、百分比留空时 CLI 继承的就是它,不是 claude 的默认触发点。
+   */
+  compactPercent?: number | null;
+}
+
+/** profile 没填百分比时 CLI 会继承的那个(env 原值);没有就是 null。 */
+function inheritedCompactPercent(host: CliHostEnv): number | null {
+  const value = host.compactPercent;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 100 ? value : null;
 }
 
 export const NO_CLI_HOST_ENV: Readonly<CliHostEnv> = Object.freeze({ maxOutputTokens: null });
@@ -96,6 +107,7 @@ const CLAUDE_AUTO_COMPACT_KILL_SWITCHES = ["DISABLE_COMPACT", "DISABLE_AUTO_COMP
 // 审查 finding 3)。钉的是「我们读到的那个赢家值」,所以对用户是原地不动,只是不许它
 // 在我们身后再变。读不到就不钉 —— 编一个数比不钉更糟。
 const CLAUDE_MAX_OUTPUT_ENV = "CLAUDE_CODE_MAX_OUTPUT_TOKENS";
+const CLAUDE_PCT_ENV = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE";
 
 /** 这个 profile 真的配了自动压缩(窗口是这一档的开关项,没它百分比也不注入)。 */
 function claudeCompactionConfigured(
@@ -159,7 +171,13 @@ export function claudeCompactionPlan(
     : null;
   const declaredEffective = declared - reserve;
   if (percent === null || declaredEffective <= 0 || effective <= 0) {
-    return { window, clampedFrom, percent: null, envPercent: null, trigger: Math.max(0, floor), capped: false };
+    // 没填百分比 ≠ 没有百分比:下层 settings 里写过的那个照样进 CLI 的算式(审查 SaouXWB_jEuw F1)。
+    const inherited = percent === null ? inheritedCompactPercent(host) : null;
+    return {
+      window, clampedFrom, percent: null, envPercent: inherited,
+      trigger: inherited === null ? Math.max(0, floor) : claudeCompactTrigger(window, inherited, host.maxOutputTokens),
+      capped: false,
+    };
   }
   const wanted = Math.floor((declared * percent) / 100);
   // claude 只认 0 < pct ≤ 100;换算后超过 100 说明用户想压得比它的下限还晚,
@@ -334,6 +352,10 @@ export function cliConfigOverrideEnv(
     if (typeof reserveSource === "number" && Number.isFinite(reserveSource) && reserveSource > 0) {
       out[CLAUDE_MAX_OUTPUT_ENV] = String(Math.round(reserveSource));
     }
+    // 百分比留空时同理:把下层继承来的那个赢家值钉进来。对 CLI 是原地不动(本来就按它压),
+    // 但这样注入的这份就是**全部**压缩输入,启动快照才能如实写下触发点,而不是按默认算。
+    const inherited = inheritedCompactPercent(host);
+    if (!(CLAUDE_PCT_ENV in out) && inherited !== null) out[CLAUDE_PCT_ENV] = String(inherited);
   }
   return out;
 }
@@ -468,6 +490,9 @@ export function cliConfigOverrideHints(
   // 摁住总开关这件事得说出来:它盖的是用户自己配置文件里的开关,不说明白就等于
   // 「悄悄改了别人的配置」;而不摁的话上面这个触发点根本不会发生(见 JI())。
   const forced = [`这次调用里 ash 会强制打开自动压缩(顶掉 settings.json 的 autoCompactEnabled:false 与 ${CLAUDE_AUTO_COMPACT_KILL_SWITCHES.join(" / ")}),否则窗口和百分比填对了也一次都不会压。`];
+  if (plan.percent === null && plan.envPercent !== null) {
+    return [`${at}百分比留空,沿用 claude 自己配置里继承来的 ${plan.envPercent}%(占窗口扣掉输出预留后的部分);想改就填下面的百分比。`, ...forced];
+  }
   if (plan.percent === null) return [`${at}这是 claude 的默认触发点;想更早压就填下面的百分比。`, ...forced];
   if (plan.capped) return [`${at}填的 ${plan.percent}% 比 claude 自己的下限还晚,已经按下限算 —— 想更早压请往小了填。`, ...forced];
   return [at, ...forced];

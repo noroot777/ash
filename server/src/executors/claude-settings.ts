@@ -113,17 +113,67 @@ function projectLayers(cwd: string): string[] {
     : [local(root), shared(root)];
 }
 
+/** 比 ash 那份 `--settings` 低的那几层(项目两档 + 用户配置目录),按实测优先级从高到低。 */
+function lowerLayers(cwd?: string): string[] {
+  return [...(cwd ? projectLayers(cwd) : []), join(userConfigDir(), "settings.json")];
+}
+
+// 会进 claude 自动压缩算式的全部输入(见 shared/src/cli-overrides.ts 那段反编译):
+// 窗口、百分比、输出预留、两条 kill switch(env),以及 settings 顶层的总开关与窗口。
+const COMPACT_ENV_INPUTS = [
+  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+  "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+  "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+  "DISABLE_COMPACT",
+  "DISABLE_AUTO_COMPACT",
+] as const;
+const COMPACT_SETTING_INPUTS = ["autoCompactEnabled", "autoCompactWindow"] as const;
+
+function touchesCompaction(path: string): boolean {
+  const settings = readJsonFile(path);
+  if (!settings) return false;
+  if (COMPACT_SETTING_INPUTS.some((key) => settings[key] !== undefined)) return true;
+  return COMPACT_ENV_INPUTS.some((name) => envValue(path, name) !== undefined);
+}
+
+/**
+ * 各层配置里跟自动压缩有关的事实,给「这次起跑最终按什么压」那道判定用(cli-env.ts
+ * claudeLaunchCompact)。ash 只注入用户在 profile 上填了的项,**留空的项照样从下面这几层
+ * 继承** —— 用户 settings.json 里写了 50%、profile 只填窗口,CLI 就按 50% 压(审查 SaouXWB_jEuw F1)。
+ *
+ *   managedTouches   企业策略那层碰过任一压缩输入:它压在 `--settings` 之上,ash 注入的数也未必算数
+ *   lowerTouches     项目/用户那几层碰过任一压缩输入:ash 没配压缩时,CLI 就按它们走
+ *   inheritedPercent 那几层里赢下来的百分比(env 原值,占有效窗口);同名变量在子进程环境里已被
+ *                    ash 删掉(cliConfigOverrideEnvPatch),所以不看 process.env
+ */
+export function claudeCompactLayers(cwd?: string): {
+  managedTouches: boolean;
+  lowerTouches: boolean;
+  inheritedPercent: number | null;
+} {
+  const lower = lowerLayers(cwd);
+  let inheritedPercent: number | null = null;
+  for (const path of lower) {
+    const found = envValue(path, "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE");
+    if (found === undefined) continue;
+    const value = Number(found);
+    inheritedPercent = Number.isFinite(value) && value > 0 && value <= 100 ? value : null;
+    break;
+  }
+  return {
+    managedTouches: touchesCompaction(managedSettingsPath()),
+    lowerTouches: lower.some(touchesCompaction),
+    inheritedPercent,
+  };
+}
+
 /**
  * 本机 claude 最终会看到的 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`(没有任何一层写过 = null)。
  * 给了 cwd 才读得到项目那几层 —— 设置页那条只读接口没有项目概念,读用户层就够。
  */
 export function claudeMaxOutputTokens(cwd?: string): number | null {
   const name = "CLAUDE_CODE_MAX_OUTPUT_TOKENS";
-  const layers = [
-    managedSettingsPath(),
-    ...(cwd ? projectLayers(cwd) : []),
-    join(userConfigDir(), "settings.json"),
-  ];
+  const layers = [managedSettingsPath(), ...lowerLayers(cwd)];
   for (const path of layers) {
     const found = envValue(path, name);
     if (found !== undefined) return toPositiveInt(found);

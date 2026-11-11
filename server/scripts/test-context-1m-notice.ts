@@ -170,6 +170,9 @@ const { spawn } = await import("node:child_process");
 const { ClaudeExecutor } = await import("../src/executors/claude.js");
 const { cliHostEnv } = await import("../src/executors/cli-env.js");
 const fixtureDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-"));
+// 用户配置目录钉到一个空目录:快照要读各层 settings(下面 ③b),不能让本机的 ~/.claude 混进来。
+const emptyConfigDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-cfg-"));
+process.env.CLAUDE_CONFIG_DIR = emptyConfigDir;
 const frames = [
   { type: "assistant", message: { model: "claude-fable-5-2", content: [], usage: { input_tokens: 143_746, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } },
   { type: "result", subtype: "success", is_error: false, session_id: "fixture-cli", modelUsage: { "claude-fable-5-2": { contextWindow: 200_000 } }, usage: { input_tokens: 143_746, output_tokens: 1 } },
@@ -348,6 +351,48 @@ assert.deepEqual(
   "带标记的「不知道」不会被老行判定翻回确定值",
 );
 
+// ── ③b 留空的输入照样从下层继承(审查 SaouXWB_jEuw F1) ─────────────────────────
+// 用户 settings.json 里写了 50%,profile 只填 600k 窗口、百分比留空:CLI 按 50% 压。快照只看
+// ash 注入了什么的话就缺了百分比,面板按默认算成 ~167k,真实是 (200k − 20k) × 50% = 90k。
+const inheritedConfigDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-cfg-"));
+writeFileSync(join(inheritedConfigDir, "settings.json"), JSON.stringify({ env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "50" } }));
+process.env.CLAUDE_CONFIG_DIR = inheritedConfigDir;
+const windowOnly = new ClaudeExecutor({ model: "claude-fable-5-2", bin: fakeClaude, configOverrides: { autoCompactWindow: 600_000 } });
+const inheritedRun = windowOnly.run({ prompt: "hi", cwd: fixtureDir });
+assert.deepEqual(inheritedRun.launchCompact, { compactWindow: 600_000, compactPercent: 50 }, "继承来的百分比进了启动快照");
+assert.ok(
+  inheritedRun.commandLine.includes(`"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"50"`),
+  "同一个赢家值钉进 ash 的 --settings:注入的这份就是全部压缩输入",
+);
+const inheritedContext = await contextOf(inheritedRun.events);
+assert.equal(contextCompactTrigger(inheritedContext), 90_000, "按继承的 50% 算,不是默认的 ~167k");
+const inheritedPlan = claudeCompactionPlan({ autoCompactWindow: 600_000 }, cliHostEnv(fixtureDir), CLAUDE_STANDARD_WINDOW);
+assert.equal(inheritedPlan?.trigger, 90_000, "设置页预览同一个数");
+assert.equal(inheritedPlan?.envPercent, 50);
+assert.ok(
+  cliConfigOverrideHints("claude", { autoCompactWindow: 600_000 }, cliHostEnv(fixtureDir), CLAUDE_STANDARD_WINDOW)
+    .some((hint) => hint.includes("~90k") && hint.includes("50%")),
+  "预览文案说出继承来的百分比",
+);
+// ash 没配压缩、下层却配过:CLI 按下层走,ash 判不全 —— 不知道,而不是「没配」。
+const unconfigured = new ClaudeExecutor({ model: "claude-fable-5-2", bin: fakeClaude });
+assert.deepEqual(unconfigured.run({ prompt: "hi", cwd: fixtureDir }).launchCompact, { compactUnknown: true });
+process.env.CLAUDE_CONFIG_DIR = emptyConfigDir;
+assert.deepEqual(unconfigured.run({ prompt: "hi", cwd: fixtureDir }).launchCompact, {}, "各层都没碰过压缩:跟随 CLI,没有可说的");
+// 项目层同样算一层下层配置。
+const projectDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-proj-"));
+const { mkdirSync } = await import("node:fs");
+mkdirSync(join(projectDir, ".claude"));
+writeFileSync(join(projectDir, ".claude", "settings.json"), JSON.stringify({ autoCompactWindow: 300_000 }));
+assert.deepEqual(unconfigured.run({ prompt: "hi", cwd: projectDir }).launchCompact, { compactUnknown: true }, "项目层顶层配了窗口");
+assert.deepEqual(
+  windowOnly.run({ prompt: "hi", cwd: projectDir }).launchCompact,
+  { compactWindow: 600_000 },
+  "配了窗口时 ash 的 --settings 压过项目层的窗口;百分比没人写过就是默认",
+);
+rmSync(inheritedConfigDir, { recursive: true, force: true });
+rmSync(projectDir, { recursive: true, force: true });
+
 // ── ④ 一键开启端点 ────────────────────────────────────────────────────────
 const { llmProviders } = await import("../src/db/schema.js");
 const { api } = await import("../src/routes.js");
@@ -423,5 +468,6 @@ assert.equal((await enable("missing", { model: "claude-opus-5" })).status, 404, 
 
 rmSync(process.env.ASH_DB!, { force: true });
 rmSync(fixtureDir, { recursive: true, force: true });
+rmSync(emptyConfigDir, { recursive: true, force: true });
 console.log("test-context-1m-notice: ok");
 process.exit(0);

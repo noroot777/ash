@@ -6,12 +6,11 @@ import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
 import {
   cliConfigOverrideConflict,
-  cliConfigOverrideEnv,
   cliConfigOverrideEnvPatch,
   cliConfigOverrideSettings,
 } from "@ash/shared/cli-overrides";
-import { type CompactSnapshot, compactSnapshotFromEnv, UNKNOWN_COMPACT_SNAPSHOT } from "@ash/shared/usage";
-import { cliHostEnv } from "./cli-env.js";
+import { type CompactSnapshot, UNKNOWN_COMPACT_SNAPSHOT } from "@ash/shared/usage";
+import { claudeLaunchCompact, cliHostEnv } from "./cli-env.js";
 import type { AgentExecutor, ConsumedOutput, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import type { MarkdownImageAccounting } from "./markdown-image-stream.js";
 import type { StallVerdict } from "../turn-stall-verdict.js";
@@ -206,7 +205,7 @@ export class ClaudeExecutor implements AgentExecutor {
 
   /**
    * 这次起跑 CLI **最终生效**的压缩配置,解成启动快照带在每条水位上、随 commandLine 落库。
-   * 跟 env()/settingsPayload() 用的是同一份 `cliConfigOverrideEnv` 结果;但 buildArgs 会把
+   * 各层配置的继承与企业策略层由 claudeLaunchCompact 判(cli-env.ts);这里补额外参数那条:buildArgs 会把
    * profile 与本次调用的额外参数排在 ash 那份 `--settings` **之后**,里面若自带 `--settings`
    * 就整份胜出(cliConfigOverrideConflict 那条),ash 注入的数一个都到不了 CLI —— 这时只能
    * 说「不知道」,不能发布被盖掉的那组(第 3 轮审查 F1)。判据跟 buildArgs 用同一份参数。
@@ -214,7 +213,7 @@ export class ClaudeExecutor implements AgentExecutor {
    */
   private launchCompactSnapshot(cwd: string | undefined, callExtraArgs: readonly string[] | undefined): CompactSnapshot {
     if (cliConfigOverrideConflict(this.type, [...this.extraArgs, ...(callExtraArgs ?? [])])) return UNKNOWN_COMPACT_SNAPSHOT;
-    return compactSnapshotFromEnv(cliConfigOverrideEnv(this.type, this.configOverrides, cliHostEnv(cwd)));
+    return claudeLaunchCompact(this.configOverrides, cwd);
   }
 
   run(opts: RunOpts): RunHandle {
