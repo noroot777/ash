@@ -90,6 +90,7 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
         onDetect={() => void detect()}
         onRegister={(cli) => void register(cli)}
         onProfileChanged={changeProfile}
+        onProviderChanged={(updated) => setProviders((current) => current.map((row) => (row.id === updated.id ? updated : row)))}
         onProfileAdded={(profile) => setProfiles((current) => [...current, profile])}
         onProfilesDeleted={(ids) => {
           const deleted = new Set(ids);

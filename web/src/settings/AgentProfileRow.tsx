@@ -23,12 +23,14 @@ export function AgentProfileRow({
   profile,
   providers,
   onChange,
+  onProviderChanged,
   onClaudeModeChange,
   notify,
 }: {
   profile: AgentExecutorProfile;
   providers: LlmProvider[];
   onChange: (profile: AgentExecutorProfile | null) => void;
+  onProviderChanged: (provider: LlmProvider) => void;
   onClaudeModeChange?: (mode: ClaudeModelMode) => void;
   notify: (message: string) => void;
 }) {
@@ -211,12 +213,18 @@ export function AgentProfileRow({
               profileName={profile.name}
               type={profile.type}
               value={profile.configOverrides ?? {}}
+              model={profile.model}
+              provider={provider}
               extraArgs={profile.extraArgs ?? []}
               disabled={busy}
               onSave={async (configOverrides) => {
                 const saved = await patch({ configOverrides });
                 if (saved) notify(`${profile.name} 的 CLI 配置覆盖已保存`);
                 return saved;
+              }}
+              onProviderChanged={(updated) => {
+                onProviderChanged(updated);
+                notify(`已在「${updated.name}」开启 1M，下一轮起生效`);
               }}
             />
           </div>

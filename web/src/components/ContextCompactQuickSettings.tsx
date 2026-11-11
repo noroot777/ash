@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { CaretDown, Sliders } from "@phosphor-icons/react";
-import type { AgentExecutorProfile, Session } from "@ash/shared";
+import type { AgentExecutorProfile, LlmProvider, Session } from "@ash/shared";
 import {
   cliConfigOverrideConflict,
   cliConfigOverrideHints,
   hasCliConfigOverrides,
 } from "@ash/shared/cli-overrides";
+import { claudeModelWindow } from "@ash/shared/context-1m";
 import { api } from "../lib/api.ts";
 import { fmtOverrideValue, useCliOverrideDraft } from "../lib/cliOverrideDraft.ts";
 import { selectAllOnFocus } from "../lib/selectAllOnFocus.ts";
@@ -52,8 +53,9 @@ export function ContextCompactQuickSettings({
     }
     let alive = true;
     setLoad({ status: "loading" });
-    api.agents()
-      .then((profiles) => { if (alive) setLoad({ status: "ready", profiles }); })
+    // 供应商一起拉:触发点要按「这个模型开没开 1M」算(没开会被 CLI 截到 200k)。
+    Promise.all([api.agents(), api.llmProviders()])
+      .then(([profiles, providers]) => { if (alive) setLoad({ status: "ready", profiles, providers }); })
       .catch((error: unknown) => {
         if (alive) setLoad({ status: "failed", error: error instanceof Error ? error.message : "执行器清单读不到" });
       });
@@ -94,8 +96,12 @@ export function ContextCompactQuickSettings({
                 <CompactOverrideForm
                   key={profile.id}
                   profile={profile}
+                  modelWindow={claudeModelWindow(
+                    session.turnModel || profile.model,
+                    load.providers.find((item) => item.id === profile.providerId),
+                  )?.window ?? null}
                   onSaved={(saved) => setLoad((current) => (current.status === "ready"
-                    ? { status: "ready", profiles: current.profiles.map((item) => (item.id === saved.id ? saved : item)) }
+                    ? { ...current, profiles: current.profiles.map((item) => (item.id === saved.id ? saved : item)) }
                     : current))}
                 />
               )
@@ -113,7 +119,7 @@ export function ContextCompactQuickSettings({
 type LoadState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "ready"; profiles: AgentExecutorProfile[] }
+  | { status: "ready"; profiles: AgentExecutorProfile[]; providers: LlmProvider[] }
   | { status: "failed"; error: string };
 
 /**
@@ -121,7 +127,7 @@ type LoadState =
  * 只剩一个可改名的展示名。名字能唯一对上就认,对上多个或对不上就如实说不认识 ——
  * 猜错的代价是「改了另一个执行器的配置」,比多点两下去设置页坏得多。
  */
-function matchProfile(profiles: AgentExecutorProfile[], session: Session): AgentExecutorProfile | null {
+export function matchProfile(profiles: AgentExecutorProfile[], session: Session): AgentExecutorProfile | null {
   if (session.executorId) return profiles.find((item) => item.id === session.executorId) ?? null;
   const byName = profiles.filter((item) => item.name === session.executor && item.type === session.agentType);
   return byName.length === 1 ? byName[0]! : null;
@@ -129,9 +135,12 @@ function matchProfile(profiles: AgentExecutorProfile[], session: Session): Agent
 
 function CompactOverrideForm({
   profile,
+  modelWindow,
   onSaved,
 }: {
   profile: AgentExecutorProfile;
+  /** CLI 下一轮会按多大的模型窗口算;压缩窗口填得比它大会被截。 */
+  modelWindow: number | null;
   onSaved: (profile: AgentExecutorProfile) => void;
 }) {
   const value = profile.configOverrides ?? {};
@@ -143,7 +152,7 @@ function CompactOverrideForm({
   const [justSaved, setJustSaved] = useState(false);
 
   // hint 跟着草稿走,不是跟着已保存的值走 —— 这行字的意义就是「改之前先看看会变成什么」。
-  const hints = cliConfigOverrideHints(profile.type, parsed, hostEnv);
+  const hints = cliConfigOverrideHints(profile.type, parsed, hostEnv, modelWindow);
   const conflict = cliConfigOverrideConflict(profile.type, profile.extraArgs ?? []);
 
   const save = async () => {

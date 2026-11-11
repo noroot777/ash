@@ -47,6 +47,8 @@ export const llmApi = {
       context1mModels: string[];
     }>,
   ): Promise<LlmProvider> => request(`/llm-providers/${id(providerId)}`, json("PATCH", patch)),
+  enableContext1m: (providerId: string, model: string): Promise<LlmProvider> =>
+    request(`/llm-providers/${id(providerId)}/context-1m-models`, json("POST", { model })),
   deleteLlmProvider: (providerId: string): Promise<{ deleted: true }> =>
     request(`/llm-providers/${id(providerId)}`, { method: "DELETE" }),
 };

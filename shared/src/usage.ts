@@ -167,11 +167,19 @@ export interface ContextUsage {
   windowEstimated: boolean;
 }
 
-/** 任务实际会先撞到的窗口：自动压缩设置优先，否则才是模型窗口。 */
+/**
+ * 任务实际会先撞到的窗口：自动压缩设置优先，否则才是模型窗口。
+ * 压缩窗口比 CLI 自报的模型窗口大时按模型窗口算 —— CLI 自己就是这么截的（600k 配在
+ * 没开 1M 的模型上，实际只有 200k，见 context-1m.ts）。估出来的窗口不拿来截：按名字猜
+ * 认不出 1M，截了反而把真 1M 会话算成 200k。
+ */
 export function effectiveContextWindow(c: ContextUsage | null | undefined): number | null {
   const compact = c?.compactWindow;
-  if (typeof compact === "number" && Number.isFinite(compact) && compact > 0) return compact;
-  return c?.window && c.window > 0 ? c.window : null;
+  const model = c?.window && c.window > 0 ? c.window : null;
+  if (typeof compact === "number" && Number.isFinite(compact) && compact > 0) {
+    return model !== null && !c!.windowEstimated ? Math.min(compact, model) : compact;
+  }
+  return model;
 }
 
 /** 水位占窗口的比例 0..1。没有窗口就 null —— 调用方据此决定显不显示百分比。 */

@@ -36,6 +36,7 @@ function AgentProfileGroup({
   providers,
   blockedByVersion,
   onProfileChanged,
+  onProviderChanged,
   onProfileAdded,
   onProfilesDeleted,
   notify,
@@ -55,6 +56,7 @@ function AgentProfileGroup({
    */
   blockedByVersion?: string;
   onProfileChanged: (id: string, profile: AgentExecutorProfile | null) => void;
+  onProviderChanged: (provider: LlmProvider) => void;
   onProfileAdded: (profile: AgentExecutorProfile) => void;
   onProfilesDeleted: (ids: string[]) => void;
   notify: (message: string) => void;
@@ -177,6 +179,7 @@ function AgentProfileGroup({
               }
               onProfileChanged(profile.id, updated);
             }}
+            onProviderChanged={onProviderChanged}
             onClaudeModeChange={(mode) => setClaudeModes((current) => ({ ...current, [profile.id]: mode }))}
             notify={notify}
           />
@@ -208,6 +211,7 @@ export function AgentProfilesSection({
   onDetect,
   onRegister,
   onProfileChanged,
+  onProviderChanged,
   onProfileAdded,
   onProfilesDeleted,
   notify,
@@ -221,6 +225,7 @@ export function AgentProfilesSection({
   onDetect: () => void;
   onRegister: (cli: DetectedCli) => void;
   onProfileChanged: (id: string, profile: AgentExecutorProfile | null) => void;
+  onProviderChanged: (provider: LlmProvider) => void;
   onProfileAdded: (profile: AgentExecutorProfile) => void;
   onProfilesDeleted: (ids: string[]) => void;
   notify: (message: string) => void;
@@ -272,6 +277,7 @@ export function AgentProfilesSection({
                 providers={providers}
                 blockedByVersion={blockedByVersion.get(type)}
                 onProfileChanged={onProfileChanged}
+                onProviderChanged={onProviderChanged}
                 onProfileAdded={onProfileAdded}
                 onProfilesDeleted={onProfilesDeleted}
                 notify={notify}

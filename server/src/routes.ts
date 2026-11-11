@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { stream, streamSSE } from "hono/streaming";
 import { getConnInfo } from "@hono/node-server/conninfo";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type {
   Group,
   LlmProvider,
@@ -463,6 +463,34 @@ api.patch("/llm-providers/:id", async (c) => {
   }
   if (b.apiKey) patch.apiKey = b.apiKey; // 只在传了非空 key 时更新(留空=不动)
   await db.update(llmProviders).set(patch).where(eq(llmProviders.id, pid));
+  const updated = (await db.select().from(llmProviders).where(eq(llmProviders.id, pid))).at(0)!;
+  return c.json(toProvider(updated));
+});
+
+// 「一键开启 1M」:往这家供应商的 1M 列表里**追加**一个模型。单独开一条而不让前端
+// 读-改-写整份 PATCH:那样两个入口(设置页、会话面板)各拿一份旧列表回写,后写的会把
+// 先写的那条冲掉。已在列表里就原样返回,幂等。
+api.post("/llm-providers/:id/context-1m-models", async (c) => {
+  const pid = c.req.param("id");
+  const existing = (await db.select().from(llmProviders).where(eq(llmProviders.id, pid))).at(0);
+  if (!existing || !(await canUseOwned(existing, actorOf(c)))) return c.json({ error: "not found" }, 404);
+  if (existing.protocol !== "anthropic") return c.json({ error: "只有 Anthropic 协议的供应商能声明 1M 模型" }, 400);
+  const b = await c.req.json<{ model?: unknown }>().catch(() => ({ model: undefined }));
+  const model = typeof b.model === "string" ? stripContext1mSuffix(b.model).trim() : "";
+  if (!model) return c.json({ error: "缺少模型名" }, 400);
+  const column = llmProviders.context1mModels;
+  // 一条 UPDATE 里判重 + 追加:库层面原子,并发的两次开启各落各的。列里是坏 JSON(老数据)
+  // 时读端本来就当空列表,这里同样按空列表重写。
+  await db.update(llmProviders)
+    .set({
+      context1mModels: sql`CASE WHEN json_valid(${column}) AND json_type(${column}) = 'array'
+        THEN json_insert(${column}, '$[#]', ${model}) ELSE json_array(${model}) END`,
+    })
+    .where(and(
+      eq(llmProviders.id, pid),
+      sql`NOT (json_valid(${column}) AND json_type(${column}) = 'array'
+        AND EXISTS (SELECT 1 FROM json_each(${column}) WHERE value = ${model}))`,
+    ));
   const updated = (await db.select().from(llmProviders).where(eq(llmProviders.id, pid))).at(0)!;
   return c.json(toProvider(updated));
 });

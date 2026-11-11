@@ -6,6 +6,7 @@ import { contextRatio, effectiveContextWindow, formatTokens, formatTokensExact, 
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
 import { ContextCompactQuickSettings } from "./ContextCompactQuickSettings.tsx";
+import { SessionContext1mNotice } from "./Context1mNotice.tsx";
 
 /**
  * 「这条会话离上下文塞满还有多远」的那颗胶囊。
@@ -66,6 +67,9 @@ export function ContextMeterChip({ context, session, className }: {
     && Number.isFinite(context.compactWindow)
     && context.compactWindow > 0;
   const displayWindowEstimated = !usesCompactWindow && context.windowEstimated;
+  // 执行器配的压缩窗口比 CLI 自报的模型窗口大 = 被截了(多半是模型没开 1M)。
+  const clampedByModel = usesCompactWindow && !context.windowEstimated
+    && context.window !== null && context.window < context.compactWindow!;
   const ratio = contextRatio(context);
   const approx = displayWindowEstimated ? "~" : "";
   const label = ratio === null
@@ -124,6 +128,7 @@ export function ContextMeterChip({ context, session, className }: {
             ? "这一轮没拿到 CLI 自报的窗口，只能按模型名估，仅供参考。"
             : "窗口由 CLI 自报。这是最近一次请求带进模型的输入量，压缩后会掉下来。"}
       </footer>
+      {session && clampedByModel && <SessionContext1mNotice session={session} cliWindow={context.window!} />}
       {session && (
         <ContextCompactQuickSettings
           session={session}

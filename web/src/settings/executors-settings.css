@@ -623,3 +623,10 @@
     transition: none;
   }
 }
+
+/* 窗口被模型窗口截掉（没开 1M）：配了跟没配一样糟，胶囊得一眼看出来。 */
+.agent-profile-overrides-summary.has-value.is-warn {
+  border-color: color-mix(in lch, var(--amber) 45%, var(--line));
+  background: color-mix(in lch, var(--amber) 8%, var(--canvas));
+  color: var(--amber);
+}

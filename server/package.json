@@ -216,6 +216,7 @@
     "test:preview-probe": "tsx scripts/test-preview-probe.ts",
     "test:openai-converter": "tsx scripts/test-openai-converter.ts",
     "test:anthropic-context-1m": "tsx scripts/test-anthropic-context-1m.ts",
+    "test:context-1m-notice": "tsx scripts/test-context-1m-notice.ts",
     "test:llm-relay": "tsx scripts/test-relay-proxy.ts && tsx scripts/test-llm-relay.ts",
     "test:skills": "tsx scripts/test-skills.ts",
     "test:file-browser": "tsx scripts/test-file-browser.ts",

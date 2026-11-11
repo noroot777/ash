@@ -119,8 +119,10 @@ function claudeCompactReserve(host: CliHostEnv): number {
 }
 
 export interface ClaudeCompactionPlan {
-  /** 声明给 claude 的窗口。 */
+  /** claude 实际按多大窗口算(声明值被模型窗口截过之后)。 */
   window: number;
+  /** 声明值比模型窗口大、被 CLI 截掉时,这里是声明的那个数;没截是 null。 */
+  clampedFrom: number | null;
   /** 用户填的百分比(占**窗口**的比例)。 */
   percent: number | null;
   /** 换算成 claude 认的那个百分比(它是占「有效窗口」的比例)。 */
@@ -134,29 +136,39 @@ export interface ClaudeCompactionPlan {
 /**
  * 按上面那套算法把用户填的两个数翻译成「实际会在多少 token 压缩」。
  * 前端拿它显示、`toEnv` 拿它落环境变量,一个公式两处用,不会漂。
+ *
+ * `modelWindow` = CLI 认的模型窗口(见 context-1m.ts)。CLI 会把声明窗口截到它,所以
+ * 注入的百分比照旧按声明值换算(那是 env 里真写的数),触发点却得按截过的窗口算 ——
+ * 不传就当没截,行为同旧版。
  */
 export function claudeCompactionPlan(
   values: Record<string, number>,
   host: CliHostEnv = NO_CLI_HOST_ENV,
+  modelWindow: number | null = null,
 ): ClaudeCompactionPlan | null {
-  const window = values.autoCompactWindow;
-  if (typeof window !== "number" || !Number.isFinite(window)) return null;
-  const effective = window - claudeCompactReserve(host);
+  const declared = values.autoCompactWindow;
+  if (typeof declared !== "number" || !Number.isFinite(declared)) return null;
+  const reserve = claudeCompactReserve(host);
+  const clamped = typeof modelWindow === "number" && modelWindow > 0 && modelWindow < declared;
+  const window = clamped ? modelWindow : declared;
+  const clampedFrom = clamped ? declared : null;
+  const effective = window - reserve;
   const floor = effective - CLAUDE_COMPACT_FLOOR_GAP;
   const percent = typeof values.autoCompactPercent === "number" && Number.isFinite(values.autoCompactPercent)
     ? values.autoCompactPercent
     : null;
-  if (percent === null || effective <= 0) {
-    return { window, percent: null, envPercent: null, trigger: Math.max(0, floor), capped: false };
+  const declaredEffective = declared - reserve;
+  if (percent === null || declaredEffective <= 0 || effective <= 0) {
+    return { window, clampedFrom, percent: null, envPercent: null, trigger: Math.max(0, floor), capped: false };
   }
-  const wanted = Math.floor((window * percent) / 100);
+  const wanted = Math.floor((declared * percent) / 100);
   // claude 只认 0 < pct ≤ 100;换算后超过 100 说明用户想压得比它的下限还晚,
   // 那就是「等于没设」,如实标 capped 而不是偷偷把数改小。
   // 保留两位小数:claude 那边是 parseFloat,精度给够,触发点的误差就只剩几十 token。
-  const raw = (wanted / effective) * 100;
+  const raw = (wanted / declaredEffective) * 100;
   const envPercent = Math.min(100, Math.max(0.01, Math.round(raw * 100) / 100));
   const trigger = Math.min(Math.floor((effective * envPercent) / 100), floor);
-  return { window, percent, envPercent, trigger, capped: wanted >= floor };
+  return { window, clampedFrom, percent, envPercent, trigger, capped: wanted >= declaredEffective - CLAUDE_COMPACT_FLOOR_GAP };
 }
 
 const CLAUDE_OVERRIDES: CliConfigOverride[] = [
@@ -428,15 +440,19 @@ export function cliConfigOverrideHints(
   type: AgentType | string,
   values: Record<string, number> | null | undefined,
   host: CliHostEnv = NO_CLI_HOST_ENV,
+  modelWindow: number | null = null,
 ): string[] {
   if (type !== "claude" || !values) return [];
-  const plan = claudeCompactionPlan(values, host);
+  const plan = claudeCompactionPlan(values, host, modelWindow);
   if (!plan) {
     return values.autoCompactPercent !== undefined
       ? ["只填百分比不起作用:窗口留空时 claude 会整段跳过自动压缩。"]
       : [];
   }
-  const at = `上下文涨到 ~${fmtTokens(plan.trigger)} 时压缩(窗口 ${fmtTokens(plan.window)} 的 ${Math.round((plan.trigger / plan.window) * 100)}%)。`;
+  const clamped = plan.clampedFrom !== null
+    ? `模型窗口只有 ${fmtTokens(plan.window)},填的 ${fmtTokens(plan.clampedFrom)} 会被 CLI 截掉;`
+    : "";
+  const at = `${clamped}上下文涨到 ~${fmtTokens(plan.trigger)} 时压缩(窗口 ${fmtTokens(plan.window)} 的 ${Math.round((plan.trigger / plan.window) * 100)}%)。`;
   // 摁住总开关这件事得说出来:它盖的是用户自己配置文件里的开关,不说明白就等于
   // 「悄悄改了别人的配置」;而不摁的话上面这个触发点根本不会发生(见 JI())。
   const forced = [`这次调用里 ash 会强制打开自动压缩(顶掉 settings.json 的 autoCompactEnabled:false 与 ${CLAUDE_AUTO_COMPACT_KILL_SWITCHES.join(" / ")}),否则窗口和百分比填对了也一次都不会压。`];

@@ -6,22 +6,12 @@ import { relayApi } from "./llm.js";
 import { bearerToken, errorResponse, responseHeaders, secretsEqual } from "./openai-converter/common.js";
 import { currentListeningPort } from "./listening-port.js";
 import { relayErrorResponse, relayFetch } from "./llm-relay.js";
+import { CONTEXT_1M_SUFFIX, modelUsesContext1m, stripContext1mSuffix } from "@ash/shared/context-1m";
 
-const CONTEXT_1M_SUFFIX = "[1m]";
+// 判定本体在 shared(设置页与会话面板要用同一份),这里原样转出,老调用点不用改。
+export { modelUsesContext1m, stripContext1mSuffix };
+
 const CONTEXT_1M_BETA = "context-1m-2025-08-07";
-
-export function stripContext1mSuffix(model: string): string {
-  const trimmed = model.trimEnd();
-  return trimmed.toLowerCase().endsWith(CONTEXT_1M_SUFFIX)
-    ? trimmed.slice(0, -CONTEXT_1M_SUFFIX.length).trimEnd()
-    : model;
-}
-
-export function modelUsesContext1m(model: string | undefined, configured: readonly string[]): boolean {
-  if (!model) return false;
-  const base = stripContext1mSuffix(model).trim();
-  return configured.some((candidate) => candidate.trim() === base);
-}
 
 export function withContext1mSuffix(model: string | undefined, configured: readonly string[]): string | undefined {
   if (!model || !modelUsesContext1m(model, configured)) return model;

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Sliders, X } from "@phosphor-icons/react";
-import type { AgentType } from "@ash/shared";
+import type { AgentType, LlmProvider } from "@ash/shared";
 import {
   cliConfigOverrideConflict,
   cliConfigOverrideHints,
   ineffectiveCliConfigOverrides,
 } from "@ash/shared/cli-overrides";
+import { clampedCompactWindow, claudeModelWindow } from "@ash/shared/context-1m";
+import { Context1mNotice } from "../components/Context1mNotice.tsx";
 import { Button } from "../components/ui.tsx";
 import { fmtOverrideValue, useCliOverrideDraft } from "../lib/cliOverrideDraft.ts";
 import { selectAllOnFocus } from "../lib/selectAllOnFocus.ts";
@@ -33,17 +35,24 @@ export function ProfileOverridesControl({
   profileName,
   type,
   value,
+  model,
+  provider,
   extraArgs,
   disabled,
   onSave,
+  onProviderChanged,
 }: {
   profileName: string;
   type: AgentType;
   value: Record<string, number>;
+  /** profile 的默认模型(空 = 跟随供应商默认)—— 判它开没开 1M。 */
+  model: string | null | undefined;
+  provider: LlmProvider | null | undefined;
   /** 同一个 profile 的额外参数 —— 里面自带 `--settings` 时这一档会被整份顶掉。 */
   extraArgs: readonly string[];
   disabled: boolean;
   onSave: (value: Record<string, number>) => Promise<boolean>;
+  onProviderChanged: (provider: LlmProvider) => void;
 }) {
   const [open, setOpen] = useState(false);
   const { specs, draft, set, reset, parsed, errors, dirty, active } = useCliOverrideDraft(type, value, open);
@@ -73,13 +82,17 @@ export function ProfileOverridesControl({
   // 额外参数自带 --settings 时整档都到不了 CLI 手上(claude 只认最后一个)。跟上面
   // 那个「空转项」一样,得在胶囊上就看得出来 —— 只写在弹层里等于要求用户先怀疑它。
   const conflict = cliConfigOverrideConflict(type, extraArgs);
+  // 窗口填得比模型窗口大(多半是模型没在供应商上开 1M)会被 CLI 截掉,同理要在胶囊上看得出。
+  const modelWindow = type === "claude" ? claudeModelWindow(model, provider)?.window ?? null : null;
+  const clamped = clampedCompactWindow(value.autoCompactWindow, modelWindow) !== null;
   const summary = active
-    .map((spec) => `${fmtOverrideValue(value[spec.key]!, spec.unit)}${dead.has(spec.key) ? "（未生效）" : ""}`)
+    .map((spec) => `${fmtOverrideValue(value[spec.key]!, spec.unit)}${dead.has(spec.key) ? "（未生效）" : ""}`
+      + (spec.key === "autoCompactWindow" && clamped ? "（未开 1M）" : ""))
     .join(" · ")
     + (active.length && conflict ? "（被额外参数顶掉）" : "");
   const shadowed = active.map((spec) => spec.shadows).join("、");
   // hint 跟着草稿走,不是跟着已保存的值走 —— 这行字存在的意义就是「改之前先看看会变成什么」。
-  const hints = cliConfigOverrideHints(type, parsed, hostEnv);
+  const hints = cliConfigOverrideHints(type, parsed, hostEnv, modelWindow);
 
   const save = async () => {
     if (!dirty) {
@@ -94,7 +107,7 @@ export function ProfileOverridesControl({
       <button
         type="button"
         ref={triggerRef}
-        className={`agent-profile-overrides-summary${summary ? " has-value" : ""}`}
+        className={`agent-profile-overrides-summary${summary ? " has-value" : ""}${clamped ? " is-warn" : ""}`}
         disabled={disabled}
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -154,6 +167,10 @@ export function ProfileOverridesControl({
               </div>
             ))}
           </div>
+
+          {type === "claude" && (
+            <Context1mNotice model={model} provider={provider} overrides={parsed} onEnabled={onProviderChanged} />
+          )}
 
           {(conflict || hints.length > 0) && (
             <div className="agent-profile-override-hint">
