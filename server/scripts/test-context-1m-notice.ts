@@ -27,7 +27,7 @@ const { claudeModelWindow, clampedCompactWindow, CLAUDE_1M_WINDOW, CLAUDE_STANDA
   await import("@ash/shared/context-1m");
 const { claudeCompactionPlan, cliConfigOverrideEnv, cliConfigOverrideHints } = await import("@ash/shared/cli-overrides");
 const { effectiveContextWindow, contextRatio, contextCompactTrigger, compactSnapshotFromEnv } = await import("@ash/shared/usage");
-const { sessionContext, sessionCompactSnapshot, setSessionContext } = await import("../src/usage.js");
+const { launchFields, sessionContext, sessionCompactSnapshot, sessionLaunchCompact, setSessionContext } = await import("../src/usage.js");
 
 // ── ① 判定 ────────────────────────────────────────────────────────────────
 const relay = {
@@ -189,6 +189,29 @@ assert.deepEqual(
 );
 const liveSteer = await contextOf(launched.runSteerable({ prompt: "hi", cwd: fixtureDir }).events);
 assert.deepEqual(liveSteer, liveRun, "可引导起跑跟普通起跑是同一份快照");
+assert.deepEqual(launched.run({ prompt: "hi", cwd: fixtureDir }).launchCompact, expectedSnapshot, "句柄上带的就是水位上那份");
+
+// 第 3 轮 F1:额外参数里自带 --settings 会整份盖掉 ash 那份,快照必须是「不知道」,不能发布
+// 被盖掉的 600k / 82.76。profile 的额外参数、本次调用的额外参数,两处来源都算。
+const overriding = `--settings {"env":{"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"100000","CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"50"}}`;
+const shadowedByProfile = new ClaudeExecutor({
+  model: "claude-fable-5-2", bin: fakeClaude, configOverrides: launchOverrides, extraArgs: [overriding],
+});
+const shadowedRun = shadowedByProfile.run({ prompt: "hi", cwd: fixtureDir });
+assert.deepEqual(shadowedRun.launchCompact, { compactUnknown: true }, "profile 额外参数盖掉时,句柄上记的是不知道");
+const shadowedContext = await contextOf(shadowedRun.events);
+assert.deepEqual(
+  shadowedContext,
+  { used: 143_746, window: 200_000, windowEstimated: false, compactUnknown: true },
+  "水位上不带被盖掉的压缩数,只标不知道",
+);
+assert.equal(contextCompactTrigger(shadowedContext), null, "不知道就不给触发点");
+assert.equal(effectiveContextWindow(shadowedContext), 200_000, "按模型窗口显示");
+assert.equal(clampedCompactWindow(shadowedContext?.compactWindow, shadowedContext?.window), null, "也就不会提示「没开 1M」");
+const shadowedSteer = await contextOf(shadowedByProfile.runSteerable({ prompt: "hi", cwd: fixtureDir }).events);
+assert.equal(shadowedSteer?.compactUnknown, true, "可引导起跑同一判据");
+const shadowedByCall = await contextOf(launched.run({ prompt: "hi", cwd: fixtureDir, extraArgs: ["--settings", "{}"] }).events);
+assert.equal(shadowedByCall?.compactUnknown, true, "本次调用的额外参数同样会盖掉");
 
 // 接管:执行器此刻已经改成 100k,被接回的旧进程却是按 600k 起的。
 const changed = new ClaudeExecutor({ model: "claude-fable-5-2", bin: fakeClaude, configOverrides: { autoCompactWindow: 100_000, autoCompactPercent: 80 } });
@@ -208,6 +231,28 @@ const residentReattached = await contextOf(changed.attach(attachChild(), {
 assert.equal(residentReattached?.compactWindow, 600_000, "可引导流的接管同样用旧快照");
 const unknown = await contextOf(changed.attach(attachChild(), { sessionId: "fixture-cli", commandLine: "claude -p" }).events);
 assert.equal(unknown?.compactWindow, undefined, "不知道旧快照就不带,不拿当前配置去补");
+
+// 接管读的是起跑时随 commandLine 一起落下的那份(launchFields),不是 resume_args 反推:
+// resume_args 里只有 ash 自己那份 --settings,看不出它被额外参数盖掉了。
+const shadowedLaunch = launchFields(shadowedRun);
+assert.equal(shadowedLaunch.commandLine, shadowedRun.commandLine);
+const shadowedReattached = await contextOf(changed.attach(attachChild(), {
+  sessionId: "fixture-cli",
+  commandLine: shadowedRun.commandLine,
+  compact: sessionLaunchCompact({ launchCompact: shadowedLaunch.launchCompact, resumeArgs: frozenArgs }),
+}).events);
+assert.equal(shadowedReattached?.compactUnknown, true, "起跑时被盖掉的,接管后也还是不知道");
+assert.equal(shadowedReattached?.compactWindow, undefined);
+assert.deepEqual(
+  sessionLaunchCompact({ launchCompact: launchFields(launched.run({ prompt: "hi", cwd: fixtureDir })).launchCompact, resumeArgs: null }),
+  expectedSnapshot,
+  "正常起跑的那份原样读回",
+);
+assert.equal(
+  sessionLaunchCompact({ launchCompact: null, resumeArgs: frozenArgs }).compactWindow,
+  600_000,
+  "这一列上线前起的进程才退回 resume_args",
+);
 
 // ── ④ 一键开启端点 ────────────────────────────────────────────────────────
 const { llmProviders } = await import("../src/db/schema.js");

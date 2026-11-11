@@ -261,6 +261,32 @@ export function sessionCompactSnapshot(resumeArgs: string | null | undefined): C
   return compactSnapshotFromEnv(env);
 }
 
+/**
+ * 起跑方把「这个进程是怎么起的」落库时用的那一组列:展示用命令行 + 最终生效的压缩配置。
+ * 两样出自同一个句柄、必须同一笔写 —— 所有写 commandLine 的起跑入口都走这里(单飞首轮、
+ * 续聊、团队调度台、duet),重启接管才读得到旧进程**真正**的配置,而不是从 resume_args
+ * 反推(那份不含额外参数,也不知道 ash 的 --settings 有没有被盖掉)。
+ */
+export function launchFields(handle: { commandLine: string; launchCompact?: CompactSnapshot | null }): {
+  commandLine: string;
+  launchCompact: string | null;
+} {
+  return {
+    commandLine: handle.commandLine,
+    launchCompact: handle.launchCompact ? JSON.stringify(handle.launchCompact) : null,
+  };
+}
+
+/**
+ * 重启接管时这个旧进程的压缩配置。`launch_compact` 有值就用它;没有(这一列上线前起的进程,
+ * 或不报压缩的 CLI)才退回 resume_args —— 老行判不出额外参数有没有盖掉,只能按 ash 那份算。
+ */
+export function sessionLaunchCompact(row: Pick<SessionRow, "launchCompact" | "resumeArgs">): CompactSnapshot {
+  return typeof row.launchCompact === "string"
+    ? parseCompactSnapshot(row.launchCompact)
+    : sessionCompactSnapshot(row.resumeArgs);
+}
+
 /** 只要窗口那一项(老调用点)。 */
 export function sessionCompactWindow(resumeArgs: string | null | undefined): number | null {
   return sessionCompactSnapshot(resumeArgs).compactWindow ?? null;

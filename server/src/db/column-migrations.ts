@@ -302,6 +302,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE sessions ADD COLUMN context_window_estimated INTEGER",
   // 水位那一刻的压缩启动快照(见 schema-sessions.ts 同名列)。存量行 NULL。
   "ALTER TABLE sessions ADD COLUMN context_compact TEXT",
+  // 起跑那一刻最终生效的压缩配置(见 schema-sessions.ts 同名列)。存量行 NULL。
+  "ALTER TABLE sessions ADD COLUMN launch_compact TEXT",
   // Codex 旧 trace 不完整时没有可信累计基线：下一回合只采基线，宁可少记一轮，也不
   // 把整条线程累计值再次加进 sessions。
   "ALTER TABLE usage_cumulative_snapshots ADD COLUMN baseline_ready INTEGER NOT NULL DEFAULT 1",

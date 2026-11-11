@@ -165,6 +165,11 @@ export interface ContextUsage {
   compactPercent?: number;
   compactMaxOutput?: number;
   /**
+   * 那个进程起跑时,额外参数里自带的 `--settings` 整份顶掉了 ash 注入的那份(claude 只认
+   * 最后一个),压缩配置以它为准 —— ash 判不出窗口与触发点。为 true 时上面三项一定缺省。
+   */
+  compactUnknown?: boolean;
+  /**
    * window 是**估**出来的(按模型名猜),不是 CLI 自报。true 时界面必须说明白,
    * 别让人当准数用。claude 自报窗口时它是 false —— 分母准不准是数据本身的属性,
    * 界面那个 `~` 该跟着数据走,而不是靠改一处渲染逻辑记得取消。
@@ -180,7 +185,10 @@ export interface ContextUsage {
  * 之后,正在跑的、被重启接管的、库里留着的那一轮都还是按旧值在压(第 1、2 轮审查)。
  * 三个字段都缺 = 那个进程没配自动压缩窗口,跟随 CLI 自己的判断。
  */
-export type CompactSnapshot = Pick<ContextUsage, "compactWindow" | "compactPercent" | "compactMaxOutput">;
+export type CompactSnapshot = Pick<ContextUsage, "compactWindow" | "compactPercent" | "compactMaxOutput" | "compactUnknown">;
+
+/** 起跑参数里有别的 `--settings` 盖住了 ash 那份:如实标「不知道」,不发布被盖掉的那组数。 */
+export const UNKNOWN_COMPACT_SNAPSHOT: CompactSnapshot = Object.freeze({ compactUnknown: true });
 
 const COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
 const COMPACT_PERCENT_ENV = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE";
@@ -212,6 +220,7 @@ export function parseCompactSnapshot(raw: string): CompactSnapshot {
   try {
     const value = JSON.parse(raw) as Record<string, unknown> | null;
     if (!value || typeof value !== "object") return {};
+    if (value.compactUnknown === true) return UNKNOWN_COMPACT_SNAPSHOT;
     return compactSnapshotFromEnv({
       [COMPACT_WINDOW_ENV]: value.compactWindow === undefined ? undefined : String(value.compactWindow),
       [COMPACT_PERCENT_ENV]: value.compactPercent === undefined ? undefined : String(value.compactPercent),
@@ -224,6 +233,7 @@ export function parseCompactSnapshot(raw: string): CompactSnapshot {
 
 /** 从一份水位里拿出它的启动快照(落库用)。 */
 export function compactSnapshotOf(c: ContextUsage): CompactSnapshot {
+  if (c.compactUnknown) return UNKNOWN_COMPACT_SNAPSHOT;
   return {
     ...(c.compactWindow !== undefined ? { compactWindow: c.compactWindow } : {}),
     ...(c.compactPercent !== undefined ? { compactPercent: c.compactPercent } : {}),

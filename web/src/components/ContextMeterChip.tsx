@@ -122,7 +122,9 @@ export function ContextMeterChip({ context, session, className }: {
         )}
       </dl>
       <footer>
-        {window === null
+        {context.compactUnknown
+          ? "这一轮的额外参数里带了 --settings，盖掉了执行器的压缩设置，ash 判不出什么时候压缩；这里按模型窗口显示。"
+          : window === null
           ? "这家 CLI 没报窗口大小，也猜不出模型，所以只给绝对值、不给百分比。"
           : usesCompactWindow
             ? "压缩窗口取这一轮起跑时的自动压缩设置与模型窗口里小的那个；「距压缩」按实际触发点算（还要扣掉输出预留与触发比例），不代表模型能力上限只有这么大。"

@@ -66,6 +66,7 @@ import {
 } from "./run-prompts.js";
 // 「登记的基线被换掉了」这句话：说不说、怎么说、失败那条路怎么补，全在这一份里。
 import { baseFallbackNote } from "./base-fallback-notice.js";
+import { launchFields } from "./usage.js";
 
 // 这一回合的**调用契约**(连 ResumeReason 一起)住在 task-continue-options.ts；这里原样
 // 再导出，调用方（task-resume、runs 那几处）不用跟着改导入路径。
@@ -477,7 +478,7 @@ export async function continueTask(
             // session-turns.ts 顶部：八个起跑入口手写就一定会漏掉其中一处。
             ...resumedTurnFields(turnStart),
             exitStatus: null,
-            commandLine: runningHandle.commandLine,
+            ...launchFields(runningHandle),
             executor: ex.label,
             // 这一轮跑在谁名下 —— 跨人续聊会换人(runOwner 上面刚算过),而 CLI 的会话
             // 文件跟着这个人的配置目录走。不刷新,接力就会去上一个人的目录里找。
@@ -531,7 +532,7 @@ export async function continueTask(
           cwd,
           cliSessionId,
           ...ex.resumeFields(cwd, cliSessionId),
-          commandLine: runningHandle.commandLine,
+          ...launchFields(runningHandle),
           startedAt: turnStart,
           ...freshTurnFields(turnStart),
           activeMs: 0,

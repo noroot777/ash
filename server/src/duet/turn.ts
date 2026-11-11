@@ -30,7 +30,8 @@ import {
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace } from "../transcript.js";
 import { noteAgentEventUpload } from "../uploads.js";
-import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
+import { launchFields, recordSessionUsageEvent, setSessionContext } from "../usage.js";
+import type { CompactSnapshot } from "@ash/shared/usage";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { isExecutionNotice, isSessionScopeNotice, announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "../session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
@@ -59,7 +60,8 @@ const CONC_RE = /结论[：:]\s*(.+)/; // one-line final conclusion
 export function reusedSessionPatch(
   executor: AgentExecutor,
   cwd: string,
-  commandLine: string,
+  // 起跑句柄:命令行与最终生效的压缩配置要同一笔落(usage.ts launchFields)。
+  launch: { commandLine: string; launchCompact?: CompactSnapshot | null },
   cliSessionId: string,
   runOwnerUserId: string | null = null,
   // **故意做成必填**,理由与上面 runOwner 那条同源:给它一个默认值,下一处新加的发言
@@ -70,7 +72,7 @@ export function reusedSessionPatch(
   cliConfigDir: string | null,
 ) {
   return {
-    commandLine,
+    ...launchFields(launch),
     executor: executor.label,
     cwd,
     // 这一轮跑在谁名下(= 注入 CLAUDE_CONFIG_DIR/CODEX_HOME 的那个人)。跟 cwd 一样是
@@ -227,7 +229,7 @@ export async function runTurn(args: {
         agentType: executor.type,
         // 开新行和复用旧行共用同一份「随执行器/工作目录走」的列,免得两条分支各写各的、
         // 时间一长只有一边跟得上(finding 6 就是这么来的)。
-        ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId, args.runOwner ?? null, turnConfigDir),
+        ...reusedSessionPatch(executor, cwd, handle, cliId, args.runOwner ?? null, turnConfigDir),
         worktreePath: args.branch ? cwd : null,
         branch: args.branch ?? null,
         cliSessionId: cliId,
@@ -244,7 +246,7 @@ export async function runTurn(args: {
         .update(sessions)
         .set({
           ...resumedTurnFields(turnStart),
-          ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId, args.runOwner ?? null, turnConfigDir),
+          ...reusedSessionPatch(executor, cwd, handle, cliId, args.runOwner ?? null, turnConfigDir),
         })
         .where(eq(sessions.id, rowId));
     }

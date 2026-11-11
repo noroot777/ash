@@ -1,13 +1,12 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { WarningCircle } from "@phosphor-icons/react";
-import type { AgentExecutorProfile, ContextUsage, LlmProvider, Session } from "@ash/shared";
+import type { ContextUsage, LlmProvider, Session } from "@ash/shared";
 import { claudeCompactionPlan } from "@ash/shared/cli-overrides";
 import { type ClaudeModelWindow, clampedCompactWindow, claudeModelWindow } from "@ash/shared/context-1m";
 import { contextCompactTrigger } from "@ash/shared/usage";
 import { api } from "../lib/api.ts";
 import { refreshProviders } from "../lib/modelCatalog.ts";
 import { useCliHostEnv } from "../lib/useCliHostEnv.ts";
-import { matchProfile } from "./ContextCompactQuickSettings.tsx";
 import "./context-1m-notice.css";
 
 // 600k / 200k / 149k 这种整数口径,跟设置页压缩提示(cli-overrides 的 fmtTokens)一致。
@@ -20,10 +19,9 @@ const fmtK = (n: number) => (n >= 1_000_000 ? `${Number((n / 1_000_000).toFixed(
 // 开关本身在供应商的 1M 列表里,离用户看见症状的地方(会话的上下文胶囊、执行器的压缩
 // 配置)都隔着好几跳,所以就地给一颗按钮;写入走原子追加,两处同时点也不会互相冲掉。
 //
-// 两种事实分开用:**报出这份水位的那一轮在怎么跑**只看水位自带的启动快照(压缩窗口、
-// 百分比、输出预留,由产出水位的进程起跑时一起写下,见 shared CompactSnapshot)和 CLI 自报
-// 的窗口;**下一轮会怎么跑**才看当前执行器与供应商配置,判据跟起跑那一侧对齐(没 key 回退
-// 官方账号、额外参数覆盖模型)。不从展示用的命令行字符串里反推模型 —— 那串是有损拼接的。
+// 会话面板只解释**报出这份水位的那一轮**(水位自带的启动快照,由产出水位的进程起跑时按
+// 最终生效的参数写下,见 shared CompactSnapshot);设置页只判**执行器自己的配置**下一次起跑
+// 会怎样(没 key 回退官方账号、额外参数覆盖模型,跟起跑那一侧同一套判据)。两边不互相借数。
 
 /** 设置页:按执行器当前配置判「下一次起跑会不会被截」。 */
 export function Context1mNotice({
@@ -58,53 +56,23 @@ export function Context1mNotice({
 }
 
 /**
- * 会话面板:调用方已确认「压缩窗口比 CLI 自报的窗口大」。这句警告只由会话自己的启动快照
- * 撑着,读不到执行器配置也照样显示;读到了再补一句「下一轮会怎样」。
+ * 会话面板:调用方已确认「压缩窗口比 CLI 自报的窗口大」。只说报出这份水位的那一轮的事实
+ * (水位自带的启动快照 + CLI 自报窗口),不推测下一轮:下一轮跑哪个模型、挂哪家供应商要看
+ * 任务级覆盖与当时的执行器配置,只有服务端起跑那一刻才定得下来,拿历史会话去猜会指错模型
+ * (第 3 轮审查 F2)。开关在设置页 → 执行器的压缩配置里,那里按执行器自己的配置判、能一键开启。
  */
 export function SessionContext1mNotice({ session, context }: { session: Session; context: ContextUsage }) {
-  const [facts, setFacts] = useState<{ profile: AgentExecutorProfile; provider: LlmProvider | null } | null>(null);
-  // 一键开启之后重读一遍权威配置(而不是拿响应去拼本地状态):别处同时改过的也一并对上。
-  const [reload, setReload] = useState(0);
-  // 只认身份字段:会话对象每次轮询都是新引用,拿它当依赖会每次重拉两张表。
-  const identity = `${session.id}|${session.executorId ?? ""}|${session.executor}|${session.agentType}`;
-  useEffect(() => {
-    let alive = true;
-    Promise.all([api.agents(), api.llmProviders()])
-      .then(([profiles, providers]) => {
-        const profile = matchProfile(profiles, session);
-        if (!alive || !profile) return;
-        setFacts({ profile, provider: providers.find((item) => item.id === profile.providerId) ?? null });
-      })
-      // 读不到就只少一句「下一轮会怎样」,上面那句警告不依赖它。
-      .catch(() => {});
-    return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- identity 已覆盖 matchProfile 读的全部字段
-  }, [identity, reload]);
-
-  // 快照与自报窗口出自同一个进程,所以这里说的是「报出这份水位的那一轮」,不管它是不是
-  // 正在跑的这一轮 —— 新一轮报回来之前,面板上本来就是上一份水位。
   const clamp = clampedCompactWindow(context.compactWindow, context.windowEstimated ? null : context.window);
   if (!clamp) return null;
-  const model = session.turnModel || session.model || "这个模型";
   const trigger = contextCompactTrigger(context);
-
-  const nextModel = facts ? session.turnModel || facts.profile.model : null;
-  const next = facts ? claudeModelWindow(nextModel, facts.provider, facts.profile.extraArgs ?? []) : null;
-  const nextWindow = facts?.profile.configOverrides?.autoCompactWindow;
-  const nextClamped = next ? clampedCompactWindow(nextWindow, next.window) !== null : false;
-
   return (
     <div className="context-1m-notice" role="status">
       <WarningCircle size={13} weight="fill" aria-hidden="true" />
       <p>
-        {model} 没开 1M：{fmtK(clamp.configured)} 窗口被截到 {fmtK(clamp.effective)}
+        没开 1M：{fmtK(clamp.configured)} 窗口被截到 {fmtK(clamp.effective)}
         {trigger !== null ? `，约 ${fmtK(trigger)} 就压缩` : ""}。
-        {next && !nextClamped && <span className="context-1m-notice-next">下一轮起不再被截。</span>}
-        {next && nextClamped && <NextLaunchHint next={next} />}
+        <span className="context-1m-notice-next">到设置 → 执行器「{session.executor}」的 CLI 配置里开启。</span>
       </p>
-      {next?.provider && nextClamped && (
-        <EnableButton model={next.model} provider={next.provider} onEnabled={() => setReload((n) => n + 1)} />
-      )}
     </div>
   );
 }

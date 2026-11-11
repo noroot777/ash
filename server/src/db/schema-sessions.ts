@@ -61,6 +61,10 @@ export const sessions = sqliteTable("sessions", {
   // env 前缀打不过用户自己的 settings.json,只有 --settings 这一层压得住(finding 2)。
   resumeArgs: text("resume_args"),
   commandLine: text("command_line"),
+  // 跟 command_line 同一笔写的「这个进程最终生效的压缩配置」(JSON,shared CompactSnapshot;
+  // 见 usage.ts launchFields)。null = 这一列上线前起的进程或不报压缩的 CLI,重启接管退回
+  // resume_args。
+  launchCompact: text("launch_compact"),
   startedAt: text("started_at").notNull(),
   endedAt: text("ended_at"), // when this run finished (set with exit_status)
   exitStatus: integer("exit_status"),

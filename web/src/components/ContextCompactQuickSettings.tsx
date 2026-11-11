@@ -96,8 +96,10 @@ export function ContextCompactQuickSettings({
                 <CompactOverrideForm
                   key={profile.id}
                   profile={profile}
+                  // 改的是执行器配置,算的就是它自己默认模型下一次起跑会怎样(跟设置页同一口径);
+                  // 任务级的模型覆盖只有服务端起跑时才定得下来,不拿历史会话的模型去猜。
                   modelWindow={claudeModelWindow(
-                    session.turnModel || profile.model,
+                    profile.model,
                     load.providers.find((item) => item.id === profile.providerId),
                     profile.extraArgs ?? [],
                   )?.window ?? null}
@@ -128,7 +130,7 @@ type LoadState =
  * 只剩一个可改名的展示名。名字能唯一对上就认,对上多个或对不上就如实说不认识 ——
  * 猜错的代价是「改了另一个执行器的配置」,比多点两下去设置页坏得多。
  */
-export function matchProfile(profiles: AgentExecutorProfile[], session: Session): AgentExecutorProfile | null {
+function matchProfile(profiles: AgentExecutorProfile[], session: Session): AgentExecutorProfile | null {
   if (session.executorId) return profiles.find((item) => item.id === session.executorId) ?? null;
   const byName = profiles.filter((item) => item.name === session.executor && item.type === session.agentType);
   return byName.length === 1 ? byName[0]! : null;

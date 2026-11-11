@@ -49,6 +49,7 @@ import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.j
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
 import { turnIdentityEnv } from "./turn-identity.js";
+import { launchFields } from "./usage.js";
 
 // 单任务的 **fresh run**:从任务描述起一条全新会话。续聊/召唤那一路(resume 已有会话、
 // 把用户原话送进去)在 orchestrator.ts 的 continueTask —— 两条路的前置条件、prompt 拼法
@@ -265,7 +266,7 @@ export async function runTask(
       cwd: ws.path,
       cliSessionId,
       ...ex.resumeFields(ws.path, cliSessionId),
-      commandLine: handle.commandLine,
+      ...launchFields(handle),
       startedAt: turnStart,
       // 回合字段一律从 helper 取（见 session-turns.ts 顶部那段）：这一处原先只写了
       // turnStartedAt，于是单飞任务——也就是绝大多数任务——的回合数永远从 0 起计，少计

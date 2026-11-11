@@ -57,6 +57,7 @@ import { createSessionConsumer } from "./session-consumer.js";
 import { sendToLead } from "./lead-delivery.js";
 import { cliConfigDirColumn, runEnvForTask, sessionCliConfigDir, sessionResumableHere } from "../auth/run-env.js";
 import { HOST_CLI_SWITCH_SESSION_NOTE } from "@ash/shared/multiuser";
+import { launchFields } from "../usage.js";
 
 const INTERRUPT_NOTE = "〔系统〕已打断调度者当前回合,插入你的新指令";
 // 「再说一句话就接回同一会话」只在会话**还在**时成立。刚被判 poisoned 作废过的话,
@@ -550,7 +551,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
           // 开出来的,漏了计数,它名下的产物归属就跟单飞一样会把真缺口抵扣掉。
           ...resumedTurnFields(turnStart),
           exitStatus: null,
-          commandLine: handle.commandLine,
+          ...launchFields(handle),
           executor: ex.label,
           runOwnerUserId: task.ownerUserId,
           cliConfigDir: leadConfigDir,
@@ -572,7 +573,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
         cwd: ws.path,
         cliSessionId,
         ...ex.resumeFields(ws.path, cliSessionId),
-        commandLine: handle.commandLine,
+        ...launchFields(handle),
         startedAt: turnStart,
         ...freshTurnFields(turnStart),
         activeMs: 0,

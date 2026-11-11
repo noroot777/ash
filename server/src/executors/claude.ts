@@ -4,8 +4,13 @@ import { readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
-import { cliConfigOverrideEnv, cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@ash/shared/cli-overrides";
-import { type CompactSnapshot, compactSnapshotFromEnv } from "@ash/shared/usage";
+import {
+  cliConfigOverrideConflict,
+  cliConfigOverrideEnv,
+  cliConfigOverrideEnvPatch,
+  cliConfigOverrideSettings,
+} from "@ash/shared/cli-overrides";
+import { type CompactSnapshot, compactSnapshotFromEnv, UNKNOWN_COMPACT_SNAPSHOT } from "@ash/shared/usage";
 import { cliHostEnv } from "./cli-env.js";
 import type { AgentExecutor, ConsumedOutput, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import type { MarkdownImageAccounting } from "./markdown-image-stream.js";
@@ -200,11 +205,15 @@ export class ClaudeExecutor implements AgentExecutor {
   }
 
   /**
-   * 这次起跑注入给 CLI 的压缩配置,原样解成启动快照带在每条水位上。跟 env()/settingsPayload()
-   * 用的是同一份 `cliConfigOverrideEnv` 结果,所以「界面上算的」与「CLI 真拿到的」是同一组数。
-   * **只在起跑时调**:接管旧进程用会话存下的那份(attach 的 opts.compact),不能拿此刻的配置。
+   * 这次起跑 CLI **最终生效**的压缩配置,解成启动快照带在每条水位上、随 commandLine 落库。
+   * 跟 env()/settingsPayload() 用的是同一份 `cliConfigOverrideEnv` 结果;但 buildArgs 会把
+   * profile 与本次调用的额外参数排在 ash 那份 `--settings` **之后**,里面若自带 `--settings`
+   * 就整份胜出(cliConfigOverrideConflict 那条),ash 注入的数一个都到不了 CLI —— 这时只能
+   * 说「不知道」,不能发布被盖掉的那组(第 3 轮审查 F1)。判据跟 buildArgs 用同一份参数。
+   * **只在起跑时调**:接管旧进程用会话存下的那份(attach 的 opts.compact)。
    */
-  private launchCompactSnapshot(cwd?: string): CompactSnapshot {
+  private launchCompactSnapshot(cwd: string | undefined, callExtraArgs: readonly string[] | undefined): CompactSnapshot {
+    if (cliConfigOverrideConflict(this.type, [...this.extraArgs, ...(callExtraArgs ?? [])])) return UNKNOWN_COMPACT_SNAPSHOT;
     return compactSnapshotFromEnv(cliConfigOverrideEnv(this.type, this.configOverrides, cliHostEnv(cwd)));
   }
 
@@ -224,12 +233,14 @@ export class ClaudeExecutor implements AgentExecutor {
     child.on("close", goal.cleanup);
     child.on("close", settings.cleanup);
     let goalStarted = false;
-    const events = cleanupWithEvents(parseClaudeStream(child, undefined, this.bin, this.type, this.launchCompactSnapshot(opts.cwd), settings.cleanup, undefined, sessionId, opts.cwd, opts.images), settings.cleanup);
+    const launchCompact = this.launchCompactSnapshot(opts.cwd, opts.extraArgs);
+    const events = cleanupWithEvents(parseClaudeStream(child, undefined, this.bin, this.type, launchCompact, settings.cleanup, undefined, sessionId, opts.cwd, opts.images), settings.cleanup);
     return {
       cliCommand: opts.cliCommand,
       goalStarted: () => goalStarted,
       sessionId,
       commandLine,
+      launchCompact,
       events: (async function* () {
         for await (const event of events) {
           if (event.kind === "text" || event.kind === "tool" || event.kind === "thinking") goalStarted = true;
@@ -268,7 +279,7 @@ export class ClaudeExecutor implements AgentExecutor {
     child.on("close", settings.cleanup);
     const detached = detachedInfo(child);
     return singleRunFromResident(
-      this.residentFromChild(child, sessionId, commandLine, this.launchCompactSnapshot(opts.cwd), settings.cleanup, opts.cwd, opts.images, true),
+      this.residentFromChild(child, sessionId, commandLine, this.launchCompactSnapshot(opts.cwd, opts.extraArgs), settings.cleanup, opts.cwd, opts.images, true),
       detached,
     );
   }
@@ -290,6 +301,7 @@ export class ClaudeExecutor implements AgentExecutor {
     return {
       sessionId: opts.sessionId,
       commandLine: opts.commandLine,
+      launchCompact: compact,
       events: cleanupWithEvents(
         // **接管必须把会话身份传下去**：这条流是从已消费的 offset 之后接着读的，`init`
         // 早在上一轮消费掉了，内置 Monitor 的投影靠「等下一条 system 事件」永远认领不回来
@@ -320,7 +332,7 @@ export class ClaudeExecutor implements AgentExecutor {
           keepStdin: true,
         });
     child.on("close", settings.cleanup);
-    return this.residentFromChild(child, sessionId, commandLine, this.launchCompactSnapshot(opts.cwd), settings.cleanup, opts.cwd, opts.images);
+    return this.residentFromChild(child, sessionId, commandLine, this.launchCompactSnapshot(opts.cwd, opts.extraArgs), settings.cleanup, opts.cwd, opts.images);
   }
 
   private residentFromChild(
@@ -348,6 +360,7 @@ export class ClaudeExecutor implements AgentExecutor {
     return {
       sessionId,
       commandLine,
+      launchCompact: compact,
       events: cleanupWithEvents(
         // 同 attach：可引导流接管回来时同样没有新的 init。
         parseClaudeStream(child, resident, this.bin, this.type, compact, settingsCleanup, undefined, sessionId, cwd, images, consumed),
@@ -596,6 +609,7 @@ export function singleRunFromResident(
   return {
     sessionId: resident.sessionId,
     commandLine: resident.commandLine,
+    launchCompact: resident.launchCompact,
     events,
     detached,
     failure: () => verdict,

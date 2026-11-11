@@ -56,6 +56,11 @@ export interface RunHandle {
   cliCommand?: CliCommand;
   sessionId: string;
   commandLine: string;
+  /**
+   * 这个进程起跑时**最终生效**的压缩配置(shared CompactSnapshot)。跟 commandLine 是一对,
+   * 起跑方用 `launchFields(handle)` 一起落库,重启接管时据此解释旧进程。不报压缩的 CLI 不给。
+   */
+  launchCompact?: CompactSnapshot | null;
   events: AsyncIterable<AgentEvent>;
   kill(): void;
   // 单飞当前回合的原生引导通道。存在时调用方把新 user 消息送进同一个活动回合，
@@ -134,6 +139,8 @@ export interface RelayConfig {
 export interface ResidentHandle {
   sessionId: string;
   commandLine: string;
+  /** 同 RunHandle.launchCompact。 */
+  launchCompact?: CompactSnapshot | null;
   events: AsyncIterable<AgentEvent>; // 直到 close()/kill() 才结束
   /**
    * 注入一条 user 消息(即时,无 tick)。
