@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mergeSlashItems, slashMatchIndex, slashToken } from "../src/lib/slashMatch.ts";
+import { mergeSlashItems, slashMatchIndex, slashSendsAsTyped, slashToken } from "../src/lib/slashMatch.ts";
 
 const skill = (command, description = "") => ({
   name: command.replace(/^\//, ""),
@@ -61,5 +61,14 @@ const native = { ...skill("/goal", "持续目标"), native: true, source: "built
 const grouped = mergeSlashItems(ASH, [skill("/goal-helper"), native], "/");
 assert.deepEqual(grouped.map((item) => item.kind), ["ash", "ash", "native", "skill"]);
 assert.equal(grouped[2].command, "/goal");
+
+// 回车直接发只给「原生命令且已一字不差敲全」:没敲全要补全,技能永远补全,ash 命令走派生配置。
+const compact = mergeSlashItems([], [{ ...skill("/compact", "原生压缩"), native: true, source: "builtin" }], "/com")[0];
+assert.equal(compact.kind, "native");
+assert.equal(slashSendsAsTyped(compact, "/com"), false);
+assert.equal(slashSendsAsTyped(compact, " /Compact"), true);
+assert.equal(slashSendsAsTyped(grouped[3], "/goal-helper"), false);
+assert.equal(slashSendsAsTyped(grouped[0], grouped[0].command), false);
+assert.equal(slashSendsAsTyped(undefined, "/compact"), false);
 
 console.log("slash match tests passed");

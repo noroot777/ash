@@ -62,3 +62,12 @@ export function mergeSlashItems(ash: SlashItem[], skills: SkillEntry[], token: s
   const items = toSlashItems(skills);
   return [...rankByMatch(ash, token), ...rankByMatch(items.filter((item) => item.kind === "native"), token), ...rankByMatch(items.filter((item) => item.kind === "skill"), token)];
 }
+
+/**
+ * 回车选中的是原生命令、而且正文已经一字不差就是它:直接发出去。
+ * 原生命令不带参数也成立(/compact、/status…),这时再「补全」只是添个空格、逼人按第二次回车。
+ * 技能不走这条:光一个 `/技能名` 没有正文,补全后让人接着写才是对的。
+ */
+export function slashSendsAsTyped(item: SlashItem | undefined, text: string): boolean {
+  return item?.kind === "native" && text.trim().toLowerCase() === item.command.toLowerCase();
+}

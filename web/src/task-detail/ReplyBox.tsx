@@ -24,7 +24,7 @@ import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments 
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { MentionMenu } from "../components/MentionMenu.tsx";
 import { useReplyMention } from "./replyMention.ts";
-import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
+import { mergeSlashItems, slashSendsAsTyped, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import { useStandingExecutor, type StandingExecutor } from "./useStandingExecutor.ts";
 import { registerReplyInput } from "./replyQuote.ts";
@@ -42,6 +42,8 @@ import {
 } from "./withdrawDraft.ts";
 
 const EMPTY_SKILLS: SkillEntry[] = [];
+// 菜单顶行只给第一组起名:原生命令和排在后面的技能各有 SlashMenu 画的分隔线。
+const MENU_HEADING: Record<SlashItem["kind"], string> = { ash: "派生命令 · ", native: "", skill: "技能 · " };
 
 export function ReplyBox({
   task,
@@ -217,11 +219,14 @@ export function ReplyBox({
   const ashItems: SlashItem[] = (command?.items ?? []).map((item) => ({ ...item, kind: "ash" }));
   const commandCandidates = (text: string) => mergeSlashItems(ashItems, skills, slashToken(text));
   const candidates = commandCandidates(value);
-  const firstSkillIndex = candidates.findIndex((item) => item.kind === "skill");
   const menuOpen = !menuDismissed && candidates.length > 0;
   const selectedIndex = Math.min(commandIndex, Math.max(0, candidates.length - 1));
   const commandMatch = !!command && command.matches(value);
-  const selectedIsSkill = candidates[selectedIndex]?.kind === "skill";
+  const selected = candidates[selectedIndex];
+  // 菜单开着时回车做什么:ash 命令打开派生配置;技能和原生命令补全进正文;
+  // 原生命令已经敲全就直接发(它本来就是发给 CLI 的一句话)。
+  const menuSends = menuOpen && slashSendsAsTyped(selected, value);
+  const menuCompletes = menuOpen && !menuSends && selected?.kind !== "ash";
   const commandActive = commandMatch || menuOpen;
   // 选模型那个浮层和底部胶囊的候选都取它；`@` 那张菜单里的智能体候选在 replyMention.ts
   // 里自己算（它还要按 token 过滤）。
@@ -268,7 +273,9 @@ export function ReplyBox({
   const pickCommand = (item: SlashItem) => {
     // 技能不是派生命令:它只是**补全**。`/名字` 原样留在正文里跟着这一轮发下去,
     // server 会据此注入 SKILL.md，所以这里绝不能把它截走。
-    if (item.kind === "skill") {
+    // 原生命令同理:`/compact` 是正文本身,发送时由 server 识别后交给 CLI 执行,
+    // 不是派生命令,交给 command.onSubmit 只会被它当成不认识的命令吞掉。
+    if (item.kind !== "ash") {
       const next = `${item.command} `;
       setValue(next);
       setCommandIndex(0);
@@ -368,7 +375,7 @@ export function ReplyBox({
 
   // 截图批注是另一条入口，照旧立即发；正文这条按回复框当前的发送方式发。
   const runSend = async (annotation?: AnnotationReply): Promise<boolean> => {
-    if (!annotation && menuOpen) {
+    if (!annotation && menuOpen && !menuSends) {
       pickCommand(candidates[selectedIndex]!);
       return false;
     }
@@ -465,7 +472,7 @@ export function ReplyBox({
         <SlashMenu
           className="task-reply-command-menu"
           ariaLabel="斜杠命令与技能"
-          hint={`${firstSkillIndex === 0 ? "技能" : "派生命令与技能"} · ↑↓ 选择，回车${selectedIsSkill ? "补全" : "确认"}，Esc 取消`}
+          hint={`${MENU_HEADING[candidates[0]!.kind]}↑↓ 选择，回车${menuSends ? "发送" : menuCompletes ? "补全" : "确认"}，Esc 取消`}
           items={candidates}
           selectedIndex={selectedIndex}
           token={slashToken(value)}
@@ -561,7 +568,8 @@ export function ReplyBox({
               }
               if (event.key === "Enter") {
                 event.preventDefault();
-                pickCommand(candidates[selectedIndex]!);
+                if (menuSends) void send();
+                else pickCommand(selected!);
                 return;
               }
               if (event.key === "Escape") {
@@ -618,10 +626,10 @@ export function ReplyBox({
           <SendSplit
             later={later}
             label={queueing ? "排队发送" : "发送"}
-            status={uploads.uploading ? uploadingLabel(uploads.pending) : selectedIsSkill ? "补全" : commandActive ? "配置" : null}
-            ariaLabel={selectedIsSkill ? "把技能补进正文" : commandActive ? "打开派生配置" : queueing ? "排队发送，任务跑完自动发出" : "发送回复"}
+            status={uploads.uploading ? uploadingLabel(uploads.pending) : menuCompletes ? "补全" : commandActive && !menuSends ? "配置" : null}
+            ariaLabel={menuCompletes ? "把命令补进正文" : commandActive && !menuSends ? "打开派生配置" : queueing ? "排队发送，任务跑完自动发出" : "发送回复"}
             sending={sending}
-            disabled={sending || uploads.uploading || (!commandActive && (disabled || (!value.trim() && !uploads.attachments.length)))}
+            disabled={sending || uploads.uploading || ((!commandActive || menuSends) && (disabled || (!value.trim() && !uploads.attachments.length)))}
             configDisabled={disabled || sending || uploads.uploading || commandActive || mention.open}
             onSend={() => void send()}
             tasks={tasks}

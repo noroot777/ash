@@ -73,7 +73,7 @@ export function TeamReplyBox({
     projectId: task.projectId,
     enabled: !disabled,
   });
-  const slash = useSlashCompletion({ value, setValue, skills: cliCommandsForMode(skills.skills, task.agentType ?? "claude", "team"), disabled });
+  const slash = useSlashCompletion({ value, setValue, skills: cliCommandsForMode(skills.skills, task.agentType ?? "claude", "team"), disabled, onSend: () => void send() });
   // `@` 引用团队工作区里的文件：团队共享一个工作目录，执行者拿到的相对路径和这里一致。
   const mention = useFileMention({
     value,
@@ -142,7 +142,7 @@ export function TeamReplyBox({
         <SlashMenu
           className="team-reply-command-menu"
           ariaLabel="技能补全"
-          hint="已装技能 · 回车补全，原样发给调度者的 CLI"
+          hint={`${slash.items[0]!.kind === "skill" ? "已装技能 · " : ""}回车${slash.sends ? "发送" : "补全"}，原样发给调度者的 CLI`}
           items={slash.items}
           selectedIndex={slash.selectedIndex}
           token={slash.token}

@@ -12,7 +12,7 @@ import type { SlashItem } from "./slashMatch.ts";
 // 「哪些候选、按什么顺序」是纯逻辑,在 slashMatch.ts(能被 node 直接跑);
 // 这里原样转发,调用方仍从本文件拿。
 export type { SlashItem } from "./slashMatch.ts";
-export { mergeSlashItems, slashMatchIndex, slashToken, toSlashItems } from "./slashMatch.ts";
+export { mergeSlashItems, slashMatchIndex, slashSendsAsTyped, slashToken, toSlashItems } from "./slashMatch.ts";
 
 export const SOURCE_LABEL: Record<SkillSource, string> = {
   project: "项目",
