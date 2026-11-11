@@ -53,6 +53,8 @@ export interface CliHostEnv {
    * **只用于换算**:ash 不把它注入 CLI,用户自己的配置由 CLI 自己读(按起跑那次的配置目录)。
    */
   compactPercent?: number | null;
+  /** 企业策略配置(managed-settings.json)碰过任一压缩输入:它压在 ash 的 `--settings` 之上。 */
+  managedCompaction?: boolean;
 }
 
 /** profile 没填百分比时 CLI 会继承的那个(env 原值);没有就是 null。 */
@@ -407,9 +409,33 @@ export function cliConfigOverrideSettings(
  * 拆成两个词再拼进命令 —— 只按原始 token 比对的话,页面看不出冲突、跑起来却真的被顶掉
  * (第 2 轮审查 finding 4)。两边共用 shared/src/cli-args.ts 那份拆法。
  */
-function hasSettingsArg(extraArgs: readonly string[] | null | undefined): boolean {
+function hasFlag(extraArgs: readonly string[] | null | undefined, flag: string): boolean {
   if (!extraArgs?.length) return false;
-  return splitProfileExtraArgs(extraArgs).some((arg) => arg === "--settings" || arg.startsWith("--settings="));
+  return splitProfileExtraArgs(extraArgs).some((arg) => arg === flag || arg.startsWith(`${flag}=`));
+}
+
+function hasSettingsArg(extraArgs: readonly string[] | null | undefined): boolean {
+  return hasFlag(extraArgs, "--settings");
+}
+
+/**
+ * 这次起跑会在多少 token 压缩,ash **证明不了**的原因;证明得了返回 null。起跑快照(server
+ * cli-env.ts claudeLaunchCompact)和设置页、会话压缩设置的预览共用这一个判据 —— 一边说「不知道」、
+ * 一边承诺「继承 50%、约 90k 压」,用户就不知道该信哪个(审查 7pDLIAokZRHH 第 2 轮 F1)。
+ *
+ * 覆盖项本身照样生效(ash 的 `--settings` 是命令行参数,不在被筛的来源里),判不出的是**从各层
+ * 配置继承**的那部分:
+ *   · `--setting-sources` 筛掉了某几层,ash 按全部分层解出来的继承值未必是 CLI 读到的;
+ *   · 企业策略层碰过压缩输入,它压在 ash 那份之上。
+ * 额外参数里另带 `--settings` 是另一回事(覆盖整份到不了 CLI),见 cliConfigOverrideConflict。
+ */
+export function claudeCompactionUnprovable(
+  extraArgs: readonly string[] | null | undefined,
+  host: CliHostEnv = NO_CLI_HOST_ENV,
+): string | null {
+  if (hasFlag(extraArgs, "--setting-sources")) return "额外参数里的 --setting-sources 改了 claude 读哪几层配置";
+  if (host.managedCompaction) return "企业策略配置里改过自动压缩";
+  return null;
 }
 
 /**
@@ -471,6 +497,8 @@ export function cliConfigOverrideHints(
   values: Record<string, number> | null | undefined,
   host: CliHostEnv = NO_CLI_HOST_ENV,
   modelWindow: number | null = null,
+  // 这个 profile 的额外参数:改了 CLI 读哪些配置时,触发点就不再承诺(claudeCompactionUnprovable)。
+  extraArgs: readonly string[] = [],
 ): string[] {
   if (type !== "claude" || !values) return [];
   const plan = claudeCompactionPlan(values, host, modelWindow);
@@ -478,6 +506,10 @@ export function cliConfigOverrideHints(
     return values.autoCompactPercent !== undefined
       ? ["只填百分比不起作用:窗口留空时 claude 会整段跳过自动压缩。"]
       : [];
+  }
+  const unprovable = claudeCompactionUnprovable(extraArgs, host);
+  if (unprovable) {
+    return [`${unprovable},从各层配置继承来的那部分 ash 判不全,这里不给触发点;会话里的上下文胶囊同样会写「判不出」。`];
   }
   const clamped = plan.clampedFrom !== null
     ? `模型窗口只有 ${fmtTokens(plan.window)},填的 ${fmtTokens(plan.clampedFrom)} 会被 CLI 截掉;`

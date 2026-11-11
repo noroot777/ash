@@ -93,7 +93,7 @@ export function ProfileOverridesControl({
     + (active.length && conflict ? "（被额外参数顶掉）" : "");
   const shadowed = active.map((spec) => spec.shadows).join("、");
   // hint 跟着草稿走,不是跟着已保存的值走 —— 这行字存在的意义就是「改之前先看看会变成什么」。
-  const hints = cliConfigOverrideHints(type, parsed, hostEnv, modelWindow);
+  const hints = cliConfigOverrideHints(type, parsed, hostEnv, modelWindow, extraArgs);
 
   const save = async () => {
     if (!dirty) {

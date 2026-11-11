@@ -1,6 +1,11 @@
-import { cliConfigOverrideEnv, cliConfigOverrideEnvPrefix, type CliHostEnv } from "@ash/shared/cli-overrides";
+import {
+  claudeCompactionUnprovable,
+  cliConfigOverrideConflict,
+  cliConfigOverrideEnv,
+  cliConfigOverrideEnvPrefix,
+  type CliHostEnv,
+} from "@ash/shared/cli-overrides";
 import { type CompactSnapshot, compactSnapshotFromEnv, UNKNOWN_COMPACT_SNAPSHOT } from "@ash/shared/usage";
-import { splitProfileExtraArgs } from "@ash/shared/cli-args";
 import { type ClaudeConfigDir, claudeCompactLayers, claudeMaxOutputTokens } from "./claude-settings.js";
 
 // ash 起 CLI 时,那个子进程会看到的环境事实。**只读**,不是配置项 —— 它由 ash
@@ -17,9 +22,11 @@ import { type ClaudeConfigDir, claudeCompactLayers, claudeMaxOutputTokens } from
 // `configDir` = 这次起跑子进程的 `CLAUDE_CONFIG_DIR`(见 claude-settings.ts ClaudeConfigDir):
 // 多人隔离档下每个用户带着自己的配置目录起跑,按宿主那份解,换算出来的就是宿主的数。
 export function cliHostEnv(cwd?: string, configDir?: ClaudeConfigDir): CliHostEnv {
+  const layers = claudeCompactLayers(cwd, configDir);
   return {
     maxOutputTokens: claudeMaxOutputTokens(cwd, configDir),
-    compactPercent: claudeCompactLayers(cwd, configDir).inheritedPercent,
+    compactPercent: layers.inheritedPercent,
+    managedCompaction: layers.managedTouches,
   };
 }
 
@@ -32,10 +39,10 @@ export function cliHostEnv(cwd?: string, configDir?: ClaudeConfigDir): CliHostEn
  *   · 配了窗口:ash 的 `--settings` 压过项目/用户各层;留空的百分比由 CLI 自己从下层继承,快照把
  *     同一个继承值记下来(只记,不往 CLI 里钉 —— 钉了就是替用户改配置);
  *   · 没配窗口:ash 一个字都不注入,项目/用户层要是碰过任一压缩输入,CLI 就按它们走 —— 判不全,标「不知道」;
- *   · 企业策略层碰过任一压缩输入:它压在 `--settings` 之上,ash 那份未必算数,同样「不知道」。
- *   · 额外参数(profile 的 + 本次调用的,跟 buildArgs 拼进命令的是同一份)改了 CLI 读哪些配置:
- *     另带 `--settings` 会整份顶掉 ash 那份(claude 只认最后一个),`--setting-sources` 会筛掉某几层
- *     (审查 7pDLIAokZRHH F1)—— 上面这套分层解析都不再成立,不去逐个模拟,一律「不知道」。
+ *   · 额外参数(profile 的 + 本次调用的,跟 buildArgs 拼进命令的是同一份)另带 `--settings`:整份顶掉
+ *     ash 那份(cliConfigOverrideConflict),「不知道」;
+ *   · `--setting-sources` 筛掉某几层、企业策略层碰过压缩输入:继承的那部分判不全,「不知道」。这条判据
+ *     在 shared claudeCompactionUnprovable,设置页与会话压缩设置的预览用的是同一个(审查 7pDLIAokZRHH)。
  */
 export function claudeLaunchCompact(
   configOverrides: Record<string, number> | null | undefined,
@@ -43,23 +50,15 @@ export function claudeLaunchCompact(
   configDir?: ClaudeConfigDir,
   extraArgs: readonly string[] = [],
 ): CompactSnapshot {
-  if (reshapesSettings(extraArgs)) return UNKNOWN_COMPACT_SNAPSHOT;
+  const host = cliHostEnv(cwd, configDir);
+  if (cliConfigOverrideConflict("claude", extraArgs) || claudeCompactionUnprovable(extraArgs, host)) return UNKNOWN_COMPACT_SNAPSHOT;
   const layers = claudeCompactLayers(cwd, configDir);
-  if (layers.managedTouches) return UNKNOWN_COMPACT_SNAPSHOT;
-  const snapshot = compactSnapshotFromEnv(cliConfigOverrideEnv("claude", configOverrides, cliHostEnv(cwd, configDir)));
+  const snapshot = compactSnapshotFromEnv(cliConfigOverrideEnv("claude", configOverrides, host));
   if (snapshot.compactWindow === undefined) return layers.lowerTouches ? UNKNOWN_COMPACT_SNAPSHOT : snapshot;
   if (snapshot.compactPercent === undefined && layers.inheritedPercent !== null) {
     return { ...snapshot, compactPercent: layers.inheritedPercent };
   }
   return snapshot;
-}
-
-/** 改变 CLI 读哪些 settings 的参数。拆词跟 buildArgs 用同一份(shared/src/cli-args.ts)。 */
-const SETTINGS_SHAPING_FLAGS = ["--settings", "--setting-sources"];
-
-function reshapesSettings(extraArgs: readonly string[]): boolean {
-  return splitProfileExtraArgs(extraArgs)
-    .some((arg) => SETTINGS_SHAPING_FLAGS.some((flag) => arg === flag || arg.startsWith(`${flag}=`)));
 }
 
 /**

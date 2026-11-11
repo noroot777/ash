@@ -155,7 +155,7 @@ function CompactOverrideForm({
   const [justSaved, setJustSaved] = useState(false);
 
   // hint 跟着草稿走,不是跟着已保存的值走 —— 这行字的意义就是「改之前先看看会变成什么」。
-  const hints = cliConfigOverrideHints(profile.type, parsed, hostEnv, modelWindow);
+  const hints = cliConfigOverrideHints(profile.type, parsed, hostEnv, modelWindow, profile.extraArgs ?? []);
   const conflict = cliConfigOverrideConflict(profile.type, profile.extraArgs ?? []);
 
   const save = async () => {

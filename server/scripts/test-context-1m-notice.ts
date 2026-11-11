@@ -25,7 +25,7 @@ requireTmpDb("test-context-1m-notice");
 
 const { claudeModelWindow, clampedCompactWindow, CLAUDE_1M_WINDOW, CLAUDE_STANDARD_WINDOW } =
   await import("@ash/shared/context-1m");
-const { claudeCompactionPlan, cliConfigOverrideEnv, cliConfigOverrideHints } = await import("@ash/shared/cli-overrides");
+const { claudeCompactionPlan, claudeCompactionUnprovable, cliConfigOverrideEnv, cliConfigOverrideHints } = await import("@ash/shared/cli-overrides");
 const { effectiveContextWindow, contextRatio, contextCompactTrigger, compactSnapshotFromEnv, parseStoredCompactSnapshot, serializeCompactSnapshot, UNKNOWN_COMPACT_SNAPSHOT } =
   await import("@ash/shared/usage");
 const { launchFields, sessionContext, sessionCompactSnapshot, sessionContextCompact, sessionLaunchCompact, setSessionContext } =
@@ -438,6 +438,22 @@ userResident.close();
 assert.equal(cliHostEnv(fixtureDir, userConfigDir).compactPercent, 20, "设置页那条只读接口按同一目录读");
 assert.equal(cliHostEnv(fixtureDir).compactPercent, 50, "不给目录才是 ash 进程自己那份");
 rmSync(userConfigDir, { recursive: true, force: true });
+// 预览与起跑快照共用同一个可信度判据(审查 7pDLIAokZRHH 第 2 轮 F1):快照判「不知道」的那几种,
+// 设置页与会话压缩设置的提示也不许再承诺「继承 50%、约 90k」。
+for (const extraArgs of [["--setting-sources", "local"], ["--setting-sources=local"], ["--setting-sources local"]]) {
+  const hints = cliConfigOverrideHints("claude", { autoCompactWindow: 600_000 }, cliHostEnv(fixtureDir), CLAUDE_STANDARD_WINDOW, extraArgs);
+  assert.ok(hints.length > 0 && hints.every((hint) => !hint.includes("~90k") && !hint.includes("50%")), `预览不承诺触发点:${extraArgs.join(" ")}`);
+  assert.ok(hints.some((hint) => hint.includes("--setting-sources")), "说清为什么判不出");
+  assert.ok(claudeCompactionUnprovable(extraArgs, cliHostEnv(fixtureDir)), "设置页 1M 提示读的也是这一个判据");
+}
+assert.ok(claudeCompactionUnprovable([], { maxOutputTokens: null, managedCompaction: true }), "企业策略层碰过压缩:同样判不出");
+assert.equal(claudeCompactionUnprovable([], cliHostEnv(fixtureDir)), null, "普通情况判得出");
+assert.deepEqual(
+  new ClaudeExecutor({ model: "claude-fable-5-2", bin: fakeClaude, configOverrides: { autoCompactWindow: 600_000 }, extraArgs: ["--setting-sources=local"] })
+    .run({ prompt: "hi", cwd: fixtureDir }).launchCompact,
+  { compactUnknown: true },
+  "起跑快照同一判据",
+);
 // ash 没配压缩、下层却配过:CLI 按下层走,ash 判不全 —— 不知道,而不是「没配」。
 const unconfigured = new ClaudeExecutor({ model: "claude-fable-5-2", bin: fakeClaude });
 assert.deepEqual(unconfigured.run({ prompt: "hi", cwd: fixtureDir }).launchCompact, { compactUnknown: true });

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { WarningCircle } from "@phosphor-icons/react";
 import type { ContextUsage, LlmProvider, Session } from "@ash/shared";
-import { type CliHostEnv, claudeCompactionPlan } from "@ash/shared/cli-overrides";
+import { type CliHostEnv, claudeCompactionPlan, claudeCompactionUnprovable } from "@ash/shared/cli-overrides";
 import { type ClaudeModelWindow, clampedCompactWindow, claudeModelWindow } from "@ash/shared/context-1m";
 import { contextCompactTrigger } from "@ash/shared/usage";
 import { api } from "../lib/api.ts";
@@ -42,7 +42,9 @@ export function Context1mNotice({
   const next = claudeModelWindow(model, provider, extraArgs);
   const clamp = next ? clampedCompactWindow(overrides.autoCompactWindow, next.window) : null;
   if (!next || !clamp) return null;
-  const trigger = claudeCompactionPlan(overrides, hostEnv, next.window)?.trigger;
+  // 窗口被截这件事判得准(配的窗口 vs 模型窗口);触发点要靠各层继承,判不全就不承诺,跟起跑快照同一个判据。
+  const unprovable = claudeCompactionUnprovable(extraArgs, hostEnv);
+  const trigger = unprovable ? null : claudeCompactionPlan(overrides, hostEnv, next.window)?.trigger;
   return (
     <div className="context-1m-notice" role="status">
       <WarningCircle size={13} weight="fill" aria-hidden="true" />
