@@ -56,7 +56,7 @@ export function ProfileOverridesControl({
 }) {
   const [open, setOpen] = useState(false);
   const { specs, draft, set, reset, parsed, errors, dirty, active } = useCliOverrideDraft(type, value, open);
-  const hostEnv = useCliHostEnv();
+  const hostEnv = useCliHostEnv(open);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
@@ -175,6 +175,7 @@ export function ProfileOverridesControl({
               provider={provider}
               extraArgs={extraArgs}
               overrides={parsed}
+              hostEnv={hostEnv}
               onEnabled={onProviderChanged}
             />
           )}

@@ -5,11 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
 import {
-  cliConfigOverrideConflict,
   cliConfigOverrideEnvPatch,
   cliConfigOverrideSettings,
 } from "@ash/shared/cli-overrides";
-import { type CompactSnapshot, UNKNOWN_COMPACT_SNAPSHOT } from "@ash/shared/usage";
+import type { CompactSnapshot } from "@ash/shared/usage";
 import { claudeLaunchCompact, cliHostEnv } from "./cli-env.js";
 import { type ClaudeConfigDir, claudeConfigDirOf } from "./claude-settings.js";
 import type { AgentExecutor, ConsumedOutput, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
@@ -208,15 +207,12 @@ export class ClaudeExecutor implements AgentExecutor {
 
   /**
    * 这次起跑 CLI **最终生效**的压缩配置,解成启动快照带在每条水位上、随 commandLine 落库。
-   * 各层配置的继承与企业策略层由 claudeLaunchCompact 判(cli-env.ts);这里补额外参数那条:buildArgs 会把
-   * profile 与本次调用的额外参数排在 ash 那份 `--settings` **之后**,里面若自带 `--settings`
-   * 就整份胜出(cliConfigOverrideConflict 那条),ash 注入的数一个都到不了 CLI —— 这时只能
-   * 说「不知道」,不能发布被盖掉的那组(第 3 轮审查 F1)。判据跟 buildArgs 用同一份参数。
+   * 判定全在 claudeLaunchCompact(cli-env.ts):各层继承、企业策略层,以及额外参数改了 CLI 读哪些
+   * 配置的情形。交给它的额外参数跟 buildArgs 拼进命令的是同一份(profile 的 + 本次调用的)。
    * **只在起跑时调**:接管旧进程用会话存下的那份(attach 的 opts.compact)。
    */
   private launchCompactSnapshot(opts: RunOpts): CompactSnapshot {
-    if (cliConfigOverrideConflict(this.type, [...this.extraArgs, ...(opts.extraArgs ?? [])])) return UNKNOWN_COMPACT_SNAPSHOT;
-    return claudeLaunchCompact(this.configOverrides, opts.cwd, claudeConfigDirOf(opts.env));
+    return claudeLaunchCompact(this.configOverrides, opts.cwd, claudeConfigDirOf(opts.env), [...this.extraArgs, ...(opts.extraArgs ?? [])]);
   }
 
   run(opts: RunOpts): RunHandle {

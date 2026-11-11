@@ -11,7 +11,12 @@ import { api } from "../lib/api.ts";
 // 会被改（审查 SaouXWB_jEuw 第 2 轮 N1），所以请求一结束就作废，下次打开重新取。
 let cached: Promise<CliHostEnv> | null = null;
 
-export function useCliHostEnv(): CliHostEnv {
+/**
+ * `refreshKey` 一变就重取:挂着不卸载的调用方(执行器设置的一整行)拿弹层的开合当这个 key,
+ * 每次打开都是新值;弹层里的子组件别再自己调一份,从父级拿同一个值(审查 7pDLIAokZRHH N1)——
+ * 两份各取各的,同一个弹层里就会一处写新百分比、一处写旧的。
+ */
+export function useCliHostEnv(refreshKey?: unknown): CliHostEnv {
   const [host, setHost] = useState<CliHostEnv>(NO_CLI_HOST_ENV);
   useEffect(() => {
     let alive = true;
@@ -21,6 +26,6 @@ export function useCliHostEnv(): CliHostEnv {
     // 为了一行提示文案在设置页弹个错，不值当。
     pending.then((value) => { if (alive) setHost(value); }, () => {}).finally(settle);
     return () => { alive = false; };
-  }, []);
+  }, [refreshKey]);
   return host;
 }

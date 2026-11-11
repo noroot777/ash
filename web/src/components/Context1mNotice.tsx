@@ -1,12 +1,11 @@
 import { useState } from "react";
 import { WarningCircle } from "@phosphor-icons/react";
 import type { ContextUsage, LlmProvider, Session } from "@ash/shared";
-import { claudeCompactionPlan } from "@ash/shared/cli-overrides";
+import { type CliHostEnv, claudeCompactionPlan } from "@ash/shared/cli-overrides";
 import { type ClaudeModelWindow, clampedCompactWindow, claudeModelWindow } from "@ash/shared/context-1m";
 import { contextCompactTrigger } from "@ash/shared/usage";
 import { api } from "../lib/api.ts";
 import { refreshProviders } from "../lib/modelCatalog.ts";
-import { useCliHostEnv } from "../lib/useCliHostEnv.ts";
 import "./context-1m-notice.css";
 
 // 600k / 200k / 149k 这种整数口径,跟设置页压缩提示(cli-overrides 的 fmtTokens)一致。
@@ -29,15 +28,17 @@ export function Context1mNotice({
   provider,
   extraArgs,
   overrides,
+  hostEnv,
   onEnabled,
 }: {
   model: string | null | undefined;
   provider: LlmProvider | null | undefined;
   extraArgs: readonly string[];
   overrides: Record<string, number>;
+  /** 跟同一弹层里其它预览共用的那份(见 useCliHostEnv),不自己另取。 */
+  hostEnv: CliHostEnv;
   onEnabled: (provider: LlmProvider) => void;
 }) {
-  const hostEnv = useCliHostEnv();
   const next = claudeModelWindow(model, provider, extraArgs);
   const clamp = next ? clampedCompactWindow(overrides.autoCompactWindow, next.window) : null;
   if (!next || !clamp) return null;

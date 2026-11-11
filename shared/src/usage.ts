@@ -221,8 +221,10 @@ export function compactSnapshotFromEnv(env: Readonly<Record<string, string | und
 // 配置照样当事实写了进去(第 4 轮审查 F1),所以「列非空」不等于「可信」,只有标记说了算。
 // 标记带版本:判定口径每收紧一次就换一个,旧口径写下的一律当证明不了。
 //   launch-final       只记 ash 注入的那几项,留空的百分比从下层继承时漏记(审查 SaouXWB_jEuw F1)
-//   launch-final/v2    覆盖全部压缩输入,各层配置按那次起跑自己的配置目录读
-const COMPACT_SNAPSHOT_PROVENANCE = "launch-final/v2";
+//   launch-final/v2    各层配置按那次起跑自己的配置目录读,但没看额外参数里的 `--setting-sources`,
+//                      百分比也不是按 CLI 的 parseFloat 解的(审查 7pDLIAokZRHH F1)
+//   launch-final/v3    改变 CLI 读哪些配置的额外参数一律判不知道,继承值按 CLI 同一种解码
+const COMPACT_SNAPSHOT_PROVENANCE = "launch-final/v3";
 
 /** 快照 → 落库/接力用的文本。所有写入点共用这一个,标记才不会漏盖。 */
 export function serializeCompactSnapshot(snapshot: CompactSnapshot): string {

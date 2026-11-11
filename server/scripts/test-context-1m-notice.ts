@@ -300,7 +300,11 @@ const v1Snapshot = JSON.stringify({ provenance: "launch-final", compactWindow: 6
 assert.equal(parseStoredCompactSnapshot(v1Snapshot), null, "旧版本标记不算数");
 assert.deepEqual(sessionLaunchCompact({ agentType: "claude", launchCompact: v1Snapshot }), { compactUnknown: true }, "接管");
 assert.deepEqual(sessionContextCompact({ agentType: "claude", contextCompact: v1Snapshot }), { compactUnknown: true }, "重读与接力导出");
-assert.ok(serializeCompactSnapshot({ compactWindow: 600_000 }).includes(`"launch-final/v2"`), "新写入带当前版本");
+// v2 口径没看 `--setting-sources`、百分比不是按 CLI 的 parseFloat 解的(审查 7pDLIAokZRHH F1),同样作废。
+const v2Snapshot = JSON.stringify({ provenance: "launch-final/v2", compactWindow: 600_000, compactPercent: 50 });
+assert.deepEqual(sessionLaunchCompact({ agentType: "claude", launchCompact: v2Snapshot }), { compactUnknown: true }, "v2 接管");
+assert.deepEqual(sessionContextCompact({ agentType: "claude", contextCompact: v2Snapshot }), { compactUnknown: true }, "v2 重读");
+assert.ok(serializeCompactSnapshot({ compactWindow: 600_000 }).includes(`"launch-final/v3"`), "新写入带当前版本");
 
 // 第 5 轮:列非空不等于可信。「按最终生效参数判定」上线前,被额外参数盖掉的那组数照样随水位
 // 写成了 {"compactWindow":600000,"compactPercent":82.76}(没有来源标记)。重读、接管、接力导出
@@ -390,6 +394,33 @@ const userConfigDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-user-"))
 writeFileSync(join(userConfigDir, "settings.json"), JSON.stringify({
   env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "20", CLAUDE_CODE_MAX_OUTPUT_TOKENS: "10000" },
 }));
+// 额外参数改了 CLI 读哪几层(审查 7pDLIAokZRHH F1):真 CLI 2.1.283 在 `--setting-sources local` 下根本没
+// 读用户层那份 50%,快照却记了 50%、报 ~90k。分层解析不再成立,三种写法、两处来源(profile / 本次调用)都判不知道。
+for (const extraArgs of [["--setting-sources", "local"], ["--setting-sources=local"], ["--setting-sources local"]]) {
+  assert.deepEqual(windowOnly.run({ prompt: "hi", cwd: fixtureDir, extraArgs }).launchCompact, { compactUnknown: true }, extraArgs.join(" "));
+}
+const sourcesByProfile = new ClaudeExecutor({
+  model: "claude-fable-5-2", bin: fakeClaude, configOverrides: { autoCompactWindow: 600_000 }, extraArgs: ["--setting-sources", "project,local"],
+});
+assert.deepEqual(sourcesByProfile.runSteerable({ prompt: "hi", cwd: fixtureDir }).launchCompact, { compactUnknown: true }, "profile 额外参数同理");
+const sourcesResident = sourcesByProfile.openResident({ prompt: "hi", cwd: fixtureDir });
+assert.deepEqual(sourcesResident.launchCompact, { compactUnknown: true }, "常驻起跑同理");
+sourcesResident.close();
+// 继承值按 CLI 同一种解码:parseFloat("50%") = 50,CLI 按 50% 压,快照也得记 50。
+const loosePercentDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-loose-"));
+writeFileSync(join(loosePercentDir, "settings.json"), JSON.stringify({ env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "50%" } }));
+assert.equal(
+  windowOnly.run({ prompt: "hi", cwd: fixtureDir, env: { CLAUDE_CONFIG_DIR: loosePercentDir } }).launchCompact?.compactPercent,
+  50,
+  "\"50%\" 跟 CLI 一样读成 50",
+);
+writeFileSync(join(loosePercentDir, "settings.json"), JSON.stringify({ env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "junk" } }));
+assert.equal(
+  windowOnly.run({ prompt: "hi", cwd: fixtureDir, env: { CLAUDE_CONFIG_DIR: loosePercentDir } }).launchCompact?.compactPercent,
+  undefined,
+  "CLI 也解不出来的,两边都按默认",
+);
+rmSync(loosePercentDir, { recursive: true, force: true });
 const userRun = windowOnly.run({ prompt: "hi", cwd: fixtureDir, env: { CLAUDE_CONFIG_DIR: userConfigDir } });
 assert.deepEqual(userRun.launchCompact, { compactWindow: 600_000, compactPercent: 20, compactMaxOutput: 10_000 }, "按用户自己的目录读");
 assert.ok(!userRun.commandLine.includes("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"), "宿主的百分比没有被钉进去顶掉用户的");

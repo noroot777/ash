@@ -172,7 +172,9 @@ export function claudeCompactLayers(cwd?: string, configDir?: ClaudeConfigDir): 
   for (const path of lower) {
     const found = envValue(path, "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE");
     if (found === undefined) continue;
-    const value = Number(found);
+    // 跟 CLI 同一种解码(2.1.283:`s ? parseFloat(s) : undefined`,再只认 0 < pct ≤ 100):
+    // "50%"、"50junk" CLI 读成 50,这里也得是 50,否则又是一边按 50% 压、一边按默认报(审查 7pDLIAokZRHH F1)。
+    const value = found ? Number.parseFloat(found) : Number.NaN;
     inheritedPercent = Number.isFinite(value) && value > 0 && value <= 100 ? value : null;
     break;
   }
