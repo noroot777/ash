@@ -105,6 +105,16 @@ export function isSendKeyEvent(event: SendKeyEventLike): boolean {
 }
 
 /**
+ * 补全菜单开着时,这一下回车算「选中这条」吗。选词中的回车、Shift/Alt+回车(换行)
+ * 都不算,⌘/Ctrl+回车也不算(那是发送键,交给 isSendKeyEvent)。菜单选中这一下
+ * 可能直接把消息发出去(敲全的原生命令),所以跟发送键用同一套否决项。
+ */
+export function isMenuPickKeyEvent(event: SendKeyEventLike): boolean {
+  return event.key === "Enter" && !composing(event) && !event.shiftKey && !event.altKey
+    && !event.metaKey && !event.ctrlKey;
+}
+
+/**
  * 只认 ⌘/Ctrl+回车、**不跟那一档走**的提交键。给「正文天生多行、裸回车永远是换行」的
  * 框用(备忘这类):那里切到 `enter` 档就等于每敲一个换行就提交一次。选词中的回车、
  * 多按了 Shift/Alt 的都不算。

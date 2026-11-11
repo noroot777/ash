@@ -1,5 +1,6 @@
 import { useState, type KeyboardEvent } from "react";
 import type { SkillEntry } from "@ash/shared";
+import { isMenuPickKeyEvent } from "./sendKey.ts";
 import { applySlashPick, mergeSlashItems, slashQuery, slashSendsAsTyped, type SlashItem } from "./useSkills.ts";
 
 // 输入框的 `/` 补全状态机。ReplyBox 和新建任务面板各有一堆自己的分支（派生命令、
@@ -53,7 +54,7 @@ export function useSlashCompletion({
       setIndex((selectedIndex + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length);
       return true;
     }
-    if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
+    if (isMenuPickKeyEvent(event)) {
       event.preventDefault();
       if (sends) onSend!();
       else pick(items[selectedIndex]!);

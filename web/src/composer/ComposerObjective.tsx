@@ -1,7 +1,7 @@
 import type { ClipboardEventHandler, KeyboardEvent, RefObject } from "react";
 import type { TaskMode } from "@ash/shared";
 import { SlashMenu } from "../components/SlashMenu.tsx";
-import { isSendKeyEvent } from "../lib/sendKey.ts";
+import { isMenuPickKeyEvent, isSendKeyEvent } from "../lib/sendKey.ts";
 import type { SlashItem } from "../lib/useSkills.ts";
 
 export function ComposerObjective({ body, mode, textareaRef, onChange, onPaste, items, selected, token, onSelect, onPick, onDismiss, onSubmit, mention }: {
@@ -34,7 +34,7 @@ export function ComposerObjective({ body, mode, textareaRef, onChange, onPaste, 
             onSelect((selected + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length);
             return;
           }
-          if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
+          if (isMenuPickKeyEvent(event)) {
             event.preventDefault(); onPick(items[selected]!); return;
           }
           if (event.key === "Escape") {

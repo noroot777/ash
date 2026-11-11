@@ -15,7 +15,7 @@ import {
 import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { useReplyLayout } from "./useReplyLayout.ts";
-import { isSendKeyEvent } from "../lib/sendKey.ts";
+import { isMenuPickKeyEvent, isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { api, type ReplyTaskResult } from "../lib/api.ts";
 import { useProviders } from "../lib/modelCatalog.ts";
@@ -566,7 +566,7 @@ export function ReplyBox({
                 setCommandIndex((selectedIndex - 1 + candidates.length) % candidates.length);
                 return;
               }
-              if (event.key === "Enter") {
+              if (isMenuPickKeyEvent(event)) {
                 event.preventDefault();
                 if (menuSends) void send();
                 else pickCommand(selected!);

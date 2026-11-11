@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { isMenuPickKeyEvent } from "../src/lib/sendKey.ts";
 import { applySlashPick, mergeSlashItems, slashMatchIndex, slashQuery, slashSendsAsTyped, slashToken } from "../src/lib/slashMatch.ts";
 
 const skill = (command, description = "") => ({
@@ -79,9 +80,23 @@ assert.deepEqual(
 const compact = mergeSlashItems([], [{ ...skill("/compact", "原生压缩"), native: true, source: "builtin" }], slashQuery("/com"))[0];
 assert.equal(compact.kind, "native");
 assert.equal(slashSendsAsTyped(compact, "/com"), false);
-assert.equal(slashSendsAsTyped(compact, " /Compact"), true);
+assert.equal(slashSendsAsTyped(compact, " /compact"), true);
+assert.equal(slashSendsAsTyped(compact, "/COMPACT"), false);
+assert.equal(applySlashPick("/COMPACT", compact.command), "/compact ");
 assert.equal(slashSendsAsTyped(grouped[3], "/goal-helper"), false);
 assert.equal(slashSendsAsTyped(grouped[0], grouped[0].command), false);
 assert.equal(slashSendsAsTyped(undefined, "/compact"), false);
+
+// 菜单开着时只有裸回车算「选中这条」:选中可能直接把敲全的原生命令发出去,
+// 所以选词中的回车、Shift/Alt+回车(换行)、⌘/Ctrl+回车(发送键)都不算。
+const key = (patch) => ({ key: "Enter", shiftKey: false, altKey: false, metaKey: false, ctrlKey: false, ...patch });
+assert.equal(isMenuPickKeyEvent(key({})), true);
+assert.equal(isMenuPickKeyEvent(key({ shiftKey: true })), false);
+assert.equal(isMenuPickKeyEvent(key({ altKey: true })), false);
+assert.equal(isMenuPickKeyEvent(key({ metaKey: true })), false);
+assert.equal(isMenuPickKeyEvent(key({ nativeEvent: { isComposing: true } })), false);
+assert.equal(isMenuPickKeyEvent(key({ isComposing: true })), false);
+assert.equal(isMenuPickKeyEvent(key({ keyCode: 229 })), false);
+assert.equal(isMenuPickKeyEvent(key({ key: "Tab" })), false);
 
 console.log("slash match tests passed");

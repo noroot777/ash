@@ -99,5 +99,7 @@ export function mergeSlashItems(ash: SlashItem[], skills: SkillEntry[], query: S
  * 技能不走这条:光一个 `/技能名` 没有正文,补全后让人接着写才是对的。
  */
 export function slashSendsAsTyped(item: SlashItem | undefined, text: string): boolean {
-  return item?.kind === "native" && text.trim().toLowerCase() === item.command.toLowerCase();
+  // 大小写必须一字不差:server 与 CLI 认原生命令是区分大小写的,`/COMPACT` 原样发出去
+  // 只是一句普通话。差了大小写就走补全,由它换成候选的准确拼写。
+  return item?.kind === "native" && text.trim() === item.command;
 }
