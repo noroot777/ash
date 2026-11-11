@@ -1,0 +1,117 @@
+/* 回复框（.reply）和全应用共用的那颗发送键（.skey）。只引用 base.css 的变量，浅深两套自动成立。 */
+
+/* ---------- 发送键：箭头主段 + 连体的小尖角 ---------- */
+.skey { --h: 29px; --opt: 24px; --g: 14px; display: inline-flex; flex: none; height: var(--h); color: var(--on-accent); }
+.skey[data-size="36"] { --h: 36px; --opt: 26px; --g: 16px; }
+.skey[data-size="36"] > button { font-size: var(--t-sm); }
+.skey > button { position: relative; display: inline-flex; align-items: center; justify-content: center; height: 100%; color: inherit; font-size: var(--t-xs); font-weight: var(--w-medium); white-space: nowrap; transition: opacity var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out); }
+
+/* 主段的底色单独一层：键变宽变窄时布局一步到位，底色从旧位置滑到新位置（只动 transform，圆角不变形）。
+   .skey-clip 向左多留 180px 只裁右边，.skey-bg 向右多铺 180px 只露左边的圆角。 */
+.skey-main { isolation: isolate; gap: 6px; min-width: var(--h); border-radius: var(--r-md) 0 0 var(--r-md); }
+.skey-main.has-txt { padding: 0 9px 0 11px; }
+.skey-clip { position: absolute; z-index: -1; inset: 0 0 0 -180px; overflow: hidden; pointer-events: none; }
+.skey-bg { position: absolute; inset: 0 -180px 0 180px; border-radius: var(--r-md) 0 0 var(--r-md); background: var(--accent); transition: background var(--dur-1) var(--ease-out); }
+.skey-main:hover .skey-bg { background: var(--accent-hover); }
+.skey-main:active .skey-bg { background: var(--accent-active); }
+.skey-main[aria-disabled="true"] { cursor: default; }
+.skey-main[aria-disabled="true"] .skey-bg { background: var(--accent); }
+
+.skey-opt { width: var(--opt); margin-left: 1px; border-radius: 0 var(--r-md) var(--r-md) 0; background: var(--accent); }
+.skey-opt:hover, .skey-opt[aria-expanded="true"] { background: var(--accent-hover); }
+.skey-opt:active { background: var(--accent-active); }
+
+/* 发不出去：整颗键同明同暗；尖角照样点得动，指上去回到实色 */
+.skey.is-dim > button { opacity: 0.45; }
+.skey.is-dim > .skey-opt:hover, .skey.is-dim > .skey-opt:focus-visible, .skey.is-dim > .skey-opt[aria-expanded="true"] { opacity: 1; }
+
+/* 键上的字：只在「这一条不会马上发出去」时出现。旧字 80ms 淡出，新字等 80ms 再 120ms 淡入 */
+.skey-txt { transition: opacity 120ms var(--ease-out) 80ms; }
+.skey-txt:empty { display: none; }
+.skey-txt.is-out { opacity: 0; transition: opacity 80ms var(--ease-out); }
+
+/* 图标叠在同一格里交叉淡：发送 ↔ 停止，尖角 ↔ 时钟 ↔ 沙漏。位置不跳 */
+.skey-glyph { display: grid; place-items: center; flex: none; }
+.skey-glyph > .i { grid-area: 1 / 1; width: var(--g); height: var(--g); stroke-width: 1.8; opacity: 0; transition: opacity 80ms var(--ease-out); }
+.skey-glyph > .i.is-on { opacity: 1; transition: opacity 120ms var(--ease-out) 80ms; }
+.skey-opt .skey-glyph > .i { width: 12px; height: 12px; stroke-width: 1.6; }
+
+/* 发送设置 / 启动设置浮层的内容（外壳是公共的 .pop）：上面选档，下面是这一档要填的那一样 */
+.skey-pop { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; width: 320px; padding: 4px; }
+.skey-pop > .seg { display: flex; }
+.skey-pop > .seg > button { flex: 1; padding: 0; }
+.skey-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.skey-body:empty { display: none; }
+.skey-body > p { padding: 0 4px 2px; color: var(--muted); font-size: var(--t-xs); }
+.skey-body > p:empty { display: none; }
+.skey-body > input { width: 100%; }
+.skey-body > .menu small { flex: none; color: var(--faint); font-size: var(--t-xs); }
+/* 启动设置（新建任务那一颗）：五档一列，右边一句说明；要填的那一样在一条细线下面 */
+.skey-launch { gap: 4px; width: 328px; padding: 0; }
+.skey-launch > .skey-body { padding: 8px 4px 4px; border-top: 1px solid var(--line); }
+.skey-launch em { margin-left: auto; padding-left: 16px; color: var(--muted); font-size: var(--t-xs); font-style: normal; }
+.skey-launch > .menu > [aria-selected="true"] > span { font-weight: var(--w-medium); color: var(--accent); }
+
+/* ---------- 回复框 ---------- */
+.reply { width: 100%; flex: none; padding-bottom: 16px; }
+.reply-col { width: min(790px, 100% - 48px); margin: 0 auto; }
+
+/* 框上方只放状态：待发送的消息一列、附件一列。没有东西时不占高度 */
+.reply-list { display: grid; }
+.reply-list:not(:empty) { padding-bottom: 6px; }
+.reply-row { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 2px 0 12px; border-radius: var(--r-md); color: var(--ink); transition: background var(--dur-1) var(--ease-out), opacity 120ms var(--ease-in), transform 120ms var(--ease-in); }
+.reply-row:hover, .reply-row:focus-within { background: var(--hover-bg); }
+.reply-row > .i { color: var(--faint); }
+.reply-row > small { flex: 0 1 auto; max-width: 50%; color: var(--muted); font-size: var(--t-xs); }
+.reply-row > small.is-stuck { color: var(--amber); }
+.reply-row > .btn { flex: none; padding: 0 8px; }
+.reply-row.is-out { opacity: 0; transform: translateY(-4px); pointer-events: none; }
+
+.reply-box { position: relative; border-radius: var(--r-lg); background: var(--panel); box-shadow: 0 0 0 1px var(--line2), var(--surface-shadow); }
+.reply-box:focus-within { box-shadow: 0 0 0 1px color-mix(in oklab, var(--focus-ring) 55%, var(--line2)), var(--surface-shadow); }
+
+/* 顶边的拖动条：平时看不见，指到或拖着时顶边亮一条线（只画直的那一段，不压圆角）。
+   它只有 8px 高、贴着框线，套一圈焦点环会把框线盖住，聚焦时改成把这条线加粗、换成焦点环的颜色 */
+.reply-grip { position: absolute; z-index: 2; inset: 0 0 auto; height: 8px; cursor: row-resize; touch-action: none; }
+.reply-grip::after { content: ""; position: absolute; inset: 0 var(--r-lg) auto; height: 1px; background: var(--accent); opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.reply-grip:hover::after, .reply-grip.is-on::after { opacity: 0.65; }
+.reply-grip:focus-visible { outline: 0; }
+.reply-grip:focus-visible::after { height: 2px; background: var(--focus-ring); opacity: 1; }
+
+/* 水印：负责人保留项，数值照现在的 agent-plate.css 一个不改（斜体 800、大写、行高 1、字距 -0.03em、
+   颜色是面板色混一点描边色、进场 380ms）。字号由脚本按框的大小算，不在五档字号之内。
+   后面那个 i 没有任何长相，只是套住字形的一个框，给对照清单的圆圈落脚。 */
+.reply-plate { position: absolute; inset: 0; z-index: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; font-size: var(--plate-size, 30px); white-space: nowrap; pointer-events: none; user-select: none; }
+.reply-plate > span { flex: 0 0 auto; color: color-mix(in lch, var(--panel) 72%, var(--line2)); font-style: italic; font-weight: 800; font-size: inherit; line-height: 1; letter-spacing: -0.03em; text-transform: uppercase; animation: reply-plate-in 380ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+@keyframes reply-plate-in { from { opacity: 0; transform: translate3d(0, 0.12em, 0) scale(0.96); } }
+.reply-plate > i { position: absolute; inset: 0; margin: auto; }
+
+.reply-box > textarea { position: relative; z-index: 1; display: block; width: 100%; min-height: 74px; padding: 12px 14px 2px; border: 0; border-radius: var(--r-lg) var(--r-lg) 0 0; outline: 0; resize: none; background: none; color: var(--ink); font-size: var(--t-sm); line-height: 20px; overflow-y: hidden; }
+
+/* 底排：动作靠左，「谁来跑」和发送键靠右，一行 */
+.reply-acts { position: relative; z-index: 1; display: flex; align-items: center; gap: 2px; padding: 4px 8px 8px; }
+.reply-acts > .btn { flex: none; padding: 0 8px; }
+.reply-acts > .btn[aria-pressed="true"] { color: var(--ink); }
+.reply-acts > .caps { margin-left: 8px; background: var(--panel); }
+.reply-acts > .skey { margin-left: 8px; }
+.reply .ico:active, .reply .btn.quiet:active { background: var(--sel-bg); }
+
+/* 放不下时的退路，脚本量过以后写在 data-tight 上（reply.js 的 fitActs）：
+   1 没有状态的动作只剩图标（提示还在），正在审、正在起预览、已预约的照样带字；2 胶囊收成只剩智能体；3 换行 */
+.reply-acts:is([data-tight="1"], [data-tight="2"], [data-tight="3"]) > .btn:not([aria-pressed="true"]) > span:not(.shim) { display: none; }
+.reply-acts:is([data-tight="2"], [data-tight="3"]) > .caps > button:not(:first-child) { display: none; }
+.reply-acts:is([data-tight="2"], [data-tight="3"]) > .caps > button:first-child { border-radius: var(--r-md); }
+.reply-acts[data-tight="3"] { flex-wrap: wrap; justify-content: flex-end; row-gap: 4px; }
+
+/* ---------- 「更多」里两样开出来的对话框（外壳是公共的 .veil + .dlg） ---------- */
+.reply-dlg { width: min(560px, calc(100vw - 32px)); }
+.reply-log { max-height: min(320px, 50vh); margin: 12px 0 0; padding: 10px 12px; overflow: auto; border-radius: var(--r-md); background: var(--raised); font: var(--t-xs)/1.6 var(--font-mono); }
+.reply-shot { display: grid; justify-items: center; gap: 4px; margin-top: 12px; padding: 28px 16px; border-radius: var(--r-md); background: var(--raised); text-align: center; }
+.reply-shot:has(.reply-shot-img) { padding: 8px; }
+.reply-shot > b { font-weight: var(--w-medium); }
+.reply-shot > p { margin: 0; font-size: var(--t-xs); }
+.reply-shot > .btn { margin-top: 10px; }
+/* 标注图：点一下落一颗带号的红点 */
+.reply-shot-img { position: relative; display: block; overflow: hidden; border-radius: var(--r-sm); cursor: crosshair; }
+.reply-shot-img > img { display: block; max-width: 100%; max-height: 50vh; }
+.reply-shot-img > i { position: absolute; width: 20px; height: 20px; translate: -50% -50%; border-radius: 50%; background: var(--red); color: var(--on-accent); font: normal var(--w-strong) var(--t-xs)/20px var(--font-sans); text-align: center; }

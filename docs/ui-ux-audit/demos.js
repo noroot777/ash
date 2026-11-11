@@ -1,4 +1,4 @@
-// 报告页的全部脚本：两张分布图、滚动淡入、五个「现在 / 之后」对照演示、发送设置与右侧面板两个样机。
+// 报告页的全部脚本：图标表、两张分布图、逐面清单、滚动淡入、五个「现在 / 之后」对照演示、发送设置与右侧面板两个样机、嵌进来的执行中样机。
 // anime.js 从 CDN 动态加载；连不上时右栏退回 WAAPI，并在页面上如实写明。
 
 const ANIME_URL = 'https://cdn.jsdelivr.net/npm/animejs@4.5.0/dist/bundles/anime.esm.min.js';
@@ -7,16 +7,62 @@ const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
+/* ---------- 图标：页面里的 <svg><use href="#i-名字"/></svg> 引用的都是这一张表（16 格、描边） ---------- */
+
+const ICONS = {
+  stop: '<rect x="4.5" y="4.5" width="7" height="7" rx="1.5"/>',
+  search: '<circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/>',
+  monitor: '<rect x="2.5" y="3.5" width="11" height="7.5" rx="1.5"/><path d="M6 13.5h4M8 11v2.5"/>',
+  send: '<path d="M14 2 7 9M14 2 9.5 14 7 9 2 6.5z"/>',
+  more: '<circle cx="3.5" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12.5" cy="8" r=".6"/>',
+  panel: '<rect x="2" y="3" width="12" height="10" rx="2"/><path d="M10 3v10"/>',
+  copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/>',
+  fork: '<circle cx="4" cy="3.5" r="1.5"/><circle cx="12" cy="3.5" r="1.5"/><circle cx="8" cy="12.5" r="1.5"/><path d="M4 5v1.5a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V5M8 8.5V11"/>',
+  redo: '<path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5v3h-3"/>',
+  clip: '<path d="M13 7.5 8 12.5a3 3 0 0 1-4.3-4.2l5-5a2 2 0 0 1 2.9 2.8l-5 5a1 1 0 0 1-1.5-1.4L9.5 5.5"/>',
+  up: '<path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/>',
+  check: '<path d="m3 8.5 3.2 3L13 4.5"/>',
+  warn: '<circle cx="8" cy="8" r="6"/><path d="M8 4.8v3.6M8 11v.2"/>',
+  pin: '<path d="M6 2.5h4l-.5 4 2.3 2.5H4.2l2.3-2.5z"/><path d="M8 9v4.5"/>',
+  caret: '<path d="m4 6 4 4 4-4"/>',
+  clock: '<circle cx="8" cy="8" r="5.5"/><path d="M8 5v3.2l2 1.3"/>',
+  sand: '<path d="M4.5 2.5h7M4.5 13.5h7M5.5 2.5v2.3L8 8l2.5-3.2V2.5M5.5 13.5v-2.3L8 8l2.5 3.2v2.3"/>',
+  x: '<path d="m4.5 4.5 7 7M11.5 4.5l-7 7"/>',
+  plus: '<path d="M8 3.5v9M3.5 8h9"/>',
+  top: '<path d="M4 3h8M8 13V6M4.5 9.5 8 6l3.5 3.5"/>',
+  info: '<circle cx="8" cy="8" r="5.5"/><path d="M8 7.3v3.4M8 5.2v.2"/>',
+  folder: '<path d="M2.5 4.5a1 1 0 0 1 1-1h2.6l1.4 1.5h5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z"/>',
+  box: '<rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="m2.5 10.5 3-3 3 3 2-2 3 3"/><circle cx="10.5" cy="6" r="1"/>',
+  diff: '<circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="5.5" r="1.5"/><path d="M4.5 5v6M11.5 7c0 2.6-3.4 2-5.4 3.6"/>',
+  note: '<path d="M3.5 2.5h9v7l-3.5 4H3.5z"/><path d="M12.5 9.5H9v4"/>',
+  chat: '<path d="M2.5 4A1.5 1.5 0 0 1 4 2.5h8A1.5 1.5 0 0 1 13.5 4v5.5A1.5 1.5 0 0 1 12 11H7l-3 2.5V11a1.5 1.5 0 0 1-1.5-1.5z"/>',
+  flow: '<path d="M2 4.5h2c3.2 0 4.3 7 7.5 7H14M2 11.5h2c1.2 0 2.1-1 2.9-2.2M9.2 6.6c.7-1.2 1.4-2.1 2.3-2.1H14M12 2.5l2 2-2 2M12 9.5l2 2-2 2"/>',
+  shield: '<circle cx="7" cy="7" r="4.5"/><path d="m10.4 10.4 3.1 3.1"/>',
+  eye: '<rect x="2" y="3" width="12" height="10" rx="2"/><path d="M2 6.5h12"/>',
+  pulse: '<path d="M1.5 8.5h3l1.5-4 3 7.5 1.5-3.5h4"/>',
+  bot: '<rect x="3" y="5.5" width="10" height="7.5" rx="2"/><path d="M8 5.5V3M6 9v1M10 9v1"/>',
+};
+
+function mountIcons() {
+  const sprite = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  sprite.setAttribute('aria-hidden', 'true');
+  sprite.setAttribute('width', '0');
+  sprite.setAttribute('height', '0');
+  sprite.style.position = 'absolute';
+  sprite.innerHTML = Object.entries(ICONS).map(([name, body]) => `<symbol id="i-${name}" viewBox="0 0 16 16">${body}</symbol>`).join('');
+  document.body.prepend(sprite);
+}
+
 /* ---------- 分布图 ---------- */
 
 // web/src 下全部 CSS 的 font-size 声明（px），2026-11-11 统计
 const FONT_SIZES = [
-  [7, 1], [8, 9], [8.5, 27], [9, 172], [9.5, 201], [10, 271], [10.5, 200], [11, 289], [11.5, 92],
+  [7, 1], [7.5, 1], [8, 9], [8.5, 27], [9, 172], [9.5, 201], [10, 271], [10.5, 200], [11, 289], [11.5, 92],
   [12, 196], [12.5, 70], [13, 71], [13.5, 7], [14, 17], [15, 12], [16, 7], [17, 7], [18, 9],
-  [20, 7], [21, 3], [22, 2], [23, 3], [25, 2], [28, 3],
+  [20, 7], [21, 3], [22, 2], [23, 3], [24, 1], [25, 2], [26, 1], [28, 3], [29, 1],
 ];
 const FLOOR_PX = 12;
-const HIST_LABELS = new Set([8, 10, 12, 14, 18, 22, 28]);
+const HIST_LABELS = new Set([8, 10, 12, 14, 18, 22, 29]);
 
 function drawHistogram(root) {
   if (!root) return;
@@ -37,8 +83,8 @@ function drawHistogram(root) {
   root.append(floor);
 }
 
-// transition 时长（ms）与出现次数；120–160 这五档肉眼分不出
-const DURATIONS = [[120, 17], [130, 16], [140, 24], [150, 43], [160, 20], [180, 11], [200, 8], [220, 3], [260, 4]];
+// 生效的 transition 按逐属性计的时长（ms）与次数，共 163 次；120–160 这五档肉眼分不出
+const DURATIONS = [[120, 28], [130, 15], [140, 23], [150, 48], [160, 19], [180, 7], [200, 10], [250, 7], [260, 6]];
 
 function drawDurations(root) {
   if (!root) return;
@@ -51,10 +97,47 @@ function drawDurations(root) {
   }
 }
 
+/* ---------- 05 逐面清单：数据在 checklist.js，样机的「对照清单」读的是同一份 ---------- */
+
+function drawChecklist(root) {
+  const audit = window.AUDIT;
+  if (!root || !audit) return;
+  const make = (tag, cls, html) => { const el = document.createElement(tag); el.className = cls; el.innerHTML = html; return el; };
+  let n = 0;
+  for (const surface of audit.surfaces) {
+    const block = make('div', 'cl', `<h3>${surface.name}<a href="demo.html${surface.at}">在样机里看</a></h3>`);
+    const list = make('ol', '', '');
+    for (const item of audit.items.filter((it) => it.s === surface.key)) {
+      n += 1;
+      const href = `demo.html${item.at ?? surface.at}?m=${item.id}`;
+      const text = item.keep ? `<p>${item.now}</p>` : `<p class="was">${item.now}</p><p>${item.after}</p>`;
+      const ask = item.ask ? `<p class="ask">${item.ask}</p>` : '';
+      list.append(make('li', item.keep ? 'keep' : item.p, `<a href="${href}" aria-label="在样机里看第 ${n} 条"><img src="shots/after/${item.id}.webp" alt="" loading="lazy"></a><i>${n}</i><div>${text}${ask}</div>`));
+    }
+    block.append(list);
+    root.append(block);
+  }
+  const asks = audit.items.filter((it) => it.ask).length;
+  const tag = $('.legend .ask');
+  if (tag) tag.textContent = `要你点头 ${asks} 处`;
+}
+
+/* ---------- 06 执行中：嵌进来的是样机的会话那一列，隔着 iframe 只能递消息 ---------- */
+
+function setupRun(root) {
+  const frame = $('iframe', root);
+  if (!frame) return;
+  // 地址只设一次：先写在 src 里再按主题改，第一次加载会被掐掉，白白报一串请求失败
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  frame.loading = 'lazy';
+  frame.src = dark ? frame.dataset.src.replace('?embed', '?embed&theme=dark') : frame.dataset.src;
+  for (const btn of $$('[data-run]', root)) btn.addEventListener('click', () => frame.contentWindow?.postMessage({ ash: 'play', name: btn.dataset.run }, '*'));
+}
+
 /* ---------- 滚动淡入 ---------- */
 
 function setupReveal() {
-  const targets = $$('.head, .shot, .notes, .kind, .cause, .versus, .rewrite, .tabs4, .pair, .surface, .split, .layers, .demo, .map, .steps');
+  const targets = $$('.head, .shot, .notes, .kind, .cause, .versus, .rewrite, .tabs4, .pair, .cl, .split, .layers, .demo, .map, .steps');
   if (reduceMotion || !('IntersectionObserver' in window)) return;
   const io = new IntersectionObserver((entries) => {
     for (const e of entries) {
@@ -101,12 +184,13 @@ function demoMenu(root) {
 /* ---------- B 列表重排 ---------- */
 
 const LIST_ITEMS = ['修复斜杠补全回车', '审查界面与动效', '合并移动端轮询', '起手式站点线', '导出周报'];
-const LIST_LABEL = { run: '运行中', wait: '等你处理' };
+const LIST_LABEL = { run: '运行中', wait: '等你处理', fresh: '刚完成' };
+// 真实的排序只有一条：按更新时间倒序。所以哪一行的状态变了，它就跳到最上面——完成也是往上跳，不是沉底
 const LIST_FRAMES = [
   { order: [0, 1, 2, 3, 4], state: { 0: 'run', 1: 'run' } },
   { order: [3, 0, 1, 2, 4], state: { 0: 'run', 1: 'run', 3: 'wait' } },
-  { order: [3, 1, 2, 4, 0], state: { 1: 'run', 3: 'wait' } },
-  { order: [1, 3, 2, 4, 0], state: { 1: 'wait', 3: 'run' } },
+  { order: [1, 3, 0, 2, 4], state: { 0: 'run', 1: 'fresh', 3: 'wait' } },
+  { order: [3, 1, 0, 2, 4], state: { 0: 'run', 1: 'fresh', 3: 'run' } },
 ];
 
 function buildList(list) {
@@ -136,7 +220,7 @@ function flip(list, mutate) {
   mutate();
   for (const [li, top] of before) {
     const dy = top - li.getBoundingClientRect().top;
-    if (dy) li.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: 380, easing: EASE_OUT });
+    if (dy) li.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: 320, easing: EASE_OUT });
   }
 }
 
@@ -155,8 +239,8 @@ function demoList(root) {
       try {
         layout ??= anime.createLayout(nextList);
         layout.update(() => applyFrame(nextList, frame), {
-          duration: 460,
-          ease: anime.spring({ bounce: 0.22, duration: 380 }),
+          duration: 320,
+          ease: anime.spring({ bounce: 0.22, duration: 320 }),
           delay: anime.stagger(18),
         });
         return;
@@ -216,14 +300,14 @@ function demoNumbers(root) {
     paint(nowPane, target);
     if (reduceMotion) return paint(nextPane, Object.assign(shown, target));
     if (anime) {
-      anime.animate(shown, { ...target, duration: 900, ease: 'outExpo', onUpdate: () => paint(nextPane, shown) });
+      anime.animate(shown, { ...target, duration: 400, ease: 'outExpo', onUpdate: () => paint(nextPane, shown) });
       return;
     }
     cancelAnimationFrame(raf);
     const from = { ...shown };
     const t0 = performance.now();
     const tick = (now) => {
-      const p = Math.min(1, (now - t0) / 900);
+      const p = Math.min(1, (now - t0) / 400);
       const eased = 1 - 2 ** (-10 * p);
       for (const key of Object.keys(target)) shown[key] = from[key] + (target[key] - from[key]) * (p === 1 ? 1 : eased);
       paint(nextPane, shown);
@@ -410,8 +494,11 @@ function setupDemos() {
   }
 }
 
+mountIcons();
 drawHistogram($('.hist'));
 drawDurations($('.durs'));
+drawChecklist($('#checklist'));
+setupRun($('.runlive'));
 setupReveal();
 setupDemos();
 $$('[data-send]').forEach(setupSend);

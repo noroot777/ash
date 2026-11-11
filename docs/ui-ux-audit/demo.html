@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>改后的 ash · 样机</title>
+<link rel="stylesheet" href="demo/base.css">
+<link rel="stylesheet" href="demo/shell.css">
+<link rel="stylesheet" href="demo/side.css">
+<link rel="stylesheet" href="demo/task.css">
+<link rel="stylesheet" href="demo/feed.css">
+<link rel="stylesheet" href="demo/live.css">
+<link rel="stylesheet" href="demo/reply.css">
+<link rel="stylesheet" href="demo/insp.css">
+<link rel="stylesheet" href="demo/home.css">
+<link rel="stylesheet" href="demo/settings.css">
+<link rel="stylesheet" href="demo/settings-pages.css">
+<link rel="stylesheet" href="demo/git.css">
+<link rel="stylesheet" href="demo/assist.css">
+</head>
+<body>
+<header class="dbar">
+  <b>改后的 ash</b>
+  <nav aria-label="样机的各面">
+    <a href="#/task">任务</a><a href="#/home">首页</a><a href="#/new">新建</a><a href="#/settings/agents">设置</a><a href="#/git">Git</a><a href="#/chat">聊天</a><a href="#/assistant">助手</a>
+  </nav>
+  <button class="run" id="runBtn" hidden>运行一轮</button>
+  <span class="grow"></span>
+  <button id="notesBtn" aria-pressed="false">对照清单</button>
+  <button id="themeBtn" aria-pressed="false" data-m="a11y-keep">深色</button>
+  <button id="motionBtn" aria-pressed="false" data-m="a11y-3">减少动效</button>
+  <a href="index.html#list">回报告</a>
+</header>
+<div class="stage">
+  <div class="app">
+    <div class="app-shell">
+      <aside class="side" id="side" aria-label="侧栏"></aside>
+      <main class="main" id="main"></main>
+    </div>
+    <footer class="statusbar" id="statusbar" data-m="bar-keep"><span class="proj"><b>harness</b></span><span class="term">终端<kbd>G Z</kbd></span><span class="add">+</span><span class="grow"></span><span class="ok">已连接</span></footer>
+  </div>
+  <aside class="notes" id="notes" aria-label="对照清单"><div></div></aside>
+</div>
+<div class="pins" id="pins"></div>
+
+<script src="checklist.js" defer></script>
+<script src="demo/kit.js" defer></script>
+<script src="demo/app.js" defer></script>
+<script src="demo/target.js" defer></script>
+<script src="demo/notes.js" defer></script>
+<script src="demo/side.js" defer></script>
+<script src="demo/reply.js" defer></script>
+<script src="demo/insp.js" defer></script>
+<script src="demo/insp-panes.js" defer></script>
+<script src="demo/insp-work.js" defer></script>
+<script src="demo/feed.js" defer></script>
+<script src="demo/task.js" defer></script>
+<script src="demo/live.js" defer></script>
+<script src="demo/home-opts.js" defer></script>
+<script src="demo/home.js" defer></script>
+<script src="demo/settings.js" defer></script>
+<script src="demo/settings-flow.js" defer></script>
+<script src="demo/settings-pages.js" defer></script>
+<script src="demo/settings-pages-2.js" defer></script>
+<script src="demo/git.js" defer></script>
+<script src="demo/git-changes.js" defer></script>
+<script src="demo/git-views.js" defer></script>
+<script src="demo/git-refs.js" defer></script>
+<script src="demo/assist.js" defer></script>
+<script src="demo/chat.js" defer></script>
+</body>
+</html>

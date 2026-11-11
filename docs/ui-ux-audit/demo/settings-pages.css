@@ -1,0 +1,215 @@
+/* 设置里除执行器、起手式以外各页自己的样式；公共件在 settings.css。
+   这九页的骨架全是公共件（页标题、分节、卡片、设置行、卡脚、表格、折叠行），这里只有公共件里没有的那几样：
+   先是九页共用的小件（ASH.setMore 每个成员的长相），再按页排。只引用 base.css 的变量。 */
+
+/* ---------- 共用小件 ---------- */
+/* 说明文字里的两种强调（rich）：`代码` 和 **加重** */
+.sv-pg-code { padding: 1px 4px; border-radius: var(--r-sm); background: var(--overlay); color: var(--ink); font-size: var(--t-xs); overflow-wrap: anywhere; }
+.sv-pg-b { color: var(--ink); font-weight: var(--w-medium); }
+
+/* 跟在控件后面的几句说明（notes）、操作之后回的一句话、卡片里一句话的空状态 */
+.sv-pg-notes { display: grid; gap: 4px; padding: 0 16px 12px; }
+.sv-pg-notes > small, .sv-pg-said, .sv-pg-empty { color: var(--muted); font-size: var(--t-xs); }
+.sv-pg-said { display: flex; align-items: baseline; gap: 8px; padding: 0 16px 12px; }
+.sv-pg-empty { padding: 14px 16px; }
+/* 卡片里单摆的一排控件（按钮、胶囊、计数） */
+.sv-pg-bar { flex-wrap: wrap; padding: 0 16px 10px; }
+.sv-pg-bar:first-child { padding-top: 12px; }
+/* 填错了的那句说明 */
+.sv-set-row small.is-bad { color: var(--red); }
+
+/* 勾选框（check）：方的是多选，圆的是几个里选一个 */
+.sv-pg-check { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; transition: color var(--dur-1) var(--ease-out); }
+.sv-pg-check:hover:not([disabled]) { color: var(--ink); }
+.sv-pg-check > i { display: grid; place-items: center; width: 14px; height: 14px; flex: none; border-radius: calc(var(--r-sm) - 2px); background: var(--panel); box-shadow: inset 0 0 0 1px var(--line2); color: var(--on-accent); transition: background var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out); }
+.sv-pg-check:hover:not([disabled]) > i { box-shadow: inset 0 0 0 1px var(--muted); }
+.sv-pg-check > i > .i { width: 10px; height: 10px; stroke-width: 2; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.sv-pg-check[aria-checked="true"] > i, .sv-pg-check[aria-checked="true"]:hover > i { background: var(--accent); box-shadow: none; }
+.sv-pg-check[aria-checked="true"] > i > .i { opacity: 1; }
+.sv-pg-check[role="radio"] > i { border-radius: 50%; }
+.sv-pg-check[role="radio"] > i > .i { display: none; }
+.sv-pg-check[role="radio"][aria-checked="true"] > i, .sv-pg-check[role="radio"][aria-checked="true"]:hover > i { background: var(--panel); box-shadow: inset 0 0 0 4px var(--accent); }
+.sv-pg-checks { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+
+/* 行里的状态小字（tag）：平时灰，.ok 绿、.warn 琥珀、.bad 红；带对勾的「好了」只有对勾是绿的。能点的那种是 button，指到有底 */
+.sv-pg-tag { display: inline-flex; align-items: center; gap: 4px; flex: none; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-regular); white-space: nowrap; }
+.sv-pg-tag.ok { color: var(--green); }
+.sv-pg-tag.warn { color: var(--amber); }
+.sv-pg-tag.bad { color: var(--red); }
+.sv-pg-tag.ok:has(> .i) { color: var(--muted); }
+.sv-pg-tag.ok > .i { color: var(--green); }
+button.sv-pg-tag { height: 24px; padding: 0 6px; border-radius: var(--r-sm); transition: background var(--dur-1) var(--ease-out); }
+button.sv-pg-tag:hover { background: var(--hover-bg); }
+
+/* 脚本框（script）：一条「Shell · 自动换行」的抬头，下面是等宽的多行输入框，两样合用一个框。放进设置行时上下排 */
+.sv-pg-shell { min-width: 0; border-radius: var(--r-md); background: var(--panel); box-shadow: var(--control-shadow); }
+.sv-pg-shell > div { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: var(--t-xs); }
+.sv-pg-shell > .field { border-radius: 0 0 var(--r-md) var(--r-md); background: none; box-shadow: none; }
+.sv-set-row:has(> .sv-pg-shell) { flex-direction: column; align-items: stretch; }
+
+/* 要滚着看的说明（预览命令说明）：比确认框宽，标题和「知道了」不动，正文自己滚 */
+.sv-pg-sheet { display: flex; flex-direction: column; width: min(640px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 48px)); }
+.sv-pg-help { display: grid; gap: 16px; min-height: 0; margin-top: 14px; padding-right: 10px; overflow-y: auto; border-radius: var(--r-sm); }
+.sv-pg-help h3 { font-size: var(--t-sm); font-weight: var(--w-strong); }
+.sv-pg-help pre { margin: 6px 0 0; padding: 8px 10px; border-radius: var(--r-md); background: var(--raised); font: var(--t-xs)/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 几个里选一个、每个带一句说明（协议、CLI 额度）：几块并排，选中的那块描主色 */
+.sv-pg-choice { display: flex; gap: 8px; }
+.sv-pg-choice > button { display: grid; align-content: start; gap: 2px; min-width: 148px; padding: 6px 10px; border-radius: var(--r-md); box-shadow: inset 0 0 0 1px var(--line); text-align: left; transition: background var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out); }
+.sv-pg-choice > button:hover { background: var(--hover-bg); }
+.sv-pg-choice > [aria-checked="true"], .sv-pg-choice > [aria-checked="true"]:hover { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.sv-pg-choice strong { font-weight: var(--w-medium); }
+.sv-pg-choice small { color: var(--muted); font-size: var(--t-xs); }
+/* 说明是一整段的那种：整行上下排，几块等宽 */
+.sv-pg-choice.is-tall > button { flex: 1 1 0; padding: 10px 12px; }
+.sv-set-row:has(> .sv-pg-choice.is-tall) { flex-direction: column; align-items: stretch; }
+
+/* 卡片里原地展开的表单（编辑供应商、切到多人模式）；表单里跟着选择换的那一段；不在卡片最底下的折叠行 */
+.sv-pg-form, .sv-pg-mid:not(:empty) { border-top: 1px solid var(--line); }
+.sv-pg-fold { min-height: 44px; padding-block: 8px; }
+.sv-pg-fold[aria-expanded] { border-radius: 0; }
+.sv-pg-fold strong { display: block; color: var(--ink); font-size: var(--t-sm); font-weight: var(--w-medium); }
+.sv-pg-fold small { display: block; color: var(--muted); font-size: var(--t-xs); }
+.sv-pg-fold em { font-style: normal; white-space: nowrap; }
+
+/* ---------- 项目设置 ---------- */
+/* 工作目录底下的体检结果：一颗点加一句话 */
+.sv-pg-health { display: flex; align-items: center; gap: 6px; padding: 0 16px 10px; color: var(--muted); font-size: var(--t-xs); }
+.sv-pg-health > i { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--faint); }
+.sv-pg-health.is-ok > i { background: var(--green); }
+.sv-pg-health.is-bad { color: var(--red); }
+.sv-pg-health.is-bad > i { background: var(--red); }
+/* 预览 · 选择服务：一个服务一块（一行控件加它的启动脚本） */
+.sv-pg-svc { display: grid; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); }
+/* 常用命令：脚本里写了 {{占位}} 时，底下说一句执行前会问什么；命令列表一条一行 */
+.sv-pg-asks { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--muted); font-size: var(--t-xs); }
+.sv-pg-asks em { margin-left: 6px; color: var(--muted); font-style: normal; }
+.sv-pg-cmd { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px 10px 16px; border-top: 1px solid var(--line); }
+.sv-pg-cmd > input.field { width: 180px; flex: none; }
+.sv-pg-cmd > .grow { display: grid; gap: 6px; }
+/* Git 远端那一行的值：名字、地址、协议 */
+.sv-pg-remote { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--t-xs); }
+.sv-pg-remote > strong { font-weight: var(--w-medium); }
+.sv-pg-remote > code { color: var(--muted); }
+.sv-pg-remote > em { color: var(--faint); font-style: normal; }
+
+/* ---------- 分组：一组一行（名字、运行方式、任务数、状态、动作），暂停着的组底下多一行续跑队列；最后一行新建 ---------- */
+.sv-pg-groups .sv-set-tbl { --cols: minmax(140px, 1fr) 96px 80px 72px 164px; --min: 584px; }
+.sv-pg-group + .sv-pg-group, .sv-pg-new { border-top: 1px solid var(--line); }
+.sv-pg-cell, .sv-pg-group .sv-pg-tag { padding: 0 8px; }
+.sv-pg-cell { color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
+.sv-pg-queue { display: flex; align-items: center; gap: 10px; min-width: var(--min); padding: 0 16px 10px; color: var(--muted); font-size: var(--t-xs); }
+.sv-pg-queue > .grow { display: flex; gap: 4px; }
+.sv-pg-queue i { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--raised); font-style: normal; line-height: 1; }
+.sv-pg-queue .is-done { color: var(--green); }
+.sv-pg-queue .is-hold { color: var(--amber); }
+.sv-pg-queue .is-todo { color: var(--faint); }
+
+/* ---------- 已归档：一条任务一行 ---------- */
+.sv-pg-arch { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 16px; }
+.sv-pg-arch + .sv-pg-arch { border-top: 1px solid var(--line); }
+.sv-pg-arch > .i { color: var(--muted); }
+.sv-pg-arch strong { display: block; font-weight: var(--w-medium); }
+.sv-pg-arch small { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: var(--t-xs); }
+
+/* ---------- 供应商：一家一行；点「编辑」，表单原地展开在它下面 ---------- */
+.sv-pg-provbox { border-top: 1px solid var(--line); }
+.sv-pg-prov { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px 8px 16px; }
+.sv-pg-prov strong { display: block; font-weight: var(--w-medium); }
+.sv-pg-prov small { display: block; color: var(--muted); font-size: var(--t-xs); }
+.sv-pg-ava { display: grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: var(--r-sm); background: var(--overlay); color: var(--muted); font: var(--w-strong) var(--t-xs)/1 var(--font-mono); }
+.sv-pg-model { max-width: 140px; color: var(--muted); font: var(--t-xs)/1.5 var(--font-mono); }
+/* 表单里的两块清单：固定模型、1M 上下文模型 */
+.sv-pg-pins, .sv-pg-big { display: grid; gap: 8px; padding: 12px 16px; }
+.sv-pg-pins { padding-top: 0; }
+.sv-pg-pins small, .sv-pg-big small { color: var(--muted); font-size: var(--t-xs); }
+.sv-pg-pins li, .sv-pg-big li { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+.sv-pg-big li { justify-content: space-between; }
+
+/* ---------- 执行模式、审查者：左边一列存好的，右边改其中一个。一张卡，中间一条线，里面不再套卡 ---------- */
+.sv-pg-roster { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 280px; }
+.sv-pg-side { min-width: 0; border-right: 1px solid var(--line); }
+.sv-pg-pane { min-width: 0; }
+.sv-pg-sidehead, .sv-pg-edhead { display: flex; align-items: center; gap: 8px; height: 52px; padding: 0 12px 0 16px; }
+.sv-pg-sidehead > b, .sv-pg-edhead b { font-weight: var(--w-strong); }
+.sv-pg-sidehead > em { color: var(--faint); font-size: var(--t-xs); font-style: normal; }
+.sv-pg-edhead b, .sv-pg-edhead small { display: block; }
+.sv-pg-edhead small { color: var(--muted); font-size: var(--t-xs); }
+.sv-pg-items { display: grid; gap: 2px; padding: 6px; border-top: 1px solid var(--line); }
+.sv-pg-items > button { display: grid; gap: 2px; min-width: 0; padding: 8px 10px; border-radius: var(--r-md); text-align: left; transition: background var(--dur-1) var(--ease-out); }
+.sv-pg-items > button:hover { background: var(--hover-bg); }
+.sv-pg-items > [aria-current="true"], .sv-pg-items > [aria-current="true"]:hover { background: var(--sel-bg); }
+.sv-pg-items b { font-weight: var(--w-medium); }
+.sv-pg-items > button > span { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font-size: var(--t-xs); }
+.sv-pg-items .is-off { color: var(--faint); }
+/* 角色那几行的名字前带一颗图标；调度者选了当不了调度者的类型时，行下面一句提醒 */
+.sv-pg-role b { display: flex; align-items: center; gap: 6px; }
+.sv-pg-role b > .i { color: var(--muted); }
+.sv-pg-warn { padding: 0 16px 10px; color: var(--amber); font-size: var(--t-xs); }
+
+/* ---------- 飞书 ---------- */
+/* 名字后面跟状态的那种行名：连接状态（一颗点加名字）、接力来源（名字加状态） */
+.sv-set-row .sv-pg-state { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+/* 键值几行（base 的 .kv）：这里的键长短不一，列宽跟着最长的那个 */
+.kv.sv-pg-facts { grid-template-columns: max-content minmax(0, 1fr); gap: 0 16px; padding: 0 16px 10px; font-size: var(--t-xs); }
+.sv-pg-facts small { color: var(--muted); font-size: var(--t-xs); }
+.sv-pg-kinds { display: grid; gap: 6px; padding: 10px 16px 12px; color: var(--muted); }
+.sv-pg-kinds > .sv-pg-facts { padding: 0; }
+.sv-pg-kinds > small { font-size: var(--t-xs); }
+/* 本月额度：数字、一条细的进度、四档水位（都列出来，当前那一档标出来） */
+.sv-pg-figure { flex: none; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
+.sv-pg-figure > strong { color: var(--ink); font-size: var(--t-md); font-weight: var(--w-strong); }
+.sv-pg-figure > em { font-style: normal; }
+.sv-pg-meter { height: 4px; margin: 0 16px; border-radius: var(--r-full); background: var(--overlay); overflow: hidden; }
+.sv-pg-meter > i { display: block; height: 100%; background: var(--accent); transform-origin: left; transition: transform var(--dur-3) var(--ease-out); }
+.sv-pg-meter > .is-warn { background: var(--amber); }
+.sv-pg-meter > .is-bad { background: var(--red); }
+.sv-pg-levels { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; padding: 12px 16px; color: var(--muted); font-size: var(--t-xs); }
+.sv-pg-levels b { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; font-weight: var(--w-medium); }
+.sv-pg-levels .is-now b { color: var(--ink); }
+.sv-pg-levels em { color: var(--faint); font-style: normal; font-weight: var(--w-regular); }
+.sv-pg-levels strong { color: var(--accent); font-weight: var(--w-medium); }
+/* 开通顺序与安全边界：折叠着的一段长说明 */
+.sv-pg-guide { display: grid; gap: 10px; padding: 12px 16px 14px; color: var(--muted); font-size: var(--t-xs); }
+.sv-pg-guide ol { display: grid; gap: 8px; padding-left: 18px; list-style: decimal; }
+.sv-pg-guide ul { display: grid; gap: 4px; }
+.sv-pg-guide ol ul { margin: 4px 0; }
+.sv-pg-guide ol ul > li { display: flex; flex-wrap: wrap; align-items: center; gap: 0 10px; }
+.sv-pg-guide > ul { padding-left: 18px; list-style: disc; }
+.sv-pg-guide > b { color: var(--ink); font-weight: var(--w-medium); }
+.sv-pg-guide small { display: block; color: var(--amber); font-size: var(--t-xs); }
+.sv-pg-scope { display: inline-flex; align-items: center; gap: 2px; }
+/* 只显示一次的那串码：码、复制、倒计时 */
+.sv-pg-codeline { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.sv-pg-codeline > code { padding: 2px 10px; border-radius: var(--r-md); background: var(--overlay); color: var(--ink); font-size: var(--t-md); font-weight: var(--w-medium); letter-spacing: 0.08em; }
+
+/* ---------- 配置搬家：选好文件先摆出来看一眼，导完说结果 ---------- */
+.sv-pg-staged { display: grid; gap: 6px; padding: 12px 16px; border-top: 1px solid var(--line); }
+.sv-pg-staged ul { display: flex; flex-wrap: wrap; gap: 2px 18px; color: var(--muted); font-size: var(--t-xs); }
+.sv-pg-staged small { color: var(--muted); font-size: var(--t-xs); }
+
+/* ---------- 默认规则 ---------- */
+.sv-pg-theme > button { display: inline-flex; align-items: center; gap: 5px; }
+/* 指纹：本机的那串只是摆着；记住的对端指纹是一颗按钮，点了问要不要忘掉 */
+.sv-pg-finger { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 24px; padding: 0 8px; border-radius: var(--r-sm); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); font: var(--t-xs)/1 var(--font-mono); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+button.sv-pg-finger:hover { background: var(--hover-bg); color: var(--ink); }
+/* 接力目标：一台两行——名字、地址、申请、指纹、删除；下面是对端账号 key。窄了第一行自己折 */
+.sv-pg-target { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 10px 12px 10px 16px; border-top: 1px solid var(--line); }
+.sv-pg-target > .sv-set-line { flex-wrap: wrap; }
+.sv-pg-target > .sv-set-line > input:first-child { width: 168px; flex: none; }
+.sv-pg-target > .sv-set-line > input.grow { flex-basis: 200px; }
+.sv-pg-keyline { min-height: 24px; color: var(--muted); }
+.sv-pg-keyline > small { font-size: var(--t-xs); }
+/* 技能扫描：一种 CLI 一行，左边是谁、右边扫到了什么 */
+.sv-pg-scan { display: grid; grid-template-columns: 220px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 48px; padding: 8px 16px; border-top: 1px solid var(--line); }
+.sv-pg-scan b { display: block; font-weight: var(--w-medium); }
+.sv-pg-scan small { display: block; color: var(--muted); font-size: var(--t-xs); }
+.sv-pg-scan em { margin-left: 8px; color: var(--muted); font-size: var(--t-xs); font-style: normal; }
+/* 切到多人模式：表单里连着的几条提醒；填完之后只显示一次的管理员 key */
+.sv-pg-warns { display: grid; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
+.sv-pg-warns b { font-weight: var(--w-medium); }
+.sv-pg-warns ul { margin: 4px 0; padding-left: 18px; list-style: disc; }
+.sv-pg-key { display: grid; justify-items: start; gap: 8px; padding: 14px 16px; }
+.sv-pg-key > b { font-weight: var(--w-strong); }
+.sv-pg-key > small { color: var(--muted); font-size: var(--t-xs); }
+.sv-pg-key > .sv-set-line { justify-self: stretch; }

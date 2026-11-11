@@ -1,0 +1,64 @@
+/* 05 逐面清单与 06 执行中。清单的条目由 demos.js 从 checklist.js 画出来，截图在 shots/after/。 */
+
+/* ---------- 03 里那张「头部一行有几样」的小表 ---------- */
+.count { margin-top: 8px; max-width: 680px; }
+.count th { text-align: left; font-weight: 600; padding: 0 20px 10px 0; border-bottom: 1px solid var(--ink); }
+.count td:nth-child(2) { font-variant-numeric: tabular-nums; }
+
+/* ---------- 05 ---------- */
+.demo-card { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 32px; align-items: center; border: 1px solid var(--ink); border-radius: var(--r-md); overflow: hidden; text-decoration: none; background: var(--surface); transition: box-shadow var(--dur-2) var(--ease-out); }
+.demo-card:hover { box-shadow: 0 12px 32px -16px rgb(0 0 0 / 0.3); }
+.demo-card img { width: 100%; border-right: 1px solid var(--line); }
+.demo-card span { font: 700 var(--t-lg)/1.3 var(--serif); padding-right: 28px; }
+.demo-card small { display: block; font: 400 var(--t-sm)/1.7 var(--sans); color: var(--ink-2); margin-top: 10px; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: var(--t-sm); color: var(--ink-2); margin: 32px 0 12px 88px; }
+.legend span, .cl li { --dot: var(--mark); }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.legend small { font-size: var(--t-xs); }
+.legend a { margin-left: auto; }
+.legend span::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--dot); border: 1.5px solid var(--dot); }
+.legend .p1::before, .legend .p2::before, .legend .keep::before { background: transparent; }
+.legend .p2, .cl .p2 { --dot: var(--ink-3); }
+.legend .keep, .cl .keep { --dot: var(--good); }
+.legend .ask { color: var(--mark); }
+.legend .ask::before { display: none; }
+
+.cl { margin-left: 88px; padding: 32px 0 20px; border-top: 1px solid var(--line); }
+.cl h3 { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; }
+.cl h3 a { font-size: var(--t-sm); font-weight: 400; color: var(--ink-2); }
+.cl ol { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 36px 32px; }
+.cl li { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 12px 0; align-content: start; }
+.cl li > a { grid-column: 1 / -1; aspect-ratio: 2 / 1; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: var(--surface); transition: border-color var(--dur-1) var(--ease-out); }
+.cl li > a:hover { border-color: var(--ink); }
+.cl img { width: 100%; height: 100%; object-fit: cover; }
+.cl li > i { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font: 600 var(--t-xs)/1 var(--sans); font-variant-numeric: tabular-nums; background: var(--dot); color: var(--paper); border: 1.5px solid var(--dot); }
+.cl li.p1 > i, .cl li.p2 > i, .cl li.keep > i { background: transparent; color: var(--dot); }
+.cl p { margin: 0; font-size: var(--t-sm); line-height: 1.7; }
+.cl .was { color: var(--ink-2); margin-bottom: 4px; }
+.cl .was + p::before { content: "→ "; color: var(--ink-3); }
+.cl .ask { margin-top: 6px; color: var(--mark); }
+.cl .ask::before { content: "要你点头　"; font-weight: 600; }
+@media (max-width: 820px) { .cl ol, .demo-card { grid-template-columns: 1fr; } .demo-card span { padding: 0 20px 20px; } .demo-card img { border-right: 0; border-bottom: 1px solid var(--line); } }
+@media (max-width: 720px) { .cl, .legend { margin-left: 0; } }
+
+/* ---------- 06 ---------- */
+.scroll { overflow-x: auto; }
+.versus.run { min-width: 900px; margin: 56px 0; }
+.versus.run td { width: 22.5%; }
+.versus.run td:first-child { width: 10%; white-space: nowrap; }
+.versus.run td:nth-child(2) { color: var(--ink-2); }
+.versus.run td:last-child { color: var(--ink); }
+.versus.run th:last-child { color: var(--mark); }
+.versus.run i { font-style: normal; font-size: var(--t-xs); color: var(--ink-3); white-space: nowrap; margin-left: 2px; }
+.runlive { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 20px 48px; padding: 40px 0; border-top: 1px solid var(--line); align-items: start; }
+.runlive p { color: var(--ink-2); }
+.runlive .tool { font-size: var(--t-sm); }
+.runlive-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.play.ghost { background: transparent; color: var(--ink); }
+.runlive iframe { width: 100%; height: 620px; border: 1px solid var(--ink); border-radius: var(--r-md); background: var(--surface); }
+.grounds { margin-top: 16px; margin-bottom: 0; padding-left: 20px; max-width: 700px; color: var(--ink-2); }
+.grounds li { padding: 7px 0 7px 6px; }
+.grounds b { color: var(--ink); font-weight: 600; }
+.src { font-size: var(--t-sm); color: var(--ink-3); margin-top: 28px; }
+@media (max-width: 900px) { .runlive { grid-template-columns: 1fr; } }

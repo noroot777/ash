@@ -22,10 +22,11 @@
 .m-st::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--m3)); }
 .m-st.ok { --c: #168466; }
 .m-st.bad { --c: #c2412d; }
+.m-st.run { --c: var(--acc); }
 
 /* 回复框：水印在最底层；发送设置贴在发送键右边那条窄段上 */
 .m-reply { padding: 20px; }
-.m-box { position: relative; width: min(640px, 100%); margin: 0 auto; border: 1px solid var(--mline); border-radius: 12px; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.12); }
+.m-box { position: relative; width: min(700px, 100%); margin: 0 auto; border: 1px solid var(--mline); border-radius: 12px; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.12); }
 .m-plate { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; border-radius: inherit; font: italic 800 clamp(48px, 13vw, 92px)/1 var(--sans); letter-spacing: -0.02em; color: #f2f2f6; pointer-events: none; user-select: none; }
 .m-box .ph { position: relative; min-height: 58px; padding: 12px 14px 0; color: var(--m3); }
 .m-box .ph.typed { color: #1c1c1f; }
@@ -56,7 +57,7 @@
 .mock .m-seg button { flex: 1; height: 26px; border-radius: 6px; color: var(--m2); cursor: pointer; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
 .mock .m-seg [aria-pressed="true"] { background: #fff; color: #1c1c1f; box-shadow: 0 1px 2px rgb(0 0 0 / 0.1); }
 .m-pop p { margin: 10px 2px 0; color: var(--m2); font-size: 12px; min-height: 18px; }
-.m-popwrap { width: min(640px, 100%); margin: 0 auto; }
+.m-popwrap { width: min(700px, 100%); margin: 0 auto; }
 
 .m-keys { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 18px 30px; margin: 0; padding: 20px 24px; list-style: none; color: var(--m2); font-size: 12px; }
 .m-keys li { display: grid; gap: 8px; justify-items: start; }
@@ -76,7 +77,18 @@
 /* 改写块里的小清单（件数、去处），与正文同栏 */
 .rewrite > .quotes { max-width: 680px; margin-top: 8px; }
 .rewrite > p + p { margin-top: -6px; }
-.m-turn { min-width: 470px; }
+.m-turn { min-width: 520px; }
 .m-turn.tail { padding: 8px 20px; }
+.m-turn.tail .m-acts { margin: 0 0 2px -6px; }
 @media (max-width: 560px) { .m-reply { padding: 12px; } .m-cap b:not(:first-child) { display: none; } }
 .m-turn u { text-underline-offset: 3px; }
+/* 审查行：轮次、结论、谁审的、用时、看报告；左边的线和结论同色 */
+.m-line.rev { margin: 4px 0; padding-left: 10px; box-shadow: inset 2px 0 0 #168466; }
+.m-line.rev b { color: #1c1c1f; font-weight: 600; }
+.m-chip { padding: 0 6px; border-radius: 5px; background: #e3f3ec; color: #127a5e; font-size: 12px; line-height: 20px; }
+/* 回复框底行里带字的动作，和发送键里的停止方块 */
+.m-act { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 6px; color: var(--m2); font-size: 12px; white-space: nowrap; }
+.m-act svg { width: 14px; height: 14px; }
+.m-key svg.fill { fill: currentColor; stroke: none; }
+.m-box .sp ~ .m-key { margin-left: 0; }
+@media (max-width: 720px) { .m-act { font-size: 0; gap: 0; } }

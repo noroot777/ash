@@ -1,0 +1,86 @@
+/* 样机的外框：顶上一条不属于产品的细栏，下面是 ash 的应用外壳（侧栏 260 + 主卡片 + 深色状态栏），右边是对照清单。 */
+
+body { display: grid; grid-template-rows: 36px minmax(0, 1fr); height: 100vh; overflow: hidden; }
+
+/* 样机栏：纸色、衬线，和产品本身分得开 */
+.dbar { display: flex; align-items: center; gap: 14px; padding: 0 12px; border-bottom: 1px solid #e7e4de; background: #fbfaf8; color: #5d5a55; font-size: 12px; white-space: nowrap; }
+.dbar b { color: #1b1a18; font: 600 14px/1 "Iowan Old Style", "New York", Georgia, "Songti SC", serif; }
+.dbar nav { display: flex; gap: 2px; }
+.dbar nav a, .dbar button, .dbar > a { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 6px; color: inherit; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.dbar nav a:hover, .dbar button:hover, .dbar > a:hover { background: #f1eee9; color: #1b1a18; }
+.dbar nav a[aria-current="page"] { background: #1b1a18; color: #fbfaf8; }
+.dbar button[aria-pressed="true"] { background: #fbe9e4; color: #d6452b; }
+.dbar .run { background: #d6452b; color: #fff; font-weight: 600; }
+.dbar .run:hover { background: #bf3b23; color: #fff; }
+.dbar .run[disabled] { opacity: 0.5; }
+.dbar .i { width: 14px; height: 14px; }
+.dbar :focus-visible { outline-color: #d6452b; }
+:root[data-theme="dark"] .dbar { border-color: #2c2b28; background: #131312; color: #a9a59d; }
+:root[data-theme="dark"] .dbar b { color: #eceae5; }
+:root[data-theme="dark"] .dbar nav a:hover, :root[data-theme="dark"] .dbar button:hover, :root[data-theme="dark"] .dbar > a:hover { background: #222120; color: #eceae5; }
+:root[data-theme="dark"] .dbar nav a[aria-current="page"] { background: #eceae5; color: #131312; }
+:root[data-theme="dark"] .dbar button[aria-pressed="true"] { background: #33201b; color: #f0694f; }
+
+.stage { display: flex; min-height: 0; }
+.app { flex: 1; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr) 26px; background: var(--chrome); }
+.app-shell { display: flex; min-height: 0; padding: 8px 8px 8px 0; }
+.side { width: 260px; flex: none; display: flex; flex-direction: column; min-height: 0; padding: 8px 12px 0; }
+.main { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; border-radius: var(--r-lg); background: var(--canvas); box-shadow: 0 0 0 0.5px var(--line), var(--surface-shadow); }
+body[data-chrome="full"] .side { display: none; }
+body[data-chrome="full"] .app-shell { padding-left: 8px; }
+
+/* 底部深色状态栏：保留项，不随主题变。色值、字号照现在产品里写死的那一套抄，一个都不改（所以这里有 12px 以下的字） */
+.statusbar { display: flex; align-items: center; gap: 2px; padding: 0 8px; background: #2b2d36; color: #c3c5d1; font-size: 11.5px; white-space: nowrap; }
+.statusbar b { font-weight: inherit; }
+.statusbar .proj, .statusbar .term, .statusbar .ok { display: inline-flex; align-items: center; gap: 6px; height: 26px; }
+.statusbar .proj { padding: 0 6px; }
+.statusbar .term { padding: 0 9px; }
+.statusbar .ok { padding: 0 6px; color: #a8aab8; }
+.statusbar .ok::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #4cc38a; }
+.statusbar .proj::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #8f6fd6; }
+.statusbar kbd { height: auto; min-width: 0; padding: 0 4px; border-radius: 3px; background: #3d3f4b; box-shadow: none; color: #9092a0; font: inherit; font-size: 9.5px; letter-spacing: 0.04em; }
+.statusbar .add { display: grid; place-items: center; width: 20px; height: 20px; margin-left: 2px; color: #8b8d9b; font-size: 14px; }
+
+/* 对照清单：一列，把应用往左推；每条对上页面里的一颗红圈 */
+.notes { width: 0; flex: none; overflow: hidden; border-left: 1px solid #e7e4de; background: #fbfaf8; color: #1b1a18; font-size: 12.5px; line-height: 1.6; transition: width var(--dur-3) var(--ease-out); }
+body.notes-on .notes { width: 340px; }
+.notes > div { width: 340px; height: 100%; overflow-y: auto; padding: 14px 16px 40px; }
+.notes h3 { margin: 18px 0 6px; font: 600 15px/1.4 "Iowan Old Style", "New York", Georgia, "Songti SC", serif; }
+.notes h3:first-child { margin-top: 0; }
+.notes li { margin: 0 -8px; }
+.notes li > button { position: relative; display: block; width: 100%; padding: 8px 8px 8px 34px; border-radius: 8px; text-align: left; line-height: inherit; transition: background var(--dur-1) var(--ease-out); }
+.notes li > button:hover, .notes li.on > button { background: #f1eee9; }
+.notes li i { position: absolute; left: 8px; top: 10px; width: 18px; height: 18px; border-radius: 50%; background: #d6452b; color: #fff; font: 600 10.5px/18px -apple-system, sans-serif; text-align: center; }
+.notes li.keep i { background: none; box-shadow: inset 0 0 0 1.5px #96928b; color: #5d5a55; }
+.notes li.off i { opacity: 0.35; }
+.notes li span { display: block; color: #5d5a55; }
+.notes li span + span { margin-top: 2px; color: #1b1a18; }
+.notes li span + span::before { content: "→ "; color: #96928b; }
+.notes em { display: inline-block; margin-top: 4px; padding: 0 6px; border-radius: 4px; background: #fbe9e4; color: #d6452b; font-style: normal; font-size: 12px; }
+:root[data-theme="dark"] .notes { border-color: #2c2b28; background: #131312; color: #eceae5; }
+:root[data-theme="dark"] .notes li > button:hover, :root[data-theme="dark"] .notes li.on > button { background: #222120; }
+:root[data-theme="dark"] .notes li span { color: #a9a59d; }
+:root[data-theme="dark"] .notes li span + span { color: #eceae5; }
+:root[data-theme="dark"] .notes em { background: #33201b; color: #f0694f; }
+
+.pins { position: fixed; inset: 0; z-index: 70; pointer-events: none; display: none; }
+body.notes-on .pins { display: block; }
+.pins button { position: absolute; left: 0; top: 0; width: 18px; height: 18px; margin: -7px 0 0 -7px; border-radius: 50%; background: #d6452b; color: #fff; font: 600 10.5px/18px -apple-system, sans-serif; text-align: center; box-shadow: 0 0 0 2px rgb(255 255 255 / 0.9), 0 3px 8px rgb(0 0 0 / 0.25); pointer-events: auto; transition: scale var(--dur-1) var(--ease-out); }
+.pins button:hover, .pins button.on { scale: 1.25; }
+.pins button.keep { background: #fff; color: #5d5a55; box-shadow: inset 0 0 0 1.5px #96928b, 0 0 0 2px rgb(255 255 255 / 0.9), 0 3px 8px rgb(0 0 0 / 0.25); }
+.mark-on { outline: 2px solid #d6452b !important; outline-offset: 3px !important; border-radius: 6px; }
+
+/* 嵌进报告时只留会话那一列 */
+body.embed { grid-template-rows: minmax(0, 1fr); }
+body.embed .dbar, body.embed .side, body.embed .statusbar, body.embed .notes, body.embed .task-insp { display: none; }
+body.embed .app { grid-template-rows: minmax(0, 1fr); }
+body.embed .app-shell { padding: 0; }
+body.embed .task-head > .ico:last-child { display: none; }   /* 嵌进报告时没有右侧面板，那颗开关也不留 */
+body.embed .main { border-radius: 0; box-shadow: none; }
+
+@media (max-width: 900px) {
+  .side { display: none; }
+  .app-shell { padding-left: 8px; }
+  .dbar { overflow-x: auto; }
+  body.notes-on .notes { position: fixed; inset: 36px 0 0 auto; z-index: 65; width: min(340px, 92vw); box-shadow: -12px 0 32px rgb(0 0 0 / 0.16); }
+}

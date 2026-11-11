@@ -1,0 +1,161 @@
+/* 首页与新建面板。两面是同一个输入块：.sv-home 是公共的根，新建面板再加 .sv-new。
+   要读的字至少用 --muted；--faint 只给图标、编号、占位和时间。
+   点开的浮层挂在 body 上：.sv-home-pop（选项）、.sv-home-menu（选项里的下拉菜单）、.sv-home-help（⌘/ 帮助）。 */
+
+.sv-home { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* 应用栏：和任务页的头同高同线 */
+.sv-home .bar { flex: none; display: flex; align-items: center; gap: 8px; height: 46px; padding: 0 10px 0 14px; border-bottom: 0.5px solid var(--line); }
+.sv-home .bar b { font-size: var(--t-md); font-weight: var(--w-strong); }
+.sv-home .kind { flex: none; height: 22px; padding: 0 7px; border-radius: var(--r-sm); background: var(--overlay); color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-strong); line-height: 22px; white-space: nowrap; }
+.sv-home .proj { color: var(--muted); font-size: var(--t-xs); }
+.sv-home .count { flex: none; margin-right: 4px; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
+
+/* 一条 720 的居中列。上边距是定值而不是算出来的居中：输入变高、下面多出列表时卡片不跳。
+   首页没有模式那一行，把那 40px 让出来，卡片在两面落在同一个位置。 */
+.sv-home .scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.sv-home .col { --top: clamp(56px, 19vh, 160px); width: min(720px, calc(100% - 48px)); margin: 0 auto; padding: calc(var(--top) + 40px) 0 48px; }
+.sv-new .col { padding-top: var(--top); }
+.sv-new .modes { display: flex; height: 28px; margin-bottom: 12px; }
+.sv-new .modes .seg > button { display: inline-flex; align-items: center; gap: 6px; }
+
+/* 输入卡：外框用公共的 .card；焦点画在卡片上，不画在输入区上（和回复框一个画法） */
+.sv-home .box:focus-within { box-shadow: 0 0 0 1px color-mix(in oklab, var(--focus-ring) 55%, var(--line2)), var(--surface-shadow); }
+.sv-home .draft { display: block; width: 100%; min-height: 92px; max-height: 40vh; padding: 14px 16px 6px; border: 0; background: none; resize: none; overflow-y: auto; font-size: var(--t-md); line-height: 24px; }
+.sv-home .draft:focus-visible { outline: 0; }
+
+.sv-home .files { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 12px 0; }
+.sv-home .file { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; height: 24px; padding: 0 2px 0 8px; border-radius: var(--r-sm); background: var(--raised); color: var(--muted); font-size: var(--t-xs); }
+.sv-home .file button { display: grid; place-items: center; width: 20px; height: 20px; flex: none; border-radius: var(--r-sm); color: var(--faint); transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.sv-home .file button:hover { background: var(--hover-bg); color: var(--ink); }
+.sv-home .file button:active { background: var(--sel-bg); }
+
+/* 底排：附件、选项入口（图标 + 当前值，没有底色和尖角）、空白、谁来做、发送键、帮助。
+   入口不压缩；只有「组织与标签」的字会变长（分组名 · 几个标签），位置不够时收它。卡片窄到放不下时入口只留图标。 */
+.sv-home .cmp { container-type: inline-size; }
+.sv-home .foot { display: flex; align-items: center; gap: 4px; min-height: 54px; padding: 8px 10px 10px; }
+.sv-home .opts { display: flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; }
+.sv-home .opt { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 28px; padding: 0 8px; border-radius: var(--r-md); color: var(--muted); font-size: var(--t-xs); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.sv-home .opt[data-kind="org"] { flex: 0 1 auto; min-width: 44px; }
+@container (max-width: 680px) { .sv-home .opts .opt { min-width: 0; } .sv-home .opts .opt > .cut { display: none; } }
+.sv-home .opt .glyph { display: grid; flex: none; }
+.sv-home .opt .i { width: 14px; height: 14px; }
+.sv-home .opt.only { flex: none; justify-content: center; width: 28px; min-width: 28px; padding: 0; }
+.sv-home .opt:hover, .sv-home .opt[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.sv-home .opt:active { background: var(--sel-bg); }
+.sv-home .opt.is-set { color: var(--ink); }
+.sv-home .foot > .opt { margin-right: 4px; }
+.sv-home .foot > .caps { margin: 0 8px; }
+/* 按起手式走时，谁来做由那条线决定，这里只读 */
+.sv-home .preset-run { display: inline-flex; align-items: center; gap: 6px; min-width: 0; margin: 0 8px; color: var(--muted); font-size: var(--t-xs); }
+.sv-home .status { padding: 0 16px 10px; color: var(--muted); font-size: var(--t-xs); }
+
+/* 回复框那颗发送键不在时的替身 */
+.sv-home .own-send { flex: none; width: 36px; height: 36px; padding: 0; }
+.sv-home .own-send .i { width: 16px; height: 16px; }
+.sv-home .help { margin-left: 4px; }
+
+/* 等你处理：和卡片同宽，字的左缘对着输入区的字 */
+.sv-home .todo { margin-top: 36px; }
+.sv-home .todo .sec { padding: 0 16px; }
+.sv-home .todo .go { width: 100%; min-height: 36px; margin: 0; padding: 0 16px; gap: 10px; }
+.sv-home .todo .go:active { background: var(--sel-bg); }
+.sv-home .todo .why { flex: none; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
+.sv-home .todo .when { flex: none; width: 64px; color: var(--faint); font-size: var(--t-xs); text-align: right; white-space: nowrap; }
+
+/* ---------- 选项浮层：标题一行，下面一行一个选项（左边名字，右边开关或下拉） ---------- */
+.sv-home-pop { width: 340px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; padding: 6px; }
+.sv-home-pop.is-wide { width: 480px; }
+.sv-home-pop:focus-visible { outline: 0; }
+.sv-home-pop > header { display: flex; align-items: center; justify-content: space-between; height: 28px; margin-bottom: 2px; padding: 0 2px 0 8px; }
+.sv-home-pop > header b { font-weight: var(--w-strong); }
+
+.sv-home-pop .row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 36px; padding: 0 8px; border-radius: var(--r-sm); text-align: left; white-space: nowrap; }
+.sv-home-pop .row > :first-child { flex: none; }
+.sv-home-pop .row > small { margin-left: auto; color: var(--muted); font-size: var(--t-xs); }
+.sv-home-pop .row > .sel, .sv-home-pop .row > .field { flex: 0 1 204px; min-width: 0; margin-left: auto; }
+.sv-home-pop button.row { transition: background var(--dur-1) var(--ease-out); }
+.sv-home-pop button.row:hover { background: var(--hover-bg); }
+.sv-home-pop button.row:active { background: var(--sel-bg); }
+.sv-home-pop .help { padding: 4px 8px 6px; color: var(--muted); font-size: var(--t-xs); line-height: 1.6; }
+.sv-home-pop .help .btn { display: flex; margin-top: 6px; }
+.sv-home-pop .run { padding: 2px 8px 6px; color: var(--muted); font-size: var(--t-xs); overflow-wrap: anywhere; }
+.sv-home-pop .run b { font-weight: var(--w-medium); }
+.sv-home-pop .sec { margin: 6px 8px 0; }
+
+/* 工作方式：两格分段，下面那一半跟着换 */
+.sv-home-pop > .seg { display: flex; margin: 2px 2px 6px; }
+.sv-home-pop > .seg > button { flex: 1; padding: 0; }
+.sv-home-pop .sub { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 2px 0 8px; }
+.sv-home-pop .sub > div { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.sv-home-pop .sub b { flex: none; font-weight: var(--w-strong); }
+.sv-home-pop .sub span { min-width: 0; overflow: hidden; color: var(--muted); font-size: var(--t-xs); text-overflow: ellipsis; white-space: nowrap; }
+/* 这条线上的站：收着是一排带编号的站名，中间一小段线；展开是一站一行，后面跟着它的参数 */
+.sv-home-pop .stops { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 6px 8px; }
+.sv-home-pop .stops li { position: relative; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: var(--r-full); box-shadow: inset 0 0 0 1px var(--line); font-size: var(--t-xs); white-space: nowrap; }
+.sv-home-pop .stops li:not(:last-child)::after { content: ""; position: absolute; left: 100%; top: 50%; width: 14px; height: 1px; background: var(--line2); }
+.sv-home-pop .stops i { color: var(--faint); font: var(--w-medium) var(--t-xs)/1 var(--font-mono); }
+.sv-home-pop .stops b { font-weight: var(--w-medium); }
+.sv-home-pop .stops.is-open { display: grid; gap: 0; }
+.sv-home-pop .stops.is-open li { display: grid; grid-template-columns: 18px 84px minmax(0, 1fr); gap: 6px; height: auto; min-height: 30px; padding: 0; border-radius: 0; box-shadow: none; white-space: normal; }
+.sv-home-pop .stops.is-open li::after { content: none; }
+.sv-home-pop .stops.is-open li > span { color: var(--muted); }
+.sv-home-pop .stops.is-open .caps { justify-self: start; }
+.sv-home-pop .cost { padding: 0 8px 6px; color: var(--muted); font-size: var(--t-xs); }
+.sv-home-pop .cost b { color: var(--ink); font-weight: var(--w-medium); }
+
+/* 组织与标签：标签是一排小块，最后一格是「添加」 */
+.sv-home-pop .row.top { align-items: flex-start; padding-top: 6px; padding-bottom: 6px; }
+.sv-home-pop .row.top > :first-child { line-height: 24px; }
+.sv-home-pop .labels { flex: 0 1 204px; min-width: 0; display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.sv-home-pop .labels > button { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; height: 24px; padding: 0 4px 0 8px; border-radius: var(--r-sm); background: var(--raised); font-size: var(--t-xs); transition: background var(--dur-1) var(--ease-out); }
+.sv-home-pop .labels > button:hover { background: var(--hover-bg); }
+.sv-home-pop .labels > button:active { background: var(--sel-bg); }
+.sv-home-pop .labels > button .i { color: var(--faint); }
+.sv-home-pop .labels > label { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px 0 6px; border-radius: var(--r-sm); box-shadow: inset 0 0 0 1px var(--line); color: var(--faint); }
+.sv-home-pop .labels > label:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.sv-home-pop .labels input { width: 64px; padding: 0; border: 0; background: none; color: var(--ink); font-size: var(--t-xs); }
+.sv-home-pop .labels input:focus-visible { outline: 0; }
+
+/* 更多选项里的写作参考 */
+.sv-home-pop .starters { display: grid; gap: 2px; }
+.sv-home-pop .starters > button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px; border-radius: var(--r-md); text-align: left; transition: background var(--dur-1) var(--ease-out); }
+.sv-home-pop .starters > button:hover { background: var(--hover-bg); }
+.sv-home-pop .starters > button:active { background: var(--sel-bg); }
+.sv-home-pop .starters i { display: grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: var(--r-md); background: var(--raised); color: var(--muted); font-size: var(--t-lg); font-style: normal; line-height: 1; }
+.sv-home-pop .starters span { flex: 1; min-width: 0; display: grid; }
+.sv-home-pop .starters b { font-weight: var(--w-medium); }
+.sv-home-pop .starters small { color: var(--muted); font-size: var(--t-xs); }
+.sv-home-pop .starters .i { color: var(--faint); }
+
+/* 谁来做：一个角色一行，名字、三段胶囊，下面一行是实际会用到的账号、模型和档位 */
+.sv-home-pop .roles { display: grid; gap: 10px; padding: 6px 8px 8px; }
+.sv-home-pop .role { display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: center; gap: 2px 12px; }
+.sv-home-pop .role > .caps { justify-self: start; max-width: 100%; }
+.sv-home-pop .role > .run { grid-column: 2; padding: 0; }
+/* 团队的组合预设：已存的几张横着排，选中的那张描主色 */
+.sv-home-pop .presets { margin-bottom: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.sv-home-pop .plist { display: flex; gap: 6px; overflow-x: auto; padding: 2px 8px 4px; }
+.sv-home-pop .plist > button { display: grid; gap: 2px; flex: 0 0 180px; min-width: 0; padding: 8px 10px; border-radius: var(--r-md); box-shadow: inset 0 0 0 1px var(--line); text-align: left; transition: background var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out); }
+.sv-home-pop .plist > button:hover { background: var(--hover-bg); }
+.sv-home-pop .plist > button:active { background: var(--sel-bg); }
+.sv-home-pop .plist > [aria-pressed="true"], .sv-home-pop .plist > [aria-pressed="true"]:hover { background: color-mix(in oklab, var(--accent) 7%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
+.sv-home-pop .plist > button:focus-visible { outline-offset: -2px; }
+.sv-home-pop .plist b { font-weight: var(--w-medium); }
+.sv-home-pop .plist span, .sv-home-pop .plist small { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: var(--t-xs); }
+.sv-home-pop .pnow { display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 2px 0 8px; color: var(--muted); font-size: var(--t-xs); }
+.sv-home-pop .pnow .is-off { color: var(--amber); }
+.sv-home-pop form.pnow { padding-left: 2px; }
+.sv-home-pop .pnow .field { flex: 1; min-width: 0; }
+
+/* 选项里的下拉菜单：右边那一小句说明用正文字体，不是按键 */
+.sv-home-menu kbd { padding-left: 16px; color: var(--muted); font-family: var(--font-sans); font-weight: var(--w-regular); }
+.sv-home-menu [aria-selected="true"]:has(kbd)::after { margin-left: 10px; }
+
+/* ⌘/ 帮助：四组，两列 */
+.sv-home-help { padding: 14px 16px 12px; }
+.sv-home-help .grid { display: grid; grid-template-columns: repeat(2, 208px); gap: 16px 32px; }
+.sv-home-help .sec { margin: 0 0 4px; }
+.sv-home-help dl { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.sv-home-help dt, .sv-home-help dd { display: flex; align-items: center; gap: 4px; min-height: 26px; }
+.sv-home-help dd { justify-content: flex-end; }

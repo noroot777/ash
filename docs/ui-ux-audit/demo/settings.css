@@ -1,0 +1,208 @@
+/* 设置页（面 settings）。整面替换外壳：左边 240 的导航，右边一列内容。
+   一页只有一层卡片：页标题 → 若干节（.sec 小标题 + .card），卡里一行一项。没有彩条，没有卡套卡。
+   这个文件：外壳、公共件（ASH.setKit 每个成员的长相，和标着「公共」的类）、执行器页、起手式页。
+   其余各页自己的样式写在 settings-pages.css，只引用这里的公共类，不要再写一套。 */
+
+.sv-set { flex: 1; min-height: 0; display: grid; grid-template-columns: 240px minmax(0, 1fr); }
+
+/* ---------- 导航：返回、项目一组、系统一组。选中的那一项浮起来，和现在一样 ---------- */
+.sv-set-nav { display: flex; flex-direction: column; gap: 18px; min-height: 0; overflow-y: auto; padding: 14px 12px; border-right: 1px solid var(--line); background: var(--chrome); }
+.sv-set-nav nav { display: grid; gap: 20px; }
+.sv-set-group { display: grid; gap: 2px; }
+.sv-set-group > small { padding: 0 8px 4px; color: var(--muted); font-size: var(--t-xs); }
+.sv-set-back, .sv-set-group > button { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: var(--r-md); color: var(--muted); text-align: left; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out); }
+.sv-set-back:hover, .sv-set-group > button:hover { background: var(--hover-bg); color: var(--ink); }
+.sv-set-back:active, .sv-set-group > button:active { background: var(--sel-bg); }
+.sv-set-group > [aria-current="page"], .sv-set-group > [aria-current="page"]:hover { background: var(--lifted); box-shadow: var(--surface-shadow); color: var(--ink); font-weight: var(--w-medium); }
+
+/* ---------- 页：自己滚动。普通页一种宽度，起手式页放宽给站点线（现状如此）。右上角那一点主色光晕也是现状 ---------- */
+.sv-set-main { min-width: 0; overflow-y: auto; background: radial-gradient(circle at 92% 4%, color-mix(in oklab, var(--accent) 6%, transparent), transparent 24%); }
+.sv-set-page { width: min(880px, 100% - 64px); margin: 0 auto; padding: 40px 0 96px; }
+.sv-set-page.is-wide { width: min(1440px, 100% - 48px); }
+/* 一页从上到下的节奏：标题 24 → 正文；卡与卡 12；新的一节前 28，小标题到卡 8 */
+.sv-set-page > * + * { margin-top: 12px; }
+.sv-set-page > * + .sec { margin-top: 28px; }
+.sv-set-page > .sec + * { margin-top: 8px; }
+.sv-set-page > .sv-set-head + * { margin-top: 24px; }
+.sv-set-page > .sec { padding: 0 2px; }
+
+/* 页标题（head，清单 set-3）：全设置只有这一套。17px，没有彩条；右边放这一页唯一的页级动作，标题下至多一句说明 */
+.sv-set-head { display: flex; align-items: flex-start; gap: 16px; }
+.sv-set-head h1 { width: fit-content; font-size: var(--t-lg); font-weight: var(--w-strong); line-height: 28px; letter-spacing: -0.01em; }
+.sv-set-head p { max-width: 620px; margin-top: 2px; color: var(--muted); }
+
+/* ---------- 公共：卡片里外的排法 ---------- */
+/* .sv-set-stack 一摞卡片（页里再包一层时用）；.sv-set-pad 卡里放整块内容时的内边距；.sv-set-line 一行排几个控件；
+   .sv-set-val 控件旁的单位或取值；.sv-set-tail 页尾的一句话；.is-leaving 正在淡出（leave 用） */
+.sv-set-stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.sv-set-pad { padding: 14px 16px; }
+.sv-set-line { display: flex; align-items: center; gap: 8px; }
+.sv-set-val { color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
+.sv-set-tail { padding: 0 2px; color: var(--muted); font-size: var(--t-xs); }
+.sv-set .is-leaving { opacity: 0; pointer-events: none; transition: opacity var(--dur-1) var(--ease-in); }
+
+/* 卡头（.sv-set-ch）：一行。左边标题 b 和计数 small，中间 span.grow，右边按钮 */
+.sv-set-ch { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 8px 0 16px; }
+.sv-set-ch > b { font-weight: var(--w-strong); }
+.sv-set-ch > small { color: var(--muted); font-size: var(--t-xs); }
+
+/* 设置行（row）：左边名字和说明，右边控件。一张卡里几行之间只有一条线。控件是多行输入框时上下排 */
+.sv-set-row { display: flex; align-items: center; gap: 8px 12px; min-height: 52px; padding: 10px 16px; }
+.sv-set-row:not(:first-child) { border-top: 1px solid var(--line); }
+.sv-set-row > div:first-child { flex: 1 1 0; min-width: 120px; }
+.sv-set-row b { display: block; font-weight: var(--w-medium); }
+.sv-set-row small { display: block; color: var(--muted); font-size: var(--t-xs); }
+.sv-set-row > input.field { width: 280px; flex-shrink: 1; min-width: 0; }
+.sv-set-row > .sel { flex-shrink: 1; max-width: 320px; }
+.sv-set-row:has(> .sv-set-area) { flex-direction: column; align-items: stretch; }
+
+/* 卡脚（foot）：一句话加按钮 */
+.sv-set-foot { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 8px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: var(--t-xs); }
+
+/* 输入框（text / area）：等宽的小一号；.sv-set-num 是只填几位数字的短框；多行的随内容长高，--rows 是最少几行 */
+.sv-set .field.mono { font-size: var(--t-xs); }
+.sv-set .field.sv-set-num { width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
+.sv-set-area { display: block; width: 100%; height: auto; min-height: calc(var(--rows, 3) * 1.5em + 14px); max-height: 264px; padding: 7px 10px; line-height: 1.5; resize: none; field-sizing: content; }
+
+/* 开关（sw）：base 的 .switch 加旁边跟着换的字 */
+.sv-set-sw { display: inline-flex; align-items: center; gap: 8px; flex: none; white-space: nowrap; cursor: pointer; }
+.sv-set-sw > .switch { transition: background var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out); }
+.sv-set-sw:hover > .switch:not([disabled]) { box-shadow: 0 0 0 3px var(--hover-bg); }
+
+/* 折叠行（.sv-set-fold）：卡底的一行 button[aria-expanded]，左边字、右边箭头，展开的内容紧跟在它后面 */
+.sv-set-fold { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; padding: 0 13px 0 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: var(--t-xs); text-align: left; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.sv-set-fold[aria-expanded="false"] { border-radius: 0 0 var(--r-lg) var(--r-lg); }
+.sv-set-fold:hover { background: var(--hover-bg); color: var(--ink); }
+.sv-set-fold > span { flex: 1; }
+.sv-set-fold > .i { transition: transform var(--dur-2) var(--ease-out); }
+.sv-set-fold[aria-expanded="true"] > .i { transform: rotate(90deg); }
+.sv-set-fold + div { border-top: 1px solid var(--line); }
+
+/* 表格（.sv-set-tbl > .sv-set-th + 若干 .sv-set-tr）：--cols 定列，--min 是窄到多少就自己横向滚动。
+   每一格里的东西左边都缩进 8px，和列头的字对齐；最后一格加 .sv-set-end 靠右 */
+.sv-set-tbl { overflow-x: auto; }
+.sv-set-th, .sv-set-tr { display: grid; grid-template-columns: var(--cols); align-items: center; gap: 0 4px; min-width: var(--min, 0); padding: 0 8px; }
+.sv-set-th { min-height: 30px; border-block: 1px solid var(--line); color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
+.sv-set-th > * { padding: 0 8px; white-space: nowrap; }
+.sv-set-tr { min-height: 44px; }
+.sv-set-tr + .sv-set-tr { border-top: 1px solid var(--line); }
+.sv-set-tr > * { display: flex; align-items: center; min-width: 0; }
+.sv-set-tr .field { width: 100%; height: 24px; padding: 0 8px; border-radius: var(--r-sm); }
+.sv-set-end { justify-content: flex-end; gap: 4px; text-align: right; }
+
+/* Select 的紧凑档（清单 set-2）：表格行和键值行里。没有框，指到或点开才出底。表单里的那一档就是 base 的 .sel，和输入框同高同框 */
+.sv-set-tr .sel, .sv-set .kv .sel { min-width: 0; height: 24px; padding: 0 4px 0 8px; border-radius: var(--r-sm); background: none; box-shadow: none; transition: background var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out); }
+.sv-set-tr .sel { width: 100%; }
+.sv-set-tr .sel:hover, .sv-set-tr .sel[aria-expanded="true"], .sv-set .kv .sel:hover, .sv-set .kv .sel[aria-expanded="true"] { background: var(--hover-bg); }
+/* 键值行里字要和上下几行的值左对齐，所以不缩进；指到时的底往左多铺出 8px */
+.sv-set .kv .sel { padding-left: 0; }
+.sv-set .kv .sel:hover, .sv-set .kv .sel[aria-expanded="true"] { box-shadow: -8px 0 0 var(--hover-bg); }
+
+/* ---------- 执行器页（清单 set-1、set-4）：一种 CLI 一张卡 = 卡头 + 表格 +（claude 才有的）模型目录折叠行 ---------- */
+.sv-set-agent .sv-set-tbl { --cols: minmax(132px, 1.4fr) minmax(112px, 1fr) minmax(128px, 1.1fr) 92px 80px 96px; --min: 680px; }
+.sv-set-agent .sv-set-tbl.has-cfg { --cols: minmax(124px, 1.3fr) minmax(108px, 1fr) minmax(112px, 1fr) 92px 76px 116px 92px; --min: 760px; }
+.sv-set-ava { display: grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: var(--r-sm); background: var(--overlay); color: var(--muted); font: var(--w-strong) var(--t-xs)/1 var(--font-mono); }
+/* 名称 13px，点一下就地改名 */
+.sv-set-name { max-width: 100%; height: 24px; padding: 0 8px; border-radius: var(--r-sm); font-size: var(--t-sm); font-weight: var(--w-medium); text-align: left; transition: background var(--dur-1) var(--ease-out); }
+.sv-set-name:hover { background: var(--hover-bg); }
+/* 「CLI 配置」那颗常显的胶囊：盖了 CLI 自己的配置时带底色 */
+.sv-set-cfg { display: inline-flex; align-items: center; gap: 6px; max-width: calc(100% - 8px); height: 24px; margin-left: 8px; padding: 0 8px; border-radius: var(--r-sm); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); font-size: var(--t-xs); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.sv-set-cfg.is-set { background: var(--accent-soft); box-shadow: none; color: var(--ink); }
+.sv-set-cfg:hover { background: var(--hover-bg); color: var(--ink); }
+.sv-set-def { display: inline-flex; align-items: center; gap: 4px; color: var(--green); font-size: var(--t-xs); font-weight: var(--w-medium); white-space: nowrap; }
+/* 检测本机之后：装着的 CLI 一格一个 */
+.sv-set-clis { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0 24px; padding: 0 16px 8px; }
+.sv-set-cli { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+.sv-set-cli > .i { color: var(--green); }
+.sv-set-cli b { display: block; font-weight: var(--w-medium); }
+.sv-set-cli small { display: block; color: var(--muted); font-size: var(--t-xs); }
+/* 「更多 → 额外 CLI 参数」的浮层 */
+.sv-set-args { display: grid; gap: 10px; width: 380px; padding: 8px; }
+.sv-set-args b { display: block; font-weight: var(--w-medium); }
+.sv-set-args small, .sv-set-args .sv-set-line > span { display: block; color: var(--muted); font-size: var(--t-xs); }
+.sv-set-tokens { display: flex; flex-wrap: wrap; gap: 4px; }
+.sv-set-tokens:empty { display: none; }
+.sv-set-tokens > span { display: inline-flex; align-items: center; max-width: 100%; height: 24px; padding-left: 8px; border-radius: var(--r-sm); background: var(--raised); font-size: var(--t-xs); }
+.sv-set-tokens code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- 起手式页：页签一排 → 名牌卡 → 工作区开关 → 站点线 ---------- */
+/* 页签：系统自带 / 我建的 / 已停用三组排成一条，组名只是两组之间的一小段字；末尾「新建」 */
+.sv-set-tabs { display: flex; align-items: center; gap: 2px; overflow-x: auto; padding: 4px 4px 6px; box-shadow: inset 0 -1px 0 var(--line); }
+.sv-set-tabs > span { flex: none; padding: 0 6px 0 14px; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
+.sv-set-tabs > span:first-child { padding-left: 2px; }
+.sv-set-tabs > [role="tab"] { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 11px; border-radius: var(--r-md) var(--r-md) 0 0; white-space: nowrap; transition: background var(--dur-1) var(--ease-out); }
+.sv-set-tabs > [role="tab"]:hover { background: var(--hover-bg); }
+.sv-set-tabs > [aria-selected="true"], .sv-set-tabs > [aria-selected="true"]:hover { background: var(--raised); box-shadow: inset 0 -2px 0 var(--accent); font-weight: var(--w-medium); }
+.sv-set-tabs em { padding: 0 6px; border-radius: var(--r-sm); background: var(--overlay); color: var(--muted); font-size: var(--t-xs); font-style: normal; font-weight: var(--w-regular); line-height: 18px; }
+.sv-set-tabs em.is-edited { background: var(--accent-soft); color: var(--accent); }
+.sv-set-newtab { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 28px; margin-left: 6px; padding: 0 10px; border-radius: var(--r-md); color: var(--muted); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.sv-set-newtab:hover { background: var(--hover-bg); color: var(--ink); }
+
+/* 名牌卡：名字和说明是两个平时看不出框的输入框（指到才有底），下面一排动作和一句提示。
+   卡的左右内边距分成两半：输入框自己带 8px，所以它的底色比字宽出一圈，字仍和下面的按钮对齐 */
+.sv-set-plaque { display: grid; gap: 2px; padding: 12px 8px 14px; }
+.sv-set-title, .sv-set-desc { min-width: 0; height: 28px; padding: 0 8px; border: 0; border-radius: var(--r-sm); background: none; transition: background var(--dur-1) var(--ease-out); }
+.sv-set-title:hover, .sv-set-desc:hover { background: var(--hover-bg); }
+.sv-set-title { font-size: var(--t-md); font-weight: var(--w-strong); }
+.sv-set-desc { color: var(--muted); }
+.sv-set-acts { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 8px 0; }
+.sv-set-plaque > p { margin: 8px 8px 0; color: var(--muted); font-size: var(--t-xs); }
+
+/* ---------- 站点线（保留，清单 set-keep）。结构照 web/src/styles/workflow.css：一张三行的格子，「段」和「站」交替成列——
+   名牌一行、线上的圆点一行、站下面的状态和参数一行。宽度够就摊开，不够一起挤到下限，再不够卡片自己横向滚动。
+   只有两处不一样：线上的小字（短名、编号、状态行、标签）都是 12px，编号圆点跟着大一圈；整条线是正常亮度。 ---------- */
+.sv-set-railbox { overflow-x: auto; }
+.sv-set-rail { --seg-min: 16px; --seg-fr: 0.22fr; --stop-min: 132px; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(var(--seg-min), var(--seg-fr)) minmax(var(--stop-min), 1fr); grid-template-rows: auto 34px auto; align-items: start; padding: 32px 8px 18px; }
+.sv-set-rail[data-dense="yes"] { --seg-min: 13px; --seg-fr: 0.13fr; --stop-min: 112px; }
+.sv-set-norail { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 28px 12px; color: var(--muted); }
+
+/* 名牌：短名一颗小标签，下面全名；指到这一站（或键盘走到）时上方浮出 ← → ✕ */
+.sv-set-plate { position: relative; grid-row: 1; min-width: 0; padding: 0 6px 10px; text-align: center; }
+.sv-set-plate > span { display: inline-block; padding: 2px 8px; border-radius: var(--r-sm); background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-strong); line-height: 1.5; }
+.sv-set-plate > h4 { margin-top: 6px; font-size: var(--t-md); font-weight: var(--w-medium); line-height: 1.35; }
+.sv-set-plate.has-issue > h4 { color: var(--red); }
+.sv-set-plate.has-issue > span { background: var(--red-bg); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--red) 22%, transparent); color: var(--red); }
+.sv-set-ops { position: absolute; left: 50%; bottom: 100%; display: flex; gap: 2px; padding: 2px; border-radius: var(--r-md); background: var(--panel); box-shadow: var(--control-shadow); opacity: 0; translate: -50% 0; transition: opacity var(--dur-1) var(--ease-out); }
+.sv-set-plate:hover > .sv-set-ops, .sv-set-ops:focus-within { opacity: 1; }
+.sv-set-ops > button { width: 22px; height: 22px; border-radius: var(--r-sm); color: var(--muted); font-size: var(--t-xs); line-height: 1; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.sv-set-ops > button:hover:not([disabled]) { background: var(--hover-bg); color: var(--ink); }
+.sv-set-ops > .is-del:hover { color: var(--red); }
+
+/* 线：圆点里是两位数的编号；段中间一颗常驻的加号，指到由虚变实 */
+.sv-set-node, .sv-set-seg { position: relative; grid-row: 2; align-self: stretch; display: grid; place-items: center; min-width: 0; }
+.sv-set-node::before, .sv-set-seg::before { content: ""; position: absolute; inset: 50% 0 auto; height: 2px; background: var(--line2); translate: 0 -50%; }
+.sv-set-node > i { position: relative; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--panel); box-shadow: inset 0 0 0 2px var(--line2); color: var(--muted); font: var(--w-strong) var(--t-xs)/1 var(--font-mono); }
+.sv-set-seg > button { position: relative; display: grid; place-items: center; width: 20px; height: 20px; border: 1px dashed var(--line2); border-radius: 50%; background: var(--panel); color: var(--muted); transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out); }
+.sv-set-seg > button:hover, .sv-set-seg > button[aria-expanded="true"] { border-style: solid; border-color: var(--muted); background: var(--raised); color: var(--ink); }
+.sv-set-seg .i { width: 12px; height: 12px; }
+
+/* 站下面：一行「任务显示 …」，一排可点的参数标签，最后是「失败 → …」。没填的和失败去向是琥珀色，和现在一样 */
+.sv-set-body { grid-row: 3; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; padding: 12px 6px 0; }
+.sv-set-body > p { color: var(--muted); font-size: var(--t-xs); text-align: center; text-wrap: balance; }
+.sv-set-body > p > b { color: var(--ink); font-weight: var(--w-medium); white-space: nowrap; }
+.sv-set-body > p > em { margin-left: 4px; font-style: normal; white-space: nowrap; }
+.sv-set-chip { display: inline-flex; align-items: center; gap: 4px; max-width: min(100%, 210px); min-height: 24px; padding: 0 9px; border-radius: var(--r-md); background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); font-size: var(--t-xs); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.sv-set-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sv-set-chip:hover, .sv-set-chip[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.sv-set-chip.is-warn, .sv-set-chip.is-fail { background: var(--amber-bg); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--amber) 24%, transparent); color: var(--amber); }
+.sv-set-chip.is-warn:hover, .sv-set-chip.is-warn[aria-expanded="true"], .sv-set-chip.is-fail:hover, .sv-set-chip.is-fail[aria-expanded="true"] { background: color-mix(in oklab, var(--amber) 20%, var(--panel)); color: var(--amber); }
+.sv-set-chip.is-fail { margin-top: 2px; }
+
+/* 点标签开的小浮层：三段胶囊、多选、填字、失败去向。选项用 base 的菜单行；填字的那种定宽，免得边打字边变宽 */
+.sv-set-host { width: max-content; min-width: 190px; max-width: 340px; }
+.sv-set-host:has(.sv-set-area) { width: 320px; }
+.sv-set-form { display: grid; gap: 6px; }
+.sv-set-form > small { padding: 4px 6px 0; color: var(--muted); font-size: var(--t-xs); }
+.sv-set-form > .caps { justify-self: start; margin: 0 4px 4px; }
+.sv-set-form > p { padding: 0 6px 4px; color: var(--muted); font-size: var(--t-xs); white-space: pre-line; }
+.sv-set-form > .sv-set-line { padding: 2px 4px 4px 8px; color: var(--muted); }
+.sv-set-form > .sv-set-line > .sel { flex: 1; }
+/* 加一站的菜单底下那句「灰掉的站…」：折行，不把菜单撑宽 */
+.sv-set-addmenu { max-width: 248px; }
+.sv-set-addmenu > .menu > small { padding-bottom: 6px; color: var(--muted); white-space: normal; }
+
+@media (hover: none) { .sv-set-ops { opacity: 1; } }
+@media (max-width: 900px) {
+  .sv-set { grid-template-columns: 184px minmax(0, 1fr); }
+  .sv-set-page, .sv-set-page.is-wide { width: calc(100% - 32px); }
+}
