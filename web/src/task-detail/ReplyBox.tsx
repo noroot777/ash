@@ -24,7 +24,7 @@ import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments 
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { MentionMenu } from "../components/MentionMenu.tsx";
 import { useReplyMention } from "./replyMention.ts";
-import { mergeSlashItems, slashSendsAsTyped, slashToken, type SlashItem } from "../lib/useSkills.ts";
+import { applySlashPick, mergeSlashItems, slashQuery, slashSendsAsTyped, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import { useStandingExecutor, type StandingExecutor } from "./useStandingExecutor.ts";
 import { registerReplyInput } from "./replyQuote.ts";
@@ -217,7 +217,7 @@ export function ReplyBox({
   // 派生命令(ash 自己的)排在技能前面,中间画一条线:前者换的是「谁来干」,
   // 后者只是给这一轮加一句提示词,点错的代价差着量级。
   const ashItems: SlashItem[] = (command?.items ?? []).map((item) => ({ ...item, kind: "ash" }));
-  const commandCandidates = (text: string) => mergeSlashItems(ashItems, skills, slashToken(text));
+  const commandCandidates = (text: string) => mergeSlashItems(ashItems, skills, slashQuery(text));
   const candidates = commandCandidates(value);
   const menuOpen = !menuDismissed && candidates.length > 0;
   const selectedIndex = Math.min(commandIndex, Math.max(0, candidates.length - 1));
@@ -276,7 +276,7 @@ export function ReplyBox({
     // 原生命令同理:`/compact` 是正文本身,发送时由 server 识别后交给 CLI 执行,
     // 不是派生命令,交给 command.onSubmit 只会被它当成不认识的命令吞掉。
     if (item.kind !== "ash") {
-      const next = `${item.command} `;
+      const next = applySlashPick(value, item.command);
       setValue(next);
       setCommandIndex(0);
       setMenuDismissed(false);
@@ -574,7 +574,10 @@ export function ReplyBox({
               }
               if (event.key === "Escape") {
                 event.preventDefault();
-                cancelCommand();
+                // 斜杠接在已写好的正文后面时只收起菜单:那是在给这句话点技能,
+                // 不是在敲命令,整段清空等于把用户写的话扔了。
+                if (slashQuery(value)?.leading) cancelCommand();
+                else setMenuDismissed(true);
                 return;
               }
             }

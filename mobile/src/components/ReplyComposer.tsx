@@ -10,7 +10,7 @@ import { fonts, radius, useTheme } from "@/lib/theme";
 import { DateTimeButton } from "@/components/DateTimeField";
 import { MonitorStrip } from "@/components/MonitorStrip";
 import { PendingMessageTray } from "@/components/PendingMessageTray";
-import { SkillSuggestions } from "@/components/SkillSuggestions";
+import { SkillSuggestions, applySlashPick } from "@/components/SkillSuggestions";
 
 export function ReplyComposer({
   task,
@@ -98,7 +98,7 @@ export function ReplyComposer({
         agentType={task.agentType}
         projectId={task.projectId}
         value={input}
-        onPick={(command) => onInputChange(`${command} `)}
+        onPick={(command) => onInputChange(applySlashPick(input, command))}
       />
 
       <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8 }}>

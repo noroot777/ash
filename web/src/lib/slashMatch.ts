@@ -15,9 +15,33 @@ export interface SlashItem {
   alsoIn?: AgentType[];
 }
 
-/** 正文里正在敲的那个斜杠 token(整段正文只有它时才算,免得句中的 `/` 也弹菜单)。 */
+/** 正文末尾正在敲的那个斜杠 token;start 是斜杠的下标,leading = 斜杠前面只有空白。 */
+export interface SlashQuery {
+  token: string;
+  start: number;
+  leading: boolean;
+}
+
+// 斜杠要么在开头,要么跟在连不进命令名的字符(空白、标点)后面 —— 与 server
+// withSkillInvocation 认「正文里点了哪个技能」是同一条边界,所以菜单补进去的
+// 一定被认得,而 `a/b`、`用/x` 这类句中斜杠不弹菜单。token 里不许再有 `/`:那是在敲路径。
+const SLASH_TAIL = /(^|[^\p{L}\p{N}_./:\-])(\/[^\s/]*)$/u;
+
+export function slashQuery(text: string): SlashQuery | null {
+  const match = SLASH_TAIL.exec(text);
+  if (!match) return null;
+  const start = match.index + match[1]!.length;
+  return { token: match[2]!.toLowerCase(), start, leading: !text.slice(0, start).trim() };
+}
+
 export function slashToken(text: string): string | null {
-  return /^\s*(\/\S*)$/.exec(text)?.[1]?.toLowerCase() ?? null;
+  return slashQuery(text)?.token ?? null;
+}
+
+/** 选中一条:只换掉末尾那个 token,前面已经写好的正文原样留着。 */
+export function applySlashPick(text: string, command: string): string {
+  const query = slashQuery(text);
+  return `${query && !query.leading ? text.slice(0, query.start) : ""}${command} `;
 }
 
 /**
@@ -56,11 +80,17 @@ export function toSlashItems(skills: SkillEntry[]): SlashItem[] {
  * 合成候选:**ash 自己的命令永远排在最前**。它们改变的是「谁来干这件事」
  * (派生一个团队/一场讨论),技能只是给当前这轮加一句提示词 —— 前者点错了代价大得多,
  * 不能让某个 CLI 装了个叫 team 的技能就把它挤下去。命中位置排序只在各自组内进行。
+ *
+ * 斜杠写在已有正文后面时只给技能:ash 命令和原生命令都得是整条消息的开头才生效,
+ * 句中补一个进去 server 和 CLI 都不认。
  */
-export function mergeSlashItems(ash: SlashItem[], skills: SkillEntry[], token: string | null): SlashItem[] {
-  if (!token) return [];
+export function mergeSlashItems(ash: SlashItem[], skills: SkillEntry[], query: SlashQuery | null): SlashItem[] {
+  if (!query) return [];
+  const { token, leading } = query;
   const items = toSlashItems(skills);
-  return [...rankByMatch(ash, token), ...rankByMatch(items.filter((item) => item.kind === "native"), token), ...rankByMatch(items.filter((item) => item.kind === "skill"), token)];
+  const skillItems = rankByMatch(items.filter((item) => item.kind === "skill"), token);
+  if (!leading) return skillItems;
+  return [...rankByMatch(ash, token), ...rankByMatch(items.filter((item) => item.kind === "native"), token), ...skillItems];
 }
 
 /**

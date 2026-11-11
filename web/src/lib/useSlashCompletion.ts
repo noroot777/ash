@@ -1,12 +1,12 @@
 import { useState, type KeyboardEvent } from "react";
 import type { SkillEntry } from "@ash/shared";
-import { mergeSlashItems, slashSendsAsTyped, slashToken, type SlashItem } from "./useSkills.ts";
+import { applySlashPick, mergeSlashItems, slashQuery, slashSendsAsTyped, type SlashItem } from "./useSkills.ts";
 
 // 输入框的 `/` 补全状态机。ReplyBox 和新建任务面板各有一堆自己的分支（派生命令、
 // @召唤、定时发送），它们自己接；剩下那些「只是一个 textarea」的表面用这个，
 // 免得把同一套 ↑↓/回车/Esc 抄第三遍第四遍。
 //
-// 只做补全：选中一条就是把 `/名字 ` 写进正文，ash 不改写、不截走。
+// 只做补全：选中一条就是把正文末尾那个斜杠 token 换成 `/名字 `，ash 不改写、不截走。
 // 例外是给了 onSend 的发送框：原生命令已经敲全时回车直接发（见 slashSendsAsTyped）。
 export function useSlashCompletion({
   value,
@@ -26,14 +26,15 @@ export function useSlashCompletion({
   const [index, setIndex] = useState(0);
   const [dismissed, setDismissed] = useState(false);
 
-  const token = disabled || dismissed ? null : slashToken(value);
-  const items = mergeSlashItems(ash, skills, token);
+  const query = disabled || dismissed ? null : slashQuery(value);
+  const token = query?.token ?? null;
+  const items = mergeSlashItems(ash, skills, query);
   const selectedIndex = Math.min(index, Math.max(0, items.length - 1));
   const open = items.length > 0;
   const sends = open && !!onSend && slashSendsAsTyped(items[selectedIndex], value);
 
   const pick = (item: SlashItem) => {
-    setValue(`${item.command} `);
+    setValue(applySlashPick(value, item.command));
     setIndex(0);
     setDismissed(false);
   };

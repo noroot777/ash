@@ -29,7 +29,7 @@ import {
   useAgentAvailability,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
-import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
+import { applySlashPick, mergeSlashItems, slashQuery, type SlashItem } from "../lib/useSkills.ts";
 import { cliCommandsForMode } from "@ash/shared/cli-commands";
 import { useSkills } from "../lib/useSkills.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
@@ -303,8 +303,8 @@ export function TaskComposerPanel({
     projectId: project.id,
     enabled: mode !== "duet",
   });
-  const slashQuery = slashDismissed ? null : slashToken(body);
-  const slashCandidates = mergeSlashItems(ASH_SLASH_ITEMS, cliCommandsForMode(skills.skills, slashRun.agentType, mode), slashQuery);
+  const slash = slashDismissed ? null : slashQuery(body);
+  const slashCandidates = mergeSlashItems(ASH_SLASH_ITEMS, cliCommandsForMode(skills.skills, slashRun.agentType, mode), slash);
   // `@` 引用项目里的文件：任务还不存在，所以按项目仓库搜。选中的路径原样写进正文，
   // 跑起来之后 agent 在自己的工作目录（worktree 或主仓）里按同一条相对路径找得到。
   // 非 git 项目照样给：服务端那边会退回自己走一遍目录（file-search.ts 的 walk）。
@@ -322,7 +322,7 @@ export function TaskComposerPanel({
       return;
     }
     // 技能只是补全:命令留在正文里，server 运行前据此注入 SKILL.md。
-    setBody(`${item.command} `);
+    setBody(applySlashPick(body, item.command));
     setSlashIndex(0);
   };
 
@@ -612,7 +612,7 @@ export function TaskComposerPanel({
           {(executorTools) => <div className="studio-card">
           <ComposerObjective body={body} mode={mode} textareaRef={textareaRef}
             onChange={(value) => { changeBody(value); setSlashIndex(0); setSlashDismissed(false); mention.onValueChange(); }}
-            onPaste={uploads.onPaste} items={slashCandidates} selected={slashSelected} token={slashQuery}
+            onPaste={uploads.onPaste} items={slashCandidates} selected={slashSelected} token={slash?.token ?? null}
             onSelect={setSlashIndex} onPick={pickSlash} onDismiss={() => setSlashDismissed(true)} onSubmit={() => void submit()}
             mention={{
               onKeyDown: mention.onKeyDown,

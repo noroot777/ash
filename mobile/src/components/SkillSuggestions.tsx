@@ -8,7 +8,8 @@ import { useTheme, radius, fonts } from "@/lib/theme";
 // 输入框上方的一条横向候选带:点一下把 `/名字 ` 填进输入框，发送时由
 // server 按当前执行器的扫描结果注入准确 SKILL.md，原始消息仍保留。
 //
-// 只在「整段正文就是一个斜杠 token」时出现,句子中间的 `/` 不打扰打字。
+// 在正文末尾敲 `/` 时出现:斜杠要在开头,或跟在空白、标点后面,`a/b` 这类路径不打扰打字。
+// 接在已有正文后面时只给技能,原生命令只有整条消息以它开头才生效。
 
 const SOURCE_LABEL: Record<SkillSource, string> = {
   project: "项目",
@@ -20,8 +21,20 @@ const SOURCE_LABEL: Record<SkillSource, string> = {
 // 拉过的清单按「执行器+项目」记住:手机上每敲一次 `/` 都转一次圈太难看。
 const cache = new Map<string, { skills: SkillEntry[] }>();
 
-export function slashToken(text: string): string | null {
-  return /^\s*(\/\S*)$/.exec(text)?.[1]?.toLowerCase() ?? null;
+// 边界与 server withSkillInvocation、桌面 web/src/lib/slashMatch.ts 一致,两边口径要一起改。
+const SLASH_TAIL = /(^|[^\p{L}\p{N}_./:\-])(\/[^\s/]*)$/u;
+
+export function slashQuery(text: string): { token: string; start: number; leading: boolean } | null {
+  const match = SLASH_TAIL.exec(text);
+  if (!match) return null;
+  const start = match.index + match[1]!.length;
+  return { token: match[2]!.toLowerCase(), start, leading: !text.slice(0, start).trim() };
+}
+
+/** 选中一条:只换掉末尾那个 token,前面已经写好的正文原样留着。 */
+export function applySlashPick(text: string, command: string): string {
+  const query = slashQuery(text);
+  return `${query && !query.leading ? text.slice(0, query.start) : ""}${command} `;
 }
 
 /**
@@ -49,7 +62,8 @@ export function SkillSuggestions({
   onPick: (command: string) => void;
 }) {
   const theme = useTheme();
-  const token = slashToken(value);
+  const query = slashQuery(value);
+  const token = query?.token ?? null;
   const wants = token !== null;
   const cli = agentType || "claude";
   const key = [cli, projectId ?? ""].join("|");
@@ -78,6 +92,7 @@ export function SkillSuggestions({
   if (!token) return null;
   // 命中位置升序:前缀命中排在中段命中前面;位置相同的保持原顺序(sort 稳定)。
   const matches = state.skills
+    .filter((skill) => query!.leading || !skill.native)
     .map((skill) => ({ skill, at: slashMatchIndex(skill.command, token) }))
     .filter((row) => row.at >= 0)
     .sort((a, b) => a.at - b.at);
