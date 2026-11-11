@@ -1,5 +1,5 @@
 /* 「没开 1M、窗口被截」：比水位明细和压缩提示都要紧（它解释了为什么老在压缩），
-   所以用琥珀色一块独立出来，按钮贴在句尾，不另起一行。 */
+   所以用琥珀色一块独立出来，按钮贴在右侧，不另起一行。 */
 .context-1m-notice {
   display: flex;
   align-items: flex-start;
@@ -15,8 +15,10 @@
 }
 .context-1m-notice > svg { flex: none; margin-top: 2px; }
 .context-1m-notice > p { flex: 1; min-width: 0; margin: 0; }
-.context-1m-notice > button {
-  flex: none;
+/* 「下一轮会怎样」是另一层事实（当前配置，不是这一轮），换行并压暗一档。 */
+.context-1m-notice-next { display: block; color: var(--muted); }
+.context-1m-notice-action { display: grid; flex: none; justify-items: end; gap: 3px; }
+.context-1m-notice-action > button {
   border: 1px solid transparent;
   border-radius: 5px;
   background: var(--accent);
@@ -25,12 +27,6 @@
   font-size: 10px;
   white-space: nowrap;
 }
-.context-1m-notice > button:hover:not(:disabled) { background: var(--accent-hover); }
-.context-1m-notice > button:disabled { opacity: 0.6; }
-.context-1m-notice-error { display: block; color: var(--red); }
-.context-1m-notice.is-pending {
-  display: block;
-  border-color: var(--line);
-  background: var(--panel);
-  color: var(--muted);
-}
+.context-1m-notice-action > button:hover:not(:disabled) { background: var(--accent-hover); }
+.context-1m-notice-action > button:disabled { opacity: 0.6; }
+.context-1m-notice-error { color: var(--red); }

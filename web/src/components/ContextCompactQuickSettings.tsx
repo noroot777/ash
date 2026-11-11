@@ -99,6 +99,7 @@ export function ContextCompactQuickSettings({
                   modelWindow={claudeModelWindow(
                     session.turnModel || profile.model,
                     load.providers.find((item) => item.id === profile.providerId),
+                    profile.extraArgs ?? [],
                   )?.window ?? null}
                   onSaved={(saved) => setLoad((current) => (current.status === "ready"
                     ? { ...current, profiles: current.profiles.map((item) => (item.id === saved.id ? saved : item)) }

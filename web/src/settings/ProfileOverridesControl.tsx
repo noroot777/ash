@@ -83,7 +83,7 @@ export function ProfileOverridesControl({
   // 那个「空转项」一样,得在胶囊上就看得出来 —— 只写在弹层里等于要求用户先怀疑它。
   const conflict = cliConfigOverrideConflict(type, extraArgs);
   // 窗口填得比模型窗口大(多半是模型没在供应商上开 1M)会被 CLI 截掉,同理要在胶囊上看得出。
-  const modelWindow = type === "claude" ? claudeModelWindow(model, provider)?.window ?? null : null;
+  const modelWindow = type === "claude" ? claudeModelWindow(model, provider, extraArgs)?.window ?? null : null;
   const clamped = clampedCompactWindow(value.autoCompactWindow, modelWindow) !== null;
   const summary = active
     .map((spec) => `${fmtOverrideValue(value[spec.key]!, spec.unit)}${dead.has(spec.key) ? "（未生效）" : ""}`
@@ -169,7 +169,13 @@ export function ProfileOverridesControl({
           </div>
 
           {type === "claude" && (
-            <Context1mNotice model={model} provider={provider} overrides={parsed} onEnabled={onProviderChanged} />
+            <Context1mNotice
+              model={model}
+              provider={provider}
+              extraArgs={extraArgs}
+              overrides={parsed}
+              onEnabled={onProviderChanged}
+            />
           )}
 
           {(conflict || hints.length > 0) && (

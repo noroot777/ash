@@ -5,6 +5,8 @@
 // 转发运行时值会让进程起不来(见 index.ts 顶部注释),所以照 team / executors
 // 的办法开一个子路径导出 "@ash/shared/usage"。
 
+import { claudeCompactTrigger } from "./cli-overrides.ts";
+
 export interface TokenUsage {
   /** 未命中缓存的输入 token。 */
   input: number;
@@ -160,6 +162,13 @@ export interface ContextUsage {
    */
   compactWindow?: number;
   /**
+   * 这条会话起跑时真正注入的压缩百分比(`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`)与输出预留
+   * (`CLAUDE_CODE_MAX_OUTPUT_TOKENS`),从会话固化的 `--settings` 读。跟 compactWindow 一样
+   * 是**启动快照**:执行器配置之后改了,解释的也还是这一轮(第 1 轮审查 F1)。
+   */
+  compactPercent?: number;
+  compactMaxOutput?: number;
+  /**
    * window 是**估**出来的(按模型名猜),不是 CLI 自报。true 时界面必须说明白,
    * 别让人当准数用。claude 自报窗口时它是 false —— 分母准不准是数据本身的属性,
    * 界面那个 `~` 该跟着数据走,而不是靠改一处渲染逻辑记得取消。
@@ -180,6 +189,17 @@ export function effectiveContextWindow(c: ContextUsage | null | undefined): numb
     return model !== null && !c!.windowEstimated ? Math.min(compact, model) : compact;
   }
   return model;
+}
+
+/**
+ * 这条会话实际会在多少 token 压缩:按启动快照里的百分比,套在 CLI 实际用的窗口上。
+ * 没配压缩窗口(= 跟随 CLI 自己的判断)时不给数 —— 那一档的触发规则 ash 这边没有依据。
+ */
+export function contextCompactTrigger(c: ContextUsage | null | undefined): number | null {
+  if (typeof c?.compactWindow !== "number" || !(c.compactWindow > 0)) return null;
+  const window = effectiveContextWindow(c);
+  if (window === null) return null;
+  return claudeCompactTrigger(window, c.compactPercent ?? null, c.compactMaxOutput ?? null);
 }
 
 /** 水位占窗口的比例 0..1。没有窗口就 null —— 调用方据此决定显不显示百分比。 */

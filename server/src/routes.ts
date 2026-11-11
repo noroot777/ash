@@ -475,8 +475,10 @@ api.post("/llm-providers/:id/context-1m-models", async (c) => {
   const existing = (await db.select().from(llmProviders).where(eq(llmProviders.id, pid))).at(0);
   if (!existing || !(await canUseOwned(existing, actorOf(c)))) return c.json({ error: "not found" }, 404);
   if (existing.protocol !== "anthropic") return c.json({ error: "只有 Anthropic 协议的供应商能声明 1M 模型" }, 400);
-  const b = await c.req.json<{ model?: unknown }>().catch(() => ({ model: undefined }));
-  const model = typeof b.model === "string" ? stripContext1mSuffix(b.model).trim() : "";
+  // 合法 JSON 也可能不是对象(`null`、数字、数组):一律当没给模型名,回 400 而不是在取字段时炸成 500。
+  const b: unknown = await c.req.json().catch(() => null);
+  const raw = b && typeof b === "object" && !Array.isArray(b) ? (b as { model?: unknown }).model : undefined;
+  const model = typeof raw === "string" ? stripContext1mSuffix(raw).trim() : "";
   if (!model) return c.json({ error: "缺少模型名" }, 400);
   const column = llmProviders.context1mModels;
   // 一条 UPDATE 里判重 + 追加:库层面原子,并发的两次开启各落各的。列里是坏 JSON(老数据)

@@ -8,6 +8,12 @@
 //  ③ 水位胶囊的分母取「压缩窗口」与 CLI 自报窗口里小的那个;
 //  ④ 一键开启的端点:原子追加、幂等、去后缀、非 anthropic 拒绝。
 //
+// 第 1 轮审查补的两条:
+//  F1 会话里「这一轮在怎么跑」只看会话自己的启动快照(命令行、固化的 --settings),执行器
+//     配置后来改了也不影响 —— 所以触发点要能单从 ContextUsage 算出来;
+//  F2 「下一轮会不会是 1M」跟起跑那一侧同一套判据:没 key 的供应商会回退官方账号,额外参数
+//     里的 --model 会覆盖选中的模型。
+//
 // 跑法:ASH_DB=/tmp/test-context-1m-notice-$RANDOM.db npx tsx server/scripts/test-context-1m-notice.ts
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
@@ -15,10 +21,11 @@ import { requireTmpDb } from "./tmp-db.js";
 
 requireTmpDb("test-context-1m-notice");
 
-const { claudeModelWindow, clampedCompactWindow, CLAUDE_1M_WINDOW, CLAUDE_STANDARD_WINDOW } =
+const { claudeModelWindow, clampedCompactWindow, launchedModelOf, CLAUDE_1M_WINDOW, CLAUDE_STANDARD_WINDOW } =
   await import("@ash/shared/context-1m");
 const { claudeCompactionPlan, cliConfigOverrideEnv, cliConfigOverrideHints } = await import("@ash/shared/cli-overrides");
-const { effectiveContextWindow, contextRatio } = await import("@ash/shared/usage");
+const { effectiveContextWindow, contextRatio, contextCompactTrigger } = await import("@ash/shared/usage");
+const { sessionContext } = await import("../src/usage.js");
 
 // ── ① 判定 ────────────────────────────────────────────────────────────────
 const relay = {
@@ -27,11 +34,12 @@ const relay = {
   protocol: "anthropic" as const,
   model: "claude-opus-5-5",
   context1mModels: ["claude-opus-5-5"],
+  hasKey: true,
 };
 
 assert.deepEqual(
   claudeModelWindow("claude-fable-5-2", relay),
-  { model: "claude-fable-5-2", window: CLAUDE_STANDARD_WINDOW, provider: { id: "p1", name: "nm-ccb" } },
+  { model: "claude-fable-5-2", window: CLAUDE_STANDARD_WINDOW, provider: { id: "p1", name: "nm-ccb" }, blocker: null },
   "没在 1M 列表里的模型按 200k 算,并且给出能一键开启的那家供应商",
 );
 assert.equal(claudeModelWindow("claude-opus-5-5", relay)?.window, CLAUDE_1M_WINDOW, "列表里的按 1M 算");
@@ -40,6 +48,33 @@ assert.equal(claudeModelWindow("claude-opus-5-5[1m]", null)?.window, CLAUDE_1M_W
 assert.equal(claudeModelWindow("claude-opus-5-5[1m]", null)?.model, "claude-opus-5-5", "判定结果里的模型名去掉后缀");
 assert.equal(claudeModelWindow("claude-opus-5-5", null)?.provider, null, "官方账号没有能一键开启的供应商");
 assert.equal(claudeModelWindow(null, null), null, "官方账号又没指定模型:判不出来,不猜");
+assert.equal(claudeModelWindow("claude-opus-5-5", null)?.blocker?.kind, "official");
+
+// F2:没 key 的供应商在起跑时不会挂上(loadRelay 返回 undefined),列表里声明了 1M 也不算。
+const keyless = claudeModelWindow("claude-opus-5-5", { ...relay, hasKey: false });
+assert.equal(keyless?.window, CLAUDE_STANDARD_WINDOW, "没 key 时按官方账号算,1M 声明不生效");
+assert.equal(keyless?.provider, null, "没 key 时不给一键开启(开了也用不上)");
+assert.deepEqual(keyless?.blocker, { kind: "no-key", provider: { id: "p1", name: "nm-ccb" } });
+assert.equal(claudeModelWindow("", { ...relay, hasKey: false }), null, "没 key 也没模型:退回官方账号,判不出来");
+
+// F2:额外参数里的 --model 排在 ash 那份之后,覆盖选中的模型;ash 只给选中的那个补 [1m]。
+const overridden = claudeModelWindow("claude-opus-5-5", relay, ["--model claude-sonnet-5"]);
+assert.equal(overridden?.model, "claude-sonnet-5", "合并 token 也要拆开认出 --model");
+assert.equal(overridden?.window, CLAUDE_STANDARD_WINDOW, "选中的模型开了 1M 也没用,跑的是额外参数里那个");
+assert.equal(overridden?.blocker?.kind, "extra-args-model");
+assert.equal(
+  claudeModelWindow("claude-opus-5-5", relay, ["--model=claude-sonnet-5[1m]"])?.window,
+  CLAUDE_1M_WINDOW,
+  "额外参数自己带 [1m] 就是 1M",
+);
+
+// F1:这一轮实际传给 CLI 的模型从会话命令行读,取最后一个 --model。
+assert.equal(
+  launchedModelOf("claude -p --model claude-fable-5-2 --effort high --model claude-sonnet-5[1m] <messages via stdin>"),
+  "claude-sonnet-5[1m]",
+);
+assert.equal(launchedModelOf("claude -p --effort high"), null);
+assert.equal(launchedModelOf(null), null);
 assert.equal(
   claudeModelWindow("claude-opus-5-5", { ...relay, protocol: "openai" })?.provider,
   null,
@@ -98,6 +133,27 @@ assert.equal(
   "按模型名估出来的 200k 认不出 1M,不拿它截",
 );
 
+// F1:触发点只从会话自己的启动快照算 —— 原形会话固化的 --settings 原样喂进去。
+const frozenArgs = `--settings '{"autoCompactEnabled":true,"env":{"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"600000",`
+  + `"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"82.76","DISABLE_COMPACT":"","DISABLE_AUTO_COMPACT":""}}'`;
+const frozen = sessionContext({ contextUsed: 143_746, contextWindow: 200_000, contextWindowEstimated: false, resumeArgs: frozenArgs });
+assert.deepEqual(
+  frozen,
+  { used: 143_746, window: 200_000, windowEstimated: false, compactWindow: 600_000, compactPercent: 82.76 },
+  "会话水位要带出起跑时真正注入的窗口与百分比",
+);
+assert.equal(contextCompactTrigger(frozen), 148_968, "不看执行器当前配置,也能算出这一轮 ~149k 就压");
+assert.equal(
+  contextCompactTrigger({ ...frozen!, compactMaxOutput: 10_000 }),
+  Math.min(Math.floor((190_000 * 82.76) / 100), 177_000),
+  "固化了输出预留就按它算",
+);
+assert.equal(
+  contextCompactTrigger({ used: 1, window: 200_000, windowEstimated: false }),
+  null,
+  "没配压缩窗口时不编触发点",
+);
+
 // ── ④ 一键开启端点 ────────────────────────────────────────────────────────
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { llmProviders } = await import("../src/db/schema.js");
@@ -125,11 +181,11 @@ await db.insert(llmProviders).values([
   },
 ]);
 
-const enable = async (providerId: string, body: unknown) => {
+const enable = async (providerId: string, body: unknown, raw?: string) => {
   const res = await api.fetch(new Request(`http://127.0.0.1/llm-providers/${providerId}/context-1m-models`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: raw ?? JSON.stringify(body),
   }));
   return { status: res.status, body: await res.json() as { context1mModels?: string[]; error?: string } };
 };
@@ -153,6 +209,9 @@ assert.deepEqual(
 
 assert.equal((await enable("openai-1", { model: "gpt-5.5" })).status, 400, "openai 协议的供应商拒绝");
 assert.equal((await enable("anthropic-1", { model: "  " })).status, 400, "空模型名拒绝");
+assert.equal((await enable("anthropic-1", null)).status, 400, "JSON null 是 400,不是 500");
+assert.equal((await enable("anthropic-1", ["claude-opus-5"])).status, 400, "数组不是请求体该有的形状");
+assert.equal((await enable("anthropic-1", undefined, "{not json")).status, 400, "坏 JSON 400");
 assert.equal((await enable("missing", { model: "claude-opus-5" })).status, 404, "不存在的供应商 404");
 
 rmSync(process.env.ASH_DB!, { force: true });

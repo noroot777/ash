@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Gauge } from "@phosphor-icons/react";
 import type { ContextUsage, Session } from "@ash/shared";
-import { contextRatio, effectiveContextWindow, formatTokens, formatTokensExact, hasContext } from "@ash/shared/usage";
+import { contextCompactTrigger, contextRatio, effectiveContextWindow, formatTokens, formatTokensExact, hasContext } from "@ash/shared/usage";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
 import { ContextCompactQuickSettings } from "./ContextCompactQuickSettings.tsx";
@@ -71,6 +71,7 @@ export function ContextMeterChip({ context, session, className }: {
   const clampedByModel = usesCompactWindow && !context.windowEstimated
     && context.window !== null && context.window < context.compactWindow!;
   const ratio = contextRatio(context);
+  const compactTrigger = usesCompactWindow ? contextCompactTrigger(context) : null;
   const approx = displayWindowEstimated ? "~" : "";
   const label = ratio === null
     ? `上下文 ${formatTokens(context.used)}`
@@ -114,7 +115,8 @@ export function ContextMeterChip({ context, session, className }: {
             )}
             <div className="is-total">
               <dt>{usesCompactWindow ? "距压缩" : "还可装"}</dt>
-              <dd>{formatTokensExact(Math.max(0, window - context.used))}</dd>
+              {/* 距压缩按真实触发点算(窗口还要扣掉输出预留与百分比),跟下面那条 1M 提示同一个数。 */}
+              <dd>{formatTokensExact(Math.max(0, (compactTrigger ?? window) - context.used))}</dd>
             </div>
           </>
         )}
@@ -128,7 +130,7 @@ export function ContextMeterChip({ context, session, className }: {
             ? "这一轮没拿到 CLI 自报的窗口，只能按模型名估，仅供参考。"
             : "窗口由 CLI 自报。这是最近一次请求带进模型的输入量，压缩后会掉下来。"}
       </footer>
-      {session && clampedByModel && <SessionContext1mNotice session={session} cliWindow={context.window!} />}
+      {session && clampedByModel && <SessionContext1mNotice session={session} context={context} />}
       {session && (
         <ContextCompactQuickSettings
           session={session}

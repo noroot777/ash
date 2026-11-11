@@ -167,8 +167,20 @@ export function claudeCompactionPlan(
   // 保留两位小数:claude 那边是 parseFloat,精度给够,触发点的误差就只剩几十 token。
   const raw = (wanted / declaredEffective) * 100;
   const envPercent = Math.min(100, Math.max(0.01, Math.round(raw * 100) / 100));
-  const trigger = Math.min(Math.floor((effective * envPercent) / 100), floor);
+  const trigger = claudeCompactTrigger(window, envPercent, host.maxOutputTokens);
   return { window, clampedFrom, percent, envPercent, trigger, capped: wanted >= declaredEffective - CLAUDE_COMPACT_FLOOR_GAP };
+}
+
+/**
+ * claude 自己那一步:给定它实际用的窗口、env 里那个百分比(没设 = null)和输出预留来源,
+ * 在多少 token 压缩。设置页(从用户填的数推)和会话面板(从这条会话固化的 env 读)共用,
+ * 两边不会各算各的。
+ */
+export function claudeCompactTrigger(window: number, envPercent: number | null, maxOutputTokens: number | null): number {
+  const effective = window - claudeCompactReserve({ maxOutputTokens });
+  const floor = Math.max(0, effective - CLAUDE_COMPACT_FLOOR_GAP);
+  if (envPercent === null || effective <= 0) return floor;
+  return Math.min(Math.floor((effective * envPercent) / 100), floor);
 }
 
 const CLAUDE_OVERRIDES: CliConfigOverride[] = [

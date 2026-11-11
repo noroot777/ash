@@ -236,12 +236,18 @@ export async function setSessionContext(sessId: string, context: ContextUsage): 
   }
 }
 
-/** 从本会话固化的 `--settings` 中读回当时真正注入的自动压缩窗口。 */
-export function sessionCompactWindow(resumeArgs: string | null | undefined): number | null {
-  const raw = resumeArgs?.match(/"CLAUDE_CODE_AUTO_COMPACT_WINDOW"\s*:\s*"(\d+)"/)?.[1];
+/** 从本会话固化的 `--settings` 里读回当时真正注入的某个环境变量(正数才算)。 */
+function sessionSettingsEnvNumber(resumeArgs: string | null | undefined, key: string): number | null {
+  const raw = resumeArgs?.match(new RegExp(`"${key}"\\s*:\\s*"([\\d.]+)"`))?.[1];
   if (!raw) return null;
   const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** 从本会话固化的 `--settings` 中读回当时真正注入的自动压缩窗口。 */
+export function sessionCompactWindow(resumeArgs: string | null | undefined): number | null {
+  const value = sessionSettingsEnvNumber(resumeArgs, "CLAUDE_CODE_AUTO_COMPACT_WINDOW");
+  return value === null ? null : Math.round(value);
 }
 
 /** 会话行 → ContextUsage。没采到(null)跟「水位是 0」是两回事，前者不显示。 */
@@ -251,11 +257,20 @@ export function sessionContext(row: Pick<
 >): ContextUsage | null {
   if (row.contextUsed === null || row.contextUsed === undefined) return null;
   const compactWindow = sessionCompactWindow(row.resumeArgs);
+  // 百分比与输出预留只在配了窗口时才有意义(没窗口时 claude 整段跳过自动压缩)。
+  const compactPercent = compactWindow !== null
+    ? sessionSettingsEnvNumber(row.resumeArgs, "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
+    : null;
+  const compactMaxOutput = compactWindow !== null
+    ? sessionSettingsEnvNumber(row.resumeArgs, "CLAUDE_CODE_MAX_OUTPUT_TOKENS")
+    : null;
   return {
     used: row.contextUsed,
     window: row.contextWindow ?? null,
     windowEstimated: row.contextWindowEstimated ?? false,
     ...(compactWindow !== null ? { compactWindow } : {}),
+    ...(compactPercent !== null ? { compactPercent } : {}),
+    ...(compactMaxOutput !== null ? { compactMaxOutput: Math.round(compactMaxOutput) } : {}),
   };
 }
 

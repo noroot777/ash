@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider } from "@ash/shared";
 import { refreshAgentAvailability } from "../lib/agentAvailability.ts";
 import { api, type DetectedCli } from "../lib/api.ts";
+import { mergeEnabledProvider } from "../components/Context1mNotice.tsx";
 import { AgentProfilesSection } from "./AgentProfilesSection.tsx";
 
 function updateById(rows: AgentExecutorProfile[], updated: AgentExecutorProfile) {
@@ -90,7 +91,9 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
         onDetect={() => void detect()}
         onRegister={(cli) => void register(cli)}
         onProfileChanged={changeProfile}
-        onProviderChanged={(updated) => setProviders((current) => current.map((row) => (row.id === updated.id ? updated : row)))}
+        onProviderChanged={(updated) => setProviders((current) => current.map((row) => (
+          row.id === updated.id ? mergeEnabledProvider(row, updated) : row
+        )))}
         onProfileAdded={(profile) => setProfiles((current) => [...current, profile])}
         onProfilesDeleted={(ids) => {
           const deleted = new Set(ids);
