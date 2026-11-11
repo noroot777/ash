@@ -54,7 +54,8 @@ assert.equal(isAffectedCodexVersion("codex-cli 0.147.9"), true);
 assert.equal(isAffectedCodexVersion("0.148.0"), false);
 assert.match(affectedCodexSessionWarning("0.147.0") ?? "", /全新会话/);
 const { appendSessionTrace, parseSessionTrace, sessionTracePath } = await import("../src/transcript.js");
-const { addUsage, sumUsage, usageTotal, hasUsage, formatTokens, formatCost, contextRatio, hasContext, guessContextWindow } = await import("@ash/shared/usage");
+const { addUsage, sumUsage, usageTotal, hasUsage, formatTokens, formatCost, contextRatio, hasContext, guessContextWindow, serializeCompactSnapshot } =
+  await import("@ash/shared/usage");
 
 /** 拿假 CLI stdout 真跑一遍解析器,把它吐出的 context 事件取回来(同 test-claude-stream-errors 的套路)。 */
 async function parseFakeClaude(lines: unknown[], compactWindow: number | null = null) {
@@ -331,23 +332,29 @@ try {
 
   const compactResumeArgs = `--settings '{"autoCompactEnabled":true,"env":{"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"400000"}}'`;
   assert.equal(sessionCompactWindow(compactResumeArgs), 400_000);
+  // 水位随自己那一轮的启动快照同一笔落下,重读只认这份(带来源标记的 context_compact)。
   await db.update(sessions).set({
     contextUsed: 272_074,
     contextWindow: 1_000_000,
     contextWindowEstimated: false,
     resumeArgs: compactResumeArgs,
-    // 同一笔写下的命令行里只有 ash 那一个 --settings,才证明 resume_args 里的就是生效配置。
-    commandLine: `claude -p --model claude-opus-5 ${compactResumeArgs} <prompt via stdin>`,
-    // 模拟 context_compact 这一列上线前落的老行:没有随水位存下的快照,才退回 resume_args。
-    contextCompact: null,
+    contextCompact: serializeCompactSnapshot({ compactWindow: 400_000 }),
   }).where(eq(sessions.id, sessId));
   const compactWater = sessionContext((await db.select().from(sessions).where(eq(sessions.id, sessId)).get())!);
   assert.deepEqual(
     compactWater,
     { used: 272_074, window: 1_000_000, windowEstimated: false, compactWindow: 400_000 },
-    "历史会话也要从固化的 --settings 读回压缩窗口，同时保留模型真实的 1M 上限",
+    "历史会话要读回这一轮自己的压缩窗口，同时保留模型真实的 1M 上限",
   );
   assert.equal(Math.round((1 - contextRatio(compactWater)!) * 100), 32, "任务页剩余量应按 400k 压缩窗口算");
+  // context_compact 上线前的老行:resume_args 是最近一次起跑写的,续跑会改它而水位不一定跟着换,
+  // 不能拿来解释这份水位 —— 如实标「不知道」,只剩模型窗口。
+  await db.update(sessions).set({ contextCompact: null }).where(eq(sessions.id, sessId));
+  assert.deepEqual(
+    sessionContext((await db.select().from(sessions).where(eq(sessions.id, sessId)).get())!),
+    { used: 272_074, window: 1_000_000, windowEstimated: false, compactUnknown: true },
+    "老行水位不退回 resume_args",
+  );
 
   await setSessionContext(sessId, { used: 0, window: null, windowEstimated: false });
   assert.equal(

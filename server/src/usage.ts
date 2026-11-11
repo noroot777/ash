@@ -280,9 +280,10 @@ export function launchFields(handle: { commandLine: string; launchCompact?: Comp
 }
 
 /**
- * 存下来的快照证明不了来源时(列为空 = 这两列上线前的老行;非空但没有来源标记 = 「按最终生效
- * 参数判定」上线前写的,那时被盖掉的配置照样当事实写了进去,见 shared serializeCompactSnapshot)
- * 唯一的退路。接管、水位重读、接力导出三处读端共用这一份判定,不各自信任各自的列。
+ * 重启接管时,launch_compact 证明不了来源(列为空 = 这一列上线前起的进程;非空但没有来源标记 =
+ * 「按最终生效参数判定」上线前写的)那个**正在跑的进程**的退路。只给接管用:resume_args 与
+ * command_line 跟这个进程同一笔写下,说的就是它;**不许拿来解释库里的水位** —— 续跑会改写这两列,
+ * 而水位要等新进程报上来才换,两者不一定同一轮(第 6 轮审查 F1,见 sessionContextCompact)。
  *
  * resume_args 只有 ash 那份 `--settings`;它到底生没生效,要看同一笔写下的 command_line 里
  * 有没有别的 `--settings` 排在后面整份盖掉它(claude 只认最后一个,见 cliConfigOverrideConflict)。
@@ -302,9 +303,17 @@ export function sessionLaunchCompact(row: Pick<SessionRow, "launchCompact" | "re
   return parseStoredCompactSnapshot(row.launchCompact) ?? legacyCompactSnapshot(row);
 }
 
-/** 库里这份水位对应的压缩快照:随水位落下的那份;证明不了来源就走 legacyCompactSnapshot。 */
-export function sessionContextCompact(row: Pick<SessionRow, "contextCompact" | "resumeArgs" | "commandLine">): CompactSnapshot {
-  return parseStoredCompactSnapshot(row.contextCompact) ?? legacyCompactSnapshot(row);
+/**
+ * 库里这份水位对应的压缩快照:只认随水位**同一笔**落下、带来源标记的那份。
+ *
+ * 证明不了来源的(这一列上线前的老行、没有标记的旧写入)**没有退路**:能拿来推的 resume_args /
+ * command_line / launch_compact 都是「最近一次起跑」写的,续跑一改它们就变,而水位要等新进程报上来
+ * 才换 —— 拿它们解释旧水位,等于把新配置套在上一轮头上(第 6 轮审查 F1)。claude 的老水位就如实
+ * 标「不知道」;别的 CLI 从来没有 ash 注入的压缩配置,没有可说的。重读、接力导出都走这里。
+ */
+export function sessionContextCompact(row: Pick<SessionRow, "contextCompact" | "agentType">): CompactSnapshot {
+  return parseStoredCompactSnapshot(row.contextCompact)
+    ?? (row.agentType === "claude" ? UNKNOWN_COMPACT_SNAPSHOT : {});
 }
 
 /** 只要窗口那一项(老调用点)。 */
@@ -315,7 +324,7 @@ export function sessionCompactWindow(resumeArgs: string | null | undefined): num
 /** 会话行 → ContextUsage。没采到(null)跟「水位是 0」是两回事，前者不显示。 */
 export function sessionContext(row: Pick<
   SessionRow,
-  "contextUsed" | "contextWindow" | "contextWindowEstimated" | "contextCompact" | "resumeArgs" | "commandLine"
+  "contextUsed" | "contextWindow" | "contextWindowEstimated" | "contextCompact" | "agentType"
 >): ContextUsage | null {
   if (row.contextUsed === null || row.contextUsed === undefined) return null;
   return {

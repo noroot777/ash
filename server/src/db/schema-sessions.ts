@@ -208,7 +208,7 @@ export const sessions = sqliteTable("sessions", {
   // rollout best-effort 读取；格式变化或本轮取不到时清空为 null，胶囊自然不显示旧值。
   contextWindowEstimated: integer("context_window_estimated", { mode: "boolean" }),
   // 报出这份水位的那个进程起跑时的压缩配置(JSON,shared 的 CompactSnapshot),跟上面三列
-  // 同一笔写。null 或没有来源标记 = 证明不了来源的老行,读侧走 legacyCompactSnapshot。
+  // 同一笔写。null 或没有来源标记 = 证明不了来源的老行,读侧标「不知道」(usage.ts sessionContextCompact)。
   contextCompact: text("context_compact"),
 });
 

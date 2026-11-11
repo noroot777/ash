@@ -135,9 +135,10 @@ const frozenArgs = `--settings '{"autoCompactEnabled":true,"env":{"CLAUDE_CODE_A
   + `"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"82.76","DISABLE_COMPACT":"","DISABLE_AUTO_COMPACT":""}}'`;
 // 原形会话的命令行:只有 ash 那一个 --settings(临时文件路径),resume_args 里的就是生效配置。
 const frozenCommand = "claude -p --model claude-fable-5-2 --settings /tmp/ash-claude-settings-1.json <messages via stdin>";
+// 水位随自己那一轮的启动快照(带来源标记)一起落库,重读时只认这份。
 const frozen = sessionContext({
-  contextUsed: 143_746, contextWindow: 200_000, contextWindowEstimated: false,
-  contextCompact: null, resumeArgs: frozenArgs, commandLine: frozenCommand,
+  contextUsed: 143_746, contextWindow: 200_000, contextWindowEstimated: false, agentType: "claude",
+  contextCompact: serializeCompactSnapshot(sessionCompactSnapshot(frozenArgs)),
 });
 assert.deepEqual(
   frozen,
@@ -274,7 +275,7 @@ const legacyReattached = await contextOf(changed.attach(attachChild(), {
 assert.equal(contextCompactTrigger(legacyReattached), null, "老行接管后不再报 ~149k");
 assert.equal(legacyReattached?.compactUnknown, true);
 assert.deepEqual(
-  sessionContext({ contextUsed: 143_746, contextWindow: 200_000, contextWindowEstimated: false, ...legacyShadowed }),
+  sessionContext({ contextUsed: 143_746, contextWindow: 200_000, contextWindowEstimated: false, agentType: "claude", ...legacyShadowed }),
   { used: 143_746, window: 200_000, windowEstimated: false, compactUnknown: true },
   "老行水位重读走同一道判定",
 );
@@ -293,7 +294,7 @@ assert.deepEqual(
 // 写成了 {"compactWindow":600000,"compactPercent":82.76}(没有来源标记)。重读、接管、接力导出
 // 都得跟空列一样走证据判定,而不是照单全收。
 const preFixWrite = JSON.stringify({ compactWindow: 600_000, compactPercent: 82.76 });
-const legacyWrongRow = { ...legacyShadowed, launchCompact: preFixWrite, contextCompact: preFixWrite };
+const legacyWrongRow = { ...legacyShadowed, agentType: "claude", launchCompact: preFixWrite, contextCompact: preFixWrite };
 assert.deepEqual(
   sessionContext({ contextUsed: 143_746, contextWindow: 200_000, contextWindowEstimated: false, ...legacyWrongRow }),
   { used: 143_746, window: 200_000, windowEstimated: false, compactUnknown: true },
@@ -301,22 +302,48 @@ assert.deepEqual(
 );
 assert.deepEqual(sessionLaunchCompact(legacyWrongRow), { compactUnknown: true }, "接管同一道判定");
 assert.deepEqual(sessionContextCompact(legacyWrongRow), { compactUnknown: true }, "接力导出读的也是这一道");
-assert.equal(
-  sessionContextCompact({ ...legacyWrongRow, commandLine: frozenCommand }).compactWindow,
-  600_000,
-  "同样没标记、但命令行证明只有 ash 那份 --settings:照旧采信",
+// 第 6 轮:水位这一侧压根不看起跑元数据。升级前按 600k/80% 跑出的水位,续跑改成 100k/50% 后
+// resume_args / command_line / launch_compact 全换了新的,而水位要等新进程报上来才换 —— 这时拿它们
+// 解释旧水位就是张冠李戴。命令行「恰好一份 --settings」只证明新进程没被盖,证明不了它是旧水位那一轮。
+const nextArgs = `--settings '{"autoCompactEnabled":true,"env":{"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"100000",`
+  + `"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"62.5"}}'`;
+const resumedBeforeNewWater = {
+  agentType: "claude",
+  contextCompact: JSON.stringify({ compactWindow: 600_000, compactPercent: 82.76 }),
+  launchCompact: serializeCompactSnapshot(sessionCompactSnapshot(nextArgs)),
+  resumeArgs: nextArgs,
+  commandLine: frozenCommand,
+};
+assert.equal(sessionCompactSnapshot(nextArgs).compactWindow, 100_000, "夹具:续跑确实改写了恢复参数");
+assert.deepEqual(sessionContextCompact(resumedBeforeNewWater), { compactUnknown: true }, "老水位不被续跑的新配置重新解释");
+assert.deepEqual(
+  sessionContextCompact({ ...resumedBeforeNewWater, contextCompact: null }),
+  { compactUnknown: true },
+  "空列的老水位同样不退回起跑元数据",
 );
+assert.deepEqual(
+  sessionContextCompact({ ...resumedBeforeNewWater, resumeArgs: null, launchCompact: serializeCompactSnapshot({}) }),
+  { compactUnknown: true },
+  "续跑取消了压缩窗口也一样:不拿「没配」去解释上一轮",
+);
+assert.deepEqual(
+  sessionContextCompact({ agentType: "codex", contextCompact: null }),
+  {},
+  "别的 CLI 从来没有 ash 注入的压缩配置,老水位没有可说的",
+);
+// 接管那一侧读的是当前进程,用当前进程的起跑元数据天经地义,两侧不共用退路。
+assert.equal(sessionLaunchCompact(resumedBeforeNewWater).compactWindow, 100_000, "接管仍按当前进程起跑时那份");
 assert.deepEqual(sessionContextCompact({ ...legacyWrongRow, contextCompact: "{坏" }), { compactUnknown: true }, "解不开的文本也证明不了");
 // 新写入带标记,原样读回;接力把这份文本带过去,对端照样认。
 const marked = serializeCompactSnapshot({ compactWindow: 600_000, compactPercent: 82.76 });
 assert.deepEqual(parseStoredCompactSnapshot(marked), { compactWindow: 600_000, compactPercent: 82.76 });
 assert.deepEqual(
-  sessionContextCompact({ contextCompact: marked, resumeArgs: null, commandLine: null }),
+  sessionContextCompact({ agentType: "claude", contextCompact: marked }),
   { compactWindow: 600_000, compactPercent: 82.76 },
   "带标记的快照不依赖本机的 resume_args/命令行(接力的接收端两样都没有)",
 );
 assert.deepEqual(
-  sessionContextCompact({ contextCompact: serializeCompactSnapshot(UNKNOWN_COMPACT_SNAPSHOT), resumeArgs: frozenArgs, commandLine: frozenCommand }),
+  sessionContextCompact({ agentType: "claude", contextCompact: serializeCompactSnapshot(UNKNOWN_COMPACT_SNAPSHOT) }),
   { compactUnknown: true },
   "带标记的「不知道」不会被老行判定翻回确定值",
 );
