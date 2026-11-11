@@ -47,20 +47,8 @@ export interface CliConfigOverride {
 export interface CliHostEnv {
   /** `CLAUDE_CODE_MAX_OUTPUT_TOKENS`;没设 = null(CLI 用模型自己的上限)。 */
   maxOutputTokens: number | null;
-  /**
-   * 用户/项目 settings 里写的 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`(env 原值,占有效窗口);没写 =
-   * null/缺省。profile 只填窗口、百分比留空时 CLI 继承的就是它,不是 claude 的默认触发点。
-   * **只用于换算**:ash 不把它注入 CLI,用户自己的配置由 CLI 自己读(按起跑那次的配置目录)。
-   */
-  compactPercent?: number | null;
   /** 企业策略配置(managed-settings.json)碰过任一压缩输入:它压在 ash 的 `--settings` 之上。 */
   managedCompaction?: boolean;
-}
-
-/** profile 没填百分比时 CLI 会继承的那个(env 原值);没有就是 null。 */
-function inheritedCompactPercent(host: CliHostEnv): number | null {
-  const value = host.compactPercent;
-  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 100 ? value : null;
 }
 
 export const NO_CLI_HOST_ENV: Readonly<CliHostEnv> = Object.freeze({ maxOutputTokens: null });
@@ -173,13 +161,10 @@ export function claudeCompactionPlan(
     : null;
   const declaredEffective = declared - reserve;
   if (percent === null || declaredEffective <= 0 || effective <= 0) {
-    // 没填百分比 ≠ 没有百分比:下层 settings 里写过的那个照样进 CLI 的算式(审查 SaouXWB_jEuw F1)。
-    const inherited = percent === null ? inheritedCompactPercent(host) : null;
-    return {
-      window, clampedFrom, percent: null, envPercent: inherited,
-      trigger: inherited === null ? Math.max(0, floor) : claudeCompactTrigger(window, inherited, host.maxOutputTokens),
-      capped: false,
-    };
+    // 没填百分比时这里按 claude 的默认算;CLI 实际可能从用户/项目 settings 继承一个百分比,
+    // 那件事只有起跑那一刻按真实 cwd 与配置目录判得准(server cli-env.ts claudeLaunchCompact),
+    // 预览侧不承诺这个数,见 claudeCompactionPreview。
+    return { window, clampedFrom, percent: null, envPercent: null, trigger: Math.max(0, floor), capped: false };
   }
   const wanted = Math.floor((declared * percent) / 100);
   // claude 只认 0 < pct ≤ 100;换算后超过 100 说明用户想压得比它的下限还晚,
@@ -487,41 +472,74 @@ export function cliConfigOverrideEnvPrefix(
 
 const fmtTokens = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
 
+export interface ClaudeCompactionPreview {
+  plan: ClaudeCompactionPlan;
+  /** 设置页敢承诺的触发点;判不出是 null,原因在 unknownReason。 */
+  trigger: number | null;
+  unknownReason: string | null;
+}
+
+/**
+ * 设置页 / 会话「压缩设置」预览的**唯一**入口:这组覆盖项在多少 token 压,以及判不出时为什么。
+ *
+ * 预览跟起跑不在同一个位置:它没有那次起跑的 cwd(项目层配置)、拿到的只是 ash 这台机器上用户级
+ * 的 claude 配置,还可能压根没读到。所以它只承诺**只靠覆盖项本身就定得下来**的触发点,其余一律
+ * 判不出、说明原因 —— 不拿「读到了用户层」冒充「这次会继承它」,也不拿「没读到」冒充「没配」
+ * (审查 rGyEqSY4VO6F F1)。起跑时的真值由 server cli-env.ts claudeLaunchCompact 按真实输入判:
+ *   · host 为 null:这台机器的 CLI 环境(输出预留、企业策略)还没读到或读取失败;
+ *   · 额外参数筛了配置来源、企业策略层碰过压缩:claudeCompactionUnprovable;
+ *   · 百分比留空:CLI 会从用户/项目 settings 继承百分比(都没写才是默认),预览侧没有项目上下文。
+ * 显式填了百分比时触发点只差输出预留一项,按用户级配置估算,项目层另配了以会话里显示的为准。
+ */
+export function claudeCompactionPreview(
+  values: Record<string, number>,
+  host: CliHostEnv | null,
+  modelWindow: number | null = null,
+  extraArgs: readonly string[] = [],
+): ClaudeCompactionPreview | null {
+  const plan = claudeCompactionPlan(values, host ?? NO_CLI_HOST_ENV, modelWindow);
+  if (!plan) return null;
+  const unknownReason = host === null
+    ? "还没读到这台机器上的 claude 配置"
+    : claudeCompactionUnprovable(extraArgs, host)
+      ?? (plan.percent === null
+        ? "百分比留空时 claude 会沿用用户或项目 settings 里写的百分比(都没写才是默认的窗口 − 33k)"
+        : null);
+  return { plan, trigger: unknownReason ? null : plan.trigger, unknownReason };
+}
+
 /**
  * 把「这几个数合起来会导致什么」翻译成人话,前端直接显示。
  * 存在的理由:这一档配置的值和它的效果之间隔着一层 CLI 内部算法,只显示用户填的
  * 数等于什么都没说 —— 得把算出来的触发水位摆在旁边,他才能判断填得对不对。
+ * 敢不敢写触发点由 claudeCompactionPreview 定,这里不另判。
  */
 export function cliConfigOverrideHints(
   type: AgentType | string,
   values: Record<string, number> | null | undefined,
-  host: CliHostEnv = NO_CLI_HOST_ENV,
+  // null = 还没读到 / 读取失败(useCliHostEnv),跟「读到了、没配」分开。
+  host: CliHostEnv | null = NO_CLI_HOST_ENV,
   modelWindow: number | null = null,
-  // 这个 profile 的额外参数:改了 CLI 读哪些配置时,触发点就不再承诺(claudeCompactionUnprovable)。
   extraArgs: readonly string[] = [],
 ): string[] {
   if (type !== "claude" || !values) return [];
-  const plan = claudeCompactionPlan(values, host, modelWindow);
-  if (!plan) {
+  const preview = claudeCompactionPreview(values, host, modelWindow, extraArgs);
+  if (!preview) {
     return values.autoCompactPercent !== undefined
       ? ["只填百分比不起作用:窗口留空时 claude 会整段跳过自动压缩。"]
       : [];
   }
-  const unprovable = claudeCompactionUnprovable(extraArgs, host);
-  if (unprovable) {
-    return [`${unprovable},从各层配置继承来的那部分 ash 判不全,这里不给触发点;会话里的上下文胶囊同样会写「判不出」。`];
-  }
+  const { plan, trigger, unknownReason } = preview;
   const clamped = plan.clampedFrom !== null
     ? `模型窗口只有 ${fmtTokens(plan.window)},填的 ${fmtTokens(plan.clampedFrom)} 会被 CLI 截掉;`
     : "";
-  const at = `${clamped}上下文涨到 ~${fmtTokens(plan.trigger)} 时压缩(窗口 ${fmtTokens(plan.window)} 的 ${Math.round((plan.trigger / plan.window) * 100)}%)。`;
   // 摁住总开关这件事得说出来:它盖的是用户自己配置文件里的开关,不说明白就等于
   // 「悄悄改了别人的配置」;而不摁的话上面这个触发点根本不会发生(见 JI())。
   const forced = [`这次调用里 ash 会强制打开自动压缩(顶掉 settings.json 的 autoCompactEnabled:false 与 ${CLAUDE_AUTO_COMPACT_KILL_SWITCHES.join(" / ")}),否则窗口和百分比填对了也一次都不会压。`];
-  if (plan.percent === null && plan.envPercent !== null) {
-    return [`${at}百分比留空,沿用 claude 自己配置里继承来的 ${plan.envPercent}%(占窗口扣掉输出预留后的部分);想改就填下面的百分比。`, ...forced];
+  if (trigger === null) {
+    return [`${clamped}${unknownReason},这里判不出确切的触发点;起跑后以会话里上下文胶囊显示的为准。`, ...forced];
   }
-  if (plan.percent === null) return [`${at}这是 claude 的默认触发点;想更早压就填下面的百分比。`, ...forced];
+  const at = `${clamped}上下文涨到 ~${fmtTokens(trigger)} 时压缩(窗口 ${fmtTokens(plan.window)} 的 ${Math.round((trigger / plan.window) * 100)}%;按这台机器用户级的 claude 配置估算,项目里另配了输出预留的以会话里显示的为准)。`;
   if (plan.capped) return [`${at}填的 ${plan.percent}% 比 claude 自己的下限还晚,已经按下限算 —— 想更早压请往小了填。`, ...forced];
   return [at, ...forced];
 }

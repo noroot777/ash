@@ -25,7 +25,7 @@ requireTmpDb("test-context-1m-notice");
 
 const { claudeModelWindow, clampedCompactWindow, CLAUDE_1M_WINDOW, CLAUDE_STANDARD_WINDOW } =
   await import("@ash/shared/context-1m");
-const { claudeCompactionPlan, claudeCompactionUnprovable, cliConfigOverrideEnv, cliConfigOverrideHints } = await import("@ash/shared/cli-overrides");
+const { claudeCompactionPlan, claudeCompactionPreview, claudeCompactionUnprovable, cliConfigOverrideEnv, cliConfigOverrideHints } = await import("@ash/shared/cli-overrides");
 const { effectiveContextWindow, contextRatio, contextCompactTrigger, compactSnapshotFromEnv, parseStoredCompactSnapshot, serializeCompactSnapshot, UNKNOWN_COMPACT_SNAPSHOT } =
   await import("@ash/shared/usage");
 const { launchFields, sessionContext, sessionCompactSnapshot, sessionContextCompact, sessionLaunchCompact, setSessionContext } =
@@ -163,7 +163,7 @@ await ensureSchema();
 
 // F1(第 2 轮):快照由产出水位的那一层带上。用一个假的 claude 可执行文件跑真实的执行器,
 // 吐一帧 assistant + 一帧 result(原形会话的水位与自报窗口)。
-const { mkdtempSync, writeFileSync, chmodSync } = await import("node:fs");
+const { mkdtempSync, mkdirSync, writeFileSync, chmodSync } = await import("node:fs");
 const { tmpdir } = await import("node:os");
 const { join } = await import("node:path");
 const { spawn } = await import("node:child_process");
@@ -379,13 +379,34 @@ assert.ok(
 );
 const inheritedContext = await contextOf(inheritedRun.events);
 assert.equal(contextCompactTrigger(inheritedContext), 90_000, "按继承的 50% 算,不是默认的 ~167k");
-const inheritedPlan = claudeCompactionPlan({ autoCompactWindow: 600_000 }, cliHostEnv(fixtureDir), CLAUDE_STANDARD_WINDOW);
-assert.equal(inheritedPlan?.trigger, 90_000, "设置页预览同一个数");
-assert.equal(inheritedPlan?.envPercent, 50);
+// 预览不承诺继承来的百分比(审查 rGyEqSY4VO6F F1):设置页那条只读接口没有项目上下文,读得到用户层
+// 50% 也说不准这次起跑继承的是不是它 —— 项目里另写了 20% 的话,真实触发点是 36k。
+const percentProjectDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-proj-"));
+mkdirSync(join(percentProjectDir, ".git"));
+mkdirSync(join(percentProjectDir, ".claude"));
+writeFileSync(join(percentProjectDir, ".claude", "settings.local.json"), JSON.stringify({ env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "20" } }));
+const projectRun = windowOnly.run({ prompt: "hi", cwd: percentProjectDir });
+assert.deepEqual(projectRun.launchCompact, { compactWindow: 600_000, compactPercent: 20 }, "起跑按真实 cwd 读到项目层的 20%");
+assert.equal(contextCompactTrigger(await contextOf(projectRun.events)), 36_000);
+rmSync(percentProjectDir, { recursive: true, force: true });
+const endpointHost = cliHostEnv(undefined, inheritedConfigDir); // /agents/cli-env 的同一种调法
+assert.ok(!("compactPercent" in endpointHost), "只读接口不再报百分比");
+const blankPreview = claudeCompactionPreview({ autoCompactWindow: 600_000 }, endpointHost, CLAUDE_STANDARD_WINDOW);
+assert.equal(blankPreview?.trigger, null, "百分比留空:预览判不出,不拿用户层的 50% 冒充这次起跑会继承的值");
+const blankHints = cliConfigOverrideHints("claude", { autoCompactWindow: 600_000 }, endpointHost, CLAUDE_STANDARD_WINDOW);
+assert.ok(blankHints.every((hint) => !hint.includes("~90k") && !hint.includes("50%") && !hint.includes("~167k")), "留空时不写任何确定触发点");
+assert.ok(blankHints.some((hint) => hint.includes("百分比留空") && hint.includes("会话")), "说清为什么判不出、去哪看真值");
+// 没读到(取数中 / 503)跟「读到了、没配」分开:不拿 NO_CLI_HOST_ENV 顶上报一个按 20k 预留算的数。
+const explicit = { autoCompactWindow: 600_000, autoCompactPercent: 80 };
+assert.equal(claudeCompactionPreview(explicit, null, CLAUDE_STANDARD_WINDOW)?.trigger, null, "host 没读到:显式百分比也不承诺");
+const unloadedHints = cliConfigOverrideHints("claude", explicit, null, CLAUDE_STANDARD_WINDOW);
+assert.ok(unloadedHints.some((hint) => hint.includes("还没读到")) && unloadedHints.every((hint) => !/~\d/.test(hint)), "没读到就如实说没读到");
+// 显式百分比 + 读到了:给估算,注明只按用户级配置算。
+const explicitPreview = claudeCompactionPreview(explicit, endpointHost, CLAUDE_STANDARD_WINDOW);
+assert.equal(typeof explicitPreview?.trigger, "number", "显式百分比照常给估算");
 assert.ok(
-  cliConfigOverrideHints("claude", { autoCompactWindow: 600_000 }, cliHostEnv(fixtureDir), CLAUDE_STANDARD_WINDOW)
-    .some((hint) => hint.includes("~90k") && hint.includes("50%")),
-  "预览文案说出继承来的百分比",
+  cliConfigOverrideHints("claude", explicit, endpointHost, CLAUDE_STANDARD_WINDOW).some((hint) => /~\d+k 时压缩/.test(hint) && hint.includes("用户级")),
+  "估算注明依据",
 );
 // 多人隔离档:这次起跑带着用户自己的配置目录(opts.env.CLAUDE_CONFIG_DIR),宿主进程那份是 50%、
 // 用户那份是 20%、输出预留 10k。各层必须按起跑那份目录读(审查 SaouXWB_jEuw 第 2 轮 F1):快照记 20%,
@@ -435,8 +456,7 @@ assert.deepEqual(
 const userResident = windowOnly.openResident({ prompt: "hi", cwd: fixtureDir, env: { CLAUDE_CONFIG_DIR: userConfigDir } });
 assert.deepEqual(userResident.launchCompact, userRun.launchCompact, "常驻起跑同一份解析");
 userResident.close();
-assert.equal(cliHostEnv(fixtureDir, userConfigDir).compactPercent, 20, "设置页那条只读接口按同一目录读");
-assert.equal(cliHostEnv(fixtureDir).compactPercent, 50, "不给目录才是 ash 进程自己那份");
+assert.equal(cliHostEnv(fixtureDir, userConfigDir).maxOutputTokens, 10_000, "设置页那条只读接口按同一目录读");
 rmSync(userConfigDir, { recursive: true, force: true });
 // 预览与起跑快照共用同一个可信度判据(审查 7pDLIAokZRHH 第 2 轮 F1):快照判「不知道」的那几种,
 // 设置页与会话压缩设置的提示也不许再承诺「继承 50%、约 90k」。
@@ -461,7 +481,6 @@ process.env.CLAUDE_CONFIG_DIR = emptyConfigDir;
 assert.deepEqual(unconfigured.run({ prompt: "hi", cwd: fixtureDir }).launchCompact, {}, "各层都没碰过压缩:跟随 CLI,没有可说的");
 // 项目层同样算一层下层配置。
 const projectDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-proj-"));
-const { mkdirSync } = await import("node:fs");
 mkdirSync(join(projectDir, ".claude"));
 writeFileSync(join(projectDir, ".claude", "settings.json"), JSON.stringify({ autoCompactWindow: 300_000 }));
 assert.deepEqual(unconfigured.run({ prompt: "hi", cwd: projectDir }).launchCompact, { compactUnknown: true }, "项目层顶层配了窗口");

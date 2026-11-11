@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { WarningCircle } from "@phosphor-icons/react";
 import type { ContextUsage, LlmProvider, Session } from "@ash/shared";
-import { type CliHostEnv, claudeCompactionPlan, claudeCompactionUnprovable } from "@ash/shared/cli-overrides";
+import { type CliHostEnv, claudeCompactionPreview } from "@ash/shared/cli-overrides";
 import { type ClaudeModelWindow, clampedCompactWindow, claudeModelWindow } from "@ash/shared/context-1m";
 import { contextCompactTrigger } from "@ash/shared/usage";
 import { api } from "../lib/api.ts";
@@ -35,22 +35,21 @@ export function Context1mNotice({
   provider: LlmProvider | null | undefined;
   extraArgs: readonly string[];
   overrides: Record<string, number>;
-  /** 跟同一弹层里其它预览共用的那份(见 useCliHostEnv),不自己另取。 */
-  hostEnv: CliHostEnv;
+  /** 跟同一弹层里其它预览共用的那份(见 useCliHostEnv,null = 没读到),不自己另取。 */
+  hostEnv: CliHostEnv | null;
   onEnabled: (provider: LlmProvider) => void;
 }) {
   const next = claudeModelWindow(model, provider, extraArgs);
   const clamp = next ? clampedCompactWindow(overrides.autoCompactWindow, next.window) : null;
   if (!next || !clamp) return null;
-  // 窗口被截这件事判得准(配的窗口 vs 模型窗口);触发点要靠各层继承,判不全就不承诺,跟起跑快照同一个判据。
-  const unprovable = claudeCompactionUnprovable(extraArgs, hostEnv);
-  const trigger = unprovable ? null : claudeCompactionPlan(overrides, hostEnv, next.window)?.trigger;
+  // 窗口被截这件事判得准(配的窗口 vs 模型窗口);触发点跟压缩设置的预览文案出自同一个入口,判不出就不写。
+  const trigger = claudeCompactionPreview(overrides, hostEnv, next.window, extraArgs)?.trigger ?? null;
   return (
     <div className="context-1m-notice" role="status">
       <WarningCircle size={13} weight="fill" aria-hidden="true" />
       <p>
         {next.model} 没开 1M：{fmtK(clamp.configured)} 窗口会被截到 {fmtK(clamp.effective)}
-        {typeof trigger === "number" ? `，约 ${fmtK(trigger)} 就压缩` : ""}。
+        {trigger !== null ? `，约 ${fmtK(trigger)} 就压缩` : ""}。
         <NextLaunchHint next={next} />
       </p>
       {next.provider && <EnableButton model={next.model} provider={next.provider} onEnabled={onEnabled} />}

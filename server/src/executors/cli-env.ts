@@ -6,7 +6,7 @@ import {
   type CliHostEnv,
 } from "@ash/shared/cli-overrides";
 import { type CompactSnapshot, compactSnapshotFromEnv, UNKNOWN_COMPACT_SNAPSHOT } from "@ash/shared/usage";
-import { type ClaudeConfigDir, claudeCompactLayers, claudeMaxOutputTokens } from "./claude-settings.js";
+import { type ClaudeCompactFacts, type ClaudeConfigDir, claudeCompactFacts } from "./claude-settings.js";
 
 // ash 起 CLI 时,那个子进程会看到的环境事实。**只读**,不是配置项 —— 它由 ash
 // 自己的启动环境**和用户自己的 claude 配置文件**共同决定。
@@ -22,12 +22,12 @@ import { type ClaudeConfigDir, claudeCompactLayers, claudeMaxOutputTokens } from
 // `configDir` = 这次起跑子进程的 `CLAUDE_CONFIG_DIR`(见 claude-settings.ts ClaudeConfigDir):
 // 多人隔离档下每个用户带着自己的配置目录起跑,按宿主那份解,换算出来的就是宿主的数。
 export function cliHostEnv(cwd?: string, configDir?: ClaudeConfigDir): CliHostEnv {
-  const layers = claudeCompactLayers(cwd, configDir);
-  return {
-    maxOutputTokens: claudeMaxOutputTokens(cwd, configDir),
-    compactPercent: layers.inheritedPercent,
-    managedCompaction: layers.managedTouches,
-  };
+  return hostEnvOf(claudeCompactFacts(cwd, configDir));
+}
+
+/** 预览只拿得到这两项;百分比继承只有起跑那一刻按真实 cwd 判得准(shared claudeCompactionPreview)。 */
+export function hostEnvOf(facts: ClaudeCompactFacts): CliHostEnv {
+  return { maxOutputTokens: facts.maxOutputTokens, managedCompaction: facts.managedTouches };
 }
 
 /**
@@ -35,7 +35,7 @@ export function cliHostEnv(cwd?: string, configDir?: ClaudeConfigDir): CliHostEn
  *
  * 快照必须覆盖 CLI 会消费的**每一个**压缩输入,不能只看 ash 注入了什么(审查 SaouXWB_jEuw F1),
  * 而且各层配置要按**这次起跑的配置目录**读(同一轮 F1 第 2 轮),跟 env()/settingsPayload() 用
- * 同一份 cliHostEnv(cwd, configDir):
+ * 同一次读取的结果(claudeCompactFacts,审查 rGyEqSY4VO6F N1):
  *   · 配了窗口:ash 的 `--settings` 压过项目/用户各层;留空的百分比由 CLI 自己从下层继承,快照把
  *     同一个继承值记下来(只记,不往 CLI 里钉 —— 钉了就是替用户改配置);
  *   · 没配窗口:ash 一个字都不注入,项目/用户层要是碰过任一压缩输入,CLI 就按它们走 —— 判不全,标「不知道」;
@@ -46,17 +46,16 @@ export function cliHostEnv(cwd?: string, configDir?: ClaudeConfigDir): CliHostEn
  */
 export function claudeLaunchCompact(
   configOverrides: Record<string, number> | null | undefined,
-  cwd?: string,
-  configDir?: ClaudeConfigDir,
+  // 这次起跑读到的那一份(claudeCompactFacts):注入 settings/env 用的也是它,别在这里另读。
+  facts: ClaudeCompactFacts,
   extraArgs: readonly string[] = [],
 ): CompactSnapshot {
-  const host = cliHostEnv(cwd, configDir);
+  const host = hostEnvOf(facts);
   if (cliConfigOverrideConflict("claude", extraArgs) || claudeCompactionUnprovable(extraArgs, host)) return UNKNOWN_COMPACT_SNAPSHOT;
-  const layers = claudeCompactLayers(cwd, configDir);
   const snapshot = compactSnapshotFromEnv(cliConfigOverrideEnv("claude", configOverrides, host));
-  if (snapshot.compactWindow === undefined) return layers.lowerTouches ? UNKNOWN_COMPACT_SNAPSHOT : snapshot;
-  if (snapshot.compactPercent === undefined && layers.inheritedPercent !== null) {
-    return { ...snapshot, compactPercent: layers.inheritedPercent };
+  if (snapshot.compactWindow === undefined) return facts.lowerTouches ? UNKNOWN_COMPACT_SNAPSHOT : snapshot;
+  if (snapshot.compactPercent === undefined && facts.inheritedPercent !== null) {
+    return { ...snapshot, compactPercent: facts.inheritedPercent };
   }
   return snapshot;
 }

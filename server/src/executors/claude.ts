@@ -4,13 +4,10 @@ import { readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
-import {
-  cliConfigOverrideEnvPatch,
-  cliConfigOverrideSettings,
-} from "@ash/shared/cli-overrides";
+import { type CliHostEnv, cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@ash/shared/cli-overrides";
 import type { CompactSnapshot } from "@ash/shared/usage";
-import { claudeLaunchCompact, cliHostEnv } from "./cli-env.js";
-import { type ClaudeConfigDir, claudeConfigDirOf } from "./claude-settings.js";
+import { claudeLaunchCompact, cliHostEnv, hostEnvOf } from "./cli-env.js";
+import { type ClaudeCompactFacts, claudeCompactFacts, claudeConfigDirOf } from "./claude-settings.js";
 import type { AgentExecutor, ConsumedOutput, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import type { MarkdownImageAccounting } from "./markdown-image-stream.js";
 import type { StallVerdict } from "../turn-stall-verdict.js";
@@ -137,12 +134,12 @@ export class ClaudeExecutor implements AgentExecutor {
     // 进程真能活过这一回合时内置 Monitor 本来就好用(claude-monitor-hook.ts 文件头),
     // 而恢复命令是给人手跑的(见 resumeFields)。
     omitMonitorHook = false,
-    // 这次起跑子进程的配置目录(claude-settings.ts ClaudeConfigDir):各层配置按它读。
-    configDir?: ClaudeConfigDir,
+    // 起跑时传这次读到的那份(launchFacts);恢复命令没有起跑,按会话 cwd 现读。
+    host: CliHostEnv = cliHostEnv(cwd),
   ): Record<string, unknown> | null {
     const settings = {
       ...(this.speed === "fast" ? { fastMode: true } : {}),
-      ...cliConfigOverrideSettings(this.type, this.configOverrides, cliHostEnv(cwd, configDir)),
+      ...cliConfigOverrideSettings(this.type, this.configOverrides, host),
       ...monitorRedirectHook(omitMonitorHook),
     } as Record<string, unknown>;
     const relayBaseUrl = this.relayBaseUrl(model);
@@ -177,8 +174,8 @@ export class ClaudeExecutor implements AgentExecutor {
   // shared/src/cli-overrides.ts,并原样显示在执行器设置里。
   // 返回值里允许出现 `undefined`:那是「把这个变量从子进程里删掉」,不是「没配」
   // (见 cliConfigOverrideEnvPatch)。所以这里不能再按 key 数量决定返不返回。
-  private env(cwd?: string, model?: string, configDir?: ClaudeConfigDir): Record<string, string | undefined> {
-    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv(cwd, configDir));
+  private env(host: CliHostEnv, model?: string): Record<string, string | undefined> {
+    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, host);
     if (this.relay) {
       env.ANTHROPIC_BASE_URL = this.relayBaseUrl(model);
       env.ANTHROPIC_AUTH_TOKEN = this.relay.apiKey;
@@ -188,8 +185,8 @@ export class ClaudeExecutor implements AgentExecutor {
     return env;
   }
 
-  private runtimeSettings(cwd: string, model?: string, crossTurn = false, configDir?: ClaudeConfigDir): RuntimeSettings {
-    const settings = this.settingsPayload(cwd, model, this.relay?.apiKey, crossTurn, configDir);
+  private runtimeSettings(cwd: string, host: CliHostEnv, model?: string, crossTurn = false): RuntimeSettings {
+    const settings = this.settingsPayload(cwd, model, this.relay?.apiKey, crossTurn, host);
     if (!settings) return { arg: null, cleanup: () => {} };
     if (!this.relay) return { arg: JSON.stringify(settings), cleanup: () => {} };
     const path = join(tmpdir(), `ash-claude-settings-${process.pid}-${randomUUID()}.json`);
@@ -209,29 +206,37 @@ export class ClaudeExecutor implements AgentExecutor {
    * 这次起跑 CLI **最终生效**的压缩配置,解成启动快照带在每条水位上、随 commandLine 落库。
    * 判定全在 claudeLaunchCompact(cli-env.ts):各层继承、企业策略层,以及额外参数改了 CLI 读哪些
    * 配置的情形。交给它的额外参数跟 buildArgs 拼进命令的是同一份(profile 的 + 本次调用的)。
-   * **只在起跑时调**:接管旧进程用会话存下的那份(attach 的 opts.compact)。
+   * **只在起跑时调**:接管旧进程用会话存下的那份(attach 的 opts.compact)。facts 跟注入 settings/env
+   * 的是同一次读取(launchFacts),快照记的就是真注入的那份。
    */
-  private launchCompactSnapshot(opts: RunOpts): CompactSnapshot {
-    return claudeLaunchCompact(this.configOverrides, opts.cwd, claudeConfigDirOf(opts.env), [...this.extraArgs, ...(opts.extraArgs ?? [])]);
+  private launchCompactSnapshot(opts: RunOpts, facts: ClaudeCompactFacts): CompactSnapshot {
+    return claudeLaunchCompact(this.configOverrides, facts, [...this.extraArgs, ...(opts.extraArgs ?? [])]);
+  }
+
+  /** 这次起跑的配置事实,按子进程自己的 CLAUDE_CONFIG_DIR 读一次,三条起跑路径各调一次。 */
+  private launchFacts(opts: RunOpts): { facts: ClaudeCompactFacts; host: CliHostEnv } {
+    const facts = claudeCompactFacts(opts.cwd, claudeConfigDirOf(opts.env));
+    return { facts, host: hostEnvOf(facts) };
   }
 
   run(opts: RunOpts): RunHandle {
     const sessionId = opts.sessionId ?? randomUUID();
     const model = opts.model ?? this.model;
+    const { facts, host } = this.launchFacts(opts);
     const settings = this.startupError
       ? { arg: null, cleanup: () => {} }
-      : this.runtimeSettings(opts.cwd, model, false, claudeConfigDirOf(opts.env));
+      : this.runtimeSettings(opts.cwd, host, model, false);
     const args = this.buildArgs(opts, sessionId, false, model, settings.arg);
     const goal = claudeGoalInvocation(opts);
     args.push(...goal.args);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>${goal.marker}`);
     const child = this.startupError || settings.error
       ? failedChild(this.startupError ?? settings.error!)
-      : spawnForRun(opts.cwd, this.bin, args, goal.input, { ...this.env(opts.cwd, model, claudeConfigDirOf(opts.env)), ...opts.env }, opts.detach);
+      : spawnForRun(opts.cwd, this.bin, args, goal.input, { ...this.env(host, model), ...opts.env }, opts.detach);
     child.on("close", goal.cleanup);
     child.on("close", settings.cleanup);
     let goalStarted = false;
-    const launchCompact = this.launchCompactSnapshot(opts);
+    const launchCompact = this.launchCompactSnapshot(opts, facts);
     const events = cleanupWithEvents(parseClaudeStream(child, undefined, this.bin, this.type, launchCompact, settings.cleanup, undefined, sessionId, opts.cwd, opts.images), settings.cleanup);
     return {
       cliCommand: opts.cliCommand,
@@ -258,10 +263,11 @@ export class ClaudeExecutor implements AgentExecutor {
     const model = opts.model ?? this.model;
     // **`--input-format stream-json` ≠ 跨回合**：这一路的进程照样在本回合的 `result`
     // 之后就被收台（见下面的 `singleRunFromResident`），所以 Monitor 改道必须照挂 ——
-    // 第三个参数给 `false`，而 `buildArgs` 那个 `true` 只是在要 stdin 的那个参数。
+    // crossTurn 给 `false`，而 `buildArgs` 那个 `true` 只是在要 stdin 的那个参数。
+    const { facts, host } = this.launchFacts(opts);
     const settings = this.startupError
       ? { arg: null, cleanup: () => {} }
-      : this.runtimeSettings(opts.cwd, model, false, claudeConfigDirOf(opts.env));
+      : this.runtimeSettings(opts.cwd, host, model, false);
     const args = this.buildArgs(opts, sessionId, true, model, settings.arg);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
     const child = this.startupError || settings.error
@@ -271,13 +277,13 @@ export class ClaudeExecutor implements AgentExecutor {
           this.bin,
           args,
           userLine(opts.prompt),
-          { ...this.env(opts.cwd, model, claudeConfigDirOf(opts.env)), ...opts.env },
+          { ...this.env(host, model), ...opts.env },
           opts.detach,
         );
     child.on("close", settings.cleanup);
     const detached = detachedInfo(child);
     return singleRunFromResident(
-      this.residentFromChild(child, sessionId, commandLine, this.launchCompactSnapshot(opts), settings.cleanup, opts.cwd, opts.images, true),
+      this.residentFromChild(child, sessionId, commandLine, this.launchCompactSnapshot(opts, facts), settings.cleanup, opts.cwd, opts.images, true),
       detached,
     );
   }
@@ -319,18 +325,19 @@ export class ClaudeExecutor implements AgentExecutor {
   openResident(opts: RunOpts): ResidentHandle {
     const sessionId = opts.sessionId ?? randomUUID();
     const model = opts.model ?? this.model;
+    const { facts, host } = this.launchFacts(opts);
     const settings = this.startupError
       ? { arg: null, cleanup: () => {} }
-      : this.runtimeSettings(opts.cwd, model, true, claudeConfigDirOf(opts.env));
+      : this.runtimeSettings(opts.cwd, host, model, true);
     const args = this.buildArgs(opts, sessionId, true, model, settings.arg);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
     const child = this.startupError || settings.error
       ? failedChild(this.startupError ?? settings.error!)
-      : spawnAgent(opts.cwd, this.bin, args, userLine(opts.prompt), { ...this.env(opts.cwd, model, claudeConfigDirOf(opts.env)), ...opts.env }, {
+      : spawnAgent(opts.cwd, this.bin, args, userLine(opts.prompt), { ...this.env(host, model), ...opts.env }, {
           keepStdin: true,
         });
     child.on("close", settings.cleanup);
-    return this.residentFromChild(child, sessionId, commandLine, this.launchCompactSnapshot(opts), settings.cleanup, opts.cwd, opts.images);
+    return this.residentFromChild(child, sessionId, commandLine, this.launchCompactSnapshot(opts, facts), settings.cleanup, opts.cwd, opts.images);
   }
 
   private residentFromChild(

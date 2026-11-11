@@ -48,9 +48,11 @@ function readJsonFile(path: string): Record<string, unknown> | null {
   }
 }
 
+type Settings = Record<string, unknown> | null;
+
 /** 一层 settings 里 `env.<name>` 的值(没写过 = undefined)。 */
-function envValue(path: string, name: string): string | undefined {
-  const env = readJsonFile(path)?.env;
+function envValue(settings: Settings, name: string): string | undefined {
+  const env = settings?.env;
   if (!env || typeof env !== "object") return undefined;
   const value = (env as Record<string, unknown>)[name];
   return typeof value === "string" || typeof value === "number" ? String(value) : undefined;
@@ -145,11 +147,18 @@ const COMPACT_ENV_INPUTS = [
 ] as const;
 const COMPACT_SETTING_INPUTS = ["autoCompactEnabled", "autoCompactWindow"] as const;
 
-function touchesCompaction(path: string): boolean {
-  const settings = readJsonFile(path);
+function touchesCompaction(settings: Settings): boolean {
   if (!settings) return false;
   if (COMPACT_SETTING_INPUTS.some((key) => settings[key] !== undefined)) return true;
-  return COMPACT_ENV_INPUTS.some((name) => envValue(path, name) !== undefined);
+  return COMPACT_ENV_INPUTS.some((name) => envValue(settings, name) !== undefined);
+}
+
+/** 本机 claude 起跑时跟自动压缩有关的全部配置事实。字段说明见 claudeCompactFacts。 */
+export interface ClaudeCompactFacts {
+  maxOutputTokens: number | null;
+  managedTouches: boolean;
+  lowerTouches: boolean;
+  inheritedPercent: number | null;
 }
 
 /**
@@ -157,20 +166,21 @@ function touchesCompaction(path: string): boolean {
  * claudeLaunchCompact)。ash 只注入用户在 profile 上填了的项,**留空的项照样从下面这几层
  * 继承** —— 用户 settings.json 里写了 50%、profile 只填窗口,CLI 就按 50% 压(审查 SaouXWB_jEuw F1)。
  *
+ *   maxOutputTokens  CLI 最终会看到的 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`(没有任何一层写过 = null)
  *   managedTouches   企业策略那层碰过任一压缩输入:它压在 `--settings` 之上,ash 注入的数也未必算数
  *   lowerTouches     项目/用户那几层碰过任一压缩输入:ash 没配压缩时,CLI 就按它们走
  *   inheritedPercent 那几层里赢下来的百分比(env 原值,占有效窗口);同名变量在子进程环境里已被
  *                    ash 删掉(cliConfigOverrideEnvPatch),所以不看 process.env
+ *
+ * 每份文件只读一次、四项出自同一次读取:起跑时注入的 settings/env 与启动快照都从这一份来,
+ * 中途有人改配置也不会一边按旧值注入、一边按新值记快照(审查 rGyEqSY4VO6F N1)。
  */
-export function claudeCompactLayers(cwd?: string, configDir?: ClaudeConfigDir): {
-  managedTouches: boolean;
-  lowerTouches: boolean;
-  inheritedPercent: number | null;
-} {
-  const lower = lowerLayers(cwd, configDir);
+export function claudeCompactFacts(cwd?: string, configDir?: ClaudeConfigDir): ClaudeCompactFacts {
+  const managed = readJsonFile(managedSettingsPath());
+  const lower = lowerLayers(cwd, configDir).map(readJsonFile);
   let inheritedPercent: number | null = null;
-  for (const path of lower) {
-    const found = envValue(path, "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE");
+  for (const settings of lower) {
+    const found = envValue(settings, "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE");
     if (found === undefined) continue;
     // 跟 CLI 同一种解码(2.1.283:`s ? parseFloat(s) : undefined`,再只认 0 < pct ≤ 100):
     // "50%"、"50junk" CLI 读成 50,这里也得是 50,否则又是一边按 50% 压、一边按默认报(审查 7pDLIAokZRHH F1)。
@@ -178,8 +188,11 @@ export function claudeCompactLayers(cwd?: string, configDir?: ClaudeConfigDir): 
     inheritedPercent = Number.isFinite(value) && value > 0 && value <= 100 ? value : null;
     break;
   }
+  const maxOutputName = "CLAUDE_CODE_MAX_OUTPUT_TOKENS";
+  const maxOutputRaw = [managed, ...lower].map((settings) => envValue(settings, maxOutputName)).find((v) => v !== undefined);
   return {
-    managedTouches: touchesCompaction(managedSettingsPath()),
+    maxOutputTokens: toPositiveInt(maxOutputRaw ?? process.env[maxOutputName]),
+    managedTouches: touchesCompaction(managed),
     lowerTouches: lower.some(touchesCompaction),
     inheritedPercent,
   };
@@ -190,13 +203,7 @@ export function claudeCompactLayers(cwd?: string, configDir?: ClaudeConfigDir): 
  * 给了 cwd 才读得到项目那几层 —— 设置页那条只读接口没有项目概念,读用户层就够。
  */
 export function claudeMaxOutputTokens(cwd?: string, configDir?: ClaudeConfigDir): number | null {
-  const name = "CLAUDE_CODE_MAX_OUTPUT_TOKENS";
-  const layers = [managedSettingsPath(), ...lowerLayers(cwd, configDir)];
-  for (const path of layers) {
-    const found = envValue(path, name);
-    if (found !== undefined) return toPositiveInt(found);
-  }
-  return toPositiveInt(process.env[name]);
+  return claudeCompactFacts(cwd, configDir).maxOutputTokens;
 }
 
 function toPositiveInt(raw: string | undefined): number | null {
