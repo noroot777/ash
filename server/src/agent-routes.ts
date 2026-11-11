@@ -12,6 +12,8 @@ import { agents, llmProviders } from "./db/schema.js";
 import { id } from "./util.js";
 import { detectKnownClis, detectLocalAgents, registrationBlockReason } from "./detect.js";
 import { cliHostEnv } from "./executors/cli-env.js";
+import { claudeConfigDirOf } from "./executors/claude-settings.js";
+import { runEnvForOwner } from "./auth/run-env.js";
 import { cachedModelEfforts } from "./executors/model-probe.js";
 import { detachTaskRefs } from "./task-refs.js";
 import { actorOf } from "./auth/context.js";
@@ -105,7 +107,12 @@ export function mountAgentRoutes(api: Hono): void {
   // ash 起 CLI 时它会看到的环境事实(只读,不是配置项)。设置页要拿它换算压缩触发点:
   // 有效窗口 = 窗口 − min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, 20000),而那个变量在 server 进程里,
   // 前端算不出来 —— 不报过去的话,页面上写的水位和 CLI 的实际行为会对不上。
-  api.get("/agents/cli-env", (c) => c.json(cliHostEnv()));
+  // 多人隔离档下按**请求者自己**的 CLI 配置目录读(跟他的任务起跑时同一份,auth/run-env.ts),
+  // 宿主那份配置跟他无关。
+  api.get("/agents/cli-env", async (c) => {
+    const runEnv = await runEnvForOwner(actorOf(c).userId, "claude");
+    return c.json(cliHostEnv(undefined, claudeConfigDirOf(runEnv)));
+  });
 
 
   api.post("/agents", async (c) => {

@@ -251,7 +251,7 @@ export async function setSessionContext(sessId: string, context: ContextUsage): 
 /**
  * 从会话固化的 resume_args(ash 自己那份 `--settings`)里读当时注入的那几个 env。
  * **只说明 ash 注入了什么,不说明 CLI 最终用了什么** —— 额外参数里另带的 `--settings` 不在
- * 这里。拿它当启动事实之前必须过 `legacyCompactSnapshot` 那道证据判定。
+ * 这里,CLI 从用户/项目配置里继承的也不在。**不许拿它当启动事实**(见 sessionLaunchCompact)。
  */
 export function sessionCompactSnapshot(resumeArgs: string | null | undefined): CompactSnapshot {
   if (!resumeArgs) return {};
@@ -280,27 +280,19 @@ export function launchFields(handle: { commandLine: string; launchCompact?: Comp
 }
 
 /**
- * 重启接管时,launch_compact 证明不了来源(列为空 = 这一列上线前起的进程;非空但没有来源标记 =
- * 「按最终生效参数判定」上线前写的)那个**正在跑的进程**的退路。只给接管用:resume_args 与
- * command_line 跟这个进程同一笔写下,说的就是它;**不许拿来解释库里的水位** —— 续跑会改写这两列,
- * 而水位要等新进程报上来才换,两者不一定同一轮(第 6 轮审查 F1,见 sessionContextCompact)。
+ * 重启接管时这个旧进程的压缩配置:只认起跑时随 command_line 同一笔落下、带当前版本来源标记的那份。
  *
- * resume_args 只有 ash 那份 `--settings`;它到底生没生效,要看同一笔写下的 command_line 里
- * 有没有别的 `--settings` 排在后面整份盖掉它(claude 只认最后一个,见 cliConfigOverrideConflict)。
- * **恰好一个**才证明 CLI 用的就是 ash 那份;多于一个、或命令行缺失都证明不了,如实标「不知道」,
- * 不拿 ash 的默认值冒充事实。命令行是展示用的拼接串,参数值里碰巧出现这个字样只会让判定偏向
- * 「不知道」,不会反过来编出一个确定值。
+ * 证明不了来源的(这一列上线前起的进程、旧版本口径写下的)**没有退路**:resume_args / command_line
+ * 只记得 ash 注入了什么,记不得 CLI 当时从用户/项目配置里继承了什么(审查 SaouXWB_jEuw F1),拿它们
+ * 拼出来的快照缺项,面板就按默认触发点报一个错数。claude 的老进程如实标「不知道」,下一次起跑就有
+ * 完整快照了;别的 CLI 从来没有 ash 注入的压缩配置,没有可说的。跟水位那一侧同一条判据。
  */
-export function legacyCompactSnapshot(row: Pick<SessionRow, "resumeArgs" | "commandLine">): CompactSnapshot {
-  const injected = sessionCompactSnapshot(row.resumeArgs);
-  if (injected.compactWindow === undefined) return {};
-  const settingsArgs = row.commandLine?.split("--settings").length ?? 0;
-  return settingsArgs === 2 ? injected : UNKNOWN_COMPACT_SNAPSHOT;
+export function sessionLaunchCompact(row: Pick<SessionRow, "launchCompact" | "agentType">): CompactSnapshot {
+  return parseStoredCompactSnapshot(row.launchCompact) ?? unprovenCompactSnapshot(row.agentType);
 }
 
-/** 重启接管时这个旧进程的压缩配置:起跑时落下的那份;证明不了来源就走 legacyCompactSnapshot。 */
-export function sessionLaunchCompact(row: Pick<SessionRow, "launchCompact" | "resumeArgs" | "commandLine">): CompactSnapshot {
-  return parseStoredCompactSnapshot(row.launchCompact) ?? legacyCompactSnapshot(row);
+function unprovenCompactSnapshot(agentType: string): CompactSnapshot {
+  return agentType === "claude" ? UNKNOWN_COMPACT_SNAPSHOT : {};
 }
 
 /**
@@ -312,8 +304,7 @@ export function sessionLaunchCompact(row: Pick<SessionRow, "launchCompact" | "re
  * 标「不知道」;别的 CLI 从来没有 ash 注入的压缩配置,没有可说的。重读、接力导出都走这里。
  */
 export function sessionContextCompact(row: Pick<SessionRow, "contextCompact" | "agentType">): CompactSnapshot {
-  return parseStoredCompactSnapshot(row.contextCompact)
-    ?? (row.agentType === "claude" ? UNKNOWN_COMPACT_SNAPSHOT : {});
+  return parseStoredCompactSnapshot(row.contextCompact) ?? unprovenCompactSnapshot(row.agentType);
 }
 
 /** 只要窗口那一项(老调用点)。 */

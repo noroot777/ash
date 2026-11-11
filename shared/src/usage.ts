@@ -219,7 +219,10 @@ export function compactSnapshotFromEnv(env: Readonly<Record<string, string | und
 // 存下来的快照文本(库里两列、接力载荷)一律带这个来源标记:只有「起跑时按最终生效的参数判过」
 // 那条写入路径会盖上它。没有标记的非空文本出自这一判定上线前的写入 —— 那时被额外参数盖掉的
 // 配置照样当事实写了进去(第 4 轮审查 F1),所以「列非空」不等于「可信」,只有标记说了算。
-const COMPACT_SNAPSHOT_PROVENANCE = "launch-final";
+// 标记带版本:判定口径每收紧一次就换一个,旧口径写下的一律当证明不了。
+//   launch-final       只记 ash 注入的那几项,留空的百分比从下层继承时漏记(审查 SaouXWB_jEuw F1)
+//   launch-final/v2    覆盖全部压缩输入,各层配置按那次起跑自己的配置目录读
+const COMPACT_SNAPSHOT_PROVENANCE = "launch-final/v2";
 
 /** 快照 → 落库/接力用的文本。所有写入点共用这一个,标记才不会漏盖。 */
 export function serializeCompactSnapshot(snapshot: CompactSnapshot): string {

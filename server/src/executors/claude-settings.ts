@@ -62,9 +62,25 @@ function managedSettingsPath(): string {
     : "/etc/claude-code/managed-settings.json";
 }
 
+/**
+ * 这次 CLI 子进程看到的 `CLAUDE_CONFIG_DIR`。**必须按本次起跑的环境算**,不能拿 ash 自己进程的:
+ * 多人隔离档下每个用户的任务都带着自己的配置目录起跑(auth/run-env.ts),拿宿主那份去读,解出来
+ * 的就是宿主的配置(审查 SaouXWB_jEuw 第 2 轮 F1)。
+ *   undefined = 本次起跑没动这个变量,子进程继承 ash 进程的;
+ *   null      = 本次起跑把它删了(env 里显式给 undefined);
+ *   string    = 本次起跑给的那个目录。
+ */
+export type ClaudeConfigDir = string | null | undefined;
+
+/** 起跑环境补丁 → ClaudeConfigDir(补丁里没出现这个 key 就是「没动」)。 */
+export function claudeConfigDirOf(env: Readonly<Record<string, string | undefined>> | undefined): ClaudeConfigDir {
+  if (!env || !Object.prototype.hasOwnProperty.call(env, "CLAUDE_CONFIG_DIR")) return undefined;
+  return env.CLAUDE_CONFIG_DIR ?? null;
+}
+
 /** 用户那一层的目录:`CLAUDE_CONFIG_DIR` 设了就是它,**不回落** `~/.claude`(实测②)。 */
-function userConfigDir(): string {
-  const configured = process.env.CLAUDE_CONFIG_DIR?.trim();
+function userConfigDir(configDir: ClaudeConfigDir): string {
+  const configured = (configDir === undefined ? process.env.CLAUDE_CONFIG_DIR : configDir ?? undefined)?.trim();
   return configured ? resolve(configured) : join(homedir(), ".claude");
 }
 
@@ -114,8 +130,8 @@ function projectLayers(cwd: string): string[] {
 }
 
 /** 比 ash 那份 `--settings` 低的那几层(项目两档 + 用户配置目录),按实测优先级从高到低。 */
-function lowerLayers(cwd?: string): string[] {
-  return [...(cwd ? projectLayers(cwd) : []), join(userConfigDir(), "settings.json")];
+function lowerLayers(cwd: string | undefined, configDir: ClaudeConfigDir): string[] {
+  return [...(cwd ? projectLayers(cwd) : []), join(userConfigDir(configDir), "settings.json")];
 }
 
 // 会进 claude 自动压缩算式的全部输入(见 shared/src/cli-overrides.ts 那段反编译):
@@ -146,12 +162,12 @@ function touchesCompaction(path: string): boolean {
  *   inheritedPercent 那几层里赢下来的百分比(env 原值,占有效窗口);同名变量在子进程环境里已被
  *                    ash 删掉(cliConfigOverrideEnvPatch),所以不看 process.env
  */
-export function claudeCompactLayers(cwd?: string): {
+export function claudeCompactLayers(cwd?: string, configDir?: ClaudeConfigDir): {
   managedTouches: boolean;
   lowerTouches: boolean;
   inheritedPercent: number | null;
 } {
-  const lower = lowerLayers(cwd);
+  const lower = lowerLayers(cwd, configDir);
   let inheritedPercent: number | null = null;
   for (const path of lower) {
     const found = envValue(path, "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE");
@@ -171,9 +187,9 @@ export function claudeCompactLayers(cwd?: string): {
  * 本机 claude 最终会看到的 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`(没有任何一层写过 = null)。
  * 给了 cwd 才读得到项目那几层 —— 设置页那条只读接口没有项目概念,读用户层就够。
  */
-export function claudeMaxOutputTokens(cwd?: string): number | null {
+export function claudeMaxOutputTokens(cwd?: string, configDir?: ClaudeConfigDir): number | null {
   const name = "CLAUDE_CODE_MAX_OUTPUT_TOKENS";
-  const layers = [managedSettingsPath(), ...lowerLayers(cwd)];
+  const layers = [managedSettingsPath(), ...lowerLayers(cwd, configDir)];
   for (const path of layers) {
     const found = envValue(path, name);
     if (found !== undefined) return toPositiveInt(found);

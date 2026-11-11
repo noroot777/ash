@@ -250,24 +250,26 @@ assert.equal(shadowedLaunch.commandLine, shadowedRun.commandLine);
 const shadowedReattached = await contextOf(changed.attach(attachChild(), {
   sessionId: "fixture-cli",
   commandLine: shadowedRun.commandLine,
-  compact: sessionLaunchCompact({ launchCompact: shadowedLaunch.launchCompact, resumeArgs: frozenArgs, commandLine: shadowedRun.commandLine }),
+  compact: sessionLaunchCompact({ agentType: "claude", launchCompact: shadowedLaunch.launchCompact }),
 }).events);
 assert.equal(shadowedReattached?.compactUnknown, true, "起跑时被盖掉的,接管后也还是不知道");
 assert.equal(shadowedReattached?.compactWindow, undefined);
 assert.deepEqual(
-  sessionLaunchCompact({ launchCompact: launchFields(launched.run({ prompt: "hi", cwd: fixtureDir })).launchCompact, resumeArgs: null, commandLine: null }),
+  sessionLaunchCompact({ agentType: "claude", launchCompact: launchFields(launched.run({ prompt: "hi", cwd: fixtureDir })).launchCompact }),
   expectedSnapshot,
   "正常起跑的那份原样读回",
 );
-assert.equal(
-  sessionLaunchCompact({ launchCompact: null, resumeArgs: frozenArgs, commandLine: frozenCommand }).compactWindow,
-  600_000,
-  "这一列上线前起的进程才退回 resume_args,且命令行证明只有 ash 那份 --settings",
+// 这一列上线前起的进程:resume_args 里只有 ash 注入的那几项,记不得 CLI 从用户/项目配置里继承了
+// 什么(审查 SaouXWB_jEuw F1)—— 即便命令行证明只有 ash 那份 --settings,也拼不出完整快照。
+assert.deepEqual(
+  sessionLaunchCompact({ agentType: "claude", launchCompact: null, resumeArgs: frozenArgs, commandLine: frozenCommand }),
+  { compactUnknown: true },
+  "老进程接管:证明不了就是不知道,不退回 resume_args",
 );
 
 // 第 4 轮:升级前起的进程,额外参数里另带了 --settings(命令行里两份)—— resume_args 只有
 // ash 那份,证明不了它生效,接管与重读都必须是「不知道」,不能退回 600k / ~149k。
-const legacyShadowed = { launchCompact: null, contextCompact: null, resumeArgs: frozenArgs, commandLine: shadowedRun.commandLine };
+const legacyShadowed = { agentType: "claude", launchCompact: null, contextCompact: null, resumeArgs: frozenArgs, commandLine: shadowedRun.commandLine };
 assert.ok(shadowedRun.commandLine.split("--settings").length > 2, "夹具:命令行里确实有两份 --settings");
 assert.deepEqual(sessionLaunchCompact(legacyShadowed), { compactUnknown: true }, "老行接管:证明不了就是不知道");
 const legacyReattached = await contextOf(changed.attach(attachChild(), {
@@ -278,20 +280,27 @@ const legacyReattached = await contextOf(changed.attach(attachChild(), {
 assert.equal(contextCompactTrigger(legacyReattached), null, "老行接管后不再报 ~149k");
 assert.equal(legacyReattached?.compactUnknown, true);
 assert.deepEqual(
-  sessionContext({ contextUsed: 143_746, contextWindow: 200_000, contextWindowEstimated: false, agentType: "claude", ...legacyShadowed }),
+  sessionContext({ contextUsed: 143_746, contextWindow: 200_000, contextWindowEstimated: false, ...legacyShadowed }),
   { used: 143_746, window: 200_000, windowEstimated: false, compactUnknown: true },
   "老行水位重读走同一道判定",
 );
 assert.deepEqual(
-  sessionLaunchCompact({ launchCompact: null, resumeArgs: frozenArgs, commandLine: null }),
+  sessionLaunchCompact({ agentType: "claude", launchCompact: null, resumeArgs: frozenArgs, commandLine: null }),
   { compactUnknown: true },
   "老行连命令行都没有:同样证明不了",
 );
 assert.deepEqual(
-  sessionLaunchCompact({ launchCompact: null, resumeArgs: null, commandLine: shadowedRun.commandLine }),
+  sessionLaunchCompact({ agentType: "codex", launchCompact: null }),
   {},
-  "ash 根本没注入压缩窗口:没有可说的,不标不知道",
+  "别的 CLI 从来没有 ash 注入的压缩配置:没有可说的,不标不知道",
 );
+// 旧口径(launch-final,不带版本)写下的快照:那一版只记 ash 注入的那几项,留空的百分比从下层继承时
+// 漏记。照单全收就会按默认算成 ~167k(审查 SaouXWB_jEuw 第 2 轮 F2),三条读侧一律当证明不了。
+const v1Snapshot = JSON.stringify({ provenance: "launch-final", compactWindow: 600_000 });
+assert.equal(parseStoredCompactSnapshot(v1Snapshot), null, "旧版本标记不算数");
+assert.deepEqual(sessionLaunchCompact({ agentType: "claude", launchCompact: v1Snapshot }), { compactUnknown: true }, "接管");
+assert.deepEqual(sessionContextCompact({ agentType: "claude", contextCompact: v1Snapshot }), { compactUnknown: true }, "重读与接力导出");
+assert.ok(serializeCompactSnapshot({ compactWindow: 600_000 }).includes(`"launch-final/v2"`), "新写入带当前版本");
 
 // 第 5 轮:列非空不等于可信。「按最终生效参数判定」上线前,被额外参数盖掉的那组数照样随水位
 // 写成了 {"compactWindow":600000,"compactPercent":82.76}(没有来源标记)。重读、接管、接力导出
@@ -361,8 +370,8 @@ const windowOnly = new ClaudeExecutor({ model: "claude-fable-5-2", bin: fakeClau
 const inheritedRun = windowOnly.run({ prompt: "hi", cwd: fixtureDir });
 assert.deepEqual(inheritedRun.launchCompact, { compactWindow: 600_000, compactPercent: 50 }, "继承来的百分比进了启动快照");
 assert.ok(
-  inheritedRun.commandLine.includes(`"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"50"`),
-  "同一个赢家值钉进 ash 的 --settings:注入的这份就是全部压缩输入",
+  !inheritedRun.commandLine.includes("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"),
+  "继承值只记进快照,不往 --settings 里钉:用户自己的配置由 CLI 自己读",
 );
 const inheritedContext = await contextOf(inheritedRun.events);
 assert.equal(contextCompactTrigger(inheritedContext), 90_000, "按继承的 50% 算,不是默认的 ~167k");
@@ -374,6 +383,30 @@ assert.ok(
     .some((hint) => hint.includes("~90k") && hint.includes("50%")),
   "预览文案说出继承来的百分比",
 );
+// 多人隔离档:这次起跑带着用户自己的配置目录(opts.env.CLAUDE_CONFIG_DIR),宿主进程那份是 50%、
+// 用户那份是 20%、输出预留 10k。各层必须按起跑那份目录读(审查 SaouXWB_jEuw 第 2 轮 F1):快照记 20%,
+// 钉进 --settings 的输出预留也是用户那份 —— 宿主的配置一个数都不许混进来。
+const userConfigDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-user-"));
+writeFileSync(join(userConfigDir, "settings.json"), JSON.stringify({
+  env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "20", CLAUDE_CODE_MAX_OUTPUT_TOKENS: "10000" },
+}));
+const userRun = windowOnly.run({ prompt: "hi", cwd: fixtureDir, env: { CLAUDE_CONFIG_DIR: userConfigDir } });
+assert.deepEqual(userRun.launchCompact, { compactWindow: 600_000, compactPercent: 20, compactMaxOutput: 10_000 }, "按用户自己的目录读");
+assert.ok(!userRun.commandLine.includes("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"), "宿主的百分比没有被钉进去顶掉用户的");
+assert.ok(userRun.commandLine.includes(`"CLAUDE_CODE_MAX_OUTPUT_TOKENS":"10000"`), "钉的输出预留是用户那份");
+const userContext = await contextOf(userRun.events);
+assert.equal(contextCompactTrigger(userContext), Math.floor(((200_000 - 10_000) * 20) / 100), "触发点按用户的 20% 与 10k 预留算");
+assert.deepEqual(
+  windowOnly.runSteerable({ prompt: "hi", cwd: fixtureDir, env: { CLAUDE_CONFIG_DIR: userConfigDir } }).launchCompact,
+  userRun.launchCompact,
+  "可引导起跑同一份解析",
+);
+const userResident = windowOnly.openResident({ prompt: "hi", cwd: fixtureDir, env: { CLAUDE_CONFIG_DIR: userConfigDir } });
+assert.deepEqual(userResident.launchCompact, userRun.launchCompact, "常驻起跑同一份解析");
+userResident.close();
+assert.equal(cliHostEnv(fixtureDir, userConfigDir).compactPercent, 20, "设置页那条只读接口按同一目录读");
+assert.equal(cliHostEnv(fixtureDir).compactPercent, 50, "不给目录才是 ash 进程自己那份");
+rmSync(userConfigDir, { recursive: true, force: true });
 // ash 没配压缩、下层却配过:CLI 按下层走,ash 判不全 —— 不知道,而不是「没配」。
 const unconfigured = new ClaudeExecutor({ model: "claude-fable-5-2", bin: fakeClaude });
 assert.deepEqual(unconfigured.run({ prompt: "hi", cwd: fixtureDir }).launchCompact, { compactUnknown: true });

@@ -50,6 +50,7 @@ export interface CliHostEnv {
   /**
    * 用户/项目 settings 里写的 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`(env 原值,占有效窗口);没写 =
    * null/缺省。profile 只填窗口、百分比留空时 CLI 继承的就是它,不是 claude 的默认触发点。
+   * **只用于换算**:ash 不把它注入 CLI,用户自己的配置由 CLI 自己读(按起跑那次的配置目录)。
    */
   compactPercent?: number | null;
 }
@@ -107,7 +108,6 @@ const CLAUDE_AUTO_COMPACT_KILL_SWITCHES = ["DISABLE_COMPACT", "DISABLE_AUTO_COMP
 // 审查 finding 3)。钉的是「我们读到的那个赢家值」,所以对用户是原地不动,只是不许它
 // 在我们身后再变。读不到就不钉 —— 编一个数比不钉更糟。
 const CLAUDE_MAX_OUTPUT_ENV = "CLAUDE_CODE_MAX_OUTPUT_TOKENS";
-const CLAUDE_PCT_ENV = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE";
 
 /** 这个 profile 真的配了自动压缩(窗口是这一档的开关项,没它百分比也不注入)。 */
 function claudeCompactionConfigured(
@@ -219,10 +219,10 @@ const CLAUDE_OVERRIDES: CliConfigOverride[] = [
     label: "压缩触发点",
     env: "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
     shadows: "claude 内置的默认触发点(窗口 − 33k)",
-    help: "上下文用到窗口的百分之几时开始压缩。留空 = 用 claude 自己的默认,也就是离窗口顶还剩 33k 才压。",
+    help: "上下文用到窗口的百分之几时开始压缩。留空 = 沿用 claude 自己配置里的百分比;那里也没写,才是 claude 的默认 —— 离窗口顶还剩 33k 才压。",
     min: 1,
     max: 100,
-    placeholder: "留空 = 窗口 − 33k",
+    placeholder: "留空 = 跟随 CLI 配置",
     recommended: 80,
     unit: "%",
     requires: "autoCompactWindow",
@@ -352,10 +352,6 @@ export function cliConfigOverrideEnv(
     if (typeof reserveSource === "number" && Number.isFinite(reserveSource) && reserveSource > 0) {
       out[CLAUDE_MAX_OUTPUT_ENV] = String(Math.round(reserveSource));
     }
-    // 百分比留空时同理:把下层继承来的那个赢家值钉进来。对 CLI 是原地不动(本来就按它压),
-    // 但这样注入的这份就是**全部**压缩输入,启动快照才能如实写下触发点,而不是按默认算。
-    const inherited = inheritedCompactPercent(host);
-    if (!(CLAUDE_PCT_ENV in out) && inherited !== null) out[CLAUDE_PCT_ENV] = String(inherited);
   }
   return out;
 }

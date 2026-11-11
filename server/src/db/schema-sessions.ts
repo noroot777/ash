@@ -62,8 +62,8 @@ export const sessions = sqliteTable("sessions", {
   resumeArgs: text("resume_args"),
   commandLine: text("command_line"),
   // 跟 command_line 同一笔写的「这个进程最终生效的压缩配置」(JSON,shared CompactSnapshot;
-  // 见 usage.ts launchFields)。null 或没有来源标记 = 证明不了来源(这一列/最终判定上线前起的
-  // 进程、不报压缩的 CLI),重启接管走 legacyCompactSnapshot。
+  // 见 usage.ts launchFields)。null 或没有当前版本的来源标记 = 证明不了来源(这一列/当前判定
+  // 上线前起的进程),重启接管标「不知道」(usage.ts sessionLaunchCompact)。
   launchCompact: text("launch_compact"),
   startedAt: text("started_at").notNull(),
   endedAt: text("ended_at"), // when this run finished (set with exit_status)
