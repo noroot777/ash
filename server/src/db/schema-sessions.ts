@@ -203,6 +203,9 @@ export const sessions = sqliteTable("sessions", {
   // （false）；自报缺失才按模型名估（true，估不出则 window 为 null）。codex 从私有
   // rollout best-effort 读取；格式变化或本轮取不到时清空为 null，胶囊自然不显示旧值。
   contextWindowEstimated: integer("context_window_estimated", { mode: "boolean" }),
+  // 报出这份水位的那个进程起跑时的压缩配置(JSON,shared 的 CompactSnapshot),跟上面三列
+  // 同一笔写。null = 这一列上线前的老行,读侧退回从 resume_args 里读。
+  contextCompact: text("context_compact"),
 });
 
 /**

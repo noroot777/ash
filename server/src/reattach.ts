@@ -27,6 +27,7 @@ import { withSkillInvocation } from "./skills.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { closeSessionTurns, markTurnActive } from "./session-turns.js";
 import { reconcileInterruptedTask } from "./task-reconcile.js";
+import { sessionCompactSnapshot } from "./usage.js";
 
 // 「现在重启会打断谁」——给 scripts/restart.mjs 的安全闸用。
 //
@@ -171,6 +172,9 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         // 所以**主文档**的前半截也在种子里(mainTurnStartedAt),不只是子文档。
         // 水位之前那段输出:后台任务账本要靠它重建,否则接回的回合一结尾就把还在跑的后台工作收掉。
         consumed: { outPath: sess.agentOutPath, offset: sess.agentOffset ?? 0 },
+        // 接回的这个进程起跑时的压缩配置:会话行上固化的那份 --settings,不是此刻解析出来的
+        // 执行器(上面 resolveExecutorFor 拿的是**当前**配置,改过窗口就对不上了)。
+        compact: sessionCompactSnapshot(sess.resumeArgs),
         images: markdownImageAccounting(
           task.id,
           sess.id,

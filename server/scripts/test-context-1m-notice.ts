@@ -8,9 +8,11 @@
 //  ③ 水位胶囊的分母取「压缩窗口」与 CLI 自报窗口里小的那个;
 //  ④ 一键开启的端点:原子追加、幂等、去后缀、非 anthropic 拒绝。
 //
-// 第 1 轮审查补的两条:
-//  F1 会话里「这一轮在怎么跑」只看会话自己的启动快照(命令行、固化的 --settings),执行器
-//     配置后来改了也不影响 —— 所以触发点要能单从 ContextUsage 算出来;
+// 第 1、2 轮审查补的:
+//  F1 「报出这份水位的那一轮在怎么跑」只看那个进程的启动快照(压缩窗口/百分比/输出预留),
+//     执行器配置后来改了也不影响。快照由**产出水位的那一层**带上:普通起跑、可引导起跑、
+//     重启接管三条路都要带全,落库时跟水位同一笔存 —— 实时事件、库里重读、接管后三种来源
+//     必须算出同一个触发点;
 //  F2 「下一轮会不会是 1M」跟起跑那一侧同一套判据:没 key 的供应商会回退官方账号,额外参数
 //     里的 --model 会覆盖选中的模型。
 //
@@ -21,11 +23,11 @@ import { requireTmpDb } from "./tmp-db.js";
 
 requireTmpDb("test-context-1m-notice");
 
-const { claudeModelWindow, clampedCompactWindow, launchedModelOf, CLAUDE_1M_WINDOW, CLAUDE_STANDARD_WINDOW } =
+const { claudeModelWindow, clampedCompactWindow, CLAUDE_1M_WINDOW, CLAUDE_STANDARD_WINDOW } =
   await import("@ash/shared/context-1m");
 const { claudeCompactionPlan, cliConfigOverrideEnv, cliConfigOverrideHints } = await import("@ash/shared/cli-overrides");
-const { effectiveContextWindow, contextRatio, contextCompactTrigger } = await import("@ash/shared/usage");
-const { sessionContext } = await import("../src/usage.js");
+const { effectiveContextWindow, contextRatio, contextCompactTrigger, compactSnapshotFromEnv } = await import("@ash/shared/usage");
+const { sessionContext, sessionCompactSnapshot, setSessionContext } = await import("../src/usage.js");
 
 // ── ① 判定 ────────────────────────────────────────────────────────────────
 const relay = {
@@ -68,13 +70,6 @@ assert.equal(
   "额外参数自己带 [1m] 就是 1M",
 );
 
-// F1:这一轮实际传给 CLI 的模型从会话命令行读,取最后一个 --model。
-assert.equal(
-  launchedModelOf("claude -p --model claude-fable-5-2 --effort high --model claude-sonnet-5[1m] <messages via stdin>"),
-  "claude-sonnet-5[1m]",
-);
-assert.equal(launchedModelOf("claude -p --effort high"), null);
-assert.equal(launchedModelOf(null), null);
 assert.equal(
   claudeModelWindow("claude-opus-5-5", { ...relay, protocol: "openai" })?.provider,
   null,
@@ -136,7 +131,7 @@ assert.equal(
 // F1:触发点只从会话自己的启动快照算 —— 原形会话固化的 --settings 原样喂进去。
 const frozenArgs = `--settings '{"autoCompactEnabled":true,"env":{"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"600000",`
   + `"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"82.76","DISABLE_COMPACT":"","DISABLE_AUTO_COMPACT":""}}'`;
-const frozen = sessionContext({ contextUsed: 143_746, contextWindow: 200_000, contextWindowEstimated: false, resumeArgs: frozenArgs });
+const frozen = sessionContext({ contextUsed: 143_746, contextWindow: 200_000, contextWindowEstimated: false, contextCompact: null, resumeArgs: frozenArgs });
 assert.deepEqual(
   frozen,
   { used: 143_746, window: 200_000, windowEstimated: false, compactWindow: 600_000, compactPercent: 82.76 },
@@ -154,11 +149,69 @@ assert.equal(
   "没配压缩窗口时不编触发点",
 );
 
-// ── ④ 一键开启端点 ────────────────────────────────────────────────────────
+// 解析器会顺手给内置 Monitor 记账,先把库建好。
 const { db, ensureSchema } = await import("../src/db/index.js");
+await ensureSchema();
+
+// F1(第 2 轮):快照由产出水位的那一层带上。用一个假的 claude 可执行文件跑真实的执行器,
+// 吐一帧 assistant + 一帧 result(原形会话的水位与自报窗口)。
+const { mkdtempSync, writeFileSync, chmodSync } = await import("node:fs");
+const { tmpdir } = await import("node:os");
+const { join } = await import("node:path");
+const { spawn } = await import("node:child_process");
+const { ClaudeExecutor } = await import("../src/executors/claude.js");
+const { cliHostEnv } = await import("../src/executors/cli-env.js");
+const fixtureDir = mkdtempSync(join(tmpdir(), "ash-context-1m-notice-"));
+const frames = [
+  { type: "assistant", message: { model: "claude-fable-5-2", content: [], usage: { input_tokens: 143_746, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } },
+  { type: "result", subtype: "success", is_error: false, session_id: "fixture-cli", modelUsage: { "claude-fable-5-2": { contextWindow: 200_000 } }, usage: { input_tokens: 143_746, output_tokens: 1 } },
+].map((frame) => JSON.stringify(frame)).join("\n");
+const fakeClaude = join(fixtureDir, "fake-claude");
+writeFileSync(fakeClaude, `#!/bin/sh\ncat <<'EOF'\n${frames}\nEOF\n`);
+chmodSync(fakeClaude, 0o755);
+const contextOf = async (events: AsyncIterable<{ kind: string; context?: unknown }>) => {
+  let found: unknown = null;
+  for await (const event of events) if (event.kind === "context") found = event.context;
+  return found as Parameters<typeof contextCompactTrigger>[0];
+};
+
+const launchOverrides = { autoCompactWindow: 600_000, autoCompactPercent: 80 };
+const launched = new ClaudeExecutor({ model: "claude-fable-5-2", bin: fakeClaude, configOverrides: launchOverrides });
+const expectedSnapshot = compactSnapshotFromEnv(cliConfigOverrideEnv("claude", launchOverrides, cliHostEnv(fixtureDir)));
+assert.equal(expectedSnapshot.compactWindow, 600_000);
+assert.ok(typeof expectedSnapshot.compactPercent === "number", "配了百分比,快照里就得有");
+
+const liveRun = await contextOf(launched.run({ prompt: "hi", cwd: fixtureDir }).events);
+assert.deepEqual(
+  liveRun,
+  { used: 143_746, window: 200_000, windowEstimated: false, ...expectedSnapshot },
+  "普通起跑:实时水位带着整份启动快照(以前只带窗口,百分比缺了就按默认 167k 算)",
+);
+const liveSteer = await contextOf(launched.runSteerable({ prompt: "hi", cwd: fixtureDir }).events);
+assert.deepEqual(liveSteer, liveRun, "可引导起跑跟普通起跑是同一份快照");
+
+// 接管:执行器此刻已经改成 100k,被接回的旧进程却是按 600k 起的。
+const changed = new ClaudeExecutor({ model: "claude-fable-5-2", bin: fakeClaude, configOverrides: { autoCompactWindow: 100_000, autoCompactPercent: 80 } });
+const attachChild = () => spawn(fakeClaude, [], { stdio: ["pipe", "pipe", "pipe"] });
+const reattached = await contextOf(changed.attach(attachChild(), {
+  sessionId: "fixture-cli",
+  commandLine: "claude -p --model claude-fable-5-2 <prompt via stdin>",
+  compact: sessionCompactSnapshot(frozenArgs),
+}).events);
+assert.equal(reattached?.compactWindow, 600_000, "接管用会话存下的那份,不是此刻的执行器配置");
+assert.equal(contextCompactTrigger(reattached), 148_968, "接管后的触发点跟起跑时一致");
+const residentReattached = await contextOf(changed.attach(attachChild(), {
+  sessionId: "fixture-cli",
+  commandLine: "claude -p --input-format stream-json --model claude-fable-5-2 <messages via stdin>",
+  compact: sessionCompactSnapshot(frozenArgs),
+}).events);
+assert.equal(residentReattached?.compactWindow, 600_000, "可引导流的接管同样用旧快照");
+const unknown = await contextOf(changed.attach(attachChild(), { sessionId: "fixture-cli", commandLine: "claude -p" }).events);
+assert.equal(unknown?.compactWindow, undefined, "不知道旧快照就不带,不拿当前配置去补");
+
+// ── ④ 一键开启端点 ────────────────────────────────────────────────────────
 const { llmProviders } = await import("../src/db/schema.js");
 const { api } = await import("../src/routes.js");
-await ensureSchema();
 await db.insert(llmProviders).values([
   {
     id: "anthropic-1",
@@ -190,6 +243,21 @@ const enable = async (providerId: string, body: unknown, raw?: string) => {
   return { status: res.status, body: await res.json() as { context1mModels?: string[]; error?: string } };
 };
 
+// 落库:快照跟水位同一笔存。之后会话又按新配置起跑(resume_args 被改写成 100k),
+// 库里那份水位仍是旧进程报的,重读出来必须还是旧进程的快照 —— 跟实时那份一致。
+const { sessions } = await import("../src/db/schema.js");
+const { eq } = await import("drizzle-orm");
+await db.insert(sessions).values({
+  id: "sess-1", taskId: "task-1", role: "single", agentType: "claude", executor: "claude@test",
+  startedAt: new Date().toISOString(), resumeArgs: frozenArgs,
+});
+await setSessionContext("sess-1", liveRun!);
+await db.update(sessions)
+  .set({ resumeArgs: frozenArgs.replace('"600000"', '"100000"') })
+  .where(eq(sessions.id, "sess-1"));
+const [sessRow] = await db.select().from(sessions).where(eq(sessions.id, "sess-1"));
+assert.deepEqual(sessionContext(sessRow!), liveRun, "库里重读 = 实时那份,不随 resume_args 改写而变");
+
 const first = await enable("anthropic-1", { model: "claude-fable-5-2[1m]" });
 assert.equal(first.status, 200, JSON.stringify(first.body));
 assert.deepEqual(first.body.context1mModels, ["claude-opus-5-5", "claude-fable-5-2"], "追加在原列表后面,去掉 [1m] 后缀");
@@ -215,5 +283,6 @@ assert.equal((await enable("anthropic-1", undefined, "{not json")).status, 400, 
 assert.equal((await enable("missing", { model: "claude-opus-5" })).status, 404, "不存在的供应商 404");
 
 rmSync(process.env.ASH_DB!, { force: true });
+rmSync(fixtureDir, { recursive: true, force: true });
 console.log("test-context-1m-notice: ok");
 process.exit(0);

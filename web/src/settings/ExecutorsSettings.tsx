@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider } from "@ash/shared";
 import { refreshAgentAvailability } from "../lib/agentAvailability.ts";
 import { api, type DetectedCli } from "../lib/api.ts";
-import { mergeEnabledProvider } from "../components/Context1mNotice.tsx";
 import { AgentProfilesSection } from "./AgentProfilesSection.tsx";
 
 function updateById(rows: AgentExecutorProfile[], updated: AgentExecutorProfile) {
@@ -30,6 +29,17 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
       .catch((error) => notify(error instanceof Error ? error.message : "执行器设置读取失败"))
       .finally(() => setLoading(false));
   }, [notify]);
+
+  // 一键开启 1M 之后:先用响应把这一行换上(按钮当场消失),再重读整张表收敛到库里的权威值。
+  // 只认最后一次重读的结果 —— 连点几次的响应与重读都可能乱序回来,也可能别处刚改过这家。
+  const providersReload = useRef(0);
+  const providerChanged = (updated: LlmProvider) => {
+    setProviders((current) => current.map((row) => (row.id === updated.id ? updated : row)));
+    const seq = ++providersReload.current;
+    api.llmProviders()
+      .then((next) => { if (seq === providersReload.current) setProviders(next); })
+      .catch(() => {});
+  };
 
   const changeProfile = (id: string, updated: AgentExecutorProfile | null) => {
     setProfiles((current) => updated
@@ -91,9 +101,7 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
         onDetect={() => void detect()}
         onRegister={(cli) => void register(cli)}
         onProfileChanged={changeProfile}
-        onProviderChanged={(updated) => setProviders((current) => current.map((row) => (
-          row.id === updated.id ? mergeEnabledProvider(row, updated) : row
-        )))}
+        onProviderChanged={providerChanged}
         onProfileAdded={(profile) => setProfiles((current) => [...current, profile])}
         onProfilesDeleted={(ids) => {
           const deleted = new Set(ids);

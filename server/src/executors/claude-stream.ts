@@ -6,7 +6,7 @@
 // re-export,复用这份解析的第三方 CLI(executors/catalog/parsers.ts)照旧从 claude.js 取。
 import { createInterface } from "node:readline";
 import type { AgentEvent, AgentType } from "@ash/shared";
-import { guessContextWindow } from "@ash/shared/usage";
+import { type CompactSnapshot, guessContextWindow } from "@ash/shared/usage";
 import { NativeWorkTrace } from "./native-work.js";
 import { childActivity } from "./native-agent-activity.js";
 import { ClaudeWriteLedger, soleReceipt } from "./tool-writes.js";
@@ -37,7 +37,9 @@ export function parseClaudeStream(
   resident?: ClaudeControlBridge,
   bin = "claude",
   calibrateAs?: AgentType,
-  compactWindow: number | null = null,
+  // 产出这条流的那个进程**起跑时**的压缩配置(shared CompactSnapshot)。由起跑方算好传进来,
+  // 接管时传会话存下的那份 —— 这里只负责原样带在每条水位上,不自己去读配置。
+  compact: CompactSnapshot | null = null,
   onInitialized: () => void = () => {},
   waitNoticeMs = 5 * 60_000,
   // 这条流属于哪条 CLI 会话。**接管路径必须传**：接管是从已消费的 offset 之后接着读的,
@@ -63,7 +65,7 @@ export function parseClaudeStream(
   // 第 5 轮 R1)。所以 sink 在这里建好传进去,由 push 同步进账,这一层只负责收口。
   const images = markdownImageSink(cwd, accounting);
   return settleMarkdownImages(
-    claudeStreamEvents(child, resident, bin, calibrateAs, compactWindow, onInitialized, waitNoticeMs, images, cliSessionId, cwd, consumed),
+    claudeStreamEvents(child, resident, bin, calibrateAs, compact, onInitialized, waitNoticeMs, images, cliSessionId, cwd, consumed),
     images,
   );
 }
@@ -73,7 +75,7 @@ async function* claudeStreamEvents(
   resident: ClaudeControlBridge | undefined,
   bin: string,
   calibrateAs: AgentType | undefined,
-  compactWindow: number | null,
+  compact: CompactSnapshot | null,
   onInitialized: () => void,
   waitNoticeMs: number,
   images: MarkdownImageSink,
@@ -403,8 +405,8 @@ async function* claudeStreamEvents(
       const usage = claudeUsage(ev);
       if (usage) push({ kind: "usage", usage });
       // 水位跟着流水一起发。模型窗口仍优先用 claude 自报的(1M 只有那儿认得出),
-      // 但执行器若显式配了自动压缩窗口就另带 compactWindow：模型能力与“先在哪压缩”
-      // 是两层数据，界面拿后者算真正的剩余量，不能为了显示 400k 把 1M 上限抹掉。
+      // 压缩配置则整份带上这个进程的启动快照：模型能力与“先在哪压缩”是两层数据，
+      // 界面拿后者算真正的剩余量与触发点，不能为了显示 400k 把 1M 上限抹掉。
       if (contextUsed > 0) {
         const model = contextModel ?? ev.model ?? null;
         const reported = claudeContextWindow(ev, model);
@@ -415,7 +417,7 @@ async function* claudeStreamEvents(
             used: contextUsed,
             window,
             windowEstimated: reported === null && window !== null,
-            ...(compactWindow !== null ? { compactWindow } : {}),
+            ...compact,
           },
         });
       }

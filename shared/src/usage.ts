@@ -161,11 +161,7 @@ export interface ContextUsage {
    * “还剩多少”——达到这里就会开始压缩，所以显示比例和告警优先用它。
    */
   compactWindow?: number;
-  /**
-   * 这条会话起跑时真正注入的压缩百分比(`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`)与输出预留
-   * (`CLAUDE_CODE_MAX_OUTPUT_TOKENS`),从会话固化的 `--settings` 读。跟 compactWindow 一样
-   * 是**启动快照**:执行器配置之后改了,解释的也还是这一轮(第 1 轮审查 F1)。
-   */
+  /** 同一份启动快照里的压缩百分比与输出预留,见 CompactSnapshot。 */
   compactPercent?: number;
   compactMaxOutput?: number;
   /**
@@ -174,6 +170,65 @@ export interface ContextUsage {
    * 界面那个 `~` 该跟着数据走,而不是靠改一处渲染逻辑记得取消。
    */
   windowEstimated: boolean;
+}
+
+/**
+ * 报出这份水位的那个 CLI 进程**起跑时**被注入的压缩配置 —— 不可变的启动快照。
+ *
+ * 只能来自起跑那一刻真正写进去的 env(`compactSnapshotFromEnv`),由产出水位的那一层
+ * 原样带在每条 context 事件上、随水位一起落库。**不许拿执行器的当前配置去补**:配置改了
+ * 之后,正在跑的、被重启接管的、库里留着的那一轮都还是按旧值在压(第 1、2 轮审查)。
+ * 三个字段都缺 = 那个进程没配自动压缩窗口,跟随 CLI 自己的判断。
+ */
+export type CompactSnapshot = Pick<ContextUsage, "compactWindow" | "compactPercent" | "compactMaxOutput">;
+
+const COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
+const COMPACT_PERCENT_ENV = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE";
+const MAX_OUTPUT_ENV = "CLAUDE_CODE_MAX_OUTPUT_TOKENS";
+/** 启动快照只认这几个 env —— 读 `--settings` 文本的那一侧按这张表取值。 */
+export const COMPACT_SNAPSHOT_ENV_KEYS = [COMPACT_WINDOW_ENV, COMPACT_PERCENT_ENV, MAX_OUTPUT_ENV] as const;
+
+const positive = (raw: unknown): number | null => {
+  const value = typeof raw === "string" || typeof raw === "number" ? Number(raw) : NaN;
+  return Number.isFinite(value) && value > 0 ? value : null;
+};
+
+/** 起跑时注入给 CLI 的 env → 启动快照。所有产出点共用这一个解码,不各写一遍。 */
+export function compactSnapshotFromEnv(env: Readonly<Record<string, string | undefined>>): CompactSnapshot {
+  const window = positive(env[COMPACT_WINDOW_ENV]);
+  // 百分比与输出预留只在配了窗口时才进 CLI 的算式(没窗口时 claude 整段跳过自动压缩)。
+  if (window === null) return {};
+  const percent = positive(env[COMPACT_PERCENT_ENV]);
+  const maxOutput = positive(env[MAX_OUTPUT_ENV]);
+  return {
+    compactWindow: Math.round(window),
+    ...(percent !== null ? { compactPercent: percent } : {}),
+    ...(maxOutput !== null ? { compactMaxOutput: Math.round(maxOutput) } : {}),
+  };
+}
+
+/** 库里存的那份快照(JSON 文本)读回来;坏数据按「没配」处理,不把垃圾数字递给界面。 */
+export function parseCompactSnapshot(raw: string): CompactSnapshot {
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown> | null;
+    if (!value || typeof value !== "object") return {};
+    return compactSnapshotFromEnv({
+      [COMPACT_WINDOW_ENV]: value.compactWindow === undefined ? undefined : String(value.compactWindow),
+      [COMPACT_PERCENT_ENV]: value.compactPercent === undefined ? undefined : String(value.compactPercent),
+      [MAX_OUTPUT_ENV]: value.compactMaxOutput === undefined ? undefined : String(value.compactMaxOutput),
+    });
+  } catch {
+    return {};
+  }
+}
+
+/** 从一份水位里拿出它的启动快照(落库用)。 */
+export function compactSnapshotOf(c: ContextUsage): CompactSnapshot {
+  return {
+    ...(c.compactWindow !== undefined ? { compactWindow: c.compactWindow } : {}),
+    ...(c.compactPercent !== undefined ? { compactPercent: c.compactPercent } : {}),
+    ...(c.compactMaxOutput !== undefined ? { compactMaxOutput: c.compactMaxOutput } : {}),
+  };
 }
 
 /**

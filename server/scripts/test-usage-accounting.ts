@@ -63,7 +63,9 @@ async function parseFakeClaude(lines: unknown[], compactWindow: number | null = 
   const child = spawn(process.execPath, [script], { stdio: ["pipe", "pipe", "pipe"] });
   child.stdin?.end();
   let context: unknown = null;
-  for await (const event of parseClaudeStream(child as any, undefined, "claude", undefined, compactWindow)) {
+  // 解析器收的是起跑时的整份压缩快照;这里只关心窗口那一项。
+  const compact = compactWindow !== null ? { compactWindow } : null;
+  for await (const event of parseClaudeStream(child as any, undefined, "claude", undefined, compact)) {
     if ((event as any).kind === "context") context = (event as any).context;
   }
   return context;
@@ -334,6 +336,8 @@ try {
     contextWindow: 1_000_000,
     contextWindowEstimated: false,
     resumeArgs: compactResumeArgs,
+    // 模拟 context_compact 这一列上线前落的老行:没有随水位存下的快照,才退回 resume_args。
+    contextCompact: null,
   }).where(eq(sessions.id, sessId));
   const compactWater = sessionContext((await db.select().from(sessions).where(eq(sessions.id, sessId)).get())!);
   assert.deepEqual(

@@ -66,14 +66,6 @@ export function lastModelArg(args: readonly string[]): string | null {
 }
 
 /**
- * 这条会话**实际起跑时**传给 CLI 的模型(含 `[1m]` 后缀与否),从会话固化的命令行里读。
- * 当前执行器配置只说明下一次怎么起,解释不了已经在跑的这一轮(第 1 轮审查 F1)。
- */
-export function launchedModelOf(commandLine: string | null | undefined): string | null {
-  return commandLine ? lastModelArg(commandLine.split(/\s+/)) : null;
-}
-
-/**
  * 这个 claude 执行器**下一次起跑**时 CLI 认的窗口是多大。判据必须跟起跑那一侧逐条对齐
  * (第 1 轮审查 F2):供应商得是 anthropic 协议**且有 key** 才真的挂上,否则退回官方账号;
  * 额外参数里的 `--model` 排在后面、会覆盖选中的模型,而 ash 只给选中的模型补 `[1m]`。

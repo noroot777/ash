@@ -9,6 +9,13 @@
 // 一起是为了让下一个人一眼看见「有两种账，加法只适用于其中一种」。
 import { and, eq, sql } from "drizzle-orm";
 import type { AgentEvent, AgentType, ContextUsage, TokenUsage, UsageAccountingMark } from "@ash/shared";
+import {
+  COMPACT_SNAPSHOT_ENV_KEYS,
+  type CompactSnapshot,
+  compactSnapshotFromEnv,
+  compactSnapshotOf,
+  parseCompactSnapshot,
+} from "@ash/shared/usage";
 import { db } from "./db/index.js";
 import { sessions, sessionTurns, usageCumulativeSnapshots } from "./db/schema.js";
 import { boundMonitorWake } from "./session-turns.js";
@@ -229,6 +236,9 @@ export async function setSessionContext(sessId: string, context: ContextUsage): 
         contextUsed: measured ? Math.round(context.used) : null,
         contextWindow: measured && context.window !== null ? Math.round(context.window) : null,
         contextWindowEstimated: measured ? context.windowEstimated : null,
+        // 启动快照跟水位**同一笔**落:两者出自同一个进程,重读时才是一对(没配就是 `{}`,
+        // 跟「老行没这一列」分得开)。
+        contextCompact: measured ? JSON.stringify(compactSnapshotOf(context)) : null,
       })
       .where(eq(sessions.id, sessId));
   } catch (error) {
@@ -236,41 +246,40 @@ export async function setSessionContext(sessId: string, context: ContextUsage): 
   }
 }
 
-/** 从本会话固化的 `--settings` 里读回当时真正注入的某个环境变量(正数才算)。 */
-function sessionSettingsEnvNumber(resumeArgs: string | null | undefined, key: string): number | null {
-  const raw = resumeArgs?.match(new RegExp(`"${key}"\\s*:\\s*"([\\d.]+)"`))?.[1];
-  if (!raw) return null;
-  const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : null;
+/**
+ * 老会话行(`context_compact` 这一列上线前落的水位)的退路:从会话固化的 `--settings` 里
+ * 读当时注入的那几个 env。这一列有值就不走这里 —— resume_args 每次起跑都会被改写成
+ * **最新**那次的配置,跟库里那份水位不一定是同一个进程。
+ */
+export function sessionCompactSnapshot(resumeArgs: string | null | undefined): CompactSnapshot {
+  if (!resumeArgs) return {};
+  const env: Record<string, string> = {};
+  for (const key of COMPACT_SNAPSHOT_ENV_KEYS) {
+    const raw = resumeArgs.match(new RegExp(`"${key}"\\s*:\\s*"([\\d.]+)"`))?.[1];
+    if (raw) env[key] = raw;
+  }
+  return compactSnapshotFromEnv(env);
 }
 
-/** 从本会话固化的 `--settings` 中读回当时真正注入的自动压缩窗口。 */
+/** 只要窗口那一项(老调用点)。 */
 export function sessionCompactWindow(resumeArgs: string | null | undefined): number | null {
-  const value = sessionSettingsEnvNumber(resumeArgs, "CLAUDE_CODE_AUTO_COMPACT_WINDOW");
-  return value === null ? null : Math.round(value);
+  return sessionCompactSnapshot(resumeArgs).compactWindow ?? null;
 }
 
 /** 会话行 → ContextUsage。没采到(null)跟「水位是 0」是两回事，前者不显示。 */
 export function sessionContext(row: Pick<
   SessionRow,
-  "contextUsed" | "contextWindow" | "contextWindowEstimated" | "resumeArgs"
+  "contextUsed" | "contextWindow" | "contextWindowEstimated" | "contextCompact" | "resumeArgs"
 >): ContextUsage | null {
   if (row.contextUsed === null || row.contextUsed === undefined) return null;
-  const compactWindow = sessionCompactWindow(row.resumeArgs);
-  // 百分比与输出预留只在配了窗口时才有意义(没窗口时 claude 整段跳过自动压缩)。
-  const compactPercent = compactWindow !== null
-    ? sessionSettingsEnvNumber(row.resumeArgs, "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
-    : null;
-  const compactMaxOutput = compactWindow !== null
-    ? sessionSettingsEnvNumber(row.resumeArgs, "CLAUDE_CODE_MAX_OUTPUT_TOKENS")
-    : null;
+  const compact = typeof row.contextCompact === "string"
+    ? parseCompactSnapshot(row.contextCompact)
+    : sessionCompactSnapshot(row.resumeArgs);
   return {
     used: row.contextUsed,
     window: row.contextWindow ?? null,
     windowEstimated: row.contextWindowEstimated ?? false,
-    ...(compactWindow !== null ? { compactWindow } : {}),
-    ...(compactPercent !== null ? { compactPercent } : {}),
-    ...(compactMaxOutput !== null ? { compactMaxOutput: Math.round(compactMaxOutput) } : {}),
+    ...compact,
   };
 }
 

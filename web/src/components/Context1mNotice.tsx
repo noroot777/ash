@@ -2,14 +2,7 @@ import { useEffect, useState } from "react";
 import { WarningCircle } from "@phosphor-icons/react";
 import type { AgentExecutorProfile, ContextUsage, LlmProvider, Session } from "@ash/shared";
 import { claudeCompactionPlan } from "@ash/shared/cli-overrides";
-import {
-  type ClaudeModelWindow,
-  clampedCompactWindow,
-  claudeModelWindow,
-  hasContext1mSuffix,
-  launchedModelOf,
-  stripContext1mSuffix,
-} from "@ash/shared/context-1m";
+import { type ClaudeModelWindow, clampedCompactWindow, claudeModelWindow } from "@ash/shared/context-1m";
 import { contextCompactTrigger } from "@ash/shared/usage";
 import { api } from "../lib/api.ts";
 import { refreshProviders } from "../lib/modelCatalog.ts";
@@ -27,17 +20,10 @@ const fmtK = (n: number) => (n >= 1_000_000 ? `${Number((n / 1_000_000).toFixed(
 // 开关本身在供应商的 1M 列表里,离用户看见症状的地方(会话的上下文胶囊、执行器的压缩
 // 配置)都隔着好几跳,所以就地给一颗按钮;写入走原子追加,两处同时点也不会互相冲掉。
 //
-// 两种事实分开用(第 1 轮审查 F1):**这一轮在怎么跑**只看会话固化的启动快照(命令行里的
-// `--model`、`--settings` 里的窗口与百分比)和 CLI 自报的窗口;**下一轮会怎么跑**才看当前
-// 执行器与供应商配置,判据跟起跑那一侧对齐(没 key 回退官方账号、额外参数覆盖模型,F2)。
-
-/**
- * 一键开启后回来的供应商行并进本地列表:只增不减地合并 1M 列表。两次开启的响应可能乱序
- * 回来,整行替换会让先发后到的那份把后一次的结果盖掉(第 1 轮审查 N4)。
- */
-export function mergeEnabledProvider(current: LlmProvider, updated: LlmProvider): LlmProvider {
-  return { ...updated, context1mModels: [...new Set([...current.context1mModels, ...updated.context1mModels])] };
-}
+// 两种事实分开用:**报出这份水位的那一轮在怎么跑**只看水位自带的启动快照(压缩窗口、
+// 百分比、输出预留,由产出水位的进程起跑时一起写下,见 shared CompactSnapshot)和 CLI 自报
+// 的窗口;**下一轮会怎么跑**才看当前执行器与供应商配置,判据跟起跑那一侧对齐(没 key 回退
+// 官方账号、额外参数覆盖模型)。不从展示用的命令行字符串里反推模型 —— 那串是有损拼接的。
 
 /** 设置页:按执行器当前配置判「下一次起跑会不会被截」。 */
 export function Context1mNotice({
@@ -77,6 +63,8 @@ export function Context1mNotice({
  */
 export function SessionContext1mNotice({ session, context }: { session: Session; context: ContextUsage }) {
   const [facts, setFacts] = useState<{ profile: AgentExecutorProfile; provider: LlmProvider | null } | null>(null);
+  // 一键开启之后重读一遍权威配置(而不是拿响应去拼本地状态):别处同时改过的也一并对上。
+  const [reload, setReload] = useState(0);
   // 只认身份字段:会话对象每次轮询都是新引用,拿它当依赖会每次重拉两张表。
   const identity = `${session.id}|${session.executorId ?? ""}|${session.executor}|${session.agentType}`;
   useEffect(() => {
@@ -91,15 +79,13 @@ export function SessionContext1mNotice({ session, context }: { session: Session;
       .catch(() => {});
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- identity 已覆盖 matchProfile 读的全部字段
-  }, [identity]);
+  }, [identity, reload]);
 
-  const launched = launchedModelOf(session.commandLine);
-  // 这一轮本来就是按 1M 起的:CLI 自报的 200k 是上一轮留下的水位(水位只在回合结束时落库),
-  // 等这一轮报回来就对上了,不该当成「没开 1M」。
-  if (launched && hasContext1mSuffix(launched)) return null;
+  // 快照与自报窗口出自同一个进程,所以这里说的是「报出这份水位的那一轮」,不管它是不是
+  // 正在跑的这一轮 —— 新一轮报回来之前,面板上本来就是上一份水位。
   const clamp = clampedCompactWindow(context.compactWindow, context.windowEstimated ? null : context.window);
   if (!clamp) return null;
-  const model = stripContext1mSuffix(launched ?? session.turnModel ?? session.model ?? "").trim() || "这个模型";
+  const model = session.turnModel || session.model || "这个模型";
   const trigger = contextCompactTrigger(context);
 
   const nextModel = facts ? session.turnModel || facts.profile.model : null;
@@ -117,13 +103,7 @@ export function SessionContext1mNotice({ session, context }: { session: Session;
         {next && nextClamped && <NextLaunchHint next={next} />}
       </p>
       {next?.provider && nextClamped && (
-        <EnableButton
-          model={next.model}
-          provider={next.provider}
-          onEnabled={(updated) => setFacts((current) => (current?.provider
-            ? { ...current, provider: mergeEnabledProvider(current.provider, updated) }
-            : current))}
-        />
+        <EnableButton model={next.model} provider={next.provider} onEnabled={() => setReload((n) => n + 1)} />
       )}
     </div>
   );

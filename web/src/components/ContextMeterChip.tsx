@@ -125,7 +125,7 @@ export function ContextMeterChip({ context, session, className }: {
         {window === null
           ? "这家 CLI 没报窗口大小，也猜不出模型，所以只给绝对值、不给百分比。"
           : usesCompactWindow
-            ? "窗口采用执行器的自动压缩设置；到达这里会开始压缩，不代表模型能力上限只有这么大。"
+            ? "压缩窗口取这一轮起跑时的自动压缩设置与模型窗口里小的那个；「距压缩」按实际触发点算（还要扣掉输出预留与触发比例），不代表模型能力上限只有这么大。"
           : displayWindowEstimated
             ? "这一轮没拿到 CLI 自报的窗口，只能按模型名估，仅供参考。"
             : "窗口由 CLI 自报。这是最近一次请求带进模型的输入量，压缩后会掉下来。"}
