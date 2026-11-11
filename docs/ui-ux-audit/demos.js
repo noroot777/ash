@@ -1,4 +1,4 @@
-// 报告页的全部脚本：两张分布图、滚动淡入、四个「现在 / 之后」对照演示。
+// 报告页的全部脚本：两张分布图、滚动淡入、四个「现在 / 之后」对照演示、右侧面板样机的切换。
 // anime.js 从 CDN 动态加载；连不上时右栏退回 WAAPI，并在页面上如实写明。
 
 const ANIME_URL = 'https://cdn.jsdelivr.net/npm/animejs@4.5.0/dist/bundles/anime.esm.min.js';
@@ -54,7 +54,7 @@ function drawDurations(root) {
 /* ---------- 滚动淡入 ---------- */
 
 function setupReveal() {
-  const targets = $$('.head, .shot, .notes, .cause, .versus, .rewrite, .surface, .split, .demo, .map, .steps');
+  const targets = $$('.head, .shot, .notes, .kind, .cause, .versus, .rewrite, .tabs4, .pair, .surface, .split, .layers, .demo, .map, .steps');
   if (reduceMotion || !('IntersectionObserver' in window)) return;
   const io = new IntersectionObserver((entries) => {
     for (const e of entries) {
@@ -233,6 +233,36 @@ function demoNumbers(root) {
   };
 }
 
+/* ---------- 面板样机：页签与分段共用一套切换 ---------- */
+
+// [data-switch] 里的 [data-to] 按钮切同一层的 [data-pane]；可以嵌套，各管各的那一层。
+function setupSwitcher(root) {
+  const buttons = $$('[data-to]', root).filter((b) => b.closest('[data-switch]') === root);
+  const panes = $$('[data-pane]', root).filter((p) => p.parentElement.closest('[data-switch]') === root);
+  const ink = $(':scope > .m-tabs > .m-ink', root);
+  const moveInk = () => {
+    const tab = ink && $(':scope > .m-tabs > [aria-selected="true"]', root);
+    if (!tab) return;
+    ink.style.setProperty('--x', `${tab.offsetLeft + 9}px`);
+    ink.style.setProperty('--w', `${tab.offsetWidth - 18}px`);
+  };
+  const show = (name) => {
+    const from = panes.findIndex((p) => p.classList.contains('on'));
+    const to = panes.findIndex((p) => p.dataset.pane === name);
+    if (to < 0 || to === from) return;
+    root.style.setProperty('--dir', to > from ? 1 : -1);
+    panes.forEach((p, i) => p.classList.toggle('on', i === to));
+    for (const b of buttons) if (b.hasAttribute('aria-selected')) b.setAttribute('aria-selected', String(b.dataset.to === name));
+    moveInk();
+  };
+  for (const b of buttons) b.addEventListener('click', () => show(b.dataset.to));
+  if (ink) {
+    moveInk();
+    addEventListener('resize', moveInk);
+    document.fonts?.ready.then(moveInk);
+  }
+}
+
 /* ---------- 启动 ---------- */
 
 const DEMOS = { menu: demoMenu, list: demoList, fold: demoFold, numbers: demoNumbers };
@@ -248,4 +278,5 @@ drawHistogram($('.hist'));
 drawDurations($('.durs'));
 setupReveal();
 setupDemos();
+$$('[data-switch]').forEach(setupSwitcher);
 loadAnime();

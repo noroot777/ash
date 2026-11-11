@@ -6,6 +6,7 @@
 <title>ash 界面审查 · UI / UX / 动效</title>
 <meta name="color-scheme" content="light dark">
 <link rel="stylesheet" href="audit.css">
+<link rel="stylesheet" href="panel.css">
 </head>
 <body>
 
@@ -18,22 +19,28 @@
   <symbol id="i-clip" viewBox="0 0 16 16"><path d="M13 7.5 8 12.5a3 3 0 0 1-4.3-4.2l5-5a2 2 0 0 1 2.9 2.8l-5 5a1 1 0 0 1-1.5-1.4L9.5 5.5"/></symbol>
   <symbol id="i-up" viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></symbol>
   <symbol id="i-check" viewBox="0 0 16 16"><path d="m3 8.5 3.2 3L13 4.5"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.8v3.6M8 11v.2"/></symbol>
 </svg>
 
 <nav class="nav"><div class="wrap">
   <b>ash 界面审查</b>
-  <a href="#screen">一屏</a><a href="#causes">根因</a><a href="#rewrite">改写</a><a href="#list">清单</a><a href="#motion">动效</a><a href="#plan">路线</a>
+  <a href="#screen">一屏</a><a href="#causes">轻重</a><a href="#rewrite">看齐</a><a href="#panel">面板</a><a href="#list">清单</a><a href="#motion">动效</a><a href="#plan">路线</a>
 </div></nav>
 
 <header class="hero"><div class="wrap">
-  <h1>功能已经是顶级的，界面还在解释自己。</h1>
-  <p class="lede measure">ash 的底子很好：中性色克制，深色模式完整，<strong>⌘K 和任务列表的键盘流是对的</strong>。离 Codex、Claude Code 桌面端差的不是功能，是克制——字太小，话太多，元数据和内容挤在同一层，状态变了却没有过程。</p>
+  <h1>先减到安静，再让它动。</h1>
+  <p class="lede measure">你说的「重」和「繁琐」量得出来：一个已完成任务的页面，一屏里有 <strong>113 个能点的东西、224 段文字、68 条边框</strong>。Codex 和 Claude Code 的简约不是功能少，是默认只给你看一件事，其余等你要的时候才出现。界面静下来以后，少量的动效才显得高级。</p>
   <div class="figures">
-    <div><b>52%</b><span>的字号声明小于 11px<br>1682 条里 882 条</span></div>
-    <div><b>34</b><span>种字号同时在用<br>另有 49 种圆角、14 种字重</span></div>
-    <div><b>15+</b><span>种动效时长<br>0 个动效令牌</span></div>
-    <div><b>1</b><span>处浮层有退场动画<br>其余全部瞬间消失</span></div>
+    <div><b>113</b><span>个能点的控件<br>同一屏，1440×900</span></div>
+    <div><b>224</b><span>段文字<br>约一万五千个字符</span></div>
+    <div><b>68</b><span>个带边框的元素<br>其中 28 个是完整的盒子</span></div>
+    <div><b>10</b><span>种字号同屏<br>另有 21 种文字色、9 种字重</span></div>
   </div>
+  <ul class="changes">
+    <li><b>主线换了</b>上一版并列五个根因。这一版归成两个字：重，和乱，并补了一屏的实测。</li>
+    <li><b>多了一节</b>右侧面板单独拆开看，给了收法和一个能点的样机。</li>
+    <li><b>动效提前了</b>上一版说它排在最后，这句话收回一半：基础的那层和定尺一起做，anime.js 仍在最后。</li>
+  </ul>
 </div></header>
 
 <section id="screen"><div class="wrap">
@@ -60,27 +67,34 @@
     <li id="n6">系统行在说实现细节：「任务 status 保持 done」「REGRESSION_FINISHED exitC…」。<em>说人话：「已合并到 main」。</em></li>
     <li id="n7">回复框里压着一个巨大的 CLAUDE 斜体水印，和占位长句叠在一起。<em>去掉水印；占位只留「回复…」。</em></li>
     <li id="n8">右侧面板里下拉框的字比标签和正文都大，下面再堆一段说明。<em>统一到正文字号，删掉说明。</em></li>
-    <li id="n9">最右一条竖轨上有九个没有文字的图标。<em>留最常用的五个，其余进「更多」。</em></li>
+    <li id="n9">最右一条竖轨上有十个没有文字的图标。<em>换成一行带字的页签，见<a href="#panel">右侧面板</a>一节。</em></li>
     <li id="n10">浅色主题下，左下角是一条深色状态栏。<em>跟随主题，或者并进侧栏底部。</em></li>
   </ol>
 </div></section>
 
 <section id="causes"><div class="wrap">
-  <div class="head"><i>02</i><h2>十处问题，五个根因</h2>
-    <p>逐个去修上面那十处，三个月后会长出新的十处。它们是同一批原因在不同位置的表现。</p></div>
+  <div class="head"><i>02</i><h2>重，和乱</h2>
+    <p>重是数量问题：一屏里常驻的东西太多。乱是规则问题：每一块都在用自己的写法。前者靠减，后者靠定。逐个去修上面那十处，三个月后会长出新的十处。</p></div>
+
+  <h3 class="kind"><b>重</b>三个来源</h3>
 
   <div class="cause">
     <i>1</i>
-    <div><h3>没有尺度</h3>
-      <p>设计令牌只定了颜色和阴影。字号、间距、圆角、字重、层级、动效全是每个文件各写各的，所以每加一块界面，就多一组「差不多」的数。</p>
-      <p>后果最重的是字号：四分之三的声明小于 12px，9px 和 9.5px 加起来用了 373 次。看久了累，不是因为内容多，是因为小。</p>
-      <p class="rule">字号 5 档、圆角 4 档、字重 3 档、动效 3 档。正文之外最小 12px。</p></div>
+    <div><h3>什么都常驻</h3>
+      <p>会话号、模型名、token 数、时间戳、耗时，和智能体说的话用同样的权重摆在一起；每个回合尾部再挂一排操作。读一段回复，眼睛要先绕过四组数字。</p>
+      <p>这些东西都有用，但不是每次都要用。一屏 113 个可点的控件，绝大多数这一刻用不上。</p>
+      <p class="rule">内容常驻，操作悬停才出现，元数据要看时去面板里看。</p></div>
     <div>
-      <div class="hist" role="img" aria-label="字号声明分布，红色为 12px 以下"></div>
       <div class="tally">
-        <div><b>49</b><span>种圆角</span></div><div><b>14</b><span>种字重</span></div>
-        <div><b>48</b><span>种 z-index</span></div><div><b>116</b><span>种令牌外颜色</span></div>
+        <div><b>41</b><span>侧栏</span></div><div><b>50</b><span>会话区</span></div>
+        <div><b>20</b><span>右侧面板</span></div><div><b>2</b><span>其它</span></div>
       </div>
+      <ul class="quotes">
+        <li><q>智能体说了什么、改了什么</q><span>常驻</span></li>
+        <li><q>复制、重试、派生、看审查报告</q><span>悬停</span></li>
+        <li><q>模型、智能水平、会话号、用量、耗时</q><span>右侧面板</span></li>
+        <li><q>验收、合并、哨兵的内部状态词</q><span>翻成人话，或不显示</span></li>
+      </ul>
     </div>
   </div>
 
@@ -88,67 +102,70 @@
     <i>2</i>
     <div><h3>用文字解释界面</h3>
       <p>凡是布局没有讲清的地方，都补了一句话：占位符里教快捷键，开关旁边写「已开启」，设置页每个标题下面一段说明，空面板再说一遍这里是干什么的。</p>
-      <p>每一句都没错，合在一起就是满屏的灰色小字，真正的内容反而要找。</p>
+      <p>每一句都没错，合在一起就是一屏 224 段文字，真正的内容反而要找。</p>
       <p class="rule">一句说明出现的地方，先问布局能不能替它说。</p></div>
     <ul class="quotes">
       <li><q>回复并继续（↵ 发送）；输入 /team 或 /duet 可派生新任务…</q><span>回复框占位</span></li>
-      <li><q>运行中的任务不能移动；排队中的任务会按顺序依次执行…</q><span>右侧面板</span></li>
+      <li><q>已结束的任务不进队列（队列会直接跳过它）。想等别的任务完成…</q><span>右侧面板</span></li>
+      <li><q>这里不预判下一步，只记录真正发生过的操作。</q><span>工作流页签</span></li>
       <li><q>已开启</q><span>开关旁边</span></li>
-      <li><q>Inspector · 选择右侧的面板查看任务信息</q><span>空面板</span></li>
       <li>助手页一屏内六段说明<span>助手</span></li>
     </ul>
   </div>
 
   <div class="cause">
     <i>3</i>
-    <div><h3>元数据和内容在同一层</h3>
-      <p>会话号、模型名、token 数、时间戳、耗时，和智能体说的话用同样的权重摆在一起。读一段回复，眼睛要先绕过四组数字。</p>
-      <p>这些信息有用，但不是每次都要用。</p>
-      <p class="rule">内容常驻，操作悬停才出现，元数据放进右侧面板。</p></div>
-    <ul class="quotes">
-      <li><q>智能体说了什么、改了什么</q><span>常驻</span></li>
-      <li><q>复制、重试、派生、看审查报告</q><span>悬停</span></li>
-      <li><q>模型、智能水平、会话号、用量、耗时</q><span>右侧面板</span></li>
-      <li><q>验收、合并、哨兵的内部状态词</q><span>翻成人话，或不显示</span></li>
-    </ul>
+    <div><h3>用边框分组</h3>
+      <p>卡片、药丸、统计格、分隔线：一屏 68 个带边框的元素，28 个是四边都描了线的盒子，有的盒子里还套着盒子。</p>
+      <p>每一条线都在说「这里有个东西」。线多了，就没有哪里是重点。</p>
+      <p class="rule">分组先用留白，再用一条线，最后才用盒子。盒子里不再放盒子。</p></div>
+    <div class="boxes">
+      <div><small>现在</small><div class="b-cards"><div><span>分支</span><b>main</b></div><div><span>提交</span><b>0</b></div><div><span>改动文件</span><b>9</b></div><div><span>增删</span><b>+371 −65</b></div></div></div>
+      <div><small>同样四个值</small><dl class="b-rows"><dt>分支</dt><dd>main</dd><dt>提交</dt><dd>0</dd><dt>改动文件</dt><dd>9</dd><dt>增删</dt><dd>+371 −65</dd></dl></div>
+    </div>
   </div>
+
+  <h3 class="kind"><b>乱</b>两个来源</h3>
 
   <div class="cause">
     <i>4</i>
-    <div><h3>一个产品，四套皮肤</h3>
+    <div><h3>没有尺度</h3>
+      <p>设计令牌只定了颜色和阴影。字号、间距、圆角、字重、层级、动效全是每个文件各写各的，所以每加一块界面，就多一组「差不多」的数。</p>
+      <p>结果是同一屏里从 8px 到 13px 几乎每半个像素一档。全部样式里四分之三的字号声明小于 12px，9px 和 9.5px 加起来用了 373 次。看久了累，不只因为多，还因为小。</p>
+      <p class="rule">字号 5 档、圆角 4 档、字重 3 档、动效 3 档。正文之外最小 12px。</p></div>
+    <div>
+      <div class="hist" role="img" aria-label="字号声明分布，红色为 12px 以下"></div>
+      <div class="tally">
+        <div><b>34</b><span>种字号</span></div><div><b>49</b><span>种圆角</span></div>
+        <div><b>14</b><span>种字重</span></div><div><b>116</b><span>种令牌外颜色</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="cause">
+    <i>5</i>
+    <div><h3>每一块一种写法</h3>
       <p>任务用浅灰侧栏，聊天换成深紫，助手又是淡蓝，底部再接一条深色状态栏。设置页的标题是 28px，主区没有任何一处这么大。原生 <code>&lt;select&gt;</code> 有 37 处，和自绘下拉混着用。</p>
-      <p>切一次页面就像换了一个应用。</p>
-      <p class="rule">一套侧栏、一套表单控件、一套页面版式，三个模式共用。</p></div>
+      <p>切一次页面像换了一个应用；<a href="#panel">右侧面板</a>里切一次页签也是。</p>
+      <p class="rule">一套侧栏、一套表单控件、一套页面版式，所有模式和面板共用。</p></div>
     <div class="skins">
       <img src="shots/skin-task.webp" alt="任务模式侧栏" loading="lazy">
       <img src="shots/skin-chat.webp" alt="聊天模式侧栏" loading="lazy">
       <img src="shots/skin-assistant.webp" alt="助手模式侧栏" loading="lazy">
     </div>
   </div>
-
-  <div class="cause">
-    <i>5</i>
-    <div><h3>状态变了，没有过程</h3>
-      <p>任务从运行跳到等待、列表重新排序、面板开合、菜单关闭——全是一帧切换。在一个以「状态一直在变」为核心的产品里，这等于让用户自己去比对前后两帧差在哪。</p>
-      <p class="rule">过程本身就是信息。<a href="#motion">动效一节</a>展开讲。</p></div>
-    <ul class="quotes">
-      <li><q>31 个 @keyframes，只有抽屉写了退场</q><span>进得来，出不去</span></li>
-      <li><q>115 条 transition，时长全部硬编码</q><span>没有节奏</span></li>
-      <li><q>列表重排、状态迁移、面板开合</q><span>瞬切</span></li>
-      <li><q>prefers-reduced-motion 散在 39 个文件</q><span>补一处漏一处</span></li>
-    </ul>
-  </div>
 </div></section>
 
 <section id="rewrite"><div class="wrap">
   <div class="head"><i>03</i><h2>向 Codex 和 Claude Code 看齐，看的是什么</h2>
-    <p>不是配色，也不是圆角。是它们在同样的信息量下，默认只给你看一件事。</p></div>
+    <p>不是配色，也不是圆角。是功能都在，但默认只给你看一件事。</p></div>
 
   <table class="versus indent">
     <tr><th></th><th>它们的共性</th><th>ash 现在</th></tr>
     <tr><td>输入框</td><td>全页最重的元素，居中，一个容器装下全部控件</td><td>上面一排动作，下面一排动作，中间一个水印</td></tr>
     <tr><td>工具调用</td><td>折成一句人话：「读了 3 个文件」</td><td>「执行过程 · 3 工具」淡到看不见，展开是原始 JSON</td></tr>
     <tr><td>元数据</td><td>悬停或侧板，正文里没有数字</td><td>每个回合头尾各一排</td></tr>
+    <tr><td>分组</td><td>留白和对齐，几乎没有盒子</td><td>一屏 68 条边框，卡片里再套卡片</td></tr>
     <tr><td>空状态</td><td>就是输入框本身</td><td>图标、标题、说明、按钮，点了才到输入框</td></tr>
     <tr><td>运行中</td><td>一处微光，其余静止</td><td>12 种循环动画，脉冲、旋转、微光各模块各写一个</td></tr>
   </table>
@@ -192,8 +209,119 @@
   </div>
 </div></section>
 
+<section id="panel"><div class="wrap">
+  <div class="head"><i>04</i><h2>右侧面板：十个页签，各写各的</h2>
+    <p>一眼看过来乱糟糟，原因不在哪一个页签，在它们之间没有一样共同的东西。下面是其中四个：标题、分组、按钮、状态，四种写法。</p></div>
+
+  <div class="tabs4 indent">
+    <figure><img src="shots/insp-info.webp" width="680" height="1712" alt="信息页签" loading="lazy"><figcaption>信息</figcaption></figure>
+    <figure><img src="shots/insp-scm.webp" width="680" height="1120" alt="改动页签" loading="lazy"><figcaption>改动</figcaption></figure>
+    <figure><img src="shots/insp-flow.webp" width="680" height="1120" alt="工作流页签" loading="lazy"><figcaption>工作流</figcaption></figure>
+    <figure><img src="shots/insp-review.webp" width="680" height="1120" alt="审查页签" loading="lazy"><figcaption>审查</figcaption></figure>
+  </div>
+
+  <div class="indent"><ol class="notes">
+    <li>竖轨上十个没有字的图标。当前选中的是一条紫色细线，「用过」的那一格却是整块青色底，比选中的还显眼。要悬停才知道名字，而那条提示会盖住面板的关闭键。<em>换成面板顶上一行带字的页签，只留一种高亮。</em></li>
+    <li>「信息」一个页签里有五种版式：折叠段、标签值行、带框统计格、说明段、表单下拉。320px 宽里 46 段文字、6 种字号、13 条边框。<em>全部写成同一种行：标签，值。分节只靠留白。</em></li>
+    <li>同一件事说三遍。改动的统计在「信息」里是四个格子，在「改动」里又列一次；审查的经过在会话流、「工作流」、「审查」各有一份；「预览指正」是一个页签，回复框上面还有一颗「打开预览」。<em>每件事只有一个家，别处最多一行链接过去。</em></li>
+    <li>没东西的时候还占着位置。已完成任务的「队列」一节只剩三行解释；「侧聊」是一块白板；「备忘」是三行说明；「预览指正」整个页签只有一个按钮。<em>没有内容就不出现；空的页签只留一个输入框。</em></li>
+    <li>把机制原样端出来。「哨兵」铺着整条 base64 命令和进程号；「审查」同一屏既写着「已通过」又写着「未通过」，再加一句「无法确认结论是否仍对应当前代码」。<em>先给一句结论，机制折起来。</em></li>
+  </ol></div>
+
+  <p class="verdict indent">一种行，一种高亮，一件事一个家。</p>
+
+  <table class="map merge indent">
+    <tr><td>信息</td><td>信息</td><td>只写一种行</td></tr>
+    <tr><td>改动 · 文件 · 生成物</td><td>产出</td><td>一个页签里三段切换；三个问题仍然分开答</td></tr>
+    <tr><td>工作流 · 审查</td><td>进度</td><td>顶上一句结论，下面一条时间线，审查轮次是其中的条目</td></tr>
+    <tr><td>侧聊</td><td>侧聊</td><td>空的时候只有输入框</td></tr>
+    <tr><td>备忘</td><td>备忘</td><td>同上；手写入口还在这里</td></tr>
+    <tr><td>预览指正</td><td>一个动作</td><td>回复框上面已经有「打开预览」；<code>I P</code> 直接打开</td></tr>
+    <tr><td>子智能体 · 哨兵</td><td>用过才出现</td><td>这条规矩保留并推广；样子和别的页签一样，不另用一种底色</td></tr>
+  </table>
+  <div class="indent measure" style="margin-top:28px">
+    <p>常驻的九个收成五个，快捷键和「+」菜单一个都不少：<code>I F</code> 仍然直达文件，只是落在「产出」的那一段上。竖轨换成面板顶上的一行字，省掉一列和一行标题，也不再需要悬停提示；面板关上时整块消失，由任务头上的面板键打开。</p>
+    <p>下面「改后」那一块是活的，可以点。</p>
+  </div>
+
+  <div class="pair indent">
+    <div><small>现在</small><figure><img src="shots/insp-info.webp" width="680" height="1712" alt="现在的信息页签" loading="lazy"></figure></div>
+    <div><small>改后</small><figure class="after mock m-insp" data-switch>
+      <div class="m-tabs" role="tablist">
+        <button role="tab" data-to="info" aria-selected="true">信息</button>
+        <button role="tab" data-to="out" aria-selected="false">产出</button>
+        <button role="tab" data-to="flow" aria-selected="false">进度</button>
+        <button role="tab" data-to="chat" aria-selected="false">侧聊</button>
+        <button role="tab" data-to="memo" aria-selected="false">备忘</button>
+        <span class="sp"></span>
+        <button class="m-ico" aria-label="更多"><svg><use href="#i-more"/></svg></button>
+        <i class="m-ink"></i>
+      </div>
+      <div class="m-view on" data-pane="info">
+        <p class="m-req">点了「这一轮不用改了」之后，审查还停在等待里，没有往下走。</p>
+        <dl class="m-kv">
+          <dt>状态</dt><dd><button>完成</button></dd>
+          <dt>分组</dt><dd><button class="none">无</button></dd>
+          <dt>标签</dt><dd><button class="none">添加</button></dd>
+        </dl>
+        <dl class="m-kv">
+          <dt>用时</dt><dd>1h 19m</dd>
+          <dt>用量</dt><dd>48.9M · 8 轮</dd>
+          <dt>改动</dt><dd><button data-to="out">9 个文件 <span class="add">+371</span> <span class="del">−65</span></button></dd>
+          <dt>分支</dt><dd>ash/QsjSuz_e</dd>
+          <dt>续跑</dt><dd>claude --resume 8c1e…<button class="m-ico" aria-label="复制续跑命令"><svg><use href="#i-copy"/></svg></button></dd>
+        </dl>
+      </div>
+      <div class="m-view" data-pane="out" data-switch>
+        <div class="m-seg">
+          <button data-to="diff" aria-selected="true">改动 9</button>
+          <button data-to="tree" aria-selected="false">文件</button>
+          <button data-to="made" aria-selected="false">生成物 2</button>
+        </div>
+        <ul class="m-files on" data-pane="diff">
+          <li><span>test-free-review-dispute-gate.ts</span><b class="add">+159</b><b class="del">−6</b></li>
+          <li><span>free-review-ruling-release.ts</span><b class="add">+96</b><b class="del">−34</b></li>
+          <li><span>free-review-reservations.ts</span><b class="add">+55</b><b class="del">−2</b></li>
+          <li><span>free-review-dispute.ts</span><b class="add">+30</b><b class="del">−18</b></li>
+          <li><span>free-workflow.ts</span><b class="add">+11</b><b class="del">−4</b></li>
+          <li><span>schema-free-workflow.ts</span><b class="add">+9</b><b class="del">−1</b></li>
+          <li><span>index.ts</span><b class="add">+4</b><b class="del">−0</b></li>
+          <li class="rest">还有 2 个</li>
+        </ul>
+        <ul class="m-files" data-pane="tree">
+          <li><span>server/</span></li><li><span>shared/</span></li><li><span>web/</span></li><li><span>docs/</span></li><li><span>AGENTS.md</span></li><li><span>package.json</span></li>
+        </ul>
+        <ul class="m-files" data-pane="made">
+          <li><span>审查报告 · 第 3 轮.md</span></li><li><span>复现截图.png</span></li>
+        </ul>
+      </div>
+      <div class="m-view" data-pane="flow">
+        <p class="m-now"><svg><use href="#i-warn"/></svg>合并后的审查没通过<button>建修复任务</button></p>
+        <ol class="m-tl">
+          <li>执行<time>38m</time></li>
+          <li class="bad">审查 · 第 1 轮<time>未通过</time></li>
+          <li>修复<time>9m</time></li>
+          <li class="bad">审查 · 第 2 轮<time>未通过</time></li>
+          <li>修复<time>6m</time></li>
+          <li class="ok">审查 · 第 3 轮<time>通过</time></li>
+          <li class="ok">合并到 main<time>23:02</time></li>
+          <li class="bad">合并后审查<time>未通过</time></li>
+        </ol>
+      </div>
+      <div class="m-view" data-pane="chat"><div class="m-ask">问一句，不打断它<button class="m-send" aria-label="发送"><svg><use href="#i-up"/></svg></button></div></div>
+      <div class="m-view" data-pane="memo"><div class="m-ask">记一条</div></div>
+    </figure></div>
+    <ul class="delta">
+      <li><b>46<i>→</i>24</b><span>段文字</span></li>
+      <li><b>6<i>→</i>1</b><span>种字号</span></li>
+      <li><b>13<i>→</i>1</b><span>条边框</span></li>
+      <li><b>5<i>→</i>1</b><span>种版式</span></li>
+    </ul>
+  </div>
+</div></section>
+
 <section id="list"><div class="wrap">
-  <div class="head"><i>04</i><h2>逐面清单</h2></div>
+  <div class="head"><i>05</i><h2>逐面清单</h2></div>
   <div class="legend"><span>先做</span><span class="p1">接着做</span><span class="p2">之后</span><span class="keep">保留</span></div>
 
   <div class="surface"><h3>侧栏</h3><ul class="rows">
@@ -221,10 +349,15 @@
   </ul></div>
 
   <div class="surface"><h3>右侧面板</h3><ul class="rows">
-    <li>下拉 16px，标签 10px，正文 13px——三种字号在一块 320px 宽的面板里。<em>统一 13px。</em></li>
-    <li class="p1">九个无标签图标的竖轨。<em>五个以内；其余进「更多」；悬停给名字。</em></li>
-    <li class="p1">空面板写着英文「Inspector」加一句说明。<em>空就是空，或直接默认打开「信息」。</em></li>
-    <li class="p2">「复制 resume 命令」旁边再放一个「复制」。<em>一行一个动作。</em></li>
+    <li>页签从九个收成五个，「信息」改成一种行。<em>见 04。</em></li>
+    <li>「审查」里三颗并排的描边按钮，没有主次。<em>一句结论配一个主动作，其余进「更多」。</em></li>
+    <li class="p1">「改动」首屏的一半给了仓库路径和「工作区只读」提示卡。<em>路径去掉；只读降成一行灰字，点了再解释。</em></li>
+    <li class="p1">「改动」的文件两行一条，九个文件就要滚动。<em>一行一条：文件名、增删数，目录悬停再给。</em></li>
+    <li class="p1">「工作流」里连着几条一模一样的「任务执行 · 已完成」。<em>相邻同类合成一条，展开再看。</em></li>
+    <li class="p1">「哨兵」把命令原样铺出来。<em>默认只显示那句描述，命令折起来。</em></li>
+    <li class="p2">「生成物」给 Markdown 文件也配一张棋盘格空缩略图。<em>只有图片和视频出缩略图，其余是一行。</em></li>
+    <li class="p2">空面板写着英文「Inspector」加一句说明。<em>空就是空，或直接默认打开「信息」。</em></li>
+    <li class="keep">「用过才浮现」是对的：没用过的功能不占位置。把它从两个页签推广到每一节。</li>
   </ul></div>
 
   <div class="surface"><h3>新建与空状态</h3><ul class="rows">
@@ -261,29 +394,38 @@
 </div></section>
 
 <section id="motion"><div class="wrap">
-  <div class="head"><i>05</i><h2>动效：anime.js 会有提升，但它排在最后</h2>
-    <p>现在的问题不是缺一个库。是没有节奏，也没有退场。</p></div>
+  <div class="head"><i>06</i><h2>动效：界面安静了，动一下才看得见</h2>
+    <p>简约配上一点动效就显得高级，这个判断是对的。它反过来也成立：在一屏 113 个控件上加动效，只会更吵。</p></div>
 
   <div class="split indent">
     <div><div class="durs" role="img" aria-label="transition 时长分布"></div></div>
     <div class="measure">
-      <p><strong>120、130、140、150、160 毫秒，人眼分不出来，代码里却是五个决定。</strong>115 条 transition 用了十五种以上的时长，没有一条引用令牌。</p>
-      <p>缓动也一样：89 处 <code>ease</code>、57 处 <code>ease-out</code>、五种写法不同的 <code>cubic-bezier</code>。浏览器默认的 <code>ease</code> 起步慢，用在界面响应上会显得迟钝。</p>
-      <p>而菜单、弹窗、提示关掉的那一刻，没有任何过渡——31 个关键帧动画里，只有侧边抽屉写了退场。</p>
+      <p>现在的状态变化几乎都是一帧切换：任务从运行跳到等待、列表重新排序、面板开合、菜单关闭。31 个关键帧动画里，只有侧边抽屉写了退场。</p>
+      <p><strong>120、130、140、150、160 毫秒，人眼分不出来，代码里却是五个决定。</strong>115 条 transition 用了十五种以上的时长，没有一条引用令牌；缓动是 89 处 <code>ease</code>、57 处 <code>ease-out</code>、五种写法不同的 <code>cubic-bezier</code>。</p>
+      <p>同时有 12 种一直在循环的动画。脉冲、旋转、微光，三种写法说的是同一件事：它在跑。</p>
     </div>
   </div>
 
-  <p class="verdict indent">差距的八成是没有系统，CSS 就能补上。剩下两成是编排，那才是 anime.js 的位置。</p>
-  <div class="indent measure">
-    <p>令牌、退场、合成线程上的过渡，现代 CSS 都有原生答案：<code>@starting-style</code>、<code>transition-behavior: allow-discrete</code>、<code>linear()</code> 弹簧。这些不需要任何依赖，也不会和 React 抢 DOM。</p>
-    <p>anime.js v4 强在 CSS 做不好的几件事：一组元素的错峰、真正的弹簧、布局变化前后的自动补间、数值滚动、SVG 描线。ash 恰好有这些场景——任务在列表里换位置、执行过程一步步展开、用量数字在跳。</p>
-    <ul class="facts">
-      <li>v4.5.0 · 2026-06</li><li>MIT · 零依赖</li><li>ESM 按需导入</li><li>整包 gzip 约 41 KB，按需远小于此</li><li>自带 WAAPI 适配与 createScope 清理</li>
-    </ul>
+  <p class="verdict indent">高级感来自稀少：平时几乎不动，动的那一下有来有去。</p>
+  <div class="layers indent">
+    <div><h3>基础层，和定尺一起做</h3><p>时长和缓动令牌、浮层的退场、面板和页签的过渡、悬停的响应。全是 CSS：<code>@starting-style</code>、<code>allow-discrete</code>、<code>linear()</code> 弹簧，不要任何依赖。上一版把这一层也排在最后，排错了，它和字号、圆角一样是尺度的一部分。</p></div>
+    <div><h3>循环的，减到一处</h3><p>运行中只留一道微光，落在正在做的那句话上。其余的点、圈、条全部静止，用颜色表示状态。</p></div>
+    <div><h3>点睛层，减完之后做</h3><p>全应用大约五个时刻：任务换位置、执行过程依次展开、数字滚动、站点线推进、审查通过的对勾。这是 CSS 做不好的编排，也才是 anime.js 的位置。这一点没变。</p></div>
+  </div>
+  <ul class="facts indent">
+    <li>anime.js v4.5.0 · 2026-06</li><li>MIT · 零依赖</li><li>ESM 按需导入</li><li>整包 gzip 约 41 KB，按需远小于此</li><li>自带 WAAPI 适配与 createScope 清理</li>
+  </ul>
+
+  <div class="demo" data-demo="busy" style="margin-top:72px">
+    <div><h3>运行中</h3><p>三处一直在动，每一处都在抢注意力。之后只剩一句话上的一道光。</p><p class="tool">纯 CSS，跑在合成线程上。</p></div>
+    <div class="stage">
+      <div class="pane"><small>现在</small><div class="d-busy now"><p><i class="dot"></i>修复斜杠补全回车</p><p><i class="ring"></i>claude 运行中</p><p class="bar">正在改 ReplyBox.tsx</p></div></div>
+      <div class="pane after"><small>之后</small><div class="d-busy"><p><i class="dot"></i>修复斜杠补全回车</p><p class="glow">正在改 ReplyBox.tsx</p></div></div>
+    </div>
   </div>
 
-  <div class="demo" data-demo="menu" style="margin-top:72px">
-    <div><h3>菜单开合</h3><p>现在只有进场，关闭是直接消失。之后进场 200ms、退场 120ms，从触发点展开。</p><p class="tool">纯 CSS，不需要库。</p><button class="play">打开 / 关闭</button></div>
+  <div class="demo" data-demo="menu">
+    <div><h3>菜单开合</h3><p>现在只有进场，关闭是直接消失。之后进场 200ms、退场 120ms，从触发点展开。</p><p class="tool">纯 CSS。<a href="#panel">右侧面板样机</a>的页签切换也是这一层。</p><button class="play">打开 / 关闭</button></div>
     <div class="stage">
       <div class="pane"><small>现在</small><span class="d-trigger">claude ▾</span><div class="d-menu now"><div>claude</div><div>codex</div><div>gemini</div><div>opencode</div></div></div>
       <div class="pane after"><small>之后</small><span class="d-trigger">claude ▾</span><div class="d-menu next"><div>claude</div><div>codex</div><div>gemini</div><div>opencode</div></div></div>
@@ -323,8 +465,9 @@
   <table class="map indent">
     <tr><td>悬停、按下、选中</td><td>CSS + 令牌</td><td>120ms，只动颜色和透明度</td></tr>
     <tr><td>菜单、弹窗、提示、抽屉的进出</td><td>CSS</td><td><code>@starting-style</code> 进场，<code>allow-discrete</code> 退场</td></tr>
+    <tr><td>页签与分段切换</td><td>CSS</td><td>指示条滑过去，内容朝同一个方向淡入</td></tr>
     <tr><td>右侧面板、侧栏的开合</td><td>CSS</td><td><code>linear()</code> 弹簧曲线，只动 transform</td></tr>
-    <tr><td>运行中的指示</td><td>CSS</td><td>合成线程上跑，流式输出再忙也不掉帧</td></tr>
+    <tr><td>运行中的指示</td><td>CSS</td><td>全应用一种微光；合成线程上跑，流式输出再忙也不掉帧</td></tr>
     <tr class="lib"><td>任务列表重排、状态迁移</td><td>anime.js</td><td><code>createLayout</code>；同屏元素很多时先试 View Transitions</td></tr>
     <tr class="lib"><td>执行过程展开、审查轮次依次出现</td><td>anime.js</td><td><code>stagger</code> + <code>createTimeline</code></td></tr>
     <tr class="lib"><td>用量、用时、改动行数</td><td>anime.js</td><td>对象补间 + <code>tabular-nums</code></td></tr>
@@ -361,21 +504,30 @@ export function useStagger(ref, open) {
 </div></section>
 
 <section id="plan"><div class="wrap">
-  <div class="head"><i>06</i><h2>四步，按这个顺序</h2>
-    <p>前一步是后一步的地基。先做动效再定尺度，动效会被做成第十六种时长。</p></div>
+  <div class="head"><i>07</i><h2>四步，顺序换了</h2>
+    <p>上一版是定尺在先。现在把「减」提到最前：减不依赖令牌，而且先减，就不必给马上要删掉的东西做迁移。</p></div>
   <div class="steps indent">
-    <div><h3>定尺</h3><p>加字号、圆角、字重、动效令牌；字号下限 12px；全局一条 reduced-motion；检查脚本只许令牌外的值减少。不改布局。</p></div>
-    <div><h3>减字</h3><p>会话流、任务头、回复框、右侧面板、空状态。元数据进面板，系统行改人话，说明文字逐句审。</p></div>
-    <div><h3>统一</h3><p>三个模式共用一套侧栏；状态栏跟随主题；原生 select 换成一个组件；设置页版式收平。</p></div>
-    <div><h3>连续</h3><p>先用 CSS 补齐退场和面板过渡，再引入 anime.js 做重排、错峰、数字和描线。</p></div>
+    <div><h3>减</h3><p>回合头尾的元数据和药丸、任务头、回复框、右侧面板九变五、空状态。说明文字逐句审，系统行改人话。</p></div>
+    <div><h3>定尺</h3><p>字号、圆角、字重、动效令牌一起加；字号下限 12px；浮层补上退场；全局一条 reduced-motion；检查脚本只许令牌外的值减少。</p></div>
+    <div><h3>收拢</h3><p>三个模式共用一套侧栏；状态栏跟随主题；原生 select 换成一个组件；设置页版式收平；循环动画减到一处。</p></div>
+    <div><h3>点睛</h3><p>引入 anime.js，只做五个时刻：重排、依次展开、数字、站点线、对勾。</p></div>
   </div>
-  <pre class="indent" style="margin-top:48px"><i>/* web/src/styles/global.css —— 第一步要加的全部内容 */</i>
+
+  <h3 class="indent" style="margin-top:64px">第一步做完，一屏应该是这样</h3>
+  <table class="map goal indent">
+    <tr><td>能点的控件</td><td>113 → 约 65</td><td>会话区 50 → 约 12，右侧 20 → 约 10；侧栏的 41 个是任务行本身，不动</td></tr>
+    <tr><td>带边框的元素</td><td>68 → 约 20</td><td>留下输入框、浮层和真正的卡片</td></tr>
+    <tr><td>文字</td><td>224 段 → 约 120 段</td><td>减掉的是说明和元数据，不是内容</td></tr>
+    <tr><td>字号</td><td>10 种 → 3 种</td><td>这一项要等第二步的令牌</td></tr>
+  </table>
+
+  <pre class="indent" style="margin-top:48px"><i>/* web/src/styles/global.css —— 第二步要加的全部内容 */</i>
 --text-xs: 12px;  --text-sm: 13px;  --text-md: 14px;  --text-lg: 17px;  --text-xl: 22px;
 --weight-regular: 450;  --weight-medium: 550;  --weight-strong: 650;
 --radius-sm: 6px;  --radius-md: 8px;  --radius-lg: 12px;  --radius-full: 999px;
 
 --dur-1: 120ms;   <i>/* 悬停、按下 */</i>
---dur-2: 200ms;   <i>/* 菜单、提示、弹窗 */</i>
+--dur-2: 200ms;   <i>/* 菜单、提示、弹窗、页签 */</i>
 --dur-3: 320ms;   <i>/* 面板、重排 */</i>
 --ease-out: cubic-bezier(0.22, 1, 0.36, 1);   <i>/* 进场、响应 */</i>
 --ease-in: cubic-bezier(0.4, 0, 1, 1);        <i>/* 退场 */</i>
@@ -384,8 +536,9 @@ export function useStagger(ref, open) {
 
 <footer><div class="wrap">
   <p>取证于 2026-11-11：对运行中的实例只读截图，对 <code>web/src</code> 的全部 CSS 做静态统计。没有改动任何产品代码。</p>
-  <p>团队与讨论模式没有截到有效画面，未单独下结论。与 Codex、Claude Code 的对照是设计共性，不是逐像素测量。</p>
-  <p>anime.js 的四个演示在本页独立运行，尚未在产品里做原型；接入前应先在会话流里实测流式输出时的帧率。</p>
+  <p>一屏的数字是 1440×900 下对同一个已完成任务页面的 DOM 实测：可见的元素、可点的控件、描了可见边框的元素。Codex 和 Claude Code 没有做同样的测量，对照是设计共性，不是逐像素比较。</p>
+  <p>右侧面板样机里的内容是示意；「九变五」和第一步的目标数字是建议，不是已经做过的原型。团队与讨论模式没有截到有效画面，未单独下结论。</p>
+  <p>anime.js 的三个演示在本页独立运行；接入前应先在会话流里实测流式输出时的帧率。</p>
 </div></footer>
 
 <script src="demos.js" defer></script>
