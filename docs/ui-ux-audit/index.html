@@ -7,6 +7,7 @@
 <meta name="color-scheme" content="light dark">
 <link rel="stylesheet" href="audit.css">
 <link rel="stylesheet" href="panel.css">
+<link rel="stylesheet" href="mocks.css">
 </head>
 <body>
 
@@ -20,6 +21,24 @@
   <symbol id="i-up" viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></symbol>
   <symbol id="i-check" viewBox="0 0 16 16"><path d="m3 8.5 3.2 3L13 4.5"/></symbol>
   <symbol id="i-warn" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.8v3.6M8 11v.2"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 16 16"><path d="M6 2.5h4l-.5 4 2.3 2.5H4.2l2.3-2.5z"/><path d="M8 9v4.5"/></symbol>
+  <symbol id="i-caret" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3.2l2 1.3"/></symbol>
+  <symbol id="i-sand" viewBox="0 0 16 16"><path d="M4.5 2.5h7M4.5 13.5h7M5.5 2.5v2.3L8 8l2.5-3.2V2.5M5.5 13.5v-2.3L8 8l2.5 3.2v2.3"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path d="m4.5 4.5 7 7M11.5 4.5l-7 7"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></symbol>
+  <symbol id="i-top" viewBox="0 0 16 16"><path d="M4 3h8M8 13V6M4.5 9.5 8 6l3.5 3.5"/></symbol>
+  <symbol id="i-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 7.3v3.4M8 5.2v.2"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2.5 4.5a1 1 0 0 1 1-1h2.6l1.4 1.5h5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-box" viewBox="0 0 16 16"><path d="m8 2 5 2.7v6.6L8 14l-5-2.7V4.7z"/><path d="m3 4.7 5 2.7 5-2.7M8 7.4V14"/></symbol>
+  <symbol id="i-diff" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="5.5" r="1.5"/><path d="M4.5 5v6M11.5 7c0 2.6-3.4 2-5.4 3.6"/></symbol>
+  <symbol id="i-note" viewBox="0 0 16 16"><path d="M3.5 2.5h9v7l-3.5 4H3.5z"/><path d="M12.5 9.5H9v4"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 16 16"><path d="M2.5 4A1.5 1.5 0 0 1 4 2.5h8A1.5 1.5 0 0 1 13.5 4v5.5A1.5 1.5 0 0 1 12 11H7l-3 2.5V11a1.5 1.5 0 0 1-1.5-1.5z"/></symbol>
+  <symbol id="i-flow" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.5"/><circle cx="12.5" cy="4" r="1.5"/><circle cx="12.5" cy="12" r="1.5"/><path d="M5 8h1.5c2 0 1.5-4 4.5-4M6.5 8c2 0 1.5 4 4.5 4"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 16 16"><path d="M8 2 3.5 3.8v3.7c0 3 1.9 5 4.5 6.5 2.6-1.5 4.5-3.5 4.5-6.5V3.8z"/><path d="m6 8 1.5 1.5 2.7-2.9"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 16 16"><path d="M1.5 8S3.9 3.5 8 3.5 14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></symbol>
+  <symbol id="i-pulse" viewBox="0 0 16 16"><path d="M1.5 8.5h3l1.5-4 3 7.5 1.5-3.5h4"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 16 16"><rect x="3" y="5.5" width="10" height="7.5" rx="2"/><path d="M8 5.5V3M6 9v1M10 9v1"/></symbol>
 </svg>
 
 <nav class="nav"><div class="wrap">
@@ -29,7 +48,7 @@
 
 <header class="hero"><div class="wrap">
   <h1>先减到安静，再让它动。</h1>
-  <p class="lede measure">你说的「重」和「繁琐」量得出来：一个已完成任务的页面，一屏里有 <strong>113 个能点的东西、224 段文字、68 条边框</strong>。Codex 和 Claude Code 的简约不是功能少，是默认只给你看一件事，其余等你要的时候才出现。界面静下来以后，少量的动效才显得高级。</p>
+  <p class="lede measure">你说的「重」和「繁琐」量得出来：一个已完成任务的页面，一屏里有 <strong>113 个能点的东西、224 段文字、68 个带框的元素</strong>。Codex 和 Claude Code 的功能并不少，只是默认只给你看一件事，其余等你要的时候才出现。界面静下来以后，少量的动效才显得高级。</p>
   <div class="figures">
     <div><b>113</b><span>个能点的控件<br>同一屏，1440×900</span></div>
     <div><b>224</b><span>段文字<br>约一万五千个字符</span></div>
@@ -37,17 +56,18 @@
     <div><b>10</b><span>种字号同屏<br>另有 21 种文字色、9 种字重</span></div>
   </div>
   <ul class="changes">
-    <li><b>主线换了</b>上一版并列五个根因。这一版归成两个字：重，和乱，并补了一屏的实测。</li>
-    <li><b>多了一节</b>右侧面板单独拆开看，给了收法和一个能点的样机。</li>
-    <li><b>动效提前了</b>上一版说它排在最后，这句话收回一半：基础的那层和定尺一起做，anime.js 仍在最后。</li>
+    <li><b>撤回五处</b>圆点筛选、深色状态栏、模式换肤、回复框水印，都是有意的设计，这一版不再动。右侧竖轨保留竖排，不换回横排页签。</li>
+    <li><b>回答一问</b>发送键变简单以后，发送设置还贴在发送键上，点右边那条窄边就是。见 <a href="#rewrite">03</a>。</li>
+    <li><b>重做三处</b>任务头部留着类型和置顶；行内时间紧跟文字，指上去才显示；右侧面板在保留竖轨的前提下重写。</li>
   </ul>
 </div></header>
 
 <section id="screen"><div class="wrap">
-  <div class="head"><i>01</i><h2>一个已完成任务的页面，十处</h2></div>
+  <div class="head"><i>01</i><h2>一个已完成任务的页面，十处</h2>
+    <p>实心的八处要改。空心的两处是有意的设计，留着。</p></div>
   <div class="shot">
-    <img src="shots/task.webp" width="2000" height="1250" alt="ash 任务详情页截图，标了十处问题">
-    <a class="pin" href="#n1" style="left:5.6%;top:7.7%">1</a>
+    <img src="shots/task.webp" width="2000" height="1250" alt="ash 任务详情页截图，标了十处">
+    <a class="pin kept" href="#n1" style="left:5.6%;top:7.7%">1</a>
     <a class="pin" href="#n2" style="left:46.9%;top:8.9%">2</a>
     <a class="pin" href="#n3" style="left:67.7%;top:3.3%">3</a>
     <a class="pin" href="#n4" style="left:35%;top:21.6%">4</a>
@@ -56,25 +76,25 @@
     <a class="pin" href="#n7" style="left:47%;top:88%">7</a>
     <a class="pin" href="#n8" style="left:89.4%;top:86.2%">8</a>
     <a class="pin" href="#n9" style="left:98%;top:22%">9</a>
-    <a class="pin" href="#n10" style="left:7.5%;top:98.5%">10</a>
+    <a class="pin kept" href="#n10" style="left:7.5%;top:98.5%">10</a>
   </div>
   <ol class="notes">
-    <li id="n1">侧栏顶部六颗彩色圆点是筛选器，但没有任何字告诉我哪颗是什么。<em>换成带名字的筛选，或者收进一个「筛选」入口。</em></li>
-    <li id="n2">回到顶部的悬浮钮常驻在正文中间，压着我正在读的那一行。<em>只在向上滚动时出现，停在右下角。</em></li>
-    <li id="n3">头部一行挤了八个元素；「已验收」长得像一颗被禁用的主按钮。<em>标题加一个状态词。状态不是按钮。</em></li>
+    <li id="n1" class="kept">侧栏顶部六颗圆点是筛选：星标，加五档状态。指上去有名字和条数。<em>有意的设计，保留。上一版说它没有名字，说错了。</em></li>
+    <li id="n2">回到顶部的悬浮钮：长会话一打开，它就停在正文上方，压着我正在读的那一行。<em>位置不动。只在我自己滚动时出现，停下约一秒淡出。</em></li>
+    <li id="n3">头部一行挤了八个元素；「已验收」长得像一颗被禁用的主按钮。<em>类型和置顶留在原位；灰按钮拿掉，时间进面板。见 <a href="#rewrite">03</a>。</em></li>
     <li id="n4">每个回合头都写着 <code>claude@nodemach · claude-opus-5-5 · high · 11/10 22:50 · 20s</code>。<em>只留名字，其余悬停再给。</em></li>
     <li id="n5">每个回合尾挂六颗等宽字体的小药丸：会话号、resume 命令、本轮、总量、上下文、派生。<em>默认不显示；悬停给操作，用量进右侧面板。</em></li>
     <li id="n6">系统行在说实现细节：「任务 status 保持 done」「REGRESSION_FINISHED exitC…」。<em>说人话：「已合并到 main」。</em></li>
-    <li id="n7">回复框里压着一个巨大的 CLAUDE 斜体水印，和占位长句叠在一起。<em>去掉水印；占位只留「回复…」。</em></li>
+    <li id="n7">回复框的占位是一句三十多个字的长句，压在 CLAUDE 水印上。<em>水印留着。占位缩成「回复…」，让它透出来。</em></li>
     <li id="n8">右侧面板里下拉框的字比标签和正文都大，下面再堆一段说明。<em>统一到正文字号，删掉说明。</em></li>
-    <li id="n9">最右一条竖轨上有十个没有文字的图标。<em>换成一行带字的页签，见<a href="#panel">右侧面板</a>一节。</em></li>
-    <li id="n10">浅色主题下，左下角是一条深色状态栏。<em>跟随主题，或者并进侧栏底部。</em></li>
+    <li id="n9">最右一条竖轨上有十个图标，「用过」的那格比选中的那格还亮。<em>竖轨留着。只留一种高亮，见<a href="#panel">右侧面板</a>一节。</em></li>
+    <li id="n10" class="kept">浅色主题下，左下角是一条深色状态栏。<em>有意的设计，保留。</em></li>
   </ol>
 </div></section>
 
 <section id="causes"><div class="wrap">
   <div class="head"><i>02</i><h2>重，和乱</h2>
-    <p>重是数量问题：一屏里常驻的东西太多。乱是规则问题：每一块都在用自己的写法。前者靠减，后者靠定。逐个去修上面那十处，三个月后会长出新的十处。</p></div>
+    <p>重是数量问题：一屏里常驻的东西太多。乱是规则问题：每一块都在用自己的写法。前者靠减，后者靠定。逐个去修上面那几处，三个月后会长出新的几处。</p></div>
 
   <h3 class="kind"><b>重</b>三个来源</h3>
 
@@ -83,7 +103,7 @@
     <div><h3>什么都常驻</h3>
       <p>会话号、模型名、token 数、时间戳、耗时，和智能体说的话用同样的权重摆在一起；每个回合尾部再挂一排操作。读一段回复，眼睛要先绕过四组数字。</p>
       <p>这些东西都有用，但不是每次都要用。一屏 113 个可点的控件，绝大多数这一刻用不上。</p>
-      <p class="rule">内容常驻，操作悬停才出现，元数据要看时去面板里看。</p></div>
+      <p class="rule">内容常驻，操作悬停才出现，元数据指上去再看。</p></div>
     <div>
       <div class="tally">
         <div><b>41</b><span>侧栏</span></div><div><b>50</b><span>会话区</span></div>
@@ -92,7 +112,8 @@
       <ul class="quotes">
         <li><q>智能体说了什么、改了什么</q><span>常驻</span></li>
         <li><q>复制、重试、派生、看审查报告</q><span>悬停</span></li>
-        <li><q>模型、智能水平、会话号、用量、耗时</q><span>右侧面板</span></li>
+        <li><q>时间、会话号、用量、耗时</q><span>悬停，或右侧面板</span></li>
+        <li><q>模型、智能水平</q><span>回复框那颗胶囊里已经有</span></li>
         <li><q>验收、合并、哨兵的内部状态词</q><span>翻成人话，或不显示</span></li>
       </ul>
     </div>
@@ -107,7 +128,7 @@
     <ul class="quotes">
       <li><q>回复并继续（↵ 发送）；输入 /team 或 /duet 可派生新任务…</q><span>回复框占位</span></li>
       <li><q>已结束的任务不进队列（队列会直接跳过它）。想等别的任务完成…</q><span>右侧面板</span></li>
-      <li><q>这里不预判下一步，只记录真正发生过的操作。</q><span>工作流页签</span></li>
+      <li><q>这里不预判下一步，只记录真正发生过的操作。</q><span>工作流面板</span></li>
       <li><q>已开启</q><span>开关旁边</span></li>
       <li>助手页一屏内六段说明<span>助手</span></li>
     </ul>
@@ -125,14 +146,15 @@
     </div>
   </div>
 
-  <h3 class="kind"><b>乱</b>两个来源</h3>
+  <h3 class="kind"><b>乱</b>一个来源，另一个撤回</h3>
 
   <div class="cause">
     <i>4</i>
     <div><h3>没有尺度</h3>
       <p>设计令牌只定了颜色和阴影。字号、间距、圆角、字重、层级、动效全是每个文件各写各的，所以每加一块界面，就多一组「差不多」的数。</p>
       <p>结果是同一屏里从 8px 到 13px 几乎每半个像素一档。全部样式里四分之三的字号声明小于 12px，9px 和 9.5px 加起来用了 373 次。看久了累，不只因为多，还因为小。</p>
-      <p class="rule">字号 5 档、圆角 4 档、字重 3 档、动效 3 档。正文之外最小 12px。</p></div>
+      <p>控件也一样：原生 <code>&lt;select&gt;</code> 有 37 处，和自绘下拉混着用；设置页的标题是 28px，主区没有一处这么大。</p>
+      <p class="rule">字号 5 档、圆角 4 档、字重 3 档、动效 3 档，下拉一种。正文之外最小 12px。</p></div>
     <div>
       <div class="hist" role="img" aria-label="字号声明分布，红色为 12px 以下"></div>
       <div class="tally">
@@ -142,46 +164,57 @@
     </div>
   </div>
 
-  <div class="cause">
+  <div class="cause kept">
     <i>5</i>
-    <div><h3>每一块一种写法</h3>
-      <p>任务用浅灰侧栏，聊天换成深紫，助手又是淡蓝，底部再接一条深色状态栏。设置页的标题是 28px，主区没有任何一处这么大。原生 <code>&lt;select&gt;</code> 有 37 处，和自绘下拉混着用。</p>
-      <p>切一次页面像换了一个应用；<a href="#panel">右侧面板</a>里切一次页签也是。</p>
-      <p class="rule">一套侧栏、一套表单控件、一套页面版式，所有模式和面板共用。</p></div>
-    <div class="skins">
-      <img src="shots/skin-task.webp" alt="任务模式侧栏" loading="lazy">
-      <img src="shots/skin-chat.webp" alt="聊天模式侧栏" loading="lazy">
-      <img src="shots/skin-assistant.webp" alt="助手模式侧栏" loading="lazy">
-    </div>
+    <div><h3>模式换肤，和深色状态栏</h3>
+      <p>聊天的深紫、助手的淡蓝、左下角的深色状态栏，都是有意的设计。上一版把它们算进「乱」，撤回。</p>
+      <p>同一条里的另外两件事，原生下拉混用和设置页的大标题，我按尺度问题并进了上一条。它们也是有意的话，说一声，一并撤。右侧面板各格各写各的，放到 <a href="#panel">04</a> 单说。</p></div>
   </div>
 </div></section>
 
 <section id="rewrite"><div class="wrap">
   <div class="head"><i>03</i><h2>向 Codex 和 Claude Code 看齐，看的是什么</h2>
-    <p>不是配色，也不是圆角。是功能都在，但默认只给你看一件事。</p></div>
+    <p>功能都在，默认只给你看一件事。配色和圆角是其次。</p></div>
 
   <table class="versus indent">
     <tr><th></th><th>它们的共性</th><th>ash 现在</th></tr>
-    <tr><td>输入框</td><td>全页最重的元素，居中，一个容器装下全部控件</td><td>上面一排动作，下面一排动作，中间一个水印</td></tr>
+    <tr><td>输入框</td><td>全页最重的元素，居中，一个容器装下全部控件</td><td>上面一排动作，下面一排动作，占位是一句三十多个字的长句</td></tr>
     <tr><td>工具调用</td><td>折成一句人话：「读了 3 个文件」</td><td>「执行过程 · 3 工具」淡到看不见，展开是原始 JSON</td></tr>
     <tr><td>元数据</td><td>悬停或侧板，正文里没有数字</td><td>每个回合头尾各一排</td></tr>
-    <tr><td>分组</td><td>留白和对齐，几乎没有盒子</td><td>一屏 68 条边框，卡片里再套卡片</td></tr>
+    <tr><td>分组</td><td>留白和对齐，几乎没有盒子</td><td>一屏 68 个带框的元素，卡片里再套卡片</td></tr>
     <tr><td>空状态</td><td>就是输入框本身</td><td>图标、标题、说明、按钮，点了才到输入框</td></tr>
     <tr><td>运行中</td><td>一处微光，其余静止</td><td>12 种循环动画，脉冲、旋转、微光各模块各写一个</td></tr>
   </table>
 
   <div class="rewrite">
-    <h3>任务头部</h3><p>八个元素减到四个。创建时间和用时进右侧面板；状态用颜色和一个词表达，不占按钮的位置；真正的操作只在有事可做时出现。</p>
+    <h3>任务头部</h3><p>类型和置顶留在标题左边，位置不动。只减三样：灰掉的那颗按钮拿掉，它多说的那句话接在状态词后面；创建时间和用时住进右侧面板；「重新排队」收进更多。真正的操作只在有事可做时出现。另有两处小改：来源徽记贴上类型，拼成一颗两段胶囊；未置顶的图钉从几乎看不见，改成看得见的灰。</p>
     <small>现在</small><figure><img src="shots/crop-header.webp" width="1180" height="60" alt="现在的任务头部" loading="lazy"></figure>
-    <small>改后</small><figure class="after mock"><div class="m-head">
-      <b>裁定不用改了后审查卡死</b><span class="state"><svg><use href="#i-check"/></svg>已合并</span><span class="sp"></span>
-      <button class="m-ico" aria-label="更多"><svg><use href="#i-more"/></svg></button>
-      <button class="m-ico" aria-label="右侧面板"><svg><use href="#i-panel"/></svg></button>
-    </div></figure>
+    <small>改后</small><figure class="after mock">
+      <div class="m-hd"><span class="m-kind"><b>任务</b></span><button class="m-ico m-pin" aria-label="置顶"><svg><use href="#i-pin"/></svg></button>
+        <b>裁定不用改了后审查卡死</b><span class="m-st ok">验收完成</span>
+        <button class="m-ico" aria-label="更多"><svg><use href="#i-more"/></svg></button><button class="m-ico" aria-label="右侧面板"><svg><use href="#i-panel"/></svg></button></div>
+      <div class="m-hd"><span class="m-kind"><b>任务</b><i>Claude 派生</i></span><button class="m-ico m-pin on" aria-label="取消置顶"><svg><use href="#i-pin"/></svg></button>
+        <b>回复框：原生命令的回车被吞掉</b><span class="m-st bad">失败</span>
+        <button class="m-btn pri"><svg><use href="#i-check"/></svg>验收</button><button class="m-btn"><svg><use href="#i-redo"/></svg>重试</button>
+        <button class="m-ico" aria-label="更多"><svg><use href="#i-more"/></svg></button><button class="m-ico" aria-label="右侧面板"><svg><use href="#i-panel"/></svg></button></div>
+      <div class="m-hd"><span class="m-kind"><b>任务</b></span><button class="m-ico m-pin" aria-label="置顶"><svg><use href="#i-pin"/></svg></button>
+        <b>合并移动端轮询</b><span class="m-st bad">失败 · 已验收</span><button class="m-btn"><svg><use href="#i-redo"/></svg>重试</button>
+        <button class="m-ico" aria-label="更多"><svg><use href="#i-more"/></svg></button><button class="m-ico" aria-label="右侧面板"><svg><use href="#i-panel"/></svg></button></div>
+      <div class="m-hd"><span class="m-kind"><b>任务</b></span><button class="m-ico m-pin" aria-label="置顶"><svg><use href="#i-pin"/></svg></button>
+        <b>导出周报</b><span class="m-st ok">完成 · 已接力</span>
+        <button class="m-ico" aria-label="更多"><svg><use href="#i-more"/></svg></button><button class="m-ico" aria-label="右侧面板"><svg><use href="#i-panel"/></svg></button></div>
+    </figure>
+    <ul class="quotes">
+      <li><q>已验收、等答复</q><span>8 件 → 6 件</span></li>
+      <li><q>运行中</q><span>8 件 → 7 件</span></li>
+      <li><q>失败</q><span>9 件 → 8 件；排着队时 10 → 8</span></li>
+    </ul>
   </div>
 
   <div class="rewrite" style="--w:780px">
-    <h3>回合结尾</h3><p>六颗药丸换成三个悬停图标。审查轮次和验收各占一行，写结果不写机制；时间靠右，颜色最浅。想看报告，点那一行。</p>
+    <h3>回合结尾</h3><p>六颗药丸换成三个悬停图标。审查轮次和验收各占一行，写结果不写机制。时间紧跟在每行文字后面，平时不显示，指到那一行才浮出来；触屏上一直显示。</p>
+    <p>带按钮的那一行，时间排在按钮后面：不显示时空位落在行尾，按钮不会左右挪。现在的代码把按钮排在最后，这一处要你点头。</p>
+    <p>六颗药丸里的本轮、总量、上下文，是你 8 月 7 日定下并排放在回合尾的。上一轮你同意收走，这里再确认一次：三样都进信息面板，上下文那颗带着的「压缩设置」入口一起过去。</p>
     <small>现在</small><figure><img src="shots/crop-chips.webp" width="780" height="180" alt="现在的回合结尾" loading="lazy"></figure>
     <small>改后</small><figure class="after mock"><div class="m-turn">
       <p>合并后请在主仓重新 build 服务端，再由你重启 :4317。</p>
@@ -190,150 +223,244 @@
         <button class="m-ico" aria-label="重试"><svg><use href="#i-redo"/></svg></button>
         <button class="m-ico" aria-label="派生新任务"><svg><use href="#i-fork"/></svg></button>
       </div>
-      <div class="m-line"><svg class="ok"><use href="#i-check"/></svg>第 3 轮审查通过 · <a href="#rewrite">看报告</a><time>23:02</time></div>
-      <div class="m-line"><svg class="ok"><use href="#i-check"/></svg>已合并到 main<time>23:04</time></div>
+      <div class="m-line"><svg class="warn"><use href="#i-warn"/></svg>执行者驳回了第 2 条<span class="more">3 条记录</span><button class="m-btn sm">去裁定</button><time datetime="2026-11-10T22:41">11/10 22:41</time></div>
+      <div class="m-line"><svg class="ok"><use href="#i-check"/></svg>第 3 轮审查通过 · 8m 12s · <a href="#rewrite">看报告</a><time datetime="2026-11-10T22:54">11/10 22:54 → 23:02</time></div>
+      <div class="m-line"><svg class="ok"><use href="#i-check"/></svg>已合并到 main<time datetime="2026-11-10T23:04">11/10 23:04</time></div>
     </div></figure>
+    <small>指到一行</small><figure class="after mock" aria-hidden="true"><div class="m-turn tail">
+      <div class="m-line is-hover"><svg class="warn"><use href="#i-warn"/></svg>执行者驳回了第 2 条<span class="more">3 条记录</span><button class="m-btn sm" tabindex="-1">去裁定</button><time>11/10 22:41</time></div>
+      <div class="m-line"><svg class="ok"><use href="#i-check"/></svg>第 3 轮审查通过 · 8m 12s · <u>看报告</u><time>11/10 22:54 → 23:02</time></div>
+      <div class="m-line"><svg class="ok"><use href="#i-check"/></svg>已合并到 main<time>11/10 23:04</time></div>
+    </div></figure>
+    <ul class="quotes">
+      <li><q>系统行、审查卡头、哨兵唤醒、提问答复、团队的来信和派活卡</q><span>改，共 12 处</span></li>
+      <li><q>智能体回合头上的时间和用时</q><span>按红圈 4 收进悬停，不算在这 12 处里</span></li>
+      <li><q>你自己那条消息上的时间，回合分隔线上的时间</q><span>不动</span></li>
+    </ul>
+  </div>
+
+  <div class="demo" data-demo="backtop">
+    <div><h3>回到顶部</h3><p>位置不动。只在你自己滚的时候出现，停下约一秒淡出；指着它、或者键盘聚焦到它时不淡出。智能体输出带着页面往下走，它不出来。</p><p>回到底部的那颗不改：往上翻的时候来了新消息，它是唯一的提示。</p><p class="tool">在右边两个框里各滚一下，再点「模拟输出」。</p><button class="play">模拟输出</button></div>
+    <div class="stage">
+      <div class="pane"><small>现在</small><div class="d-feed" tabindex="0"></div><button class="d-top" aria-label="回到顶部"><svg><use href="#i-top"/></svg></button></div>
+      <div class="pane after"><small>之后</small><div class="d-feed" tabindex="0"></div><button class="d-top is-idle" aria-label="回到顶部"><svg><use href="#i-top"/></svg></button></div>
+    </div>
   </div>
 
   <div class="rewrite" style="--w:800px">
-    <h3>回复框</h3><p>一个容器，一行控件。「智能体 · 模型 · 智能水平」仍是那一颗三段胶囊，只是不再抢戏；发送键合成一个；再审、预览、接力收进 <code>/</code> 和「更多」。</p>
+    <h3>回复框</h3><p>水印留着。占位缩成「回复…」，它就透出来了。</p>
+    <p>发送设置没有搬家：箭头右边连着一小截，上面一个小尖角，点它还是原来那张「发送设置」，三种发法都在。平时键上没有字。只要这一条不会像平常那样马上发出去，键就变宽、写上字，尖角换成时钟或沙漏。发出后照旧进输入框上方的待发送列表，可以撤回。连体的小尖角是邮件客户端「稍后发送」的通行做法（凭已有知识）。</p>
+    <p>团队回复框和新建任务的「启动设置」是同一颗键，三处一起改。新建任务默认那一档也只画箭头，「创建并运行」五个字挪进面板底部现成的那行小字；你觉得新手会看不懂的话，这一处留字就行。底行现有的「截图批注」这一题没动，样机没画它。</p>
     <small>现在</small><figure><img src="shots/crop-composer.webp" width="800" height="160" alt="现在的回复框" loading="lazy"></figure>
-    <small>改后</small><figure class="after mock"><div class="m-box">
+    <small>改后</small><figure class="after mock"><div class="m-reply"><div class="m-box">
+      <i class="m-plate" aria-hidden="true">CLAUDE</i>
       <div class="ph">回复…</div>
       <div class="row">
         <button class="m-ico" aria-label="附件"><svg><use href="#i-clip"/></svg></button>
-        <button class="m-chip"><b>claude</b>· opus-5-5 · high</button>
-        <button class="m-send" aria-label="发送"><svg><use href="#i-up"/></svg></button>
+        <span class="m-cap"><b>claude</b><b>opus-5-5</b><b>high</b></span>
+        <span class="m-key idle"><span><svg><use href="#i-up"/></svg></span><span><svg><use href="#i-caret"/></svg></span></span>
+      </div>
+    </div></div></figure>
+    <small>点尖角</small><figure class="after mock"><div class="m-reply" data-send>
+      <div class="m-popwrap"><div class="m-pop">
+        <header>发送设置<svg><use href="#i-x"/></svg></header>
+        <div class="m-seg">
+          <button data-mode="now" aria-pressed="false">立即发送</button>
+          <button data-mode="timed" aria-pressed="true">指定时间</button>
+          <button data-mode="after" aria-pressed="false">等任务完成</button>
+        </div>
+        <p></p>
+      </div></div>
+      <div class="m-box">
+        <i class="m-plate" aria-hidden="true">CLAUDE</i>
+        <div class="ph typed">跑完回归再合并，结果贴在这条下面。</div>
+        <div class="row">
+          <button class="m-ico" aria-label="附件"><svg><use href="#i-clip"/></svg></button>
+          <span class="m-cap"><b>claude</b><b>opus-5-5</b><b>high</b></span>
+          <span class="m-key"><button class="txt" aria-label="发送"><span></span><svg><use href="#i-up"/></svg></button><button aria-label="发送设置"><svg><use href="#i-clock"/></svg></button></span>
+        </div>
       </div>
     </div></figure>
-  </div>
-</div></section>
-
-<section id="panel"><div class="wrap">
-  <div class="head"><i>04</i><h2>右侧面板：十个页签，各写各的</h2>
-    <p>一眼看过来乱糟糟，原因不在哪一个页签，在它们之间没有一样共同的东西。下面是其中四个：标题、分组、按钮、状态，四种写法。</p></div>
-
-  <div class="tabs4 indent">
-    <figure><img src="shots/insp-info.webp" width="680" height="1712" alt="信息页签" loading="lazy"><figcaption>信息</figcaption></figure>
-    <figure><img src="shots/insp-scm.webp" width="680" height="1120" alt="改动页签" loading="lazy"><figcaption>改动</figcaption></figure>
-    <figure><img src="shots/insp-flow.webp" width="680" height="1120" alt="工作流页签" loading="lazy"><figcaption>工作流</figcaption></figure>
-    <figure><img src="shots/insp-review.webp" width="680" height="1120" alt="审查页签" loading="lazy"><figcaption>审查</figcaption></figure>
-  </div>
-
-  <div class="indent"><ol class="notes">
-    <li>竖轨上十个没有字的图标。当前选中的是一条紫色细线，「用过」的那一格却是整块青色底，比选中的还显眼。要悬停才知道名字，而那条提示会盖住面板的关闭键。<em>换成面板顶上一行带字的页签，只留一种高亮。</em></li>
-    <li>「信息」一个页签里有五种版式：折叠段、标签值行、带框统计格、说明段、表单下拉。320px 宽里 46 段文字、6 种字号、13 条边框。<em>全部写成同一种行：标签，值。分节只靠留白。</em></li>
-    <li>同一件事说三遍。改动的统计在「信息」里是四个格子，在「改动」里又列一次；审查的经过在会话流、「工作流」、「审查」各有一份；「预览指正」是一个页签，回复框上面还有一颗「打开预览」。<em>每件事只有一个家，别处最多一行链接过去。</em></li>
-    <li>没东西的时候还占着位置。已完成任务的「队列」一节只剩三行解释；「侧聊」是一块白板；「备忘」是三行说明；「预览指正」整个页签只有一个按钮。<em>没有内容就不出现；空的页签只留一个输入框。</em></li>
-    <li>把机制原样端出来。「哨兵」铺着整条 base64 命令和进程号；「审查」同一屏既写着「已通过」又写着「未通过」，再加一句「无法确认结论是否仍对应当前代码」。<em>先给一句结论，机制折起来。</em></li>
-  </ol></div>
-
-  <p class="verdict indent">一种行，一种高亮，一件事一个家。</p>
-
-  <table class="map merge indent">
-    <tr><td>信息</td><td>信息</td><td>只写一种行</td></tr>
-    <tr><td>改动 · 文件 · 生成物</td><td>产出</td><td>一个页签里三段切换；三个问题仍然分开答</td></tr>
-    <tr><td>工作流 · 审查</td><td>进度</td><td>顶上一句结论，下面一条时间线，审查轮次是其中的条目</td></tr>
-    <tr><td>侧聊</td><td>侧聊</td><td>空的时候只有输入框</td></tr>
-    <tr><td>备忘</td><td>备忘</td><td>同上；手写入口还在这里</td></tr>
-    <tr><td>预览指正</td><td>一个动作</td><td>回复框上面已经有「打开预览」；<code>I P</code> 直接打开</td></tr>
-    <tr><td>子智能体 · 哨兵</td><td>用过才出现</td><td>这条规矩保留并推广；样子和别的页签一样，不另用一种底色</td></tr>
-  </table>
-  <div class="indent measure" style="margin-top:28px">
-    <p>常驻的九个收成五个，快捷键和「+」菜单一个都不少：<code>I F</code> 仍然直达文件，只是落在「产出」的那一段上。竖轨换成面板顶上的一行字，省掉一列和一行标题，也不再需要悬停提示；面板关上时整块消失，由任务头上的面板键打开。</p>
-    <p>下面「改后」那一块是活的，可以点。</p>
-  </div>
-
-  <div class="pair indent">
-    <div><small>现在</small><figure><img src="shots/insp-info.webp" width="680" height="1712" alt="现在的信息页签" loading="lazy"></figure></div>
-    <div><small>改后</small><figure class="after mock m-insp" data-switch>
-      <div class="m-tabs" role="tablist">
-        <button role="tab" data-to="info" aria-selected="true">信息</button>
-        <button role="tab" data-to="out" aria-selected="false">产出</button>
-        <button role="tab" data-to="flow" aria-selected="false">进度</button>
-        <button role="tab" data-to="chat" aria-selected="false">侧聊</button>
-        <button role="tab" data-to="memo" aria-selected="false">备忘</button>
-        <span class="sp"></span>
-        <button class="m-ico" aria-label="更多"><svg><use href="#i-more"/></svg></button>
-        <i class="m-ink"></i>
-      </div>
-      <div class="m-view on" data-pane="info">
-        <p class="m-req">点了「这一轮不用改了」之后，审查还停在等待里，没有往下走。</p>
-        <dl class="m-kv">
-          <dt>状态</dt><dd><button>完成</button></dd>
-          <dt>分组</dt><dd><button class="none">无</button></dd>
-          <dt>标签</dt><dd><button class="none">添加</button></dd>
-        </dl>
-        <dl class="m-kv">
-          <dt>用时</dt><dd>1h 19m</dd>
-          <dt>用量</dt><dd>48.9M · 8 轮</dd>
-          <dt>改动</dt><dd><button data-to="out">9 个文件 <span class="add">+371</span> <span class="del">−65</span></button></dd>
-          <dt>分支</dt><dd>ash/QsjSuz_e</dd>
-          <dt>续跑</dt><dd>claude --resume 8c1e…<button class="m-ico" aria-label="复制续跑命令"><svg><use href="#i-copy"/></svg></button></dd>
-        </dl>
-      </div>
-      <div class="m-view" data-pane="out" data-switch>
-        <div class="m-seg">
-          <button data-to="diff" aria-selected="true">改动 9</button>
-          <button data-to="tree" aria-selected="false">文件</button>
-          <button data-to="made" aria-selected="false">生成物 2</button>
-        </div>
-        <ul class="m-files on" data-pane="diff">
-          <li><span>test-free-review-dispute-gate.ts</span><b class="add">+159</b><b class="del">−6</b></li>
-          <li><span>free-review-ruling-release.ts</span><b class="add">+96</b><b class="del">−34</b></li>
-          <li><span>free-review-reservations.ts</span><b class="add">+55</b><b class="del">−2</b></li>
-          <li><span>free-review-dispute.ts</span><b class="add">+30</b><b class="del">−18</b></li>
-          <li><span>free-workflow.ts</span><b class="add">+11</b><b class="del">−4</b></li>
-          <li><span>schema-free-workflow.ts</span><b class="add">+9</b><b class="del">−1</b></li>
-          <li><span>index.ts</span><b class="add">+4</b><b class="del">−0</b></li>
-          <li class="rest">还有 2 个</li>
-        </ul>
-        <ul class="m-files" data-pane="tree">
-          <li><span>server/</span></li><li><span>shared/</span></li><li><span>web/</span></li><li><span>docs/</span></li><li><span>AGENTS.md</span></li><li><span>package.json</span></li>
-        </ul>
-        <ul class="m-files" data-pane="made">
-          <li><span>审查报告 · 第 3 轮.md</span></li><li><span>复现截图.png</span></li>
-        </ul>
-      </div>
-      <div class="m-view" data-pane="flow">
-        <p class="m-now"><svg><use href="#i-warn"/></svg>合并后的审查没通过<button>建修复任务</button></p>
-        <ol class="m-tl">
-          <li>执行<time>38m</time></li>
-          <li class="bad">审查 · 第 1 轮<time>未通过</time></li>
-          <li>修复<time>9m</time></li>
-          <li class="bad">审查 · 第 2 轮<time>未通过</time></li>
-          <li>修复<time>6m</time></li>
-          <li class="ok">审查 · 第 3 轮<time>通过</time></li>
-          <li class="ok">合并到 main<time>23:02</time></li>
-          <li class="bad">合并后审查<time>未通过</time></li>
-        </ol>
-      </div>
-      <div class="m-view" data-pane="chat"><div class="m-ask">问一句，不打断它<button class="m-send" aria-label="发送"><svg><use href="#i-up"/></svg></button></div></div>
-      <div class="m-view" data-pane="memo"><div class="m-ask">记一条</div></div>
-    </figure></div>
-    <ul class="delta">
-      <li><b>46<i>→</i>24</b><span>段文字</span></li>
-      <li><b>6<i>→</i>1</b><span>种字号</span></li>
-      <li><b>13<i>→</i>1</b><span>条边框</span></li>
-      <li><b>5<i>→</i>1</b><span>种版式</span></li>
+    <small>几种状态</small><figure class="after mock"><ul class="m-keys">
+      <li><span class="m-key"><span><svg><use href="#i-up"/></svg></span><span><svg><use href="#i-caret"/></svg></span></span>立即</li>
+      <li><span class="m-key idle"><span><svg><use href="#i-up"/></svg></span><span><svg><use href="#i-caret"/></svg></span></span>空输入</li>
+      <li><span class="m-key"><span class="txt">排队发送<svg><use href="#i-up"/></svg></span><span><svg><use href="#i-caret"/></svg></span></span>任务在跑</li>
+      <li><span class="m-key"><span class="txt">14:30 发送<svg><use href="#i-up"/></svg></span><span><svg><use href="#i-clock"/></svg></span></span>已定时</li>
+      <li><span class="m-key"><span class="txt">完成后发送<svg><use href="#i-up"/></svg></span><span><svg><use href="#i-sand"/></svg></span></span>等任务完成</li>
+      <li><span class="m-key idle"><span class="txt">上传中 37%<svg><use href="#i-up"/></svg></span><span><svg><use href="#i-caret"/></svg></span></span>上传中</li>
+      <li><span class="m-key solo"><span class="txt">补全<svg><use href="#i-up"/></svg></span></span>斜杠命令</li>
+    </ul></figure>
+    <ul class="quotes">
+      <li><q>⌘↵ 发送</q><span>指到发送键上的提示</span></li>
+      <li><q>可粘贴图片或文件</q><span>指到附件钮上的提示</span></li>
+      <li><q>为什么发不出去</q><span>留在占位里；键是淡的时候，指上去也说</span></li>
+      <li><q>空输入时左半灰、右半实</q><span>整颗键同明同暗；尖角照样点得动</span></li>
     </ul>
   </div>
 </div></section>
 
+<section id="panel"><div class="wrap">
+  <div class="head"><i>04</i><h2>右侧面板：竖轨留着，乱在别处</h2>
+    <p>横排带字的页签你试过，嫌繁琐，所以竖轨留着，不换回横排。一眼看过来乱，有四个来源：条上十格不分组（默认九格，加一格用过才冒出来的哨兵）；「用过」的格比选中的格还亮；每一格各用一套版式；信息格自己把一件事说两遍。下面是其中四格。</p></div>
+
+  <div class="tabs4 indent">
+    <figure><img src="shots/insp-info.webp" width="680" height="1712" alt="信息面板" loading="lazy"><figcaption>信息</figcaption></figure>
+    <figure><img src="shots/insp-scm.webp" width="680" height="1120" alt="改动面板" loading="lazy"><figcaption>改动</figcaption></figure>
+    <figure><img src="shots/insp-flow.webp" width="680" height="1120" alt="工作流面板" loading="lazy"><figcaption>工作流</figcaption></figure>
+    <figure><img src="shots/insp-review.webp" width="680" height="1120" alt="审查面板" loading="lazy"><figcaption>审查</figcaption></figure>
+  </div>
+
+  <div class="indent"><ol class="notes">
+    <li>竖轨上，选中的那格只有一条紫色细线，「用过」的那格却是整块青底，比选中的还显眼。同一块青底还说着两件事：备忘里有东西，和哨兵正在跑，长得一样。<em>选中只有一种长相。状态改成图标角上的一个小点：灰点是有东西，紫点是在跑。</em></li>
+    <li>「信息」一格里有五种版式：折叠段、标签值行、带框统计格、说明段、表单下拉。340px 宽里 46 段文字、6 种字号、13 个带框的元素。<em>全部写成同一种行：标签，值。分节只靠留白。</em></li>
+    <li>各格之间没有一样共同的东西：段标题约 18 种写法，空状态 7 种，提示条至少 8 种，主按钮的私有样式至少 9 份。<em>收成六个公共件：分节标题、键值行、入口行、空状态、提示条、按钮。卡片只统一外框。</em></li>
+    <li>同一屏里把一件事说两遍：信息格里分支名出现两次；改动统计是一个标题、四个带框的格子、再加一颗入口钮。「打开改动工作区」各格有三种叫法。<em>同一屏不重复。改动统计压成一行入口，叫法统一。跨格的重复是上下文，留着。</em></li>
+    <li>没东西的时候还占着位置，有东西的时候把机制原样端出来。「预览指正」整格是图标、标题、两段说明和一颗按钮；「哨兵」铺着整条命令和进程号。<em>空的格只留一句话和一个动作；机制折起来，先给结论。</em></li>
+  </ol></div>
+
+  <p class="verdict indent">一种行，一种高亮，同一屏不说两遍。</p>
+
+  <table class="map rail indent">
+    <tr><td>格数</td><td>不动，默认九格都留着</td><td>你做竖轨，就是为了每个面板常驻可见。想再少几格，见表后</td></tr>
+    <tr><td>高亮</td><td>选中一种，状态是小点</td><td>青底取消。小点在选中的格上也看得见，青底做不到</td></tr>
+    <tr><td>分簇</td><td>三簇，中间留一道空</td><td>源码里本来就按三段排：看任务本身，看它改了什么，跟它一起干活。断在「信息」后和「改动」后，这两个断点要你确认</td></tr>
+    <tr><td>提示</td><td>第一次等 0.4 秒，连着看不等</td><td>现在零延迟，鼠标划过竖轨，每格都弹一下</td></tr>
+    <tr><td>再点一次</td><td>收起整栏</td><td>和任务头最右那颗键是同一个动作。现在点已选中的格什么都不发生；VS Code 和 JetBrains 的竖条都是再点一次收起（凭已有知识）</td></tr>
+    <tr><td>关闭键</td><td>仍是把这一格移出竖轨</td><td>「信息」是必留格，不画这颗键；提示写明「可从 + 加回」</td></tr>
+    <tr><td>你的减法</td><td>任务状态变了也不回来</td><td>现在任务状态一变，摘掉的格就被拽回来。哨兵、子智能体两格是例外：摘掉后重新进这个任务，它们还会冒出来（按代码推断，没实测），这一轮不改。下一步加一份跨任务的「我的默认格」，面板宽度也跨任务记住</td></tr>
+  </table>
+  <div class="indent measure" style="margin-top:28px">
+    <p>顺序、快捷键、「+」都不动：备忘的手写入口还在备忘这一格，哨兵和子智能体照旧用过才浮现。团队视图用的是同一个外壳，竖轨的改动自动跟上，团队的信息面板换同一套公共件。</p>
+    <p>想让条上再少几格：默认可以只上五格（信息｜改动｜备忘、侧聊、审查，预设工作流的任务多一格工作流），文件、生成物、预览指正、自由工作流的工作流退到「+」和快捷键。团队视图现在默认就是五格。代价是老任务上这四格会被摘掉一次，常用的要从「+」加回；名单也只是按用途推的，没有使用数据。这一条我没放进主线，你定。</p>
+    <p>上一版说「一件事一个家」，这一版收窄成同一屏不重复：面板一次只看一格，跨格的重复多数是有意留的上下文。</p>
+    <p>下面「改后」那一块是活的：点格子切换，再点一次收起；关闭键把这一格移出竖轨，「+」里加回来。可以自己摘几格，看看五格的样子。</p>
+  </div>
+
+  <div class="pair indent">
+    <div><small>现在</small><figure><img src="shots/insp-info.webp" width="680" height="1712" alt="现在的信息面板" loading="lazy"></figure></div>
+    <div><small>改后</small><figure class="after mock m-insp" data-rail>
+      <div class="m-main">
+        <header class="m-ph"><b>信息</b><span class="sp"></span><button class="m-ico" data-remove aria-label="移出竖轨，可从 + 加回" hidden><svg><use href="#i-x"/></svg></button></header>
+        <div class="m-view on" data-pane="info">
+          <p class="m-req">点了「这一轮不用改了」之后，审查还停在等待里，没有往下走。</p>
+          <dl class="m-kv">
+            <dt>状态</dt><dd><button>完成</button></dd>
+            <dt>分组</dt><dd><button class="none">无</button></dd>
+            <dt>标签</dt><dd><button class="none">添加</button></dd>
+            <dt>调度</dt><dd><button class="none">不定时</button></dd>
+          </dl>
+          <dl class="m-kv">
+            <dt>创建</dt><dd>11/10 21:34</dd>
+            <dt>用时</dt><dd>1h 19m</dd>
+            <dt>用量</dt><dd>48.9M · 8 轮</dd>
+            <dt>上下文</dt><dd><button>65%</button></dd>
+            <dt>改动</dt><dd><button data-to="scm">9 个文件 <span class="add">+371</span> <span class="del">−65</span></button></dd>
+            <dt>分支</dt><dd>ash/QsjSuz_e</dd>
+            <dt>目录</dt><dd>.worktrees/QsjSuz_ehsEW</dd>
+            <dt>续跑</dt><dd>claude --resume 8c1e…<button class="m-ico" aria-label="复制续跑命令"><svg><use href="#i-copy"/></svg></button></dd>
+          </dl>
+        </div>
+        <div class="m-view" data-pane="files"><ul class="m-files">
+          <li><span>server/</span></li><li><span>shared/</span></li><li><span>web/</span></li><li><span>docs/</span></li><li><span>AGENTS.md</span></li><li><span>package.json</span></li>
+        </ul></div>
+        <div class="m-view" data-pane="made"><ul class="m-files">
+          <li><span>审查报告 · 第 3 轮.md</span></li><li><span>复现截图.png</span></li>
+        </ul></div>
+        <div class="m-view" data-pane="scm">
+          <dl class="m-kv"><dt>分支</dt><dd>ash/QsjSuz_e</dd></dl>
+          <h4 class="m-sec">未提交</h4>
+          <p class="m-none">工作区干净</p>
+          <h4 class="m-sec">已提交<i>9 个文件 <span class="add">+371</span> <span class="del">−65</span></i></h4>
+          <ul class="m-files">
+            <li><span>test-free-review-dispute-gate.ts</span><b class="add">+159</b><b class="del">−6</b></li>
+            <li><span>free-review-ruling-release.ts</span><b class="add">+96</b><b class="del">−34</b></li>
+            <li><span>free-review-reservations.ts</span><b class="add">+55</b><b class="del">−2</b></li>
+            <li><span>free-review-dispute.ts</span><b class="add">+30</b><b class="del">−18</b></li>
+            <li><span>free-workflow.ts</span><b class="add">+11</b><b class="del">−4</b></li>
+            <li class="rest">另 4 个文件</li>
+          </ul>
+          <button class="m-go">打开改动工作区</button>
+        </div>
+        <div class="m-view" data-pane="agents"><p class="m-none">这个任务没有用过子智能体。</p></div>
+        <div class="m-view" data-pane="memo">
+          <div class="m-ask">记一条</div>
+          <ul class="m-files"><li><span>合并后回主仓重新 build</span></li></ul>
+        </div>
+        <div class="m-view" data-pane="chat"><div class="m-ask">问一句，不打断它<button class="m-send" aria-label="发送"><svg><use href="#i-up"/></svg></button></div></div>
+        <div class="m-view" data-pane="flow"><ol class="m-tl">
+          <li>执行<span>38m</span></li>
+          <li class="bad"><button data-to="review">审查 · 第 1 轮</button><span>未通过</span></li>
+          <li>修复<span>9m</span></li>
+          <li class="bad"><button data-to="review">审查 · 第 2 轮</button><span>未通过</span></li>
+          <li>修复<span>6m</span></li>
+          <li class="ok"><button data-to="review">审查 · 第 3 轮</button><span>通过</span></li>
+          <li class="ok">合并到 main<span>23:04</span></li>
+        </ol></div>
+        <div class="m-view" data-pane="review">
+          <p class="m-now"><svg><use href="#i-check"/></svg>第 3 轮通过</p>
+          <h4 class="m-sec">审查记录<i>3</i></h4>
+          <dl class="m-kv wide">
+            <dt>第 3 轮 · codex</dt><dd>通过</dd>
+            <dt>第 2 轮 · codex</dt><dd class="del">未通过 · 2 条</dd>
+            <dt>第 1 轮 · claude</dt><dd class="del">未通过 · 3 条</dd>
+          </dl>
+          <button class="m-go" data-to="scm">打开改动工作区</button>
+        </div>
+        <div class="m-view" data-pane="preview">
+          <p class="m-none">在页面上圈出要改的地方，逐条写意见。</p>
+          <button class="m-btn">打开预览指正</button>
+        </div>
+        <div class="m-view" data-pane="watch">
+          <h4 class="m-sec">在跑<i>1</i></h4>
+          <dl class="m-kv">
+            <dt>盯着</dt><dd>构建日志里的 ERROR</dd>
+            <dt>已跑</dt><dd>4m 12s</dd>
+            <dt>命令</dt><dd><button class="none">展开</button></dd>
+          </dl>
+          <button class="m-btn sm">停掉</button>
+        </div>
+      </div>
+      <nav class="m-rail" aria-label="面板">
+        <button data-to="info" data-g="1" data-key="I I" aria-label="信息" aria-pressed="true"><svg><use href="#i-info"/></svg></button>
+        <button data-to="files" data-g="2" data-key="I F" aria-label="文件" aria-pressed="false"><svg><use href="#i-folder"/></svg></button>
+        <button data-to="made" data-g="2" data-key="I A" aria-label="生成物" aria-pressed="false"><svg><use href="#i-box"/></svg></button>
+        <button data-to="scm" data-g="2" data-key="I G" aria-label="改动" aria-pressed="false"><svg><use href="#i-diff"/></svg></button>
+        <button data-to="agents" data-g="3" data-key="I S" aria-label="子智能体" aria-pressed="false" hidden><svg><use href="#i-bot"/></svg></button>
+        <button data-to="memo" data-g="3" data-key="I B" aria-label="备忘" aria-pressed="false" class="dot"><svg><use href="#i-note"/></svg></button>
+        <button data-to="chat" data-g="3" data-key="I C" aria-label="侧聊" aria-pressed="false"><svg><use href="#i-chat"/></svg></button>
+        <button data-to="flow" data-g="3" data-key="I W" aria-label="工作流" aria-pressed="false"><svg><use href="#i-flow"/></svg></button>
+        <button data-to="review" data-g="3" data-key="I R" aria-label="审查" aria-pressed="false"><svg><use href="#i-shield"/></svg></button>
+        <button data-to="preview" data-g="3" data-key="I P" aria-label="预览指正" aria-pressed="false"><svg><use href="#i-eye"/></svg></button>
+        <button data-to="watch" data-g="3" data-key="I M" aria-label="哨兵" aria-pressed="false" class="dot live"><svg><use href="#i-pulse"/></svg></button>
+        <button class="add" aria-label="添加面板" aria-expanded="false"><svg><use href="#i-plus"/></svg></button>
+        <i class="m-ink"></i>
+        <div class="m-menu" hidden></div>
+      </nav>
+      <div class="m-back">整栏已收起<button class="m-ico" aria-label="打开右侧面板"><svg><use href="#i-panel"/></svg></button></div>
+    </figure></div>
+    <ul class="delta">
+      <li><b>46<i>→</i>28</b><span>段文字</span></li>
+      <li><b>6<i>→</i>1</b><span>种字号</span></li>
+      <li><b>13<i>→</i>1</b><span>个带框的元素</span></li>
+      <li><b>2<i>→</i>1</b><span>种高亮</span></li>
+    </ul>
+  </div>
+</div></section>
 <section id="list"><div class="wrap">
   <div class="head"><i>05</i><h2>逐面清单</h2></div>
   <div class="legend"><span>先做</span><span class="p1">接着做</span><span class="p2">之后</span><span class="keep">保留</span></div>
 
   <div class="surface"><h3>侧栏</h3><ul class="rows">
-    <li>542 个任务里 532 个挂着「验收完成」的绿点，等于没有信息。<em>完成是默认态，不画点；只有运行中和等你处理才有颜色。</em></li>
-    <li>六颗彩色圆点筛选器没有名字。<em>带文字的筛选，或一个入口。</em></li>
+    <li>542 个任务里 532 个挂着「验收完成」的绿点，等于没有信息。<em>完成是默认态，行上不画点；只有运行中和等你处理才有颜色。顶上那排筛选圆点照旧。</em></li>
     <li class="p1">「其他机器」分组占着首屏，平时用不到。<em>默认折叠到底部。</em></li>
     <li class="p2">底部入口字太小、行太挤。<em>跟随新的字号下限。</em></li>
-    <li class="keep">F 聚焦任务列表、⌘K 全局跳转——不要动。</li>
+    <li class="keep">顶部的圆点筛选、底部的深色状态栏是有意的设计；F 打开任务列表、⌘K 全局跳转也不要动。</li>
   </ul></div>
 
   <div class="surface"><h3>会话流</h3><ul class="rows">
     <li>回合头尾的元数据与六颗药丸。<em>见 03 的改写。</em></li>
+    <li>行内的时间一直亮着，审查卡头的还甩在最右。<em>紧跟文字，指到那一行才显示；触屏常显。</em></li>
+    <li>回到顶部的悬浮钮，长会话一打开就常驻。<em>位置不动；只在自己滚动时出现。回到底部那颗不改。</em></li>
     <li>系统行泄漏内部状态词与常量名。<em>每一条过一遍文案，用户不需要知道 status 字段。</em></li>
     <li>工具调用展开后是原始 JSON。<em>先给一句人话摘要，原文再折一层。</em></li>
     <li class="p1">「ash 自动输入」卡片比智能体的回复还醒目。<em>降成一行浅色系统行。</em></li>
@@ -342,22 +469,26 @@
   </ul></div>
 
   <div class="surface"><h3>回复框</h3><ul class="rows">
-    <li>水印与占位长句相撞。<em>去水印；占位「回复…」。</em></li>
-    <li class="p1">发送键分成两半，左半禁用时右半仍是实色。<em>合成一个；其它发送方式进长按或菜单。</em></li>
+    <li>占位是一句三十多个字的长句，盖住了水印。<em>占位「回复…」；快捷键和「可粘贴」改成悬停提示；发不出去的原因留在占位里。</em></li>
+    <li class="p1">发送键右半段画着纸飞机，像第二颗发送键；空输入时左半灰、右半实。<em>右半段瘦成一条带小尖角的窄边，整颗键一个颜色。发送设置还在这里。</em></li>
     <li class="p1">框上框下各一排动作。<em>并成框内一行，低频的进「更多」。</em></li>
     <li class="p2">原生 textarea 的拖拽角还在。<em>改成随内容自动长高。</em></li>
+    <li class="keep">CLAUDE 水印是有意的调性，不动。</li>
   </ul></div>
 
   <div class="surface"><h3>右侧面板</h3><ul class="rows">
-    <li>页签从九个收成五个，「信息」改成一种行。<em>见 04。</em></li>
+    <li>竖轨上「用过」的格比选中的格还亮，一块青底说两件事。<em>选中一种长相，状态改成小点。见 04。</em></li>
+    <li>「信息」一格五种版式，同一屏把一件事说两遍。<em>写成一种行；同一屏不重复。</em></li>
+    <li class="p1">每一格一套版式。<em>收成六个公共件，卡片只统一外框。</em></li>
+    <li class="p1">竖轨上十格不分组；提示零延迟；摘掉的格，任务状态一变又回来。<em>分三簇；提示第一次等一下；再点一次收起；任务状态变了，摘掉的格也不回来。</em></li>
     <li>「审查」里三颗并排的描边按钮，没有主次。<em>一句结论配一个主动作，其余进「更多」。</em></li>
-    <li class="p1">「改动」首屏的一半给了仓库路径和「工作区只读」提示卡。<em>路径去掉；只读降成一行灰字，点了再解释。</em></li>
+    <li class="p1">「改动」首屏的一半给了仓库路径和「工作区只读」提示卡。<em>路径压成一行；只读降成一行灰字，点了再解释。</em></li>
     <li class="p1">「改动」的文件两行一条，九个文件就要滚动。<em>一行一条：文件名、增删数，目录悬停再给。</em></li>
     <li class="p1">「工作流」里连着几条一模一样的「任务执行 · 已完成」。<em>相邻同类合成一条，展开再看。</em></li>
     <li class="p1">「哨兵」把命令原样铺出来。<em>默认只显示那句描述，命令折起来。</em></li>
     <li class="p2">「生成物」给 Markdown 文件也配一张棋盘格空缩略图。<em>只有图片和视频出缩略图，其余是一行。</em></li>
     <li class="p2">空面板写着英文「Inspector」加一句说明。<em>空就是空，或直接默认打开「信息」。</em></li>
-    <li class="keep">「用过才浮现」是对的：没用过的功能不占位置。把它从两个页签推广到每一节。</li>
+    <li class="keep">竖排的形态、格数、次序、<code>I</code> 加字母的快捷键、「用过才浮现」，都不动。信息格里空的节也照「用过才浮现」办：没内容就不出现。</li>
   </ul></div>
 
   <div class="surface"><h3>新建与空状态</h3><ul class="rows">
@@ -381,8 +512,8 @@
   </ul></div>
 
   <div class="surface"><h3>聊天与助手</h3><ul class="rows">
-    <li class="p1">两个模式各换一套侧栏配色。<em>共用任务模式的侧栏，用图标和标题区分。</em></li>
     <li class="p1">助手页同屏六段说明，「0 项关联任务」用了最大的数字。<em>为零就不显示。</em></li>
+    <li class="keep">两个模式各自的侧栏配色是有意的，不动。</li>
   </ul></div>
 
   <div class="surface"><h3>可达性</h3><ul class="rows">
@@ -408,9 +539,9 @@
 
   <p class="verdict indent">高级感来自稀少：平时几乎不动，动的那一下有来有去。</p>
   <div class="layers indent">
-    <div><h3>基础层，和定尺一起做</h3><p>时长和缓动令牌、浮层的退场、面板和页签的过渡、悬停的响应。全是 CSS：<code>@starting-style</code>、<code>allow-discrete</code>、<code>linear()</code> 弹簧，不要任何依赖。上一版把这一层也排在最后，排错了，它和字号、圆角一样是尺度的一部分。</p></div>
+    <div><h3>基础层，和定尺一起做</h3><p>时长和缓动令牌、浮层的退场、面板开合和切格的过渡、悬停的响应。全是 CSS：<code>@starting-style</code>、<code>allow-discrete</code>、<code>linear()</code> 弹簧，不要任何依赖。它和字号、圆角一样，是尺度的一部分。</p></div>
     <div><h3>循环的，减到一处</h3><p>运行中只留一道微光，落在正在做的那句话上。其余的点、圈、条全部静止，用颜色表示状态。</p></div>
-    <div><h3>点睛层，减完之后做</h3><p>全应用大约五个时刻：任务换位置、执行过程依次展开、数字滚动、站点线推进、审查通过的对勾。这是 CSS 做不好的编排，也才是 anime.js 的位置。这一点没变。</p></div>
+    <div><h3>点睛层，减完之后做</h3><p>全应用大约五个时刻：任务换位置、执行过程依次展开、数字滚动、站点线推进、审查通过的对勾。这是 CSS 做不好的编排，也才是 anime.js 的位置。</p></div>
   </div>
   <ul class="facts indent">
     <li>anime.js v4.5.0 · 2026-06</li><li>MIT · 零依赖</li><li>ESM 按需导入</li><li>整包 gzip 约 41 KB，按需远小于此</li><li>自带 WAAPI 适配与 createScope 清理</li>
@@ -425,7 +556,7 @@
   </div>
 
   <div class="demo" data-demo="menu">
-    <div><h3>菜单开合</h3><p>现在只有进场，关闭是直接消失。之后进场 200ms、退场 120ms，从触发点展开。</p><p class="tool">纯 CSS。<a href="#panel">右侧面板样机</a>的页签切换也是这一层。</p><button class="play">打开 / 关闭</button></div>
+    <div><h3>菜单开合</h3><p>现在只有进场，关闭是直接消失。之后进场 200ms、退场 120ms，从触发点展开。</p><p class="tool">纯 CSS。<a href="#panel">右侧面板样机</a>里切格子、<a href="#rewrite">回到顶部</a>的淡入淡出也是这一层。</p><button class="play">打开 / 关闭</button></div>
     <div class="stage">
       <div class="pane"><small>现在</small><span class="d-trigger">claude ▾</span><div class="d-menu now"><div>claude</div><div>codex</div><div>gemini</div><div>opencode</div></div></div>
       <div class="pane after"><small>之后</small><span class="d-trigger">claude ▾</span><div class="d-menu next"><div>claude</div><div>codex</div><div>gemini</div><div>opencode</div></div></div>
@@ -463,9 +594,9 @@
 
   <h3 class="indent" style="margin-top:72px">哪里用什么</h3>
   <table class="map indent">
-    <tr><td>悬停、按下、选中</td><td>CSS + 令牌</td><td>120ms，只动颜色和透明度</td></tr>
+    <tr><td>悬停、按下、选中，行内时间的显隐</td><td>CSS + 令牌</td><td>120ms，只动颜色和透明度</td></tr>
     <tr><td>菜单、弹窗、提示、抽屉的进出</td><td>CSS</td><td><code>@starting-style</code> 进场，<code>allow-discrete</code> 退场</td></tr>
-    <tr><td>页签与分段切换</td><td>CSS</td><td>指示条滑过去，内容朝同一个方向淡入</td></tr>
+    <tr><td>竖轨切格、分段切换</td><td>CSS</td><td>指示条滑过去，内容淡入</td></tr>
     <tr><td>右侧面板、侧栏的开合</td><td>CSS</td><td><code>linear()</code> 弹簧曲线，只动 transform</td></tr>
     <tr><td>运行中的指示</td><td>CSS</td><td>全应用一种微光；合成线程上跑，流式输出再忙也不掉帧</td></tr>
     <tr class="lib"><td>任务列表重排、状态迁移</td><td>anime.js</td><td><code>createLayout</code>；同屏元素很多时先试 View Transitions</td></tr>
@@ -504,18 +635,18 @@ export function useStagger(ref, open) {
 </div></section>
 
 <section id="plan"><div class="wrap">
-  <div class="head"><i>07</i><h2>四步，顺序换了</h2>
-    <p>上一版是定尺在先。现在把「减」提到最前：减不依赖令牌，而且先减，就不必给马上要删掉的东西做迁移。</p></div>
+  <div class="head"><i>07</i><h2>四步：减，定尺，收拢，点睛</h2>
+    <p>「减」在最前：它不依赖令牌，而且先减，就不必给马上要删掉的东西做迁移。</p></div>
   <div class="steps indent">
-    <div><h3>减</h3><p>回合头尾的元数据和药丸、任务头、回复框、右侧面板九变五、空状态。说明文字逐句审，系统行改人话。</p></div>
+    <div><h3>减</h3><p>回合头尾的元数据和药丸、任务头的灰按钮和时间、行内时间、回到顶部钮、回复框占位、空状态；右侧的信息格写成一种行，竖轨只留一种高亮。说明文字逐句审，系统行改人话。</p></div>
     <div><h3>定尺</h3><p>字号、圆角、字重、动效令牌一起加；字号下限 12px；浮层补上退场；全局一条 reduced-motion；检查脚本只许令牌外的值减少。</p></div>
-    <div><h3>收拢</h3><p>三个模式共用一套侧栏；状态栏跟随主题；原生 select 换成一个组件；设置页版式收平；循环动画减到一处。</p></div>
+    <div><h3>收拢</h3><p>右侧面板换成六个公共件；竖轨分簇、提示延迟、再点收起、摘掉的格不再回来；发送键三处同一颗；原生 select 换成一个组件；设置页版式收平；循环动画减到一处。</p></div>
     <div><h3>点睛</h3><p>引入 anime.js，只做五个时刻：重排、依次展开、数字、站点线、对勾。</p></div>
   </div>
 
   <h3 class="indent" style="margin-top:64px">第一步做完，一屏应该是这样</h3>
   <table class="map goal indent">
-    <tr><td>能点的控件</td><td>113 → 约 65</td><td>会话区 50 → 约 12，右侧 20 → 约 10；侧栏的 41 个是任务行本身，不动</td></tr>
+    <tr><td>能点的控件</td><td>113 → 约 75</td><td>会话区 50 → 约 14，右侧 20 → 约 16（竖轨的格不减）；侧栏的 41 个不动</td></tr>
     <tr><td>带边框的元素</td><td>68 → 约 20</td><td>留下输入框、浮层和真正的卡片</td></tr>
     <tr><td>文字</td><td>224 段 → 约 120 段</td><td>减掉的是说明和元数据，不是内容</td></tr>
     <tr><td>字号</td><td>10 种 → 3 种</td><td>这一项要等第二步的令牌</td></tr>
@@ -527,7 +658,7 @@ export function useStagger(ref, open) {
 --radius-sm: 6px;  --radius-md: 8px;  --radius-lg: 12px;  --radius-full: 999px;
 
 --dur-1: 120ms;   <i>/* 悬停、按下 */</i>
---dur-2: 200ms;   <i>/* 菜单、提示、弹窗、页签 */</i>
+--dur-2: 200ms;   <i>/* 菜单、提示、弹窗、切格 */</i>
 --dur-3: 320ms;   <i>/* 面板、重排 */</i>
 --ease-out: cubic-bezier(0.22, 1, 0.36, 1);   <i>/* 进场、响应 */</i>
 --ease-in: cubic-bezier(0.4, 0, 1, 1);        <i>/* 退场 */</i>
@@ -536,8 +667,9 @@ export function useStagger(ref, open) {
 
 <footer><div class="wrap">
   <p>取证于 2026-11-11：对运行中的实例只读截图，对 <code>web/src</code> 的全部 CSS 做静态统计。没有改动任何产品代码。</p>
-  <p>一屏的数字是 1440×900 下对同一个已完成任务页面的 DOM 实测：可见的元素、可点的控件、描了可见边框的元素。Codex 和 Claude Code 没有做同样的测量，对照是设计共性，不是逐像素比较。</p>
-  <p>右侧面板样机里的内容是示意；「九变五」和第一步的目标数字是建议，不是已经做过的原型。团队与讨论模式没有截到有效画面，未单独下结论。</p>
+  <p>一屏的数字是 1440×900 下对同一个已完成任务页面的 DOM 实测：可见的元素、可点的控件、描了可见边框的元素。Codex 和 Claude Code 没有做同样的测量，对照的是设计共性；两家的回合细节凭已有知识，没有对着真实界面逐条核过。</p>
+  <p>头部、回合结尾、回复框、右侧面板的样机是示意，没有在真实界面里跑过；件数照代码数，第一步的目标数字是建议。团队与讨论模式没有截图，那两处的结论来自读代码。</p>
+  <p>VS Code、JetBrains 的竖条和邮件客户端的发送键同样凭已有知识引用，没有联网核对。</p>
   <p>anime.js 的三个演示在本页独立运行；接入前应先在会话流里实测流式输出时的帧率。</p>
 </div></footer>
 

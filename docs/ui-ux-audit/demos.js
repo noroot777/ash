@@ -1,4 +1,4 @@
-// 报告页的全部脚本：两张分布图、滚动淡入、四个「现在 / 之后」对照演示、右侧面板样机的切换。
+// 报告页的全部脚本：两张分布图、滚动淡入、五个「现在 / 之后」对照演示、发送设置与右侧面板两个样机。
 // anime.js 从 CDN 动态加载；连不上时右栏退回 WAAPI，并在页面上如实写明。
 
 const ANIME_URL = 'https://cdn.jsdelivr.net/npm/animejs@4.5.0/dist/bundles/anime.esm.min.js';
@@ -233,39 +233,175 @@ function demoNumbers(root) {
   };
 }
 
-/* ---------- 面板样机：页签与分段共用一套切换 ---------- */
+/* ---------- 回到顶部：位置不动，只在使用者自己滚的时候出现 ---------- */
 
-// [data-switch] 里的 [data-to] 按钮切同一层的 [data-pane]；可以嵌套，各管各的那一层。
-function setupSwitcher(root) {
-  const buttons = $$('[data-to]', root).filter((b) => b.closest('[data-switch]') === root);
-  const panes = $$('[data-pane]', root).filter((p) => p.parentElement.closest('[data-switch]') === root);
-  const ink = $(':scope > .m-tabs > .m-ink', root);
-  const moveInk = () => {
-    const tab = ink && $(':scope > .m-tabs > [aria-selected="true"]', root);
-    if (!tab) return;
-    ink.style.setProperty('--x', `${tab.offsetLeft + 9}px`);
-    ink.style.setProperty('--w', `${tab.offsetWidth - 18}px`);
+const TOP_EDGE = 24;        // 离顶这么近就不需要它（真实界面是 80px，演示框矮，按比例缩了）
+const INTENT_MS = 800;      // 一次滚轮 / 触摸 / 按键之后，这么久以内的 scroll 算「自己在滚」
+const IDLE_MS = 1000;       // 停下这么久淡出
+const FEED_WIDTHS = [62, 88, 74, 94, 55, 81, 68];
+
+function feedLine(i, fresh) {
+  const p = document.createElement('p');
+  p.style.setProperty('--w', `${FEED_WIDTHS[i % FEED_WIDTHS.length]}%`);
+  if (fresh) p.className = 'new';
+  else if (i % 6 === 4) p.className = 'me';
+  return p;
+}
+
+function demoBacktop(root) {
+  const feeds = $$('.pane', root).map((pane, k) => {
+    const feed = $('.d-feed', pane);
+    const btn = $('.d-top', pane);
+    for (let i = 0; i < 28; i++) feed.append(feedLine(i));
+    feed.scrollTop = feed.scrollHeight;
+    const toTop = () => feed.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' });
+    if (k === 0) {
+      // 现在：只看位置
+      feed.addEventListener('scroll', () => btn.classList.toggle('is-hidden', feed.scrollTop <= TOP_EDGE));
+      btn.addEventListener('click', toTop);
+      return feed;
+    }
+    // 之后：位置 + 「自己在滚」。流式输出的自动跟随也会派发 scroll，所以要两个条件一起判
+    let intentUntil = 0;
+    let dragging = false;
+    let idle = 0;
+    const note = () => { intentUntil = performance.now() + INTENT_MS; };
+    const rest = () => {
+      if (btn.matches(':hover, :focus-visible')) idle = setTimeout(rest, 400);
+      else btn.classList.add('is-idle');
+    };
+    for (const type of ['wheel', 'touchmove', 'keydown']) feed.addEventListener(type, note, { passive: true });
+    feed.addEventListener('pointerdown', () => { dragging = true; });
+    addEventListener('pointerup', () => { dragging = false; });
+    feed.addEventListener('scroll', () => {
+      btn.classList.toggle('is-hidden', feed.scrollTop <= TOP_EDGE);
+      if (!dragging && performance.now() > intentUntil) return;
+      btn.classList.remove('is-idle');
+      clearTimeout(idle);
+      idle = setTimeout(rest, IDLE_MS);
+    });
+    btn.addEventListener('click', () => { note(); toTop(); });
+    return feed;
+  });
+  let run = 0;
+  return () => {
+    clearInterval(run);
+    let n = 0;
+    run = setInterval(() => {
+      for (const feed of feeds) {
+        feed.append(feedLine(n, true));
+        if (feed.children.length > 60) feed.firstElementChild.remove();
+        feed.scrollTop = feed.scrollHeight;
+      }
+      if (++n >= 10) clearInterval(run);
+    }, 300);
   };
-  const show = (name) => {
-    const from = panes.findIndex((p) => p.classList.contains('on'));
-    const to = panes.findIndex((p) => p.dataset.pane === name);
-    if (to < 0 || to === from) return;
-    root.style.setProperty('--dir', to > from ? 1 : -1);
-    panes.forEach((p, i) => p.classList.toggle('on', i === to));
-    for (const b of buttons) if (b.hasAttribute('aria-selected')) b.setAttribute('aria-selected', String(b.dataset.to === name));
-    moveInk();
+}
+
+/* ---------- 发送设置样机：选一档，发送键跟着变 ---------- */
+
+const SEND_MODES = {
+  now: { label: '', icon: 'i-caret', hint: '' },
+  timed: { label: '14:30 发送', icon: 'i-clock', hint: '11/11 14:30 自动发出，发出前可以在待发送里撤回。' },
+  after: { label: '完成后发送', icon: 'i-sand', hint: '等「修复斜杠补全回车」完成后发出。' },
+};
+
+function setupSend(root) {
+  const main = $('.m-key > :first-child', root);
+  const cfg = $('.m-key > :last-child', root);
+  const hint = $('.m-pop p', root);
+  const chips = $$('[data-mode]', root);
+  const pick = (mode) => {
+    const { label, icon, hint: text } = SEND_MODES[mode];
+    for (const c of chips) c.setAttribute('aria-pressed', String(c.dataset.mode === mode));
+    $('span', main).textContent = label;
+    main.classList.toggle('txt', Boolean(label));
+    $('use', cfg).setAttribute('href', `#${icon}`);
+    hint.textContent = text;
   };
-  for (const b of buttons) b.addEventListener('click', () => show(b.dataset.to));
-  if (ink) {
-    moveInk();
-    addEventListener('resize', moveInk);
-    document.fonts?.ready.then(moveInk);
+  for (const c of chips) c.addEventListener('click', () => pick(c.dataset.mode));
+  pick('timed');
+}
+
+/* ---------- 面板样机：竖轨切格、再点收起整栏、关闭键移出、「+」加回 ---------- */
+
+function setupRail(root) {
+  const rail = $('.m-rail', root);
+  const tabs = $$(':scope > [data-to]', rail);
+  const panes = $$('.m-view', root);
+  const title = $('.m-ph b', root);
+  const remove = $('[data-remove]', root);
+  const ink = $('.m-ink', rail);
+  const add = $('.add', rail);
+  const menu = $('.m-menu', rail);
+  const tabOf = (name) => tabs.find((t) => t.dataset.to === name);
+  let current = tabs.find((t) => t.getAttribute('aria-pressed') === 'true');
+
+  const paint = () => {
+    const shut = root.classList.contains('shut');
+    let prev = null;
+    for (const t of tabs) {
+      t.setAttribute('aria-pressed', String(!shut && t === current));
+      if (t.hidden) continue;
+      // 相邻两格不在同一簇，中间留一道空；某一簇整簇不在条上时不会留出双倍
+      t.classList.toggle('gap', Boolean(prev) && prev.dataset.g !== t.dataset.g);
+      prev = t;
+    }
+    for (const p of panes) p.classList.toggle('on', p.dataset.pane === current.dataset.to);
+    title.textContent = current.getAttribute('aria-label');
+    remove.hidden = current.dataset.to === 'info';   // 「信息」是必留格
+    for (const item of $$('button', menu)) item.disabled = !tabOf(item.dataset.add).hidden;
+    if (!shut) ink.style.setProperty('--y', `${current.offsetTop + (current.offsetHeight - 18) / 2}px`);
+  };
+  let openedAt = 0;
+  const open = (tab) => {
+    tab.hidden = false;
+    current = tab;
+    openedAt = performance.now();
+    root.classList.remove('shut');
+    paint();
+  };
+  const closeMenu = () => { menu.hidden = true; add.setAttribute('aria-expanded', 'false'); };
+
+  for (const t of tabs) {
+    t.addEventListener('click', (e) => {
+      // 再点已选中的格 = 收起整栏。只认鼠标：回车、空格触发的 click，detail 是 0；
+      // 刚切过来的那一下双击不算（否则双击一格会「先选中再收起」）
+      const again = t === current && e.detail > 0 && performance.now() - openedAt > 350;
+      if (again) { root.classList.add('shut'); paint(); } else if (t !== current) open(t);
+    });
+    const item = document.createElement('button');
+    item.dataset.add = t.dataset.to;
+    item.innerHTML = `${t.innerHTML}${t.getAttribute('aria-label')}<kbd>${t.dataset.key}</kbd>`;
+    item.addEventListener('click', () => { closeMenu(); open(t); });
+    menu.append(item);
   }
+  for (const b of $$('.m-main [data-to]', root)) b.addEventListener('click', () => open(tabOf(b.dataset.to)));
+  remove.addEventListener('click', () => {
+    const shown = tabs.filter((t) => !t.hidden);
+    const i = shown.indexOf(current);
+    current.hidden = true;
+    current = shown[i + 1] ?? shown[i - 1];
+    paint();
+    current.focus();
+  });
+  $('.m-back button', root).addEventListener('click', () => open(current));
+  add.addEventListener('click', () => { menu.hidden = !menu.hidden; add.setAttribute('aria-expanded', String(!menu.hidden)); });
+  document.addEventListener('pointerdown', (e) => { if (!menu.hidden && !e.target.closest('.m-menu, .add')) closeMenu(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+
+  // 提示：第一次悬停等一下，连着看下一格不等
+  let warm = 0;
+  rail.addEventListener('pointerenter', () => { clearTimeout(warm); warm = setTimeout(() => rail.classList.add('warm'), 420); });
+  rail.addEventListener('pointerleave', () => { clearTimeout(warm); warm = setTimeout(() => rail.classList.remove('warm'), 300); });
+  paint();
+  addEventListener('resize', paint);
+  document.fonts?.ready.then(paint);
 }
 
 /* ---------- 启动 ---------- */
 
-const DEMOS = { menu: demoMenu, list: demoList, fold: demoFold, numbers: demoNumbers };
+const DEMOS = { backtop: demoBacktop, menu: demoMenu, list: demoList, fold: demoFold, numbers: demoNumbers };
 
 function setupDemos() {
   for (const root of $$('.demo[data-demo]')) {
@@ -278,5 +414,6 @@ drawHistogram($('.hist'));
 drawDurations($('.durs'));
 setupReveal();
 setupDemos();
-$$('[data-switch]').forEach(setupSwitcher);
+$$('[data-send]').forEach(setupSend);
+$$('[data-rail]').forEach(setupRail);
 loadAnime();
