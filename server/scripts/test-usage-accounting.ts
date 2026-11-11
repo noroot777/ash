@@ -336,6 +336,8 @@ try {
     contextWindow: 1_000_000,
     contextWindowEstimated: false,
     resumeArgs: compactResumeArgs,
+    // 同一笔写下的命令行里只有 ash 那一个 --settings,才证明 resume_args 里的就是生效配置。
+    commandLine: `claude -p --model claude-opus-5 ${compactResumeArgs} <prompt via stdin>`,
     // 模拟 context_compact 这一列上线前落的老行:没有随水位存下的快照,才退回 resume_args。
     contextCompact: null,
   }).where(eq(sessions.id, sessId));

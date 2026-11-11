@@ -131,7 +131,12 @@ assert.equal(
 // F1:触发点只从会话自己的启动快照算 —— 原形会话固化的 --settings 原样喂进去。
 const frozenArgs = `--settings '{"autoCompactEnabled":true,"env":{"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"600000",`
   + `"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"82.76","DISABLE_COMPACT":"","DISABLE_AUTO_COMPACT":""}}'`;
-const frozen = sessionContext({ contextUsed: 143_746, contextWindow: 200_000, contextWindowEstimated: false, contextCompact: null, resumeArgs: frozenArgs });
+// 原形会话的命令行:只有 ash 那一个 --settings(临时文件路径),resume_args 里的就是生效配置。
+const frozenCommand = "claude -p --model claude-fable-5-2 --settings /tmp/ash-claude-settings-1.json <messages via stdin>";
+const frozen = sessionContext({
+  contextUsed: 143_746, contextWindow: 200_000, contextWindowEstimated: false,
+  contextCompact: null, resumeArgs: frozenArgs, commandLine: frozenCommand,
+});
 assert.deepEqual(
   frozen,
   { used: 143_746, window: 200_000, windowEstimated: false, compactWindow: 600_000, compactPercent: 82.76 },
@@ -239,19 +244,47 @@ assert.equal(shadowedLaunch.commandLine, shadowedRun.commandLine);
 const shadowedReattached = await contextOf(changed.attach(attachChild(), {
   sessionId: "fixture-cli",
   commandLine: shadowedRun.commandLine,
-  compact: sessionLaunchCompact({ launchCompact: shadowedLaunch.launchCompact, resumeArgs: frozenArgs }),
+  compact: sessionLaunchCompact({ launchCompact: shadowedLaunch.launchCompact, resumeArgs: frozenArgs, commandLine: shadowedRun.commandLine }),
 }).events);
 assert.equal(shadowedReattached?.compactUnknown, true, "起跑时被盖掉的,接管后也还是不知道");
 assert.equal(shadowedReattached?.compactWindow, undefined);
 assert.deepEqual(
-  sessionLaunchCompact({ launchCompact: launchFields(launched.run({ prompt: "hi", cwd: fixtureDir })).launchCompact, resumeArgs: null }),
+  sessionLaunchCompact({ launchCompact: launchFields(launched.run({ prompt: "hi", cwd: fixtureDir })).launchCompact, resumeArgs: null, commandLine: null }),
   expectedSnapshot,
   "正常起跑的那份原样读回",
 );
 assert.equal(
-  sessionLaunchCompact({ launchCompact: null, resumeArgs: frozenArgs }).compactWindow,
+  sessionLaunchCompact({ launchCompact: null, resumeArgs: frozenArgs, commandLine: frozenCommand }).compactWindow,
   600_000,
-  "这一列上线前起的进程才退回 resume_args",
+  "这一列上线前起的进程才退回 resume_args,且命令行证明只有 ash 那份 --settings",
+);
+
+// 第 4 轮:升级前起的进程,额外参数里另带了 --settings(命令行里两份)—— resume_args 只有
+// ash 那份,证明不了它生效,接管与重读都必须是「不知道」,不能退回 600k / ~149k。
+const legacyShadowed = { launchCompact: null, contextCompact: null, resumeArgs: frozenArgs, commandLine: shadowedRun.commandLine };
+assert.ok(shadowedRun.commandLine.split("--settings").length > 2, "夹具:命令行里确实有两份 --settings");
+assert.deepEqual(sessionLaunchCompact(legacyShadowed), { compactUnknown: true }, "老行接管:证明不了就是不知道");
+const legacyReattached = await contextOf(changed.attach(attachChild(), {
+  sessionId: "fixture-cli",
+  commandLine: shadowedRun.commandLine,
+  compact: sessionLaunchCompact(legacyShadowed),
+}).events);
+assert.equal(contextCompactTrigger(legacyReattached), null, "老行接管后不再报 ~149k");
+assert.equal(legacyReattached?.compactUnknown, true);
+assert.deepEqual(
+  sessionContext({ contextUsed: 143_746, contextWindow: 200_000, contextWindowEstimated: false, ...legacyShadowed }),
+  { used: 143_746, window: 200_000, windowEstimated: false, compactUnknown: true },
+  "老行水位重读走同一道判定",
+);
+assert.deepEqual(
+  sessionLaunchCompact({ launchCompact: null, resumeArgs: frozenArgs, commandLine: null }),
+  { compactUnknown: true },
+  "老行连命令行都没有:同样证明不了",
+);
+assert.deepEqual(
+  sessionLaunchCompact({ launchCompact: null, resumeArgs: null, commandLine: shadowedRun.commandLine }),
+  {},
+  "ash 根本没注入压缩窗口:没有可说的,不标不知道",
 );
 
 // ── ④ 一键开启端点 ────────────────────────────────────────────────────────

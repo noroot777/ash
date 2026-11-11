@@ -15,6 +15,7 @@ import {
   compactSnapshotFromEnv,
   compactSnapshotOf,
   parseCompactSnapshot,
+  UNKNOWN_COMPACT_SNAPSHOT,
 } from "@ash/shared/usage";
 import { db } from "./db/index.js";
 import { sessions, sessionTurns, usageCumulativeSnapshots } from "./db/schema.js";
@@ -247,9 +248,9 @@ export async function setSessionContext(sessId: string, context: ContextUsage): 
 }
 
 /**
- * 老会话行(`context_compact` 这一列上线前落的水位)的退路:从会话固化的 `--settings` 里
- * 读当时注入的那几个 env。这一列有值就不走这里 —— resume_args 每次起跑都会被改写成
- * **最新**那次的配置,跟库里那份水位不一定是同一个进程。
+ * 从会话固化的 resume_args(ash 自己那份 `--settings`)里读当时注入的那几个 env。
+ * **只说明 ash 注入了什么,不说明 CLI 最终用了什么** —— 额外参数里另带的 `--settings` 不在
+ * 这里。拿它当启动事实之前必须过 `legacyCompactSnapshot` 那道证据判定。
  */
 export function sessionCompactSnapshot(resumeArgs: string | null | undefined): CompactSnapshot {
   if (!resumeArgs) return {};
@@ -278,13 +279,34 @@ export function launchFields(handle: { commandLine: string; launchCompact?: Comp
 }
 
 /**
- * 重启接管时这个旧进程的压缩配置。`launch_compact` 有值就用它;没有(这一列上线前起的进程,
- * 或不报压缩的 CLI)才退回 resume_args —— 老行判不出额外参数有没有盖掉,只能按 ash 那份算。
+ * 没有随起跑落下快照的老行(launch_compact / context_compact 上线前)唯一的退路,两处读端
+ * (接管、水位重读)共用这一份判定。
+ *
+ * resume_args 只有 ash 那份 `--settings`;它到底生没生效,要看同一笔写下的 command_line 里
+ * 有没有别的 `--settings` 排在后面整份盖掉它(claude 只认最后一个,见 cliConfigOverrideConflict)。
+ * **恰好一个**才证明 CLI 用的就是 ash 那份;多于一个、或命令行缺失都证明不了,如实标「不知道」,
+ * 不拿 ash 的默认值冒充事实(第 3 轮审查 F1)。命令行是展示用的拼接串,参数值里碰巧出现这个
+ * 字样只会让判定偏向「不知道」,不会反过来编出一个确定值。
  */
-export function sessionLaunchCompact(row: Pick<SessionRow, "launchCompact" | "resumeArgs">): CompactSnapshot {
+export function legacyCompactSnapshot(row: Pick<SessionRow, "resumeArgs" | "commandLine">): CompactSnapshot {
+  const injected = sessionCompactSnapshot(row.resumeArgs);
+  if (injected.compactWindow === undefined) return {};
+  const settingsArgs = row.commandLine?.split("--settings").length ?? 0;
+  return settingsArgs === 2 ? injected : UNKNOWN_COMPACT_SNAPSHOT;
+}
+
+/** 重启接管时这个旧进程的压缩配置:起跑时落下的那份;老行走 legacyCompactSnapshot。 */
+export function sessionLaunchCompact(row: Pick<SessionRow, "launchCompact" | "resumeArgs" | "commandLine">): CompactSnapshot {
   return typeof row.launchCompact === "string"
     ? parseCompactSnapshot(row.launchCompact)
-    : sessionCompactSnapshot(row.resumeArgs);
+    : legacyCompactSnapshot(row);
+}
+
+/** 库里这份水位对应的压缩快照:随水位落下的那份;老行走 legacyCompactSnapshot。 */
+export function sessionContextCompact(row: Pick<SessionRow, "contextCompact" | "resumeArgs" | "commandLine">): CompactSnapshot {
+  return typeof row.contextCompact === "string"
+    ? parseCompactSnapshot(row.contextCompact)
+    : legacyCompactSnapshot(row);
 }
 
 /** 只要窗口那一项(老调用点)。 */
@@ -295,17 +317,14 @@ export function sessionCompactWindow(resumeArgs: string | null | undefined): num
 /** 会话行 → ContextUsage。没采到(null)跟「水位是 0」是两回事，前者不显示。 */
 export function sessionContext(row: Pick<
   SessionRow,
-  "contextUsed" | "contextWindow" | "contextWindowEstimated" | "contextCompact" | "resumeArgs"
+  "contextUsed" | "contextWindow" | "contextWindowEstimated" | "contextCompact" | "resumeArgs" | "commandLine"
 >): ContextUsage | null {
   if (row.contextUsed === null || row.contextUsed === undefined) return null;
-  const compact = typeof row.contextCompact === "string"
-    ? parseCompactSnapshot(row.contextCompact)
-    : sessionCompactSnapshot(row.resumeArgs);
   return {
     used: row.contextUsed,
     window: row.contextWindow ?? null,
     windowEstimated: row.contextWindowEstimated ?? false,
-    ...compact,
+    ...sessionContextCompact(row),
   };
 }
 

@@ -215,6 +215,9 @@ export interface HandoffSessionRow {
   contextUsed: number | null;
   contextWindow: number | null;
   contextWindowEstimated: boolean | null;
+  // 这份水位的压缩快照(shared CompactSnapshot 的 JSON)。源机按自己的证据判定**解析好**再给,
+  // 接收端没有源机的 resume_args/命令行可推。可选:老版本对端不带,接收端只剩模型水位。
+  contextCompact?: string | null;
 }
 
 export interface HandoffManifest {

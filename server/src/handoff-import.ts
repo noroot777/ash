@@ -453,6 +453,7 @@ async function importValidated(
     contextUsed: s.contextUsed,
     contextWindow: s.contextWindow,
     contextWindowEstimated: s.contextWindowEstimated,
+    contextCompact: typeof s.contextCompact === "string" ? s.contextCompact : null,
     // 逐回合计数**显式钉成「本机零历史」**,别留 NULL（本轮审查第 4 条）。
     //
     // 载荷里不带回合行(下面那条 delete 还会把本机残留的清掉),所以导进来的会话在本机一行
