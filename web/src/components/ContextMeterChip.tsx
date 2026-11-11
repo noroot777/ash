@@ -123,7 +123,7 @@ export function ContextMeterChip({ context, session, className }: {
       </dl>
       <footer>
         {context.compactUnknown
-          ? "这一轮的额外参数里带了 --settings，盖掉了执行器的压缩设置，ash 判不出什么时候压缩；这里按模型窗口显示。"
+          ? "ash 证明不了这一轮最终用的是哪份压缩设置（可能是额外参数里另带了 --settings 盖掉了执行器那份，也可能是升级前的老会话没留下起跑证据），判不出什么时候压缩；这里按模型窗口显示。"
           : window === null
           ? "这家 CLI 没报窗口大小，也猜不出模型，所以只给绝对值、不给百分比。"
           : usesCompactWindow

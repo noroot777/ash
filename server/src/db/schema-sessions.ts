@@ -62,8 +62,8 @@ export const sessions = sqliteTable("sessions", {
   resumeArgs: text("resume_args"),
   commandLine: text("command_line"),
   // 跟 command_line 同一笔写的「这个进程最终生效的压缩配置」(JSON,shared CompactSnapshot;
-  // 见 usage.ts launchFields)。null = 这一列上线前起的进程或不报压缩的 CLI,重启接管退回
-  // resume_args。
+  // 见 usage.ts launchFields)。null 或没有来源标记 = 证明不了来源(这一列/最终判定上线前起的
+  // 进程、不报压缩的 CLI),重启接管走 legacyCompactSnapshot。
   launchCompact: text("launch_compact"),
   startedAt: text("started_at").notNull(),
   endedAt: text("ended_at"), // when this run finished (set with exit_status)
@@ -208,7 +208,7 @@ export const sessions = sqliteTable("sessions", {
   // rollout best-effort 读取；格式变化或本轮取不到时清空为 null，胶囊自然不显示旧值。
   contextWindowEstimated: integer("context_window_estimated", { mode: "boolean" }),
   // 报出这份水位的那个进程起跑时的压缩配置(JSON,shared 的 CompactSnapshot),跟上面三列
-  // 同一笔写。null = 这一列上线前的老行,读侧退回从 resume_args 里读。
+  // 同一笔写。null 或没有来源标记 = 证明不了来源的老行,读侧走 legacyCompactSnapshot。
   contextCompact: text("context_compact"),
 });
 

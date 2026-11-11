@@ -165,8 +165,9 @@ export interface ContextUsage {
   compactPercent?: number;
   compactMaxOutput?: number;
   /**
-   * 那个进程起跑时,额外参数里自带的 `--settings` 整份顶掉了 ash 注入的那份(claude 只认
-   * 最后一个),压缩配置以它为准 —— ash 判不出窗口与触发点。为 true 时上面三项一定缺省。
+   * ash 证明不了那个进程最终用的是哪份压缩配置:额外参数里自带的 `--settings` 整份顶掉了 ash
+   * 注入的那份(claude 只认最后一个),或者老行没留下能证明这一点的起跑证据 —— 判不出窗口与
+   * 触发点。为 true 时上面三项一定缺省。
    */
   compactUnknown?: boolean;
   /**
@@ -187,7 +188,7 @@ export interface ContextUsage {
  */
 export type CompactSnapshot = Pick<ContextUsage, "compactWindow" | "compactPercent" | "compactMaxOutput" | "compactUnknown">;
 
-/** 起跑参数里有别的 `--settings` 盖住了 ash 那份:如实标「不知道」,不发布被盖掉的那组数。 */
+/** 证明不了 CLI 最终用的是哪份压缩配置(另有 `--settings` 盖住 ash 那份,或老行缺起跑证据):如实标「不知道」。 */
 export const UNKNOWN_COMPACT_SNAPSHOT: CompactSnapshot = Object.freeze({ compactUnknown: true });
 
 const COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
@@ -215,11 +216,25 @@ export function compactSnapshotFromEnv(env: Readonly<Record<string, string | und
   };
 }
 
-/** 库里存的那份快照(JSON 文本)读回来;坏数据按「没配」处理,不把垃圾数字递给界面。 */
-export function parseCompactSnapshot(raw: string): CompactSnapshot {
+// 存下来的快照文本(库里两列、接力载荷)一律带这个来源标记:只有「起跑时按最终生效的参数判过」
+// 那条写入路径会盖上它。没有标记的非空文本出自这一判定上线前的写入 —— 那时被额外参数盖掉的
+// 配置照样当事实写了进去(第 4 轮审查 F1),所以「列非空」不等于「可信」,只有标记说了算。
+const COMPACT_SNAPSHOT_PROVENANCE = "launch-final";
+
+/** 快照 → 落库/接力用的文本。所有写入点共用这一个,标记才不会漏盖。 */
+export function serializeCompactSnapshot(snapshot: CompactSnapshot): string {
+  return JSON.stringify({ provenance: COMPACT_SNAPSHOT_PROVENANCE, ...snapshot });
+}
+
+/**
+ * 存下来的快照文本读回来。**null = 来源证明不了**(没有/不认识的标记、空值),调用方必须走
+ * 老行的证据判定,不许把里面的数字当事实;连 JSON 都解不开同样证明不了;带标记但字段坏了按「没配」处理,不把垃圾数字递给界面。
+ */
+export function parseStoredCompactSnapshot(raw: string | null | undefined): CompactSnapshot | null {
+  if (typeof raw !== "string") return null;
   try {
     const value = JSON.parse(raw) as Record<string, unknown> | null;
-    if (!value || typeof value !== "object") return {};
+    if (!value || typeof value !== "object" || value.provenance !== COMPACT_SNAPSHOT_PROVENANCE) return null;
     if (value.compactUnknown === true) return UNKNOWN_COMPACT_SNAPSHOT;
     return compactSnapshotFromEnv({
       [COMPACT_WINDOW_ENV]: value.compactWindow === undefined ? undefined : String(value.compactWindow),
@@ -227,7 +242,7 @@ export function parseCompactSnapshot(raw: string): CompactSnapshot {
       [MAX_OUTPUT_ENV]: value.compactMaxOutput === undefined ? undefined : String(value.compactMaxOutput),
     });
   } catch {
-    return {};
+    return null;
   }
 }
 

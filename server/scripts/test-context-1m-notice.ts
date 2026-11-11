@@ -26,8 +26,10 @@ requireTmpDb("test-context-1m-notice");
 const { claudeModelWindow, clampedCompactWindow, CLAUDE_1M_WINDOW, CLAUDE_STANDARD_WINDOW } =
   await import("@ash/shared/context-1m");
 const { claudeCompactionPlan, cliConfigOverrideEnv, cliConfigOverrideHints } = await import("@ash/shared/cli-overrides");
-const { effectiveContextWindow, contextRatio, contextCompactTrigger, compactSnapshotFromEnv } = await import("@ash/shared/usage");
-const { launchFields, sessionContext, sessionCompactSnapshot, sessionLaunchCompact, setSessionContext } = await import("../src/usage.js");
+const { effectiveContextWindow, contextRatio, contextCompactTrigger, compactSnapshotFromEnv, parseStoredCompactSnapshot, serializeCompactSnapshot, UNKNOWN_COMPACT_SNAPSHOT } =
+  await import("@ash/shared/usage");
+const { launchFields, sessionContext, sessionCompactSnapshot, sessionContextCompact, sessionLaunchCompact, setSessionContext } =
+  await import("../src/usage.js");
 
 // ── ① 判定 ────────────────────────────────────────────────────────────────
 const relay = {
@@ -285,6 +287,38 @@ assert.deepEqual(
   sessionLaunchCompact({ launchCompact: null, resumeArgs: null, commandLine: shadowedRun.commandLine }),
   {},
   "ash 根本没注入压缩窗口:没有可说的,不标不知道",
+);
+
+// 第 5 轮:列非空不等于可信。「按最终生效参数判定」上线前,被额外参数盖掉的那组数照样随水位
+// 写成了 {"compactWindow":600000,"compactPercent":82.76}(没有来源标记)。重读、接管、接力导出
+// 都得跟空列一样走证据判定,而不是照单全收。
+const preFixWrite = JSON.stringify({ compactWindow: 600_000, compactPercent: 82.76 });
+const legacyWrongRow = { ...legacyShadowed, launchCompact: preFixWrite, contextCompact: preFixWrite };
+assert.deepEqual(
+  sessionContext({ contextUsed: 143_746, contextWindow: 200_000, contextWindowEstimated: false, ...legacyWrongRow }),
+  { used: 143_746, window: 200_000, windowEstimated: false, compactUnknown: true },
+  "老版本写下的非空水位快照没有来源标记,按证据判定成不知道",
+);
+assert.deepEqual(sessionLaunchCompact(legacyWrongRow), { compactUnknown: true }, "接管同一道判定");
+assert.deepEqual(sessionContextCompact(legacyWrongRow), { compactUnknown: true }, "接力导出读的也是这一道");
+assert.equal(
+  sessionContextCompact({ ...legacyWrongRow, commandLine: frozenCommand }).compactWindow,
+  600_000,
+  "同样没标记、但命令行证明只有 ash 那份 --settings:照旧采信",
+);
+assert.deepEqual(sessionContextCompact({ ...legacyWrongRow, contextCompact: "{坏" }), { compactUnknown: true }, "解不开的文本也证明不了");
+// 新写入带标记,原样读回;接力把这份文本带过去,对端照样认。
+const marked = serializeCompactSnapshot({ compactWindow: 600_000, compactPercent: 82.76 });
+assert.deepEqual(parseStoredCompactSnapshot(marked), { compactWindow: 600_000, compactPercent: 82.76 });
+assert.deepEqual(
+  sessionContextCompact({ contextCompact: marked, resumeArgs: null, commandLine: null }),
+  { compactWindow: 600_000, compactPercent: 82.76 },
+  "带标记的快照不依赖本机的 resume_args/命令行(接力的接收端两样都没有)",
+);
+assert.deepEqual(
+  sessionContextCompact({ contextCompact: serializeCompactSnapshot(UNKNOWN_COMPACT_SNAPSHOT), resumeArgs: frozenArgs, commandLine: frozenCommand }),
+  { compactUnknown: true },
+  "带标记的「不知道」不会被老行判定翻回确定值",
 );
 
 // ── ④ 一键开启端点 ────────────────────────────────────────────────────────

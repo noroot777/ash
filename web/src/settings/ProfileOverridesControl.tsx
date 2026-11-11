@@ -83,8 +83,9 @@ export function ProfileOverridesControl({
   // 那个「空转项」一样,得在胶囊上就看得出来 —— 只写在弹层里等于要求用户先怀疑它。
   const conflict = cliConfigOverrideConflict(type, extraArgs);
   // 窗口填得比模型窗口大(多半是模型没在供应商上开 1M)会被 CLI 截掉,同理要在胶囊上看得出。
+  // 整档被顶掉时这些值根本到不了 CLI,「截到多少、多久压一次、去开 1M」都无从谈起,只报冲突。
   const modelWindow = type === "claude" ? claudeModelWindow(model, provider, extraArgs)?.window ?? null : null;
-  const clamped = clampedCompactWindow(value.autoCompactWindow, modelWindow) !== null;
+  const clamped = !conflict && clampedCompactWindow(value.autoCompactWindow, modelWindow) !== null;
   const summary = active
     .map((spec) => `${fmtOverrideValue(value[spec.key]!, spec.unit)}${dead.has(spec.key) ? "（未生效）" : ""}`
       + (spec.key === "autoCompactWindow" && clamped ? "（未开 1M）" : ""))
@@ -168,7 +169,7 @@ export function ProfileOverridesControl({
             ))}
           </div>
 
-          {type === "claude" && (
+          {type === "claude" && !conflict && (
             <Context1mNotice
               model={model}
               provider={provider}
@@ -181,6 +182,7 @@ export function ProfileOverridesControl({
           {(conflict || hints.length > 0) && (
             <div className="agent-profile-override-hint">
               {conflict && <p><b>{conflict}</b></p>}
+              {conflict && hints.length > 0 && <p>下面是去掉那份 --settings 之后才会成立的预览：</p>}
               {hints.map((hint) => <p key={hint}>{hint}</p>)}
             </div>
           )}

@@ -14,7 +14,8 @@ import {
   type CompactSnapshot,
   compactSnapshotFromEnv,
   compactSnapshotOf,
-  parseCompactSnapshot,
+  parseStoredCompactSnapshot,
+  serializeCompactSnapshot,
   UNKNOWN_COMPACT_SNAPSHOT,
 } from "@ash/shared/usage";
 import { db } from "./db/index.js";
@@ -239,7 +240,7 @@ export async function setSessionContext(sessId: string, context: ContextUsage): 
         contextWindowEstimated: measured ? context.windowEstimated : null,
         // 启动快照跟水位**同一笔**落:两者出自同一个进程,重读时才是一对(没配就是 `{}`,
         // 跟「老行没这一列」分得开)。
-        contextCompact: measured ? JSON.stringify(compactSnapshotOf(context)) : null,
+        contextCompact: measured ? serializeCompactSnapshot(compactSnapshotOf(context)) : null,
       })
       .where(eq(sessions.id, sessId));
   } catch (error) {
@@ -274,19 +275,20 @@ export function launchFields(handle: { commandLine: string; launchCompact?: Comp
 } {
   return {
     commandLine: handle.commandLine,
-    launchCompact: handle.launchCompact ? JSON.stringify(handle.launchCompact) : null,
+    launchCompact: handle.launchCompact ? serializeCompactSnapshot(handle.launchCompact) : null,
   };
 }
 
 /**
- * 没有随起跑落下快照的老行(launch_compact / context_compact 上线前)唯一的退路,两处读端
- * (接管、水位重读)共用这一份判定。
+ * 存下来的快照证明不了来源时(列为空 = 这两列上线前的老行;非空但没有来源标记 = 「按最终生效
+ * 参数判定」上线前写的,那时被盖掉的配置照样当事实写了进去,见 shared serializeCompactSnapshot)
+ * 唯一的退路。接管、水位重读、接力导出三处读端共用这一份判定,不各自信任各自的列。
  *
  * resume_args 只有 ash 那份 `--settings`;它到底生没生效,要看同一笔写下的 command_line 里
  * 有没有别的 `--settings` 排在后面整份盖掉它(claude 只认最后一个,见 cliConfigOverrideConflict)。
  * **恰好一个**才证明 CLI 用的就是 ash 那份;多于一个、或命令行缺失都证明不了,如实标「不知道」,
- * 不拿 ash 的默认值冒充事实(第 3 轮审查 F1)。命令行是展示用的拼接串,参数值里碰巧出现这个
- * 字样只会让判定偏向「不知道」,不会反过来编出一个确定值。
+ * 不拿 ash 的默认值冒充事实。命令行是展示用的拼接串,参数值里碰巧出现这个字样只会让判定偏向
+ * 「不知道」,不会反过来编出一个确定值。
  */
 export function legacyCompactSnapshot(row: Pick<SessionRow, "resumeArgs" | "commandLine">): CompactSnapshot {
   const injected = sessionCompactSnapshot(row.resumeArgs);
@@ -295,18 +297,14 @@ export function legacyCompactSnapshot(row: Pick<SessionRow, "resumeArgs" | "comm
   return settingsArgs === 2 ? injected : UNKNOWN_COMPACT_SNAPSHOT;
 }
 
-/** 重启接管时这个旧进程的压缩配置:起跑时落下的那份;老行走 legacyCompactSnapshot。 */
+/** 重启接管时这个旧进程的压缩配置:起跑时落下的那份;证明不了来源就走 legacyCompactSnapshot。 */
 export function sessionLaunchCompact(row: Pick<SessionRow, "launchCompact" | "resumeArgs" | "commandLine">): CompactSnapshot {
-  return typeof row.launchCompact === "string"
-    ? parseCompactSnapshot(row.launchCompact)
-    : legacyCompactSnapshot(row);
+  return parseStoredCompactSnapshot(row.launchCompact) ?? legacyCompactSnapshot(row);
 }
 
-/** 库里这份水位对应的压缩快照:随水位落下的那份;老行走 legacyCompactSnapshot。 */
+/** 库里这份水位对应的压缩快照:随水位落下的那份;证明不了来源就走 legacyCompactSnapshot。 */
 export function sessionContextCompact(row: Pick<SessionRow, "contextCompact" | "resumeArgs" | "commandLine">): CompactSnapshot {
-  return typeof row.contextCompact === "string"
-    ? parseCompactSnapshot(row.contextCompact)
-    : legacyCompactSnapshot(row);
+  return parseStoredCompactSnapshot(row.contextCompact) ?? legacyCompactSnapshot(row);
 }
 
 /** 只要窗口那一项(老调用点)。 */
