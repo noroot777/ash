@@ -13,6 +13,9 @@
   };
   let shown = [];
   let looping = false;
+  let ringed = null;      /* 刚从清单点过来、正圈着的那个元素 */
+  let ringTimer = 0;
+  const ring = h('div.ring');
 
   /* 被滚动容器裁掉、或者根本没画出来的，不放圆圈 */
   function visibleRect(el) {
@@ -35,6 +38,9 @@
       if (r) pin.style.translate = `${Math.round(r.left)}px ${Math.round(r.top)}px`;
       $(`.notes li[data-id="${pin.dataset.id}"]`)?.classList.toggle('off', !r);
     }
+    const r = ringed?.isConnected ? ringed.getBoundingClientRect() : null;
+    ring.classList.toggle('is-in', Boolean(r));
+    if (r) Object.assign(ring.style, { translate: `${r.left - 5}px ${r.top - 5}px`, width: `${r.width + 10}px`, height: `${r.height + 10}px` });
     requestAnimationFrame(place);
   }
 
@@ -47,14 +53,14 @@
       for (const pin of $$('#pins button')) pin.classList.toggle('on', pin.dataset.id === id);
       if (!el) return;
       el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: ASH.reduced() ? 'auto' : 'smooth' });
-      el.classList.add('mark-on');
-      clearTimeout(el._mark);
-      el._mark = setTimeout(() => el.classList.remove('mark-on'), 1800);
+      ringed = el;
+      clearTimeout(ringTimer);
+      ringTimer = setTimeout(() => { ringed = null; }, 1800);
     });
   };
 
   function pick(item, route) {
-    if (sameRoute(item, route) && (targetOf(item.id) || ASH.prep[item.id])) ASH.focusMark(item.id);
+    if (targetOf(item.id) || (sameRoute(item, route) && ASH.prep[item.id])) ASH.focusMark(item.id);
     else ASH.go(`${routeOf(item)}?m=${item.id}`);
   }
 
@@ -63,14 +69,15 @@
       const box = $('#notes > div');
       const pins = $('#pins');
       if (!document.body.classList.contains('notes-on')) { pins.replaceChildren(); return; }
-      shown = data.items.filter((item) => sameRoute(item, route) || surfaceOf[item.s].everywhere);
+      /* 这一页的条目 = 清单里写着在这一页的，加上页面上真画出来、有元素认领的（侧栏在好几面都在；设置各子页、聊天页认领的是别的面的条目） */
+      shown = data.items.filter((item) => sameRoute(item, route) || targetOf(item.id)?.getClientRects().length);
       const groups = data.surfaces.filter((s) => shown.some((item) => item.s === s.key));
       box.replaceChildren(...groups.flatMap((s) => [
         h('h3', s.name),
         h('ul', shown.filter((item) => item.s === s.key).map((item) => h(`li${item.keep ? '.keep' : ''}`, { 'data-id': item.id },
           h('button', { type: 'button', onclick: () => pick(item, route) }, h('i', String(numberOf.get(item.id))), h('span', item.now), item.after && h('span', item.after), item.ask && h('em', '要你点头'))))),
       ]));
-      pins.replaceChildren(...shown.map((item) => h(`button${item.keep ? '.keep' : ''}`, { 'data-id': item.id, 'aria-label': `清单第 ${numberOf.get(item.id)} 条`, onclick: () => ASH.focusMark(item.id) }, String(numberOf.get(item.id)))));
+      pins.replaceChildren(ring, ...shown.map((item) => h(`button${item.keep ? '.keep' : ''}`, { 'data-id': item.id, 'aria-label': `清单第 ${numberOf.get(item.id)} 条`, onclick: () => ASH.focusMark(item.id) }, String(numberOf.get(item.id)))));
       if (!looping) { looping = true; requestAnimationFrame(place); }
     },
   };

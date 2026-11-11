@@ -11,6 +11,7 @@
      accepted: false = 做完了还没验收（真实产品里是一颗一直在的靛蓝环，算进「需要你处理」） */
   ASH.data = {
     project: 'harness',
+    sendKey: 'enter',          /* 设置里的「发送键」：enter / mod-enter。回复框、首页、新建面板都读它 */
     current: 't-cur',
     tasks: [
       { id: 't-run', title: '斜杠补全：已有正文后面敲 / 也弹', status: 'running', agent: 'claude', when: '刚刚' },
@@ -69,12 +70,12 @@
     return close;
   };
 
-  /* 菜单：items 里是 { label, icon, kbd, onpick, disabled, selected } / '-'（分隔线）/ 字符串（小标题）。上下键走，回车选 */
+  /* 菜单：items 里是 { label, icon, kbd, onpick, disabled, selected, danger } / '-'（分隔线）/ 字符串（小标题）。上下键走，回车选 */
   ASH.menu = (anchor, items, opts = {}) => {
     const list = h('div.menu', { role: opts.role ?? 'menu' }, items.map((it) => {
       if (it === '-') return h('hr');
       if (typeof it === 'string') return h('small', it);
-      return h('button', { role: opts.role === 'listbox' ? 'option' : 'menuitem', disabled: it.disabled, 'aria-selected': it.selected ? 'true' : null,
+      return h(`button${it.danger ? '.danger' : ''}`, { role: opts.role === 'listbox' ? 'option' : 'menuitem', disabled: it.disabled, 'aria-selected': it.selected ? 'true' : null,
         onclick: () => { ASH.closePop(); anchor.focus({ preventScroll: true }); it.onpick?.(); } }, it.icon && icon(it.icon), h('span', it.label), it.kbd && h('kbd', it.kbd));
     }));
     const close = ASH.pop(anchor, list, { ...opts, cls: `${opts.cls ?? ''} ${opts.role === 'listbox' ? 'sel-menu' : ''}`.trim() });
@@ -155,6 +156,16 @@
   addEventListener('pointerdown', hideTip, true);
   addEventListener('scroll', hideTip, true);
 
+  /* 样机没画下去的去处（改动工作区、F 铺开的宽列表……）：产品的界面里不解释，只在样机自己那条栏里说一句 */
+  let sayTimer = 0;
+  ASH.todo = (what) => {
+    const say = $('#dbarSay');
+    say.textContent = `样机没画这一步：${what}`;
+    say.classList.add('is-in');
+    clearTimeout(sayTimer);
+    sayTimer = setTimeout(() => say.classList.remove('is-in'), 2600);
+  };
+
   /* ---------- 路由：#/task、#/home、#/new、#/settings/<页>、#/git、#/chat、#/assistant；?m=<清单条目> 定位 ---------- */
   let current = null;
   let cleanup = null;
@@ -200,7 +211,7 @@
     const params = new URLSearchParams(location.search);
     if (params.get('theme') === 'dark') root.dataset.theme = 'dark';
     if (params.get('motion')) root.dataset.motion = params.get('motion');
-    if (params.has('embed')) document.body.classList.add('embed');
+    if (params.has('embed')) document.body.classList.add('embed', `embed-${params.get('embed') || 'feed'}`);
     document.body.append(tip);
     ASH.mount('side', $('#side'));
     $('#themeBtn').addEventListener('click', (e) => { root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark'; toggle(e.currentTarget, root.dataset.theme === 'dark'); });

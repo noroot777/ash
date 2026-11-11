@@ -161,12 +161,13 @@ kbd, .kbd { padding: 1px 5px; border-radius: 4px; background: var(--overlay); co
 .seg > [aria-pressed="true"] { background: var(--lifted); box-shadow: var(--surface-shadow); color: var(--ink); }
 
 /* 浮层与菜单：进场 200ms，退场 120ms，从触发点长出来 */
-.pop { position: fixed; z-index: 60; min-width: 180px; padding: 4px; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow), var(--menu-shadow); opacity: 0; transform: translateY(-4px) scale(0.98); transform-origin: var(--origin, top left); transition: opacity 120ms var(--ease-in), transform 120ms var(--ease-in); }
+.pop { position: fixed; z-index: 90; min-width: 180px; padding: 4px; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow), var(--menu-shadow); opacity: 0; transform: translateY(-4px) scale(0.98); transform-origin: var(--origin, top left); transition: opacity 120ms var(--ease-in), transform 120ms var(--ease-in); }
 .pop:not(.is-in) { pointer-events: none; }
 .pop.is-in { opacity: 1; transform: none; transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out); }
 .menu > button, .menu > a { display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 8px; border-radius: var(--r-sm); text-align: left; white-space: nowrap; }
 .menu > button:hover, .menu > a:hover, .menu > [data-active="true"] { background: var(--hover-bg); }
 .menu > button > .i:first-child { color: var(--muted); }
+.menu > button.danger, .menu > button.danger > .i:first-child { color: var(--red); }
 .menu kbd { margin-left: auto; background: none; color: var(--faint); }
 .menu hr { height: 1px; margin: 4px 0; border: 0; background: var(--line); }
 .menu > small { display: block; padding: 6px 8px 2px; color: var(--faint); font-size: var(--t-xs); }
@@ -205,7 +206,7 @@ kbd, .kbd { padding: 1px 5px; border-radius: 4px; background: var(--overlay); co
 .switch[aria-checked="true"]::after { transform: translateX(12px); }
 
 /* 提示：第一次等 0.4 秒，连着看下一个不等；键盘聚焦不等 */
-#tip { position: fixed; z-index: 80; padding: 3px 8px; border-radius: var(--r-sm); background: var(--ink); color: var(--panel); font-size: var(--t-xs); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+#tip { position: fixed; z-index: 100; padding: 3px 8px; border-radius: var(--r-sm); background: var(--ink); color: var(--panel); font-size: var(--t-xs); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
 #tip.is-in { opacity: 1; }
 #tip kbd { margin-left: 8px; padding: 0; background: none; color: color-mix(in oklab, var(--panel) 62%, transparent); }
 

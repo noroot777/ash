@@ -2,7 +2,7 @@
    全页最多一颗实心主色按钮；空的分组不画；顶栏下面同一时刻只有一句话。 */
 
 /* contain：顶栏那一排不换行的字不该把整页撑宽（对照清单打开时主区会变窄） */
-.sv-git { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; contain: inline-size; }
+.sv-git { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .sv-git .btn[disabled] { pointer-events: none; }
 .sv-git .ico.git-danger:hover { background: var(--red-bg); color: var(--red); }
 

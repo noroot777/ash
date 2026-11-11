@@ -1,8 +1,7 @@
 /* 任务页的骨架和头部（task.js）。会话流、提问坞在 feed.css，回复框在 reply.css，右侧面板在 insp.css。 */
 
-/* 骨架照现在的产品：右侧面板通顶，头部只压在会话那一列上面。
-   contain：这一页多宽由外壳说了算，不由里面的内容撑——否则头部和回复框的最小宽度会一路顶到 .app，把对照清单挤出窗口 */
-.task { flex: 1; min-height: 0; display: flex; contain: inline-size; }
+/* 骨架照现在的产品：右侧面板通顶，头部只压在会话那一列上面 */
+.task { flex: 1; min-width: 0; min-height: 0; display: flex; }
 .task-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .task-col { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .task-insp { flex: none; min-height: 0; }

@@ -1,6 +1,7 @@
 /* 样机的外框：顶上一条不属于产品的细栏，下面是 ash 的应用外壳（侧栏 260 + 主卡片 + 深色状态栏），右边是对照清单。 */
 
-body { display: grid; grid-template-rows: 36px minmax(0, 1fr); height: 100vh; overflow: hidden; }
+/* 列宽写成 minmax(0, 1fr)：每一面多宽由外壳说了算，里面有不换行的一排也撑不动它（否则会把对照清单挤出窗口） */
+body { display: grid; grid-template: 36px minmax(0, 1fr) / minmax(0, 1fr); height: 100vh; overflow: hidden; }
 
 /* 样机栏：纸色、衬线，和产品本身分得开 */
 .dbar { display: flex; align-items: center; gap: 14px; padding: 0 12px; border-bottom: 1px solid #e7e4de; background: #fbfaf8; color: #5d5a55; font-size: 12px; white-space: nowrap; }
@@ -14,6 +15,9 @@ body { display: grid; grid-template-rows: 36px minmax(0, 1fr); height: 100vh; ov
 .dbar .run:hover { background: #bf3b23; color: #fff; }
 .dbar .run[disabled] { opacity: 0.5; }
 .dbar .i { width: 14px; height: 14px; }
+/* 样机自己要说的话只出现在这条栏里（「这一步样机没画」），不写进产品的界面 */
+.dbar-say { overflow: hidden; color: #d6452b; text-overflow: ellipsis; opacity: 0; transition: opacity 120ms var(--ease-in); }
+.dbar-say.is-in { opacity: 1; transition: opacity var(--dur-2) var(--ease-out); }
 .dbar :focus-visible { outline-color: #d6452b; }
 :root[data-theme="dark"] .dbar { border-color: #2c2b28; background: #131312; color: #a9a59d; }
 :root[data-theme="dark"] .dbar b { color: #eceae5; }
@@ -22,7 +26,7 @@ body { display: grid; grid-template-rows: 36px minmax(0, 1fr); height: 100vh; ov
 :root[data-theme="dark"] .dbar button[aria-pressed="true"] { background: #33201b; color: #f0694f; }
 
 .stage { display: flex; min-height: 0; }
-.app { flex: 1; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr) 26px; background: var(--chrome); }
+.app { flex: 1; min-width: 0; display: grid; grid-template: minmax(0, 1fr) 26px / minmax(0, 1fr); background: var(--chrome); }
 .app-shell { display: flex; min-height: 0; padding: 8px 8px 8px 0; }
 .side { width: 260px; flex: none; display: flex; flex-direction: column; min-height: 0; padding: 8px 12px 0; }
 .main { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; border-radius: var(--r-lg); background: var(--canvas); box-shadow: 0 0 0 0.5px var(--line), var(--surface-shadow); }
@@ -68,14 +72,18 @@ body.notes-on .pins { display: block; }
 .pins button { position: absolute; left: 0; top: 0; width: 18px; height: 18px; margin: -7px 0 0 -7px; border-radius: 50%; background: #d6452b; color: #fff; font: 600 10.5px/18px -apple-system, sans-serif; text-align: center; box-shadow: 0 0 0 2px rgb(255 255 255 / 0.9), 0 3px 8px rgb(0 0 0 / 0.25); pointer-events: auto; transition: scale var(--dur-1) var(--ease-out); }
 .pins button:hover, .pins button.on { scale: 1.25; }
 .pins button.keep { background: #fff; color: #5d5a55; box-shadow: inset 0 0 0 1.5px #96928b, 0 0 0 2px rgb(255 255 255 / 0.9), 0 3px 8px rgb(0 0 0 / 0.25); }
-.mark-on { outline: 2px solid #d6452b !important; outline-offset: 3px !important; border-radius: 6px; }
+/* 从清单点过来时圈一下：画在最上层，贴着面板边的元素也不会被裁掉 */
+.pins .ring { position: absolute; left: 0; top: 0; border: 2px solid #d6452b; border-radius: 8px; opacity: 0; transition: opacity var(--dur-2) var(--ease-out); }
+.pins .ring.is-in { opacity: 1; }
 
-/* 嵌进报告时只留会话那一列 */
+/* 嵌进报告：?embed 只留会话那一列（06 节），?embed=insp 只留右侧面板（04 节） */
 body.embed { grid-template-rows: minmax(0, 1fr); }
-body.embed .dbar, body.embed .side, body.embed .statusbar, body.embed .notes, body.embed .task-insp { display: none; }
+body.embed .dbar, body.embed .side, body.embed .statusbar, body.embed .notes { display: none; }
+body.embed-feed .task-insp, body.embed-feed .task-panel { display: none; }
+body.embed-insp .task-main { display: none; }
+body.embed-insp .task-insp { flex: 1; }
 body.embed .app { grid-template-rows: minmax(0, 1fr); }
 body.embed .app-shell { padding: 0; }
-body.embed .task-head > .ico:last-child { display: none; }   /* 嵌进报告时没有右侧面板，那颗开关也不留 */
 body.embed .main { border-radius: 0; box-shadow: none; }
 
 @media (max-width: 900px) {

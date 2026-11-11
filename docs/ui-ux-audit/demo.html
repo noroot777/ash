@@ -25,7 +25,7 @@
     <a href="#/task">任务</a><a href="#/home">首页</a><a href="#/new">新建</a><a href="#/settings/agents">设置</a><a href="#/git">Git</a><a href="#/chat">聊天</a><a href="#/assistant">助手</a>
   </nav>
   <button class="run" id="runBtn" hidden>运行一轮</button>
-  <span class="grow"></span>
+  <span class="grow dbar-say" id="dbarSay" role="status"></span>
   <button id="notesBtn" aria-pressed="false">对照清单</button>
   <button id="themeBtn" aria-pressed="false" data-m="a11y-keep">深色</button>
   <button id="motionBtn" aria-pressed="false" data-m="a11y-3">减少动效</button>
@@ -49,6 +49,7 @@
 <script src="demo/target.js" defer></script>
 <script src="demo/notes.js" defer></script>
 <script src="demo/side.js" defer></script>
+<script src="demo/sendkey.js" defer></script>
 <script src="demo/reply.js" defer></script>
 <script src="demo/insp.js" defer></script>
 <script src="demo/insp-panes.js" defer></script>
