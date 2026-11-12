@@ -18,7 +18,12 @@ import "../../src/styles/global.css";
 
 declare global {
   interface Window {
-    __reviews?: { hold: (taskId: string) => void; release: (taskId: string) => void; set: (taskId: string, ids: string[]) => void };
+    __reviews?: {
+      hold: (taskId: string) => void;
+      release: (taskId: string) => void;
+      set: (taskId: string, ids: string[]) => void;
+      fail: (taskId: string, message: string | null) => void;
+    };
     __releaseRounds?: () => void;
     __pendingRequest?: Record<string, () => string | null>;
     __lanes?: Record<string, { title: string; runId: string | null }[]>;
@@ -39,6 +44,7 @@ const run = (id: string, at: string, name: string): FreeReviewRun => ({
 } as unknown as FreeReviewRun);
 const runs = [run("old-run", "2026-11-11T10:00:00.000Z", "旧一场"), run("new-run", "2026-11-12T10:00:00.000Z", "新一场")];
 const ghost = run("ghost-run", "2026-11-12T12:00:00.000Z", "后来补上的一场");
+const later = run("later-run", "2026-11-12T13:00:00.000Z", "再后来的一场");
 
 // 时间线上的审查段。旧那场是升级前落的（开始那一条不带 runId，只能按时间窗口配）：第一次启动
 // 失败，重跑那次才出结论——两张卡都是旧那场的第 1 轮。新那场的开始那一条带着 runId。还有一张
@@ -100,22 +106,24 @@ window.__lanes = Object.fromEntries([["free", freeLanes], ["superseded", superse
   .map(([name, lanes]) => [name, (lanes as ConversationReviewLane[]).map((item) => ({ title: item.title, runId: item.runId }))]));
 
 // 每个任务的审查记录由测试放行：放行之前发出的 GET 都挂着；放行时按当时设下的那一份回。
-type Served = { runs: FreeReviewRun[]; version: number; gate: Promise<void>; open: () => void };
+type Served = { runs: FreeReviewRun[]; version: number; gate: Promise<void>; open: () => void; error: string | null };
 const served = new Map<string, Served>();
 const serve = (taskId: string, list: FreeReviewRun[], held: boolean) => {
-  const entry: Served = { runs: list, version: 1, gate: Promise.resolve(), open: () => {} };
+  const entry: Served = { runs: list, version: 1, gate: Promise.resolve(), open: () => {}, error: null };
   if (held) entry.gate = new Promise((resolve) => { entry.open = resolve; });
   served.set(taskId, entry);
 };
-const byId = new Map([...runs, ghost].map((item) => [item.id, item]));
+const byId = new Map([...runs, ghost, later].map((item) => [item.id, item]));
 window.__reviews = {
   hold: (taskId) => { const entry = served.get(taskId)!; entry.gate = new Promise((resolve) => { entry.open = resolve; }); },
   release: (taskId) => served.get(taskId)!.open(),
   set: (taskId, ids) => { const entry = served.get(taskId)!; entry.runs = ids.map((id) => byId.get(id)!); entry.version += 1; },
+  fail: (taskId, message) => { served.get(taskId)!.error = message; },
 };
 api.freeWorkflow = (async (taskId: string) => {
   const entry = served.get(taskId)!;
   await entry.gate;
+  if (entry.error) throw new Error(entry.error);
   return {
     taskId, stateVersion: entry.version, selectedReviewerId: null, workspaceHead: "head", workspaceDirty: false,
     reviewReservation: { armed: false }, preview: { running: false }, executions: [], reviews: entry.runs,
@@ -128,6 +136,9 @@ serve(task.id, runs, true);
 // 已经读到过一份（只有旧那场）：新一场刚结束就点它，手里那份是旧快照。
 const staleTask = taskOf("nav-stale");
 serve(staleTask.id, runs.slice(0, 1), false);
+// 第一次读就失败：数据一直是空的，这份请求不能一声不响地挂着。
+const coldTask = taskOf("nav-cold");
+serve(coldTask.id, runs.slice(0, 1), true);
 
 const lane = (id: string, source: ConversationReviewLane["source"], runId: string | null, round: number, label: string): ConversationReviewLane => ({
   kind: "review-lane", id, source, round, totalRounds: null, title: `第 ${round} 轮`, items: [], reviewerLabel: label,
@@ -187,11 +198,19 @@ function Shell() {
       </Host>
       <Host
         name="stale"
-        lanes={[mixedLanes[1]!, lane("ghost", "free", "ghost-run", 1, "后来补上的一场")]}
-        names={["stale-new", "ghost"]}
+        lanes={[
+          mixedLanes[1]!,
+          lane("ghost", "free", "ghost-run", 1, "后来补上的一场"),
+          lane("future", "free", "future-run", 2, "一直没有的一场"),
+          lane("later", "free", "later-run", 1, "再后来的一场"),
+        ]}
+        names={["stale-new", "ghost", "future", "later"]}
         workflowMode="free"
       >
         <FreeReviewPane task={staleTask} notify={() => {}} />
+      </Host>
+      <Host name="cold" lanes={[lane("cold", "free", "old-run", 1, "冷启动")]} names={["cold"]} workflowMode="free">
+        <FreeReviewPane task={coldTask} notify={() => {}} />
       </Host>
       <Host
         name="verify"

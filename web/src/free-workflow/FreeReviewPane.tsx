@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FreeReviewRound, FreeReviewRun, Task } from "@ash/shared";
 import { InspActions, InspConclusion, InspMainButton, InspMore, type InspMainAction, type InspMoreItem, type InspTone } from "../inspector/InspHead.tsx";
-import { useInspectorRequest } from "../inspector/nav.tsx";
+import { useInspectorRequest, type InspectorRequest } from "../inspector/nav.tsx";
 import { RequestMissNote } from "../inspector/RequestMissNote.tsx";
 import { reviewTargetOf } from "../review/reviewTarget.ts";
 import { InspNone, InspRecord, InspSec } from "../inspector/parts.tsx";
@@ -33,6 +33,13 @@ function entries(runs: FreeReviewRun[]): Entry[] {
   return runs
     .flatMap((run) => run.rounds.map((round) => ({ run, round })))
     .sort((a, b) => a.round.startedAt.localeCompare(b.round.startedAt));
+}
+
+/** 没找到的是哪一条：提示里说出来，连着点了几处时分得清是哪一处没找到。 */
+function missedReview(params: InspectorRequest): string {
+  const target = reviewTargetOf(params);
+  if (target.source === "merge") return "那一场合并结果审查";
+  return target.round == null ? "那一轮审查" : `第 ${target.round} 轮审查`;
 }
 
 export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify }: {
@@ -108,11 +115,11 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify }: {
       && (target.round == null || entry.round.round === target.round));
     if (hit) { reveal(reviewKey(hit.run.id, hit.round.round)); return; }
     return !state && !free.error ? "wait" : "missing";
-  }, { version: all, refresh: () => free.reload(true, true) });
+  }, { version: [all, free.error], refresh: () => free.reload(true, true) });
 
   if (free.loading && !state) return <div className="insp-pane"><InspConclusion tone="busy">正在读取审查记录…</InspConclusion></div>;
   if (free.error && !state) {
-    return <div className="insp-pane"><RequestMissNote miss={requestMiss} what="那一轮审查" /><InspNone>{free.error}</InspNone></div>;
+    return <div className="insp-pane"><RequestMissNote miss={requestMiss} what={missedReview} /><InspNone>{free.error}</InspNone></div>;
   }
 
   const openWorkspace: InspMoreItem[] = onOpenReview ? [{ key: "workspace", label: "打开改动工作区", onSelect: onOpenReview }] : [];
@@ -277,7 +284,7 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify }: {
         )}
       </section>
 
-      <RequestMissNote miss={requestMiss} what="那一轮审查" />
+      <RequestMissNote miss={requestMiss} what={missedReview} />
       {disputedRound && disputedRun && notify && (
         <FreeReviewDisputeCard
           // 一张卡 = 一条驳回：换成另一条（轮询、另一个窗口裁掉了这条）就整张重建，

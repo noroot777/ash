@@ -61,12 +61,15 @@ export function TaskReviewRounds({
     const key = roundKey(hit);
     setOpenKeys((current) => new Set(current).add(key));
     requestAnimationFrame(() => rootRef.current?.querySelector(`[data-record="${CSS.escape(key)}"]`)?.scrollIntoView({ block: "nearest" }));
-  }, { version: rounds, refresh: () => state.reload(true) });
+  }, { version: [rounds, state.loading, state.error], refresh: () => state.reload(true) });
 
   return (
     <section ref={rootRef} aria-label="验证记录">
       <InspSec count={rounds.length || undefined}>验证记录</InspSec>
-      <RequestMissNote miss={requestMiss} what="那一轮验证" />
+      <RequestMissNote miss={requestMiss} what={(params) => {
+        const { round } = reviewTargetOf(params);
+        return round == null ? "那一轮验证" : `第 ${round} 轮验证`;
+      }} />
       {state.loading && <InspNone>正在读取验证记录…</InspNone>}
       {!state.loading && state.error && (
         <InspNone action={<InspButton size="sm" onClick={() => void state.reload()}>重试</InspButton>}>

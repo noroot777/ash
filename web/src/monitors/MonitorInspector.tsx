@@ -88,7 +88,7 @@ export function MonitorInspector({
     card.focus({ preventScroll: true });
     card.classList.add("is-flash");
     window.setTimeout(() => card.classList.remove("is-flash"), 1600);
-  }, { version: rows, refresh: () => monitors.reload() });
+  }, { version: [rows, monitors.ready, monitors.error], refresh: () => monitors.reload() });
 
   return (
     <div className="insp-pane monitor-inspector">
@@ -105,7 +105,7 @@ export function MonitorInspector({
           </InspTool>
         </InspectorHeadActions>
       )}
-      <RequestMissNote miss={requestMiss} what="那个哨兵" />
+      <RequestMissNote miss={requestMiss} what={() => "那个哨兵"} />
       {monitors.error && <p className="insp-hint is-bad monitor-inspector__error" role="alert">{monitors.error}</p>}
       {blockedReason && <div className="monitor-inspector__blocked"><InspNote>{blockedReason}</InspNote></div>}
       {form !== null && (

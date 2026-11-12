@@ -34,7 +34,10 @@ export function useInspectorNav(): InspectorNav | null {
  */
 export type InspectorRequestOutcome = void | "wait" | "missing";
 
-/** 一份请求确认办不成：还留着它说了什么，「重试」原样再发一次。 */
+/**
+ * 一份请求确认办不成：还留着它说了什么，「重试」原样再发一次。它只属于**那一份**请求：之后
+ * 又来了一份（点了别的），它就跟着撤掉——旧提示的「重试」不能把人带回上一个目标。
+ */
 export type InspectorRequestMiss = { params: InspectorRequest; retry: () => void; dismiss: () => void };
 
 /**
@@ -43,7 +46,8 @@ export type InspectorRequestMiss = { params: InspectorRequest; retry: () => void
  *
  * 切到那一格不等于办成了，手里有数据也不等于找过了：刚挂上的那一格往往还在读；读到的也可能
  * 是点之前的旧快照（新一场审查刚结束、缓存里还没有它）。所以：
- *   - `"wait"`：`version`（那一格的数据）一变就再交给它一次；
+ *   - `"wait"`：`version`（那一格的数据，以及读没读完、读失败没有）里任何一样一变就再交给它
+ *     一次——只盯数据的话，第一次就读失败时数据一直是空的，这份请求会一声不响地挂着；
  *   - `"missing"`：先 `refresh` 一次——拿一份**这份请求之后才发起**的新数据再认；还没有，或者
  *     压根没给 `refresh`，才算确认办不成。办不成不悄悄吞掉：返回值是这份请求，那一格把它
  *     说出来、给一个「重试」（见 RequestMissNote）。
@@ -51,7 +55,8 @@ export type InspectorRequestMiss = { params: InspectorRequest; retry: () => void
 export function useInspectorRequest(
   id: string,
   handle: (params: InspectorRequest) => InspectorRequestOutcome,
-  { version, refresh }: { version?: unknown; refresh?: () => Promise<unknown> } = {},
+  // version 的长度对同一处调用要固定（它直接进 effect 的依赖）。
+  { version = [], refresh }: { version?: readonly unknown[]; refresh?: () => Promise<unknown> } = {},
 ): InspectorRequestMiss | null {
   const nav = useInspectorNav();
   const handleRef = useRef(handle);
@@ -64,9 +69,14 @@ export function useInspectorRequest(
   // 哪一份请求已经为它重读过一次、那一趟落地没有。
   const refreshed = useRef<{ seq: number; settled: boolean } | null>(null);
   const [landed, setLanded] = useState(0);
-  const [missed, setMissed] = useState<InspectorRequest | null>(null);
+  const [missed, setMissed] = useState<{ seq: number; params: InspectorRequest } | null>(null);
+  // 最近交到这一格的那一份请求：只有它的失败提示还作数。
+  const latest = useRef(0);
   useEffect(() => {
     if (!request || request.id !== id) return;
+    latest.current = request.seq;
+    // 新的一份来了：上一份的失败提示（连同它的「重试」）当场作废，不等这一份办出结果。
+    setMissed((current) => (current && current.seq !== request.seq ? null : current));
     const outcome = handleRef.current(request.params);
     if (outcome === "wait") return;
     if (outcome === "missing") {
@@ -83,19 +93,22 @@ export function useInspectorRequest(
         return;
       }
       if (attempt && !attempt.settled) return;
-      setMissed(request.params);
+      setMissed({ seq: request.seq, params: request.params });
     } else {
       setMissed(null);
     }
     consume?.(request.seq);
-  }, [consume, id, request, version, landed]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- version 是调用方给的一组依赖，按项展开
+  }, [consume, id, request, landed, ...version]);
   if (!missed) return null;
+  const { seq, params } = missed;
+  const stale = () => latest.current !== seq;
   return {
-    params: missed,
+    params,
     retry: () => {
       setMissed(null);
-      openTab?.(id, missed);
+      if (!stale()) openTab?.(id, params);
     },
-    dismiss: () => setMissed(null),
+    dismiss: () => setMissed((current) => (current?.seq === seq ? null : current)),
   };
 }

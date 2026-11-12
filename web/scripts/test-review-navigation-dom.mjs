@@ -3,7 +3,8 @@
 //     旧卡也认旧那场（它的开始那一条是升级前落的，不带 runId）；升级前那场没收尾、升级后
 //     新一场又从第 1 轮开始，后面那句结论归新一场；
 //   · 手里那份是点之前的旧快照（还没有新一场）：这份请求等新数据到了再办，不当场收掉；
-//     重读过也没有：说出来、给「重试」，重试时那一场到了就展开；
+//     重读过也没有：说出来（说是哪一轮）、给「重试」，重试时那一场到了就展开；接着点了别的，
+//     上一份的失败提示连同它的「重试」当场撤掉；第一次读就失败也说出来、能重试；
 //   · 认不出是哪一场的老卡、自由工作流里的就地验证卡不去审查格猜，在原处展开；
 //   · 审查记录还没读到时点过来，这份请求要等记录到了再办，不能切过去就算办完；
 //   · 就地验证的「第 N 轮验证」走验证记录那一格，同样展开那一轮。
@@ -73,7 +74,7 @@ try {
   await waitUntil(async () => (await page.evaluate(() => window.__pendingRequest.stale())) === null, "办成之后请求收下");
 
   // ⑤ 重读过也没有：说出来、能重试；重试时那一场到了就展开。
-  const miss = page.locator('[data-pane="stale"] [role="alert"]', { hasText: "没找到要打开的那一轮审查" });
+  const miss = page.locator('[data-pane="stale"] [role="alert"]', { hasText: "没找到要打开的第 1 轮审查" });
   await milestone("ghost").click();
   await miss.waitFor();
   assert.equal(await page.evaluate(() => window.__pendingRequest.stale()), null, "确认办不成才收下");
@@ -84,6 +85,34 @@ try {
   await waitUntil(async () => (await expanded("stale", ghostKey)) === "true", "重试时那一场到了，展开它");
   assert.equal(await miss.count(), 0, "办成了，提示收起");
 
+  // ⑥ 一处没找到、接着点了另一处（数据还在路上）：上一份的失败提示和「重试」当场撤掉，
+  //    后点的那一处到了就展开，不被旧目标顶掉。
+  const staleAlert = page.locator('[data-pane="stale"] [role="alert"]');
+  await milestone("future").click();
+  await staleAlert.filter({ hasText: "没找到要打开的第 2 轮审查" }).waitFor();
+  await page.evaluate(() => { window.__reviews.hold("nav-stale"); window.__reviews.set("nav-stale", ["old-run", "new-run", "ghost-run", "later-run"]); });
+  await milestone("later").click();
+  await waitUntil(async () => (await staleAlert.count()) === 0, "点了别的，上一份的失败提示当场撤掉");
+  assert.match(await page.evaluate(() => window.__pendingRequest.stale()) ?? "", /later-run/, "后点的那一处在等数据");
+  await page.evaluate(() => window.__reviews.release("nav-stale"));
+  await page.locator('[data-pane="stale"] [data-record^="later-run"]').first().waitFor();
+  const laterKey = await staleKey("later-run");
+  await waitUntil(async () => (await expanded("stale", laterKey)) === "true", "后点的那一处到了就展开");
+  assert.equal(await staleAlert.count(), 0, "旧目标的失败没有回来");
+
+  // ⑦ 第一次读就失败：说出来、能重试；恢复后重试就展开。
+  await milestone("cold").click();
+  await page.waitForTimeout(150);
+  await page.evaluate(() => { window.__reviews.fail("nav-cold", "网络断了"); window.__reviews.release("nav-cold"); });
+  const coldMiss = page.locator('[data-pane="cold"] [role="alert"]', { hasText: "没找到要打开的第 1 轮审查" });
+  await coldMiss.waitFor();
+  assert.equal(await page.evaluate(() => window.__pendingRequest.cold()), null, "读失败了不再挂着");
+  await page.evaluate(() => window.__reviews.fail("nav-cold", null));
+  await coldMiss.getByRole("button", { name: "重试" }).click();
+  await page.locator('[data-pane="cold"] [data-record^="old-run"]').first().waitFor();
+  const coldKey = await page.locator('[data-pane="cold"] [data-record^="old-run"]').first().getAttribute("data-record");
+  await waitUntil(async () => (await expanded("cold", coldKey)) === "true", "恢复后重试就展开");
+
   // ③ 就地验证：验证记录还在读时点过来也要等，读到了展开第 1 轮（不是最新那轮）。
   await milestone("verify").click();
   await page.waitForTimeout(150);
@@ -93,10 +122,10 @@ try {
   assert.equal(await expanded("verify", "2-inline"), "false", "别的轮次不动");
   // 没有的那一轮：重读过也没有，说出来。
   await milestone("verify-3").click();
-  await page.locator('[data-pane="verify"] [role="alert"]', { hasText: "没找到要打开的那一轮验证" }).waitFor();
+  await page.locator('[data-pane="verify"] [role="alert"]', { hasText: "没找到要打开的第 3 轮验证" }).waitFor();
   assert.equal(await page.evaluate(() => window.__pendingRequest.verify()), null, "确认办不成才收下");
   assert.deepEqual(errors, [], "页面没有报错");
-  console.log("review navigation dom ok: 同号两场（含启动失败的旧卡、升级前没收尾的旧开始）认得出、认不出的在原处展开、记录没读到或是旧快照时请求等着、重读也没有就说出来并能重试、就地验证也展开那一轮");
+  console.log("review navigation dom ok: 同号两场（含启动失败的旧卡、升级前没收尾的旧开始）认得出、认不出的在原处展开、记录没读到或是旧快照时请求等着、重读也没有就说出来并能重试、点了别的旧提示当场撤掉、第一次读就失败也能重试、就地验证也展开那一轮");
 } finally {
   await browser?.close();
   await web.close();
