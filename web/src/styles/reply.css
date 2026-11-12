@@ -30,6 +30,10 @@
 .send-split-main:hover:not(:disabled) { background: var(--accent-hover); }
 .send-split-main:disabled { opacity: .5; }
 .send-split-main:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 55%, transparent); outline-offset: 1px; }
+/* 在跑、输入框空着：主段就是停止键（同一格里换成方块）；打了字以后停止挪到左边这颗小键上。 */
+.send-split-main.is-stop { padding: 0 10px; }
+.send-split-halt { display: inline-grid; width: 24px; height: 24px; align-self: center; place-items: center; margin-right: 6px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--muted); }
+.send-split-halt:hover:not(:disabled) { background: var(--hover-bg); color: var(--ink); }
 .send-split .studio-submit-mode.studio-aux-button { height: 29px; gap: 4px; border-radius: 0 7px 7px 0; padding: 0 7px; }
 .send-split .studio-submit-mode.studio-aux-button:disabled { opacity: .5; }
 .team-reply-box footer .send-split-main,

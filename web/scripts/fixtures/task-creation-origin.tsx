@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Task, TaskListItem } from "@ash/shared";
-import { OriginTaskBar } from "../../src/components/TaskOrigin.tsx";
 import { TaskHeader } from "../../src/task-detail/TaskHeader.tsx";
 import { TaskRow } from "../../src/workspace/TaskTreeRows.tsx";
 import "../../src/styles/global.css";
@@ -23,9 +22,10 @@ function Fixture() {
       <section style={{ flex: 1, minWidth: 0 }}>
         {selected && <>
           <h2>{selected.title}</h2>
-          {/* 真的挂详情页顶栏：创建者徽标就长在这一行里，挪走了这里会立刻挂。 */}
+          {/* 真的挂详情页顶栏：谁开的、从哪来都收在标题前那颗来源图标上，挪走了这里会立刻挂。 */}
           <TaskHeader
             task={{ ...selected, body: "" } as Task}
+            allTasks={tasks}
             conversationMarkdown=""
             busy={false}
             refreshing={false}
@@ -38,10 +38,9 @@ function Fixture() {
             onRefresh={() => {}}
             onReview={() => {}}
             onDelete={() => {}}
-            indicatorForTask={() => null}
+            onOpenTask={id => setSelected(tasks.find(t => t.id === id) || null)}
             notify={() => {}}
           />
-          <OriginTaskBar task={selected} allTasks={tasks} onOpen={id => setSelected(tasks.find(t => t.id === id) || null)} />
         </>}
       </section>
     </div>

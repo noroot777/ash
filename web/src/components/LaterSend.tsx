@@ -5,7 +5,7 @@
 // 普通任务回复框与团队调度台回复框共用这一份,两边长得不一样会被当成 bug 报上来。
 import { useEffect, useState } from "react";
 import type { Group, ScheduledMessage, TaskListItem } from "@ash/shared";
-import { ArrowUp, Clock, HourglassMedium, PaperPlaneRight, SpinnerGap } from "@phosphor-icons/react";
+import { ArrowUp, Clock, HourglassMedium, PaperPlaneRight, SpinnerGap, Stop } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import type { DraftHandle } from "../lib/DraftStore.tsx";
 import { sendAfterOptions } from "../lib/sendAfter.ts";
@@ -88,8 +88,14 @@ export type LaterSend = ReturnType<typeof useLaterSend>;
 /** 分体发送按钮。label 是「立即发送」这一档的文案(排队发送 / 发送…);选了「稍后」就换成那一档
  *  的文案,免得设置藏在浮层里、按钮看上去还是「发送」。status 是此刻主按钮不在「发送」的
  *  那些情形(上传中、补全技能…),它优先,也不受「稍后」没配好的拦截。 */
+/**
+ * 任务在跑时这颗键也是停止键（docs/ui-ux-audit reply-4）：输入框空着时主段就是停止；打了字
+ * 主段要用来排队发送，停止挪到它左边一颗小键上——什么时候都停得下来。
+ */
+export type SendStop = { label: string; busy?: boolean; onStop: () => void };
+
 export function SendSplit({ later, label, status, ariaLabel, sending, disabled,
-  configDisabled, onSend, tasks, projectId, taskId }: {
+  configDisabled, onSend, tasks, projectId, taskId, stop, empty }: {
   later: LaterSend;
   label: string;
   status?: string | null;
@@ -101,15 +107,31 @@ export function SendSplit({ later, label, status, ariaLabel, sending, disabled,
   tasks: TaskListItem[];
   projectId: string;
   taskId: string;
+  /** 给了 = 任务正在跑 / 排着队，这颗键也管停。 */
+  stop?: SendStop | null;
+  /** 输入框里一个字、一个附件都没有（停止键占主段的判据之一）。 */
+  empty?: boolean;
 }) {
   const configured = later.kind !== "now";
   const text = status ?? (configured ? later.submitLabel : label);
+  const stopAsMain = !!stop && !!empty && !status && !sending;
   return (
     <span className="send-split">
-      <button type="button" className="send-split-main" disabled={disabled || (!status && !later.choice)}
-        aria-label={configured && !status ? text : ariaLabel} onClick={onSend}>
-        <span>{text}</span>{sending ? <SpinnerGap size={14} className="is-spinning" /> : <ArrowUp size={14} weight="bold" />}
-      </button>
+      {stop && !stopAsMain && (
+        <button type="button" className="send-split-halt" aria-label={stop.label} disabled={stop.busy} onClick={stop.onStop}>
+          {stop.busy ? <SpinnerGap size={12} className="is-spinning" aria-hidden="true" /> : <Stop size={12} weight="fill" aria-hidden="true" />}
+        </button>
+      )}
+      {stopAsMain ? (
+        <button type="button" className="send-split-main is-stop" aria-label={stop.label} disabled={stop.busy} onClick={stop.onStop}>
+          {stop.busy ? <SpinnerGap size={14} className="is-spinning" aria-hidden="true" /> : <Stop size={14} weight="fill" aria-hidden="true" />}
+        </button>
+      ) : (
+        <button type="button" className="send-split-main" disabled={disabled || (!status && !later.choice)}
+          aria-label={configured && !status ? text : ariaLabel} onClick={onSend}>
+          <span>{text}</span>{sending ? <SpinnerGap size={14} className="is-spinning" /> : <ArrowUp size={14} weight="bold" />}
+        </button>
+      )}
       <ComposerPopover label="发送设置" value={KINDS.find((item) => item.value === later.kind)!.label}
         disabled={configDisabled} className={`studio-submit-mode${configured ? " is-configured" : ""}`}
         trigger={<KindIcon kind={later.kind} />}>

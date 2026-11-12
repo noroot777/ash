@@ -11,6 +11,8 @@
   overflow: hidden;
 }
 
+/* 头部一行：左边说「这是哪个任务」（类型、标题、来源、图钉），右边只有图标：轮到你的那一步、
+   验收的章、更多、面板开关（docs/ui-ux-audit head-1、head-2）。 */
 .task-detail-header {
   --task-header-gap: 6px;
   position: relative;
@@ -21,19 +23,16 @@
   align-items: center;
   gap: var(--task-header-gap);
   border-bottom: 0.5px solid var(--line);
-  padding: 0 10px 0 14px;
+  padding: 0 10px 0 16px;
   background: var(--canvas);
 }
+.task-head-name { display: flex; min-width: 0; align-items: center; }
+.task-head-grow { flex: 1; min-width: 0; }
+.task-head-acts { display: inline-flex; flex: none; align-items: center; gap: 2px; }
 
-.task-detail-kind {
-  flex: 0 0 auto;
-  border-radius: 5px;
-  background: var(--raised);
-  padding: 2px 7px;
-  color: var(--muted);
-  font-size: 9.5px;
-  font-weight: 750;
-}
+/* 类型、来源：各一个灰图标，名字在提示里 */
+.task-head-glyph { display: inline-grid; width: 20px; height: 24px; flex: none; place-items: center; color: var(--faint); }
+.task-head-source.ui-icon-button { color: var(--faint); }
 
 .task-plan-mode-notice {
   display: flex;
@@ -51,90 +50,53 @@
 .task-plan-mode-notice strong { color: var(--accent); }
 .task-plan-mode-notice code { color: var(--ink); }
 
+/* 标题平时就是一行字，指上去或点进去才看得出能改。宽度跟着字走（.task-title-sizer 用一份看不见
+   的副本撑出宽度）——来源和图钉紧跟在标题后面，不是甩在这一行的另一头；放不下时自己缩、打省略号。 */
+.task-title-sizer { display: inline-grid; min-width: 3em; flex: 0 1 auto; }
+.task-title-sizer::after,
+.task-title-sizer > .task-detail-title { grid-area: 1 / 1; }
+.task-title-sizer::after {
+  visibility: hidden;
+  overflow: hidden;
+  padding: 0 7px;
+  content: attr(data-value);
+  font-size: var(--t-md);
+  font-weight: var(--w-medium);
+  white-space: pre;
+}
 .task-detail-title {
-  width: 120px;
-  min-width: 90px;
-  flex: 1;
+  width: 100%;
+  min-width: 0;
+  height: 28px;
   overflow: hidden;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--r-sm);
   background: transparent;
-  padding: 3px 5px;
+  padding: 0 6px;
+  color: var(--ink);
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: var(--t-md);
+  font-weight: var(--w-medium);
+  line-height: 28px;
   outline: 0;
+  transition: background var(--dur-1) var(--ease-out);
 }
-
+span.task-detail-title { display: block; width: auto; }
 .task-detail-title:not(.is-readonly):hover,
-.task-detail-title:not(.is-readonly):focus {
-  background: var(--raised);
-}
+.task-detail-title:not(.is-readonly):focus { background: var(--raised); }
+.task-detail-title:not(.is-readonly):focus-visible { outline: 2px solid var(--focus-soft); outline-offset: 0; }
 
-.task-detail-status {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 5px;
-  border-radius: 999px;
-  padding: 3px 5px;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 650;
-}
-
-/* 「合并后不提交」那一档欠着的提交：对话区只留这一颗可点的徽记，详情与出路都在验收台
-   的 PendingMergeCard 里（见该文件顶部）。 */
-.task-pending-commit {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 4px;
-  border: 1px solid color-mix(in lch,var(--amber) 36%,var(--line));
-  border-radius: 999px;
-  background: color-mix(in lch,var(--amber) 9%,var(--panel));
-  padding: 3px 7px;
-  color: var(--amber);
-  font-size: 10px;
-  font-weight: 650;
-  cursor: pointer;
-}
-
-.task-pending-commit:hover { background: color-mix(in lch,var(--amber) 15%,var(--panel)); }
-
-.task-time-meta { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; color: var(--faint); font-family: var(--font-mono); font-size: 9.5px; white-space: nowrap; }
-
-.task-time-meta > svg { flex: 0 0 auto; }
-.task-time-meta > i { color: var(--line2); font-style: normal; }
-
-.task-primary-action,
-.task-requeue-action,
-.task-overflow-trigger {
-  display: inline-flex;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: var(--accent);
-  padding: 0 10px;
-  color: white;
-  font-size: 11.5px;
-  font-weight: 600;
-  box-shadow: 0 1px 2px rgb(40 42 48 / 12%);
-}
-
-.task-primary-action:hover:not(:disabled) { background: var(--accent-hover); }
-.task-primary-action.is-danger { border-color: color-mix(in srgb, var(--red) 38%, transparent); background: var(--panel); color: var(--red); }
-.task-primary-action.is-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 6%, transparent); }
-.task-requeue-action { flex: 0 0 auto; border-color: var(--line2); background: var(--panel); color: var(--muted); box-shadow: var(--control-shadow); }
-.task-requeue-action:hover:not(:disabled) { background: var(--overlay); color: var(--ink); }
+/* 轮到你的那一步是墨色（头上别的图标都是灰的）。章验过了以后填实、退成灰——和图钉一个说法：
+   实心 = 已经是了。欠着一步提交是琥珀：它是「要你动手」的状态。 */
+.task-head-acts > .task-head-step { color: var(--ink); }
+.task-head-acts > .task-head-seal { color: var(--ink); }
+.task-head-acts > .task-head-seal.is-done { color: var(--faint); }
+.task-head-acts > .task-head-seal.is-done:hover,
+.task-head-acts > .task-head-seal.is-done[aria-expanded="true"] { color: var(--muted); }
+.task-head-acts > .task-head-pending { color: var(--amber); }
 
 .task-overflow { position: relative; }
-.task-overflow-trigger { width: 28px; padding: 0; background: var(--panel); color: var(--muted); box-shadow: var(--control-shadow); }
-.task-overflow-trigger:hover { background: var(--overlay); color: var(--ink); }
 
 .task-overflow-menu {
   position: absolute;
@@ -142,31 +104,36 @@
   top: 34px;
   right: 0;
   width: 210px;
-  border: 1px solid var(--line2);
-  border-radius: 10px;
+  border-radius: var(--r-lg);
   background: var(--panel);
-  padding: 5px;
-  box-shadow: var(--menu-shadow);
+  padding: 4px;
+  box-shadow: var(--control-shadow), var(--menu-shadow);
+  transform-origin: top right;
+  animation: task-menu-in var(--dur-2) var(--ease-out);
 }
+@keyframes task-menu-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
 
 .task-overflow-menu button {
   display: flex;
   width: 100%;
   height: 30px;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   background: transparent;
   padding: 0 8px;
-  color: var(--muted);
+  color: var(--ink);
   text-align: left;
-  font-size: 11.5px;
+  font-size: var(--t-sm);
+  white-space: nowrap;
 }
-
-.task-overflow-menu button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
-.task-overflow-menu button.is-danger { color: var(--red); }
-.task-overflow-menu > span { display: block; height: 1px; margin: 4px 2px; background: var(--line); }
+.task-overflow-menu button > svg { flex: none; color: var(--muted); }
+.task-overflow-menu button:hover:not(:disabled) { background: var(--hover-bg); }
+.task-overflow-menu button:focus-visible { outline-offset: -2px; }
+.task-overflow-menu button.is-danger,
+.task-overflow-menu button.is-danger > svg { color: var(--red); }
+.task-overflow-menu > span { display: block; height: 1px; margin: 4px 0; background: var(--line); }
 
 .task-detail-body { display: flex; min-height: 0; flex: 1; }
 .task-detail-main { display: flex; min-width: 0; flex: 1; flex-direction: column; background: var(--canvas); }
@@ -315,20 +282,8 @@
 .is-spinning { animation: task-spin 800ms linear infinite; }
 @keyframes task-spin { to { transform: rotate(360deg); } }
 
-@media (max-width: 1080px) {
-  .task-detail-header > .task-time-meta { display: none; }
-}
-
 @media (max-width: 820px) {
-  .task-detail-status { display: none; }
   .task-conversation { padding-right: 16px; padding-left: max(var(--conversation-input-gutter, 0px), 16px); }
-}
-
-@media (max-width: 560px) {
-  .task-detail-kind { display: none; }
-  .task-primary-action { padding: 0 8px; }
-  .task-requeue-action { width: 28px; padding: 0; }
-  .task-requeue-action > span { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

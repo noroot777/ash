@@ -49,6 +49,7 @@ export function ReplyBox({
   task,
   hasConversation,
   onSend,
+  onStop,
   onStandingExecutorChange,
   command,
   skills = EMPTY_SKILLS,
@@ -77,6 +78,11 @@ export function ReplyBox({
     // 输入框里的字、附件、@选中的执行器全部原样留着，用户点一下就能重来。
   ) => Promise<ReplyTaskResult | null>;
   /**
+   * 停掉这一轮（在跑）或不排了（排着队）。给了才有停止键：任务头上不再有停止，它就是发送键的
+   * 另一面（docs/ui-ux-audit reply-4）。
+   */
+  onStop?: () => Promise<void>;
+  /**
    * 点胶囊改执行器/模型/智能水平 = 改**这个任务以后都用谁**，由调用方写回任务
    * （PATCH /tasks/:id）。不传就只剩 `@` 那条一次性召唤，胶囊变成只读。
    * `label` 只是提示文案用的执行器名，别当业务字段使。
@@ -104,6 +110,7 @@ export function ReplyBox({
   const value = draft.text;
   const setValue = draft.setText;
   const [sending, setSending] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [commandResult, setCommandResult] = useState<{ taskId: string; text: string } | null>(null);
   const currentTaskId = useRef(task.id);
@@ -635,6 +642,15 @@ export function ReplyBox({
             disabled={sending || uploads.uploading || ((!commandActive || menuSends) && (disabled || (!value.trim() && !uploads.attachments.length)))}
             configDisabled={disabled || sending || uploads.uploading || commandActive || mention.open}
             onSend={() => void send()}
+            stop={queueing && onStop ? {
+              label: task.status === "queued" ? "不排了" : "停止这一轮",
+              busy: stopping,
+              onStop: () => {
+                setStopping(true);
+                void onStop().finally(() => setStopping(false));
+              },
+            } : null}
+            empty={!value.trim() && !uploads.attachments.length && !uploads.uploading}
             tasks={tasks}
             projectId={task.projectId}
             taskId={task.id}

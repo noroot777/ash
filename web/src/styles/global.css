@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "./controls.css";
+@import "./icon-button.css";
 @import "./auth.css";
 @import "./run-target-picker.css";
 @import "./slash-menu.css";

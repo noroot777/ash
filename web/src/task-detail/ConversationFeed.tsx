@@ -14,7 +14,6 @@ import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
 import { MessageFooter } from "../components/MessageFooter.tsx";
-import { TurnRetryButton } from "../components/TurnRetryButton.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
 import { conversationFeedRows, reviewLaneMessageRoles, type ReviewLaneMessageRole } from "./conversationReviewLanes.ts";
 import { conversationDebateRows } from "./conversationDebateRows.ts";
@@ -36,7 +35,6 @@ import {
   type SystemNoticeMode,
 } from "./systemNoticeModel.ts";
 import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
-import { type ReviewRetryIdentity, type TurnRetryTarget, turnRetryTarget } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
 import { isQuestionAnswer, type QuestionRecord } from "@ash/shared/questions";
@@ -199,9 +197,7 @@ export function ConversationFeed({
   forkBlockedReason,
   footer,
   dock,
-  onRetryTurn,
   onForkReply,
-  reviewRetry,
   reviews,
   onOpenReviewPanel,
   systemNoticeMode,
@@ -231,11 +227,7 @@ export function ConversationFeed({
    * 也不会被「回到底部」那颗浮动按钮压住。
    */
   dock?: React.ReactNode;
-  /** 重跑上一回合。不给就不出重试按钮（只读的会话视图用得上）。 */
-  onRetryTurn?: (target: TurnRetryTarget) => Promise<void> | void;
   onForkReply?: (replyId: string) => void;
-  /** 此刻能「继续本轮审查」的那一轮（freeReviewRetryIdentity）；null = 审查档一颗都不出。 */
-  reviewRetry?: ReviewRetryIdentity | null;
   /** 自由派审的落盘记录：折叠卡靠它反查报告的 runId（旁注里只有轮号）。 */
   reviews?: readonly FreeReviewRun[] | null;
   /**
@@ -283,16 +275,6 @@ export function ConversationFeed({
     pending: pendingExecutor,
     fallback: task.executorLabel ?? task.agentType,
   });
-  // 按钮挂在最后一条 agent 气泡上 —— 前提是那条气泡就是这颗按钮要续的那条会话。审查档不是
-  // （审查一句没说就断了，或者之后又跑过 `/compact` 这类旁路回合）就挂在会话末尾单独一行：
-  // 能继续就必须有处可点，也不能挂到别人的气泡底下。不满足条件时一颗都不出。
-  const retry = onRetryTurn ? turnRetryTarget(task, items, { reviewRetry, sessions }) : null;
-  const lastAgent = retry ? [...items].reverse().find((item) => item.kind === "agent") : undefined;
-  const retryItemId = lastAgent && (retry?.kind !== "review" || lastAgent.session?.id === retry.sessionId)
-    ? lastAgent.id : null;
-  const retryButton = retry ? (
-    <TurnRetryButton exitStatus={retry.exitStatus} kind={retry.kind} onRetry={() => onRetryTurn!(retry)} />
-  ) : null;
   const search = typeof window === "undefined" ? "" : window.location.search;
   const modeFromUrl = SYSTEM_NOTICE_DEMO_REQUESTED;
   const noticeMode = systemNoticeMode ?? INITIAL_SYSTEM_NOTICE_MODE;
@@ -355,7 +337,6 @@ export function ConversationFeed({
           hideTime={hiddenTimes.has(item.id)}
           laneRole={laneRole}
           onFork={onForkReply && !loading && !error && !forkBlockedReason && canForkReply(item) ? () => onForkReply(item.id) : undefined}
-          retry={item.id === retryItemId ? retryButton : undefined}
         />
       );
     }
@@ -427,7 +408,6 @@ export function ConversationFeed({
               </ReviewerLane>
             );
           })}
-          {retryButton && !retryItemId && <footer className="task-message-footer">{retryButton}</footer>}
           {activityPhase && !loading && !error && (
             <RunActivity
               status={task.status}

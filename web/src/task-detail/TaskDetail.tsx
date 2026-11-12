@@ -37,12 +37,11 @@ import {
   type TaskDerivationCommand,
 } from "./taskDerivation.ts";
 import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
-import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { DerivedTaskLinks } from "../components/DerivedTaskLinks.tsx";
 import { TaskReplyRail } from "./TaskReplyRail.tsx";
 import { FreeReviewDialog } from "../free-workflow/FreeReviewDialog.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
-import { freeReviewRetryIdentity } from "./turnRetry.ts";
+import { freeReviewRetryIdentity, turnRetryCopy, turnRetryTarget, type TurnRetryTarget } from "./turnRetry.ts";
 import { useExecutorGate } from "./ExecutorGate.tsx";
 import type { ComposerDraft } from "../composer/composerDraft.ts";
 import { forkReadBlock, snapshotConversationFork } from "./conversationFork.ts";
@@ -103,13 +102,20 @@ export function TaskDetail({
   // 刚发出去的那一回合由谁跑。会话行一落库就由它接管(见 runActivityExecutor),
   // 这里只补中间那一两秒;任务停下来就作废,免得下一次「运行」照抄旧目标。
   const [pendingExecutor, setPendingExecutor] = useState<string | null>(null);
-  const { indicatorForTask } = useTaskReadState(allTasks, task.id);
+  // 读过 / 没读过的账（侧栏那一行的点）随打开的任务对齐；头上不再画状态点，返回值这里用不上。
+  useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
   // Inspector 栈（哪几格存在、默认开哪几格）整块在 useTaskInspectorStack.ts。
   const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount } =
     useTaskInspectorStack(task, allTasks, conversation);
   // 审查链状态同时服务验收后快照入口和会话尾栏的异常回合重试；共享一份缓存与订阅。
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
+  // 「上一回合崩了、任务却停在终态」的那颗重来：住在任务头上（不用悬停、也不跟着会话滚走），
+  // 判据和服务端 retryTurnRejection 对齐（turnRetry.ts）。
+  const turnRetry = turnRetryTarget(task, conversation.items, {
+    reviewRetry: freeReviewRetryIdentity(free.state?.reviews),
+    sessions: conversation.sessions,
+  });
   const followUps = useMemo(
     () => conversation.items.flatMap((item) => (
       item.kind === "user" && isUserFollowUp(item)
@@ -219,6 +225,27 @@ export function TaskDetail({
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const retryTurn = async (target: TurnRetryTarget) => {
+    try {
+      if (!(await confirmExecutorSwap(task.id))) return;
+      const result = await api.retryTurn(task.id, target);
+      // 审查档同一颗按钮有两种结果：上下文还在就接着做，上下文是空的
+      // （CLI 当时压根没起来）才重发整份任务书。别只说「已重跑」——
+      // 用户按之前看到的承诺是「继续」，退回从头跑时必须当面说清楚。
+      notify(result.mode === "review"
+        ? result.resumed
+          ? "已从中断处继续这一轮审查"
+          : "上一轮没留下可接着做的上下文，已重新交代任务书跑这一轮"
+        : result.mode === "resend" ? "已重发上一条指令，任务续跑中" : "已从中断处续跑");
+      // 只重取会话正文。任务本身的 running 由 SSE 推过来 —— 这里再补一发
+      // GET，回来的很可能还是重投前的 done，反手把跑起来的状态盖回去
+      // （WorkspaceShell 按 onTaskUpdate 覆盖，没有版本门禁）。
+      await conversation.refetch();
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
     }
   };
 
@@ -332,13 +359,17 @@ export function TaskDetail({
         {({ toggleButton, openTab }) => (
           <>
             <div className="task-detail">
-              <OriginTaskBar task={task} allTasks={allTasks} onOpen={onOpenTask} />
               <TaskHeader
                 task={task}
+                allTasks={allTasks}
                 conversationMarkdown={markdown}
                 busy={busy}
                 refreshing={conversation.refreshing}
                 reviewOpen={reviewOpen}
+                turnRetry={turnRetry ? {
+                  ...turnRetryCopy(turnRetry),
+                  run: () => retryTurn(turnRetry),
+                } : null}
                 onTitle={(title) => patch({ title, autoTitle: false })}
                 onTogglePin={() => patch({ pinnedAt: task.pinnedAt != null ? null : Date.now() })}
                 onPrimary={(action) => void perform(action)}
@@ -353,7 +384,7 @@ export function TaskDetail({
                   else setPostMergeDialogOpen(true);
                 } : undefined}
                 onDelete={() => setDeleteOpen(true)}
-                indicatorForTask={indicatorForTask}
+                onOpenTask={onOpenTask}
                 inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
                 notify={notify}
               />
@@ -456,26 +487,6 @@ export function TaskDetail({
                         try { onForkTask(snapshotConversationFork(task, conversation.items, replyId)); }
                         catch (reason) { notify(reason instanceof Error ? reason.message : String(reason)); }
                       } : undefined}
-                      onRetryTurn={async (target) => {
-                        try {
-                          if (!(await confirmExecutorSwap(task.id))) return;
-                          const result = await api.retryTurn(task.id, target);
-                          // 审查档同一颗按钮有两种结果：上下文还在就接着做，上下文是空的
-                          // （CLI 当时压根没起来）才重发整份任务书。别只说「已重跑」——
-                          // 用户按之前看到的承诺是「继续」，退回从头跑时必须当面说清楚。
-                          notify(result.mode === "review"
-                            ? result.resumed
-                              ? "已从中断处继续这一轮审查"
-                              : "上一轮没留下可接着做的上下文，已重新交代任务书跑这一轮"
-                            : result.mode === "resend" ? "已重发上一条指令，任务续跑中" : "已从中断处续跑");
-                          // 只重取会话正文。任务本身的 running 由 SSE 推过来 —— 这里再补一发
-                          // GET，回来的很可能还是重投前的 done，反手把跑起来的状态盖回去
-                          // （WorkspaceShell 按 onTaskUpdate 覆盖，没有版本门禁）。
-                          await conversation.refetch();
-                        } catch (reason) {
-                          notify(reason instanceof Error ? reason.message : String(reason));
-                        }
-                      }}
                       // 只有单个智能体的任务、且此刻没在跑才能删：服务端同样会挡，这里不出按钮是
                       // 为了不让人点了才知道（团队调度台、duet 还没接「下一轮重建上下文」）。
                       onDeleteMessage={task.mode === "single" && !handedOut && task.status !== "running" && task.status !== "queued"
@@ -492,7 +503,6 @@ export function TaskDetail({
                           await conversation.refetch();
                         }
                         : undefined}
-                      reviewRetry={freeReviewRetryIdentity(free.state?.reviews)}
                       reviews={free.state?.reviews}
                       onOpenReviewPanel={() => openTab("review")}
                       // 会话区底部的常驻卡。提问要人答，所以它留在会话里（答案就在那条
@@ -556,6 +566,7 @@ export function TaskDetail({
                         )
                         : undefined}
                       skills={skills.skills}
+                      onStop={() => perform("stop")}
                       onStandingExecutorChange={async (next, label) => {
                         const updated = await api.patchTask(task.id, next);
                         onTaskUpdate(updated);

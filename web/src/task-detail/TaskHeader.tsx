@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { Task } from "@ash/shared";
-import { canArchive, hasPendingAcceptCommit, taskDisplayStatus } from "@ash/shared";
+import type { Task, TaskListItem } from "@ash/shared";
+import { canArchive, hasPendingAcceptCommit } from "@ash/shared";
+import { taskCreationLabel } from "@ash/shared/task-origin";
 import {
   Archive,
   ArrowCounterClockwise,
@@ -8,79 +9,49 @@ import {
   Copy,
   DotsThree,
   DownloadSimple,
-  GitDiff,
   GitCommit,
+  GitDiff,
+  GitFork,
   ListNumbers,
   Play,
+  Robot,
+  SealCheck,
   SpinnerGap,
-  Stop,
   Trash,
+  UsersThree,
   X,
 } from "@phosphor-icons/react";
-import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
-import { TaskCreationBadge } from "../components/TaskOrigin.tsx";
+import { TaskModeIcon, taskModeLabel, taskParentLink, taskParentRelation } from "../components/TaskOrigin.tsx";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
+import { IconButton } from "../components/IconButton.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
-import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { TaskPinButton } from "./TaskPinButton.tsx";
-import { TaskTimeMeta } from "./TaskTimeMeta.tsx";
+import { headSteps, sealState, type HeadStep } from "./taskHeadSteps.ts";
 import { safeDownloadName } from "./utils.ts";
 
-export type PrimaryAction = "run" | "retry" | "stop" | "accept" | "unarchive" | null;
+export type PrimaryAction = "run" | "retry" | "stop" | "accept" | "unarchive";
 
-function primaryAction(task: Task): { kind: PrimaryAction; label: string; danger?: boolean; disabled?: boolean } {
-  if (task.archived) return { kind: "unarchive", label: "取消归档" };
-  if (task.status === "running") return { kind: "stop", label: "停止", danger: true };
-  // 接力出去的任务在本机是历史存档:运行/重试/验收全部由服务端 handoff 守卫 409,
-  // 主按钮给禁用态而不是假按钮。要在本机继续,走横幅上的「在本机继续」移除标记。
-  if (task.handoff?.direction === "out") {
-    const pendingReturn = task.handoff.pending
-      && Object.prototype.hasOwnProperty.call(task.handoff, "returnTransferId");
-    return {
-      kind: null,
-      label: task.handoff.pending ? pendingReturn ? "移回未确认" : "接力未确认" : "已接力",
-      disabled: true,
-    };
-  }
-  if (task.status === "queued") return { kind: "stop", label: "停止排队", danger: true };
-  if (task.stage === "accepted") return { kind: null, label: "已验收", disabled: true };
-  // 就地验证轮还没出结论、或有待答复的提问：任务的 status 是它原来的终态（旁路回合
-  // 不改 status，提问停在 paused/done 上也一样），所以光看 status 会给出一个「验收」
-  // 主按钮，可后端 acceptanceGuard 必然 409——这一版还没定稿：验证结论会覆盖 accepted，
-  // 而答复会 resume 会话继续往一个已合并、已删除的 worktree 里写。给禁用态而不是假按钮。
-  if (task.verifyRound != null) return { kind: null, label: "验证中", disabled: true };
-  if (task.question) return { kind: null, label: "等答复", disabled: true };
-  if (task.parentId !== null && task.status === "done") return { kind: null, label: "已完成", disabled: true };
-  if (task.status === "done" || task.stage === "awaiting_acceptance" || task.stage === "verified") {
-    return { kind: "accept", label: "验收" };
-  }
-  // 自由工作流的 failed/canceled 同样可验收（修复失败/手停后接受上一版直接合并，后端
-  // acceptTask 已放行；时间线也承诺「由你决定验收」）——主按钮给验收，重试/运行降为
-  // 旁边的次级按钮（terminalRerunAction），不能只藏在更多菜单里绕行。
-  if (task.workflowMode === "free" && (task.status === "failed" || task.status === "canceled")) {
-    return { kind: "accept", label: "验收" };
-  }
-  if (task.status === "failed") return { kind: "retry", label: "重试" };
-  if (task.status === "backlog" || task.status === "canceled") return { kind: "run", label: "运行" };
-  if (task.status === "paused") return { kind: "run", label: "继续" };
-  if (task.status === "awaiting_review") return { kind: null, label: "等待裁决", disabled: true };
-  return { kind: null, label: task.status === "idle" ? "待命" : "进行中", disabled: true };
-}
+/**
+ * 头上一回合级别的「重来」：上一回合崩了、任务却停在终态（续聊回合、自由工作流的修复 / 审查
+ * 回合异常结束不改任务状态），判据和动作都在 TaskDetail（turnRetry.ts），这里只摆那颗图标。
+ */
+export type HeadTurnRetry = { label: string; tip: string; run: () => Promise<void> };
 
-/** 自由任务终态主按钮让位给「验收」后，重试/运行保留为次级按钮（一键可达）。 */
-function terminalRerunAction(task: Task): { kind: "retry" | "run"; label: string } | null {
-  if (task.workflowMode !== "free" || task.archived) return null;
-  if (task.handoff?.direction === "out") return null;
-  if (task.status === "failed") return { kind: "retry", label: "重试" };
-  if (task.status === "canceled") return { kind: "run", label: "运行" };
-  return null;
-}
-
+/**
+ * 任务头：左边说「这是哪个任务」——类型（灰图标）、标题、来源（灰图标）、图钉；右边只有图标：
+ * 此刻轮到你的那一步（重试 / 运行 / 继续）、验收的那枚章、更多、面板开关（docs/ui-ux-audit head-1）。
+ *
+ * 状态词不在头上写：在跑看回复框那颗键（它就是停止），别的看侧栏那一行的点，右侧「信息」格里
+ * 也有一行。时间住进右侧面板；「重新排队」进更多。
+ */
 export function TaskHeader({
   task,
+  allTasks,
   conversationMarkdown,
   busy,
   refreshing,
   reviewOpen,
+  turnRetry,
   onTitle,
   onTogglePin,
   onPrimary,
@@ -89,46 +60,45 @@ export function TaskHeader({
   onArchive,
   onRefresh,
   onReview,
+  onOpenTask,
   postMergeReviewLabel,
   onPostMergeReview,
   onDelete,
-  indicatorForTask,
   inspectorToggle,
   notify,
 }: {
   task: Task;
+  allTasks: TaskListItem[];
   conversationMarkdown: string;
   busy: boolean;
   refreshing: boolean;
   reviewOpen: boolean;
+  turnRetry?: HeadTurnRetry | null;
   onTitle: (title: string) => Promise<void>;
   onTogglePin: () => Promise<void>;
-  onPrimary: (action: Exclude<PrimaryAction, null>) => void;
+  onPrimary: (action: PrimaryAction) => void;
   onRequeue: () => void;
   /** 「标记为已完成」：结算说明让用户核对产物后自己收尾，这是那句话对应的入口。 */
   onMarkDone?: () => void;
   onArchive: () => void;
   onRefresh: () => void;
   onReview: () => void;
+  onOpenTask: (taskId: string) => void;
   postMergeReviewLabel?: string | null;
   onPostMergeReview?: () => void;
   onDelete: () => void;
-  indicatorForTask: IndicatorForTask;
   inspectorToggle?: ReactNode;
   notify: (message: string) => void;
 }) {
   const [title, setTitle] = useState(task.title);
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const menuRoot = useRef<HTMLDivElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const pointerToggle = useRef(false);
-  const action = primaryAction(task);
-  // 验收台开着时，「验收」主按钮点下去只是把一个已经开着的面板再开一次——这时顶栏这个
-  // 位置就是这一屏唯一的返回口，验收台自己那一行不再重复一个「返回对话」。其它主动作
-  // （停止 / 重试 / 运行）在验收台里照样有用，那时返回按钮补在主按钮旁边而不顶掉它。
-  const hidePrimaryForReview = reviewOpen && action.kind === "accept";
-  const rerun = terminalRerunAction(task);
+  const steps = headSteps(task);
+  const seal = sealState(task);
   const canRequeue = task.parentId === null
     && !task.archived
     && task.handoff?.direction !== "out"
@@ -142,8 +112,6 @@ export function TaskHeader({
     && !task.archived
     && task.handoff?.direction !== "out"
     && (task.status === "failed" || task.status === "canceled");
-  const display = taskDisplayStatus(task.status, task.stage, !!task.question);
-  const indicator = indicatorForTask(task);
 
   useEffect(() => { if (!editing) setTitle(task.title); }, [editing, task.title]);
   useDismissable({
@@ -188,102 +156,102 @@ export function TaskHeader({
     }
   };
 
+  const runTurnRetry = async () => {
+    if (!turnRetry) return;
+    setRetrying(true);
+    try { await turnRetry.run(); } finally { setRetrying(false); }
+  };
+
+  // 任务级的那一步优先：失败了是任务级重试；只有任务停在终态、上一回合却崩了，才轮到回合级那颗。
+  const stepButtons: { key: string; step: HeadStep | null }[] = steps.length
+    ? steps.map((step) => ({ key: step.kind, step }))
+    : turnRetry ? [{ key: "turn-retry", step: null }] : [];
+
   return (
     <header className="task-detail-header">
-      <span className="task-detail-kind">{task.mode === "single" ? "任务" : task.mode === "team" ? "团队" : "讨论"}</span>
-      <TaskCreationBadge task={task} />
-      {task.parentId === null && <TaskPinButton task={task} onTogglePin={onTogglePin} notify={notify} />}
-      {task.parentId !== null ? (
-        <span className="task-detail-title is-readonly">{task.title || "未命名任务"}</span>
-      ) : (
-        <input
-          className="task-detail-title"
-          value={title}
-          aria-label="任务标题"
-          onFocus={() => setEditing(true)}
-          onChange={(event) => setTitle(event.target.value)}
-          onBlur={() => void commitTitle()}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") event.currentTarget.blur();
-            if (event.key === "Escape") { setTitle(task.title); event.currentTarget.blur(); }
-          }}
-        />
-      )}
-      <span className="task-detail-status">
-        {indicator && <TaskStatusDot indicator={indicator} surface="team" />}
-        {display.label}
+      <div className="task-head-name">
+        <TaskKindGlyph mode={task.mode} />
+        {task.parentId !== null ? (
+          <span className="task-detail-title is-readonly">{task.title || "未命名任务"}</span>
+        ) : (
+          <span className="task-title-sizer" data-value={title || " "}>
+            <input
+              className="task-detail-title"
+              value={title}
+              size={1}
+              aria-label="任务标题"
+              spellCheck={false}
+              autoComplete="off"
+              onFocus={() => setEditing(true)}
+              onChange={(event) => setTitle(event.target.value)}
+              onBlur={() => void commitTitle()}
+              onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) return;
+                if (event.key === "Enter") event.currentTarget.blur();
+                if (event.key === "Escape") { setTitle(task.title); event.currentTarget.blur(); }
+              }}
+            />
+          </span>
+        )}
+        <TaskSourceGlyph task={task} allTasks={allTasks} onOpen={onOpenTask} />
+        {task.parentId === null && <TaskPinButton task={task} onTogglePin={onTogglePin} notify={notify} />}
+      </div>
+      <span className="task-head-grow" />
+      <span className="task-head-acts">
+        {stepButtons.map(({ key, step }) => step ? (
+          <IconButton
+            key={key}
+            label={step.label}
+            tip={step.tip}
+            className="task-head-step"
+            data-workspace-run-action={step.kind === "resume" ? "run" : step.kind}
+            disabled={busy}
+            onClick={() => onPrimary(step.kind === "retry" ? "retry" : "run")}
+          >
+            {busy ? <SpinnerGap size={16} className="is-spinning" aria-hidden="true" />
+              : step.kind === "retry" ? <ArrowCounterClockwise size={16} aria-hidden="true" />
+                : <Play size={16} aria-hidden="true" />}
+          </IconButton>
+        ) : (
+          <IconButton
+            key={key}
+            label={turnRetry!.label}
+            tip={turnRetry!.tip}
+            className="task-head-step"
+            disabled={retrying}
+            onClick={() => void runTurnRetry()}
+          >
+            {retrying ? <SpinnerGap size={16} className="is-spinning" aria-hidden="true" /> : <ArrowCounterClockwise size={16} aria-hidden="true" />}
+          </IconButton>
+        ))}
+        {/* 「合并后不提交」那一档欠着的那一步。收尾的卡片只住在验收台里（用户 2026-09-15：
+            那张卡不用在对话区永远铺着），所以头上留这一颗——一眼看得出还欠一步，点一下就进验收台。 */}
+        {!reviewOpen && hasPendingAcceptCommit(task) && (
+          <IconButton label="这次验收还欠一步提交，打开验收台收尾" className="task-head-pending" onClick={onReview}>
+            <GitCommit size={16} weight="bold" aria-hidden="true" />
+          </IconButton>
+        )}
+        {seal ? (
+          <IconButton
+            label={seal === "done" ? "已验收" : "验收"}
+            tip={seal === "done" ? "已验收 · 打开改动工作区" : "验收 · 打开改动工作区"}
+            className={`task-head-seal${seal === "done" ? " is-done" : ""}`}
+            aria-expanded={reviewOpen}
+            onClick={onReview}
+          >
+            <SealCheck size={17} weight={seal === "done" ? "fill" : "regular"} aria-hidden="true" />
+          </IconButton>
+        ) : reviewOpen && (
+          <IconButton label="返回对话" onClick={onReview}>
+            <X size={16} aria-hidden="true" />
+          </IconButton>
+        )}
       </span>
-      {/* 「合并后不提交」那一档欠着的那一步。收尾的卡片只住在验收台里（用户 2026-09-15：
-          那张卡不用在对话区永远铺着），所以对话区留这一颗徽记——一眼看得出还欠一步，
-          点一下就进验收台。验收台开着时那张卡自己就在，这里不再重复。 */}
-      {!reviewOpen && hasPendingAcceptCommit(task) && (
-        <button
-          type="button"
-          className="task-pending-commit"
-          aria-label="这次验收还欠一步提交，打开验收台收尾"
-          onClick={onReview}
-        >
-          <GitCommit size={12} weight="fill" aria-hidden="true" />待提交
-        </button>
-      )}
-      <TaskTimeMeta task={task} />
-      {!hidePrimaryForReview && (
-        <button
-          className={`task-primary-action${action.danger ? " is-danger" : ""}`}
-          type="button"
-          data-workspace-run-action={action.kind === "run" || action.kind === "retry" ? action.kind : undefined}
-          disabled={busy || action.disabled || !action.kind}
-          onClick={() => action.kind && onPrimary(action.kind)}
-        >
-          {busy ? <SpinnerGap size={13} className="is-spinning" />
-            : action.kind === "stop" ? <Stop size={13} weight="fill" />
-              : action.kind === "accept" ? <CheckCircle size={14} weight="fill" />
-                : action.kind === "retry" || action.kind === "unarchive" ? <ArrowCounterClockwise size={13} />
-                  : <Play size={13} weight="fill" />}
-          {action.label}
-        </button>
-      )}
-      {reviewOpen && (
-        <button
-          className="task-requeue-action"
-          type="button"
-          aria-label="返回对话"
-          onClick={onReview}
-        >
-          <X size={13} />
-          <span>返回对话</span>
-        </button>
-      )}
-      {rerun && (
-        <button
-          className="task-requeue-action"
-          type="button"
-          data-workspace-run-action={rerun.kind}
-          disabled={busy}
-          onClick={() => onPrimary(rerun.kind)}
-        >
-          <ArrowCounterClockwise size={13} />
-          <span>{rerun.label}</span>
-        </button>
-      )}
-      {canRequeue && (
-        <button
-          className="task-requeue-action"
-          type="button"
-          disabled={busy}
-          title="回到队列等待；若队列已经越过此任务，则移到队尾"
-          onClick={onRequeue}
-        >
-          <ListNumbers size={13} />
-          <span>重新排队</span>
-        </button>
-      )}
       <div className="task-overflow" ref={menuRoot}>
-        <button
+        <IconButton
           ref={menuButton}
-          className="task-overflow-trigger"
-          type="button"
-          aria-label="更多任务操作"
+          label="更多任务操作"
+          aria-haspopup="menu"
           aria-expanded={menu}
           onPointerDown={(event) => {
             event.preventDefault();
@@ -296,9 +264,15 @@ export function TaskHeader({
           }}
         >
           <DotsThree size={18} weight="bold" aria-hidden="true" />
-        </button>
+        </IconButton>
         {menu && (
           <div className="task-overflow-menu" role="menu">
+            {canRequeue && (
+              <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenu(false); onRequeue(); }}>
+                <ListNumbers size={14} />重新排队
+              </button>
+            )}
+            {canRequeue && <span role="separator" />}
             {/* 正在读就把「刷新」禁掉，等于把唯一的恢复入口交给了它要恢复的那件事——
                 会话读取卡住时 refreshing 恰好一直是 true。重读本身是抢占式的（点它就
                 掐掉在途那一发重来，见 lib/useConversation.ts），连点无害，所以只留转圈
@@ -331,7 +305,12 @@ export function TaskHeader({
             )}
             {task.parentId === null && <span role="separator" />}
             {task.parentId === null && (
-              <button type="button" role="menuitem" onClick={() => { setMenu(false); onArchive(); }} disabled={!task.archived && !canArchive(task.status)}>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => { setMenu(false); onArchive(); }}
+                disabled={!task.archived && !canArchive(task.status)}
+              >
                 <Archive size={14} />{task.archived ? "取消归档" : "归档任务"}
               </button>
             )}
@@ -345,5 +324,54 @@ export function TaskHeader({
       </div>
       {inspectorToggle}
     </header>
+  );
+}
+
+/** 类型：标题前面的一个灰图标，名字在提示里（和侧栏行尾那颗是同一套 TaskModeIcon）。 */
+function TaskKindGlyph({ mode }: { mode: Task["mode"] }) {
+  const hover = useHoverTip();
+  const name = mode === "single" ? "任务" : `${taskModeLabel(mode)}任务`;
+  return (
+    <span className="task-head-glyph" role="img" aria-label={name} tabIndex={-1} {...hover.anchorProps}>
+      <TaskModeIcon mode={mode} size={14} />
+      <HoverTip at={hover.at}>{name}</HoverTip>
+    </span>
+  );
+}
+
+/**
+ * 来源：标题后面的一个灰图标，自己建的任务没有。名字（谁开的、从哪个任务来）在提示里，点它去
+ * 来源任务——原来那一整条「来自…」横条（OriginTaskBar）的事，在这一颗上做完，不另占一行。
+ */
+function TaskSourceGlyph({ task, allTasks, onOpen }: { task: TaskListItem; allTasks: TaskListItem[]; onOpen: (taskId: string) => void }) {
+  const link = taskParentLink(task, allTasks);
+  const creator = task.creationOrigin?.kind === "agent" ? task.creationOrigin : null;
+  if (!link && !creator) return null;
+  const relation = link ? taskParentRelation(link) : null;
+  const sourceTitle = link?.task?.title || (creator?.taskId === link?.taskId ? creator?.taskTitle : null) || null;
+  const said = [
+    creator ? [taskCreationLabel(creator), creator.executorLabel].filter(Boolean).join(" · ") : null,
+    relation ? `${relation}${sourceTitle ? `：${sourceTitle}` : ""}` : null,
+  ].filter(Boolean).join("，");
+  const glyph = link?.kind === "team" ? <UsersThree size={14} aria-hidden="true" />
+    : creator ? <Robot size={14} aria-hidden="true" />
+      : <GitFork size={14} aria-hidden="true" />;
+  if (link?.task) {
+    return (
+      <IconButton label={said} size="sm" className="task-head-source" onClick={() => onOpen(link.taskId)}>
+        {glyph}
+      </IconButton>
+    );
+  }
+  return <SourceMark said={said}>{glyph}</SourceMark>;
+}
+
+function SourceMark({ said, children }: { said: string; children: ReactNode }) {
+  const hover = useHoverTip();
+  return (
+    <span className="task-head-glyph task-head-source" role="img" aria-label={said} {...hover.anchorProps}>
+      {children}
+      <HoverTip at={hover.at}>{said}</HoverTip>
+    </span>
   );
 }

@@ -118,3 +118,21 @@ function crashedTurnTarget(task: TaskListItem, items: ConversationItem[], sessio
   if (task.status !== "done") return null;
   return { sessionId: session.id, kind: "turn", exitStatus };
 }
+
+/**
+ * 任务头那颗回合级重来的名字和提示。
+ *
+ * 审查档跑的是**那一轮审查**（同一位审查者接着把这一轮做完），跟重投一句话不是一回事，名字
+ * 必须分开写——用户点之前得知道自己要开的是哪台机器。写「继续」而不是「重跑」，因为服务端默认
+ * 就是从中断处接着做；只有崩在 CLI 起来之前、无处可接时才退回重发任务书，那一种由点完之后的
+ * 提示当面说明。
+ *
+ * 提示里那半句是**这颗图标为什么会出现**的证据，所以不能写死「exit N」：审查档认的是「这一轮
+ * 没给出结论」，而 CLI 报完 API Error 照样 exit 0，写「exit 0」等于自相矛盾。
+ */
+export function turnRetryCopy(target: TurnRetryTarget): { label: string; tip: string } {
+  const why = target.exitStatus != null && target.exitStatus !== 0 ? `上一回合 exit ${target.exitStatus}` : "上一轮未出结论";
+  return target.kind === "review"
+    ? { label: "继续本轮审查", tip: `继续本轮审查 · ${why}` }
+    : { label: "重试这一回合", tip: `重试这一回合 · ${why}` };
+}

@@ -1,0 +1,18 @@
+/* 只画图标的键（components/IconButton.tsx）：名字在提示里。28 一档、24 一档；灰色，指到才有底色。 */
+.ui-icon-button {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  padding: 0;
+  color: var(--muted);
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out);
+}
+.ui-icon-button.is-sm { width: 24px; height: 24px; border-radius: var(--r-sm); }
+.ui-icon-button:hover:not(:disabled),
+.ui-icon-button[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.ui-icon-button:active:not(:disabled) { background: var(--sel-bg); }

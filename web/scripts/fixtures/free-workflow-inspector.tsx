@@ -498,6 +498,8 @@ function AcceptanceFixture({ task, className }: { task: Task; className: string 
     <section className={className}>
       <TaskHeader
         task={task}
+        allTasks={[task]}
+        reviewOpen={reviewOpen}
         conversationMarkdown=""
         busy={false}
         refreshing={false}
@@ -509,7 +511,7 @@ function AcceptanceFixture({ task, className }: { task: Task; className: string 
         onRefresh={() => undefined}
         onReview={() => setReviewOpen((open) => !open)}
         onDelete={() => undefined}
-        indicatorForTask={() => null}
+        onOpenTask={() => undefined}
         notify={() => undefined}
       />
       {reviewOpen
@@ -533,6 +535,7 @@ function PostMergeFixture() {
     <section className="post-merge-fixture">
       <TaskHeader
         task={postMergeTask}
+        allTasks={[postMergeTask]}
         conversationMarkdown=""
         busy={false}
         refreshing={false}
@@ -547,7 +550,7 @@ function PostMergeFixture() {
         postMergeReviewLabel={latest?.status === "reviewing" ? "查看合并审查" : latest ? "再次审查合并结果" : "审查合并结果"}
         onPostMergeReview={() => setDialogOpen(true)}
         onDelete={() => undefined}
-        indicatorForTask={() => null}
+        onOpenTask={() => undefined}
         notify={() => undefined}
       />
       {reviewOpen && <TaskReviewWorkspace task={postMergeTask} allTasks={[postMergeTask]} onTaskUpdated={() => undefined} notify={() => undefined} onPostMergeReview={() => setDialogOpen(true)} />}

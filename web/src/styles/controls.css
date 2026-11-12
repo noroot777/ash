@@ -95,25 +95,14 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--red) 22%, transparent);
 }
 
-.task-pin {
-  display: grid;
-  width: 22px;
-  height: 22px;
-  flex: 0 0 22px;
-  place-items: center;
-  margin-left: calc(4px - var(--task-header-gap, 6px));
-  margin-right: calc(2px - var(--task-header-gap, 6px));
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  padding: 0;
-  color: color-mix(in lch, var(--faint) 45%, transparent);
-  transition: color 150ms ease, background-color 150ms ease;
-}
-
-.task-pin:hover,
-.task-pin:focus-visible { background: var(--raised); color: var(--muted); }
-.task-pin.is-pinned { color: color-mix(in lch, var(--accent) 86%, var(--muted)); }
+/* 图钉（TaskPinButton）：置顶了是实心的墨色、一直在；没置顶的平时不画，指到头部或键盘走到它才
+   出来；触屏上常显。外形是 IconButton 的小档。 */
+.task-pin { color: var(--faint); }
+.task-pin:not(.is-pinned) { opacity: 0; }
+header:hover .task-pin,
+.task-pin:focus-visible { opacity: 1; }
+.task-pin.is-pinned { color: var(--ink); }
+@media (hover: none) { .task-pin:not(.is-pinned) { opacity: 1; } }
 
 .ui-input {
   width: 100%;
