@@ -1,0 +1,189 @@
+// 「信息」格下半截：这个任务跑得怎么样了。来源、时间、用量（一个执行器一行）、本轮、上下文，
+// 以及会话号和 resume 命令。后四样以前是会话最后一条回复尾巴上的药丸，搬到这里以后取数
+// 照旧（会话行上的账本 + 会话流里最新那条气泡的直播值，见 infoRunFacts.ts），只是换成「标签 值」。
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { Session, Task, TokenUsage } from "@ash/shared";
+import { addUsage, formatTokens, formatTokensExact, hasContext, hasUsage, usageTotal } from "@ash/shared/usage";
+import { taskCreationLabel } from "@ash/shared/task-origin";
+import { createPortal } from "react-dom";
+import { ContextMeterPanel, contextMeterView } from "../../components/ContextMeterChip.tsx";
+import { HoverTip, useHoverTip } from "../../components/HoverTip.tsx";
+import { InspCopy, InspRow } from "../../inspector/parts.tsx";
+import { useDismissable } from "../../lib/useDismissable.ts";
+import { placementStyle, usePanelPlacement } from "../../lib/usePanelPlacement.ts";
+import { formatInstant, formatInstantRange, taskDurationInfo } from "../utils.ts";
+import type { InfoRunFacts } from "./infoRunFacts.ts";
+
+/** 一段字，指上去 / 键盘走到再说一句补充（不用原生 title）。 */
+function Tipped({ tip, children, className = "" }: { tip: string; children: React.ReactNode; className?: string }) {
+  const hover = useHoverTip();
+  return (
+    <>
+      <span className={`insp-has-tip ${className}`.trim()} tabIndex={0} {...hover.anchorProps}>{children}</span>
+      <HoverTip at={hover.at}>{tip}</HoverTip>
+    </>
+  );
+}
+
+// 「N 轮」只数真人/系统推着走的回合，被哨兵叫醒的那几轮扣掉，在悬停里另报。
+// 服务端在同一笔入账里数总轮数和唤醒轮数，唤醒本来就是总数的子集；token 仍按全部回合计。
+function UsageValue({ label, usage, wakes }: { label: string; usage: TokenUsage; wakes: number }) {
+  const total = usage.turns ?? 0;
+  const woken = Math.min(wakes, total);
+  const turns = total - woken;
+  const note = woken > 0 ? `另有哨兵唤醒 ${woken} 轮未计入` : null;
+  return (
+    <span
+      className="insp-cut"
+      aria-label={[`${label} 累计 ${formatTokensExact(usageTotal(usage))} token`, total ? `${turns} 轮` : "", note].filter(Boolean).join("，")}
+    >
+      <span className="insp-faint">{label}</span>{" "}
+      <span className="insp-num">{formatTokens(usageTotal(usage))}</span>
+      {total > 0 && (
+        <span className="insp-faint">
+          {" · "}
+          {note ? <Tipped tip={note}>{turns} 轮</Tipped> : `${turns} 轮`}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** 上下文那一行：一根细条画剩下的那一截（剩到 15% 以下变红），右边是「压缩设置」——点开就是原来那颗胶囊的明细加快捷设置。 */
+function ContextValue({ facts }: { facts: InfoRunFacts }) {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(true);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const place = usePanelPlacement(triggerRef, panelRef, { minWidth: editing ? 296 : 224, minHeight: 108, fallbackHeight: 180, enabled: open });
+  useDismissable({ enabled: open, containerRef: panelRef, onClose: () => setOpen(false), restoreFocusRef: triggerRef });
+  useLayoutEffect(() => {
+    if (open) panelRef.current?.focus();
+  }, [open]);
+  const context = facts.context;
+  if (!hasContext(context)) {
+    return facts.compacting ? <span className="insp-live">压缩中</span> : <span className="insp-faint">还没有数据</span>;
+  }
+  const view = contextMeterView(context);
+  const remain = view.remain;
+  return (
+    <>
+      {remain !== null && (
+        <span className={`insp-bar${remain <= 15 ? " is-low" : ""}`} aria-hidden="true">
+          <i style={{ transform: `scaleX(${remain / 100})` }} />
+        </span>
+      )}
+      <span className={facts.compacting ? "insp-live" : "insp-num"} aria-label={facts.compacting ? "正在压缩上下文" : view.spoken}>
+        {facts.compacting
+          ? "压缩中"
+          : remain === null ? `已用 ${formatTokens(context.used)}` : `剩 ${view.approx}${remain}%`}
+      </span>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="insp-val is-end"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {facts.session ? "压缩设置" : "明细"}
+      </button>
+      {open && createPortal(
+        <ContextMeterPanel
+          ref={panelRef}
+          context={context}
+          session={facts.session}
+          editing={editing}
+          onToggleEditing={() => setEditing((current) => !current)}
+          style={placementStyle(place)}
+        />,
+        document.body,
+      )}
+    </>
+  );
+}
+
+/** 来源、创建、用时、用量（一个执行器一行）、本轮、上下文。 */
+export function InfoRunRows({ task, sessions, facts }: { task: Task; sessions: Session[]; facts: InfoRunFacts }) {
+  // 一个 agent 一行，**不同 agent 绝不相加**：单价、上下文、缓存策略都不是一回事，
+  // 加出来那个数不代表任何东西（用户 2026-08-07 明确要求分开看）。同一个执行器名下的
+  // 多条会话（重跑、续跑各开一行）才合并 —— 那才是同一副账。哨兵唤醒的轮数跟着同一份
+  // 分组累加：唤醒照样计费、照样算进轮数，只在悬停里拆开。
+  const usageByExecutor = useMemo(() => {
+    const groups = new Map<string, { usage: TokenUsage; wakes: number }>();
+    for (const session of sessions) {
+      if (!session.usage) continue;
+      const label = session.executor || session.agentType;
+      const previous = groups.get(label);
+      const wakes = session.monitorWakeTurns ?? 0;
+      groups.set(label, previous
+        ? { usage: addUsage(previous.usage, session.usage), wakes: previous.wakes + wakes }
+        : { usage: session.usage, wakes });
+    }
+    return [...groups].filter(([, group]) => hasUsage(group.usage));
+  }, [sessions]);
+  const duration = taskDurationInfo(task);
+  const range = formatInstantRange(task.startedAt, task.endedAt);
+  const turn = hasUsage(facts.turnUsage) ? facts.turnUsage : null;
+  return (
+    <>
+      <InspRow label="来源"><span className="insp-cut">{taskCreationLabel(task.creationOrigin)}</span></InspRow>
+      <InspRow label="创建"><span className="insp-num">{formatInstant(task.createdAt)}</span></InspRow>
+      {duration && (
+        <InspRow label={duration.label}>
+          <Tipped tip={[range, duration.note].filter(Boolean).join(" · ") || duration.text} className="insp-num">{duration.text}</Tipped>
+        </InspRow>
+      )}
+      {usageByExecutor.map(([label, { usage, wakes }], index) => (
+        <InspRow key={label} label={index === 0 ? "用量" : ""}>
+          <UsageValue label={label} usage={usage} wakes={wakes} />
+        </InspRow>
+      ))}
+      {turn && (
+        <InspRow label="本轮">
+          <span className="insp-num" aria-label={`本轮 ${formatTokensExact(usageTotal(turn))} token`}>
+            {formatTokens(usageTotal(turn))}
+          </span>
+          {usageByExecutor.length > 1 && facts.turnLabel && <span className="insp-faint insp-cut">{facts.turnLabel}</span>}
+        </InspRow>
+      )}
+      {(hasContext(facts.context) || facts.compacting) && (
+        <InspRow label="上下文"><ContextValue facts={facts} /></InspRow>
+      )}
+    </>
+  );
+}
+
+/** 分支、目录、会话号、resume 命令。后两样可复制。 */
+export function InfoSessionRows({ task, session, notify }: { task: Task; session: Session | undefined; notify: (message: string) => void }) {
+  if (!session) return null;
+  const cliId = session.cliSessionId;
+  return (
+    <>
+      {session.branch && (
+        <InspRow label="分支" className={task.useWorktree ? "" : "is-danger"}>
+          <Tipped tip={task.useWorktree ? session.branch : `${session.branch}（没有独立工作区，直接在这条分支上改）`} className="insp-cut">{session.branch}</Tipped>
+          <InspCopy text={session.branch} label="复制分支名" onError={notify} />
+        </InspRow>
+      )}
+      {(session.worktreePath || session.cwd) && (
+        <InspRow label="目录">
+          <Tipped tip={(session.worktreePath || session.cwd)!} className="insp-cut">{session.worktreePath || session.cwd}</Tipped>
+          <InspCopy text={(session.worktreePath || session.cwd)!} label="复制目录" onError={notify} />
+        </InspRow>
+      )}
+      {cliId && (
+        <InspRow label="会话">
+          <span className="insp-num insp-cut">{cliId}</span>
+          <InspCopy text={cliId} label="复制会话号" onError={notify} />
+        </InspRow>
+      )}
+      {session.resumeCommand && (
+        <InspRow label="resume">
+          <span className="insp-cut insp-mono">{session.resumeCommand}</span>
+          <InspCopy text={session.resumeCommand} label="复制 resume 命令" onError={notify} />
+        </InspRow>
+      )}
+    </>
+  );
+}

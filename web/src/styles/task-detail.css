@@ -140,95 +140,19 @@ span.task-detail-title { display: block; width: auto; }
 /* 内容排进居中的阅读列：两侧留白至少是原来那一档，宽出来的平分到两边。 */
 .task-conversation { --reading-pad: max(clamp(18px, 4vw, 48px), calc((100% - var(--reading-col)) / 2)); height: 100%; overflow-y: auto; padding: 18px var(--reading-pad) 28px max(var(--conversation-input-gutter, 0px), var(--reading-pad)); }
 
-.task-inspector details summary {
-  cursor: pointer;
-  color: var(--faint);
-  font-size: 10.5px;
-  font-weight: 600;
-  list-style: none;
-}
-
-.task-inspector details summary::-webkit-details-marker { display: none; }
-.task-inspector details summary::after { content: "＋"; float: right; }
-.task-inspector details[open] summary::after { content: "－"; }
-
-.task-inspector { display: flex; min-height: 0; height: 100%; flex-direction: column; overflow: hidden; background: var(--canvas); }
-.task-inspector-scroll { min-height: 0; flex: 1; overflow-y: auto; }
-.task-inspector-scroll > section { border-bottom: 0.5px solid var(--line); padding: 13px 14px; }
-.task-inspector h2 { margin: 0 0 8px; color: var(--muted); font-size: 11.5px; font-weight: 600; }
+/* 「信息」格的样式搬到了 task-info.css；工作流格（预设）还在用下面这两样行，等它换成公共件一起删。 */
 .task-inspector-row { display: grid; min-height: 28px; grid-template-columns: 86px minmax(0, 1fr); align-items: center; gap: 7px; }
 .task-inspector-row > span { color: var(--faint); font-size: 10.5px; }
 .task-inspector-row > div { min-width: 0; color: var(--muted); font-size: 10.5px; }
 .task-inspector-row.is-danger > span,
 .task-inspector-row.is-danger > div,
 .task-inspector-row.is-danger code { color: var(--red); }
-/* 多个 agent 参与时,每行前面标出这笔账是谁的 —— 它们从不相加,谁的就是谁的。 */
-.task-usage-who { margin-right: 6px; color: var(--faint); font-style: normal; }
-.task-usage-turns.has-tip { border-bottom: 1px dotted var(--line2); cursor: help; }
-/* 窄右栏放不下时整条换行,不在箭头处断成两截 —— 断开的区间比换行难读得多。 */
-.task-inspector-aside { display: inline-block; margin-left: 7px; color: var(--faint); font-style: normal; white-space: nowrap; }
 .task-inspector-row select { width: 100%; min-width: 0; border: 0; border-radius: 6px; background: transparent; padding: 4px 5px; color: var(--muted); font-size: 10.5px; outline: 0; }
 .task-inspector-row select:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .task-inspector-row code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 9.5px; }
-.task-label-editor { display: flex; flex-wrap: wrap; gap: 4px; }
-.task-label-editor > button,
-.task-label-editor > label { display: inline-flex; min-height: 22px; align-items: center; gap: 3px; border: 0; border-radius: 999px; background: var(--raised); padding: 2px 7px; color: var(--muted); font-size: 9.5px; }
-.task-label-editor input { width: 44px; border: 0; background: transparent; padding: 0; outline: 0; font-size: 9.5px; }
 .task-inspector-note { margin: 5px 0 0; color: var(--faint); font-size: 10px; line-height: 1.5; }
 .task-inspector-note.is-error { color: var(--red); }
 .task-inspector-note.is-warning { color: var(--amber); }
-.task-inspector .review-dispatch-control { margin: 8px 0 0; }
-.task-inspector .review-dispatch-heading { flex-wrap: wrap; }
-.task-inspector .review-dispatch-heading > div { min-width: calc(100% - 33px); }
-.task-inspector .review-dispatch-heading > button { width: 100%; justify-content: center; }
-.task-inspector .review-dispatch-fields { grid-template-columns: 1fr; }
-.task-inspector .review-dispatch-control form footer { align-items: stretch; flex-direction: column; }
-.task-inspector .review-dispatch-control form footer > button { justify-content: center; }
-.task-inspector-action { display: flex; width: 100%; min-height: 31px; align-items: center; border: 0; border-radius: 7px; background: transparent; padding: 5px 7px; color: var(--muted); font-size: 10.5px; text-align: left; }
-.task-inspector-action:hover { background: var(--raised); color: var(--ink); }
-/* 「排在某任务之后」入口(独立任务时顶替「查看队列」那一行的位置) */
-.task-inspector-queue-after { width: 100%; }
-.task-inspector-queue-after .ui-select-trigger { width: 100%; min-height: 31px; font-size: 10.5px; }
-.task-inspector-action span { display: inline-flex; align-items: center; gap: 5px; }
-.task-inspector-action span:last-child,
-.task-inspector-action > svg:last-child { margin-left: auto; }
-.task-inspector details { margin-top: 5px; border-top: 0.5px solid var(--line); padding-top: 7px; }
-/* 顶线是用来隔开兄弟节的；一节里的头一个 details 上面没有兄弟，画线只会在面板标题下留一道空档。 */
-.task-inspector section > details:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
-.task-inspector details pre { max-height: 240px; overflow: auto; margin: 7px 0 0; white-space: pre-wrap; word-break: break-word; color: var(--muted); font-family: var(--font-sans); font-size: 10.5px; line-height: 1.55; }
-.task-inspector-attachment-links { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 7px; margin-top: 6px; font-size: 10.5px; }
-.task-inspector-attachment-links > span:first-child { color: var(--faint); }
-.task-inspector-attachment-link { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 42%, transparent); text-underline-offset: 2px; }
-.task-inspector-attachment-link:hover { color: color-mix(in srgb, var(--accent) 76%, var(--ink)); text-decoration-color: currentColor; }
-.task-inspector-attachment-link:focus-visible { border-radius: 2px; outline: 2px solid color-mix(in srgb, var(--accent) 36%, transparent); outline-offset: 2px; }
-.task-inspector-attachment-missing { color: var(--faint); }
-.task-inspector-follow-ups ol { display: grid; gap: 8px; margin: 7px 0 0; padding: 0; list-style: none; }
-.task-inspector-follow-ups li + li { border-top: 0.5px solid var(--line); padding-top: 8px; }
-.task-inspector-follow-ups time { display: block; color: var(--faint); font-size: 9px; }
-.task-inspector-follow-ups li pre { margin-top: 3px; }
-.task-resume-editor { margin-top: 7px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); }
-.task-resume-editor-head { display: flex; min-height: 30px; align-items: center; gap: 4px; padding: 5px 7px; }
-.task-resume-editor-head > span { min-width: 0; flex: 1; color: var(--faint); font-size: 9.5px; line-height: 1.4; }
-.task-resume-editor button { border: 0; border-radius: 5px; background: transparent; padding: 3px 5px; color: var(--muted); font-size: 9.5px; }
-.task-resume-editor button:hover:not(:disabled) { background: var(--overlay); color: var(--ink); }
-.task-resume-editor pre { max-height: 160px; overflow: auto; margin: 0; border-top: 0.5px solid var(--line); padding: 7px; white-space: pre-wrap; word-break: break-word; color: var(--ink); font-family: var(--font-sans); font-size: 10.5px; line-height: 1.55; }
-.task-resume-editor textarea { display: block; width: 100%; resize: none; border: 0; background: transparent; padding: 8px; color: var(--ink); font-family: var(--font-sans); font-size: 10.5px; line-height: 1.55; outline: 0; }
-.task-resume-editor footer { display: flex; min-height: 34px; align-items: center; gap: 4px; border-top: 0.5px solid var(--line); padding: 5px 6px; }
-.task-resume-editor footer > span { margin-right: auto; color: var(--faint); font-size: 8.5px; }
-.task-resume-editor button.is-primary { background: var(--accent); color: white; }
-.task-resume-editor button.is-primary:hover:not(:disabled) { background: var(--accent-hover); color: white; }
-.task-change-summary__state { display: flex; align-items: center; gap: 6px; margin: 3px 0 6px; color: var(--faint); font-size: 10px; }
-.task-change-summary__state.is-error { color: var(--red); }
-.task-change-summary__facts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 5px; }
-.task-change-summary__facts > div { min-width: 0; border: 0.5px solid var(--line); border-radius: 7px; background: color-mix(in lch,var(--panel) 60%,var(--canvas)); padding: 7px 8px; }
-.task-change-summary__facts span { display: flex; align-items: center; gap: 4px; color: var(--faint); font-size: 9px; }
-.task-change-summary__facts code,
-.task-change-summary__facts b { display: block; min-width: 0; overflow: hidden; margin-top: 3px; color: var(--muted); font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.task-change-summary__delta { display: flex !important; gap: 7px; }
-.task-change-summary__delta i,
-.task-change-summary__delta em { font-style: normal; }
-.task-change-summary__delta i { color: var(--green); }
-.task-change-summary__delta em { color: var(--red); }
 
 .task-drawer-scrim { position: fixed; z-index: 90; inset: 0; background: rgb(40 42 48 / 28%); }
 .task-queue-drawer { position: fixed; z-index: 95; top: 0; right: 0; bottom: 0; display: flex; width: min(430px, 92vw); flex-direction: column; border-left: 1px solid var(--line2); background: var(--panel); box-shadow: -24px 0 60px rgb(40 42 48 / 18%); }

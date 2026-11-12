@@ -108,7 +108,7 @@ export function TaskDetail({
   const conversation = useConversation(task.id);
   // Inspector 栈（哪几格存在、默认开哪几格）整块在 useTaskInspectorStack.ts。
   // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点、验收后快照入口和会话尾栏的异常回合重试。
-  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount, free } =
+  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount, free, runFacts } =
     useTaskInspectorStack(task, allTasks, conversation);
   // 「上一回合崩了、任务却停在终态」的那颗重来：住在任务头上（不用悬停、也不跟着会话滚走），
   // 判据和服务端 retryTurnRejection 对齐（turnRetry.ts）。
@@ -320,6 +320,7 @@ export function TaskDetail({
           sessions: conversation.sessions,
           allTasks,
           followUps,
+          runFacts,
           onOpenTask,
           onOpenReview: () => changeReviewOpen(true),
           onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); fileView.close(); subagents.closeAgent(); },

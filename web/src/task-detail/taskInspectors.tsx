@@ -19,6 +19,7 @@ import { MonitorInspector } from "../monitors/MonitorInspector.tsx";
 import { TaskMemoInspector } from "../task-memos/TaskMemoInspector.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import type { TaskMonitorsState } from "../monitors/useTaskMonitors.ts";
+import type { InfoRunFacts } from "./info/infoRunFacts.ts";
 
 export interface TaskInspectorContext {
   nativeWork: NativeWorkInspectorProps;
@@ -29,6 +30,8 @@ export interface TaskInspectorContext {
   sessions: Session[];
   allTasks: TaskListItem[];
   followUps: { text: string; attachments: string[]; at?: string }[];
+  /** 「信息」格里最近一轮的用量、上下文与压缩中（以前挂在会话尾栏的药丸上）。 */
+  runFacts: InfoRunFacts;
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;
   onOpenPreview: () => void;

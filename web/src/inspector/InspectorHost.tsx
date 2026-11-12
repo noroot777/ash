@@ -14,6 +14,7 @@ import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { useNarrowScreen } from "../lib/useNarrowScreen.ts";
 import { InspectorHeadSlotProvider } from "./headActions.tsx";
 import { InspectorRail } from "./InspectorRail.tsx";
+import { InspectorNavProvider, type InspectorNav, type InspectorRequest } from "./nav.tsx";
 import { registerInspectorShortcutTarget } from "./shortcuts.ts";
 import type { InspectorDescriptor, InspectorHostControls, InspectorTabPolicy } from "./types.ts";
 
@@ -325,7 +326,18 @@ function InspectorHostState<Context>({
     });
   };
 
-  const openTab = useCallback((id: string) => {
+  // 带着话的打开（见 nav.tsx）：那一格收下就清掉，只说一次。
+  const [request, setRequest] = useState<InspectorNav["request"]>(null);
+  const requestSeq = useRef(0);
+  const consumeRequest = useCallback((seq: number) => {
+    setRequest((current) => (current?.seq === seq ? null : current));
+  }, []);
+
+  const openTab = useCallback((id: string, params?: InspectorRequest) => {
+    if (params) {
+      requestSeq.current += 1;
+      setRequest({ id, params, seq: requestSeq.current });
+    }
     setState((current) => ({
       ...current,
       openTabs: orderedValidTabs([...current.openTabs, id], descriptors),
@@ -348,6 +360,8 @@ function InspectorHostState<Context>({
     current.openTab(descriptor.id);
     return true;
   }), []);
+
+  const nav = useMemo<InspectorNav>(() => ({ openTab, request, consume: consumeRequest }), [consumeRequest, openTab, request]);
 
   const toggleButton = (
     <button
@@ -430,7 +444,9 @@ function InspectorHostState<Context>({
               aria-labelledby={tabIdFor(activeDescriptor.id)}
             >
               <InspectorHeadSlotProvider value={headSlot}>
-                {activeDescriptor.render(context)}
+                <InspectorNavProvider value={nav}>
+                  {activeDescriptor.render(context)}
+                </InspectorNavProvider>
               </InspectorHeadSlotProvider>
             </div>
           </div>

@@ -9,6 +9,7 @@ import { useTaskMemoTab } from "../task-memos/useTaskMemoTab.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { TASK_INSPECTORS } from "./taskInspectors.tsx";
 import type { useConversation } from "../lib/useConversation.ts";
+import { latestRunFacts } from "./info/infoRunFacts.ts";
 
 // 这几档 stage 下默认落在「审查」那一格：到了这一步，用户要看的就是审查那摊事。
 const REVIEW_FOCUS_STAGES = new Set(["verifying", "verified", "verify_failed", "awaiting_acceptance"]);
@@ -79,5 +80,8 @@ export function useTaskInspectorStack(
     defaultActiveTabId: reviewFocused ? "review" : "info",
   }), [reviewFocused, task.status]);
 
-  return { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount, free };
+  // 「信息」格里最近一轮的用量、上下文、压缩中：取自会话流里最新那条回复（直播值比会话行新）。
+  const runFacts = useMemo(() => latestRunFacts(conversation.items), [conversation.items]);
+
+  return { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount, free, runFacts };
 }

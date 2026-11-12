@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { forwardRef, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { Gauge } from "@phosphor-icons/react";
 import type { ContextUsage, Session } from "@ash/shared";
@@ -26,42 +26,8 @@ import { SessionContext1mNotice } from "./Context1mNotice.tsx";
  * 明细下面挂着**快捷设置**（`ContextCompactQuickSettings`）：面板里这几个数从哪来，
  * 就在同一个面板里改得动。给了 `session` 才有，因为要知道改的是哪个执行器 profile。
  */
-export function ContextMeterChip({ context, session, className }: {
-  context?: ContextUsage | null;
-  /** 这条会话的身份 —— 快捷设置要靠它定位执行器 profile。不给就只有只读明细。 */
-  session?: Session | null;
-  className?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const place = usePanelPlacement(triggerRef, panelRef, {
-    // 展开设置后面板里是一排输入框，224px 塞不下；收起时仍按明细的窄宽度走。
-    minWidth: editing ? 296 : 224,
-    minHeight: 108,
-    fallbackHeight: 180,
-    enabled: open,
-  });
-
-  const close = () => {
-    setOpen(false);
-    setEditing(false);
-  };
-
-  useDismissable({
-    enabled: open,
-    containerRef: panelRef,
-    onClose: close,
-    restoreFocusRef: triggerRef,
-  });
-
-  useLayoutEffect(() => {
-    if (open) panelRef.current?.focus();
-  }, [open]);
-
-  if (!hasContext(context)) return null;
-
+/** 胶囊上和面板里要用的那几个数，两处（这颗胶囊、右侧「信息」格的上下文那一行）同一份算法。 */
+export function contextMeterView(context: ContextUsage) {
   const window = effectiveContextWindow(context);
   const usesCompactWindow = typeof context.compactWindow === "number"
     && Number.isFinite(context.compactWindow)
@@ -73,22 +39,34 @@ export function ContextMeterChip({ context, session, className }: {
   const ratio = contextRatio(context);
   const compactTrigger = usesCompactWindow ? contextCompactTrigger(context) : null;
   const approx = displayWindowEstimated ? "~" : "";
-  const label = ratio === null
-    ? `上下文 ${formatTokens(context.used)}`
-    : `上下文剩 ${approx}${Math.round((1 - ratio) * 100)}%`;
+  const remain = ratio === null ? null : Math.round((1 - ratio) * 100);
   const spoken = ratio === null
     ? `上下文已用 ${formatTokensExact(context.used)} token，窗口未知`
-    : `上下文还剩 ${Math.round((1 - ratio) * 100)}%，已用 ${formatTokensExact(context.used)} / `
+    : `上下文还剩 ${remain}%，已用 ${formatTokensExact(context.used)} / `
       + `${formatTokensExact(window!)} token${displayWindowEstimated ? "（窗口为估算）" : ""}`;
   // 只有两档：进红区才变色。中间再插一档黄色只会让「变色」失去信号价值。
-  const tone = ratio !== null && ratio >= 0.85 ? " is-tight" : "";
+  const tight = ratio !== null && ratio >= 0.85;
+  return { window, usesCompactWindow, displayWindowEstimated, clampedByModel, ratio, compactTrigger, approx, remain, spoken, tight };
+}
 
-  const panel = open && (
+/**
+ * 水位明细加快捷设置那一层（挂在 body 上的浮层）。胶囊和「信息」格的「压缩设置」打开的是
+ * 同一个它；开合、定位、焦点归调用方。
+ */
+export const ContextMeterPanel = forwardRef<HTMLDivElement, {
+  context: ContextUsage;
+  session?: Session | null;
+  editing: boolean;
+  onToggleEditing: () => void;
+  style?: CSSProperties;
+}>(function ContextMeterPanel({ context, session, editing, onToggleEditing, style }, ref) {
+  const { window, usesCompactWindow, displayWindowEstimated, clampedByModel, compactTrigger } = contextMeterView(context);
+  return (
     <div
       className="token-usage-panel is-cols-1"
-      ref={panelRef}
+      ref={ref}
       tabIndex={-1}
-      style={placementStyle(place)}
+      style={style}
       role="dialog"
       aria-label="上下文水位明细"
     >
@@ -137,10 +115,64 @@ export function ContextMeterChip({ context, session, className }: {
         <ContextCompactQuickSettings
           session={session}
           open={editing}
-          onToggle={() => setEditing((current) => !current)}
+          onToggle={onToggleEditing}
         />
       )}
     </div>
+  );
+});
+
+export function ContextMeterChip({ context, session, className }: {
+  context?: ContextUsage | null;
+  /** 这条会话的身份 —— 快捷设置要靠它定位执行器 profile。不给就只有只读明细。 */
+  session?: Session | null;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const place = usePanelPlacement(triggerRef, panelRef, {
+    // 展开设置后面板里是一排输入框，224px 塞不下；收起时仍按明细的窄宽度走。
+    minWidth: editing ? 296 : 224,
+    minHeight: 108,
+    fallbackHeight: 180,
+    enabled: open,
+  });
+
+  const close = () => {
+    setOpen(false);
+    setEditing(false);
+  };
+
+  useDismissable({
+    enabled: open,
+    containerRef: panelRef,
+    onClose: close,
+    restoreFocusRef: triggerRef,
+  });
+
+  useLayoutEffect(() => {
+    if (open) panelRef.current?.focus();
+  }, [open]);
+
+  if (!hasContext(context)) return null;
+
+  const { ratio, approx, remain, spoken, tight } = contextMeterView(context);
+  const label = ratio === null
+    ? `上下文 ${formatTokens(context.used)}`
+    : `上下文剩 ${approx}${remain}%`;
+  const tone = tight ? " is-tight" : "";
+
+  const panel = open && (
+    <ContextMeterPanel
+      ref={panelRef}
+      context={context}
+      session={session}
+      editing={editing}
+      onToggleEditing={() => setEditing((current) => !current)}
+      style={placementStyle(place)}
+    />
   );
 
   return (

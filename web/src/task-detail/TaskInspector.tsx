@@ -1,148 +1,38 @@
-import { useEffect, useMemo, useState } from "react";
-import type { Group, Session, Task, TaskListItem, TaskStatus, TokenUsage } from "@ash/shared";
-import { isUserSettableStatus, TASK_STATUS_LABELS } from "@ash/shared";
-import { addUsage, formatTokens, formatTokensExact, hasUsage, usageTotal } from "@ash/shared/usage";
-import { ArrowSquareOut, CaretRight, ListNumbers } from "@phosphor-icons/react";
-import { api } from "../lib/api.ts";
-import { isSendKeyEvent } from "../lib/sendKey.ts";
-import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
-import { canJoinQueue, placeTaskAfter, queueAfterOptions } from "../lib/queueAfter.ts";
+import { useMemo } from "react";
+import type { Group, Session, Task, TaskListItem, TaskStatus } from "@ash/shared";
+import { isUserSettableStatus, TASK_STATUS_LABELS, taskDisplayStatus } from "@ash/shared";
+import { ArrowSquareOut, Warning } from "@phosphor-icons/react";
 import { Dropdown } from "../components/Dropdown.tsx";
-import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
-import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import { taskParentLink } from "../components/TaskOrigin.tsx";
-import { taskCreationLabel } from "@ash/shared/task-origin";
-import { QueueDrawer } from "./QueueDrawer.tsx";
-import { InspectorPromptContent } from "./InspectorPromptContent.tsx";
+import { InspKv, InspNote, InspRow } from "../inspector/parts.tsx";
 import { TaskChangeSummary } from "./TaskChangeSummary.tsx";
-import { formatInstant, formatInstantRange, taskDurationInfo } from "./utils.ts";
-import { AutoTextarea } from "../components/AutoTextarea.tsx";
+import { InfoFollowUps, InfoRequest, InfoResumePrompt, type InfoFollowUp } from "./info/InfoAsk.tsx";
+import { InfoQueue } from "./info/InfoQueue.tsx";
+import { InfoRunRows, InfoSessionRows } from "./info/InfoRunRows.tsx";
+import { InfoSchedule } from "./info/InfoSchedule.tsx";
+import { EMPTY_RUN_FACTS, type InfoRunFacts } from "./info/infoRunFacts.ts";
 
 const STATUS_ORDER: TaskStatus[] = [
   "running", "idle", "paused", "awaiting_review", "queued", "backlog", "done", "failed", "canceled",
 ];
 
-function InspectorRow({
-  label,
-  children,
-  danger = false,
-}: {
-  label: string;
-  children: React.ReactNode;
-  danger?: boolean;
-}) {
-  return <div className={`task-inspector-row${danger ? " is-danger" : ""}`}><span>{label}</span><div>{children}</div></div>;
-}
-
-// 「N 轮」只数真人/系统推着走的回合，被哨兵叫醒的那几轮扣掉，在虚线下的悬停里另报。
-// 服务端在同一笔入账里数总轮数和唤醒轮数，唤醒本来就是总数的子集；token 仍按全部回合计。
-function UsageLine({ label, usage, wakes, showLabel }: { label: string; usage: TokenUsage; wakes: number; showLabel: boolean }) {
-  const tip = useHoverTip();
-  const total = usage.turns ?? 0;
-  const woken = Math.min(wakes, total);
-  const turns = total - woken;
-  const note = woken > 0 ? `另有哨兵唤醒 ${woken} 轮未计入` : null;
-  return (
-    <>
-      <span aria-label={[`${label} 累计 ${formatTokensExact(usageTotal(usage))} token`, total ? `${turns} 轮` : "", note].filter(Boolean).join("，")}>
-        {showLabel && <em className="task-usage-who">{label}</em>}
-        {formatTokens(usageTotal(usage))}
-        {total > 0 && " · "}
-        {total > 0 && (note
-          ? <span className="task-usage-turns has-tip" tabIndex={0} {...tip.anchorProps}>{turns} 轮</span>
-          : `${turns} 轮`)}
-      </span>
-      {note && <HoverTip at={tip.at}>{note}</HoverTip>}
-    </>
-  );
-}
-
-function ResumePromptEditor({
-  value,
-  editable,
-  onSave,
-}: {
-  value: string;
-  editable: boolean;
-  onSave: (value: string) => Promise<boolean>;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
-  const sendKeys = useSendKeyLabels();
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!editing) setDraft(value);
-  }, [editing, value]);
-
-  const commit = async (nextValue = draft) => {
-    const normalized = nextValue.trim();
-    if (normalized === value.trim()) {
-      setEditing(false);
-      return;
-    }
-    setSaving(true);
-    try {
-      if (await onSave(normalized)) {
-        setDraft(normalized);
-        setEditing(false);
-      }
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (editing && editable) {
-    return (
-      <div className="task-resume-editor is-editing">
-        <AutoTextarea
-          autoFocus
-          rows={5}
-          value={draft}
-          aria-label="续跑指令"
-          placeholder="续跑时发送给执行器的消息，例如：继续完成 TTS 阶段"
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (isSendKeyEvent(event)) {
-              event.preventDefault();
-              void commit();
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              setDraft(value);
-              setEditing(false);
-            }
-          }}
-        />
-        <footer>
-          <span>{sendKeys.send} 保存</span>
-          <button type="button" disabled={saving} onClick={() => { setDraft(value); setEditing(false); }}>取消</button>
-          <button className="is-primary" type="button" disabled={saving} onClick={() => void commit()}>{saving ? "保存中…" : "保存"}</button>
-        </footer>
-      </div>
-    );
-  }
-
-  return (
-    <div className="task-resume-editor">
-      <div className="task-resume-editor-head">
-        <span>{value.trim() ? "下次唤醒时发送" : "未设置，续跑时使用标准“继续”指令"}</span>
-        {editable && <button type="button" onClick={() => setEditing(true)}>{value.trim() ? "编辑" : "添加"}</button>}
-        {editable && value.trim() && <button type="button" disabled={saving} onClick={() => void commit("")}>清空</button>}
-      </div>
-      {value.trim() && <pre>{value}</pre>}
-    </div>
-  );
-}
-
+/**
+ * 右侧「信息」格。最上面是原始需求（两行，点开看全），下面全是「标签 值」一种行、一种字号：
+ * 上一组是能改的（追问、状态、分组、标签、调度、队列、续跑指令），下一组是事实（来源、时间、
+ * 用量、本轮、上下文、改动、分支、目录、会话、resume）。分节只靠留白。
+ *
+ * 执行器/模型/智能水平不在这里露面：它们跑到一半就能改，这里写下的只会是「此刻的配置」而
+ * 不是「这段历史里谁在跑」。当前配置看对话框底部那颗三段胶囊；真正跑过的执行器见「用量」。
+ */
 export function TaskInspector({
   task,
   groups,
   sessions,
   allTasks,
   followUps = [],
+  runFacts = EMPTY_RUN_FACTS,
   onOpenTask,
   onOpenReview,
   onPatch,
@@ -154,7 +44,9 @@ export function TaskInspector({
   groups: Group[];
   sessions: Session[];
   allTasks: TaskListItem[];
-  followUps?: { text: string; attachments: string[]; at?: string }[];
+  followUps?: InfoFollowUp[];
+  /** 最近一轮的用量、上下文、是不是正在压缩（见 info/infoRunFacts.ts）。 */
+  runFacts?: InfoRunFacts;
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
@@ -163,48 +55,11 @@ export function TaskInspector({
   onTasksSynced: (tasks: Task[]) => void;
   notify: (message: string) => void;
 }) {
-  const [queueItems, setQueueItems] = useState<{ taskId: string; title: string }[]>([]);
-  const [queueOpen, setQueueOpen] = useState(false);
-  const [requeueing, setRequeueing] = useState(false);
   const readOnly = task.parentId !== null || !!task.archived;
   const latestSession = useMemo(
     () => [...sessions].sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0],
     [sessions],
   );
-  // 一个 agent 一行，**不同 agent 绝不相加**：单价、上下文、缓存策略都不是一回事，
-  // 加出来那个数不代表任何东西（用户 2026-08-07 明确要求分开看）。同一个执行器名下的
-  // 多条会话（重跑、续跑各开一行）才合并 —— 那才是同一副账。哨兵唤醒的轮数跟着同一份
-  // 分组累加：唤醒照样计费、照样算进轮数，只在悬停里拆开。
-  const usageByExecutor = useMemo(() => {
-    const groups = new Map<string, { usage: TokenUsage; wakes: number }>();
-    for (const session of sessions) {
-      if (!session.usage) continue;
-      const label = session.executor || session.agentType;
-      const previous = groups.get(label);
-      const wakes = session.monitorWakeTurns ?? 0;
-      groups.set(label, previous
-        ? { usage: addUsage(previous.usage, session.usage), wakes: previous.wakes + wakes }
-        : { usage: session.usage, wakes });
-    }
-    return [...groups].filter(([, group]) => hasUsage(group.usage));
-  }, [sessions]);
-  const queuePosition = queueItems.findIndex((item) => item.taskId === task.id);
-  const nextQueueItem = queuePosition >= 0 ? queueItems[queuePosition + 1] : undefined;
-
-  // 队列成员或顺序变了也要重读:只依赖自己的 queueId/位置的话,中间插人时自己的
-  // 位置纹丝不动,「第 n / m 位」「下一个」会停在旧值(第 1 轮审查复现)。列表经
-  // SSE 实时更新,从它派生一个成员签名当依赖。
-  const queueSignature = task.queueId == null ? "" : allTasks
-    .filter((item) => item.queueId === task.queueId)
-    .map((item) => `${item.id}:${item.queuePosition}`)
-    .join(",");
-
-  useEffect(() => {
-    let alive = true;
-    if (!task.queueId) setQueueItems([]);
-    else api.queue(task.queueId).then((queue) => { if (alive) setQueueItems(queue.items); }).catch(() => undefined);
-    return () => { alive = false; };
-  }, [task.id, task.queueId, task.queuePosition, queueSignature, queueOpen]);
 
   const patch = async (value: Partial<Task>, message = "任务属性已更新") => {
     try {
@@ -226,169 +81,44 @@ export function TaskInspector({
     }
   };
 
+  // 状态那一行说的是人话：在等答复、在验证、验收过了，都照任务头那套叫法写；下拉里能选的
+  // 仍只有能手动设的那几种，加上当前这一个。
   const statusOptions = STATUS_ORDER.filter((status) => isUserSettableStatus(status) || status === task.status);
-  // 执行器/模型/智能水平不在这里露面：它们跑到一半就能改，这里写下的只会是
-  // 「此刻的配置」而不是「这段历史里谁在跑」。当前配置看对话框底部那颗三段胶囊，
-  // 起跑前的可用性由 ExecutorGate 按后端判据拦。真正跑过的执行器见下面 Token 用量。
-  const duration = taskDurationInfo(task);
+  const display = taskDisplayStatus(task.status, task.stage, !!task.question).label;
   const parent = taskParentLink(task, allTasks);
-  const canRequeue = task.parentId === null
-    && !task.archived
-    && !!task.queueId
-    && (task.status === "failed" || task.status === "canceled");
-
-  const requeue = async () => {
-    if (!task.queueId) return;
-    setRequeueing(true);
-    try {
-      const response = await api.requeueTask(task.id);
-      onQueueChanged(response.task);
-      void api.queue(task.queueId).then((queue) => setQueueItems(queue.items)).catch(() => undefined);
-      notify(response.movedToEnd ? "已重新排队并移到队尾" : "已重新排队");
-    } catch (reason) {
-      notify(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setRequeueing(false);
-    }
-  };
-
-  // 「排在某任务之后」:目标在队列就紧随其后插入,不在就建一条 [目标, 本任务]。
-  // 响应里的成员快照(含前驱和本任务)**只走 onTasksSynced 一条按版本合并的路**;
-  // 不再对本任务另调 onQueueChanged(placed.task)——那条带参分支最终是无条件覆盖,
-  // 迟到的旧入队响应会反转 SSE 已送达的移出(第 6 轮审查双页面真实复现)。也不再
-  // 「成功后 GET」:那条路没有错误处理,断流+GET 失败时入队成功却显示成独立任务
-  // (第 5 轮审查);只有响应没带快照(老服务端)才退回无参 onQueueChanged 兜底刷新。
-  const joinQueueAfter = async (targetId: string) => {
-    const target = allTasks.find((item) => item.id === targetId);
-    if (!target) return;
-    try {
-      const placed = await placeTaskAfter(task.id, target);
-      // 运行中的任务入队不打断当前回合,提示也不能说「轮到它时自动开始」——它已经在跑,
-      // 照抄待办文案会被读成「刚才那下把任务停了」。
-      const live = task.status === "running" || task.status === "queued";
-      notify(`已排在「${target.title || "未命名任务"}」之后${live ? "；当前运行不受影响" : "，轮到它时自动开始"}`);
-      if (placed.tasks.length) onTasksSynced(placed.tasks);
-      else onQueueChanged();
-    } catch (reason) {
-      notify(reason instanceof Error ? reason.message : String(reason));
-    }
-  };
 
   return (
-    <div className="task-inspector" aria-label="任务信息">
-      <div className="task-inspector-scroll">
-        <ImagePreviewGroup isolated>
-          <section>
-            <details open>
-              <summary>原始需求</summary>
-              <InspectorPromptContent text={task.body} emptyText="这个任务没有正文说明。" />
-            </details>
-            <details className="task-inspector-follow-ups">
-              <summary>后续追问</summary>
-              {followUps.length ? (
-                <ol>
-                  {followUps.map((followUp, index) => (
-                    <li key={`${followUp.at ?? "pending"}:${index}`}>
-                      {followUp.at && <time dateTime={followUp.at}>{formatInstant(followUp.at)}</time>}
-                      <InspectorPromptContent
-                        text={followUp.text}
-                        attachments={followUp.attachments}
-                        emptyText="（空消息）"
-                      />
-                    </li>
-                  ))}
-                </ol>
-              ) : <p className="task-inspector-note">暂无后续追问。</p>}
-            </details>
-          </section>
-        </ImagePreviewGroup>
-
-        <section>
-          <h2>执行信息</h2>
-          {latestSession?.versionWarning && <p className="task-inspector-note is-warning">{latestSession.versionWarning}</p>}
-          {duration ? (
-            <InspectorRow label={duration.label}>
-              <span title={[`创建 ${formatInstant(task.createdAt)}`, duration.note].filter(Boolean).join(" · ")}>
-                {duration.text}
-                <em className="task-inspector-aside">{formatInstantRange(task.startedAt, task.endedAt)}</em>
-              </span>
-            </InspectorRow>
-          ) : <InspectorRow label="创建"><span>{formatInstant(task.createdAt)}</span></InspectorRow>}
-          {usageByExecutor.map(([label, { usage, wakes }], index) => (
-            <InspectorRow key={label} label={index === 0 ? "Token 用量" : ""}>
-              <UsageLine label={label} usage={usage} wakes={wakes} showLabel={usageByExecutor.length > 1} />
-            </InspectorRow>
-          ))}
-          {latestSession?.branch && (
-            <InspectorRow label="分支" danger={!task.useWorktree}>
-              <code>{latestSession.branch}</code>
-            </InspectorRow>
-          )}
-          {latestSession?.worktreePath && <InspectorRow label="worktree"><code>{latestSession.worktreePath}</code></InspectorRow>}
-          {latestSession?.resumeCommand && (
-            <button className="task-inspector-action" type="button" onClick={async () => {
-              try { await navigator.clipboard.writeText(latestSession.resumeCommand!); notify("已复制 resume 命令"); }
-              catch { notify("复制失败，请检查浏览器剪贴板权限后重试"); }
-            }}>
-              <span>复制 resume 命令</span><span>复制</span>
-            </button>
-          )}
-        </section>
-
-        <TaskChangeSummary task={task} allTasks={allTasks} onOpenReview={onOpenReview} />
-
-        <section>
-          <h2>队列</h2>
-          {task.queueId ? (
-            <>
-              <InspectorRow label="所在位置"><span>第 {queuePosition >= 0 ? queuePosition + 1 : (task.queuePosition ?? 0) + 1} / {queueItems.length || "?"} 位</span></InspectorRow>
-              <InspectorRow label="下一个"><span>{nextQueueItem?.title ?? "队尾"}</span></InspectorRow>
-              {canRequeue && (
-                <button className="task-inspector-action" type="button" disabled={requeueing} onClick={() => void requeue()}>
-                  <span><ListNumbers size={13} />重新排队</span><span>{requeueing ? "处理中…" : "回到队列"}</span>
-                </button>
-              )}
-              <button className="task-inspector-action" type="button" onClick={() => setQueueOpen(true)}>
-                <span><ListNumbers size={13} />查看队列 · {queueItems.length || "…"} 个任务</span><CaretRight size={13} />
-              </button>
-            </>
-          ) : canJoinQueue(task) ? (
-            <>
-              <Dropdown className="task-inspector-queue-after" label="排在某任务之后" value=""
-                placeholder="排在某任务之后…" filterPlaceholder="筛选任务…"
-                options={queueAfterOptions({
-                  tasks: allTasks,
-                  groups,
-                  projectId: task.projectId,
-                  excludeId: task.id,
-                  subjectGroupId: task.groupId ?? null,
-                  subjectRunning: task.status === "running",
-                })}
-                onChange={(targetId) => void joinQueueAfter(targetId)} />
-              <p className="task-inspector-note">{task.status === "running"
-                ? "正在运行。入队不会打断它:它跑完后,排在它后面的任务自动开始。"
-                : "独立任务。选一个同组任务，等它跑完这个再自动开始。"}</p>
-            </>
-          ) : <p className="task-inspector-note">{task.status === "done" || task.status === "failed" || task.status === "canceled"
-            ? "已结束的任务不进队列（队列会直接跳过它）。想等别的任务完成再让它接着做，在回复框的发送按钮旁选「等任务完成」。"
-            : "独立任务，不在任何队列中。"}</p>}
-        </section>
-
-        <section>
-          <h2>属性</h2>
-          <InspectorRow label="创建来源">{taskCreationLabel(task.creationOrigin)}</InspectorRow>
-          <InspectorRow label="状态">
+    <div className="task-inspector insp-pane" aria-label="任务信息">
+      <ImagePreviewGroup isolated>
+        <InfoRequest body={task.body} />
+        <InspKv label="任务属性">
+          <InfoFollowUps followUps={followUps} />
+          <InspRow label="状态">
             <Dropdown
+              className="insp-dropdown"
               label="状态"
               value={task.status}
-              options={statusOptions.map((status) => ({ value: status, label: TASK_STATUS_LABELS[status] }))}
+              options={statusOptions.map((status) => ({
+                value: status,
+                label: status === task.status ? display : TASK_STATUS_LABELS[status],
+              }))}
               disabled={readOnly}
               filterable={false}
               onChange={(status) => void patch({ status: status as TaskStatus })}
             />
-          </InspectorRow>
-          <InspectorRow label="分组">
+            {task.archived && <span className="insp-faint">已归档</span>}
+          </InspRow>
+          {task.parentId !== null && parent && (
+            <InspRow label="团队">
+              <button type="button" className="insp-val" aria-label={`打开所属团队${parent.task ? `「${parent.task.title}」` : ""}；属性由团队任务统一管理`} onClick={() => onOpenTask(parent.taskId)}>
+                <span className="insp-cut">{parent.task?.title ?? "所属团队"}</span>
+                <ArrowSquareOut size={12} aria-hidden="true" />
+              </button>
+            </InspRow>
+          )}
+          <InspRow label="分组">
             <Dropdown
+              className="insp-dropdown"
               label="分组"
               value={task.groupId ?? ""}
               options={[
@@ -405,8 +135,8 @@ export function TaskInspector({
               placeholder="无分组"
               onChange={(groupId) => void patch({ groupId: groupId || null })}
             />
-          </InspectorRow>
-          <InspectorRow label="标签">
+          </InspRow>
+          <InspRow label="标签">
             <TaskLabelsEditor
               key={task.id}
               labels={task.labels}
@@ -416,42 +146,33 @@ export function TaskInspector({
                 change.kind === "add" ? "标签已添加" : "标签已移除",
               )}
             />
-          </InspectorRow>
-          {task.parentId !== null && (
-            <>
-              <p className="task-inspector-note">这是调度者派出的执行者，属性由团队任务统一管理。</p>
-              {parent && (
-                <button className="task-inspector-action" type="button" onClick={() => onOpenTask(parent.taskId)}>
-                  <span>打开所属团队{parent.task ? ` · ${parent.task.title}` : ""}</span><ArrowSquareOut size={13} />
-                </button>
-              )}
-            </>
-          )}
-        </section>
-
-        <section>
-          <h2>调度与续跑</h2>
-          <ScheduleControl
-            taskId={task.id}
+          </InspRow>
+          <InfoSchedule taskId={task.id} notify={notify} disabled={task.parentId !== null || !!task.archived} />
+          <InfoQueue
+            task={task}
+            groups={groups}
+            allTasks={allTasks}
+            onQueueChanged={onQueueChanged}
+            onTasksSynced={onTasksSynced}
             notify={notify}
-            disabled={task.parentId !== null || !!task.archived}
           />
-          <ResumePromptEditor
+          <InfoResumePrompt
             value={task.resumePrompt ?? ""}
             editable={task.parentId === null && task.status === "paused" && !task.question}
             onSave={saveResumePrompt}
           />
-        </section>
-      </div>
-      {queueOpen && task.queueId && (
-        <QueueDrawer
-          queueId={task.queueId}
-          currentTaskId={task.id}
-          allTasks={allTasks}
-          onClose={() => setQueueOpen(false)}
-          onChanged={() => { onQueueChanged(); void api.queue(task.queueId!).then((queue) => setQueueItems(queue.items)); }}
-        />
+        </InspKv>
+      </ImagePreviewGroup>
+
+      {latestSession?.versionWarning && (
+        <InspNote tone="warn" icon={<Warning weight="fill" />}>{latestSession.versionWarning}</InspNote>
       )}
+
+      <InspKv label="执行信息">
+        <InfoRunRows task={task} sessions={sessions} facts={runFacts} />
+        <TaskChangeSummary task={task} allTasks={allTasks} onOpenReview={onOpenReview} />
+        <InfoSessionRows task={task} session={latestSession} notify={notify} />
+      </InspKv>
     </div>
   );
 }

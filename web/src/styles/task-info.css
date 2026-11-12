@@ -1,0 +1,362 @@
+/* 右侧「信息」格（task-detail/TaskInspector.tsx 与 task-detail/info/*）。公共件在 inspector-parts.css，
+   这里只补它收不进去的几样：原始需求那两行、追问清单、上下文细条、行内的下拉 / 标签 / 输入框。 */
+
+/* 原始需求：两行截断，整块可点；点开是全文加附件链接 */
+.insp-req {
+  display: block;
+  width: 100%;
+  margin: 0 0 14px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.6;
+  text-align: left;
+  transition: color var(--dur-1) var(--ease-out);
+}
+
+.insp-req > span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+button.insp-req:hover {
+  color: var(--muted);
+}
+
+button.insp-req:focus-visible {
+  border-radius: var(--r-sm);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.insp-req.is-empty {
+  color: var(--muted);
+}
+
+.insp-req.is-open > pre,
+.insp-asks pre {
+  margin: 0;
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.insp-req.is-open > .insp-btn {
+  margin: 4px 0 0 -9px;
+}
+
+.task-inspector .task-inspector-attachment-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  margin-top: 6px;
+  font-size: var(--t-xs);
+}
+
+.task-inspector .task-inspector-attachment-links > span:first-child,
+.task-inspector .task-inspector-attachment-missing {
+  color: var(--muted);
+}
+
+/* 附件是链接：墨色加下划线，不用主色 */
+.task-inspector .task-inspector-attachment-link {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--line2);
+  text-underline-offset: 2px;
+}
+
+.task-inspector .task-inspector-attachment-link:hover {
+  text-decoration-color: currentColor;
+}
+
+.task-inspector .task-inspector-attachment-link:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* 追问：点开的清单，一条一段，时间是小一号的灰字 */
+.insp-asks {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.insp-asks time {
+  display: block;
+  color: var(--muted);
+  font-size: var(--t-xs);
+}
+
+/* 上下文：一根细条画剩下的那一截，剩到 15% 以下变红 */
+.insp-bar {
+  display: block;
+  width: 48px;
+  height: 3px;
+  flex: 0 0 48px;
+  overflow: hidden;
+  border-radius: var(--r-full);
+  background: var(--line2);
+}
+
+.insp-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--muted);
+  transform-origin: left;
+  transition: transform var(--dur-3) var(--ease-out);
+}
+
+.insp-bar.is-low > i {
+  background: var(--red);
+}
+
+.insp-bad {
+  color: var(--red);
+}
+
+/* 能指上去看补充的一段字：不画虚线，指到才说 */
+.insp-has-tip {
+  min-width: 0;
+  border-radius: 2px;
+}
+
+.insp-has-tip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* 一行里可能很长的值（续跑指令）：最多三行 */
+.insp-clamp {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.insp-kv > dd:has(> .insp-clamp),
+.insp-kv > dd:has(> .insp-val > .insp-clamp) {
+  padding: 4px 0;
+}
+
+.insp-val:has(> .insp-clamp) {
+  height: auto;
+  min-height: 24px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+/* 没有独立工作区、直接在分支上改：那一行标红 */
+.insp-kv > .is-danger,
+.insp-kv > dd.is-danger .insp-has-tip {
+  color: var(--red);
+}
+
+/* 行里的一排小键（保存、取消……），靠右 */
+.insp-inline-acts {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.insp-inline-acts > .insp-cut {
+  margin-right: auto;
+  font-size: var(--t-xs);
+}
+
+.insp-field {
+  display: block;
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--line2);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  padding: 8px 10px;
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.5;
+  outline: 0;
+}
+
+.insp-field:focus {
+  border-color: var(--focus-soft);
+  box-shadow: 0 0 0 1px var(--focus-soft);
+}
+
+/* 行里的下拉：平时就是一段字加一颗尖角（尖角就是「这一项能改」的全部说明），悬停才显出底色。
+   字和上下两行的值对齐，字号跟正文一样 */
+.insp-kv .insp-dropdown {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.insp-kv .insp-dropdown .ui-dropdown-trigger {
+  width: auto;
+  max-width: 100%;
+  height: 24px;
+  gap: 6px;
+  margin-left: -8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  padding: 0 8px;
+  color: var(--ink);
+  font-size: var(--t-sm);
+  box-shadow: none;
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.insp-kv .insp-dropdown .ui-dropdown-trigger > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.insp-kv .insp-dropdown .ui-dropdown-trigger:hover:not(:disabled),
+.insp-kv .insp-dropdown .ui-dropdown-trigger[aria-expanded="true"] {
+  background: var(--hover-bg);
+  box-shadow: none;
+}
+
+.insp-kv .insp-dropdown .ui-dropdown-trigger:disabled {
+  color: var(--ink);
+  opacity: 1;
+}
+
+.insp-kv .insp-dropdown .ui-dropdown-trigger:disabled .ui-select-caret {
+  display: none;
+}
+
+.insp-kv .insp-dropdown .ui-select-caret {
+  color: var(--faint);
+}
+
+.insp-kv .insp-dropdown .is-placeholder {
+  color: var(--muted);
+}
+
+/* 标签：一枚一枚的小块，「添加」是一个没框的输入 */
+.insp-kv .task-label-editor {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+}
+
+.insp-kv .task-label-editor > button {
+  display: inline-flex;
+  max-width: 100%;
+  height: 22px;
+  align-items: center;
+  gap: 2px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--overlay);
+  padding: 0 4px 0 8px;
+  color: var(--ink);
+  font-size: var(--t-xs);
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.insp-kv .task-label-editor > button:hover:not(:disabled) {
+  background: var(--sel-bg);
+}
+
+.insp-kv .task-label-editor > button > svg {
+  width: 12px;
+  height: 12px;
+  color: var(--faint);
+}
+
+.insp-kv .task-label-editor > button:disabled {
+  padding-right: 8px;
+}
+
+.insp-kv .task-label-editor > button:disabled > svg {
+  display: none;
+}
+
+.insp-kv .task-label-editor > label {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  color: var(--muted);
+}
+
+.insp-kv .task-label-editor > label > svg {
+  display: none;
+}
+
+.insp-kv .task-label-editor input {
+  width: 4em;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--ink);
+  font-size: var(--t-xs);
+  outline: 0;
+}
+
+.insp-kv .task-label-editor input::placeholder {
+  color: var(--muted);
+}
+
+/* 调度的时间框 */
+.insp-kv .schedule-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--faint);
+}
+
+.insp-kv .schedule-field input {
+  min-width: 0;
+  height: 28px;
+  flex: 1;
+  border: 1px solid var(--line2);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  padding: 0 8px;
+  color: var(--ink);
+  font-size: var(--t-sm);
+  outline: 0;
+}
+
+.insp-kv .schedule-field input:focus {
+  border-color: var(--focus-soft);
+}
+
+.task-inspector > .insp-note {
+  margin: 14px 0 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .insp-bar > i,
+  .insp-req,
+  .insp-kv .insp-dropdown .ui-dropdown-trigger {
+    transition: none;
+  }
+}

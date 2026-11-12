@@ -75,7 +75,7 @@ export function ScheduleFields({
   );
 }
 
-function scheduleSummary(schedule: Schedule | null): string {
+export function scheduleSummary(schedule: Schedule | null): string {
   if (!schedule) return "未设置定时";
   if (!schedule.enabled) return schedule.kind === "once" ? "这次定时已执行；保存可重新启用" : "定时已停用";
   if (schedule.kind === "once") {
@@ -85,17 +85,11 @@ function scheduleSummary(schedule: Schedule | null): string {
   return `按本地时间运行 · ${schedule.cron ?? "未配置"}${lastRun}`;
 }
 
-export function ScheduleControl({
-  taskId,
-  notify,
-  disabled = false,
-  className = "",
-}: {
-  taskId: string;
-  notify: (message: string) => void;
-  disabled?: boolean;
-  className?: string;
-}) {
+/**
+ * 一个任务的定时：读、改草稿、保存 / 清除、Cron 立即触发。这里这颗表单和右侧「信息」格里
+ * 那一行（task-detail/InfoSchedule.tsx）用同一份，两处只是排法不同。
+ */
+export function useScheduleDraft(taskId: string, notify: (message: string) => void) {
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [kind, setKind] = useState<ScheduleDraftKind>("none");
   const [at, setAt] = useState("");
@@ -181,6 +175,21 @@ export function ScheduleControl({
     }
   };
 
+  return { schedule, kind, at, cron, loading, saving, firing, loadError, dirty, setAt, setCron, changeKind, save, fire };
+}
+
+export function ScheduleControl({
+  taskId,
+  notify,
+  disabled = false,
+  className = "",
+}: {
+  taskId: string;
+  notify: (message: string) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const { schedule, kind, at, cron, loading, saving, firing, loadError, dirty, setAt, setCron, changeKind, save, fire } = useScheduleDraft(taskId, notify);
   const unavailable = disabled || loading || saving || firing;
   return (
     <div className={`schedule-control ${className}`.trim()}>
