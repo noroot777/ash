@@ -3,6 +3,7 @@ import { isVisibleExecutionEvent, type ExecutionEvent } from "../lib/executionTr
 import { describeEvent, isFlatStep, liveLabel, pastSummary, type StepView } from "../lib/executionWords.ts";
 import { useSwapText } from "../lib/useSwapText.ts";
 import { useNow } from "../lib/useNow.ts";
+import { isCompactionEvent } from "../task-detail/compactionMarkers.ts";
 import { formatDuration } from "../task-detail/utils.ts";
 import "./live-strip.css";
 
@@ -85,7 +86,7 @@ export function hasExecutionError(events: ExecutionEvent[]): boolean {
 
 /** 这一串里有没有过程提示(上游重试之类)。折叠条据此上一层琥珀,但**不是**报错。 */
 export function hasExecutionNotice(events: ExecutionEvent[]): boolean {
-  return events.some((event) => event.kind === "notice");
+  return events.some((event) => event.kind === "notice" && !isCompactionEvent(event));
 }
 
 /** 折叠块外壳的类名:异常压过提示 —— 真出事了就别让琥珀把红色顶掉。 */

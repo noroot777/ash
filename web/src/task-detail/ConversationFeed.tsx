@@ -22,6 +22,7 @@ import { NoticeLine, noticeTail, SystemAuthoredMessage } from "./SystemNotice.ts
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
 import { noticeView, turnFailureView } from "./timelineNoticeCopy.ts";
 import { crashedTurns } from "./turnFailure.ts";
+import { liftCompactionMarkers } from "./compactionMarkers.ts";
 import { TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts } from "./TurnReceipts.tsx";
 import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
@@ -230,7 +231,7 @@ export function ConversationFeed({
   const { items: noticeItems, remedy: turnRemedy, reload: reloadNotices } = useRejectionNotices(task.id);
   // 哨兵叫醒那几下并回等它的那一回合（feed-7，见 monitorWakeTurns）。
   const items = useMemo(
-    () => foldMonitorWakes(bodyReady ? mergeNoticeItems(feedItems, noticeItems) : feedItems),
+    () => foldMonitorWakes(liftCompactionMarkers(bodyReady ? mergeNoticeItems(feedItems, noticeItems) : feedItems)),
     [bodyReady, feedItems, noticeItems],
   );
   const requirementText = requirement?.text;

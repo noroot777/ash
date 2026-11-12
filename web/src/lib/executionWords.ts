@@ -6,6 +6,7 @@
 // 都是「文件」时后一类省掉名词。只有一步时直接说那一步:「读了 ReplyBox.tsx」。
 import { isVisibleExecutionEvent, type ExecutionEvent } from "./executionTrace.ts";
 import { describeTool, joinVerb, type StepKind, type StepPhrase } from "./toolPhrase.ts";
+import { COMPACTED, COMPACTING, isCompactionEvent } from "../task-detail/compactionMarkers.ts";
 
 export type StepView = StepPhrase & { tone: "tool" | "thinking" | "error" | "notice" };
 
@@ -28,6 +29,8 @@ function plain(tone: StepView["tone"], verb: string, text: string): StepView {
 export function describeEvent(event: ExecutionEvent): StepView {
   if (event.kind === "tool") return { ...describeTool(event), tone: "tool" };
   if (event.kind === "thinking") return plain("thinking", "思考", event.detail ?? "");
+  // 压缩上下文是这一轮中途发生的事，一句话说完（run-9）。
+  if (isCompactionEvent(event)) return plain("notice", event.detail ?? COMPACTED, "");
   // 提示的正文在 detail 里(label 恒为「提示」,见 conversationSegments 的 auxEvent)。
   if (event.kind === "notice") return plain("notice", event.label || "提示", event.detail ?? "");
   // 异常的话在 label 里;有 detail 的(少见)点开看。
@@ -50,8 +53,11 @@ export function isFlatStep(view: StepView): boolean {
 export function liveLabel(events: ExecutionEvent[], awaiting: boolean): string {
   const visible = events.filter(isVisibleExecutionEvent);
   const latest = visible.at(-1);
+  // 压着的时候进行条那一行就写这件事（run-9）。
+  if (latest && isCompactionEvent(latest) && latest.detail === COMPACTING) return COMPACTING;
   if (awaiting && latest?.kind === "notice") return collapse(latest.detail ?? "") || "正在等上游回话";
   const step = [...visible].reverse().find((event) => event.kind !== "notice");
+  if (!step && latest && isCompactionEvent(latest)) return COMPACTED;
   if (!step) return pastSummary(visible);
   // 跟进行条那一档同一个说法(样机 live-words.js 的 thinkWord):在想 / 想了一会儿。
   if (step.kind === "thinking") return "在想";
@@ -77,7 +83,9 @@ export function pastSummary(events: ExecutionEvent[]): string {
   const tools = visible.filter((event) => event.kind === "tool").map(describeTool);
   const done = tools.filter((step) => !step.failed);
   const failed = tools.length - done.length;
-  const notices = visible.filter((event) => event.kind === "notice").length;
+  // 压缩上下文不算「提示」：它不是上游闹脾气（run-9），只有它的那一段就说它。
+  const compactions = visible.filter(isCompactionEvent);
+  const notices = visible.filter((event) => event.kind === "notice" && !isCompactionEvent(event)).length;
   const errors = visible.filter((event) => event.kind === "error").length;
   const thinking = visible.some((event) => event.kind === "thinking");
 
@@ -107,5 +115,6 @@ export function pastSummary(events: ExecutionEvent[]): string {
     notices ? `${notices} 条提示` : "",
     errors ? `${errors} 处异常` : "",
   ].filter(Boolean);
+  if (!head.length && !tail.length && compactions.length) return compactions.at(-1)!.detail ?? COMPACTED;
   return [...head, ...tail].join("，") || "执行过程";
 }
