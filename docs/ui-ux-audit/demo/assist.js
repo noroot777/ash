@@ -119,7 +119,7 @@
     const offKeys = ASH.on('sendkey:change', () => { if (keys.isConnected) paintKeys(); else offKeys(); });
     paintKeys();
     const ctx = h('p.as-ctx', { role: 'status', hidden: true });
-    const card = h('div.as-box', {}, input, h('footer', {}, left, hint, send));
+    const card = h('div.as-box.inbox', {}, input, h('footer', {}, left, hint, send));
     const el = h('div.as-reply', {}, h('div.as-live', { role: 'status' }, live, stop), ctx, card,
       h('div.as-keys', {}, keys, tail && h('i', tail)));
     return { el, card, input,

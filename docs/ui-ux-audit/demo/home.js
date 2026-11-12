@@ -251,7 +251,7 @@
 
     const el = h('div.cmp', {},
       modes && h('div.modes.enter', {}, modes),
-      h('div.card.box', { 'data-m': mark }, area, files,
+      h('div.inbox.box', { 'data-m': mark }, area, files,
         /* 发送键是这张卡的主动作，守在右下角（和回复框一个落点）；「?」是三级入口，排在左边那排选项的末尾 */
         h('div.foot', {}, clip, h('div.opts', {}, compact ? [opts.where.btn, expand, help] : [opts.work.btn, opts.where.btn, opts.org.btn, more, help]),
           h('span.grow'), caps.el, run, opts.cast?.btn, send.el),

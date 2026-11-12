@@ -187,10 +187,8 @@ button.as-name:active { background: var(--sel-bg); }
 .as-stop:hover { background: var(--red-bg); color: var(--red); }
 .as-stop > .i { fill: currentColor; }
 .as-ctx { padding-bottom: 6px; color: var(--muted); font-size: var(--t-xs); line-height: 1.6; }
-/* 外框和聚焦的样子同任务页回复框（reply.css）：输入框铺满整张卡，焦点提示由卡片自己承担 */
-.as-box { position: relative; border-radius: var(--r-lg); background: var(--panel); box-shadow: 0 0 0 1px var(--line2), var(--surface-shadow); transition: box-shadow var(--dur-1) var(--ease-out); }
-.as-box:focus-within { box-shadow: 0 0 0 1px color-mix(in oklab, var(--focus-ring) 55%, var(--line2)), var(--surface-shadow); }
-.as-box > textarea { display: block; width: 100%; min-height: 74px; max-height: 190px; padding: 14px 15px 8px; border: 0; outline: 0; resize: none; background: none; line-height: 1.7; }
+/* 外框、底色、聚焦时的环是公共的 .inbox（base.css），和任务页回复框是同一张 */
+.as-box > textarea { display: block; width: 100%; min-height: 74px; max-height: 190px; padding: 14px 15px 8px; line-height: 1.7; }
 .as-box > footer { display: flex; align-items: center; gap: 9px; padding: 6px 9px 9px 11px; }
 .as-box > footer > .grow { color: var(--muted); font-size: var(--t-xs); overflow-wrap: anywhere; }
 .as-send { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: var(--r-md); background: var(--tone); color: var(--on-accent); }

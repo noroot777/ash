@@ -19,10 +19,8 @@
 .sv-new .modes { display: flex; height: 28px; margin-bottom: 12px; }
 .sv-new .modes .seg > button { display: inline-flex; align-items: center; gap: 6px; }
 
-/* 输入卡：外框用公共的 .card；焦点画在卡片上，不画在输入区上（和回复框一个画法） */
-.sv-home .box:focus-within { box-shadow: 0 0 0 1px color-mix(in oklab, var(--focus-ring) 55%, var(--line2)), var(--surface-shadow); }
-.sv-home .draft { display: block; width: 100%; min-height: 92px; max-height: 40vh; padding: 14px 16px 6px; border: 0; background: none; resize: none; overflow-y: auto; font-size: var(--t-md); line-height: 24px; }
-.sv-home .draft:focus-visible { outline: 0; }
+/* 输入卡：外框、底色、聚焦时的环都是公共的 .inbox（base.css），和回复框是同一张 */
+.sv-home .draft { display: block; width: 100%; min-height: 92px; max-height: 40vh; padding: 14px 16px 6px; overflow-y: auto; font-size: var(--t-md); line-height: 24px; }
 
 .sv-home .files { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 12px 0; }
 .sv-home .file { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; height: 24px; padding: 0 2px 0 8px; border-radius: var(--r-sm); background: var(--raised); color: var(--muted); font-size: var(--t-xs); }
