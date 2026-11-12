@@ -3,7 +3,7 @@
    「已经选好项目了」,而这一屏存在的理由正是还没有。
 
    配色只用 global.css `:root` 里真实存在的令牌(--chrome/--panel/--raised/--ink/
-   --muted/--line/--accent),淡底一律 color-mix(in srgb, …) —— 理由见 auth.css 顶部
+   --muted/--line/--accent),淡底一律 color-mix(in oklab, …) —— 理由见 auth.css 顶部
    (--panel/--line 是零彩度的,在 lch 里混色会把一个没有意义的色相插值进来)。
 
    卡片比登录那张宽(760 而不是 560):里面摊着的是设置页那几个真组件(供应商表单的
@@ -72,15 +72,15 @@
 }
 
 .onboarding-rail-step.is-on {
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
-  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  border-color: color-mix(in oklab, var(--accent) 40%, var(--line));
+  background: color-mix(in oklab, var(--accent) 8%, var(--panel));
   color: var(--ink);
   font-weight: var(--w-medium);
 }
 
 .onboarding-rail-step.is-done i {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
-  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--line));
+  background: color-mix(in oklab, var(--accent) 14%, var(--panel));
   color: var(--accent);
 }
 
@@ -244,7 +244,7 @@
 }
 
 .onboarding-pick.is-on {
-  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+  background: color-mix(in oklab, var(--accent) 9%, var(--panel));
   box-shadow: inset 2px 0 0 var(--accent);
 }
 

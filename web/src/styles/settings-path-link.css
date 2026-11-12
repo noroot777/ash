@@ -25,6 +25,6 @@
 }
 
 @keyframes settings-anchor-flash {
-  0%, 55% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent); }
+  0%, 55% { box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 55%, transparent); }
   100% { box-shadow: 0 0 0 2px transparent; }
 }

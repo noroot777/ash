@@ -24,7 +24,7 @@
 .gwb-design button { cursor: pointer; border: none; background: none; padding: 0; }
 .gwb-design code, .gwb-design .mono { font-family: var(--font-mono); }
 .gwb-design ::placeholder { color: var(--faint); }
-.gwb-design ::selection { background: color-mix(in lch, var(--accent) 18%, transparent); }
+.gwb-design ::selection { background: color-mix(in oklab, var(--accent) 18%, transparent); }
 .gwb-design :focus-visible { outline: 1px solid var(--focus-ring); outline-offset: 0; }
 .gwb-design [disabled], .gwb-design .is-disabled { cursor: default; opacity: 0.42; pointer-events: none; }
 .gwb-design .is-hidden { display: none !important; }
@@ -94,7 +94,7 @@
 .gwb-design .lock-chip {
   display: inline-flex; align-items: center; gap: 5px;
   height: 24px; padding: 0 9px; border-radius: 9999px;
-  background: color-mix(in lch, var(--amber) 14%, var(--panel));
+  background: color-mix(in oklab, var(--amber) 14%, var(--panel));
   color: var(--amber); font-size: 11px; font-weight: 550;
 }
 
@@ -107,9 +107,9 @@
 }
 .gwb-design .banner b { font-weight: 600; }
 .gwb-design .banner span { color: var(--muted); }
-.gwb-design .banner-conflict { background: color-mix(in lch, var(--red) 8%, var(--canvas)); color: var(--red); }
-.gwb-design .banner-conflict span { color: color-mix(in lch, var(--red) 55%, var(--muted)); }
-.gwb-design .banner-lock { background: color-mix(in lch, var(--amber) 9%, var(--canvas)); color: var(--amber); }
+.gwb-design .banner-conflict { background: color-mix(in oklab, var(--red) 8%, var(--canvas)); color: var(--red); }
+.gwb-design .banner-conflict span { color: color-mix(in oklab, var(--red) 55%, var(--muted)); }
+.gwb-design .banner-lock { background: color-mix(in oklab, var(--amber) 9%, var(--canvas)); color: var(--amber); }
 
 /* ---------- 主区 ---------- */
 .gwb-design .shell { display: flex; flex: 1; min-height: 0; }
@@ -150,7 +150,7 @@
 .gwb-design .ui-btn.primary:hover { background: var(--action-hover); }
 .gwb-design .ui-btn.primary:active { background: var(--action-active); }
 .gwb-design .ui-btn.primary.danger { background: var(--red); }
-.gwb-design .ui-btn.primary.danger:hover { background: color-mix(in lch, var(--red) 88%, var(--ink)); }
+.gwb-design .ui-btn.primary.danger:hover { background: color-mix(in oklab, var(--red) 88%, var(--ink)); }
 .gwb-design .mini-btn {
   display: inline-flex; align-items: center; gap: 4px;
   height: 22px; padding: 0 8px; border-radius: 6px;
@@ -260,9 +260,9 @@
 }
 .gwb-design .diff-hunk-head {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 4px 8px; background: color-mix(in lch, var(--accent) 8%, var(--panel));
+  padding: 4px 8px; background: color-mix(in oklab, var(--accent) 8%, var(--panel));
 }
-.gwb-design .diff-hunk-header { font-size: 10px; color: color-mix(in lch, var(--accent) 72%, var(--ink)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gwb-design .diff-hunk-header { font-size: 10px; color: color-mix(in oklab, var(--accent) 72%, var(--ink)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gwb-design .diff-hunk-actions { display: flex; gap: 4px; flex: 0 0 auto; }
 .gwb-design .diff-lines { font-family: var(--font-mono); font-size: 10.5px; line-height: 1.6; }
 .gwb-design .diff-line { display: flex; }
@@ -274,9 +274,9 @@
 .gwb-design .diff-sign { flex: 0 0 16px; text-align: center; color: var(--faint); user-select: none; }
 .gwb-design .diff-code { white-space: pre; padding-right: 10px; color: var(--muted); }
 .gwb-design .diff-line.t-add { background: var(--green-bg); }
-.gwb-design .diff-line.t-add .diff-code { color: color-mix(in lch, var(--green) 72%, var(--ink)); }
+.gwb-design .diff-line.t-add .diff-code { color: color-mix(in oklab, var(--green) 72%, var(--ink)); }
 .gwb-design .diff-line.t-del { background: var(--red-bg); }
-.gwb-design .diff-line.t-del .diff-code { color: color-mix(in lch, var(--red) 72%, var(--ink)); }
+.gwb-design .diff-line.t-del .diff-code { color: color-mix(in oklab, var(--red) 72%, var(--ink)); }
 .gwb-design .diff-line.is-pickable { cursor: pointer; }
 .gwb-design .diff-line.is-pickable:hover { filter: brightness(0.96); }
 .gwb-design .diff-line.is-picked { outline: 1.5px solid var(--accent); outline-offset: -1.5px; }
@@ -291,7 +291,7 @@
 .gwb-design .kind-M { background: var(--accent-soft); color: var(--accent); }
 .gwb-design .kind-A, .gwb-design .kind-U { background: var(--green-bg); color: var(--green); }
 .gwb-design .kind-D { background: var(--red-bg); color: var(--red); }
-.gwb-design .kind-R, .gwb-design .kind-C, .gwb-design .kind-T { background: color-mix(in lch, var(--cyan) 14%, var(--panel)); color: var(--cyan); }
+.gwb-design .kind-R, .gwb-design .kind-C, .gwb-design .kind-T { background: color-mix(in oklab, var(--cyan) 14%, var(--panel)); color: var(--cyan); }
 .gwb-design .kind-\! { background: var(--red); color: #fff; }
 .gwb-design .stat { display: inline-flex; gap: 5px; font-size: 10px; font-family: var(--font-mono); flex: 0 0 auto; }
 .gwb-design .stat-add { font-style: normal; color: var(--green); }

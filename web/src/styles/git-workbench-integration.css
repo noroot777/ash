@@ -51,7 +51,7 @@
 .gwb-design .gwb-diff-footer .diff-tip { margin: 0; }
 .gwb-design .gwb-diff-feedback { margin: 0 0 8px; font-size: 11px; color: var(--muted); }
 .gwb-design .gwb-diff-line { border: none; border-radius: 0; box-shadow: none; width: 100%; padding: 0; text-align: left; min-height: 16px; font: inherit; }
-.gwb-design button.gwb-diff-line.is-hunk { width: auto; font: 10px var(--font-mono); min-height: 18px; color: color-mix(in lch, var(--accent) 72%, var(--ink)); }
+.gwb-design button.gwb-diff-line.is-hunk { width: auto; font: 10px var(--font-mono); min-height: 18px; color: color-mix(in oklab, var(--accent) 72%, var(--ink)); }
 .gwb-design .diff-lines { overflow-x: auto; }
 .gwb-design .diff-line { min-width: max-content; width: 100%; }
 .gwb-design .gwb-diff-number { user-select: none; }
@@ -135,7 +135,7 @@
 .gwb-design .gwb-push-raw { position: relative; margin: 6px 0 2px; }
 .gwb-design .gwb-push-raw > pre { margin: 0; max-height: 160px; overflow: auto; padding: 8px 36px 8px 10px; border-radius: var(--r-sm); background: var(--panel); font: var(--w-regular) var(--t-xs)/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .gwb-design .gwb-push-raw > .icon-btn { position: absolute; top: 4px; right: 4px; }
-.gwb-design .gwb-operation { font-size: 12px; background: color-mix(in lch, var(--red) 8%, var(--canvas)); border-bottom: .5px solid var(--line); padding: 7px 14px; }
+.gwb-design .gwb-operation { font-size: 12px; background: color-mix(in oklab, var(--red) 8%, var(--canvas)); border-bottom: .5px solid var(--line); padding: 7px 14px; }
 .gwb-design .gwb-operation > header { display: flex; align-items: center; gap: 8px; color: var(--red); flex-wrap: wrap; }
 .gwb-design .gwb-operation > header > span { color: var(--muted); }
 .gwb-design .gwb-operation .gwb-inline-actions { margin-left: auto; }

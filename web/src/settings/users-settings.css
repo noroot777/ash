@@ -11,7 +11,7 @@
   padding: 14px 16px;
   border: 1px solid var(--accent);
   border-radius: 10px;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
   font-size: var(--t-sm);
   line-height: 1.7;
 }

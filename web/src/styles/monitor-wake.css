@@ -1,6 +1,6 @@
 .monitor-wake-input {
-  --wake-line: color-mix(in lch, var(--accent) 10%, var(--line));
-  --wake-tint: color-mix(in lch, var(--accent) 5%, var(--panel));
+  --wake-line: color-mix(in oklab, var(--accent) 10%, var(--line));
+  --wake-tint: color-mix(in oklab, var(--accent) 5%, var(--panel));
   display: flex;
   min-width: 0;
   justify-content: flex-end;
@@ -15,7 +15,7 @@
   border: 1px solid var(--wake-line);
   border-radius: 12px 5px 12px 12px;
   background: var(--panel);
-  box-shadow: 0 2px 5px color-mix(in lch, var(--ink) 3%, transparent);
+  box-shadow: 0 2px 5px color-mix(in oklab, var(--ink) 3%, transparent);
 }
 
 .monitor-wake-input.is-team { padding-left: 42px; }
@@ -57,16 +57,16 @@
 .monitor-wake-source { display: flex; align-items: baseline; gap: 7px; margin: 5px 0 12px; color: var(--muted); font-size: 10.5px; line-height: 1.65; }
 .monitor-wake-source-label { flex: none; color: var(--faint); font-size: 9px; }
 .monitor-wake-source > span:last-child { min-width: 0; overflow-wrap: anywhere; }
-.monitor-wake-payload { min-width: 0; border-radius: 6px; padding: 10px 12px; background: color-mix(in lch, var(--canvas) 80%, var(--panel)); }
+.monitor-wake-payload { min-width: 0; border-radius: 6px; padding: 10px 12px; background: color-mix(in oklab, var(--canvas) 80%, var(--panel)); }
 .monitor-wake-payload-label { margin: 0 0 7px; color: var(--faint); font-size: 9px; }
-.monitor-wake-excerpt { border-left: 2px solid color-mix(in lch, var(--accent) 25%, var(--line)); padding-left: 10px; }
+.monitor-wake-excerpt { border-left: 2px solid color-mix(in oklab, var(--accent) 25%, var(--line)); padding-left: 10px; }
 .monitor-wake-excerpt + .monitor-wake-excerpt { margin-top: 10px; }
 .monitor-wake-excerpt > span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
 .monitor-wake-excerpt pre, .monitor-wake-payload > pre, .monitor-wake-raw pre { margin: 0; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 10.5px; line-height: 1.75; white-space: pre-wrap; }
-.monitor-wake-excerpt pre, .monitor-wake-payload > pre { color: color-mix(in lch, var(--ink) 85%, var(--muted)); }
-.monitor-wake-caution { display: flex; width: fit-content; align-items: center; gap: 5px; margin: 9px 0 0; color: color-mix(in lch, var(--amber) 70%, var(--muted)); font-size: 10px; }
+.monitor-wake-excerpt pre, .monitor-wake-payload > pre { color: color-mix(in oklab, var(--ink) 85%, var(--muted)); }
+.monitor-wake-caution { display: flex; width: fit-content; align-items: center; gap: 5px; margin: 9px 0 0; color: color-mix(in oklab, var(--amber) 70%, var(--muted)); font-size: 10px; }
 .monitor-wake-omitted { margin: 7px 0 0; color: var(--muted); font-size: 10px; line-height: 1.7; }
-.monitor-wake-raw { border-top: 1px solid color-mix(in lch, var(--line) 65%, transparent); }
+.monitor-wake-raw { border-top: 1px solid color-mix(in oklab, var(--line) 65%, transparent); }
 .monitor-wake-raw summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 10px 16px; list-style: none; cursor: pointer; }
 .monitor-wake-raw summary::-webkit-details-marker { display: none; }
 .monitor-wake-delivery { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; color: var(--muted); font-size: 9.5px; }

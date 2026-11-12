@@ -4,7 +4,7 @@
    执行者记录卡等)。 */
 .single-review-workspace,.team-review-workspace { display:flex; min-height:0; flex:1; flex-direction:column; background:var(--canvas); }
 .single-review-subbar,.team-review-subbar { display:flex; min-height:52px; max-height:60%; flex:0 0 auto; flex-wrap:wrap; overflow-y:auto; overscroll-behavior:contain; align-items:center; gap:10px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
-.accept-workspace-commit { display: flex; flex: 1 0 100%; align-items: flex-start; gap: 9px; border: 1px solid color-mix(in lch, var(--amber) 35%, var(--line)); border-radius: 9px; background: color-mix(in lch, var(--amber) 6%, var(--panel)); padding: 11px 12px; color: var(--amber); font-size: 11px; }
+.accept-workspace-commit { display: flex; flex: 1 0 100%; align-items: flex-start; gap: 9px; border: 1px solid color-mix(in oklab, var(--amber) 35%, var(--line)); border-radius: 9px; background: color-mix(in oklab, var(--amber) 6%, var(--panel)); padding: 11px 12px; color: var(--amber); font-size: 11px; }
 .accept-workspace-commit > svg { flex-shrink: 0; margin-top: 2px; }
 .accept-workspace-commit > div:first-of-type { min-width: 0; flex: 1; }
 .accept-workspace-commit p { margin: 5px 0; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
@@ -25,17 +25,17 @@
 .single-review-subbar > button:hover,.single-review-subbar > a:hover,.team-review-subbar > button:hover,.team-review-subbar > a:hover { background:var(--raised); color:var(--ink); }
 .single-review-scroll,.team-review-scroll { min-height:0; flex:1; overflow-y:auto; padding:18px clamp(14px,3vw,34px) 38px; }
 .single-review-stack,.team-review-stack { display:flex; width:100%; max-width:1180px; margin:0 auto; flex-direction:column; gap:14px; }
-.single-review-shared-badge { display:inline-flex; height:27px; align-items:center; border:1px solid color-mix(in lch,var(--cyan) 28%,var(--line)); border-radius:7px; background:color-mix(in lch,var(--cyan) 6%,var(--panel)); padding:0 8px; color:var(--cyan); font-size:10px; font-weight:650; }
+.single-review-shared-badge { display:inline-flex; height:27px; align-items:center; border:1px solid color-mix(in oklab,var(--cyan) 28%,var(--line)); border-radius:7px; background:color-mix(in oklab,var(--cyan) 6%,var(--panel)); padding:0 8px; color:var(--cyan); font-size:10px; font-weight:650; }
 .single-review-facts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:0; }
 .single-review-facts > div { min-width:0; border:1px solid var(--line); border-radius:7px; background:var(--panel); padding:7px 8px; }
 .single-review-facts dt { color:var(--faint); font-size:9px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
 .single-review-facts dd { display:flex; min-width:0; align-items:center; gap:4px; overflow:hidden; margin:3px 0 0; color:var(--muted); font-family:var(--font-mono); font-size:9.5px; text-overflow:ellipsis; white-space:nowrap; }
-.single-review-shared-note { display:flex; align-items:center; gap:12px; border:1px solid color-mix(in lch,var(--cyan) 24%,var(--line)); border-radius:8px; background:color-mix(in lch,var(--cyan) 5%,var(--panel)); padding:9px 10px; }
+.single-review-shared-note { display:flex; align-items:center; gap:12px; border:1px solid color-mix(in oklab,var(--cyan) 24%,var(--line)); border-radius:8px; background:color-mix(in oklab,var(--cyan) 5%,var(--panel)); padding:9px 10px; }
 .single-review-shared-note > div { min-width:0; flex:1; }.single-review-shared-note b { color:var(--ink); font-size:10.5px; }.single-review-shared-note p { margin:2px 0 0; color:var(--muted); font-size:9.5px; line-height:1.5; }
 .single-review-shared-note > a { display:inline-flex; height:27px; flex:0 0 auto; align-items:center; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; color:var(--accent); font-size:9.5px; font-weight:600; }
 .single-review-loading,.single-review-error { display:flex; align-items:center; gap:6px; margin:0; border:1px dashed var(--line2); border-radius:8px; padding:18px; color:var(--faint); font-size:10.5px; }
 .single-review-error { color:var(--red); }
-.accepted-snapshot-card { display:grid; gap:9px; border:1px solid var(--line); border-radius:9px; background:var(--panel); padding:10px 11px; }.accepted-snapshot-card > header { display:grid; min-width:0; grid-template-columns:27px minmax(0,1fr) auto; align-items:center; gap:8px; }.accepted-snapshot-card > header > span { display:grid; width:27px; height:27px; place-items:center; border-radius:8px; background:color-mix(in lch,var(--cyan) 8%,var(--raised)); color:var(--cyan); }.accepted-snapshot-card header b,.accepted-snapshot-card header small { display:block; }.accepted-snapshot-card header b { font-size:10.5px; }.accepted-snapshot-card header small { margin-top:1px; color:var(--faint); font-size:9px; }.accepted-snapshot-card header em { color:var(--green); font-size:9px; font-style:normal; }.accepted-snapshot-card dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin:0; }.accepted-snapshot-card dl > div { min-width:0; border-radius:7px; background:var(--canvas); padding:6px 7px; }.accepted-snapshot-card dt { color:var(--faint); font-size:8.5px; }.accepted-snapshot-card dd { overflow:hidden; margin:2px 0 0; color:var(--muted); font-family:var(--font-mono); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }.accepted-snapshot-card > button { justify-self:start; border:0; background:transparent; padding:0; color:var(--accent); font-size:9.5px; text-align:left; }.accepted-snapshot-card > button:hover { text-decoration:underline; }
+.accepted-snapshot-card { display:grid; gap:9px; border:1px solid var(--line); border-radius:9px; background:var(--panel); padding:10px 11px; }.accepted-snapshot-card > header { display:grid; min-width:0; grid-template-columns:27px minmax(0,1fr) auto; align-items:center; gap:8px; }.accepted-snapshot-card > header > span { display:grid; width:27px; height:27px; place-items:center; border-radius:8px; background:color-mix(in oklab,var(--cyan) 8%,var(--raised)); color:var(--cyan); }.accepted-snapshot-card header b,.accepted-snapshot-card header small { display:block; }.accepted-snapshot-card header b { font-size:10.5px; }.accepted-snapshot-card header small { margin-top:1px; color:var(--faint); font-size:9px; }.accepted-snapshot-card header em { color:var(--green); font-size:9px; font-style:normal; }.accepted-snapshot-card dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin:0; }.accepted-snapshot-card dl > div { min-width:0; border-radius:7px; background:var(--canvas); padding:6px 7px; }.accepted-snapshot-card dt { color:var(--faint); font-size:8.5px; }.accepted-snapshot-card dd { overflow:hidden; margin:2px 0 0; color:var(--muted); font-family:var(--font-mono); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }.accepted-snapshot-card > button { justify-self:start; border:0; background:transparent; padding:0; color:var(--accent); font-size:9.5px; text-align:left; }.accepted-snapshot-card > button:hover { text-decoration:underline; }
 /* 提交横铺一条，宽度全留给下面的「改动文件 + diff」（理由见 CommitStrip.tsx）。 */
 .single-review-content { display:grid; min-width:0; gap:10px; }
 /* 分支 → 合入目标 + 提交，压成一条元信息行（理由见 ChangeMetaBar.tsx）。 */
@@ -97,13 +97,13 @@
 .single-review-diff > header small { color:var(--faint); font-size:9px; }
 .single-review-zoom { display:inline-flex; height:24px; flex:0 0 auto; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:9.5px; }
 .single-review-zoom:hover { background:var(--raised); color:var(--ink); }
-.single-review-zoom[aria-pressed="true"] { border-color:color-mix(in lch,var(--accent) 40%,var(--line2)); color:var(--accent); }
+.single-review-zoom[aria-pressed="true"] { border-color:color-mix(in oklab,var(--accent) 40%,var(--line2)); color:var(--accent); }
 /* 放大层里的分支 diff：从固定高度改成撑满这一屏。层本身的定位、层高见 `zoom-layer.css`。 */
 .zoom-layer--review > .single-review-diff-layout { min-height:0; flex:1; }
 .zoom-layer--review .single-review-files,.zoom-layer--review .single-review-diff { display:flex; min-height:0; flex-direction:column; }
 .zoom-layer--review .single-review-files > div { max-height:none; flex:1; }
 .zoom-layer--review .single-review-code { max-height:none; flex:1; }
-.single-review-warning { display:flex; align-items:center; gap:6px; border-bottom:.5px solid color-mix(in lch,var(--amber) 25%,var(--line)); background:color-mix(in lch,var(--amber) 7%,var(--panel)); padding:7px 10px; color:var(--amber); font-size:9.5px; }
+.single-review-warning { display:flex; align-items:center; gap:6px; border-bottom:.5px solid color-mix(in oklab,var(--amber) 25%,var(--line)); background:color-mix(in oklab,var(--amber) 7%,var(--panel)); padding:7px 10px; color:var(--amber); font-size:9.5px; }
 .single-review-empty { display:grid; min-height:140px; place-items:center; border:1px dashed var(--line2); border-radius:8px; background:var(--panel); padding:18px; color:var(--faint); font-size:10.5px; text-align:center; }
 .single-review-diff .single-review-empty { border:0; border-radius:0; }
 .single-review-code { max-height:620px; overflow:auto; background:var(--canvas); font-family:var(--font-mono); font-size:10px; line-height:1.55; }
@@ -112,9 +112,9 @@
 .single-review-line > .single-review-new { left:46px; }
 .single-review-line > code { display:block; padding:0 10px; color:var(--muted); white-space:pre; }
 .single-review-line.is-add { background:var(--green-bg); }
-.single-review-line.is-add > code { color:color-mix(in lch,var(--green) 72%,var(--ink)); }
+.single-review-line.is-add > code { color:color-mix(in oklab,var(--green) 72%,var(--ink)); }
 .single-review-line.is-delete { background:var(--red-bg); }
-.single-review-line.is-delete > code { color:color-mix(in lch,var(--red) 72%,var(--ink)); }
+.single-review-line.is-delete > code { color:color-mix(in oklab,var(--red) 72%,var(--ink)); }
 /* `@@` 段头 → 一条「这里跳过了一段没改的代码」的分隔条：淡底加上下两条细线，正文位置
    只放 git 给的上下文（所在函数），区间数字不印（行号栏里已经有了）。 */
 .single-review-line.is-hunk { border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:var(--raised); }
@@ -139,9 +139,9 @@
 .single-review-code.is-split .single-review-side > code { align-self:start; padding-left:calc(10px + 2ch); overflow-wrap:anywhere; text-indent:-2ch; white-space:pre-wrap; }
 .single-review-code.is-split .single-review-side + .single-review-side { border-left:1px solid var(--line); }
 .single-review-code.is-split .single-review-side.is-add { background:var(--green-bg); }
-.single-review-code.is-split .single-review-side.is-add > code { color:color-mix(in lch,var(--green) 72%,var(--ink)); }
+.single-review-code.is-split .single-review-side.is-add > code { color:color-mix(in oklab,var(--green) 72%,var(--ink)); }
 .single-review-code.is-split .single-review-side.is-delete { background:var(--red-bg); }
-.single-review-code.is-split .single-review-side.is-delete > code { color:color-mix(in lch,var(--red) 72%,var(--ink)); }
+.single-review-code.is-split .single-review-side.is-delete > code { color:color-mix(in oklab,var(--red) 72%,var(--ink)); }
 .single-review-code.is-split .single-review-side.is-empty { background:repeating-linear-gradient(135deg,var(--canvas),var(--canvas) 4px,var(--overlay) 4px,var(--overlay) 8px); }
 .single-review-code.is-split .single-review-line.is-span { grid-column:1/-1; grid-template-columns:1fr; min-width:0; }
 .single-review-code.is-split .single-review-line.is-span > code { overflow-wrap:anywhere; white-space:pre-wrap; }

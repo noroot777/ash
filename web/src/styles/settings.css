@@ -294,7 +294,7 @@
   justify-content: space-between;
   gap: 16px;
   border-top: 1px solid var(--line);
-  background: color-mix(in lch, var(--raised) 55%, var(--panel));
+  background: color-mix(in oklab, var(--raised) 55%, var(--panel));
   padding: 10px 14px;
   color: var(--muted);
   font-size: var(--t-xs);
@@ -405,7 +405,7 @@
 }
 
 .settings-icon-danger:hover {
-  background: color-mix(in srgb, var(--red) 7%, transparent);
+  background: color-mix(in oklab, var(--red) 7%, transparent);
   color: var(--red);
 }
 

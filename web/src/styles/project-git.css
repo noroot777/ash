@@ -119,7 +119,7 @@
 }
 .project-git-panel__running { align-items:flex-start; background:var(--overlay); color:var(--muted); }
 .project-git-panel__running > svg { flex:0 0 auto; margin-top:2px; color:var(--accent); }
-.project-git-panel__warn { background:color-mix(in lch,var(--amber) 8%,var(--panel)); color:var(--muted); }
+.project-git-panel__warn { background:color-mix(in oklab,var(--amber) 8%,var(--panel)); color:var(--muted); }
 .project-git-panel__warn > svg { flex:0 0 auto; color:var(--amber); }
 .project-git-panel__dirty { background:var(--overlay); color:var(--muted); }
 .project-git-panel__dirty > span { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -129,7 +129,7 @@
   color:var(--ink); font-size:var(--t-xs);
 }
 .project-git-panel__dirty button:hover { background:var(--hover-bg); }
-.project-git-panel__error { background:color-mix(in lch,var(--red) 9%,var(--panel)); color:var(--ink); }
+.project-git-panel__error { background:color-mix(in oklab,var(--red) 9%,var(--panel)); color:var(--ink); }
 .project-git-panel__ok { background:var(--overlay); color:var(--muted); }
 
 /* ── 分支一行一条 ── */

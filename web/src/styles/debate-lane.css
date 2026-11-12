@@ -43,15 +43,15 @@
   flex: none;
   place-items: center;
   border-radius: 50%;
-  background: color-mix(in lch, var(--accent) 13%, var(--panel));
+  background: color-mix(in oklab, var(--accent) 13%, var(--panel));
   color: var(--accent);
 }
-.debate-lane-head > b { flex: none; color: color-mix(in lch, var(--accent) 66%, var(--ink)); font-size: 11px; font-weight: 680; }
+.debate-lane-head > b { flex: none; color: color-mix(in oklab, var(--accent) 66%, var(--ink)); font-size: 11px; font-weight: 680; }
 .debate-lane-by { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .debate-lane-verdict { flex: none; border-radius: 999px; padding: 1px 7px; font-size: 9.5px; font-weight: 650; }
-.debate-lane-verdict.is-running { background: color-mix(in lch, var(--cyan) 11%, var(--panel)); color: color-mix(in lch, var(--cyan) 72%, var(--ink)); }
-.debate-lane-verdict.is-failed { background: color-mix(in lch, var(--red) 11%, var(--panel)); color: var(--red); }
-.debate-lane-verdict.is-verdict { background: color-mix(in lch, var(--amber) 12%, var(--panel)); color: var(--amber); }
+.debate-lane-verdict.is-running { background: color-mix(in oklab, var(--cyan) 11%, var(--panel)); color: color-mix(in oklab, var(--cyan) 72%, var(--ink)); }
+.debate-lane-verdict.is-failed { background: color-mix(in oklab, var(--red) 11%, var(--panel)); color: var(--red); }
+.debate-lane-verdict.is-verdict { background: color-mix(in oklab, var(--amber) 12%, var(--panel)); color: var(--amber); }
 .debate-lane-verdict.is-done { background: var(--raised); color: var(--muted); }
 .debate-lane-time { margin-left: auto; color: var(--faint); font-size: 9.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .debate-lane-actions { display: inline-flex; flex: none; align-items: center; gap: 5px; }
@@ -74,12 +74,12 @@
 /* 「去裁定」：辩论是为了裁定才开的，读完就该能当场决定。只在「这场辩论辩的正是此刻
    待裁定的那条驳回、且它已经说完」时才挂（判据在 ConversationFeed）。 */
 .debate-lane-actions > button.debate-lane-resolve {
-  border-color: color-mix(in lch, var(--accent) 40%, var(--line2));
-  background: color-mix(in lch, var(--accent) 10%, var(--panel));
+  border-color: color-mix(in oklab, var(--accent) 40%, var(--line2));
+  background: color-mix(in oklab, var(--accent) 10%, var(--panel));
   color: var(--accent);
 }
 .debate-lane-actions > button.debate-lane-resolve:hover {
-  background: color-mix(in lch, var(--accent) 18%, var(--panel));
+  background: color-mix(in oklab, var(--accent) 18%, var(--panel));
   color: var(--accent);
 }
 .debate-lane-body { padding: 12px 13px 6px; }
@@ -91,11 +91,11 @@
    同一张卡上同样两方各染两套色，读的人只会以为那是四种东西。 */
 .debate-lane-strip { display: inline-flex; flex: none; gap: 3px; }
 .debate-lane-strip i { width: 13px; height: 4px; border-radius: 2px; background: var(--line2); }
-.debate-lane-strip i.is-reviewer:is(.is-done, .is-speaking) { background: color-mix(in lch, var(--accent) 78%, var(--panel)); }
-.debate-lane-strip i.is-executor:is(.is-done, .is-speaking) { background: color-mix(in lch, var(--amber) 88%, var(--panel)); }
+.debate-lane-strip i.is-reviewer:is(.is-done, .is-speaking) { background: color-mix(in oklab, var(--accent) 78%, var(--panel)); }
+.debate-lane-strip i.is-executor:is(.is-done, .is-speaking) { background: color-mix(in oklab, var(--amber) 88%, var(--panel)); }
 /* 正在说的那格用呼吸区分，而不是换颜色：换色会跟「执行者」撞成同一种黄。 */
 .debate-lane-strip i.is-speaking { animation: debate-strip-pulse 1.1s ease-in-out infinite; }
-.debate-lane-strip i.is-error { background: color-mix(in lch, var(--red) 55%, var(--panel)); }
+.debate-lane-strip i.is-error { background: color-mix(in oklab, var(--red) 55%, var(--panel)); }
 
 @keyframes debate-strip-pulse {
   0%, 100% { opacity: .3; }

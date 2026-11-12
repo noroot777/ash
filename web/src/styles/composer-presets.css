@@ -4,9 +4,9 @@
 
 .composer-preset-bar {
   margin-top: 14px;
-  border: 1px solid color-mix(in lch, var(--accent) 18%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--accent) 18%, var(--line));
   border-radius: 10px;
-  background: color-mix(in lch, var(--accent) 3%, var(--canvas));
+  background: color-mix(in oklab, var(--accent) 3%, var(--canvas));
   padding: 10px;
 }
 
@@ -97,8 +97,8 @@
 }
 
 .composer-preset-card[aria-pressed="true"] {
-  border-color: color-mix(in lch, var(--accent) 54%, var(--line));
-  background: color-mix(in lch, var(--accent) 5%, var(--panel));
+  border-color: color-mix(in oklab, var(--accent) 54%, var(--line));
+  background: color-mix(in oklab, var(--accent) 5%, var(--panel));
   box-shadow: inset 0 2px var(--accent);
 }
 

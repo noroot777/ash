@@ -149,10 +149,10 @@
   --menu-shadow: lch(0 0 0 / 0.02) 0 6px 18px,
     lch(0 0 0 / 0.04) 0 3px 9px, lch(0 0 0 / 0.04) 0 1px 1px;
   /* 下面这几个在深色里不必另写：它们从上面那几个色推出来，跟着一起翻面。 */
-  --red-bg: color-mix(in lch, var(--red) 9%, var(--panel));
-  --amber-bg: color-mix(in lch, var(--amber) 10%, var(--panel));
-  --cyan-bg: color-mix(in lch, var(--cyan) 9%, var(--panel));
-  --violet-bg: color-mix(in lch, var(--violet) 10%, var(--panel));
+  --red-bg: color-mix(in oklab, var(--red) 9%, var(--panel));
+  --amber-bg: color-mix(in oklab, var(--amber) 10%, var(--panel));
+  --cyan-bg: color-mix(in oklab, var(--cyan) 9%, var(--panel));
+  --violet-bg: color-mix(in oklab, var(--violet) 10%, var(--panel));
   --violet: #7657b7;
   --accent-hover: #5560c4;
   --accent-active: #4d57b5;
@@ -306,7 +306,7 @@ code,
 }
 
 ::selection {
-  background: color-mix(in lch, var(--accent) 18%, transparent);
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
 }
 
 .run-activity {
@@ -328,7 +328,7 @@ code,
   gap: 2px;
   border-radius: 50%;
   background: var(--overlay);
-  color: color-mix(in lch, var(--accent) 55%, var(--faint));
+  color: color-mix(in oklab, var(--accent) 55%, var(--faint));
 }
 
 .run-activity-signal i {
@@ -441,9 +441,9 @@ select:focus-visible,
   bottom: 8px;
   z-index: 90;
   padding: 3px 9px;
-  border: 1px solid color-mix(in lch, var(--accent) 30%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 30%, transparent);
   border-radius: 9999px;
-  background: color-mix(in lch, var(--accent) 12%, var(--panel));
+  background: color-mix(in oklab, var(--accent) 12%, var(--panel));
   color: var(--faint);
   font-size: 10.5px;
   letter-spacing: 0.01em;

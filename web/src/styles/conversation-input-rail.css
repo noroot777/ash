@@ -28,7 +28,7 @@
   margin-top: -0.75px;
   border: 0;
   border-radius: 1px;
-  background: color-mix(in srgb, var(--faint) 55%, transparent);
+  background: color-mix(in oklab, var(--faint) 55%, transparent);
   padding: 0;
   pointer-events: none;
   transition: width 120ms ease-out, background-color 120ms ease-out;
@@ -49,11 +49,11 @@
   --glass-highlight: lch(100 0 0 / 0.55);
   --glass-shadow: lch(0 0 0 / 0.12) 0 18px 48px, lch(0 0 0 / 0.06) 0 4px 12px;
   /* 挑中那一行、键帽的底：叠在玻璃上的一层薄墨，不是又一块实色。 */
-  --glass-row: color-mix(in srgb, var(--ink) 10%, transparent);
+  --glass-row: color-mix(in oklab, var(--ink) 10%, transparent);
   /* 最淡那档字（时间、附件名）在玻璃上提一级。写 --color-faint 不写 --faint：自己引用自己会作废。 */
-  --faint: color-mix(in lch, var(--muted) 50%, var(--color-faint));
+  --faint: color-mix(in oklab, var(--muted) 50%, var(--color-faint));
   border: 1px solid var(--glass-edge);
-  background: color-mix(in srgb, var(--glass-tint) var(--glass-alpha), transparent);
+  background: color-mix(in oklab, var(--glass-tint) var(--glass-alpha), transparent);
   box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-shadow);
   backdrop-filter: blur(16px) saturate(160%);
   text-shadow: 0 0 6px var(--glass-tint), 0 0 12px var(--glass-tint);
@@ -67,7 +67,7 @@
   --glass-edge: lch(100 0 0 / 0.1);
   --glass-highlight: lch(100 0 0 / 0.07);
   --glass-shadow: lch(0 0 0 / 0.5) 0 18px 48px, lch(0 0 0 / 0.3) 0 4px 12px;
-  --glass-row: color-mix(in srgb, var(--ink) 6%, transparent);
+  --glass-row: color-mix(in oklab, var(--ink) 6%, transparent);
   --faint: lch(60% 3 282);
 }
 
@@ -167,7 +167,7 @@
   height: 1.5px;
   margin-top: calc(0.5lh - 0.75px);
   border-radius: 1px;
-  background: color-mix(in srgb, currentColor 55%, transparent);
+  background: color-mix(in oklab, currentColor 55%, transparent);
   content: "";
 }
 
@@ -205,7 +205,7 @@
 .is-jump-target { animation: conversation-input-flash 1.6s ease-out; }
 
 @keyframes conversation-input-flash {
-  0%, 20% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+  0%, 20% { box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 45%, transparent); }
   100% { box-shadow: 0 0 0 2px transparent; }
 }
 

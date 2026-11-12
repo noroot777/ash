@@ -92,7 +92,7 @@ body:has(.preview-workspace.is-expanded) .palette-scrim { z-index: 185; }
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--panel);
-  box-shadow: 0 4px 20px color-mix(in srgb, var(--ink) 12%, transparent);
+  box-shadow: 0 4px 20px color-mix(in oklab, var(--ink) 12%, transparent);
 }
 .preview-workspace.has-preview .preview-workspace-header {
   flex-shrink: 0;

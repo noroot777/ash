@@ -337,7 +337,7 @@
 .feishu-bounds {
   margin-top: 14px;
   border-radius: 9px;
-  background: color-mix(in srgb, var(--amber) 7%, var(--panel));
+  background: color-mix(in oklab, var(--amber) 7%, var(--panel));
   padding: 10px 12px;
   font-size: var(--t-xs);
   line-height: 1.65;
@@ -397,7 +397,7 @@
 }
 
 .feishu-pending {
-  background: color-mix(in lch, var(--accent) 5%, var(--panel));
+  background: color-mix(in oklab, var(--accent) 5%, var(--panel));
 }
 
 .feishu-pending small {

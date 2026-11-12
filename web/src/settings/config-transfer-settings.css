@@ -7,8 +7,8 @@
 .cfgx-warning {
   padding: 12px 14px;
   border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--amber) 30%, var(--line));
-  background: color-mix(in srgb, var(--amber) 8%, var(--panel));
+  border: 1px solid color-mix(in oklab, var(--amber) 30%, var(--line));
+  background: color-mix(in oklab, var(--amber) 8%, var(--panel));
   font-size: var(--t-sm);
   line-height: 1.7;
   color: var(--muted);

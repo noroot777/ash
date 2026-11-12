@@ -138,9 +138,9 @@
 
 /* 克隆报的是 git 原文，可能好几行，别压成一行省略号 —— 用户要照着它改地址重试。 */
 .create-project-error {
-  border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
+  border: 1px solid color-mix(in oklab, var(--red) 45%, transparent);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--red) 10%, transparent);
+  background: color-mix(in oklab, var(--red) 10%, transparent);
   padding: 8px 10px;
   color: var(--red);
   font-size: 11px;

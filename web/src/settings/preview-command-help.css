@@ -7,8 +7,8 @@
 .preview-command-help-trigger {
   flex-shrink: 0;
   height: 32px;
-  border-color: color-mix(in lch, var(--accent) 24%, var(--line));
-  background: color-mix(in lch, var(--accent) 7%, var(--panel));
+  border-color: color-mix(in oklab, var(--accent) 24%, var(--line));
+  background: color-mix(in oklab, var(--accent) 7%, var(--panel));
   color: var(--accent);
   font-weight: var(--w-medium);
 }

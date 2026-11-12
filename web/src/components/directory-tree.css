@@ -34,7 +34,7 @@
 }
 
 .dtree-row[data-selected="yes"] {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
 }
 
 .dtree-caret,

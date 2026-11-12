@@ -11,7 +11,7 @@
 .assistant-header > .chat-member-count { flex-shrink: 0; white-space: nowrap; }
 /* 删除对话是纯图标胶囊，只有指上去才变红，免得一进页面就有个红按钮盯着人。 */
 .assistant-header > .assistant-delete { padding: 5px 9px; color: var(--muted); }
-.assistant-header > .assistant-delete:hover { border-color: color-mix(in lch, var(--red) 34%, var(--line)); color: var(--red); }
+.assistant-header > .assistant-delete:hover { border-color: color-mix(in oklab, var(--red) 34%, var(--line)); color: var(--red); }
 /* 右栏：只有「关联任务 N」和一条条任务入口。 */
 .assistant-links h2 { display: flex; align-items: baseline; gap: 6px; margin: 0 0 10px; color: var(--muted); font-size: var(--t-sm); font-weight: var(--w-medium); }
 .assistant-links h2 > span { color: var(--faint); font-weight: var(--w-regular); }

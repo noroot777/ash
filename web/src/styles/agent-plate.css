@@ -18,7 +18,7 @@
 .agent-plate-word {
   flex: 0 0 auto;
   /* 淡到几乎只剩纹理:再淡一档就看不见了,要调只动这一个值 */
-  color: color-mix(in lch, var(--panel) 72%, var(--line2));
+  color: color-mix(in oklab, var(--panel) 72%, var(--line2));
   /* 真斜体字形,由 main.tsx 引入 wght-italic;缺这份字体浏览器会合成假斜体 */
   font-style: italic;
   font-weight: 800;

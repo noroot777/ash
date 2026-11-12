@@ -1,10 +1,10 @@
 /* 子智能体执行详情抽屉（task-detail/NativeAgentConversation.tsx）。右侧那一格的列表在 native-work.css。 */
 .native-work__status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; width: fit-content; padding: 2px 6px; border-radius: 4px; background: var(--raised); color: var(--muted); font-size: 10px; font-weight: 450; line-height: 1.4; white-space: nowrap; }
 .native-work__status::before { width: 4px; height: 4px; border-radius: 50%; background: currentColor; content: ""; }
-.native-work__status[data-status="running"] { background: color-mix(in srgb, var(--accent) 9%, var(--panel)); color: var(--accent); }
-.native-work__status[data-status="completed"] { background: color-mix(in srgb, var(--green) 8%, var(--panel)); color: var(--green); }
-.native-work__status[data-status="failed"] { background: color-mix(in srgb, var(--red) 8%, var(--panel)); color: var(--red); }
-.native-work__status[data-status="pending"] { background: color-mix(in srgb, var(--amber) 8%, var(--panel)); color: var(--amber); }
+.native-work__status[data-status="running"] { background: color-mix(in oklab, var(--accent) 9%, var(--panel)); color: var(--accent); }
+.native-work__status[data-status="completed"] { background: color-mix(in oklab, var(--green) 8%, var(--panel)); color: var(--green); }
+.native-work__status[data-status="failed"] { background: color-mix(in oklab, var(--red) 8%, var(--panel)); color: var(--red); }
+.native-work__status[data-status="pending"] { background: color-mix(in oklab, var(--amber) 8%, var(--panel)); color: var(--amber); }
 .native-agent { display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--ink); }
 .native-agent__header { display: flex; flex-shrink: 0; align-items: flex-start; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .native-agent__heading { display: flex; flex: 1 1 auto; align-items: flex-start; gap: 9px; min-width: 0; }

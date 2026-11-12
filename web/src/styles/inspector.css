@@ -75,7 +75,7 @@
   flex-direction: column;
   align-items: center;
   border-left: 0.5px solid var(--line);
-  --rail-bg: color-mix(in lch, var(--canvas) 86%, var(--panel));
+  --rail-bg: color-mix(in oklab, var(--canvas) 86%, var(--panel));
   background: var(--rail-bg);
   padding: 5px 0 6px;
 }

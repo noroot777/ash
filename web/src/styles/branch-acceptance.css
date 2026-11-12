@@ -57,11 +57,11 @@
 .merge-target-fields { display:flex; flex-wrap:wrap; align-items:end; gap:8px; margin-top:8px; }
 .merge-target-fields label { display:flex; min-width:0; flex:1 1 220px; align-items:center; gap:8px; color:var(--muted); font-size:10.5px; }
 .merge-target-fields select { min-width:0; min-height:30px; flex:1; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:4px 7px; color:var(--ink); font-family:var(--font-mono); font-size:11px; }
-.merge-target-fields .merge-target-save { border-color:color-mix(in srgb,var(--accent) 25%,var(--line)); background:color-mix(in srgb,var(--accent) 7%,var(--panel)); color:var(--accent); }
-.merge-target-fields .merge-target-save:hover:not(:disabled) { background:color-mix(in srgb,var(--accent) 12%,var(--panel)); color:var(--accent); }
+.merge-target-fields .merge-target-save { border-color:color-mix(in oklab,var(--accent) 25%,var(--line)); background:color-mix(in oklab,var(--accent) 7%,var(--panel)); color:var(--accent); }
+.merge-target-fields .merge-target-save:hover:not(:disabled) { background:color-mix(in oklab,var(--accent) 12%,var(--panel)); color:var(--accent); }
 .branch-acceptance-panel p { margin:0; color:var(--muted); overflow-wrap:anywhere; }
 .branch-acceptance-panel p[role] { border:1px solid var(--line); border-radius:6px; background:var(--canvas); padding:8px 10px; }
-.branch-acceptance-panel p[role="alert"] { border-color:color-mix(in srgb,var(--amber) 25%,var(--line)); background:color-mix(in srgb,var(--amber) 5%,var(--panel)); color:var(--amber); }
+.branch-acceptance-panel p[role="alert"] { border-color:color-mix(in oklab,var(--amber) 25%,var(--line)); background:color-mix(in oklab,var(--amber) 5%,var(--panel)); color:var(--amber); }
 .branch-acceptance-panel p[role] button { margin-left:8px; }
 .merge-target-editor p[role] { margin-top:8px; }
 .branch-acceptance-panel ul { list-style:none; margin:0; padding:0; }

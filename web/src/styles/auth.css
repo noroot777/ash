@@ -4,7 +4,7 @@
    --muted/--line/--red/--amber)。这一屏最初写的是 `var(--bg, #0f1115)` 这类
    **压根没定义过的名字 + 暗色兜底**,于是浅色主题下配出「深底 + 继承来的黑字」,
    首启选择卡的标题几乎读不出来(第 1 轮审查 P2)。
-   淡底一律 `color-mix(in srgb, …)`:`--panel`/`--line` 是**零彩度**的(`lch(… 0 282)`),
+   淡底一律 `color-mix(in oklab, …)`:`--panel`/`--line` 是**零彩度**的(`lch(… 0 282)`),
    在 lch 里跟它们混色会把那个没有意义的 282 号色相一起插值进来 —— 黄色警告条实测
    会配出 rgb(246,244,254) 的淡紫,红色危险条也一样。 */
 
@@ -184,16 +184,16 @@
 .auth-warning {
   padding: 12px 14px;
   border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--amber) 30%, var(--line));
-  background: color-mix(in srgb, var(--amber) 8%, var(--panel));
+  border: 1px solid color-mix(in oklab, var(--amber) 30%, var(--line));
+  background: color-mix(in oklab, var(--amber) 8%, var(--panel));
   font-size: 12.5px;
   line-height: 1.7;
   color: var(--muted);
 }
 
 .auth-warning--strong {
-  border-color: color-mix(in srgb, var(--red) 35%, var(--line));
-  background: color-mix(in srgb, var(--red) 7%, var(--panel));
+  border-color: color-mix(in oklab, var(--red) 35%, var(--line));
+  background: color-mix(in oklab, var(--red) 7%, var(--panel));
   color: var(--ink);
 }
 
@@ -220,7 +220,7 @@
 
 .auth-choice:hover:not(:disabled) {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  background: color-mix(in oklab, var(--accent) 8%, var(--panel));
 }
 
 .auth-choice b {
@@ -263,11 +263,11 @@
 
 .host-cli-option[data-checked="yes"] {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  background: color-mix(in oklab, var(--accent) 8%, var(--panel));
 }
 
 .host-cli-option:hover:not(:has(input:disabled)) {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
 }
 
 .host-cli-option:has(input:disabled) {

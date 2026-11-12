@@ -78,18 +78,18 @@
   white-space: nowrap;
 }
 .handoff-approval-state.is-pending {
-  border-color: color-mix(in lch, var(--amber) 40%, var(--line));
-  background: color-mix(in lch, var(--amber) 10%, var(--panel));
+  border-color: color-mix(in oklab, var(--amber) 40%, var(--line));
+  background: color-mix(in oklab, var(--amber) 10%, var(--panel));
   color: var(--amber);
 }
 .handoff-approval-state.is-approved {
-  border-color: color-mix(in lch, var(--accent) 35%, var(--line));
-  background: color-mix(in lch, var(--accent) 8%, var(--panel));
+  border-color: color-mix(in oklab, var(--accent) 35%, var(--line));
+  background: color-mix(in oklab, var(--accent) 8%, var(--panel));
   color: var(--accent);
 }
 .handoff-approval-state.is-blocked {
-  border-color: color-mix(in lch, var(--red) 35%, var(--line));
-  background: color-mix(in lch, var(--red) 8%, var(--panel));
+  border-color: color-mix(in oklab, var(--red) 35%, var(--line));
+  background: color-mix(in oklab, var(--red) 8%, var(--panel));
   color: var(--red);
 }
 
@@ -138,15 +138,15 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   font-size: var(--t-xs);
 }
 .handoff-peer-row.is-pending .handoff-peer-state {
-  background: color-mix(in lch, var(--amber) 18%, var(--panel));
+  background: color-mix(in oklab, var(--amber) 18%, var(--panel));
   color: var(--amber);
 }
 .handoff-peer-row.is-approved .handoff-peer-state {
-  background: color-mix(in lch, var(--accent) 14%, var(--panel));
+  background: color-mix(in oklab, var(--accent) 14%, var(--panel));
   color: var(--accent);
 }
 .handoff-peer-row.is-blocked .handoff-peer-state {
-  background: color-mix(in lch, var(--red) 14%, var(--panel));
+  background: color-mix(in oklab, var(--red) 14%, var(--panel));
   color: var(--red);
 }
 
@@ -167,8 +167,8 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
 .handoff-peer-line > svg { flex: none; margin-top: 2px; color: var(--accent); }
 .handoff-peer-line b { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); letter-spacing: 0.02em; }
 .handoff-peer-line.is-warn {
-  border-color: color-mix(in lch, var(--amber) 45%, var(--line));
-  background: color-mix(in lch, var(--amber) 9%, var(--panel));
+  border-color: color-mix(in oklab, var(--amber) 45%, var(--line));
+  background: color-mix(in oklab, var(--amber) 9%, var(--panel));
 }
 .handoff-peer-line.is-warn > svg { color: var(--amber); }
 
@@ -180,14 +180,14 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
    颜色得先把这个区别说清楚。 */
 .handoff-capability {
   margin: 10px 0;
-  border: 1px solid color-mix(in lch, var(--amber) 45%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--amber) 45%, var(--line));
   border-radius: 8px;
-  background: color-mix(in lch, var(--amber) 9%, var(--panel));
+  background: color-mix(in oklab, var(--amber) 9%, var(--panel));
   padding: 8px 10px;
 }
 .handoff-capability.is-blocking {
-  border-color: color-mix(in lch, var(--danger) 45%, var(--line));
-  background: color-mix(in lch, var(--danger) 9%, var(--panel));
+  border-color: color-mix(in oklab, var(--danger) 45%, var(--line));
+  background: color-mix(in oklab, var(--danger) 9%, var(--panel));
 }
 .handoff-capability .handoff-peer-line {
   margin: 0;

@@ -37,7 +37,7 @@
 }
 .gwb-picker-menu .menu-item:hover:not(:disabled) { background: var(--canvas); }
 .gwb-picker-menu .menu-item:focus-visible { background: var(--canvas); outline: 1px solid var(--accent); outline-offset: -1px; }
-.gwb-picker-menu .menu-item.is-current { background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
+.gwb-picker-menu .menu-item.is-current { background: color-mix(in oklab, var(--accent) 8%, var(--panel)); }
 .gwb-picker-menu .menu-item.is-current:disabled { opacity: 1; cursor: default; }
 .gwb-picker-icon {
   display: flex;

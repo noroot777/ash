@@ -85,7 +85,7 @@
 }
 
 .composer-config-section.is-execution {
-  border-color: color-mix(in lch, var(--accent) 18%, var(--line));
+  border-color: color-mix(in oklab, var(--accent) 18%, var(--line));
 }
 
 .composer-option-grid {
@@ -202,7 +202,7 @@
 
 .composer-field-run > em {
   border-radius: 4px;
-  background: color-mix(in lch, var(--accent) 14%, transparent);
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
   padding: 1px 4px;
   color: var(--accent);
   font-size: 9px;
@@ -246,7 +246,7 @@
 .composer-agent-availability {
   margin: 9px 0 0;
   border-radius: 8px;
-  background: color-mix(in srgb, var(--amber) 8%, transparent);
+  background: color-mix(in oklab, var(--amber) 8%, transparent);
   padding: 7px 9px;
   color: var(--amber);
   font-size: 10px;
@@ -258,5 +258,5 @@
 }
 
 .composer-agent-availability.is-empty {
-  border: 1px dashed color-mix(in lch, var(--amber) 35%, var(--line));
+  border: 1px dashed color-mix(in oklab, var(--amber) 35%, var(--line));
 }

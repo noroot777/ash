@@ -5,7 +5,7 @@
 
 /* 正在被编辑的那一行留在原位当锚点；收起后原地闪一下，找得回来。 */
 .provider-row.is-editing {
-  background: color-mix(in lch, var(--accent-soft) 40%, var(--panel));
+  background: color-mix(in oklab, var(--accent-soft) 40%, var(--panel));
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
@@ -14,14 +14,14 @@
 }
 
 @keyframes provider-row-flash {
-  0%, 45% { background: color-mix(in lch, var(--accent-soft) 62%, var(--panel)); }
+  0%, 45% { background: color-mix(in oklab, var(--accent-soft) 62%, var(--panel)); }
   100% { background: transparent; }
 }
 
 /* 减少动效时不闪，直接停在淡染底上。 */
-:root[data-motion="reduce"] .provider-row.is-just-edited { animation: none; background: color-mix(in lch, var(--accent-soft) 45%, var(--panel)); }
+:root[data-motion="reduce"] .provider-row.is-just-edited { animation: none; background: color-mix(in oklab, var(--accent-soft) 45%, var(--panel)); }
 @media (prefers-reduced-motion: reduce) {
-  :root:not([data-motion="full"]) .provider-row.is-just-edited { animation: none; background: color-mix(in lch, var(--accent-soft) 45%, var(--panel)); }
+  :root:not([data-motion="full"]) .provider-row.is-just-edited { animation: none; background: color-mix(in oklab, var(--accent-soft) 45%, var(--panel)); }
 }
 
 .providers-intro {
@@ -66,15 +66,15 @@
   height: 28px;
   place-items: center;
   border-radius: 8px;
-  background: color-mix(in lch, var(--violet) 16%, var(--panel));
-  color: color-mix(in lch, var(--violet) 72%, var(--ink));
+  background: color-mix(in oklab, var(--violet) 16%, var(--panel));
+  color: color-mix(in oklab, var(--violet) 72%, var(--ink));
   font-size: var(--t-xs);
   font-weight: var(--w-medium);
 }
 
 .provider-protocol.is-openai {
-  background: color-mix(in lch, var(--green) 14%, var(--panel));
-  color: color-mix(in lch, var(--green) 72%, var(--ink));
+  background: color-mix(in oklab, var(--green) 14%, var(--panel));
+  color: color-mix(in oklab, var(--green) 72%, var(--ink));
 }
 
 .provider-copy {
@@ -113,7 +113,7 @@
   gap: 4px;
   border: 0;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--amber) 9%, transparent);
+  background: color-mix(in oklab, var(--amber) 9%, transparent);
   padding: 3px 7px;
   color: var(--amber);
   font-family: inherit;
@@ -133,7 +133,7 @@ button.provider-mount-state {
 }
 
 button.provider-mount-state:hover {
-  background: color-mix(in srgb, var(--amber) 20%, transparent);
+  background: color-mix(in oklab, var(--amber) 20%, transparent);
 }
 
 /* 卡片上那两句处境说明(供应商读失败 / 挂载情况未知),末尾带一颗重试。 */
@@ -199,12 +199,12 @@ button.provider-mount-state:hover {
 }
 
 .provider-protocol-pick button:hover {
-  border-color: color-mix(in lch, var(--accent) 45%, var(--line));
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--line));
 }
 
 .provider-protocol-pick button[aria-checked="true"] {
   border-color: var(--accent);
-  background: color-mix(in lch, var(--accent-soft) 60%, var(--canvas));
+  background: color-mix(in oklab, var(--accent-soft) 60%, var(--canvas));
 }
 
 .provider-protocol-pick b {
@@ -229,9 +229,9 @@ button.provider-mount-state:hover {
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  border: 1px solid color-mix(in lch, var(--accent) 24%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--accent) 24%, var(--line));
   border-radius: 9px;
-  background: color-mix(in lch, var(--accent-soft) 34%, transparent);
+  background: color-mix(in oklab, var(--accent-soft) 34%, transparent);
   padding: 10px 12px;
 }
 
@@ -400,7 +400,7 @@ button.provider-mount-state:hover {
 }
 
 .provider-context-head:hover {
-  background: color-mix(in lch, var(--raised) 74%, transparent);
+  background: color-mix(in oklab, var(--raised) 74%, transparent);
 }
 
 .provider-context-title {
@@ -575,7 +575,7 @@ button.provider-mount-state:hover {
   font-size: var(--t-xs);
 }
 .provider-test-action:hover:not(:disabled) {
-  border-color: color-mix(in lch, var(--accent) 40%, var(--line));
+  border-color: color-mix(in oklab, var(--accent) 40%, var(--line));
   background: var(--accent-soft);
   color: var(--accent);
 }

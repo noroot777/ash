@@ -155,7 +155,7 @@
 .status-bar__item:focus-visible,
 .status-bar__tab-open:focus-visible,
 .status-bar__tab-close:focus-visible,
-.status-bar__tab-add:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 78%, white); outline-offset: -2px; }
+.status-bar__tab-add:focus-visible { outline: 2px solid color-mix(in oklab, var(--accent) 78%, white); outline-offset: -2px; }
 
 .status-bar__dot {
   width: 7px;

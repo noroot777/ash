@@ -6,7 +6,7 @@
   width: min(720px, calc(100vw - 32px));
   max-height: min(820px, calc(100vh - 36px));
   overflow: auto;
-  border-color: color-mix(in lch, var(--line2) 72%, transparent);
+  border-color: color-mix(in oklab, var(--line2) 72%, transparent);
   border-radius: 20px;
   padding: 24px;
   box-shadow: 0 30px 90px rgb(20 22 30 / 24%);
@@ -68,7 +68,7 @@
   margin: 20px 0 14px;
   border: 1px solid var(--line);
   border-radius: 16px;
-  background: color-mix(in lch, var(--raised) 78%, var(--panel));
+  background: color-mix(in oklab, var(--raised) 78%, var(--panel));
   padding: 17px 18px;
 }
 .handoff-route-node { display: grid; min-width: 0; }
@@ -78,8 +78,8 @@
 .handoff-route-node small { overflow: hidden; margin-top: 5px; color: var(--muted); font-family: var(--font-mono); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
 .handoff-route-track { position: relative; display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--accent); }
 .handoff-route-track::before,
-.handoff-route-track::after { width: 28px; height: 1px; background: color-mix(in lch, var(--accent) 34%, var(--line)); content: ""; }
-.handoff-route-track i { position: absolute; width: 10px; height: 10px; left: 29px; border: 3px solid color-mix(in lch, var(--accent) 25%, var(--panel)); border-radius: 50%; background: var(--accent); }
+.handoff-route-track::after { width: 28px; height: 1px; background: color-mix(in oklab, var(--accent) 34%, var(--line)); content: ""; }
+.handoff-route-track i { position: absolute; width: 10px; height: 10px; left: 29px; border: 3px solid color-mix(in oklab, var(--accent) 25%, var(--panel)); border-radius: 50%; background: var(--accent); }
 
 .handoff-review-grid {
   display: grid;
@@ -118,13 +118,13 @@
   width: 112px;
   height: 112px;
   margin-bottom: 28px;
-  border: 1px solid color-mix(in lch, var(--accent) 22%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--accent) 22%, var(--line));
   border-radius: 50%;
 }
 .handoff-progress-orbit::before,
-.handoff-progress-orbit::after { position: absolute; border: 1px solid color-mix(in lch, var(--accent) 18%, var(--line)); border-radius: 50%; content: ""; inset: 16px; }
+.handoff-progress-orbit::after { position: absolute; border: 1px solid color-mix(in oklab, var(--accent) 18%, var(--line)); border-radius: 50%; content: ""; inset: 16px; }
 .handoff-progress-orbit::after { inset: 32px; background: var(--accent-soft); }
-.handoff-progress-orbit span { position: absolute; z-index: 1; width: 30px; height: 30px; inset: 41px; border-radius: 9px; background: var(--accent); box-shadow: 0 8px 20px color-mix(in lch, var(--accent) 25%, transparent); }
+.handoff-progress-orbit span { position: absolute; z-index: 1; width: 30px; height: 30px; inset: 41px; border-radius: 9px; background: var(--accent); box-shadow: 0 8px 20px color-mix(in oklab, var(--accent) 25%, transparent); }
 .handoff-progress-orbit i { position: absolute; width: 8px; height: 8px; top: 9px; left: 52px; border-radius: 50%; background: var(--cyan); transform-origin: 4px 47px; animation: handoff-orbit 1.7s linear infinite; }
 .handoff-progress h3,
 .handoff-result-panel h3 { margin: 14px 0 0; color: var(--ink); font-size: 26px; letter-spacing: -0.04em; }
@@ -139,14 +139,14 @@
 .handoff-progress li small { margin-top: 5px; color: var(--faint); font-size: 10px; }
 
 .handoff-result-panel { display: grid; justify-items: center; padding: 44px 10px 20px; text-align: center; }
-.handoff-result-mark { display: grid; width: 58px; height: 58px; margin-bottom: 18px; place-items: center; border-radius: 18px; background: color-mix(in lch, var(--green) 13%, var(--panel)); color: var(--green); box-shadow: inset 0 0 0 1px color-mix(in lch, var(--green) 22%, var(--line)); }
+.handoff-result-mark { display: grid; width: 58px; height: 58px; margin-bottom: 18px; place-items: center; border-radius: 18px; background: color-mix(in oklab, var(--green) 13%, var(--panel)); color: var(--green); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--green) 22%, var(--line)); }
 /* 批量接力中途卡住(比如整批缺 key)时同一个位置要报警,不能顶着一枚绿章说没做完。 */
-.handoff-result-mark.is-warn { background: color-mix(in lch, var(--amber) 15%, var(--panel)); color: var(--amber); box-shadow: inset 0 0 0 1px color-mix(in lch, var(--amber) 26%, var(--line)); }
+.handoff-result-mark.is-warn { background: color-mix(in oklab, var(--amber) 15%, var(--panel)); color: var(--amber); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--amber) 26%, var(--line)); }
 .handoff-result-facts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 24px; }
 .handoff-result-facts span { border: 1px solid var(--line); border-radius: 999px; background: var(--raised); padding: 7px 11px; color: var(--muted); font-size: 10px; }
 .handoff-result-facts b { color: var(--ink); }
 .handoff-result-panel .handoff-notes { width: min(520px, 100%); margin-top: 20px; text-align: left; }
-.handoff-local-open { display: inline-flex; height: 36px; align-items: center; gap: 6px; margin-top: 24px; border: 1px solid var(--accent); border-radius: 10px; background: var(--accent); padding: 0 15px; color: white; font-size: 11.5px; font-weight: 700; cursor: pointer; box-shadow: 0 10px 24px color-mix(in lch, var(--accent) 22%, transparent); }
+.handoff-local-open { display: inline-flex; height: 36px; align-items: center; gap: 6px; margin-top: 24px; border: 1px solid var(--accent); border-radius: 10px; background: var(--accent); padding: 0 15px; color: white; font-size: 11.5px; font-weight: 700; cursor: pointer; box-shadow: 0 10px 24px color-mix(in oklab, var(--accent) 22%, transparent); }
 .handoff-local-open:hover { filter: brightness(.97); transform: translateY(-1px); }
 
 .handoff-dialog > footer { padding-top: 2px; }
@@ -178,9 +178,9 @@
   display: grid;
   gap: 6px;
   margin: 8px 0 12px;
-  border: 1px solid color-mix(in lch, var(--amber) 40%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--amber) 40%, var(--line));
   border-radius: 10px;
-  background: color-mix(in lch, var(--amber) 7%, var(--panel));
+  background: color-mix(in oklab, var(--amber) 7%, var(--panel));
   padding: 10px 12px;
 }
 .handoff-key-fix label { color: var(--faint); font-size: 10.5px; }
@@ -234,7 +234,7 @@
   margin: 8px 18px 0;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: color-mix(in lch, var(--accent) 7%, var(--panel));
+  background: color-mix(in oklab, var(--accent) 7%, var(--panel));
   padding: 7px 12px;
   color: var(--muted);
   font-size: 11.5px;
@@ -244,8 +244,8 @@
 
 /* 接力/移回送达未确认(应答丢失):琥珀色警示,提醒用户先重试收口或确认后移除标记。 */
 .task-handoff-banner.is-pending {
-  border-color: color-mix(in lch, var(--amber) 45%, var(--line));
-  background: color-mix(in lch, var(--amber) 9%, var(--panel));
+  border-color: color-mix(in oklab, var(--amber) 45%, var(--line));
+  background: color-mix(in oklab, var(--amber) 9%, var(--panel));
 }
 .task-handoff-banner.is-pending > svg { color: var(--amber); }
 
@@ -289,7 +289,7 @@
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
-  border: 1px solid color-mix(in lch, var(--amber) 55%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--amber) 55%, var(--line));
   border-width: 0 0 1px;
   background: var(--panel);
   padding: 12px 16px;
@@ -302,7 +302,7 @@
   height: 38px;
   place-items: center;
   border-radius: 11px;
-  background: color-mix(in lch, var(--amber) 18%, var(--panel));
+  background: color-mix(in oklab, var(--amber) 18%, var(--panel));
   color: var(--amber);
 }
 .handoff-approval-alert-copy { min-width: 0; }
@@ -366,11 +366,11 @@
   display: flex;
   align-items: flex-start;
   gap: 7px;
-  border: 1px solid color-mix(in lch, var(--green) 24%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--green) 24%, var(--line));
   border-radius: 9px;
-  background: color-mix(in lch, var(--green) 6%, var(--panel));
+  background: color-mix(in oklab, var(--green) 6%, var(--panel));
   padding: 9px 10px;
-  color: color-mix(in lch, var(--green) 76%, var(--ink));
+  color: color-mix(in oklab, var(--green) 76%, var(--ink));
   font-size: 11px;
   line-height: 1.5;
 }
@@ -382,9 +382,9 @@
 }
 
 .handoff-bulk-peer.is-warn {
-  border-color: color-mix(in lch, var(--amber) 25%, var(--line));
-  background: color-mix(in lch, var(--amber) 8%, var(--panel));
-  color: color-mix(in lch, var(--amber) 72%, var(--ink));
+  border-color: color-mix(in oklab, var(--amber) 25%, var(--line));
+  background: color-mix(in oklab, var(--amber) 8%, var(--panel));
+  color: color-mix(in oklab, var(--amber) 72%, var(--ink));
 }
 
 .handoff-bulk-field {
@@ -435,12 +435,12 @@
   display: flex;
   align-items: flex-start;
   gap: 7px;
-  background: color-mix(in lch, var(--amber) 10%, var(--panel));
-  color: color-mix(in lch, var(--amber) 72%, var(--ink));
+  background: color-mix(in oklab, var(--amber) 10%, var(--panel));
+  color: color-mix(in oklab, var(--amber) 72%, var(--ink));
 }
 
 .handoff-bulk-error {
-  background: color-mix(in lch, var(--red) 9%, var(--panel));
+  background: color-mix(in oklab, var(--red) 9%, var(--panel));
   color: var(--red);
 }
 
@@ -482,7 +482,7 @@
 }
 
 .handoff-bulk-notes {
-  color: color-mix(in lch, var(--amber) 68%, var(--muted));
+  color: color-mix(in oklab, var(--amber) 68%, var(--muted));
 }
 
 .handoff-bulk-progress {
@@ -490,7 +490,7 @@
   align-items: center;
   gap: 7px;
   border-radius: 9px;
-  background: color-mix(in lch, var(--accent) 8%, var(--panel));
+  background: color-mix(in oklab, var(--accent) 8%, var(--panel));
   padding: 9px 10px;
   color: var(--accent);
   font-size: 11px;
@@ -504,7 +504,7 @@
 
 .handoff-bulk-failures {
   margin-top: 0;
-  border: 1px solid color-mix(in lch, var(--red) 24%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--red) 24%, var(--line));
   border-radius: 9px;
   padding: 9px 10px;
 }

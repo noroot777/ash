@@ -93,8 +93,8 @@
 }
 
 .workspace-load-error {
-  border-bottom: 1px solid color-mix(in lch, var(--red) 25%, var(--line));
-  background: color-mix(in lch, var(--red) 6%, var(--canvas));
+  border-bottom: 1px solid color-mix(in oklab, var(--red) 25%, var(--line));
+  background: color-mix(in oklab, var(--red) 6%, var(--canvas));
   padding: 8px 14px;
   color: var(--red);
   font-size: 11px;

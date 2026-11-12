@@ -104,8 +104,8 @@
 .task-delete-failure > header { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 6px; padding: 7px 9px; color: var(--faint); }
 .task-delete-failure > header > span { font-size: 9.5px; font-weight: 650; }
 .task-delete-failure code { overflow: hidden; color: var(--ink); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.task-delete-stderr { max-height: 150px; overflow: auto; margin: 0; border-top: 1px solid color-mix(in lch, var(--red) 22%, var(--line)); background: color-mix(in lch, var(--red) 5%, var(--panel)); padding: 8px 9px; white-space: pre-wrap; word-break: break-word; color: var(--red); font-family: var(--font-mono); font-size: 10px; line-height: 1.45; }
-.task-delete-force > .task-delete-stderr { border: 1px solid color-mix(in lch, var(--red) 22%, var(--line)); border-radius: 8px; }
+.task-delete-stderr { max-height: 150px; overflow: auto; margin: 0; border-top: 1px solid color-mix(in oklab, var(--red) 22%, var(--line)); background: color-mix(in oklab, var(--red) 5%, var(--panel)); padding: 8px 9px; white-space: pre-wrap; word-break: break-word; color: var(--red); font-family: var(--font-mono); font-size: 10px; line-height: 1.45; }
+.task-delete-force > .task-delete-stderr { border: 1px solid color-mix(in oklab, var(--red) 22%, var(--line)); border-radius: 8px; }
 .task-delete-warning { display: flex; align-items: flex-start; gap: 5px; margin: 0; color: var(--amber); font-size: 10px; line-height: 1.5; }
 .task-delete-warning svg { flex: 0 0 auto; margin-top: 1px; }
 

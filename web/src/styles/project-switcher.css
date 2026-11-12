@@ -198,7 +198,7 @@
 }
 
 .workspace-project-search:focus-within {
-  border-color: color-mix(in lch, var(--accent) 48%, var(--line2));
+  border-color: color-mix(in oklab, var(--accent) 48%, var(--line2));
 }
 
 .workspace-project-search input {
@@ -253,7 +253,7 @@
 }
 
 .workspace-project-create:hover {
-  color: color-mix(in lch, var(--accent) 78%, var(--ink));
+  color: color-mix(in oklab, var(--accent) 78%, var(--ink));
 }
 
 .workspace-project-option > svg {

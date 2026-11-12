@@ -1,11 +1,11 @@
-.composer-config-section.is-workflow-mode { display:grid; gap:12px; border:1px solid color-mix(in lch,var(--cyan) 22%,var(--line)); border-radius:11px; background:color-mix(in lch,var(--cyan) 2.5%,var(--panel)); }
-.is-workflow-mode .composer-section-heading > span { display:grid; width:27px; height:27px; flex:0 0 27px; place-items:center; border-radius:8px; background:color-mix(in lch,var(--cyan) 10%,var(--raised)); color:var(--cyan); }
+.composer-config-section.is-workflow-mode { display:grid; gap:12px; border:1px solid color-mix(in oklab,var(--cyan) 22%,var(--line)); border-radius:11px; background:color-mix(in oklab,var(--cyan) 2.5%,var(--panel)); }
+.is-workflow-mode .composer-section-heading > span { display:grid; width:27px; height:27px; flex:0 0 27px; place-items:center; border-radius:8px; background:color-mix(in oklab,var(--cyan) 10%,var(--raised)); color:var(--cyan); }
 .is-workflow-mode .ui-tabs { width:max-content; max-width:100%; }
 .is-workflow-mode > .composer-field { width:min(100%,520px); }
 
 .free-workflow-toolbar { position:relative; z-index:2; display:flex; max-width:100%; flex-wrap:wrap; align-items:center; gap:2px; }
-.free-review-progress { display:flex; min-height:31px; align-items:center; gap:6px; border-radius:7px; background:color-mix(in lch,var(--cyan) 8%,var(--panel)); padding:5px 7px; color:var(--cyan); font-size:var(--t-xs); font-weight:var(--w-medium); }
-.free-review-progress.is-auto_rereview { background:color-mix(in lch,var(--amber) 9%,var(--panel)); color:var(--amber); }
+.free-review-progress { display:flex; min-height:31px; align-items:center; gap:6px; border-radius:7px; background:color-mix(in oklab,var(--cyan) 8%,var(--panel)); padding:5px 7px; color:var(--cyan); font-size:var(--t-xs); font-weight:var(--w-medium); }
+.free-review-progress.is-auto_rereview { background:color-mix(in oklab,var(--amber) 9%,var(--panel)); color:var(--amber); }
 .free-review-progress.is-compact { height:28px; min-height:28px; flex:0 0 auto; padding:0 8px; }
 /* 回复框那一行里的派审 / 预览键（reply-act，见 task-reply.css）：底色和字色只在有状态时出（审查中、已预约、停了、要修、预览起着）。 */
 .reply-act.is-review.is-busy,.reply-act.is-review.is-armed,.reply-act.is-review[data-state="reviewing"] { background:color-mix(in oklab,var(--accent) 8%,transparent); color:var(--accent); }
@@ -27,7 +27,7 @@
 .reviewer-profile-fields > label { display:grid; gap:5px; }
 .reviewer-profile-fields > label > span { color:var(--faint); font-size:9px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
 .reviewer-profile-fields input { width:100%; height:32px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; outline:0; }
-.reviewer-profile-fields input:focus { border-color:var(--accent); box-shadow:0 0 0 2px color-mix(in lch,var(--accent) 12%,transparent); }
+.reviewer-profile-fields input:focus { border-color:var(--accent); box-shadow:0 0 0 2px color-mix(in oklab,var(--accent) 12%,transparent); }
 
 /* 执行者驳回卡：审查链停在这里等用户裁定。只有图标是琥珀色，整块不上色
    —— 这不是又坏了一处，而是两个 agent 没谈拢，需要人来拍板。 */
@@ -39,7 +39,7 @@
    选择器**必须带上父级和 `p`**：上面那条 `.free-review-dispute-card > p` 是「类+元素」，
    比裸一个类更具体，光靠写在后面压不住它——主角会被渲染成和状态行一样的灰小字
    （第 1 轮审查 N2 实测 9.5px/--muted）。 */
-.free-review-dispute-card > p.free-review-dispute-card__gist { margin:0; border-left:2px solid color-mix(in lch,var(--amber) 55%,var(--line2)); padding-left:8px; color:var(--ink); font-size:var(--t-sm); line-height:1.6; }
+.free-review-dispute-card > p.free-review-dispute-card__gist { margin:0; border-left:2px solid color-mix(in oklab,var(--amber) 55%,var(--line2)); padding-left:8px; color:var(--ink); font-size:var(--t-sm); line-height:1.6; }
 /* 「看审查者怎么说」：卡上只有执行者的说法，审查者那一半在报告里。 */
 .free-review-dispute-card__report { display:inline-flex; width:fit-content; height:24px; align-items:center; gap:4px; border:0; border-radius:var(--r-sm); background:transparent; padding:0 8px; margin-left:-8px; color:var(--ink); font-size:var(--t-xs); cursor:pointer; transition:background var(--dur-1) var(--ease-out); }
 .free-review-dispute-card__report:hover { background:var(--hover-bg); }
@@ -75,7 +75,7 @@
 .free-review-debate { border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:8px 9px; }
 .free-review-debate > header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }.free-review-debate > header b { color:var(--ink); font-size:9.5px; }.free-review-debate > header small { color:var(--faint); font-size:8.5px; }
 .free-review-debate > ol { display:grid; gap:7px; margin:7px 0 0; padding:0; list-style:none; }
-.free-review-debate li { border-left:2px solid var(--line2); padding-left:8px; }.free-review-debate li.is-reviewer { border-left-color:color-mix(in lch,var(--accent) 45%,var(--line2)); }.free-review-debate li.is-executor { border-left-color:color-mix(in lch,var(--amber) 45%,var(--line2)); }.free-review-debate li.is-speaking { opacity:.75; }
+.free-review-debate li { border-left:2px solid var(--line2); padding-left:8px; }.free-review-debate li.is-reviewer { border-left-color:color-mix(in oklab,var(--accent) 45%,var(--line2)); }.free-review-debate li.is-executor { border-left-color:color-mix(in oklab,var(--amber) 45%,var(--line2)); }.free-review-debate li.is-speaking { opacity:.75; }
 .free-review-debate li > span { display:flex; align-items:center; gap:4px; color:var(--faint); }.free-review-debate li > span b { font-size:9px; }.free-review-debate li > span em { font-size:8.5px; font-style:normal; font-variant-numeric:tabular-nums; }
 .free-review-debate .task-markdown { margin-top:3px; color:var(--muted); font-size:10px; line-height:1.6; }
 /* 每段发言的那一句人话：逐段只读它就能看出这场辩论辩到哪了，完整发言折在下面。 */
@@ -88,7 +88,7 @@
 /* 「用这段作要点」：贴在每段发言的头一行右端。辩论最有用的产物常常就是某一段里的
    具体方案，点它等于把那段话交给执行者去做——不点也能自己写，所以它是轻量的。 */
 .free-review-debate__quote { display:inline-flex; margin-left:auto; flex:none; align-items:center; gap:3px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:1px 6px; color:var(--faint); font-size:8.5px; cursor:pointer; }
-.free-review-debate__quote:hover { border-color:color-mix(in lch,var(--accent) 40%,var(--line2)); background:color-mix(in lch,var(--accent) 8%,var(--panel)); color:var(--accent); }
+.free-review-debate__quote:hover { border-color:color-mix(in oklab,var(--accent) 40%,var(--line2)); background:color-mix(in oklab,var(--accent) 8%,var(--panel)); color:var(--accent); }
 .free-review-debate.is-reading .free-review-debate__quote { font-size:9.5px; padding:2px 8px; }
 /* 阅读态同一份数据、另一档排版：正文回到能读的字号，两侧留白也跟着松开。 */
 .free-review-debate.is-reading { border:0; border-radius:0; padding:0; }
@@ -100,7 +100,7 @@
 .free-review-debate.is-reading li > span em { font-size:10px; }
 .free-review-debate.is-reading .task-markdown { margin-top:0; color:var(--ink); font-size:12.5px; line-height:1.68; }
 .free-review-debate.is-reading .free-review-debate__pending { font-size:11.5px; }
-.free-review-debate-exchanges { display:grid; gap:5px; padding:0 2px; }.free-review-debate-exchanges > b { color:var(--ink); font-size:10px; }.free-review-debate-exchanges > div { display:flex; gap:5px; }.free-review-debate-exchanges > div > button { width:32px; height:28px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); color:var(--muted); font-size:10.5px; }.free-review-debate-exchanges > div > button.is-selected { border-color:color-mix(in lch,var(--accent) 40%,var(--line2)); background:color-mix(in lch,var(--accent) 10%,var(--panel)); color:var(--accent); font-weight:700; }.free-review-debate-exchanges > small { color:var(--faint); font-size:9px; line-height:1.5; }
+.free-review-debate-exchanges { display:grid; gap:5px; padding:0 2px; }.free-review-debate-exchanges > b { color:var(--ink); font-size:10px; }.free-review-debate-exchanges > div { display:flex; gap:5px; }.free-review-debate-exchanges > div > button { width:32px; height:28px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); color:var(--muted); font-size:10.5px; }.free-review-debate-exchanges > div > button.is-selected { border-color:color-mix(in oklab,var(--accent) 40%,var(--line2)); background:color-mix(in oklab,var(--accent) 10%,var(--panel)); color:var(--accent); font-weight:700; }.free-review-debate-exchanges > small { color:var(--faint); font-size:9px; line-height:1.5; }
 .review-round-dispute { margin-top:12px; border-top:1px solid var(--line); padding-top:10px; }.review-round-dispute > b { display:block; margin-bottom:6px; color:var(--amber); font-size:var(--t-xs); font-weight:var(--w-medium); }.review-round-dispute > .free-review-debate { margin-top:8px; }
 /* 历史记录里同样先摆那一句人话（和驳回卡一个读法），几千字依据折在它下面。 */
 .review-round-dispute__gist { margin:0 0 6px; color:var(--ink); font-size:var(--t-sm); line-height:1.6; }
@@ -108,13 +108,13 @@
 /* 裁定要点是用户自己写的那段，配色跟驳回理由（琥珀=执行者的话）分开，免得读成同一个人说的。 */
 .review-round-dispute__note { margin-top:10px; border:1px solid var(--line); border-radius:var(--r-md); background:var(--raised); padding:8px 10px; }.review-round-dispute__note > b { display:block; margin-bottom:4px; color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-medium); }.review-round-dispute__note .task-markdown { color:var(--ink); font-size:var(--t-xs); line-height:1.6; }
 /* 裁定确认框里的要点输入：三档共用，措辞由 NOTE_FIELDS 换。 */
-.free-review-dispute-note { display:grid; gap:5px; padding:0 2px; }.free-review-dispute-note > span { color:var(--ink); font-size:10px; }.free-review-dispute-note > textarea { border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:7px 8px; color:var(--ink); font-size:10.5px; line-height:1.6; resize: none; }.free-review-dispute-note > textarea:focus-visible { border-color:color-mix(in lch,var(--accent) 45%,var(--line2)); outline:none; }.free-review-dispute-note > small { color:var(--faint); font-size:9px; line-height:1.5; }
+.free-review-dispute-note { display:grid; gap:5px; padding:0 2px; }.free-review-dispute-note > span { color:var(--ink); font-size:10px; }.free-review-dispute-note > textarea { border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:7px 8px; color:var(--ink); font-size:10.5px; line-height:1.6; resize: none; }.free-review-dispute-note > textarea:focus-visible { border-color:color-mix(in oklab,var(--accent) 45%,var(--line2)); outline:none; }.free-review-dispute-note > small { color:var(--faint); font-size:9px; line-height:1.5; }
 
 /* 预览日志：起不来的时候唯一的现场。等宽、可选中、默认贴底。 */
 .preview-log-dialog { display:flex; flex-direction:column; width:min(860px,calc(100vw - 28px)); max-height:min(760px,92vh); overflow:hidden; border:1px solid var(--line2); border-radius:15px; background:var(--panel); box-shadow:var(--shadow); }
 .preview-log-dialog.is-expanded { height:min(760px,92vh); }
 .preview-log-dialog > header { display:grid; min-height:66px; grid-template-columns:34px minmax(0,1fr) 28px; align-items:center; gap:10px; border-bottom:1px solid var(--line); padding:10px 14px; }
-.preview-log-dialog > header > span { display:grid; width:34px; height:34px; place-items:center; border-radius:10px; background:color-mix(in lch,var(--accent) 11%,var(--raised)); color:var(--accent); }
+.preview-log-dialog > header > span { display:grid; width:34px; height:34px; place-items:center; border-radius:10px; background:color-mix(in oklab,var(--accent) 11%,var(--raised)); color:var(--accent); }
 .preview-log-dialog h2,.preview-log-dialog p { margin:0; }
 .preview-log-dialog h2 { font-size:14px; }
 .preview-log-dialog > header p { margin-top:2px; color:var(--faint); font-size:10px; }
@@ -127,7 +127,7 @@
 .preview-log-dialog > footer { display:flex; min-height:52px; align-items:center; justify-content:flex-end; gap:8px; border-top:1px solid var(--line); padding:9px 14px; }
 .preview-log-dialog > footer > span { margin-right:auto; color:var(--faint); font-size:9.5px; }
 .preview-log-dialog > footer button { display:inline-flex; height:30px; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:9px; background:var(--panel); padding:0 12px; color:var(--muted); font-size:11px; font-weight:620; }
-.preview-log-dialog > footer button:hover:not(:disabled) { border-color:color-mix(in lch,var(--accent) 40%,var(--line)); color:var(--ink); }
+.preview-log-dialog > footer button:hover:not(:disabled) { border-color:color-mix(in oklab,var(--accent) 40%,var(--line)); color:var(--ink); }
 .preview-log-dialog > footer button:disabled { opacity:.45; }
 
 @media (max-width:800px) {
@@ -155,8 +155,8 @@
 .preview-log-services { min-width:0; border-bottom:1px solid var(--line); padding:6px 12px 0; }
 .preview-log-services .preview-service-scroll > button { display:flex; height:37px; flex:0 0 auto; align-items:center; gap:7px; border:0; border-radius:7px 7px 0 0; background:transparent; padding:0 12px; color:var(--muted); font-size:11px; font-weight:550; white-space:nowrap; }
 .preview-log-services .preview-service-scroll > button:hover { background:var(--raised); color:var(--ink); }
-.preview-log-services .preview-service-scroll > button[aria-selected="true"] { background:color-mix(in lch,var(--accent) 6%,transparent); box-shadow:inset 0 -2px var(--accent); color:var(--accent); }
-.preview-log-services [aria-selected="true"] .preview-service-count { background:color-mix(in lch,var(--accent) 12%,transparent); color:var(--accent); }
+.preview-log-services .preview-service-scroll > button[aria-selected="true"] { background:color-mix(in oklab,var(--accent) 6%,transparent); box-shadow:inset 0 -2px var(--accent); color:var(--accent); }
+.preview-log-services [aria-selected="true"] .preview-service-count { background:color-mix(in oklab,var(--accent) 12%,transparent); color:var(--accent); }
 .preview-service-tab-name { max-width:180px; overflow:hidden; text-overflow:ellipsis; }
 .preview-log-selection { display:flex; min-width:0; align-items:baseline; gap:12px; padding:9px 14px 0; font-size:10.5px; }
 .preview-log-selection > span:first-child { flex:1; min-width:0; color:var(--muted); overflow-wrap:anywhere; }

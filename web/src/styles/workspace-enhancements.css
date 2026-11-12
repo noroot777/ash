@@ -34,7 +34,7 @@
 .workspace-sidebar-resize-handle:hover::after,
 .workspace-sidebar-resize-handle:focus-visible::after,
 .workspace-sidebar-resizing .workspace-sidebar-resize-handle::after {
-  background: color-mix(in lch, var(--accent) 72%, transparent);
+  background: color-mix(in oklab, var(--accent) 72%, transparent);
 }
 
 .workspace-sidebar-resizing .workspace-sidebar {

@@ -12,9 +12,9 @@
 .team-review-record-title > span { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .team-review-record-title b { min-width: 0; overflow: hidden; color: var(--ink); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
 .team-review-record-title em, .team-review-record-title small { border-radius: 4px; background: var(--raised); padding: 1px 5px; color: var(--muted); font-size: 9.5px; font-style: normal; }
-.team-review-record-title small { background: color-mix(in lch,var(--accent) 8%,var(--raised)); color: var(--accent); }
+.team-review-record-title small { background: color-mix(in oklab,var(--accent) 8%,var(--raised)); color: var(--accent); }
 .team-review-record-title p { display: -webkit-box; overflow: hidden; margin: 5px 0 0; color: var(--faint); font-size: 10.5px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.team-review-record-body { display: grid; gap: 12px; border-top: .5px solid var(--line); background: color-mix(in lch,var(--canvas) 72%,var(--panel)); padding: 12px; }
+.team-review-record-body { display: grid; gap: 12px; border-top: .5px solid var(--line); background: color-mix(in oklab,var(--canvas) 72%,var(--panel)); padding: 12px; }
 
 .team-accept-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 5px; }
 /* min-height 而不是 height:按钮上写的是状态文案(「验收受阻」的整句理由就直接当标签),
@@ -23,27 +23,27 @@
 .team-accept-actions > button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .team-accept-actions > button.is-primary { border-color: var(--accent); background: var(--accent); color: white; }
 .team-accept-actions > button:disabled { cursor: not-allowed; opacity: .52; }
-.team-accept-actions > span { border-color: color-mix(in lch,var(--green) 24%,var(--line)); background: var(--green-bg); color: var(--green); }
-.team-accept-failure { margin: 0 12px 11px 51px; border: 1px solid color-mix(in lch,var(--red) 30%,var(--line)); border-radius: 8px; background: color-mix(in lch,var(--red) 5%,var(--panel)); padding: 9px 10px; color: var(--red); font-size: 10.5px; }
-.team-accept-failure.is-handed-off { border-color: color-mix(in lch,var(--amber) 34%,var(--line)); background: color-mix(in lch,var(--amber) 7%,var(--panel)); color: var(--amber); }
+.team-accept-actions > span { border-color: color-mix(in oklab,var(--green) 24%,var(--line)); background: var(--green-bg); color: var(--green); }
+.team-accept-failure { margin: 0 12px 11px 51px; border: 1px solid color-mix(in oklab,var(--red) 30%,var(--line)); border-radius: 8px; background: color-mix(in oklab,var(--red) 5%,var(--panel)); padding: 9px 10px; color: var(--red); font-size: 10.5px; }
+.team-accept-failure.is-handed-off { border-color: color-mix(in oklab,var(--amber) 34%,var(--line)); background: color-mix(in oklab,var(--amber) 7%,var(--panel)); color: var(--amber); }
 .team-accept-failure-heading { display: flex; align-items: flex-start; gap: 8px; }
-.team-accept-failure-heading > span { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 7px; background: color-mix(in lch,var(--red) 10%,var(--panel)); }
-.team-accept-failure.is-handed-off .team-accept-failure-heading > span { background: color-mix(in lch,var(--amber) 13%,var(--panel)); }
+.team-accept-failure-heading > span { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 7px; background: color-mix(in oklab,var(--red) 10%,var(--panel)); }
+.team-accept-failure.is-handed-off .team-accept-failure-heading > span { background: color-mix(in oklab,var(--amber) 13%,var(--panel)); }
 .team-accept-failure-heading > div { min-width: 0; flex: 1; }
-.team-accept-failure-heading b { display: block; color: color-mix(in lch,var(--red) 76%,var(--ink)); font-size: 11px; }
-.team-accept-failure.is-handed-off .team-accept-failure-heading b { color: color-mix(in lch,var(--amber) 76%,var(--ink)); }
+.team-accept-failure-heading b { display: block; color: color-mix(in oklab,var(--red) 76%,var(--ink)); font-size: 11px; }
+.team-accept-failure.is-handed-off .team-accept-failure-heading b { color: color-mix(in oklab,var(--amber) 76%,var(--ink)); }
 .team-accept-failure p { margin: 3px 0 0; color: var(--muted); line-height: 1.5; white-space: pre-wrap; }
 .team-accept-failure > .pending-merge-actions { margin: 9px 0 0 32px; }
-.team-accept-failure .team-accept-handoff-message { color: color-mix(in lch,var(--amber) 62%,var(--ink)); font-weight: 600; }
-.team-accept-failure .team-accept-failure-guidance { color: color-mix(in lch,var(--red) 60%,var(--muted)); }
-.team-accept-failure.is-handed-off .team-accept-failure-guidance { color: color-mix(in lch,var(--amber) 66%,var(--muted)); }
-.team-accept-conflict-files { margin: 8px 0 0 32px; border-top: .5px solid color-mix(in lch,var(--red) 18%,var(--line)); padding-top: 7px; }
-.team-accept-failure.is-handed-off .team-accept-conflict-files { border-top-color: color-mix(in lch,var(--amber) 20%,var(--line)); color: var(--faint); }
+.team-accept-failure .team-accept-handoff-message { color: color-mix(in oklab,var(--amber) 62%,var(--ink)); font-weight: 600; }
+.team-accept-failure .team-accept-failure-guidance { color: color-mix(in oklab,var(--red) 60%,var(--muted)); }
+.team-accept-failure.is-handed-off .team-accept-failure-guidance { color: color-mix(in oklab,var(--amber) 66%,var(--muted)); }
+.team-accept-conflict-files { margin: 8px 0 0 32px; border-top: .5px solid color-mix(in oklab,var(--red) 18%,var(--line)); padding-top: 7px; }
+.team-accept-failure.is-handed-off .team-accept-conflict-files { border-top-color: color-mix(in oklab,var(--amber) 20%,var(--line)); color: var(--faint); }
 .team-accept-conflict-files > span { display: block; color: currentColor; font-size: 9.5px; font-weight: 650; }
 .team-accept-conflict-files ul { display: grid; gap: 2px; margin: 4px 0 0; padding: 0; list-style: none; }
 .team-accept-conflict-files code { display: block; overflow-wrap: anywhere; color: currentColor; font-size: 9.5px; }
 .team-return-feedback { display: block; width: 100%; resize: none; border: 1px solid var(--line2); border-radius: 8px; background: var(--canvas); padding: 8px 9px; color: var(--ink); font-size: 11.5px; line-height: 1.5; outline: 0; }
-.team-return-feedback:focus { border-color: color-mix(in lch,var(--accent) 55%,var(--line2)); }
+.team-return-feedback:focus { border-color: color-mix(in oklab,var(--accent) 55%,var(--line2)); }
 
 /* 验收确认框里那个「合并后提交代码」的勾（本次有效，默认跟项目设置）。 */
 .team-accept-commit { display: flex; align-items: flex-start; gap: 8px; border: 1px solid var(--line2); border-radius: 8px; background: var(--canvas); padding: 9px 10px; }
@@ -52,18 +52,18 @@
 .team-accept-commit b { color: var(--ink); font-size: 11px; }
 .team-accept-commit small { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .team-accept-commit small + small { color: var(--faint); }
-.team-accept-commit:has(> input:not(:checked)) { border-color: color-mix(in lch,var(--amber) 34%,var(--line2)); background: color-mix(in lch,var(--amber) 6%,var(--canvas)); }
+.team-accept-commit:has(> input:not(:checked)) { border-color: color-mix(in oklab,var(--amber) 34%,var(--line2)); background: color-mix(in oklab,var(--amber) 6%,var(--canvas)); }
 /* 项目默认还没读到：不给勾（显示成什么都可能跟后端要做的事相反），确认按钮同时禁掉。 */
 .team-accept-commit.is-pending { color: var(--faint); }
-.team-accept-commit.is-pending[role="alert"] { border-color: color-mix(in lch,var(--red) 30%,var(--line2)); background: color-mix(in lch,var(--red) 5%,var(--canvas)); }
+.team-accept-commit.is-pending[role="alert"] { border-color: color-mix(in oklab,var(--red) 30%,var(--line2)); background: color-mix(in oklab,var(--red) 5%,var(--canvas)); }
 .team-accept-commit-retry { border: 0; background: transparent; color: inherit; font: inherit; text-decoration: underline; }
 
 .team-review-change { display: grid; min-width: 0; gap: 10px; }
 .team-review-loading { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--faint); font-size: 10.5px; }
 .team-review-loading.is-error { color: var(--red); }
 
-.team-review-evidence { overflow: hidden; border: 1px solid color-mix(in lch,var(--accent) 20%,var(--line)); border-radius: 9px; background: color-mix(in lch,var(--accent) 3%,var(--panel)); }
-.team-review-evidence > header { display: flex; min-height: 42px; align-items: center; border-bottom: .5px solid color-mix(in lch,var(--accent) 14%,var(--line)); padding: 6px 10px; }
+.team-review-evidence { overflow: hidden; border: 1px solid color-mix(in oklab,var(--accent) 20%,var(--line)); border-radius: 9px; background: color-mix(in oklab,var(--accent) 3%,var(--panel)); }
+.team-review-evidence > header { display: flex; min-height: 42px; align-items: center; border-bottom: .5px solid color-mix(in oklab,var(--accent) 14%,var(--line)); padding: 6px 10px; }
 .team-review-evidence > header b, .team-review-evidence > header small { display: block; }
 .team-review-evidence > header b { color: var(--ink); font-size: 11px; }
 .team-review-evidence > header small { color: var(--faint); font-size: 9.5px; }
@@ -71,17 +71,17 @@
 .team-review-evidence > p.is-error { color: var(--red); }
 .team-review-evidence > p button { border: 0; background: transparent; color: inherit; text-decoration: underline; }
 .review-dispatch-control { margin: 9px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
-.review-dispatch-control.is-prominent { border-color: color-mix(in lch,var(--accent) 28%,var(--line)); background: color-mix(in lch,var(--accent) 4%,var(--panel)); }
+.review-dispatch-control.is-prominent { border-color: color-mix(in oklab,var(--accent) 28%,var(--line)); background: color-mix(in oklab,var(--accent) 4%,var(--panel)); }
 .review-dispatch-heading { display: flex; min-height: 46px; align-items: center; gap: 8px; padding: 7px 8px; }
-.review-dispatch-heading > span { display: grid; width: 25px; height: 25px; flex: 0 0 25px; place-items: center; border-radius: 7px; background: color-mix(in lch,var(--accent) 10%,var(--raised)); color: var(--accent); }
+.review-dispatch-heading > span { display: grid; width: 25px; height: 25px; flex: 0 0 25px; place-items: center; border-radius: 7px; background: color-mix(in oklab,var(--accent) 10%,var(--raised)); color: var(--accent); }
 .review-dispatch-heading > div { min-width: 0; flex: 1; }
 .review-dispatch-heading b, .review-dispatch-heading small { display: block; }
 .review-dispatch-heading b { color: var(--ink); font-size: 10.5px; }
 .review-dispatch-heading small { margin-top: 1px; color: var(--faint); font-size: 9.5px; line-height: 1.4; }
-.review-dispatch-heading > button { display: inline-flex; height: 27px; flex: 0 0 auto; align-items: center; gap: 5px; border: 1px solid color-mix(in lch,var(--accent) 28%,var(--line)); border-radius: 7px; background: var(--panel); padding: 0 8px; color: var(--accent); font-size: 9.5px; font-weight: 650; }
-.review-dispatch-heading > button:hover:not(:disabled) { background: color-mix(in lch,var(--accent) 7%,var(--panel)); }
+.review-dispatch-heading > button { display: inline-flex; height: 27px; flex: 0 0 auto; align-items: center; gap: 5px; border: 1px solid color-mix(in oklab,var(--accent) 28%,var(--line)); border-radius: 7px; background: var(--panel); padding: 0 8px; color: var(--accent); font-size: 9.5px; font-weight: 650; }
+.review-dispatch-heading > button:hover:not(:disabled) { background: color-mix(in oklab,var(--accent) 7%,var(--panel)); }
 .review-dispatch-heading > button:disabled { cursor: not-allowed; opacity: .55; }
-.review-dispatch-control > form { border-top: .5px solid color-mix(in lch,var(--accent) 16%,var(--line)); }
+.review-dispatch-control > form { border-top: .5px solid color-mix(in oklab,var(--accent) 16%,var(--line)); }
 .review-dispatch-control fieldset { min-width: 0; margin: 0; border: 0; padding: 9px; }
 /* 一栏：那颗三段胶囊「智能体 · 模型 · 智能水平」。 */
 .review-dispatch-fields { display: grid; gap: 8px; max-width: 420px; }
@@ -98,12 +98,12 @@
 .review-dispatch-control form footer > button:hover:not(:disabled) { background: var(--accent-hover); }
 .review-dispatch-control form footer > button:disabled { cursor: not-allowed; opacity: .5; }
 .team-review-round { margin: 9px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
-.team-review-round.is-verified { border-color: color-mix(in lch,var(--green) 25%,var(--line)); }
-.team-review-round.is-verify_failed { border-color: color-mix(in lch,var(--red) 30%,var(--line)); }
+.team-review-round.is-verified { border-color: color-mix(in oklab,var(--green) 25%,var(--line)); }
+.team-review-round.is-verify_failed { border-color: color-mix(in oklab,var(--red) 30%,var(--line)); }
 .team-review-round > button { display: flex; width: 100%; min-height: 37px; align-items: center; gap: 7px; border: 0; background: transparent; padding: 5px 8px; text-align: left; }
 .team-review-round > button > span { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; background: var(--raised); color: var(--muted); font-size: 9.5px; font-weight: 750; }
 .team-review-round > button > b { color: var(--ink); font-size: 10.5px; }
-.team-review-round > button > em { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; background: color-mix(in lch,var(--accent) 9%,var(--raised)); padding: 2px 6px; color: var(--accent); font-size: 9.5px; font-style: normal; font-weight: 650; }
+.team-review-round > button > em { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; background: color-mix(in oklab,var(--accent) 9%,var(--raised)); padding: 2px 6px; color: var(--accent); font-size: 9.5px; font-style: normal; font-weight: 650; }
 .team-review-round.is-verified > button > em { background: var(--green-bg); color: var(--green); }
 .team-review-round.is-verify_failed > button > em { background: var(--red-bg); color: var(--red); }
 .team-review-round > button > small { color: var(--faint); font-size: 9.5px; }
@@ -117,7 +117,7 @@
 .team-review-shots h5 { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; color: var(--faint); font-size: 9.5px; text-transform: uppercase; }
 .team-review-shots > div { display: grid; grid-template-columns: repeat(auto-fill,minmax(130px,1fr)); gap: 7px; }
 .team-review-shot { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: var(--canvas); text-align: left; }
-.team-review-shot:hover { border-color: color-mix(in lch,var(--accent) 42%,var(--line)); }
+.team-review-shot:hover { border-color: color-mix(in oklab,var(--accent) 42%,var(--line)); }
 .team-review-shots img { display: block; width: 100%; aspect-ratio: 16/9; background: var(--raised); object-fit: cover; }
 .team-review-shots span { display: block; overflow: hidden; padding: 5px 6px; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -142,20 +142,20 @@
 /* 「合并后不提交」那一档欠着的那一步：验收台里的状态卡 + 动作行上那个「待提交」徽记。
    判据与来由见 web/src/review/PendingMergeCard.tsx 顶部（对话区那一侧只留 TaskHeader
    的「待提交」徽记，样式在 task-detail.css）。 */
-.team-accept-actions > span.is-pending-commit { border-color: color-mix(in lch,var(--amber) 36%,var(--line)); background: color-mix(in lch,var(--amber) 9%,var(--panel)); color: var(--amber); }
-.pending-merge-card { display: grid; gap: 8px; margin: 8px 12px 0; border: 1px solid color-mix(in lch,var(--amber) 34%,var(--line)); border-radius: 10px; background: color-mix(in lch,var(--amber) 6%,var(--panel)); padding: 9px 11px; font-size: 10.5px; }
-.pending-merge-card.is-settled { border-color: color-mix(in lch,var(--green) 26%,var(--line)); background: var(--green-bg); }
+.team-accept-actions > span.is-pending-commit { border-color: color-mix(in oklab,var(--amber) 36%,var(--line)); background: color-mix(in oklab,var(--amber) 9%,var(--panel)); color: var(--amber); }
+.pending-merge-card { display: grid; gap: 8px; margin: 8px 12px 0; border: 1px solid color-mix(in oklab,var(--amber) 34%,var(--line)); border-radius: 10px; background: color-mix(in oklab,var(--amber) 6%,var(--panel)); padding: 9px 11px; font-size: 10.5px; }
+.pending-merge-card.is-settled { border-color: color-mix(in oklab,var(--green) 26%,var(--line)); background: var(--green-bg); }
 .pending-merge-card > header { display: flex; align-items: flex-start; gap: 8px; }
-.pending-merge-card > header > span:first-child { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 7px; background: color-mix(in lch,var(--amber) 13%,var(--panel)); color: var(--amber); }
-.pending-merge-card.is-settled > header > span:first-child { background: color-mix(in lch,var(--green) 13%,var(--panel)); color: var(--green); }
+.pending-merge-card > header > span:first-child { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 7px; background: color-mix(in oklab,var(--amber) 13%,var(--panel)); color: var(--amber); }
+.pending-merge-card.is-settled > header > span:first-child { background: color-mix(in oklab,var(--green) 13%,var(--panel)); color: var(--green); }
 .pending-merge-card > header > div { min-width: 0; flex: 1; }
-.pending-merge-card b { display: block; color: color-mix(in lch,var(--amber) 70%,var(--ink)); font-size: 11px; }
-.pending-merge-card.is-settled b { color: color-mix(in lch,var(--green) 70%,var(--ink)); }
+.pending-merge-card b { display: block; color: color-mix(in oklab,var(--amber) 70%,var(--ink)); font-size: 11px; }
+.pending-merge-card.is-settled b { color: color-mix(in oklab,var(--green) 70%,var(--ink)); }
 .pending-merge-card p { margin: 3px 0 0; color: var(--muted); line-height: 1.55; }
 .pending-merge-refresh { display: inline-flex; height: 22px; flex: 0 0 auto; align-items: center; gap: 4px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 0 7px; color: var(--muted); font-size: 9.5px; }
 .pending-merge-refresh:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .pending-merge-refresh:disabled { cursor: not-allowed; opacity: .5; }
-.pending-merge-files, .pending-merge-commands { border-top: .5px solid color-mix(in lch,var(--amber) 18%,var(--line)); padding-top: 7px; }
+.pending-merge-files, .pending-merge-commands { border-top: .5px solid color-mix(in oklab,var(--amber) 18%,var(--line)); padding-top: 7px; }
 .pending-merge-files > span, .pending-merge-commands > span { display: block; color: var(--faint); font-size: 9.5px; font-weight: 650; }
 .pending-merge-files ul, .pending-merge-commands ul { display: grid; gap: 2px; margin: 4px 0 0; padding: 0; list-style: none; }
 .pending-merge-files code { display: block; overflow-wrap: anywhere; color: var(--muted); font-size: 9.5px; }
@@ -170,13 +170,13 @@
 /* 验收前置命令卡。跟 PendingMergeCard 同一副骨架（都是「验收停在这儿 + 出路」），
    只有色调随状态走：跑着=中性、通过=绿、没通过=红。 */
 .accept-gate-card { display: grid; gap: 8px; margin: 8px 12px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 9px 11px; font-size: 10.5px; }
-.accept-gate-card.is-running { border-color: color-mix(in lch,var(--accent) 30%,var(--line)); background: color-mix(in lch,var(--accent) 5%,var(--panel)); }
-.accept-gate-card.is-passed { border-color: color-mix(in lch,var(--green) 26%,var(--line)); background: var(--green-bg); }
-.accept-gate-card.is-failed { border-color: color-mix(in lch,var(--red) 30%,var(--line)); background: color-mix(in lch,var(--red) 5%,var(--panel)); }
+.accept-gate-card.is-running { border-color: color-mix(in oklab,var(--accent) 30%,var(--line)); background: color-mix(in oklab,var(--accent) 5%,var(--panel)); }
+.accept-gate-card.is-passed { border-color: color-mix(in oklab,var(--green) 26%,var(--line)); background: var(--green-bg); }
+.accept-gate-card.is-failed { border-color: color-mix(in oklab,var(--red) 30%,var(--line)); background: color-mix(in oklab,var(--red) 5%,var(--panel)); }
 /* 验收做完之后那张只读回执的「没通过」档:它不是关口(没有任何东西拦着你了),只是这次
    合并没有通过记录 —— 所以是琥珀不是红。色值自带 alpha 而不是跟 --line 混:--line 的
    色度是 0、色相却记着 282,lch 会沿短弧把黄插值成品红。 */
-.accept-gate-card.is-skipped { border-color: color-mix(in srgb, var(--amber) 34%, transparent); background: color-mix(in srgb, var(--amber) 5.5%, transparent); }
+.accept-gate-card.is-skipped { border-color: color-mix(in oklab, var(--amber) 34%, transparent); background: color-mix(in oklab, var(--amber) 5.5%, transparent); }
 .accept-gate-card.is-skipped > header > span:first-child { color: var(--amber); }
 .accept-gate-card > header { display: flex; align-items: flex-start; gap: 8px; }
 .accept-gate-card > header > span:first-child { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 7px; background: var(--raised); color: var(--muted); }
@@ -195,7 +195,7 @@
    「不用我修、该怎么办」的地方，所以不折起来。原文是**纯文本**（gateCommandMissNotice
    不发 markdown：同一份字还要进门禁日志和 MCP 回执，星号反引号在那两处只会原样显示
    —— 第 1 轮审查 N4），自带换行与序号，所以 pre-line。 */
-.accept-gate-diagnosis { border: 1px solid color-mix(in lch,var(--amber) 34%,var(--line)); border-radius: 7px; background: color-mix(in srgb, var(--amber) 6%, transparent); padding: 7px 9px; color: var(--ink); line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
+.accept-gate-diagnosis { border: 1px solid color-mix(in oklab,var(--amber) 34%,var(--line)); border-radius: 7px; background: color-mix(in oklab, var(--amber) 6%, transparent); padding: 7px 9px; color: var(--ink); line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
 .accept-gate-diagnosis > span { display: block; margin-bottom: 3px; color: var(--amber); font-size: 9.5px; font-weight: 650; }
 /* 已失效的历史结论:虚线 + 灰调,一眼看出它跟上面那块当前结论不是同一回事。 */
 .accept-gate-diagnosis.is-obsolete { border-style: dashed; border-color: var(--line2); background: var(--panel); color: var(--muted); }

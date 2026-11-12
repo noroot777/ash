@@ -17,7 +17,7 @@
 .composer-preset-dialog,
 .duet-handoff-modal,
 .markdown-report-dialog {
-  border-color: color-mix(in lch, var(--line2) 70%, transparent);
+  border-color: color-mix(in oklab, var(--line2) 70%, transparent);
   border-radius: 20px;
   box-shadow: 0 28px 90px rgb(20 22 30 / 22%), 0 6px 22px rgb(20 22 30 / 10%);
   animation: dialog-surface-in 210ms cubic-bezier(.2, .8, .2, 1) both;
@@ -29,7 +29,7 @@
   overflow-y: auto;
   padding: 22px;
   background:
-    radial-gradient(circle at 96% 0, color-mix(in srgb, var(--accent) 8%, transparent), transparent 25%),
+    radial-gradient(circle at 96% 0, color-mix(in oklab, var(--accent) 8%, transparent), transparent 25%),
     var(--panel);
 }
 
@@ -45,16 +45,16 @@
   width: 46px;
   height: 46px;
   place-items: center;
-  border: 1px solid color-mix(in lch, var(--accent) 18%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--accent) 18%, var(--line));
   border-radius: 14px;
-  background: color-mix(in lch, var(--accent) 10%, var(--panel));
+  background: color-mix(in oklab, var(--accent) 10%, var(--panel));
   color: var(--accent);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel) 72%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--panel) 72%, transparent);
 }
 
 .task-confirm-dialog > .task-confirm-header > span.is-danger {
-  border-color: color-mix(in srgb, var(--red) 24%, var(--line));
-  background: color-mix(in srgb, var(--red) 9%, var(--panel));
+  border-color: color-mix(in oklab, var(--red) 24%, var(--line));
+  background: color-mix(in oklab, var(--red) 9%, var(--panel));
   color: var(--red);
 }
 
@@ -97,8 +97,8 @@
 }
 
 .task-confirm-dialog:not(.handoff-dialog) > footer button:hover:not(:disabled) { border-color: var(--line2); box-shadow: 0 7px 18px rgb(35 37 48 / 8%); transform: translateY(-1px); }
-.task-confirm-dialog:not(.handoff-dialog) > footer button.is-primary { box-shadow: 0 10px 23px color-mix(in srgb, var(--accent) 20%, transparent); }
-.task-confirm-dialog:not(.handoff-dialog) > footer button.is-danger { box-shadow: 0 10px 23px color-mix(in srgb, var(--red) 18%, transparent); }
+.task-confirm-dialog:not(.handoff-dialog) > footer button.is-primary { box-shadow: 0 10px 23px color-mix(in oklab, var(--accent) 20%, transparent); }
+.task-confirm-dialog:not(.handoff-dialog) > footer button.is-danger { box-shadow: 0 10px 23px color-mix(in oklab, var(--red) 18%, transparent); }
 
 .create-project-dialog { width: min(740px, calc(100vw - 32px)) !important; }
 
@@ -121,7 +121,7 @@
   gap: 11px;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: color-mix(in lch, var(--raised) 68%, var(--panel));
+  background: color-mix(in oklab, var(--raised) 68%, var(--panel));
   padding: 13px;
   text-align: left;
   transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
@@ -141,23 +141,23 @@
 .create-project-mode > span:last-child { display: grid; min-width: 0; gap: 3px; }
 .create-project-mode b { color: var(--ink); font-size: 12.5px; font-weight: 670; }
 .create-project-mode small { color: var(--faint); font-size: 9.5px; line-height: 1.45; }
-.create-project-mode:hover:not(:disabled) { border-color: color-mix(in lch, var(--accent) 35%, var(--line)); box-shadow: 0 8px 22px rgb(35 37 48 / 6%); transform: translateY(-1px); }
+.create-project-mode:hover:not(:disabled) { border-color: color-mix(in oklab, var(--accent) 35%, var(--line)); box-shadow: 0 8px 22px rgb(35 37 48 / 6%); transform: translateY(-1px); }
 
 .create-project-mode.is-on {
-  border-color: color-mix(in lch, var(--accent) 55%, var(--line));
-  background: color-mix(in lch, var(--accent) 7%, var(--panel));
-  box-shadow: 0 10px 28px color-mix(in srgb, var(--accent) 10%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--panel) 60%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
+  background: color-mix(in oklab, var(--accent) 7%, var(--panel));
+  box-shadow: 0 10px 28px color-mix(in oklab, var(--accent) 10%, transparent), inset 0 0 0 1px color-mix(in oklab, var(--panel) 60%, transparent);
 }
 
-.create-project-mode.is-on > span:first-child { background: var(--accent); color: white; box-shadow: 0 7px 18px color-mix(in srgb, var(--accent) 22%, transparent); }
+.create-project-mode.is-on > span:first-child { background: var(--accent); color: white; box-shadow: 0 7px 18px color-mix(in oklab, var(--accent) 22%, transparent); }
 
 .quick-create-fields { gap: 13px; margin-top: 18px; }
 .quick-create-fields label { gap: 7px; }
 .quick-create-fields label > span { color: var(--muted); font-size: 10.5px; font-weight: 620; }
 .quick-create-fields input,
-.quick-create-fields select { height: 39px; border-radius: 10px; background: color-mix(in lch, var(--canvas) 72%, var(--panel)); padding-inline: 11px; box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel) 72%, transparent); }
+.quick-create-fields select { height: 39px; border-radius: 10px; background: color-mix(in oklab, var(--canvas) 72%, var(--panel)); padding-inline: 11px; box-shadow: inset 0 1px 0 color-mix(in oklab, var(--panel) 72%, transparent); }
 .quick-create-fields input:focus,
-.quick-create-fields select:focus { border-color: color-mix(in lch, var(--accent) 72%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 9%, transparent); }
+.quick-create-fields select:focus { border-color: color-mix(in oklab, var(--accent) 72%, var(--line)); box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 9%, transparent); }
 .quick-create-fields .create-project-health { border-radius: 11px; padding: 10px 12px; }
 .create-project-target { border: 1px dashed var(--line2); border-radius: 10px; background: var(--raised); padding: 8px 10px; }
 .create-project-note,
@@ -168,8 +168,8 @@
 .palette-results { padding: 7px; }
 .palette-row { min-height: 45px; border-radius: 10px; }
 .palette-row:hover,
-.palette-row.is-active { background: color-mix(in lch, var(--accent) 7%, var(--raised)); }
-.palette-footer { height: 36px; background: color-mix(in lch, var(--raised) 56%, var(--panel)); }
+.palette-row.is-active { background: color-mix(in oklab, var(--accent) 7%, var(--raised)); }
+.palette-footer { height: 36px; background: color-mix(in oklab, var(--raised) 56%, var(--panel)); }
 
 .notes-panel,
 .groups-panel { border-radius: 22px; }

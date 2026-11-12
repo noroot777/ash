@@ -31,12 +31,12 @@
 .task-execution-label { min-width: 0; max-width: min(58vw, 520px); overflow: hidden; font-weight: var(--w-regular); text-overflow: ellipsis; white-space: nowrap; }
 
 /* 出过异常：红色压过一切（executionBlockTone 只给 has-error / has-notice 其中一个）。 */
-.task-execution-block.has-error > summary { color: color-mix(in lch, var(--red) 82%, var(--muted)); }
-.task-execution-block.has-error .shim { --shim-base: color-mix(in lch, var(--red) 70%, var(--muted)); --shim-hi: var(--red); }
+.task-execution-block.has-error > summary { color: color-mix(in oklab, var(--red) 82%, var(--muted)); }
+.task-execution-block.has-error .shim { --shim-base: color-mix(in oklab, var(--red) 70%, var(--muted)); --shim-hi: var(--red); }
 /* 过程提示（上游在重试、还在等回话）：折起来时也得看得出这一轮里上游闹过脾气，但它
    跟「出了岔子」不是一回事 —— 琥珀比红色轻一档。 */
-.task-execution-block.has-notice > summary { color: color-mix(in lch, var(--amber) 58%, var(--muted)); }
-.task-execution-block.has-notice .shim { --shim-base: color-mix(in lch, var(--amber) 50%, var(--muted)); --shim-hi: var(--amber); }
+.task-execution-block.has-notice > summary { color: color-mix(in oklab, var(--amber) 58%, var(--muted)); }
+.task-execution-block.has-notice .shim { --shim-base: color-mix(in oklab, var(--amber) 50%, var(--muted)); --shim-hi: var(--amber); }
 
 .task-execution-events { margin: 0 0 4px 2px; border-left: 1px solid var(--line2); padding: 2px 0 2px 10px; }
 
@@ -81,10 +81,10 @@
 .task-tool-line--error svg,
 .task-tool-line.is-failed svg { color: var(--red); }
 /* 「提示 · 上游返回 502 …」那一行：整行调成琥珀。 */
-.task-tool-line--notice { color: color-mix(in lch, var(--amber) 62%, var(--muted)); }
+.task-tool-line--notice { color: color-mix(in oklab, var(--amber) 62%, var(--muted)); }
 .task-tool-line--notice svg { color: var(--amber); }
 .task-tool-line--notice > summary:hover,
-.task-tool-line--notice[open] > summary { color: color-mix(in lch, var(--amber) 80%, var(--ink)); }
+.task-tool-line--notice[open] > summary { color: color-mix(in oklab, var(--amber) 80%, var(--ink)); }
 
 /* 点开：「字段 值」，原始参数再折一层。左边让过图标，跟动词对齐。 */
 .task-tool-more { padding: 2px 0 8px 23px; }

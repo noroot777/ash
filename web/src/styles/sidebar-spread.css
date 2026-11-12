@@ -100,11 +100,11 @@
 
 /* 轮到你处理的那些行淡淡染一层琥珀：铺开是拿来「找出该我动的活」的。 */
 .workspace-sidebar.is-spread .workspace-task-row-wrap.is-todo:not(.is-selected) {
-  background: color-mix(in lch, var(--amber) 6%, transparent);
+  background: color-mix(in oklab, var(--amber) 6%, transparent);
 }
 
 .workspace-sidebar.is-spread .workspace-task-row-wrap.is-todo:not(.is-selected):hover {
-  background: color-mix(in lch, var(--amber) 11%, transparent);
+  background: color-mix(in oklab, var(--amber) 11%, transparent);
 }
 
 /* ── 右边几格 ─────────────────────────────────────────── */
@@ -297,7 +297,7 @@
 .workspace-spread-dot.is-on i {
   background: var(--spread-dot);
   transform: scale(1.14);
-  box-shadow: 0 0 0 2.5px color-mix(in lch, var(--spread-dot) 26%, transparent);
+  box-shadow: 0 0 0 2.5px color-mix(in oklab, var(--spread-dot) 26%, transparent);
 }
 
 .workspace-spread-dot--todo { --spread-dot: var(--amber); }

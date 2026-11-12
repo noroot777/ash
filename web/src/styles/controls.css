@@ -39,14 +39,14 @@
 .ui-button--primary {
   background: var(--accent);
   color: white;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-active) 28%, transparent), 0 1px 2px rgb(40 42 48 / 12%);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent-active) 28%, transparent), 0 1px 2px rgb(40 42 48 / 12%);
 }
 
 .ui-button--primary:hover,
 .ui-button--primary.is-hover {
   background: var(--accent-hover);
   color: white;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-active) 38%, transparent), 0 2px 4px rgb(40 42 48 / 14%);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent-active) 38%, transparent), 0 2px 4px rgb(40 42 48 / 14%);
 }
 
 .ui-button--primary:active,
@@ -84,15 +84,15 @@
 }
 
 .ui-button--danger {
-  border-color: color-mix(in srgb, var(--red) 38%, transparent);
+  border-color: color-mix(in oklab, var(--red) 38%, transparent);
   background: var(--panel);
   color: var(--red);
 }
 
 .ui-button--danger:hover,
 .ui-button--danger.is-hover {
-  background: color-mix(in srgb, var(--red) 6%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--red) 22%, transparent);
+  background: color-mix(in oklab, var(--red) 6%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--red) 22%, transparent);
 }
 
 /* 图钉（TaskPinButton）：置顶了是实心的墨色、一直在；没置顶的平时不画，指到头部或键盘走到它才
@@ -120,7 +120,7 @@ header:hover .task-pin,
 .ui-input.is-hover,
 .ui-input:focus,
 .ui-input.is-focus {
-  border-color: color-mix(in lch, var(--line2) 62%, var(--faint));
+  border-color: color-mix(in oklab, var(--line2) 62%, var(--faint));
 }
 
 .ui-menu {
@@ -272,7 +272,7 @@ header:hover .task-pin,
   height: 20px;
   flex: 0 0 30px;
   border-radius: 72px;
-  background: color-mix(in lch, var(--line2) 82%, var(--faint));
+  background: color-mix(in oklab, var(--line2) 82%, var(--faint));
   transition: background-color 150ms ease-out, opacity 150ms ease-out;
 }
 

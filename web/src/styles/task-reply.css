@@ -106,20 +106,20 @@
 
 .task-derivation-card {
   overflow: hidden;
-  border: 1px solid color-mix(in lch, var(--accent) 28%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--accent) 28%, var(--line));
   border-radius: 13px;
   background: var(--panel);
 }
-.task-derivation-card.is-team { border-color: color-mix(in lch, var(--cyan) 35%, var(--line)); }
+.task-derivation-card.is-team { border-color: color-mix(in oklab, var(--cyan) 35%, var(--line)); }
 .task-derivation-header {
   display: flex;
   align-items: flex-start;
   gap: 9px;
   border-bottom: 1px solid var(--line);
   padding: 11px 12px;
-  background: color-mix(in lch, var(--accent) 4%, var(--panel));
+  background: color-mix(in oklab, var(--accent) 4%, var(--panel));
 }
-.task-derivation-card.is-team .task-derivation-header { background: color-mix(in lch, var(--cyan) 4%, var(--panel)); }
+.task-derivation-card.is-team .task-derivation-header { background: color-mix(in oklab, var(--cyan) 4%, var(--panel)); }
 .task-derivation-header > span {
   display: grid;
   width: 28px;
@@ -127,10 +127,10 @@
   flex: 0 0 28px;
   place-items: center;
   border-radius: 8px;
-  background: color-mix(in lch, var(--accent) 12%, var(--panel));
+  background: color-mix(in oklab, var(--accent) 12%, var(--panel));
   color: var(--accent);
 }
-.task-derivation-card.is-team .task-derivation-header > span { background: color-mix(in lch, var(--cyan) 12%, var(--panel)); color: var(--cyan); }
+.task-derivation-card.is-team .task-derivation-header > span { background: color-mix(in oklab, var(--cyan) 12%, var(--panel)); color: var(--cyan); }
 .task-derivation-header > div { display: grid; min-width: 0; gap: 1px; }
 .task-derivation-header b { font-size: 12px; font-weight: 650; }
 .task-derivation-header small { color: var(--faint); font-size: 9.5px; }

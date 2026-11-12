@@ -1,7 +1,7 @@
 .remote-task-header .task-detail-title { cursor: default; }
 .remote-task-refresh { display: grid; width: 28px; height: 28px; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--muted); }
 .remote-task-refresh:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
-.remote-task-route { display: grid; min-height: 52px; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 8px; border-bottom: 0.5px solid var(--line); background: color-mix(in lch, var(--raised) 68%, var(--canvas)); padding: 7px 14px; color: var(--muted); }
+.remote-task-route { display: grid; min-height: 52px; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 8px; border-bottom: 0.5px solid var(--line); background: color-mix(in oklab, var(--raised) 68%, var(--canvas)); padding: 7px 14px; color: var(--muted); }
 .remote-task-route > svg { color: var(--faint); }
 .remote-task-route > div { display: grid; min-width: 0; gap: 2px; }
 .remote-task-route b { color: var(--ink); font-size: 11.5px; font-weight: 650; }
@@ -11,7 +11,7 @@
 .remote-task-route.is-offline b,
 .remote-task-route.is-offline > svg { color: var(--red); }
 .remote-task-reply .task-reply-actions > span { margin-left: auto; }
-.remote-return-error { display: grid; gap: 7px; margin: 12px 14px; border: 1px solid color-mix(in lch, var(--red) 30%, var(--line)); border-radius: 8px; background: color-mix(in lch, var(--red) 5%, var(--panel)); padding: 12px; color: var(--red); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.remote-return-error { display: grid; gap: 7px; margin: 12px 14px; border: 1px solid color-mix(in oklab, var(--red) 30%, var(--line)); border-radius: 8px; background: color-mix(in oklab, var(--red) 5%, var(--panel)); padding: 12px; color: var(--red); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .remote-return-progress { display: grid; gap: 7px; margin: 12px 14px; border: 1px solid var(--line2); border-radius: 8px; background: var(--raised); padding: 12px; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .remote-return-error p, .remote-return-progress p { margin: 0; white-space: pre-wrap; }
 .remote-return-error p:last-of-type { color: var(--muted); }

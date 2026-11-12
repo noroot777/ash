@@ -77,7 +77,7 @@
 .groups-panel-body {
   min-height: 0;
   overflow-y: auto;
-  background: color-mix(in lch, var(--canvas) 72%, var(--panel));
+  background: color-mix(in oklab, var(--canvas) 72%, var(--panel));
   padding: 18px;
 }
 

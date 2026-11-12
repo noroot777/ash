@@ -231,8 +231,8 @@
 .wf-chip:disabled { cursor: default; }
 .wf-chip.is-warn {
   color: var(--amber);
-  background: color-mix(in srgb, var(--amber) 9%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber) 24%, transparent);
+  background: color-mix(in oklab, var(--amber) 9%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--amber) 24%, transparent);
 }
 
 .wf-failchip {
@@ -242,10 +242,10 @@
   margin-top: 2px;
   font-size: var(--t-xs);
   color: var(--amber);
-  background: color-mix(in srgb, var(--amber) 8%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber) 20%, transparent);
+  background: color-mix(in oklab, var(--amber) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--amber) 20%, transparent);
 }
-.wf-failchip:hover:not(:disabled) { background: color-mix(in srgb, var(--amber) 15%, transparent); }
+.wf-failchip:hover:not(:disabled) { background: color-mix(in oklab, var(--amber) 15%, transparent); }
 .wf-failchip:disabled { cursor: default; }
 
 /* 紧一档时字和内边距跟着收 —— 只收下限不收字号的话，站是塞进去了，chip 却全成了
@@ -260,12 +260,12 @@
 .wf-node.is-done i { box-shadow: inset 0 0 0 2.5px var(--green); color: var(--green); }
 .wf-node.is-current i {
   transform: scale(1.15);
-  box-shadow: inset 0 0 0 2.5px var(--accent), 0 0 0 5px color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 0 0 0 2.5px var(--accent), 0 0 0 5px color-mix(in oklab, var(--accent) 18%, transparent);
   color: var(--accent);
 }
 .wf-node.is-blocked i {
   transform: scale(1.15);
-  box-shadow: inset 0 0 0 2.5px var(--red), 0 0 0 5px color-mix(in srgb, var(--red) 16%, transparent);
+  box-shadow: inset 0 0 0 2.5px var(--red), 0 0 0 5px color-mix(in oklab, var(--red) 16%, transparent);
   color: var(--red);
 }
 .wf-plate.is-pending, .wf-body.is-pending { opacity: 0.62; }
@@ -277,8 +277,8 @@
 .wf-plate.has-issue h4 { color: var(--red); }
 .wf-plate.has-issue .wf-short {
   color: var(--red);
-  background: color-mix(in srgb, var(--red) 8%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 22%, transparent);
+  background: color-mix(in oklab, var(--red) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--red) 22%, transparent);
 }
 
 /* ── 就地改：点哪儿弹哪儿，只有这一个字段 ────────────────────────── */
@@ -351,7 +351,7 @@
 /* 起手式那张下拉：名字一行、颜色点一行、描述一行 */
 .wf-pop-tpl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; white-space: normal; }
 .wf-pop-sub { flex-basis: 100%; font-size: 11px; color: var(--faint); }
-.wf-pop-option.is-on .wf-pop-sub { color: color-mix(in srgb, var(--accent) 72%, transparent); }
+.wf-pop-option.is-on .wf-pop-sub { color: color-mix(in oklab, var(--accent) 72%, transparent); }
 
 /* 站点菜单的目录页：左边字段名、右边它现在的值，点一行钻进去改 */
 .wf-pop-cell {
@@ -398,7 +398,7 @@
 .wf-pop-ops .wf-pop-del { flex: 1.4; }
 .wf-pop-ops .wf-pop-del:hover:not(:disabled) {
   color: var(--red);
-  background: color-mix(in srgb, var(--red) 10%, transparent);
+  background: color-mix(in oklab, var(--red) 10%, transparent);
 }
 
 .wf-pop-form { display: flex; flex-direction: column; gap: 6px; }
@@ -565,8 +565,8 @@
   border-radius: 10px;
   font-size: 12px;
   color: var(--red);
-  background: color-mix(in srgb, var(--red) 7%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 20%, transparent);
+  background: color-mix(in oklab, var(--red) 7%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--red) 20%, transparent);
 }
 
 .wf-lib-rail { padding: 0; overflow: hidden; }
@@ -594,7 +594,7 @@
 }
 .wf-vst:last-child { padding-bottom: 0; }
 .wf-vst:last-child::before { display: none; }
-.wf-vst[data-state="done"]::before { background: color-mix(in srgb, var(--accent) 46%, transparent); }
+.wf-vst[data-state="done"]::before { background: color-mix(in oklab, var(--accent) 46%, transparent); }
 .wf-vpin {
   display: inline-flex;
   align-items: center;
@@ -627,7 +627,7 @@
   font-size: 9.5px;
   font-style: normal;
 }
-.wf-vchips em[data-warn="true"] { background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--red); }
+.wf-vchips em[data-warn="true"] { background: color-mix(in oklab, var(--red) 12%, transparent); color: var(--red); }
 .wf-vfail { display: flex; align-items: center; gap: 3px; margin-top: 4px; color: var(--faint); font-size: 9.5px; }
 .wf-vnote { margin: 4px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.5; }
 .wf-vgate { margin-top: 7px; }

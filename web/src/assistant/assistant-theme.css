@@ -56,11 +56,11 @@
 .assistant-shell .chat-jump { background: var(--panel); border-color: var(--line); color: var(--accent); box-shadow: 0 3px 12px #2d435d10; }
 .assistant-shell .chat-live-line > button { color: var(--muted); }
 .assistant-shell .chat-composer { background: var(--panel); border-color: var(--line2); box-shadow: 0 2px 9px #2d435d06; }
-.assistant-shell .chat-composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 13%, transparent); }
+.assistant-shell .chat-composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 13%, transparent); }
 .assistant-shell .chat-composer textarea::placeholder,.assistant-shell .chat-composer footer > span,.assistant-shell .chat-composer-hint { color: var(--faint); }
 .assistant-shell .chat-composer footer > button { color: var(--muted); }
 .assistant-shell .chat-composer footer .chat-send { background: var(--accent); color: white; }
-.assistant-shell .chat-composer footer .chat-send:hover:not(:disabled) { background: color-mix(in lch, var(--accent) 80%, var(--ink)); }
-.assistant-shell .chat-error { color: var(--red); border-color: color-mix(in srgb, var(--red) 25%, var(--panel)); background: color-mix(in srgb, var(--red) 7%, var(--panel)); }
+.assistant-shell .chat-composer footer .chat-send:hover:not(:disabled) { background: color-mix(in oklab, var(--accent) 80%, var(--ink)); }
+.assistant-shell .chat-error { color: var(--red); border-color: color-mix(in oklab, var(--red) 25%, var(--panel)); background: color-mix(in oklab, var(--red) 7%, var(--panel)); }
 .assistant-shell .chat-info { border-color: var(--assistant-rail-line); background: var(--canvas); }
 .assistant-shell .chat-context-note { color: var(--muted); }

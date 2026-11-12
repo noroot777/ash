@@ -26,7 +26,7 @@
 /* 有东西在跑:按钮自己就是那盏灯,不必再去底部找。 */
 .cmd-launcher.is-live { color: var(--green); }
 .cmd-launcher.is-live:hover,
-.cmd-launcher.is-live[aria-expanded="true"] { background: color-mix(in srgb, var(--green) 14%, transparent); }
+.cmd-launcher.is-live[aria-expanded="true"] { background: color-mix(in oklab, var(--green) 14%, transparent); }
 .cmd-launcher__crash {
   position: absolute;
   top: 3px;
@@ -52,7 +52,7 @@
   background: var(--panel);
   color: var(--ink);
   border-radius: 13px;
-  box-shadow: color-mix(in srgb, var(--ink) 7%, transparent) 0 0 0 1px, var(--shadow);
+  box-shadow: color-mix(in oklab, var(--ink) 7%, transparent) 0 0 0 1px, var(--shadow);
   overflow: hidden;
   text-align: left;
 }
@@ -120,10 +120,10 @@
 .cmd-pop__svc-btn.is-stop {
   color: var(--red);
   background: transparent;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 55%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--red) 55%, transparent);
 }
 .cmd-pop__svc-btn.is-stop:hover {
-  background: color-mix(in srgb, var(--red) 10%, transparent);
+  background: color-mix(in oklab, var(--red) 10%, transparent);
   box-shadow: inset 0 0 0 1px var(--red);
 }
 
@@ -158,11 +158,11 @@
 }
 .cmd-pop__row-dot.is-on {
   background: var(--green);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 16%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--green) 16%, transparent);
 }
 .cmd-pop__row-dot.is-err {
   background: var(--red);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 14%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--red) 14%, transparent);
 }
 
 .cmd-pop__row-main {

@@ -2,7 +2,7 @@
 .reviewer-settings-status { display:flex; min-height:240px; align-items:center; justify-content:center; gap:8px; color: var(--muted); }
 .reviewer-settings-status.is-error { color:var(--red); }
 .reviewer-settings-layout { display:grid; min-height:480px; grid-template-columns:230px minmax(0,1fr); }
-.reviewer-settings-layout > aside { border-right:1px solid var(--line); background:color-mix(in lch,var(--raised) 45%,var(--panel)); }
+.reviewer-settings-layout > aside { border-right:1px solid var(--line); background:color-mix(in oklab,var(--raised) 45%,var(--panel)); }
 .reviewer-settings-layout > aside > header { display:flex; min-height:44px; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); padding:0 10px 0 12px; }
 .reviewer-settings-layout > aside > header b { font-size: var(--t-xs); }
 .reviewer-settings-layout > aside > header button { display:inline-flex; align-items:center; gap:4px; border:0; border-radius:6px; background:transparent; padding:5px 7px; color:var(--accent); font-size: var(--t-xs); font-weight: var(--w-medium); }

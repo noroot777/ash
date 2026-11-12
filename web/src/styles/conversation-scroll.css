@@ -16,7 +16,7 @@
   place-items: center;
   border: 1px solid var(--line2);
   border-radius: 50%;
-  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  background: color-mix(in oklab, var(--panel) 90%, transparent);
   color: var(--muted);
   box-shadow: var(--menu-shadow);
   opacity: 0.8;

@@ -39,8 +39,8 @@
 .wf-mini-stop:hover:not(:disabled),
 .wf-mini-stop[aria-expanded="true"] {
   background: var(--panel);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 55%, transparent),
-    0 0 0 3px color-mix(in srgb, var(--tone) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--tone) 55%, transparent),
+    0 0 0 3px color-mix(in oklab, var(--tone) 12%, transparent);
 }
 .wf-mini-stop:disabled { cursor: default; }
 
@@ -50,7 +50,7 @@
   height: 7px;
   border-radius: 50%;
   background: var(--tone);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 16%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--tone) 16%, transparent);
 }
 
 .wf-mini-no {

@@ -1,6 +1,6 @@
 .team-view { position: relative; display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; background: var(--canvas); }
 .team-header { --task-header-gap: 8px; position: relative; z-index: 14; display: flex; height: 44px; flex: 0 0 44px; align-items: center; gap: var(--task-header-gap); border-bottom: .5px solid var(--line); padding: 0 10px 0 14px; background: var(--canvas); }
-.team-kind { flex: 0 0 auto; border-radius: 5px; background: color-mix(in lch, var(--accent) 10%, var(--raised)); padding: 2px 7px; color: var(--accent); font-size: 9.5px; font-weight: 750; }
+.team-kind { flex: 0 0 auto; border-radius: 5px; background: color-mix(in oklab, var(--accent) 10%, var(--raised)); padding: 2px 7px; color: var(--accent); font-size: 9.5px; font-weight: 750; }
 .team-header > input { width: 130px; min-width: 90px; flex: 1; overflow: hidden; border: 0; border-radius: 5px; background: transparent; padding: 3px 5px; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; outline: 0; }
 .team-header > input:hover, .team-header > input:focus { background: var(--raised); }
 .team-busy-pill { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; border-radius: 999px; padding: 3px 5px; color: var(--muted); font-size: 10px; font-weight: 650; }
@@ -8,7 +8,7 @@
 .team-header-actions > button, .team-header-menu > button { display: inline-flex; height: 28px; align-items: center; justify-content: center; gap: 5px; border: 1px solid var(--line2); border-radius: 8px; background: var(--panel); padding: 0 9px; color: var(--muted); font-size: 11px; font-weight: 600; box-shadow: var(--surface-shadow); }
 .team-header-actions > button:hover, .team-header-menu > button:hover { background: var(--overlay); color: var(--ink); }
 .team-header-actions > button.is-primary { border-color: var(--accent); background: var(--accent); color: white; }
-.team-header-actions > button.is-danger { border-color: color-mix(in lch, var(--red) 38%, var(--line)); color: var(--red); }
+.team-header-actions > button.is-danger { border-color: color-mix(in oklab, var(--red) 38%, var(--line)); color: var(--red); }
 .team-header-menu { position: relative; }
 .team-header-menu > button { width: 28px; padding: 0; }
 .team-header-menu > div { position: absolute; z-index: 80; top: 34px; right: 0; width: 218px; border: 1px solid var(--line2); border-radius: 10px; background: var(--panel); padding: 5px; box-shadow: var(--menu-shadow); }
@@ -20,23 +20,23 @@
    外面再套一层滚动只会把「发送答复」滚出视野。 */
 .team-lead-question { flex: 0 0 auto; border-bottom: .5px solid var(--line); padding: 0 16px 8px; }
 .team-lead-question .task-question-card { max-width: none; margin: 10px 0 0; }
-.team-halt-notice { display: flex; min-height: 35px; flex: 0 0 auto; align-items: center; gap: 8px; border-bottom: 1px solid color-mix(in lch, var(--amber) 24%, var(--line)); background: color-mix(in lch, var(--amber) 7%, var(--panel)); padding: 6px 16px; color: var(--muted); font-size: 10.5px; }
-.team-halt-notice b { color: color-mix(in lch, var(--amber) 72%, var(--ink)); font-size: 11.5px; }
+.team-halt-notice { display: flex; min-height: 35px; flex: 0 0 auto; align-items: center; gap: 8px; border-bottom: 1px solid color-mix(in oklab, var(--amber) 24%, var(--line)); background: color-mix(in oklab, var(--amber) 7%, var(--panel)); padding: 6px 16px; color: var(--muted); font-size: 10.5px; }
+.team-halt-notice b { color: color-mix(in oklab, var(--amber) 72%, var(--ink)); font-size: 11.5px; }
 .team-halt-notice small { margin-left: auto; color: var(--faint); }
-.team-cua-notice { display: flex; min-height: 36px; flex: 0 0 auto; align-items: center; gap: 7px; border-bottom: 1px solid color-mix(in lch,var(--amber) 28%,var(--line)); background: color-mix(in lch,var(--amber) 8%,var(--panel)); padding: 6px 14px; color: var(--muted); font-size: 10.5px; }
+.team-cua-notice { display: flex; min-height: 36px; flex: 0 0 auto; align-items: center; gap: 7px; border-bottom: 1px solid color-mix(in oklab,var(--amber) 28%,var(--line)); background: color-mix(in oklab,var(--amber) 8%,var(--panel)); padding: 6px 14px; color: var(--muted); font-size: 10.5px; }
 .team-cua-notice > svg { flex: 0 0 auto; color: var(--amber); }
 .team-cua-notice b { color: var(--ink); }
 .team-cua-notice code { color: var(--faint); font-size: 9.5px; }
-.team-cua-notice button { display: inline-flex; height: 25px; align-items: center; gap: 4px; margin-left: auto; border: 1px solid color-mix(in lch,var(--amber) 36%,var(--line)); border-radius: 6px; background: var(--panel); padding: 0 7px; color: color-mix(in lch,var(--amber) 76%,var(--ink)); font-size: 10px; }
+.team-cua-notice button { display: inline-flex; height: 25px; align-items: center; gap: 4px; margin-left: auto; border: 1px solid color-mix(in oklab,var(--amber) 36%,var(--line)); border-radius: 6px; background: var(--panel); padding: 0 7px; color: color-mix(in oklab,var(--amber) 76%,var(--ink)); font-size: 10px; }
 
-.team-attention { flex: 0 0 auto; border-bottom: 1px solid color-mix(in lch,var(--cyan) 28%,var(--line)); background: color-mix(in lch,var(--cyan) 6%,var(--panel)); }
+.team-attention { flex: 0 0 auto; border-bottom: 1px solid color-mix(in oklab,var(--cyan) 28%,var(--line)); background: color-mix(in oklab,var(--cyan) 6%,var(--panel)); }
 .team-attention > header { display: flex; min-height: 32px; align-items: center; gap: 7px; padding: 5px 14px; color: var(--muted); font-size: 10.5px; }
 .team-attention > header > svg { flex: 0 0 auto; color: var(--cyan); }
 .team-attention > header b { color: var(--ink); font-size: 11.5px; }
 .team-attention > header span { color: var(--faint); }
-.team-attention-list { max-height: 190px; overflow-y: auto; border-top: 1px solid color-mix(in lch,var(--cyan) 18%,var(--line)); }
+.team-attention-list { max-height: 190px; overflow-y: auto; border-top: 1px solid color-mix(in oklab,var(--cyan) 18%,var(--line)); }
 .team-attention-list > article { display: flex; min-height: 43px; align-items: center; gap: 12px; padding: 6px 14px; }
-.team-attention-list > article + article { border-top: 1px solid color-mix(in lch,var(--cyan) 13%,var(--line)); }
+.team-attention-list > article + article { border-top: 1px solid color-mix(in oklab,var(--cyan) 13%,var(--line)); }
 .team-attention-question { min-width: 0; flex: 1; }
 .team-attention-question > button { max-width: min(360px,45vw); overflow: hidden; border: 0; background: transparent; padding: 0; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 650; vertical-align: middle; }
 .team-attention-question > button:hover { color: var(--accent); }
@@ -86,7 +86,7 @@
 .team-feed-agent > header b { color: var(--muted); font-weight: 650; }
 .team-feed-agent > .task-markdown { margin-top: 0; }
 .team-feed-user { display: flex; justify-content: flex-end; margin: 0 0 20px; padding-left: 42px; }
-.team-feed-user > div { max-width: min(680px,88%); border: 1px solid color-mix(in lch, var(--accent) 28%, var(--line)); border-radius: 9px; background: color-mix(in lch, var(--accent) 7%, var(--panel)); padding: 8px 11px; }
+.team-feed-user > div { max-width: min(680px,88%); border: 1px solid color-mix(in oklab, var(--accent) 28%, var(--line)); border-radius: 9px; background: color-mix(in oklab, var(--accent) 7%, var(--panel)); padding: 8px 11px; }
 .team-feed-user header { display: flex; gap: 6px; color: var(--faint); font-size: 10.5px; }
 .team-feed-user header b { color: var(--muted); }
 .team-feed-user p { margin: 2px 0 0; color: var(--ink); font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; }
@@ -97,8 +97,8 @@
 .team-feed-event { display: flex; max-width: 800px; align-items: center; gap: 8px; margin: 16px 0; color: var(--faint); font-size: 10.5px; }
 .team-feed-event.is-error { color: var(--red); }
 .team-feed-inbound { max-width: 800px; margin: 0 0 18px; border-left: 2px solid var(--line2); border-radius: 0 8px 8px 0; padding: 7px 9px 7px 11px; }
-.team-feed-inbound.is-question { border-color: var(--cyan); background: linear-gradient(90deg,color-mix(in lch,var(--cyan) 7%,transparent),transparent); }
-.team-feed-inbound.is-failed { border-color: var(--red); background: linear-gradient(90deg,color-mix(in lch,var(--red) 6%,transparent),transparent); }
+.team-feed-inbound.is-question { border-color: var(--cyan); background: linear-gradient(90deg,color-mix(in oklab,var(--cyan) 7%,transparent),transparent); }
+.team-feed-inbound.is-failed { border-color: var(--red); background: linear-gradient(90deg,color-mix(in oklab,var(--red) 6%,transparent),transparent); }
 .team-feed-inbound header { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--faint); font-size: 10.5px; }
 .team-feed-inbound header > span { display: grid; width: 19px; height: 19px; place-items: center; border-radius: 5px; background: #8b8e98; color: white; font-family: var(--font-mono); font-size: 9px; font-weight: 750; }
 .team-feed-inbound header button { border: 0; background: transparent; padding: 0; color: var(--ink); font-size: 11.5px; font-weight: 650; }
@@ -123,14 +123,14 @@
 .team-dispatch-index { width: 14px; color: var(--faint); font-family: var(--font-mono); font-size: 9.5px; }
 .team-dispatch-card > footer { border-top: 1px solid var(--line); padding: 5px 9px; color: var(--faint); font-size: 10px; }
 
-.team-worker-rail { min-height: 100%; overflow-y: auto; background: color-mix(in lch,var(--canvas) 96%,var(--chrome)); padding: 12px; }
+.team-worker-rail { min-height: 100%; overflow-y: auto; background: color-mix(in oklab,var(--canvas) 96%,var(--chrome)); padding: 12px; }
 .team-worker-rail > header { display: flex; justify-content: space-between; margin-bottom: 7px; color: var(--faint); font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
 .team-worker-rail > header small { font-weight: 450; letter-spacing: 0; text-transform: none; }
 .team-worker-rail > p, .team-worker-rail > footer { margin: 9px 2px; color: var(--faint); font-size: 10.5px; line-height: 1.55; }
 .team-worker-rail > button { display: block; width: 100%; margin-bottom: 6px; border: 1px solid transparent; border-radius: 9px; background: var(--panel); padding: 8px 9px; text-align: left; box-shadow: 0 1px 2px rgb(30 32 38 / 4%); }
 .team-worker-rail > button:hover { border-color: var(--line2); }
-.team-worker-rail > button.is-selected { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in lch,var(--accent) 14%,transparent); }
-.team-worker-rail > button.is-asking { border-color: color-mix(in lch,var(--cyan) 42%,var(--line)); background: color-mix(in lch,var(--cyan) 5%,var(--panel)); }
+.team-worker-rail > button.is-selected { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in oklab,var(--accent) 14%,transparent); }
+.team-worker-rail > button.is-asking { border-color: color-mix(in oklab,var(--cyan) 42%,var(--line)); background: color-mix(in oklab,var(--cyan) 5%,var(--panel)); }
 .team-worker-rail > button > div { display: flex; align-items: center; gap: 6px; }
 .team-worker-rail__index { width: 14px; flex: 0 0 14px; color: var(--faint); font-family: var(--font-mono); font-size: 9.5px; text-align: center; }
 .team-worker-rail > button b { min-width: 0; flex: 1; overflow: hidden; color: var(--ink); font-size: 11.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }

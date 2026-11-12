@@ -64,21 +64,21 @@
 .task-user-bubble {
   min-width: 0;
   max-width: min(640px, 88%);
-  border: 1px solid color-mix(in lch, var(--line) 55%, transparent);
+  border: 1px solid color-mix(in oklab, var(--line) 55%, transparent);
   border-radius: 16px 6px 16px 16px;
-  background: color-mix(in lch, var(--accent) 3%, var(--raised));
+  background: color-mix(in oklab, var(--accent) 3%, var(--raised));
   padding: 12px 16px 14px;
-  box-shadow: 0 1px 2px color-mix(in lch, var(--ink) 3%, transparent);
+  box-shadow: 0 1px 2px color-mix(in oklab, var(--ink) 3%, transparent);
 }
 .task-user-bubble > header { gap: 8px; }
-.task-message--user:not(.is-system-authored) header { color: color-mix(in lch, var(--muted) 72%, var(--faint)); }
-.task-message--user:not(.is-system-authored) header b { color: color-mix(in lch, var(--accent) 70%, var(--muted)); font-weight: 600; }
+.task-message--user:not(.is-system-authored) header { color: color-mix(in oklab, var(--muted) 72%, var(--faint)); }
+.task-message--user:not(.is-system-authored) header b { color: color-mix(in oklab, var(--accent) 70%, var(--muted)); font-weight: 600; }
 .task-user-bubble > header time { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .task-user-bubble > header button { flex: none; color: var(--muted); }
 .task-user-bubble > header button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .task-user-bubble > p {
   margin: 7px 0 0;
-  color: color-mix(in lch, var(--ink) 88%, var(--muted));
+  color: color-mix(in oklab, var(--ink) 88%, var(--muted));
   font-size: 12.5px;
   font-weight: 400;
   line-height: 1.75;
@@ -137,7 +137,7 @@
 .task-markdown th,
 .task-markdown td { border: 1px solid var(--line2); padding: 6px 8px; text-align: left; vertical-align: top; }
 .task-markdown th { background: var(--raised); color: var(--ink); font-weight: 650; }
-.task-markdown td { background: color-mix(in lch, var(--panel) 82%, transparent); }
+.task-markdown td { background: color-mix(in oklab, var(--panel) 82%, transparent); }
 .task-markdown th > :first-child,
 .task-markdown td > :first-child { margin-top: 0; }
 .task-markdown th > :last-child,
@@ -162,7 +162,7 @@
 .task-code-copy:focus-visible,
 .task-code-copy.is-copied,
 .task-code-copy.is-copy-failed { opacity: 1; }
-.task-code-copy:hover { background: color-mix(in lch, var(--ink) 7%, transparent); color: var(--ink); }
+.task-code-copy:hover { background: color-mix(in oklab, var(--ink) 7%, transparent); color: var(--ink); }
 .task-code-copy.copy-button.is-copied { color: var(--green); }
 .task-code-copy.copy-button.is-copy-failed { color: var(--red); }
 @media (hover: none) { .task-code-copy { opacity: 1; } }
@@ -210,14 +210,14 @@
 .task-message-footer button:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
 /* 「重跑上一回合」：同一行里唯一的**动作**，其余都是元信息，所以给它红色描边——
    出现的前提本来就是「上一回合崩了」，不该跟会话 id 一样灰。 */
-.task-message-footer button.is-retry { display: inline-flex; align-items: center; gap: 3px; border-color: color-mix(in lch, var(--red) 45%, var(--line)); color: var(--red); }
-.task-message-footer button.is-retry:hover { border-color: var(--red); background: color-mix(in lch, var(--red) 12%, var(--raised)); color: var(--red); }
+.task-message-footer button.is-retry { display: inline-flex; align-items: center; gap: 3px; border-color: color-mix(in oklab, var(--red) 45%, var(--line)); color: var(--red); }
+.task-message-footer button.is-retry:hover { border-color: var(--red); background: color-mix(in oklab, var(--red) 12%, var(--raised)); color: var(--red); }
 .task-message-footer button.is-retry:disabled { opacity: 0.55; }
 .task-message-footer button.task-message-copy-action { display: inline-flex; align-items: center; gap: 3px; }
 /* 尾栏这几颗是描边胶囊，反馈得连边框一起变，只换字色在灰底上看不出来；
    同样要压过上面那条 :hover。 */
-.task-message-footer button.copy-button.is-copied { border-color: color-mix(in lch, var(--green) 45%, var(--line)); background: transparent; color: var(--green); }
-.task-message-footer button.copy-button.is-copy-failed { border-color: color-mix(in lch, var(--red) 45%, var(--line)); background: transparent; color: var(--red); }
+.task-message-footer button.copy-button.is-copied { border-color: color-mix(in oklab, var(--green) 45%, var(--line)); background: transparent; color: var(--green); }
+.task-message-footer button.copy-button.is-copy-failed { border-color: color-mix(in oklab, var(--red) 45%, var(--line)); background: transparent; color: var(--red); }
 
 /* Token 用量。三颗都在尾栏里，跟 .task-message-footer 的按钮同款外形。 */
 .token-usage-chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; white-space: nowrap; }

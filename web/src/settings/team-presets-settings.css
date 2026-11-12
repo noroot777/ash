@@ -31,7 +31,7 @@
   overflow: hidden;
   border-right: 1px solid var(--line);
   border-radius: 11px 0 0 11px;
-  background: color-mix(in lch, var(--raised) 42%, var(--panel));
+  background: color-mix(in oklab, var(--raised) 42%, var(--panel));
 }
 
 .team-presets-list > header {
@@ -245,7 +245,7 @@
   gap: 20px;
   border: 1px solid var(--line);
   border-radius: 9px;
-  background: color-mix(in lch, var(--raised) 45%, var(--panel));
+  background: color-mix(in oklab, var(--raised) 45%, var(--panel));
   padding: 8px 11px;
 }
 
@@ -272,7 +272,7 @@
   gap: 10px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: color-mix(in lch, var(--role-color) 2%, var(--panel));
+  background: color-mix(in oklab, var(--role-color) 2%, var(--panel));
   padding: 9px 10px;
 }
 
@@ -297,7 +297,7 @@
   flex: none;
   place-items: center;
   border-radius: 7px;
-  background: color-mix(in lch, var(--role-color) 14%, var(--panel));
+  background: color-mix(in oklab, var(--role-color) 14%, var(--panel));
   color: var(--role-color);
 }
 
@@ -314,7 +314,7 @@
   margin: 0;
   grid-column: 1 / -1;
   border-radius: 7px;
-  background: color-mix(in srgb, var(--amber) 8%, transparent);
+  background: color-mix(in oklab, var(--amber) 8%, transparent);
   padding: 6px 8px;
   color: var(--amber);
   font-size: var(--t-xs);

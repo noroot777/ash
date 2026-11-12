@@ -10,7 +10,7 @@
   display: flex; align-items: center; gap: 10px;
   height: 50px; flex: 0 0 auto; padding: 0 16px;
   border-bottom: .5px solid var(--line);
-  background: color-mix(in lch, var(--red) 5%, var(--canvas));
+  background: color-mix(in oklab, var(--red) 5%, var(--canvas));
 }
 .gwb-design .cf-title { display: flex; align-items: center; gap: 8px; color: var(--red); }
 .gwb-design .cf-title b { font-size: 13.5px; font-weight: 650; }
@@ -37,7 +37,7 @@
   box-shadow: var(--surface-shadow), 0 0 0 .5px var(--line);
   overflow: hidden;
 }
-.gwb-design .cf-block.is-solved { box-shadow: var(--surface-shadow), 0 0 0 1px color-mix(in lch, var(--green) 40%, transparent); }
+.gwb-design .cf-block.is-solved { box-shadow: var(--surface-shadow), 0 0 0 1px color-mix(in oklab, var(--green) 40%, transparent); }
 .gwb-design .cf-block-head {
   display: flex; align-items: center; gap: 9px;
   padding: 8px 12px; border-bottom: .5px solid var(--line);
@@ -58,10 +58,10 @@
   font-family: var(--font-mono); font-size: 10.5px; line-height: 1.65;
   padding: 4px 12px 8px; white-space: pre; overflow-x: auto;
 }
-.gwb-design .cf-side.is-ours .cf-code { background: color-mix(in lch, var(--accent) 5%, var(--panel)); }
-.gwb-design .cf-side.is-theirs .cf-code { background: color-mix(in lch, var(--cyan) 5%, var(--panel)); }
+.gwb-design .cf-side.is-ours .cf-code { background: color-mix(in oklab, var(--accent) 5%, var(--panel)); }
+.gwb-design .cf-side.is-theirs .cf-code { background: color-mix(in oklab, var(--cyan) 5%, var(--panel)); }
 .gwb-design .cf-code.is-result { background: var(--green-bg); }
-.gwb-design .cf-code.is-ai { background: color-mix(in lch, var(--accent) 6%, var(--panel)); }
+.gwb-design .cf-code.is-ai { background: color-mix(in oklab, var(--accent) 6%, var(--panel)); }
 .gwb-design .cf-code-line { min-height: 1.1em; }
 .gwb-design .cf-actions {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;

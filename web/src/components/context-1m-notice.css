@@ -5,9 +5,9 @@
   align-items: flex-start;
   gap: 6px;
   margin: 6px 0 0;
-  border: 1px solid color-mix(in lch, var(--amber) 28%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--amber) 28%, var(--line));
   border-radius: 7px;
-  background: color-mix(in lch, var(--amber) 7%, var(--panel));
+  background: color-mix(in oklab, var(--amber) 7%, var(--panel));
   padding: 6px 8px;
   color: var(--amber);
   font-size: 10.5px;

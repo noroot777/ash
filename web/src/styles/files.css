@@ -23,7 +23,7 @@
 
 .file-tree__row { display:flex; width:100%; min-height:24px; align-items:center; gap:5px; border:0; border-radius:5px; background:transparent; padding-right:8px; text-align:left; }
 .file-tree__row:hover { background:var(--raised); }
-.file-tree__row.is-active { background:color-mix(in lch,var(--accent) 12%,var(--panel)); box-shadow:inset 2px 0 var(--accent); }
+.file-tree__row.is-active { background:color-mix(in oklab,var(--accent) 12%,var(--panel)); box-shadow:inset 2px 0 var(--accent); }
 .file-tree__row.is-ignored { opacity:.5; }
 .file-tree__caret { display:grid; width:10px; flex:0 0 10px; place-items:center; color:var(--faint); }
 .file-tree__glyph { display:grid; flex:0 0 auto; place-items:center; color:var(--faint); }
@@ -64,8 +64,8 @@
 .file-viewer__reel small { min-width:44px; color:var(--faint); font-size:10.5px; font-variant-numeric:tabular-nums; text-align:center; }
 /* 删除单独成组：跟「关闭」之间隔一道竖线，避免顺手点到。真正的防线是那个确认框。 */
 .file-viewer__danger-group { display:flex; flex:0 0 auto; align-items:center; gap:8px; margin-left:2px; border-left:1px solid var(--line); padding-left:8px; }
-.file-viewer__action.is-danger:hover:not(:disabled) { border-color:color-mix(in lch,var(--red) 45%,var(--line2)); background:color-mix(in lch,var(--red) 9%,var(--panel)); color:var(--red); }
-.file-viewer__notice { display:flex; align-items:center; gap:5px; margin:0; border-bottom:.5px solid var(--line); background:color-mix(in lch,var(--amber) 8%,var(--panel)); padding:6px 16px; color:var(--muted); font-size:10px; }
+.file-viewer__action.is-danger:hover:not(:disabled) { border-color:color-mix(in oklab,var(--red) 45%,var(--line2)); background:color-mix(in oklab,var(--red) 9%,var(--panel)); color:var(--red); }
+.file-viewer__notice { display:flex; align-items:center; gap:5px; margin:0; border-bottom:.5px solid var(--line); background:color-mix(in oklab,var(--amber) 8%,var(--panel)); padding:6px 16px; color:var(--muted); font-size:10px; }
 .file-viewer__notice-action { flex:none; margin-left:auto; border:.5px solid var(--line); border-radius:4px; background:var(--panel); padding:2px 8px; color:var(--text); font-size:10px; cursor:pointer; }
 .file-viewer__notice-action:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
 .file-viewer__notice-action:disabled { opacity:.5; cursor:default; }
@@ -132,9 +132,9 @@
 .file-delete__fact > span { display:grid; flex:0 0 auto; place-items:start; margin-top:1px; color:var(--muted); }
 .file-delete__fact b { display:block; color:var(--ink); font-size:11.5px; font-weight:600; }
 .file-delete__fact p { margin:3px 0 0; color:var(--faint); font-size:10.5px; line-height:1.65; }
-.file-delete__fact.is-danger { border-color:color-mix(in lch,var(--red) 30%,var(--line)); background:color-mix(in lch,var(--red) 7%,var(--panel)); }
+.file-delete__fact.is-danger { border-color:color-mix(in oklab,var(--red) 30%,var(--line)); background:color-mix(in oklab,var(--red) 7%,var(--panel)); }
 .file-delete__fact.is-danger > span, .file-delete__fact.is-danger b { color:var(--red); }
-.file-delete__fact.is-warn { border-color:color-mix(in lch,var(--amber) 32%,var(--line)); background:color-mix(in lch,var(--amber) 8%,var(--panel)); }
+.file-delete__fact.is-warn { border-color:color-mix(in oklab,var(--amber) 32%,var(--line)); background:color-mix(in oklab,var(--amber) 8%,var(--panel)); }
 .file-delete__fact.is-warn > span, .file-delete__fact.is-warn b { color:var(--amber); }
 .file-delete__fact.is-ok > span { color:var(--green); }
 .file-delete__fact ul { margin:6px 0 0; padding-left:15px; color:var(--faint); font-family:var(--font-mono); font-size:10px; line-height:1.75; }

@@ -17,7 +17,7 @@
 .shell-editor .cm-line { padding: 0 12px; }
 .shell-editor .cm-gutters { border-right: 1px solid var(--line); background: var(--raised); color: var(--muted); }
 .shell-editor .cm-lineNumbers .cm-gutterElement { min-width: 34px; padding: 0 8px; }
-.shell-editor .cm-activeLine, .shell-editor .cm-activeLineGutter { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.shell-editor .cm-activeLine, .shell-editor .cm-activeLineGutter { background: color-mix(in oklab, var(--accent) 6%, transparent); }
 .shell-editor .cm-activeLineGutter { color: var(--muted); }
 .shell-editor .cm-cursor { border-left-color: var(--ink); }
 .shell-editor .cm-selectionBackground, .shell-editor .cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground { background: var(--accent-soft); }

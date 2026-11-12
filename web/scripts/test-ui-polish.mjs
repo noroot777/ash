@@ -106,7 +106,7 @@ try {
 
   const dangerColors = await page.locator(".task-confirm-header > span.is-danger").evaluate((node) => {
     const reference = document.createElement("i");
-    reference.style.cssText = "background:color-mix(in srgb,var(--red) 9%,var(--panel));border:1px solid color-mix(in srgb,var(--red) 24%,var(--line))";
+    reference.style.cssText = "background:color-mix(in oklab,var(--red) 9%,var(--panel));border:1px solid color-mix(in oklab,var(--red) 24%,var(--line))";
     document.body.append(reference);
     const actual = getComputedStyle(node);
     const expected = getComputedStyle(reference);
@@ -119,8 +119,8 @@ try {
     reference.remove();
     return result;
   });
-  assert.equal(dangerColors.background, dangerColors.expectedBackground, "危险图标底色应按 sRGB 混出淡红");
-  assert.equal(dangerColors.border, dangerColors.expectedBorder, "危险图标描边应按 sRGB 混出红色");
+  assert.equal(dangerColors.background, dangerColors.expectedBackground, "危险图标底色应按 oklab 混出淡红");
+  assert.equal(dangerColors.border, dangerColors.expectedBorder, "危险图标描边应按 oklab 混出红色");
 
   await page.emulateMedia({ reducedMotion: "reduce" });
   for (const selector of [".create-project-mode", ".task-confirm-dialog > footer button", ".auth-choice", ".settings-main .users-row", ".settings-main .pmem-row"]) {

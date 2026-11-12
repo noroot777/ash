@@ -10,14 +10,14 @@
 .scheduled-message-row > b { min-width: 0; flex: 1; overflow: hidden; color: var(--ink); font-size: 10.5px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-message-row > button { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--faint); }
 .scheduled-message-row > button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
-.scheduled-message-row > button:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 55%, transparent); outline-offset: 1px; }
+.scheduled-message-row > button:focus-visible { outline: 2px solid color-mix(in oklab, var(--accent) 55%, transparent); outline-offset: 1px; }
 .scheduled-message-row > button:disabled { opacity: .48; }
 /* 审查链自己排的答复：只标出来，不给撤回按钮（那颗按钮的承诺在这里兑现不了）。 */
 .scheduled-message-row > .scheduled-message-managed { flex: 0 0 auto; color: var(--faint); font-size: 9.5px; white-space: nowrap; }
 .scheduled-message-row > .scheduled-message-guide { display: inline-flex; width: auto; height: 24px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--overlay); padding: 0 8px; color: var(--muted); font-size: 9.5px; font-weight: 650; white-space: nowrap; }
 .scheduled-message-guide > svg { color: var(--accent); }
-.scheduled-message-guide:hover:not(:disabled) { border-color: color-mix(in lch, var(--accent) 38%, var(--line2)); background: var(--sel-bg); color: var(--ink); }
-.scheduled-message-guide:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 55%, transparent); outline-offset: 1px; }
+.scheduled-message-guide:hover:not(:disabled) { border-color: color-mix(in oklab, var(--accent) 38%, var(--line2)); background: var(--sel-bg); color: var(--ink); }
+.scheduled-message-guide:focus-visible { outline: 2px solid color-mix(in oklab, var(--accent) 55%, transparent); outline-offset: 1px; }
 .scheduled-message-guide:disabled { opacity: .48; }
 @container (max-width: 520px) {
   .scheduled-message-row > .scheduled-message-guide { width: 24px; justify-content: center; padding: 0; }
@@ -65,7 +65,7 @@
 .agent-model-picker-crumb { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; color: var(--faint); font-size: 9.5px; }
 .agent-model-picker-crumb > svg { color: var(--muted); }
 .agent-model-picker-head input { min-width: 0; flex: 1; height: 25px; border: 1px solid var(--line2); border-radius: 6px; background: var(--canvas); padding: 0 7px; color: var(--ink); font: 11px var(--font-sans); outline: none; }
-.agent-model-picker-head input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in lch, var(--accent) 13%, transparent); }
+.agent-model-picker-head input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 13%, transparent); }
 .agent-model-picker-rows { max-height: min(46vh, 330px); overflow-y: auto; overscroll-behavior: contain; padding: 5px; }
 .agent-model-picker-rows > p { margin: 6px 7px; color: var(--faint); font-size: 10.5px; }
 /* 分块标题跟统一下拉组件（.ui-dropdown-group）同一套：灰底条 + 大写小字，滚动时吸顶。 */
