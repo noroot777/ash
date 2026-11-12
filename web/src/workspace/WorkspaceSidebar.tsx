@@ -4,18 +4,19 @@ import type { HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
 import type { TerminalSessionInfo } from "../lib/api.ts";
 import type { OutboundBar } from "./OutboundStatusBar.tsx";
 import {
+  ListBullets,
   ListChecks,
   MagnifyingGlass,
   NotePencil,
   Plus,
   SidebarSimple,
-  Stack,
   ChatCircleDots,
 } from "@phosphor-icons/react";
 import { CommandsLauncher } from "./CommandsLauncher.tsx";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { ProjectGitContext } from "./ProjectGitContext.tsx";
 import { ProjectSwitcher } from "./ProjectSwitcher.tsx";
+import { SidebarIconButton } from "./SidebarIconButton.tsx";
 import { SpreadFilterControls } from "./SpreadFilterControls.tsx";
 import { TaskTree } from "./TaskTree.tsx";
 import { TASK_MODE_LABEL, type TaskScope } from "./taskScope.ts";
@@ -55,7 +56,6 @@ export function WorkspaceSidebar({
   chatOpen,
   onAssistant,
   assistantOpen,
-  onGroups,
   onCreate,
   onNewProject,
   onSettings,
@@ -97,7 +97,6 @@ export function WorkspaceSidebar({
   chatOpen?: boolean;
   onAssistant?: () => void;
   assistantOpen?: boolean;
-  onGroups: () => void;
   onCreate: () => void;
   onNewProject: () => void;
   onSettings: () => void;
@@ -156,6 +155,8 @@ export function WorkspaceSidebar({
 
   return (
     <aside className={`workspace-sidebar${spread.laidOut ? " is-spread" : ""}${spread.open ? " is-spread-open" : ""}`} aria-label="项目和任务导航">
+      {/* 一行只管一件事：顶行「在哪儿」（项目、常用命令），第二行「新建」，第三行「找」。
+          分组管理不在这几行里：它在项目菜单的「设置」和 ⌘K 里。 */}
       <div className="workspace-sidebar-top">
         <div className="workspace-sidebar-selectors">
           <ProjectSwitcher
@@ -177,7 +178,7 @@ export function WorkspaceSidebar({
               onOpenTerminal={onOpenTerminal}
             />
           )}
-          {/* 顶行最右:常用命令的启动入口。项目名、分支、运行现场三件事凑在同一行里。 */}
+          {/* 顶行最右:常用命令的启动入口。 */}
           <CommandsLauncher
             currentProject={currentProject}
             canUseTerminal={commands.canUseTerminal}
@@ -187,21 +188,22 @@ export function WorkspaceSidebar({
             notify={notify}
           />
         </div>
-        <div className="workspace-sidebar-tools" role="toolbar" aria-label="任务工具">
-          {onChat && <button className="workspace-side-icon" type="button" aria-label="聊天" aria-pressed={!!chatOpen} onClick={() => onChat()}><ChatCircleDots size={16} /></button>}
-          <SpreadFilterControls spread={spread} tasks={tasks} scope={scope} />
-          <button className="workspace-side-icon" type="button" title={`搜索 ${modifier} K`} aria-label={`搜索 ${modifier} K`} onClick={onSearch}>
-            <MagnifyingGlass size={15} aria-hidden="true" />
-          </button>
-          <button className="workspace-side-icon" type="button" title="随手记" aria-label="随手记" onClick={onNotes}>
+        <div className="workspace-sidebar-make">
+          <NewTaskButton onCreate={onCreate} />
+          <SidebarIconButton label="随手记" onClick={onNotes}>
             <NotePencil size={15} aria-hidden="true" />
-          </button>
-          <button className="workspace-side-icon" type="button" title="分组管理" aria-label="分组管理" onClick={onGroups}>
-            <Stack size={15} aria-hidden="true" />
-          </button>
-          <button className="workspace-side-icon" type="button" title="新建任务" aria-label="新建任务" onClick={onCreate}>
-            <Plus size={16} weight="bold" aria-hidden="true" />
-          </button>
+          </SidebarIconButton>
+        </div>
+        {/* 「找」：一颗星加五颗点的筛选靠左（铺开时原地换成带字带数的胶囊），右边搜索和
+            任务列表。F 原来只是底部一句点不动的提示，现在是这一行最右的一颗键。 */}
+        <div className="workspace-sidebar-find" role="toolbar" aria-label="筛选与搜索">
+          <SpreadFilterControls spread={spread} tasks={tasks} scope={scope} />
+          <SidebarIconButton label="搜索" keys={`${modifier} K`} haspopup="dialog" onClick={onSearch}>
+            <MagnifyingGlass size={15} aria-hidden="true" />
+          </SidebarIconButton>
+          <SidebarIconButton className="workspace-spread-toggle" label={spread.open ? "收起任务列表" : "打开任务列表"} keys="F" pressed={spread.open} onClick={spread.toggle}>
+            <ListBullets size={16} aria-hidden="true" />
+          </SidebarIconButton>
         </div>
       </div>
 
@@ -231,12 +233,7 @@ export function WorkspaceSidebar({
             <kbd>J</kbd><kbd>K</kbd> 选 · <kbd>Enter</kbd> 打开 · 指住右边两列看全文 · <kbd>F</kbd>/<kbd>Esc</kbd> 收起
           </span>
         )}
-        {!spread.open && (
-          <span className="workspace-spread-shortcut" aria-label="按 F 打开任务列表">
-            <kbd>F</kbd>
-            {width < 240 ? "打开" : "打开任务列表"}
-          </span>
-        )}
+        {onChat && <button type="button" aria-label="聊天" aria-pressed={!!chatOpen} onClick={() => onChat()}><ChatCircleDots size={15} aria-hidden="true" /></button>}
         {onAssistant && <button className="workspace-assistant-entry" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} {...tipProps("assistant")} onClick={() => { footerTip.hide(); onAssistant(); }}>
           <AssistantIcon size={15} filled={assistantOpen} />
           <span className="workspace-assistant-label">助手</span>
@@ -249,5 +246,19 @@ export function WorkspaceSidebar({
       <HoverTip at={footerTip.at}>{tipContent}</HoverTip>
       <WorkspaceResizeHandle width={width} onChange={onWidthChange} />
     </aside>
+  );
+}
+
+// 「新建任务」占满第二行：它是侧栏里最常按的一下，值得一整行，而不是工具行里六颗长得差不多的图标之一。
+function NewTaskButton({ onCreate }: { onCreate: () => void }) {
+  const tip = useHoverTip();
+  return (
+    <>
+      <button className="workspace-new-task" type="button" {...tip.anchorProps} onClick={() => { tip.hide(); onCreate(); }}>
+        <Plus size={14} aria-hidden="true" />
+        <span>新建任务</span>
+      </button>
+      <HoverTip at={tip.at}>新建任务 <kbd>C</kbd></HoverTip>
+    </>
   );
 }

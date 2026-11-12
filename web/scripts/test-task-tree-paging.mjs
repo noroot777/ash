@@ -63,7 +63,8 @@ try {
   await workerMore.getByRole("button", { name: "收起", exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('.workspace-worker-list .workspace-task-row').length === 12);
 
-  // —— 三、「其他项目」那一叠：40 条，同样一次一页。
+  // —— 三、「其他项目」那一叠：40 条，同样一次一页。它先折成一行，点开才是一个项目一行。
+  await page.getByRole("button", { name: /^展开其他项目，/ }).click();
   await page.getByRole("button", { name: "隔壁项目" }).click();
   const otherList = page.locator(".workspace-other-project-tasks");
   const otherRows = otherList.locator(".workspace-task-row");

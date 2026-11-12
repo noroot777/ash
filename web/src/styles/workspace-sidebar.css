@@ -1,0 +1,206 @@
+/* 侧栏里任务树以外的那几行：顶上「在哪儿 / 新建 / 找」三行、最底下一行、收起后的那一列。
+   从 workspace.css 拆出来，是因为这几行改版时整块重排了，跟主区那些规则不是一回事。 */
+
+.workspace-sidebar--collapsed .workspace-project-avatar {
+  margin-top: 1px;
+}
+
+.workspace-sidebar--collapsed .workspace-connection-light {
+  margin-top: auto;
+}
+
+/* ── 顶上三行：一行只管一件事 ──────────────────────────── */
+.workspace-sidebar-top {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+}
+
+/* 第一行「在哪儿」：项目、（分支）、常用命令 */
+.workspace-sidebar-selectors {
+  display: flex;
+  height: 36px;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+}
+
+/* 第二行「新建」：新建任务占满这一行，右边一颗随手记 */
+.workspace-sidebar-make {
+  display: flex;
+  height: 32px;
+  align-items: center;
+  gap: 3px;
+  margin-top: 6px;
+}
+
+.workspace-new-task {
+  display: flex;
+  height: 32px;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  padding: 0 8px 0 0;
+  color: var(--ink);
+  font-size: var(--t-sm);
+  font-weight: var(--w-regular);
+  text-align: left;
+  outline-offset: -2px;
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+
+.workspace-new-task > svg {
+  flex: 0 0 auto;
+  margin: 0 6px 0 7px;
+  color: var(--muted);
+}
+
+.workspace-new-task > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-new-task:hover { background: var(--hover-bg); }
+.workspace-new-task:active { background: var(--sel-bg); }
+
+/* 第三行「找」：筛选（保留项）靠左，搜索和任务列表靠右。筛选那排点 / 铺开后的胶囊自带
+   margin-right:auto，把两颗图标顶到右端。 */
+.workspace-sidebar-find {
+  display: flex;
+  height: 30px;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  margin-top: 10px;
+  padding-left: 4px;
+}
+
+/* 侧栏里的纯图标键：28 见方，平时次级色，指上去墨色。按下去的（聊天、助手开着、任务列表
+   铺开着）也是墨色，不再染主色 —— 主色只留给状态。 */
+.workspace-side-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--muted);
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.workspace-side-icon:hover {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.workspace-side-icon:active { background: var(--sel-bg); }
+
+.workspace-side-icon[aria-pressed="true"],
+.workspace-side-icon[aria-expanded="true"] {
+  background: var(--sel-bg);
+  color: var(--ink);
+}
+
+/* ── 最底下一行 ─────────────────────────────────────────── */
+.workspace-sidebar-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
+  padding: 6px 0 1px;
+}
+
+.workspace-sidebar-bottom .workspace-spread-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-connection {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 4px 6px;
+}
+
+.workspace-connection:focus-visible,
+.workspace-connection-light:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.workspace-connection:focus-visible {
+  outline-offset: -2px;
+}
+
+.workspace-connection i,
+.workspace-connection-light {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: var(--r-full);
+  background: var(--red);
+}
+
+.workspace-connection.is-connected i,
+.workspace-connection-light.is-connected {
+  background: var(--green);
+}
+
+.workspace-sidebar-bottom > button {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  padding: 4px 7px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+}
+
+.workspace-sidebar-bottom .workspace-assistant-entry {
+  white-space: nowrap;
+  background: transparent;
+  color: var(--muted);
+}
+
+.workspace-side-icon.workspace-assistant-entry {
+  background: transparent;
+}
+
+.workspace-sidebar-bottom > button:hover {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.workspace-sidebar-bottom .workspace-assistant-entry:hover,
+.workspace-sidebar-bottom .workspace-assistant-entry[aria-pressed="true"],
+.workspace-side-icon.workspace-assistant-entry:hover,
+.workspace-side-icon.workspace-assistant-entry[aria-pressed="true"] {
+  color: var(--ink);
+}
+
+/* 窄屏（手机）上列表和内容一次只给一样，铺开和收起都没有意义 */
+@media (max-width: 720px) {
+  .workspace-spread-toggle,
+  .workspace-sidebar-bottom > button[aria-label="收起侧边栏"] { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-new-task,
+  .workspace-side-icon { transition: none; }
+}

@@ -101,8 +101,10 @@ try {
   assert.deepEqual(screen, ["pin", "a1", "a2", "team", "old1", "old2", "gone"], "展开出来的旧行接在本机任务后面");
   assert.deepEqual(await walk(7), screen, "年龄闸放出来的行必须跟着进序列");
 
-  // —— 四、「其他项目」那一叠：展开后它的行也在屏幕上，也必须进序列。
+  // —— 四、「其他项目」那一叠：折成一行（右边写有几个），点开是一个项目一行，再点开项目
+  // 它的行才在屏幕上，也必须进序列。
   await reset();
+  await page.getByRole("button", { name: /^展开其他项目，1 个$/ }).click();
   await page.getByRole("button", { name: "隔壁项目" }).click();
   await page.locator('.workspace-task-tree [data-task-id="b1"]').waitFor();
   screen = await screenOrder();

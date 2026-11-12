@@ -27,7 +27,6 @@ import {
 } from "../settings/SettingsPage.tsx";
 import { CommandPalette } from "../overlays/CommandPalette.tsx";
 import { NotesPanel } from "../overlays/NotesPanel.tsx";
-import { GroupsPanel } from "../overlays/GroupsPanel.tsx";
 import { TaskComposerPanel, type ComposerDraft } from "../composer/TaskComposerPanel.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
@@ -104,7 +103,6 @@ export function WorkspaceShell() {
   const [assistantOrigin, setAssistantOrigin] = useState<AssistantOrigin | null>(initial.assistantOrigin);
   const assistantOpen = assistantOrigin !== null;
   const [notes, setNotes] = useState<{ projectId: string; noteId: string | null } | null>(initial.view === "notes" && initial.projectId ? { projectId: initial.projectId, noteId: initial.noteId } : null);
-  const [groupsPanelOpen, setGroupsPanelOpen] = useState(false);
   // composer.draft 只承载「从别处带进来的一份内容」（随手记转任务）。用户自己敲的正文
   // 和附件不走这里 —— 它们存在全局草稿库里按项目留着（见 composer/composerDraft.ts），
   // 所以去聊天/看别的任务再回来，框里原样还在，不需要谁把它抬来抬去。
@@ -403,7 +401,6 @@ export function WorkspaceShell() {
     setComposer(null);
     setNotes({ projectId: nextProjectId, noteId });
   };
-  const openGroups = () => { if (requireProject("管理分组")) setGroupsPanelOpen(true); };
   // 设置页里项目那几节（项目设置 / 成员 / 分组 / 已归档）没有项目就只有一句空话，进去等于
   // 撞墙 —— 命令面板里的「分组管理」「项目设置」走的正是这里，所以门禁挡在入口而不是页内。
   // 项目行被改过之后换掉手里那一份。设置页和新建面板都会写项目（名称、目录、起手式、
@@ -527,7 +524,7 @@ export function WorkspaceShell() {
   useWorkspaceShortcuts({
     // 这颗开关只管列表导航那几颗单键（j/k/f/c/r/q）：换了界面它们就没有落点。
     // `G …` 一族不受它约束，在聊天 / 助手 / 设置页照样按得到（见 useWorkspaceShortcuts）。
-    enabled: !gitOpen && !settingsSection && !groupsPanelOpen && !chatOpen && !assistantOpen,
+    enabled: !gitOpen && !settingsSection && !chatOpen && !assistantOpen,
     paletteOpen,
     composerOpen: composer !== null,
     spreadOpen: spread.open,
@@ -585,7 +582,6 @@ export function WorkspaceShell() {
   const overlays = <>
     <CommandPalette open={paletteOpen} projects={projects} currentProject={currentProject} tasks={tasks} selectedTask={selectedTask} groups={groups} onClose={() => setPaletteOpen(false)} onProject={selectProject} onTaskMode={() => { selectTaskMode(); setPaletteOpen(false); }} onTask={selectTask} onTaskUpdated={updateTask} onNote={openNotes} onComposer={openComposer} onNewGroup={() => { if (requireProject("新建分组")) setCreateDialog({ kind: "group" }); }} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onDeleteTask={setDeleteTarget} onSettings={openSettings} notify={notify} />
     {notes && notesProject && <NotesPanel key={`${notes.projectId}:${notes.noteId ?? "list"}`} project={notesProject} initialNoteId={notes.noteId} onClose={() => setNotes(null)} onTask={(nextTaskId) => { const task = tasks.find((row) => row.id === nextTaskId); if (task) selectTask(task); else api.task(nextTaskId).then(selectTask).catch(() => notify("关联任务读取失败")); setNotes(null); }} onConvert={(draft) => openComposer("single", draft)} notify={notify} />}
-    {groupsPanelOpen && currentProject && <GroupsPanel project={currentProject} groups={groups} tasks={tasks} onClose={() => setGroupsPanelOpen(false)} onChanged={refreshGroups} notify={notify} />}
     {deleteTarget && <DeleteTaskDialog task={deleteTarget} onClose={() => setDeleteTarget(null)} onDeleted={(ids) => { ids.forEach(deleteTask); setDeleteTarget(null); }} notify={notify} />}
     {handoffTarget && <HandoffDialog task={handoffTarget} onClose={() => setHandoffTarget(null)} onTaskUpdate={updateTask} onOpenRemote={selectRemoteTask} notify={notify} />}
     {createDialog?.kind === "project" && <CreateProjectDialog projects={projects} reason={createDialog.reason} notify={notify} onClose={() => setCreateDialog(null)} onCreated={(created) => { const existing = projects.some(project => project.id === created.id); setProjects((current) => current.some(project => project.id === created.id) ? current : [...current, created]); setProjectId(created.id); setTaskId(null); setSettingsSection(null); setCreateDialog(null); notify(existing ? "已打开项目" : "项目已创建"); }} />}
@@ -612,7 +608,7 @@ export function WorkspaceShell() {
 
   return (
     <><div className="workspace-system-layout">{handoffAlert}<div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}${chatOpen ? " is-chat" : ""}${assistantOpen ? " is-assistant" : ""}${narrowPane.pane === "both" ? "" : ` is-narrow-${narrowPane.pane}`}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed && !narrowPane.narrow} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={toContent(selectTask)} onRemoteTask={toContent(selectRemoteTask)} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} onQueueChanged={() => refetchTasks({ silent: true }).then(() => {})} outbound={outboundBar} onOpenTerminal={currentProject && canUseTerminal ? terminal.reveal : null} commands={commandsWiring} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={openGroups} onChat={toContent(openChat)} chatOpen={chatOpen} onAssistant={toContent(openAssistant)} assistantOpen={assistantOpen} onCreate={toContent(() => openComposer("single"))} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={openSettingsHome} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed && !narrowPane.narrow} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={toContent(selectTask)} onRemoteTask={toContent(selectRemoteTask)} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} onQueueChanged={() => refetchTasks({ silent: true }).then(() => {})} outbound={outboundBar} onOpenTerminal={currentProject && canUseTerminal ? terminal.reveal : null} commands={commandsWiring} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onChat={toContent(openChat)} chatOpen={chatOpen} onAssistant={toContent(openAssistant)} assistantOpen={assistantOpen} onCreate={toContent(() => openComposer("single"))} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={openSettingsHome} />
       <main className="workspace-main">
         {narrowPane.pane === "content" && <button type="button" className="workspace-narrow-back" onClick={narrowPane.showList}><CaretLeft size={14} weight="bold" aria-hidden="true" />列表</button>}
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}

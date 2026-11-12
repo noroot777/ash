@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
 import { CaretRight } from "@phosphor-icons/react";
 import { useTaskReadState, type LookForTask } from "../lib/useTaskReadState.ts";
@@ -229,27 +229,27 @@ function ScopedTaskTree({
   const renderSection = (entry: (typeof layout)[number] | undefined) => {
     if (!entry || !entry.groups.some((group) => group.tasks.length + group.extraTasks.length)) return null;
     const { section, grouped, groups } = entry;
-    // 分组时这一节自己不再顶一个「任务」标题：项目那一行已经在分段了，再压一层标题
-    // 就是三级帽子叠在一起，跟「弱化」正好反着来。
+    // 「置顶」「任务」两节不写标题：置顶的排在最前、行尾一颗图钉，和后面的隔一道缝 ——
+    // 布局自己就说清了，再顶一个标题只是多一行字。
     //
-    // 「置顶」「任务」这两节**不收起**（用户 2026-09-08 指定）：它们是这份列表的主体，
-    // 顶上摆一颗能把主体整段藏起来的箭头，收益抵不上误点一下满屏消失。侧栏里唯一能
-    // 折叠的是下面那节「其他机器」——它是别处的东西，藏起来才有意义。
+    // 这两节也**不收起**（用户 2026-09-08 指定）：它们是这份列表的主体，摆一颗能把主体
+    // 整段藏起来的箭头，收益抵不上误点一下满屏消失。能折起来的只有下面「其他机器」
+    // 「其他项目」—— 它们是别处的东西，藏起来才有意义。
     return (
-      <section className={`workspace-task-section${grouped ? " workspace-task-section--grouped" : ""}`} data-task-section={section.key} key={section.key}>
-        {!grouped && <header className="workspace-task-section-title">{section.label}</header>}
+      <section className={`workspace-task-section${grouped ? " workspace-task-section--grouped" : ""}`} data-task-section={section.key} aria-label={section.label} key={section.key}>
         {grouped ? groups.map(renderProjectGroup) : renderRows(groups[0]!, true)}
       </section>
     );
   };
-  const pinned = layout.find((entry) => entry.section.key === "pinned");
-  const rest = layout.find((entry) => entry.section.key === "rest");
+  const pinnedNode = renderSection(layout.find((entry) => entry.section.key === "pinned"));
+  const restNode = renderSection(layout.find((entry) => entry.section.key === "rest"));
   const noVisibleTasks = !layout.some((entry) => entry.kept.length);
   return (
     <>
       <OutboundStatusBar {...outbound} />
-      {renderSection(pinned)}
-      {renderSection(rest)}
+      {pinnedNode}
+      {pinnedNode && restNode && <div className="workspace-task-gap" role="separator" />}
+      {restNode}
       {/* 一条不剩时必须自己说出来，还得给条退路：窄态那排点很小，不说清楚的话看着就是
           「任务全没了」。它排在离线提示**之后** —— 两句话可以同时出现，而且先说清楚
           「有台机器问不到」，再说「剩下的没有」。 */}
@@ -316,6 +316,27 @@ function OtherProject({
   );
 }
 
+// 「其他项目」那一行开没开，记在本机：点开过的人多半还想下次一进来就看得见。没存过 = 折着。
+const OTHER_PROJECTS_OPEN_KEY = "ash:other-projects:open";
+
+function useOtherProjectsOpen() {
+  const [open, setOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem(OTHER_PROJECTS_OPEN_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(OTHER_PROJECTS_OPEN_KEY, open ? "1" : "0");
+    } catch {
+      // 存不下就只在这一次会话里生效。
+    }
+  }, [open]);
+  return [open, setOpen] as const;
+}
+
 export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTaskId, selectedRemoteTaskId, spread, onTask, onRemoteTask, onTaskStarred, onHandoffFinished, onQueueChanged, outbound, notify }: TaskTreeProps) {
   const { lookForTask } = useTaskReadState(tasks, selectedTaskId);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
@@ -324,6 +345,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
   const taskMode = scope.kind === "tasks";
   const otherProjects = taskMode ? [] : projects.filter((project) => project.id !== currentProjectId);
   const currentProject = projects.find((project) => project.id === currentProjectId) ?? null;
+  const [othersOpen, setOthersOpen] = useOtherProjectsOpen();
   // 行尾队列徽标点开的抽屉(查看/重排/移出),挂在树顶层,一次只开一条队列。
   const [openQueueId, setOpenQueueId] = useState<string | null>(null);
   // 徽标表只在任务模式给：单项目态下每行都是同一个项目，标了纯属占地方。
@@ -359,9 +381,20 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
           machineSection={taskMode ? null : <HandoffMachines project={currentProject} tasks={tasks} selectedRemoteTaskId={selectedRemoteTaskId} onRemoteTask={onRemoteTask} notify={notify} onFinished={onHandoffFinished} />}
         />
         {otherProjects.length > 0 && (
-          <section className="workspace-other-projects">
-            <header className="workspace-task-section-title">其他项目</header>
-            {otherProjects.map((project) => (
+          <section className="workspace-other-projects" aria-labelledby="workspace-other-projects-title">
+            {/* 跟「其他机器」一样折成一行、右边写有几个；点开是一个项目一行，再点开是它的任务。 */}
+            <button
+              className="workspace-fold"
+              type="button"
+              aria-expanded={othersOpen}
+              aria-label={`${othersOpen ? "折叠" : "展开"}其他项目，${otherProjects.length} 个`}
+              onClick={() => setOthersOpen((value) => !value)}
+            >
+              <span id="workspace-other-projects-title">其他项目</span>
+              <CaretRight size={12} weight="bold" aria-hidden="true" />
+              <b>{otherProjects.length}</b>
+            </button>
+            {othersOpen && otherProjects.map((project) => (
               <OtherProject
                 key={project.id}
                 project={project}

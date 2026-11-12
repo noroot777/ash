@@ -9,25 +9,11 @@
   isolation: isolate;
 }
 
-.workspace-task-section + .workspace-task-section,
-.workspace-other-projects {
-  margin-top: 14px;
-}
-
-.workspace-task-section-title {
-  display: flex;
-  height: 34px;
-  align-items: center;
-  padding: 10px 7px 3px;
-  color: var(--faint);
-  font-size: 11.5px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-}
-
-.workspace-task-section:first-child .workspace-task-section-title {
-  height: 30px;
-  padding-top: 5px;
+/* 「置顶」「任务」两节不写标题：置顶的排在最前，和后面的任务之间隔一道缝。 */
+.workspace-task-gap {
+  height: 9px;
+  margin: 4px 7px 0;
+  border-top: 1px solid var(--line);
 }
 
 .workspace-task-row-wrap {
@@ -128,9 +114,7 @@
   top: 50%;
   right: 3px;
   z-index: 2;
-  opacity: var(--row-active);
   transform: translateY(-50%);
-  transition: opacity 130ms ease-out;
 }
 
 /* The origin chip is a sibling of the row button, so reserve its hit area from the title. */
@@ -159,19 +143,30 @@
   color: var(--ink);
 }
 
-/* 行尾那两三个字（等你答复）：定长、不截，标题让它。行尾被星标占着的时候它自己往左让，
-   标题就不用再为星标抹掉一截。 */
-.workspace-task-word {
+/* 行尾常驻的那一组：等什么（两三个字，定长、不截）、团队任务、置顶的灰图标。标题让它们；
+   行尾被星标占着的时候这一组自己往左让，标题就不用再为星标抹掉一截。 */
+.workspace-task-end {
+  display: flex;
   flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
   margin-right: calc(var(--tail-busy) * var(--task-row-tail));
   padding-left: 10px;
-  color: var(--muted);
-  font-size: var(--t-xs);
-  white-space: nowrap;
   transition: margin-right var(--dur-1) var(--ease-out);
 }
 
-.workspace-task-row-wrap.has-word .workspace-task-title {
+.workspace-task-word {
+  color: var(--muted);
+  font-size: var(--t-xs);
+  white-space: nowrap;
+}
+
+.workspace-task-glyph {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.workspace-task-row-wrap.has-end .workspace-task-title {
   --title-clear: 0px;
 }
 
@@ -236,14 +231,6 @@
   right: 28px;
 }
 
-/* 「谁建的」徽标站在标题后面、行尾那块地上,跟星标、meta 图标是同一块地。都硬摆的话,
-   星标会压在它上面、meta 那层挡板还会把这枚在流里的胶囊从中间切开(圆角切一半、标签
-   只剩半个字)。所以行尾一被占它就整枚淡出 —— 位置仍占着,标题不会因此重排。 */
-.workspace-task-row .task-creation-badge {
-  opacity: calc(1 - var(--tail-busy));
-  transition: opacity 130ms ease-out;
-}
-
 .workspace-task-kind {
   flex: 0 0 auto;
   color: var(--faint);
@@ -285,8 +272,7 @@
    标题右边已经站着别的东西时不用再收第二次:来源徽标那格是 padding-right 顶开的,
    「谁建的」徽标本身就在流里占着位置,两种情况标题都够不到星标。 */
 .workspace-task-row-wrap.can-star { --task-row-tail: 24px; }
-.workspace-task-row-wrap.can-star:has(> .task-origin-chip),
-.workspace-task-row-wrap.can-star:has(.task-creation-badge) { --task-row-tail: 0px; }
+.workspace-task-row-wrap.can-star:has(> .task-origin-chip) { --task-row-tail: 0px; }
 .workspace-task-row-wrap.can-star > .task-origin-chip { right: 27px; }
 .workspace-task-row-wrap.can-star .workspace-task-row--has-origin { padding-right: 52px; }
 .workspace-task-row-wrap.can-star .workspace-task-meta { right: 29px; }
@@ -341,13 +327,11 @@
   opacity: 0;
 }
 
-.workspace-team-caret svg,
-.workspace-other-project-head svg {
+.workspace-team-caret svg {
   transition: transform 150ms ease-out;
 }
 
-.workspace-team-caret svg.is-open,
-.workspace-other-project-head svg.is-open {
+.workspace-team-caret svg.is-open {
   transform: rotate(90deg);
 }
 
@@ -455,42 +439,4 @@
   margin-left: auto;
   margin-right: 22px;
   padding: 0 8px;
-}
-
-.workspace-other-projects > .workspace-task-section-title {
-  margin-bottom: 4px;
-}
-
-.workspace-other-project-head {
-  display: flex;
-  width: 100%;
-  height: 36px;
-  align-items: center;
-  gap: 8px;
-  border: 0;
-  background: transparent;
-  padding: 0 7px;
-  color: var(--faint);
-  text-align: left;
-}
-
-.workspace-other-project-head span:nth-of-type(2) {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12.5px;
-  font-weight: 450;
-}
-
-.workspace-other-project-tasks {
-  margin: 0 0 8px 7px;
-}
-
-.workspace-other-project-tasks > p {
-  margin: 0;
-  padding: 8px;
-  color: var(--faint);
-  font-size: 10.5px;
 }

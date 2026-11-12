@@ -61,6 +61,56 @@
 
 .workspace-handoff-machines + .workspace-other-projects { margin-top: 0; }
 
+/* ── 其他项目（展开后）：一个项目一行，各自再点开是它的任务 ── */
+.workspace-other-project-head {
+  display: flex;
+  width: 100%;
+  height: 36px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  padding: 0 7px;
+  color: var(--muted);
+  text-align: left;
+  outline-offset: -2px;
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.workspace-other-project-head:hover {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.workspace-other-project-head:active { background: var(--sel-bg); }
+
+.workspace-other-project-head > svg {
+  flex: 0 0 auto;
+  color: var(--faint);
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+.workspace-other-project-head > svg.is-open { transform: rotate(90deg); }
+
+.workspace-other-project-head > span:last-child {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: var(--t-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-other-project-tasks { margin: 0 0 8px 7px; }
+
+.workspace-other-project-tasks > p {
+  margin: 0;
+  padding: 8px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+}
+
 /* ── 其他机器（展开后）：一台机器一行，接力过去的任务缩进在它下面 ── */
 .workspace-handoff-machine-list {
   display: grid;
@@ -179,5 +229,7 @@
 @media (prefers-reduced-motion: reduce) {
   .workspace-fold,
   .workspace-fold > svg,
+  .workspace-other-project-head,
+  .workspace-other-project-head > svg,
   .workspace-handoff-machine > button { transition: none; }
 }

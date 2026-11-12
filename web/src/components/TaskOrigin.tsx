@@ -65,7 +65,11 @@ export function OriginTaskChip({
   const tip = useHoverTip();
   if (!link) return null;
   const relation = taskParentRelation(link);
-  const label = link.task ? `${relation}：${link.task.title}` : relation;
+  // 智能体开的任务画一颗机器人、提示里先说是谁派生的：侧栏行里原来那颗带字的彩色胶囊
+  // （TaskCreationBadge）就收成这一颗灰图标，点它去来源任务。别的来源关系照旧画来源的模式图标。
+  const creator = task.creationOrigin?.kind === "agent" ? task.creationOrigin : null;
+  const source = link.task ? `${relation}「${link.task.title}」` : relation;
+  const label = creator ? `${taskCreationLabel(creator)} · ${source}` : link.task ? `${relation}：${link.task.title}` : relation;
   return (
     <span className="task-origin-chip" {...tip.anchorProps}>
       <button
@@ -79,7 +83,7 @@ export function OriginTaskChip({
           onOpen(link.taskId);
         }}
       >
-        <TaskModeIcon mode={taskParentMode(link)} size={12} />
+        {creator ? <Robot size={13} aria-hidden="true" /> : <TaskModeIcon mode={taskParentMode(link)} size={13} />}
       </button>
       <HoverTip at={tip.at}>{label}</HoverTip>
     </span>

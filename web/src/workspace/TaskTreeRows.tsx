@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { ProjectView, TaskListItem } from "@ash/shared";
 import { statusCounts, workersOf } from "@ash/shared/team";
-import { CaretRight, ChatsCircle, ListNumbers, PaperPlaneTilt, Star, UsersThree } from "@phosphor-icons/react";
-import { OriginTaskChip, TaskCreationBadge, taskParentLink } from "../components/TaskOrigin.tsx";
+import { CaretRight, ChatsCircle, ListNumbers, PaperPlaneTilt, PushPin, Robot, Star, UsersThree, type Icon } from "@phosphor-icons/react";
+import { OriginTaskChip, taskParentLink } from "../components/TaskOrigin.tsx";
+import { taskCreationLabel } from "@ash/shared/task-origin";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { api } from "../lib/api.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
@@ -97,6 +98,18 @@ function RowWord({ look }: { look: TaskLook }) {
     <>
       <span className="workspace-task-word" {...(look.detail ? tip.anchorProps : {})}>{look.word}</span>
       {look.detail && <HoverTip at={tip.at}>{look.detail}</HoverTip>}
+    </>
+  );
+}
+
+// 行尾常驻的灰图标（团队任务、已置顶）：只是让你认得出这是哪种行，点了跟点整行一样。
+// 名字在提示里。
+function RowGlyph({ icon: Glyph, label, weight = "regular" }: { icon: Icon; label: string; weight?: "regular" | "fill" }) {
+  const tip = useHoverTip();
+  return (
+    <>
+      <Glyph size={13} weight={weight} className="workspace-task-glyph" role="img" aria-label={label} {...tip.anchorProps} />
+      <HoverTip at={tip.at}>{label}</HoverTip>
     </>
   );
 }
@@ -202,8 +215,16 @@ export function TaskRow({
     : null;
   const hasMeta = task.mode === "duet" || showHandoffMeta || trailing != null || queueBadge != null;
   const project = canStar && showProject ? actions?.projectBadges?.get(task.projectId) : undefined;
+  // 行尾常驻的那几样：等什么（两三个字）、团队任务、置顶。都是灰的，平时就在；智能体开的
+  // 那颗机器人图标是能点的（去来源任务），所以它跟星标一样是行外面的兄弟，不在这一组里。
+  const isTeam = task.mode === "team" && task.parentId === null;
+  const pinned = canStar && task.pinnedAt != null;
+  // 智能体开的、却查不到来源任务的（外部智能体自报、群聊委派）：没地方可去，就只画一颗看的
+  // 机器人。查得到来源的那种由下面的 OriginTaskChip 画成能点的那一颗。
+  const agentOnly = showOrigin && !hasOrigin && task.creationOrigin?.kind === "agent" ? taskCreationLabel(task.creationOrigin) : null;
+  const hasEnd = !!look.word || isTeam || pinned || !!agentOnly;
   return (
-    <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${spreadCells && look.bucket === "todo" ? " is-todo" : ""}${look.word ? " has-word" : ""}${task.starredAt != null ? " has-star" : ""}${queueBadge ? " has-queue" : ""}${canStar ? " can-star" : ""}`}>
+    <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${spreadCells && look.bucket === "todo" ? " is-todo" : ""}${hasEnd ? " has-end" : ""}${task.starredAt != null ? " has-star" : ""}${queueBadge ? " has-queue" : ""}${canStar ? " can-star" : ""}`}>
       <span className="workspace-task-leading">
         {leading ?? <RowMark look={look} />}
       </span>
@@ -217,8 +238,14 @@ export function TaskRow({
       >
         {project && <TaskProjectBadge project={project} />}
         <span className="workspace-task-title">{task.title || "未命名任务"}</span>
-        <RowWord look={look} />
-        <TaskCreationBadge task={task} />
+        {hasEnd && (
+          <span className="workspace-task-end">
+            <RowWord look={look} />
+            {isTeam && <RowGlyph icon={UsersThree} label="团队任务" />}
+            {agentOnly && <RowGlyph icon={Robot} label={agentOnly} />}
+            {pinned && <RowGlyph icon={PushPin} label="已置顶" />}
+          </span>
+        )}
         {hasMeta && (
           <span className="workspace-task-meta">
             {task.mode === "duet" && <ChatsCircle size={12} weight="bold" className="workspace-task-kind" aria-label="讨论" />}
@@ -339,12 +366,7 @@ export function TeamRow({
             </button>
           </span>
         }
-        trailing={
-          <>
-            <WorkerSummary workers={workers} lookForTask={lookForTask} />
-            <UsersThree size={13} weight="fill" className="workspace-task-kind" aria-label="团队任务" />
-          </>
-        }
+        trailing={<WorkerSummary workers={workers} lookForTask={lookForTask} />}
       />
       {expanded && workers.length > 0 && (
         <div className="workspace-worker-list">
