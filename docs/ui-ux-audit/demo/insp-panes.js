@@ -304,7 +304,7 @@
       h('p.insp-clean', {}, icon('check', 'sm'), h('span.grow', '无未提交改动'), h('button.insp-val.end', { type: 'button', onclick: () => ASH.go('#/git') }, 'Git 工作台', icon('ext', 'sm'))),
       sec('本任务已提交改动', [files, ' 个文件 ', h('span.plus', {}, '+', add), ' ', h('span.minus', {}, '−', del)]),
       list,
-      go('查看完整 diff 与提交', () => ASH.emit('changes:open')),
+      go('打开改动工作区', () => ASH.emit('changes:open')),
       sec('最近提交'),
       log,
     ];

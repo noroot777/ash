@@ -84,8 +84,12 @@ body.notes-on .pins { display: block; }
 body.embed { grid-template-rows: minmax(0, 1fr); }
 body.embed .dbar, body.embed .side, body.embed .statusbar, body.embed .notes { display: none; }
 body.embed-feed .task-insp, body.embed-feed .task-panel { display: none; }
-body.embed-insp .task-main { display: none; }
-body.embed-insp .task-insp { flex: 1; }
+/* 只留面板时它占满这一框；整栏收起以后，露出来的是任务头最右那颗开关（平时被面板挤到 0 宽） */
+body.embed-insp .task-main { overflow: hidden; }
+body.embed-insp .task-main > :not(.task-head), body.embed-insp .task-head > :not(.task-panel) { display: none; }
+body.embed-insp .task-head { justify-content: flex-end; border-bottom: 0; }
+body.embed-insp .insp:not(.is-shut), body.embed-insp .insp:not(.is-shut) > .insp-in { width: 100vw; }
+body.embed-insp .insp-in { border-left: 0; }
 body.embed .app { grid-template-rows: minmax(0, 1fr); }
 body.embed .app-shell { padding: 0; }
 body.embed .main { border-radius: 0; box-shadow: none; }

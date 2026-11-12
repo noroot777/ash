@@ -1,4 +1,4 @@
-// 报告页的全部脚本：图标表、两张分布图、逐面清单、滚动淡入、五个「现在 / 之后」对照演示、发送设置与右侧面板两个样机、嵌进来的执行中样机。
+// 报告页的全部脚本：图标表、两张分布图、逐面清单、滚动淡入、五个「现在 / 之后」对照演示、发送设置样机、嵌进来的两块样机（04 右侧面板、06 执行中）。
 // anime.js 从 CDN 动态加载；连不上时右栏退回 WAAPI，并在页面上如实写明。
 
 const ANIME_URL = 'https://cdn.jsdelivr.net/npm/animejs@4.5.0/dist/bundles/anime.esm.min.js';
@@ -112,26 +112,43 @@ function drawChecklist(root) {
       const href = `demo.html${item.at ?? surface.at}?m=${item.id}`;
       const text = item.keep ? `<p>${item.now}</p>` : `<p class="was">${item.now}</p><p>${item.after}</p>`;
       const ask = item.ask ? `<p class="ask">${item.ask}</p>` : '';
-      list.append(make('li', item.keep ? 'keep' : item.p, `<a href="${href}" aria-label="在样机里看第 ${n} 条"><img src="shots/after/${item.id}.webp" alt="" loading="lazy"></a><i>${n}</i><div>${text}${ask}</div>`));
+      const li = make('li', `${item.keep ? 'keep' : item.p}${item.ask ? ' has-ask' : ''}`, `<a href="${href}" aria-label="在样机里看第 ${n} 条"><img src="shots/after/${item.id}.webp" alt="" loading="lazy"></a><i>${n}</i><div>${text}${ask}</div>`);
+      li.id = `c-${item.id}`;   // 样机里「回报告」落回这一条
+      list.append(li);
     }
+    block.classList.toggle('has-ask', Boolean($('.has-ask', list)));
     block.append(list);
     root.append(block);
   }
+  // 「要你点头」那颗是开关：按下只留带红字的条目
   const asks = audit.items.filter((it) => it.ask).length;
   const tag = $('.legend .ask');
-  if (tag) tag.textContent = `要你点头 ${asks} 处`;
+  if (!tag) return;
+  const paint = (on) => { tag.setAttribute('aria-pressed', String(on)); tag.textContent = on ? `看全部 ${audit.items.length} 条` : `只看要你点头的 ${asks} 条`; root.classList.toggle('only-ask', on); };
+  tag.addEventListener('click', () => paint(tag.getAttribute('aria-pressed') !== 'true'));
+  paint(false);
+  // 带着 #c-<编号> 进来时条目还没画出来，画完补滚一次
+  if (location.hash.startsWith('#c-')) document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: 'center' });
 }
 
-/* ---------- 06 执行中：嵌进来的是样机的会话那一列，隔着 iframe 只能递消息 ---------- */
+/* ---------- 嵌进来的样机：04 是右侧面板，06 是会话那一列。隔着 iframe 只能递消息 ---------- */
+
+// 地址只设一次：先写在 src 里再按主题改，第一次加载会被掐掉，白白报一串请求失败
+function loadFrame(frame) {
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const [path, route] = frame.dataset.src.split('#');
+  frame.loading = 'lazy';
+  frame.src = `${path}${dark ? '&theme=dark' : ''}#${route}`;
+}
 
 function setupRun(root) {
   const frame = $('iframe', root);
   if (!frame) return;
-  // 地址只设一次：先写在 src 里再按主题改，第一次加载会被掐掉，白白报一串请求失败
-  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
-  frame.loading = 'lazy';
-  frame.src = dark ? frame.dataset.src.replace('?embed', '?embed&theme=dark') : frame.dataset.src;
+  loadFrame(frame);
   for (const btn of $$('[data-run]', root)) btn.addEventListener('click', () => frame.contentWindow?.postMessage({ ash: 'play', name: btn.dataset.run }, '*'));
+  // 样机停下来等你答复时往外递一句，这一页的标签页标题跟着变（清单 run-7 的后半句）
+  const title = document.title;
+  addEventListener('message', (e) => { if (e.source === frame.contentWindow && e.data?.ash === 'title') document.title = e.data.waiting ? `● 等你答复 · ${title}` : title; });
 }
 
 /* ---------- 滚动淡入 ---------- */
@@ -386,7 +403,7 @@ function demoBacktop(root) {
 
 const SEND_MODES = {
   now: { label: '', icon: 'i-caret', hint: '' },
-  timed: { label: '14:30 发送', icon: 'i-clock', hint: '11/11 14:30 自动发出，发出前可以在待发送里撤回。' },
+  timed: { label: '定时发送', icon: 'i-clock', hint: '今天 14:30 自动发出，发出前可以在待发送里撤回。' },
   after: { label: '完成后发送', icon: 'i-sand', hint: '等「修复斜杠补全回车」完成后发出。' },
 };
 
@@ -405,82 +422,6 @@ function setupSend(root) {
   };
   for (const c of chips) c.addEventListener('click', () => pick(c.dataset.mode));
   pick('timed');
-}
-
-/* ---------- 面板样机：竖轨切格、再点收起整栏、关闭键移出、「+」加回 ---------- */
-
-function setupRail(root) {
-  const rail = $('.m-rail', root);
-  const tabs = $$(':scope > [data-to]', rail);
-  const panes = $$('.m-view', root);
-  const title = $('.m-ph b', root);
-  const remove = $('[data-remove]', root);
-  const ink = $('.m-ink', rail);
-  const add = $('.add', rail);
-  const menu = $('.m-menu', rail);
-  const tabOf = (name) => tabs.find((t) => t.dataset.to === name);
-  let current = tabs.find((t) => t.getAttribute('aria-pressed') === 'true');
-
-  const paint = () => {
-    const shut = root.classList.contains('shut');
-    let prev = null;
-    for (const t of tabs) {
-      t.setAttribute('aria-pressed', String(!shut && t === current));
-      if (t.hidden) continue;
-      // 相邻两格不在同一簇，中间留一道空；某一簇整簇不在条上时不会留出双倍
-      t.classList.toggle('gap', Boolean(prev) && prev.dataset.g !== t.dataset.g);
-      prev = t;
-    }
-    for (const p of panes) p.classList.toggle('on', p.dataset.pane === current.dataset.to);
-    title.textContent = current.getAttribute('aria-label');
-    remove.hidden = current.dataset.to === 'info';   // 「信息」是必留格
-    for (const item of $$('button', menu)) item.disabled = !tabOf(item.dataset.add).hidden;
-    if (!shut) ink.style.setProperty('--y', `${current.offsetTop + (current.offsetHeight - 18) / 2}px`);
-  };
-  let openedAt = 0;
-  const open = (tab) => {
-    tab.hidden = false;
-    current = tab;
-    openedAt = performance.now();
-    root.classList.remove('shut');
-    paint();
-  };
-  const closeMenu = () => { menu.hidden = true; add.setAttribute('aria-expanded', 'false'); };
-
-  for (const t of tabs) {
-    t.addEventListener('click', (e) => {
-      // 再点已选中的格 = 收起整栏。只认鼠标：回车、空格触发的 click，detail 是 0；
-      // 刚切过来的那一下双击不算（否则双击一格会「先选中再收起」）
-      const again = t === current && e.detail > 0 && performance.now() - openedAt > 350;
-      if (again) { root.classList.add('shut'); paint(); } else if (t !== current) open(t);
-    });
-    const item = document.createElement('button');
-    item.dataset.add = t.dataset.to;
-    item.innerHTML = `${t.innerHTML}${t.getAttribute('aria-label')}<kbd>${t.dataset.key}</kbd>`;
-    item.addEventListener('click', () => { closeMenu(); open(t); });
-    menu.append(item);
-  }
-  for (const b of $$('.m-main [data-to]', root)) b.addEventListener('click', () => open(tabOf(b.dataset.to)));
-  remove.addEventListener('click', () => {
-    const shown = tabs.filter((t) => !t.hidden);
-    const i = shown.indexOf(current);
-    current.hidden = true;
-    current = shown[i + 1] ?? shown[i - 1];
-    paint();
-    current.focus();
-  });
-  $('.m-back button', root).addEventListener('click', () => open(current));
-  add.addEventListener('click', () => { menu.hidden = !menu.hidden; add.setAttribute('aria-expanded', String(!menu.hidden)); });
-  document.addEventListener('pointerdown', (e) => { if (!menu.hidden && !e.target.closest('.m-menu, .add')) closeMenu(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
-
-  // 提示：第一次悬停等一下，连着看下一格不等
-  let warm = 0;
-  rail.addEventListener('pointerenter', () => { clearTimeout(warm); warm = setTimeout(() => rail.classList.add('warm'), 420); });
-  rail.addEventListener('pointerleave', () => { clearTimeout(warm); warm = setTimeout(() => rail.classList.remove('warm'), 300); });
-  paint();
-  addEventListener('resize', paint);
-  document.fonts?.ready.then(paint);
 }
 
 /* ---------- 启动 ---------- */
@@ -502,5 +443,5 @@ setupRun($('.runlive'));
 setupReveal();
 setupDemos();
 $$('[data-send]').forEach(setupSend);
-$$('[data-rail]').forEach(setupRail);
+$$('.pair iframe').forEach(loadFrame);
 loadAnime();

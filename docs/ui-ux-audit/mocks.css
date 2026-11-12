@@ -20,7 +20,7 @@
 .m-pin.on svg { fill: currentColor; }
 .m-st { display: inline-flex; align-items: center; gap: 6px; margin-right: 4px; color: var(--m2); font-size: 12px; white-space: nowrap; }
 .m-st::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--m3)); }
-.m-st.ok { --c: #168466; }
+.m-st.none::before { display: none; }
 .m-st.bad { --c: #c2412d; }
 .m-st.run { --c: var(--acc); }
 

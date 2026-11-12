@@ -21,8 +21,9 @@
 .legend .p1::before, .legend .p2::before, .legend .keep::before { background: transparent; }
 .legend .p2, .cl .p2 { --dot: var(--ink-3); }
 .legend .keep, .cl .keep { --dot: var(--good); }
-.legend .ask { color: var(--mark); }
-.legend .ask::before { display: none; }
+.legend .ask { padding: 2px 10px; border: 1px solid var(--mark); border-radius: 999px; color: var(--mark); font: inherit; background: none; cursor: pointer; }
+.legend .ask[aria-pressed="true"] { background: var(--mark); color: var(--paper); }
+#checklist.only-ask li:not(.has-ask), #checklist.only-ask .cl:not(.has-ask) { display: none; }
 
 .cl { margin-left: 88px; padding: 32px 0 20px; border-top: 1px solid var(--line); }
 .cl h3 { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; }
