@@ -1,5 +1,6 @@
 /* 对话框底部的回复框（含 `/` 命令与 @ 提及菜单），以及 /team、/duet 弹出的派生面板。 */
-.task-reply-shell { position: relative; flex: 0 0 auto; border-top: 0.5px solid var(--line); padding: 10px clamp(14px, 3vw, 34px) 14px; background: var(--canvas); }
+/* 回复框和会话排在同一条居中的阅读列里（feed-13）；上面那几个浮层跟着框的左缘走。 */
+.task-reply-shell { --reply-pad: max(clamp(14px, 3vw, 34px), calc((100% - var(--reading-col)) / 2)); position: relative; flex: 0 0 auto; border-top: 0.5px solid var(--line); padding: 10px var(--reply-pad) 14px; background: var(--canvas); }
 /* 输入框正上方那条只放状态（验收前置命令在跑）；动作都在框里那一行（reply-3）。 */
 .task-reply-rail { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0 0 6px; }
 .task-reply-rail:empty { display: none; }
@@ -61,7 +62,7 @@
   position: absolute;
   z-index: 24;
   bottom: 100%;
-  left: clamp(14px, 3vw, 34px);
+  left: var(--reply-pad);
   margin-bottom: 7px;
 }
 .task-reply-command-menu {

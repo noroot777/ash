@@ -2,10 +2,10 @@
    提问卡停在会话下方的「坞」里（`ConversationFeed` 的 dock，在滚动容器外面）：
    上文照常滚，问题永远在手边，也压不到「回到底部」那颗浮动按钮上；
    一次只出一题——多题一次全摊开的版本要滚半天才找得到发送键。 */
-.task-question-card { max-width: 790px; margin: 18px 0 12px 30px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); color: var(--ink); overflow: hidden; }
+.task-question-card { margin: 18px 0 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); color: var(--ink); overflow: hidden; }
 .task-question-card { border-color: color-mix(in lch, var(--cyan) 30%, var(--line)); }
 
-.task-question-dock { flex: 0 0 auto; padding: 0 clamp(18px, 4vw, 48px) 12px; background: var(--canvas); animation: question-dock-in var(--dur-3) var(--ease-out) backwards; }
+.task-question-dock { flex: 0 0 auto; padding: 0 max(clamp(18px, 4vw, 48px), calc((100% - var(--reading-col)) / 2)) 12px; background: var(--canvas); animation: question-dock-in var(--dur-3) var(--ease-out) backwards; }
 /* 提问卡从下面滑进来、答完原路收回去（run-7）。只动 transform / opacity。 */
 .task-question-dock.is-leaving { animation: question-dock-out 200ms var(--ease-in, ease-in) forwards; }
 @keyframes question-dock-in { from { opacity: 0; transform: translateY(16px); } }

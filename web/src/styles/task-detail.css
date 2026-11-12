@@ -137,7 +137,8 @@ span.task-detail-title { display: block; width: auto; }
 
 .task-detail-body { display: flex; min-height: 0; flex: 1; }
 .task-detail-main { display: flex; min-width: 0; flex: 1; flex-direction: column; background: var(--canvas); }
-.task-conversation { height: 100%; overflow-y: auto; padding: 18px clamp(18px, 4vw, 48px) 28px max(var(--conversation-input-gutter, 0px), clamp(18px, 4vw, 48px)); }
+/* 内容排进居中的阅读列：两侧留白至少是原来那一档，宽出来的平分到两边。 */
+.task-conversation { --reading-pad: max(clamp(18px, 4vw, 48px), calc((100% - var(--reading-col)) / 2)); height: 100%; overflow-y: auto; padding: 18px var(--reading-pad) 28px max(var(--conversation-input-gutter, 0px), var(--reading-pad)); }
 
 .task-inspector details summary {
   cursor: pointer;
