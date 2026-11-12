@@ -63,11 +63,4 @@
 .assistant-shell .chat-composer footer .chat-send:hover:not(:disabled) { background: color-mix(in lch, var(--accent) 80%, var(--ink)); }
 .assistant-shell .chat-error { color: var(--red); border-color: color-mix(in srgb, var(--red) 25%, var(--panel)); background: color-mix(in srgb, var(--red) 7%, var(--panel)); }
 .assistant-shell .chat-info { border-color: var(--assistant-rail-line); background: var(--canvas); }
-.assistant-shell .chat-info-title,.assistant-shell .chat-info h3,.assistant-shell .chat-presence strong { color: var(--assistant-rail-ink); }
-.assistant-shell .chat-info p,.assistant-shell .chat-presence small,.assistant-shell .chat-presence button > svg,.assistant-shell .chat-info-stat span,.assistant-shell .chat-context-note { color: var(--muted); }
-.assistant-shell .chat-presence button:hover,.assistant-shell .chat-add-member:hover { background: var(--accent-soft); }
-.assistant-shell .chat-presence i { border-color: var(--canvas); background: var(--faint); }
-.assistant-shell .chat-presence i.is-busy { background: var(--green); }
-.assistant-shell .chat-add-member { border-color: var(--assistant-rail-line); color: var(--accent); }
-.assistant-shell .chat-info-divider { background: var(--line); }
-.assistant-shell .chat-info-stat strong { color: var(--accent); }
+.assistant-shell .chat-context-note { color: var(--muted); }

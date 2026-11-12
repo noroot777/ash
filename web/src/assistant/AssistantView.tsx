@@ -1,11 +1,11 @@
 import "../chat/chat.css";
 import { AssistantIcon } from "./AssistantIcon.tsx";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { ProjectView, TaskListItem, TaskMode } from "@ash/shared";
 import { taskDisplayStatus } from "@ash/shared";
 import type { ChatMessage, ChatSnapshot } from "@ash/shared/chat";
 import { STEP_LABELS, WORKSPACE_LABELS } from "@ash/shared/workflow";
-import { ArrowUp, ArrowUpRight, MagnifyingGlass, Robot, Stop, Trash } from "@phosphor-icons/react";
+import { ArrowUp, ArrowUpRight, MagnifyingGlass, Stop, Trash } from "@phosphor-icons/react";
 import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import { AssistantConnection } from "./AssistantConnection.tsx";
 import { AssistantArchive } from "./AssistantArchive.tsx";
@@ -82,6 +82,14 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit, o
   const configure = editing || (chat.ready && !chat.room && !chat.error);
   const pickStarter = (text: string) => { chat.setDraft(text); input.current?.focus(); };
   const openTask = (task: TaskListItem) => { if (task.archived) setArchiveId(task.id); else onTask(task); };
+  // 右栏按对话里第一次提到的先后排，和消息里那几张任务卡的次序一致。
+  const linkedTasks = useMemo(() => {
+    const snapshot = chat.snapshot;
+    if (!snapshot?.tasks.length) return [];
+    const order = snapshot.messages.flatMap((message) => [...(message.assistant?.matches.map((match) => match.taskId) ?? []), ...(message.taskId ? [message.taskId] : [])]);
+    const rank = (id: string) => { const at = order.indexOf(id); return at < 0 ? order.length : at; };
+    return [...snapshot.tasks].sort((a, b) => rank(a.id) - rank(b.id));
+  }, [chat.snapshot]);
   const removeConversation = async () => {
     if (!deleteTarget || deleting) return;
     setDeleting(true);
@@ -91,11 +99,11 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit, o
     finally { setDeleting(false); }
   };
   return <section className="chat-shell assistant-shell" aria-label="ash 助手">
-    <AssistantSidebar rooms={chat.rooms} selectedId={chat.room?.id} ready={chat.ready} sending={chat.sending} projectName={project?.name} onExit={onExit} onSelect={(id) => { chat.select(id); setEditing(false); setArchiveId(null); }} onNew={() => { setEditing(false); setArchiveId(null); void chat.newConversation(); }} />
+    <AssistantSidebar rooms={chat.rooms} selectedId={chat.room?.id} ready={chat.ready} sending={chat.sending} projectName={project?.name} onExit={onExit}
+      agent={chat.room?.members[0]?.agentType} agentLocked={chat.busy || chat.sending} onConfigure={() => setEditing(true)} onSelect={(id) => { chat.select(id); setEditing(false); setArchiveId(null); }} onNew={() => { setEditing(false); setArchiveId(null); void chat.newConversation(); }} />
     <div className="chat-main assistant-main">
     <ConversationModeBar active="assistant" onMode={onMode} onChat={onChat} />
     {!configure && <header className="chat-header assistant-header"><div className="assistant-heading">{chat.room ? <AssistantConversationTitle key={chat.room.id} name={chat.room.name} onRename={chat.renameConversation}><span className={`chat-connection${chat.connected ? " is-connected" : ""}`} tabIndex={0} role="status" aria-label={chat.connected ? "实时连接" : "连接中，状态可能延迟"} {...connectionTip.anchorProps} /></AssistantConversationTitle> : <h1><AssistantIcon size={23} />ash 助手</h1>}</div>
-      {chat.room && <button type="button" className="chat-member-count" aria-label="更换助手智能体" disabled={chat.busy || chat.sending} onClick={() => setEditing(true)}><Robot size={19} /><span>{chat.room.members[0]?.agentType}</span></button>}
       {chat.room && <button type="button" className="chat-member-count assistant-delete" aria-label={`删除对话：${chat.room.name}`} onClick={() => { setDeleteError(""); setDeleteTarget({ id: chat.room!.id, name: chat.room!.name }); }}><Trash size={17} /></button>}
       <HoverTip at={connectionTip.at}>{chat.connected ? "实时连接" : "连接中，状态可能延迟"}</HoverTip>
     </header>}
@@ -104,7 +112,7 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit, o
       onConfirm={() => void removeConversation()} onClose={() => { if (!deleting) { setDeleteTarget(null); setDeleteError(""); } }} />}
     {archiveId ? <AssistantArchive key={archiveId} taskId={archiveId} onClose={() => setArchiveId(null)} /> : <>
       <AssistantScroll conversationId={chat.room?.id ?? "assistant"} tailKey={chatTailKey(chat.snapshot?.messages)} followMessages={!!chat.snapshot?.messages.length && !configure}>
-        {!configure && <div className="chat-welcome"><span className="chat-welcome-icon"><AssistantIcon size={32} filled /></span><h2>ash 助手，从一句话开始。</h2><p>问 ash 怎么用，找回一个任务，或搭好起手式。<br />直接发送，先说结论，只讲重点。</p>
+        {!configure && <div className="chat-welcome"><span className="chat-welcome-icon"><AssistantIcon size={32} filled /></span><h2>ash 助手，从一句话开始。</h2><p>问 ash 怎么用，找回一个任务，或搭好起手式。</p>
           <div>{STARTERS.map(({ label, text }) => <button type="button" key={label} onClick={() => pickStarter(text)}>{label}</button>)}</div>
         </div>}
         {!chat.ready && <p className="assistant-loading" role="status">正在读取助手对话…</p>}
@@ -120,10 +128,10 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit, o
         <ChatContextNotice context={chat.snapshot?.context} />
         <div className="chat-composer"><textarea ref={input} aria-label="给 ash 助手发消息" maxLength={8000} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} placeholder="描述你遇到的问题，或记得的任务内容…" onKeyDown={(event) => { if (isSendKeyEvent(event)) { event.preventDefault(); void chat.send(); } }} />
           <footer><AssistantKnowledge /><span>直接发送，无需 @</span><button type="button" className="chat-send" aria-label="发送给助手" disabled={chat.busy || chat.sending || !chat.draft.trim() || !chat.snapshot} onClick={() => void chat.send()}><ArrowUp size={20} weight="bold" /></button></footer>
-        </div><div className="chat-composer-hint">{sendKeys.send} 发送 · {sendKeys.newline} 换行 · /clear 清空上下文<span>简洁回复已启用</span></div>
+        </div><div className="chat-composer-hint">{sendKeys.send} 发送 · {sendKeys.newline} 换行 · /clear 清空上下文</div>
       </div>}
     </>}
     </div>
-    {chat.room && !configure && <AssistantInfo member={chat.room.members[0]} busy={chat.busy} disabled={chat.busy || chat.sending} taskCount={chat.snapshot?.tasks.length ?? 0} onConfigure={() => setEditing(true)} />}
+    {chat.room && !configure && !!linkedTasks.length && <AssistantInfo tasks={linkedTasks} onTask={openTask} />}
   </section>;
 }

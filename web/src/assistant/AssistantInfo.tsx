@@ -1,19 +1,14 @@
-import type { ChatMember } from "@ash/shared/chat";
-import { PencilSimple, Robot } from "@phosphor-icons/react";
-import { AssistantIcon } from "./AssistantIcon.tsx";
+import type { TaskListItem } from "@ash/shared";
+import { CaretRight } from "@phosphor-icons/react";
 
-export function AssistantInfo({ member, busy, disabled, taskCount, onConfigure }: {
-  member: ChatMember | undefined; busy: boolean; disabled: boolean; taskCount: number; onConfigure: () => void;
-}) {
-  return <aside className="chat-info" aria-label="助手信息">
-    <div className="chat-info-title"><Robot size={20} /><h2>在这个空间</h2></div><p>直接发送消息，助手就会加入对话。</p>
-    <div className="chat-presence"><button type="button" disabled={disabled} onClick={onConfigure}>
-      <span className="chat-avatar assistant-avatar"><AssistantIcon size={20} filled /><i className={busy ? "is-busy" : ""} /></span>
-      <span><strong>{member?.name ?? "ash 助手"}</strong><small>{busy ? "正在回复" : "待命 · 直接对话"}</small></span><PencilSimple size={14} />
-    </button></div>
-    <button type="button" className="chat-add-member" disabled={disabled} onClick={onConfigure}><PencilSimple size={14} />更换智能体</button>
-    <div className="chat-info-divider" /><h3>从对话到行动</h3><p>找到历史任务，搭好起手式，或把明确委派的工作交给 ash 任务。</p>
-    <div className="chat-info-stat"><strong>{taskCount}</strong><span>项关联任务</span></div>
-    <small className="chat-context-note">内置 ash 使用指南，按需检索你可见的任务与会话。回复默认言简意赅，完整资料范围可在「知识与回复设置」查看。</small>
+// 助手页的右栏：只放这段对话关联到的任务（助手找出来的、它建的），一条一个入口。
+// 用哪个智能体写在二级栏顶上、回复风格写在栏底，这里不再说一遍；没有关联任务时整列不画，
+// 对话区吃满宽度（调用方据 tasks 是否为空决定渲不渲）。
+export function AssistantInfo({ tasks, onTask }: { tasks: readonly TaskListItem[]; onTask: (task: TaskListItem) => void }) {
+  return <aside className="chat-info assistant-links" aria-label="关联任务">
+    <h2>关联任务<span>{tasks.length}</span></h2>
+    <nav>{tasks.map((task) => <button type="button" key={task.id} onClick={() => onTask(task)}>
+      <span>{task.title}</span><CaretRight size={14} aria-hidden="true" />
+    </button>)}</nav>
   </aside>;
 }

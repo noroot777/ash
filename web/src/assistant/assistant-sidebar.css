@@ -1,4 +1,8 @@
 .assistant-sidebar { min-width: 0; min-height: 0; box-shadow: inset -1px 0 var(--assistant-rail-line); }
+/* 当前对话用的智能体，点它换。配色沿用侧栏这一套，不另起颜色。 */
+.assistant-shell .assistant-who { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; margin: 0 0 14px; padding: 7px 10px; border: 0; border-radius: var(--r-md); background: none; color: var(--assistant-rail-ink); font-size: var(--t-sm); text-align: left; }
+.assistant-who > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assistant-who > svg { flex-shrink: 0; color: var(--assistant-rail-muted); }
 .assistant-history-actions { display: flex; }
 .assistant-history-actions button { display: flex; }
 .assistant-history-search { display: flex; align-items: center; gap: 7px; min-width: 0; margin: 0 0 8px; padding: 8px; border: 1px solid var(--assistant-rail-line); border-radius: 7px; color: var(--assistant-rail-muted); }
@@ -28,4 +32,5 @@
   .assistant-sidebar .chat-channel-label > span { display: none; }
   .assistant-history-search { flex-basis: 100%; order: 3; margin: 0; }
   .assistant-conversations > button { max-width: 180px; }
+  .assistant-shell .assistant-who { width: auto; max-width: 140px; flex-shrink: 0; margin: 0; }
 }

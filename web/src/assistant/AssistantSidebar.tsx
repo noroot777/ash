@@ -1,15 +1,19 @@
 import { useState } from "react";
 import type { ChatRoom } from "@ash/shared/chat";
-import { ArrowLeft, BookOpen, ChatCircle, CheckCircle, MagnifyingGlass, Plus, X } from "@phosphor-icons/react";
+import { ArrowLeft, BookOpen, ChatCircle, CheckCircle, MagnifyingGlass, PencilSimple, Plus, Robot, X } from "@phosphor-icons/react";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { AssistantIcon } from "./AssistantIcon.tsx";
 import { AssistantKnowledgeContent } from "./AssistantKnowledge.tsx";
 import "./assistant-sidebar.css";
 
-export function AssistantSidebar({ rooms, selectedId, ready, sending, projectName, onSelect, onNew, onExit }: {
+export function AssistantSidebar({ rooms, selectedId, ready, sending, projectName, onSelect, onNew, onExit, agent, agentLocked, onConfigure }: {
   rooms: ChatRoom[]; selectedId?: string; ready: boolean; sending: boolean;
   onSelect: (id: string) => void; onNew: () => void;
   projectName?: string; onExit: () => void;
+  /** 当前对话用的智能体；没有对话（还没接入）时不画这一行。 */
+  agent?: string; agentLocked: boolean; onConfigure: () => void;
 }) {
+  const whoTip = useHoverTip();
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const matches = [...rooms].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -17,6 +21,11 @@ export function AssistantSidebar({ rooms, selectedId, ready, sending, projectNam
   return <aside className={`chat-rail assistant-sidebar${searching ? " is-searching" : ""}`} aria-label="助手侧栏">
     <header><span className="chat-brand"><AssistantIcon size={25} filled />助手</span><button type="button" aria-label="关闭助手" onClick={onExit}><ArrowLeft size={17} /></button></header>
     <div className="chat-project">{projectName ?? "全部可见项目"}<small>直接对话 · 简洁回复</small></div>
+    {/* 「更换智能体」全页只有这一个入口：二级栏顶上这一行就写着现在用的是谁。回复没回来之前不能换（照原来）。 */}
+    {selectedId && agent && <button type="button" className="assistant-who" aria-label="更换助手智能体" disabled={agentLocked} onClick={onConfigure} {...whoTip.anchorProps}>
+      <Robot size={16} /><span>{agent}</span><PencilSimple size={13} />
+    </button>}
+    <HoverTip at={whoTip.at}>更换智能体</HoverTip>
     <div className="chat-channel-label"><span>你的对话</span><div className="assistant-history-actions">
       <button type="button" aria-label="搜索对话" aria-expanded={searching} onClick={() => { setSearching((value) => !value); setQuery(""); }}><MagnifyingGlass size={17} /></button>
       <button type="button" aria-label="新对话" disabled={!selectedId || sending} onClick={() => { setQuery(""); setSearching(false); onNew(); }}><Plus size={17} /></button>
