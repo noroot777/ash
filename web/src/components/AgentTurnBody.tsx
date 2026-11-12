@@ -6,6 +6,7 @@ import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { turnDocument, type TurnStop } from "../task-detail/turnDocument.ts";
 import { ImagePreviewGroup } from "./ImagePreview.tsx";
 import { MarkdownBody } from "./MarkdownBody.tsx";
+import { useSmoothText } from "../lib/useSmoothText.ts";
 import type { MarkdownLayout } from "./markdownLayout.ts";
 import {
   ExecutionDetails,
@@ -79,16 +80,24 @@ export function AgentTurnBody({
   // 此刻还卡在上游等回话?判据连理由住在 awaitingUpstream;跟 main 路径同口径,先滤掉
   // 画不出东西的段再取末段(重建那一路 markSegmentsAwaiting 落的就是最后一个可见段)。
   const awaiting = running && awaitingUpstream(segments.filter(segmentHasVisibleContent));
+  // 正文匀速放出来（run-4）；没放到的执行步骤先不摆，免得后放出来的字排到它上面去。
+  const smooth = useSmoothText(turn.text, running);
   // 折叠的开合状态放在这一层:整篇只解析一次,「折着的那一区里的引用不算看得见」要在布局
   // 里判(只被过程折叠引用到的脚注不该把正文和截图露在外面,见 markdownLayout 的 collapsed)。
   const [foldOpen, setFoldOpen] = useState(false);
   const layout = useMemo((): MarkdownLayout => {
-    const { stops, fold } = turn;
+    const { fold } = turn;
+    const shown = smooth.text.length;
+    const stops = running ? turn.stops.filter((stop) => stop.offset <= shown) : turn.stops;
     // 还在飞的那一下,脉冲点只给**最后一个画得出东西的**步骤 —— 它就是此刻正在发生的那一步。
-    const pulse = running
+    // 它后面已经在出正文了就谁都不给:同一时刻只有一个「活的」东西(run-4),卡在上游等回话除外。
+    const latest = running
       ? stops.reduce((last, stop, index) => (stop.events.some(isVisibleExecutionEvent) ? index : last), -1)
       : -1;
+    const writing = latest >= 0 && !awaiting && smooth.text.slice(stops[latest]!.offset).trim().length > 0;
+    const pulse = writing ? -1 : latest;
     return {
+      ...(smooth.marks.length ? { fresh: { marks: smooth.marks, now: performance.now() } } : {}),
       inserts: stops.map((stop, index) => ({
         offset: stop.offset,
         node: (
@@ -124,9 +133,9 @@ export function AgentTurnBody({
         }
         : {}),
     };
-  }, [turn, running, awaiting, foldOpen, since]);
+  }, [turn, running, awaiting, foldOpen, since, smooth]);
 
-  return <MarkdownBody text={turn.text} layout={layout} />;
+  return <MarkdownBody text={smooth.text} layout={layout} />;
 }
 
 /* `awaiting` = 此刻正卡在上游等回话,只会落在脉冲那一步上(它就是正在发生的这一步):

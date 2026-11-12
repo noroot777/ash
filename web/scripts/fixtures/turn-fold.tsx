@@ -124,6 +124,7 @@ function TeamLeadFeed() {
   const lead = {
     id: "lead",
     title: "调度台",
+    body: "",
     status: phase === "running" ? "running" : "idle",
     mode: "team",
     parentId: null,

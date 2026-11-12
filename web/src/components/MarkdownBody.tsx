@@ -5,6 +5,7 @@ import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markd
 import remarkGfm from "remark-gfm";
 import type { ReviewConclusion } from "@ash/shared";
 import { CodeBlock } from "./CodeBlock.tsx";
+import { rehypeFreshText } from "./freshText.ts";
 import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./ImagePreview.tsx";
 import { splitReviewReport } from "./reviewReportSections.ts";
 import { isLocalFileHref } from "./fileLinkTarget.ts";
@@ -243,7 +244,9 @@ function MarkdownDocument({ text, resolveFile, layout, onReviewReport, onActionE
   latest.current = { resolveFile, layout, onReviewReport, onActionError };
   const components = useMemo(() => markdownComponents(latest), []);
   const rehypePlugins = useMemo(
-    () => (layout ? [rehypeMarkdownLayout(layout)] : []),
+    () => (layout
+      ? [rehypeMarkdownLayout(layout), ...(layout.fresh ? [rehypeFreshText(layout.fresh.marks, layout.fresh.now)] : [])]
+      : []),
     [layout],
   );
   return (

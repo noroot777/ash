@@ -14,6 +14,7 @@
 // 结论:解析一次,然后按**节点的源码偏移**把执行步骤插进顶层块之间。折叠(执行过程)也在
 // 这同一棵树里完成 —— 它是展示分组,不是另一份文档,所以用一个包装节点圈住前面那几个块,
 // 而不是另起一次渲染。
+import type { FreshMark } from "../lib/useSmoothText.ts";
 import type { ReactNode } from "react";
 
 /** 插在整条正文某个偏移处的一块非 Markdown 内容(执行步骤 + 这一步的附件卡片)。 */
@@ -44,6 +45,8 @@ export type MarkdownLayout = {
    * 的区;一个块都不归的(以及渲染器生成的脚注那一节)排在全部区之后、原样铺开。
    */
   regions?: MarkdownRegion[];
+  /** 正在放字时，哪几段是新放出来的（淡入，见 freshText）；`now` 是这一次渲染的时刻。 */
+  fresh?: { marks: FreshMark[]; now: number };
 };
 
 export type MarkdownRegion = {

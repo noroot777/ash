@@ -11,6 +11,7 @@
 // 「这个执行完了怎么没有自动折叠」）。折起来之后用户自己动过折角，重绘也不许按回去。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { waitUntil } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -122,11 +123,11 @@ try {
     if (frame) await click("grow", "grow");
     await flush();
     assert.equal(await folded("grow"), 0, `第 ${frame + 1} 帧：跑的中途把回合折了`);
-    assert.deepEqual(
-      await visibleSays(),
-      expected[frame].map((index) => saidSoFar[index]),
-      `第 ${frame + 1} 帧：说过的话被收编进过程块了`,
-    );
+    // 正文是匀速放出来的（run-4），新的那句要等它放完才整句都在。
+    const want = expected[frame].map((index) => saidSoFar[index]);
+    await waitUntil(async () => JSON.stringify(await visibleSays()) === JSON.stringify(want), { timeout: 3000, message: `第 ${frame + 1} 帧的正文放完` }).catch(() => undefined);
+    assert.deepEqual(await visibleSays(), want, `第 ${frame + 1} 帧：说过的话被收编进过程块了`);
+    assert.equal(await folded("grow"), 0, `第 ${frame + 1} 帧：放字途中把回合折了`);
   }
   // 收口这一下才折：三段正文里，只有最后一句留在外面。
   await click("grow", "end-turn");
