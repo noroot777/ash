@@ -1,0 +1,80 @@
+/* 派审 / 预约审查对话框（free-workflow/FreeReviewDialog.tsx）：标题、四行、一排动作。
+   按钮走公共件（inspector-parts.css 的 .insp-btn），下拉走 Dropdown，步进器走 RoundsStepper。 */
+.free-review-dialog {
+  display: flex;
+  width: min(460px, calc(100vw - 28px));
+  max-height: min(720px, 92vh);
+  flex-direction: column;
+  gap: 14px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  padding: 18px 20px 16px;
+  color: var(--ink);
+  font-size: var(--t-sm);
+  box-shadow: var(--shadow);
+  outline: none;
+}
+.free-review-dialog:focus-visible { box-shadow: var(--shadow), 0 0 0 2px var(--focus-ring); }
+.free-review-dialog > h2 { margin: 0; font-size: var(--t-lg); font-weight: var(--w-strong); }
+.free-review-dialog__target { margin: -8px 0 0; color: var(--muted); font-size: var(--t-xs); line-height: 1.6; }
+.free-review-dialog__target code { font-family: var(--font-mono); color: var(--ink); }
+
+/* 字段那一段自己滚，标题和那排动作始终露着 */
+.free-review-rows { display: grid; min-height: 0; flex: 1 1 auto; align-content: start; gap: 6px; overflow: auto; margin: -2px; padding: 2px; }
+.free-review-row { display: grid; min-height: 36px; grid-template-columns: 104px minmax(0, 1fr); align-items: start; gap: 10px; }
+.free-review-row > span:first-child,
+.free-review-row > label:first-child { color: var(--muted); line-height: 28px; }
+.free-review-row > div { display: flex; min-width: 0; min-height: 28px; flex-wrap: wrap; align-items: center; gap: 6px 8px; color: var(--muted); }
+.free-review-row .ui-dropdown { width: 220px; max-width: 100%; }
+/* 下拉、选模型、选智能水平的浮层都 portal 到 body、自带 z-index 60，得压过对话框那层遮罩
+   （.task-modal-scrim 是 230）。它们是对话框开着以后才挂上去的，所以排在遮罩后面。 */
+.task-modal-scrim:has(> .free-review-dialog) ~ .ui-dropdown-panel,
+.task-modal-scrim:has(> .free-review-dialog) ~ .agent-model-picker.is-floating,
+.task-modal-scrim:has(> .free-review-dialog) ~ .effort-picker-panel { z-index: 240; }
+.free-review-row__zero { font-size: var(--t-xs); }
+.free-review-row__empty { color: var(--muted); }
+.free-review-row__hint { flex: 1 0 100%; color: var(--muted); font-size: var(--t-xs); line-height: 1.5; }
+
+/* 这一次换个执行器：审查者那一行底下摊开的一行，点审查者行尾那颗钮才有 */
+.free-review-row.is-sub { min-height: 0; }
+.free-review-run-once { display: grid; min-width: 0; gap: 4px; }
+.free-review-run-once .composer-field { gap: 4px; }
+.free-review-run-once .composer-field > span { color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-regular); letter-spacing: normal; text-transform: none; }
+.free-review-run-once__hint { color: var(--muted); font-size: var(--t-xs); }
+
+.free-review-note {
+  display: block;
+  width: 100%;
+  min-height: 52px;
+  max-height: 168px;
+  resize: vertical;
+  border: 1px solid var(--line2);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  padding: 6px 10px;
+  color: var(--ink);
+  font: inherit;
+  line-height: 20px;
+  outline: none;
+  transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
+}
+.free-review-note::placeholder { color: var(--faint); }
+.free-review-note:focus { border-color: var(--focus-soft); box-shadow: 0 0 0 1px var(--focus-soft); }
+.free-review-note:disabled { opacity: 0.55; }
+
+.free-review-dialog > footer { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; margin-top: 2px; }
+.free-review-dialog__grow { flex: 1 1 auto; }
+
+.free-review-loading { display: flex; min-height: 160px; align-items: center; justify-content: center; gap: 8px; color: var(--muted); }
+.free-review-loading.is-error { color: var(--red); }
+
+/* 审查进行中调整轮数（FreeReviewRoundsDialog）：一行「最多 [−] n [+] 轮」+ 一句后果 */
+.free-review-rounds { display: grid; gap: 8px; margin-top: 14px; }
+.free-review-rounds > div { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.free-review-rounds > small { color: var(--muted); font-size: var(--t-xs); line-height: 1.55; }
+
+@media (prefers-reduced-motion: reduce) {
+  .free-review-note { transition: none; }
+}

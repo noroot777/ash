@@ -158,11 +158,13 @@ try {
   assert.ok(Math.abs(presetIcon.width - 42) < 1, `执行模式弹窗图标应接近 42px：${JSON.stringify(presetIcon)}`);
 
   await page.setViewportSize({ width: 1000, height: 700 });
+  // 派审对话框的样式挂在组件上（free-review-dialog.css），不在 global.css 里，这里单独接进来。
+  await page.addStyleTag({ url: "/src/styles/free-review-dialog.css" });
   await render(`
     <form class="free-review-dialog">
-      <header><span>◇</span><div><h2>派发审查</h2><p>选择审查者</p></div><button>×</button></header>
-      <div class="free-review-dialog-body"><div style="height:580px"></div><aside></aside></div>
-      <footer><button>取消</button><button class="is-primary">派发</button></footer>
+      <h2>派审查</h2>
+      <div class="free-review-rows"><div style="height:900px"></div></div>
+      <footer><span class="free-review-dialog__grow"></span><button class="insp-btn">取消</button><button class="insp-btn is-pri">开始审查</button></footer>
     </form>
   `);
   const reviewGeometry = await page.locator(".free-review-dialog").evaluate((node) => {

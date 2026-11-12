@@ -41,13 +41,8 @@ export function reviewerPayload(draft: ReviewerDraft, profiles: AgentExecutorPro
   };
 }
 
-export function ReviewerProfileSummary({
-  reviewer,
-  profiles,
-}: {
-  reviewer: ReviewerProfile;
-  profiles: AgentExecutorProfile[];
-}) {
+/** 一位审查者实际会怎么跑：智能体 · 模型 · 智能水平（没覆盖的那段写「跟随 CLI」）。 */
+export function reviewerRunParts(reviewer: ReviewerProfile, profiles: AgentExecutorProfile[]) {
   const selection = { agentType: reviewer.agentType, executorId: reviewer.executorId };
   const inheritedProfile = executorProfileFor(selection, profiles);
   const run = executorRunSummary(
@@ -55,10 +50,27 @@ export function ReviewerProfileSummary({
     profiles,
     { model: reviewer.model, effort: reviewer.reasoningEffort },
   );
-  const model = run.model ?? "跟随 CLI";
-  const effort = run.effort ?? "跟随 CLI";
-  const executor = reviewer.executorLabel ?? inheritedProfile?.name ?? reviewer.agentType;
+  return {
+    executor: reviewer.executorLabel ?? inheritedProfile?.name ?? reviewer.agentType,
+    model: run.model ?? "跟随 CLI",
+    effort: run.effort ?? "跟随 CLI",
+  };
+}
 
+/** 同一份，压成一行字（下拉候选右边那段灰字）。 */
+export function reviewerRunText(reviewer: ReviewerProfile, profiles: AgentExecutorProfile[]): string {
+  const { executor, model, effort } = reviewerRunParts(reviewer, profiles);
+  return `${executor} · ${model} · ${effort}`;
+}
+
+export function ReviewerProfileSummary({
+  reviewer,
+  profiles,
+}: {
+  reviewer: ReviewerProfile;
+  profiles: AgentExecutorProfile[];
+}) {
+  const { executor, model, effort } = reviewerRunParts(reviewer, profiles);
   return (
     <small className="reviewer-profile-summary" aria-label={`智能体：${executor}；模型：${model}；智能水平：${effort}`}>
       <span>{executor}</span><i aria-hidden="true">·</i><code>{model}</code><i aria-hidden="true">·</i><code>{effort}</code>

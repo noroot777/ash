@@ -1,6 +1,5 @@
 import type { AgentExecutorProfile, AgentType, FreeReviewExecutorOverride, ReviewerProfile } from "@ash/shared";
 import { executorValue, parseExecutorValue } from "../lib/agentAvailability.ts";
-import { useRovingChoice } from "../lib/useRovingChoice.ts";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 
 /** 派审面上「这一次用谁跑」的草稿——形状与审查者表单同源，只是不含名称。 */
@@ -9,9 +8,6 @@ export interface ReviewerRunDraft {
   model: string;
   effort: string;
 }
-
-/** 改动落到哪里：只作用于这一次 / 写回这位审查者 / 另存成一位新审查者。 */
-export type ReviewerRunSaveMode = "once" | "overwrite" | "new";
 
 export function reviewerRunDraft(reviewer: ReviewerProfile | null | undefined): ReviewerRunDraft {
   if (!reviewer) return { target: executorValue({ agentType: "codex", executorId: null }), model: "", effort: "" };
@@ -54,52 +50,30 @@ export function reviewerRunPayload(
 }
 
 /**
- * 选中审查者的执行器，可以就地改。**改了不等于要存**：三选一决定这套改动的去向，
- * 默认「仅本次使用」——用户来这个对话框是为了发起一次审查，顺手换个模型是常态，
- * 把它写回配置反而是意外副作用。三段没动时整块保存选择不出现，别拿一个无从选起
- * 的单选题占版面。
+ * 这一次换个执行器跑：只作用于这一次（或这一份预约），选中那位审查者的配置不动。
+ * 要长期改、或另存一位新的，去设置页「审查者」——那里能编辑和新建。
  */
-const SAVE_MODES: readonly ReviewerRunSaveMode[] = ["once", "overwrite", "new"];
-
-export function ReviewerRunOverride({
+export function ReviewerRunOnce({
   reviewer,
   profiles,
   types,
   draft,
   changed,
-  saveMode,
-  newName,
   disabled = false,
   onChange,
-  onSaveModeChange,
-  onNewNameChange,
 }: {
-  reviewer: ReviewerProfile | null;
+  reviewer: ReviewerProfile;
   profiles: AgentExecutorProfile[];
   types: AgentType[];
   draft: ReviewerRunDraft;
   changed: boolean;
-  saveMode: ReviewerRunSaveMode;
-  newName: string;
   disabled?: boolean;
   onChange: (draft: ReviewerRunDraft) => void;
-  onSaveModeChange: (mode: ReviewerRunSaveMode) => void;
-  onNewNameChange: (name: string) => void;
 }) {
-  // 钩子排在那句早退之前(hooks 规则):这一组的取值是固定的三档,只有标签要等
-  // reviewer 才拼得出来。
-  const saveModeGroup = useRovingChoice(SAVE_MODES, saveMode, onSaveModeChange);
-  if (!reviewer) return null;
-  const modes: Array<{ value: ReviewerRunSaveMode; label: string; hint: string }> = [
-    { value: "once", label: "仅本次使用", hint: `不改动「${reviewer.name}」的配置` },
-    { value: "overwrite", label: `覆盖「${reviewer.name}」`, hint: "以后用这位审查者都按新配置" },
-    { value: "new", label: "另存为新审查者", hint: "保留原审查者，多出一位新的" },
-  ];
-
   return (
-    <div className="free-review-run-override">
+    <div className="free-review-run-once">
       <ExecutorPickerField
-        label="本次审查用"
+        label="这一次用"
         value={draft.target}
         types={types}
         profiles={profiles}
@@ -110,33 +84,7 @@ export function ReviewerRunOverride({
         onChange={(target, override) => onChange({ target, model: override.model, effort: override.effort })}
         onEffortChange={(effort) => onChange({ ...draft, effort })}
       />
-      {changed && (
-        <div className="free-review-save-mode" {...saveModeGroup.groupProps} aria-label="改动的保存方式">
-          {modes.map((mode) => (
-            <button
-              key={mode.value}
-              type="button"
-              {...saveModeGroup.itemProps(mode.value)}
-              disabled={disabled}
-              onClick={() => onSaveModeChange(mode.value)}
-            >
-              <b>{mode.label}</b><small>{mode.hint}</small>
-            </button>
-          ))}
-          {saveMode === "new" && (
-            <label className="free-review-new-name">
-              <span>新审查者名称</span>
-              <input
-                value={newName}
-                disabled={disabled}
-                placeholder={`例如：${reviewer.name} · 加强版`}
-                onChange={(event) => onNewNameChange(event.target.value)}
-              />
-            </label>
-          )}
-          <small className="free-review-save-hint">无论选哪种，这次审查都按上面改后的配置跑。</small>
-        </div>
-      )}
+      {changed && <small className="free-review-run-once__hint">只用这一次，「{reviewer.name}」的配置不变</small>}
     </div>
   );
 }

@@ -98,9 +98,9 @@ try {
   await reserveButton.click();
   const reviewDialog = page.locator(".free-review-dialog");
   await reviewDialog.getByRole("heading", { name: "预约审查" }).waitFor();
-  await reviewDialog.locator(".free-review-reviewer-pick").filter({ hasText: "Codex 审查" }).waitFor();
+  await reviewDialog.locator(".free-review-reviewer .ui-dropdown-trigger").filter({ hasText: "Codex 审查" }).waitFor();
   const dialogBox = await reviewDialog.boundingBox();
-  assert.ok(dialogBox && dialogBox.width <= 642, "派审弹窗应收窄到 640px 左右");
+  assert.ok(dialogBox && dialogBox.width <= 462, "派审弹窗是四行字段的窄框（460px 左右）");
   assert.equal(await reviewDialog.evaluate((node) => node === document.activeElement), true, "弹窗打开后应接管焦点，让 Enter 可直接提交");
   await page.keyboard.press("Enter");
   await chatToolbar.getByRole("button", { name: "已预约复审" }).waitFor();
@@ -108,7 +108,7 @@ try {
 
   await chatToolbar.getByRole("button", { name: "已预约复审" }).click();
   await reviewDialog.getByRole("heading", { name: "调整预约审查" }).waitFor();
-  const note = reviewDialog.getByLabel("附言（可选）");
+  const note = reviewDialog.getByLabel("附言");
   await note.fill("重点检查窄屏布局");
   await note.press("Shift+Enter");
   await note.type("与键盘交互");
@@ -129,22 +129,31 @@ try {
   await reservationNote.waitFor();
   assert.match(await reservationNote.innerText(), /预约附言[\s\S]*重点检查窄屏布局[\s\S]*与键盘交互/, "预约附言应连同换行原样显示在审查面板里");
 
-  // 「失败后自动复审」是手填的数字，不是固定几档：预设里没有的 7 也要能提交上去。
+  // 「失败后自动复审」是一个步进器 [−] n [+]：0 的时候才多一句「未通过就停下」，边界上那颗键灰掉。
   await chatToolbar.getByRole("button", { name: "已预约复审" }).click();
   await reviewDialog.getByRole("heading", { name: "调整预约审查" }).waitFor();
-  const retry = reviewDialog.getByLabel("失败后自动复审");
-  assert.equal(await retry.inputValue(), "1", "重新打开要回显已存的轮数");
+  const retryValue = reviewDialog.getByRole("group", { name: "自动复审" }).locator("output");
+  const retryLess = reviewDialog.getByRole("button", { name: "自动复审少一轮" });
+  const retryMore = reviewDialog.getByRole("button", { name: "自动复审多一轮" });
+  const zeroHint = reviewDialog.getByText("未通过就停下，等你处理", { exact: true });
+  assert.equal(await retryValue.innerText(), "1", "重新打开要回显已存的轮数");
+  assert.equal(await zeroHint.count(), 0, "轮数大于 0 时不摆那句提示");
+  await retryLess.click();
+  assert.equal(await retryValue.innerText(), "0");
+  assert.equal(await zeroHint.count(), 1, "0 轮时要说清未通过就停下");
+  assert.equal(await retryLess.isDisabled(), true, "0 是下限");
+  assert.equal(await retryMore.evaluate((node) => node === document.activeElement), true, "减到下限那颗键灰掉时焦点挪到另一颗");
+  for (let index = 0; index < 6; index += 1) await page.keyboard.press("ArrowUp");
+  assert.equal(await retryValue.innerText(), "6", "停在步进器上时上下方向键也能调数");
+  await retryMore.click();
+  assert.equal(await retryValue.innerText(), "7");
+  assert.equal(await zeroHint.count(), 0);
   const submitReservation = reviewDialog.getByRole("button", { name: "保存预约" });
-  await retry.fill("999");
-  assert.equal(await submitReservation.isEnabled(), false, "超上限时提交按钮必须灰掉，不能等后端打回");
-  await retry.fill("");
-  assert.equal(await submitReservation.isEnabled(), false, "空值同样不能提交");
-  await retry.fill("7");
-  assert.equal(await submitReservation.isEnabled(), true);
+  assert.equal(await reviewDialog.getByRole("button", { name: "取消预约" }).count(), 1, "约过了再打开要能取消预约");
   await submitReservation.click();
   await page.waitForFunction(() => window.__reservationRequests === 3);
   await reviewDialog.waitFor({ state: "detached" });
-  assert.equal(await page.evaluate(() => window.__reservationRetryLimit), 7, "手填的轮数必须原样提交");
+  assert.equal(await page.evaluate(() => window.__reservationRetryLimit), 7, "调好的轮数必须原样提交");
   assert.deepEqual(
     (await reviewRounds.locator(".insp-cut").allInnerTexts()).map((text) => text.replace(/\s+/g, " ").slice(0, 5)),
     ["第 1 轮", "第 1 轮"],
@@ -264,11 +273,11 @@ try {
   await menuReview.waitFor();
   await menuReview.click();
   await reviewDialog.getByRole("heading", { name: "审查合并结果" }).waitFor();
-  await reviewDialog.locator(".free-review-reviewer-pick").filter({ hasText: "Codex 审查" }).waitFor();
+  await reviewDialog.locator(".free-review-reviewer .ui-dropdown-trigger").filter({ hasText: "Codex 审查" }).waitFor();
   assert.match(await reviewDialog.innerText(), /main/);
   assert.match(await reviewDialog.innerText(), /11111111.*22222222/);
   assert.equal(await reviewDialog.getByText("失败后自动复审", { exact: true }).count(), 0, "合并后审查固定单轮，不显示自动复审设置");
-  await reviewDialog.getByRole("button", { name: "关闭审查合并结果" }).click();
+  await reviewDialog.getByRole("button", { name: "取消", exact: true }).click();
 
   await postMergeHeader.getByRole("button", { name: "更多任务操作" }).click();
   await postMergeHeader.getByRole("menuitem", { name: "查看改动与审查" }).click();
@@ -278,7 +287,7 @@ try {
   assert.equal(await snapshotLink.count(), 1, "统一验收快照卡应提供低调文字入口");
   await snapshotLink.click();
   await reviewDialog.getByRole("heading", { name: "审查合并结果" }).waitFor();
-  await reviewDialog.locator(".free-review-reviewer-pick").filter({ hasText: "Codex 审查" }).waitFor();
+  await reviewDialog.locator(".free-review-reviewer .ui-dropdown-trigger").filter({ hasText: "Codex 审查" }).waitFor();
   await reviewDialog.getByRole("button", { name: "开始审查", exact: true }).click();
   await page.waitForFunction(() => window.__postMergeRequests === 1);
   assert.equal(await page.evaluate(() => window.__postMergeRequests), 1, "快照入口应发起一次合并结果审查");
@@ -346,18 +355,18 @@ try {
     /已有 1 处意见被你裁定「不在本任务里修」[\s\S]*不必在这里重复说明/,
     "裁定过之后，派审面要告诉用户这句话不用自己写了",
   );
-  await reviewDialog.getByRole("button", { name: "关闭派审查" }).click();
+  await reviewDialog.getByRole("button", { name: "取消", exact: true }).click();
   await reviewDialog.waitFor({ state: "detached" });
   // 反面：没裁定过的任务不该凭空多出这句提示。
   await chatToolbar.getByRole("button", { name: "已预约复审" }).click();
   await reviewDialog.getByRole("heading", { name: "调整预约审查" }).waitFor();
   assert.equal(
-    await reviewDialog.locator("#free-review-note-hint").innerText(),
-    // 键名由「输入框发送键」那一档统一给出（web/src/lib/sendKey.ts），默认档就是这句。
-    "Enter 提交 · Shift Enter 换行",
+    await reviewDialog.locator("#free-review-note-hint").count(), 0,
     "没裁定过的任务不该凭空多出这句提示",
   );
-  await reviewDialog.getByRole("button", { name: "关闭调整预约审查" }).click();
+  // 键名由「输入框发送键」那一档统一给出（web/src/lib/sendKey.ts），默认档写在附言框的读屏说明上。
+  assert.equal(await reviewDialog.getByLabel("附言").getAttribute("aria-description"), "Enter 提交，Shift Enter 换行");
+  await reviewDialog.getByRole("button", { name: "取消", exact: true }).click();
 
   console.log("free workflow inspector preview test passed");
 } finally {

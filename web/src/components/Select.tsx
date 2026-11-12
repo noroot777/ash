@@ -183,9 +183,15 @@ export function Select<V extends string = string>({
   useLayoutEffect(() => {
     if (!open) return;
     measure();
+  }, [filterable, open, options.length]);
+  // 焦点要等浮层真的挂上（量完位置才渲染）再给：跟量位置写在同一拍里的话，第一次打开时
+  // 浮层还不在，筛选框 / 浮层都拿不到焦点，键盘只能停在触发键上干瞪眼。
+  const placed = place !== null;
+  useLayoutEffect(() => {
+    if (!open || !placed) return;
     if (filterable) inputRef.current?.focus();
     else panelRef.current?.focus();
-  }, [filterable, open, options.length]);
+  }, [filterable, open, placed]);
 
   // 页面滚动/尺寸变化时跟着走：浮层是 fixed 的，不重算就会飘到别处。
   useEffect(() => {

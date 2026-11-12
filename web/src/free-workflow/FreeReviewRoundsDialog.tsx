@@ -1,9 +1,11 @@
 import { useState } from "react";
 import type { FreeReviewRun } from "@ash/shared";
 import { MAX_FREE_REVIEW_RETRIES } from "@ash/shared/free-workflow";
-import { Minus, Plus, Repeat } from "@phosphor-icons/react";
+import { Repeat } from "@phosphor-icons/react";
+import { RoundsStepper } from "../components/RoundsStepper.tsx";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import "../styles/free-review-dialog.css";
 
 /**
  * 审查进行中改这条链最多跑几轮。正在跑的那一轮自己占一轮，所以下限就是它；
@@ -56,11 +58,9 @@ export function FreeReviewRoundsDialog({
       onClose={() => { if (!busy) onClose(); }}
     >
       <div className="free-review-rounds">
-        <b>最多</b>
-        <div role="group" aria-label="最多轮数">
-          <button type="button" aria-label="少一轮" disabled={busy || total <= min} onClick={() => setTotal((value) => Math.max(min, value - 1))}><Minus size={12} /></button>
-          <output aria-live="polite">{total}</output>
-          <button type="button" aria-label="多一轮" disabled={busy || total >= max} onClick={() => setTotal((value) => Math.min(max, value + 1))}><Plus size={12} /></button>
+        <div>
+          <span>最多</span>
+          <RoundsStepper label="最多轮数" value={total} min={min} max={max} disabled={busy} onChange={setTotal} />
           <span>轮</span>
         </div>
         <small>{total > run.currentRound

@@ -64,7 +64,7 @@
     "test:free-workflow-inspector": "node scripts/test-free-workflow-inspector.mjs",
     "//test:free-review-defer-dom": "驳回卡上第三个出口(转为独立任务):按钮的存在条件、只提转出时的标题、混合形态下四个出口并存、确认后发出的裁定与回报的派生任务。",
     "test:free-review-defer-dom": "node scripts/test-free-review-defer-dom.mjs",
-    "//test:free-review-delete": "派审对话框里删审查者:行尾入口的显隐、确认框说的后果(全局配置/历史快照/预约会断)、取消不发请求、删掉选中项后下一位顶上、删光了摊开新建表单。",
+    "//test:free-review-delete": "派审对话框和审查者被删:四行字段、没有新建/删除入口、「管理审查者…」走到设置页;别处删掉选中项时回退并说一声、正在填的草稿不动;换任务/在飞请求/派审前核对;回车派审;这一次换个执行器点开才出。",
     "test:free-review-delete": "node scripts/test-free-review-delete.mjs",
     "//test:dispute-timeline-cta": "时间线上「现在由你裁定」旁注的「去裁定」按钮:有未裁定驳回才出现、点了打开审查面板、裁定完消失、没有入口时不给、不落在 summary 里。",
     "test:dispute-timeline-cta": "node scripts/test-dispute-timeline-cta.mjs",

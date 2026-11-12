@@ -2,46 +2,42 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { AgentExecutorProfile, FreeReviewCheckMode, FreeReviewExecutorOverride, ReviewerProfile } from "@ash/shared";
 import { MAX_FREE_REVIEW_RETRIES } from "@ash/shared/free-workflow";
-import { CheckCircle, MagnifyingGlass, Plus, SpinnerGap, Trash, WarningCircle, X } from "@phosphor-icons/react";
+import { SlidersHorizontal, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
+import { Dropdown } from "../components/Dropdown.tsx";
+import { RoundsStepper } from "../components/RoundsStepper.tsx";
+import { InspButton, InspTool } from "../inspector/parts.tsx";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
-import { reviewerDeleteMessage, settledDisputeRounds } from "./freeReviewCopy.ts";
+import { settledDisputeRounds } from "./freeReviewCopy.ts";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { reviewerProfilesStore } from "./reviewerProfilesStore.ts";
-import { selectAllOnFocus } from "../lib/selectAllOnFocus.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
-import { useRovingChoice } from "../lib/useRovingChoice.ts";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
-import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { reviewerRunText } from "./ReviewerProfileFields.tsx";
 import {
-  createReviewerDraft,
-  ReviewerProfileSummary,
-  ReviewerProfileFields,
-  reviewerPayload,
-  type ReviewerDraft,
-} from "./ReviewerProfileFields.tsx";
-import {
-  ReviewerRunOverride,
+  ReviewerRunOnce,
   reviewerRunDraft,
   reviewerRunDraftFrom,
   reviewerRunPayload,
   sameAsReviewer,
   type ReviewerRunDraft,
-  type ReviewerRunSaveMode,
 } from "./ReviewerRunOverride.tsx";
-import { AutoTextarea } from "../components/AutoTextarea.tsx";
+import { openReviewerSettings } from "./openReviewerSettings.ts";
+import "../styles/free-review-dialog.css";
+
+const CHECK_MODES = [
+  { value: "logic", label: "逻辑检查", detail: "看得见的前端改动会真打开页面截图" },
+  { value: "syntax", label: "只做语法检查" },
+] as const;
 
 /**
- * 复审轮数是手填的：空串、小数、负号、超上限都要在这里判死，别让它走到提交那一刻
- * 才被后端（`free-review-input.ts` 的同一个上限）打回。null = 这串不是合法轮数。
+ * 派审 / 预约审查：四行（审查者、检查类型、失败后自动复审几轮、附言）、一个主动作。任务在跑时
+ * 同一个对话框叫「预约审查」，约过了再打开是「调整预约审查」，这时多一颗「取消预约」。
+ *
+ * 审查者的新建、删除、长期改配置都在设置页「审查者」——下拉最底下那一项「管理审查者…」过去。
+ * 这里只留一样设置页做不了的：**这一次**换个执行器跑（审查者行尾那颗小钮，点开才出），
+ * 改了不写回那位审查者。
  */
-function parseRetryLimit(value: string): number | null {
-  const text = value.trim();
-  if (!/^\d+$/.test(text)) return null;
-  const parsed = Number(text);
-  return parsed <= MAX_FREE_REVIEW_RETRIES ? parsed : null;
-}
-
 export function FreeReviewDialog({
   taskId,
   state,
@@ -67,23 +63,19 @@ export function FreeReviewDialog({
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [selectedId, setSelectedId] = useState(state?.selectedReviewerId ?? "");
   const [checkMode, setCheckMode] = useState<FreeReviewCheckMode>(state?.reviewReservation?.checkMode ?? "logic");
-  const [retryLimit, setRetryLimit] = useState(String(state?.reviewReservation?.retryLimit ?? 1));
+  const [retryLimit, setRetryLimit] = useState(state?.reviewReservation?.retryLimit ?? 1);
   const [note, setNote] = useState(state?.reviewReservation?.note ?? "");
-  const [creating, setCreating] = useState(false);
-  const [draft, setDraft] = useState<ReviewerDraft>(() => createReviewerDraft());
-  // 「这一次用谁跑」：进来先等于选中审查者的配置，改动的去向由 saveMode 决定。
+  // 「这一次用谁跑」：进来先等于选中审查者的配置；只有点开审查者行尾那颗钮才摆出来。
   const [runDraft, setRunDraft] = useState<ReviewerRunDraft>(() => reviewerRunDraft(null));
-  const [saveMode, setSaveMode] = useState<ReviewerRunSaveMode>("once");
-  const [newName, setNewName] = useState("");
+  const [runOpen, setRunOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<ReviewerProfile | null>(null);
   /*
    * 这个对话框里有两样东西，生命周期完全不同，必须分开管，别拿一个去挡另一个：
    *
-   * ① **草稿**（选中谁、检查类型、轮数、附言、执行器覆盖、新建表单）属于「某个任务的
+   * ① **草稿**（选中谁、检查类型、轮数、附言、这一次的执行器）属于「某个任务的
    *    某一次打开」。它只按 taskId 初始化一次：远端预约字段在对话框开着的时候照样会变
    *    （别的页面改了预约、自动复审推进了一轮、在这里删掉被预约引用的那位审查者——服务端
    *    会顺手撤掉预约），那都不等于「用户重新打开了对话框」，正在写的草稿不是已经保存的
@@ -91,7 +83,7 @@ export function FreeReviewDialog({
    *    重建组件），这份草稿就不再属于当前任务了，必须整套重来 —— 否则会把给 A 写的附言
    *    保存到 B 身上。所以这里记的是「为哪个任务初始化过」，不是一个布尔开关。
    *
-   * ② **审查者清单**是一份**全局配置**，别的页面（设置页就有删除入口）随时能删掉其中一
+   * ② **审查者清单**是一份**全局配置**，别的页面（设置页的删除入口）随时能删掉其中一
    *    位。它必须跟着远端走：任务状态每变一次就重读一次权威清单，只更新清单本身和**确实
    *    失效**的选中项。保护用户输入不等于停止同步远端资源——那会让这里一直摆着一个已经
    *    不存在的配置，点下去才报「审查者不存在」。
@@ -106,8 +98,8 @@ export function FreeReviewDialog({
    * 先验一遍：服务端请求该做的照做（用户点的删除 / 派审本来就是冲着那个任务发的），但它
    * 不许再改一份已经不属于它的草稿、不许抢掉新对话框的忙碌态、更不许把新对话框关掉。
    *
-   * 不做这道门禁的后果（实测）：在 A 删掉选中的审查者，等 DELETE 响应期间后退到 B，B 刚
-   * 初始化好的选择会被 A 这次删除改掉，点「保存预约」就把错的那位写给了 B。
+   * 不做这道门禁的后果（实测）：在 A 上点了派审，等响应期间后退到 B，A 那次的返回会把
+   * B 刚初始化好的对话框关掉、用 A 的状态盖住 B。
    */
   const taskIdRef = useRef(taskId);
   taskIdRef.current = taskId;
@@ -120,14 +112,10 @@ export function FreeReviewDialog({
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
   const hasState = !!state;
-  const refocusAfterDelete = useRef(false);
   // 表单摊开的前提：**这个任务**的状态和审查者清单都到齐了。少一样都不许开放编辑 ——
   // 在还没有真实状态的空表单上写的东西，等状态到了会被那一次初始化整套盖掉。
   const ready = initializedFor === taskId && !loading;
   const postMerge = !!postMergeTarget;
-  const parsedRetryLimit = parseRetryLimit(retryLimit);
-  // 合并结果审查本来就不复审（提交时写死 0），别让那条禁用的输入卡住它的提交按钮。
-  const retryLimitInvalid = !postMerge && parsedRetryLimit === null;
   const dialogTitle = postMerge
     ? "审查合并结果"
     : reservationMode ? (state?.reviewReservation?.armed ? "调整预约审查" : "预约审查") : "派审查";
@@ -138,34 +126,34 @@ export function FreeReviewDialog({
   // 照旧每轮手打「有异议的已经转为新任务，只审查本次改动内容」。
   const settled = useMemo(() => settledDisputeRounds(state?.reviews), [state?.reviews]);
   // 轮号跨 run 会重复（第二条审查链又从第 1 轮数起），所以这里只报条数、不报轮号。
-  const noteHint = settled.length
-    ? `${sendKeys.send} 提交 · ${sendKeys.newline} 换行 · 已有 ${settled.length} 处意见被你裁定「不在本任务里修」` +
-      "（转为独立任务或作废），派审时会自动讲给审查者，不必在这里重复说明"
-    : `${sendKeys.send} 提交 · ${sendKeys.newline} 换行`;
+  // 没裁定过就不摆这一行；发送键怎么按写在附言框的读屏说明和主键的快捷键属性上。
+  const settledHint = settled.length
+    ? `已有 ${settled.length} 处意见被你裁定「不在本任务里修」（转为独立任务或作废），派审时会自动讲给审查者，不必在这里重复说明`
+    : "";
   const selectedReviewer = reviewers.find((item) => item.id === selectedId) ?? null;
   const runChanged = !sameAsReviewer(runDraft, selectedReviewer);
   // 对话框开着期间**始终**登记在那摞可关闭层里。`enabled` 跟着 busy 翻动等于「退出这摞
-  // 再重新 push」，层序会被改写成最新 push 的那一个 —— 父层跑到里面那个确认框前面去，
-  // 于是点确认框被父层判成「点了外面」，两个框一起关掉（删除失败后再点一次「删除」，
-  // 实测就是两个一起消失、请求一次都没发出去）。要禁的是「这会儿不许关」，那归 onClose
+  // 再重新 push」，层序会被改写成最新 push 的那一个 —— 父层跑到里面那几只下拉浮层前面去，
+  // 于是点浮层被父层判成「点了外面」，两层一起关掉。要禁的是「这会儿不许关」，那归 onClose
   // 判，跟层序无关；`useDismissable` 的 onClose 是每次渲染写进 ref 的，不会因此重登记。
   useDismissable({ enabled: true, containerRef: scrim, onClose: () => { if (!busy) onClose(); } });
 
-  // 换审查者 = 换了参照系：草稿、保存方式、新名字整套回到这位审查者的原配置。
+  // 换审查者 = 换了参照系：「这一次用谁跑」回到这位审查者的原配置。
   const selectReviewer = (reviewer: ReviewerProfile) => {
     setSelectedId(reviewer.id);
     setRunDraft(reviewerRunDraft(reviewer));
-    setSaveMode("once");
-    setNewName("");
   };
 
   const pickReviewer = (id: string) => {
     const reviewer = reviewers.find((item) => item.id === id);
-    if (!reviewer) return;
-    selectReviewer(reviewer);
-    setCreating(false);
+    if (reviewer) selectReviewer(reviewer);
   };
-  const reviewerGroup = useRovingChoice(reviewers.map((item) => item.id), selectedId, pickReviewer);
+
+  // 新建、删除、长期改配置都在设置页。先关掉对话框再走过去（草稿不保存：那边改完回来重新点开即可）。
+  const manageReviewers = () => {
+    onClose();
+    openReviewerSettings();
+  };
 
   useEffect(() => { dialog.current?.focus(); }, []);
 
@@ -185,22 +173,20 @@ export function FreeReviewDialog({
       const nextReviewers = reviewerProfilesStore.current() ?? list;
       setReviewers(nextReviewers);
       setProfiles(nextProfiles);
-      setDraft(createReviewerDraft(nextProfiles));
       const preferred = opened?.selectedReviewerId && nextReviewers.some((item) => item.id === opened.selectedReviewerId)
         ? opened.selectedReviewerId
         : nextReviewers[0]?.id ?? "";
       setSelectedId(preferred);
       setCheckMode(opened?.reviewReservation?.checkMode ?? "logic");
-      setRetryLimit(String(opened?.reviewReservation?.retryLimit ?? 1));
+      setRetryLimit(Math.min(MAX_FREE_REVIEW_RETRIES, Math.max(0, opened?.reviewReservation?.retryLimit ?? 1)));
       setNote(opened?.reviewReservation?.note ?? "");
       // 「调整预约审查」再打开时要看到上次改后的那套配置，而不是审查者的原配置——
-      // 预约里存着覆盖就回显它，保存方式跟着回到「仅本次使用」。
+      // 预约里存着覆盖就回显它，那颗「这一次换个执行器」直接摊开。
       const reserved = opened?.reviewReservation?.override ?? null;
       const reviewer = nextReviewers.find((item) => item.id === preferred) ?? null;
-      setRunDraft(reserved && reviewer ? reviewerRunDraftFrom(reserved) : reviewerRunDraft(reviewer));
-      setSaveMode("once");
-      setNewName("");
-      setCreating(nextReviewers.length === 0);
+      const echoed = reserved && reviewer ? reviewerRunDraftFrom(reserved) : reviewerRunDraft(reviewer);
+      setRunDraft(echoed);
+      setRunOpen(!sameAsReviewer(echoed, reviewer));
       // 这一次初始化之前发出的异步动作，从这一刻起都不再属于眼前这份草稿。
       openGen.current += 1;
       setInitializedFor(taskId);
@@ -214,11 +200,10 @@ export function FreeReviewDialog({
     return () => { alive = false; };
   }, [hasState, notify, reloadToken, taskId]);
 
-  // ② 任务一换，上一轮在飞的写操作就不再属于这个对话框：忙碌态和删除确认框立刻让位。
-  //    否则新任务的对话框会顶着一个关不掉的「忙」——右上角那颗关闭按钮也是 disabled={busy}。
+  // ② 任务一换，上一轮在飞的写操作就不再属于这个对话框：忙碌态立刻让位。
+  //    否则新任务的对话框会顶着一个关不掉的「忙」——「取消」那颗键也是 disabled={busy}。
   useEffect(() => {
     setBusy(false);
-    setDeleteTarget(null);
   }, [taskId]);
 
   // ③ 清单同步：审查者是一份全局配置，谁都能删，所以重读的信号**不挂在「这项任务的状态
@@ -235,76 +220,15 @@ export function FreeReviewDialog({
     const fallback = next[0];
     if (fallback) {
       selectReviewer(fallback);
-      // 本机刚按下的那次删除自己会报「已删除审查者「X」」，别再叠一条。
+      // 本机发起的那次删除自己会报「已删除审查者「X」」，别再叠一条。
       if (source === "remote") notify(`原先选中的审查者已被删除，已替你改选「${fallback.name}」`);
       return;
     }
     setSelectedId("");
     setRunDraft(reviewerRunDraft(null));
-    setSaveMode("once");
-    setNewName("");
-    setCreating(true);
-    if (source === "remote") notify("审查者已被删除，请先新建一位再派审");
+    setRunOpen(false);
+    if (source === "remote") notify("审查者已被删除，请先在「管理审查者…」里新建一位再派审");
   }), [notify]);
-
-  // 删成功那一下，原来那颗删除按钮已经不在了；确认框只在「原来那个元素还连着」时才还
-  // 焦点，于是焦点掉到 body 上，键盘就从对话框里掉了出去。给它补一个落点：对话框本身。
-  useEffect(() => {
-    if (deleteTarget || !refocusAfterDelete.current) return;
-    refocusAfterDelete.current = false;
-    if (!dialog.current?.contains(document.activeElement)) dialog.current?.focus();
-  }, [deleteTarget]);
-
-  const create = async () => {
-    if (!draft.name.trim() || busy) return;
-    const token = identity();
-    setBusy(true);
-    try {
-      const created = await reviewerProfilesStore.create(reviewerPayload(draft, profiles));
-      // 配置是真建出来了，所以这句话无论如何都得说；但「顺手选中它」只对发起时那份草稿成立。
-      if (!mine(token)) { notify(`已创建审查者「${created.name}」`); return; }
-      selectReviewer(created);
-      setCreating(false);
-      notify(`已创建并选中审查者「${created.name}」`);
-    } catch (error) {
-      notify(error instanceof Error ? error.message : "审查者创建失败");
-    } finally {
-      if (mine(token)) setBusy(false);
-    }
-  };
-
-  // 删审查者删的是一份**全局配置**，别的任务也在用它，所以跟设置页同一套口径：先确认，
-  // 再照服务端的真实后果写清楚（历史审查记录留的是当时的配置快照，不受影响）。
-  const reservation = state?.reviewReservation;
-  // 自动复审的续轮预约（runId 非空）配置已冻结在 run 行里，删了照样能续；只有手动预约会断，
-  // 服务端在那种情况下会顺手 disarm，所以确认框要提前把这句说在前面。
-  const deleteBreaksReservation = !!deleteTarget
-    && !!reservation?.armed
-    && !reservation.runId
-    && reservation.reviewerId === deleteTarget.id;
-
-  const removeReviewer = async () => {
-    if (!deleteTarget || busy) return;
-    // 确认框里的那一位，不是「现在的 deleteTarget」：await 之后它随时可能已经是别的东西。
-    const target = deleteTarget;
-    const token = identity();
-    setBusy(true);
-    try {
-      await reviewerProfilesStore.remove(target.id);
-      // 新清单和「选中的那位没了怎么办」都由资源层 + ③ 的订阅收口 —— 这里一个字都不自己
-      // 拼。拿发起时捕获的那份清单算 rest 会把这中间别处删掉的那位贴回去，拿发起时的
-      // selectedId 判断又会漏掉「当前选中的其实也刚被删」。
-      notify(`已删除审查者「${target.name}」`);
-      // 删完要收的尾只属于这一次打开：关掉确认框、把焦点收回对话框。
-      if (!mine(token)) return;
-      refocusAfterDelete.current = true;
-      setDeleteTarget(null);
-    } catch (error) {
-      notify(error instanceof Error ? error.message : "审查者删除失败");
-    } finally {
-      if (mine(token)) setBusy(false);
-    }
-  };
 
   const submit = async () => {
     if (!selectedId || busy || !ready) return;
@@ -313,14 +237,6 @@ export function FreeReviewDialog({
     // 提交：那会把写给 A 的附言保存到 B 身上。重新初始化期间这里只是挡一下，等它完成。
     if (initializedForRef.current !== taskId) {
       notify("任务已经切换，正在重新读取这项任务的审查配置");
-      return;
-    }
-    if (retryLimitInvalid) {
-      notify(`自动复审轮数必须是 0-${MAX_FREE_REVIEW_RETRIES} 的整数`);
-      return;
-    }
-    if (runChanged && saveMode === "new" && !newName.trim()) {
-      notify("请先给新审查者起个名字");
       return;
     }
     // 用户按下这一下时选的是哪一位 —— 不是「await 之后 selectedId 变成了什么」。这中间
@@ -339,25 +255,13 @@ export function FreeReviewDialog({
         notify("所选审查者刚刚被删除了，这一次没有派出去；请确认改选后再派审");
         return;
       }
-      // 三种去向的共同点：这一次审查一定按改后的配置跑。前两种把改动落进审查者配置
-      // （落完就是它自己的配置，不必再带覆盖），「仅本次使用」才走 override。
-      const payload = runChanged ? reviewerRunPayload(runDraft, profiles) : null;
-      let reviewerId = intended;
-      let override: FreeReviewExecutorOverride | null = null;
-      if (payload && saveMode === "overwrite") {
-        await reviewerProfilesStore.update(intended, payload);
-      } else if (payload && saveMode === "new") {
-        const created = await reviewerProfilesStore.create({ name: newName.trim(), ...payload });
-        // 清单由资源层送达；只有「把选中项挪到新建的那位」属于这一次打开的草稿。
-        if (mine(token)) setSelectedId(created.id);
-        reviewerId = created.id;
-      } else if (payload) {
-        override = payload;
-      }
+      // 这一次换了执行器就带上覆盖；审查者自己的配置不动。
+      const override: FreeReviewExecutorOverride | null = runChanged ? reviewerRunPayload(runDraft, profiles) : null;
+      const reviewerId = intended;
       const input = {
         reviewerId,
         checkMode,
-        retryLimit: postMerge ? 0 : (parsedRetryLimit ?? 0),
+        retryLimit: postMerge ? 0 : retryLimit,
         note,
         override,
       };
@@ -367,9 +271,7 @@ export function FreeReviewDialog({
         : reservationMode
           ? await api.reserveFreeReview(taskId, input)
           : await api.dispatchFreeReview(taskId, input);
-      const name = reviewerId === intended
-        ? reviewers.find((item) => item.id === intended)?.name ?? "审查者"
-        : newName.trim();
+      const name = reviewers.find((item) => item.id === intended)?.name ?? "审查者";
       notify(postMerge ? `已派出 ${name} 审查合并结果` : reservationMode ? `已预约由「${name}」审查，执行回合正常结束后开始` : `已派出 ${name}`);
       // 但返回的是**那个任务**的状态，对话框这会儿可能已经是另一个任务的了：把它交给
       // 容器就等于用 A 的状态盖 B，顺手 onClose() 更是关掉了一个别人正在填的对话框。
@@ -401,6 +303,16 @@ export function FreeReviewDialog({
     }
   };
 
+  const armed = !postMerge && !!state?.reviewReservation?.armed;
+  const primaryLabel = busy
+    ? (reservationMode && !postMerge ? "保存中…" : "启动中…")
+    : postMerge ? "开始审查" : reservationMode ? (armed ? "保存预约" : "预约审查") : "开始审查";
+  const reviewerOptions = reviewers.map((reviewer) => ({
+    value: reviewer.id,
+    label: reviewer.name,
+    detail: reviewerRunText(reviewer, profiles),
+  }));
+
   return createPortal(
     <div className="task-modal-scrim" ref={scrim} role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget && !busy) onClose();
@@ -422,109 +334,125 @@ export function FreeReviewDialog({
           void submit();
         }}
       >
-        <header>
-          <span><MagnifyingGlass size={17} weight="bold" /></span>
-          <div><h2 id="free-review-title">{dialogTitle}</h2><p>{postMerge ? "在验收时冻结的目标分支快照上做一次可选检查；未通过时另建修复任务。" : reservationMode ? "选择审查者与检查深度；执行回合正常结束后自动开始。托盘里还排着消息时先把它们发完，停止、异常或等待答复时保留预约。" : "选择一套审查者配置，再决定检查深度与失败后的自动复审次数。"}</p></div>
-          <button type="button" aria-label={`关闭${dialogTitle}`} disabled={busy} onClick={onClose}><X size={15} /></button>
-        </header>
+        <h2 id="free-review-title">{dialogTitle}</h2>
+        {postMergeTarget && (
+          <p className="free-review-dialog__target">
+            合入 <code>{postMergeTarget.branch}</code> 的那次合并 · <code>{postMergeTarget.baseCommit.slice(0, 8)} → {postMergeTarget.mergeCommit.slice(0, 8)}</code>；不改动原任务，发现问题从审查记录另建修复任务
+          </p>
+        )}
         {!ready ? (
-          <div className={`free-review-loading${loadError ? " is-error" : ""}`}>
+          <div className={`free-review-loading${loadError ? " is-error" : ""}`} role="status">
             {loadError
-              ? <><WarningCircle size={15} />{loadError}<button type="button" onClick={() => { setLoadError(null); setLoading(true); setReloadToken((value) => value + 1); }}>重试</button></>
-              : <><SpinnerGap size={15} className="is-spinning" />{hasState ? "正在读取审查者…" : "正在读取任务状态…"}</>}
+              ? <><WarningCircle size={14} aria-hidden="true" />{loadError}<InspButton size="sm" onClick={() => { setLoadError(null); setLoading(true); setReloadToken((value) => value + 1); }}>重试</InspButton></>
+              : <><SpinnerGap size={14} className="is-spinning" aria-hidden="true" />{hasState ? "正在读取审查者…" : "正在读取任务状态…"}</>}
           </div>
         ) : (
-          <div className="free-review-dialog-body">
-            <section className="free-review-reviewers">
-              <div className="free-review-section-title"><b>审查者</b><button type="button" onClick={() => setCreating((value) => !value)}><Plus size={11} />新建</button></div>
-              <div className="free-review-reviewer-list" {...reviewerGroup.groupProps} aria-label="审查者">
-                {reviewers.map((reviewer) => (
-                  <div key={reviewer.id} className="free-review-reviewer-row">
-                    <button className="free-review-reviewer-pick" type="button" {...reviewerGroup.itemProps(reviewer.id)} onClick={() => pickReviewer(reviewer.id)}>
-                      <span><b>{reviewer.name}</b><ReviewerProfileSummary reviewer={reviewer} profiles={profiles} /></span>
-                      {selectedId === reviewer.id && <CheckCircle size={16} weight="fill" />}
-                    </button>
-                    <button
-                      className="free-review-reviewer-delete"
-                      type="button"
-                      aria-label={`删除审查者「${reviewer.name}」`}
-                      disabled={busy}
-                      onClick={() => setDeleteTarget(reviewer)}
-                    ><Trash size={13} /></button>
-                  </div>
-                ))}
+          <div
+            className="free-review-rows"
+            onKeyDown={(event) => {
+              // 停在审查者 / 检查类型那颗下拉上时：回车就是派审（选完一位，焦点回到下拉上，接着按回车
+              // 就发出去），方向键往下才打开候选；空格照常打开。浮层里的按键 target 是浮层，不走这里。
+              const target = event.target as HTMLElement;
+              if (!target.classList.contains("ui-dropdown-trigger") || event.nativeEvent.isComposing) return;
+              if (event.key === "Enter") {
+                event.preventDefault();
+                target.closest("form")?.requestSubmit();
+              } else if (event.key === "ArrowDown" && target.getAttribute("aria-expanded") !== "true") {
+                event.preventDefault();
+                target.click();
+              }
+            }}
+          >
+            <div className="free-review-row">
+              <span id="free-review-reviewer-label">审查者</span>
+              <div>
+                {reviewers.length > 0 ? (
+                  <Dropdown
+                    className="free-review-reviewer"
+                      label="审查者"
+                    value={selectedId}
+                    options={reviewerOptions}
+                    filterable={reviewers.length > 8}
+                    disabled={busy}
+                    onChange={pickReviewer}
+                    // 下拉最底下那一项：Dropdown 的尾项出口本来给「清空」用，这里借它摆「管理审查者…」。
+                    onClear={manageReviewers}
+                    clearLabel="管理审查者…"
+                  />
+                ) : (
+                  <>
+                    <span className="free-review-row__empty">还没有审查者</span>
+                    <InspButton size="sm" onClick={manageReviewers}>管理审查者…</InspButton>
+                  </>
+                )}
+                {selectedReviewer && (
+                  <InspTool
+                    label="这一次换个执行器"
+                    tip={runOpen ? "收起：这一次照审查者原来的配置跑" : `只改这一次用谁跑，不动「${selectedReviewer.name}」的配置`}
+                    aria-pressed={runOpen}
+                    disabled={busy}
+                    onClick={() => {
+                      // 收起 = 不要这次的改动了，回到审查者原配置。
+                      if (runOpen) setRunDraft(reviewerRunDraft(selectedReviewer));
+                      setRunOpen((value) => !value);
+                    }}
+                  >
+                    <SlidersHorizontal aria-hidden="true" />
+                  </InspTool>
+                )}
               </div>
-              {!creating && selectedReviewer && (
-                <ReviewerRunOverride
+            </div>
+            {runOpen && selectedReviewer && (
+              <div className="free-review-row is-sub">
+                <span aria-hidden="true" />
+                <ReviewerRunOnce
                   reviewer={selectedReviewer}
                   profiles={profiles}
                   types={types}
                   draft={runDraft}
                   changed={runChanged}
-                  saveMode={saveMode}
-                  newName={newName}
                   disabled={busy}
                   onChange={setRunDraft}
-                  onSaveModeChange={setSaveMode}
-                  onNewNameChange={setNewName}
                 />
-              )}
-              {creating && (
-                <div className="free-review-create" onKeyDown={(event) => {
-                  // 这个小表单里只有单行输入，所以它**不跟**「输入框发送键」那一档（设置 →
-                  // 默认规则 → 输入框）：单行输入里回车提交是浏览器自己的表单语义，到处都
-                  // 一样，没有第二种读法；跟着那一档走只会变成「填完名字按回车没反应」。
-                  if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.target instanceof HTMLButtonElement) return;
-                  event.preventDefault();
-                  void create();
-                }}>
-                  <ReviewerProfileFields draft={draft} profiles={profiles} types={types} disabled={busy} onChange={setDraft} />
-                  <button type="button" disabled={busy || !draft.name.trim() || !profiles.length} onClick={() => void create()}>{busy ? "创建中…" : "创建并选中"}</button>
+              </div>
+            )}
+            <div className="free-review-row">
+              <span>检查类型</span>
+              <div>
+                <Dropdown
+                  className="free-review-check"
+                  label="检查类型"
+                  value={checkMode}
+                  options={CHECK_MODES}
+                  filterable={false}
+                  disabled={busy}
+                  onChange={(value) => setCheckMode(value as FreeReviewCheckMode)}
+                />
+              </div>
+            </div>
+            {!postMerge && (
+              <div className="free-review-row">
+                <span>失败后自动复审</span>
+                <div>
+                  <RoundsStepper label="自动复审" value={retryLimit} min={0} max={MAX_FREE_REVIEW_RETRIES} disabled={busy} onChange={setRetryLimit} />
+                  <span>轮</span>
+                  {retryLimit === 0 && <span className="free-review-row__zero">未通过就停下，等你处理</span>}
                 </div>
-              )}
-            </section>
-            <section className="free-review-options">
-              {postMergeTarget && (
-                <dl className="free-review-target">
-                  <div><dt>目标分支</dt><dd>{postMergeTarget.branch}</dd></div>
-                  <div><dt>审查区间</dt><dd>{postMergeTarget.baseCommit.slice(0, 8)} → {postMergeTarget.mergeCommit.slice(0, 8)}</dd></div>
-                </dl>
-              )}
-              <label><span>检查类型</span><select value={checkMode} onChange={(event) => setCheckMode(event.target.value as FreeReviewCheckMode)}><option value="logic">逻辑检查</option><option value="syntax">只做语法检查</option></select></label>
-              {!postMerge && (
-                <label className="free-review-retry">
-                  <span>失败后自动复审</span>
-                  <span className={`free-review-retry-field${retryLimitInvalid ? " is-invalid" : ""}`}>
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      min={0}
-                      max={MAX_FREE_REVIEW_RETRIES}
-                      step={1}
-                      value={retryLimit}
-                      disabled={busy}
-                      aria-invalid={retryLimitInvalid}
-                      aria-describedby="free-review-retry-hint"
-                      onChange={(event) => setRetryLimit(event.target.value)}
-                      {...selectAllOnFocus}
-                    />
-                    <em>轮</em>
-                  </span>
-                  <small id="free-review-retry-hint">
-                    {retryLimitInvalid
-                      ? `请填 0-${MAX_FREE_REVIEW_RETRIES} 之间的整数`
-                      : `直接填 0-${MAX_FREE_REVIEW_RETRIES} 的整数；0 = 未通过就停下来等你处理`}
-                  </small>
-                </label>
-              )}
-              <label className="free-review-note">
-                <span>附言（可选）</span>
-                <AutoTextarea
+              </div>
+            )}
+            <div className="free-review-row">
+              <label htmlFor="free-review-note">附言</label>
+              <div>
+                <textarea
+                  id="free-review-note"
+                  className="free-review-note"
                   value={note}
                   maxLength={2000}
+                  rows={2}
                   disabled={busy}
                   placeholder="补充希望审查者重点关注的内容"
-                  aria-describedby="free-review-note-hint"
+                  aria-description={`${sendKeys.send} 提交，${sendKeys.newline} 换行`}
+                  aria-describedby={settledHint ? "free-review-note-hint" : undefined}
                   onChange={(event) => setNote(event.target.value)}
                   onKeyDown={(event) => {
                     if (!isSendKeyEvent(event)) return;
@@ -532,32 +460,20 @@ export function FreeReviewDialog({
                     event.currentTarget.form?.requestSubmit();
                   }}
                 />
-                <small id="free-review-note-hint">{noteHint}</small>
-              </label>
-              <p>{postMerge ? "这次只检查冻结的合并快照，不改动原任务。若发现问题，可从审查记录创建基于该 merge commit 的独立修复任务。" : "默认 1 轮：首次审查未通过后，执行方修完会自动再审一次。逻辑检查遇到可见前端改动时必须真实打开页面并截图。"}</p>
-            </section>
+                {settledHint && <small id="free-review-note-hint" className="free-review-row__hint">{settledHint}</small>}
+              </div>
+            </div>
           </div>
         )}
         <footer>
-          {!postMerge && state?.reviewReservation?.armed && <button type="button" disabled={busy} onClick={() => void cancelReservation()}>取消预约</button>}
-          <button type="button" disabled={busy} onClick={onClose}>{!postMerge && state?.reviewReservation?.armed ? "关闭" : "取消"}</button>
-          <button className="is-primary" type="submit" aria-keyshortcuts={sendKeys.ariaShortcut} disabled={busy || !ready || !selectedId || retryLimitInvalid}>
-            {busy ? (reservationMode && !postMerge ? "保存中…" : "启动中…") : postMerge ? "开始审查" : reservationMode ? (state?.reviewReservation?.armed ? "保存预约" : "预约审查") : "开始审查"}
-          </button>
+          {armed && <InspButton variant="quiet" disabled={busy} onClick={() => void cancelReservation()}>取消预约</InspButton>}
+          <span className="free-review-dialog__grow" />
+          <InspButton disabled={busy} onClick={onClose}>取消</InspButton>
+          <InspButton variant="pri" type="submit" aria-keyshortcuts={sendKeys.ariaShortcut} disabled={busy || !ready || !selectedId}>
+            {primaryLabel}
+          </InspButton>
         </footer>
       </form>
-      {/* 自己 portal 到 body、自己进那摞可关闭层，所以挂在这里不会被遮罩的「点外面」判成关闭。 */}
-      {deleteTarget && (
-        <ConfirmDialog
-          title="删除审查者"
-          message={reviewerDeleteMessage(deleteTarget.name, { breaksReservation: deleteBreaksReservation })}
-          confirmLabel="删除"
-          danger
-          busy={busy}
-          onConfirm={() => void removeReviewer()}
-          onClose={() => setDeleteTarget(null)}
-        />
-      )}
     </div>,
     document.body,
   );
