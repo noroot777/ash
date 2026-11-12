@@ -120,8 +120,6 @@ button.as-name:active { background: var(--sel-bg); }
 .as-hello > h2 { margin: 20px 0 10px; font-size: var(--t-xl); font-weight: var(--w-medium); letter-spacing: -0.03em; line-height: 1.4; }
 .as-hello > p { color: var(--muted); line-height: 1.9; }
 .as-hello > div { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 20px; }
-.as-hello .btn { color: var(--tone-ink); }
-.as-hello .btn:hover { background: var(--tone-soft); }
 
 /* 日期胶囊：两边各一条细线 */
 .as-date { display: flex; align-items: center; gap: 12px; margin: 14px 0; color: var(--faint); font-size: var(--t-xs); }
@@ -191,9 +189,9 @@ button.as-name:active { background: var(--sel-bg); }
 .as-box > textarea { display: block; width: 100%; min-height: 74px; max-height: 190px; padding: 14px 15px 8px; line-height: 1.7; }
 .as-box > footer { display: flex; align-items: center; gap: 9px; padding: 6px 9px 9px 11px; }
 .as-box > footer > .grow { color: var(--muted); font-size: var(--t-xs); overflow-wrap: anywhere; }
-.as-send { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: var(--r-md); background: var(--tone); color: var(--on-accent); }
+.as-send { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: var(--r-md); background: var(--action); color: var(--on-action); }
 .as-send > .i { stroke-width: 1.8; }
-.as-send:hover:not([disabled]) { background: color-mix(in oklab, var(--tone) 82%, var(--ink)); }
+.as-send:hover:not([disabled]) { background: var(--action-hover); }
 .as-send:active:not([disabled]) { transform: scale(0.94); }
 .as-keys { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; color: var(--faint); font-size: var(--t-xs); }
 /* 点名菜单：长在输入卡上方，焦点留在输入框里；行的样子是公共的 .menu，只是每行多一个头像所以高一点 */
@@ -207,9 +205,6 @@ button.as-name:active { background: var(--sel-bg); }
 :is(.as-edit, .as-setup) h2 { font-size: var(--t-xl); font-weight: var(--w-medium); letter-spacing: -0.03em; line-height: 1.4; }
 :is(.as-edit, .as-setup) > p { color: var(--muted); font-size: var(--t-xs); line-height: 1.8; }
 :is(.as-edit, .as-setup) > footer { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 25px; padding: 20px 0; border-top: 1px solid var(--line); }
-/* 这两页的主按钮（保存设置 / 创建群聊 / 保存选择 / 新建群聊）和发送键同色，都是这一页自己的强调色 */
-:is(.as-edit, .as-setup, .as-blank) .btn.pri { background: var(--tone); }
-:is(.as-edit, .as-setup, .as-blank) .btn.pri:hover:not([disabled]) { background: color-mix(in oklab, var(--tone) 82%, var(--ink)); }
 .as-setup > p { margin: 8px 0 25px; }
 /* 「选谁干活」：一行小标题，下面是那颗三段胶囊 */
 .as-pick { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; color: var(--muted); font-size: var(--t-xs); }
@@ -242,7 +237,7 @@ button.as-name:active { background: var(--sel-bg); }
 .as-presence > .go:active { background: var(--sel-bg); }
 .as-presence strong { display: block; font-weight: var(--w-regular); overflow-wrap: anywhere; }
 .as-presence small { display: block; color: var(--muted); font-size: var(--t-xs); }
-.as-manage { margin-top: 14px; color: var(--tone-ink); }
+.as-manage { margin-top: 14px; }
 .as-info > hr { height: 1px; margin: 24px 0; border: 0; background: var(--line); }
 .as-stat { display: flex; align-items: baseline; gap: 8px; padding: 4px 0 14px; }
 .as-stat > strong { color: var(--tone-line); font-size: var(--t-xl); font-weight: var(--w-regular); line-height: 1.2; }

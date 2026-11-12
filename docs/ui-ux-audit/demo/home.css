@@ -136,7 +136,7 @@
 .sv-home-pop .plist > button { display: grid; gap: 2px; flex: 0 0 180px; min-width: 0; padding: 8px 10px; border-radius: var(--r-md); box-shadow: inset 0 0 0 1px var(--line); text-align: left; transition: background var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out); }
 .sv-home-pop .plist > button:hover { background: var(--hover-bg); }
 .sv-home-pop .plist > button:active { background: var(--sel-bg); }
-.sv-home-pop .plist > [aria-pressed="true"], .sv-home-pop .plist > [aria-pressed="true"]:hover { background: color-mix(in oklab, var(--accent) 7%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
+.sv-home-pop .plist > [aria-pressed="true"], .sv-home-pop .plist > [aria-pressed="true"]:hover { background: var(--hover-bg); box-shadow: inset 0 0 0 1px var(--ink); }
 .sv-home-pop .plist > button:focus-visible { outline-offset: -2px; }
 .sv-home-pop .plist b { font-weight: var(--w-regular); }
 .sv-home-pop .plist span, .sv-home-pop .plist small { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: var(--t-xs); }

@@ -18,10 +18,10 @@
 .task-title { flex: 0 1 auto; min-width: 3em; height: 28px; padding: 0 6px; border: 0; border-radius: var(--r-sm); background: transparent; font-size: var(--t-md); font-weight: var(--w-medium); text-overflow: ellipsis; transition: background var(--dur-1) var(--ease-out); }
 .task-title:hover, .task-title:focus { background: var(--raised); }
 
-/* 图钉：置顶了是实心主色、一直在；没置顶的平时不画，指到头部、或者键盘走到它才出来；触屏上常显 */
+/* 图钉：置顶了是实心墨色、一直在；没置顶的平时不画，指到头部、或者键盘走到它才出来；触屏上常显 */
 .task-pin { color: var(--faint); opacity: 0; }
 .task-head:hover .task-pin, .task-pin:focus-visible, .task-pin[aria-pressed="true"] { opacity: 1; }
-.task-pin[aria-pressed="true"] { color: var(--accent); }
+.task-pin[aria-pressed="true"] { color: var(--ink); }
 .task-pin[aria-pressed="true"] .i { fill: currentColor; }
 @media (hover: none) { .task-pin { opacity: 1; } }
 
@@ -31,7 +31,7 @@
 .task-status > .dot.is-out { opacity: 0; }
 
 /* 面板开着的时候，开关是按下的样子（底色来自 .ico[aria-expanded]） */
-.task-panel[aria-expanded="true"] { color: var(--accent); }
+.task-panel[aria-expanded="true"] { color: var(--ink); }
 
 /* 确认框里分两段说的话 */
 .task-say { display: block; }

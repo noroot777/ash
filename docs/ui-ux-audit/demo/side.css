@@ -126,8 +126,8 @@
 .side-foot .i { width: 14px; height: 14px; }
 .side-foot > a:hover { background: var(--hover-bg); color: var(--ink); }
 .side-foot > a:active { background: var(--sel-bg); }
-/* 开着聊天、助手时那一颗是主色、图标填实（现有约定） */
-.side-foot > a[aria-current="page"] { color: var(--accent); }
+/* 开着聊天、助手时那一颗是墨色、图标填实 */
+.side-foot > a[aria-current="page"] { color: var(--ink); }
 .side-foot > a[aria-current="page"] > .i { fill: color-mix(in oklab, currentColor 22%, transparent); }
 
 /* ---------- 项目菜单：当前项目、设置、深浅色、搜索、「切换到」、新建项目（浮层本体是公共件 .pop + .menu） ---------- */
@@ -146,10 +146,9 @@
 .side-pm-find > input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; }
 .side-pm-list { max-height: 310px; overflow-y: auto; }
 .side-pm-list > button { height: auto; gap: 9px; padding: 6px 7px; }
-.side-pm-list > button > .i:last-child { color: var(--accent); }
+.side-pm-list > button > .i:last-child { color: var(--ink); }
 .side-pm-list > .none { padding: 18px 8px; }
 .side-pm-new { margin-top: 6px; padding-top: 4px; border-top: 1px solid var(--line); }
-.side-pm-new > button, .side-pm-new > button > .i:first-child { color: var(--accent); }
 .side-pm-new > button { font-weight: var(--w-regular); }
 
 /* ---------- ⌘K：居中的命令面板，带遮罩（遮罩是公共件 .veil）。靠上摆，两行一条：名字在上、去处在下 ---------- */

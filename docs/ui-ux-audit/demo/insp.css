@@ -31,9 +31,9 @@
 .insp-cell:active { background: var(--sel-bg); }
 .insp-cell.gap { margin-top: 8px; }
 .insp-add { margin-top: auto; }
-/* 高亮只有一种：主色图标 + 右缘竖条。竖条是一根，在格之间滑 */
-.insp-cell[aria-pressed="true"] { color: var(--accent); }
-.insp-ink { position: absolute; right: 0; top: 0; width: 2px; height: 20px; border-radius: 2px 0 0 2px; background: var(--accent); pointer-events: none; transform: translateY(var(--y, 10px)); transition: transform var(--dur-2) var(--ease-out); }
+/* 高亮只有一种：墨色图标 + 右缘竖条。竖条是一根，在格之间滑 */
+.insp-cell[aria-pressed="true"] { color: var(--ink); }
+.insp-ink { position: absolute; right: 0; top: 0; width: 2px; height: 20px; border-radius: 2px 0 0 2px; background: var(--ink); pointer-events: none; transform: translateY(var(--y, 10px)); transition: transform var(--dur-2) var(--ease-out); }
 .insp-ink.is-slow { transition-duration: var(--dur-3); }
 /* 状态是图标角上的一颗点：灰 = 这格里有东西，主色 = 有东西在跑。选中、悬停时都还在 */
 .insp-cell[data-dot]::before { content: ""; position: absolute; right: 6px; top: 6px; width: 5px; height: 5px; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 1.5px var(--canvas); }

@@ -19,9 +19,9 @@
 .sv-git .git-branch > b { max-width: 230px; font-family: var(--font-mono); font-size: var(--t-xs); font-weight: var(--w-regular); }
 .sv-git .git-branch > .i { color: var(--muted); }
 .sv-git .git-tree { gap: 4px; padding: 0 8px; color: var(--muted); }
-/* 领先、落后的数挂在推送、拉取上（现在就是这样）；键变成主色时反过来 */
-.sv-git .git-badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-full); background: var(--accent); color: var(--on-accent); font-size: var(--t-xs); font-style: normal; font-weight: var(--w-medium); line-height: 18px; text-align: center; }
-.sv-git .btn.pri > .git-badge { background: var(--on-accent); color: var(--accent); }
+/* 领先、落后的数挂在推送、拉取上（现在就是这样）；键变成实心时反过来 */
+.sv-git .git-badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-full); background: var(--action); color: var(--on-action); font-size: var(--t-xs); font-style: normal; font-weight: var(--w-medium); line-height: 18px; text-align: center; }
+.sv-git .btn.pri > .git-badge { background: var(--on-action); color: var(--action); }
 .sv-git .git-lock { display: inline-flex; align-items: center; gap: 5px; height: 24px; flex: none; padding: 0 9px; border-radius: var(--r-full); background: var(--amber-bg); color: var(--amber); font-size: var(--t-xs); font-weight: var(--w-regular); white-space: nowrap; }
 
 /* 顶栏下面那一条：正在执行的一句、上一步的结果（带「查看日志」） */
@@ -48,7 +48,7 @@
 .sv-git .git-views > button:hover { background: var(--hover-bg); color: var(--ink); }
 .sv-git .git-views > [aria-current="page"] { background: var(--sel-bg); color: var(--ink); font-weight: var(--w-medium); }
 .sv-git .git-views > button > span { flex: 1; }
-.sv-git .git-views > button > b { min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-full); background: var(--accent-soft); color: var(--accent); font-size: var(--t-xs); font-weight: var(--w-medium); line-height: 18px; text-align: center; }
+.sv-git .git-views > button > b { min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-full); background: var(--sel-bg); color: var(--ink); font-size: var(--t-xs); font-weight: var(--w-medium); line-height: 18px; text-align: center; }
 .sv-git .git-mid { min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
 .sv-git .git-files { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 10px 12px; }
 .sv-git .git-diff { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -87,11 +87,11 @@
 .sv-git .git-diff-body:focus-visible { outline-offset: -2px; }
 .sv-git .git-hunks { display: flex; flex-direction: column; gap: 10px; }
 .sv-git .git-hunk { overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-md); }
-.sv-git .git-hunk > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; padding: 4px 8px; background: color-mix(in oklab, var(--accent) 8%, var(--panel)); }
-.sv-git .git-hunk > header > code, .sv-git .git-hunk-pick { color: color-mix(in oklab, var(--accent) 72%, var(--ink)); font: var(--w-regular) var(--t-xs)/1.7 var(--font-mono); }
+.sv-git .git-hunk > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; padding: 4px 8px; background: var(--raised); }
+.sv-git .git-hunk > header > code, .sv-git .git-hunk-pick { color: var(--muted); font: var(--w-regular) var(--t-xs)/1.7 var(--font-mono); }
 .sv-git .git-hunk-pick { padding: 0 4px; border-radius: 4px; text-align: left; transition: background var(--dur-1) var(--ease-out); }
-.sv-git .git-hunk-pick:hover { background: color-mix(in oklab, var(--accent) 12%, transparent); }
-.sv-git .git-hunk-pick[aria-pressed="true"] { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.sv-git .git-hunk-pick:hover { background: var(--sel-bg); color: var(--ink); }
+.sv-git .git-hunk-pick[aria-pressed="true"] { box-shadow: inset 0 0 0 1.5px var(--ink); color: var(--ink); }
 .sv-git .git-hunk-pick:focus-visible, .sv-git .git-line:focus-visible { outline-offset: -2px; }
 .sv-git .git-hunk-acts { display: inline-flex; gap: 4px; flex: none; }
 .sv-git .git-lines { overflow-x: auto; font: var(--w-regular) var(--t-xs)/20px var(--font-mono); }
@@ -103,9 +103,9 @@
 .sv-git .git-line.add > code { color: color-mix(in oklab, var(--green) 72%, var(--ink)); }
 .sv-git .git-line.del { background: var(--red-bg); }
 .sv-git .git-line.del > code { color: color-mix(in oklab, var(--red) 72%, var(--ink)); }
-/* 能按行选的改动行：指上去压暗一点，选中描一圈主色 */
+/* 能按行选的改动行：指上去压暗一点，选中描一圈墨色 */
 .sv-git button.git-line:hover { box-shadow: inset 0 0 0 999px color-mix(in oklab, var(--ink) 4%, transparent); }
-.sv-git button.git-line[aria-pressed="true"] { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.sv-git button.git-line[aria-pressed="true"] { box-shadow: inset 0 0 0 1.5px var(--ink); }
 .sv-git .git-diff-foot { flex: none; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--panel); }
 .sv-git .git-diff-tip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--muted); font-size: var(--t-xs); }
 .sv-git .git-guide { margin-bottom: 8px; color: var(--muted); font-size: var(--t-xs); line-height: 1.65; overflow-wrap: anywhere; }
@@ -117,7 +117,7 @@
 .sv-git .git-msg { display: block; width: 100%; height: auto; min-height: 64px; max-height: 32vh; padding: 4px 6px; resize: none; overflow-y: auto; background: none; box-shadow: none; line-height: 1.55; }
 .sv-git .git-commit-row { display: flex; align-items: center; gap: 8px; }
 .sv-git .git-amend { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; cursor: pointer; }
-.sv-git .git-amend > input { margin: 0; accent-color: var(--accent); }
+.sv-git .git-amend > input { margin: 0; accent-color: var(--action); }
 .sv-git .git-main { flex: none; margin-left: auto; }
 
 /* ---------- 另外六个视图：占掉文件栏和差异栏两格 ---------- */
@@ -130,13 +130,13 @@
 .sv-git .git-page-head > .field { width: 220px; }
 .sv-git .git-quiet { padding: 6px 8px; color: var(--faint); font-size: var(--t-xs); }
 .sv-git .none > small { display: block; margin-top: 4px; color: var(--faint); font-size: var(--t-xs); }
-/* 小牌子。引用名等宽：当前分支实心主色、别的分支和远端灰、标签琥珀；任务名青、自己的贮藏淡主色 */
+/* 小牌子。引用名等宽：当前分支实心墨色、别的分支和远端灰、标签琥珀；任务名青、自己的贮藏深一档的灰 */
 .sv-git .git-chip { display: inline-block; flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; padding: 0 6px; border-radius: 4px; background: var(--raised); color: var(--muted); font-size: var(--t-xs); font-style: normal; font-weight: var(--w-regular); line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
 .sv-git .git-chip:is([data-kind="head"], [data-kind="branch"], [data-kind="remote"], [data-kind="tag"]) { font-family: var(--font-mono); }
-.sv-git .git-chip[data-kind="head"] { background: var(--accent); color: var(--on-accent); }
+.sv-git .git-chip[data-kind="head"] { background: var(--action); color: var(--on-action); }
 .sv-git .git-chip[data-kind="tag"] { background: var(--amber-bg); color: var(--amber); }
 .sv-git .git-chip[data-kind="task"] { background: var(--cyan-bg); color: var(--cyan); }
-.sv-git .git-chip[data-kind="own"] { background: var(--accent-soft); color: var(--accent); }
+.sv-git .git-chip[data-kind="own"] { background: var(--sel-bg); color: var(--ink); }
 .sv-git button.git-chip:hover { text-decoration: underline; text-underline-offset: 3px; }
 /* 能收能放的小标题（远端配置、文件历史、一条日志的结果、历史备份） */
 .sv-git .git-fold { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px 0 2px; border-radius: var(--r-sm); color: var(--muted); font-size: var(--t-xs); transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
@@ -154,7 +154,7 @@
 .sv-git .git-ref-name { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 40%; flex: 0 1 auto; }
 .sv-git .git-ref-name > .i { flex: none; color: var(--muted); }
 .sv-git .git-ref-name > b { font: var(--w-regular) var(--t-xs)/1.5 var(--font-mono); }
-.sv-git .git-cur { flex: none; padding: 0 6px; border-radius: var(--r-full); background: var(--accent-soft); color: var(--accent); font-size: var(--t-xs); font-style: normal; line-height: 18px; }
+.sv-git .git-cur { flex: none; padding: 0 6px; border-radius: var(--r-full); background: var(--sel-bg); color: var(--ink); font-size: var(--t-xs); font-style: normal; line-height: 18px; }
 .sv-git .git-sync { display: inline-flex; gap: 6px; flex: none; color: var(--muted); font-size: var(--t-xs); }
 .sv-git .git-sync > i { font-style: normal; }
 .sv-git .git-ref-last { flex: 1; min-width: 0; color: var(--muted); font-size: var(--t-xs); }
@@ -178,13 +178,13 @@
 .sv-git .git-card-body { padding: 12px; border-top: 1px solid var(--line); }
 .sv-git .git-cards:has(> .git-wt) { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 10px; }
 .sv-git .git-wt { display: flex; flex-direction: column; gap: 8px; padding: 12px; }
-.sv-git .git-wt[data-on="true"] { box-shadow: 0 0 0 1.5px var(--accent); }
+.sv-git .git-wt[data-on="true"] { box-shadow: 0 0 0 1.5px var(--ink); }
 .sv-git .git-wt > header { min-height: 0; padding: 0; color: var(--muted); }
 .sv-git .git-wt > header > .i { flex: none; }
 .sv-git .git-wt > header > code { flex: 1; min-width: 0; color: var(--ink); font-size: var(--t-xs); font-weight: var(--w-regular); }
 .sv-git .git-wt-meta { display: flex; gap: 6px; min-width: 0; }
 .sv-git .git-wt > small { display: flex; gap: 10px; color: var(--muted); font-family: var(--font-mono); font-size: var(--t-xs); }
-.sv-git .git-wt > small > b { color: var(--accent); font-family: var(--font-sans); font-weight: var(--w-regular); }
+.sv-git .git-wt > small > b { color: var(--ink); font-family: var(--font-sans); font-weight: var(--w-regular); }
 .sv-git .git-wt-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 
 /* 操作日志：仓库锁一张卡；一条记录一行（时刻、谁、做了什么、成没成、命令），点开看结果 */
@@ -244,14 +244,14 @@
 .git-pick-list > button { display: flex; align-items: flex-start; gap: 10px; min-height: 60px; padding: 10px; border-radius: var(--r-md); text-align: left; transition: background var(--dur-1) var(--ease-out); }
 .git-pick-list > button:hover:not([disabled]) { background: var(--hover-bg); }
 .git-pick-list > button:focus-visible { outline-offset: -2px; }
-.git-pick-list > [aria-current] { background: color-mix(in oklab, var(--accent) 8%, var(--panel)); opacity: 1; }
+.git-pick-list > [aria-current] { background: var(--raised); opacity: 1; }
 .git-pick-ico { display: grid; place-items: center; flex: 0 0 28px; height: 28px; margin-top: 2px; border-radius: var(--r-sm); background: var(--raised); color: var(--muted); }
-.git-pick-list > [aria-current] > .git-pick-ico { background: var(--accent-soft); color: var(--accent); }
+.git-pick-list > [aria-current] > .git-pick-ico { background: var(--sel-bg); color: var(--ink); }
 .git-pick-copy { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 4px; }
 .git-pick-copy > b { font-size: var(--t-sm); font-weight: var(--w-medium); line-height: 17px; }
 .git-pick-copy > b.mono { font-size: var(--t-xs); }
 .git-pick-copy > span { color: var(--muted); font-size: var(--t-xs); line-height: 16px; overflow-wrap: anywhere; }
-.git-pick-cur { display: inline-flex; align-items: center; gap: 3px; flex: none; color: var(--accent); font-size: var(--t-xs); line-height: 17px; }
+.git-pick-cur { display: inline-flex; align-items: center; gap: 3px; flex: none; color: var(--ink); font-size: var(--t-xs); line-height: 17px; }
 
 /* 带输入框的确认框：外框是公共的 .veil + .dlg，这里只排输入框。下拉的浮层要盖在它上面 */
 .git-ask { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
@@ -260,7 +260,7 @@
 .git-ask-row > .field, .git-ask-row > .sel { width: 100%; }
 .git-ask-row > textarea.field { height: auto; padding: 6px 10px; resize: none; line-height: 1.5; }
 .git-ask-check { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--t-xs); cursor: pointer; }
-.git-ask-check > input { margin: 0; accent-color: var(--accent); }
+.git-ask-check > input { margin: 0; accent-color: var(--action); }
 .git-ask-note { color: var(--faint); font-size: var(--t-xs); }
 body:has(> .git-ask-veil) > .pop { z-index: 90; }
 

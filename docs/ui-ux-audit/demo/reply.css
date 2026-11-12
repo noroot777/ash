@@ -1,7 +1,7 @@
 /* 回复框（.reply）和全应用共用的那颗发送键（.skey）。只引用 base.css 的变量，浅深两套自动成立。 */
 
 /* ---------- 发送键：箭头主段 + 连体的小尖角 ---------- */
-.skey { --h: 29px; --opt: 24px; --g: 14px; display: inline-flex; flex: none; height: var(--h); color: var(--on-accent); }
+.skey { --h: 29px; --opt: 24px; --g: 14px; display: inline-flex; flex: none; height: var(--h); color: var(--on-action); }
 .skey[data-size="36"] { --h: 36px; --opt: 26px; --g: 16px; }
 .skey[data-size="36"] > button { font-size: var(--t-sm); }
 .skey > button { position: relative; display: inline-flex; align-items: center; justify-content: center; height: 100%; color: inherit; font-size: var(--t-xs); font-weight: var(--w-medium); white-space: nowrap; transition: opacity var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out); }
@@ -11,15 +11,15 @@
 .skey-main { isolation: isolate; gap: 6px; min-width: var(--h); border-radius: var(--r-md) 0 0 var(--r-md); }
 .skey-main.has-txt { padding: 0 9px 0 11px; }
 .skey-clip { position: absolute; z-index: -1; inset: 0 0 0 -180px; overflow: hidden; pointer-events: none; }
-.skey-bg { position: absolute; inset: 0 -180px 0 180px; border-radius: var(--r-md) 0 0 var(--r-md); background: var(--accent); transition: background var(--dur-1) var(--ease-out); }
-.skey-main:hover .skey-bg { background: var(--accent-hover); }
-.skey-main:active .skey-bg { background: var(--accent-active); }
+.skey-bg { position: absolute; inset: 0 -180px 0 180px; border-radius: var(--r-md) 0 0 var(--r-md); background: var(--action); transition: background var(--dur-1) var(--ease-out); }
+.skey-main:hover .skey-bg { background: var(--action-hover); }
+.skey-main:active .skey-bg { background: var(--action-active); }
 .skey-main[aria-disabled="true"] { cursor: default; }
-.skey-main[aria-disabled="true"] .skey-bg { background: var(--accent); }
+.skey-main[aria-disabled="true"] .skey-bg { background: var(--action); }
 
-.skey-opt { width: var(--opt); margin-left: 1px; border-radius: 0 var(--r-md) var(--r-md) 0; background: var(--accent); }
-.skey-opt:hover, .skey-opt[aria-expanded="true"] { background: var(--accent-hover); }
-.skey-opt:active { background: var(--accent-active); }
+.skey-opt { width: var(--opt); margin-left: 1px; border-radius: 0 var(--r-md) var(--r-md) 0; background: var(--action); }
+.skey-opt:hover, .skey-opt[aria-expanded="true"] { background: var(--action-hover); }
+.skey-opt:active { background: var(--action-active); }
 
 /* 发不出去：整颗键同明同暗；尖角照样点得动，指上去回到实色 */
 .skey.is-dim > button:not(.skey-halt) { opacity: 0.45; }
@@ -58,7 +58,7 @@
 .skey-launch { gap: 4px; width: 328px; padding: 0; }
 .skey-launch > .skey-body { padding: 8px 4px 4px; border-top: 1px solid var(--line); }
 .skey-launch em { margin-left: auto; padding-left: 16px; color: var(--muted); font-size: var(--t-xs); font-style: normal; }
-.skey-launch > .menu > [aria-selected="true"] > span { font-weight: var(--w-regular); color: var(--accent); }
+.skey-launch > .menu > [aria-selected="true"] > span { font-weight: var(--w-medium); }
 
 /* ---------- 回复框 ---------- */
 .reply { width: 100%; flex: none; padding-bottom: 16px; }
@@ -88,8 +88,8 @@
 /* 顶边的拖动条：平时看不见，指到或拖着时顶边亮一条线（只画直的那一段，不压圆角）。
    它只有 8px 高、贴着框线，套一圈焦点环会把框线盖住，聚焦时改成把这条线加粗、换成焦点环的颜色 */
 .reply-grip { position: absolute; z-index: 2; inset: 0 0 auto; height: 8px; cursor: row-resize; touch-action: none; }
-.reply-grip::after { content: ""; position: absolute; inset: 0 var(--r-lg) auto; height: 1px; background: var(--accent); opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
-.reply-grip:hover::after, .reply-grip.is-on::after { opacity: 0.65; }
+.reply-grip::after { content: ""; position: absolute; inset: 0 var(--r-lg) auto; height: 1px; background: var(--ink); opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.reply-grip:hover::after, .reply-grip.is-on::after { opacity: 0.4; }
 .reply-grip:focus-visible { outline: 0; }
 .reply-grip:focus-visible::after { height: 2px; background: var(--focus-ring); opacity: 1; }
 

@@ -17,10 +17,14 @@
   --ink: lch(9.794% 0 282);
   --muted: lch(39.176% 1.25 282);
   --faint: lch(64.64% 1.25 282);
+  /* 能点的东西一律墨色：主按钮、发送键、开关、勾选、选中的那一格、链接、焦点环。
+     主色只留给状态（在跑的点、做完没验收的环、Git 图上的线）——颜色说的是「它怎么样了」，不是「这里能点」 */
+  --action: var(--ink);
+  --action-hover: lch(24% 0 282);
+  --action-active: lch(32% 0 282);
+  --on-action: var(--panel);
   --accent: #5e6ad2;
   --accent-soft: lch(92.5% 12 286);
-  --accent-hover: #5560c4;
-  --accent-active: #4d57b5;
   --on-accent: #fff;
   --green: #168466;
   --red: #d93d4c;
@@ -30,7 +34,7 @@
   --hover-bg: lch(91.64% 0.5 282);
   --sel-bg: lch(89.54% 0.5 282);
   --lifted: var(--panel);
-  --focus-ring: #6d78d5;
+  --focus-ring: var(--ink);
   --shadow: lch(0 0 0 / 0.08) 0 9px 48px, lch(0 0 0 / 0.1) 0 6px 24px, lch(0 0 0 / 0.04) 0 1px 1px;
   --surface-shadow: lch(0 0 0 / 0.02) 0 3px 6px -2px, lch(0 0 0 / 0.04) 0 1px 1px;
   --control-shadow: lch(0 0 0 / 0.103) 0 0 0 1px, var(--surface-shadow);
@@ -69,10 +73,11 @@
   --ink: lch(92% 1 282);
   --muted: lch(67% 3 282);
   --faint: lch(48% 3 282);
+  --action-hover: lch(100% 0 282);
+  --action-active: lch(82% 1 282);
+  --on-action: var(--chrome);
   --accent: #7480e0;
   --accent-soft: lch(24% 20 286);
-  --accent-hover: #828de6;
-  --accent-active: #6a75d8;
   --green: #3fba8c;
   --red: #ef6b7b;
   --amber: #dea43c;
@@ -81,7 +86,6 @@
   --hover-bg: lch(17% 2 282);
   --sel-bg: lch(21% 3 282);
   --lifted: lch(25% 2.5 282);
-  --focus-ring: #8790ec;
   --shadow: lch(0 0 0 / 0.4) 0 9px 48px, lch(0 0 0 / 0.36) 0 6px 24px, lch(0 0 0 / 0.2) 0 1px 1px;
   --surface-shadow: lch(0 0 0 / 0.16) 0 3px 6px -2px, lch(0 0 0 / 0.24) 0 1px 1px;
   --control-shadow: lch(100 0 0 / 0.08) 0 0 0 1px, var(--surface-shadow);
@@ -100,7 +104,7 @@ h1, h2, h3, h4, b, strong, th { font-weight: var(--w-medium); }
 ul, ol { list-style: none; }
 code, kbd, .mono { font-family: var(--font-mono); }
 ::placeholder { color: var(--faint); }
-::selection { background: color-mix(in oklab, var(--accent) 22%, transparent); }
+::selection { background: color-mix(in oklab, var(--ink) 16%, transparent); }
 [hidden] { display: none !important; }
 * { scrollbar-width: thin; scrollbar-color: color-mix(in oklab, var(--muted) 30%, transparent) transparent; }
 .num { font-variant-numeric: tabular-nums; }
@@ -122,9 +126,9 @@ input:focus-visible, textarea:focus-visible { outline-offset: 0; }
 /* 按钮：一种主按钮、一种次按钮、一种图标钮 */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: var(--r-md); background: var(--panel); box-shadow: var(--control-shadow); color: var(--ink); font-size: var(--t-sm); font-weight: var(--w-regular); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out); }
 .btn:hover { background: var(--raised); }
-.btn.pri { background: var(--accent); box-shadow: none; color: var(--on-accent); font-weight: var(--w-medium); }
-.btn.pri:hover { background: var(--accent-hover); }
-.btn.pri:active { background: var(--accent-active); }
+.btn.pri { background: var(--action); box-shadow: none; color: var(--on-action); font-weight: var(--w-medium); }
+.btn.pri:hover { background: var(--action-hover); }
+.btn.pri:active { background: var(--action-active); }
 .btn.quiet { background: none; box-shadow: none; color: var(--muted); }
 .btn.quiet:hover { background: var(--hover-bg); color: var(--ink); }
 .btn.danger { color: var(--red); }
@@ -134,7 +138,7 @@ input:focus-visible, textarea:focus-visible { outline-offset: 0; }
 .ico:hover, .ico[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
 .ico.sm { width: 24px; height: 24px; border-radius: var(--r-sm); }
 .ico.sm .i { width: 14px; height: 14px; }
-.link { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in oklab, var(--accent) 35%, transparent); text-underline-offset: 3px; }
+.link { color: var(--ink); text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 3px; }
 .link:hover { text-decoration-color: currentColor; }
 kbd, .kbd { padding: 1px 5px; border-radius: 4px; background: var(--overlay); color: var(--muted); font: var(--w-regular) var(--t-xs)/1.5 var(--font-mono); }
 
@@ -216,15 +220,15 @@ kbd, .kbd { padding: 1px 5px; border-radius: 4px; background: var(--overlay); co
 .sel.sm { height: 24px; min-width: 0; padding: 0 4px 0 6px; border-radius: var(--r-sm); background: none; box-shadow: none; }
 .sel.sm:hover, .sel.sm[aria-expanded="true"] { background: var(--hover-bg); }
 .sel-menu [aria-selected="true"] > em { margin-right: 8px; }
-.sel-menu [aria-selected="true"]::after { content: ""; width: 10px; height: 6px; margin-left: auto; border: solid var(--accent); border-width: 0 0 1.6px 1.6px; transform: translateY(-2px) rotate(-45deg); }
+.sel-menu [aria-selected="true"]::after { content: ""; width: 10px; height: 6px; margin-left: auto; border: solid var(--ink); border-width: 0 0 1.6px 1.6px; transform: translateY(-2px) rotate(-45deg); }
 .field { height: 28px; padding: 0 10px; border: 0; border-radius: var(--r-md); background: var(--panel); box-shadow: var(--control-shadow); }
 /* 步进器：[−] 数 [+]，改轮数、改次数都用它 */
 .stepper { display: inline-flex; align-items: center; gap: 2px; }
 .stepper > output { min-width: 22px; text-align: center; color: var(--ink); font-weight: var(--w-regular); }
 .switch { position: relative; width: 30px; height: 18px; flex: none; border-radius: var(--r-full); background: var(--line2); transition: background var(--dur-1) var(--ease-out); }
 .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.2); transition: transform var(--dur-2) var(--ease-spring); }
-.switch[aria-checked="true"] { background: var(--accent); }
-.switch[aria-checked="true"]::after { transform: translateX(12px); }
+.switch[aria-checked="true"] { background: var(--action); }
+.switch[aria-checked="true"]::after { background: var(--on-action); transform: translateX(12px); }
 
 /* 短提示：保存、复制之后那一句（ASH.toast）。位置和长相照现在的产品：底部居中的一小条，自己走 */
 .toast { position: fixed; z-index: 95; left: 50%; bottom: 44px; max-width: min(460px, calc(100vw - 32px)); padding: 6px 12px; border-radius: var(--r-md); background: var(--panel); box-shadow: var(--control-shadow), var(--menu-shadow); color: var(--muted); font-size: var(--t-xs); pointer-events: none; opacity: 0; translate: -50% 4px; transition: opacity 120ms var(--ease-in), translate 120ms var(--ease-in); }
@@ -260,7 +264,7 @@ kbd, .kbd { padding: 1px 5px; border-radius: 4px; background: var(--overlay); co
 @keyframes enter { from { opacity: 0; transform: translateY(4px); } }
 /* 定位到某一处：底色亮一下再退掉 */
 .flash { animation: flash 1.4s var(--ease-out); }
-@keyframes flash { 0%, 30% { background-color: color-mix(in oklab, var(--accent) 16%, transparent); } }
+@keyframes flash { 0%, 30% { background-color: color-mix(in oklab, var(--ink) 12%, transparent); } }
 
 /* 减少动效：全局一条。过渡直接关掉；动画压到近乎为零而不是关掉——有的组件靠 animationend 收尾。
    循环的换成静态等价物：流光变实色，转圈停住。（清单「可达性」第 3 条） */

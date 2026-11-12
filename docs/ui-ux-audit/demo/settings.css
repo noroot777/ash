@@ -15,8 +15,8 @@
 .sv-set-back:active, .sv-set-group > button:active { background: var(--sel-bg); }
 .sv-set-group > [aria-current="page"], .sv-set-group > [aria-current="page"]:hover { background: var(--lifted); box-shadow: var(--surface-shadow); color: var(--ink); font-weight: var(--w-regular); }
 
-/* ---------- 页：自己滚动。普通页一种宽度，起手式页放宽给站点线（现状如此）。右上角那一点主色光晕也是现状 ---------- */
-.sv-set-main { min-width: 0; overflow-y: auto; background: radial-gradient(circle at 92% 4%, color-mix(in oklab, var(--accent) 6%, transparent), transparent 24%); }
+/* ---------- 页：自己滚动。普通页一种宽度，起手式页放宽给站点线（现状如此） ---------- */
+.sv-set-main { min-width: 0; overflow-y: auto; }
 .sv-set-page { width: min(880px, 100% - 64px); margin: 0 auto; padding: 40px 0 96px; }
 .sv-set-page.is-wide { width: min(1440px, 100% - 48px); }
 /* 一页从上到下的节奏：标题 24 → 正文；卡与卡 12；新的一节前 28，小标题到卡 8 */
@@ -104,7 +104,7 @@
 .sv-set-name:hover { background: var(--hover-bg); }
 /* 「CLI 配置」那颗常显的胶囊：盖了 CLI 自己的配置时带底色 */
 .sv-set-cfg { display: inline-flex; align-items: center; gap: 6px; max-width: calc(100% - 8px); height: 24px; margin-left: 8px; padding: 0 8px; border-radius: var(--r-sm); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); font-size: var(--t-xs); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
-.sv-set-cfg.is-set { background: var(--accent-soft); box-shadow: none; color: var(--ink); }
+.sv-set-cfg.is-set { background: var(--sel-bg); box-shadow: none; color: var(--ink); }
 .sv-set-cfg:hover { background: var(--hover-bg); color: var(--ink); }
 .sv-set-def { display: inline-flex; align-items: center; gap: 4px; color: var(--green); font-size: var(--t-xs); font-weight: var(--w-regular); white-space: nowrap; }
 /* 检测本机之后：装着的 CLI 一格一个 */
@@ -129,9 +129,9 @@
 .sv-set-tabs > span:first-child { padding-left: 2px; }
 .sv-set-tabs > [role="tab"] { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 11px; border-radius: var(--r-md) var(--r-md) 0 0; white-space: nowrap; transition: background var(--dur-1) var(--ease-out); }
 .sv-set-tabs > [role="tab"]:hover { background: var(--hover-bg); }
-.sv-set-tabs > [aria-selected="true"], .sv-set-tabs > [aria-selected="true"]:hover { background: var(--raised); box-shadow: inset 0 -2px 0 var(--accent); font-weight: var(--w-regular); }
+.sv-set-tabs > [aria-selected="true"], .sv-set-tabs > [aria-selected="true"]:hover { background: var(--raised); box-shadow: inset 0 -2px 0 var(--ink); font-weight: var(--w-regular); }
 .sv-set-tabs em { padding: 0 6px; border-radius: var(--r-sm); background: var(--overlay); color: var(--muted); font-size: var(--t-xs); font-style: normal; font-weight: var(--w-regular); line-height: 18px; }
-.sv-set-tabs em.is-edited { background: var(--accent-soft); color: var(--accent); }
+.sv-set-tabs em.is-edited { background: var(--sel-bg); color: var(--ink); }
 .sv-set-newtab { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 28px; margin-left: 6px; padding: 0 10px; border-radius: var(--r-md); color: var(--muted); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
 .sv-set-newtab:hover { background: var(--hover-bg); color: var(--ink); }
 

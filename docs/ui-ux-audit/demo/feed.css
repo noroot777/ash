@@ -16,7 +16,7 @@
 .bubble-row { display: flex; justify-content: flex-end; padding-left: 38px; }
 .bubble { min-width: 0; max-width: min(640px, 88%); padding: 8px 14px 10px; border-radius: 16px 6px 16px 16px; background: var(--raised); }
 .bubble > header { display: flex; align-items: center; gap: 6px; min-height: 24px; color: var(--faint); font-size: var(--t-xs); }
-.bubble > header b { color: color-mix(in oklab, var(--accent) 70%, var(--muted)); font-weight: var(--w-regular); }
+.bubble > header b { color: var(--muted); font-weight: var(--w-regular); }
 .bubble > header time { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .bubble > header .ico { opacity: 0; }
 .bubble > header time + .ico, .bubble > header b + .ico { margin-left: auto; }
