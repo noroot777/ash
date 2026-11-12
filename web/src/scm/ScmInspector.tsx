@@ -2,23 +2,22 @@ import { api } from "../lib/api.ts";
 import { openGitWorkbench, type GitLocation } from "../git-workbench/navigation.ts";
 import { useEffect, useMemo, useState } from "react";
 import {
-  ArrowUpRight,
+  ArrowSquareOut,
   ArrowsClockwise,
-  CaretRight,
-  CheckCircle,
-  GitBranch,
-  GitCommit,
+  Check,
   LockSimple,
   Warning,
   WarningCircle,
 } from "@phosphor-icons/react";
 import type { ScmChange, ScmGroupId } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
-import { ROOT_SOURCE_LABEL } from "../files/fileModel.ts";
 import { ScmChangeGroup } from "./ScmChangeGroup.tsx";
 import { ScmCommittedChanges } from "./ScmCommittedChanges.tsx";
+import { ScmPartialBanner, ScmPathLine, ScmWhy } from "./ScmHead.tsx";
 import { useFileListLayout } from "../lib/fileLayout.ts";
 import { FileLayoutToggle } from "../components/FileLayoutToggle.tsx";
+import { InspectorHeadActions } from "../inspector/headActions.tsx";
+import { InspButton, InspGo, InspNone, InspNote, InspSec } from "../inspector/parts.tsx";
 import {
   OPERATION_LABEL,
   diffSourceOf,
@@ -26,7 +25,6 @@ import {
   useScmWorkspace,
   type ScmAction,
   type ScmDiffTarget,
-  type ScmPartialNotice,
 } from "./scmModel.ts";
 import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
@@ -43,36 +41,6 @@ import { AutoTextarea } from "../components/AutoTextarea.tsx";
 //      写到一半的中间态提交进去。后端为此回 409 + needsForce，前端弹框说清后果再带 force。
 
 const DISCARD_HINT = "丢弃不可逆：restore 覆盖回原样、clean 直接删文件，都不进 reflog 也不进 stash。";
-
-/**
- * 「上一次操作改到一半停下了」的横幅。
- *
- * 两种情形都会到这里：分批跑的批量操作中途失败（git 给不了跨调用的事务，前面那些已经
- * 真的生效了——丢弃未跟踪文件时它们已经从磁盘上没了），以及提交时预暂存成功但 commit
- * 被拒（文件留在索引里，下一次提交会把它们带上）。这种结果不能只靠一条飘过去的提示
- * 交代：横幅留在面板上，直到用户自己按「知道了」，或者下一次写操作成功。
- *
- * 主文案直接用后端那句话——发生了什么只有它说得准，前端按动作名硬拼准会拼错。
- *
- * 「下面的列表已经是实际结果」这句要看 `stale`：补刷也失败时列表并不是实际结果，那句话
- * 会把用户按回错误的判断上，此时交给下面的 stale 横幅说实话。
- */
-function PartialBanner({ notice, stale, onDismiss }: { notice: ScmPartialNotice; stale: boolean; onDismiss: () => void }) {
-  const sample = notice.done.slice(0, 3).join("、");
-  return (
-    <p className="scm-banner is-danger">
-      <WarningCircle size={13} />
-      <span className="scm-banner__body">
-        <span>{notice.message}</span>
-        {!stale && <span>下面的列表已经是实际结果。</span>}
-        {notice.done.length > 0 && (
-          <code>已生效：{sample}{notice.done.length > 3 ? ` 等 ${notice.done.length} 个` : ""}</code>
-        )}
-      </span>
-      <button type="button" className="scm-banner__dismiss" onClick={onDismiss}>知道了</button>
-    </p>
-  );
-}
 
 interface PendingConfirm {
   action: ScmAction;
@@ -99,43 +67,6 @@ function forceConfirm(action: ScmAction, reason: string): PendingConfirm {
     danger: true,
     force: true,
   };
-}
-
-// 分支栏。右上角只剩平铺/树切换——推送和刷新都撤了：推送归 Git 工作台（下面「Git 工作台」
-// 那颗入口点得到），状态每 5 秒自己轮询一次，读失败时另有横幅带「重试」。
-function BranchBar({
-  branch,
-  rootPath,
-  rootSource,
-}: {
-  branch: { head: string | null; detached: boolean; upstream: string | null; ahead: number | null; behind: number | null };
-  rootPath: string;
-  rootSource: keyof typeof ROOT_SOURCE_LABEL;
-}) {
-  return (
-    <header className="scm-branch">
-      <div className="scm-branch__identity">
-        <span className="scm-branch__name">
-          <GitBranch size={15} />
-          <b>{branch.detached ? "游离 HEAD" : branch.head ?? "（无分支）"}</b>
-        </span>
-        {branch.upstream && (
-          <span className="scm-branch__upstream">
-            <span>{branch.upstream}</span>
-            {(branch.ahead ?? 0) > 0 && <i>↑{branch.ahead}</i>}
-            {(branch.behind ?? 0) > 0 && <i>↓{branch.behind}</i>}
-          </span>
-        )}
-      </div>
-      <span className="scm-branch__tools">
-        <FileLayoutToggle className="scm-layout-toggle" />
-      </span>
-      <div className="scm-branch__root">
-        <span>{ROOT_SOURCE_LABEL[rootSource]}</span>
-        <code><bdi dir="ltr">{rootPath}</bdi></code>
-      </div>
-    </header>
-  );
 }
 
 export function ScmInspector({
@@ -229,13 +160,13 @@ export function ScmInspector({
     });
   };
 
-  if (scm.loading && !scm.overview) return <p className="scm-hint">正在读取工作区状态…</p>;
+  if (scm.loading && !scm.overview) return <div className="scm-panel insp-pane"><InspNone>正在读取工作区状态…</InspNone></div>;
   if (!scm.overview || !status) {
     return (
-      <div className="scm-empty">
-        <Warning size={15} />
-        <p>{scm.error ?? "读不到这个任务的工作目录"}</p>
-        <button type="button" onClick={() => void scm.refresh()}>重试</button>
+      <div className="scm-panel insp-pane">
+        <InspNone action={<InspButton size="sm" onClick={() => void scm.refresh()}>重试</InspButton>}>
+          {scm.error ?? "读不到这个任务的工作目录"}
+        </InspNone>
       </div>
     );
   }
@@ -250,78 +181,71 @@ export function ScmInspector({
   const canCommit = message.trim().length > 0 && (status.staged.length > 0 || (commitPaths?.length ?? 0) > 0);
 
   return (
-    <div className="scm-panel">
-      <BranchBar
+    <div className="scm-panel insp-pane">
+      {/* 平铺 / 目录树挂在面板头上：清单再长、滚到哪儿都够得着，不用每一节各摆一颗。 */}
+      <InspectorHeadActions>
+        <FileLayoutToggle className="insp-tool scm-layout-toggle" size={14} />
+      </InspectorHeadActions>
+      <ScmPathLine
         branch={status.branch}
         rootPath={scm.overview.root.path}
         rootSource={scm.overview.root.source}
+        notify={notify}
       />
+      {readOnly && (
+        <ScmWhy key={readOnly} icon={<LockSimple size={14} />} label="工作区只读">{readOnly}</ScmWhy>
+      )}
+      {running && (
+        <ScmWhy icon={<Warning size={14} />} label="有任务正在这里运行">
+          有任务正在这个工作目录里运行（可能是共用它的其它任务），智能体可能正在写这里。改动会随它变化，写操作需要额外确认。
+        </ScmWhy>
+      )}
 
-      {scm.partial && <PartialBanner notice={scm.partial} stale={!!scm.stale} onDismiss={scm.dismissPartial} />}
+      {scm.partial && <ScmPartialBanner notice={scm.partial} stale={!!scm.stale} onDismiss={scm.dismissPartial} />}
       {scm.stale && (
         // 不给「知道了」：这不是一条通知，是一个还没解除的状态。只有刷成功才算解除，
         // 所以出口只有「重试」一个。写操作同时被 `frozen` 冻住（见上面 readOnly 那段）。
-        <p className="scm-banner is-danger">
-          <WarningCircle size={13} />
-          <span className="scm-banner__body">
-            <span>{scm.stale}</span>
-            <span>写操作已暂停，刷新成功后恢复。</span>
-          </span>
-          <button
-            type="button"
-            className="scm-banner__dismiss"
-            disabled={scm.loading || scm.busy}
-            onClick={() => void scm.refresh()}
+        <div className="scm-banner is-danger">
+          <InspNote
+            tone="bad"
+            icon={<WarningCircle weight="fill" />}
+            action={(
+              <InspButton size="sm" className="scm-banner__dismiss" disabled={scm.loading || scm.busy} onClick={() => void scm.refresh()}>
+                重试
+              </InspButton>
+            )}
           >
-            重试
-          </button>
-        </p>
-      )}
-      {readOnly && (
-        <details className="scm-readonly" key={readOnly}>
-          <summary>
-            <LockSimple size={13} />
-            <strong>工作区只读</strong>
-            <span>原因与操作指引</span>
-            <CaretRight size={11} className="scm-readonly__caret" />
-          </summary>
-          <p>{readOnly}</p>
-        </details>
+            <p>{scm.stale}</p>
+            <p>写操作已暂停，刷新成功后恢复。</p>
+          </InspNote>
+        </div>
       )}
       {status.operation && (
-        <p className="scm-banner is-warning">
-          <ArrowsClockwise size={13} />
-          正在{OPERATION_LABEL[status.operation]}中途。先解决完冲突再提交，此时丢弃的含义也和平时不同。
-        </p>
-      )}
-      {running && (
-        <p className="scm-banner">
-          <WarningCircle size={13} />
-          有任务正在这个工作目录里运行（可能是共用它的其它任务），agent 可能正在写这里。改动会随它变化，写操作需要额外确认。
-        </p>
+        <div className="scm-banner is-warning">
+          <InspNote tone="warn" icon={<ArrowsClockwise />}>
+            正在{OPERATION_LABEL[status.operation]}中途。先解决完冲突再提交，此时丢弃的含义也和平时不同。
+          </InspNote>
+        </div>
       )}
       {status.truncated && (
-        <p className="scm-banner is-warning">
-          <WarningCircle size={13} />
-          改动条目太多，下面这份没有列全。
-        </p>
+        <div className="scm-banner is-warning">
+          <InspNote tone="warn" icon={<WarningCircle weight="fill" />}>改动条目太多，下面这份没有列全。</InspNote>
+        </div>
       )}
 
-      <div className="scm-workspace-actions">
-        {clean ? (
-          <span className="scm-clean-state"><CheckCircle size={13} />无未提交改动</span>
-        ) : (
-          <span className="scm-workspace-actions__label">工作区改动</span>
-        )}
+      <p className="insp-clean scm-workspace-actions">
+        {clean
+          ? <><Check size={14} className="scm-clean-state" aria-hidden="true" /><span className="insp-cut">无未提交改动</span></>
+          : <span className="insp-cut insp-faint">工作区改动</span>}
         <button
           type="button"
-          className="scm-workbench-entry"
+          className="insp-val is-end scm-workbench-entry"
           aria-label="打开此工作区的 Git 工作台"
           onClick={() => openWorkbench()}
         >
-          Git 工作台 <ArrowUpRight size={12} />
+          Git 工作台 <ArrowSquareOut size={12} aria-hidden="true" />
         </button>
-      </div>
+      </p>
 
       {!readOnly && !clean && (
         <section className="scm-commit">
@@ -331,20 +255,20 @@ export function ScmInspector({
             placeholder={status.staged.length ? "提交信息（提交已暂存的改动）" : "提交信息（没有暂存内容时，提交全部改动）"}
             onChange={(event) => setMessage(event.target.value)}
           />
-          <button
-            type="button"
+          <InspButton
+            variant="pri"
+            size="sm"
             className="scm-commit__submit"
             disabled={!canCommit || scm.busy || !!scm.stale}
             onClick={() => void perform({ kind: "commit", message, stagePaths: commitPaths })}
           >
-            <GitCommit size={13} />
             {status.staged.length ? `提交已暂存（${status.staged.length}）` : `暂存全部并提交（${commitPaths?.length ?? 0}）`}
-          </button>
+          </InspButton>
           {/* 「只提交其中几个」是这个面板本来就有的能力：逐条 + 暂存，按钮随即从「暂存全部
               并提交」翻成「提交已暂存」。但逐条那颗 + 只在 hover 时浮出来、又是个纯图标，
               不说一句就等于没有——用户只会看见「暂存全部」这一条路。 */}
           {!clean && !status.staged.length && (
-            <p className="scm-commit__hint">只想提交其中几个：把鼠标移到文件那一行，点右侧的 + 逐个暂存，这颗按钮会变成「提交已暂存」。</p>
+            <p className="insp-hint scm-commit__hint">只想提交其中几个：指到文件那一行，点右边的 + 逐个暂存。</p>
           )}
         </section>
       )}
@@ -414,22 +338,19 @@ export function ScmInspector({
       />
 
       {scm.overview.commits.length > 0 && (
-        <section className="scm-commits">
-          <header><GitCommit size={13} />最近提交</header>
-          {/* 每一条都点得开：跳 Git 工作台的历史视图，选中这条提交、右边直接是它的 diff。
-              这份清单原先是纯展示的死胡同——看见了想看内容，只能自己去工作台再找一遍。 */}
+        <section className="scm-commits" aria-label="最近提交">
+          <InspSec>最近提交</InspSec>
+          {/* 每一条都点得开：跳 Git 工作台的历史视图，选中这条提交、右边直接是它的 diff。 */}
           <ul>
             {scm.overview.commits.slice(0, 8).map((commit) => (
               <li key={commit.sha}>
-                <button
-                  type="button"
+                <InspGo
                   aria-label={`在 Git 工作台打开提交 ${commit.shortSha} ${commit.subject}`}
+                  meta={commit.author}
                   onClick={() => openWorkbench({ view: "history", commit: commit.sha })}
                 >
-                  <code>{commit.shortSha}</code>
-                  <span>{commit.subject}</span>
-                  <small>{commit.author}</small>
-                </button>
+                  <code className="insp-mono insp-faint">{commit.shortSha}</code> {commit.subject}
+                </InspGo>
               </li>
             ))}
           </ul>

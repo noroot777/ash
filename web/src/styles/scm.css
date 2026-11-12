@@ -1,155 +1,427 @@
-/* 工作区源代码管理面板（inspector）+ 中间栏的工作区 diff */
+/* 「改动」格（scm/ScmInspector.tsx 与同目录各件）+ 中间栏的工作区 diff 共用的增删数。
+   公共件（分节标题、入口行、提示条、按钮）在 inspector-parts.css。 */
 
-.scm-panel { display:flex; min-width:0; min-height:0; height:100%; flex-direction:column; overflow:auto; background:var(--canvas); }
-/* 这是个 flex 列向滚动容器：子块默认 flex-shrink:1，改动一多就会被压扁成一条，内容
-   原地溢出、叠印到下一块身上（文件列表画在「最近提交」上）。滚动容器里的块不该被
-   压，一律锁死 shrink，超出的部分交给 overflow 滚。 */
-.scm-panel > *, .scm-groups > * { flex:0 0 auto; }
-.scm-hint { margin:14px 10px; color:var(--faint); font-size:10.5px; line-height:1.6; }
-.scm-empty { display:flex; flex-direction:column; align-items:flex-start; gap:8px; margin:14px 10px; border:1px dashed var(--line2); border-radius:8px; padding:12px; color:var(--muted); font-size:10.5px; }
-.scm-empty > svg { color:var(--amber); }
-.scm-empty p { margin:0; line-height:1.6; }
-.scm-empty button { border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:3px 9px; color:var(--muted); font-size:10px; }
-.scm-empty button:hover { background:var(--raised); color:var(--ink); }
-
-.scm-panel :is(button, summary):focus-visible { outline:2px solid var(--accent); outline-offset:-2px; border-radius:5px; }
-.scm-branch { display:flex; flex:0 0 auto; flex-wrap:wrap; align-items:center; gap:8px; border-bottom:1px solid var(--line); padding:12px; }
-.scm-branch__identity { display:flex; min-width:0; flex:1; flex-wrap:wrap; align-items:center; gap:5px 8px; }
-.scm-branch__name { display:inline-flex; min-width:0; max-width:100%; align-items:center; gap:6px; }
-.scm-branch__name > svg { flex:0 0 auto; color:var(--accent); }
-.scm-branch__name b { overflow:hidden; color:var(--ink); font-size:12px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
-.scm-branch__upstream { display:inline-flex; min-width:0; max-width:100%; align-items:center; gap:4px; border-radius:4px; background:var(--overlay); padding:2px 5px; color:var(--muted); font-family:var(--font-mono); font-size:9px; }
-.scm-branch__upstream > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.scm-branch__upstream i { color:var(--muted); font-style:normal; }
-.scm-branch__tools { display:inline-flex; flex:0 0 auto; margin-left:auto; align-items:center; gap:2px; }
-.scm-branch__root { display:flex; width:100%; min-width:0; align-items:baseline; gap:8px; font-size:9px; }
-.scm-branch__root > span { flex:0 0 auto; color:var(--muted); }
-.scm-branch__root code { min-width:0; overflow:hidden; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
-/* 平铺/目录树切换。分支栏右上角现在只剩它，另一处入口在「已提交的改动」那一节的标题栏。 */
-.scm-layout-toggle { display:grid; width:24px; height:24px; place-items:center; border:0; border-radius:5px; background:transparent; color:var(--muted); }
-.scm-layout-toggle:hover { background:var(--raised); color:var(--ink); }
-
-.scm-banner { display:flex; align-items:flex-start; gap:5px; margin:8px 9px 0; border:1px solid var(--line2); border-radius:7px; background:var(--overlay); padding:6px 8px; color:var(--muted); font-size:10px; line-height:1.55; }
-.scm-banner > svg { flex:0 0 auto; margin-top:1px; }
-.scm-banner.is-warning { border-color:color-mix(in lch,var(--amber) 30%,var(--line)); background:color-mix(in lch,var(--amber) 8%,var(--panel)); }
-.scm-banner.is-danger { border-color:color-mix(in lch,var(--red) 32%,var(--line)); background:color-mix(in lch,var(--red) 8%,var(--panel)); color:var(--ink); }
-.scm-banner__body { display:flex; min-width:0; flex:1 1 auto; flex-direction:column; gap:3px; }
-.scm-banner__body code { overflow:hidden; color:var(--muted); font-size:9.5px; text-overflow:ellipsis; white-space:nowrap; }
-.scm-banner__dismiss { flex:0 0 auto; align-self:flex-start; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:1px 6px; color:var(--muted); font-size:9.5px; }
-.scm-banner__dismiss:hover { color:var(--ink); }
-
-.scm-readonly { margin:10px 12px 0; border:1px solid var(--line); border-radius:7px; background:var(--panel); color:var(--muted); }
-.scm-readonly summary { display:flex; min-height:32px; align-items:center; gap:6px; padding:7px 9px; cursor:pointer; list-style:none; }
-.scm-readonly summary::-webkit-details-marker { display:none; }
-.scm-readonly summary > svg { flex:0 0 auto; }
-.scm-readonly summary strong { font-size:10px; font-weight:600; }
-.scm-readonly summary > span { margin-left:auto; color:var(--faint); font-size:9px; }
-.scm-readonly[open] .scm-readonly__caret { transform:rotate(90deg); }
-.scm-readonly p { margin:0; border-top:1px solid var(--line); padding:9px; font-size:10px; line-height:1.7; overflow-wrap:anywhere; }
-.scm-workspace-actions { display:flex; min-width:0; align-items:center; justify-content:space-between; gap:8px; padding:10px 12px; }
-.scm-clean-state { display:inline-flex; align-items:center; gap:5px; color:var(--muted); font-size:10px; }
-.scm-clean-state > svg { flex:0 0 auto; color:var(--green); }
-.scm-workspace-actions__label { color:var(--muted); font-size:10px; font-weight:600; }
-.scm-workbench-entry { display:inline-flex; flex:0 0 auto; align-items:center; gap:4px; border:0; border-radius:5px; background:transparent; padding:3px 0 3px 5px; color:var(--accent); font-size:10px; }
-.scm-workbench-entry:hover { background:var(--overlay); }
-
-.scm-commit { display:flex; flex:0 0 auto; flex-direction:column; gap:6px; padding:0 12px 10px; }
-.scm-commit textarea { width:100%; min-height:46px; resize: none; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:6px 8px; color:var(--ink); font-size:11px; line-height:1.5; }
-.scm-commit textarea:focus { border-color:color-mix(in lch,var(--accent) 45%,var(--line2)); outline:none; }
-.scm-commit__submit { display:inline-flex; height:28px; align-items:center; justify-content:center; gap:5px; border:1px solid color-mix(in lch,var(--accent) 35%,var(--line2)); border-radius:7px; background:color-mix(in lch,var(--accent) 12%,var(--panel)); color:var(--accent); font-size:10.5px; font-weight:600; }
-.scm-commit__submit:hover:not(:disabled) { background:color-mix(in lch,var(--accent) 18%,var(--panel)); }
-.scm-commit__submit:disabled { border-color:var(--line2); background:var(--panel); color:var(--faint); }
-.scm-commit__hint { margin:0; color:var(--faint); font-size:9.5px; line-height:1.55; }
-
-.scm-committed { border-top:1px solid var(--line); background:color-mix(in lch,var(--panel) 55%,var(--canvas)); padding:12px 8px; }
-.scm-committed header { display:flex; align-items:center; gap:6px; padding:0 4px; }
-.scm-committed h3 { display:flex; min-width:0; align-items:center; gap:6px; margin:0; color:var(--ink); font-size:11px; font-weight:600; }
-.scm-committed h3 > svg { color:var(--muted); }
-.scm-committed__summary { display:flex; align-items:center; gap:8px; padding:6px 4px 10px; }
-.scm-committed__count { color:var(--muted); font-size:10px; }
-.scm-committed__summary .scm-diff__counts { margin-left:auto; }
-.scm-committed__summary :is(i, em) { border-radius:4px; padding:2px 5px; }
-.scm-committed__summary i { background:color-mix(in lch,var(--green) 9%,transparent); }
-.scm-committed__summary em { background:color-mix(in lch,var(--red) 7%,transparent); }
-.scm-committed__layout { display:grid; width:22px; height:22px; margin-left:auto; place-items:center; border:0; border-radius:5px; background:transparent; color:var(--muted); }
-.scm-committed__layout:hover { background:var(--raised); color:var(--ink); }
-.scm-committed__state { display:flex; align-items:center; gap:5px; margin:6px 4px 0; color:var(--muted); font-size:10px; line-height:1.55; }
-.scm-committed ul { margin:0; padding:0; list-style:none; }
-.scm-committed .scm-row__open { min-height:26px; gap:5px; padding:0 4px 0 calc(6px + var(--file-indent,0px)); }
-.scm-committed .scm-row__name { color:var(--ink); }
-.scm-row__file-icon { flex:0 0 auto; color:var(--faint); }
-.scm-committed[data-layout="flat"] .scm-row__open { display:grid; min-height:34px; grid-template-columns:12px minmax(0,1fr); column-gap:6px; row-gap:0; padding-top:4px; padding-bottom:4px; }
-.scm-committed[data-layout="flat"] .scm-row__file-icon { grid-row:1 / span 3; }
-.scm-committed[data-layout="flat"] :is(.scm-row__name, .scm-row__dir, .scm-row__from) { grid-column:2; }
-.scm-committed .scm-diff__counts { flex:0 0 auto; font-size:9px; }
-.scm-committed .scm-diff__counts > * { min-width:4ch; text-align:right; }
-.scm-committed .scm-row--dir .scm-row__open { min-height:24px; }
-.scm-committed .scm-row--dir .scm-diff__counts :is(i, em) { color:var(--faint); }
-.scm-committed__open { display:flex; width:100%; align-items:center; justify-content:space-between; gap:6px; margin-top:10px; border:1px solid var(--line); border-radius:6px; background:var(--panel); padding:7px 8px; color:var(--muted); font-size:10px; }
-.scm-committed__open span { display:inline-flex; align-items:center; gap:5px; }
-.scm-committed__open:hover { background:var(--raised); color:var(--ink); }
-
-.scm-groups { display:flex; flex-direction:column; gap:2px; padding-bottom:14px; }
-.scm-group header { display:flex; align-items:center; gap:6px; padding:6px 9px 3px; }
-.scm-group header b { color:var(--muted); font-size:10px; font-weight:600; letter-spacing:.02em; }
-.scm-group.is-merge header b { color:var(--red); }
-.scm-group__count { border-radius:8px; background:var(--overlay); padding:0 5px; color:var(--faint); font-size:9px; }
-/* 跟「已提交的改动」那节的切换同一档：小一圈、不描边，挨着计数摆。它常驻而不是跟着
-   hover 出现——藏起来的控件等于没有，而这颗是「我习惯怎么看清单」的入口，不是危险动作。
-   摆在左边这一簇里，右侧那组批量操作浮出来时也就不会把它挤走。 */
-.scm-group__layout { display:grid; width:18px; height:18px; place-items:center; border:0; border-radius:5px; background:transparent; color:var(--faint); }
-.scm-group__layout:hover { background:var(--raised); color:var(--ink); }
-.scm-group__bulk { display:inline-flex; margin-left:auto; gap:2px; opacity:0; transition:opacity .12s; }
-.scm-group:hover .scm-group__bulk, .scm-group__bulk:focus-within { opacity:1; }
-.scm-group__bulk button, .scm-row__actions button { display:grid; width:20px; height:20px; place-items:center; border:0; border-radius:5px; background:transparent; color:var(--faint); }
-.scm-group__bulk button:hover, .scm-row__actions button:hover { background:var(--raised); color:var(--ink); }
-.scm-group__hint { margin:0 9px 4px; color:var(--faint); font-size:9.5px; line-height:1.5; }
-.scm-group ul { margin:0; padding:0; list-style:none; }
-
-.scm-row { display:flex; min-width:0; align-items:center; border-radius:5px; padding-right:4px; }
-.scm-row:hover { background:var(--raised); }
-.scm-row.is-active { background:color-mix(in lch,var(--accent) 12%,var(--panel)); box-shadow:inset 2px 0 var(--accent); }
-.scm-row__open { display:flex; min-width:0; min-height:24px; flex:1; align-items:center; gap:6px; border:0; background:transparent; padding:0 4px 0 calc(9px + var(--file-indent,0px)); text-align:left; }
-.scm-row__name { flex:0 1 auto; overflow:hidden; color:var(--muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
-.scm-row.is-active .scm-row__name { color:var(--ink); font-weight:600; }
-.scm-row__from { color:var(--faint); font-size:9px; font-style:normal; }
-.scm-row__dir { min-width:0; flex:1; overflow:hidden; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
-.scm-row__meta { display:inline-flex; flex:0 0 auto; align-items:center; gap:4px; }
-.scm-row__conflict { border-radius:3px; background:color-mix(in lch,var(--red) 14%,var(--panel)); padding:0 4px; color:var(--red); font-size:8.5px; font-style:normal; }
-.scm-row__badge { display:grid; width:14px; place-items:center; color:var(--faint); font-family:var(--font-mono); font-size:9.5px; font-weight:700; }
-.scm-row__badge.is-added, .scm-row__badge.is-untracked { color:var(--green); }
-.scm-row__badge.is-deleted, .scm-row__badge.is-unmerged { color:var(--red); }
-.scm-row__badge.is-modified, .scm-row__badge.is-typechange { color:var(--amber); }
-.scm-row__actions { display:inline-flex; flex:0 0 auto; gap:2px; opacity:0; transition:opacity .12s; }
-.scm-row:hover .scm-row__actions, .scm-row__actions:focus-within { opacity:1; }
-/* 嵌套仓那一行：没有按钮，那句「去哪操作」是常驻的，不跟着 hover 出现。 */
-.scm-row__nested { flex:0 0 auto; color:var(--faint); font-size:9px; white-space:nowrap; }
-
-/* 目录树里的目录行。缩进走 --file-indent（由行内样式给），每一节各自的基准内边距不变。 */
-.scm-row--dir .scm-row__open { min-height:21px; gap:3px; }
-.scm-row--dir .scm-row__open > svg { flex:0 0 auto; color:var(--faint); }
-.scm-row__folder { min-width:0; flex:0 1 auto; overflow:hidden; color:var(--muted); font-size:10px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
-.scm-row__folder-count { flex:0 0 auto; margin-left:3px; color:var(--faint); font-size:9px; font-variant-numeric:tabular-nums; }
-
-.scm-commits { border-top:1px solid var(--line); padding:12px 12px 16px; }
-.scm-commits header { display:flex; align-items:center; gap:5px; color:var(--faint); font-size:9.5px; }
-.scm-commits ul { margin:6px 0 0; padding:0; list-style:none; }
-.scm-commits li { display:flex; }
-.scm-commits li > button { display:flex; width:100%; min-width:0; align-items:baseline; gap:7px; border:0; border-radius:5px; background:transparent; padding:4px 6px; margin:0 -6px; text-align:left; }
-.scm-commits li > button:hover { background:var(--raised); }
-.scm-commits li > button:hover span { color:var(--ink); }
-.scm-commits code { flex:0 0 auto; color:var(--faint); font-family:var(--font-mono); font-size:9.5px; }
-.scm-commits span { min-width:0; flex:1; overflow:hidden; color:var(--muted); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
-.scm-commits small { max-width:25%; overflow:hidden; flex:0 0 auto; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
-
-.scm-diff__counts { display:inline-flex; flex:0 0 auto; gap:6px; font-family:var(--font-mono); font-size:10px; font-variant-numeric:tabular-nums; }
-.scm-diff__counts i { color:var(--green); font-style:normal; }
-.scm-diff__counts em { color:var(--red); font-style:normal; }
-.scm-diff__counts .is-zero { color:var(--faint); }
-
-@media (prefers-reduced-motion:reduce) {
-  .scm-group__bulk, .scm-row__actions { transition:none; }
+.scm-panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
 }
-@media (hover:none) {
-  .scm-group__bulk, .scm-row__actions { opacity:1; }
+
+/* 这是个 flex 列向容器：子块默认 flex-shrink:1，改动一多就会被压扁成一条，内容原地溢出、
+   叠印到下一块身上（文件列表画在「最近提交」上）。块一律锁死 shrink，超出的交给外层滚。 */
+.scm-panel > *,
+.scm-groups > * {
+  flex: 0 0 auto;
+}
+
+/* 分支和目录一行：分支墨色，目录灰字从左边截（尾巴那一截留着），行尾的复制钮指到才出 */
+.insp-path {
+  display: flex;
+  min-width: 0;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--muted);
+}
+
+.insp-path > svg {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.insp-path > b {
+  flex: 0 1 auto;
+  color: var(--ink);
+  font-weight: var(--w-regular);
+}
+
+.insp-path__dir {
+  flex: 1 1 0;
+  direction: rtl;
+  text-align: left;
+}
+
+.insp-path > [tabindex]:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.insp-path:hover > .insp-copy,
+.insp-path:focus-within > .insp-copy {
+  opacity: 1;
+}
+
+/* 只读、有任务在跑：一行灰字，点了才铺开为什么 */
+.scm-why__row {
+  min-height: 28px;
+  color: var(--muted);
+}
+
+.scm-why__row:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.scm-why__icon {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+}
+
+.scm-why > .insp-note {
+  margin: 2px 0 6px;
+  overflow-wrap: anywhere;
+}
+
+.scm-banner {
+  margin: 6px 0;
+}
+
+.scm-banner .insp-note__text > p + p {
+  margin-top: 2px;
+}
+
+/* 工作区干净 / 有改动那一行，行尾是 Git 工作台的入口 */
+.insp-clean {
+  display: flex;
+  min-width: 0;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.insp-clean > .scm-clean-state {
+  flex: 0 0 auto;
+  color: var(--green);
+}
+
+/* 提交 */
+.scm-commit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 10px;
+}
+
+.scm-commit textarea {
+  width: 100%;
+  min-height: 52px;
+  resize: vertical;
+  border: 1px solid var(--line2);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  padding: 6px 10px;
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.5;
+}
+
+.scm-commit textarea:focus {
+  border-color: var(--focus-soft);
+  box-shadow: 0 0 0 1px var(--focus-soft);
+  outline: none;
+}
+
+.scm-commit__submit {
+  align-self: flex-end;
+}
+
+.scm-commit .insp-hint {
+  margin: 0;
+}
+
+/* 工作区分组：冲突 / 已暂存 / 更改 / 未跟踪 */
+.scm-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.scm-group header {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.scm-group header b {
+  color: var(--muted);
+  font-size: var(--t-xs);
+  font-weight: var(--w-regular);
+}
+
+.scm-group.is-merge header b {
+  color: var(--red);
+}
+
+.scm-group__count {
+  color: var(--faint);
+  font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.scm-group__bulk {
+  display: inline-flex;
+  margin-left: auto;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+
+.scm-group:hover .scm-group__bulk,
+.scm-group__bulk:focus-within {
+  opacity: 1;
+}
+
+.scm-group__bulk button,
+.scm-row__actions button {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.scm-group__bulk button:hover,
+.scm-row__actions button:hover {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.scm-group__hint {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  line-height: 1.5;
+}
+
+.scm-group ul,
+.scm-committed ul,
+.scm-commits ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 文件行：一行一条，文件名在左、增删数（或改动类型）在右 */
+.scm-row {
+  display: flex;
+  min-width: 0;
+  min-height: 28px;
+  align-items: center;
+  margin: 0 -8px;
+  border-radius: var(--r-md);
+  padding-right: 8px;
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.scm-row:hover {
+  background: var(--hover-bg);
+}
+
+.scm-row.is-active {
+  background: var(--sel-bg);
+}
+
+.scm-row__open {
+  display: flex;
+  min-width: 0;
+  min-height: 28px;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  padding: 0 4px 0 calc(8px + var(--file-indent, 0px));
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+}
+
+.scm-row__open.is-static {
+  cursor: default;
+}
+
+.scm-row__name {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scm-row.is-active .scm-row__name {
+  font-weight: var(--w-medium);
+}
+
+.scm-row__dir {
+  color: var(--muted);
+}
+
+.scm-row__from {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scm-row__meta {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.scm-row__conflict {
+  color: var(--red);
+  font-size: var(--t-xs);
+  font-style: normal;
+}
+
+.scm-row__badge {
+  display: grid;
+  width: 14px;
+  place-items: center;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+}
+
+.scm-row__badge.is-added,
+.scm-row__badge.is-untracked { color: var(--green); }
+.scm-row__badge.is-deleted,
+.scm-row__badge.is-unmerged { color: var(--red); }
+.scm-row__badge.is-modified,
+.scm-row__badge.is-typechange { color: var(--amber); }
+
+.scm-row__actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+
+.scm-row:hover .scm-row__actions,
+.scm-row__actions:focus-within {
+  opacity: 1;
+}
+
+/* 嵌套仓那一行：没有按钮，那句「去哪操作」是常驻的，不跟着悬停出现 */
+.scm-row__nested {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  white-space: nowrap;
+}
+
+/* 目录树里的目录行。缩进走 --file-indent（由行内样式给） */
+.scm-row--dir .scm-row__open {
+  gap: 4px;
+}
+
+.scm-row--dir .scm-row__open > svg {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.scm-row__folder {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scm-row__folder-count {
+  flex: 0 0 auto;
+  margin-left: 2px;
+  color: var(--faint);
+  font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.scm-row--dir .scm-diff__counts :is(i, em) {
+  color: var(--faint);
+}
+
+/* 本任务已提交改动 */
+.scm-committed__summary {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.scm-committed__state {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  line-height: 1.55;
+}
+
+.scm-committed__open {
+  margin-top: 4px;
+}
+
+.scm-row > .scm-diff__counts {
+  margin-left: auto;
+}
+
+/* 最近提交 */
+.scm-commits code {
+  margin-right: 2px;
+}
+
+/* 增删数：中间栏的 diff 头上也用这一份 */
+.scm-diff__counts {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.scm-diff__counts i { color: var(--green); font-style: normal; }
+.scm-diff__counts em { color: var(--red); font-style: normal; }
+.scm-diff__counts .is-zero { color: var(--faint); }
+
+.scm-panel .scm-row__open:focus-visible,
+.scm-panel .scm-row__actions button:focus-visible,
+.scm-panel .scm-group__bulk button:focus-visible {
+  border-radius: var(--r-sm);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scm-group__bulk,
+  .scm-row,
+  .scm-row__actions,
+  .scm-row__actions button,
+  .scm-group__bulk button {
+    transition: none;
+  }
+}
+
+@media (hover: none) {
+  .scm-group__bulk,
+  .scm-row__actions {
+    opacity: 1;
+  }
 }

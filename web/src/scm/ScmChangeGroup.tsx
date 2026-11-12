@@ -2,8 +2,8 @@ import { ArrowCounterClockwise, Minus, Plus, Trash } from "@phosphor-icons/react
 import type { ScmChange, ScmGroupId } from "../lib/api.ts";
 import { CONFLICT_LABEL, KIND_BADGE, KIND_LABEL, dirName, fileName, pathsOf } from "./scmModel.ts";
 import { indentStyle, useFileTreeRows, type FileListLayout } from "../lib/fileLayout.ts";
-import { FileLayoutToggle } from "../components/FileLayoutToggle.tsx";
-import { ScmDirRow } from "./ScmTreeParts.tsx";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
+import { ScmDirRow, duplicateNames } from "./ScmTreeParts.tsx";
 
 // 一个改动分组（冲突 / 已暂存 / 更改 / 未跟踪）。条目本身是按钮——点它开 diff，跟
 // 文件树点文件开查看器是同一套手势；逐条的操作按钮浮在右侧，不抢主点击区。
@@ -123,17 +123,18 @@ function ChangeRow({
   active: boolean;
   /** 树里的缩进层级；平铺恒为 0。 */
   depth: number;
-  /** 所在目录那一截。树里由目录行说明，行内再写一遍就是重复。 */
+  /** 平铺时同一组里有同名文件：所在目录直接写在名字前面，不然认不出是哪一个。 */
   showDir: boolean;
 }) {
   const dir = dirName(change.path);
+  const tip = useHoverTip({ placement: "left" });
   const body = (
     <>
       <span className="scm-row__name">
+        {showDir && dir && <span className="scm-row__dir">{dir}/</span>}
         {fileName(change.path)}
         {change.origPath && <i className="scm-row__from">← {change.origPath}</i>}
       </span>
-      {showDir && dir && <span className="scm-row__dir">{dir}</span>}
       <span className="scm-row__meta">
         {change.conflict && (
           <em className="scm-row__conflict">{CONFLICT_LABEL[change.conflict] ?? "冲突"}</em>
@@ -154,9 +155,19 @@ function ChangeRow({
         {change.nested ? (
           <span className="scm-row__open is-static">{body}</span>
         ) : (
-          <button type="button" className="scm-row__open" onClick={() => actions.onOpen(change)}>
-            {body}
-          </button>
+          <>
+            {/* 目录平时不占地方：指到或键盘走到这一行再说（树里目录行已经说过了，不再重复）。 */}
+            <button
+              type="button"
+              className="scm-row__open"
+              aria-label={`${change.path}，${KIND_LABEL[change.kind]}`}
+              {...(dir && depth === 0 ? tip.anchorProps : {})}
+              onClick={() => actions.onOpen(change)}
+            >
+              {body}
+            </button>
+            {dir && depth === 0 && <HoverTip at={tip.at}>{dir}</HoverTip>}
+          </>
         )}
         <RowActions change={change} group={group} actions={actions} />
       </div>
@@ -184,6 +195,7 @@ export function ScmChangeGroup({
   layout: FileListLayout;
 }) {
   const tree = useFileTreeRows(changes, changePath, layout === "tree");
+  const twins = duplicateNames(changes.map(changePath));
   if (!changes.length) return null;
   const isActive = (change: ScmChange) => activeGroup === group && activePath === change.path;
   return (
@@ -191,10 +203,6 @@ export function ScmChangeGroup({
       <header>
         <b>{title}</b>
         <span className="scm-group__count">{changes.length}</span>
-        {/* 切换摆在**每个分组的标题上**，跟「已提交的改动」那节同一个理由：面板是滚动的，
-            分支栏上那颗常常已经滚出视野，而清单就在眼前。几颗按钮共用同一份全局偏好，
-            按哪颗都是整页一起翻（见 `lib/fileLayout.ts`）。 */}
-        <FileLayoutToggle className="scm-group__layout" size={12} />
         <span className="scm-group__bulk">
           {actions.onDiscard && (
             <button
@@ -260,7 +268,7 @@ export function ScmChangeGroup({
               actions={actions}
               active={isActive(change)}
               depth={0}
-              showDir
+              showDir={twins.has(fileName(change.path))}
             />
           ))}
       </ul>

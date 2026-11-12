@@ -43,3 +43,15 @@ export function ScmDirRow({
     </li>
   );
 }
+
+/** 一份清单里重名的文件名（只看最后一截）。平铺时它们要带上目录才认得出是哪一个。 */
+export function duplicateNames(paths: readonly string[]): ReadonlySet<string> {
+  const seen = new Set<string>();
+  const twins = new Set<string>();
+  for (const path of paths) {
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    if (seen.has(name)) twins.add(name);
+    seen.add(name);
+  }
+  return twins;
+}

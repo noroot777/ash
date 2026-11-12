@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { CaretRight, FileText, GitDiff, SpinnerGap } from "@phosphor-icons/react";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
+import { InspGo, InspSec } from "../inspector/parts.tsx";
 import { api, type TaskDiffResult } from "../lib/api.ts";
 import { branchDiffReason, dirName, fileName, type ScmDiffTarget } from "./scmModel.ts";
 import { indentStyle, useFileListLayout, useFileTreeRows } from "../lib/fileLayout.ts";
-import { FileLayoutToggle } from "../components/FileLayoutToggle.tsx";
-import { ScmDirRow } from "./ScmTreeParts.tsx";
+import { ScmDirRow, duplicateNames } from "./ScmTreeParts.tsx";
 
 // 「本任务已提交的改动」——面板上半截问的是「此刻还没提交的东西」，仓库约定「改完立即
 // 提交」，所以上半截绝大多数时候是空的。只留一句「工作区干净」会把人按到错误的结论上：
@@ -49,20 +49,32 @@ function CommittedFileRow({
   active: boolean;
   /** 树里的缩进层级；平铺恒为 0。 */
   depth: number;
-  /** 所在目录那一截。树里由目录行说明，行内再写一遍就是重复。 */
+  /** 平铺时清单里有同名文件：所在目录直接写在名字前面。 */
   showDir: boolean;
   onOpen: () => void;
 }) {
+  const dir = dirName(file.path);
+  const tip = useHoverTip({ placement: "left" });
   return (
     <li className={`scm-row${active ? " is-active" : ""}`} style={indentStyle(depth)}>
-      <button type="button" className="scm-row__open" aria-label={file.path} aria-current={active ? "true" : undefined} onClick={onOpen}>
-        <FileText size={12} className="scm-row__file-icon" aria-hidden="true" />
-        <span className="scm-row__name">{fileName(file.path)}</span>
+      {/* 一行一条：文件名和增删数；目录指到或键盘走到再说（树里目录行已经说过了）。 */}
+      <button
+        type="button"
+        className="scm-row__open"
+        aria-label={file.path}
+        aria-current={active ? "true" : undefined}
+        {...(dir && depth === 0 ? tip.anchorProps : {})}
+        onClick={onOpen}
+      >
+        <span className="scm-row__name">
+          {showDir && dir && <span className="scm-row__dir">{dir}/</span>}
+          {fileName(file.path)}
+        </span>
         {/* 改名的来源路径要摆出来：只显示新名字的话，清单上会凭空多一个「新文件」，
             而它的 diff 里满是删除行。 */}
         {file.origPath && <i className="scm-row__from">← {fileName(file.origPath)}</i>}
-        {showDir && dirName(file.path) && <span className="scm-row__dir">{dirName(file.path)}</span>}
       </button>
+      {dir && depth === 0 && <HoverTip at={tip.at}>{dir}</HoverTip>}
       <DiffCounts files={[file]} />
     </li>
   );
@@ -100,23 +112,20 @@ export function ScmCommittedChanges({
   const shown = useMemo(() => files.slice(0, MAX_ROWS), [files]);
   const [layout] = useFileListLayout();
   const tree = useFileTreeRows(shown, diffFilePath, layout === "tree");
+  const twins = useMemo(() => duplicateNames(shown.map(diffFilePath)), [shown]);
 
   return (
     <section className="scm-committed" data-layout={layout}>
-      <header>
-        <h3><GitDiff size={14} />本任务已提交改动</h3>
-        {/* 这一节常常在滚动面板的下半截，顶上分支栏那颗切换按钮此时已经滚出视野——
-            清单在哪儿，切换就得在哪儿够得着。两处共用同一份偏好。 */}
-        {diff?.available && files.length > 0 && <FileLayoutToggle className="scm-committed__layout" size={12} />}
-      </header>
-      {diff?.available && files.length > 0 && (
-        <div className="scm-committed__summary">
+      <InspSec tail={diff?.available && files.length > 0 ? (
+        <span className="scm-committed__summary">
           <span className="scm-committed__count">{files.length} 个文件</span>
           <DiffCounts files={files} />
-        </div>
-      )}
+        </span>
+      ) : undefined}>
+        本任务已提交改动
+      </InspSec>
 
-      {loading && !diff && <p className="scm-committed__state"><SpinnerGap size={12} className="is-spinning" />正在读取分支改动…</p>}
+      {loading && !diff && <p className="scm-committed__state">正在读取分支改动…</p>}
       {!loading && error && <p className="scm-committed__state">读取失败：{error}</p>}
       {!loading && diff && !diff.available && (
         <p className="scm-committed__state">读不到分支改动：{branchDiffReason(diff.reason)}。</p>
@@ -158,7 +167,7 @@ export function ScmCommittedChanges({
                   file={file}
                   active={activeDiff?.source === "branch" && activeDiff.path === file.path}
                   depth={0}
-                  showDir
+                  showDir={twins.has(fileName(file.path))}
                   onOpen={() => onOpenDiff({ path: file.path, source: "branch", origPath: file.origPath })}
                 />
               ))}
@@ -167,12 +176,7 @@ export function ScmCommittedChanges({
             <p className="scm-committed__state">另有 {files.length - MAX_ROWS} 个文件没有列出。</p>
           )}
           {diff.truncated && <p className="scm-committed__state">diff 内容超出上限，文件清单可能不完整。</p>}
-          {onOpenReview && (
-            <button type="button" className="scm-committed__open" onClick={onOpenReview}>
-              <span>查看完整 diff 与提交</span>
-              <CaretRight size={13} />
-            </button>
-          )}
+          {onOpenReview && <InspGo className="scm-committed__open" onClick={onOpenReview}>打开改动工作区</InspGo>}
         </>
       )}
     </section>
