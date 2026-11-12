@@ -8,7 +8,7 @@ import { Plus } from "@phosphor-icons/react";
 import { TASK_MEMO_MAX_LEN } from "@ash/shared/task-memo";
 import type { TaskMemo } from "@ash/shared/task-memo";
 import { InspectorHeadActions } from "../inspector/index.ts";
-import { InspButton, InspNone, InspTool } from "../inspector/parts.tsx";
+import { InspButton, InspNone, InspNote, InspTool } from "../inspector/parts.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import type { Notify } from "../lib/notify.ts";
 import { isModEnterEvent } from "../lib/sendKey.ts";
@@ -74,7 +74,7 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
   };
 
   return (
-    <div className="task-memo-inspector" aria-label="任务备忘">
+    <div className="task-memo-inspector insp-pane" aria-label="任务备忘">
       <InspectorHeadActions>
         <InspTool
           label="写一条备忘"
@@ -88,7 +88,7 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
         </InspTool>
       </InspectorHeadActions>
 
-      {error && <p className="task-memo-inspector__error" role="alert">{error}</p>}
+      {error && <InspNote tone="bad" role="alert">{error}</InspNote>}
 
       {composing !== null && (
         <div className="task-memo-composer">
@@ -98,6 +98,7 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
             rows={5}
             maxLength={TASK_MEMO_MAX_LEN}
             placeholder="这一轮为什么这么定、哪段输出要留着回头看、验收时记得查什么…"
+            aria-label="备忘内容"
             disabled={pendingOn(null)}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -108,16 +109,16 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
             }}
           />
           <div className="task-memo-composer__actions">
-            <button type="button" disabled={pendingOn(null)} onClick={() => setMemoComposerDraft(taskId, null)}>取消</button>
-            <button
-              type="button"
-              className="is-primary"
+            <InspButton variant="quiet" size="sm" disabled={pendingOn(null)} onClick={() => setMemoComposerDraft(taskId, null)}>取消</InspButton>
+            <InspButton
+              variant="pri"
+              size="sm"
               disabled={pendingOn(null) || !draft.trim()}
               aria-keyshortcuts="Meta+Enter Control+Enter"
               onClick={() => submit()}
             >
               保存
-            </button>
+            </InspButton>
           </div>
         </div>
       )}

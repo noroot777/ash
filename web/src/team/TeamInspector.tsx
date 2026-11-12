@@ -1,19 +1,12 @@
 import type { Group, Session, Task, TaskListItem } from "@ash/shared";
-import { agentMix } from "@ash/shared/team";
 import { Clock, FolderOpen, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, UsersThree } from "@phosphor-icons/react";
 import { NativeWorkInspector, type NativeWorkInspectorProps } from "../task-detail/NativeWorkInspector.tsx";
-import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
-import { MarkdownBody } from "../components/MarkdownBody.tsx";
-import { MessageFooter } from "../components/MessageFooter.tsx";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
 import { ArtifactsInspector } from "../files/ArtifactsInspector.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import { retireInspectorTab, type InspectorDescriptor } from "../inspector/index.ts";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import type { Notify } from "../lib/notify.ts";
-import { MessageAttachments } from "../task-detail/Attachments.tsx";
-import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
-import { parseAttachmentText } from "../task-detail/utils.ts";
 import { TeamTimeline } from "./TeamTimeline.tsx";
 import { TeamReviewInspector } from "./TeamReviewInspector.tsx";
 import { WorkerRail } from "./WorkerRail.tsx";
@@ -21,12 +14,8 @@ import { monitorBlockedReason } from "@ash/shared/monitor";
 import { MonitorInspector } from "../monitors/MonitorInspector.tsx";
 import { TaskMemoInspector } from "../task-memos/TaskMemoInspector.tsx";
 import type { TaskMonitorsState } from "../monitors/useTaskMonitors.ts";
-import {
-  teamLeadLabel,
-  teamReviewerLabel,
-  teamWorkerLabel,
-  type LeadTurn,
-} from "./teamModel.ts";
+import { TeamInfoPanel } from "./TeamInfoPanel.tsx";
+import type { LeadTurn } from "./teamModel.ts";
 
 export interface TeamInspectorContext {
   nativeWork: NativeWorkInspectorProps;
@@ -51,110 +40,6 @@ export interface TeamInspectorContext {
   onOpenFolder: (path: string) => void;
   onOpenDiff: (target: ScmDiffTarget) => void;
   notify: Notify;
-}
-
-function ConfigValue({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="team-info-panel__config-value">
-      <dt>{label}</dt>
-      <dd title={value}>{value}</dd>
-    </div>
-  );
-}
-
-function RoleConfig({
-  role,
-  executor,
-  model,
-  effort,
-  note,
-  disabled = false,
-}: {
-  role: string;
-  executor: string;
-  model: string;
-  effort: string;
-  note?: string;
-  disabled?: boolean;
-}) {
-  return (
-    <article className={`team-info-panel__role${disabled ? " is-disabled" : ""}`}>
-      <header><span>{role}</span><b title={executor}>{executor}</b></header>
-      {!disabled && (
-        <dl>
-          <ConfigValue label="模型" value={model} />
-          <ConfigValue label="智能水平" value={effort} />
-        </dl>
-      )}
-      {note && <p>{note}</p>}
-    </article>
-  );
-}
-
-function TeamInfoPanel({ task, workers, sessions }: Pick<TeamInspectorContext, "task" | "workers" | "sessions">) {
-  const objective = parseAttachmentText(task.body);
-  const latestSession = [...sessions].sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0];
-  const config = task.team;
-  const reviewEnabled = config?.review !== false;
-  const inherited = "跟随执行器";
-
-  return (
-    <div className="team-info-panel" aria-label="团队信息">
-      <ImagePreviewGroup isolated>
-        <details className="team-info-panel__section team-info-panel__objective">
-          <summary>原始需求</summary>
-          <div className="team-info-panel__objective-body">
-            {objective.body || objective.paths.length > 0 ? (
-              <>
-                {objective.body && <MarkdownBody text={objective.body} />}
-                <MessageAttachments paths={objective.paths} />
-              </>
-            ) : <p className="team-info-panel__empty">未记录原始需求。</p>}
-          </div>
-        </details>
-      </ImagePreviewGroup>
-
-      <section className="team-info-panel__section">
-        <h2>执行配置</h2>
-        <div className="team-info-panel__roles">
-          <RoleConfig
-            role="调度者"
-            executor={teamLeadLabel(task, latestSession)}
-            model={task.model || config?.leadModel || inherited}
-            effort={task.reasoningEffort || config?.leadReasoningEffort || inherited}
-          />
-          <RoleConfig
-            role="执行者"
-            executor={teamWorkerLabel(task)}
-            model={config?.workerModel || inherited}
-            effort={config?.workerReasoningEffort || inherited}
-            note={workers.length ? `${workers.length} 人 · ${agentMix(workers)}` : "尚未派出执行者"}
-          />
-          <RoleConfig
-            role="审查者"
-            executor={reviewEnabled ? teamReviewerLabel(task) : "已关闭"}
-            model={config?.reviewerModel || inherited}
-            effort={config?.reviewerReasoningEffort || inherited}
-            disabled={!reviewEnabled}
-          />
-        </div>
-      </section>
-
-      <section className="team-info-panel__section">
-        <h2>工作区</h2>
-        <dl className="team-info-panel__workspace">
-          <ConfigValue label="分支" value={latestSession?.branch || "项目当前分支"} />
-          <ConfigValue
-            label="worktree"
-            value={latestSession?.worktreePath || (task.useWorktree ? "尚未记录" : "共享项目目录")}
-          />
-          {task.useWorktree && <ConfigValue label="合入目标" value={task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "未确定（验收时解析）"} />}
-        </dl>
-        {latestSession && <MessageFooter session={latestSession} />}
-        <TaskTimeMeta task={task} />
-      </section>
-    </div>
-  );
 }
 
 // 团队模式的默认面板里不放子智能体：调度台自己那点工具调用远不如「谁跟谁在并行」有用，
@@ -186,7 +71,7 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     icon: <Info size={14} />,
     defaultOpen: true,
     shortcut: "i",
-    render: (context) => <TeamInfoPanel {...context} />,
+    render: (context) => <TeamInfoPanel task={context.task} workers={context.workers} sessions={context.sessions} notify={context.notify} />,
   },
   {
     // 跟单飞任务同一格（同一个组件、同一张表）：调度台也是一条任务，「这一轮为什么这么派」

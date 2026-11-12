@@ -6,7 +6,8 @@
 // （scrollHeight > clientHeight），按字数猜在不同字号/缩放下一定会错，猜短了就出现一颗
 // 点了什么都没发生的「展开」。
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Check, PencilSimple, TrashSimple, X } from "@phosphor-icons/react";
+import { PencilSimple, TrashSimple } from "@phosphor-icons/react";
+import { InspButton, InspTool } from "../inspector/parts.tsx";
 import type { TaskMemo } from "@ash/shared/task-memo";
 import { TASK_MEMO_MAX_LEN } from "@ash/shared/task-memo";
 import { isModEnterEvent } from "../lib/sendKey.ts";
@@ -83,21 +84,7 @@ export function TaskMemoCard({ memo, busy, highlight, draft, onDraft, onSave, on
   const edited = memo.updatedAt !== memo.createdAt;
 
   return (
-    <article ref={card} className={`task-memo-card${highlight ? " is-new" : ""}`}>
-      <header>
-        <time dateTime={memo.updatedAt}>{formatInstant(memo.updatedAt)}</time>
-        {edited && <span className="task-memo-card__edited">已编辑</span>}
-        {!editing && (
-          <div className="task-memo-card__actions">
-            <button type="button" aria-label="编辑这条备忘" disabled={busy} onClick={() => onDraft(memo.body)}>
-              <PencilSimple size={13} />
-            </button>
-            <button type="button" className="is-danger" aria-label="删除这条备忘" disabled={busy} onClick={onDelete}>
-              <TrashSimple size={13} />
-            </button>
-          </div>
-        )}
-      </header>
+    <article ref={card} className={`insp-card task-memo-card${highlight ? " is-new" : ""}`}>
       {editing ? (
         <div className="task-memo-card__edit">
           <AutoTextarea
@@ -106,6 +93,7 @@ export function TaskMemoCard({ memo, busy, highlight, draft, onDraft, onSave, on
             maxLength={TASK_MEMO_MAX_LEN}
             rows={Math.min(16, Math.max(4, (draft ?? "").split("\n").length + 1))}
             disabled={busy}
+            aria-label="备忘内容"
             onChange={(event) => onDraft(event.target.value)}
             // Esc 撤销这次编辑，⌘/Ctrl+回车保存。裸回车留给换行 —— 备忘天生是多行的东西。
             onKeyDown={(event) => {
@@ -114,18 +102,16 @@ export function TaskMemoCard({ memo, busy, highlight, draft, onDraft, onSave, on
             }}
           />
           <div className="task-memo-card__edit-actions">
-            <button type="button" disabled={busy} onClick={() => onDraft(null)}>
-              <X size={12} />取消
-            </button>
-            <button
-              type="button"
-              className="is-primary"
+            <InspButton variant="quiet" size="sm" disabled={busy} onClick={() => onDraft(null)}>取消</InspButton>
+            <InspButton
+              variant="pri"
+              size="sm"
               disabled={busy || !(draft ?? "").trim()}
               aria-keyshortcuts="Meta+Enter Control+Enter"
               onClick={() => void save()}
             >
-              <Check size={12} />保存
-            </button>
+              保存
+            </InspButton>
           </div>
         </div>
       ) : (
@@ -133,7 +119,7 @@ export function TaskMemoCard({ memo, busy, highlight, draft, onDraft, onSave, on
           <p
             ref={body}
             className="task-memo-card__body"
-            style={expanded ? undefined : { maxHeight: `calc(${CLAMP_LINES} * 1.75em)` }}
+            style={expanded ? undefined : { maxHeight: `calc(${CLAMP_LINES} * 1.6em)` }}
           >
             {memo.body}
           </p>
@@ -144,6 +130,20 @@ export function TaskMemoCard({ memo, busy, highlight, draft, onDraft, onSave, on
           )}
         </>
       )}
+      {/* 底下一行：几点写的（改过就带「已编辑」），编辑、删掉两颗指到这张卡才出。 */}
+      <footer className="task-memo-card__foot">
+        <time dateTime={memo.updatedAt}>{formatInstant(memo.updatedAt)}{edited ? " · 已编辑" : ""}</time>
+        {!editing && (
+          <span className="task-memo-card__actions">
+            <InspTool label="编辑这条备忘" disabled={busy} onClick={() => onDraft(memo.body)}>
+              <PencilSimple aria-hidden="true" />
+            </InspTool>
+            <InspTool label="删除这条备忘" disabled={busy} onClick={onDelete}>
+              <TrashSimple aria-hidden="true" />
+            </InspTool>
+          </span>
+        )}
+      </footer>
     </article>
   );
 }

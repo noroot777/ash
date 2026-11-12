@@ -16,6 +16,7 @@ import {
 } from "@phosphor-icons/react";
 import { api, type FileEntry } from "../lib/api.ts";
 import { OpenInIdeMenu } from "./OpenInIdeMenu.tsx";
+import { InspNote } from "../inspector/parts.tsx";
 import { formatSize, isImageName, ROOT_SOURCE_LABEL, siblingReel, useFileTree } from "./fileModel.ts";
 import { KIND_BADGE, KIND_LABEL, type ScmDiffTarget } from "../scm/scmModel.ts";
 import { fileGitDecorations, type FileGitDecoration } from "./fileGitDecorations.ts";
@@ -246,15 +247,10 @@ export function FileTreeInspector({
         </button>
       </header>
 
-      {tree.error && (
-        <p className="file-tree__error">
-          <Warning size={13} aria-hidden="true" />
-          {tree.error}
-        </p>
-      )}
+      {tree.error && <InspNote tone="bad" icon={<Warning weight="fill" />} role="alert">{tree.error}</InspNote>}
 
-      {tree.git?.error && <p className="file-tree__error" role="status">Git 状态读取失败，改动标识暂不可用：{tree.git.error}</p>}
-      {tree.git?.truncated && <p className="file-tree__hint">Git 改动过多，部分文件和目录的标识未显示</p>}
+      {tree.git?.error && <InspNote tone="warn" role="status">Git 状态读取失败，改动标识暂不可用：{tree.git.error}</InspNote>}
+      {tree.git?.truncated && <p className="file-tree__hint file-tree__hint--head">Git 改动过多，部分文件和目录的标识未显示</p>}
 
       <div className="file-tree__body">
         <Level

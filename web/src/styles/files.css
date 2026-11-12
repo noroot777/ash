@@ -2,19 +2,24 @@
 
 .file-tree { display:flex; min-height:0; height:100%; flex-direction:column; }
 /* position:relative 是给头部那颗「用 IDE 打开」的菜单当定位上下文用的，见 .file-ide.is-rail。 */
-.file-tree__head { position:relative; display:flex; flex:0 0 auto; align-items:center; gap:6px; border-bottom:.5px solid var(--line); padding:8px 9px; }
-.file-tree__where { min-width:0; flex:1; }
-.file-tree__where b { display:flex; min-width:0; align-items:center; gap:4px; overflow:hidden; color:var(--ink); font-size:11px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
-.file-tree__where b > svg { flex:0 0 auto; color:var(--accent); }
-.file-tree__where small { display:block; overflow:hidden; margin-top:2px; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
-.file-tree__action { display:grid; width:24px; height:24px; flex:0 0 auto; place-items:center; border:1px solid var(--line2); border-radius:6px; background:var(--panel); color:var(--muted); }
-.file-tree__action:hover:not(:disabled) { background:var(--raised); color:var(--ink); }
-.file-tree__action[aria-pressed="true"] { border-color:color-mix(in lch,var(--accent) 35%,var(--line2)); background:color-mix(in lch,var(--accent) 9%,var(--panel)); color:var(--accent); }
-.file-tree__action:disabled { opacity:.5; }
+.file-tree__head { position:relative; display:flex; flex:0 0 auto; align-items:center; gap:2px; padding:4px 12px 6px 16px; }
+.file-tree__where { min-width:0; flex:1; margin-right:4px; }
+.file-tree__where b { display:flex; min-width:0; align-items:center; gap:6px; overflow:hidden; color:var(--ink); font-size:var(--t-sm); font-weight:var(--w-regular); text-overflow:ellipsis; white-space:nowrap; }
+.file-tree__where b > svg { flex:0 0 auto; color:var(--faint); }
+.file-tree__where small { display:block; overflow:hidden; margin-top:1px; color:var(--muted); font-size:var(--t-xs); text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
+/* 头上那几颗跟别的格面板头上的小图标钮同一个样子（.insp-tool）：不描边，指到才垫底色 */
+.file-tree__action { display:inline-grid; width:24px; height:24px; flex:0 0 24px; place-items:center; border:0; border-radius:var(--r-sm); background:transparent; padding:0; color:var(--muted); transition:background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.file-tree__action:hover:not(:disabled),
+.file-tree__action[aria-expanded="true"],
+.file-tree__action[aria-pressed="true"] { background:var(--hover-bg); color:var(--ink); }
+.file-tree__action:disabled { cursor:default; opacity:.45; }
+.file-tree__action:focus-visible { outline:2px solid var(--focus-ring); outline-offset:-2px; }
+.file-tree__action > svg { width:14px; height:14px; }
 
-.file-tree__error { display:flex; align-items:center; gap:5px; margin:8px 9px 0; border:1px solid color-mix(in lch,var(--red) 26%,var(--line)); border-radius:7px; background:color-mix(in lch,var(--red) 6%,var(--panel)); padding:6px 8px; color:var(--red); font-size:10px; }
+.file-tree > .insp-note { margin:4px 12px 0 16px; }
+.file-tree__hint--head { margin:4px 12px 0 16px; }
 .file-tree__body { min-height:0; flex:1; overflow:auto; padding:4px 0 16px; }
-.file-tree__hint { margin:2px 0; color:var(--faint); font-size:9.5px; }
+.file-tree__hint { margin:2px 0; color:var(--muted); font-size:var(--t-xs); }
 
 .file-tree__row { display:flex; width:100%; min-height:24px; align-items:center; gap:5px; border:0; border-radius:5px; background:transparent; padding-right:8px; text-align:left; }
 .file-tree__row:hover { background:var(--raised); }

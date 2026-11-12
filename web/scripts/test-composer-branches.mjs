@@ -134,10 +134,10 @@ try {
   console.log("✓ 外部切分支时自动标签不点名过期快照，创建仍采用服务端当前分支");
 
   await page.goto(url.replace("composer-branches.html", "frozen-task-branches.html"));
-  const targetRow = page.locator(".team-info-panel__config-value").filter({has:page.getByText("合入目标", {exact:true})});
+  const targetRow = page.locator(".team-info-panel .insp-kv");
   let frozenCaptured = false;
   const checkTarget = async (target) => {
-    assert.equal(await targetRow.locator("dd").innerText(), target);
+    assert.equal(await targetRow.locator("dd.team-info-target").innerText(), target);
     await page.getByRole("button", {name:"人工强制通过",exact:true}).click();
     const dialog = page.getByRole("dialog");
     await dialog.waitFor();
@@ -157,7 +157,7 @@ try {
   await page.getByRole("button", {name:"旧任务基准",exact:true}).click();
   await checkTarget("legacy-base");
   await page.getByRole("button", {name:"未记录目标",exact:true}).click();
-  assert.equal(await targetRow.locator("dd").innerText(), "未确定（验收时解析）");
+  assert.equal(await targetRow.locator("dd.team-info-target").innerText(), "未确定（验收时解析）");
   await page.getByRole("button", {name:"人工强制通过",exact:true}).click();
   const unknown = await page.getByRole("dialog").innerText();
   assert(unknown.includes("未确定的合入目标（验收时解析）"));

@@ -233,7 +233,8 @@ try {
   await page.waitForFunction(() => !document.querySelector(".file-tree__row[data-git-kind]"), null, { timeout: 20_000 });
   assert.equal(await head.getAttribute("data-git-kind"), null, "提交后工作区根仍残留 Git 颜色");
   assert.equal(await elementColor(branch), await tokenColor("--ink"), "提交后分支名没有恢复普通颜色");
-  assert.equal(await elementColor(branchIcon), await tokenColor("--accent"), "提交后工作区图标没有恢复普通颜色");
+  // 没有改动时图标是淡一档的灰（颜色只留给状态）。
+  assert.equal(await elementColor(branchIcon), await tokenColor("--faint"), "提交后工作区图标没有恢复普通颜色");
   assert.equal(await page.getByText("temporary.txt", { exact: true }).count(), 0, "已删除的目录项没有被轮询移除");
   await page.getByText("generated.txt", { exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "重新读取文件列表" }).getAttribute("disabled"), null);
