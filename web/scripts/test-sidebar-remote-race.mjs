@@ -20,16 +20,19 @@ try {
 
   const localRow = page.locator('.workspace-task-tree [data-task-id="local"]');
   const farRow = (id) => page.locator(`.workspace-handoff-task[data-task-id="${id}"]`);
-  await localRow.waitFor();
-  await farRow("far-1").waitFor();
-
-  // 「其他机器」那一节夹在置顶和「任务」之间；这份数据没有置顶行，所以它排在最前面 ——
-  // 从本机那条往上按 K 才会走到远端行上。
+  // 「其他机器」那一节排在本机任务后面、默认折成一行：先点开它，远端行才在屏幕上。
+  // 从本机那条往下按 J 就走到远端行上。
+  const openMachines = async () => {
+    await localRow.waitFor();
+    await page.getByRole("button", { name: /^展开其他机器，/ }).click();
+    await farRow("far-1").waitFor();
+  };
+  await openMachines();
   const screenOrder = () => page.$$eval(
     ".workspace-task-tree [data-task-id]",
     (rows) => rows.filter((row) => row.offsetParent !== null).map((row) => row.dataset.taskId),
   );
-  assert.deepEqual(await screenOrder(), ["far-1", "far-2", "local"], "屏幕上的行序");
+  assert.deepEqual(await screenOrder(), ["local", "far-1", "far-2"], "屏幕上的行序");
 
   // 选中身份看的是**列表上亮着的那一行**和 URL —— 两处都是用户实际看到的东西。
   const selected = () => page.$eval(".workspace-task-tree", (tree) => tree.querySelector(
@@ -89,8 +92,8 @@ try {
 
   await page.evaluate(() => window.__holdTargets());
   await localRow.focus();
-  // K 从本机那条往上走一格，落在「其他机器」那一节上 —— 真实里就是这一下按出的问题。
-  await page.keyboard.press("k");
+  // J 从本机那条往下走一格，落在「其他机器」那一节上 —— 真实里就是这一下按出的问题。
+  await page.keyboard.press("j");
   await waitPending(1);
   await waitSelected("local");
 
@@ -107,7 +110,7 @@ try {
   // 所以这一下当场落地；随后回来的那份应答必须认出自己已经过期。
   await page.evaluate(() => window.__holdTargets());
   await localRow.focus();
-  await page.keyboard.press("k");
+  await page.keyboard.press("j");
   await waitPending(1);
   await farRow("far-1").click();
   await waitSelected("far-1");
@@ -146,43 +149,30 @@ try {
   await localRow.click();
   await waitSelected("local");
 
-  // 向上两下 K：local → far-2 → far-1。两下都在同一个在途窗口里按完。
+  // 向下两下 J：local → far-1 → far-2。两下都在同一个在途窗口里按完。
   await page.evaluate(() => window.__holdTargets());
   await localRow.focus();
-  await page.keyboard.press("k");
+  await page.keyboard.press("j");
   await waitPending(1);
-  await page.keyboard.press("k");
+  await page.keyboard.press("j");
   await waitPending(2);
   await waitSelected("local");
   await releaseAndSettle();
-  await waitSelected("far-1");
-  await settlePage(page);
-  assert.equal(await selected(), "far-1", "连按两下 K 要走到第二行远端任务上，不能只挪一行");
-
-  // 向下两下 J：从「一行都没选」开始，far-1 → far-2。
-  await page.reload();
-  await localRow.waitFor();
-  await farRow("far-1").waitFor();
-  await page.evaluate(() => window.__holdTargets());
-  await page.keyboard.press("j");
-  await waitPending(1);
-  await page.keyboard.press("j");
-  await waitPending(2);
-  await releaseAndSettle();
   await waitSelected("far-2");
   await settlePage(page);
-  assert.equal(await selected(), "far-2", "连按两下 J 要走到第二行，不能停在第一行");
+  assert.equal(await selected(), "far-2", "连按两下 J 要走到第二行远端任务上，不能只挪一行");
 
-  // 中间插一下别的动作，光标就该作废：点回本机那条之后按 K，要重新从它上面那行算起。
+  // 中间插一下别的动作，光标就该作废：点回本机那条之后按 J，要重新从它下面那行算起，
+  // 而不是接着上一串停在最后一行。
   await page.evaluate(() => window.__holdTargets());
   await localRow.click();
   await waitSelected("local");
-  await page.keyboard.press("k");
+  await page.keyboard.press("j");
   await waitPending(1);
   await page.evaluate(() => window.__releaseTargets());
   await page.waitForFunction(() => window.__pendingTargets() === 0);
-  await waitSelected("far-2");
-  assert.equal(await selected(), "far-2", "点过别的之后按 K 要从选中那行重新算，不接着上一串");
+  await waitSelected("far-1");
+  assert.equal(await selected(), "far-1", "点过别的之后按 J 要从选中那行重新算，不接着上一串");
 
   console.log("outbound open race tests passed");
 } finally {

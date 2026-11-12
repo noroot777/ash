@@ -6,14 +6,18 @@ import { BulkHandoffDialog } from "./BulkHandoffDialog.tsx";
 import { outboundTasksForTarget } from "./bulkHandoff.ts";
 import { useRevealHiddenSelection } from "./TaskTreeRows.tsx";
 
-// 收起状态自己存一份，不跟任务分节共用 `ash:task-tree:collapsed-sections`：那份由
+// 开合状态自己存一份，不跟任务分节共用 `ash:task-tree:collapsed-sections`：那份由
 // TaskTree 里的 useCollapsedSections 持有，这一节在它外面，两个 hook 实例各写各的
 // 同一个键，最后一个写的会把另一个的收起状态抹掉。
-const COLLAPSED_STORAGE_KEY = "ash:handoff-machines:collapsed";
+//
+// 这一节排在任务后面、默认折成一行。键从旧的 `ash:handoff-machines:collapsed` 换成了
+// 记「开着」的这一个：老用户本地存着的是「展开」（"0"），沿用旧键的话默认折起对他们
+// 永远不生效。旧键不再读。
+const OPEN_STORAGE_KEY = "ash:handoff-machines:open";
 
-function readCollapsed(): boolean {
+function readOpen(): boolean {
   try {
-    return window.localStorage.getItem(COLLAPSED_STORAGE_KEY) === "1";
+    return window.localStorage.getItem(OPEN_STORAGE_KEY) === "1";
   } catch {
     // 隐私模式下读不到 storage 也得能用，只是记不住。
     return false;
@@ -37,14 +41,14 @@ export function HandoffMachines({
 }) {
   const [targets, setTargets] = useState<HandoffTarget[]>([]);
   const [selected, setSelected] = useState<HandoffTarget | null>(null);
-  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [open, setOpen] = useState(readOpen);
   useEffect(() => {
     try {
-      window.localStorage.setItem(COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
+      window.localStorage.setItem(OPEN_STORAGE_KEY, open ? "1" : "0");
     } catch {
       // 存不下就只在这一次会话里生效。
     }
-  }, [collapsed]);
+  }, [open]);
 
   const reloadTargets = useCallback(() => {
     let alive = true;
@@ -69,24 +73,28 @@ export function HandoffMachines({
     && [...outboundByTarget.values()].some((rows) => rows.some((task) => task.id === selectedRemoteTaskId));
   useRevealHiddenSelection(
     holdsSelection ? selectedRemoteTaskId : null,
-    useCallback(() => setCollapsed(false), []),
+    useCallback(() => setOpen(true), []),
   );
+  const count = useMemo(() => [...outboundByTarget.values()].reduce((sum, rows) => sum + rows.length, 0), [outboundByTarget]);
 
   if (!targets.length || !project) return null;
 
   return (
-    <section className={`workspace-task-section workspace-handoff-machines${collapsed ? " is-collapsed" : ""}`} aria-labelledby="workspace-handoff-machines-title">
+    <section className={`workspace-handoff-machines${open ? "" : " is-collapsed"}`} aria-labelledby="workspace-handoff-machines-title">
+      {/* 折起来就是一行：名字、指上去才出的箭头、右边写着接力出去了几条。点开和从前一样：
+          一台机器一行，接力过去的任务缩进在它下面。 */}
       <button
-        className="workspace-task-section-title workspace-task-section-toggle"
+        className="workspace-fold"
         type="button"
-        aria-expanded={!collapsed}
-        aria-label={`${collapsed ? "展开" : "折叠"}其他机器`}
-        onClick={() => setCollapsed((value) => !value)}
+        aria-expanded={open}
+        aria-label={`${open ? "折叠" : "展开"}其他机器，${count} 条`}
+        onClick={() => setOpen((value) => !value)}
       >
         <span id="workspace-handoff-machines-title">其他机器</span>
-        <CaretRight size={10} weight="bold" aria-hidden="true" />
+        <CaretRight size={12} weight="bold" aria-hidden="true" />
+        <b>{count}</b>
       </button>
-      {!collapsed && <div className="workspace-handoff-machine-list">
+      {open && <div className="workspace-handoff-machine-list">
         {targets.map((target) => {
           const outbound = outboundByTarget.get(target.url) ?? [];
           return (

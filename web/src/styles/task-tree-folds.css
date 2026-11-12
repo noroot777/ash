@@ -1,0 +1,183 @@
+/* 任务树底下那几块「别处的东西」：其他机器、其他项目。它们排在本机任务后面，各自折成一行
+   （名字 · 指上去才出的箭头 · 右边写有几个），点开才铺出来。从 task-tree.css 拆出来是因为
+   那份写到了 700 行硬线，而这几块恰好自成一职。 */
+
+/* ── 折起来的那一行 ──────────────────────────────────────── */
+.workspace-fold {
+  display: flex;
+  width: 100%;
+  height: 28px;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  padding: 0 7px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  font-weight: var(--w-regular);
+  text-align: left;
+  outline-offset: -2px;
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.workspace-fold:hover {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.workspace-fold:active { background: var(--sel-bg); }
+
+.workspace-fold > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 箭头只在指上去或键盘聚焦时出现（展开态收起态都一样），平时侧栏只留这一行字 */
+.workspace-fold > svg {
+  flex: 0 0 auto;
+  color: var(--faint);
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out), transform var(--dur-2) var(--ease-out);
+}
+
+.workspace-fold:hover > svg,
+.workspace-fold:focus-visible > svg { opacity: 1; }
+
+.workspace-fold[aria-expanded="true"] > svg { transform: rotate(90deg); }
+
+.workspace-fold > b {
+  margin-left: auto;
+  color: var(--faint);
+  font-weight: var(--w-regular);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 本机任务和这几行之间隔开一段，这几行彼此挨着 */
+.workspace-handoff-machines,
+.workspace-other-projects { margin-top: 16px; }
+
+.workspace-handoff-machines + .workspace-other-projects { margin-top: 0; }
+
+/* ── 其他机器（展开后）：一台机器一行，接力过去的任务缩进在它下面 ── */
+.workspace-handoff-machine-list {
+  display: grid;
+  gap: 2px;
+}
+
+.workspace-handoff-machine-group { min-width: 0; }
+
+.workspace-handoff-machine {
+  display: grid;
+  min-height: 38px;
+  grid-template-columns: 22px minmax(0, 1fr) 28px;
+  align-items: center;
+  color: var(--muted);
+}
+
+.workspace-handoff-machine > svg {
+  justify-self: center;
+  color: var(--faint);
+}
+
+.workspace-handoff-machine-copy {
+  display: grid;
+  min-width: 0;
+  line-height: 1.1;
+}
+
+.workspace-handoff-machine-copy b {
+  overflow: hidden;
+  color: color-mix(in lch, var(--ink) 58%, var(--muted));
+  font-size: var(--t-sm);
+  font-weight: var(--w-regular);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 接力钮指到这一台才出（触屏上常显） */
+.workspace-handoff-machine > button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--faint);
+  padding: 0;
+  opacity: 0;
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out);
+}
+
+.workspace-handoff-machine:hover > button,
+.workspace-handoff-machine > button:focus-visible { opacity: 1; }
+
+@media (hover: none) {
+  .workspace-handoff-machine > button { opacity: 1; }
+}
+
+.workspace-handoff-machine > button:hover,
+.workspace-handoff-machine > button:focus-visible {
+  background: color-mix(in lch, var(--ink) 8%, transparent);
+  color: var(--ink);
+}
+
+.workspace-sidebar.is-spread .workspace-handoff-machine {
+  width: calc(var(--spread-title-w) + 22px);
+}
+
+.workspace-handoff-task-list {
+  display: grid;
+  gap: 1px;
+  margin: 0 0 3px 22px;
+}
+
+.workspace-handoff-task {
+  display: grid;
+  min-width: 0;
+  min-height: 30px;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: center;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  padding: 0 4px 0 2px;
+  color: color-mix(in lch, var(--ink) 52%, var(--muted));
+  text-align: left;
+  text-decoration: none;
+  outline-offset: -2px;
+}
+
+.workspace-handoff-task > i {
+  width: 5px;
+  height: 5px;
+  justify-self: center;
+  border-radius: var(--r-full);
+  background: var(--faint);
+  opacity: 0.7;
+}
+
+.workspace-handoff-task > span {
+  overflow: hidden;
+  font-size: var(--t-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-handoff-task:hover,
+.workspace-handoff-task:focus-visible,
+.workspace-handoff-task.is-selected {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.workspace-handoff-task:active { background: var(--sel-bg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-fold,
+  .workspace-fold > svg,
+  .workspace-handoff-machine > button { transition: none; }
+}

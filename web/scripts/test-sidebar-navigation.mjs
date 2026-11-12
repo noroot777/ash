@@ -53,25 +53,30 @@ try {
     );
   };
 
-  // —— 一、单项目态：年龄闸折起来的旧行不进序列，团队执行者收着的时候也不进。
-  // 「其他机器」那一节夹在置顶和「任务」之间（见 TaskTree 的渲染顺序），所以 gone 排第二 ——
-  // 模型那份顺序里它根本不在这个位置，这正是两家必须分开算的地方。
+  // —— 一、单项目态：年龄闸折起来的旧行不进序列，团队执行者收着的时候也不进；
+  // 「其他机器」那一节排在本机任务后面、默认折成一行，折着的时候它的行也不进。
   let screen = await screenOrder();
   assert.deepEqual(
     screen,
-    ["pin", "gone", "a1", "a2", "team"],
-    "屏幕上该有的行：置顶、「其他机器」那条、两条新任务、团队（执行者收着）",
+    ["pin", "a1", "a2", "team"],
+    "屏幕上该有的行：置顶、两条新任务、团队（执行者收着）；「其他机器」默认折着",
   );
   assert.equal(screen.includes("old1"), false, "被年龄闸折起来的旧行不在屏幕上");
 
-  assert.deepEqual(await walk(5), screen, "J 的落点序列必须逐行等于屏幕上那份顺序");
+  assert.deepEqual(await walk(4), screen, "J 的落点序列必须逐行等于屏幕上那份顺序");
   assert.deepEqual(await walk(1), ["team"], "走到最后一行就停住，不绕回列表头");
 
-  // 「其他机器」那一节的远端行也是人眼看得见的行：它在序列里（上面已经走到过），
+  // 「其他机器」点开之后，那一节的远端行也是人眼看得见的行：它排在本机任务后面进序列，
   // 而且选中落在远端身份上之后 J/K 还认得「我在哪」—— 不能从头重新开始。
+  await page.getByRole("button", { name: /^展开其他机器，1 条$/ }).click();
+  await page.locator('.workspace-task-tree [data-task-id="gone"]').waitFor();
+  screen = await screenOrder();
+  assert.deepEqual(screen, ["pin", "a1", "a2", "team", "gone"], "「其他机器」的行排在本机任务后面");
   await reset();
-  assert.deepEqual(await walk(2), ["pin", "gone"], "第二下 J 落在「其他机器」那条上");
-  assert.deepEqual(await walk(1, "k"), ["pin"], "从远端行按 K 应退回上一行，而不是跳回列表头");
+  assert.deepEqual(await walk(5), screen, "第五下 J 落在「其他机器」那条上");
+  assert.deepEqual(await walk(1, "k"), ["team"], "从远端行按 K 应退回上一行，而不是跳回列表头");
+  await reset();
+  assert.deepEqual(await walk(1, "k"), ["pin"], "没有选中时从头一条开始");
   assert.deepEqual(await walk(1, "k"), ["pin"], "到顶就停住");
 
   // —— 二、团队行展开：底下那两个执行者当场进序列。
@@ -79,21 +84,21 @@ try {
   await page.getByRole("button", { name: /展开 2 个执行者/ }).click();
   await page.locator('.workspace-task-tree [data-task-id="w1"]').waitFor();
   screen = await screenOrder();
-  assert.deepEqual(screen, ["pin", "gone", "a1", "a2", "team", "w1", "w2"], "执行者行排在团队行底下");
+  assert.deepEqual(screen, ["pin", "a1", "a2", "team", "w1", "w2", "gone"], "执行者行排在团队行底下");
   assert.deepEqual(await walk(7), screen, "展开后的执行者行必须跟着进 J 的序列");
 
   // 收起来就该再次跳过它们 —— 屏幕上没有的行一个都不能落上去。
   await reset();
   await page.getByRole("button", { name: "折叠执行者" }).click();
   await page.waitForSelector('.workspace-task-tree [data-task-id="w1"]', { state: "detached" });
-  assert.deepEqual(await walk(5), ["pin", "gone", "a1", "a2", "team"], "执行者收起后 J 必须跳过它们");
+  assert.deepEqual(await walk(5), ["pin", "a1", "a2", "team", "gone"], "执行者收起后 J 必须跳过它们");
 
   // —— 三、年龄闸：点开「展开(2/2)」放出来的旧行同样当场进序列。
   await reset();
   await page.locator(".workspace-task-more-row").getByRole("button", { name: /^展开\(/ }).click();
   await page.locator('.workspace-task-tree [data-task-id="old1"]').waitFor();
   screen = await screenOrder();
-  assert.deepEqual(screen, ["pin", "gone", "a1", "a2", "team", "old1", "old2"], "展开出来的旧行接在后面");
+  assert.deepEqual(screen, ["pin", "a1", "a2", "team", "old1", "old2", "gone"], "展开出来的旧行接在本机任务后面");
   assert.deepEqual(await walk(7), screen, "年龄闸放出来的行必须跟着进序列");
 
   // —— 四、「其他项目」那一叠：展开后它的行也在屏幕上，也必须进序列。

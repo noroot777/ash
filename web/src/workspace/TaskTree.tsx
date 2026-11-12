@@ -249,7 +249,6 @@ function ScopedTaskTree({
     <>
       <OutboundStatusBar {...outbound} />
       {renderSection(pinned)}
-      {machineSection}
       {renderSection(rest)}
       {/* 一条不剩时必须自己说出来，还得给条退路：窄态那排点很小，不说清楚的话看着就是
           「任务全没了」。它排在离线提示**之后** —— 两句话可以同时出现，而且先说清楚
@@ -260,6 +259,9 @@ function ScopedTaskTree({
           {filter !== "all" && <button className="workspace-task-empty-action" type="button" onClick={onClearFilter}>显示全部</button>}
         </p>
       )}
+      {/* 别的机器上的接力任务排在本机任务后面、默认折成一行：它是别处的东西，占着列表
+          三成的高度时最该看的那几行反而被挤到下面去了。 */}
+      {machineSection}
     </>
   );
 }
