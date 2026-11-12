@@ -9,6 +9,7 @@ import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 
 /** 背景短就直接摊开：为两行字多设一次「展开」纯属添堵。 */
 const CONTEXT_CLAMP_CHARS = 110;
@@ -68,7 +69,9 @@ function QuestionStep({ item, value, disabled, autoFocus, onChange, onCommit }: 
           })}
         </div>
       )}
-      {!!list.length && <small id={hintId} className="task-question-hint">
+      {/* 选项前那颗带数字的小方块就是「按这个键」，勾上变对勾、字落进下面的答复框就是「可多选、
+          可改」——不再另写一行（feed-14）。读屏看不见这些，照旧念给它听。 */}
+      {!!list.length && <small id={hintId} className="task-visually-hidden">
         可多选，也可编辑下方答案 · 数字键 1–{Math.min(list.length, 9)} 快速勾选
       </small>}
       <textarea ref={input} value={value} rows={1} disabled={disabled}
@@ -140,10 +143,12 @@ function QuestionForm({ task, onAnswer }: Props) {
   const commit = () => { if (last) void submit(); else go(current + 1); };
 
   const status = sent ? "已发送" : settling ? "等这一轮结束" : "待答复";
+  // 发送的键名在发送键的提示里（feed-14）；页脚只说进度和「现在发不了」这类状态。
   const hint = sent ? "答复已发送"
     : settling ? "这一轮结束后即可答复"
     : multi ? `已答 ${answered}/${items.length} · 留空的题会标记为未答`
-    : `${sendKeys.send} 发送`;
+    : "";
+  const sendTip = useHoverTip({ placement: "above" });
 
   return (
     <section className={`task-question-card${collapsed ? " is-collapsed" : ""}`} aria-label="等待答复的问题" aria-busy={sending}>
@@ -161,9 +166,11 @@ function QuestionForm({ task, onAnswer }: Props) {
             ))}
           </nav>
         )}
-        <span className="task-question-status">
+        {/* 卡头只说一遍：展开时「待答复」就是卡头那句话本身，不再挂一颗；等这一轮结束、已发送
+            这两种不一样的状态照旧写在这里。收起时只剩这一条，进度和状态都得在。 */}
+        {(collapsed || status !== "待答复") && <span className="task-question-status">
           {multi && collapsed ? `${answered}/${items.length} · ${status}` : status}
-        </span>
+        </span>}
         <button type="button" className="task-question-collapse" aria-expanded={!collapsed}
           aria-label={collapsed ? "展开答复卡" : "收起答复卡，先看上文"}
           onClick={() => setCollapsed((value) => !value)}>
@@ -197,10 +204,13 @@ function QuestionForm({ task, onAnswer }: Props) {
           {/* 没答到最后一题时「发送」退成次要样式：主按钮留给「下一题」，
               免得顺手一点就把只答了一题的答复发出去。 */}
           <button type="button" className={last ? "task-question-send" : "task-question-nav"}
-            disabled={unavailable || !answered} onClick={() => void submit()}>
+            disabled={unavailable || !answered} onClick={() => void submit()} aria-describedby={`${task.id}-send-key`} {...sendTip.anchorProps}>
             {sent ? <Check size={13} aria-hidden="true" /> : <PaperPlaneTilt size={13} weight="fill" aria-hidden="true" />}
             {sending ? "发送中…" : sent ? "已发送" : "发送答复"}
           </button>
+          {/* 键名不常驻；读屏仍从按钮的描述里念到此刻生效的那一档。 */}
+          <span id={`${task.id}-send-key`} className="task-visually-hidden">{sendKeys.send} 发送</span>
+          {!unavailable && <HoverTip at={sendTip.at}>发送答复<kbd>{sendKeys.send}</kbd></HoverTip>}
           {multi && !last && (
             <button type="button" className="task-question-send" disabled={unavailable} onClick={() => go(current + 1)}>
               下一题<CaretRight size={12} weight="bold" aria-hidden="true" />
