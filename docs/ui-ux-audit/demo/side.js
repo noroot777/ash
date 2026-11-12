@@ -1,6 +1,9 @@
-/* 侧栏。结构、文案、入口都照真实侧栏画（web/src/workspace 的 WorkspaceSidebar / ProjectSwitcher / TaskTree / TaskTreeRows / HandoffMachines）：
-   顶行（项目菜单、分支、常用命令）、工具行（聊天、圆点筛选、搜索、随手记、分组管理、新建任务）、任务树（置顶 / 任务 / 其他机器 / 其他项目）、底部一行。
-   和现状不一样的只有清单里的四条：side-1 行首记号、side-2 行首与顶上圆点查同一张表、side-3「其他机器」排到「任务」后面并默认折起、side-4 底部一行的字号字色。
+/* 侧栏。入口和文案照真实侧栏（web/src/workspace 的 WorkspaceSidebar / ProjectSwitcher / TaskTree / TaskTreeRows / HandoffMachines），一样不少；
+   变的是摆法——一行只管一件事（side-5）：顶行是「在哪儿」（项目、分支、常用命令），第二行是「新建」（新建任务、随手记），
+   第三行是「找」（一颗星加五颗点的筛选、搜索、打开任务列表），然后是任务，底下一行是「去别处」（聊天、助手）和收起。
+   任务树不写「置顶」「任务」两个标题：置顶的排在最前、行尾一颗图钉，和后面的隔一道缝；「其他机器」「其他项目」各折成一行、右边写有几个。
+   行尾平时只有会让你换主意的东西：等你什么（一个短词）、团队任务、智能体开的、置顶、星标，都是灰图标；加星标的键指到才出。
+   清单里另外四条照旧：side-1 行首记号、side-2 行首与顶上圆点查同一张表、side-3「其他机器」排到任务后面并默认折起、side-4 底部一行。
    对外：ASH.parts.side = { setStatus(id, status, why), setFilter(key), setPinned(id, on), setFar(open), refresh(), search() }；
    听 task:status、route；发 task:open { id }（点的不是当前这条任务时）、task:pin { id, pinned }。
    样机没画下去的去处（常用命令、随手记、任务模式、F 铺开的宽列表……）界面上照产品原样写，点了只在样机自己那条栏里说一句（ASH.todo）。 */
@@ -106,7 +109,7 @@
       let goAt = null; /* 上一次按 G 的时刻（没按过是 null）：G S / G C / G T 是两键连打，中间最多隔一秒 */
 
       /* 样机数据里没有星标，给一条让那颗星有东西可筛 */
-      if (!tasks.some((task) => task.starred)) { const seed = byId('t-d3'); if (seed) seed.starred = true; }
+      if (!tasks.some((task) => task.starred)) { const seed = byId('t-d2'); if (seed) seed.starred = true; }
 
       /* ---------- 顶行：项目（点开是项目菜单）、分支、常用命令 ---------- */
       const avatar = (who = name, cls = '') => h(`i.side-ava${cls}`, { 'aria-hidden': 'true', 'data-tone': OTHERS.find((p) => p.name === who)?.tone }, who[0].toUpperCase());
@@ -116,7 +119,7 @@
         h('button.side-branch', { type: 'button', 'aria-label': 'Git：分支 main，点击切换分支或同步', 'aria-haspopup': 'dialog', 'data-tip': '切换分支或同步', onclick: todo('切换分支的浮层') }, icon('branch'), h('span.cut', 'main'), icon('caret', 'sm')),
         cmdBtn);
 
-      /* ---------- 工具行：聊天、圆点筛选、搜索、随手记、分组管理、新建任务（图标和次序照现在的） ---------- */
+      /* ---------- 第二行「新建」、第三行「找」。分组管理不在这里：它在项目菜单的「设置」和 ⌘K 里 ---------- */
       const fbtn = {};
       const filterEl = h('div.side-filter', { role: 'group', 'aria-label': '按状态筛选任务', 'data-m': 'side-keep' }, BUCKETS.map((bucket) => {
         const btn = h('button.side-f', { type: 'button', 'data-k': bucket.key, 'aria-pressed': 'false', onclick: () => setFilter(filter === bucket.key ? null : bucket.key) },
@@ -124,17 +127,17 @@
         fbtn[bucket.key] = { btn, label: bucket.label };
         return btn;
       }));
-      const chatBtn = h('a.ico', { href: '#/chat', 'aria-label': '聊天' }, icon('chat'));
+      const newBtn = h('a.side-new', { href: '#/new', 'data-tip': '新建任务', 'data-key': 'C' }, icon('plus'), h('span', '新建任务'));
+      const make = h('div.side-make', { 'data-m': 'side-5' }, newBtn,
+        h('button.ico', { type: 'button', 'aria-label': '随手记', 'data-tip': '随手记', 'data-key': 'NI', onclick: todo('随手记') }, icon('edit')));
       const searchBtn = h('button.ico', { type: 'button', 'aria-label': '搜索 Cmd K', 'aria-haspopup': 'dialog', 'data-tip': '搜索', 'data-key': '⌘K', onclick: () => openJump() }, icon('search'));
-      const tools = h('div.side-tools', { role: 'toolbar', 'aria-label': '任务工具' }, chatBtn, filterEl, searchBtn,
-        h('button.ico', { type: 'button', 'aria-label': '随手记', 'data-tip': '随手记', 'data-key': 'NI', onclick: todo('随手记') }, icon('edit')),
-        h('a.ico', { href: '#/settings/groups', 'aria-label': '分组管理', 'data-tip': '分组管理' }, icon('layers')),
-        h('a.ico', { href: '#/new', 'aria-label': '新建任务', 'data-tip': '新建任务' }, icon('plus')));
+      /* F 把侧栏铺开成宽列表：原来是底部一句不可点的提示，现在是「找」这一行里的一颗键，键位在提示里。那一态样机没画 */
+      const find = h('div.side-find', { role: 'toolbar', 'aria-label': '筛选与搜索' }, filterEl, searchBtn,
+        h('button.ico', { type: 'button', 'aria-label': '打开任务列表', 'data-tip': '打开任务列表', 'data-key': 'F', onclick: todo('F 铺开的宽列表') }, icon('list')));
 
       /* ---------- 任务树的固定件 ---------- */
       const tree = h('nav.side-tree', { 'aria-label': '任务树' });
-      const pinHead = h('div.sec.side-sec', {}, h('h3', '置顶'));
-      const taskHead = h('div.sec.side-sec', {}, h('h3', '任务'));
+      const gap = h('div.side-gap', { role: 'separator' });   /* 置顶的那几行和后面的任务之间的一道缝 */
       const empty = h('div.none');
       /* 其他机器（side-3）：排在「任务」后面、默认折成一行、右边写有几条。点开照现在的：一台机器一行，接力过去的任务缩进在它下面 */
       const farCount = MACHINES.reduce((n, machine) => n + machine.tasks.length, 0);
@@ -144,8 +147,14 @@
         h('div.side-mach-head', {}, icon('tower'), h('b.cut', machine.name),
           h('button.ico.sm', { type: 'button', 'aria-label': `把本项目正在跑的任务接力到 ${machine.name}`, 'data-tip': `把本项目正在跑的任务接力到 ${machine.name}`, onclick: todo('接力对话框') }, icon('send'))),
         machine.tasks.map((title) => h('button.side-mach-task', { type: 'button', onclick: () => ASH.emit('task:open', {}) }, h('i', { 'aria-hidden': 'true' }), h('span.cut', title))))));
-      /* 其他项目：一个项目一行，默认折着；点开是它的任务，没有就一句「没有任务」 */
-      const otherHead = h('div.sec.side-sec', {}, h('h3', '其他项目'));
+      /* 其他项目：和「其他机器」一样折成一行、右边写有几个。点开是一个项目一行，再点开是它的任务，没有就一句「没有任务」 */
+      let otherOpen = false;
+      const otherHead = h('button.sec.side-sec.side-fold', { type: 'button', 'aria-expanded': 'false', 'aria-label': `展开其他项目，${OTHERS.length} 个`, onclick: () => {
+        otherOpen = !otherOpen;
+        otherHead.setAttribute('aria-expanded', String(otherOpen));
+        otherHead.setAttribute('aria-label', `${otherOpen ? '折叠' : '展开'}其他项目，${OTHERS.length} 个`);
+        layout();
+      } }, h('span', '其他项目'), icon('chev', 'sm'), h('span.grow'), h('b', String(OTHERS.length)));
       const others = OTHERS.map((other) => {
         const head = h('button.side-other', { type: 'button', 'aria-expanded': 'false', onclick: () => { other.open = !other.open; head.setAttribute('aria-expanded', String(other.open)); layout(); } },
           icon('chev', 'sm'), avatar(other.name), h('span.cut', other.name));
@@ -155,31 +164,30 @@
         return { other, head, body };
       });
 
-      /* 底部一行（side-4）：四样和次序照现在的——连接灯、F、助手、收起；只是字从 10px 上下的三级灰提到 12px 次级色。
-         「F 打开任务列表」照现在是一句不可点的提示；F 在真实产品里把侧栏铺开成宽列表，那一态样机没画 */
-      const spreadHint = h('span.side-hint', {}, h('kbd', 'F'), '打开任务列表');
-      const helper = h('a', { href: '#/assistant', 'aria-label': 'ash 助手', 'data-tip': 'ash 助手' }, icon('assistant'), '助手');
-      const foot = h('div.side-foot', { 'data-m': 'side-4' },
-        h('span.side-conn', { role: 'status', tabindex: '0', 'aria-label': '实时已连接', 'data-tip': '实时已连接' }, h('span.dot.new')),
-        spreadHint, helper,
-        h('button', { type: 'button', 'aria-label': '收起侧边栏', 'data-tip': '收起侧边栏', 'data-key': '⌘B', onclick: todo('收起侧栏') }, icon('sidebar'), '收起'));
+      /* 底部一行（side-4）：左边是「去别处」——聊天、助手，12px 次级色；右边一颗收起。连接灯不在这里（状态栏右端一直写着「已连接」） */
+      const chatBtn = h('a', { href: '#/chat' }, icon('chat'), '聊天');
+      const helper = h('a', { href: '#/assistant', 'aria-label': 'ash 助手' }, icon('assistant'), '助手');
+      const foot = h('div.side-foot', { 'data-m': 'side-4' }, chatBtn, helper, h('span.grow'),
+        h('button.ico', { type: 'button', 'aria-label': '收起侧边栏', 'data-tip': '收起侧边栏', 'data-key': '⌘B', onclick: todo('收起侧栏') }, icon('sidebar')));
 
-      /* ---------- 行：行首记号、标题、「谁建的」徽记、行尾那句短话；行尾浮着星标、来源任务、团队记号（都照现在的 TaskTreeRows.tsx） ---------- */
+      /* ---------- 行：行首记号、标题、行尾那个短词，整行是一个链接（它的点击面铺满整行）。
+         行尾另有四样小东西，都是灰图标：团队任务、智能体开的（点了去来源任务）、置顶、星标（加星标的键指到这一行才出）。照 TaskTreeRows.tsx，只是不再是彩色胶囊 ---------- */
       function buildRow(task) {
         const dot = h('span.dot');
         const lead = h('span.side-row-lead', {}, dot);
         const title = h('span.side-row-title', task.title);
         const end = h('span.side-row-end');
-        const link = h('a.side-row-main', { href: '#/task', onclick: (e) => { if (!open(task)) e.preventDefault(); } }, lead, title,
-          task.origin && h('span.side-row-from', {}, icon('bot'), task.origin), end);
+        const link = h('a.side-row-main', { href: '#/task', onclick: (e) => { if (!open(task)) e.preventDefault(); } }, lead, title, end);
+        const glyph = (name, say) => h('span.side-row-glyph', { role: 'img', 'aria-label': say, 'data-tip': say, onclick: () => link.click() }, icon(name));
         const star = h('button.side-row-star', { type: 'button', onclick: () => setStarred(task, !task.starred) }, icon('star'));
-        const from = `来自任务：${byId(SOURCE[task.id])?.title ?? ''}`;
-        const row = h(`div.side-row${task.origin ? '.has-from' : ''}${task.kind === 'team' ? '.is-team' : ''}`, { 'data-id': task.id }, link,
-          task.kind === 'team' && h('span.side-row-kind', { role: 'img', 'aria-label': '团队任务' }, icon('team')),
-          task.origin && h('button.side-row-src', { type: 'button', 'aria-label': from, 'data-tip': from, onclick: () => ASH.emit('task:open', { id: SOURCE[task.id] }) }, icon('file')),
-          star);
+        const from = task.origin && `${task.origin} · 来自「${byId(SOURCE[task.id])?.title ?? ''}」`;
+        const pin = glyph('pin', '已置顶');
+        const row = h('div.side-row', { 'data-id': task.id }, link,
+          task.kind === 'team' && glyph('team', '团队任务'),
+          task.origin && h('button.side-row-src', { type: 'button', 'aria-label': from, 'data-tip': from, onclick: () => ASH.emit('task:open', { id: SOURCE[task.id] }) }, icon('bot')),
+          pin, star);
         cutTip(title);
-        rows.set(task.id, { task, el: row, link, lead, dot, title, end, star, why: null });
+        rows.set(task.id, { task, el: row, link, lead, dot, title, end, star, pin, why: null });
         paint(task, false);
       }
 
@@ -205,7 +213,7 @@
         else if (say) { row.why = h(`span.side-row-why${soft ? '.enter' : ''}`, say); row.end.prepend(row.why); }
         else if (row.why) { row.why.remove(); row.why = null; }
         if (row.why) { if (task.detail) row.why.dataset.tip = task.detail; else delete row.why.dataset.tip; }
-        row.el.classList.toggle('has-why', Boolean(say));
+        row.pin.hidden = !task.pinned;
         const starred = !!task.starred;
         row.el.classList.toggle('is-starred', starred);
         row.star.setAttribute('aria-pressed', String(starred));
@@ -244,19 +252,19 @@
         }
       }
 
-      /* ---------- 排版：树里此刻该有哪些孩子、按什么顺序（筛选只管「置顶」「任务」两节） ---------- */
+      /* ---------- 排版：树里此刻该有哪些孩子、按什么顺序（筛选只管任务那几行：置顶的在前，隔一道缝是其余的） ---------- */
       function wanted() {
         const pass = (id) => !filter || inBucket(byId(id), filter);
         const pins = order.pin.filter(pass).map((id) => rows.get(id).el);
         const rest = order.task.filter(pass).map((id) => rows.get(id).el);
-        const list = [];
-        if (pins.length) list.push(pinHead, ...pins);
-        if (rest.length || !filter) list.push(taskHead, ...rest);
+        const list = [...pins];
+        if (pins.length && rest.length) list.push(gap);
+        list.push(...rest);
         if (filter && !pins.length && !rest.length) list.push(empty);
         list.push(farHead);
         if (farOpen) list.push(farBody);
         list.push(otherHead);
-        for (const { other, head, body } of others) { list.push(head); if (other.open) list.push(body); }
+        if (otherOpen) for (const { other, head, body } of others) { list.push(head); if (other.open) list.push(body); }
         return list;
       }
 
@@ -264,7 +272,7 @@
       function claim() {
         const shown = [...order.task, ...order.pin].map((id) => rows.get(id)).filter((row) => row.el.parentNode === tree);
         const picks = {
-          'side-1': shown.find((row) => row.look === LOOK.done)?.el ?? taskHead,
+          'side-1': shown.find((row) => row.look === LOOK.done)?.el ?? fbtn.accepted.btn,
           'side-2': (shown.find((row) => row.look === LOOK.failed) ?? shown.find((row) => row.look.dot))?.el ?? fbtn.todo.btn,
         };
         for (const id of Object.keys(picks)) if (held[id] !== picks[id]) held[id]?.removeAttribute('data-m');
@@ -339,7 +347,7 @@
         layout();
       }
 
-      /* 置顶的开关在任务头上（侧栏行上没有）；任务头的图钉调这里，把这一行移进 / 移出「置顶」 */
+      /* 置顶的开关在任务头上（侧栏行上只有一颗看的图钉）；任务头的图钉调这里，把这一行移到最前 / 移回去 */
       function setPinned(id, on) {
         const task = byId(id);
         const row = rows.get(id);
@@ -348,6 +356,7 @@
         order.pin = order.pin.filter((x) => x !== id);
         order.task = order.task.filter((x) => x !== id);
         order[on ? 'pin' : 'task'].unshift(id);
+        row.pin.hidden = !on;
         lift(row);
         layout();
         ASH.emit('task:pin', { id, pinned: task.pinned });
@@ -522,7 +531,7 @@
       for (const task of tasks) { buildRow(task); order[task.pinned ? 'pin' : 'task'].push(task.id); }
       count();
       tree.replaceChildren(...wanted());
-      el.replaceChildren(top, tools, tree, foot);
+      el.replaceChildren(top, make, find, tree, foot);
       claim();
 
       ASH.on('task:status', ({ id, status, why, accepted } = {}) => apply(id, status, why, accepted));
@@ -530,7 +539,7 @@
       ASH.on('route', (route) => {
         onTask = route.name === 'task';
         select();
-        for (const [link, where] of [[chatBtn, 'chat'], [helper, 'assistant']]) { if (route.name === where) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current'); }
+        for (const [link, where] of [[chatBtn, 'chat'], [helper, 'assistant'], [newBtn, 'new']]) { if (route.name === where) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current'); }
       });
 
       /* 对照清单点到第 1、2 条时，先把筛选放开，那两行才在 */
