@@ -289,10 +289,12 @@ async function* claudeStreamEvents(
         } else if (ev.status === null) {
           // 压缩结束了却没有结论:CLI 的合法路径之一 —— PreCompact hook 把这次自动压缩
           // 拦下时,就是先 `status:"compacting"` 再以 `status:null` 收尾,`compact_result`
-          // 整个字段缺失。没有结论就不说话(压没压、成没成都无从谈起),但标志必须复位,
-          // 否则它会泄漏到下一次压缩,把那次的开始提示整个吞掉。
+          // 整个字段缺失。不谎报「已压缩」,但得说一声这次结束了(cancelled):否则界面上那句
+          // 「在压缩上下文」会一直挂到回合结束。标志也必须复位,否则它会泄漏到下一次压缩,
+          // 把那次的开始提示整个吞掉。
           // 只认显式的 `null`:`requesting` 这类别的状态值在压缩期间也可能出现,拿它复位
           // 等于把心跳去重白做一遍。
+          if (compacting) push({ kind: "error", message: "这次压缩被拦下了，没有压", level: "notice", affectsTurn: false, compaction: "cancelled" });
           compacting = false;
         }
       }

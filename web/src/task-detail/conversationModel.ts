@@ -10,8 +10,7 @@ import { eventTone, isVerifyNote, verifyMark } from "./conversationNotes.ts";
 import type { TimelineNotice } from "@ash/shared/timeline-notice";
 import { applyVerifySpans, reviewerKey, reviewerKeyOf, reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";
 import type { AgentContentSegment } from "./conversationSegments.ts";
-import { contentSegments, legacyCompactionCount, markSegmentsAwaiting } from "./conversationSegments.ts";
-import { stripLegacyCompaction } from "../lib/compaction.ts";
+import { contentSegments, markSegmentsAwaiting } from "./conversationSegments.ts";
 import {
   groupedTrace,
   normalizedPersistedTrace,
@@ -448,7 +447,6 @@ function appendPersistedSession(
         ? next.at
         : undefined;
       const traceEntries = takeTraceGroup(traceGroups, consumedTrace, turnStartedAt, boundary);
-      const body = stripLegacyCompaction(segment.text, legacyCompactionCount(traceEntries));
       const chunk: AgentItem = {
         kind: "agent",
         id: `persisted:agent:${session.id}:${index}`,
@@ -461,8 +459,8 @@ function appendPersistedSession(
         run: traceRun(traceEntries) ?? sessionRun(session),
         reviewer: reviewerOf(traceVerifyRound(traceEntries), session?.role),
         usage: traceUsage(traceEntries),
-        markdown: body,
-        segments: contentSegments(traceEntries, body, `persisted:segment:${session.id}:${index}`),
+        markdown: segment.text,
+        segments: contentSegments(traceEntries, segment.text, `persisted:segment:${session.id}:${index}`),
         ...origin(index),
       };
       // 中间只隔着一条「那一刻回合还在飞」的旁注 —— 这就是同一回合的下半截，并回去。

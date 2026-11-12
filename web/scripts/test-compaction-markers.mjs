@@ -1,15 +1,17 @@
 // 压缩上下文不是它说的话（docs/ui-ux-audit run-9）：它是执行过程里它发生的那个位置上的一步；
 // 压着时进行条那一行说「在压缩上下文」，压完并成一行。
 //
-// 来源只认结构化事件（error 事件上的 compaction）。正文里出现同一句——智能体在解释压缩日志、
-// 代码块里引了原文——一个字都不许动，也不许凭空说「在压缩」（第 1 轮审查 F1）。旧会话那一串
-// 只在 trace 里整条正文恰好就是它时才认，而且换成步骤之后**原来的先后不变**。
+// 来源只认结构化事件（error 事件上的 compaction）。**正文永远是正文**：智能体在解释压缩日志、
+// 代码块里引了原文、文字块恰好切在那一句上、甚至整条回复就是一个 `constructor`——一个字都
+// 不许动，也不许凭空说「在压缩」「在等上游」（第 1、2 轮审查）。旧会话里服务端当年插的那两句
+// 引用不转换，照原样留在正文里。
 // 跑:npm -w web run test:compaction-markers
 import assert from "node:assert/strict";
-import { COMPACTED, COMPACTING, stripLegacyCompaction } from "../src/lib/compaction.ts";
+import { COMPACTED, COMPACTING, COMPACT_SKIPPED } from "../src/lib/compaction.ts";
 import { liveLabel, pastSummary } from "../src/lib/executionWords.ts";
 import { hasExecutionNotice } from "../src/components/ExecutionTrace.tsx";
-import { awaitingAfterEvent, contentSegments, legacyCompactionCount } from "../src/task-detail/conversationSegments.ts";
+import { awaitingAfterEvent, contentSegments } from "../src/task-detail/conversationSegments.ts";
+import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
 import { latestRunFacts } from "../src/task-detail/info/infoRunFacts.ts";
 
 const at = (second) => `2026-11-12T10:00:${String(second).padStart(2, "0")}.000Z`;
@@ -19,13 +21,10 @@ const compaction = (phase, second) => ({
   at: at(second),
   event: phase === "failed"
     ? { kind: "error", message: "上下文压缩失败，会话大小原地不动：503", affectsTurn: false, compaction: phase }
-    : { kind: "error", message: phase === "start" ? "正在压缩上下文" : "上下文已压缩", level: "notice", affectsTurn: false, compaction: phase },
+    : { kind: "error", message: phase, level: "notice", affectsTurn: false, compaction: phase },
 });
-/** 落盘那一路：`.md` 先按 trace 认出来的旧标记摘一遍，再分段（conversationModel 同一个顺序）。 */
-const rebuild = (trace, md) => {
-  const body = stripLegacyCompaction(md, legacyCompactionCount(trace));
-  return { body, segments: contentSegments(trace, body, "t") };
-};
+/** 落盘那一路：正文就是 `.md`，trace 只定位步骤插在哪（conversationModel 同一个调用）。 */
+const rebuild = (trace, md) => ({ body: md, segments: contentSegments(trace, md, "t") });
 const stepsOf = (segments) => segments.flatMap((segment) => segment.events.map((event) => event.kind === "tool" ? event.label : event.detail ?? event.label));
 const agentItem = (segments, endedAt = null) => ({ kind: "agent", id: "a", markdown: "", endedAt, segments });
 
@@ -69,23 +68,46 @@ const agentItem = (segments, endedAt = null) => ({ kind: "agent", id: "a", markd
   assert.ok(failed.flatMap((segment) => segment.events).some((event) => event.kind === "error"), "没压成照旧是一条异常");
 }
 
-// ④ 旧会话：服务端当年插的那一串是 trace 里一条独立的正文。认出来换成步骤，位置跟着它在
-//    trace 里的先后走；同一回合里智能体自己代码块里的那句照旧留着。
+// ④ 旧会话：服务端当年插的那一串（不论在 trace 里是不是一条独立的正文），照原样是正文；
+//    跟它同文的普通引文、切在三个文字块里的代码示例同样原样。
 {
-  const own = "```text\n> 正在压缩上下文…\n```";
-  const trace = [text("先看看。", 1), tool("Read", '{"file_path":"before.ts"}', 2), text(`\n\n${own}`, 3), text("\n> 正在压缩上下文…\n\n", 4), text("\n> 上下文已压缩。\n\n", 5), text("接着改。", 6)];
-  const md = `先看看。\n\n${own}\n> 正在压缩上下文…\n\n\n> 上下文已压缩。\n\n接着改。`;
-  const { body, segments } = rebuild(trace, md);
-  assert.equal(legacyCompactionCount(trace), 2);
-  assert.ok(body.includes(own), "代码块里智能体自己写的那句不摘");
-  assert.equal(body.split("正在压缩上下文").length - 1, 1, "只摘 trace 认出来的那一处");
-  assert.doesNotMatch(body, /上下文已压缩/);
-  assert.deepEqual(stepsOf(segments), ["Read", COMPACTED], "旧标记换成步骤，原来的先后不变");
-  assert.equal(segments.at(-1).markdown.trim(), "接着改。");
-  assert.ok(segments.slice(0, -1).map((segment) => segment.markdown).join("").includes(own), "压缩之前那段正文完整");
+  const quote = "> 正在压缩上下文…";
+  const trace = [text("先引一句：\n\n", 1), text(`${quote}\n\n`, 2), tool("Read", '{"file_path":"before.ts"}', 3), text("\n> 正在压缩上下文…\n\n", 4), text("\n> 上下文已压缩。\n\n", 5), text("接着改。", 6)];
+  const md = trace.filter((entry) => entry.event.kind === "text").map((entry) => entry.event.text).join("");
+  const { segments } = rebuild(trace, md);
+  assert.equal(segments.map((segment) => segment.markdown).join(""), md, "旧会话正文一个字不摘");
+  assert.deepEqual(stepsOf(segments), ["Read"], "旧标记不转成步骤");
+  assert.equal(latestRunFacts([agentItem(segments)]).compacting, false, "旧标记不让信息格说在压");
 }
 
-// ⑤ `.md` 里有这一串、trace 却不认得（智能体自己整行写了它）：不摘。
-assert.equal(stripLegacyCompaction("说明：\n> 正在压缩上下文…\n\n就这样。", 0), "说明：\n> 正在压缩上下文…\n\n就这样。");
+// ⑤ 直播：每一片正文都是正文——哪怕恰好是旧标记那一串、是被切开的代码示例、是 Object 原型上的
+//    名字。不长出步骤，不说「在等上游」。
+{
+  const session = { id: "s1", taskId: "t1", agentType: "codex", role: "main", startedAt: at(0), endedAt: null };
+  const live = (chunks) => buildConversationItems([], [session], chunks.map((chunk, index) => ({
+    kind: "server",
+    id: `live:${index}`,
+    event: { type: "agent.event", taskId: "t1", sessionId: "s1", role: "main", agentType: "codex", event: { kind: "text", text: chunk } },
+  }))).filter((item) => item.kind === "agent");
+  for (const chunks of [
+    ["constructor"], ["toString"], ["__proto__"], ["hasOwnProperty"],
+    ["```text\n", "\n> 正在压缩上下文…\n\n", "```"],
+    ["\n> 上下文已压缩。\n\n"],
+  ]) {
+    const [item] = live(chunks);
+    assert.equal(item.markdown, chunks.join(""), `直播正文原样：${JSON.stringify(chunks)}`);
+    assert.equal(item.segments.flatMap((segment) => segment.events).length, 0, `直播正文不长出步骤：${JSON.stringify(chunks)}`);
+    assert.equal(item.segments.some((segment) => segment.awaiting), false, `直播正文不说在等上游：${JSON.stringify(chunks)}`);
+  }
+}
 
-console.log("compaction markers ok: 只认结构化事件，正文与代码块原样，旧标记按 trace 认、先后不变，压缩不算等上游");
+// ⑥ 被 PreCompact hook 拦下：结束了、没压，不谎报「压缩了」，也不一直说在压。
+{
+  const { segments } = rebuild([text("先读一遍。", 1), compaction("start", 2), compaction("cancelled", 3)], "先读一遍。");
+  const events = segments.flatMap((segment) => segment.events);
+  assert.deepEqual(stepsOf(segments), [COMPACT_SKIPPED], "开始和被拦下并成一行");
+  assert.equal(latestRunFacts([agentItem(segments)]).compacting, false, "被拦下了就不再说在压");
+  assert.equal(liveLabel(events, false), COMPACT_SKIPPED, "进行条说被拦下，不说压缩了");
+}
+
+console.log("compaction markers ok: 只认结构化事件，直播与落盘正文一律原样（旧标记、分片、原型属性名），被拦下的压缩如实收口，压缩不算等上游");

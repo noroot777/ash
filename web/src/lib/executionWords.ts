@@ -78,7 +78,7 @@ export function liveLabel(events: ExecutionEvent[], awaiting: boolean): string {
   if (latest && isCompactionEvent(latest) && latest.detail === COMPACTING) return COMPACTING;
   if (awaiting && latest?.kind === "notice") return collapse(latest.detail ?? "") || "正在等上游回话";
   const step = [...visible].reverse().find((event) => event.kind !== "notice");
-  if (!step && latest && isCompactionEvent(latest)) return COMPACTED;
+  if (!step && latest && isCompactionEvent(latest)) return latest.detail ?? COMPACTED;
   if (!step) return pastSummary(visible);
   // 跟进行条那一档同一个说法(样机 live-words.js 的 thinkWord):在想 / 想了一会儿。
   if (step.kind === "thinking") return "在想";

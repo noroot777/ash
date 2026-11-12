@@ -213,6 +213,9 @@ console.log("4) 压缩(/compact 与自动压缩)的过程与成败必须显式�
   else fail(`跳过路径后开始提示报了 ${skipStarted} 次,期望 2 次:${JSON.stringify(skipText)}`);
   if (skipEnded === 1) ok("没有结论的那次不谎报「已压缩」");
   else fail(`结束提示报了 ${skipEnded} 次,期望 1 次:${JSON.stringify(skipText)}`);
+  // 被拦下的那次也得说一声结束了(cancelled),否则界面上「在压缩上下文」会挂到回合结束。
+  if (skipText.join() === "start,cancelled,start,done") ok("被拦下的那次报 cancelled,不报 done");
+  else fail(`被拦下那次的结束信号不对:${JSON.stringify(skipText)}`);
 }
 
 console.log("5) 旧版 Claude Code 的 --effort 参数错误要给出可操作提示");

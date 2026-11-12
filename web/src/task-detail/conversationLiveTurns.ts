@@ -7,7 +7,6 @@ import { addUsage } from "@ash/shared/usage";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
 import { eventTone, isVerifyNote, noteTone } from "./conversationNotes.ts";
 import { appendExecutionEvent, isVisibleExecutionEvent } from "../lib/executionTrace.ts";
-import { LEGACY_COMPACTION_GAP, legacyCompactionPhase } from "../lib/compaction.ts";
 import { reviewerKey, reviewerKeyOf, reviewerOf } from "./conversationReviewer.ts";
 import type { AgentContentSegment, AgentTraceEvent } from "./conversationSegments.ts";
 import { auxEvent, awaitingAfterEvent } from "./conversationSegments.ts";
@@ -272,13 +271,7 @@ export function appendLiveTimeline(
     // cliSessionId 已经在会话详情/恢复按钮那里可查,会话流里不展示。
     if (event.kind === "session") continue;
     const agent = appendAgent(items, entry.event, sessions);
-    // 旧服务端把压缩写成一条固定的正文（见 lib/compaction 的 LEGACY），升级前跑着的回合还会发。
-    const legacyCompaction = event.kind === "text" ? legacyCompactionPhase(event.text) : null;
-    if (legacyCompaction) {
-      // 换成段落分隔再切段，跟落盘重建那一路同一个换法（conversationSegments）。
-      appendAgentText(agent, LEGACY_COMPACTION_GAP);
-      appendAgentAux(agent, { kind: "error", message: "", level: "notice", compaction: legacyCompaction });
-    } else if (event.kind === "text") appendAgentText(agent, event.text);
+    if (event.kind === "text") appendAgentText(agent, event.text);
     if (event.kind === "attachment") appendAgentAttachment(agent, event);
     // 用量恒在本回合的 turnEnd/done 之前到，所以它落在的就是刚说完话的那条气泡。
     if (event.kind === "usage") {

@@ -33,7 +33,7 @@ export type GateRequest = GateAction & { expectedVersion?: number };
 
 // ── Executor streaming events (§12) ──────────────────────────────────────────
 /** 上下文压缩的三个时刻(见 AgentEvent 的 error 变体)。 */
-export type CompactionPhase = "start" | "done" | "failed";
+export type CompactionPhase = "start" | "done" | "cancelled" | "failed";
 
 export type AgentEvent =
   | { kind: "thinking"; text: string }
@@ -105,8 +105,9 @@ export type AgentEvent =
   // 压缩失败），不能据此把已经成功的模型回合判失败。缺省=true，真正的回合/API 错误
   // 不必每个执行器重复标注。
   //
-  // compaction = 这条是**上下文压缩**的过程信号(claude 的 system/status):start/done 是
-  // `level:"notice"` 的一步,failed 是 affectsTurn=false 的红色异常。展示端只认这个字段,
+  // compaction = 这条是**上下文压缩**的过程信号(claude 的 system/status):start/done/cancelled
+  // (被 PreCompact hook 拦下、没有结论)是 `level:"notice"` 的一步,failed 是 affectsTurn=false
+  // 的红色异常。展示端只认这个字段,
   // 不再从正文里找那两句引用 —— 正文是智能体说的话,任何一句都可能恰好跟提示同文。
   | { kind: "error"; message: string; scope?: "session"; level?: "notice"; affectsTurn?: false; compaction?: CompactionPhase }
   // 常驻会话（team 调度台）专用：一个回合说完了，但进程还活着等下一条消息。
