@@ -2,7 +2,8 @@
    回复框发出的事件：reply:send { text, files }（空闲时发）、reply:queue { text }（运行中发，进托盘）、reply:later { text, mode }（定时 / 等任务，进托盘）、
      reply:steer { text, taken }（引导会话：接的人把 taken 置 true）、reply:stop、reply:preview { open }。
      听的事件：run:state { running }、task:status { id, status }、review:change。
-   回复框的方法：el、key（它的发送键）、value()、set(text)、clear()、focus()、takeQueued()、hasQueued()、destroy()。 */
+   回复框的方法：el、key（它的发送键）、slot（框上面留给交付条的那一格，next.js）、value()、set(text)、clear()、focus()、takeQueued()、hasQueued()、destroy()。
+   停止只有这一处：任务在跑或在排队、输入框空着时，发送键就是停止键；打了字，它左边多一颗小停止键（sendkey.js）。排着队的任务没有回合可停，停 = 不排了，落到「已取消」。 */
 (() => {
   const { h, icon } = ASH;
   ASH.icons.stopc = '<circle cx="8" cy="8" r="5.5"/><rect x="6" y="6" width="4" height="4" rx=".8"/>';
@@ -57,6 +58,7 @@
       const first = ASH.AGENTS[ctx?.agent ?? task?.agent] ? (ctx?.agent ?? task.agent) : 'claude';
       let who = { agent: first, model: ASH.AGENTS[first].models[0], level: 'high' };
       let running = Boolean(ctx?.running ?? ASH.parts.live?.running);
+      let queued = task?.status === 'queued';   /* 排着队：没有回合在跑，但停止键照样在（停 = 不排了） */
       let uploading = 0;
       let pinned = null;      /* 拖出来的高度；null = 跟着行数长 */
       let preview = 'off';    /* off / starting / on */
@@ -213,7 +215,8 @@
         }
       }
       const box = h('div.reply-box.inbox', grip, plate, ta, acts);
-      const root = h('div.reply', h('div.reply-col', tray, shelf, box));
+      const slot = h('div.reply-next');
+      const root = h('div.reply', h('div.reply-col', slot, tray, shelf, box));
 
       /* ---------- 输入区：三行起步，随内容长到最多 12 行（且不过窗口的四成）；拖过就以拖的为准 ---------- */
       function grow() {
@@ -223,7 +226,7 @@
         ta.style.height = `${next}px`;
         ta.style.overflowY = full > next ? 'auto' : 'hidden';
       }
-      const sync = () => key.update({ empty: !ta.value.trim() && !files.some((file) => !file.timer), running, uploading: uploading || false });
+      const sync = () => key.update({ empty: !ta.value.trim() && !files.some((file) => !file.timer), running: running || queued, uploading: uploading || false, stopSay: queued && !running ? '停止排队' : '' });
       ta.addEventListener('input', () => { grow(); sync(); });
       ta.addEventListener('input', suggest);
       ta.addEventListener('keydown', (e) => {
@@ -361,6 +364,8 @@
       }
       const setRunning = (next) => { running = next; paintActs(); sync(); };
       function stop() {
+        /* 没有在跑的回合要停（排着队，或者状态是从别处改成运行中的）：直接落到已取消 */
+        if (!rehearsal && !ASH.parts.live?.running && (queued || ASH.parts.head?.state === 'running')) { ASH.emit('task:status', { id: task.id, status: 'stopped' }); return; }
         ASH.emit('reply:stop');
         if (rehearsal) { clearTimeout(rehearsal); rehearsal = 0; setRunning(false); }
       }
@@ -368,6 +373,7 @@
       const api = {
         el: root,
         key,
+        slot,
         value: () => ta.value,
         set(next) { ta.value = next ?? ''; grow(); sync(); },
         clear() { api.set(''); },
@@ -399,7 +405,7 @@
         ASH.on('run:state', (state) => setRunning(Boolean(state?.running))),
         ASH.on('review:change', () => paintActs()),
         ASH.on('task:status', ({ id, status } = {}) => {
-          if (id === ASH.data.current) return;
+          if (id === ASH.data.current) { if (queued !== (status === 'queued')) { queued = status === 'queued'; sync(); } return; }
           for (const item of queue.filter((it) => it.kind === 'after' && it.task.id === id)) {
             item.status = status;
             if (status === 'done') { dropRow(queue, item); post(item.text, item.names); }

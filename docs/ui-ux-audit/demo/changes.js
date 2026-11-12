@@ -1,10 +1,11 @@
 /* 改动工作区（部件 changes）：点「验收」、更多里的「查看改动与审查」、右侧面板里通到「完整 diff 与提交」的入口，到的都是这一面。
    这一面这一轮不动，照现状只画了骨架（web/src/review/TaskReviewWorkspace.tsx）：一行标题和验收动作、分支与提交、改动的文件。
-   差异本身没画：点一个文件只发 diff:open。开着的时候它顶替会话那一列，任务头上那颗键是「返回对话」。
+   差异本身没画：点一个文件只发 diff:open。开着的时候它顶替会话那一列，「返回对话」在它自己那一行的最左（任务头上没有按钮）。
    听 changes:open（开；开着的时候再来一次是关）、task:status、review:change；发 changes:state { open }。 */
 (() => {
   const { h, icon } = ASH;
   const LIVE = ['running', 'waiting', 'queued'];
+  ASH.icons.back ??= '<path d="M13 8H3M7 4 3 8l4 4"/>';
 
   ASH.part('changes', {
     mount(el, { talk = [] } = {}) {
@@ -29,7 +30,7 @@
       const count = h('b');
       const logCount = h('b');
       el.append(
-        h('header.changes-bar', h('b', '改动与提交'), h('span.grow'), done, accept),
+        h('header.changes-bar', h('button.btn.quiet.sm', { type: 'button', onclick: () => show(false) }, icon('back'), '返回对话'), h('b', '改动与提交'), h('span.grow'), done, accept),
         h('div.changes-body', warn, meta, h('h4.sec', '改动的文件', count), files, h('h4.sec', '提交', logCount), log));
 
       function paint() {

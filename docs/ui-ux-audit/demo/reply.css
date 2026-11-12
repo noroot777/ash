@@ -22,7 +22,14 @@
 .skey-opt:active { background: var(--accent-active); }
 
 /* 发不出去：整颗键同明同暗；尖角照样点得动，指上去回到实色 */
-.skey.is-dim > button { opacity: 0.45; }
+.skey.is-dim > button:not(.skey-halt) { opacity: 0.45; }
+
+/* 在跑、又打了字：主段要用来发，停止挪到它左边这一颗上。和主段同高，不抢主色，指上去才是红的 */
+.skey > .skey-halt { width: var(--h); margin-right: 6px; border-radius: var(--r-md); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); animation: skey-halt-in var(--dur-2) var(--ease-out) both; }
+.skey > .skey-halt:hover { background: var(--hover-bg); color: var(--red); }
+.skey > .skey-halt:active { background: var(--sel-bg); }
+.skey > .skey-halt > .i { width: var(--g); height: var(--g); }
+@keyframes skey-halt-in { from { opacity: 0; transform: scale(0.9); } }
 .skey.is-dim > .skey-opt:hover, .skey.is-dim > .skey-opt:focus-visible, .skey.is-dim > .skey-opt[aria-expanded="true"] { opacity: 1; }
 
 /* 键上的字：只在「这一条不会马上发出去」时出现。旧字先淡出，键变宽，新字再淡入 */
@@ -56,6 +63,14 @@
 /* ---------- 回复框 ---------- */
 .reply { width: 100%; flex: none; padding-bottom: 16px; }
 .reply-col { width: min(790px, 100% - 48px); margin: 0 auto; }
+
+/* 交付条（next.js）：回复框上面的一行，不带框——左边是还没验收的改动，右边是轮到你的那一步。字和待发送那几行同一条左缘 */
+.next { display: flex; align-items: center; gap: 6px; min-height: 24px; margin-bottom: 8px; padding-left: 6px; }
+.next-sum { display: inline-flex; align-items: center; gap: 8px; height: 24px; padding: 0 8px; border-radius: var(--r-sm); color: var(--muted); font-size: var(--t-xs); font-variant-numeric: tabular-nums; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.next-sum:hover { background: var(--hover-bg); color: var(--ink); }
+.next-sum > .plus { color: var(--green); } .next-sum > .minus { color: var(--red); }
+.next-acts { display: inline-flex; flex: none; gap: 6px; }
+.next-acts > .is-out { opacity: 0; pointer-events: none; }
 
 /* 框上方只放状态：待发送的消息一列、附件一列。没有东西时不占高度 */
 .reply-list { display: grid; }

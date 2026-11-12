@@ -6,35 +6,29 @@
 .task-col { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .task-insp { flex: none; min-height: 0; }
 
-/* 头部一行，高度和两侧留白照现状。左边一组是「这是什么」（类型、图钉、标题），右边依次是状态、按钮、更多、面板开关 */
-.task-head { flex: none; display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 10px 0 14px; border-bottom: 0.5px solid var(--line); }
-.task-name { flex: 1; display: flex; align-items: center; gap: 4px; }
+/* 头部一行，高度和两侧留白照现状。左边一组说「这是哪个任务」（类型、标题、来源、图钉），右边是状态词、更多、面板开关。头上没有按钮 */
+.task-head { flex: none; display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 10px 0 16px; border-bottom: 0.5px solid var(--line); }
+.task-name { display: flex; align-items: center; min-width: 0; }
 
-/* 类型和来源：一颗两段胶囊，中间一道缝（清单 head-2）。来源那一段只有智能体开的任务才有 */
-.task-kind { display: inline-flex; flex: none; height: 22px; border-radius: var(--r-sm); background: var(--overlay); color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
-.task-kind > b, .task-kind > i { display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; }
-.task-kind > b { font-weight: var(--w-medium); }
-.task-kind > i { box-shadow: inset 1px 0 0 var(--canvas); font-style: normal; }
-.task-kind .i { width: 12px; height: 12px; }
+/* 类型、来源：各一个灰图标，名字在提示里 */
+.task-kind, .task-from { display: inline-grid; flex: none; place-items: center; width: 20px; height: 24px; color: var(--faint); }
+.task-kind .i, .task-from .i { width: 14px; height: 14px; }
 
-/* 图钉：没置顶是看得见的灰，置顶了是实心主色（清单 head-2） */
-.task-pin { color: var(--faint); }
-.task-pin[aria-pressed="true"] { color: var(--accent); }
-.task-pin[aria-pressed="true"] .i { fill: currentColor; }
-
-/* 标题平时就是一行字，指上去或点进去才看得出能改。width: 0 = 输入框自带的那截宽度不算数，这一行剩多少它占多少 */
-.task-title { flex: 1; width: 0; min-width: 6em; height: 28px; padding: 0 6px; border: 0; border-radius: var(--r-sm); background: transparent; font-size: var(--t-md); font-weight: var(--w-medium); text-overflow: ellipsis; transition: background var(--dur-1) var(--ease-out); }
+/* 标题平时就是一行字，指上去或点进去才看得出能改。宽度由 task.js 按字量出来，放不下时自己缩、打省略号 */
+.task-title { flex: 0 1 auto; min-width: 3em; height: 28px; padding: 0 6px; border: 0; border-radius: var(--r-sm); background: transparent; font-size: var(--t-md); font-weight: var(--w-medium); text-overflow: ellipsis; transition: background var(--dur-1) var(--ease-out); }
 .task-title:hover, .task-title:focus { background: var(--raised); }
 
+/* 图钉：置顶了是实心主色、一直在；没置顶的平时不画，指到头部、或者键盘走到它才出来；触屏上常显 */
+.task-pin { color: var(--faint); opacity: 0; }
+.task-head:hover .task-pin, .task-pin:focus-visible, .task-pin[aria-pressed="true"] { opacity: 1; }
+.task-pin[aria-pressed="true"] { color: var(--accent); }
+.task-pin[aria-pressed="true"] .i { fill: currentColor; }
+@media (hover: none) { .task-pin { opacity: 1; } }
+
 /* 状态是一个词，前面那颗点和侧栏行首查的是同一张表。换状态时点跟着字一起淡出淡入 */
-.task-status { display: inline-flex; flex: none; align-items: center; gap: 6px; padding: 0 4px; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-regular); white-space: nowrap; }
+.task-status { display: inline-flex; flex: none; align-items: center; gap: 6px; padding: 0 6px; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
 .task-status > .dot { transition: opacity 150ms var(--ease-out); }
 .task-status > .dot.is-out { opacity: 0; }
-
-/* 按钮只在有事可做时出现：一颗也没有时这一格不占地方。用不上的那颗先淡出（.btn 自带 120ms 的透明度过渡）再撤 */
-.task-acts { display: inline-flex; flex: none; gap: 6px; }
-.task-acts:empty { display: none; }
-.task-acts > .is-out { opacity: 0; pointer-events: none; }
 
 /* 面板开着的时候，开关是按下的样子（底色来自 .ico[aria-expanded]） */
 .task-panel[aria-expanded="true"] { color: var(--accent); }
@@ -42,12 +36,6 @@
 /* 确认框里分两段说的话 */
 .task-say { display: block; }
 .task-say + .task-say { margin-top: 8px; }
-
-/* 一行摆不下时，task.js 的 fit 量着溢出一档一档让：按钮只剩图标、来源只剩图标、标题再短一截 */
-.task-acts > .is-bare { width: 28px; padding: 0; }
-.task-acts > .is-bare > span, .task-kind.is-short > i > span { display: none; }
-.task-title.is-short { min-width: 3em; }
-.task-title.is-least { min-width: 0; }
 
 /* 改动工作区（changes.js）：顶替会话那一列。一行标题和验收动作，下面是分支、文件、提交——只画了骨架，差异没画 */
 .changes { flex: 1; min-height: 0; display: flex; flex-direction: column; }

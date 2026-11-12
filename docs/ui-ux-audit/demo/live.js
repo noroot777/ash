@@ -7,7 +7,7 @@
    嵌在报告里时，等你答复那一刻往外递 { ash: 'title', waiting }，报告拿它改自己的标签页标题。
    发 run:state { running }（同时发 run:start / run:end）、task:status { id, status, why }、
    usage { turn, tokens, ctx, files, add, del, elapsedMs, commit? }（turn 是这一轮的用量，其余是跑完之后的总数，ctx 是上下文还剩百分之几）；
-   听 reply:send / reply:stop / reply:steer（回复框）、head:act（任务头的停止 / 重试 / 运行）、review:start / review:done（审查那一行在会话里起、落）。 */
+   听 reply:send / reply:stop / reply:steer（回复框）、task:act（交付条的重试 / 运行）、review:start / review:done（审查那一行在会话里起、落）。 */
 (() => {
   const { h, $, icon } = ASH;
   const TITLE = document.title;
@@ -280,7 +280,6 @@
   }
 
   /* ---- 一轮 ---- */
-  const retries = [];   /* 还挂在会话里的「重试」：重试一次就都收走 */
   function openTurn() {
     const turn = kit.turn({ reply: run.reply });
     run.reply = null;
@@ -357,12 +356,10 @@
       await sleep(350);
       openTurn();
     } else if (ev.fail) {
-      /* 进行条原地落定成红色的一句，「重试」紧跟在它后面；退出码收在点开的那一层 */
+      /* 进行条原地落定成红色的一句；退出码收在点开的那一层。「重试」不挂在会话里：它在回复框上面那一行（next.js） */
       const strip = r.strip ?? openStrip('这一轮异常结束');
-      const again = h('button.btn.sm.retry', { type: 'button', onclick: () => retry() }, icon('redo'), '重试');
-      retries.push(again);
       strip.put(h('p.step-note', `退出码 ${ev.fail}`));
-      settle(strip, '这一轮异常结束', 'is-failed', () => { if (retries.includes(again)) strip.btn.after(enter(again)); });
+      settle(strip, '这一轮异常结束', 'is-failed');
       claim(strip.btn, 'run-8');
       r.turn.setMeta(`${cur.model} · 刚刚 · ${ASH.dur(performance.now() - r.t0)}`);
       finish('failed');
@@ -459,7 +456,6 @@
   /* 重试：不发新的气泡，接着上一轮做 */
   function retry() {
     if (run) return;
-    for (const btn of retries.splice(0)) { btn.classList.add('is-out'); setTimeout(() => btn.remove(), ASH.reduced() ? 0 : 120); }
     play('again');
   }
   /* 引导会话：正在跑的那一回合就地收住（已经出来的步骤折成一行），你的话接在它后面，再另起一回合。任务一直是「运行中」 */
@@ -525,10 +521,9 @@
         ASH.on('reply:send', ({ text } = {}) => { if (run?.answer) run.answer(text); else play('run', text); }),
         ASH.on('reply:stop', stop),
         ASH.on('reply:steer', steer),
-        ASH.on('head:act', ({ label } = {}) => {
-          if (label === '停止') stop();
-          else if (label === '重试') retry();
-          else if (label === '运行' || label === '继续') play(last, '');
+        ASH.on('task:act', ({ label } = {}) => {
+          if (label === '重试') retry();
+          else if (label === '运行') play(last, '');
         }),
       ];
       const pick = () => (run ? stop() : ASH.menu(runBtn, [

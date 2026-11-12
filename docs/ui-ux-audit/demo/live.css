@@ -8,10 +8,8 @@
 .live-time::before { content: "· "; }
 .live-time:empty { display: none; }
 
-/* 异常结束：同一行落定成红色的一句（红是换字那一刻才上的），「重试」和它一起进场、紧跟在后面，不用悬停 */
+/* 异常结束：同一行落定成红色的一句（红是换字那一刻才上的）。「重试」在回复框上面那一行 */
 .fold.is-failed, .fold.is-failed:hover, .fold.is-failed > .i { color: var(--red); }
-.retry { margin: 3px 0 0 6px; vertical-align: top; }
-.retry.is-out { opacity: 0; pointer-events: none; }
 
 /* 放字：新放出来的那几个字淡入，别的什么都不动。没有光标 */
 .w { animation: w-in 280ms linear both; }
