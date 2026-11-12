@@ -75,7 +75,7 @@ const redact = await import("../src/conversation-redact.js");
 const { pickTurnSession } = await import("../src/turn-session-pick.js");
 const { continueTask } = await import("../src/orchestrator.js");
 const { isHumanOnlyPath } = await import("../src/auth/personal-gate.js");
-const { appendTaskTimeline } = await import("../src/task-timeline.js");
+const { appendTaskTimeline, receiptLine } = await import("../src/task-timeline.js");
 const { withRunFileLock } = await import("../src/run-file-lock.js");
 const { sessionsForTask } = await import("../src/task-session-routes.js");
 const { Hono } = await import("hono");
@@ -221,7 +221,7 @@ await db.insert(sessions).values({
   const mdPath = sessionTranscriptPath(taskId, sessionId);
   let unlock!: () => void;
   const held = withRunFileLock([mdPath], () => new Promise<void>((resolve) => { unlock = resolve; }));
-  const appending = appendTaskTimeline(taskId, "并发旁注 KEEP", { sessionId });
+  const appending = appendTaskTimeline(taskId, receiptLine("并发旁注 KEEP"), { sessionId });
   const deleting = post({ segments: [target(2), target(3), target(4)] });
   await new Promise((r) => setTimeout(r, 300));
   assert.doesNotMatch(readFileSync(mdPath, "utf8"), /并发旁注 KEEP/, "锁被占着时旁注不落盘");

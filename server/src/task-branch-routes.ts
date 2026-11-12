@@ -12,7 +12,7 @@ import { taskWorkflowDef } from "./workflows.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
 import { withRepoLock } from "./repo-lock.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { updateTaskBase } from "./task-base-update.js";
 import { abandonTaskBaseUpdate, readBaseUpdateRecovery } from "./task-base-recovery.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
@@ -173,7 +173,7 @@ export async function acceptFamily(
       const current = currentTask ? await entry(currentTask, project.repoPath, row.targetCommit) : null;
       if (!current || current.fingerprint !== row.fingerprint) {
         const error = `「${row.title}」在验收期间已变化，后续任务未合入`;
-        await appendTaskTimeline(taskId, `统一验收暂停：${error}；已完成 ${completed.join("、") || "无"}`);
+        await appendTaskTimeline(taskId, alertLine(`统一验收暂停：${error}；已完成 ${completed.join("、") || "无"}`));
         return { ok: false, completed, stoppedAt: row.taskId, error };
       }
       let result: AcceptTaskResult;
@@ -182,13 +182,13 @@ export async function acceptFamily(
         const after = (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0);
         if (after?.stage === "accepted") completed.push(row.taskId);
         const error = cause instanceof Error ? cause.message : String(cause);
-        await appendTaskTimeline(taskId, `统一验收暂停在「${row.title}」：${error}；已完成 ${completed.join("、") || "无"}，其余未执行。`);
+        await appendTaskTimeline(taskId, alertLine(`统一验收暂停在「${row.title}」：${error}；已完成 ${completed.join("、") || "无"}，其余未执行。`));
         return { ok: false, completed, stoppedAt: row.taskId, error };
       }
       // 「门禁开跑了」不是失败：那条命令绿了会自动把这一个合完。上面那道闸保证这里最多
       // 只剩一个待验收的任务，所以这一批到此为止是对的，但话得说准。
       if (!result.accepted && (result.reason === "accept_gate_required" || result.reason === "accept_gate_running")) {
-        await appendTaskTimeline(taskId, `统一验收：「${row.title}」的验收前置命令已经开跑，绿了它会自动合完；已完成 ${completed.join("、") || "无"}。`);
+        await appendTaskTimeline(taskId, receiptLine(`统一验收：「${row.title}」的验收前置命令已经开跑，绿了它会自动合完；已完成 ${completed.join("、") || "无"}。`));
         return {
           ok: false, completed, stoppedAt: row.taskId,
           error: `「${row.title}」的验收前置命令已经开跑：绿了它会自动合完这一个，红了会把日志交回那个任务去修。`
@@ -198,11 +198,11 @@ export async function acceptFamily(
       if (!result.accepted || (result.tail && !result.tail.ok)) {
         if (result.accepted) completed.push(row.taskId);
         const error = result.accepted ? "合并已完成，但验收后步骤失败" : result.error;
-        await appendTaskTimeline(taskId, `统一验收暂停在「${row.title}」：${error}；已完成 ${completed.join("、") || "无"}，其余未执行。`);
+        await appendTaskTimeline(taskId, alertLine(`统一验收暂停在「${row.title}」：${error}；已完成 ${completed.join("、") || "无"}，其余未执行。`));
         return { ok: false, completed, stoppedAt: row.taskId, error };
       }
       completed.push(row.taskId);
-      await appendTaskTimeline(taskId, `统一验收：已完成「${row.title}」（${row.taskId}）`);
+      await appendTaskTimeline(taskId, receiptLine(`统一验收：已完成「${row.title}」（${row.taskId}）`));
     }
     return { ok: true, completed };
   });
@@ -250,7 +250,7 @@ export function mountBranchPlanRoutes(api: Hono, accept: Accept): void {
           const result = await discardTaskWorkspace(project.repoPath, taskId, { worktree: true, branch: false, force: false });
           if (!result.worktreeRemoved) return c.json({ error: result.worktreeError || "工作区未能释放，请刷新后重试" }, 409);
           await db.update(tasks).set({ updatedAt: now() }).where(eq(tasks.id, taskId));
-          await appendTaskTimeline(taskId, `已释放工作区目录 ${workspace.path}，保留任务记录及分支 ${workspace.branch}；可继续处理合入这条分支的子任务。`);
+          await appendTaskTimeline(taskId, receiptLine(`已释放工作区目录 ${workspace.path}，保留任务记录及分支 ${workspace.branch}；可继续处理合入这条分支的子任务。`));
           await publishTaskUpdated(taskId);
           return c.json({ ok: true });
         } finally { release(); }
@@ -281,7 +281,7 @@ export function mountBranchPlanRoutes(api: Hono, accept: Accept): void {
         if (!(await localBranchExists(project.repoPath, target))) return c.json({ error: `目标本地分支 ${target} 不存在` }, 400);
         if (target === await resolveWorktreeBranchName(project.repoPath, taskId)) return c.json({ error: "合入目标不能是任务自身的分支" }, 400);
         await db.update(tasks).set({ mergeTargetBranch: target, acceptedTargetBranch: null, acceptedSourceCommit: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-        await appendTaskTimeline(taskId, `合入目标由 ${before.targetBranch || "未确定"} 更改为 ${target}；开工提交未变，请重新核对验收依赖与 diff。`);
+        await appendTaskTimeline(taskId, receiptLine(`合入目标由 ${before.targetBranch || "未确定"} 更改为 ${target}；开工提交未变，请重新核对验收依赖与 diff。`));
         await publishTaskUpdated(taskId);
         return c.json({ ok: true });
       });

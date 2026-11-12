@@ -37,7 +37,7 @@ import { serialize } from "./monitors.js";
 import { confirmDone, hasConfirmed, revokeConfirmed } from "./task-confirmation.js";
 import { monitorsBlockingComplete, noteMonitorsDropped } from "./task-complete-monitors.js";
 import { clearAutoCheckpoint, writeResumePrompt } from "./task-resume-prompt.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
 
 export type ConfirmCompleteResult =
@@ -254,6 +254,6 @@ async function landCheckpoint(
       .where(and(eq(tasks.id, taskId), ...where));
     if (!mine.length) return false;
   }
-  await appendTaskTimeline(taskId, note);
+  await appendTaskTimeline(taskId, receiptLine(note));
   return true;
 }

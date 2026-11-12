@@ -2,6 +2,7 @@ import { createWriteStream, mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { AgentType, SessionRole } from "@ash/shared";
+import type { TimelineNotice } from "@ash/shared/timeline-notice";
 import { desc, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -25,11 +26,26 @@ import { now } from "./util.js";
 // 「最新」投递，用户 @codex 却看见 claude 的时间线里冒出一条不属于它的失败，而被 @
 // 的那位那边一片空白 —— 跟没说一样。所以先按会话 id 认人，再按 agent(+role) 认，
 // 都找不到才退回最新会话。
+//
+// 每一条带着自己是**哪一类事**（`line.notice`，见 shared/src/timeline-notice.ts）：展示端
+// 据它决定摆法（里程碑常显 / 回执记在回合上 / 出了岔子留在明面）和说法，不再回头认原文里的
+// 字。原文（`line.text`）照旧落盘，是点开以后看的细节，也是移动端与 MCP 读转录的依据。
+// 写法用下面三个小工具：`receiptLine(text)` / `alertLine(text)` / `noticeLine(notice, text)`。
+export type TimelineLine = { text: string; notice: TimelineNotice };
+
+/** 回执：记在所属回合上、平时不画的那一类。原文就是它的话。 */
+export const receiptLine = (text: string): TimelineLine => ({ text, notice: { kind: "receipt" } });
+/** 出了岔子 / 需要用户知道的：留在会话明面上。原文就是它的话。 */
+export const alertLine = (text: string): TimelineLine => ({ text, notice: { kind: "alert" } });
+/** 有专门 kind 的那几类（审查起止与结论、验收完成、哨兵起停……）。 */
+export const noticeLine = (notice: TimelineNotice, text: string): TimelineLine => ({ text, notice });
+
 export async function appendTaskTimeline(
   taskId: string,
-  text: string,
+  line: TimelineLine,
   target?: { sessionId?: string; agentType?: AgentType; role?: SessionRole; eventKey?: string },
 ): Promise<boolean> {
+  const { text, notice } = line;
   try {
     const all = await db
       .select()
@@ -67,7 +83,7 @@ export async function appendTaskTimeline(
       const out = createWriteStream(transcriptPath, { flags: "a" });
       out.once("error", reject);
       out.once("finish", resolve);
-      writeTurn(out, { t: "system", agent: session.agentType as AgentType, text, aside: true,
+      writeTurn(out, { t: "system", agent: session.agentType as AgentType, text, aside: true, notice,
         ...(target?.eventKey ? { eventKey: target.eventKey } : {}),
       }, at);
       out.end();
@@ -78,7 +94,7 @@ export async function appendTaskTimeline(
       sessionId: session.id,
       role: session.role as SessionRole,
       agentType: session.agentType as AgentType,
-      event: { kind: "system", text, at, aside: true },
+      event: { kind: "system", text, at, aside: true, notice },
     });
     return true;
   } catch (error) {

@@ -17,7 +17,7 @@
 //  · **记账有上限**：过期的缓存条目随手清，说过的记录超过上限就丢最旧的 —— 常驻进程里
 //    任务和目录只增不减，不能让这两张表跟着一直长。
 import { ashMcpReachability, type AshMcpReach } from "./ash-mcp-reachability.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 
 /** 起跑提示这一档的缓存寿命。 */
 const CACHE_MS = 10 * 60_000;
@@ -85,7 +85,7 @@ export async function hintAshMcpForTurn(q: Query): Promise<void> {
     told.set(toldKey, tier);
     if (told.size > TOLD_MAX) told.delete(told.keys().next().value!);
     // 没写进去就不算说过，下一轮还说。
-    if (!(await appendTaskTimeline(q.taskId, text, { sessionId: q.sessionId }))) told.delete(toldKey);
+    if (!(await appendTaskTimeline(q.taskId, alertLine(text), { sessionId: q.sessionId }))) told.delete(toldKey);
   } catch (error) {
     console.error(`[ash] hintAshMcpForTurn(${q.taskId}) failed:`, error);
   }

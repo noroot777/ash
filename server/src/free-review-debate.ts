@@ -44,7 +44,7 @@ import {
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { claimOwnTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole } from "./runs.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { id, now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -147,7 +147,7 @@ async function failDebate(debate: DebateRow, turn: DebateTurnRow | null, note: s
   }
   await db.update(freeReviewDebates).set({ status: "failed", updatedAt: at, finishedAt: at })
     .where(eq(freeReviewDebates.id, debate.id));
-  await appendTaskTimeline(debate.taskId, `${note}辩论已中止；驳回仍在等你裁定，也可以再开一轮辩论。`);
+  await appendTaskTimeline(debate.taskId, alertLine(`${note}辩论已中止；驳回仍在等你裁定，也可以再开一轮辩论。`));
   bus.publish({ type: "task.review", taskId: debate.taskId });
 }
 
@@ -168,8 +168,8 @@ async function launchSegment(
   });
   const side = turn.side as FreeReviewDebateSide;
   await appendTaskTimeline(task.id,
-    `辩论第 ${turn.seq}/${totalSegments(debate.exchanges)} 段：轮到${DEBATE_SIDE_LABELS[side]}发言` +
-    `${side === "reviewer" ? `（${run.reviewerName}）` : ""}。`);
+    receiptLine(`辩论第 ${turn.seq}/${totalSegments(debate.exchanges)} 段：轮到${DEBATE_SIDE_LABELS[side]}发言` +
+    `${side === "reviewer" ? `（${run.reviewerName}）` : ""}。`));
   bus.publish({ type: "task.review", taskId: task.id });
   continueWhenIdle(task.id, prompt, side === "reviewer"
     ? {
@@ -261,8 +261,8 @@ export async function startFreeReviewDebate(
       };
       await db.insert(freeReviewDebateTurns).values(turn);
       await appendTaskTimeline(taskId,
-        `开始辩论第 ${open.round.round} 轮审查意见：${exchanges} 个来回，` +
-        `审查者（${open.run.reviewerName}）先答辩，最后由它收尾给出立场；结论仍由你裁定。`);
+        receiptLine(`开始辩论第 ${open.round.round} 轮审查意见：${exchanges} 个来回，` +
+        `审查者（${open.run.reviewerName}）先答辩，最后由它收尾给出立场；结论仍由你裁定。`));
       await launchSegment(
         task, open.run,
         debate as DebateRow, turn as DebateTurnRow,
@@ -363,8 +363,8 @@ export async function settleDebateTurn(taskId: string, turnOk: boolean): Promise
     const verdict = (await db.select({ verdict: freeReviewDebates.verdict }).from(freeReviewDebates)
       .where(eq(freeReviewDebates.id, debate.id))).at(0)?.verdict as FreeReviewDebateVerdict | null;
     await appendTaskTimeline(taskId,
-      `辩论结束，审查者收尾立场：${verdict ? DEBATE_VERDICT_LABELS[verdict] : "未给出"}。` +
-      "这只是它自己的立场，结论仍由你裁定：让它接着改（可以把某一段发言直接作为裁定要点），或者判这一轮不用改了。");
+      receiptLine(`辩论结束，审查者收尾立场：${verdict ? DEBATE_VERDICT_LABELS[verdict] : "未给出"}。` +
+      "这只是它自己的立场，结论仍由你裁定：让它接着改（可以把某一段发言直接作为裁定要点），或者判这一轮不用改了。"));
     bus.publish({ type: "task.review", taskId });
     return true;
   }

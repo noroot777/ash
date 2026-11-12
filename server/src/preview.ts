@@ -4,7 +4,7 @@ import { existsSync, readdirSync, rmSync } from "node:fs";
 import { bus } from "./bus.js";
 import { RUNS_DIR } from "./paths.js";
 import { heldCacheOf, pruneNodeDeps } from "./preview-deps.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { readAnyPreview, recordPath, alive, archivePreview, type PreviewStep, type PreviewResult, type PreviewRecord } from "./preview-store.js";
 import { starting, beginDriving, endDriving, driving, cancelDriving, hasUnfinishedPreviewStart, whileRetiringPreview } from "./preview-start-state.js";
 import { hasPendingPreviewStops, pendingPreviewCaches, previewStopFailure, retryPreviewStops, stopPreviewProcesses, type PreviewStopResult } from "./preview-process-stop.js";
@@ -78,7 +78,7 @@ async function stopPreviewExcept(
     if (!marked) return stopOutcome(pending, false);
     // 这一段还没有 url、也还没有 pid，能说的只有「取消了一次启动」——但必须说，
     // 「刷新之后仍看得出我停过」是停止/暂停那条规矩的判据。
-    if (reason) await appendTaskTimeline(taskId, `预览启动已取消（${reason}）${pending.stopped ? "" : `；${pending.message}`}`);
+    if (reason) await appendTaskTimeline(taskId, receiptLine(`预览启动已取消（${reason}）${pending.stopped ? "" : `；${pending.message}`}`));
     bus.publish({ type: "task.review", taskId });
     return stopOutcome(pending);
   }
@@ -91,8 +91,8 @@ async function stopPreviewExcept(
     pending = await retryPreviewStops(taskId);
   }
   const result = !pending.stopped && pending.reason === "record_error" ? pending : retired.stopped ? pending : retired;
-  if (reason) await appendTaskTimeline(taskId, result.stopped
-    ? `预览已回收（${reason}）：${record.url ?? record.cmd}` : `${result.message}（${reason}）`);
+  if (reason) await appendTaskTimeline(taskId, (result.stopped
+    ? receiptLine(`预览已回收（${reason}）：${record.url ?? record.cmd}`) : alertLine(`${result.message}（${reason}）`)));
   // 自由工作流状态里的 preview.running 变了就必须发事件：那份快照的版本号只由
   // task.review / task.status 递增，不发的话前端拿到的新快照版本相等，会被当成
   // 「不比现值新」丢掉——按钮就一直停在「关闭预览」上。
@@ -152,7 +152,7 @@ export async function sweepPreviews(): Promise<void> {
   }
   for (const taskId of dirs) {
     try { await sweepTaskPreview(taskId); }
-    catch (error) { await appendTaskTimeline(taskId, `预览清理暂缓：${String(error)}`); }
+    catch (error) { await appendTaskTimeline(taskId, alertLine(`预览清理暂缓：${String(error)}`)); }
   }
   // 收尾再清备用依赖：这套东西按内容一份一份地装，一份前端依赖几百兆，不清就会在**用户的
   // 磁盘**上无声地涨（见 pruneNodeDeps）。
@@ -177,9 +177,9 @@ async function sweepTaskPreview(taskId: string): Promise<void> {
   if (interrupted || !(record.services?.length ? record.services.every((s) => s.status === "ready" && alive(s.pid)) : alive(record.pid))) {
     const retired = await retirePreview(record, "failed");
     if (!retired) return;
-    await appendTaskTimeline(taskId, !retired.stopped ? retired.message : interrupted
-      ? `预览没能起完就中断了（ash 重启），已经清理：${record.cmd}`
-      : `预览进程已自行退出：${record.url ?? record.cmd}`);
+    await appendTaskTimeline(taskId, !retired.stopped ? alertLine(retired.message) : interrupted
+      ? receiptLine(`预览没能起完就中断了（ash 重启），已经清理：${record.cmd}`)
+      : alertLine(`预览进程已自行退出：${record.url ?? record.cmd}`));
     return;
   }
   if (record.life === "idle30" && Date.now() - Date.parse(record.startedAt) > IDLE_LIFE_MS) {

@@ -15,7 +15,7 @@ import { claimWorkspaceTurn, isRunning, isTurnClaimed } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { cleanupArchivedWorkspaces } from "./task-archive-cleanup.js";
 import { acceptedHeadRef, commitAt } from "./task-branch-plan.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { enrichTasks } from "./task-store.js";
 import { detectTaskWorkspace } from "./workspace-cleanup.js";
 import { haltTeam } from "./team/session.js";
@@ -112,7 +112,7 @@ export function mountTaskArchiveRoutes(api: Hono): void {
     }
     const cleanup = await cleanupArchivedWorkspaces(await repoPathOf(r.projectId), cleanupTargets);
     const summary = summarizeArchiveCleanup(cleanup);
-    if (summary) await appendTaskTimeline(r.id, `归档时清理工作区：${summary}。`);
+    if (summary) await appendTaskTimeline(r.id, receiptLine(`归档时清理工作区：${summary}。`));
     const task = (await enrichTasks([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0];
     return c.json({ task, cleanup });
   });

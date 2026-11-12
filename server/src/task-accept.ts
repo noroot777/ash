@@ -21,7 +21,7 @@ import { finishAcceptedTail, type AcceptTail } from "./task-accept-tail.js";
 import { commitAcceptanceStage, reviewAcceptanceAuthority } from "./review-acceptance.js";
 import { acceptSharedTeamWorkers, sharedWorkerAcceptanceMessage } from "./task-accept-shared-workers.js";
 import { acceptanceGuard, type AcceptFailure, type AcceptWarning } from "./task-accept-guard.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine, type TimelineLine, noticeLine } from "./task-timeline.js";
 import { now } from "./util.js";
 import { recordBranchReceipt } from "./task-branch-receipts.js";
 import { branchDependency, branchOwner, commitAt, dependentTasks, plannedMergeTarget } from "./task-branch-plan.js";
@@ -89,7 +89,7 @@ const mergeLabel: Record<string, string> = {
 async function acceptWithoutCleanup(
   task: typeof tasks.$inferSelect,
   kind: AcceptSuccess["kind"],
-  message: string,
+  message: TimelineLine,
   authority?: ReviewAuthority,
   basis: AcceptGateSnapshot | null = null,
 ): Promise<AcceptTaskResult> {
@@ -133,13 +133,13 @@ async function acceptTaskUnlocked(
     // 幂等快路也要补清预约：历史上可能形成 accepted + armed 的组合（旧版合并入口、
     // 或写 accepted 与清预约之间进程退出），不自愈的话 reopen 后会触发幽灵审查。
     if (task.workflowMode === "free" && await disarmFreeReviewReservation(task.id)) {
-      await appendTaskTimeline(task.id, "任务已验收，检测到遗留的复审预约，已补清。");
+      await appendTaskTimeline(task.id, receiptLine("任务已验收，检测到遗留的复审预约，已补清。"));
     }
     const sharedWorkers = task.mode === "team" ? await acceptSharedTeamWorkers(task.id) : null;
     await appendTaskTimeline(
       taskId,
-      `验收动作重复调用：该任务此前已验收完成，本次未重复执行 git 操作。` +
-        `${sharedWorkers ? ` ${sharedWorkerAcceptanceMessage(sharedWorkers)}` : ""}`,
+      receiptLine(`验收动作重复调用：该任务此前已验收完成，本次未重复执行 git 操作。` +
+        `${sharedWorkers ? ` ${sharedWorkerAcceptanceMessage(sharedWorkers)}` : ""}`),
     );
     return {
       accepted: true,
@@ -163,14 +163,14 @@ async function acceptTaskUnlocked(
 
   if (verification) {
     if (!confirmUnverified) {
-      await appendTaskTimeline(taskId, `${verification.message} 本次验收未执行，需明确确认仍要验收。`);
+      await appendTaskTimeline(taskId, alertLine(`${verification.message} 本次验收未执行，需明确确认仍要验收。`));
       return {
         accepted: false, httpStatus: 409, taskId, reason: verification.reason,
         error: `${verification.message} 如已知情并决定继续，请传 confirmUnverified: true。`,
         verification, confirmationRequired: "confirmUnverified", phase: "before_accept",
       };
     }
-    await appendTaskTimeline(taskId, `${verification.message} 本次验收已显式确认继续，未将验证记为已执行或通过。`);
+    await appendTaskTimeline(taskId, receiptLine(`${verification.message} 本次验收已显式确认继续，未将验证记为已执行或通过。`));
   }
 
   // 「验收前置命令」：这个项目设了的话，合并之前先跑一遍，rc=0 才继续（不设 = 老行为，
@@ -206,7 +206,8 @@ async function acceptTaskUnlocked(
     return acceptWithoutCleanup(
       task,
       "in_place",
-      `验收通过：${subject}，代码已在原工作区中；无需执行分支合并或 worktree 清理，status 保持 ${task.status}。`,
+      noticeLine({ kind: "accept.done", target: null },
+        `验收通过：${subject}，代码已在原工作区中；无需执行分支合并或 worktree 清理，status 保持 ${task.status}。`),
       reviewAuthority,
       gateBasis,
     );
@@ -237,8 +238,8 @@ async function acceptTaskUnlocked(
     return acceptWithoutCleanup(
       task,
       "marked_only",
-      `验收通过：这条线上没有「合并并清理」这一站，所以只记下「我认可这份产物」，` +
-        `没有动 git —— 任务分支和 worktree 都留着。要让这条线自己合，在编排里加上这一站即可。`,
+      noticeLine({ kind: "accept.done", target: null }, `验收通过：这条线上没有「合并并清理」这一站，所以只记下「我认可这份产物」，` +
+        `没有动 git —— 任务分支和 worktree 都留着。要让这条线自己合，在编排里加上这一站即可。`),
       reviewAuthority,
       gateBasis,
     );
@@ -253,7 +254,7 @@ async function acceptTaskUnlocked(
   const commitOnAccept = plan.merge === "tag" ? true : commitOverride ?? project.acceptCommit !== false;
   await appendTaskTimeline(
     taskId,
-    (offScript
+    receiptLine((offScript
       ? task.workflowMode === "free"
         ? `开始验收：自由工作流没有预设合并站，手动验收按默认规矩`
         : `开始验收：这条线上没画「合并并清理」，但你亲手点了验收通过 —— 手动验收按默认规矩`
@@ -261,11 +262,11 @@ async function acceptTaskUnlocked(
       `「${ACCEPT_STRATEGY_LABELS[plan.merge]}、${ACCEPT_CLEAN_LABELS[plan.clean]}」处理，` +
       `目标 ${task.mergeTargetBranch || task.worktreeBase?.trim() || "项目当前分支"}；冲突时只报告并回滚，不会强制合并。` +
       (commitOnAccept ? "" : `本次${commitOverride === false && project.acceptCommit !== false ? "单独选了" : "按项目设置"}「合并后不提交」：`
-        + "改动会合进目标分支的工作区并暂存，目标分支的提交历史一动不动，提交或丢弃由你自己决定。"),
+        + "改动会合进目标分支的工作区并暂存，目标分支的提交历史一动不动，提交或丢弃由你自己决定。")),
   );
   const mergeGuard = await acceptanceGuard(taskId, "before_merge");
   if (mergeGuard.failure) {
-    await appendTaskTimeline(taskId, `验收暂缓：${mergeGuard.failure.error}`);
+    await appendTaskTimeline(taskId, alertLine(`验收暂缓：${mergeGuard.failure.error}`));
     return mergeGuard.failure;
   }
   // 一次验收生命周期内目标分支必须冻结，且**在动 Git 之前先持久化**：崩溃可能发生在
@@ -274,7 +275,7 @@ async function acceptTaskUnlocked(
   // 非空即「本生命周期已锁定的目标」（reopen 摘牌时清空，见 task-stage.ts）。
   const dependency = plan.merge === "tag" ? null : await branchDependency(task, project.repoPath);
   if (dependency && dependency.state !== "ready") {
-    await appendTaskTimeline(taskId, `验收暂缓：${dependency.message}`);
+    await appendTaskTimeline(taskId, alertLine(`验收暂缓：${dependency.message}`));
     return { accepted: false, httpStatus: 409, taskId, reason: `base_${dependency.state}`, error: dependency.message, status: task.status };
   }
   const retrying = task.stage === "merged";
@@ -323,7 +324,8 @@ async function acceptTaskUnlocked(
       if (guard.failure) return guard.failure;
       const finalized = await finalizeAcceptance(
         task,
-        `任务分支已在先前清理中删除；沿用已记录的 merged 阶段，继续完成验收标记（目标 ${targetBranch}）。`,
+        noticeLine({ kind: "accept.done", target: targetBranch },
+          `任务分支已在先前清理中删除；沿用已记录的 merged 阶段，继续完成验收标记（目标 ${targetBranch}）。`),
         false,
         { completedMerge: { targetBranch, commit: task.acceptedMergeCommit } },
         reviewAuthority,
@@ -351,7 +353,7 @@ async function acceptTaskUnlocked(
       : merge.dirtyFiles?.length
         ? `；脏文件：${merge.dirtyFiles.join("、")}`
         : "";
-    await appendTaskTimeline(taskId, `验收未完成：${merge.message}${detail}。未强制合并，任务 status 保持 ${task.status}。`);
+    await appendTaskTimeline(taskId, alertLine(`验收未完成：${merge.message}${detail}。未强制合并，任务 status 保持 ${task.status}。`));
     const conflictHandoff = await handOffConflict(task, merge);
     return {
       accepted: false,
@@ -405,7 +407,7 @@ async function acceptTaskUnlocked(
   if (merge.method === "already_merged" && !task.acceptedBaseCommit) {
     await appendTaskTimeline(
       taskId,
-      "合并早已发生但没有留下本生命周期的快照（可能是上次验收中断）：合并前基准 commit 无法确认，已按「不可知」记录而不是伪造空区间。",
+      receiptLine("合并早已发生但没有留下本生命周期的快照（可能是上次验收中断）：合并前基准 commit 无法确认，已按「不可知」记录而不是伪造空区间。"),
     );
   }
   const mergedAt = now();
@@ -419,11 +421,11 @@ async function acceptTaskUnlocked(
   if (!tagged) await recordBranchReceipt(taskId, true);
   if (!tagged) {
     bus.publish({ type: "task.stage", taskId, stage: "merged", updatedAt: mergedAt });
-    await appendTaskTimeline(taskId, `验收阶段更新：${STAGE_LABELS.merged}（merged）`);
+    await appendTaskTimeline(taskId, noticeLine({ kind: "stage", stage: "merged" }, `验收阶段更新：${STAGE_LABELS.merged}（merged）`));
   }
   await appendTaskTimeline(
     taskId,
-    tagged
+    receiptLine(tagged
       ? `已按线上写的「只打标签不合并」在 ${merge.sourceBranch} 上打下标签 ${merge.tag}；目标分支 ${merge.targetBranch} 一个字节都没动。`
       : noCommit
         // 用户是从这句话里找下一步怎么走的，所以命令要给全、能直接粘（带 -C，不假设
@@ -436,10 +438,10 @@ async function acceptTaskUnlocked(
           + `（会把暂存区和工作区一起退回 ${merge.targetBranch} 当前提交，这次合进来的改动就没了）。`
           + `在你收尾之前，这个工作区都是「脏」的，下一次验收会因此暂停。`
           + `来源分支 ${merge.sourceBranch} 保留着，改动没提交也丢不了。`
-        : `合并完成：${merge.sourceBranch} → ${merge.targetBranch}（${mergeLabel[merge.method] ?? merge.method}）。`,
+        : `合并完成：${merge.sourceBranch} → ${merge.targetBranch}（${mergeLabel[merge.method] ?? merge.method}）。`),
   );
   for (const warning of merge.warnings ?? []) {
-    await appendTaskTimeline(taskId, `合并清理警告：${warning.message}`);
+    await appendTaskTimeline(taskId, alertLine(`合并清理警告：${warning.message}`));
   }
   const completedMerge = tagged ? undefined : { targetBranch: merge.targetBranch, commit: noCommit ? null : merge.afterCommit ?? null };
   const completedTag = tagged ? merge.tag : undefined;
@@ -451,7 +453,7 @@ async function acceptTaskUnlocked(
   const cleanupGuard = await acceptanceGuard(taskId, "before_cleanup");
   if (cleanupGuard.failure) {
     const error = `${completedSummary}为避免删除正在使用或尚未结算的 worktree，清理已暂缓。${cleanupGuard.failure.error}`;
-    await appendTaskTimeline(taskId, `${error} ${tagged ? "标签已保留" : "阶段停在 merged"}，稍后可重新验收继续清理。`);
+    await appendTaskTimeline(taskId, alertLine(`${error} ${tagged ? "标签已保留" : "阶段停在 merged"}，稍后可重新验收继续清理。`));
     return {
       ...cleanupGuard.failure,
       error,
@@ -472,12 +474,12 @@ async function acceptTaskUnlocked(
   const dependents = await dependentTasks(project.repoPath, task.projectId, taskId);
   if (dependents.length && cleanPlan.branch) {
     cleanPlan.branch = false;
-    await appendTaskTimeline(taskId, `保留来源分支：仍有 ${dependents.length} 个子任务需要处理验收依赖（${dependents.map(t => t.title).join("、")}）。`);
+    await appendTaskTimeline(taskId, receiptLine(`保留来源分支：仍有 ${dependents.length} 个子任务需要处理验收依赖（${dependents.map(t => t.title).join("、")}）。`));
   }
   if (noCommit && dependents.length) {
     await appendTaskTimeline(
       taskId,
-      `注意：本次合并没有落提交，${dependents.length} 个子任务的「父成果依赖」会一直显示等待，直到你自己把这次合并提交到 ${merge.targetBranch}。`,
+      alertLine(`注意：本次合并没有落提交，${dependents.length} 个子任务的「父成果依赖」会一直显示等待，直到你自己把这次合并提交到 ${merge.targetBranch}。`),
     );
   }
   // 按**计划**判而不是按本次 method：squash 计划的重试会拿到 already_merged，但分支
@@ -496,18 +498,18 @@ async function acceptTaskUnlocked(
     try { previewStopped = await stopPreviewForWorktreeCleanup(taskId); }
     catch (failure) {
       const error = `${completedSummary}${failure instanceof Error ? failure.message : String(failure)}`;
-      await appendTaskTimeline(taskId, error);
+      await appendTaskTimeline(taskId, alertLine(error));
       return { accepted: false, httpStatus: 409, taskId, reason: "preview_cleanup_pending", error, completedMerge, completedTag, status: task.status, phase: "before_cleanup" };
     }
   }
   const cleanup = await cleanupAcceptedTask(project.repoPath, taskId, merge.targetBranch, cleanPlan);
-  for (const notice of cleanup.notices ?? []) await appendTaskTimeline(taskId, notice);
-  if (cleanup.worktreeBackupPath) await appendTaskTimeline(taskId, `半删除工作区的剩余源码已与任务提交核对，全部残留文件已备份到 ${cleanup.worktreeBackupPath}。备份包含依赖缓存、会占用磁盘，不会自动清理；确认无误后可直接删除该目录及同名 .git-pointer 文件（如有）。`);
+  for (const notice of cleanup.notices ?? []) await appendTaskTimeline(taskId, receiptLine(notice));
+  if (cleanup.worktreeBackupPath) await appendTaskTimeline(taskId, alertLine(`半删除工作区的剩余源码已与任务提交核对，全部残留文件已备份到 ${cleanup.worktreeBackupPath}。备份包含依赖缓存、会占用磁盘，不会自动清理；确认无误后可直接删除该目录及同名 .git-pointer 文件（如有）。`));
   if (!cleanup.ok) {
     const previewNotice = previewStopped ? "预览已在清理前关闭，处理清理问题后可重新启动。" : "";
     await appendTaskTimeline(
       taskId,
-      `验收清理未完成：${cleanup.message}。${tagged ? "标签已保留，尚未合并" : "合并结果已保留，阶段停在 merged"}，status 保持 ${task.status}。${previewNotice}`,
+      alertLine(`验收清理未完成：${cleanup.message}。${tagged ? "标签已保留，尚未合并" : "合并结果已保留，阶段停在 merged"}，status 保持 ${task.status}。${previewNotice}`),
     );
     return {
       accepted: false,
@@ -528,7 +530,7 @@ async function acceptTaskUnlocked(
 
   await appendTaskTimeline(
     taskId,
-    `清理完成：${
+    receiptLine(`清理完成：${
       !cleanPlan.worktree
         ? `按线上写的保留了 worktree ${cleanup.worktreePath}`
         : cleanup.worktreeRemoved ? `已删除 worktree ${cleanup.worktreePath}` : "任务 worktree 已不存在"
@@ -538,11 +540,13 @@ async function acceptTaskUnlocked(
         : branchKeptReason
           ? `分支 ${cleanup.sourceBranch} 保留（${branchKeptReason}）`
           : `分支 ${cleanup.sourceBranch} 已不存在`
-    }。`,
+    }。`),
   );
   const finalized = await finalizeAcceptance(
     task,
-    `验收完成：目标分支 ${merge.targetBranch}${noCommit ? "（改动已合入其工作区，等你自己提交）" : ""}；任务 status 保持 ${task.status}。`,
+    noticeLine(
+      tagged ? { kind: "accept.done", target: null, tag: merge.tag } : { kind: "accept.done", target: merge.targetBranch, noCommit },
+      `验收完成：目标分支 ${merge.targetBranch}${noCommit ? "（改动已合入其工作区，等你自己提交）" : ""}；任务 status 保持 ${task.status}。`),
     cleanPlan.worktree,
     { completedMerge, completedTag },
     reviewAuthority,
@@ -638,7 +642,7 @@ export async function acceptTask(
             // 排队是刷新后仍看得见的事实,不只是"点了没反应"。
             await appendTaskTimeline(
               taskId,
-              `验收排队：同一仓库有其它验收/worktree 操作正在执行，已等待 ${(wait.waitedMs / 1000).toFixed(1)}s 后开始本次验收。`,
+              receiptLine(`验收排队：同一仓库有其它验收/worktree 操作正在执行，已等待 ${(wait.waitedMs / 1000).toFixed(1)}s 后开始本次验收。`),
             );
           }
           return acceptTaskUnlocked(

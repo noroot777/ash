@@ -19,7 +19,7 @@ import { ensureSupervised } from "./monitor-handover.js";
 import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
 import { clearSpawnIdentity } from "./monitor-spawn.js";
 import { monitorLogBytes, publish, runtimes } from "./monitors.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, noticeLine } from "./task-timeline.js";
 import { now } from "./util.js";
 
 /**
@@ -295,7 +295,8 @@ async function finishHeld(
       return;
     }
     publish(row.taskId);
-    await appendTaskTimeline(row.taskId, `哨兵结束：${row.description}${code}。${reason}（${tally}）`);
+    await appendTaskTimeline(row.taskId, noticeLine({ kind: "monitor.finished", description: row.description },
+      `哨兵结束：${row.description}${code}。${reason}（${tally}）`));
     // 入队 + 销凭证。顺序反过来那条缝又回来了(见 `deliverResultHandoff`)。
     if (endNotice) await deliverResultHandoff(monitorId);
     // **追线索放在最后**:状态、时间线、通知都已落定,这一步只负责「能收的档收掉」。

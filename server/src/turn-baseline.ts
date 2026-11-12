@@ -58,7 +58,7 @@ import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
 import { clearTaskStage, restoreTaskStage, type AcceptedSnapshot, type ReopenedAcceptance } from "./task-stage.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine, alertLine } from "./task-timeline.js";
 import { now } from "./util.js";
 import { setWorkflowAt } from "./workflow-advance.js";
 import { railStalledAtRun, taskWorkflowDef } from "./workflows.js";
@@ -209,7 +209,7 @@ const RESET_STALLED_NOTE =
  */
 async function noteStalledAtRun(taskId: string): Promise<void> {
   if (!(await railStalledAtRun(taskId))) return;
-  await appendTaskTimeline(taskId, RESET_STALLED_NOTE);
+  await appendTaskTimeline(taskId, alertLine(RESET_STALLED_NOTE));
 }
 
 /** 白清一场：纯询问回合的收尾。 */
@@ -248,8 +248,8 @@ async function resetWorkflowLedger(taskId: string): Promise<LedgerSnapshot | nul
     (!!before.workflowAt && before.workflowAt !== runId);
   if (!stale) return null; // 账本本来就是空的，别写一行没信息量的时间线
   // clearTaskStage 顺带广播 task.stage 并写时间线；没有 stage 可清时自己补那一行。
-  if (before.stage) await clearTaskStage(taskId, RESET_NOTE);
-  else await appendTaskTimeline(taskId, RESET_NOTE);
+  if (before.stage) await clearTaskStage(taskId, receiptLine(RESET_NOTE));
+  else await appendTaskTimeline(taskId, receiptLine(RESET_NOTE));
   await db
     .update(tasks)
     .set({ verifyStationRounds: 0, reviewStep: null, updatedAt: now() })
@@ -296,7 +296,7 @@ async function discardEmptyShell(taskId: string): Promise<void> {
   if (!out.worktreeRemoved && !out.branchDeleted) return; // 没删成就别吭声（多半是里面还有东西）
   await appendTaskTimeline(
     taskId,
-    `这一轮没有产出任何改动，为它临时重建的工作目录${out.branchDeleted ? `与空分支 ${out.branch}` : ""}已清理。`,
+    receiptLine(`这一轮没有产出任何改动，为它临时重建的工作目录${out.branchDeleted ? `与空分支 ${out.branch}` : ""}已清理。`),
   );
 }
 
@@ -342,7 +342,7 @@ export async function reconcileTurnBaseline(taskId: string, confirmedDone: boole
     const staged = stageBack
       ? await restoreTaskStage(taskId, stageBack, restoreStageNote(stageBack), base.acceptedSnapshot ?? null)
       : false;
-    if (!staged && base.ledger) await appendTaskTimeline(taskId, RESTORE_NOTE);
+    if (!staged && base.ledger) await appendTaskTimeline(taskId, receiptLine(RESTORE_NOTE));
     if (base.fresh) await discardEmptyShell(taskId);
   } catch (error) {
     console.warn(`[ash] failed to reconcile turn baseline for ${taskId}:`, error);

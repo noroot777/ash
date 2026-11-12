@@ -11,6 +11,7 @@ import type { SessionRole } from "./session.ts";
 import type { ContextUsage, TokenUsage, UsageAccountingMark } from "./usage.ts";
 import type { NativeWorkEvent } from "./native-work.ts";
 import type { MonitorWakeData } from "./monitor-wake.ts";
+import type { TimelineNotice } from "./timeline-notice.ts";
 
 // ── HITL gates (§7) ──────────────────────────────────────────────────────────
 export type GateName = "G1" | "G2"; // G2 is legacy, retained for historical events
@@ -62,7 +63,8 @@ export type AgentEvent =
   // 展示端不能拿它当回合边界用 —— 它落在哪一秒纯属偶然,常常正砸在某一回合说到一半的
   // 地方。不带这个标的 system 行是真的说给 agent 听的(「继续(从中断处)」那类),照旧当
   // 回合起点。
-  | { kind: "system"; text: string; at: string; level?: "notice"; aside?: true }
+  // notice = 时间线旁注是哪一类事（见 timeline-notice.ts），与落盘 sentinel 同一份。
+  | { kind: "system"; text: string; at: string; level?: "notice"; aside?: true; notice?: TimelineNotice }
   // 本回合的 token 用量,由执行器从 CLI 的收尾事件(claude 的 result / codex 的
   // turn.completed)解析。每回合至多一条,恒在该回合的 turnEnd/done 之前。拿不到
   // 用量的 CLI 一条都不发 —— 展示端据此判断「这家报不报账」。

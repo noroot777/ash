@@ -27,7 +27,7 @@ import { rerunGateClosed } from "./rerun-gate.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { isMultiUser } from "./auth/mode.js";
 import { previewState } from "./preview-public.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { failureQuestionInput, setTaskQuestion } from "./task-question.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { taskWorkflowDef } from "./workflows.js";
@@ -110,14 +110,14 @@ async function runCommand(task: TaskRow, step: CommandStep, authority?: ReviewAu
       maxBuffer: 8 * 1024 * 1024,
     });
     const out = shorten(`${stdout}${stderr}`, 400);
-    await appendTaskTimeline(task.id, `跑了一条命令：\`${step.p.cmd}\`（通过）${out ? `\n${out}` : ""}`);
+    await appendTaskTimeline(task.id, receiptLine(`跑了一条命令：\`${step.p.cmd}\`（通过）${out ? `\n${out}` : ""}`));
     return { ok: true };
   } catch (error) {
     const err = error as { stdout?: string; stderr?: string; message?: string; killed?: boolean };
     const reason = err.killed
       ? `超时（${Math.round(COMMAND_TIMEOUT_MS / 60_000)} 分钟）`
       : shorten(`${err.stderr ?? ""}${err.stdout ?? ""}` || err.message || "命令失败");
-    await appendTaskTimeline(task.id, `跑了一条命令：\`${step.p.cmd}\`（没通过）\n${reason}`);
+    await appendTaskTimeline(task.id, alertLine(`跑了一条命令：\`${step.p.cmd}\`（没通过）\n${reason}`));
     return { ok: false, failed: step, reason };
   }
 }
@@ -144,11 +144,11 @@ async function runPreview(task: TaskRow, step: PreviewStep, workspace?: { input:
   if (result.ok) {
     await appendTaskTimeline(
       task.id,
-      `预览已起：${previewState(task.id).url ?? `端口 ${result.record.port}`}（\`${step.p.cmd}\`）`,
+      receiptLine(`预览已起：${previewState(task.id).url ?? `端口 ${result.record.port}`}（\`${step.p.cmd}\`）`),
     );
     return { ok: true };
   }
-  await appendTaskTimeline(task.id, `预览没起来（\`${step.p.cmd}\`）\n${result.reason}`);
+  await appendTaskTimeline(task.id, alertLine(`预览没起来（\`${step.p.cmd}\`）\n${result.reason}`));
   return { ok: false, failed: step, reason: result.reason };
 }
 
@@ -166,9 +166,9 @@ async function runAccept(task: TaskRow, def: WorkflowDef | null, step: WorkflowS
   const gated = !!def?.steps.some((s) => s.kind === "human");
   await appendTaskTimeline(
     task.id,
-    gated
+    receiptLine(gated
       ? "你在前面那道「等我点头」放行过了，线走到「合并并清理」，按线上写的合。"
-      : "这条线上没写「等我点头」，走到「合并并清理」就自己合了。",
+      : "这条线上没写「等我点头」，走到「合并并清理」就自己合了。"),
   );
   const { acceptTask } = await import("./task-accept.js");
   const result = await acceptTask(task.id, "workflow", { reviewAuthority: authority });
@@ -178,8 +178,8 @@ async function runAccept(task: TaskRow, def: WorkflowDef | null, step: WorkflowS
   if (result.reason === "accept_gate_required" || result.reason === "accept_gate_running") {
     await appendTaskTimeline(
       task.id,
-      "这条线走到「合并并清理」，但这个项目设了验收前置命令：先在独立源码快照里跑一遍它，rc=0 且整次退出已确认才合。"
-        + "这一站就停在这儿等它 —— 绿了会自动合完并接着往下走，红了会把日志交回这个任务去修。",
+      receiptLine("这条线走到「合并并清理」，但这个项目设了验收前置命令：先在独立源码快照里跑一遍它，rc=0 且整次退出已确认才合。"
+        + "这一站就停在这儿等它 —— 绿了会自动合完并接着往下走，红了会把日志交回这个任务去修。"),
     );
     return { ok: false, halted: true, failed: step, reason: result.error };
   }
@@ -267,29 +267,29 @@ export async function applyFailPolicy(
       .where(eq(regressionEvidence.directory, opts.reviewAuthority.directory)))[0];
     if (state?.finalization?.acceptance
       && acceptPlan(taskWorkflowDef(task.workflow), "workflow", state.finalization.acceptance.stepId).clean !== "none") {
-      await appendTaskTimeline(task.id, `「${label}」写的是「打回给 AI 重做」，但工作区刚随验收清掉了，没法再打回；改成问你一句。`);
+      await appendTaskTimeline(task.id, receiptLine(`「${label}」写的是「打回给 AI 重做」，但工作区刚随验收清掉了，没法再打回；改成问你一句。`));
       await setTaskQuestion({ ...failureQuestionInput(task.id, label, reason), reviewAuthority: opts.reviewAuthority });
       return;
     }
   }
   if (fail?.mode === "ask") {
     await setTaskQuestion({ ...failureQuestionInput(task.id, label, reason), reviewAuthority: opts.reviewAuthority });
-    await appendTaskTimeline(task.id, `这条线卡在「${label}」这一站；线上写的是「问我一句」，已经把问题挂给你了。`);
+    await appendTaskTimeline(task.id, receiptLine(`这条线卡在「${label}」这一站；线上写的是「问我一句」，已经把问题挂给你了。`));
     return;
   }
   if (fail?.mode !== "back") {
-    await appendTaskTimeline(task.id, `这条线卡在「${label}」这一站，停下等你处理。`);
+    await appendTaskTimeline(task.id, alertLine(`这条线卡在「${label}」这一站，停下等你处理。`));
     return;
   }
   const round = bumpAttempt(task.id, step.id);
   if (round > Math.max(1, fail.max)) {
     await appendTaskTimeline(
       task.id,
-      `「${label}」已经打回重做 ${fail.max} 次仍没过，按线上写的上限停下等你处理。`,
+      alertLine(`「${label}」已经打回重做 ${fail.max} 次仍没过，按线上写的上限停下等你处理。`),
     );
     return;
   }
-  await appendTaskTimeline(task.id, `这条线卡在「${label}」这一站，按线上写的打回给 AI 重做（第 ${round} 次）。`);
+  await appendTaskTimeline(task.id, receiptLine(`这条线卡在「${label}」这一站，按线上写的打回给 AI 重做（第 ${round} 次）。`));
   if (opts.onRepair) { await opts.onRepair(repairPrompt(round)); return; }
   if (opts.reviewAuthority) {
     const { enqueueFinalizationRepair } = await import("./regression-finalization.js");
@@ -300,7 +300,7 @@ export async function applyFailPolicy(
   // 任务的单飞锁还锁着，直接 continueTask 会被静默挡回、打回就此石沉大海。
   continueWhenIdle(task.id, repairPrompt(round), { system: "wake" }, (error) => appendTaskTimeline(
     task.id,
-    `想把这一站打回重做，但唤醒任务时出错（${error}），请手动续跑。`,
+    alertLine(`想把这一站打回重做，但唤醒任务时出错（${error}），请手动续跑。`),
   ));
 }
 

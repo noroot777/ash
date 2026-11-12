@@ -1,7 +1,7 @@
 import type { AgentType, SessionRole } from "@ash/shared";
 import type { Workspace } from "./git.js";
 import { WORKSPACE_BASE_FALLBACK_MARKER } from "./run-prompts.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 
 // 「登记的基线被换掉了」这句话该不该说、怎么说，只有这一份。
 //
@@ -37,5 +37,5 @@ export async function announceBaseFallback(
 ): Promise<void> {
   const note = baseFallbackNote(fallback);
   if (!note) return;
-  await appendTaskTimeline(taskId, note, target);
+  await appendTaskTimeline(taskId, alertLine(note), target);
 }

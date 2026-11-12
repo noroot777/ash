@@ -15,7 +15,7 @@ import { derivedTaskTitle } from "./derived-task-title.js";
 import { freeReviewRounds, tasks } from "./db/schema.js";
 import { freeReviewEvidenceDir, freeReviewReportPath } from "./free-review-files.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { createTasks, enrichTasks } from "./task-store.js";
 import { id, now } from "./util.js";
 import { DisputeStaleError, type ReviewRoundRow, type ReviewRunRow } from "./free-review-dispute.js";
@@ -160,10 +160,10 @@ export async function deferOpenDispute(
       .set({ disputeDeferredTaskId: created.id })
       .where(eq(freeReviewRounds.id, round.id));
     await appendTaskTimeline(source.id,
-      `你裁定把第 ${round.round} 轮里超出本任务边界的那几条意见转成独立任务：` +
+      receiptLine(`你裁定把第 ${round.round} 轮里超出本任务边界的那几条意见转成独立任务：` +
       `${created.title}（${created.id}，待办、未起跑）。` +
       "这一轮不再要求本任务照它修复；审查报告与证据原样保留，审查结论本身不改写。" +
-      (note ? `你写下的裁定要点已随任务带过去。` : ""));
+      (note ? `你写下的裁定要点已随任务带过去。` : "")));
     bus.publish({ type: "task.review", taskId: source.id });
     return created;
   } finally {

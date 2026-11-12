@@ -15,7 +15,7 @@ try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, sessions, tasks } = await import("../src/db/schema.js");
   const { setTaskStatus } = await import("../src/status.js");
-  const { appendTaskTimeline } = await import("../src/task-timeline.js");
+  const { appendTaskTimeline, noticeLine } = await import("../src/task-timeline.js");
   await ensureSchema();
 
   const at = "2026-08-01T00:00:00.000Z";
@@ -52,7 +52,7 @@ try {
   assert.equal(event.updatedAt, row?.updatedAt, "状态 SSE 必须携带数据库实际写入的 updatedAt");
   assert.notEqual(event.updatedAt, at, "状态变化应推进 updatedAt");
 
-  assert.equal(await appendTaskTimeline("task", "已预约完成后审查。"), true);
+  assert.equal(await appendTaskTimeline("task", noticeLine({ kind: "review.reserved", reviewer: "5.5审查", updated: false }, "已预约完成后审查。")), true);
   const liveNote = events.find((candidate) => (
     candidate.type === "agent.event"
     && candidate.taskId === "task"
@@ -64,9 +64,13 @@ try {
   ).find((segment) => segment.kind === "system");
   assert.ok(persistedNote?.at, "系统旁注落盘应带时间");
   assert.equal(liveNote.event.at, persistedNote.at, "系统旁注 SSE 与落盘 sentinel 必须共用同一时间");
+  // 「这是哪一类事」跟着同一条路走：直播与落盘读回来的必须是同一份（展示端据它摆放，不认原文）。
+  const reserved = { kind: "review.reserved", reviewer: "5.5审查", updated: false };
+  assert.deepEqual(liveNote.event.notice, reserved, "系统旁注 SSE 应带着它的类型");
+  assert.deepEqual(persistedNote.kind === "system" ? persistedNote.notice : null, reserved, "落盘 sentinel 应带着同一份类型");
 
   unsubscribe();
-  console.log("task event timestamps: 状态水位与系统旁注时间均保持实时/落盘一致");
+  console.log("task event timestamps: 状态水位、系统旁注时间与类型均保持实时/落盘一致");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

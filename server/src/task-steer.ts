@@ -24,7 +24,7 @@ import {
   whenTurnIdle,
 } from "./runs.js";
 import { setTaskStatus } from "./status.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { attachmentsPrompt, now } from "./util.js";
 import { bindUploadsToTask } from "./uploads.js";
@@ -208,7 +208,7 @@ async function deliverNativeSteer(
       if (restarted) {
         await appendTaskTimeline(
           message.taskId,
-          "Claude 未确认原生引导，已结束当前回合；这条排队消息会由新回合重新投递。",
+          receiptLine("Claude 未确认原生引导，已结束当前回合；这条排队消息会由新回合重新投递。"),
         );
         whenTurnIdle(message.taskId, () => flushPendingForTask(message.taskId));
       }
@@ -249,9 +249,9 @@ async function finishStoppedSteer(
       }
       await appendTaskTimeline(
         message.taskId,
-        stopped === "paused"
+        receiptLine(stopped === "paused"
           ? "分组暂停发生在引导收尾期间：引导已取消，任务已暂停，排队消息仍保留。"
-          : "手动停止发生在引导收尾期间：引导已取消，停止已落账，排队消息仍保留。",
+          : "手动停止发生在引导收尾期间：引导已取消，停止已落账，排队消息仍保留。"),
       );
     }
     if (previous) await restorePreviousCompletionState(message.taskId, previous);
@@ -302,7 +302,7 @@ export async function steerQueuedMessage(messageId: string, options: { nativeOnl
   if (blocked) return { ok: false, status: 409, error: blocked };
   if (isCanceling(task.id)) {
     const error = "任务正在停止或所在分组正在暂停，消息继续排队";
-    await appendTaskTimeline(task.id, `引导会话未执行：${error}`);
+    await appendTaskTimeline(task.id, alertLine(`引导会话未执行：${error}`));
     return { ok: false, status: 409, error };
   }
   if (isAcceptingTask(task.id)) {

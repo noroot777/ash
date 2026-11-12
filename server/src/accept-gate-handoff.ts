@@ -19,7 +19,7 @@ import { gateFailureInputFor } from "./accept-gate-messages.js";
 import { gateView, latestRun } from "./accept-gate-state.js";
 import { parseGateSettlement } from "./accept-gate-exit.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { existingTaskWorkspacePath } from "./task-workspace.js";
 import { continueWhenIdle } from "./runs.js";
 import { id as newId, now } from "./util.js";
@@ -103,13 +103,13 @@ export async function handOffGateFailure(row: GateRow, view: AcceptGateView, aga
             .where(eq(acceptGateRuns.id, row.id));
         }, `gate-${row.id}`);
       bus.publish({ type: "task.acceptGate", taskId: row.taskId });
-      await appendTaskTimeline(row.taskId, `门禁交接：修复输入已持久入队，按原审查权限等待投递（日志 ${row.logPath}）。`);
+      await appendTaskTimeline(row.taskId, receiptLine(`门禁交接：修复输入已持久入队，按原审查权限等待投递（日志 ${row.logPath}）。`));
       onFinal?.();
       await (await import("./pending-messages.js")).deliverPendingMessages(row.taskId);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       await markHandoff(row.id, { at: now(), error: reason });
-      await appendTaskTimeline(row.taskId, `门禁交接失败：${reason}。日志在 ${row.logPath}，可核对后手动再交。`);
+      await appendTaskTimeline(row.taskId, alertLine(`门禁交接失败：${reason}。日志在 ${row.logPath}，可核对后手动再交。`));
       await settle();
     }
     return;
@@ -117,7 +117,7 @@ export async function handOffGateFailure(row: GateRow, view: AcceptGateView, aga
   // 先把「这一次交接发起了」落盘再投递：投递是异步的，中间用户刷新页面的话，不落盘
   // 那张卡只能说「不知道」。失败由下面的 onError 补写原因（两件事都写同一行）。
   await markHandoff(row.id, { at: now(), error: null });
-  await appendTaskTimeline(row.taskId, gateHandoffTimeline(view, row.logPath, again));
+  await appendTaskTimeline(row.taskId, alertLine(gateHandoffTimeline(view, row.logPath, again)));
   // byBackend：占真人回合，但字是后端写的（同验收冲突交接）。
   // handoff_at 只说明「发起了」：投递在等回合空闲，进程这时候死掉的话话一个字都没送出去。
   // 所以欠着的记号等协议定论（下面三档裁决）或失败记完账才清（第 2 轮审查）。
@@ -132,7 +132,7 @@ export async function handOffGateFailure(row: GateRow, view: AcceptGateView, aga
       await markHandoff(row.id, { at: now(), error: why });
       await appendTaskTimeline(
         row.taskId,
-        `门禁交接失败：没能叫醒该任务（${why}）。日志在 ${row.logPath}，请手动点运行或直接回复它。`,
+        alertLine(`门禁交接失败：没能叫醒该任务（${why}）。日志在 ${row.logPath}，请手动点运行或直接回复它。`),
       );
     } catch (error) {
       // 失败没记上账就不算落定：记号留给下次启动，只把「正在办」放开。
@@ -151,7 +151,7 @@ export async function handOffGateFailure(row: GateRow, view: AcceptGateView, aga
     onRefused: async () => {
       const why = "协议层明确拒收，这份修复要求一个字都没送进会话";
       await markHandoff(row.id, { at: now(), error: why });
-      await appendTaskTimeline(row.taskId, `门禁交接失败：${why}。在验收台上点「再交一次」即可重新投递（日志 ${row.logPath}）。`);
+      await appendTaskTimeline(row.taskId, alertLine(`门禁交接失败：${why}。在验收台上点「再交一次」即可重新投递（日志 ${row.logPath}）。`));
       await settle();
     },
     // 与 `resolveInterruptedHandoff` 同一口径：说不清就不重发（可能重复执行），如实记一笔交给用户。
@@ -159,7 +159,7 @@ export async function handOffGateFailure(row: GateRow, view: AcceptGateView, aga
       unconfirmed = true;
       const why = "这份修复要求有没有送进会话，协议层没给回执，为免重复没有自动重发";
       await markHandoff(row.id, { at: now(), error: why });
-      await appendTaskTimeline(row.taskId, `门禁交接：${why}。看一眼会话里有没有这条修复要求，没有的话在验收台上点「再交一次」（日志 ${row.logPath}）。`);
+      await appendTaskTimeline(row.taskId, alertLine(`门禁交接：${why}。看一眼会话里有没有这条修复要求，没有的话在验收台上点「再交一次」（日志 ${row.logPath}）。`));
       await settle();
     },
   }, deliveryKey ? () => claimDelivery(row.id, deliveryKey) : undefined);
@@ -191,7 +191,7 @@ export async function resolveInterruptedHandoff(row: GateRow): Promise<void> {
   if (!delivered) {
     const why = "ash 重启时这份修复输入正在投递，说不清有没有送到，为免重复没有自动重发";
     await markHandoff(row.id, { at: now(), error: why });
-    await appendTaskTimeline(row.taskId, `门禁交接：${why}。看一眼会话里有没有这条修复要求，没有的话在验收台上点「再交一次」（日志 ${row.logPath}）。`);
+    await appendTaskTimeline(row.taskId, alertLine(`门禁交接：${why}。看一眼会话里有没有这条修复要求，没有的话在验收台上点「再交一次」（日志 ${row.logPath}）。`));
   }
   await db.update(acceptGateRuns).set({ settlement: null }).where(eq(acceptGateRuns.id, row.id));
 }

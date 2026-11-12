@@ -29,7 +29,7 @@ import { acceptanceGuard, type AcceptFailure } from "./task-accept-guard.js";
 import { resultVersionOf } from "./task-result-version.js";
 import { clearTaskStage } from "./task-stage.js";
 import { publishTaskUpdated } from "./task-store.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { taskWorkflowDef } from "./workflows.js";
 
 export const NO_GATE = "-";
@@ -56,7 +56,7 @@ type TaskRow = typeof tasks.$inferSelect;
 /** 在验收互斥里现核：已经不是调用方看到的那一版成果、那一道关，就不验收。 */
 export async function staleAcceptance(task: TaskRow, expected: AcceptExpectation): Promise<AcceptFailure | null> {
   if (expected.resultVersion !== undefined && await resultVersionOf(task) !== expected.resultVersion) {
-    await appendTaskTimeline(task.id, "验收没有执行：点验收时看到的那一版之后，任务又跑出了新的结果。看过最新的再验收。");
+    await appendTaskTimeline(task.id, alertLine("验收没有执行：点验收时看到的那一版之后，任务又跑出了新的结果。看过最新的再验收。"));
     return {
       accepted: false, httpStatus: 409, taskId: task.id, reason: "result_changed", phase: "initial", status: task.status,
       error: "要验收的那一版之后任务又跑出了新结果，这一次没有验收：请看过最新的再验收",
@@ -64,7 +64,7 @@ export async function staleAcceptance(task: TaskRow, expected: AcceptExpectation
   }
   if (expected.humanGate === undefined) return null;
   if (humanGateOf(task) !== expected.humanGate) {
-    await appendTaskTimeline(task.id, "这一下没有执行：点的是这条线上一段的卡，它已经离开了那一道「等我点头」。看过它现在停在哪一站再点。");
+    await appendTaskTimeline(task.id, alertLine("这一下没有执行：点的是这条线上一段的卡，它已经离开了那一道「等我点头」。看过它现在停在哪一站再点。"));
     return {
       accepted: false, httpStatus: 409, taskId: task.id, reason: "gate_changed", phase: "initial", status: task.status,
       error: "点的那张卡是这条线上一段的，它已经离开了那一道「等我点头」，这一次没有执行：请看过它现在停在哪一站再点",
@@ -94,7 +94,7 @@ export async function releaseHumanGate(
   if (guard.failure) return guard.failure;
   const next = nextAnchor(def, task.workflowAt);
   const where = next ? `后面还写着「${STEP_LABELS[next.kind]}」` : "这条线上后面还写着别的站";
-  if (!await clearTaskStage(task.id, `你在这一道「等我点头」放行了：${where}，所以没有合并、也没有清理，接着往下走。`, sameGate(task))) {
+  if (!await clearTaskStage(task.id, receiptLine(`你在这一道「等我点头」放行了：${where}，所以没有合并、也没有清理，接着往下走。`), sameGate(task))) {
     return {
       accepted: false, httpStatus: 409, taskId: task.id, reason: "gate_changed", phase: "before_accept", status: task.status,
       error: "放行的同时这条线离开了这一道「等我点头」（或已经放过了），这一次没有放行：请看过它现在停在哪一站再点",

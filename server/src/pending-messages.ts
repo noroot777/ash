@@ -44,7 +44,7 @@ import { monitorEventSourceState } from "./monitor-session.js";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 import { deliveryOptions, isDueForDelivery, pendingExecutionIntent } from "./pending-verdict.js";
 import { deliveryVerdictOf } from "./pending-delivery-facts.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { dispatchPendingMessage } from "./pending-dispatch.js";
 import { pendingMessageOrder } from "./pending-monitor-batch.js";
@@ -230,7 +230,7 @@ export async function cancelPendingMessage(message: Row, reason: string): Promis
   const text = message.text.trim();
   const quoted = text ? `\n原文：${text.length > 500 ? `${text.slice(0, 500)}…` : text}` : "";
   const note = `〔系统〕${label}未发送，已取消${when}：${reason}${quoted}`;
-  if (!(await appendTaskTimeline(message.taskId, note))) {
+  if (!(await appendTaskTimeline(message.taskId, alertLine(note)))) {
     console.warn(`[ash] ${note} task=${message.taskId} message=${message.id}`);
   }
 }

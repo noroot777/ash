@@ -152,7 +152,7 @@ import {
 } from "./free-review-responsibility.js";
 import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
 import { continueWhenIdle, type TurnDeliveryFailure } from "./runs.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
 
 export {
@@ -354,9 +354,9 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
     if (taken === "unwritable" && !warnedUnwritable) {
       warnedUnwritable = true;
       await appendTaskTimeline(taskId,
-        `${label}的任务书正在等一个空闲回合窗口，但这一轮的派发意图没能存进库里（写库失败，`
+        alertLine(`${label}的任务书正在等一个空闲回合窗口，但这一轮的派发意图没能存进库里（写库失败，`
         + `详情在服务日志）。等待本身照旧有效；只是服务若在送出去之前重启，这一轮不会被自动补投，`
-        + `需要你手动再开一轮。`);
+        + `需要你手动再开一轮。`));
     }
     // 排进等待队列之前把相位标成「排着」:准备阶段到此结束(两档都算有人负责,分开记只为
     // 日志读得出它卡在哪一段)。
@@ -406,8 +406,8 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
         // 留痕排在重排**之前**:重排是同步排进等待队列的,排完下一次失败可能立刻就到,先写时间线
         // 才保证顺序读得通。
         await appendTaskTimeline(taskId,
-          `${label}的任务书还没能送进会话：回合锁在释放点上被其它执行先抢到（第 ${attempts} 次）。`
-          + `已重新排到下一个空闲窗口，不需要你动手；连续 ${MAX_REVIEW_DISPATCH_ATTEMPTS} 次都抢不到才会停下来。`);
+          receiptLine(`${label}的任务书还没能送进会话：回合锁在释放点上被其它执行先抢到（第 ${attempts} 次）。`
+          + `已重新排到下一个空闲窗口，不需要你动手；连续 ${MAX_REVIEW_DISPATCH_ATTEMPTS} 次都抢不到才会停下来。`));
         await hand();
       } catch (error) {
         releaseReviewDispatchClaim(run.id, run.currentRound, token);

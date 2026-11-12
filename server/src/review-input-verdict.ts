@@ -35,7 +35,7 @@ import { db } from "./db/index.js";
 import { regressionEvidence, tasks } from "./db/schema.js";
 import type { InputAcceptance } from "./executors/types.js";
 import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 
 type Verdict = Exclude<InputAcceptance, "unknown">;
 type Delivered = NonNullable<NonNullable<typeof tasks.$inferSelect["waitOwnership"]>["deliveredReview"]>;
@@ -168,8 +168,8 @@ export async function noteReviewInput(
   run: { targetKind: string | null; currentRound: number }, directory: string, input: ReviewInputHold,
 ): Promise<void> {
   const delivered = task.waitOwnership?.deliveredReview;
-  await appendTaskTimeline(task.id, reviewInputNote(input,
-    run.targetKind === "accepted_merge" ? "合并结果" : `自由工作流第 ${run.currentRound} 轮`),
+  await appendTaskTimeline(task.id, alertLine(reviewInputNote(input,
+    run.targetKind === "accepted_merge" ? "合并结果" : `自由工作流第 ${run.currentRound} 轮`)),
   { eventKey: `review-input-${input}:${directory}:${delivered?.generation}:${JSON.stringify(delivered?.identity)}` });
 }
 

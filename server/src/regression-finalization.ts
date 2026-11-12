@@ -5,7 +5,7 @@ import type { RegressionFinalization } from "./db/schema-regression-evidence.js"
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { pendingMessageRow, publishPendingMessages } from "./pending-messages.js";
 import { isTurnClaimed } from "./runs.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, type TimelineLine } from "./task-timeline.js";
 import { assertReviewAuthority, finalizationAuthority, ReviewSuperseded, settlementAuthority } from "./review-ownership.js";
 
 const draining = new Map<string, Promise<void>>();
@@ -48,8 +48,8 @@ export async function checkpointFinalizationWorkflow(directory: string, generati
   }, { behavior: "immediate" });
 }
 
-export async function appendFinalizationTimeline(taskId: string, text: string, eventKey: string): Promise<void> {
-  if (!await appendTaskTimeline(taskId, text, { eventKey }) && (await db.select({ id: sessions.id }).from(sessions)
+export async function appendFinalizationTimeline(taskId: string, line: TimelineLine, eventKey: string): Promise<void> {
+  if (!await appendTaskTimeline(taskId, line, { eventKey }) && (await db.select({ id: sessions.id }).from(sessions)
     .where(eq(sessions.taskId, taskId)).limit(1)).length) throw new Error("审查收尾时间线暂不可写");
 }
 
@@ -96,7 +96,7 @@ export async function drainRegressionFinalization(directory: string, retry = fal
     }, { behavior: "immediate" });
     if (retry) await appendTaskTimeline((await db.select().from(regressionEvidence)
       .where(eq(regressionEvidence.directory, directory)))[0]!.taskId,
-    "本次验收明确补跑原审查尚未完成的尾段；中断站可能已有外部副作用，请核对后按站内幂等约定处理。");
+    alertLine("本次验收明确补跑原审查尚未完成的尾段；中断站可能已有外部副作用，请核对后按站内幂等约定处理。"));
     const state = (await db.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
     if (!state?.finalization || state.finalization.completed) return;
     try {

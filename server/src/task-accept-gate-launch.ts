@@ -1,11 +1,11 @@
 import type { AcceptGateView } from "@ash/shared/accept-gate";
 import { dropPendingAcceptGate, startPendingAcceptGate } from "./accept-gate.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import type { AcceptTaskResult } from "./task-accept.js";
 
 export async function discardPendingAcceptanceGate(taskId: string, error: unknown): Promise<void> {
   if (dropPendingAcceptGate(taskId)) await appendTaskTimeline(taskId,
-    `验收在门禁发射前异常退出，已撤销未执行的启动登记，不保留工作区占用：${String(error)}`);
+    alertLine(`验收在门禁发射前异常退出，已撤销未执行的启动登记，不保留工作区占用：${String(error)}`));
 }
 
 /**

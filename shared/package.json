@@ -237,6 +237,10 @@
     "./task-order": {
       "types": "./src/task-order.ts",
       "default": "./src/task-order.ts"
+    },
+    "./timeline-notice": {
+      "types": "./src/timeline-notice.ts",
+      "default": "./src/timeline-notice.ts"
     }
   },
   "scripts": {

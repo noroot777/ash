@@ -83,7 +83,7 @@ import { claudeMonitorStatus } from "@ash/shared/monitor-claude";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { db, dbClient } from "./db/index.js";
 import { sessions } from "./db/schema.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 
 export type BackgroundKind = "agent" | "workflow" | "bash";
 
@@ -416,7 +416,7 @@ export class ClaudeBackgroundTrace {
           .where(eq(sessions.cliSessionId, this.cliSessionId))
           .orderBy(desc(sessions.startedAt))).at(0);
         if (!home || isTaskRevoked(home.taskId)) return;
-        if (await appendTaskTimeline(home.taskId, notice, { sessionId: home.id })) return;
+        if (await appendTaskTimeline(home.taskId, receiptLine(notice), { sessionId: home.id })) return;
       } catch (e) {
         if (attempt === 2) console.warn(`[ash] 后台任务收尾记账失败（session=${this.cliSessionId}）:`, e);
       }

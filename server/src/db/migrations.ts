@@ -239,7 +239,7 @@ async function migrateFreeWorkflowMergeStates(client: Client): Promise<boolean> 
   );
   if (!rows.rows.length) return true;
   let allMigrated = true;
-  const { appendTaskTimeline } = await import("../task-timeline.js");
+  const { appendTaskTimeline, receiptLine, alertLine } = await import("../task-timeline.js");
   for (const row of rows.rows) {
     const taskId = String(row.task_id ?? "");
     const status = String(row.merge_status ?? "");
@@ -250,7 +250,7 @@ async function migrateFreeWorkflowMergeStates(client: Client): Promise<boolean> 
           sql: "UPDATE tasks SET stage = 'accepted' WHERE id = ? AND (stage IS NULL OR stage = '')",
           args: [taskId],
         });
-        await appendTaskTimeline(taskId, "升级迁移：上一版「合并&清理」已记录合并完成，验收标记已补上（合并区间无从考证，未伪造）。");
+        await appendTaskTimeline(taskId, receiptLine("升级迁移：上一版「合并&清理」已记录合并完成，验收标记已补上（合并区间无从考证，未伪造）。"));
       } else if (status === "merging") {
         // 结构化恢复，不依赖时间线（没跑过会话的任务时间线写不进去）：stage=merged 让
         // 统一验收接管——source branch 还在会正常重合并/识别 already_merged；已清理的
@@ -269,11 +269,11 @@ async function migrateFreeWorkflowMergeStates(client: Client): Promise<boolean> 
           sql: "UPDATE tasks SET stage = 'merged', accepted_target_branch = COALESCE(accepted_target_branch, ?) WHERE id = ? AND (stage IS NULL OR stage = '')",
           args: [target, taskId],
         });
-        await appendTaskTimeline(taskId, "升级迁移：上一版验收停在「合并进行中」，Git 合并可能已完成；已按「已合并待确认」恢复，请从验收页重新验收——已合并的会被安全识别，无法核对时会停下等人工确认，不会伪造区间。");
+        await appendTaskTimeline(taskId, alertLine("升级迁移：上一版验收停在「合并进行中」，Git 合并可能已完成；已按「已合并待确认」恢复，请从验收页重新验收——已合并的会被安全识别，无法核对时会停下等人工确认，不会伪造区间。"));
       } else if (status === "failed") {
         const message = String(row.merge_message ?? "").trim();
         // 错误原文是唯一证据：时间线写不进去（任务从没跑过会话）就保留旧列，下次启动再试。
-        const wrote = await appendTaskTimeline(taskId, `升级迁移：上一版「合并&清理」失败${message ? `，原始错误：${message}` : ""}；请从验收页重新验收或人工处理。`);
+        const wrote = await appendTaskTimeline(taskId, alertLine(`升级迁移：上一版「合并&清理」失败${message ? `，原始错误：${message}` : ""}；请从验收页重新验收或人工处理。`));
         if (!wrote) {
           console.warn(`[ash] 旧合并失败原因写不进 ${taskId} 的时间线（无会话），本轮保留旧列`);
           allMigrated = false;

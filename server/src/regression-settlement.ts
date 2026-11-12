@@ -5,7 +5,7 @@ import { freeReviewRounds, regressionEvidence, tasks } from "./db/schema.js";
 import type { RegressionFinalization, RegressionSettlement } from "./db/schema-regression-evidence.js";
 import { checkRegressionConclusion, evidenceState } from "./regression-evidence-lifecycle.js";
 import { RegressionConclusionRejected } from "./regression-conclusion-errors.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { isTurnClaimed, turnIdentity } from "./runs.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { reviewRoundDir } from "./review-evidence.js";
@@ -146,7 +146,7 @@ export async function regressionSettlementConclusion(taskId: string, directory: 
     ...(input.ignoreActive ? { ignoreActive: true } : {}),
     ...(input.fence ? { fence: input.fence } : {}),
   };
-  if (stored.unknown) await appendTaskTimeline(taskId, "审查缺少持久保存的真实退出结果，不能因已有通过结论推定正常结束；本轮按异常结束处理。");
+  if (stored.unknown) await appendTaskTimeline(taskId, alertLine("审查缺少持久保存的真实退出结果，不能因已有通过结论推定正常结束；本轮按异常结束处理。"));
   if (outcome !== "done" || !checked.target) return checked;
   try {
     await checkRegressionConclusion(taskId, directory, conclusion ?? "", undefined, true);
@@ -154,10 +154,10 @@ export async function regressionSettlementConclusion(taskId: string, directory: 
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (error instanceof RegressionConclusionRejected) {
-      await appendTaskTimeline(taskId, `通过结论的依据已失效：${message}`);
+      await appendTaskTimeline(taskId, alertLine(`通过结论的依据已失效：${message}`));
       return { ...checked, conclusion: "verify_failed" };
     }
-    await appendTaskTimeline(taskId, `验证依据暂不可核验，保留结论及审查轮次，恢复后可重试：${message}`);
+    await appendTaskTimeline(taskId, alertLine(`验证依据暂不可核验，保留结论及审查轮次，恢复后可重试：${message}`));
     return null;
   }
 }

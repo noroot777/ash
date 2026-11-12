@@ -3,7 +3,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { TURN_FAILED_TO_START } from "./run-prompts.js";
 import { id, now } from "./util.js";
 
@@ -69,5 +69,5 @@ export async function reportTurnFailure(opts: {
     type: "agent.event", taskId, sessionId: opts.target?.sessionId ?? "", role, agentType,
     event: { kind: "error", message },
   });
-  await appendTaskTimeline(taskId, TURN_FAILED_TO_START(message, opts.undelivered), opts.target);
+  await appendTaskTimeline(taskId, alertLine(TURN_FAILED_TO_START(message, opts.undelivered)), opts.target);
 }

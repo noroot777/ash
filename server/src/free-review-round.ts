@@ -30,7 +30,7 @@ import { reviewInputHoldNow, reviewInputStillCurrent } from "./review-input-verd
 import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
 import { reviewLifecycle } from "./review-lifecycle-lock.js";
 import { claimOwnTurn, releaseTurn, turnIdentity } from "./runs.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine, noticeLine } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { turnProducedWork } from "./transcript.js";
 import { id, now } from "./util.js";
@@ -113,7 +113,7 @@ export async function cleanupAcceptedMergeRun(run: ReviewRunRow, strict = false)
     await cleanupPostMergeReviewWorktree(project.repoPath, run.taskId, run.id);
   } catch (error) {
     if (strict) throw error;
-    await appendTaskTimeline(run.taskId, `合并结果审查临时工作区清理失败：${error instanceof Error ? error.message : String(error)}`);
+    await appendTaskTimeline(run.taskId, alertLine(`合并结果审查临时工作区清理失败：${error instanceof Error ? error.message : String(error)}`));
   }
 }
 
@@ -230,7 +230,10 @@ async function failReviewStartHeld(
     await stopReviewRunMonitors(run.id, "这次审查启动失败，它挂的哨兵一并收回", false,
       { round: run.currentRound, generation: owner.generation });
   }
-  await appendTaskTimeline(run.taskId, `${run.targetKind === "accepted_merge" ? "合并结果" : `自由工作流第 ${run.currentRound} 轮`}审查启动失败：${message}`);
+  const merge = run.targetKind === "accepted_merge";
+  await appendTaskTimeline(run.taskId, noticeLine({
+    kind: "review.verdict", source: merge ? "merge" : "free", round: merge ? null : run.currentRound, verdict: "aborted",
+  }, `${merge ? "合并结果" : `自由工作流第 ${run.currentRound} 轮`}审查启动失败：${message}`));
   await cleanupAcceptedMergeRun(run);
   bus.publish({ type: "task.review", taskId: run.taskId });
 }
@@ -341,7 +344,12 @@ export async function launchReviewRound(
   const freshSession = opts.redeliver ? opts.redeliver.freshSession
     : freshSessionFor(run, run.currentRound, !!opts.retry && !!opts.resumeSessionId);
   const label = run.targetKind === "accepted_merge" ? "合并结果审查" : `自由工作流第 ${run.currentRound} 轮审查`;
-  await appendTaskTimeline(task.id, opts.redeliver
+  const merge = run.targetKind === "accepted_merge";
+  const start = { kind: "review.start" as const, source: merge ? "merge" as const : "free" as const,
+    round: merge ? null : run.currentRound, reviewer: run.reviewerName };
+  // 补投只是把同一份任务书再送一次，不开也不收这一轮，记成普通回执。
+  await appendTaskTimeline(task.id, (opts.redeliver ? receiptLine : (text: string) => noticeLine(
+    opts.retry ? { ...start, rerun: true } : start, text))(opts.redeliver
     // 补投不写「审查开始」:那一句上一次已经写过了,再写一遍会让时间线读成开了两轮。
     // `attempts === 0` = 上次中断在**准备阶段**(责任登记好了、还没排上队,见
     // `preparingReviewDispatch`):说成「已尝试 0 次」会让用户以为计数坏了。
@@ -354,7 +362,7 @@ export async function launchReviewRound(
         : `${label}重跑上一回合：${run.reviewerName}。`
       : run.targetKind === "accepted_merge"
         ? `合并结果审查开始：${run.reviewerName} · ${run.targetBranch}@${run.targetCommit?.slice(0, 8)} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`
-        : `自由工作流第 ${run.currentRound} 轮审查开始：${run.reviewerName} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`);
+        : `自由工作流第 ${run.currentRound} 轮审查开始：${run.reviewerName} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`));
   bus.publish({ type: "task.review", taskId: task.id });
   const message = !opts.retry
     ? prompt
@@ -657,8 +665,8 @@ export async function reopenFailedFreeReview(
       // **一个字都不写、也不落终态**,但要留得下痕:只在返回值里说一句,用户刷新页面后看到的
       // 仍是「我点了，然后什么都没发生」。时间线是持久的那一半。
       if (!prepared.claimToken) {
-        await appendTaskTimeline(taskId, "这次「继续本轮审查」没有另起投递：这一轮已经有一份"
-          + "在途派发在负责，它会在下一个空闲回合窗口把任务书送进会话。");
+        await appendTaskTimeline(taskId, receiptLine("这次「继续本轮审查」没有另起投递：这一轮已经有一份"
+          + "在途派发在负责，它会在下一个空闲回合窗口把任务书送进会话。"));
         return { state: await freeWorkflowState(taskId), resumed: false, dispatched: false };
       }
       const responsibility = { generation: prepared.generation, claimToken: prepared.claimToken, since: at };
@@ -668,8 +676,8 @@ export async function reopenFailedFreeReview(
           { resumeSessionId, retry: true, responsibility });
         handed = dispatched;
         if (!dispatched) {
-          await appendTaskTimeline(taskId, "这次「继续本轮审查」没有另起投递：这一轮已经有一份"
-            + "在途派发在负责，它会在下一个空闲回合窗口把任务书送进会话。");
+          await appendTaskTimeline(taskId, receiptLine("这次「继续本轮审查」没有另起投递：这一轮已经有一份"
+            + "在途派发在负责，它会在下一个空闲回合窗口把任务书送进会话。"));
         }
         return { state: await freeWorkflowState(taskId), resumed, dispatched };
       } catch (error) {

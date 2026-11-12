@@ -11,7 +11,7 @@ import { assertConclusionTask, commitRegressionConclusion, type ConclusionTask }
 import { RegressionConclusionRejected, RegressionEvidenceUnavailable } from "./regression-conclusion-errors.js";
 import { reviewRoundDir } from "./review-evidence.js";
 import { handoffBlockReason } from "./handoff-guard.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine, type TimelineLine, noticeLine } from "./task-timeline.js";
 import { REPORTED_ACCEPTANCE_PREFIX } from "./review-acceptance.js";
 import { id, now } from "./util.js";
 
@@ -39,7 +39,7 @@ export async function setTaskStage(
   }).where(where).returning({ id: tasks.id });
   if (!updated.length) return null;
   bus.publish({ type: "task.stage", taskId, stage, updatedAt });
-  const timelineRecorded = await appendTaskTimeline(taskId, `验收阶段更新：${STAGE_LABELS[stage]}（${stage}）`);
+  const timelineRecorded = await appendTaskTimeline(taskId, noticeLine({ kind: "stage", stage }, `验收阶段更新：${STAGE_LABELS[stage]}（${stage}）`));
   return { updatedAt, timelineRecorded };
 }
 
@@ -81,7 +81,7 @@ export async function reportTaskStage(taskId: string, stage: TaskStage, opts: {
     await transaction.update(tasks).set({ stage, ...acceptanceId, updatedAt }).where(eq(tasks.id, taskId));
   });
   bus.publish({ type: "task.stage", taskId, stage, updatedAt });
-  const timelineRecorded = await appendTaskTimeline(taskId, `验收阶段更新：${STAGE_LABELS[stage]}（${stage}）`);
+  const timelineRecorded = await appendTaskTimeline(taskId, noticeLine({ kind: "stage", stage }, `验收阶段更新：${STAGE_LABELS[stage]}（${stage}）`));
   return { updatedAt, timelineRecorded };
 }
 
@@ -96,7 +96,7 @@ export async function reportTaskStage(taskId: string, stage: TaskStage, opts: {
  * onlyIf：只在这一行此刻还满足它时才清（放行按「还是核过的那一道关」写，task-human-gate.ts sameGate）。
  * 返回 false = 条件落空，什么都没动。
  */
-export async function clearTaskStage(taskId: string, note: string, onlyIf?: SQL): Promise<boolean> {
+export async function clearTaskStage(taskId: string, note: TimelineLine, onlyIf?: SQL): Promise<boolean> {
   const updatedAt = now();
   const cleared = await db.update(tasks).set({ stage: null, updatedAt })
     .where(onlyIf ? and(eq(tasks.id, taskId), onlyIf) : eq(tasks.id, taskId)).returning({ id: tasks.id });
@@ -189,7 +189,7 @@ export async function commitReopenAcceptedStage(taskId: string): Promise<void> {
   const updatedAt = now();
   await db.update(tasks).set({ ...CLEARED_SNAPSHOT, stage: null, updatedAt }).where(eq(tasks.id, taskId));
   bus.publish({ type: "task.stage", taskId, stage: null, updatedAt });
-  await appendTaskTimeline(taskId, "任务又被唤醒，验收阶段清回进行中（完成后重新验收即可再次翻篇）");
+  await appendTaskTimeline(taskId, receiptLine("任务又被唤醒，验收阶段清回进行中（完成后重新验收即可再次翻篇）"));
 }
 
 const CLEARED_SNAPSHOT = {
@@ -254,7 +254,7 @@ export async function restoreTaskStage(
     updatedAt,
   }).where(eq(tasks.id, taskId));
   bus.publish({ type: "task.stage", taskId, stage, updatedAt });
-  await appendTaskTimeline(taskId, note);
+  await appendTaskTimeline(taskId, receiptLine(note));
   return true;
 }
 

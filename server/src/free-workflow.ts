@@ -64,7 +64,7 @@ import { activeReviewEvidence, preserveReviewWait, reviewContinuationPending } f
 import { drainRegressionFinalization, finalization } from "./regression-finalization.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { claimOwnTurn, releaseTurn, turnRole } from "./runs.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine, noticeLine } from "./task-timeline.js";
 import { noteReviewInput, reviewInputHoldNow } from "./review-input-verdict.js";
 import { REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
 import { extractReportFindings } from "./review-history.js";
@@ -213,8 +213,9 @@ export async function reserveFreeReview(
         reviewHeldToken: sql`CASE WHEN ${freeWorkflowStates.reviewArmed} = 1 AND ${freeWorkflowStates.reviewHeldToken} = ${freeWorkflowStates.updatedAt} THEN ${at} ELSE NULL END`,
       },
     });
-    await appendTaskTimeline(taskId, `${existing?.reviewArmed ? "已更新审查预约" : "已预约审查"}：${profile.name}${overrideSuffix(override)} · ` +
-      `${mode === "logic" ? "逻辑检查" : "语法检查"} · 自动复审 ${retries} 轮${note ? " · 含附言" : ""}。执行回合正常结束后自动开始。`);
+    await appendTaskTimeline(taskId, noticeLine({ kind: "review.reserved", reviewer: profile.name, updated: !!existing?.reviewArmed },
+      `${existing?.reviewArmed ? "已更新审查预约" : "已预约审查"}：${profile.name}${overrideSuffix(override)} · ` +
+      `${mode === "logic" ? "逻辑检查" : "语法检查"} · 自动复审 ${retries} 轮${note ? " · 含附言" : ""}。执行回合正常结束后自动开始。`));
     bus.publish({ type: "task.review", taskId });
     return freeWorkflowState(taskId);
   } finally {
@@ -238,7 +239,7 @@ export async function cancelFreeReviewReservation(taskId: string): Promise<FreeW
           reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
         })
         .where(eq(freeWorkflowStates.taskId, taskId));
-      await appendTaskTimeline(taskId, "已取消审查预约。");
+      await appendTaskTimeline(taskId, noticeLine({ kind: "review.unreserved" }, "已取消审查预约。"));
       bus.publish({ type: "task.review", taskId });
     }
     return freeWorkflowState(taskId);
@@ -343,9 +344,9 @@ export async function launchReservedFreeReview(
         override: reserved.override,
       }, { slotToken: input.slotToken });
       if (reserved.dropped === "executor") {
-        await appendTaskTimeline(taskId, `预约里选的执行器已不可用，这次改用 ${reserved.override!.agentType} 的默认执行器（模型与智能水平仍按你预约时改的跑）。`);
+        await appendTaskTimeline(taskId, receiptLine(`预约里选的执行器已不可用，这次改用 ${reserved.override!.agentType} 的默认执行器（模型与智能水平仍按你预约时改的跑）。`));
       } else if (reserved.dropped === "all") {
-        await appendTaskTimeline(taskId, "预约里的执行器覆盖已失效，这次按审查者自己的配置跑。");
+        await appendTaskTimeline(taskId, receiptLine("预约里的执行器覆盖已失效，这次按审查者自己的配置跑。"));
       }
       await afterDispatch();
       return state;
@@ -412,7 +413,7 @@ export async function handleFreeWorkflowSettlement(
       if (reservation?.armed && reservation.source === "follow_up") {
         const canceled = await consumeFreeReviewReservation(taskId, reservation);
         if (canceled) {
-          await appendTaskTimeline(taskId, "修复执行回合异常结束，自动复审已取消；修复成功后可重新派审。");
+          await appendTaskTimeline(taskId, alertLine("修复执行回合异常结束，自动复审已取消；修复成功后可重新派审。"));
           return true;
         }
       }
@@ -441,7 +442,8 @@ export async function handleFreeWorkflowSettlement(
       // 槽由 startReservedFreeReview 按 CAS 消费（消费成功才启动），所以失败路径都不再补
       // disarm——那时槽已经空了，再清一次清掉的会是用户新保存的那条。
       await launchReservedFreeReview(task, reservation, async () => {
-        if (!confirmedDone) await appendTaskTimeline(taskId, "执行回合已正常结束，按预约启动审查。本回合未确认任务完成，任务完成状态仍按原结算结果保留。");
+        if (!confirmedDone) await appendTaskTimeline(taskId, noticeLine({ kind: "review.launch" },
+          "执行回合已正常结束，按预约启动审查。本回合未确认任务完成，任务完成状态仍按原结算结果保留。"));
       });
       return true;
     }
@@ -624,7 +626,7 @@ export async function startFreeReview(
       }
       // 派审面上临时改过执行器：写一行，否则时间线只有审查者名字，读不出这一轮跑的是谁。
       if (override) {
-        await appendTaskTimeline(taskId, `本次审查改用 ${overrideLabel(override)}（${profile.name} 的配置未改动）。`);
+        await appendTaskTimeline(taskId, receiptLine(`本次审查改用 ${overrideLabel(override)}（${profile.name} 的配置未改动）。`));
       }
       handed = (await launchReviewRound(task, run,
         { responsibility: { generation, claimToken, since: at } })).dispatched;

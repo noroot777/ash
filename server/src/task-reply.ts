@@ -17,7 +17,7 @@ import { nativeCliCommand } from "./skills.js";
 import { leadTypeOf } from "./team/session.js";
 import { replyWithAnnotationBatch } from "./page-annotation-routes.js";
 import { taskCliCommand } from "./task-cli-command.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { whenTurnIdle } from "./runs.js";
 
 export type TaskReplyBody = {
@@ -193,7 +193,7 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
     await enqueueMessage({ taskId, text, ...route, agent: b.agent ?? null, ownerUserId: route.actingUserId });
     deliverWhenTurnIdle(taskId);
   }).catch((error) => {
-    void appendTaskTimeline(taskId, `续聊未能启动：${error instanceof Error ? error.message : String(error)}`).catch((failure) => console.error("[ash] 续聊失败说明写入失败:", failure));
+    void appendTaskTimeline(taskId, alertLine(`续聊未能启动：${error instanceof Error ? error.message : String(error)}`)).catch((failure) => console.error("[ash] 续聊失败说明写入失败:", failure));
   });
   return c.json({ started: true }, 202);
 }

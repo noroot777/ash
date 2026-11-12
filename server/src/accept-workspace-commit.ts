@@ -1,7 +1,7 @@
 import { readScmStatus } from "./git-status.js";
 import { commitWorkspace, ScmOperationError } from "./git-workspace-ops.js";
 import { claimWorkspaceWrite, resolveWorkspaceContext } from "./workspace-write-gate.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import type { tasks } from "./db/schema.js";
 import { assertAcceptanceWorkspaceCommit } from "./accept-workspace-ownership.js";
 import type { AcceptFailure } from "./task-accept-guard.js";
@@ -17,7 +17,7 @@ export async function autoCommitAcceptanceWorkspace(
   if (!enabled || task.stage === "merged" || task.stage === "accepted") return null;
   const skip = async (reason: string) => {
     onOutcome?.({ status: "skipped", reason });
-    await appendTaskTimeline(task.id, `验收前已跳过自动提交，继续按原流程验收：${reason}`);
+    await appendTaskTimeline(task.id, receiptLine(`验收前已跳过自动提交，继续按原流程验收：${reason}`));
     return null;
   };
   let commitRequired = false;
@@ -47,7 +47,7 @@ export async function autoCommitAcceptanceWorkspace(
       });
     });
     onOutcome?.({ status: "committed", reason: result.warning ?? "已自动提交任务改动", ...(result.sha ? { sha: result.sha } : {}) });
-    await appendTaskTimeline(task.id, `验收前已按项目设置自动提交任务改动：${result.sha?.slice(0, 8) ?? result.subject}。${result.warning ?? ""}`);
+    await appendTaskTimeline(task.id, receiptLine(`验收前已按项目设置自动提交任务改动：${result.sha?.slice(0, 8) ?? result.subject}。${result.warning ?? ""}`));
     return null;
   } catch (error) {
     if (!commitRequired) return skip(error instanceof Error ? error.message : String(error));

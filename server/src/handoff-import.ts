@@ -39,7 +39,7 @@ import { claudeSessionFilePath, handoffSessionContext } from "./handoff-collect.
 import { cliConfigDirForOwner } from "./auth/run-env.js";
 import { discardMigratedWorkspace } from "./workspace-cleanup.js";
 import { id, now } from "./util.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { isAcceptedStage, type TaskHandoff, type TaskStage } from "@ash/shared";
 import { importWaitOwnership, manifestCarriesReview } from "./handoff-wait.js";
 import { collectGateRuns, replaceGateRuns, returningAcceptanceId } from "./handoff-accept-gate.js";
@@ -649,7 +649,7 @@ async function importValidated(
     // 丢掉了,只有落在会话时间线上的这一句刷新页面后还看得见。
     await appendTaskTimeline(
       m.task.id,
-      "任务带着「已验收」回到本机，没有自动续跑 —— 续跑会把验收结论和合并快照整套摘掉。需要继续改动就直接在会话里发消息唤醒它。",
+      receiptLine("任务带着「已验收」回到本机，没有自动续跑 —— 续跑会把验收结论和合并快照整套摘掉。需要继续改动就直接在会话里发消息唤醒它。"),
     );
   }
 

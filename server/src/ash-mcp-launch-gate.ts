@@ -20,7 +20,7 @@ import { desc, eq } from "drizzle-orm";
 import { ashMcpReachability } from "./ash-mcp-reachability.js";
 import { db } from "./db/index.js";
 import { projects, sessions, tasks } from "./db/schema.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { existingTaskWorkspacePath } from "./task-workspace.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -103,7 +103,7 @@ export async function gateAshMcpBeforeLaunch(
   // 用户回头能看到这一句，而不是只剩「未能正常给出结论」（新链第 1 轮审查第 3 条）。
   if (reach.warning) {
     // appendTaskTimeline 自己不抛，写不进去只回 false（任务还没有会话行时就是这样）。
-    if (!(await appendTaskTimeline(task.id, `起跑预检提示（${who}）：${reach.warning}`))) {
+    if (!(await appendTaskTimeline(task.id, alertLine(`起跑预检提示（${who}）：${reach.warning}`)))) {
       console.error(`[ash] 起跑预检提示写不进时间线(${task.id})：${reach.warning}`);
     }
   }

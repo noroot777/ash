@@ -5,7 +5,7 @@ import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
 import { directionIdentityCleared } from "./task-direction-epoch.js";
 import { taskStartStatus, recordTaskStatus } from "./task-start-status.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
 
 export async function rememberGuardedStart(transaction: ConclusionTransaction, task: typeof tasks.$inferSelect,
@@ -64,5 +64,5 @@ export async function withdrawRepairStart(taskId: string, receipt: ReviewStartRe
   }, { behavior: "immediate" });
   if (!withdrawn) return;
   recordTaskStatus(withdrawn.task, withdrawn.status);
-  await appendTaskTimeline(taskId, "自动修复在启动前撤回（原方向失效或起跑中断），本轮没有启动，已释放运行状态；原审查结论保持不变。");
+  await appendTaskTimeline(taskId, receiptLine("自动修复在启动前撤回（原方向失效或起跑中断），本轮没有启动，已释放运行状态；原审查结论保持不变。"));
 }

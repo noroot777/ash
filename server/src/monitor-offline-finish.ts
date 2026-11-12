@@ -19,7 +19,7 @@ import {
   claimFinish, commitProgress, monitorLogBytes, publish, pushLines, serialize, teardownRuntimeLocked,
   type Row,
 } from "./monitors.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, noticeLine } from "./task-timeline.js";
 import { now } from "./util.js";
 
 /**
@@ -137,7 +137,8 @@ export async function finishOffline(
       }
       publish(base.taskId);
       // 同上:问日志文件,不问游标也不问这一趟读到哪(两者都只是「送出去多少」的影子)。
-      await appendTaskTimeline(base.taskId, `哨兵结束：${base.description}。${note}（${tally}）`);
+      await appendTaskTimeline(base.taskId, noticeLine({ kind: "monitor.finished", description: base.description },
+        `哨兵结束：${base.description}。${note}（${tally}）`));
       await deliverResultHandoff(base.id);
     } finally {
       // 撤运行时排在读日志之前(自己那条 tail 不停下来就会边收尾边继续推),所以中间这一段

@@ -42,7 +42,7 @@ import { mountHandoffRemoteRoutes } from "./handoff-remote.js";
 import { assertReturnProject, listReturnGrants, returnArchiveForPeer } from "./handoff-return.js";
 import { returnTargetForTask, sourceUrlFromPeer } from "./handoff-return-address.js";
 import { listSourceAddresses, updateSourceAddress } from "./handoff-source-address.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { isMultiUser } from "./auth/mode.js";
 import { countUsers } from "./auth/store.js";
 import { peerActor, peerOwnerId, peerUserFor, peerUserSoft } from "./auth/handoff-peer-user.js";
@@ -632,13 +632,13 @@ export function mountHandoffRoutes(api: Hono): void {
     if (!updated.length) {
       return c.json({ error: "核验期间任务的接力状态已经变化，请刷新后按最新状态处理" }, 409);
     }
-    await appendTaskTimeline(taskId, audit
+    await appendTaskTimeline(taskId, alertLine(audit
       ? returning
         ? "⚠️ 用户在无法核验原机状态时强制撤销了本次移回；任务继续由本机持有，但原机可能已有副本，恢复联网后必须人工确认只运行一份。"
         : "⚠️ 用户在无法核验目标机状态时强制恢复了本机任务；目标机可能已有副本，恢复联网后必须人工确认只运行一份。"
       : returning
         ? "🔁 用户安全撤销了本次移回，任务继续由本机持有；原机已登记忽略这次旧移回请求。"
-        : "🔁 对端确认未收到任务并登记撤销后，用户移除了接力标记，任务恢复为本机可运行。");
+        : "🔁 对端确认未收到任务并登记撤销后，用户移除了接力标记，任务恢复为本机可运行。"));
     await publishTaskUpdated(taskId);
     return c.json({ cleared: true, restored: returning ? "in" : "local", forced });
   });

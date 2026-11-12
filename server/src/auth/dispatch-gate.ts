@@ -118,10 +118,10 @@ export async function noteExecutorDowngrade(
   from: { name: string; type: string },
   toName: string,
 ): Promise<void> {
-  const { appendTaskTimeline } = await import("../task-timeline.js");
+  const { appendTaskTimeline, receiptLine } = await import("../task-timeline.js");
   await appendTaskTimeline(
     taskId,
-    `执行器已降级：原执行器「${from.name}」(${from.type})属于别人，本轮改用你的「${toName}」。`,
+    receiptLine(`执行器已降级：原执行器「${from.name}」(${from.type})属于别人，本轮改用你的「${toName}」。`),
   );
 }
 

@@ -36,7 +36,7 @@ import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
 import { confirmTaskComplete } from "./task-complete.js";
 import { reportTaskStage } from "./task-stage.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 
 /** 从输出流里认出来的一次 ash MCP 调用。 */
 export interface McpCallRecord {
@@ -290,7 +290,7 @@ export async function replayUndeliveredMcpCalls(a: {
     const note = await applyReplay(a.taskId, a.sessId, call, directionToken).catch(() => null);
     if (!note) continue;
     done += 1;
-    await appendTaskTimeline(a.taskId, note);
+    await appendTaskTimeline(a.taskId, receiptLine(note));
   }
   if (done) bus.publish({ type: "task.review", taskId: a.taskId });
   return done;

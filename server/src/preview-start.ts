@@ -15,7 +15,7 @@ import { boundListeningPort, currentListeningPort } from "./listening-port.js";
 import { canceledGens, previewRetiring, whileRetiringPreview } from "./preview-start-state.js";
 import { alive, archivePreview, logFollower, patchStart, prunePreviewArtifacts, readAnyPreview, recordPath, tail, writeRecord, type PreviewStep, type PreviewResult, type PreviewServiceRecord } from "./preview-store.js";
 import { now } from "./util.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 
 export interface PreviewStartOptions {
   beforeStart?: () => Promise<void>;
@@ -134,7 +134,7 @@ export async function runPreview(
           if (previewRetiring(gen)) return;
           if (ours() && readAnyPreview(taskId)?.state === "ready") {
             void fail(`${s.name}：预览进程已自行退出`).then(result =>
-              appendTaskTimeline(taskId, `预览异常：${result.reason}`)).catch(() => {});
+              appendTaskTimeline(taskId, alertLine(`预览异常：${result.reason}`))).catch(() => {});
           }
         });
         child.unref();

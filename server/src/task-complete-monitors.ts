@@ -74,7 +74,7 @@ import { db } from "./db/index.js";
 import { monitorLogBytes } from "./monitors.js";
 import { monitors, sessions } from "./db/schema.js";
 import { unsettledMonitorResponsibility, type MonitorResponsibilityRow } from "./monitor-responsibility.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 
 type MonitorFacts = {
   id: string;
@@ -285,13 +285,13 @@ export async function noteMonitorsDropped(taskId: string): Promise<void> {
     const more = dropped.length > 3 ? `，另有 ${dropped.length - 3} 个` : "";
     await appendTaskTimeline(
       taskId,
-      `本回合撤掉 ${dropped.length} 个哨兵后确认完成：${detail}${more}。`
+      receiptLine(`本回合撤掉 ${dropped.length} 个哨兵后确认完成：${detail}${more}。`
       // **只说「不再继续盯」**(第 1 轮审查 N3)。上一版写「它们在等的结果不会再回来了」,
       // 而这句话有两处说不准:一是确认成功不等于这一轮就落 done(手里还攥着人工检查点/
       // 提问时会落 paused),二是 `stop_monitor` 明确保留已经攒下的事件(monitor-stop.ts),
       // 放弃撤掉的只是「必须先收下它」这条放行条件 —— 那几条该送还是会送到。
       + "从这一刻起没人再盯着它们了,之后才产生的输出不会再有人收——还需要的话得重新挂一个哨兵"
-      + "（它们停之前已经攒下、还排在待发送里的那些,该送的照旧会送到）。",
+      + "（它们停之前已经攒下、还排在待发送里的那些,该送的照旧会送到）。"),
       { sessionId: turn.sessionId },
     );
   } catch (e) {

@@ -16,7 +16,7 @@ import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from 
 import { lstat, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { replaceEvidenceFile, safeRunDirectory } from "./review-evidence.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { id } from "./util.js";
 import { extractReportFindings, freeReviewHistory } from "./review-history.js";
 import { RECURRENCE_LIST_FILE, recurrenceListMarkdown, recurrenceRepairNote, roundRecurrence } from "./review-recurrence.js";
@@ -159,8 +159,8 @@ async function recurrenceNote(taskId: string, runId: string, round: number): Pro
     extractReportFindings(readFreeReviewReport(taskId, runId, round))));
   if (!failure) return note.text;
   const why = `同类问题熔断的完整清单写不进证据目录（${failure}），这一次修复交接先不发`;
-  await appendTaskTimeline(taskId, `${why}：条目太多放不进指令，不给清单执行者就不知道要一次改全哪几条。会自动重试；` +
-    `也可以修好证据目录后再点「按意见修复」。`, { eventKey: `recurrence-list:${runId}:${round}` }).catch(() => false);
+  await appendTaskTimeline(taskId, alertLine(`${why}：条目太多放不进指令，不给清单执行者就不知道要一次改全哪几条。会自动重试；` +
+    `也可以修好证据目录后再点「按意见修复」。`), { eventKey: `recurrence-list:${runId}:${round}` }).catch(() => false);
   throw new Error(why);
 }
 

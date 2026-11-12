@@ -9,7 +9,7 @@ import { handOffGateFailure, parseChoices, resolveInterruptedHandoff } from "./a
 import { parseGateSettlement } from "./accept-gate-exit.js";
 import { latestRun } from "./accept-gate-state.js";
 import { ReviewSuperseded } from "./review-ownership.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 
@@ -51,7 +51,7 @@ export async function followUpGate(row: GateRow, view: AcceptGateView, resumeNot
       await resolveInterruptedHandoff(row);
       return;
     }
-    if (resumeNote) await appendTaskTimeline(row.taskId, resumeNote);
+    if (resumeNote) await appendTaskTimeline(row.taskId, receiptLine(resumeNote));
     if (row.status === "passed") {
       await continueAcceptance(row);
       await clearOwed(row.id);
@@ -78,8 +78,8 @@ async function continueAcceptance(row: GateRow): Promise<void> {
   const choices = parseChoices(row.acceptOptions);
   if (!choices) {
     // 不是欠着的一步（下次启动再读也还是坏的）：说清楚，交回给人点。
-    await appendTaskTimeline(row.taskId, "验收前置命令通过了，但当初那一下验收的选择（点的是哪一版、怎么提交）读不出来了，"
-      + "没有替你自动验收：回 ash 看过这一版再点一次验收。");
+    await appendTaskTimeline(row.taskId, alertLine("验收前置命令通过了，但当初那一下验收的选择（点的是哪一版、怎么提交）读不出来了，"
+      + "没有替你自动验收：回 ash 看过这一版再点一次验收。"));
     return;
   }
   const { acceptTask } = await import("./task-accept.js");
@@ -97,8 +97,8 @@ async function continueAcceptance(row: GateRow): Promise<void> {
     // 其余抛出来的不是「验收没过」这个结果，是这一次没走完（读库失败、进程内异常……）。照样告诉
     // 用户，但欠账留着：下次启动会接着做，不把一次临时故障变成永远没人补的那一步。
     const reason = error instanceof Error ? error.message : String(error);
-    await appendTaskTimeline(row.taskId, `验收前置命令通过后自动继续验收时出错（${reason}）。这一步还欠着：`
-      + "ash 下次启动会接着做，你也可以现在直接再点一次验收。").catch(() => {});
+    await appendTaskTimeline(row.taskId, alertLine(`验收前置命令通过后自动继续验收时出错（${reason}）。这一步还欠着：`
+      + "ash 下次启动会接着做，你也可以现在直接再点一次验收。")).catch(() => {});
     throw error;
   });
   if (!result.accepted) {
@@ -108,8 +108,8 @@ async function continueAcceptance(row: GateRow): Promise<void> {
     if (reason === "accept_gate_required" || reason === "accept_gate_running") {
       await appendTaskTimeline(
         row.taskId,
-        `验收前置命令通过了，但它验的已经不是现在这一份（命令跑的那十几分钟里工作区又有了新提交、`
-          + `这条命令被改过，或者合并预览档下目标分支又进了别的合并）。所以没有直接合并，而是按**现在**这一份重新跑一遍；绿了仍会自动接着合。`,
+        receiptLine(`验收前置命令通过了，但它验的已经不是现在这一份（命令跑的那十几分钟里工作区又有了新提交、`
+          + `这条命令被改过，或者合并预览档下目标分支又进了别的合并）。所以没有直接合并，而是按**现在**这一份重新跑一遍；绿了仍会自动接着合。`),
       );
       return;
     }
@@ -117,7 +117,7 @@ async function continueAcceptance(row: GateRow): Promise<void> {
     // 否则用户只看见一条没头没尾的验收失败，不知道是谁点的。
     await appendTaskTimeline(
       row.taskId,
-      `验收前置命令通过后自动继续验收，但没能完成：${result.error}。处理完上面那条原因后再点一次验收即可。`,
+      alertLine(`验收前置命令通过后自动继续验收，但没能完成：${result.error}。处理完上面那条原因后再点一次验收即可。`),
     );
   }
 }

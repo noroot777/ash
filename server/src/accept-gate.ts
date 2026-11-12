@@ -23,7 +23,7 @@ import { acceptGateRuns, projects, tasks } from "./db/schema.js";
 import { acceptGateLogPath, appendGateLog, spawnAcceptGate } from "./accept-gate-process.js";
 import { isAncestor } from "./git-accept.js";
 import { commitAt } from "./task-branch-plan.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { acceptGateCommandOf, gateView, latestRun, prepareGateCwd, runningRun } from "./accept-gate-state.js";
 import { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource, type GateSource } from "./accept-gate-source.js";
 import { readOnlyGit, snapshotMaterialization } from "./accept-gate-preview.js";
@@ -112,7 +112,7 @@ export async function acceptGateCheck(
   }
   const unavailable = gateConfinementUnavailable();
   if (unavailable && opts.intent !== "skip") {
-    await appendTaskTimeline(task.id, `验收前置命令未执行（本机能力不可用）：${unavailable}`);
+    await appendTaskTimeline(task.id, alertLine(`验收前置命令未执行（本机能力不可用）：${unavailable}`));
     return { accepted: false, httpStatus: 409, taskId: task.id, reason: "accept_gate_unavailable",
       error: unavailable, status: task.status };
   }
@@ -150,12 +150,12 @@ export async function acceptGateCheck(
         return null;
       }
       const besides = gateDriftBesidesTree(row, plan);
-      if (besides === "materialization") await appendTaskTimeline(task.id, "验收前置命令通过了，但它跑的那会儿之后项目的换行配置"
-        + "（core.autocrlf / core.eol）变了：同一棵树合进去之后检出的字节已经不是测过的那份。旧结果不拿来合，按现在的配置重新跑一遍。");
-      else if (besides === "physical") await appendTaskTimeline(task.id, `验收前置命令通过了，但它跑的那会儿之后目标分支 ${plan?.targetBranch ?? ""} 的检出里`
-        + "有这次合并不会重写的文件变了（字节和测的时候不是同一份，树和 `git status` 看不出来）。旧结果不拿来合，按现在的检出重新跑一遍。");
-      else await appendTaskTimeline(task.id, `验收前置命令通过了，但它预演的是 ${row.targetBranch ?? "目标分支"}@${row.previewBase?.slice(0, 8) ?? "（分支快照）"}，`
-        + `现在要合的已经是 ${plan?.targetBranch ?? "目标分支"}@${plan?.previewBase?.slice(0, 8) ?? "（分支快照）"}。旧结果不拿来合这一棵，按现在的目标分支重新跑一遍。`);
+      if (besides === "materialization") await appendTaskTimeline(task.id, receiptLine("验收前置命令通过了，但它跑的那会儿之后项目的换行配置"
+        + "（core.autocrlf / core.eol）变了：同一棵树合进去之后检出的字节已经不是测过的那份。旧结果不拿来合，按现在的配置重新跑一遍。"));
+      else if (besides === "physical") await appendTaskTimeline(task.id, receiptLine(`验收前置命令通过了，但它跑的那会儿之后目标分支 ${plan?.targetBranch ?? ""} 的检出里`
+        + "有这次合并不会重写的文件变了（字节和测的时候不是同一份，树和 `git status` 看不出来）。旧结果不拿来合，按现在的检出重新跑一遍。"));
+      else await appendTaskTimeline(task.id, receiptLine(`验收前置命令通过了，但它预演的是 ${row.targetBranch ?? "目标分支"}@${row.previewBase?.slice(0, 8) ?? "（分支快照）"}，`
+        + `现在要合的已经是 ${plan?.targetBranch ?? "目标分支"}@${plan?.previewBase?.slice(0, 8) ?? "（分支快照）"}。旧结果不拿来合这一棵，按现在的目标分支重新跑一遍。`));
     }
   }
 
@@ -165,8 +165,8 @@ export async function acceptGateCheck(
     // 目录里跑测试、写日志。界面不给这条路，HTTP/MCP 给得出来（第 1 轮审查）。
     await appendTaskTimeline(
       task.id,
-      `本次验收**跳过**了验收前置命令 \`${command}\`：这是你在验收时明确选的，` +
-        `ash 没有跑它，也没有任何它通过的证据。${inFlight ? "正在跑的那一次已经一并收掉。" : ""}`,
+      receiptLine(`本次验收**跳过**了验收前置命令 \`${command}\`：这是你在验收时明确选的，` +
+        `ash 没有跑它，也没有任何它通过的证据。${inFlight ? "正在跑的那一次已经一并收掉。" : ""}`),
     );
     recordBasis("skipped", null);
     return null;
@@ -179,7 +179,7 @@ export async function acceptGateCheck(
     await noteTargetDrift(task, project.repoPath, previous!);
     await appendTaskTimeline(
       task.id,
-      `验收前置命令沿用上一次的结果：\`${previous!.command}\` 在当前源码快照（${source.fingerprint.slice(0, 12)}）上已经通过，不再重跑。`,
+      receiptLine(`验收前置命令沿用上一次的结果：\`${previous!.command}\` 在当前源码快照（${source.fingerprint.slice(0, 12)}）上已经通过，不再重跑。`),
     );
     recordBasis("passed", previous!.id);
     return null;
@@ -208,7 +208,7 @@ export async function acceptGateCheck(
  * 任务叫醒去解（交接在锁释放之后才真的发出，见 accept-conflict.ts）。
  */
 async function baselineRefusal(task: TaskRow, block: GateBaselineBlock): Promise<AcceptFailure> {
-  await appendTaskTimeline(task.id, `验收未完成：${block.error}`);
+  await appendTaskTimeline(task.id, alertLine(`验收未完成：${block.error}`));
   const conflictHandoff = block.reason === "merge_conflict"
     ? await handOffConflict(task, { ...block, preview: true }) : null;
   return { accepted: false, httpStatus: 409, taskId: task.id, reason: block.reason, error: block.error,
@@ -226,7 +226,7 @@ async function noteTargetDrift(task: TaskRow, repoPath: string, row: GateRow): P
     + (included ? "目标分支现在的内容已经包含在被测提交中。"
       : "它跑过的是任务分支那棵树，不是这一次的合并结果 —— 目标分支这期间进来的改动没有被它验过。");
   appendGateLog(row.logPath, `\n[ash] ${notice}\n`);
-  await appendTaskTimeline(task.id, notice);
+  await appendTaskTimeline(task.id, alertLine(notice));
 }
 
 /**
@@ -269,13 +269,13 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     if (executionNotice) appendGateLog(logPath, `[ash] ${executionNotice}\n`);
     await appendTaskTimeline(
       taskId,
-      `验收前置命令开跑：\`${plan.command}\`（独立快照 ${snapshotCwd}，源自 ${plan.cwd}）。rc=0 且进程监督收尾后才会继续合并；`
+      receiptLine(`验收前置命令开跑：\`${plan.command}\`（独立快照 ${snapshotCwd}，源自 ${plan.cwd}）。rc=0 且进程监督收尾后才会继续合并；`
         + `绿了会自动把这次验收做完，红了会把日志交回这个任务去修。`
         + (executionNotice ? ` ${executionNotice}` : "")
         + (baselineNotice ? ` ${baselineNotice}。`
           : plan.fastForward === false
             ? ` 注意：目标分支 ${plan.targetBranch} 已经领先于这棵树，所以它验的不是最终的合并结果。`
-            : ""),
+            : "")),
     );
     announceGate(taskId);
   } catch (error) {

@@ -41,7 +41,7 @@ import { withRepoLock } from "./repo-lock.js";
 import { acceptingBusyText, beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { holdTeamForAcceptance } from "./team-acceptance-hold.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { recordBranchReceipt } from "./task-branch-receipts.js";
 import { taskWorkflowDef } from "./workflows.js";
@@ -259,8 +259,8 @@ async function backfillCommitted(task: TaskRow, commit: string): Promise<void> {
   await recordBranchReceipt(task.id, true).catch(() => {});
   await appendTaskTimeline(
     task.id,
-    `核对现场时发现：那次「合并后不提交」的改动你自己已经提交了（${commitLabel(commit)}，内容与合并结果一致），`
-      + "已把合并快照补齐。",
+    receiptLine(`核对现场时发现：那次「合并后不提交」的改动你自己已经提交了（${commitLabel(commit)}，内容与合并结果一致），`
+      + "已把合并快照补齐。"),
   );
   await publishTaskUpdated(task.id);
 }
@@ -332,7 +332,7 @@ export async function commitPendingMerge(taskId: string): Promise<PendingMergeAc
         await exec("git", ["-C", repo, "commit", "-m", squashCommitMessage(state.sourceBranch)]);
       } catch (error) {
         const message = `git commit 失败：${gitError(error)}；索引里的改动一个字没动，可以修掉原因再试`;
-        await appendTaskTimeline(taskId, `替你提交这次合并没成功：${message}`);
+        await appendTaskTimeline(taskId, alertLine(`替你提交这次合并没成功：${message}`));
         return { ok: false, httpStatus: 409, reason: "commit_failed", error: message } as PendingMergeFailure;
       }
       const commit = await exec("git", ["-C", repo, "rev-parse", "--verify", "--quiet", `${state.targetBranch}^{commit}`])
@@ -341,7 +341,7 @@ export async function commitPendingMerge(taskId: string): Promise<PendingMergeAc
       if (!commit || commit === task.acceptedBaseCommit) {
         const message = `git commit 跑完了，但 ${state.targetBranch} 仍停在 ${commitLabel(task.acceptedBaseCommit ?? "")}；`
           + "没有产生提交，请手动核对仓库状态。";
-        await appendTaskTimeline(taskId, message);
+        await appendTaskTimeline(taskId, alertLine(message));
         return { ok: false, httpStatus: 409, reason: "commit_missing", error: message } as PendingMergeFailure;
       }
       await db.update(tasks).set({ acceptedMergeCommit: commit, updatedAt: now() }).where(eq(tasks.id, taskId));
@@ -349,8 +349,8 @@ export async function commitPendingMerge(taskId: string): Promise<PendingMergeAc
       const notices = await rerunCleanup(task, project, state.targetBranch);
       await appendTaskTimeline(
         taskId,
-        `已把那次「合并后不提交」的改动落成提交 ${commitLabel(commit)}（${state.targetBranch}），`
-          + `提交消息与正常验收一致。${notices.length ? `清理重跑：${notices.join("；")}。` : ""}`,
+        receiptLine(`已把那次「合并后不提交」的改动落成提交 ${commitLabel(commit)}（${state.targetBranch}），`
+          + `提交消息与正常验收一致。${notices.length ? `清理重跑：${notices.join("；")}。` : ""}`),
       );
       const updated = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0) ?? task;
       const after = await inspectPendingMerge(updated, project);
@@ -399,7 +399,7 @@ export async function remergePendingMerge(
       const plan = acceptPlan(taskWorkflowDef(task.workflow), "human", task.workflowAt);
       const merge = await mergeTaskBranch(project.repoPath, taskId, before.targetBranch, plan.merge ?? "safe", { commit });
       if (!merge.ok) {
-        await appendTaskTimeline(taskId, `重新合并未完成：${merge.message}。目标分支没有被强制修改。`);
+        await appendTaskTimeline(taskId, alertLine(`重新合并未完成：${merge.message}。目标分支没有被强制修改。`));
         return { ok: false, httpStatus: 409, reason: merge.reason, error: merge.message } as PendingMergeFailure;
       }
       const noCommit = merge.method === "no_commit";
@@ -415,11 +415,11 @@ export async function remergePendingMerge(
       const notices = noCommit ? [] : await rerunCleanup(task, project, merge.targetBranch);
       await appendTaskTimeline(
         taskId,
-        `已重新合并：${merge.sourceBranch} → ${merge.targetBranch}`
+        receiptLine(`已重新合并：${merge.sourceBranch} → ${merge.targetBranch}`
           + (noCommit
             ? "（仍按「合并后不提交」，改动又躺在目标分支工作区里等你收尾）。"
             : `（这次落了提交 ${commitLabel(merge.afterCommit ?? "")}）。`)
-          + `${notices.length ? `清理重跑：${notices.join("；")}。` : ""}`,
+          + `${notices.length ? `清理重跑：${notices.join("；")}。` : ""}`),
       );
       const updated = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0) ?? task;
       const after = await inspectPendingMerge(updated, project);

@@ -62,7 +62,7 @@ import { claimOwnTurn, releaseTurn } from "./runs.js";
 import { RESUME_PROMPT } from "./run-prompts.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { readableRunPath, sessionTranscriptPath } from "./transcript.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 
@@ -388,13 +388,13 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
         void work.then(
           async (delivered) => {
             // continueTask 返回 false = 一个字都没送出去，且它自己已经把锁还了。
-            if (delivered === false) await appendTaskTimeline(taskId, `${what}未能启动：回合被其它执行抢占，请再试一次。`);
+            if (delivered === false) await appendTaskTimeline(taskId, alertLine(`${what}未能启动：回合被其它执行抢占，请再试一次。`));
           },
           async (error) => {
             // 只有下游接管之前抛错才会到这（接管之后它自己 try/finally 兜底），锁还是
             // 我们占的那把，必须还回去。
             releaseTurn(taskId, turn);
-            await appendTaskTimeline(taskId, `${what}启动失败：${errorText(error)}；可以再试一次。`);
+            await appendTaskTimeline(taskId, alertLine(`${what}启动失败：${errorText(error)}；可以再试一次。`));
           },
         ).finally(() => {
           // 队列占位的收尾:真跑起来了是 no-op(结算覆盖状态);一个字都没跑成就按守卫

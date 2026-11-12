@@ -5,7 +5,7 @@ import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { agents, freeWorkflowStates, reviewerProfiles } from "./db/schema.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { id, now } from "./util.js";
 import { actorOf } from "./auth/context.js";
 import { canUseOwned, filterOwned, notYours, ownerStamp } from "./auth/owned.js";
@@ -150,7 +150,7 @@ export function mountReviewerProfileRoutes(api: Hono): void {
     await db.delete(reviewerProfiles).where(eq(reviewerProfiles.id, profileId));
     for (const row of affected) {
       if (!row.reviewArmed || row.reviewRunId) continue;
-      await appendTaskTimeline(row.taskId, "完成后审查预约已取消：所选审查者配置已被删除。");
+      await appendTaskTimeline(row.taskId, alertLine("完成后审查预约已取消：所选审查者配置已被删除。"));
       bus.publish({ type: "task.review", taskId: row.taskId });
     }
     return c.json({ deleted: true });

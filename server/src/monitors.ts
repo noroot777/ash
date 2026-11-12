@@ -42,7 +42,7 @@ import { consumeTailChunk, flushBuffer } from "./monitor-consume.js";
 // 这里的 `runtimes`/`publish`,两个文件互相引用。公开面照旧从这里出(见下面「停」那一节的
 // re-export),所以调用方一个都不用改。
 import { settleInBackground } from "./monitor-finish.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 // 消费层是从这个文件拆出去的（见 monitor-consume.ts 文件头）。这两个仍从这里导出:
 // 它们的调用方（离线补读、创建协议）本来就按「找 monitors 要」在写，没必要跟着搬家。
 export { commitProgress, pushLines } from "./monitor-consume.js";
@@ -209,8 +209,8 @@ function noteUnreadableCondition(row: Row): void {
   console.error(`[ash] 哨兵 ${row.id} 存着一条读不出来的结束条件 ${JSON.stringify(raw)}：${parsed.error}`);
   void appendTaskTimeline(
     row.taskId,
-    `哨兵「${row.description}」存着一条这一版读不出来的结束条件「${raw}」（结束条件不是正则，是字样）。`
-    + "它不会提前收工，只会盯到到期——要让它早点收工，用改得对的条件另起一个。",
+    alertLine(`哨兵「${row.description}」存着一条这一版读不出来的结束条件「${raw}」（结束条件不是正则，是字样）。`
+    + "它不会提前收工，只会盯到到期——要让它早点收工，用改得对的条件另起一个。"),
   ).catch(() => undefined);
 }
 

@@ -16,7 +16,7 @@ import { freeReviewRuns, tasks } from "./db/schema.js";
 import { retryLimit } from "./free-review-input.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
 
 export async function adjustFreeReviewRounds(
@@ -50,9 +50,9 @@ export async function adjustFreeReviewRounds(
         .returning({ id: freeReviewRuns.id });
       if (!updated.length) throw new Error("这一轮审查刚刚结束，轮数没有改动");
       const last = retries + 1 === run.currentRound;
-      await appendTaskTimeline(taskId, `审查轮数已调整：最多 ${retries + 1} 轮（原 ${run.retryLimit + 1} 轮）。` +
+      await appendTaskTimeline(taskId, receiptLine(`审查轮数已调整：最多 ${retries + 1} 轮（原 ${run.retryLimit + 1} 轮）。` +
         (last ? `第 ${run.currentRound} 轮是最后一轮，未通过就停下来等你处理。`
-          : `第 ${run.currentRound} 轮未通过时，意见交给执行者修复，修完自动续审。`));
+          : `第 ${run.currentRound} 轮未通过时，意见交给执行者修复，修完自动续审。`)));
       bus.publish({ type: "task.review", taskId });
     }
     return freeWorkflowState(taskId);

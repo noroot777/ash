@@ -13,6 +13,7 @@
 // 删除而挪动。默认解析把它们滤掉 —— 任何读正文的人（下一轮重建上下文、追问列表、重试
 // 取上一条输入、MCP 读转录）都天然读不到；只有要按原位排版的界面传 `keepDeleted`。
 import type { MonitorWakeData } from "./monitor-wake.ts";
+import { timelineNoticeOf, type TimelineNotice } from "./timeline-notice.ts";
 import { LEGACY_SYS_MARKER } from "./index.ts";
 
 export type ConvSeg =
@@ -28,14 +29,20 @@ export type ConvSeg =
   // aside:true = 任务时间线旁注（appendTaskTimeline 写的那些：预约审查、验收阶段更新、
   // 预览起停…）。它不是说给 agent 听的话，也不开/不收一个回合——落在哪一秒纯属偶然，
   // 常常正砸在某一回合说到一半的地方，所以展示端不能拿它当回合边界（见 events.ts）。
-  | { kind: "system"; text: string; at?: string; level?: "notice"; aside?: true; deleted?: true };
+  // notice = 这条时间线旁注是哪一类事（见 timeline-notice.ts）。老记录没有。
+  | { kind: "system"; text: string; at?: string; level?: "notice"; aside?: true; notice?: TimelineNotice; deleted?: true };
 
 /** 一段连同它在原文里占的行（含首尾，按 `\n` 切出来的行号）。删除就地改写靠它定位。 */
 export type SessionSegmentSpan = { seg: ConvSeg; first: number; last: number };
 
 type Sentinel = {
-  t?: string; text?: string; at?: string; by?: string; level?: string; aside?: boolean;
+  t?: string; text?: string; at?: string; by?: string; level?: string; aside?: boolean; notice?: unknown;
   monitorWake?: MonitorWakeData; answerIds?: unknown; deleted?: boolean;
+};
+
+const noticeOf = (value: unknown): { notice?: TimelineNotice } => {
+  const notice = timelineNoticeOf(value);
+  return notice ? { notice } : {};
 };
 
 const answerIdsOf = (value: unknown): { answerIds?: string[] } => {
@@ -105,6 +112,7 @@ export function parseSessionSpans(out: string): SessionSegmentSpan[] {
                 at: j.at,
                 ...(j.level === "notice" ? { level: "notice" as const } : {}),
                 ...(j.aside === true ? { aside: true as const } : {}),
+                ...noticeOf(j.notice),
                 ...deleted,
               }
             : {

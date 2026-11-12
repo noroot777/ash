@@ -15,7 +15,7 @@ import { acceptingBusyText, beginAccepting, endAccepting } from "./acceptance-lo
 import { acceptanceGuard } from "./task-accept-guard.js";
 import { workspaceParticipants } from "./task-workspace.js";
 import { isTurnClaimed, claimWorkspaceTurn } from "./runs.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { now } from "./util.js";
@@ -37,7 +37,7 @@ async function finishBaseUpdate(task: typeof tasks.$inferSelect, repo: string, h
     if (current === intent.head) await exec("git", ["-C", path, "reset", "--keep", intent.rebased]);
     await recordCompletedBaseUpdate(repo, task.id, task.mergeTargetBranch!, intent);
     const backupWarning = await retainBaseUpdateBackups(repo, task.id, [intent.backup, `${baseUpdateBackupPrefix(task.id)}prepared-${intent.rebased}`]);
-    await appendTaskTimeline(task.id, `子分支基线已更新到 ${task.mergeTargetBranch}@${intent.target.slice(0, 8)}；旧提交保留在 ${intent.backup}。请核对 diff 并按影响范围重新验证，旧审查结论未自动沿用。${backupWarning}`);
+    await appendTaskTimeline(task.id, receiptLine(`子分支基线已更新到 ${task.mergeTargetBranch}@${intent.target.slice(0, 8)}；旧提交保留在 ${intent.backup}。请核对 diff 并按影响范围重新验证，旧审查结论未自动沿用。${backupWarning}`));
     await publishTaskUpdated(task.id);
     return { ok: true };
   } finally { release(); }
@@ -87,7 +87,7 @@ export async function updateTaskBase(taskId: string, expectedHead: string): Prom
         } catch {
           await exec("git", ["-C", temp, "rebase", "--abort"]).catch(() => {});
           const error = "更新基线发生冲突或 rebase 失败；原子分支和工作区未修改，请在子任务中处理后重新验证";
-          await appendTaskTimeline(taskId, error);
+          await appendTaskTimeline(taskId, alertLine(error));
           return { ok: false, error };
         }
         const rebased = await commitAt(temp, "HEAD");

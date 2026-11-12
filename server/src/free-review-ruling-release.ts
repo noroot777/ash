@@ -33,7 +33,7 @@ import {
 import { reviewingRun } from "./free-review-round.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { claimOwnTurn, releaseTurn, whenTurnIdle } from "./runs.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, noticeLine } from "./task-timeline.js";
 
 const AFTER_CURRENT_TURN = "当前执行回合正常结束后开始";
 
@@ -88,7 +88,7 @@ export async function releaseReservationAfterRuling(taskId: string, opts: { retr
     if (await reviewingRun(taskId)) return;
     const { launchReservedFreeReview } = await import("./free-workflow.js");
     await launchReservedFreeReview(task, reservation, () =>
-      appendTaskTimeline(taskId, "裁定之后没有要等的执行回合，按预约开始审查。"), "ruling");
+      appendTaskTimeline(taskId, noticeLine({ kind: "review.launch" }, "裁定之后没有要等的执行回合，按预约开始审查。")), "ruling");
   } finally {
     releaseTurn(taskId, turn);
   }

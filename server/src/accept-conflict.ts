@@ -1,5 +1,5 @@
 import { continueWhenIdle } from "./runs.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 
 // 验收撞冲突,是整条流程里唯一一处「后端做不下去、但 agent 做得了」的岔口:merge 只
 // 会 abort 并如实报告(绝不强合),而没人去解冲突,任务就永远停在 awaiting_acceptance。
@@ -57,7 +57,7 @@ export async function handOffConflict(
   const prompt = CONFLICT_PROMPT({ sourceBranch, targetBranch, conflictFiles: files, preview: merge.preview });
   pending.set(task.id, { prompt, sourceBranch, targetBranch });
   const message = `已叫醒该任务去解冲突：它会在 ${sourceBranch} 上合并 ${targetBranch} 并解决 ${files.length} 个冲突文件，完成后重新点验收即可（届时是 fast-forward）。`;
-  await appendTaskTimeline(task.id, `冲突交接：${message}`);
+  await appendTaskTimeline(task.id, receiptLine(`冲突交接：${message}`));
   return { notified: true, message };
 }
 
@@ -76,8 +76,8 @@ export function flushConflictHandoff(taskId: string): void {
   continueWhenIdle(taskId, plan.prompt, { byBackend: true }, async (why) => {
     await appendTaskTimeline(
       taskId,
-      `冲突交接失败：没能叫醒该任务解冲突（${why}）。请手动点运行或直接回复它，` +
-        `让它在 ${plan.sourceBranch} 上 \`git merge ${plan.targetBranch}\` 解掉冲突后再点验收。`,
+      alertLine(`冲突交接失败：没能叫醒该任务解冲突（${why}）。请手动点运行或直接回复它，` +
+        `让它在 ${plan.sourceBranch} 上 \`git merge ${plan.targetBranch}\` 解掉冲突后再点验收。`),
     );
   });
 }

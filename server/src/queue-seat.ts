@@ -28,7 +28,7 @@ import { queueItems, tasks } from "./db/schema.js";
 import { manualStartBlockers } from "./queues.js";
 import { SEAT_ROLLBACK_ROLE, claimNonTurn, releaseTurn, whenTurnIdle } from "./runs.js";
 import type { TurnOwner } from "./runs.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation, type TaskQueueReservation } from "./task-queue-reservation.js";
 import { waitForStartReceipt } from "./task-start-receipt.js";
 
@@ -272,7 +272,7 @@ export async function seatThenStart(
       await start(seat);
     } catch (err) {
       console.error(`[ash] 任务 ${taskId} 启动异常:`, err);
-      await appendTaskTimeline(taskId, `本次启动失败，未能继续执行：${err instanceof Error ? err.message : String(err)}。可稍后重试运行。`);
+      await appendTaskTimeline(taskId, alertLine(`本次启动失败，未能继续执行：${err instanceof Error ? err.message : String(err)}。可稍后重试运行。`));
     } finally {
       releaseTurn(taskId, owner);
       await seat?.release();

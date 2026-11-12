@@ -26,7 +26,7 @@ import { db } from "./db/index.js";
 import { sessions } from "./db/schema.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { turnProducedWork } from "./transcript.js";
 import type { TurnReview } from "./turn-lock.js";
 
@@ -253,7 +253,7 @@ export async function noteReviewerChannelGap(a: {
   // 说明会落到另一位智能体名下 —— 看记录的人在审查者那边什么也看不到（第 1 轮审查 N3）。
   await appendTaskTimeline(
     a.taskId,
-    `这一轮的审查报告可能已经写完了，只是结论没能上报到 ash。${why}${next}`,
+    alertLine(`这一轮的审查报告可能已经写完了，只是结论没能上报到 ash。${why}${next}`),
     { sessionId: a.sessId },
   );
   return true;
@@ -288,9 +288,9 @@ export async function noteTurnChannelGap(a: {
   const check = HOW_TO_CHECK[a.agentType] ?? "检查该执行器的 ash MCP 登记";
   await appendTaskTimeline(
     a.taskId,
-    "这一轮没交卷多半不是 agent 漏了，而是它手上没有 ash 的工具：complete_task、ask_question、pause_task 都是 ash MCP 提供的，"
+    alertLine("这一轮没交卷多半不是 agent 漏了，而是它手上没有 ash 的工具：complete_task、ask_question、pause_task 都是 ash MCP 提供的，"
       + `通道不在，这一轮干得再好也交不上（自查：${check}）。修好之后点重试，它会从中断处接着做、只补交卷。`
-      + `证据：${evidence.detail}`,
+      + `证据：${evidence.detail}`),
     { sessionId: a.sessId },
   );
   return true;

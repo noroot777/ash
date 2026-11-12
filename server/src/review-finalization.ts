@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { projects, regressionEvidence, sessions, tasks } from "./db/schema.js";
+import { alertLine, noticeLine } from "./task-timeline.js";
 import { appendFinalizationTimeline, commitFinalizationStep, finalizationStep, enqueueFinalizationRepair, checkpointFinalizationWorkflow } from "./regression-finalization.js";
 import { readReport, writeConclusion } from "./review-evidence.js";
 import { repairPrompt } from "./review-prompts.js";
@@ -36,8 +37,9 @@ export async function finalizePresetReview(state: typeof regressionEvidence.$inf
     bus.publish({ type: "task.review", taskId: target.id });
   });
   if (frozen) {
-    await step("frozen", () => appendFinalizationTimeline(target.id,
-      `第 ${round} 轮验证结束时任务已归档或验收，结论不再覆盖冻结阶段（这一轮${outcome === "done" ? "正常收尾" : "未正常收尾"}）。${expiredQuestionNotice}`, `${state.generation}:frozen`));
+    await step("frozen", () => appendFinalizationTimeline(target.id, noticeLine(
+      { kind: "review.verdict", source: "inline", round, verdict: "inconclusive" },
+      `第 ${round} 轮验证结束时任务已归档或验收，结论不再覆盖冻结阶段（这一轮${outcome === "done" ? "正常收尾" : "未正常收尾"}）。${expiredQuestionNotice}`), `${state.generation}:frozen`));
     return true;
   }
   try {
@@ -46,8 +48,9 @@ export async function finalizePresetReview(state: typeof regressionEvidence.$inf
   }
   catch (error) {
     if (!(error instanceof ReviewSuperseded)) throw error;
-    await step("unapplied", () => appendFinalizationTimeline(target.id,
-      `第 ${round} 轮验证已终止并完成轮次记账；${plan.superseded ? "原轮次已被替换" : authority.target ? "原目标方向已变化" : "历史记录缺少原目标方向身份"}，本轮结论未应用，未推进工作流或投递修复。${expiredQuestionNotice}请重新派发验证。`,
+    await step("unapplied", () => appendFinalizationTimeline(target.id, noticeLine(
+      { kind: "review.verdict", source: "inline", round, verdict: "inconclusive" },
+      `第 ${round} 轮验证已终止并完成轮次记账；${plan.superseded ? "原轮次已被替换" : authority.target ? "原目标方向已变化" : "历史记录缺少原目标方向身份"}，本轮结论未应用，未推进工作流或投递修复。${expiredQuestionNotice}请重新派发验证。`),
       `${state.generation}:unapplied`));
     throw error;
   }
@@ -60,7 +63,7 @@ export async function finalizePresetReview(state: typeof regressionEvidence.$inf
   if (action === "verified") {
     if (plan.runningStep || plan.blockedStep) {
       await step("interrupted-workflow", () => appendFinalizationTimeline(target.id,
-        `审查已完成，但后续工作流「${plan.runningStep ?? plan.blockedStep}」中断或失败；已保留逐站记录，不会自动重复执行。请核对实际副作用，再次验收可补跑未完成的站。`, `${state.generation}:interrupted-workflow`));
+        alertLine(`审查已完成，但后续工作流「${plan.runningStep ?? plan.blockedStep}」中断或失败；已保留逐站记录，不会自动重复执行。请核对实际副作用，再次验收可补跑未完成的站。`), `${state.generation}:interrupted-workflow`));
       return false;
     }
     if (!plan.done.includes("workflow")) {
@@ -92,12 +95,14 @@ export async function finalizePresetReview(state: typeof regressionEvidence.$inf
     }
     return true;
   }
-  const note = async (text: string) => {
-    await step("timeline", () => appendFinalizationTimeline(target.id, text, `${state.generation}:timeline`));
+  // 走到这里的都是这一轮验证的收尾结论：没过（stop / repair），或者压根没给出结论（failed / invalid）。
+  const note = async (text: string, verdict: "failed" | "inconclusive" = "failed") => {
+    await step("timeline", () => appendFinalizationTimeline(target.id,
+      noticeLine({ kind: "review.verdict", source: "inline", round, verdict }, text), `${state.generation}:timeline`));
     return true;
   };
-  if (action === "failed") return note(`第 ${round} 轮验证以 ${outcome} 结束；${STUCK_AT_VERIFY}`);
-  if (action === "invalid") return note(`第 ${round} 轮验证已结束，但没有把 verified / verify_failed 的结论写回来，线不会替你放行。${STUCK_AT_VERIFY}`);
+  if (action === "failed") return note(`第 ${round} 轮验证以 ${outcome} 结束；${STUCK_AT_VERIFY}`, "inconclusive");
+  if (action === "invalid") return note(`第 ${round} 轮验证已结束，但没有把 verified / verify_failed 的结论写回来，线不会替你放行。${STUCK_AT_VERIFY}`, "inconclusive");
   if (action === "stop") {
     if (policy?.verify && policy.onVerifyFail === "ask") {
       const input = failureQuestionInput(target.id, STEP_LABELS.verify, await readReport(target.id, round));

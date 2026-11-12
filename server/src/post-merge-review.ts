@@ -9,7 +9,7 @@ import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-
 import { startFreeReview } from "./free-workflow.js";
 import { isAncestor } from "./git-accept.js";
 import { expandHome, localBranchExists } from "./git.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { createTasks, enrichTasks } from "./task-store.js";
 import { id, now } from "./util.js";
 import type { Actor } from "./auth/context.js";
@@ -110,7 +110,7 @@ export async function createPostMergeRepairTask(taskId: string, runId: string): 
     }]);
     if (!created) throw new Error("修复任务创建失败");
     await db.update(freeReviewRuns).set({ repairTaskId: created.id, updatedAt: now() }).where(eq(freeReviewRuns.id, run.id));
-    await appendTaskTimeline(taskId, `已从合并结果审查创建独立修复任务：${created.title}（${created.id}）。`);
+    await appendTaskTimeline(taskId, receiptLine(`已从合并结果审查创建独立修复任务：${created.title}（${created.id}）。`));
     bus.publish({ type: "task.review", taskId });
     return created;
   } finally {

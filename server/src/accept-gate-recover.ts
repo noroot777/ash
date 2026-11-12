@@ -4,7 +4,7 @@ import { eq, isNotNull, or } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { acceptGateRuns } from "./db/schema.js";
 import { appendGateLog } from "./accept-gate-process.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { gateView } from "./accept-gate-state.js";
 import { gateStoppedSummary } from "./accept-gate-messages.js";
 import { attachGateProcess, claimGateProcess, stopGateRun } from "./accept-gate-ownership.js";
@@ -63,7 +63,7 @@ async function recoverRow(row: GateRow, tally: { interrupted: number; resumed: n
   if (claimed) {
     appendGateLog(row.logPath, `\n[ash] ash 重启时这一次正在收尾，结论已经认领（${claimed.status}），接着收完。\n`);
     // 说明是旁注：它写不进去不能拦着结算挂上负责者。
-    await appendTaskTimeline(row.taskId, `ash 重启时验收前置命令 \`${row.command}\` 正在收尾，结论已经落库，按那一份接着收完。`)
+    await appendTaskTimeline(row.taskId, receiptLine(`ash 重启时验收前置命令 \`${row.command}\` 正在收尾，结论已经落库，按那一份接着收完。`))
       .catch(() => {});
     if (await settleDurably(row.id, claimed)) tally.settled++;
     return;
@@ -72,8 +72,8 @@ async function recoverRow(row: GateRow, tally: { interrupted: number; resumed: n
   if (fate.kind === "running") { await resumeGate(row); tally.resumed++; return; }
   if (fate.kind === "exited") {
     appendGateLog(row.logPath, `\n[ash] ash 重启后读到命令自己留下的退出结果（rc=${fate.exit.code}），按它结算。\n`);
-    await appendTaskTimeline(row.taskId, `ash 重启时验收前置命令 \`${row.command}\` 已经跑完（rc=${fate.exit.code}），`
-      + "结果由它的启动器留在了磁盘上，按它照常结算。").catch(() => {});
+    await appendTaskTimeline(row.taskId, receiptLine(`ash 重启时验收前置命令 \`${row.command}\` 已经跑完（rc=${fate.exit.code}），`
+      + "结果由它的启动器留在了磁盘上，按它照常结算。")).catch(() => {});
     if (await settleDurably(row.id, gateExitOutcome(fate.exit))) tally.settled++;
     return;
   }
@@ -95,10 +95,10 @@ async function recoverRow(row: GateRow, tally: { interrupted: number; resumed: n
     stopped ? stoppedSummary : "残留进程尚未确认退出，工作区仍被占用"}）。\n`);
   await appendTaskTimeline(
     row.taskId,
-    (row.status === "running"
+    alertLine((row.status === "running"
       ? `验收前置命令被打断：ash 重启时它还在跑（\`${row.command}\`），已按未完成收尾。`
       : `ash 重启后继续核对验收前置命令 \`${row.command}\` 的停止责任（原状态 ${row.status}）。`)
-    + (stopped ? `${stoppedSummary}，工作区占用已释放。` : "尚未确认进程退出，合并和清理仍被阻止。"),
+    + (stopped ? `${stoppedSummary}，工作区占用已释放。` : "尚未确认进程退出，合并和清理仍被阻止。")),
   );
   announceGate(row.taskId);
 }
@@ -162,7 +162,7 @@ async function resumeGate(row: GateRow): Promise<void> {
       const why = `macOS 兼容监督的持续观察没能接回来（${error instanceof Error ? error.message : String(error)}）：`
         + "接管之后新起、又清掉了继承标记的后代可能认不出，收尾时可能漏掉它们；退出等待和超时看护不受影响。";
       appendGateNote(row.logPath, `[ash] ${now()} ${why}`);
-      await appendTaskTimeline(row.taskId, `验收前置命令接管降级：${why}`);
+      await appendTaskTimeline(row.taskId, alertLine(`验收前置命令接管降级：${why}`));
     })() });
   // 时限从启动器起来那一刻算（启动记录里记着），旧记录没有就退到这一行的开跑时刻。
   // 已知边界：跨进程只有墙钟可比，ash 不在场时主机大幅校时会让接管后的超时看护提前或推后。
@@ -171,7 +171,7 @@ async function resumeGate(row: GateRow): Promise<void> {
   superviseGate(row.taskId, row.id, row.logPath, pid, pidStartedAt,
     { elapsedMs: Number.isFinite(launchedAt) ? Math.max(0, Date.now() - launchedAt) : 0, exit });
   appendGateNote(row.logPath, `[ash] ${now()} ash 重启，新实例接管了这条仍在跑的命令，接着等它退出。`);
-  await appendTaskTimeline(row.taskId, `ash 重启时验收前置命令 \`${row.command}\` 还在跑，新实例已经接管：`
-    + "继续等它跑完并按真实结果结算（绿了照常自动合并，红了照常交回这个任务去修），超时仍从开跑那一刻算。");
+  await appendTaskTimeline(row.taskId, receiptLine(`ash 重启时验收前置命令 \`${row.command}\` 还在跑，新实例已经接管：`
+    + "继续等它跑完并按真实结果结算（绿了照常自动合并，红了照常交回这个任务去修），超时仍从开跑那一刻算。"));
   announceGate(row.taskId);
 }

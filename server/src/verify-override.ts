@@ -22,7 +22,7 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { setTaskStage } from "./task-stage.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine, noticeLine } from "./task-timeline.js";
 import { now } from "./util.js";
 import { advanceWorkflowFrom } from "./workflow-advance.js";
 import { taskWorkflowDef } from "./workflows.js";
@@ -92,7 +92,8 @@ export async function forcePassVerifyStation(
   // 计数**——它没跑完，不该占掉用户写的轮数额度。
   if (task.verifyRound) {
     await db.update(tasks).set({ verifyRound: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-    await appendTaskTimeline(taskId, `第 ${task.verifyRound} 轮验证没有给出结论就停了，人工强制通过时一并收尾。`);
+    await appendTaskTimeline(taskId, noticeLine({ kind: "review.verdict", source: "inline", round: task.verifyRound, verdict: "inconclusive" },
+      `第 ${task.verifyRound} 轮验证没有给出结论就停了，人工强制通过时一并收尾。`));
     bus.publish({ type: "task.review", taskId });
   }
   // 验证回合中途提过问、人却选择直接放行：卡片留着会显示成「还等着你答」，但那个回合
@@ -104,13 +105,13 @@ export async function forcePassVerifyStation(
       .set({ question: null, questionOptions: null, questionItems: null, updatedAt })
       .where(eq(tasks.id, taskId));
     bus.publish({ type: "task.question", taskId, updatedAt, question: null, questionOptions: null, questionItems: null });
-    await appendTaskTimeline(taskId, "验证轮里提的那个问题随强制通过一并撤下（那一回合已经结束，没人在等答复）。");
+    await appendTaskTimeline(taskId, receiptLine("验证轮里提的那个问题随强制通过一并撤下（那一回合已经结束，没人在等答复）。"));
   }
 
   await appendTaskTimeline(
     taskId,
-    `人工强制通过「${STEP_LABELS.verify}」这一站：这不是验证器给的结论，`
-    + `第 ${task.verifyRounds ?? 0} 轮验证的报告与证据原样保留，由人签字放行后接着往下走。`,
+    receiptLine(`人工强制通过「${STEP_LABELS.verify}」这一站：这不是验证器给的结论，`
+    + `第 ${task.verifyRounds ?? 0} 轮验证的报告与证据原样保留，由人签字放行后接着往下走。`),
   );
   await setTaskStage(taskId, "verified");
 
@@ -121,7 +122,7 @@ export async function forcePassVerifyStation(
   if (fresh) {
     await advanceWorkflowFrom(fresh, def, station.id).catch(async (error) => {
       advanceError = error instanceof Error ? error.message : String(error);
-      await appendTaskTimeline(taskId, `强制通过之后想接着往下走，但出错了（${advanceError}），请手动续跑。`);
+      await appendTaskTimeline(taskId, alertLine(`强制通过之后想接着往下走，但出错了（${advanceError}），请手动续跑。`));
     });
   }
 

@@ -21,7 +21,7 @@ import {
   announceResumePrompt, resumePromptHeldBy, resumePromptRestorePatch, resumePromptSlotFor,
   resumePromptTakePatch, type StoredResumePromptReceipt,
 } from "./task-resume-prompt.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 
 /**
  * 哨兵把任务叫醒的那一轮，要把 agent 当初**留给自己**的那段续跑交代一起喂回去。
@@ -257,16 +257,16 @@ async function restoreCheckpoint(
     // 交代就这么没了,用户刷新页面后应该看得出发生过这件事(第 2 轮审查 F2 的后果面)。
     await appendTaskTimeline(
       message.taskId,
-      `那条哨兵事件带走的续跑交代没有放回任务行：这期间已经有另一段续跑指令占用过那一格，`
+      receiptLine(`那条哨兵事件带走的续跑交代没有放回任务行：这期间已经有另一段续跑指令占用过那一格，`
       + `后写的那一段才是最新意图，所以这一段就此作废（原文：${checkpoint.slice(0, 120)}`
-      + `${checkpoint.length > 120 ? "…" : ""}）。`,
+      + `${checkpoint.length > 120 ? "…" : ""}）。`),
     ).catch(() => {});
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     console.error(`[ash] 续跑交代回填失败 ${message.taskId}:`, error);
     await appendTaskTimeline(
       message.taskId,
-      `续跑交代没能放回任务行（${detail}）。它仍记在那条待发送的哨兵事件的账本列上，下一次投递会带着它走。`,
+      receiptLine(`续跑交代没能放回任务行（${detail}）。它仍记在那条待发送的哨兵事件的账本列上，下一次投递会带着它走。`),
     ).catch(() => {});
     throw error;
   }

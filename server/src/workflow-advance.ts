@@ -23,7 +23,7 @@ import { firstAnchor, nextAnchor, prevAnchor } from "@ash/shared/workflow-policy
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { publishTaskUpdated } from "./task-store.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { verifyStationAction } from "./review-policy.js";
 import { advanceSegment, type SegmentOptions, type SegmentResult } from "./workflow-steps.js";
 import { now } from "./util.js";
@@ -106,7 +106,7 @@ async function atVerifyStation(
   if (action === "halt") {
     await appendTaskTimeline(
       task.id,
-      `这条线停在「${STEP_LABELS.verify}」这一站：自动复审轮数已经用完，等你处理后再手动派一轮。`,
+      alertLine(`这条线停在「${STEP_LABELS.verify}」这一站：自动复审轮数已经用完，等你处理后再手动派一轮。`),
     );
     return { ok: false, failed: station, reason: "自动复审轮数已经用完" };
   }
@@ -120,8 +120,8 @@ async function atVerifyStation(
     const reason = error instanceof Error ? error.message : String(error);
     await appendTaskTimeline(
       task.id,
-      `想在「${STEP_LABELS.verify}」这一站开一轮验证，但没开起来（${reason}）。`
-        + (error instanceof AshMcpUnreachable ? "线停在这一站：把 ash MCP 接好之后点「再验一轮」，会从这一站接着走。" : ""),
+      alertLine(`想在「${STEP_LABELS.verify}」这一站开一轮验证，但没开起来（${reason}）。`
+        + (error instanceof AshMcpUnreachable ? "线停在这一站：把 ash MCP 接好之后点「再验一轮」，会从这一站接着走。" : "")),
       { eventKey: `verify-start-failed:${station.id}:${rounds}:${task.endedAt ?? ""}:${reason}` },
     );
     return { ok: false, failed: station, reason };

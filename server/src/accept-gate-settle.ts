@@ -7,7 +7,7 @@ import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { acceptGateRuns } from "./db/schema.js";
 import { acceptGateLogPath, appendGateLog, stampAshNote } from "./accept-gate-process.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { gateView } from "./accept-gate-state.js";
 import { startGateWatch, type GateWatch } from "./accept-gate-watch.js";
@@ -95,8 +95,8 @@ export async function noteIfStillAlive(taskId: string, logPath: string, stopped:
   appendGateLog(logPath, `\n[ash] 尚未取得整棵进程树退出的证据；身份未核实时不会盲发信号。\n`);
   await appendTaskTimeline(
     taskId,
-    "验收前置命令尚未确认整棵进程树退出：可能是进程身份或归属暂时读不出，也可能仍有进程存活。"
-      + "**这个工作区仍按被占用处理**，合并与清理继续阻止；再次取消、验收或清理时会重新核对。",
+    alertLine("验收前置命令尚未确认整棵进程树退出：可能是进程身份或归属暂时读不出，也可能仍有进程存活。"
+      + "**这个工作区仍按被占用处理**，合并与清理继续阻止；再次取消、验收或清理时会重新核对。"),
   );
 }
 
@@ -191,10 +191,10 @@ export async function settleGate(
     appendGateLog(row.logPath, `\n[ash] ${finishedAt} ${summarizeAcceptGate(view)}\n`
       + (diagnosed ? stampAshNote(`\n${diagnosed.diagnosis}\n`) : ""));
     await appendTaskTimeline(row.taskId,
-      `${summarizeAcceptGate(view)}。${outcome.note ? ` ${outcome.note}` : ""}${sceneFailure ? ` ${sceneFailure}` : ""}`);
+      (view.status === "passed" ? receiptLine : alertLine)(`${summarizeAcceptGate(view)}。${outcome.note ? ` ${outcome.note}` : ""}${sceneFailure ? ` ${sceneFailure}` : ""}`));
     // 归类结论要**单独进一条时间线**：它是用户刷新后唯一能找回「这条红是怎么来的」的地方，
     // 跟在摘要那一行后面会被折进去（根 AGENTS.md「停止/暂停必须留下持久可见的状态」同款判据）。
-    if (diagnosed) await appendTaskTimeline(row.taskId, diagnosed.diagnosis);
+    if (diagnosed) await appendTaskTimeline(row.taskId, alertLine(diagnosed.diagnosis));
     announceGate(row.taskId);
     finishOutcome();
     if (owed) await followUpGate({ ...settled, settlement: null }, view);

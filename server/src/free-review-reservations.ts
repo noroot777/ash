@@ -5,7 +5,7 @@ import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { freeWorkflowStates, type FreeReviewReservationSource } from "./db/schema.js";
 import { withRulingGate } from "./free-review-ruling-gate.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
 
 export type ReservedFreeReview = {
@@ -89,7 +89,7 @@ export async function noteReservationStillWaiting(
   const slot = (await db.select({ armed: freeWorkflowStates.reviewArmed })
     .from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
   if (!slot?.armed) return false;
-  await appendTaskTimeline(taskId, `预约审查仍在等待：${reason}。预约已保留，${resumes}。`);
+  await appendTaskTimeline(taskId, receiptLine(`预约审查仍在等待：${reason}。预约已保留，${resumes}。`));
   return true;
 }
 
@@ -386,7 +386,7 @@ async function startReservedFreeReviewHeld(
         snapshot = await readFreeReviewReservation(taskId);
         continue;
       }
-      await appendTaskTimeline(taskId, "审查预约已取消：预约的审查者已不可用。");
+      await appendTaskTimeline(taskId, alertLine("审查预约已取消：预约的审查者已不可用。"));
       return;
     }
     const token = await consumeFreeReviewReservation(taskId, snapshot);
@@ -413,9 +413,9 @@ async function startReservedFreeReviewHeld(
       // 启动失败 = 这条预约没被用掉，把它放回槽里（CAS，见 restoreFreeReviewReservation）。
       // 否则它既没跑也不在了：用户下次执行回合正常结束时什么都不会发生，而界面上只有一行失败。
       const restored = await restoreFreeReviewReservation(taskId, consumed, token);
-      await appendTaskTimeline(taskId, restored
+      await appendTaskTimeline(taskId, alertLine(restored
         ? `预约审查启动失败：${message}；预约已保留，下次执行回合正常结束时会再试一次。`
-        : `预约审查启动失败：${message}；预约期间已被更新，保留你最新的设置。`);
+        : `预约审查启动失败：${message}；预约期间已被更新，保留你最新的设置。`));
       bus.publish({ type: "task.review", taskId });
     }
     return;

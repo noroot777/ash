@@ -20,7 +20,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { imInbound, imOutbox } from "../db/schema-im.js";
 import type { ConclusionTransaction } from "../regression-conclusion-commit.js";
-import { appendTaskTimeline } from "../task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "../task-timeline.js";
 import { noteSystemNotice } from "../user-action-rejection.js";
 import { now } from "../util.js";
 import type { Actor } from "../auth/context.js";
@@ -551,7 +551,7 @@ export function acceptedOutcome(data: Record<string, unknown>): Pick<Outcome, "t
  */
 async function audit(taskId: string, envelopeId: string, text: string): Promise<void> {
   try {
-    const landed = await appendTaskTimeline(taskId, text, { eventKey: `im:${envelopeId}` })
+    const landed = await appendTaskTimeline(taskId, receiptLine(text), { eventKey: `im:${envelopeId}` })
       || await noteSystemNotice(taskId, `im:${envelopeId}`, "飞书操作", text);
     if (landed) await auditDone(envelopeId);
   } catch (error) {

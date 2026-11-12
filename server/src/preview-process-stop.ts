@@ -5,7 +5,7 @@ import { inspectProcessSync, isPidAlive, isProcessGroupAlive, killTree, listProc
 import { RUNS_DIR } from "./paths.js";
 import { recordPath, type PreviewRecord } from "./preview-store.js";
 import { heldCacheOf } from "./preview-deps.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 
 type Target = { pid: number; startedAt: string | null; observedAt?: number };
 type HeldLink = { path: string; target: string; cache: string | null; dev: number; ino: number };
@@ -103,7 +103,7 @@ async function discardInvalidTargets(taskId: string, file: string, reason: strin
   if (valid && (valid.targets.length || valid.links.length)) writeStopRecord(file, valid);
   else rmSync(file, { force: true });
   const notice = `预览停止记录 ${basename(file)}：${reason}，已移除无效条目；未向这些条目对应的 PID 发送停止信号。`;
-  if (!await appendTaskTimeline(taskId, notice)) appendFileSync(join(RUNS_DIR, taskId, "preview.log"), `${notice}\n`);
+  if (!await appendTaskTimeline(taskId, receiptLine(notice))) appendFileSync(join(RUNS_DIR, taskId, "preview.log"), `${notice}\n`);
 }
 
 async function terminate(taskId: string, file: string, record: StopRecord, signalable = record.targets): Promise<PreviewStopResult> {

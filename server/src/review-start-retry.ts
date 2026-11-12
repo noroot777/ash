@@ -6,7 +6,7 @@ import { activeReviewEvidence, assertReviewAuthority, reviewDeliveryAuthority, r
 import { directionIdentityCleared } from "./task-direction-epoch.js";
 import { recordTaskStatus } from "./task-start-status.js";
 import { publishTaskUpdated } from "./task-store.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine, alertLine } from "./task-timeline.js";
 import { now } from "./util.js";
 
 export async function restoreUndeliveredReviewStart(taskId: string, receipt: ReviewStartReceipt | undefined,
@@ -52,7 +52,7 @@ export async function restoreUndeliveredReviewStart(taskId: string, receipt: Rev
   recordTaskStatus(restored.task, restored.status);
   await publishTaskUpdated(taskId);
   await appendTaskTimeline(taskId, restored.uncertain
-    ? "服务在审查输入交付期间中断，无法确认是否已执行；已暂停且保留原输入，不会自动重发。请核对执行记录后重新派审。"
-    : "这一轮尚未送达审查输入，启动已撤回；原答复或检查点仍保留，恢复后可继续投递。");
+    ? alertLine("服务在审查输入交付期间中断，无法确认是否已执行；已暂停且保留原输入，不会自动重发。请核对执行记录后重新派审。")
+    : receiptLine("这一轮尚未送达审查输入，启动已撤回；原答复或检查点仍保留，恢复后可继续投递。"));
   return true;
 }

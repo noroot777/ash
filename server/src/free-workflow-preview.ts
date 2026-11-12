@@ -15,7 +15,7 @@ import { workspacePreviewDirectory, workspacePreviewInput } from "./preview-work
 import { isMultiUser } from "./auth/mode.js";
 import { previewState } from "./preview-public.js";
 import { isTurnClaimed } from "./runs.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { readPreview, readPreviewLog, isPreviewStarting, startPreview, stopPreview, beginPreviewStart, endPreviewStart, previewStartCanceled, PREVIEW_CANCELED, type PreviewStep } from "./preview.js";
 import { rerunGateClosed } from "./rerun-gate.js";
@@ -105,7 +105,7 @@ async function startFreePreview(taskId: string, input?: WorkspacePreviewInput) {
     // 要去项目设置改，认出来的那条跑错了是另一回事。
     await appendTaskTimeline(
       taskId,
-      `自由工作流预览已打开（${input ? "预览指正" : source === "configured" ? "项目预览设置" : "自动识别"}：${command}）：${previewState(taskId).url ?? command}`,
+      receiptLine(`自由工作流预览已打开（${input ? "预览指正" : source === "configured" ? "项目预览设置" : "自动识别"}：${command}）：${previewState(taskId).url ?? command}`),
     );
     if (!mine()) throw new Error(PREVIEW_CANCELED);
     bus.publish({ type: "task.review", taskId });

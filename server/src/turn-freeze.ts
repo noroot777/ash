@@ -19,7 +19,7 @@ import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { groups, tasks } from "./db/schema.js";
 import { markStopped, takeStartFreeze } from "./runs.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 
 export type TurnFreeze = { reason: string } & (
   | { source: "stop"; settle: "canceled"; overrideRestorable: true }
@@ -91,7 +91,7 @@ export async function abortFrozen(
   freeze: TurnFreeze,
   opts: { restorable?: boolean } = {},
 ): Promise<never> {
-  await appendTaskTimeline(taskId, `这一轮在启动前被撤回：${freeze.reason}。`).catch(() => false);
+  await appendTaskTimeline(taskId, alertLine(`这一轮在启动前被撤回：${freeze.reason}。`)).catch(() => false);
   if (!opts.restorable || freeze.overrideRestorable) markStopped(taskId, freeze.settle);
   throw new FrozenTurn(freeze.reason);
 }

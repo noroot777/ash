@@ -44,7 +44,7 @@ import {
 import { finishReview, finishVerifyRound } from "./review-settlement.js";
 import { verifyProtocolFor } from "./review-prompts.js";
 import { setTaskStage, clearTaskStage } from "./task-stage.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine, noticeLine } from "./task-timeline.js";
 import {
   shouldAutoDispatchReview,
   withVerifyExecutor,
@@ -215,7 +215,8 @@ export async function startVerifyRound(
     if (opts.reviewAuthority) await transaction.update(tasks).set({ stage: "verifying", updatedAt: now() }).where(eq(tasks.id, targetId));
   });
   if (!opts.reviewAuthority) await setTaskStage(targetId, "verifying");
-  await appendTaskTimeline(targetId, `第 ${round} 轮验证开始：就在这个任务的工作目录里跑，不另起审查任务。`);
+  await appendTaskTimeline(targetId, noticeLine({ kind: "review.start", source: "inline", round },
+    `第 ${round} 轮验证开始：就在这个任务的工作目录里跑，不另起审查任务。`));
   bus.publish({ type: "task.review", taskId: targetId });
 
   continueWhenIdle(
@@ -245,7 +246,7 @@ export async function startVerifyRound(
             }).where(eq(tasks.id, targetId));
           });
         } catch (failure) { if (failure instanceof ReviewSuperseded) return; throw failure; }
-        await appendTaskTimeline(targetId, `第 ${round} 轮验证启动失败：${error}`);
+        await appendTaskTimeline(targetId, noticeLine({ kind: "review.verdict", source: "inline", round, verdict: "aborted" }, `第 ${round} 轮验证启动失败：${error}`));
         bus.publish({ type: "task.review", taskId: targetId });
         return;
       }
@@ -263,9 +264,10 @@ export async function startVerifyRound(
       if (current?.stage === "verifying") {
         // 只在还是本轮写下的 verifying 时回滚（期间有更新的结论就不碰）。
         if (target.stage && target.stage !== "verifying") await setTaskStage(targetId, target.stage as TaskStage);
-        else await clearTaskStage(targetId, `第 ${round} 轮验证启动失败，验证状态已回滚。`);
+        else await clearTaskStage(targetId, noticeLine({ kind: "review.verdict", source: "inline", round, verdict: "aborted" },
+          `第 ${round} 轮验证启动失败，验证状态已回滚。`));
       }
-      await appendTaskTimeline(targetId, `第 ${round} 轮验证启动失败：${error}`);
+      await appendTaskTimeline(targetId, noticeLine({ kind: "review.verdict", source: "inline", round, verdict: "aborted" }, `第 ${round} 轮验证启动失败：${error}`));
       bus.publish({ type: "task.review", taskId: targetId });
     },
   );
@@ -287,7 +289,7 @@ export async function enterHumanGate(taskId: string, authority?: ReviewAuthority
       await transaction.update(tasks).set({ stage: "awaiting_acceptance", updatedAt }).where(eq(tasks.id, taskId));
     });
     bus.publish({ type: "task.stage", taskId, stage: "awaiting_acceptance", updatedAt });
-    await appendTaskTimeline(taskId, "这条线走到「等我点头」，停在待验收等你决定。");
+    await appendTaskTimeline(taskId, receiptLine("这条线走到「等我点头」，停在待验收等你决定。"));
     return;
   }
   const row = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -298,7 +300,7 @@ export async function enterHumanGate(taskId: string, authority?: ReviewAuthority
   // 无从判断它是在等自己点头还是卡住了。只跳过重复的 setTaskStage（免得多一行没信息量
   // 的「验收阶段更新：待验收」），那句「走到等我点头」照写。
   if (row.stage !== "awaiting_acceptance") await setTaskStage(taskId, "awaiting_acceptance");
-  await appendTaskTimeline(taskId, "这条线走到「等我点头」，停在待验收等你决定。");
+  await appendTaskTimeline(taskId, receiptLine("这条线走到「等我点头」，停在待验收等你决定。"));
 }
 
 async function parentIsTeam(task: TaskRow): Promise<boolean> {
@@ -368,7 +370,7 @@ export async function handleTaskSettlement(
     // 结算恢复（regression-settlement）会重放这个钩子，同一次结算、同一个原因只说一句。
     await startVerifyRound(task.id).catch((error) => {
       const reason = error instanceof Error ? error.message : String(error);
-      return appendTaskTimeline(task.id, `想自动开一轮验证，但没开起来（${reason}）。`,
+      return appendTaskTimeline(task.id, alertLine(`想自动开一轮验证，但没开起来（${reason}）。`),
         { eventKey: `auto-verify-start-failed:${task.endedAt ?? ""}:${reason}` });
     });
   }

@@ -7,7 +7,7 @@ import { STEP_LABELS } from "@ash/shared/workflow";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { taskWorkflowDef } from "./workflows.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
 import type { SegmentResult } from "./workflow-steps.js";
@@ -34,7 +34,7 @@ export async function finishAcceptedTail(result: AcceptSuccess, by: AcceptBy, op
   const task = (await db.select().from(tasks).where(eq(tasks.id, result.taskId)))[0];
   if (result.kind === "already_accepted" && !task?.acceptedTailPending) return result;
   if (result.kind === "already_accepted") await appendTaskTimeline(result.taskId,
-    "上次验收的「点头之后」段没有跑完（中断或有站失败），本次只补跑未完成的站。");
+    receiptLine("上次验收的「点头之后」段没有跑完（中断或有站失败），本次只补跑未完成的站。"));
   const tail = await runAcceptedTail(result.taskId, by);
   if (!tail || tail.ok) await db.update(tasks).set({ acceptedTailPending: false, acceptedTailDone: "[]", updatedAt: now() })
     .where(eq(tasks.id, result.taskId));
@@ -63,7 +63,7 @@ export async function releaseGate(taskId: string, opts: WorkflowAdvanceOptions):
   const stuck = await advanceWorkflowFrom(task, taskWorkflowDef(task.workflow), task.workflowAt, opts)
     .catch(async (error): Promise<SegmentResult> => {
       const reason = error instanceof Error ? error.message : String(error);
-      await appendTaskTimeline(taskId, `放行之后想接着往下走，但出错了（${reason}），请手动续跑。`);
+      await appendTaskTimeline(taskId, alertLine(`放行之后想接着往下走，但出错了（${reason}），请手动续跑。`));
       return { ok: false, reason };
     });
   // 「在等一件已经开跑的事」不是没走过去，那件事完了会自己接着走（SegmentResult.halted）。
@@ -115,7 +115,7 @@ export async function runAcceptedTail(taskId: string, by: AcceptBy): Promise<Acc
   const label = STEP_LABELS[step.kind];
   await appendTaskTimeline(
     taskId,
-    `合并已经做完了，卡住的是「点头之后」那一段：「${label}」没跑过。产物已经合进去，这一段要不要补跑由你定。`,
+    alertLine(`合并已经做完了，卡住的是「点头之后」那一段：「${label}」没跑过。产物已经合进去，这一段要不要补跑由你定。`),
   );
   // 「打回给 AI 重做」在这一段有个真做不到的情况：清理那一档刚把 worktree 和分支收掉，
   // 唤醒 agent 也没有地方可干活。这时不假装打回，改成把问题挂给用户并说明为什么。
@@ -123,7 +123,7 @@ export async function runAcceptedTail(taskId: string, by: AcceptBy): Promise<Acc
   // 「工作区还在」，于是打回一个已经不存在的 worktree。
   const workspaceGone = task.useWorktree && acceptPlan(def, by, task.workflowAt).clean !== "none";
   if (step.fail?.mode === "back" && workspaceGone) {
-    await appendTaskTimeline(taskId, `「${label}」写的是「打回给 AI 重做」，但工作区刚随验收清掉了，没法再打回；改成问你一句。`);
+    await appendTaskTimeline(taskId, receiptLine(`「${label}」写的是「打回给 AI 重做」，但工作区刚随验收清掉了，没法再打回；改成问你一句。`));
     const { askAboutFailure } = await import("./task-question.js");
     await askAboutFailure(taskId, label, result.reason);
   } else {

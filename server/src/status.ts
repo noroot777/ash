@@ -7,7 +7,7 @@ import { stopPreviewOnRerun } from "./preview.js";
 import { beginRerunGate, endRerunGate } from "./rerun-gate.js";
 import { reviewTurnInFlight } from "./review-turn.js";
 import { now, runsTiming } from "./util.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { previewStopFailure } from "./preview-process-stop.js";
 import { recordTaskStatus } from "./task-start-status.js";
 import { releaseTerminalLanding } from "./task-complete.js";
@@ -148,7 +148,7 @@ async function writeTaskStatus(
     // claimOwnTurn/reclaimTurn 都排在 setStatus(running) 之前。
     if (rerun && !reviewTurnInFlight(taskId)) {
       try { await stopPreviewOnRerun(taskId); }
-      catch (error) { await appendTaskTimeline(taskId, `旧预览回收暂缓，任务继续运行。${previewStopFailure(error).message}`); }
+      catch (error) { await appendTaskTimeline(taskId, alertLine(`旧预览回收暂缓，任务继续运行。${previewStopFailure(error).message}`)); }
     }
   } else if (TERMINAL.includes(status)) {
     patch.endedAt = endedAt = updatedAt;

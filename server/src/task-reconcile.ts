@@ -16,7 +16,7 @@ import { startTeam } from "./team/session.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { now } from "./util.js";
 import { interruptCliGoal } from "./task-cli-state.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { cleanupClaudeGoalContext } from "./executors/claude-goal.js";
 
 // On (re)start nothing is actually running, so any task still in an in-flight
@@ -105,9 +105,9 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
     // 熔断过的那一轮不许说成「暂停」:那句话替用户表达了「它在等你」,而这一轮是我们自己判
     // 失败的 —— 两个结论里用户看到的那个说它在等人,正是 F3 的形状。那一句由下面统一补。
     if (!ashFailure.note) {
-      await appendTaskTimeline(t.id, goalHeld
+      await appendTaskTimeline(t.id, alertLine(goalHeld
         ? "持续目标因服务中断已暂停；任务和历史保留，使用 /goal resume 续跑。"
-        : "持续目标尚未启动就遇到服务中断；已恢复起跑前的目标状态。");
+        : "持续目标尚未启动就遇到服务中断；已恢复起跑前的目标状态。"));
     }
   }
   // **落位优先级不在这儿定**(第 1 轮审查 F2,已实测):这一处原先是一行三元表达式,而正常结算
@@ -135,7 +135,7 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
   // 这一轮的结局说给用户:**每一条路都要说**,不只持续目标那一支 —— 普通回合落 failed 时,
   // 时间线上同样只有那条来自上一个进程的红字,不说清「这一轮为什么是失败的」就只能让人去查
   // 一个不存在的崩溃。
-  if (ashFailure.note) await appendTaskTimeline(t.id, ashFailure.note);
+  if (ashFailure.note) await appendTaskTimeline(t.id, alertLine(ashFailure.note));
   await reconcileTurnBaseline(t.id, false);
   // 旧会话的停滞标记在这里撤:置标记的那个消费者早就没了,没人来撤(第 5 轮审查 F5)。留着
   // 的话,用户换执行器重试时新会话只清自己那一行,旧行重新满足「任务在跑」的 EXISTS,卡片上
@@ -290,7 +290,7 @@ export async function reconcileInterruptedTask(taskId: string): Promise<boolean>
       // 轴收掉:`interruptedTurnVerdict` 把区间收在 failed 上,结论进时间线,义务跟着这一笔
       // 落位一起兑现(`settleStallTurns`,见 status.ts)。
       const verdict = await interruptedTurnVerdict(taskId);
-      if (verdict.note) await appendTaskTimeline(taskId, verdict.note);
+      if (verdict.note) await appendTaskTimeline(taskId, alertLine(verdict.note));
       await setTaskStatus(taskId, "idle", { settleStallTurns: verdict.settled });
       return true;
     }

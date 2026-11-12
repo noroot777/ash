@@ -17,7 +17,7 @@ import { workspaceParticipants } from "./task-workspace.js";
 import { claimWorkspaceTurn, isTurnClaimed } from "./runs.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { now } from "./util.js";
 
@@ -124,7 +124,7 @@ export async function abandonTaskBaseUpdate(taskId: string, fingerprint: string,
           : resolution === "manual"
             ? "已按核对的基点手动解除挂起，当前提交与工作区文件已保留。原更新未记作完成，请按新的 diff 范围重新审查；也可重设合入目标、释放工作区或删除任务。"
             : "已放弃本次基线更新。当前分支、工作区文件及开工记录已保留，请重新核对验收依赖。";
-        await appendTaskTimeline(taskId, `${message} 本次恢复备份：${view.backups.map(b => b.ref).join("、") || "无新增"}。${backupWarning}`);
+        await appendTaskTimeline(taskId, receiptLine(`${message} 本次恢复备份：${view.backups.map(b => b.ref).join("、") || "无新增"}。${backupWarning}`));
         await publishTaskUpdated(taskId);
         return { ok: true, message: `${message}${backupWarning}` };
       } finally { release(); }

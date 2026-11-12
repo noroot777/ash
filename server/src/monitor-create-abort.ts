@@ -16,7 +16,7 @@ import type { StartMonitorResult } from "./monitor-create.js";
 import { reclaimMonitorProcess, settleReclaim, type ReclaimVerdict } from "./monitor-reclaim-debts.js";
 import { clearSpawnIdentity, type SpawnedMonitor } from "./monitor-spawn.js";
 import { publish, type Row } from "./monitors.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { now } from "./util.js";
 
 const detail = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -206,7 +206,7 @@ export async function abortRegistration(
   // 时间线上先写过一句「哨兵已起」时必须留一句更正 —— 不然看时间线的人只会看到「起了」,
   // 而那条命令其实一个字都没跑。
   if (opts.announced) {
-    await appendTaskTimeline(row.taskId, `哨兵没能开工：${row.description}。${why}`)
+    await appendTaskTimeline(row.taskId, alertLine(`哨兵没能开工：${row.description}。${why}`))
       .catch(() => { /* 更正写不进去也不该把收尾带下去 */ });
   }
   const tail = verdict === "reclaimed"

@@ -6,6 +6,7 @@ import { cleanupAcceptedMergeRun, stopReviewRunMonitors } from "./free-review-ro
 import { armFollowUpFreeReview } from "./free-review-reservations.js";
 import { reviewLifecycle } from "./review-lifecycle-lock.js";
 import { freeRepairPrompt } from "./free-review-prompts.js";
+import { noticeLine } from "./task-timeline.js";
 import { appendFinalizationTimeline, enqueueFinalizationRepair, finalizationStep } from "./regression-finalization.js";
 import { reviewIdentityMatches, settlementAuthority } from "./review-ownership.js";
 import { recurrenceTimeline, roundRecurrence } from "./review-recurrence.js";
@@ -51,8 +52,14 @@ export async function finalizeFreeReview(state: typeof regressionEvidence.$infer
   // 熔断那一轮在时间线上留一句（审查记录上的那一份由状态接口按承接现算，见 review-recurrence.ts）。
   const recurrence = (outcome === "repair" || outcome === "exhausted") && run.targetKind !== "accepted_merge"
     ? await roundRecurrence(run.taskId, run.id, run.currentRound) : null;
-  await step("timeline", () => appendFinalizationTimeline(run.taskId,
-    `${text}${authority.target ? "" : "原提问随本轮终止失效。"}${recurrence ? recurrenceTimeline(recurrence.length) : ""}`,
+  const merge = run.targetKind === "accepted_merge";
+  await step("timeline", () => appendFinalizationTimeline(run.taskId, noticeLine({
+    kind: "review.verdict",
+    source: merge ? "merge" : "free",
+    round: merge ? null : run.currentRound,
+    verdict: outcome === "passed" ? "passed" : outcome === "failed" ? "inconclusive" : "failed",
+    reviewer: run.reviewerName,
+  }, `${text}${authority.target ? "" : "原提问随本轮终止失效。"}${recurrence ? recurrenceTimeline(recurrence.length) : ""}`),
     `${state.generation}:timeline`));
   await step("publish", async () => { bus.publish({ type: "task.review", taskId: run.taskId }); });
 }

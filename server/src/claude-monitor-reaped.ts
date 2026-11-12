@@ -37,7 +37,7 @@ import type { MonitorRunOrigin } from "./claude-monitor-origin.js";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, sessions } from "./db/schema.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
 
 /**
@@ -115,7 +115,7 @@ export async function reapClaudeMonitors(
   }
   for (const [taskId, tally] of byTask) {
     if (isTaskRevoked(taskId)) continue;
-    await appendTaskTimeline(taskId, reapedNotice(tally), { sessionId: await sessionOf(cliSessionId, taskId) });
+    await appendTaskTimeline(taskId, receiptLine(reapedNotice(tally)), { sessionId: await sessionOf(cliSessionId, taskId) });
   }
 }
 

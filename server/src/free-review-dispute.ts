@@ -52,7 +52,7 @@ import {
 import { withRulingGate } from "./free-review-ruling-gate.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { turnRole } from "./runs.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine, noticeLine } from "./task-timeline.js";
 import { now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -304,7 +304,7 @@ export async function supersedeOpenDisputes(taskId: string, how: string): Promis
     .where(and(inArray(freeReviewRounds.id, open.map(({ round }) => round.id)), isNull(freeReviewRounds.disputeResolution)));
   const rounds = [...new Set(open.map(({ round }) => `第 ${round.round} 轮`))].join("、");
   await appendTaskTimeline(taskId,
-    `执行者对${rounds}意见的驳回还没裁定，你${how}：这条驳回不再等裁定（驳回与报告原样留在审查记录里，没有替你选任何一档裁定）。`);
+    receiptLine(`执行者对${rounds}意见的驳回还没裁定，你${how}：这条驳回不再等裁定（驳回与报告原样留在审查记录里，没有替你选任何一档裁定）。`));
   bus.publish({ type: "task.review", taskId });
 }
 
@@ -397,14 +397,14 @@ async function disputeFreeReviewHeld(
     ? await consumeFreeReviewReservation(taskId, reservation)
     : null;
 
-  await appendTaskTimeline(taskId, disputeTimelineNote({
+  await appendTaskTimeline(taskId, noticeLine({ kind: "review.dispute", round: run.currentRound }, disputeTimelineNote({
     round: run.currentRound,
     reviewerName: run.reviewerName,
     summary,
     hasReason: !!reason,
     hasDefer: !!deferReason,
     canceledAuto: !!canceledAuto,
-  }));
+  })));
   bus.publish({ type: "task.review", taskId });
   return { runId: run.id, round: run.currentRound };
 }
@@ -493,7 +493,8 @@ export async function upholdDisputeOn(taskId: string, round: ReviewRoundRow): Pr
   }, { behavior: "immediate" });
   if (!ruled.length) return false;
   await appendTaskTimeline(taskId,
-    `按第 ${round.round} 轮审查意见发起修复，即维持审查意见（执行者的驳回未被采纳）。`);
+    noticeLine({ kind: "review.repair", source: "free", round: round.round },
+      `按第 ${round.round} 轮审查意见发起修复，即维持审查意见（执行者的驳回未被采纳）。`));
   bus.publish({ type: "task.review", taskId });
   return true;
 }
@@ -577,13 +578,13 @@ export async function resolveFreeReviewDispute(
     return rows;
   }, { behavior: "immediate" });
   if (!ruled.length) throw new DisputeStaleError("这一轮驳回已经被裁定过了");
-  await appendTaskTimeline(taskId, (resolution === "withdrawn"
+  await appendTaskTimeline(taskId, receiptLine((resolution === "withdrawn"
     ? `你裁定第 ${open.round.round} 轮的未通过意见不用改了（采纳执行者的说法，报告与证据原样保留，审查结论本身不改写）。`
     // 写了要点时不能只说「照报告修复」：用户写要点，多半正是因为要改的不是报告那版。
     : `你裁定让执行者接着改第 ${open.round.round} 轮的意见（维持审查意见，未采纳驳回）：` +
       `${note ? "按你写的要点和报告修复" : "照报告修复"}。`)
     // 时间线只放摘要，全文留在那一轮的审查记录里（时间线不是正文的第二个家）。
-    + (note ? `你写下的裁定要点：${summarize(note)}` : ""));
+    + (note ? `你写下的裁定要点：${summarize(note)}` : "")));
   bus.publish({ type: "task.review", taskId });
   if (resolution === "withdrawn") await releaseHeldReservation(taskId);
 
@@ -599,8 +600,8 @@ export async function resolveFreeReviewDispute(
       repairError = error instanceof Error ? error.message : String(error);
       // 报错里已经指了出路（再派一轮审查）时，就别再叫用户去点「按意见修复」——那颗按钮过的
       // 是同一道校验，只会再被拦一次。
-      await appendTaskTimeline(taskId, `已裁定维持审查意见，但这次没能自动发起修复：${repairError}` +
-        (repairError.includes("再派一轮审查") ? "。" : "；可在审查面板里手动点「按意见修复」。"));
+      await appendTaskTimeline(taskId, alertLine(`已裁定维持审查意见，但这次没能自动发起修复：${repairError}` +
+        (repairError.includes("再派一轮审查") ? "。" : "；可在审查面板里手动点「按意见修复」。")));
       bus.publish({ type: "task.review", taskId });
     }
   }

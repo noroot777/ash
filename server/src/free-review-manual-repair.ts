@@ -20,7 +20,7 @@ import { latestWorkspaceRun, reviewingRun, type ReviewRunRow } from "./free-revi
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeWorkflowState, workspaceStateOf, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { claimOwnTurn, releaseTurn, whenTurnIdle } from "./runs.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, noticeLine } from "./task-timeline.js";
 
 // 「按意见修复」按钮 = 代发一条带报告链接的修复消息，**不翻转任何状态**。
 // 「修复进行中」的显示靠任务本身 running 推导；修完要不要复审看预约槽。
@@ -110,7 +110,7 @@ async function manualRepairSubject(taskId: string, target: RepairTarget | null):
 async function deliverManualRepair(taskId: string, target: RepairTarget): Promise<void> {
   const abort = async (message: string) => {
     pendingRepairs.delete(taskId);
-    await appendTaskTimeline(taskId, `自由工作流审查意见修复已取消：${message}；请再派一轮审查。`);
+    await appendTaskTimeline(taskId, alertLine(`自由工作流审查意见修复已取消：${message}；请再派一轮审查。`));
     bus.publish({ type: "task.review", taskId });
   };
   try {
@@ -178,7 +178,8 @@ export async function startManualFreeReviewRepair(
       // 裁定那一路已经自己记过账，这里不再碰任何驳回。
       if (!opts.target) await upholdDisputeOn(taskId, subject.round);
       const target: RepairTarget = { runId: subject.run.id, round: subject.round.round, ruled: !!opts.target };
-      await appendTaskTimeline(taskId, `已按自由工作流第 ${target.round} 轮审查意见发起修复。`);
+      await appendTaskTimeline(taskId, noticeLine({ kind: "review.repair", source: "free", round: target.round },
+        `已按自由工作流第 ${target.round} 轮审查意见发起修复。`));
       bus.publish({ type: "task.review", taskId });
       pendingRepairs.add(taskId);
       whenTurnIdle(taskId, () => { void deliverManualRepair(taskId, target); });

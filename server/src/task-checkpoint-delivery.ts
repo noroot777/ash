@@ -7,7 +7,7 @@ import {
   CHECKPOINT_RUN_ORIGIN, checkpointDeliveryVerdict, forgetCheckpointDelivering, noteCheckpointDelivering,
 } from "./pending-checkpoint-recovery.js";
 import { CROSSING_PROTOCOL, ensureCrossingDir, forgetDeliveryCrossing } from "./delivery-crossing.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { freshRunFailureTarget } from "./turn-failure.js";
 import { markSent } from "./pending-messages.js";
 import {
@@ -246,7 +246,7 @@ async function publishUncertainRecord(receipt: Row): Promise<boolean> {
     + "更大。原文留在下面，要不要再送由你决定：\n\n"
     + `> ${text.split("\n").join("\n> ")}`;
   const target = { eventKey: `checkpoint-uncertain:${receipt.id}` };
-  if (await appendTaskTimeline(receipt.taskId, note, target)) return true;
+  if (await appendTaskTimeline(receipt.taskId, alertLine(note), target)) return true;
   const opened = await db.select({ id: sessions.id }).from(sessions).where(eq(sessions.taskId, receipt.taskId));
   if (opened.length) return false;
   const task = (await db.select().from(tasks).where(eq(tasks.id, receipt.taskId))).at(0);
@@ -254,7 +254,7 @@ async function publishUncertainRecord(receipt: Row): Promise<boolean> {
     console.error(`[ash] 续跑交代交付不明、又无处落账 task=${receipt.taskId}，原文:`, text);
     return true;
   }
-  return appendTaskTimeline(receipt.taskId, note, { ...await freshRunFailureTarget(task, null), ...target });
+  return appendTaskTimeline(receipt.taskId, alertLine(note), { ...await freshRunFailureTarget(task, null), ...target });
 }
 
 /**
