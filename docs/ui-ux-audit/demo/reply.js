@@ -14,7 +14,7 @@
   /* ---------- 回复框 ---------- */
   const FILES = [['回归截图.png', 248e3], ['later-send.log', 12e3], ['补发前后对比.png', 391e3]];
   /* 敲 / 出命令与技能，敲 @ 出智能体与文件：[填进去的字, 说明, 图标] */
-  const SLASH = [['/team', '派一支团队来做', 'team'], ['/duet', '找两个智能体讨论', 'chat'], ['/compact', '压缩上下文', 'box'], ['/review', '让它自查一遍', 'search'], ['/code-review', '技能 · 代码审查', 'spark']];
+  const SLASH = [['/team', '派一支团队来做', 'team'], ['/duet', '找两个智能体讨论', 'chat'], ['/compact', '压缩上下文', 'squeeze'], ['/review', '让它自查一遍', 'search'], ['/code-review', '技能 · 代码审查', 'spark']];
   const AT = [['@codex', '召唤 codex 接着做', 'bot'], ['@gemini', '召唤 gemini 接着做', 'bot'], ['@server/src/later-send.ts', '引用文件', 'file'], ['@server/src/later-send-recover.ts', '引用文件', 'file']];
   /* 底排两颗会换字的键各自最长能写成什么：放不放得下按最长的量，开跑、开审都不会让整排换形 */
   const LONGEST = { review: ['已预约复审', '审查新改动', '审查中 2/2'], preview: ['启动中·点此取消'] };
@@ -89,6 +89,7 @@
       const shelf = h('div.reply-list', { role: 'list', 'aria-label': '附件' });
       const key = ASH.sendKey({ onsend: send, onstop: stop, onlayout: () => fitActs() });
       key.opt.dataset.m = 'reply-2';
+      key.el.dataset.m = 'a11y-6';
       key.main.dataset.m = 'reply-4 run-1';
       /* 三段胶囊：改的是这个任务以后都由谁跑；换智能体时水印跟着换词 */
       const caps = ASH.target({ value: who, label: '这个任务以后由谁来跑', place: 'top-start', onchange: (next) => {

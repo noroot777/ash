@@ -95,12 +95,14 @@
     turn.textContent = ASH.num(cur.turn);
     ASH.roll(time, elapsed, { fmt: ASH.dur });
 
-    /* 上下文：还剩多少。细条画的也是剩下的那一截，剩到 15% 以下变红 */
+    /* 上下文：还剩多少。细条画的也是剩下的那一截，剩到 15% 以下变红。正在压缩的那一会儿数字让位给「压缩中」，压完滚到新的数 */
     const WINDOW = 200000;
     let remain = cur.remain;
+    let squeezing = false;
     const bar = h('span.insp-bar', {}, h('i'));
     const left = h('span.num');
     const paintCtx = () => {
+      if (squeezing) { cancelAnimationFrame(left._roll); left.textContent = '压缩中'; return; }
       ASH.roll(left, remain, { fmt: (n) => `剩 ${Math.round(n)}%` });
       bar.style.setProperty('--p', String(remain / 100));
       bar.classList.toggle('is-low', remain <= 15);
@@ -139,7 +141,9 @@
         if (u.elapsedMs != null) elapsed = u.elapsedMs;
       }
       ASH.roll(time, elapsed, { fmt: ASH.dur });
-      if (u.ctx != null) { remain = Math.max(0, Math.min(100, u.ctx > 0 && u.ctx <= 1 ? u.ctx * 100 : u.ctx)); paintCtx(); }
+      if (u.squeezing != null) squeezing = u.squeezing;
+      if (u.ctx != null) remain = Math.max(0, Math.min(100, u.ctx > 0 && u.ctx <= 1 ? u.ctx * 100 : u.ctx));
+      if (u.ctx != null || u.squeezing != null) paintCtx();
     });
     c.on('status', (now, prev) => { paintStatus(prev); paintQueue(); });
     paintStatus();

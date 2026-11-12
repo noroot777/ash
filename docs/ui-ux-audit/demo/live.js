@@ -2,11 +2,12 @@
    正文是「攒够约 40 字」才来一块，工具只有一条「开始」、没有「结束」——动效都落在前端能做的那一侧：
    一行进行条（流光 + 用时，做完原地落定成过去式）、匀速放字 + 淡入、同一时刻只有一个「活的」信号。
    剧本在 live-scripts.js。这一轮跟着任务走，不跟着页面：切到别的面它照常往下跑（侧栏那一行照样变），回来接着看。
-   对外：ASH.parts.live = { running, play(name, say), stop(), retry(), accept(), destroy() }，name 是 run / ask / fail / slow / watch / agents；
+   对外：ASH.parts.live = { running, play(name, say), stop(), retry(), accept(), destroy() }，name 是 run / ask / fail / slow / squeeze / squeezeFail / stall / watch / agents；
    报告页隔着 iframe 递 { ash: 'play', name } 也能起一轮（正跑着的那一轮连同它留下的半截一起撤掉），{ ash: 'stop' } 是停；
    嵌在报告里时，等你答复那一刻往外递 { ash: 'title', waiting }，报告拿它改自己的标签页标题。
    发 run:state { running }（同时发 run:start / run:end）、agents:spawn（这一轮派出一个子智能体）、watch:hang / watch:wake（挂上一个哨兵、被它叫醒一次；这三样右侧面板的那两格接）、task:status { id, status, why }、
-   usage { turn, tokens, ctx, files, add, del, elapsedMs, commit? }（turn 是这一轮的用量，其余是跑完之后的总数，ctx 是上下文还剩百分之几）；
+   usage { turn, tokens, ctx, files, add, del, elapsedMs, commit? }（turn 是这一轮的用量，其余是跑完之后的总数，ctx 是上下文还剩百分之几；
+   中途只报 { ctx } 是水位变了，{ squeezing } 是正在压缩 / 压完了）；
    听 reply:send / reply:stop / reply:steer（回复框）、task:act（任务头的重试 / 运行）、review:start / review:done（审查那一行在会话里起、落）。 */
 (() => {
   const { h, $, icon } = ASH;
@@ -24,12 +25,15 @@
   };
 
   /* 「读了 3 个文件，改了 1 个，跑了 1 条命令，等了 2 次哨兵」：读、改按对象去重；相邻两段同一种东西时后一段省掉名词。
-     哨兵那半句总在最后、不占前三样的位置——这一轮为什么这么久，多半就在它身上。只挂上、还没等的，说「挂了 N 个哨兵」 */
+     哨兵那半句总在最后、不占前三样的位置——这一轮为什么这么久，多半就在它身上。只挂上、还没等的，说「挂了 N 个哨兵」。
+     steps 里没有 verb 的那种（{ bad: '上下文没压成' }）不是它做的事，是中途没成的事：不计数，原话接在最后 */
   const KINDS = [['读', '个', '文件'], ['搜', '次', ''], ['改', '个', '文件'], ['跑', '条', '命令'], ['看网页', '个', '网页'], ['派', '个', '子智能体']];
   const SENTRY = ['挂', '等'];
-  function summarize(steps) {
-    if (!steps.length) return '想了一会儿';
-    if (steps.length === 1) return `${steps[0].verb}了 ${plain(steps[0].text)}`;
+  function summarize(all) {
+    const steps = all.filter((s) => s.verb);
+    const bad = all.find((s) => s.bad)?.bad;
+    if (!steps.length) return bad ?? '想了一会儿';
+    if (steps.length === 1 && !bad) return `${steps[0].verb}了 ${plain(steps[0].text)}`;
     const work = steps.filter((s) => !SENTRY.includes(s.verb));
     const [hung, waits] = SENTRY.map((verb) => steps.filter((s) => s.verb === verb).length);
     const parts = KINDS.map(([verb, unit, noun]) => {
@@ -38,8 +42,9 @@
     }).filter((p) => p.n);
     const rest = parts.slice(3).reduce((sum, p) => sum + p.n, 0) + work.filter((s) => !KINDS.some(([verb]) => verb === s.verb)).length;
     const said = parts.slice(0, 3).map((p, i, all) => `${p.verb}了 ${p.n} ${p.unit}${i && all[i - 1].noun === p.noun ? '' : p.noun}`);
-    return [...said, rest && `另有 ${rest} 步`, waits ? `等了 ${waits} 次哨兵` : hung && `挂了 ${hung} 个哨兵`].filter(Boolean).join('，');
+    return [...said, rest && `另有 ${rest} 步`, waits ? `等了 ${waits} 次哨兵` : hung && `挂了 ${hung} 个哨兵`, bad].filter(Boolean).join('，');
   }
+  const anyBad = (steps) => steps.some((s) => s.bad);
   const thinkWord = (ms) => (ms >= 45000 ? '想了很久' : ms >= 15000 ? '还在想' : '在想');
 
   const cur = ASH.data.cur;
@@ -131,19 +136,20 @@
     strip.said = text;
     strip.pending = setTimeout(() => { strip.shownAt = performance.now(); swapLabel(strip, text); }, Math.max(0, strip.shownAt + 1000 - performance.now()));
   }
-  /* 等哨兵是进行条的第三种说法（在想 / 正在做什么 / 在等哨兵）：它没在动，所以字上没有流光；后面是等了多久，再后面是最迟等到几点。
-     on = false 是被叫醒了：同一行换回「在想」接着走 */
-  function waiting(strip, on, text, until) {
+  /* 进行条换一种说法。它一共四种：在想 / 正在做什么 / 在等哨兵 / 中途插进来的事（在压缩上下文、上游没回话在重试）。
+     后两种后面的用时是「这件事花了多久」，调的人先把 run.s0 拨到这一刻。still = 这会儿没有东西在动（等哨兵、等上游）：字上没有流光；
+     until 是最迟等到几点；thinking = 换回「在想」接着走 */
+  function restate(strip, text, { still = false, thinking = false, until } = {}) {
     clearTimeout(strip.pending);
-    strip.thinking = !on;
+    strip.thinking = thinking;
     strip.said = text;
     strip.since = strip.shownAt = performance.now();
-    strip.btn.classList.toggle('is-wait', on);
-    strip.label.classList.toggle('shim', !on);
+    strip.btn.classList.toggle('is-wait', still);
+    strip.label.classList.toggle('shim', !still);
     strip.time.classList.remove('is-in');
     if (strip.label.textContent !== text) swapLabel(strip, text);
     strip.until?.remove();
-    strip.until = on && until ? h('span.live-until.num', `最迟 ${until}`) : null;
+    strip.until = until ? h('span.live-until.num', `最迟 ${until}`) : null;
     if (strip.until) strip.time.after(strip.until);
   }
   /* 落定是一拍：流光停，旧句和用时按原来的颜色一起淡出；150ms 后同一行换成过去式（或者你给的那句话），
@@ -155,6 +161,7 @@
     strip.time.classList.remove('is-in');
     strip.until?.remove();
     ASH.swap(strip.label, text ?? summarize(strip.steps), { row: strip.btn });
+    strip.btn.classList.toggle('has-bad', !text && anyBad(strip.steps));
     const land = () => { strip.time.remove(); if (cls) strip.btn.classList.add(cls); then?.(); };
     if (ASH.reduced()) land(); else setTimeout(land, 150);
     delete strip.btn.dataset.m;
@@ -189,7 +196,7 @@
     const giveWay = () => {
       const strip = r.strip;
       if (!strip) return;
-      if (strip.steps.length) { settle(strip); return; }
+      if (strip.list.childElementCount) { settle(strip); return; }
       clearTimeout(strip.pending);
       strip.btn.remove();
       strip.list.remove();
@@ -289,6 +296,8 @@
       if (ev.tool.hang) { r.hang = { ...ev.tool.hang, until: after(ev.tool.hang.limit) }; ASH.emit('watch:hang', ev.tool.hang); }
       feed.follow();
       await sleep(ev.ms);
+      /* 这一步读进来的东西把上下文占掉了多少：右侧「信息」里的水位跟着走 */
+      if (ev.ctx != null) { totals.ctx = ev.ctx; ASH.emit('usage', { ctx: ev.ctx }); }
     } else if (ev.text) {
       await stream(ev.text);
     } else if (ev.ask) {
@@ -327,7 +336,7 @@
       if (strip.open) row.el.classList.add('enter');
       strip.put(row.el);
       r.s0 = performance.now();
-      waiting(strip, true, said, r.hang?.until);
+      restate(strip, said, { still: true, until: r.hang?.until });
       feed.follow();
       const took = () => ASH.dur(performance.now() - r.s0);
       const ticking = setInterval(() => { row.tail.textContent = took(); }, 250);
@@ -336,7 +345,31 @@
       ASH.emit('watch:wake', { title: w.name, lines: w.lines, exit: w.exit });
       r.s0 = performance.now();
       r.woke = true;
-      waiting(strip, false, '在想');
+      restate(strip, '在想', { thinking: true });
+      feed.follow();
+    } else if (ev.meanwhile) {
+      /* 中途插进来的事——压缩上下文、上游不回话在重试：不是它做的，也不是它说的，所以不进正文。
+         进行条写着它，后面是这件事已经花了多久；过去了这一行接着往下走，外面什么都不留，只在执行过程里它发生的位置上记一行（kit.note）。
+         没成的才留在外面：那一行是红的，摘要最后多半句（summarize 的 bad） */
+      const m = ev.meanwhile;
+      const squeeze = m.ctx != null;
+      const strip = r.strip ?? openStrip(m.says[0]);
+      r.s0 = performance.now();
+      restate(strip, m.says[0], { still: m.still });
+      claim(strip.btn, 'run-9');
+      if (squeeze) ASH.emit('usage', { squeezing: true });
+      feed.follow();
+      try {
+        for (const [i, said] of m.says.entries()) { if (i) relabel(strip, said); await sleep(m.ms / m.says.length); }
+      } catch (why) { if (squeeze) ASH.emit('usage', { squeezing: false }); throw why; }
+      if (m.fail) { const failed = { bad: m.fail }; strip.steps.push(failed); r.steps.push(failed); }
+      const row = kit.note({ glyph: m.glyph, text: m.fail ?? m.done, tail: ASH.dur(performance.now() - r.s0), bad: Boolean(m.fail), why: m.why,
+        act: m.act && { label: m.act, onclick: () => ASH.todo(`${m.act}之后的样子`) } });
+      if (strip.open) row.classList.add('enter');
+      strip.put(row);
+      if (squeeze) { if (!m.fail) totals.ctx = m.ctx; ASH.emit('usage', { squeezing: false, ctx: totals.ctx }); }
+      r.s0 = performance.now();
+      restate(strip, '在想', { thinking: true });
       feed.follow();
     } else if (ev.fail) {
       /* 进行条原地落定成红色的一句；退出码收在点开的那一层。「重试」不挂在会话里：它在任务头上，是一颗图标 */
@@ -368,6 +401,7 @@
   /* 把一串节点收进一行「执行过程」，放在 before 前面：步骤照搬，夹在中间的正文变成过程说明，原来那几行摘要不要了 */
   function pack(nodes, steps, before, time) {
     const fold = kit.fold(summarize(steps), [], { time });
+    fold.btn.classList.toggle('has-bad', anyBad(steps));
     for (const node of nodes) {
       if (node.classList.contains('md')) { node.classList.add('said'); node.removeAttribute('data-m'); fold.put(node); }
       else if (node.classList.contains('steps')) { fold.put(...node.children); node.remove(); }
@@ -527,7 +561,12 @@
         { label: '跑一轮', icon: 'play', onpick: () => play('run') },
         { label: '跑到要你答复', icon: 'help', onpick: () => play('ask') },
         { label: '中途失败', icon: 'warn', onpick: () => play('fail') },
+        '-',
         { label: '想得很久（17 秒）', icon: 'clock', onpick: () => play('slow') },
+        { label: '中途压缩上下文', icon: 'squeeze', onpick: () => play('squeeze') },
+        { label: '压缩没成', icon: 'squeeze', onpick: () => play('squeezeFail') },
+        { label: '上游不回话，重试三次', icon: 'redo', onpick: () => play('stall') },
+        '-',
         { label: '中途挂哨兵等结果', icon: 'pulse', onpick: () => play('watch') },
         { label: '派子智能体分头查', icon: 'bot', onpick: () => play('agents') },
       ]));

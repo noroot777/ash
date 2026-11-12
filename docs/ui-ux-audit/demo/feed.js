@@ -130,6 +130,17 @@
     return { el, btn, tail, settle(done) { Object.assign(wait, done); paint(wait); } };
   };
 
+  /* 这一轮中途发生、但不是它做的事（压缩了上下文、上游没回话重试了几次）：执行过程里它发生的位置上的一行，后面是花了多久。
+     平时就是一行字，不能点；没成的（bad）图标是红的，点开是原因和出路（act = { label, onclick }） */
+  ASH.icons.squeeze ??= '<path d="M2.5 8h11M5.5 2.5 8 5l2.5-2.5M5.5 13.5 8 11l2.5 2.5"/>';
+  kit.note = ({ glyph = 'info', text, tail, bad, why, act }) => {
+    const line = () => [icon(glyph), h('span', text), tail && h('em.step-tail.num', tail)];
+    if (!bad) return h('div.step.mid', h('p', line()));
+    const more = h('div.step-more', { hidden: true }, why && h('p', why), act && h('button.sys-more', { type: 'button', onclick: act.onclick }, act.label));
+    const btn = h('button', { type: 'button', 'aria-expanded': 'false', onclick: () => unfold(btn, more) }, line());
+    return h('div.step.mid.bad', btn, more);
+  };
+
   /* 一步：一句人话（动词 + 对象）。点开是「字段 值」，原始参数再折一层 */
   const VERB_ICON = { 读: 'file', 搜: 'search', 改: 'edit', 写: 'edit', 跑: 'term', 看网页: 'globe', 派: 'bot', 挂: 'pulse' };
   const VERB_FIELD = { 读: '文件', 搜: '查找', 改: '文件', 写: '文件', 跑: '命令', 看网页: '网址', 派: '任务', 挂: '盯什么' };

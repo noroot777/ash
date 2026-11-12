@@ -84,7 +84,7 @@
 
       /* 右边那一组：一步一颗图标，章排在最后、位置不随状态变。章开着改动工作区时是按下的样子，再点一次回对话 */
       const acts = h('span.task-acts', { 'data-m': 'head-1' });
-      const seal = h('button.ico.task-seal', { type: 'button', 'aria-expanded': 'false', onclick: () => ASH.emit('changes:open') }, icon('seal'));
+      const seal = h('button.ico.task-seal', { type: 'button', 'aria-expanded': 'false', 'data-m': 'reply-6', onclick: () => ASH.emit('changes:open') }, icon('seal'));
       const actBtn = (label) => h('button.ico', { type: 'button', 'aria-label': label, 'data-tip': label, 'data-act': label, onclick: () => ASH.emit('task:act', { label }) }, icon(ACT[label]));
 
       const markDone = async () => {
