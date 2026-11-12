@@ -74,7 +74,7 @@
 .studio-card > .studio-input-status { padding:0 16px 10px; color:var(--muted); font-size:var(--t-xs); }
 
 /* 旧长相的入口（回复框的发送设置还在用） */
-.studio-aux-button { display:inline-flex; min-width:0; max-width:100%; height:30px; flex:0 1 auto; align-items:center; gap:6px; border:0; border-radius:7px; padding:0 8px; background:transparent; color:var(--muted); font-size:11px; white-space:nowrap; }
+.studio-aux-button { display:inline-flex; min-width:0; max-width:100%; height:30px; flex:0 1 auto; align-items:center; gap:6px; border:0; border-radius:7px; padding:0 8px; background:transparent; color:var(--muted); font-size:var(--t-xs); white-space:nowrap; }
 .studio-aux-button > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
 .studio-aux-button > svg { flex-shrink:0; }
 .studio-aux-button:hover:not(:disabled),.studio-aux-button[aria-expanded="true"] { color:var(--ink); background:var(--raised); }
@@ -110,7 +110,7 @@
 .studio-popover .composer-launch-mode { display:grid; gap:6px; }
 .studio-popover .composer-launch-mode > span { display:block; }
 .composer-launch-mode-grid { display:flex; flex-wrap:wrap; gap:5px; }
-.composer-launch-blocked { color:var(--faint); font-size:10px; }
+.composer-launch-blocked { color:var(--muted); font-size:var(--t-xs); }
 .studio-popover .schedule-field { width:100%; margin-top:12px; }
 .studio-popover .composer-launch-error { display:block; margin-top:8px; white-space:normal; }
 /* 「创建并排队」的目标任务选择器(启动设置浮层内) */

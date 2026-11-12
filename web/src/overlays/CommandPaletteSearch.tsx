@@ -15,7 +15,7 @@ const FIELD_LABEL: Record<SearchHit["field"], string | null> = {
 // 「你搜的就是这个任务」的标识。命中按 id 时钉在最前面(见 CommandPalette),
 // 但标识挂在行本身:同一个前缀撞上两条任务时,第二条也得看得出来它是 id 命中。
 function IdMatchBadge() {
-  return <span className="shrink-0 rounded bg-ink/10 px-1 text-[9px] font-medium leading-4 text-ink">就是这个任务</span>;
+  return <span className="shrink-0 rounded bg-ink/10 px-1 text-[length:var(--t-xs)] font-medium leading-4 text-ink">就是这个任务</span>;
 }
 
 function isIdMatch(hit: SearchHit) {
@@ -116,7 +116,7 @@ export function SearchPreview({ hit, query, onOpen }: { hit: SearchHit | undefin
               <span className="min-w-0"><Highlight text={hit.title} query={query} /></span>
               {isIdMatch(hit) && <IdMatchBadge />}
             </h2>
-            <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] leading-4 text-faint">
+            <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[length:var(--t-xs)] leading-4 text-faint">
               {hit.kind === "task" && <><span className="font-mono text-muted"><Highlight text={hit.id} query={query} /></span><span aria-hidden="true">·</span></>}
               <span>{hit.projectName ?? "未知项目"}</span><span aria-hidden="true">·</span>
               <span>更新于 {formatInstant(hit.updatedAt)}</span>
@@ -171,18 +171,18 @@ export function SearchHitRow({
         </span>
         <span className="palette-hit-title min-w-0 truncate font-medium text-ink"><Highlight text={hit.title} query={query} /></span>
         {isIdMatch(hit) && <IdMatchBadge />}
-        {hit.kind === "task" && hit.archived && <span className="shrink-0 rounded bg-overlay px-1 text-[9px] text-faint">已归档</span>}
-        {hit.kind === "note" && hit.taskCount > 0 && <span className="shrink-0 rounded bg-overlay px-1 text-[9px] text-faint">已转 {hit.taskCount} 个任务</span>}
+        {hit.kind === "task" && hit.archived && <span className="shrink-0 rounded bg-overlay px-1 text-[length:var(--t-xs)] text-faint">已归档</span>}
+        {hit.kind === "note" && hit.taskCount > 0 && <span className="shrink-0 rounded bg-overlay px-1 text-[length:var(--t-xs)] text-faint">已转 {hit.taskCount} 个任务</span>}
       </span>
-      <span className="palette-hit-meta flex w-full min-w-0 items-center gap-1.5 pl-[23px] text-[9px] leading-4 text-faint">
+      <span className="palette-hit-meta flex w-full min-w-0 items-center gap-1.5 pl-[23px] text-[length:var(--t-xs)] leading-4 text-faint">
         {hit.projectName && <><span className="truncate">{hit.projectName}</span><span aria-hidden="true">·</span></>}
-        {hit.kind === "task" && <><span className="font-mono text-[10px] text-muted"><Highlight text={hit.id} query={query} /></span><span aria-hidden="true">·</span></>}
+        {hit.kind === "task" && <><span className="font-mono text-[length:var(--t-xs)] text-muted"><Highlight text={hit.id} query={query} /></span><span aria-hidden="true">·</span></>}
         <span>更新于 {formatInstant(hit.updatedAt)}</span>
       </span>
       {hit.snippet && (
         <span className="flex w-full min-w-0 items-center gap-1.5 pl-[23px]">
-          {fieldChip && <span className="shrink-0 rounded bg-overlay px-1 text-[9px] leading-4 text-faint">{fieldChip}</span>}
-          <span className="palette-hit-snippet min-w-0 text-[11px] leading-4 text-muted"><Highlight text={hit.snippet} query={query} /></span>
+          {fieldChip && <span className="shrink-0 rounded bg-overlay px-1 text-[length:var(--t-xs)] leading-4 text-faint">{fieldChip}</span>}
+          <span className="palette-hit-snippet min-w-0 text-[length:var(--t-xs)] leading-4 text-muted"><Highlight text={hit.snippet} query={query} /></span>
         </span>
       )}
     </button>

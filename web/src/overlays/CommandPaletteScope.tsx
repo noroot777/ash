@@ -35,7 +35,7 @@ export function ScopeToken({
   onRemove: () => void;
 }) {
   return (
-    <span className="flex shrink-0 items-center overflow-hidden rounded-md border border-ink/20 bg-ink/5 text-[11px] text-ink">
+    <span className="flex shrink-0 items-center overflow-hidden rounded-md border border-ink/20 bg-ink/5 text-[length:var(--t-xs)] text-ink">
       <button type="button" className="px-2 py-1 font-medium outline-none hover:bg-ink/10 focus-visible:bg-ink/15" onClick={onEdit}>
         {scopeProjectName(scope, projects)} <span className="mx-0.5 opacity-50">/</span> {scopeTypeName(scope.type)}
       </button>
@@ -79,7 +79,7 @@ function ChoiceRow({
       </span>
       <span className="min-w-0">
         <span className="block truncate text-sm text-ink">{label}</span>
-        <span className="mt-0.5 block truncate text-[11px] text-faint">{description}</span>
+        <span className="mt-0.5 block truncate text-[length:var(--t-xs)] text-faint">{description}</span>
       </span>
     </button>
   );

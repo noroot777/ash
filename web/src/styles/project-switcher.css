@@ -54,7 +54,7 @@
   border-radius: 6px;
   background: var(--accent);
   color: white;
-  font-size: 9px;
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
 }
 
@@ -72,7 +72,7 @@
   height: 17px;
   flex-basis: 17px;
   border-radius: 5px;
-  font-size: 8px;
+  font-size: var(--t-xs);
 }
 
 .workspace-project-avatar--large {
@@ -148,8 +148,8 @@
 
 .workspace-project-current small,
 .workspace-project-option small {
-  color: var(--faint);
-  font-size: 10.5px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   font-weight: var(--w-regular);
 }
 
@@ -181,8 +181,8 @@
 }
 
 .workspace-project-settings small {
-  color: var(--faint);
-  font-size: 9.5px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .workspace-project-search {
@@ -216,8 +216,8 @@
 
 .workspace-project-menu-label {
   padding: 2px 6px 5px;
-  color: var(--faint);
-  font-size: 9.5px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -272,14 +272,14 @@
   background: var(--raised);
   padding: 1px 5px;
   color: var(--faint);
-  font: 10px var(--font-mono);
+  font: var(--t-xs) var(--font-mono);
   white-space: nowrap;
 }
 
 .workspace-project-empty {
   margin: 0;
   padding: 18px 8px;
-  color: var(--faint);
+  color: var(--muted);
   text-align: center;
-  font-size: 11px;
+  font-size: var(--t-xs);
 }

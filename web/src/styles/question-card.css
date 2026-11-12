@@ -14,8 +14,8 @@
 
 .task-question-heading { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 7px 10px 7px 13px; background: color-mix(in oklab, var(--cyan) 5%, var(--panel)); }
 .task-question-icon { display: grid; place-items: center; color: var(--cyan); }
-.task-question-heading b { font-size: 11.5px; font-weight: var(--w-medium); white-space: nowrap; }
-.task-question-status { margin-left: auto; color: var(--cyan); font-size: 10px; white-space: nowrap; }
+.task-question-heading b { font-size: var(--t-xs); font-weight: var(--w-medium); white-space: nowrap; }
+.task-question-status { margin-left: auto; color: var(--cyan); font-size: var(--t-xs); white-space: nowrap; }
 .task-question-collapse { display: grid; width: 24px; height: 24px; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }
 .task-question-collapse:hover { background: var(--raised); color: var(--ink); }
 .task-question-collapse svg { transition: transform .15s ease; }
@@ -23,7 +23,7 @@
 
 /* 进度条就是题号本身：点一下直接跳过去，比「下一题」点四次快。 */
 .task-question-progress { display: flex; flex-wrap: wrap; gap: 4px; margin-left: 4px; }
-.task-question-progress button { display: grid; width: 19px; height: 19px; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--muted); font: 10px/1 var(--font-mono); }
+.task-question-progress button { display: grid; width: 19px; height: 19px; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--muted); font: var(--t-xs)/1 var(--font-mono); }
 .task-question-progress button:hover:not(:disabled) { border-color: color-mix(in oklab, var(--cyan) 45%, var(--line)); color: var(--ink); }
 .task-question-progress button.is-answered { border-color: color-mix(in oklab, var(--cyan) 40%, var(--line)); background: color-mix(in oklab, var(--cyan) 12%, var(--panel)); color: var(--cyan); }
 .task-question-progress button[aria-current="step"] { border-color: var(--cyan); background: var(--cyan); color: white; font-weight: var(--w-medium); }
@@ -32,13 +32,13 @@
 /* 用 max-height 而不是 -webkit-line-clamp：背景是 markdown，行都在内层 <p> 里，
    line-clamp 挂在外层 div 上夹不住。这里的 2 就是「两行」（行高也是 1.6em）。 */
 .task-question-context.is-clamped .task-markdown { max-height: calc(1.6em * 2); overflow: hidden; }
-.task-question-context > button { margin-top: 2px; border: 0; padding: 0; background: transparent; color: var(--cyan); font-size: 10.5px; }
+.task-question-context > button { margin-top: 2px; border: 0; padding: 0; background: transparent; color: var(--cyan); font-size: var(--t-xs); }
 .task-question-context .task-markdown { font-size: 12px; line-height: 1.6; }
 
 /* 一次只出一题，所以这里限高而不是整张卡限高：头尾（题号、发送）任何时候都看得见。 */
 .task-question-step { max-height: 44vh; overflow-y: auto; padding: 13px 14px; }
 .task-question-title { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 11px; min-width: 0; }
-.task-question-title > span { display: grid; place-items: center; flex: 0 0 20px; height: 20px; margin-top: 1px; border-radius: 6px; background: var(--raised); color: var(--muted); font: 11px/1 var(--font-mono); }
+.task-question-title > span { display: grid; place-items: center; flex: 0 0 20px; height: 20px; margin-top: 1px; border-radius: 6px; background: var(--raised); color: var(--muted); font: var(--t-xs)/1 var(--font-mono); }
 .task-question-title .task-markdown { min-width: 0; font-size: 13px; line-height: 1.6; font-weight: var(--w-medium); }
 .task-question-title .task-markdown > :first-child,
 .task-question-context .task-markdown > :first-child { margin-top: 0; }
@@ -51,15 +51,15 @@
 .task-question-options button:hover:not(:disabled) { border-color: color-mix(in oklab, var(--cyan) 50%, var(--line)); background: color-mix(in oklab, var(--cyan) 3%, var(--panel)); }
 .task-question-options button[aria-pressed="true"] { border-color: var(--cyan); background: color-mix(in oklab, var(--cyan) 7%, var(--panel)); }
 /* 平时是序号（配数字键），选中了就换成勾：同一颗徽标既是快捷键提示又是选中态。 */
-.task-question-option-key { display: grid; flex: 0 0 17px; height: 17px; place-items: center; border: 1px solid var(--line2); border-radius: 5px; color: var(--faint); font: 10px/1 var(--font-mono); }
+.task-question-option-key { display: grid; flex: 0 0 18px; height: 18px; place-items: center; border: 1px solid var(--line2); border-radius: 5px; color: var(--faint); font: var(--t-xs)/1 var(--font-mono); }
 [aria-pressed="true"] .task-question-option-key { border-color: var(--cyan); background: var(--cyan); color: white; }
-.task-question-hint { display: block; padding: 0 0 7px; color: var(--faint); font-size: 10px; }
+.task-question-hint { display: block; padding: 0 0 7px; color: var(--muted); font-size: var(--t-xs); }
 .task-question-step textarea { width: 100%; min-height: 34px; resize: none; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); padding: 8px 10px; color: var(--ink); font: 12.5px/1.6 var(--font-sans); }
 .task-question-step textarea:focus { background: var(--panel); }
 
-.task-question-card > footer { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; border-top: 1px solid var(--line); padding: 8px 12px; color: var(--muted); font-size: 10px; }
+.task-question-card > footer { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; border-top: 1px solid var(--line); padding: 8px 12px; color: var(--muted); font-size: var(--t-xs); }
 .task-question-card > footer > span:first-child { margin-right: auto; }
-.task-question-nav { display: inline-flex; align-items: center; gap: 3px; min-height: 28px; border: 1px solid var(--line); border-radius: 7px; padding: 0 9px; background: var(--panel); color: var(--muted); font-size: 11.5px; }
+.task-question-nav { display: inline-flex; align-items: center; gap: 3px; min-height: 28px; border: 1px solid var(--line); border-radius: 7px; padding: 0 9px; background: var(--panel); color: var(--muted); font-size: var(--t-xs); }
 .task-question-nav:hover:not(:disabled) { border-color: var(--line2); color: var(--ink); }
 .task-question-send { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; border: 0; border-radius: 7px; padding: 0 13px; background: var(--cyan); color: white; font-size: 12px; font-weight: var(--w-medium); }
 .task-question-card button:disabled { opacity: .48; cursor: not-allowed; }

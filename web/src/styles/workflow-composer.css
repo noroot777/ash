@@ -54,7 +54,7 @@
 }
 
 .wf-mini-no {
-  font: var(--w-medium) 9.5px/1 var(--font-mono);
+  font: var(--w-medium) var(--t-xs)/1 var(--font-mono);
   color: var(--faint);
 }
 
@@ -125,8 +125,8 @@
 }
 .composer-wf-label em {
   font-style: normal;
-  font-size: 11px;
-  color: var(--faint);
+  font-size: var(--t-xs);
+  color: var(--muted);
 }
 .composer-wf-label em[data-own="yes"] { color: var(--ink); }
 
@@ -156,8 +156,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11.5px;
-  color: var(--faint);
+  font-size: var(--t-xs);
+  color: var(--muted);
 }
 .composer-wf-sel > svg { flex: none; color: var(--faint); }
 
@@ -171,8 +171,8 @@
   align-items: center;
   gap: 5px;
   padding: 0 2px;
-  font-size: 10.5px;
-  color: var(--faint);
+  font-size: var(--t-xs);
+  color: var(--muted);
 }
 .composer-wf-cost b { font-weight: var(--w-medium); color: var(--muted); }
 

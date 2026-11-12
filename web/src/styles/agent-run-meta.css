@@ -11,7 +11,7 @@
   max-width: min(320px, 42vw);
   align-items: center;
   color: color-mix(in oklab, var(--muted) 82%, var(--faint));
-  font-size: 9.5px;
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
 }
 

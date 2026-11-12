@@ -46,8 +46,8 @@
 .task-upload-chip > span { min-width: 0; }
 .task-upload-chip b,
 .task-upload-chip small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-upload-chip b { color: var(--ink); font-size: 10.5px; font-weight: var(--w-medium); }
-.task-upload-chip small { color: var(--faint); font-size: 9px; }
+.task-upload-chip b { color: var(--ink); font-size: var(--t-xs); font-weight: var(--w-medium); }
+.task-upload-chip small { color: var(--muted); font-size: var(--t-xs); }
 .task-upload-chip > button { position: absolute; top: 3px; right: 3px; display: grid; width: 17px; height: 17px; place-items: center; border: 0; border-radius: 4px; background: var(--raised); color: var(--faint); }
 /* 在途的那张：虚线边 + 底部一条按已传字节走的进度线。远程访问时上传要十几秒，
    这条线是「它在动」的唯一证据。 */
@@ -55,9 +55,9 @@
 .task-upload-chip.is-uploading > svg { width: 18px; flex: 0 0 auto; color: var(--accent); }
 .task-upload-progress { position: absolute; bottom: 0; left: 0; width: 100%; height: 2px; transform: scaleX(0); transform-origin: left; background: var(--accent); transition: transform 120ms linear; }
 .task-upload-error,
-.task-reply-error { width: 100%; margin: 0; color: var(--red); font-size: 10.5px; }
+.task-reply-error { width: 100%; margin: 0; color: var(--red); font-size: var(--t-xs); }
 .task-reply-error { margin-bottom: 5px; }
-.task-reply-command-result { max-height: 240px; overflow: auto; margin: 0 0 8px; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; background: var(--panel); color: var(--ink); font-size: 11px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-reply-command-result { max-height: 240px; overflow: auto; margin: 0 0 8px; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; background: var(--panel); color: var(--ink); font-size: var(--t-xs); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .task-reply-command-menu,
 .task-reply-mention-menu,
 .task-reply-inline-panel {
@@ -76,7 +76,7 @@
   padding: 5px;
   box-shadow: var(--menu-shadow);
 }
-.task-reply-command-menu > small { display: block; padding: 4px 7px 5px; color: var(--faint); font-size: 9.5px; }
+.task-reply-command-menu > small { display: block; padding: 4px 7px 5px; color: var(--muted); font-size: var(--t-xs); }
 .task-reply-command-menu > button {
   display: flex;
   width: 100%;
@@ -91,9 +91,9 @@
 }
 .task-reply-command-menu > button:hover,
 .task-reply-command-menu > button[aria-selected="true"] { background: var(--sel-bg); }
-.task-reply-command-menu b { flex: 0 0 auto; color: var(--ink); font-family: var(--font-mono); font-size: 11.5px; }
-.task-reply-command-menu span { flex: 0 0 auto; font-size: 11.5px; font-weight: var(--w-medium); }
-.task-reply-command-menu em { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.task-reply-command-menu b { flex: 0 0 auto; color: var(--ink); font-family: var(--font-mono); font-size: var(--t-xs); }
+.task-reply-command-menu span { flex: 0 0 auto; font-size: var(--t-xs); font-weight: var(--w-medium); }
+.task-reply-command-menu em { min-width: 0; overflow: hidden; color: var(--muted); font-size: var(--t-xs); font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 /* 技能一多这张菜单就得能滚（本机 57 条）；键盘选中项的 scrollIntoView 在 SlashMenu 里。 */
 .task-reply-command-menu { max-height: min(46vh, 340px); overflow-y: auto; }
 /* `@` 菜单的盒子在 mention-menu.css，这里只管把它贴在输入框上方。 */
@@ -135,13 +135,13 @@
 .task-derivation-card.is-team .task-derivation-header > span { background: color-mix(in oklab, var(--cyan) 12%, var(--panel)); color: var(--cyan); }
 .task-derivation-header > div { display: grid; min-width: 0; gap: 1px; }
 .task-derivation-header b { font-size: 12px; font-weight: var(--w-medium); }
-.task-derivation-header small { color: var(--faint); font-size: 9.5px; }
+.task-derivation-header small { color: var(--muted); font-size: var(--t-xs); }
 .task-derivation-header .ui-button { margin-left: auto; }
 .task-derivation-body { display: grid; gap: 11px; padding: 12px; }
 .task-derivation-role-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .task-derivation-role { min-width: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--canvas); padding: 9px; }
-.task-derivation-review { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 10.5px; font-weight: var(--w-medium); }
-.task-derivation-note { position: relative; display: grid; gap: 6px; color: var(--muted); font-size: 10px; font-weight: var(--w-medium); }
+.task-derivation-review { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
+.task-derivation-note { position: relative; display: grid; gap: 6px; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
 .task-derivation-note textarea {
   width: 100%;
   resize: none;
@@ -172,12 +172,12 @@
   box-shadow: var(--menu-shadow);
   font-weight: var(--w-regular);
 }
-.task-derivation-slash-menu > small { display: block; padding: 4px 7px 5px; color: var(--faint); font-size: 9.5px; }
+.task-derivation-slash-menu > small { display: block; padding: 4px 7px 5px; color: var(--muted); font-size: var(--t-xs); }
 .task-derivation-slash-menu > button { display: flex; width: 100%; min-height: 35px; align-items: baseline; gap: 9px; border: 0; border-radius: 7px; background: transparent; padding: 7px 8px; text-align: left; }
 .task-derivation-slash-menu > button:hover,
 .task-derivation-slash-menu > button[aria-selected="true"] { background: var(--sel-bg); }
-.task-derivation-slash-menu b { flex: 0 0 auto; color: var(--ink); font-family: var(--font-mono); font-size: 11.5px; }
-.task-derivation-slash-menu em { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.task-derivation-slash-menu b { flex: 0 0 auto; color: var(--ink); font-family: var(--font-mono); font-size: var(--t-xs); }
+.task-derivation-slash-menu em { min-width: 0; overflow: hidden; color: var(--muted); font-size: var(--t-xs); font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 
 /* `@` 引用文件的菜单同样往下挂（理由同上），盒子样式来自 mention-menu.css。
    `font-weight` 要压回来：外面那层 <label> 是加粗的小标题，继承下来整张菜单都会变粗。 */
@@ -191,9 +191,9 @@
 }
 .task-derivation-duet-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .task-derivation-gate { display: grid; gap: 6px; }
-.task-derivation-gate > span { color: var(--muted); font-size: 10px; font-weight: var(--w-medium); }
+.task-derivation-gate > span { color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
 .task-derivation-gate .ui-choice { min-height: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 0 9px; }
-.task-derivation-explainer { margin: -2px 0 0; color: var(--faint); font-size: 9.5px; }
+.task-derivation-explainer { margin: -2px 0 0; color: var(--muted); font-size: var(--t-xs); }
 .task-derivation-footer {
   display: flex;
   min-height: 48px;
@@ -204,11 +204,11 @@
   padding: 8px 10px 8px 12px;
   background: var(--canvas);
 }
-.task-derivation-warning { display: flex; width: 100%; align-items: center; gap: 5px; margin: 0; color: var(--amber); font-size: 10px; }
-.task-derivation-worktree { display: inline-flex; min-width: 0; align-items: center; gap: 5px; overflow: hidden; color: var(--faint); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.task-derivation-warning { display: flex; width: 100%; align-items: center; gap: 5px; margin: 0; color: var(--amber); font-size: var(--t-xs); }
+.task-derivation-worktree { display: inline-flex; min-width: 0; align-items: center; gap: 5px; overflow: hidden; color: var(--muted); font-size: var(--t-xs); text-overflow: ellipsis; white-space: nowrap; }
 .task-derivation-worktree svg { flex: 0 0 auto; color: var(--muted); }
 .task-derivation-actions { display: flex; margin-left: auto; gap: 5px; }
-.task-derivation-actions kbd { color: rgb(255 255 255 / 70%); font: 9px var(--font-mono); }
+.task-derivation-actions kbd { color: rgb(255 255 255 / 70%); font: var(--t-xs) var(--font-mono); }
 
 @media (max-width: 880px) {
   .task-derivation-role-grid { grid-template-columns: 1fr; }

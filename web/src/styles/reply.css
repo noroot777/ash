@@ -1,19 +1,19 @@
 .scheduled-message-tray { container-type: inline-size; display: flex; margin-bottom: 7px; flex-direction: column; gap: 4px; }
-.scheduled-message-tray > small { color: var(--faint); font-size: 9.5px; }
-.scheduled-message-tray > p { margin: 0; color: var(--red); font-size: 10.5px; }
-.scheduled-message-row { display: flex; min-height: 28px; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--overlay); padding: 4px 6px 4px 8px; color: var(--faint); font-size: 10px; }
+.scheduled-message-tray > small { color: var(--muted); font-size: var(--t-xs); }
+.scheduled-message-tray > p { margin: 0; color: var(--red); font-size: var(--t-xs); }
+.scheduled-message-row { display: flex; min-height: 28px; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--overlay); padding: 4px 6px 4px 8px; color: var(--muted); font-size: var(--t-xs); }
 .scheduled-message-row time,
 .scheduled-message-row > em,
 .scheduled-message-row > span { flex: 0 0 auto; }
 .scheduled-message-row > span { font-family: var(--font-mono); }
 .scheduled-message-row > em { font-style: normal; }
-.scheduled-message-row > b { min-width: 0; flex: 1; overflow: hidden; color: var(--ink); font-size: 10.5px; font-weight: var(--w-medium); text-overflow: ellipsis; white-space: nowrap; }
+.scheduled-message-row > b { min-width: 0; flex: 1; overflow: hidden; color: var(--ink); font-size: var(--t-xs); font-weight: var(--w-medium); text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-message-row > button { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--faint); }
 .scheduled-message-row > button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .scheduled-message-row > button:disabled { opacity: .48; }
 /* 审查链自己排的答复：只标出来，不给撤回按钮（那颗按钮的承诺在这里兑现不了）。 */
-.scheduled-message-row > .scheduled-message-managed { flex: 0 0 auto; color: var(--faint); font-size: 9.5px; white-space: nowrap; }
-.scheduled-message-row > .scheduled-message-guide { display: inline-flex; width: auto; height: 24px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--overlay); padding: 0 8px; color: var(--muted); font-size: 9.5px; font-weight: var(--w-medium); white-space: nowrap; }
+.scheduled-message-row > .scheduled-message-managed { flex: 0 0 auto; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
+.scheduled-message-row > .scheduled-message-guide { display: inline-flex; width: auto; height: 24px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--overlay); padding: 0 8px; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); white-space: nowrap; }
 .scheduled-message-guide > svg { color: var(--muted); }
 .scheduled-message-guide:hover:not(:disabled) { border-color: color-mix(in oklab, var(--ink) 38%, var(--line2)); background: var(--sel-bg); color: var(--ink); }
 .scheduled-message-guide:disabled { opacity: .48; }
@@ -60,11 +60,11 @@
 .agent-model-picker-head { display: flex; align-items: center; gap: 6px; border-bottom: 0.5px solid var(--line); padding: 7px 8px; }
 .agent-model-picker-back { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); }
 .agent-model-picker-back:hover { background: var(--raised); color: var(--ink); }
-.agent-model-picker-crumb { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; color: var(--faint); font-size: 9.5px; }
+.agent-model-picker-crumb { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; color: var(--muted); font-size: var(--t-xs); }
 .agent-model-picker-crumb > svg { color: var(--muted); }
-.agent-model-picker-head input { min-width: 0; flex: 1; height: 25px; border: 1px solid var(--line2); border-radius: 6px; background: var(--canvas); padding: 0 7px; color: var(--ink); font: 11px var(--font-sans); }
+.agent-model-picker-head input { min-width: 0; flex: 1; height: 25px; border: 1px solid var(--line2); border-radius: 6px; background: var(--canvas); padding: 0 7px; color: var(--ink); font: var(--t-xs) var(--font-sans); }
 .agent-model-picker-rows { max-height: min(46vh, 330px); overflow-y: auto; overscroll-behavior: contain; padding: 5px; }
-.agent-model-picker-rows > p { margin: 6px 7px; color: var(--faint); font-size: 10.5px; }
+.agent-model-picker-rows > p { margin: 6px 7px; color: var(--muted); font-size: var(--t-xs); }
 /* 分块标题跟统一下拉组件（.ui-dropdown-group）同一套：灰底条 + 大写小字，滚动时吸顶。 */
 .agent-model-picker-rows header {
   position: sticky;
@@ -79,8 +79,8 @@
   background: var(--raised);
   padding: 3px 6px;
 }
-.agent-model-picker-rows header > b { color: var(--muted); font-size: 9.5px; font-weight: var(--w-medium); letter-spacing: .04em; text-transform: uppercase; }
-.agent-model-picker-rows header > small { display: inline-flex; min-width: 0; align-items: center; gap: 3px; overflow: hidden; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.agent-model-picker-rows header > b { color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); letter-spacing: .04em; text-transform: uppercase; }
+.agent-model-picker-rows header > small { display: inline-flex; min-width: 0; align-items: center; gap: 3px; overflow: hidden; color: var(--muted); font-size: var(--t-xs); text-overflow: ellipsis; white-space: nowrap; }
 .agent-model-picker-rows header > small.is-error { color: var(--red); }
 /* 分块标题里的「现问一次」：本身是 header 的一个 button，得把下面那条通用行样式
    （width:100%、min-height:30px）压回去，否则它会把整条标题撑成一行按钮。 */
@@ -94,7 +94,7 @@
   border-radius: 5px;
   padding: 1px 5px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
 }
 .agent-model-picker-rows header > button.model-refresh:hover:not(:disabled) { background: var(--sel-bg); color: var(--ink); }
@@ -113,12 +113,12 @@
 }
 .agent-model-picker-rows button:hover,
 .agent-model-picker-rows button[aria-selected="true"] { background: var(--sel-bg); }
-.agent-model-picker-rows button > b { min-width: 0; overflow: hidden; color: var(--ink); font-family: var(--font-mono); font-size: 11px; font-weight: var(--w-medium); text-overflow: ellipsis; white-space: nowrap; }
-.agent-model-picker-rows button > span { min-width: 0; flex: 1; overflow: hidden; color: var(--faint); font-size: 9.5px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.agent-model-picker-rows button > b { min-width: 0; overflow: hidden; color: var(--ink); font-family: var(--font-mono); font-size: var(--t-xs); font-weight: var(--w-medium); text-overflow: ellipsis; white-space: nowrap; }
+.agent-model-picker-rows button > span { min-width: 0; flex: 1; overflow: hidden; color: var(--muted); font-size: var(--t-xs); text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .agent-model-picker-rows button > svg { flex: 0 0 auto; color: var(--faint); }
 /* 面包屑里回显上一步选定的智能体/模型名，等宽字体跟列表里的写法对齐。 */
-.agent-model-picker-crumb > code { font-family: var(--font-mono); font-size: 9.5px; }
-.agent-model-picker > footer { border-top: 0.5px solid var(--line); padding: 5px 9px 6px; color: var(--faint); font-size: 9px; }
+.agent-model-picker-crumb > code { font-family: var(--font-mono); font-size: var(--t-xs); }
+.agent-model-picker > footer { border-top: 0.5px solid var(--line); padding: 5px 9px 6px; color: var(--muted); font-size: var(--t-xs); }
 .team-reply-shell { position: relative; }
 
 /* 哨兵条：跟待发送消息托盘同一套视觉语言（它们讲的是同一件事——还没落到会话里的东西）。 */

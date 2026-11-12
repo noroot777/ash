@@ -345,8 +345,8 @@ code,
 .run-activity-copy { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; column-gap: 6px; }
 .run-activity-copy b,
 .run-activity-copy small { display: inline; }
-.run-activity-copy b { color: var(--muted); font-size: 10.5px; font-weight: var(--w-medium); }
-.run-activity-copy small { color: var(--faint); font-size: 10.5px; line-height: 1.45; }
+.run-activity-copy b { color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
+.run-activity-copy small { color: var(--muted); font-size: var(--t-xs); line-height: 1.45; }
 .run-activity-copy small::before { margin-right: 6px; color: var(--line2); content: "·"; }
 .duet-stream > .run-activity { max-width: 980px; margin-right: auto; margin-left: auto; }
 
@@ -459,8 +459,8 @@ input:is([type="checkbox"], [type="radio"], [type="range"], [type="color"], [typ
   border: 1px solid color-mix(in oklab, var(--accent) 30%, transparent);
   border-radius: 9999px;
   background: color-mix(in oklab, var(--accent) 12%, var(--panel));
-  color: var(--faint);
-  font-size: 10.5px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   letter-spacing: 0.01em;
   pointer-events: none;
   user-select: none;
@@ -483,6 +483,6 @@ input:is([type="checkbox"], [type="radio"], [type="range"], [type="color"], [typ
   margin: 0;
   color: var(--red);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-xs);
   white-space: pre-wrap;
 }

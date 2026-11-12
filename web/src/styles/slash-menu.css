@@ -8,7 +8,7 @@
   border-top: 1px solid var(--line2);
   padding: 6px 7px 4px;
   color: var(--faint);
-  font-size: 9.5px;
+  font-size: var(--t-xs);
 }
 .slash-menu-tag {
   flex: 0 0 auto;
@@ -16,8 +16,8 @@
   border-radius: 4px;
   background: var(--raised);
   padding: 1px 5px;
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   font-style: normal;
   white-space: nowrap;
 }

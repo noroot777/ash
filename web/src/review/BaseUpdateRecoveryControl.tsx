@@ -61,7 +61,7 @@ export function BaseUpdateRecoveryControl({ taskId, disabled, onAbandoned }: {
         <p role="status">{proposal.manual.basis}</p>
         <p style={{ maxHeight: 120, overflow: "auto", overflowWrap: "anywhere" }}>处理后的 diff 文件：{proposal.manual.files.join("、") || "无"}</p>
         {proposal.manual.fileCount > proposal.manual.files.length && <p role="status">共 {proposal.manual.fileCount} 个改动文件，此处仅列出前 {proposal.manual.files.length} 个。请结合工作区核对完整改动范围后再确认。</p>}
-        <pre style={{ maxHeight: 160, overflow: "auto", fontSize: 11 }}>{proposal.manual.diff || "该起点到当前提交没有差异。"}</pre>
+        <pre style={{ maxHeight: 160, overflow: "auto", fontSize: "var(--t-xs)" }}>{proposal.manual.diff || "该起点到当前提交没有差异。"}</pre>
         {proposal.manual.truncated && <p role="status">此处 diff 已截断；解除后仍需核对完整改动并重新审查。</p>}
         <label><input type="checkbox" checked={acknowledged} onChange={e => setAcknowledged(e.target.checked)} />我已核对基点和差异范围，保留当前代码并重新审查</label>
       </section>}

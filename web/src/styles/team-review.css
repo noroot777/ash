@@ -11,26 +11,26 @@
 .team-review-record-title { min-width: 0; flex: 1; border: 0; background: transparent; padding: 0; text-align: left; }
 .team-review-record-title > span { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .team-review-record-title b { min-width: 0; overflow: hidden; color: var(--ink); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
-.team-review-record-title em, .team-review-record-title small { border-radius: 4px; background: var(--raised); padding: 1px 5px; color: var(--muted); font-size: 9.5px; font-style: normal; }
+.team-review-record-title em, .team-review-record-title small { border-radius: 4px; background: var(--raised); padding: 1px 5px; color: var(--muted); font-size: var(--t-xs); font-style: normal; }
 .team-review-record-title small { background: color-mix(in oklab,var(--ink) 8%,var(--raised)); color: var(--ink); }
-.team-review-record-title p { display: -webkit-box; overflow: hidden; margin: 5px 0 0; color: var(--faint); font-size: 10.5px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.team-review-record-title p { display: -webkit-box; overflow: hidden; margin: 5px 0 0; color: var(--muted); font-size: var(--t-xs); line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .team-review-record-body { display: grid; gap: 12px; border-top: .5px solid var(--line); background: color-mix(in oklab,var(--canvas) 72%,var(--panel)); padding: 12px; }
 
 .team-accept-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 5px; }
 /* min-height 而不是 height:按钮上写的是状态文案(「验收受阻」的整句理由就直接当标签),
    定高遇到换行会被文字顶穿。 */
-.team-accept-actions > button, .team-accept-actions > span { display: inline-flex; min-height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 3px 8px; color: var(--muted); font-size: 10.5px; font-weight: var(--w-medium); text-align: left; }
+.team-accept-actions > button, .team-accept-actions > span { display: inline-flex; min-height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 3px 8px; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); text-align: left; }
 .team-accept-actions > button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .team-accept-actions > button.is-primary { border-color: var(--action); background: var(--action); color: var(--on-action); }
 .team-accept-actions > button:disabled { cursor: not-allowed; opacity: .52; }
 .team-accept-actions > span { border-color: color-mix(in oklab,var(--green) 24%,var(--line)); background: var(--green-bg); color: var(--green); }
-.team-accept-failure { margin: 0 12px 11px 51px; border: 1px solid color-mix(in oklab,var(--red) 30%,var(--line)); border-radius: 8px; background: color-mix(in oklab,var(--red) 5%,var(--panel)); padding: 9px 10px; color: var(--red); font-size: 10.5px; }
+.team-accept-failure { margin: 0 12px 11px 51px; border: 1px solid color-mix(in oklab,var(--red) 30%,var(--line)); border-radius: 8px; background: color-mix(in oklab,var(--red) 5%,var(--panel)); padding: 9px 10px; color: var(--red); font-size: var(--t-xs); }
 .team-accept-failure.is-handed-off { border-color: color-mix(in oklab,var(--amber) 34%,var(--line)); background: color-mix(in oklab,var(--amber) 7%,var(--panel)); color: var(--amber); }
 .team-accept-failure-heading { display: flex; align-items: flex-start; gap: 8px; }
 .team-accept-failure-heading > span { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 7px; background: color-mix(in oklab,var(--red) 10%,var(--panel)); }
 .team-accept-failure.is-handed-off .team-accept-failure-heading > span { background: color-mix(in oklab,var(--amber) 13%,var(--panel)); }
 .team-accept-failure-heading > div { min-width: 0; flex: 1; }
-.team-accept-failure-heading b { display: block; color: color-mix(in oklab,var(--red) 76%,var(--ink)); font-size: 11px; }
+.team-accept-failure-heading b { display: block; color: color-mix(in oklab,var(--red) 76%,var(--ink)); font-size: var(--t-xs); }
 .team-accept-failure.is-handed-off .team-accept-failure-heading b { color: color-mix(in oklab,var(--amber) 76%,var(--ink)); }
 .team-accept-failure p { margin: 3px 0 0; color: var(--muted); line-height: 1.5; white-space: pre-wrap; }
 .team-accept-failure > .pending-merge-actions { margin: 9px 0 0 32px; }
@@ -39,17 +39,17 @@
 .team-accept-failure.is-handed-off .team-accept-failure-guidance { color: color-mix(in oklab,var(--amber) 66%,var(--muted)); }
 .team-accept-conflict-files { margin: 8px 0 0 32px; border-top: .5px solid color-mix(in oklab,var(--red) 18%,var(--line)); padding-top: 7px; }
 .team-accept-failure.is-handed-off .team-accept-conflict-files { border-top-color: color-mix(in oklab,var(--amber) 20%,var(--line)); color: var(--faint); }
-.team-accept-conflict-files > span { display: block; color: currentColor; font-size: 9.5px; font-weight: var(--w-medium); }
+.team-accept-conflict-files > span { display: block; color: currentColor; font-size: var(--t-xs); font-weight: var(--w-medium); }
 .team-accept-conflict-files ul { display: grid; gap: 2px; margin: 4px 0 0; padding: 0; list-style: none; }
-.team-accept-conflict-files code { display: block; overflow-wrap: anywhere; color: currentColor; font-size: 9.5px; }
-.team-return-feedback { display: block; width: 100%; resize: none; border: 1px solid var(--line2); border-radius: 8px; background: var(--canvas); padding: 8px 9px; color: var(--ink); font-size: 11.5px; line-height: 1.5; }
+.team-accept-conflict-files code { display: block; overflow-wrap: anywhere; color: currentColor; font-size: var(--t-xs); }
+.team-return-feedback { display: block; width: 100%; resize: none; border: 1px solid var(--line2); border-radius: 8px; background: var(--canvas); padding: 8px 9px; color: var(--ink); font-size: var(--t-xs); line-height: 1.5; }
 
 /* 验收确认框里那个「合并后提交代码」的勾（本次有效，默认跟项目设置）。 */
 .team-accept-commit { display: flex; align-items: flex-start; gap: 8px; border: 1px solid var(--line2); border-radius: 8px; background: var(--canvas); padding: 9px 10px; }
 .team-accept-commit > input { margin: 1px 0 0; flex: 0 0 auto; }
 .team-accept-commit > span { display: grid; min-width: 0; gap: 3px; }
-.team-accept-commit b { color: var(--ink); font-size: 11px; }
-.team-accept-commit small { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.team-accept-commit b { color: var(--ink); font-size: var(--t-xs); }
+.team-accept-commit small { color: var(--muted); font-size: var(--t-xs); line-height: 1.5; }
 .team-accept-commit small + small { color: var(--faint); }
 .team-accept-commit:has(> input:not(:checked)) { border-color: color-mix(in oklab,var(--amber) 34%,var(--line2)); background: color-mix(in oklab,var(--amber) 6%,var(--canvas)); }
 /* 项目默认还没读到：不给勾（显示成什么都可能跟后端要做的事相反），确认按钮同时禁掉。 */
@@ -58,15 +58,15 @@
 .team-accept-commit-retry { border: 0; background: transparent; color: inherit; font: inherit; text-decoration: underline; }
 
 .team-review-change { display: grid; min-width: 0; gap: 10px; }
-.team-review-loading { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--faint); font-size: 10.5px; }
+.team-review-loading { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: var(--t-xs); }
 .team-review-loading.is-error { color: var(--red); }
 
 .team-review-evidence { overflow: hidden; border: 1px solid color-mix(in oklab,var(--ink) 20%,var(--line)); border-radius: 9px; background: color-mix(in oklab,var(--ink) 3%,var(--panel)); }
 .team-review-evidence > header { display: flex; min-height: 42px; align-items: center; border-bottom: .5px solid color-mix(in oklab,var(--ink) 14%,var(--line)); padding: 6px 10px; }
 .team-review-evidence > header b, .team-review-evidence > header small { display: block; }
-.team-review-evidence > header b { color: var(--ink); font-size: 11px; }
-.team-review-evidence > header small { color: var(--faint); font-size: 9.5px; }
-.team-review-evidence > p { display: flex; align-items: center; gap: 6px; margin: 0; padding: 10px; color: var(--faint); font-size: 10.5px; }
+.team-review-evidence > header b { color: var(--ink); font-size: var(--t-xs); }
+.team-review-evidence > header small { color: var(--muted); font-size: var(--t-xs); }
+.team-review-evidence > p { display: flex; align-items: center; gap: 6px; margin: 0; padding: 10px; color: var(--muted); font-size: var(--t-xs); }
 .team-review-evidence > p.is-error { color: var(--red); }
 .team-review-evidence > p button { border: 0; background: transparent; color: inherit; text-decoration: underline; }
 .review-dispatch-control { margin: 9px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
@@ -75,9 +75,9 @@
 .review-dispatch-heading > span { display: grid; width: 25px; height: 25px; flex: 0 0 25px; place-items: center; border-radius: 7px; background: color-mix(in oklab,var(--ink) 10%,var(--raised)); color: var(--ink); }
 .review-dispatch-heading > div { min-width: 0; flex: 1; }
 .review-dispatch-heading b, .review-dispatch-heading small { display: block; }
-.review-dispatch-heading b { color: var(--ink); font-size: 10.5px; }
-.review-dispatch-heading small { margin-top: 1px; color: var(--faint); font-size: 9.5px; line-height: 1.4; }
-.review-dispatch-heading > button { display: inline-flex; height: 27px; flex: 0 0 auto; align-items: center; gap: 5px; border: 1px solid color-mix(in oklab,var(--ink) 28%,var(--line)); border-radius: 7px; background: var(--panel); padding: 0 8px; color: var(--ink); font-size: 9.5px; font-weight: var(--w-medium); }
+.review-dispatch-heading b { color: var(--ink); font-size: var(--t-xs); }
+.review-dispatch-heading small { margin-top: 1px; color: var(--muted); font-size: var(--t-xs); line-height: 1.4; }
+.review-dispatch-heading > button { display: inline-flex; height: 27px; flex: 0 0 auto; align-items: center; gap: 5px; border: 1px solid color-mix(in oklab,var(--ink) 28%,var(--line)); border-radius: 7px; background: var(--panel); padding: 0 8px; color: var(--ink); font-size: var(--t-xs); font-weight: var(--w-medium); }
 .review-dispatch-heading > button:hover:not(:disabled) { background: color-mix(in oklab,var(--ink) 7%,var(--panel)); }
 .review-dispatch-heading > button:disabled { cursor: not-allowed; opacity: .55; }
 .review-dispatch-control > form { border-top: .5px solid color-mix(in oklab,var(--ink) 16%,var(--line)); }
@@ -85,48 +85,48 @@
 /* 一栏：那颗三段胶囊「智能体 · 模型 · 智能水平」。 */
 .review-dispatch-fields { display: grid; gap: 8px; max-width: 420px; }
 .review-dispatch-fields .composer-field { gap: 4px; }
-.review-dispatch-fields .composer-field > span { font-size: 9px; }
-.review-dispatch-fields .composer-field input, .review-dispatch-fields .composer-field select { height: 30px; border-radius: 7px; font-size: 10.5px; }
+.review-dispatch-fields .composer-field > span { font-size: var(--t-xs); }
+.review-dispatch-fields .composer-field input, .review-dispatch-fields .composer-field select { height: 30px; border-radius: 7px; font-size: var(--t-xs); }
 /* 这一栏整体比新建面板紧一档，胶囊也跟着收到 30px，别在一片 30 里立一颗 34。 */
 .review-dispatch-fields .composer-field .run-target-picker { height: 30px; }
-.review-dispatch-availability { display: flex; align-items: center; gap: 5px; margin: 7px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.45; }
+.review-dispatch-availability { display: flex; align-items: center; gap: 5px; margin: 7px 0 0; color: var(--muted); font-size: var(--t-xs); line-height: 1.45; }
 .review-dispatch-availability.is-error { color: var(--red); }
 .review-dispatch-control form footer { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
-.review-dispatch-control form footer > span { min-width: 0; flex: 1; color: var(--faint); font-size: 9px; }
-.review-dispatch-control form footer > button { display: inline-flex; height: 28px; align-items: center; gap: 5px; border: 0; border-radius: 7px; background: var(--action); padding: 0 9px; color: var(--on-action); font-size: 9.5px; font-weight: var(--w-medium); }
+.review-dispatch-control form footer > span { min-width: 0; flex: 1; color: var(--muted); font-size: var(--t-xs); }
+.review-dispatch-control form footer > button { display: inline-flex; height: 28px; align-items: center; gap: 5px; border: 0; border-radius: 7px; background: var(--action); padding: 0 9px; color: var(--on-action); font-size: var(--t-xs); font-weight: var(--w-medium); }
 .review-dispatch-control form footer > button:hover:not(:disabled) { background: var(--action-hover); }
 .review-dispatch-control form footer > button:disabled { cursor: not-allowed; opacity: .5; }
 .team-review-round { margin: 9px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
 .team-review-round.is-verified { border-color: color-mix(in oklab,var(--green) 25%,var(--line)); }
 .team-review-round.is-verify_failed { border-color: color-mix(in oklab,var(--red) 30%,var(--line)); }
 .team-review-round > button { display: flex; width: 100%; min-height: 37px; align-items: center; gap: 7px; border: 0; background: transparent; padding: 5px 8px; text-align: left; }
-.team-review-round > button > span { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; background: var(--raised); color: var(--muted); font-size: 9.5px; font-weight: var(--w-medium); }
-.team-review-round > button > b { color: var(--ink); font-size: 10.5px; }
-.team-review-round > button > em { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; background: color-mix(in oklab,var(--ink) 9%,var(--raised)); padding: 2px 6px; color: var(--ink); font-size: 9.5px; font-style: normal; font-weight: var(--w-medium); }
+.team-review-round > button > span { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; background: var(--raised); color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
+.team-review-round > button > b { color: var(--ink); font-size: var(--t-xs); }
+.team-review-round > button > em { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; background: color-mix(in oklab,var(--ink) 9%,var(--raised)); padding: 2px 6px; color: var(--ink); font-size: var(--t-xs); font-style: normal; font-weight: var(--w-medium); }
 .team-review-round.is-verified > button > em { background: var(--green-bg); color: var(--green); }
 .team-review-round.is-verify_failed > button > em { background: var(--red-bg); color: var(--red); }
-.team-review-round > button > small { color: var(--faint); font-size: 9.5px; }
+.team-review-round > button > small { color: var(--muted); font-size: var(--t-xs); }
 .team-review-round > button > svg:last-child { margin-left: auto; transition: transform 140ms ease; }
 .team-review-round > button[aria-expanded="false"] > svg:last-child { transform: rotate(-90deg); }
-.team-review-round > div { border-top: .5px solid var(--line); padding: 9px 10px; color: var(--muted); font-size: 10.5px; line-height: 1.6; }
+.team-review-round > div { border-top: .5px solid var(--line); padding: 9px 10px; color: var(--muted); font-size: var(--t-xs); line-height: 1.6; }
 .team-review-round > div > :first-child { margin-top: 0; }
 .team-review-round > div > :last-child { margin-bottom: 0; }
-.team-review-round .task-markdown { font-size: 10.5px; line-height: 1.6; }
+.team-review-round .task-markdown { font-size: var(--t-xs); line-height: 1.6; }
 .team-review-shots { margin-top: 9px; border-top: .5px solid var(--line); padding-top: 8px; }
-.team-review-shots h5 { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; color: var(--faint); font-size: 9.5px; text-transform: uppercase; }
+.team-review-shots h5 { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; color: var(--muted); font-size: var(--t-xs); text-transform: uppercase; }
 .team-review-shots > div { display: grid; grid-template-columns: repeat(auto-fill,minmax(130px,1fr)); gap: 7px; }
 .team-review-shot { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: var(--canvas); text-align: left; }
 .team-review-shot:hover { border-color: color-mix(in oklab,var(--ink) 42%,var(--line)); }
 .team-review-shots img { display: block; width: 100%; aspect-ratio: 16/9; background: var(--raised); object-fit: cover; }
-.team-review-shots span { display: block; overflow: hidden; padding: 5px 6px; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.team-review-shots span { display: block; overflow: hidden; padding: 5px 6px; color: var(--muted); font-size: var(--t-xs); text-overflow: ellipsis; white-space: nowrap; }
 
 .team-acceptance-queue { overflow: hidden; border: 1px solid var(--line2); border-radius: 10px; background: var(--panel); }
 .team-acceptance-queue > header { display: flex; align-items: flex-start; gap: 8px; border-bottom: .5px solid var(--line); padding: 10px 12px; }
 .team-acceptance-queue > header > div { min-width: 0; flex: 1; }
 .team-acceptance-queue > header b, .team-acceptance-queue > header small { display: block; }
-.team-acceptance-queue > header b { font-size: 11.5px; }
-.team-acceptance-queue > header small { color: var(--faint); font-size: 9.5px; }
-.team-acceptance-queue > header > span { color: var(--faint); font-size: 10px; }
+.team-acceptance-queue > header b { font-size: var(--t-xs); }
+.team-acceptance-queue > header small { color: var(--muted); font-size: var(--t-xs); }
+.team-acceptance-queue > header > span { color: var(--muted); font-size: var(--t-xs); }
 .team-acceptance-queue > div { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,470px),1fr)); gap: 10px; padding: 10px; }
 .team-acceptance-queue .team-review-record-body { padding: 9px; }
 .team-acceptance-queue .single-review-diff-layout { grid-template-columns: 1fr; }
@@ -142,33 +142,33 @@
    判据与来由见 web/src/review/PendingMergeCard.tsx 顶部（对话区那一侧只留 TaskHeader
    的「待提交」徽记，样式在 task-detail.css）。 */
 .team-accept-actions > span.is-pending-commit { border-color: color-mix(in oklab,var(--amber) 36%,var(--line)); background: color-mix(in oklab,var(--amber) 9%,var(--panel)); color: var(--amber); }
-.pending-merge-card { display: grid; gap: 8px; margin: 8px 12px 0; border: 1px solid color-mix(in oklab,var(--amber) 34%,var(--line)); border-radius: 10px; background: color-mix(in oklab,var(--amber) 6%,var(--panel)); padding: 9px 11px; font-size: 10.5px; }
+.pending-merge-card { display: grid; gap: 8px; margin: 8px 12px 0; border: 1px solid color-mix(in oklab,var(--amber) 34%,var(--line)); border-radius: 10px; background: color-mix(in oklab,var(--amber) 6%,var(--panel)); padding: 9px 11px; font-size: var(--t-xs); }
 .pending-merge-card.is-settled { border-color: color-mix(in oklab,var(--green) 26%,var(--line)); background: var(--green-bg); }
 .pending-merge-card > header { display: flex; align-items: flex-start; gap: 8px; }
 .pending-merge-card > header > span:first-child { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 7px; background: color-mix(in oklab,var(--amber) 13%,var(--panel)); color: var(--amber); }
 .pending-merge-card.is-settled > header > span:first-child { background: color-mix(in oklab,var(--green) 13%,var(--panel)); color: var(--green); }
 .pending-merge-card > header > div { min-width: 0; flex: 1; }
-.pending-merge-card b { display: block; color: color-mix(in oklab,var(--amber) 70%,var(--ink)); font-size: 11px; }
+.pending-merge-card b { display: block; color: color-mix(in oklab,var(--amber) 70%,var(--ink)); font-size: var(--t-xs); }
 .pending-merge-card.is-settled b { color: color-mix(in oklab,var(--green) 70%,var(--ink)); }
 .pending-merge-card p { margin: 3px 0 0; color: var(--muted); line-height: 1.55; }
-.pending-merge-refresh { display: inline-flex; height: 22px; flex: 0 0 auto; align-items: center; gap: 4px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 0 7px; color: var(--muted); font-size: 9.5px; }
+.pending-merge-refresh { display: inline-flex; height: 22px; flex: 0 0 auto; align-items: center; gap: 4px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 0 7px; color: var(--muted); font-size: var(--t-xs); }
 .pending-merge-refresh:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .pending-merge-refresh:disabled { cursor: not-allowed; opacity: .5; }
 .pending-merge-files, .pending-merge-commands { border-top: .5px solid color-mix(in oklab,var(--amber) 18%,var(--line)); padding-top: 7px; }
-.pending-merge-files > span, .pending-merge-commands > span { display: block; color: var(--faint); font-size: 9.5px; font-weight: var(--w-medium); }
+.pending-merge-files > span, .pending-merge-commands > span { display: block; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
 .pending-merge-files ul, .pending-merge-commands ul { display: grid; gap: 2px; margin: 4px 0 0; padding: 0; list-style: none; }
-.pending-merge-files code { display: block; overflow-wrap: anywhere; color: var(--muted); font-size: 9.5px; }
-.pending-merge-files small { display: block; margin-top: 3px; color: var(--faint); font-size: 9px; }
+.pending-merge-files code { display: block; overflow-wrap: anywhere; color: var(--muted); font-size: var(--t-xs); }
+.pending-merge-files small { display: block; margin-top: 3px; color: var(--muted); font-size: var(--t-xs); }
 /* 命令是要被粘走的：一次点选就整条选中，别让用户在一行里拖。 */
-.pending-merge-commands code { display: block; overflow-wrap: anywhere; border-radius: 5px; background: var(--canvas); padding: 3px 6px; color: var(--muted); font-size: 9.5px; user-select: all; }
+.pending-merge-commands code { display: block; overflow-wrap: anywhere; border-radius: 5px; background: var(--canvas); padding: 3px 6px; color: var(--muted); font-size: var(--t-xs); user-select: all; }
 .pending-merge-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.pending-merge-actions > button { display: inline-flex; height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 9px; color: var(--muted); font-size: 10.5px; font-weight: var(--w-medium); }
+.pending-merge-actions > button { display: inline-flex; height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 9px; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
 .pending-merge-actions > button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .pending-merge-actions > button.is-primary { border-color: var(--action); background: var(--action); color: var(--on-action); }
 .pending-merge-actions > button:disabled { cursor: not-allowed; opacity: .52; }
 /* 验收前置命令卡。跟 PendingMergeCard 同一副骨架（都是「验收停在这儿 + 出路」），
    只有色调随状态走：跑着=中性、通过=绿、没通过=红。 */
-.accept-gate-card { display: grid; gap: 8px; margin: 8px 12px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 9px 11px; font-size: 10.5px; }
+.accept-gate-card { display: grid; gap: 8px; margin: 8px 12px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 9px 11px; font-size: var(--t-xs); }
 .accept-gate-card.is-running { border-color: color-mix(in oklab,var(--accent) 30%,var(--line)); background: color-mix(in oklab,var(--accent) 5%,var(--panel)); }
 .accept-gate-card.is-passed { border-color: color-mix(in oklab,var(--green) 26%,var(--line)); background: var(--green-bg); }
 .accept-gate-card.is-failed { border-color: color-mix(in oklab,var(--red) 30%,var(--line)); background: color-mix(in oklab,var(--red) 5%,var(--panel)); }
@@ -183,11 +183,11 @@
 .accept-gate-card.is-passed > header > span:first-child { color: var(--green); }
 .accept-gate-card.is-failed > header > span:first-child { color: var(--red); }
 .accept-gate-card > header > div { min-width: 0; flex: 1; }
-.accept-gate-card b { display: block; color: var(--ink); font-size: 11px; }
+.accept-gate-card b { display: block; color: var(--ink); font-size: var(--t-xs); }
 .accept-gate-card p { margin: 3px 0 0; color: var(--muted); line-height: 1.55; overflow-wrap: anywhere; }
 .accept-gate-card .pending-merge-actions { margin-top: 1px; }
 .accept-gate-command { display: grid; gap: 4px; margin: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 7px 9px; }
-.accept-gate-command dt { color: var(--faint); font-size: 10px; }
+.accept-gate-command dt { color: var(--muted); font-size: var(--t-xs); }
 .accept-gate-command dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
 .accept-gate-command code { white-space: pre-wrap; }
 /* 门禁归类结论：「这条命令在快照里不存在」那一类的出路。它是用户在这张卡上唯一能读到
@@ -195,30 +195,30 @@
    不发 markdown：同一份字还要进门禁日志和 MCP 回执，星号反引号在那两处只会原样显示
    —— 第 1 轮审查 N4），自带换行与序号，所以 pre-line。 */
 .accept-gate-diagnosis { border: 1px solid color-mix(in oklab,var(--amber) 34%,var(--line)); border-radius: 7px; background: color-mix(in oklab, var(--amber) 6%, transparent); padding: 7px 9px; color: var(--ink); line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
-.accept-gate-diagnosis > span { display: block; margin-bottom: 3px; color: var(--amber); font-size: 9.5px; font-weight: var(--w-medium); }
+.accept-gate-diagnosis > span { display: block; margin-bottom: 3px; color: var(--amber); font-size: var(--t-xs); font-weight: var(--w-medium); }
 /* 已失效的历史结论:虚线 + 灰调,一眼看出它跟上面那块当前结论不是同一回事。 */
 .accept-gate-diagnosis.is-obsolete { border-style: dashed; border-color: var(--line2); background: var(--panel); color: var(--muted); }
 .accept-gate-diagnosis.is-obsolete > span { color: var(--faint); }
-.accept-gate-log > span { display: flex; align-items: center; justify-content: space-between; color: var(--faint); font-size: 9.5px; font-weight: var(--w-medium); }
-.accept-gate-log > span > button { border: 0; background: transparent; padding: 0; color: var(--ink); font-size: 9.5px; }
-.accept-gate-log pre { max-height: 180px; overflow: auto; margin: 4px 0 0; border-radius: 6px; background: var(--canvas); padding: 6px 8px; color: var(--muted); font-family: var(--font-mono); font-size: 9.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.accept-gate-log > span { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
+.accept-gate-log > span > button { border: 0; background: transparent; padding: 0; color: var(--ink); font-size: var(--t-xs); }
+.accept-gate-log pre { max-height: 180px; overflow: auto; margin: 4px 0 0; border-radius: 6px; background: var(--canvas); padding: 6px 8px; color: var(--muted); font-family: var(--font-mono); font-size: var(--t-xs); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .accept-gate-log.is-full pre { max-height: 360px; }
 /* 没设命令时的那一档:它只是一个入口,别长成一张告警卡。 */
 .accept-gate-card.is-idle { border-style: dashed; background: var(--panel); }
 .accept-gate-card.is-idle > header > span:first-child { background: transparent; color: var(--faint); }
 .accept-gate-edit { display: grid; gap: 5px; }
-.accept-gate-edit input { width: 100%; height: 30px; border: 1px solid var(--line2); border-radius: 7px; background: var(--canvas); padding: 0 9px; color: var(--ink); font-size: 10.5px; }
-.accept-gate-edit small { color: var(--faint); font-size: 9.5px; line-height: 1.55; }
-.accept-gate-edit small b { display: inline; color: var(--muted); font-size: 9.5px; }
+.accept-gate-edit input { width: 100%; height: 30px; border: 1px solid var(--line2); border-radius: 7px; background: var(--canvas); padding: 0 9px; color: var(--ink); font-size: var(--t-xs); }
+.accept-gate-edit small { color: var(--muted); font-size: var(--t-xs); line-height: 1.55; }
+.accept-gate-edit small b { display: inline; color: var(--muted); font-size: var(--t-xs); }
 /* 门禁基准三档（AcceptGateBaselineChoice）。设置页和门禁卡共用；选择器带上 role 是为了压过
    `.settings-row > div` 那条把直接子 div 一律设成 grid 的规则。 */
 [role="radiogroup"].accept-gate-baseline { display: inline-flex; flex: 0 0 auto; gap: 0; width: fit-content; border: 1px solid var(--line2); border-radius: 7px; background: var(--canvas); overflow: hidden; }
-.accept-gate-baseline > button { height: 26px; border: 0; border-right: 1px solid var(--line); background: transparent; padding: 0 10px; color: var(--muted); font-size: 10.5px; white-space: nowrap; cursor: pointer; }
+.accept-gate-baseline > button { height: 26px; border: 0; border-right: 1px solid var(--line); background: transparent; padding: 0 10px; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; cursor: pointer; }
 .accept-gate-baseline > button:last-child { border-right: 0; }
 .accept-gate-baseline > button[aria-checked="true"] { background: var(--raised); color: var(--ink); font-weight: var(--w-medium); }
 .accept-gate-baseline > button:disabled { cursor: default; }
 .accept-gate-baseline > button:disabled:not([aria-checked="true"]) { opacity: .55; }
 .accept-gate-basis { display: grid; gap: 5px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 7px 9px; }
-.accept-gate-basis > span { color: var(--faint); font-size: 10px; }
+.accept-gate-basis > span { color: var(--muted); font-size: var(--t-xs); }
 .accept-gate-basis > p { margin: 0; color: var(--muted); line-height: 1.55; }
 .accept-gate-basis > p[role="alert"] { color: var(--red); }

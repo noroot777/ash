@@ -96,7 +96,7 @@
 
 .auth-brand-copy > span {
   color: #f2b564;
-  font: var(--w-medium) 9px/1 var(--font-mono);
+  font: var(--w-medium) var(--t-xs)/1 var(--font-mono);
   letter-spacing: .15em;
 }
 
@@ -138,9 +138,9 @@
 }
 
 .auth-brand-points li > span { display: grid; gap: 1px; }
-.auth-brand-points b { color: #f6f4ed; font-size: 11.5px; font-weight: var(--w-medium); }
-.auth-brand-points small { color: rgb(246 244 237 / 48%); font-size: 9.5px; }
-.auth-brand-foot { position: relative; z-index: 1; margin: 24px 0 0; color: rgb(246 244 237 / 28%); font: var(--w-medium) 8px/1 var(--font-mono); letter-spacing: .13em; }
+.auth-brand-points b { color: #f6f4ed; font-size: var(--t-xs); font-weight: var(--w-medium); }
+.auth-brand-points small { color: rgb(246 244 237 / 48%); font-size: var(--t-xs); }
+.auth-brand-foot { position: relative; z-index: 1; margin: 24px 0 0; color: rgb(246 244 237 / 28%); font: var(--w-medium) var(--t-xs)/1 var(--font-mono); letter-spacing: .13em; }
 
 .auth-stage-content {
   position: relative;
@@ -169,7 +169,7 @@
   display: block;
   margin-bottom: 12px;
   color: var(--muted);
-  font: var(--w-medium) 9px/1 var(--font-mono);
+  font: var(--w-medium) var(--t-xs)/1 var(--font-mono);
   letter-spacing: .15em;
   content: "ASH ACCESS";
 }
@@ -229,7 +229,7 @@
   border-radius: 12px;
   background: var(--panel);
   color: var(--muted);
-  font: var(--w-medium) 10px/1 var(--font-mono);
+  font: var(--w-medium) var(--t-xs)/1 var(--font-mono);
   content: "01";
 }
 
@@ -239,8 +239,8 @@
 .auth-choice span { font-size: 12px; line-height: 1.65; }
 
 .auth-field { gap: 7px; }
-.auth-field > span { color: var(--ink); font-size: 11px; font-weight: var(--w-medium); }
-.auth-field small { font-size: 10.5px; }
+.auth-field > span { color: var(--ink); font-size: var(--t-xs); font-weight: var(--w-medium); }
+.auth-field small { font-size: var(--t-xs); }
 .auth-field-row { gap: 14px; }
 .auth-actions { gap: 9px; padding-top: 4px; }
 .auth-actions .ui-button { min-height: 38px; border-radius: 10px; }

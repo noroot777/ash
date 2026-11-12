@@ -419,15 +419,15 @@ export function CommandPalette({
         <div className="palette-input">
           <MagnifyingGlass size={18} className="shrink-0" />
           {step === "search" && scope && <ScopeToken scope={scope} projects={projects} onEdit={enterScope} onRemove={() => setScope(null)} />}
-          {(step === "scope-project" || step === "scope-type") && <span className="shrink-0 rounded-md bg-overlay px-2 py-1 font-mono text-[11px] text-ink">/scope</span>}
+          {(step === "scope-project" || step === "scope-type") && <span className="shrink-0 rounded-md bg-overlay px-2 py-1 font-mono text-[length:var(--t-xs)] text-ink">/scope</span>}
           {step === "scope-type" && (
-            <span className="shrink-0 rounded-md bg-overlay px-2 py-1 text-[11px] text-muted">
+            <span className="shrink-0 rounded-md bg-overlay px-2 py-1 text-[length:var(--t-xs)] text-muted">
               {pendingProjectId ? projectNames.get(pendingProjectId) ?? "未知项目" : "不限项目"}
             </span>
           )}
-          {(step === "git-project" || step === "git-overview") && <span className="shrink-0 rounded-md bg-overlay px-2 py-1 font-mono text-[11px] text-ink">/git</span>}
+          {(step === "git-project" || step === "git-overview") && <span className="shrink-0 rounded-md bg-overlay px-2 py-1 font-mono text-[length:var(--t-xs)] text-ink">/git</span>}
           {step === "git-overview" && gitProject && (
-            <button type="button" className="shrink-0 rounded-md bg-overlay px-2 py-1 text-[11px] text-muted outline-none hover:text-ink focus-visible:text-ink" onClick={() => { setStep("git-project"); resetActive(); focusInput(); }}>
+            <button type="button" className="shrink-0 rounded-md bg-overlay px-2 py-1 text-[length:var(--t-xs)] text-muted outline-none hover:text-ink focus-visible:text-ink" onClick={() => { setStep("git-project"); resetActive(); focusInput(); }}>
               {gitProject.name}
             </button>
           )}
@@ -485,7 +485,7 @@ export function CommandPalette({
                 <span className="w-16 shrink-0 font-mono text-sm font-medium text-ink">{command.trigger}</span>
                 <span className="min-w-0">
                   <span className="block text-sm text-ink">{command.label}</span>
-                  <span className="mt-0.5 block truncate text-[11px] text-faint">{command.description}</span>
+                  <span className="mt-0.5 block truncate text-[length:var(--t-xs)] text-faint">{command.description}</span>
                 </span>
               </button>
             ))}
@@ -515,9 +515,9 @@ export function CommandPalette({
               })}
               <SearchHitList hits={restHits} active={active} startIndex={hitStart} query={query} sort={sort} onSelect={setActive} onOpen={openHit} />
               {!normalTotal && !searchError && <p className="palette-empty">{searching ? searchNote : isSearchQueryReady(query) ? "没有匹配的命令、任务或随手记" : "无匹配命令"}</p>}
-              {searching && normalTotal > 0 && <p className="px-4 py-2 text-center text-[10px] text-faint">{searchNote}</p>}
+              {searching && normalTotal > 0 && <p className="px-4 py-2 text-center text-[length:var(--t-xs)] text-faint">{searchNote}</p>}
               {searchError && <div role="alert" className="palette-search-error"><span>{searchError}</span><button type="button" onClick={retry}>重试</button></div>}
-              {!searching && hits.length >= SEARCH_MAX_HITS && <p className="px-4 py-2 text-center text-[10px] text-faint">显示前 {SEARCH_MAX_HITS} 条结果</p>}
+              {!searching && hits.length >= SEARCH_MAX_HITS && <p className="px-4 py-2 text-center text-[length:var(--t-xs)] text-faint">显示前 {SEARCH_MAX_HITS} 条结果</p>}
             </div>
             {hasHits && <SearchPreview hit={activeHit} query={query} onOpen={openHit} />}
           </div>

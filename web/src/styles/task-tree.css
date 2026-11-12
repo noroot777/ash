@@ -62,13 +62,13 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  height: 16px;
+  height: 18px;
   border: 1px solid var(--line2);
   border-radius: 999px;
   background: var(--panel);
   padding: 0 6px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
   font-variant-numeric: tabular-nums;
   cursor: pointer;
@@ -188,8 +188,8 @@
 .workspace-task-project small {
   overflow: hidden;
   max-width: 92px;
-  color: var(--faint);
-  font-size: 10.5px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -340,9 +340,9 @@
   flex: 0 0 auto;
   align-items: center;
   gap: 5px;
-  color: var(--faint);
+  color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: var(--t-xs);
 }
 
 .workspace-worker-dots {
@@ -370,9 +370,9 @@
   max-width: 68px;
   flex: 0 1 auto;
   overflow: hidden;
-  color: var(--faint);
+  color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 8.5px;
+  font-size: var(--t-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -380,9 +380,9 @@
 .workspace-task-empty {
   margin: 0;
   padding: 34px 8px;
-  color: var(--faint);
+  color: var(--muted);
   text-align: center;
-  font-size: 11px;
+  font-size: var(--t-xs);
 }
 
 .workspace-task-empty-action {
@@ -393,7 +393,7 @@
   background: transparent;
   padding: 2px 8px;
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--t-xs);
 }
 
 .workspace-task-empty-action:hover { background: var(--hover-bg); }

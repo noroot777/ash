@@ -397,7 +397,7 @@
   max-width: 30em;
   margin: 0;
   color: var(--faint);
-  font-size: 10.5px;
+  font-size: var(--t-xs);
   line-height: 1.65;
 }
 

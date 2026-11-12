@@ -60,11 +60,11 @@
   justify-content: space-between;
   gap: 18px;
   color: white;
-  font-size: 11px;
+  font-size: var(--t-xs);
 }
 
 .image-preview-lightbox__meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.image-preview-lightbox__meta small { flex: 0 0 auto; font-size: 10px; font-variant-numeric: tabular-nums; opacity: 0.78; }
+.image-preview-lightbox__meta small { flex: 0 0 auto; font-size: var(--t-xs); font-variant-numeric: tabular-nums; opacity: 0.78; }
 
 .image-zoom-controls {
   position: absolute;
@@ -96,7 +96,7 @@
 
 .image-zoom-controls button:nth-child(2) {
   min-width: 54px;
-  font-size: 11px;
+  font-size: var(--t-xs);
   font-variant-numeric: tabular-nums;
 }
 

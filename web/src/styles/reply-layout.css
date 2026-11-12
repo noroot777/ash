@@ -7,4 +7,4 @@
 .task-reply-box > textarea, .team-reply-box > textarea { flex: 1 1 auto; }
 .reply-context ~ .task-reply-box > textarea, .reply-context ~ .team-reply-box > textarea { overflow-y: auto !important; }
 .task-reply-actions, .team-reply-box > footer { flex-shrink: 0; }
-.team-reply-shell > .reply-context > p { margin: 0 0 5px; color: var(--red); font-size: 10.5px; }
+.team-reply-shell > .reply-context > p { margin: 0 0 5px; color: var(--red); font-size: var(--t-xs); }

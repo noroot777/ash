@@ -3,10 +3,10 @@
    执行过程折叠块在 execution-trace.css，它用到的流光与换字在 motion-text.css。 */
 .task-message { position: relative; max-width: 790px; margin-bottom: 20px; }
 .task-message--agent { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; }
-.task-message-avatar { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; background: var(--overlay); color: var(--muted); font-size: 8px; font-weight: var(--w-medium); }
+.task-message-avatar { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; background: var(--overlay); color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
 .task-message-content { min-width: 0; }
 .task-message header,
-.task-user-bubble header { display: flex; min-height: 20px; align-items: center; gap: 6px; color: var(--faint); font-size: 10.5px; }
+.task-user-bubble header { display: flex; min-height: 20px; align-items: center; gap: 6px; color: var(--muted); font-size: var(--t-xs); }
 .task-message header b,
 .task-user-bubble header b { color: var(--muted); font-weight: var(--w-medium); }
 .task-turn-duration { color: var(--faint); font-size: inherit; font-weight: var(--w-regular); }
@@ -120,19 +120,19 @@
 .task-markdown h2 { font-size: 15px; font-weight: var(--w-strong); }
 .task-markdown h3 { font-size: 13.5px; font-weight: var(--w-medium); }
 .task-markdown h4 { font-size: 12.5px; font-weight: var(--w-medium); }
-.task-markdown h5 { font-size: 11.5px; font-weight: var(--w-medium); }
-.task-markdown h6 { color: var(--muted); font-size: 11px; font-weight: var(--w-medium); }
+.task-markdown h5 { font-size: var(--t-xs); font-weight: var(--w-medium); }
+.task-markdown h6 { color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
 .task-markdown strong { color: var(--ink); font-weight: var(--w-medium); }
 .task-markdown a { color: var(--ink); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 /* 引用块跟系统旁注（.conversation-note）是同一档「不是正文在说话」的东西：agent 输出里
    的引用多半就是 ash 自己插的注记（「正在压缩上下文…」之类）。字号行高跟旁注对齐，
    竖线的高度才跟着一样——竖线高度就是行高加这两像素 padding 撑出来的。 */
-.task-markdown blockquote { border-left: 2px solid var(--line2); padding: 1px 0 1px 11px; color: var(--faint); font-size: 11px; line-height: 1.6; }
+.task-markdown blockquote { border-left: 2px solid var(--line2); padding: 1px 0 1px 11px; color: var(--muted); font-size: var(--t-xs); line-height: 1.6; }
 .task-markdown blockquote > :first-child { margin-top: 0; }
 .task-markdown blockquote > :last-child { margin-bottom: 0; }
 .task-markdown hr { height: 1px; margin: 15px 0; border: 0; background: var(--line); }
 .task-markdown-table { max-width: 100%; overflow-x: auto; }
-.task-markdown table { width: 100%; min-width: 420px; border-collapse: collapse; font-size: 11.5px; line-height: 1.5; }
+.task-markdown table { width: 100%; min-width: 420px; border-collapse: collapse; font-size: var(--t-xs); line-height: 1.5; }
 .task-markdown th,
 .task-markdown td { border: 1px solid var(--line2); padding: 6px 8px; text-align: left; vertical-align: top; }
 .task-markdown th { background: var(--raised); color: var(--ink); font-weight: var(--w-medium); }
@@ -141,7 +141,7 @@
 .task-markdown td > :first-child { margin-top: 0; }
 .task-markdown th > :last-child,
 .task-markdown td > :last-child { margin-bottom: 0; }
-.task-markdown code { border-radius: 4px; background: var(--raised); padding: 1px 4px; color: var(--ink); font-size: 11.5px; overflow-wrap: anywhere; }
+.task-markdown code { border-radius: 4px; background: var(--raised); padding: 1px 4px; color: var(--ink); font-size: var(--t-xs); overflow-wrap: anywhere; }
 /* 正文里提到的工作区文件：点一下摊在中间栏（TaskFileLink）。跟链接同一个颜色，前面带个文件图标。 */
 .task-markdown code.task-file-link { color: var(--ink); cursor: pointer; }
 .task-markdown code.task-file-link:hover { text-decoration: underline; text-underline-offset: 2px; }
@@ -152,7 +152,7 @@
    右侧一条窄栏。按钮不叠在代码上面，所以任何宽度、任何滚动位置都遮不住一个字——触屏上
    它常亮，叠上去就会永久挡住首行末尾。 */
 .task-code-block-wrap { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; margin: 9px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--overlay); }
-.task-code-block { overflow-x: auto; margin: 0; padding: 10px 4px 10px 12px; color: var(--ink); font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6; white-space: pre; }
+.task-code-block { overflow-x: auto; margin: 0; padding: 10px 4px 10px 12px; color: var(--ink); font-family: var(--font-mono); font-size: var(--t-xs); line-height: 1.6; white-space: pre; }
 .task-code-block code { background: transparent; padding: 0; color: inherit; overflow-wrap: normal; }
 /* 悬停这一块才露脸，免得长对话里满屏图标；触屏没有悬停，常亮。复制反馈期间同样常亮，
    理由同气泡头部那颗（见文件开头）。 */
@@ -167,13 +167,13 @@
 @media (hover: none) { .task-code-copy { opacity: 1; } }
 .task-markdown-image { display: block; max-width: 100%; border: 0; background: transparent; padding: 0; }
 .task-markdown img { display: block; max-width: min(100%, 680px); max-height: 460px; border: 1px solid var(--line); border-radius: 8px; object-fit: contain; }
-.markdown-action-error { margin: 7px 0 0; color: var(--red); font-size: 10.5px; }
+.markdown-action-error { margin: 7px 0 0; color: var(--red); font-size: var(--t-xs); }
 
 .markdown-report-scrim { position: fixed; z-index: 180; inset: 0; display: grid; place-items: center; background: rgb(40 42 48 / 42%); padding: 20px; backdrop-filter: blur(1px); }
 .markdown-report-dialog { display: grid; width: min(880px, 94vw); max-height: min(760px, 90vh); grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line2); border-radius: 13px; background: var(--panel); box-shadow: var(--shadow); }
 .markdown-report-dialog > header { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding: 11px 12px 11px 16px; }
 .markdown-report-dialog > header > div { min-width: 0; }
-.markdown-report-dialog > header span { display: block; color: var(--faint); font-size: 9px; font-weight: var(--w-medium); letter-spacing: .04em; }
+.markdown-report-dialog > header span { display: block; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); letter-spacing: .04em; }
 .markdown-report-dialog h2 { overflow: hidden; margin: 2px 0 0; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .markdown-report-dialog > header button { display: grid; width: 28px; height: 28px; flex: none; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--muted); }
 .markdown-report-dialog > header button:hover { background: var(--raised); color: var(--ink); }
@@ -184,7 +184,7 @@
 
 /* 摘要段和技术明细之间的那道开关。做成一条贯通的分隔线而不是普通按钮：它在语义上是
    「上面写给你看，下面写给照着修的 agent 看」的分界，不是一个可有可无的动作。 */
-.review-report-more { display: flex; width: 100%; align-items: center; justify-content: center; gap: 6px; margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); padding: 7px 10px; color: var(--muted); font-size: 11px; }
+.review-report-more { display: flex; width: 100%; align-items: center; justify-content: center; gap: 6px; margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); padding: 7px 10px; color: var(--muted); font-size: var(--t-xs); }
 .review-report-more:hover { border-color: var(--line2); color: var(--ink); }
 .review-report-more svg { transition: transform .15s ease; }
 .review-report-more.is-open svg { transform: rotate(180deg); }
@@ -205,7 +205,7 @@
 /* 执行过程那个折叠块（工具、思考、提示、异常）的样式在 execution-trace.css。 */
 /* 一条气泡的尾栏：会话 id、resume 命令、三颗账目胶囊全在这一行。 */
 .task-message-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px; }
-.task-message-footer button { max-width: 240px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.task-message-footer button { max-width: 240px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--muted); font-family: var(--font-mono); font-size: var(--t-xs); text-overflow: ellipsis; white-space: nowrap; }
 .task-message-footer button:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
 /* 「重跑上一回合」：同一行里唯一的**动作**，其余都是元信息，所以给它红色描边——
    出现的前提本来就是「上一回合崩了」，不该跟会话 id 一样灰。 */
@@ -219,7 +219,7 @@
 .task-message-footer button.copy-button.is-copy-failed { border-color: color-mix(in oklab, var(--red) 45%, var(--line)); background: transparent; color: var(--red); }
 
 /* Token 用量。三颗都在尾栏里，跟 .task-message-footer 的按钮同款外形。 */
-.token-usage-chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; white-space: nowrap; }
+.token-usage-chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--muted); font-family: var(--font-mono); font-size: var(--t-xs); white-space: nowrap; }
 .token-usage-chip:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
 
 /* 上下文水位。借 .token-usage-chip 的外形（两颗并排要长得像一家人），只多一条进度条；
@@ -238,7 +238,7 @@
   padding: 8px 10px 7px;
   box-shadow: var(--menu-shadow);
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--t-xs);
   outline: none;
 }
 .token-usage-panel header,
@@ -247,7 +247,7 @@
 .token-usage-panel.is-cols-1 dl > div { grid-template-columns: 1fr 66px; }
 .token-usage-panel.is-cols-2 header,
 .token-usage-panel.is-cols-2 dl > div { grid-template-columns: 1fr 66px 66px; }
-.token-usage-panel header { margin-bottom: 5px; border-bottom: 1px solid var(--line); padding-bottom: 5px; color: var(--faint); font-size: 9.5px; }
+.token-usage-panel header { margin-bottom: 5px; border-bottom: 1px solid var(--line); padding-bottom: 5px; color: var(--muted); font-size: var(--t-xs); }
 .token-usage-panel header span + span { text-align: right; }
 .token-usage-panel dl { margin: 0; }
 .token-usage-panel dl > div { padding: 1px 0; }
@@ -255,37 +255,37 @@
 .token-usage-panel dd { margin: 0; font-family: var(--font-mono); text-align: right; }
 .token-usage-panel .is-total { margin-top: 3px; border-top: 1px solid var(--line); padding-top: 4px; color: var(--ink); }
 .token-usage-panel .is-total dt { color: var(--ink); }
-.token-usage-panel footer { margin-top: 7px; color: var(--faint); font-size: 9.5px; line-height: 1.55; }
+.token-usage-panel footer { margin-top: 7px; color: var(--muted); font-size: var(--t-xs); line-height: 1.55; }
 
 /* 面板底部的快捷设置：明细里那几个数从哪来，就在同一个面板里改得动。
    默认收起成一行 —— 这颗胶囊的主业仍是「看一眼还剩多少」，表单不该抢在前面。 */
 .context-compact-quick { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
-.context-compact-toggle { display: flex; width: 100%; align-items: center; gap: 4px; border: 0; border-radius: 5px; background: transparent; padding: 3px 4px; color: var(--faint); font-size: 10px; }
+.context-compact-toggle { display: flex; width: 100%; align-items: center; gap: 4px; border: 0; border-radius: 5px; background: transparent; padding: 3px 4px; color: var(--muted); font-size: var(--t-xs); }
 .context-compact-toggle:hover { background: var(--raised); color: var(--muted); }
 .context-compact-toggle > span { flex: 1; text-align: left; }
 .context-compact-toggle > svg:last-child { transition: transform 0.12s ease; }
 .context-compact-toggle.is-open > svg:last-child { transform: rotate(180deg); }
 .context-compact-form { display: grid; gap: 6px; padding: 5px 4px 2px; }
 .context-compact-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 6px; }
-.context-compact-row > label { color: var(--faint); font-size: 10px; }
+.context-compact-row > label { color: var(--muted); font-size: var(--t-xs); }
 .context-compact-input { display: inline-flex; align-items: center; gap: 4px; }
-.context-compact-input input { width: 76px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 3px 6px; color: var(--ink); font-family: var(--font-mono); font-size: 10.5px; text-align: right; }
-.context-compact-input > small { width: 28px; color: var(--faint); font-size: 9px; }
-.context-compact-preset { border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 3px 6px; color: var(--faint); font-size: 9.5px; white-space: nowrap; }
+.context-compact-input input { width: 76px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 3px 6px; color: var(--ink); font-family: var(--font-mono); font-size: var(--t-xs); text-align: right; }
+.context-compact-input > small { width: 28px; color: var(--muted); font-size: var(--t-xs); }
+.context-compact-preset { border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 3px 6px; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
 .context-compact-preset:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
-.context-compact-note { margin: 0; color: var(--faint); font-size: 9.5px; line-height: 1.5; }
+.context-compact-note { margin: 0; color: var(--muted); font-size: var(--t-xs); line-height: 1.5; }
 .context-compact-note.is-warn { color: var(--red); }
-.context-compact-retry { margin-left: 6px; border: 1px solid currentColor; border-radius: 5px; background: transparent; padding: 1px 6px; color: inherit; font-size: 9.5px; }
+.context-compact-retry { margin-left: 6px; border: 1px solid currentColor; border-radius: 5px; background: transparent; padding: 1px 6px; color: inherit; font-size: var(--t-xs); }
 .context-compact-retry:hover { background: var(--raised); }
 .context-compact-actions { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
 /* 「改的是哪个执行器 / 什么时候生效」跟保存按钮同一行：这是按下去之前最该读到的一句。 */
-.context-compact-actions > span { flex: 1; min-width: 0; color: var(--faint); font-size: 9.5px; line-height: 1.4; }
+.context-compact-actions > span { flex: 1; min-width: 0; color: var(--muted); font-size: var(--t-xs); line-height: 1.4; }
 .context-compact-actions > span.is-error { color: var(--red); }
-.context-compact-save { flex: none; border: 1px solid transparent; border-radius: 5px; background: var(--action); padding: 3px 9px; color: var(--on-action); font-size: 10px; }
+.context-compact-save { flex: none; border: 1px solid transparent; border-radius: 5px; background: var(--action); padding: 3px 9px; color: var(--on-action); font-size: var(--t-xs); }
 .context-compact-save:hover:not(:disabled) { background: var(--action-hover); }
 .context-compact-save:disabled { border-color: var(--line); background: transparent; color: var(--faint); }
 
-.task-event-line { display: flex; max-width: 790px; align-items: center; gap: 9px; margin: 17px 0 17px 30px; color: var(--faint); font-size: 10.5px; }
+.task-event-line { display: flex; max-width: 790px; align-items: center; gap: 9px; margin: 17px 0 17px 30px; color: var(--muted); font-size: var(--t-xs); }
 .task-event-line p { margin: 0; }
 .task-event-line.is-error { color: var(--red); }
 
@@ -297,14 +297,14 @@
 /* 结论那一段:凭据对不上时下面跟一颗「重新加载页面」。跟上面那颗开关共用一行的话,
    flex 会把它挤成两行(实测「重新加载页/面」),所以这里改成纵向摞 —— 一句话、一个出路。 */
 .task-turn-remedy p.task-turn-remedy__result { display: grid; gap: 6px; justify-items: start; color: var(--text); }
-.task-turn-remedy__result button { border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 3px 9px; color: var(--text); font-size: 11px; }
+.task-turn-remedy__result button { border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 3px 9px; color: var(--text); font-size: var(--t-xs); }
 .task-turn-remedy__result button:hover { background: var(--raised); }
 .task-turn-remedy textarea { box-sizing: border-box; width: 100%; min-width: 0; resize: none; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; font-size: 12px; }
 
 .task-conversation-empty { display: grid; min-height: 150px; place-content: center; justify-items: center; color: var(--faint); }
 .task-conversation-empty p,
 .task-conversation-note,
-.task-conversation-error { margin: 8px 0; color: var(--faint); font-size: 11.5px; }
+.task-conversation-error { margin: 8px 0; color: var(--muted); font-size: var(--t-xs); }
 .task-conversation-error { color: var(--red); }
 .task-message-attachments,
 .task-upload-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
@@ -316,7 +316,7 @@
    图片会多一道边框圆角、文件名会被加下划线。卡片自己那个 54px 的盒子已经有边框了。 */
 .task-message-attachments img { display: block; width: 100%; max-width: none; height: 100%; max-height: none; border: 0; border-radius: 0; object-fit: cover; }
 .task-message-attachments > a { text-decoration: none; }
-.task-message-attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.task-message-attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-xs); }
 
 .task-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 

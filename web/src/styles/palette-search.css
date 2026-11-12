@@ -48,7 +48,7 @@
   background: var(--raised);
   padding: 5px 9px;
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--t-xs);
 }
 
 .palette-search-error {

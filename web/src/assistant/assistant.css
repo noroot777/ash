@@ -24,7 +24,7 @@
 .assistant-rename > div { display: flex; gap: 5px; }
 .assistant-rename input { min-width: 0; width: 220px; max-width: 100%; border: 1px solid var(--line2); border-radius: 5px; padding: 5px 7px; background: var(--panel); color: var(--ink); font-size: 13px; }
 .assistant-rename button { display: grid; place-items: center; flex-shrink: 0; padding: 4px; border: 0; border-radius: 4px; background: var(--raised); color: var(--muted); }
-.assistant-rename p { margin: 4px 0; color: var(--red); font-size: 11px; }
+.assistant-rename p { margin: 4px 0; color: var(--red); font-size: var(--t-xs); }
 .assistant-message { overflow-wrap: anywhere; }
 .assistant-message-body { margin: 3px 0; }
 .assistant-message .task-markdown { font-size: 13px; line-height: 1.8; }
@@ -32,25 +32,25 @@
 .assistant-message .task-markdown > :last-child { margin-bottom: 0; }
 .assistant-message.is-stopped .assistant-message-body { color: var(--amber); }
 .assistant-message.is-failed .assistant-message-body { color: var(--red); }
-.assistant-search-note { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 11px; margin: 15px 0 8px; }
+.assistant-search-note { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: var(--t-xs); margin: 15px 0 8px; }
 .assistant-results { display: grid; gap: 8px; }
 .assistant-task > span { display: grid; min-width: 0; flex: 1; gap: 5px; }
-.assistant-task small { color: var(--accent); font-size: 10px; }
+.assistant-task small { color: var(--accent); font-size: var(--t-xs); }
 .assistant-task strong { color: var(--ink); font-size: 13px; }
-.assistant-task span span { font-size: 11px; color: var(--muted); }
-.assistant-task code { color: var(--faint); font-size: 10px; }
+.assistant-task span span { font-size: var(--t-xs); color: var(--muted); }
+.assistant-task code { color: var(--muted); font-size: var(--t-xs); }
 .assistant-task > svg { flex-shrink: 0; }
 .assistant-workflow { margin-top: 18px; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
 .assistant-workflow > header { display: flex; height: auto; align-items: center; gap: 10px; color: var(--accent); }
 .assistant-workflow h3 { margin: 3px 0 0; color: var(--ink); font-size: 15px; }
-.assistant-workflow p,.assistant-workflow small { font-size: 11px; line-height: 1.8; color: var(--muted); }
+.assistant-workflow p,.assistant-workflow small { font-size: var(--t-xs); line-height: 1.8; color: var(--muted); }
 .assistant-workflow ol { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; padding: 0; margin: 15px 0; }
-.assistant-workflow li { border-radius: 5px; background: var(--raised); padding: 6px 9px; font-size: 11px; }
+.assistant-workflow li { border-radius: 5px; background: var(--raised); padding: 6px 9px; font-size: var(--t-xs); }
 .assistant-workflow li + li::before { content: "→"; color: var(--faint); margin-right: 8px; }
-.assistant-workflow summary { font-size: 11px; color: var(--ink); cursor: pointer; }
+.assistant-workflow summary { font-size: var(--t-xs); color: var(--ink); cursor: pointer; }
 .assistant-workflow-rail { overflow: auto; max-width: 100%; padding: 16px 0; }
 .assistant-workflow footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: center; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
-.assistant-workflow footer span { font-size: 11px; color: var(--muted); }
+.assistant-workflow footer span { font-size: var(--t-xs); color: var(--muted); }
 .assistant-shell .assistant-primary { border: 0; background: var(--action); color: var(--on-action); border-radius: 7px; padding: 10px 17px; font-size: 12px; white-space: nowrap; }
 .assistant-connection { padding: 35px 30px; }
 .assistant-connection h2 { font-size: 23px; font-weight: var(--w-strong); letter-spacing: -.6px; margin: 8px 0; }
@@ -61,7 +61,7 @@
 .assistant-error { color: var(--red); font-size: 12px; overflow-wrap: anywhere; }
 .assistant-loading { text-align: center; color: var(--muted); padding: 20px; font-size: 13px; }
 .assistant-archive { overflow: auto; flex: 1; padding: 28px; }
-.assistant-archive > button { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; background: var(--panel); color: var(--muted); font-size: 11px; }
+.assistant-archive > button { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; background: var(--panel); color: var(--muted); font-size: var(--t-xs); }
 .assistant-archive > small { display: block; margin-top: 25px; color: var(--muted); }
 .assistant-archive h2 { font-size: 24px; }
 .assistant-archive h3 { margin-top: 32px; font-size: 16px; }

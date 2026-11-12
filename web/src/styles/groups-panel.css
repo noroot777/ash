@@ -52,8 +52,8 @@
 
 .groups-panel-heading small {
   overflow: hidden;
-  color: var(--faint);
-  font-size: 9.5px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

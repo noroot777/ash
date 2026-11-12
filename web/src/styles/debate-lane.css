@@ -33,7 +33,7 @@
   gap: 8px;
   border-bottom: 1px solid var(--line);
   padding: 7px 10px 7px 12px;
-  font-size: 10.5px;
+  font-size: var(--t-xs);
 }
 .debate-lane.is-collapsed .debate-lane-head { border-bottom-color: transparent; }
 .debate-lane-mark {
@@ -46,14 +46,14 @@
   background: color-mix(in oklab, var(--accent) 13%, var(--panel));
   color: var(--accent);
 }
-.debate-lane-head > b { flex: none; color: color-mix(in oklab, var(--accent) 66%, var(--ink)); font-size: 11px; font-weight: var(--w-medium); }
-.debate-lane-by { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.debate-lane-verdict { flex: none; border-radius: 999px; padding: 1px 7px; font-size: 9.5px; font-weight: var(--w-medium); }
+.debate-lane-head > b { flex: none; color: color-mix(in oklab, var(--accent) 66%, var(--ink)); font-size: var(--t-xs); font-weight: var(--w-medium); }
+.debate-lane-by { min-width: 0; overflow: hidden; color: var(--muted); font-size: var(--t-xs); text-overflow: ellipsis; white-space: nowrap; }
+.debate-lane-verdict { flex: none; border-radius: 999px; padding: 1px 7px; font-size: var(--t-xs); font-weight: var(--w-medium); }
 .debate-lane-verdict.is-running { background: color-mix(in oklab, var(--cyan) 11%, var(--panel)); color: color-mix(in oklab, var(--cyan) 72%, var(--ink)); }
 .debate-lane-verdict.is-failed { background: color-mix(in oklab, var(--red) 11%, var(--panel)); color: var(--red); }
 .debate-lane-verdict.is-verdict { background: color-mix(in oklab, var(--amber) 12%, var(--panel)); color: var(--amber); }
 .debate-lane-verdict.is-done { background: var(--raised); color: var(--muted); }
-.debate-lane-time { margin-left: auto; color: var(--faint); font-size: 9.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.debate-lane-time { margin-left: auto; color: var(--faint); font-size: var(--t-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .debate-lane-actions { display: inline-flex; flex: none; align-items: center; gap: 5px; }
 .debate-lane-time + .debate-lane-actions { margin-left: 0; }
 .debate-lane-actions:first-of-type { margin-left: auto; }
@@ -67,7 +67,7 @@
   background: var(--panel);
   padding: 2px 8px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--t-xs);
   cursor: pointer;
 }
 .debate-lane-actions > button:hover { background: var(--raised); color: var(--ink); }
@@ -145,7 +145,7 @@
   padding: 11px 15px;
 }
 .debate-reader__sheet > header b { display: block; color: var(--ink); font-size: 12.5px; font-weight: var(--w-medium); }
-.debate-reader__sheet > header small { color: var(--faint); font-size: 10.5px; }
+.debate-reader__sheet > header small { color: var(--muted); font-size: var(--t-xs); }
 .debate-reader__sheet > header button {
   display: inline-flex;
   flex: none;
@@ -156,7 +156,7 @@
   background: var(--panel);
   padding: 4px 9px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: var(--t-xs);
   cursor: pointer;
 }
 .debate-reader__sheet > header button:hover { background: var(--raised); color: var(--ink); }

@@ -12,7 +12,7 @@
   padding: 0 14px;
   color: var(--muted);
   text-align: left;
-  font-size: 10.5px;
+  font-size: var(--t-xs);
 }
 
 .task-origin-bar:hover {
@@ -71,8 +71,8 @@
   border-radius: 4px;
   color: var(--ink);
   background: color-mix(in oklab, var(--ink) 10%, transparent);
-  font-size: 10px;
-  line-height: 14px;
+  font-size: var(--t-xs);
+  line-height: 16px;
   white-space: nowrap;
 }
 .task-origin-bar > button {

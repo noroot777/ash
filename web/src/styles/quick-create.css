@@ -18,7 +18,7 @@
 
 .quick-create-fields label > span {
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--t-xs);
 }
 
 .quick-create-fields input,
@@ -75,11 +75,11 @@
 .create-project-mode-hint {
   margin: 6px 0 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--t-xs);
   line-height: 1.45;
 }
 .create-project-advanced { border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; }
-.create-project-advanced summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+.create-project-advanced summary { cursor: pointer; color: var(--muted); font-size: var(--t-xs); }
 .create-project-advanced[open] summary { margin-bottom: 12px; }
 
 .create-project-row {
@@ -101,19 +101,19 @@
   gap: 6px;
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--t-xs);
 }
 
 .create-project-target code {
   word-break: break-all;
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--t-xs);
 }
 
 .create-project-note {
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--t-xs);
   line-height: 1.45;
 }
 
@@ -127,7 +127,7 @@
   gap: 6px;
   margin: -2px 0 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--t-xs);
 }
 
 /* 克隆报的是 git 原文，可能好几行，别压成一行省略号 —— 用户要照着它改地址重试。 */
@@ -137,7 +137,7 @@
   background: color-mix(in oklab, var(--red) 10%, transparent);
   padding: 8px 10px;
   color: var(--red);
-  font-size: 11px;
+  font-size: var(--t-xs);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;

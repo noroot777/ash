@@ -17,15 +17,15 @@
 .reply-act:is(.free-workflow-toolbar > a, a) { text-decoration:none; }
 
 /* 审查者的配置一行（设置页「审查者」列表）和它的编辑表单。派审对话框本身见 free-review-dialog.css。 */
-.reviewer-profile-summary { display:flex; min-width:0; align-items:baseline; gap:4px; margin-top:2px; overflow:hidden; color:var(--faint); font-size:9px; line-height:1.25; white-space:nowrap; }
+.reviewer-profile-summary { display:flex; min-width:0; align-items:baseline; gap:4px; margin-top:2px; overflow:hidden; color:var(--muted); font-size:var(--t-xs); line-height:1.25; white-space:nowrap; }
 .reviewer-profile-summary > span { min-width:0; max-width:40%; overflow:hidden; flex:0 1 auto; text-overflow:ellipsis; }
 .reviewer-profile-summary i { flex:0 0 auto; color:var(--line2); font-style:normal; }
-.reviewer-profile-summary code { min-width:0; overflow:hidden; color:var(--muted); font-family:var(--font-mono); font-size:8.5px; text-overflow:ellipsis; white-space:nowrap; }
+.reviewer-profile-summary code { min-width:0; overflow:hidden; color:var(--muted); font-family:var(--font-mono); font-size:var(--t-xs); text-overflow:ellipsis; white-space:nowrap; }
 .reviewer-profile-summary code:first-of-type { flex:0 1 auto; }
 .reviewer-profile-summary code:last-of-type { flex:0 0 auto; }
 .reviewer-profile-fields { display:grid; gap:10px; }
 .reviewer-profile-fields > label { display:grid; gap:5px; }
-.reviewer-profile-fields > label > span { color:var(--faint); font-size:9px; font-weight:var(--w-medium); letter-spacing:.05em; text-transform:uppercase; }
+.reviewer-profile-fields > label > span { color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-medium); letter-spacing:.05em; text-transform:uppercase; }
 .reviewer-profile-fields input { width:100%; height:32px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; }
 
 /* 执行者驳回卡：审查链停在这里等用户裁定。只有图标是琥珀色，整块不上色
@@ -59,47 +59,47 @@
 .free-review-dispute-recorded { display:block; margin:8px 0 0; color:var(--muted); font-size:var(--t-xs); }
 /* 折起来的长正文（驳回依据、每段辩论发言）：标题行报字数，点开才渲染 markdown。
    组件在 components/FoldedProse.tsx，但只服务这两处，样式就留在这份里。 */
-.folded-prose > button { display:flex; width:100%; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:5px 8px; color:var(--muted); font-size:9.5px; cursor:pointer; text-align:left; }
+.folded-prose > button { display:flex; width:100%; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:5px 8px; color:var(--muted); font-size:var(--t-xs); cursor:pointer; text-align:left; }
 .folded-prose > button:hover { background:var(--raised); color:var(--ink); }
 .folded-prose > button > svg { flex:none; transition:transform .12s ease; }
 .folded-prose > button > b { flex:1; min-width:0; font-weight:var(--w-medium); }
-.folded-prose > button > em { flex:none; color:var(--faint); font-size:8.5px; font-style:normal; font-variant-numeric:tabular-nums; }
+.folded-prose > button > em { flex:none; color:var(--muted); font-size:var(--t-xs); font-style:normal; font-variant-numeric:tabular-nums; }
 .folded-prose.is-open > button > svg { transform:rotate(90deg); }
 .folded-prose.is-open > button { border-bottom-left-radius:0; border-bottom-right-radius:0; }
-.folded-prose.is-open .task-markdown { border:1px solid var(--line2); border-top:0; border-radius:0 0 7px 7px; background:var(--panel); padding:8px 9px; color:var(--muted); font-size:10px; line-height:1.6; }
+.folded-prose.is-open .task-markdown { border:1px solid var(--line2); border-top:0; border-radius:0 0 7px 7px; background:var(--panel); padding:8px 9px; color:var(--muted); font-size:var(--t-xs); line-height:1.6; }
 /* 「它认可、但说该另开任务」那一段换成中性色：它说的不是「报告不对」，而是「报告是
    对的、只是不该在这儿修」，和驳回依据同色会被读成同一件事。 */
 .folded-prose.is-defer > button { border-style:dashed; }
 /* 辩论回放：两侧用不同的左边线区分，正文仍按报告那套 markdown 渲染。 */
 .free-review-debate { border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:8px 9px; }
-.free-review-debate > header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }.free-review-debate > header b { color:var(--ink); font-size:9.5px; }.free-review-debate > header small { color:var(--faint); font-size:8.5px; }
+.free-review-debate > header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }.free-review-debate > header b { color:var(--ink); font-size:var(--t-xs); }.free-review-debate > header small { color:var(--muted); font-size:var(--t-xs); }
 .free-review-debate > ol { display:grid; gap:7px; margin:7px 0 0; padding:0; list-style:none; }
 .free-review-debate li { border-left:2px solid var(--line2); padding-left:8px; }.free-review-debate li.is-reviewer { border-left-color:color-mix(in oklab,var(--accent) 45%,var(--line2)); }.free-review-debate li.is-executor { border-left-color:color-mix(in oklab,var(--amber) 45%,var(--line2)); }.free-review-debate li.is-speaking { opacity:.75; }
-.free-review-debate li > span { display:flex; align-items:center; gap:4px; color:var(--faint); }.free-review-debate li > span b { font-size:9px; }.free-review-debate li > span em { font-size:8.5px; font-style:normal; font-variant-numeric:tabular-nums; }
-.free-review-debate .task-markdown { margin-top:3px; color:var(--muted); font-size:10px; line-height:1.6; }
+.free-review-debate li > span { display:flex; align-items:center; gap:4px; color:var(--faint); }.free-review-debate li > span b { font-size:var(--t-xs); }.free-review-debate li > span em { font-size:var(--t-xs); font-style:normal; font-variant-numeric:tabular-nums; }
+.free-review-debate .task-markdown { margin-top:3px; color:var(--muted); font-size:var(--t-xs); line-height:1.6; }
 /* 每段发言的那一句人话：逐段只读它就能看出这场辩论辩到哪了，完整发言折在下面。 */
-.free-review-debate__gist { margin:3px 0 4px; color:var(--ink); font-size:10px; line-height:1.55; }
+.free-review-debate__gist { margin:3px 0 4px; color:var(--ink); font-size:var(--t-xs); line-height:1.55; }
 .free-review-debate.is-reading .free-review-debate__gist { margin:5px 0 7px; font-size:12px; font-weight:var(--w-medium); }
-.free-review-debate__pending { margin:3px 0 0; color:var(--faint); font-size:9.5px; }
+.free-review-debate__pending { margin:3px 0 0; color:var(--muted); font-size:var(--t-xs); }
 /* 「全宽阅读」：面板这一栏只有 ~540px，七段发言在里面是一根一万像素高的细条。 */
-.free-review-debate__expand { display:inline-flex; flex:none; align-items:center; gap:4px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:1px 7px; color:var(--muted); font-size:9px; cursor:pointer; }
+.free-review-debate__expand { display:inline-flex; flex:none; align-items:center; gap:4px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:1px 7px; color:var(--muted); font-size:var(--t-xs); cursor:pointer; }
 .free-review-debate__expand:hover { background:var(--raised); color:var(--ink); }
 /* 「用这段作要点」：贴在每段发言的头一行右端。辩论最有用的产物常常就是某一段里的
    具体方案，点它等于把那段话交给执行者去做——不点也能自己写，所以它是轻量的。 */
-.free-review-debate__quote { display:inline-flex; margin-left:auto; flex:none; align-items:center; gap:3px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:1px 6px; color:var(--faint); font-size:8.5px; cursor:pointer; }
+.free-review-debate__quote { display:inline-flex; margin-left:auto; flex:none; align-items:center; gap:3px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:1px 6px; color:var(--muted); font-size:var(--t-xs); cursor:pointer; }
 .free-review-debate__quote:hover { border-color:color-mix(in oklab,var(--ink) 40%,var(--line2)); background:color-mix(in oklab,var(--ink) 8%,var(--panel)); color:var(--ink); }
-.free-review-debate.is-reading .free-review-debate__quote { font-size:9.5px; padding:2px 8px; }
+.free-review-debate.is-reading .free-review-debate__quote { font-size:var(--t-xs); padding:2px 8px; }
 /* 阅读态同一份数据、另一档排版：正文回到能读的字号，两侧留白也跟着松开。 */
 .free-review-debate.is-reading { border:0; border-radius:0; padding:0; }
 .free-review-debate.is-reading > header { display:none; }
 .free-review-debate.is-reading > ol { gap:20px; margin:0; }
 .free-review-debate.is-reading li { border-left-width:2px; padding-left:14px; }
-.free-review-debate.is-reading li > span { gap:7px; margin-bottom:4px; font-size:10px; }
-.free-review-debate.is-reading li > span b { font-size:11px; font-weight:var(--w-medium); color:var(--muted); }
-.free-review-debate.is-reading li > span em { font-size:10px; }
+.free-review-debate.is-reading li > span { gap:7px; margin-bottom:4px; font-size:var(--t-xs); }
+.free-review-debate.is-reading li > span b { font-size:var(--t-xs); font-weight:var(--w-medium); color:var(--muted); }
+.free-review-debate.is-reading li > span em { font-size:var(--t-xs); }
 .free-review-debate.is-reading .task-markdown { margin-top:0; color:var(--ink); font-size:12.5px; line-height:1.68; }
-.free-review-debate.is-reading .free-review-debate__pending { font-size:11.5px; }
-.free-review-debate-exchanges { display:grid; gap:5px; padding:0 2px; }.free-review-debate-exchanges > b { color:var(--ink); font-size:10px; }.free-review-debate-exchanges > div { display:flex; gap:5px; }.free-review-debate-exchanges > div > button { width:32px; height:28px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); color:var(--muted); font-size:10.5px; }.free-review-debate-exchanges > div > button.is-selected { border-color:color-mix(in oklab,var(--ink) 40%,var(--line2)); background:color-mix(in oklab,var(--ink) 10%,var(--panel)); color:var(--ink); font-weight:var(--w-medium); }.free-review-debate-exchanges > small { color:var(--faint); font-size:9px; line-height:1.5; }
+.free-review-debate.is-reading .free-review-debate__pending { font-size:var(--t-xs); }
+.free-review-debate-exchanges { display:grid; gap:5px; padding:0 2px; }.free-review-debate-exchanges > b { color:var(--ink); font-size:var(--t-xs); }.free-review-debate-exchanges > div { display:flex; gap:5px; }.free-review-debate-exchanges > div > button { width:32px; height:28px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); color:var(--muted); font-size:var(--t-xs); }.free-review-debate-exchanges > div > button.is-selected { border-color:color-mix(in oklab,var(--ink) 40%,var(--line2)); background:color-mix(in oklab,var(--ink) 10%,var(--panel)); color:var(--ink); font-weight:var(--w-medium); }.free-review-debate-exchanges > small { color:var(--muted); font-size:var(--t-xs); line-height:1.5; }
 .review-round-dispute { margin-top:12px; border-top:1px solid var(--line); padding-top:10px; }.review-round-dispute > b { display:block; margin-bottom:6px; color:var(--amber); font-size:var(--t-xs); font-weight:var(--w-medium); }.review-round-dispute > .free-review-debate { margin-top:8px; }
 /* 历史记录里同样先摆那一句人话（和驳回卡一个读法），几千字依据折在它下面。 */
 .review-round-dispute__gist { margin:0 0 6px; color:var(--ink); font-size:var(--t-sm); line-height:1.6; }
@@ -107,7 +107,7 @@
 /* 裁定要点是用户自己写的那段，配色跟驳回理由（琥珀=执行者的话）分开，免得读成同一个人说的。 */
 .review-round-dispute__note { margin-top:10px; border:1px solid var(--line); border-radius:var(--r-md); background:var(--raised); padding:8px 10px; }.review-round-dispute__note > b { display:block; margin-bottom:4px; color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-medium); }.review-round-dispute__note .task-markdown { color:var(--ink); font-size:var(--t-xs); line-height:1.6; }
 /* 裁定确认框里的要点输入：三档共用，措辞由 NOTE_FIELDS 换。 */
-.free-review-dispute-note { display:grid; gap:5px; padding:0 2px; }.free-review-dispute-note > span { color:var(--ink); font-size:10px; }.free-review-dispute-note > textarea { border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:7px 8px; color:var(--ink); font-size:10.5px; line-height:1.6; resize: none; }.free-review-dispute-note > small { color:var(--faint); font-size:9px; line-height:1.5; }
+.free-review-dispute-note { display:grid; gap:5px; padding:0 2px; }.free-review-dispute-note > span { color:var(--ink); font-size:var(--t-xs); }.free-review-dispute-note > textarea { border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:7px 8px; color:var(--ink); font-size:var(--t-xs); line-height:1.6; resize: none; }.free-review-dispute-note > small { color:var(--muted); font-size:var(--t-xs); line-height:1.5; }
 
 /* 预览日志：起不来的时候唯一的现场。等宽、可选中、默认贴底。 */
 .preview-log-dialog { display:flex; flex-direction:column; width:min(860px,calc(100vw - 28px)); max-height:min(760px,92vh); overflow:hidden; border:1px solid var(--line2); border-radius:15px; background:var(--panel); box-shadow:var(--shadow); }
@@ -116,16 +116,16 @@
 .preview-log-dialog > header > span { display:grid; width:34px; height:34px; place-items:center; border-radius:10px; background:color-mix(in oklab,var(--muted) 11%,var(--raised)); color:var(--muted); }
 .preview-log-dialog h2,.preview-log-dialog p { margin:0; }
 .preview-log-dialog h2 { font-size:14px; }
-.preview-log-dialog > header p { margin-top:2px; color:var(--faint); font-size:10px; }
+.preview-log-dialog > header p { margin-top:2px; color:var(--muted); font-size:var(--t-xs); }
 .preview-log-dialog > header > button { display:grid; width:28px; height:28px; place-items:center; border:0; border-radius:7px; background:transparent; color:var(--faint); }
 .preview-log-dialog > header > button:hover { background:var(--raised); color:var(--ink); }
 .preview-log-meta { display:flex; min-width:0; align-items:center; gap:10px; border-bottom:1px solid var(--line); padding:8px 14px; }
-.preview-log-meta code { overflow:hidden; flex:1; color:var(--muted); font-size:10.5px; text-overflow:ellipsis; white-space:nowrap; }
-.preview-log-meta a { flex:0 1 auto; max-width:45%; overflow:hidden; color:var(--ink); font-size:10.5px; text-overflow:ellipsis; white-space:nowrap; }
-.preview-log-body { flex:1; min-height:0; overflow:auto; margin:0; background:var(--canvas); padding:12px 14px; color:var(--muted); font-size:11px; line-height:1.55; tab-size:2; white-space:pre-wrap; word-break:break-word; user-select:text; }
+.preview-log-meta code { overflow:hidden; flex:1; color:var(--muted); font-size:var(--t-xs); text-overflow:ellipsis; white-space:nowrap; }
+.preview-log-meta a { flex:0 1 auto; max-width:45%; overflow:hidden; color:var(--ink); font-size:var(--t-xs); text-overflow:ellipsis; white-space:nowrap; }
+.preview-log-body { flex:1; min-height:0; overflow:auto; margin:0; background:var(--canvas); padding:12px 14px; color:var(--muted); font-size:var(--t-xs); line-height:1.55; tab-size:2; white-space:pre-wrap; word-break:break-word; user-select:text; }
 .preview-log-dialog > footer { display:flex; min-height:52px; align-items:center; justify-content:flex-end; gap:8px; border-top:1px solid var(--line); padding:9px 14px; }
-.preview-log-dialog > footer > span { margin-right:auto; color:var(--faint); font-size:9.5px; }
-.preview-log-dialog > footer button { display:inline-flex; height:30px; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:9px; background:var(--panel); padding:0 12px; color:var(--muted); font-size:11px; font-weight:var(--w-medium); }
+.preview-log-dialog > footer > span { margin-right:auto; color:var(--muted); font-size:var(--t-xs); }
+.preview-log-dialog > footer button { display:inline-flex; height:30px; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:9px; background:var(--panel); padding:0 12px; color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-medium); }
 .preview-log-dialog > footer button:hover:not(:disabled) { border-color:color-mix(in oklab,var(--ink) 40%,var(--line)); color:var(--ink); }
 .preview-log-dialog > footer button:disabled { opacity:.45; }
 
@@ -135,7 +135,7 @@
 }
 
 .preview-log-dialog > header, .preview-log-dialog > footer, .preview-log-meta, .preview-log-services, .preview-log-selection { flex-shrink:0; }
-.preview-service-count { min-width:16px; border-radius:4px; background:var(--raised); padding:0 4px; color:var(--faint); font-size:10px; text-align:center; }
+.preview-service-count { min-width:16px; border-radius:4px; background:var(--raised); padding:0 4px; color:var(--faint); font-size:var(--t-xs); text-align:center; }
 .preview-service-status { color:var(--muted); white-space:nowrap; }
 .preview-service-status[data-status="ready"] { color:var(--green); }
 .preview-service-status[data-status="starting"] { color:var(--amber); }
@@ -152,16 +152,16 @@
 .preview-service-scroll-control:disabled { opacity:.3; }
 .preview-service-strip button:focus-visible,.preview-service-scroll a:focus-visible { outline-offset:-2px; }
 .preview-log-services { min-width:0; border-bottom:1px solid var(--line); padding:6px 12px 0; }
-.preview-log-services .preview-service-scroll > button { display:flex; height:37px; flex:0 0 auto; align-items:center; gap:7px; border:0; border-radius:7px 7px 0 0; background:transparent; padding:0 12px; color:var(--muted); font-size:11px; font-weight:var(--w-medium); white-space:nowrap; }
+.preview-log-services .preview-service-scroll > button { display:flex; height:37px; flex:0 0 auto; align-items:center; gap:7px; border:0; border-radius:7px 7px 0 0; background:transparent; padding:0 12px; color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-medium); white-space:nowrap; }
 .preview-log-services .preview-service-scroll > button:hover { background:var(--raised); color:var(--ink); }
 .preview-log-services .preview-service-scroll > button[aria-selected="true"] { background:color-mix(in oklab,var(--ink) 6%,transparent); box-shadow:inset 0 -2px var(--ink); color:var(--ink); }
 .preview-log-services [aria-selected="true"] .preview-service-count { background:color-mix(in oklab,var(--ink) 12%,transparent); color:var(--ink); }
 .preview-service-tab-name { max-width:180px; overflow:hidden; text-overflow:ellipsis; }
-.preview-log-selection { display:flex; min-width:0; align-items:baseline; gap:12px; padding:9px 14px 0; font-size:10.5px; }
+.preview-log-selection { display:flex; min-width:0; align-items:baseline; gap:12px; padding:9px 14px 0; font-size:var(--t-xs); }
 .preview-log-selection > span:first-child { flex:1; min-width:0; color:var(--muted); overflow-wrap:anywhere; }
 .preview-service-links { display:flex; flex:1 0 100%; min-width:0; align-items:center; gap:10px; margin-top:3px; padding:2px 8px; }
-.preview-service-links-label { flex-shrink:0; color:var(--faint); font-size:10px; }
-.preview-service-links .preview-service-scroll > a { display:flex; height:26px; max-width:230px; flex:0 0 auto; align-items:center; gap:6px; border:1px solid var(--line); border-radius:6px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:11px; font-weight:var(--w-medium); text-decoration:none; }
+.preview-service-links-label { flex-shrink:0; color:var(--muted); font-size:var(--t-xs); }
+.preview-service-links .preview-service-scroll > a { display:flex; height:26px; max-width:230px; flex:0 0 auto; align-items:center; gap:6px; border:1px solid var(--line); border-radius:6px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-medium); text-decoration:none; }
 .preview-service-links .preview-service-scroll > a:hover { border-color:var(--line2); background:var(--raised); color:var(--ink); }
 .preview-service-links .preview-service-scroll > a > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .preview-service-links .preview-service-scroll > a > svg { flex-shrink:0; color:var(--faint); }

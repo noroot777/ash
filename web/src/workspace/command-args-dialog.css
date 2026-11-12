@@ -23,8 +23,8 @@
 .command-args__field > span em {
   font-style: normal;
   font-weight: var(--w-regular);
-  font-size: 11px;
-  color: var(--faint);
+  font-size: var(--t-xs);
+  color: var(--muted);
 }
 .command-args__field > span em.is-required { color: var(--amber); }
 .command-args__field input {
@@ -50,7 +50,7 @@
   box-shadow: inset 0 0 0 1px var(--line);
   color: var(--muted);
   font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-  font-size: 11.5px;
+  font-size: var(--t-xs);
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;

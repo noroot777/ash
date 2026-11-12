@@ -1,7 +1,7 @@
 .conversation-selection-scope { display: contents; }
 /* 两条去处合成一颗浮条：外壳画边框和阴影，里面两段共用它，中间只留一道分隔线。 */
 .conversation-selection-action { position: fixed; z-index: 60; display: flex; overflow: hidden; max-width: calc(100vw - 16px); border: 1px solid var(--line); border-radius: 7px; background: var(--canvas); box-shadow: 0 3px 12px #0002; }
-.conversation-selection-action button { display: flex; align-items: center; gap: 5px; padding: 5px 9px; border: 0; background: none; color: var(--ink); font: inherit; font-size: 11px; line-height: 1.5; white-space: nowrap; cursor: pointer; }
+.conversation-selection-action button { display: flex; align-items: center; gap: 5px; padding: 5px 9px; border: 0; background: none; color: var(--ink); font: inherit; font-size: var(--t-xs); line-height: 1.5; white-space: nowrap; cursor: pointer; }
 .conversation-selection-action button + button { border-left: 1px solid var(--line); }
 .conversation-selection-action button:hover { background: var(--hover-bg); }
 .conversation-selection-action svg { color: var(--muted); }

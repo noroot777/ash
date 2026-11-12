@@ -81,8 +81,8 @@
   max-width: 96px;
   flex: 0 1 auto;
   overflow: hidden;
-  color: var(--faint);
-  font-size: 10.5px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -91,7 +91,7 @@
   flex: 1;
   overflow: hidden;
   color: var(--muted);
-  font: 10.5px var(--font-mono);
+  font: var(--t-xs) var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -121,17 +121,17 @@
   border-color: var(--line2);
   border-radius: 999px;
   background: var(--overlay);
-  font-size: 10px;
+  font-size: var(--t-xs);
 }
 .run-target-picker.is-chip .run-target-seg,
-.run-target-picker.is-chip .effort-picker-trigger { gap: 4px; padding: 0 7px; font-size: 10px; }
+.run-target-picker.is-chip .effort-picker-trigger { gap: 4px; padding: 0 7px; font-size: var(--t-xs); }
 .run-target-picker.is-chip .run-target-seg--agent { padding-left: 9px; }
 .run-target-picker.is-chip .effort-picker-trigger { padding-right: 9px; }
 .run-target-picker.is-chip .run-target-seg--model,
 .run-target-picker.is-chip .effort-picker-trigger { border-left-color: var(--line2); }
-.run-target-picker.is-chip .run-target-seg > b { font-family: var(--font-mono); font-size: 10.5px; font-weight: var(--w-medium); }
-.run-target-picker.is-chip .run-target-seg > code { font-size: 10px; }
-.run-target-picker.is-chip .effort-picker-trigger > em { font-size: 10px; }
+.run-target-picker.is-chip .run-target-seg > b { font-family: var(--font-mono); font-size: var(--t-xs); font-weight: var(--w-medium); }
+.run-target-picker.is-chip .run-target-seg > code { font-size: var(--t-xs); }
+.run-target-picker.is-chip .effort-picker-trigger > em { font-size: var(--t-xs); }
 
 /* 「本回合另派了人」：整颗点亮，跟任务的常设配置一眼区分开。 */
 .run-target-picker.is-highlight {
@@ -166,11 +166,11 @@
   border-radius: 999px;
   background: var(--overlay);
   padding: 0 7px 0 9px;
-  font-size: 10px;
+  font-size: var(--t-xs);
 }
 .effort-picker-trigger > em {
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--t-xs);
   font-style: normal;
   font-weight: var(--w-medium);
 }
@@ -189,7 +189,7 @@
   flex-basis: 100%;
   overflow: hidden;
   color: var(--red);
-  font-size: 10px;
+  font-size: var(--t-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -224,8 +224,8 @@
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -239,7 +239,7 @@
   border-bottom: 1px solid var(--line);
   padding: 5px 8px 7px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: var(--t-xs);
 }
 .effort-picker-hint.is-error { color: var(--red); }
 .effort-picker-hint > svg { flex: 0 0 auto; }

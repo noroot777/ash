@@ -170,7 +170,7 @@ header:hover .task-pin,
 .ui-menu-item kbd {
   margin-left: auto;
   color: var(--faint);
-  font: 10px var(--font-mono);
+  font: var(--t-xs) var(--font-mono);
 }
 
 .ui-menu-separator {
@@ -263,7 +263,7 @@ header:hover .task-pin,
   position: absolute;
   inset: -2px 0 0;
   color: var(--on-action);
-  font-size: 11px;
+  font-size: var(--t-xs);
   text-align: center;
 }
 
@@ -316,7 +316,7 @@ header:hover .task-pin,
   border-radius: 9999px;
   padding: 0 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
 }
 
@@ -352,8 +352,8 @@ header:hover .task-pin,
 
 .ui-selectable-row small {
   margin-left: auto;
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 /* 路径输入框 + 「浏览…」按钮。放在 controls.css 而不是某个页面样式里，是因为它同时长在

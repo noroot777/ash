@@ -70,7 +70,7 @@
   background: var(--raised);
   padding: 1px 5px;
   color: var(--faint);
-  font: 10px var(--font-mono);
+  font: var(--t-xs) var(--font-mono);
   white-space: nowrap;
 }
 
@@ -100,8 +100,8 @@
 
 .palette-label {
   padding: 8px 9px 4px;
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -141,15 +141,15 @@
 
 .palette-row small {
   overflow: hidden;
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .palette-row em {
   color: transparent;
-  font-size: 11px;
+  font-size: var(--t-xs);
   font-style: normal;
 }
 
@@ -196,8 +196,8 @@
 .palette-empty {
   margin: 0;
   padding: 44px 18px;
-  color: var(--faint);
-  font-size: 11px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   text-align: center;
 }
 
@@ -212,8 +212,8 @@
   border-top: 1px solid var(--line);
   background: var(--panel);
   padding: 0 13px;
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 /* 排序档开关。靠右，跟左边那串键位提示分开：那些是「怎么操作」，这个是「现在按什么排」。 */
@@ -227,7 +227,7 @@
   background: transparent;
   padding: 2px 6px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--t-xs);
 }
 
 .palette-sort:hover,
@@ -287,8 +287,8 @@
 }
 
 .notes-panel > header span {
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .notes-panel > header button,
@@ -333,7 +333,7 @@
 }
 
 .notes-status-filter { min-width: 0; }
-.notes-status-filter .ui-dropdown-trigger { border-color: var(--line); padding: 0 7px; font-size: 10px; box-shadow: none; }
+.notes-status-filter .ui-dropdown-trigger { border-color: var(--line); padding: 0 7px; font-size: var(--t-xs); box-shadow: none; }
 .notes-status-filter-menu { z-index: 215; }
 
 .notes-list-tools label {
@@ -364,7 +364,7 @@
   flex: 1;
   border: 0;
   background: transparent;
-  font-size: 11px;
+  font-size: var(--t-xs);
 }
 
 .notes-scroll {
@@ -374,8 +374,8 @@
 
 .notes-scroll > p {
   margin: 24px 8px;
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   text-align: center;
 }
 
@@ -405,15 +405,15 @@
 
 .note-row-main b {
   overflow: hidden;
-  font-size: 11px;
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .note-row-main small {
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .note-pick,
@@ -444,8 +444,8 @@
   border: 0;
   background: transparent;
   padding: 0 2px;
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
   white-space: nowrap;
   transition: color 150ms ease;
@@ -489,8 +489,8 @@
   gap: 12px;
   border-bottom: 1px solid var(--line);
   padding: 0 16px;
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .note-meta > span {
@@ -512,8 +512,8 @@
 
 .note-task-links > b {
   flex: none;
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
   white-space: nowrap;
 }
@@ -542,7 +542,7 @@
   background: var(--raised);
   padding: 3px 7px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--t-xs);
 }
 
 .note-task-links button:hover {
@@ -558,8 +558,8 @@
 
 .note-task-links button small {
   flex: none;
-  color: var(--faint);
-  font-size: 8px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .note-editor > textarea,
@@ -618,7 +618,7 @@
   background: var(--canvas);
   padding: 4px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--t-xs);
 }
 
 .note-attachments img {
@@ -655,8 +655,8 @@
 .notes-panel > footer > span {
   min-width: 0;
   overflow: hidden;
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

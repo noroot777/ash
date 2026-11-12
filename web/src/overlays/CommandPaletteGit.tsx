@@ -28,7 +28,7 @@ export function GitProjectStep({
           <GitBranch size={17} className="shrink-0 text-muted" />
           <span className="min-w-0">
             <span className="block truncate text-sm text-ink">{project.name}</span>
-            <span className="mt-0.5 block truncate font-mono text-[11px] text-faint">{project.repoPath}</span>
+            <span className="mt-0.5 block truncate font-mono text-[length:var(--t-xs)] text-faint">{project.repoPath}</span>
           </span>
         </button>
       ))}
@@ -41,8 +41,8 @@ function Section({ title, count, children }: { title: string; count: number; chi
   return (
     <section className="min-h-0 min-w-0 overflow-y-auto">
       <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
-        <h3 className="text-[9px] font-medium uppercase tracking-[0.08em] text-faint">{title}</h3>
-        <span className="rounded-full bg-overlay px-1.5 py-0.5 text-[9px] tabular-nums text-muted">{count}</span>
+        <h3 className="text-[length:var(--t-xs)] font-medium uppercase tracking-[0.08em] text-faint">{title}</h3>
+        <span className="rounded-full bg-overlay px-1.5 py-0.5 text-[length:var(--t-xs)] tabular-nums text-muted">{count}</span>
       </div>
       <div className="p-2">{children}</div>
     </section>
@@ -76,7 +76,7 @@ export function GitOverviewPanel({
               <button type="button" onClick={() => { if (project) openGitWorkbench({ projectId: project.id, view: "branches", ref: branch }); }} key={branch} className={`flex min-w-0 items-center gap-2 rounded-md px-2.5 py-2 ${current ? "bg-ink/5" : ""}`}>
                 {current ? <Check size={13} weight="bold" className="shrink-0 text-ink" /> : <GitBranch size={13} className="shrink-0 text-faint" />}
                 <span className={`min-w-0 truncate font-mono text-xs ${current ? "font-medium text-ink" : "text-muted"}`}>{branch}</span>
-                {current && <span className="ml-auto shrink-0 text-[9px] text-muted">当前</span>}
+                {current && <span className="ml-auto shrink-0 text-[length:var(--t-xs)] text-muted">当前</span>}
               </button>
             );
           })}
@@ -92,7 +92,7 @@ export function GitOverviewPanel({
                 <TreeStructure size={14} className="shrink-0 text-muted" />
                 <span className="min-w-0 truncate font-mono text-xs text-ink">{worktree.path}</span>
               </div>
-              <div className="mt-2 flex min-w-0 items-center gap-3 pl-[22px] text-[10px] text-faint">
+              <div className="mt-2 flex min-w-0 items-center gap-3 pl-[22px] text-[length:var(--t-xs)] text-faint">
                 <span className="flex min-w-0 items-center gap-1">
                   <GitBranch size={11} />
                   <span className="truncate">{worktree.branch ?? (worktree.detached ? "detached HEAD" : "无分支")}</span>

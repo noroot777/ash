@@ -33,7 +33,7 @@
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  font-size: 10.5px;
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
   letter-spacing: 0.02em;
   text-overflow: ellipsis;
@@ -44,7 +44,7 @@
 .workspace-task-project-head em {
   flex: 0 0 auto;
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: var(--t-xs);
   font-style: normal;
   opacity: 0.6;
 }
@@ -78,8 +78,8 @@
   padding: 5px 8px;
   border-radius: 7px;
   background: var(--hover-bg);
-  color: var(--faint);
-  font-size: 10.5px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   line-height: 1.45;
 }
 

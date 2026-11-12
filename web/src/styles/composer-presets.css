@@ -25,14 +25,14 @@
 }
 
 .composer-preset-heading b {
-  font-size: 10.5px;
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
 }
 
 .composer-preset-heading span {
   overflow: hidden;
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -40,7 +40,7 @@
 .composer-preset-heading .ui-button {
   flex: 0 0 auto;
   height: 27px;
-  font-size: 10.5px;
+  font-size: var(--t-xs);
 }
 
 .composer-preset-empty {
@@ -52,8 +52,8 @@
   margin-top: 8px;
   border: 1px dashed var(--line);
   border-radius: 8px;
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .composer-preset-empty.is-error {
@@ -62,7 +62,7 @@
 
 .composer-preset-empty .ui-button {
   height: 24px;
-  font-size: 10px;
+  font-size: var(--t-xs);
 }
 
 .composer-preset-list {
@@ -104,7 +104,7 @@
 
 .composer-preset-card > b {
   overflow: hidden;
-  font-size: 11px;
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -117,7 +117,7 @@
   align-items: center;
   gap: 4px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--t-xs);
 }
 
 .composer-preset-card > span > span {
@@ -156,7 +156,7 @@
   gap: 5px;
   overflow: hidden;
   color: var(--green);
-  font-size: 9.5px;
+  font-size: var(--t-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -174,7 +174,7 @@
 .composer-preset-selection .ui-button {
   height: 25px;
   padding: 0 8px;
-  font-size: 9.5px;
+  font-size: var(--t-xs);
   box-shadow: none;
 }
 
@@ -215,8 +215,8 @@
 
 .composer-preset-dialog p {
   margin-top: 2px;
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .composer-preset-dialog > label {
@@ -227,7 +227,7 @@
 
 .composer-preset-dialog > label > span {
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
 }
 

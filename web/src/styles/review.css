@@ -4,13 +4,13 @@
    执行者记录卡等)。 */
 .single-review-workspace,.team-review-workspace { display:flex; min-height:0; flex:1; flex-direction:column; background:var(--canvas); }
 .single-review-subbar,.team-review-subbar { display:flex; min-height:52px; max-height:60%; flex:0 0 auto; flex-wrap:wrap; overflow-y:auto; overscroll-behavior:contain; align-items:center; gap:10px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
-.accept-workspace-commit { display: flex; flex: 1 0 100%; align-items: flex-start; gap: 9px; border: 1px solid color-mix(in oklab, var(--amber) 35%, var(--line)); border-radius: 9px; background: color-mix(in oklab, var(--amber) 6%, var(--panel)); padding: 11px 12px; color: var(--amber); font-size: 11px; }
+.accept-workspace-commit { display: flex; flex: 1 0 100%; align-items: flex-start; gap: 9px; border: 1px solid color-mix(in oklab, var(--amber) 35%, var(--line)); border-radius: 9px; background: color-mix(in oklab, var(--amber) 6%, var(--panel)); padding: 11px 12px; color: var(--amber); font-size: var(--t-xs); }
 .accept-workspace-commit > svg { flex-shrink: 0; margin-top: 2px; }
 .accept-workspace-commit > div:first-of-type { min-width: 0; flex: 1; }
 .accept-workspace-commit p { margin: 5px 0; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
 .accept-workspace-commit small { display: block; margin-top: 4px; color: var(--muted); line-height: 1.6; }
 .accept-workspace-commit-actions { display: flex; flex-shrink: 0; gap: 5px; }
-.accept-workspace-commit button { display: inline-flex; min-height: 29px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 4px 8px; color: var(--ink); font-size: 11px; }
+.accept-workspace-commit button { display: inline-flex; min-height: 29px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 4px 8px; color: var(--ink); font-size: var(--t-xs); }
 .accept-workspace-commit button:disabled { cursor: not-allowed; opacity: .5; }
 @media (max-width: 600px) { .accept-workspace-commit { flex-wrap: wrap; } .accept-workspace-commit-actions { width: 100%; justify-content: flex-end; } }
 /* 验收动作提到顶栏:它是这一屏唯一的动作,不该跟着卡片一起被折叠收走。它带来的那串状态卡
@@ -19,40 +19,40 @@
    原先在这里逐张卡列的那三条白名单已并入它(见 team-review.css)。 */
 .single-review-subbar b,.single-review-subbar small,.team-review-subbar b,.team-review-subbar small { display:block; }
 .single-review-subbar b,.team-review-subbar b { font-size:12.5px; }
-.single-review-subbar small,.team-review-subbar small { color:var(--faint); font-size:10px; }
-.single-review-subbar > button,.single-review-subbar > a,.team-review-subbar > button,.team-review-subbar > a { display:inline-flex; height:28px; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 9px; color:var(--muted); font-size:10.5px; }
+.single-review-subbar small,.team-review-subbar small { color:var(--muted); font-size:var(--t-xs); }
+.single-review-subbar > button,.single-review-subbar > a,.team-review-subbar > button,.team-review-subbar > a { display:inline-flex; height:28px; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 9px; color:var(--muted); font-size:var(--t-xs); }
 .single-review-subbar > button:hover,.single-review-subbar > a:hover,.team-review-subbar > button:hover,.team-review-subbar > a:hover { background:var(--raised); color:var(--ink); }
 .single-review-scroll,.team-review-scroll { min-height:0; flex:1; overflow-y:auto; padding:18px clamp(14px,3vw,34px) 38px; }
 .single-review-stack,.team-review-stack { display:flex; width:100%; max-width:1180px; margin:0 auto; flex-direction:column; gap:14px; }
-.single-review-shared-badge { display:inline-flex; height:27px; align-items:center; border:1px solid color-mix(in oklab,var(--cyan) 28%,var(--line)); border-radius:7px; background:color-mix(in oklab,var(--cyan) 6%,var(--panel)); padding:0 8px; color:var(--cyan); font-size:10px; font-weight:var(--w-medium); }
+.single-review-shared-badge { display:inline-flex; height:27px; align-items:center; border:1px solid color-mix(in oklab,var(--cyan) 28%,var(--line)); border-radius:7px; background:color-mix(in oklab,var(--cyan) 6%,var(--panel)); padding:0 8px; color:var(--cyan); font-size:var(--t-xs); font-weight:var(--w-medium); }
 .single-review-facts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:0; }
 .single-review-facts > div { min-width:0; border:1px solid var(--line); border-radius:7px; background:var(--panel); padding:7px 8px; }
-.single-review-facts dt { color:var(--faint); font-size:9px; font-weight:var(--w-medium); letter-spacing:.05em; text-transform:uppercase; }
-.single-review-facts dd { display:flex; min-width:0; align-items:center; gap:4px; overflow:hidden; margin:3px 0 0; color:var(--muted); font-family:var(--font-mono); font-size:9.5px; text-overflow:ellipsis; white-space:nowrap; }
+.single-review-facts dt { color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-medium); letter-spacing:.05em; text-transform:uppercase; }
+.single-review-facts dd { display:flex; min-width:0; align-items:center; gap:4px; overflow:hidden; margin:3px 0 0; color:var(--muted); font-family:var(--font-mono); font-size:var(--t-xs); text-overflow:ellipsis; white-space:nowrap; }
 .single-review-shared-note { display:flex; align-items:center; gap:12px; border:1px solid color-mix(in oklab,var(--cyan) 24%,var(--line)); border-radius:8px; background:color-mix(in oklab,var(--cyan) 5%,var(--panel)); padding:9px 10px; }
-.single-review-shared-note > div { min-width:0; flex:1; }.single-review-shared-note b { color:var(--ink); font-size:10.5px; }.single-review-shared-note p { margin:2px 0 0; color:var(--muted); font-size:9.5px; line-height:1.5; }
-.single-review-shared-note > a { display:inline-flex; height:27px; flex:0 0 auto; align-items:center; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; color:var(--ink); font-size:9.5px; font-weight:var(--w-medium); }
-.single-review-loading,.single-review-error { display:flex; align-items:center; gap:6px; margin:0; border:1px dashed var(--line2); border-radius:8px; padding:18px; color:var(--faint); font-size:10.5px; }
+.single-review-shared-note > div { min-width:0; flex:1; }.single-review-shared-note b { color:var(--ink); font-size:var(--t-xs); }.single-review-shared-note p { margin:2px 0 0; color:var(--muted); font-size:var(--t-xs); line-height:1.5; }
+.single-review-shared-note > a { display:inline-flex; height:27px; flex:0 0 auto; align-items:center; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; color:var(--ink); font-size:var(--t-xs); font-weight:var(--w-medium); }
+.single-review-loading,.single-review-error { display:flex; align-items:center; gap:6px; margin:0; border:1px dashed var(--line2); border-radius:8px; padding:18px; color:var(--muted); font-size:var(--t-xs); }
 .single-review-error { color:var(--red); }
-.accepted-snapshot-card { display:grid; gap:9px; border:1px solid var(--line); border-radius:9px; background:var(--panel); padding:10px 11px; }.accepted-snapshot-card > header { display:grid; min-width:0; grid-template-columns:27px minmax(0,1fr) auto; align-items:center; gap:8px; }.accepted-snapshot-card > header > span { display:grid; width:27px; height:27px; place-items:center; border-radius:8px; background:color-mix(in oklab,var(--cyan) 8%,var(--raised)); color:var(--cyan); }.accepted-snapshot-card header b,.accepted-snapshot-card header small { display:block; }.accepted-snapshot-card header b { font-size:10.5px; }.accepted-snapshot-card header small { margin-top:1px; color:var(--faint); font-size:9px; }.accepted-snapshot-card header em { color:var(--green); font-size:9px; font-style:normal; }.accepted-snapshot-card dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin:0; }.accepted-snapshot-card dl > div { min-width:0; border-radius:7px; background:var(--canvas); padding:6px 7px; }.accepted-snapshot-card dt { color:var(--faint); font-size:8.5px; }.accepted-snapshot-card dd { overflow:hidden; margin:2px 0 0; color:var(--muted); font-family:var(--font-mono); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }.accepted-snapshot-card > button { justify-self:start; border:0; background:transparent; padding:0; color:var(--ink); font-size:9.5px; text-align:left; }.accepted-snapshot-card > button:hover { text-decoration:underline; }
+.accepted-snapshot-card { display:grid; gap:9px; border:1px solid var(--line); border-radius:9px; background:var(--panel); padding:10px 11px; }.accepted-snapshot-card > header { display:grid; min-width:0; grid-template-columns:27px minmax(0,1fr) auto; align-items:center; gap:8px; }.accepted-snapshot-card > header > span { display:grid; width:27px; height:27px; place-items:center; border-radius:8px; background:color-mix(in oklab,var(--cyan) 8%,var(--raised)); color:var(--cyan); }.accepted-snapshot-card header b,.accepted-snapshot-card header small { display:block; }.accepted-snapshot-card header b { font-size:var(--t-xs); }.accepted-snapshot-card header small { margin-top:1px; color:var(--muted); font-size:var(--t-xs); }.accepted-snapshot-card header em { color:var(--green); font-size:var(--t-xs); font-style:normal; }.accepted-snapshot-card dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin:0; }.accepted-snapshot-card dl > div { min-width:0; border-radius:7px; background:var(--canvas); padding:6px 7px; }.accepted-snapshot-card dt { color:var(--muted); font-size:var(--t-xs); }.accepted-snapshot-card dd { overflow:hidden; margin:2px 0 0; color:var(--muted); font-family:var(--font-mono); font-size:var(--t-xs); text-overflow:ellipsis; white-space:nowrap; }.accepted-snapshot-card > button { justify-self:start; border:0; background:transparent; padding:0; color:var(--ink); font-size:var(--t-xs); text-align:left; }.accepted-snapshot-card > button:hover { text-decoration:underline; }
 /* 提交横铺一条，宽度全留给下面的「改动文件 + diff」（理由见 CommitStrip.tsx）。 */
 .single-review-content { display:grid; min-width:0; gap:10px; }
 /* 分支 → 合入目标 + 提交，压成一条元信息行（理由见 ChangeMetaBar.tsx）。 */
 .review-meta-bar { min-width:0; overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
-.review-meta-bar__line { display:flex; min-height:32px; flex-wrap:wrap; align-items:center; gap:6px; padding:5px 9px; color:var(--muted); font-size:10px; }
+.review-meta-bar__line { display:flex; min-height:32px; flex-wrap:wrap; align-items:center; gap:6px; padding:5px 9px; color:var(--muted); font-size:var(--t-xs); }
 .review-meta-bar__line > svg { flex:0 0 auto; color:var(--faint); }
-.review-meta-bar code { min-width:0; overflow:hidden; font-family:var(--font-mono); font-size:9.5px; text-overflow:ellipsis; white-space:nowrap; }
+.review-meta-bar code { min-width:0; overflow:hidden; font-family:var(--font-mono); font-size:var(--t-xs); text-overflow:ellipsis; white-space:nowrap; }
 .review-meta-bar__branch { display:inline-flex; min-width:0; align-items:center; gap:5px; }
 .review-meta-bar__branch svg { flex:0 0 auto; color:var(--faint); }
 .review-meta-bar__branch code { color:var(--accent); }
-.review-meta-bar__where { flex:0 0 auto; border-radius:5px; background:var(--raised); padding:2px 6px; color:var(--faint); font-size:9px; }
-.review-meta-bar__toggle { display:inline-flex; height:24px; flex:0 0 auto; align-items:center; gap:5px; margin-left:auto; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:9.5px; }
+.review-meta-bar__where { flex:0 0 auto; border-radius:5px; background:var(--raised); padding:2px 6px; color:var(--muted); font-size:var(--t-xs); }
+.review-meta-bar__toggle { display:inline-flex; height:24px; flex:0 0 auto; align-items:center; gap:5px; margin-left:auto; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:var(--t-xs); }
 .review-meta-bar__toggle:hover:not(:disabled) { background:var(--raised); color:var(--ink); }
 .review-meta-bar__toggle:disabled { color:var(--faint); }
 .review-meta-bar__toggle > svg:last-child { transition:transform 140ms ease; }
 .review-meta-bar__toggle[aria-expanded="true"] > svg:last-child { transform:rotate(180deg); }
 .review-meta-bar__commits { border-top:.5px solid var(--line); padding:8px 9px; }
-.review-meta-bar__commits > small { display:block; margin-bottom:6px; color:var(--faint); font-size:9px; }
+.review-meta-bar__commits > small { display:block; margin-bottom:6px; color:var(--muted); font-size:var(--t-xs); }
 .review-meta-bar__commits .review-commit-strip { border:0; border-radius:0; }
 .review-meta-bar__commits .review-commit-strip > ul { padding:0; }
 .review-commit-strip { overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
@@ -62,16 +62,16 @@
 .review-commit-strip > ul > li.is-linked { padding:0; }
 .review-commit-strip > ul > li.is-linked > button { display:flex; width:100%; min-width:0; align-items:baseline; gap:6px; border:0; border-radius:6px; background:transparent; padding:5px 7px; text-align:left; }
 .review-commit-strip > ul > li.is-linked:hover { border-color:var(--ink); background:var(--raised); }
-.review-commit-strip li code { flex:0 0 auto; color:var(--accent); font-family:var(--font-mono); font-size:9px; }
-.review-commit-strip li b { min-width:0; flex:1; overflow:hidden; color:var(--muted); font-size:10px; font-weight:var(--w-medium); text-overflow:ellipsis; white-space:nowrap; }
-.review-commit-strip li time { flex:0 0 auto; color:var(--faint); font-size:8.5px; }
-.review-commit-strip > p { margin:0; padding:14px 9px; color:var(--faint); font-size:10px; text-align:center; }
-.review-commit-strip > button { width:100%; min-height:29px; border:0; border-top:.5px solid var(--line); background:var(--canvas); color:var(--ink); font-size:9.5px; }
+.review-commit-strip li code { flex:0 0 auto; color:var(--accent); font-family:var(--font-mono); font-size:var(--t-xs); }
+.review-commit-strip li b { min-width:0; flex:1; overflow:hidden; color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-medium); text-overflow:ellipsis; white-space:nowrap; }
+.review-commit-strip li time { flex:0 0 auto; color:var(--faint); font-size:var(--t-xs); }
+.review-commit-strip > p { margin:0; padding:14px 9px; color:var(--muted); font-size:var(--t-xs); text-align:center; }
+.review-commit-strip > button { width:100%; min-height:29px; border:0; border-top:.5px solid var(--line); background:var(--canvas); color:var(--ink); font-size:var(--t-xs); }
 .review-commit-strip > button:hover { background:var(--raised); }
 .single-review-files,.single-review-diff { min-width:0; overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
-.single-review-files > header { display:flex; height:34px; align-items:center; justify-content:space-between; border-bottom:.5px solid var(--line); padding:0 9px; color:var(--muted); font-size:10.5px; }
+.single-review-files > header { display:flex; height:34px; align-items:center; justify-content:space-between; border-bottom:.5px solid var(--line); padding:0 9px; color:var(--muted); font-size:var(--t-xs); }
 .single-review-files > header span { display:inline-flex; align-items:center; gap:5px; }
-.single-review-files > header b { color:var(--faint); font-size:9.5px; }
+.single-review-files > header b { color:var(--muted); font-size:var(--t-xs); }
 .single-review-diff-layout { display:grid; min-width:0; grid-template-columns:240px minmax(0,1fr); gap:10px; }
 .single-review-files > div { max-height:620px; overflow-y:auto; }
 .single-review-files > div > button { display:flex; width:100%; min-height:34px; align-items:center; gap:7px; border:0; border-top:.5px solid var(--line); background:transparent; padding:6px 8px 6px calc(8px + var(--file-indent,0px)); text-align:left; }
@@ -83,18 +83,18 @@
 .single-review-files > div > button:first-child { border-top:0; }
 .single-review-files > div > button:hover,.single-review-files > div > button.is-selected { background:var(--raised); }
 .single-review-files > div > button.is-selected { box-shadow:inset 2px 0 var(--ink); }
-.single-review-files button code { min-width:0; flex:1; overflow:hidden; color:var(--muted); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
-.single-review-files button span { display:flex; flex:0 0 auto; gap:5px; font-family:var(--font-mono); font-size:8.5px; }
+.single-review-files button code { min-width:0; flex:1; overflow:hidden; color:var(--muted); font-size:var(--t-xs); text-overflow:ellipsis; white-space:nowrap; }
+.single-review-files button span { display:flex; flex:0 0 auto; gap:5px; font-family:var(--font-mono); font-size:var(--t-xs); }
 .single-review-files i,.single-review-diff header i { color:var(--green); font-style:normal; }
 .single-review-files em,.single-review-diff header em { color:var(--red); font-style:normal; }
-.single-review-load { width:100%; min-height:30px; border:0; border-top:.5px solid var(--line); background:var(--canvas); color:var(--ink); font-size:9.5px; }
+.single-review-load { width:100%; min-height:30px; border:0; border-top:.5px solid var(--line); background:var(--canvas); color:var(--ink); font-size:var(--t-xs); }
 .single-review-diff { min-width:0; }
 .single-review-diff > header { display:flex; min-height:38px; align-items:center; gap:10px; border-bottom:.5px solid var(--line); padding:0 10px; }
 .single-review-diff > header > div { display:flex; min-width:0; flex:1; align-items:center; gap:6px; }
-.single-review-diff > header b { overflow:hidden; font-family:var(--font-mono); font-size:10px; font-weight:var(--w-medium); text-overflow:ellipsis; white-space:nowrap; }
-.single-review-diff > header > span { display:flex; gap:5px; font-family:var(--font-mono); font-size:9px; }
-.single-review-diff > header small { color:var(--faint); font-size:9px; }
-.single-review-zoom { display:inline-flex; height:24px; flex:0 0 auto; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:9.5px; }
+.single-review-diff > header b { overflow:hidden; font-family:var(--font-mono); font-size:var(--t-xs); font-weight:var(--w-medium); text-overflow:ellipsis; white-space:nowrap; }
+.single-review-diff > header > span { display:flex; gap:5px; font-family:var(--font-mono); font-size:var(--t-xs); }
+.single-review-diff > header small { color:var(--muted); font-size:var(--t-xs); }
+.single-review-zoom { display:inline-flex; height:24px; flex:0 0 auto; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:var(--t-xs); }
 .single-review-zoom:hover { background:var(--raised); color:var(--ink); }
 .single-review-zoom[aria-pressed="true"] { border-color:color-mix(in oklab,var(--ink) 40%,var(--line2)); color:var(--ink); }
 /* 放大层里的分支 diff：从固定高度改成撑满这一屏。层本身的定位、层高见 `zoom-layer.css`。 */
@@ -102,10 +102,10 @@
 .zoom-layer--review .single-review-files,.zoom-layer--review .single-review-diff { display:flex; min-height:0; flex-direction:column; }
 .zoom-layer--review .single-review-files > div { max-height:none; flex:1; }
 .zoom-layer--review .single-review-code { max-height:none; flex:1; }
-.single-review-warning { display:flex; align-items:center; gap:6px; border-bottom:.5px solid color-mix(in oklab,var(--amber) 25%,var(--line)); background:color-mix(in oklab,var(--amber) 7%,var(--panel)); padding:7px 10px; color:var(--amber); font-size:9.5px; }
-.single-review-empty { display:grid; min-height:140px; place-items:center; border:1px dashed var(--line2); border-radius:8px; background:var(--panel); padding:18px; color:var(--faint); font-size:10.5px; text-align:center; }
+.single-review-warning { display:flex; align-items:center; gap:6px; border-bottom:.5px solid color-mix(in oklab,var(--amber) 25%,var(--line)); background:color-mix(in oklab,var(--amber) 7%,var(--panel)); padding:7px 10px; color:var(--amber); font-size:var(--t-xs); }
+.single-review-empty { display:grid; min-height:140px; place-items:center; border:1px dashed var(--line2); border-radius:8px; background:var(--panel); padding:18px; color:var(--muted); font-size:var(--t-xs); text-align:center; }
 .single-review-diff .single-review-empty { border:0; border-radius:0; }
-.single-review-code { max-height:620px; overflow:auto; background:var(--canvas); font-family:var(--font-mono); font-size:10px; line-height:1.55; }
+.single-review-code { max-height:620px; overflow:auto; background:var(--canvas); font-family:var(--font-mono); font-size:var(--t-xs); line-height:1.55; }
 .single-review-line { display:grid; min-width:max-content; grid-template-columns:46px 46px minmax(520px,1fr); }
 .single-review-line > span { position:sticky; z-index:1; left:0; border-right:1px solid var(--line); background:var(--raised); padding:0 7px; color:var(--faint); text-align:right; user-select:none; }
 .single-review-line > .single-review-new { left:46px; }
@@ -118,7 +118,7 @@
    只放 git 给的上下文（所在函数），区间数字不印（行号栏里已经有了）。 */
 .single-review-line.is-hunk { border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:var(--raised); }
 .single-review-line.is-hunk > span { background:var(--overlay); color:var(--faint); }
-.single-review-line.is-hunk > code { color:var(--faint); font-size:9px; }
+.single-review-line.is-hunk > code { color:var(--muted); font-size:var(--t-xs); }
 .single-review-line.is-meta > code { color:var(--faint); }
 /* 并排（左右分栏）：每一行是「旧的一格 + 新的一格」，两格各自带行号；一侧没有对应行时
    那一格是 is-empty，用斜纹底表示「这里本来就没东西」，而不是留一块白让人以为是空行。
@@ -145,18 +145,18 @@
 .single-review-code.is-split .single-review-line.is-span { grid-column:1/-1; grid-template-columns:1fr; min-width:0; }
 .single-review-code.is-split .single-review-line.is-span > code { overflow-wrap:anywhere; white-space:pre-wrap; }
 .single-review-code.is-split .single-review-line.is-span.is-hunk { border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:var(--raised); }
-.single-review-code.is-split .single-review-line.is-span.is-hunk > code { color:var(--faint); font-size:9px; }
+.single-review-code.is-split .single-review-line.is-span.is-hunk > code { color:var(--muted); font-size:var(--t-xs); }
 .single-review-code.is-split .single-review-line.is-span.is-meta > code { color:var(--faint); }
 /* 行号不跟着整块横向滚（并排根本不横向滚），也不能用单栏那种 sticky 到最左——那会让右栏
    的行号贴到左栏上去。底色继承所在格，一眼能看出这一行属于删还是增。 */
 .single-review-code.is-split .single-review-side > span { position:static; border-right:1px solid var(--line); padding:0 7px; color:var(--faint); text-align:right; user-select:none; }
 /* 「这一行后面没有换行符」。并排里它是正文的尾巴而不是单独一行，所以做成一枚淡标签。 */
-.single-review-code.is-split .single-review-nonl { margin-left:8px; border-radius:4px; background:var(--chrome); padding:0 4px; color:var(--faint); font-size:8.5px; font-style:normal; user-select:none; }
+.single-review-code.is-split .single-review-nonl { margin-left:8px; border-radius:4px; background:var(--chrome); padding:0 4px; color:var(--muted); font-size:var(--t-xs); font-style:normal; user-select:none; }
 /* 单栏 / 并排的切换。摆在 diff 标题栏上，两段只有一个是按下的。 */
 .diff-layout-toggle { display:inline-flex; flex:0 0 auto; overflow:hidden; border:1px solid var(--line2); border-radius:6px; background:var(--panel); }
-.diff-layout-toggle button { display:inline-flex; height:24px; align-items:center; gap:4px; border:0; background:transparent; padding:0 7px; color:var(--muted); font-size:9.5px; }
+.diff-layout-toggle button { display:inline-flex; height:24px; align-items:center; gap:4px; border:0; background:transparent; padding:0 7px; color:var(--muted); font-size:var(--t-xs); }
 .diff-layout-toggle button + button { border-left:1px solid var(--line2); }
 .diff-layout-toggle button:hover { background:var(--raised); color:var(--ink); }
 .diff-layout-toggle button[aria-pressed="true"] { background:var(--sel-bg); color:var(--ink); }
-.single-review-more-lines { position:sticky; left:0; width:100%; min-width:612px; height:32px; border:0; border-top:1px solid var(--line); background:var(--panel); color:var(--ink); font-size:9.5px; }
+.single-review-more-lines { position:sticky; left:0; width:100%; min-width:612px; height:32px; border:0; border-top:1px solid var(--line); background:var(--panel); color:var(--ink); font-size:var(--t-xs); }
 @media (max-width:760px) { .single-review-facts,.single-review-diff-layout,.accepted-snapshot-card dl { grid-template-columns:1fr; } .single-review-files > div { max-height:220px; } }

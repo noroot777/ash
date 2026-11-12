@@ -1,5 +1,5 @@
 /* 子智能体执行详情抽屉（task-detail/NativeAgentConversation.tsx）。右侧那一格的列表在 native-work.css。 */
-.native-work__status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; width: fit-content; padding: 2px 6px; border-radius: 4px; background: var(--raised); color: var(--muted); font-size: 10px; font-weight: var(--w-regular); line-height: 1.4; white-space: nowrap; }
+.native-work__status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; width: fit-content; padding: 2px 6px; border-radius: 4px; background: var(--raised); color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-regular); line-height: 1.4; white-space: nowrap; }
 .native-work__status::before { width: 4px; height: 4px; border-radius: 50%; background: currentColor; content: ""; }
 .native-work__status[data-status="running"] { background: color-mix(in oklab, var(--accent) 9%, var(--panel)); color: var(--accent); }
 .native-work__status[data-status="completed"] { background: color-mix(in oklab, var(--green) 8%, var(--panel)); color: var(--green); }
@@ -11,21 +11,21 @@
 .native-agent__avatar { display: grid; flex: 0 0 30px; width: 30px; height: 30px; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--muted); }
 .native-agent__heading > div { min-width: 0; }
 .native-agent__heading strong { display: block; font-size: 13px; font-weight: var(--w-medium); line-height: 1.5; overflow-wrap: anywhere; }
-.native-agent__headline { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.7; overflow-wrap: anywhere; }
+.native-agent__headline { margin: 5px 0 0; color: var(--muted); font-size: var(--t-xs); line-height: 1.7; overflow-wrap: anywhere; }
 .native-agent__headline-dot { margin: 0 7px; color: var(--faint); }
-.native-agent__headline small { margin-left: 5px; font-size: 9px; }
+.native-agent__headline small { margin-left: 5px; font-size: var(--t-xs); }
 .native-agent__headline-time { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .native-agent__header > .native-work__status { flex: 0 0 auto; margin-top: 2px; }
 .native-agent__scroll-region { flex: 1; min-height: 0; }
 .native-agent__conversation { height: 100%; overflow: auto; padding: 16px 14px 48px; overflow-wrap: anywhere; font-size: 12px; }
-.native-agent__section-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 16px; color: var(--muted); font-size: 10px; }
+.native-agent__section-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 16px; color: var(--muted); font-size: var(--t-xs); }
 .native-agent__section-label > span:first-child { color: var(--ink); font-weight: var(--w-medium); }
 .native-agent__assignment { margin-bottom: 16px; border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; background: var(--panel); color: var(--muted); }
-.native-agent__assignment > summary { cursor: pointer; font-size: 11px; }
+.native-agent__assignment > summary { cursor: pointer; font-size: var(--t-xs); }
 .native-agent__assignment[open] > summary { margin-bottom: 10px; }
 .native-agent__conversation .task-execution-events { max-width: 100%; }
 .native-agent__conversation .task-markdown { font-size: 12px; line-height: 1.8; }
-.native-agent__live { display: flex; align-items: center; gap: 7px; margin: 18px 0 0; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 10px; }
-.native-agent .native-work__hint { margin: 0 0 18px; color: var(--muted); font-size: 11px; line-height: 1.65; }
+.native-agent__live { display: flex; align-items: center; gap: 7px; margin: 18px 0 0; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: var(--t-xs); }
+.native-agent .native-work__hint { margin: 0 0 18px; color: var(--muted); font-size: var(--t-xs); line-height: 1.65; }
 .native-agent .native-work__error { margin-bottom: 12px; color: var(--red); }
 .native-agent .native-work__error button { margin-left: 6px; text-decoration: underline; }

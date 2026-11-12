@@ -55,7 +55,7 @@
   background: var(--raised);
   padding: 2px 7px;
   color: var(--muted);
-  font-size: 9.5px;
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
 }
 
@@ -74,7 +74,7 @@
   align-items: center;
   gap: 5px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
 }
 
@@ -89,7 +89,7 @@
   margin-left: auto;
   color: var(--faint);
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: var(--t-xs);
 }
 
 .workspace-load-error {
@@ -97,7 +97,7 @@
   background: color-mix(in oklab, var(--red) 6%, var(--canvas));
   padding: 8px 14px;
   color: var(--red);
-  font-size: 11px;
+  font-size: var(--t-xs);
 }
 
 .workspace-load-error button { margin-left: 10px; }
@@ -130,20 +130,20 @@
 }
 
 .workspace-inspector-slot span {
-  font-size: 11.5px;
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
 }
 
 .workspace-inspector-slot small {
-  color: var(--faint);
-  font-size: 9.5px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .workspace-inspector-slot p {
   max-width: 220px;
   margin: 30px auto 0;
-  color: var(--faint);
-  font-size: 11px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   line-height: 1.7;
   text-align: center;
 }
@@ -165,7 +165,7 @@
 .workspace-empty-project {
   margin-bottom: 8px;
   color: var(--ink);
-  font-size: 10px;
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -199,7 +199,7 @@
   align-items: center;
   gap: 8px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
 }
 
@@ -251,7 +251,7 @@
 
 .workspace-task-placeholder dt {
   color: var(--faint);
-  font-size: 9px;
+  font-size: var(--t-xs);
   font-weight: var(--w-medium);
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -260,7 +260,7 @@
 .workspace-task-placeholder dd {
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--t-xs);
 }
 
 /* 两句提示上下摞着：常驻那句在上，普通那句贴着角。空槽位不渲染，所以这里不留占位。 */
@@ -286,7 +286,7 @@
   padding: 9px 12px;
   box-shadow: var(--menu-shadow);
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--t-xs);
   opacity: 0;
   pointer-events: none;
   transition: opacity 150ms ease-out, transform 150ms ease-out;

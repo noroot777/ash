@@ -71,7 +71,7 @@
 }
 
 .dtree-repo {
-  font-size: 11px;
+  font-size: var(--t-xs);
   color: var(--accent);
 }
 

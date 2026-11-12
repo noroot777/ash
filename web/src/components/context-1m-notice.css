@@ -10,7 +10,7 @@
   background: color-mix(in oklab, var(--amber) 7%, var(--panel));
   padding: 6px 8px;
   color: var(--amber);
-  font-size: 10.5px;
+  font-size: var(--t-xs);
   line-height: 1.5;
 }
 .context-1m-notice > svg { flex: none; margin-top: 2px; }
@@ -24,7 +24,7 @@
   background: var(--action);
   padding: 2px 9px;
   color: var(--on-action);
-  font-size: 10px;
+  font-size: var(--t-xs);
   white-space: nowrap;
 }
 .context-1m-notice-action > button:hover:not(:disabled) { background: var(--action-hover); }
