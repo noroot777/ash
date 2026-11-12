@@ -78,7 +78,6 @@
 .preview-assist-step b { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; font-weight: var(--w-medium); }
 .preview-assist-spin { flex: none; color: var(--accent); animation: preview-assist-spin 1s linear infinite; }
 @keyframes preview-assist-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .preview-assist-spin { animation: none; } }
 .preview-assist-verdict { margin: 0; color: var(--muted); font-size: var(--t-xs); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .preview-assist-verdict code { color: var(--ink); }
 .preview-assist :is(.preview-assist-say, .preview-assist-attempt) > summary { color: var(--muted); font-size: var(--t-xs); cursor: pointer; list-style-position: inside; }

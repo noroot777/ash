@@ -45,10 +45,10 @@ try {
   await page.emulateMedia({ reducedMotion: "reduce" });
   const reducedMotion = await rows.first().evaluate((row) => {
     const style = getComputedStyle(row);
-    return { property: style.transitionProperty, duration: style.transitionDuration };
+    return style.transitionDuration.split(",").map((value) => Number.parseFloat(value));
   });
-  assert.equal(reducedMotion.property, "none", "减弱动态效果时用户行不应保留 hover 过渡");
-  assert.equal(reducedMotion.duration, "0s", "减弱动态效果时用户行过渡时长应归零");
+  // 全局那条减少动效规则（motion-text.css）把时长压到 0.01ms，而不是把过渡整个去掉。
+  assert.ok(reducedMotion.every((seconds) => seconds < 0.001), `减弱动态效果时用户行过渡时长应近乎为零：${reducedMotion}`);
   await page.emulateMedia({ reducedMotion: "no-preference" });
 
   const roleOf = (name) => selectTrigger(page, `${name} 的实例角色`);

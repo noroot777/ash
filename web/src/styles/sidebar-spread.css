@@ -325,12 +325,6 @@
 
 .workspace-spread-dot--starred i svg { display: block; flex: 0 0 auto; }
 
-
-@media (prefers-reduced-motion: reduce) {
-  .workspace-spread-dots { animation: none; }
-  .workspace-spread-dot i { transition: none; }
-}
-
 .workspace-spread-hint {
   margin-left: 12px;
   color: var(--faint);
@@ -429,15 +423,6 @@
   }
   .workspace-spread-cell--body { display: none; }
   .workspace-spread-hint { display: none; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .workspace-sidebar.is-spread,
-  .workspace-spread-cell,
-  .workspace-shell.is-spread::after {
-    transition: none;
-  }
-  .workspace-spread-peek { animation: none; }
 }
 
 /* 「追问还没读到」那句限定：比正文弱一档，别抢备忘内容的注意力。 */

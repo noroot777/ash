@@ -488,10 +488,3 @@
 @media (max-width: 680px) {
   .agent-profile-group-default { display: none; }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .profile-row-menu,
-  .profile-row-menu.is-leaving,
-  .agent-profile-args-popover.is-anchored { animation-duration: 1ms; }
-  .agent-profile-fold > svg { transition: none; }
-}

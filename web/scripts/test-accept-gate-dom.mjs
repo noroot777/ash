@@ -461,12 +461,14 @@ try {
         const dot = document.createElement("span");
         dot.className = className;
         document.body.append(dot);
-        const animation = getComputedStyle(dot).animationName;
+        const style = getComputedStyle(dot);
+        // 全局那条减少动效规则（motion-text.css）把呼吸压到 0.01ms、只跑一遍，停在静止的样子。
+        const still = style.animationName === "none" || (Number.parseFloat(style.animationDuration) < 0.001 && style.animationIterationCount === "1");
         dot.remove();
-        return animation;
+        return still;
       });
     });
-    assert.deepEqual(animations, ["none", "none", "none", "none"]);
+    assert.deepEqual(animations, [true, true, true, true]);
     await page.close();
   }
   {

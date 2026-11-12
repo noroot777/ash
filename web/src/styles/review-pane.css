@@ -222,12 +222,6 @@
   margin-top: 4px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .insp-report .review-round__open-task {
-    transition: none;
-  }
-}
-
 /* 行：时间线里的一条。一行一条，右边是靠右对齐的灰字 */
 .insp-row {
   display: flex;

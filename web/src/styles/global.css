@@ -354,10 +354,6 @@ code,
   32% { opacity: 1; transform: translateY(-2px); }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .run-activity-signal i { animation: none; }
-}
-
 :focus-visible,
 .is-focus {
   outline: 1px solid var(--focus-ring);

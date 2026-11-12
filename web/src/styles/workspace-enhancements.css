@@ -40,10 +40,3 @@
 .workspace-sidebar-resizing .workspace-sidebar {
   transition: none;
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .workspace-sidebar,
-  .workspace-sidebar-resize-handle::after {
-    transition: none;
-  }
-}

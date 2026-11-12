@@ -229,21 +229,10 @@
   .groups-panel { width: calc(100vw - 16px); height: calc(100dvh - 16px); max-height: none; border-radius: 18px; }
 }
 
+/* 减少动效时悬停不上浮。 */
+:root[data-motion="reduce"] .create-project-mode:hover:not(:disabled),
+:root[data-motion="reduce"] .task-confirm-dialog:not(.handoff-dialog) > footer button:hover:not(:disabled) { transform: none; }
 @media (prefers-reduced-motion: reduce) {
-  .task-modal-scrim,
-  .overlay-scrim,
-  .duet-handoff-scrim,
-  .markdown-report-scrim,
-  .task-confirm-dialog:not(.handoff-dialog),
-  .command-palette,
-  .notes-panel,
-  .groups-panel,
-  .free-review-dialog,
-  .composer-preset-dialog,
-  .duet-handoff-modal,
-  .markdown-report-dialog { animation: none; }
-  .create-project-mode,
-  .task-confirm-dialog:not(.handoff-dialog) > footer button { transition: none; }
-  .create-project-mode:hover:not(:disabled),
-  .task-confirm-dialog:not(.handoff-dialog) > footer button:hover:not(:disabled) { transform: none; }
+  :root:not([data-motion="full"]) .create-project-mode:hover:not(:disabled),
+  :root:not([data-motion="full"]) .task-confirm-dialog:not(.handoff-dialog) > footer button:hover:not(:disabled) { transform: none; }
 }

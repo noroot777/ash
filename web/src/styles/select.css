@@ -148,8 +148,3 @@
   text-align: left;
 }
 .ui-dropdown-clear:hover { background: var(--hover-bg); color: var(--ink); }
-
-@media (prefers-reduced-motion: reduce) {
-  .ui-dropdown-panel, .ui-dropdown-panel.is-leaving { animation-duration: 1ms; }
-  .ui-select-caret { transition: none; }
-}

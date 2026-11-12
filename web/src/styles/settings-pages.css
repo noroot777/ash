@@ -79,8 +79,3 @@
   .settings-main .users-row::before,
   .settings-main .pmem-row::before { left: 14px; }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .settings-main .users-row,
-  .settings-main .pmem-row { transition: none; }
-}

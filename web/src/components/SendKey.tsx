@@ -19,6 +19,7 @@ import { createPortal } from "react-dom";
 import { ArrowUp, CaretDown, Clock, HourglassMedium, SpinnerGap, Stop } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "./HoverTip.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { motionReduced } from "../lib/useSwapText.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import "./send-key.css";
 
@@ -67,7 +68,6 @@ export type SendKeyProps = {
   className?: string;
 };
 
-const reduced = () => typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 const EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
 
 export function SendKey({ action, text, tip, blocked, busy = false, stop, halt, shortcut, size = "sm", onSend, settings, className = "" }: SendKeyProps) {
@@ -94,7 +94,7 @@ export function SendKey({ action, text, tip, blocked, busy = false, stop, halt, 
   const face = `${label}|${stopping}|${!!halt}`;
   const lastFace = useRef(face);
   const before = useRef<{ main: DOMRect; others: [Element, DOMRect][] } | null>(null);
-  if (face !== lastFace.current && main.current && root.current?.parentElement && !reduced()) {
+  if (face !== lastFace.current && main.current && root.current?.parentElement && !motionReduced()) {
     const others = [...root.current.parentElement.children].filter((node) => node !== root.current);
     before.current = { main: main.current.getBoundingClientRect(), others: [...others, opt.current!].filter(Boolean).map((node) => [node, node.getBoundingClientRect()]) };
   }

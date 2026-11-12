@@ -221,8 +221,3 @@
     backdrop-filter: none;
   }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .conversation-input-tick { transition: none; }
-  .conversation-input-menu { animation: none; }
-}

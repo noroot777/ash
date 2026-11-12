@@ -107,12 +107,5 @@
 .task-tool-raw[open] > pre { animation: task-trace-unfold var(--dur-2) var(--ease-out); }
 @keyframes task-trace-unfold { from { opacity: 0; transform: translateY(-4px); } }
 
-:root[data-motion="reduce"] :is(.task-execution-caret, .task-execution-block > summary, .task-tool-line > summary, .task-tool-raw > summary) { transition: none; }
-:root[data-motion="reduce"] :is(.task-execution-events, .task-turn-process-body, .task-tool-more, .task-tool-raw > pre) { animation: none; }
-@media (prefers-reduced-motion: reduce) {
-  :root:not([data-motion="full"]) :is(.task-execution-caret, .task-execution-block > summary, .task-tool-line > summary, .task-tool-raw > summary) { transition: none; }
-  :root:not([data-motion="full"]) :is(.task-execution-events, .task-turn-process-body, .task-tool-more, .task-tool-raw > pre) { animation: none; }
-}
-
 /* 子智能体抽屉里「执行中，内容实时更新」前面那个小点（NativeAgentConversation）。折叠条上已经不用它了。 */
 .task-execution-pulse { width: 3px; height: 3px; flex: none; border-radius: 50%; background: currentColor; opacity: .72; }

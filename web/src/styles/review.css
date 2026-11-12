@@ -161,4 +161,3 @@
 .diff-layout-toggle button[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); }
 .single-review-more-lines { position:sticky; left:0; width:100%; min-width:612px; height:32px; border:0; border-top:1px solid var(--line); background:var(--panel); color:var(--accent); font-size:9.5px; }
 @media (max-width:760px) { .single-review-facts,.single-review-diff-layout,.accepted-snapshot-card dl { grid-template-columns:1fr; } .single-review-files > div { max-height:220px; } }
-@media (prefers-reduced-motion:reduce) { .single-review-workspace * { scroll-behavior:auto; } .review-meta-bar__toggle > svg:last-child { transition:none; } }

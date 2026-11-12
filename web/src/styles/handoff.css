@@ -343,11 +343,6 @@
   .handoff-target-row { flex-wrap: wrap; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .handoff-approval-alert,
-  .handoff-dialog,
-  .handoff-progress-orbit i { animation: none; }
-}
 .handoff-bulk-dialog > .handoff-route-card { margin-bottom: 10px; }
 .handoff-bulk-result { padding-bottom: 8px; }
 .handoff-bulk-result .handoff-bulk-failures { width: min(520px, 100%); margin-top: 18px; text-align: left; }

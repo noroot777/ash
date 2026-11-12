@@ -138,9 +138,6 @@
   .team-accept-actions { width: 100%; justify-content: flex-end; }
   .review-dispatch-fields { grid-template-columns: 1fr; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .team-review-record svg { transition: none; }
-}
 
 /* 「合并后不提交」那一档欠着的那一步：验收台里的状态卡 + 动作行上那个「待提交」徽记。
    判据与来由见 web/src/review/PendingMergeCard.tsx 顶部（对话区那一侧只留 TaskHeader

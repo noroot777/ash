@@ -1,6 +1,7 @@
 import { useRef, type RefObject } from "react";
 import { ArrowDown, ArrowUp } from "@phosphor-icons/react";
 import { useScrollEdges } from "../lib/useScrollEdges.ts";
+import { motionReduced } from "../lib/useSwapText.ts";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { useUserScrolling } from "../lib/useUserScrolling.ts";
 import type { ConversationInput } from "../task-detail/conversationInputs.ts";
@@ -35,7 +36,7 @@ export function ConversationScrollControls({
     if (!element) return;
     if (target === "top") noteUserScrollIntent(true);
     else resume();
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const reducedMotion = motionReduced();
     element.scrollTo({
       top: target === "top" ? 0 : element.scrollHeight,
       behavior: reducedMotion ? "auto" : "smooth",

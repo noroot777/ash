@@ -29,7 +29,6 @@
 /* 刚发出去的那一句（run-1）：上移 4px 淡入。 */
 .task-message--user.is-fresh { animation: user-bubble-in var(--dur-2) var(--ease-out) backwards; }
 @keyframes user-bubble-in { from { opacity: 0; transform: translateY(4px); } }
-@media (prefers-reduced-motion: reduce) { .task-message--user.is-fresh { animation: none; } }
 /* 放字：新放出来的那几个字淡入，别的什么都不动，没有光标（run-4，lib/useSmoothText.ts）。
    只动透明度：会话里任何逐帧改高度的动画都会和贴底滚动抢。 */
 .is-fresh-text { animation: fresh-text-in 280ms linear both; }
@@ -39,7 +38,6 @@
 .task-message--agent.is-just-ended .turn-acts { opacity: 1; }
 .task-message--agent.is-just-ended .task-turn-process > summary { animation: turn-settle-in var(--dur-2) var(--ease-out) backwards; }
 @keyframes turn-settle-in { from { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .task-message--agent.is-just-ended .task-turn-process > summary { animation: none; } }
 .task-message--agent:has(.turn-acts) { margin-bottom: 30px; }
 @media (hover: none) { .turn-meta, .turn-acts { opacity: 1; } }
 .task-message header button,
@@ -205,10 +203,6 @@
   mask-image: linear-gradient(to bottom, #000 calc(100% - 52px), transparent);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .review-report-more svg { transition: none; }
-}
-
 /* 执行过程那个折叠块（工具、思考、提示、异常）的样式在 execution-trace.css。 */
 /* 一条气泡的尾栏：会话 id、resume 命令、三颗账目胶囊全在这一行。 */
 .task-message-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px; }
@@ -327,7 +321,6 @@
 .task-message-attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 
 .task-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-
 
 @media (max-width: 560px) {
   .task-message--user { padding-left: 10px; }

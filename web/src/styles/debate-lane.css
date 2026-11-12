@@ -102,8 +102,10 @@
   50% { opacity: 1; }
 }
 
+/* 减少动效时「在说话」停在半亮。 */
+:root[data-motion="reduce"] .debate-lane-strip i.is-speaking { animation: none; opacity: .55; }
 @media (prefers-reduced-motion: reduce) {
-  .debate-lane-strip i.is-speaking { animation: none; opacity: .55; }
+  :root:not([data-motion="full"]) .debate-lane-strip i.is-speaking { animation: none; opacity: .55; }
 }
 
 /* ——— 全宽阅读态 ——— */

@@ -18,8 +18,10 @@
   100% { background: transparent; }
 }
 
+/* 减少动效时不闪，直接停在淡染底上。 */
+:root[data-motion="reduce"] .provider-row.is-just-edited { animation: none; background: color-mix(in lch, var(--accent-soft) 45%, var(--panel)); }
 @media (prefers-reduced-motion: reduce) {
-  .provider-row.is-just-edited { animation: none; background: color-mix(in lch, var(--accent-soft) 45%, var(--panel)); }
+  :root:not([data-motion="full"]) .provider-row.is-just-edited { animation: none; background: color-mix(in lch, var(--accent-soft) 45%, var(--panel)); }
 }
 
 .providers-intro {
@@ -374,12 +376,6 @@ button.provider-mount-state:hover {
 .t-acc-chevron path { vector-effect: non-scaling-stroke; }
 .t-acc[data-open="true"] .t-acc-chevron {
   transform: scaleY(-1);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .t-acc-panel, .t-acc-panel-inner, .t-acc-chevron {
-    transition: none !important;
-  }
 }
 
 .provider-context-1m {

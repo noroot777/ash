@@ -225,11 +225,3 @@
 }
 
 .workspace-handoff-task:active { background: var(--sel-bg); }
-
-@media (prefers-reduced-motion: reduce) {
-  .workspace-fold,
-  .workspace-fold > svg,
-  .workspace-other-project-head,
-  .workspace-other-project-head > svg,
-  .workspace-handoff-machine > button { transition: none; }
-}

@@ -99,10 +99,3 @@
 .monitor-composer__ending-options input { width: auto; height: auto; }
 .monitor-composer__ending-pattern { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--t-xs); }
 .monitor-composer__actions { display: flex; justify-content: flex-end; gap: 6px; }
-
-@media (prefers-reduced-motion: reduce) {
-  .monitor-card,
-  .monitor-card__fold,
-  .monitor-card__fold > svg { transition: none; }
-}
-

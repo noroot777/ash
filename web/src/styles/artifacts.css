@@ -73,8 +73,3 @@
   .artifacts__open.insp-tool { opacity: 1; }
   .artifacts__file .insp-meta { visibility: visible; }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .artifacts__thumb,
-  .artifacts__open.insp-tool { transition: none; }
-}

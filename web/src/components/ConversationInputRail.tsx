@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type PointerEvent, type RefObject, type WheelEvent } from "react";
 import { Paperclip } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { motionReduced } from "../lib/useSwapText.ts";
 import {
   REQUIREMENT_INPUT_ID,
   conversationInputHeadline,
@@ -194,7 +195,7 @@ export function ConversationInputRail({
     // 落点就是底部（点的是最后一条）也一样脱离跟随：人是来看这颗气泡的，接着长出来的回复
     // 要是把视口往下带，它转眼就被顶出屏幕。想接着跟，按 ↓ 或者自己滚到底。
     onReaderScroll(true);
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const reducedMotion = motionReduced();
     container.scrollTo({ top: target, behavior: reducedMotion ? "auto" : "smooth" });
     if (bubble) flash(bubble);
   };

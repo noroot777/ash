@@ -121,13 +121,3 @@
 .review-screenshot-strip__item span { display: block; overflow: hidden; padding: 4px 5px; color: var(--muted); font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
 
 @keyframes review-evidence-drawer-in { from { transform: translateX(16px); opacity: 0; } to { transform: none; opacity: 1; } }
-
-@media (prefers-reduced-motion: reduce) {
-  .review-round svg {
-    transition: none;
-  }
-
-  .review-evidence-drawer {
-    animation: none;
-  }
-}

@@ -85,11 +85,6 @@
   .side-chat-ans__acts { opacity: 1; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .side-chat-ans__acts,
-  .side-chat-input { transition: none; }
-}
-
 @media (max-width: 720px) {
   .inspector-host:has(.side-chat-pane) { position: absolute; right: 0; top: 0; bottom: 0; width: min(100%, 430px); min-width: 0; z-index: 12; box-shadow: -8px 0 28px #0002; }
   .inspector-layout:has(.side-chat-pane) { position: relative; }

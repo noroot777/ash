@@ -59,8 +59,3 @@
 .native-work__todo-list > li[data-status="failed"] .native-work__todo-icon { color: var(--red); }
 .native-work__todo-title { min-width: 0; flex: 1 1 auto; color: var(--ink); overflow-wrap: anywhere; }
 .native-work__todo-list > li[data-status="completed"] .native-work__todo-title { color: var(--muted); }
-
-@media (prefers-reduced-motion: reduce) {
-  .native-work__fold,
-  .native-work__fold > svg { transition: none; }
-}

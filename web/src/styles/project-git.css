@@ -171,10 +171,3 @@
 .project-git-workbench-entry > svg { color:var(--faint); }
 .project-git-workbench-entry:hover { color:var(--ink); }
 .project-git-panel__note { flex:0 0 auto; margin:0; padding:0 8px; color:var(--faint); font-size:var(--t-xs); line-height:1.5; }
-
-@media (prefers-reduced-motion: reduce) {
-  .project-git-panel { animation:none; }
-  .workspace-git-context,
-  .project-git-action,
-  .project-git-workbench-entry { transition:none; }
-}

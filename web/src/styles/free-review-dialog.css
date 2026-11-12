@@ -74,7 +74,3 @@
 .free-review-rounds { display: grid; gap: 8px; margin-top: 14px; }
 .free-review-rounds > div { display: flex; align-items: center; gap: 6px; color: var(--muted); }
 .free-review-rounds > small { color: var(--muted); font-size: var(--t-xs); line-height: 1.55; }
-
-@media (prefers-reduced-motion: reduce) {
-  .free-review-note { transition: none; }
-}

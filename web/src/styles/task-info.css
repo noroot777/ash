@@ -348,11 +348,3 @@ button.insp-req:focus-visible {
 .task-inspector > .insp-note {
   margin: 14px 0 0;
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .insp-bar > i,
-  .insp-req,
-  .insp-kv .insp-dropdown .ui-dropdown-trigger {
-    transition: none;
-  }
-}

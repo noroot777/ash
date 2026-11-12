@@ -65,4 +65,3 @@
 @media (max-width:600px) { .duet-gate-conclusions,.duet-handoff-grid { grid-template-columns:1fr; }.duet-control-actions > .duet-handoff-bar,.duet-control-actions > .duet-handoff-stack { min-width:100%; }/* 竖过来之后交叉轴就是宽度:stretch 让标题块和它底下那串状态卡一样宽,否则标题只占
    自己那道地板宽,左边一列参差不齐。 */
   .duet-terminal-acceptance { align-items:stretch; flex-direction:column; }.duet-terminal-acceptance .team-accept-actions { width:100%; justify-content:flex-end; } }
-@media (prefers-reduced-motion:reduce) { .duet-typing i { animation:none; } }

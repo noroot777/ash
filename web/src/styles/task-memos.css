@@ -59,10 +59,3 @@
 @media (hover: none) {
   .task-memo-card__actions { opacity: 1; }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .task-memo-card,
-  .task-memo-card__actions,
-  .task-memo-composer textarea,
-  .task-memo-card__edit textarea { transition: none; }
-}

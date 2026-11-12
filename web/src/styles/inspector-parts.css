@@ -425,17 +425,6 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .insp-val,
-  .insp-go,
-  .insp-btn,
-  .insp-tool,
-  .insp-val > svg,
-  .insp-go__chev {
-    transition: none;
-  }
-}
-
 /* 用公共件拼起来的那几格的外层：左右 16 的边，顶上紧贴面板头 */
 .insp-pane {
   padding: 4px 16px 20px;

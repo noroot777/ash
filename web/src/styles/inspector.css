@@ -435,10 +435,3 @@
     display: none;
   }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .inspector-host,
-  .inspector-host__resize-handle::after {
-    transition: none;
-  }
-}

@@ -369,15 +369,6 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .workspace-sidebar,
-  .workspace-team-caret svg,
-  .workspace-other-project-head svg,
-  .workspace-toast {
-    transition: none;
-  }
-}
-
 /* 窄屏（手机、飞书里点开 ash 链接）：列表和内容一次只给一样（useNarrowPane.ts），不再挤成三栏。 */
 .workspace-narrow-back {
   display: flex;

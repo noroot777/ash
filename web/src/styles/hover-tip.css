@@ -42,9 +42,3 @@
 @keyframes ui-hover-tip-in {
   from { opacity: 0; }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .ui-hover-tip {
-    animation: none;
-  }
-}

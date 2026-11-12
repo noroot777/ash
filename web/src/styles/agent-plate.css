@@ -46,9 +46,3 @@
   position: relative;
   z-index: 1;
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .agent-plate-word {
-    animation-duration: 1ms;
-  }
-}

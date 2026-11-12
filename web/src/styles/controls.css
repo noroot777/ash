@@ -410,7 +410,3 @@ header:hover .task-pin,
    「成功/失败」这两种状态怎么现形——颜色跟着 currentColor 走，图标和文字一起变。 */
 .copy-button.is-copied { color: var(--green); }
 .copy-button.is-copy-failed { color: var(--red); }
-
-@media (prefers-reduced-motion: reduce) {
-  .task-pin { transition: none; }
-}

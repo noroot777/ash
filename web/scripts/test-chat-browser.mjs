@@ -150,7 +150,8 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
   await page.screenshot({ path: `${output}/chat-mobile.png`, animations: "disabled" });
   await page.emulateMedia({ reducedMotion: "reduce" });
-  assert.equal(await page.locator(".chat-message").first().evaluate((element) => getComputedStyle(element).animationName), "none");
+  // 全局那条减少动效规则（motion-text.css）把进场动画压到 0.01ms、只跑一遍。
+  assert.ok(Number.parseFloat(await page.locator(".chat-message").first().evaluate((element) => getComputedStyle(element).animationDuration)) < 0.001);
   await page.getByRole("button", { name: "新建群聊", exact: true }).click();
   await page.getByLabel("群聊名称", { exact: true }).fill("另一个群");
   await page.getByRole("button", { name: "添加成员", exact: true }).click();

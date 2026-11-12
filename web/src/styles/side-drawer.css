@@ -25,7 +25,14 @@
 @media (max-width: 920px) {
   .side-drawer { width: min(720px,92%); }
 }
+/* 减少动效时整个不动画：SideDrawer.tsx 同一口径判到之后靠定时器收尾，不等 animationend。 */
+:root[data-motion="reduce"] .side-drawer,
+:root[data-motion="reduce"] .side-drawer.is-closing,
+:root[data-motion="reduce"] .side-drawer-scrim,
+:root[data-motion="reduce"] .side-drawer-scrim.is-closing { animation: none; }
 @media (prefers-reduced-motion: reduce) {
-  .side-drawer, .side-drawer.is-closing,
-  .side-drawer-scrim, .side-drawer-scrim.is-closing { animation: none; }
+  :root:not([data-motion="full"]) .side-drawer,
+  :root:not([data-motion="full"]) .side-drawer.is-closing,
+  :root:not([data-motion="full"]) .side-drawer-scrim,
+  :root:not([data-motion="full"]) .side-drawer-scrim.is-closing { animation: none; }
 }

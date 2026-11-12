@@ -5,6 +5,7 @@ import type { TaskListItem } from "@ash/shared";
 import { taskDisplayStatus } from "@ash/shared";
 import { ArrowDown, ArrowUpRight, CheckCircle, Hash, Lightning } from "@phosphor-icons/react";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
+import { motionReduced } from "../lib/useSwapText.ts";
 import { chatTailKey } from "../lib/chatTailKey.ts";
 import { useScrollEdges } from "../lib/useScrollEdges.ts";
 
@@ -18,7 +19,7 @@ export function ChatMessages({ snapshot, onTask, onMention }: { snapshot: ChatSn
     resume();
     const element = scroll.current;
     if (!element) return;
-    element.scrollTo({ top: element.scrollHeight, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    element.scrollTo({ top: element.scrollHeight, behavior: motionReduced() ? "auto" : "smooth" });
   };
   return <div className="chat-feed-wrap"><div className="chat-feed" ref={scroll} role="log" aria-label="群聊消息" aria-live="polite">
     <div className="chat-welcome"><span className="chat-welcome-icon"><Hash size={32} weight="bold" /></span><h2>{snapshot.room.name}，从一句话开始。</h2><p>想法留在这里，复杂的工作交给任务。<br />点名才加入对话，不点名就安静待命。</p><div>{snapshot.room.members.length > 1 && <button type="button" onClick={() => onMention(ALL_MENTION_ALIASES[0])}>@all</button>}{snapshot.room.members.map((member) => <button type="button" key={member.id} onClick={() => onMention(member.name)}>@{member.name}</button>)}</div></div>

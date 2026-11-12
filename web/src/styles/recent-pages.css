@@ -288,7 +288,8 @@
   .auth-choice::before { left: 14px; }
 }
 
+/* 减少动效时悬停不上浮。 */
+:root[data-motion="reduce"] .auth-choice:hover:not(:disabled) { transform: none; }
 @media (prefers-reduced-motion: reduce) {
-  .auth-choice { transition: none; }
-  .auth-choice:hover:not(:disabled) { transform: none; }
+  :root:not([data-motion="full"]) .auth-choice:hover:not(:disabled) { transform: none; }
 }

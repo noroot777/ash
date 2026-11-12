@@ -670,8 +670,3 @@
   .settings-field > span { width: 100%; }
   .settings-field input, .settings-field > .path-field { width: 100%; }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .settings-resume-dots .is-running,
-  .settings-resume-dots .is-queued { animation: none; opacity: 1; transform: none; }
-}

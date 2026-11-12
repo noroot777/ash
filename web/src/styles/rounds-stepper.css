@@ -25,7 +25,3 @@
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .rounds-stepper > button { transition: none; }
-}

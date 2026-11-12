@@ -200,9 +200,3 @@
   .workspace-spread-toggle,
   .workspace-sidebar-collapse { display: none; }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .workspace-new-task,
-  .workspace-side-icon { transition: none; }
-  .color-theme-menu { animation: none; }
-}

@@ -194,6 +194,3 @@
   .team-attention-list > article { align-items: flex-start; flex-direction: column; gap: 6px; }
   .team-attention-list .team-question-actions { align-self: flex-end; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .team-timeline-summary > svg { transition: none; }
-}

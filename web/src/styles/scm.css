@@ -409,16 +409,6 @@
   outline-offset: -2px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .scm-group__bulk,
-  .scm-row,
-  .scm-row__actions,
-  .scm-row__actions button,
-  .scm-group__bulk button {
-    transition: none;
-  }
-}
-
 @media (hover: none) {
   .scm-group__bulk,
   .scm-row__actions {

@@ -42,18 +42,12 @@
 .send-key-glyph > svg.is-spinning.is-on { animation: send-key-spin 800ms linear infinite; }
 @keyframes send-key-spin { to { rotate: 360deg; } }
 
-@media (prefers-reduced-motion: reduce) {
-  .send-key-text, .send-key > .send-key-halt { animation: none; }
-  .send-key-glyph > svg { transition: none; }
-}
-
 /* 尖角点开的那一层（发送设置 / 启动设置）：上面选档，下面是这一档要填的那一样 */
 .send-key-panel { position: fixed; z-index: 50; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; width: 328px; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); overflow-y: auto; padding: 4px; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow), var(--menu-shadow); color: var(--ink); opacity: 0; transform: translateY(4px) scale(0.98); transform-origin: bottom right; }
 .send-key-panel.is-in { opacity: 1; transform: none; transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out); }
 .send-key-panel:focus { outline: 0; }
 .send-key-panel p { margin: 0; padding: 0 4px 2px; color: var(--muted); font-size: var(--t-xs); line-height: 1.6; }
 .send-key-panel p:empty { display: none; }
-@media (prefers-reduced-motion: reduce) { .send-key-panel, .send-key-panel.is-in { transform: none; transition: none; } }
 
 /* 一列可选的档：左边名字，右边一句说明（启动设置）；或一组分段（发送设置） */
 .send-key-choices { display: grid; }

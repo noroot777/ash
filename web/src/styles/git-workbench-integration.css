@@ -208,7 +208,6 @@ section.gwb-rebase-dialog.gwb-design { width: 720px; }
   .gwb-design .oplog-time { flex: 0 0 45px; }
 }
 @media (max-width: 480px) { .gwb-design .sync-group .top-btn span { display: none; } }
-@media (prefers-reduced-motion: reduce) { .gwb-design *, .gwb-design *::before, .gwb-design *::after { transition: none !important; animation: none !important; } }
 .gwb-design .gwb-tag-info { display: flex; align-items: center; flex: 1; gap: 12px; min-width: 0; }
 .gwb-design .gwb-tag-info strong { font: 600 11.5px var(--font-mono); min-width: 120px; }
 .gwb-design .gwb-tag-info span { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; color: var(--faint); }

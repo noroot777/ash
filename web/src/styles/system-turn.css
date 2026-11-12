@@ -246,11 +246,10 @@ button.notice-line-button:focus-visible { outline: 2px solid var(--focus-ring); 
   .notice-line-tail,
   .turn-receipts { opacity: 1; }
 }
+/* 减少动效时流光换成实色字。 */
+:root[data-motion="reduce"] .notice-line-text.is-live { animation: none; color: var(--muted); background: none; }
 @media (prefers-reduced-motion: reduce) {
-  .notice-line-text.is-live { animation: none; color: var(--muted); background: none; }
-  .notice-line-detail,
-  .review-milestone-body,
-  .turn-receipt-log { animation: none; }
+  :root:not([data-motion="full"]) .notice-line-text.is-live { animation: none; color: var(--muted); background: none; }
 }
 
 /* 团队时间线上的回合边界：一条很淡的分隔线和说明。 */

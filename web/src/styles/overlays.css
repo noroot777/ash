@@ -681,8 +681,3 @@
   .notes-list-tools > button { grid-column: 2; grid-row: 1; } .notes-status-filter { grid-column: 1 / -1; grid-row: 2; }
   .notes-panel > footer > span { display: none; }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .note-task-badge,
-  .note-task-arrow { transition: none; }
-}

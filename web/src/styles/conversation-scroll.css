@@ -44,7 +44,3 @@
 
 .conversation-scroll-button--top.is-hidden { transform: translate(-50%, -4px); }
 .conversation-scroll-button--bottom.is-hidden { transform: translate(-50%, 4px); }
-
-@media (prefers-reduced-motion: reduce) {
-  .conversation-scroll-button { transition: none; }
-}

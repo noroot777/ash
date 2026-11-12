@@ -126,10 +126,10 @@ try {
   for (const selector of [".create-project-mode", ".task-confirm-dialog > footer button", ".auth-choice", ".settings-main .users-row", ".settings-main .pmem-row"]) {
     const motion = await page.locator(selector).first().evaluate((node) => {
       const style = getComputedStyle(node);
-      return { property: style.transitionProperty, duration: style.transitionDuration };
+      return style.transitionDuration.split(",").map((value) => Number.parseFloat(value));
     });
-    assert.equal(motion.property, "none", `${selector} 在减弱动态效果时不应保留过渡`);
-    assert.equal(motion.duration, "0s", `${selector} 在减弱动态效果时过渡时长应归零`);
+    // 全局那条减少动效规则（motion-text.css）把时长压到 0.01ms，而不是把过渡整个去掉。
+    assert.ok(motion.every((seconds) => seconds < 0.001), `${selector} 在减弱动态效果时过渡时长应近乎为零：${motion}`);
     await page.locator(selector).first().hover();
     assert.equal(await page.locator(selector).first().evaluate((node) => getComputedStyle(node).transform), "none");
   }
