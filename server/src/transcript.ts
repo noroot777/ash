@@ -213,7 +213,8 @@ function validTraceEvent(event: unknown): boolean {
       return isString(e.message)
         && (e.scope === undefined || e.scope === "session")
         && (e.level === undefined || e.level === "notice")
-        && (e.affectsTurn === undefined || e.affectsTurn === false);
+        && (e.affectsTurn === undefined || e.affectsTurn === false)
+        && (e.compaction === undefined || e.compaction === "start" || e.compaction === "done" || e.compaction === "failed");
     case "usage":
       // 口径和判据都归 shared/src/usage.ts —— 账本那边怎么定义，这里就怎么验。
       // 缺省 = 标记出现之前的旧 trace,仍然合法。

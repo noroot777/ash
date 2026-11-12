@@ -54,7 +54,8 @@ export function trackSessionWaiting(
   event: AgentEvent,
 ): void {
   const held = waiting.get(sessionId);
-  if (event.kind === "error" && isExecutionNotice(event)) {
+  // 压缩那两步不是在等上游(见 shared 的 resumesWaiting),照常走下面的解除。
+  if (event.kind === "error" && isExecutionNotice(event) && !event.compaction) {
     if (!turnStartedAt) return;
     // 同一个持有者的同一轮才接着往后攒;换台或换轮都从这一条重新起(认领见 WaitingOwner)。
     const kept = held && held.owner === owner && held.turnStartedAt === turnStartedAt ? held.notices : [];

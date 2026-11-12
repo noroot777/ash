@@ -23,7 +23,8 @@ const RESUMES: ReadonlySet<AgentEvent["kind"]> = new Set<AgentEvent["kind"]>([
  * `session` / `context` / `system` 不算:换 thread id、上下文水位、会话旁注都不是上游在回话。
  */
 export function resumesWaiting(event: AgentEvent): boolean {
-  if (event.kind === "error") return event.level !== "notice";
+  // 压缩的开始/压完虽然也走 notice 那一档,却不是「上游在重试」:那是 CLI 在报真实进展。
+  if (event.kind === "error") return event.level !== "notice" || !!event.compaction;
   return RESUMES.has(event.kind);
 }
 

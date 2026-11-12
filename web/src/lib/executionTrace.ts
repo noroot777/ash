@@ -8,6 +8,7 @@
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import type { NativeWorkEvent } from "@ash/shared";
+import { mergeCompaction } from "./compaction.ts";
 
 export { isVisibleExecutionEvent };
 
@@ -174,7 +175,7 @@ export function hasMoreThanSummary(event: ExecutionEvent, summary: string): bool
  * 返回新数组而不是就地改:调用方里既有可变的段落对象,也有 duet 那种 React state。
  */
 export function appendExecutionEvent(events: ExecutionEvent[], event: ExecutionEvent): ExecutionEvent[] {
-  if (event.kind !== "thinking") return [...events, event];
+  if (event.kind !== "thinking") return mergeCompaction(events, event) ?? [...events, event];
   let index = events.length - 1;
   while (index >= 0 && !isVisibleExecutionEvent(events[index]!)) index -= 1;
   const previous = events[index];

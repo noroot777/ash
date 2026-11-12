@@ -1,5 +1,6 @@
 import type { ContextUsage, Session, TokenUsage } from "@ash/shared";
 import type { ConversationItem } from "../conversationModel.ts";
+import { COMPACTING, isCompactionEvent } from "../../lib/compaction.ts";
 
 /**
  * 右侧「信息」格要的那几样「最近这一轮」的事实：本轮用量、上下文水位、它是哪条会话、此刻
@@ -21,16 +22,17 @@ export interface InfoRunFacts {
 
 export const EMPTY_RUN_FACTS: InfoRunFacts = { turnUsage: null, turnLabel: null, session: null, context: null, compacting: false };
 
-// 服务端（server/src/executors/claude-stream.ts）把 claude 的 `status:"compacting"` 心跳抬成
-// 一行正文「> 正在压缩上下文…」，压完补一行「> 上下文已压缩。」；失败走 error 事件，回合
-// 照常收口。所以「此刻在压」= 回合还开着，且最后一次开压之后还没有收口那一行。
-const COMPACT_START = "正在压缩上下文…";
-const COMPACT_DONE = "上下文已压缩。";
-
+// 「此刻在压」= 回合还开着，执行过程里最后一次压缩那一步还停在「在压缩上下文」。压没压成，
+// 服务端都会接着报一条（压完并成「压缩了上下文」，没压成是一条异常）——异常也算收口。
+// 只看结构化的那一步，不看正文：正文里引一句「正在压缩上下文…」不等于正在压。
 function compactingNow(item: Extract<ConversationItem, { kind: "agent" }>): boolean {
   if (item.endedAt) return false;
-  const started = item.markdown.lastIndexOf(COMPACT_START);
-  return started >= 0 && item.markdown.lastIndexOf(COMPACT_DONE) < started;
+  let compacting = false;
+  for (const event of item.segments.flatMap((segment) => segment.events)) {
+    if (isCompactionEvent(event)) compacting = event.detail === COMPACTING;
+    else if (event.kind === "error") compacting = false;
+  }
+  return compacting;
 }
 
 export function latestRunFacts(items: readonly ConversationItem[]): InfoRunFacts {

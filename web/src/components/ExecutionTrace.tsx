@@ -5,7 +5,7 @@ import { describeEvent, isFlatStep, liveLabel, mergeRetryRuns, pastSummary, type
 import { useSwapText } from "../lib/useSwapText.ts";
 import { useNow } from "../lib/useNow.ts";
 import { useStagger } from "../lib/motion/index.ts";
-import { isCompactionEvent } from "../task-detail/compactionMarkers.ts";
+import { isCompactionEvent } from "../lib/compaction.ts";
 import { formatDuration } from "../task-detail/utils.ts";
 import "./live-strip.css";
 

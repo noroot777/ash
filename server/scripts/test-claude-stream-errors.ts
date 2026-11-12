@@ -150,10 +150,17 @@ console.log("4) 压缩(/compact 与自动压缩)的过程与成败必须显式�
     },
     { type: "result", subtype: "success", session_id: "sess-4" },
   ]);
-  const text = failed.filter((e) => e.kind === "text").map((e) => e.text).join("");
-  const errors = failed.filter((e) => e.kind === "error");
-  if (text.includes("正在压缩上下文")) ok("压缩开始时说了一声");
-  else fail(`压缩开始没有任何提示:${JSON.stringify(text)}`);
+  // 开始/压完是结构化的过程提示(compaction 字段),**不进正文**:正文是智能体说的话,展示端
+  // 从正文里认提示的话,回复里恰好引了这句就会被摘掉(第 1 轮审查 F1)。
+  const phases = (list: typeof failed) => list.flatMap((e) => e.kind === "error" && e.compaction ? [e.compaction] : []);
+  const errors = failed.filter((e) => e.kind === "error" && e.level !== "notice");
+  if (phases(failed).join() === "start,failed") ok("压缩开始时说了一声,失败那条也带着 compaction");
+  else fail(`压缩过程信号不对:${JSON.stringify(phases(failed))}`);
+  if (!failed.some((e) => e.kind === "text")) ok("压缩提示不写进正文");
+  else fail(`压缩提示写进了正文:${JSON.stringify(failed.filter((e) => e.kind === "text"))}`);
+  const start = failed.find((e) => e.compaction === "start");
+  if (start?.level === "notice" && start.affectsTurn === false) ok("压缩开始是执行过程里的一步,不算故障");
+  else fail(`压缩开始的分级不对:${JSON.stringify(start)}`);
   if (errors.length === 1 && errors[0].message.includes("503")) ok(`压缩失败抬成了 error:${errors[0].message}`);
   else fail(`压缩失败没有报错(收到 ${errors.length} 条:${errors[0]?.message})`);
   if (errors[0]?.affectsTurn === false) ok("压缩失败只影响展示，不把成功回合判失败");
@@ -164,10 +171,9 @@ console.log("4) 压缩(/compact 与自动压缩)的过程与成败必须显式�
     { type: "system", subtype: "status", status: null, compact_result: "success", session_id: "sess-5" },
     { type: "result", subtype: "success", session_id: "sess-5" },
   ]);
-  const okText = succeeded.filter((e) => e.kind === "text").map((e) => e.text).join("");
-  if (okText.includes("上下文已压缩")) ok("压成了也说一声");
-  else fail(`压缩成功没有任何提示:${JSON.stringify(okText)}`);
-  if (!succeeded.filter((e) => e.kind === "error").length) ok("压缩成功不报错");
+  if (phases(succeeded).join() === "start,done") ok("压成了也说一声");
+  else fail(`压缩成功没有任何提示:${JSON.stringify(phases(succeeded))}`);
+  if (!succeeded.filter((e) => e.kind === "error" && e.level !== "notice").length) ok("压缩成功不报错");
   else fail("压缩成功却报了 error");
 
   // `status:"compacting"` 是压缩期间每隔几秒重发的**心跳**,不是「又压了一次」。
@@ -181,9 +187,9 @@ console.log("4) 压缩(/compact 与自动压缩)的过程与成败必须显式�
     { type: "system", subtype: "status", status: null, compact_result: "success", session_id: "sess-6" },
     { type: "result", subtype: "success", session_id: "sess-6" },
   ]);
-  const beats = heartbeat.filter((e) => e.kind === "text").map((e) => e.text).join("");
-  const started = beats.split("正在压缩上下文").length - 1;
-  const ended = beats.split("上下文已压缩").length - 1;
+  const beats = phases(heartbeat);
+  const started = beats.filter((phase) => phase === "start").length;
+  const ended = beats.filter((phase) => phase === "done").length;
   if (started === 2 && ended === 2) ok("心跳去重:压两次就报两次开始、两次结束");
   else fail(`压缩提示数量不对(开始 ${started} 次、结束 ${ended} 次,期望各 2 次)`);
 
@@ -200,9 +206,9 @@ console.log("4) 压缩(/compact 与自动压缩)的过程与成败必须显式�
     { type: "system", subtype: "status", status: null, compact_result: "success", session_id: "sess-7" },
     { type: "result", subtype: "success", session_id: "sess-7" },
   ]);
-  const skipText = skipped.filter((e) => e.kind === "text").map((e) => e.text).join("");
-  const skipStarted = skipText.split("正在压缩上下文").length - 1;
-  const skipEnded = skipText.split("上下文已压缩").length - 1;
+  const skipText = phases(skipped);
+  const skipStarted = skipText.filter((phase) => phase === "start").length;
+  const skipEnded = skipText.filter((phase) => phase === "done").length;
   if (skipStarted === 2) ok("被拦下的那次不影响下一次:两次尝试各报一次开始");
   else fail(`跳过路径后开始提示报了 ${skipStarted} 次,期望 2 次:${JSON.stringify(skipText)}`);
   if (skipEnded === 1) ok("没有结论的那次不谎报「已压缩」");

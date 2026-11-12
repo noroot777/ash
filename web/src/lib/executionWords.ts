@@ -6,7 +6,7 @@
 // 都是「文件」时后一类省掉名词。只有一步时直接说那一步:「读了 ReplyBox.tsx」。
 import { isVisibleExecutionEvent, type ExecutionEvent } from "./executionTrace.ts";
 import { describeTool, joinVerb, type StepKind, type StepPhrase } from "./toolPhrase.ts";
-import { COMPACTED, COMPACTING, isCompactionEvent } from "../task-detail/compactionMarkers.ts";
+import { COMPACTED, COMPACTING, isCompactionEvent } from "./compaction.ts";
 
 export type StepView = StepPhrase & { tone: "tool" | "thinking" | "error" | "notice" };
 

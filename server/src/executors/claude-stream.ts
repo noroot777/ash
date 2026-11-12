@@ -263,7 +263,10 @@ async function* claudeStreamEvents(
       // 下一句话照样撞「Prompt is too long」(2026-08-13 实测:中转网关连着三次 503,
       // 手动 `/compact` 和自动压缩都没压成,用户只能得出「这个系统的 /compact 坏了」)。
       // 所以这里把结论抬成显式事件:失败 → error(执行诊断块 + trace + SSE),开始/成功
-      // → 一行正文。三者都只管展示,不碰任务状态(原生命令本来就走旁路回合)。
+      // → 执行过程里的一步(notice)。三者都带 `compaction`,只管展示,不碰任务状态(原生
+      // 命令本来就走旁路回合)。
+      // 从前开始/成功是往正文里插一句引用,展示端再从正文里认它 —— 智能体的回复只要恰好
+      // 引了这句(比如解释压缩日志),代码块里那一行就被摘掉、还凭空显示「在压缩」。
       if (ev.subtype === "status") {
         if (typeof ev.compact_result === "string") {
           compacting = false;
@@ -275,13 +278,14 @@ async function* claudeStreamEvents(
               kind: "error",
               message: `上下文压缩失败，会话大小原地不动：${detail}`,
               affectsTurn: false,
+              compaction: "failed",
             });
           } else {
-            push({ kind: "text", text: "\n> 上下文已压缩。\n\n" });
+            push({ kind: "error", message: "上下文已压缩", level: "notice", affectsTurn: false, compaction: "done" });
           }
         } else if (ev.status === "compacting" && !compacting) {
           compacting = true;
-          push({ kind: "text", text: "\n> 正在压缩上下文…\n\n" });
+          push({ kind: "error", message: "正在压缩上下文", level: "notice", affectsTurn: false, compaction: "start" });
         } else if (ev.status === null) {
           // 压缩结束了却没有结论:CLI 的合法路径之一 —— PreCompact hook 把这次自动压缩
           // 拦下时,就是先 `status:"compacting"` 再以 `status:null` 收尾,`compact_result`

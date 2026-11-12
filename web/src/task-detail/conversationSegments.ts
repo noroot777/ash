@@ -16,6 +16,7 @@ import type { AgentEvent } from "@ash/shared";
 import { stableBlockBoundary } from "@ash/shared/markdown-images";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import { appendExecutionEvent, isVisibleExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
+import { compactionEvent, isCompactionEvent, LEGACY_COMPACTION_GAP, legacyCompactionPhase } from "../lib/compaction.ts";
 
 // 「执行过程」块里的一行(工具 / 思考 / 异常)。形状与渲染都归 lib/executionTrace,
 // 普通任务、团队、辩论共用同一份 —— 这里只保留旧名字的别名。
@@ -115,7 +116,8 @@ export function awaitingUpstream(segments: AgentContentSegment[]): boolean {
  * 直播追加与落盘重建共用它(两路各算一份就会漂)。画不出来的子智能体通知也算恢复:
  * 它同样是上游真的吐出来的东西,这一位答的是「还有没有在等」,不是「画不画得出来」。
  */
-export const awaitingAfterEvent = (event: AgentAuxEvent): boolean => event.kind === "notice";
+// 压缩那一步不是在等上游（shared 的 resumesWaiting 同一个口径）。
+export const awaitingAfterEvent = (event: AgentAuxEvent): boolean => event.kind === "notice" && !isCompactionEvent(event);
 
 /**
  * 把「此刻还在等上游」这一位落到该读它的那一段上 —— 折叠条读的是**末段**(AgentTurnBody
@@ -156,7 +158,10 @@ export function auxEvent(event: AgentTraceEvent, at?: string): AgentAuxEvent {
   // level:"notice" = 这条不是故障,是过程里的一句提示(上游在重试、还在等回话)。整句话
   // 走 detail 而不是 label:label 在行内是不收缩的工具名那一格,一条几十字的提示塞进去
   // 会把整行撑爆;detail 那一格本来就是「这一步具体在干什么」,超长自己省略。
-  if (event.level === "notice") return { kind: "notice", label: "提示", detail: text(event.message), ...(at ? { at } : {}) };
+  if (event.level === "notice") {
+    if (event.compaction === "start" || event.compaction === "done") return compactionEvent(event.compaction, at);
+    return { kind: "notice", label: "提示", detail: text(event.message), ...(at ? { at } : {}) };
+  }
   return { kind: "error", label: text(event.message) };
 }
 
@@ -178,6 +183,14 @@ function auxEvents(entries: SessionTraceEntry[]): AgentAuxEvent[] {
     (events, entry) => appendExecutionEvent(events, auxEvent(entry.event as AgentTraceEvent, entry.at)),
     [],
   );
+}
+
+/**
+ * 这一回合的 trace 里有几条是旧服务端插的压缩引用（见 lib/compaction 的 LEGACY）——落盘正文里
+ * 就摘那么多处，多一处都是智能体自己的话。
+ */
+export function legacyCompactionCount(traced: SessionTraceEntry[]): number {
+  return traced.filter((entry) => entry.event.kind === "text" && legacyCompactionPhase(entry.event.text)).length;
 }
 
 export function contentSegments(
@@ -236,7 +249,16 @@ export function contentSegments(
   // markSegmentsAwaiting 与 AgentContentSegment.awaiting)。
   for (const [index, entry] of entries.entries()) {
     if (entry.event.kind === "text") {
-      current.markdown += entry.event.text;
+      const phase = legacyCompactionPhase(entry.event.text);
+      if (!phase) {
+        current.markdown += entry.event.text;
+        continue;
+      }
+      // 旧服务端那一串：正文里换成段落分隔（调用方对 `.md` 做同样的替换，两边对得上），
+      // 它本身是执行过程里的一步，在这个位置切段。
+      current.markdown += LEGACY_COMPACTION_GAP;
+      if (current.markdown.trim()) splitForEvent(index > lastText);
+      current.events = appendExecutionEvent(current.events, compactionEvent(phase, entry.at));
       continue;
     }
     if (entry.event.kind === "attachment") {
