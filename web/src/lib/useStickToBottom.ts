@@ -6,9 +6,9 @@ export const STICK_TO_BOTTOM_THRESHOLD = 80;
 const BOTTOM_EPSILON = 2;
 const OVERLAY_SCROLLBAR_HITBOX = 18;
 
-const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+export const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 
-const isEditableTarget = (target: EventTarget | null) => {
+export const isEditableTarget = (target: EventTarget | null) => {
   if (!(target instanceof HTMLElement)) return false;
   return !!target.closest("input, textarea, select, button, [contenteditable='true'], [contenteditable='']");
 };
@@ -58,7 +58,7 @@ const clearTimeoutRef = (ref: { current: number }) => {
   ref.current = 0;
 };
 
-const isScrollbarPointerDown = (event: PointerEvent, element: HTMLElement) => {
+export const isScrollbarPointerDown = (event: PointerEvent, element: HTMLElement) => {
   const rect = element.getBoundingClientRect();
   const canScrollVertically = element.scrollHeight > element.clientHeight;
   const verticalScrollbarWidth = element.offsetWidth - element.clientWidth;

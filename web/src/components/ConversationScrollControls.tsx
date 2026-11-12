@@ -1,7 +1,8 @@
-import type { RefObject } from "react";
+import { useRef, type RefObject } from "react";
 import { ArrowDown, ArrowUp } from "@phosphor-icons/react";
 import { useScrollEdges } from "../lib/useScrollEdges.ts";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
+import { useUserScrolling } from "../lib/useUserScrolling.ts";
 import type { ConversationInput } from "../task-detail/conversationInputs.ts";
 import { ConversationInputRail } from "./ConversationInputRail.tsx";
 
@@ -26,6 +27,8 @@ export function ConversationScrollControls({
 }) {
   const { noteUserScrollIntent, resume, hold } = useStickToBottom(scrollRef, resetKey, tailKey);
   const { atTop, atBottom } = useScrollEdges(scrollRef, resetKey);
+  const top = useRef<HTMLButtonElement>(null);
+  const scrolling = useUserScrolling(scrollRef, resetKey, top);
 
   const scrollToEdge = (target: "top" | "bottom") => {
     const element = scrollRef.current;
@@ -51,12 +54,15 @@ export function ConversationScrollControls({
           onCover={hold}
         />
       )}
+      {/* 回到顶部只在你自己滚的时候出来，停下约一秒淡出；智能体输出带着页面走不算（feed-4）。
+          它不在 Tab 的路上——键盘回顶用 Home。 */}
       <button
-        className={`conversation-scroll-button conversation-scroll-button--top${atTop ? " is-hidden" : ""}`}
+        ref={top}
+        className={`conversation-scroll-button conversation-scroll-button--top${atTop || !scrolling ? " is-hidden" : ""}`}
         type="button"
         onClick={() => scrollToEdge("top")}
-        tabIndex={atTop ? -1 : 0}
-        aria-hidden={atTop}
+        tabIndex={-1}
+        aria-hidden={atTop || !scrolling}
         aria-label="滚动到会话顶部"
       >
         <ArrowUp size={15} weight="bold" aria-hidden="true" />

@@ -349,8 +349,25 @@ try {
   await until(atBottom, "没摊开时新消息应照常跟到底");
   const topButton = page.locator(".conversation-scroll-button--top");
   const topButtonClickable = () => topButton.evaluate((element) => getComputedStyle(element).pointerEvents !== "none");
-  assert.equal(await topButtonClickable(), true, "没摊开时回顶按钮照常能点");
+  // 回顶钮只在你自己滚的时候出来（feed-4）：一下滚轮带一次滚动就算，程序滚动不算。
+  const topShown = () => {
+    const element = document.querySelector(".conversation-scroll-button--top");
+    return !!element && getComputedStyle(element).pointerEvents !== "none";
+  };
+  const wakeTop = () => feed.evaluate((element) => {
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: 0 }));
+    element.dispatchEvent(new Event("scroll"));
+  });
+  // 上面那一下 End 也算你自己在滚；停下约一秒就收。
+  await until(() => {
+    const element = document.querySelector(".conversation-scroll-button--top");
+    return !!element && getComputedStyle(element).pointerEvents === "none";
+  }, "停下约一秒，回顶按钮就收");
+  await wakeTop();
+  await until(topShown, "自己一滚，回顶按钮就出来");
   await openList();
+  await wakeTop();
+  await flush();
   assert.equal(await topButtonClickable(), false, "被列表盖住的回顶按钮应藏起来");
   await appendReply();
   await flush();
@@ -358,7 +375,8 @@ try {
   assert.ok(held.distance > 100, `列表摊开期间新消息不该带着会话往下滚：${JSON.stringify(held)}`);
   await page.keyboard.press("Escape");
   await until(atBottom, "收起列表后应补上那一下、落到最新一条");
-  assert.equal(await topButtonClickable(), true, "收起后回顶按钮回来");
+  await wakeTop();
+  await until(topShown, "收起后回顶按钮回来");
 
   // 点外面收起：按下那一刻列表就收了，补到底却要等松手 —— 不然松手的 click 落到换过的内容上。
   await openList();
