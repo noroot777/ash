@@ -188,9 +188,11 @@ button.insp-req:focus-visible {
 
 /* 行里的下拉：平时就是一段字加一颗尖角（尖角就是「这一项能改」的全部说明），悬停才显出底色。
    字和上下两行的值对齐，字号跟正文一样 */
+/* 往左让出的那 8px 记在外层：记在键上，收缩包裹的外层量宽时会把它扣掉，键里的字就被压成「待…」。 */
 .insp-kv .insp-dropdown {
   min-width: 0;
-  max-width: 100%;
+  max-width: calc(100% + 8px);
+  margin-left: -8px;
 }
 
 .insp-kv .insp-dropdown .ui-dropdown-trigger {
@@ -198,7 +200,6 @@ button.insp-req:focus-visible {
   max-width: 100%;
   height: 24px;
   gap: 6px;
-  margin-left: -8px;
   border: 0;
   border-radius: var(--r-sm);
   background: transparent;
