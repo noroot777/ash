@@ -100,13 +100,13 @@ try {
   await paste("slow.png");
   await page.locator(".side-chat-compose .task-upload-chip.is-uploading").waitFor();
   assert.equal(await send.isDisabled(), true, "还有在途上传时不能发，否则发出去的那条少几张图");
-  assert.equal(await page.getByRole("combobox", { name: "切换侧聊" }).isDisabled(), true, "上传中不许切侧聊");
+  assert.equal(await page.getByRole("button", { name: "新建侧聊", exact: true }).isDisabled(), true, "上传中不许切侧聊");
   await waitUntil(() => release, "slow.png 的上传请求被扣住");
   release();
   await page.locator(".side-chat-compose .task-upload-chip.is-uploading").waitFor({ state: "detached" });
   await page.unroute("**/api/uploads");
   assert.equal(await send.isDisabled(), false, "传完要立刻放开发送");
-  assert.equal(await page.getByRole("combobox", { name: "切换侧聊" }).isDisabled(), false, "传完要放开切换");
+  assert.equal(await page.getByRole("button", { name: "新建侧聊", exact: true }).isDisabled(), false, "传完要放开切换");
 
   // ⑤ 没发出去的附件跟正文一样是草稿：刷新页面还在原处。
   await page.reload();
@@ -119,7 +119,8 @@ try {
   await page.getByRole("button", { name: "新建侧聊", exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll(".side-chat-compose .task-upload-chip").length === 0);
   assert.equal(await input.inputValue(), "", "新侧聊不该继承上一个的草稿");
-  await page.getByRole("combobox", { name: "切换侧聊" }).selectOption({ index: 1 });
+  await page.getByRole("button", { name: "换一场侧聊", exact: true }).click();
+  await page.getByRole("listbox", { name: "切换侧聊" }).getByRole("option").first().click();
   await page.locator(".side-chat-compose .task-upload-chip img").waitFor();
   assert.equal(await page.getByRole("button", { name: "移除 slow.png" }).count(), 1, "切回来附件要回到原来那个侧聊");
 

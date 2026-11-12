@@ -1,51 +1,30 @@
 import { useRef } from "react";
 import type { Task } from "@ash/shared";
-import type { ChatMessage } from "@ash/shared/chat";
-import { parseAttachmentText } from "@ash/shared/attachments";
-import { ArrowDown, ArrowBendUpLeft } from "@phosphor-icons/react";
-import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
-import { MarkdownBody } from "../components/MarkdownBody.tsx";
-import { MessageAttachments } from "../task-detail/Attachments.tsx";
+import { ArrowDown } from "@phosphor-icons/react";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
+import { InspNone } from "../inspector/parts.tsx";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { chatTailKey } from "../lib/chatTailKey.ts";
 import { useScrollEdges } from "../lib/useScrollEdges.ts";
+import { formatInstant } from "../task-detail/utils.ts";
 import { SideChatComposer } from "./SideChatComposer.tsx";
 import { SideChatHeadControls } from "./SideChatHeadControls.tsx";
+import { SideChatMessage } from "./SideChatMessage.tsx";
 import { useSideChat } from "./useSideChat.ts";
 import "./side-chat.css";
 
-const receiptLabels = { queued: "已排队 · 主任务空闲后发送", delivering: "正在投递", sent: "已送达主任务", canceled: "未送达 · 已取消", unavailable: "回执不可用" };
-
-function SideMessage({ message }: { message: ChatMessage }) {
-  const busy = message.status === "queued" || message.status === "running";
-  // 执行过程跟主会话同一个折叠块：跑的中途露在外面（服务端边跑边写，见 chat/trace.ts），
-  // 跑完/被停之后仍留在回复上方折着。有过程可看时就不再说「正在思考…」——那句话此刻
-  // 反而比真实进度少。
-  const trace = message.trace ?? [];
-  // 自己发的那条里，附件是正文末尾一段固定文本（server 的 attachmentsPrompt 拼的）。
-  // 这里按同一把尺子摘回来还原成缩略图，别让用户读自己粘的图的绝对路径。
-  const parsed = message.role === "user" ? parseAttachmentText(message.body) : null;
-  return <article className={`side-chat-message is-${message.role} is-${message.status}`}>
-    <header><strong>{message.role === "user" ? "你" : message.role === "system" ? "ash" : "侧聊助手"}</strong><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></header>
-    {/* 侧聊的 trace 里只有工具/思考/提示,正文压根不进(server 的 chat/execution.ts 跑完
-        才一次性落 body),所以这一路没有「正文已经恢复」这个信号可用,判据只能是「那条提示
-        之后还没有新的 trace 事件」。代价说在明处:上游恢复之后先说一段话、迟迟不调下一个
-        工具的那段时间里,这句提示会多留一会儿,直到下一条事件或者这条跑完。 */}
-    {!!trace.length && <ExecutionDetails
-      events={trace}
-      running={busy}
-      awaiting={trace.at(-1)?.kind === "notice"}
-    />}
-    {busy && !trace.length && <p className="side-chat-thinking" role="status">{message.status === "queued" ? "等待回复…" : "正在思考…"}</p>}
-    {!busy && <MarkdownBody text={parsed?.body ?? message.body} />}
-    {!!parsed?.paths.length && <MessageAttachments paths={parsed.paths} />}
-    {message.forwardError && <p className="side-chat-error" role="status">未发送到主任务：{message.forwardError}</p>}
-    {message.forward && <details className={`side-chat-receipt is-${message.forward.status}`}>
-      <summary><ArrowBendUpLeft size={14} /><span>{receiptLabels[message.forward.status]}</span></summary>
-      <p>{message.forward.text}</p>
-      {message.forward.status === "queued" && <small>可在主任务的待发送消息中查看或取消。</small>}
-    </details>}
-  </article>;
+/**
+ * 第一行说清这一场带着的是主会话哪一刻的内容：侧聊是在开场那一刻拍下主会话的快照，
+ * 之后主会话再说的，这一场看不到——要带上就新开一场。
+ */
+function SnapLine({ at }: { at: string }) {
+  const tip = useHoverTip();
+  return (
+    <>
+      <p className="side-chat-snap" tabIndex={0} {...tip.anchorProps}>主会话快照 {formatInstant(at)}</p>
+      <HoverTip at={tip.at}>它知道的是这一刻之前的主会话；之后的新内容要新开一场才带得上</HoverTip>
+    </>
+  );
 }
 
 export function SideChatPane({ task }: { task: Task }) {
@@ -53,18 +32,23 @@ export function SideChatPane({ task }: { task: Task }) {
   const scroll = useRef<HTMLDivElement>(null);
   const { resume } = useStickToBottom(scroll, chat.room?.id ?? task.id, chatTailKey(chat.snapshot?.messages));
   const { atBottom } = useScrollEdges(scroll, chat.room?.id ?? task.id);
-  return <section className="side-chat-pane" aria-label="任务侧聊">
+  const messages = chat.snapshot?.messages ?? [];
+  return <section className="side-chat-pane" aria-label="任务侧聊" data-room-id={chat.room?.id ?? ""}>
     <SideChatHeadControls chat={chat} />
     <div className="side-chat-scroll-wrap">
       <div className="side-chat-scroll" ref={scroll}>
         {!chat.ready && <p className="side-chat-note" role="status">正在读取侧聊…</p>}
         {chat.room && !chat.snapshot && <p className="side-chat-note" role="status">正在读取消息…</p>}
-        <div role="log" aria-label="侧聊消息" aria-live="polite">
-          {(chat.snapshot?.messages.length ?? 0) >= 500 && <p className="side-chat-note">显示最近 500 条消息，更早记录仍保留。</p>}
-          {chat.snapshot?.messages.map((message) => <SideMessage key={message.id} message={message} />)}
+        {chat.room && <SnapLine at={chat.room.createdAt} />}
+        {chat.ready && !chat.room && <InspNone>问个问题，不打断主任务。</InspNone>}
+        <div className="side-chat-log" role="log" aria-label="侧聊消息" aria-live="polite">
+          {messages.length >= 500 && <p className="side-chat-note">显示最近 500 条消息，更早记录仍保留。</p>}
+          {messages.map((message) => (
+            <SideChatMessage key={message.id} message={message} onForward={(id) => void chat.forward(id)} onRevoke={(id) => void chat.revoke(id)} />
+          ))}
         </div>
       </div>
-      {!atBottom && <button type="button" className="side-chat-latest" aria-label="跳到侧聊最新消息" onClick={() => { resume(); scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: "auto" }); }}><ArrowDown size={13} />最新消息</button>}
+      {!atBottom && <button type="button" className="side-chat-latest" aria-label="跳到侧聊最新消息" onClick={() => { resume(); scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: "auto" }); }}><ArrowDown size={13} aria-hidden="true" />最新消息</button>}
     </div>
     <SideChatComposer task={task} chat={chat} />
   </section>;

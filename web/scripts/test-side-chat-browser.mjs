@@ -38,21 +38,22 @@ try {
   await page.getByRole("button", { name: "打开侧聊", exact: true }).click();
   const input = page.getByRole("textbox", { name: "侧聊消息输入" });
   const send = page.getByRole("button", { name: "发送侧聊消息" });
-  const roomPicker = page.getByRole("combobox", { name: "切换侧聊" });
+  // 换一场走面板头那颗钟：点开是一场一行的列表；当前是哪一场看面板上的 data-room-id（新的一场是空串）。
+  const currentRoom = async () => await page.locator(".side-chat-pane").getAttribute("data-room-id");
+  const waitRoom = (roomId) => page.waitForFunction((id) => document.querySelector(".side-chat-pane")?.dataset.roomId === id, roomId);
+  const pickRoom = async (roomId) => {
+    await page.getByRole("button", { name: "换一场侧聊", exact: true }).click();
+    await page.getByRole("listbox", { name: "切换侧聊" }).locator(`[data-room-id="${roomId}"]`).click();
+    await waitRoom(roomId);
+  };
   await input.waitFor();
   await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "侧聊消息输入");
   assert.equal((await roomsFor("parent")).length, 0, "只打开侧聊不创建房间");
   assert.equal(await page.getByRole("button", { name: "开始侧聊", exact: true }).count(), 0);
   assert.equal(await page.getByText("这里聊，不打断思路", { exact: true }).count(), 0);
-  // 侧聊说明不再常驻底部：点头带上的 ⓘ 才展开，Esc 收起。
-  const helpButton = page.getByRole("button", { name: "侧聊说明", exact: true });
-  const helpPopover = page.getByRole("dialog", { name: "侧聊说明", exact: true });
-  assert.equal(await helpPopover.count(), 0, "说明默认不占地方");
-  assert.equal(await helpButton.evaluate((element) => !!element.closest(".inspector-host__panel-head")), true, "说明入口在面板头带上");
-  await helpButton.click();
-  await helpPopover.waitFor();
-  await page.keyboard.press("Escape");
-  await helpPopover.waitFor({ state: "detached" });
+  // 说明不常驻：那段话拆进了快照那一行和发送键的悬停提示里，头带上不再有 ⓘ。
+  assert.equal(await page.getByRole("button", { name: "侧聊说明", exact: true }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "换一场侧聊", exact: true }).count(), 0, "还没聊过别的场，就没有那颗钟");
   assert.equal(await page.getByRole("log", { name: "侧聊消息" }).innerText(), "");
   const sendForReply = async (body) => {
     const position = await page.locator(".side-chat-message.is-agent").count();
@@ -91,28 +92,44 @@ try {
   // 说完之后过程折起来待在正文上方，条上按主会话那套词说（只有一步时直接说那一步）。
   assert.match(await page.locator(".side-chat-message.is-agent").last().innerText(), /跑了 git log --oneline \| head/);
   assert.equal((await state()).delivered.length, 0);
-  const firstRoom = await roomPicker.inputValue();
+  const firstRoom = await currentRoom();
+  assert.match(await page.locator(".side-chat-snap").innerText(), /^主会话快照 \d\d\/\d\d \d\d:\d\d$/, "第一行说清带着的是主会话哪一刻");
+  // 你的话靠右、它的话靠左，都不报名字。
+  assert.equal(await page.locator(".side-chat-message header").count(), 0, "不再报「你 / 侧聊助手」");
+  // 指到一条答完的回答才出复制和发给主任务；点了就把原文交给主任务。
+  const plain = page.locator(".side-chat-message.is-agent").last();
+  const forwardKey = plain.getByRole("button", { name: "发给主任务", exact: true });
+  assert.equal(await forwardKey.evaluate((element) => getComputedStyle(element.parentElement).opacity), "0", "两颗键平时藏着");
+  await plain.hover();
+  await page.waitForFunction(() => getComputedStyle(document.querySelectorAll(".side-chat-message.is-agent .side-chat-ans__acts")[document.querySelectorAll(".side-chat-message.is-agent .side-chat-ans__acts").length - 1]).opacity === "1");
+  await plain.getByRole("button", { name: "复制", exact: true }).waitFor();
+  const deliveredBeforeButton = (await state()).delivered.length;
+  await forwardKey.click();
+  await plain.getByText("已送达主任务", { exact: true }).waitFor();
+  assert.equal((await state()).delivered.length, deliveredBeforeButton + 1, "点「发给主任务」就投递");
+  assert.equal(await plain.getByRole("button", { name: "发给主任务", exact: true }).count(), 0, "送到了就不再给那颗键");
   await page.getByRole("button", { name: "切换主任务状态" }).click();
   assert.equal(await input.count(), 1, "主任务状态变化不抢走侧聊焦点");
   await input.fill("把结论告诉主任务，以后都按这个来"); await send.click();
-  await page.getByText("已送达主任务", { exact: true }).waitFor();
-  assert.equal((await state()).delivered.length, 1);
+  await page.locator(".side-chat-message.is-agent").last().getByText("已送达主任务", { exact: true }).waitFor();
+  assert.equal((await state()).delivered.length, 2);
   assert.equal((await state()).kills, 0);
-  await page.locator(".side-chat-receipt > summary").click();
-  assert.match(await page.locator(".side-chat-receipt").innerText(), /来自侧聊.*方案 B/s);
+  // 发出去的原文在回执的悬停提示里。
+  await page.locator(".side-chat-receipt.is-sent > span").last().hover();
+  assert.match(await page.getByRole("tooltip").innerText(), /来自侧聊.*方案 B/s);
   await page.screenshot({ path: join(artifacts, "side-chat-desktop.png") });
   await input.fill("草稿也保留");
   await page.getByRole("button", { name: "关闭侧聊", exact: true }).click();
   await page.getByRole("button", { name: "打开侧聊", exact: true }).click();
   await input.waitFor();
-  await page.waitForFunction((roomId) => document.querySelector('[aria-label="切换侧聊"]')?.value === roomId, firstRoom);
+  await waitRoom(firstRoom);
   assert.equal(await input.inputValue(), "草稿也保留");
-  await page.getByText("已送达主任务", { exact: true }).waitFor();
+  await page.getByText("已送达主任务", { exact: true }).first().waitFor();
   await page.reload();
   await input.waitFor();
-  await page.waitForFunction((roomId) => document.querySelector('[aria-label="切换侧聊"]')?.value === roomId, firstRoom);
+  await waitRoom(firstRoom);
   assert.equal(await input.inputValue(), "草稿也保留");
-  assert.equal(await roomPicker.inputValue(), firstRoom);
+  assert.equal(await currentRoom(), firstRoom);
   const analyzingPosition = await page.locator(".side-chat-message.is-agent").count();
   await input.fill("等待一下，做长分析"); await send.click();
   // 执行过程跟主会话一样：跑的中途就露在外面，展开能看见跑了什么命令。
@@ -135,16 +152,24 @@ try {
   assert.equal((await state()).kills, 0);
   await control("native", { enabled: false });
   await input.fill("「把结论告诉主任务」"); await send.click();
-  await page.getByText("已排队 · 主任务空闲后发送", { exact: true }).waitFor();
+  await page.getByText("排着，主任务空下来就发", { exact: true }).waitFor();
   await control("cancel", {});
-  await page.getByText("未送达 · 已取消", { exact: true }).waitFor();
-  assert.equal((await state()).delivered.length, 1);
+  await page.getByText("已撤回，没有发给主任务", { exact: true }).waitFor();
+  assert.equal((await state()).delivered.length, 2);
+  // 撤回过的可以再发：这回用「发给主任务」那颗键，主任务不收（native 关着）就排着，排着时能撤回。
+  const revoked = page.locator(".side-chat-message.is-agent").last();
+  await revoked.hover();
+  await revoked.getByRole("button", { name: "发给主任务", exact: true }).click();
+  await revoked.getByText("排着，主任务空下来就发", { exact: true }).waitFor();
+  await revoked.getByRole("button", { name: "撤回", exact: true }).click();
+  await revoked.getByText("已撤回，没有发给主任务", { exact: true }).waitFor();
+  assert.equal((await state()).delivered.length, 2, "撤回的那条没有投递");
   const replyText = "回传结论：选择方案 B，复用现有消息队列，并补上投递回执。";
   for (const condition of ["把结论告诉主任务，如果它已经开始做了就算了", "不要把结论告诉主任务"]) {
     const last = await sendForReply(condition);
     await last.getByText(/未发送到主任务/).waitFor();
     assert.match(await last.innerText(), /回传结论：选择方案 B/);
-    assert.equal((await state()).pending.length, 2, "拒绝回传不入队");
+    assert.equal((await state()).pending.length, 3, "拒绝回传不入队");
   }
   await control("archive", { archived: true });
   await input.fill("把结论告诉主任务"); await send.click();
@@ -152,23 +177,24 @@ try {
   await page.reload();
   await page.getByText(/未发送到主任务：主任务已归档/).waitFor();
   assert.match(await page.locator(".side-chat-message.is-agent").last().innerText(), new RegExp(replyText));
-  assert.equal((await state()).pending.length, 2);
+  assert.equal((await state()).pending.length, 3);
   await page.screenshot({ path: join(artifacts, "side-chat-reply-preserved.png") });
   await control("archive", { archived: false });
   await page.getByRole("button", { name: "新建侧聊", exact: true }).click();
-  await page.waitForFunction(() => document.querySelector('[aria-label="切换侧聊"]')?.value === "");
+  await waitRoom("");
   await input.waitFor();
   assert.equal(await page.getByRole("log", { name: "侧聊消息" }).innerText(), "");
   assert.equal((await roomsFor("parent")).length, 1, "新建侧聊只切到新草稿，不提前建房");
   await input.fill("新侧聊草稿");
-  await roomPicker.selectOption(firstRoom);
-  await page.getByText("已送达主任务", { exact: true }).waitFor();
-  await roomPicker.selectOption("");
+  await pickRoom(firstRoom);
+  await page.getByText("已送达主任务", { exact: true }).first().waitFor();
+  await page.getByRole("button", { name: "新建侧聊", exact: true }).click();
+  await waitRoom("");
   assert.equal(await input.inputValue(), "新侧聊草稿");
   await input.fill("新侧聊首问");
   await send.click();
   await page.locator(".side-chat-message.is-agent.is-done").last().waitFor();
-  const secondRoom = await roomPicker.inputValue();
+  const secondRoom = await currentRoom();
   assert.notEqual(secondRoom, "");
   assert.equal((await roomsFor("parent")).length, 2);
   await input.fill("新侧聊草稿");
@@ -179,10 +205,14 @@ try {
   assert.equal(await page.getByRole("log", { name: "侧聊消息" }).innerText(), "");
   await page.getByRole("button", { name: "切换主任务", exact: true }).click();
   await input.waitFor();
-  await page.waitForFunction((roomId) => document.querySelector('[aria-label="切换侧聊"]')?.value === roomId, secondRoom);
+  await waitRoom(secondRoom);
   assert.equal(await input.inputValue(), "新侧聊草稿");
-  await roomPicker.selectOption(firstRoom);
-  await page.getByText("已送达主任务", { exact: true }).waitFor();
+  // 列表里一场一行，名字是它的第一句话。
+  await page.getByRole("button", { name: "换一场侧聊", exact: true }).click();
+  assert.match(await page.getByRole("listbox", { name: "切换侧聊" }).innerText(), /新侧聊首问/);
+  await page.keyboard.press("Escape");
+  await pickRoom(firstRoom);
+  await page.getByText("已送达主任务", { exact: true }).first().waitFor();
   await control("native", { enabled: true });
   await control("forward-mode", { forced: true });
   const beforeNatural = await state();

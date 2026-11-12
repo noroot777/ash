@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { sideChatBody } from "@ash/shared/chat";
 import { createClientId } from "../lib/clientId.ts";
 
 export type SideChatQuote = { id: string; text: string };
@@ -78,7 +79,5 @@ export function useSideChatQuote(taskId: string, roomId: string | null, ready = 
 }
 
 export function sideChatMessageBody(draft: string, quote: SideChatQuote | null): string {
-  const question = draft.trim();
-  if (!quote) return question;
-  return `【主会话选文，仅作参考】\n${quote.text.split(/\r\n|\r|\n/u).map((line) => `> ${line}`).join("\n")}\n\n【当前问题】\n${question}`;
+  return sideChatBody(draft.trim(), quote?.text ?? null);
 }

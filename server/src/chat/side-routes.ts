@@ -1,9 +1,10 @@
 import { open } from "node:fs/promises";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { Context, Hono } from "hono";
 import { parseSessionOutput } from "@ash/shared/session-output";
+import { sideChatTitle } from "@ash/shared/chat";
 import { db } from "../db/index.js";
-import { chatContextEntries, chatRooms, sessions, tasks } from "../db/schema.js";
+import { chatContextEntries, chatMessages, chatRooms, sessions, tasks } from "../db/schema.js";
 import { actorOf, ownerIdOf } from "../auth/context.js";
 import { filterOwned } from "../auth/owned.js";
 import { id, now } from "../util.js";
@@ -72,7 +73,15 @@ export function mountSideChatRoutes(api: Hono) {
     const rows = await filterOwned(await db.select().from(chatRooms)
       .where(and(eq(chatRooms.parentTaskId, task.id), eq(chatRooms.projectId, task.projectId), eq(chatRooms.kind, "side")))
       .orderBy(desc(chatRooms.createdAt), desc(chatRooms.id)), actorOf(c));
-    return c.json(rows.map(toRoom));
+    // 一场侧聊拿它的第一句话当名字（房间名一律是「侧聊」，分不出谁是谁）。
+    const firsts = new Map<string, string>();
+    if (rows.length) {
+      const asked = await db.select({ roomId: chatMessages.roomId, body: chatMessages.body }).from(chatMessages)
+        .where(and(inArray(chatMessages.roomId, rows.map((row) => row.id)), eq(chatMessages.role, "user")))
+        .orderBy(asc(chatMessages.createdAt), asc(chatMessages.id));
+      for (const message of asked) if (!firsts.has(message.roomId)) firsts.set(message.roomId, sideChatTitle(message.body));
+    }
+    return c.json(rows.map((row) => ({ ...toRoom(row), ...(firsts.get(row.id) ? { title: firsts.get(row.id) } : {}) })));
   });
   api.post("/tasks/:id/side-chats", async (c) => {
     const task = await parentFor(c);

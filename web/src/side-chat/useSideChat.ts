@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 import type { ChatMember, ChatRoom, ChatSnapshot } from "@ash/shared/chat";
 import { chatApi } from "../chat/chatApi.ts";
+import { api } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
 import type { UploadAttachment, UploadingFile } from "../task-detail/Attachments.tsx";
 import { clearSideChatQuote, moveNewSideChatQuote, sideChatMessageBody, useSideChatQuote } from "./sideChatQuote.ts";
@@ -28,7 +29,9 @@ export function mergeSideSnapshot(previous: ChatSnapshot | null, next: ChatSnaps
   for (const message of next.messages) {
     const old = messages.get(message.id);
     if (old && finished(old.status) && !finished(message.status)) continue;
-    const forward = old?.forward && ["sent", "canceled"].includes(old.forward.status)
+    // 送到了就是终局：迟到的快照里那条「排着/正在送」不能把它顶回去。撤回过的不算终局——
+    // 撤回以后可以再发一次，那时新快照里的「排着」才是真的。
+    const forward = old?.forward?.status === "sent"
       && message.forward && ["queued", "delivering"].includes(message.forward.status) ? old.forward : message.forward;
     messages.set(message.id, { ...message, forward });
   }
@@ -111,7 +114,8 @@ export function useSideChat(taskId: string) {
     } catch { /* Invalid local drafts do not affect server history. */ }
     if (!active) return;
     setSnapshot((previous) => mergeSideSnapshot(previous, value));
-    setRooms((rows) => rows.map((row) => row.id === value.room.id ? value.room : row));
+    // 快照里的房间不带「第一句话」那个名字（只有列表接口给），换上来时把它留着。
+    setRooms((rows) => rows.map((row) => row.id === value.room.id ? { ...value.room, title: row.title } : row));
     setError("");
     if (acknowledged) setSendError("");
     if (clearedDraft) setDraftState("");
@@ -182,7 +186,7 @@ export function useSideChat(taskId: string) {
   const updateRoom = (value: ChatRoom) => {
     if (!alive.current || selected.current !== value.id) return;
     if (value.members[0]) confirmedMembers.current.set(value.id, value.members[0]);
-    setRooms((rows) => rows.map((row) => row.id === value.id ? value : row));
+    setRooms((rows) => rows.map((row) => row.id === value.id ? { ...value, title: row.title } : row));
     setSnapshot((previous) => previous ? { ...previous, room: value } : previous);
   };
   const saveMember = async (member: ChatMember) => {
@@ -261,5 +265,19 @@ export function useSideChat(taskId: string) {
   // 头带上的选择框同时也是禁用的，这一句挡的是别的表面直接调过来的情况。
   const select = (id: string | null) => { if (!locked.current && !savingMember && !uploading.current.length) chooseRoom(id); };
   const removeQuote = () => { if (quote) clearSideChatQuote(taskId, roomId, quote.id); };
-  return { rooms, room, snapshot, ready, loaded, connected, error: sendError || error, memberError, memberUncertain, draft, attachments, pending, quote, removeQuote, sending, savingMember, busy, canSend, select, setDraft, setAttachments, setPending, saveMember, send, stop, reload };
+  // 「发给主任务」：把一条答完的回答原文交给主任务（主任务在跑就排着）；回执跟着快照回来。
+  const forward = async (messageId: string) => {
+    if (!roomId) return;
+    try { apply(await chatApi.forward(roomId, messageId)); }
+    catch (reason) { if (alive.current && selected.current === roomId) setError(String(reason)); }
+  };
+  // 撤回还排着的那条：走主任务待发送消息的取消，回执随下一份快照变成「已撤回」。
+  const revoke = async (forwardId: string) => {
+    const current = roomId;
+    try {
+      await api.cancelScheduledMessage(forwardId);
+      if (current) apply(await chatApi.snapshot(current));
+    } catch (reason) { if (alive.current && selected.current === current) setError(String(reason)); }
+  };
+  return { rooms, room, snapshot, ready, loaded, connected, error: sendError || error, memberError, memberUncertain, draft, attachments, pending, quote, removeQuote, sending, savingMember, busy, canSend, select, setDraft, setAttachments, setPending, saveMember, send, stop, reload, forward, revoke };
 }

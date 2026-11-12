@@ -15,5 +15,6 @@ export const chatApi = {
   stop: (roomId: string) => request<ChatSnapshot>(`/chats/${roomId}/stop`, json({})),
   assistants: (projectId: string) => request<ChatRoom[]>(`/chats?kind=assistant&projectId=${encodeURIComponent(projectId)}`),
   createAssistant: (projectId: string, member: ChatMember, name = "ash 助手") => request<ChatRoom>("/chats", json({ projectId, name, members: [member], kind: "assistant" })),
+  forward: (roomId: string, messageId: string) => request<ChatSnapshot>(`/chats/${roomId}/messages/${messageId}/forward`, json({})),
   saveWorkflow: (roomId: string, messageId: string) => request<ChatSnapshot>(`/chats/${roomId}/messages/${messageId}/workflow`, json({})),
 };

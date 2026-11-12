@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { acceptedSideRequests } from "./side-authorization-cases.js";
 import { mountFixtureSettings } from "./fixture-settings.js";
 
@@ -78,6 +78,14 @@ api.post("/fixture/forward-mode", async (c) => { const mode = await c.req.json()
 api.post("/fixture/native", async (c) => { bind((await c.req.json()).enabled); return c.json({ ok: true }); });
 api.post("/fixture/archive", async (c) => { await db.update(tasks).set({ archived: (await c.req.json()).archived }).where(eq(tasks.id, "parent")); return c.json({ ok: true }); });
 api.post("/fixture/large-history", async (c) => { await db.update(tasks).set({ body: "背景".repeat(50000) }).where(eq(tasks.id, "parent")); return c.json({ ok: true }); });
+// 侧聊回执上的「撤回」走主任务待发送消息的取消；这个台子没挂 task-run-routes，照它的判据
+// （只撤还排着、没人在送的）补一个最小版。
+api.delete("/scheduled-messages/:mid", async (c) => {
+  const canceled = await db.update(scheduledMessages).set({ status: "canceled", deliveringSince: null })
+    .where(and(eq(scheduledMessages.id, c.req.param("mid")), eq(scheduledMessages.status, "pending"), isNull(scheduledMessages.deliveringSince)))
+    .returning({ id: scheduledMessages.id });
+  return canceled.length ? c.json({ canceled: true }) : c.json({ error: "只能取消待发送的消息" }, 409);
+});
 api.post("/fixture/cancel", async (c) => { await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.status, "pending")); return c.json({ ok: true }); });
 const app = new Hono(); app.route("/api", api);
 const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, (info) => console.log(`SIDE_FIXTURE_URL=http://127.0.0.1:${info.port}`));

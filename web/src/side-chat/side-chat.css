@@ -1,70 +1,95 @@
-.side-chat-pane { height: 100%; min-height: 0; display: flex; flex-direction: column; color: var(--ink); background: var(--canvas); font-size: 13px; }
-.side-chat-pane button, .side-chat-pane select { font: inherit; }
-.side-chat-pane button { cursor: pointer; }
-.side-chat-pane button:disabled { opacity: .45; cursor: default; }
-.side-chat-pane button:focus-visible, .side-chat-pane select:focus-visible, .side-chat-pane summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-/* 切换侧聊 / 新建 / ⓘ 说明挂在 inspector 面板头带里（inspector/headActions.tsx），
-   所以这一组不在 .side-chat-pane 之下——字号、光标、焦点圈都得自己写一份。 */
-.side-chat-head { position: relative; display: flex; min-width: 0; align-items: center; gap: 2px; font-size: 11px; }
-.side-chat-head select, .side-chat-head button { font: inherit; cursor: pointer; color: var(--muted); background: transparent; border: 0; border-radius: 5px; }
-.side-chat-head select { min-width: 0; max-width: 150px; flex: 0 1 auto; height: 22px; padding: 0 2px; }
-.side-chat-head button { display: grid; flex: 0 0 auto; place-items: center; width: 22px; height: 22px; }
-.side-chat-head select:hover:not(:disabled), .side-chat-head button:hover:not(:disabled) { background: var(--hover-bg); color: var(--ink); }
-.side-chat-head button[aria-expanded="true"] { background: var(--sel-bg); color: var(--ink); }
-.side-chat-head select:disabled, .side-chat-head button:disabled { opacity: .45; cursor: default; }
-.side-chat-head select:focus-visible, .side-chat-head button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.side-chat-help { position: absolute; z-index: 30; top: 26px; right: 0; width: min(280px, calc(100vw - 28px)); padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); box-shadow: var(--menu-shadow); color: var(--muted); line-height: 1.7; }
-.side-chat-help p { margin: 0 0 7px; }
-.side-chat-help p:last-child { margin-bottom: 0; }
+/* 侧聊（side-chat/SideChatPane.tsx 与同目录各件）。头带上那两颗、发送键、提示条走公共件
+   （inspector-parts.css）；执行过程折叠块沿用主会话那套（task-conversation.css）。 */
+.side-chat-pane { height: 100%; min-height: 0; display: flex; flex-direction: column; color: var(--ink); background: var(--canvas); font-size: var(--t-sm); }
+.side-chat-pane button { font: inherit; cursor: pointer; }
+.side-chat-pane button:disabled { cursor: default; }
+
+/* 换一场：列表里一场一行，名字是它的第一句话，右边是几点开的 */
+.side-chat-rooms > .ui-menu { width: auto; min-width: 240px; max-width: 320px; max-height: 320px; overflow: auto; }
+.side-chat-rooms__item { display: flex; min-width: 0; align-items: center; gap: 10px; font-size: var(--t-sm); }
+.side-chat-rooms__item > .insp-cut { flex: 1 1 auto; text-align: left; }
+.side-chat-rooms__at { flex: 0 0 auto; color: var(--muted); font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
+
 .side-chat-scroll-wrap { flex: 1; min-height: 0; position: relative; }
-.side-chat-scroll { height: 100%; overflow: auto; overscroll-behavior: contain; padding: 18px 14px; }
-.side-chat-message { padding: 14px 0; overflow-wrap: anywhere; border-top: 1px solid var(--line); }
-.side-chat-message > header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
-.side-chat-message strong { font-weight: 600; }
-.side-chat-message > header time { margin-left: auto; font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.side-chat-message.is-user { margin: 0 -4px; padding: 12px 10px; border: 0; border-radius: 8px; background: color-mix(in srgb, var(--accent) 6%, transparent); }
-.side-chat-message.is-user + .side-chat-message { border-top: 0; }
-.side-chat-message .task-markdown { font-size: 13px; line-height: 1.7; }
-.side-chat-message .task-markdown pre { max-width: 100%; font-size: 11px; }
-.side-chat-message.is-failed, .side-chat-message.is-stopped { color: var(--muted); }
-/* 执行过程沿用主会话那套折叠块(.task-execution-block,见 execution-trace.css)，
-   侧栏窄，这里只放开最大宽度。 */
-.side-chat-message .task-execution-block { max-width: 100%; margin-bottom: 6px; }
+.side-chat-scroll { height: 100%; overflow: auto; overscroll-behavior: contain; padding: 12px 14px 18px; }
+.side-chat-snap { width: fit-content; margin: 0 auto 12px; border-radius: var(--r-sm); color: var(--muted); font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
+.side-chat-snap:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.side-chat-log { display: flex; flex-direction: column; gap: 14px; }
+.side-chat-message { min-width: 0; overflow-wrap: anywhere; }
+.side-chat-message .task-markdown { font-size: var(--t-sm); line-height: 1.7; }
+.side-chat-message .task-markdown pre { max-width: 100%; font-size: var(--t-xs); }
+
+/* 你的话：靠右、垫一层底色 */
+.side-chat-me { align-self: flex-end; max-width: 88%; border-radius: var(--r-lg); background: var(--raised); padding: 8px 12px; }
+.side-chat-me .task-markdown > :first-child { margin-top: 0; }
+.side-chat-me .task-markdown > :last-child { margin-bottom: 0; }
+.side-chat-me__quote { display: -webkit-box; overflow: hidden; margin: 0 0 4px; border-left: 2px solid var(--line2); padding-left: 8px; color: var(--muted); font-size: var(--t-xs); line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 1; }
+.side-chat-me__quote:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.side-chat-me .task-message-attachments { margin-top: 6px; }
+
+/* 它的话：靠左、不加框；执行过程在正文上方折着 */
+.side-chat-ans .task-execution-block { max-width: 100%; margin-bottom: 6px; font-size: var(--t-xs); }
+.side-chat-ans .task-tool-line,
+.side-chat-ans .task-tool-summary { font-size: var(--t-xs); }
+.side-chat-ans.is-failed,
+.side-chat-ans.is-stopped { color: var(--muted); }
 .side-chat-thinking { margin: 0; color: var(--muted); }
-.side-chat-receipt { margin-top: 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; font-size: 11px; }
-.side-chat-receipt > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--muted); }
-.side-chat-receipt.is-sent > summary { color: var(--accent); }
-.side-chat-receipt p { white-space: pre-wrap; line-height: 1.7; margin: 8px 0; }
-.side-chat-receipt small { color: var(--muted); }
-.side-chat-compose { flex: 0 0 auto; max-height: min(75%, 540px); overflow: auto; padding: 10px 12px 12px; border-top: 1px solid var(--line); }
-.side-chat-quote { margin: 0 0 10px; padding: 9px 10px; border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0; background: color-mix(in srgb, var(--accent) 6%, transparent); }
-.side-chat-quote > header { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
-.side-chat-quote button { display: grid; place-items: center; margin-left: auto; padding: 4px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); }
-.side-chat-quote button:hover { color: var(--ink); background: var(--hover-bg); }
-.side-chat-quote blockquote { margin: 7px 0 0; max-height: 72px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; }
-.side-chat-quote.is-expanded blockquote { max-height: 160px; }
-.side-chat-quote .side-chat-quote-expand { margin: 6px 0 0; padding: 2px 0; font-size: 11px; color: var(--accent); }
-.side-chat-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 22px; margin-bottom: 6px; font-size: 11px; color: var(--muted); }
-.side-chat-status button { display: flex; align-items: center; gap: 4px; color: var(--ink); background: transparent; border: 0; padding: 4px 0; font-size: 11px; }
-.side-chat-input { border: 1px solid var(--line); border-radius: 10px; padding: 8px; }
+.side-chat-ans__foot { display: flex; min-height: 26px; align-items: center; gap: 6px; margin-top: 2px; }
+/* 复制、发给主任务：指到这条回答才出 */
+.side-chat-ans__acts { display: inline-flex; margin-left: auto; gap: 2px; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.side-chat-ans:hover .side-chat-ans__acts,
+.side-chat-ans__acts:focus-within { opacity: 1; }
+.side-chat-ans__acts > .insp-copy { opacity: 1; }
+.side-chat-receipt { display: inline-flex; min-width: 0; align-items: flex-start; gap: 6px; margin: 0; color: var(--muted); font-size: var(--t-xs); line-height: 1.5; }
+.side-chat-receipt > svg { flex: 0 0 auto; margin-top: 3px; }
+.side-chat-receipt.is-sent > svg { color: var(--green); }
+.side-chat-receipt.is-error { color: var(--red); }
+.side-chat-receipt > span:focus-visible { border-radius: 2px; outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.side-chat-receipt__undo { border: 0; border-radius: var(--r-sm); background: transparent; padding: 2px 4px; color: var(--ink); font-size: var(--t-xs); text-decoration: underline; text-underline-offset: 2px; }
+.side-chat-receipt__undo:hover { background: var(--hover-bg); }
+.side-chat-receipt__undo:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.side-chat-sys { align-self: center; color: var(--muted); font-size: var(--t-xs); text-align: center; }
+.side-chat-sys .task-markdown { font-size: var(--t-xs); }
+
+/* 输入区 */
+.side-chat-compose { flex: 0 0 auto; max-height: min(75%, 540px); overflow: auto; padding: 8px 12px 12px; border-top: 1px solid var(--line); }
+.side-chat-error { margin-bottom: 8px; }
+.side-chat-status { margin: 0 0 6px; }
+.side-chat-quote { display: flex; min-width: 0; align-items: center; gap: 6px; margin: 0 0 6px; color: var(--muted); }
+.side-chat-quote > svg { flex: 0 0 auto; }
+.side-chat-quote blockquote { min-width: 0; flex: 1 1 auto; overflow: hidden; margin: 0; color: var(--muted); font-size: var(--t-xs); text-overflow: ellipsis; white-space: nowrap; }
+.side-chat-quote blockquote:focus-visible { border-radius: 2px; outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.side-chat-input { border: 1px solid var(--line2); border-radius: var(--r-lg); background: var(--panel); padding: 8px; transition: border-color var(--dur-1) var(--ease-out); }
+.side-chat-input:focus-within { border-color: var(--focus-soft); box-shadow: 0 0 0 1px var(--focus-soft); }
+.side-chat-input textarea { display: block; width: 100%; min-height: 56px; max-height: 180px; resize: vertical; border: 0; outline: none; padding: 2px; color: var(--ink); background: transparent; font: inherit; line-height: 1.6; }
 /* 附件卡片沿用主会话那套（task-reply.css / task-conversation.css）。侧栏只有三百来像素宽，
    190px 的固定上限会让两张图挤成一行半，这里改成跟着栏宽走。 */
 .side-chat-compose .task-upload-list { margin: 0 0 8px; }
 .side-chat-compose .task-upload-chip { max-width: min(190px, calc(50% - 4px)); }
-.side-chat-message .task-message-attachments { margin-top: 8px; }
+.side-chat-input footer { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
 .side-chat-input footer .task-reply-icon { width: 26px; height: 26px; flex: 0 0 auto; }
-.side-chat-input:focus-within { border-color: var(--accent); }
-.side-chat-input textarea { display: block; width: 100%; min-height: 64px; max-height: 180px; resize: none; border: 0; outline: none; padding: 2px; color: var(--ink); background: transparent; font: inherit; line-height: 1.6; }
-.side-chat-input footer { display: flex; gap: 6px; align-items: center; justify-content: space-between; margin-top: 6px; }
 /* 胶囊在这条里吃掉除发送键之外的宽度，三段各自省略号（run-target-picker.css）。
    智能体那段是 codex/claude 这类短词，侧栏窄下来时先保住它——要省略也该省略长模型名。 */
 .side-chat-input footer > .run-target-picker { min-width: 0; flex: 1 1 auto; }
 .side-chat-input footer .run-target-seg--agent { flex: 0 0 auto; }
-.side-chat-primary { display: inline-flex; justify-content: center; align-items: center; min-height: 30px; padding: 6px 10px; background: var(--accent); color: white; border: 0; border-radius: 7px; }
-.side-chat-note { color: var(--muted); font-size: 12px; }
-.side-chat-error { padding: 10px 12px; line-height: 1.6; overflow-wrap: anywhere; color: var(--ink); background: color-mix(in srgb, var(--accent) 6%, transparent); }
-.side-chat-error button { display: block; border: 0; background: transparent; color: var(--accent); padding: 5px 0; }
-.side-chat-latest { display: flex; align-items: center; gap: 4px; position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); color: var(--ink); background: var(--canvas); border: 1px solid var(--line); border-radius: 20px; padding: 5px 10px; font-size: 11px; }
+/* 发送键：纯黑实心（深色反过来）；在回答时同一个位置是停止键 */
+.side-chat-primary.insp-tool { width: 28px; height: 28px; flex: 0 0 auto; margin-left: auto; border-radius: var(--r-full); background: var(--action); color: var(--on-action); }
+.side-chat-primary.insp-tool:hover:not(:disabled) { background: var(--action-hover); color: var(--on-action); }
+.side-chat-primary.insp-tool:active:not(:disabled) { background: var(--action-active); }
+.side-chat-primary.insp-tool:disabled { background: var(--raised); color: var(--faint); opacity: 1; }
+.side-chat-note { color: var(--muted); font-size: var(--t-xs); }
+.side-chat-latest { display: flex; align-items: center; gap: 4px; position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-full); padding: 4px 10px; font-size: var(--t-xs); }
+.side-chat-latest:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+@media (hover: none) {
+  .side-chat-ans__acts { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .side-chat-ans__acts,
+  .side-chat-input { transition: none; }
+}
+
 @media (max-width: 720px) {
   .inspector-host:has(.side-chat-pane) { position: absolute; right: 0; top: 0; bottom: 0; width: min(100%, 430px); min-width: 0; z-index: 12; box-shadow: -8px 0 28px #0002; }
   .inspector-layout:has(.side-chat-pane) { position: relative; }

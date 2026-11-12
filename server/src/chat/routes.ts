@@ -14,6 +14,7 @@ import { validateAssistantWorkflow } from "./assistant.js";
 import { visibleRoom, visibleProject, isHumanRequest, parseMembers } from "./route-access.js";
 import { deleteChatRoom } from "./lifecycle.js";
 import { mountSideChatRoutes } from "./side-routes.js";
+import { forwardSideAnswer } from "./side-delivery.js";
 import type { AssistantResult } from "@ash/shared/chat";
 
 async function snapshot(room: RoomRow, c: Context) {
@@ -129,6 +130,14 @@ export function mountChatRoutes(api: Hono, service: ChatService = chatService) {
     if (!room) return c.json({ error: "chat not found" }, 404);
     await service.stop(room.id);
     return c.json(await snapshot(room, c));
+  });
+  api.post("/chats/:roomId/messages/:messageId/forward", async (c) => {
+    const room = await visibleRoom(c);
+    if (!room || room.kind !== "side") return c.json({ error: "side chat not found" }, 404);
+    try {
+      await forwardSideAnswer(room, c.req.param("messageId"));
+      return c.json(await snapshot(room, c));
+    } catch (error) { return c.json({ error: error instanceof Error ? error.message : "发给主任务失败" }, 409); }
   });
   api.post("/chats/:roomId/messages/:messageId/workflow", async (c) => {
     const room = await visibleRoom(c);
