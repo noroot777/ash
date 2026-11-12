@@ -42,8 +42,12 @@ export type TimelineNotice =
   /** 执行者驳回了这一轮审查意见，等用户裁定。 */
   | { kind: "review.dispute"; round: number }
   // ── 审查段的结构（本身是回执，审查泳道靠它们定起止）──
-  /** 一轮审查开始了。`rerun` = 同一轮重跑上一回合 / 从中断处继续，不算新开一轮。 */
-  | { kind: "review.start"; source: TimelineReviewSource; round: number | null; rerun?: boolean; reviewer?: string | null }
+  /**
+   * 一轮审查开始了。`rerun` = 同一轮重跑上一回合 / 从中断处继续，不算新开一轮。`runId` = 这是
+   * 哪一场派审 / 合并结果审查（就地验证没有）：轮号会重复（重新派审从第 1 轮数起），点这一轮
+   * 去审查格时靠它认出是哪一场。老记录没有。
+   */
+  | { kind: "review.start"; source: TimelineReviewSource; round: number | null; rerun?: boolean; reviewer?: string | null; runId?: string }
   /** 按某一轮的审查意见发起了修复（意见已交给执行者）。 */
   | { kind: "review.repair"; source: TimelineReviewSource; round: number }
   /** 验收阶段翻了一档（stage 原值：verified / verify_failed / merged / accepted …）。就地验证的结论靠它。 */

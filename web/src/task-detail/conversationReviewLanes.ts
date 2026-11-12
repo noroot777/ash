@@ -43,8 +43,10 @@ export type ConversationReviewLane = {
   reportAvailable: boolean;
   report: ReviewLaneReport | null;
   /**
-   * 这一轮属于哪一场派审（`FreeReviewRun.id`）——有没有报告都配得上。轮号不是身份：重新派审
-   * 从第 1 轮数起，点这一句去审查格时靠它认出是哪一场。就地验证、配不上 run 的为 null。
+   * 这一轮属于哪一场派审（`FreeReviewRun.id`）——有没有报告都配得上，同一场同一轮的每次尝试
+   * （启动失败的旧卡、重跑那张）都带上。先认服务端写在「开始」那一条上的，老记录才按时间窗口
+   * 配。轮号不是身份：重新派审从第 1 轮数起，点这一句去审查格时靠它认出是哪一场。就地验证、
+   * 配不上 run 的为 null——那种点了就在原处展开，不去猜。
    */
   runId: string | null;
   defaultCollapsed: boolean;
@@ -274,6 +276,8 @@ function attachReports(lanes: ConversationReviewLane[], reviews: readonly FreeRe
     const ended = nextAt ? Date.parse(nextAt) : Number.NaN;
     const matching = lanes.filter((lane) => {
       if (assigned.has(lane.id) || lane.source !== candidate.source) return false;
+      // 开始那一条已经说了是哪一场，就只认那一场；老记录没说，才按时间窗口去配。
+      if (lane.runId && lane.runId !== candidate.runId) return false;
       if (candidate.source === "free" && lane.round !== candidate.round) return false;
       const at = lane.startedAt ? Date.parse(lane.startedAt) : Number.NaN;
       if (Number.isFinite(started) && Number.isFinite(at) && at < started) return false;
@@ -284,6 +288,9 @@ function attachReports(lanes: ConversationReviewLane[], reviews: readonly FreeRe
     // 「启动失败旧卡」显示成「第 3 轮」、紧挨着的重跑卡显示成「第 3/5 轮」。
     // 附言同理：它属于整条 run，配到这一轮的每张卡都该带上。
     for (const lane of matching) {
+      // 身份属于整场：启动失败的那张旧卡和重跑那张都是这一场的这一轮，点过去都该认这一场。
+      // 报告只归最后一次尝试（下面），两件事分开。
+      lane.runId ??= candidate.runId;
       if (candidate.note && lane.note === null) lane.note = candidate.note;
       if (candidate.source !== "free" || candidate.totalRounds === null || lane.totalRounds !== null) continue;
       lane.totalRounds = candidate.totalRounds;
@@ -292,7 +299,6 @@ function attachReports(lanes: ConversationReviewLane[], reviews: readonly FreeRe
     const lane = matching.at(-1);
     if (!lane) continue;
     assigned.add(lane.id);
-    lane.runId = candidate.runId;
     // 审查者会话还没落盘时卡上没有气泡可推名字，用配到的这一 run 补齐。
     lane.reviewerLabel ??= candidate.reviewerName || null;
     lane.reviewerModel ??= candidate.model;
@@ -341,7 +347,9 @@ export function conversationFeedRows(
     const start = laneStart(item);
     // 同一轮的重跑（「重跑上一回合」/「从中断处继续」）接着原来那张卡跑，不另开一张
     // 只有半截的历史卡。
-    const rerun = !!active && !!start && start.kind === active.source && start.round === active.round;
+    const rerun = !!active && !!start && start.kind === active.source && start.round === active.round
+      // 同号不同场（重新派审又从第 1 轮数起）是新的一场，不是重跑。
+      && (!start.runId || !active.runId || start.runId === active.runId);
     if (active && start && !rerun) pushActive({ superseded: true });
     else if (active && closeBefore(active, item)) pushActive();
     if (!active && start) {
@@ -363,7 +371,7 @@ export function conversationFeedRows(
         complete: false,
         reportAvailable: false,
         report: null,
-        runId: null,
+        runId: start.runId ?? null,
         defaultCollapsed: false,
         findings: null,
         reviewerSpoke: false,

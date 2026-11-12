@@ -17,7 +17,7 @@ import { conversationFeedRows, reviewLaneMessageRoles, type ReviewLaneMessageRol
 import { conversationDebateRows } from "./conversationDebateRows.ts";
 import { conversationSystemRows, laneReceipts, type TurnReceipt } from "./conversationSystemRows.ts";
 import { DebateLane } from "./DebateLane.tsx";
-import { ReviewerLane } from "./ReviewerLane.tsx";
+import { ReviewerLane, laneRoundOpener } from "./ReviewerLane.tsx";
 import type { ReviewTarget } from "../review/reviewTarget.ts";
 import { NoticeLine, noticeTail, SystemAuthoredMessage } from "./SystemNotice.tsx";
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
@@ -437,7 +437,7 @@ export function ConversationFeed({
             }
             const roles = reviewLaneMessageRoles(row);
             return (
-              <ReviewerLane key={row.id} taskId={task.id} lane={row} onOpenRound={onOpenReviewPanel}>
+              <ReviewerLane key={row.id} taskId={task.id} lane={row} onOpenRound={laneRoundOpener(row, task.workflowMode, onOpenReviewPanel)}>
                 {lanes.get(row.id)!.rows.map((entry) => entry.kind === "item"
                   ? renderItem(entry.item, true, roles.get(entry.item.id))
                   : entry.kind === "notice"

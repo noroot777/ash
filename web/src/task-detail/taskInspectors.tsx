@@ -21,6 +21,7 @@ import { TaskMemoInspector } from "../task-memos/TaskMemoInspector.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import type { TaskMonitorsState } from "../monitors/useTaskMonitors.ts";
 import type { InfoRunFacts } from "./info/infoRunFacts.ts";
+import { reviewPanelSources } from "../review/reviewTarget.ts";
 
 export interface TaskInspectorContext {
   nativeWork: NativeWorkInspectorProps;
@@ -198,7 +199,8 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     icon: <MagnifyingGlass size={14} />,
     defaultOpen: true,
     shortcut: "r",
-    render: (context) => context.task.workflowMode === "free"
+    // 判据跟会话里「这一轮能不能点过来」同一份（review/reviewTarget 的 reviewPanelSources）。
+    render: (context) => reviewPanelSources(context.task.workflowMode).has("free")
       ? <FreeReviewPane task={context.task} onOpenReview={context.onOpenReview} onOpenTask={context.onOpenTask} notify={context.notify} />
       : <TaskReviewInspector {...context} />,
   },

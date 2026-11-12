@@ -60,6 +60,8 @@ export type VerifyNoteMark = {
   kind: "inline" | "free" | "merge";
   round: number | null;
   phase: "start" | "end";
+  /** 开始那一条带着的「哪一场」（服务端写在 review.start 上；老记录、就地验证没有）。 */
+  runId?: string;
 };
 
 const VERIFY_NOTE = /(自由工作流)?第\s*(\d+)\s*轮(验证|审查)/;
@@ -119,7 +121,9 @@ export function isVerifyNote(text: string, notice?: TimelineNotice): boolean {
  */
 export function verifyMark(text: string, notice?: TimelineNotice): VerifyNoteMark | null {
   if (!notice) return verifyNoteOf(text);
-  if (notice.kind === "review.start") return { kind: notice.source, round: notice.round, phase: "start" };
+  if (notice.kind === "review.start") {
+    return { kind: notice.source, round: notice.round, phase: "start", ...(typeof notice.runId === "string" && notice.runId ? { runId: notice.runId } : {}) };
+  }
   if (notice.kind === "review.verdict" || notice.kind === "review.repair") {
     return { kind: notice.source, round: notice.round, phase: "end" };
   }

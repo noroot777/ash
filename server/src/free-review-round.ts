@@ -346,7 +346,7 @@ export async function launchReviewRound(
   const label = run.targetKind === "accepted_merge" ? "合并结果审查" : `自由工作流第 ${run.currentRound} 轮审查`;
   const merge = run.targetKind === "accepted_merge";
   const start = { kind: "review.start" as const, source: merge ? "merge" as const : "free" as const,
-    round: merge ? null : run.currentRound, reviewer: run.reviewerName };
+    round: merge ? null : run.currentRound, reviewer: run.reviewerName, runId: run.id };
   // 补投只是把同一份任务书再送一次，不开也不收这一轮，记成普通回执。
   await appendTaskTimeline(task.id, (opts.redeliver ? receiptLine : (text: string) => noticeLine(
     opts.retry ? { ...start, rerun: true } : start, text))(opts.redeliver

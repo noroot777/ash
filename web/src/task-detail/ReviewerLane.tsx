@@ -4,7 +4,7 @@ import { ReviewReportDialog } from "../components/MarkdownBody.tsx";
 import type { ReviewFileTarget } from "../components/markdownPolicy.ts";
 import { api } from "../lib/api.ts";
 import { ReviewNote } from "../review/ReviewNote.tsx";
-import type { ReviewTarget } from "../review/reviewTarget.ts";
+import { reviewPanelSources, reviewTargetLocatable, type ReviewTarget } from "../review/reviewTarget.ts";
 import type { ConversationReviewLane, ReviewLaneConclusion } from "./conversationReviewLanes.ts";
 import { NoticeLine } from "./SystemNotice.tsx";
 import { reviewVerdictText, reviewVerdictTone, type ReviewVerdictWord } from "./timelineNoticeCopy.ts";
@@ -37,6 +37,23 @@ export function reviewLaneSentence(lane: ConversationReviewLane): string {
   return reviewVerdictText(lane.source, lane.round, verdict, lane.findings);
 }
 
+/** 点这一轮去审查格时带的话：来源、那一场、第几轮（见 review/reviewTarget）。 */
+export function laneReviewTarget(lane: ConversationReviewLane): ReviewTarget {
+  return { source: lane.source, runId: lane.runId, round: lane.round };
+}
+
+/**
+ * 这一轮点了去不去审查格：认得出是哪一条记录（老时间线配不上那一场、这个任务的审查格不装这一类
+ * 都算认不出）才给 `open`，否则不给——ReviewerLane 就在原处展开，不去审查格猜。
+ */
+export function laneRoundOpener(
+  lane: ConversationReviewLane,
+  workflowMode: string | null | undefined,
+  open: ((target: ReviewTarget) => void) | undefined,
+): ((target: ReviewTarget) => void) | undefined {
+  return open && reviewTargetLocatable(laneReviewTarget(lane), reviewPanelSources(workflowMode)) ? open : undefined;
+}
+
 /** 指到才出的那半句：谁审的、用时、什么时候出的结论。 */
 export function reviewLaneTail(lane: ConversationReviewLane): string {
   return [lane.reviewerLabel, durationBetween(lane.startedAt, lane.endedAt), formatInstant(lane.endedAt)]
@@ -55,7 +72,7 @@ export function ReviewerLane({
   children: ReactNode;
   /**
    * 出了结论的轮次点一下去右侧「审查」格、展开这一轮（带着来源和那一场，见 review/reviewTarget）。
-   * 不给（只读视图、团队时间线没有那一格）就在原处摊开这一轮的经过。
+   * 不给（只读视图、团队时间线没有那一格，或者认不出这一轮是哪一条记录）就在原处摊开这一轮的经过。
    */
   onOpenRound?: (target: ReviewTarget) => void;
 }) {
@@ -95,7 +112,7 @@ function ReviewMilestone({ taskId, lane, children, onOpenRound }: {
       <NoticeLine
         view={view}
         tail={reviewLaneTail(lane)}
-        onOpen={onOpenRound ? () => onOpenRound({ source: lane.source, runId: lane.runId, round: lane.round }) : () => setExpanded((value) => !value)}
+        onOpen={onOpenRound ? () => onOpenRound(laneReviewTarget(lane)) : () => setExpanded((value) => !value)}
         openLabel={onOpenRound ? "在右侧审查格里打开这一轮" : expanded ? "收起这一轮的经过" : "展开这一轮的经过"}
       />
       {!onOpenRound && expanded && (

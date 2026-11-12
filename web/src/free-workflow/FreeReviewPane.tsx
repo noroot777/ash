@@ -96,13 +96,13 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify }: {
   });
 
   // 别处（会话流里那一句审查结论、工作流格里那一轮）点过来：展开那一场的那一轮。认的是
-  // 「来源 + 那一场 + 轮号」（见 review/reviewTarget）；带不出那一场的老时间线才退回同来源里
-  // 最近那场的同号轮。审查记录还没读到时先不收下这份请求，读到了再办。
+  // 「来源 + 那一场 + 轮号」（见 review/reviewTarget）；不知道是哪一场就什么都不展开——拿最近
+  // 那场的同号轮顶上，打开的就是另一份报告。审查记录还没读到时先不收下这份请求，读到了再办。
   useInspectorRequest("review", (params) => {
     const target = reviewTargetOf(params);
-    if (target.source === "inline") return; // 就地验证不在这一格里，别拿同号的派审顶上
+    if (target.source === "inline" || !target.runId) return;
     const pool = target.source === "merge" ? postMerge : workspace;
-    const hit = [...pool].reverse().find((entry) => (target.runId ? entry.run.id === target.runId : true)
+    const hit = [...pool].reverse().find((entry) => entry.run.id === target.runId
       && (target.round == null || entry.round.round === target.round));
     if (hit) reveal(reviewKey(hit.run.id, hit.round.round));
     else if (!state && !free.error) return "wait";
