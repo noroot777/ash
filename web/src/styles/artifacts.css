@@ -1,79 +1,80 @@
-/* 生成物 Inspector：任务做出来的图片 / 网页 / 音视频 / PDF */
+/* 生成物（files/ArtifactsInspector.tsx）：按类型分节。图片和视频出缩略图，其余一行一条。
+   分节标题、提示条、空状态、入口行走公共件（inspector-parts.css）。 */
 
-.artifacts { display:flex; min-height:0; height:100%; flex-direction:column; overflow:auto; padding:8px 9px 16px; gap:2px; }
-.artifacts__head-action { display:grid; width:22px; height:22px; place-items:center; border:1px solid var(--line2); border-radius:6px; background:var(--panel); color:var(--muted); }
-.artifacts__head-action:hover:not(:disabled) { background:var(--raised); color:var(--ink); }
-.artifacts__head-action:disabled { opacity:.5; }
+.artifacts { display: flex; min-height: 0; flex-direction: column; gap: 8px; }
+.artifacts > .insp-note { margin: 0; }
+.artifacts__group > .insp-sec { margin-top: 12px; }
+.artifacts__group:first-of-type > .insp-sec { margin-top: 0; }
 
-.artifacts__state { display:flex; align-items:center; gap:6px; margin:6px 0; color:var(--faint); font-size:10.5px; }
-.artifacts__state.is-error { color:var(--red); }
-.artifacts__notice { margin:6px 0 0; border:1px solid color-mix(in lch,var(--amber) 28%,var(--line)); border-radius:7px; background:color-mix(in lch,var(--amber) 7%,var(--panel)); padding:6px 8px; color:var(--amber); font-size:10px; line-height:1.6; }
-/* 归属说明不是警告：它只解释「凭什么算这个任务的」，用琥珀色会抢掉真正的提示。 */
-.artifacts__notice.is-scope { border-color:var(--line); background:var(--panel); color:var(--muted); }
-
-.artifacts__empty { display:flex; flex-direction:column; align-items:center; gap:6px; margin-top:22px; padding:0 14px; text-align:center; }
-.artifacts__empty > svg { color:var(--faint); opacity:.65; }
-.artifacts__empty b { color:var(--muted); font-size:11.5px; font-weight:600; }
-.artifacts__empty p { margin:0; color:var(--faint); font-size:10px; line-height:1.7; }
-
-.artifacts__group { margin-top:10px; }
-.artifacts__group-head { display:flex; align-items:center; gap:5px; margin:0 0 6px; color:var(--muted); font-size:10px; font-weight:600; letter-spacing:.02em; text-transform:none; }
-.artifacts__group-head small { border-radius:999px; background:var(--raised); padding:1px 6px; color:var(--faint); font-size:9px; font-weight:500; }
-
-/* auto-fill 而不是固定列数：这一栏宽度用户能拖，280px 时一列、拖到 600px 就自己变三列。 */
-.artifacts__grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(124px,1fr)); gap:7px; }
-.artifacts__cell { position:relative; min-width:0; }
-
-.artifacts__card { display:flex; width:100%; min-width:0; flex-direction:column; gap:0; overflow:hidden; border:1px solid var(--line); border-radius:9px; background:var(--panel); padding:0; text-align:left; }
-.artifacts__card:hover { border-color:var(--line2); background:var(--raised); }
-.artifacts__card.is-active { border-color:color-mix(in lch,var(--accent) 45%,var(--line2)); background:color-mix(in lch,var(--accent) 9%,var(--panel)); }
-
-/* 缩略图区固定比例：一格一格高矮不齐的网格扫起来比不齐的文字还累。
-   棋盘底纹是为了让透明 PNG 的边界看得出来——纯色底上透明和白色长得一模一样。 */
-.artifacts__thumb {
-  display:grid; height:78px; place-items:center; overflow:hidden;
-  border-bottom:.5px solid var(--line);
-  background-color:var(--raised);
-  background-image:
-    linear-gradient(45deg,color-mix(in lch,var(--line) 55%,transparent) 25%,transparent 25% 75%,color-mix(in lch,var(--line) 55%,transparent) 75%),
-    linear-gradient(45deg,color-mix(in lch,var(--line) 55%,transparent) 25%,transparent 25% 75%,color-mix(in lch,var(--line) 55%,transparent) 75%);
-  background-position:0 0,7px 7px;
-  background-size:14px 14px;
+/* 缩略图：两列起，这一栏拖宽了自己变三列。auto-fill 而不是固定列数：宽度是用户拖的。 */
+.artifacts__thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
+.artifacts__shot { position: relative; min-width: 0; }
+.artifacts__thumb-card {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  padding: 0;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
-.artifacts__thumb-img { max-width:100%; max-height:100%; object-fit:contain; }
-.artifacts__thumb-glyph { display:grid; place-items:center; color:var(--faint); }
-.artifacts__thumb[data-kind="page"] .artifacts__thumb-glyph { color:var(--accent); }
-.artifacts__card:hover .artifacts__thumb-glyph { color:var(--muted); }
+.artifacts__thumb-card:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* 缩略图区固定比例：一格一格高矮不齐的网格扫起来比不齐的文字还累。 */
+.artifacts__thumb {
+  display: grid;
+  aspect-ratio: 16 / 10;
+  margin-bottom: 4px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: var(--r-md);
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--muted);
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+.artifacts__thumb > svg { width: 20px; height: 20px; }
+.artifacts__thumb-card:hover .artifacts__thumb { opacity: 0.85; }
+.artifacts__thumb-card.is-active .artifacts__thumb { box-shadow: inset 0 0 0 2px var(--ink); }
+.artifacts__thumb-img { width: 100%; height: 100%; object-fit: cover; }
+.artifacts__name { display: block; }
+.artifacts__facts { color: var(--muted); font-size: var(--t-xs); }
 
-.artifacts__meta { display:flex; min-width:0; flex-direction:column; gap:2px; padding:6px 7px 7px; }
-.artifacts__meta b { overflow:hidden; color:var(--ink); font-size:10.5px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
-/* 目录从右往左截断：`assets/img/gen/` 里有意义的是末尾那一段，不是开头。 */
-.artifacts__dir { overflow:hidden; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
-.artifacts__facts { display:flex; flex-wrap:wrap; align-items:center; gap:4px; color:var(--faint); font-size:9px; }
-.artifacts__facts em { border-radius:4px; background:var(--raised); padding:0 4px; font-size:8.5px; font-style:normal; line-height:1.5; }
-.artifacts__facts em[data-origin="working"] { background:color-mix(in lch,var(--amber) 16%,var(--panel)); color:var(--amber); }
-.artifacts__facts em[data-origin="committed"] { background:color-mix(in lch,var(--green) 16%,var(--panel)); color:var(--green); }
-.artifacts__facts em[data-origin="ignored"] { background:var(--raised); color:var(--muted); }
-/* 候选：描边而不是填色——它说的是「这一条有多硬」,跟左边那三个讲状态的角标不是一回事。 */
-.artifacts__facts em[data-confidence="approx"] { border:.5px dashed color-mix(in lch,var(--amber) 42%,var(--line2)); background:transparent; padding:0 3px; color:var(--amber); }
+/* 一行一条：名字、（还没提交的）来源、大小。「用本机应用打开」指到才出，换掉右边的大小。 */
+.artifacts__list { margin: 0; padding: 0; list-style: none; }
+.artifacts__file { position: relative; }
+.artifacts__line > .insp-cut { flex: 0 1 auto; }
+.artifacts__line:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.artifacts__line > svg { width: 14px; height: 14px; flex: 0 0 auto; color: var(--muted); }
+.artifacts__line.is-active { background: var(--sel-bg); }
+.artifacts__from { flex: 0 0 auto; color: var(--muted); font-size: var(--t-xs); }
+.artifacts__file:hover .insp-meta,
+.artifacts__file:focus-within .insp-meta { visibility: hidden; }
 
-/* 拿不准归属的那一栏：默认折起来，跟确定的那几组之间隔一道线，免得被当成同一份清单。 */
-.artifacts__doubtful { margin-top:14px; border-top:.5px dashed color-mix(in lch,var(--amber) 35%,var(--line)); padding-top:8px; }
-.artifacts__doubtful-toggle { display:flex; align-items:center; gap:5px; border:0; background:transparent; padding:2px 0; color:var(--amber); font-size:10px; font-weight:600; }
-.artifacts__doubtful-toggle:hover { color:var(--ink); }
-.artifacts__doubtful-toggle small { border-radius:999px; background:color-mix(in lch,var(--amber) 12%,var(--panel)); padding:1px 6px; font-size:9px; font-weight:500; }
-.artifacts__doubtful-note { margin:3px 0 0; color:var(--faint); font-size:9.5px; line-height:1.6; }
+.artifacts__open.insp-tool { position: absolute; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.artifacts__shot > .artifacts__open { top: 4px; right: 4px; background: var(--panel); box-shadow: var(--control-shadow); }
+.artifacts__file > .artifacts__open { top: 3px; right: -4px; }
+.artifacts__shot:hover > .artifacts__open,
+.artifacts__shot:focus-within > .artifacts__open,
+.artifacts__file:hover > .artifacts__open,
+.artifacts__file:focus-within > .artifacts__open { opacity: 1; }
 
-/* 「交给本机应用打开」压在卡片右上角，而且是卡片的**兄弟**不是子元素：套在按钮里浏览器
-   会把它拎出去，点哪儿都变成点了整张卡（file-tree 那边踩过同一个坑）。 */
-.artifacts__open { position:absolute; z-index:2; top:5px; right:5px; display:grid; width:20px; height:20px; place-items:center; border:1px solid var(--line2); border-radius:6px; background:color-mix(in lch,var(--panel) 82%,transparent); color:var(--muted); opacity:0; }
-.artifacts__cell:hover .artifacts__open, .artifacts__open:focus-visible { opacity:1; }
-.artifacts__open:hover { background:var(--raised); color:var(--ink); }
+/* 拿不准归属的那一栏：默认折起来，跟确定的那几组之间多留一段空 */
+.artifacts__doubtful { margin-top: 10px; }
+.artifacts__doubtful > .insp-hint { margin: 2px 0 0; }
+.artifacts__scope { margin-top: 6px; }
 
-.artifacts__legend { margin:14px 0 0; border-top:.5px solid var(--line); padding-top:8px; }
-.artifacts__legend > div { display:flex; gap:6px; margin-top:4px; }
-.artifacts__legend dt { flex:0 0 auto; border-radius:4px; background:var(--raised); padding:0 4px; color:var(--muted); font-size:8.5px; line-height:1.6; }
-.artifacts__legend dt[data-origin="working"] { background:color-mix(in lch,var(--amber) 16%,var(--panel)); color:var(--amber); }
-.artifacts__legend dt[data-origin="committed"] { background:color-mix(in lch,var(--green) 16%,var(--panel)); color:var(--green); }
-.artifacts__legend dt[data-confidence="approx"] { border:.5px dashed color-mix(in lch,var(--amber) 42%,var(--line2)); background:transparent; color:var(--amber); }
-.artifacts__legend dd { margin:0; color:var(--faint); font-size:9px; line-height:1.6; }
+@media (hover: none) {
+  .artifacts__open.insp-tool { opacity: 1; }
+  .artifacts__file .insp-meta { visibility: visible; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .artifacts__thumb,
+  .artifacts__open.insp-tool { transition: none; }
+}

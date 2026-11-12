@@ -28,7 +28,17 @@ export const ARTIFACT_ORIGIN_LABEL: Record<TaskArtifact["origin"], string> = {
   ignored: "未纳入版本管理",
 };
 
-/** 角标的悬浮解释——「未提交」三个字本身说不清它凭什么算这个任务的产物。 */
+/**
+ * 跟在名字后面的那两个字：只在**还没提交**时写（已提交的是多数，写了只是噪音）。被 .gitignore
+ * 挡着的那种叫「未跟踪」，全称「未纳入版本管理」和它凭什么算这个任务的，指上去看。
+ */
+export const ARTIFACT_ORIGIN_SHORT: Record<TaskArtifact["origin"], string | null> = {
+  working: "未提交",
+  committed: null,
+  ignored: "未跟踪",
+};
+
+/** 来源的悬浮解释——「未提交」三个字本身说不清它凭什么算这个任务的产物。 */
 export const ARTIFACT_ORIGIN_HINT: Record<TaskArtifact["origin"], string> = {
   working: "还在工作目录里，没有提交",
   // 共享主仓的任务（useWorktree=false）压根没有一条属于它的分支，那一档退回「运行区间
@@ -97,17 +107,6 @@ export function groupArtifacts(artifacts: readonly TaskArtifact[]): ArtifactGrou
   return KIND_ORDER
     .filter((kind) => byKind.has(kind))
     .map((kind) => ({ key: kind, label: ARTIFACT_KIND_LABEL[kind], items: byKind.get(kind)! }));
-}
-
-export function formatArtifactTime(iso: string | null): string {
-  if (!iso) return "";
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return "";
-  const minutes = Math.floor((Date.now() - at.getTime()) / 60000);
-  if (minutes < 1) return "刚刚";
-  if (minutes < 60) return `${minutes} 分钟前`;
-  if (minutes < 60 * 24) return `${Math.floor(minutes / 60)} 小时前`;
-  return at.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
 }
 
 export function useTaskArtifacts(taskId: string) {

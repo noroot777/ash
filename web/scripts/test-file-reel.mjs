@@ -43,6 +43,8 @@ const artifacts = [
   artifact("pages/second.html", "page"),
   artifact("clips/only.mp4", "video"),
 ];
+// 有一张已经提交了：名字后面不写来源，只有还没提交的才多两个字。
+artifacts[1].origin = "committed";
 
 // 文件树那一层：图片和文本混着摆，正是审查里翻出类别的那种目录。
 const entry = (path) => ({
@@ -116,6 +118,17 @@ try {
   const shownPath = async () => title.textContent();
 
   await card("one.png").waitFor();
+
+  // 生成物面板的版式：图片和视频出缩略图，其余（这里是网页）一行一条——名字、大小；
+  // 还没提交的多两个字「未跟踪」，已提交的不写；目录和时间不常驻，指上去才看。
+  assert.equal(await page.locator(".artifacts__thumb-card").count(), 4, "三张图 + 一段视频出缩略图");
+  assert.equal(await page.locator(".artifacts__line").count(), 2, "网页一行一条");
+  assert.match(await card("first.html").innerText(), /first\.html[\s\S]*未跟踪[\s\S]*2(\.0)? KB/);
+  assert.doesNotMatch(await card("two.png").innerText(), /未跟踪|未提交|已提交/, "已提交的不写来源");
+  assert.doesNotMatch(await page.locator(".artifacts").innerText(), /pages|shots|2026/, "目录和时间不常驻");
+  await card("first.html").hover();
+  await page.locator(".ui-hover-tip").filter({ hasText: "未纳入版本管理 · pages" }).waitFor();
+  await page.mouse.move(0, 0);
 
   // 从中间那一张点进去：计数按它在组里的位置，不是从 1 开始数。
   await card("two.png").click();
