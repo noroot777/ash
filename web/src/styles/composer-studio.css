@@ -67,16 +67,13 @@
 .studio-preset-run { display:inline-flex; min-width:0; align-items:center; gap:6px; margin:0 8px; color:var(--muted); font-size:var(--t-xs); }
 .studio-preset-run > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .studio-preset-run > svg { flex-shrink:0; }
-.studio-card > .composer-footer > .composer-opt:last-of-type { margin-right:4px; }
+.studio-card > .composer-footer > .send-key { margin-left:4px; }
 
-/* 旧的连体提交键（reply-2 换成共用发送键之前） */
-.studio-submit-group { display:flex; flex:0 0 auto; align-items:stretch; }
-.studio-submit-group > .studio-submit.ui-button { border-top-right-radius:0; border-bottom-right-radius:0; }
+/* 回复框旧的连体发送键里那半截「发送设置」（换成共用发送键之后就可以删） */
 .studio-submit-mode.studio-aux-button { height:36px; flex:0 0 auto; margin-left:1px; border-radius:0 9px 9px 0; padding:0 8px; background:var(--accent); color:white; box-shadow:0 0 0 1px color-mix(in srgb, var(--accent-active) 28%, transparent), 0 1px 2px rgb(40 42 48 / 12%); }
 .studio-submit-mode.studio-aux-button:hover:not(:disabled),.studio-submit-mode.studio-aux-button[aria-expanded="true"] { background:var(--accent-hover); color:white; }
 .studio-submit-mode.studio-aux-button.is-configured { color:white; }
 .studio-submit-mode > .studio-aux-caret { display:inline; }
-.studio-submit.ui-button { height:36px; gap:10px; padding:0 12px; border-radius:9px; font-size:11px; }
 .studio-card > .studio-input-status { padding:0 16px 10px; color:var(--muted); font-size:var(--t-xs); }
 .studio-footnote { display:flex; justify-content:space-between; gap:12px; color:var(--faint); font-size:10px; margin:12px 6px 0; }
 

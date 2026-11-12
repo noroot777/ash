@@ -1,0 +1,79 @@
+/* 共用发送键（components/SendKey.tsx）。实心的那两段用 --action 黑白令牌：浅色主题纯黑、深色主题反过来白底黑字。 */
+
+.send-key { --h: 29px; --opt: 24px; display: inline-flex; flex: none; height: var(--h); color: var(--on-action); }
+.send-key.is-md { --h: 36px; --opt: 26px; }
+.send-key > button { position: relative; display: inline-flex; align-items: center; justify-content: center; height: 100%; border: 0; padding: 0; color: inherit; font-size: var(--t-xs); font-weight: var(--w-medium); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.send-key.is-md > button { font-size: var(--t-sm); }
+.send-key > button:focus-visible { outline: 2px solid var(--focus-soft); outline-offset: 2px; z-index: 1; }
+
+/* 主段的底色单独一层：键变宽变窄时布局一步到位，底色从旧位置滑到新位置（只动 transform，圆角不变形）。
+   .send-key-clip 向左多留 180px、只裁右边；.send-key-bg 向右多铺 180px、只露左边的圆角。 */
+.send-key-main { isolation: isolate; gap: 6px; min-width: var(--h); border-radius: var(--r-md) 0 0 var(--r-md); background: transparent; }
+.send-key-main.has-text { padding: 0 9px 0 11px; }
+.send-key-clip { position: absolute; z-index: -1; inset: 0 0 0 -180px; overflow: hidden; pointer-events: none; }
+.send-key-bg { position: absolute; inset: 0 -180px 0 180px; border-radius: var(--r-md) 0 0 var(--r-md); background: var(--action); transition: background var(--dur-1) var(--ease-out); }
+.send-key-main:hover .send-key-bg { background: var(--action-hover); }
+.send-key-main:active .send-key-bg { background: var(--action-active); }
+.send-key-main[aria-disabled="true"], .send-key-main[aria-busy="true"] { cursor: default; }
+
+.send-key-opt { width: var(--opt); margin-left: 1px; border-radius: 0 var(--r-md) var(--r-md) 0; background: var(--action); }
+.send-key-opt:hover:not(:disabled), .send-key-opt[aria-expanded="true"] { background: var(--action-hover); }
+.send-key-opt:active:not(:disabled) { background: var(--action-active); }
+.send-key-opt:disabled { color: var(--on-action-dim); cursor: default; }
+
+/* 发不出去：键还是实心的，只有主段上的箭头和字淡下去；尖角照样点得动，不跟着淡 */
+.send-key.is-dim > .send-key-main { color: var(--on-action-dim); }
+.send-key.is-dim > .send-key-main:is(:hover, :active) .send-key-bg { background: var(--action); }
+
+/* 在跑、又打了字：主段要用来发，停止挪到它左边这一颗上。和主段同高，不抢实心色，指上去才是红的 */
+.send-key > .send-key-halt { width: var(--h); margin-right: 6px; border-radius: var(--r-md); background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); animation: send-key-halt-in var(--dur-2) var(--ease-out) both; }
+.send-key > .send-key-halt:hover:not(:disabled) { background: var(--hover-bg); color: var(--red); }
+.send-key > .send-key-halt:active:not(:disabled) { background: var(--sel-bg); }
+@keyframes send-key-halt-in { from { opacity: 0; transform: scale(0.9); } }
+
+/* 键上的字：只在「这一条不会马上发出去」时出现。换一句字时淡入 */
+.send-key-text { animation: send-key-text-in var(--dur-2) var(--ease-out) both; }
+@keyframes send-key-text-in { from { opacity: 0; } }
+
+/* 图标叠在同一格里交叉淡：发送 ↔ 停止 ↔ 转圈，尖角 ↔ 时钟 ↔ 沙漏。进来的那个从九成大长到原大 */
+.send-key-glyph { display: grid; place-items: center; flex: none; }
+.send-key-glyph > svg { grid-area: 1 / 1; opacity: 0; transform: scale(0.9); transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out); }
+.send-key-glyph > svg.is-on { opacity: 1; transform: none; }
+.send-key-glyph > svg.is-spinning.is-on { animation: send-key-spin 800ms linear infinite; }
+@keyframes send-key-spin { to { rotate: 360deg; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .send-key-text, .send-key > .send-key-halt { animation: none; }
+  .send-key-glyph > svg { transition: none; }
+}
+
+/* 尖角点开的那一层（发送设置 / 启动设置）：上面选档，下面是这一档要填的那一样 */
+.send-key-panel { position: fixed; z-index: 50; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; width: 328px; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); overflow-y: auto; padding: 4px; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow), var(--menu-shadow); color: var(--ink); opacity: 0; transform: translateY(4px) scale(0.98); transform-origin: bottom right; }
+.send-key-panel.is-in { opacity: 1; transform: none; transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out); }
+.send-key-panel:focus { outline: 0; }
+.send-key-panel p { margin: 0; padding: 0 4px 2px; color: var(--muted); font-size: var(--t-xs); line-height: 1.6; }
+.send-key-panel p:empty { display: none; }
+@media (prefers-reduced-motion: reduce) { .send-key-panel, .send-key-panel.is-in { transform: none; transition: none; } }
+
+/* 一列可选的档：左边名字，右边一句说明（启动设置）；或一组分段（发送设置） */
+.send-key-choices { display: grid; }
+.send-key-choices > button { display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; border: 0; border-radius: var(--r-sm); padding: 0 8px; background: transparent; color: var(--ink); font-size: var(--t-sm); text-align: left; white-space: nowrap; transition: background var(--dur-1) var(--ease-out); }
+.send-key-choices > button:hover:not(:disabled) { background: var(--hover-bg); }
+.send-key-choices > button:focus-visible { outline: 2px solid var(--focus-soft); outline-offset: -2px; }
+.send-key-choices > button[aria-checked="true"] > span { font-weight: var(--w-medium); }
+.send-key-choices > button[aria-checked="true"]::after { content: ""; width: 6px; height: 6px; flex: none; margin-left: 8px; border-radius: 50%; background: var(--ink); }
+.send-key-choices > button > em { margin-left: auto; padding-left: 16px; color: var(--muted); font-size: var(--t-xs); font-style: normal; }
+.send-key-choices > button:disabled { color: var(--faint); cursor: default; }
+.send-key-choices > button:disabled > em { color: var(--faint); }
+.send-key-seg { display: flex; gap: 2px; padding: 2px; border-radius: var(--r-md); background: var(--overlay); }
+.send-key-seg > button { flex: 1; height: 26px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--muted); font-size: var(--t-xs); transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.send-key-seg > button:hover { color: var(--ink); }
+.send-key-seg > button[aria-checked="true"] { background: var(--lifted); box-shadow: var(--surface-shadow); color: var(--ink); }
+.send-key-seg > button:focus-visible { outline: 2px solid var(--focus-soft); outline-offset: 1px; }
+.send-key-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 8px 4px 4px; border-top: 1px solid var(--line); }
+.send-key-body:empty { display: none; }
+.send-key-body .schedule-field { width: 100%; margin: 0; }
+.send-key-body .composer-queue-after { display: grid; gap: 6px; margin: 0; color: var(--muted); font-size: var(--t-xs); }
+.send-key-body .composer-queue-after .ui-select-trigger, .send-key-body .composer-queue-after .ui-dropdown-trigger { width: 100%; }
+.send-key-body .composer-queue-after .studio-help { margin: 0; }
+.send-key-body .is-error { color: var(--red); }

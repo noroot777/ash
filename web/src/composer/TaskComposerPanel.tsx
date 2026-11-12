@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { DUET_DEFAULTS } from "@ash/shared/duet";
 import type {
   AgentExecutorProfile,
   AgentType,
@@ -39,6 +38,7 @@ import { ComposerFields } from "./ComposerFields.tsx";
 import { ASH_SLASH_ITEMS, SLASHES } from "./composerParts.tsx";
 import { useComposerDraft, type ComposerDraft } from "./composerDraft.ts";
 import { settleCreatedTask } from "./settleCreatedTask.ts";
+import { composerTaskInput } from "./composerTaskInput.ts";
 import { useComposerWorkflow } from "./ComposerWorkflow.tsx";
 import { ComposerLaunchControl, type LaunchMode } from "./ComposerLaunchControl.tsx";
 import { useQueueAfter } from "./useQueueAfter.tsx";
@@ -54,9 +54,8 @@ import {
 } from "./executorOverrides.ts";
 import { useComposerRunSummary } from "./composerRunSummary.ts";
 import { ComposerForkContext } from "./ComposerForkContext.tsx";
-import { forkTaskBody, forkBodyProblem } from "../task-detail/conversationFork.ts";
+import { forkBodyProblem } from "../task-detail/conversationFork.ts";
 import { useComposerBranches } from "./useComposerBranches.ts";
-import { provisionalTitle } from "@ash/shared/provisional-title";
 export type { ComposerDraft };
 
 export function TaskComposerPanel({
@@ -405,8 +404,14 @@ export function TaskComposerPanel({
   // 悄悄扔掉。三种模式一视同仁——切走这个面板就没人接住在途的那张了。
   const waitingUploads = uploads.uploading;
   const forkError = forkBodyProblem(fork, body);
-  const canSubmit = (fork ? !!body.trim() : !!body.trim() || allAttachments.length > 0)
-    && !forkError && !busy && !switching && !noExecutor && !roleBlocked && !scheduleError && !queueTargetError && !waitingUploads;
+  // 此刻为什么发不出去：发送键淡下去时指上去说的就是这一句；提交函数里照样拦。
+  const blockReason = !(fork ? body.trim() : body.trim() || allAttachments.length > 0) ? "先写点内容"
+    : forkError ? forkError
+      : waitingUploads ? "附件传完才能创建"
+        : switching ? "正在切换项目分支，切完才能创建"
+          : noExecutor || roleBlocked ? availabilityMessage ?? "执行器不可用"
+            : scheduleError || queueTargetError || null;
+  const canSubmit = !blockReason && !busy;
 
   const changeLaunchMode = (next: LaunchMode) => {
     setLaunchMode(next);
@@ -428,86 +433,11 @@ export function TaskComposerPanel({
     setBusy(true);
     let task: Task;
     try {
-      const common = {
-        projectId: project.id,
-        title: provisionalTitle(body, mode === "duet" ? "新建讨论" : undefined),
-        autoTitle: mode === "single",
-        groupId: groupId || null,
-        labels,
-        originTaskId: fork?.sourceTaskId,
-      };
-      if (mode === "duet") {
-        // 议题同时送 body 和 duet.topic：后端会把附件块分别拼在两者末尾（task-routes
-        // 的 `row.body` / `scopedDuet`），于是讨论者的开场 prompt 和详情页顶部的「完整
-        // 议题」看到的是同一份东西。只送 topic 的话，详情页那句 `task.body || topic`
-        // 会拿到一段只剩附件路径、没有正文的 body。
-        task = await api.createTask({
-          ...common,
-          body: forkTaskBody(fork, body),
-          attachments: allAttachments,
-          mode,
-          duet: {
-            ...DUET_DEFAULTS,
-            topic: forkTaskBody(fork, body),
-            voiceA: voiceAExecutor.agentType,
-            voiceB: voiceBExecutor.agentType,
-            voiceAExecutorId: voiceAExecutor.executorId,
-            voiceBExecutorId: voiceBExecutor.executorId,
-            voiceAModel: executors.voiceA.model || null,
-            voiceAReasoningEffort: executors.voiceA.effort || null,
-            voiceBModel: executors.voiceB.model || null,
-            voiceBReasoningEffort: executors.voiceB.effort || null,
-            maxRounds: rounds ? Math.max(1, Number(rounds) || 3) : null,
-            gateG1: gate ? "on" : "off",
-          },
-        });
-      } else if (mode === "team") {
-        task = await api.createTask({
-          ...common,
-          body: forkTaskBody(fork, body),
-          attachments: allAttachments,
-          mode,
-          agentType: executorTypes.lead,
-          useWorktree: project.health.isRepo && useWorktree,
-          worktreeBase: useWorktree && base ? base : null,
-          team: {
-            lead: executorTypes.lead,
-            worker: executorTypes.worker,
-            leadExecutorId: leadExecutor.executorId,
-            workerExecutorId: workerExecutor.executorId,
-            leadModel: executors.lead.model || null,
-            workerModel: executors.worker.model || null,
-            leadReasoningEffort: executors.lead.effort || null,
-            workerReasoningEffort: executors.worker.effort || null,
-            review,
-            reviewerAgentType: executorTypes.reviewer,
-            reviewerExecutorId: reviewerExecutor.executorId,
-            reviewerModel: executors.reviewer.model || null,
-            reviewerReasoningEffort: executors.reviewer.effort || null,
-          },
-        });
-      } else {
-        task = await api.createTask({
-          ...common,
-          body: forkTaskBody(fork, body),
-          attachments: allAttachments,
-          mode,
-          agentType: singleRun.agentType,
-          executorId: singleRun.executorId,
-          model: singleRun.model,
-          reasoningEffort: singleRun.reasoningEffort,
-          useWorktree: project.health.isRepo && useWorktree,
-          worktreeBase: useWorktree && base ? base : null,
-          workflowMode,
-          workflowId: workflowMode === "preset" ? workflow.workflowId : null,
-          // 送的是**快照**而不是引用：面板上看到的那条线,原样落进这个任务。
-          // workspace 以「任务选项」里的 worktree 开关为准 —— 那是同一件事的唯一开关,
-          // 起手式里带的那个只负责在挑中它的时候把开关拨过去(见 pickWorkflow)。
-          workflow: workflowMode === "preset" && workflow.def
-            ? { ...workflow.def, workspace: project.health.isRepo && useWorktree ? "isolated" : "shared" }
-            : null,
-        });
-      }
+      task = await api.createTask(composerTaskInput({
+        mode, project, body, fork, groupId, labels, attachments: allAttachments, rounds, gate, review, useWorktree, base,
+        executors, lead: leadExecutor, worker: workerExecutor, reviewer: reviewerExecutor, voiceA: voiceAExecutor, voiceB: voiceBExecutor,
+        singleRun, workflowMode, workflowId: workflow.workflowId, workflowDef: workflow.def,
+      }));
     } catch (error) {
       notify(error instanceof Error ? error.message : "任务创建失败");
       setBusy(false);
@@ -626,7 +556,8 @@ export function TaskComposerPanel({
               at={scheduleAt}
               cron={scheduleCron}
               busy={busy}
-              canSubmit={canSubmit}
+              blocked={blockReason}
+              uploading={uploads.uploading ? uploadingLabel(uploads.pending) : null}
               error={scheduleError || queueTargetError}
               onModeChange={changeLaunchMode}
               onAtChange={setScheduleAt}
@@ -636,10 +567,7 @@ export function TaskComposerPanel({
               queueUnavailable={queueUnavailable}
             />
           </footer>
-          {(uploads.uploading || allAttachments.length > 0 || scheduleError || queueTargetError) && <div className="studio-input-status" role="status">
-            {uploads.uploading ? `${uploadingLabel(uploads.pending)} · 传完才能创建`
-              : scheduleError || queueTargetError || `${allAttachments.length} 个附件`}
-          </div>}
+          {allAttachments.length > 0 && <div className="studio-input-status" role="status">{allAttachments.length} 个附件</div>}
           </div></>}
           </ComposerFields>
           <div className="studio-footnote"><span>/ 调用技能 · @ 引用项目文件 · {sendKeys.send} 创建</span>{body.length > 0 && <span>{body.length} 字</span>}</div>
