@@ -160,14 +160,19 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
   // 生产方明说「已经了结、终态说不准」的那几行(closed + unknown):没有终态也有结束时刻。
   const closedRows = new Set<string>();
   const legacyOrdinals = new Map<string, number>();
+  // 「哪一回合派的」按第几个回合认，不认条目 id：直播和落盘重读的 id 是两套（live:… / persisted:…），
+  // 拿 id 认，刷新一下同一批子智能体就像换了一轮派的。
+  let agentTurn = -1;
   for (const item of items) {
     if (item.kind !== "agent") continue;
+    agentTurn += 1;
+    const turn = `turn:${agentTurn}`;
     const key = (id: string) => `${item.sessionId}:${id}`;
     const base = { sessionId: item.sessionId, sessionLabel: item.label };
     let observedAt: string | undefined;
     const put = (id: string, patch: Partial<NativeWorkItem>) => {
       const previous = rows.get(id);
-      const next = { id, kind: "agent" as const, title: placeholderTitle(item.sessionId, id), status: "unknown" as const, dispatchTurn: item.id, ...base, ...previous, ...patch };
+      const next = { id, kind: "agent" as const, title: placeholderTitle(item.sessionId, id), status: "unknown" as const, dispatchTurn: turn, ...base, ...previous, ...patch };
       if (observedAt) {
         if (!next.startedAt && next.status === "running") next.startedAt = observedAt;
         if (terminal(next.status) && (!previous || !terminal(previous.status))) next.endedAt = observedAt;

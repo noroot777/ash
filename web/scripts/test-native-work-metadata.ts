@@ -4,7 +4,7 @@ import { codexChildWork, codexNativeWork, nativePlanSnapshot, NativeWorkTrace } 
 import { childActivity } from "../../server/src/executors/native-agent-activity.ts";
 import { buildConversationItems, type ConversationItem } from "../src/task-detail/conversationModel.ts";
 import { buildNativeWork } from "../src/task-detail/nativeWorkModel.ts";
-import { nativeWorkDate, nativeWorkDuration } from "../src/task-detail/nativeWorkTiming.ts";
+import { nativeWorkDuration, nativeWorkRange } from "../src/task-detail/nativeWorkTiming.ts";
 
 const start = "2026-09-08T23:59:00.000Z";
 const end = "2026-09-09T00:01:05.000Z";
@@ -160,7 +160,7 @@ assert.equal(multipleTurns.endedAt, finalEnd);
 assert.equal(nativeWorkDuration(multipleTurns, Date.parse(finalEnd)), "10小时 1分", "显示首末时间跨度，包含两轮之间的空闲");
 const unknown = { ...done, startedAt: undefined };
 assert.equal(nativeWorkDuration(unknown, Date.now()), "未记录");
-assert.equal(nativeWorkDate("invalid"), null);
+assert.equal(nativeWorkRange({ ...done, startedAt: "invalid", endedAt: undefined }), "", "认不出的时刻不写半截时间");
 assert.equal(nativeWorkDuration({ ...done, startedAt: end, endedAt: start }, Date.now()), "未记录");
 assert.equal(nativeWorkDuration({ ...done, endedAt: "2026-09-10T02:02:00.000Z" }, Date.now()), "1天 2小时 3分");
 
