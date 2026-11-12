@@ -9,6 +9,7 @@
 .composer-header > span { min-width:0; overflow:hidden; color:var(--muted); font-size:var(--t-xs); text-overflow:ellipsis; white-space:nowrap; }
 .composer-header > .composer-header-grow { flex:1; }
 .composer-header .ui-button { flex:none; }
+.composer-header > .composer-header-count { flex:none; margin-right:4px; }
 
 .composer-scroll { min-height:0; overflow-y:auto; background:var(--canvas); }
 /* 一条 720 的居中列。上边距是定值而不是算出来的居中：输入变高、下面多出列表时卡片不跳。
@@ -84,6 +85,20 @@
 .studio-aux-button:hover:not(:disabled),.studio-aux-button[aria-expanded="true"] { color:var(--ink); background:var(--raised); }
 .studio-aux-button.is-configured { color:var(--accent); }
 .studio-aux-caret { color:var(--faint); }
+
+/* 首页：卡片下面「等你处理」，和卡片同宽，字的左缘对着输入区的字 */
+.home-todo { margin-top:36px; }
+.home-todo > h2 { display:flex; align-items:baseline; gap:6px; margin:0 0 6px; padding:0 16px; color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-medium); }
+.home-todo > h2 > b { color:var(--faint); font-weight:var(--w-regular); font-variant-numeric:tabular-nums; }
+.home-todo > ul { margin:0; padding:0; list-style:none; }
+.home-todo button { display:flex; align-items:center; gap:10px; width:100%; min-height:36px; border:0; border-radius:var(--r-md); padding:0 16px; background:transparent; color:var(--ink); font-size:var(--t-sm); text-align:left; transition:background var(--dur-1) var(--ease-out); }
+.home-todo button:hover { background:var(--hover-bg); }
+.home-todo button:active { background:var(--sel-bg); }
+.home-todo button:focus-visible { outline:2px solid var(--focus-soft); outline-offset:-2px; }
+.home-todo-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.home-todo-why { flex:none; color:var(--muted); font-size:var(--t-xs); white-space:nowrap; }
+.home-todo-when { flex:none; width:64px; color:var(--faint); font-size:var(--t-xs); text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.home-todo-more { margin:6px 0 0; padding:0 16px; color:var(--muted); font-size:var(--t-xs); }
 
 /* ---------- 点开的浮层 ---------- */
 .studio-popover { position:fixed; z-index:40; width:340px; max-width:calc(100vw - 24px); max-height:calc(100dvh - 24px); overflow-y:auto; border-radius:var(--r-lg); padding:6px; background:var(--panel); box-shadow:var(--control-shadow), var(--menu-shadow); }

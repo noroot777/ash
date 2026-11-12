@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
   AgentExecutorProfile,
   AgentType,
@@ -54,9 +54,26 @@ import {
 } from "./executorOverrides.ts";
 import { useComposerRunSummary } from "./composerRunSummary.ts";
 import { ComposerForkContext } from "./ComposerForkContext.tsx";
+import { ComposerExpand } from "./ComposerExpand.tsx";
 import { forkBodyProblem } from "../task-detail/conversationFork.ts";
 import { useComposerBranches } from "./useComposerBranches.ts";
 export type { ComposerDraft };
+
+/**
+ * 首页形态：有项目、没选任务时主区就是这张卡（只建单任务）。和新建面板是**同一个组件
+ * 实例**——WorkspaceShell 在两处用同一个 key 挂它，点「全部选项」展开成新建面板时，
+ * 写到一半的正文、附件、选好的执行器和工作目录都原样带过去。
+ */
+export type ComposerHome = {
+  title: string;
+  /** 标题后面那一小段灰字（任务模式下写「新建到哪个项目」）。 */
+  detail?: string;
+  count?: string;
+  /** 「全部选项」：展开成新建面板。 */
+  onExpand: () => void;
+  /** 卡片下面那一块（等你处理）。 */
+  below?: ReactNode;
+};
 
 export function TaskComposerPanel({
   project,
@@ -72,6 +89,7 @@ export function TaskComposerPanel({
   onCreateGroup,
   onProjectUpdated,
   notify,
+  home,
 }: {
   project: ProjectView;
   groups: Group[];
@@ -95,6 +113,7 @@ export function TaskComposerPanel({
   /** 「设为本项目默认」写回之后，把新的项目行交回上层 —— 否则下次打开这块面板还按旧值预填。 */
   onProjectUpdated: (project: ProjectView) => void;
   notify: (message: string) => void;
+  home?: ComposerHome;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sendKeys = useSendKeyLabels();
@@ -182,7 +201,15 @@ export function TaskComposerPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notify, project.health.isRepo, project.id]);
 
+  // 首页不抢焦点：J/K、C 这几颗单键在输入框里按不出来，一进首页就把光标塞进框里等于把
+  // 键盘导航关掉。展开成新建面板时才把光标放进去；从面板退回首页时把它拿出来。
+  const isHome = !!home;
   useEffect(() => {
+    if (isHome) textareaRef.current?.blur();
+    else textareaRef.current?.focus({ preventScroll: true });
+  }, [isHome]);
+  useEffect(() => {
+    if (isHome) return;
     const key = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
@@ -190,7 +217,7 @@ export function TaskComposerPanel({
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [onCancel]);
+  }, [isHome, onCancel]);
   const allAttachments = useMemo(
     () => [...new Set([...uploads.attachments.map((item) => item.path), ...(fork?.attachmentPaths ?? [])])],
     [uploads.attachments, fork],
@@ -462,8 +489,13 @@ export function TaskComposerPanel({
   };
 
   return (
-    <main className="task-composer-panel is-studio">
-      <header className="composer-header">
+    <main className={`task-composer-panel is-studio${home ? " is-home" : ""}`}>
+      {home ? <header className="composer-header">
+        <b>{home.title}</b>
+        {home.detail && <span>{home.detail}</span>}
+        <span className="composer-header-grow" aria-hidden="true" />
+        {home.count && <span className="composer-header-count">{home.count}</span>}
+      </header> : <header className="composer-header">
         <span className="workspace-kind-chip">新建</span>
         <b>{fork ? "派生新任务" : "新建任务"}</b>
         <span>{project.name}</span>
@@ -474,7 +506,7 @@ export function TaskComposerPanel({
           <Button variant="ghost" onClick={() => { draft.clear(); textareaRef.current?.focus(); }}>清空草稿</Button>
         )}
         <Button variant="ghost" onClick={onCancel}>取消 Esc</Button>
-      </header>
+      </header>}
       <div className="composer-scroll">
         <div className="composer-inner">
           {fork && <ComposerForkContext fork={fork} />}
@@ -529,9 +561,10 @@ export function TaskComposerPanel({
             }}
           >
           {({ modes, options, executorTools }) => <>
-          <div className="composer-modes">{modes}</div>
+          {!home && <div className="composer-modes">{modes}</div>}
           <div className="studio-card">
-          <ComposerObjective body={body} mode={mode} textareaRef={textareaRef}
+          <ComposerObjective body={body} mode={mode} textareaRef={textareaRef} autoFocus={!home}
+            onEscape={home ? () => textareaRef.current?.blur() : undefined}
             onChange={(value) => { changeBody(value); setSlashIndex(0); setSlashDismissed(false); mention.onValueChange(); }}
             onPaste={uploads.onPaste} items={slashCandidates} selected={slashSelected} token={slash?.token ?? null}
             onSelect={setSlashIndex} onPick={pickSlash} onDismiss={() => setSlashDismissed(true)} onSubmit={() => void submit()}
@@ -548,7 +581,9 @@ export function TaskComposerPanel({
           {/* 底排：附件、选项入口在左；谁来做、发送键守在右下角（和回复框一个落点）。 */}
           <footer className="composer-footer">
             <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />
-            <div className="composer-opts">{options.work}{options.where}{options.org}{options.more}</div>
+            <div className="composer-opts">{home
+              ? <>{options.where}<ComposerExpand onExpand={home.onExpand} /></>
+              : <>{options.work}{options.where}{options.org}{options.more}</>}</div>
             <span className="composer-foot-grow" aria-hidden="true" />
             {executorTools}
             <ComposerLaunchControl
@@ -570,6 +605,7 @@ export function TaskComposerPanel({
           {allAttachments.length > 0 && <div className="studio-input-status" role="status">{allAttachments.length} 个附件</div>}
           </div></>}
           </ComposerFields>
+          {home?.below}
           <div className="studio-footnote"><span>/ 调用技能 · @ 引用项目文件 · {sendKeys.send} 创建</span>{body.length > 0 && <span>{body.length} 字</span>}</div>
         </div>
       </div>

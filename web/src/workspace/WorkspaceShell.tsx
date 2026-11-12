@@ -27,7 +27,8 @@ import {
 } from "../settings/SettingsPage.tsx";
 import { CommandPalette } from "../overlays/CommandPalette.tsx";
 import { NotesPanel } from "../overlays/NotesPanel.tsx";
-import { TaskComposerPanel, type ComposerDraft } from "../composer/TaskComposerPanel.tsx";
+import { TaskComposerPanel, type ComposerDraft, type ComposerHome } from "../composer/TaskComposerPanel.tsx";
+import { HomeTodo } from "./HomeTodo.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
 import { CreateProjectDialog } from "../overlays/CreateProjectDialog.tsx";
@@ -271,11 +272,12 @@ export function WorkspaceShell() {
     : remoteSelection ? `remote:${remoteSelection.task.id}` : taskId ? `task:${taskId}` : null);
   const { toContent } = narrowPane;
   const loadError = projectsError ?? tasksError;
-  const activeTaskCount = useMemo(
+  const homeRows = useMemo(
     () => scopeTasks(tasks.filter((task) => !task.archived && visibleInScope(task, scope)), scope)
-      .filter((task) => task.parentId === null).length,
+      .filter((task) => task.parentId === null),
     [scope, tasks],
   );
+  const activeTaskCount = homeRows.length;
   // J/K 的顺序**只认屏幕**（见 sidebarNavigation）；这份模型顺序只在侧栏**收起**时当退路 ——
   // 那时屏幕上根本没有这份列表。筛选开着时它也得跟着筛，判据与 TaskTree 共用。
   const sidebarFallbackOrder = useMemo(
@@ -510,6 +512,10 @@ export function WorkspaceShell() {
     return created;
   };
 
+  // 新建面板和首页是同一个组件、同一个 key：从首页点「全部选项」展开、或从面板 Esc 退回首页，
+  // React 认作同一个实例，写到一半的东西和选好的执行器、工作目录都不丢（见 ComposerHome）。
+  const composerPanel = (project: ProjectView, home?: ComposerHome) => <TaskComposerPanel key={`composer:${project.id}`} project={project} groups={groups} tasks={tasks} initialDraft={home ? null : composer?.draft} onDraftSeeded={dropComposerSeed} mode={home ? "single" : composer?.mode ?? "single"} onModeChange={(mode) => home ? openComposer(mode) : setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onTasksSynced={applyTaskSnapshots} onCreateGroup={createComposerGroup} onProjectUpdated={applyProjectUpdate} notify={notify} home={home} />;
+
   // J/K 挪一格：顺序只认屏幕上那份列表（见 sidebarNavigation），所以展开/收起团队执行者、
   // 折叠项目分组、年龄闸那几档都自动跟着走，不必在这里重算一份。
   const navigateSidebar = useSidebarTaskNavigation({
@@ -612,7 +618,7 @@ export function WorkspaceShell() {
       <main className="workspace-main">
         {narrowPane.pane === "content" && <button type="button" className="workspace-narrow-back" onClick={narrowPane.showList}><CaretLeft size={14} weight="bold" aria-hidden="true" />列表</button>}
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
-        {assistantOpen ? <AssistantView project={currentProject} projects={projects} onTask={(task) => { updateTask(task); selectTask(task); }} onSettings={openSettings} onExit={closeAssistant} /> : chatOpen && currentProject ? <ChatView key={currentProject.id} project={currentProject} onTask={selectTask} onExit={() => setChatOpen(false)} /> : composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} tasks={tasks} initialDraft={composer.draft} onDraftSeeded={dropComposerSeed} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onTasksSynced={applyTaskSnapshots} onCreateGroup={createComposerGroup} onProjectUpdated={applyProjectUpdate} notify={notify} /> : remoteSelection ? (
+        {assistantOpen ? <AssistantView project={currentProject} projects={projects} onTask={(task) => { updateTask(task); selectTask(task); }} onSettings={openSettings} onExit={closeAssistant} /> : chatOpen && currentProject ? <ChatView key={currentProject.id} project={currentProject} onTask={selectTask} onExit={() => setChatOpen(false)} /> : composer && currentProject ? composerPanel(currentProject) : remoteSelection ? (
           <RemoteTaskDetail
             archive={remoteSelection.task}
             target={remoteSelection.target}
@@ -626,7 +632,13 @@ export function WorkspaceShell() {
           <DuetView task={selectedFullTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} notify={notify} />
         ) : selectedFullTask ? (
           <TaskDetail task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onTasksSynced={applyTaskSnapshots} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} onForkTask={(draft) => openComposer("single", draft)} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} notify={notify} />
-        ) : <><header className="workspace-app-bar"><span className="workspace-kind-chip">{scopeKind === "tasks" ? "任务" : "项目"}</span><span className="workspace-app-title">{scopeKind === "tasks" ? TASK_MODE_LABEL : currentProject?.name ?? "Ash"}</span>{(scopeKind === "tasks" || currentProject) && <span className="workspace-app-count">{activeTaskCount} 项{scopeKind === "tasks" ? "还没落地" : "任务"}</span>}</header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={null} onCreateProject={() => setCreateDialog({ kind: "project", reason: null })} /></section><aside className="workspace-inspector-slot" aria-label="Inspector 占位"><div><span>Inspector</span><small>项目概览</small></div><p>选择任务后，这里会显示可操作属性、执行信息与队列。</p></aside></div></>}
+        ) : currentProject && !selectedTask ? composerPanel(currentProject, {
+          title: scopeKind === "tasks" ? TASK_MODE_LABEL : currentProject.name,
+          detail: scopeKind === "tasks" ? `新建到 ${currentProject.name}` : undefined,
+          count: `${activeTaskCount} 项${scopeKind === "tasks" ? "还没落地" : "任务"}`,
+          onExpand: () => openComposer("single"),
+          below: <HomeTodo rows={homeRows} all={tasks} onOpen={(task) => toContent(selectTask)(task)} />,
+        }) : <><header className="workspace-app-bar"><span className="workspace-app-title">{scopeKind === "tasks" ? TASK_MODE_LABEL : currentProject?.name ?? "Ash"}</span></header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={selectedTask} onCreateProject={() => setCreateDialog({ kind: "project", reason: null })} /></section></div></>}
       </main>
     </div>{terminalDock}{statusBar}</div>{overlays}</>
   );

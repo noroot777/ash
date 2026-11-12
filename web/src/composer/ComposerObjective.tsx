@@ -4,8 +4,11 @@ import { SlashMenu } from "../components/SlashMenu.tsx";
 import { isMenuPickKeyEvent, isSendKeyEvent } from "../lib/sendKey.ts";
 import type { SlashItem } from "../lib/useSkills.ts";
 
-export function ComposerObjective({ body, mode, textareaRef, onChange, onPaste, items, selected, token, onSelect, onPick, onDismiss, onSubmit, mention }: {
+export function ComposerObjective({ body, mode, textareaRef, autoFocus = true, onEscape, onChange, onPaste, items, selected, token, onSelect, onPick, onDismiss, onSubmit, mention }: {
   body: string;
+  autoFocus?: boolean;
+  /** 没有菜单开着时的 Esc（首页拿它把光标交还给页面）。 */
+  onEscape?: () => void;
   mode: TaskMode;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   onChange: (value: string) => void;
@@ -29,7 +32,7 @@ export function ComposerObjective({ body, mode, textareaRef, onChange, onPaste, 
     area.style.height = `${area.scrollHeight}px`;
   }, [body, textareaRef]);
   return <div className="composer-objective">
-    <textarea ref={textareaRef} autoFocus rows={3} aria-label="任务目标" value={body} onPaste={onPaste}
+    <textarea ref={textareaRef} autoFocus={autoFocus} rows={3} aria-label="任务目标" value={body} onPaste={onPaste}
       onChange={(event) => onChange(event.target.value)}
       placeholder={mode === "team" ? "想让团队完成什么？\n\n写下目标，剩下的交给团队。"
         : mode === "duet" ? "有什么想一起讨论？\n\n写下背景、方案，或一个还没想清楚的问题。" : "想完成什么？\n\n一个问题、一个想法，或一个完整的目标。"}
@@ -51,6 +54,10 @@ export function ComposerObjective({ body, mode, textareaRef, onChange, onPaste, 
         }
         if (isSendKeyEvent(event)) {
           event.preventDefault(); onSubmit();
+          return;
+        }
+        if (event.key === "Escape" && onEscape && !event.nativeEvent.isComposing) {
+          event.preventDefault(); onEscape();
         }
       }} />
     {!!items.length && <SlashMenu className="composer-slash-menu" ariaLabel="斜杠命令与技能"

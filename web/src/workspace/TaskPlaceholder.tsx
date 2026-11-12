@@ -1,10 +1,10 @@
-import type { ProjectView, Task } from "@ash/shared";
+import type { ProjectView, TaskListItem } from "@ash/shared";
 import { taskDisplayStatus } from "@ash/shared";
 import { CirclesThreePlus, FolderPlus } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { workspaceModifierLabel } from "./useWorkspaceShortcuts.ts";
 
-function taskKind(task: Task): string {
+function taskKind(task: TaskListItem): string {
   if (task.mode === "team") return "团队";
   if (task.mode === "duet") return "讨论";
   return "任务";
@@ -16,7 +16,8 @@ export function TaskPlaceholder({
   onCreateProject,
 }: {
   project: ProjectView | null;
-  task: Task | null;
+  /** 选中了、但正文还没到手的那个任务（列表行不带正文）：先用它的身份顶着。 */
+  task: (TaskListItem & { body?: string }) | null;
   /** 一个项目都没有时,空状态得自己给出下一步 —— 只写一句「用 ⌘K 新建项目」等于让人先学快捷键。 */
   onCreateProject?: () => void;
 }) {
@@ -37,15 +38,8 @@ export function TaskPlaceholder({
     );
   }
 
-  if (!task) {
-    return (
-      <section className="workspace-empty-state">
-        <span className="workspace-empty-project">{project.name}</span>
-        <h1>从任务树选择一项</h1>
-        <p>选择任务查看完整会话与 Inspector，或按 C 新建任务。</p>
-      </section>
-    );
-  }
+  // 有项目、没选任务时主区是首页那张输入卡（TaskComposerPanel 的首页形态），不走这里。
+  if (!task) return null;
 
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   return (
@@ -56,7 +50,7 @@ export function TaskPlaceholder({
         <b>{display.label}</b>
       </div>
       <h1>{task.title || "未命名任务"}</h1>
-      <p>{task.body.trim() || "这个任务没有正文说明。"}</p>
+      {task.body?.trim() && <p>{task.body.trim()}</p>}
       <dl>
         <div>
           <dt>项目</dt>
