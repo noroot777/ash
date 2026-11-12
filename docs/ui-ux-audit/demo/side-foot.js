@@ -1,6 +1,6 @@
-/* 侧栏最底下那一块（side.js 把它装进去）：两行，外加从底边升起来的那只抽屉。
-   上一行是主仓现在在哪个分支：点它，「项目 Git」从整个侧栏的底边升起来，盖在任务列表上面（列表不让位、不挪动）；点别处、按 Esc 落回去。原来它是顶行里的一颗下拉。
-   下一行是「去别处」：聊天、助手靠左；右边是深浅色（一颗图标，画的是现在选的那一档，点开三选一）和收起。原来深浅色是项目菜单里的一排分段。
+/* 侧栏最底下那一行（side.js 把它装进去），外加从底边升起来的那只抽屉。
+   左边是主仓现在在哪个分支：点它，「项目 Git」从整个侧栏的底边升起来，盖在任务列表上面（列表不让位、不挪动）；点别处、按 Esc 落回去。原来它是顶行里的一颗下拉。
+   右边四颗图标：聊天、助手（去别处），深浅色（画的是现在选的那一档，点开三选一）和收起。名字在提示里。原来深浅色是项目菜单里的一排分段。
    抽屉里的东西照现在的（web/src/workspace/ProjectGitPanel.tsx）：当前分支、更新 / 拉取 / 推送（领先几个写在推送上）、搜索、分支一行一条、去 Git 工作台；
    那一段说明压成最后一句。切分支是真的会换（换完抽屉落下去、底下那一行跟着改）；更新、拉取、推送之后的样子样机没画。
    对外：ASH.sideFoot() → { el, layer, chat, helper }。layer 要直接放在侧栏那个元素里：抽屉量的是它的底边。分支是编的。 */
@@ -23,7 +23,7 @@
     let up = false;
     let leaving = 0;
 
-    /* ---------- 上一行：分支 ---------- */
+    /* ---------- 左边：分支。领先落后紧跟在名字后面；挤的时候先收后半句，再截名字 ---------- */
     const name = h('span.cut', cur.name);
     const ahead = h('em.num', tail(cur));
     const git = h('button.side-git', { type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', 'data-tip': '切换分支或同步', onclick: () => rise(!up) }, icon('branch'), name, ahead);
@@ -31,11 +31,13 @@
       ASH.swap(name, cur.name);
       ahead.textContent = tail(cur);
       git.setAttribute('aria-label', `主仓在 ${cur.name} 分支，点击切换分支或同步`);
+      /* 名字被截了，提示里给全名 */
+      requestAnimationFrame(() => { git.dataset.tip = name.scrollWidth > name.clientWidth || ahead.scrollWidth > ahead.clientWidth ? [cur.name, tail(cur)].filter(Boolean).join(' · ') : '切换分支或同步'; });
     };
 
-    /* ---------- 下一行：聊天、助手、深浅色、收起 ---------- */
-    const chat = h('a', { href: '#/chat' }, icon('chat'), '聊天');
-    const helper = h('a', { href: '#/assistant', 'aria-label': 'ash 助手' }, icon('assistant'), '助手');
+    /* ---------- 右边：聊天、助手、深浅色、收起 ---------- */
+    const chat = h('a.ico', { href: '#/chat', 'aria-label': '聊天', 'data-tip': '聊天' }, icon('chat'));
+    const helper = h('a.ico', { href: '#/assistant', 'aria-label': 'ash 助手', 'data-tip': 'ash 助手' }, icon('assistant'));
     const themeGlyph = h('span.side-theme-glyph');
     const theme = h('button.ico', { type: 'button', 'aria-haspopup': 'listbox', 'data-tip': '配色', onclick: () => ASH.menu(theme,
       THEMES.map(([value, label, glyph]) => ({ label, icon: glyph, selected: ASH.theme.pref === value, onpick: () => ASH.theme.set(value) })), { role: 'listbox', place: 'top-end' }) }, themeGlyph);
@@ -45,9 +47,8 @@
       theme.setAttribute('aria-label', `配色：${label}`);
     };
     ASH.on('theme:change', paintTheme);
-    const el = h('div.side-foot', { 'data-m': 'side-4' }, git,
-      h('div.side-foot-row', {}, chat, helper, h('span.grow'), theme,
-        h('button.ico', { type: 'button', 'aria-label': '收起侧边栏', 'data-tip': '收起侧边栏', 'data-key': '⌘B', onclick: () => ASH.todo('收起侧栏') }, icon('sidebar'))));
+    const el = h('div.side-foot', { 'data-m': 'side-4' }, git, chat, helper, theme,
+      h('button.ico', { type: 'button', 'aria-label': '收起侧边栏', 'data-tip': '收起侧边栏', 'data-key': '⌘B', onclick: () => ASH.todo('收起侧栏') }, icon('sidebar')));
 
     /* ---------- 升起来的那只抽屉 ---------- */
     const head = h('b.cut');

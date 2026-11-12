@@ -117,20 +117,20 @@
 .side-other-tasks { margin: 0 0 8px 7px; }
 .side-other-tasks > p { padding: 8px; color: var(--muted); font-size: var(--t-xs); }
 
-/* ---------- 底部两行（side-foot.js）：上一行是主仓的分支，下一行是聊天、助手靠左，深浅色和收起靠右。都是 12px、次级文字色 ---------- */
-.side-foot { flex: none; padding: 5px 0 2px; border-top: 1px solid var(--line); }
-.side-foot-row { display: flex; align-items: center; gap: 2px; }
-.side-foot a, .side-git { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 7px; border-radius: var(--r-sm); outline-offset: -2px; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+/* ---------- 底部一行（side-foot.js）：左边是主仓的分支，右边四颗图标（聊天、助手、深浅色、收起）。12px、次级文字色 ---------- */
+.side-foot { display: flex; align-items: center; gap: 2px; flex: none; padding: 5px 0 2px; border-top: 1px solid var(--line); }
 .side-foot .i { width: 14px; height: 14px; }
-.side-foot a:hover, .side-git:hover, .side-git[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
-.side-foot a:active, .side-git:active { background: var(--sel-bg); }
+/* 分支占掉图标剩下的宽度，领先落后紧跟在名字后面 */
+.side-git { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; height: 28px; padding: 0 7px; border-radius: var(--r-sm); outline-offset: -2px; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; text-align: left; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.side-git:hover, .side-git[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.side-git:active { background: var(--sel-bg); }
+/* 挤的时候先收后半句，再截名字 */
+.side-git > .cut { flex: 0 1 auto; }
+.side-git > em { flex: 0 9999 auto; min-width: 0; overflow: hidden; color: var(--faint); font-style: normal; }
 /* 开着聊天、助手时那一颗是墨色、图标填实 */
 .side-foot a[aria-current="page"] { color: var(--ink); }
 .side-foot a[aria-current="page"] > .i { fill: color-mix(in oklab, currentColor 22%, transparent); }
-/* 分支那一行占满宽度：名字放不下就截，领先落后贴右 */
-.side-git { display: flex; width: 100%; text-align: left; }
-.side-git > .cut { flex: 1; }
-.side-git > em { flex: none; color: var(--faint); font-style: normal; }
+.side-foot a:active { background: var(--sel-bg); }
 .side-theme-glyph { display: grid; }
 
 /* ---------- 「项目 Git」：从侧栏的底边升起来，盖住下半截；点别处落回去。外面一层只管把它裁在侧栏里（多出的 8px 是外壳的底边距，窗贴到状态栏上） ---------- */
