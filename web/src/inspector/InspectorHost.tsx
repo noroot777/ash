@@ -10,127 +10,26 @@ import {
   type ReactNode,
 } from "react";
 import { Sidebar, SidebarSimple, X } from "@phosphor-icons/react";
-import { readRenamedStorage } from "../lib/renamedStorage.ts";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { useNarrowScreen } from "../lib/useNarrowScreen.ts";
 import { InspectorHeadSlotProvider } from "./headActions.tsx";
 import { InspectorRail } from "./InspectorRail.tsx";
 import { InspectorNavProvider, type InspectorNav, type InspectorRequest } from "./nav.tsx";
 import { registerInspectorShortcutTarget } from "./shortcuts.ts";
+import {
+  applyTabPolicy,
+  clampWidth,
+  INSPECTOR_DEFAULT_WIDTH,
+  INSPECTOR_MAX_WIDTH,
+  INSPECTOR_MIN_WIDTH,
+  orderedValidTabs,
+  readState,
+  storageKeyFor,
+  type InspectorState,
+} from "./inspectorState.ts";
 import type { InspectorDescriptor, InspectorHostControls, InspectorTabPolicy } from "./types.ts";
 
-export const INSPECTOR_MIN_WIDTH = 280;
-export const INSPECTOR_MAX_WIDTH = 720;
-export const INSPECTOR_DEFAULT_WIDTH = 340;
-
-interface InspectorState {
-  openTabs: string[];
-  activeTab: string | null;
-  width: number;
-  visible: boolean;
-  policyKey: string | null;
-}
-
-function clampWidth(value: number) {
-  return Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, value));
-}
-
-function defaultState<Context>(
-  descriptors: readonly InspectorDescriptor<Context>[],
-  defaultVisible: boolean,
-): InspectorState {
-  const marked = descriptors.filter((descriptor) => descriptor.defaultOpen).map((descriptor) => descriptor.id);
-  const openTabs = marked.length > 0 ? marked : descriptors.slice(0, 1).map((descriptor) => descriptor.id);
-  return {
-    openTabs,
-    activeTab: openTabs[0] ?? null,
-    width: INSPECTOR_DEFAULT_WIDTH,
-    visible: defaultVisible && openTabs.length > 0,
-    policyKey: null,
-  };
-}
-
-function orderedValidTabs<Context>(
-  ids: readonly string[],
-  descriptors: readonly InspectorDescriptor<Context>[],
-) {
-  const requested = new Set(ids);
-  return descriptors.filter((descriptor) => requested.has(descriptor.id)).map((descriptor) => descriptor.id);
-}
-
-function applyTabPolicy<Context>(
-  state: InspectorState,
-  policy: InspectorTabPolicy,
-  descriptors: readonly InspectorDescriptor<Context>[],
-): InspectorState {
-  const descriptorIds = new Set(descriptors.map((descriptor) => descriptor.id));
-  const openTabs = orderedValidTabs([
-    ...state.openTabs,
-    policy.requiredTabId,
-    ...policy.defaultOpenTabIds,
-    policy.defaultActiveTabId,
-  ], descriptors);
-  const activeTab = state.activeTab && descriptorIds.has(state.activeTab) && policy.preserveActiveTabIds?.includes(state.activeTab)
-    ? state.activeTab
-    : descriptorIds.has(policy.defaultActiveTabId)
-    ? policy.defaultActiveTabId
-    : openTabs[0] ?? null;
-  return {
-    ...state,
-    openTabs,
-    activeTab,
-    visible: state.visible && openTabs.length > 0,
-    policyKey: policy.stateKey,
-  };
-}
-
-function readState<Context>(
-  storageKey: string,
-  descriptors: readonly InspectorDescriptor<Context>[],
-  defaultVisible: boolean,
-  tabPolicy?: InspectorTabPolicy,
-) {
-  const fallback = defaultState(descriptors, defaultVisible);
-  const descriptorIds = new Set(descriptors.map((descriptor) => descriptor.id));
-  try {
-    const raw = readRenamedStorage(storageKey);
-    if (!raw) return tabPolicy ? applyTabPolicy(fallback, tabPolicy, descriptors) : fallback;
-    const parsed = JSON.parse(raw) as Partial<InspectorState>;
-    const storedTabs = Array.isArray(parsed.openTabs)
-      ? parsed.openTabs.filter((id): id is string => typeof id === "string")
-      : null;
-    const validTabs = storedTabs
-      ? orderedValidTabs(storedTabs, descriptors)
-      : fallback.openTabs;
-    const openTabs = storedTabs && storedTabs.length > 0 && validTabs.length === 0
-      ? fallback.openTabs
-      : validTabs;
-    const activeTab = typeof parsed.activeTab === "string" && openTabs.includes(parsed.activeTab)
-      ? parsed.activeTab
-      : openTabs[0] ?? null;
-    const width = typeof parsed.width === "number" && Number.isFinite(parsed.width)
-      ? clampWidth(parsed.width)
-      : fallback.width;
-    const visible = (typeof parsed.visible === "boolean" ? parsed.visible : fallback.visible)
-      && openTabs.length > 0;
-    const policyKey = typeof parsed.policyKey === "string" ? parsed.policyKey : null;
-    let restored = { openTabs, activeTab, width, visible, policyKey };
-    if (tabPolicy && policyKey !== tabPolicy.stateKey) {
-      // A semantic task-state change deliberately wins over restored focus once.
-      return applyTabPolicy(restored, tabPolicy, descriptors);
-    }
-    if (tabPolicy && visible && descriptorIds.has(tabPolicy.requiredTabId)
-      && !restored.openTabs.includes(tabPolicy.requiredTabId)) {
-      restored = { ...restored, openTabs: [...restored.openTabs, tabPolicy.requiredTabId] };
-    }
-    return restored;
-  } catch {
-    return tabPolicy ? applyTabPolicy(fallback, tabPolicy, descriptors) : fallback;
-  }
-}
-
-function storageKeyFor(contextKey: string) {
-  return `ash:inspector:${contextKey}`;
-}
+export { INSPECTOR_DEFAULT_WIDTH, INSPECTOR_MAX_WIDTH, INSPECTOR_MIN_WIDTH } from "./inspectorState.ts";
 
 function safeDomId(value: string) {
   return value.replace(/[^a-zA-Z0-9_-]/g, "-");
@@ -315,15 +214,38 @@ function InspectorHostState<Context>({
     });
   };
 
+  // 关闭键 = 把这一格移出竖轨，切到它后面那一格（它是最后一格就切到前面那格）；条上只剩
+  // 它一格时整栏收起。摘完以后关闭键还在原地、指的已经是下一格：0.4 秒内紧跟着的那一下
+  // 不算，连点两下不会连摘两格。中间换过格、加过格就不再拦（那已经不是连点了）。
+  const removedAt = useRef(0);
   const closeTab = (id: string) => {
+    if (performance.now() - removedAt.current < 400) return;
+    removedAt.current = performance.now();
     setState((current) => {
       const closingIndex = current.openTabs.indexOf(id);
       const openTabs = current.openTabs.filter((tabId) => tabId !== id);
       const activeTab = current.activeTab === id
         ? openTabs[Math.min(closingIndex, openTabs.length - 1)] ?? null
         : current.activeTab;
-      return { ...current, openTabs, activeTab, visible: current.visible && openTabs.length > 0 };
+      const dismissed = current.dismissed.includes(id) ? current.dismissed : [...current.dismissed, id];
+      return { ...current, openTabs, activeTab, dismissed, visible: current.visible && openTabs.length > 0 };
     });
+  };
+
+  // 再点已选中的那一格 = 收起整栏。只认鼠标（回车、空格触发的 click，detail 是 0）；刚切过来
+  // 350ms 内的那一下不算，否则双击一格会「先选中再收起」。
+  const switchedAt = useRef(0);
+  const selectTab = (id: string, clicks = 0) => {
+    if (id === activeDescriptor?.id) {
+      if (clicks > 0 && performance.now() - switchedAt.current > 350) {
+        if (narrow) setNarrowOpen(false);
+        else setState((current) => ({ ...current, visible: false }));
+      }
+      return;
+    }
+    switchedAt.current = performance.now();
+    removedAt.current = 0;
+    setState((current) => ({ ...current, activeTab: id }));
   };
 
   // 带着话的打开（见 nav.tsx）：那一格收下就清掉，只说一次。
@@ -338,10 +260,13 @@ function InspectorHostState<Context>({
       requestSeq.current += 1;
       setRequest({ id, params, seq: requestSeq.current });
     }
+    switchedAt.current = performance.now();
+    removedAt.current = 0;
     setState((current) => ({
       ...current,
       openTabs: orderedValidTabs([...current.openTabs, id], descriptors),
       activeTab: id,
+      dismissed: current.dismissed.filter((tabId) => tabId !== id),
       ...(narrow ? {} : { visible: true }),
     }));
     if (narrow) setNarrowOpen(true);
@@ -361,22 +286,27 @@ function InspectorHostState<Context>({
     return true;
   }), []);
 
+  const toggleTip = useHoverTip();
+  const closeTip = useHoverTip();
   const nav = useMemo<InspectorNav>(() => ({ openTab, request, consume: consumeRequest }), [consumeRequest, openTab, request]);
 
   const toggleButton = (
-    <button
-      type="button"
-      className={`inspector-toggle${panelVisible ? " is-active" : ""}`}
-      aria-label={panelVisible ? "隐藏 Inspector" : "显示 Inspector"}
-      aria-controls={panelId}
-      aria-expanded={panelVisible}
-      title={panelVisible ? "隐藏 Inspector" : "显示 Inspector"}
-      onClick={toggle}
-    >
-      {panelVisible
-        ? <SidebarSimple size={16} aria-hidden="true" />
-        : <Sidebar size={16} aria-hidden="true" />}
-    </button>
+    <>
+      <button
+        type="button"
+        className={`inspector-toggle${panelVisible ? " is-active" : ""}`}
+        aria-label={panelVisible ? "隐藏 Inspector" : "显示 Inspector"}
+        aria-controls={panelId}
+        aria-expanded={panelVisible}
+        {...toggleTip.anchorProps}
+        onClick={() => { toggleTip.hide(); toggle(); }}
+      >
+        {panelVisible
+          ? <SidebarSimple size={16} aria-hidden="true" />
+          : <Sidebar size={16} aria-hidden="true" />}
+      </button>
+      <HoverTip at={toggleTip.at}>{panelVisible ? "收起右侧面板" : "展开右侧面板"}</HoverTip>
+    </>
   );
 
   return (
@@ -419,7 +349,7 @@ function InspectorHostState<Context>({
             activeId={activeDescriptor.id}
             tabIdFor={tabIdFor}
             contentIdFor={contentIdFor}
-            onSelect={(id) => setState((current) => ({ ...current, activeTab: id }))}
+            onSelect={selectTab}
             onOpen={openTab}
           />
           <div className="inspector-host__panel">
@@ -432,10 +362,12 @@ function InspectorHostState<Context>({
                 type="button"
                 className="inspector-host__panel-close"
                 aria-label={narrow ? "收起 Inspector" : `关闭${activeDescriptor.title}`}
+                {...closeTip.anchorProps}
                 onClick={() => narrow ? setNarrowOpen(false) : closeTab(activeDescriptor.id)}
               >
                 <X size={14} aria-hidden="true" />
               </button>
+              <HoverTip at={closeTip.at}>{narrow ? "收起，回到内容" : "移出竖轨，可从 + 加回"}</HoverTip>
             </div>
             <div
               id={contentIdFor(activeDescriptor.id)}

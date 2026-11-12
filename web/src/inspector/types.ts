@@ -15,6 +15,8 @@ export interface InspectorDescriptor<Context> {
   render: (context: Context) => ReactNode;
   defaultOpen?: boolean;
   shortcut?: InspectorShortcutKey;
+  /** 竖轨上的第几簇。相邻两格簇号不同，中间多留一段空（不画线）；不给就不分簇。 */
+  cluster?: number;
 }
 
 export interface InspectorTabPolicy {

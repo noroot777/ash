@@ -88,6 +88,7 @@ function MonitorInspectorPane({ context }: { context: TaskInspectorContext }) {
 export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
   {
     id: "info",
+    cluster: 1,
     title: "信息",
     icon: <Info size={14} />,
     defaultOpen: true,
@@ -96,6 +97,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
   },
   {
     id: "files",
+    cluster: 2,
     title: "文件",
     icon: <FolderOpen size={14} />,
     defaultOpen: true,
@@ -116,6 +118,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     // 什么可以直接看的东西」。一张生成的图在树里只是几十行里的一行，在 diff 里是一句
     // `Binary files differ` —— 两边都等于没有。
     id: "artifacts",
+    cluster: 2,
     title: "生成物",
     icon: <Images size={14} />,
     defaultOpen: true,
@@ -131,6 +134,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
   },
   {
     id: "scm",
+    cluster: 2,
     title: "改动",
     icon: <GitPullRequest size={14} />,
     defaultOpen: true,
@@ -149,6 +153,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     // 「用过才浮现」：开合由 useSubagents 按「这个任务到底有没有派出子智能体」翻（所以这里
     // 不写 defaultOpen）。派过才自己冒到图标条上并带底色，没派过就留在「+」菜单和 I S 里。
     id: "subagents",
+    cluster: 3,
     title: "子智能体",
     icon: <Robot size={14} />,
     shortcut: "s",
@@ -158,6 +163,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     // 备忘跟旁边两样东西的分界见 shared/src/task-memo.ts：它不进任何 prompt，所以**不走
     // 「用过才浮现」**——手写一条的入口只在这一格里，藏起来等于这条路只能从会话选文进。
     id: "memos",
+    cluster: 3,
     title: "备忘",
     icon: <NotePencil size={14} />,
     defaultOpen: true,
@@ -166,6 +172,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
   },
   {
     id: "side-chat",
+    cluster: 3,
     title: "侧聊",
     icon: <Chats size={14} />,
     defaultOpen: true,
@@ -174,6 +181,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
   },
   {
     id: "workflow",
+    cluster: 3,
     title: "工作流",
     icon: <WorkflowIcon size={14} />,
     defaultOpen: true,
@@ -184,6 +192,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
   },
   {
     id: "review",
+    cluster: 3,
     title: "审查",
     icon: <MagnifyingGlass size={14} />,
     defaultOpen: true,
@@ -194,6 +203,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
   },
   {
     id: "preview",
+    cluster: 3,
     title: "预览指正",
     icon: <Browser size={14} />,
     defaultOpen: true,
@@ -205,6 +215,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     // 翻（所以这里不写 defaultOpen）。它仍然是手动起哨兵唯一的入口，所以可以不默认开着、
     // 但绝不能整格不给——「+」菜单和 I M 永远找得到它，空态里那段话解释这是什么。
     id: "monitors",
+    cluster: 3,
     title: "哨兵",
     icon: <Pulse size={14} />,
     shortcut: "m",

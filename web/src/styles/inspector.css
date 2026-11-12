@@ -113,6 +113,11 @@
   transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 
+/* 三簇：信息 / 文件、生成物、改动 / 其余。簇与簇之间多一段空，不画线 */
+.inspector-rail__tab.is-cluster-start {
+  margin-top: 6px;
+}
+
 .inspector-rail__tab:hover {
   background: var(--hover-bg);
   color: var(--ink);

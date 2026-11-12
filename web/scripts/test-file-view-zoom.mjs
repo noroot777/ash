@@ -146,6 +146,8 @@ try {
     await inspector.getByRole("button", { name: "关闭文件" }).click();
     await inspector.getByText("这一轮没有备忘。").waitFor();
     await settle(`${what}：关掉第一个面板后`);
+    // 关闭键摘完一格后 0.4 秒内的下一下不算（防连点连摘两格），隔开再点。
+    await page.waitForTimeout(450);
     await inspector.getByRole("button", { name: "关闭备忘" }).click();
     await inspector.waitFor({ state: "detached" });
     await settle(`${what}：关光所有面板后`);

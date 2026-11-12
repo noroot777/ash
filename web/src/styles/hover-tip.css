@@ -7,15 +7,14 @@
   width: max-content;
   max-width: min(280px, calc(100vw - 16px));
   transform: translateX(-50%);
-  border: 1px solid var(--line2);
-  border-radius: 6px;
-  background: var(--panel);
-  padding: 4px 7px;
-  color: var(--ink);
-  font-size: 10.5px;
-  line-height: 1.4;
+  border-radius: var(--r-sm);
+  background: var(--ink);
+  padding: 3px 8px;
+  color: var(--panel);
+  font-size: var(--t-xs);
+  line-height: 1.45;
   pointer-events: none;
-  box-shadow: var(--menu-shadow);
+  animation: ui-hover-tip-in var(--dur-1) var(--ease-out);
 }
 
 /* 挂在锚点左侧、垂直居中：给窗口右缘的竖排图标条用。 */
@@ -32,11 +31,20 @@
 }
 
 .ui-hover-tip kbd {
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--raised);
-  padding: 0 4px;
-  color: var(--faint);
-  font-size: 9px;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: color-mix(in oklab, var(--panel) 62%, transparent);
+  font-size: var(--t-xs);
   font-family: inherit;
+}
+
+@keyframes ui-hover-tip-in {
+  from { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-hover-tip {
+    animation: none;
+  }
 }

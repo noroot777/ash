@@ -132,6 +132,8 @@ try {
   // 旧实现在进放大态时就把 host 节点捕获进闭包，节点卸载后 `getBoundingClientRect()` 全是
   // 0 —— left 读成 0，右缘被算成整个视口宽，层当场挤成左缘一条细条（只剩 padding，实测
   // width=25，文字被挤成一字一行的竖排）。下缘必须同时保持让开底部坞，不能跟着一起退化。
+  // 关闭键摘完一格后 0.4 秒内的下一下不算（防连点连摘两格），隔开再点。
+  await page.waitForTimeout(450);
   await inspector.getByRole("button", { name: "关闭改动与提交" }).click();
   await inspector.waitFor({ state: "detached" });
   await settle("关光所有面板后");

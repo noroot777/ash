@@ -19,6 +19,7 @@ export interface InspectorRailItem {
   icon: ReactNode;
   dot?: InspectorDot | null;
   shortcut?: InspectorShortcutKey;
+  cluster?: number;
 }
 
 function tabLabel(item: InspectorRailItem) {
@@ -32,6 +33,7 @@ function InspectorRailTab({
   tabId,
   contentId,
   tabProps,
+  clusterStart,
   onSelect,
 }: {
   item: InspectorRailItem;
@@ -40,7 +42,10 @@ function InspectorRailTab({
   contentId: string;
   /** 方向键漫游那套 props(lib/useRovingChoice.ts),由图标条统一发下来。 */
   tabProps: Record<string, unknown>;
-  onSelect: (id: string) => void;
+  /** 和上一格不在同一簇：上面多留一段空（不画线）。 */
+  clusterStart: boolean;
+  /** `clicks` 是鼠标点击的 event.detail（键盘触发为 0），宿主拿它分辨「再点一下收起」。 */
+  onSelect: (id: string, clicks?: number) => void;
 }) {
   const tip = useHoverTip({ placement: "left" });
   return (
@@ -49,12 +54,12 @@ function InspectorRailTab({
         id={tabId}
         type="button"
         {...tabProps}
-        className={`inspector-rail__tab${active ? " is-active" : ""}`}
+        className={`inspector-rail__tab${active ? " is-active" : ""}${clusterStart ? " is-cluster-start" : ""}`}
         data-dot={item.dot ?? undefined}
         aria-controls={contentId}
         aria-label={tabLabel(item)}
         {...tip.anchorProps}
-        onClick={() => onSelect(item.id)}
+        onClick={(event) => onSelect(item.id, event.detail)}
       >
         <span className="inspector-rail__icon" aria-hidden="true">{item.icon}</span>
       </button>
@@ -82,7 +87,7 @@ export function InspectorRail({
   activeId: string | null;
   tabIdFor: (id: string) => string;
   contentIdFor: (id: string) => string;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, clicks?: number) => void;
   onOpen: (id: string) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -112,10 +117,12 @@ export function InspectorRail({
         aria-orientation="vertical"
         aria-label="已打开的 Inspector 面板"
       >
-        {items.map((item) => (
+        {items.map((item, index) => (
           <InspectorRailTab
             key={item.id}
             item={item}
+            // 相邻两格不在同一簇才留空；整簇都摘掉时不会留出双倍的空。
+            clusterStart={index > 0 && item.cluster !== items[index - 1]?.cluster}
             active={item.id === activeId}
             tabId={tabIdFor(item.id)}
             contentId={contentIdFor(item.id)}
