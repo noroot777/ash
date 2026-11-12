@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Robot } from "@phosphor-icons/react";
 import type { TaskStatus } from "@ash/shared";
 import { SideDrawer } from "../components/SideDrawer.tsx";
-import { INSPECTOR_USED_ICON_CLASS, surfaceTabWhenUsed, type InspectorDescriptor } from "../inspector/index.ts";
+import { surfaceTabWhenUsed, type InspectorDescriptor } from "../inspector/index.ts";
 import type { ConversationItem } from "./conversationModel.ts";
 import { NativeAgentConversation } from "./NativeAgentConversation.tsx";
 import type { NativeWorkInspectorProps } from "./NativeWorkInspector.tsx";
@@ -61,12 +60,12 @@ export function useSubagents<Context>(
   // 代价说清楚：只写过待办、没派过子智能体的任务，待办清单那一栏不会自己冒出来，得自己去
   // 「+」里开（那份清单同时也在会话的过程折叠里）。
   const used = hasSubagents || incomplete;
+  const running = rows.some((row) => row.kind === "agent" && row.status === "running");
   const inspectors = useMemo(() => surfaceTabWhenUsed(descriptors, "subagents", used, (descriptor) => ({
     title: incomplete ? `${descriptor.title}（记录读取不完整）` : descriptor.title,
-    icon: used
-      ? <Robot size={14} weight="bold" className={INSPECTOR_USED_ICON_CLASS} />
-      : descriptor.icon,
-  })), [descriptors, incomplete, used]);
+    // 角上那颗点：有在跑的是主色，派过的都停了是灰点。
+    dot: running ? "run" : used ? "has" : null,
+  })), [descriptors, incomplete, running, used]);
 
   const nativeWork: NativeWorkInspectorProps = {
     rows,

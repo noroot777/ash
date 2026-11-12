@@ -6,6 +6,7 @@ import type { Task, TaskListItem } from "@ash/shared";
 import { useSubagents } from "./useSubagents.tsx";
 import { useMonitorInspector } from "../monitors/useMonitorInspector.tsx";
 import { useTaskMemoTab } from "../task-memos/useTaskMemoTab.tsx";
+import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { TASK_INSPECTORS } from "./taskInspectors.tsx";
 import type { useConversation } from "../lib/useConversation.ts";
 
@@ -30,7 +31,16 @@ export function useTaskInspectorStack(
   const monitorTab = useMonitorInspector(subagents.inspectors, task.id);
   // 备忘那一格只改标题/图标（有几条），开合仍按 TASK_INSPECTORS 的 defaultOpen —— 理由
   // 见 task-memos/useTaskMemoTab.tsx：手写第一条的入口只在那一格里。
-  const inspectors = useTaskMemoTab(monitorTab.inspectors, task.id);
+  const memoTab = useTaskMemoTab(monitorTab.inspectors, task.id);
+  // 审查链状态在这一层订阅：竖轨上「审查」那一格的主色点要它（审查在跑），任务页别处
+  // （验收后快照入口、会话尾栏的异常回合重试）也用同一份，一个任务只挂一条 2.5s 轮询。
+  const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
+  const reviewing = task.workflowMode === "free"
+    ? (free.state?.reviews ?? []).some((run) => run.status === "reviewing")
+    : task.stage === "verifying";
+  const inspectors = useMemo(() => memoTab.map((descriptor) => (descriptor.id === "review"
+    ? { ...descriptor, dot: reviewing ? "run" as const : null }
+    : descriptor)), [memoTab, reviewing]);
 
   // 会话区那张卡把两种来源**分开**数（同 MonitorInspector 的分段）：ash 那几个才是「在等」
   // —— claude 内置 Monitor 的只读投影就算还显示 running 也唤不醒任何人（它的通知只注回那
@@ -69,5 +79,5 @@ export function useTaskInspectorStack(
     defaultActiveTabId: reviewFocused ? "review" : "info",
   }), [reviewFocused, task.status]);
 
-  return { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount };
+  return { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount, free };
 }

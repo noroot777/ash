@@ -65,6 +65,3 @@
 .task-memo-card__edit-actions button.is-primary:hover:not(:disabled) { background: var(--accent-hover); color: white; }
 .task-memo-card__edit-actions button:disabled { cursor: not-allowed; opacity: .48; }
 
-/* 图标条上那一格：这个任务有备忘时带底色（跟子智能体/哨兵「用过才浮现」那套同一个记号，
-   见 inspector.css 的 .inspector-rail-icon--used）。这里只补一句备忘自己的强调色。 */
-.task-memo-rail-icon--has { color: var(--accent); }

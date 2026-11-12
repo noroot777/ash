@@ -6,6 +6,7 @@ import { useDismissable } from "../lib/useDismissable.ts";
 import { useRovingChoice } from "../lib/useRovingChoice.ts";
 import { inspectorShortcutLabel } from "./shortcuts.ts";
 import type { InspectorShortcutKey } from "./shortcuts.ts";
+import type { InspectorDot } from "./types.ts";
 
 // Inspector 的竖排图标条（VS Code 活动栏那种）：只画图标，指上去或键盘走到才报名字。
 // 横排页签在 340px 宽的侧栏里最多塞得下三四个，再多就横向滚动、标题也被截成两个字；
@@ -16,11 +17,13 @@ export interface InspectorRailItem {
   id: string;
   title: string;
   icon: ReactNode;
+  dot?: InspectorDot | null;
   shortcut?: InspectorShortcutKey;
 }
 
 function tabLabel(item: InspectorRailItem) {
-  return item.shortcut ? `${item.title}，快捷键 ${inspectorShortcutLabel(item.shortcut)}` : item.title;
+  const state = item.dot === "run" ? "，有东西在跑" : "";
+  return item.shortcut ? `${item.title}${state}，快捷键 ${inspectorShortcutLabel(item.shortcut)}` : `${item.title}${state}`;
 }
 
 function InspectorRailTab({
@@ -47,6 +50,7 @@ function InspectorRailTab({
         type="button"
         {...tabProps}
         className={`inspector-rail__tab${active ? " is-active" : ""}`}
+        data-dot={item.dot ?? undefined}
         aria-controls={contentId}
         aria-label={tabLabel(item)}
         {...tip.anchorProps}

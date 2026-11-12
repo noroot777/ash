@@ -71,14 +71,17 @@
   flex-direction: column;
   align-items: center;
   border-left: 0.5px solid var(--line);
-  background: color-mix(in lch, var(--canvas) 86%, var(--panel));
+  --rail-bg: color-mix(in lch, var(--canvas) 86%, var(--panel));
+  background: var(--rail-bg);
   padding: 5px 0 6px;
 }
 
+/* 撑满竖轨的宽：选中那根竖条画在按钮外侧、贴着窗口边缘，容器只有按钮宽的话会被 overflow 裁掉。 */
 .inspector-host__rail-tabs {
   display: flex;
   min-height: 0;
   flex: 1;
+  align-self: stretch;
   flex-direction: column;
   align-items: center;
   gap: 2px;
@@ -99,36 +102,39 @@
   flex: 0 0 32px;
   place-items: center;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--r-md);
   background: transparent;
   padding: 0;
-  color: var(--faint);
+  color: var(--muted);
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 
 .inspector-rail__tab:hover {
-  background: var(--overlay);
+  background: var(--hover-bg);
   color: var(--ink);
 }
 
-/* 选中态的那道竖条。贴在按钮外侧（朝窗口边缘那一侧），跟 VS Code 活动栏一致。 */
+/* 选中只有一种长相：墨色图标 + 右缘一根竖条。竖条贴在按钮外侧（朝窗口边缘那一侧），
+   跟 VS Code 活动栏一致。不上底色——底色留给悬停。 */
 .inspector-rail__tab::after {
   position: absolute;
   top: 6px;
-  right: 0;
+  right: -4px;
   bottom: 6px;
   width: 2px;
-  border-radius: 2px;
-  background: var(--accent);
+  border-radius: 2px 0 0 2px;
+  background: var(--ink);
   content: "";
   opacity: 0;
+  transition: opacity var(--dur-2) var(--ease-out);
 }
 
 .inspector-rail__tab.is-active {
-  color: var(--accent);
+  color: var(--ink);
 }
 
 .inspector-rail__tab.is-active::after {
-  opacity: 0.85;
+  opacity: 1;
 }
 
 .inspector-rail__icon {
@@ -141,11 +147,26 @@
   height: 16px;
 }
 
-/* 「用过才浮现」的那几格（子智能体、哨兵）：自己冒上来时带一层底色，说清楚「它是因为这个
-   任务真用过才在这儿的」，跟一直常驻的那几格区分开。选中态和 hover 有自己的底色，不叠。 */
-.inspector-rail__tab:not(.is-active):not(:hover):has(.inspector-rail-icon--used) {
-  background: color-mix(in srgb, var(--cyan) 16%, var(--panel));
-  color: color-mix(in srgb, var(--cyan) 90%, var(--ink));
+/* 状态是图标右上角的一颗点：灰 = 这格里有东西，主色 = 有东西在跑。选中、悬停时都还在
+   （青底做不到这一点：它和选中、悬停抢的是同一块底色）。描一圈竖轨的底色，把点和图标线条分开。 */
+.inspector-rail__tab[data-dot]::before {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 5px;
+  height: 5px;
+  border-radius: var(--r-full);
+  background: var(--muted);
+  box-shadow: 0 0 0 1.5px var(--rail-bg);
+  content: "";
+}
+
+.inspector-rail__tab[data-dot="run"]::before {
+  background: var(--accent);
+}
+
+.inspector-rail__tab[data-dot]:hover::before {
+  box-shadow: 0 0 0 1.5px var(--hover-bg);
 }
 
 .inspector-host__menu-label svg {
@@ -216,15 +237,6 @@
   flex: 0 0 auto;
   margin-left: 8px;
   white-space: nowrap;
-}
-
-.inspector-host__menu-label .inspector-rail-icon--used {
-  color: color-mix(in srgb, var(--cyan) 90%, var(--ink));
-}
-
-/* 已在图标条上的那几格置灰，图标的「用过」色也一起收掉，不然灰字旁边还亮着一个青色图标。 */
-.inspector-host__menu .ui-menu-item:disabled .inspector-rail-icon--used {
-  color: inherit;
 }
 
 .inspector-host__panel {

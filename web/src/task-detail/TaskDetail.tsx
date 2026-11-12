@@ -42,7 +42,6 @@ import { TaskReplyRail } from "./TaskReplyRail.tsx";
 import { useTaskReplyActions } from "./TaskReplyActions.tsx";
 import { useWaitingTitle } from "./useWaitingTitle.ts";
 import { FreeReviewDialog } from "../free-workflow/FreeReviewDialog.tsx";
-import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { freeReviewRetryIdentity, turnRetryCopy, turnRetryTarget, type TurnRetryTarget } from "./turnRetry.ts";
 import { useExecutorGate } from "./ExecutorGate.tsx";
 import type { ComposerDraft } from "../composer/composerDraft.ts";
@@ -108,10 +107,9 @@ export function TaskDetail({
   useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
   // Inspector 栈（哪几格存在、默认开哪几格）整块在 useTaskInspectorStack.ts。
-  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount } =
+  // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点、验收后快照入口和会话尾栏的异常回合重试。
+  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount, free } =
     useTaskInspectorStack(task, allTasks, conversation);
-  // 审查链状态同时服务验收后快照入口和会话尾栏的异常回合重试；共享一份缓存与订阅。
-  const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   // 「上一回合崩了、任务却停在终态」的那颗重来：住在任务头上（不用悬停、也不跟着会话滚走），
   // 判据和服务端 retryTurnRejection 对齐（turnRetry.ts）。
   const turnRetry = turnRetryTarget(task, conversation.items, {

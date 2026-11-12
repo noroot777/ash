@@ -1,10 +1,17 @@
 import type { ReactNode } from "react";
 import type { InspectorShortcutKey } from "./shortcuts.ts";
 
+/**
+ * 竖轨图标右上角那颗点。`has` = 这一格里有东西（灰点），`run` = 有东西在跑（主色点）。
+ * 选中只有一种长相（墨色图标 + 右缘竖条），状态一律走这颗点，两件事不再抢同一块底色。
+ */
+export type InspectorDot = "has" | "run";
+
 export interface InspectorDescriptor<Context> {
   id: string;
   title: string;
   icon: ReactNode;
+  dot?: InspectorDot | null;
   render: (context: Context) => ReactNode;
   defaultOpen?: boolean;
   shortcut?: InspectorShortcutKey;

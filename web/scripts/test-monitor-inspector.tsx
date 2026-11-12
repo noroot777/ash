@@ -359,19 +359,17 @@ const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
   assert.equal(empty?.defaultOpen, false, "没挂过哨兵就不往图标条上冒");
   assert.equal(empty?.title, "哨兵", "没在盯着的就不带数量");
   assert.equal(empty?.icon, descriptors[1].icon, "没挂过的时候图标不该变");
+  assert.ok(!empty?.dot, "没挂过的时候竖轨上不画点");
 
   const ended = tab(0, 2);
   assert.equal(ended?.defaultOpen, true, "挂过就得浮现——跑完的哨兵是干过什么的凭证，不能跟着收走");
   assert.equal(ended?.title, "哨兵", "都结束了就别再冒充活信号");
-  assert.match(String((ended?.icon as React.ReactElement<{ className?: string }>).props.className),
-    /inspector-rail-icon--used/, "浮现的那一格要带底色记号（和子智能体同一个类名）");
+  assert.equal(ended?.dot, "has", "挂过、都结束了：图标角上是一颗灰点（里面有东西），不是在跑的主色点");
 
   const busy = tab(2);
   assert.equal(busy?.defaultOpen, true, "有哨兵在盯着当然要浮现");
   assert.match(String(busy?.title), /哨兵（2）/, "标题上的数字是此刻真在烧回合的那几个，不含已经结束的");
-  const busyClass = String((busy?.icon as React.ReactElement<{ className?: string }>).props.className);
-  assert.match(busyClass, /monitor-rail-icon--live/, "有在盯的哨兵时图标要变（这是面板收起时唯一的活信号）");
-  assert.match(busyClass, /inspector-rail-icon--used/, "活信号之外，底色记号照样要在");
+  assert.equal(busy?.dot, "run", "有在盯的哨兵时角上是主色点（这是面板收起时唯一的活信号）");
 
   // 开合既然按「用过没用过」给，那两份 descriptor 表上就不许再写死 defaultOpen——写了
   // 就是无条件默认开，这一条规矩当场作废。
@@ -640,4 +638,4 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
   assert.match(ended({ status: "exited", exitCode: 2 }), /退出码 2/, "非 0 退出码是唯一线索，要带上");
 }
 
-console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、说得出什么时候挂上的（起点不作数时只说答不出来、不画退化值、同一行不重复），空日志只说可证实的事实（读不出来/非空却切不出完整行/确证零字节三种分开说），空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一（含起点可信性反向兜底），结束条件读不出来时照实说、结果还欠着的那一类给得出放弃入口，回复框上那条「在等」折叠态只报数（正文归 DOM 测试点开验）");
+console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、说得出什么时候挂上的（起点不作数时只说答不出来、不画退化值、同一行不重复），空日志只说可证实的事实（读不出来/非空却切不出完整行/确证零字节三种分开说），空态留得住入口、用过才浮现且角上带「有东西 / 在跑」两种点，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一（含起点可信性反向兜底），结束条件读不出来时照实说、结果还欠着的那一类给得出放弃入口，回复框上那条「在等」折叠态只报数（正文归 DOM 测试点开验）");

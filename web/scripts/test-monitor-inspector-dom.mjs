@@ -34,9 +34,9 @@ const getsTo = async (page, fragment) => (await fetchLog(page))
   .filter((entry) => entry.method === "GET" && new URL(entry.url, "http://page.invalid").pathname === fragment).length;
 const pending = [];
 try {
-  // ── 「用过才浮现」落到图标条上：没挂过不上条、挂过带底色 ────────────────────
-  // 底色是 CSS 的 `:has(.inspector-rail-icon--used)` 给的，类名两边一错位就悄悄没了，
-  // 而「少一层淡底色」这种事看快照、读代码都发现不了，只能量计算样式。
+  // ── 「用过才浮现」落到图标条上：没挂过不上条、挂过角上带一颗点 ────────────────
+  // 点是 CSS 的 `[data-dot]::before` 画的，属性两边一错位就悄悄没了，而「少一颗 5px 的点」
+  // 这种事看快照、读代码都发现不了，只能量伪元素的计算样式。
   {
     // ① 这个任务一个哨兵都没挂过：不上图标条，但必须留在「+」菜单里——上一版的子智能体
     //    就是整格摘掉，结果用户翻遍菜单也找不到它。
@@ -65,7 +65,7 @@ try {
     await page.close();
   }
   {
-    // ② 挂过哨兵：自己冒到图标条上（不抢焦点），并带底色。
+    // ② 挂过哨兵：自己冒到图标条上（不抢焦点），角上带一颗点；选中只有一种长相，不上底色。
     const page = await open(undefined, "?rail=1");
     const tab = page.locator('.inspector-rail__tab[data-choice-value="monitors"]');
     await tab.waitFor();
@@ -75,16 +75,21 @@ try {
       "自己冒出来的那一格不许抢当前焦点",
     );
     const paint = await page.evaluate(() => {
-      const bg = (id) => getComputedStyle(document.querySelector(`.inspector-rail__tab[data-choice-value="${id}"]`)).backgroundColor;
+      const tab = (id) => document.querySelector(`.inspector-rail__tab[data-choice-value="${id}"]`);
+      const dot = (id) => getComputedStyle(tab(id), "::before");
       return {
-        monitors: bg("monitors"),
-        info: bg("info"),
-        marked: !!document.querySelector('.inspector-rail__tab[data-choice-value="monitors"] .inspector-rail-icon--used'),
+        dot: tab("monitors").getAttribute("data-dot"),
+        monitorsDot: { content: dot("monitors").content, width: dot("monitors").width },
+        infoDot: dot("info").content,
+        monitorsBg: getComputedStyle(tab("monitors")).backgroundColor,
+        infoBg: getComputedStyle(tab("info")).backgroundColor,
       };
     });
-    assert.ok(paint.marked, "图标上要带 inspector-rail-icon--used——底色全靠它选中");
-    assert.notEqual(paint.monitors, paint.info, `用过的那一格要有底色，现在和别的格一样是 ${paint.monitors}`);
-    assert.doesNotMatch(paint.monitors, /rgba\(0, 0, 0, 0\)|transparent/, "底色不能是透明");
+    assert.ok(paint.dot === "has" || paint.dot === "run", `挂过哨兵的那一格要带 data-dot，现在是 ${paint.dot}`);
+    assert.notEqual(paint.monitorsDot.content, "none", "角上那颗点要真的画出来");
+    assert.equal(paint.monitorsDot.width, "5px", "点是 5px 的小圆点");
+    assert.equal(paint.infoDot, "none", "没东西的格不画点");
+    assert.equal(paint.monitorsBg, paint.infoBg, "用过的格不再上底色：状态只走那颗点");
     await page.close();
   }
 
@@ -144,8 +149,7 @@ try {
     await tab.waitFor();
     await fetchesSettled(page, 0, "切回 task-a 之后的读取都已被页面读完");
     assert.equal(await tab.count(), 1, "切回来时它已经挂上哨兵了，这一格必须自己冒出来");
-    assert.equal(await tab.locator(".inspector-rail-icon--used").count(), 1, "冒出来就得带底色记号");
-    assert.equal(await tab.locator(".monitor-rail-icon--live").count(), 1, "那条还在跑，活信号也得在");
+    assert.equal(await tab.getAttribute("data-dot"), "run", "那条还在跑：角上得是主色的活信号点");
     assert.equal(
       await page.locator('.inspector-rail__tab[aria-selected="true"]').getAttribute("data-choice-value"),
       "info",
