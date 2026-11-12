@@ -14,17 +14,6 @@ export function nativeWorkDuration(row: NativeWorkItem, now: number): string {
   return `${Math.floor(seconds / 86400)}天 ${Math.floor(seconds % 86400 / 3600)}小时 ${Math.floor(seconds % 3600 / 60)}分`;
 }
 
-// 跟 task-detail/utils.ts 的 formatInstant 同一套写法：MM/DD HH:mm，不带年份也不带秒。
-export function nativeWorkDate(at?: string): { date: string; time: string } | null {
-  if (!at || !Number.isFinite(Date.parse(at))) return null;
-  const value = new Date(at);
-  const pad = (number: number) => String(number).padStart(2, "0");
-  return {
-    date: `${pad(value.getMonth() + 1)}/${pad(value.getDate())}`,
-    time: `${pad(value.getHours())}:${pad(value.getMinutes())}`,
-  };
-}
-
 /**
  * 起止区间，与任务检查器里那条同一个写法（`11/06 14:05 → 14:59`）；一个时刻都没记下就是空串，
  * 让列表卡片自己决定空着——「尚未开始」「时间未记录」那类说明留给展开后的时间详情。

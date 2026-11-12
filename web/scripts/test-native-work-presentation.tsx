@@ -5,7 +5,8 @@ import { ExecutionDetails, executionSummaryText } from "../src/components/Execut
 import type { ExecutionEvent } from "../src/lib/executionTrace.ts";
 import type { AgentEvent, ServerEvent } from "@ash/shared";
 import { applyDuetEvent, emptyDuet, rebuildDuetState } from "../src/duet/duetState.ts";
-import { NativeWorkHeadline, NativeWorkMeta } from "../src/task-detail/NativeWorkMeta.tsx";
+import { NativeWorkHeadline } from "../src/task-detail/NativeWorkMeta.tsx";
+import { agentListRows, agentProvenance, agentSideText } from "../src/task-detail/nativeWorkList.ts";
 import { NativeAgentConversation } from "../src/task-detail/NativeAgentConversation.tsx";
 import type { NativeWorkItem } from "../src/task-detail/nativeWorkModel.ts";
 
@@ -75,38 +76,42 @@ console.log("duet 实时与刷新渲染一致：子智能体动态不产生空 A
 
 const pendingRow: NativeWorkItem = { id: "pending", sessionId: "session", sessionLabel: "codex@test", kind: "task",
   title: "待处理步骤", status: "pending" };
-const pendingMarkup = renderToStaticMarkup(<NativeWorkMeta row={pendingRow} />);
-assert.ok(pendingMarkup.includes("尚未开始") && !pendingMarkup.includes("native-work__duration-value"), "没开工就没有跨度可报");
-assert.ok(!pendingMarkup.includes("<time") && !pendingMarkup.includes("模型") && !pendingMarkup.includes("gpt-5.6"));
-for (const status of ["running", "completed", "failed", "stopped", "unknown"] as const) {
-  const markup = renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, status }} />);
-  assert.ok(!/总耗时|已用时|模型/.test(markup));
-}
 const timedRow = { ...pendingRow, status: "completed" as const,
   startedAt: "2026-09-09T00:00:00.000Z", endedAt: "2026-09-09T00:08:00.000Z" };
-const timedMarkup = renderToStaticMarkup(<NativeWorkMeta row={timedRow} />);
-assert.ok(timedMarkup.includes("时间跨度：8分 0秒"), "摘要的无障碍名里统一叫时间跨度");
-const firstCompleted = renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, status: "completed", endedAt: "2026-09-09T01:00:00.000Z" }} />);
-assert.ok(firstCompleted.includes("未记录开始时间，无法计算跨度。") && !firstCompleted.includes("native-work__duration-value"));
+const now = Date.parse("2026-09-09T00:10:00.000Z");
+// 右边那几个字：在跑和跑完了的是用时，别的状态只换字；没开工没有用时可报。
+assert.deepEqual(agentSideText({ ...pendingRow, kind: "agent" }, now), { text: "待处理", tone: "plain" });
+assert.deepEqual(agentSideText({ ...timedRow, kind: "agent" }, now), { text: "8分 0秒", tone: "plain" });
+assert.deepEqual(agentSideText({ ...timedRow, kind: "agent", status: "running", endedAt: undefined }, now), { text: "10分 0秒", tone: "live" });
+assert.deepEqual(agentSideText({ ...timedRow, kind: "agent", status: "failed" }, now), { text: "失败", tone: "bad" });
+assert.deepEqual(agentSideText({ ...pendingRow, kind: "agent", status: "completed", endedAt: "2026-09-09T01:00:00.000Z" }, now),
+  { text: "已完成", tone: "plain" }, "没记下开始时间就算不出用时，照实说已完成");
 const pendingAgent = renderToStaticMarkup(<NativeAgentConversation row={{ ...pendingRow, kind: "agent" }} statusLabel="待处理" />);
 assert.ok(pendingAgent.includes("未记录") && !pendingAgent.includes("会话默认") && pendingAgent.includes("等待子智能体开始执行"));
-const requestedAgent = renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, kind: "agent", requestedModel: "sonnet" }} />);
-assert.ok(requestedAgent.includes("sonnet") && requestedAgent.includes("调用指定"));
-const reportedAgent = renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, kind: "agent", requestedModel: "opus", model: "claude-sonnet-4-6" }} />);
-assert.ok(reportedAgent.includes("claude-sonnet-4-6") && !reportedAgent.includes("调用指定") && !reportedAgent.includes("opus"));
 assert.ok(!pendingAgent.includes("执行中，内容实时更新"));
 
-// 智能水平和模型是一对:卡片里逐项列清楚（没有就说未记录），实跑值压过调用时点的档位。
-const effortRow = { ...pendingRow, kind: "agent" as const, model: "gpt-5.6-sol", effort: "low" };
-const withEffort = renderToStaticMarkup(<NativeWorkMeta row={effortRow} />);
-assert.ok(withEffort.includes("智能水平") && withEffort.includes("low") && !withEffort.includes("思考强度"), "用户可见文案只叫智能水平");
-assert.ok(!withEffort.includes("未记录"), "两项都问出来了就不该有未记录");
-const askedEffort = renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, kind: "agent", requestedEffort: "xhigh" }} />);
-assert.equal((askedEffort.match(/调用指定/g) ?? []).length, 1, "只有没上报实跑值的那一项标调用指定");
-assert.ok(askedEffort.includes("xhigh") && askedEffort.includes("未记录"), "智能水平点了名、模型没上报，两件事各自如实说");
-const reportedEffort = renderToStaticMarkup(<NativeWorkMeta row={{ ...effortRow, requestedEffort: "high" }} />);
-assert.ok(reportedEffort.includes("low") && !reportedEffort.includes("high") && !reportedEffort.includes("调用指定"));
-assert.ok(!renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, effort: "low" }} />).includes("智能水平"), "内部任务没有自己的智能水平");
+// 出处那一行：模型和智能水平是一对，实跑值压过调用时点的档位，只有退回到点名的那一项标调用指定；
+// 两样都没问出来就不占位（不连写两个「未记录」）。
+const agentRow = { ...pendingRow, kind: "agent" as const };
+assert.deepEqual(agentProvenance({ ...agentRow, requestedModel: "sonnet" }), ["sonnet（调用指定）"]);
+assert.deepEqual(agentProvenance({ ...agentRow, requestedModel: "opus", model: "claude-sonnet-4-6" }), ["claude-sonnet-4-6"]);
+const effortRow = { ...agentRow, model: "gpt-5.6-sol", effort: "low" };
+assert.deepEqual(agentProvenance({ ...effortRow, requestedEffort: "high" }), ["gpt-5.6-sol", "智能水平 low"], "用户可见文案只叫智能水平");
+assert.deepEqual(agentProvenance({ ...agentRow, requestedEffort: "xhigh" }), ["智能水平 xhigh（调用指定）"]);
+assert.deepEqual(agentProvenance({ ...pendingRow, effort: "low" }), [], "内部任务没有自己的模型和智能水平");
+assert.deepEqual(agentProvenance({ ...timedRow, kind: "agent", agentType: "Explore", status: "stopped" }, { now, parentTitle: "上一级", showSession: true }),
+  ["Explore", "09/09 08:00 派出", "跑了 8分 0秒", "由「上一级」派出", "codex@test"], "没正常跑完的才在出处里补一句跑了多久");
+assert.ok(!agentProvenance({ ...timedRow, kind: "agent" }, { now }).some((piece) => piece.startsWith("跑了")), "跑完的用时已经在右边，不重复");
+
+// 在跑的排最前；其余按派出去的那一轮分组，新的一轮在上；换轮的那一行多留一点空。
+const listed = agentListRows([
+  { ...agentRow, id: "a1", dispatchTurn: "t1", status: "completed" },
+  { ...agentRow, id: "a2", dispatchTurn: "t1", status: "completed" },
+  { ...agentRow, id: "b1", dispatchTurn: "t2", status: "completed" },
+  { ...agentRow, id: "b2", dispatchTurn: "t2", status: "running" },
+  { ...pendingRow, id: "todo" },
+]);
+assert.deepEqual(listed.map(({ row, batchStart }) => [row.id, batchStart]), [["b2", false], ["b1", true], ["a1", true], ["a2", false]]);
 
 // 没有派活正文时照实说明,别留一片空白让人以为界面漏了。
 const noAssignment = renderToStaticMarkup(<NativeAgentConversation row={{ ...effortRow, kind: "agent" }} statusLabel="待处理" />);

@@ -25,48 +25,48 @@ try {
   await page.goto(`${web.origin}/scripts/fixtures/native-work.html`);
   await page.clock.install();
 
+  // 「执行过程」在点开的那一行里：先把那一行展开（已经展开就不动），再点它。
+  const agentRow = (title) => page.locator(".native-work__agent").filter({ has: page.locator(".native-work__title", { hasText: title }) });
+  const viewRun = async (title) => {
+    const row = agentRow(title);
+    const toggle = row.locator(".native-work__row");
+    if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
+    await page.getByRole("button", { name: `查看执行：${title}`, exact: true }).click();
+  };
+
   assert.equal(await page.getByRole("tab", { name: "子智能体" }).count(), 0, "Inspector starts hidden");
   await page.getByRole("button", { name: "打开子智能体" }).click();
   await page.getByRole("tab", { name: "子智能体" }).waitFor();
-  assert.equal(await page.locator(".native-work__row").count(), 6);
-  assert.deepEqual((await page.locator(".native-work__status").allInnerTexts()).sort(),
-    ["进行中", "待处理", "已完成", "失败", "已停止", "状态未知"].sort());
-
-  // 每张卡片折叠着就能看到起止时间，与任务检查器同一个写法；一个时刻都没记下的不占位。
-  const when = (status) => page.locator(`.native-work__entry[data-status="${status}"] .native-work__when`);
-  assert.match(await when("completed").innerText(), /^09\/08 08:00 → 08:01$/, "同一天的结束只写时刻");
-  assert.match(await when("running").innerText(), /^09\/08 08:00 起$/, "还在跑的用「起」收尾");
-  assert.equal(await when("pending").count(), 0, "未开工的卡片不放时间");
+  const agents = page.locator(".native-work__agent");
+  assert.equal(await agents.count(), 5, "一行一个子智能体；内部待办不混进来");
+  assert.equal(await agents.first().getAttribute("data-status"), "running", "在跑的排在最前");
+  const side = (status) => page.locator(`.native-work__agent[data-status="${status}"] .native-work__side`);
+  assert.match(await side("running").innerText(), /\d/, "在跑的右边是用时");
+  assert.match(await side("running").getAttribute("class"), /insp-live/, "在跑的用时是主色");
+  assert.equal(await side("completed").innerText(), "1分 35秒", "跑完的右边是用时");
+  assert.equal(await side("failed").innerText(), "失败");
+  assert.match(await side("failed").getAttribute("class"), /insp-bad/);
+  assert.equal(await side("stopped").innerText(), "已停止", "停了的只换右边那几个字");
+  assert.equal(await side("unknown").innerText(), "状态未知");
+  assert.equal(await page.locator(".native-work__doing").count(), 1, "只有在跑的那一行底下多一行它此刻在做什么");
+  assert.ok((await page.locator('.native-work__agent[data-status="running"] .native-work__doing').innerText()).trim().length > 0);
+  assert.equal(await page.locator(".native-work__counts, .native-work__intro").count(), 0, "三格统计和那段说明都不要了");
+  assert.equal(await page.locator(".native-work__more").count(), 0, "默认都收着");
 
   await mkdir(output, { recursive: true });
   const inspector = page.locator(".inspector-host");
   const inspectorStyle = await inspector.getAttribute("style");
-  const longTitle = page.locator('.native-work__entry[data-status="unknown"] .native-work__title');
-  assert.ok((await longTitle.innerText()).length >= 50, "夹具覆盖超长标题");
-  let previousCapacity = 0;
-  for (const width of [280, 314, 316, 318, 340, 446, 448, 480, 720]) {
+  assert.ok((await agentRow("调研 ash").locator(".native-work__title").innerText()).length >= 50, "夹具覆盖超长标题");
+  for (const width of [280, 316, 340, 448, 720]) {
     await inspector.evaluate((el, width) => {
       el.style.setProperty("--inspector-width", `${width}px`);
       el.style.transition = "none";
     }, width);
-    const cards = await page.locator(".native-work__entry").evaluateAll((entries) => entries.map((entry) => {
-      const title = entry.querySelector(".native-work__title");
-      const titleBox = title.getBoundingClientRect();
-      return { height: entry.getBoundingClientRect().height,
-        lines: titleBox.height / parseFloat(getComputedStyle(title).lineHeight),
-        overflow: entry.scrollWidth > entry.clientWidth,
-        expanded: entry.querySelector(".native-work__row").open };
-    }));
-    assert.ok(cards.every((card) => !card.expanded && card.height <= 60 && card.lines <= 2 && !card.overflow),
-      `折叠卡片最多两行且无横向溢出：${JSON.stringify({ width, cards })}`);
-    const capacity = await longTitle.evaluate((title) => {
-      const box = title.getBoundingClientRect();
-      return box.width * box.height / parseFloat(getComputedStyle(title).lineHeight);
-    });
-    assert.ok(capacity >= previousCapacity - 1,
-      `拉宽面板不应减少标题的可显示长度：${JSON.stringify({ width, previousCapacity, capacity })}`);
-    previousCapacity = capacity;
-    if ([340, 446, 448].includes(width)) await inspector.screenshot({ path: `${output}/native-work-compact-${width}.png` });
+    const rows = await page.locator(".native-work__row").evaluateAll((items) => items.map((item) => ({
+      height: item.getBoundingClientRect().height, overflow: item.scrollWidth > item.clientWidth + 1,
+    })));
+    assert.ok(rows.every((row) => row.height <= 34 && !row.overflow), `每个子智能体一行、不横向溢出：${JSON.stringify({ width, rows })}`);
+    if ([340, 448].includes(width)) await inspector.screenshot({ path: `${output}/native-work-compact-${width}.png` });
   }
   await inspector.evaluate((el, style) => {
     if (style === null) el.removeAttribute("style");
@@ -74,43 +74,39 @@ try {
   }, inspectorStyle);
   await settled(inspector);
 
-  const running = page.locator('.native-work__row[data-status="running"]');
-  const card = page.locator('.native-work__entry[data-status="running"]');
-  await running.locator(":scope > summary").press("Enter");
-  // 模型和智能水平各占一行：实跑值优先，只有退回到派活时点的那个才标「调用指定」。
-  assert.match(await card.locator(".native-work__meta").innerText(),
-    /模型\s*gpt-5\.6-sol\s*调用指定[\s\S]*智能水平\s*xhigh/);
-  assert.equal((await card.locator(".native-work__meta").innerText()).match(/调用指定/g).length, 1,
-    "已上报实跑智能水平的那一项不该再标调用指定");
-  const timing = card.locator(".native-work__timing");
-  assert.equal(await timing.getAttribute("open"), null, "卡片默认只显示时间摘要");
-  assert.equal(await card.locator(".native-work__times").isVisible(), false);
-  await timing.locator("summary").press("Enter");
-  assert.equal(await card.locator(".native-work__times").isVisible(), true);
-  assert.match(await card.locator(".native-work__times").innerText(), /开始时间[\s\S]*结束时间[\s\S]*尚未结束/);
-  assert.equal(await card.locator("time").first().getAttribute("datetime"), "2026-09-08T00:00:01.000Z");
-  assert.match(await card.locator("time").first().innerText(), /^09\/08\s+08:00$/, "日期按 MM/DD HH:mm 显示，不带年份也不带秒");
-  await timing.locator("summary").press("Space");
-  assert.equal(await card.locator(".native-work__times").isVisible(), false, "可重新收起完整时间");
-  const pending = page.locator('.native-work__entry[data-status="pending"]');
-  await pending.locator(".native-work__row > summary").click();
-  assert.equal(await pending.locator("time").count(), 0, "未开工不能显示开始时间");
-  assert.equal(await pending.locator(".native-work__model").count(), 0, "内部待办没有执行模型");
-  assert.match(await pending.locator(".native-work__timing > summary").innerText(), /尚未开始/);
-  assert.equal(await pending.locator(".native-work__duration-value").count(), 0);
-  const activeSpan = await card.locator(".native-work__duration-value").innerText();
+  // 点开：先是它带回来的话，再是一行出处（类型 · 模型 · 智能水平 · 几点派的）；收到的输入折着。
+  const running = agentRow("运行中的资料搜集");
+  await running.locator(".native-work__row").press("Enter");
+  assert.equal(await running.locator(".native-work__row").getAttribute("aria-expanded"), "true");
+  assert.match(await running.locator(".native-work__result").innerText(), /还没带回来话/);
+  const facts = await running.locator(".native-work__facts").innerText();
+  assert.match(facts, /gpt-5\.6-sol（调用指定）\s*·\s*智能水平 xhigh\s*·\s*09\/08 08:00 派出/, "模型和智能水平实跑值优先，只有退回到派活时点的那个才标调用指定");
+  assert.equal(facts.match(/调用指定/g).length, 1, "已上报实跑智能水平的那一项不该再标调用指定");
+  assert.equal(await running.locator(".native-work__input").count(), 0, "收到的输入默认折着");
+  await running.getByRole("button", { name: "收到的输入", exact: true }).click();
+  assert.match(await running.locator(".native-work__input").innerText(), /需要检查一个不会自然换行的超长说明/);
+  const activeSpan = await side("running").innerText();
   await page.clock.fastForward(60_000);
   await settlePage(page); // 假时钟触发的秒表 setState 还排在 React 调度里；冲刷掉再读 DOM
-  assert.notEqual(await card.locator(".native-work__duration-value").innerText(), activeSpan, "运行项实时更新跨度");
-  assert.equal(await pending.locator(".native-work__duration-value").count(), 0, "待处理项不会随时钟递增");
-  assert.match(await page.locator(".native-work__detail").filter({ hasText: "所属子智能体" }).innerText(), /运行中的资料搜集/);
+  assert.notEqual(await side("running").innerText(), activeSpan, "运行项实时更新用时");
+  const stopped = agentRow("用户停止的执行者");
+  await stopped.locator(".native-work__row").click();
+  assert.match(await stopped.locator(".native-work__result").innerText(), /没有带回来的话/);
+  await stopped.getByRole("button", { name: "收到的输入", exact: true }).click();
+  assert.match(await stopped.locator(".native-work__input").innerText(), /未记录主会话给它的输入[\s\S]*加密/, "没有派活正文时照实说为什么空着");
+  await stopped.locator(".native-work__row").click();
+
+  // 待办收成最底下一行：有子智能体时默认收着，点开一项一行，带上它属于哪个子智能体。
+  const todoRow = page.locator(".native-work__todo-row");
+  assert.match(await todoRow.innerText(), /待办[\s\S]*0 \/ 1/);
+  assert.equal(await todoRow.getAttribute("aria-expanded"), "false");
+  await todoRow.click();
+  assert.match(await page.locator(".native-work__todo-list li").innerText(), /核对浏览器状态\s*·\s*运行中的资料搜集/);
+  await todoRow.click();
 
   const overflow = await page.locator(".native-work").evaluate((el) => ({ width: el.clientWidth, scroll: el.scrollWidth }));
   assert.ok(overflow.scroll <= overflow.width + 1, `narrow Inspector overflowed: ${JSON.stringify(overflow)}`);
-  await mkdir(output, { recursive: true });
   await page.screenshot({ path: `${output}/native-work-initial.png`, fullPage: true });
-  await running.locator(":scope > summary").press("Space");
-  await pending.locator(".native-work__row > summary").click();
 
   await page.getByRole("button", { name: "查看执行：运行中的资料搜集", exact: true }).click();
   // 执行详情从左侧抽屉推出来（和团队模式点执行者同一套外壳）：只盖住主区那一栏，
@@ -118,7 +114,7 @@ try {
   const drawer = page.getByLabel("子智能体执行详情：运行中的资料搜集", { exact: true });
   await drawer.waitFor();
   assert.equal(await drawer.locator(".side-drawer__kind").innerText(), "子智能体");
-  assert.equal(await page.locator(".native-work__entry.is-open").count(), 1);
+  assert.equal(await page.locator(".native-work__agent.is-viewing").count(), 1);
   assert.equal(await page.getByRole("button", { name: "查看执行：运行中的资料搜集", exact: true })
     .getAttribute("aria-pressed"), "true");
   const mainBox = await page.locator("main > div > section").boundingBox();
@@ -169,7 +165,7 @@ try {
   assert.ok(detailSize.scroll <= detailSize.width + 1, "execution details fit the drawer");
   await page.screenshot({ path: `${output}/native-work-live.png`, fullPage: true });
   // 不关抽屉直接点列表里的下一个：换人不该被关闭动画吞掉。
-  await page.getByRole("button", { name: "查看执行：用户停止的执行者", exact: true }).click();
+  await viewRun("用户停止的执行者");
   await page.getByLabel("子智能体执行详情：用户停止的执行者", { exact: true }).waitFor();
   assert.match(await conversation.innerText(), /另一个子智能体的独立记录/);
   assert.match(await conversation.innerText(), /未记录主会话给它的输入[\s\S]*加密/,
@@ -185,22 +181,25 @@ try {
   assert.equal(await page.locator("[data-task-id='native-work-task']").count(), 1, "该切回原任务");
   assert.equal(await page.getByLabel("子智能体执行详情", { exact: true }).count(), 0,
     "切走再切回来，抽屉不该自己重新打开");
-  assert.equal(await page.locator(".native-work__entry.is-open").count(), 0, "列表也不该还回显选中");
+  assert.equal(await page.locator(".native-work__agent.is-viewing").count(), 0, "列表也不该还回显选中");
   // 切回来之后照样能重新打开。
-  await page.getByRole("button", { name: "查看执行：运行中的资料搜集", exact: true }).click();
+  await viewRun("运行中的资料搜集");
   await page.getByLabel("子智能体执行详情：运行中的资料搜集", { exact: true }).waitFor();
   await closeDrawer();
 
   await page.getByRole("button", { name: "完成运行项" }).click();
-  await page.locator('.native-work__row[data-status="completed"] > summary').filter({ hasText: "运行中的资料搜集" }).waitFor();
-  assert.equal(await page.locator('.native-work__row[data-status="completed"]').count(), 3);
-  assert.match(await page.locator(".native-work__counts").innerText(), /3\s+已完成/);
+  await page.locator('.native-work__agent[data-status="completed"]').filter({ hasText: "运行中的资料搜集" }).waitFor();
+  assert.equal(await page.locator('.native-work__agent[data-status="completed"]').count(), 2);
+  assert.match(await page.locator(".native-work__todo-row").innerText(), /1 \/ 1/, "它名下那条待办跟着做完了");
 
   await page.reload();
   await page.getByRole("tab", { name: "子智能体" }).waitFor();
-  assert.equal(await page.locator('.native-work__row[data-status="completed"]').count(), 3, "refresh rebuild keeps final states");
-  assert.equal(await page.locator(".native-work__title", { hasText: "运行中的资料搜集" }).locator("xpath=ancestor::details[1]").getAttribute("data-status"), "completed");
-  await page.getByRole("button", { name: "查看执行：运行中的资料搜集", exact: true }).click();
+  assert.equal(await page.locator('.native-work__agent[data-status="completed"]').count(), 2, "refresh rebuild keeps final states");
+  assert.equal(await agentRow("运行中的资料搜集").getAttribute("data-status"), "completed");
+  assert.equal(await page.locator(".native-work__doing").count(), 0, "没有在跑的就没有「此刻在做什么」");
+  await agentRow("运行中的资料搜集").locator(".native-work__row").click();
+  assert.match(await agentRow("运行中的资料搜集").locator(".native-work__result").innerText(), /刷新后仍应保留的完成结果/, "点开先是它带回来的话");
+  await viewRun("运行中的资料搜集");
   await conversation.getByText("刷新后仍应保留的完成结果", { exact: false }).waitFor();
   assert.match(await headline.innerText(), /09\/08 08:00 → 08:08\s*·\s*8分 0秒/, "收工后抬头给出完整区间和跨度");
   await page.clock.fastForward(60_000);
@@ -210,29 +209,22 @@ try {
   await conversation.locator(".task-turn-process > summary").click();
   assert.match(await conversation.innerText(), /实时进展 1/);
   await closeDrawer();
-  assert.equal(await page.locator(".native-work__entry.is-open").count(), 0, "抽屉关掉后列表不再回显选中");
+  assert.equal(await page.locator(".native-work__agent.is-viewing").count(), 0, "抽屉关掉后列表不再回显选中");
 
   await page.getByRole("button", { name: "切换空状态" }).click();
-  await page.getByText("暂无子智能体或内部任务").waitFor();
-  assert.equal(await page.locator(".native-work__row").count(), 0);
+  await page.getByText("这个任务没有派过子智能体。", { exact: true }).waitFor();
+  assert.equal(await page.locator(".native-work__agent").count(), 0);
   await page.screenshot({ path: `${output}/native-work-empty.png`, fullPage: true });
+  // 只有待办、没有子智能体：那一行默认铺开，不再说「没有派过」。
   await page.getByRole("button", { name: "切换计划快照", exact: true }).click();
-  assert.equal(await page.locator(".native-work__row").count(), 4);
-  assert.equal(await page.locator(".native-work__model").count(), 0);
-  const snapshotPending = page.locator('.native-work__entry[data-status="pending"]');
-  assert.equal(await snapshotPending.count(), 2);
-  assert.equal(await snapshotPending.locator("time").count(), 0);
-  assert.equal(await snapshotPending.locator(".native-work__duration-value").count(), 0);
-  const firstCompleted = page.locator('.native-work__entry[data-status="completed"]');
-  assert.equal(await firstCompleted.locator("time").count(), 1, "首次快照仅知道完成时间");
-  await firstCompleted.locator(".native-work__row > summary").click();
-  await firstCompleted.locator(".native-work__timing > summary").click();
-  assert.match(await firstCompleted.innerText(), /未记录开始时间，无法计算跨度/);
-  await page.clock.fastForward(60_000);
-  await settlePage(page); // 假时钟触发的秒表 setState 还排在 React 调度里；冲刷掉再读 DOM
-  assert.equal(await snapshotPending.locator(".native-work__duration-value").count(), 0);
+  await page.locator(".native-work__todo-list").waitFor();
+  assert.equal(await page.locator(".native-work__agent").count(), 0);
+  assert.equal(await page.getByText("这个任务没有派过子智能体。", { exact: true }).count(), 0);
+  assert.match(await page.locator(".native-work__todo-row").innerText(), /1 \/ 4/);
+  assert.deepEqual(await page.locator(".native-work__todo-list li").evaluateAll((items) => items.map((item) => item.dataset.status)),
+    ["completed", "running", "pending", "pending"]);
+  assert.equal(await page.locator('.native-work__todo-list li[data-status="running"] .insp-live').innerText(), "进行中");
   await page.screenshot({ path: `${output}/native-work-plan-timing.png`, fullPage: true });
-  await snapshotPending.first().screenshot({ path: `${output}/native-work-pending-fixed.png` });
   console.log("native work Inspector DOM regression passed");
 } finally {
   await browser?.close();

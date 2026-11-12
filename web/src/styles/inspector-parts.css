@@ -194,8 +194,13 @@
   font-variant-numeric: tabular-nums;
 }
 
-.insp-meta.is-bad {
+.insp-meta.is-bad,
+.insp-meta.insp-bad {
   color: var(--red);
+}
+
+.insp-meta.insp-live {
+  color: var(--accent);
 }
 
 .insp-go__chev {

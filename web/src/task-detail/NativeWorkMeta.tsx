@@ -1,13 +1,6 @@
 import { Fragment } from "react";
-import { CaretDown } from "@phosphor-icons/react";
 import type { NativeWorkItem } from "./nativeWorkModel.ts";
-import { nativeWorkDate, useNativeWorkTiming } from "./nativeWorkTiming.ts";
-
-function Timestamp({ at, fallback }: { at?: string; fallback: string }) {
-  const value = nativeWorkDate(at);
-  return value ? <time dateTime={at}><span>{value.date}</span>{" "}<span>{value.time}</span></time>
-    : <span className="native-work__unrecorded">{fallback}</span>;
-}
+import { useNativeWorkTiming } from "./nativeWorkTiming.ts";
 
 /**
  * 「模型」与「智能水平」是一对:实跑值优先,没上报就退到调用方点的名,两样都没有才叫未记录。
@@ -18,42 +11,12 @@ const FIELDS = [
   { label: "智能水平", reported: "effort", requested: "requestedEffort" },
 ] as const;
 
-function fieldValues(row: NativeWorkItem) {
+export function fieldValues(row: NativeWorkItem) {
   if (row.kind !== "agent") return [];
   return FIELDS.map(({ label, reported, requested }) => {
     const asked = row[requested] !== "inherit" ? row[requested] : undefined;
     return { label, value: row[reported] || asked || "未记录", requestedOnly: !row[reported] && !!asked, unknown: !row[reported] && !asked };
   });
-}
-
-/** 模型/智能水平还没上报时显示的是调用方点的名，标出来免得当成实跑的那个。 */
-function Values({ row }: { row: NativeWorkItem }) {
-  return <>{fieldValues(row).map(({ label, value, requestedOnly }) => <dl className="native-work__model" key={label}>
-    <dt>{label}</dt><dd><span>{value}</span>{requestedOnly && <small>调用指定</small>}</dd>
-  </dl>)}</>;
-}
-
-/**
- * 列表卡片展开后的那条：起止区间已经挂在卡片抬头上，这里摘要只报跨度（算不出跨度时才退回区间
- * 那句说明），点开才是逐项的开始与结束。
- */
-export function NativeWorkMeta({ row }: { row: NativeWorkItem }) {
-  const { active, awaitingStart, range, duration, hasDuration } = useNativeWorkTiming(row);
-  return <div className="native-work__meta">
-    <Values row={row} />
-    <details className="native-work__timing">
-      <summary aria-label={`时间详情：${range}${hasDuration ? `，时间跨度：${duration}` : ""}`}>
-        {hasDuration ? <span className="native-work__duration-value">{duration}</span>
-          : <span className="native-work__time-range">{range}</span>}
-        <CaretDown size={10} aria-hidden="true" />
-      </summary>
-      <dl className="native-work__times">
-        <div><dt>开始时间</dt><dd><Timestamp at={row.startedAt} fallback={awaitingStart ? "尚未开始" : "未记录"} /></dd></div>
-        <div><dt>结束时间</dt><dd><Timestamp at={row.endedAt} fallback={awaitingStart ? "—" : active ? "尚未结束" : "未记录"} /></dd></div>
-      </dl>
-      {!row.startedAt && row.endedAt && <p className="native-work__timing-note">未记录开始时间，无法计算跨度。</p>}
-    </details>
-  </div>;
 }
 
 /**
@@ -62,7 +25,7 @@ export function NativeWorkMeta({ row }: { row: NativeWorkItem }) {
  * 于是顺着副标题横向摊开——填上那片空白，也不必再把读者的视线掰成表格。
  *
  * 抬头是摘要,所以只摊开**问出来**的那几项;一项都没问出来时留一个「未记录」说明情况,
- * 而不是连着两个「未记录」。完整的逐项记录在列表卡片的 NativeWorkMeta 里。
+ * 而不是连着两个「未记录」。
  */
 export function NativeWorkHeadline({ row }: { row: NativeWorkItem }) {
   const { range, duration, hasDuration } = useNativeWorkTiming(row);

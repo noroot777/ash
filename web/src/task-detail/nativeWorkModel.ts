@@ -30,6 +30,8 @@ export interface NativeWorkItem {
   endedAt?: string;
   agentType?: string;
   legacy?: boolean;
+  /** 第一次在哪一回合（会话里那一条 agent 项的 id）里出现：右侧列表按它把同一轮派出去的排在一起。 */
+  dispatchTurn?: string;
   activity?: NativeAgentActivity[];
   /** message/result(快照式正文)里图片引用的保存结果 —— 跟 activity 那份文档各配各的。 */
   messageImages?: AttachmentSource[];
@@ -165,7 +167,7 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
     let observedAt: string | undefined;
     const put = (id: string, patch: Partial<NativeWorkItem>) => {
       const previous = rows.get(id);
-      const next = { id, kind: "agent" as const, title: placeholderTitle(item.sessionId, id), status: "unknown" as const, ...base, ...previous, ...patch };
+      const next = { id, kind: "agent" as const, title: placeholderTitle(item.sessionId, id), status: "unknown" as const, dispatchTurn: item.id, ...base, ...previous, ...patch };
       if (observedAt) {
         if (!next.startedAt && next.status === "running") next.startedAt = observedAt;
         if (terminal(next.status) && (!previous || !terminal(previous.status))) next.endedAt = observedAt;

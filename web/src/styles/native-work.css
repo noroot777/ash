@@ -1,107 +1,66 @@
-.native-work { padding: 16px 12px 28px; color: var(--ink); font-size: 12px; }
-.native-work__intro, .native-work__hint { margin: 0 0 18px; color: var(--muted); font-size: 11px; line-height: 1.65; }
-.native-work__intro { margin-top: 10px; }
-.native-work__counts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 2px 0 12px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
-.native-work__counts > span { display: flex; flex-direction: column; gap: 3px; padding-left: 12px; color: var(--muted); font-size: 10px; }
-.native-work__counts > span:first-child { padding-left: 0; }
-.native-work__counts > span + span { border-left: 1px solid var(--line); }
-.native-work__counts strong { color: var(--ink); font-size: 21px; font-weight: 550; line-height: 1.2; letter-spacing: -.04em; }
-.native-work__counts [data-status="running"] strong { color: var(--accent); }
-.native-work__counts [data-status="completed"] strong { color: var(--green); }
-.native-work__group + .native-work__group { margin-top: 22px; }
-.native-work__group h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 9px; color: var(--muted); font-size: 11px; font-weight: 550; }
-.native-work__group h3 span { display: grid; min-width: 18px; height: 18px; place-items: center; border-radius: 5px; background: var(--raised); color: var(--muted); font-size: 10px; }
-.native-work__entry { position: relative; container-type: inline-size; min-width: 0; margin-bottom: 6px; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); }
-.native-work__entry[data-status="running"] { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
-/* 执行详情正在左侧抽屉里打开着的那一项（与团队执行者列表的 is-selected 同一个意思）。 */
-.native-work__entry.is-open { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
-.native-work__row > summary { display: flex; align-items: flex-start; gap: 6px; min-height: 38px; padding: 9px 10px; cursor: pointer; list-style: none; }
-.native-work__entry[data-kind="agent"] > .native-work__row > summary { padding-right: 90px; }
-.native-work__row > summary::-webkit-details-marker { display: none; }
-.native-work__row > summary:hover { background: color-mix(in srgb, var(--canvas) 75%, transparent); }
-.native-work__row > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; border-radius: 8px; }
-.native-work__title { display: -webkit-box; flex: 1; min-width: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--ink); font-size: 12px; font-weight: 550; line-height: 18px; overflow-wrap: anywhere; }
-.native-work__full-title { margin: 0; padding: 2px 12px 8px; font-weight: 550; line-height: 1.5; overflow-wrap: anywhere; }
-/* 状态徽标和起止时间是一组：宽卡片里整组跟在标题后面不收缩，窄卡片里成为标题下的第二行。 */
-.native-work__state { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; min-width: 0; }
-.native-work__when { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; line-height: 1.4; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
-.native-work__status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; width: fit-content; padding: 2px 6px; border-radius: 4px; background: var(--raised); color: var(--muted); font-size: 10px; font-weight: 450; line-height: 1.4; white-space: nowrap; }
-.native-work__status::before { width: 4px; height: 4px; border-radius: 50%; background: currentColor; content: ""; }
-.native-work__status[data-status="running"] { background: color-mix(in srgb, var(--accent) 9%, var(--panel)); color: var(--accent); }
-.native-work__status[data-status="completed"] { background: color-mix(in srgb, var(--green) 8%, var(--panel)); color: var(--green); }
-.native-work__status[data-status="failed"] { background: color-mix(in srgb, var(--red) 8%, var(--panel)); color: var(--red); }
-.native-work__status[data-status="pending"] { background: color-mix(in srgb, var(--amber) 8%, var(--panel)); color: var(--amber); }
-.native-work__chevron { flex: 0 0 auto; margin-top: 3px; color: var(--muted); }
-.native-work__row[open] .native-work__chevron { transform: rotate(180deg); }
-.native-work__detail { padding: 0 12px 12px; overflow-wrap: anywhere; }
-.native-work__detail dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 10px; margin: 0 0 14px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 11px; }
-.native-work__detail dt { color: var(--muted); }
-.native-work__detail dd { margin: 0; }
-.native-work__detail h4 { margin: 12px 0 5px; color: var(--muted); font-size: 11px; font-weight: 500; }
-.native-work__detail p { max-height: 400px; overflow: auto; margin: 0; line-height: 1.7; white-space: pre-wrap; }
-.native-work__detail .native-work__hint { margin-top: 14px; font-size: 11px; }
-.native-work__meta { display: grid; gap: 4px; min-width: 0; margin: 0 12px; padding: 8px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; line-height: 1.6; }
-.native-work__model { display: flex; align-items: baseline; gap: 10px; margin: 0; }
-.native-work__model dt { flex: 0 0 auto; }
-.native-work__model dd { display: flex; flex: 1; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px 6px; min-width: 0; margin: 0; text-align: right; }
-.native-work__model dd > span { overflow-wrap: anywhere; }
-.native-work__model small { font-size: 9px; }
-.native-work__times { display: grid; gap: 2px; margin: 0; color: color-mix(in srgb, var(--muted) 70%, var(--faint)); font-size: 9px; }
-.native-work__times > div { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
-.native-work__times dt { flex: 0 0 auto; }
-.native-work__times dd { min-width: 0; margin: 0; text-align: right; }
-.native-work__times time { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 6px; font-variant-numeric: tabular-nums; }
-.native-work__unrecorded { color: inherit; }
-.native-work__duration { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; color: color-mix(in srgb, var(--muted) 70%, var(--faint)); font-size: 9px; }
-.native-work__duration > span:first-child { flex: 0 0 auto; }
-.native-work__duration-value { min-width: 0; font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
-.native-work__timing-note { margin: 4px 0 0; color: color-mix(in srgb, var(--muted) 70%, var(--faint)); font-size: 9px; }
-.native-work__timing { min-width: 0; color: color-mix(in srgb, var(--muted) 70%, var(--faint)); font-size: 9px; }
-.native-work__timing > summary { display: flex; align-items: baseline; gap: 4px; padding: 2px 0; cursor: pointer; list-style: none; }
-.native-work__timing > summary::-webkit-details-marker { display: none; }
-.native-work__timing > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
-.native-work__time-range { min-width: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.native-work__timing > summary .native-work__duration-value { flex: 0 0 auto; white-space: nowrap; }
-.native-work__timing > summary svg { flex: 0 0 auto; align-self: center; margin-left: auto; }
-.native-work__timing[open] > summary svg { transform: rotate(180deg); }
-.native-work__timing[open] > summary { margin-bottom: 6px; }
-.native-work__open { position: absolute; top: 6px; right: 6px; display: inline-flex; align-items: center; gap: 4px; min-height: 26px; border: 0; border-radius: 5px; padding: 4px 6px; background: color-mix(in srgb, var(--accent) 7%, var(--panel)); color: var(--accent); font-size: 11px; white-space: nowrap; cursor: pointer; }
-.native-work__open:hover { background: color-mix(in srgb, var(--accent) 13%, var(--panel)); }
-.native-work__open:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-/* 标题、状态、起止时间挤一行时标题会被压得太窄，卡片窄于这条线就把状态与时间放到第二行。 */
-@container (max-width: 520px) {
-  .native-work__entry[data-kind] > .native-work__row > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title chevron" "state ."; gap: 2px 6px; padding: 7px 10px; }
-  .native-work__title { grid-area: title; -webkit-line-clamp: 1; }
-  .native-work__state { grid-area: state; }
-  /* 第二行右侧让给「查看执行」，时间放不下就省略，逐项的开始与结束在展开的时间详情里。 */
-  .native-work__entry[data-kind="agent"] .native-work__state { margin-right: 58px; }
-  .native-work__chevron { grid-area: chevron; }
-  .native-work__open { top: 26px; min-height: 22px; padding-block: 2px; }
+/* 右侧「子智能体」格（task-detail/NativeWorkInspector.tsx）。行、按钮、提示这些公共件在
+   inspector-parts.css；点「执行过程」推出来的那只抽屉在 native-agent.css。 */
+
+.native-work { min-width: 0; }
+.native-work__error { margin-bottom: 10px; }
+.native-work__agents { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); }
+
+.native-work__agent { min-width: 0; }
+/* 不同轮次派出去的：多留一点空，不写「第几批」 */
+.native-work__agent.is-batch-start { margin-top: 12px; }
+.native-work__row { min-height: 30px; }
+.native-work__title { flex: 1 1 auto; color: var(--ink); }
+.native-work__side { font-variant-numeric: tabular-nums; }
+/* 正从左侧抽屉里看着的那一个：名字加一档字重，不另加框 */
+.native-work__agent.is-viewing .native-work__title { font-weight: var(--w-medium); }
+
+/* 在跑的那一行底下：它此刻在做什么 */
+.native-work__doing { margin: -4px 0 4px; color: var(--muted); font-size: var(--t-xs); line-height: 1.5; }
+
+.native-work__more { min-width: 0; margin: 2px 0 10px; }
+.native-work__result { max-height: 360px; overflow: auto; margin: 0; color: var(--ink); font-size: var(--t-xs); line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
+.native-work__result.is-empty { color: var(--muted); }
+.native-work__facts { margin: 6px 0 0; color: var(--muted); font-size: var(--t-xs); line-height: 1.5; overflow-wrap: anywhere; }
+.native-work__more > .insp-hint { margin-top: 4px; }
+
+.native-work__folds { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
+.native-work__fold {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  padding: 0 4px 0 0;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  transition: color var(--dur-1) var(--ease-out);
 }
-.native-work__empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 38px 8px; color: var(--muted); text-align: center; }
-.native-work__empty strong { color: var(--ink); font-weight: 500; }
-.native-work__empty p { margin: 0; line-height: 1.7; }
-.native-work__error { margin-bottom: 12px; color: var(--red); }
-.native-work__error button { margin-left: 6px; text-decoration: underline; }
-.native-agent { display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--ink); }
-.native-agent__header { display: flex; flex-shrink: 0; align-items: flex-start; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
-.native-agent__heading { display: flex; flex: 1 1 auto; align-items: flex-start; gap: 9px; min-width: 0; }
-.native-agent__avatar { display: grid; flex: 0 0 30px; width: 30px; height: 30px; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--muted); }
-.native-agent__heading > div { min-width: 0; }
-.native-agent__heading strong { display: block; font-size: 13px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
-/* 来源会话 · 模型 · 时间 · 跨度顺着标题横向摊开：普通文本流，窄了就自然折行。 */
-.native-agent__headline { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.7; overflow-wrap: anywhere; }
-.native-agent__headline-dot { margin: 0 7px; color: var(--faint); }
-.native-agent__headline small { margin-left: 5px; font-size: 9px; }
-.native-agent__headline-time { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.native-agent__header > .native-work__status { flex: 0 0 auto; margin-top: 2px; }
-.native-agent__scroll-region { flex: 1; min-height: 0; }
-.native-agent__conversation { height: 100%; overflow: auto; padding: 16px 14px 48px; overflow-wrap: anywhere; font-size: 12px; }
-.native-agent__section-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 16px; color: var(--muted); font-size: 10px; }
-.native-agent__section-label > span:first-child { color: var(--ink); font-weight: 550; }
-.native-agent__assignment { margin-bottom: 16px; border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; background: var(--panel); color: var(--muted); }
-.native-agent__assignment > summary { cursor: pointer; font-size: 11px; }
-.native-agent__assignment[open] > summary { margin-bottom: 10px; }
-.native-agent__conversation .task-execution-events { max-width: 100%; }
-.native-agent__conversation .task-markdown { font-size: 12px; line-height: 1.8; }
-.native-agent__live { display: flex; align-items: center; gap: 7px; margin: 18px 0 0; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 10px; }
+.native-work__fold:hover,
+.native-work__fold[aria-expanded="true"],
+.native-work__fold[aria-pressed="true"] { color: var(--ink); }
+.native-work__fold > svg { transition: transform var(--dur-1) var(--ease-out); }
+.native-work__fold[aria-expanded="true"] > svg { transform: rotate(90deg); }
+.native-work__fold:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.native-work__input { max-height: 280px; overflow: auto; margin: 4px 0 0; border-left: 2px solid var(--line2); padding: 2px 0 2px 10px; color: var(--ink); font-size: var(--t-xs); line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
+.native-work__input.is-empty { color: var(--muted); }
+
+/* 最底下那一行待办 */
+.native-work__todos { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 6px; }
+.native-work__agents:empty + .native-work__todos,
+.native-work > .native-work__todos:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
+.native-work__todo-row { color: var(--muted); }
+.native-work__todo-list { display: grid; gap: 2px; margin: 2px 0 4px; padding: 0; list-style: none; }
+.native-work__todo-list > li { display: flex; min-width: 0; min-height: 24px; align-items: flex-start; gap: 6px; padding: 3px 0; font-size: var(--t-xs); line-height: 1.5; }
+.native-work__todo-icon { display: inline-grid; flex: 0 0 auto; height: 18px; place-items: center; color: var(--faint); }
+.native-work__todo-list > li[data-status="completed"] .native-work__todo-icon { color: var(--green); }
+.native-work__todo-list > li[data-status="running"] .native-work__todo-icon { color: var(--accent); }
+.native-work__todo-list > li[data-status="failed"] .native-work__todo-icon { color: var(--red); }
+.native-work__todo-title { min-width: 0; flex: 1 1 auto; color: var(--ink); overflow-wrap: anywhere; }
+.native-work__todo-list > li[data-status="completed"] .native-work__todo-title { color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .native-work__fold,
+  .native-work__fold > svg { transition: none; }
+}
