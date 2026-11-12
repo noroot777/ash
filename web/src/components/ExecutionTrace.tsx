@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { CaretRight, File, Globe, Lightbulb, ListChecks, MagnifyingGlass, PencilSimple, Plug, Pulse, Robot, TerminalWindow, WarningCircle, X } from "@phosphor-icons/react";
 import { isVisibleExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
-import { describeEvent, isFlatStep, liveLabel, pastSummary, type StepView } from "../lib/executionWords.ts";
+import { describeEvent, isFlatStep, liveLabel, mergeRetryRuns, pastSummary, type StepView } from "../lib/executionWords.ts";
 import { useSwapText } from "../lib/useSwapText.ts";
 import { useNow } from "../lib/useNow.ts";
 import { useStagger } from "../lib/motion/index.ts";
@@ -133,7 +133,7 @@ function LiveTime({ since }: { since: string }) {
 
 /** 光秃秃的事件行列表。外面已经有折叠壳时用它，别再套一层 `<details>`。 */
 export function ExecutionEventList({ events }: { events: ExecutionEvent[] }) {
-  events = events.filter(isVisibleExecutionEvent);
+  events = mergeRetryRuns(events.filter(isVisibleExecutionEvent));
   if (!events.length) return null;
   return (
     <div className="task-execution-events">

@@ -265,4 +265,19 @@ const withBlankTail = tracedSegments(
 assert.ok(withBlankTail.length >= 1);
 assert.equal(awaitingUpstream(withBlankTail), true, "等待那一位落到了折叠条读不到的段上");
 
+// ── 事后点开：紧挨着的几次重试并成一行，用最后一次的说法、带上一共几次（docs/ui-ux-audit run-9）──
+const RETRY_2 = "上游返回 502 server_error，正在重试（第 2/10 次，等 1.2 秒）";
+const RETRY_3 = "上游返回 502 server_error，正在重试（第 3/10 次，等 2.4 秒）";
+const retries = renderToStaticMarkup(<ExecutionDetails running={false} events={[
+  { kind: "tool", label: "Bash", detail: JSON.stringify({ command: "npm test" }) },
+  { kind: "notice", label: "提示", detail: RETRY },
+  { kind: "notice", label: "提示", detail: RETRY_2 },
+  { kind: "notice", label: "提示", detail: RETRY_3 },
+  { kind: "tool", label: "Read", detail: JSON.stringify({ file_path: "/repo/a.ts" }) },
+  { kind: "notice", label: "提示", detail: RETRY },
+]} />);
+assert.equal(retries.split("task-tool-line--notice").length - 1, 2, "三次连着的重试该并成一行，隔开的另起一行");
+assert.ok(retries.includes(`${RETRY_3}（共 3 次）`), "并成的那一行用最后一次的说法，并说一共几次");
+assert.ok(!retries.includes(RETRY_2), "并掉的中间那几次不再各占一行");
+
 console.log("上游重试排在执行过程里它发生的那一步下面：落盘、直播、折叠、duet 四路一致，不标红，恢复输出(含只记账的用量)会解除等待；刷新重建认服务端那一位");

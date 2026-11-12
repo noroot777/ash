@@ -38,6 +38,27 @@ export function describeEvent(event: ExecutionEvent): StepView {
   return event.detail?.trim() ? { ...view, raw: event.detail.trim() } : view;
 }
 
+/**
+ * 事后点开执行过程时，紧挨着的几次「上游没回话、在重试」并成一行（run-9）：它说的是同一件事，
+ * 一次一行只会把真正做过的那几步挤下去。并成的那一行用最后一次的说法，后面带上一共几次。
+ */
+export function mergeRetryRuns(events: ExecutionEvent[]): ExecutionEvent[] {
+  const merged: ExecutionEvent[] = [];
+  let run = 0;
+  for (const event of events) {
+    const previous = merged.at(-1);
+    const retry = event.kind === "notice" && !isCompactionEvent(event);
+    if (retry && previous?.kind === "notice" && !isCompactionEvent(previous) && previous.label === event.label) {
+      run += 1;
+      merged[merged.length - 1] = { ...event, detail: `${collapse(event.detail ?? "")}（共 ${run} 次）` };
+      continue;
+    }
+    run = retry ? 1 : 0;
+    merged.push(event);
+  }
+  return merged;
+}
+
 /** 这一行能不能点开:有字段、或者有一行装不下的原文。 */
 export function isFlatStep(view: StepView): boolean {
   return !view.fields.length && !view.raw;
