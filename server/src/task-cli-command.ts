@@ -6,7 +6,7 @@ import { ownerIdOf, actorOf } from "./auth/context.js";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
 import { claimOwnTurn, nativeCommandRun, releaseTurn, stopTask, whenTurnIdle } from "./runs.js";
-import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, noticeLine } from "./task-timeline.js";
 import { preflightCliGoalCommand, readCliState, renameCliTask, resolvedCliState, saveCliState } from "./task-cli-state.js";
 import { formatClaudeGoal } from "./executors/claude-goal.js";
 import type { TaskReplyBody } from "./task-reply.js";
@@ -32,7 +32,7 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
   if (deferred && command.name === "goal" && (command.goalScope || command.args === "--scopes")) throw new Error("目标作用域查询与显式选择不支持稍后发送，请直接发送斜杠命令");
   if (command.name === "goal" && command.args === "--scopes") {
     const text = await formatCliGoalScopes(task, userId);
-    const recorded = await appendTaskTimeline(task.id, receiptLine(`${command.text}\n${text}`), { agentType });
+    const recorded = await appendTaskTimeline(task.id, noticeLine({ kind: "command.output", command: command.text }, `${command.text}\n${text}`), { agentType });
     return c.json({ started: false, command: true, text, recorded });
   }
   if (!running) {
@@ -56,7 +56,7 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
           await publishTaskUpdated(task.id);
           const [updated] = await db.select().from(tasks).where(eq(tasks.id, task.id));
           const text = `已保存目标已清除，暂停标记已释放；原执行器不可用，未调用其 CLI。\n作用域：${await cliGoalScopeLabel(scope)}\n任务、历史及其他作用域保持不变。\n${await formatCliGoalScopes(updated!, userId)}`;
-          const recorded = await appendTaskTimeline(task.id, receiptLine(`${text}\n命令：${command.text}`), { agentType: scope.agentType });
+          const recorded = await appendTaskTimeline(task.id, noticeLine({ kind: "command.output", command: command.text }, `${text}\n命令：${command.text}`), { agentType: scope.agentType });
           return c.json({ started: false, command: true, text, recorded });
         } finally {
           releaseTurn(task.id, turn);
@@ -72,7 +72,7 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
       const state = await resolvedCliState(task, agentType, executorId, userId);
       if (!state.goal) {
         const text = `当前没有目标（当前执行器作用域）。使用 /goal --scopes 查看作用域。\n${await formatCliGoalScopes(task, userId)}`;
-        const recorded = await appendTaskTimeline(task.id, receiptLine(`${command.text}\n${text}`), { agentType });
+        const recorded = await appendTaskTimeline(task.id, noticeLine({ kind: "command.output", command: command.text }, `${command.text}\n${text}`), { agentType });
         return c.json({ started: false, command: true, text, recorded });
       }
     }
@@ -80,7 +80,7 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
       const state = await resolvedCliState(task, agentType, body.agent ? body.executorId ?? null : task.executorId, userId);
       if (command.args && state.goal) { state.goal.status = "paused"; await saveCliState(task.id, agentType, state); }
       const text = formatClaudeGoal(state.goal ?? null);
-      const recorded = await appendTaskTimeline(task.id, receiptLine(`${command.text}\n${text}`), { agentType });
+      const recorded = await appendTaskTimeline(task.id, noticeLine({ kind: "command.output", command: command.text }, `${command.text}\n${text}`), { agentType });
       return c.json({ started: false, command: true, text, recorded });
     }
     return null;
@@ -133,6 +133,6 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
     }
   }
   if (command.name === "rename") await renameCliTask(task.id, command.args);
-  const recorded = await appendTaskTimeline(task.id, receiptLine(`${command.text}\n${text}`), { sessionId: session.id });
+  const recorded = await appendTaskTimeline(task.id, noticeLine({ kind: "command.output", command: command.text }, `${command.text}\n${text}`), { sessionId: session.id });
   return c.json({ started: false, command: true, text, recorded });
 }

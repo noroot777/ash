@@ -7,6 +7,8 @@ import { armFollowUpFreeReview } from "./free-review-reservations.js";
 import { reviewLifecycle } from "./review-lifecycle-lock.js";
 import { freeRepairPrompt } from "./free-review-prompts.js";
 import { noticeLine } from "./task-timeline.js";
+import { readFreeReviewReport } from "./free-review-files.js";
+import { extractReportFindings } from "./review-history.js";
 import { appendFinalizationTimeline, enqueueFinalizationRepair, finalizationStep } from "./regression-finalization.js";
 import { reviewIdentityMatches, settlementAuthority } from "./review-ownership.js";
 import { recurrenceTimeline, roundRecurrence } from "./review-recurrence.js";
@@ -53,12 +55,19 @@ export async function finalizeFreeReview(state: typeof regressionEvidence.$infer
   const recurrence = (outcome === "repair" || outcome === "exhausted") && run.targetKind !== "accepted_merge"
     ? await roundRecurrence(run.taskId, run.id, run.currentRound) : null;
   const merge = run.targetKind === "accepted_merge";
+  // 「未通过，N 条意见」的那个 N：跟复发熔断数「本轮第几条」是同一个口径（extractReportFindings）。
+  // 读不到报告、或者一条都抽不出来就不给，展示端只写「未通过」。
+  const findings = outcome === "passed" || outcome === "failed" ? null : (() => {
+    try { return extractReportFindings(readFreeReviewReport(run.taskId, run.id, run.currentRound)).length || null; }
+    catch { return null; }
+  })();
   await step("timeline", () => appendFinalizationTimeline(run.taskId, noticeLine({
     kind: "review.verdict",
     source: merge ? "merge" : "free",
     round: merge ? null : run.currentRound,
     verdict: outcome === "passed" ? "passed" : outcome === "failed" ? "inconclusive" : "failed",
     reviewer: run.reviewerName,
+    ...(findings ? { findings } : {}),
   }, `${text}${authority.target ? "" : "原提问随本轮终止失效。"}${recurrence ? recurrenceTimeline(recurrence.length) : ""}`),
     `${state.generation}:timeline`));
   await step("publish", async () => { bus.publish({ type: "task.review", taskId: run.taskId }); });

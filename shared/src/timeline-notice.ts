@@ -6,8 +6,9 @@
 // 回头去认原文里的字。原文照旧落盘：它是点开以后看的细节，也是移动端、MCP 读转录、以及这份
 // 类型出现之前那些老记录唯一的依据。
 //
-// 三档摆法由 kind 决定（表在展示端）：
+// 摆法由 kind 决定（表在展示端）：
 //   里程碑 —— 会话里常显一行：审查出了结论、验收了。
+//   回答   —— 你那条斜杠命令的结果：常显一行，点开是全文。
 //   回执   —— 记在它所属的那一回合上，平时不画（审查已预约、开始盯、不再等了、意见已交给执行者……）。
 //   明面   —— 出了岔子、或者要你拍板的：留在会话里一行，不收进回执。
 //
@@ -32,6 +33,8 @@ export type TimelineNotice =
     round: number | null;
     verdict: TimelineReviewVerdict;
     reviewer?: string | null;
+    /** 未通过时报告里抽得出几条意见。抽不出来就不给。 */
+    findings?: number;
   }
   /** 验收做完了。`target` = 合进了哪条分支；`noCommit` = 只合进了工作区、等用户自己提交；`tag` = 只打了标签没合并。 */
   | { kind: "accept.done"; target: string | null; noCommit?: boolean; tag?: string | null }
@@ -58,6 +61,9 @@ export type TimelineNotice =
   | { kind: "monitor.finished"; description: string }
   /** 不再等某个哨兵的结果了。`finished` = 它那时已经跑完。 */
   | { kind: "monitor.released"; description: string; finished: boolean }
+  // ── 你那条命令的回答（常显：是你要看的东西）──
+  /** 斜杠命令（/goal --scopes、/rename …）就地执行的结果。原文里带着命令本身和全部输出。 */
+  | { kind: "command.output"; command: string }
   // ── 通用两档：原文就是它的话 ──
   | { kind: "receipt" }
   | { kind: "alert" };
@@ -67,7 +73,7 @@ export type TimelineNoticeKind = TimelineNotice["kind"];
 const KINDS: ReadonlySet<string> = new Set<TimelineNoticeKind>([
   "review.verdict", "accept.done", "review.dispute", "review.start", "review.repair", "stage",
   "review.reserved", "review.unreserved", "review.launch",
-  "monitor.started", "monitor.finished", "monitor.released", "receipt", "alert",
+  "monitor.started", "monitor.finished", "monitor.released", "command.output", "receipt", "alert",
 ]);
 
 /**
