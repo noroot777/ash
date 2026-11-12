@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useRef } from "react";
+import { Fragment, memo, useMemo, useRef } from "react";
 import { File, Gavel, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
@@ -24,6 +24,7 @@ import { noticeView, turnFailureView } from "./timelineNoticeCopy.ts";
 import { crashedTurns } from "./turnFailure.ts";
 import { QuestionDock } from "./QuestionDock.tsx";
 import { useJustEnded } from "./useJustEnded.ts";
+import { conversationKeys } from "./conversationKeys.ts";
 import { liftCompactionMarkers } from "./compactionMarkers.ts";
 import { TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts } from "./TurnReceipts.tsx";
 import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
@@ -51,7 +52,9 @@ function ReviewerBadge({ round }: { round: number | null }) {
   );
 }
 
-function AgentMessage({
+const AgentMessage = memo(AgentMessageView, sameSettledTurn);
+
+function AgentMessageView({
   item,
   taskId,
   hideTime,
@@ -125,6 +128,37 @@ function AgentMessage({
       </div>
     </article>
   );
+}
+
+type AgentMessageProps = Parameters<typeof AgentMessageView>[0];
+
+/**
+ * 已经收口的回合不跟着别人的事件重渲（docs/ui-ux-audit 08 的两条工程前提之一）。会话每来一条
+ * 事件，整份条目都会重新拼一遍、每一条都是新对象；还在说的那一回合要跟着变，说完的那些只在
+ * 它自己真的变了时才重画（重读回来补上了执行过程、被删了一截、旁边多了回执）。回调只认有没有：
+ * 它们闭包里拿的都是稳定的 setter / 派发函数。
+ */
+function sameSettledTurn(prev: AgentMessageProps, next: AgentMessageProps): boolean {
+  if (prev.item === next.item && prev.taskActive === next.taskActive) return shallowRest(prev, next);
+  const settled = (props: AgentMessageProps) => !!props.item.endedAt || !props.taskActive;
+  if (!settled(prev) || !settled(next)) return false;
+  const a = prev.item;
+  const b = next.item;
+  const events = (item: typeof a) => item.segments.reduce((sum, segment) => sum + segment.events.length + segment.attachments.length, 0);
+  return a.id === b.id && a.endedAt === b.endedAt && a.markdown === b.markdown && a.label === b.label
+    && a.segments.length === b.segments.length && events(a) === events(b)
+    && a.continuation === b.continuation && a.wokenByMonitor === b.wokenByMonitor
+    && a.reviewer?.round === b.reviewer?.round && a.run?.model === b.run?.model && a.run?.reasoningEffort === b.run?.reasoningEffort
+    && (a.sources?.length ?? 0) === (b.sources?.length ?? 0) && a.session?.exitStatus === b.session?.exitStatus
+    && shallowRest(prev, next);
+}
+
+function shallowRest(prev: AgentMessageProps, next: AgentMessageProps): boolean {
+  return prev.taskId === next.taskId && prev.hideTime === next.hideTime && prev.laneRole === next.laneRole
+    && prev.wakeReply === next.wakeReply && prev.taskActive === next.taskActive
+    && !!prev.onFork === !!next.onFork && !!prev.onAskSideChat === !!next.onAskSideChat
+    && (prev.receipts?.length ?? 0) === (next.receipts?.length ?? 0)
+    && prev.receipts?.at(-1)?.id === next.receipts?.at(-1)?.id;
 }
 
 function UserMessage({
@@ -294,6 +328,7 @@ export function ConversationFeed({
   }
 
   const crashed = crashedTurns(items);
+  const keys = conversationKeys(items);
   const renderItem = (
     item: ConversationItem,
     preserveSystemStyle = false,
@@ -302,7 +337,7 @@ export function ConversationFeed({
     if (item.kind === "agent") {
       const failure = crashed.get(item.id);
       return (
-        <Fragment key={item.id}>
+        <Fragment key={keys.get(item.id) ?? item.id}>
         <AgentMessage
           item={item}
           // 审查会话、团队执行者的发言都挂在**自己那个任务**上，工作目录各是各的；
@@ -321,7 +356,7 @@ export function ConversationFeed({
       );
     }
     if (item.kind === "user") {
-      return <UserMessage key={item.id} item={item} preserveSystemStyle={preserveSystemStyle} />;
+      return <UserMessage key={keys.get(item.id) ?? item.id} item={item} preserveSystemStyle={preserveSystemStyle} />;
     }
     if (preserveSystemStyle) {
       return (
