@@ -1,0 +1,86 @@
+/* 设置页里多人模式那几页（用户、成员、个人 CLI 环境、配置搬家）和「我的账号」的 key 卡。
+   页标题统一走 settings.css 的 .settings-heading（清单 set-3：一套标题，17px，没有彩条）；
+   这里只管这几页自己的块和行。 */
+
+.settings-main .users-settings,
+.settings-main .pmem,
+.settings-main .pcli,
+.settings-main .cfgx { gap: 16px; }
+
+/* 这几页是一列 flex，自带间距；页标题自己的下边距在这里收掉，免得叠成两份。 */
+.settings-main :is(.users-settings, .pmem, .pcli, .cfgx) > .settings-heading { margin-bottom: 8px; }
+
+.settings-card--pad > .auth-key-reveal > h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--t-lg);
+  font-weight: var(--w-strong);
+  letter-spacing: -0.01em;
+}
+
+.settings-main .users-form,
+.settings-main .users-invite,
+.settings-main .pmem-block,
+.settings-main .pcli-block,
+.settings-main .cfgx-block {
+  border: 0;
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  box-shadow: var(--control-shadow);
+}
+
+.settings-main .users-form { gap: 16px; padding: 20px; }
+.settings-main .users-invite { padding: 16px; }
+.settings-main .users-invite-url,
+.settings-main .pmem-invite-url { border: 1px dashed var(--line2); border-radius: var(--r-md); background: var(--canvas); padding: 11px 12px; }
+
+/* 名单里一人一行；行首那块方形记号只是认行用的，不着色。 */
+.settings-main .users-row,
+.settings-main .pmem-row {
+  position: relative;
+  min-height: 72px;
+  border: 0;
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  padding: 14px 16px 14px 52px;
+  box-shadow: var(--control-shadow);
+  transition: box-shadow var(--dur-1) var(--ease-out);
+}
+
+.settings-main .users-row::before,
+.settings-main .pmem-row::before {
+  position: absolute;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  left: 16px;
+  place-items: center;
+  border-radius: var(--r-sm);
+  background: var(--overlay);
+  content: "";
+}
+
+.settings-main .users-row:hover,
+.settings-main .pmem-row:hover { box-shadow: var(--control-hover-shadow); }
+.settings-main .users-row-name b,
+.settings-main .pmem-who b { font-size: var(--t-sm); font-weight: var(--w-medium); }
+
+.settings-main .pcli-block,
+.settings-main .cfgx-block { padding: 20px; }
+.settings-main .pcli-block h3,
+.settings-main .cfgx-block h3 { font-size: var(--t-md); font-weight: var(--w-medium); }
+.settings-main .pcli-skills li { min-height: 42px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--raised); }
+.settings-main .cfgx-kind { min-height: 38px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--raised); padding: 8px 11px; }
+.settings-main .cfgx-warning { border-radius: var(--r-lg); padding: 14px 16px; }
+
+@media (max-width: 640px) {
+  .settings-main .users-row,
+  .settings-main .pmem-row { padding-left: 48px; }
+  .settings-main .users-row::before,
+  .settings-main .pmem-row::before { left: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-main .users-row,
+  .settings-main .pmem-row { transition: none; }
+}

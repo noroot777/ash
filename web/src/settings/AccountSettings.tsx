@@ -69,7 +69,7 @@ export function AccountSettings({ notify }: { notify: (message: string) => void 
       <header className="settings-heading">
         <div>
           <h1>我的账号</h1>
-          <p>你的资料、提交署名和登录用的 key。这一节的内容只有你自己看得到。</p>
+          <p>你的资料、提交署名和登录用的 key，只有你自己看得到。</p>
         </div>
       </header>
 

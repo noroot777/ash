@@ -52,6 +52,7 @@
 @import "./scm.css";
 @import "./duet.css";
 @import "./settings.css";
+@import "./settings-pages.css";
 /* 这两份从 settings.css 拆出来(单文件 700 行上限),紧跟其后引入，层叠顺序与拆之前一致。 */
 @import "./settings-project-git.css";
 @import "./settings-path-link.css";

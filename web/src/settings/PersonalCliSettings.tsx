@@ -38,23 +38,23 @@ export function PersonalCliSettings({ notify }: { notify: (message: string) => v
   if (mode === "single") {
     return (
       <section className="settings-section">
-        <h2>个人 CLI 环境</h2>
-        <p className="settings-hint">
-          自用模式下 CLI 用的就是这台机器上的默认配置目录（<code>~/.claude</code>、<code>~/.codex</code>），
-          订阅照用。「个人级」这一层只在多人模式下才有意义。
-        </p>
+        <header className="settings-heading">
+          <div>
+            <h1>个人 CLI 环境</h1>
+            <p>自用模式下 CLI 用的就是这台机器上的默认配置目录（<code>~/.claude</code>、<code>~/.codex</code>），「个人级」这一层只在多人模式下才有意义。</p>
+          </div>
+        </header>
       </section>
     );
   }
 
   return (
     <section className="settings-section pcli">
-      <header>
-        <h2>个人 CLI 环境</h2>
-        <p className="settings-hint">
-          你自己的技能、全局指令和插件。装一次<b>所有项目都能用</b>，跟项目里的{" "}
-          <code>.claude/skills</code>、<code>CLAUDE.md</code> 两层并存 —— 那一层照旧跟项目走。
-        </p>
+      <header className="settings-heading">
+        <div>
+          <h1>个人 CLI 环境</h1>
+          <p>你自己的技能、全局指令和插件装一次所有项目都能用，跟项目里的 <code>.claude/skills</code>、<code>CLAUDE.md</code> 两层并存。</p>
+        </div>
       </header>
       {/* 目录还在盘上、编辑器也还能写,但 CLI 不会去读它 —— 不说清楚的话,用户会在这里
           装一个技能然后发现补全里没有,而界面上一切正常。 */}

@@ -2,7 +2,7 @@
   display: grid;
   width: 100%;
   height: 100%;
-  grid-template-columns: 228px minmax(0, 1fr);
+  grid-template-columns: 240px minmax(0, 1fr);
   background: var(--canvas);
 }
 
@@ -12,7 +12,7 @@
   flex-direction: column;
   border-right: 1px solid var(--line);
   background: var(--chrome);
-  padding: 16px 12px 12px;
+  padding: 18px 13px 14px;
 }
 
 .settings-back {
@@ -71,9 +71,22 @@
   text-align: left;
 }
 
-.settings-sidebar nav button[aria-selected="true"] {
+.settings-sidebar nav button {
+  border-radius: var(--r-md);
+  transition: background-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.settings-sidebar nav button:hover {
+  background: var(--hover-bg);
   color: var(--ink);
-  font-weight: 550;
+}
+
+/* 选中的那一项浮起来；不加粗，分层靠底色和墨色。 */
+.settings-sidebar nav button[aria-selected="true"],
+.settings-sidebar nav button[aria-selected="true"]:hover {
+  background: var(--lifted);
+  box-shadow: var(--surface-shadow);
+  color: var(--ink);
 }
 
 .settings-main {
@@ -85,7 +98,7 @@
 .settings-content {
   width: min(880px, calc(100% - 64px));
   margin: 0 auto;
-  padding: 64px 0 96px;
+  padding: 40px 0 96px;
 }
 
 /* 横着长的那几节（起手式的线路图）用更宽的栏 —— 判据在 SettingsPage 的 WIDE_SECTIONS。 */
@@ -93,31 +106,48 @@
   width: min(1440px, calc(100% - 48px));
 }
 
+/* 页标题（清单 set-3）：全设置只有这一套。17px，没有彩条；标题下至多一句说明，右边放这一页
+   唯一的页级动作（一颗按钮，比如执行器页的「检测本地智能体」、用户页的「添加用户」）。 */
 .settings-heading {
   display: flex;
-  min-height: 62px;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 34px;
+  gap: 16px;
+  margin-bottom: 24px;
 }
+
+.settings-heading > div { min-width: 0; }
+
+.settings-heading > .ui-button { flex: none; }
 
 .settings-heading h1 {
   margin: 0;
-  font-size: 20px;
-  font-weight: 650;
-  letter-spacing: -0.025em;
+  font-size: var(--t-lg);
+  font-weight: var(--w-strong);
+  line-height: 28px;
+  letter-spacing: -0.01em;
 }
 
 .settings-heading p {
   max-width: 620px;
-  margin: 7px 0 0;
+  margin: 2px 0 0;
   color: var(--muted);
-  font-size: 12px;
+}
+
+/* 项目列表最近一次没读到、这一屏可能不是最新的：贴着标题说。 */
+.settings-stale {
+  margin: -16px 0 24px;
+  color: var(--amber);
+  line-height: 1.6;
 }
 
 .settings-section {
-  margin-top: 26px;
+  margin-top: 28px;
+}
+
+.settings-heading + .settings-section,
+.settings-stale + .settings-section {
+  margin-top: 0;
 }
 
 .settings-section h2 {
@@ -130,10 +160,9 @@
 
 .settings-card {
   overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--r-lg);
   background: var(--panel);
-  box-shadow: var(--surface-shadow);
+  box-shadow: var(--control-shadow);
 }
 
 /* 卡片里塞一整块表单(不是「一行一个设置项」)时用它补内边距 —— .settings-row 的

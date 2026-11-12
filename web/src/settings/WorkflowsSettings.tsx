@@ -158,10 +158,7 @@ export function WorkflowsSettings({ notify }: { notify: (message: string) => voi
       <header className="settings-heading">
         <div>
           <h1>起手式</h1>
-          <p>
-            新建任务时挑一条线起手，挑完还能改。系统自带的那几个也能改、能停用，
-            改坏了随时恢复默认；任务在创建那一刻就把线拷进自己兜里，改这儿不会动到已有任务。
-          </p>
+          <p>新建任务时挑一条线起手、挑完还能改；任务在创建那一刻就把线拷进自己兜里，改这儿不会动到已有任务。</p>
         </div>
       </header>
 

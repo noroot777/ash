@@ -1,4 +1,4 @@
-/* 最近新增的身份页与多人设置共用一套“本地控制室”视觉语言。 */
+/* 身份页的“本地控制室”视觉语言。多人设置那几页原来也套着它，现在归设置页自己（settings.css / settings-pages.css）。 */
 .auth-shell {
   align-items: safe center;
   padding: clamp(18px, 4vw, 48px);
@@ -263,146 +263,6 @@
 .auth-shell .auth-link { text-decoration: none; }
 .auth-shell .auth-link:hover { color: var(--accent); }
 
-.settings-shell {
-  background: var(--canvas);
-}
-
-@media (min-width: 681px) {
-  .settings-shell { grid-template-columns: 240px minmax(0, 1fr); }
-}
-
-.settings-sidebar {
-  border-right-color: color-mix(in lch, var(--line) 72%, transparent);
-  background: var(--chrome);
-  padding: 18px 13px 14px;
-}
-
-.settings-sidebar nav button {
-  border-radius: 9px;
-  transition: background 130ms ease, box-shadow 130ms ease, color 130ms ease;
-}
-
-.settings-sidebar nav button[aria-selected="true"] {
-  background: var(--panel);
-  box-shadow: 0 4px 16px rgb(35 37 48 / 7%), inset 0 0 0 1px color-mix(in srgb, var(--ink) 5%, transparent);
-  color: var(--ink);
-}
-
-.settings-main {
-  background:
-    radial-gradient(circle at 92% 4%, color-mix(in srgb, var(--accent) 6%, transparent), transparent 24%),
-    var(--canvas);
-}
-
-.settings-heading { margin-bottom: 38px; }
-.settings-heading h1 { font-size: 29px; font-weight: 710; letter-spacing: -.045em; }
-.settings-heading p { font-size: 12.5px; line-height: 1.7; }
-.settings-stale { margin: -26px 0 26px; font-size: 12.5px; line-height: 1.6; color: var(--amber); }
-
-.settings-card {
-  border-color: color-mix(in lch, var(--line) 82%, transparent);
-  border-radius: 16px;
-  box-shadow: 0 9px 28px rgb(35 37 48 / 4%), inset 0 1px 0 color-mix(in srgb, var(--panel) 75%, transparent);
-}
-
-.settings-card--pad > .auth-key-reveal > h2 {
-  margin: 0;
-  color: var(--ink);
-  font-size: 17px;
-  font-weight: 690;
-  letter-spacing: -.02em;
-}
-
-.settings-main .users-settings,
-.settings-main .pmem,
-.settings-main .pcli,
-.settings-main .cfgx { gap: 18px; }
-
-.settings-main .users-header,
-.settings-main .pmem > header,
-.settings-main .pcli > header,
-.settings-main .cfgx > header {
-  position: relative;
-  padding: 0 0 16px 16px;
-  border-bottom: 1px solid var(--line);
-}
-
-.settings-main .users-header::before,
-.settings-main .pmem > header::before,
-.settings-main .pcli > header::before,
-.settings-main .cfgx > header::before {
-  position: absolute;
-  width: 4px;
-  top: 1px;
-  bottom: 17px;
-  left: 0;
-  border-radius: 999px;
-  background: linear-gradient(var(--accent), color-mix(in lch, var(--accent) 35%, var(--cyan)));
-  content: "";
-}
-
-.settings-main .users-header h2,
-.settings-main .pmem header h2,
-.settings-main .pcli header h2,
-.settings-main .cfgx header h2 { color: var(--ink); font-size: 17px; font-weight: 690; letter-spacing: -.02em; }
-
-.settings-main .users-form,
-.settings-main .users-invite,
-.settings-main .pmem-block,
-.settings-main .pcli-block,
-.settings-main .cfgx-block {
-  border-color: color-mix(in lch, var(--line) 82%, transparent);
-  border-radius: 16px;
-  background: var(--panel);
-  box-shadow: 0 10px 30px rgb(35 37 48 / 4%);
-}
-
-.settings-main .users-form { gap: 16px; padding: 20px; }
-.settings-main .users-invite { padding: 18px; }
-.settings-main .users-invite-url,
-.settings-main .pmem-invite-url { border: 1px dashed var(--line2); border-radius: 10px; background: var(--canvas); padding: 11px 12px; }
-
-.settings-main .users-row,
-.settings-main .pmem-row {
-  position: relative;
-  min-height: 72px;
-  border-color: color-mix(in lch, var(--line) 82%, transparent);
-  border-radius: 14px;
-  background: var(--panel);
-  padding: 14px 16px 14px 52px;
-  box-shadow: 0 6px 20px rgb(35 37 48 / 3%);
-  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
-}
-
-.settings-main .users-row::before,
-.settings-main .pmem-row::before {
-  position: absolute;
-  display: grid;
-  width: 27px;
-  height: 27px;
-  left: 14px;
-  place-items: center;
-  border-radius: 9px;
-  background: linear-gradient(145deg, var(--accent-soft), color-mix(in lch, var(--accent) 18%, var(--panel)));
-  box-shadow: inset 0 0 0 1px color-mix(in lch, var(--accent) 18%, var(--line));
-  content: "";
-}
-
-.settings-main .users-row:hover,
-.settings-main .pmem-row:hover { border-color: color-mix(in lch, var(--accent) 24%, var(--line)); box-shadow: 0 11px 28px rgb(35 37 48 / 6%); transform: translateY(-1px); }
-.settings-main .users-row-name b,
-.settings-main .pmem-who b { font-size: 13.5px; }
-.settings-main .users-tag,
-.settings-main .pmem-tag { background: color-mix(in lch, var(--accent) 7%, var(--panel)); }
-
-.settings-main .pcli-block,
-.settings-main .cfgx-block { padding: 20px; }
-.settings-main .pcli-block h3,
-.settings-main .cfgx-block h3 { font-size: 16px; letter-spacing: -.015em; }
-.settings-main .pcli-skills li { min-height: 42px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in lch, var(--raised) 74%, var(--panel)); }
-.settings-main .cfgx-kind { min-height: 38px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); padding: 8px 11px; }
-.settings-main .cfgx-warning { border-radius: 14px; padding: 15px 17px; }
-
 @media (max-width: 840px) {
   .auth-stage { min-height: 0; grid-template-columns: 1fr; }
   .auth-brand { min-height: 190px; padding: 26px; }
@@ -426,15 +286,9 @@
   .auth-field-row { grid-template-columns: 1fr; }
   .auth-choice { min-height: 0; padding-left: 68px; }
   .auth-choice::before { left: 14px; }
-  .settings-main .users-row,
-  .settings-main .pmem-row { padding-left: 48px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .auth-choice,
-  .settings-main .users-row,
-  .settings-main .pmem-row { transition: none; }
-  .auth-choice:hover:not(:disabled),
-  .settings-main .users-row:hover,
-  .settings-main .pmem-row:hover { transform: none; }
+  .auth-choice { transition: none; }
+  .auth-choice:hover:not(:disabled) { transform: none; }
 }

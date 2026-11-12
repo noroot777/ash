@@ -38,8 +38,8 @@ try {
       contentLeft: content.left - outer.left,
     };
   });
-  assert.equal(layout.paddingLeft, 52, "用户行要给左侧装饰徽标留出 52px");
-  assert.equal(layout.borderRadius, 14, "用户行应使用焕新后的圆角");
+  assert.equal(layout.paddingLeft, 52, "用户行要给左侧那块方形记号留出 52px");
+  assert.equal(layout.borderRadius, 12, "用户行和设置页别的卡片同一个圆角（--r-lg）");
   assert.ok(layout.contentLeft > layout.badgeRight, `装饰徽标不能压住正文：${JSON.stringify(layout)}`);
 
   await page.emulateMedia({ reducedMotion: "reduce" });

@@ -88,20 +88,24 @@ export function ProjectMembersSettings({
   if (state.mode !== "multi") {
     return (
       <section className="settings-section">
-        <h2>成员</h2>
-        <p className="settings-hint">自用模式下项目就是你自己的，没有成员这回事。</p>
+        <header className="settings-heading">
+          <div>
+            <h1>成员</h1>
+            <p>自用模式下项目就是你自己的，没有成员这回事。</p>
+          </div>
+        </header>
       </section>
     );
   }
 
   return (
     <section className="settings-section pmem">
-      <header>
-        <h2>成员</h2>
-        <p className="settings-hint">
-          谁在这份名单里，谁才看得见 <b>{project.name}</b> 和它下面的任务。
-          项目管理员能改项目设置、加减成员；实例管理员天然能进任意项目。
-        </p>
+      {/* 标题下至多一句：谁看得见。谁能改什么由下面名单里的角色下拉自己说明。 */}
+      <header className="settings-heading">
+        <div>
+          <h1>成员</h1>
+          <p>谁在这份名单里，谁才看得见 {project.name} 和它下面的任务；项目管理员能加减成员，实例管理员天然能进任意项目。</p>
+        </div>
       </header>
 
       <ul className="pmem-list">

@@ -75,12 +75,11 @@ export function ConfigTransferSettings({ notify }: { notify: (message: string) =
 
   return (
     <section className="settings-section cfgx">
-      <header>
-        <h2>配置搬家</h2>
-        <p className="settings-hint">
-          把你自己那套执行器、模式预设、起手式、审查者和个人 CLI 环境打包成一个文件，
-          换机器或者给同事复制时导入。
-        </p>
+      <header className="settings-heading">
+        <div>
+          <h1>配置搬家</h1>
+          <p>把你自己那套执行器、模式预设、起手式、审查者和个人 CLI 环境打包成一个文件，换机器或者给同事复制时导入。</p>
+        </div>
       </header>
 
       <div className="cfgx-warning">

@@ -172,10 +172,12 @@ export function UsersSettings({
   if (state.mode !== "multi") {
     return (
       <section className="settings-section">
-        <h2>用户</h2>
-        <p className="settings-hint">
-          这台 ash 现在是<b>自用模式</b>，没有用户这回事。要几个人一起用，去「默认规则 → 危险区」切到多人模式。
-        </p>
+        <header className="settings-heading">
+          <div>
+            <h1>用户</h1>
+            <p>这台 ash 现在是自用模式，没有用户这回事；要几个人一起用，去「默认规则 → 危险区」切到多人模式。</p>
+          </div>
+        </header>
       </section>
     );
   }
@@ -185,22 +187,22 @@ export function UsersSettings({
   if (state.user?.role !== "admin") {
     return (
       <section className="settings-section">
-        <h2>用户</h2>
-        <p className="settings-hint">
-          只有<b>实例管理员</b>能管用户，你现在是普通成员。要改回来得找另一位管理员。
-        </p>
+        <header className="settings-heading">
+          <div>
+            <h1>用户</h1>
+            <p>只有实例管理员能管用户，你现在是普通成员，要改回来得找另一位管理员。</p>
+          </div>
+        </header>
       </section>
     );
   }
 
   return (
     <section className="settings-section users-settings">
-      <header className="users-header">
+      <header className="settings-heading">
         <div>
-          <h2>用户</h2>
-          <p className="settings-hint">
-            根目录 <code>{state.rootDir ?? "—"}</code>。每建一个用户，就在它下面开一个属于他的目录。
-          </p>
+          <h1>用户</h1>
+          <p>每建一个用户，就在根目录 <code>{state.rootDir ?? "—"}</code> 下面开一个属于他的目录。</p>
         </div>
         {!adding ? <Button variant="primary" onClick={() => setAdding(true)}>添加用户</Button> : null}
       </header>
