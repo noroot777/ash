@@ -1,3 +1,4 @@
+import { useEffect, type RefObject } from "react";
 import { layerAbove } from "../components/selectPlacement.ts";
 
 /**
@@ -20,4 +21,31 @@ export function anchoredBelowEnd(anchor: HTMLElement, box: HTMLElement): Anchore
   return up
     ? { left, bottom: window.innerHeight - rect.top + GAP, zIndex: layerAbove(anchor), up }
     : { left, top: rect.bottom + GAP, zIndex: layerAbove(anchor), up };
+}
+
+/**
+ * 开着的时候跟着按钮走：浮层是 fixed 的，设置内容一滚、窗口一缩，按钮挪了它还留在原地
+ * （第 1 轮审查）。跟公共下拉（components/Select.tsx）同一个做法：滚动（捕获，任何一层滚动
+ * 容器都算）和尺寸变化时重量一遍。
+ */
+export function useFollowAnchor(
+  enabled: boolean,
+  anchorRef: RefObject<HTMLElement | null>,
+  boxRef: RefObject<HTMLElement | null>,
+  setPlace: (place: AnchoredPlace) => void,
+) {
+  useEffect(() => {
+    if (!enabled) return;
+    const sync = () => {
+      const anchor = anchorRef.current;
+      const box = boxRef.current;
+      if (anchor && box) setPlace(anchoredBelowEnd(anchor, box));
+    };
+    window.addEventListener("scroll", sync, true);
+    window.addEventListener("resize", sync);
+    return () => {
+      window.removeEventListener("scroll", sync, true);
+      window.removeEventListener("resize", sync);
+    };
+  }, [anchorRef, boxRef, enabled, setPlace]);
 }

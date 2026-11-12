@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DotsThree, SlidersHorizontal, Star, Trash } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
-import { anchoredBelowEnd, type AnchoredPlace } from "./anchoredPlace.ts";
+import { anchoredBelowEnd, useFollowAnchor, type AnchoredPlace } from "./anchoredPlace.ts";
 import { ProfileArgsPopover } from "./ProfileArgsPopover.tsx";
 
 /** 菜单收起的退场时长（和 executors-settings.css 里 .profile-row-menu.is-leaving 同一个数）。 */
@@ -57,6 +57,7 @@ export function ProfileRowMenu({
     setPlace(anchoredBelowEnd(anchor, menu));
     menu.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
   }, [open, mounted]);
+  useFollowAnchor(open && mounted, triggerRef, menuRef, setPlace);
 
   const pick = (action: () => void) => {
     setOpen(false);

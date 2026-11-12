@@ -4,7 +4,7 @@ import { X } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { ExtraArgsEditor } from "./ExtraArgsEditor.tsx";
-import { anchoredBelowEnd, type AnchoredPlace } from "./anchoredPlace.ts";
+import { anchoredBelowEnd, useFollowAnchor, type AnchoredPlace } from "./anchoredPlace.ts";
 
 /**
  * 「额外 CLI 参数」的编辑浮层。入口在执行器表行尾那颗「更多」里（ProfileRowMenu），
@@ -40,6 +40,7 @@ export function ProfileArgsPopover({
     if (!anchor || !box) return;
     setPlace(anchoredBelowEnd(anchor, box));
   }, [anchorRef, draft.length]);
+  useFollowAnchor(true, anchorRef, boxRef, setPlace);
 
   // 打开就把焦点交进来：停在「更多」上的话，键盘用户按 Tab 会跑到同排别的格子去。
   useEffect(() => {
