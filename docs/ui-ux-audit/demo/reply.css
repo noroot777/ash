@@ -51,7 +51,7 @@
 .skey-launch { gap: 4px; width: 328px; padding: 0; }
 .skey-launch > .skey-body { padding: 8px 4px 4px; border-top: 1px solid var(--line); }
 .skey-launch em { margin-left: auto; padding-left: 16px; color: var(--muted); font-size: var(--t-xs); font-style: normal; }
-.skey-launch > .menu > [aria-selected="true"] > span { font-weight: var(--w-medium); color: var(--accent); }
+.skey-launch > .menu > [aria-selected="true"] > span { font-weight: var(--w-regular); color: var(--accent); }
 
 /* ---------- 回复框 ---------- */
 .reply { width: 100%; flex: none; padding-bottom: 16px; }
@@ -109,7 +109,7 @@
 .reply-log { max-height: min(320px, 50vh); margin: 12px 0 0; padding: 10px 12px; overflow: auto; border-radius: var(--r-md); background: var(--raised); font: var(--t-xs)/1.6 var(--font-mono); }
 .reply-shot { display: grid; justify-items: center; gap: 4px; margin-top: 12px; padding: 28px 16px; border-radius: var(--r-md); background: var(--raised); text-align: center; }
 .reply-shot:has(.reply-shot-img) { padding: 8px; }
-.reply-shot > b { font-weight: var(--w-medium); }
+.reply-shot > b { font-weight: var(--w-regular); }
 .reply-shot > p { margin: 0; font-size: var(--t-xs); }
 .reply-shot > .btn { margin-top: 10px; }
 /* 标注图：点一下落一颗带号的红点 */

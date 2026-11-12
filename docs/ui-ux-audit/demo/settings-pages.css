@@ -5,7 +5,7 @@
 /* ---------- 共用小件 ---------- */
 /* 说明文字里的两种强调（rich）：`代码` 和 **加重** */
 .sv-pg-code { padding: 1px 4px; border-radius: var(--r-sm); background: var(--overlay); color: var(--ink); font-size: var(--t-xs); overflow-wrap: anywhere; }
-.sv-pg-b { color: var(--ink); font-weight: var(--w-medium); }
+.sv-pg-b { color: var(--ink); font-weight: var(--w-regular); }
 
 /* 跟在控件后面的几句说明（notes）、操作之后回的一句话、卡片里一句话的空状态 */
 .sv-pg-notes { display: grid; gap: 4px; padding: 0 16px 12px; }
@@ -50,7 +50,7 @@ button.sv-pg-tag:hover { background: var(--hover-bg); }
 /* 要滚着看的说明（预览命令说明）：比确认框宽，标题和「知道了」不动，正文自己滚 */
 .sv-pg-sheet { display: flex; flex-direction: column; width: min(640px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 48px)); }
 .sv-pg-help { display: grid; gap: 16px; min-height: 0; margin-top: 14px; padding-right: 10px; overflow-y: auto; border-radius: var(--r-sm); }
-.sv-pg-help h3 { font-size: var(--t-sm); font-weight: var(--w-strong); }
+.sv-pg-help h3 { font-size: var(--t-sm); font-weight: var(--w-medium); }
 .sv-pg-help pre { margin: 6px 0 0; padding: 8px 10px; border-radius: var(--r-md); background: var(--raised); font: var(--t-xs)/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* 几个里选一个、每个带一句说明（协议、CLI 额度）：几块并排，选中的那块描主色 */
@@ -58,7 +58,7 @@ button.sv-pg-tag:hover { background: var(--hover-bg); }
 .sv-pg-choice > button { display: grid; align-content: start; gap: 2px; min-width: 148px; padding: 6px 10px; border-radius: var(--r-md); box-shadow: inset 0 0 0 1px var(--line); text-align: left; transition: background var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out); }
 .sv-pg-choice > button:hover { background: var(--hover-bg); }
 .sv-pg-choice > [aria-checked="true"], .sv-pg-choice > [aria-checked="true"]:hover { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
-.sv-pg-choice strong { font-weight: var(--w-medium); }
+.sv-pg-choice strong { font-weight: var(--w-regular); }
 .sv-pg-choice small { color: var(--muted); font-size: var(--t-xs); }
 /* 说明是一整段的那种：整行上下排，几块等宽 */
 .sv-pg-choice.is-tall > button { flex: 1 1 0; padding: 10px 12px; }
@@ -68,7 +68,7 @@ button.sv-pg-tag:hover { background: var(--hover-bg); }
 .sv-pg-form, .sv-pg-mid:not(:empty) { border-top: 1px solid var(--line); }
 .sv-pg-fold { min-height: 44px; padding-block: 8px; }
 .sv-pg-fold[aria-expanded] { border-radius: 0; }
-.sv-pg-fold strong { display: block; color: var(--ink); font-size: var(--t-sm); font-weight: var(--w-medium); }
+.sv-pg-fold strong { display: block; color: var(--ink); font-size: var(--t-sm); font-weight: var(--w-regular); }
 .sv-pg-fold small { display: block; color: var(--muted); font-size: var(--t-xs); }
 .sv-pg-fold em { font-style: normal; white-space: nowrap; }
 
@@ -89,7 +89,7 @@ button.sv-pg-tag:hover { background: var(--hover-bg); }
 .sv-pg-cmd > .grow { display: grid; gap: 6px; }
 /* Git 远端那一行的值：名字、地址、协议 */
 .sv-pg-remote { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--t-xs); }
-.sv-pg-remote > strong { font-weight: var(--w-medium); }
+.sv-pg-remote > strong { font-weight: var(--w-regular); }
 .sv-pg-remote > code { color: var(--muted); }
 .sv-pg-remote > em { color: var(--faint); font-style: normal; }
 
@@ -109,13 +109,13 @@ button.sv-pg-tag:hover { background: var(--hover-bg); }
 .sv-pg-arch { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 16px; }
 .sv-pg-arch + .sv-pg-arch { border-top: 1px solid var(--line); }
 .sv-pg-arch > .i { color: var(--muted); }
-.sv-pg-arch strong { display: block; font-weight: var(--w-medium); }
+.sv-pg-arch strong { display: block; font-weight: var(--w-regular); }
 .sv-pg-arch small { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: var(--t-xs); }
 
 /* ---------- 供应商：一家一行；点「编辑」，表单原地展开在它下面 ---------- */
 .sv-pg-provbox { border-top: 1px solid var(--line); }
 .sv-pg-prov { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px 8px 16px; }
-.sv-pg-prov strong { display: block; font-weight: var(--w-medium); }
+.sv-pg-prov strong { display: block; font-weight: var(--w-regular); }
 .sv-pg-prov small { display: block; color: var(--muted); font-size: var(--t-xs); }
 .sv-pg-ava { display: grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: var(--r-sm); background: var(--overlay); color: var(--muted); font: var(--w-strong) var(--t-xs)/1 var(--font-mono); }
 .sv-pg-model { max-width: 140px; color: var(--muted); font: var(--t-xs)/1.5 var(--font-mono); }
@@ -131,7 +131,7 @@ button.sv-pg-tag:hover { background: var(--hover-bg); }
 .sv-pg-side { min-width: 0; border-right: 1px solid var(--line); }
 .sv-pg-pane { min-width: 0; }
 .sv-pg-sidehead, .sv-pg-edhead { display: flex; align-items: center; gap: 8px; height: 52px; padding: 0 12px 0 16px; }
-.sv-pg-sidehead > b, .sv-pg-edhead b { font-weight: var(--w-strong); }
+.sv-pg-sidehead > b, .sv-pg-edhead b { font-weight: var(--w-medium); }
 .sv-pg-sidehead > em { color: var(--faint); font-size: var(--t-xs); font-style: normal; }
 .sv-pg-edhead b, .sv-pg-edhead small { display: block; }
 .sv-pg-edhead small { color: var(--muted); font-size: var(--t-xs); }
@@ -139,7 +139,7 @@ button.sv-pg-tag:hover { background: var(--hover-bg); }
 .sv-pg-items > button { display: grid; gap: 2px; min-width: 0; padding: 8px 10px; border-radius: var(--r-md); text-align: left; transition: background var(--dur-1) var(--ease-out); }
 .sv-pg-items > button:hover { background: var(--hover-bg); }
 .sv-pg-items > [aria-current="true"], .sv-pg-items > [aria-current="true"]:hover { background: var(--sel-bg); }
-.sv-pg-items b { font-weight: var(--w-medium); }
+.sv-pg-items b { font-weight: var(--w-regular); }
 .sv-pg-items > button > span { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font-size: var(--t-xs); }
 .sv-pg-items .is-off { color: var(--faint); }
 /* 角色那几行的名字前带一颗图标；调度者选了当不了调度者的类型时，行下面一句提醒 */
@@ -158,17 +158,17 @@ button.sv-pg-tag:hover { background: var(--hover-bg); }
 .sv-pg-kinds > small { font-size: var(--t-xs); }
 /* 本月额度：数字、一条细的进度、四档水位（都列出来，当前那一档标出来） */
 .sv-pg-figure { flex: none; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
-.sv-pg-figure > strong { color: var(--ink); font-size: var(--t-md); font-weight: var(--w-strong); }
+.sv-pg-figure > strong { color: var(--ink); font-size: var(--t-md); font-weight: var(--w-medium); }
 .sv-pg-figure > em { font-style: normal; }
 .sv-pg-meter { height: 4px; margin: 0 16px; border-radius: var(--r-full); background: var(--overlay); overflow: hidden; }
 .sv-pg-meter > i { display: block; height: 100%; background: var(--accent); transform-origin: left; transition: transform var(--dur-3) var(--ease-out); }
 .sv-pg-meter > .is-warn { background: var(--amber); }
 .sv-pg-meter > .is-bad { background: var(--red); }
 .sv-pg-levels { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; padding: 12px 16px; color: var(--muted); font-size: var(--t-xs); }
-.sv-pg-levels b { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; font-weight: var(--w-medium); }
+.sv-pg-levels b { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; font-weight: var(--w-regular); }
 .sv-pg-levels .is-now b { color: var(--ink); }
 .sv-pg-levels em { color: var(--faint); font-style: normal; font-weight: var(--w-regular); }
-.sv-pg-levels strong { color: var(--accent); font-weight: var(--w-medium); }
+.sv-pg-levels strong { color: var(--accent); font-weight: var(--w-regular); }
 /* 开通顺序与安全边界：折叠着的一段长说明 */
 .sv-pg-guide { display: grid; gap: 10px; padding: 12px 16px 14px; color: var(--muted); font-size: var(--t-xs); }
 .sv-pg-guide ol { display: grid; gap: 8px; padding-left: 18px; list-style: decimal; }
@@ -176,7 +176,7 @@ button.sv-pg-tag:hover { background: var(--hover-bg); }
 .sv-pg-guide ol ul { margin: 4px 0; }
 .sv-pg-guide ol ul > li { display: flex; flex-wrap: wrap; align-items: center; gap: 0 10px; }
 .sv-pg-guide > ul { padding-left: 18px; list-style: disc; }
-.sv-pg-guide > b { color: var(--ink); font-weight: var(--w-medium); }
+.sv-pg-guide > b { color: var(--ink); font-weight: var(--w-regular); }
 .sv-pg-guide small { display: block; color: var(--amber); font-size: var(--t-xs); }
 .sv-pg-scope { display: inline-flex; align-items: center; gap: 2px; }
 /* 只显示一次的那串码：码、复制、倒计时 */
@@ -202,14 +202,14 @@ button.sv-pg-finger:hover { background: var(--hover-bg); color: var(--ink); }
 .sv-pg-keyline > small { font-size: var(--t-xs); }
 /* 技能扫描：一种 CLI 一行，左边是谁、右边扫到了什么 */
 .sv-pg-scan { display: grid; grid-template-columns: 220px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 48px; padding: 8px 16px; border-top: 1px solid var(--line); }
-.sv-pg-scan b { display: block; font-weight: var(--w-medium); }
+.sv-pg-scan b { display: block; font-weight: var(--w-regular); }
 .sv-pg-scan small { display: block; color: var(--muted); font-size: var(--t-xs); }
 .sv-pg-scan em { margin-left: 8px; color: var(--muted); font-size: var(--t-xs); font-style: normal; }
 /* 切到多人模式：表单里连着的几条提醒；填完之后只显示一次的管理员 key */
 .sv-pg-warns { display: grid; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
-.sv-pg-warns b { font-weight: var(--w-medium); }
+.sv-pg-warns b { font-weight: var(--w-regular); }
 .sv-pg-warns ul { margin: 4px 0; padding-left: 18px; list-style: disc; }
 .sv-pg-key { display: grid; justify-items: start; gap: 8px; padding: 14px 16px; }
-.sv-pg-key > b { font-weight: var(--w-strong); }
+.sv-pg-key > b { font-weight: var(--w-medium); }
 .sv-pg-key > small { color: var(--muted); font-size: var(--t-xs); }
 .sv-pg-key > .sv-set-line { justify-self: stretch; }

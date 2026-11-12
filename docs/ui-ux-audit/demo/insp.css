@@ -15,7 +15,7 @@
 
 /* 面板头：格名、这一格自己的动作、关闭键。和任务头同高（44），两条基线对得上；不画底线，靠留白和下面的内容分开 */
 .insp-head { display: flex; align-items: center; gap: 2px; flex: none; height: 44px; padding: 0 8px 0 16px; }
-.insp-head > b { flex: none; font-weight: var(--w-strong); }
+.insp-head > b { flex: none; font-weight: var(--w-medium); }
 .insp-acts { display: flex; align-items: center; gap: 2px; min-width: 0; }
 .insp-acts > .sel { color: var(--muted); font-size: var(--t-xs); }
 .insp-acts > .sel:hover, .insp-acts > .sel[aria-expanded="true"] { color: var(--ink); }
@@ -90,7 +90,7 @@
 .insp-set .field { width: 100%; min-width: 0; text-align: right; }
 .insp-set > p { margin-top: 6px; color: var(--muted); font-size: var(--t-xs); line-height: 1.5; }
 .insp-step { display: flex; align-items: center; gap: 4px; min-height: 32px; }
-.insp-step > output { min-width: 20px; text-align: center; font-weight: var(--w-medium); }
+.insp-step > output { min-width: 20px; text-align: center; font-weight: var(--w-regular); }
 .insp-set-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: var(--t-xs); }
 .insp-help { width: 264px; padding: 8px 10px; color: var(--muted); line-height: 1.6; }
 .insp-help > p + p { margin-top: 8px; }
@@ -109,7 +109,7 @@ button.insp-row[aria-current] { background: var(--sel-bg); }
 button.insp-row.is-in { padding-left: 28px; }
 .insp [aria-expanded="true"] > .i.insp-rot { transform: rotate(90deg); }
 .insp-path { display: flex; align-items: center; gap: 6px; min-height: 28px; color: var(--muted); }
-.insp-path > b { flex: 0 1 auto; color: var(--ink); font-weight: var(--w-medium); }
+.insp-path > b { flex: 0 1 auto; color: var(--ink); font-weight: var(--w-regular); }
 .insp-path > span { flex: 1 1 0; }
 .insp-why { color: var(--muted); }
 .insp-why + .note { margin: 4px 0 6px; }
@@ -151,7 +151,7 @@ button.insp-row.is-in { padding-left: 28px; }
 .insp-sub > li { display: flex; justify-content: space-between; min-height: 26px; align-items: center; font-variant-numeric: tabular-nums; }
 
 /* 审查：一句结论，一个主动作 */
-.insp-now { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: var(--t-md); font-weight: var(--w-strong); }
+.insp-now { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: var(--t-md); font-weight: var(--w-medium); }
 .insp-now.is-ok > .i { color: var(--green); }
 .insp-now.is-bad > .i { color: var(--red); }
 .insp-now.is-stale > .i { color: var(--amber); }
@@ -194,7 +194,7 @@ button.insp-row.is-in { padding-left: 28px; }
 .insp-pane[data-pane="chat"] { display: flex; flex-direction: column; min-height: 100%; }
 .insp-log { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; gap: 12px; padding-bottom: 12px; }
 .insp-msg > header { display: flex; align-items: baseline; gap: 6px; }
-.insp-msg > header > b { font-weight: var(--w-medium); }
+.insp-msg > header > b { font-weight: var(--w-regular); }
 .insp-msg > header > time { color: var(--faint); font-size: var(--t-xs); }
 .insp-msg > p { line-height: 1.6; overflow-wrap: anywhere; }
 .insp-ask { position: sticky; bottom: 0; padding: 10px 8px 8px; }

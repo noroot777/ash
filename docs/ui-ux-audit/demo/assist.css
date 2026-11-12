@@ -45,12 +45,12 @@
 /* ── 二级栏：204 宽。选中项是「底色加深 + 左边 3px 一条」，这也是保留下来的长相 ── */
 .as-rail { width: 204px; flex: none; display: flex; flex-direction: column; min-height: 0; padding: 24px 14px 18px; background: var(--rail); box-shadow: inset -1px 0 var(--rail-edge); color: var(--rail-ink); }
 .as-rail > header { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 4px 0 9px; }
-.as-brand { --knock: var(--rail); display: flex; align-items: center; gap: 9px; font-size: var(--t-lg); font-weight: var(--w-strong); letter-spacing: -0.02em; line-height: 1.3; }
+.as-brand { --knock: var(--rail); display: flex; align-items: center; gap: 9px; font-size: var(--t-lg); font-weight: var(--w-medium); letter-spacing: -0.02em; line-height: 1.3; }
 .as-brand > .i { width: 22px; height: 22px; color: var(--rail-mark); }
 .as-rbtn { display: grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: var(--r-sm); color: var(--rail-btn); }
 .as-rbtn:hover:not([disabled]), .as-rbtn[aria-expanded="true"] { background: var(--rail-hover); }
 .as-rbtn:active:not([disabled]) { transform: scale(0.94); }
-.as-proj { flex: none; padding: 26px 10px; font-size: var(--t-md); font-weight: var(--w-strong); line-height: 1.4; overflow-wrap: anywhere; }
+.as-proj { flex: none; padding: 26px 10px; font-size: var(--t-md); font-weight: var(--w-medium); line-height: 1.4; overflow-wrap: anywhere; }
 .as-proj > small { display: block; margin-top: 6px; color: var(--rail-sub); font-size: var(--t-xs); font-weight: var(--w-regular); }
 /* 助手页：当前智能体这一行，「更换智能体」唯一的入口（清单 as-1）。它在项目名下面，所以项目名那一块的下边距让给它 */
 .as-proj:has(+ .as-who) { padding-bottom: 14px; }
@@ -81,7 +81,7 @@
 
 .as-note { flex: none; max-height: 48%; overflow-y: auto; padding: 22px 10px 0; border-top: 1px solid var(--rail-rule); color: var(--rail-note); font-size: var(--t-xs); }
 .as-note > .i { width: 20px; height: 20px; }
-.as-note > strong { display: block; margin-top: 10px; color: var(--rail-note-ink); font-weight: var(--w-strong); }
+.as-note > strong { display: block; margin-top: 10px; color: var(--rail-note-ink); font-weight: var(--w-medium); }
 .as-note > p { margin-top: 7px; line-height: 1.8; }
 .as-fold { display: flex; align-items: center; gap: 6px; margin-top: 14px; padding: 4px 8px 4px 2px; border-radius: var(--r-sm); }
 .as-fold:hover { background: var(--rail-hover); color: var(--rail-note-ink); }
@@ -91,7 +91,7 @@
 .as-know { --k-ink: var(--ink); --k-dim: var(--muted); --k-rule: var(--line); color: var(--k-dim); font-size: var(--t-xs); }
 .as-rail .as-know { --k-ink: var(--rail-note-ink); --k-dim: var(--rail-note); --k-rule: var(--rail-rule); }
 .as-know > dl { margin-top: 12px; }
-.as-know dt { color: var(--k-ink); font-weight: var(--w-medium); }
+.as-know dt { color: var(--k-ink); font-weight: var(--w-regular); }
 .as-know dd { margin: 4px 0 13px; line-height: 1.8; }
 .as-know > p { padding: 10px 0 4px; border-top: 1px solid var(--k-rule); line-height: 1.8; }
 
@@ -99,7 +99,7 @@
 .as-mid { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--as-paper); }
 /* 群名 / 对话名是一颗键，自己带 7px 的左右内距，所以头部左边少留 7px，字才和下面对在一条线上 */
 .as-bar { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; padding: 0 var(--as-gut) 0 calc(var(--as-gut) - 7px); border-bottom: 1px solid var(--line); background: var(--panel); }
-.as-bar > h1 { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; font-size: var(--t-lg); font-weight: var(--w-strong); letter-spacing: -0.02em; line-height: 1.3; }
+.as-bar > h1 { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; font-size: var(--t-lg); font-weight: var(--w-medium); letter-spacing: -0.02em; line-height: 1.3; }
 .as-name { min-width: 0; display: flex; align-items: center; gap: 6px; padding: 4px 7px; border-radius: var(--r-md); }
 button.as-name:hover { background: var(--hover-bg); }
 button.as-name:active { background: var(--sel-bg); }
@@ -117,7 +117,7 @@ button.as-name:active { background: var(--sel-bg); }
 .as-hello { padding: 38px var(--as-gut) 28px; }
 .as-tile { --knock: var(--tone-soft); display: inline-grid; place-items: center; width: 54px; height: 54px; border-radius: calc(var(--r-lg) + 4px); background: var(--tone-soft); color: var(--tone-ink); transform: rotate(-7deg); }
 .as-tile > .i { width: 30px; height: 30px; }
-.as-hello > h2 { margin: 20px 0 10px; font-size: var(--t-xl); font-weight: var(--w-strong); letter-spacing: -0.03em; line-height: 1.4; }
+.as-hello > h2 { margin: 20px 0 10px; font-size: var(--t-xl); font-weight: var(--w-medium); letter-spacing: -0.03em; line-height: 1.4; }
 .as-hello > p { color: var(--muted); line-height: 1.9; }
 .as-hello > div { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 20px; }
 .as-hello .btn { color: var(--tone-ink); }
@@ -132,7 +132,7 @@ button.as-name:active { background: var(--sel-bg); }
 .as-msg { display: flex; gap: 12px; padding: 13px var(--as-gut); transition: background var(--dur-2) var(--ease-out); }
 .as-msg:hover { background: var(--as-wash); }
 .as-msg > .grow > header { display: flex; align-items: center; gap: 8px; height: 22px; }
-.as-msg > .grow > header > strong { font-weight: var(--w-strong); }
+.as-msg > .grow > header > strong { font-weight: var(--w-medium); }
 .as-msg time { color: var(--faint); font-size: var(--t-xs); }
 .as-bot { padding: 0 5px; border-radius: calc(var(--r-sm) - 2px); background: var(--overlay); color: var(--muted); font-size: var(--t-xs); line-height: 18px; }
 .sv-as .as-bot { background: var(--tone-soft); color: var(--tone-ink); }
@@ -169,7 +169,7 @@ button.as-name:active { background: var(--sel-bg); }
 .as-task > .grow { display: grid; gap: 3px; }
 .as-task small { color: var(--muted); font-size: var(--t-xs); }
 .sv-as .as-task small { color: var(--tone-ink); }
-.as-task strong { font-weight: var(--w-strong); overflow-wrap: anywhere; }
+.as-task strong { font-weight: var(--w-medium); overflow-wrap: anywhere; }
 .as-task .grow > span { color: var(--muted); font-size: var(--t-xs); overflow-wrap: anywhere; }
 .as-task code { color: var(--faint); font-size: var(--t-xs); }
 .as-task.is-done { box-shadow: inset 3px 0 color-mix(in oklab, var(--green) 65%, var(--panel)), var(--control-shadow); }
@@ -199,12 +199,12 @@ button.as-name:active { background: var(--sel-bg); }
 /* 点名菜单：长在输入卡上方，焦点留在输入框里；行的样子是公共的 .menu，只是每行多一个头像所以高一点 */
 .as-mention { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 3; width: min(340px, 100%); max-height: 260px; overflow-y: auto; padding: 4px; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow), var(--menu-shadow); }
 .as-mention > button { height: 40px; padding: 0 7px; }
-.as-mention > button > strong { flex: 1; font-weight: var(--w-medium); }
+.as-mention > button > strong { flex: 1; font-weight: var(--w-regular); }
 .as-mention > button > small { color: var(--muted); font-size: var(--t-xs); }
 
 /* ── 整列换掉的两页：群聊设置 / 新建群聊（聊天）、更换助手的智能体（助手） ── */
 :is(.as-edit, .as-setup) { flex: 1; min-height: 0; overflow-y: auto; padding: 35px 30px; }
-:is(.as-edit, .as-setup) h2 { font-size: var(--t-xl); font-weight: var(--w-strong); letter-spacing: -0.03em; line-height: 1.4; }
+:is(.as-edit, .as-setup) h2 { font-size: var(--t-xl); font-weight: var(--w-medium); letter-spacing: -0.03em; line-height: 1.4; }
 :is(.as-edit, .as-setup) > p { color: var(--muted); font-size: var(--t-xs); line-height: 1.8; }
 :is(.as-edit, .as-setup) > footer { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 25px; padding: 20px 0; border-top: 1px solid var(--line); }
 /* 这两页的主按钮（保存设置 / 创建群聊 / 保存选择 / 新建群聊）和发送键同色，都是这一页自己的强调色 */
@@ -217,7 +217,7 @@ button.as-name:active { background: var(--sel-bg); }
 .as-edit > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .as-edit > header small { color: var(--muted); font-size: var(--t-xs); }
 .as-edit > header h2 { margin: 4px 0 8px; }
-.as-edit > p > strong { font-weight: var(--w-strong); }
+.as-edit > p > strong { font-weight: var(--w-medium); }
 .as-roomname { display: flex; flex-direction: column; gap: 8px; margin: 25px 0; color: var(--muted); font-size: var(--t-xs); }
 .as-roomname > .field, .as-field .field { width: 100%; min-width: 0; font-size: var(--t-sm); }
 .as-fields { display: flex; flex-direction: column; gap: 15px; margin: 25px 0 15px; }
@@ -231,7 +231,7 @@ button.as-name:active { background: var(--sel-bg); }
 /* 一个群都没有时的空态 */
 .as-blank { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
 .as-blank > .i { width: 44px; height: 44px; margin-bottom: 8px; color: var(--faint); }
-.as-blank > h2 { font-size: var(--t-xl); font-weight: var(--w-strong); letter-spacing: -0.03em; }
+.as-blank > h2 { font-size: var(--t-xl); font-weight: var(--w-medium); letter-spacing: -0.03em; }
 
 /* ── 右栏：212 宽 ── */
 .as-info { width: 212px; flex: none; min-height: 0; overflow-y: auto; padding: 28px 20px; border-left: 1px solid var(--line); background: var(--canvas); }
@@ -240,7 +240,7 @@ button.as-name:active { background: var(--sel-bg); }
 .as-presence { display: flex; flex-direction: column; gap: 4px; }
 .as-presence > .go { gap: 10px; padding-block: 6px; }
 .as-presence > .go:active { background: var(--sel-bg); }
-.as-presence strong { display: block; font-weight: var(--w-medium); overflow-wrap: anywhere; }
+.as-presence strong { display: block; font-weight: var(--w-regular); overflow-wrap: anywhere; }
 .as-presence small { display: block; color: var(--muted); font-size: var(--t-xs); }
 .as-manage { margin-top: 14px; color: var(--tone-ink); }
 .as-info > hr { height: 1px; margin: 24px 0; border: 0; background: var(--line); }

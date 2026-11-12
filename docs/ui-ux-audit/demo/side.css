@@ -7,7 +7,7 @@
 .side-proj, .side-branch { display: flex; align-items: center; min-width: 0; height: 36px; border-radius: var(--r-md); transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
 .side-proj { flex: 1; gap: 7px; padding: 0 6px 0 5px; font-weight: var(--w-medium); text-align: left; }
 .side-proj > .cut { flex: 1; }
-.side-branch { flex: 0 1 auto; gap: 4px; max-width: 46%; padding: 0 7px; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
+.side-branch { flex: 0 1 auto; gap: 4px; max-width: 46%; padding: 0 7px; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-regular); }
 .side-proj > .i, .side-branch > .i { width: 12px; height: 12px; color: var(--faint); }
 .side-proj:hover, .side-proj[aria-expanded="true"], .side-branch:hover { background: var(--hover-bg); }
 .side-branch:hover { color: var(--ink); }
@@ -50,7 +50,7 @@
 /* ---------- 任务树：节标题和行平铺在同一个容器里，换节也能连着滑过去 ---------- */
 /* 滚动区左右各往外让 6px：行的位置不变，聚焦环和对照清单的描边不会被裁掉 */
 .side-tree { flex: 1; min-height: 0; margin: 8px -6px 0; padding: 0 6px 14px; overflow: hidden auto; }
-.side-sec { align-items: center; height: 34px; margin: 14px 0 0; padding: 10px 7px 3px; font-weight: var(--w-medium); }
+.side-sec { align-items: center; height: 34px; margin: 14px 0 0; padding: 10px 7px 3px; font-weight: var(--w-regular); }
 .side-tree > .side-sec:first-child { height: 30px; margin-top: 0; padding-top: 5px; }
 .side-sec h3 { font: inherit; }
 /* 「其他机器」折成的那一行：整行能点，右边是条数；箭头只在指上去或聚焦时出现（现有约定，不动） */
@@ -134,7 +134,7 @@
 .side-pm { width: 304px; padding: 8px; }
 .side-pm-cur { display: flex; align-items: center; gap: 9px; padding: 4px 5px 6px; }
 .side-pm-2 { display: grid; flex: 1; min-width: 0; }
-.side-pm-2 > b { font-weight: var(--w-medium); }
+.side-pm-2 > b { font-weight: var(--w-regular); }
 .side-pm-2 > small { color: var(--muted); font-size: var(--t-xs); }
 .side-pm .menu > button > small { margin-left: auto; color: var(--muted); font-size: var(--t-xs); }
 .side-pm .menu > button > small + kbd { margin-left: 4px; }
@@ -150,7 +150,7 @@
 .side-pm-list > .none { padding: 18px 8px; }
 .side-pm-new { margin-top: 6px; padding-top: 4px; border-top: 1px solid var(--line); }
 .side-pm-new > button, .side-pm-new > button > .i:first-child { color: var(--accent); }
-.side-pm-new > button { font-weight: var(--w-medium); }
+.side-pm-new > button { font-weight: var(--w-regular); }
 
 /* ---------- ⌘K：居中的命令面板，带遮罩（遮罩是公共件 .veil）。靠上摆，两行一条：名字在上、去处在下 ---------- */
 .side-jump-veil { place-items: start center; padding-top: min(15vh, 132px); }
