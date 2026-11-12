@@ -318,6 +318,7 @@
       main.append(h('div.sv-set', nav, h('div.sv-set-main', page)));
       /* 还没人登记的页只有标题 */
       const off = P[sub] ? P[sub](page, ctx) : void page.append(head(known[1]));
+      if (sub === 'project') $('.card', page)?.setAttribute('data-m', 'a11y-5');   /* 字重那一条认领在行标题最多的这一页上 */
       return () => { ctx.timers.forEach(clearTimeout); off?.(); };
     },
   });
@@ -338,6 +339,7 @@
   claim('set-1', 'agents');
   claim('set-3', 'agents');
   claim('set-keep', 'workflow');
+  claim('a11y-5', 'project');
   claim('set-2', 'agents', (el) => openAt(el));                                                      /* 第一颗模型下拉：选中项打勾 */
   claim('set-4', 'agents', (el) => openAt(el, el.closest('.card').querySelector('[data-col="more"]')));   /* 第一行的「更多」：里面还是那三样 */
 })();

@@ -203,7 +203,7 @@
       (r.n ? box.querySelector(`[data-round="${r.n}"]`) : box.lastElementChild)?.scrollIntoView({ block: 'nearest' });
     };
     const workspace = { label: '打开改动工作区', icon: 'pull', onpick: () => ASH.emit('changes:open') };
-    const fix = (last) => ASH.parts.live?.play?.('fix', '', { reply: `回复第 ${last.n} 轮审查的意见` });
+    const fix = (last) => ASH.parts.live?.play?.('fix', '', { cause: { text: `按第 ${last.n} 轮审查的意见改`, onclick: () => ASH.emit('insp:open', { pane: 'review', round: last.n }) } });
     /* 这一刻该说哪句话、给哪一颗主动作、哪些进「更多」。主动作只有「有事要你办」的时候才是实心的。
        派审、预约、调整预约走的是回复框那颗键同一张对话框（R.dialog），字也取自同一处（R.key） */
     function view() {

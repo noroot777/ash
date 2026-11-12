@@ -165,7 +165,7 @@
         ? h('button.git-hunk-pick.cut', { type: 'button', 'aria-pressed': 'false', 'aria-label': `选择改动块 ${n + 1}${hk.ctx ? `：${hk.ctx}` : ''}`, onclick: () => pick.toggle(changes) }, title)
         : h('code.cut', title);
       pick?.heads.push([head, changes]);
-      return h('section.git-hunk', {}, h('header', {}, head, pick?.acts(changes)), h('div.git-lines', hk.rows.map((r) => {
+      return h('section.git-hunk', {}, h('header', {}, head, pick?.acts(changes)), h('div.git-lines', { 'data-m': pick && n === 0 ? 'a11y-4' : null }, hk.rows.map((r) => {
         at += 1;
         const cls = r.sign === '+' ? '.add' : r.sign === '-' ? '.del' : '';
         const cells = [h('span.n', String(r.o ?? '')), h('span.n', String(r.n ?? '')), h('span.s', r.sign), h('code', r.t)];

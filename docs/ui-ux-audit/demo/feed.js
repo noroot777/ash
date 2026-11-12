@@ -232,7 +232,7 @@
 
     b.setLog([[`不再等「${test.title}」了，它已经跑完`, '15:28'], ['这一轮跑完，预约的审查开始', '15:28']]);
     const rev3 = rev(3);
-    return { a, foldA, b, foldB, rev3, nodes: [a.el, rev(1), a2.el, rev(2), kit.user(ASH.data.cur.asks[0][1], ASH.data.cur.asks[0][0]), a3.el, b.el, rev3] };
+    return { a, foldA, a3, b, foldB, rev3, nodes: [a.el, rev(1), a2.el, rev(2), kit.user(ASH.data.cur.asks[0][1], ASH.data.cur.asks[0][0]), a3.el, b.el, rev3] };
   };
 
   ASH.part('feed', {
@@ -417,6 +417,7 @@
       s.foldB.btn.dataset.m = 'feed-8 a11y-2';
       $('.rt', rev3).dataset.m = 'feed-3';
       s.b.log.btn.dataset.m = 'feed-5';
+      s.a3.log.btn.dataset.m = 'feed-15';
       s.foldA.list.dataset.m = 'feed-6';
       s.b.cause.dataset.m = 'feed-7';
       $('.mile-text', rev3).dataset.m = 'feed-10';
@@ -428,6 +429,7 @@
       ASH.prep['feed-3'] = () => peek(...$$('.mile .rt', feed));
       /* 回执、起因的原文都是点开才有的：点到哪一条就摊开哪一样，另一样收回去 */
       ASH.prep['feed-5'] = () => { shut(s.b.cause, $('.cause-body', s.b.body)); if (!s.b.log.btn.matches('[aria-expanded="true"]')) unfold(s.b.log.btn, s.b.log.list); };
+      ASH.prep['feed-15'] = () => { if (!s.a3.log.btn.matches('[aria-expanded="true"]')) unfold(s.a3.log.btn, s.a3.log.list); };
       ASH.prep['feed-7'] = () => { shut(s.b.log.btn, s.b.log.list); if (!s.b.cause.matches('[aria-expanded="true"]')) unfold(s.b.cause, $('.cause-body', s.b.body)); };
       ASH.prep['feed-4'] = () => { feed.scrollTop = Math.max(120, feed.scrollTop - 60); top.classList.remove('is-hidden', 'is-idle'); clearTimeout(idle); idle = setTimeout(rest, 2600); };
       ASH.prep['feed-6'] = () => { s.foldA.toggle(true); const last = s.foldA.list.lastElementChild; if ($('.step-more', last).hidden) unfold($('button', last), $('.step-more', last)); };
@@ -445,7 +447,7 @@
           sizes.disconnect();
           clearTimeout(idle);
           kit.changed = null;
-          for (const id of ['feed-1', 'feed-2', 'feed-3', 'feed-4', 'feed-5', 'feed-6', 'feed-7', 'feed-12', 'feed-14']) delete ASH.prep[id];
+          for (const id of ['feed-1', 'feed-2', 'feed-3', 'feed-4', 'feed-5', 'feed-6', 'feed-7', 'feed-12', 'feed-14', 'feed-15']) delete ASH.prep[id];
         },
       };
     },
