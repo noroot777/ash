@@ -123,7 +123,7 @@ try {
   const current = page.locator(".project-git-branch.is-current");
   assert.equal(await current.count(), 1, "当前分支只该有一行");
   assert.match(await current.innerText(), /feature/, "写之前发出的那趟 GET 不许把 checkout 结果盖回 main");
-  assert.match(await panel.locator(".project-git-panel__branch b").innerText(), /feature/, "浮层顶上那行也得是切过去的分支");
+  assert.equal(await panel.locator(".project-git-panel__branch").count(), 0, "当前分支不在浮层顶上再写一遍：底下那颗键和打勾的那一行已经说了");
 
   // ── ⑥ 过期的读**失败**了，同样不许改写刚做成的那件事 ─────────────────
   // 跟 ⑤ 是同一条竞态的另一半。只拦成功那一路的话，剩下的失败一路照样能把「已切换到

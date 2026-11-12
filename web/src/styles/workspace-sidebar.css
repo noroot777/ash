@@ -5,7 +5,12 @@
   margin-top: 1px;
 }
 
-.workspace-sidebar--collapsed .workspace-connection-light {
+/* 收起后的那一列：展开键和助手沉到最底下 */
+.workspace-sidebar-rail-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
   margin-top: auto;
 }
 
@@ -111,96 +116,93 @@
   color: var(--ink);
 }
 
-/* ── 最底下一行 ─────────────────────────────────────────── */
+/* ── 最底下一行：左边分支，右边聊天、助手、配色、收起 ──────── */
+/* 「项目 Git」和配色那一列都从这一行的上沿弹出来，所以这一行立定位参照、不裁边。 */
 .workspace-sidebar-bottom {
+  position: relative;
   display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-  overflow: hidden;
+  gap: 2px;
   border-top: 1px solid var(--line);
-  padding: 6px 0 1px;
+  padding: 5px 0 2px;
 }
+
+.workspace-sidebar-bottom-gap { flex: 1; }
+
+/* 铺开时这一行跟着变宽：分支键别跟着撑满，右边让给那句键位提示 */
+.workspace-sidebar.is-spread .workspace-git-context-host { flex: 0 1 240px; }
 
 .workspace-sidebar-bottom .workspace-spread-hint {
   min-width: 0;
+  flex: 0 1 auto;
+  margin-right: auto;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.workspace-connection {
+/* 开着聊天、助手时那一颗是墨色、图标填实 */
+.workspace-sidebar-bottom .workspace-side-icon[aria-pressed="true"] { background: transparent; }
+.workspace-sidebar-bottom .workspace-side-icon[aria-pressed="true"]:hover { background: var(--hover-bg); }
+
+/* ── 配色：一颗图标，点开往上弹一列三选一，右边对齐 ── */
+.color-theme-menu-host {
+  position: relative;
   display: flex;
   flex: 0 0 auto;
-  align-items: center;
-  padding: 4px 6px;
 }
 
-.workspace-connection:focus-visible,
-.workspace-connection-light:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.workspace-connection:focus-visible {
-  outline-offset: -2px;
-}
-
-.workspace-connection i,
-.workspace-connection-light {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 6px;
-  border-radius: var(--r-full);
-  background: var(--red);
-}
-
-.workspace-connection.is-connected i,
-.workspace-connection-light.is-connected {
-  background: var(--green);
-}
-
-.workspace-sidebar-bottom > button {
+.color-theme-menu {
+  position: absolute;
+  z-index: 80;
+  right: 0;
+  bottom: calc(100% + 6px);
   display: flex;
-  flex: 0 0 auto;
+  min-width: 148px;
+  flex-direction: column;
+  gap: 1px;
+  border: 1px solid var(--line2);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  padding: 4px;
+  box-shadow: var(--menu-shadow);
+  animation: color-theme-menu-in var(--dur-2) var(--ease-out);
+}
+
+@keyframes color-theme-menu-in {
+  from { opacity: 0; transform: translateY(4px); }
+}
+
+.color-theme-menu > button {
+  display: flex;
+  height: 30px;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
   border: 0;
   border-radius: var(--r-sm);
   background: transparent;
-  padding: 4px 7px;
+  padding: 0 8px;
   color: var(--muted);
-  font-size: var(--t-xs);
+  font-size: var(--t-sm);
+  text-align: left;
+  outline-offset: -2px;
 }
 
-.workspace-sidebar-bottom .workspace-assistant-entry {
-  white-space: nowrap;
-  background: transparent;
-  color: var(--muted);
-}
-
-.workspace-side-icon.workspace-assistant-entry {
-  background: transparent;
-}
-
-.workspace-sidebar-bottom > button:hover {
-  background: var(--hover-bg);
-  color: var(--ink);
-}
-
-.workspace-sidebar-bottom .workspace-assistant-entry:hover,
-.workspace-sidebar-bottom .workspace-assistant-entry[aria-pressed="true"],
-.workspace-side-icon.workspace-assistant-entry:hover,
-.workspace-side-icon.workspace-assistant-entry[aria-pressed="true"] {
-  color: var(--ink);
-}
+.color-theme-menu > button > span { flex: 1; }
+.color-theme-menu > button:hover,
+.color-theme-menu > button:focus-visible { background: var(--hover-bg); color: var(--ink); }
+.color-theme-menu > button[aria-checked="true"] { color: var(--ink); }
 
 /* 窄屏（手机）上列表和内容一次只给一样，铺开和收起都没有意义 */
 @media (max-width: 720px) {
   .workspace-spread-toggle,
-  .workspace-sidebar-bottom > button[aria-label="收起侧边栏"] { display: none; }
+  .workspace-sidebar-collapse { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .workspace-new-task,
   .workspace-side-icon { transition: none; }
+  .color-theme-menu { animation: none; }
 }

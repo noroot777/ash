@@ -95,7 +95,6 @@ function Fixture() {
   useProjectGitAnnouncer(notify, () => setProject((current) => projectOf(current.id)));
   return <div style={{ display: "flex", height: "100vh", flexDirection: "column" }}>
     <header style={{ display: "flex", gap: 12, padding: 16, flexWrap: "wrap" }}>
-      <ProjectGitContext key={project.id} projectId={project.id} health={project.health} project={project} canManage onOpenTerminal={null} />
       <button onClick={() => setProject(projectOf(project.id === "p1" ? "p2" : "p1"))}>切换项目</button>
       <button onClick={() => { heads[project.id] = "version-upgrade"; }}>外部切到升级分支</button>
       <button onClick={() => { holdBranches = true; failBranches = false; setRound((value) => value + 1); }}>重开并延迟分支读取</button>
@@ -114,6 +113,10 @@ function Fixture() {
     <TaskComposerPanel key={round} project={project} groups={[]} mode={mode} onModeChange={setMode}
       onCancel={() => {}} onCreated={(_task: Task) => { setRecords([...created]); setRound((value) => value + 1); }}
       onCreateGroup={async () => { throw new Error("not used"); }} onProjectUpdated={setProject} notify={notify} />
+    {/* 跟现场一样摆在侧栏最底下那一行里（钉在左下角），浮层从这一行的上沿往上弹。 */}
+    <div className="workspace-sidebar-bottom" style={{ position: "fixed", left: 12, bottom: 12, zIndex: 50, width: 260, background: "var(--chrome)" }}>
+      <ProjectGitContext key={project.id} projectId={project.id} health={project.health} project={project} canManage onOpenTerminal={null} />
+    </div>
     <footer style={{ padding: 12, maxHeight: 180, overflow: "auto" }}>
       <pre data-testid="created">{JSON.stringify(records, null, 2)}</pre>
       <p data-testid="notices">{notices.join("；")}</p>

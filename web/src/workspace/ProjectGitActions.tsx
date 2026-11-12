@@ -7,7 +7,7 @@ import { useDismissable } from "../lib/useDismissable.ts";
 import type { ProjectGitHandle } from "./useProjectGit.ts";
 import { defaultRemote, fetchBlocker, PULL_OPTIONS, pullBlocker, pushBlocker, pushLabelFor } from "./projectGitModel.ts";
 
-// ⟳ 更新 / ↓ 拉取 / ↑ 推送 这三颗按钮，住在侧栏那颗分支胶囊点开的浮层里——这是项目主仓
+// ⟳ 更新 / ↓ 拉取 / ↑ 推送 这三颗按钮，住在侧栏底部那颗分支键点开的浮层头一行里——这是项目主仓
 // git 操作的唯一入口（命令面板 `/git` 只读，用户 2026-08-21 指定）。
 //
 // 按钮的禁用一律用 `aria-disabled` 而不是 `disabled`：Chrome 不给 `disabled` 元素派发
@@ -147,6 +147,8 @@ export function ProjectGitActions({
         >
           <ArrowUp size={13} weight="bold" />
         </ActionButton>
+        {/* 领先几个提交写在推送这颗键上：底下那颗分支键挤的时候会先把它收掉。 */}
+        {!!state?.branch.upstream && (state.branch.ahead ?? 0) > 0 && <em aria-hidden="true">{state.branch.ahead}</em>}
         {publishing && (
           <div className="project-git-menu" role="menu" aria-label="选择要发布到的远端">
             <p>发布这条分支到</p>

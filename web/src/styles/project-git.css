@@ -1,154 +1,180 @@
-/* 侧栏项目名右边的分支下拉，以及它点开的项目 Git 浮层。
-   两个下拉并排住在顶行；浮层从分支下拉底下展开——侧栏是 `overflow:visible`，
-   所以浮层比侧栏宽也不会被裁掉。 */
+/* 侧栏最底下那一行左边的分支键，以及它点开的「项目 Git」。
+   浮层从那一行的上沿弹出来，盖住任务列表的下半截（列表不让位、不挪动），那一行不挡。
+   参照立在分支键外面那层 host 上（它从这一行的左沿起），宽度按侧栏算，这样浮层不必知道
+   自己摆在哪一行里。 */
 
-.workspace-git-context-host { position:relative; min-width:0; max-width:46%; flex:0 1 auto; }
+.workspace-git-context-host { position:relative; display:flex; min-width:0; flex:1 1 auto; }
 
-/* 这几个浮层（308px / 304px，外加顶行最右那颗 ▶ 点开的 430px 常用命令弹层）都比侧栏宽，
-   右半边探进主区，于是要跟两样东西比高低：
-   ① 侧栏右边缘那条拖宽手柄（`.workspace-sidebar-resize-handle`，z-index 20）比顶部那一行
-      （`.workspace-sidebar-top`，z-index 2）高，会横穿浮层、把落在它底下的按钮全部吃掉点击
-      ——无头浏览器实测点不到「拉取」；
+/* 这几个浮层（项目 Git、常用命令弹层、项目菜单）都可能比侧栏宽，探进主区，于是要跟两样
+   东西比高低：
+   ① 侧栏右边缘那条拖宽手柄（`.workspace-sidebar-resize-handle`，z-index 20），会横穿浮层、
+      把落在它底下的按钮全部吃掉点击——无头浏览器实测点不到「拉取」；
    ② 主区里那些**面板级**浮层：团队执行者抽屉（`.team-worker-drawer` 95）和它的遮罩（90）、
-      审查证据抽屉（96）……它们的遮罩只铺满主区，侧栏照旧点得动，所以抽屉开着时点分支下拉
-      是正当操作——但抽屉在根层叠上下文里就是比 30 高，探出去那半边会被整块盖掉（实测面板
-      右下角的命中测试落在抽屉的正文上，绘制和点击一起输）。
-   所以浮层开着时把整行抬到 100：压过主区所有面板级浮层，又低于视口级遮罩（`.overlay-scrim`
-   110）和 toast（120）——那几样盖的是整个窗口，本来就该连侧栏一起盖住。关着时不动，免得顶部
-   这段拖不了宽。项目切换菜单是同一个毛病，一起治。 */
-.workspace-sidebar-top:has(.project-git-panel),
+      审查证据抽屉（96）……它们的遮罩只铺满主区，侧栏照旧点得动，所以抽屉开着时点分支键
+      是正当操作——但抽屉在根层叠上下文里比侧栏这几行高，探出去那半边会被整块盖掉。
+   所以浮层开着时把它所在的那一行抬到 100：压过主区所有面板级浮层，又低于视口级遮罩
+   （`.overlay-scrim` 110）和 toast（120）。关着时不动，免得这几段拖不了宽。 */
 .workspace-sidebar-top:has(.cmd-pop),
-.workspace-sidebar-top:has(.workspace-project-menu) { z-index:100; }
+.workspace-sidebar-top:has(.workspace-project-menu),
+.workspace-sidebar-bottom:has(.project-git-panel, .color-theme-menu) { z-index:100; }
 
+/* ── 分支键：占掉右边四颗图标剩下的宽度，领先落后紧跟在名字后面 ── */
 .workspace-git-context {
-  display:flex; max-width:100%; min-width:0; height:36px; align-items:center; gap:5px;
-  border:0; border-radius:9px; background:transparent; padding:0 7px;
-  color:var(--faint); font-size:11px; font-weight:550;
+  display:flex; width:100%; min-width:0; height:28px; align-items:center; gap:5px;
+  border:0; border-radius:var(--r-sm); background:transparent; padding:0 7px;
+  color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-regular);
+  white-space:nowrap; text-align:left; outline-offset:-2px;
+  transition:background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 .workspace-git-context:hover,
-.workspace-git-context[aria-expanded="true"] { background:var(--hover-bg); color:var(--muted); }
-/* 浮层收起来了、操作还在跑：胶囊自己顶上去，别让「我刚点过拉取」这件事只活在那个已经
-   消失的浮层里。刷新页面就没了是另一回事——那时请求本来也断了。 */
-.workspace-git-context.is-busy { color:var(--accent); }
-.workspace-git-context.is-busy > svg:last-child { color:var(--accent); }
+.workspace-git-context[aria-expanded="true"] { background:var(--hover-bg); color:var(--ink); }
+.workspace-git-context:active { background:var(--sel-bg); }
 .workspace-git-context > svg { flex:0 0 auto; }
-.workspace-git-context > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.workspace-git-context > i { width:5px; height:5px; flex:0 0 5px; border-radius:50%; background:var(--amber); }
+/* 挤的时候先收后半句（领先落后），再截名字 */
+.workspace-git-context > span { min-width:0; flex:0 1 auto; overflow:hidden; text-overflow:ellipsis; }
 .workspace-git-context > em {
-  flex:0 0 auto; border-radius:3px; background:var(--raised); padding:1px 3px;
-  font-size:7.5px; font-style:normal; letter-spacing:.01em;
+  min-width:0; flex:0 9999 auto; overflow:hidden; color:var(--faint);
+  font-style:normal; font-variant-numeric:tabular-nums;
 }
-/* 「任务模式」时胶囊要自报归属：左边那颗按钮已经不写项目名了。头像按分支图标的尺寸收一收，
-   免得这颗小胶囊被 17px 的方块撑变形。 */
+.workspace-git-context > i { width:6px; height:6px; flex:0 0 6px; border-radius:var(--r-full); background:var(--amber); }
+/* 浮层收起来了、操作还在跑：键上自己转圈，别让「我刚点过拉取」这件事只活在那个已经
+   消失的浮层里。 */
+.workspace-git-context > svg.is-spinning { color:var(--accent); }
+/* 「任务模式」时键要自报归属：左边那颗按钮已经不写项目名了。 */
 .workspace-git-context.has-project .workspace-project-avatar {
-  width:13px; height:13px; flex-basis:13px; border-radius:4px; font-size:7px;
+  width:14px; height:14px; flex-basis:14px; border-radius:var(--r-sm); font-size:var(--t-xs);
 }
 
+/* ── 「项目 Git」：从底部那一行的上沿升起来 ── */
 .project-git-panel {
-  position:absolute; z-index:80; top:calc(100% + 5px); left:-4px;
-  display:flex; width:308px; max-height:min(60vh,460px); flex-direction:column; gap:6px;
-  border:1px solid var(--line2); border-radius:11px; background:var(--panel); padding:9px;
+  /* 底部那一行上边有 5px 内距，再空 6px：浮层下沿离那条分隔线 6px */
+  position:absolute; z-index:80; bottom:calc(100% + 11px); left:-6px;
+  display:flex; width:min(calc(var(--workspace-sidebar-width, 260px) - 12px), 340px); max-height:min(70vh, 520px);
+  flex-direction:column; gap:6px;
+  border:1px solid var(--line2); border-radius:var(--r-lg); background:var(--panel); padding:6px 6px 8px;
   box-shadow:var(--menu-shadow);
+  animation:project-git-rise var(--dur-3) var(--ease-out);
+}
+@keyframes project-git-rise {
+  from { opacity:0; transform:translateY(10px); }
 }
 
-.project-git-panel__head { display:flex; min-width:0; align-items:center; gap:6px; }
-.project-git-panel__branch { display:flex; min-width:0; flex:1; align-items:center; gap:5px; color:var(--ink); }
-.project-git-panel__branch > svg { flex:0 0 auto; color:var(--faint); }
-.project-git-panel__branch b { overflow:hidden; font-size:11.5px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
-.project-git-panel__branch small {
-  display:flex; min-width:0; align-items:center; gap:3px; overflow:hidden;
-  color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap;
+/* 头一行：搜索，右边是更新、拉取、推送 */
+.project-git-panel__head { display:flex; min-width:0; flex:0 0 auto; align-items:center; gap:2px; margin:1px 1px 0; }
+.project-git-panel__search {
+  display:flex; min-width:0; flex:1; align-items:center; gap:6px; margin-right:3px;
+  border:1px solid var(--line2); border-radius:var(--r-md); background:var(--overlay); padding:0 8px;
+  color:var(--faint);
 }
-.project-git-panel__branch small i { font-style:normal; color:var(--muted); }
+.project-git-panel__search:focus-within { border-color:var(--line2); box-shadow:var(--focus-soft); }
+.project-git-panel__search input {
+  width:100%; min-width:0; height:28px; border:0; background:transparent; color:var(--ink);
+  font-size:var(--t-xs); outline:none;
+}
 
-.project-git-panel__tools { display:flex; flex:0 0 auto; align-items:center; gap:2px; }
+.project-git-panel__tools { display:flex; flex:0 0 auto; align-items:center; gap:1px; }
 .project-git-action {
-  display:grid; width:24px; height:24px; place-items:center;
-  border:0; border-radius:7px; background:transparent; color:var(--muted);
+  display:grid; width:26px; height:26px; place-items:center;
+  border:0; border-radius:var(--r-sm); background:transparent; color:var(--muted);
+  transition:background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
-.project-git-action:hover { background:var(--raised); color:var(--ink); }
+.project-git-action:hover { background:var(--hover-bg); color:var(--ink); }
 .project-git-action[aria-disabled="true"] { color:var(--faint); opacity:.55; cursor:default; }
 .project-git-action[aria-disabled="true"]:hover { background:transparent; }
 
 .project-git-pull, .project-git-publish { position:relative; display:flex; align-items:center; }
-.project-git-pull__more {
-  display:grid; width:13px; height:24px; place-items:center;
-  border:0; border-radius:5px; background:transparent; color:var(--faint);
+/* 领先几个提交，写在推送那颗键上 */
+.project-git-publish > em {
+  min-width:12px; margin-left:-3px; padding-right:5px; color:var(--muted);
+  font-size:var(--t-xs); font-style:normal; font-variant-numeric:tabular-nums;
 }
-.project-git-pull__more:hover, .project-git-pull__more[aria-expanded="true"] { background:var(--raised); color:var(--ink); }
+.project-git-pull__more {
+  display:grid; width:14px; height:26px; place-items:center;
+  border:0; border-radius:var(--r-sm); background:transparent; color:var(--faint);
+}
+.project-git-pull__more:hover, .project-git-pull__more[aria-expanded="true"] { background:var(--hover-bg); color:var(--ink); }
 .project-git-pull__more[aria-disabled="true"] { opacity:.45; cursor:default; }
 .project-git-pull__more[aria-disabled="true"]:hover { background:transparent; color:var(--faint); }
 
+/* 拉取方式 / 发布到哪儿：从头一行往下开，压在分支清单上 */
 .project-git-menu {
   position:absolute; z-index:20; top:calc(100% + 4px); right:0;
-  display:flex; min-width:186px; flex-direction:column; gap:1px;
-  border:1px solid var(--line2); border-radius:8px; background:var(--panel); padding:4px;
+  display:flex; min-width:200px; flex-direction:column; gap:1px;
+  border:1px solid var(--line2); border-radius:var(--r-md); background:var(--panel); padding:4px;
   box-shadow:var(--menu-shadow);
 }
-.project-git-menu p { margin:0 0 2px; padding:0 5px; color:var(--faint); font-size:9px; }
-.project-git-menu button { display:flex; flex-direction:column; gap:1px; border-radius:6px; padding:4px 6px; text-align:left; }
-.project-git-menu button:hover { background:var(--raised); }
-.project-git-menu button b { color:var(--ink); font-size:10.5px; font-weight:550; }
-.project-git-menu button small { color:var(--faint); font-size:9px; line-height:1.4; }
+.project-git-menu p { margin:0 0 2px; padding:2px 6px; color:var(--faint); font-size:var(--t-xs); }
+.project-git-menu button { display:flex; flex-direction:column; gap:1px; border:0; border-radius:var(--r-sm); background:transparent; padding:5px 7px; text-align:left; }
+.project-git-menu button:hover { background:var(--hover-bg); }
+.project-git-menu button b { color:var(--ink); font-size:var(--t-xs); font-weight:var(--w-medium); }
+.project-git-menu button small { color:var(--faint); font-size:var(--t-xs); line-height:1.4; }
 
 .project-git-panel__warn,
 .project-git-panel__dirty,
 .project-git-panel__error,
 .project-git-panel__ok,
 .project-git-panel__running {
-  display:flex; align-items:center; gap:5px; margin:0;
-  border-radius:7px; padding:5px 7px; font-size:9.5px; line-height:1.5;
+  display:flex; align-items:center; gap:6px; margin:0;
+  border-radius:var(--r-md); padding:5px 8px; font-size:var(--t-xs); line-height:1.5;
 }
-.project-git-panel__running {
-  align-items:flex-start; background:color-mix(in lch,var(--accent) 9%,var(--panel)); color:var(--muted);
-}
-.project-git-panel__running > svg { flex:0 0 auto; margin-top:1px; color:var(--accent); }
-.project-git-panel__warn { border:1px solid color-mix(in lch,var(--amber) 30%,var(--line)); background:color-mix(in lch,var(--amber) 8%,var(--panel)); color:var(--muted); }
+.project-git-panel__running { align-items:flex-start; background:var(--overlay); color:var(--muted); }
+.project-git-panel__running > svg { flex:0 0 auto; margin-top:2px; color:var(--accent); }
+.project-git-panel__warn { background:color-mix(in lch,var(--amber) 8%,var(--panel)); color:var(--muted); }
 .project-git-panel__warn > svg { flex:0 0 auto; color:var(--amber); }
 .project-git-panel__dirty { background:var(--overlay); color:var(--muted); }
 .project-git-panel__dirty > span { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .project-git-panel__dirty button {
-  display:inline-flex; flex:0 0 auto; align-items:center; gap:3px;
-  border:1px solid var(--line2); border-radius:5px; background:var(--panel); padding:1px 5px;
-  color:var(--muted); font-size:9px;
+  display:inline-flex; flex:0 0 auto; align-items:center; gap:4px;
+  border:0; border-radius:var(--r-sm); background:transparent; padding:2px 6px;
+  color:var(--ink); font-size:var(--t-xs);
 }
-.project-git-panel__dirty button:hover { color:var(--ink); }
+.project-git-panel__dirty button:hover { background:var(--hover-bg); }
 .project-git-panel__error { background:color-mix(in lch,var(--red) 9%,var(--panel)); color:var(--ink); }
-.project-git-panel__ok { background:color-mix(in lch,var(--accent) 9%,var(--panel)); color:var(--muted); }
+.project-git-panel__ok { background:var(--overlay); color:var(--muted); }
 
-.project-git-panel__search {
-  display:flex; align-items:center; gap:5px;
-  border:1px solid var(--line2); border-radius:7px; background:var(--overlay); padding:0 7px;
-  color:var(--faint);
-}
-.project-git-panel__search input {
-  width:100%; height:26px; border:0; background:transparent; color:var(--ink); font-size:10.5px; outline:none;
-}
-
+/* ── 分支一行一条 ── */
 .project-git-panel__branches { display:flex; min-height:0; flex:1; flex-direction:column; gap:1px; overflow-y:auto; }
 /* 同 .scm-panel：列向滚动容器里的行不许被 flex 压扁，否则分支一多就叠印。 */
 .project-git-panel__branches > * { flex:0 0 auto; }
 .project-git-branch {
-  display:flex; width:100%; min-width:0; align-items:center; gap:6px;
-  border:0; border-radius:7px; background:transparent; padding:5px 7px;
-  color:var(--muted); font-size:10.5px; text-align:left;
+  display:flex; width:100%; min-width:0; height:28px; align-items:center; gap:6px;
+  border:0; border-radius:var(--r-sm); background:transparent; padding:0 8px 0 6px;
+  color:var(--muted); font-size:var(--t-xs); text-align:left; outline-offset:-2px;
 }
 .project-git-branch:hover { background:var(--hover-bg); color:var(--ink); }
-.project-git-branch > svg { flex:0 0 auto; color:var(--faint); }
+/* 当前那条前面一个墨色的勾，别的空着同样的宽度 */
+.project-git-branch > svg,
+.project-git-branch > i { width:12px; flex:0 0 12px; color:var(--ink); }
 .project-git-branch > span {
   min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   cursor:text; user-select:text;
 }
-.project-git-branch > small { flex:0 0 auto; color:var(--faint); font-size:9px; }
+.project-git-branch > small,
 .project-git-branch > em {
-  flex:0 0 auto; border-radius:3px; background:var(--raised); padding:1px 4px;
-  color:var(--faint); font-size:8px; font-style:normal;
+  flex:0 0 auto; padding-left:10px; color:var(--faint);
+  font-size:var(--t-xs); font-style:normal; font-variant-numeric:tabular-nums;
 }
-.project-git-branch.is-current { background:color-mix(in lch,var(--accent) 10%,transparent); color:var(--accent); }
-.project-git-branch.is-current > svg { color:var(--accent); }
-.project-git-branch[aria-disabled="true"] { color:var(--faint); opacity:.6; cursor:default; }
+.project-git-branch.is-current { color:var(--ink); }
+.project-git-branch[aria-disabled="true"] { color:var(--faint); cursor:default; }
 .project-git-branch[aria-disabled="true"]:hover { background:transparent; }
 
-.project-git-panel__empty { margin:0; padding:14px 0; color:var(--faint); font-size:10px; text-align:center; }
-.project-git-panel__note { margin:0; border-top:.5px solid var(--line); padding-top:6px; color:var(--faint); font-size:9px; line-height:1.55; }
-.project-git-workbench-entry { display:block; width:100%; border:1px solid var(--line); border-radius:5px; background:color-mix(in srgb,var(--accent) 5%,var(--raised)); color:var(--accent); padding:8px 10px; font-size:11px; text-align:left; cursor:pointer; }
+.project-git-panel__empty { margin:0; padding:18px 8px; color:var(--faint); font-size:var(--t-xs); text-align:center; }
+
+/* ── 去 Git 工作台，和最后那一句说明 ── */
+.project-git-workbench-entry {
+  display:flex; width:100%; height:30px; flex:0 0 auto; align-items:center;
+  border:0; border-top:1px solid var(--line); border-radius:0 0 var(--r-sm) var(--r-sm);
+  background:transparent; padding:0 8px; color:var(--muted); font-size:var(--t-xs);
+  text-align:left; outline-offset:-2px; transition:color var(--dur-1) var(--ease-out);
+}
+.project-git-workbench-entry > span { flex:1; }
+.project-git-workbench-entry > svg { color:var(--faint); }
+.project-git-workbench-entry:hover { color:var(--ink); }
+.project-git-panel__note { flex:0 0 auto; margin:0; padding:0 8px; color:var(--faint); font-size:var(--t-xs); line-height:1.5; }
+
+@media (prefers-reduced-motion: reduce) {
+  .project-git-panel { animation:none; }
+  .workspace-git-context,
+  .project-git-action,
+  .project-git-workbench-entry { transition:none; }
+}

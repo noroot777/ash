@@ -167,7 +167,7 @@ try {
   await page.keyboard.press("t");
   assert.equal(new URL(page.url()).searchParams.get("scope"), null, "a second G T must return to project scope");
   await page.locator(".workspace-git-context").click();
-  await page.getByRole("button", { name: "打开 Git 工作台 →", exact: true }).click();
+  await page.getByRole("button", { name: "打开 Git 工作台", exact: true }).click();
   await page.locator(".workspace-git-page").waitFor();
   await page.getByRole("navigation", { name: "Git 工作台视图" }).waitFor();
   const workspacePage = await page.locator(".workspace-git-page").evaluate(element => {
@@ -188,7 +188,7 @@ try {
   await page.keyboard.press("t");
   assert.equal(new URL(page.url()).searchParams.get("scope"), null, "a second G T must return to project scope");
   await page.locator(".workspace-git-context").click();
-  await page.getByRole("button", { name: "打开 Git 工作台 →", exact: true }).click();
+  await page.getByRole("button", { name: "打开 Git 工作台", exact: true }).click();
   await page.locator(".workspace-git-page").waitFor();
   await page.getByRole("button", { name: "返回 ash 工作区", exact: true }).click();
   await page.locator(".workspace-sidebar").waitFor();

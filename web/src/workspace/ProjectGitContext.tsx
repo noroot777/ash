@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ProjectHealth, ProjectView } from "@ash/shared";
-import { ArrowsClockwise, CaretDown, GitBranch } from "@phosphor-icons/react";
+import { ArrowsClockwise, GitBranch } from "@phosphor-icons/react";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { ProjectGitPanel } from "./ProjectGitPanel.tsx";
@@ -8,8 +9,10 @@ import { gitOpLabel } from "./projectGitModel.ts";
 import { markProjectGitPanelOpen } from "./projectGitRuns.ts";
 import { useProjectGit } from "./useProjectGit.ts";
 
-// 侧栏项目名右边的分支下拉。它以前是一段死文本（只带个原生 `title`），现在是**项目
-// 级 git 操作的正门**：和项目切换器并排，点开就能切分支 / 更新 / 拉取 / 推送。
+// 侧栏最底下那一行左边的分支键：主仓现在在哪个分支。它是**项目级 git 操作的正门**，
+// 点开「项目 Git」从这一行的上沿弹出来、盖住任务列表的下半截（这一行不挡），切分支 /
+// 更新 / 拉取 / 推送都在里面；再点一次、点别处、按 Esc 落回去。原来它是顶行里项目名
+// 右边的一颗下拉。
 //
 // 胶囊自己不拉 git 状态——分支名和「有未提交改动」那颗点都从 `ProjectHealth` 来，
 // WorkspaceShell 已经在拉了。真正的状态（分支清单、ahead/behind、远端）只在浮层打开时
@@ -38,6 +41,7 @@ export function ProjectGitContext({
   onOpenTerminal: (() => void) | null;
 }) {
   const [open, setOpen] = useState(false);
+  const tip = useHoverTip({ placement: "above" });
   useEffect(() => { const close = () => setOpen(false); window.addEventListener("popstate", close); return () => window.removeEventListener("popstate", close); }, []);
   const root = useRef<HTMLSpanElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -63,9 +67,17 @@ export function ProjectGitContext({
 
   if (!health.isRepo) return null;
   const branch = health.branch || "Git";
+  // 领先落后几个只有点开过浮层才知道（关着的时候不为它打一趟 git，见 useProjectGit）；
+  // 缓存里那份对得上当前分支才写，对不上宁可不写。
+  const known = git.state && git.state.branch.head === health.branch ? git.state.branch : null;
+  const ahead = known?.ahead ?? 0;
+  const behind = known?.behind ?? 0;
+  const tail = [ahead > 0 ? `↑${ahead}` : "", behind > 0 ? `↓${behind}` : ""].filter(Boolean).join(" ");
   const label = `${project ? `${project.name}：` : ""}${health.branch
-    ? `Git：分支 ${health.branch}${health.isWorktree ? "（worktree）" : ""}${health.dirty ? " · 有未提交改动" : ""}`
+    ? `Git：分支 ${health.branch}${health.isWorktree ? "（worktree）" : ""}${tail ? ` ${tail}` : ""}${health.dirty ? " · 有未提交改动" : ""}`
     : "Git"}`;
+  // 名字挤不下时先收后半句（领先落后），再截名字；全名和那半句都在提示里。
+  const tipText = busyLabel ? `正在${busyLabel}…` : [health.branch ? `${health.branch}${tail ? ` ${tail}` : ""}` : "Git", health.isWorktree ? "主仓是一个 worktree" : "", health.dirty ? "有未提交改动" : "", "切换分支或同步"].filter(Boolean).join(" · ");
 
   return (
     <span className="workspace-git-context-host" ref={root}>
@@ -77,16 +89,16 @@ export function ProjectGitContext({
         aria-busy={busyLabel ? true : undefined}
         aria-expanded={open}
         aria-haspopup="dialog"
-        onClick={() => setOpen((value) => !value)}
+        {...tip.anchorProps}
+        onClick={() => { tip.hide(); setOpen((value) => !value); }}
       >
-        {project ? <ProjectAvatar project={project} size="small" /> : <GitBranch size={10} weight="bold" aria-hidden="true" />}
+        {project ? <ProjectAvatar project={project} size="small" /> : <GitBranch size={14} aria-hidden="true" />}
         <span>{branch}</span>
+        {tail && !busyLabel && <em>{tail}</em>}
         {health.dirty && <i role="img" aria-label="有未提交改动" />}
-        {health.isWorktree && <em>worktree</em>}
-        {busyLabel
-          ? <ArrowsClockwise size={9} weight="bold" className="is-spinning" aria-hidden="true" />
-          : <CaretDown size={8} weight="bold" aria-hidden="true" />}
+        {busyLabel && <ArrowsClockwise size={12} weight="bold" className="is-spinning" aria-hidden="true" />}
       </button>
+      {!open && <HoverTip at={tip.at}>{tipText}</HoverTip>}
       {open && (
         <ProjectGitPanel git={git} canManage={canManage} onOpenTerminal={onOpenTerminal} />
       )}

@@ -139,20 +139,19 @@ function Ash() {
   );
   return (
     <main style={{ display: "flex", flexDirection: "column", gap: 12, padding: 16, width: 460 }}>
-      <div className="workspace-sidebar-top">
-        <div className="workspace-sidebar-selectors">
-          <ProjectGitContext
-            key={current.id}
-            projectId={current.id}
-            health={current.health}
-            project={current}
-            canManage
-            onOpenTerminal={null}
-          />
-        </div>
+      {/* 跟现场一样摆在侧栏最底下那一行里：浮层从这一行的上沿往上弹，所以上面留出地方。 */}
+      <div className="workspace-sidebar-bottom" style={{ marginTop: 540, width: 260 }}>
+        <ProjectGitContext
+          key={current.id}
+          projectId={current.id}
+          health={current.health}
+          project={current}
+          canManage
+          onOpenTerminal={null}
+        />
       </div>
       {/* 「浮层外面」的落点：测试点它来模拟手滑点到别处。 */}
-      <button type="button" data-testid="outside" style={{ marginTop: 320, padding: 8 }}>
+      <button type="button" data-testid="outside" style={{ padding: 8 }}>
         别处
       </button>
       <button

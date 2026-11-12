@@ -1,5 +1,4 @@
 import { AssistantIcon } from "../assistant/AssistantIcon.tsx";
-import { useState, type FocusEvent, type MouseEvent } from "react";
 import type { HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
 import type { TerminalSessionInfo } from "../lib/api.ts";
 import type { OutboundBar } from "./OutboundStatusBar.tsx";
@@ -12,6 +11,7 @@ import {
   SidebarSimple,
   ChatCircleDots,
 } from "@phosphor-icons/react";
+import { ColorThemeMenu } from "../components/ColorThemeChoice.tsx";
 import { CommandsLauncher } from "./CommandsLauncher.tsx";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { ProjectGitContext } from "./ProjectGitContext.tsx";
@@ -33,7 +33,6 @@ export function WorkspaceSidebar({
   tasks,
   selectedTaskId,
   selectedRemoteTaskId,
-  connected,
   collapsed,
   spread,
   width,
@@ -67,7 +66,6 @@ export function WorkspaceSidebar({
   tasks: TaskListItem[];
   selectedTaskId: string | null;
   selectedRemoteTaskId: string | null;
-  connected: boolean;
   collapsed: boolean;
   spread: SidebarSpread;
   width: number;
@@ -103,28 +101,6 @@ export function WorkspaceSidebar({
 }) {
   const modifier = workspaceModifierLabel();
   const taskMode = scope.kind === "tasks";
-  const connectionLabel = connected ? "实时已连接" : "实时连接中断";
-  const hoverTip = useHoverTip({ placement: "above" });
-  const focusTip = useHoverTip({ placement: "above" });
-  const [hoveredKind, setHoveredKind] = useState<"assistant" | "connection">("connection");
-  const [focusedKind, setFocusedKind] = useState<typeof hoveredKind>("connection");
-  const footerTip = {
-    at: hoverTip.at ?? focusTip.at,
-    hide: () => { hoverTip.hide(); focusTip.hide(); },
-  };
-  const tipKind = hoverTip.at ? hoveredKind : focusedKind;
-  const tipProps = (kind: typeof tipKind) => ({
-    onMouseEnter: (event: MouseEvent<Element>) => { setHoveredKind(kind); hoverTip.anchorProps.onMouseEnter(event); },
-    onMouseLeave: hoverTip.hide,
-    onPointerDown: focusTip.hide,
-    onFocus: (event: FocusEvent<Element>) => {
-      if (!event.currentTarget.matches(":focus-visible")) { focusTip.hide(); return; }
-      setFocusedKind(kind);
-      focusTip.anchorProps.onFocus(event);
-    },
-    onBlur: focusTip.hide,
-  });
-  const tipContent = tipKind === "connection" ? connectionLabel : "ash 助手";
   if (collapsed) {
     return (
       <aside className="workspace-sidebar workspace-sidebar--collapsed" aria-label="已收起的侧边栏">
@@ -143,12 +119,17 @@ export function WorkspaceSidebar({
           onManageCommands={commands.onManageCommands}
           notify={notify}
         />
-        <span className={`workspace-connection-light${connected ? " is-connected" : ""}`} role="status" aria-label={connectionLabel} tabIndex={0} {...tipProps("connection")} />
-        <button className="workspace-side-icon" type="button" onClick={onToggleCollapsed} aria-label="展开侧边栏">
-          <SidebarSimple size={17} weight="bold" aria-hidden="true" />
-        </button>
-        {onAssistant && <button className="workspace-side-icon workspace-assistant-entry" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} {...tipProps("assistant")} onClick={() => { footerTip.hide(); onAssistant(); }}><AssistantIcon size={18} filled={assistantOpen} /></button>}
-        <HoverTip at={footerTip.at}>{tipContent}</HoverTip>
+        {/* 连接好不好看最底下那条状态栏，这一列不再另点一盏灯。 */}
+        <div className="workspace-sidebar-rail-foot">
+          <button className="workspace-side-icon" type="button" onClick={onToggleCollapsed} aria-label="展开侧边栏">
+            <SidebarSimple size={17} weight="bold" aria-hidden="true" />
+          </button>
+          {onAssistant && (
+            <SidebarIconButton className="workspace-assistant-entry" label="ash 助手" placement="above" pressed={!!assistantOpen} onClick={onAssistant}>
+              <AssistantIcon size={18} filled={assistantOpen} />
+            </SidebarIconButton>
+          )}
+        </div>
       </aside>
     );
   }
@@ -156,7 +137,7 @@ export function WorkspaceSidebar({
   return (
     <aside className={`workspace-sidebar${spread.laidOut ? " is-spread" : ""}${spread.open ? " is-spread-open" : ""}`} aria-label="项目和任务导航">
       {/* 一行只管一件事：顶行「在哪儿」（项目、常用命令），第二行「新建」，第三行「找」。
-          分组管理不在这几行里：它在项目菜单的「设置」和 ⌘K 里。 */}
+          分组管理不在这几行里：它在项目菜单的「设置」和 ⌘K 里。主仓在哪个分支挪到了最底下那一行。 */}
       <div className="workspace-sidebar-top">
         <div className="workspace-sidebar-selectors">
           <ProjectSwitcher
@@ -167,17 +148,7 @@ export function WorkspaceSidebar({
             onTaskMode={onTaskMode}
             onCreate={onNewProject}
             onSettings={onSettings}
-            notify={notify}
           />
-          {currentProject && (
-            <ProjectGitContext
-              projectId={currentProject.id}
-              health={currentProject.health}
-              project={taskMode ? currentProject : null}
-              canManage={currentProject.myRole === "admin"}
-              onOpenTerminal={onOpenTerminal}
-            />
-          )}
           {/* 顶行最右:常用命令的启动入口。 */}
           <CommandsLauncher
             currentProject={currentProject}
@@ -224,26 +195,41 @@ export function WorkspaceSidebar({
         notify={notify}
       />
 
-      <div className={`workspace-sidebar-bottom${onAssistant ? " has-assistant" : ""}`}>
-        <span className={`workspace-connection${connected ? " is-connected" : ""}`} role="status" aria-label={connectionLabel} tabIndex={0} {...tipProps("connection")}>
-          <i aria-hidden="true" />
-        </span>
+      {/* 最底下一行：左边主仓的分支（点开「项目 Git」从这一行上沿弹出来），右边四颗图标——
+          聊天、助手（去别处），配色（画着现在那一档），收起。名字都在提示里。连接好不好不在
+          这儿点灯了，看状态栏右端。 */}
+      <div className="workspace-sidebar-bottom">
+        {currentProject
+          ? (
+            <ProjectGitContext
+              projectId={currentProject.id}
+              health={currentProject.health}
+              project={taskMode ? currentProject : null}
+              canManage={currentProject.myRole === "admin"}
+              onOpenTerminal={onOpenTerminal}
+            />
+          )
+          : <span className="workspace-sidebar-bottom-gap" />}
         {spread.open && (
           <span className="workspace-spread-hint">
             <kbd>J</kbd><kbd>K</kbd> 选 · <kbd>Enter</kbd> 打开 · 指住右边两列看全文 · <kbd>F</kbd>/<kbd>Esc</kbd> 收起
           </span>
         )}
-        {onChat && <button type="button" aria-label="聊天" aria-pressed={!!chatOpen} onClick={() => onChat()}><ChatCircleDots size={15} aria-hidden="true" /></button>}
-        {onAssistant && <button className="workspace-assistant-entry" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} {...tipProps("assistant")} onClick={() => { footerTip.hide(); onAssistant(); }}>
-          <AssistantIcon size={15} filled={assistantOpen} />
-          <span className="workspace-assistant-label">助手</span>
-        </button>}
-        <button type="button" onClick={onToggleCollapsed} aria-label="收起侧边栏">
-          <SidebarSimple size={14} weight="bold" aria-hidden="true" />
-          收起
-        </button>
+        {onChat && (
+          <SidebarIconButton label="聊天" placement="above" pressed={!!chatOpen} onClick={onChat}>
+            <ChatCircleDots size={15} weight={chatOpen ? "fill" : "regular"} aria-hidden="true" />
+          </SidebarIconButton>
+        )}
+        {onAssistant && (
+          <SidebarIconButton className="workspace-assistant-entry" label="ash 助手" placement="above" pressed={!!assistantOpen} onClick={onAssistant}>
+            <AssistantIcon size={15} filled={assistantOpen} />
+          </SidebarIconButton>
+        )}
+        <ColorThemeMenu notify={notify} buttonClassName="workspace-side-icon" />
+        <SidebarIconButton className="workspace-sidebar-collapse" label="收起侧边栏" placement="above" onClick={onToggleCollapsed}>
+          <SidebarSimple size={15} aria-hidden="true" />
+        </SidebarIconButton>
       </div>
-      <HoverTip at={footerTip.at}>{tipContent}</HoverTip>
       <WorkspaceResizeHandle width={width} onChange={onWidthChange} />
     </aside>
   );

@@ -164,7 +164,7 @@ try {
   await pill.waitFor();
   assert.match(await pill.getAttribute("aria-label"), /分支 main.*有未提交改动/);
   await pill.click();
-  await page.getByRole("button", { name: "打开 Git 工作台 →", exact: true }).click();
+  await page.getByRole("button", { name: "打开 Git 工作台", exact: true }).click();
   await page.getByRole("navigation", { name: "Git 工作台视图" }).waitFor();
   if (persistentScreenshots) {
     screenshotDirectory = persistentScreenshots;

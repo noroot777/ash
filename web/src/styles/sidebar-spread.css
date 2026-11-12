@@ -334,7 +334,7 @@
 .workspace-spread-hint {
   margin-left: 12px;
   color: var(--faint);
-  font-size: 10.5px;
+  font-size: var(--t-xs);
   white-space: nowrap;
 }
 

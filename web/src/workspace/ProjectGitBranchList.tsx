@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { Check, GitBranch } from "@phosphor-icons/react";
+import { Check } from "@phosphor-icons/react";
 import type { ProjectGitBranchRow, ProjectGitState } from "../lib/api.ts";
 import { checkoutBlocker } from "./projectGitModel.ts";
 
@@ -68,9 +68,10 @@ function BranchRow({
         if (!blocked && !busy) onCheckout();
       }}
     >
+      {/* 当前那条前面一个勾，别的空着同样的宽度，名字对齐 */}
       {row.current
         ? <Check size={12} weight="bold" aria-hidden="true" />
-        : <GitBranch size={12} aria-hidden="true" />}
+        : <i aria-hidden="true" />}
       <span>{row.name}</span>
       {row.worktree && <em>占用中</em>}
       {detail && <small>{detail}</small>}

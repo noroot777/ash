@@ -49,15 +49,14 @@ function Ash() {
       ) : (
         <section className="fixture-project-card">
           <p>项目主区</p>
-          <div className="workspace-sidebar-top">
-            <div className="workspace-sidebar-selectors">
-              <ProjectGitContext
-                projectId={projectId}
-                health={health}
-                canManage
-                onOpenTerminal={null}
-              />
-            </div>
+          {/* 跟现场一样摆在侧栏最底下那一行里，浮层往上弹，所以上面留出地方。 */}
+          <div className="workspace-sidebar-bottom" style={{ marginTop: 520, width: 260 }}>
+            <ProjectGitContext
+              projectId={projectId}
+              health={health}
+              canManage
+              onOpenTerminal={null}
+            />
           </div>
         </section>
       )}

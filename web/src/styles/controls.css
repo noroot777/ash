@@ -209,8 +209,8 @@ header:hover .task-pin,
   box-shadow: 0 1px 3px rgb(40 42 48 / 14%);
 }
 
-/* 深浅色开关(components/ColorThemeChoice.tsx):图标 + 字。摆法(设置页那行靠右、项目下拉里
-   撑满一行)由摆它的地方定，这里不碰 display。 */
+/* 深浅色开关(components/ColorThemeChoice.tsx):图标 + 字。摆法(设置页那行靠右)由摆它的
+   地方定，这里不碰 display。侧栏底部那颗图标版的样式在 workspace-sidebar.css。 */
 .color-theme-choice button {
   display: inline-flex;
   align-items: center;
