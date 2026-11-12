@@ -244,13 +244,16 @@ kbd, .kbd { padding: 1px 5px; border-radius: 4px; background: var(--overlay); co
 #tip.is-in { opacity: 1; }
 #tip kbd { margin-left: 8px; padding: 0; background: none; color: color-mix(in oklab, var(--panel) 62%, transparent); }
 
-/* 状态点：只有「在跑」和「等你」有颜色；完成且读过不画 */
+/* 状态点：只有「在跑」和「等你」有颜色；完成且读过不画。会动的只有一颗（.breathe） */
 .dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--c, transparent); }
 .dot.run { --c: var(--accent); }
 .dot.wait { --c: var(--amber); }
 .dot.bad { --c: var(--red); }
 .dot.new { --c: var(--green); }
 .dot.queue { box-shadow: inset 0 0 0 1.5px var(--faint); }
+/* 它自己停下来等一件会回来的事（哨兵）：和「等你」同一种黄，但会呼吸，照现在产品里的样子（task-status-dot.css 的 --working）。静止的黄 = 轮到你，呼吸的黄 = 不用你动 */
+.dot.breathe { --c: var(--amber); animation: breathe 1.35s ease-in-out infinite; }
+@keyframes breathe { 0%, 100% { opacity: 0.68; transform: scale(0.84); } 50% { opacity: 1; transform: scale(1.18); } }
 /* 做完没验收：靛蓝空心环，照现在产品里的样子（环 = 等你动手），一直在，不呼吸 */
 .dot.open { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: inset 0 0 0 1.5px var(--accent); }
 

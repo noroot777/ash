@@ -1,4 +1,4 @@
-/* 侧栏（改后）。外框（宽 260、内边距）在 shell.css，这里只管里面五段：顶行、新建一行、筛选一行、任务树、底部两行，外加从侧栏点开的三样（项目菜单、⌘K、从底边升起来的「项目 Git」）。
+/* 侧栏（改后）。外框（宽 260、内边距）在 shell.css，这里只管里面五段：顶行、新建一行、筛选一行、任务树、底部一行，外加从侧栏点开的三样（项目菜单、⌘K、弹在底部那一行上面的「项目 Git」）。
    一行只管一件事：在哪儿 / 新建 / 找 / 任务 / 去别处。尺寸照现在的侧栏（web/src/styles 的 workspace / task-tree / sidebar-spread / project-switcher / overlays）。 */
 
 /* ---------- 顶行：项目 · 常用命令 ---------- */
@@ -133,22 +133,21 @@
 .side-foot a:active { background: var(--sel-bg); }
 .side-theme-glyph { display: grid; }
 
-/* ---------- 「项目 Git」：从侧栏的底边升起来，盖住下半截；点别处落回去。外面一层只管把它裁在侧栏里（多出的 8px 是外壳的底边距，窗贴到状态栏上） ---------- */
+/* ---------- 「项目 Git」：弹在底部那一行的上面，那一行不挡；盖住任务列表的下半截，点别处落回去。外面一层只管把它裁在那一行以上（下沿是 side-foot.js 量出来的） ---------- */
 .side { position: relative; }
-.side-rise { position: absolute; inset: 0 0 -8px; z-index: 5; display: flex; align-items: flex-end; overflow: hidden; background: transparent; transition: background 200ms var(--ease-in); }
+.side-rise { position: absolute; inset: 0; z-index: 5; display: flex; align-items: flex-end; overflow: hidden; background: transparent; transition: background 200ms var(--ease-in); }
 .side-rise.is-up { background: color-mix(in oklab, var(--chrome) 50%, transparent); transition: background var(--dur-3) var(--ease-out); }
-.side-sheet { display: flex; flex-direction: column; width: calc(100% - 12px); max-height: 76%; margin: 0 6px; padding: 6px 6px 8px; border-radius: var(--r-lg) var(--r-lg) 0 0; background: var(--panel); box-shadow: var(--control-shadow), var(--shadow); transform: translateY(calc(100% + 28px)); transition: transform 200ms var(--ease-in); }
+.side-sheet { display: flex; flex-direction: column; width: calc(100% - 12px); max-height: 76%; margin: 0 6px 6px; padding: 6px 6px 8px; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow), var(--shadow); transform: translateY(calc(100% + 28px)); transition: transform 200ms var(--ease-in); }
 .side-rise.is-up > .side-sheet { transform: none; transition: transform var(--dur-3) var(--ease-out); }
-.side-sheet-head { display: flex; align-items: center; gap: 2px; flex: none; height: 32px; padding-left: 7px; }
-.side-sheet-head > .i { width: 14px; height: 14px; margin-right: 5px; color: var(--muted); }
-.side-sheet-head > b { flex: 1; font-weight: var(--w-medium); }
+/* 头一行：搜索，右边是更新、拉取、推送 */
+.side-sheet-head { display: flex; align-items: center; gap: 2px; flex: none; margin: 1px 1px 5px; }
+.side-sheet-head > .side-pm-find { flex: 1; min-width: 0; margin: 0 3px 0 0; }
 .side-sheet-head .ico { width: 26px; height: 26px; }
 .side-sheet-head .ico > .i { width: 14px; height: 14px; }
 /* 领先几个提交，写在推送那颗键上 */
 .side-sheet-push { display: inline-flex; align-items: center; }
 .side-sheet-push > em { min-width: 12px; margin-left: -3px; padding-right: 5px; color: var(--muted); font-size: var(--t-xs); font-style: normal; }
 .side-sheet-push > em:empty { display: none; }
-.side-sheet > .side-pm-find { flex: none; margin: 4px 1px 5px; }
 .side-sheet-list { flex: 1; min-height: 0; overflow-y: auto; }
 .side-sheet-list > button { font-size: var(--t-xs); }
 .side-sheet-list > button > .cut { flex: 1; }

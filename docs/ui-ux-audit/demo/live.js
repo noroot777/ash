@@ -6,7 +6,7 @@
    报告页隔着 iframe 递 { ash: 'play', name } 也能起一轮（正跑着的那一轮连同它留下的半截一起撤掉），{ ash: 'stop' } 是停；
    嵌在报告里时，等你答复那一刻往外递 { ash: 'title', waiting }，报告拿它改自己的标签页标题。
    发 run:state { running }（同时发 run:start / run:end）、agents:spawn（这一轮派出一个子智能体）、watch:hang / watch:wake（挂上一个哨兵、它回来一次；右侧面板的那两格接）、
-   task:status { id, status, why }（等哨兵时是 paused、why 是「在等哨兵」）、task:resume { text }（它歇下来时留的续跑交代，空 = 没有了）、
+   task:status { id, status, why, watching }（等哨兵时是 paused、watching 是 true）、task:resume { text }（它歇下来时留的续跑交代，空 = 没有了）、
    usage { turn, tokens, ctx, files, add, del, elapsedMs, commit? }（turn 是这一轮的用量，其余是跑完之后的总数，ctx 是上下文还剩百分之几；
    中途只报 { ctx } 是水位变了，{ squeezing } 是正在压缩 / 压完了）；
    听 reply:send / reply:stop / reply:steer（回复框）、task:act（任务头的重试 / 运行 / 继续）、watch:stop（不等了：会话里那一行或者哨兵格里点的）、
@@ -56,7 +56,7 @@
     r.waits.set(fail, undo);
   });
   const sleep = (ms) => hold((done) => { const id = setTimeout(done, ms); return () => clearTimeout(id); });
-  const status = (state, why) => ASH.emit('task:status', { id: ASH.data.current, status: state, why });
+  const status = (state, why, more) => ASH.emit('task:status', { id: ASH.data.current, status: state, why, ...more });
   const busy = (on) => { ASH.emit('run:state', { running: on }); ASH.emit(on ? 'run:start' : 'run:end', { id: ASH.data.current }); };
   /* 等你答复时标签页标题前多一个 ●；嵌在报告里看不到自己的标题，递给外面那一页去改 */
   const waitingTitle = (on) => {
@@ -354,7 +354,7 @@
     p.line = kit.wait({ name: p.w.name, until: p.until, then: p.then, onquit: () => ASH.emit('watch:stop') });
     r.turn.body.append(enter(p.line.el));
     tick();
-    status('paused', '在等哨兵');
+    status('paused', undefined, { watching: true });
     ASH.emit('task:resume', { text: p.then });   /* 右侧「信息」里的续跑指令：它留的那句交代 */
     busy(false);
     feed.follow();

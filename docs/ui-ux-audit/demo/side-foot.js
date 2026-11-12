@@ -1,9 +1,9 @@
-/* 侧栏最底下那一行（side.js 把它装进去），外加从底边升起来的那只抽屉。
-   左边是主仓现在在哪个分支：点它，「项目 Git」从整个侧栏的底边升起来，盖在任务列表上面（列表不让位、不挪动）；点别处、按 Esc 落回去。原来它是顶行里的一颗下拉。
+/* 侧栏最底下那一行（side.js 把它装进去），外加弹在它上面的那一层。
+   左边是主仓现在在哪个分支：点它，「项目 Git」从这一行的上沿升起来，盖在任务列表上面（列表不让位、不挪动），这一行不挡——分支那颗键是按下去的样子，再点一次、点别处、按 Esc 落回去。原来它是顶行里的一颗下拉。
    右边四颗图标：聊天、助手（去别处），深浅色（画的是现在选的那一档，点开三选一）和收起。名字在提示里。原来深浅色是项目菜单里的一排分段。
-   抽屉里的东西照现在的（web/src/workspace/ProjectGitPanel.tsx）：当前分支、更新 / 拉取 / 推送（领先几个写在推送上）、搜索、分支一行一条、去 Git 工作台；
-   那一段说明压成最后一句。切分支是真的会换（换完抽屉落下去、底下那一行跟着改）；更新、拉取、推送之后的样子样机没画。
-   对外：ASH.sideFoot() → { el, layer, chat, helper }。layer 要直接放在侧栏那个元素里：抽屉量的是它的底边。分支是编的。 */
+   那一层里的东西照现在的（web/src/workspace/ProjectGitPanel.tsx）：搜索、更新 / 拉取 / 推送（领先几个写在推送上）、分支一行一条、去 Git 工作台；
+   那一段说明压成最后一句。现在在哪个分支不再写一遍：正下方那一行写着，列表里打勾的也是它。切分支是真的会换（换完落下去、底下那一行跟着改）；更新、拉取、推送之后的样子样机没画。
+   对外：ASH.sideFoot() → { el, layer, chat, helper }。layer 要直接放在侧栏那个元素里：它的下沿量的是这一行的上沿。分支是编的。 */
 (() => {
   const { h, $$, icon } = ASH;
 
@@ -50,15 +50,14 @@
     const el = h('div.side-foot', { 'data-m': 'side-4' }, git, chat, helper, theme,
       h('button.ico', { type: 'button', 'aria-label': '收起侧边栏', 'data-tip': '收起侧边栏', 'data-key': '⌘B', onclick: () => ASH.todo('收起侧栏') }, icon('sidebar')));
 
-    /* ---------- 升起来的那只抽屉 ---------- */
-    const head = h('b.cut');
+    /* ---------- 弹在这一行上面的那一层 ---------- */
     const push = h('em.num');
     const tool = (label, glyph, what) => h('button.ico', { type: 'button', 'aria-label': label, 'data-tip': label, onclick: () => ASH.todo(what) }, icon(glyph));
     const input = h('input', { type: 'text', placeholder: '搜索分支…', 'aria-label': '搜索分支', autocomplete: 'off', spellcheck: 'false' });
     const list = h('div.menu.side-sheet-list', { role: 'listbox', 'aria-label': '分支' });
     const sheet = h('div.side-sheet', { role: 'dialog', 'aria-label': '项目 Git' },
-      h('header.side-sheet-head', {}, icon('branch'), head, tool('更新', 'redo', '更新之后的样子'), tool('拉取', 'down', '拉取之后的样子'), h('span.side-sheet-push', {}, tool('推送', 'up', '推送之后的样子'), push)),
-      h('label.side-pm-find', {}, icon('search'), input),
+      h('header.side-sheet-head', {}, h('label.side-pm-find', {}, icon('search'), input),
+        tool('更新', 'redo', '更新之后的样子'), tool('拉取', 'down', '拉取之后的样子'), h('span.side-sheet-push', {}, tool('推送', 'up', '推送之后的样子'), push)),
       list,
       h('a.side-sheet-go', { href: '#/git', onclick: () => rise(false) }, h('span', '打开 Git 工作台'), icon('chev', 'sm')),
       h('p.side-sheet-note', '主仓是所有任务共用的：切了分支，新建的任务就从它起。'));
@@ -72,7 +71,6 @@
     function draw() {
       const q = input.value.trim().toLowerCase();
       const hit = BRANCHES.filter((b) => !q || b.name.toLowerCase().includes(q));
-      head.textContent = cur.name;
       push.textContent = cur.up ? String(cur.up) : '';
       list.replaceChildren(...(hit.length ? hit.map((b) => {
         const on = b === cur;
@@ -88,8 +86,9 @@
       stops[(stops.indexOf(document.activeElement) + (e.key === 'ArrowDown' ? 1 : stops.length - 1)) % stops.length]?.focus();
     });
 
-    /* 升、落：抽屉只动位置（transform），外面那一层只管把它裁在侧栏里、再把后面的任务树压暗一点。落下去之后整层摘掉，Tab 走不进去 */
-    const outside = (e) => { if (!sheet.contains(e.target)) rise(false); };
+    /* 升、落：那张卡只动位置（transform），外面那一层只管把它裁在底部那一行以上、再把后面的任务树压暗一点。落下去之后整层摘掉，Tab 走不进去。
+       分支那颗键自己管开合，所以它不算「点别处」 */
+    const outside = (e) => { if (!sheet.contains(e.target) && !git.contains(e.target)) rise(false); };
     const key = (e) => { if (e.key === 'Escape' && !document.querySelector('.pop')) { e.stopPropagation(); rise(false); git.focus({ preventScroll: true }); } };
     function rise(next) {
       if (up === next) return;
@@ -100,6 +99,7 @@
         ASH.closePop();
         input.value = '';
         draw();
+        layer.style.bottom = `${el.offsetParent.clientHeight - el.offsetTop}px`;
         layer.hidden = false;
         void layer.offsetWidth;
         layer.classList.add('is-up');

@@ -29,7 +29,7 @@
     open: { dot: 'open', bucket: 'todo', say: '已完成，等你验收' },        /* 做完没验收：靛蓝环，读没读过都在 */
     running: { dot: 'run', bucket: 'run', say: '运行中' },
     queued: { dot: 'queue', bucket: 'wait', say: '排队中' },              /* 排在队里、还没轮到 */
-    parked: { dot: 'queue', bucket: 'wait', say: '已暂停，在等一件会自己回来的事' },   /* 它自己停下来等哨兵：不用你动，和排着的是同一种环，等什么写在行尾 */
+    parked: { dot: 'breathe', bucket: 'wait', say: '有东西在后台跑着，它会自己回来' },   /* 它自己停下来等哨兵：不用你动，所以这颗黄点会呼吸，行尾不写字（照现在的 --working） */
     paused: { dot: 'wait', bucket: 'wait', say: '已暂停，等你继续' },      /* 停在检查点上、没有东西会来叫它：轮到你，所以是黄的；桶还是「排着 / 暂停」 */
     stopped: { dot: '', bucket: 'done', say: '' },                        /* 停掉的归「已收尾」，行首空着 */
     backlog: { dot: '', bucket: 'wait', say: '' },                        /* 待排期：还没排进队，归「排着 / 暂停」 */
@@ -43,12 +43,12 @@
   const lookOf = (task) => {
     if (task.status === 'done') return task.accepted === false ? LOOK.open : task.read === false ? LOOK.fresh : LOOK.done;
     if (task.status === 'stopped' && task.accepted) return LOOK.done;   /* 停掉的也能验收：验收了就归「验收完成」。失败的验收了还是红的，照旧等你处理 */
-    if (task.status === 'paused') return task.why ? LOOK.parked : LOOK.paused;
+    if (task.status === 'paused') return task.watching ? LOOK.parked : LOOK.paused;
     if (['waiting', 'failed', 'running', 'queued', 'stopped', 'backlog'].includes(task.status)) return LOOK[task.status];
     if (!odd[task.status]) { console.warn(`[side] 状态表里没有「${task.status}」`); odd[task.status] = { dot: '', bucket: 'wait', say: `状态：${task.status}` }; }
     return odd[task.status];
   };
-  const sigOf = (task) => `${task.status}|${task.accepted}|${task.read}|${task.why ?? ''}|${task.detail ?? ''}`;
+  const sigOf = (task) => `${task.status}|${task.accepted}|${task.read}|${task.watching ?? ''}|${task.why ?? ''}|${task.detail ?? ''}`;
   const mark = (look) => h(`span.dot${look.dot ? `.${look.dot}` : ''}`, look.say ? { role: 'img', 'aria-label': look.say } : {});
 
   /* 顶上那一排（保留项）：一颗星加五颗点，名字、颜色、次序跟现在一样 */
@@ -311,10 +311,11 @@
 
       /* ---------- 改状态：点换颜色，这一行滑到本节第一位（置顶节只看置顶时间，不动）。
          事件里的词比表多一个：'accepted' = 验收了（也算看过）。'done' 默认是做完了还没验收，除非明说 accepted: true ---------- */
-      function apply(id, status, why, accepted) {
+      function apply(id, status, why, accepted, watching) {
         const task = byId(id);
         const row = rows.get(id);
         if (!task || !row || !status) return;
+        if (status === 'paused' && watching) task.watching = true; else delete task.watching;   /* 暂停着、名下有哨兵在跑 */
         if (status === 'accepted') Object.assign(task, { status: 'done', accepted: true, read: true });
         else if (status === 'done') {
           if (row.status !== 'done') task.read = id === ASH.data.current; /* 正开着的那条算读过 */
@@ -527,7 +528,7 @@
       el.replaceChildren(top, make, find, tree, foot.el, foot.layer);
       claim();
 
-      ASH.on('task:status', ({ id, status, why, accepted } = {}) => apply(id, status, why, accepted));
+      ASH.on('task:status', ({ id, status, why, accepted, watching } = {}) => apply(id, status, why, accepted, watching));
       ASH.on('task:title', ({ id, title } = {}) => { const row = rows.get(id); if (row && title) row.title.textContent = title; }); /* 任务头上改了名 */
       ASH.on('route', (route) => {
         onTask = route.name === 'task';
