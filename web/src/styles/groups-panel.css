@@ -36,8 +36,8 @@
   flex: 0 0 27px;
   place-items: center;
   border-radius: 8px;
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--raised);
+  color: var(--muted);
 }
 
 .groups-panel-heading {

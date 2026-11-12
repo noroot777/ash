@@ -5,8 +5,8 @@
 
 /* 正在被编辑的那一行留在原位当锚点；收起后原地闪一下，找得回来。 */
 .provider-row.is-editing {
-  background: color-mix(in oklab, var(--accent-soft) 40%, var(--panel));
-  box-shadow: inset 3px 0 0 var(--accent);
+  background: color-mix(in oklab, var(--sel-bg) 40%, var(--panel));
+  box-shadow: inset 3px 0 0 var(--ink);
 }
 
 .provider-row.is-just-edited {
@@ -14,14 +14,14 @@
 }
 
 @keyframes provider-row-flash {
-  0%, 45% { background: color-mix(in oklab, var(--accent-soft) 62%, var(--panel)); }
+  0%, 45% { background: color-mix(in oklab, var(--sel-bg) 62%, var(--panel)); }
   100% { background: transparent; }
 }
 
 /* 减少动效时不闪，直接停在淡染底上。 */
-:root[data-motion="reduce"] .provider-row.is-just-edited { animation: none; background: color-mix(in oklab, var(--accent-soft) 45%, var(--panel)); }
+:root[data-motion="reduce"] .provider-row.is-just-edited { animation: none; background: color-mix(in oklab, var(--sel-bg) 45%, var(--panel)); }
 @media (prefers-reduced-motion: reduce) {
-  :root:not([data-motion="full"]) .provider-row.is-just-edited { animation: none; background: color-mix(in oklab, var(--accent-soft) 45%, var(--panel)); }
+  :root:not([data-motion="full"]) .provider-row.is-just-edited { animation: none; background: color-mix(in oklab, var(--sel-bg) 45%, var(--panel)); }
 }
 
 .providers-intro {
@@ -199,12 +199,12 @@ button.provider-mount-state:hover {
 }
 
 .provider-protocol-pick button:hover {
-  border-color: color-mix(in oklab, var(--accent) 45%, var(--line));
+  border-color: color-mix(in oklab, var(--ink) 45%, var(--line));
 }
 
 .provider-protocol-pick button[aria-checked="true"] {
-  border-color: var(--accent);
-  background: color-mix(in oklab, var(--accent-soft) 60%, var(--canvas));
+  border-color: var(--ink);
+  background: color-mix(in oklab, var(--sel-bg) 60%, var(--canvas));
 }
 
 .provider-protocol-pick b {
@@ -229,9 +229,9 @@ button.provider-mount-state:hover {
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  border: 1px solid color-mix(in oklab, var(--accent) 24%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--ink) 24%, var(--line));
   border-radius: 9px;
-  background: color-mix(in oklab, var(--accent-soft) 34%, transparent);
+  background: color-mix(in oklab, var(--sel-bg) 34%, transparent);
   padding: 10px 12px;
 }
 
@@ -575,9 +575,9 @@ button.provider-mount-state:hover {
   font-size: var(--t-xs);
 }
 .provider-test-action:hover:not(:disabled) {
-  border-color: color-mix(in oklab, var(--accent) 40%, var(--line));
-  background: var(--accent-soft);
-  color: var(--accent);
+  border-color: color-mix(in oklab, var(--ink) 40%, var(--line));
+  background: var(--sel-bg);
+  color: var(--ink);
 }
 .provider-test-action:disabled {
   opacity: 0.55;

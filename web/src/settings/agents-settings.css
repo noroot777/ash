@@ -299,8 +299,8 @@
   display: grid;
   gap: 12px;
   border-bottom: 1px solid var(--line);
-  border-left: 3px solid var(--accent);
-  background: color-mix(in oklab, var(--accent-soft) 24%, var(--panel));
+  border-left: 3px solid var(--ink);
+  background: color-mix(in oklab, var(--sel-bg) 24%, var(--panel));
   padding: 14px 14px 14px 11px;
 }
 

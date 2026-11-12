@@ -31,10 +31,10 @@
 .single-review-facts dd { display:flex; min-width:0; align-items:center; gap:4px; overflow:hidden; margin:3px 0 0; color:var(--muted); font-family:var(--font-mono); font-size:9.5px; text-overflow:ellipsis; white-space:nowrap; }
 .single-review-shared-note { display:flex; align-items:center; gap:12px; border:1px solid color-mix(in oklab,var(--cyan) 24%,var(--line)); border-radius:8px; background:color-mix(in oklab,var(--cyan) 5%,var(--panel)); padding:9px 10px; }
 .single-review-shared-note > div { min-width:0; flex:1; }.single-review-shared-note b { color:var(--ink); font-size:10.5px; }.single-review-shared-note p { margin:2px 0 0; color:var(--muted); font-size:9.5px; line-height:1.5; }
-.single-review-shared-note > a { display:inline-flex; height:27px; flex:0 0 auto; align-items:center; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; color:var(--accent); font-size:9.5px; font-weight:600; }
+.single-review-shared-note > a { display:inline-flex; height:27px; flex:0 0 auto; align-items:center; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; color:var(--ink); font-size:9.5px; font-weight:600; }
 .single-review-loading,.single-review-error { display:flex; align-items:center; gap:6px; margin:0; border:1px dashed var(--line2); border-radius:8px; padding:18px; color:var(--faint); font-size:10.5px; }
 .single-review-error { color:var(--red); }
-.accepted-snapshot-card { display:grid; gap:9px; border:1px solid var(--line); border-radius:9px; background:var(--panel); padding:10px 11px; }.accepted-snapshot-card > header { display:grid; min-width:0; grid-template-columns:27px minmax(0,1fr) auto; align-items:center; gap:8px; }.accepted-snapshot-card > header > span { display:grid; width:27px; height:27px; place-items:center; border-radius:8px; background:color-mix(in oklab,var(--cyan) 8%,var(--raised)); color:var(--cyan); }.accepted-snapshot-card header b,.accepted-snapshot-card header small { display:block; }.accepted-snapshot-card header b { font-size:10.5px; }.accepted-snapshot-card header small { margin-top:1px; color:var(--faint); font-size:9px; }.accepted-snapshot-card header em { color:var(--green); font-size:9px; font-style:normal; }.accepted-snapshot-card dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin:0; }.accepted-snapshot-card dl > div { min-width:0; border-radius:7px; background:var(--canvas); padding:6px 7px; }.accepted-snapshot-card dt { color:var(--faint); font-size:8.5px; }.accepted-snapshot-card dd { overflow:hidden; margin:2px 0 0; color:var(--muted); font-family:var(--font-mono); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }.accepted-snapshot-card > button { justify-self:start; border:0; background:transparent; padding:0; color:var(--accent); font-size:9.5px; text-align:left; }.accepted-snapshot-card > button:hover { text-decoration:underline; }
+.accepted-snapshot-card { display:grid; gap:9px; border:1px solid var(--line); border-radius:9px; background:var(--panel); padding:10px 11px; }.accepted-snapshot-card > header { display:grid; min-width:0; grid-template-columns:27px minmax(0,1fr) auto; align-items:center; gap:8px; }.accepted-snapshot-card > header > span { display:grid; width:27px; height:27px; place-items:center; border-radius:8px; background:color-mix(in oklab,var(--cyan) 8%,var(--raised)); color:var(--cyan); }.accepted-snapshot-card header b,.accepted-snapshot-card header small { display:block; }.accepted-snapshot-card header b { font-size:10.5px; }.accepted-snapshot-card header small { margin-top:1px; color:var(--faint); font-size:9px; }.accepted-snapshot-card header em { color:var(--green); font-size:9px; font-style:normal; }.accepted-snapshot-card dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin:0; }.accepted-snapshot-card dl > div { min-width:0; border-radius:7px; background:var(--canvas); padding:6px 7px; }.accepted-snapshot-card dt { color:var(--faint); font-size:8.5px; }.accepted-snapshot-card dd { overflow:hidden; margin:2px 0 0; color:var(--muted); font-family:var(--font-mono); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }.accepted-snapshot-card > button { justify-self:start; border:0; background:transparent; padding:0; color:var(--ink); font-size:9.5px; text-align:left; }.accepted-snapshot-card > button:hover { text-decoration:underline; }
 /* 提交横铺一条，宽度全留给下面的「改动文件 + diff」（理由见 CommitStrip.tsx）。 */
 .single-review-content { display:grid; min-width:0; gap:10px; }
 /* 分支 → 合入目标 + 提交，压成一条元信息行（理由见 ChangeMetaBar.tsx）。 */
@@ -61,12 +61,12 @@
 /* 可点开的那一份：内边距交给里面的按钮，整格都是热区。 */
 .review-commit-strip > ul > li.is-linked { padding:0; }
 .review-commit-strip > ul > li.is-linked > button { display:flex; width:100%; min-width:0; align-items:baseline; gap:6px; border:0; border-radius:6px; background:transparent; padding:5px 7px; text-align:left; }
-.review-commit-strip > ul > li.is-linked:hover { border-color:var(--accent); background:var(--raised); }
+.review-commit-strip > ul > li.is-linked:hover { border-color:var(--ink); background:var(--raised); }
 .review-commit-strip li code { flex:0 0 auto; color:var(--accent); font-family:var(--font-mono); font-size:9px; }
 .review-commit-strip li b { min-width:0; flex:1; overflow:hidden; color:var(--muted); font-size:10px; font-weight:550; text-overflow:ellipsis; white-space:nowrap; }
 .review-commit-strip li time { flex:0 0 auto; color:var(--faint); font-size:8.5px; }
 .review-commit-strip > p { margin:0; padding:14px 9px; color:var(--faint); font-size:10px; text-align:center; }
-.review-commit-strip > button { width:100%; min-height:29px; border:0; border-top:.5px solid var(--line); background:var(--canvas); color:var(--accent); font-size:9.5px; }
+.review-commit-strip > button { width:100%; min-height:29px; border:0; border-top:.5px solid var(--line); background:var(--canvas); color:var(--ink); font-size:9.5px; }
 .review-commit-strip > button:hover { background:var(--raised); }
 .single-review-files,.single-review-diff { min-width:0; overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
 .single-review-files > header { display:flex; height:34px; align-items:center; justify-content:space-between; border-bottom:.5px solid var(--line); padding:0 9px; color:var(--muted); font-size:10.5px; }
@@ -82,12 +82,12 @@
 .single-review-layout:hover { background:var(--raised); color:var(--ink); }
 .single-review-files > div > button:first-child { border-top:0; }
 .single-review-files > div > button:hover,.single-review-files > div > button.is-selected { background:var(--raised); }
-.single-review-files > div > button.is-selected { box-shadow:inset 2px 0 var(--accent); }
+.single-review-files > div > button.is-selected { box-shadow:inset 2px 0 var(--ink); }
 .single-review-files button code { min-width:0; flex:1; overflow:hidden; color:var(--muted); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
 .single-review-files button span { display:flex; flex:0 0 auto; gap:5px; font-family:var(--font-mono); font-size:8.5px; }
 .single-review-files i,.single-review-diff header i { color:var(--green); font-style:normal; }
 .single-review-files em,.single-review-diff header em { color:var(--red); font-style:normal; }
-.single-review-load { width:100%; min-height:30px; border:0; border-top:.5px solid var(--line); background:var(--canvas); color:var(--accent); font-size:9.5px; }
+.single-review-load { width:100%; min-height:30px; border:0; border-top:.5px solid var(--line); background:var(--canvas); color:var(--ink); font-size:9.5px; }
 .single-review-diff { min-width:0; }
 .single-review-diff > header { display:flex; min-height:38px; align-items:center; gap:10px; border-bottom:.5px solid var(--line); padding:0 10px; }
 .single-review-diff > header > div { display:flex; min-width:0; flex:1; align-items:center; gap:6px; }
@@ -96,7 +96,7 @@
 .single-review-diff > header small { color:var(--faint); font-size:9px; }
 .single-review-zoom { display:inline-flex; height:24px; flex:0 0 auto; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:9.5px; }
 .single-review-zoom:hover { background:var(--raised); color:var(--ink); }
-.single-review-zoom[aria-pressed="true"] { border-color:color-mix(in oklab,var(--accent) 40%,var(--line2)); color:var(--accent); }
+.single-review-zoom[aria-pressed="true"] { border-color:color-mix(in oklab,var(--ink) 40%,var(--line2)); color:var(--ink); }
 /* 放大层里的分支 diff：从固定高度改成撑满这一屏。层本身的定位、层高见 `zoom-layer.css`。 */
 .zoom-layer--review > .single-review-diff-layout { min-height:0; flex:1; }
 .zoom-layer--review .single-review-files,.zoom-layer--review .single-review-diff { display:flex; min-height:0; flex-direction:column; }
@@ -157,6 +157,6 @@
 .diff-layout-toggle button { display:inline-flex; height:24px; align-items:center; gap:4px; border:0; background:transparent; padding:0 7px; color:var(--muted); font-size:9.5px; }
 .diff-layout-toggle button + button { border-left:1px solid var(--line2); }
 .diff-layout-toggle button:hover { background:var(--raised); color:var(--ink); }
-.diff-layout-toggle button[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); }
-.single-review-more-lines { position:sticky; left:0; width:100%; min-width:612px; height:32px; border:0; border-top:1px solid var(--line); background:var(--panel); color:var(--accent); font-size:9.5px; }
+.diff-layout-toggle button[aria-pressed="true"] { background:var(--sel-bg); color:var(--ink); }
+.single-review-more-lines { position:sticky; left:0; width:100%; min-width:612px; height:32px; border:0; border-top:1px solid var(--line); background:var(--panel); color:var(--ink); font-size:9.5px; }
 @media (max-width:760px) { .single-review-facts,.single-review-diff-layout,.accepted-snapshot-card dl { grid-template-columns:1fr; } .single-review-files > div { max-height:220px; } }

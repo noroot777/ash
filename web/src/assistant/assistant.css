@@ -47,11 +47,11 @@
 .assistant-workflow ol { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; padding: 0; margin: 15px 0; }
 .assistant-workflow li { border-radius: 5px; background: var(--raised); padding: 6px 9px; font-size: 11px; }
 .assistant-workflow li + li::before { content: "→"; color: var(--faint); margin-right: 8px; }
-.assistant-workflow summary { font-size: 11px; color: var(--accent); cursor: pointer; }
+.assistant-workflow summary { font-size: 11px; color: var(--ink); cursor: pointer; }
 .assistant-workflow-rail { overflow: auto; max-width: 100%; padding: 16px 0; }
 .assistant-workflow footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: center; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
 .assistant-workflow footer span { font-size: 11px; color: var(--muted); }
-.assistant-shell .assistant-primary { border: 0; background: var(--accent); color: white; border-radius: 7px; padding: 10px 17px; font-size: 12px; white-space: nowrap; }
+.assistant-shell .assistant-primary { border: 0; background: var(--action); color: var(--on-action); border-radius: 7px; padding: 10px 17px; font-size: 12px; white-space: nowrap; }
 .assistant-connection { padding: 35px 30px; }
 .assistant-connection h2 { font-size: 23px; font-weight: 650; letter-spacing: -.6px; margin: 8px 0; }
 .assistant-connection p { font-size: 12px; color: var(--muted); line-height: 1.8; margin-bottom: 25px; }

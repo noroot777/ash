@@ -3,7 +3,7 @@
   align-items: safe center;
   padding: clamp(18px, 4vw, 48px);
   background:
-    radial-gradient(circle at 12% 16%, color-mix(in oklab, var(--accent) 14%, transparent), transparent 29%),
+    radial-gradient(circle at 12% 16%, color-mix(in oklab, var(--ink) 14%, transparent), transparent 29%),
     radial-gradient(circle at 88% 82%, color-mix(in oklab, var(--green) 10%, transparent), transparent 28%),
     var(--chrome);
 }
@@ -28,9 +28,9 @@
   height: 180px;
   top: -112px;
   right: -92px;
-  border: 1px solid color-mix(in oklab, var(--accent) 18%, transparent);
+  border: 1px solid color-mix(in oklab, var(--ink) 18%, transparent);
   border-radius: 50%;
-  box-shadow: 0 0 0 26px color-mix(in oklab, var(--accent) 4%, transparent), 0 0 0 52px color-mix(in oklab, var(--accent) 3%, transparent);
+  box-shadow: 0 0 0 26px color-mix(in oklab, var(--ink) 4%, transparent), 0 0 0 52px color-mix(in oklab, var(--ink) 3%, transparent);
   content: "";
   pointer-events: none;
 }
@@ -149,7 +149,7 @@
   place-items: center;
   padding: clamp(34px, 6vw, 76px) clamp(26px, 5vw, 66px);
   background:
-    radial-gradient(circle at 84% 9%, color-mix(in oklab, var(--accent) 7%, transparent), transparent 25%),
+    radial-gradient(circle at 84% 9%, color-mix(in oklab, var(--ink) 7%, transparent), transparent 25%),
     var(--panel);
 }
 
@@ -168,7 +168,7 @@
 .auth-shell .auth-key-reveal > h2::before {
   display: block;
   margin-bottom: 12px;
-  color: var(--accent);
+  color: var(--muted);
   font: 750 9px/1 var(--font-mono);
   letter-spacing: .15em;
   content: "ASH ACCESS";
@@ -203,7 +203,7 @@
   min-height: 42px;
   border-radius: 11px;
   font-weight: 680;
-  box-shadow: 0 10px 24px color-mix(in oklab, var(--accent) 20%, transparent);
+  box-shadow: 0 10px 24px color-mix(in oklab, #000 20%, transparent);
 }
 
 .auth-choice {
@@ -225,16 +225,16 @@
   height: 40px;
   left: 20px;
   place-items: center;
-  border: 1px solid color-mix(in oklab, var(--accent) 24%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--muted) 24%, var(--line));
   border-radius: 12px;
   background: var(--panel);
-  color: var(--accent);
+  color: var(--muted);
   font: 720 10px/1 var(--font-mono);
   content: "01";
 }
 
 .auth-choice + .auth-choice::before { color: var(--green); content: "02"; }
-.auth-choice:hover:not(:disabled) { border-color: color-mix(in oklab, var(--accent) 55%, var(--line)); background: var(--panel); box-shadow: 0 14px 34px rgb(35 37 48 / 9%); transform: translateY(-2px); }
+.auth-choice:hover:not(:disabled) { border-color: color-mix(in oklab, var(--ink) 55%, var(--line)); background: var(--panel); box-shadow: 0 14px 34px rgb(35 37 48 / 9%); transform: translateY(-2px); }
 .auth-choice b { font-size: 15px; }
 .auth-choice span { font-size: 12px; line-height: 1.65; }
 
@@ -261,7 +261,7 @@
 
 .auth-shell .auth-check { padding: 11px 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--raised); }
 .auth-shell .auth-link { text-decoration: none; }
-.auth-shell .auth-link:hover { color: var(--accent); }
+.auth-shell .auth-link:hover { color: var(--ink); }
 
 @media (max-width: 840px) {
   .auth-stage { min-height: 0; grid-template-columns: 1fr; }

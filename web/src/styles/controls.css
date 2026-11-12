@@ -37,22 +37,28 @@
 }
 
 .ui-button--primary {
-  background: var(--accent);
-  color: white;
-  box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent-active) 28%, transparent), 0 1px 2px rgb(40 42 48 / 12%);
+  background: var(--action);
+  color: var(--on-action);
+  box-shadow: 0 0 0 1px color-mix(in oklab, #000 28%, transparent), 0 1px 2px rgb(40 42 48 / 12%);
 }
 
 .ui-button--primary:hover,
 .ui-button--primary.is-hover {
-  background: var(--accent-hover);
-  color: white;
-  box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent-active) 38%, transparent), 0 2px 4px rgb(40 42 48 / 14%);
+  background: var(--action-hover);
+  color: var(--on-action);
+  box-shadow: 0 0 0 1px color-mix(in oklab, #000 38%, transparent), 0 2px 4px rgb(40 42 48 / 14%);
 }
 
 .ui-button--primary:active,
 .ui-button--primary.is-active {
-  background: var(--accent-active);
-  box-shadow: inset 0 1px 2px rgb(20 24 80 / 24%);
+  background: var(--action-active);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 24%);
+}
+
+/* 点不了的时候实心键还是黑的，只有上面的字和图标淡下去（a11y-6）。 */
+:is(.ui-button--primary, .task-send-button, .chat-send, .duet-gate-submit, .review-dispatch-control form footer > button, button.is-primary):is(:disabled, .is-disabled) {
+  opacity: 1;
+  color: var(--on-action-dim);
 }
 
 .ui-button--ghost,
@@ -248,15 +254,15 @@ header:hover .task-pin,
 }
 
 .ui-checkbox.is-checked {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--action);
+  background: var(--action);
 }
 
 .ui-checkbox.is-checked::after {
   content: "✓";
   position: absolute;
   inset: -2px 0 0;
-  color: white;
+  color: var(--on-action);
   font-size: 11px;
   text-align: center;
 }
@@ -283,17 +289,18 @@ header:hover .task-pin,
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  /* 拨钮两种模式都是白的：深色下关着的轨道是灰、开着是主色，白钮都看得清。 */
+  /* 关着时拨钮是白的（轨道是灰）；开着时轨道是实心键的黑白，拨钮跟着换成键上的字色。 */
   background: white;
   box-shadow: 0 1px 2px rgb(0 0 0 / 18%);
   transition: transform 150ms ease-out;
 }
 
 .ui-toggle.is-on {
-  background: var(--accent);
+  background: var(--action);
 }
 
 .ui-toggle.is-on::after {
+  background: var(--on-action);
   transform: translateX(10px);
 }
 
@@ -377,7 +384,7 @@ header:hover .task-pin,
   background: var(--canvas);
   padding: 0 9px;
 }
-.path-field > .path-scoped:focus-within { border-color: var(--accent); }
+.path-field > .path-scoped:focus-within { border-color: var(--focus-soft); }
 .path-field > .path-scoped > code {
   min-width: 0;
   flex: 0 1 auto;

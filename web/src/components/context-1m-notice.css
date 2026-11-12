@@ -21,12 +21,12 @@
 .context-1m-notice-action > button {
   border: 1px solid transparent;
   border-radius: 5px;
-  background: var(--accent);
+  background: var(--action);
   padding: 2px 9px;
-  color: white;
+  color: var(--on-action);
   font-size: 10px;
   white-space: nowrap;
 }
-.context-1m-notice-action > button:hover:not(:disabled) { background: var(--accent-hover); }
+.context-1m-notice-action > button:hover:not(:disabled) { background: var(--action-hover); }
 .context-1m-notice-action > button:disabled { opacity: 0.6; }
 .context-1m-notice-error { color: var(--red); }

@@ -81,8 +81,8 @@
   gap: 4px;
   padding: 1px 6px;
   border-radius: 5px;
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--sel-bg);
+  color: var(--ink);
   font-family: var(--font-mono, ui-monospace, Consolas, monospace);
   font-size: var(--t-xs);
 }

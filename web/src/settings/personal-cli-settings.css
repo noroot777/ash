@@ -84,7 +84,7 @@
   padding: 0;
   border: 0;
   background: none;
-  color: var(--accent);
+  color: var(--ink);
   font-family: var(--font-mono);
   font-size: var(--t-sm);
   cursor: pointer;

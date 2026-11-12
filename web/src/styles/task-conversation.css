@@ -66,13 +66,13 @@
   max-width: min(640px, 88%);
   border: 1px solid color-mix(in oklab, var(--line) 55%, transparent);
   border-radius: 16px 6px 16px 16px;
-  background: color-mix(in oklab, var(--accent) 3%, var(--raised));
+  background: color-mix(in oklab, var(--ink) 3%, var(--raised));
   padding: 12px 16px 14px;
   box-shadow: 0 1px 2px color-mix(in oklab, var(--ink) 3%, transparent);
 }
 .task-user-bubble > header { gap: 8px; }
 .task-message--user:not(.is-system-authored) header { color: color-mix(in oklab, var(--muted) 72%, var(--faint)); }
-.task-message--user:not(.is-system-authored) header b { color: color-mix(in oklab, var(--accent) 70%, var(--muted)); font-weight: 600; }
+.task-message--user:not(.is-system-authored) header b { color: color-mix(in oklab, var(--ink) 70%, var(--muted)); font-weight: 600; }
 .task-user-bubble > header time { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .task-user-bubble > header button { flex: none; color: var(--muted); }
 .task-user-bubble > p {
@@ -109,7 +109,7 @@
 .task-markdown li::marker { color: var(--faint); font-variant-numeric: tabular-nums; }
 .task-markdown ul.contains-task-list { padding-left: 0; list-style: none; }
 .task-markdown .task-list-item { list-style: none; }
-.task-markdown .task-list-item > input { margin: 0 7px 0 0; vertical-align: -1px; accent-color: var(--accent); }
+.task-markdown .task-list-item > input { margin: 0 7px 0 0; vertical-align: -1px; accent-color: var(--ink); }
 .task-markdown h1,
 .task-markdown h2,
 .task-markdown h3,
@@ -123,7 +123,7 @@
 .task-markdown h5 { font-size: 11.5px; font-weight: 680; }
 .task-markdown h6 { color: var(--muted); font-size: 11px; font-weight: 680; }
 .task-markdown strong { color: var(--ink); font-weight: 650; }
-.task-markdown a { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.task-markdown a { color: var(--ink); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 /* 引用块跟系统旁注（.conversation-note）是同一档「不是正文在说话」的东西：agent 输出里
    的引用多半就是 ash 自己插的注记（「正在压缩上下文…」之类）。字号行高跟旁注对齐，
    竖线的高度才跟着一样——竖线高度就是行高加这两像素 padding 撑出来的。 */
@@ -143,7 +143,7 @@
 .task-markdown td > :last-child { margin-bottom: 0; }
 .task-markdown code { border-radius: 4px; background: var(--raised); padding: 1px 4px; color: var(--ink); font-size: 11.5px; overflow-wrap: anywhere; }
 /* 正文里提到的工作区文件：点一下摊在中间栏（TaskFileLink）。跟链接同一个颜色，前面带个文件图标。 */
-.task-markdown code.task-file-link { color: var(--accent); cursor: pointer; }
+.task-markdown code.task-file-link { color: var(--ink); cursor: pointer; }
 .task-markdown code.task-file-link:hover { text-decoration: underline; text-underline-offset: 2px; }
 .task-file-link__glyph { display: inline-block; margin-right: 3px; vertical-align: -1px; }
 .task-markdown a.task-file-link-anchor { text-decoration: none; }
@@ -281,8 +281,8 @@
 /* 「改的是哪个执行器 / 什么时候生效」跟保存按钮同一行：这是按下去之前最该读到的一句。 */
 .context-compact-actions > span { flex: 1; min-width: 0; color: var(--faint); font-size: 9.5px; line-height: 1.4; }
 .context-compact-actions > span.is-error { color: var(--red); }
-.context-compact-save { flex: none; border: 1px solid transparent; border-radius: 5px; background: var(--accent); padding: 3px 9px; color: white; font-size: 10px; }
-.context-compact-save:hover:not(:disabled) { background: var(--accent-hover); }
+.context-compact-save { flex: none; border: 1px solid transparent; border-radius: 5px; background: var(--action); padding: 3px 9px; color: var(--on-action); font-size: 10px; }
+.context-compact-save:hover:not(:disabled) { background: var(--action-hover); }
 .context-compact-save:disabled { border-color: var(--line); background: transparent; color: var(--faint); }
 
 .task-event-line { display: flex; max-width: 790px; align-items: center; gap: 9px; margin: 17px 0 17px 30px; color: var(--faint); font-size: 10.5px; }
@@ -356,7 +356,7 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--accent);
+  color: var(--ink);
   font: inherit;
   text-decoration: underline;
   cursor: pointer;

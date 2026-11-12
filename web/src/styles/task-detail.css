@@ -154,7 +154,7 @@ span.task-detail-title { display: block; width: auto; }
 .task-queue-list > p { padding: 16px; color: var(--faint); }
 .task-queue-row { display: flex; min-height: 62px; align-items: center; gap: 8px; border-bottom: 0.5px solid var(--line); padding: 9px 12px; color: var(--faint); }
 .task-queue-row.is-current { background: var(--raised); }
-.task-queue-row.is-over { box-shadow: inset 0 2px var(--accent); }
+.task-queue-row.is-over { box-shadow: inset 0 2px var(--ink); }
 .task-queue-position { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 6px; background: var(--overlay); color: var(--muted); font-family: var(--font-mono); font-size: 9px; }
 .task-queue-row > div { min-width: 0; flex: 1; }
 .task-queue-row b,
@@ -173,14 +173,14 @@ span.task-detail-title { display: block; width: auto; }
 /* 打开时焦点落在容器上（见 ConfirmDialog.tsx），那是为了接管键盘而不是指人看这里，别画框。 */
 .task-confirm-dialog:focus { outline: none; }
 .task-confirm-dialog > header { display: flex; align-items: center; gap: 9px; }
-.task-confirm-dialog > header > span { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 8px; background: var(--accent-soft); color: var(--accent); }
+.task-confirm-dialog > header > span { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 8px; background: var(--raised); color: var(--muted); }
 .task-confirm-dialog > header > span.is-danger { background: color-mix(in oklab, var(--red) 10%, transparent); color: var(--red); }
 .task-confirm-dialog h2 { margin: 0; font-size: 14px; }
 .task-confirm-dialog > p { margin: 12px 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .task-confirm-dialog > footer { display: flex; justify-content: flex-end; gap: 7px; margin-top: 16px; }
 .task-confirm-dialog > footer button { height: 30px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 12px; color: var(--muted); font-size: 11.5px; }
 .task-confirm-dialog > footer button:disabled { cursor: not-allowed; opacity: 0.55; }
-.task-confirm-dialog > footer button.is-primary { border-color: var(--accent); background: var(--accent); color: white; }
+.task-confirm-dialog > footer button.is-primary { border-color: var(--action); background: var(--action); color: var(--on-action); }
 .task-confirm-dialog > footer button.is-danger { border-color: var(--red); background: var(--red); color: white; }
 .task-delete-probe,
 .task-delete-error { color: var(--faint); font-size: 10.5px; }

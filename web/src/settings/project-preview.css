@@ -3,7 +3,7 @@
 .preview-mode-choice label:has(input:checked) { background: var(--panel); color: var(--ink); box-shadow: var(--surface-shadow); }
 .preview-mode-choice label:has(input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .preview-mode-choice label:has(input:disabled) { opacity: .6; cursor: default; }
-.project-preview input:is([type="radio"], [type="checkbox"]) { width: 14px; height: 14px; margin: 0; flex: none; accent-color: var(--accent); }
+.project-preview input:is([type="radio"], [type="checkbox"]) { width: 14px; height: 14px; margin: 0; flex: none; accent-color: var(--ink); }
 .project-preview .preview-script-field { align-items: flex-start; border-bottom: 0; padding-bottom: 8px; }
 .project-preview .preview-script-field > span { padding-top: 10px; }
 .project-preview .preview-help { display: grid; gap: 5px; color: var(--muted); font-size: var(--t-xs); line-height: 1.7; overflow-wrap: anywhere; }
@@ -22,7 +22,7 @@
 .preview-detect-actions > span { margin-left:auto; border-radius:5px; background:var(--raised); padding:3px 7px; color:var(--muted); font-size: var(--t-xs); font-variant-numeric:tabular-nums; }
 .preview-service-list { display:grid; min-width:0; gap:8px; container-type:inline-size; }
 .preview-service-card { min-width:0; border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:8px 10px 10px; }
-.preview-service-card.is-selected { border-color:color-mix(in oklab,var(--accent) 45%,var(--line)); box-shadow:inset 3px 0 var(--accent); }
+.preview-service-card.is-selected { border-color:color-mix(in oklab,var(--ink) 45%,var(--line)); box-shadow:inset 3px 0 var(--ink); }
 .preview-service-heading { display:grid; grid-template-columns:26px minmax(0,1fr) auto 28px; align-items:center; gap:6px; }
 .preview-service-toggle { display:grid; width:26px; height:28px; place-items:center; border-radius:5px; cursor:pointer; }
 .preview-service-toggle:hover:not(:has(input:disabled)) { background:var(--raised); }
@@ -33,7 +33,7 @@
 .preview-service-options { display:flex; align-items:center; gap:12px; padding-inline:8px; font-size: var(--t-xs); }
 .preview-service-options > label, .preview-service-options > .preview-service-kind { display:inline-flex; flex-shrink:0; align-items:center; gap:6px; color:var(--muted); white-space:nowrap; }
 .preview-service-options .preview-service-primary { min-height:26px; border-radius:5px; padding:0 6px; cursor:pointer; }
-.preview-service-primary:has(input:checked) { background:color-mix(in oklab,var(--accent) 8%,var(--panel)); color:var(--accent); }
+.preview-service-primary:has(input:checked) { background:color-mix(in oklab,var(--ink) 8%,var(--panel)); color:var(--ink); }
 .preview-service-primary:hover:not(:has(input:disabled)) { background:var(--raised); }
 .preview-service-primary:has(input:disabled) { color: var(--faint); cursor:default; }
 .project-preview .preview-service-primary input { width:12px; height:12px; }

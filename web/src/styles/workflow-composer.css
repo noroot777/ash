@@ -94,9 +94,9 @@
 .wf-mini-add:hover,
 .wf-mini-add[aria-expanded="true"] {
   border-style: solid;
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
+  border-color: var(--ink);
+  background: var(--sel-bg);
+  color: var(--ink);
 }
 
 /* ── 新建任务面板里的「干完之后」 ─────────────────────────────── */
@@ -111,7 +111,7 @@
   font-size: 12px;
   cursor: pointer;
 }
-.composer-wf-grow:hover { color: var(--accent); background: var(--accent-soft); }
+.composer-wf-grow:hover { color: var(--ink); background: var(--sel-bg); }
 
 .composer-wf-pick { display: flex; flex-direction: column; gap: 5px; }
 /* 「起手式」压左、来源标签压右：一行就说清「这条线叫什么」和「它是从哪继承来的」。 */
@@ -128,7 +128,7 @@
   font-size: 11px;
   color: var(--faint);
 }
-.composer-wf-label em[data-own="yes"] { color: var(--accent); }
+.composer-wf-label em[data-own="yes"] { color: var(--ink); }
 
 /* 下拉框自己就是一张名片：粗体名字 + 一串站台颜色点 + 这条线怎么走。 */
 .composer-wf-sel {
@@ -148,7 +148,7 @@
   cursor: pointer;
 }
 .composer-wf-sel:hover,
-.composer-wf-sel[aria-expanded="true"] { box-shadow: inset 0 0 0 1px var(--accent); }
+.composer-wf-sel[aria-expanded="true"] { box-shadow: inset 0 0 0 1px var(--ink); }
 .composer-wf-sel > b { font-weight: 560; color: var(--ink); white-space: nowrap; }
 .composer-wf-sel > small {
   flex: 1;
@@ -182,11 +182,11 @@
   gap: 10px;
   padding: 7px 10px;
   border-radius: 10px;
-  background: var(--accent-soft);
+  background: var(--sel-bg);
   font-size: 12px;
   color: var(--muted);
 }
-.composer-wf-fork b { margin-right: 6px; color: var(--accent); font-weight: 560; }
+.composer-wf-fork b { margin-right: 6px; color: var(--ink); font-weight: 560; }
 .composer-wf-forkops { display: inline-flex; gap: 6px; margin-left: auto; }
 .composer-wf-forkops button {
   padding: 3px 9px;
@@ -197,7 +197,7 @@
   font-size: 12px;
   cursor: pointer;
 }
-.composer-wf-forkops button:hover { color: var(--accent); }
+.composer-wf-forkops button:hover { color: var(--ink); }
 
 .composer-wf-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .composer-wf-field input {

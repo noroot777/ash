@@ -14,8 +14,8 @@
 /* 审查链自己排的答复：只标出来，不给撤回按钮（那颗按钮的承诺在这里兑现不了）。 */
 .scheduled-message-row > .scheduled-message-managed { flex: 0 0 auto; color: var(--faint); font-size: 9.5px; white-space: nowrap; }
 .scheduled-message-row > .scheduled-message-guide { display: inline-flex; width: auto; height: 24px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--overlay); padding: 0 8px; color: var(--muted); font-size: 9.5px; font-weight: 650; white-space: nowrap; }
-.scheduled-message-guide > svg { color: var(--accent); }
-.scheduled-message-guide:hover:not(:disabled) { border-color: color-mix(in oklab, var(--accent) 38%, var(--line2)); background: var(--sel-bg); color: var(--ink); }
+.scheduled-message-guide > svg { color: var(--muted); }
+.scheduled-message-guide:hover:not(:disabled) { border-color: color-mix(in oklab, var(--ink) 38%, var(--line2)); background: var(--sel-bg); color: var(--ink); }
 .scheduled-message-guide:disabled { opacity: .48; }
 @container (max-width: 520px) {
   .scheduled-message-row > .scheduled-message-guide { width: 24px; justify-content: center; padding: 0; }

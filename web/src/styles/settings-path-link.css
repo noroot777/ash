@@ -6,7 +6,7 @@
   border: 0;
   background: none;
   padding: 0;
-  color: var(--accent);
+  color: var(--ink);
   font: inherit;
   text-align: left;
   text-decoration: underline;
@@ -25,6 +25,6 @@
 }
 
 @keyframes settings-anchor-flash {
-  0%, 55% { box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 55%, transparent); }
+  0%, 55% { box-shadow: 0 0 0 2px color-mix(in oklab, var(--ink) 55%, transparent); }
   100% { box-shadow: 0 0 0 2px transparent; }
 }

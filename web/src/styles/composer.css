@@ -50,7 +50,7 @@
 }
 
 .composer-slash-menu b {
-  color: var(--accent);
+  color: var(--ink);
   font: 600 11px var(--font-mono);
 }
 
@@ -80,7 +80,7 @@
 }
 
 .composer-config-section.is-execution {
-  border-color: color-mix(in oklab, var(--accent) 18%, var(--line));
+  border-color: color-mix(in oklab, var(--ink) 18%, var(--line));
 }
 
 .composer-option-grid {
@@ -137,7 +137,7 @@
 
 .composer-field .ui-dropdown-trigger:hover:not(:disabled),
 .composer-field .ui-dropdown-trigger[aria-expanded="true"] {
-  border-color: var(--accent);
+  border-color: var(--ink);
   background: var(--panel);
   box-shadow: none;
 }
@@ -162,7 +162,7 @@
 }
 
 .composer-field .run-target-picker:hover {
-  border-color: var(--accent);
+  border-color: var(--ink);
 }
 
 .composer-field-run.is-error {
@@ -179,7 +179,7 @@
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.composer-field-unset:hover:not(:disabled) { color: var(--accent); }
+.composer-field-unset:hover:not(:disabled) { color: var(--ink); }
 .composer-field-unset:disabled { color: var(--faint); cursor: default; }
 
 /* 选择器只写得下 Profile 名 + Profile 自带模型;覆盖生效时实际跑的是别的模型,
@@ -196,9 +196,9 @@
 
 .composer-field-run > em {
   border-radius: 4px;
-  background: color-mix(in oklab, var(--accent) 14%, transparent);
+  background: color-mix(in oklab, var(--ink) 14%, transparent);
   padding: 1px 4px;
-  color: var(--accent);
+  color: var(--ink);
   font-size: 9px;
   font-style: normal;
   font-weight: 600;

@@ -17,7 +17,7 @@
 /* 拖动条贴在回复框自己的上边(框内侧):框有 overflow:hidden 来裁圆角和水印,
    所以热区不能像侧栏那样探出边界,只能贴着内沿。z-index 要压过 textarea 那一层。 */
 .task-reply-resize { position: absolute; z-index: 5; top: 0; right: 0; left: 0; height: 8px; cursor: row-resize; }
-.task-reply-resize::after { position: absolute; top: 0; right: 0; left: 0; height: 1px; background: var(--accent); content: ""; opacity: 0; transition: opacity 120ms ease; }
+.task-reply-resize::after { position: absolute; top: 0; right: 0; left: 0; height: 1px; background: var(--ink); content: ""; opacity: 0; transition: opacity 120ms ease; }
 .task-reply-resize:hover::after,
 .task-reply-resize:focus-visible::after,
 .task-reply-resizing .task-reply-resize::after { opacity: .65; }
@@ -39,8 +39,8 @@
 .task-reply-icon,
 .task-send-button { display: grid; width: 29px; height: 29px; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--muted); }
 .task-reply-icon:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
-.task-send-button { background: var(--accent); color: white; }
-.task-send-button:hover:not(:disabled) { background: var(--accent-hover); }
+.task-send-button { background: var(--action); color: var(--on-action); }
+.task-send-button:hover:not(:disabled) { background: var(--action-hover); }
 .task-upload-chip { position: relative; display: flex; height: 48px; max-width: 190px; align-items: center; gap: 7px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 4px 24px 4px 6px; }
 .task-upload-chip > img { width: 38px; height: 38px; border-radius: 5px; object-fit: cover; }
 .task-upload-chip > span { min-width: 0; }
@@ -91,7 +91,7 @@
 }
 .task-reply-command-menu > button:hover,
 .task-reply-command-menu > button[aria-selected="true"] { background: var(--sel-bg); }
-.task-reply-command-menu b { flex: 0 0 auto; color: var(--accent); font-family: var(--font-mono); font-size: 11.5px; }
+.task-reply-command-menu b { flex: 0 0 auto; color: var(--ink); font-family: var(--font-mono); font-size: 11.5px; }
 .task-reply-command-menu span { flex: 0 0 auto; font-size: 11.5px; font-weight: 600; }
 .task-reply-command-menu em { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 /* 技能一多这张菜单就得能滚（本机 57 条）；键盘选中项的 scrollIntoView 在 SlashMenu 里。 */
@@ -108,7 +108,7 @@
 
 .task-derivation-card {
   overflow: hidden;
-  border: 1px solid color-mix(in oklab, var(--accent) 28%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--ink) 28%, var(--line));
   border-radius: 13px;
   background: var(--panel);
 }
@@ -119,7 +119,7 @@
   gap: 9px;
   border-bottom: 1px solid var(--line);
   padding: 11px 12px;
-  background: color-mix(in oklab, var(--accent) 4%, var(--panel));
+  background: color-mix(in oklab, var(--ink) 4%, var(--panel));
 }
 .task-derivation-card.is-team .task-derivation-header { background: color-mix(in oklab, var(--cyan) 4%, var(--panel)); }
 .task-derivation-header > span {
@@ -129,8 +129,8 @@
   flex: 0 0 28px;
   place-items: center;
   border-radius: 8px;
-  background: color-mix(in oklab, var(--accent) 12%, var(--panel));
-  color: var(--accent);
+  background: color-mix(in oklab, var(--ink) 12%, var(--panel));
+  color: var(--ink);
 }
 .task-derivation-card.is-team .task-derivation-header > span { background: color-mix(in oklab, var(--cyan) 12%, var(--panel)); color: var(--cyan); }
 .task-derivation-header > div { display: grid; min-width: 0; gap: 1px; }
@@ -176,7 +176,7 @@
 .task-derivation-slash-menu > button { display: flex; width: 100%; min-height: 35px; align-items: baseline; gap: 9px; border: 0; border-radius: 7px; background: transparent; padding: 7px 8px; text-align: left; }
 .task-derivation-slash-menu > button:hover,
 .task-derivation-slash-menu > button[aria-selected="true"] { background: var(--sel-bg); }
-.task-derivation-slash-menu b { flex: 0 0 auto; color: var(--accent); font-family: var(--font-mono); font-size: 11.5px; }
+.task-derivation-slash-menu b { flex: 0 0 auto; color: var(--ink); font-family: var(--font-mono); font-size: 11.5px; }
 .task-derivation-slash-menu em { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 
 /* `@` 引用文件的菜单同样往下挂（理由同上），盒子样式来自 mention-menu.css。
@@ -206,7 +206,7 @@
 }
 .task-derivation-warning { display: flex; width: 100%; align-items: center; gap: 5px; margin: 0; color: var(--amber); font-size: 10px; }
 .task-derivation-worktree { display: inline-flex; min-width: 0; align-items: center; gap: 5px; overflow: hidden; color: var(--faint); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
-.task-derivation-worktree svg { flex: 0 0 auto; color: var(--accent); }
+.task-derivation-worktree svg { flex: 0 0 auto; color: var(--muted); }
 .task-derivation-actions { display: flex; margin-left: auto; gap: 5px; }
 .task-derivation-actions kbd { color: rgb(255 255 255 / 70%); font: 9px var(--font-mono); }
 

@@ -45,7 +45,7 @@
 /* 折叠箭头那一格**不管有没有箭头都占着**，否则同一层的文件和目录会左右错开半格，
    看着像两棵树。缩进本身是按钮的 padding-left（见 MentionMenu.tsx）。 */
 .mention-menu > button > .mention-menu-caret { flex: 0 0 auto; width: 11px; color: var(--faint); }
-.mention-menu > button[aria-expanded] > svg:not(.mention-menu-caret) { color: var(--accent); }
+.mention-menu > button[aria-expanded] > svg:not(.mention-menu-caret) { color: var(--ink); }
 .mention-menu b {
   min-width: 0;
   flex: 0 1 auto;
@@ -68,7 +68,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.mention-menu .mention-menu-hit { background: transparent; color: var(--accent); font-weight: 700; }
+.mention-menu .mention-menu-hit { background: transparent; color: var(--ink); font-weight: 700; }
 /* 「已忽略」这类小标：靠右挤在行尾，绝不跟名字抢宽度。 */
 .mention-menu .mention-menu-tag {
   flex: 0 0 auto;

@@ -41,7 +41,7 @@
 .monitor-wake-meta button.is-copy-failed { color: var(--red); }
 .monitor-wake-meta button:focus-visible, .monitor-wake-head:focus-visible, .monitor-wake-raw summary:focus-visible { outline-offset: -2px; }
 .monitor-wake-fold-action { display: inline-flex; flex: none; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; transition: color 140ms ease; }
-.monitor-wake-head:hover .monitor-wake-fold-action { color: var(--accent); }
+.monitor-wake-head:hover .monitor-wake-fold-action { color: var(--ink); }
 .monitor-wake-fold-action svg { flex: none; transition: transform 140ms ease; }
 .monitor-wake-fold[open] .monitor-wake-fold-action svg { transform: rotate(180deg); }
 .monitor-wake-fold-close { display: none; }
@@ -72,9 +72,9 @@
 .monitor-wake-delivery { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; color: var(--muted); font-size: 9.5px; }
 .monitor-wake-delivery svg { flex: none; color: var(--accent); }
 .monitor-wake-expand { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; transition: color 140ms ease; }
-.monitor-wake-raw summary:hover .monitor-wake-expand { color: var(--accent); }
+.monitor-wake-raw summary:hover .monitor-wake-expand { color: var(--ink); }
 .monitor-wake-expand svg { flex: none; transition: transform 140ms ease; }
-.monitor-wake-raw[open] .monitor-wake-expand { color: var(--accent); }
+.monitor-wake-raw[open] .monitor-wake-expand { color: var(--ink); }
 .monitor-wake-raw[open] .monitor-wake-expand svg { transform: rotate(90deg); }
 .monitor-wake-raw > pre { max-height: 360px; overflow-y: auto; margin: 0 16px 12px; border-radius: 6px; padding: 10px 12px; color: var(--muted); background: var(--canvas); }
 .monitor-wake-receipt { margin-left: 5px; border-left: 1px solid var(--line); padding-left: 10px; color: var(--faint); font-size: 9px; }

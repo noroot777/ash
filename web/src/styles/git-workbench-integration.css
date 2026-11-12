@@ -62,7 +62,7 @@
 .gwb-design .gwb-history-list { overflow: hidden; flex: 0 0 var(--gwb-history-width); }
 .gwb-design .gwb-history-resize { position: absolute; z-index: 2; top: 0; bottom: 0; left: var(--gwb-history-width); width: 8px; transform: translateX(-50%); cursor: col-resize; touch-action: none; }
 .gwb-design .gwb-history-resize::after { content: ""; position: absolute; inset: 0 3px; background: transparent; }
-.gwb-design .gwb-history-resize:hover::after, .gwb-design .gwb-history-resize:focus-visible::after, .gwb-design .is-resizing .gwb-history-resize::after { background: var(--accent); }
+.gwb-design .gwb-history-resize:hover::after, .gwb-design .gwb-history-resize:focus-visible::after, .gwb-design .is-resizing .gwb-history-resize::after { background: var(--ink); }
 .gwb-design .gwb-history-resize:focus-visible { outline: none; }
 .gwb-design .gwb-history-split.is-resizing, .gwb-design .gwb-history-split.is-resizing * { cursor: col-resize; user-select: none; }
 .gwb-design .history-rows { min-height: 0; }

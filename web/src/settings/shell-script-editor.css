@@ -7,7 +7,7 @@
 .shell-editor__toolbar > span { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); }
 .shell-editor__toolbar > span > span { font-family: var(--font-sans); color: var(--muted); }
 .shell-editor__toolbar label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; }
-.shell-editor__toolbar input[type="checkbox"] { flex: none; width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
+.shell-editor__toolbar input[type="checkbox"] { flex: none; width: 14px; height: 14px; margin: 0; accent-color: var(--ink); }
 .shell-editor__toolbar label:has(input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 2px; }
 .shell-editor__surface { min-width: 0; }
 .shell-editor .cm-editor { height: var(--shell-editor-height); background: var(--canvas); font-size: var(--t-sm); }
@@ -17,7 +17,7 @@
 .shell-editor .cm-line { padding: 0 12px; }
 .shell-editor .cm-gutters { border-right: 1px solid var(--line); background: var(--raised); color: var(--muted); }
 .shell-editor .cm-lineNumbers .cm-gutterElement { min-width: 34px; padding: 0 8px; }
-.shell-editor .cm-activeLine, .shell-editor .cm-activeLineGutter { background: color-mix(in oklab, var(--accent) 6%, transparent); }
+.shell-editor .cm-activeLine, .shell-editor .cm-activeLineGutter { background: color-mix(in oklab, var(--ink) 6%, transparent); }
 .shell-editor .cm-activeLineGutter { color: var(--muted); }
 .shell-editor .cm-cursor { border-left-color: var(--ink); }
 .shell-editor .cm-selectionBackground, .shell-editor .cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground { background: var(--accent-soft); }

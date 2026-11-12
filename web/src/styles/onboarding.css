@@ -72,16 +72,16 @@
 }
 
 .onboarding-rail-step.is-on {
-  border-color: color-mix(in oklab, var(--accent) 40%, var(--line));
-  background: color-mix(in oklab, var(--accent) 8%, var(--panel));
+  border-color: color-mix(in oklab, var(--ink) 40%, var(--line));
+  background: color-mix(in oklab, var(--ink) 8%, var(--panel));
   color: var(--ink);
   font-weight: var(--w-medium);
 }
 
 .onboarding-rail-step.is-done i {
-  border-color: color-mix(in oklab, var(--accent) 45%, var(--line));
-  background: color-mix(in oklab, var(--accent) 14%, var(--panel));
-  color: var(--accent);
+  border-color: color-mix(in oklab, var(--ink) 45%, var(--line));
+  background: color-mix(in oklab, var(--ink) 14%, var(--panel));
+  color: var(--ink);
 }
 
 .onboarding-head {
@@ -191,7 +191,7 @@
   gap: 4px;
   flex: none;
   font-size: var(--t-xs);
-  color: var(--accent);
+  color: var(--muted);
 }
 
 .onboarding-provider-pick {
@@ -244,8 +244,8 @@
 }
 
 .onboarding-pick.is-on {
-  background: color-mix(in oklab, var(--accent) 9%, var(--panel));
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: color-mix(in oklab, var(--ink) 9%, var(--panel));
+  box-shadow: inset 2px 0 0 var(--ink);
 }
 
 .onboarding-add {

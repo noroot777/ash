@@ -25,7 +25,7 @@ export function GitProjectStep({
           onClick={() => onChoose(project.id)}
           className="ui-selectable flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left outline-none"
         >
-          <GitBranch size={17} className="shrink-0 text-accent" />
+          <GitBranch size={17} className="shrink-0 text-muted" />
           <span className="min-w-0">
             <span className="block truncate text-sm text-ink">{project.name}</span>
             <span className="mt-0.5 block truncate font-mono text-[11px] text-faint">{project.repoPath}</span>
@@ -73,10 +73,10 @@ export function GitOverviewPanel({
           {overview.branches.map((branch) => {
             const current = branch === overview.current;
             return (
-              <button type="button" onClick={() => { if (project) openGitWorkbench({ projectId: project.id, view: "branches", ref: branch }); }} key={branch} className={`flex min-w-0 items-center gap-2 rounded-md px-2.5 py-2 ${current ? "bg-accent/10" : ""}`}>
-                {current ? <Check size={13} weight="bold" className="shrink-0 text-accent" /> : <GitBranch size={13} className="shrink-0 text-faint" />}
-                <span className={`min-w-0 truncate font-mono text-xs ${current ? "font-medium text-accent" : "text-muted"}`}>{branch}</span>
-                {current && <span className="ml-auto shrink-0 text-[9px] text-accent/75">当前</span>}
+              <button type="button" onClick={() => { if (project) openGitWorkbench({ projectId: project.id, view: "branches", ref: branch }); }} key={branch} className={`flex min-w-0 items-center gap-2 rounded-md px-2.5 py-2 ${current ? "bg-ink/5" : ""}`}>
+                {current ? <Check size={13} weight="bold" className="shrink-0 text-ink" /> : <GitBranch size={13} className="shrink-0 text-faint" />}
+                <span className={`min-w-0 truncate font-mono text-xs ${current ? "font-medium text-ink" : "text-muted"}`}>{branch}</span>
+                {current && <span className="ml-auto shrink-0 text-[9px] text-muted">当前</span>}
               </button>
             );
           })}
@@ -89,7 +89,7 @@ export function GitOverviewPanel({
           {overview.worktrees.map((worktree) => (
             <button type="button" onClick={() => { if (project) openGitWorkbench({ projectId: project.id, view: "worktrees", root: worktree.path }); }} key={worktree.path} className="w-full text-left rounded-lg border border-line bg-raised/45 px-3 py-2.5">
               <div className="flex min-w-0 items-center gap-2">
-                <TreeStructure size={14} className="shrink-0 text-accent" />
+                <TreeStructure size={14} className="shrink-0 text-muted" />
                 <span className="min-w-0 truncate font-mono text-xs text-ink">{worktree.path}</span>
               </div>
               <div className="mt-2 flex min-w-0 items-center gap-3 pl-[22px] text-[10px] text-faint">

@@ -210,8 +210,8 @@
   cursor: pointer;
 }
 .cmd-pop__row-actions button:hover { background: var(--raised); box-shadow: var(--control-hover-shadow); }
-.cmd-pop__row-actions button.is-primary { background: var(--accent); color: #fff; box-shadow: none; }
-.cmd-pop__row-actions button.is-primary:hover { background: var(--accent-hover); }
+.cmd-pop__row-actions button.is-primary { background: var(--action); color: var(--on-action); box-shadow: none; }
+.cmd-pop__row-actions button.is-primary:hover { background: var(--action-hover); }
 .cmd-pop__row-actions button.is-danger { color: var(--red); }
 
 /* ── 底部:管理入口 ────────────────────────────────────── */

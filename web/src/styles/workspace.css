@@ -159,12 +159,12 @@
 
 .workspace-empty-state > svg {
   margin-bottom: 16px;
-  color: var(--accent);
+  color: var(--muted);
 }
 
 .workspace-empty-project {
   margin-bottom: 8px;
-  color: var(--accent);
+  color: var(--ink);
   font-size: 10px;
   font-weight: 750;
   letter-spacing: 0.08em;
@@ -381,7 +381,7 @@
   border-radius: 0;
   background: transparent;
   padding: 0 12px;
-  color: var(--accent);
+  color: var(--ink);
   font-size: 13px;
   font-weight: 600;
   text-align: left;

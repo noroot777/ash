@@ -250,18 +250,18 @@
   border-top: 1px solid var(--line);
   background: transparent;
   padding: 8px 7px 0;
-  color: var(--accent);
+  color: var(--ink);
   text-align: left;
   font-size: 12px;
   font-weight: 600;
 }
 
 .workspace-project-create:hover {
-  color: color-mix(in oklab, var(--accent) 78%, var(--ink));
+  color: color-mix(in oklab, var(--ink) 78%, var(--ink));
 }
 
 .workspace-project-option > svg {
-  color: var(--accent);
+  color: var(--muted);
 }
 
 .workspace-project-option kbd,

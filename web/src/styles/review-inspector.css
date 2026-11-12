@@ -20,7 +20,7 @@
 .review-inspector__status.is-verify_failed { background: var(--red-bg); color: var(--red); }
 .review-inspector__actions { display: grid; gap: 4px; margin-top: 11px; }
 .review-inspector__actions button { display: flex; min-height: 31px; align-items: center; gap: 6px; border: 0; border-radius: 7px; background: transparent; padding: 5px 7px; color: var(--muted); font-size: 10.5px; text-align: left; }
-.review-inspector__actions button:first-child { background: color-mix(in oklab,var(--accent) 8%,var(--panel)); color: var(--accent); font-weight: 650; }
+.review-inspector__actions button:first-child { background: color-mix(in oklab,var(--ink) 8%,var(--panel)); color: var(--ink); font-weight: 650; }
 .review-inspector__actions button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .review-inspector__actions button:disabled { cursor: not-allowed; opacity: 0.48; }
 .review-inspector__actions button span { min-width: 0; flex: 1; }
@@ -33,8 +33,8 @@
 .review-inspector__targets .review-inspector__empty button { flex: 0 0 auto; border: 0; border-radius: 5px; background: var(--raised); padding: 3px 7px; color: var(--muted); font-size: 9.5px; }
 .review-inspector__targets .review-inspector__empty.is-error { color: var(--red); }
 
-.review-evidence { overflow: hidden; border: 1px solid color-mix(in oklab,var(--accent) 20%,var(--line)); border-radius: 9px; background: color-mix(in oklab,var(--accent) 3%,var(--panel)); }
-.review-evidence > header { display: flex; min-height: 42px; align-items: center; border-bottom: 0.5px solid color-mix(in oklab,var(--accent) 14%,var(--line)); padding: 6px 10px; }
+.review-evidence { overflow: hidden; border: 1px solid color-mix(in oklab,var(--ink) 20%,var(--line)); border-radius: 9px; background: color-mix(in oklab,var(--ink) 3%,var(--panel)); }
+.review-evidence > header { display: flex; min-height: 42px; align-items: center; border-bottom: 0.5px solid color-mix(in oklab,var(--ink) 14%,var(--line)); padding: 6px 10px; }
 .review-evidence > header b, .review-evidence > header small { display: block; }
 .review-evidence > header b { color: var(--ink); font-size: 11px; }
 .review-evidence > header small { color: var(--faint); font-size: 9.5px; }
@@ -47,7 +47,7 @@
 .review-round > button { display: flex; width: 100%; min-height: 37px; align-items: center; gap: 7px; border: 0; background: transparent; padding: 5px 8px; text-align: left; }
 .review-round > button > span { display: grid; width: 22px; height: 22px; flex: 0 0 22px; place-items: center; border-radius: 50%; background: var(--raised); color: var(--muted); font-size: 9.5px; font-weight: 750; }
 .review-round > button > b { color: var(--ink); font-size: 10.5px; white-space: nowrap; }
-.review-round > button > em { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; background: color-mix(in oklab,var(--accent) 9%,var(--raised)); padding: 2px 6px; color: var(--accent); font-size: 9.5px; font-style: normal; font-weight: 650; white-space: nowrap; }
+.review-round > button > em { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; background: color-mix(in oklab,var(--ink) 9%,var(--raised)); padding: 2px 6px; color: var(--ink); font-size: 9.5px; font-style: normal; font-weight: 650; white-space: nowrap; }
 .review-round.is-verified > button > em { background: var(--green-bg); color: var(--green); }
 .review-round.is-verify-failed > button > em, .review-round.is-inconclusive > button > em { background: var(--red-bg); color: var(--red); }
 .review-round > button > small { min-width: 0; overflow: hidden; color: var(--faint); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
@@ -63,7 +63,7 @@
 .review-shots h5 { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; color: var(--faint); font-size: 9.5px; text-transform: uppercase; }
 .review-shots > div { display: grid; grid-template-columns: repeat(auto-fill,minmax(120px,1fr)); gap: 7px; }
 .review-shot { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: var(--canvas); text-align: left; }
-.review-shot:hover { border-color: color-mix(in oklab,var(--accent) 42%,var(--line)); }
+.review-shot:hover { border-color: color-mix(in oklab,var(--ink) 42%,var(--line)); }
 .review-shots img { display: block; width: 100%; aspect-ratio: 16/9; background: var(--raised); object-fit: cover; }
 .review-shots span { display: block; overflow: hidden; padding: 5px 6px; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .review-round__open-task { display: inline-flex; align-items: center; gap: 5px; margin-top: 8px; border: 0; border-radius: 6px; background: var(--raised); padding: 4px 7px; color: var(--muted); font-size: 9.5px; }
@@ -72,9 +72,9 @@
 /* 派审附言（ReviewNote）。三个地方共用同一块：报告抽屉正文顶部、会话流审查卡正文顶部、
    预约概览。它是**用户自己写的输入**，所以刻意长得像引用而不是像结论——一条竖杠 + 原样
    换行的正文，跟旁边的报告 markdown 区分开。 */
-.review-note { border-left: 2px solid color-mix(in oklab,var(--accent) 45%,var(--line)); border-radius: 0 6px 6px 0; background: color-mix(in oklab,var(--accent) 4%,var(--panel)); padding: 6px 9px; }
+.review-note { border-left: 2px solid color-mix(in oklab,var(--ink) 45%,var(--line)); border-radius: 0 6px 6px 0; background: color-mix(in oklab,var(--ink) 4%,var(--panel)); padding: 6px 9px; }
 .review-note + * { margin-top: 9px; }
-.review-note > b { display: block; color: var(--accent); font-size: 9px; font-weight: 700; letter-spacing: .04em; }
+.review-note > b { display: block; color: var(--ink); font-size: 9px; font-weight: 700; letter-spacing: .04em; }
 .review-note > p { overflow-wrap: anywhere; margin: 3px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; white-space: pre-wrap; }
 
 .review-inspector__targets { border-bottom: 0.5px solid var(--line); padding: 12px 14px; }
@@ -84,14 +84,14 @@
 .review-inspector__targets > header small { color: var(--faint); font-size: 9px; }
 .review-inspector__targets > div { display: grid; gap: 5px; }
 .review-inspector__targets button { display: flex; min-width: 0; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 7px 8px; text-align: left; }
-.review-inspector__targets button:hover, .review-inspector__targets button.is-selected { border-color: color-mix(in oklab,var(--accent) 38%,var(--line)); background: color-mix(in oklab,var(--accent) 4%,var(--panel)); }
+.review-inspector__targets button:hover, .review-inspector__targets button.is-selected { border-color: color-mix(in oklab,var(--ink) 38%,var(--line)); background: color-mix(in oklab,var(--ink) 4%,var(--panel)); }
 .review-inspector__targets button.is-failed { border-color: color-mix(in oklab,var(--red) 34%,var(--line)); }
 .review-inspector__targets button > span { min-width: 0; flex: 1; }
 .review-inspector__targets button b, .review-inspector__targets button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .review-inspector__targets button b { color: var(--ink); font-size: 10.5px; }
 .review-inspector__targets button small { color: var(--faint); font-size: 9px; }
 .review-inspector__targets button em { flex: 0 0 auto; border-radius: 4px; background: var(--raised); padding: 2px 5px; color: var(--muted); font-size: 8.5px; font-style: normal; }
-.review-inspector__targets button.is-selected em { background: color-mix(in oklab,var(--accent) 12%,var(--raised)); color: var(--accent); }
+.review-inspector__targets button.is-selected em { background: color-mix(in oklab,var(--ink) 12%,var(--raised)); color: var(--ink); }
 
 /* 贴着审查侧边栏左边缘的那一屉，位置与尺寸由 ReviewEvidenceDrawer 量出来写在 style 上。
    z 要压过执行者抽屉（95）：那一屉里也有 inspector，审查内容得浮在它上面才看得见。 */
@@ -116,7 +116,7 @@
 .review-screenshot-strip__rail { display: flex; min-width: 0; gap: 7px; overflow-x: auto; overscroll-behavior-x: contain; padding-bottom: 2px; scroll-snap-type: x proximity; }
 .review-screenshot-strip__rail:focus-visible { border-radius: 6px; }
 .review-screenshot-strip__item { width: 112px; min-width: 112px; overflow: hidden; flex: 0 0 112px; border: 1px solid var(--line); border-radius: 7px; background: var(--canvas); scroll-snap-align: start; }
-.review-screenshot-strip__item:hover { border-color: color-mix(in oklab,var(--accent) 42%,var(--line)); }
+.review-screenshot-strip__item:hover { border-color: color-mix(in oklab,var(--ink) 42%,var(--line)); }
 .review-screenshot-strip__item img { display: block; width: 100%; aspect-ratio: 16/9; background: var(--panel); object-fit: cover; }
 .review-screenshot-strip__item span { display: block; overflow: hidden; padding: 4px 5px; color: var(--muted); font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
 

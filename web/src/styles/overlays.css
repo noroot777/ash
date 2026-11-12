@@ -428,7 +428,7 @@
 }
 
 .note-pick:hover .ui-checkbox {
-  border-color: var(--accent);
+  border-color: var(--ink);
 }
 
 .note-pick:focus-visible .ui-checkbox {
@@ -460,7 +460,7 @@
 
 .note-row.is-converted:hover .note-task-badge,
 .note-task-badge:focus-visible {
-  color: var(--accent);
+  color: var(--ink);
 }
 
 .note-row.is-converted:hover .note-task-arrow,
@@ -546,8 +546,8 @@
 }
 
 .note-task-links button:hover {
-  border-color: color-mix(in oklab, var(--accent) 38%, var(--line));
-  color: var(--accent);
+  border-color: color-mix(in oklab, var(--ink) 38%, var(--line));
+  color: var(--ink);
 }
 
 .note-task-links button span {

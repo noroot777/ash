@@ -26,8 +26,8 @@
   height: 44px;
   flex: 0 0 44px;
   border-radius: 13px;
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--raised);
+  color: var(--muted);
 }
 .handoff-symbol i {
   position: absolute;
@@ -37,11 +37,11 @@
   border-radius: 6px;
 }
 .handoff-symbol i:first-child { top: 9px; left: 8px; }
-.handoff-symbol i:last-child { right: 8px; bottom: 8px; background: var(--accent-soft); }
+.handoff-symbol i:last-child { right: 8px; bottom: 8px; background: var(--raised); }
 .handoff-dialog-header > div { min-width: 0; flex: 1; }
 .handoff-dialog-header h2 { margin-top: 3px; font-size: 20px; font-weight: 720; letter-spacing: -0.035em; }
 .handoff-eyebrow {
-  color: var(--accent);
+  color: var(--muted);
   font-family: var(--font-mono);
   font-size: 9px;
   font-weight: 750;
@@ -99,7 +99,7 @@
 }
 .handoff-review-item:nth-child(odd) { border-right: 1px solid var(--line); }
 .handoff-review-item:nth-child(n + 3) { border-top: 1px solid var(--line); }
-.handoff-review-item > svg { grid-row: 1 / 4; margin-top: 1px; color: var(--accent); }
+.handoff-review-item > svg { grid-row: 1 / 4; margin-top: 1px; color: var(--muted); }
 .handoff-review-item span { color: var(--faint); font-size: 9.5px; }
 .handoff-review-item b { overflow: hidden; margin-top: 5px; color: var(--ink); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
 .handoff-review-item small { overflow: hidden; margin-top: 4px; color: var(--muted); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
@@ -146,7 +146,7 @@
 .handoff-result-facts span { border: 1px solid var(--line); border-radius: 999px; background: var(--raised); padding: 7px 11px; color: var(--muted); font-size: 10px; }
 .handoff-result-facts b { color: var(--ink); }
 .handoff-result-panel .handoff-notes { width: min(520px, 100%); margin-top: 20px; text-align: left; }
-.handoff-local-open { display: inline-flex; height: 36px; align-items: center; gap: 6px; margin-top: 24px; border: 1px solid var(--accent); border-radius: 10px; background: var(--accent); padding: 0 15px; color: white; font-size: 11.5px; font-weight: 700; cursor: pointer; box-shadow: 0 10px 24px color-mix(in oklab, var(--accent) 22%, transparent); }
+.handoff-local-open { display: inline-flex; height: 36px; align-items: center; gap: 6px; margin-top: 24px; border: 1px solid var(--action); border-radius: 10px; background: var(--action); padding: 0 15px; color: var(--on-action); font-size: 11.5px; font-weight: 700; cursor: pointer; box-shadow: 0 10px 24px color-mix(in oklab, #000 22%, transparent); }
 .handoff-local-open:hover { filter: brightness(.97); transform: translateY(-1px); }
 
 .handoff-dialog > footer { padding-top: 2px; }
@@ -211,7 +211,7 @@
 .handoff-notes { color: var(--faint); }
 
 .handoff-settings-link {
-  color: var(--accent);
+  color: var(--ink);
   font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -221,7 +221,7 @@
 
 .handoff-check { display: flex; align-items: center; gap: 6px; margin: 12px 0 0; color: var(--ink); font-size: 11.5px; }
 
-.handoff-remote-link { display: inline-flex; align-items: center; gap: 3px; border: 0; background: transparent; padding: 0; color: var(--accent); cursor: pointer; }
+.handoff-remote-link { display: inline-flex; align-items: center; gap: 3px; border: 0; background: transparent; padding: 0; color: var(--ink); cursor: pointer; }
 
 /* 详情页横幅:接力标记持久落在 tasks.handoff 上,刷新后仍看得见。 */
 .task-handoff-banner {
@@ -231,12 +231,12 @@
   margin: 8px 18px 0;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: color-mix(in oklab, var(--accent) 7%, var(--panel));
+  background: color-mix(in oklab, var(--ink) 7%, var(--panel));
   padding: 7px 12px;
   color: var(--muted);
   font-size: 11.5px;
 }
-.task-handoff-banner > svg { flex: none; color: var(--accent); }
+.task-handoff-banner > svg { flex: none; color: var(--muted); }
 .task-handoff-banner span { flex: 1 1 auto; min-width: 0; }
 
 /* 接力/移回送达未确认(应答丢失):琥珀色警示,提醒用户先重试收口或确认后移除标记。 */
@@ -257,7 +257,7 @@
   font-size: 11px;
   cursor: pointer;
 }
-.task-handoff-clear:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.task-handoff-clear:hover:not(:disabled) { border-color: var(--ink); color: var(--ink); }
 .task-handoff-clear:disabled { cursor: not-allowed; opacity: 0.55; }
 
 /* 系统级入站申请占一行布局空间，出现时把工作区整体下推，不遮任何操作面。

@@ -7,9 +7,9 @@
 .preview-command-help-trigger {
   flex-shrink: 0;
   height: 32px;
-  border-color: color-mix(in oklab, var(--accent) 24%, var(--line));
-  background: color-mix(in oklab, var(--accent) 7%, var(--panel));
-  color: var(--accent);
+  border-color: color-mix(in oklab, var(--ink) 24%, var(--line));
+  background: color-mix(in oklab, var(--ink) 7%, var(--panel));
+  color: var(--ink);
   font-weight: var(--w-medium);
 }
 

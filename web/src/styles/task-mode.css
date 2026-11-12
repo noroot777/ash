@@ -94,7 +94,7 @@
   border-radius: 5px;
   padding: 1px 5px;
   background: transparent;
-  color: var(--accent);
+  color: var(--ink);
   font: inherit;
   cursor: pointer;
 }

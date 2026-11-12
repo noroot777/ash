@@ -35,14 +35,14 @@ export function ScopeToken({
   onRemove: () => void;
 }) {
   return (
-    <span className="flex shrink-0 items-center overflow-hidden rounded-md border border-accent/25 bg-accent/10 text-[11px] text-accent">
-      <button type="button" className="px-2 py-1 font-medium outline-none hover:bg-accent/10 focus-visible:bg-accent/15" onClick={onEdit}>
+    <span className="flex shrink-0 items-center overflow-hidden rounded-md border border-ink/20 bg-ink/5 text-[11px] text-ink">
+      <button type="button" className="px-2 py-1 font-medium outline-none hover:bg-ink/10 focus-visible:bg-ink/15" onClick={onEdit}>
         {scopeProjectName(scope, projects)} <span className="mx-0.5 opacity-50">/</span> {scopeTypeName(scope.type)}
       </button>
       <button
         type="button"
         aria-label="清除搜索范围"
-        className="self-stretch border-l border-accent/20 px-1.5 outline-none hover:bg-accent/15 focus-visible:bg-accent/20"
+        className="self-stretch border-l border-ink/20 px-1.5 outline-none hover:bg-ink/10 focus-visible:bg-ink/15"
         onClick={onRemove}
       >
         <X size={10} weight="bold" />
@@ -74,7 +74,7 @@ function ChoiceRow({
       onClick={onChoose}
       className="ui-selectable flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left outline-none"
     >
-      <span className={`grid size-5 shrink-0 place-items-center rounded-full border ${selected ? "border-accent bg-accent text-white" : "border-line2"}`}>
+      <span className={`grid size-5 shrink-0 place-items-center rounded-full border ${selected ? "border-[var(--action)] bg-[var(--action)] text-[var(--on-action)]" : "border-line2"}`}>
         {selected && <Check size={11} weight="bold" />}
       </span>
       <span className="min-w-0">

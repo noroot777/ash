@@ -4,6 +4,6 @@
 .conversation-selection-action button { display: flex; align-items: center; gap: 5px; padding: 5px 9px; border: 0; background: none; color: var(--ink); font: inherit; font-size: 11px; line-height: 1.5; white-space: nowrap; cursor: pointer; }
 .conversation-selection-action button + button { border-left: 1px solid var(--line); }
 .conversation-selection-action button:hover { background: var(--hover-bg); }
-.conversation-selection-action svg { color: var(--accent); }
+.conversation-selection-action svg { color: var(--muted); }
 /* 外壳 overflow: hidden 会把外扩的描边裁掉，所以焦点框往里画。 */
 .conversation-selection-action button:focus-visible { outline-offset: -2px; }

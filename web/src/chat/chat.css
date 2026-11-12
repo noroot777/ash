@@ -116,7 +116,7 @@
 .chat-live-dot { width: 5px; height: 5px; background: var(--chat-lilac); border-radius: 50%; animation: chat-dot 1.3s ease-in-out infinite; }
 .chat-composer { border: 1px solid var(--chat-line2); border-radius: 10px; box-shadow: 0 2px 9px #382a4006; position: relative; transition: box-shadow 180ms ease, border-color 180ms ease; }
 /* 输入框铺满整张卡，带 offset 的默认焦点环会画到卡片外面去；焦点提示改由卡片自己的 focus-within 环承担。 */
-.chat-composer:focus-within { border-color: var(--chat-lilac); box-shadow: 0 0 0 3px color-mix(in oklab, var(--chat-violet) 13%, transparent); }
+.chat-composer:focus-within { border-color: var(--focus-soft); box-shadow: 0 0 0 3px color-mix(in oklab, var(--focus-ring) 10%, transparent); }
 .chat-shell .chat-composer textarea:focus-visible { outline: none; }
 .chat-composer textarea { display: block; width: 100%; resize: none; min-height: 74px; max-height: 190px; background: none; border: 0; padding: 14px 15px 8px; color: var(--chat-ink); font: inherit; font-size: 13px; line-height: 1.7; border-radius: 10px; outline: none; }
 .chat-composer textarea::placeholder { color: var(--chat-faint); }
@@ -124,8 +124,8 @@
 .chat-composer footer > button { background: none; border: 0; color: var(--chat-faint); padding: 3px; display: flex; border-radius: 5px; }
 .chat-composer footer > span { font-size: 10px; color: var(--chat-faint); flex: 1; overflow-wrap: anywhere; }
 /* 发送键与 .chat-primary 是紫色实底白字，两种模式同色。 */
-.chat-composer footer .chat-send { background: #78558f; color: #fff; padding: 7px; border-radius: 7px; }
-.chat-composer footer .chat-send:hover:not(:disabled) { background: #624079; transform: translateY(-1px); }
+.chat-composer footer .chat-send { background: var(--action); color: var(--on-action); padding: 7px; border-radius: 7px; }
+.chat-composer footer .chat-send:hover:not(:disabled) { background: var(--action-hover); transform: translateY(-1px); }
 .chat-composer-hint { display: flex; justify-content: space-between; color: var(--chat-faint); font-size: 9px; margin-top: 8px; }
 .chat-composer-hint span { font-style: italic; }
 .chat-mention-menu { position: absolute; bottom: calc(100% + 8px); left: 0; width: min(340px, 100%); max-height: 260px; overflow: auto; background: var(--chat-paper); padding: 5px; border: 1px solid var(--chat-line2); border-radius: 10px; box-shadow: 0 8px 35px #382a4020; z-index: 3; animation: chat-panel 180ms ease both; }

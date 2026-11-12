@@ -29,7 +29,7 @@
   overflow-y: auto;
   padding: 22px;
   background:
-    radial-gradient(circle at 96% 0, color-mix(in oklab, var(--accent) 8%, transparent), transparent 25%),
+    radial-gradient(circle at 96% 0, color-mix(in oklab, var(--ink) 8%, transparent), transparent 25%),
     var(--panel);
 }
 
@@ -45,10 +45,10 @@
   width: 46px;
   height: 46px;
   place-items: center;
-  border: 1px solid color-mix(in oklab, var(--accent) 18%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--muted) 18%, var(--line));
   border-radius: 14px;
-  background: color-mix(in oklab, var(--accent) 10%, var(--panel));
-  color: var(--accent);
+  background: color-mix(in oklab, var(--muted) 10%, var(--panel));
+  color: var(--muted);
   box-shadow: inset 0 1px 0 color-mix(in oklab, var(--panel) 72%, transparent);
 }
 
@@ -59,7 +59,7 @@
 }
 
 .task-confirm-dialog > .task-confirm-header > div { display: grid; min-width: 0; gap: 4px; }
-.task-confirm-dialog > .task-confirm-header small { color: var(--accent); font: 750 8.5px/1 var(--font-mono); letter-spacing: .13em; }
+.task-confirm-dialog > .task-confirm-header small { color: var(--muted); font: 750 8.5px/1 var(--font-mono); letter-spacing: .13em; }
 .task-confirm-dialog > .task-confirm-header:has(> span.is-danger) small { color: var(--red); }
 .task-confirm-dialog > .task-confirm-header h2 { overflow: hidden; margin: 0; font-size: 20px; font-weight: 710; letter-spacing: -.035em; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -97,7 +97,7 @@
 }
 
 .task-confirm-dialog:not(.handoff-dialog) > footer button:hover:not(:disabled) { border-color: var(--line2); box-shadow: 0 7px 18px rgb(35 37 48 / 8%); transform: translateY(-1px); }
-.task-confirm-dialog:not(.handoff-dialog) > footer button.is-primary { box-shadow: 0 10px 23px color-mix(in oklab, var(--accent) 20%, transparent); }
+.task-confirm-dialog:not(.handoff-dialog) > footer button.is-primary { box-shadow: 0 10px 23px color-mix(in oklab, #000 20%, transparent); }
 .task-confirm-dialog:not(.handoff-dialog) > footer button.is-danger { box-shadow: 0 10px 23px color-mix(in oklab, var(--red) 18%, transparent); }
 
 .create-project-dialog { width: min(740px, calc(100vw - 32px)) !important; }
@@ -141,15 +141,15 @@
 .create-project-mode > span:last-child { display: grid; min-width: 0; gap: 3px; }
 .create-project-mode b { color: var(--ink); font-size: 12.5px; font-weight: 670; }
 .create-project-mode small { color: var(--faint); font-size: 9.5px; line-height: 1.45; }
-.create-project-mode:hover:not(:disabled) { border-color: color-mix(in oklab, var(--accent) 35%, var(--line)); box-shadow: 0 8px 22px rgb(35 37 48 / 6%); transform: translateY(-1px); }
+.create-project-mode:hover:not(:disabled) { border-color: color-mix(in oklab, var(--ink) 35%, var(--line)); box-shadow: 0 8px 22px rgb(35 37 48 / 6%); transform: translateY(-1px); }
 
 .create-project-mode.is-on {
-  border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
-  background: color-mix(in oklab, var(--accent) 7%, var(--panel));
-  box-shadow: 0 10px 28px color-mix(in oklab, var(--accent) 10%, transparent), inset 0 0 0 1px color-mix(in oklab, var(--panel) 60%, transparent);
+  border-color: color-mix(in oklab, var(--ink) 55%, var(--line));
+  background: color-mix(in oklab, var(--ink) 7%, var(--panel));
+  box-shadow: 0 10px 28px color-mix(in oklab, var(--ink) 10%, transparent), inset 0 0 0 1px color-mix(in oklab, var(--panel) 60%, transparent);
 }
 
-.create-project-mode.is-on > span:first-child { background: var(--accent); color: white; box-shadow: 0 7px 18px color-mix(in oklab, var(--accent) 22%, transparent); }
+.create-project-mode.is-on > span:first-child { background: var(--action); color: var(--on-action); box-shadow: 0 7px 18px color-mix(in oklab, #000 22%, transparent); }
 
 .quick-create-fields { gap: 13px; margin-top: 18px; }
 .quick-create-fields label { gap: 7px; }
@@ -166,7 +166,7 @@
 .palette-results { padding: 7px; }
 .palette-row { min-height: 45px; border-radius: 10px; }
 .palette-row:hover,
-.palette-row.is-active { background: color-mix(in oklab, var(--accent) 7%, var(--raised)); }
+.palette-row.is-active { background: color-mix(in oklab, var(--ink) 7%, var(--raised)); }
 .palette-footer { height: 36px; background: color-mix(in oklab, var(--raised) 56%, var(--panel)); }
 
 .notes-panel,
@@ -202,7 +202,7 @@
 
 .markdown-report-dialog { border-radius: 22px; }
 .markdown-report-dialog > header { min-height: 68px; padding: 13px 16px 13px 20px; }
-.markdown-report-dialog > header span { color: var(--accent); font-family: var(--font-mono); letter-spacing: .1em; }
+.markdown-report-dialog > header span { color: var(--muted); font-family: var(--font-mono); letter-spacing: .1em; }
 .markdown-report-dialog h2 { margin-top: 5px; font-size: 16px; letter-spacing: -.02em; }
 .markdown-report-body { padding: 22px 24px 28px; }
 

@@ -76,14 +76,14 @@
   border-radius: 6px;
   background: transparent;
   padding: 0 6px;
-  color: var(--accent);
+  color: var(--ink);
   font-size: var(--t-xs);
   font-weight: var(--w-medium);
 }
 
 .team-presets-list-add:hover,
 .team-presets-list-add[aria-pressed="true"] {
-  background: var(--accent-soft);
+  background: var(--sel-bg);
 }
 
 .team-presets-list-items {
@@ -119,7 +119,7 @@
 
 .team-presets-list-item[aria-selected="true"] {
   background: var(--panel);
-  box-shadow: inset 3px 0 var(--accent);
+  box-shadow: inset 3px 0 var(--ink);
   color: var(--ink);
 }
 

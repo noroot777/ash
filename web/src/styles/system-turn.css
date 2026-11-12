@@ -64,10 +64,10 @@
   width: 16px;
   height: 16px;
   justify-self: center;
-  border: 1px solid color-mix(in oklab, var(--accent) 18%, var(--line2));
+  border: 1px solid color-mix(in oklab, var(--muted) 18%, var(--line2));
   border-radius: 50%;
-  background: color-mix(in oklab, var(--accent) 7%, var(--panel));
-  color: color-mix(in oklab, var(--accent) 45%, var(--muted));
+  background: color-mix(in oklab, var(--muted) 7%, var(--panel));
+  color: color-mix(in oklab, var(--muted) 45%, var(--muted));
 }
 .system-action-wrap .system-action-note.is-conflict .system-action-icon { border-color: color-mix(in oklab, var(--red) 25%, var(--line2)); background: color-mix(in oklab, var(--red) 7%, var(--panel)); color: color-mix(in oklab, var(--red) 62%, var(--muted)); }
 .system-action-wrap .system-action-main { padding-top: 1px; }

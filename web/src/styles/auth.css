@@ -219,8 +219,8 @@
 }
 
 .auth-choice:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: color-mix(in oklab, var(--accent) 8%, var(--panel));
+  border-color: var(--ink);
+  background: color-mix(in oklab, var(--ink) 8%, var(--panel));
 }
 
 .auth-choice b {
@@ -262,12 +262,12 @@
 }
 
 .host-cli-option[data-checked="yes"] {
-  border-color: var(--accent);
-  background: color-mix(in oklab, var(--accent) 8%, var(--panel));
+  border-color: var(--ink);
+  background: color-mix(in oklab, var(--ink) 8%, var(--panel));
 }
 
 .host-cli-option:hover:not(:has(input:disabled)) {
-  border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
+  border-color: color-mix(in oklab, var(--ink) 55%, var(--line));
 }
 
 .host-cli-option:has(input:disabled) {

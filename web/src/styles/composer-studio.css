@@ -78,7 +78,7 @@
 .studio-aux-button > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
 .studio-aux-button > svg { flex-shrink:0; }
 .studio-aux-button:hover:not(:disabled),.studio-aux-button[aria-expanded="true"] { color:var(--ink); background:var(--raised); }
-.studio-aux-button.is-configured { color:var(--accent); }
+.studio-aux-button.is-configured { color:var(--ink); }
 .studio-aux-caret { color:var(--faint); }
 
 /* 首页：卡片下面「等你处理」，和卡片同宽，字的左缘对着输入区的字 */

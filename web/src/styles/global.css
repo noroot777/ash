@@ -156,7 +156,8 @@
   --violet: #7657b7;
   --accent-hover: #5560c4;
   --accent-active: #4d57b5;
-  --focus-ring: #6d78d5;
+  /* 焦点环是墨色：能点的东西一律黑白，主色只留给状态。 */
+  --focus-ring: var(--ink);
   /* 「浮起来的那一块」:分段控件选中的那颗、浅灰列表里的选中行。浅色下就是卡片白;
      深色下卡片反而比轨道暗，照搬会凹下去，所以单独一档、比轨道亮。 */
   --lifted: var(--panel);
@@ -228,7 +229,7 @@
   --violet: #a48ce6;
   --accent-hover: #828de6;
   --accent-active: #6a75d8;
-  --focus-ring: #8790ec;
+  --focus-ring: var(--ink);
   --lifted: lch(25% 2.5 282);
   /* 深色里实心的键反过来：白底黑字——纯黑放在深色底上看不见。 */
   --action: #fff;
@@ -306,7 +307,7 @@ code,
 }
 
 ::selection {
-  background: color-mix(in oklab, var(--accent) 18%, transparent);
+  background: color-mix(in oklab, var(--ink) 18%, transparent);
 }
 
 .run-activity {

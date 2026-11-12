@@ -1,10 +1,10 @@
 .preview-workspace { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; background: var(--panel); color: var(--ink); font: 12px var(--font-sans); }
 .preview-workspace button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 7px 9px; color: var(--muted); font: inherit; cursor: pointer; }
 .preview-workspace button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
-.preview-workspace button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.preview-workspace button[aria-pressed="true"] { color: var(--ink); border-color: var(--ink); background: var(--sel-bg); }
 .preview-workspace button:disabled { opacity: .45; cursor: default; }
 .preview-workspace-header { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
-.preview-workspace-header > svg { color: var(--accent); }
+.preview-workspace-header > svg { color: var(--muted); }
 .preview-workspace-header h2 { margin: 0; font-size: 17px; }
 .preview-workspace-header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .preview-workspace-layout-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
@@ -20,7 +20,7 @@ body:has(.preview-workspace.is-expanded) .palette-scrim { z-index: 185; }
 .annotation-batch-mismatch > div { flex: 1 1 240px; min-width: 0; }
 .annotation-batch-mismatch p { margin: 0; color: var(--ink); line-height: 1.6; overflow-wrap: anywhere; }
 .annotation-batch-mismatch small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.6; }
-.preview-workspace .annotation-batch-mismatch > button { color: var(--accent); border-color: var(--accent); }
+.preview-workspace .annotation-batch-mismatch > button { color: var(--ink); border-color: var(--ink); }
 .preview-workspace-modes, .preview-workspace-tools { display: flex; gap: 4px; }
 .preview-workspace-modes { border-right: 1px solid var(--line); padding-right: 8px; }
 .preview-workspace-service { display: flex; align-items: center; gap: 6px; margin-left: auto; color: var(--muted); font-size: 11px; }
@@ -53,7 +53,7 @@ body:has(.preview-workspace.is-expanded) .palette-scrim { z-index: 185; }
 .preview-workspace .preview-workspace-delete { color: var(--red); flex-shrink: 0; }
 .preview-workspace .preview-workspace-item { width: 100%; justify-content: flex-start; padding: 9px; text-align: left; }
 .preview-workspace-item > b { display: grid; place-items: center; width: 25px; height: 25px; flex-shrink: 0; background: var(--red); color: white; border-radius: 50%; font: 700 11px var(--font-mono); }
-.preview-workspace-item[aria-pressed="true"] > b { background: var(--accent); }
+.preview-workspace-item[aria-pressed="true"] > b { background: var(--action); color: var(--on-action); }
 .preview-workspace-item > span { display: grid; gap: 4px; min-width: 0; }
 .preview-workspace-item strong, .preview-workspace-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preview-workspace-item strong { font-size: 11px; font-weight: 600; }

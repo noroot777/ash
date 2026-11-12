@@ -277,7 +277,7 @@
 .gwb-design .diff-line.t-del .diff-code { color: color-mix(in oklab, var(--red) 72%, var(--ink)); }
 .gwb-design .diff-line.is-pickable { cursor: pointer; }
 .gwb-design .diff-line.is-pickable:hover { filter: brightness(0.96); }
-.gwb-design .diff-line.is-picked { outline: 1.5px solid var(--accent); outline-offset: -1.5px; }
+.gwb-design .diff-line.is-picked { outline: 1.5px solid var(--ink); outline-offset: -1.5px; }
 
 /* ---------- 通用小件 ---------- */
 .gwb-design .kind-badge {

@@ -76,8 +76,8 @@
 
 .workspace-queue-badge:hover,
 .workspace-queue-badge:focus-visible {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--ink);
+  color: var(--ink);
 }
 
 .workspace-task-row-wrap:hover:not(.is-selected) {
@@ -392,7 +392,7 @@
   border-radius: 6px;
   background: transparent;
   padding: 2px 8px;
-  color: var(--accent);
+  color: var(--ink);
   font-size: 11px;
 }
 

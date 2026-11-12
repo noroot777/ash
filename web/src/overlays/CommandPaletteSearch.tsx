@@ -15,7 +15,7 @@ const FIELD_LABEL: Record<SearchHit["field"], string | null> = {
 // 「你搜的就是这个任务」的标识。命中按 id 时钉在最前面(见 CommandPalette),
 // 但标识挂在行本身:同一个前缀撞上两条任务时,第二条也得看得出来它是 id 命中。
 function IdMatchBadge() {
-  return <span className="shrink-0 rounded bg-accent/20 px-1 text-[9px] font-medium leading-4 text-accent">就是这个任务</span>;
+  return <span className="shrink-0 rounded bg-ink/10 px-1 text-[9px] font-medium leading-4 text-ink">就是这个任务</span>;
 }
 
 function isIdMatch(hit: SearchHit) {
@@ -81,7 +81,7 @@ export function Highlight({ text, query }: { text: string; query: string }) {
     if (nextIndex < 0) break;
     if (nextIndex > position) parts.push(text.slice(position, nextIndex));
     parts.push(
-      <mark key={`${nextIndex}:${nextTerm}`} className="rounded-[2px] bg-accent/25 text-inherit">
+      <mark key={`${nextIndex}:${nextTerm}`} className="rounded-[2px] bg-ink/15 text-inherit">
         {text.slice(nextIndex, nextIndex + nextTerm.length)}
       </mark>,
     );

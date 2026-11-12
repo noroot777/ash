@@ -4,9 +4,9 @@
 
 .composer-preset-bar {
   margin-top: 14px;
-  border: 1px solid color-mix(in oklab, var(--accent) 18%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--ink) 18%, var(--line));
   border-radius: 10px;
-  background: color-mix(in oklab, var(--accent) 3%, var(--canvas));
+  background: color-mix(in oklab, var(--ink) 3%, var(--canvas));
   padding: 10px;
 }
 
@@ -97,9 +97,9 @@
 }
 
 .composer-preset-card[aria-pressed="true"] {
-  border-color: color-mix(in oklab, var(--accent) 54%, var(--line));
-  background: color-mix(in oklab, var(--accent) 5%, var(--panel));
-  box-shadow: inset 0 2px var(--accent);
+  border-color: color-mix(in oklab, var(--ink) 54%, var(--line));
+  background: color-mix(in oklab, var(--ink) 5%, var(--panel));
+  box-shadow: inset 0 2px var(--ink);
 }
 
 .composer-preset-card > b {
@@ -131,7 +131,7 @@
 }
 
 .composer-preset-card > small {
-  color: var(--accent);
+  color: var(--ink);
 }
 
 .composer-preset-card > small.is-off {
@@ -200,8 +200,8 @@
   flex: 0 0 29px;
   place-items: center;
   border-radius: 8px;
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--raised);
+  color: var(--muted);
 }
 
 .composer-preset-dialog h2,

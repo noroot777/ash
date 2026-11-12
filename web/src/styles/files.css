@@ -23,11 +23,11 @@
 
 .file-tree__row { display:flex; width:100%; min-height:24px; align-items:center; gap:5px; border:0; border-radius:5px; background:transparent; padding-right:8px; text-align:left; }
 .file-tree__row:hover { background:var(--raised); }
-.file-tree__row.is-active { background:color-mix(in oklab,var(--accent) 12%,var(--panel)); box-shadow:inset 2px 0 var(--accent); }
+.file-tree__row.is-active { background:color-mix(in oklab,var(--ink) 12%,var(--panel)); box-shadow:inset 2px 0 var(--ink); }
 .file-tree__row.is-ignored { opacity:.5; }
 .file-tree__caret { display:grid; width:10px; flex:0 0 10px; place-items:center; color:var(--faint); }
 .file-tree__glyph { display:grid; flex:0 0 auto; place-items:center; color:var(--faint); }
-.file-tree__row.is-active .file-tree__glyph { color:var(--accent); }
+.file-tree__row.is-active .file-tree__glyph { color:var(--ink); }
 .file-tree__name { min-width:0; flex:1; overflow:hidden; color:var(--muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
 .file-tree__row.is-active .file-tree__name { color:var(--ink); font-weight:600; }
 .file-tree__tag { flex:0 0 auto; border-radius:3px; background:var(--overlay); padding:0 3px; color:var(--faint); font-size:8px; font-style:normal; }
@@ -45,7 +45,7 @@
 .file-tree__row-wrap { position:relative; }
 .file-tree__peek { position:absolute; top:2px; right:4px; display:none; width:20px; height:20px; place-items:center; border:1px solid var(--line2); border-radius:5px; background:var(--panel); color:var(--muted); }
 .file-tree__row-wrap:hover .file-tree__peek, .file-tree__peek:focus-visible { display:grid; }
-.file-tree__peek:hover { background:var(--raised); color:var(--accent); }
+.file-tree__peek:hover { background:var(--raised); color:var(--ink); }
 
 .file-viewer { display:flex; min-width:0; min-height:0; flex:1; flex-direction:column; background:var(--canvas); }
 /* 换行是必需的，不是美化：这排按钮全是 `flex:0 0 auto`，中栏收窄到 420px 左右时
@@ -67,7 +67,7 @@
 .file-viewer__action.is-danger:hover:not(:disabled) { border-color:color-mix(in oklab,var(--red) 45%,var(--line2)); background:color-mix(in oklab,var(--red) 9%,var(--panel)); color:var(--red); }
 .file-viewer__notice { display:flex; align-items:center; gap:5px; margin:0; border-bottom:.5px solid var(--line); background:color-mix(in oklab,var(--amber) 8%,var(--panel)); padding:6px 16px; color:var(--muted); font-size:10px; }
 .file-viewer__notice-action { flex:none; margin-left:auto; border:.5px solid var(--line); border-radius:4px; background:var(--panel); padding:2px 8px; color:var(--text); font-size:10px; cursor:pointer; }
-.file-viewer__notice-action:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+.file-viewer__notice-action:hover:not(:disabled) { border-color:var(--ink); color:var(--ink); }
 .file-viewer__notice-action:disabled { opacity:.5; cursor:default; }
 .file-viewer__body { display:flex; min-height:0; flex:1; flex-direction:column; overflow:auto; }
 .file-viewer__state { display:flex; align-items:center; gap:6px; margin:18px; color:var(--faint); font-size:11px; }
@@ -159,7 +159,7 @@
 .file-openwith__hint.is-error { color:var(--red); }
 .file-openwith__app { display:flex; min-width:0; flex-direction:column; gap:1px; }
 .file-openwith__app b { display:flex; align-items:center; gap:4px; color:var(--ink); font-size:11px; font-weight:550; }
-.file-openwith__app b > svg { color:var(--accent); }
+.file-openwith__app b > svg { color:var(--muted); }
 .file-openwith__app small { overflow:hidden; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
 /* 「上次用的」：排在第一行那个的轻标记，别做成彩色徽章跟文件名抢注意力。 */
 .file-openwith__app b em { flex:0 0 auto; border-radius:3px; background:var(--overlay); padding:0 4px; color:var(--faint); font-size:8.5px; font-style:normal; font-weight:500; }

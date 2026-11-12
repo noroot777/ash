@@ -419,13 +419,13 @@ export function CommandPalette({
         <div className="palette-input">
           <MagnifyingGlass size={18} className="shrink-0" />
           {step === "search" && scope && <ScopeToken scope={scope} projects={projects} onEdit={enterScope} onRemove={() => setScope(null)} />}
-          {(step === "scope-project" || step === "scope-type") && <span className="shrink-0 rounded-md bg-overlay px-2 py-1 font-mono text-[11px] text-accent">/scope</span>}
+          {(step === "scope-project" || step === "scope-type") && <span className="shrink-0 rounded-md bg-overlay px-2 py-1 font-mono text-[11px] text-ink">/scope</span>}
           {step === "scope-type" && (
             <span className="shrink-0 rounded-md bg-overlay px-2 py-1 text-[11px] text-muted">
               {pendingProjectId ? projectNames.get(pendingProjectId) ?? "未知项目" : "不限项目"}
             </span>
           )}
-          {(step === "git-project" || step === "git-overview") && <span className="shrink-0 rounded-md bg-overlay px-2 py-1 font-mono text-[11px] text-accent">/git</span>}
+          {(step === "git-project" || step === "git-overview") && <span className="shrink-0 rounded-md bg-overlay px-2 py-1 font-mono text-[11px] text-ink">/git</span>}
           {step === "git-overview" && gitProject && (
             <button type="button" className="shrink-0 rounded-md bg-overlay px-2 py-1 text-[11px] text-muted outline-none hover:text-ink focus-visible:text-ink" onClick={() => { setStep("git-project"); resetActive(); focusInput(); }}>
               {gitProject.name}
@@ -482,7 +482,7 @@ export function CommandPalette({
                 onClick={() => chooseSlashCommand(command)}
                 className="ui-selectable flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left outline-none"
               >
-                <span className="w-16 shrink-0 font-mono text-sm font-medium text-accent">{command.trigger}</span>
+                <span className="w-16 shrink-0 font-mono text-sm font-medium text-ink">{command.trigger}</span>
                 <span className="min-w-0">
                   <span className="block text-sm text-ink">{command.label}</span>
                   <span className="mt-0.5 block truncate text-[11px] text-faint">{command.description}</span>

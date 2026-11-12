@@ -69,8 +69,8 @@
   flex: 0 0 auto;
   padding: 2px 5px;
   border-radius: 4px;
-  color: var(--accent);
-  background: color-mix(in oklab, var(--accent) 10%, transparent);
+  color: var(--ink);
+  background: color-mix(in oklab, var(--ink) 10%, transparent);
   font-size: 10px;
   line-height: 14px;
   white-space: nowrap;
