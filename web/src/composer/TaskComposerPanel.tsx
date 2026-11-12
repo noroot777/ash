@@ -29,7 +29,6 @@ import { api } from "../lib/api.ts";
 import { applySlashPick, mergeSlashItems, slashQuery, type SlashItem } from "../lib/useSkills.ts";
 import { cliCommandsForMode } from "@ash/shared/cli-commands";
 import { useSkills } from "../lib/useSkills.ts";
-import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { ComposerObjective } from "./ComposerObjective.tsx";
 import { FileMentionMenu } from "../components/MentionMenu.tsx";
 import { useFileMention } from "../lib/useFileMention.ts";
@@ -55,6 +54,7 @@ import {
 import { useComposerRunSummary } from "./composerRunSummary.ts";
 import { ComposerForkContext } from "./ComposerForkContext.tsx";
 import { ComposerExpand } from "./ComposerExpand.tsx";
+import { ComposerShortcutHelp } from "./ComposerShortcutHelp.tsx";
 import { forkBodyProblem } from "../task-detail/conversationFork.ts";
 import { useComposerBranches } from "./useComposerBranches.ts";
 export type { ComposerDraft };
@@ -116,7 +116,6 @@ export function TaskComposerPanel({
   home?: ComposerHome;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const sendKeys = useSendKeyLabels();
   // 提交是异步的,完成时这份面板可能早已卸载(用户点了别的任务/删了刚建的任务再新开
   // 面板)。收尾动作要按挂载状态分流,StrictMode 下 effect 会 mount→cleanup→mount,
   // 所以置 true 必须写在 effect 体里而不是初始值。
@@ -582,7 +581,7 @@ export function TaskComposerPanel({
             <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />
             <div className="composer-opts">{home
               ? <>{options.where}<ComposerExpand onExpand={home.onExpand} /></>
-              : <>{options.work}{options.where}{options.org}{options.more}</>}</div>
+              : <>{options.work}{options.where}{options.org}{options.more}</>}<ComposerShortcutHelp /></div>
             <span className="composer-foot-grow" aria-hidden="true" />
             {executorTools}
             <ComposerLaunchControl
@@ -605,7 +604,6 @@ export function TaskComposerPanel({
           </div></>}
           </ComposerFields>
           {home?.below}
-          <div className="studio-footnote"><span>/ 调用技能 · @ 引用项目文件 · {sendKeys.send} 创建</span>{body.length > 0 && <span>{body.length} 字</span>}</div>
         </div>
       </div>
       {groupDialogOpen && <CreateGroupDialog

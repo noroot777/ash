@@ -76,7 +76,6 @@
 .studio-submit-mode.studio-aux-button.is-configured { color:white; }
 .studio-submit-mode > .studio-aux-caret { display:inline; }
 .studio-card > .studio-input-status { padding:0 16px 10px; color:var(--muted); font-size:var(--t-xs); }
-.studio-footnote { display:flex; justify-content:space-between; gap:12px; color:var(--faint); font-size:10px; margin:12px 6px 0; }
 
 /* 旧长相的入口（回复框的发送设置还在用） */
 .studio-aux-button { display:inline-flex; min-width:0; max-width:100%; height:30px; flex:0 1 auto; align-items:center; gap:6px; border:0; border-radius:7px; padding:0 8px; background:transparent; color:var(--muted); font-size:11px; white-space:nowrap; }
@@ -137,6 +136,16 @@
 .composer-workspace-default-save { display:inline-flex; align-items:center; margin-left:6px; border:0; border-radius:var(--r-sm); padding:2px 8px; background:var(--raised); color:var(--ink); font-size:var(--t-xs); }
 .composer-workspace-default-save:hover:not(:disabled) { background:var(--hover-bg); }
 .composer-workspace-default-save:disabled { opacity:.55; }
+
+/* 「?」点开的快捷键帮助：四组，两列 */
+.studio-popover.composer-help { width:auto; padding:14px 16px 12px; }
+.composer-help-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 208px)); gap:16px 32px; }
+.composer-help-grid h3 { margin:0 0 4px; color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-medium); }
+.composer-help-grid dl { margin:0; }
+.composer-help-grid dl > div { display:flex; align-items:center; gap:8px; min-height:26px; font-size:var(--t-sm); }
+.composer-help-grid dd { display:flex; gap:4px; margin:0 0 0 auto; }
+.composer-help-grid kbd { padding:1px 5px; border-radius:4px; background:var(--overlay); color:var(--muted); font:var(--w-regular) var(--t-xs)/1.5 var(--font-mono); }
+@media(max-width:560px) { .composer-help-grid { grid-template-columns:minmax(0, 1fr); } }
 
 /* 更多选项里的写作参考 */
 .studio-starters .studio-help { margin:0 0 6px; }
