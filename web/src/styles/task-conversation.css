@@ -14,6 +14,8 @@
    名字不让，那一句可以被省略：列再窄它也撑不宽这一行。 */
 .task-message header.turn-head { gap: 8px; min-width: 0; color: var(--muted); font-size: var(--t-xs); }
 .task-message header.turn-head b { flex: none; color: var(--muted); font-weight: var(--w-medium); }
+/* 起因：名字后面的一句——这一回合不是你发话起的头（被哨兵叫醒）。 */
+.turn-cause { flex: none; color: var(--muted); }
 .turn-meta { min-width: 0; overflow: hidden; color: var(--faint); font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
 .task-message--agent:hover > .task-message-content > .turn-head .turn-meta,
 .task-message--agent:focus-within > .task-message-content > .turn-head .turn-meta { opacity: 1; }

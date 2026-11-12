@@ -71,21 +71,19 @@ try {
   await page.goto(`${web.origin}/scripts/fixtures/reply-rail.html`);
   const rail = page.locator(".task-reply-rail");
   await rail.waitFor();
-  // 两张卡都得先真的画出来,否则后面数到的 1 可能只是「它压根没出现」。
-  await page.locator(".monitor-wait").waitFor();
+  // 卡得先真的画出来,否则后面数到的 1 可能只是「它压根没出现」。（哨兵那张已经挪进会话，feed-7。）
   await page.locator(".accept-gate-wait").waitFor();
 
   const flush = () => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
   const cards = () => rail.evaluate((element) => ({
-    monitor: element.querySelectorAll(".monitor-wait").length,
     gate: element.querySelectorAll(".accept-gate-wait").length,
     children: element.children.length,
   }));
 
   const first = await cards();
   assert.deepEqual(
-    { monitor: first.monitor, gate: first.gate },
-    { monitor: 1, gate: 1 },
+    { gate: first.gate },
+    { gate: 1 },
     `首帧每张卡应各一份，实得 ${JSON.stringify(first)}`,
   );
 
@@ -96,8 +94,8 @@ try {
   await flush();
   const after = await cards();
   assert.deepEqual(
-    { monitor: after.monitor, gate: after.gate },
-    { monitor: 1, gate: 1 },
+    { gate: after.gate },
+    { gate: 1 },
     `重渲染 12 次后仍应各一份(孤儿节点回归)，实得 ${JSON.stringify(after)}`,
   );
   assert.equal(
@@ -112,8 +110,8 @@ try {
     await flush();
     const toggled = await cards();
     assert.deepEqual(
-      { monitor: toggled.monitor, gate: toggled.gate, children: toggled.children },
-      { monitor: 1, gate: 1, children: expectedChildren },
+      { gate: toggled.gate, children: toggled.children },
+      { gate: 1, children: expectedChildren },
       `接力入口翻面后 rail 应只有该有的那几个节点，实得 ${JSON.stringify(toggled)}`,
     );
   }
@@ -125,8 +123,8 @@ try {
   await flush();
   const settled = await cards();
   assert.deepEqual(
-    { monitor: settled.monitor, gate: settled.gate, children: settled.children },
-    { monitor: 1, gate: 1, children: first.children },
+    { gate: settled.gate, children: settled.children },
+    { gate: 1, children: first.children },
     `翻面后再重渲染仍应各一份，实得 ${JSON.stringify(settled)}`,
   );
 

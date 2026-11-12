@@ -68,6 +68,7 @@ const ORDER: { kind: StepKind; past: string; unit: string; noun: string; byFile:
   { kind: "run", past: "跑了", unit: "条", noun: "命令", byFile: false },
   { kind: "web", past: "看了", unit: "个", noun: "网页", byFile: false },
   { kind: "dispatch", past: "派了", unit: "个", noun: "子智能体", byFile: false },
+  { kind: "wait", past: "等了", unit: "次", noun: "哨兵", byFile: false },
 ];
 
 /** 做完以后的那一句。一步都没有(只有思考)时说「想了一会儿」;什么都没有时退回「执行过程」。 */

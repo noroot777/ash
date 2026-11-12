@@ -1,0 +1,22 @@
+/* 「在等哨兵」那一行（monitors/MonitorWaitLine.tsx）：会话最后、和回合正文对齐的一行静止的字。
+   图标是琥珀色（等你处理 / 在等的那一类状态色），字是次级色；点开是一块浅底的说明。 */
+.monitor-wait-line { max-width: 790px; margin: -8px 0 20px; padding-left: 30px; color: var(--muted); font-size: var(--t-xs); }
+.monitor-wait-line__bar { display: flex; max-width: 100%; min-height: 24px; align-items: center; gap: 6px; border: 0; border-radius: var(--r-sm); background: transparent; padding: 0 6px; margin-left: -6px; color: var(--muted); font-size: var(--t-xs); text-align: left; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.monitor-wait-line__bar:hover, .monitor-wait-line__bar[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.monitor-wait-line__bar > svg { flex: none; color: var(--amber); }
+.monitor-wait-line.is-builtin-only .monitor-wait-line__bar > svg { color: var(--faint); }
+.monitor-wait-line__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.monitor-wait-line__time, .monitor-wait-line__due { flex: none; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.monitor-wait-line__time::before, .monitor-wait-line__bar > .monitor-wait-line__due::before { content: "·"; margin-right: 6px; }
+.monitor-wait-line__body { width: min(560px, 100%); margin-top: 4px; border-radius: var(--r-md); background: var(--raised); padding: 2px 12px 10px; animation: task-menu-in var(--dur-2) var(--ease-out); }
+.monitor-wait-line__body p { margin: 8px 0 0; line-height: 1.6; }
+.monitor-wait-line__body q { color: var(--ink); quotes: "「" "」"; }
+.monitor-wait-line__body code { border-radius: 4px; background: var(--overlay); padding: 0 3px; font-family: var(--font-mono); font-size: var(--t-xs); }
+.monitor-wait-line__body .is-stuck { color: var(--amber); }
+.monitor-wait-line__list { display: grid; gap: 2px; margin: 8px 0 0; padding: 0; list-style: none; }
+.monitor-wait-line__list li { display: flex; justify-content: space-between; gap: 12px; }
+.monitor-wait-line__acts { display: flex; gap: 4px; }
+.monitor-wait-line__acts button { height: 24px; border: 0; border-radius: var(--r-sm); background: transparent; padding: 0 6px; margin-left: -6px; color: var(--ink); font-size: var(--t-xs); text-decoration: underline; text-decoration-color: color-mix(in oklab, currentColor 30%, transparent); text-underline-offset: 3px; }
+.monitor-wait-line__acts button + button { margin-left: 4px; }
+.monitor-wait-line__acts button:hover:not(:disabled) { background: var(--hover-bg); }
+.monitor-wait-line__acts button:disabled { opacity: .5; }

@@ -11,7 +11,6 @@ export function TaskReplyRail({
   task,
   freeToolbar,
   canHandoff,
-  monitorWait,
   gateWait,
   onHandoff,
   notify,
@@ -22,14 +21,8 @@ export function TaskReplyRail({
   /** 接力入口给不给：单飞、没归档、不在队列里、没接力出去(或还悬着)。 */
   canHandoff: boolean;
   /**
-   * 哨兵那一条（折叠态；`MonitorWaitCard` 自己管展开）。落在这条 rail 上是因为它和这里
-   * 的按钮是同一类东西：**任务正跑着也得看得见**。展开后它靠 `flex-basis: 100%` 换到
-   * 下一行占满——那时它是一张卡，跟按钮挤在一行会两头都读不清。
-   */
-  monitorWait?: ReactNode;
-  /**
-   * 验收前置命令那一条（折叠态；`AcceptGateWaitCard` 自己判要不要出现）。跟哨兵同一类
-   * 事实、同一套骨架，所以紧挨着它放 —— 两条都在时，它们是同一行里并排的两条。
+   * 验收前置命令那一条（折叠态；`AcceptGateWaitCard` 自己判要不要出现）。哨兵那一条原来
+   * 和它并排住在这里，现在挪进了会话最后（feed-7，monitors/MonitorWaitLine.tsx）。
    */
   gateWait?: ReactNode;
   onHandoff: () => void;
@@ -47,7 +40,7 @@ export function TaskReplyRail({
           <span>{returning ? "移回..." : "接力到..."}</span>
         </button>
       )}
-      {/* 两个插槽各自关进一个带 key 的 Fragment 里，**这一层不是装饰**。
+      {/* 插槽关进一个带 key 的 Fragment 里，**这一层不是装饰**（当年这里有两个插槽）。
           它们是同一条 children 列表里的兄弟，而 key 由调用方给：TaskDetail 给两张卡的都是
           `task.id`，于是列表里出现了两个同 key 的兄弟。只要这条列表前面还有一个 `false`
           （`canHandoff` 为假时那颗接力按钮就是 —— 在队列里的任务恒为假），React 就会从逐位
@@ -58,7 +51,6 @@ export function TaskReplyRail({
           重复 key 的警告只在开发构建里出）。关进各自的 Fragment 之后，调用方的 key 落在
           两棵不同的子树里，再也撞不到一起，调用方想怎么取 key 都安全；Fragment 不产生
           DOM 节点，这条 rail 的 flex 几何一个像素都不变。 */}
-      {monitorWait ? <Fragment key="monitor-wait">{monitorWait}</Fragment> : null}
       {gateWait ? <Fragment key="accept-gate-wait">{gateWait}</Fragment> : null}
     </div>
   );

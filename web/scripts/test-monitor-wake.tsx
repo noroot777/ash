@@ -95,7 +95,9 @@ const renderTeam = (items: ConversationItem[]) => renderToStaticMarkup(
     workers={[]} onOpenWorker={() => undefined} onAskLead={() => undefined} delegatingIds={new Set()} indicatorForTask={() => null} />,
 );
 const count = (text: string, token: string) => text.split(token).length - 1;
-for (const render of [renderTask, renderTeam]) {
+// 团队调度流还是原来那张折叠卡（团队有自己的版式）；普通任务的会话里，叫醒并进回合（下面那一段）。
+// 没有回复的叫醒（刚送进去、它还没开口）两边都还是这张卡。
+for (const render of [renderTeam]) {
   const html = render([notice, user(combined), reply]);
   assert.equal(count(html, 'class="monitor-wake-input '), 1);
   assert.equal(count(html, 'class="monitor-wake-reply"'), 1);
@@ -124,8 +126,8 @@ for (const render of [renderTask, renderTeam]) {
   assert.equal(count(render([notice, reply]), 'class="monitor-wake-input '), 0);
   assert.equal(count(render([user(output)]), 'class="monitor-wake-reply"'), 0);
   assert.equal(count(render([user(output, { bySystem: false }), reply]), 'class="monitor-wake-reply"'), 0);
-  assert.match(render([user(ended), reply]), /命令结束 ≠ 任务完成/);
-  assert.match(render([user(checkpoint), reply]), /含续跑交代/);
+  assert.match(render([user(ended)]), /命令结束 ≠ 任务完成/);
+  assert.match(render([user(checkpoint)]), /含续跑交代/);
   assert.ok(render([user(checkpoint)]).includes(checkpoint.text));
   assert.match(render([user(truncated)]), /500 条消息/);
   const spoofedHtml = render([user(spoofed)]);
@@ -142,6 +144,35 @@ for (const render of [renderTask, renderTeam]) {
   assert.match(hostile, /&lt;img/);
 }
 assert.match(renderToStaticMarkup(<SystemAuthoredMessage item={user({ text: "【验收未通过 · 需要你解冲突】\n合并发生冲突。" })} />), /system-action-note is-conflict/);
+// 普通任务（feed-7）：哨兵住进回合里。叫醒是执行过程里的一步，它醒来说的话接在等它的那一回合后面。
+{
+  // 等它的那一回合挂过哨兵（start_monitor）：插话判据靠它认出「这时有哨兵在等着」。
+  const startMonitor = { kind: "tool" as const, label: "mcp__ash__start_monitor", detail: JSON.stringify({ description: "全量回归", command: "npm test" }) };
+  const waiting = { ...agent("waiting"), markdown: "挂上哨兵等回归。", segments: [{ id: "waiting:body", markdown: "挂上哨兵等回归。", events: [startMonitor], attachments: [] }] };
+  const joined = renderTask([waiting, notice, user(combined), reply]);
+  assert.equal(count(joined, 'class="monitor-wake-input '), 0, "并进回合以后不再单独画一张自动输入卡");
+  assert.equal(count(joined, "task-message task-message--agent"), 1, "等它的那一回合和醒来的回答是同一段");
+  assert.match(joined, /挂上哨兵等回归。/);
+  assert.match(joined, /核对收到的回归结果/);
+  assert.match(joined, /哨兵「/, "叫醒那一下是执行过程里的一步");
+  assert.doesNotMatch(joined, /被哨兵叫醒/, "并进去的那一段不另起回合");
+  // 没有可并的回合（会话第一句就是叫醒）：另起一回合，名字后面写「被哨兵叫醒」。
+  const alone = renderTask([notice, user(combined), reply]);
+  assert.equal(count(alone, 'class="monitor-wake-input '), 0);
+  assert.match(alone, /class="turn-cause"[^>]*>被哨兵叫醒/);
+  // 等的时候你插过话：之后的叫醒不并进答你的那一回合，另起一回合。
+  const spoke = renderTask([
+    waiting,
+    user({ text: "先看一下别的" }, { id: "you", bySystem: false }),
+    agent("answer"),
+    user(combined, { id: "wake-2" }),
+    agent("woken"),
+  ]);
+  assert.equal(count(spoke, "task-message task-message--agent"), 3);
+  assert.equal(count(spoke, "被哨兵叫醒"), 1);
+  // 还没回复的叫醒照旧是那张卡。
+  assert.equal(count(renderTask([waiting, user(output)]), 'class="monitor-wake-input '), 1);
+}
 const reviewerWake = renderTask([{ ...notice, text: "第 1 轮验证开始：就在这个任务的工作目录里跑。", verify: true }, user(output), { ...reply, reviewer: { round: 1 } }]);
 assert.ok(reviewerWake.includes('class="verify-lane"'));
 assert.equal(count(reviewerWake, 'class="monitor-wake-input '), 1);
@@ -157,6 +188,12 @@ for (const items of [persisted, live]) {
   const input = items.find((item) => item.kind === "user")!;
   assert.deepEqual(monitorWakeInput(input)!.events, combined.monitorWake.events);
   assert.equal(monitorWakeReplyIds(items).size, 1);
-  assert.match(renderTask(items), /monitor-wake-reply/);
+  const html = renderTask(items);
+  assert.equal(count(html, "task-message task-message--agent"), 1, "落盘和直播两条路都不再把叫醒单独画成一张卡");
+  assert.equal(count(html, 'class="monitor-wake-input '), 0);
+  assert.match(html, /收到回归结果。/);
+  // 落盘那一路前面还有等它的那一回合：并进去；直播那一路只有叫醒和回复：另起一回合。
+  if (items === persisted) assert.match(html, /等待全量回归。/);
+  else assert.match(html, /被哨兵叫醒/);
 }
 console.log("monitor wake: structured provenance, hostile logs, legacy fallback, default-collapsed card, task/team, live/reload passed");

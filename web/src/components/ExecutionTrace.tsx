@@ -1,4 +1,4 @@
-import { CaretRight, File, Globe, Lightbulb, ListChecks, MagnifyingGlass, PencilSimple, Plug, Robot, TerminalWindow, WarningCircle, X } from "@phosphor-icons/react";
+import { CaretRight, File, Globe, Lightbulb, ListChecks, MagnifyingGlass, PencilSimple, Plug, Pulse, Robot, TerminalWindow, WarningCircle, X } from "@phosphor-icons/react";
 import { isVisibleExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
 import { describeEvent, isFlatStep, liveLabel, pastSummary, type StepView } from "../lib/executionWords.ts";
 import { useSwapText } from "../lib/useSwapText.ts";
@@ -22,6 +22,7 @@ function StepIcon({ view }: { view: StepView }) {
     case "run": return <TerminalWindow {...props} />;
     case "web": return <Globe {...props} />;
     case "dispatch": return <Robot {...props} />;
+    case "wait": return <Pulse {...props} />;
     default: return view.verb === "记待办" ? <ListChecks {...props} /> : <Plug {...props} />;
   }
 }

@@ -196,7 +196,7 @@ const TURN_PROTOCOL = new Set(["complete_task", "pause_task", "report_stage", "a
 const PLAN_BOOKKEEPING = new Set(["taskcreate", "taskupdate", "tasklist", "todowrite", "update_plan"]);
 
 /** `mcp__ash__complete_task`(claude)/ `ash/complete_task`(codex)→ `complete_task`。 */
-function ashMcpTool(label: string): string | null {
+export function ashMcpTool(label: string): string | null {
   for (const server of [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME]) {
     if (label.startsWith(`mcp__${server}__`)) return label.slice(`mcp__${server}__`.length);
     if (label.startsWith(`${server}/`)) return label.slice(server.length + 1);

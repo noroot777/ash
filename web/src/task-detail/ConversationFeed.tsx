@@ -39,6 +39,7 @@ import { isQuestionAnswer, type QuestionRecord } from "@ash/shared/questions";
 import { canForkReply } from "./conversationFork.ts";
 import { MonitorWakeReply } from "./MonitorWakeInput.tsx";
 import { monitorWakeInput, monitorWakeReplyIds } from "./monitorWakeModel.ts";
+import { foldMonitorWakes } from "./monitorWakeTurns.ts";
 import { mergeNoticeItems, useRejectionNotices } from "./useRejectionNotices.ts";
 import { ReclaimTurnSwitch } from "./ReclaimTurnSwitch.tsx";
 import { DeleteMessageButton, MessageDeleteProvider } from "./MessageDelete.tsx";
@@ -107,6 +108,7 @@ function AgentMessage({
         {(showIdentity || showBadge || meta) && (
           <header className="turn-head">
             {showIdentity && <b>{item.label}</b>}
+            {showIdentity && item.wokenByMonitor && <span className="turn-cause">被哨兵叫醒</span>}
             {showBadge && <ReviewerBadge round={reviewer.round} />}
             {meta && <span className="turn-meta">{meta}</span>}
           </header>
@@ -232,8 +234,9 @@ export function ConversationFeed({
   // 可见」没有关系,上一版拿它当判据,任务一跑出正文第一次被拒的记录就再也显示不出来
   // (第 2 轮审查 F4)。合流之后它和会话正文里的 aside 旁注走同一套渲染。
   const { items: noticeItems, remedy: turnRemedy, reload: reloadNotices } = useRejectionNotices(task.id);
+  // 哨兵叫醒那几下并回等它的那一回合（feed-7，见 monitorWakeTurns）。
   const items = useMemo(
-    () => bodyReady ? mergeNoticeItems(feedItems, noticeItems) : feedItems,
+    () => foldMonitorWakes(bodyReady ? mergeNoticeItems(feedItems, noticeItems) : feedItems),
     [bodyReady, feedItems, noticeItems],
   );
   const requirementText = requirement?.text;

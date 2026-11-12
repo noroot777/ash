@@ -2,7 +2,7 @@
 //
 // 钉的是**孤儿 DOM**那一幕（任务 z2lq7MAWeKx7 实测）：rail 上的「在等 N 个哨兵」每次重
 // 渲染多出一张，长开的页面上攒了几十张，而数据侧只有 1 条在跑。所以夹具必须用真的
-// `TaskReplyRail` + 真的两张 wait 卡 —— 它是 React 对一条 children 列表怎么比对的产物，
+// `TaskReplyRail` + 真的 wait 卡（哨兵那张 2026-11 挪进了会话，现在只剩门禁那张）—— 它是 React 对一条 children 列表怎么比对的产物，
 // 脱开真实的渲染-提交过程（手搓几个 div、或只断言组件返回值）一点都复现不出来。
 //
 // **两张卡的 key 在这里故意都给成裸 `task.id`**（出事那一版 TaskDetail 的原样）：这条列表
@@ -11,22 +11,11 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
-import type { TaskMonitor } from "@ash/shared/monitor";
-import { MonitorWaitCard } from "../../src/monitors/MonitorWaitCard.tsx";
 import { AcceptGateWaitCard } from "../../src/review/AcceptGateWaitCard.tsx";
 import { TaskReplyRail } from "../../src/task-detail/TaskReplyRail.tsx";
 import "../../src/styles/global.css";
 
 const TASK_ID = "rail-task";
-
-const MONITOR: TaskMonitor = {
-  id: "m-1", taskId: TASK_ID, kind: "ash", nativeId: null, lifetime: "bounded",
-  command: "tail -F build.log", description: "盯构建日志", cwd: "/repo", status: "running",
-  pid: 4242, events: 3, exitCode: null,
-  startedAt: "2026-10-27T02:00:00.000Z", startedAtExact: true,
-  expiresAt: "2026-10-27T04:00:00.000Z",
-  timeoutMs: 7_200_000, endedAt: null, endedReason: null,
-};
 
 const task = {
   id: TASK_ID,
@@ -59,17 +48,6 @@ function Fixture() {
         // 它留在 `false` 位上同样提供「前面有一个 false」这个触发条件。
         freeToolbar={false}
         canHandoff={canHandoff}
-        monitorWait={(
-          <MonitorWaitCard
-            key={task.id}
-            monitors={[MONITOR]}
-            builtinCount={0}
-            status={task.status}
-            resumePrompt="继续：接着看构建"
-            reviewArmed={false}
-            onOpenPanel={() => undefined}
-          />
-        )}
         gateWait={<AcceptGateWaitCard key={task.id} taskId={TASK_ID} expected notify={() => undefined} />}
         onHandoff={() => undefined}
         notify={() => undefined}

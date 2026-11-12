@@ -4,7 +4,7 @@ import type { Group, Task, TaskListItem } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
-import { MonitorWaitCard } from "../monitors/MonitorWaitCard.tsx";
+import { MonitorWaitLine } from "../monitors/MonitorWaitLine.tsx";
 import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { TaskFileLinks } from "../components/TaskFileLink.tsx";
@@ -505,6 +505,19 @@ export function TaskDetail({
                         }
                         : undefined}
                       onAskSideChat={(quote) => { stageSideChatQuote(task.id, quote); openTab("side-chat"); }}
+                      // 任务停下来等哨兵：会话最后多一行「在等哨兵…」（feed-7）。在跑的时候不出——
+                      // 那时挂上的哨兵是执行过程里的一步，事件排着队等这一轮跑完。
+                      footer={task.status !== "running" && task.status !== "queued" && (liveMonitors.length || liveBuiltinCount) ? (
+                        <MonitorWaitLine
+                          key={`monitor-wait:${task.id}`}
+                          monitors={liveMonitors}
+                          builtinCount={liveBuiltinCount}
+                          resumePrompt={task.resumePrompt ?? null}
+                          reviewArmed={!!free.state?.reviewReservation.armed}
+                          onOpenPanel={() => openTab("monitors")}
+                          notify={notify}
+                        />
+                      ) : undefined}
                       reviews={free.state?.reviews}
                       onOpenReviewPanel={() => openTab("review")}
                       // 会话区底部的常驻卡。提问要人答，所以它留在会话里（答案就在那条
@@ -527,30 +540,13 @@ export function TaskDetail({
                       tasks={allTasks}
                       hasConversation={hasConversation}
                       conversationItems={conversation.items}
-                      // 哨兵那一条也住这儿:它跟派审/预览是同一类东西——任务正跑着也得
-                      // 看得见。所以 rail 的显示条件要连它一起算,否则「只有哨兵、没有那
-                      // 几个按钮」的任务（归档的、预设工作流的）会整条消失。
-                      topRail={freeToolbarVisible || canHandoff || liveMonitors.length || liveBuiltinCount
-                        || task.acceptGateRunning
+                      // 哨兵不住这儿了：等的时候是会话最后那一行（feed-7，见下面传给会话的 footer）。
+                      topRail={freeToolbarVisible || canHandoff || task.acceptGateRunning
                         ? (
                           <TaskReplyRail
                             task={task}
                             freeToolbar={freeToolbarVisible}
                             canHandoff={canHandoff}
-                            monitorWait={(
-                              <MonitorWaitCard
-                                // 切任务时折叠回去:上一个任务展开过,不代表这一个也该展开。
-                                // 带上角色前缀:这两张卡是 rail 里的兄弟,光用 task.id 会跟
-                                // 下面那张门禁卡撞成同一个 key(后果见 TaskReplyRail 里那段)。
-                                key={`monitor-wait:${task.id}`}
-                                monitors={liveMonitors}
-                                builtinCount={liveBuiltinCount}
-                                status={task.status}
-                                resumePrompt={task.resumePrompt ?? null}
-                                reviewArmed={!!free.state?.reviewReservation.armed}
-                                onOpenPanel={() => openTab("monitors")}
-                              />
-                            )}
                             // 验收前置命令那一条:点了验收之后它在工作区里跑十几分钟,而
                             // 任务本身 status/stage 一个字都不变 —— 不摆在这儿,主会话页
                             // 上就完全看不出有东西在跑(时间轴那行很快被顶走)。

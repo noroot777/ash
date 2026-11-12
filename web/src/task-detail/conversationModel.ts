@@ -67,6 +67,8 @@ export type ConversationItem =
       showSessionMeta?: boolean;
       /** 上一条说话的还是同一个会话、中间只隔着旁注：接着上一段说，不再重报头像和执行器名。 */
       continuation?: boolean;
+      /** 这一回合是哨兵叫醒的、没能并回等它的那一回合（等的时候你插过话），见 monitorWakeTurns。 */
+      wokenByMonitor?: boolean;
       session?: Session;
       run?: { model: string | null; reasoningEffort: string | null };
       /**

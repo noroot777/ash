@@ -15,7 +15,7 @@ import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp
 import { shortenPath, traceSummary, type ExecutionEvent } from "./executionTrace.ts";
 
 /** 摘要里分得开的那几类;其余的(调用 MCP、记待办、看目录……)都算 other,摘要里并成「另有 N 步」。 */
-export type StepKind = "read" | "search" | "edit" | "write" | "run" | "web" | "dispatch" | "other";
+export type StepKind = "read" | "search" | "edit" | "write" | "run" | "web" | "dispatch" | "wait" | "other";
 
 export type StepPhrase = {
   kind: StepKind;
@@ -50,6 +50,7 @@ const FORMS: Record<Exclude<StepKind, "other">, [verb: string, now: string, past
   run: ["跑", "正在跑", "跑了"],
   web: ["看网页", "正在看", "看了"],
   dispatch: ["派", "正在派", "派了"],
+  wait: ["等", "在等", "等了"],
 };
 
 // 工具名归一:小写、去掉 _ - 空格,`read_file` / `ReadFile` / `readFile` 落到同一个键上。
@@ -82,6 +83,9 @@ other("closeagent interruptagent", "停子智能体", "正在停子智能体", "
 other("resumeagent", "唤回子智能体", "正在唤回子智能体", "唤回了子智能体", ["id"]);
 other("listagents", "看子智能体", "正在看子智能体", "看了子智能体", []);
 other("exitplanmode", "交出计划", "正在交出计划", "交出了计划", ["plan"]);
+
+/** 哨兵叫醒那一步在执行过程里用的工具名(ash 服务名下),见 task-detail/monitorWakeTurns.ts。 */
+export const MONITOR_WAKE_TOOL = "monitor_wake";
 
 // ash 自己那套 MCP 工具:名字说的就是动作,翻一下就不必让人去认 `mcp__ash__start_monitor`。
 const ASH_TOOLS: Record<string, [string, string, string, string[]]> = {
@@ -365,6 +369,19 @@ export function describeTool(event: ExecutionEvent): StepPhrase {
     const line = collapse(what.split("\n")[0] ?? "");
     // 折叠条上单说一句「派了 找工具渲染点」读不通,补上派的是什么。
     return phrase(kind, FORMS.dispatch, { object: line, short: line ? `子智能体「${clip(line, 40)}」` : "子智能体" }, parsed, "任务");
+  }
+
+  // 哨兵叫醒了它:不是它调的工具,是 ash 把等来的东西喂回这一回合(task-detail/monitorWakeTurns.ts
+  // 造的那一步)。说成「等 哨兵「…」」,后面是等了多久、等到了什么;点开是送回来的那几行。
+  if (isAsh && tool === MONITOR_WAKE_TOOL && input) {
+    const name = asText(input.source) || "哨兵";
+    const output = asText(input.output);
+    return {
+      kind: "wait", verb: FORMS.wait[0], now: FORMS.wait[1], past: FORMS.wait[2], object: `哨兵「${clip(collapse(name), 60)}」`, short: `哨兵「${clip(collapse(name), 24)}」`,
+      mono: false, tail: [asText(input.waited), asText(input.got)].filter(Boolean).join(" · ") || undefined, files: [],
+      fields: output ? [["送回", clip(output, MAX_FIELD)]] : [], raw: asText(input.raw) || undefined,
+      failed: input.bad === true,
+    };
   }
 
   // 其余:有专门说法的用专门说法,否则「调用 <工具名>」后面跟一个挑得出来的值。

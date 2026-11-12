@@ -88,17 +88,6 @@
 /* 不能挂哨兵时那一句：说清为什么，而不是让「+」凭空消失。 */
 .monitor-inspector__blocked { margin: 0 0 9px; border-left: 2px solid var(--line2); padding-left: 8px; color: var(--faint); font-size: 10px; line-height: 1.6; }
 
-/* ── 回复框上方那条哨兵(MonitorWaitCard) ──────────────────────────────────────
-   形态、尺寸、展开方式全在共用的 .wait-bar 里(web/src/styles/wait-bar.css),验收前置
-   命令那条用的是同一套。这儿只留哨兵独有的:那份「在等几个、各自盯什么」的列表,以及
-   「只有内置 Monitor 在跑」时的降调。 */
-.monitor-wait__list { display: grid; gap: 3px; margin: 2px 0 0; padding: 0; list-style: none; }
-.monitor-wait__list > li { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
-.monitor-wait__what { min-width: 0; overflow: hidden; color: var(--muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
-/* 「这一刻认不回来」那一段:它是**受阻**,不是说明 —— 用边线把它从旁注里拎出来(灰到底的
-   小字里,用户要先看见这一句才知道「等着」等不来)。 */
-.monitor-wait__note--stuck { border-left: 1.5px solid color-mix(in srgb, var(--amber) 48%, transparent); padding-left: 7px; color: var(--muted); }
-
 /* ── 按来源分段(MonitorInspector)──────────────────────────────────────────────
    两种哨兵的能力不对等,混排会让用户对着一张只读卡去找停止按钮。段头做得轻:一行小字,
    名字 + 一句「能拿它怎么办」,不抢卡片本身的位置。 */
@@ -106,6 +95,4 @@
 .monitor-group__head { display: grid; gap: 1px; margin: 0 0 6px; }
 .monitor-group__name { color: var(--muted); font-size: 10px; font-weight: 650; letter-spacing: .02em; }
 .monitor-group__hint { color: var(--faint); font-size: 9px; font-weight: 400; line-height: 1.5; }
-/* 只有内置 Monitor 在跑时：它不表达「正在等一件会回来的事」,所以不借那套 «进行中»
-   的颜色,把 tint 退成中性 —— 卡片说的恰恰是「别指望它叫醒你」。 */
-.wait-bar.is-builtin-only { --wait-tint: var(--muted); border-color: var(--line); background: var(--panel); }
+

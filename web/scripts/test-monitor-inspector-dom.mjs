@@ -519,7 +519,7 @@ try {
     await page.close();
   }
 
-  // ── 回复框上那条「在等哨兵」展开之后说了什么 ───────────────────────────────
+  // ── 会话最后那一行「在等哨兵」展开之后说了什么 ───────────────────────────────
   // 这件事**只能点开才看得见**：正文默认不渲染，所以静态渲染根本摸不到那段文案（第 21 轮
   // 审查 N2：上一版那条静态断言查的是折叠态，于是「不含某句话」在任何实现下都成立）。
   //
@@ -531,8 +531,8 @@ try {
   {
     const bodyOf = async (mode) => {
       const page = await open(undefined, `?wait=${mode}`);
-      await page.locator(".wait-bar__bar").click();
-      const body = page.locator(".wait-bar__body");
+      await page.locator(".monitor-wait-line__bar").click();
+      const body = page.locator(".monitor-wait-line__body");
       await body.waitFor();
       const text = await body.innerText();
       await page.close();

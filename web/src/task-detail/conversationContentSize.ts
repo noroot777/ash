@@ -106,6 +106,7 @@ const AGENT_SIZE: SizeTable<AgentItem> = {
   interrupted: () => 0,
   showSessionMeta: () => 0,
   continuation: () => 0,
+  wokenByMonitor: () => 0,
   session: () => 0,
   run: () => 0,
   reviewer: () => 0,

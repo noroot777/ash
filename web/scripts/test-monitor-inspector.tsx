@@ -11,7 +11,7 @@ import type { InspectorDescriptor } from "../src/inspector/types.ts";
 import { formatInstant } from "../src/task-detail/utils.ts";
 import { MonitorInspector } from "../src/monitors/MonitorInspector.tsx";
 import { emptyLogCopy } from "../src/monitors/monitorCopy.ts";
-import { MonitorWaitCard } from "../src/monitors/MonitorWaitCard.tsx";
+import { MonitorWaitLine } from "../src/monitors/MonitorWaitLine.tsx";
 import { withMonitorTab } from "../src/monitors/useMonitorInspector.tsx";
 import type { TaskMonitorsState } from "../src/monitors/useTaskMonitors.ts";
 
@@ -138,16 +138,24 @@ const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
   assert.match(spanOnly, /总共盯 2 分钟/, "119.6 秒说成「2 分钟」，不是「1 分 60 秒」");
   assert.doesNotMatch(spanOnly, /60 秒/, "任何情况下都不该出现 60 秒");
 
-  // 「（起点不确定）」这句话现在只剩**回复框上那张等待卡**一个去处：那里没有起点那一段，
-  // 所以必须自带这半句。卡片上它是重复的（起点那一段已经认了），于是传
-  // `startSaidSeparately` 关掉——两头要分别钉住，否则「到处都不说」也能让上面那条绿。
+  // 「（起点不确定）」这句话现在只剩**会话最后那一行「在等哨兵」**一个去处：起点不作数、
+  // 算不出「最迟几点」时，那一行退回这一句，所以必须自带这半句。卡片上它是重复的（起点那一段
+  // 已经认了），于是传 `startSaidSeparately` 关掉——两头要分别钉住，否则「到处都不说」也能让上面那条绿。
   const waiting = renderToStaticMarkup(
-    <MonitorWaitCard
-      monitors={[{ ...base, expiresAt: null, timeoutMs: 119_600 }]} builtinCount={0}
-      status="paused" resumePrompt={null} reviewArmed={false} onOpenPanel={() => undefined}
+    <MonitorWaitLine
+      monitors={[{ ...base, expiresAt: null, timeoutMs: 119_600, startedAtExact: false }]} builtinCount={0}
+      resumePrompt={null} reviewArmed={false} onOpenPanel={() => undefined}
     />,
   );
-  assert.match(waiting, /总共盯 2 分钟（起点不确定）/, "等待卡只显示这一句，所以要自带「起点不确定」");
+  assert.match(waiting, /总共盯 2 分钟（起点不确定）/, "等待行算不出最迟几点时要自带「起点不确定」");
+  // 起点作数时直接说最迟几点。
+  const due = renderToStaticMarkup(
+    <MonitorWaitLine
+      monitors={[{ ...base, expiresAt: null, timeoutMs: 119_600 }]} builtinCount={0}
+      resumePrompt={null} reviewArmed={false} onOpenPanel={() => undefined}
+    />,
+  );
+  assert.match(due, /最迟 (\d\d\/\d\d )?\d\d:\d\d/, "起点作数时等待行写最迟几点");
   assert.doesNotMatch(spanOnly, /起点不确定/, "卡片上起点已经单独说过了，不许再带一遍");
 }
 
@@ -545,7 +553,7 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
   }
 }
 
-// ── 回复框上那条「在等哨兵」：折叠那一行照旧只报数 ──────────────────────────────
+// ── 会话最后那一行「在等哨兵」：折叠时只说等的是谁 ──────────────────────────────
 //
 // 重启恰好打断了「落身份 → 起进程 → 回填 pid」那一步时,那一行是 running、pid 空、
 // `ended_reason` 上写着受阻原因(server/src/monitor-adopt.ts 的 `notePendingIntent`)。
@@ -558,8 +566,8 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
       + "所以一个信号都没发；这条创建意图原样留着，ash 正在自己按间隔重问身份，认回来就接上日志和期限（日志路径见这一行）",
   };
   const wait = (monitors: TaskMonitor[]) => renderToStaticMarkup(
-    <MonitorWaitCard
-      monitors={monitors} builtinCount={0} status="paused" resumePrompt={null}
+    <MonitorWaitLine
+      monitors={monitors} builtinCount={0} resumePrompt={null}
       reviewArmed={false} onOpenPanel={() => undefined}
     />,
   );
@@ -567,8 +575,8 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
   // 归 test-monitor-inspector-dom.mjs 的 `?wait=pending|claimed` 两张台子(第 21 轮审查 N2:
   // 上一版在折叠态上断言「不含『重新叫醒』」,那在任何实现下都成立,等于什么都没查)。
   const shut = wait([stuck]);
-  assert.match(shut, /在等 1 个哨兵/, "折叠那一行照旧:在等几个、等的是谁");
-  assert.doesNotMatch(shut, /wait-bar__body/,
+  assert.match(shut, /在等哨兵「盯构建日志」/, "折叠那一行:等的是谁");
+  assert.doesNotMatch(shut, /monitor-wait-line__body/,
     "折叠态连正文都不渲染 —— 这一条钉住上面那句话的前提:正文的断言只能在真点击里做");
 }
 
