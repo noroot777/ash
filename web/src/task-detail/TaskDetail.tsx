@@ -506,12 +506,13 @@ export function TaskDetail({
                           builtinCount={liveBuiltinCount}
                           resumePrompt={task.resumePrompt ?? null}
                           reviewArmed={!!free.state?.reviewReservation.armed}
-                          onOpenPanel={() => openTab("monitors")}
+                          onOpenPanel={() => openTab("monitors", liveMonitors[0] ? { monitorId: liveMonitors[0].id } : undefined)}
                           notify={notify}
                         />
                       ) : undefined}
                       reviews={free.state?.reviews}
-                      onOpenReviewPanel={() => openTab("review")}
+                      // 会话里那一句审查结论点过来：审查格展开那一轮（feed-10 / insp-5）。
+                      onOpenReviewPanel={(round) => openTab("review", round != null ? { round } : undefined)}
                       // 会话区底部的常驻卡。提问要人答，所以它留在会话里（答案就在那条
                       // 对话上下文里）；哨兵是「它自己会回来」，一行就够，落在回复框上方
                       // 那条 rail 上（见下面的 monitorWait）。

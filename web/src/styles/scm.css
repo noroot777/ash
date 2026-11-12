@@ -110,7 +110,7 @@
 .scm-commit textarea {
   width: 100%;
   min-height: 52px;
-  resize: vertical;
+  resize: none;
   border: 1px solid var(--line2);
   border-radius: var(--r-md);
   background: var(--panel);

@@ -7,6 +7,7 @@ import { isSendKeyEvent } from "../../lib/sendKey.ts";
 import { useSendKeyLabels } from "../../lib/useComposerSendKey.ts";
 import { InspectorPromptContent } from "../InspectorPromptContent.tsx";
 import { formatInstant, parseAttachmentText } from "../utils.ts";
+import { AutoTextarea } from "../../components/AutoTextarea.tsx";
 
 /** 原始需求：收着时是两行字（整块可点），点开是全文加附件链接，底下一颗「收起」。 */
 export function InfoRequest({ body }: { body: string }) {
@@ -115,7 +116,7 @@ export function InfoResumePrompt({ value, editable, onSave }: {
       </InspRow>
       {editing && editable && (
         <InspRow wide>
-          <textarea
+          <AutoTextarea
             className="insp-field"
             autoFocus
             rows={4}

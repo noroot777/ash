@@ -24,6 +24,7 @@ import {
 } from "./ReviewerRunOverride.tsx";
 import { openReviewerSettings } from "./openReviewerSettings.ts";
 import "../styles/free-review-dialog.css";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 const CHECK_MODES = [
   { value: "logic", label: "逻辑检查", detail: "看得见的前端改动会真打开页面截图" },
@@ -443,7 +444,7 @@ export function FreeReviewDialog({
             <div className="free-review-row">
               <label htmlFor="free-review-note">附言</label>
               <div>
-                <textarea
+                <AutoTextarea
                   id="free-review-note"
                   className="free-review-note"
                   value={note}

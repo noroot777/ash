@@ -61,7 +61,7 @@
 .side-chat-quote blockquote:focus-visible { border-radius: 2px; outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .side-chat-input { border: 1px solid var(--line2); border-radius: var(--r-lg); background: var(--panel); padding: 8px; transition: border-color var(--dur-1) var(--ease-out); }
 .side-chat-input:focus-within { border-color: var(--focus-soft); box-shadow: 0 0 0 1px var(--focus-soft); }
-.side-chat-input textarea { display: block; width: 100%; min-height: 56px; max-height: 180px; resize: vertical; border: 0; outline: none; padding: 2px; color: var(--ink); background: transparent; font: inherit; line-height: 1.6; }
+.side-chat-input textarea { display: block; width: 100%; min-height: 56px; max-height: 180px; resize: none; border: 0; outline: none; padding: 2px; color: var(--ink); background: transparent; font: inherit; line-height: 1.6; }
 /* 附件卡片沿用主会话那套（task-reply.css / task-conversation.css）。侧栏只有三百来像素宽，
    190px 的固定上限会让两张图挤成一行半，这里改成跟着栏宽走。 */
 .side-chat-compose .task-upload-list { margin: 0 0 8px; }

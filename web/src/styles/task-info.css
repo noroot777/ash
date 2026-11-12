@@ -181,7 +181,7 @@ button.insp-req:focus-visible {
 .insp-field {
   display: block;
   width: 100%;
-  resize: vertical;
+  resize: none;
   border: 1px solid var(--line2);
   border-radius: var(--r-md);
   background: var(--panel);
