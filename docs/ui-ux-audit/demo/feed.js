@@ -1,7 +1,8 @@
 /* 会话流（部件 feed）：静态的一段会话 + 滚动钮 + 输入导航 + 提问坞。
    造回合、气泡、里程碑行、执行过程的那几个函数挂在 ASH.feedKit 上，执行中的模拟（live.js）用的是同一套。
    会话里平时只有三样：你说的（气泡）、它说的（回合）、里程碑（一行一句：审查出了结论、验收了）。ash 自己的话不单独占行——
-   「这一回合为什么开始」是回合头名字后面的一句起因（被哨兵叫醒、照审查意见改、重试），原文点了再看；
+   哨兵把它叫醒不算新的一回合：还是这一回合接着往下说，中间只多一行（kit.watch，和「执行过程」同一个写法）；
+   「这一回合为什么开始」是回合头名字后面的一句起因（照审查意见改、重试），原文点了再看；
    回执（开始盯、暂停、预约、不再等了……）记在它所属的那一回合上，指到这一回合才多出一项「N 条记录」。要你动手的事在任务头上（task.js 的那几颗图标），不在会话里。
    文案照 web/src/task-detail 的 ConversationFeed / SystemNotice / ReviewerLane / QuestionCard；清单 feed-1 到 feed-15。
    原始需求不在会话里出气泡（照现状，它住在右侧「信息」格）；输入导航的第一格是它，点了回到会话顶端。
@@ -100,9 +101,34 @@
     if (api.cause) head.firstElementChild.after(api.cause);
     return api;
   };
-  /* 被哨兵叫醒的那种起因点开的原文：谁发的、几条并成一次、原话 */
-  kit.wake = ({ from, lines = [] }) => ({ text: `由「${from}」叫醒`, detail: h('div.cause-body',
-    h('dl.kv', h('dt', '来自哨兵'), h('dd', from), h('dt', '写入会话'), h('dd', `${lines.length} 条消息 → 1 次输入`)), h('pre', lines.join('\n'))) });
+  /* 哨兵：回合里的一行，和「执行过程」同一个写法，行首是哨兵那颗图标。一个回合 = 从你发话到它把话交还给你，哨兵叫醒它不算换回合。
+     在等的时候是活的：「在等「…」」后面的用时在走；等到了原地落定成一句过去式——「等了「…」11m 42s，退出 0」。
+     点开是它送回来的那几行，和去哨兵格的入口。wait = { name, took?, exit?, at?, lines? }；没有 took = 还在等 */
+  kit.watch = (wait) => {
+    const label = h('span.fold-label');
+    const time = h('span.live-time.num');
+    const tail = h('time.rt');
+    const pre = h('pre');
+    const more = h('div.cause-body', { hidden: true }, pre,
+      h('button.sys-more', { type: 'button', onclick: () => ASH.emit('insp:open', { pane: 'watch' }) }, '在哨兵格里看'));
+    const btn = h('button.fold.watch', { type: 'button', 'aria-expanded': 'false', onclick: () => { if (!btn.classList.contains('is-flat')) unfold(btn, more); } }, icon('pulse'), label, time, tail);
+    const el = h('div.watch-row', btn, more);
+    const say = (w) => (w.took == null ? `在等「${w.name}」` : w.stopped ? `不再等「${w.name}」了` : w.exit == null ? `等了「${w.name}」${w.took}，到点没等到` : `等了「${w.name}」${w.took}，退出 ${w.exit}`);
+    const paint = (w, soft) => {
+      const live = w.took == null;
+      btn.classList.toggle('is-live', live);
+      const flat = live || !(w.lines ?? []).length;   /* 还在等、或者它什么都没送回来：没有东西可点开 */
+      btn.classList.toggle('is-flat', flat);
+      btn.tabIndex = flat ? -1 : 0;
+      el.classList.toggle('bad', !live && !w.stopped && w.exit !== 0);
+      if (soft) ASH.swap(label, say(w), { row: btn }); else label.textContent = say(w);
+      if (!live) { time.classList.remove('is-in'); time.textContent = ''; }
+      tail.textContent = w.at ?? '';
+      pre.textContent = (w.lines ?? []).join('\n');
+    };
+    paint(wait, false);
+    return { el, btn, time, settle(done) { Object.assign(wait, done); paint(wait, true); } };
+  };
 
   /* 一步：一句人话（动词 + 对象）。点开是「字段 值」，原始参数再折一层 */
   const VERB_ICON = { 读: 'file', 搜: 'search', 改: 'edit', 写: 'edit', 跑: 'term', 看网页: 'globe', 派: 'bot' };
@@ -200,7 +226,8 @@
     a2.body.append(foldA2.btn, foldA2.list, h('div.md', { html: `
       <p>三条意见都改了：补发和到点共用一把锁，一条消息只发一次；补发写进记录，带着原定的时间；过了点的几条按原定时间的先后发，补了回归。</p>` }));
 
-    const a3 = kit.turn({ meta: `${model} · 11/09 15:09 · 7m 2s` });
+    /* 这一回合中间挂了一个哨兵、等了十来分钟：还是一个回合，回合头只有一个，中间多一行「等了…」 */
+    const a3 = kit.turn({ meta: `${model} · 11/09 15:09 · 7m 22s` });
     const foldA3 = kit.fold('读了 1 个文件，改了 3 个，跑了 3 条命令', [
       { verb: '读', text: '`server/src/later-send-store.ts` 第 22–96 行', fields: { 文件: 'server/src/later-send-store.ts', 行: '22–96' } },
       { verb: '改', text: '`server/src/later-send-store.ts`' },
@@ -210,18 +237,15 @@
       { verb: '跑', text: '`git commit`', fields: { 命令: `git commit -m "${commits[0][1]}"`, 目录: '.' } },
       { verb: '跑', text: `挂一个哨兵盯${test.name}`, fields: { 命令: test.cmd, 目录: 'server', 时限: '15 分钟' } },
     ], { time: '7m 2s' });
-    a3.body.append(foldA3.btn, foldA3.list, h('div.md', { html: `
-      <p>两条都改了，各补了一个测试用例。回归要跑十来分钟，我挂了一个哨兵盯着，跑完会叫醒我；这一轮先停在这里。</p>` }));
-    a3.setLog([[`开始盯：${test.title}`, '15:16'], ['任务暂停，等回归结果', '15:16'], ['审查已预约，这一轮跑完自动开始', '15:17']]);
-
-    const b = kit.turn({ meta: `${model} · 11/09 15:28 · 20s`,
-      cause: kit.wake({ from: test.title, lines: [`[输出] ${test.pass} passed, 0 failed (11m 42s)`, '[结束] 命令退出，退出码 0'] }) });
+    const watch = kit.watch({ name: test.title, took: '11m 42s', exit: 0, at: '15:28', lines: [`[输出] ${test.pass} passed, 0 failed (11m 42s)`, '[结束] 命令退出，退出码 0'] });
     const foldB = kit.fold('读了 2 个文件，跑了 1 条命令', [
       { verb: '读', text: '`server/src/later-send-recover.ts` 第 18–74 行', fields: { 文件: 'server/src/later-send-recover.ts', 行: '18–74' } },
       { verb: '读', text: '`server/scripts/test-later-send-recover.ts`' },
       { verb: '跑', text: '`git log -2 --stat`', fields: { 命令: 'git log -2 --stat', 目录: '.' } },
     ], { time: '20s' });
-    b.body.append(foldB.btn, foldB.list, h('div.md', { html: `
+    a3.body.append(foldA3.btn, foldA3.list, h('div.md', { html: `
+      <p>两条都改了，各补了一个测试用例。回归要跑十来分钟，我挂了一个哨兵盯着，跑完接着说。</p>` }),
+      watch.el, foldB.btn, foldB.list, h('div.md', { html: `
       <p>第 2 轮审查的两条都修好了，分别提交为 <code>${commits[1][0]}</code> 和 <code>${commits[0][0]}</code>。登记的回归跑完，退出码 0。</p>
       <ol>
         <li><strong>撤回了的定时消息，重启后还会被补发</strong>：以前补发只看「过没过点」。现在先看这条还在不在待发送里，撤回的直接跳过。</li>
@@ -229,10 +253,9 @@
       </ol>
       <p>两个场景各加了一个测试用例。临时撤掉对应的修复，用例会失败；恢复后全部通过。</p>
       <p>这次只动了服务端和一行界面文案，没有碰数据库结构。</p>` }));
-
-    b.setLog([[`不再等「${test.title}」了，它已经跑完`, '15:28'], ['这一轮跑完，预约的审查开始', '15:28']]);
+    a3.setLog([['审查已预约，这一轮跑完自动开始', '15:17'], ['这一轮跑完，预约的审查开始', '15:28']]);
     const rev3 = rev(3);
-    return { a, foldA, a3, b, foldB, rev3, nodes: [a.el, rev(1), a2.el, rev(2), kit.user(ASH.data.cur.asks[0][1], ASH.data.cur.asks[0][0]), a3.el, b.el, rev3] };
+    return { a, foldA, a3, foldB, watch, rev3, nodes: [a.el, rev(1), a2.el, rev(2), kit.user(ASH.data.cur.asks[0][1], ASH.data.cur.asks[0][0]), a3.el, rev3] };
   };
 
   ASH.part('feed', {
@@ -412,25 +435,24 @@
       /* 认领清单条目 */
       const { rev3 } = s;
       feed.dataset.m = 'feed-13';
-      s.b.head.firstElementChild.dataset.m = 'feed-1';
-      s.b.acts.dataset.m = 'feed-2';
+      s.a3.head.firstElementChild.dataset.m = 'feed-1';
+      s.a3.acts.dataset.m = 'feed-2';
       s.foldB.btn.dataset.m = 'feed-8 a11y-2';
       $('.rt', rev3).dataset.m = 'feed-3';
-      s.b.log.btn.dataset.m = 'feed-5';
-      s.a3.log.btn.dataset.m = 'feed-15';
+      s.a3.log.btn.dataset.m = 'feed-5 feed-15';
       s.foldA.list.dataset.m = 'feed-6';
-      s.b.cause.dataset.m = 'feed-7';
+      s.watch.btn.dataset.m = 'feed-7';
       $('.mile-text', rev3).dataset.m = 'feed-10';
       /* 悬停才有的东西，点清单时亮 2.6 秒 */
       const peek = (...els) => { for (const el of els) { el.classList.add('is-shown'); setTimeout(() => el.classList.remove('is-shown'), 2600); } };
       const shut = (btn, box) => { if (btn.getAttribute('aria-expanded') === 'true') unfold(btn, box); };
-      ASH.prep['feed-1'] = () => peek($('.rt', s.b.head));
-      ASH.prep['feed-2'] = () => peek(s.b.acts);
+      ASH.prep['feed-1'] = () => peek($('.rt', s.a3.head));
+      ASH.prep['feed-2'] = () => peek(s.a3.acts);
       ASH.prep['feed-3'] = () => peek(...$$('.mile .rt', feed));
-      /* 回执、起因的原文都是点开才有的：点到哪一条就摊开哪一样，另一样收回去 */
-      ASH.prep['feed-5'] = () => { shut(s.b.cause, $('.cause-body', s.b.body)); if (!s.b.log.btn.matches('[aria-expanded="true"]')) unfold(s.b.log.btn, s.b.log.list); };
-      ASH.prep['feed-15'] = () => { if (!s.a3.log.btn.matches('[aria-expanded="true"]')) unfold(s.a3.log.btn, s.a3.log.list); };
-      ASH.prep['feed-7'] = () => { shut(s.b.log.btn, s.b.log.list); if (!s.b.cause.matches('[aria-expanded="true"]')) unfold(s.b.cause, $('.cause-body', s.b.body)); };
+      /* 回执、哨兵送回来的那几行都是点开才有的：点到哪一条就摊开哪一样，另一样收回去 */
+      const wakeBody = s.watch.el.lastElementChild;
+      ASH.prep['feed-5'] = ASH.prep['feed-15'] = () => { shut(s.watch.btn, wakeBody); if (!s.a3.log.btn.matches('[aria-expanded="true"]')) unfold(s.a3.log.btn, s.a3.log.list); };
+      ASH.prep['feed-7'] = () => { shut(s.a3.log.btn, s.a3.log.list); if (!s.watch.btn.matches('[aria-expanded="true"]')) unfold(s.watch.btn, wakeBody); };
       ASH.prep['feed-4'] = () => { feed.scrollTop = Math.max(120, feed.scrollTop - 60); top.classList.remove('is-hidden', 'is-idle'); clearTimeout(idle); idle = setTimeout(rest, 2600); };
       ASH.prep['feed-6'] = () => { s.foldA.toggle(true); const last = s.foldA.list.lastElementChild; if ($('.step-more', last).hidden) unfold($('button', last), $('.step-more', last)); };
       ASH.prep['feed-12'] = ASH.prep['feed-14'] = () => { if (!card) ask({ q: '回归里有一条用例依赖真实时钟，改成假时钟还是放宽断言？', options: ['改成假时钟', '把断言放宽到 ±1 秒'] }); };

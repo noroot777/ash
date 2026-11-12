@@ -2,7 +2,7 @@
    正文是「攒够约 40 字」才来一块，工具只有一条「开始」、没有「结束」——动效都落在前端能做的那一侧：
    一行进行条（流光 + 用时，做完原地落定成过去式）、匀速放字 + 淡入、同一时刻只有一个「活的」信号。
    这一轮跟着任务走，不跟着页面：切到别的面它照常往下跑（侧栏那一行照样变），回来接着看。
-   对外：ASH.parts.live = { running, play(name, say), stop(), retry(), accept(), destroy() }，name 是 run / ask / fail / slow；
+   对外：ASH.parts.live = { running, play(name, say), stop(), retry(), accept(), destroy() }，name 是 run / ask / fail / slow / watch；
    报告页隔着 iframe 递 { ash: 'play', name } 也能起一轮（正跑着的那一轮连同它留下的半截一起撤掉），{ ash: 'stop' } 是停；
    嵌在报告里时，等你答复那一刻往外递 { ash: 'title', waiting }，报告拿它改自己的标签页标题。
    发 run:state { running }（同时发 run:start / run:end）、task:status { id, status, why }、
@@ -78,6 +78,18 @@
       { think: 17000 },
       { text: '想了一圈，还剩一条：任务被接力到另一台机器时，待发送里的定时消息没有跟过去。这条我单独开一个任务记下来。' },
       { end: { turn: 9200, files: 0, add: 0, del: 0, ctx: 1 } },
+    ] },
+    /* 中途挂一个哨兵等结果：等的那一会儿回合不收口，哨兵那一行自己走着表；等到了，同一回合接着往下说 */
+    watch: { say: '把回归连跑三遍，看还会不会偶尔挂。', events: [
+      { think: 1600 },
+      { tool: { verb: '读', text: '`server/scripts/test-later-send-recover.ts`' }, ms: 1000 },
+      { tool: { verb: '跑', text: `挂一个哨兵盯${cur.test.name}连跑三遍`, fields: { 命令: `for i in 1 2 3; do ${cur.test.cmd} || break; done`, 目录: 'server', 时限: '30 分钟' } }, ms: 1100 },
+      { text: '连跑三遍要半个小时左右，我挂了一个哨兵盯着，跑完接着说。' },
+      { watch: { name: `${cur.test.title} ×3`, ms: 7000, exit: 0, lines: [`[输出] 第 1 遍：${cur.test.pass} passed`, `[输出] 第 2 遍：${cur.test.pass} passed`, `[输出] 第 3 遍：${cur.test.pass} passed`, '[结束] 命令退出，退出码 0'] } },
+      { think: 1200 },
+      { tool: { verb: '读', text: '`server/logs/later-send-test.log`' }, ms: 1000 },
+      { text: `三遍都过了，每遍 ${cur.test.pass} 条。之前偶尔挂的那一条是端口被占，和补发的逻辑没有关系。` },
+      { end: { turn: 14800, files: 0, add: 0, del: 0, ctx: 1 } },
     ] },
     /* 「重试」跑的那一轮：没有新的气泡，接着上一轮做；回合头名字后面写着「重试」 */
     again: { events: [
@@ -211,7 +223,7 @@
     const strip = run?.strip;
     if (!strip) return;
     const now = performance.now();
-    if (now - run.t0 >= 2000) { strip.time.textContent = ASH.dur(now - run.t0); strip.time.classList.add('is-in'); }
+    if (now - run.s0 >= 2000) { strip.time.textContent = ASH.dur(now - run.s0); strip.time.classList.add('is-in'); }
     if (strip.thinking && thinkWord(now - strip.since) !== strip.said) relabel(strip, thinkWord(now - strip.since));
   }
 
@@ -285,6 +297,7 @@
     run.cause = null;
     turn.el.classList.add('is-live');
     Object.assign(run, { turn, strip: null, flat: [], prose: [], steps: [], t0: performance.now() });
+    run.s0 = run.t0;   /* 这一段从哪一刻算起：哨兵把一个回合隔成几段，每段各收各的 */
     feed.append(enter(turn.el));
   }
 
@@ -355,6 +368,20 @@
       status('running');
       await sleep(350);
       openTurn();
+    } else if (ev.watch) {
+      /* 挂了哨兵：前面这一段先收成一行，回合不收口。等的时候只有哨兵那一行是活的；等到了它原地落定，同一回合接着往下 */
+      tidy();
+      Object.assign(r, { flat: [], prose: [], steps: [] });
+      const row = kit.watch({ name: ev.watch.name });
+      r.turn.body.append(enter(row.el));
+      claim(row.btn, 'feed-7');
+      feed.follow();
+      const began = performance.now();
+      const ticking = setInterval(() => { row.time.textContent = ASH.dur(performance.now() - began); row.time.classList.add('is-in'); }, 250);
+      const took = () => ASH.dur(performance.now() - began);
+      try { await sleep(ev.watch.ms); } catch (why) { row.settle({ took: took(), stopped: true }); throw why; } finally { clearInterval(ticking); }
+      row.settle({ took: took(), exit: ev.watch.exit, at: '刚刚', lines: ev.watch.lines });
+      r.s0 = performance.now();
     } else if (ev.fail) {
       /* 进行条原地落定成红色的一句；退出码收在点开的那一层。「重试」不挂在会话里：它在任务头上，是一颗图标 */
       const strip = r.strip ?? openStrip('这一轮异常结束');
@@ -383,12 +410,13 @@
   }
 
   /* 回合收口：最后一段正文之前的东西收成一行。收起不带动画——它是系统替你收的；收完的那一行是淡入的，回合尾的操作淡入一次 */
-  function collapse() {
+  /* 把这一段里最后一段正文之前的东西收成一行（哨兵把一个回合隔成几段时，每段各收一次） */
+  function tidy() {
     const r = run;
     if (r.strip) settle(r.strip);
     const final = r.prose.at(-1);
     const hidden = r.flat.filter((node) => node !== final);
-    const total = ASH.dur(performance.now() - r.t0);
+    const total = ASH.dur(performance.now() - r.s0);
     if (hidden.length === 2 && hidden[0].classList.contains('fold')) {
       /* 前面本来就只有一行「执行过程」：它已经是摘要了，原样留着，只补上用时 */
       hidden[0].append(h('time.rt', total));
@@ -400,10 +428,14 @@
         else if (node.classList.contains('steps')) { fold.put(...node.children); node.remove(); }
         else node.remove();
       }
-      r.turn.body.prepend(enter(fold.btn), fold.list);
+      if (final) final.before(enter(fold.btn), fold.list); else r.turn.body.append(enter(fold.btn), fold.list);
       claim(fold.btn, 'run-5');
     }
-    r.turn.setMeta(`${cur.model} · 刚刚 · ${total}`);
+  }
+  function collapse() {
+    const r = run;
+    tidy();
+    r.turn.setMeta(`${cur.model} · 刚刚 · ${ASH.dur(performance.now() - r.t0)}`);
     const acts = r.turn.acts;
     r.turn.el.classList.remove('is-live');
     void acts.offsetWidth;   /* 这一排刚从「不画」出来，先让它以透明的样子落一次，下面那句才有过渡可走 */
@@ -529,6 +561,7 @@
         { label: '跑到要你答复', icon: 'help', onpick: () => play('ask') },
         { label: '中途失败', icon: 'warn', onpick: () => play('fail') },
         { label: '想得很久（17 秒）', icon: 'clock', onpick: () => play('slow') },
+        { label: '中途挂哨兵等结果', icon: 'pulse', onpick: () => play('watch') },
       ]));
       runBtn.hidden = false;
       runBtn.addEventListener('click', pick);

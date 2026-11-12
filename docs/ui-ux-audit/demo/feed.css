@@ -80,6 +80,12 @@ button.turn-cause:hover, button.turn-cause[aria-expanded="true"] { color: var(--
 .fold.is-flat { cursor: default; }
 .fold.is-flat:hover, .fold.is-flat:active { background: none; color: var(--muted); }
 .fold.is-flat > .i { opacity: 0; }
+/* 哨兵那一行：和「执行过程」同一个写法，行首是哨兵的图标（不跟着点开转）。还在等的时候不能点；没等到好结果的，图标是红的 */
+.watch-row > .fold { display: flex; width: fit-content; }
+.fold.watch[aria-expanded="true"] > .i { transform: none; }
+.fold.watch.is-flat > .i { opacity: 1; }
+.watch-row.bad > .fold > .i { color: var(--red); }
+.watch-row > .cause-body > .sys-more { margin-top: 6px; }
 /* 点开的那一块：高度一帧到位，内容淡入；收起先淡出再撤掉。会话流里不做高度动画，贴底才不会跟它抢 */
 /* 一串步骤是逐行来的：前六行隔 45ms 依次出现（--i 由 feed.js 给），整段不超过 400ms */
 .step-more, .step-more > pre, .sys-log, .cause-body, .bubble-opts, .steps > * { animation: unfold var(--dur-2) var(--ease-out) backwards; }
