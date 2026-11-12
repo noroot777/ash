@@ -40,6 +40,7 @@ import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
 import { DerivedTaskLinks } from "../components/DerivedTaskLinks.tsx";
 import { TaskReplyRail } from "./TaskReplyRail.tsx";
 import { useTaskReplyActions } from "./TaskReplyActions.tsx";
+import { useWaitingTitle } from "./useWaitingTitle.ts";
 import { FreeReviewDialog } from "../free-workflow/FreeReviewDialog.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { freeReviewRetryIdentity, turnRetryCopy, turnRetryTarget, type TurnRetryTarget } from "./turnRetry.ts";
@@ -145,6 +146,7 @@ export function TaskDetail({
   const handedOut = task.handoff?.direction === "out" && !task.handoff.pending;
   // 选中会话正文后的「添加到对话」：写进这个任务的回复草稿。没有对话框的任务不给这个入口。
   const addToReply = useAddReplyQuote(task.id);
+  useWaitingTitle(!!task.question, task.id);
   // 回复框那一行左边的动作：再审、打开预览、接力到…（reply-3）。
   const replyActions = useTaskReplyActions({ task, canHandoff, onHandoff: () => onHandoff?.(task), notify });
 

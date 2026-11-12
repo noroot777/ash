@@ -5,7 +5,12 @@
 .task-question-card { max-width: 790px; margin: 18px 0 12px 30px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); color: var(--ink); overflow: hidden; }
 .task-question-card { border-color: color-mix(in lch, var(--cyan) 30%, var(--line)); }
 
-.task-question-dock { flex: 0 0 auto; padding: 0 clamp(18px, 4vw, 48px) 12px; background: var(--canvas); }
+.task-question-dock { flex: 0 0 auto; padding: 0 clamp(18px, 4vw, 48px) 12px; background: var(--canvas); animation: question-dock-in var(--dur-3) var(--ease-out) backwards; }
+/* 提问卡从下面滑进来、答完原路收回去（run-7）。只动 transform / opacity。 */
+.task-question-dock.is-leaving { animation: question-dock-out 200ms var(--ease-in, ease-in) forwards; }
+@keyframes question-dock-in { from { opacity: 0; transform: translateY(16px); } }
+@keyframes question-dock-out { to { opacity: 0; transform: translateY(16px); } }
+@media (prefers-reduced-motion: reduce) { .task-question-dock, .task-question-dock.is-leaving { animation: none; } }
 .task-question-dock .task-question-card { margin: 0; box-shadow: 0 -10px 20px -18px rgb(0 0 0 / 35%); }
 
 .task-question-heading { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 7px 10px 7px 13px; background: color-mix(in lch, var(--cyan) 5%, var(--panel)); }

@@ -22,6 +22,7 @@ import { NoticeLine, noticeTail, SystemAuthoredMessage } from "./SystemNotice.ts
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
 import { noticeView, turnFailureView } from "./timelineNoticeCopy.ts";
 import { crashedTurns } from "./turnFailure.ts";
+import { QuestionDock } from "./QuestionDock.tsx";
 import { liftCompactionMarkers } from "./compactionMarkers.ts";
 import { TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts } from "./TurnReceipts.tsx";
 import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
@@ -406,7 +407,7 @@ export function ConversationFeed({
         </div>
         <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={conversationTailKey(items)} inputs={inputs} />
       </div>
-      {dock && <div className="task-question-dock">{dock}</div>}
+      <QuestionDock>{dock}</QuestionDock>
     </ImagePreviewGroup>
     </MessageDeleteProvider>
     </QuestionHistoryProvider>
