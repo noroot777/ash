@@ -27,7 +27,7 @@
     <div><b>10</b><span>种字号同屏<br>另有 21 种文字色、9 种字重</span></div>
   </div>
   <ul class="changes">
-    <li><b>这一版只管一件事：清爽</b>五处，都在 <a href="#rewrite">03</a>，样机已经跟上：任务头上不留按钮；会话里只剩你说的、它说的、里程碑一句；验收搬到回复框上面那一行；侧栏一行只管一件事；字重收成苹方真有的三档。</li>
+    <li><b>这一版还是一件事：清爽</b>都在 <a href="#rewrite">03</a> 和 <a href="#panel">04</a>，样机已经跟上：任务头不写状态，右边只剩图标，验收是其中一枚章；哨兵住进回合里，被叫醒多少次都还是一个回合；压缩上下文只在压的时候看得见；分支和深浅色搬到侧栏最底下；实心的键一律纯黑，颜色只留给状态；子智能体和侧聊两格重排。</li>
     <li><b>清单配了样机</b><a href="#list">05</a> 的每一条都有一张「改后」的图，取自一份<a href="demo.html">可以点的样机</a>：七个面都能点，任务页能真的跑一轮、派审、修复、验收。要你点头的地方标了红字，可以只看这些。</li>
     <li><b>新增一节</b><a href="#run">06 执行中</a>：Codex 和 Claude Code 在对话里到底动了什么，ash 缺的是哪几处。照搬之前 ash 自己有五个限制，其中两件要先处理。</li>
     <li><b>更正十四处</b>对着代码重核，前几版有十四处说错了，已经改掉，逐条列在<a href="#fixes">页尾</a>。</li>
@@ -53,7 +53,7 @@
   <ol class="notes">
     <li id="n1" class="kept">侧栏顶部六颗圆点是筛选：星标，加五档状态。指上去有名字和条数。<em>有意的设计，保留。</em></li>
     <li id="n2">回到顶部的悬浮钮：长会话一打开，它就停在正文上方，压着我正在读的那一行。<em>位置不动。只在我自己滚动时出现，停下约一秒淡出。</em></li>
-    <li id="n3">头部一行挤了八个元素；「已验收」长得像一颗被禁用的主按钮。<em>头上不留按钮：类型缩成一个图标，图钉指到才出，时间进面板，验收去了回复框上面。见 <a href="#rewrite">03</a>。</em></li>
+    <li id="n3">头部一行挤了八个元素；「已验收」长得像一颗被禁用的主按钮。<em>头上不写状态，也不留带字的按钮：类型缩成一个图标，图钉指到才出，时间进面板，验收是右边的一枚章。见 <a href="#rewrite">03</a>。</em></li>
     <li id="n4">每个回合头都写着 <code>执行器名 · claude-opus-5-5 · high · 11/10 22:50 · 20s</code>。<em>只留名字，其余悬停再给。</em></li>
     <li id="n5">会话最后一条回复的尾巴上挂着六颗等宽字体的小药丸：会话号、resume 命令、本轮、总量、上下文、派生。前面每条回复也各有一颗「本轮」。<em>默认不显示；悬停给操作，用量进右侧面板。</em></li>
     <li id="n6">系统行在说实现细节：「任务 status 保持 done」「REGRESSION_FINISHED exitC…」。<em>写结果：「已验收，合并到 main」。回执不进会话，记在它所属的那一回合上。</em></li>
@@ -159,29 +159,35 @@
   </table>
 
   <div class="rewrite">
-    <h3>任务头部</h3><p>头上只说两件事：这是哪个任务，现在怎样。类型缩成标题前面的一个灰图标，来源是标题后面的一个灰图标，名字都在提示里；图钉紧跟标题，置顶了才常显，没置顶的指到头部、或者键盘走到它才出来。状态是一个词，灰按钮多说的那半句接在它后面。</p>
-    <p>按钮一颗不留。验收、重试、运行搬到回复框上面那一行（见下面「回复框」），停止是发送键；时间住进右侧面板，「重新排队」收进更多。你要的置顶和任务区分都还在，只是不再各占一颗带字的徽记。</p>
+    <h3>任务头部</h3><p>头上只说一件事：这是哪个任务。类型缩成标题前面的一个灰图标，来源是标题后面的一个灰图标，名字都在提示里；图钉紧跟标题，置顶了才常显，没置顶的指到头部、或者键盘走到它才出来。状态不在头上写：侧栏那一行的行首有它，会话里正在走的那一行、失败的那一行也有它，头上再写就是第三遍。</p>
+    <p>右边没有字，只有图标。轮到你的那一步用得上才出现：失败了是「重试」，取消了、还没跑过是「运行」。验收是一枚章——空心是做完了等你验，实心是验过了；点它到的都是改动工作区，真正的「验收通过」在那里面。任务在跑、在排队、在等你答复时，这两样都不画。停止是发送键；时间住进右侧面板，「重新排队」收进更多。</p>
     <small>现在</small><figure><img src="shots/crop-header.webp" width="1180" height="60" alt="现在的任务头部" loading="lazy"></figure>
-    <small>改后</small><figure class="after mock">
-      <div class="m-hd"><svg class="m-gl"><use href="#i-file"/></svg><b>侧栏宽度记不住</b><span class="sp"></span><span class="m-st none">验收完成</span><button class="m-ico" aria-label="更多"><svg><use href="#i-more"/></svg></button><button class="m-ico" aria-label="右侧面板"><svg><use href="#i-panel"/></svg></button></div>
-      <div class="m-hd"><svg class="m-gl"><use href="#i-file"/></svg><b>斜杠补全：已有正文后面敲 / 也弹</b><span class="sp"></span><span class="m-st run">运行中</span><button class="m-ico" aria-label="更多"><svg><use href="#i-more"/></svg></button><button class="m-ico" aria-label="右侧面板"><svg><use href="#i-panel"/></svg></button></div>
-      <div class="m-hd"><svg class="m-gl"><use href="#i-file"/></svg><b>导出周报</b><span class="sp"></span><span class="m-st bad">失败</span><button class="m-ico" aria-label="更多"><svg><use href="#i-more"/></svg></button><button class="m-ico" aria-label="右侧面板"><svg><use href="#i-panel"/></svg></button></div>
-      <div class="m-hd"><svg class="m-gl"><use href="#i-file"/></svg><b>回复框：原生命令的回车被吞掉</b><svg class="m-gl"><use href="#i-bot"/></svg><button class="m-ico m-pin" aria-label="取消置顶"><svg><use href="#i-pin"/></svg></button><span class="sp"></span><span class="m-st bad">失败 · 已验收</span><button class="m-ico" aria-label="更多"><svg><use href="#i-more"/></svg></button><button class="m-ico" aria-label="右侧面板"><svg><use href="#i-panel"/></svg></button></div>
+    <small>验过了</small><figure class="after mock">
+      <div class="m-hd"><svg class="m-gl"><use href="#i-file"/></svg><b>侧栏宽度记不住</b><span class="sp"></span><button class="m-ico m-done" aria-label="已验收"><svg><use href="#i-sealOn"/></svg></button><button class="m-ico" aria-label="更多"><svg><use href="#i-more"/></svg></button><button class="m-ico" aria-label="右侧面板"><svg><use href="#i-panel"/></svg></button></div>
     </figure>
-    <p>下表数的是头部那一行里同时摆着几样东西：类型、来源、图钉、标题、状态词、时间（创建和用时算一样）、每颗按钮、每个图标键，各算一样。改后是五样：类型图标、标题、状态词、更多、面板开关；智能体开的任务多一个来源图标，置顶了的多一颗图钉（样机第四行）。</p>
+    <small>等你验</small><figure class="after mock">
+      <div class="m-hd"><svg class="m-gl"><use href="#i-file"/></svg><b>定时发送：到点时 ash 没开着就不发了</b><span class="sp"></span><button class="m-ico m-do" aria-label="验收"><svg><use href="#i-seal"/></svg></button><button class="m-ico" aria-label="更多"><svg><use href="#i-more"/></svg></button><button class="m-ico" aria-label="右侧面板"><svg><use href="#i-panel"/></svg></button></div>
+    </figure>
+    <small>在跑</small><figure class="after mock">
+      <div class="m-hd"><svg class="m-gl"><use href="#i-file"/></svg><b>斜杠补全：已有正文后面敲 / 也弹</b><span class="sp"></span><button class="m-ico" aria-label="更多"><svg><use href="#i-more"/></svg></button><button class="m-ico" aria-label="右侧面板"><svg><use href="#i-panel"/></svg></button></div>
+    </figure>
+    <small>失败</small><figure class="after mock">
+      <div class="m-hd"><svg class="m-gl"><use href="#i-file"/></svg><b>回复框：原生命令的回车被吞掉</b><svg class="m-gl"><use href="#i-bot"/></svg><button class="m-ico m-pin" aria-label="取消置顶"><svg><use href="#i-pin"/></svg></button><span class="sp"></span><button class="m-ico m-do" aria-label="重试"><svg><use href="#i-redo"/></svg></button><button class="m-ico m-do" aria-label="验收"><svg><use href="#i-seal"/></svg></button><button class="m-ico" aria-label="更多"><svg><use href="#i-more"/></svg></button><button class="m-ico" aria-label="右侧面板"><svg><use href="#i-panel"/></svg></button></div>
+    </figure>
+    <p>下表数的是头部那一行里同时摆着几样东西：类型、来源、图钉、标题、状态词、时间（创建和用时算一样）、每颗按钮、每个图标键，各算一样。改后一直在的是四样：类型图标、标题、更多、面板开关。跑完以后多一枚章，失败或取消时再多一颗重试或运行；智能体开的任务多一个来源图标，置顶了的多一颗图钉（最后那一行两样都有）。</p>
     <table class="map count">
       <tr><th>任务的状态</th><th>现在 → 改后</th><th>少掉的去了哪</th></tr>
-      <tr><td>已验收，或者在等你答复</td><td>8 → 5</td><td>时间进面板；灰按钮并进状态词；没置顶的图钉指到才出</td></tr>
-      <tr><td>运行中</td><td>8 → 5</td><td>同上；停止是发送键</td></tr>
-      <tr><td>失败</td><td>9 → 5</td><td>同上；验收、重试在回复框上面那一行</td></tr>
-      <tr><td>失败，而且还排在队列里</td><td>10 → 5</td><td>同上；「重新排队」进了更多</td></tr>
+      <tr><td>已验收</td><td>8 → 5</td><td>时间进面板；状态词和灰按钮并成一枚实心的章；没置顶的图钉指到才出</td></tr>
+      <tr><td>在等你答复</td><td>8 → 4</td><td>同上；这时没有章，要你做的事是会话下面那张提问卡</td></tr>
+      <tr><td>运行中</td><td>8 → 4</td><td>同上；停止是发送键</td></tr>
+      <tr><td>失败</td><td>9 → 6</td><td>重试、验收各是一个图标</td></tr>
+      <tr><td>失败，而且还排在队列里</td><td>10 → 6</td><td>同上；「重新排队」进了更多</td></tr>
     </table>
-    <p class="tool">按钮没有消失，是搬走了：这张表只数头部这一行。失败的两行按自由工作流的任务数：起手式的任务失败时没有「验收」。验收完成的任务，状态词前面不再有点：它不需要你看。</p>
+    <p class="tool">这张表只数头部这一行。失败的两行按自由工作流的任务数：起手式的任务失败时没有「验收」。头上不写状态以后，「失败」「已取消」要从多出来的那颗图标和侧栏那一行的点看出来；右侧「信息」里也有一行状态。</p>
   </div>
-
   <div class="rewrite" style="--w:780px">
     <h3>会话</h3><p>会话是一份记录，不是通知栏。平时只有三样：你说的，它说的，里程碑一句——审查出了结论、验收了。ash 自己的回执（审查已预约、开始盯、任务暂停、不再等了……服务端有七十多处在往任务时间线里写）不单独占行，记在它所属的那一回合上：指到这一回合，操作里多一项「N 条记录」，点开是一份带时刻的流水。</p>
-    <p>「ash 自动输入」那张白卡也不占行：它是这一回合的起因，写在回合头名字后面，原文点了再看；照审查意见改、重试起的回合，同一个位置各是一句。答过的提问是你的一个气泡，问题引在答案上面。要你动手的事不在会话里，在回复框上面那一行。</p>
+    <p>不是你发话起头的回合，起因是回合头名字后面的一句：照第几轮审查的意见改、重试。哨兵叫醒不算起因，也不另起回合，见下面「哨兵」。答过的提问是你的一个气泡，问题引在答案上面。要你动手的事不在会话里：重试、运行、验收是任务头右边的图标。</p>
     <p>回合尾的药丸换成三个图标：复制、派生、更多，平时不画。药丸里的本轮、总量、上下文，是你 8 月 7 日定下并排放在回合尾的；你同意过收走，这里再确认一次去处：连同会话号和 resume 命令，都进右侧「信息」，上下文那颗带着的「压缩设置」入口一起过去。里程碑那一行的时间，连同谁审的、用时，紧跟在字后面，指到才显示；触屏上一直显示。</p>
     <small>现在</small><figure><img src="shots/crop-chips.webp" width="780" height="180" alt="现在的回合结尾" loading="lazy"></figure>
     <small>改后</small><figure class="after mock"><div class="m-turn">
@@ -200,11 +206,57 @@
     <ul class="quotes">
       <li><q>审查出了结论、验收了</q><span>里程碑一句，常显</span></li>
       <li><q>审查已预约、开始盯、任务暂停、不再等了</q><span>记在所属的回合上，指到才有「N 条记录」</span></li>
-      <li><q>ash 自动输入、照意见修复、重试</q><span>回合头名字后面一句起因</span></li>
+      <li><q>照意见修复、重试</q><span>回合头名字后面一句起因</span></li>
+      <li><q>哨兵挂上了、叫醒了（ash 自动输入）</q><span>执行过程里的一步，见「哨兵」</span></li>
+      <li><q>正在压缩上下文、上游在重试</q><span>正在走的那一行；过去了不留字，见「中途发生的事」</span></li>
       <li><q>答过的提问</q><span>你的气泡，问题引在答案上面</span></li>
-      <li><q>验收、重试、运行</q><span>回复框上面那一行</span></li>
-      <li><q>执行者驳回了审查意见，等你裁定</q><span>该在回复框上面那一行；样机没有画</span></li>
+      <li><q>验收、重试、运行</q><span>任务头右边的图标</span></li>
+      <li><q>执行者驳回了审查意见，等你裁定</q><span>现在是会话里的一张卡，这一版没有给它重新找位置；样机没有画</span></li>
     </ul>
+  </div>
+
+  <div class="rewrite" style="--w:780px">
+    <h3>哨兵</h3><p>哨兵一多，会话就被切成一截一截。根子不在那张卡画得重，在记法：哨兵每叫醒一次，那几行输出是当作一条「输入」写进会话的，和你打的字是同一种东西。界面于是照规矩办事，遇到输入就另起一个回合——一张「ash 自动输入」的卡，后面的回复重新报一遍头像、名字、模型，挂一句「回复这次自动输入」，尾巴上又是一颗药丸；回复框上面还常驻一条「在等 N 个哨兵」。等三次，一段话成了七块。</p>
+    <p>改后换的是「一个回合」的定义：从你发话，到它把话交还给你。挂哨兵、等它、被它叫醒，都发生在这中间，所以都是执行过程里的一步，和读文件、跑命令排在一起。等的时候，回合最后那一行写着「在等哨兵「…」」、等了多久、最迟几点，字上没有流光；被叫醒了，还是这一行接着走。它每说一段新的话，前面的就收进执行过程。收口以后只有两样：一行执行过程，一段正文。回复框上面那一条不要了；右侧「哨兵」格照旧，停掉哨兵还在那边。</p>
+    <p>能做到，而且只动前端。数据不用改：那条输入上已经带着标记（哪个哨兵、来了几行、是不是结束了），现在的代码也已经会把落在回合中间的旁白并回同一个气泡，缺的只是把「回复、哨兵叫醒、回复」认成一个回合来画。用量那一格数「几轮」时，本来就把哨兵叫醒的那几轮扣掉了。两种情况不并：叫醒的是审查那条会话；你中途自己插了一句话。老记录里没带标记的叫醒照样并，只是写不出是哪个哨兵。</p>
+    <small>现在</small><figure class="mock"><div class="m-turn">
+      <div class="m-who"><i>C</i>claude@local<span>claude-opus-5-5 · high · 11/09 15:09 · 48s</span></div>
+      <div class="m-msg"><p>连跑三遍要半个小时左右。我挂了一个哨兵盯着，每跑完一遍它叫我一次。</p><div class="m-chips"><b>本轮 6.2k</b></div></div>
+      <div class="m-wake"><i><svg><use href="#i-in"/></svg></i><b>ash</b>自动输入<time>15:21</time><span>展开</span><p>收到新输出，继续处理。<em>定时发送回归测试 ×3</em></p></div>
+      <div class="m-who"><i>C</i>claude@local<span>claude-opus-5-5 · high · 11/09 15:21 · 9s</span><em>↳ 回复这次自动输入</em></div>
+      <div class="m-msg"><p>第 1 遍过了，接着等后两遍。</p><div class="m-chips"><b>本轮 1.1k</b></div></div>
+      <div class="m-wake"><i><svg><use href="#i-in"/></svg></i><b>ash</b>自动输入<time>15:33</time><span>展开</span><p>收到新输出，继续处理。<em>定时发送回归测试 ×3</em></p></div>
+      <div class="m-who"><i>C</i>claude@local<span>claude-opus-5-5 · high · 11/09 15:33 · 7s</span><em>↳ 回复这次自动输入</em></div>
+      <div class="m-msg"><p>第 2 遍也过了。</p><div class="m-chips"><b>本轮 0.9k</b></div></div>
+      <div class="m-wake"><i><svg><use href="#i-in"/></svg></i><b>ash</b>自动输入<time>15:44</time><span>展开</span><p>哨兵已结束，继续核对结果。<em>定时发送回归测试 ×3</em></p></div>
+      <div class="m-who"><i>C</i>claude@local<span>claude-opus-5-5 · high · 11/09 15:44 · 21s</span><em>↳ 回复这次自动输入</em></div>
+      <div class="m-msg"><p>三遍都过了，每遍 17 条。之前偶尔挂的那一条是端口被占，和补发的逻辑没有关系。</p><div class="m-chips"><b>本轮 2.4k</b><b>总量 186k</b><b>上下文 42%</b></div></div>
+    </div></figure>
+    <small>等的时候</small><figure class="after"><img src="shots/watch-live.webp" width="1606" height="452" alt="改后：等哨兵时，回合最后一行写着在等哪个哨兵、等了多久、最迟几点" loading="lazy"></figure>
+    <small>收口以后</small><figure class="after"><img src="shots/watch-done.webp" width="1606" height="396" alt="改后：被叫醒三次的回合，收口后是一行执行过程和一段正文" loading="lazy"></figure>
+    <small>点开</small><figure class="after"><img src="shots/watch-open.webp" width="1606" height="944" alt="改后：点开执行过程，挂哨兵、三次等待和中间说过的话按先后排着" loading="lazy"></figure>
+    <p class="tool">「现在」是照代码画的示意，字是编的，没有截真实界面。下面三张取自样机：<a href="demo.html#/task">打开样机</a>，右上角「运行一轮」里选「中途挂哨兵等结果」，能看它走一遍，那半个小时在样机里演成了几秒；<a href="#run">06</a> 的「演一遍」里也有这一颗。</p>
+    <ul class="quotes">
+      <li><q>「ash 自动输入」的卡</q><span>执行过程里的一步：等 哨兵「…」，后面是等了多久、等到了什么；点开是它带回来的那几行</span></li>
+      <li><q>「回复这次自动输入」</q><span>没有了，还是同一个回合</span></li>
+      <li><q>回复框上面的「在等 N 个哨兵」</q><span>回合最后那一行；细节在右侧「哨兵」格</span></li>
+      <li><q>被叫醒之前说过的话</q><span>收进执行过程，点开看</span></li>
+    </ul>
+  </div>
+
+  <div class="rewrite" style="--w:780px">
+    <h3>中途发生的事</h3><p>「正在压缩上下文…」这一类话，说的是这一轮中途发生的事，不是它说的话。现在压缩的开始和结束是当正文写进回复的：两句灰色的引用，压完也一直留在那条回复里，复制时一起带走；压的那一两分钟里，看不出已经压了多久。上游不回话在重试是同一类，它已经不在正文里了，但每试一次，执行过程里多一行。</p>
+    <p>改后只有一条规矩：正在发生的事，写在正在走的那一行上；过去了，就从会话里消失。压的时候那一行写着「在压缩上下文」，后面是压了多久，右侧「信息」里上下文那一行同时写着「压缩中」；压完这一行接着往下走，水位滚到新的数。重试的时候写着第几次、已经等了多久，字上没有流光——它没在动。事后只在点开执行过程时，它发生的那个位置上有一行，几次重试并成一行。</p>
+    <p>没成的才留在外面：压缩失败时，上下文原样没动，下一句话照样可能装不下，所以摘要最后多半句「上下文没压成」，折角是红的，点开是原因和「再压一次」。Claude Code 的命令行也是这么放的：压缩和重试都是转动符那一行换一句话，不进正文（读的是 2.1.283 安装包里的代码，没对着运行中的界面看）。</p>
+    <small>现在</small><figure class="mock"><div class="m-turn">
+      <div class="m-who"><i>C</i>claude@local<span>claude-opus-5-5 · high · 11/09 16:02 · 1m 31s</span></div>
+      <div class="m-msg"><p class="m-trace">执行过程 · 3 工具</p><blockquote>正在压缩上下文…</blockquote><blockquote>上下文已压缩。</blockquote><p>十月一共补发了 41 次，没有发重的：每一次补发前都查过「实际几点发的」，已经发出去的全部跳过了。</p><div class="m-chips"><b>本轮 52k</b><b>总量 238k</b><b>上下文 24%</b></div></div>
+    </div></figure>
+    <small>压的时候</small><figure class="after"><img src="shots/squeeze-live.webp" width="1606" height="332" alt="改后：压缩时，回合最后一行写着在压缩上下文和压了多久" loading="lazy"></figure>
+    <small>压完</small><figure class="after"><img src="shots/squeeze-done.webp" width="1606" height="396" alt="改后：压完以后会话里没有任何压缩的字样" loading="lazy"></figure>
+    <small>点开</small><figure class="after"><img src="shots/squeeze-open.webp" width="1606" height="624" alt="改后：点开执行过程，压缩发生的位置上有一行" loading="lazy"></figure>
+    <small>没压成</small><figure class="after"><img src="shots/squeeze-fail.webp" width="1606" height="626" alt="改后：压缩失败时摘要最后多半句，点开是原因和再压一次" loading="lazy"></figure>
+    <p class="tool">「现在」是照代码画的示意。样机里「运行一轮」有三段：中途压缩上下文、压缩没成、上游不回话。执行过程里那一行是我留的：它标着「这之前的对话被压过」，哪天它忘了前面说过的事，靠这一行找原因；连这一行也不要的话说一声。你自己敲 <code>/compact</code> 的那一次，压完要不要回一句，样机没画。</p>
   </div>
 
   <div class="demo" data-demo="backtop">
@@ -219,9 +271,9 @@
     <h3>回复框</h3><p>水印留着。占位缩成「回复…」，它就透出来了。框上那排动作并进框里：附件、再审、打开预览、接力到…、更多在左，胶囊和发送键在右；截图批注和预览日志进「更多」。派审、预览、接力留在明面，是现有代码写明的要求——任务跑着也得看得见、点得动。点「再审」出来的派审对话框也收了一遍：四行字段、一个主动作，<a href="demo.html#/task?m=reply-5">在样机里看</a>。</p>
     <p>发送设置没有搬家：箭头右边连着一小截，上面一个小尖角，点它还是原来那张「发送设置」，三种发法都在。平时键上没有字。只要这一条不会像平常那样马上发出去，键就变宽、写上字，尖角换成时钟或沙漏。发出后照旧进输入框上方的待发送列表，可以撤回。连体的小尖角是邮件客户端「稍后发送」的通行做法（凭已有知识）。</p>
     <p>团队回复框和新建任务的「启动设置」是同一颗键，三处一起改。新建任务默认那一档也只画箭头，「创建并运行」和它的快捷键进这颗键的悬停提示，面板底部那行快捷键小字整行收走；你觉得新手会看不懂的话，这一处留字就行。任务在跑、输入框空着时，这颗键的位置就是停止键；打了字它变成「排队发送」，左边多一颗小的停止键，什么时候都停得下来。排着队的任务也是这颗键，停就是不排了。任务头上不再有停止——这是新增的行为，要你点头。</p>
-    <p>验收在哪：回复框上面多一行，不带框。左边是这个任务还没验收的改动，右边是轮到你的那一步——验收、重试、运行。一轮结束时你要做的决定就两个，再说一句，或者收下；两样摆在一起，它要验的东西就在按钮旁边。「验收」不再是实心主色，因为回复框里已经有一颗主色的发送键；点它和点左边那一段到的是同一处，改动工作区，真正的「验收通过」还在那里面。失败时右边是「重试　验收」，取消后是「运行　验收」；任务在跑时只剩左半边；验收过了、又没别的事要你做，这一行不画。</p>
+    <p>回复框上面不加东西。上一版在那里加过一行（改了几个文件，加一颗验收），这一版拿掉了：验收回到任务头，是一枚章；改了几个文件在右侧「信息」和改动工作区里看。</p>
     <small>现在</small><figure><img src="shots/crop-composer.webp" width="800" height="160" alt="现在的回复框" loading="lazy"></figure>
-    <small>改后</small><figure class="after mock"><div class="m-reply"><div class="m-next"><span>7 个文件<i class="add">+219</i><i class="del">−21</i></span><span class="sp"></span><span class="m-btn sm">验收</span></div><div class="m-box">
+    <small>改后</small><figure class="after mock"><div class="m-reply"><div class="m-box">
       <i class="m-plate" aria-hidden="true">CLAUDE</i>
       <div class="ph">回复…</div>
       <div class="row">
@@ -269,18 +321,30 @@
       <li><q>可粘贴图片或文件</q><span>指到附件钮上的提示</span></li>
       <li><q>为什么发不出去</q><span>键是淡的时候，指上去说</span></li>
       <li><q>引导会话怎么用</q><span>待发送那一条的按钮提示</span></li>
-      <li><q>空输入时左半灰、右半实</q><span>整颗键同明同暗；尖角照样点得动</span></li>
+      <li><q>空输入时左半灰、右半实</q><span>键还是黑的，只有箭头变淡；尖角照样点得动</span></li>
     </ul>
   </div>
 
   <div class="rewrite">
-    <h3>侧栏</h3><p>工具行现在一排六样，长相差不多：聊天、筛选、搜索、随手记、分组管理、新建任务——去别处的、找东西的、新建的混在一起。改后一行只管一件事：第一行说在哪儿（项目、分支、常用命令，不动）；第二行新建，「新建任务」占一整行，右边是随手记；第三行找，筛选的六颗圆点原样，右边是搜索和任务列表；最底下一行去别处，聊天、助手。分组管理留在项目菜单的「设置」和 ⌘K 里。</p>
+    <h3>侧栏</h3><p>工具行现在一排六样，长相差不多：聊天、筛选、搜索、随手记、分组管理、新建任务——去别处的、找东西的、新建的混在一起。改后一行只管一件事：第一行说在哪儿，只剩项目和常用命令；第二行新建，「新建任务」占一整行，右边是随手记；第三行找，筛选的六颗圆点原样，右边是搜索和任务列表。分组管理留在项目菜单的「设置」和 ⌘K 里。</p>
+    <p>最底下是两行。上一行是主仓现在在哪个分支：点它，「项目 Git」从侧栏的底边升起来，盖在任务列表上面，点别处就落回去；原来它是顶行里的一颗下拉。下一行去别处：聊天、助手靠左，右边是深浅色和收起。深浅色是一颗图标，画的是现在选的那一档，点开三选一；原来它是项目菜单里的一排分段。</p>
     <p>任务树不写「置顶」「任务」两个标题：置顶的排最前、行尾一颗图钉，和后面的隔一道缝。智能体开的任务，行里那颗带字的彩色胶囊换成行尾一个灰图标，点它去来源任务。「其他机器」「其他项目」各折成一行，右边写有几条。底部的连接灯拿掉，状态栏右端一直写着「已连接」。</p>
     <small>现在 / 改后</small><div class="sides">
       <figure class="crop"><img src="shots/task.webp" width="2000" height="1250" alt="现在的侧栏" loading="lazy"></figure>
       <figure class="after"><img src="shots/side-after.webp" width="520" height="1726" alt="改后的侧栏" loading="lazy"></figure>
     </div>
     <p class="tool">左边是 01 那张截图的左边一列。右边取自样机，任务是编的，所以两边的行对不上；看的是排法。</p>
+  </div>
+
+  <div class="rewrite">
+    <h3>颜色</h3><p>现在主按钮、发送键、开关、勾选、选中的格、链接、焦点环都是靛蓝，同一种靛蓝还表示「在跑」和「没验收」。一屏里蓝的东西很多，分不出哪些是状态、哪些只是能点。改后能点的东西一律黑白：实心的键是纯黑，开关、勾选、选中的格、链接、焦点环是墨色。主色只留给状态：在跑的点、没验收的环、Git 图上的线。</p>
+    <p>发不出去的时候键还是黑的，只有上面的箭头和字变淡。深色主题里实心的键反过来，白底黑字——纯黑放在深色底上看不见。打字的输入框，焦点环用淡一档的墨色，不然一进页面就是一个黑框。</p>
+    <small>现在</small><figure class="mock"><div class="m-ink now">
+      <span class="m-key"><span><svg><use href="#i-up"/></svg></span><span><svg><use href="#i-caret"/></svg></span></span><span class="m-btn pri">验收通过</span><span class="m-sw"></span><span class="m-ck"><svg><use href="#i-check"/></svg></span><u>打开改动工作区</u><span class="sp"></span><span class="m-state">在跑</span><span class="m-state ring">没验收</span>
+    </div></figure>
+    <small>改后</small><figure class="after mock"><div class="m-ink">
+      <span class="m-key"><span><svg><use href="#i-up"/></svg></span><span><svg><use href="#i-caret"/></svg></span></span><span class="m-btn pri">验收通过</span><span class="m-sw"></span><span class="m-ck"><svg><use href="#i-check"/></svg></span><u>打开改动工作区</u><span class="sp"></span><span class="m-state">在跑</span><span class="m-state ring">没验收</span>
+    </div></figure>
   </div>
 
   <div class="rewrite">
@@ -338,6 +402,19 @@
       <li><b>46<i>→</i>51</b><span>段文字。没少：回合尾搬来了 7 段（本轮、上下文、会话号），其余是同一批事实换成了一种行。现在一屏放不下，改后一屏放完</span></li>
     </ul>
   </div>
+
+  <div class="indent measure" style="margin-top:72px">
+    <h3>子智能体和侧聊</h3>
+    <p>这两格这一版重排了。毛病是同一个：一眼分不出主次。</p>
+    <p><strong>子智能体。</strong>现在最上面是三格统计和一段说明；每个子智能体一张卡，名字、状态词、起止时间各占一处，旁边再挂一颗「查看执行」；点开是模型、智能水平、来源会话、编号、类型、负责人一张表，它带回来的话排在最后。改后一行一个：名字，右边是用时。在跑的排最前，用时是主色，底下多一行它此刻在做什么。点开先是它带回来的话——派它出去就是为了这个——再是一行出处；「收到的输入」折着，「执行过程」是一个入口。不是同一轮派的，之间多留一点空。待办收成最底下一行。</p>
+    <p><strong>侧聊。</strong>现在你和它的话都靠左，各报一遍名字和时间；想把结论带回主任务，得打一句「把结论告诉主任务」，这句话只写在 ⓘ 里。改后你的话靠右、有底色，它的话靠左、没有框，都不报名字。它的每条回答指到才出两颗键：复制、发给主任务；发出去以后那条回答下面留一行回执，主任务在跑就先排着、能撤回，空下来才送到。一场侧聊拿它的第一句话当名字，第一行写着它带的是哪一刻的主会话。从会话里带一段过来问，那一段是输入框上面的一行引用。</p>
+  </div>
+  <div class="pair both indent" style="margin-top:28px">
+    <div><small>子智能体</small><figure class="after"><img src="shots/insp-agents-after.webp" width="680" height="1644" alt="改后的子智能体面板：一行一个，点开先是它带回来的话" loading="lazy"></figure></div>
+    <div><small>侧聊</small><figure class="after"><img src="shots/insp-chat-after.webp" width="680" height="1644" alt="改后的侧聊面板：你的话靠右，它的话靠左" loading="lazy"></figure></div>
+    <div class="measure"><p class="tool">两张都取自样机。在<a href="demo.html#/task">样机</a>里，「运行一轮」选「派子智能体分头查」，这一格会一行一行长出来；侧聊可以真的问一句，再把回答发给主任务。</p>
+      <p class="tool">「发给主任务」从打一句话变成一颗键：点击本身就是你的授权，发的是那条回答的原文。这是新的行为，要你点头。子智能体的「执行过程」点了还是现在那只盖住会话的抽屉，样机没画；送达以后主任务那一侧怎么显示，也没画。</p></div>
+  </div>
 </div></section>
 <section id="list"><div class="wrap">
   <div class="head"><i>05</i><h2>逐面清单：每一条改后的样子</h2>
@@ -363,6 +440,7 @@
     <tr><td>调工具</td><td>一串工具合成一行，标题跟着当前这一步换，每条至少停 1 秒；做完，同一行换成静态的摘要。<i>桌面</i></td><td>行首一颗圆点：灰色闪是进行中，绿是成，红是败。「Reading…」做完变成「Read」。<i>命令行</i></td><td>工具收在一行折起的「执行过程 · N 工具」里：字上有流光，新一步来了换成工具原名加一个字段，3.6 秒后退回计数。9.5px 的淡字，不落定成过去式。数据里只有「开始」。</td><td>在这一行上改：标题换成人话、跟着当前这一步走，不退回计数；做完原地变成过去式。</td></tr>
     <tr><td>出正文</td><td>前端按积压量匀速放字，每个词 0.7 秒淡入，没有光标。正文在出时把状态行藏起来。<i>桌面</i></td><td>每步放约 22 个字，0.2 秒淡入。<i>桌面</i> 按整行露出，正文一出就撤掉转动符。<i>命令行</i></td><td>约 40 个字一跳。</td><td>匀速放字，新字 0.28 秒淡入。正文在出时进行条让位。</td></tr>
     <tr><td>回合结束</td><td>最终回答一开始出，过程就收成一行「Working for…」，这次收起不带动画，你自己点开才有；回合结束时换成「Worked for…」。<i>桌面</i></td><td>转动符那一行原地褪色、停住，动词换成过去式：「Cooked for 1m 12s」。<i>命令行</i></td><td>先多出一条分隔线；整份会话重读回来后分隔线消失，最后一条回复整颗重建成折叠的样子，带出用时和药丸。停在等你答复时不重读，分隔线留下。</td><td>过程收成一行摘要，这一行是淡入的；回合尾的操作淡入一次，随后只在指到时出现。</td></tr>
+    <tr><td>中途压缩、重试</td><td>没有核。</td><td>转动符那一行换成一句「Compacting conversation」，上游重试的状态也挂在这一行上；都不进正文。<i>命令行</i></td><td>压缩是回复正文里的两句灰色引用：「正在压缩上下文…」「上下文已压缩。」，压完也留着。上游每重试一次，执行过程里多一行。</td><td>进行条写着「在压缩上下文」和压了多久；重试写着第几次、等了多久。过去了不留字，执行过程里记一行；没成的才留在外面。</td></tr>
     <tr><td>等你处理</td><td>窗口标题在「Action Required」上每秒闪一下。<i>命令行</i></td><td>审批卡 0.22 秒落到位。<i>桌面</i> 工具行下面多一行灰字「Waiting for permission…」。<i>命令行</i></td><td>提问卡一帧出现，把会话区挤矮一截。</td><td>提问卡从下面滑进来；标签页标题前多一个「● 等你答复」。</td></tr>
     <tr><td>减少动效</td><td>应用里一个三态开关。循环的停，位移去掉，留很短的淡入。<i>桌面</i></td><td>全局一条兜底把时长压到近乎为零，再给每个循环动画一个静态的样子。<i>桌面</i></td><td>分散在 39 个文件里各写各的，有漏网的。</td><td>全局一条。流光变实色，转圈停住，放字改成整段出现。</td></tr>
   </table></div>
@@ -371,8 +449,8 @@
     <div class="measure">
       <h3>演一遍</h3>
       <p>框里是样机的会话那一列，数据按 ash 真实的粒度来：正文约 40 个字来一块，工具只有「开始」。</p>
-      <p class="runlive-acts"><button class="play" data-run="run">跑一轮</button><button class="play ghost" data-run="ask">跑到要你答复</button><button class="play ghost" data-run="fail">中途失败</button><button class="play ghost" data-run="slow">想得很久</button></p>
-      <p class="tool">跑到要你答复时，看一眼这一页的标签页标题。整页的版本在<a href="demo.html#/task">样机</a>里：任务头的状态词、侧栏那一行的位置、面板里的数字会跟着一起变；跑完可以接着派审、按意见修复、验收。</p>
+      <p class="runlive-acts"><button class="play" data-run="run">跑一轮</button><button class="play ghost" data-run="ask">跑到要你答复</button><button class="play ghost" data-run="fail">中途失败</button><button class="play ghost" data-run="slow">想得很久</button><button class="play ghost" data-run="watch">中途挂哨兵</button><button class="play ghost" data-run="squeeze">中途压缩上下文</button></p>
+      <p class="tool">跑到要你答复时，看一眼这一页的标签页标题。整页的版本在<a href="demo.html#/task">样机</a>里：任务头的图标、侧栏那一行的位置、面板里的数字会跟着一起变；跑完可以接着派审、按意见修复、验收。</p>
     </div>
     <iframe data-src="demo.html?embed#/task" title="执行中的样机"></iframe>
   </div>
@@ -502,19 +580,19 @@ export function useStagger(ref, open) {
   <div class="head"><i>08</i><h2>四步：减，定尺，收拢，点睛</h2>
     <p>「减」在最前：它不依赖令牌，而且先减，就不必给马上要删掉的东西做迁移。</p></div>
   <div class="steps indent">
-    <div><h3>减</h3><p>回合头尾的元数据和药丸；任务头的灰按钮和时间，头上的按钮搬到回复框上面那一行；会话里的回执记到回合上，自动输入的白卡并进回合头；行内时间、回到顶部钮、回复框占位；首页直接是输入框；侧栏分行、不写节标题，验收过也看过的行不画记号，行首的点和顶上的筛选查同一张表；右侧的信息格写成一种行，竖轨只留一种高亮，审查格顶上只留一个主动作；Git 顶栏只留一颗主色键。系统行和工具调用改人话。</p></div>
-    <div><h3>定尺</h3><p>字号、圆角、字重、动效令牌一起加；字重三档用苹方真有的 400 / 500 / 600；字号下限 12px；焦点环一条；状态淡底换一种混色；浮层补上退场；减少动效全局一条；检查脚本只许令牌外的值减少。</p></div>
-    <div><h3>收拢</h3><p>执行中那一套；「它在跑」减到一种画法；右侧面板换成六个公共件，竖轨分簇、提示延迟、再点收起、摘掉的格不再回来；回复框两排并成一行，发送键三处同一颗；新建面板顶行只留模式；原生下拉换成一个组件；设置页版式收平。</p></div>
+    <div><h3>减</h3><p>回合头尾的元数据和药丸；任务头的状态词、灰按钮和时间，头上带字的按钮换成图标；会话里的回执记到回合上，哨兵叫醒并进回合、不再另起一轮，压缩上下文的那两句不进正文；行内时间、回到顶部钮、回复框占位；首页直接是输入框；侧栏分行、不写节标题，验收过也看过的行不画记号，行首的点和顶上的筛选查同一张表；右侧的信息格写成一种行，竖轨只留一种高亮，审查格顶上只留一个主动作；Git 顶栏只留一颗实心的键。系统行和工具调用改人话。</p></div>
+    <div><h3>定尺</h3><p>字号、圆角、字重、动效令牌一起加；字重三档用苹方真有的 400 / 500 / 600；字号下限 12px；能点的一律黑白、主色只留给状态；焦点环一条；状态淡底换一种混色；浮层补上退场；减少动效全局一条；检查脚本只许令牌外的值减少。</p></div>
+    <div><h3>收拢</h3><p>执行中那一套；「它在跑」减到一种画法；右侧面板换成六个公共件，竖轨分簇、提示延迟、再点收起、摘掉的格不再回来；子智能体、侧聊两格重排；分支和深浅色搬到侧栏最底下；回复框两排并成一行，发送键三处同一颗；新建面板顶行只留模式；原生下拉换成一个组件；设置页版式收平。</p></div>
     <div><h3>点睛</h3><p>引入 anime.js，只做五个时刻：重排、依次展开、数字、站点线、对勾。</p></div>
   </div>
     <p class="indent measure" style="margin-top:28px;color:var(--ink-2)"><a href="#list">清单</a>里标「先做」的是第一步，「接着做」是第二、三步，「之后」是第四步加几条不急的小改。执行中那一套（<a href="#run">06</a>）在「接着做」里排最前：流光、换字、淡入用的令牌在「定尺」里加；进行条、匀速放字、回合落定、发送键变停止键在「收拢」里做。它前面有两件工程上的事：让已经结束的回合不再跟着每条事件重画；让一条消息从发出到回合结束是同一个身份，不被拆掉重建。你想先看到它的话，进行条在跑的那一段可以单独提前：它是在现有那行「执行过程」上改，不依赖令牌；只有回合结束时落定的那一下，要等第二件事。</p>
 
   <h3 class="indent" style="margin-top:64px">做完以后，一屏是这样</h3>
-  <p class="indent measure" style="color:var(--ink-2)">右边的数是在样机上用同一把尺量的：同一种页面（一个验收完成的任务，1440×900），只数看得见的。侧栏这一版重排了，件数没怎么变：样机里量到 35，但它的任务行比真实的少，所以总数里侧栏仍按现在的 41 算。</p>
+  <p class="indent measure" style="color:var(--ink-2)">右边的数是在样机上用同一把尺量的：同一种页面（一个验收完成的任务，1440×900），只数看得见的。侧栏这一版重排了，件数没怎么变：样机里量到 36，但它的任务行比真实的少，所以总数里侧栏仍按现在的 41 算。</p>
   <table class="map goal indent">
-    <tr><td>能点的控件</td><td>113 → 约 88</td><td>会话区 50 → 24（任务头 3、会话 10、回复框 11），右侧 20 → 21（竖轨的格不减）；侧栏按 41 算</td></tr>
+    <tr><td>能点的控件</td><td>113 → 约 88</td><td>会话区 50 → 23（任务头 4、会话 8、回复框 11），右侧 20 → 22（竖轨的格不减，这个任务还多亮着一格子智能体）；侧栏按 41 算</td></tr>
     <tr><td>带边框的元素</td><td>68 → 7</td><td>留下输入框、标签，和几条分隔线</td></tr>
-    <tr><td>文字</td><td>224 段 → 117 段</td><td>减掉的是说明和元数据，不是内容</td></tr>
+    <tr><td>文字</td><td>224 段 → 115 段</td><td>减掉的是说明和元数据，不是内容</td></tr>
     <tr><td>字号</td><td>10 种 → 3 种</td><td>12、13、14px；深色状态栏是保留项，里面的字不动。这一项要等第二步的令牌</td></tr>
   </table>
 
@@ -534,9 +612,10 @@ export function useStagger(ref, open) {
 <footer><div class="wrap">
   <p>取证于 2026-11-11：对运行中的 ash 只读截图，对 <code>web/src</code> 的全部样式做静态统计，逐面读了组件代码。字重一项补量于 11-12。没有改动任何产品代码。</p>
   <p>一屏的数字是 1440×900 下对同一个已完成任务页面的 DOM 实测：可见的元素、可点的控件、描了可见边框的元素。Codex 和 Claude Code 没有做同样的测量。</p>
+  <p>03 里「哨兵」「中途发生的事」两块的「现在」是照代码画的示意，字是编的，不是截图。样机里等哨兵的那半个小时演成了几秒；等的时候任务算作还在这一轮里（回复框那颗键是停止），现在的产品里这时任务是暂停的，这一条要你点头。</p>
   <p>06 里回合结束的先后、消息被拆掉重建这几条，是从代码路径推出来的，没在运行中的界面上看过。03 那张对照表里，输入框、元数据、分组、空状态四行凭已有知识，没有核；工具调用、运行中两行以 06 为准。</p>
   <p>样机（demo.html）和文中各处的改后图都是示意：数据是编的，没接真实服务，没在真实界面里跑过；执行中那一段是按 ash 真实的事件粒度模拟的。清单没提到的地方照现状画。</p>
-  <p>样机里只画了入口、没做下去的：差异查看、文件查看、文件夹详情、队列抽屉、接力对话框、预览指正的工作区、F 铺开的宽列表、回复框上面那一行里的「等你裁定」、「其他项目」里的任务、常用命令、随手记、任务模式、收起侧栏、侧栏里别的任务的会话；点到这些，样机顶上那条栏会说一句「样机没画这一步」。新建面板里的起手式站点线不能就地改参数；改动工作区（验收也在这里）只有文件清单、提交和「验收通过」，看不了差异；Git 工作台的操作日志没有「撤销」和备份，历史页没有逐行归属，变基计划不能排序；回复框敲斜杠有菜单，但发送键不会变成「补全」。团队与讨论模式没有画，那两处的结论来自读代码，没有截图。</p>
+  <p>样机里只画了入口、没做下去的：差异查看、文件查看、文件夹详情、队列抽屉、接力对话框、预览指正的工作区、F 铺开的宽列表、等你裁定的那张卡、子智能体的执行过程、侧聊的回答送达以后主任务那一侧的样子、你自己敲 <code>/compact</code> 的那一次、分支抽屉里更新 / 拉取 / 推送之后的样子、「其他项目」里的任务、常用命令、随手记、任务模式、收起侧栏、侧栏里别的任务的会话；点到这些，样机顶上那条栏会说一句「样机没画这一步」。新建面板里的起手式站点线不能就地改参数；改动工作区（验收也在这里）只有文件清单、提交和「验收通过」，看不了差异；Git 工作台的操作日志没有「撤销」和备份，历史页没有逐行归属，变基计划不能排序；回复框敲斜杠有菜单，但发送键不会变成「补全」。团队与讨论模式没有画，那两处的结论来自读代码，没有截图。</p>
   <p>任务头的件数照代码数。08 里「做完以后」那组数是在样机上量的，不是在真实界面上。</p>
   <p>VS Code、JetBrains 的竖条和邮件客户端的发送键凭已有知识引用，没有联网核对。anime.js 的三个演示在本页独立运行；接入前应先在会话流里实测流式输出时的帧率。</p>
   <h3 id="fixes">前几版说错、已经改掉的</h3>

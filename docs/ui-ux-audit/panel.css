@@ -48,6 +48,8 @@
 .pair > div { display: flex; flex-direction: column; }
 .pair small { font-size: var(--t-sm); color: var(--ink-3); margin-bottom: 10px; }
 .pair > div:nth-child(2) small { color: var(--ink); font-weight: 600; }
+/* 两张都是「改后」（子智能体、侧聊）：两个小标题同一个分量 */
+.pair.both > div small { color: var(--ink); font-weight: 600; }
 .pair figure { margin: 0; flex: 1; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: #fafafa; }
 .pair figure.after { border-color: var(--ink); background: #fff; }
 .pair figure img { width: 100%; }
