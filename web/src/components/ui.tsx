@@ -32,27 +32,6 @@ export const TextInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLIn
   },
 );
 
-export function SelectTrigger({
-  children,
-  open = false,
-  className = "",
-  ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { open?: boolean }) {
-  return (
-    <button
-      type="button"
-      className={`ui-select-trigger ${className}`.trim()}
-      aria-expanded={open}
-      {...props}
-    >
-      <span>{children}</span>
-      <span className="ui-select-caret" aria-hidden="true">
-        {open ? "⌃" : "⌄"}
-      </span>
-    </button>
-  );
-}
-
 export function Menu({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
     <div className={`ui-menu ${className}`.trim()} role="menu">

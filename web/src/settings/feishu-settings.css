@@ -66,6 +66,11 @@
   white-space: nowrap;
 }
 
+.feishu-actions .feishu-project-select {
+  min-width: 160px;
+  max-width: 240px;
+}
+
 .feishu-actions {
   display: inline-flex;
   flex: none;

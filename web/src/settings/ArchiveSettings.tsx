@@ -9,6 +9,7 @@ import { CopyButton } from "../components/CopyButton.tsx";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { toggleArchive } from "../lib/archive.ts";
+import { Select } from "../components/Select.tsx";
 
 // 归档那一下会不会连磁盘一起收。实例面的设置（不是一人一份）：它改的是这台机器上
 // 归档的行为，多人模式下只有实例管理员能动 —— 真正的闸在服务端，这里只是别把改不动
@@ -58,13 +59,13 @@ export function ArchiveSettings({ project, tasks, onTaskUpdated, notify }: {
               <b>归档一并清理 worktree 和分支</b>
               <small>{CLEAN_HINTS[settings.archiveClean]}</small>
             </div>
-            <select
+            <Select
+              label="归档时的清理方式"
               value={settings.archiveClean}
               disabled={loading || !canManageInstance}
-              onChange={(event) => void patchClean(event.target.value as AcceptClean)}
-            >
-              {ACCEPT_CLEAN.map((clean) => <option key={clean} value={clean}>{ACCEPT_CLEAN_LABELS[clean]}</option>)}
-            </select>
+              options={ACCEPT_CLEAN.map((clean) => ({ value: clean, label: ACCEPT_CLEAN_LABELS[clean] }))}
+              onChange={(clean) => void patchClean(clean)}
+            />
           </div>
         </div>
         {!canManageInstance && <p className="settings-note">这一项对整台机器生效，只有实例管理员能改。</p>}

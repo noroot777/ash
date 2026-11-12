@@ -18,6 +18,7 @@ import { userApi } from "../lib/authApi.ts";
 import { useAuth } from "../auth/authContext.ts";
 import { Button, TextInput } from "../components/ui.tsx";
 import "./users-settings.css";
+import { Select } from "../components/Select.tsx";
 
 function absoluteInvite(url: string): string {
   return new URL(url, window.location.origin).toString();
@@ -246,14 +247,15 @@ export function UsersSettings({
           </label>
           <label className="users-field">
             <span>实例角色</span>
-            <select
-              className="ui-input"
+            <Select
+              label="实例角色"
               value={role}
-              onChange={(e) => setRole(asRole(e.target.value))}
-            >
-              <option value="member">{ROLE_LABEL.member}</option>
-              <option value="admin">{ROLE_LABEL.admin}（能管用户、能碰任意路径、能开终端）</option>
-            </select>
+              options={[
+                { value: "member", label: ROLE_LABEL.member },
+                { value: "admin", label: ROLE_LABEL.admin, detail: "能管用户、能碰任意路径、能开终端" },
+              ]}
+              onChange={(next) => setRole(asRole(next))}
+            />
           </label>
           <div className="users-form-actions">
             <Button variant="ghost" onClick={resetForm}>取消</Button>
@@ -356,16 +358,17 @@ function UserRow({
             onConfirm={() => void applyRole(pendingRole)}
           />
         ) : (
-          <select
-            className="ui-input users-role"
-            aria-label={`${user.name} 的实例角色`}
+          <Select
+            className="users-role"
+            label={`${user.name} 的实例角色`}
             value={user.role}
             disabled={roleBusy}
-            onChange={(e) => requestRole(asRole(e.target.value))}
-          >
-            <option value="member">{ROLE_LABEL.member}</option>
-            <option value="admin">{ROLE_LABEL.admin}</option>
-          </select>
+            options={[
+              { value: "member", label: ROLE_LABEL.member },
+              { value: "admin", label: ROLE_LABEL.admin },
+            ]}
+            onChange={(next) => requestRole(asRole(next))}
+          />
         )}
         {user.status === "suspended" ? (
           <Button onClick={() => void onAct("已恢复", () => userApi.resume(user.id))}>恢复</Button>

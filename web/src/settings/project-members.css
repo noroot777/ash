@@ -88,9 +88,9 @@
   flex-wrap: wrap;
 }
 
-.pmem-add select {
+.pmem-add .pmem-user {
   flex: 1;
-  min-width: 0;
+  min-width: 160px;
 }
 
 /* 角色只有两项，不跟用户下拉平分宽度。`.ui-input` 是 width:100%，在可换行的 flex 行里

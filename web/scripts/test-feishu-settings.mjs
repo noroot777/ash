@@ -14,6 +14,7 @@
 //   真人专属动作每一下都带页面凭据，且用的是上一个响应轮换下来的那一份。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { chooseOption, selectedValue, selectTrigger } from "./select-helpers.mjs";
 
 const web = await startWebServer();
 let browser;
@@ -118,7 +119,7 @@ try {
     assert.deepEqual(accept.body, { codeId: "code-1" });
     assert.equal(accept.token, "tok-1", "确认绑定要带页面凭据");
     await page.getByRole("button", { name: "发一张测试卡", exact: true }).waitFor();
-    assert.equal(await page.getByRole("combobox", { name: "飞书里的当前项目" }).count(), 0, "飞书里不固定一个当前项目（建任务时在表单上选）");
+    assert.equal(await selectTrigger(page, "飞书里的当前项目").count(), 0, "飞书里不固定一个当前项目（建任务时在表单上选）");
 
     // 清除凭证：先开框，取消不发请求，确认才发
     await page.getByRole("button", { name: "清除", exact: true }).click();
@@ -156,7 +157,7 @@ try {
     const page = await open("scenario=connected&groups=demo");
     const groups = page.locator('[data-settings-anchor="feishu-groups"]');
     await groups.getByText("ash 开发群", { exact: true }).waitFor();
-    assert.equal(await groups.getByRole("combobox", { name: "ash 开发群 绑定的项目" }).inputValue(), "p-ash");
+    assert.equal(await selectedValue(selectTrigger(groups, "ash 开发群 绑定的项目")), "p-ash");
     await groups.getByText(/群「日报群」在 .+ 发来了绑定码，要把它绑到项目「daily-report」吗？/).waitFor();
     await groups.getByRole("button", { name: "确认绑定群", exact: true }).click();
     await groups.getByText("日报群", { exact: true }).waitFor();
@@ -164,7 +165,7 @@ try {
     assert.deepEqual(accept.body, { codeId: "gcode-1" });
     assert.equal(accept.token, "tok-0", "确认绑定群要带页面凭据");
 
-    await groups.getByRole("combobox", { name: "要绑群的项目" }).selectOption("p-daily");
+    await chooseOption(selectTrigger(groups, "要绑群的项目"), "p-daily");
     await groups.getByRole("button", { name: "生成群绑定码", exact: true }).click();
     await groups.getByLabel("群绑定码", { exact: true }).waitFor();
     const [code] = await calls(page, "POST", "/api/im/feishu/groups/code");

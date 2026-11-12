@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { ProjectView, SkillScanOverview, SkillScanRow, SkillSource } from "@ash/shared";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
+import { Select } from "../components/Select.tsx";
 
 // 设置页里的「技能扫描」一块：刷新间隔 + 立即重新扫描 + 每个 **CLI 类型**扫到了什么。
 //
@@ -103,18 +104,13 @@ export function SkillScanCard({
               {readOnly && <><br />这一项是整台机器的轮询行为，只有实例管理员能改。</>}
             </small>
           </div>
-          <select
+          <Select
             value={String(seconds)}
             disabled={loading || readOnly}
-            aria-label="技能清单刷新间隔"
-            onChange={(event) => void onChangeSeconds(Number(event.target.value))}
-          >
-            {choicesFor(seconds).map((choice) => (
-              <option key={choice.value} value={String(choice.value)}>
-                {choice.label}
-              </option>
-            ))}
-          </select>
+            label="技能清单刷新间隔"
+            options={choicesFor(seconds).map((choice) => ({ value: String(choice.value), label: choice.label }))}
+            onChange={(next) => void onChangeSeconds(Number(next))}
+          />
         </div>
 
         <div className="settings-row">
@@ -127,18 +123,15 @@ export function SkillScanCard({
             </small>
           </div>
           <span className="skill-scan-actions">
-            <select
+            <Select
               value={projectId}
-              aria-label="按项目查看技能"
-              onChange={(event) => setProjectId(event.target.value)}
-            >
-              <option value="">不限项目（只看个人/插件级）</option>
-              {projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
+              label="按项目查看技能"
+              options={[
+                { value: "", label: "不限项目（只看个人/插件级）" },
+                ...projects.map((project) => ({ value: project.id, label: project.name })),
+              ]}
+              onChange={setProjectId}
+            />
             <Button variant="secondary" disabled={scanning} onClick={() => void load(true)}>
               {scanning ? "扫描中…" : "立即重新扫描"}
             </Button>

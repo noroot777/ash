@@ -8,6 +8,7 @@
 // 直接用全站统一的那副形状（composer/ExecutorPickerField.tsx 的三段胶囊）。
 import type { FailPolicy, WorkflowStep } from "@ash/shared/workflow";
 import { FAIL_MODES, FAIL_MODE_LABELS, MAX_FAIL_ROUNDS } from "@ash/shared/workflow";
+import { Select } from "../components/Select.tsx";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import { executorValue, parseExecutorValue, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { executorProfile, type ExecutorCatalog } from "./executorCatalog.ts";
@@ -192,14 +193,15 @@ export function FailEditor({
           这个旋钮：夹在锚点之间的命令/预览是成段跑的，单独回到其中一站既没有触发它的
           事件，也没有从那儿接着往下的入口。所以只剩「最多来几轮」要选。 */}
       {fail.mode === "back" && (
-        <label className="wf-pop-row">
+        <div className="wf-pop-row">
           <span>最多重做</span>
-          <select value={fail.max} onChange={(event) => onPatch({ max: Number(event.target.value) })}>
-            {Array.from({ length: MAX_FAIL_ROUNDS }, (_, i) => i + 1).map((n) => (
-              <option key={n} value={n}>{n} 轮</option>
-            ))}
-          </select>
-        </label>
+          <Select
+            label="最多重做几轮"
+            value={String(fail.max)}
+            options={Array.from({ length: MAX_FAIL_ROUNDS }, (_, i) => ({ value: String(i + 1), label: `${i + 1} 轮` }))}
+            onChange={(next) => onPatch({ max: Number(next) })}
+          />
+        </div>
       )}
     </div>
   );

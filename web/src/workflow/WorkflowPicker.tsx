@@ -8,6 +8,7 @@
 // 对下一次挂载生效，当前这个下拉里照样没有刚存进去的那条（于是刚存完就选不中它）。
 import { useEffect, useState } from "react";
 import type { WorkflowItem } from "@ash/shared/workflow";
+import { Select } from "../components/Select.tsx";
 import { api } from "../lib/api.ts";
 import { workflowSummary } from "./workflowModel.ts";
 
@@ -48,14 +49,15 @@ export function useWorkflows(): WorkflowItem[] {
 }
 
 export function WorkflowPicker({
-  value, items, inheritLabel, disabled, id, onChange,
+  value, items, inheritLabel, disabled, label = "起手式", onChange,
 }: {
   /** 空串 = 没显式选，跟着上一级走 */
   value: string;
   items: WorkflowItem[];
   inheritLabel: string;
   disabled?: boolean;
-  id?: string;
+  /** 可访问名称：旁边那行字说的是哪一级的默认。 */
+  label?: string;
   onChange: (workflowId: string) => void;
 }) {
   // 停用的不进候选，但**已经选中的那条即便停用了也得列出来**，否则下拉会显示成空、
@@ -68,20 +70,23 @@ export function WorkflowPicker({
   // 不能选，由各个调用方在旁边的说明里讲（第 6 轮审查 P1）。
   const opaque = !!value && !options.some((item) => item.id === value);
   return (
-    <select
-      id={id}
+    <Select
       className="wf-picker"
+      label={label}
       value={value}
       disabled={disabled}
-      onChange={(event) => onChange(event.target.value)}
-    >
-      <option value="">{inheritLabel}</option>
-      {opaque && <option value={value}>当前设的那条（不在可选清单里）</option>}
-      {options.map((item) => (
-        <option key={item.id} value={item.id}>
-          {item.name}{item.disabled ? "（已停用）" : ""} · {workflowSummary(item.def)}
-        </option>
-      ))}
-    </select>
+      filterable={options.length > 10}
+      filterPlaceholder="筛选起手式…"
+      options={[
+        { value: "", label: inheritLabel },
+        ...(opaque ? [{ value, label: "当前设的那条（不在可选清单里）" }] : []),
+        ...options.map((item) => ({
+          value: item.id,
+          label: `${item.name}${item.disabled ? "（已停用）" : ""}`,
+          detail: workflowSummary(item.def),
+        })),
+      ]}
+      onChange={onChange}
+    />
   );
 }

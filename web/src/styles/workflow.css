@@ -415,7 +415,7 @@
   color: var(--muted);
 }
 .wf-pop-row > span { flex: none; min-width: 62px; }
-.wf-pop-row select,
+.wf-pop-row .ui-dropdown,
 .wf-pop-row input { flex: 1; min-width: 0; }
 
 .wf-pop-text {

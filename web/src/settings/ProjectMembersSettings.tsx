@@ -11,11 +11,16 @@ import { projectMemberApi, userApi } from "../lib/authApi.ts";
 import { useAuth } from "../auth/authContext.ts";
 import { Button } from "../components/ui.tsx";
 import "./project-members.css";
+import { Select, type SelectOption } from "../components/Select.tsx";
 
 const ROLE_LABEL: Record<ProjectRole, string> = {
   admin: "项目管理员",
   member: "成员",
 };
+const ROLE_OPTIONS: SelectOption<ProjectRole>[] = [
+  { value: "member", label: ROLE_LABEL.member },
+  { value: "admin", label: ROLE_LABEL.admin },
+];
 
 export function ProjectMembersSettings({
   project,
@@ -112,20 +117,18 @@ export function ProjectMembersSettings({
                 <span className="pmem-note">天然可进，不在成员名单里</span>
               ) : canManage ? (
                 <>
-                  <select
-                    className="ui-input pmem-role"
-                    aria-label={`${member.name} 的项目角色`}
+                  <Select
+                    className="pmem-role"
+                    label={`${member.name} 的项目角色`}
                     value={member.role}
                     disabled={busy}
-                    onChange={(e) =>
+                    options={ROLE_OPTIONS}
+                    onChange={(next) =>
                       void run("已改权限", () =>
-                        projectMemberApi.setRole(project.id, member.userId, e.target.value as ProjectRole),
+                        projectMemberApi.setRole(project.id, member.userId, next),
                       )
                     }
-                  >
-                    <option value="member">{ROLE_LABEL.member}</option>
-                    <option value="admin">{ROLE_LABEL.admin}</option>
-                  </select>
+                  />
                   <Button
                     variant="danger"
                     disabled={busy}
@@ -146,28 +149,23 @@ export function ProjectMembersSettings({
         <div className="pmem-block">
           <h3>加人</h3>
           <div className="pmem-add">
-            <select
-              className="ui-input"
-              aria-label="选择要加入的用户"
+            <Select
+              className="pmem-user"
+              label="选择要加入的用户"
               value={pick}
-              onChange={(e) => setPick(e.target.value)}
-            >
-              <option value="">选一个用户…</option>
-              {candidates.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.name}
-                </option>
-              ))}
-            </select>
-            <select
-              className="ui-input pmem-role"
-              aria-label="加入后的角色"
+              placeholder="选一个用户…"
+              filterable={candidates.length > 8}
+              filterPlaceholder="筛选用户…"
+              options={candidates.map((u) => ({ value: u.id, label: u.name }))}
+              onChange={setPick}
+            />
+            <Select
+              className="pmem-role"
+              label="加入后的角色"
               value={pickRole}
-              onChange={(e) => setPickRole(e.target.value as ProjectRole)}
-            >
-              <option value="member">{ROLE_LABEL.member}</option>
-              <option value="admin">{ROLE_LABEL.admin}</option>
-            </select>
+              options={ROLE_OPTIONS}
+              onChange={setPickRole}
+            />
             <Button
               variant="primary"
               disabled={busy || !pick}

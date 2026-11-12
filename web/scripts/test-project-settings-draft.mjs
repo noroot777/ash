@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { chooseOption, selectedValue, selectTrigger } from "./select-helpers.mjs";
 import { testShellScriptEditor } from "./shell-script-editor-checks.mjs";
 
 const editorText = async (editor) => editor.locator(".cm-line").evaluateAll((lines) => lines.map((line) => line.querySelector(".cm-placeholder") ? "" : line.textContent).join("\n"));
@@ -21,7 +22,7 @@ try {
   const preview = page.getByRole("textbox", { name: "启动脚本", exact: true });
   const name = page.locator("label", { hasText: "项目名称" }).locator("input");
   const repoPath = page.locator("label", { hasText: "工作目录" }).locator("input");
-  const proxy = page.getByRole("combobox", { name: "通过 ash 反向代理访问" });
+  const proxy = selectTrigger(page, "通过 ash 反向代理访问");
   const savePreview = page.getByRole("button", { name: "保存预览设置" });
   const scriptMode = page.getByRole("radio", { name: "自定义脚本", exact: true });
   const servicesMode = page.getByRole("radio", { name: "选择服务", exact: true });
@@ -39,12 +40,12 @@ try {
   await page.getByText("当前使用直连：", { exact: false }).waitFor();
   await page.getByTestId("mode-multi").click();
   await page.getByText("当前使用反代：", { exact: false }).waitFor();
-  await proxy.selectOption("off");
+  await chooseOption(proxy, "off");
   await page.getByText("当前使用直连：", { exact: false }).waitFor();
-  await proxy.selectOption("on");
+  await chooseOption(proxy, "on");
   await page.getByTestId("mode-single").click();
   await page.getByText("当前使用反代：", { exact: false }).waitFor();
-  await proxy.selectOption("auto");
+  await chooseOption(proxy, "auto");
   await testShellScriptEditor(page, preview, savePreview);
 
   const draft = [
@@ -234,11 +235,11 @@ try {
   assert.equal(await editorText(webCommand), editedWebCommand, "同项目重新渲染吞掉了服务脚本草稿");
   assert.equal(await page.getByText("已选 2 个 · 最多同时启动 8 个").isVisible(), true, "检测结果应支持多选");
 
-  await proxy.selectOption("auto");
+  await chooseOption(proxy, "auto");
   // 起多大一摊是个**能选的**项：它曾经写死在服务端，项目配什么都没用，而界面上看不出来。
-  const launch = page.getByRole("combobox", { name: "预览启动范围" });
-  assert.equal(await launch.inputValue(), "frontend", "没配过的项目按老行为显示只起前端");
-  await launch.selectOption("test");
+  const launch = selectTrigger(page, "预览启动范围");
+  assert.equal(await selectedValue(launch), "frontend", "没配过的项目按老行为显示只起前端");
+  await chooseOption(launch, "test");
   await savePreview.click();
   await page.waitForFunction(
     () => JSON.parse(document.querySelector("[data-testid=stored-projects]").textContent)["p-one"].previewConfig.mode === "services",

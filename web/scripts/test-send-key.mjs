@@ -27,6 +27,7 @@
 //      离开设置页再回来（第 4 轮审查）。界面继续声称一个没存成的档位比显示滞后危险。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { chooseOption, selectedValue, selectTrigger } from "./select-helpers.mjs";
 import { settlePage, waitUntil, WAIT_TIMEOUT_MS } from "./wait-until.mjs";
 
 const web = await startWebServer();
@@ -42,7 +43,7 @@ try {
   const log = page.locator('[data-testid="log"]');
   const hint = page.locator('[data-testid="hint"]');
   const objective = page.getByLabel("任务目标");
-  const picker = page.getByLabel("输入框发送键");
+  const picker = selectTrigger(page, "输入框发送键");
   const entries = async () => (await log.innerText()).split(",").filter(Boolean);
   const state = () => page.evaluate(() => window.__state());
   const open = async (query = "") => {
@@ -76,7 +77,7 @@ try {
   // ① 服务端那份说 ⌘/Ctrl+回车：裸回车只换行。
   await open("?send-key=mod-enter");
   await assertHint(hint, "⌘ / Ctrl + Enter 发送 · Enter 换行");
-  assert.equal(await picker.inputValue(), "mod-enter", "下拉该显示服务端那一份");
+  assert.equal(await selectedValue(picker), "mod-enter", "下拉该显示服务端那一份");
   await typeThen("甲", "Enter");
   await page.keyboard.type("乙");
   assert.deepEqual(await entries(), [], "⌘ 回车那一档下，裸回车不该提交");
@@ -85,7 +86,7 @@ try {
   assert.deepEqual(await entries(), ['submit("甲\\n乙")'], "⌘/Ctrl+回车应当提交，且拿到的是框里的内容");
 
   // ② 设置卡上切回「回车直发」：PATCH 落到服务端，提示文案当场跟着变。
-  await picker.selectOption("enter");
+  await chooseOption(picker, "enter");
   await assertHint(hint, "Enter 发送 · Shift Enter 换行");
   await settleServerTo(page, "enter", "设置卡上改一下就该 PATCH 回服务端");
 
@@ -136,7 +137,7 @@ try {
   // ⑥ 保存之前发出的那条 GET 迟到回来，不许顶掉刚存好的那一档。
   await open("?send-key=enter");
   await page.evaluate(() => window.__probeHeld()); // 这条在保存之前发出，被扣住
-  await picker.selectOption("mod-enter");
+  await chooseOption(picker, "mod-enter");
   await settleTo(() => window.__state().mode === "mod-enter", "保存成功后该当场切到 ⌘/Ctrl 那一档");
   const readsBeforeLate = await consumedSoFar("reads");
   await page.evaluate(() => window.__releaseProbe());
@@ -149,7 +150,7 @@ try {
   //    那条 GET 的号更大，但它跨过了一次写 —— 不算数。
   await open("?send-key=enter");
   await page.evaluate(() => window.__holdPatch(true)); // 放行才写：模拟「还没到服务端」
-  await picker.selectOption("mod-enter");
+  await chooseOption(picker, "mod-enter");
   await held("patch", "发送键那条 PATCH 扣在桩上");
   const readsBeforeProbe = await consumedSoFar("reads");
   await page.evaluate(() => window.__probe());         // 读到的还是 enter，且先回来
@@ -169,7 +170,7 @@ try {
   await page.evaluate(() => window.__holdPatch(false)); // 服务端已经写了，只是应答在路上
   await page.evaluate(() => window.__patchSkill(7200));
   await held("patch", "另一张卡那条 PATCH 已经写进服务端、应答扣在桩上");
-  await picker.selectOption("mod-enter");
+  await chooseOption(picker, "mod-enter");
   await settleTo(() => window.__state().value === "mod-enter", "发送键自己那次保存该先生效");
   const writesBeforeLate = await consumedSoFar("writes");
   await page.evaluate(() => window.__releasePatch());
@@ -177,14 +178,14 @@ try {
   const after = await state();
   assert.equal(after.value, "mod-enter", "另一张卡的旧应答不该把发送键的显示值退回去");
   assert.equal(after.mode, "mod-enter", "实际按键行为同样不该退");
-  assert.equal(await picker.inputValue(), "mod-enter", "下拉显示的也得是用户刚选的那一档");
+  assert.equal(await selectedValue(picker), "mod-enter", "下拉显示的也得是用户刚选的那一档");
   await assertHint(hint, "⌘ / Ctrl + Enter 发送 · Enter 换行");
 
   // ⑩ 读取整段跨过一次保存：保存开始 → 它读到旧值 → 保存结束 → 它迟到的应答才回来。
   //    两个端点都看不到「写在途」，可它中间完整跨过了一次保存。
   await open("?send-key=enter");
   await page.evaluate(() => window.__holdPatch(true)); // 放行才写：保存还没到服务端
-  await picker.selectOption("mod-enter");
+  await chooseOption(picker, "mod-enter");
   await page.evaluate(() => window.__probeHeld());     // 这条真读到 enter，应答也扣住
   await held("patch", "发送键那条 PATCH 扣在桩上");
   await held("probe", "那条 GET 读到了旧值、应答扣在桩上");
@@ -194,7 +195,7 @@ try {
   await page.evaluate(() => window.__releaseProbe());  // 旧读取这才回来
   await consumed("reads", readsBeforeCross, "跨过保存的那条 GET 回来并被处理完");
   assert.equal((await state()).mode, "mod-enter", "整段跨过一次保存的读取不算数");
-  assert.equal(await picker.inputValue(), "mod-enter", "下拉同样不该退档");
+  assert.equal(await selectedValue(picker), "mod-enter", "下拉同样不该退档");
   await assertHint(hint, "⌘ / Ctrl + Enter 发送 · Enter 换行");
   await typeThen("读取跨了一次保存", "Enter");
   assert.deepEqual(await entries(), [], "保存已成功，裸回车不该把没写完的任务发出去");
@@ -203,7 +204,7 @@ try {
   // ⑪ 两个互不冲突的部分写入：发送键先发、技能间隔后发先完成，两次都该生效。
   await open("?send-key=enter");
   await page.evaluate(() => window.__holdPatch(true)); // 发送键这条扣住，还没到服务端
-  await picker.selectOption("mod-enter");
+  await chooseOption(picker, "mod-enter");
   await held("patch", "发送键那条 PATCH 先发出、扣在桩上");
   await page.evaluate(() => window.__patchSkill(3600)); // 后发、先完成，应答里发送键还是 enter
   await settleTo(() => window.__state().skill === 3600, "另一项设置自己那次保存该先生效");
@@ -212,14 +213,14 @@ try {
   const merged = await state();
   assert.equal(merged.mode, "mod-enter", "较晚的另一项保存不该撤销较早的发送键保存");
   assert.equal(merged.skill, 3600, "另一项设置也得留住 —— 两次保存都是用户的意思");
-  assert.equal(await picker.inputValue(), "mod-enter", "下拉显示的是实际存成的那一档");
+  assert.equal(await selectedValue(picker), "mod-enter", "下拉显示的是实际存成的那一档");
   await typeThen("两项同时保存", "Enter");
   assert.deepEqual(await entries(), [], "裸回车该按已存成的 ⌘/Ctrl 那一档当换行");
 
   // ⑫ 后发的那次保存失败：它自己没存上，更不该连累成功的那次。
   await open("?send-key=enter");
   await page.evaluate(() => window.__holdPatch(true));
-  await picker.selectOption("mod-enter");
+  await chooseOption(picker, "mod-enter");
   await held("patch", "发送键那条 PATCH 先发出、扣在桩上");
   await page.evaluate(() => window.__failPatch(1));
   const writesBeforeFail = await consumedSoFar("writes");
@@ -236,21 +237,21 @@ try {
   await open("?send-key=mod-enter");
   await settleTo(() => window.__state().mode === "mod-enter", "开场该学到服务端那一份");
   await page.evaluate(() => window.__holdPatch(true)); // 第一条:放行才写,还没到服务端
-  await picker.selectOption("enter");
+  await chooseOption(picker, "enter");
   await held("patch", "第一条 PATCH 扣在桩上");
   await page.evaluate(() => window.__reopenSettings()); // 离开再回来:卡片的 saving 丢了
   // 重新挂载的标志就是下拉不再禁用 —— 报告指出的正是这个:上一个实例的「保存中」没了。
   await picker.locator("xpath=.").waitFor();
   await page.waitForFunction(
-    () => !document.querySelector('[data-settings-anchor="send-key"] select')?.disabled,
+    () => !document.querySelector('[data-settings-anchor="send-key"] .ui-select-trigger')?.disabled,
     undefined, { timeout: WAIT_TIMEOUT_MS },
   ).catch(() => assert.fail("卡片该重新挂载、下拉不再带着上一个实例的「保存中」"));
   assert.equal((await state()).epoch, 1, "卡片确实重新挂载过一次");
   assert.equal(
-    await picker.inputValue(), "enter",
+    await selectedValue(picker), "enter",
     "重新挂载的下拉该显示用户最后选的那一档，不是他已经改掉的旧值",
   );
-  await picker.selectOption("mod-enter");              // 第二条:排在第一条后面,还没发出
+  await chooseOption(picker, "mod-enter");              // 第二条:排在第一条后面,还没发出
   // 不睡：第二条已经进了队（选完当场生效），它若不排队，发出与落到桩上都在这之后的微任务里，
   // 冲刷一轮就该看见；还是 0 就是没抢跑。
   await settleTo(() => window.__state().mode === "mod-enter", "第二次选择已经进队、当场生效");
@@ -276,10 +277,10 @@ try {
   await open("?send-key=enter");
   await settleTo(() => window.__state().mode === "enter", "开场该学到服务端那一份");
   await page.evaluate(() => window.__holdPatch(true, true)); // 扣住，放行时 503
-  await picker.selectOption("mod-enter");
+  await chooseOption(picker, "mod-enter");
   await held("patch", "发送键那条 PATCH 扣在桩上");
   assert.equal((await state()).mode, "mod-enter", "在途期间按用户刚选的那一档走");
-  assert.equal(await picker.inputValue(), "mod-enter", "下拉显示的也是它");
+  assert.equal(await selectedValue(picker), "mod-enter", "下拉显示的也是它");
   await page.evaluate(() => window.__patchSkill(7200));      // 另一项设置存成了
   await settleTo(() => window.__state().skill === 7200, "另一项设置该存成");
   assert.equal(
@@ -288,7 +289,7 @@ try {
   );
   await page.evaluate(() => window.__releasePatch());        // 发送键保存失败
   await settleTo(() => window.__state().mode === "enter", "保存失败该退回已确认的那一档");
-  assert.equal(await picker.inputValue(), "enter", "下拉当场跟着退，不许继续显示没存成的那一档");
+  assert.equal(await selectedValue(picker), "enter", "下拉当场跟着退，不许继续显示没存成的那一档");
   await assertHint(hint, "Enter 发送 · Shift Enter 换行");
   assert.equal(await serverSendKey(page), "enter", "服务端本来就一个字没写");
   await typeThen("保存失败之后", "Enter");
@@ -301,18 +302,18 @@ try {
   await open("?send-key=enter");
   await settleTo(() => window.__state().mode === "enter", "开场该学到服务端那一份");
   await page.evaluate(() => window.__holdPatch(true, true));
-  await picker.selectOption("mod-enter");
+  await chooseOption(picker, "mod-enter");
   await held("patch", "发送键那条 PATCH 扣在桩上");
   await page.evaluate(() => window.__reopenSettings());
   await page.waitForFunction(
-    () => !document.querySelector('[data-settings-anchor="send-key"] select')?.disabled,
+    () => !document.querySelector('[data-settings-anchor="send-key"] .ui-select-trigger')?.disabled,
     undefined, { timeout: WAIT_TIMEOUT_MS },
   ).catch(() => assert.fail("卡片该重新挂载、下拉不再带着上一个实例的「保存中」"));
-  assert.equal(await picker.inputValue(), "mod-enter", "重新挂载时显示在途的那一档");
+  assert.equal(await selectedValue(picker), "mod-enter", "重新挂载时显示在途的那一档");
   assert.equal((await state()).value, "enter", "交出去的快照仍只有已确认的值");
   await page.evaluate(() => window.__releasePatch());        // 失败
   await settleTo(() => window.__state().mode === "enter", "失败后该退回已确认的那一档");
-  assert.equal(await picker.inputValue(), "enter", "重新挂载过的卡片同样当场退回");
+  assert.equal(await selectedValue(picker), "enter", "重新挂载过的卡片同样当场退回");
   await assertHint(hint, "Enter 发送 · Shift Enter 换行");
   assert.equal(await serverSendKey(page), "enter", "服务端一个字没写");
   await typeThen("重进设置后保存失败", "Enter");

@@ -186,6 +186,17 @@
   font-size: 11px;
 }
 
+/* 行尾的下拉（components/Select.tsx 的表单档）：宽度跟着选中项走，太长时省略，不把左边的说明挤没。 */
+.settings-row > .ui-dropdown {
+  flex: 0 1 auto;
+  min-width: 140px;
+  max-width: 320px;
+}
+
+.settings-field > .ui-dropdown {
+  width: min(320px, 100%);
+}
+
 .settings-row > span {
   color: var(--muted);
   font-size: 12px;
@@ -331,13 +342,9 @@
 }
 
 .settings-agent-row input,
-.settings-agent-row select,
 .settings-add-agent input,
-.settings-add-agent select,
 .settings-group-row input,
-.settings-group-row select,
-.settings-group-create input,
-.settings-group-create select {
+.settings-group-create input {
   min-width: 0;
   height: 29px;
   border: 1px solid var(--line);

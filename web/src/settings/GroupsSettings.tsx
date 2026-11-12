@@ -5,6 +5,7 @@ import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { activeGroupTasks, resumeQueueModel } from "./groupQueueModel.ts";
+import { Select, type SelectOption } from "../components/Select.tsx";
 
 function ResumeQueue({ tasks }: { tasks: TaskListItem[] }) {
   const queue = resumeQueueModel(tasks);
@@ -21,6 +22,11 @@ type GroupManagerProps = {
   notify: (message: string) => void;
   onNestedDialogChange?: (open: boolean) => void;
 };
+
+const GROUP_MODES: SelectOption<GroupMode>[] = [
+  { value: "parallel", label: "并行" },
+  { value: "serial", label: "串行" },
+];
 
 export function GroupManager({ project, groups, tasks, onChanged, notify, onNestedDialogChange }: GroupManagerProps) {
   const [name, setName] = useState("");
@@ -49,7 +55,7 @@ export function GroupManager({ project, groups, tasks, onChanged, notify, onNest
         {visible.map((group) => { const members = groupTasks(group.id); return (
           <article className="settings-group-row" key={group.id}><div className="settings-group-main">
             <input defaultValue={group.name} aria-label="分组名称" onBlur={(event) => { const next = event.target.value.trim(); if (next && next !== group.name) void action(api.updateGroup(group.id, { name: next }), "分组名称已更新"); else event.target.value = group.name; }} />
-            <select value={group.mode} onChange={(event) => void action(api.updateGroup(group.id, { mode: event.target.value as GroupMode }), "分组模式已更新")}><option value="parallel">并行</option><option value="serial">串行</option></select>
+            <Select label={`${group.name} 的运行方式`} value={group.mode} options={GROUP_MODES} onChange={(next) => void action(api.updateGroup(group.id, { mode: next }), "分组模式已更新")} />
             <span>{members.length} 个任务</span>
             {group.paused ? <span className="settings-paused">已暂停</span> : null}
             <Button variant="primary" onClick={() => void action(api.runGroup(group.id), group.paused ? "分组已继续" : "分组已启动")}><Play size={12} weight="fill" />{group.paused ? "继续" : "运行"}</Button>
@@ -57,7 +63,7 @@ export function GroupManager({ project, groups, tasks, onChanged, notify, onNest
             <button className="settings-icon-danger" type="button" aria-label={`删除 ${group.name}`} onClick={() => setConfirmDelete(group)}><Trash size={14} /></button>
           </div><ResumeQueue tasks={members} /></article>
         ); })}
-        <div className="settings-group-create"><input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void create()} placeholder="新分组名称…" /><select value={mode} onChange={(event) => setMode(event.target.value as GroupMode)}><option value="parallel">并行</option><option value="serial">串行</option></select><Button variant="primary" disabled={!name.trim()} onClick={() => void create()}><Plus size={13} weight="bold" />新建</Button></div>
+        <div className="settings-group-create"><input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void create()} placeholder="新分组名称…" /><Select label="新分组的运行方式" value={mode} options={GROUP_MODES} onChange={setMode} /><Button variant="primary" disabled={!name.trim()} onClick={() => void create()}><Plus size={13} weight="bold" />新建</Button></div>
       </div>
       <p className="settings-note">运行分组会按服务端现有调度语义处理队列、暂停点和失败重试。</p>
       {confirmDelete && <ConfirmDialog title="删除分组" message={`确定删除“${confirmDelete.name}”？组内 ${count(confirmDelete.id)} 个任务会保留并取消分组。`} confirmLabel="删除" danger onClose={() => setConfirmDelete(null)} onConfirm={() => { const group = confirmDelete; setConfirmDelete(null); void action(api.deleteGroup(group.id), "分组已删除"); }} />}

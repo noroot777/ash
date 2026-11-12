@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ComposerSendKey } from "@ash/shared";
 import { sendKeyLabels } from "../lib/sendKey.ts";
 import { useComposerSendKey } from "../lib/useComposerSendKey.ts";
+import { Select } from "../components/Select.tsx";
 
 // 设置页里的「输入框」一块：全站输入框按哪一下算发送。
 //
@@ -48,20 +49,16 @@ export function ComposerSendKeyCard({ loading, onChange }: {
               {value === "enter" && "（⌘ / Ctrl + 回车也照旧发送）"}
             </small>
           </div>
-          <select
+          <Select
             value={value}
             disabled={loading || saving}
-            aria-label="输入框发送键"
-            onChange={(event) => {
-              const next = event.target.value as ComposerSendKey;
+            label="输入框发送键"
+            options={CHOICES}
+            onChange={(next) => {
               setSaving(true);
               void onChange(next).finally(() => setSaving(false));
             }}
-          >
-            {CHOICES.map((choice) => (
-              <option key={choice.value} value={choice.value}>{choice.label}</option>
-            ))}
-          </select>
+          />
         </div>
       </div>
     </section>

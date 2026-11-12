@@ -49,6 +49,8 @@ try {
   const pickA = async () => {
     await page.locator(".task-inspector-queue-after .ui-select-trigger").click();
     await page.locator(".ui-dropdown-row", { hasText: "前驱任务A" }).click();
+    // 下拉收起有一段 120ms 的退场，那一会儿旧选项（带着「队列第几位」）还在 DOM 里。
+    await page.locator(".ui-dropdown-panel").waitFor({ state: "detached" });
   };
 
   // 健康路径(真实回调链):K1 接在 A 后,响应即时返回,快照整批生效。

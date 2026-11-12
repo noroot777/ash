@@ -3,6 +3,7 @@ import { MagnifyingGlass, Plus, Trash } from "@phosphor-icons/react";
 import type { ProjectView } from "@ash/shared";
 import { MAX_PREVIEW_SERVICES, parsePreviewConfig, PREVIEW_MODE, PREVIEW_MODE_LABELS, previewPortDialect, previewPortRef, previewPortRuleText, previewProxyEnabled, withoutBlankServices, type ProjectPreviewConfig, type PreviewServiceConfig } from "@ash/shared/preview";
 import { Button } from "../components/ui.tsx";
+import { Select, type SelectOption } from "../components/Select.tsx";
 import { useAuth } from "../auth/authContext.ts";
 import { useHostInfo } from "../lib/useHostInfo.ts";
 import { api } from "../lib/api.ts";
@@ -11,6 +12,11 @@ import { PreviewAiAssist } from "./PreviewAiAssist.tsx";
 import { ProjectPreviewHelp } from "./ProjectPreviewHelp.tsx";
 import { ShellScriptEditor, useShellScriptWrapping } from "./ShellScriptEditor.tsx";
 import "./project-preview.css";
+
+const SERVICE_KINDS: SelectOption<PreviewServiceConfig["kind"]>[] = [
+  { value: "web", label: "网页" },
+  { value: "service", label: "接口服务" },
+];
 
 const emptyConfig = (): ProjectPreviewConfig => ({ mode: "script", proxy: "auto", services: [], primaryServiceId: null, launch: "frontend" });
 // 存量配置里可能留着以前没填完的空壳服务，进来先丢掉：它不该被展示成一条已有配置。
@@ -122,7 +128,7 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
           </label>
           <input className="preview-service-name" aria-label={`服务名称 ${service.name}`} value={service.name} maxLength={160} readOnly={!canManage || busy} onChange={(e) => patchService(service.id, { name: e.target.value })} />
           <div className="preview-service-options">
-            <label className="preview-service-kind">用途 <select aria-label={`${service.name} 用途`} value={service.kind} disabled={!canManage || busy} onChange={(e) => patchService(service.id, { kind: e.target.value as PreviewServiceConfig["kind"] })}><option value="web">网页</option><option value="service">接口服务</option></select></label>
+            <span className="preview-service-kind">用途 <Select size="compact" label={`${service.name} 用途`} value={service.kind} disabled={!canManage || busy} options={SERVICE_KINDS} onChange={(kind) => patchService(service.id, { kind })} /></span>
             <label className="preview-service-primary"><input type="radio" name={`preview-primary-${project.id}`} checked={config.primaryServiceId === service.id} disabled={!canManage || busy || !service.enabled} onChange={() => setConfig({ ...config, primaryServiceId: service.id })} />默认打开</label>
           </div>
           <Button className="preview-service-remove" variant="ghost" disabled={!canManage || busy} aria-label={`移除 ${service.name}`} onClick={() => setConfig((current) => ({ ...current, services: current.services.filter((s) => s.id !== service.id), primaryServiceId: current.primaryServiceId === service.id ? null : current.primaryServiceId }))}><Trash size={14} aria-hidden="true" /></Button>
@@ -133,11 +139,9 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
       </div>)}</div>
       <div className="preview-help"><small>每条脚本都从任务工作区根目录独立执行，使用自己的 <code>{variable("PORT")}</code>。已选服务按列表顺序对应 <code>{variable("URL1")}</code>、<code>{variable("URL2")}</code>…，可传给前端开发服务器的接口代理配置。它们是服务端内部地址。</small></div>
     </div>}
-    <label className="settings-field preview-launch-scope-field"><span>启动范围</span>
-      <select aria-label="预览启动范围" value={config.launch} disabled={!canManage || busy} onChange={(e) => setConfig({ ...config, launch: e.target.value as ProjectPreviewConfig["launch"] })}>
-        {PREVIEW_MODE.map((value) => <option key={value} value={value}>{PREVIEW_MODE_LABELS[value]}</option>)}
-      </select>
-    </label>
+    <div className="settings-field preview-launch-scope-field"><span>启动范围</span>
+      <Select label="预览启动范围" value={config.launch} disabled={!canManage || busy} options={PREVIEW_MODE.map((value) => ({ value, label: PREVIEW_MODE_LABELS[value] }))} onChange={(launch) => setConfig({ ...config, launch })} />
+    </div>
     <div className="preview-help preview-launch-scope-help">
       <small>ash 把这个选择作为 <code>{variable("ASH_PREVIEW_MODE")}</code> 递给上面的启动脚本，<b>起不起后端是脚本自己的事</b> —— 脚本不读这个变量时，四档没有区别（大多数项目都是这样，选哪个都行）。</small>
       {/* 这一句是这个选项存在的全部理由：选「只起前端」时预览里的后端根本不是这个分支的，
@@ -145,12 +149,19 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
           东西没生效」。界面不说，用户无从知道该去看哪儿。 */}
       <small>选「只启动前端」时，脚本通常会把 <code>/api</code> 打回正在跑的这台 ash：<b>你在预览里验的是主实例的后端，不是这个分支的</b>。要验后端改动，请选前后端全启动的那两档，或在脚本里自己起后端。</small>
     </div>
-    <label className="settings-field preview-proxy-field"><span>通过 ash 反向代理访问</span>
-      <select aria-label="通过 ash 反向代理访问" value={config.proxy} disabled={!canManage || busy} onChange={(e) => setConfig({ ...config, proxy: e.target.value as ProjectPreviewConfig["proxy"] })}>
-        <option value="auto">跟随模式默认（{state.mode === "multi" ? "多人模式：开启" : "单人模式：关闭"}）</option>
-        <option value="on">开启</option><option value="off">关闭</option>
-      </select>
-    </label>
+    <div className="settings-field preview-proxy-field"><span>通过 ash 反向代理访问</span>
+      <Select
+        label="通过 ash 反向代理访问"
+        value={config.proxy}
+        disabled={!canManage || busy}
+        options={[
+          { value: "auto", label: `跟随模式默认（${state.mode === "multi" ? "多人模式：开启" : "单人模式：关闭"}）` },
+          { value: "on", label: "开启" },
+          { value: "off", label: "关闭" },
+        ] satisfies SelectOption<ProjectPreviewConfig["proxy"]>[]}
+        onChange={(proxy) => setConfig({ ...config, proxy })}
+      />
+    </div>
     <div className="preview-help preview-proxy-help">
       <small>{proxied ? "当前使用反代：浏览器复用 ash 入口，无需开放每个服务的端口。预览页面跑在独立沙箱里，与 ash 的登录态隔离，只有一个例外——被预览的仓库就是这台 ash 自己、而且启动命令自己声明了「我的 /api 打到这台 ash 上」（ash 自带的「只起前端」启动方式默认这么声明；多服务预览一律不算，脚本里用 ASH_PROXY 把前端指向自己的后端也会让它改口）时，/api 会由代理单独接回这台 ash 并替你带上当前这条会话，打开即登录态；否则你只会看到一个登录框，而在预览页里粘 key 比这危险得多（key 是长期凭证，会落到被预览的应用手上）。这条会话只出现在 /api 那一跳上，被预览的 dev server 一个字都收不到，页面本身也读不出来；代价是页面能借这条路以你的身份调 ash 的接口。你一登出它就失效，链接被别人拿去打开也不会继承。预览页面自己发出的请求所带的 Authorization（Bearer 等）会照常转发，从 ash 页面或命令行带进来的鉴权头不会（否则你的 ash key 会落到被预览的应用手上）；Basic/Digest 一律不转发，需要它们的应用请改用直连。localStorage、sessionStorage 和 document.cookie 由 ash 在页面内模拟——读写正常，但只活在当前这个页面：刷新或跳转即清空，页面写的 Cookie 也不会随请求发出，所以把登录态存在本地存储的应用每次刷新都要重新登录。IndexedDB、Service Worker 和站外接口在沙箱里用不了，依赖它们的应用请改用直连。" : "当前使用直连：浏览器直接访问服务端口。远程访问时，服务需监听可访问的网卡地址，并开放相应端口。"}</small>
       {proxied && <small>服务需要配置资源前缀时，可读取 <code>{variable("ASH_PREVIEW_BASE")}</code>。例如 Vite 可在启动参数中使用 <code>--base {variable("ASH_PREVIEW_BASE")}</code>。</small>}

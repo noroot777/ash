@@ -264,28 +264,11 @@ button.provider-mount-state:hover {
   gap: 7px;
 }
 
-/* 固定模型的「添加」下拉跟上面的「默认模型」共用一套观感：同样的 trigger、同样高。 */
+/* 固定模型的「添加」下拉跟上面的「默认模型」并排时各占剩下的宽度。 */
 .provider-model-control > .ui-dropdown,
 .provider-pinned-add > .ui-dropdown {
   min-width: 0;
   flex: 1;
-}
-
-.provider-model-control > .ui-dropdown .ui-dropdown-trigger,
-.provider-pinned-add > .ui-dropdown .ui-dropdown-trigger {
-  height: 29px;
-  border-color: var(--line);
-  background: var(--canvas);
-  box-shadow: none;
-}
-
-.provider-model-control > .ui-dropdown .ui-dropdown-trigger:hover,
-.provider-model-control > .ui-dropdown .ui-dropdown-trigger[aria-expanded="true"],
-.provider-pinned-add > .ui-dropdown .ui-dropdown-trigger:hover,
-.provider-pinned-add > .ui-dropdown .ui-dropdown-trigger[aria-expanded="true"] {
-  border-color: var(--accent);
-  background: var(--canvas);
-  box-shadow: none;
 }
 
 .provider-model-field > div .ui-button {

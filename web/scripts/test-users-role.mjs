@@ -9,6 +9,7 @@
 //   ④ 把自己降下去要过确认，而且降完这一屏得自己关上：导航项没了、面板还挂着，而普通
 //      成员拿到的 `GET /users` 是精简版，照原样渲染就是一屏空目录名。
 import assert from "node:assert/strict";
+import { chooseOption, selectedValue, selectTrigger } from "./select-helpers.mjs";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 const web = await startWebServer();
@@ -50,42 +51,42 @@ try {
   assert.equal(reducedMotion.duration, "0s", "减弱动态效果时用户行过渡时长应归零");
   await page.emulateMedia({ reducedMotion: "no-preference" });
 
-  const roleOf = (name) => page.getByRole("combobox", { name: `${name} 的实例角色` });
+  const roleOf = (name) => selectTrigger(page, `${name} 的实例角色`);
 
   // ① 每一行一个下拉，读的是这个人现在的角色。
   assert.equal(await page.locator(".users-role").count(), 4, "四行都该有实例角色下拉");
-  assert.equal(await roleOf("阿岚").inputValue(), "admin");
-  assert.equal(await roleOf("小蔡").inputValue(), "member");
+  assert.equal(await selectedValue(roleOf("阿岚")), "admin");
+  assert.equal(await selectedValue(roleOf("小蔡")), "member");
   if (process.env.USERS_ROLE_SHOT) {
     await page.locator(".users-settings").screenshot({ path: process.env.USERS_ROLE_SHOT });
   }
 
   // ② 升管理员先确认，说清交出去的是什么；取消就什么都没发生。
-  await roleOf("小蔡").selectOption("admin");
+  await chooseOption(roleOf("小蔡"), "admin");
   const confirm = rows.filter({ hasText: "小蔡" }).locator(".users-confirm");
   await confirm.waitFor();
   assert.match(await confirm.innerText(), /小蔡 将能管理所有用户、访问这台机器上的任意路径、开终端/);
   await confirm.getByRole("button", { name: "取消" }).click();
   await roleOf("小蔡").waitFor();
-  assert.equal(await roleOf("小蔡").inputValue(), "member", "取消后角色不许动");
+  assert.equal(await selectedValue(roleOf("小蔡")), "member", "取消后角色不许动");
 
-  await roleOf("小蔡").selectOption("admin");
+  await chooseOption(roleOf("小蔡"), "admin");
   await rows.filter({ hasText: "小蔡" }).locator(".users-confirm").getByRole("button", { name: "确定" }).click();
   await page.locator(".users-row", { hasText: "小蔡" }).getByText("管理员", { exact: true }).waitFor();
-  assert.equal(await roleOf("小蔡").inputValue(), "admin");
+  assert.equal(await selectedValue(roleOf("小蔡")), "admin");
   assert.match(await page.getByTestId("notices").innerText(), /已升为实例管理员/);
 
   // ③ 降别人当场生效，不拦。
-  await roleOf("小博").selectOption("member");
+  await chooseOption(roleOf("小博"), "member");
   await page.waitForFunction(
     () => /已降为普通成员/.test(document.querySelector('[data-testid="notices"]').textContent ?? ""),
   );
   assert.equal(await rows.filter({ hasText: "小博" }).locator(".users-confirm").count(), 0, "降别人不该弹确认");
-  assert.equal(await roleOf("小博").inputValue(), "member");
+  assert.equal(await selectedValue(roleOf("小博")), "member");
 
   // ④ 把自己降下去要确认，而且降完这一屏自己关上。这时名单上还有「小蔡」这个真能
   //    登录的管理员，所以后端那道 409 让开，界面这一侧才轮得到检验。
-  await roleOf("阿岚").selectOption("member");
+  await chooseOption(roleOf("阿岚"), "member");
   const selfConfirm = rows.filter({ hasText: "阿岚" }).locator(".users-confirm");
   await selfConfirm.waitFor();
   assert.match(await selfConfirm.innerText(), /降级后你立刻失去管理员权限，这一屏也随之关上/);
@@ -138,7 +139,7 @@ try {
 
 /** 把「阿岚」（也就是当前这个会话自己）降成普通成员，走完那道确认。 */
 async function selfDemote(page, rows, roleOf) {
-  await roleOf("阿岚").selectOption("member");
+  await chooseOption(roleOf("阿岚"), "member");
   const confirm = rows.filter({ hasText: "阿岚" }).locator(".users-confirm");
   await confirm.waitFor();
   await confirm.getByRole("button", { name: "确定" }).click();

@@ -1,0 +1,155 @@
+/* Select（components/Select.tsx；旧名 Dropdown）：全应用一个下拉，两档长相。
+   类名沿用 .ui-dropdown-* / .ui-select-trigger —— 各面按上下文微调的样式和回归测试都认这套名字。
+
+   · 表单档（缺省）：和输入框同高同框，28 高。
+   · 紧凑档（.ui-dropdown.is-compact）：表格和键值行里用，无框、24 高，尖角一直在，指到才有底色。
+   浮层从触发器那一侧长出来：进场 --dur-2，退场 120ms（Select.tsx 的 LEAVE_MS 同一个数）。 */
+
+.ui-dropdown { min-width: 0; }
+
+.ui-select-trigger {
+  display: flex;
+  width: 100%;
+  height: 28px;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: var(--panel);
+  padding: 0 6px 0 10px;
+  color: var(--ink);
+  font-size: var(--t-sm);
+  font-weight: var(--w-regular);
+  text-align: left;
+  box-shadow: var(--control-shadow);
+  transition: background-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
+}
+.ui-select-trigger:hover:not(:disabled) { box-shadow: var(--control-hover-shadow); }
+.ui-select-trigger > span:first-child {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-select-trigger.is-mono > span:first-child { font-family: var(--font-mono); font-size: var(--t-xs); }
+.ui-select-trigger > span.is-placeholder { color: var(--muted); font-family: var(--font-sans); font-size: var(--t-sm); }
+.ui-select-caret { flex: none; color: var(--muted); transition: transform var(--dur-1) var(--ease-out); }
+.ui-select-trigger[aria-expanded="true"] > .ui-select-caret { transform: rotate(180deg); }
+.ui-dropdown-trigger > .ui-dropdown-warn { flex: none; color: var(--red); }
+.ui-select-trigger:disabled { opacity: 0.55; }
+
+.ui-dropdown.is-compact .ui-select-trigger {
+  height: 24px;
+  border-radius: var(--r-sm);
+  background: none;
+  padding: 0 4px 0 8px;
+  box-shadow: none;
+}
+.ui-dropdown.is-compact .ui-select-trigger:hover:not(:disabled),
+.ui-dropdown.is-compact .ui-select-trigger[aria-expanded="true"] { background: var(--hover-bg); box-shadow: none; }
+
+/* ---------- 浮层 ---------- */
+.ui-dropdown-panel {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  padding: 4px;
+  box-shadow: var(--control-shadow), var(--menu-shadow);
+  outline: none;
+  transform-origin: top left;
+  animation: ui-select-in var(--dur-2) var(--ease-out) both;
+}
+.ui-dropdown-panel.is-up { transform-origin: bottom left; }
+.ui-dropdown-panel.is-leaving { pointer-events: none; animation: ui-select-out 120ms var(--ease-in) both; }
+@keyframes ui-select-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
+@keyframes ui-select-out { to { opacity: 0; transform: translateY(-4px) scale(0.98); } }
+.ui-dropdown-panel.is-up { animation-name: ui-select-in-up; }
+.ui-dropdown-panel.is-up.is-leaving { animation-name: ui-select-out-up; }
+@keyframes ui-select-in-up { from { opacity: 0; transform: translateY(4px) scale(0.98); } }
+@keyframes ui-select-out-up { to { opacity: 0; transform: translateY(4px) scale(0.98); } }
+
+.ui-dropdown-search { flex: none; padding: 0 0 4px; }
+.ui-dropdown-search input {
+  width: 100%;
+  height: 28px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--raised);
+  padding: 0 8px;
+  color: var(--ink);
+  font: var(--t-xs) var(--font-sans);
+  outline: none;
+}
+.ui-dropdown-search input:focus-visible { box-shadow: inset 0 0 0 1px var(--focus-soft); }
+.ui-dropdown-note { flex: none; margin: 2px 8px 6px; color: var(--muted); font-size: var(--t-xs); }
+.ui-dropdown-note.is-error { color: var(--red); }
+.ui-dropdown-rows { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+.ui-dropdown-empty { margin: 6px 8px 8px; color: var(--muted); font-size: var(--t-xs); }
+.ui-dropdown-group { margin: 6px 0 2px; padding: 2px 8px; color: var(--muted); font-size: var(--t-xs); }
+.ui-dropdown-rows > div:first-child > .ui-dropdown-group { margin-top: 0; }
+
+.ui-dropdown-row {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  padding: 4px 8px;
+  color: var(--ink);
+  text-align: left;
+}
+.ui-dropdown-row[data-active="true"] { background: var(--hover-bg); }
+.ui-dropdown-row > b {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--t-sm);
+  font-weight: var(--w-regular);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-dropdown-row.is-mono > b { font-family: var(--font-mono); font-size: var(--t-xs); }
+.ui-dropdown-row > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 选中的那一项右边打勾：墨色，不用主色（主色只表示状态）。没有说明字时勾自己顶到最右。 */
+.ui-dropdown-check { flex: none; margin-left: auto; color: var(--ink); }
+.ui-dropdown-row > span + .ui-dropdown-check { margin-left: 0; }
+.ui-dropdown-row.is-disabled { opacity: 0.5; cursor: default; }
+.ui-dropdown-row.is-disabled[data-active="true"] { background: transparent; }
+
+/* 「回到不设置」的出口：候选列表里就不必再占一行「跟随…」。 */
+.ui-dropdown-clear {
+  display: block;
+  width: 100%;
+  flex: none;
+  margin-top: 4px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  background: transparent;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  text-align: left;
+}
+.ui-dropdown-clear:hover { background: var(--hover-bg); color: var(--ink); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-dropdown-panel, .ui-dropdown-panel.is-leaving { animation-duration: 1ms; }
+  .ui-select-caret { transition: none; }
+}

@@ -107,24 +107,26 @@
   justify-self: end;
 }
 
+/* 表单里的输入框和旁边的下拉（components/Select.tsx 的表单档）同高同框。 */
 .agent-profile-create-grid input,
-.agent-profile-create-grid select,
 .provider-form-grid input {
   width: 100%;
   min-width: 0;
-  height: 29px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--canvas);
-  padding: 0 8px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: var(--panel);
+  padding: 0 10px;
   color: var(--ink);
-  outline: 0;
-  font-size: 11px;
+  font-size: var(--t-sm);
+  box-shadow: var(--control-shadow);
 }
 
-.agent-profile-create-grid input:focus,
-.agent-profile-create-grid select:focus,
-.provider-form-grid input:focus,
+.agent-profile-create-grid input:focus-visible,
+.provider-form-grid input:focus-visible {
+  outline: 1px solid var(--focus-soft);
+}
+
 .agent-arg-token input:focus {
   border-color: var(--accent);
 }

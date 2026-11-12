@@ -8,6 +8,7 @@ import { SettingsPathText } from "./SettingsPathText.tsx";
 import type { SettingsSection } from "./sections.ts";
 import { countdownText, formatTime, isExpired, remainingText } from "./feishuText.ts";
 import { useNow } from "./useFeishuPoll.ts";
+import { Select } from "../components/Select.tsx";
 
 // 群卡：把一个飞书群绑到一个项目。流程和个人绑定同一个方向——网页上选项目、生成码，把机器人
 // 拉进群、在群里 @ 它发码，回网页看见「哪个群认领了」再确认。码的明文同样只在生成那一刻有，
@@ -122,15 +123,17 @@ export function FeishuGroupsCard({ groups, projects, bound, onGroups, onOpen, no
               </small>
             </div>
             <span className="feishu-actions">
-              <select
-                aria-label={`${group.name ?? "未命名的群"} 绑定的项目`}
+              <Select
+                className="feishu-project-select"
+                label={`${group.name ?? "未命名的群"} 绑定的项目`}
                 value={group.projectId}
                 disabled={busy || !group.canEdit}
-                onChange={(event) => void run(() => api.patchFeishuGroup(group.chatId, { projectId: event.target.value }), "群绑定的项目已切换", "保存失败")}
-              >
-                {!list.some((project) => project.id === group.projectId) && <option value={group.projectId}>{missing}</option>}
-                {list.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-              </select>
+                options={[
+                  ...(list.some((project) => project.id === group.projectId) ? [] : [{ value: group.projectId, label: missing }]),
+                  ...list.map((project) => ({ value: project.id, label: project.name })),
+                ]}
+                onChange={(projectId) => void run(() => api.patchFeishuGroup(group.chatId, { projectId }), "群绑定的项目已切换", "保存失败")}
+              />
               <Toggle
                 label={group.pushCards ? "卡片发到群里" : "卡片发单聊"}
                 checked={group.pushCards}
@@ -152,10 +155,15 @@ export function FeishuGroupsCard({ groups, projects, bound, onGroups, onOpen, no
             </small>
           </div>
           <span className="feishu-actions">
-            <select aria-label="要绑群的项目" value={target} disabled={busy || !list.length} onChange={(event) => setProjectId(event.target.value)}>
-              {projects === null && <option value="">项目清单没读到</option>}
-              {list.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-            </select>
+            <Select
+              className="feishu-project-select"
+              label="要绑群的项目"
+              value={target}
+              disabled={busy || !list.length}
+              placeholder={projects === null ? "项目清单没读到" : "选择项目"}
+              options={list.map((project) => ({ value: project.id, label: project.name }))}
+              onChange={setProjectId}
+            />
             <Button variant="secondary" disabled={busy || !target} onClick={() => void generate()}>生成群绑定码</Button>
           </span>
         </div>
