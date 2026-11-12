@@ -1,0 +1,26 @@
+/* 执行中：进行条、放字、落定。只动 opacity 和 transform——会话流里任何让高度逐帧变化的动画，都会和贴底滚动抢。 */
+
+/* 进行条就是那一行「执行过程」：进行时字上有流光（base.css 的 .shim）、后面跟着这一轮的用时；做完原地换成过去式 */
+.live-time { color: var(--faint); white-space: nowrap; opacity: 0; transition: opacity var(--dur-2) var(--ease-out); }
+.live-time.is-in { opacity: 1; }
+/* 标题换字的那一拍，用时跟着一起暗下去再亮回来，不会剩它一个数字悬着 */
+.live-time.is-in.is-dim { opacity: 0; transition-duration: var(--dur-1); }
+.live-time::before { content: "· "; }
+.live-time:empty { display: none; }
+
+/* 在等哨兵的时候，用时后面再跟半句「最迟几点」 */
+.live-until { color: var(--faint); white-space: nowrap; }
+.live-until::before { content: "· "; }
+
+/* 异常结束：同一行落定成红色的一句（红是换字那一刻才上的）。「重试」在任务头上，是一颗图标 */
+.fold.is-failed, .fold.is-failed:hover, .fold.is-failed > .i { color: var(--red); }
+
+/* 放字：新放出来的那几个字淡入，别的什么都不动。没有光标 */
+.w { animation: w-in 280ms linear both; }
+@keyframes w-in { from { opacity: 0; } }
+
+/* 在跑的那一轮还没有「回合尾」；收口时它淡入一次，之后回到悬停才出 */
+.turn.is-live > .turn-acts { display: none; }
+
+/* 收进「执行过程」里的过程说明：比结论轻一档 */
+.steps .md.said { margin: 4px 0 6px; padding-left: 12px; border-left: 1px solid var(--line2); color: var(--muted); font-size: var(--t-sm); }

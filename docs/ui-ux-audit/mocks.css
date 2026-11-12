@@ -1,0 +1,133 @@
+/* 「改后」样机：任务头部、会话、哨兵与压缩（「现在」那两张是照代码画的示意）、回复框与发送设置、侧栏、颜色、字重，和「回到顶部」演示。
+   右侧竖轨的样机在 panel.css。色值取自 ash 自己的色板，令牌在 audit.css。实心的键是纯黑；强调色 #5e6ad2 只留给状态。 */
+
+.mock { --acc: #5e6ad2; --acc-2: #5560c4; }
+.mock .m-btn { height: 28px; padding: 0 11px; border: 1px solid var(--mline); border-radius: 7px; background: #fff; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; white-space: nowrap; }
+.mock .m-btn.pri { border-color: #000; background: #000; color: #fff; }
+.mock .m-btn.sm { height: 24px; padding: 0 9px; font-size: 12px; }
+.mock .m-btn svg { width: 14px; height: 14px; }
+.mock .sp { flex: 1; }
+
+/* 任务头部：类型、来源各一个灰图标，图钉紧跟标题；不写状态。右边只有图标：轮到你的那一步和没验的章是墨色，验过的章填实、退成灰 */
+.m-hd { display: flex; align-items: center; gap: 6px; height: 46px; min-width: 540px; padding: 0 10px 0 16px; }
+.m-hd + .m-hd { border-top: 1px solid var(--mline); }
+.m-hd > b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; font-size: 14px; }
+.mock .m-gl { flex: none; width: 14px; height: 14px; color: var(--m3); }
+.mock .m-pin { margin: 0 -6px; color: #1c1c1f; }
+.m-pin svg { fill: currentColor; }
+.mock .m-ico.m-do { color: #1c1c1f; }
+.mock .m-ico.m-done { color: var(--m3); }
+
+/* 回复框：水印在最底层；发送设置贴在发送键右边那条窄段上 */
+.m-reply { padding: 20px; }
+.m-box { position: relative; width: min(700px, 100%); margin: 0 auto; border: 1px solid var(--mline); border-radius: 12px; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.12); }
+.m-plate { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; border-radius: inherit; font: italic 800 clamp(48px, 13vw, 92px)/1 var(--sans); letter-spacing: -0.02em; color: #f2f2f6; pointer-events: none; user-select: none; }
+.m-box .ph { position: relative; min-height: 58px; padding: 12px 14px 0; color: var(--m3); }
+.m-box .ph.typed { color: #1c1c1f; }
+.m-box .row { position: relative; display: flex; align-items: center; gap: 8px; padding: 0 8px 8px; }
+.m-cap { display: inline-flex; height: 26px; border: 1px solid var(--mline); border-radius: 8px; background: #fff; color: var(--m2); font-size: 12px; line-height: 24px; white-space: nowrap; }
+.m-cap b { padding: 0 9px; font-weight: 400; }
+.m-cap b:first-child { color: #1c1c1f; font-weight: 500; }
+.m-cap b + b { border-left: 1px solid var(--mline); }
+
+.m-key { display: inline-flex; flex: none; height: 29px; margin-left: auto; }
+.mock .m-key > * { display: inline-flex; align-items: center; justify-content: center; background: #000; color: #fff; font-size: 12px; font-weight: 500; white-space: nowrap; transition: background var(--dur-1) var(--ease-out); }
+.mock .m-key > :first-child { gap: 6px; min-width: 30px; padding: 0 8px; border-radius: 8px 0 0 8px; }
+.mock .m-key > .txt { padding: 0 9px 0 11px; }
+.m-key span:empty { display: none; }
+.mock .m-key > :last-child { width: 24px; margin-left: 1px; border-radius: 0 8px 8px 0; }
+.mock .m-key.solo > * { width: auto; margin: 0; border-radius: 8px; }
+.mock .m-key > button { cursor: pointer; }
+.mock .m-key > button:hover { background: #2b2b2e; }
+.m-key svg { width: 14px; height: 14px; }
+.m-key > :last-child svg { width: 11px; height: 11px; }
+/* 发不出去：键还是黑的，只有左边那一段上的箭头和字变淡；尖角照样点得动 */
+.mock .m-key.idle > :first-child { color: rgb(255 255 255 / 0.42); }
+
+.m-pop { width: min(320px, 100%); margin: 0 0 8px auto; padding: 12px 12px 14px; border: 1px solid var(--mline); border-radius: 12px; background: #fff; box-shadow: 0 12px 32px -8px rgb(0 0 0 / 0.2); }
+.m-pop header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-weight: 500; }
+.m-pop header svg { width: 13px; height: 13px; color: var(--m3); }
+.m-seg { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: #f1f1f4; }
+.mock .m-seg button { flex: 1; height: 26px; border-radius: 6px; color: var(--m2); cursor: pointer; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.mock .m-seg [aria-pressed="true"] { background: #fff; color: #1c1c1f; box-shadow: 0 1px 2px rgb(0 0 0 / 0.1); }
+.m-pop p { margin: 10px 2px 0; color: var(--m2); font-size: 12px; min-height: 18px; }
+.m-popwrap { width: min(700px, 100%); margin: 0 auto; }
+
+.m-keys { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 18px 30px; margin: 0; padding: 20px 24px; list-style: none; color: var(--m2); font-size: 12px; }
+.m-keys li { display: grid; gap: 8px; justify-items: start; }
+.m-keys .m-key { margin: 0; }
+
+/* 回到顶部：位置不动，只在自己滚的时候出现 */
+.d-feed { height: 188px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; display: grid; gap: 9px; align-content: start; padding: 2px 8px 2px 0; border-radius: var(--r-sm); }
+.d-feed p { height: 10px; margin: 0; border-radius: 5px; background: var(--line); width: var(--w, 80%); }
+.d-feed p.me { margin-left: auto; background: color-mix(in srgb, var(--ink-3) 40%, var(--line)); }
+.d-feed p.new { background: color-mix(in srgb, var(--ash) 34%, var(--line)); }
+.d-top { position: absolute; left: 50%; top: 52px; translate: -50% 0; width: 30px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--surface); color: var(--ink-2); display: grid; place-items: center; box-shadow: 0 4px 12px rgb(0 0 0 / 0.14); cursor: pointer; transition: opacity var(--dur-2) var(--ease-out), translate var(--dur-2) var(--ease-out); }
+.d-top svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.d-top.is-hidden { opacity: 0; translate: -50% -4px; pointer-events: none; }
+.d-top.is-idle { opacity: 0; pointer-events: none; }
+.d-top.is-idle:focus-visible { opacity: 1; pointer-events: auto; }
+
+/* 改写块里的小清单（件数、去处），与正文同栏 */
+.rewrite > .quotes { max-width: 680px; margin-top: 8px; }
+.rewrite > p + p { margin-top: -6px; }
+.m-turn { min-width: 520px; }
+.m-turn.tail { padding: 8px 20px; }
+.m-turn.tail .m-acts { margin: 0 0 2px -6px; }
+@media (max-width: 560px) { .m-reply { padding: 12px; } .m-cap b:not(:first-child) { display: none; } }
+.m-turn u { text-underline-offset: 3px; }
+/* 会话：回合头（名字后面是起因）、指到才出的「N 条记录」和它点开的流水 */
+.m-who { display: flex; align-items: center; gap: 8px; min-height: 30px; margin-top: 4px; color: var(--m2); white-space: nowrap; }
+.m-who i { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #ededf0; font: 600 11px/1 var(--sans); }
+.m-who span { color: var(--m3); font-size: 12px; }
+.m-who + .m-msg { padding-left: 28px; }
+.m-acts .more { align-self: center; margin-left: 6px; color: var(--m2); font-size: 12px; }
+.m-log { margin: 0 0 8px; padding: 0; list-style: none; color: var(--m2); font-size: 12px; line-height: 22px; }
+.m-log time { display: inline-block; width: 44px; color: var(--m3); font-variant-numeric: tabular-nums; }
+.m-line .bad { color: #c2412d; }
+.m-pairk { display: inline-flex; gap: 6px; }
+.m-halt { display: inline-grid; place-items: center; width: 29px; height: 29px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--mline); color: var(--m2); }
+.mock .m-halt svg { width: 12px; height: 12px; fill: currentColor; stroke: none; }
+/* 侧栏：左边那张是从 01 的整页截图里裁出来的左边一列（按 1440 宽摆，只露出最左 260px） */
+.sides { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: flex-start; }
+.rewrite .sides figure { flex: none; width: 260px; }
+.rewrite .sides .crop { height: 900px; }
+.rewrite .sides .crop img { width: 1440px; max-width: none; height: auto; }
+/* 字重：同一行字排七个值 */
+.m-wt { display: flex; flex-wrap: wrap; gap: 8px 26px; padding: 16px 20px; font-size: 14px; }
+.m-wt span { white-space: nowrap; }
+.m-wt i { margin-left: 6px; color: var(--m3); font: 400 11px var(--mono, ui-monospace, monospace); }
+/* 回复框底行里带字的动作，和发送键里的停止方块 */
+.m-act { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 6px; color: var(--m2); font-size: 12px; white-space: nowrap; }
+.m-act svg { width: 14px; height: 14px; }
+.m-key svg.fill { fill: currentColor; stroke: none; }
+.m-box .sp ~ .m-key { margin-left: 0; }
+@media (max-width: 720px) { .m-act { font-size: 0; gap: 0; } }
+/* 「现在」的两张示意，照 web/src 画的、不是截图（字号按样机的 12px 下限放大过）：
+   哨兵每叫醒一次，会话里多一张「ash 自动输入」的卡，后面的回复重新报一遍名字和模型；压缩是写进回复正文的两句引用 */
+.m-chips { display: flex; gap: 4px; margin: 0 0 8px; }
+.m-chips b { padding: 0 7px; border: 1px solid var(--mline); border-radius: 999px; color: var(--m3); font: 400 12px/18px var(--mono, ui-monospace, monospace); }
+.m-wake { display: grid; grid-template-columns: 22px auto auto 1fr auto; align-items: center; gap: 0 6px; width: min(480px, 100%); margin: 6px 0 12px; padding: 8px 12px; border: 1px solid var(--mline); border-radius: 10px; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.05), 0 6px 16px -10px rgb(0 0 0 / 0.2); color: var(--m2); font-size: 12px; white-space: nowrap; }
+.m-wake > i { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: color-mix(in srgb, var(--acc) 14%, #fff); color: var(--acc); }
+.mock .m-wake > i svg { width: 13px; height: 13px; }
+.m-wake b { color: #1c1c1f; font-weight: 500; }
+.m-wake time { color: var(--m3); font-variant-numeric: tabular-nums; }
+.m-wake > span { justify-self: end; color: var(--m3); }
+.m-turn .m-wake p { grid-column: 2 / -1; margin: 2px 0 0; color: var(--m2); }
+.m-wake p em, .m-who em { color: var(--m3); font-size: 12px; font-style: normal; }
+.m-wake p em { margin-left: 8px; }
+.m-turn .m-trace { margin-bottom: 6px; color: var(--m3); font-size: 12px; }
+.m-msg blockquote { margin: 0 0 10px; padding: 1px 0 1px 11px; border-left: 2px solid var(--mline); color: var(--m3); font-size: 12px; line-height: 1.6; }
+/* 颜色：能点的一律黑白，主色只留给状态。上面一排是现在（都是同一种靛蓝） */
+.m-ink { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 18px 20px; color: var(--m2); font-size: 12px; }
+.m-ink .m-key { margin: 0; }
+.m-ink u { color: #1c1c1f; text-underline-offset: 3px; }
+.m-sw { position: relative; width: 30px; height: 18px; border-radius: 9px; background: #1c1c1f; }
+.m-sw::after { content: ""; position: absolute; top: 2px; right: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; }
+.m-ck { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; background: #1c1c1f; color: #fff; }
+.mock .m-ck svg { width: 11px; height: 11px; stroke-width: 2; }
+.m-state { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.m-state::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--acc); }
+.m-state.ring::before { background: none; box-shadow: inset 0 0 0 1.5px var(--acc); }
+.mock .m-ink.now .m-key > *, .mock .m-ink.now .m-btn.pri, .m-ink.now .m-sw, .m-ink.now .m-ck { border-color: var(--acc); background: var(--acc); }
+.m-ink.now u { color: var(--acc); }

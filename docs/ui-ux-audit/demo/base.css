@@ -1,0 +1,284 @@
+/* 「改后的 ash」样机的地基。
+   颜色是 ash 自己的色板（web/src/styles/global.css 的 --color-*，浅深两套原样搬来）；
+   字号、圆角、字重、动效是报告 07 建议加的那套尺子。各面的样式只许引用这里的变量。 */
+
+:root {
+  color-scheme: light;
+  --font-sans: "Inter Variable", "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+
+  --chrome: lch(94.44% 0.5 282);
+  --canvas: lch(97.94% 0.5 282);
+  --panel: lch(100% 0 282);
+  --raised: lch(96.914% 0 282);
+  --overlay: lch(95.886% 0 282);
+  --line: lch(90.55% 0 282);
+  --line2: lch(86.5% 0 282);
+  --ink: lch(9.794% 0 282);
+  --muted: lch(39.176% 1.25 282);
+  --faint: lch(64.64% 1.25 282);
+  /* 实心的键一律纯黑（主按钮、发送键、开关、勾选）：不是正文那种带一点灰的墨色。选中的那一格、链接、焦点环是墨色。
+     主色只留给状态（在跑的点、做完没验收的环、Git 图上的线）——颜色说的是「它怎么样了」，不是「这里能点」 */
+  --action: #000;
+  --action-hover: #262626;
+  --action-active: #333;
+  --on-action: #fff;
+  --on-action-dim: #8a8a8a;   /* 点不了的时候键还是黑的，只有上面的字和箭头淡下去 */
+  --accent: #5e6ad2;
+  --accent-soft: lch(92.5% 12 286);
+  --on-accent: #fff;
+  --green: #168466;
+  --red: #d93d4c;
+  --amber: #b57b00;
+  --cyan: #0e9db8;
+  --violet: #7657b7;
+  --hover-bg: lch(91.64% 0.5 282);
+  --sel-bg: lch(89.54% 0.5 282);
+  --lifted: var(--panel);
+  --focus-ring: var(--ink);
+  --focus-soft: color-mix(in oklab, var(--ink) 40%, transparent);   /* 正在打字的那一格：里面有光标，环淡一档 */
+  --shadow: lch(0 0 0 / 0.08) 0 9px 48px, lch(0 0 0 / 0.1) 0 6px 24px, lch(0 0 0 / 0.04) 0 1px 1px;
+  --surface-shadow: lch(0 0 0 / 0.02) 0 3px 6px -2px, lch(0 0 0 / 0.04) 0 1px 1px;
+  --control-shadow: lch(0 0 0 / 0.103) 0 0 0 1px, var(--surface-shadow);
+  --menu-shadow: lch(0 0 0 / 0.02) 0 6px 18px, lch(0 0 0 / 0.04) 0 3px 9px, lch(0 0 0 / 0.04) 0 1px 1px;
+  /* 语义色的淡底在 oklab 里混：现在用的 lch 会把无彩的底色带着 282° 的色相一起插值，
+     绿、红、琥珀的淡底全偏蓝紫，四种几乎分不出（清单「可达性」第 4 条）。 */
+  --green-bg: color-mix(in oklab, var(--green) 11%, var(--panel));
+  --red-bg: color-mix(in oklab, var(--red) 9%, var(--panel));
+  --amber-bg: color-mix(in oklab, var(--amber) 12%, var(--panel));
+  --cyan-bg: color-mix(in oklab, var(--cyan) 10%, var(--panel));
+  --violet-bg: color-mix(in oklab, var(--violet) 10%, var(--panel));
+
+  /* 尺子 */
+  --t-xs: 12px;  --t-sm: 13px;  --t-md: 14px;  --t-lg: 17px;  --t-xl: 22px;
+  /* 字重只有三档，而且是苹方真有的三档：中文落不到 450、550、650 上——450 会被排成 Medium，550 以上全是 Semibold，
+     正文和强调之间就只剩一级。regular 是正文；medium 只给标题、主按钮这类「这一块叫什么」；strong 只给页标题和对话框标题 */
+  --w-regular: 400;  --w-medium: 500;  --w-strong: 600;
+  --r-sm: 6px;  --r-md: 8px;  --r-lg: 12px;  --r-full: 999px;
+  --dur-1: 120ms;   /* 悬停、按下 */
+  --dur-2: 200ms;   /* 菜单、提示、弹窗、切格、进场 */
+  --dur-3: 320ms;   /* 面板、重排 */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-spring: linear(0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 25.3%, 0.849 31.5%, 0.937 38.1%, 0.968 41.8%, 0.991 45.7%, 1.006 50.1%, 1.015 55%, 1.017 63.9%, 1.001 85.9%, 1);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --chrome: lch(7% 2 282);
+  --canvas: lch(9.5% 2 282);
+  --panel: lch(12.5% 2 282);
+  --raised: lch(15.5% 2 282);
+  --overlay: lch(18% 2 282);
+  --line: lch(20.5% 2 282);
+  --line2: lch(26% 2.5 282);
+  --ink: lch(92% 1 282);
+  --muted: lch(67% 3 282);
+  --faint: lch(48% 3 282);
+  --action: #fff;   /* 深色里反过来：纯白的键、纯黑的字 */
+  --action-hover: #e6e6e6;
+  --action-active: #d4d4d4;
+  --on-action: #000;
+  --on-action-dim: #8a8a8a;
+  --accent: #7480e0;
+  --accent-soft: lch(24% 20 286);
+  --green: #3fba8c;
+  --red: #ef6b7b;
+  --amber: #dea43c;
+  --cyan: #3cbfd8;
+  --violet: #a48ce6;
+  --hover-bg: lch(17% 2 282);
+  --sel-bg: lch(21% 3 282);
+  --lifted: lch(25% 2.5 282);
+  --shadow: lch(0 0 0 / 0.4) 0 9px 48px, lch(0 0 0 / 0.36) 0 6px 24px, lch(0 0 0 / 0.2) 0 1px 1px;
+  --surface-shadow: lch(0 0 0 / 0.16) 0 3px 6px -2px, lch(0 0 0 / 0.24) 0 1px 1px;
+  --control-shadow: lch(100 0 0 / 0.08) 0 0 0 1px, var(--surface-shadow);
+  --menu-shadow: lch(0 0 0 / 0.3) 0 6px 18px, lch(0 0 0 / 0.3) 0 3px 9px, lch(0 0 0 / 0.2) 0 1px 1px;
+}
+
+*, ::before, ::after { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--chrome); color: var(--ink); font: var(--w-regular) var(--t-sm)/1.5 var(--font-sans); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+button, input, textarea { font: inherit; color: inherit; }
+button { margin: 0; padding: 0; border: 0; background: none; cursor: pointer; }
+a { color: inherit; text-decoration: none; }
+h1, h2, h3, h4, p, ul, ol, dl, dd, figure { margin: 0; padding: 0; }
+/* 浏览器给标题和 b 的默认是 700：一律先落到 medium，要更重或更轻的各自写明 */
+h1, h2, h3, h4, b, strong, th { font-weight: var(--w-medium); }
+ul, ol { list-style: none; }
+code, kbd, .mono { font-family: var(--font-mono); }
+::placeholder { color: var(--faint); }
+::selection { background: color-mix(in oklab, var(--ink) 16%, transparent); }
+[hidden] { display: none !important; }
+* { scrollbar-width: thin; scrollbar-color: color-mix(in oklab, var(--muted) 30%, transparent) transparent; }
+.num { font-variant-numeric: tabular-nums; }
+.grow { flex: 1; min-width: 0; }
+.cut { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 焦点环：2px、外扩 2px，全应用一条（清单「可达性」第 1 条）。两处写明的例外：
+   贴边排成一列的行（菜单项、列表行）环画在行内，不然会顶到容器的边上；输入卡见下面 .inbox */
+:focus-visible, .is-focus { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+input:focus-visible, textarea:focus-visible { outline-color: var(--focus-soft); outline-offset: 0; }
+.menu > button:focus-visible, .menu > a:focus-visible, .rowring:focus-visible { outline-offset: -2px; }
+[disabled], .is-disabled { cursor: default; opacity: 0.45; }
+
+/* 图标 */
+.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.i.sm { width: 14px; height: 14px; }
+.i.fill { fill: currentColor; }
+
+/* 按钮：一种主按钮、一种次按钮、一种图标钮 */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: var(--r-md); background: var(--panel); box-shadow: var(--control-shadow); color: var(--ink); font-size: var(--t-sm); font-weight: var(--w-regular); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out); }
+.btn:hover { background: var(--raised); }
+.btn.pri { background: var(--action); box-shadow: none; color: var(--on-action); font-weight: var(--w-medium); }
+.btn.pri:hover { background: var(--action-hover); }
+.btn.pri:active { background: var(--action-active); }
+.btn.pri:is([disabled], .is-disabled) { background: var(--action); color: var(--on-action-dim); opacity: 1; }
+.btn.quiet { background: none; box-shadow: none; color: var(--muted); }
+.btn.quiet:hover { background: var(--hover-bg); color: var(--ink); }
+.btn.danger { color: var(--red); }
+.btn.sm { height: 24px; padding: 0 9px; font-size: var(--t-xs); border-radius: var(--r-sm); }
+.btn .i { width: 14px; height: 14px; }
+.ico { display: inline-grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: var(--r-md); color: var(--muted); transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out); }
+.ico:hover, .ico[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.ico.sm { width: 24px; height: 24px; border-radius: var(--r-sm); }
+.ico.sm .i { width: 14px; height: 14px; }
+.link { color: var(--ink); text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 3px; }
+.link:hover { text-decoration-color: currentColor; }
+kbd, .kbd { padding: 1px 5px; border-radius: 4px; background: var(--overlay); color: var(--muted); font: var(--w-regular) var(--t-xs)/1.5 var(--font-mono); }
+
+/* 六个公共件：分节标题、键值行、入口行、空状态、提示条、（按钮见上）；卡片只统一外框 */
+.sec { display: flex; align-items: baseline; gap: 6px; margin: 18px 0 6px; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
+.sec:first-child { margin-top: 0; }
+.sec b { color: var(--faint); font-weight: var(--w-regular); font-variant-numeric: tabular-nums; }
+.kv { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 0 12px; }
+.kv dt, .kv dd { min-height: 28px; display: flex; align-items: center; gap: 6px; }
+.kv dt { color: var(--muted); }
+.kv dd { min-width: 0; }
+.kv dd > .cut { flex: 0 1 auto; }
+.go { display: flex; align-items: center; gap: 8px; width: calc(100% + 16px); min-height: 32px; padding: 0 8px; margin: 0 -8px; border-radius: var(--r-md); text-align: left; transition: background var(--dur-1) var(--ease-out); }
+.go:hover { background: var(--hover-bg); }
+.go > .i:last-child { margin-left: auto; color: var(--faint); }
+.none { padding: 28px 12px; color: var(--muted); text-align: center; }
+.none .btn { margin-top: 12px; }
+.note { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: var(--r-md); background: var(--raised); color: var(--muted); }
+.note .i { margin-top: 2px; }
+.note.warn { background: var(--amber-bg); color: var(--ink); } .note.warn > .i { color: var(--amber); }
+.note.bad { background: var(--red-bg); color: var(--ink); } .note.bad > .i { color: var(--red); }
+.note.ok { background: var(--green-bg); color: var(--ink); } .note.ok > .i { color: var(--green); }
+.note > .btn, .note > .link { margin-left: auto; flex: none; }
+.card { border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow); }
+/* 输入卡：外框是卡，里面是一个没有框的多行输入框（回复框、新建、聊天、助手、侧聊）。
+   它本来就是这一屏正在写字的地方，焦点不套 2px 的实环：卡自己那圈线换成焦点色，外面再晕开 2px */
+.inbox { position: relative; border-radius: var(--r-lg); background: var(--panel); box-shadow: 0 0 0 1px var(--line2), var(--surface-shadow); transition: box-shadow var(--dur-1) var(--ease-out); }
+.inbox:has(textarea:focus-visible) { box-shadow: 0 0 0 1px var(--focus-soft), 0 0 0 3px color-mix(in oklab, var(--focus-ring) 10%, transparent), var(--surface-shadow); }
+.inbox textarea { border: 0; background: none; resize: none; }
+.inbox textarea:focus-visible { outline: 0; }
+
+/* 分段：选中的那颗浮起来 */
+.seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--r-md); background: var(--overlay); }
+.seg > button { height: 24px; padding: 0 10px; border-radius: var(--r-sm); color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-regular); transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.seg > button:hover { color: var(--ink); }
+.seg > [aria-pressed="true"] { background: var(--lifted); box-shadow: var(--surface-shadow); color: var(--ink); }
+
+/* 浮层与菜单：进场 200ms，退场 120ms，从触发点长出来 */
+.pop { position: fixed; z-index: 90; min-width: 180px; padding: 4px; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow), var(--menu-shadow); opacity: 0; transform: translateY(-4px) scale(0.98); transform-origin: var(--origin, top left); transition: opacity 120ms var(--ease-in), transform 120ms var(--ease-in); }
+.pop:not(.is-in) { pointer-events: none; }
+.pop.is-in { opacity: 1; transform: none; transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out); }
+.menu > button, .menu > a { display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 8px; border-radius: var(--r-sm); text-align: left; white-space: nowrap; }
+.menu > button:hover, .menu > a:hover, .menu > [data-active="true"] { background: var(--hover-bg); }
+.menu > button > .i:first-child { color: var(--muted); }
+.menu > button.danger, .menu > button.danger > .i:first-child { color: var(--red); }
+.menu kbd { margin-left: auto; background: none; color: var(--faint); }
+.menu > button > em { margin-left: auto; padding-left: 16px; color: var(--muted); font-size: var(--t-xs); font-style: normal; }
+.menu > button > em + kbd { margin-left: 8px; }
+.menu hr { height: 1px; margin: 4px 0; border: 0; background: var(--line); }
+.menu > small { display: block; padding: 6px 8px 2px; color: var(--faint); font-size: var(--t-xs); }
+
+/* 确认框：全应用一个（ASH.confirm）。居中、有遮罩 */
+.veil { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; background: rgb(0 0 0 / 0.28); opacity: 0; transition: opacity 120ms var(--ease-in); }
+.veil.is-in { opacity: 1; transition: opacity var(--dur-2) var(--ease-out); }
+.veil:not(.is-in) { pointer-events: none; }
+.dlg { width: min(400px, calc(100vw - 32px)); padding: 18px; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow), var(--menu-shadow); transform: scale(0.98); transition: transform var(--dur-2) var(--ease-out); }
+.veil.is-in .dlg { transform: none; }
+.dlg h2 { font-size: var(--t-md); font-weight: var(--w-strong); }
+.dlg p { margin-top: 6px; color: var(--muted); }
+.dlg-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+
+/* 三段胶囊：选谁干活的唯一长相（ASH.target） */
+.caps { display: inline-flex; flex: none; height: 26px; border-radius: var(--r-md); box-shadow: inset 0 0 0 1px var(--line); font-size: var(--t-xs); white-space: nowrap; }
+.caps > button { padding: 0 9px; color: var(--muted); transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.caps > button[hidden] { display: none; }
+.caps > button:first-child { border-radius: var(--r-md) 0 0 var(--r-md); color: var(--ink); font-weight: var(--w-regular); }
+.caps > button:last-child { border-radius: 0 var(--r-md) var(--r-md) 0; }
+.caps > button + button { box-shadow: inset 1px 0 0 var(--line); }
+.caps > button:hover, .caps > button[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.caps > button:active { background: var(--sel-bg); }
+.caps.is-follow > button:first-child { border-radius: var(--r-md); color: var(--muted); font-weight: var(--w-regular); }
+
+/* Select：全应用一个（清单「设置」第 2 条）。触发器与输入框同高同框，浮层就是 .pop.menu */
+.sel { display: inline-flex; align-items: center; gap: 6px; height: 28px; min-width: 120px; padding: 0 6px 0 10px; border-radius: var(--r-md); background: var(--panel); box-shadow: var(--control-shadow); text-align: left; }
+.sel > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sel > .i { width: 14px; height: 14px; color: var(--faint); transition: transform var(--dur-1) var(--ease-out); }
+.sel[aria-expanded="true"] > .i { transform: rotate(180deg); }
+/* 紧凑档：表格和键值行里用。无框、24 高，尖角一直在，指到才有底色 */
+.sel.sm { height: 24px; min-width: 0; padding: 0 4px 0 6px; border-radius: var(--r-sm); background: none; box-shadow: none; }
+.sel.sm:hover, .sel.sm[aria-expanded="true"] { background: var(--hover-bg); }
+.sel-menu [aria-selected="true"] > em { margin-right: 8px; }
+.sel-menu [aria-selected="true"]::after { content: ""; width: 10px; height: 6px; margin-left: auto; border: solid var(--ink); border-width: 0 0 1.6px 1.6px; transform: translateY(-2px) rotate(-45deg); }
+.field { height: 28px; padding: 0 10px; border: 0; border-radius: var(--r-md); background: var(--panel); box-shadow: var(--control-shadow); }
+/* 步进器：[−] 数 [+]，改轮数、改次数都用它 */
+.stepper { display: inline-flex; align-items: center; gap: 2px; }
+.stepper > output { min-width: 22px; text-align: center; color: var(--ink); font-weight: var(--w-regular); }
+.switch { position: relative; width: 30px; height: 18px; flex: none; border-radius: var(--r-full); background: var(--line2); transition: background var(--dur-1) var(--ease-out); }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.2); transition: transform var(--dur-2) var(--ease-spring); }
+.switch[aria-checked="true"] { background: var(--action); }
+.switch[aria-checked="true"]::after { background: var(--on-action); transform: translateX(12px); }
+
+/* 短提示：保存、复制之后那一句（ASH.toast）。位置和长相照现在的产品：底部居中的一小条，自己走 */
+.toast { position: fixed; z-index: 95; left: 50%; bottom: 44px; max-width: min(460px, calc(100vw - 32px)); padding: 6px 12px; border-radius: var(--r-md); background: var(--panel); box-shadow: var(--control-shadow), var(--menu-shadow); color: var(--muted); font-size: var(--t-xs); pointer-events: none; opacity: 0; translate: -50% 4px; transition: opacity 120ms var(--ease-in), translate 120ms var(--ease-in); }
+.toast.is-in { opacity: 1; translate: -50% 0; transition: opacity var(--dur-2) var(--ease-out), translate var(--dur-2) var(--ease-out); }
+
+/* 提示：第一次等 0.4 秒，连着看下一个不等；键盘聚焦不等 */
+#tip { position: fixed; z-index: 100; padding: 3px 8px; border-radius: var(--r-sm); background: var(--ink); color: var(--panel); font-size: var(--t-xs); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+#tip.is-in { opacity: 1; }
+#tip kbd { margin-left: 8px; padding: 0; background: none; color: color-mix(in oklab, var(--panel) 62%, transparent); }
+
+/* 状态点：只有「在跑」和「等你」有颜色；完成且读过不画。会动的只有一颗（.breathe） */
+.dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--c, transparent); }
+.dot.run { --c: var(--accent); }
+.dot.wait { --c: var(--amber); }
+.dot.bad { --c: var(--red); }
+.dot.new { --c: var(--green); }
+.dot.queue { box-shadow: inset 0 0 0 1.5px var(--faint); }
+/* 它自己停下来等一件会回来的事（哨兵）：和「等你」同一种黄，但会呼吸，照现在产品里的样子（task-status-dot.css 的 --working）。静止的黄 = 轮到你，呼吸的黄 = 不用你动 */
+.dot.breathe { --c: var(--amber); animation: breathe 1.35s ease-in-out infinite; }
+@keyframes breathe { 0%, 100% { opacity: 0.68; transform: scale(0.84); } 50% { opacity: 1; transform: scale(1.18); } }
+/* 做完没验收：靛蓝空心环，照现在产品里的样子（环 = 等你动手），一直在，不呼吸 */
+.dot.open { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: inset 0 0 0 1.5px var(--accent); }
+
+/* 全应用只有一种「它在跑」：字上扫过一道光，扫 1.1 秒，歇 1.3 秒。只挂在纯文字的 span 上（字色是透明的，里面的图标会跟着不见） */
+.shim { color: transparent; -webkit-text-fill-color: transparent; background: linear-gradient(100deg, var(--muted) 40%, var(--ink) 50%, var(--muted) 60%) 100% 0 / 250% 100% no-repeat; -webkit-background-clip: text; background-clip: text; animation: shim 2.4s linear infinite; }
+@keyframes shim { 0% { background-position: 100% 0; } 46%, 100% { background-position: 0% 0; } }
+/* 换字：旧的上去，新的上来，150ms */
+.swap { display: inline-block; transition: opacity 150ms var(--ease-out), transform 150ms var(--ease-out), filter 150ms var(--ease-out); }
+.swap.is-out { opacity: 0; transform: translateY(-4px); filter: blur(2px); }
+.swap.is-pre { opacity: 0; transform: translateY(4px); filter: blur(2px); transition: none; }
+/* 等待不知道多久的那一种转圈，全应用一个规格 */
+.spin { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 1.6px solid color-mix(in oklab, currentColor 22%, transparent); border-top-color: currentColor; animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+/* 新东西出现：上移 4px 加淡入，一种 */
+.enter { animation: enter var(--dur-2) var(--ease-out) both; }
+@keyframes enter { from { opacity: 0; transform: translateY(4px); } }
+/* 定位到某一处：底色亮一下再退掉 */
+.flash { animation: flash 1.4s var(--ease-out); }
+@keyframes flash { 0%, 30% { background-color: color-mix(in oklab, var(--ink) 12%, transparent); } }
+
+/* 减少动效：全局一条。过渡直接关掉；动画压到近乎为零而不是关掉——有的组件靠 animationend 收尾。
+   循环的换成静态等价物：流光变实色，转圈停住。（清单「可达性」第 3 条） */
+:root[data-motion="reduce"] *, :root[data-motion="reduce"] ::before, :root[data-motion="reduce"] ::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; animation-delay: 0s !important; transition-duration: 0s !important; transition-delay: 0s !important; }
+:root[data-motion="reduce"] .shim { background: none; color: var(--muted); -webkit-text-fill-color: currentColor; }
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) *, :root:not([data-motion="full"]) ::before, :root:not([data-motion="full"]) ::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; animation-delay: 0s !important; transition-duration: 0s !important; transition-delay: 0s !important; }
+  :root:not([data-motion="full"]) .shim { background: none; color: var(--muted); -webkit-text-fill-color: currentColor; }
+}

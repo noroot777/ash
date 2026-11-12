@@ -1,0 +1,267 @@
+/* 聊天页（chat.js）与助手页（assist.js）。两页同一副三栏骨架：二级栏 · 对话 · 右栏，零件是 ASH.conv 那一套，样式也只写这一份。
+   版式照现在的产品（web/src/chat/chat.css、web/src/assistant/*.css）：栏宽、内距、头像、日期胶囊、任务卡、输入区三层都是原来的比例。
+   和现状不同的只有全应用的尺子：字号收进五档且不低于 12px；主区的中性色走全局变量；要读的字用次级文字色；
+   「它在跑」只有字上的流光；焦点环是全局那一条；输入框随内容长高、没有拖拽角。
+   类名一律带 as- 前缀，免得和会话流那边不带前缀的类名撞上。 */
+
+/* ── 保留项（清单 as-keep）：两条二级栏各自的配色是负责人有意的设计。底色、字色、悬停、选中的样子照现在的值写死，
+   一个值都不动，所以这里有十六进制色，也不跟主题变量走 ──
+   聊天：深紫，浅色、深色主题下是同一套（出处 web/src/chat/chat.css 的 .chat-rail 一族）。
+   --tone / --tone-ink 是这一页自己的强调色（发送键、@ 高亮、欢迎块图标），和二级栏是同一套里的，一并照搬。 */
+.sv-chat {
+  --rail: #382a40; --rail-ink: #eee6f5; --rail-mark: #eee6f5; --rail-btn: #cdbbdc; --rail-sub: #bbabca; --rail-dim: #baabc6;
+  --rail-item: #dfd4e8; --rail-hover: #ffffff12; --rail-sel: #76568f; --rail-sel-ink: #fff; --rail-bar: #d8baf4;
+  --rail-rule: #ffffff17; --rail-note: #c5b3d3; --rail-note-ink: #e7ddef; --rail-edge: transparent;
+  --tone: #78558f; --tone-ink: #7351a3;
+  --as-paper: var(--panel); --as-wash: var(--canvas);
+}
+:root[data-theme="dark"] .sv-chat { --tone-ink: #a98fdb; }
+/* 助手：浅蓝灰，深色主题下另有一套（出处 web/src/assistant/assistant-theme.css，深色那套原文就是 lch 写的）。 */
+.sv-as {
+  --rail: #edf2f7; --rail-ink: #2d435d; --rail-mark: #386394; --rail-btn: #52657d; --rail-sub: #52657d; --rail-dim: #52657d;
+  --rail-item: #2d435d; --rail-hover: #e2eaf3; --rail-sel: #d7e5f5; --rail-sel-ink: #2d435d; --rail-bar: #386394;
+  --rail-rule: #d7e1ec; --rail-note: #52657d; --rail-note-ink: #2d435d; --rail-edge: #d7e1ec;
+  --tone: #386394; --tone-ink: #386394;
+  --as-paper: var(--canvas); --as-wash: var(--panel);
+}
+:root[data-theme="dark"] .sv-as {
+  --rail: lch(8.5% 3 265); --rail-ink: lch(88% 5 265); --rail-mark: #7196cc; --rail-btn: lch(66% 9 265); --rail-sub: lch(66% 9 265); --rail-dim: lch(66% 9 265);
+  --rail-item: lch(88% 5 265); --rail-hover: lch(15% 5 265); --rail-sel: lch(20% 10 265); --rail-sel-ink: lch(88% 5 265); --rail-bar: #7196cc;
+  --rail-rule: lch(21% 5 265); --rail-note: lch(66% 9 265); --rail-note-ink: lch(88% 5 265); --rail-edge: lch(21% 5 265);
+  --tone: #7196cc; --tone-ink: #7196cc;
+}
+/* 强调色的淡底和细条从上面两个值混出来，不再另写色值。--as-gut 是主区左右那一道边距：头部、欢迎块、头像、输入卡对在同一条线上 */
+:is(.sv-chat, .sv-as) {
+  --tone-soft: color-mix(in oklab, var(--tone-ink) 13%, var(--panel));
+  --tone-line: color-mix(in oklab, var(--tone-ink) 62%, var(--panel));
+  --as-gut: 28px;
+}
+
+/* ── 骨架 ── */
+/* 整面是一个尺寸容器：对照清单一打开主卡片就变窄，下面按卡片自己的宽度让位（见文件末尾），不看视口 */
+.as-root { flex: 1; width: 100%; min-height: 0; display: flex; container-type: inline-size; }
+:is(.as-rbtn, .as-room, .as-who, .as-fold, .as-name, .as-stop, .as-send, .as-task, .as-search > button) { transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out); }
+
+/* ── 二级栏：204 宽。选中项是「底色加深 + 左边 3px 一条」，这也是保留下来的长相 ── */
+.as-rail { width: 204px; flex: none; display: flex; flex-direction: column; min-height: 0; padding: 24px 14px 18px; background: var(--rail); box-shadow: inset -1px 0 var(--rail-edge); color: var(--rail-ink); }
+.as-rail > header { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 4px 0 9px; }
+.as-brand { --knock: var(--rail); display: flex; align-items: center; gap: 9px; font-size: var(--t-lg); font-weight: var(--w-medium); letter-spacing: -0.02em; line-height: 1.3; }
+.as-brand > .i { width: 22px; height: 22px; color: var(--rail-mark); }
+.as-rbtn { display: grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: var(--r-sm); color: var(--rail-btn); }
+.as-rbtn:hover:not([disabled]), .as-rbtn[aria-expanded="true"] { background: var(--rail-hover); }
+.as-rbtn:active:not([disabled]) { transform: scale(0.94); }
+.as-proj { flex: none; padding: 26px 10px; font-size: var(--t-md); font-weight: var(--w-medium); line-height: 1.4; overflow-wrap: anywhere; }
+.as-proj > small { display: block; margin-top: 6px; color: var(--rail-sub); font-size: var(--t-xs); font-weight: var(--w-regular); }
+/* 助手页：当前智能体这一行，「更换智能体」唯一的入口（清单 as-1）。它在项目名下面，所以项目名那一块的下边距让给它 */
+.as-proj:has(+ .as-who) { padding-bottom: 14px; }
+.as-who { flex: none; display: flex; align-items: center; gap: 8px; width: 100%; height: 34px; margin-bottom: 14px; padding: 0 10px; border-radius: var(--r-md); box-shadow: inset 0 0 0 1px var(--rail-rule); color: var(--rail-ink); text-align: left; }
+.as-who:hover:not([disabled]) { background: var(--rail-hover); }
+.as-who:active:not([disabled]) { background: var(--rail-sel); }
+.as-who > .i { color: var(--rail-dim); }
+.as-label { flex: none; display: flex; align-items: center; justify-content: space-between; min-height: 36px; padding: 0 4px 0 10px; color: var(--rail-dim); font-size: var(--t-xs); letter-spacing: 0.04em; }
+.as-label > div { display: flex; }
+
+.as-search { flex: none; display: flex; align-items: center; gap: 7px; min-width: 0; height: 32px; margin-bottom: 8px; padding: 0 6px 0 8px; border-radius: var(--r-md); box-shadow: inset 0 0 0 1px var(--rail-rule); color: var(--rail-dim); }
+/* 输入框铺满这一格，焦点环画在格子上（还是全局那一条） */
+.as-search:focus-within { outline: 2px solid var(--focus-soft); outline-offset: 2px; }
+.as-search > input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--rail-ink); font-size: var(--t-xs); }
+.as-search > input::placeholder { color: var(--rail-dim); }
+.as-search > input::-webkit-search-cancel-button { display: none; }
+.as-search > button { display: grid; place-items: center; width: 20px; height: 20px; flex: none; border-radius: var(--r-sm); }
+.as-search > button:hover { background: var(--rail-hover); }
+
+.as-rooms { flex: 1; min-width: 0; min-height: 80px; overflow-y: auto; }
+.as-room { display: flex; align-items: center; gap: 8px; width: 100%; margin-bottom: 3px; padding: 10px; border-radius: var(--r-md); color: var(--rail-item); text-align: left; line-height: 1.4; }
+.as-room:hover { background: var(--rail-hover); }
+.as-room:active { background: var(--rail-sel); color: var(--rail-sel-ink); }
+.as-room:focus-visible { outline-offset: -2px; }   /* 列表自己会滚动，外扩的环会被裁掉，所以画在里面 */
+.as-room > small { opacity: 0.6; font-size: var(--t-xs); }
+.as-room[aria-current] { background: var(--rail-sel); box-shadow: inset 3px 0 var(--rail-bar); color: var(--rail-sel-ink); }
+.as-rooms > p { margin: 12px 9px; color: var(--rail-dim); font-size: var(--t-xs); line-height: 1.8; }
+
+.as-note { flex: none; max-height: 48%; overflow-y: auto; padding: 22px 10px 0; border-top: 1px solid var(--rail-rule); color: var(--rail-note); font-size: var(--t-xs); }
+.as-note > .i { width: 20px; height: 20px; }
+.as-note > strong { display: block; margin-top: 10px; color: var(--rail-note-ink); font-weight: var(--w-medium); }
+.as-note > p { margin-top: 7px; line-height: 1.8; }
+.as-fold { display: flex; align-items: center; gap: 6px; margin-top: 14px; padding: 4px 8px 4px 2px; border-radius: var(--r-sm); }
+.as-fold:hover { background: var(--rail-hover); color: var(--rail-note-ink); }
+.as-fold > .i:first-child { transition: transform var(--dur-1) var(--ease-out); }
+.as-fold[aria-expanded="true"] > .i:first-child { transform: rotate(90deg); }
+/* 「知识与回复设置」的内容：栏底展开一份，输入框那颗书本键的浮层里一份。栏里跟二级栏的字色，浮层里跟全局的 */
+.as-know { --k-ink: var(--ink); --k-dim: var(--muted); --k-rule: var(--line); color: var(--k-dim); font-size: var(--t-xs); }
+.as-rail .as-know { --k-ink: var(--rail-note-ink); --k-dim: var(--rail-note); --k-rule: var(--rail-rule); }
+.as-know > dl { margin-top: 12px; }
+.as-know dt { color: var(--k-ink); font-weight: var(--w-regular); }
+.as-know dd { margin: 4px 0 13px; line-height: 1.8; }
+.as-know > p { padding: 10px 0 4px; border-top: 1px solid var(--k-rule); line-height: 1.8; }
+
+/* ── 中间一列：头部、消息、输入区；「群聊设置」「更换智能体」打开时整列换成那一页 ── */
+.as-mid { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--as-paper); }
+/* 群名 / 对话名是一颗键，自己带 7px 的左右内距，所以头部左边少留 7px，字才和下面对在一条线上 */
+.as-bar { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; padding: 0 var(--as-gut) 0 calc(var(--as-gut) - 7px); border-bottom: 1px solid var(--line); background: var(--panel); }
+.as-bar > h1 { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; font-size: var(--t-lg); font-weight: var(--w-medium); letter-spacing: -0.02em; line-height: 1.3; }
+.as-name { min-width: 0; display: flex; align-items: center; gap: 6px; padding: 4px 7px; border-radius: var(--r-md); }
+button.as-name:hover { background: var(--hover-bg); }
+button.as-name:active { background: var(--sel-bg); }
+.as-name > .i:first-child { width: 20px; height: 20px; }
+.as-name > .i:last-child { color: var(--faint); }
+/* 连接灯只是一颗 6px 的点：透明的边把能指到的范围撑到 14px，说明在悬停提示里 */
+.as-conn { --c: var(--green); box-sizing: content-box; width: 6px; height: 6px; border: 4px solid transparent; background-clip: padding-box; }
+.as-count { flex: none; color: var(--muted); }
+.as-del:hover { background: var(--red-bg); color: var(--red); }
+.as-rename { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; padding-left: 7px; }
+.as-rename > .field { width: 220px; min-width: 0; flex: 0 1 auto; }
+
+.as-feedwrap { position: relative; flex: 1; min-height: 0; }
+.as-feed { height: 100%; overflow: hidden auto; overscroll-behavior: contain; scroll-padding: 24px; padding-bottom: 42px; }
+.as-hello { padding: 38px var(--as-gut) 28px; }
+.as-tile { --knock: var(--tone-soft); display: inline-grid; place-items: center; width: 54px; height: 54px; border-radius: calc(var(--r-lg) + 4px); background: var(--tone-soft); color: var(--tone-ink); transform: rotate(-7deg); }
+.as-tile > .i { width: 30px; height: 30px; }
+.as-hello > h2 { margin: 20px 0 10px; font-size: var(--t-xl); font-weight: var(--w-medium); letter-spacing: -0.03em; line-height: 1.4; }
+.as-hello > p { color: var(--muted); line-height: 1.9; }
+.as-hello > div { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 20px; }
+
+/* 日期胶囊：两边各一条细线 */
+.as-date { display: flex; align-items: center; gap: 12px; margin: 14px 0; color: var(--faint); font-size: var(--t-xs); }
+.as-date::before, .as-date::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.as-date > span { padding: 2px 12px; border-radius: var(--r-full); background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+
+/* 一条消息：头像、名字、「智能体」标记、时间都常显 */
+.as-msg { display: flex; gap: 12px; padding: 13px var(--as-gut); transition: background var(--dur-2) var(--ease-out); }
+.as-msg:hover { background: var(--as-wash); }
+.as-msg > .grow > header { display: flex; align-items: center; gap: 8px; height: 22px; }
+.as-msg > .grow > header > strong { font-weight: var(--w-medium); }
+.as-msg time { color: var(--faint); font-size: var(--t-xs); }
+.as-bot { padding: 0 5px; border-radius: calc(var(--r-sm) - 2px); background: var(--overlay); color: var(--muted); font-size: var(--t-xs); line-height: 18px; }
+.sv-as .as-bot { background: var(--tone-soft); color: var(--tone-ink); }
+.as-text { margin: 3px 0; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.as-text > mark { padding: 2px 3px; border-radius: calc(var(--r-sm) - 2px); background: var(--tone-soft); color: var(--tone-ink); }
+.as-text > code { padding: 1px 5px; border-radius: calc(var(--r-sm) - 2px); background: var(--overlay); font-size: var(--t-xs); }
+.as-msg.is-stopped .as-text { color: color-mix(in oklab, var(--amber) 72%, var(--ink)); }
+.as-typing { margin: 8px 0 2px; font-size: var(--t-xs); }
+.as-sys { margin: 12px var(--as-gut); color: var(--muted); font-size: var(--t-xs); }
+.as-found { display: flex; align-items: center; gap: 6px; margin: 12px 0 8px; color: var(--muted); font-size: var(--t-xs); }
+.as-results { display: grid; gap: 8px; }
+.as-results > p { color: var(--muted); font-size: var(--t-xs); }
+
+/* 头像：成员按次序轮四种身份色（紫、绿、琥珀、青，都是全局的语义色和它们的淡底）；「你」是灰底；助手是这一页的强调色 */
+.as-ava { --c: var(--violet); --c-bg: var(--violet-bg); position: relative; display: inline-grid; place-items: center; width: 35px; height: 35px; flex: none; border-radius: var(--r-md); background: var(--c-bg); color: var(--c); font-size: var(--t-md); font-weight: var(--w-strong); line-height: 1; }
+.as-ava.t1 { --c: var(--green); --c-bg: var(--green-bg); }
+.as-ava.t2 { --c: var(--amber); --c-bg: var(--amber-bg); }
+.as-ava.t3 { --c: var(--cyan); --c-bg: var(--cyan-bg); }
+.as-ava.you { --c: var(--panel); --c-bg: color-mix(in oklab, var(--muted) 82%, var(--panel)); font-size: var(--t-xs); }
+.as-ava.bot { --c: var(--tone-ink); --c-bg: var(--tone-soft); --knock: var(--tone-soft); }
+.as-ava.bot > .i { width: 20px; height: 20px; }
+.as-ava.sm { width: 27px; height: 27px; border-radius: var(--r-sm); font-size: var(--t-xs); }
+/* 右栏成员头像右下角的一颗：灰 = 待命，绿 = 正在回复（不跳动；「在回复」由旁边那行字的流光说） */
+.as-ava > i { position: absolute; right: -2px; bottom: -2px; width: 10px; height: 10px; border: 2px solid var(--canvas); border-radius: 50%; background: var(--faint); transition: background var(--dur-2) var(--ease-out); }
+.as-ava.is-busy > i { background: var(--green); }
+
+/* 消息里的任务卡：左边 3px 一条强调色，点了去任务页 */
+.as-task { display: flex; align-items: center; gap: 12px; width: min(100%, 430px); margin-top: 13px; padding: 14px 15px; box-shadow: inset 3px 0 var(--tone-line), var(--control-shadow); }
+.as-results > .as-task { margin-top: 0; }
+.as-task:hover { background: var(--raised); }
+.as-task:active { background: var(--overlay); }
+.as-task > .i:first-child { width: 22px; height: 22px; color: var(--tone-line); }
+.as-task > .i:last-child { color: var(--faint); }
+.as-task > .grow { display: grid; gap: 3px; }
+.as-task small { color: var(--muted); font-size: var(--t-xs); }
+.sv-as .as-task small { color: var(--tone-ink); }
+.as-task strong { font-weight: var(--w-medium); overflow-wrap: anywhere; }
+.as-task .grow > span { color: var(--muted); font-size: var(--t-xs); overflow-wrap: anywhere; }
+.as-task code { color: var(--faint); font-size: var(--t-xs); }
+.as-task.is-done { box-shadow: inset 3px 0 color-mix(in oklab, var(--green) 65%, var(--panel)), var(--control-shadow); }
+.as-task.is-done > .i:first-child, .as-task.is-done .grow > span { color: var(--green); }
+
+/* 离开底部时浮出来的「最新消息」。居中用 translate，进出场用 transform，两样不打架 */
+.as-jump { position: absolute; left: 50%; bottom: 9px; translate: -50% 0; display: flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px 0 8px; border-radius: var(--r-full); background: var(--panel); box-shadow: var(--control-shadow), var(--surface-shadow); color: var(--muted); font-size: var(--t-xs); transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.as-jump:hover { color: var(--ink); }
+.as-jump.is-hidden { opacity: 0; pointer-events: none; transform: translateY(4px); transition-duration: var(--dur-1); transition-timing-function: var(--ease-in); }
+
+/* ── 输入区三层：一行状态、输入卡、一行按键提示 ── */
+.as-reply { flex: none; padding: 0 var(--as-gut) 16px; }
+.as-live { display: flex; align-items: center; gap: 6px; min-height: 26px; color: var(--faint); font-size: var(--t-xs); }
+.as-stop { display: flex; align-items: center; gap: 4px; height: 22px; margin-left: auto; padding: 0 7px 0 5px; border-radius: var(--r-sm); color: var(--muted); }
+.as-stop:hover { background: var(--red-bg); color: var(--red); }
+.as-stop > .i { fill: currentColor; }
+.as-ctx { padding-bottom: 6px; color: var(--muted); font-size: var(--t-xs); line-height: 1.6; }
+/* 外框、底色、聚焦时的环是公共的 .inbox（base.css），和任务页回复框是同一张 */
+.as-box > textarea { display: block; width: 100%; min-height: 74px; max-height: 190px; padding: 14px 15px 8px; line-height: 1.7; }
+.as-box > footer { display: flex; align-items: center; gap: 9px; padding: 6px 9px 9px 11px; }
+.as-box > footer > .grow { color: var(--muted); font-size: var(--t-xs); overflow-wrap: anywhere; }
+.as-send { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: var(--r-md); background: var(--action); color: var(--on-action); }
+.as-send > .i { stroke-width: 1.8; }
+.as-send:hover:not([disabled]) { background: var(--action-hover); }
+.as-send[disabled] { color: var(--on-action-dim); opacity: 1; }
+.as-send:active:not([disabled]) { transform: scale(0.94); }
+.as-keys { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; color: var(--faint); font-size: var(--t-xs); }
+/* 点名菜单：长在输入卡上方，焦点留在输入框里；行的样子是公共的 .menu，只是每行多一个头像所以高一点 */
+.as-mention { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 3; width: min(340px, 100%); max-height: 260px; overflow-y: auto; padding: 4px; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow), var(--menu-shadow); }
+.as-mention > button { height: 40px; padding: 0 7px; }
+.as-mention > button > strong { flex: 1; font-weight: var(--w-regular); }
+.as-mention > button > small { color: var(--muted); font-size: var(--t-xs); }
+
+/* ── 整列换掉的两页：群聊设置 / 新建群聊（聊天）、更换助手的智能体（助手） ── */
+:is(.as-edit, .as-setup) { flex: 1; min-height: 0; overflow-y: auto; padding: 35px 30px; }
+:is(.as-edit, .as-setup) h2 { font-size: var(--t-xl); font-weight: var(--w-medium); letter-spacing: -0.03em; line-height: 1.4; }
+:is(.as-edit, .as-setup) > p { color: var(--muted); font-size: var(--t-xs); line-height: 1.8; }
+:is(.as-edit, .as-setup) > footer { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 25px; padding: 20px 0; border-top: 1px solid var(--line); }
+.as-setup > p { margin: 8px 0 25px; }
+/* 「选谁干活」：一行小标题，下面是那颗三段胶囊 */
+.as-pick { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; color: var(--muted); font-size: var(--t-xs); }
+.as-pick > .caps { background: var(--panel); }
+.as-edit > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.as-edit > header small { color: var(--muted); font-size: var(--t-xs); }
+.as-edit > header h2 { margin: 4px 0 8px; }
+.as-edit > p > strong { font-weight: var(--w-medium); }
+.as-roomname { display: flex; flex-direction: column; gap: 8px; margin: 25px 0; color: var(--muted); font-size: var(--t-xs); }
+.as-roomname > .field, .as-field .field { width: 100%; min-width: 0; font-size: var(--t-sm); }
+.as-fields { display: flex; flex-direction: column; gap: 15px; margin: 25px 0 15px; }
+.as-fields:empty { display: none; }
+.as-field { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 15px; border-radius: var(--r-lg); background: var(--as-wash); box-shadow: inset 0 0 0 1px var(--line); }
+.as-field > label { display: flex; flex-direction: column; gap: 5px; width: 120px; color: var(--muted); font-size: var(--t-xs); }
+.as-field > .as-pick { flex: 1; min-width: 160px; }
+.as-field > .ico { margin-left: auto; }
+.as-edit > footer { justify-content: space-between; }
+.as-edit > footer > span { color: var(--muted); font-size: var(--t-xs); }
+/* 一个群都没有时的空态 */
+.as-blank { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
+.as-blank > .i { width: 44px; height: 44px; margin-bottom: 8px; color: var(--faint); }
+.as-blank > h2 { font-size: var(--t-xl); font-weight: var(--w-medium); letter-spacing: -0.03em; }
+
+/* ── 右栏：212 宽 ── */
+.as-info { width: 212px; flex: none; min-height: 0; overflow-y: auto; padding: 28px 20px; border-left: 1px solid var(--line); background: var(--canvas); }
+.as-info > .sec { align-items: center; gap: 7px; }
+.as-info > p { margin: 10px 0 16px; color: var(--muted); font-size: var(--t-xs); line-height: 1.8; }
+.as-presence { display: flex; flex-direction: column; gap: 4px; }
+.as-presence > .go { gap: 10px; padding-block: 6px; }
+.as-presence > .go:active { background: var(--sel-bg); }
+.as-presence strong { display: block; font-weight: var(--w-regular); overflow-wrap: anywhere; }
+.as-presence small { display: block; color: var(--muted); font-size: var(--t-xs); }
+.as-manage { margin-top: 14px; }
+.as-info > hr { height: 1px; margin: 24px 0; border: 0; background: var(--line); }
+.as-stat { display: flex; align-items: baseline; gap: 8px; padding: 4px 0 14px; }
+.as-stat > strong { color: var(--tone-line); font-size: var(--t-xl); font-weight: var(--w-regular); line-height: 1.2; }
+.as-stat > span { color: var(--muted); font-size: var(--t-xs); }
+.as-info > small { display: block; color: var(--muted); font-size: var(--t-xs); line-height: 1.8; }
+
+/* ── 浮层：挂在 body 上，靠 ASH.pop 的 cls 把 .sv-as 带过去（「知识与回复设置」） ── */
+.as-kpop { width: min(340px, calc(100vw - 16px)); max-height: min(440px, 60vh); overflow-y: auto; padding: 14px 18px; }
+.as-kpop header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+/* ── 主卡片变窄时（对照清单打开、窗口 1280）：二级栏收到 174（产品里窄窗口也是这个数），右栏和边距各让一点；
+   再窄，聊天页先收右栏；助手页的右栏只有两三行事实，留到最后 ── */
+@container (max-width: 900px) {
+  .as-rail { width: 174px; padding-inline: 10px; }
+  .as-info { width: 192px; padding: 24px 16px; }
+  :is(.as-mid, .as-edit, .as-setup) { --as-gut: 20px; }
+  :is(.as-edit, .as-setup) { padding: 28px 20px; }
+}
+@container (max-width: 720px) {
+  .sv-chat .as-info { display: none; }
+  .sv-as .as-info { width: 168px; padding-inline: 14px; }
+  .as-keys > i { display: none; }
+}
+@container (max-width: 560px) {
+  .as-info { display: none; }
+}

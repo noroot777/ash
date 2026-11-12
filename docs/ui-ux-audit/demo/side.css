@@ -1,0 +1,198 @@
+/* 侧栏（改后）。外框（宽 260、内边距）在 shell.css，这里只管里面五段：顶行、新建一行、筛选一行、任务树、底部一行，外加从侧栏点开的三样（项目菜单、⌘K、弹在底部那一行上面的「项目 Git」）。
+   一行只管一件事：在哪儿 / 新建 / 找 / 任务 / 去别处。尺寸照现在的侧栏（web/src/styles 的 workspace / task-tree / sidebar-spread / project-switcher / overlays）。 */
+
+/* ---------- 顶行：项目 · 常用命令 ---------- */
+.side-top { display: flex; align-items: center; gap: 3px; height: 36px; flex: none; }
+.side-proj { display: flex; flex: 1; align-items: center; gap: 7px; min-width: 0; height: 36px; padding: 0 6px 0 5px; border-radius: var(--r-md); font-weight: var(--w-medium); text-align: left; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.side-proj > .cut { flex: 1; }
+.side-proj > .i { width: 12px; height: 12px; color: var(--faint); }
+.side-proj:hover, .side-proj[aria-expanded="true"] { background: var(--hover-bg); }
+.side-proj:active, .side .ico:active { background: var(--sel-bg); }
+/* 项目头像：一块项目色加首字母。「任务模式」不是哪个项目，用中性底加清单图标 */
+.side-ava { display: grid; place-items: center; width: 18px; height: 18px; flex: none; border-radius: var(--r-sm); background: var(--violet); color: var(--on-accent); font: var(--w-strong) var(--t-xs)/1 var(--font-sans); }
+.side-ava[data-tone="green"] { background: var(--green); }
+.side-ava[data-tone="cyan"] { background: var(--cyan); }
+.side-ava.is-lg { width: 30px; height: 30px; border-radius: var(--r-md); font-size: var(--t-md); }
+.side-ava.is-mode { background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); }
+.side-ava > .i { width: 12px; height: 12px; }
+
+/* ---------- 第二行「新建」：新建任务占满这一行，右边一颗随手记 ---------- */
+.side-make { display: flex; align-items: center; gap: 3px; height: 32px; flex: none; margin-top: 6px; }
+.side-new { display: flex; flex: 1; align-items: center; min-width: 0; height: 32px; padding-right: 8px; border-radius: var(--r-md); outline-offset: -2px; transition: background var(--dur-1) var(--ease-out); }
+.side-new > .i { width: 14px; height: 14px; margin: 0 6px 0 7px; color: var(--muted); }
+.side-new:hover { background: var(--hover-bg); }
+.side-new:active { background: var(--sel-bg); }
+.side-new[aria-current="page"] { background: var(--sel-bg); }
+
+/* ---------- 第三行「找」：筛选（保留项）靠左，搜索和打开任务列表靠右。它同时是任务那一段的头 ---------- */
+.side-find { display: flex; align-items: center; gap: 3px; height: 30px; flex: none; margin-top: 10px; padding-left: 4px; }
+/* 一颗星加五颗点靠左，图标组被顶到右边。点位 13×22、圆点 7、颜色、悬停放大、选中的光环都照现在的 */
+.side-filter { display: flex; align-items: center; margin-right: auto; }
+.side-f { display: grid; place-items: center; width: 13px; height: 22px; flex: none; border-radius: var(--r-sm); outline-offset: 0; --c: var(--faint); }
+.side-f[data-k="star"] { --c: var(--muted); }
+.side-f[data-k="todo"] { --c: var(--amber); }
+.side-f[data-k="run"] { --c: var(--accent); }
+.side-f[data-k="done"] { --c: var(--green); }
+.side-f[data-k="accepted"] { --c: var(--cyan); }
+.side-f > i { position: relative; z-index: 0; display: grid; place-items: center; width: 7px; height: 7px; border-radius: 50%; background: var(--c); color: var(--c); transition: transform var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out); }
+/* 选中的那一圈光环单独垫在圆点底下，只动透明度 */
+.side-f > i::after { content: ""; position: absolute; z-index: -1; inset: -2.5px; border-radius: 50%; background: color-mix(in oklab, var(--c) 26%, transparent); opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.side-f > i > .i { width: 9px; height: 9px; }
+.side-f:hover > i, .side-f:focus-visible > i { transform: scale(1.28); }
+.side-f[aria-pressed="true"] > i { transform: scale(1.14); }
+.side-f[aria-pressed="true"] > i::after { opacity: 1; }
+.side-f:active > i { transform: scale(1); }
+/* 星标是手动记号，画成星形。选中时和圆点同构：填成实心圆贴住光环，星形反白刻在圆里（不让星悬在空心环里） */
+.side-f[data-k="star"]:not([aria-pressed="true"]) > i { background: none; }
+.side-f[data-k="star"][aria-pressed="true"] > i { color: var(--chrome); }
+.side-f[data-k="star"][aria-pressed="true"] > i > .i { transform: scale(0.86); }
+/* 这一档一个都没有：淡下去，位置不动 */
+.side-f.is-empty > i { opacity: 0.4; }
+.side-f.is-empty:hover > i, .side-f.is-empty:focus-visible > i, .side-f.is-empty[aria-pressed="true"] > i { opacity: 1; }
+
+/* ---------- 任务树：行平铺在同一个容器里，置顶的在前、隔一道缝是其余的 ---------- */
+/* 滚动区左右各往外让 6px：行的位置不变，聚焦环和对照清单的描边不会被裁掉 */
+.side-tree { flex: 1; min-height: 0; margin: 2px -6px 0; padding: 0 6px 14px; overflow: hidden auto; }
+.side-gap { height: 9px; margin: 4px 7px 0; border-top: 1px solid var(--line); }
+.side-sec { align-items: center; margin: 0; font-weight: var(--w-regular); }
+/* 「其他机器」「其他项目」各折成一行：整行能点，右边是有几个；箭头只在指上去或聚焦时出现（现有约定，不动） */
+.side-fold { width: 100%; height: 28px; padding: 0 7px; border-radius: var(--r-md); outline-offset: -2px; text-align: left; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.side-row + .side-fold, .none + .side-fold { margin-top: 16px; }
+.side-fold:hover { background: var(--hover-bg); color: var(--ink); }
+.side-fold:active { background: var(--sel-bg); }
+.side-fold > .i { width: 12px; height: 12px; color: var(--faint); opacity: 0; transition: opacity var(--dur-1) var(--ease-out), transform var(--dur-2) var(--ease-out); }
+.side-fold:hover > .i, .side-fold:focus-visible > .i { opacity: 1; }
+.side-fold[aria-expanded="true"] > .i { transform: rotate(90deg); }
+
+/* 行：整行是一个链接（它的点击面用 ::after 铺满整行），行尾那几样小东西排在它后面、浮在点击面上面。
+   标题占满剩下的宽度，尾巴 18px 渐隐；行首 22 宽的槽永远留着，验收过也看过的行槽里是空的，标题因此对得齐 */
+.side-row { position: relative; display: flex; align-items: center; height: 34px; padding-right: 4px; border-radius: var(--r-md); background: var(--bg); transition: background var(--dur-1) var(--ease-out); --bg: transparent; }
+.side-row:hover, .side-row:has(> .side-row-main:focus-visible) { --bg: var(--hover-bg); }
+.side-row.is-on, .side-row:has(> .side-row-main:active) { --bg: var(--sel-bg); }
+.side-row:has(> .side-row-main:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.side-row-main { display: flex; align-items: center; flex: 1; min-width: 0; height: 100%; border-radius: inherit; outline: 0; color: color-mix(in oklab, var(--ink) 52%, var(--muted)); text-align: left; transition: color var(--dur-1) var(--ease-out); }
+.side-row-main::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.side-row:hover > .side-row-main, .side-row.is-on > .side-row-main { color: var(--ink); }
+.side-row-lead { display: grid; place-items: center; width: 22px; height: 100%; flex: none; }
+.side-row-title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; -webkit-mask-image: linear-gradient(90deg, black calc(100% - 18px), transparent); mask-image: linear-gradient(90deg, black calc(100% - 18px), transparent); }
+/* 行尾那个短词（等什么）：定长、不截，标题让它 */
+.side-row-end { display: flex; flex: none; padding: 0 4px 0 10px; }
+.side-row-end:empty { display: none; }
+.side-row-why { color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
+/* 行尾的小图标：团队任务、智能体开的、置顶是看的；星标是键，没加星的平时不占地方，指到这一行才滑出来 */
+.side-row-glyph, .side-row-src, .side-row-star { position: relative; z-index: 1; display: grid; place-items: center; flex: none; width: 20px; height: 24px; border-radius: var(--r-sm); color: var(--faint); transition: width var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.side-row-glyph > .i, .side-row-src > .i, .side-row-star > .i { width: 13px; height: 13px; flex: none; }
+.side-row-star { width: 0; overflow: hidden; opacity: 0; }
+.side-row:is(:hover, :focus-within, .is-on, .is-starred) > .side-row-star { width: 20px; opacity: 1; }
+.side-row.is-starred > .side-row-star { color: var(--muted); }
+.side-row-star:hover, .side-row-star:focus-visible, .side-row-src:hover, .side-row-src:focus-visible { background: color-mix(in oklab, var(--ink) 8%, transparent); color: var(--ink); }
+.side-row-star:active, .side-row-src:active { background: color-mix(in oklab, var(--ink) 14%, transparent); }
+@media (hover: none) { .side-row-star { width: 20px; opacity: 1; } }
+/* 正在换位置的那一行垫一层底，滑过别的行时字不叠在一起 */
+.side-row.is-moving { z-index: 2; }
+.side-row.is-moving:not(:hover, .is-on) { --bg: var(--chrome); }
+
+/* 其他机器（展开后）：一台机器一行（塔式机、名字、行尾接力钮），接力过去的任务缩进在它下面，行首一颗恒灰的小点 */
+.side-far { display: grid; gap: 2px; }
+.side-mach { display: grid; }
+.side-mach-head { display: grid; grid-template-columns: 22px minmax(0, 1fr) 28px; align-items: center; min-height: 38px; }
+.side-mach-head > .i { justify-self: center; width: 14px; height: 14px; color: var(--faint); }
+.side-mach-head > b { color: color-mix(in oklab, var(--ink) 58%, var(--muted)); font-weight: var(--w-regular); }
+/* 接力钮指到这一台才出（触屏上常显） */
+.side-mach-head > .ico { color: var(--faint); opacity: 0; }
+.side-mach-head:hover > .ico, .side-mach-head > .ico:focus-visible { opacity: 1; }
+@media (hover: none) { .side-mach-head > .ico { opacity: 1; } }
+.side-mach-head > .ico:hover, .side-mach-head > .ico:focus-visible { color: var(--ink); }
+.side-mach-task { display: grid; grid-template-columns: 14px minmax(0, 1fr); align-items: center; min-height: 30px; margin: 0 0 1px 22px; padding: 0 4px 0 2px; border-radius: var(--r-md); outline-offset: -2px; color: color-mix(in oklab, var(--ink) 52%, var(--muted)); text-align: left; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.side-mach-task > i { justify-self: center; width: 5px; height: 5px; border-radius: 50%; background: var(--faint); opacity: 0.7; }
+.side-mach-task:hover, .side-mach-task:focus-visible { background: var(--hover-bg); color: var(--ink); }
+.side-mach-task:active { background: var(--sel-bg); }
+
+/* 其他项目：一个项目一行，默认折着 */
+.side-other { display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 7px; border-radius: var(--r-md); outline-offset: -2px; color: var(--muted); text-align: left; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.side-other:hover { background: var(--hover-bg); color: var(--ink); }
+.side-other:active { background: var(--sel-bg); }
+.side-other > .i { width: 12px; height: 12px; color: var(--faint); transition: transform var(--dur-2) var(--ease-out); }
+.side-other[aria-expanded="true"] > .i { transform: rotate(90deg); }
+.side-other-tasks { margin: 0 0 8px 7px; }
+.side-other-tasks > p { padding: 8px; color: var(--muted); font-size: var(--t-xs); }
+
+/* ---------- 底部一行（side-foot.js）：左边是主仓的分支，右边四颗图标（聊天、助手、深浅色、收起）。12px、次级文字色 ---------- */
+.side-foot { display: flex; align-items: center; gap: 2px; flex: none; padding: 5px 0 2px; border-top: 1px solid var(--line); }
+.side-foot .i { width: 14px; height: 14px; }
+/* 分支占掉图标剩下的宽度，领先落后紧跟在名字后面 */
+.side-git { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; height: 28px; padding: 0 7px; border-radius: var(--r-sm); outline-offset: -2px; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; text-align: left; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.side-git:hover, .side-git[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.side-git:active { background: var(--sel-bg); }
+/* 挤的时候先收后半句，再截名字 */
+.side-git > .cut { flex: 0 1 auto; }
+.side-git > em { flex: 0 9999 auto; min-width: 0; overflow: hidden; color: var(--faint); font-style: normal; }
+/* 开着聊天、助手时那一颗是墨色、图标填实 */
+.side-foot a[aria-current="page"] { color: var(--ink); }
+.side-foot a[aria-current="page"] > .i { fill: color-mix(in oklab, currentColor 22%, transparent); }
+.side-foot a:active { background: var(--sel-bg); }
+.side-theme-glyph { display: grid; }
+
+/* ---------- 「项目 Git」：弹在底部那一行的上面，那一行不挡；盖住任务列表的下半截，点别处落回去。外面一层只管把它裁在那一行以上（下沿是 side-foot.js 量出来的） ---------- */
+.side { position: relative; }
+.side-rise { position: absolute; inset: 0; z-index: 5; display: flex; align-items: flex-end; overflow: hidden; background: transparent; transition: background 200ms var(--ease-in); }
+.side-rise.is-up { background: color-mix(in oklab, var(--chrome) 50%, transparent); transition: background var(--dur-3) var(--ease-out); }
+.side-sheet { display: flex; flex-direction: column; width: calc(100% - 12px); max-height: 76%; margin: 0 6px 6px; padding: 6px 6px 8px; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow), var(--shadow); transform: translateY(calc(100% + 28px)); transition: transform 200ms var(--ease-in); }
+.side-rise.is-up > .side-sheet { transform: none; transition: transform var(--dur-3) var(--ease-out); }
+/* 头一行：搜索，右边是更新、拉取、推送 */
+.side-sheet-head { display: flex; align-items: center; gap: 2px; flex: none; margin: 1px 1px 5px; }
+.side-sheet-head > .side-pm-find { flex: 1; min-width: 0; margin: 0 3px 0 0; }
+.side-sheet-head .ico { width: 26px; height: 26px; }
+.side-sheet-head .ico > .i { width: 14px; height: 14px; }
+/* 领先几个提交，写在推送那颗键上 */
+.side-sheet-push { display: inline-flex; align-items: center; }
+.side-sheet-push > em { min-width: 12px; margin-left: -3px; padding-right: 5px; color: var(--muted); font-size: var(--t-xs); font-style: normal; }
+.side-sheet-push > em:empty { display: none; }
+.side-sheet-list { flex: 1; min-height: 0; overflow-y: auto; }
+.side-sheet-list > button { font-size: var(--t-xs); }
+.side-sheet-list > button > .cut { flex: 1; }
+.side-sheet-list > button > em { padding-left: 10px; }
+/* 当前分支前面一个勾，别的空着同样的宽度 */
+.side-sheet-list > button::before { content: ""; width: 10px; height: 6px; flex: none; margin: 0 2px 3px; border: solid transparent; border-width: 0 0 1.6px 1.6px; transform: rotate(-45deg); }
+.side-sheet-list > [aria-selected="true"]::before { border-color: var(--ink); }
+.side-sheet-list > .none { padding: 18px 8px; }
+.side-sheet-go { display: flex; align-items: center; flex: none; height: 30px; margin-top: 5px; padding: 0 8px; border-top: 1px solid var(--line); border-radius: 0 0 var(--r-sm) var(--r-sm); color: var(--muted); font-size: var(--t-xs); outline-offset: -2px; transition: color var(--dur-1) var(--ease-out); }
+.side-sheet-go > span { flex: 1; }
+.side-sheet-go > .i { width: 12px; height: 12px; color: var(--faint); }
+.side-sheet-go:hover { color: var(--ink); }
+.side-sheet-note { flex: none; padding: 0 8px; color: var(--faint); font-size: var(--t-xs); line-height: 1.5; }
+
+/* ---------- 项目菜单：当前项目、设置、搜索、「切换到」、新建项目（浮层本体是公共件 .pop + .menu） ---------- */
+.side-pm { width: 304px; padding: 8px; }
+.side-pm-cur { display: flex; align-items: center; gap: 9px; padding: 4px 5px 6px; }
+.side-pm-2 { display: grid; flex: 1; min-width: 0; }
+.side-pm-2 > b { font-weight: var(--w-regular); }
+.side-pm-2 > small { color: var(--muted); font-size: var(--t-xs); }
+.side-pm .menu > button > small { margin-left: auto; color: var(--muted); font-size: var(--t-xs); }
+.side-pm .menu > button > small + kbd { margin-left: 4px; }
+.side-pm-find { display: flex; align-items: center; gap: 7px; height: 30px; margin: 7px 0 3px; padding: 0 9px; border-radius: var(--r-md); box-shadow: inset 0 0 0 1px var(--line2); color: var(--faint); }
+.side-pm-find:focus-within { outline: 2px solid var(--focus-soft); outline-offset: 0; }
+.side-pm-find > input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; }
+.side-pm-list { max-height: 310px; overflow-y: auto; }
+.side-pm-list > button { height: auto; gap: 9px; padding: 6px 7px; }
+.side-pm-list > button > .i:last-child { color: var(--ink); }
+.side-pm-list > .none { padding: 18px 8px; }
+.side-pm-new { margin-top: 6px; padding-top: 4px; border-top: 1px solid var(--line); }
+.side-pm-new > button { font-weight: var(--w-regular); }
+
+/* ---------- ⌘K：居中的命令面板，带遮罩（遮罩是公共件 .veil）。靠上摆，两行一条：名字在上、去处在下 ---------- */
+.side-jump-veil { place-items: start center; padding-top: min(15vh, 132px); }
+.side-jump { display: flex; flex-direction: column; width: min(610px, calc(100vw - 32px)); max-height: min(calc(100vh - min(15vh, 132px) - 24px), 640px); overflow: hidden; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow), var(--shadow); transform: translateY(-4px) scale(0.98); transform-origin: top center; transition: transform var(--dur-2) var(--ease-out); }
+.veil.is-in > .side-jump { transform: none; }
+.side-jump-in { display: flex; align-items: center; gap: 10px; height: 52px; flex: none; padding: 0 16px; border-bottom: 1px solid var(--line); color: var(--faint); }
+.side-jump-in > input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: none; font-size: var(--t-md); }
+.side-jump > .menu { flex: 1; min-height: 0; padding: 5px; overflow-y: auto; }
+.side-jump > .menu > button { height: auto; min-height: 42px; gap: 9px; padding: 5px 9px; }
+/* 只有上下键停着的那一行有底色：指针划过也给底色的话，分不清回车会打开哪一行（现有约定） */
+.side-jump > .menu > button:hover:not([data-active="true"]) { background: none; }
+.side-jump > .menu > button > :first-child { width: 20px; height: 20px; }
+.side-jump > .menu > button > .i:first-child { padding: 2px; }
+.side-jump > .menu > button > em { width: 14px; color: var(--faint); font-style: normal; text-align: right; opacity: 0; }
+.side-jump > .menu > [data-active="true"] > em { opacity: 1; }
+.side-jump > .menu > .none { padding: 44px 18px; }
+.side-jump-foot { display: flex; align-items: center; gap: 16px; height: 32px; flex: none; padding: 0 13px; border-top: 1px solid var(--line); color: var(--muted); font-size: var(--t-xs); }
