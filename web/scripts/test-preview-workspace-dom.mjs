@@ -121,14 +121,15 @@ export async function testPreviewWorkspaceDom() {
       return reply([]);
     });
     await page.route("**/__preview-test", async (route) => route.fulfill({ contentType: "text/html", body: await server.transformIndexHtml("/__preview-test", `<!doctype html><html><head>
-      <style>:root { --panel:#fff;--raised:#eee;--ink:#222;--muted:#555;--line:#ddd;--line2:#ccc;--accent:#5566bb;--red:#b22;--canvas:#fafafa;--font-sans:system-ui;--font-mono:monospace; }
+      <style>:root { --panel:#fff;--raised:#eee;--ink:#222;--muted:#555;--line:#ddd;--line2:#ccc;--accent:#5566bb;--action:#000;--action-hover:#262626;--on-action:#fff;--on-action-dim:#8a8a8a;--red:#b22;--canvas:#fafafa;--font-sans:system-ui;--font-mono:monospace; }
         * {box-sizing:border-box} body {margin:0} .workspace-main {isolation:isolate} #sidebar {position:fixed;inset:0 auto 0 0;width:220px;z-index:5;background:#ddd}
         #root {display:flex;position:absolute;left:220px;top:80px;width:900px;height:760px}</style>
       </head><body><div class="workspace-shell"><div id="sidebar"></div><div class="workspace-main" id="root"></div></div><div id="toast-root"></div><script type="module">
         import React from 'react';
         import { createPortal } from 'react-dom';
         import { createRoot } from 'react-dom/client';
-        import { PreviewWorkspace, PreviewWorkspaceEntry } from '/src/preview-workspace/PreviewWorkspace.tsx';
+        import { PreviewWorkspace } from '/src/preview-workspace/PreviewWorkspace.tsx';
+        import { InspButton, InspNone } from '/src/inspector/parts.tsx';
         import { DraftProvider } from '/src/lib/DraftStore.tsx';
         import { WorkspaceToast } from '/src/workspace/WorkspaceToast.tsx';
         import { useWorkspaceShortcuts } from '/src/workspace/useWorkspaceShortcuts.ts';
@@ -167,7 +168,7 @@ export async function testPreviewWorkspaceDom() {
           });
           const workspace = open ? React.createElement(PreviewWorkspace, {key:selectedTaskId,taskId:selectedTaskId,onClose:()=>{
             window.closeRequests++; sessionStorage.removeItem('preview-open'); setOpen(false);
-          }}) : React.createElement(PreviewWorkspaceEntry, {onOpen:openPreview});
+          }}) : React.createElement('div', {className:'insp-pane'}, React.createElement(InspNone, {action: React.createElement(InspButton, {onClick:openPreview}, '打开预览指正')}, '在页面上圈出要改的地方，逐条写意见。'));
           const sidebar = createPortal(React.createElement(React.Fragment, {},
             React.createElement('button', {id:'preview-external-opener',onClick:openPreview}, '外部预览入口'),
             React.createElement('input', {id:'preview-external-input','aria-label':'预览外输入框'}),
