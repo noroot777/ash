@@ -1,4 +1,4 @@
-import { Fragment, memo, useMemo, useRef } from "react";
+import { Fragment, memo, useMemo, useRef, useState } from "react";
 import { File, Gavel, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
@@ -168,6 +168,8 @@ function UserMessage({
   item: Extract<ConversationItem, { kind: "user" }>;
   preserveSystemStyle?: boolean;
 }) {
+  // 刚发出去的那一句上移 4px 淡入（run-1）；页面打开时已经在的不动。
+  const [fresh] = useState(() => !!item.at && Date.now() - Date.parse(item.at) < 5000);
   const parsed = parseAttachmentText(item.text);
   const displayBody = annotationBatchDisplayText(parsed.body) ?? parsed.body;
   if (item.isAnswer || isQuestionAnswer(item.text)) return <AnsweredQuestionMessage text={item.text} id={item.id} at={item.at} deletable={item} />;
@@ -178,7 +180,7 @@ function UserMessage({
     return <SystemAuthoredMessage item={item} />;
   }
   return (
-    <article className={`task-message task-message--user${bySystem ? " is-system-authored" : ""}`}>
+    <article className={`task-message task-message--user${bySystem ? " is-system-authored" : ""}${fresh ? " is-fresh" : ""}`}>
       <div className="task-user-bubble" {...conversationInputAnchor(item.id)}>
         <header>
           <b>{bySystem ? "系统" : "你"}</b>
