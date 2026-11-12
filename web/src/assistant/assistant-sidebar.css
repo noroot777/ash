@@ -1,6 +1,8 @@
 .assistant-sidebar { min-width: 0; min-height: 0; box-shadow: inset -1px 0 var(--assistant-rail-line); }
 /* 当前对话用的智能体，点它换。配色沿用侧栏这一套，不另起颜色。 */
-.assistant-shell .assistant-who { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; margin: 0 0 14px; padding: 7px 10px; border: 0; border-radius: var(--r-md); background: none; color: var(--assistant-rail-ink); font-size: var(--t-sm); text-align: left; }
+.assistant-shell .chat-project:has(+ .assistant-who) { padding-bottom: 14px; }
+.assistant-shell .assistant-who { display: flex; flex-shrink: 0; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 34px; margin: 0 0 14px; padding: 0 10px; border: 0; border-radius: var(--r-md); background: none; box-shadow: inset 0 0 0 1px var(--assistant-rail-line); color: var(--assistant-rail-ink); font-size: var(--t-sm); text-align: left; }
+.assistant-shell .assistant-who:active:not(:disabled) { background: var(--assistant-rail-selected); }
 .assistant-who > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .assistant-who > svg { flex-shrink: 0; color: var(--assistant-rail-muted); }
 .assistant-history-actions { display: flex; }

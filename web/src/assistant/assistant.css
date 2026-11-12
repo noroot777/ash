@@ -66,6 +66,9 @@
 .assistant-archive h2 { font-size: 24px; }
 .assistant-archive h3 { margin-top: 32px; font-size: 16px; }
 .assistant-archive label { display: flex; align-items: center; gap: 10px; font-size: 12px; margin: 12px 0; }
+/* 聊天页的右栏窗口一窄就收；助手页这一列只有几行任务入口，留到最后再收。 */
+@media (max-width: 1200px) { .assistant-shell .assistant-links { display: block; width: 168px; padding-inline: 14px; } }
+@media (max-width: 900px) { .assistant-shell .assistant-links { display: none; } }
 @media (max-width: 760px) {
   .workspace-shell.is-assistant > .workspace-sidebar { display: none; }
   .assistant-connection { padding: 24px 16px; }
