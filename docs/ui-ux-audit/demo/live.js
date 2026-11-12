@@ -79,7 +79,7 @@
       { text: '想了一圈，还剩一条：任务被接力到另一台机器时，待发送里的定时消息没有跟过去。这条我单独开一个任务记下来。' },
       { end: { turn: 9200, files: 0, add: 0, del: 0, ctx: 1 } },
     ] },
-    /* 「重试」跑的那一轮：没有新的气泡，接着上一轮做 */
+    /* 「重试」跑的那一轮：没有新的气泡，接着上一轮做；回合头名字后面写着「重试」 */
     again: { events: [
       { think: 1200 },
       { tool: TEST, ms: 2800 },
@@ -95,7 +95,7 @@
       { text: `调整完了，回归 ${cur.test.pass} 条全部通过。` },
       { end: { turn: 12400, files: 0, add: 4, del: 1, ctx: 1 } },
     ] },
-    /* 审查没通过、这一趟还没到头：意见直接交给执行者，没有你的气泡 */
+    /* 审查没通过、这一趟还没到头：意见直接交给执行者，没有你的气泡；回合头名字后面写着它是照哪一轮的意见改 */
     fix: { events: [
       { think: 1400 },
       { tool: { verb: '读', text: '`server/scripts/test-later-send-recover.ts`' }, ms: 1000 },
@@ -281,18 +281,18 @@
 
   /* ---- 一轮 ---- */
   function openTurn() {
-    const turn = kit.turn({ reply: run.reply });
-    run.reply = null;
+    const turn = kit.turn({ cause: run.cause });
+    run.cause = null;
     turn.el.classList.add('is-live');
     Object.assign(run, { turn, strip: null, flat: [], prose: [], steps: [], t0: performance.now() });
     feed.append(enter(turn.el));
   }
 
-  async function play(name = 'run', say, { reply = null } = {}) {
+  async function play(name = 'run', say, { cause = null } = {}) {
     const script = SCRIPTS[name];
     if (run || !script) return;
     if (SCRIPTS[name].say) last = name;
-    const r = (run = { name, reply, dead: false, steered: false, waits: new Map(), waiting: false, ask: null, answer: null, nodes: [], turn: null, strip: null, flat: [], prose: [], steps: [], t0: performance.now() });
+    const r = (run = { name, cause, dead: false, steered: false, waits: new Map(), waiting: false, ask: null, answer: null, nodes: [], turn: null, strip: null, flat: [], prose: [], steps: [], t0: performance.now() });
     r.over = new Promise((done) => { r.end = done; });
     paintBtn();
     const text = say ?? script.say;
@@ -350,7 +350,7 @@
       } finally { waitingTitle(false); r.answer = null; r.waiting = false; }
       /* 提问卡沉下去和答复落进会话是同一段：卡往下走的那 320ms 里，会话带着新来的这一行一起落回贴底 */
       feed.pin();
-      feed.unask(() => feed.append(enter(got.card ? kit.answer({ ...ev.ask, text: got.text, time: '刚刚' }) : kit.user(got.text, '刚刚'))));
+      feed.unask(() => feed.append(enter(kit.user(got.text, '刚刚', got.card ? { quote: ev.ask.q, options: ev.ask.options } : {}))));
       busy(true);
       status('running');
       await sleep(350);
@@ -456,7 +456,7 @@
   /* 重试：不发新的气泡，接着上一轮做 */
   function retry() {
     if (run) return;
-    play('again');
+    play('again', undefined, { cause: { text: '重试' } });
   }
   /* 引导会话：正在跑的那一回合就地收住（已经出来的步骤折成一行），你的话接在它后面，再另起一回合。任务一直是「运行中」 */
   async function steer(msg = {}) {
@@ -487,7 +487,7 @@
     const state = ASH.parts.head?.state ?? 'done';
     if (state === 'done') status('accepted'); else ASH.emit('task:status', { id: ASH.data.current, status: state, accepted: true });
     feed.pin();
-    feed.append(enter(kit.sys({ tone: 'ok', text: `已合并到 \`${cur.target}\``, more: '3 条记录', time: '刚刚',
+    feed.append(enter(kit.mile({ tone: 'ok', text: `已验收，合并到 \`${cur.target}\``, note: '刚刚',
       log: [['验收前置命令通过', ''], [`\`${cur.branch}\` 合并进 \`${cur.target}\`，没有冲突`, ''], ['任务分支和它的工作区已清理', '']] })));
   }
 
@@ -506,9 +506,7 @@
     if (!repair) return;
     setTimeout(() => {
       if (run) return;
-      feed.pin();
-      feed.append(enter(kit.sys({ glyph: 'clock', text: `第 ${round} 轮审查没通过，意见已交给执行者`, time: '刚刚' })));
-      play('fix', '', { reply: `回复第 ${round} 轮审查的意见` });
+      play('fix', '', { cause: { text: `按第 ${round} 轮审查的意见改`, onclick: () => ASH.emit('insp:open', { pane: 'review', round }) } });
     }, 900);
   });
 

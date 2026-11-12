@@ -1,13 +1,15 @@
 /* 会话流（部件 feed）：静态的一段会话 + 滚动钮 + 输入导航 + 提问坞。
-   造回合、气泡、系统行、执行过程的那几个函数挂在 ASH.feedKit 上，执行中的模拟（live.js）用的是同一套。
-   结构和文案照 web/src/task-detail 的 ConversationFeed / SystemNotice / ReviewerLane / QuestionCard；和现状不一样的只有清单 feed-1 到 feed-14。
+   造回合、气泡、里程碑行、执行过程的那几个函数挂在 ASH.feedKit 上，执行中的模拟（live.js）用的是同一套。
+   会话里平时只有三样：你说的（气泡）、它说的（回合）、里程碑（一行一句：审查出了结论、验收了）。ash 自己的话不单独占行——
+   「这一回合为什么开始」是回合头名字后面的一句起因（被哨兵叫醒、照审查意见改、重试），原文点了再看；
+   回执（开始盯、暂停、预约、不再等了……）记在它所属的那一回合上，指到这一回合才多出一项「N 条记录」。要你动手的事在回复框上面那一行（next.js），不在会话里。
+   文案照 web/src/task-detail 的 ConversationFeed / SystemNotice / ReviewerLane / QuestionCard；清单 feed-1 到 feed-15。
    原始需求不在会话里出气泡（照现状，它住在右侧「信息」格）；输入导航的第一格是它，点了回到会话顶端。
    对外：ASH.parts.feed = { el, dock, follow(), pin(), stuck, append(...nodes), ask({ q, options, onanswer, instant }), unask(then?), destroy() }。
    unask(then)：提问卡沉下去，会话同一拍落回；then 里追加的东西（答复、新的一回合）并在这一段里一起走。
    append 进来的节点记在 ASH.feedKit.kept 里：切到别的面再回来，跑过的那几轮还在。 */
 (() => {
   const { h, $, $$, icon } = ASH;
-  ASH.icons.elbow = '<path d="M4 3v5a2 2 0 0 0 2 2h6.5M10 7.5l2.5 2.5-2.5 2.5"/>';
   const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   /* 行内只认两样：`代码` 和 **着重** */
   const fmt = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -47,24 +49,29 @@
     setTimeout(() => { el.remove(); kit.kept = kit.kept.filter((node) => node !== el); kit.changed?.(); }, ASH.reduced() ? 0 : 120);
   };
 
-  /* 系统行、自动输入、答复行尾上的小动作：和回合尾一个规矩，指到这一行（或键盘走到它）才出 */
-  const delBtn = (row) => h('button.ico.sm', { type: 'button', 'aria-label': '删除这条消息', 'data-tip': '删除', onclick: () => drop(row()) }, icon('trash'));
-  const rowActs = (...btns) => h('span.row-acts', btns);
+  /* 一份流水：一行一条，时间排在最前面。回合上的记录、里程碑点开的明细用的都是它 */
+  const logList = (lines) => h('ul.sys-log', { hidden: true }, lines.map(([line, at]) => h('li', h('span', { html: fmt(line) }), at && h('time', at))));
 
-  /* 你发的话：泡里一行「你 · 时间」，复制和删除指到才出（照现状） */
-  kit.user = (text, time) => {
+  /* 你发的话：泡里一行「你 · 时间」，复制和删除指到才出（照现状）。
+     quote = 这句话答的是哪个提问：问题引在气泡里、答案的上面；当时给的选项点一下那句引文再看 */
+  kit.user = (text, time, { quote, options = [] } = {}) => {
     const row = h('div.bubble-row', { 'data-user': '' });
+    const picked = text.split('\n');
+    const opts = quote && options.length > 0 && h('ul.bubble-opts', { hidden: true, 'aria-label': '当时的选项' }, options.map((o) => h(`li${picked.includes(o) ? '.on' : ''}`, o)));
+    const asked = quote && (opts ? h('button.bubble-quote', { type: 'button', 'aria-expanded': 'false', onclick: () => unfold(asked, opts) }, quote) : h('p.bubble-quote', quote));
     row.append(h('div.bubble',
       h('header', h('b', '你'), time && h('time', time), copyBtn('复制这条回复', () => text),
         h('button.ico.sm', { type: 'button', 'aria-label': '删除这条消息', 'data-tip': '删除', onclick: () => drop(row) }, icon('trash'))),
-      h('p', text)));
+      asked, opts, h('p', text)));
     return row;
   };
 
-  /* 回合：头上只有名字，模型、智能水平、时间、用时悬停才给；尾上的操作同样悬停才出。reply = 这一回合是在回一次自动输入 */
-  kit.turn = ({ agent = ASH.data.cur.exec[ASH.data.tasks.find((t) => t.id === ASH.data.current)?.agent] ?? ASH.data.cur.exec.claude, meta, reply } = {}) => {
+  /* 回合：头上是名字，后面至多一句起因；模型、智能水平、时间、用时悬停才给，尾上的操作同样悬停才出。
+     cause = 这一回合不是你发话起的头，是谁：{ text, onclick? 点了去哪, detail? 点了就地摊开的原文 }；三样都没有 = 只是一句话。
+     setLog(lines) = 记在这一回合上的回执 [[话, 时刻]]：平时不画，回合尾那一排里多一项「N 条记录」，点了摊在回合下面 */
+  kit.turn = ({ agent = ASH.data.cur.exec[ASH.data.tasks.find((t) => t.id === ASH.data.current)?.agent] ?? ASH.data.cur.exec.claude, meta, cause } = {}) => {
     const head = h('header.turn-head', h('b', agent), rt(meta));
-    const body = h('div.turn-body', reply && h('p.turn-ref', icon('elbow'), reply === true ? '回复这次自动输入' : reply));
+    const body = h('div.turn-body');
     const el = h('article.turn', h('span.turn-av', { 'aria-hidden': 'true' }, agent[0].toUpperCase()), head, body);
     const more = h('button.ico.sm', { type: 'button', 'aria-label': '更多', 'aria-haspopup': 'menu', 'data-tip': '更多',
       onclick: () => ASH.menu(more, [{ label: '删除这条回复', icon: 'trash', onpick: () => drop(el) }]) }, icon('more'));
@@ -72,8 +79,30 @@
       copyBtn('复制这条回复', () => $$(':scope > .md', body).map((md) => md.innerText).join('\n\n')),
       h('button.ico.sm', { type: 'button', 'aria-label': '派生新任务', 'data-tip': '派生新任务', onclick: () => ASH.go('#/new') }, icon('fork')), more);
     el.append(acts);
-    return { el, head, body, acts, setMeta(text) { $('.rt', head)?.remove(); head.append(rt(text)); } };
+    const api = { el, head, body, acts, cause: null, log: null,
+      setMeta(text) { $('.rt', head)?.remove(); head.append(rt(text)); },
+      setLog(lines) {
+        api.log?.btn.remove();
+        api.log?.list.remove();
+        api.log = null;
+        if (!lines?.length) return;
+        const list = logList(lines);
+        const btn = h('button.turn-log', { type: 'button', 'aria-expanded': 'false', onclick: () => unfold(btn, list) }, `${lines.length} 条记录`);
+        acts.append(btn);
+        el.append(list);
+        api.log = { btn, list };
+      } };
+    if (cause?.detail) {
+      cause.detail.hidden = true;
+      api.cause = h('button.turn-cause', { type: 'button', 'aria-expanded': 'false', onclick: () => unfold(api.cause, cause.detail) }, cause.text);
+      body.append(cause.detail);
+    } else if (cause) api.cause = cause.onclick ? h('button.turn-cause', { type: 'button', onclick: cause.onclick }, cause.text) : h('span.turn-cause', cause.text);
+    if (api.cause) head.firstElementChild.after(api.cause);
+    return api;
   };
+  /* 被哨兵叫醒的那种起因点开的原文：谁发的、几条并成一次、原话 */
+  kit.wake = ({ from, lines = [] }) => ({ text: `由「${from}」叫醒`, detail: h('div.cause-body',
+    h('dl.kv', h('dt', '来自哨兵'), h('dd', from), h('dt', '写入会话'), h('dd', `${lines.length} 条消息 → 1 次输入`)), h('pre', lines.join('\n'))) });
 
   /* 一步：一句人话（动词 + 对象）。点开是「字段 值」，原始参数再折一层 */
   const VERB_ICON = { 读: 'file', 搜: 'search', 改: 'edit', 写: 'edit', 跑: 'term', 看网页: 'globe', 派: 'bot' };
@@ -112,60 +141,31 @@
     return api;
   };
 
-  /* 系统行：图标落在头像轴上。tone 是 ok / warn / bad / 空；log 是点开「N 条记录」后的明细；时间排在这一行所有东西的后面 */
-  const TONE_ICON = { ok: 'check', warn: 'warn', bad: 'warn' };
-  kit.sys = ({ tone = '', glyph, text, more, log, time }) => {
-    const logEl = log && h('ul.sys-log', { hidden: true }, log.map(([line, at]) => h('li', h('span', { html: fmt(line) }), at && h('time', at))));
-    const moreEl = logEl && h('button.sys-more', { type: 'button', 'aria-expanded': 'false', onclick: () => unfold(moreEl, logEl) }, more);
-    const row = h(`div.sys${tone ? `.${tone}` : ''}`, h('span.sys-ic', icon(glyph ?? TONE_ICON[tone] ?? 'info')),
-      h('div.sys-line', h('span', { html: fmt(text) }), moreEl, rt(time), rowActs(delBtn(() => row))), logEl);
-    return row;
+  /* 里程碑：一行一句，图标落在头像轴上，整行是一颗键。tone 是 ok / warn / bad / 空，颜色只在图标上，结论写在字里；
+     note 是指到才出的那半句（谁、用时、时刻）。点了要么去别处（onclick），要么就地摊开明细（log） */
+  kit.mile = ({ tone = '', glyph = 'check', text, note, onclick, log }) => {
+    const list = log && logList(log);
+    const btn = h('button.mile-line', { type: 'button', 'aria-expanded': list ? 'false' : null, onclick: onclick ?? (() => unfold(btn, list)) }, h('span.mile-text', { html: fmt(text) }), rt(note));
+    return h(`div.mile${tone ? `.${tone}` : ''}`, h('span.sys-ic', icon(glyph)), btn, list);
   };
 
-  /* 「ash 自动输入」：还在你这一侧，只是一行灰字；内容点了再看。这一行靠右，所以时间排在字的前面，字才贴得住右边 */
-  kit.auto = ({ text, from, lines = [], time }) => {
-    const body = h('div.auto-body', { hidden: true },
-      h('dl.kv', h('dt', '来自哨兵'), h('dd', from), h('dt', '写入会话'), h('dd', `${lines.length} 条消息 → 1 次输入`)),
-      h('pre', lines.join('\n')));
-    const more = h('button.sys-more', { type: 'button', 'aria-expanded': 'false', onclick: () => unfold(more, body) }, '查看内容');
-    const row = h('div.auto', h('p.auto-line', rowActs(copyBtn('复制这次自动输入', () => lines.join('\n')), delBtn(() => row)), rt(time), icon('pulse'), h('span', `${text} · ${from}`), more), body);
-    return row;
-  };
-
-  /* 审查轮：一行——第几轮、结论、谁审的、用时、看报告。颜色只从结论来（通过绿、未通过红），和右侧审查格是同一张表；
-     「看报告」在右侧审查格里就地展开那一轮。还在审的时候 r.ok 是 undefined：结论那一格写「审查中」带流光，出了结论调 row.settle(r) 原地落定 */
-  const VERDICT = { true: ['ok', '已通过'], false: ['bad', '未通过'] };
+  /* 审查轮：也是一句里程碑——「第 3 轮审查通过」「第 2 轮审查未通过，2 条意见」。谁审的、用时、时刻指到才出；
+     点了在右侧审查格里就地展开那一轮。还在审的时候 r.ok 是 undefined：这一句是带流光的「第 N 轮审查中」，出了结论调 row.settle(r) 原地落定 */
   kit.rev = (r) => {
-    const chip = h('span.rev-chip');
-    const who = h('span');
-    const report = h('button.link', { type: 'button', onclick: () => ASH.emit('insp:open', { pane: 'review', round: r.n }) }, '看报告');
-    const time = h('time.rt');
-    const head = h('div.rev-head', h('b', `第 ${r.n} 轮审查`), chip, who, report, time);
-    const row = h('div.rev', h('span.sys-ic', icon('shield')), h('div.rev-main', head));
+    const text = h('span.mile-text');
+    const tail = h('time.rt');
+    const btn = h('button.mile-line', { type: 'button', onclick: () => ASH.emit('insp:open', { pane: 'review', round: r.n }) }, text, tail);
+    const row = h('div.mile', h('span.sys-ic', icon('shield')), btn);
     const paint = (now, soft) => {
       const done = now.ok != null;
-      const [tone, verdict] = done ? VERDICT[now.ok] : ['', '审查中'];
-      row.className = `rev${tone ? ` ${tone}` : ' is-live'}`;
-      chip.classList.toggle('shim', !done);
-      const tail = done ? `${now.by} · ${now.took}` : now.by;
-      if (soft) { ASH.swap(chip, verdict, { row: head }); ASH.swap(who, tail, { row: head }); } else { chip.textContent = verdict; who.textContent = tail; }
-      report.hidden = !done;
-      if (done && soft) report.classList.add('enter');
-      time.textContent = done ? now.time ?? '' : '';
+      const say = !done ? `第 ${now.n} 轮审查中` : now.ok ? `第 ${now.n} 轮审查通过` : `第 ${now.n} 轮审查未通过，${now.notes.length} 条意见`;
+      row.className = `mile rev${done ? (now.ok ? ' ok' : ' bad') : ' is-live'}`;
+      text.classList.toggle('shim', !done);
+      if (soft) ASH.swap(text, say, { row: btn }); else text.textContent = say;
+      tail.textContent = [now.by, done && now.took, done && now.time].filter(Boolean).join(' · ');
     };
     row.settle = (now) => paint(now, true);
     paint(r, false);
-    return row;
-  };
-
-  /* 答过的提问：一行「你的答复」加答案，问的是什么点开再看 */
-  kit.answer = ({ q, options = [], text, time }) => {
-    const picked = text.split('\n');
-    const body = h('div.qa-body', { hidden: true }, h('p', q),
-      options.length > 0 && h('ul', { 'aria-label': '当时的选项' }, options.map((o) => h(`li${picked.includes(o) ? '.on' : ''}`, o))));
-    const more = h('button.sys-more', { type: 'button', 'aria-expanded': 'false', onclick: () => unfold(more, body) }, '查看问答');
-    const row = h('div.qa', h('span.sys-ic', icon('check')),
-      h('div.qa-main', h('div.sys-line', h('b', '你的答复'), more, rt(time), rowActs(copyBtn('复制答案', () => text), delBtn(() => row))), h('p.qa-text', text), body));
     return row;
   };
 
@@ -188,7 +188,7 @@
       <p>找到原因了：到点那一下靠的是内存里的定时器，服务没开着就没有人触发；重新启动时也不会回头看有没有过了点的。</p>
       <p>改了两处：启动时把过了点的捡出来补发；补发的那条带上「补发」和它晚了多久。补了一条回归。</p>` }));
 
-    const a2 = kit.turn({ meta: `${model} · 11/09 14:41 · 5m 15s`, reply: '回复第 1 轮审查的意见' });
+    const a2 = kit.turn({ meta: `${model} · 11/09 14:41 · 5m 15s`, cause: { text: '按第 1 轮审查的意见改', onclick: () => ASH.emit('insp:open', { pane: 'review', round: 1 }) } });
     const foldA2 = kit.fold('读了 2 个文件，改了 3 个，跑了 1 条命令', [
       { verb: '读', text: '`server/src/later-send-recover.ts`' },
       { verb: '读', text: '`server/src/later-send.ts` 第 40–112 行', fields: { 文件: 'server/src/later-send.ts', 行: '40–112' } },
@@ -212,8 +212,10 @@
     ], { time: '7m 2s' });
     a3.body.append(foldA3.btn, foldA3.list, h('div.md', { html: `
       <p>两条都改了，各补了一个测试用例。回归要跑十来分钟，我挂了一个哨兵盯着，跑完会叫醒我；这一轮先停在这里。</p>` }));
+    a3.setLog([[`开始盯：${test.title}`, '15:16'], ['任务暂停，等回归结果', '15:16'], ['审查已预约，这一轮跑完自动开始', '15:17']]);
 
-    const b = kit.turn({ meta: `${model} · 11/09 15:28 · 20s`, reply: true });
+    const b = kit.turn({ meta: `${model} · 11/09 15:28 · 20s`,
+      cause: kit.wake({ from: test.title, lines: [`[输出] ${test.pass} passed, 0 failed (11m 42s)`, '[结束] 命令退出，退出码 0'] }) });
     const foldB = kit.fold('读了 2 个文件，跑了 1 条命令', [
       { verb: '读', text: '`server/src/later-send-recover.ts` 第 18–74 行', fields: { 文件: 'server/src/later-send-recover.ts', 行: '18–74' } },
       { verb: '读', text: '`server/scripts/test-later-send-recover.ts`' },
@@ -228,21 +230,9 @@
       <p>两个场景各加了一个测试用例。临时撤掉对应的修复，用例会失败；恢复后全部通过。</p>
       <p>这次只动了服务端和一行界面文案，没有碰数据库结构。</p>` }));
 
-    const autoRow = kit.auto({ text: '收到 2 条哨兵消息，合并为一次输入', from: test.title, time: '11/09 15:28',
-      lines: [`[输出] ${test.pass} passed, 0 failed (11m 42s)`, '[结束] 命令退出，退出码 0'] });
-    const doneRow = kit.sys({ glyph: 'pulse', text: `不再等「${test.title}」了，它已经跑完`, more: '查看完整内容', time: '11/09 15:28', log: [['理由：结果已经收到，退出码 0', '']] });
+    b.setLog([[`不再等「${test.title}」了，它已经跑完`, '15:28'], ['这一轮跑完，预约的审查开始', '15:28']]);
     const rev3 = rev(3);
-    return {
-      a, foldA, b, foldB, autoRow, doneRow, rev3,
-      nodes: [
-        a.el, rev(1), a2.el, rev(2),
-        kit.user(ASH.data.cur.asks[0][1], ASH.data.cur.asks[0][0]),
-        a3.el,
-        kit.sys({ glyph: 'clock', text: '审查还没开始：任务暂停着，跑完这一轮自动开审', more: '5 条记录', time: '11/09 15:28',
-          log: [['第 2 轮审查没通过，意见已交给执行者', '15:07'], ['开始修复', '15:09'], [`开始盯：${test.title}`, '15:16'], ['任务暂停，等回归结果', '15:16'], ['审查已预约，这一轮跑完自动开始', '15:17']] }),
-        autoRow, b.el, doneRow, rev3,
-      ],
-    };
+    return { a, foldA, b, foldB, rev3, nodes: [a.el, rev(1), a2.el, rev(2), kit.user(ASH.data.cur.asks[0][1], ASH.data.cur.asks[0][0]), a3.el, b.el, rev3] };
   };
 
   ASH.part('feed', {
@@ -281,7 +271,7 @@
       });
       /* 贴着底的时候你点开、收起了哪一块：到它收完（收起要先淡出 120ms）为止每一帧都贴一次底，底下那一行不会被顶出去。没贴底就什么都不动 */
       feed.addEventListener('click', (e) => {
-        if (!stuck || !e.target.closest('.fold, .step > button, .sys-more')) return;
+        if (!stuck || !e.target.closest('.fold, .step > button, .sys-more, .turn-cause, .turn-log, .mile-line, .bubble-quote')) return;
         const until = performance.now() + 180;
         const keep = () => { feed.scrollTop = feed.scrollHeight; if (performance.now() < until) requestAnimationFrame(keep); };
         requestAnimationFrame(keep);
@@ -420,22 +410,25 @@
       };
 
       /* 认领清单条目 */
-      const { autoRow, doneRow, rev3 } = s;
+      const { rev3 } = s;
       feed.dataset.m = 'feed-13';
-      s.b.head.dataset.m = 'feed-1';
+      s.b.head.firstElementChild.dataset.m = 'feed-1';
       s.b.acts.dataset.m = 'feed-2';
       s.foldB.btn.dataset.m = 'feed-8 a11y-2';
-      $('.rt', doneRow).dataset.m = 'feed-3';
-      doneRow.dataset.m = 'feed-5';
+      $('.rt', rev3).dataset.m = 'feed-3';
+      s.b.log.btn.dataset.m = 'feed-5';
       s.foldA.list.dataset.m = 'feed-6';
-      autoRow.firstElementChild.dataset.m = 'feed-7';
-      rev3.dataset.m = 'feed-10';
-      $('.rev-chip', rev3).dataset.m = 'a11y-4';
+      s.b.cause.dataset.m = 'feed-7';
+      $('.mile-text', rev3).dataset.m = 'feed-10';
       /* 悬停才有的东西，点清单时亮 2.6 秒 */
       const peek = (...els) => { for (const el of els) { el.classList.add('is-shown'); setTimeout(() => el.classList.remove('is-shown'), 2600); } };
+      const shut = (btn, box) => { if (btn.getAttribute('aria-expanded') === 'true') unfold(btn, box); };
       ASH.prep['feed-1'] = () => peek($('.rt', s.b.head));
       ASH.prep['feed-2'] = () => peek(s.b.acts);
-      ASH.prep['feed-3'] = () => peek(...$$('.sys .rt, .rev .rt, .auto .rt, .sys .row-acts, .auto .row-acts', feed));
+      ASH.prep['feed-3'] = () => peek(...$$('.mile .rt', feed));
+      /* 回执、起因的原文都是点开才有的：点到哪一条就摊开哪一样，另一样收回去 */
+      ASH.prep['feed-5'] = () => { shut(s.b.cause, $('.cause-body', s.b.body)); if (!s.b.log.btn.matches('[aria-expanded="true"]')) unfold(s.b.log.btn, s.b.log.list); };
+      ASH.prep['feed-7'] = () => { shut(s.b.log.btn, s.b.log.list); if (!s.b.cause.matches('[aria-expanded="true"]')) unfold(s.b.cause, $('.cause-body', s.b.body)); };
       ASH.prep['feed-4'] = () => { feed.scrollTop = Math.max(120, feed.scrollTop - 60); top.classList.remove('is-hidden', 'is-idle'); clearTimeout(idle); idle = setTimeout(rest, 2600); };
       ASH.prep['feed-6'] = () => { s.foldA.toggle(true); const last = s.foldA.list.lastElementChild; if ($('.step-more', last).hidden) unfold($('button', last), $('.step-more', last)); };
       ASH.prep['feed-12'] = ASH.prep['feed-14'] = () => { if (!card) ask({ q: '回归里有一条用例依赖真实时钟，改成假时钟还是放宽断言？', options: ['改成假时钟', '把断言放宽到 ±1 秒'] }); };
@@ -452,7 +445,7 @@
           sizes.disconnect();
           clearTimeout(idle);
           kit.changed = null;
-          for (const id of ['feed-1', 'feed-2', 'feed-3', 'feed-4', 'feed-6', 'feed-12', 'feed-14']) delete ASH.prep[id];
+          for (const id of ['feed-1', 'feed-2', 'feed-3', 'feed-4', 'feed-5', 'feed-6', 'feed-7', 'feed-12', 'feed-14']) delete ASH.prep[id];
         },
       };
     },
