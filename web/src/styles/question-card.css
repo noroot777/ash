@@ -61,8 +61,11 @@
 .task-question-card > footer > span:first-child { margin-right: auto; }
 .task-question-nav { display: inline-flex; align-items: center; gap: 3px; min-height: 28px; border: 1px solid var(--line); border-radius: 7px; padding: 0 9px; background: var(--panel); color: var(--muted); font-size: var(--t-xs); }
 .task-question-nav:hover:not(:disabled) { border-color: var(--line2); color: var(--ink); }
-.task-question-send { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; border: 0; border-radius: 7px; padding: 0 13px; background: var(--cyan); color: white; font-size: 12px; font-weight: var(--w-medium); }
-.task-question-card button:disabled { opacity: .48; cursor: not-allowed; }
+.task-question-send { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; border: 0; border-radius: 7px; padding: 0 13px; background: var(--action); color: var(--on-action); font-size: var(--t-xs); font-weight: var(--w-medium); }
+.task-question-send:hover:not(:disabled) { background: var(--action-hover); }
+/* 能点的一律黑白（a11y-6）：实心键发不出去时还是黑的，只有字和图标淡下去。 */
+.task-question-send:disabled { color: var(--on-action-dim); cursor: not-allowed; }
+.task-question-nav:disabled { opacity: .48; cursor: not-allowed; }
 .task-question-card button:focus-visible { outline-offset: -2px; }
 .task-question-error { margin: 0; padding: 0 14px 10px; color: var(--red); font-size: 12px; overflow-wrap: anywhere; }
 
