@@ -163,8 +163,9 @@ try {
     const page = await open();
     await page.setViewportSize({ width: 1280, height: 800 });
     await waitIds(page, "m-task-a");
-    // 日志也展开：那一段是整页里最长的不可断内容。
-    await page.getByRole("button", { name: "看它的输出" }).click();
+    // 命令和输出都展开：那两段是整页里最长的不可断内容。
+    await page.getByRole("button", { name: "命令", exact: true }).click();
+    await page.getByRole("button", { name: "输出", exact: true }).click();
     await page.locator(".monitor-card__log pre").waitFor();
 
     const geometry = await page.evaluate(() => {
@@ -320,13 +321,14 @@ try {
     // 断线那一下（connected=false 的提交和它的 cleanup：作废代次、掐断在途）先落地，再发 open。
     await settlePage(page);
     await page.evaluate(() => { for (const source of window.__sources) source.onopen?.({}); });
-    await page.locator(".monitor-card__meta").filter({ hasText: "11 条事件" }).waitFor();
+    // 事件数收在「命令」那一块里（hidden，仍在 DOM）：按挂载判，不按可见判。
+    await page.locator(".monitor-card__facts").filter({ hasText: "11 条事件" }).waitFor({ state: "attached" });
 
     releaseFirst();
     // 先出门的那一发要么已被断线掐掉，要么此刻才回来：等它被页面消费完再看。
     await fetchesSettled(page, 0, "先出门、后落地的那份已被页面读完或掐掉");
     assert.match(
-      await page.locator(".monitor-card__meta").first().innerText(),
+      await page.locator(".monitor-card__facts").first().textContent(),
       /11 条事件/,
       "先出门、后落地的那份读到的是旧计数，不许把已经写进去的新计数顶回去",
     );

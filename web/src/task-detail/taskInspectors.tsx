@@ -74,6 +74,7 @@ function MonitorInspectorPane({ context }: { context: TaskInspectorContext }) {
     <MonitorInspector
       monitors={context.monitors}
       blockedReason={monitorBlockedReason(task, { activeReview })}
+      waiting={task.status === "paused"}
     />
   );
 }

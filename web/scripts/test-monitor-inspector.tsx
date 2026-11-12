@@ -69,11 +69,12 @@ function state(monitors: TaskMonitor[], recovery: TaskMonitorsState["recovery"] 
 }
 
 /** 默认是「已确认没有待恢复的事实」——`null` 是另一回事（见下面的第三态）。 */
-const panel = (monitors: TaskMonitor[], blockedReason: string | null = null) =>
+const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, waiting = false) =>
   renderToStaticMarkup(
     <MonitorInspector
       monitors={state(monitors, { pending: false, reasons: [], attempts: 0, exhausted: false })}
       blockedReason={blockedReason}
+      waiting={waiting}
     />,
   );
 
@@ -187,7 +188,16 @@ const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
   assert.match(html, /3 条事件/, "推了多少条事件要看得见——那是花掉的回合数");
   assert.match(html, /停掉哨兵“盯构建日志”/, "在盯的哨兵必须给得出停止入口");
   assert.match(html, /grep --line-buffered ERROR/, "命令原文是判断「它到底在盯什么」的唯一依据");
-  assert.match(html, /看它的输出/, "能回看原始输出才分得出「还没吐」和「过滤条件写错了」");
+  assert.match(html, />输出<\/button>/, "能回看原始输出才分得出「还没吐」和「过滤条件写错了」");
+  // 露在外面的只有四样：盯什么、什么状态、跑了多久、几点起的；命令、目录、事件数收在「命令」里。
+  const meta = html.match(/<p class="monitor-card__meta">([\s\S]*?)<\/p>/)?.[1] ?? "";
+  assert.match(meta, /在盯/, "状态露在外面");
+  assert.match(meta, /起于 /, "起点露在外面");
+  assert.doesNotMatch(meta, /条事件|pid|grep/, "事件数、pid、命令原文不露在外面");
+  assert.match(html, /<div class="monitor-card__details" hidden="">/, "命令那一块默认收着（仍在 DOM 里）");
+  assert.match(html, /在 \/repo 里跑/, "工作目录收在命令那一块里");
+  assert.match(html, />停掉</, "任务没在暂停时，那颗键叫「停掉」");
+  assert.match(panel([base], null, true), />不等了</, "任务停着等哨兵时，那颗键叫「不等了」（任务留在暂停）");
 }
 
 // ── 每张卡都要说得出它是什么时候挂上的 ──────────────────────────────────────
@@ -260,11 +270,11 @@ const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
 {
   const html = panel([projected]);
   assert.match(html, /最终全量回归结果/, "投影的说明照样要露在外面");
-  assert.match(html, /claude 自带/, "出身要标出来——两种卡在列表里是混排的");
+  assert.match(html, /claude 自带 Monitor/, "出身要标出来：两种卡按来源分段，段头写明是谁起的");
   assert.match(html, /只能看不能停/, "要解释清楚它为什么没有停止按钮");
   assert.doesNotMatch(html, /停掉哨兵/, "ash 停不掉它，就不该画一个注定失败的停止按钮");
   assert.doesNotMatch(html, /条事件/, "事件数 ash 根本数不到，画出来只会被读成「过滤写错了」");
-  assert.doesNotMatch(html, /看它的输出/, "它的输出进了智能体自己的会话，ash 这边没有日志可看");
+  assert.doesNotMatch(html, />输出<\/button>/, "它的输出进了智能体自己的会话，ash 这边没有日志可看");
 }
 
 // ── 结束之后那半句要分档说 ──────────────────────────────────────────────────
@@ -333,7 +343,8 @@ const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
 {
   const html = panel([]);
   assert.match(html, /还没有哨兵/, "空态要直说现在没有");
-  assert.match(html, /每吐一行/, "空态顺带解释清楚哨兵是什么，否则这一格对新用户是个谜");
+  // 空态只说一句；「哨兵是什么」收在 + 的悬停提示和表单说明里，不常驻。
+  assert.doesNotMatch(html, /每吐一行/, "空态只说一句，解释不常驻");
   assert.match(html, /手动起一个哨兵/, "没有哨兵时也要留着手动起一个的入口");
   const blocked = panel([], "任务已归档，不能再挂哨兵");
   assert.doesNotMatch(blocked, /手动起一个哨兵/, "归档任务上的哨兵早被收回，不该再给新建入口");

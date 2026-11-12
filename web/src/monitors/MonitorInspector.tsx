@@ -7,7 +7,8 @@ import { useMemo, useRef, useState } from "react";
 import { Plus } from "@phosphor-icons/react";
 import { MONITOR_RECOVERY_LABEL, type MonitorKind, type TaskMonitor } from "@ash/shared/monitor";
 import { InspectorHeadActions } from "../inspector/index.ts";
-import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
+import { useInspectorRequest } from "../inspector/nav.tsx";
+import { InspNone, InspNote, InspSec, InspTool } from "../inspector/parts.tsx";
 import { MonitorCard } from "./MonitorCard.tsx";
 import { MonitorComposer } from "./MonitorComposer.tsx";
 import type { TaskMonitorsState } from "./useTaskMonitors.ts";
@@ -16,16 +17,20 @@ import type { TaskMonitorsState } from "./useTaskMonitors.ts";
  * 分段的顺序与措辞。ash 那组排在前面：它是这一格的主角（能停、有日志、真的会唤醒任务），
  * 内置那组是「也让你看得见」的旁证。
  */
-const MONITOR_GROUPS: readonly { kind: MonitorKind; title: string; hint: string }[] = [
-  { kind: "ash", title: "ash 哨兵", hint: "进程由 ash 起，跨回合、跨重启都活着；能停、能看输出" },
-  { kind: "claude", title: "claude 内置 Monitor", hint: "只读投影：进程在智能体自己那一轮里，停不掉、没有日志，也不会唤醒任务" },
+const MONITOR_GROUPS: readonly { kind: MonitorKind; title: string; hint: string | null }[] = [
+  // ash 那组能停、有输出，按钮和折叠就在卡上，不用再解释一遍。
+  { kind: "ash", title: "ash 哨兵", hint: null },
+  { kind: "claude", title: "claude 自带 Monitor", hint: "只读：进程在智能体自己那一轮里，停不掉、没有输出可看，也不会唤醒任务。" },
 ];
 
 export function MonitorInspector({
   monitors,
   blockedReason,
+  waiting = false,
 }: {
   monitors: TaskMonitorsState;
+  /** 任务这会儿是暂停的：在盯的那几张卡上，停掉的说法换成「不等了」（任务留在暂停）。 */
+  waiting?: boolean;
   /**
    * 不能挂哨兵时的原因（`monitorBlockedReason`，与服务端创建闸同一份判据）；null = 能挂。
    *
@@ -48,7 +53,7 @@ export function MonitorInspector({
   const nextForm = useRef(0);
   const [form, setForm] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState<number | null>(null);
-  const addTip = useHoverTip();
+  const cards = useRef(new Map<string, HTMLElement>());
   /**
    * **按来源分段，不混排**（用户 2026-10-16 拍板）。
    *
@@ -72,25 +77,34 @@ export function MonitorInspector({
   }, [monitors.monitors]);
   const rows = useMemo(() => groups.flatMap((group) => group.rows), [groups]);
 
+  // 会话里那一行「在哨兵格里看」带着哨兵 id 过来：把那张卡滚进视野、焦点放上去。
+  useInspectorRequest("monitors", (params) => {
+    const id = typeof params.monitorId === "string" ? params.monitorId : null;
+    const card = id ? cards.current.get(id) : null;
+    if (!card) return;
+    card.scrollIntoView({ block: "nearest" });
+    card.focus({ preventScroll: true });
+    card.classList.add("is-flash");
+    window.setTimeout(() => card.classList.remove("is-flash"), 1600);
+  });
+
   return (
-    <div className="monitor-inspector">
+    <div className="insp-pane monitor-inspector">
       {canStart && (
         <InspectorHeadActions>
-          <button
-            type="button"
+          <InspTool
+            label="手动起一个哨兵"
+            tip="手动起一个哨兵：一条绑在任务上的长跑命令，由 ash 起，每吐一行就唤醒任务一次。智能体挂的（含 claude 自带的 Monitor）也列在这一格"
             className="monitor-inspector__add"
-            aria-label="手动起一个哨兵"
             aria-expanded={form !== null}
-            {...addTip.anchorProps}
             onClick={() => setForm((current) => (current === null ? ++nextForm.current : null))}
           >
-            <Plus size={13} weight="bold" aria-hidden="true" />
-          </button>
-          <HoverTip at={form !== null ? null : addTip.at}>手动起一个哨兵</HoverTip>
+            <Plus aria-hidden="true" />
+          </InspTool>
         </InspectorHeadActions>
       )}
-      {monitors.error && <p className="monitor-inspector__error" role="alert">{monitors.error}</p>}
-      {blockedReason && <p className="monitor-inspector__blocked">{blockedReason}</p>}
+      {monitors.error && <p className="insp-hint is-bad monitor-inspector__error" role="alert">{monitors.error}</p>}
+      {blockedReason && <div className="monitor-inspector__blocked"><InspNote>{blockedReason}</InspNote></div>}
       {form !== null && (
         <MonitorComposer
           // 重开就是一张新表单：代号一换，上一张的草稿不会被继承过来。
@@ -111,7 +125,7 @@ export function MonitorInspector({
       {/* 「还没读完」要跟「确实没有」分开说：两者都是空面板，但该做的事完全不同（一个等
           一下再看，一个根本没用过哨兵）。有卡片时也要说——那份列表可能只是其中一部分。 */}
       {monitors.recovery?.pending && (
-        <p className="monitor-inspector__pending" role="status">
+        <p className="insp-hint monitor-inspector__pending" role="status">
           历史监听还没读完（{monitors.recovery.reasons.map((reason) => MONITOR_RECOVERY_LABEL[reason]).join("、")}），
           {/* 重试预算用完之后**不能再说「正在自动继续」**——那时定时器已经停了（第 8 轮审查
               不拦项 1）。但也不能说成「已停止」:读这份状态本身就是一次真实请求，它顺手
@@ -125,43 +139,37 @@ export function MonitorInspector({
       )}
       {rows.length === 0
         ? (
+          // 三种空态分开说：还没读完 / **不知道**（恢复状态自己都没读到）/ 确实没有。
+          // 第三句是一句很强的断言（「这个任务没用过哨兵」），拿不到依据时不许说它。
+          //
+          // 「哨兵是什么」那段解释收进 + 的悬停提示和起哨兵的表单里，空态只说一句。
           <div className="monitor-inspector__empty">
-            {/* 三种空态分开说：还没读完 / **不知道**（恢复状态自己都没读到）/ 确实没有。
-                第三句是一句很强的断言（「这个任务没用过哨兵」），拿不到依据时不许说它。 */}
-            <p>
+            <InspNone>
               {monitors.recovery?.pending
                 ? "历史还没读完，先给你看现有的（暂时一条也没有）。"
                 : monitors.recovery === null
                   ? "读不到这个任务的监听恢复状态，所以还不能说它没用过哨兵。"
                   : "这个任务上还没有哨兵。"}
-            </p>
-            <p>
-              哨兵是一条绑在任务上的长跑命令，由 ash 自己起——不在智能体的进程树里，
-              所以它的回合结束、会话结束、server 重启都带不走它。它每吐一行，就把这个任务唤醒一次。
-            </p>
-            {/* 两种来源都要说到：claude 执行器几乎必然用它自带的那个（CLI 的提示词把长等待
-                主动往那边引），用户在这儿只写 start_monitor 的话，会以为面板漏了东西。 */}
-            <p>
-              智能体用 claude 自带的 Monitor 起的，这里也会列出来，但只能看不能停——
-              那种的进程在智能体自己的进程树里。
-            </p>
-            {canStart && <p>智能体可以自己挂（MCP 工具 start_monitor），你也可以从上面那个 + 手动起一个。</p>}
+            </InspNone>
           </div>
         )
         : (
           <div className="monitor-inspector__groups">
             {groups.map((group) => (
-              <section key={group.kind} className="monitor-group">
-                {/* 段头一行把这一组是什么、能拿它怎么办说清楚。只有一组时也照样显示——
-                    那时它回答的是另一个问题：「为什么这几张卡没有停止按钮」。 */}
-                <h4 className="monitor-group__head">
-                  <span className="monitor-group__name">{group.title}</span>
-                  <span className="monitor-group__hint">{group.hint}</span>
-                </h4>
-                <div className="monitor-inspector__list">
+              <section key={group.kind} className="monitor-group" aria-label={group.title}>
+                {/* 段头只说这一组是谁起的。claude 那组多一句：它回答的是「为什么这几张卡没有
+                    停止按钮」，只有一组时也照样显示。 */}
+                <InspSec count={group.rows.length}>{group.title}</InspSec>
+                {group.hint && <p className="insp-hint monitor-group__hint">{group.hint}</p>}
+                <div className="insp-cards monitor-inspector__list">
                   {group.rows.map((monitor) => (
                     <MonitorCard
                       key={monitor.id}
+                      ref={(element) => {
+                        if (element) cards.current.set(monitor.id, element);
+                        else cards.current.delete(monitor.id);
+                      }}
+                      waiting={waiting}
                       monitor={monitor}
                       stopping={monitors.stoppingIds.has(monitor.id)}
                       onStop={(monitorId) => void monitors.stop(monitorId)}
