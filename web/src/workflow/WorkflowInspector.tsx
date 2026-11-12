@@ -8,6 +8,7 @@
 // ① 每站底下那行字来自 railStops()，也就是任务列表里那一格的同一个词；
 // ② 走到哪一站读的是任务身上那个真游标（resolveCursor），不是假进度条，也不是从
 //    stage 猜的——尤其是人工关口那两个真按钮，判据只能是「游标停在这一道上」。
+import { InspKv, InspNone, InspRow, InspSec } from "../inspector/parts.tsx";
 import type { Task } from "@ash/shared";
 import type { WorkflowDef } from "@ash/shared/workflow";
 import { STEP_LABELS, WORKSPACE_LABELS } from "@ash/shared/workflow";
@@ -135,16 +136,8 @@ export function WorkflowInspector({
 
   if (!def) {
     return (
-      <div className="task-inspector" aria-label="工作流">
-        <div className="task-inspector-scroll">
-          <section>
-            <h2>这条线</h2>
-            <p className="task-inspector-note">
-              这个任务身上没有编排。它建于工作流之前，行为跟以前完全一样；
-              之后新建的任务会在创建那一刻把线拷进自己兜里。
-            </p>
-          </section>
-        </div>
+      <div className="insp-pane" aria-label="工作流">
+        <InspNone>这个任务建于工作流之前，身上没有编排，行为跟以前完全一样。</InspNone>
       </div>
     );
   }
@@ -153,25 +146,17 @@ export function WorkflowInspector({
   const verifyStationId = verifyStationAtCursor(task)?.stationId ?? null;
 
   return (
-    <div className="task-inspector" aria-label="工作流">
-      <div className="task-inspector-scroll">
-        <section>
-          <h2>这条线</h2>
-          <div className="task-inspector-row">
-            <span>顺序</span>
-            <div>{workflowSummary(def)}</div>
-          </div>
-          <div className="task-inspector-row">
-            <span>在哪儿干活</span>
-            <div>{WORKSPACE_LABELS[def.workspace]}</div>
-          </div>
-          <p className="task-inspector-note">
-            这是任务创建那一刻拷下来的一份快照。之后在设置里改起手式，不会追着改它。
-          </p>
-        </section>
+    <div className="insp-pane" aria-label="工作流">
+      <section aria-label="这条线">
+        {/* 这是任务创建那一刻拷下来的一份快照：之后在设置里改起手式，不会追着改它。 */}
+        <InspKv>
+          <InspRow label="顺序">{workflowSummary(def)}</InspRow>
+          <InspRow label="工作区">{WORKSPACE_LABELS[def.workspace]}</InspRow>
+        </InspKv>
+      </section>
 
-        <section>
-          <h2>走到哪了</h2>
+      <section aria-label="走到哪了">
+        <InspSec>走到哪了</InspSec>
           <ol className="wf-vrail">
             {stops.map((stop, index) => (
               <Stop
@@ -187,8 +172,7 @@ export function WorkflowInspector({
               />
             ))}
           </ol>
-        </section>
-      </div>
+      </section>
     </div>
   );
 }

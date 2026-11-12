@@ -198,13 +198,28 @@ try {
   assert.equal(await reviewOnly.locator(".insp-rec__body").count(), 0, "再点一次那一行就收起来");
 
   const workflow = page.locator(".workflow-inspector-fixture");
-  const activities = workflow.locator(".free-workflow-generated li");
-  assert.deepEqual(await activities.locator("b").allInnerTexts(), [
-    "任务执行", "Codex 审查 · 逻辑检查", "任务执行", "Codex 审查 · 逻辑检查",
-  ], "任务执行和审查必须按真实时间交替排列，不能合并同名审查");
-  assert.match(await activities.nth(0).locator("small").innerText(), /8\/9.*9 分钟/);
-  assert.equal(await activities.last().locator("svg.is-spinning").count(), 1, "进行中的审查应显示旋转图标");
+  const activities = workflow.locator(".insp-tl > li");
+  const rowTitles = await activities.evaluateAll((items) => items.map((item) => item.querySelector(".insp-row > span")?.textContent?.trim() ?? ""));
+  assert.deepEqual(rowTitles, [
+    "任务执行", "审查 · 第 1 轮", "任务执行 ×2", "审查 · 第 1 轮",
+  ], "任务执行和审查按真实时间交替；相邻的几段任务执行合成一行，审查不合并");
+  assert.match(await activities.nth(0).innerText(), /8\/9[\s\S]*9 分钟/);
+  assert.match(await activities.nth(2).innerText(), /10 分钟/, "合并那一行右边是合计用时");
+  assert.equal(await activities.last().locator(".insp-live").count(), 1, "进行中的审查右边是主色「审查中」");
+  assert.match(await activities.last().getAttribute("class"), /is-live/);
+  assert.match(await activities.nth(1).getAttribute("class"), /is-ok/);
 
+  const merged = activities.nth(2).getByRole("button");
+  assert.equal(await merged.getAttribute("aria-expanded"), "false");
+  assert.equal(await activities.nth(2).locator(".insp-sub li").count(), 0, "合并那一行默认收着");
+  await merged.click();
+  assert.equal(await merged.getAttribute("aria-expanded"), "true");
+  assert.equal(await activities.nth(2).locator(".insp-sub li").count(), 2, "点开是一段一段的");
+  await merged.click();
+  assert.equal(await activities.nth(2).locator(".insp-sub li").count(), 0);
+  assert.equal(await activities.nth(0).getByRole("button").count(), 0, "只有一段的那行不是按钮");
+
+  // 面板外单独渲染（没有「审查」格可去）时，点一轮审查退回左侧抽屉。
   assert.equal(await drawer.count(), 0, "工作流中的审查正文默认也不弹出");
   await activities.nth(1).getByRole("button").click();
   await drawer.waitFor();

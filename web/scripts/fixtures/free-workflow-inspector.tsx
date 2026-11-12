@@ -21,6 +21,7 @@ const state = {
   executions: [
     { id: "execution-1", status: "completed", startedAt: "2026-08-09T00:00:00.000Z", endedAt: "2026-08-09T00:09:00.000Z" },
     { id: "execution-2", status: "completed", startedAt: "2026-08-09T00:20:00.000Z", endedAt: "2026-08-09T00:29:00.000Z" },
+    { id: "execution-2b", status: "completed", startedAt: "2026-08-09T00:29:10.000Z", endedAt: "2026-08-09T00:29:40.000Z" },
   ],
   reviews: [{
     id: "run-def",

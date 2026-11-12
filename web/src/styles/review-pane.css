@@ -227,3 +227,83 @@
     transition: none;
   }
 }
+
+/* 行：时间线里的一条。一行一条，右边是靠右对齐的灰字 */
+.insp-row {
+  display: flex;
+  min-width: 0;
+  min-height: 28px;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  text-align: left;
+}
+
+.insp-row > .insp-meta {
+  margin-left: auto;
+}
+
+button.insp-row.insp-go {
+  width: calc(100% + 16px);
+}
+
+button.insp-row > .insp-meta + .insp-go__chev {
+  margin-left: -2px;
+}
+
+/* 时间线：左边一串小圆点，结论只给点上色；在跑的是主色 */
+.insp-tl {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.insp-tl > li {
+  position: relative;
+  padding-left: 18px;
+}
+
+.insp-tl > li::before {
+  content: "";
+  position: absolute;
+  top: 11px;
+  left: 2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line2);
+}
+
+.insp-tl > li::after {
+  content: "";
+  position: absolute;
+  top: 22px;
+  bottom: -6px;
+  left: 5px;
+  width: 1px;
+  background: var(--line);
+}
+
+.insp-tl > li:last-child::after {
+  display: none;
+}
+
+.insp-tl > li.is-ok::before { background: var(--green); }
+.insp-tl > li.is-bad::before { background: var(--red); }
+.insp-tl > li.is-live::before { background: var(--accent); }
+
+.insp-sub {
+  margin: 0 0 4px;
+  padding: 0;
+  color: var(--muted);
+  list-style: none;
+}
+
+.insp-sub > li {
+  display: flex;
+  min-height: 26px;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+}
