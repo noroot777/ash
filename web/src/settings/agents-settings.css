@@ -1,114 +1,8 @@
-.agent-profiles-card,
 .providers-card {
   overflow: visible;
 }
 
-.agent-profiles-card {
-  background: color-mix(in lch, var(--raised) 34%, var(--panel));
-}
-
-.agent-profile-groups {
-  display: grid;
-  gap: 11px;
-  border-bottom: 1px solid var(--line);
-  padding: 12px;
-  /* 下面那张 profile 表「窄了就横向滚动」的判据挂在这儿：要按**卡片自己的宽度**判，
-     不能按视口 —— 卡片宽度是工作区布局给的（侧栏 176/240 + 内边距），1000px 视口下
-     卡片只有 700 出头，已经比表窄了，而按视口写的断点还没到，表就直接顶穿卡片。 */
-  container-type: inline-size;
-}
-
-.agent-profile-group {
-  --agent-color: #6d685f;
-  position: relative;
-  /* grid 子项默认 min-width:auto，不给 0 的话这张分组卡会被里面的表撑到内容宽度，
-     连同「新增」按钮一起顶到设置卡片外面。 */
-  min-width: 0;
-  overflow: visible;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel);
-  box-shadow: 0 1px 1px rgb(30 28 24 / 3%);
-}
-
-.agent-profile-group::before {
-  position: absolute;
-  z-index: 1;
-  top: 8px;
-  bottom: 8px;
-  left: -1px;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: var(--agent-color);
-  content: "";
-}
-
-.agent-profile-group.is-claude { --agent-color: #a76338; }
-.agent-profile-group.is-codex { --agent-color: #287567; }
-.agent-profile-group.is-antigravity { --agent-color: #665493; }
-.agent-profile-group.is-gemini { --agent-color: #4775a7; }
-.agent-profile-group.is-opencode { --agent-color: #76558a; }
-.agent-profile-group.is-grok { --agent-color: #4f5660; }
-.agent-profile-group.is-kimi { --agent-color: #27758d; }
-.agent-profile-group.is-qwen { --agent-color: #596fa2; }
-
-/* 上面这组品牌色偏深（头像上当字色用），深色底上看不清，深色模式换成同色相的亮一档。 */
-[data-theme="dark"] .agent-profile-group { --agent-color: #a8a39a; }
-[data-theme="dark"] .agent-profile-group.is-claude { --agent-color: #d9915f; }
-[data-theme="dark"] .agent-profile-group.is-codex { --agent-color: #52b3a0; }
-[data-theme="dark"] .agent-profile-group.is-antigravity { --agent-color: #a08fd2; }
-[data-theme="dark"] .agent-profile-group.is-gemini { --agent-color: #7ba8dc; }
-[data-theme="dark"] .agent-profile-group.is-opencode { --agent-color: #b590ca; }
-[data-theme="dark"] .agent-profile-group.is-grok { --agent-color: #9ba3ae; }
-[data-theme="dark"] .agent-profile-group.is-kimi { --agent-color: #58b2cc; }
-[data-theme="dark"] .agent-profile-group.is-qwen { --agent-color: #91a3d8; }
-
-.agent-profile-group-head {
-  display: grid;
-  min-height: 46px;
-  grid-template-columns: 30px minmax(130px, 1fr) minmax(120px, auto);
-  align-items: center;
-  gap: 9px;
-  border-radius: 9px 9px 0 0;
-  background: color-mix(in lch, var(--agent-color) 5%, var(--panel));
-  padding: 7px 10px 7px 12px;
-}
-
-.agent-profile-group-head .settings-agent-avatar {
-  background: color-mix(in lch, var(--agent-color) 15%, var(--panel));
-  color: var(--agent-color);
-}
-
-.agent-profile-group-head > div {
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.agent-profile-group-head b {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: -0.015em;
-}
-
-.agent-profile-group-head small,
-.agent-profile-group-default {
-  overflow: hidden;
-  color: var(--faint);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-profile-group-default {
-  max-width: 230px;
-  justify-self: end;
-}
-
 /* 表单里的输入框和旁边的下拉（components/Select.tsx 的表单档）同高同框。 */
-.agent-profile-create-grid input,
 .provider-form-grid input {
   width: 100%;
   min-width: 0;
@@ -122,7 +16,6 @@
   box-shadow: var(--control-shadow);
 }
 
-.agent-profile-create-grid input:focus-visible,
 .provider-form-grid input:focus-visible {
   outline: 1px solid var(--focus-soft);
 }
@@ -131,12 +24,11 @@
   border-color: var(--accent);
 }
 
-.agent-profile-create-grid label > small,
 .agent-model-control > small,
 .provider-model-field > small {
   overflow: hidden;
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -163,7 +55,7 @@
 }
 /* 「CLI 默认已是 X」比来源说明更值得看(它是唯一的行动线索),所以颜色重一档;但仍然
    可截断 —— 挤到没地方时先保住行尾那颗刷新按钮,86a3f06 修的就是按钮被挤没。 */
-.agent-model-control > small > span.model-behind-default { color: var(--muted); }
+.agent-model-control > small > span.model-behind-default { color: var(--ink); }
 
 .agent-model-control > small.is-error,
 .provider-model-field > small.is-error {
@@ -178,13 +70,13 @@
   align-items: center;
   gap: 2px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--r-sm);
   margin-left: auto;
   background: var(--raised);
-  padding: 1px 5px;
+  padding: 1px 6px;
   color: var(--muted);
-  font-size: 9px;
-  font-weight: 600;
+  font-size: var(--t-xs);
+  font-weight: var(--w-regular);
 }
 .agent-model-control > small > button.model-refresh:hover:not(:disabled) { background: var(--sel-bg); color: var(--ink); }
 .agent-model-control > small > button.model-refresh:disabled { opacity: .55; }
@@ -408,25 +300,6 @@
   display: none;
 }
 
-.agent-profile-foot {
-  border-top: 0;
-}
-
-.agent-profile-foot:has(.agent-profile-create) {
-  display: block;
-  padding: 0;
-}
-
-.agent-profile-foot:has(.agent-profile-create) > span {
-  display: none;
-}
-
-.agent-profile-foot .agent-profile-create {
-  width: 100%;
-  border-bottom: 0;
-}
-
-.agent-profile-create,
 .provider-form {
   display: grid;
   gap: 12px;
@@ -436,13 +309,6 @@
   padding: 14px 14px 14px 11px;
 }
 
-.agent-profile-create-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.agent-profile-create-grid label,
 .provider-form-grid label,
 .provider-model-field {
   display: grid;
@@ -450,7 +316,6 @@
   gap: 4px;
 }
 
-.agent-profile-create-grid label > span,
 .provider-form-grid label > span,
 .provider-protocol-pick > span,
 .provider-model-field > label,
@@ -462,7 +327,6 @@
   text-transform: uppercase;
 }
 
-.agent-profile-create-actions,
 .provider-form-actions {
   display: flex;
   justify-content: flex-end;
@@ -482,36 +346,14 @@
     width: min(480px, calc(100vw - 40px));
     transform: translate(-50%, -50%);
   }
-
-  .agent-profile-create-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 680px) {
-  .agent-profile-groups {
-    gap: 8px;
-    padding: 8px;
-  }
-
-  .agent-profile-group-head {
-    grid-template-columns: 30px minmax(0, 1fr);
-  }
-
-  .agent-profile-group-default {
-    display: none;
-  }
-
-  .agent-profile-create-grid {
-    grid-template-columns: 1fr;
-  }
-
   .agent-arg-token,
   .agent-arg-token.is-new {
     width: 100%;
   }
 
-  .agent-profile-foot,
   .providers-intro {
     align-items: flex-start;
     flex-direction: column;

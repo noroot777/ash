@@ -5,6 +5,7 @@ import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import { cliCatalogNote, useCliModelCatalog } from "../lib/cliModelCatalog.ts";
 import { api } from "../lib/api.ts";
+import { Button } from "../components/ui.tsx";
 
 type RefreshResult = { text: string; error: boolean };
 
@@ -94,38 +95,44 @@ export function ClaudeModelsSettings({ notify }: { notify: (message: string) => 
     notify(result.text);
   };
 
+  // 它是执行器页 claude 那张卡底「模型目录」那一行点开的内容：卡底已经写着标题，这里不再重复，
+  // 一项一行，跟设置页别处的行一个排法。
   return (
     <section className="claude-model-settings" aria-label="Claude 官方账号模型目录">
-      <div className="claude-model-settings-head">
+      <div className="settings-row">
         <div>
-          <b>Claude 官方账号 · 模型目录</b>
           <small>选 opus 等别名时由 CLI 决定具体版本；选完整 ID 时传入指定版本。</small>
-        </div>
-        <div className="claude-model-fetch">
-          <label>
-            <span>自动获取间隔</span>
-            <span className="claude-model-hours"><input type="number" min={1} max={168} step={1}
-              aria-label="Claude 模型目录自动获取间隔（小时）" value={hours}
-              disabled={loading || saving || !canEdit}
-              onChange={(event) => setHours(Number(event.target.value))} /> 小时</span>
-          </label>
-          <button type="button" className="model-refresh"
-            disabled={loading || saving || cli.refreshing || (changed && (!canEdit || !validHours))}
-            onClick={() => void refreshNow()}>{saving ? "保存中…" : cli.refreshing ? "获取中…" : "立即从官方获取"}</button>
+          <small className={cli.catalog?.error ? "is-error" : ""}>{cliCatalogNote(cli.catalog)}</small>
+          {fetchResult && <small className={fetchResult.error ? "is-error" : ""} role="status" aria-live="polite">{fetchResult.text}</small>}
         </div>
       </div>
-      <small className={cli.catalog?.error ? "is-error" : ""}>{cliCatalogNote(cli.catalog)}</small>
-      {fetchResult && <small className={fetchResult.error ? "is-error" : ""} role="status" aria-live="polite">{fetchResult.text}</small>}
-      <label className="claude-model-custom">
-        <span>自己添加完整 ID（每行一个，也可用逗号分隔）</span>
+      <div className="settings-row">
+        <div><b>自动获取间隔</b></div>
+        <span className="claude-model-hours">
+          <input type="number" min={1} max={168} step={1}
+            aria-label="Claude 模型目录自动获取间隔（小时）" value={hours}
+            disabled={loading || saving || !canEdit}
+            onChange={(event) => setHours(Number(event.target.value))} />
+          小时
+        </span>
+        <Button
+          disabled={loading || saving || cli.refreshing || (changed && (!canEdit || !validHours))}
+          onClick={() => void refreshNow()}
+        >
+          {saving ? "保存中…" : cli.refreshing ? "获取中…" : "立即从官方获取"}
+        </Button>
+      </div>
+      <label className="settings-row claude-model-custom">
+        <b>自己添加完整 ID（每行一个，也可用逗号分隔）</b>
         <textarea rows={3} value={models} disabled={loading || saving || !canEdit}
           placeholder={"claude-opus-4-6\nclaude-sonnet-4-6"}
           onChange={(event) => setModels(event.target.value)} />
       </label>
-      <div className="claude-model-settings-foot">
-        <small>{!canEdit ? "多人实例的目录设置由管理员管理" : "官方目录仅提供候选；账号能否使用以实际请求为准。"}</small>
-        <button type="button" disabled={loading || saving || !changed || !canEdit || !validHours}
-          onClick={() => void save()}>{saving ? "保存中…" : "保存目录设置"}</button>
+      <div className="settings-card-foot">
+        <span>{!canEdit ? "多人实例的目录设置由管理员管理" : "官方目录仅提供候选；账号能否使用以实际请求为准。"}</span>
+        <Button disabled={loading || saving || !changed || !canEdit || !validHours} onClick={() => void save()}>
+          {saving ? "保存中…" : "保存目录设置"}
+        </Button>
       </div>
     </section>
   );

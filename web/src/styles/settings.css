@@ -286,27 +286,18 @@
   padding: 10px 12px;
 }
 
+/* CLI 的首字母小方块（执行器卡头、首启向导）。只是认人用的记号，不着品牌色。 */
 .settings-agent-avatar {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: 24px;
+  height: 24px;
+  flex: none;
   place-items: center;
   align-self: center;
-  border-radius: 8px;
-  background: var(--sel-bg);
+  border-radius: var(--r-sm);
+  background: var(--overlay);
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.settings-agent-avatar.is-codex {
-  background: color-mix(in lch, var(--green) 14%, var(--panel));
-  color: color-mix(in lch, var(--green) 72%, var(--ink));
-}
-
-.settings-agent-avatar.is-antigravity {
-  background: color-mix(in lch, var(--violet) 16%, var(--panel));
-  color: color-mix(in lch, var(--violet) 72%, var(--ink));
+  font: var(--w-medium) var(--t-xs) / 1 var(--font-mono);
 }
 
 .settings-agent-copy {
@@ -355,7 +346,6 @@
   font-size: 11px;
 }
 
-.settings-default-tag,
 .settings-paused {
   align-self: center;
   border-radius: 999px;
@@ -400,24 +390,20 @@
   gap: 7px;
 }
 
+/* 「本地已安装」：装着的 CLI 一格一个，左边一颗绿勾（状态色），右边「注册」或「已注册」。 */
 .settings-cli-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0 24px;
+  padding: 0 16px 8px;
 }
 
 .settings-cli-grid article {
   display: flex;
-  min-height: 58px;
+  min-height: 44px;
   align-items: center;
-  gap: 9px;
-  border-right: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  padding: 9px 12px;
-}
-
-.settings-cli-grid article:nth-child(even) {
-  border-right: 0;
+  gap: 10px;
+  padding: 6px 0;
 }
 
 .settings-cli-grid article > div {
@@ -425,14 +411,10 @@
   min-width: 0;
 }
 
-.settings-cli-grid b {
-  font-size: 12px;
-}
-
 .settings-cli-grid small {
   overflow: hidden;
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -445,27 +427,30 @@
 }
 
 .settings-cli-grid article > button {
+  height: 24px;
+  flex: none;
   margin-left: auto;
   border: 0;
-  background: transparent;
-  color: var(--accent);
-  font-size: 11px;
+  border-radius: var(--r-sm);
+  background: var(--panel);
+  padding: 0 10px;
+  color: var(--ink);
+  font-size: var(--t-xs);
+  box-shadow: var(--control-shadow);
+  transition: box-shadow var(--dur-1) var(--ease-out);
 }
+
+.settings-cli-grid article > button:hover:not(:disabled) { box-shadow: var(--control-hover-shadow); }
 
 .settings-cli-state {
   display: grid;
-  width: 24px;
-  height: 24px;
+  width: 16px;
+  flex: none;
   place-items: center;
-  border-radius: 7px;
-  background: var(--raised);
-  color: var(--faint);
+  color: var(--muted);
 }
 
-.settings-cli-state.is-ready {
-  background: var(--green-bg);
-  color: var(--green);
-}
+.settings-cli-state.is-ready { color: var(--green); }
 
 .settings-groups-card {
   overflow: visible;
@@ -596,6 +581,13 @@
   border-radius: 8px;
   background: var(--raised);
   color: var(--muted);
+}
+
+/* 页尾那一句（执行器页的说明只剩这一句）。 */
+.settings-tail {
+  margin: 12px 2px 0;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .settings-muted,

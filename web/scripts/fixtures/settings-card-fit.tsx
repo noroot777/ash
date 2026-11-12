@@ -127,10 +127,8 @@ function Fixture() {
           profiles={profiles}
           providers={providers}
           loading={false}
-          detecting={false}
           detected={null}
           registeringKey={null}
-          onDetect={() => {}}
           onRegister={() => {}}
           onProfileChanged={() => {}}
           onProfileAdded={() => {}}

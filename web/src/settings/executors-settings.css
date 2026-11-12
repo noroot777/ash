@@ -1,138 +1,461 @@
-.agent-profiles-section-head {
+/* 执行器页（设置 → 执行器）。一种 CLI 一张卡：卡头一行 → 一张表 →（claude 才有的）模型目录
+   收成卡底一行。没有彩条、没有卡套卡；颜色只留给状态（默认那颗星、警告行）。
+   「本地已安装」那张卡（AgentDetectionResults）首启向导也复用，向导里的差异在 onboarding.css。 */
+
+/* 一摞卡片。下面那张表「窄了就横向滚动」的判据挂在这儿：按**卡片自己的宽度**判（容器查询），
+   不能按视口 —— 卡片宽度是工作区布局给的（侧栏 + 内边距），1000px 视口下卡片只有 700 出头，
+   已经比表窄了，而按视口写的断点还没到。 */
+.agent-profile-groups {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  container-type: inline-size;
+}
+
+.agent-profiles .settings-muted { padding: 4px 2px; }
+
+/* ---------- 一张 CLI 卡 ---------- */
+.agent-profile-group {
+  /* grid 子项默认 min-width:auto，不给 0 的话这张卡会被里面的表撑到内容宽度，
+     连同「新增」按钮一起顶到页面外。卡里的浮层（CLI 配置覆盖）要伸出卡外，不裁。 */
+  min-width: 0;
+  overflow: visible;
+}
+
+.agent-profile-group-head {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 16px;
+}
+
+.agent-profile-group-head > b {
+  font-family: var(--font-mono);
+  font-weight: var(--w-medium);
+}
+
+.agent-profile-group-head > small,
+.agent-profile-group-default {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-profile-group-default {
+  min-width: 0;
+  max-width: 260px;
+  margin-left: auto;
+}
+
+.agent-profile-group-head .settings-icon-danger {
+  width: 28px;
+  height: 28px;
+}
+
+/* ---------- 表 ---------- */
+.agent-profile-table {
+  min-width: 0;
+  overflow: visible;
+}
+
+.agent-profile-columns,
+.agent-profile-row {
+  display: grid;
+  grid-template-columns:
+    minmax(132px, 1.4fr)
+    minmax(112px, 1fr)
+    minmax(128px, 1.1fr)
+    92px
+    80px
+    112px;
+  align-items: center;
+  column-gap: 4px;
+  padding-inline: 8px;
+}
+
+/* 「CLI 配置」列。这一档设置盖掉的是用户 ~/.claude/settings.json 里的值，所以它既不藏进
+   「更多」、也不缩成一个图标：常显一枚写着当前值的胶囊（没配就写「未覆盖」）。列的有无见
+   AgentProfilesSection。 */
+.agent-profile-table.has-overrides .agent-profile-columns,
+.agent-profile-table.has-overrides .agent-profile-row {
+  grid-template-columns:
+    minmax(124px, 1.3fr)
+    minmax(108px, 1fr)
+    minmax(112px, 1fr)
+    92px
+    76px
+    minmax(108px, 0.9fr)
+    112px;
+}
+
+.agent-profile-columns {
+  min-height: 30px;
+  border-block: 1px solid var(--line);
+  color: var(--muted);
+  font-size: var(--t-xs);
+}
+
+.agent-profile-columns > span {
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.agent-profile-row {
+  position: relative;
+  min-height: 44px;
+}
+
+.agent-profile-row + .agent-profile-row {
+  border-top: 1px solid var(--line);
+}
+
+.agent-profile-identity,
+.agent-profile-cell {
+  min-width: 0;
+}
+
+.agent-profile-name-button,
+.agent-profile-name-input {
+  max-width: 100%;
+  height: 24px;
+  border-radius: var(--r-sm);
+  padding: 0 8px;
+  font-size: var(--t-sm);
+}
+
+.agent-profile-name-button {
+  display: block;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+
+.agent-profile-name-button:hover:not(:disabled) { background: var(--hover-bg); }
+
+.agent-profile-name-input {
+  width: 100%;
+  border: 0;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: var(--control-shadow);
+}
+
+/* 模型格下面那行来源说明（「内置清单 · 刷新」/「CLI 默认已是 X」）跟格子里的字对齐。 */
+.agent-profile-cell .agent-model-control { gap: 0; }
+.agent-profile-cell .agent-model-control > small { padding: 0 8px 4px; }
+
+/* 智能水平那一格跟同排的下拉是同一个紧凑档：无框、24 高、指到才有底色。 */
+.agent-profile-cell .effort-picker { min-width: 0; }
+.agent-profile-cell .effort-picker-trigger {
+  width: 100%;
+  height: 24px;
+  justify-content: space-between;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  padding: 0 4px 0 8px;
+  color: var(--muted);
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.agent-profile-cell .effort-picker-trigger > em {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--t-sm);
+  font-weight: var(--w-regular);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-profile-cell .effort-picker-trigger > svg:last-child { width: 12px; height: 12px; }
+.agent-profile-cell .effort-picker-trigger:hover:not(:disabled),
+.agent-profile-cell .effort-picker-trigger[aria-expanded="true"] { background: var(--hover-bg); }
+.agent-profile-cell .effort-picker-trigger.is-error,
+.agent-profile-cell .effort-picker-trigger.is-error > em { color: var(--red); }
+/* 这一格塞不下解释文字，红色警告态 + 浮层里的说明已经足够。 */
+.agent-profile-cell .effort-picker-warning { display: none; }
+
+/* 行尾那一格：默认那一行常显「默认」，其余动作收在常驻的「更多」里。
+   它粘在右缘 —— 表窄到横向滚动时「更多」一直够得着，不会被滚到看不见的地方。 */
+.agent-profile-actions,
+.agent-profile-actions-heading {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  margin-right: -8px;
+  padding-right: 8px;
+  background: var(--panel);
+}
+
+.agent-profile-actions {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.agent-profile-columns > .agent-profile-actions-heading {
+  align-self: stretch;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin: 0 2px 8px;
+  justify-content: flex-end;
 }
 
-/* Claude 的品牌色（与 agents-settings.css 的 is-claude 同值），深色底上换亮一档。 */
-.claude-model-settings,
-.claude-model-mode-tabs { --claude-tone: #a76338; }
-[data-theme="dark"] .claude-model-settings,
-[data-theme="dark"] .claude-model-mode-tabs { --claude-tone: #d9915f; }
+.settings-default-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--green);
+  font-size: var(--t-xs);
+  white-space: nowrap;
+}
 
-.claude-model-settings {
+.profile-row-more {
   display: grid;
-  gap: 10px;
-  border-top: 1px solid var(--line);
-  background: color-mix(in lch, var(--agent-color, var(--claude-tone)) 3%, var(--panel));
-  padding: 13px 16px 15px;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 
+.profile-row-more:hover:not(:disabled),
+.profile-row-more[aria-expanded="true"] {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+/* 「更多」菜单：和全应用的下拉一个长相、一套进退场（keyframes 在 styles/select.css）。 */
+.profile-row-menu {
+  position: fixed;
+  display: grid;
+  min-width: 200px;
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  padding: 4px;
+  box-shadow: var(--control-shadow), var(--menu-shadow);
+  transform-origin: top right;
+  animation: ui-select-in var(--dur-2) var(--ease-out) both;
+}
+.profile-row-menu.is-up { transform-origin: bottom right; animation-name: ui-select-in-up; }
+.profile-row-menu.is-leaving { pointer-events: none; animation: ui-select-out 120ms var(--ease-in) both; }
+.profile-row-menu.is-up.is-leaving { animation-name: ui-select-out-up; }
+
+.profile-row-menu > button {
+  display: flex;
+  height: 30px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  padding: 0 8px;
+  color: var(--ink);
+  text-align: left;
+  white-space: nowrap;
+}
+.profile-row-menu > button > svg { flex: none; color: var(--muted); }
+.profile-row-menu > button > em {
+  margin-left: auto;
+  padding-left: 16px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  font-style: normal;
+}
+.profile-row-menu > button:hover:not(:disabled),
+.profile-row-menu > button:focus-visible { background: var(--hover-bg); outline: none; }
+.profile-row-menu > button.is-danger,
+.profile-row-menu > button.is-danger > svg { color: var(--red); }
+.profile-row-menu > hr { height: 1px; margin: 4px 0; border: 0; background: var(--line); }
+
+/* 「额外 CLI 参数」从「更多」里打开，挂在那颗按钮下面（ProfileArgsPopover，portal 到 body）。 */
+.agent-profile-args-popover.is-anchored {
+  position: fixed;
+  top: auto;
+  right: auto;
+  transform: none;
+  animation: ui-select-in var(--dur-2) var(--ease-out) both;
+}
+
+/* 行内的静默失效警告（如「1.5x 被额外参数里的 --settings 顶掉」）。跨满整行：速度那一格
+   塞不下一句人话，而缩成一个记号等于要求用户先怀疑它。 */
+.agent-profile-row-warning {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 0 8px 8px;
+  color: var(--amber);
+  font-size: var(--t-xs);
+  line-height: 1.5;
+  /* 补不上 ash MCP 时原因里带着要手工加的那段配置，换行得留着才抄得走。 */
+  white-space: pre-wrap;
+}
+
+/* 「派不出任务」比「某个选项静默失效」更重：前者是这一行现在完全跑不了。 */
+.agent-profile-row-warning.is-blocked { color: var(--red); }
+
+/* 「CLI 配置」那颗常显的胶囊：盖了 CLI 自己的配置时带底色。 */
+.agent-profile-args-control { position: relative; min-width: 0; }
+
+.agent-profile-overrides-summary {
+  display: inline-flex;
+  max-width: calc(100% - 8px);
+  height: 24px;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  white-space: nowrap;
+  box-shadow: inset 0 0 0 1px var(--line);
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.agent-profile-overrides-summary > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-profile-overrides-summary.has-value {
+  background: var(--sel-bg);
+  color: var(--ink);
+  box-shadow: none;
+}
+
+.agent-profile-overrides-summary:hover:not(:disabled),
+.agent-profile-overrides-summary[aria-expanded="true"] {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+/* 窗口被模型窗口截掉（没开 1M）：配了跟没配一样糟，胶囊得一眼看出来。 */
+.agent-profile-overrides-summary.has-value.is-warn {
+  background: var(--amber-bg);
+  color: var(--amber);
+}
+
+.agent-profile-cell .agent-profile-args-control .agent-profile-args-popover { right: 0; }
+
+/* ---------- 卡底的模型目录（claude 才有）：一行，点开再看 ---------- */
+.agent-profile-fold {
+  display: flex;
+  width: 100%;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+  background: transparent;
+  padding: 0 13px 0 16px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  text-align: left;
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.agent-profile-fold[aria-expanded="true"] { border-radius: 0; }
+.agent-profile-fold:hover { background: var(--hover-bg); color: var(--ink); }
+.agent-profile-fold > span { flex: 1; }
+.agent-profile-fold > svg { transition: transform var(--dur-2) var(--ease-out); }
+.agent-profile-fold[aria-expanded="true"] > svg { transform: rotate(90deg); }
+
+.claude-model-settings { border-top: 1px solid var(--line); }
+.claude-model-settings small.is-error { color: var(--red); }
+.claude-model-hours {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+}
+.claude-model-hours input {
+  width: 64px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: var(--panel);
+  padding: 0 10px;
+  color: var(--ink);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  box-shadow: var(--control-shadow);
+}
+.settings-row.claude-model-custom {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 8px;
+}
+.claude-model-custom > b { font-weight: var(--w-regular); }
+.claude-model-custom textarea {
+  width: 100%;
+  min-height: 84px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: var(--panel);
+  padding: 7px 10px;
+  color: var(--ink);
+  font: var(--t-xs) / 1.5 var(--font-mono);
+  resize: vertical;
+  box-shadow: var(--control-shadow);
+}
+
+/* 模型下拉顶上「CLI 原有方式 / 指定完整模型」的分段：选中的那颗浮起来，墨色不用品牌色。 */
 .claude-model-mode-tabs {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 3px;
-  border-bottom: 1px solid var(--line);
-  padding: 5px 6px;
+  gap: 2px;
+  margin-bottom: 4px;
+  border-radius: var(--r-md);
+  background: var(--overlay);
+  padding: 2px;
 }
 .claude-model-mode-tabs button {
   min-width: 0;
+  height: 24px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--r-sm);
   background: transparent;
-  padding: 6px 4px;
+  padding: 0 4px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--t-xs);
   white-space: nowrap;
-  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
+.claude-model-mode-tabs button:hover { color: var(--ink); }
 .claude-model-mode-tabs button[aria-pressed="true"] {
-  background: color-mix(in lch, var(--claude-tone) 13%, var(--panel));
+  background: var(--lifted);
   color: var(--ink);
-  font-weight: 650;
-}
-.claude-model-mode-tabs button:focus-visible { outline: 2px solid var(--claude-tone); outline-offset: -2px; }
-
-.claude-model-settings-head,
-.claude-model-settings-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  box-shadow: var(--surface-shadow);
 }
 
-.claude-model-settings-head > div:first-child { display: grid; gap: 4px; }
-.claude-model-settings-head b { font-size: 12px; }
-.claude-model-settings small { color: var(--muted); font-size: 10px; line-height: 1.5; }
-.claude-model-settings small.is-error { color: var(--red); }
-.claude-model-fetch { display: flex; flex: 0 0 auto; align-items: end; gap: 9px; }
-.claude-model-fetch label, .claude-model-custom { display: grid; align-content: start; gap: 6px; min-width: 0; font-size: 10px; color: var(--muted); }
-.claude-model-settings button {
-  flex: 0 0 auto;
-  border: 1px solid var(--line2);
-  border-radius: 6px;
-  background: var(--raised);
-  padding: 5px 9px;
-  color: var(--ink);
-  font-size: 10px;
-  cursor: pointer;
-}
-.claude-model-settings button:disabled { opacity: .55; cursor: default; }
-.claude-model-settings input,
-.claude-model-settings textarea {
-  min-width: 0;
-  border: 1px solid var(--line2);
-  border-radius: 6px;
-  background: var(--raised);
-  padding: 7px 8px;
-  color: var(--ink);
-  font: 11px var(--font-mono);
-}
-.claude-model-settings textarea { width: 100%; resize: vertical; }
-.claude-model-hours { display: flex; align-items: center; gap: 6px; }
-.claude-model-hours input { width: 72px; }
-.claude-model-settings :is(button, input, textarea):focus-visible { outline: 2px solid var(--claude-tone); outline-offset: 2px; }
-
-@media (max-width: 650px) {
-  .claude-model-settings-head, .claude-model-settings-foot { align-items: flex-start; flex-wrap: wrap; }
-  .claude-model-fetch { flex-wrap: wrap; }
-}
-
-.settings-section .agent-profiles-section-head h2 {
-  margin: 0;
-}
-
-.agent-profiles-section-head > div,
-.agent-profile-group-actions {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.agent-detection-results {
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in lch, var(--green-bg) 30%, var(--panel));
-}
-
+/* ---------- 「本地已安装」：检测之后，装着的 CLI 一格一个 ---------- */
 .agent-detection-results-head {
   display: flex;
-  min-height: 34px;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  border-bottom: 1px solid var(--line);
-  padding: 9px 12px 7px;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
 }
-
-.agent-detection-results-head b {
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.agent-detection-results-head small {
-  color: var(--faint);
-  font-size: 9px;
-}
-
-.agent-detection-results .settings-muted {
-  margin: 0;
-}
-
-.agent-detection-results .settings-cli-grid article:nth-last-child(-n + 2) {
-  border-bottom: 0;
-}
+.agent-detection-results-head b { font-weight: var(--w-medium); }
+.agent-detection-results-head small { color: var(--muted); font-size: var(--t-xs); }
+.agent-detection-results .settings-muted { margin: 0; }
 
 .agent-cli-registered {
   display: inline-flex;
@@ -140,7 +463,7 @@
   gap: 4px;
   margin-left: auto;
   color: var(--green);
-  font-size: 10px;
+  font-size: var(--t-xs);
   white-space: nowrap;
 }
 
@@ -151,482 +474,24 @@
   white-space: normal;
 }
 
-.agent-profile-group-head {
-  min-height: 40px;
-  grid-template-columns: 26px minmax(100px, auto) minmax(110px, 1fr) auto;
-  gap: 8px;
-  padding: 5px 8px 5px 10px;
-}
-
-.agent-profile-group-head .settings-agent-avatar {
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  font-size: 10px;
-}
-
-.agent-profile-group-head > .agent-profile-group-copy {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.agent-profile-group-head > .agent-profile-group-actions {
-  align-items: center;
-}
-
-.agent-profile-group-actions {
-  justify-self: end;
-}
-
-.agent-profile-group-add {
-  height: 24px;
-  padding-inline: 6px;
-  font-size: 9px;
-}
-
-.agent-profile-group-actions .settings-icon-danger {
-  width: 24px;
-  height: 24px;
-}
-
-.agent-profile-name-button {
-  min-width: 0;
-  overflow: hidden;
-  border: 0;
-  background: transparent;
-  padding: 2px 0;
-  color: var(--ink);
-  font-size: 10px;
-  font-weight: 600;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-profile-name-button:hover {
-  color: var(--accent);
-}
-
-.agent-profile-name-input {
-  width: 100%;
-  min-width: 38px;
-  height: 25px;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  background: var(--canvas);
-  padding: 0 5px;
-  color: var(--ink);
-  font-size: 10px;
-  font-weight: 600;
-  outline: 0;
-}
-
-.agent-profile-table {
-  /* min-width:0：grid 子项默认 min-width:auto，表格会把自己撑到内容的最小宽度
-     （带「CLI 配置」列时是 722px），连带整张分组卡一起顶出设置卡片，末尾那几列和
-     分组头上的「新增」按钮被卡片切掉且滚不出来。给 0 之后窄下来才轮得到下面那段
-     容器查询里的横向滚动接手。 */
-  min-width: 0;
-  overflow: visible;
-}
-
-.agent-profile-columns,
-.agent-profile-row {
-  display: grid;
-  grid-template-columns:
-    minmax(150px, 1.65fr)
-    minmax(96px, 0.75fr)
-    minmax(120px, 1.15fr)
-    78px
-    60px
-    100px;
-  align-items: center;
-  gap: 6px;
-  padding-inline: 9px;
-}
-
-.agent-profile-columns {
-  min-height: 22px;
-  border-top: 1px solid var(--line);
-  background: color-mix(in lch, var(--raised) 38%, var(--panel));
-  color: var(--faint);
-  font-size: 8px;
-  font-weight: 650;
-  letter-spacing: 0.045em;
-  text-transform: uppercase;
-}
-
-.agent-profile-actions-heading {
-  padding-right: 4px;
-  text-align: right;
-}
-
-.agent-profile-row {
-  position: relative;
-  min-height: 36px;
-  border-top: 1px solid color-mix(in lch, var(--line) 82%, transparent);
-  padding-block: 3px;
-}
-
-.agent-profile-row:hover,
-.agent-profile-row:focus-within {
-  background: color-mix(in lch, var(--raised) 40%, transparent);
-}
-
-/* 行内的静默失效警告(如「1.5x 被额外参数里的 --settings 顶掉」)。跨满整行:速度那
-   一格只有 56–60px,一句人话塞不进去,而缩成一个记号等于要求用户先怀疑它。 */
-.agent-profile-row-warning {
-  grid-column: 1 / -1;
-  margin: 0;
-  padding: 2px 0 3px;
-  color: var(--amber);
-  font-size: 10px;
-  line-height: 1.5;
-  /* 补不上 ash MCP 时原因里带着要手工加的那段配置，换行得留着才抄得走。 */
-  white-space: pre-wrap;
-}
-
-/* 「派不出任务」比「某个选项静默失效」更重：前者是这一行现在完全跑不了。 */
-.agent-profile-row-warning.is-blocked {
-  color: var(--red);
-}
-
-.agent-profile-identity {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-}
-
-.agent-profile-identity small {
-  overflow: hidden;
-  flex: none;
-  max-width: 78px;
-  color: var(--faint);
-  font-size: 8px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-profile-identity small::before {
-  margin-right: 6px;
-  content: "·";
-}
-
-.agent-profile-cell,
-.agent-profile-args-control {
-  min-width: 0;
-}
-
-/* 执行器表是紧凑行：统一下拉在这里缩一号（高 26 / 字号 11），但仍是同一套
-   .ui-select-trigger，四个格子彼此一致，也跟别处的下拉是同一种东西。 */
-.agent-profile-cell .ui-dropdown-trigger {
-  height: 26px;
-  border-radius: 6px;
-  background: transparent;
-  padding: 0 6px;
-  color: var(--muted);
-  font-size: 11px;
-  box-shadow: none;
-}
-
-.agent-profile-cell .ui-dropdown-trigger.is-mono > span:first-child {
-  font-size: 11px;
-}
-
-.agent-profile-cell .ui-dropdown-trigger > span.is-placeholder {
-  font-size: 11px;
-}
-
-.agent-profile-cell .ui-dropdown-trigger:hover:not(:disabled) {
-  background: color-mix(in lch, var(--raised) 62%, transparent);
-  color: var(--ink);
-  box-shadow: none;
-}
-
-.agent-profile-cell .ui-dropdown-trigger[aria-expanded="true"] {
-  background: var(--canvas);
-  color: var(--ink);
-  box-shadow: inset 0 0 0 1px var(--line2);
-}
-
-.agent-profile-cell .agent-model-control {
-  /* 原来 gap:0 把说明行贴死在下拉上;CLI 刷新行出现后需要一点点间距才读得出来。 */
-  gap: 2px;
-}
-
-/* 强度那一格跟同排的下拉长一个样：这一列只有 78px，边框和 34px 高度会顶出格子。 */
-.agent-profile-cell .effort-picker {
-  min-width: 0;
-}
-
-.agent-profile-cell .effort-picker-trigger {
-  width: 100%;
-  height: 26px;
-  border-color: transparent;
-  border-radius: 6px;
-  background: transparent;
-  padding: 0 6px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.agent-profile-cell .effort-picker-trigger > em {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 11px;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-profile-cell .effort-picker-trigger:hover:not(:disabled) {
-  border-color: transparent;
-  background: color-mix(in lch, var(--raised) 62%, transparent);
-  color: var(--ink);
-}
-
-.agent-profile-cell .effort-picker-trigger[aria-expanded="true"] {
-  border-color: transparent;
-  background: var(--canvas);
-  color: var(--ink);
-  box-shadow: inset 0 0 0 1px var(--line2);
-}
-
-.agent-profile-cell .effort-picker-trigger.is-error {
-  border-color: var(--red);
-  color: var(--red);
-}
-
-/* 这一格塞不下解释文字，红色警告态 + 浮层里的说明已经足够。 */
-.agent-profile-cell .effort-picker-warning {
-  display: none;
-}
-
-.agent-profile-actions {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 2px;
-}
-
-.agent-profile-hover-action,
-.agent-profile-default:not(.is-current) {
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(1px);
-  transition: opacity 120ms ease, transform 120ms ease;
-}
-
-.agent-profile-row:hover .agent-profile-hover-action,
-.agent-profile-row:hover .agent-profile-default,
-.agent-profile-row:focus-within .agent-profile-hover-action,
-.agent-profile-row:focus-within .agent-profile-default {
-  opacity: 1;
-  pointer-events: auto;
-  transform: none;
-}
-
-.agent-profile-default {
-  display: flex;
-  min-width: 24px;
-  justify-content: center;
-}
-
-.agent-profile-default.is-current .settings-default-tag {
-  display: inline-flex;
-  height: 20px;
-  align-items: center;
-  gap: 3px;
-  padding: 0 5px;
-  font-size: 8px;
-}
-
-.agent-profile-default-action,
-.agent-profile-actions .settings-icon-danger,
-.agent-profile-args-summary {
-  display: grid;
-  width: 24px;
-  height: 24px;
-  place-items: center;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  padding: 0;
-  color: var(--faint);
-}
-
-.agent-profile-default-action:hover,
-.agent-profile-args-summary:hover,
-.agent-profile-args-summary[aria-expanded="true"] {
-  background: var(--raised);
-  color: var(--accent);
-}
-
-.agent-profile-default-action:focus-visible,
-.agent-profile-args-summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.agent-profile-args-control {
-  position: relative;
-}
-
-/* 「CLI 配置」列。这一档设置盖掉的是用户 ~/.claude/settings.json 里的值，所以它
-   既不藏进 hover、也不缩成一个图标：常显一枚写着当前值的胶囊（没配就写「未覆盖」），
-   一眼能看出哪几个 profile 动过别人的配置。列的存在与否见 AgentProfilesSection。 */
-.agent-profile-table.has-overrides .agent-profile-row,
-.agent-profile-table.has-overrides .agent-profile-columns {
-  grid-template-columns:
-    minmax(140px, 1.5fr)
-    minmax(92px, 0.7fr)
-    minmax(112px, 1.05fr)
-    72px
-    56px
-    minmax(96px, 0.7fr)
-    100px;
-}
-
-/* 基础样式里那个 right: -66px 是按最右那列的图标按钮调的；这颗胶囊在自己的一列里，
-   右对齐胶囊本身就够，不要蹭到隔壁列去。 */
-.agent-profile-cell .agent-profile-args-control .agent-profile-args-popover {
-  right: 0;
-}
-
-.agent-profile-overrides-summary {
-  display: flex;
-  width: 100%;
-  height: 24px;
-  align-items: center;
-  gap: 4px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--canvas);
-  padding: 0 7px;
-  color: var(--faint);
-  font-size: 10px;
-}
-
-.agent-profile-overrides-summary.has-value {
-  border-color: color-mix(in lch, var(--accent) 45%, var(--line));
-  background: var(--accent-soft);
-  color: var(--ink);
-}
-
-.agent-profile-overrides-summary > span {
-  overflow: hidden;
-  flex: 1;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-profile-overrides-summary:hover,
-.agent-profile-overrides-summary[aria-expanded="true"] {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.agent-profile-overrides-summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.agent-profile-args-summary {
-  position: relative;
-  text-align: left;
-}
-
-.agent-profile-args-summary > span {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-
-.agent-profile-args-summary.has-value::after {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 4px;
-  height: 4px;
-  border: 1px solid var(--panel);
-  border-radius: 999px;
-  background: var(--accent);
-  content: "";
-}
-
-.agent-profile-actions .agent-profile-args-popover {
-  right: 0;
-}
-
-.agent-profile-delete {
-  width: 24px;
-  height: 24px;
-}
-
-/* 表比卡片宽时改成横向滚动。判据是**卡片的宽度**（容器查询，容器是
-   .agent-profile-groups），不是视口宽度：视口 1000px 时卡片就已经只有 700 出头，
-   按视口写的断点那会儿还没生效，表被卡片切掉且滚不出来。730 = 带「CLI 配置」列
-   时这张表的最小宽度（722）再留一点余量。 */
+/* 表比卡片宽时改成横向滚动（行尾那一格粘在右缘，见上）。730 = 带「CLI 配置」列时这张表的
+   最小宽度再留一点余量。表一旦成了滚动容器，格子里绝对定位的「CLI 配置」浮层会被裁掉，
+   所以同一档里它改成屏幕居中（agents-settings.css 里同一个 @container 730）。 */
 @container (max-width: 730px) {
-  .agent-profile-table {
-    overflow-x: auto;
-  }
-
+  .agent-profile-table { overflow-x: auto; }
   .agent-profile-columns,
-  .agent-profile-row {
-    min-width: 650px;
-  }
-
-  .agent-profile-actions .agent-profile-args-popover {
-    right: auto;
-  }
+  .agent-profile-row { min-width: 680px; }
+  .agent-profile-table.has-overrides .agent-profile-columns,
+  .agent-profile-table.has-overrides .agent-profile-row { min-width: 760px; }
 }
 
 @media (max-width: 680px) {
-  .agent-profiles-section-head {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .agent-profile-group-head {
-    grid-template-columns: 26px minmax(0, 1fr) auto;
-  }
-
-  .agent-profile-group-actions {
-    grid-column: 3;
-  }
-
-  .agent-detection-results .settings-cli-grid article:nth-last-child(2) {
-    border-bottom: 1px solid var(--line);
-  }
-}
-
-@media (hover: none), (max-width: 680px) {
-  .agent-profile-hover-action,
-  .agent-profile-default:not(.is-current) {
-    opacity: 1;
-    pointer-events: auto;
-    transform: none;
-  }
+  .agent-profile-group-default { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-profile-hover-action,
-  .agent-profile-default:not(.is-current) {
-    transition: none;
-  }
-}
-
-/* 窗口被模型窗口截掉（没开 1M）：配了跟没配一样糟，胶囊得一眼看出来。 */
-.agent-profile-overrides-summary.has-value.is-warn {
-  border-color: color-mix(in lch, var(--amber) 45%, var(--line));
-  background: color-mix(in lch, var(--amber) 8%, var(--canvas));
-  color: var(--amber);
+  .profile-row-menu,
+  .profile-row-menu.is-leaving,
+  .agent-profile-args-popover.is-anchored { animation-duration: 1ms; }
+  .agent-profile-fold > svg { transition: none; }
 }

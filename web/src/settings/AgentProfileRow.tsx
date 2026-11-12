@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider } from "@ash/shared";
 import { hasCliConfigOverrides, cliSpeedOverrideConflict } from "@ash/shared/cli-overrides";
-import { Star, Trash } from "@phosphor-icons/react";
-import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
+import { Star } from "@phosphor-icons/react";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
+import { Select, type SelectOption } from "../components/Select.tsx";
 import { EffortPicker } from "../components/EffortPicker.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
@@ -10,11 +11,11 @@ import {
   providerProtocolForAgent,
   providersForAgent,
 } from "./agentProviderRules.ts";
-import { ProfileArgsControl } from "./ProfileArgsControl.tsx";
 import { ProfileOverridesControl } from "./ProfileOverridesControl.tsx";
+import { ProfileRowMenu } from "./ProfileRowMenu.tsx";
 import { ProviderModelInput, type ClaudeModelMode } from "./ProviderModelInput.tsx";
 
-const SPEED_CHOICES: DropdownOption[] = [
+const SPEED_CHOICES: SelectOption<"standard" | "fast">[] = [
   { value: "standard", label: "标准" },
   { value: "fast", label: "1.5x" },
 ];
@@ -40,6 +41,7 @@ export function AgentProfileRow({
   const [effortOpen, setEffortOpen] = useState(false);
   const [nameDraft, setNameDraft] = useState(profile.name);
   const cancelNameCommit = useRef(false);
+  const renameTip = useHoverTip();
   const providerOptions = providersForAgent(profile.type, providers);
   const provider = providers.find((candidate) => candidate.id === profile.providerId);
   const protocol = providerProtocolForAgent(profile.type);
@@ -49,8 +51,8 @@ export function AgentProfileRow({
 
   // 供应商候选：官方账号 + 本类型协议匹配的供应商；当前选的那家如果协议已经不匹配
   // （改过供应商协议），仍要留在列表里，否则下拉显示空白，看着像「没设过」。
-  const providerChoices = useMemo<DropdownOption[]>(() => {
-    const rows: DropdownOption[] = [{
+  const providerChoices = useMemo<SelectOption[]>(() => {
+    const rows: SelectOption[] = [{
       value: "",
       label: protocol ? "CLI 官方账号" : "暂不支持",
       detail: protocol ? "不接第三方供应商" : "",
@@ -117,7 +119,7 @@ export function AgentProfileRow({
   return (
     <>
       <article className="agent-profile-row" role="row">
-        <div className="agent-profile-identity">
+        <div className="agent-profile-identity" role="cell">
           {editingName ? (
             <input
               className="agent-profile-name-input"
@@ -140,19 +142,23 @@ export function AgentProfileRow({
               }}
             />
           ) : (
-            <button
-              type="button"
-              className="agent-profile-name-button"
-              disabled={busy}
-              title="点击编辑名称"
-              onClick={() => setEditingName(true)}
-            >
-              {profile.name}
-            </button>
+            <>
+              <button
+                type="button"
+                className="agent-profile-name-button"
+                disabled={busy}
+                {...renameTip.anchorProps}
+                onClick={() => { renameTip.hide(); setEditingName(true); }}
+              >
+                {profile.name}
+              </button>
+              <HoverTip at={renameTip.at}>点击编辑名称</HoverTip>
+            </>
           )}
         </div>
-        <div className="agent-profile-cell">
-          <Dropdown
+        <div className="agent-profile-cell" role="cell">
+          <Select
+            size="compact"
             label={`${profile.name} 的供应商`}
             value={profile.providerId ?? ""}
             options={providerChoices}
@@ -163,7 +169,7 @@ export function AgentProfileRow({
             onChange={(providerId) => void patch({ providerId: providerId || null, model: "", reasoningEffort: "" })}
           />
         </div>
-        <div className="agent-profile-cell">
+        <div className="agent-profile-cell" role="cell">
           <ProviderModelInput
             type={profile.type}
             provider={provider}
@@ -181,7 +187,7 @@ export function AgentProfileRow({
             }}
           />
         </div>
-        <div className="agent-profile-cell">
+        <div className="agent-profile-cell" role="cell">
           <EffortPicker
             type={profile.type}
             model={profile.model ?? null}
@@ -194,21 +200,21 @@ export function AgentProfileRow({
             onChange={(reasoningEffort) => void patch({ reasoningEffort })}
           />
         </div>
-        <div className="agent-profile-cell">
-          <Dropdown
+        <div className="agent-profile-cell" role="cell">
+          <Select
+            size="compact"
             label={`${profile.name} 的速度`}
             value={profile.speed ?? "standard"}
             options={SPEED_CHOICES}
             disabled={busy || profile.type === "antigravity"}
-            filterable={false}
-            onChange={(speed) => void patch({ speed: speed as "standard" | "fast" })}
+            onChange={(speed) => void patch({ speed })}
           />
         </div>
         {/* 覆盖 CLI 自身配置的那一档**自己占一列**，不进右边那堆 hover 才现身的图标：
             它盖掉的是用户自己配置文件里的值，看不见就等于「明明改了别人的配置却没说」。
             表头那一格由 AgentProfilesSection 按同一个判据渲染，两边必须同进同出。 */}
         {hasCliConfigOverrides(profile.type) && (
-          <div className="agent-profile-cell">
+          <div className="agent-profile-cell" role="cell">
             <ProfileOverridesControl
               profileName={profile.name}
               type={profile.type}
@@ -229,46 +235,27 @@ export function AgentProfileRow({
             />
           </div>
         )}
-        <div className="agent-profile-actions">
-          <div className="agent-profile-hover-action">
-            <ProfileArgsControl
-              profileName={profile.name}
-              value={profile.extraArgs ?? []}
-              disabled={busy}
-              onSave={async (extraArgs) => {
-                const saved = await patch({ extraArgs });
-                if (saved) notify(`${profile.name} 的 CLI 参数已保存`);
-                return saved;
-              }}
-            />
-          </div>
-          <div className={`agent-profile-default${profile.isDefault ? " is-current" : ""}`}>
-            {profile.isDefault ? (
-              <span className="settings-default-tag">
-                <Star size={10} weight="fill" aria-hidden="true" />默认
-              </span>
-            ) : (
-              <button
-                type="button"
-                className="agent-profile-default-action"
-                disabled={busy}
-                title="设为默认执行器"
-                aria-label={`将 ${profile.name} 设为默认执行器`}
-                onClick={() => void patch({ isDefault: true })}
-              >
-                <Star size={13} aria-hidden="true" />
-              </button>
-            )}
-          </div>
-          <button
-            className="settings-icon-danger agent-profile-delete agent-profile-hover-action"
-            type="button"
-            disabled={busy}
-            onClick={() => setConfirmDelete(true)}
-            aria-label={`删除 ${profile.name}`}
-          >
-            <Trash size={13} aria-hidden="true" />
-          </button>
+        {/* 行尾这一格粘在表格右缘（窄到横向滚动时也够得着）：默认的那一行常显「默认」，
+            其余动作收在常驻的一颗「更多」里。 */}
+        <div className="agent-profile-actions" role="cell">
+          {profile.isDefault && (
+            <span className="settings-default-tag">
+              <Star size={12} weight="fill" aria-hidden="true" />默认
+            </span>
+          )}
+          <ProfileRowMenu
+            profileName={profile.name}
+            extraArgs={profile.extraArgs ?? []}
+            isDefault={!!profile.isDefault}
+            busy={busy}
+            onSaveArgs={async (extraArgs) => {
+              const saved = await patch({ extraArgs });
+              if (saved) notify(`${profile.name} 的 CLI 参数已保存`);
+              return saved;
+            }}
+            onMakeDefault={() => void patch({ isDefault: true })}
+            onDelete={() => setConfirmDelete(true)}
+          />
         </div>
         {/* 「选了 1.5x，其实被自己那条 --settings 顶掉了」这类静默失效必须在行里看得见。
             整行跨列显示：速度那一格只有 56px，塞不下一句人话，而缩成一个记号等于要求

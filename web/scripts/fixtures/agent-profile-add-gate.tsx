@@ -2,6 +2,7 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { AgentExecutorProfile } from "@ash/shared";
 import { AgentProfilesSection } from "../../src/settings/AgentProfilesSection.tsx";
+import { Button } from "../../src/components/ui.tsx";
 import type { DetectedCli } from "../../src/lib/api.ts";
 import "../../src/styles/global.css";
 
@@ -40,14 +41,14 @@ function Fixture() {
   const [notices, setNotices] = useState<string[]>([]);
   return (
     <main style={{ width: 900, margin: "24px auto" }}>
+      {/* 「检测本地智能体」在真页面上是页标题右边那颗页级动作（ExecutorsSettings）。 */}
+      <Button onClick={() => setDetected(detectedClis)}>检测本地智能体</Button>
       <AgentProfilesSection
         profiles={profiles}
         providers={[]}
         loading={false}
-        detecting={false}
         detected={detected}
         registeringKey={null}
-        onDetect={() => setDetected(detectedClis)}
         onRegister={() => {}}
         onProfileChanged={() => {}}
         onProfileAdded={() => {}}

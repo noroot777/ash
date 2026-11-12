@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider } from "@ash/shared";
+import { MagnifyingGlass } from "@phosphor-icons/react";
+import { Button } from "../components/ui.tsx";
 import { refreshAgentAvailability } from "../lib/agentAvailability.ts";
 import { api, type DetectedCli } from "../lib/api.ts";
 import { AgentProfilesSection } from "./AgentProfilesSection.tsx";
@@ -85,20 +87,19 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
   return (
     <>
       <header className="settings-heading">
-        <div>
-          <h1>执行器</h1>
-          <p>配置实际调用的 CLI 身份、运行位置、模型供应商与默认覆盖。</p>
-        </div>
+        <div><h1>执行器</h1></div>
+        <Button disabled={detecting} onClick={() => void detect()}>
+          <MagnifyingGlass size={14} aria-hidden="true" />
+          {detecting ? "检测中…" : "检测本地智能体"}
+        </Button>
       </header>
 
       <AgentProfilesSection
         profiles={profiles}
         providers={providers}
         loading={loading}
-        detecting={detecting}
         detected={detected}
         registeringKey={registeringKey}
-        onDetect={() => void detect()}
         onRegister={(cli) => void register(cli)}
         onProfileChanged={changeProfile}
         onProviderChanged={providerChanged}

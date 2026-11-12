@@ -16,7 +16,7 @@ const MIN_WIDTH = 200;
  * 浮层 portal 到 body 后脱离了触发器所在的堆叠上下文：触发器长在对话框、弹层里时，
  * 浮层得压过那一层，否则坐标对了、画面却被遮罩盖住。
  */
-function layerAbove(anchor: HTMLElement): number {
+export function layerAbove(anchor: HTMLElement): number {
   let zIndex = 60;
   for (let element: HTMLElement | null = anchor; element; element = element.parentElement) {
     const own = Number.parseInt(window.getComputedStyle(element).zIndex, 10);

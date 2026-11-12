@@ -203,6 +203,7 @@ export function ProviderModelInput({
     <div className="agent-model-control">
       <div className="model-effort-row">
         <Dropdown
+          size={compact ? "compact" : "form"}
           label={provider ? `模型 · ${provider.name}` : "模型"}
           value={claudeOfficial && selectionMode !== savedMode ? "" : value}
           options={options}
