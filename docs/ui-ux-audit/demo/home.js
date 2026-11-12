@@ -265,8 +265,8 @@
     };
   }
 
-  /* 应用栏：类型标 + 标题，照现状一条 */
-  const bar = (kind, title, ...rest) => h('header.bar', {}, h('span.kind', kind), h('b.cut', title), rest);
+  /* 应用栏：一条，只有标题。现状标题前面还有一颗类型标（「项目」「新建」），说的和标题是同一件事，和任务头一样不画 */
+  const bar = (title, ...rest) => h('header.bar', {}, h('b.cut', title), rest);
 
   /* 两面共用的键盘：⌘/ 开帮助；Esc 在没有浮层和确认框开着时交给这一面（C 新建由侧栏管）。
      对照清单点到 home-4 时先把帮助打开（已经开着就不动）；离开这一面时一并收掉 */
@@ -298,7 +298,7 @@
         h('ul', {}, todo.slice(0, 6).map(([t, [dot, why]]) => h('li', {}, h('button.go', { type: 'button', onclick: () => { ASH.emit('task:open', { id: t.id }); ASH.go('#/task'); } },
           h(`i.dot.${dot}`), h('span.cut.grow', t.title), h('span.why', why), h('span.when.num', t.when)))))) : null;
       main.append(h('div.sv-home', {},
-        bar('项目', ASH.data?.project ?? 'harness', h('span.grow'), h('span.count.num', `${tasks.length} 项任务`)),
+        bar(ASH.data?.project ?? 'harness', h('span.grow'), h('span.count.num', `${tasks.length} 项任务`)),
         h('div.scroll', {}, h('div.col', {}, cmp.el, list))));
       cmp.focus();
       return listen(cmp);
@@ -314,7 +314,7 @@
       const wipe = h('button.btn.quiet', { type: 'button', hidden: true, onclick: () => cmp.clear() }, '清空草稿');
       const cmp = composer({ compact: false, mark: 'home-2', onsubmit: () => ASH.go('#/task'), onchange: () => { wipe.hidden = !cmp?.dirty(); } });
       main.append(h('div.sv-home.sv-new', {},
-        bar('新建', '新建任务', h('span.proj.cut', ASH.data?.project ?? 'harness'), h('span.grow'), wipe,
+        bar('新建任务', h('span.proj.cut', ASH.data?.project ?? 'harness'), h('span.grow'), wipe,
           h('button.btn.quiet', { type: 'button', onclick: close }, '取消 Esc')),
         h('div.scroll', {}, h('div.col', {}, cmp.el))));
       cmp.focus();
