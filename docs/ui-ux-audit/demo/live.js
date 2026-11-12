@@ -1,11 +1,11 @@
 /* 执行中（部件 live）：把一轮从发出到落定演一遍。数据按 ash 真实的粒度来——
    正文是「攒够约 40 字」才来一块，工具只有一条「开始」、没有「结束」——动效都落在前端能做的那一侧：
    一行进行条（流光 + 用时，做完原地落定成过去式）、匀速放字 + 淡入、同一时刻只有一个「活的」信号。
-   这一轮跟着任务走，不跟着页面：切到别的面它照常往下跑（侧栏那一行照样变），回来接着看。
+   剧本在 live-scripts.js。这一轮跟着任务走，不跟着页面：切到别的面它照常往下跑（侧栏那一行照样变），回来接着看。
    对外：ASH.parts.live = { running, play(name, say), stop(), retry(), accept(), destroy() }，name 是 run / ask / fail / slow / watch / agents；
    报告页隔着 iframe 递 { ash: 'play', name } 也能起一轮（正跑着的那一轮连同它留下的半截一起撤掉），{ ash: 'stop' } 是停；
    嵌在报告里时，等你答复那一刻往外递 { ash: 'title', waiting }，报告拿它改自己的标签页标题。
-   发 run:state { running }（同时发 run:start / run:end）、agents:spawn（这一轮派出一个子智能体，右侧面板那一格接）、task:status { id, status, why }、
+   发 run:state { running }（同时发 run:start / run:end）、agents:spawn（这一轮派出一个子智能体）、watch:hang / watch:wake（挂上一个哨兵、被它叫醒一次；这三样右侧面板的那两格接）、task:status { id, status, why }、
    usage { turn, tokens, ctx, files, add, del, elapsedMs, commit? }（turn 是这一轮的用量，其余是跑完之后的总数，ctx 是上下文还剩百分之几）；
    听 reply:send / reply:stop / reply:steer（回复框）、task:act（任务头的重试 / 运行）、review:start / review:done（审查那一行在会话里起、落）。 */
 (() => {
@@ -23,120 +23,28 @@
     return el;
   };
 
-  /* 「读了 3 个文件，改了 1 个，跑了 1 条命令」：读、改按对象去重；相邻两段同一种东西时后一段省掉名词 */
+  /* 「读了 3 个文件，改了 1 个，跑了 1 条命令，等了 2 次哨兵」：读、改按对象去重；相邻两段同一种东西时后一段省掉名词。
+     哨兵那半句总在最后、不占前三样的位置——这一轮为什么这么久，多半就在它身上。只挂上、还没等的，说「挂了 N 个哨兵」 */
   const KINDS = [['读', '个', '文件'], ['搜', '次', ''], ['改', '个', '文件'], ['跑', '条', '命令'], ['看网页', '个', '网页'], ['派', '个', '子智能体']];
+  const SENTRY = ['挂', '等'];
   function summarize(steps) {
     if (!steps.length) return '想了一会儿';
     if (steps.length === 1) return `${steps[0].verb}了 ${plain(steps[0].text)}`;
+    const work = steps.filter((s) => !SENTRY.includes(s.verb));
+    const [hung, waits] = SENTRY.map((verb) => steps.filter((s) => s.verb === verb).length);
     const parts = KINDS.map(([verb, unit, noun]) => {
-      const mine = steps.filter((s) => s.verb === verb);
+      const mine = work.filter((s) => s.verb === verb);
       return { verb, unit, noun, n: noun === '文件' ? new Set(mine.map((s) => s.text)).size : mine.length };
     }).filter((p) => p.n);
-    const rest = parts.slice(3).reduce((sum, p) => sum + p.n, 0) + steps.filter((s) => !KINDS.some(([verb]) => verb === s.verb)).length;
+    const rest = parts.slice(3).reduce((sum, p) => sum + p.n, 0) + work.filter((s) => !KINDS.some(([verb]) => verb === s.verb)).length;
     const said = parts.slice(0, 3).map((p, i, all) => `${p.verb}了 ${p.n} ${p.unit}${i && all[i - 1].noun === p.noun ? '' : p.noun}`);
-    return said.join('，') + (rest ? `，另有 ${rest} 步` : '');
+    return [...said, rest && `另有 ${rest} 步`, waits ? `等了 ${waits} 次哨兵` : hung && `挂了 ${hung} 个哨兵`].filter(Boolean).join('，');
   }
   const thinkWord = (ms) => (ms >= 45000 ? '想了很久' : ms >= 15000 ? '还在想' : '在想');
 
   const cur = ASH.data.cur;
-  const [HEAD, PREV] = cur.commits;
-  const SQUASH = 'b7e2a94';
-  const TEST = { verb: '跑', text: cur.test.name, fields: { 命令: cur.test.cmd, 目录: 'server', 时限: '10 分钟' } };
-  const SCRIPTS = {
-    run: { say: '把这两条修复合成一个提交，再跑一遍回归。', events: [
-      { think: 2400 },
-      { tool: { verb: '读', text: '`server/src/later-send-recover.ts`' }, ms: 900 },
-      { tool: { verb: '读', text: '`server/scripts/test-later-send-recover.ts`' }, ms: 1100 },
-      { tool: { verb: '跑', text: '`git log --oneline -3`', fields: { 命令: 'git log --oneline -3', 目录: '.' } }, ms: 1200 },
-      { text: `两条修复现在是两个提交：\`${PREV[0]}\` 和 \`${HEAD[0]}\`。我把它们压成一个，说明里写清各自对应哪条审查意见，然后重跑回归。` },
-      { tool: { verb: '跑', text: '`git reset --soft HEAD~2`' }, ms: 1100 },
-      { tool: { verb: '跑', text: '`git commit`', fields: { 命令: 'git commit -m "补发前重新核对：撤回的不发，时间回拨不重发"', 目录: '.' } }, ms: 1200 },
-      { tool: { verb: '写', text: '`docs/later-send.md`' }, ms: 1000 },
-      { tool: TEST, ms: 3400 },
-      { think: 1400 },
-      { text: `合成了一个提交 \`${SQUASH}\`：**补发前重新核对，撤回的不发、时间回拨不重发**。\n\n回归测试 ${cur.test.pass} 条全部通过，补发的规则顺手记进了 \`docs/later-send.md\`。改动没有超出这两条意见的范围，可以直接验收。` },
-      { end: { turn: 41800, files: 1, add: 12, del: 3, ctx: 3, commit: { hash: SQUASH, text: '补发前重新核对：撤回的不发，时间回拨不重发', squash: 2 } } },
-    ] },
-    ask: { say: '回归偶尔会挂，看一下是不是用例本身的问题。', events: [
-      { think: 1800 },
-      { tool: { verb: '读', text: '`server/scripts/test-later-send-recover.ts`' }, ms: 1200 },
-      { tool: { verb: '搜', text: '「Date.now」于 `server/scripts`', fields: { 查找: 'Date.now', 范围: 'server/scripts' } }, ms: 1000 },
-      { text: '有一条用例依赖真实时钟：它等 50 毫秒后断言「已经过点」，机器一忙就会差几毫秒。' },
-      { ask: { q: '这条用例改成假时钟，还是把断言放宽？', options: ['改成假时钟', '把断言放宽到 ±1 秒'] } },
-      { think: 1200 },
-      { tool: { verb: '改', text: '`server/scripts/test-later-send-recover.ts`' }, ms: 1300 },
-      { tool: TEST, ms: 2400 },
-      { text: '按你说的改好了，连跑 20 遍没有再挂。' },
-      { end: { turn: 18600, files: 0, add: 8, del: 3, ctx: 2 } },
-    ] },
-    fail: { say: '再跑一遍回归。', events: [
-      { think: 1500 },
-      { tool: TEST, ms: 3200 },
-      { fail: 1 },
-    ] },
-    slow: { say: '补发还有没有别的漏网的情况？仔细想想。', events: [
-      { think: 17000 },
-      { text: '想了一圈，还剩一条：任务被接力到另一台机器时，待发送里的定时消息没有跟过去。这条我单独开一个任务记下来。' },
-      { end: { turn: 9200, files: 0, add: 0, del: 0, ctx: 1 } },
-    ] },
-    /* 中途挂一个哨兵等结果：等的那一会儿回合不收口，哨兵那一行自己走着表；等到了，同一回合接着往下说 */
-    watch: { say: '把回归连跑三遍，看还会不会偶尔挂。', events: [
-      { think: 1600 },
-      { tool: { verb: '读', text: '`server/scripts/test-later-send-recover.ts`' }, ms: 1000 },
-      { tool: { verb: '跑', text: `挂一个哨兵盯${cur.test.name}连跑三遍`, fields: { 命令: `for i in 1 2 3; do ${cur.test.cmd} || break; done`, 目录: 'server', 时限: '30 分钟' } }, ms: 1100 },
-      { text: '连跑三遍要半个小时左右，我挂了一个哨兵盯着，跑完接着说。' },
-      { watch: { name: `${cur.test.title} ×3`, ms: 7000, exit: 0, lines: [`[输出] 第 1 遍：${cur.test.pass} passed`, `[输出] 第 2 遍：${cur.test.pass} passed`, `[输出] 第 3 遍：${cur.test.pass} passed`, '[结束] 命令退出，退出码 0'] } },
-      { think: 1200 },
-      { tool: { verb: '读', text: '`server/logs/later-send-test.log`' }, ms: 1000 },
-      { text: `三遍都过了，每遍 ${cur.test.pass} 条。之前偶尔挂的那一条是端口被占，和补发的逻辑没有关系。` },
-      { end: { turn: 14800, files: 0, add: 0, del: 0, ctx: 1 } },
-    ] },
-    /* 派三个子智能体分头查：会话里是三步「派」，各自在做什么、带回了什么在右边「子智能体」那一格（agents:spawn） */
-    agents: { say: '补发还会不会漏别的入口？分头查一下。', events: [
-      { think: 1500 },
-      { tool: { verb: '派', text: '子智能体：查接力到别的机器时待发送跟不跟', spawn: { title: '查接力到别的机器时待发送跟不跟', kind: 'Explore', model: 'haiku-4-5', ms: 6400,
-        acts: ['在搜「later_messages」', '在读 server/src/handoff.ts', '在读 server/src/later-send-store.ts'],
-        input: '任务接力到另一台机器时，待发送里的定时消息有没有跟过去？看接力打包了哪些东西。只读代码，不要改。',
-        result: '没有跟过去。接力只打包了会话和工作区，待发送里的定时消息留在原来那台机器上；到点时那台机器要是关着，这几条就不会发。' } }, ms: 500 },
-      { tool: { verb: '派', text: '子智能体：查任务归档时待发送怎么处理', spawn: { title: '查任务归档时待发送怎么处理', kind: 'Explore', model: 'haiku-4-5', ms: 4200,
-        acts: ['在搜「archive」', '在读 server/src/archive.ts'],
-        input: '任务被归档时，它名下还没发的定时消息怎么处理？会不会归档以后还发出去，或者再也发不出去。只读代码，不要改。',
-        result: '不会漏。归档时会把这个任务名下没发的定时消息一并撤回，之后的补发也会跳过撤回的。' } }, ms: 500 },
-      { tool: { verb: '派', text: '子智能体：查改了系统时区以后会不会重发', spawn: { title: '查改了系统时区以后会不会重发', kind: 'Explore', model: 'haiku-4-5', ms: 5200,
-        acts: ['在读 server/src/later-send.ts', '在读 server/src/later-send-recover.ts', '在跑 时区换算的小脚本'],
-        input: '改了系统时区以后，定时消息会不会提前、推迟或者重发一遍？只读代码，可以跑只读的小脚本验证。',
-        result: '不会。原定时间存的是不带时区的时刻，换时区不影响先后；补发那一笔记录按消息去重，不会发第二遍。' } }, ms: 7200 },
-      { think: 1300 },
-      { text: '三路都查完了，漏的只有一处：**任务接力到另一台机器时，待发送里的定时消息没有跟过去。**归档和换时区都没有问题。\n\n这一处不在这次的范围里，我没有动。要修的话单开一个任务。' },
-      { end: { turn: 22600, files: 0, add: 0, del: 0, ctx: 2 } },
-    ] },
-    /* 「重试」跑的那一轮：没有新的气泡，接着上一轮做；回合头名字后面写着「重试」 */
-    again: { events: [
-      { think: 1200 },
-      { tool: TEST, ms: 2800 },
-      { text: `这次过了，${cur.test.pass} 条全部通过。上一次是测试端口被别的进程占着，和这次的改动没有关系。` },
-      { end: { turn: 6400, files: 0, add: 0, del: 0, ctx: 1 } },
-    ] },
-    /* 你点了「引导会话」：上一回合就地收住，这一回合接着你刚说的话做 */
-    steer: { events: [
-      { think: 1600 },
-      { tool: { verb: '读', text: '`server/src/later-send-recover.ts`' }, ms: 1000 },
-      { text: '收到，按你刚说的来。刚才那一步我先放下了，做到一半的改动没有提交。' },
-      { tool: TEST, ms: 2200 },
-      { text: `调整完了，回归 ${cur.test.pass} 条全部通过。` },
-      { end: { turn: 12400, files: 0, add: 4, del: 1, ctx: 1 } },
-    ] },
-    /* 审查没通过、这一趟还没到头：意见直接交给执行者，没有你的气泡；回合头名字后面写着它是照哪一轮的意见改 */
-    fix: { events: [
-      { think: 1400 },
-      { tool: { verb: '读', text: '`server/scripts/test-later-send-recover.ts`' }, ms: 1000 },
-      { tool: { verb: '改', text: '`server/scripts/test-later-send-recover.ts`' }, ms: 1200 },
-      { tool: TEST, ms: 2600 },
-      { text: `补上了「连着重启两次」这一种，回归 ${cur.test.pass + 1} 条全部通过。` },
-      { end: { turn: 15200, files: 0, add: 21, del: 0, ctx: 2 } },
-    ] },
-  };
-  const PREP = { 'run-1': 'run', 'run-2': 'run', 'run-3': 'run', 'run-4': 'run', 'run-5': 'run', 'run-6': 'run', 'run-7': 'ask', 'run-8': 'fail' };
+  const after = (minutes) => new Date(Date.now() + minutes * 6e4).toTimeString().slice(0, 5);
+  const { SCRIPTS, PREP } = ASH.liveScripts;
 
   /* 行内的 `代码` 和 **着重** 拆开：代码整颗出，其余一个字一个字放 */
   function atoms(text) {
@@ -223,13 +131,29 @@
     strip.said = text;
     strip.pending = setTimeout(() => { strip.shownAt = performance.now(); swapLabel(strip, text); }, Math.max(0, strip.shownAt + 1000 - performance.now()));
   }
+  /* 等哨兵是进行条的第三种说法（在想 / 正在做什么 / 在等哨兵）：它没在动，所以字上没有流光；后面是等了多久，再后面是最迟等到几点。
+     on = false 是被叫醒了：同一行换回「在想」接着走 */
+  function waiting(strip, on, text, until) {
+    clearTimeout(strip.pending);
+    strip.thinking = !on;
+    strip.said = text;
+    strip.since = strip.shownAt = performance.now();
+    strip.btn.classList.toggle('is-wait', on);
+    strip.label.classList.toggle('shim', !on);
+    strip.time.classList.remove('is-in');
+    if (strip.label.textContent !== text) swapLabel(strip, text);
+    strip.until?.remove();
+    strip.until = on && until ? h('span.live-until.num', `最迟 ${until}`) : null;
+    if (strip.until) strip.time.after(strip.until);
+  }
   /* 落定是一拍：流光停，旧句和用时按原来的颜色一起淡出；150ms 后同一行换成过去式（或者你给的那句话），
      cls（失败的红）在换字的那一刻才加上，then 里是要和新句一起进场的东西（「重试」） */
   function settle(strip, text, cls, then) {
     clearTimeout(strip.pending);
-    strip.btn.classList.remove('is-live');
+    strip.btn.classList.remove('is-live', 'is-wait');
     strip.label.classList.remove('shim');
     strip.time.classList.remove('is-in');
+    strip.until?.remove();
     ASH.swap(strip.label, text ?? summarize(strip.steps), { row: strip.btn });
     const land = () => { strip.time.remove(); if (cls) strip.btn.classList.add(cls); then?.(); };
     if (ASH.reduced()) land(); else setTimeout(land, 150);
@@ -273,7 +197,8 @@
       r.strip = null;
     };
     const md = h('div.md');
-    const begin = () => { giveWay(); r.turn.body.append(md); r.flat.push(md); r.prose.push(md); claim(md, 'run-4'); };
+    /* 被哨兵叫醒过的回合：新的一段正文一出来，它前面的东西（上一段正文也在内）就并成一行 */
+    const begin = () => { giveWay(); r.turn.body.append(md); r.flat.push(md); r.prose.push(md); claim(md, 'run-4'); if (r.woke) compact(md); };
     if (ASH.reduced()) {
       /* 减少动效：等这一段到齐，整段一次出现；到齐之前进行条照常在 */
       await sleep(plan.at(-1)[0]);
@@ -316,7 +241,7 @@
     run.cause = null;
     turn.el.classList.add('is-live');
     Object.assign(run, { turn, strip: null, flat: [], prose: [], steps: [], t0: performance.now() });
-    run.s0 = run.t0;   /* 这一段从哪一刻算起：哨兵把一个回合隔成几段，每段各收各的 */
+    run.s0 = run.t0;   /* 进行条后面的用时从哪一刻算起：平时是回合开头；等哨兵时是开始等的那一刻，被叫醒以后是叫醒的那一刻 */
     feed.append(enter(turn.el));
   }
 
@@ -361,6 +286,7 @@
       r.steps.push(ev.tool);
       strip.add(ev.tool);
       if (ev.tool.spawn) ASH.emit('agents:spawn', ev.tool.spawn);
+      if (ev.tool.hang) { r.hang = { ...ev.tool.hang, until: after(ev.tool.hang.limit) }; ASH.emit('watch:hang', ev.tool.hang); }
       feed.follow();
       await sleep(ev.ms);
     } else if (ev.text) {
@@ -389,19 +315,29 @@
       await sleep(350);
       openTurn();
     } else if (ev.watch) {
-      /* 挂了哨兵：前面这一段先收成一行，回合不收口。等的时候只有哨兵那一行是活的；等到了它原地落定，同一回合接着往下 */
-      tidy();
-      Object.assign(r, { flat: [], prose: [], steps: [] });
-      const row = kit.watch({ name: ev.watch.name });
-      r.turn.body.append(enter(row.el));
-      claim(row.btn, 'feed-7');
-      feed.follow();
-      const began = performance.now();
-      const ticking = setInterval(() => { row.time.textContent = ASH.dur(performance.now() - began); row.time.classList.add('is-in'); }, 250);
-      const took = () => ASH.dur(performance.now() - began);
-      try { await sleep(ev.watch.ms); } catch (why) { row.settle({ took: took(), stopped: true }); throw why; } finally { clearInterval(ticking); }
-      row.settle({ took: took(), exit: ev.watch.exit, at: '刚刚', lines: ev.watch.lines });
+      /* 等哨兵：进行条换成「在等哨兵「…」」，这一步记在它名下（点开那一层里是活的一行）。回合不收口。
+         被叫醒 = 这一步落定、同一行接着往下走；它再开口时，前面的东西并成一行（compact） */
+      const w = ev.watch;
+      const said = `在等哨兵「${w.name}」`;
+      const strip = r.strip ?? openStrip(said);
+      const row = kit.watch({ name: w.name, until: r.hang?.until, then: r.hang?.then });
+      const stepped = { verb: '等', text: `哨兵「${w.name}」` };
+      strip.steps.push(stepped);
+      r.steps.push(stepped);
+      if (strip.open) row.el.classList.add('enter');
+      strip.put(row.el);
       r.s0 = performance.now();
+      waiting(strip, true, said, r.hang?.until);
+      feed.follow();
+      const took = () => ASH.dur(performance.now() - r.s0);
+      const ticking = setInterval(() => { row.tail.textContent = took(); }, 250);
+      try { await sleep(w.ms); } catch (why) { row.settle({ took: took(), stopped: true }); throw why; } finally { clearInterval(ticking); }
+      row.settle({ took: took(), exit: w.exit, lines: w.lines });
+      ASH.emit('watch:wake', { title: w.name, lines: w.lines, exit: w.exit });
+      r.s0 = performance.now();
+      r.woke = true;
+      waiting(strip, false, '在想');
+      feed.follow();
     } else if (ev.fail) {
       /* 进行条原地落定成红色的一句；退出码收在点开的那一层。「重试」不挂在会话里：它在任务头上，是一颗图标 */
       const strip = r.strip ?? openStrip('这一轮异常结束');
@@ -429,28 +365,39 @@
     if (r?.waiting) ASH.parts.feed?.ask?.({ ...r.ask, instant, onanswer: (said) => r.answer?.(said, true) });
   }
 
+  /* 把一串节点收进一行「执行过程」，放在 before 前面：步骤照搬，夹在中间的正文变成过程说明，原来那几行摘要不要了 */
+  function pack(nodes, steps, before, time) {
+    const fold = kit.fold(summarize(steps), [], { time });
+    for (const node of nodes) {
+      if (node.classList.contains('md')) { node.classList.add('said'); node.removeAttribute('data-m'); fold.put(node); }
+      else if (node.classList.contains('steps')) { fold.put(...node.children); node.remove(); }
+      else node.remove();
+    }
+    if (before) before.before(enter(fold.btn), fold.list); else run.turn.body.append(enter(fold.btn), fold.list);
+    claim(fold.btn, 'run-5');
+    return fold;
+  }
+  /* 被哨兵叫醒以后说的每一段话，都把它前面的东西并成一行（本来就只有一行的不动）。
+     于是不管被叫醒多少次，回合里摊着的最多三样——之前的一行、最近说的那段话、正在走的进行条 */
+  function compact(keep) {
+    const r = run;
+    const at = r.flat.indexOf(keep);
+    if (at < 3) return;
+    const fold = pack(r.flat.slice(0, at), r.steps, keep);
+    r.flat = [fold.btn, fold.list, ...r.flat.slice(at)];
+  }
   /* 回合收口：最后一段正文之前的东西收成一行。收起不带动画——它是系统替你收的；收完的那一行是淡入的，回合尾的操作淡入一次 */
-  /* 把这一段里最后一段正文之前的东西收成一行（哨兵把一个回合隔成几段时，每段各收一次） */
   function tidy() {
     const r = run;
     if (r.strip) settle(r.strip);
     const final = r.prose.at(-1);
     const hidden = r.flat.filter((node) => node !== final);
-    const total = ASH.dur(performance.now() - r.s0);
+    const total = ASH.dur(performance.now() - r.t0);
     if (hidden.length === 2 && hidden[0].classList.contains('fold')) {
       /* 前面本来就只有一行「执行过程」：它已经是摘要了，原样留着，只补上用时 */
       hidden[0].append(h('time.rt', total));
       claim(hidden[0], 'run-5');
-    } else if (hidden.length) {
-      const fold = kit.fold(summarize(r.steps), [], { time: total });
-      for (const node of hidden) {
-        if (node.classList.contains('md')) { node.classList.add('said'); node.removeAttribute('data-m'); fold.put(node); }
-        else if (node.classList.contains('steps')) { fold.put(...node.children); node.remove(); }
-        else node.remove();
-      }
-      if (final) final.before(enter(fold.btn), fold.list); else r.turn.body.append(enter(fold.btn), fold.list);
-      claim(fold.btn, 'run-5');
-    }
+    } else if (hidden.length) pack(hidden, r.steps, final, total);
   }
   function collapse() {
     const r = run;

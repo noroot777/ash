@@ -263,9 +263,9 @@
       paint();
       return k;
     }
-    function end(k, how) {
+    function end(k, how, code = null) {
       if (k.state !== 'run') return;
-      Object.assign(k, { state: how, ms: performance.now() - k.t0 }, how === 'done' ? { code: 0, events: k.events + 1, out: [...k.out, ...PASSED] } : {});
+      Object.assign(k, { state: how, ms: performance.now() - k.t0, code });
       if (k === auto) auto = null;
       k.paint();
       paint();
@@ -306,9 +306,17 @@
       if (!can && !form.hidden) toggle(false);
       c.setActs('watch', can ? [addBtn] : []);
     };
-    c.on('run', (on) => { if (on && !auto) auto = start(TEST); });   // 它跑起来就挂一条盯回归
+    /* 会话里那一轮挂上的哨兵在这里是一张卡：它每叫醒一次，卡上多几行输出；带着退出码来的那一次，它就跑完了 */
+    ASH.on('watch:hang', ({ title, cmd } = {}) => { auto = start({ title, cmd, dir: D.dir }); });
+    ASH.on('watch:wake', ({ lines = [], exit } = {}) => {
+      if (!auto) return;
+      const k = auto;
+      k.out.push(...lines);
+      k.events += 1;
+      if (exit == null) k.paint(); else { end(k, 'done', exit); k.paint(); }
+    });
     c.on('status', (now) => {
-      if (ENDED.includes(now.status)) for (const k of cards.filter((x) => x.state === 'run')) end(k, now.status === 'done' && k === auto ? 'done' : 'stop');
+      if (ENDED.includes(now.status)) for (const k of cards.filter((x) => x.state === 'run')) end(k, 'stop');
       gate();
     });
     gate();

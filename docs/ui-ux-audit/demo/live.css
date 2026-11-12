@@ -8,7 +8,11 @@
 .live-time::before { content: "· "; }
 .live-time:empty { display: none; }
 
-/* 异常结束：同一行落定成红色的一句（红是换字那一刻才上的）。「重试」在回复框上面那一行 */
+/* 在等哨兵的时候，用时后面再跟半句「最迟几点」 */
+.live-until { color: var(--faint); white-space: nowrap; }
+.live-until::before { content: "· "; }
+
+/* 异常结束：同一行落定成红色的一句（红是换字那一刻才上的）。「重试」在任务头上，是一颗图标 */
 .fold.is-failed, .fold.is-failed:hover, .fold.is-failed > .i { color: var(--red); }
 
 /* 放字：新放出来的那几个字淡入，别的什么都不动。没有光标 */

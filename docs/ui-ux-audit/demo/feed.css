@@ -80,12 +80,6 @@ button.turn-cause:hover, button.turn-cause[aria-expanded="true"] { color: var(--
 .fold.is-flat { cursor: default; }
 .fold.is-flat:hover, .fold.is-flat:active { background: none; color: var(--muted); }
 .fold.is-flat > .i { opacity: 0; }
-/* 哨兵那一行：和「执行过程」同一个写法，行首是哨兵的图标（不跟着点开转）。还在等的时候不能点；没等到好结果的，图标是红的 */
-.watch-row > .fold { display: flex; width: fit-content; }
-.fold.watch[aria-expanded="true"] > .i { transform: none; }
-.fold.watch.is-flat > .i { opacity: 1; }
-.watch-row.bad > .fold > .i { color: var(--red); }
-.watch-row > .cause-body > .sys-more { margin-top: 6px; }
 /* 点开的那一块：高度一帧到位，内容淡入；收起先淡出再撤掉。会话流里不做高度动画，贴底才不会跟它抢 */
 /* 一串步骤是逐行来的：前六行隔 45ms 依次出现（--i 由 feed.js 给），整段不超过 400ms */
 .step-more, .step-more > pre, .sys-log, .cause-body, .bubble-opts, .steps > * { animation: unfold var(--dur-2) var(--ease-out) backwards; }
@@ -99,6 +93,11 @@ button.turn-cause:hover, button.turn-cause[aria-expanded="true"] { color: var(--
 .step > button:hover, .step > button[aria-expanded="true"] { color: var(--ink); }
 .step > button .i { width: 13px; height: 13px; color: var(--faint); }
 .step > button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 等哨兵的那一步：名字后面跟着等了多久、等到了什么（还在等时是走着的表）。没等到好结果的，图标是红的 */
+.step-tail { flex: none; color: var(--faint); font-style: normal; white-space: nowrap; }
+.step.wait.bad > button .i { color: var(--red); }
+.step.wait > .step-more > p { color: var(--muted); line-height: 1.6; }
+.step.wait > .step-more > .sys-more { display: inline-block; margin-top: 6px; }
 .step code { padding: 0 4px; border-radius: 4px; background: var(--raised); color: var(--ink); font-size: var(--t-xs); }
 .step-note { display: flex; align-items: center; min-height: 26px; color: var(--muted); font-size: var(--t-xs); }
 .step-more { padding: 2px 0 8px 21px; font-size: var(--t-xs); }
