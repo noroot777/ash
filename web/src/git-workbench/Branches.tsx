@@ -193,7 +193,7 @@ export function Branches({
           onChange={(event) => setSearch(event.target.value)}
         />
         <button
-          className="gwb-primary ui-btn primary"
+          className="ui-btn"
           disabled={w.blocked || !data.status.branch.oid}
           onClick={newBranch}
         >

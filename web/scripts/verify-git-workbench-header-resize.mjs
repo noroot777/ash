@@ -64,13 +64,6 @@ const box = locator => locator.evaluate(element => {
   const rect = element.getBoundingClientRect();
   return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
 });
-const color = value => {
-  const parts = value.match(/[\d.]+/g)?.slice(0, 3).map(Number);
-  assert(parts?.length === 3, `expected an rgb color, received ${value}`);
-  return parts;
-};
-const luminance = ([red, green, blue]) =>
-  (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
 const waitForHistory = async page => {
   await page.getByRole("region", { name: "提交历史" }).locator(".commit-row").first().waitFor();
   await page.getByText("正在读取差异…").waitFor({ state: "detached" });
@@ -165,15 +158,21 @@ try {
   assert.equal(await projectMenu.count(), 1, "project selector must have one trigger");
   assert.equal(await worktreeMenu.count(), 1, "worktree selector must have one trigger");
   assert((await box(exit)).x < (await box(fetch)).x, "return must appear before fetch");
+  assert((await box(exit)).x < (await box(projectMenu)).x, "return must be the leftmost control in the header");
+  // 返回是一颗纯图标、不是实心键：实心只留给当下该做的那一步（提交 / 推送 / 先拉取）。
   const exitColors = await exit.evaluate(element => {
     const style = getComputedStyle(element);
-    return { background: style.backgroundColor, foreground: style.color };
+    return { background: style.backgroundColor, foreground: style.color, text: element.textContent.trim() };
   });
-  const background = color(exitColors.background);
-  const foreground = color(exitColors.foreground);
-  assert(background[2] > background[0] && background[2] > background[1], "return background must be blue");
-  assert(luminance(background) < 0.5, "return background must be dark");
-  assert(luminance(foreground) > 0.7, "return label must remain legible");
+  assert.equal(exitColors.text, "", "return must be icon-only; its name lives in the hover tip");
+  assert.match(exitColors.background, /rgba\(0, 0, 0, 0\)|transparent/, "return must not be a filled button");
+  // 出口只有这一颗：工作台选项里不再另放「返回 ash」。
+  await page.getByLabel("工作台选项", { exact: true }).click();
+  const optionsMenu = page.getByRole("menu", { name: "工作台选项" });
+  await optionsMenu.waitFor();
+  assert.equal(await optionsMenu.getByRole("menuitem", { name: /返回/ }).count(), 0, "workbench options must not offer a second exit");
+  await page.keyboard.press("Escape");
+  await optionsMenu.waitFor({ state: "detached" });
 
   await projectMenu.click();
   const projectItems = page.getByRole("menu", { name: "选择 Git 项目" }).getByRole("menuitem");
@@ -305,7 +304,12 @@ try {
   assert.equal(dimensions.scrollWidth, dimensions.clientWidth, "mobile workbench must not overflow horizontally");
   const mobileExit = mobilePage.getByLabel("返回 ash 工作区", { exact: true });
   const mobileFetch = mobilePage.getByLabel("获取", { exact: true });
-  assert((await box(mobileExit)).x < (await box(mobileFetch)).x, "mobile return must remain before fetch");
+  // 窄屏顶栏折成两行：返回在第一行最左，拉取引用那一组落到第二行——按阅读顺序它仍在前面。
+  const [mobileExitBox, mobileFetchBox] = [await box(mobileExit), await box(mobileFetch)];
+  assert(
+    mobileExitBox.y + mobileExitBox.height <= mobileFetchBox.y || mobileExitBox.x < mobileFetchBox.x,
+    "mobile return must remain before fetch",
+  );
   await mobilePage.screenshot({ path: join(output, "mobile.png"), fullPage: true });
   await mobilePage.close();
 

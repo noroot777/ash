@@ -78,12 +78,18 @@
   transition: box-shadow 150ms ease-out, background 150ms ease-out;
 }
 .gwb-design .top-btn:hover { box-shadow: var(--control-hover-shadow); color: var(--ink); }
+/* 实心的那一颗只给当下该做的一步（提交完是推送 / 发布），黑白令牌，深色主题自动反过来。 */
+.gwb-design .top-btn.is-action { background: var(--action); color: var(--on-action); box-shadow: none; }
+.gwb-design .top-btn.is-action:hover { background: var(--action-hover); color: var(--on-action); box-shadow: none; }
+.gwb-design .top-btn.is-action:active { background: var(--action-active); }
+/* 领先、落后的数挂在推送、拉取上；键变成实心时数字反过来。 */
 .gwb-design .top-badge {
-  font-style: normal; font-size: 9.5px; font-weight: 600;
-  min-width: 15px; height: 15px; line-height: 15px; text-align: center;
-  padding: 0 4px; border-radius: 9999px;
-  background: var(--accent); color: #fff;
+  font-style: normal; font-size: var(--t-xs); font-weight: var(--w-medium);
+  min-width: 18px; height: 18px; line-height: 18px; text-align: center;
+  padding: 0 5px; border-radius: var(--r-full);
+  background: var(--action); color: var(--on-action);
 }
+.gwb-design .top-btn.is-action .top-badge { background: var(--on-action); color: var(--action); }
 .gwb-design .top-badge.is-new { background: var(--green); }
 .gwb-design .lock-chip {
   display: inline-flex; align-items: center; gap: 5px;
@@ -140,8 +146,9 @@
   transition: background 150ms ease-out, box-shadow 150ms ease-out;
 }
 .gwb-design .ui-btn:hover { box-shadow: var(--control-hover-shadow); }
-.gwb-design .ui-btn.primary { background: var(--accent); color: #fff; box-shadow: none; }
-.gwb-design .ui-btn.primary:hover { background: var(--accent-hover); }
+.gwb-design .ui-btn.primary { background: var(--action); color: var(--on-action); box-shadow: none; }
+.gwb-design .ui-btn.primary:hover { background: var(--action-hover); }
+.gwb-design .ui-btn.primary:active { background: var(--action-active); }
 .gwb-design .ui-btn.primary.danger { background: var(--red); }
 .gwb-design .ui-btn.primary.danger:hover { background: color-mix(in lch, var(--red) 88%, var(--ink)); }
 .gwb-design .mini-btn {
@@ -153,7 +160,7 @@
   transition: box-shadow 150ms ease-out, color 150ms ease-out;
 }
 .gwb-design .mini-btn:hover { box-shadow: var(--control-hover-shadow); color: var(--ink); }
-.gwb-design .mini-btn.tone-accent { color: var(--accent); }
+.gwb-design .mini-btn.tone-accent { color: var(--ink); }
 .gwb-design .mini-btn.tone-danger { color: var(--red); }
 .gwb-design .icon-btn {
   display: inline-flex; align-items: center; justify-content: center;

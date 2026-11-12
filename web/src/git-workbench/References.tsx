@@ -101,7 +101,7 @@ export function References({
           </p>
         </div>
         <button
-          className="gwb-primary ui-btn primary"
+          className="ui-btn"
           disabled={w.blocked || (view !== "stash" && !data.status.branch.oid)}
           onClick={create}
         >

@@ -29,12 +29,15 @@ export function Changes({
   ask,
   assist,
   resolve,
+  onCommitReady,
 }: {
   projectId: string;
   workbench: Workbench;
   ask: AskAction;
   assist?: () => void;
   resolve: (path: string) => void;
+  /** 提交键是不是当下该按的那一颗；离开这个视图时报 false。 */
+  onCommitReady?: (ready: boolean) => void;
 }) {
   const data = w.data!;
   const [selection, setSelection] = useState<{
@@ -118,6 +121,16 @@ export function Changes({
         deleteUntracked: source === "untracked" ? pathsOf(files) : [],
       }),
     });
+  const canCommit =
+    !w.blocked &&
+    !!message.trim() &&
+    (amend || !!data.status.staged.length) &&
+    !data.status.operation &&
+    !data.status.merge.length;
+  useEffect(() => {
+    onCommitReady?.(canCommit);
+  }, [canCommit, onCommitReady]);
+  useEffect(() => () => onCommitReady?.(false), [onCommitReady]);
   const commit = () => {
     if (!message.trim() || w.blocked) return;
     if (amend)
@@ -205,15 +218,10 @@ export function Changes({
               />
               修补上一次提交
             </label>
+            {/* 只有现在能提交时才是实心的；还不能提交时是普通键，把实心让给别的那一步。 */}
             <button
-              className="gwb-primary ui-btn primary"
-              disabled={
-                w.blocked ||
-                !message.trim() ||
-                (!amend && !data.status.staged.length) ||
-                !!data.status.operation ||
-                !!data.status.merge.length
-              }
+              className={`ui-btn${canCommit ? " primary" : ""}`}
+              disabled={!canCommit}
               onClick={commit}
             >
               <GitCommit size={14} />

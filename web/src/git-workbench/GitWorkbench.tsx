@@ -63,6 +63,9 @@ export function GitWorkbench({
     snapshot: Pick<GitActionRequest, "root" | "version">;
   } | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
+  // 提交框此刻能不能提交（说明已写、有暂存或勾了修补）。由「变更」视图报上来，
+  // 顶栏据此决定「推送」要不要接过那颗实心键——同一时刻只有一步是当下该做的。
+  const [commitReady, setCommitReady] = useState(false);
   const data = w.data;
   const emptyGuidance = data ? emptyCommitGuidance(data.status) : null;
   const assist =
@@ -141,6 +144,22 @@ export function GitWorkbench({
             ? data.worktrees.length
             : undefined;
   const latest = data?.journal[0];
+  const branch = data?.status.branch;
+  // 日志是整个仓库共用的，只认这棵工作树自己的那一条。
+  const latestHere = latest && latest.root === data?.root ? latest : undefined;
+  const pushFailed = latestHere?.action === "push" && latestHere.state === "failed";
+  // 实心键只给当下该做的那一步：能提交时是提交键；提交完是顶栏的推送——有上游看领先数，
+  // 还没发布过的分支没有领先数，就看这棵工作树上一步是不是刚提交完；推送被拒时让给提示里的「先拉取」。
+  const pushIsNext =
+    !!data &&
+    !commitReady &&
+    !pushFailed &&
+    !w.blocked &&
+    !!data.remotes.length &&
+    !!branch?.oid &&
+    (branch.upstream
+      ? !!branch.ahead
+      : latestHere?.action === "commit" && latestHere.state === "succeeded");
   return (
     <section className="gwb gwb-design" aria-label="Git 工作台">
       <WorkbenchHeader
@@ -152,6 +171,7 @@ export function GitWorkbench({
         ask={ask}
         push={push}
         assist={assist}
+        pushIsNext={pushIsNext}
         onExit={onExit}
       />
       {w.error && (
@@ -312,6 +332,7 @@ export function GitWorkbench({
                 ask={ask}
                 assist={assist}
                 resolve={setConflict}
+                onCommitReady={setCommitReady}
               />
             ) : view === "history" ? (
               <History

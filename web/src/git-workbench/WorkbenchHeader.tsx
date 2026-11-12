@@ -13,6 +13,7 @@ import {
 } from "@phosphor-icons/react";
 import type { ProjectView } from "@ash/shared";
 import type { GitView } from "@ash/shared/git-workbench";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import type { Workbench } from "./useWorkbench.ts";
 import type { AskAction } from "./ActionDialog.tsx";
 import { WorkbenchMenu } from "./WorkbenchMenu.tsx";
@@ -27,6 +28,7 @@ export function WorkbenchHeader({
   ask,
   push,
   assist,
+  pushIsNext,
   onExit,
 }: {
   projectId: string;
@@ -37,9 +39,12 @@ export function WorkbenchHeader({
   ask: AskAction;
   push: (force?: boolean) => void;
   assist?: () => void;
+  /** 提交完、还有没推上去的提交：这时「推送 / 发布」才是当下该做的那一步，画成实心。 */
+  pushIsNext: boolean;
   onExit: () => void;
 }) {
   const data = w.data;
+  const backTip = useHoverTip();
   const branch = data?.status.branch;
   const managed = data?.worktrees.some(
     (tree) => tree.path === data.root && tree.managed,
@@ -47,6 +52,17 @@ export function WorkbenchHeader({
   return (
     <header className="gwb-header topbar">
       <div className="top-left">
+        {/* 出口只有这一颗：顶栏最左，「工作台选项」里不再另放一个。 */}
+        <button
+          type="button"
+          className="gwb-back"
+          aria-label="返回 ash 工作区"
+          onClick={onExit}
+          {...backTip.anchorProps}
+        >
+          <ArrowLeft size={16} />
+        </button>
+        <HoverTip at={backTip.at}>返回</HoverTip>
         <WorkbenchMenu
           className="repo-name"
           label="选择 Git 项目"
@@ -143,10 +159,6 @@ export function WorkbenchHeader({
       </div>
       <span className="flex-1" />
       <div className="gwb-sync sync-group">
-        <button type="button" className="top-btn gwb-back-btn" aria-label="返回 ash 工作区" onClick={onExit}>
-          <ArrowLeft size={14} />
-          <span>返回</span>
-        </button>
         <button
           className="top-btn"
           aria-label="获取"
@@ -185,7 +197,7 @@ export function WorkbenchHeader({
           {!!branch?.behind && <em className="top-badge">{branch.behind}</em>}
         </WorkbenchMenu>
         <button
-          className="top-btn"
+          className={`top-btn${pushIsNext ? " is-action" : ""}`}
           aria-label={branch?.upstream ? "推送" : "发布"}
           disabled={w.blocked || !data?.remotes.length || !branch?.oid}
           onClick={() => push()}
@@ -229,12 +241,6 @@ export function WorkbenchHeader({
                 ),
               danger: true,
               onClick: () => push(true),
-            },
-            {
-              label: "返回 ash",
-              icon: <ArrowLeft size={14} />,
-              separator: true,
-              onClick: onExit,
             },
           ]}
         />

@@ -11,11 +11,13 @@
 .gwb-design .repo-name b { display: flex; align-items: center; gap: 6px; max-width: 100%; }
 .gwb-design .repo-name b span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gwb-design .repo-name b svg, .gwb-design .gwb-worktree-picker { flex-shrink: 0; }
-.gwb-design .top-btn.gwb-back-btn { background: #1e3a8a; color: #fff; }
-.gwb-design .top-btn.gwb-back-btn:hover { background: #1e40af; color: #fff; }
-/* 这块藏青在深色顶栏上几乎和底色糊在一起，深色下提亮一档；白字两边都不变。 */
-[data-theme="dark"] .gwb-design .top-btn.gwb-back-btn { background: #2f4fb0; }
-[data-theme="dark"] .gwb-design .top-btn.gwb-back-btn:hover { background: #3a5cc4; }
+/* 返回：顶栏最左一颗纯图标，名字在悬停提示里。 */
+.gwb-design .gwb-back {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 28px; height: 28px; border-radius: var(--r-md); color: var(--muted);
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.gwb-design .gwb-back:hover { background: var(--hover-bg); color: var(--ink); }
 .gwb-design .branch-pill { min-width: 0; flex-shrink: 0; max-width: 25vw; }
 .gwb-design .branch-pill svg { flex-shrink: 0; }
 .gwb-design .branch-pill b { min-width: 0; max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -145,7 +147,7 @@ section.task-confirm-dialog.gwb-design .task-confirm-header > button { width: 22
 section.task-confirm-dialog.gwb-design > .task-confirm-message { margin: 0; padding: 2px 16px 8px; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
 section.task-confirm-dialog.gwb-design > footer { display: flex; justify-content: flex-end; padding: 10px 16px 14px; gap: 8px; border: none; margin: 0; flex-shrink: 0; }
 section.task-confirm-dialog.gwb-design > footer button { height: 28px; min-height: 28px; min-width: 0; padding: 0 12px; border: none; border-radius: 8px; font-size: 12px; font-weight: 500; background: var(--panel); color: var(--ink); box-shadow: var(--control-shadow); }
-section.task-confirm-dialog.gwb-design > footer button.is-primary { background: var(--accent); color: #fff; box-shadow: none; }
+section.task-confirm-dialog.gwb-design > footer button.is-primary { background: var(--action); color: var(--on-action); box-shadow: none; }
 section.task-confirm-dialog.gwb-design > footer button.is-danger { background: var(--red); color: #fff; box-shadow: none; }
 section.task-confirm-dialog.gwb-design > footer button:hover:not(:disabled) { transform: none; box-shadow: var(--control-hover-shadow); }
 section.gwb-rebase-dialog.gwb-design { width: 720px; }
@@ -192,7 +194,7 @@ section.gwb-rebase-dialog.gwb-design { width: 720px; }
   .gwb-design .gwb-rebase-step { flex-wrap: wrap; }
   .gwb-design .oplog-time { flex: 0 0 45px; }
 }
-@media (max-width: 480px) { .gwb-design .sync-group .top-btn:not(.gwb-back-btn) span { display: none; } }
+@media (max-width: 480px) { .gwb-design .sync-group .top-btn span { display: none; } }
 @media (prefers-reduced-motion: reduce) { .gwb-design *, .gwb-design *::before, .gwb-design *::after { transition: none !important; animation: none !important; } }
 .gwb-design .gwb-tag-info { display: flex; align-items: center; flex: 1; gap: 12px; min-width: 0; }
 .gwb-design .gwb-tag-info strong { font: 600 11.5px var(--font-mono); min-width: 120px; }
