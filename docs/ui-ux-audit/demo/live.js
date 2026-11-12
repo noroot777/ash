@@ -7,7 +7,7 @@
    嵌在报告里时，等你答复那一刻往外递 { ash: 'title', waiting }，报告拿它改自己的标签页标题。
    发 run:state { running }（同时发 run:start / run:end）、task:status { id, status, why }、
    usage { turn, tokens, ctx, files, add, del, elapsedMs, commit? }（turn 是这一轮的用量，其余是跑完之后的总数，ctx 是上下文还剩百分之几）；
-   听 reply:send / reply:stop / reply:steer（回复框）、task:act（交付条的重试 / 运行）、review:start / review:done（审查那一行在会话里起、落）。 */
+   听 reply:send / reply:stop / reply:steer（回复框）、task:act（任务头的重试 / 运行）、review:start / review:done（审查那一行在会话里起、落）。 */
 (() => {
   const { h, $, icon } = ASH;
   const TITLE = document.title;
@@ -356,7 +356,7 @@
       await sleep(350);
       openTurn();
     } else if (ev.fail) {
-      /* 进行条原地落定成红色的一句；退出码收在点开的那一层。「重试」不挂在会话里：它在回复框上面那一行（next.js） */
+      /* 进行条原地落定成红色的一句；退出码收在点开的那一层。「重试」不挂在会话里：它在任务头上，是一颗图标 */
       const strip = r.strip ?? openStrip('这一轮异常结束');
       strip.put(h('p.step-note', `退出码 ${ev.fail}`));
       settle(strip, '这一轮异常结束', 'is-failed');

@@ -6,7 +6,7 @@
 .task-col { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .task-insp { flex: none; min-height: 0; }
 
-/* 头部一行，高度和两侧留白照现状。左边一组说「这是哪个任务」（类型、标题、来源、图钉），右边是状态词、更多、面板开关。头上没有按钮 */
+/* 头部一行，高度和两侧留白照现状。左边一组说「这是哪个任务」（类型、标题、来源、图钉），右边只有图标：轮到你的那一步、验收的章、更多、面板开关 */
 .task-head { flex: none; display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 10px 0 16px; border-bottom: 0.5px solid var(--line); }
 .task-name { display: flex; align-items: center; min-width: 0; }
 
@@ -25,10 +25,14 @@
 .task-pin[aria-pressed="true"] .i { fill: currentColor; }
 @media (hover: none) { .task-pin { opacity: 1; } }
 
-/* 状态是一个词，前面那颗点和侧栏行首查的是同一张表。换状态时点跟着字一起淡出淡入 */
-.task-status { display: inline-flex; flex: none; align-items: center; gap: 6px; padding: 0 6px; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
-.task-status > .dot { transition: opacity 150ms var(--ease-out); }
-.task-status > .dot.is-out { opacity: 0; }
+/* 轮到你的那一步：墨色（头上别的图标都是灰的）。章验过了以后填实、退成灰——和图钉一个说法：实心 = 已经是了 */
+.task-acts { display: inline-flex; flex: none; gap: 2px; }
+.task-acts > .ico { color: var(--ink); }
+.task-seal[data-on="true"] { color: var(--faint); }
+.task-seal[data-on="true"]:hover, .task-seal[data-on="true"][aria-expanded="true"] { color: var(--muted); }
+.task-seal[data-on="true"] path:first-child { fill: currentColor; }
+.task-seal[data-on="true"] path:last-child { stroke: var(--canvas); }
+.task-seal[data-on="true"]:hover path:last-child, .task-seal[data-on="true"][aria-expanded="true"] path:last-child { stroke: var(--hover-bg); }
 
 /* 面板开着的时候，开关是按下的样子（底色来自 .ico[aria-expanded]） */
 .task-panel[aria-expanded="true"] { color: var(--ink); }

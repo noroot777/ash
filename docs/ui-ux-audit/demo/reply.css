@@ -64,14 +64,6 @@
 .reply { width: 100%; flex: none; padding-bottom: 16px; }
 .reply-col { width: min(790px, 100% - 48px); margin: 0 auto; }
 
-/* 交付条（next.js）：回复框上面的一行，不带框——左边是还没验收的改动，右边是轮到你的那一步。字和待发送那几行同一条左缘 */
-.next { display: flex; align-items: center; gap: 6px; min-height: 24px; margin-bottom: 8px; padding-left: 6px; }
-.next-sum { display: inline-flex; align-items: center; gap: 8px; height: 24px; padding: 0 8px; border-radius: var(--r-sm); color: var(--muted); font-size: var(--t-xs); font-variant-numeric: tabular-nums; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
-.next-sum:hover { background: var(--hover-bg); color: var(--ink); }
-.next-sum > .plus { color: var(--green); } .next-sum > .minus { color: var(--red); }
-.next-acts { display: inline-flex; flex: none; gap: 6px; }
-.next-acts > .is-out { opacity: 0; pointer-events: none; }
-
 /* 框上方只放状态：待发送的消息一列、附件一列。没有东西时不占高度 */
 .reply-list { display: grid; }
 .reply-list:not(:empty) { padding-bottom: 6px; }

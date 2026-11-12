@@ -2,7 +2,7 @@
    造回合、气泡、里程碑行、执行过程的那几个函数挂在 ASH.feedKit 上，执行中的模拟（live.js）用的是同一套。
    会话里平时只有三样：你说的（气泡）、它说的（回合）、里程碑（一行一句：审查出了结论、验收了）。ash 自己的话不单独占行——
    「这一回合为什么开始」是回合头名字后面的一句起因（被哨兵叫醒、照审查意见改、重试），原文点了再看；
-   回执（开始盯、暂停、预约、不再等了……）记在它所属的那一回合上，指到这一回合才多出一项「N 条记录」。要你动手的事在回复框上面那一行（next.js），不在会话里。
+   回执（开始盯、暂停、预约、不再等了……）记在它所属的那一回合上，指到这一回合才多出一项「N 条记录」。要你动手的事在任务头上（task.js 的那几颗图标），不在会话里。
    文案照 web/src/task-detail 的 ConversationFeed / SystemNotice / ReviewerLane / QuestionCard；清单 feed-1 到 feed-15。
    原始需求不在会话里出气泡（照现状，它住在右侧「信息」格）；输入导航的第一格是它，点了回到会话顶端。
    对外：ASH.parts.feed = { el, dock, follow(), pin(), stuck, append(...nodes), ask({ q, options, onanswer, instant }), unask(then?), destroy() }。

@@ -1,30 +1,31 @@
 /* 任务页（面 task）：头部 + 会话列（会话流、提问坞、回复框；看改动、验收时换成改动工作区）+ 右侧面板。骨架照现状：面板通顶，头部只压在会话那一列上面。
-   头部是部件 head，只说「这是哪个任务、现在怎样」：类型（一个图标）、标题（可改名）、来源（智能体开的才有，一个图标）、图钉、状态词，右边是更多和面板开关。
-   头上没有按钮：要你动手的那几件（验收、重试、运行）在回复框上面那一行（next.js），停止是发送键（reply.js）。
-   现状里灰着的「已验收」「等答复」不画成按钮，它多说的半句接在状态词后面（「失败 · 已验收」）；时间住进右侧面板、「重新排队」进更多（head-1）。
-   对外：ASH.parts.head = { set(status), state, accepted, destroy() }；ASH.taskLook(status, accepted) → { word, tail, dot, acts }，交付条用的是同一张表。
-   发 task:status { id, status }、task:title { id, title }、changes:open（更多里的「查看改动与审查」）；听 task:status { id, status, accepted? }、task:pin { id, pinned }、insp:state { shut }。 */
+   头部是部件 head。左边说「这是哪个任务」：类型（一个图标）、标题（可改名）、来源（智能体开的才有，一个图标）、图钉。
+   右边没有字，只有图标：此刻轮到你的那一步（重试 / 运行）、验收的那枚章、更多、面板开关。状态不在头上写——侧栏那一行的行首和会话里都有。
+   章空心是「改动等你验收」，实心是「验过了」；点它开的是改动工作区（changes.js），真正的「验收通过」在那里面，和现在一样。在跑、排队、等答复时没有章。
+   停止是发送键（reply.js）；时间住进右侧面板、「重新排队」进更多（head-1）。
+   对外：ASH.parts.head = { set(status), state, accepted, destroy() }。
+   发 task:status { id, status }、task:title { id, title }、task:act { label }（重试 / 运行，由 live.js 接）、changes:open（章，和更多里的「查看改动与审查」）；
+   听 task:status { id, status, accepted? }、task:pin { id, pinned }、insp:state { shut }、changes:state { open }。 */
 (() => {
   const { h, icon } = ASH;
   ASH.icons.download ??= '<path d="M8 2.5v8M4.5 7.5 8 11l3.5-3.5M3 13.5h10"/>';
+  /* 验收的章：八瓣的印，里面一个勾（Phosphor 里叫 SealCheck）。两笔分开画：验过了以后印填实、勾反白 */
+  ASH.icons.seal ??= '<path d="M5.95 3.06A2.3 2.3 0 0 1 10.05 3.06A2.3 2.3 0 0 1 12.94 5.95A2.3 2.3 0 0 1 12.94 10.05A2.3 2.3 0 0 1 10.05 12.94A2.3 2.3 0 0 1 5.95 12.94A2.3 2.3 0 0 1 3.06 10.05A2.3 2.3 0 0 1 3.06 5.95A2.3 2.3 0 0 1 5.95 3.06z"/><path d="m5.9 8.2 1.5 1.5 2.8-3.1"/>';
 
   /* 类型：图标和侧栏行尾那颗是同一套（TaskModeIcon），指上去是它的名字 */
   const KIND = { single: ['file', '任务'], team: ['team', '团队任务'], duet: ['chat', '讨论任务'] };
   const KNOWN = ['running', 'waiting', 'failed', 'queued', 'stopped', 'backlog', 'done'];
-  /* 状态点指上去的那句话，照 TaskStatusDot.tsx */
-  const DOT_SAY = { run: '运行中或排队中', queue: '运行中或排队中', wait: '需要人工输入', open: '已完成，等你验收', bad: '失败' };
+  const ACT = { 重试: 'redo', 运行: 'play' };
 
-  /* 状态词，和这个状态下轮到你做的事（自由工作流顶层任务的 primaryAction / terminalRerunAction）。
-     样机的 stopped 就是产品里的 canceled（叫「已取消」），waiting 是挂着提问（叫「等答复」）。
-     acts 里「验收」永远排最后：它在交付条上的位置不随状态变 */
-  const look = ASH.taskLook = (status, accepted) => {
-    if (status === 'running') return { word: '运行中', dot: 'run', acts: [] };
-    if (status === 'queued') return { word: '排队中', dot: 'queue', acts: [] };
-    if (status === 'waiting') return { word: '等答复', dot: 'wait', acts: [] };
-    if (status === 'failed') return { word: '失败', tail: accepted && '已验收', dot: 'bad', acts: ['重试', !accepted && '验收'].filter(Boolean) };
-    if (status === 'stopped') return { word: '已取消', tail: accepted && '已验收', dot: '', acts: ['运行', !accepted && '验收'].filter(Boolean) };
-    if (status === 'backlog') return { word: '待排期', dot: '', acts: ['运行'] };
-    return accepted ? { word: '验收完成', dot: '', acts: [] } : { word: '完成', dot: 'open', acts: ['验收'] };
+  /* 这个状态下头上有哪几颗（自由工作流顶层任务的 primaryAction / terminalRerunAction）。
+     样机的 stopped 就是产品里的 canceled，waiting 是挂着提问。seal：'' 不画 / open 等你验收 / done 验过了 */
+  const look = (status, accepted) => {
+    if (status === 'running' || status === 'queued' || status === 'waiting') return { acts: [], seal: '' };
+    const seal = accepted ? 'done' : 'open';
+    if (status === 'failed') return { acts: ['重试'], seal };
+    if (status === 'stopped') return { acts: ['运行'], seal };
+    if (status === 'backlog') return { acts: ['运行'], seal: '' };
+    return { acts: [], seal };
   };
 
   const copy = (text) => { try { navigator.clipboard?.writeText(text)?.catch(() => {}); } catch { /* file:// 下可能没有剪贴板 */ } };
@@ -81,10 +82,10 @@
         ASH.emit('task:title', { id: task.id, title: next });
       });
 
-      /* 两条清单认领在同一处会叠成一颗圆圈：head-1 认领整个状态，run-6（换字）认领那个词 */
-      const dot = h('i.dot', { role: 'img', hidden: true });
-      const word = h('span', { 'data-m': 'run-6' });
-      const says = h('span.task-status', { 'data-m': 'head-1' }, dot, word);
+      /* 右边那一组：一步一颗图标，章排在最后、位置不随状态变。章开着改动工作区时是按下的样子，再点一次回对话 */
+      const acts = h('span.task-acts', { 'data-m': 'head-1' });
+      const seal = h('button.ico.task-seal', { type: 'button', 'aria-expanded': 'false', onclick: () => ASH.emit('changes:open') }, icon('seal'));
+      const actBtn = (label) => h('button.ico', { type: 'button', 'aria-label': label, 'data-tip': label, 'data-act': label, onclick: () => ASH.emit('task:act', { label }) }, icon(ACT[label]));
 
       const markDone = async () => {
         const yes = await ASH.confirm({ title: '标记为已完成', ok: '标记完成', body: [
@@ -141,28 +142,22 @@
         panel.addEventListener('blur', () => panel.classList.remove('is-focus'), { once: true });
       };
 
-      el.append(h('div.task-name', { 'data-m': 'head-2' }, kind, title, origin, pin), h('span.grow'), says, more, panel);
+      el.append(h('div.task-name', { 'data-m': 'head-2' }, kind, title, origin, pin), h('span.grow'), acts, more, panel);
       size();
       document.fonts?.ready.then(size);
 
-      /* 换状态是一拍：旧的点和旧的词一起淡出，150ms 后新的一起到位（和 ASH.swap 同一拍）。连着换几次只认最后一次 */
-      let landing = 0;
+      /* 换状态：留着的那颗不重画、滑到新位置，新来的淡入（ASH.flip） */
       const paint = (first) => {
         const s = look(status, accepted);
-        const text = s.tail ? `${s.word} · ${s.tail}` : s.word;
-        const dotStays = (dot.dataset.kind ?? '') === s.dot;
-        const land = () => {
-          dot.dataset.kind = s.dot;
-          dot.className = `dot${s.dot ? ` ${s.dot}` : ''}`;
-          dot.hidden = !s.dot;
-          if (s.dot) { dot.setAttribute('aria-label', DOT_SAY[s.dot]); dot.dataset.tip = DOT_SAY[s.dot]; }
-          if (!first && !dotStays) { dot.classList.add('is-out'); void dot.offsetWidth; dot.classList.remove('is-out'); }
+        const redraw = () => {
+          const old = new Map([...acts.children].map((btn) => [btn.dataset.act, btn]));
+          const say = s.seal === 'done' ? '已验收' : '验收';
+          seal.dataset.on = String(s.seal === 'done');
+          seal.setAttribute('aria-label', say);
+          seal.dataset.tip = say;
+          acts.replaceChildren(...s.acts.map((label) => old.get(label) ?? actBtn(label)), ...(s.seal ? [seal] : []));
         };
-        clearTimeout(landing);
-        if (first) word.textContent = text; else ASH.swap(word, text);
-        if (first || ASH.reduced()) { land(); return; }
-        dot.classList.toggle('is-out', !dotStays);
-        landing = setTimeout(land, 150);
+        if (first) redraw(); else ASH.flip(acts, redraw);
       };
       /* accepted 没明说时：收到「验收完成」就是验过了；重新跑起来、重新排队、改回「完成」都把章摘掉；其余状态不动它 */
       function apply(next, flag) {
@@ -181,12 +176,13 @@
         ASH.on('task:status', ({ id, status: next, accepted: flag } = {}) => { if (id === task.id) apply(next, flag); }),
         ASH.on('task:pin', ({ id, pinned } = {}) => { if (id === task.id) setPin(Boolean(pinned)); }),
         ASH.on('insp:state', ({ shut } = {}) => setPanel(Boolean(shut))),
+        ASH.on('changes:state', ({ open } = {}) => seal.setAttribute('aria-expanded', String(Boolean(open)))),
       ];
       return {
         set(next) { apply(next); },
         get state() { return status; },
         get accepted() { return accepted; },
-        destroy() { for (const off of offs) off(); clearTimeout(landing); delete ASH.prep['a11y-1']; },
+        destroy() { for (const off of offs) off(); delete ASH.prep['a11y-1']; },
       };
     },
   });
@@ -203,8 +199,7 @@
       main.append(h('div.task', h('div.task-main', head, h('section.task-col', wrap, dock, reply, work)), insp));
       const parts = [ASH.mount('head', head), ASH.mount('feed', wrap, { dock }), ASH.mount('reply', reply, { kind: 'task' }), ASH.mount('insp', insp), ASH.mount('live', main),
         ASH.mount('changes', work, { talk: [wrap, dock, reply] })];
-      parts.push(ASH.mount('next', ASH.parts.reply.slot));
-      return () => { for (const p of parts) p.destroy?.(); for (const name of ['head', 'feed', 'reply', 'insp', 'live', 'changes', 'next']) delete ASH.parts[name]; };
+      return () => { for (const p of parts) p.destroy?.(); for (const name of ['head', 'feed', 'reply', 'insp', 'live', 'changes']) delete ASH.parts[name]; };
     },
   });
 })();

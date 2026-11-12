@@ -2,7 +2,7 @@
    回复框发出的事件：reply:send { text, files }（空闲时发）、reply:queue { text }（运行中发，进托盘）、reply:later { text, mode }（定时 / 等任务，进托盘）、
      reply:steer { text, taken }（引导会话：接的人把 taken 置 true）、reply:stop、reply:preview { open }。
      听的事件：run:state { running }、task:status { id, status }、review:change。
-   回复框的方法：el、key（它的发送键）、slot（框上面留给交付条的那一格，next.js）、value()、set(text)、clear()、focus()、takeQueued()、hasQueued()、destroy()。
+   回复框的方法：el、key（它的发送键）、value()、set(text)、clear()、focus()、takeQueued()、hasQueued()、destroy()。
    停止只有这一处：任务在跑或在排队、输入框空着时，发送键就是停止键；打了字，它左边多一颗小停止键（sendkey.js）。排着队的任务没有回合可停，停 = 不排了，落到「已取消」。 */
 (() => {
   const { h, icon } = ASH;
@@ -215,8 +215,7 @@
         }
       }
       const box = h('div.reply-box.inbox', grip, plate, ta, acts);
-      const slot = h('div.reply-next');
-      const root = h('div.reply', h('div.reply-col', slot, tray, shelf, box));
+      const root = h('div.reply', h('div.reply-col', tray, shelf, box));
 
       /* ---------- 输入区：三行起步，随内容长到最多 12 行（且不过窗口的四成）；拖过就以拖的为准 ---------- */
       function grow() {
@@ -373,7 +372,6 @@
       const api = {
         el: root,
         key,
-        slot,
         value: () => ta.value,
         set(next) { ta.value = next ?? ''; grow(); sync(); },
         clear() { api.set(''); },
