@@ -9,6 +9,7 @@ import { Menu, MenuItem } from "../components/ui.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
 import { InspButton } from "./parts.tsx";
+import { DrawnCheck } from "../lib/motion/index.ts";
 
 export type InspTone = "ok" | "bad" | "stale" | "busy" | "hold" | "none";
 
@@ -32,11 +33,15 @@ const TONE_ICON: Record<Exclude<InspTone, "busy">, ReactNode> = {
 
 /** 那一句结论：在跑的只用主色字，其余前面一颗表示结论的图标。 */
 export function InspConclusion({ tone, children }: { tone: InspTone; children: ReactNode }) {
+  // 看着它从「在跑」落成「通过」的那一下，对勾描出来（08「点睛」对勾）；打开时就已经通过的不描。
+  const previous = useRef(tone);
+  const drawCheck = tone === "ok" && previous.current === "busy";
+  useLayoutEffect(() => { previous.current = tone; }, [tone]);
   return (
     <p className={`insp-now is-${tone}`} role="status">
       {tone === "busy"
         ? <><SpinnerGap size={16} className="is-spinning" aria-hidden="true" /><span className="insp-live">{children}</span></>
-        : <><span className="insp-now__icon" aria-hidden="true">{TONE_ICON[tone]}</span><span>{children}</span></>}
+        : <><span className="insp-now__icon" aria-hidden="true">{tone === "ok" ? <DrawnCheck draw={drawCheck} /> : TONE_ICON[tone]}</span><span>{children}</span></>}
     </p>
   );
 }

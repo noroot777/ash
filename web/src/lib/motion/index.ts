@@ -4,3 +4,4 @@
 export { useLayoutMotion } from "./useLayoutMotion.ts";
 export { useStagger } from "./useStagger.ts";
 export { RollingNumber } from "./RollingNumber.tsx";
+export { DrawnCheck } from "./DrawnCheck.tsx";
