@@ -58,32 +58,30 @@ syncComposerSendKey("mod-enter");
 assert.match(renderSingle(), /⌘ \/ Ctrl \+ Enter 发送/);
 syncComposerSendKey("enter");
 const recorded = render([answer]);
-assert.equal(count(recorded, 'class="task-question-record"'), 1, "会话与数据库里的同一份答复只显示一张卡");
-assert.match(recorded, /<details class="task-question-record">/);
-assert.doesNotMatch(recorded, /<details class="task-question-record" open/);
-assert.match(recorded, /查看问答/);
-assert.match(recorded, /放在哪里？/);
-assert.match(recorded, /侧栏里/);
-assert.match(recorded, /已部分答复/);
-assert.match(recorded, /未答复/);
-assert.doesNotMatch(recorded, /你之前的提问|请据此/);
-assert.equal(count(recorded, "会话里"), 3, "摘要、答案和当时的选项各保留一处");
-const summaries = (html: string) => [...html.matchAll(/<summary>([\s\S]*?)<\/summary>/g)].map((match) => match[1]!);
-assert.match(summaries(recorded)[0]!, /你的答复/);
-assert.match(summaries(recorded)[0]!, /1\. 会话里/);
-assert.doesNotMatch(summaries(recorded)[0]!, /两个细节|放在哪里|侧栏里/);
-assert.equal(count(render([]), 'class="task-question-record"'), 1, "已保存但续跑尚未写入会话时，历史仍可查看");
+const recordClass = 'class="task-message task-message--user task-question-record"';
+assert.equal(count(recorded, recordClass), 1, "会话与数据库里的同一份答复只显示一个气泡");
+// 答过的提问就是你的一个气泡：问题引在答案上面，当时的选项点那句引文才摊开。
+assert.match(recorded, /<div class="task-user-bubble task-question-bubble"><header><b>你<\/b><small>已部分答复<\/small>/);
+assert.match(recorded, /class="task-question-quote"[^>]*aria-expanded="false"[\s\S]*?>两个细节</, "多题时共同引言先引一句");
+assert.match(recorded, /class="task-question-quote-number">1<\/span><span class="task-question-quote-text">放在哪里？<\/span><\/button><p>会话里<\/p>/, "第 1 题：问题引在答案上面");
+assert.match(recorded, /<span class="task-question-quote-text">保留什么？<\/span><\/button><p class="is-empty">未答复<\/p>/, "留空的题写「未答复」");
+assert.doesNotMatch(recorded, /侧栏里/, "当时的选项平时不摊开");
+assert.doesNotMatch(recorded, /你之前的提问|请据此|查看问答|<details/);
+assert.equal(count(recorded, "会话里"), 1, "答案只写一处");
+const quoteOrder = (html: string) => [...html.matchAll(/task-question-quote-text">([\s\S]*?)<\/span>/g)].map((match) => match[1]!);
+assert.deepEqual(quoteOrder(recorded), ["两个细节", "放在哪里？", "保留什么？"]);
+assert.equal(count(render([]), recordClass), 1, "已保存但续跑尚未写入会话时，历史仍可查看");
 
 const repeated = { ...record, id: "record-2", answeredAt: "2026-09-10T02:00:00Z", question: "第二次确认" };
 const repeatedHtml = renderToStaticMarkup(<ConversationFeed task={task} items={[answer, { ...answer, id: "answer-2", at: repeated.answeredAt }]}
   questionHistory={[record, repeated]} sessions={[]} loading={false} error={null} />);
-assert.equal(count(repeatedHtml, 'class="task-question-record"'), 2);
+assert.equal(count(repeatedHtml, recordClass), 2);
 assert.match(repeatedHtml, /第二次确认/);
 const delayedHtml = renderToStaticMarkup(<ConversationFeed task={task} items={[
   { ...answer, at: "2026-09-10T03:00:00Z" }, { ...answer, id: "answer-2", at: "2026-09-10T03:01:00Z" },
 ]} questionHistory={[record, repeated]} sessions={[]} loading={false} error={null} />);
-assert.equal(count(delayedHtml, '<p>两个细节</p>'), 1, "排队延迟送达的同文答复仍要对应各自的问题");
-assert.equal(count(delayedHtml, '<p>第二次确认</p>'), 1);
+assert.equal(count(delayedHtml, 'task-question-quote-text">两个细节<'), 1, "排队延迟送达的同文答复仍要对应各自的问题");
+assert.equal(count(delayedHtml, 'task-question-quote-text">第二次确认<'), 1);
 
 const oldText = "【答复】你之前的提问:「以前的问题？」\n\n以前的答案\n\n请据此继续完成任务。";
 const legacyAnswer = { ...answer, text: oldText };
@@ -93,12 +91,12 @@ assert.match(oldHtml, /以前的答案/);
 assert.doesNotMatch(oldHtml, /请据此继续完成任务/);
 const team = renderToStaticMarkup(<TeamFeed task={{ ...task, mode: "team" }} rows={[{ kind: "conv", key: "old", item: legacyAnswer }]}
   workers={[]} onOpenWorker={() => undefined} onAskLead={() => undefined} delegatingIds={new Set()} indicatorForTask={() => null} />);
-assert.match(team, /class="task-question-record"/);
+assert.match(team, /task-question-record"/);
 assert.match(team, /以前的问题？/);
 assert.doesNotMatch(team, /你之前的提问/);
 const teamHistory = renderToStaticMarkup(<TeamFeed task={{ ...task, mode: "team", questionHistory: [record] }} rows={[]}
   workers={[]} onOpenWorker={() => undefined} onAskLead={() => undefined} delegatingIds={new Set()} indicatorForTask={() => null} />);
-assert.equal(count(teamHistory, 'class="task-question-record"'), 1, "团队流直接展示调用方已经持有的历史");
+assert.equal(count(teamHistory, recordClass), 1, "团队流直接展示调用方已经持有的历史");
 assert.match(teamHistory, /放在哪里？/);
 const longRecord = legacyQuestionRecord(longLegacyReply, "screenshot");
 assert.equal(longRecord?.question, longQuestion, "嵌套引号和空行不能截断旧题干");
@@ -107,11 +105,10 @@ const crlfRecord = legacyQuestionRecord(`${longLegacyReply}\n\n请据此继续�
 assert.equal(crlfRecord?.question, longQuestion);
 assert.equal(crlfRecord?.answer, longAnswer);
 const longHtml = render([{ ...legacyAnswer, isAnswer: undefined, bySystem: false, text: longLegacyReply }], []);
-assert.equal(count(longHtml, 'class="task-question-record"'), 1, "旧消息没有 isAnswer 标记也显示已答卡");
-assert.equal(count(longHtml, 'class="task-user-bubble"'), 0);
-assert.match(summaries(longHtml)[0]!, /你的答复/);
-assert.match(summaries(longHtml)[0]!, /A\n顺便/);
-assert.doesNotMatch(summaries(longHtml)[0]!, /跨站那个问题|三个选项|你之前的提问/);
-assert.match(longHtml, /跨站那个问题/);
+assert.equal(count(longHtml, recordClass), 1, "旧消息没有 isAnswer 标记也显示已答的气泡");
+assert.equal(count(longHtml, 'class="task-user-bubble"'), 0, "不另画一个普通气泡");
+assert.match(longHtml, /<\/button><p>A\n顺便/, "答案原样在引文下面");
+assert.doesNotMatch(longHtml, /你之前的提问/);
+assert.match(longHtml, /task-question-quote-text">[^<]*跨站那个问题/, "旧题干引在答案上面");
 assert.match(longHtml, /还是在 ash 上预览别的项目/);
 console.log("question card: accessible inputs, collapsed durable cards, duplicate suppression and legacy/team rendering passed");

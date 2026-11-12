@@ -111,8 +111,10 @@ try {
     await page.getByRole("button", { name: "挂载切换" }).click();
     await count(page, 2);
     assert.equal(calls.length, 2, "重挂载后补齐旧快照遗漏的最新答复");
-    await page.locator(".task-question-record").filter({ hasText: "live的问题" }).locator("summary").click();
-    assert.equal(await page.getByText("live的问题", { exact: true }).isVisible(), true);
+    // 答过的提问是你的一个气泡：问题引在答案上面，点那句引文看当时的完整选项。
+    const live = page.locator(".task-question-record").filter({ hasText: "live的问题" });
+    assert.equal(await live.locator(".task-question-quote-text").innerText(), "live的问题");
+    await live.locator(".task-question-quote").click();
     assert.equal(await page.getByText("其他选项", { exact: true }).isVisible(), true, "回看仍有当时的完整选项");
     await page.close();
   }
@@ -124,8 +126,7 @@ try {
   assert.equal(await outlastFallback(first.page), 1, "已连接后挂载也只读取一次轻量历史（页面这一侧）");
   await fetchesSettled(first.page, 0, "那一发问答历史已被页面读完");
   assert.deepEqual(first.calls, ["/api/tasks/history-a/question-history"], "已连接后挂载也只读取一次轻量历史");
-  await first.page.locator(".task-question-record summary").click();
-  assert.equal(await first.page.getByText("loaded的问题", { exact: true }).isVisible(), true);
+  assert.equal(await first.page.locator(".task-question-record .task-question-quote-text").innerText(), "loaded的问题");
   await first.page.close();
 
   let release;

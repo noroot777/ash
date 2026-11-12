@@ -194,9 +194,9 @@
 .conversation-input-menu button.is-current { color: var(--ink); }
 .conversation-input-menu button.is-current::before { width: 14px; background: currentColor; }
 
-/* 列表摊开时盖住会话区大半，上下那两颗回顶 / 回底按钮、系统提示方案开关隔着玻璃透成几块灰斑，
-   又点不着：先藏起来，收起再回来。 */
-.conversation-scroll-region:has(> .conversation-input-rail > .conversation-input-menu) :is(.conversation-scroll-button, .system-notice-mode-switch) {
+/* 列表摊开时盖住会话区大半，上下那两颗回顶 / 回底按钮隔着玻璃透成几块灰斑，又点不着：
+   先藏起来，收起再回来。 */
+.conversation-scroll-region:has(> .conversation-input-rail > .conversation-input-menu) .conversation-scroll-button {
   opacity: 0;
   pointer-events: none;
 }

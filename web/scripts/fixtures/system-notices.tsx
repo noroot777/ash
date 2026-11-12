@@ -4,7 +4,6 @@ import type { Session, Task } from "@ash/shared";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
 import { SystemBoundary } from "../../src/task-detail/SystemNotice.tsx";
-import { SYSTEM_NOTICE_MODES } from "../../src/task-detail/systemNoticeModel.ts";
 import "../../src/styles/global.css";
 
 const session = {
@@ -28,7 +27,7 @@ const task = {
   executorLabel: "codex@local",
 } as unknown as Task;
 
-const turn = (kind: string, text: string, at: string, extra: Record<string, string> = {}) =>
+const turn = (kind: string, text: string, at: string, extra: Record<string, unknown> = {}) =>
   `\x1e${JSON.stringify({ t: kind, text, at, ...extra })}`;
 
 const conflict = [
@@ -51,8 +50,10 @@ const output = [
   turn("system", "冲突交接：已叫醒该任务去解冲突，完成后重新点验收即可。", "2026-09-01T05:10:02.000Z"),
   turn("user", conflict, "2026-09-01T05:10:03.000Z", { by: "system" }),
   "冲突已经解决并提交。",
-  turn("system", "已预约完成后审查：5.5审查 · 逻辑检查。", "2026-09-01T05:30:00.000Z"),
-  turn("system", "验收阶段更新：验收完成（accepted）", "2026-09-01T05:40:00.000Z"),
+  turn("system", "已预约完成后审查：5.5审查 · 逻辑检查。", "2026-09-01T05:30:00.000Z", { notice: { kind: "review.reserved", reviewer: "5.5审查", updated: false } }),
+  turn("system", "哨兵「全量回归」已经结束（exit 0），不再等它的结果：它排着的事件按明确放弃算。", "2026-09-01T05:35:00.000Z", { notice: { kind: "monitor.released", description: "全量回归", finished: true } }),
+  turn("system", "验收完成：目标分支 main（worktree 与任务分支已删除）。", "2026-09-01T05:40:00.000Z", { notice: { kind: "accept.done", target: "main" } }),
+  turn("system", "验收阶段更新：验收完成（accepted）", "2026-09-01T05:40:01.000Z", { notice: { kind: "stage", stage: "accepted" } }),
   turn("system", "冲突交接失败：没能叫醒该任务解冲突。", "2026-09-01T05:50:00.000Z"),
   turn("system", "本回合没有交卷：产物仍保留，可直接重试。", "2026-09-01T06:00:00.000Z", { level: "notice" }),
   turn("system", "〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状", "2026-09-01T06:10:00.000Z"),
@@ -75,22 +76,16 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     {new URLSearchParams(window.location.search).has("boundaries") ? (
       <main style={{ padding: 20, background: "var(--bg)" }}>
-        {SYSTEM_NOTICE_MODES.map(({ value, label }) => (
-          <section key={value} data-boundary-mode={value}>
-            <h2>{label}</h2>
-            {(["task", "team"] as const).map((surface) => (
-              <div key={surface} data-surface={surface}>
-                {(["neutral", "error"] as const).map((tone) => (
-                  <SystemBoundary
-                    key={tone}
-                    mode={value}
-                    surface={surface}
-                    item={{ text: tone === "error" ? "执行异常结束 · exit 1" : "本轮执行结束", tone }}
-                  />
-                ))}
-              </div>
+        {(["task", "team"] as const).map((surface) => (
+          <div key={surface} data-surface={surface}>
+            {(["neutral", "error"] as const).map((tone) => (
+              <SystemBoundary
+                key={tone}
+                surface={surface}
+                item={{ text: tone === "error" ? "执行异常结束 · exit 1" : "本轮执行结束", tone }}
+              />
             ))}
-          </section>
+          </div>
         ))}
       </main>
     ) : <div style={{ height: "100vh", background: "var(--bg)" }}>

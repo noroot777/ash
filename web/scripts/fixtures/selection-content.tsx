@@ -58,9 +58,8 @@ const items: ConversationItem[] = [
 ];
 
 /* 一条没跟任何用户消息配对的问答记录 —— 走 QuestionHistoryRemainder 那条路，渲染出真实的
-   `AnsweredQuestionCard`。折起来时整张卡**可见的只有 `<summary>` 那一行**：答复预览就在
-   里头，而完整问答藏在闭合的 `<details>` 里。两件要钉的事都只在这个真结构上成立 ——
-   摘要行不能被当装置整块删掉，藏着的那半截一个字都不许漏出来。 */
+   `AnsweredQuestionCard`：你的一个气泡，问题引在答案上面。引文是一颗键（点开看完整的问题
+   和当时的选项），按语义它是装置；答案才是正文。点开之后那段完整的问题是正文，取得到。 */
 const answered: QuestionRecord = {
   id: "q-1",
   answeredAt: "2026-10-30T03:30:00.000Z",

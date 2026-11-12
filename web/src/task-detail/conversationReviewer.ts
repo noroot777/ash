@@ -3,7 +3,7 @@
 // 这里只管在那条线上认人。类型是单向借用（`import type` 编译后不留引用）。
 import { LEGACY_SYS_MARKER } from "@ash/shared";
 import type { SessionTraceEntry } from "../lib/api.ts";
-import { verifyNoteOf, type VerifyNoteMark } from "./conversationNotes.ts";
+import { stageOf, verifyMarkOf, type VerifyNoteMark } from "./conversationNotes.ts";
 import type { ConversationItem } from "./conversationModel.ts";
 import { monitorWakeInput } from "./monitorWakeModel.ts";
 
@@ -12,7 +12,7 @@ export type ReviewerMark = { round: number | null };
 // 「这一轮有结论了」的服务端信号：report_stage 写进时间线的那条（task-stage.ts,
 // 文案 `验收阶段更新：${STAGE_LABELS[stage]}（${stage}）`）。认括号里的英文 key 而不认
 // 中文标签 —— 标签是给人看的、随时可改，key 是 TaskStage 本身。
-const CONCLUDED_STAGE = /验收阶段更新：.*（(?:verified|verify_failed)）/;
+const CONCLUDED_STAGES = new Set(["verified", "verify_failed"]);
 
 // 「这一回合是审查者在说话吗」的唯一判据，落盘与直播两条路读同一份语义：
 // ① 就地验证轮 —— 服务端按回合把轮次号写进 trace 的 run 事件、并随 agent.event 广播；
@@ -123,11 +123,11 @@ export function applyVerifySpans(items: ConversationItem[]): void {
       continue;
     }
     if (item.kind === "event") {
-      const mark = verifyNoteOf(item.text);
+      const mark = verifyMarkOf(item);
       if (mark) {
         close();
         if (mark.phase === "start") span = { ...mark, sessionId: item.sessionId };
-      } else if (span && CONCLUDED_STAGE.test(item.text)) {
+      } else if (span && CONCLUDED_STAGES.has(stageOf(item) ?? "")) {
         concluded = true;
       } else if (
         span && concluded && spoke

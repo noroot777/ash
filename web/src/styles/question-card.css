@@ -2,8 +2,7 @@
    提问卡停在会话下方的「坞」里（`ConversationFeed` 的 dock，在滚动容器外面）：
    上文照常滚，问题永远在手边，也压不到「回到底部」那颗浮动按钮上；
    一次只出一题——多题一次全摊开的版本要滚半天才找得到发送键。 */
-.task-question-card,
-.task-question-record { max-width: 790px; margin: 18px 0 12px 30px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); color: var(--ink); overflow: hidden; }
+.task-question-card { max-width: 790px; margin: 18px 0 12px 30px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); color: var(--ink); overflow: hidden; }
 .task-question-card { border-color: color-mix(in lch, var(--cyan) 30%, var(--line)); }
 
 .task-question-dock { flex: 0 0 auto; padding: 0 clamp(18px, 4vw, 48px) 12px; background: var(--canvas); }
@@ -60,40 +59,36 @@
 .task-question-nav:hover:not(:disabled) { border-color: var(--line2); color: var(--ink); }
 .task-question-send { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; border: 0; border-radius: 7px; padding: 0 13px; background: var(--cyan); color: white; font-size: 12px; font-weight: 600; }
 .task-question-card button:disabled { opacity: .48; cursor: not-allowed; }
-.task-question-card button:focus-visible,
-.task-question-record summary:focus-visible,
-.task-question-record button:focus-visible { outline: 2px solid var(--cyan); outline-offset: -3px; }
+.task-question-card button:focus-visible { outline: 2px solid var(--cyan); outline-offset: -3px; }
 .task-question-error { margin: 0; padding: 0 14px 10px; color: var(--red); font-size: 12px; overflow-wrap: anywhere; }
 
-.task-question-record-body > section { padding: 16px; }
-.task-question-record-body > section + section { border-top: 1px solid var(--line); }
-.task-question-record > summary { display: flex; align-items: center; gap: 10px; padding: 13px 16px; cursor: pointer; list-style: none; }
-.task-question-record > summary::-webkit-details-marker { display: none; }
-.task-question-record > summary:hover { background: var(--canvas); }
-.task-question-record-icon { flex: 0 0 auto; color: var(--green); }
-.task-question-record-summary { display: grid; gap: 4px; flex: 1; min-width: 0; }
-.task-question-record-summary > span:first-child { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-.task-question-record-summary b { font-size: 11px; color: var(--green); font-weight: 600; }
-.task-question-record-summary small { font-size: 10px; color: var(--muted); }
-.task-question-record-summary time { font-size: 10px; color: var(--faint); }
-.task-question-record-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; white-space: pre-line; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; }
-.task-question-record-action { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
-.task-question-record-caret { flex: 0 0 auto; color: var(--faint); }
-.task-question-record[open] .task-question-record-caret { transform: rotate(180deg); }
-.task-question-record[open] > summary { border-bottom: 1px solid var(--line); }
-.task-question-record-options { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; padding: 0; list-style: none; }
-.task-question-record-options li { border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; color: var(--muted); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.task-question-record-options li.is-selected { color: var(--green); border-color: color-mix(in lch, var(--green) 35%, var(--line)); background: color-mix(in lch, var(--green) 5%, var(--panel)); }
-.task-question-record-answer { border-left: 2px solid color-mix(in lch, var(--green) 45%, var(--line)); padding: 2px 0 2px 11px; }
-.task-question-record-answer b { color: var(--muted); font-size: 10px; font-weight: 500; }
-.task-question-record-answer p { margin: 4px 0 0; font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
-.task-question-record-answer.is-empty { border-color: var(--line); color: var(--faint); }
-.task-question-record-body > .task-question-record-answer { margin: 0 16px 16px; }
-.task-question-record-body > footer { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-top: 1px solid var(--line); color: var(--faint); font-size: 10px; }
-.task-question-record-actions { display: inline-flex; align-items: center; gap: 14px; }
-.task-question-record-body > footer button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 0; border: 0; background: transparent; color: var(--muted); font-size: 11px; }
-.task-question-history-error { color: var(--red); font-size: 11px; }
-.team-feed .task-question-record { margin-left: 0; }
+
+/* 答过的提问：你的一个气泡（气泡本身的样子在 task-conversation.css），问题引在答案上面。 */
+.task-question-bubble > header small { color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-regular); }
+.task-question-pair + .task-question-pair { margin-top: 10px; }
+.task-question-quote {
+  display: flex; gap: 6px; width: 100%; margin: 7px 0 0; padding: 0 0 0 10px;
+  border: 0; border-left: 2px solid var(--line2); border-radius: 0; background: transparent;
+  color: var(--muted); font: inherit; font-size: var(--t-xs); line-height: 1.6; text-align: left; cursor: pointer;
+  transition: color var(--dur-1) var(--ease-out);
+}
+.task-question-quote:hover,
+.task-question-quote[aria-expanded="true"] { color: var(--ink); }
+.task-question-quote:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.task-question-quote-number { flex: none; font-variant-numeric: tabular-nums; font-weight: var(--w-medium); }
+.task-question-quote-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; min-width: 0; overflow: hidden; overflow-wrap: anywhere; }
+.task-question-quote-full { margin: 6px 0 0 12px; color: var(--muted); font-size: var(--t-xs); line-height: 1.6; }
+.task-question-quote-full .task-question-record-options { margin: 6px 0 0; }
+.task-question-pair > p {
+  margin: 4px 0 0; color: color-mix(in lch, var(--ink) 88%, var(--muted));
+  font-size: var(--t-sm); font-weight: var(--w-regular); line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.task-question-pair > p.is-empty { color: var(--faint); }
+.task-question-record-options { display: flex; flex-wrap: wrap; gap: 6px; padding: 0; list-style: none; }
+.task-question-record-options li { border-radius: var(--r-sm); padding: 1px 8px; box-shadow: inset 0 0 0 1px var(--line2); color: var(--muted); font-size: var(--t-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-question-record-options li.is-selected { background: color-mix(in lch, var(--green) 10%, var(--panel)); box-shadow: none; color: var(--green); }
+.task-question-history-error { color: var(--red); font-size: var(--t-xs); }
+@media (prefers-reduced-motion: reduce) { .task-question-quote { transition: none; } }
 
 @media (max-width: 820px) {
   /* 与 `.task-conversation` 的窄屏内边距对齐（task-detail.css），坞里的卡片才跟正文一条线。 */
@@ -101,12 +96,8 @@
 }
 
 @media (max-width: 560px) {
-  .task-question-card, .task-question-record { margin-left: 0; border-radius: 10px; }
-  .task-question-record > summary { padding: 12px; }
+  .task-question-card { margin-left: 0; border-radius: 10px; }
   .task-question-step { max-height: 52vh; padding: 12px; }
-  .task-question-record-body > section { padding: 12px; }
-  .task-question-record-body > footer { padding: 10px 12px; }
-  .task-question-record-action { display: none; }
   .task-question-options button { min-height: 40px; }
   /* 三颗按钮挤不进一行就整行换：提示自己占一行，按钮平分下一行，
      别让「下一题」单独掉到左下角。 */

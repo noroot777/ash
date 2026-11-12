@@ -6,7 +6,8 @@ import { addUsage, usageTotal } from "@ash/shared/usage";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
-import { isVerifyNote, noteTone, verifyNoteOf } from "./conversationNotes.ts";
+import { eventTone, isVerifyNote, verifyMark } from "./conversationNotes.ts";
+import type { TimelineNotice } from "@ash/shared/timeline-notice";
 import { applyVerifySpans, reviewerKey, reviewerKeyOf, reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";
 import type { AgentContentSegment } from "./conversationSegments.ts";
 import { contentSegments, markSegmentsAwaiting } from "./conversationSegments.ts";
@@ -138,6 +139,8 @@ export type ConversationItem =
        * trace 的回合分组推（见 notePlacement）。
        */
       aside?: boolean;
+      /** 服务端给的「这是哪一类事」（shared/src/timeline-notice.ts）。老记录、非时间线旁注没有。 */
+      notice?: TimelineNotice;
     };
 
 export type PersistedConversation = { session: Session; output: string; trace?: SessionTraceEntry[] };
@@ -349,7 +352,7 @@ function appendPersistedSession(
     if (segment.at) {
       if (midTurn || segment.aside === true) asideAt.add(segment.at);
       if (!(closedTurn && proseSinceTurnStart)
-        && verifyNoteOf(normalizeSessionNoteText(segment.text))?.phase !== "start"
+        && verifyMark(normalizeSessionNoteText(segment.text), segment.notice)?.phase !== "start"
         && (midTurn || (placement === "unknown" && segment.aside))) {
         midTurnAt.add(segment.at);
       }
@@ -416,10 +419,11 @@ function appendPersistedSession(
         at: segment.at,
         sessionId: session.id,
         // 服务端标了 notice 就照它的，别再去猜（见 conversationNotes 的 tone 注释）。
-        tone: segment.level === "notice" ? "notice" : noteTone(text),
+        tone: eventTone(text, segment.notice, segment.level),
         variant: "note",
-        verify: isVerifyNote(text),
+        verify: isVerifyNote(text, segment.notice),
         aside: asideAt.has(segment.at ?? ""),
+        ...(segment.notice ? { notice: segment.notice } : {}),
         ...origin(index),
       });
       // 回合起点跟着**切点**走：切过的地方 trace 已经另成一组，下半截要靠这个起点认领

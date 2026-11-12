@@ -14,7 +14,8 @@ import { buildConversationItems } from "../src/task-detail/conversationModel.ts"
 import { isWorkspaceRecoveryNote, noteTone, verifyNoteOf } from "../src/task-detail/conversationNotes.ts";
 import { conversationFeedRows } from "../src/task-detail/conversationReviewLanes.ts";
 import { conversationSystemRows } from "../src/task-detail/conversationSystemRows.ts";
-import { isConflictHandoff, isReviewSystemPrompt, systemEventKind, systemNoticeModeFromSearch } from "../src/task-detail/systemNoticeModel.ts";
+import { isConflictHandoff, isReviewSystemPrompt } from "../src/task-detail/systemNoticeModel.ts";
+import { noticeView } from "../src/task-detail/timelineNoticeCopy.ts";
 
 // —— 语气分类：办成了的事不报红，没办成的才报红 ——
 assert.equal(noteTone("自由工作流第 2 轮审查通过（5.5审查）。"), "neutral");
@@ -32,31 +33,84 @@ assert.equal(
   "已知的 worktree 重建回执应拿到专用单行样式",
 );
 assert.equal(isWorkspaceRecoveryNote("合并清理警告：worktree 未能删除"), false, "普通 worktree 旁注不能误判为恢复回执");
-assert.equal(systemEventKind("开始验收：准备安全合并。", "neutral"), "progress");
-assert.equal(systemEventKind("验收完成：目标分支 main。", "neutral"), "success");
-assert.equal(systemEventKind("本回合没有交卷：产物仍保留。", "notice"), "notice");
-assert.equal(systemEventKind("验收未完成：合并发生冲突。", "error"), "error");
+// —— 没有类型的老记录：按原文里的几个固定说法和语气分三档 ——
+const legacy = (text, tone = "neutral") => noticeView({ text, tone, variant: "note" });
+assert.equal(legacy("开始验收：准备安全合并。").tier, "receipt");
+assert.deepEqual(
+  [legacy("验收完成：目标分支 main。").tier, legacy("验收完成：目标分支 main。").text],
+  ["milestone", "已验收，合并到 main"],
+);
+assert.equal(legacy("本回合没有交卷：产物仍保留。", "notice").tier, "alert");
+assert.deepEqual([legacy("验收未完成：合并发生冲突。", "error").tier, legacy("验收未完成：合并发生冲突。", "error").tone], ["alert", "bad"]);
+assert.equal(legacy("〔系统〕已预约完成后审查：5.5审查。").tier, "receipt", "老记录的〔系统〕前缀是回执");
+assert.equal(legacy("〔系统〕已预约完成后审查：5.5审查。").text.startsWith("〔系统〕"), false, "前缀不进摆出来的那句");
+
+// —— 有类型的：写结果不写机制，细节留在原文里点开再看 ——
+const typed = (notice, text = "原文") => noticeView({ text, tone: "neutral", variant: "note", notice });
+assert.deepEqual(
+  [typed({ kind: "accept.done", target: "main" }, "验收完成：目标分支 main（worktree 已删除）。").text, typed({ kind: "accept.done", target: "main" }).tier],
+  ["已验收，合并到 main", "milestone"],
+);
+assert.equal(typed({ kind: "accept.done", target: "main", noCommit: true }).text, "已验收，合并到 main，等你提交");
+assert.equal(typed({ kind: "accept.done", target: null, tag: "v1.2" }).text, "已验收，打上标签 v1.2");
+assert.equal(typed({ kind: "monitor.released", description: "回归测试", finished: true }).text, "不再等「回归测试」了，它已经跑完");
+assert.equal(typed({ kind: "monitor.released", description: "回归测试", finished: true }).tier, "receipt");
+assert.equal(typed({ kind: "review.reserved", reviewer: "5.5审查", updated: false }).text, "审查已预约，这一轮跑完自动开始");
+assert.deepEqual(
+  (({ tier, tone, text }) => [tier, tone, text])(typed({ kind: "review.verdict", source: "free", round: 2, verdict: "failed", findings: 2 })),
+  ["milestone", "bad", "第 2 轮审查未通过，2 条意见"],
+);
+assert.equal(typed({ kind: "review.verdict", source: "free", round: 3, verdict: "passed" }).text, "第 3 轮审查通过");
+assert.equal(typed({ kind: "review.verdict", source: "free", round: 1, verdict: "aborted" }).tier, "alert", "没能开始的一轮是出了岔子");
+assert.equal(typed({ kind: "review.dispute", round: 1 }, "执行者驳回了审查意见，等你裁定").dispute, true);
+assert.equal(typed({ kind: "alert" }, "预览没起来：端口被占用。").tier, "alert");
+// 你那条斜杠命令的回答是你要看的东西：不收进回合记录。
+const scopes = typed({ kind: "command.output", command: "/goal --scopes" }, "/goal --scopes\n已保存的目标作用域（ash 快照，不启动模型）：\n- codex：让 test/auth 全过");
+assert.deepEqual(
+  [scopes.tier, scopes.text, scopes.meta],
+  ["reply", "已保存的目标作用域（ash 快照，不启动模型）：\n- codex：让 test/auth 全过", "/goal --scopes"],
+  "命令的回答整段常显，命令本身写在指到才出的那半句里",
+);
+assert.equal(typed({ kind: "command.output", command: "/goal clear" }, "已清除。\n命令：/goal clear").text, "已清除。");
+const longRaw = "验收暂缓：这一轮的回归测试还在跑，等它跑完、结果交回任务之后再来合并；你也可以先去改动工作区看看改了什么。";
+assert.deepEqual(
+  [typed({ kind: "receipt" }, longRaw).text, typed({ kind: "receipt" }, longRaw).detail],
+  ["验收暂缓", longRaw],
+  "长原文只留标题，原文点开再看",
+);
+assert.equal(typed({ kind: "receipt" }, "开始验收：准备安全合并。").detail, null, "短的整句照登，没有可展开的");
 assert.equal(isConflictHandoff("【验收未通过 · 需要你解冲突】\n请处理"), true);
 assert.equal(isConflictHandoff("【自动验证未通过 · 第 1 轮】\n请处理"), false);
 assert.equal(isReviewSystemPrompt("【自由工作流审查未通过 · 第 1 轮】\n请处理"), true);
 assert.equal(isReviewSystemPrompt("【验收未通过 · 需要你解冲突】\n请处理"), false);
-assert.equal(systemNoticeModeFromSearch("?systemNotices=footnote"), "footnote");
-assert.equal(systemNoticeModeFromSearch("?systemNotices=unknown"), "aligned", "非法参数回落到正式默认方案二");
-assert.equal(systemNoticeModeFromSearch(""), "aligned");
 
-const digestEvent = (id, text) => ({
-  kind: "event",
-  id,
-  text,
-  variant: "note",
-  tone: "neutral",
-});
-const oneDigest = conversationSystemRows([{ kind: "item", item: digestEvent("digest:first", "第一条") }]);
-const growingDigest = conversationSystemRows([
-  { kind: "item", item: digestEvent("digest:first", "第一条") },
-  { kind: "item", item: digestEvent("digest:second", "第二条") },
+// —— 回执记在它所属的那一回合上，不在会话里占行 ——
+const ev = (id, text, notice, tone = "neutral") => ({ kind: "item", item: { kind: "event", id, text, variant: "note", tone, ...(notice ? { notice } : {}) } });
+const agent = (id) => ({ kind: "item", item: { kind: "agent", id, segments: [] } });
+const user = (id) => ({ kind: "item", item: { kind: "user", id, text: "你说的", attachments: [] } });
+const attached = conversationSystemRows([
+  user("u0"),
+  ev("r0", "意见已交给执行者", { kind: "review.repair", source: "free", round: 1 }),
+  agent("a1"),
+  ev("r1", "开始盯", { kind: "monitor.started", description: "回归测试" }),
+  ev("m1", "验收完成", { kind: "accept.done", target: "main" }),
+  ev("r2", "已预约", { kind: "review.reserved", reviewer: "x", updated: false }),
+  user("u1"),
+  ev("r3", "不再等", { kind: "monitor.released", description: "回归测试", finished: true }),
+  agent("a2"),
+  user("u2"),
+  ev("r4", "孤零零的一条", { kind: "receipt" }),
 ]);
-assert.equal(oneDigest[0].id, growingDigest[0].id, "同一组追加系统事件时 React key 必须稳定，展开态不能被冲掉");
+assert.deepEqual(
+  attached.rows.map((row) => row.kind === "item" ? row.item.id : `${row.kind}:${row.kind === "receipt-log" ? row.receipts.map((r) => r.id).join("+") : row.item.id}`),
+  ["u0", "a1", "notice:m1", "u1", "a2", "u2", "receipt-log:r4"],
+  "会话里只剩你说的、它说的、里程碑一句；找不到回合的回执原处留一颗「N 条记录」",
+);
+assert.deepEqual(attached.receipts.get("a1")?.map((r) => r.id), ["r0", "r1", "r2"], "段里还没回合的回执等第一回合来认，之后的记在最近那一回合上，里程碑不打断归属");
+assert.deepEqual(attached.receipts.get("a2")?.map((r) => r.id), ["r3"]);
+const oneLog = conversationSystemRows([ev("first", "第一条", { kind: "receipt" })]);
+const growingLog = conversationSystemRows([ev("first", "第一条", { kind: "receipt" }), ev("second", "第二条", { kind: "receipt" })]);
+assert.equal(oneLog.rows[0].id, growingLog.rows[0].id, "同一组追加回执时 React key 必须稳定，展开态不能被冲掉");
 
 // —— 会话轮换旁注：中性事实，不是本回合失败 ——
 // 这几句会出现在一个 exit 0 的成功回合、甚至用户自己点的「停止全组」上。判据不是「文案
@@ -404,6 +458,20 @@ const timeline = [
   ...DEBATE_NOTES.slice(0, 2),
   DEBATE_NOTES[3],
 ].map((text, index) => `\x1e${JSON.stringify({ t: "system", text, at: `2026-09-24T12:${String(index * 5).padStart(2, "0")}:00.000Z` })}`);
+// 审查段的起止按类型认，原文换了说法也不走样；结论与意见条数从类型上拿。
+const typedTimeline = [
+  [{ kind: "review.start", source: "free", round: 4, reviewer: "顶级审查" }, "派审：换了一种说法"],
+  [{ kind: "review.verdict", source: "free", round: 4, verdict: "failed", reviewer: "顶级审查", findings: 3 }, "也换了一种说法"],
+].map(([notice, text], index) => `\x1e${JSON.stringify({ t: "system", text, notice, at: `2026-09-24T13:0${index}:00.000Z` })}`);
+const typedLanes = conversationFeedRows(
+  buildConversationItems([{ session: debateSession, output: typedTimeline.join("\n"), trace: [] }], [debateSession], []),
+).filter((row) => row.kind === "review-lane");
+assert.equal(typedLanes.length, 1);
+assert.deepEqual(
+  [typedLanes[0].title, typedLanes[0].complete, typedLanes[0].conclusion, typedLanes[0].findings],
+  ["第 4 轮审查", true, "verify_failed", 3],
+);
+
 const debateLanes = conversationFeedRows(
   buildConversationItems([{ session: debateSession, output: timeline.join("\n"), trace: [] }], [debateSession], []),
 ).filter((row) => row.kind === "review-lane");

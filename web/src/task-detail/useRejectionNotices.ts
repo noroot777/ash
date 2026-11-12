@@ -42,6 +42,8 @@ export function useRejectionNotices(taskId: string, revision = 0): {
           at: notice.occurredAt,
           text: noticeText(notice),
           tone: "notice" as const,
+          // 被挡回的操作要让人知道：留在明面上，不收进回合的记录里。
+          notice: { kind: "alert" as const },
           // 这是任务时间线的一条记录,不是会话里的一个回合 —— 不许当回合边界用。
           aside: true,
         })));

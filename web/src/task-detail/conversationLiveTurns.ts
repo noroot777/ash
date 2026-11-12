@@ -5,7 +5,7 @@ import type { ContextUsage, Session } from "@ash/shared";
 import { stableBlockBoundary } from "@ash/shared/markdown-images";
 import { addUsage } from "@ash/shared/usage";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
-import { isVerifyNote, noteTone } from "./conversationNotes.ts";
+import { eventTone, isVerifyNote, noteTone } from "./conversationNotes.ts";
 import { appendExecutionEvent, isVisibleExecutionEvent } from "../lib/executionTrace.ts";
 import { reviewerKey, reviewerKeyOf, reviewerOf } from "./conversationReviewer.ts";
 import type { AgentContentSegment, AgentTraceEvent } from "./conversationSegments.ts";
@@ -229,9 +229,10 @@ export function appendLiveTimeline(
         text,
         at: event.at,
         sessionId: entry.event.sessionId,
-        tone: event.level === "notice" ? "notice" : noteTone(text),
+        tone: eventTone(text, event.notice, event.level),
         variant: "note",
-        verify: isVerifyNote(text),
+        verify: isVerifyNote(text, event.notice),
+        ...(event.notice ? { notice: event.notice } : {}),
         // 直播这一路认服务端的标就够了：旁注本来就不拆气泡（见 appendAgent 跨旁注回捞
         // 当前回合），带上它只是为了同样别去定这一回合的结束时刻。
         aside: event.aside === true,

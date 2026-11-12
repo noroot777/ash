@@ -1,5 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { CaretDown, CheckCircle } from "@phosphor-icons/react";
+import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   formatQuestionAnswers, legacyQuestionRecord, pairAnswerMessages, questionItems, questionOptionSelected, type QuestionRecord,
 } from "@ash/shared/questions";
@@ -117,51 +116,79 @@ function LocalQuestionHistory({ taskId, history, messages, children }: {
   return <PairedHistory records={local.records} messages={messages} error={local.error} retry={reload}>{children}</PairedHistory>;
 }
 
-/** `deletable`：这张卡出自会话里的那条答复（有出处才删得掉，见 MessageDelete.tsx）。 */
+/** 引文里只放一行纯文字：多余的空白收掉，长了交给样式去截。 */
+const plain = (text: string) => text.replace(/\s+/g, " ").trim();
+
+/**
+ * 一题的引文：问题引在答案上面，淡一档、左边一道竖线。它是一颗键——引文截成两行，点开是
+ * 完整的问题和当时给的选项（选中的那几个标出来）；平时不摊开。
+ */
+function QuestionQuote({ question, options, answer, number }: {
+  question: string;
+  options?: readonly string[];
+  answer?: string;
+  number?: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const detailId = useId();
+  if (!question.trim() && !options?.length) return null;
+  return <>
+    <button
+      type="button"
+      className="task-question-quote"
+      aria-expanded={open}
+      aria-controls={detailId}
+      aria-label={`${number ? `第 ${number} 题：` : "答的是："}${plain(question)}，${open ? "收起" : "看完整的问题和当时的选项"}`}
+      onClick={() => setOpen((value) => !value)}
+    >
+      {number && <span className="task-question-quote-number">{number}</span>}
+      <span className="task-question-quote-text">{plain(question)}</span>
+    </button>
+    {open && <div className="task-question-quote-full" id={detailId}>
+      {question.trim() && <MarkdownBody text={question} />}
+      {!!options?.length && <ul className="task-question-record-options" aria-label="当时的选项">
+        {options.map((option, i) => <li key={i} className={questionOptionSelected(answer ?? "", option) ? "is-selected" : undefined}>{option}</li>)}
+      </ul>}
+    </div>}
+  </>;
+}
+
+/**
+ * 答过的一次提问：就是你的一个气泡（跟你别的话同一种长相），问题引在答案上面。
+ * 多题时一题一段：引文、答案，留空的题写「未答复」。
+ *
+ * `deletable`：这张卡出自会话里的那条答复（有出处才删得掉，见 MessageDelete.tsx）。
+ */
 export function AnsweredQuestionCard({ record, deletable }: { record: QuestionRecord; deletable?: DeletableItem }) {
   const items = questionItems(record);
   const answers = record.answers ?? (items.length === 1 ? [record.answer] : undefined);
   const partial = answers?.some((answer) => !answer.trim());
   const answerText = answers ? formatQuestionAnswers(answers) : record.answer;
+  const multi = items.length > 1;
   return (
-    <details className="task-question-record">
-      <summary>
-        <CheckCircle className="task-question-record-icon" size={18} weight="duotone" aria-hidden="true" />
-        <span className="task-question-record-summary">
-          <span><b>你的答复</b>{partial && <small>已部分答复</small>}{record.answeredAt && <time>{formatInstant(record.answeredAt)}</time>}</span>
-          {/* 折起来时这一行就是整张卡的全部可见内容，不能跟着外面那层 `<summary>` 一起被
-              当成界面装置剔掉（见 side-chat/selectionContent.ts）。 */}
-          <span className="task-question-record-preview" data-selection-content="">{answerText}</span>
-        </span>
-        <span className="task-question-record-action">查看问答</span>
-        <CaretDown className="task-question-record-caret" size={14} aria-hidden="true" />
-      </summary>
-      <div className="task-question-record-body">
-        {record.questionItems?.length && record.question ? <div className="task-question-context"><MarkdownBody text={record.question} /></div> : null}
-        {items.map((item, index) => (
-          <section key={index}>
-            <div className="task-question-title">
-              {items.length > 1 && <span>{index + 1}</span>}
-              <MarkdownBody text={item.question} />
-            </div>
-            {!!item.options?.length && <ul className="task-question-record-options" aria-label="当时的选项">
-              {item.options.map((option, i) => <li key={i} className={questionOptionSelected(answers?.[index] ?? "", option) ? "is-selected" : undefined}>{option}</li>)}
-            </ul>}
-            {answers && <div className={`task-question-record-answer${answers[index]?.trim() ? "" : " is-empty"}`}>
-              <b>你的答案</b><p>{answers[index]?.trim() || "未答复"}</p>
-            </div>}
-          </section>
-        ))}
-        {!answers && <div className="task-question-record-answer"><b>你的答案</b><p>{record.answer}</p></div>}
-        <footer>
-          <span className="task-question-record-actions">
-            <CopyButton value={answerText} label="复制答案" ariaLabel="复制答案" icon />
-            {deletable && <DeleteMessageButton item={deletable} label="删除" />}
-          </span>
-          <span>已发送的答复</span>
-        </footer>
+    <article className="task-message task-message--user task-question-record">
+      <div className="task-user-bubble task-question-bubble">
+        <header>
+          <b>你</b>
+          {partial && <small>已部分答复</small>}
+          {record.answeredAt && <time>{formatInstant(record.answeredAt)}</time>}
+          <CopyButton value={answerText} ariaLabel="复制答案" icon />
+          {deletable && <DeleteMessageButton item={deletable} />}
+        </header>
+        {multi && record.question?.trim() && <QuestionQuote question={record.question} />}
+        {answers
+          ? items.map((item, index) => (
+            <section key={index} className="task-question-pair">
+              <QuestionQuote question={item.question} options={item.options} answer={answers[index]} number={multi ? index + 1 : undefined} />
+              <p className={answers[index]?.trim() ? undefined : "is-empty"}>{answers[index]?.trim() || "未答复"}</p>
+            </section>
+          ))
+          : <>
+            {items.map((item, index) => <QuestionQuote key={index} question={item.question} options={item.options} number={multi ? index + 1 : undefined} />)}
+            <p>{record.answer}</p>
+          </>}
       </div>
-    </details>
+    </article>
   );
 }
 

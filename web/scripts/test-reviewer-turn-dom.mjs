@@ -1,5 +1,5 @@
-// 审查者身份在会话里的实际渲染：盾形头像 + 一颗徽标 + 验证段旁注的竖条颜色。
-// 判定逻辑由 test:reviewer-turn 钉住，这里钉的是「看得出来」和「没动别的」两件事。
+// 审查轮在会话里的实际渲染：出了结论的一轮收成一句（颜色只在图标上，谁审的、用时指到才出），
+// 还在跑的一轮是一张卡。判定逻辑由 test:reviewer-turn 钉住，这里钉的是「看得出来」和「没动别的」。
 // 设 SHOT=<路径> 可以顺带截一张图自查版式。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -29,233 +29,126 @@ try {
   });
   await page.goto(`${web.origin}/scripts/fixtures/reviewer-turn.html`);
 
+  // 出了结论的轮次在会话里只剩一句：审查者那几段发言、报告都收在这一行后面。
   const messages = page.locator(".task-message--agent");
   await messages.first().waitFor();
-  assert.equal(await messages.count(), 5, "四段就地验证前后的发言 + 一段自由派审");
+  assert.equal(await messages.count(), 2, "平时只看得见实现与修复这两段；审查发言收在各自那一轮里");
+  assert.equal(await page.locator(".task-message--agent.is-reviewer").count(), 0);
+  for (const index of [0, 1]) {
+    assert.equal(await messages.nth(index).locator(".turn-head > b").count(), 1, `第 ${index + 1} 段该报身份`);
+  }
 
-  // 两轮就地验证 + 最后一段 reviewer 会话挂 is-reviewer，修复正文仍是普通执行者。
-  const reviewer = page.locator(".task-message--agent.is-reviewer");
-  assert.equal(await reviewer.count(), 3);
-  assert.equal(await messages.nth(0).evaluate((el) => el.classList.contains("is-reviewer")), false);
-  assert.equal(await messages.nth(1).evaluate((el) => el.classList.contains("is-reviewer")), true);
-  assert.equal(await messages.nth(2).evaluate((el) => el.classList.contains("is-reviewer")), false);
-  assert.equal(await messages.nth(3).evaluate((el) => el.classList.contains("is-reviewer")), true);
-  assert.equal(await messages.nth(4).evaluate((el) => el.classList.contains("is-reviewer")), true);
-
-  // 轮次、身份、模型档位和起止时间全归卡头：卡内首条气泡原本把这一整行又复读了一遍。
-  assert.equal(
-    await page.locator(".verify-badge").count(),
-    0,
-    "三条审查发言都在卡里，轮次徽标只是卡头标题的复读",
+  const milestones = page.locator(".review-milestone");
+  assert.deepEqual(
+    await milestones.evaluateAll((els) => els.map((el) => el.getAttribute("aria-label"))),
+    ["第 2 轮验证未通过", "第 3 轮验证通过", "第 1 轮审查没有给出结论", "第 1 轮审查通过"],
+    "一轮一句，结论写在字里；自由派审不沿用就地验证的「验证」",
   );
-  const laneBy = await page.locator(".verify-lane-by").allInnerTexts();
-  assert.match(laneBy[0], /codex@cpa·gpt-5\.6-sol 在审 · xhigh/, "卡头报出在审的人和智能水平");
-  assert.match(laneBy[3], /5\.5审查 在审 · claude-opus-5 · high/, "模型和智能水平一起搬到卡头");
+  assert.deepEqual(
+    await milestones.locator(".notice-line").evaluateAll((els) => els.map((el) => [...el.classList].find((name) => name.startsWith("tone-")))),
+    ["tone-bad", "tone-ok", "tone-warn", "tone-ok"],
+  );
+  const colors = await milestones.locator(".notice-line").evaluateAll((els) => els.map((el) => ({
+    icon: getComputedStyle(el.querySelector(".notice-line-icon")).color,
+    text: getComputedStyle(el.querySelector(".notice-line-text")).color,
+  })));
+  assert.notEqual(colors[0].icon, colors[1].icon, "未通过与通过只在图标上分颜色");
+  assert.equal(new Set(colors.map((c) => c.text)).size, 1, "字都是同一种颜色");
 
-  // D：有后续轮次且已有结论的历史卡默认折叠，最新一张展开。自由派审启动失败后重跑
-  // 仍是同一 round，但要分成旧失败卡 + 新结果卡；报告只能挂到后者。
+  // 谁审的、用时、时刻紧跟在字后面，指到才出。
+  const first = milestones.nth(0);
+  assert.equal(await first.locator(".notice-line-tail").innerText(), "codex@cpa·gpt-5.6-sol · 30m 0s · 08/10 12:10");
+  await page.mouse.move(990, 5);
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".review-milestone .notice-line-tail")).opacity === "0");
+  await first.hover();
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".review-milestone .notice-line-tail")).opacity === "1");
+  assert.equal(await milestones.nth(3).locator(".notice-line-tail").innerText(), "claude@5.5审查 · 12m 0s · 08/10 23:13");
+
+  // 还在跑的那一轮照旧是整张卡：看得见审查者在说什么（这一轮还没开口，卡里是空的）。
   const lanes = page.locator(".verify-lane");
-  assert.equal(await lanes.count(), 5, "两轮就地验证 + 自由派审失败旧卡 / 重跑结果卡 + 尚未开口的新轮次");
-  assert.deepEqual(
-    await lanes.evaluateAll((els) => els.map((el) => el.getAttribute("aria-label"))),
-    ["第 2 轮验证", "第 3 轮验证", "第 1/5 轮审查", "第 1/5 轮审查", "第 2/5 轮审查"],
-    "自由派审的卡不能沿用就地验证的「第 N 轮验证」标题；同一条链的每张卡都要带上总轮数",
-  );
-  assert.equal(await lanes.nth(0).evaluate((el) => el.classList.contains("is-collapsed")), true);
-  assert.equal(await lanes.nth(1).evaluate((el) => el.classList.contains("is-collapsed")), true);
-  assert.equal(await lanes.nth(2).evaluate((el) => el.classList.contains("is-collapsed")), true);
-  assert.equal(await lanes.nth(3).evaluate((el) => el.classList.contains("is-collapsed")), true);
-  assert.equal(await lanes.nth(4).evaluate((el) => el.classList.contains("is-collapsed")), true, "空正文按收起态绘制");
-  assert.equal(await lanes.nth(0).locator(".verify-lane-body").isHidden(), true);
-  assert.equal(await lanes.nth(4).locator(".verify-lane-body").isHidden(), true);
-  assert.equal(await lanes.nth(4).locator(".verify-lane-body > *").count(), 0);
-  assert.deepEqual(await lanes.nth(4).locator(".verify-lane-actions > button").allInnerTexts(), [], "空正文没有无效展开按钮");
-  assert.deepEqual(
-    await lanes.nth(0).locator(".verify-lane-actions > button").allInnerTexts(),
-    ["审查报告", "展开"],
-    "审查报告必须在展开按钮左边",
-  );
-  assert.deepEqual(
-    await lanes.nth(2).locator(".verify-lane-actions > button").allInnerTexts(),
-    ["展开"],
-    "启动失败旧卡不能占用后来重跑生成的报告",
-  );
-  assert.deepEqual(
-    await lanes.nth(3).locator(".verify-lane-actions > button").allInnerTexts(),
-    ["审查报告", "展开"],
-  );
-  assert.equal(
-    await messages.nth(4).evaluate((el) => el.closest(".verify-lane")?.getAttribute("aria-label")),
-    "第 1/5 轮审查",
-    "自由派审的正文归它自己那张卡",
-  );
-  assert.equal(await page.getByText(/审查开始|审查重跑上一回合/).count(), 0, "卡头已有轮次，正文不重复开始旁注");
-  const resumeMarkers = page.locator(".system-event-digest summary > span").filter({ hasText: /继续（从中断处）/ });
-  assert.equal(await resumeMarkers.count(), 1, "普通任务的 checkpoint 续跑标记必须保留");
-  assert.equal(await resumeMarkers.first().evaluate((el) => !!el.closest(".verify-lane")), false, "只隐藏审查卡内部的续跑标记");
-  assert.equal(await page.getByText(/请先完整读取 report\.md/).count(), 0, "自由审查修复 prompt 不伪装成系统消息块");
+  assert.deepEqual(await lanes.evaluateAll((els) => els.map((el) => el.getAttribute("aria-label"))), ["第 2/5 轮审查"]);
+  assert.equal(await lanes.first().evaluate((el) => el.classList.contains("is-collapsed")), true, "空正文按收起态绘制");
+  assert.equal(await lanes.first().locator(".verify-lane-body > *").count(), 0);
+  assert.deepEqual(await lanes.first().locator(".verify-lane-actions > button").allInnerTexts(), [], "空正文没有无效展开按钮");
+  assert.match(await lanes.first().locator(".verify-lane-state").innerText(), /进行中/);
 
-  // 折叠状态不妨碍直接看报告；报告沿用现有应用内 Markdown 弹层，不另开标签页。
+  assert.equal(await page.getByText(/审查开始|审查重跑上一回合/).count(), 0, "开始旁注不在会话里");
+  assert.equal(await page.getByText(/请先完整读取 report\.md/).count(), 0, "自由审查修复 prompt 不伪装成系统消息块");
+  // 普通任务的续跑标记是那一回合的一条记录，审查轮里的那条不外露。
+  await messages.nth(0).hover();
+  await messages.nth(0).locator(".turn-receipts-toggle").click();
+  assert.match(await messages.nth(0).locator(".turn-receipt-log").innerText(), /继续（从中断处）/);
+  assert.equal(await page.locator(".turn-receipts-toggle").count(), 1, "审查轮里的续跑标记不外露");
+
+  // 没有右侧审查格可去（只读视图）：点那一句就地摊开这一轮。
+  await first.locator(":scope > .notice-line button.notice-line-button").click();
+  const body = first.locator(".review-milestone-body");
+  await body.waitFor();
+  const reviewerTurn = body.locator(".task-message--agent.is-reviewer");
+  assert.equal(await reviewerTurn.count(), 1, "审查者的发言在这一轮里");
+  assert.equal(await reviewerTurn.locator(".turn-head > b").count(), 0, "身份由那一句代言");
+  assert.equal(await reviewerTurn.locator(".task-message-avatar").count(), 0, "摊开的那一轮里不再挂头像");
+  const aligned = await page.evaluate(() => {
+    const line = document.querySelector(".review-milestone .notice-line-text").getBoundingClientRect();
+    const turn = document.querySelector(".review-milestone-body .task-message-content").getBoundingClientRect();
+    return { line: Math.round(line.left), turn: Math.round(turn.left) };
+  });
+  assert.ok(aligned.turn >= aligned.line, "摊开的发言收在那一句下面，不往外凸");
+
+  // 报告沿用现有应用内 Markdown 弹层，不另开标签页。
   const pageCount = page.context().pages().length;
-  await lanes.nth(0).getByRole("button", { name: "审查报告" }).click();
+  await body.getByRole("button", { name: "审查报告" }).click();
   const reportDialog = page.getByRole("dialog", { name: /report\.md/ });
   await reportDialog.waitFor();
   await reportDialog.getByText(/第 2 轮审查报告/).waitFor();
-  assert.match(await reportDialog.innerText(), /第 2 轮审查报告/);
   assert.equal(page.context().pages().length, pageCount);
-  assert.equal(await lanes.nth(0).evaluate((el) => el.classList.contains("is-collapsed")), true);
   await reportDialog.getByRole("button", { name: "关闭审查报告" }).click();
 
-  // 自由派审走的是另一条带 runId 的路由，报告内容必须是它自己那份。
-  await lanes.nth(3).getByRole("button", { name: "审查报告" }).click();
+  // 启动失败那一轮不能占用后来重跑生成的报告；自由派审走另一条带 runId 的路由。
+  await milestones.nth(2).locator(":scope > .notice-line button.notice-line-button").click();
+  assert.equal(await milestones.nth(2).getByRole("button", { name: "审查报告" }).count(), 0);
+  await milestones.nth(3).locator(":scope > .notice-line button.notice-line-button").click();
+  const freeBody = milestones.nth(3).locator(".review-milestone-body");
+  assert.equal(await freeBody.locator(".task-message--agent.is-reviewer").count(), 1, "自由派审的正文归它自己那一轮");
+  await freeBody.getByRole("button", { name: "审查报告" }).click();
   const freeDialog = page.getByRole("dialog", { name: /report\.md/ });
-  await freeDialog.waitFor();
   await freeDialog.getByText(/自由派审报告 fr1 第 1 轮/).waitFor();
-  assert.match(await freeDialog.innerText(), /自由派审报告 fr1 第 1 轮/);
   await freeDialog.getByRole("button", { name: "关闭审查报告" }).click();
+  await first.locator(":scope > .notice-line button.notice-line-button").click();
+  assert.equal(await first.locator(".review-milestone-body").count(), 0, "再点一下收起");
 
-  await lanes.nth(0).getByRole("button", { name: "展开" }).click();
-  assert.equal(await lanes.nth(0).locator(".verify-lane-body").isVisible(), true);
-  assert.equal(await lanes.nth(0).getByRole("button", { name: "收起" }).count(), 1);
-  // 下面量版式，三张卡都得摊开。
-  await lanes.nth(1).getByRole("button", { name: "展开" }).click();
-  await lanes.nth(3).getByRole("button", { name: "展开" }).click();
-
-  // 执行方恢复普通任务原来的无卡片排版；审查泳道保留中性卡片 + 左绿线，整张卡
-  // 移回左侧。审查正文不能再套一层卡。
-  const conversationBox = await page.locator(".task-conversation").evaluate((el) => {
-    const style = getComputedStyle(el);
-    const rect = el.getBoundingClientRect();
-    return {
-      contentLeft: Math.round(rect.left + Number.parseFloat(style.paddingLeft)),
-    };
-  });
-  const executorLayout = await messages.nth(0).evaluate((el) => {
-    const style = getComputedStyle(el);
-    const line = getComputedStyle(el, "::before");
-    const rect = el.getBoundingClientRect();
-    return {
-      left: Math.round(rect.left),
-      border: style.borderTopWidth,
-      line: line.content,
-    };
-  });
-  const laneLayout = await lanes.nth(1).evaluate((el) => {
-    const style = getComputedStyle(el);
-    const line = getComputedStyle(el, "::before");
-    const rect = el.getBoundingClientRect();
-    return {
-      left: Math.round(rect.left),
-      leftBorder: Number.parseFloat(style.borderLeftWidth),
-      rightBorder: Number.parseFloat(style.borderRightWidth),
-      lineWidth: Number.parseFloat(line.width),
-      lineLeft: line.left,
-    };
-  });
-  assert.ok(Math.abs(executorLayout.left - conversationBox.contentLeft) <= 1, "执行消息应贴住会话内容区左侧");
-  assert.equal(executorLayout.border, "0px", "执行消息应恢复无卡片排版");
-  assert.equal(executorLayout.line, "none", "执行消息不再画角色边线");
-  assert.ok(Math.abs(laneLayout.left - conversationBox.contentLeft) <= 1, "审查泳道应移回会话内容区左侧");
-  assert.equal(laneLayout.leftBorder, 1, "审查卡整圈只用普通描边");
-  assert.equal(laneLayout.rightBorder, 1);
-  assert.equal(laneLayout.lineWidth, 2, "审查身份线应与讨论任务一样细");
-  assert.equal(laneLayout.lineLeft, "-1px");
-  const nestedReviewer = await reviewer.nth(0).evaluate((el) => ({
-    border: getComputedStyle(el).borderTopWidth,
-    line: getComputedStyle(el, "::before").content,
-  }));
-  assert.equal(nestedReviewer.border, "0px", "审查泳道内不能再套第二层卡片");
-  assert.equal(nestedReviewer.line, "none", "审查泳道只保留最外侧一条角色线");
-
-  // 普通消息原本就是「可用空间内铺满、最多 790px」；审查卡也沿用同一个宽度上限，
-  // 不能再乘一层百分比把较窄工作区里的正文额外压缩。
-  await page.setViewportSize({ width: 760, height: 1200 });
-  const narrowWidths = await page.evaluate(() => {
+  // 执行方恢复普通任务原来的无卡片排版。
+  const layout = await page.evaluate(() => {
     const conversation = document.querySelector(".task-conversation");
-    const executor = document.querySelector(".task-message--agent:not(.is-reviewer)");
-    const lane = document.querySelectorAll(".verify-lane")[1];
-    if (!conversation || !executor || !lane) throw new Error("narrow layout missing");
     const style = getComputedStyle(conversation);
-    const available = conversation.getBoundingClientRect().width
-      - Number.parseFloat(style.paddingLeft)
-      - Number.parseFloat(style.paddingRight);
+    const contentLeft = conversation.getBoundingClientRect().left + Number.parseFloat(style.paddingLeft);
+    const executor = document.querySelector(".task-message--agent:not(.is-reviewer)");
+    const lane = document.querySelector(".verify-lane");
     return {
-      available: Math.round(available),
-      executor: Math.round(executor.getBoundingClientRect().width),
-      reviewer: Math.round(lane.getBoundingClientRect().width),
+      contentLeft: Math.round(contentLeft),
+      executorLeft: Math.round(executor.getBoundingClientRect().left),
+      executorBorder: getComputedStyle(executor).borderTopWidth,
+      laneLeft: Math.round(lane.getBoundingClientRect().left),
+      laneLine: Number.parseFloat(getComputedStyle(lane, "::before").width),
     };
   });
-  assert.equal(narrowWidths.executor, narrowWidths.available, "较窄工作区里的执行消息应铺满可用宽度");
-  assert.equal(narrowWidths.reviewer, narrowWidths.available, "较窄工作区里的审查卡应铺满可用宽度");
+  assert.ok(Math.abs(layout.executorLeft - layout.contentLeft) <= 1, "执行消息贴住会话内容区左侧");
+  assert.equal(layout.executorBorder, "0px", "执行消息无卡片排版");
+  assert.ok(Math.abs(layout.laneLeft - layout.contentLeft) <= 1, "进行中的审查卡在会话内容区左侧");
+  assert.equal(layout.laneLine, 2, "审查身份线细细一根");
+
+  await page.setViewportSize({ width: 760, height: 1200 });
+  const narrow = await page.evaluate(() => {
+    const conversation = document.querySelector(".task-conversation");
+    const style = getComputedStyle(conversation);
+    const available = conversation.getBoundingClientRect().width - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight);
+    return { available: Math.round(available), lane: Math.round(document.querySelector(".verify-lane").getBoundingClientRect().width) };
+  });
+  assert.equal(narrow.lane, narrow.available, "较窄工作区里的审查卡铺满可用宽度");
   await page.setViewportSize({ width: 1000, height: 1200 });
 
-  // 换身份是断点：卡外那两段（实现 / 修复）各自重新报执行器名，否则读者只看见
-  // 「同一个人一口气说了三段」。卡内的三段审查发言反过来 —— 卡头已经把人和模型档位
-  // 写在头上，气泡再报一次就是同一行文字上下叠两遍。
-  for (const index of [0, 2]) {
-    assert.equal(
-      await messages.nth(index).locator(".turn-head > b").count(),
-      1,
-      `第 ${index + 1} 段该报身份`,
-    );
-  }
-  for (const index of [1, 3, 4]) {
-    assert.equal(
-      await messages.nth(index).locator(".turn-head > b").count(),
-      0,
-      `第 ${index + 1} 段在审查卡里，身份由卡头代言`,
-    );
-    assert.equal(
-      await messages.nth(index).locator(".task-message-content > header").count(),
-      0,
-      `第 ${index + 1} 段是本轮首条发言，整条头都由卡头顶替`,
-    );
-  }
-
-  // 验证段的起止旁注跟审查者同一套颜色；打回那条仍归红。
-  const verifyNotes = page.locator(".conversation-note.is-verify");
-  assert.equal(await verifyNotes.count(), 4, "四张审查卡各只保留一条收尾结论");
-  assert.match(await verifyNotes.nth(0).innerText(), /第 2 轮验证未通过/);
-  assert.equal(await verifyNotes.nth(0).evaluate((el) => el.classList.contains("is-error")), true);
-  const noteColors = await verifyNotes.evaluateAll((els) =>
-    els.map((el) => getComputedStyle(el).borderLeftColor));
-  assert.notEqual(noteColors[0], noteColors[1], "开始是青的、打回是红的，两条不能同色");
-  const noteWidths = await verifyNotes.evaluateAll((els) =>
-    els.map((el) => getComputedStyle(el).borderLeftWidth));
-  assert.ok(noteWidths.every((width) => width === "2px"), "审查起止旁注都应保留截图中的 2px 短竖线");
-
-  // D 的正文统一收进同一层泳道内边距 —— 自由派审现在也是一张卡，同样对齐。
-  const boxes = await messages.evaluateAll((els) =>
-    els.map((el) => {
-      const body = el.querySelector(".task-message-content");
-      const rect = body.getBoundingClientRect();
-      return { x: Math.round(rect.x), width: Math.round(rect.width) };
-    }));
-  assert.equal(boxes[3].x, boxes[1].x, "两轮验证正文应使用同一条泳道内边距");
-  assert.equal(boxes[3].width, boxes[1].width, "两轮验证正文宽度应一致");
-  assert.equal(boxes[4].x, boxes[1].x, "自由派审的正文也在泳道里，跟就地验证同一条内边距");
-  assert.equal(boxes[4].width, boxes[1].width);
-  assert.notEqual(boxes[4].x, boxes[0].x, "卡内正文比卡外窄，不然折叠卡的边界看不出来");
-
-  // 头像只留给卡外的发言。卡内那三条身份归卡头，连头像列一起收掉 —— 卡头左边已经有
-  // 一颗盾，每条气泡再挂一颗就是把同一个身份画两遍。（卡外审查者仍是盾形头像，那条
-  // 分支现在这份 fixture 圈不出来，判据由 test:reviewer-turn 的 reviewer 字段钉住。）
-  const avatars = await page.locator(".task-message-avatar").evaluateAll((els) =>
-    els.map((el) => {
-      const rect = el.getBoundingClientRect();
-      return { size: `${Math.round(rect.width)}x${Math.round(rect.height)}`, svg: !!el.querySelector("svg") };
-    }));
-  assert.equal(avatars.length, 2, "只有卡外那两段实现回合还带头像");
-  assert.equal(await page.locator(".verify-lane .task-message-avatar").count(), 0, "卡内不再重复画盾");
-  assert.equal(avatars[0].svg, false, "普通回合还是首字母");
-  assert.equal(avatars[1].svg, false);
-  assert.equal(avatars[0].size, avatars[1].size, "头像盘子大小不变");
-
-  // 新增的这几处小字承载的正是本功能的全部信息（谁在说话 / 哪一轮 / 验证段的边界），
-  // 淡一点就等于没做。按 WCAG 相对亮度实测，普通小号文本至少要 4.5:1。
+  // 这几处小字承载的是「哪一轮、什么结论、谁在审」，按 WCAG 相对亮度实测至少 4.5:1。
   const contrasts = await page.evaluate(() => {
-    // 这套配色写的是 lch()/color-mix()，getComputedStyle 原样返回 `lch(55 30 232)`，
-    // 按 rgb 去解会把 L/C/H 当成三个通道。过一遍画布，拿真正落到屏幕上的 sRGB。
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = 1;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -269,7 +162,6 @@ try {
       const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
       return 0.2126 * channel(r / 255) + 0.7152 * channel(g / 255) + 0.0722 * channel(b / 255);
     };
-    // 背景要一层层往上找：多数元素自己是透明的，实际衬在下面的是祖先那层。
     const backdrop = (el) => {
       for (let node = el; node; node = node.parentElement) {
         const color = getComputedStyle(node).backgroundColor;
@@ -284,8 +176,7 @@ try {
     };
     return {
       laneBy: ratio(document.querySelector(".verify-lane-by")),
-      note: ratio(document.querySelector(".conversation-note.is-verify:not(.is-error)")),
-      failNote: ratio(document.querySelector(".conversation-note.is-verify.is-error")),
+      milestone: ratio(document.querySelector(".review-milestone .notice-line-text")),
     };
   });
   for (const [name, value] of Object.entries(contrasts)) {

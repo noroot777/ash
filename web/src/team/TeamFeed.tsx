@@ -18,13 +18,8 @@ import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "../task-detail/QuestionHistory.tsx";
 import { isQuestionAnswer } from "@ash/shared/questions";
-import { SystemAuthoredMessage, SystemBoundary, SystemEventNote, SystemNoticeModeSwitch } from "../task-detail/SystemNotice.tsx";
-import {
-  INITIAL_SYSTEM_NOTICE_MODE,
-  SYSTEM_NOTICE_DEMO_REQUESTED,
-  isReviewSystemPrompt,
-  type SystemNoticeMode,
-} from "../task-detail/systemNoticeModel.ts";
+import { SystemAuthoredMessage, SystemBoundary, SystemEventNote } from "../task-detail/SystemNotice.tsx";
+import { isReviewSystemPrompt } from "../task-detail/systemNoticeModel.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
 import { MonitorWakeReply } from "../task-detail/MonitorWakeInput.tsx";
@@ -72,7 +67,7 @@ function AgentRow({
   );
 }
 
-function UserRow({ row, noticeMode }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]; noticeMode: SystemNoticeMode }) {
+function UserRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"] }) {
   if (row.kind !== "user") return null;
   if (row.isAnswer || isQuestionAnswer(row.text)) return <AnsweredQuestionMessage text={row.text} id={row.id} at={row.at} />;
   const parsed = parseAttachmentText(row.text);
@@ -80,7 +75,7 @@ function UserRow({ row, noticeMode }: { row: Extract<TeamFeedRow, { kind: "conv"
   const paths = [...parsed.paths, ...row.attachments];
   const bySystem = !!row.bySystem;
   if (bySystem && !isReviewSystemPrompt(row.text)) {
-    return <SystemAuthoredMessage item={row} surface="team" mode={noticeMode} />;
+    return <SystemAuthoredMessage item={row} surface="team" />;
   }
   return (
     <article className={`team-feed-user${bySystem ? " is-system-authored" : ""}`}>
@@ -208,9 +203,6 @@ export function TeamFeed({
   historyReady?: boolean;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
-  const search = typeof window === "undefined" ? "" : window.location.search;
-  const noticeMode = INITIAL_SYSTEM_NOTICE_MODE;
-  const showNoticeModeSwitch = SYSTEM_NOTICE_DEMO_REQUESTED;
   const byId = new Map(workers.map((worker) => [worker.id, worker]));
   const wakeReplies = monitorWakeReplyIds(rows.flatMap((row) => row.kind === "conv" ? [row.item] : []));
   // 调度台的原始需求同样不在流里（首条会话从调度者的拆解开始），左侧导航靠它排出第一格。
@@ -243,8 +235,7 @@ export function TeamFeed({
       messages={rows.flatMap((row) => row.kind === "conv" && row.item.kind === "user" ? [row.item] : [])}>
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region">
-        <section className={`team-feed system-notice-mode-${noticeMode}`} aria-label="团队调度流" ref={scroll}>
-          {showNoticeModeSwitch && <SystemNoticeModeSwitch mode={noticeMode} search={search} />}
+        <section className="team-feed" aria-label="团队调度流" ref={scroll}>
           {!rows.length && !activityPhase && <p className="team-feed-empty">运行后，调度者的拆解、派活、执行者提问与汇报会按发生顺序出现在这里。</p>}
           {rows.map((row) => {
             if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} indicatorForTask={indicatorForTask} />;
@@ -252,7 +243,7 @@ export function TeamFeed({
             // 执行者各有自己的工作目录（团队共享那一档也一样按会话行走），所以按发言
             // 所属的会话取任务，不是一律用调度台。
             if (item.kind === "agent") return <AgentRow key={row.key} row={item} taskId={item.session?.taskId ?? task.id} hideTime={hiddenTimes.has(item.id)} wakeReply={wakeReplies.has(item.id)} />;
-            if (item.kind === "user") return <UserRow key={row.key} row={item} noticeMode={noticeMode} />;
+            if (item.kind === "user") return <UserRow key={row.key} row={item} />;
             const inbound = parseInbound(item.text);
             if (inbound) {
               return (
@@ -276,9 +267,9 @@ export function TeamFeed({
               );
             }
             if (item.variant === "boundary") {
-              return <SystemBoundary item={item} surface="team" mode={noticeMode} key={row.key} />;
+              return <SystemBoundary item={item} surface="team" key={row.key} />;
             }
-            return <SystemEventNote item={item} mode={noticeMode} key={row.key} />;
+            return <SystemEventNote item={item} key={row.key} />;
           })}
           {historyReady && <QuestionHistoryRemainder />}
           {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadLabel(task)} queuePosition={task.queuePosition} />}

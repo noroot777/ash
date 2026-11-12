@@ -17,18 +17,10 @@ try {
   const page = await browser.newPage({ viewport: { width: 1000, height: 1300 } });
   const fixture = `http://127.0.0.1:${address.port}/scripts/fixtures/system-notices.html`;
   await page.goto(fixture);
-  await page.locator(".system-event-digest.is-aligned").waitFor();
-  assert.equal(await page.locator(".system-event-digest.is-aligned").count(), 1, "生产环境默认使用备选二");
-  assert.equal(await page.locator(".system-notice-mode-switch").count(), 0, "预览页面默认也不显示方案比较开关");
-
-  await page.goto(`${fixture}?systemNotices=unknown`);
-  assert.equal(await page.locator(".system-event-digest.is-aligned").count(), 1, "非法模式参数应回落到正式默认方案二");
-  assert.equal(await page.locator('.system-notice-mode-switch a[aria-current="page"]').innerText(), "备选二 · 头像轴提示");
-
-  await page.goto(`${fixture}?systemNotices=footnote`);
 
   const action = page.locator(".system-action-note.is-conflict");
   await action.waitFor();
+  assert.equal(await page.locator(".system-notice-mode-switch").count(), 0, "四套试验摆法连同切换条一起拿掉了");
   assert.equal(await action.count(), 1, "冲突流程只占一条系统旁注");
   assert.match(await action.innerText(), /验收遇到冲突.*目标分支未改动/s);
   assert.equal(await action.locator(".system-action-files").isHidden(), true, "冲突文件默认收进详情，不在会话里铺开");
@@ -45,115 +37,119 @@ try {
   await action.getByText("流程记录 3 条", { exact: true }).click();
   assert.match(await action.innerText(), /开始验收.*验收未完成.*冲突交接/s, "原始流程记录仍可展开核对");
 
-  const digest = page.locator(".system-event-digest.is-footnote");
-  assert.equal(await digest.count(), 1, "连续系统事件应合成一条会话脚注");
-  assert.match(await digest.locator("summary").innerText(), /工作区已恢复.*5 条记录/s, "摘要必须显示组内最新状态");
-  const latestPair = await digest.evaluate((el) => {
-    const summary = el.querySelector("summary");
-    const latest = el.querySelector("li:last-child");
-    return {
-      summaryText: summary.querySelector(":scope > span").textContent,
-      summaryTime: summary.querySelector(":scope > time")?.textContent,
-      latestText: latest.querySelector(":scope > span").textContent,
-      latestTime: latest.querySelector(":scope > time")?.textContent,
-    };
-  });
-  assert.equal(latestPair.summaryText, latestPair.latestText, "摘要文字必须来自最新事件");
-  assert.equal(latestPair.summaryTime, latestPair.latestTime, "摘要时间必须来自同一条最新事件");
-  assert.equal(await digest.evaluate((el) => el.classList.contains("is-recovery")), true, "摘要语气必须与最新恢复事件一致");
-  assert.equal(await digest.evaluate((el) => el.classList.contains("is-error")), false, "恢复文字不能被旧失败染成整行红色");
-  assert.match(await digest.locator(".system-event-issues").innerText(), /其中 1 条异常/, "组内旧失败仍应用可读文字提示");
-  const marker = await digest.evaluate((el) => {
-    const style = getComputedStyle(el, "::before");
-    return { width: style.width, height: style.height, radius: style.borderRadius, content: style.content };
-  });
-  assert.deepEqual(marker, { width: "4px", height: "4px", radius: "50%", content: '""' }, "脚注使用无方向性的 4px 圆点，不再显示弯箭头");
-  const compactLine = await digest.locator("summary").evaluate((el) => {
-    const timeElement = el.querySelector(":scope > time");
-    const time = timeElement.getBoundingClientRect();
-    const previous = timeElement.previousElementSibling.getBoundingClientRect();
-    return {
-      gap: Math.round(time.left - previous.right),
-      lineWidth: Math.round(el.getBoundingClientRect().width),
-      containerWidth: Math.round(el.parentElement.getBoundingClientRect().width),
-    };
-  });
-  assert.ok(compactLine.gap <= 16, "时间应紧跟在最后一个摘要信息块之后");
-  assert.equal(compactLine.lineWidth, compactLine.containerWidth, "系统提示应按内容收缩，不铺成整行");
-  assert.ok(compactLine.containerWidth < 500, "短系统提示不应占满会话内容宽度");
-  await digest.locator("summary").click();
-  assert.match(await digest.innerText(), /已预约完成后审查.*验收阶段更新.*本回合没有交卷.*工作区已恢复/s);
-  assert.equal(await page.locator(".system-event-row").count(), 0, "任务会话不再逐条铺系统事件");
-  assert.equal(await page.locator(".system-boundary").count(), 1);
-  assert.equal(await page.locator(".task-message--agent").count(), 2, "普通 agent 消息结构没有改");
-  assert.equal(await page.locator(".system-notice-mode-switch a").count(), 4, "带模式参数时显示两套备选与两种早期方向");
-  assert.equal(await page.locator('.system-notice-mode-switch a[aria-current="page"]').innerText(), "备选一 · 轻量脚注");
+  // —— 会话里平时只有你说的、它说的、里程碑一句，以及出了岔子 / 要你知道的 ——
+  const lines = page.locator(".task-conversation-feed .notice-line, .notice-line");
+  assert.deepEqual(
+    await lines.locator(".notice-line-text").allInnerTexts(),
+    ["已验收，合并到 main", "冲突交接失败：没能叫醒该任务解冲突。", "本回合没有交卷：产物仍保留，可直接重试。", "工作区已恢复，会话内容都在"],
+    "回执（审查已预约、不再等、验收阶段、本轮执行结束）不在会话里占行",
+  );
+  assert.deepEqual(
+    await lines.evaluateAll((elements) => elements.map((el) => [...el.classList].filter((name) => /^(is|tone)-/.test(name)).join(" "))),
+    ["is-milestone tone-ok", "is-alert tone-bad", "is-alert tone-warn", "is-alert tone-neutral"],
+  );
+  const milestone = lines.first();
+  const iconColors = await lines.evaluateAll((elements) => elements.map((el) => ({
+    icon: getComputedStyle(el.querySelector(".notice-line-icon")).color,
+    text: getComputedStyle(el.querySelector(".notice-line-text")).color,
+  })));
+  assert.notEqual(iconColors[0].icon, iconColors[0].text, "颜色只落在行首图标上");
+  assert.equal(new Set(iconColors.map((c) => c.text)).size, 1, "几档的字是同一种颜色，结论写在字里");
 
-  await page.goto(`${fixture}?systemNotices=aligned`);
-  const aligned = page.locator(".system-event-digest.is-aligned");
-  await aligned.waitFor();
-  const alignedGeometry = await page.evaluate(() => {
-    const agentAvatar = document.querySelector(".task-message-avatar").getBoundingClientRect();
-    const agentBody = document.querySelector(".task-message-content").getBoundingClientRect();
-    const digest = document.querySelector(".system-event-digest.is-aligned");
-    const digestIcon = digest.querySelector(".system-event-avatar").getBoundingClientRect();
-    const digestLine = digest.querySelector("summary").getBoundingClientRect();
-    const action = document.querySelector(".system-action-note");
-    const actionIcon = action.querySelector(".system-action-icon").getBoundingClientRect();
-    const actionMain = action.querySelector(".system-action-main").getBoundingClientRect();
-    const boundary = document.querySelector(".system-boundary.notice-mode-aligned");
-    const digestBox = digest.getBoundingClientRect();
-    const boundaryBox = boundary.getBoundingClientRect();
+  // 头像轴：图标中心对智能体头像中心，字对正文起点。
+  const axis = await page.evaluate(() => {
+    const avatar = document.querySelector(".task-message-avatar").getBoundingClientRect();
+    const body = document.querySelector(".task-message-content").getBoundingClientRect();
+    const line = document.querySelector(".notice-line");
+    const icon = line.querySelector(".notice-line-icon").getBoundingClientRect();
+    const text = line.querySelector(".notice-line-text").getBoundingClientRect();
+    const actionIcon = document.querySelector(".system-action-icon").getBoundingClientRect();
+    const actionMain = document.querySelector(".system-action-main").getBoundingClientRect();
     return {
-      avatarCenter: Math.round(agentAvatar.left + agentAvatar.width / 2),
-      bodyLeft: Math.round(agentBody.left),
-      digestIconCenter: Math.round(digestIcon.left + digestIcon.width / 2),
-      digestLineLeft: Math.round(digestLine.left),
-      actionIconCenter: Math.round(actionIcon.left + actionIcon.width / 2),
-      actionMainLeft: Math.round(actionMain.left),
-      iconSize: `${Math.round(digestIcon.width)}x${Math.round(digestIcon.height)}`,
-      iconBackground: getComputedStyle(digest.querySelector(".system-event-avatar")).backgroundColor,
-      boundaryIcon: !!boundary?.querySelector(".system-event-avatar"),
-      boundaryWiderThanDigest: boundaryBox.width > digestBox.width,
-      boundaryRule: !!boundary?.querySelector(".system-boundary-rule"),
+      avatar: Math.round(avatar.left + avatar.width / 2),
+      icon: Math.round(icon.left + icon.width / 2),
+      action: Math.round(actionIcon.left + actionIcon.width / 2),
+      body: Math.round(body.left),
+      text: Math.round(text.left),
+      actionMain: Math.round(actionMain.left),
     };
   });
-  assert.equal(alignedGeometry.digestIconCenter, alignedGeometry.avatarCenter, "系统节点应与智能体头像中心对齐");
-  assert.equal(alignedGeometry.actionIconCenter, alignedGeometry.avatarCenter, "系统长提示同样进入头像轴");
-  assert.equal(alignedGeometry.digestLineLeft, alignedGeometry.bodyLeft, "系统摘要正文应与智能体正文起点对齐");
-  assert.equal(alignedGeometry.actionMainLeft, alignedGeometry.bodyLeft, "系统长提示正文应与智能体正文起点对齐");
-  assert.equal(alignedGeometry.iconSize, "16x16", "系统节点外圈应比智能体头像更克制");
-  assert.notEqual(alignedGeometry.iconBackground, "rgba(0, 0, 0, 0)", "备选二用轻底色提高一点辨识度");
-  assert.equal(alignedGeometry.boundaryIcon, true, "回合边界也应使用同一系统节点");
-  assert.equal(alignedGeometry.boundaryRule, true, "回合边界应保留横贯细线");
-  assert.equal(alignedGeometry.boundaryWiderThanDigest, true, "回合边界应明显宽于普通系统旁注");
-  assert.equal(await page.locator('.system-notice-mode-switch a[aria-current="page"]').innerText(), "备选二 · 头像轴提示");
+  assert.equal(axis.icon, axis.avatar, "里程碑图标落在头像轴上");
+  assert.equal(axis.action, axis.avatar, "系统长提示同样进入头像轴");
+  assert.equal(axis.text, axis.body, "里程碑的字与智能体正文起点对齐");
+  assert.equal(axis.actionMain, axis.body, "系统长提示正文与智能体正文起点对齐");
 
-  await page.goto(`${fixture}?systemNotices=collapsed`);
-  const collapsed = page.locator(".system-event-digest.is-collapsed");
-  await collapsed.waitFor();
-  assert.match(await collapsed.locator("summary").innerText(), /系统记录 · 工作区已恢复/);
-  assert.equal(await page.locator('.system-notice-mode-switch a[aria-current="page"]').innerText(), "系统记录折叠");
-
-  await page.goto(`${fixture}?systemNotices=attached`);
-  const attached = page.locator(".system-event-digest.is-attached");
-  await attached.waitFor();
-  const attachedStyle = await attached.evaluate((el) => {
-    const style = getComputedStyle(el);
-    const line = el.querySelector("summary");
-    const timeElement = line.querySelector(":scope > time");
-    const time = timeElement.getBoundingClientRect();
-    const previous = timeElement.previousElementSibling.getBoundingClientRect();
-    return {
-      marginTop: Number.parseFloat(style.marginTop),
-      border: getComputedStyle(line).borderTopWidth,
-      timeGap: Math.round(time.left - previous.right),
-    };
+  // 里程碑的时刻紧跟在字后面，指到这一行才出。
+  const tailOpacity = () => milestone.locator(".notice-line-tail").evaluate((el) => getComputedStyle(el).opacity);
+  await page.mouse.move(990, 5);
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".notice-line-tail")).opacity === "0");
+  await milestone.hover();
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".notice-line-tail")).opacity === "1");
+  assert.equal(await tailOpacity(), "1");
+  const tailGap = await milestone.evaluate((el) => {
+    const text = el.querySelector(".notice-line-text").getBoundingClientRect();
+    const tail = el.querySelector(".notice-line-tail").getBoundingClientRect();
+    return Math.round(tail.left - text.right);
   });
-  assert.ok(attachedStyle.marginTop < 0, "消息尾注应贴近上一段会话");
-  assert.notEqual(attachedStyle.border, "0px", "消息尾注用细线表达它属于上一段消息");
-  assert.ok(attachedStyle.timeGap <= 16, "消息尾注的时间同样应紧跟最后一个摘要信息块");
-  assert.equal(await page.locator('.system-notice-mode-switch a[aria-current="page"]').innerText(), "消息尾注");
+  assert.ok(tailGap >= 0 && tailGap <= 16, `时刻紧跟在字后面（隔了 ${tailGap}px）`);
+
+  // 长原文只写一句，点开那一行才看全文。
+  const workspace = lines.nth(3);
+  await workspace.locator(".notice-line-button").click();
+  assert.match(await workspace.locator(".notice-line-detail").innerText(), /原目录已不存在/);
+  assert.equal(await workspace.locator(".notice-line-button").getAttribute("aria-expanded"), "true");
+
+  // —— 回执记在它所属的那一回合上：平时不画，指到这一回合才有「N 条记录」 ——
+  const owner = page.locator(".task-message--agent").filter({ hasText: "冲突已经解决并提交。" });
+  // 收了口的回合里，「N 条记录」是回合尾那一排悬停操作里的一颗（复制 / 派生 / 更多 旁边）。
+  const receipts = owner.locator(".turn-acts");
+  assert.equal(await owner.locator(".turn-receipts-toggle").count(), 1, "回执记到了它之前最近的那一回合上");
+  const actsOpacity = () => receipts.evaluate((el) => getComputedStyle(el).opacity);
+  await page.mouse.move(990, 5);
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".turn-acts:has(.turn-receipts-toggle)")).opacity === "0");
+  await owner.hover();
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".turn-acts:has(.turn-receipts-toggle)")).opacity === "1");
+  const toggle = receipts.locator(".turn-receipts-toggle");
+  assert.equal(await toggle.innerText(), "4 条记录");
+  await toggle.click();
+  assert.equal(await toggle.getAttribute("aria-expanded"), "true");
+  const log = owner.locator(".turn-receipt-log");
+  assert.deepEqual(
+    await log.locator(".turn-receipt-text").allInnerTexts(),
+    ["审查已预约，这一轮跑完自动开始", "不再等「全量回归」了，它已经跑完", "验收阶段：验收完成", "本轮执行结束"],
+    "流水里每一条写的是结果",
+  );
+  const leading = await log.locator(".turn-receipt").first().evaluate((el) => {
+    const time = el.querySelector(":scope > time");
+    const text = el.querySelector(".turn-receipt-text").getBoundingClientRect();
+    return { first: el.firstElementChild === time, before: time.getBoundingClientRect().right <= text.left, label: time.getAttribute("aria-label") };
+  });
+  assert.equal(leading.first, true, "时刻排在每一条最前面");
+  assert.equal(leading.before, true);
+  assert.match(leading.label, /\d\d\/\d\d \d\d:\d\d/, "读屏拿到完整的日期时刻");
+  await page.mouse.move(990, 5);
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".turn-acts:has(.turn-receipts-toggle)")).opacity === "1");
+  assert.equal(await actsOpacity(), "1", "点开以后一直在，不等指到");
+  const released = log.locator(".turn-receipt").nth(1);
+  await released.locator(".turn-receipt-more").click();
+  assert.match(await released.locator(".turn-receipt-detail").innerText(), /exit 0/, "原文点那一条再看");
+
+  // 键盘：Tab 走到「N 条记录」时它现形，焦点看得见。
+  await page.reload();
+  await page.locator(".turn-receipts-toggle").first().waitFor({ state: "attached" });
+  await page.mouse.move(990, 5);
+  await page.locator(".turn-receipts-toggle").first().focus();
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".turn-acts:has(.turn-receipts-toggle)")).opacity === "1", null, { timeout: 2000 });
+
+  // 触屏没有「指到」：回执那颗键与里程碑的时刻常显。
+  const touch = await browser.newContext({ viewport: { width: 390, height: 900 }, hasTouch: true, isMobile: true });
+  const touchPage = await touch.newPage();
+  await touchPage.goto(fixture);
+  await touchPage.locator(".notice-line").first().waitFor();
+  assert.equal(await touchPage.evaluate(() => matchMedia("(hover: none)").matches), true, "模拟的触屏得真是「没有指到」");
+  assert.equal(await touchPage.locator(".notice-line-tail").first().evaluate((el) => getComputedStyle(el).opacity), "1", "触屏上时刻常显");
+  assert.equal(await touchPage.locator(".turn-acts:has(.turn-receipts-toggle)").first().evaluate((el) => getComputedStyle(el).opacity), "1", "触屏上「N 条记录」常显");
+  await touch.close();
 
   await resizeViewport(page, { width: 390, height: 900 });
   const geometry = await page.evaluate(() => ({
@@ -166,7 +162,6 @@ try {
   await page.setViewportSize({ width: 1100, height: 700 });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/review-system-prompts.html`);
   await page.locator('[data-surface="team"] .is-system-authored').waitFor();
-  assert.equal(await page.locator(".system-notice-mode-switch").count(), 0, "任务和团队预览都不自动展示样式演示工具");
   const authoredStyles = await page.evaluate(() => {
     const read = (surface) => {
       const root = document.querySelector(`[data-surface="${surface}"]`);
@@ -212,35 +207,23 @@ try {
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
 
   await page.goto(`${fixture}?boundaries`);
-  await page.locator("[data-boundary-mode] .system-boundary").first().waitFor();
+  await page.locator("[data-surface] .system-boundary").first().waitFor();
   for (const width of [1100, 390]) {
     await resizeViewport(page, { width, height: 1000 });
-    const boundaries = await page.locator("[data-boundary-mode] .system-boundary").evaluateAll((elements) =>
-      elements.map((element) => {
-        const icon = element.querySelector(".system-event-avatar");
-        const iconBox = icon?.getBoundingClientRect();
-        const textBox = element.querySelector("p").getBoundingClientRect();
-        const rules = [...element.querySelectorAll(".system-boundary-rule")].map((rule) => {
+    const boundaries = await page.locator("[data-surface] .system-boundary").evaluateAll((elements) =>
+      elements.map((element) => ({
+        surface: element.closest("[data-surface]").dataset.surface,
+        error: element.classList.contains("is-error"),
+        rules: [...element.querySelectorAll(".system-boundary-rule")].map((rule) => {
           const box = rule.getBoundingClientRect();
           return { width: box.width, height: box.height, hidden: rule.getAttribute("aria-hidden") };
-        });
-        return {
-          mode: element.closest("[data-boundary-mode]").dataset.boundaryMode,
-          surface: element.closest("[data-surface]").dataset.surface,
-          error: element.classList.contains("is-error"),
-          icon: iconBox ? { width: iconBox.width, height: iconBox.height } : null,
-          centerOffset: iconBox ? Math.abs(iconBox.y + iconBox.height / 2 - textBox.y - textBox.height / 2) : 0,
-          rules,
-        };
-      }),
+        }),
+      })),
     );
-    assert.equal(boundaries.length, 16, "两种会话、四种模式和两种结束状态都应覆盖");
+    assert.equal(boundaries.length, 4, "两种会话和两种结束状态都应覆盖");
     for (const boundary of boundaries) {
-      const label = `${width}px ${boundary.surface}/${boundary.mode}/${boundary.error ? "error" : "neutral"}`;
-      const aligned = boundary.mode === "aligned";
-      assert.deepEqual(boundary.icon, aligned ? { width: 16, height: 16 } : null, `${label} 图标不能被横线样式压扁`);
-      assert.ok(boundary.centerOffset <= 1, `${label} 图标与文字应垂直居中`);
-      assert.equal(boundary.rules.length, aligned ? 1 : 2, `${label} 分隔线数量应保持不变`);
+      const label = `${width}px ${boundary.surface}/${boundary.error ? "error" : "neutral"}`;
+      assert.equal(boundary.rules.length, 2, `${label} 两侧各一条分隔线`);
       for (const rule of boundary.rules) {
         assert.equal(rule.height, 1, `${label} 分隔线应为 1px`);
         assert.ok(rule.width > 0, `${label} 分隔线应保持可见`);

@@ -20,76 +20,50 @@ try {
   });
   await page.goto(`${web.origin}/scripts/fixtures/conversation-notes.html`);
 
-  const notes = page.locator(".system-event-digest");
-  await notes.first().waitFor();
-  assert.equal(await notes.count(), 5, "十条时间线通告应按相邻会话位置合成五条脚注");
-  assert.equal(
-    await notes.locator("li").count() + await notes.locator(".system-event-digest-line").count(),
-    10,
-    "脚注与折叠详情合计完整保留十条原始记录",
+  // 这份 fixture 全是**没有类型的老记录**：照样分得出三档。
+  const lines = page.locator(".notice-line");
+  await lines.first().waitFor();
+  assert.deepEqual(
+    await lines.locator(".notice-line-text").allInnerTexts(),
+    ["第 2 轮审查通过", "已验收，合并到 feat/free-pipeline", "第 3 轮审查未通过", "工作区已恢复，会话内容都在", "本回合没有交卷"],
+    "会话里常显的只有里程碑和要你知道的那几条",
   );
-
-  const recovery = notes.locator("li.is-recovery");
-  assert.equal(await recovery.count(), 1, "worktree 重建应收成一条恢复回执");
-  assert.match(await recovery.textContent(), /工作区已恢复.*会话内容已保留/);
-
-  // 通告不再借用回合边界那条横贯的分隔线；边界事件本身仍然是那条线。
-  const boundary = page.locator(".task-event-line");
-  assert.equal(await boundary.count(), 1);
-  assert.match(await boundary.innerText(), /本轮执行结束/);
-  // 两档要看得出是两种东西：一条横贯，一条只占正文宽度的脚注。
-  const noteBox = await notes.first().boundingBox();
-  const boundaryBox = await boundary.boundingBox();
-  assert.ok(boundaryBox.width > noteBox.width, "回合边界横贯得比旁注宽");
-  // 「没办成」的那条要看得出来不一样。
-  const failedDigest = page.locator(".system-event-digest").filter({ hasText: "审查未通过" });
-  assert.equal(await failedDigest.count(), 1);
-  assert.match(await failedDigest.locator("summary").innerText(), /工作区已恢复/, "摘要显示这组的最新状态");
-  assert.match(await failedDigest.locator(".system-event-issues").innerText(), /其中 1 条异常/, "隐藏的失败记录必须用文字提示");
-  assert.equal(await failedDigest.evaluate((el) => el.classList.contains("is-error")), false, "恢复摘要不能沿用旧失败的整行红色语气");
-  await failedDigest.locator("summary").click();
-  assert.match(await failedDigest.innerText(), /审查未通过/s, "展开后仍完整保留组内失败记录");
+  const messages = page.locator(".task-message--agent");
+  const receiptCounts = await messages.evaluateAll((elements) => elements.map((el) =>
+    el.querySelector(".turn-receipts-toggle")?.textContent ?? ""));
+  assert.deepEqual(
+    receiptCounts,
+    ["1 条记录", "2 条记录", "1 条记录", "", "1 条记录", "1 条记录"],
+    "其余的回执记在各自所属的回合上，一条不少（预约、验收阶段、迁移说明、会话轮换、回合边界、实时预约）",
+  );
+  // 回合边界不再横贯会话：正常收口是那一回合上的一条记录。
+  assert.equal(await page.locator(".task-event-line, .system-boundary").count(), 0);
+  const openLog = async (index) => {
+    const message = messages.nth(index);
+    await message.hover();
+    await message.locator(".turn-receipts-toggle").click();
+    return message.locator(".turn-receipt-log");
+  };
 
   // 会话轮换旁注是中性事实：一个 exit 0 的成功回合、甚至用户自己点的「停止全组」都会带
   // 一句。它既不该是红的，也不该把 Markdown 标记原样露给用户（旁注是纯文本渲染）。
-  const rotation = notes.locator("li").filter({ hasText: "ash 已经把这个失效的 id 清掉" });
-  assert.equal(await rotation.count(), 1, "会话轮换旁注没渲染出来");
-  assert.equal(
-    await rotation.evaluate((el) => el.classList.contains("is-error")),
-    false,
-    "会话轮换旁注被渲染成红色执行异常 —— 用户会以为这一回合失败了",
-  );
+  const rotationLog = await openLog(2);
+  const rotation = rotationLog.locator(".turn-receipt").first();
+  assert.equal(await rotation.evaluate((el) => el.classList.contains("tone-neutral")), true, "会话轮换旁注被渲染成异常");
+  if (await rotation.locator(".turn-receipt-more").count()) await rotation.locator(".turn-receipt-more").click();
+  assert.match(await rotation.innerText(), /ash 已经把这个失效的 id 清掉/, "会话轮换的原文点开看得到");
   assert.doesNotMatch(await rotation.textContent(), /\*\*/, "旁注是纯文本，Markdown 标记会原样露给用户");
 
-  // 结算说明（level:"notice"）：不许是红的（它讲的是流程，不是故障），只在语气图标上
-  // 留一点琥珀提示，不再铺一整条底色。
-  const settlement = notes.filter({ hasText: "本回合没有交卷" });
-  assert.equal(await settlement.count(), 1, "结算说明没渲染成旁注");
-  assert.equal(
-    await settlement.evaluate((el) => el.classList.contains("is-notice")),
-    true,
-    "结算说明该拿到 notice 那身提示语气",
-  );
-  assert.equal(
-    await settlement.evaluate((el) => el.classList.contains("is-error")),
-    false,
-    "结算说明被渲染成红色异常 —— 第一次用的人会读成「它崩了」",
-  );
-  assert.equal(await settlement.locator("details").count(), 1, "单条结算说明也必须有完整内容入口");
-  assert.match(await settlement.locator("summary").innerText(), /查看完整内容/);
-  await settlement.locator("summary").click();
-  assert.match(
-    await settlement.innerText(),
-    /这不是崩溃.*点重试会从中断处接着跑/s,
-    "单条结算说明展开后必须能读到完整原因和下一步",
-  );
-  const [settlementBg, plainBg] = await Promise.all([
-    settlement.evaluate((el) => getComputedStyle(el).backgroundColor),
-    notes.first().evaluate((el) => getComputedStyle(el).backgroundColor),
-  ]);
-  assert.equal(settlementBg, plainBg, "结算说明不再用整条底色抢占视线");
+  // 结算说明（level:"notice"）：留在明面上，但不许是红的（它讲的是流程，不是故障）——
+  // 颜色只在行首图标上，是琥珀。整句点开再看。
+  const settlement = lines.filter({ hasText: "本回合没有交卷" });
+  assert.equal(await settlement.evaluate((el) => el.classList.contains("tone-warn")), true, "结算说明该拿到提示语气");
+  assert.equal(await settlement.evaluate((el) => el.classList.contains("tone-bad")), false, "结算说明被渲染成红色异常 —— 第一次用的人会读成「它崩了」");
+  await settlement.locator(".notice-line-button").click();
+  assert.match(await settlement.innerText(), /这不是崩溃.*点重试会从中断处接着跑/s, "结算说明展开后必须能读到完整原因和下一步");
+  const failed = lines.filter({ hasText: "第 3 轮审查未通过" });
+  assert.equal(await failed.evaluate((el) => el.classList.contains("tone-bad")), true, "没办成的那条看得出来不一样");
 
-  const messages = page.locator(".task-message--agent");
   assert.equal(await messages.count(), 6, "实时旁注后的工具应并回当前回合，不另拆第七段");
   // 第一段照常报身份；被旁注隔开的后几段接着上一段排版，不重报执行器名。
   assert.equal(await messages.nth(0).locator(".turn-head > b").count(), 1);
@@ -109,12 +83,13 @@ try {
   // 真人插过话之后是新的一段，身份要回来；回合边界之后同理。
   assert.equal(await messages.nth(4).locator(".turn-head > b").count(), 1, "真人插话后必须重新报身份");
   assert.equal(await messages.nth(5).locator(".turn-head > b").count(), 1, "回合边界之后必须重新报身份");
-  assert.match(await notes.last().innerText(), /已预约完成后审查.*08\/10 15:02/s, "实时旁注应在自身行内显示精确时间");
+  const liveLog = await openLog(5);
+  assert.match(await liveLog.innerText(), /08\/10 15:02.*审查已预约|08\/10 15:02.*已预约完成后审查/s, "实时旁注在流水里带着自己的精确时间，时间排在最前面");
   assert.equal(await messages.last().locator(".task-tool-line").count(), 1, "旁注后到达的工具应显示在旁注之前的当前回合里");
-  assert.equal(await notes.last().evaluate((note) => note === note.parentElement?.lastElementChild), true, "实时旁注应稳定留在当前回合之后");
+  assert.equal(await messages.last().locator(".turn-receipts-toggle").count(), 1, "实时旁注记在当前回合上，后到的工具不另起一段");
 
   await resizeViewport(page, { width: 390, height: 1000 });
-  const narrowTime = await notes.last().locator("summary time").evaluate((time) => {
+  const narrowTime = await liveLog.locator(".turn-receipt > time").first().evaluate((time) => {
     const range = document.createRange();
     range.selectNodeContents(time);
     return { whiteSpace: getComputedStyle(time).whiteSpace, lineCount: range.getClientRects().length };
@@ -122,18 +97,17 @@ try {
   assert.deepEqual(narrowTime, { whiteSpace: "nowrap", lineCount: 1 }, "窄屏日期与时分不能从中间拆成两行");
   await page.setViewportSize({ width: 1000, height: 1400 });
 
-  // agent 输出里的引用块与系统脚注都低于正文层级，脚注可以再小半档，但不能反过来更重。
-  const quote = page.locator(".task-markdown blockquote").first();
-  await quote.waitFor();
-  const metrics = await quote.evaluate((el) => {
-    const note = document.querySelector(".system-event-digest");
-    const read = (node) => {
-      const s = getComputedStyle(node);
-      return { size: s.fontSize, line: s.lineHeight, height: node.getBoundingClientRect().height };
+  // 回合记录低于正文层级：比 agent 正文小一档，但不小于界面的最小字号 12px。
+  const metrics = await page.evaluate(() => {
+    const size = (node) => Number.parseFloat(getComputedStyle(node).fontSize);
+    return {
+      body: size(document.querySelector(".task-message--agent .task-markdown p")),
+      log: size(document.querySelector(".turn-receipt-log")),
+      line: size(document.querySelector(".notice-line-text")),
     };
-    return { quote: read(el), note: read(note) };
   });
-  assert.ok(Number.parseFloat(metrics.note.size) <= Number.parseFloat(metrics.quote.size), "系统脚注不能比 agent 引用更抢眼");
+  assert.ok(metrics.log < metrics.body, "回合记录不能比 agent 正文更抢眼");
+  assert.ok(metrics.log >= 12 && metrics.line >= 12, "字号不小于 12px");
 
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
   console.log("conversation-notes-dom ok");

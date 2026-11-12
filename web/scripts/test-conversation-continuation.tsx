@@ -51,7 +51,9 @@ const render = () => renderToStaticMarkup(
 const count = (text: string, needle: string) => text.split(needle).length - 1;
 
 const persisted = render();
-assert.equal(count(persisted, "<time>"), 2, "折叠摘要和隐藏明细各保留一次旁注时间");
+// 回执记在它所属的那一回合上：会话里不占行，只在回合上多一颗「1 条记录」，时刻在点开的流水里。
+assert.equal(count(persisted, "<time"), 0, "回执的时刻只在点开的流水里");
+assert.match(persisted, /class="turn-receipts-toggle"[^>]*>1 条记录</, "回执记到了续写的那一回合上");
 assert.doesNotMatch(persisted, /task-message--agent[^>]*>[\s\S]*?<header>[\s\S]*?<time>/, "续写段不应重复旁注时间");
 assert.equal(count(persisted, 'aria-label="复制这条回复"'), 1, "压平消息头不能删掉复制入口");
 assert.match(persisted, /class="turn-acts"[\s\S]*?aria-label="复制这条回复"/, "复制入口住在回合尾那一排");
@@ -70,8 +72,8 @@ const team = renderToStaticMarkup(
     indicatorForTask={() => null}
   />,
 );
-assert.equal(count(team, "<time>"), 1, "团队旁注也应自己显示时间，续写段不再另起一行");
-assert.match(team, /conversation-note[^>]*>[\s\S]*<p>已预约完成后审查。<\/p><time>/);
+assert.equal(count(team, "<time"), 1, "团队旁注也应自己显示时间，续写段不再另起一行");
+assert.match(team, /notice-line[^>]*>[\s\S]*>已预约完成后审查。<\/span><time class="notice-line-tail">/);
 assert.doesNotMatch(team, /team-feed-agent[^>]*><header>/, "团队续写没有额外元信息时不应留下空消息头");
 
 const reviewPrompt: ConversationItem = {

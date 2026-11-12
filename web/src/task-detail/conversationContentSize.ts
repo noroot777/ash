@@ -147,6 +147,7 @@ const EVENT_SIZE: SizeTable<EventItem> = {
   variant: () => 0,
   verify: () => 0,
   aside: () => 0,
+  notice: () => 0,
   text: (value) => value.length,
 };
 const EVENT_KEYS = Object.keys(EVENT_SIZE) as (keyof EventItem)[];

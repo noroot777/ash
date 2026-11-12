@@ -5,6 +5,8 @@ import type { ReviewFileTarget } from "../components/markdownPolicy.ts";
 import { api } from "../lib/api.ts";
 import { ReviewNote } from "../review/ReviewNote.tsx";
 import type { ConversationReviewLane, ReviewLaneConclusion } from "./conversationReviewLanes.ts";
+import { NoticeLine } from "./SystemNotice.tsx";
+import { reviewVerdictText, reviewVerdictTone, type ReviewVerdictWord } from "./timelineNoticeCopy.ts";
 import { durationBetween, formatInstant } from "./utils.ts";
 
 function stateOf(conclusion: ReviewLaneConclusion, complete: boolean) {
@@ -22,7 +24,103 @@ function timing(lane: ConversationReviewLane): string | null {
   return `${start}${end && end !== start ? `–${end}` : ""}${duration ? ` · ${duration}` : ""}`;
 }
 
+const VERDICT: Record<Exclude<ReviewLaneConclusion, null>, ReviewVerdictWord> = {
+  verified: "passed",
+  verify_failed: "failed",
+  inconclusive: "inconclusive",
+};
+
+/** 出了结论的那一轮收成的一句：「第 3 轮审查通过」「第 2 轮审查未通过，2 条意见」。 */
+export function reviewLaneSentence(lane: ConversationReviewLane): string {
+  const verdict = lane.conclusion ? VERDICT[lane.conclusion] : "inconclusive";
+  return reviewVerdictText(lane.source, lane.round, verdict, lane.findings);
+}
+
+/** 指到才出的那半句：谁审的、用时、什么时候出的结论。 */
+export function reviewLaneTail(lane: ConversationReviewLane): string {
+  return [lane.reviewerLabel, durationBetween(lane.startedAt, lane.endedAt), formatInstant(lane.endedAt)]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 export function ReviewerLane({
+  taskId,
+  lane,
+  children,
+  onOpenRound,
+}: {
+  taskId: string;
+  lane: ConversationReviewLane;
+  children: ReactNode;
+  /**
+   * 出了结论的轮次点一下去右侧「审查」格、展开这一轮。不给（只读视图、团队时间线没有那一格）
+   * 就在原处摊开这一轮的经过。
+   */
+  onOpenRound?: (round: number | null) => void;
+}) {
+  // 收了口的一轮（出了结论，或者到头了也没给出结论）收成一行；还在跑的保留整张卡。
+  if (lane.complete) return <ReviewMilestone taskId={taskId} lane={lane} onOpenRound={onOpenRound}>{children}</ReviewMilestone>;
+  return <RunningReviewLane taskId={taskId} lane={lane}>{children}</RunningReviewLane>;
+}
+
+/**
+ * 出了结论的审查轮：一行一句，整行可点。颜色只在行首那颗盾上，结论写在字里；谁审的、
+ * 用时、时刻指到再看。点开去右侧「审查」格的这一轮（报告、附言、证据都在那儿）。
+ */
+function ReviewMilestone({ taskId, lane, children, onOpenRound }: {
+  taskId: string;
+  lane: ConversationReviewLane;
+  children: ReactNode;
+  onOpenRound?: (round: number | null) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [report, setReport] = useState<ReviewFileTarget | null>(null);
+  const bodyId = useId();
+  const verdict = lane.conclusion ? VERDICT[lane.conclusion] : "inconclusive";
+  const view = {
+    tier: "milestone" as const,
+    tone: reviewVerdictTone(verdict),
+    glyph: "review" as const,
+    text: reviewLaneSentence(lane),
+    detail: null,
+  };
+  const openReport = () => {
+    const target = lane.report;
+    if (!target) return;
+    setReport({ name: "report.md", url: reportUrl(taskId, target) });
+  };
+  return (
+    <section className="review-milestone" aria-label={view.text}>
+      <NoticeLine
+        view={view}
+        tail={reviewLaneTail(lane)}
+        onOpen={onOpenRound ? () => onOpenRound(lane.round) : () => setExpanded((value) => !value)}
+        openLabel={onOpenRound ? "在右侧审查格里打开这一轮" : expanded ? "收起这一轮的经过" : "展开这一轮的经过"}
+      />
+      {!onOpenRound && expanded && (
+        <div className="review-milestone-body" id={bodyId}>
+          {lane.reportAvailable && lane.report && (
+            <button type="button" className="review-milestone-report" onClick={openReport}>
+              <FileText size={12} aria-hidden="true" />审查报告
+            </button>
+          )}
+          {lane.note && <ReviewNote text={lane.note} />}
+          {children}
+        </div>
+      )}
+      {report && <ReviewReportDialog target={report} onReviewReport={setReport} onClose={() => setReport(null)} />}
+    </section>
+  );
+}
+
+function reportUrl(taskId: string, target: NonNullable<ConversationReviewLane["report"]>): string {
+  return target.kind === "inline"
+    ? api.taskReviewFileUrl(taskId, target.round, "report.md")
+    : api.freeReviewFileUrl(taskId, target.runId, target.round, "report.md");
+}
+
+/** 审查进行中：保留整张卡，看得见审查者正在说什么。 */
+function RunningReviewLane({
   taskId,
   lane,
   children,
@@ -53,10 +151,7 @@ export function ReviewerLane({
   const openReport = () => {
     const target = lane.report;
     if (!target) return;
-    const url = target.kind === "inline"
-      ? api.taskReviewFileUrl(taskId, target.round, "report.md")
-      : api.freeReviewFileUrl(taskId, target.runId, target.round, "report.md");
-    setReport({ name: "report.md", url });
+    setReport({ name: "report.md", url: reportUrl(taskId, target) });
   };
 
   return (

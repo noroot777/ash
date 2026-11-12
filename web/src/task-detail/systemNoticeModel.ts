@@ -1,21 +1,8 @@
-import type { ConversationEventTone } from "./conversationNotes.ts";
-
-export type SystemEventKind = "neutral" | "progress" | "success" | "warning" | "error" | "notice" | "recovery";
-export type SystemNoticeMode = "footnote" | "aligned" | "collapsed" | "attached";
-
-export const SYSTEM_NOTICE_MODES: ReadonlyArray<{ value: SystemNoticeMode; label: string }> = [
-  { value: "footnote", label: "备选一 · 轻量脚注" },
-  { value: "aligned", label: "备选二 · 头像轴提示" },
-  { value: "collapsed", label: "系统记录折叠" },
-  { value: "attached", label: "消息尾注" },
-];
-
+// 后端代写、占着真人回合的那几种指令（验收冲突交接、审查打回）怎么读。时间线旁注的类型与
+// 文案不在这里，在 timelineNoticeCopy.ts。
 const CONFLICT_HANDOFF = /^【验收未通过\s*·\s*需要你解冲突】/;
 const REVIEW_SYSTEM_PROMPT = /^【(?:自由工作流审查未通过|自动(?:验证|审查)未通过|审查未通过)(?:\s*·[^】]+)?】/;
 const BRACKET_TITLE = /^【([^】]+)】\s*/;
-const SUCCESS = /已完成|完成|通过|已合并|合并完成|清理完成|已删除|已打开|已关闭|已保存|已同步|已恢复/;
-const ACTIVE_PROGRESS = /开始|正在|已预约|已发起|已叫醒|等待|排队|继续|重跑|交接|处理中|即将/;
-const WARNING = /警告|暂缓|等待用户|需要你|卡在|用完了/;
 
 export function isConflictHandoff(text: string): boolean {
   return CONFLICT_HANDOFF.test(text.trimStart());
@@ -23,16 +10,6 @@ export function isConflictHandoff(text: string): boolean {
 
 export function isReviewSystemPrompt(text: string): boolean {
   return REVIEW_SYSTEM_PROMPT.test(text.trimStart());
-}
-
-export function systemEventKind(text: string, tone?: ConversationEventTone): SystemEventKind {
-  if (text.includes("原工作目录(worktree 与分支)已不存在") && text.includes("已重建为空目录")) return "recovery";
-  if (tone === "notice") return "notice";
-  if (tone === "error") return WARNING.test(text) && !/失败|异常|错误|未完成|未通过/.test(text) ? "warning" : "error";
-  if (ACTIVE_PROGRESS.test(text)) return "progress";
-  if (SUCCESS.test(text)) return "success";
-  if (/更新/.test(text)) return "progress";
-  return "neutral";
 }
 
 export function systemPromptTitle(text: string): string {
@@ -60,7 +37,8 @@ export function conflictContextEvent(text: string): boolean {
 }
 
 /**
- * 「执行者驳回了这一轮意见，现在等你裁定」那条时间线旁注。
+ * 「执行者驳回了这一轮意见，现在等你裁定」那条时间线旁注——**只给没有类型的老记录用**；
+ * 新记录由服务端标成 `review.dispute`（见 timelineNoticeCopy.ts）。
  *
  * 匹配的是 `server/src/free-review-dispute.ts` 里唯一写它的那一处结尾——那句话把三/四条
  * 出路**列了出来却没给任何能点的东西**，用户读完还得自己去右边找审查面板（用户 2026-09-24
@@ -73,20 +51,3 @@ export function conflictContextEvent(text: string): boolean {
 export function pendingDisputeEvent(text: string): boolean {
   return /现在由你裁定[：:]/.test(text);
 }
-
-export function systemNoticeModeFromSearch(search: string, hash = ""): SystemNoticeMode {
-  const value = new URLSearchParams(search).get("systemNotices")
-    ?? new URLSearchParams(hash.replace(/^#/, "")).get("systemNotices");
-  return value === "footnote" || value === "aligned" || value === "collapsed" || value === "attached"
-    ? value
-    : "aligned";
-}
-
-const INITIAL_SEARCH = typeof window === "undefined" ? "" : window.location.search;
-const INITIAL_HASH = typeof window === "undefined" ? "" : window.location.hash;
-const SYSTEM_NOTICE_MODE_REQUESTED = new URLSearchParams(INITIAL_SEARCH).has("systemNotices")
-  || new URLSearchParams(INITIAL_HASH.replace(/^#/, "")).has("systemNotices");
-export const INITIAL_SYSTEM_NOTICE_MODE = SYSTEM_NOTICE_MODE_REQUESTED
-  ? systemNoticeModeFromSearch(INITIAL_SEARCH, INITIAL_HASH)
-  : "aligned";
-export const SYSTEM_NOTICE_DEMO_REQUESTED = SYSTEM_NOTICE_MODE_REQUESTED;

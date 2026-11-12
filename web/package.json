@@ -24,7 +24,7 @@
     "//test:side-chat-upload": "侧聊里粘图：真上传 + 真发送，钉住附件块拼进 prompt、气泡里还原成缩略图、在途时按住发送与切换、草稿按侧聊各归各的。",
     "test:side-chat-upload": "node scripts/test-side-chat-upload.mjs",
     "test:conversation-fork": "tsx scripts/test-conversation-fork.ts && tsx ../server/scripts/test-task-reply-fork.ts && node scripts/test-conversation-fork-dom.mjs",
-    "test:question-card": "tsx scripts/test-question-card.tsx",
+    "test:question-card": "tsx --import ./scripts/ignore-css-hooks.mjs scripts/test-question-card.tsx",
     "test:question-history-dom": "node scripts/test-question-history-dom.mjs",
     "//test:page-token": "真人动作凭据的交付面:vite 的 dev 与 preview 交出的文档上,凭据必须来自后端且后端真的认(fixture 里写死的那一份证明不了真实文档)。",
     "test:page-token": "node scripts/test-page-token-delivery.mjs",

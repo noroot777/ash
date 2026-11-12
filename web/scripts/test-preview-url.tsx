@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { browserPreviewUrl, previewNoticeText } from "../src/lib/previewUrl.ts";
-import { SystemAuthoredMessage, SystemBoundary, SystemEventDigest, SystemEventNote } from "../src/task-detail/SystemNotice.tsx";
+import { SystemAuthoredMessage, SystemBoundary } from "../src/task-detail/SystemNotice.tsx";
+import { noticeView } from "../src/task-detail/timelineNoticeCopy.ts";
 import type { ConversationItem } from "../src/task-detail/conversationModel.ts";
 
 const path = "/api/tasks/preview-task/preview/open/web";
@@ -49,11 +50,14 @@ try {
   assert.equal(browserPreviewUrl(path), expected, "toast 和链接使用当前访问页面的 origin");
   for (const [text, url] of [[freeText, expected], [presetText, expected], [directFree, directExpected], [directPreset, directExpected]]) {
     const item: Extract<ConversationItem, { kind: "event" }> = { kind: "event", id: "preview", text, tone: "neutral" };
+    // 会话里那一行 / 回合记录里那一条只写一句结果，完整地址在点开的原文里。
+    const view = noticeView(item);
+    const shown = `${view.text}\n${view.detail ?? ""}`;
+    assert(shown.includes(url), "点开的原文里是当前入口的完整地址");
+    assert(!shown.includes("localhost"), "远程入口的原文不残留回环地址");
     const surfaces = [
-      <SystemEventNote item={item} />,
       <SystemBoundary item={item} />,
-      <SystemBoundary item={item} mode="aligned" surface="team" />,
-      <SystemEventDigest items={[item]} mode="collapsed" />,
+      <SystemBoundary item={item} surface="team" />,
       <SystemAuthoredMessage item={{ kind: "user", id: "action", text: "预览已启动", attachments: [] }} related={[item]} />,
     ];
     for (const surface of surfaces) {

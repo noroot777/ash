@@ -68,7 +68,7 @@ try {
     const head = node(a.text);
     const tail = node(b.text);
     const range = document.createRange();
-    range.setStart(head, a.at ?? head.textContent.indexOf(a.text));
+    range.setStart(head, a.atEnd ? head.textContent.indexOf(a.text) + a.text.length : a.at ?? head.textContent.indexOf(a.text));
     range.setEnd(tail, b.at ?? tail.textContent.indexOf(b.text) + b.text.length);
     const selection = getSelection();
     selection?.removeAllRanges();
@@ -121,10 +121,10 @@ try {
   await select({ text: "第 2 条改完，测试也过了。" }, { text: "跑了 2 条命令" });
   assert.equal(await take(), "第 2 条改完，测试也过了。\n\n接下来做第 3 条。");
 
-  // ④ 选区横跨两块装置、中间一个字正文都没有(上一条的账目尾栏 → 下一条的头像身份头):
-  //    没有正文可取,浮条就不出现——总比给一条「🪙 本轮 10.5k C Claude 2」的备忘强。
+  // ④ 选区横跨两块装置、中间一个字正文都没有(上一条正文的句末 → 上一条的回合尾操作 →
+  //    下一条的头像身份头):没有正文可取,浮条就不出现——总比给一条「C Claude 2」的备忘强。
   await page.getByTestId("clear").click();
-  await select({ text: "本轮" }, { text: "Claude 2" });
+  await select({ text: "接下来做第 3 条。", atEnd: true }, { text: "Claude 2" });
   await flush();
   assert.equal(await memo.isVisible().catch(() => false), false, "整段都是装置时浮条不出现");
   assert.equal(await taken.textContent(), "", "也没有任何东西被取走");
@@ -179,9 +179,8 @@ try {
     assert.equal(unmarked.includes(noise), false, `没标记的卡片漏出了「${noise}」`);
   }
 
-  // ⑪ 折起来的问答卡:整张卡此刻**可见的只有 `<summary>` 那一行**,答复预览就长在里头。
-  //    光按标签判的话 summary 整块算装置,于是用户选了一整张卡却什么都没取到(审查第 2 轮
-  //    必修 2)。同类还有哨兵自动输入卡和系统旁注,都是「折着的时候摘要行就是全部内容」。
+  // ⑪ 答过的提问:你的一个气泡,问题引在答案上面。引文是一颗键(点开看完整问题),按语义算装置;
+  //    选一整个气泡取到的是你的答案,不夹「你」、时刻和引文。
   await page.getByTestId("clear").click();
   const question = page.locator(".task-question-record");
   await question.scrollIntoViewIfNeeded();
@@ -189,34 +188,34 @@ try {
   await selectAll(question);
   const folded = await take();
   assert.equal(folded, "按第二个方案做，先把开关关掉。");
-  for (const noise of ["你的答复", "查看问答", "隐藏的问题正文", "你的答案", "10/30"]) {
-    assert.equal(folded.includes(noise), false, `折着的问答卡漏出了「${noise}」`);
+  for (const noise of ["你", "隐藏的问题正文", "10/30"]) {
+    assert.equal(folded.replace("按第二个方案做，先把开关关掉。", "").includes(noise), false, `问答气泡漏出了「${noise}」`);
   }
 
-  // 点开之后藏着的那半截成了正文,照样取得到 —— 「看不见就不算」判的是此刻,不是标签。
+  // 点开引文之后,完整的问题成了正文,照样取得到 —— 「看不见就不算」判的是此刻,不是标签。
   await page.getByTestId("clear").click();
-  await question.evaluate((card) => { card.open = true; });
+  await question.locator(".task-question-quote").click();
+  await question.locator(".task-question-quote-full").waitFor();
   await question.scrollIntoViewIfNeeded();
   await settle();
   await selectAll(question);
   const opened = await take();
-  assert.match(opened, /隐藏的问题正文/, "展开之后那段问答就该取得到");
+  assert.match(opened, /隐藏的问题正文/, "展开之后那段问题就该取得到");
   assert.match(opened, /按第二个方案做，先把开关关掉。/);
 
-  // ⑫ 选区从上一条的代码块跨进折起来的问答卡,终点停在答复预览**中间**。藏着的那半截
-  //    `Range.toString()` 照样读得到;而拿含隐藏内容的 range 重建 Selection 之后,
-  //    `Selection.toString()` 还会越过 range 边界把后面的字一起带出来(必修 3)。
+  // ⑫ 选区从上一条的代码块跨进收着引文的问答气泡,终点停在答案**中间**。收起的那段完整问题
+  //    已经不在页面上;引文那颗键是装置,一个字都不许漏进来(必修 3)。
   await page.getByTestId("clear").click();
-  await question.evaluate((card) => { card.open = false; });
+  await question.locator(".task-question-quote").click();
+  await question.locator(".task-question-quote-full").waitFor({ state: "detached" });
   await question.scrollIntoViewIfNeeded();
   await settle();
   await select({ text: 'print("第二行")' }, { text: "按第二个方案做，" });
   const crossed = await take();
   assert.equal(crossed, 'print("第二行")\n\n按第二个方案做，');
 
-  //    再把整张折叠卡整个跨过去,落到它后面那张卡的正文里 —— 审查复现的就是这个形状。
-  //    中间那一截整个落在关着的子树里(`Range.toString()` 照样读得到那段问答),一个字都
-  //    不许漏出来,也不许把选区终点之后的尾栏带进来。
+  //    再把整个问答气泡跨过去,落到它后面那张卡的正文里 —— 审查复现的就是这个形状。
+  //    中间只该带上答案:引文、身份头一个字都不许漏出来,也不许把选区终点之后的尾栏带进来。
   await page.getByTestId("clear").click();
   await question.scrollIntoViewIfNeeded();
   await settle();
@@ -224,8 +223,8 @@ try {
   const over = await take();
   assert.equal(over, 'print("第二行")\n\n按第二个方案做，先把开关关掉。\n\n审查卡自己的正文该留下。');
 
-  // ⑬ 反过来:从答复预览**中间**起步、跨到卡片外面。预览前面那一截 summary 整个落在选区
-  //    起点之前,照原样拿它去挪起点就会把起点拽回预览的开头 —— 用户没选的前半句跟着被
+  // ⑬ 反过来:从答案**中间**起步、跨到气泡外面。答案前面那一截装置(身份头、引文)整个落在
+  //    选区起点之前,照原样拿它去挪起点就会把起点拽回答案的开头 —— 用户没选的前半句跟着被
   //    存进备忘(审查第 2 轮必修)。两头各一道闸,每一截都得是原选区的子区间。
   await page.getByTestId("clear").click();
   await question.scrollIntoViewIfNeeded();

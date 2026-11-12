@@ -1,7 +1,7 @@
 import { LEGACY_SYS_MARKER } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import type { ConversationItem } from "./conversationModel.ts";
-import { verifyNoteOf, type VerifyNoteMark } from "./conversationNotes.ts";
+import { stageOf, verifyMarkOf, type VerifyNoteMark } from "./conversationNotes.ts";
 import { monitorWakeInput } from "./monitorWakeModel.ts";
 import { monitorWakeFedReviewer } from "./conversationReviewer.ts";
 
@@ -43,6 +43,8 @@ export type ConversationReviewLane = {
   reportAvailable: boolean;
   report: ReviewLaneReport | null;
   defaultCollapsed: boolean;
+  /** 未通过时报告里有几条意见（服务端在结论旁注上给的）。老记录、通过的轮次是 null。 */
+  findings: number | null;
 };
 
 export type ConversationFeedRow =
@@ -84,7 +86,6 @@ type ActiveLane = ConversationReviewLane & {
   startSessionId: string | null;
 };
 
-const STAGE_CONCLUSION = /验收阶段更新：.*（(verified|verify_failed)）/;
 const FREE_REVIEW_REPAIR_HANDOFF = /^【自由工作流审查未通过(?:\s*·[^】]+)?】/;
 const INLINE_REVIEW_REPAIR_HANDOFF = /^【自动(?:验证|审查)未通过(?:\s*·[^】]+)?】/;
 
@@ -113,9 +114,15 @@ function itemEnd(item: ConversationItem): string | null {
 
 function conclusionOf(item: ConversationItem): ReviewLaneConclusion {
   if (item.kind !== "event") return null;
-  const stage = STAGE_CONCLUSION.exec(item.text)?.[1];
+  const stage = stageOf(item);
   if (stage === "verified" || stage === "verify_failed") return stage;
-  const mark = verifyNoteOf(item.text);
+  // 带类型的结论旁注直接读结论，不再看原文；下面那几道正则只给没有类型的老记录。
+  const notice = item.notice;
+  if (notice?.kind === "review.verdict") {
+    return notice.verdict === "passed" ? "verified" : notice.verdict === "failed" ? "verify_failed" : "inconclusive";
+  }
+  if (notice) return notice.kind === "review.repair" ? "inconclusive" : null;
+  const mark = verifyMarkOf(item);
   if (!mark || mark.phase !== "end") return null;
   if (mark.kind === "inline") {
     if (item.tone === "error") return "verify_failed";
@@ -130,13 +137,13 @@ function conclusionOf(item: ConversationItem): ReviewLaneConclusion {
 
 function laneStart(item: ConversationItem): VerifyNoteMark | null {
   if (item.kind !== "event") return null;
-  const mark = verifyNoteOf(item.text);
+  const mark = verifyMarkOf(item);
   return mark?.phase === "start" ? mark : null;
 }
 
 function matchingEnd(item: ConversationItem, lane: ActiveLane): boolean {
   if (item.kind !== "event") return false;
-  const mark = verifyNoteOf(item.text);
+  const mark = verifyMarkOf(item);
   if (mark?.phase !== "end" || mark.kind !== lane.source) return false;
   // 「自由工作流审查仍未通过，自动复审次数已用完」这类收尾不带轮号，但它收的就是
   // 当前这一轮 —— 不认的话最后一轮永远等不到收口。
@@ -189,6 +196,10 @@ function addToLane(lane: ActiveLane, item: ConversationItem): void {
   lane.endedAt = itemEnd(item) ?? lane.endedAt;
   const conclusion = conclusionOf(item);
   if (conclusion) lane.conclusion = conclusion;
+  if (item.kind === "event" && item.notice?.kind === "review.verdict") {
+    lane.findings = item.notice.findings ?? lane.findings;
+    lane.reviewerLabel ??= item.notice.reviewer ?? null;
+  }
   if (item.kind !== "agent" || item.reviewer?.round !== lane.round) return;
   lane.reviewerSpoke = true;
   lane.reviewerSessionId ??= item.sessionId;
@@ -347,6 +358,7 @@ export function conversationFeedRows(
         reportAvailable: false,
         report: null,
         defaultCollapsed: false,
+        findings: null,
         reviewerSpoke: false,
         reviewerSessionId: null,
         startSessionId: item.kind === "event" ? item.sessionId ?? null : null,

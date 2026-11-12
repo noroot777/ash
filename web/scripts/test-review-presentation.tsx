@@ -116,10 +116,24 @@ const noteLane = conversationFeedRows(protocolItems, { reviews: [{
 }] as never }).find((row): row is ConversationReviewLane => row.kind === "review-lane");
 assert.ok(noteLane);
 assert.equal(noteLane.note, noteText, "附言从 run 上补进审查卡");
+// 收了口的一轮在会话里只剩一句结论：附言、报告、证据都在右侧「审查」格那一轮里。
 const noteMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={noteLane}>{null}</ReviewerLane>);
-assert.match(noteMarkup, /派审附言/, "卡内正文顶部摆出附言");
-assert.match(noteMarkup, /重点看 SSE 断线重连/, "附言正文原样呈现");
-assert.match(noteMarkup, /含附言/, "卡头留标记，折叠着也看得出这一轮带附言");
+assert.match(noteMarkup, /class="review-milestone"/, "出了结论的一轮收成一行");
+assert.match(noteMarkup, />第 3 轮审查未通过</, "结论写在字里");
+assert.match(noteMarkup, /class="notice-line is-milestone tone-bad"/, "颜色只落在行首图标那一档");
+assert.match(noteMarkup, /<time class="notice-line-tail">5\.5审查 · 40m 0s · /, "谁审的、用时、时刻紧跟在字后面");
+assert.doesNotMatch(noteMarkup, /重点看 SSE 断线重连/, "附言不摊在会话里");
+const opened: Array<number | null> = [];
+const linkedMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={noteLane} onOpenRound={(round) => opened.push(round)}>{null}</ReviewerLane>);
+assert.match(linkedMarkup, /aria-label="第 3 轮审查未通过，在右侧审查格里打开这一轮"/, "接上审查格时整行就是去那一轮的键");
+// 还在跑的那一轮照旧是整张卡：附言是这一轮审查的输入，卡里必须看得见。
+const runningNoteLane = { ...noteLane, complete: false, conclusion: null, defaultCollapsed: false };
+const runningNoteMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={runningNoteLane}>{null}</ReviewerLane>);
+assert.match(runningNoteMarkup, /派审附言/, "卡内正文顶部摆出附言");
+assert.match(runningNoteMarkup, /重点看 SSE 断线重连/, "附言正文原样呈现");
+assert.match(runningNoteMarkup, /含附言/, "卡头留标记，折叠着也看得出这一轮带附言");
+const findingsMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={{ ...noteLane, findings: 2 }}>{null}</ReviewerLane>);
+assert.match(findingsMarkup, />第 3 轮审查未通过，2 条意见</, "抽得出意见条数时写进那一句");
 
 // —— 卡内首条气泡的头曾经是卡头的逐字复读：审查者名、模型、轮次徽标、开始时间、用时
 // 全部在卡头上写过一遍。省掉整条头之后，模型旁边的智能水平只剩卡头这一处，必须补上。
@@ -133,7 +147,6 @@ const laneItems = buildConversationItems([{
   output: [
     turn("system", "第 1 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-11T06:00:00.000Z"),
     "审查正文。",
-    turn("system", "第 1 轮验证通过。", "2026-08-11T06:30:00.000Z"),
   ].join("\n"),
   trace: [laneRun("2026-08-11T06:00:00.000Z", 1)],
 } as never], [session], []);
@@ -160,5 +173,21 @@ assert.doesNotMatch(feedMarkup, /turn-meta">[^<]*gpt-5\.5/, "卡内首条气泡�
 assert.doesNotMatch(feedMarkup, /verify-badge/, "轮次徽标是卡头标题的复读，卡内不出");
 assert.doesNotMatch(feedMarkup, /turn-meta">[^<]*用时/, "用时已在卡头，首条气泡不再重复");
 assert.doesNotMatch(feedMarkup, /task-message-avatar/, "卡头左边已有一颗盾，卡内气泡不再各挂一颗");
+
+// 跑完了：同一轮在会话里收成一句，卡头那些（模型、智能水平）不再摆出来。
+const doneItems = buildConversationItems([{
+  session,
+  output: [
+    turn("system", "第 1 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-11T06:00:00.000Z"),
+    "审查正文。",
+    turn("system", "第 1 轮验证通过。", "2026-08-11T06:30:00.000Z"),
+  ].join("\n"),
+  trace: [laneRun("2026-08-11T06:00:00.000Z", 1)],
+} as never], [session], []);
+const doneMarkup = renderToStaticMarkup(
+  <ConversationFeed task={{ id: "t1", status: "done" } as never} items={doneItems} sessions={[session]} loading={false} error={null} />,
+);
+assert.match(doneMarkup, />第 1 轮验证通过</);
+assert.doesNotMatch(doneMarkup, /class="verify-lane/, "收了口的一轮不再是整张卡");
 
 console.log("review-presentation ok");

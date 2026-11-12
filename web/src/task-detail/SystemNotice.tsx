@@ -1,5 +1,5 @@
-import { ArrowClockwise, CheckCircle, Clock, Info, WarningCircle } from "@phosphor-icons/react";
-import type { ReactNode } from "react";
+import { ArrowClockwise, CheckCircle, Info, ShieldCheck, WarningCircle } from "@phosphor-icons/react";
+import { useId, useState, type ReactNode } from "react";
 import { openGitWorkbench } from "../git-workbench/navigation.ts";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { previewNoticeText } from "../lib/previewUrl.ts";
@@ -9,177 +9,102 @@ import { monitorWakeInput } from "./monitorWakeModel.ts";
 import type { ConversationItem } from "./conversationModel.ts";
 import { DeleteMessageButton } from "./MessageDelete.tsx";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
-import {
-  SYSTEM_NOTICE_MODES,
-  conflictFiles,
-  isConflictHandoff,
-  systemEventKind,
-  systemPromptBody,
-  systemPromptSummary,
-  systemPromptTitle,
-  type SystemEventKind,
-  type SystemNoticeMode,
-} from "./systemNoticeModel.ts";
+import { conflictFiles, isConflictHandoff, systemPromptBody, systemPromptSummary, systemPromptTitle } from "./systemNoticeModel.ts";
+import { noticeView, type NoticeGlyph, type NoticeView } from "./timelineNoticeCopy.ts";
 
 type EventItem = Extract<ConversationItem, { kind: "event" }>;
-type EventLike = Pick<EventItem, "text" | "at" | "tone" | "verify" | "sources">;
+type EventLike = Pick<EventItem, "text" | "at" | "tone" | "variant" | "notice" | "sources">;
 
-const IMPORTANCE: Record<SystemEventKind, number> = {
-  neutral: 0,
-  progress: 1,
-  success: 2,
-  recovery: 3,
-  notice: 4,
-  warning: 5,
-  error: 6,
-};
-
-function eventIcon(kind: SystemEventKind): ReactNode {
-  if (kind === "recovery") return <ArrowClockwise size={11} weight="bold" />;
-  if (kind === "success") return <CheckCircle size={11} weight="fill" />;
-  if (kind === "progress") return <Clock size={11} weight="fill" />;
-  if (kind === "error" || kind === "warning" || kind === "notice") return <WarningCircle size={11} weight="fill" />;
-  return <Info size={11} weight="fill" />;
+export function NoticeIcon({ glyph }: { glyph: NoticeGlyph }) {
+  if (glyph === "review") return <ShieldCheck size={14} weight="fill" />;
+  if (glyph === "check") return <CheckCircle size={14} weight="fill" />;
+  if (glyph === "recovery") return <ArrowClockwise size={14} weight="bold" />;
+  if (glyph === "warn") return <WarningCircle size={14} weight="fill" />;
+  return <Info size={14} weight="fill" />;
 }
 
-function cleanEventText(item: EventLike): string {
-  if (systemEventKind(item.text, item.tone) === "recovery") return "工作区已恢复 · 会话内容已保留";
-  return previewNoticeText(item.text.replace(/^〔系统〕/, "").trim());
-}
-
-function digestLead(items: EventItem[]): { kind: SystemEventKind; text: string } {
-  const latest = items.at(-1)!;
-  const text = cleanEventText(latest).replace(/\s+/g, " ");
-  return {
-    kind: systemEventKind(latest.text, latest.tone),
-    text: text.length > 108 ? `${text.slice(0, 105)}…` : text,
-  };
-}
-
-export function SystemNoticeModeSwitch({ mode, search }: { mode: SystemNoticeMode; search: string }) {
-  return (
-    <nav className="system-notice-mode-switch" aria-label="系统提示方案">
-      <span>系统提示方案</span>
-      {SYSTEM_NOTICE_MODES.map((option) => {
-        const params = new URLSearchParams(search);
-        params.set("systemNotices", option.value);
-        return (
-          <a
-            href={`?${params.toString()}`}
-            aria-current={mode === option.value ? "page" : undefined}
-            key={option.value}
-          >
-            {option.label}
-          </a>
-        );
-      })}
-    </nav>
-  );
-}
-
-export function SystemEventDigest({
-  items,
-  mode,
-  attached = false,
+/**
+ * 会话里常显的那一行：里程碑（审查出了结论、验收了），或者出了岔子 / 要你拍板的。
+ *
+ * 一行一句，图标落在头像轴上，颜色只在图标上，结论写在字里。`tail`（谁审的、用时、时刻）
+ * 紧跟在字后面，指到这一行才显示，触屏上常显。整行是一颗键：给了 `onOpen` 就去那儿
+ * （审查轮去右侧「审查」格），否则有原文细节时就地摊开它。
+ */
+export function NoticeLine({
+  view,
+  tail,
+  onOpen,
+  openLabel,
   action,
+  deletable,
+  live = false,
 }: {
-  items: EventItem[];
-  mode: SystemNoticeMode;
-  /** 贴着上一颗气泡排成这一回合的尾注（见 ConversationSystemDigestRow.attached）。 */
-  attached?: boolean;
-  /**
-   * 这组旁注里有一条此刻**要用户做点什么**时，摆在摘要行旁边的那颗按钮。
-   * 摆在 `<summary>` 外面：`<details>` 里的点击会连带展开/收起，按钮就成了「点一下
-   * 顺手把这段折叠掉」。
-   */
+  view: Pick<NoticeView, "tier" | "tone" | "glyph" | "text" | "detail">;
+  tail?: string | null;
+  onOpen?: () => void;
+  /** onOpen 去哪儿，读屏用（「在审查格里打开第 3 轮」）。 */
+  openLabel?: string;
+  /** 「去裁定」这一类：摆在这一行最后，不跟着整行的键走。 */
   action?: ReactNode;
+  deletable?: EventLike;
+  /** 还没出结论（审查进行中）：字上走一道流光。 */
+  live?: boolean;
 }) {
-  const lead = digestLead(items);
-  const lastAt = items.at(-1)?.at;
-  const hiddenIssueCount = items.slice(0, -1).filter((item) => {
-    const kind = systemEventKind(item.text, item.tone);
-    return kind === "error" || kind === "warning";
-  }).length;
-  const important = IMPORTANCE[lead.kind] >= IMPORTANCE.recovery;
-  const collapsedLabel = important ? `系统记录 · ${lead.text}` : `系统记录 · ${items.length} 条`;
+  const [open, setOpen] = useState(false);
+  const detailId = useId();
+  const expandable = !onOpen && !!view.detail;
   const line = (
     <>
-      {/* 折起来时这一行就是这组旁注的全部可见内容（底下那张明细列表藏着），所以它要
-          声明成正文，别跟着 `<summary>` 一起被剔掉（见 side-chat/selectionContent.ts）。 */}
-      <span data-selection-content="">{mode === "collapsed" ? collapsedLabel : lead.text}</span>
-      {mode !== "collapsed" && <small>{items.length > 1 ? `${items.length} 条记录` : "查看完整内容"}</small>}
-      {hiddenIssueCount > 0 && <small className="system-event-issues">其中 {hiddenIssueCount} 条异常</small>}
-      {lastAt && <time>{formatInstant(lastAt)}</time>}
+      <span className={`notice-line-text${live ? " is-live" : ""}`} data-selection-content="">{view.text}</span>
+      {tail && <time className="notice-line-tail">{tail}</time>}
     </>
   );
   return (
-    <div className={`system-event-digest is-${mode} is-${lead.kind}${attached ? " is-turn-aside" : ""}`} role={lead.kind === "error" ? "status" : undefined}>
-      {mode === "aligned" && (
-        <span className="system-event-avatar" aria-hidden="true">{eventIcon(lead.kind)}</span>
-      )}
-      {/* 摘要行和按钮共处一格：aligned 模式下外层是「头像列 + 正文列」两列网格，按钮
-          单独当直接子元素会被自动排进下一行的头像列里，20px 宽把三个字挤成竖排。 */}
-      <div className="system-event-digest-main">
-        <details>
-          <summary>{line}</summary>
-          <ol>
-            {items.map((item) => (
-              <li key={item.id} className={`is-${systemEventKind(item.text, item.tone)}`}>
-                <span>{cleanEventText(item)}</span>
-                {item.at && <time>{formatInstant(item.at)}</time>}
-                <DeleteMessageButton item={item} />
-              </li>
-            ))}
-          </ol>
-        </details>
-        {action && <span className="system-event-action">{action}</span>}
-      </div>
-    </div>
-  );
-}
-
-export function SystemEventNote({ item, mode = "footnote", action }: { item: EventLike; mode?: SystemNoticeMode; action?: ReactNode }) {
-  const kind = systemEventKind(item.text, item.tone);
-  const recovery = kind === "recovery";
-  return (
     <div
-      className={`conversation-note system-event-row notice-mode-${mode} is-${kind}${item.verify ? " is-verify" : ""}${recovery ? " system-recovery-row" : ""}`}
-      role={kind === "error" || kind === "warning" || kind === "notice" ? "status" : undefined}
+      className={`notice-line is-${view.tier} tone-${view.tone}`}
+      role={view.tier === "alert" ? "status" : undefined}
     >
-      <span className="system-event-icon" aria-hidden="true">{eventIcon(kind)}</span>
-      <p>
-        {recovery && <b>工作区已恢复</b>}
-        {recovery ? "原目录已不存在，系统已重建空工作区；会话与用户消息均已保留。" : cleanEventText(item)}
-      </p>
-      {item.at && <time>{formatInstant(item.at)}</time>}
-      <DeleteMessageButton item={item} />
-      {/* 按钮是这条旁注上的最后一件东西：正文、时间都是「发生了什么」，只有它是「你要做
-          什么」，插在正文和时间之间会把一行事实截成两段。摘要版同理（在 summary 之后）。 */}
-      {action && <span className="system-event-action">{action}</span>}
+      <span className="notice-line-icon" aria-hidden="true"><NoticeIcon glyph={view.glyph} /></span>
+      <div className={`notice-line-main${onOpen || expandable ? "" : " is-flow"}`}>
+        {onOpen || expandable ? (
+          <button
+            type="button"
+            className="notice-line-button"
+            aria-label={openLabel ? `${view.text}，${openLabel}` : undefined}
+            aria-expanded={expandable ? open : undefined}
+            aria-controls={expandable ? detailId : undefined}
+            onClick={() => (onOpen ? onOpen() : setOpen((value) => !value))}
+          >
+            {line}
+          </button>
+        ) : (
+          // 不能点的一行按文字排：「去裁定」这类动作接在最后一行字后面，不另起一行。
+          <span className="notice-line-button is-static">
+            {line}
+            {action && <span className="notice-line-action">{action}</span>}
+          </span>
+        )}
+        {(onOpen || expandable) && action && <span className="notice-line-action">{action}</span>}
+        {deletable && <DeleteMessageButton item={deletable} />}
+        {expandable && open && <p className="notice-line-detail" id={detailId}>{view.detail}</p>}
+      </div>
     </div>
   );
 }
 
-export function SystemBoundary({
-  item,
-  surface = "task",
-  mode = "footnote",
-}: {
-  item: EventLike;
-  surface?: "task" | "team";
-  mode?: SystemNoticeMode;
-}) {
-  const kind = systemEventKind(item.text, item.tone);
-  if (mode === "aligned") {
-    return (
-      <div className={`${surface === "team" ? "team-feed-event" : "task-event-line"} system-boundary notice-mode-aligned is-${kind}`}>
-        <span className="system-event-avatar" aria-hidden="true">{eventIcon(kind)}</span>
-        <p>{previewNoticeText(item.text)}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
-        <DeleteMessageButton item={item} />
-        <span className="system-boundary-rule" aria-hidden="true" />
-      </div>
-    );
-  }
+/** 指到才出的那半句：（是哪条命令 ·）时刻。 */
+export function noticeTail(view: Pick<NoticeView, "meta">, at?: string): string | null {
+  return [view.meta, at ? formatInstant(at) : ""].filter(Boolean).join(" · ") || null;
+}
+
+/** 一条时间线旁注，按它的类型摆成常显的一行（团队时间线、审查卡里也用这一份）。 */
+export function SystemEventNote({ item, action }: { item: EventLike; action?: ReactNode }) {
+  const view = noticeView(item);
+  return <NoticeLine view={view} tail={noticeTail(view, item.at)} action={action} deletable={item} />;
+}
+
+/** 团队时间线上的回合边界：一条很淡的分隔线和一句说明。 */
+export function SystemBoundary({ item, surface = "task" }: { item: EventLike; surface?: "task" | "team" }) {
   return (
     <div className={`${surface === "team" ? "team-feed-event" : "task-event-line"} system-boundary${item.tone === "error" ? " is-error" : ""}`}>
       <span className="system-boundary-rule" aria-hidden="true" />
@@ -192,12 +117,12 @@ export function SystemBoundary({
 
 type SystemMessageProps = {
   item: Extract<ConversationItem, { kind: "user" }>;
-  related?: Array<Extract<ConversationItem, { kind: "event" }>>;
+  related?: EventItem[];
   surface?: "task" | "team";
-  mode?: SystemNoticeMode;
 };
 
-export function SystemAuthoredMessage({ item, related = [], surface = "task", mode = "footnote" }: SystemMessageProps) {
+/** 后端代写、占着真人回合的那几种指令（验收冲突交接等）。 */
+export function SystemAuthoredMessage({ item, related = [], surface = "task" }: SystemMessageProps) {
   const wakeInput = monitorWakeInput(item);
   if (wakeInput) return <MonitorWakeInput item={item} input={wakeInput} surface={surface} />;
   const parsed = parseAttachmentText(item.text);
@@ -215,7 +140,7 @@ export function SystemAuthoredMessage({ item, related = [], surface = "task", mo
   const raw = systemPromptBody(text);
   const outer = surface === "team" ? "team-feed-user" : "task-message task-message--user";
   return (
-    <article className={`${outer} is-system-authored system-action-wrap notice-mode-${mode}`}>
+    <article className={`${outer} is-system-authored system-action-wrap`}>
       <section className={`system-action-note${conflict ? " is-conflict" : ""}`} aria-label={title}>
         <span className="system-action-icon" aria-hidden="true">
           {conflict ? <WarningCircle size={12} weight="fill" /> : <Info size={12} weight="fill" />}

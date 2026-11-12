@@ -15,23 +15,13 @@ import { RunActivity } from "../components/RunActivity.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
 import { conversationFeedRows, reviewLaneMessageRoles, type ReviewLaneMessageRole } from "./conversationReviewLanes.ts";
 import { conversationDebateRows } from "./conversationDebateRows.ts";
-import { conversationSystemRows } from "./conversationSystemRows.ts";
+import { conversationSystemRows, laneReceipts, type TurnReceipt } from "./conversationSystemRows.ts";
 import { DebateLane } from "./DebateLane.tsx";
 import { ReviewerLane } from "./ReviewerLane.tsx";
-import {
-  SystemAuthoredMessage,
-  SystemBoundary,
-  SystemEventDigest,
-  SystemEventNote,
-  SystemNoticeModeSwitch,
-} from "./SystemNotice.tsx";
-import {
-  INITIAL_SYSTEM_NOTICE_MODE,
-  SYSTEM_NOTICE_DEMO_REQUESTED,
-  isReviewSystemPrompt,
-  pendingDisputeEvent,
-  type SystemNoticeMode,
-} from "./systemNoticeModel.ts";
+import { NoticeLine, noticeTail, SystemAuthoredMessage } from "./SystemNotice.tsx";
+import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
+import { noticeView } from "./timelineNoticeCopy.ts";
+import { TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts } from "./TurnReceipts.tsx";
 import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
@@ -66,6 +56,7 @@ function AgentMessage({
   onAskSideChat,
   wakeReply,
   taskActive,
+  receipts,
 }: {
   item: Extract<ConversationItem, { kind: "agent" }>;
   /** 这条发言是在哪个任务的工作目录里说的（正文里的图靠它去那个目录取），见 AgentTurnBody。 */
@@ -79,7 +70,10 @@ function AgentMessage({
   wakeReply?: boolean;
   /** 任务此刻在跑或排着。没有结束时刻的那一回合只有这时才算「还在说」——历史记录缺了结束时刻不算。 */
   taskActive: boolean;
+  /** 记在这一回合上的回执（conversationSystemRows）。 */
+  receipts?: readonly TurnReceipt[];
 }) {
+  const log = useTurnReceipts();
   const duration = durationBetween(item.at, item.endedAt);
   const reviewer = item.reviewer;
   const showIdentity = !item.continuation && !laneRole;
@@ -115,8 +109,13 @@ function AgentMessage({
         )}
         {wakeReply && <MonitorWakeReply />}
         <AgentTurnBody segments={item.segments} running={!item.endedAt} taskId={taskId} />
-        {/* 跑着的这一回合还没说完，尾上的操作等它收口再出（run-5）。 */}
-        {!live && <TurnActions item={item} markdown={item.markdown} onFork={onFork} onAskSideChat={onAskSideChat} />}
+        {/* 跑着的这一回合还没说完，尾上的操作等它收口再出（run-5）。「N 条记录」是那一排里的一颗，
+            摊开的流水在它下面。 */}
+        {!live && <TurnActions item={item} markdown={item.markdown} onFork={onFork} onAskSideChat={onAskSideChat}
+          records={receipts?.length ? <TurnReceiptsToggle count={receipts.length} open={log.open} onToggle={log.toggle} logId={log.logId} /> : undefined} />}
+        {!live && receipts && <TurnReceiptLog receipts={receipts} open={log.open} logId={log.logId} />}
+        {/* 还在说的那一回合没有尾栏，记录先单独挂在正文下面（同样指到才出）。 */}
+        {live && receipts && receipts.length > 0 && <TurnReceipts receipts={receipts} />}
       </div>
     </article>
   );
@@ -124,11 +123,9 @@ function AgentMessage({
 
 function UserMessage({
   item,
-  noticeMode,
   preserveSystemStyle = false,
 }: {
   item: Extract<ConversationItem, { kind: "user" }>;
-  noticeMode: SystemNoticeMode;
   preserveSystemStyle?: boolean;
 }) {
   const parsed = parseAttachmentText(item.text);
@@ -138,7 +135,7 @@ function UserMessage({
   const bySystem = !!item.bySystem;
   const reviewPrompt = isReviewSystemPrompt(item.text);
   if (bySystem && (!preserveSystemStyle || monitorWakeInput(item)) && !reviewPrompt) {
-    return <SystemAuthoredMessage item={item} mode={noticeMode} />;
+    return <SystemAuthoredMessage item={item} />;
   }
   return (
     <article className={`task-message task-message--user${bySystem ? " is-system-authored" : ""}`}>
@@ -173,7 +170,6 @@ export function ConversationFeed({
   onAskSideChat,
   reviews,
   onOpenReviewPanel,
-  systemNoticeMode,
   questionHistory,
   liveQuestionHistory,
   historyReady = true,
@@ -208,10 +204,11 @@ export function ConversationFeed({
   /**
    * 打开审查面板（那张裁定卡在里面）。不给就不出「去裁定」按钮——只读的会话视图、
    * 团队时间线都没有那块面板，给一颗点了没反应的按钮比不给更糟。
+   *
+   * `round`：会话里那一行审查结论被点了，要在审查格里展开的是哪一轮（合并结果审查没有
+   * 轮号，给 null）；「去裁定」不带。
    */
-  onOpenReviewPanel?: () => void;
-  /** 比较系统提示方案时覆盖 URL 模式；普通任务不传。 */
-  systemNoticeMode?: SystemNoticeMode;
+  onOpenReviewPanel?: (round?: number | null) => void;
   questionHistory?: QuestionRecord[];
   liveQuestionHistory?: boolean;
   /**
@@ -251,12 +248,12 @@ export function ConversationFeed({
     pending: pendingExecutor,
     fallback: task.executorLabel ?? task.agentType,
   });
-  const search = typeof window === "undefined" ? "" : window.location.search;
-  const modeFromUrl = SYSTEM_NOTICE_DEMO_REQUESTED;
-  const noticeMode = systemNoticeMode ?? INITIAL_SYSTEM_NOTICE_MODE;
-  // 一整场辩论折成一行，排在系统旁注收拢之前 —— 反过来的话，那七条「轮到 X 发言」会先
-  // 被 conversationSystemRows 收进摘要行，辩论就再也认不出自己的边界了。
-  const rows = conversationSystemRows(conversationDebateRows(conversationFeedRows(items, { reviews }), { reviews }));
+  // 一整场辩论折成一行，排在回执归属之前 —— 反过来的话，那七条「轮到 X 发言」会先被
+  // conversationSystemRows 收进某一回合的记录里，辩论就再也认不出自己的边界了。
+  const { rows, receipts } = conversationSystemRows(conversationDebateRows(conversationFeedRows(items, { reviews }), { reviews }));
+  // 审查进行中那张卡里的旁注同样记在审查者那一回合上（见 laneReceipts）。
+  const lanes = new Map(rows.flatMap((row) => row.kind === "review-lane" ? [[row.id, laneReceipts(row)] as const] : []));
+  const receiptsOf = (id: string) => receipts.get(id) ?? [...lanes.values()].find((lane) => lane.receipts.has(id))?.receipts.get(id);
   const wakeReplies = monitorWakeReplyIds(items);
   // 「执行者驳回了，现在由你裁定」那条旁注上挂一颗「去裁定」——那句话把出路列了出来，
   // 却没给任何能点的东西（用户 2026-09-24：「直接给个按钮不行吗」）。
@@ -268,10 +265,10 @@ export function ConversationFeed({
   // 按钮只把人送到那张卡跟前，不在这里复制四个出口：每个出口都带自己的确认框和说明
   // （「作废」和「转出去」的差别就写在那些文字里），复制一份必然漂成两套说法。
   const disputeEventId = onOpenReviewPanel && openDisputeIn(reviews)
-    ? [...items].reverse().find((item) => item.kind === "event" && pendingDisputeEvent(item.text))?.id ?? null
+    ? [...items].reverse().find((item) => item.kind === "event" && noticeView(item).dispute)?.id ?? null
     : null;
   const ruleAction = disputeEventId ? (
-    <button type="button" className="system-event-cta" onClick={onOpenReviewPanel}>
+    <button type="button" className="system-event-cta" onClick={() => onOpenReviewPanel!()}>
       <Gavel size={11} weight="fill" aria-hidden="true" />去裁定
     </button>
   ) : null;
@@ -315,16 +312,12 @@ export function ConversationFeed({
           onFork={onForkReply && !loading && !error && !forkBlockedReason && canForkReply(item) ? () => onForkReply(item.id) : undefined}
           onAskSideChat={onAskSideChat}
           taskActive={task.status === "running" || task.status === "queued"}
+          receipts={receiptsOf(item.id)}
         />
       );
     }
     if (item.kind === "user") {
-      return <UserMessage key={item.id} item={item} noticeMode={noticeMode} preserveSystemStyle={preserveSystemStyle} />;
-    }
-    // 回合边界才配得上一条横贯的分隔线；系统旁注只是贴在会话边上的一行小字，
-    // 它不该看起来像「这里换了一段对话」。
-    if (item.variant === "boundary") {
-      return <SystemBoundary item={item} mode={preserveSystemStyle ? "footnote" : noticeMode} key={item.id} />;
+      return <UserMessage key={item.id} item={item} preserveSystemStyle={preserveSystemStyle} />;
     }
     if (preserveSystemStyle) {
       return (
@@ -338,8 +331,18 @@ export function ConversationFeed({
         </p>
       );
     }
-    return <SystemEventNote item={item} mode={noticeMode} key={item.id} action={item.id === disputeEventId ? ruleAction : undefined} />;
+    return renderNotice(item, noticeView(item));
   };
+  // 常显的那一行（里程碑 / 出了岔子 / 等你裁定）。回执不走这里，它们记在回合上。
+  const renderNotice = (item: Extract<ConversationItem, { kind: "event" }>, view: ReturnType<typeof noticeView>) => (
+    <NoticeLine
+      key={item.id}
+      view={view}
+      tail={noticeTail(view, item.at)}
+      action={item.id === disputeEventId ? ruleAction : undefined}
+      deletable={item}
+    />
+  );
 
   return (
     <QuestionHistoryProvider key={task.id} taskId={task.id} history={questionHistory} live={liveQuestionHistory}
@@ -347,24 +350,14 @@ export function ConversationFeed({
     <MessageDeleteProvider onDelete={onDeleteMessage}>
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
-        {modeFromUrl && <SystemNoticeModeSwitch mode={noticeMode} search={search} />}
-        <div className={`task-conversation system-notice-mode-${noticeMode}`} ref={scroll}>
+        <div className="task-conversation" ref={scroll}>
           {rows.map((row) => {
             if (row.kind === "item") return renderItem(row.item);
             if (row.kind === "system-action") {
-              return <SystemAuthoredMessage key={row.id} item={row.item} related={row.related} mode={noticeMode} />;
+              return <SystemAuthoredMessage key={row.id} item={row.item} related={row.related} />;
             }
-            if (row.kind === "system-digest") {
-              return (
-                <SystemEventDigest
-                  key={row.id}
-                  items={row.items}
-                  mode={noticeMode}
-                  attached={row.attached}
-                  action={row.items.some((item) => item.id === disputeEventId) ? ruleAction : undefined}
-                />
-              );
-            }
+            if (row.kind === "notice") return renderNotice(row.item, row.view);
+            if (row.kind === "receipt-log") return <TurnReceipts key={row.id} receipts={row.receipts} standalone />;
             if (row.kind === "debate-lane") {
               return (
                 <DebateLane
@@ -372,7 +365,7 @@ export function ConversationFeed({
                   row={row}
                   onResolve={
                     onOpenReviewPanel && row.candidate && resolvableDebateIds.has(row.candidate.debate.id)
-                      ? onOpenReviewPanel
+                      ? () => onOpenReviewPanel()
                       : undefined
                   }
                   fallback={row.items.map((item) => renderItem(item, true))}
@@ -381,8 +374,12 @@ export function ConversationFeed({
             }
             const roles = reviewLaneMessageRoles(row);
             return (
-              <ReviewerLane key={row.id} taskId={task.id} lane={row}>
-                {row.items.map((item) => renderItem(item, true, roles.get(item.id)))}
+              <ReviewerLane key={row.id} taskId={task.id} lane={row} onOpenRound={onOpenReviewPanel}>
+                {lanes.get(row.id)!.rows.map((entry) => entry.kind === "item"
+                  ? renderItem(entry.item, true, roles.get(entry.item.id))
+                  : entry.kind === "notice"
+                    ? renderNotice(entry.item, entry.view)
+                    : <TurnReceipts key={entry.id} receipts={entry.receipts} standalone />)}
               </ReviewerLane>
             );
           })}

@@ -6,6 +6,7 @@
 //   note     旁注,贴着上一段说话继续,不重复头像/执行器名(system 时间线通告都归这档)
 //   boundary 回合边界(本轮执行结束 / 执行异常结束 / 本回合结束),保留整宽横线
 import { SESSION_POISON_DIAGNOSIS_PREFIX, stripSessionNotes } from "@ash/shared/session-notes";
+import type { TimelineNotice } from "@ash/shared/timeline-notice";
 
 // notice = 结算说明（「这一轮为什么落成这个状态」）。它由服务端**显式标记**（事件和落盘
 // 行上的 level:"notice"），不参与下面的关键词推断 —— 这类说明里天然带着「未完成」，猜出
@@ -108,8 +109,46 @@ export function verifyNoteOf(text: string): VerifyNoteMark | null {
   return null;
 }
 
-export function isVerifyNote(text: string): boolean {
-  return !!verifyNoteOf(text);
+export function isVerifyNote(text: string, notice?: TimelineNotice): boolean {
+  return !!verifyMark(text, notice);
+}
+
+/**
+ * 同上，但先认服务端给的类型（shared/src/timeline-notice.ts）：带类型的旁注**不再看原文**，
+ * 原文只是给没有类型的老记录兜底的。审查段的起止只有这三类：开始、出了结论、按意见修复。
+ */
+export function verifyMark(text: string, notice?: TimelineNotice): VerifyNoteMark | null {
+  if (!notice) return verifyNoteOf(text);
+  if (notice.kind === "review.start") return { kind: notice.source, round: notice.round, phase: "start" };
+  if (notice.kind === "review.verdict" || notice.kind === "review.repair") {
+    return { kind: notice.source, round: notice.round, phase: "end" };
+  }
+  return null;
+}
+
+/** 条目版：会话条目上带着 text 与 notice 两样。 */
+export function verifyMarkOf(item: { text: string; notice?: TimelineNotice }): VerifyNoteMark | null {
+  return verifyMark(item.text, item.notice);
+}
+
+const STAGE_UPDATE = /验收阶段更新：.*（([a-z_]+)）/;
+
+/** 这条旁注是不是一次「验收阶段翻档」，翻到了哪一档（verified / verify_failed / merged / accepted …）。 */
+export function stageOf(item: { text: string; notice?: TimelineNotice }): string | null {
+  if (item.notice) return item.notice.kind === "stage" ? item.notice.stage : null;
+  return STAGE_UPDATE.exec(item.text)?.[1] ?? null;
+}
+
+/**
+ * 旁注的语气（这个字段别处也在读：审查卡里的旁注、辩论条的兜底排版）。带类型的按类型给，
+ * 没有类型的老记录才按关键词猜（noteTone）；结算说明一律是 notice。
+ */
+export function eventTone(text: string, notice?: TimelineNotice, level?: "notice"): ConversationEventTone {
+  if (level === "notice") return "notice";
+  if (!notice) return noteTone(text);
+  if (notice.kind === "alert") return "error";
+  if (notice.kind === "review.verdict") return notice.verdict === "failed" || notice.verdict === "aborted" ? "error" : "neutral";
+  return "neutral";
 }
 
 // worktree 被验收清理后，用户继续追问会触发这一条持久系统回执。它不是警告，也不是
