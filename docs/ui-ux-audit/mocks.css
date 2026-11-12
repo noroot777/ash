@@ -1,23 +1,20 @@
-/* 「改后」样机：任务头部、回合结尾、回复框与发送设置，和「回到顶部」演示。右侧竖轨的样机在 panel.css。
+/* 「改后」样机：任务头部、会话、回复框与发送设置、侧栏、字重，和「回到顶部」演示。右侧竖轨的样机在 panel.css。
    色值取自 ash 自己的色板（强调色 #5e6ad2），令牌在 audit.css。 */
 
 .mock { --acc: #5e6ad2; --acc-2: #5560c4; }
-.mock .m-btn { height: 28px; padding: 0 11px; border: 1px solid var(--mline); border-radius: 7px; background: #fff; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 550; white-space: nowrap; }
+.mock .m-btn { height: 28px; padding: 0 11px; border: 1px solid var(--mline); border-radius: 7px; background: #fff; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .mock .m-btn.pri { border-color: var(--acc); background: var(--acc); color: #fff; }
 .mock .m-btn.sm { height: 24px; padding: 0 9px; font-size: 12px; }
 .mock .m-btn svg { width: 14px; height: 14px; }
 .mock .sp { flex: 1; }
 
-/* 任务头部：类型与置顶留在标题左边，状态是一个词 */
-.m-hd { display: flex; align-items: center; gap: 8px; height: 46px; min-width: 540px; padding: 0 10px 0 16px; }
+/* 任务头部：类型、来源各一个灰图标，图钉紧跟标题，状态是一个词；头上没有按钮 */
+.m-hd { display: flex; align-items: center; gap: 6px; height: 46px; min-width: 540px; padding: 0 10px 0 16px; }
 .m-hd + .m-hd { border-top: 1px solid var(--mline); }
-.m-hd > b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 14px; }
-.m-kind { display: inline-flex; flex: none; height: 22px; border-radius: 6px; background: #ededf0; color: var(--m2); font-size: 12px; line-height: 22px; white-space: nowrap; }
-.m-kind b { padding: 0 7px; font-weight: 650; }
-.m-kind i { padding: 0 7px; border-left: 1px solid #fff; font-style: normal; }
-.mock .m-pin { margin: 0 -4px; color: #8b8b94; }
-.mock .m-pin.on { color: var(--acc); }
-.m-pin.on svg { fill: currentColor; }
+.m-hd > b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; font-size: 14px; }
+.mock .m-gl { flex: none; width: 14px; height: 14px; color: var(--m3); }
+.mock .m-pin { margin: 0 -6px; color: var(--acc); }
+.m-pin svg { fill: currentColor; }
 .m-st { display: inline-flex; align-items: center; gap: 6px; margin-right: 4px; color: var(--m2); font-size: 12px; white-space: nowrap; }
 .m-st::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--m3)); }
 .m-st.none::before { display: none; }
@@ -32,12 +29,12 @@
 .m-box .ph.typed { color: #1c1c1f; }
 .m-box .row { position: relative; display: flex; align-items: center; gap: 8px; padding: 0 8px 8px; }
 .m-cap { display: inline-flex; height: 26px; border: 1px solid var(--mline); border-radius: 8px; background: #fff; color: var(--m2); font-size: 12px; line-height: 24px; white-space: nowrap; }
-.m-cap b { padding: 0 9px; font-weight: 450; }
-.m-cap b:first-child { color: #1c1c1f; font-weight: 550; }
+.m-cap b { padding: 0 9px; font-weight: 400; }
+.m-cap b:first-child { color: #1c1c1f; font-weight: 500; }
 .m-cap b + b { border-left: 1px solid var(--mline); }
 
 .m-key { display: inline-flex; flex: none; height: 29px; margin-left: auto; }
-.mock .m-key > * { display: inline-flex; align-items: center; justify-content: center; background: var(--acc); color: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; transition: background var(--dur-1) var(--ease-out); }
+.mock .m-key > * { display: inline-flex; align-items: center; justify-content: center; background: var(--acc); color: #fff; font-size: 12px; font-weight: 500; white-space: nowrap; transition: background var(--dur-1) var(--ease-out); }
 .mock .m-key > :first-child { gap: 6px; min-width: 30px; padding: 0 8px; border-radius: 8px 0 0 8px; }
 .mock .m-key > .txt { padding: 0 9px 0 11px; }
 .m-key span:empty { display: none; }
@@ -51,7 +48,7 @@
 .mock .m-key.idle > * { opacity: 0.45; }
 
 .m-pop { width: min(320px, 100%); margin: 0 0 8px auto; padding: 12px 12px 14px; border: 1px solid var(--mline); border-radius: 12px; background: #fff; box-shadow: 0 12px 32px -8px rgb(0 0 0 / 0.2); }
-.m-pop header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-weight: 600; }
+.m-pop header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-weight: 500; }
 .m-pop header svg { width: 13px; height: 13px; color: var(--m3); }
 .m-seg { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: #f1f1f4; }
 .mock .m-seg button { flex: 1; height: 26px; border-radius: 6px; color: var(--m2); cursor: pointer; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
@@ -82,10 +79,31 @@
 .m-turn.tail .m-acts { margin: 0 0 2px -6px; }
 @media (max-width: 560px) { .m-reply { padding: 12px; } .m-cap b:not(:first-child) { display: none; } }
 .m-turn u { text-underline-offset: 3px; }
-/* 审查行：轮次、结论、谁审的、用时、看报告；左边的线和结论同色 */
-.m-line.rev { margin: 4px 0; padding-left: 10px; box-shadow: inset 2px 0 0 #168466; }
-.m-line.rev b { color: #1c1c1f; font-weight: 600; }
-.m-chip { padding: 0 6px; border-radius: 5px; background: #e3f3ec; color: #127a5e; font-size: 12px; line-height: 20px; }
+/* 会话：回合头（名字后面是起因）、指到才出的「N 条记录」和它点开的流水 */
+.m-who { display: flex; align-items: center; gap: 8px; min-height: 30px; margin-top: 4px; color: var(--m2); white-space: nowrap; }
+.m-who i { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #ededf0; font: 600 11px/1 var(--sans); }
+.m-who span { color: var(--m3); font-size: 12px; }
+.m-who + .m-msg { padding-left: 28px; }
+.m-acts .more { align-self: center; margin-left: 6px; color: var(--m2); font-size: 12px; }
+.m-log { margin: 0 0 8px; padding: 0; list-style: none; color: var(--m2); font-size: 12px; line-height: 22px; }
+.m-log time { display: inline-block; width: 44px; color: var(--m3); font-variant-numeric: tabular-nums; }
+.m-line .bad { color: #c2412d; }
+/* 回复框上面那一行：还没验收的改动，和轮到你的那一步 */
+.m-next { display: flex; align-items: center; width: min(700px, 100%); margin: 0 auto 8px; padding: 0 2px 0 8px; color: var(--m2); font-size: 12px; }
+.m-next i { margin-left: 6px; font-style: normal; }
+.m-next .add { color: #168466; } .m-next .del { color: #c2412d; }
+.m-pairk { display: inline-flex; gap: 6px; }
+.m-halt { display: inline-grid; place-items: center; width: 29px; height: 29px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--mline); color: var(--m2); }
+.mock .m-halt svg { width: 12px; height: 12px; fill: currentColor; stroke: none; }
+/* 侧栏：左边那张是从 01 的整页截图里裁出来的左边一列（按 1440 宽摆，只露出最左 260px） */
+.sides { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: flex-start; }
+.rewrite .sides figure { flex: none; width: 260px; }
+.rewrite .sides .crop { height: 900px; }
+.rewrite .sides .crop img { width: 1440px; max-width: none; height: auto; }
+/* 字重：同一行字排七个值 */
+.m-wt { display: flex; flex-wrap: wrap; gap: 8px 26px; padding: 16px 20px; font-size: 14px; }
+.m-wt span { white-space: nowrap; }
+.m-wt i { margin-left: 6px; color: var(--m3); font: 400 11px var(--mono, ui-monospace, monospace); }
 /* 回复框底行里带字的动作，和发送键里的停止方块 */
 .m-act { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 6px; color: var(--m2); font-size: 12px; white-space: nowrap; }
 .m-act svg { width: 14px; height: 14px; }

@@ -186,7 +186,7 @@ table.indent { width: calc(100% - 88px); }
 @media (max-width: 720px) { .rewrite { grid-template-columns: minmax(0, 1fr); } .rewrite.rewrite > * { grid-column: 1; } .rewrite small { padding-top: 4px; } }
 
 /* 样机用的是 ash 自己的色板，证明改的是层级不是风格 */
-.mock { font: 450 13px/1.5 var(--sans); color: #1c1c1f; --m2: #6a6a72; --m3: #a2a2aa; --mline: #e6e6ea; }
+.mock { font: 400 13px/1.5 var(--sans); color: #1c1c1f; --m2: #6a6a72; --m3: #a2a2aa; --mline: #e6e6ea; }
 .mock button { border: 0; background: none; padding: 0; cursor: default; color: inherit; }
 .mock .m-ico { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; color: var(--m2); }
 .mock .m-ico:hover { background: #ededf0; }

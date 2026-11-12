@@ -41,6 +41,7 @@ const ICONS = {
   eye: '<rect x="2" y="3" width="12" height="10" rx="2"/><path d="M2 6.5h12"/>',
   pulse: '<path d="M1.5 8.5h3l1.5-4 3 7.5 1.5-3.5h4"/>',
   bot: '<rect x="3" y="5.5" width="10" height="7.5" rx="2"/><path d="M8 5.5V3M6 9v1M10 9v1"/>',
+  file: '<path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/>',
 };
 
 function mountIcons() {
