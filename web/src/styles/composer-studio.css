@@ -1,66 +1,102 @@
-.task-composer-panel.is-studio { grid-template-rows:48px minmax(0,1fr); }
-.is-studio .composer-inner { width:min(920px,calc(100% - 48px)); padding:clamp(28px,10vh,96px) 0 36px; }
-.studio-accessories { display:flex; align-items:center; flex-wrap:wrap; gap:3px; padding:0 4px 10px; }
-.studio-aux-button { display:inline-flex; min-width:0; max-width:100%; height:30px; flex:0 1 auto; align-items:center; gap:6px; border:0; border-radius:7px; padding:0 8px; background:transparent; color:var(--muted); font-size:11px; white-space:nowrap; }
-.studio-aux-button > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
-.studio-aux-button > svg { flex-shrink:0; }
-.studio-aux-button:hover:not(:disabled),.studio-aux-button[aria-expanded="true"] { color:var(--ink); background:var(--raised); }
-.studio-aux-button.is-configured { color:var(--accent); }
-.studio-aux-caret { color:var(--faint); }
-.studio-tool-divider { width:1px; height:14px; flex:0 0 1px; margin:0 5px; background:var(--line); }
-.studio-template-tool { margin-left:auto; }
-/* 允许折行:这一栏的格数不固定(`MODES` 三格 + 聊天 / 助手两个外挂入口),按钮本身
-   `white-space:nowrap`、不能压缩,窄屏上一旦摆不下就整条捅出容器 —— 320px 下实测
-   258 > 247,最后那格「助手」被裁在视口外且页面并不横向滚动,等于点不到。外层
-   `.studio-accessories` 本来就是 wrap,这里跟上同一套办法。 */
-.studio-mode-tabs { display:flex; flex-wrap:wrap; align-items:center; gap:2px; }
-.studio-mode-tabs > button { display:inline-flex; height:30px; align-items:center; gap:6px; border:0; border-radius:7px; padding:0 9px; background:transparent; color:var(--faint); font-size:11px; white-space:nowrap; }
-.studio-mode-tabs > button:hover { background:var(--raised); color:var(--muted); }
-.studio-mode-tabs > button[aria-selected="true"] { background:var(--raised); color:var(--ink); box-shadow:inset 0 0 0 1px color-mix(in lch,var(--line2) 70%,transparent); font-weight:550; }
+/* 新建任务面板（TaskComposerPanel）。一张输入卡：卡片上方只有三种模式，输入区下面一排
+   「图标 + 当前值」的选项入口，谁来做和发送键守在右下角。点开的浮层是 .studio-popover。 */
+
+.task-composer-panel { display:grid; width:100%; height:100%; min-height:0; grid-template-rows:46px minmax(0,1fr); background:var(--panel); }
+
+/* 应用栏：和任务页的头同高同线 */
+.composer-header { display:flex; align-items:center; gap:8px; min-width:0; border-bottom:1px solid var(--line); padding:0 10px 0 20px; }
+.composer-header > b { flex:0 1 auto; min-width:0; overflow:hidden; font-size:var(--t-md); font-weight:var(--w-medium); text-overflow:ellipsis; white-space:nowrap; }
+.composer-header > span { min-width:0; overflow:hidden; color:var(--muted); font-size:var(--t-xs); text-overflow:ellipsis; white-space:nowrap; }
+.composer-header > .composer-header-grow { flex:1; }
+.composer-header .ui-button { flex:none; }
+
+.composer-scroll { min-height:0; overflow-y:auto; background:var(--canvas); }
+.is-studio .composer-inner { width:min(920px,calc(100% - 48px)); margin:0 auto; padding:clamp(28px,10vh,96px) 0 36px; }
+
+/* 卡片上方：三种模式，一组分段 */
+.composer-modes { display:flex; margin-bottom:12px; }
+.studio-mode-tabs { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; border-radius:var(--r-md); background:var(--overlay); }
+.studio-mode-tabs > button { display:inline-flex; height:24px; align-items:center; gap:6px; border:0; border-radius:var(--r-sm); padding:0 10px; background:transparent; color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-regular); white-space:nowrap; transition:background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.studio-mode-tabs > button:hover { color:var(--ink); }
+.studio-mode-tabs > button[aria-selected="true"] { background:var(--lifted); box-shadow:var(--surface-shadow); color:var(--ink); }
 .studio-mode-tabs > button > svg { flex:0 0 auto; }
-.studio-card { border:1px solid var(--line2); border-radius:16px; background:var(--panel); box-shadow:0 6px 24px rgb(25 27 50 / 3%),var(--surface-shadow); }
-.studio-card:focus-within { border-color:color-mix(in lch,var(--accent) 42%,var(--line)); }
-.is-studio .composer-objective { margin:0; padding:0 26px; }
-.is-studio .composer-objective textarea { min-height:clamp(260px,36vh,380px); border:0; border-radius:0; padding:26px 0 18px; background:transparent; font-size:16px; line-height:1.85; box-shadow:none; }
+
+/* 输入卡：外框、底色；聚焦时环用淡一档的墨色，不然一进页面就是一个黑框 */
+.studio-card { position:relative; border-radius:var(--r-lg); background:var(--panel); box-shadow:0 0 0 1px var(--line2), var(--surface-shadow); transition:box-shadow var(--dur-1) var(--ease-out); }
+.studio-card:has(textarea:focus-visible) { box-shadow:0 0 0 1px var(--focus-soft), 0 0 0 3px color-mix(in oklab, var(--focus-ring) 10%, transparent), var(--surface-shadow); }
+.is-studio .composer-objective { margin:0; }
+.is-studio .composer-objective textarea { display:block; width:100%; min-height:clamp(260px,36vh,380px); border:0; border-radius:var(--r-lg) var(--r-lg) 0 0; padding:14px 16px 6px; background:transparent; color:var(--ink); font-size:var(--t-md); line-height:24px; resize:none; outline:0; box-shadow:none; }
 .is-studio .composer-objective textarea:focus-visible { outline:0; }
-.is-studio .composer-slash-menu { left:22px; max-width:calc(100% - 44px); }
-.is-studio .composer-mention-menu { left:22px; max-width:calc(100% - 44px); }
-.studio-card > .task-upload-list { padding:0 24px 10px; }
-.studio-card > .composer-warning { margin:0; padding:6px 24px 10px; }
-.studio-card .composer-footer { display:block; min-height:0; border:0; border-radius:0 0 16px 16px; padding:12px 16px 16px; background:transparent; }
-.studio-card .composer-footer > .composer-launch-control { display:flex; width:100%; min-width:0; flex-wrap:nowrap; justify-content:space-between; align-items:center; gap:12px; }
-.studio-input-tools { display:flex; flex:1; min-width:0; align-items:center; gap:3px; }
-.studio-input-tools > .task-reply-icon { width:30px; height:30px; flex:0 0 30px; }
+.is-studio .composer-slash-menu, .is-studio .composer-mention-menu { left:12px; max-width:calc(100% - 24px); }
+.studio-card > .task-upload-list { padding:4px 12px 0; }
+
+/* 底排：附件、选项入口、空白、谁来做、发送键。入口不压缩；只有「组织与标签」的字会变长
+   （分组名 · 几个标签），位置不够时收它。卡片窄到放不下时入口只留图标。 */
+.studio-card { container-type:inline-size; }
+.studio-card > .composer-footer { display:flex; align-items:center; gap:4px; min-height:54px; padding:8px 10px 10px; }
+.studio-card > .composer-footer .task-reply-icon { display:grid; width:28px; height:28px; flex:none; place-items:center; border:0; border-radius:var(--r-md); background:transparent; color:var(--muted); transition:background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.studio-card > .composer-footer .task-reply-icon:hover:not(:disabled) { background:var(--hover-bg); color:var(--ink); }
+.studio-card > .composer-footer .task-reply-icon > svg { width:16px; height:16px; }
+.composer-opts { display:flex; flex:0 1 auto; min-width:0; align-items:center; gap:2px; margin-left:4px; }
+.composer-foot-grow { flex:1; min-width:8px; }
+.composer-opt { display:inline-flex; flex:none; min-width:0; height:28px; align-items:center; gap:6px; border:0; border-radius:var(--r-md); padding:0 8px; background:transparent; color:var(--muted); font-size:var(--t-xs); white-space:nowrap; transition:background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.composer-opt > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.composer-opt > svg { flex:none; }
+.composer-opt:hover:not(:disabled), .composer-opt[aria-expanded="true"] { background:var(--hover-bg); color:var(--ink); }
+.composer-opt:active:not(:disabled) { background:var(--sel-bg); }
+.composer-opt.is-configured { color:var(--ink); }
+.composer-opt.is-org { flex:0 1 auto; min-width:44px; }
+.composer-opt.is-icon { justify-content:center; width:28px; padding:0; }
+@container (max-width: 680px) {
+  .composer-opts .composer-opt { min-width:0; }
+  .composer-opts .composer-opt > span { display:none; }
+}
+
+/* 谁来做：单任务是一颗三段胶囊；按起手式走时只读 */
+.studio-inline-executor { flex:0 1 auto; min-width:0; margin:0 4px; }
+.studio-inline-executor > .composer-field { gap:0; }
+.studio-inline-executor > .composer-field > span { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.studio-inline-executor .run-target-picker { height:28px; border-radius:var(--r-md); background:var(--panel); }
+.studio-inline-executor .run-target-seg { padding:0 8px; }
+.studio-inline-executor .run-target-seg > b { font-size:var(--t-xs); }
+.studio-inline-executor .effort-picker-trigger { flex-shrink:0; white-space:nowrap; font-size:var(--t-xs); }
+.studio-inline-executor .composer-field-run.is-error { margin-top:4px; white-space:normal; }
+.studio-preset-run { display:inline-flex; min-width:0; align-items:center; gap:6px; margin:0 8px; color:var(--muted); font-size:var(--t-xs); }
+.studio-preset-run > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.studio-preset-run > svg { flex-shrink:0; }
+.studio-card > .composer-footer > .composer-opt:last-of-type { margin-right:4px; }
+
+/* 旧的连体提交键（reply-2 换成共用发送键之前） */
 .studio-submit-group { display:flex; flex:0 0 auto; align-items:stretch; }
 .studio-submit-group > .studio-submit.ui-button { border-top-right-radius:0; border-bottom-right-radius:0; }
 .studio-submit-mode.studio-aux-button { height:36px; flex:0 0 auto; margin-left:1px; border-radius:0 9px 9px 0; padding:0 8px; background:var(--accent); color:white; box-shadow:0 0 0 1px color-mix(in srgb, var(--accent-active) 28%, transparent), 0 1px 2px rgb(40 42 48 / 12%); }
 .studio-submit-mode.studio-aux-button:hover:not(:disabled),.studio-submit-mode.studio-aux-button[aria-expanded="true"] { background:var(--accent-hover); color:white; }
 .studio-submit-mode.studio-aux-button.is-configured { color:white; }
 .studio-submit-mode > .studio-aux-caret { display:inline; }
-.studio-inline-executor { flex:0 1 440px; min-width:0; }
-.studio-inline-executor > .composer-field { gap:0; }
-.studio-inline-executor > .composer-field > span { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
-.studio-inline-executor .run-target-picker { height:30px; border-radius:8px; background:color-mix(in lch,var(--raised) 55%,var(--panel)); }
-.studio-inline-executor .run-target-seg { padding:0 7px; }
-.studio-inline-executor .run-target-seg > b { font-size:11px; }
-.studio-inline-executor .effort-picker-trigger { flex-shrink:0; white-space:nowrap; font-size:11px; }
-.studio-inline-executor .composer-field-run.is-error { margin-top:5px; white-space:normal; }
-.studio-preset-run { display:inline-flex; min-width:0; align-items:center; gap:7px; color:var(--muted); font-size:11px; }
-.studio-preset-run > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.studio-preset-run > svg { flex-shrink:0; }
 .studio-submit.ui-button { height:36px; gap:10px; padding:0 12px; border-radius:9px; font-size:11px; }
-.studio-card .composer-footer > .studio-input-status { display:block; margin:9px 4px 0; color:var(--muted); font-size:10px; }
+.studio-card > .studio-input-status { padding:0 16px 10px; color:var(--muted); font-size:var(--t-xs); }
 .studio-footnote { display:flex; justify-content:space-between; gap:12px; color:var(--faint); font-size:10px; margin:12px 6px 0; }
-.studio-popover { position:fixed; z-index:40; width:340px; max-width:calc(100vw - 24px); max-height:calc(100dvh - 24px); overflow-y:auto; border:1px solid var(--line2); border-radius:12px; padding:14px; background:var(--panel); box-shadow:var(--shadow); }
+
+/* 旧长相的入口（回复框的发送设置还在用） */
+.studio-aux-button { display:inline-flex; min-width:0; max-width:100%; height:30px; flex:0 1 auto; align-items:center; gap:6px; border:0; border-radius:7px; padding:0 8px; background:transparent; color:var(--muted); font-size:11px; white-space:nowrap; }
+.studio-aux-button > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.studio-aux-button > svg { flex-shrink:0; }
+.studio-aux-button:hover:not(:disabled),.studio-aux-button[aria-expanded="true"] { color:var(--ink); background:var(--raised); }
+.studio-aux-button.is-configured { color:var(--accent); }
+.studio-aux-caret { color:var(--faint); }
+
+/* ---------- 点开的浮层 ---------- */
+.studio-popover { position:fixed; z-index:40; width:340px; max-width:calc(100vw - 24px); max-height:calc(100dvh - 24px); overflow-y:auto; border-radius:var(--r-lg); padding:6px; background:var(--panel); box-shadow:var(--control-shadow), var(--menu-shadow); }
 .studio-popover[hidden] { display:none; }
-.studio-popover.is-wide { width:620px; }
+.studio-popover.is-wide { width:480px; }
 .studio-popover:focus { outline:none; }
-.studio-popover > header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; color:var(--ink); font-size:12px; }
-.studio-popover > header > b { font-weight:600; }
-.studio-popover > header > button { display:grid; width:24px; height:24px; place-items:center; border:0; border-radius:6px; background:transparent; color:var(--faint); }
-.studio-popover > header > button:hover { background:var(--raised); color:var(--ink); }
-.studio-popover-body { min-width:0; }
-.studio-popover .composer-option-grid { display:grid; grid-template-columns:minmax(0,1fr); margin:0; }
+.studio-popover > header { display:flex; align-items:center; justify-content:space-between; gap:12px; height:28px; margin-bottom:2px; padding:0 2px 0 8px; color:var(--ink); font-size:var(--t-sm); }
+.studio-popover > header > b { font-weight:var(--w-medium); }
+.studio-popover > header > button { display:grid; width:24px; height:24px; place-items:center; border:0; border-radius:var(--r-sm); background:transparent; color:var(--faint); }
+.studio-popover > header > button:hover { background:var(--hover-bg); color:var(--ink); }
+.studio-popover-body { min-width:0; padding:0 8px 8px; }
+.studio-popover.is-plain > .studio-popover-body { padding:0; }
+.studio-popover .composer-option-grid { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; margin:0; }
 .studio-popover .composer-launch-mode { display:grid; gap:6px; }
 .studio-popover .composer-launch-mode > span { display:block; }
 .composer-launch-mode-grid { display:flex; flex-wrap:wrap; gap:5px; }
@@ -72,56 +108,36 @@
 .studio-popover .schedule-field { width:100%; margin-top:12px; }
 .studio-popover .composer-launch-error { display:block; margin-top:8px; white-space:normal; }
 /* 「创建并排队」的目标任务选择器(启动设置浮层内) */
-.studio-popover .composer-queue-after { display:grid; gap:6px; margin-top:12px; font-size:11.5px; color:var(--muted); }
+.studio-popover .composer-queue-after { display:grid; gap:6px; margin-top:12px; font-size:var(--t-xs); color:var(--muted); }
 .studio-popover .composer-queue-after .ui-select-trigger { width:100%; }
 .studio-popover .composer-queue-after .studio-help { margin-top:0; }
 .studio-workflow > .is-workflow { padding:16px 0 0; }
 .studio-workflow .composer-wf-label { flex-wrap:wrap; }
-.studio-effective-run { margin:7px 0 0; color:var(--muted); font-size:10px; overflow-wrap:anywhere; }
-.studio-effective-run b { font-weight:550; }
+.studio-effective-run { margin:6px 0 0; color:var(--muted); font-size:var(--t-xs); overflow-wrap:anywhere; }
+.studio-effective-run b { font-weight:var(--w-regular); }
 .studio-executors { display:grid; gap:16px; }
 .studio-executors .run-target-picker { min-width:0; }
-.studio-help { margin:12px 0 0; font-size:11px; line-height:1.7; color:var(--muted); }
+.studio-help { margin:12px 0 0; font-size:var(--t-xs); line-height:1.6; color:var(--muted); }
 .studio-help > svg { display:inline; margin-right:6px; vertical-align:-2px; }
-.composer-workspace-default-save { display:inline-flex; align-items:center; margin-left:6px; border:0; border-radius:6px; padding:2px 7px; background:var(--raised); color:var(--ink); font-size:11px; }
-.composer-workspace-default-save:hover:not(:disabled) { background:var(--line2); }
+.composer-workspace-default-save { display:inline-flex; align-items:center; margin-left:6px; border:0; border-radius:var(--r-sm); padding:2px 8px; background:var(--raised); color:var(--ink); font-size:var(--t-xs); }
+.composer-workspace-default-save:hover:not(:disabled) { background:var(--hover-bg); }
 .composer-workspace-default-save:disabled { opacity:.55; }
-.studio-starters .studio-help { margin:0 0 8px; }
-.studio-starters > div { display:grid; gap:3px; }
-.studio-starters button { display:flex; align-items:center; gap:10px; width:100%; border:0; border-radius:8px; padding:10px 8px; background:transparent; text-align:left; }
-.studio-starters button:hover { background:var(--raised); }
-.studio-starter-icon { display:grid; place-items:center; width:27px; height:27px; flex:0 0 27px; border-radius:7px; background:var(--raised); color:var(--muted); font-size:17px; }
+
+/* 更多选项里的写作参考 */
+.studio-starters .studio-help { margin:0 0 6px; }
+.studio-starters > div { display:grid; gap:2px; }
+.studio-starters button { display:flex; align-items:center; gap:10px; width:100%; border:0; border-radius:var(--r-md); padding:8px; background:transparent; text-align:left; transition:background var(--dur-1) var(--ease-out); }
+.studio-starters button:hover { background:var(--hover-bg); }
+.studio-starters button:active { background:var(--sel-bg); }
+.studio-starter-icon { display:grid; place-items:center; width:28px; height:28px; flex:0 0 28px; border-radius:var(--r-md); background:var(--raised); color:var(--muted); font-size:var(--t-lg); }
 .studio-starters b,.studio-starters button small { display:block; }
-.studio-starters b { font-size:12px; font-weight:550; }
-.studio-starters button small { margin-top:2px; color:var(--faint); font-size:10px; }
+.studio-starters b { font-size:var(--t-sm); font-weight:var(--w-regular); }
+.studio-starters button small { color:var(--muted); font-size:var(--t-xs); }
 .studio-starters button > svg { flex:0 0 auto; margin-left:auto; color:var(--faint); }
+
 @media(max-width:700px) {
   .is-studio .composer-inner { width:calc(100% - 28px); padding-top:32px; }
-  .studio-accessories { gap:2px; padding:0 0 8px; }
-  .studio-aux-button { padding:0 6px; font-size:10px; }
-  .studio-mode-tabs > button { gap:4px; padding:0 6px; font-size:10px; }
-  .studio-tool-divider { margin:0 2px; }
-  .studio-template-tool { margin-left:0; }
-  .is-studio .composer-objective { padding:0 18px; }
-  .is-studio .composer-objective textarea { min-height:280px; padding-top:22px; font-size:15px; }
-  .studio-card .composer-footer { padding:10px 12px 12px; }
-  .studio-card .composer-footer > .composer-launch-control { gap:7px; }
-  .studio-input-tools { flex-wrap:wrap; row-gap:8px; }
-  .studio-inline-executor { flex:1 1 240px; }
-  .studio-inline-executor .run-target-seg--agent { flex-shrink:0; }
+  .studio-card > .composer-footer { flex-wrap:wrap; row-gap:6px; }
   .studio-inline-executor .run-target-seg--agent > span { display:none; }
-  .studio-input-tools > .studio-tool-divider { display:none; }
-  .studio-submit-group { align-self:flex-end; }
-  .studio-submit.ui-button { width:34px; height:34px; padding:0; flex:0 0 34px; }
-  .studio-submit > span { display:none; }
-  .studio-submit-mode.studio-aux-button { height:34px; }
   .studio-popover .run-target-seg { padding:0 6px; }
-}
-@media(max-width:380px) {
-  .studio-accessories { column-gap:0; }
-  .studio-accessories > .studio-tool-divider { display:none; }
-  .studio-accessories .studio-aux-button { gap:4px; }
-  .studio-mode-tabs > button { padding:0 5px; }
-  .studio-template-tool .studio-aux-button > span { display:none; }
-  .studio-footnote { font-size:9px; }
 }

@@ -1,4 +1,3 @@
-import { AssistantIcon } from "../assistant/AssistantIcon.tsx";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DUET_DEFAULTS } from "@ash/shared/duet";
 import type {
@@ -13,7 +12,6 @@ import type {
   TaskWorkflowMode,
   TeamPresetConfig,
 } from "@ash/shared";
-import { ChatCircleDots } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import {
   DEFAULT_CRON,
@@ -69,8 +67,6 @@ export function TaskComposerPanel({
   onDraftSeeded,
   mode,
   onModeChange,
-  onChat,
-  onAssistant,
   onCancel,
   onCreated,
   onTasksSynced,
@@ -87,8 +83,6 @@ export function TaskComposerPanel({
   onDraftSeeded?: () => void;
   mode: TaskMode;
   onModeChange: (mode: TaskMode) => void;
-  onChat?: () => void;
-  onAssistant?: () => void;
   onCancel: () => void;
   /**
    * 创建(含排队)完成的回写。ownsComposer=false 表示发起提交的那份面板已经卸载——
@@ -543,6 +537,7 @@ export function TaskComposerPanel({
         <span className="workspace-kind-chip">新建</span>
         <b>{fork ? "派生新任务" : "新建任务"}</b>
         <span>{project.name}</span>
+        <span className="composer-header-grow" aria-hidden="true" />
         {/* 草稿是「关掉也留着」的，所以必须有一个明写的丢弃口 —— 否则上一次没写完的
             东西会一直顶在新建框里，用户只能自己全选删。 */}
         {(!!body || uploads.attachments.length > 0 || uploads.uploading) && (
@@ -597,19 +592,15 @@ export function TaskComposerPanel({
             workflowMode={workflowMode}
             onWorkflowModeChange={setWorkflowMode}
             onModeChange={onModeChange}
-            extraModeTabs={<>{onChat && <button type="button" role="tab" aria-selected={false} disabled={uploads.uploading}
-              onClick={() => onChat()}>
-              <ChatCircleDots size={14} /><span>聊天</span>
-            </button>}{onAssistant && <button type="button" role="tab" aria-label="ash 助手" aria-selected={false} disabled={uploads.uploading} onClick={onAssistant}>
-              <AssistantIcon size={14} /><span>助手</span>
-            </button>}</>}
             onPickStarter={(text, nextMode) => {
               changeBody(body.trim() ? body + "\n\n" + text : text);
               onModeChange(nextMode);
               textareaRef.current?.focus();
             }}
           >
-          {(executorTools) => <div className="studio-card">
+          {({ modes, options, executorTools }) => <>
+          <div className="composer-modes">{modes}</div>
+          <div className="studio-card">
           <ComposerObjective body={body} mode={mode} textareaRef={textareaRef}
             onChange={(value) => { changeBody(value); setSlashIndex(0); setSlashDismissed(false); mention.onValueChange(); }}
             onPaste={uploads.onPaste} items={slashCandidates} selected={slashSelected} token={slash?.token ?? null}
@@ -624,7 +615,12 @@ export function TaskComposerPanel({
             <UploadAttachmentList attachments={uploads.attachments} pending={uploads.pending}
               error={uploads.error} onRemove={uploads.remove} onCancel={uploads.cancel} />
           </ImagePreviewGroup>
+          {/* 底排：附件、选项入口在左；谁来做、发送键守在右下角（和回复框一个落点）。 */}
           <footer className="composer-footer">
+            <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />
+            <div className="composer-opts">{options.work}{options.where}{options.org}{options.more}</div>
+            <span className="composer-foot-grow" aria-hidden="true" />
+            {executorTools}
             <ComposerLaunchControl
               mode={launchMode}
               at={scheduleAt}
@@ -636,17 +632,15 @@ export function TaskComposerPanel({
               onAtChange={setScheduleAt}
               onCronChange={setScheduleCron}
               onSubmit={() => void submit()}
-              attachmentTool={<AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />}
-              executorTools={executorTools}
               queueSlot={queueAfter.slot}
               queueUnavailable={queueUnavailable}
             />
-            {(uploads.uploading || allAttachments.length > 0 || scheduleError || queueTargetError) && <div className="studio-input-status" role="status">
-              {uploads.uploading ? `${uploadingLabel(uploads.pending)} · 传完才能创建`
-                : scheduleError || queueTargetError || `${allAttachments.length} 个附件`}
-            </div>}
           </footer>
+          {(uploads.uploading || allAttachments.length > 0 || scheduleError || queueTargetError) && <div className="studio-input-status" role="status">
+            {uploads.uploading ? `${uploadingLabel(uploads.pending)} · 传完才能创建`
+              : scheduleError || queueTargetError || `${allAttachments.length} 个附件`}
           </div>}
+          </div></>}
           </ComposerFields>
           <div className="studio-footnote"><span>/ 调用技能 · @ 引用项目文件 · {sendKeys.send} 创建</span>{body.length > 0 && <span>{body.length} 字</span>}</div>
         </div>

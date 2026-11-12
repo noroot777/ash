@@ -1,7 +1,7 @@
 import "../chat/chat.css";
 import { AssistantIcon } from "./AssistantIcon.tsx";
 import { useMemo, useRef, useState } from "react";
-import type { ProjectView, TaskListItem, TaskMode } from "@ash/shared";
+import type { ProjectView, TaskListItem } from "@ash/shared";
 import { taskDisplayStatus } from "@ash/shared";
 import type { ChatMessage, ChatSnapshot } from "@ash/shared/chat";
 import { STEP_LABELS, WORKSPACE_LABELS } from "@ash/shared/workflow";
@@ -22,7 +22,6 @@ import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { ChatContextNotice } from "../chat/ChatContextNotice.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
-import { ConversationModeBar } from "../chat/ConversationModeBar.tsx";
 import { WorkflowRail } from "../workflow/WorkflowRail.tsx";
 import type { SettingsSection } from "../settings/SettingsPage.tsx";
 import "./assistant.css";
@@ -65,10 +64,9 @@ function AssistantMessage({ message, snapshot, projects, onTask, onSave, saving,
   </article>;
 }
 
-export function AssistantView({ project, projects, onTask, onSettings, onExit, onMode, onChat }: {
+export function AssistantView({ project, projects, onTask, onSettings, onExit }: {
   project: ProjectView | null; projects: ProjectView[]; onTask: (task: TaskListItem) => void;
   onSettings: (section: SettingsSection) => void; onExit: () => void;
-  onMode: (mode: TaskMode) => void; onChat: () => void;
 }) {
   const chat = useAssistantChat(project?.id ?? "");
   const [editing, setEditing] = useState(false);
@@ -102,7 +100,6 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit, o
     <AssistantSidebar rooms={chat.rooms} selectedId={chat.room?.id} ready={chat.ready} sending={chat.sending} projectName={project?.name} onExit={onExit}
       agent={chat.room?.members[0]?.agentType} agentLocked={chat.busy || chat.sending} onConfigure={() => setEditing(true)} onSelect={(id) => { chat.select(id); setEditing(false); setArchiveId(null); }} onNew={() => { setEditing(false); setArchiveId(null); void chat.newConversation(); }} />
     <div className="chat-main assistant-main">
-    <ConversationModeBar active="assistant" onMode={onMode} onChat={onChat} />
     {!configure && <header className="chat-header assistant-header"><div className="assistant-heading">{chat.room ? <AssistantConversationTitle key={chat.room.id} name={chat.room.name} onRename={chat.renameConversation}><span className={`chat-connection${chat.connected ? " is-connected" : ""}`} tabIndex={0} role="status" aria-label={chat.connected ? "实时连接" : "连接中，状态可能延迟"} {...connectionTip.anchorProps} /></AssistantConversationTitle> : <h1><AssistantIcon size={23} />ash 助手</h1>}</div>
       {chat.room && <button type="button" className="chat-member-count assistant-delete" aria-label={`删除对话：${chat.room.name}`} onClick={() => { setDeleteError(""); setDeleteTarget({ id: chat.room!.id, name: chat.room!.name }); }}><Trash size={17} /></button>}
       <HoverTip at={connectionTip.at}>{chat.connected ? "实时连接" : "连接中，状态可能延迟"}</HoverTip>

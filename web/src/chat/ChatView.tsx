@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ProjectView, TaskListItem, TaskMode } from "@ash/shared";
+import type { ProjectView, TaskListItem } from "@ash/shared";
 import type { ChatRoom, ChatSnapshot } from "@ash/shared/chat";
 import { ALL_MENTION_ALIASES, isChatClearCommand, mentionedMembers } from "@ash/shared/chat";
 import { ArrowLeft, ArrowUp, At, ChatCircleDots, Hash, PencilSimple, Plus, Stop, UsersThree } from "@phosphor-icons/react";
@@ -9,15 +9,13 @@ import { ChatMessages } from "./ChatMessages.tsx";
 import { ChatContextNotice } from "./ChatContextNotice.tsx";
 import { createClientId } from "../lib/clientId.ts";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
-import { ConversationModeBar } from "./ConversationModeBar.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import "./chat.css";
 
-export function ChatView({ project, onTask, onExit, onMode, onAssistant }: {
-  project: ProjectView; onTask: (task: TaskListItem) => void; onExit: () => void; onMode: (mode: TaskMode) => void;
-  onAssistant?: () => void;
+export function ChatView({ project, onTask, onExit }: {
+  project: ProjectView; onTask: (task: TaskListItem) => void; onExit: () => void;
 }) {
   const [rooms, setRooms] = useState<ChatRoom[]>([]);
   const [roomId, setRoomId] = useState<string | null>(null);
@@ -148,7 +146,7 @@ export function ChatView({ project, onTask, onExit, onMode, onAssistant }: {
       <div className="chat-channels">{rooms.map((item) => <button type="button" key={item.id} className={item.id === roomId && editor !== "create" ? "is-selected" : ""} onClick={() => selectRoom(item.id)}><Hash size={17} /><span>{item.name}</span><small>{item.members.length}</small></button>)}</div>
       <div className="chat-rail-note"><At size={22} /><strong>有需要，再叫上它。</strong><p>没有 @ 的普通消息只保存在群里。@all 唤醒全部成员；单独发送 /clear 重新开始上下文。</p></div>
     </nav>
-    <div className="chat-main"><ConversationModeBar active="chat" onMode={onMode} onAssistant={onAssistant} />
+    <div className="chat-main">
       {editor ? <ChatMembers key={`${editor}-${roomId}`} creating={editor === "create"} initial={editor === "members" ? room?.members ?? [] : []} initialName={editor === "members" ? room?.name : undefined} onCancel={() => setEditor(null)} onDelete={editor === "members" && roomId ? () => removeRoom(roomId) : undefined} onSave={async (members, name) => {
         if (editor === "create") { const created = await chatApi.create(project.id, name, members); setRooms((current) => [...current, created]); selectRoom(created.id); }
         else if (roomId) {

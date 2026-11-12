@@ -114,25 +114,6 @@
   text-transform: none;
 }
 
-.task-composer-panel {
-  grid-template-rows: 48px minmax(0, 1fr) auto;
-}
-
-.composer-footer {
-  min-height: 58px;
-  flex-wrap: wrap;
-  padding-top: 9px;
-  padding-bottom: 9px;
-}
-
-.composer-footer > .composer-launch-control {
-  min-width: 0;
-  flex: 0 1 auto;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 7px;
-}
-
 .composer-launch-mode select {
   width: 118px;
 }
@@ -156,25 +137,12 @@
 }
 
 @media (max-width: 760px) {
-  .composer-footer > div:first-child > span,
   .composer-launch-mode > span {
     display: none;
-  }
-
-  .composer-footer > div:first-child {
-    flex: 0 0 auto;
   }
 }
 
 @media (max-width: 560px) {
-  .composer-footer {
-    align-items: stretch;
-  }
-
-  .composer-footer > .composer-launch-control {
-    flex: 1 1 100%;
-  }
-
   .composer-launch-mode,
   .composer-launch-mode select,
   .composer-launch-control .schedule-field {

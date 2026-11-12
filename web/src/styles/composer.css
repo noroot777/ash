@@ -1,91 +1,3 @@
-.task-composer-panel {
-  display: grid;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  grid-template-rows: 48px minmax(0, 1fr) 58px;
-  background: var(--panel);
-}
-
-.composer-header {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  border-bottom: 1px solid var(--line);
-  padding: 0 16px;
-}
-
-.composer-header > b {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.composer-header > span:not(.workspace-kind-chip) {
-  color: var(--faint);
-  font-size: 10px;
-}
-
-.composer-header .ui-button {
-  margin-left: auto;
-}
-
-/* 头部有两颗按钮时（草稿非空会多出「清空草稿」），只让第一颗把空白吃掉，
-   两颗才是靠在一起的一组，而不是被剩余空间从中间劈开。 */
-.composer-header .ui-button + .ui-button {
-  margin-left: 0;
-}
-
-.composer-scroll {
-  min-height: 0;
-  overflow-y: auto;
-  background: var(--canvas);
-}
-
-.composer-inner {
-  width: min(820px, calc(100% - 40px));
-  margin: 0 auto;
-  padding: 30px 0 54px;
-}
-
-.composer-tabs {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 12px;
-}
-
-.composer-tabs button {
-  display: inline-flex;
-  height: 30px;
-  align-items: center;
-  gap: 6px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  padding: 0 12px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.composer-tabs button:hover {
-  background: var(--raised);
-  color: var(--ink);
-}
-
-.composer-tabs button[aria-selected="true"] {
-  background: var(--sel-bg);
-  color: var(--ink);
-  font-weight: 550;
-}
-
-.composer-tabs > span {
-  margin-left: auto;
-  color: var(--faint);
-  font-size: 9px;
-}
-
-.composer-objective textarea:focus,
 .composer-field input:focus,
 .composer-field select:focus {
   border-color: var(--accent);
@@ -93,21 +5,6 @@
 
 .composer-objective {
   position: relative;
-  margin-top: 18px;
-}
-
-.composer-objective textarea {
-  display: block;
-  width: 100%;
-  min-height: 240px;
-  resize: vertical;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel);
-  padding: 14px;
-  outline: 0;
-  font-size: 14px;
-  line-height: 1.75;
 }
 
 .composer-slash-menu {
@@ -181,14 +78,6 @@
 .composer-slash-menu button:hover,
 .composer-slash-menu button[aria-selected="true"] { border-radius: 7px; background: var(--sel-bg); }
 
-.composer-config {
-  display: grid;
-  gap: 12px;
-  margin-top: 22px;
-  border-top: 1px solid var(--line);
-  padding-top: 18px;
-}
-
 .composer-config-section,
 
 .composer-config-section {
@@ -197,35 +86,6 @@
 
 .composer-config-section.is-execution {
   border-color: color-mix(in lch, var(--accent) 18%, var(--line));
-}
-
-.composer-section-heading {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-}
-
-.composer-section-heading > span,
-
-.is-execution .composer-section-heading > span {
-  background: color-mix(in lch, var(--accent) 10%, var(--raised));
-  color: var(--accent);
-}
-
-.composer-section-heading h2,
-.composer-section-heading p {
-  margin: 0;
-}
-
-.composer-section-heading h2 {
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.composer-section-heading p {
-  margin-top: 1px;
-  color: var(--faint);
-  font-size: 9.5px;
 }
 
 .composer-option-grid {
@@ -362,18 +222,6 @@
   font-size: 11px;
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
 .composer-override-group {
   min-width: 0;
   border: 1px solid var(--line);
@@ -411,53 +259,4 @@
 
 .composer-agent-availability.is-empty {
   border: 1px dashed color-mix(in lch, var(--amber) 35%, var(--line));
-}
-
-.composer-footer {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  border-top: 1px solid var(--line);
-  background: var(--panel);
-  padding: 0 16px;
-}
-
-.composer-footer > div {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  align-items: center;
-  gap: 7px;
-}
-
-.composer-footer > div > span {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 5px;
-  color: var(--faint);
-  font-size: 9px;
-}
-
-.composer-footer .task-reply-icon {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--muted);
-}
-
-.composer-footer .task-reply-icon:hover {
-  background: var(--raised);
-  color: var(--ink);
-}
-
-@media (max-width: 720px) {
-  .composer-inner { width: calc(100% - 26px); }
-  .composer-option-grid,
-  .composer-tabs > span { display: none; }
-  .composer-footer > div > span { display: none; }
 }

@@ -7,7 +7,7 @@ import type {
   TaskWorkflowMode,
   TeamPresetConfig,
 } from "@ash/shared";
-import { ChatsCircle, Check, FolderSimple, GitBranch, NotePencil, Tag, UsersThree } from "@phosphor-icons/react";
+import { ChatsCircle, Check, DotsThree, FolderSimple, GitBranch, Tag, UsersThree } from "@phosphor-icons/react";
 import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import { ComposerStarters } from "./ComposerStudio.tsx";
 import { ComposerPopover } from "./ComposerPopover.tsx";
@@ -22,6 +22,13 @@ import { ExecutorPickerField } from "./ExecutorPickerField.tsx";
 import { PresetBar } from "./PresetBar.tsx";
 import { composerRunSummary, type ComposerRunSummary } from "./composerRunSummary.ts";
 import { useProviders } from "../lib/modelCatalog.ts";
+
+/** 摆进新建卡片的几块：卡片上方的模式、输入区下面那排入口、右下角的「谁来做」。 */
+export type ComposerFieldParts = {
+  modes: ReactNode;
+  options: { work: ReactNode; where: ReactNode; org: ReactNode; more: ReactNode };
+  executorTools: ReactNode;
+};
 
 export function ComposerFields({
   mode,
@@ -66,7 +73,6 @@ export function ComposerFields({
   workflowMode,
   onWorkflowModeChange,
   onModeChange,
-  extraModeTabs,
   onPickStarter,
   children,
 }: {
@@ -117,9 +123,8 @@ export function ComposerFields({
   workflowMode: TaskWorkflowMode;
   onWorkflowModeChange: (mode: TaskWorkflowMode) => void;
   onModeChange: (mode: TaskMode) => void;
-  extraModeTabs?: ReactNode;
   onPickStarter: (body: string, mode: TaskMode) => void;
-  children: (executorTools: ReactNode) => ReactNode;
+  children: (parts: ComposerFieldParts) => ReactNode;
 }) {
   const modeTabs = useRovingChoice(MODES.map((item) => item.value), mode, onModeChange, "tab");
   const nameFor = (role: ComposerExecutorRole) => {
@@ -175,14 +180,16 @@ export function ComposerFields({
   const directory = isRepo && useWorktree ? "独立 worktree" : "项目目录";
   const groupName = groups.find((group) => group.id === groupId)?.name;
   const organization = [!duet && groupName, labels.length > 0 && `${labels.length} 个标签`].filter(Boolean).join(" · ");
+  // 「谁来做」：单任务是底排那颗三段胶囊；按起手式走时由那条线的「让 AI 干活」一站决定，
+  // 这里只读；团队 / 讨论是一颗入口，点开是分工（团队另有组合预设）。
   const executorTools = single
     ? preset
       ? <span className="studio-preset-run" aria-label={`起手式执行器：${singleRunSummary.provider} · ${singleRunSummary.model} · ${singleRunSummary.effort}`}>
         <WorkflowIcon size={14} /><span>{singleRunSummary.model} · {singleRunSummary.effort}</span>
       </span>
       : <div className="studio-inline-executor">{picker("single", "任务执行器")}</div>
-    : <ComposerPopover key={mode} label="谁来做" value={duet ? `${nameFor("voiceA")} × ${nameFor("voiceB")}` : `${nameFor("lead")} 调度`}
-      trigger={<>{duet ? <ChatsCircle size={15} /> : <UsersThree size={15} />}<span>{duet ? "讨论者" : "团队配置"}</span></>} wide>
+    : <ComposerPopover key={mode} tone="opt" align="end" label="谁来做" value={duet ? `${nameFor("voiceA")} × ${nameFor("voiceB")}` : `${nameFor("lead")} 调度`}
+      trigger={<>{duet ? <ChatsCircle size={14} /> : <UsersThree size={14} />}<span>{duet ? "讨论者" : "团队配置"}</span></>} wide>
       {mode === "team" && <PresetBar currentConfig={currentTeamConfig} profiles={profiles} onApply={onApplyTeamPreset} notify={notify} />}
       <div className="studio-executors">
         {mode === "team" && <>
@@ -196,54 +203,53 @@ export function ComposerFields({
         </>}
       </div>
     </ComposerPopover>;
+  // 卡片上方只剩三种模式；「聊天」「助手」的入口在侧栏，不在这一行。
+  const modes = <div className="studio-mode-tabs" {...modeTabs.groupProps} aria-label="任务模式">
+    {MODES.map((item) => { const Icon = item.icon; return <button type="button" key={item.value}
+      {...modeTabs.itemProps(item.value)} onClick={() => onModeChange(item.value)}>
+      <Icon size={14} /><span>{item.label}</span>
+    </button>; })}
+  </div>;
+  // 输入区下面那排入口：图标 + 当前值，点开才是开关和下拉。名字和次序照旧。
+  const work = single ? <ComposerPopover tone="opt" label="工作方式" value={preset ? "起手式" : "自由工作流"} wide={preset}
+    trigger={<><WorkflowIcon size={14} /><span>{preset ? "起手式" : "自由工作流"}</span></>}>
+    <section className="studio-workflow">
+      <PillTabs label="工作方式" value={workflowMode}
+        items={[{ value: "free", label: "自由工作流" }, { value: "preset", label: "起手式" }]} onChange={onWorkflowModeChange} />
+      {preset ? <>{runLine("让 AI 干活", singleRunSummary)}{workflowSlot}</>
+        : <><p className="studio-help">由输入框下方的任务执行器完成目标，按需派审和预览，完成后统一验收。</p>{runLine("任务执行器", singleRunSummary)}</>}
+    </section>
+  </ComposerPopover> : <ComposerPopover tone="opt" label="如何交付"
+    value={duet ? `${rounds ? `最多 ${rounds} 轮` : "不限轮数"} · ${gate ? "需要确认共识" : "自动结束"}` : review ? "自动审查" : "按需审查"}
+    trigger={<><Check size={14} /><span>{duet ? "讨论规则" : review ? "自动审查" : "按需审查"}</span></>}>
+    {duet ? <div className="composer-option-grid">
+      <div className="composer-field"><span>最多轮数</span><Dropdown label="最多轮数" value={rounds}
+        options={[{ value: "", label: "不限" }, ...[1, 2, 3, 5, 8].map((value) => ({ value: String(value), label: value + " 轮" }))]}
+        filterable={false} placeholder="不限" onChange={onRoundsChange} /></div>
+      <label className="composer-toggle-field"><span>共识闸门</span><Toggle checked={gate} onChange={onGateChange} label={gate ? "需要确认" : "自动结束"} /></label>
+    </div> : <label className="composer-toggle-field"><span>自动审查</span><Toggle checked={review} onChange={onReviewChange} label={review ? "已开启" : "已关闭"} /></label>}
+  </ComposerPopover>;
+  const where = duet ? null : <ComposerPopover tone="opt" label="工作目录" value={`${directory}${isRepo && useWorktree ? ` · ${base || automaticBaseLabel}` : ""}`}
+    trigger={<>{isRepo && useWorktree ? <GitBranch size={14} /> : <FolderSimple size={14} />}<span>{directory}</span></>}>
+    {isRepo ? workspaceEditor : <p className="studio-help">当前项目不是 Git 仓库，直接使用项目目录。</p>}
+  </ComposerPopover>;
+  const org = <ComposerPopover tone="opt" label="组织与标签" value={organization || "无分组、无标签"} className={`is-org${organization ? " is-configured" : ""}`}
+    trigger={<><Tag size={14} /><span>{organization || (duet ? "标签" : "分组与标签")}</span></>}>
+    <div className="composer-option-grid">
+      {!duet && <div className="composer-field"><span>分组</span><Dropdown label="分组" value={groupId}
+        options={[{ value: "", label: "无分组" }, ...groups.filter((group) => !group.ownerTaskId).map((group) => ({ value: group.id, label: group.name, detail: group.mode === "parallel" ? "并行" : "串行" })), { value: "__new", label: "＋ 新建分组…" }]}
+        filterable={groups.length > 6} filterPlaceholder="筛选分组…" placeholder="无分组"
+        onChange={(value) => { if (value === "__new") onCreateGroup(); else onGroupChange(value); }} /></div>}
+      <div className="composer-label-field"><span>标签</span><TaskLabelsEditor labels={labels} onChange={onLabelsChange} /></div>
+    </div>
+  </ComposerPopover>;
+  // 「更多」里眼下只有写作参考（原来的「任务示例」）：浮层标题直接叫它的名字。
+  const more = <ComposerPopover tone="opt" iconOnly label="更多选项" heading="写作参考" trigger={<DotsThree size={16} weight="bold" />}>
+    {(close) => <ComposerStarters onPick={(text, nextMode) => { close(); onPickStarter(text, nextMode); }} />}
+  </ComposerPopover>;
   return (
     <>
-      <div className="studio-accessories" aria-label="任务辅助设置">
-        <div className="studio-mode-tabs" {...modeTabs.groupProps} aria-label="任务模式">
-          {MODES.map((item) => { const Icon = item.icon; return <button type="button" key={item.value}
-            {...modeTabs.itemProps(item.value)} onClick={() => onModeChange(item.value)}>
-            <Icon size={14} /><span>{item.label}</span>
-          </button>; })}
-          {extraModeTabs}
-        </div>
-        <span className="studio-tool-divider" aria-hidden="true" />
-        {single ? <ComposerPopover label="工作方式" value={preset ? "起手式" : "自由工作流"} wide={preset}
-          trigger={<><WorkflowIcon size={14} /><span>{preset ? "起手式" : "自由工作流"}</span></>}>
-          <section className="studio-workflow">
-            <PillTabs label="工作方式" value={workflowMode}
-              items={[{ value: "free", label: "自由工作流" }, { value: "preset", label: "起手式" }]} onChange={onWorkflowModeChange} />
-            {preset ? <>{runLine("让 AI 干活", singleRunSummary)}{workflowSlot}</>
-              : <><p className="studio-help">由输入框下方的任务执行器完成目标，按需派审和预览，完成后统一验收。</p>{runLine("任务执行器", singleRunSummary)}</>}
-          </section>
-        </ComposerPopover> : <ComposerPopover label="如何交付"
-          value={duet ? `${rounds ? `最多 ${rounds} 轮` : "不限轮数"} · ${gate ? "需要确认共识" : "自动结束"}` : review ? "自动审查" : "按需审查"}
-          trigger={<><Check size={14} /><span>{duet ? "讨论规则" : review ? "自动审查" : "按需审查"}</span></>}>
-          {duet ? <div className="composer-option-grid">
-            <div className="composer-field"><span>最多轮数</span><Dropdown label="最多轮数" value={rounds}
-              options={[{ value: "", label: "不限" }, ...[1, 2, 3, 5, 8].map((value) => ({ value: String(value), label: value + " 轮" }))]}
-              filterable={false} placeholder="不限" onChange={onRoundsChange} /></div>
-            <label className="composer-toggle-field"><span>共识闸门</span><Toggle checked={gate} onChange={onGateChange} label={gate ? "需要确认" : "自动结束"} /></label>
-          </div> : <label className="composer-toggle-field"><span>自动审查</span><Toggle checked={review} onChange={onReviewChange} label={review ? "已开启" : "已关闭"} /></label>}
-        </ComposerPopover>}
-        {!duet && <ComposerPopover label="工作目录" value={`${directory}${isRepo && useWorktree ? ` · ${base || automaticBaseLabel}` : ""}`}
-          trigger={<>{isRepo && useWorktree ? <GitBranch size={14} /> : <FolderSimple size={14} />}<span>{directory}</span></>}>
-          {isRepo ? workspaceEditor : <p className="studio-help">当前项目不是 Git 仓库，直接使用项目目录。</p>}
-        </ComposerPopover>}
-        <ComposerPopover label="组织与标签" value={organization || "无分组、无标签"} className={organization ? "is-configured" : ""}
-          trigger={<><Tag size={14} /><span>{organization || (duet ? "标签" : "分组与标签")}</span></>}>
-        <div className="composer-option-grid">
-          {!duet && <div className="composer-field"><span>分组</span><Dropdown label="分组" value={groupId}
-            options={[{ value: "", label: "无分组" }, ...groups.filter((group) => !group.ownerTaskId).map((group) => ({ value: group.id, label: group.name, detail: group.mode === "parallel" ? "并行" : "串行" })), { value: "__new", label: "＋ 新建分组…" }]}
-            filterable={groups.length > 6} filterPlaceholder="筛选分组…" placeholder="无分组"
-            onChange={(value) => { if (value === "__new") onCreateGroup(); else onGroupChange(value); }} /></div>}
-          <div className="composer-label-field"><span>标签</span><TaskLabelsEditor labels={labels} onChange={onLabelsChange} /></div>
-        </div>
-        </ComposerPopover>
-        <div className="studio-template-tool"><ComposerPopover label="任务示例" trigger={<><NotePencil size={14} /><span>写作参考</span></>}>
-          {(close) => <ComposerStarters onPick={(text, nextMode) => { close(); onPickStarter(text, nextMode); }} />}
-        </ComposerPopover></div>
-      </div>
-      {children(executorTools)}
+      {children({ modes, options: { work, where, org, more }, executorTools })}
       {availabilityMessage && <p role="status" className={"composer-agent-availability is-" + (availabilityTone ?? "warning")}>{availabilityMessage}</p>}
     </>
   );

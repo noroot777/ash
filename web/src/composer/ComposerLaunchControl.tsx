@@ -47,8 +47,6 @@ export function ComposerLaunchControl({
   onAtChange,
   onCronChange,
   onSubmit,
-  attachmentTool,
-  executorTools,
   queueSlot,
   queueUnavailable,
 }: {
@@ -62,8 +60,6 @@ export function ComposerLaunchControl({
   onAtChange: (value: string) => void;
   onCronChange: (value: string) => void;
   onSubmit: () => void;
-  attachmentTool: ReactNode;
-  executorTools: ReactNode;
   /** mode="queue" 时的目标任务选择器(由面板构造,这里只负责摆进浮层)。 */
   queueSlot?: ReactNode;
   /** 非空 = 当前任务模式不支持排队(如团队任务),选项置灰并附上原因。 */
@@ -72,11 +68,6 @@ export function ComposerLaunchControl({
   const launchGroup = useRovingChoice(LAUNCH_MODES, mode, onModeChange);
   return (
     <div className="composer-launch-control">
-      <div className="studio-input-tools">
-      {attachmentTool}
-      <span className="studio-tool-divider" aria-hidden="true" />
-      {executorTools}
-      </div>
       {/* 启动设置贴着提交按钮(连体的 ▾ 段):提交方式和提交动作是一件事,放回左侧
           工具堆里会被淹没,用户找不到「创建并排队」在哪(2026-10-10 反馈)。 */}
       <div className="studio-submit-group">
