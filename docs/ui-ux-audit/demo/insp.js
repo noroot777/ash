@@ -51,7 +51,7 @@
   const ALIAS = { changes: 'scm', diff: 'scm', artifacts: 'made', memos: 'memo', 'side-chat': 'chat', workflow: 'flow', monitors: 'watch', subagents: 'agents' };
   const CELL = 32, GAP = 2, BREAK = 8, PAD = 4, INK = 20;   // 和 insp.css 里竖轨的尺寸是一套
   const CHORD_MS = 1000;                                    // I 加字母：和现在一样等一秒
-  const KNOWN = ['running', 'waiting', 'failed', 'queued', 'stopped', 'backlog', 'done'];
+  const KNOWN = ['running', 'waiting', 'paused', 'failed', 'queued', 'stopped', 'backlog', 'done'];
   /* 这一次打开样机期间记住的三样：你摘掉 / 加回的格、停在哪一格、整栏收没收。切到别的面再回来不会被重置。
      三格不记「摘掉」，照现在的产品：信息是必开格，下次打开面板它自己补回来；哨兵、子智能体是「用过才浮现」，这个任务用过，重新进来还会冒出来 */
   const mem = { off: new Set(), on: new Set(), pane: 'info', shut: false };

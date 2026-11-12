@@ -29,18 +29,21 @@
     open: { dot: 'open', bucket: 'todo', say: '已完成，等你验收' },        /* 做完没验收：靛蓝环，读没读过都在 */
     running: { dot: 'run', bucket: 'run', say: '运行中' },
     queued: { dot: 'queue', bucket: 'wait', say: '排队中' },              /* 排在队里、还没轮到 */
+    parked: { dot: 'queue', bucket: 'wait', say: '已暂停，在等一件会自己回来的事' },   /* 它自己停下来等哨兵：不用你动，和排着的是同一种环，等什么写在行尾 */
+    paused: { dot: 'wait', bucket: 'wait', say: '已暂停，等你继续' },      /* 停在检查点上、没有东西会来叫它：轮到你，所以是黄的；桶还是「排着 / 暂停」 */
     stopped: { dot: '', bucket: 'done', say: '' },                        /* 停掉的归「已收尾」，行首空着 */
     backlog: { dot: '', bucket: 'wait', say: '' },                        /* 待排期：还没排进队，归「排着 / 暂停」 */
     fresh: { dot: 'new', bucket: 'accepted', say: '已完成，有未读动态' },  /* 验收过、还没看：点开就熄 */
     done: { dot: '', bucket: 'accepted', say: '' },                       /* 验收过、看过：行首空着 */
   };
   /* ⌘K 里任务下面那行小字用的状态词（照 shared 的 TASK_STATUS_LABELS；挂着提问的叫「等答复」） */
-  const WORD = { running: '运行中', queued: '排队中', waiting: '等答复', failed: '失败', stopped: '已取消', backlog: '待排期', done: '完成' };
+  const WORD = { running: '运行中', queued: '排队中', waiting: '等答复', paused: '已暂停', failed: '失败', stopped: '已取消', backlog: '待排期', done: '完成' };
   /* 表里没有的状态不猜成「完成」：行首空着，提示里把原词报出来，归「排着 / 暂停」（现在也是哪一档都不算就落这里），控制台记一笔 */
   const odd = {};
   const lookOf = (task) => {
     if (task.status === 'done') return task.accepted === false ? LOOK.open : task.read === false ? LOOK.fresh : LOOK.done;
     if (task.status === 'stopped' && task.accepted) return LOOK.done;   /* 停掉的也能验收：验收了就归「验收完成」。失败的验收了还是红的，照旧等你处理 */
+    if (task.status === 'paused') return task.why ? LOOK.parked : LOOK.paused;
     if (['waiting', 'failed', 'running', 'queued', 'stopped', 'backlog'].includes(task.status)) return LOOK[task.status];
     if (!odd[task.status]) { console.warn(`[side] 状态表里没有「${task.status}」`); odd[task.status] = { dot: '', bucket: 'wait', say: `状态：${task.status}` }; }
     return odd[task.status];
@@ -487,7 +490,7 @@
           const group = `当前任务 · ${task.title}`;
           const live = task.status === 'running' || task.status === 'queued';
           return [
-            (task.status === 'failed' || task.status === 'stopped') && [group, task.status === 'failed' ? '重试任务' : '运行任务', 'play', '', '', 'R'],
+            (task.status === 'failed' || task.status === 'stopped' || task.status === 'paused') && [group, task.status === 'failed' ? '重试任务' : task.status === 'paused' ? '继续任务' : '运行任务', 'play', '', '', 'R'],
             live && [group, task.status === 'queued' ? '停止排队' : '停止运行', 'stop'],
             !live && task.status !== 'waiting' && [group, '归档任务', 'box'],
             [group, '删除任务', 'trash'],
@@ -498,7 +501,7 @@
           const kids = [];
           const add = (label, items) => { if (items.length) kids.push(h('small', label), ...items); };
           if (q) add('任务', tasks.filter((task) => task.title.toLowerCase().includes(q)).map(taskRow));
-          else add('进行中', tasks.filter((task) => ['running', 'queued', 'waiting'].includes(task.status)).slice(0, 6).map(taskRow));
+          else add('进行中', tasks.filter((task) => ['running', 'queued', 'waiting', 'paused'].includes(task.status)).slice(0, 6).map(taskRow));
           const all = [...current(), ...COMMANDS, ...[name, ...OTHERS.map((other) => other.name)].map((who) => ['切换项目', who, 'folder', '', '', pathOf(who)])]
             .filter(([group, label, , keys, , detail]) => !q || `${label} ${detail ?? ''} ${group} ${keys ?? ''}`.toLowerCase().includes(q));
           for (const group of new Set(all.map((item) => item[0]))) add(group, all.filter((item) => item[0] === group).map(([, label, glyph, keys, to, detail]) => option(icon(glyph), label, detail, keys, to || '')));

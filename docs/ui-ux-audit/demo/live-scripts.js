@@ -1,8 +1,9 @@
 /* 执行中的剧本（live.js 照着演）：一段是一轮，从发出到落定。数据按 ash 真实的粒度来写——工具只有一条「开始」，正文是一整段。
    一步的写法：{ think: 毫秒 } 想；{ tool: { verb, text, fields? }, ms } 做一件事（带 spawn 的是派出一个子智能体，带 hang 的是挂上一个哨兵）；
-   { text } 说一段话；{ ask: { q, options } } 停下来问你；{ watch: { name, ms, lines, exit? } } 等哨兵叫醒（带 exit 的那一次哨兵自己也跑完了）；
-   { meanwhile: { says, ms, done | fail, glyph, still?, ctx?, why?, act? } } 中途插进来的事（压缩上下文、上游不回话）：says 是进行条上依次写的话，
-   done / fail 是过去以后执行过程里记的那一行，ctx 是压完上下文还剩百分之几；工具那一步带 ctx = 读完它上下文还剩百分之几；
+   { text } 说一段话；{ ask: { q, options } } 停下来问你；{ watch: { name, ms, lines, exit?, you? } } 歇下来等哨兵、任务落到暂停，
+   ms 以后它回来（带 exit 的那一次哨兵自己也跑完了；you = { at, text } 是等的时候你插的一句）；
+   { meanwhile: { says, ms, done | fail, glyph, still?, ctx?, why?, act?, quiet? } } 中途插进来的事（压缩上下文、上游不回话）：says 是进行条上依次写的话，
+   done / fail 是过去以后执行过程里记的那一行（quiet 的不记），ctx 是压完上下文还剩百分之几；工具那一步带 ctx = 读完它上下文还剩百分之几；
    { fail: 退出码 } 异常结束；{ end: { turn, files, add, del, ctx, commit? } } 正常收口，数字是这一轮多出来的量。
    PREP：对照清单点到「执行中」的哪一条，就演哪一段。 */
 (() => {
@@ -11,6 +12,8 @@
   const SQUASH = 'b7e2a94';
   const TEST = { verb: '跑', text: cur.test.name, fields: { 命令: cur.test.cmd, 目录: 'server', 时限: '10 分钟' } };
   const WATCH = `${cur.test.title} ×3`;
+  const HANG = { verb: '挂', text: `哨兵「${WATCH}」`, fields: { 盯什么: WATCH, 命令: `for i in 1 2 3; do ${cur.test.cmd} || break; done`, 目录: 'server', 时限: '30 分钟' },
+    hang: { title: WATCH, cmd: `for i in 1 2 3; do ${cur.test.cmd} || break; done`, limit: 30, then: '每遍跑完看一眼结果，三遍都过了再回话' } };
   const SCRIPTS = {
     run: { say: '把这两条修复合成一个提交，再跑一遍回归。', events: [
       { think: 2400 },
@@ -79,13 +82,18 @@
       { text: '写全了。撤回的不发、时间回拨不重发、重启后只补一次，三条都在，例子也对得上现在的代码。' },
       { end: { turn: 8800, files: 0, add: 0, del: 0, ctx: 1 } },
     ] },
-    /* 中途挂一个哨兵、被它叫醒三次：回合不收口。等的时候进行条写着「在等哨兵…」；叫醒了这一行接着往下走，
+    /* 你自己敲 /compact：压的时候和自动压缩一样，是进行条那一行；压完它回一句，执行过程里不再另记 */
+    compact: { events: [
+      { meanwhile: { glyph: 'squeeze', says: ['在压缩上下文'], ms: 5200, ctx: 76, quiet: true } },
+      { text: '压好了，上下文还剩 76%。' },
+      { end: { turn: 1800, files: 0, add: 0, del: 0, ctx: 0 } },
+    ] },
+    /* 中途挂一个哨兵、被它叫醒三次。等的时候任务是暂停的：回合收口，最后多一行「在等哨兵…」；叫醒了同一回合接着往下走，
        上一段正文之前的东西并成一行——被叫醒多少次，回合里摊着的都只有最近那一段 */
     watch: { say: '把回归连跑三遍，看还会不会偶尔挂。', events: [
       { think: 1600 },
       { tool: { verb: '读', text: '`server/scripts/test-later-send-recover.ts`' }, ms: 1000 },
-      { tool: { verb: '挂', text: `哨兵「${WATCH}」`, fields: { 盯什么: WATCH, 命令: `for i in 1 2 3; do ${cur.test.cmd} || break; done`, 目录: 'server', 时限: '30 分钟' },
-        hang: { title: WATCH, cmd: `for i in 1 2 3; do ${cur.test.cmd} || break; done`, limit: 30, then: '每遍跑完看一眼结果，三遍都过了再回话' } }, ms: 1100 },
+      { tool: HANG, ms: 1100 },
       { text: '连跑三遍要半个小时左右。我挂了一个哨兵盯着，每跑完一遍它叫我一次。' },
       { watch: { name: WATCH, ms: 5200, lines: [`第 1 遍：${cur.test.pass} passed, 0 failed`] } },
       { think: 1100 },
@@ -98,6 +106,42 @@
       { tool: { verb: '读', text: '`server/logs/later-send-test.log`' }, ms: 1000 },
       { text: `三遍都过了，每遍 ${cur.test.pass} 条。之前偶尔挂的那一条是端口被占，和补发的逻辑没有关系。` },
       { end: { turn: 14800, files: 0, add: 0, del: 0, ctx: 1 } },
+    ] },
+    /* 同一段，等第一遍的时候你插了一句：那一行让位，你的话和它的回答另起一回合；答完哨兵还没回来，那一行回到新回合的最后。
+       之后哨兵叫醒它，接在这个新回合后面往下走 */
+    watchSay: { say: '把回归连跑三遍，看还会不会偶尔挂。', events: [
+      { think: 1600 },
+      { tool: { verb: '读', text: '`server/scripts/test-later-send-recover.ts`' }, ms: 1000 },
+      { tool: HANG, ms: 1100 },
+      { text: '连跑三遍要半个小时左右。我挂了一个哨兵盯着，每跑完一遍它叫我一次。' },
+      { watch: { name: WATCH, ms: 10400, you: { at: 2600, text: '顺便看一眼，偶尔挂的那条用例是怎么起服务的？' }, lines: [`第 1 遍：${cur.test.pass} passed, 0 failed`] } },
+      { think: 1100 },
+      { text: '第 1 遍过了，接着等后两遍。' },
+      { watch: { name: WATCH, ms: 4200, lines: [`第 2 遍：${cur.test.pass} passed, 0 failed`] } },
+      { think: 1000 },
+      { text: '第 2 遍也过了。' },
+      { watch: { name: WATCH, ms: 4200, exit: 0, lines: [`第 3 遍：${cur.test.pass} passed, 0 failed`, '命令退出，退出码 0'] } },
+      { think: 1200 },
+      { text: `三遍都过了，每遍 ${cur.test.pass} 条。偶尔挂的那一条是端口被占，和补发的逻辑没有关系。` },
+      { end: { turn: 19600, files: 0, add: 0, del: 0, ctx: 2 } },
+    ] },
+    /* 等哨兵的时候你发了一句：它照常答你，哨兵那边不受影响。没有 end——这一轮还没完 */
+    aside: { events: [
+      { think: 1200 },
+      { tool: { verb: '读', text: '`server/scripts/test-later-send-recover.ts` 第 12–40 行', fields: { 文件: 'server/scripts/test-later-send-recover.ts', 行: '12–40' } }, ms: 900 },
+      { text: '它起服务用的是固定端口，别的进程占着就起不来——偶尔挂多半是这个。等三遍跑完我再改成随机端口：现在动这个文件，哨兵那边正用着。' },
+    ] },
+    /* 等哨兵的时候你点了任务头上的「继续」：它看一眼，接着等 */
+    peek: { events: [
+      { think: 1000 },
+      { tool: { verb: '读', text: '`server/logs/later-send-test.log`' }, ms: 900 },
+      { text: '哨兵还在跑，这一遍还没出结果。我接着等。' },
+    ] },
+    /* 你说了不等了、之后点「继续」：哨兵已经停了，它把停下来的地方交代一句 */
+    unwatched: { events: [
+      { think: 1200 },
+      { text: '哨兵已经停了，我没有接着等，三遍没有跑完。要重跑的话说一声。' },
+      { end: { turn: 3200, files: 0, add: 0, del: 0, ctx: 1 } },
     ] },
     /* 派三个子智能体分头查：会话里是三步「派」，各自在做什么、带回了什么在右边「子智能体」那一格（agents:spawn） */
     agents: { say: '补发还会不会漏别的入口？分头查一下。', events: [

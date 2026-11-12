@@ -30,7 +30,7 @@
   let t0 = 0;
   let pop = null;        /* 开着的「调整审查轮数」 */
   const changed = () => ASH.emit('review:change');
-  const live = () => was === 'running' || was === 'waiting' || was === 'queued';
+  const live = () => was === 'running' || was === 'waiting' || was === 'queued' || was === 'paused';
 
   /* ---------- 一轮：2.6 秒出结论 ---------- */
   function begin(what, from, max) {

@@ -9,7 +9,7 @@
   const D = I.data;
   const cur = ASH.data.cur;
   const m = ASH.changes;
-  const STATUS = { running: '运行中', waiting: '等答复', queued: '排队中', failed: '失败', stopped: '已取消', backlog: '待排期', done: '完成' };   // 叫法和任务头一致
+  const STATUS = { running: '运行中', waiting: '等答复', paused: '已暂停', queued: '排队中', failed: '失败', stopped: '已取消', backlog: '待排期', done: '完成' };   // 叫法和任务头一致
   const SETTABLE = ['backlog', 'done', 'failed', 'stopped'];   // 能手动设的四种，照 shared 的 USER_SETTABLE_STATUSES
   const pathLine = (copy) => h('p.insp-path', {}, icon('branch', 'sm'), h('b.cut', D.branch), h('span.cut', D.dir), copy && copyBtn(`${D.branch}  ${D.dir}`, '复制分支和目录'));
 
@@ -150,10 +150,19 @@
     paintCtx();
     paintChanges();
 
+    /* 续跑指令：它自己停下来等哨兵时留的那句交代（醒来以后接着做什么）；别的时候没设 */
+    const RESUME_TIP = '任务暂停时才能改；没设就用标准的「继续」';
+    const resume = h('span.cut.faint', { 'data-tip': RESUME_TIP }, '未设置');
+    ASH.on('task:resume', ({ text } = {}) => {
+      resume.textContent = text || '未设置';
+      resume.classList.toggle('faint', !text);
+      resume.dataset.tip = text || RESUME_TIP;
+    });
+
     const top = kv(['追问', askBtn], askWide, status,
       ['分组', ASH.select({ compact: true, value: '', label: '分组', options: [{ value: '', label: '无分组' }, { value: 'g1', label: '定时与队列' }, { value: 'g2', label: '回复框' }] })],
       ['标签', tags], ['调度', schedule], whenWide, queue, next,
-      ['续跑指令', h('span.faint', { 'data-tip': '任务暂停时才能改；没设就用标准的「继续」' }, '未设置')]);
+      ['续跑指令', resume]);
     paintQueue(true);
     return h('div', { 'data-m': 'insp-2' }, req, top, kv(
       ['来源', task.origin ?? '用户创建'],

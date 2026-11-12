@@ -93,11 +93,17 @@ button.turn-cause:hover, button.turn-cause[aria-expanded="true"] { color: var(--
 .step > button:hover, .step > button[aria-expanded="true"] { color: var(--ink); }
 .step > button .i { width: 13px; height: 13px; color: var(--faint); }
 .step > button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 等哨兵的那一步：名字后面跟着等了多久、等到了什么（还在等时是走着的表）。没等到好结果的、没成的，图标是红的 */
+/* 等到了哨兵的那一步：名字后面跟着等了多久、等到了什么。没等到好结果的、没成的，图标是红的 */
 .step-tail { flex: none; color: var(--faint); font-style: normal; white-space: nowrap; }
 .step.bad > button .i { color: var(--red); }
 .step.wait > .step-more > p, .step.mid > .step-more > p { color: var(--muted); line-height: 1.6; }
 .step.wait > .step-more > .sys-more, .step.mid > .step-more > .sys-more { display: inline-block; margin-top: 6px; }
+/* 在等哨兵（任务暂停着）：最近那一回合的最后一行。长相就是那一行执行过程，只是行首是哨兵的图标、点开不转；字是静止的 */
+.wait > .fold > .i, .wait > .fold[aria-expanded="true"] > .i { transform: none; }
+.wait > .fold.is-flat > .i { opacity: 1; }
+.wait > .step-more { padding-left: 18px; }
+.wait > .step-more > p { color: var(--muted); line-height: 1.6; }
+.wait-acts { display: flex; gap: 14px; margin-top: 4px; }
 /* 中途发生、不是它做的事（压缩了上下文、上游重试了几次）：和别的步骤同一种行，只是点不开 */
 .step.mid > p { display: flex; align-items: center; gap: 8px; min-height: 26px; color: var(--muted); font-size: var(--t-xs); }
 .step.mid > p .i { flex: none; width: 13px; height: 13px; color: var(--faint); }

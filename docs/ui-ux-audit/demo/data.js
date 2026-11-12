@@ -59,7 +59,7 @@
     if (fresh.length || dAdd || dDel || commit) for (const fn of [...changes.subs]) fn();
   });
 
-  /* 任务：status 有 running / waiting / failed / queued / done / stopped / backlog（待排期，只有手动设得到）；read、accepted 只对结束了的任务有意义。
+  /* 任务：status 有 running / waiting / paused（它自己停下来，多半是在等哨兵；只有跑起来才到得了）/ failed / queued / done / stopped / backlog（待排期，只有手动设得到）；read、accepted 只对结束了的任务有意义。
      accepted: false = 做完了还没验收（真实产品里是一颗一直在的靛蓝环，算进「需要你处理」）。
      why 是行尾那句短话（定长的词）；detail 是悬停时多给的那半句 */
   ASH.data = {

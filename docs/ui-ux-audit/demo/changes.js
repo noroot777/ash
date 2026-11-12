@@ -4,7 +4,7 @@
    听 changes:open（开；开着的时候再来一次是关）、task:status、review:change；发 changes:state { open }。 */
 (() => {
   const { h, icon } = ASH;
-  const LIVE = ['running', 'waiting', 'queued'];
+  const LIVE = ['running', 'waiting', 'queued', 'paused'];
   ASH.icons.back ??= '<path d="M13 8H3M7 4 3 8l4 4"/>';
 
   ASH.part('changes', {

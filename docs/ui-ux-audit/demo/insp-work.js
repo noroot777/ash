@@ -163,7 +163,7 @@
         if (post.ok) return { tone: 'ok', text: '合并结果已通过', main: ['再审一次', () => R.startPost()], more: [see, workspace] };
         return { tone: 'bad', text: `合并结果未通过 · ${post.notes.length} 条`, main: ['创建修复任务', () => ASH.go('#/new'), true], more: [see, { label: '再审一次', icon: 'search', onpick: () => R.startPost() }, workspace] };
       }
-      const going = st.status === 'running' || st.status === 'waiting' || st.status === 'queued';
+      const going = st.status === 'running' || st.status === 'waiting' || st.status === 'queued' || st.status === 'paused';
       if (going || R.armed) {
         const text = last.ok ? `第 ${last.n} 轮已通过` : `第 ${last.n} 轮未通过 · ${going ? '任务修改中' : '交给执行者修复'}`;
         return { tone: last.ok ? 'ok' : 'bad', text, main: [key.text, () => R.dialog(), false, R.armed, 'dialog'], more: [workspace] };
@@ -225,7 +225,7 @@
       const state = h('span');
       const took = h('span.num');
       const facts = h('p.insp-card-meta');
-      const stop = h('button.btn.sm', { type: 'button', hidden: true, 'data-tip': '杀掉它的进程，不再唤醒任务', onclick: () => end(k, 'stop') }, '停掉');
+      const stop = h('button.btn.sm', { type: 'button', hidden: true, 'data-tip': '杀掉它的进程，不再唤醒任务', onclick: () => { const waited = k === auto; end(k, 'stop'); if (waited) ASH.emit('watch:stop'); } }, '停掉');
       const cmd = h('div', { hidden: true }, h('pre.insp-code', k.cmd), facts);
       const out = h('pre.insp-code', { hidden: true });
       const cmdBtn = h('button.insp-fold', { type: 'button', 'aria-expanded': 'false', onclick: () => fold(cmdBtn, cmd) }, icon('chev', 'insp-rot'), '命令');
@@ -308,6 +308,7 @@
     };
     /* 会话里那一轮挂上的哨兵在这里是一张卡：它每叫醒一次，卡上多几行输出；带着退出码来的那一次，它就跑完了 */
     ASH.on('watch:hang', ({ title, cmd } = {}) => { auto = start({ title, cmd, dir: D.dir }); });
+    ASH.on('watch:stop', () => { if (auto) end(auto, 'stop'); });   /* 会话里那一行点了「不等了」 */
     ASH.on('watch:wake', ({ lines = [], exit } = {}) => {
       if (!auto) return;
       const k = auto;

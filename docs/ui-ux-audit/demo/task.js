@@ -1,10 +1,10 @@
 /* 任务页（面 task）：头部 + 会话列（会话流、提问坞、回复框；看改动、验收时换成改动工作区）+ 右侧面板。骨架照现状：面板通顶，头部只压在会话那一列上面。
    头部是部件 head。左边说「这是哪个任务」：类型（一个图标）、标题（可改名）、来源（智能体开的才有，一个图标）、图钉。
-   右边没有字，只有图标：此刻轮到你的那一步（重试 / 运行）、验收的那枚章、更多、面板开关。状态不在头上写——侧栏那一行的行首和会话里都有。
+   右边没有字，只有图标：此刻轮到你的那一步（重试 / 运行 / 继续）、验收的那枚章、更多、面板开关。状态不在头上写——侧栏那一行的行首和会话里都有。
    章空心是「改动等你验收」，实心是「验过了」；点它开的是改动工作区（changes.js），真正的「验收通过」在那里面，和现在一样。在跑、排队、等答复时没有章。
    停止是发送键（reply.js）；时间住进右侧面板、「重新排队」进更多（head-1）。
    对外：ASH.parts.head = { set(status), state, accepted, destroy() }。
-   发 task:status { id, status }、task:title { id, title }、task:act { label }（重试 / 运行，由 live.js 接）、changes:open（章，和更多里的「查看改动与审查」）；
+   发 task:status { id, status }、task:title { id, title }、task:act { label }（重试 / 运行 / 继续，由 live.js 接）、changes:open（章，和更多里的「查看改动与审查」）；
    听 task:status { id, status, accepted? }、task:pin { id, pinned }、insp:state { shut }、changes:state { open }。 */
 (() => {
   const { h, icon } = ASH;
@@ -14,17 +14,19 @@
 
   /* 类型：图标和侧栏行尾那颗是同一套（TaskModeIcon），指上去是它的名字 */
   const KIND = { single: ['file', '任务'], team: ['team', '团队任务'], duet: ['chat', '讨论任务'] };
-  const KNOWN = ['running', 'waiting', 'failed', 'queued', 'stopped', 'backlog', 'done'];
-  const ACT = { 重试: 'redo', 运行: 'play' };
+  const KNOWN = ['running', 'waiting', 'paused', 'failed', 'queued', 'stopped', 'backlog', 'done'];
+  const ACT = { 重试: 'redo', 运行: 'play', 继续: 'play' };
 
   /* 这个状态下头上有哪几颗（自由工作流顶层任务的 primaryAction / terminalRerunAction）。
-     样机的 stopped 就是产品里的 canceled，waiting 是挂着提问。seal：'' 不画 / open 等你验收 / done 验过了 */
+     样机的 stopped 就是产品里的 canceled，waiting 是挂着提问，paused 是它自己停在检查点上（多半是在等哨兵）：头上是「继续」，没有章。
+     seal：'' 不画 / open 等你验收 / done 验过了 */
   const look = (status, accepted) => {
     if (status === 'running' || status === 'queued' || status === 'waiting') return { acts: [], seal: '' };
     const seal = accepted ? 'done' : 'open';
     if (status === 'failed') return { acts: ['重试'], seal };
     if (status === 'stopped') return { acts: ['运行'], seal };
     if (status === 'backlog') return { acts: ['运行'], seal: '' };
+    if (status === 'paused') return { acts: ['继续'], seal: '' };
     return { acts: [], seal };
   };
 

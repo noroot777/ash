@@ -1,8 +1,9 @@
 /* 会话流（部件 feed）：静态的一段会话 + 滚动钮 + 输入导航 + 提问坞。
    造回合、气泡、里程碑行、执行过程的那几个函数挂在 ASH.feedKit 上，执行中的模拟（live.js）用的是同一套。
    会话里平时只有三样：你说的（气泡）、它说的（回合）、里程碑（一行一句：审查出了结论、验收了）。ash 自己的话不单独占行——
-   哨兵住在回合里：挂上它、等它、被它叫醒都是「执行过程」里的一步（kit.watch），和读文件、跑命令排在一起。
-   一个回合 = 从你发话到它把话交还给你，中间被哨兵叫醒多少次都还是这一个回合：一行执行过程、一段正文；
+   哨兵住在回合里：挂上它、等到它，都是「执行过程」里的一步（kit.watch），和读文件、跑命令排在一起。
+   会话里的段只由你的话来分：两句你说的话之间，是它的一整段——中间被哨兵叫醒多少次都还是这一段：一行执行过程、一段正文。
+   等哨兵的时候任务是暂停的：最近那一回合的最后多一行「在等哨兵…」（kit.wait）；这时你发话，那一行让位，答完你它再回来（live.js）。
    「这一回合为什么开始」是回合头名字后面的一句起因（照审查意见改、重试），原文点了再看；
    回执（开始盯、暂停、预约、不再等了……）记在它所属的那一回合上，指到这一回合才多出一项「N 条记录」。要你动手的事在任务头上（task.js 的那几颗图标），不在会话里。
    文案照 web/src/task-detail 的 ConversationFeed / SystemNotice / ReviewerLane / QuestionCard；清单 feed-1 到 feed-15。
@@ -104,30 +105,41 @@
     if (api.cause) head.firstElementChild.after(api.cause);
     return api;
   };
-  /* 等哨兵：执行过程里的一步。还在等的时候是活的（后面的用时在走），等到了原地落定——后面跟着等了多久、等到了什么。
-     点开是它送回来的那几行；还在等就是「最迟等到几点、等到以后接着做什么」。两种都带着去哨兵格的入口（停掉它在那边）。
-     wait = { name, until?, then?, took?, exit?, lines?, stopped? }；没有 took = 还在等。调的人自己走表：row.tail.textContent */
-  kit.watch = (wait) => {
-    const tail = h('em.step-tail.num');
-    const facts = h('p');
-    const pre = h('pre');
-    const more = h('div.step-more', { hidden: true }, facts, pre,
+  /* 等到了哨兵：执行过程里的一步——后面跟着等了多久、等到了什么；点开是它送回来的那几行，和去哨兵格的入口。
+     没等到好结果的（退出码不是 0、到点什么都没来）图标是红的。wait = { name, took, exit?, lines? } */
+  kit.watch = ({ name, took, exit, lines = [] }) => {
+    const got = exit != null ? `退出 ${exit}` : lines.length ? `来了 ${lines.length} 行` : '到点没等到';
+    const more = h('div.step-more', { hidden: true }, lines.length > 0 && h('pre', lines.join('\n')),
       h('button.sys-more', { type: 'button', onclick: () => ASH.emit('insp:open', { pane: 'watch' }) }, '在哨兵格里看'));
-    const btn = h('button', { type: 'button', 'aria-expanded': 'false', onclick: () => unfold(btn, more) }, icon('pulse'), h('span', `等 哨兵「${wait.name}」`), tail);
-    const el = h('div.step.wait', btn, more);
-    const got = (w) => (w.stopped ? '不等了' : w.exit != null ? `退出 ${w.exit}` : w.lines?.length ? `来了 ${w.lines.length} 行` : '到点没等到');
-    const paint = (w) => {
-      const live = w.took == null;
-      el.classList.toggle('is-live', live);
-      el.classList.toggle('bad', !live && !w.stopped && (w.exit == null ? !w.lines?.length : w.exit !== 0));
-      if (!live) tail.textContent = `${w.took} · ${got(w)}`;
-      facts.hidden = !live;
-      facts.textContent = [w.until && `最迟等到 ${w.until}`, w.then && `等到以后：${w.then}`].filter(Boolean).join('。');
-      pre.hidden = !w.lines?.length;
-      pre.textContent = (w.lines ?? []).join('\n');
-    };
-    paint(wait);
-    return { el, btn, tail, settle(done) { Object.assign(wait, done); paint(wait); } };
+    const btn = h('button', { type: 'button', 'aria-expanded': 'false', onclick: () => unfold(btn, more) }, icon('pulse'), h('span', `等 哨兵「${name}」`), h('em.step-tail.num', `${took} · ${got}`));
+    return { el: h(`div.step.wait${(exit == null ? !lines.length : exit !== 0) ? '.bad' : ''}`, btn, more), btn };
+  };
+
+  /* 在等哨兵：任务这时是暂停的。这一行在最近那一回合的最后——它为什么不动、等了多久、最迟等到几点；字上没有流光。
+     点开是等到以后它接着做什么，和两条出路：不等了（停掉哨兵，任务留在暂停）、去哨兵格看它的输出。
+     调的人自己走表（row.time.textContent）；quit(took) = 你停掉了：这一行原地落定成一句，留在这一回合的最后。
+     wait = { name, until?, then?, onquit } */
+  kit.wait = ({ name, until, then, onquit }) => {
+    const label = h('span.fold-label', `在等哨兵「${name}」`);
+    const time = h('span.live-time.num.is-in');
+    const due = until && h('span.live-until.num', `最迟 ${until}`);
+    const more = h('div.step-more', { hidden: true }, then && h('p', `等到以后：${then}`),
+      h('p.wait-acts', h('button.sys-more', { type: 'button', onclick: onquit }, '不等了'),
+        h('button.sys-more', { type: 'button', onclick: () => ASH.emit('insp:open', { pane: 'watch' }) }, '在哨兵格里看')));
+    let over = false;
+    const btn = h('button.fold', { type: 'button', 'aria-expanded': 'false', onclick: () => { if (!over) unfold(btn, more); } }, icon('pulse'), label, time, due);
+    const el = h('div.wait', btn, more);
+    return { el, btn, time,
+      quit(took) {
+        if (btn.getAttribute('aria-expanded') === 'true') unfold(btn, more);
+        over = true;
+        label.textContent = `不等哨兵「${name}」了`;
+        time.textContent = `等了 ${took}`;
+        due?.remove();
+        btn.removeAttribute('aria-expanded');
+        btn.classList.add('is-flat');
+        btn.tabIndex = -1;
+      } };
   };
 
   /* 这一轮中途发生、但不是它做的事（压缩了上下文、上游没回话重试了几次）：执行过程里它发生的位置上的一行，后面是花了多久。
@@ -237,8 +249,8 @@
     a2.body.append(foldA2.btn, foldA2.list, h('div.md', { html: `
       <p>三条意见都改了：补发和到点共用一把锁，一条消息只发一次；补发写进记录，带着原定的时间；过了点的几条按原定时间的先后发，补了回归。</p>` }));
 
-    /* 这一回合中间挂了一个哨兵、等了十来分钟才被叫醒：还是一个回合——一行执行过程、一段正文。
-       挂哨兵、等它、它叫醒之前说的那句话，都在点开的那一层里，按先后排着 */
+    /* 这一回合中间挂了一个哨兵、等了十来分钟才被叫醒：还是一段——一行执行过程、一段正文。
+       挂哨兵、等到它、它叫醒之前说的那句话，都在点开的那一层里，按先后排着 */
     const a3 = kit.turn({ meta: `${model} · 11/09 15:09 · 19m 04s` });
     const foldA3 = kit.fold('读了 3 个文件，改了 3 个，跑了 3 条命令，等了 1 次哨兵', [
       { verb: '读', text: '`server/src/later-send-store.ts` 第 22–96 行', fields: { 文件: 'server/src/later-send-store.ts', 行: '22–96' } },
