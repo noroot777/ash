@@ -184,14 +184,15 @@ export function Select<V extends string = string>({
     if (!open) return;
     measure();
   }, [filterable, open, options.length]);
-  // 焦点要等浮层真的挂上（量完位置才渲染）再给：跟量位置写在同一拍里的话，第一次打开时
-  // 浮层还不在，筛选框 / 浮层都拿不到焦点，键盘只能停在触发键上干瞪眼。
-  const placed = place !== null;
+  // 焦点要等浮层真的挂上再给，判据就是下面渲染浮层的那个条件（挂着 + 量过位置）：只看量没量
+  // 过不够——关掉之后位置还留着，再开时这一拍浮层要等 mounted 才回到 DOM 里，焦点给早了落空，
+  // 之后又没有东西再触发一次，键盘只能停在触发键上干瞪眼（第 1 轮审查 F3）。
+  const panelShown = mounted && place !== null;
   useLayoutEffect(() => {
-    if (!open || !placed) return;
+    if (!open || !panelShown) return;
     if (filterable) inputRef.current?.focus();
     else panelRef.current?.focus();
-  }, [filterable, open, placed]);
+  }, [filterable, open, panelShown]);
 
   // 页面滚动/尺寸变化时跟着走：浮层是 fixed 的，不重算就会飘到别处。
   useEffect(() => {
@@ -330,7 +331,7 @@ export function Select<V extends string = string>({
         <CaretDown size={12} weight="bold" className="ui-select-caret" aria-hidden="true" />
       </button>
 
-      {mounted && place && createPortal(
+      {panelShown && place && createPortal(
         <div
           className={`ui-dropdown-panel${leaving ? " is-leaving" : ""}${flipped ? " is-up" : ""} ${panelClassName}`.trim()}
           ref={panelRef}
