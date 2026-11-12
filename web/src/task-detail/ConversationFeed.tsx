@@ -23,6 +23,7 @@ import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
 import { noticeView, turnFailureView } from "./timelineNoticeCopy.ts";
 import { crashedTurns } from "./turnFailure.ts";
 import { QuestionDock } from "./QuestionDock.tsx";
+import { useJustEnded } from "./useJustEnded.ts";
 import { liftCompactionMarkers } from "./compactionMarkers.ts";
 import { TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts } from "./TurnReceipts.tsx";
 import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
@@ -91,9 +92,11 @@ function AgentMessage({
     duration && laneRole !== "lead" ? `${duration} 用时` : null,
   ].filter(Boolean).join(" · ");
   const live = !item.endedAt && taskActive;
+  // 看着它收口的那一下：尾栏淡入一次、约两秒后收回，过程摘要那一行淡入（run-5）。
+  const justEnded = useJustEnded(live);
   return (
     <article
-      className={`task-message task-message--agent${item.continuation ? " is-continuation" : ""}${reviewer ? " is-reviewer" : ""}${laneRole ? " is-lane-owned" : ""}${live ? " is-live" : ""}`}
+      className={`task-message task-message--agent${item.continuation ? " is-continuation" : ""}${reviewer ? " is-reviewer" : ""}${laneRole ? " is-lane-owned" : ""}${live ? " is-live" : ""}${justEnded ? " is-just-ended" : ""}`}
     >
       {/* 卡头左边已经有一颗同样的盾：卡里每条发言再挂一颗，只是把同一个身份画两遍。 */}
       {!laneRole && (
