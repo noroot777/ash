@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { Fragment, useMemo, useRef } from "react";
 import { File, Gavel, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
@@ -20,7 +20,8 @@ import { DebateLane } from "./DebateLane.tsx";
 import { ReviewerLane } from "./ReviewerLane.tsx";
 import { NoticeLine, noticeTail, SystemAuthoredMessage } from "./SystemNotice.tsx";
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
-import { noticeView } from "./timelineNoticeCopy.ts";
+import { noticeView, turnFailureView } from "./timelineNoticeCopy.ts";
+import { crashedTurns } from "./turnFailure.ts";
 import { TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts } from "./TurnReceipts.tsx";
 import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
@@ -287,15 +288,17 @@ export function ConversationFeed({
     ) hiddenTimes.add(item.id);
   }
 
+  const crashed = crashedTurns(items);
   const renderItem = (
     item: ConversationItem,
     preserveSystemStyle = false,
     laneRole?: ReviewLaneMessageRole,
   ) => {
     if (item.kind === "agent") {
+      const failure = crashed.get(item.id);
       return (
+        <Fragment key={item.id}>
         <AgentMessage
-          key={item.id}
           item={item}
           // 审查会话、团队执行者的发言都挂在**自己那个任务**上，工作目录各是各的；
           // 会话行缺失（记录读不全）时才退到当前任务。
@@ -308,6 +311,8 @@ export function ConversationFeed({
           taskActive={task.status === "running" || task.status === "queued"}
           receipts={receiptsOf(item.id)}
         />
+        {failure && <NoticeLine view={turnFailureView(failure)} />}
+        </Fragment>
       );
     }
     if (item.kind === "user") {

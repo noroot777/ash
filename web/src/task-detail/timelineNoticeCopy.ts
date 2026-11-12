@@ -198,6 +198,12 @@ export function noticeView(item: NoticeSource): NoticeView {
   const raw = noticeRawText(item.text);
   // 回合边界（直播那一路的「本轮执行结束」「执行异常结束 · exit 1」）不走时间线：
   // 正常收口是回执，异常收口留在明面上。
-  if (item.variant === "boundary") return item.tone === "error" ? generic("alert", "bad", raw) : generic("receipt", "neutral", raw);
+  // 异常收口落定成一句「这一轮异常结束」，退出码点开再看（run-8）。
+  if (item.variant === "boundary") return item.tone === "error" ? turnFailureView(raw) : generic("receipt", "neutral", raw);
   return item.notice ? typedView(item.notice, raw) : legacyView(item, raw);
+}
+
+/** 一轮异常结束的那一句（直播那一路的回合边界、刷新以后从会话行认出来的都用它）。 */
+export function turnFailureView(raw: string): NoticeView {
+  return view("alert", "bad", "warn", "这一轮异常结束", raw);
 }
