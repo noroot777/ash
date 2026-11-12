@@ -246,48 +246,30 @@
   M.count = (G, t = G.T) => tally(G.P, t);
 
   /* 带输入框的确认框（现在的 ActionDialog）：没有输入框的直接走 ASH.confirm。确认键上写的就是标题（另给了 ok 的除外）。
-     note 是输入框下面跟着所填内容变的一句。回 { 字段: 值 }，取消回 null */
-  M.ask = ({ title, body, ok = title, danger = false, fields = [], note }) => {
-    if (!fields.length) return ASH.confirm({ title, body, ok, danger }).then((yes) => (yes ? {} : null));
+     note 是输入框下面跟着所填内容变的一句。typed：回不去的动作多一行「输入 X 确认」，没输对确认键点不动（照现在的，一处都不少）。
+     层用的是全应用那一个（ASH.sheet）：Esc、Tab、点遮罩、焦点回原处都归它管。回 { 字段: 值 }，取消回 null */
+  M.ask = ({ title, body, ok = title, danger = false, fields = [], note, typed }) => {
+    if (!fields.length && !typed) return ASH.confirm({ title, body, ok, danger }).then((yes) => (yes ? {} : null));
     return new Promise((done) => {
-      ASH.closePop();
-      const back = document.activeElement;
       const v = Object.fromEntries(fields.map((f) => [f.key, f.initial ?? (f.type === 'check' ? false : f.type === 'select' ? f.options[0].value : '')]));
+      let matched = !typed;
       const yes = h(`button.btn${danger ? '.danger' : '.pri'}`, { type: 'button', onclick: () => close(v) }, ok);
       const noteEl = note && h('p.git-ask-note');
       const no = h('button.btn', { type: 'button', onclick: () => close(null) }, '取消');
-      const check = () => { yes.disabled = fields.some((f) => f.required && !String(v[f.key]).trim()); if (noteEl) noteEl.textContent = note(v); };
+      const check = () => { yes.disabled = !matched || fields.some((f) => f.required && !String(v[f.key]).trim()); if (noteEl) noteEl.textContent = note(v); };
+      const enter = (e, area) => { if (e.key === 'Enter' && !area && !e.isComposing && !yes.disabled) close(v); };
       const rows = fields.map((f) => {
         if (f.type === 'check') return h('label.git-ask-check', h('input', { type: 'checkbox', checked: v[f.key], onchange: (e) => { v[f.key] = e.target.checked; } }), f.label);
         if (f.type === 'select') return h('div.git-ask-row', h('span', f.label), ASH.select({ value: v[f.key], options: f.options, label: f.label, onchange: (to) => { v[f.key] = to; check(); } }));
         const input = h(f.type === 'area' ? 'textarea.field' : 'input.field', { placeholder: f.placeholder, spellcheck: 'false', rows: f.type === 'area' ? '3' : null,
-          oninput: () => { v[f.key] = input.value; check(); },
-          onkeydown: (e) => { if (e.key === 'Enter' && f.type !== 'area' && !e.isComposing && !yes.disabled) close(v); } });
+          oninput: () => { v[f.key] = input.value; check(); }, onkeydown: (e) => enter(e, f.type === 'area') });
         input.value = v[f.key];
         return h('label.git-ask-row', h('span', f.label), input);
       });
-      const dlg = h('div.dlg', { role: 'dialog', 'aria-modal': 'true', 'aria-label': title }, h('h2', title), body && h('p', body), h('div.git-ask', rows, noteEl), h('div.dlg-acts', no, yes));
-      const veil = h('div.veil.git-ask-veil', dlg);
-      const key = (e) => {
-        if (document.querySelector('.pop.is-in')) return;   /* 下拉开着：Esc、Tab 先归它 */
-        if (e.key === 'Escape') { e.stopPropagation(); close(null); }
-        if (e.key !== 'Tab') return;
-        const all = [...dlg.querySelectorAll('input, textarea, button:not([disabled])')];
-        e.preventDefault();
-        all[(all.indexOf(document.activeElement) + (e.shiftKey ? -1 : 1) + all.length) % all.length].focus();
-      };
-      function close(answer) {
-        removeEventListener('keydown', key, true);
-        ASH.closePop();
-        veil.classList.remove('is-in');
-        setTimeout(() => veil.remove(), 130);
-        back?.focus?.({ preventScroll: true });
-        done(answer);
-      }
-      veil.addEventListener('pointerdown', (e) => { if (e.target === veil) close(null); });
-      addEventListener('keydown', key, true);
-      document.body.append(veil);
-      requestAnimationFrame(() => veil.classList.add('is-in'));
+      const proof = typed && h('input.field', { spellcheck: 'false', autocomplete: 'off', oninput: () => { matched = proof.value.trim() === typed; check(); }, onkeydown: (e) => enter(e) });
+      const dlg = h('div.dlg', { role: 'dialog', 'aria-modal': 'true', 'aria-label': title }, h('h2', title), body && h('p', body),
+        h('div.git-ask', rows, typed && h('label.git-ask-row', h('span', '输入 ', h('code', typed), ' 确认'), proof), noteEl), h('div.dlg-acts', no, yes));
+      const close = ASH.sheet(dlg, { cls: 'git-ask-veil', onclose: (answer) => done(answer ?? null) });
       check();
       (dlg.querySelector('.field') ?? no).focus();
     });
@@ -392,7 +374,7 @@
         ask: { title: '从提交新建分支', body: about, fields: [{ key: 'name', label: '分支名', required: true }] } }) },
       { label: '打标签', disabled: G.busy, onpick: () => M.tagAt(G, c.sha, { title: '为提交打标签', body: about, fields: [{ key: 'name', label: '标签名', required: true }, { key: 'note', type: 'area', label: '附注（留空创建轻量标签）' }] }) },
       { label: '重置到这里…', danger: true, disabled: G.busy, onpick: () => M.act(G, { label: '重置', cmd: (v) => `git reset --${v.mode} ${c.sha}`, clean: true, text: (v) => `已执行 ${v.mode} 重置，原 HEAD 已保留备份`,
-        ask: { title: '重置当前分支', danger: true, body: `将当前分支移到 ${s8}。soft 保留索引和工作区；mixed 取消暂存但保留工作区；hard 同时恢复工作区。操作要求工作区干净，执行前备份原 HEAD。`, fields: [{ key: 'mode', type: 'select', label: '重置方式', options: RESET, initial: 'mixed' }] },
+        ask: { title: '重置当前分支', danger: true, typed: G.T.branch, body: `将当前分支移到 ${s8}。soft 保留索引和工作区；mixed 取消暂存但保留工作区；hard 同时恢复工作区。操作要求工作区干净，执行前备份原 HEAD。`, fields: [{ key: 'mode', type: 'select', label: '重置方式', options: RESET, initial: 'mixed' }] },
         run: () => { M.keep(G); G.ref(G.T.branch).sha = c.sha; M.count(G); } }) },
       { label: '编辑此提交之后的历史…', disabled: G.busy, onpick: () => {
         /* 基点之后、当前分支上的提交，从早到晚 */

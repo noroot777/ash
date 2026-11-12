@@ -63,7 +63,7 @@
       if (!tree) {
         const del = (force) => M.act(G, { label: '删除分支', cmd: `git branch ${force ? '-D' : '-d'} ${r.name}`, run: () => drop(P.refs, r),
           why: () => (force || M.reach(G, head().sha).has(r.sha) ? null : `error: the branch '${r.name}' is not fully merged`),
-          ask: { title: force ? '强制删除分支' : '删除已合并分支', danger: true,
+          ask: { title: force ? '强制删除分支' : '删除已合并分支', danger: true, typed: force ? r.name : null,
             body: `删除本地分支 ${r.name}。${force ? '尚未合并的提交将失去此分支引用。请先为需要保留的提交打标签或创建备份分支。' : 'Git 会拒绝删除尚未合并的分支。'}远端分支保持原样。` } });
         add('删除已合并分支', () => del(false), true);
         add('强制删除…', () => del(true), true);
@@ -73,7 +73,7 @@
         ask: { title: '检出远端分支', body: `从 ${r.name} 建立本地分支并切换过去，之后可设置上游。`, fields: [{ key: 'name', label: '本地分支名', initial: short, required: true }] },
         run: (v) => { P.refs.push({ kind: 'branch', name: v.name.trim(), sha: r.sha }); M.switchTo(G, v.name.trim()); } }));
       add('删除远端分支…', () => M.act(G, { label: '删除远端引用', cmd: `git push --force-with-lease origin :refs/heads/${short}`, text: '远端配置或引用操作已完成',
-        ask: { title: '删除远端分支', danger: true, body: `从 origin 删除服务器上的分支 ${short}。只有远端仍处于 ${s8(r.sha)} 时才会执行，远端新增提交时拒绝删除。此操作影响其他协作者。` },
+        ask: { title: '删除远端分支', danger: true, typed: r.name, body: `从 origin 删除服务器上的分支 ${short}。只有远端仍处于 ${s8(r.sha)} 时才会执行，远端新增提交时拒绝删除。此操作影响其他协作者。` },
         run: () => unhook(G, [r]) }), true);
     }
     return items;
@@ -98,7 +98,7 @@
           mini('修改地址', () => M.act(G, { label: '修改远端地址', text, cmd: `git remote set-url ${x.name} <url>`, run: (v) => { x.url = v.url.trim(); },
             ask: { title: '修改远端地址', body: `修改 ${x.name} 的主要获取地址。已单独配置的推送地址会继续使用。`, fields: [{ key: 'url', label: '新地址', initial: x.url, required: true }] } }), { off: G.busy }),
           mini('移除', () => M.act(G, { label: '移除远端', text, cmd: `git remote remove ${x.name}`, run: () => { drop(P.remotes, x); unhook(G, P.refs.filter((r) => r.kind === 'remote' && r.name.startsWith(`${x.name}/`))); },
-            ask: { title: '移除远端配置', danger: true, body: `移除 ${x.name} 的本地配置和跟踪引用。不会删除服务器上的仓库或分支；使用该远端的上游配置也会失效。` } }), { danger: true, off: G.busy }))))
+            ask: { title: '移除远端配置', danger: true, typed: x.name, body: `移除 ${x.name} 的本地配置和跟踪引用。不会删除服务器上的仓库或分支；使用该远端的上游配置也会失效。` } }), { danger: true, off: G.busy }))))
         : h('p.git-quiet', '尚未配置远端，添加后即可获取和发布分支。'));
   }
   M.branches = (G, ui) => {
@@ -154,7 +154,7 @@
         M.chip(s.mine ? '我的贮藏' : '共享 · 仅应用', s.mine ? 'own' : ''), h('time.num', s.at.toLocaleDateString('zh-CN')),
         mini('应用', () => use(s, false), { off: G.busy }), s.mine && mini('弹出', () => use(s, true), { off: G.busy }),
         s.mine && mini('删除', () => M.act(G, { label: '删除贮藏', cmd: `git stash drop ${s.sha}`, run: () => drop(P.stashes, s),
-          ask: { title: '删除贮藏', danger: true, body: '删除这份保存的未提交改动。此操作不能从工作台直接撤销。' } }), { danger: true, off: G.busy })),
+          ask: { title: '删除贮藏', danger: true, typed: s8(s.sha), body: '删除这份保存的未提交改动。此操作不能从工作台直接撤销。' } }), { danger: true, off: G.busy })),
         open && h('div.git-card-body.enter', {}, M.diff(s.files)));
     };
     return h('div.git-pane', M.head('贮藏', '共享贮藏栈；他人的记录可应用，不能弹出或删除。', create(G, '贮藏改动', () => M.stashSave(G, true))),
@@ -171,9 +171,9 @@
         mini('推送', () => far(r, () => M.act(G, { label: '推送标签', cmd: (v) => `git push ${v.remote} refs/tags/${r.name}`, text: '远端操作已完成',
           ask: { title: '推送标签', body: `将 ${r.name} 发布到选定远端。只推送这一个标签。`, fields: [remoteField(P, '远端')] } })), { off: G.busy }),
         mini('删除', () => M.act(G, { label: '删除标签', cmd: `git tag -d ${r.name}`, run: () => drop(P.refs, r),
-          ask: { title: '删除本地标签', danger: true, body: `移除本地标签 ${r.name}，原引用会保留备份，不删除提交或远端标签。` } }), { danger: true, off: G.busy }),
+          ask: { title: '删除本地标签', danger: true, typed: r.name, body: `移除本地标签 ${r.name}，原引用会保留备份，不删除提交或远端标签。` } }), { danger: true, off: G.busy }),
         dots(G, `${r.name} 标签操作`, [{ label: '从 origin 删除远端标签…', danger: true, disabled: G.busy, onpick: () => M.act(G, { label: '删除远端引用', cmd: `git push --force-with-lease origin :refs/tags/${r.name}`, text: '远端配置或引用操作已完成',
-          ask: { title: '删除远端标签', danger: true, body: `从 origin 删除服务器上的标签 ${r.name}。仅当远端标签仍指向本地看到的 ${s8(r.sha)} 时执行；影响所有协作者。本地标签继续保留。` } }) }])));
+          ask: { title: '删除远端标签', danger: true, typed: `origin/${r.name}`, body: `从 origin 删除服务器上的标签 ${r.name}。仅当远端标签仍指向本地看到的 ${s8(r.sha)} 时执行；影响所有协作者。本地标签继续保留。` } }) }])));
     const tags = P.refs.filter((r) => r.kind === 'tag');
     return h('div.git-pane', M.head('标签', '为值得保留的版本命名，按需发布到远端。', create(G, '新建标签', () => M.tagAt(G, head.sha, { title: '新建标签',
       body: `为当前 HEAD ${s8(head.sha)} 打标签。暂时只创建本地标签，可以随后单独推送。`, fields: [{ key: 'name', label: '标签名', placeholder: 'v1.0.0', required: true }, { key: 'note', type: 'area', label: '附注（留空为轻量标签）' }] }))),
@@ -194,7 +194,7 @@
           manual && mini(t.locked ? '解锁' : '锁定', () => M.act(G, { label: t.locked ? '解锁工作树' : '锁定工作树', cmd: `git worktree ${t.locked ? 'unlock' : 'lock'} ${t.path}`, run: () => { t.locked = !t.locked; } }), { off: G.busy }),
           manual && mini('移除', () => M.act(G, { label: '移除工作树', cmd: `git worktree remove ${t.path}`,
             why: () => (t.locked ? 'fatal: cannot remove a locked working tree' : t.files.length ? `fatal: '${t.path}' contains modified or untracked files, use --force to delete it` : null),
-            ask: { title: '移除手动工作树', danger: true, body: `将移除目录 ${t.path}。Git 会拒绝删除含未提交改动或未跟踪文件的工作树；分支与提交继续保留。` },
+            ask: { title: '移除手动工作树', danger: true, typed: t.path, body: `将移除目录 ${t.path}。Git 会拒绝删除含未提交改动或未跟踪文件的工作树；分支与提交继续保留。` },
             run: () => { drop(P.trees, t); if (t === T) G.openTree(P.trees[0]); } }), { danger: true, off: G.busy })));
     };
     return h('div.git-pane', M.head('工作树', '选择正在操作的目录，区分任务工作树与手动工作树。', create(G, '新建工作树', () => M.act(G, { label: '创建工作树',
@@ -226,7 +226,7 @@
           P.refs.push({ kind: 'branch', name: v.name.trim(), sha: b.sha });
         } }), { off: G.busy }),
       mini('删除备份', () => M.act(G, { label: '删除备份', cmd: `git update-ref -d ${b.ref} ${b.sha}`, run: () => drop(P.backups, b),
-        ask: { title: '删除备份', danger: true, body: `删除 ${s8(b.sha)} 的这条备份引用。仅由此备份保留的历史之后可能被 Git 回收，届时无法恢复；需要保留请先恢复为新分支。` } }), { danger: true, off: G.busy })));
+        ask: { title: '删除备份', danger: true, typed: b.ref, body: `删除 ${s8(b.sha)} 的这条备份引用。仅由此备份保留的历史之后可能被 Git 回收，届时无法恢复；需要保留请先恢复为新分支。` } }), { danger: true, off: G.busy })));
     return h('div.git-pane',
       h('div.git-lockcard', { role: 'status' }, icon('lock'), h('b', '仓库锁'), h('span', G.busy ? '仓库正在操作；排队中的动作将在锁释放后继续。' : '空闲 · 页面操作与 agent 的 Git 操作在同一条队列上执行。')),
       M.head('操作日志', '最近 200 次工作台操作 · 排队、失败、中止和历史备份都会保留。'),

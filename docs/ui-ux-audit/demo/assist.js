@@ -2,7 +2,7 @@
    两页都照现在的产品画，对的是 web/src/assistant 与 web/src/chat：二级栏五段（品牌与返回、项目名与副题、列表标题与动作、列表、栏底说明）、
    头部、欢迎块、日期胶囊、头像与「智能体」标记、常显的时间、「正在回复 · 停止回复」、输入框和它下面那行按键提示——入口和文案按原文。
    和现状不一样的只有三处：
-   ① 清单 as-1（只讲助手页）：右栏只剩事实（智能体、回复风格）；关联任务为零时那一行不出现；说了两遍的两句各留一处；
+   ① 清单 as-1（只讲助手页）：右栏只在有关联任务时出现，里面只有「关联任务 N」和各条任务的入口（智能体、回复风格屏上别处已经有了）；说了两遍的两句各留一处；
       「更换智能体」只留二级栏顶上一个入口，点开还是现在那一页（标题、一句话、三段胶囊、三颗按钮）。
    ② 顶上那条五项的模式条拿掉了（清单 home-3 里要负责人点头的那一处）。
    ③ 全应用的尺子：字号不低于 12px；跳动的小圆点换成字上的流光（全应用只有这一种「它在跑」）；输入框随内容长高。
@@ -112,12 +112,16 @@
     input.addEventListener('input', sync);
     input.addEventListener('keydown', (e) => {
       if (e.isComposing || onkey?.(e)) return;
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+      if (ASH.sendKey.hit(e)) { e.preventDefault(); submit(); }   /* 哪一下算发送跟「发送键」设置走，和回复框、新建是同一份判定 */
     });
+    const keys = h('span');
+    const paintKeys = () => { const caps = ASH.sendKey.caps(); keys.textContent = `${caps.send} 发送 · ${caps.newline} 换行 · /clear 清空上下文`; };
+    const offKeys = ASH.on('sendkey:change', () => { if (keys.isConnected) paintKeys(); else offKeys(); });
+    paintKeys();
     const ctx = h('p.as-ctx', { role: 'status', hidden: true });
     const card = h('div.as-box', {}, input, h('footer', {}, left, hint, send));
     const el = h('div.as-reply', {}, h('div.as-live', { role: 'status' }, live, stop), ctx, card,
-      h('div.as-keys', {}, h('span', 'Enter 发送 · Shift Enter 换行 · /clear 清空上下文'), tail && h('i', tail)));
+      h('div.as-keys', {}, keys, tail && h('i', tail)));
     return { el, card, input,
       set(text) { input.value = text; sync(); input.focus(); },
       busy(text) { live.textContent = text ?? idle; live.classList.toggle('shim', !!text); stop.hidden = !text; },
@@ -143,9 +147,9 @@
   /* 按建立的先后排；二级栏里新的在上，进来先开最新的那一段。
      第一段里有一张任务卡，所以它的右栏多一行「关联任务」；另外两段为零，那一行不出现（as-1）。 */
   const DATA = { rooms: [
-    { name: '找审查卡死的任务', who: who(), msgs: [
-      { me: true, day: '11月9日', at: '10:30', text: '上周有个改审查卡死的任务，帮我找出来。' },
-      { day: '11月9日', at: '10:30', text: '找到了：已经做完，还没验收。', queries: ['审查 卡死', '裁定 不用改了'], tasks: [{ id: 't-cur', why: '标题和会话里都提到「审查卡死」' }] },
+    { name: '找定时消息的任务', who: who(), msgs: [
+      { me: true, day: '11月9日', at: '16:02', text: '今天有个修定时消息不补发的任务，帮我找出来。' },
+      { day: '11月9日', at: '16:02', text: '找到了：已经做完，还没验收。', queries: ['定时消息 补发', '过了点 待发送'], tasks: [{ id: 't-cur', why: '标题和会话里都提到「过了点没有补发」' }] },
     ] },
     { name: '起手式在哪配', who: who(), msgs: [
       { me: true, day: '11月10日', at: '17:05', text: '起手式在哪里配？' },
@@ -171,9 +175,7 @@
     let setup = null;        /* 开着「更换助手的智能体」那一页时，是收起它的函数 */
     let endRename = null;
     let query = '';
-    const whoWord = (target) => [target.agent, target.model, target.level].filter(Boolean).join(' · ');
     const waiting = (room) => room?.msgs.find((m) => m.wait);
-    const linked = (room) => new Set(room.msgs.flatMap((m) => (m.tasks ?? []).map((t) => t.id))).size;
 
     /* ---------- 二级栏 ---------- */
     const list = h('nav.as-rooms', { 'aria-label': '助手对话记录' });
@@ -327,12 +329,15 @@
       whoBtn.disabled = on;
     }
 
-    /* ---------- 右栏（as-1）：只剩事实。关联任务为零时那一行不出现 ---------- */
-    const info = h('aside.as-info', { 'aria-label': '助手信息', 'data-m': 'as-1' });
+    /* ---------- 右栏（as-1）：有关联任务才有这一列，里面只有「关联任务 N」和各条任务的入口。
+       用哪个智能体在二级栏顶上、回复风格在栏底，都已经说过；没有关联任务时整列不画，会话区吃满宽度 ---------- */
+    const info = h('aside.as-info', { 'aria-label': '关联任务', 'data-m': 'as-1' });
     function paintInfo() {
-      const n = linked(cur);
-      info.replaceChildren(h('dl.kv', {}, h('dt', '智能体'), h('dd', {}, h('span.cut', whoWord(cur.who))), h('dt', '回复风格'), h('dd', '简洁'),
-        n > 0 && [h('dt', '关联任务'), h('dd.num', `${n} 项`)]));
+      const ids = [...new Set(cur.msgs.flatMap((m) => (m.tasks ?? []).map((t) => t.id)))];
+      const tasks = ids.map((id) => ASH.data.tasks.find((t) => t.id === id)).filter(Boolean);
+      info.hidden = Boolean(setup) || !tasks.length;
+      info.replaceChildren(h('h4.sec', {}, '关联任务', h('b', String(tasks.length))),
+        ...tasks.map((t) => h('button.go', { type: 'button', onclick: () => { if (t.id === ASH.data.current) ASH.go('#/task'); else ASH.emit('task:open', { id: t.id }); } }, h('span.cut', t.title), icon('chev'))));
     }
 
     /* ---------- 「更换智能体」点开的那一页：换掉头部、消息和输入区，右栏也让开（照现状）。选谁干活是那颗三段胶囊 ---------- */
@@ -395,7 +400,13 @@
     main.append(h('section.sv-as.as-root', { 'aria-label': 'ash 助手' }, rail, h('div.as-mid', {}, head, feed.el, setupEl, box.el), info));
     paint();
     drawFeed();
-    ASH.prep['as-1'] = () => { if (setup && cur) { setup(); paint(); feed.toEnd(); } };   /* 右栏被「更换智能体」那一页让开时，先把它收起 */
+    /* 对照清单点到 as-1：右栏只在有关联任务的对话里才有，先切到那一段；「更换智能体」那一页开着就先收起 */
+    ASH.prep['as-1'] = () => {
+      if (setup && cur) { setup(); paint(); }
+      const withTask = state.rooms.find((room) => room.msgs.some((m) => m.tasks?.length));
+      if (withTask && withTask !== cur) open(withTask);
+      feed.toEnd();
+    };
     return () => { alive = false; for (const id of timers) clearTimeout(id); delete ASH.prep['as-1']; };
   }
 

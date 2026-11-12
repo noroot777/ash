@@ -13,14 +13,15 @@
      card(...kids)                 → div.card。一节一张，里面放 row / foot / 表格
      row(name, hint, ...ctl)       → 设置行。左边名字（可 null）和说明（一句、几句的数组或 null），右边控件；控件是多行输入框时自动上下排
      foot(note, ...ctl)            → 卡脚。左边一句话，右边按钮
-     pick(label, pairs, value, onchange?)   → Select，pairs = [[值, 名字], …]，onchange(值)。表单里和输入框同高同框；放进 .sv-set-tr 或 dl.kv 里自动是无框的紧凑档
+     pick(label, pairs, value, onchange?)   → Select，pairs = [[值, 名字], …]，onchange(值)。表单里用，和输入框同高同框
+     pickSm(…同上)                          → 同一个 Select 的紧凑档（无框、24 高），表格行和键值行里用
      flowPick(label, inherit, value?)       → 选起手式的 Select；inherit 是第一项「跟着上一级走」写什么
      seg(label, pairs, value, onchange?)    → 分段单选，pairs 同上。两三项、名字短的时候用它，不用 Select
      sw(on, [开着写什么, 关着写什么], onchange?)   → label.sv-set-sw：开关加旁边跟着换的字；里面第一个孩子是 button.switch，onchange(开没开)
      text(label, value?, attrs?)   → 单行输入框。attrs 直接落到 input 上；attrs.class 可给 mono（等宽）、sv-set-num（短数字）、grow（占满剩下的宽）
      area(label, value?, placeholder?, rows?, attrs?)   → 多行输入框，随内容长高，rows = 最少几行；attrs 同上
      btn(label, onclick, cls?, icon?)   → 按钮。cls 是 '.pri' '.quiet' '.danger' '.sm'，可连写（'.quiet.sm'）；icon 是 ASH.icons 里的名字
-     stub(label, cls?, icon?)      → 入口在、名字对、点了没有下文的按钮
+     stub(label, cls?, icon?)      → 入口在、名字对、样机没画下文的按钮：点了在样机自己那条栏里说一句
      saver(label, ...inputs)       → 主按钮：平时灰着，动过它管的输入框才亮，点完又灰回去
      leave(el)                     → 淡出后删掉
      replay(el)                    → 让它重新进场一次（换了内容时用）
@@ -97,8 +98,9 @@
   /* ---------- 各页共用的小件（用法见文件头） ---------- */
   const opt = (pairs) => pairs.map(([value, label]) => ({ value, label }));
   const pick = (label, pairs, value, onchange) => ASH.select({ value, options: opt(pairs), label, onchange });
+  const pickSm = (label, pairs, value, onchange) => ASH.select({ value, options: opt(pairs), label, onchange, compact: true });
   const btn = (label, onclick, cls = '', ico) => h(`button.btn${cls}`, { type: 'button', onclick }, ico && icon(ico), label);
-  const stub = (label, cls = '', ico) => btn(label, null, cls, ico);
+  const stub = (label, cls = '', ico) => btn(label, () => ASH.todo(label.replace(/…$/, '')), cls, ico);
   /* 输入框：调用方给的 class 接在 field 后面，不顶掉它 */
   const input = (tag, label, { class: cls = '', ...attrs }, ...kids) => h(tag, { class: `field ${cls}`.trim(), 'aria-label': label, spellcheck: 'false', ...attrs }, kids);
   const text = (label, value = '', attrs = {}) => input('input', label, { type: 'text', value, ...attrs });
@@ -137,7 +139,7 @@
   const replay = (el) => { el.classList.remove('enter'); void el.offsetWidth; el.classList.add('enter'); };
   /* 选起手式的下拉：第一项是「跟着上一级走」，其余写「名字 · 干活 → 验证 → …」 */
   const flowPick = (label, inherit, value = '') => pick(label, [['', inherit], ...S.flows.filter((f) => !f.off).map((f) => [f.key, `${f.name} · ${f.stops.map((s) => SHORT[s.kind]).join(' → ')}`])], value);
-  ASH.setKit = { pick, btn, stub, text, area, card, sec, row, foot, head, sw, seg, saver, leave, replay, flowPick };
+  ASH.setKit = { pick, pickSm, btn, stub, text, area, card, sec, row, foot, head, sw, seg, saver, leave, replay, flowPick };
 
   /* ---------- 执行器页（清单 set-1、set-2、set-4）：一种 CLI 一张卡，卡里一个 Profile 一行，列和现在一样多。
      卡头的「新增」「删除全部」、行里点名字改名、供应商 / 模型 / 智能水平 / 速度 / CLI 配置都照现状；
@@ -214,12 +216,12 @@
         const provs = [['', 'CLI 官方账号'], ...S.providers.filter((p) => (p.proto === 'anthropic') === (a.id === 'claude')).map((p) => [p.id, p.name])];
         const refocus = (col) => list.children[a.profiles.indexOf(pf)]?.querySelector(`[data-col="${col}"]`)?.focus();
         /* 换供应商时模型和智能水平回到「跟随」，和现在一样 */
-        const prov = pick(`${pf.name} 的供应商`, provs, pf.prov, (v) => { pf.prov = v; pf.model = ''; pf.level = ''; rows(); refocus('prov'); });
-        const model = pick(`${pf.name} 的模型`, [['', pf.prov ? '跟随供应商默认' : '跟随 CLI'], ...specOf(a).models.map((m) => [m, m])], pf.model, (v) => { pf.model = v; });
+        const prov = pickSm(`${pf.name} 的供应商`, provs, pf.prov, (v) => { pf.prov = v; pf.model = ''; pf.level = ''; rows(); refocus('prov'); });
+        const model = pickSm(`${pf.name} 的模型`, [['', pf.prov ? '跟随供应商默认' : '跟随 CLI'], ...specOf(a).models.map((m) => [m, m])], pf.model, (v) => { pf.model = v; });
         /* 档位照原值写（low / medium / high…）；没指定时格子里只写「跟随」，菜单里那一行是「跟随 CLI」 */
-        const level = pick(`${pf.name} 的智能水平`, [['', '跟随 CLI'], ...specOf(a).levels.map((l) => [l, l])], pf.level, (v) => { pf.level = v; level.firstChild.textContent = v || '跟随'; });
+        const level = pickSm(`${pf.name} 的智能水平`, [['', '跟随 CLI'], ...specOf(a).levels.map((l) => [l, l])], pf.level, (v) => { pf.level = v; level.firstChild.textContent = v || '跟随'; });
         if (!pf.level) level.firstChild.textContent = '跟随';
-        const speed = pick(`${pf.name} 的速度`, [['standard', '标准'], ['fast', '1.5x']], pf.speed, (v) => { pf.speed = v; });
+        const speed = pickSm(`${pf.name} 的速度`, [['standard', '标准'], ['fast', '1.5x']], pf.speed, (v) => { pf.speed = v; });
         for (const [col, sel] of [['prov', prov], ['model', model], ['level', level], ['speed', speed]]) sel.setAttribute('data-col', col);
 
         const remove = async () => {

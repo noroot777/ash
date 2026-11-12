@@ -160,9 +160,8 @@
 .qcard { width: min(790px, 100%); margin: 0 auto 12px; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow), var(--surface-shadow); }
 .qcard.is-rising { position: absolute; left: 24px; right: 24px; bottom: 0; z-index: 9; width: min(790px, calc(100% - 48px)); will-change: transform; }
 .qcard > header { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 8px 0 14px; }
-.qcard > header > .i, .q-status { color: var(--cyan); }
+.qcard > header > .i { color: var(--cyan); }
 .qcard > header b { font-weight: var(--w-strong); }
-.q-status { margin-left: auto; font-size: var(--t-xs); }
 .qcard > header .ico .i { transition: transform var(--dur-1) var(--ease-out); }
 .qcard.is-shut > header .ico .i { transform: rotate(180deg); }
 .qcard.is-shut > .q-body, .qcard.is-shut > footer { display: none; }
@@ -176,10 +175,8 @@
 .q-key { display: grid; place-items: center; flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 5px; box-shadow: inset 0 0 0 1px var(--line2); color: var(--muted); font: var(--t-xs)/1 var(--font-mono); }
 .q-key .i { width: 12px; height: 12px; }
 [aria-pressed="true"] > .q-key { background: var(--cyan); box-shadow: none; color: var(--panel); }
-.q-hint { display: block; margin-bottom: 8px; color: var(--muted); font-size: var(--t-xs); }
 .qcard textarea { display: block; width: 100%; min-height: 36px; padding: 8px 10px; border: 0; border-radius: var(--r-md); background: var(--raised); resize: none; line-height: 20px; }
-.qcard > footer { display: flex; align-items: center; gap: 8px; padding: 8px 12px 12px 14px; color: var(--muted); font-size: var(--t-xs); }
-.qcard > footer > span { margin-right: auto; }
+.qcard > footer { display: flex; justify-content: flex-end; padding: 8px 12px 12px 14px; }
 
 @media (max-width: 720px) {
   .feed { padding-inline: 16px; }

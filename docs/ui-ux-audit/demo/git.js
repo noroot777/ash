@@ -234,8 +234,8 @@ hint: Updates were rejected because ${t.remoteAhead ? 'the remote contains work 
     async function askPush(force) {
       if (busy) return;
       if (!T.up) { more('publish'); return; }
-      const yes = await ASH.confirm(force
-        ? { title: '保护强推', ok: '保护强推', danger: true, body: `将本地历史推送到 ${T.up}，前提是远端仍停在你看到的 ${ref(T.up).sha}。远端新增提交时 Git 会拒绝覆盖。` }
+      const yes = await (ASH.gitMore?.ask ?? ASH.confirm)(force
+        ? { title: '保护强推', ok: '保护强推', danger: true, typed: T.branch, body: `将本地历史推送到 ${T.up}，前提是远端仍停在你看到的 ${ref(T.up).sha}。远端新增提交时 Git 会拒绝覆盖。` }
         : { title: '推送当前分支', ok: '推送当前分支', body: `推送 ${T.branch} 已提交的历史。未提交文件不会被推送。` });
       if (yes && alive && !busy) doPush(force);
     }

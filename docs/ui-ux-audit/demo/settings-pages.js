@@ -84,30 +84,14 @@
   };
   ASH.setMore = { head, form2, rich, hints, setHints, notes, fill, check, tag, ibtn, saveKey, wait, script, copyKey };
 
-  /* 一张要滚着看的说明：遮罩加一张宽一点的对话框。Esc、点遮罩、「知道了」都能关，关掉后焦点回到触发处 */
-  let shutSheet = null;
+  /* 一张要滚着看的说明：一张宽一点的对话框，层用全应用那一个（ASH.sheet）。Esc、点遮罩、「知道了」都能关，关掉后焦点回到触发处 */
   function sheet(anchor, title, lead, sections) {
-    const ok = K.btn('知道了', () => shutSheet(), '.pri');
+    const ok = K.btn('知道了', () => close(), '.pri');
     const body = h('div.sv-pg-help', { tabindex: '0', role: 'region', 'aria-label': '配置说明内容' },
       sections.map(([name, ...lines]) => h('section', h('h3', name), lines.map((t) => (t.startsWith('$ ') ? h('pre', t.slice(2)) : h('p', rich(t)))))));
-    const veil = h('div.veil', { onpointerdown: (e) => { if (e.target === veil) shutSheet(); } },
-      h('div.dlg.sv-pg-sheet', { role: 'dialog', 'aria-modal': 'true', 'aria-label': title }, h('h2', title), h('p', lead), body, h('div.dlg-acts', ok)));
-    const key = (e) => {
-      if (e.key === 'Escape') { e.stopPropagation(); shutSheet(); }
-      if (e.key === 'Tab') { e.preventDefault(); (document.activeElement === ok ? body : ok).focus(); }
-    };
-    shutSheet = () => {
-      shutSheet = null;
-      removeEventListener('keydown', key, true);
-      veil.classList.remove('is-in');
-      setTimeout(() => veil.remove(), 130);
-      anchor.setAttribute('aria-expanded', 'false');
-      anchor.focus({ preventScroll: true });
-    };
-    addEventListener('keydown', key, true);
-    document.body.append(veil);
+    const close = ASH.sheet(h('div.dlg.sv-pg-sheet', { role: 'dialog', 'aria-modal': 'true', 'aria-label': title }, h('h2', title), h('p', lead), body, h('div.dlg-acts', ok)),
+      { onclose: () => anchor.setAttribute('aria-expanded', 'false') });
     anchor.setAttribute('aria-expanded', 'true');
-    requestAnimationFrame(() => veil.classList.add('is-in'));
     ok.focus();
   }
 
@@ -360,7 +344,6 @@
         K.foot('当前远端都是 SSH，配了也不会被用到——SSH 走上面那把私钥。', credClear, credSave)),
       K.sec('危险操作'), K.card(K.row('删除项目', '删除项目记录，以及它下面的任务、分组和运行记录；不会删除仓库目录。',
         K.btn('删除项目', () => ASH.confirm({ title: '删除项目', body: `确定删除“${name.value.trim() || ASH.data.project}”？项目下的任务、分组和运行记录会一并删除，仓库目录不会被删除。`, ok: '删除项目', danger: true }), '.danger'))));
-    return () => shutSheet?.();
   };
 
   /* ---------- 分组：一组一行，名字就地改、运行方式下拉即存；最后一行新建。暂停着的组多一行「续跑队列」 ---------- */
@@ -379,7 +362,7 @@
         name.addEventListener('blur', () => { const next = name.value.trim(); if (next) g.name = next; else name.value = g.name; });
         const held = g.tasks.some(([, st]) => st === 'hold');
         return h(`div.sv-pg-group${g === fresh ? '.enter' : ''}`, { role: 'listitem', 'data-group': i },
-          h('div.sv-set-tr', h('div', name), h('div', K.pick(`${g.name} 的运行方式`, MODES, g.mode, (v) => { g.mode = v; })),
+          h('div.sv-set-tr', h('div', name), h('div', K.pickSm(`${g.name} 的运行方式`, MODES, g.mode, (v) => { g.mode = v; })),
             h('div', h('span.sv-pg-cell', `${g.tasks.length} 个任务`)), h('div', g.paused && tag('已暂停', '.warn')),
             h('div.sv-set-end', K.btn(g.paused ? '继续' : '运行', () => { g.paused = false; turn(g, 'hold', 'run'); draw(null, `[data-group="${i}"] .pri`); }, '.pri.sm', 'play'),
               !g.paused && K.btn('暂停', () => { g.paused = true; turn(g, 'run', 'hold'); draw(null, `[data-group="${i}"] .pri`); }, '.sm', 'pgPause'),
@@ -409,7 +392,7 @@
     fresh.addEventListener('keydown', (e) => { if (e.key === 'Enter') create(); });
     draw();
     page.append(head('分组', '把同类任务装进并行或串行容器，并在这里运行或暂停整组。'), K.sec('项目分组'),
-      h('div.card.sv-pg-groups', h('div.sv-set-tbl', list, h('div.sv-set-tr.sv-pg-new', h('div', fresh), h('div', K.pick('新分组的运行方式', MODES, mode, (v) => { mode = v; })), h('div'), h('div'), h('div.sv-set-end', add)))),
+      h('div.card.sv-pg-groups', h('div.sv-set-tbl', list, h('div.sv-set-tr.sv-pg-new', h('div', fresh), h('div', K.pickSm('新分组的运行方式', MODES, mode, (v) => { mode = v; })), h('div'), h('div'), h('div.sv-set-end', add)))),
       h('p.sv-set-tail', '运行分组会按服务端现有调度语义处理队列、暂停点和失败重试。'));
   };
 

@@ -105,7 +105,7 @@
     area.addEventListener('input', () => { area.style.height = 'auto'; area.style.height = `${area.scrollHeight}px`; });
     return () => { area.value = ''; area.style.height = ''; };
   };
-  const big = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : ASH.num(n));   // 用量：28.36M，和现在一样留两位
+  const big = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : ASH.num(n));   // 用量：21.40M，和现在一样留两位
   const clock = ASH.clock;
   I.kit = { sec, pair, showRows, kv, go, none, reenter, fold, leave, tool, copyBtn, grow, big, clock };
   const { branch, dir, session } = ASH.data.cur;

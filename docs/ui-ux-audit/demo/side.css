@@ -77,14 +77,14 @@
 .side-row:hover > .side-row-main, .side-row.is-on > .side-row-main { color: var(--ink); }
 .side-row-lead { display: grid; place-items: center; width: 22px; height: 100%; flex: none; }
 .side-row-title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; --clear: var(--shift); -webkit-mask-image: linear-gradient(90deg, black calc(100% - 18px - var(--clear)), transparent calc(100% - var(--clear))); mask-image: linear-gradient(90deg, black calc(100% - 18px - var(--clear)), transparent calc(100% - var(--clear))); }
-/* 「谁建的」徽记站在标题后面、占着位置，行尾的东西压不到标题，标题不用让 */
-.side-row.has-from .side-row-title { --clear: 0px; }
-.side-row-from { display: inline-flex; align-items: center; gap: 3px; flex: none; margin-left: 6px; padding: 1px 5px; border-radius: var(--r-sm); background: color-mix(in oklab, var(--accent) 10%, transparent); color: var(--accent); font-size: var(--t-xs); white-space: nowrap; opacity: calc(1 - var(--busy)); transition: opacity var(--dur-1) var(--ease-out); }
+/* 「谁建的」徽记站在标题后面。行尾被别的东西占了（那句短话、星标、指着时浮出来的键）它就让出来——是从排版里拿掉，不是只变透明，标题因此拿到整行剩下的宽度 */
+.side-row-from { display: inline-flex; align-items: center; gap: 3px; flex: none; margin-left: 6px; padding: 1px 5px; border-radius: var(--r-sm); background: color-mix(in oklab, var(--accent) 10%, transparent); color: var(--accent); font-size: var(--t-xs); white-space: nowrap; }
+.side-row:is(:hover, :focus-within, .is-on, .is-starred, .has-why) .side-row-from { display: none; }
 .side-row-from > .i { width: 12px; height: 12px; }
-/* 行尾那句短话（等什么）：行尾被占时往左让出那一格，不重排 */
-.side-row-end { display: flex; flex: 0 1 auto; min-width: 0; max-width: 50%; padding-left: 10px; transform: translateX(calc(var(--shift) * -1)); transition: transform var(--dur-1) var(--ease-out); }
+/* 行尾那个短词（等什么）：定长、不截，标题让它；行尾被占时往左让出那一格，不重排 */
+.side-row-end { display: flex; flex: none; padding-left: 10px; transform: translateX(calc(var(--shift) * -1)); transition: transform var(--dur-1) var(--ease-out); }
 .side-row-end:empty { display: none; }
-.side-row-why { color: var(--muted); font-size: var(--t-xs); }
+.side-row-why { color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
 .side-row-star, .side-row-src, .side-row-kind { position: absolute; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--faint); transition: opacity var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
 .side-row-star { top: 5px; right: 3px; width: 22px; height: 24px; opacity: var(--busy); }
 .side-row-src, .side-row-kind { top: 7px; right: 27px; width: 20px; height: 20px; opacity: var(--live); }
@@ -122,7 +122,7 @@
 /* ---------- 底部一行：连接灯、F、助手、收起。四样和次序照现在的，字是 12px、次级文字色 ---------- */
 .side-foot { display: flex; align-items: center; justify-content: space-between; flex: none; padding: 5px 0 2px; border-top: 1px solid var(--line); }
 .side-conn { display: grid; place-items: center; width: 20px; height: 28px; flex: none; border-radius: var(--r-sm); outline-offset: -2px; }
-.side-foot > a, .side-foot > button { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 5px; border-radius: var(--r-sm); outline-offset: -2px; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.side-foot > a, .side-foot > button, .side-hint { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 5px; border-radius: var(--r-sm); outline-offset: -2px; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
 .side-foot .i { width: 14px; height: 14px; }
 .side-foot > a:hover, .side-foot > button:hover { background: var(--hover-bg); color: var(--ink); }
 .side-foot > a:active, .side-foot > button:active { background: var(--sel-bg); }

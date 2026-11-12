@@ -374,17 +374,19 @@
           if (pinned) { stuck = true; feed.scrollTop = feed.scrollHeight; }
         });
       };
-      /* 提问卡，件和话照 QuestionCard.tsx：选项可多选，选了就写进下面的答复框；数字键勾选；回车发送 */
+      /* 提问卡，照 QuestionCard.tsx：选项可多选，选了就写进下面的答复框；数字键勾选；发送键发送。
+         这些不另写一行说明：选项前那颗带数字的小方块就是「按这个键」，点一下它打上勾、字落进答复框就是「可多选、可改」；发送的键名在按钮的提示里 */
       const ask = ({ q, options = [], onanswer, instant }) => {
         unask();
         const input = h('textarea', { rows: '1', placeholder: options.length ? '补充或修改…' : '写下你的答案…', 'aria-label': `答复：${q}`, 'data-m': 'feed-12' });
-        const sendBtn = h('button.btn.pri', { type: 'button', onclick: () => send() }, icon('send'), '发送答复');
+        const sendBtn = h('button.btn.pri', { type: 'button', 'data-tip': '发送答复', onclick: () => send() }, icon('send'), '发送答复');
         const keys = options.map((o, i) => h('span.q-key', { 'aria-hidden': 'true' }, String(i + 1)));
         const opts = options.map((o, i) => h('button', { type: 'button', 'aria-pressed': 'false', onclick: () => toggle(i) }, keys[i], h('span', o)));
         const paint = () => {
           const lines = input.value.split('\n');
           opts.forEach((btn, i) => { const on = lines.includes(options[i]); btn.setAttribute('aria-pressed', String(on)); keys[i].replaceChildren(on ? icon('check') : String(i + 1)); });
           sendBtn.disabled = !input.value.trim();
+          sendBtn.dataset.key = ASH.sendKey.caps().send;
           input.style.height = 'auto';
           input.style.height = `${Math.min(input.scrollHeight, 168)}px`;
           follow();
@@ -400,11 +402,10 @@
           follow();
         } }, icon('caret'));
         const el = h('section.qcard', { 'aria-label': '等待答复的问题', 'data-m': 'run-7' },
-          h('header', icon('help'), h('b', '需要你的答复'), h('span.q-status', '待答复'), fold),
+          h('header', icon('help'), h('b.grow', '需要你的答复'), fold),
           h('div.q-body', h('p.q-title', q),
-            options.length > 0 && h('div.opts', { role: 'group', 'aria-label': `${q}的建议答案` }, opts),
-            options.length > 0 && h('small.q-hint', `可多选，也可编辑下方答案 · 数字键 1–${Math.min(options.length, 9)} 快速勾选`), input),
-          h('footer', h('span', `${ASH.sendKey.caps().send} 发送`), sendBtn));
+            options.length > 0 && h('div.opts', { role: 'group', 'aria-label': `${q}的建议答案，可多选` }, opts), input),
+          h('footer', sendBtn));
         el.addEventListener('keydown', (e) => {
           const n = Number(e.key) - 1;
           if (e.target === input || e.metaKey || e.ctrlKey || e.altKey || !Number.isInteger(n) || n < 0 || n >= options.length) return;
@@ -413,6 +414,7 @@
         });
         card = el;
         sendBtn.disabled = true;
+        sendBtn.dataset.key = ASH.sendKey.caps().send;
         rise(el, instant);
         return el;
       };

@@ -128,7 +128,9 @@
       return [run,
         h('div.sub', {}, h('div', {}, h('b', '干完之后'), h('span', '谁来验、什么时候停下等你、过了要不要合并。')), grow),
         field('起手式', select('起手式', d.preset, FLOWS, (v) => { d.preset = v; redraw('.sel'); })),
-        h(`ol.stops${open ? '.is-open' : ''}`, { 'aria-label': '这条线上的站' }, stops.map((kind, i) => h('li', {}, h('i.num', String(i + 1).padStart(2, '0')), h('b', STOPS[kind]), open && (kind === 'run' ? who() : h('span', stopSay(kind, flow)))))),
+        /* 这条站点线是保留项：产品里点一站能改参数、前后挪、拆掉，站间能加站。样机在设置 › 起手式里画了可编辑的那一条，这里只画了它的样子 */
+        h(`ol.stops${open ? '.is-open' : ''}`, { 'aria-label': '这条线上的站' }, stops.map((kind, i) => h('li', { onclick: (e) => { if (!e.target.closest('.caps')) ASH.todo('在新建面板里改这一站（照现在的，能改参数、挪位置、拆掉）'); } },
+          h('i.num', String(i + 1).padStart(2, '0')), h('b', STOPS[kind]), open && (kind === 'run' ? who() : h('span', stopSay(kind, flow)))))),
         h('p.cost', {}, '顺利走完 ', h('b.num', String(stops.length)), ' 步 · 要你出面 ', h('b.num', String(stops.filter((kind) => kind === 'human').length)), ' 次 · 不顺利最多起 ', h('b.num', String(1 + (stops.includes('verify') ? flow[4] : 0))), ' 次 AI')];
     }
     function draw(fresh) {
@@ -205,7 +207,8 @@
 
   /* ---------- 更多选项：写作参考（现状的「任务示例」）搬到这里 ---------- */
   function more(d, mode, api) {
-    return [head('更多选项', api), h('h3.sec', '写作参考'), help('选一个起点，接着写。已有正文会保留。'),
+    /* 「更多」里眼下只有这一样：浮层只留一层抬头，直接叫它的名字；以后有第二样再分节 */
+    return [head('写作参考', api), help('选一个起点，接着写。已有正文会保留。'),
       h('div.starters', { role: 'group', 'aria-label': '任务示例' }, STARTERS.map(([sign, name, say, to, body]) => h('button', { type: 'button', onclick: () => {
         api.close();
         api.insert(body);

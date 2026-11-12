@@ -92,12 +92,12 @@
      const close = ASH.sheet(node, { cls, onclose(value), keep })；close(value) 关掉并把 value 交给 onclose。keep：点里面的东西不抢走焦点（命令面板） */
   const sheets = [];
   const tip = h('div', { id: 'tip', role: 'tooltip' });
-  ASH.sheet = (node, { cls = '', onclose } = {}) => {
+  ASH.sheet = (node, { cls = '', onclose, keep = false } = {}) => {
     ASH.closePop();
     const back = document.activeElement;
     const veil = h('div.veil', {}, node);
     if (cls) veil.classList.add(...cls.split(' '));
-    const entry = { veil };
+    const entry = { veil, keep };
     const close = (value) => {
       const at = sheets.indexOf(entry);
       if (at < 0) return;
@@ -108,7 +108,7 @@
       onclose?.(value);
     };
     entry.close = close;
-    veil.addEventListener('pointerdown', (e) => { if (e.target === veil) close(); });
+    veil.addEventListener('pointerdown', (e) => { if (e.target === veil) close(); else if (keep && !e.target.matches('input, textarea')) e.preventDefault(); });
     sheets.push(entry);
     if (tip.isConnected) tip.before(veil); else document.body.append(veil);   /* 垫在提示底下：层里的提示才盖得住遮罩 */
     requestAnimationFrame(() => veil.classList.add('is-in'));
@@ -120,6 +120,7 @@
     if (!top || open) return;
     if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); top.close(); return; }
     if (e.key !== 'Tab') return;
+    if (top.keep) { e.preventDefault(); return; }
     const all = $$('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), a[href], [tabindex="0"]', top.veil).filter((el) => el.offsetParent);
     if (!all.length) return;
     e.preventDefault();

@@ -2,7 +2,8 @@
    顶行（项目菜单、分支、常用命令）、工具行（聊天、圆点筛选、搜索、随手记、分组管理、新建任务）、任务树（置顶 / 任务 / 其他机器 / 其他项目）、底部一行。
    和现状不一样的只有清单里的四条：side-1 行首记号、side-2 行首与顶上圆点查同一张表、side-3「其他机器」排到「任务」后面并默认折起、side-4 底部一行的字号字色。
    对外：ASH.parts.side = { setStatus(id, status, why), setFilter(key), setPinned(id, on), setFar(open), refresh(), search() }；
-   听 task:status、route；发 task:open { id }、task:pin { id, pinned }。 */
+   听 task:status、route；发 task:open { id }（点的不是当前这条任务时）、task:pin { id, pinned }。
+   样机没画下去的去处（常用命令、随手记、任务模式、F 铺开的宽列表……）界面上照产品原样写，点了只在样机自己那条栏里说一句（ASH.todo）。 */
 (() => {
   const { h, $, $$, icon } = ASH;
   const EASE_OUT = 'cubic-bezier(0.22, 1, 0.36, 1)';
@@ -26,20 +27,22 @@
     running: { dot: 'run', bucket: 'run', say: '运行中' },
     queued: { dot: 'queue', bucket: 'wait', say: '排队中' },              /* 排在队里、还没轮到 */
     stopped: { dot: '', bucket: 'done', say: '' },                        /* 停掉的归「已收尾」，行首空着 */
+    backlog: { dot: '', bucket: 'wait', say: '' },                        /* 待排期：还没排进队，归「排着 / 暂停」 */
     fresh: { dot: 'new', bucket: 'accepted', say: '已完成，有未读动态' },  /* 验收过、还没看：点开就熄 */
     done: { dot: '', bucket: 'accepted', say: '' },                       /* 验收过、看过：行首空着 */
   };
   /* ⌘K 里任务下面那行小字用的状态词（照 shared 的 TASK_STATUS_LABELS；挂着提问的叫「等答复」） */
-  const WORD = { running: '运行中', queued: '排队中', waiting: '等答复', failed: '失败', stopped: '已取消', done: '完成' };
+  const WORD = { running: '运行中', queued: '排队中', waiting: '等答复', failed: '失败', stopped: '已取消', backlog: '待排期', done: '完成' };
   /* 表里没有的状态不猜成「完成」：行首空着，提示里把原词报出来，归「排着 / 暂停」（现在也是哪一档都不算就落这里），控制台记一笔 */
   const odd = {};
   const lookOf = (task) => {
     if (task.status === 'done') return task.accepted === false ? LOOK.open : task.read === false ? LOOK.fresh : LOOK.done;
-    if (['waiting', 'failed', 'running', 'queued', 'stopped'].includes(task.status)) return LOOK[task.status];
+    if (task.status === 'stopped' && task.accepted) return LOOK.done;   /* 停掉的也能验收：验收了就归「验收完成」。失败的验收了还是红的，照旧等你处理 */
+    if (['waiting', 'failed', 'running', 'queued', 'stopped', 'backlog'].includes(task.status)) return LOOK[task.status];
     if (!odd[task.status]) { console.warn(`[side] 状态表里没有「${task.status}」`); odd[task.status] = { dot: '', bucket: 'wait', say: `状态：${task.status}` }; }
     return odd[task.status];
   };
-  const sigOf = (task) => `${task.status}|${task.accepted}|${task.read}|${task.why ?? ''}`;
+  const sigOf = (task) => `${task.status}|${task.accepted}|${task.read}|${task.why ?? ''}|${task.detail ?? ''}`;
   const mark = (look) => h(`span.dot${look.dot ? `.${look.dot}` : ''}`, look.say ? { role: 'img', 'aria-label': look.say } : {});
 
   /* 顶上那一排（保留项）：一颗星加五颗点，名字、颜色、次序跟现在一样 */
@@ -66,9 +69,8 @@
   ];
   const TASK_MODE = ['任务模式', '所有项目里在跑、失败、等你答复和待验收的任务'];
   const SOURCE = { 't-cur': 't-rev', 't-fail': 't-run' }; /* 智能体派生的那两条各自来自哪条任务（编的） */
-  const NO_DETAIL = '打开这条任务（样机里没做）'; /* 样机只画了当前这一条任务的详情 */
   const pathOf = (name) => `~/code/${name}`;
-  /* ⌘K 命令面板里固定的几组：组名、条目、键位照现在的（web/src/overlays/CommandPalette.tsx）。[组, 名字, 图标, 键位, 去哪, 副题]；去哪空着 = 样机里没做 */
+  /* ⌘K 命令面板里固定的几组：组名、条目、键位照现在的（web/src/overlays/CommandPalette.tsx）。[组, 名字, 图标, 键位, 去哪, 副题]；去哪空着 = 样机没画这一步 */
   const COMMANDS = [
     ['新建', '新建任务', 'plus', 'C', '#/new'],
     ['新建', '新建讨论 · 给你答案', 'chat'],
@@ -87,15 +89,7 @@
     if (node.scrollWidth > node.clientWidth + 1) node.dataset.tip = node.textContent;
     else delete node.dataset.tip;
   });
-  /* 点了一样样机里没做的东西：把它那句提示当场亮出来（平时要指着等一会儿才出）。text 是临时的一句，指针挪开就摘掉 */
-  const say = (node, text) => {
-    if (text) {
-      node.dataset.tip = text;
-      for (const evt of ['pointerleave', 'blur']) node.addEventListener(evt, () => delete node.dataset.tip, { once: true });
-    }
-    node.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
-  };
-  const nudge = (e) => { const node = e.target.closest?.('[data-tip*="样机里"]'); if (node) say(node); };
+  const todo = (what) => () => ASH.todo(what);
 
   ASH.part('side', {
     mount(el) {
@@ -110,7 +104,6 @@
       let onTask = false;
       let seq = 0;
       let goAt = null; /* 上一次按 G 的时刻（没按过是 null）：G S / G C / G T 是两键连打，中间最多隔一秒 */
-      let followSystem = false; /* 项目菜单里选过「跟随系统」才为真；样机栏那颗「深色」只有两档 */
 
       /* 样机数据里没有星标，给一条让那颗星有东西可筛 */
       if (!tasks.some((task) => task.starred)) { const seed = byId('t-d3'); if (seed) seed.starred = true; }
@@ -118,9 +111,9 @@
       /* ---------- 顶行：项目（点开是项目菜单）、分支、常用命令 ---------- */
       const avatar = (who = name, cls = '') => h(`i.side-ava${cls}`, { 'aria-hidden': 'true', 'data-tone': OTHERS.find((p) => p.name === who)?.tone }, who[0].toUpperCase());
       const proj = h('button.side-proj', { type: 'button', 'aria-haspopup': 'menu', onclick: () => openProject() }, avatar(), h('span.cut', name), icon('caret', 'sm'));
-      const cmdBtn = h('button.ico', { type: 'button', 'aria-label': '常用命令（G C）', 'aria-haspopup': 'dialog', 'data-tip': '常用命令（样机里没做）', 'data-key': 'G C' }, icon('play', 'fill'));
+      const cmdBtn = h('button.ico', { type: 'button', 'aria-label': '常用命令（G C）', 'aria-haspopup': 'dialog', 'data-tip': '常用命令', 'data-key': 'G C', onclick: todo('常用命令面板') }, icon('play', 'fill'));
       const top = h('div.side-top', {}, proj,
-        h('button.side-branch', { type: 'button', 'aria-label': 'Git：分支 main，点击切换分支或同步', 'aria-haspopup': 'dialog', 'data-tip': '切换分支或同步（样机里没做）' }, icon('branch'), h('span.cut', 'main'), icon('caret', 'sm')),
+        h('button.side-branch', { type: 'button', 'aria-label': 'Git：分支 main，点击切换分支或同步', 'aria-haspopup': 'dialog', 'data-tip': '切换分支或同步', onclick: todo('切换分支的浮层') }, icon('branch'), h('span.cut', 'main'), icon('caret', 'sm')),
         cmdBtn);
 
       /* ---------- 工具行：聊天、圆点筛选、搜索、随手记、分组管理、新建任务（图标和次序照现在的） ---------- */
@@ -134,7 +127,7 @@
       const chatBtn = h('a.ico', { href: '#/chat', 'aria-label': '聊天' }, icon('chat'));
       const searchBtn = h('button.ico', { type: 'button', 'aria-label': '搜索 Cmd K', 'aria-haspopup': 'dialog', 'data-tip': '搜索', 'data-key': '⌘K', onclick: () => openJump() }, icon('search'));
       const tools = h('div.side-tools', { role: 'toolbar', 'aria-label': '任务工具' }, chatBtn, filterEl, searchBtn,
-        h('button.ico', { type: 'button', 'aria-label': '随手记', 'data-tip': '随手记（样机里没做）' }, icon('edit')),
+        h('button.ico', { type: 'button', 'aria-label': '随手记', 'data-tip': '随手记', 'data-key': 'NI', onclick: todo('随手记') }, icon('edit')),
         h('a.ico', { href: '#/settings/groups', 'aria-label': '分组管理', 'data-tip': '分组管理' }, icon('layers')),
         h('a.ico', { href: '#/new', 'aria-label': '新建任务', 'data-tip': '新建任务' }, icon('plus')));
 
@@ -149,27 +142,27 @@
         h('span', '其他机器'), icon('chev', 'sm'), h('span.grow'), h('b', String(farCount)));
       const farBody = h('div.side-far', {}, MACHINES.map((machine) => h('div.side-mach', {},
         h('div.side-mach-head', {}, icon('tower'), h('b.cut', machine.name),
-          h('button.ico.sm', { type: 'button', 'aria-label': `把本项目正在跑的任务接力到 ${machine.name}`, 'data-tip': `把本项目正在跑的任务接力到 ${machine.name}（样机里没做）` }, icon('send'))),
-        machine.tasks.map((title) => h('button.side-mach-task', { type: 'button', 'data-tip': '打开那台机器上的任务（样机里没做）' }, h('i', { 'aria-hidden': 'true' }), h('span.cut', title))))));
+          h('button.ico.sm', { type: 'button', 'aria-label': `把本项目正在跑的任务接力到 ${machine.name}`, 'data-tip': `把本项目正在跑的任务接力到 ${machine.name}`, onclick: todo('接力对话框') }, icon('send'))),
+        machine.tasks.map((title) => h('button.side-mach-task', { type: 'button', onclick: () => ASH.emit('task:open', {}) }, h('i', { 'aria-hidden': 'true' }), h('span.cut', title))))));
       /* 其他项目：一个项目一行，默认折着；点开是它的任务，没有就一句「没有任务」 */
       const otherHead = h('div.sec.side-sec', {}, h('h3', '其他项目'));
       const others = OTHERS.map((other) => {
         const head = h('button.side-other', { type: 'button', 'aria-expanded': 'false', onclick: () => { other.open = !other.open; head.setAttribute('aria-expanded', String(other.open)); layout(); } },
           icon('chev', 'sm'), avatar(other.name), h('span.cut', other.name));
         const body = h('div.side-other-tasks', {}, other.tasks.length
-          ? other.tasks.map((title) => h('div.side-row', {}, h('button.side-row-main', { type: 'button', 'data-tip': '打开别的项目里的任务（样机里没做）' }, h('span.side-row-lead', {}, h('span.dot')), h('span.side-row-title.cut', title))))
+          ? other.tasks.map((title) => h('div.side-row', {}, h('button.side-row-main', { type: 'button', onclick: () => ASH.emit('task:open', {}) }, h('span.side-row-lead', {}, h('span.dot')), h('span.side-row-title.cut', title))))
           : h('p', '没有任务'));
         return { other, head, body };
       });
 
       /* 底部一行（side-4）：四样和次序照现在的——连接灯、F、助手、收起；只是字从 10px 上下的三级灰提到 12px 次级色。
-         F 在真实产品里是把侧栏铺开成宽列表，样机没画铺开态：这颗键点了、按了 F 都只出一句提示 */
-      const spreadBtn = h('button', { type: 'button', 'aria-label': '按 F 打开任务列表', 'data-tip': '铺开成宽列表（样机里没画）' }, h('kbd', 'F'), '打开任务列表');
+         「F 打开任务列表」照现在是一句不可点的提示；F 在真实产品里把侧栏铺开成宽列表，那一态样机没画 */
+      const spreadHint = h('span.side-hint', {}, h('kbd', 'F'), '打开任务列表');
       const helper = h('a', { href: '#/assistant', 'aria-label': 'ash 助手', 'data-tip': 'ash 助手' }, icon('assistant'), '助手');
       const foot = h('div.side-foot', { 'data-m': 'side-4' },
         h('span.side-conn', { role: 'status', tabindex: '0', 'aria-label': '实时已连接', 'data-tip': '实时已连接' }, h('span.dot.new')),
-        spreadBtn, helper,
-        h('button', { type: 'button', 'aria-label': '收起侧边栏', 'data-tip': '收起侧栏（样机里没做）' }, icon('sidebar'), '收起'));
+        spreadHint, helper,
+        h('button', { type: 'button', 'aria-label': '收起侧边栏', 'data-tip': '收起侧边栏', 'data-key': '⌘B', onclick: todo('收起侧栏') }, icon('sidebar'), '收起'));
 
       /* ---------- 行：行首记号、标题、「谁建的」徽记、行尾那句短话；行尾浮着星标、来源任务、团队记号（都照现在的 TaskTreeRows.tsx） ---------- */
       function buildRow(task) {
@@ -177,13 +170,13 @@
         const lead = h('span.side-row-lead', {}, dot);
         const title = h('span.side-row-title', task.title);
         const end = h('span.side-row-end');
-        const link = h('a.side-row-main', { href: '#/task', onclick: (e) => { if (!open(task)) { e.preventDefault(); say(link, NO_DETAIL); } } }, lead, title,
+        const link = h('a.side-row-main', { href: '#/task', onclick: (e) => { if (!open(task)) e.preventDefault(); } }, lead, title,
           task.origin && h('span.side-row-from', {}, icon('bot'), task.origin), end);
         const star = h('button.side-row-star', { type: 'button', onclick: () => setStarred(task, !task.starred) }, icon('star'));
         const from = `来自任务：${byId(SOURCE[task.id])?.title ?? ''}`;
         const row = h(`div.side-row${task.origin ? '.has-from' : ''}${task.kind === 'team' ? '.is-team' : ''}`, { 'data-id': task.id }, link,
           task.kind === 'team' && h('span.side-row-kind', { role: 'img', 'aria-label': '团队任务' }, icon('team')),
-          task.origin && h('button.side-row-src', { type: 'button', 'aria-label': from, 'data-tip': `${from}（样机里没做）` }, icon('file')),
+          task.origin && h('button.side-row-src', { type: 'button', 'aria-label': from, 'data-tip': from, onclick: () => ASH.emit('task:open', { id: SOURCE[task.id] }) }, icon('file')),
           star);
         cutTip(title);
         rows.set(task.id, { task, el: row, link, lead, dot, title, end, star, why: null });
@@ -206,10 +199,13 @@
           if (soft && !look.dot) row.dot.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(0.4)' }], { duration: 120, easing: EASE_IN }).onfinish = set;
           else { set(); if (soft) row.dot.animate([{ opacity: 0, transform: 'scale(0.4)' }, { opacity: 1, transform: 'none' }], { duration: 200, easing: EASE_OUT }); }
         }
+        /* 行尾是一个定长的短词（等你答复、等你裁定），不截；多的那半句在提示里 */
         const say = task.why ?? '';
         if (say && row.why) ASH.swap(row.why, say);
-        else if (say) { row.why = h(`span.side-row-why.cut${soft ? '.enter' : ''}`, say); cutTip(row.why); row.end.prepend(row.why); }
+        else if (say) { row.why = h(`span.side-row-why${soft ? '.enter' : ''}`, say); row.end.prepend(row.why); }
         else if (row.why) { row.why.remove(); row.why = null; }
+        if (row.why) { if (task.detail) row.why.dataset.tip = task.detail; else delete row.why.dataset.tip; }
+        row.el.classList.toggle('has-why', Boolean(say));
         const starred = !!task.starred;
         row.el.classList.toggle('is-starred', starred);
         row.star.setAttribute('aria-pressed', String(starred));
@@ -230,8 +226,9 @@
       /* 点开一行 = 读过：验收过、还没看的那颗绿点熄掉。样机只有当前这一条任务的详情：点的是它才返回 true，别的行主区不换 */
       function open(task) {
         if (task.status === 'done' && task.read === false) { task.read = true; paint(task, true); count(); layout(); }
-        ASH.emit('task:open', { id: task.id });
-        return task.id === ASH.data.current;
+        const mine = task.id === ASH.data.current;
+        if (!mine) ASH.emit('task:open', { id: task.id });
+        return mine;
       }
 
       /* ---------- 每颗圆点有几条：和现在一样只写在悬停提示里 ---------- */
@@ -314,8 +311,13 @@
         else if (status === 'done') {
           if (row.status !== 'done') task.read = id === ASH.data.current; /* 正开着的那条算读过 */
           Object.assign(task, { status: 'done', accepted: accepted === true });
-        } else task.status = status;
+        } else {
+          task.status = status;
+          /* 失败、停掉的也能验收（「失败 · 已验收」）；重新跑起来、重新排队就把章摘掉 */
+          if (typeof accepted === 'boolean') task.accepted = accepted; else if (status === 'running' || status === 'queued') task.accepted = false;
+        }
         const say = why ?? (task.status === 'waiting' ? task.why || '等你处理' : '');
+        if (say !== task.why) delete task.detail;
         if (say) task.why = say; else delete task.why;
         if (row.sig === sigOf(task)) return; /* 画着的就是这个样子：同样的状态再来一次不折腾 */
         task.when = '刚刚';
@@ -384,22 +386,11 @@
 
       /* ---------- 项目菜单：内容和次序照现在的——当前项目、设置、深浅色、搜索、「切换到」（任务模式排第一）、新建项目 ---------- */
       function openProject() {
-        const root = document.documentElement;
-        const dark = () => root.dataset.theme === 'dark';
-        const sysDark = () => matchMedia('(prefers-color-scheme: dark)').matches;
+        /* 深浅色和样机栏那颗「深色」、设置页那颗分段是同一份偏好（ASH.theme）；选完不收起菜单（现在也不收） */
         const themes = [['system', '跟随系统', 'monitor'], ['light', '浅色', 'sun'], ['dark', '深色', 'moon']].map(([value, label, glyph]) =>
-          h('button', { type: 'button', 'data-v': value, onclick: () => pickTheme(value) }, icon(glyph), label));
-        const paintTheme = () => {
-          const now = followSystem && dark() === sysDark() ? 'system' : dark() ? 'dark' : 'light';
-          for (const btn of themes) btn.setAttribute('aria-pressed', String(btn.dataset.v === now));
-        };
-        /* 和样机栏那颗「深色」是同一个开关；选完不收起菜单（现在也不收） */
-        function pickTheme(value) {
-          const want = value === 'system' ? sysDark() : value === 'dark';
-          followSystem = value === 'system';
-          if (dark() !== want) { const btn = $('#themeBtn'); if (btn) btn.click(); else root.dataset.theme = want ? 'dark' : 'light'; }
-          paintTheme();
-        }
+          h('button', { type: 'button', 'data-v': value, onclick: () => ASH.theme.set(value) }, icon(glyph), label));
+        const paintTheme = () => { for (const btn of themes) btn.setAttribute('aria-pressed', String(btn.dataset.v === ASH.theme.pref)); };
+        const offTheme = ASH.on('theme:change', paintTheme);
         const input = h('input', { type: 'text', placeholder: '搜索项目…', 'aria-label': '搜索项目', autocomplete: 'off', spellcheck: 'false' });
         const list = h('div.menu.side-pm-list');
         const option = (lead, title, sub, tail, attrs) => h('button', { type: 'button', role: 'menuitemradio', ...attrs }, lead, h('span.side-pm-2', {}, h('b.cut', title), h('small.cut', sub)), tail);
@@ -407,9 +398,9 @@
           const q = input.value.trim().toLowerCase();
           const hit = (who) => !q || who.toLowerCase().includes(q) || pathOf(who).includes(q);
           const found = [
-            (!q || TASK_MODE[0].includes(q) || 'tasks'.startsWith(q)) && option(h('i.side-ava.is-mode', { 'aria-hidden': 'true' }, icon('checks')), ...TASK_MODE, h('kbd', 'G T'), { 'aria-checked': 'false', 'data-tip': '任务模式（样机里没做）' }),
+            (!q || TASK_MODE[0].includes(q) || 'tasks'.startsWith(q)) && option(h('i.side-ava.is-mode', { 'aria-hidden': 'true' }, icon('checks')), ...TASK_MODE, h('kbd', 'G T'), { 'aria-checked': 'false', onclick: todo('任务模式') }),
             hit(name) && option(avatar(), name, pathOf(name), icon('check'), { 'aria-checked': 'true', onclick: () => { ASH.closePop(); proj.focus({ preventScroll: true }); } }),
-            ...OTHERS.filter((other) => hit(other.name)).map((other) => option(avatar(other.name), other.name, pathOf(other.name), null, { 'aria-checked': 'false', 'data-tip': '切换项目（样机里没做）' })),
+            ...OTHERS.filter((other) => hit(other.name)).map((other) => option(avatar(other.name), other.name, pathOf(other.name), null, { 'aria-checked': 'false', onclick: todo('切换项目') })),
           ].filter(Boolean);
           list.replaceChildren(h('small', '切换到'), ...(found.length ? found : [h('p.none', '没有匹配的项目')]));
         };
@@ -422,12 +413,11 @@
           h('div.seg.side-pm-theme', { role: 'group', 'aria-label': '配色' }, themes),
           h('label.side-pm-find', {}, icon('search'), input),
           list,
-          h('div.menu.side-pm-new', {}, h('button', { type: 'button', role: 'menuitem', 'data-tip': '新建项目（样机里没做）' }, icon('folderPlus'), h('span', '新建项目'))),
-        ], { cls: 'side-pm' });
-        if (!close) return;
+          h('div.menu.side-pm-new', {}, h('button', { type: 'button', role: 'menuitem', onclick: todo('新建项目') }, icon('folderPlus'), h('span', '新建项目'))),
+        ], { cls: 'side-pm', onclose: offTheme });
+        if (!close) { offTheme(); return; }
         close.el.setAttribute('role', 'menu');
         close.el.setAttribute('aria-label', '项目切换');
-        close.el.addEventListener('click', nudge);
         input.addEventListener('input', draw);
         close.el.addEventListener('keydown', (e) => {
           if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
@@ -438,7 +428,7 @@
         input.focus();
       }
 
-      /* ---------- 键盘：F / \ 是铺开（样机没画，只把焦点放到底部那颗键上让提示出来）、C 新建、G 加字母、⌘K；焦点在行上时 J / K / 上下键挪一格 ---------- */
+      /* ---------- 键盘：F / \ 是铺开（样机没画这一态）、C 新建、G 加字母、⌘K；焦点在行上时 J / K / 上下键挪一格 ---------- */
       tree.addEventListener('keydown', (e) => {
         const step = { ArrowDown: 1, j: 1, J: 1, ArrowUp: -1, k: -1, K: -1 }[e.key];
         if (!step || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -448,7 +438,7 @@
         e.preventDefault();
         all[Math.max(0, Math.min(at + step, all.length - 1))].focus();
       });
-      const GO = { s: () => ASH.go('#/settings/agents'), c: () => cmdBtn.focus(), t: () => {}, z: () => {} }; /* 任务模式、终端抽屉样机里没做，键照样吃掉 */
+      const GO = { s: () => ASH.go('#/settings/agents'), c: todo('常用命令面板'), t: todo('任务模式'), z: todo('终端抽屉') };
       addEventListener('keydown', (e) => {
         if (e.defaultPrevented || e.repeat || e.isComposing) return;
         const mod = e.metaKey || e.ctrlKey;
@@ -459,7 +449,7 @@
         if (mod || e.altKey || typing(e.target) || $('.pop, .veil') || !el.offsetParent) return;
         if (chord && GO[key]) { e.preventDefault(); GO[key](); }
         else if (key === 'g') goAt = performance.now();
-        else if (key === 'f' || key === '\\') { e.preventDefault(); spreadBtn.focus(); }
+        else if (key === 'f' || key === '\\') { e.preventDefault(); ASH.todo('F 铺开的宽列表'); }
         else if (key === 'c') { e.preventDefault(); ASH.go('#/new'); }
       });
 
@@ -468,13 +458,11 @@
       let shutJump = null;
       function openJump() {
         if (shutJump) { shutJump(); return; }
-        ASH.closePop();
-        const from = document.activeElement;
         const input = h('input', { type: 'text', placeholder: '搜索任务、随手记，或输入 / 命令', 'aria-label': '命令面板', autocomplete: 'off', spellcheck: 'false' });
         const list = h('div.menu', { role: 'listbox', 'aria-label': '命令和任务' });
-        const veil = h('div.veil.side-jump-veil', {}, h('div.side-jump', { role: 'dialog', 'aria-modal': 'true', 'aria-label': '命令面板' },
+        const panel = h('div.side-jump', { role: 'dialog', 'aria-modal': 'true', 'aria-label': '命令面板' },
           h('label.side-jump-in', {}, icon('search'), input, h('kbd', '⌘K')), list,
-          h('div.side-jump-foot', {}, h('span', '↑↓ 选择'), h('span', '↵ 执行'), h('span', 'esc 关闭'))));
+          h('div.side-jump-foot', {}, h('span', '↑↓ 选择'), h('span', '↵ 执行'), h('span', 'esc 关闭')));
         let active = 0;
         const options = () => $$('button', list);
         const light = () => options().forEach((btn, i) => {
@@ -482,19 +470,14 @@
           btn.setAttribute('aria-selected', String(i === active));
           if (i === active) btn.scrollIntoView({ block: 'nearest' });
         });
-        const shut = (to) => {
-          shutJump = null;
-          veil.classList.remove('is-in');
-          setTimeout(() => veil.remove(), 130);
-          if (to) ASH.go(to);
-          else if (from?.isConnected && from !== document.body) from.focus({ preventScroll: true });
-        };
+        /* 层是全应用那一个（ASH.sheet）：Esc、点遮罩、焦点回原处归它管；keep = 点条目不抢输入框的焦点、Tab 不走 */
+        const close = ASH.sheet(panel, { cls: 'side-jump-veil', keep: true, onclose: () => { shutJump = null; } });
+        const shut = (to) => { close(); if (to) ASH.go(to); };
         /* 一条两行：名字在上、去处或状态在下；右边是键位，高亮那一行多一个回车记号 */
-        const option = (lead, label, detail, keys, to) => h('button', { type: 'button', role: 'option', tabindex: '-1', 'data-tip': to ? null : `${label}（样机里没做）`, onclick: () => shut(to) },
+        const option = (lead, label, detail, keys, to) => h('button', { type: 'button', role: 'option', tabindex: '-1', onclick: () => { shut(to); if (to === '') ASH.todo(label); } },
           lead, h('span.side-pm-2', {}, h('b.cut', label), detail && h('small.cut', detail)), keys && h('kbd', keys), h('em', { 'aria-hidden': 'true' }, '↵'));
         const taskRow = (task) => {
-          const row = option(h('span.side-row-lead', {}, mark(lookOf(task))), task.title, `${name} · ${WORD[task.status]}`, '', task.id === ASH.data.current && '#/task');
-          if (task.id !== ASH.data.current) row.dataset.tip = NO_DETAIL;
+          const row = option(h('span.side-row-lead', {}, mark(lookOf(task))), task.title, `${name} · ${WORD[task.status] ?? task.status}`, '', task.id === ASH.data.current ? '#/task' : null);
           row.addEventListener('click', () => open(task));
           return row;
         };
@@ -519,7 +502,7 @@
           else add('进行中', tasks.filter((task) => ['running', 'queued', 'waiting'].includes(task.status)).slice(0, 6).map(taskRow));
           const all = [...current(), ...COMMANDS, ...[name, ...OTHERS.map((other) => other.name)].map((who) => ['切换项目', who, 'folder', '', '', pathOf(who)])]
             .filter(([group, label, , keys, , detail]) => !q || `${label} ${detail ?? ''} ${group} ${keys ?? ''}`.toLowerCase().includes(q));
-          for (const group of new Set(all.map((item) => item[0]))) add(group, all.filter((item) => item[0] === group).map(([, label, glyph, keys, to, detail]) => option(icon(glyph), label, detail, keys, to)));
+          for (const group of new Set(all.map((item) => item[0]))) add(group, all.filter((item) => item[0] === group).map(([, label, glyph, keys, to, detail]) => option(icon(glyph), label, detail, keys, to || '')));
           list.replaceChildren(...(kids.length ? kids : [h('p.none', '没有匹配的命令、任务或随手记')]));
           active = 0;
           light();
@@ -529,13 +512,8 @@
           const n = options().length;
           if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && n) { e.preventDefault(); active = (active + (e.key === 'ArrowDown' ? 1 : n - 1)) % n; light(); }
           else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); options()[active]?.click(); }
-          else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); shut(); }
-          else if (e.key === 'Tab') e.preventDefault();
         });
-        veil.addEventListener('pointerdown', (e) => { if (e.target === veil) shut(); else if (e.target !== input) e.preventDefault(); /* 点条目不抢输入框的焦点 */ });
         draw();
-        document.body.insertBefore(veil, $('#tip')); /* 垫在提示底下：条目上的提示才盖得住遮罩 */
-        requestAnimationFrame(() => veil.classList.add('is-in'));
         input.focus();
         shutJump = shut;
       }
@@ -549,10 +527,8 @@
 
       ASH.on('task:status', ({ id, status, why, accepted } = {}) => apply(id, status, why, accepted));
       ASH.on('task:title', ({ id, title } = {}) => { const row = rows.get(id); if (row && title) row.title.textContent = title; }); /* 任务头上改了名 */
-      el.addEventListener('click', nudge);
       ASH.on('route', (route) => {
         onTask = route.name === 'task';
-        shutJump?.();
         select();
         for (const [link, where] of [[chatBtn, 'chat'], [helper, 'assistant']]) { if (route.name === where) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current'); }
       });

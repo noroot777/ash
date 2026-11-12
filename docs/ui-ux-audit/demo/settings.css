@@ -90,13 +90,10 @@
 .sv-set-tr .field { width: 100%; height: 24px; padding: 0 8px; border-radius: var(--r-sm); }
 .sv-set-end { justify-content: flex-end; gap: 4px; text-align: right; }
 
-/* Select 的紧凑档（清单 set-2）：表格行和键值行里。没有框，指到或点开才出底。表单里的那一档就是 base 的 .sel，和输入框同高同框 */
-.sv-set-tr .sel, .sv-set .kv .sel { min-width: 0; height: 24px; padding: 0 4px 0 8px; border-radius: var(--r-sm); background: none; box-shadow: none; transition: background var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out); }
-.sv-set-tr .sel { width: 100%; }
-.sv-set-tr .sel:hover, .sv-set-tr .sel[aria-expanded="true"], .sv-set .kv .sel:hover, .sv-set .kv .sel[aria-expanded="true"] { background: var(--hover-bg); }
-/* 键值行里字要和上下几行的值左对齐，所以不缩进；指到时的底往左多铺出 8px */
-.sv-set .kv .sel { padding-left: 0; }
-.sv-set .kv .sel:hover, .sv-set .kv .sel[aria-expanded="true"] { box-shadow: -8px 0 0 var(--hover-bg); }
+/* 表格行里的下拉是公共的紧凑档（base.css 的 .sel.sm，清单 set-2），这里只让它占满这一格、字和列头对齐 */
+.sv-set-tr .sel { width: 100%; padding-left: 8px; }
+/* 行尾那一格（动作）粘在右缘：表格窄到要横向滚动时，「更多」一直够得着，不会被滚到看不见的地方 */
+.sv-set-th > :last-child, .sv-set-tr > :last-child { position: sticky; right: 0; margin-right: -8px; padding-right: 8px; background: var(--panel); }
 
 /* ---------- 执行器页（清单 set-1、set-4）：一种 CLI 一张卡 = 卡头 + 表格 +（claude 才有的）模型目录折叠行 ---------- */
 .sv-set-agent .sv-set-tbl { --cols: minmax(132px, 1.4fr) minmax(112px, 1fr) minmax(128px, 1.1fr) 92px 80px 96px; --min: 680px; }

@@ -120,7 +120,7 @@
   };
 
   /* ---------- 审查者：一套「谁来审」= 名字加一颗三段胶囊 ---------- */
-  const JUDGES = [{ name: '逻辑从严', who: who('codex', 'gpt-5.5', 'xhigh') }, { name: '前端走查', who: who('claude', 'opus-5-5', 'high') }];
+  const JUDGES = ASH.data.judges;   /* 派审对话框里能选的就是这一批 */
   P.reviewers = (page) => {
     const parts = (r) => [`${r.who.agent}@local`, r.who.model ?? '跟随 CLI', r.who.level ?? '跟随 CLI'];
     page.append(M.head('审查者', '保存多套智能体、模型与智能水平组合，供自由工作流按需派审。'), K.sec('已保存的审查者'), roster({
@@ -371,18 +371,17 @@
   const finger = (fp, attrs) => h(attrs ? 'button.sv-pg-finger' : 'span.sv-pg-finger', attrs ?? {}, icon('pgFinger', 'sm'), fp);
 
   P.defaults = (page, ctx) => {
-    const root = document.documentElement;
     const mod = () => /^mod/.test(ASH.data.sendKey ?? '');
-    const sendRow = K.row('按哪一下算发送', null, K.pick('输入框发送键', [['enter', '回车直接发送（Shift + 回车换行）'], ['mod-enter', '⌘ / Ctrl + 回车发送（回车换行）']], mod() ? 'mod-enter' : 'enter', (v) => { ASH.data.sendKey = v; sendSay(); }));
+    const sendRow = K.row('按哪一下算发送', null, K.pick('输入框发送键', [['enter', '回车直接发送（Shift + 回车换行）'], ['mod-enter', '⌘ / Ctrl + 回车发送（回车换行）']], mod() ? 'mod-enter' : 'enter', (v) => { ASH.setSendKey(v); sendSay(); }));
     const sendSay = () => M.setHints(sendRow, '对全站的消息输入框生效：任务回复、新建任务、答复提问、团队插话、群聊、侧聊、ash 助手、讨论关口、派审附言。改完立刻生效，不用刷新页面。',
       mod() ? '当前：⌘ / Ctrl + Enter 发送，Enter 换行' : '当前：Enter 发送，Shift Enter 换行（⌘ / Ctrl + 回车也照旧发送）');
     sendSay();
-    /* 深浅色和样机栏那颗「深色」是同一个开关 */
-    const theme = K.seg('配色', [['system', [icon('monitor', 'sm'), '跟随系统']], ['light', [icon('sun', 'sm'), '浅色']], ['dark', [icon('moon', 'sm'), '深色']]], root.dataset.theme === 'dark' ? 'dark' : 'light', (v) => {
-      const want = v === 'system' ? matchMedia('(prefers-color-scheme: dark)').matches : v === 'dark';
-      if ((root.dataset.theme === 'dark') === want) return;
-      const key = $('#themeBtn');
-      if (key) key.click(); else root.dataset.theme = want ? 'dark' : 'light';
+    /* 深浅色：和样机栏那颗「深色」、侧栏项目菜单里那一排是同一份偏好（ASH.theme），缺省跟随系统；别处改了这里跟着换 */
+    const THEMES = ['system', 'light', 'dark'];
+    const theme = K.seg('配色', [['system', [icon('monitor', 'sm'), '跟随系统']], ['light', [icon('sun', 'sm'), '浅色']], ['dark', [icon('moon', 'sm'), '深色']]], ASH.theme.pref, (v) => ASH.theme.set(v));
+    const offTheme = ASH.on('theme:change', (pref) => {
+      if (!theme.isConnected) { offTheme(); return; }
+      [...theme.children].forEach((b, i) => b.setAttribute('aria-pressed', String(THEMES[i] === pref)));
     });
     theme.classList.add('sv-pg-theme');
 

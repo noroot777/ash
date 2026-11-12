@@ -251,14 +251,14 @@
       for (const r of rows) r.st = src !== 'staged';
       done('部分暂存', `git apply --cached (${rows.length} selected lines)`, src === 'staged' ? '已取消所选改动的暂存' : '已暂存所选改动');
     }
-    /* 丢弃回不去：走统一的确认框（现在还要再手打「丢弃」两个字）。rows 给了就只丢这几行，whole = 这几行是一整块 */
+    /* 丢弃回不去：确认框里要手打「丢弃」两个字才点得动（照现在的）。rows 给了就只丢这几行，whole = 这几行是一整块 */
     async function discard(list, src, rows, whole) {
       if (G.busy) return;
       const title = rows ? (whole ? '丢弃这个改动块' : '丢弃所选改动') : src === 'untracked' ? '删除未跟踪文件' : '丢弃未暂存改动';
       const body = rows
         ? `${list[0].path}：${whole ? '还原这个改动块内的全部改动。' : `逐行撤销勾选的 ${rows.length} 行差异。${GUIDE.unstaged}`}保留其他未暂存改动及暂存区。未提交内容无法从历史备份找回。`
         : `将处理 ${list.length} 个文件：${list.slice(0, 8).map((f) => f.path).join('、')}。${src === 'untracked' ? '文件将从磁盘删除。' : '工作区内容将恢复到暂存区版本。'}这些未提交内容不在 Git 历史里，不能通过撤销找回。`;
-      if (!(await ASH.confirm({ title, ok: title, danger: true, body })) || !G.alive) return;
+      if (!(await (ASH.gitMore?.ask ?? ASH.confirm)({ title, ok: title, danger: true, typed: '丢弃', body })) || !G.alive) return;
       const gone = new Set(rows ?? list.flatMap((f) => f.hunks.flatMap((hk) => hk.rows.filter((r) => isChange(r) && !r.st))));
       for (const f of list) for (const hk of f.hunks) hk.rows = hk.rows.flatMap((r) => (!gone.has(r) ? [r] : r.sign === '+' ? [] : [{ sign: ' ', t: r.t }]));
       prune();
