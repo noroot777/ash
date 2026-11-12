@@ -35,22 +35,13 @@ const task = {
 function Fixture() {
   // 重渲染计数器:泄漏是「每次重渲染多留一张」,所以要能按出任意多次重渲染。
   const [renders, setRenders] = useState(0);
-  // 接力入口在真实任务上会随 queueId / archived 翻面,翻面那一帧走的是另一条比对路径。
-  const [canHandoff, setCanHandoff] = useState(false);
   return (
     <main style={{ padding: 16 }}>
       <button type="button" data-testid="rerender" onClick={() => setRenders((n) => n + 1)}>重渲染</button>
-      <button type="button" data-testid="toggle-handoff" onClick={() => setCanHandoff((v) => !v)}>切接力</button>
       <output data-testid="renders">{renders}</output>
+      {/* 派审 / 预览 / 接力那几颗键 2026-11 挪进了回复框里那一行（reply-3），这条只剩状态。 */}
       <TaskReplyRail
-        task={task}
-        // 自由工作流那组按钮不进这份夹具:它自己要拉一串接口,而被测的事跟它无关。
-        // 它留在 `false` 位上同样提供「前面有一个 false」这个触发条件。
-        freeToolbar={false}
-        canHandoff={canHandoff}
         gateWait={<AcceptGateWaitCard key={task.id} taskId={TASK_ID} expected notify={() => undefined} />}
-        onHandoff={() => undefined}
-        notify={() => undefined}
       />
     </main>
   );

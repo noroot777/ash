@@ -11,7 +11,7 @@ import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
 import "../../src/styles/global.css";
-import { FreeWorkflowToolbar } from "../../src/free-workflow/FreeWorkflowToolbar.tsx";
+import { FreeWorkflowToolbar } from "../../src/free-workflow/useFreeWorkflowActions.tsx";
 
 const reply = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });

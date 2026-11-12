@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type RefObject } from "react";
 import { Image as ImageIcon, PencilSimple, SpinnerGap, UploadSimple } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
@@ -9,8 +9,13 @@ import { exportScreenshot, loadScreenshot } from "./image.ts";
 import { screenshotReplyText, type AnnotationImage, type AnnotationReply, type ScreenshotCandidate, type ScreenshotDraft } from "./model.ts";
 import "./annotation.css";
 
-export function ScreenshotAnnotation({ taskId, candidates, disabled, queueing, executorLabel, onSend, triggerLabel }: {
+export function ScreenshotAnnotation({ taskId, candidates, disabled, queueing, executorLabel, onSend, triggerLabel, open: openProp, onOpenChange, returnFocusRef }: {
   triggerLabel?: string;
+  /** 由外面开关（例如回复框的「更多」菜单）：给了它就不画自己的那颗触发键。 */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** 外面开关时，关上以后焦点回到哪颗键。 */
+  returnFocusRef?: RefObject<HTMLElement | null>;
   taskId: string;
   candidates: ScreenshotCandidate[];
   disabled: boolean;
@@ -19,19 +24,23 @@ export function ScreenshotAnnotation({ taskId, candidates, disabled, queueing, e
   onSend: (reply: AnnotationReply) => Promise<boolean>;
 }) {
   const { screenshot: draft, setScreenshot } = useTaskReplyDraft(taskId);
-  const [open, setOpen] = useState(false);
+  const [ownOpen, setOwnOpen] = useState(false);
+  const controlled = openProp !== undefined;
+  const open = controlled ? openProp : ownOpen;
+  const setOpen = (next: boolean) => { if (controlled) onOpenChange?.(next); else setOwnOpen(next); };
   const [replacing, setReplacing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
+  const ownTrigger = useRef<HTMLButtonElement>(null);
+  const focusTrigger = () => (returnFocusRef ?? ownTrigger).current?.focus();
   const inputRef = useRef<HTMLInputElement>(null);
   const uploaded = useRef<{ draft: ScreenshotDraft; reply: AnnotationReply } | null>(null);
   const close = () => {
     if (inFlight.current) return;
     setOpen(false);
-    triggerRef.current?.focus();
+    focusTrigger();
   };
   const selectImage = async (input: File | ScreenshotCandidate, source: AnnotationImage["source"]) => {
     if (inFlight.current || draft || disabled) return;
@@ -76,7 +85,7 @@ export function ScreenshotAnnotation({ taskId, candidates, disabled, queueing, e
       setScreenshot((current) => current === snapshot ? null : current);
       uploaded.current = null;
       setOpen(false);
-      triggerRef.current?.focus();
+      focusTrigger();
     } catch (reason) {
       setError(`发送失败：${reason instanceof Error ? reason.message : String(reason)}。批注已保留，可重试。`);
     } finally {
@@ -94,9 +103,9 @@ export function ScreenshotAnnotation({ taskId, candidates, disabled, queueing, e
 
   return (
     <>
-      <button className="screenshot-annotation-trigger" ref={triggerRef} type="button" disabled={disabled} onClick={() => setOpen(true)}>
+      {!controlled && <button className="screenshot-annotation-trigger" ref={ownTrigger} type="button" disabled={disabled} onClick={() => setOpen(true)}>
         <PencilSimple size={15} />{triggerLabel ?? (draft ? "继续批注" : "截图批注")}
-      </button>
+      </button>}
       {open && <AnnotationDialog busy={busy} onClose={close} onPaste={(event) => {
         if (draft || busy || disabled) return;
         const file = Array.from(event.clipboardData.items ?? []).find((item) => item.type.startsWith("image/"))?.getAsFile()

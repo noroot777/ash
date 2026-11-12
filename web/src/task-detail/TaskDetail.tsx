@@ -39,6 +39,7 @@ import {
 import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
 import { DerivedTaskLinks } from "../components/DerivedTaskLinks.tsx";
 import { TaskReplyRail } from "./TaskReplyRail.tsx";
+import { useTaskReplyActions } from "./TaskReplyActions.tsx";
 import { FreeReviewDialog } from "../free-workflow/FreeReviewDialog.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { freeReviewRetryIdentity, turnRetryCopy, turnRetryTarget, type TurnRetryTarget } from "./turnRetry.ts";
@@ -145,10 +146,8 @@ export function TaskDetail({
   const handedOut = task.handoff?.direction === "out" && !task.handoff.pending;
   // 选中会话正文后的「添加到对话」：写进这个任务的回复草稿。没有对话框的任务不给这个入口。
   const addToReply = useAddReplyQuote(task.id);
-  // 与 FreeWorkflowToolbar 自己的判据一致:两处都得知道这一条 rail 里到底有没有东西,
-  // 空的时候不能给 ReplyBox 挂 has-top-rail(那会白留一条内边距)。
-  const freeToolbarVisible = task.workflowMode === "free" && task.mode === "single"
-    && !task.parentId && !task.reviewOf;
+  // 回复框那一行左边的动作：再审、打开预览、接力到…（reply-3）。
+  const replyActions = useTaskReplyActions({ task, canHandoff, onHandoff: () => onHandoff?.(task), notify });
 
   // 这一轮由哪个执行器跑,`/` 就补它自己装的技能(ReplyBox 里 @ 召唤别人时列表
   // 不跟着变——那是「本回合换人」,而技能清单按任务常设执行器给,够用且不闪)。
@@ -541,28 +540,25 @@ export function TaskDetail({
                       hasConversation={hasConversation}
                       conversationItems={conversation.items}
                       // 哨兵不住这儿了：等的时候是会话最后那一行（feed-7，见下面传给会话的 footer）。
-                      topRail={freeToolbarVisible || canHandoff || task.acceptGateRunning
-                        ? (
-                          <TaskReplyRail
-                            task={task}
-                            freeToolbar={freeToolbarVisible}
-                            canHandoff={canHandoff}
-                            // 验收前置命令那一条:点了验收之后它在工作区里跑十几分钟,而
-                            // 任务本身 status/stage 一个字都不变 —— 不摆在这儿,主会话页
-                            // 上就完全看不出有东西在跑(时间轴那行很快被顶走)。
-                            gateWait={(
-                              <AcceptGateWaitCard
-                                key={`accept-gate:${task.id}`}
-                                taskId={task.id}
-                                expected={!!task.acceptGateRunning}
-                                notify={notify}
-                              />
-                            )}
-                            onHandoff={() => onHandoff?.(task)}
-                            notify={notify}
-                          />
-                        )
-                        : undefined}
+                      // 框上方只剩状态：验收前置命令那一条。点了验收之后它在工作区里跑十几分钟,
+                      // 而任务本身 status/stage 一个字都不变 —— 不摆在这儿,主会话页上就完全
+                      // 看不出有东西在跑(时间轴那行很快被顶走)。
+                      // 卡自己判要不要出现（它读门禁状态，不只看任务投影），没在跑时这一条是空的、不占地方。
+                      topRail={(
+                        <TaskReplyRail
+                          gateWait={(
+                            <AcceptGateWaitCard
+                              key={`accept-gate:${task.id}`}
+                              taskId={task.id}
+                              expected={!!task.acceptGateRunning}
+                              notify={notify}
+                            />
+                          )}
+                        />
+                      )}
+                      actions={replyActions.actions}
+                      moreItems={replyActions.moreItems}
+                      moreRef={replyActions.moreRef}
                       skills={skills.skills}
                       onStop={() => perform("stop")}
                       onStandingExecutorChange={async (next, label) => {

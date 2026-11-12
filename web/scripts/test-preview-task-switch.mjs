@@ -41,7 +41,8 @@ try {
   await openOnB.click();
   await page.getByRole("button", { name: "启动中·点此取消" }).waitFor();
   // B 正在冷启动，日志入口就是它此刻唯一能看见的东西。
-  await page.getByTestId("preview-log-open").waitFor();
+  // 预览日志在「更多」里（reply-3）：这一页上「更多」里只有它，「更多」在 = 日志入口在。
+  await page.locator(".free-workflow-toolbar .ui-menu-anchor > button").waitFor();
   const afterClick = await page.evaluate(() => window.__calls);
   assert.equal(afterClick.postsB, 1, "在 B 上点「打开预览」没有起 B 的预览");
   assert.equal(afterClick.deletesB, 0, "在 B 上点下去反而给 B 发了停止请求");
@@ -61,7 +62,7 @@ try {
     calls: window.__calls,
     notices: document.querySelector("[data-testid=notices]")?.textContent ?? "",
     label: document.querySelector("button.is-preview")?.textContent ?? "",
-    logEntries: document.querySelectorAll("[data-testid=preview-log-open]").length,
+    logEntries: document.querySelectorAll(".free-workflow-toolbar .ui-menu-anchor > button").length,
   }));
   assert.deepEqual(afterLate.calls.opens, [], "A 的成功回调在 B 的页面上弹开了新标签页");
   assert.equal(afterLate.notices.includes("预览已打开"), false, "A 的成功通知弹到了 B 的页面上");

@@ -2,7 +2,7 @@ import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
 import { FreeWorkflowInspector } from "../../src/free-workflow/FreeWorkflowInspector.tsx";
-import { FreeWorkflowToolbar } from "../../src/free-workflow/FreeWorkflowToolbar.tsx";
+import { FreeWorkflowToolbar } from "../../src/free-workflow/useFreeWorkflowActions.tsx";
 import { FreeReviewDialog } from "../../src/free-workflow/FreeReviewDialog.tsx";
 import type { FreeWorkflowApiState } from "../../src/lib/api.ts";
 import { TaskReviewWorkspace } from "../../src/review/TaskReviewWorkspace.tsx";

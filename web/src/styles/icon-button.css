@@ -35,6 +35,8 @@
   animation: task-menu-in var(--dur-2) var(--ease-out);
 }
 .ui-menu.is-end { right: 0; left: auto; transform-origin: top right; }
+.ui-menu.is-above { top: auto; bottom: calc(100% + 4px); transform-origin: bottom left; }
+.ui-menu.is-above.is-end { transform-origin: bottom right; }
 .ui-menu button {
   display: flex;
   width: 100%;

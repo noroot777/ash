@@ -10,7 +10,7 @@ import { AcceptanceControls } from "../../src/team/TeamReviewWorkspace.tsx";
 import "../../src/styles/global.css";
 
 // 验收前置命令那两处表面的测试舞台：验收台上那张卡，以及主会话页回复框上方那条折叠条
-// （`?wait=1`，摆在一条仿真的 .task-reply-rail 上 —— 它的折叠/展开靠 flex 换行，脱离
+// （`?wait=1`，摆在一条仿真的 .task-reply-rail 上（这条现在只放状态） —— 它的折叠/展开靠 flex 换行，脱离
 // 那条 rail 就验不出真实几何）。两者都自己拉状态、自己判要不要出现，把整个验收台搬进来
 // 只会把真正要验的东西埋在一堆无关请求里。
 const task = (over: Partial<Task>): Task => ({
@@ -77,7 +77,6 @@ function Fixture() {
     return <main style={{ maxWidth: 760, padding: 24, margin: "auto" }}>
       <h1>验收前置命令卡</h1>
       <div className="task-reply-rail">
-        <button type="button" className="task-reply-rail-button">派审查</button>
         {/* expected = 任务投影里那个「此刻有命令在跑」：状态读失败时这条靠它仍然出现。 */}
         {mounted && <AcceptGateWaitCard taskId={taskId} expected={params.get("expected") === "1"} notify={setNotice} />}
       </div>

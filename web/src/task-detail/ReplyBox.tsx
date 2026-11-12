@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { AgentExecutorProfile, AgentType, ScheduledMessage, SkillEntry, Task, TaskListItem } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
 import { parseCliCommand } from "@ash/shared/cli-commands";
-import { X } from "@phosphor-icons/react";
+import { PencilSimple, X } from "@phosphor-icons/react";
+import { IconMenu, type IconMenuItem } from "../components/IconMenu.tsx";
 import { ScheduledMessageTray, useScheduledMessages } from "../components/ScheduledMessages.tsx";
 import { LaterSendKey, useLaterSend } from "../components/LaterSend.tsx";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
@@ -54,6 +55,9 @@ export function ReplyBox({
   skills = EMPTY_SKILLS,
   inlinePanel,
   topRail,
+  actions,
+  moreItems = [],
+  moreRef,
   conversationItems = [],
   tasks = [],
 }: {
@@ -99,13 +103,23 @@ export function ReplyBox({
   // server 会在运行这一回合前注入对应 SKILL.md。
   skills?: SkillEntry[];
   inlinePanel?: ReactNode;
+  /** 框上方只放状态（验收前置命令在跑之类）；没有就不占地方。 */
   topRail?: ReactNode;
+  /** 框里那一行左边、附件后面的动作（再审、打开预览、接力到…）（docs/ui-ux-audit reply-3）。 */
+  actions?: ReactNode;
+  /** 「更多」里除截图批注以外的项（预览日志）。 */
+  moreItems?: IconMenuItem[];
+  /** 「更多」那颗键：它里面开出的对话框关上以后焦点回到这里。 */
+  moreRef?: RefObject<HTMLButtonElement | null>;
   conversationItems?: ConversationItem[];
   /** 「等某任务完成后发送」的候选,以及托盘里报出在等谁。 */
   tasks?: TaskListItem[];
 }) {
   const draft = useTaskReplyDraft(task.id);
   const shellRef = useReplyLayout();
+  const ownMoreRef = useRef<HTMLButtonElement>(null);
+  const moreButton = moreRef ?? ownMoreRef;
+  const [annotating, setAnnotating] = useState(false);
   const value = draft.text;
   const setValue = draft.setText;
   const [sending, setSending] = useState(false);
@@ -474,7 +488,7 @@ export function ReplyBox({
   };
 
   return (
-    <div ref={shellRef} className={`task-reply-shell${topRail ? " has-top-rail" : ""}`}>
+    <div ref={shellRef} className="task-reply-shell">
       {menuOpen && (
         <SlashMenu
           className="task-reply-command-menu"
@@ -602,10 +616,18 @@ export function ReplyBox({
         />
         <div className="task-reply-actions">
           <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending || commandActive} />
-          <ScreenshotAnnotation key={task.id} taskId={task.id}
+          {actions}
+          {/* 截图批注、预览日志用得少，收进「更多」。 */}
+          <IconMenu side="above" buttonRef={moreButton} className="task-reply-more" items={[
+            { label: draft.screenshot ? "继续批注" : "截图批注", icon: <PencilSimple size={15} />,
+              disabled: disabled || sending || uploads.uploading || commandActive, onPick: () => setAnnotating(true) },
+            ...moreItems,
+          ]} />
+          <ScreenshotAnnotation key={task.id} taskId={task.id} open={annotating} onOpenChange={setAnnotating} returnFocusRef={moreButton}
             candidates={screenshotCandidates(conversationItems, [...parseAttachmentText(task.body).paths, ...uploads.attachments.map((attachment) => attachment.path)])}
             disabled={disabled || sending || uploads.uploading || commandActive} queueing={queueing}
             executorLabel={activeExecutorLabel} onSend={(reply) => runSend(reply)} />
+          <span className="task-reply-actions-gap" aria-hidden="true" />
           {/* 一颗三段胶囊：智能体 · 模型 · 智能水平。可单独改任一段，也可选完前一段后
               向右接着配置；跟新建面板、工作流站点用同一组件。
               没在 @ 召唤时改它 = 改任务的常设配置，之后每条消息都按新的跑；正在召唤

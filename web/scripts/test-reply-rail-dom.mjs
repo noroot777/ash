@@ -104,30 +104,6 @@ try {
     `rail 的子节点总数不该随重渲染变化：${first.children} → ${after.children}`,
   );
 
-  // 接力入口翻面:那一帧列表的形状变了(多出/少掉一位),两张卡要跟着挪位而不是各留一份。
-  for (const expectedChildren of [first.children + 1, first.children]) {
-    await page.getByTestId("toggle-handoff").click();
-    await flush();
-    const toggled = await cards();
-    assert.deepEqual(
-      { gate: toggled.gate, children: toggled.children },
-      { gate: 1, children: expectedChildren },
-      `接力入口翻面后 rail 应只有该有的那几个节点，实得 ${JSON.stringify(toggled)}`,
-    );
-  }
-
-  // 翻完再连按重渲染:泄漏最初就是在「前面那一位是 false」这条路径上发生的。
-  for (let round = 0; round < 12; round += 1) {
-    await page.getByTestId("rerender").click();
-  }
-  await flush();
-  const settled = await cards();
-  assert.deepEqual(
-    { gate: settled.gate, children: settled.children },
-    { gate: 1, children: first.children },
-    `翻面后再重渲染仍应各一份，实得 ${JSON.stringify(settled)}`,
-  );
-
   assert.deepEqual(keyWarnings, [], `React 报了重复 key：${keyWarnings.join(" | ")}`);
   assert.deepEqual(errors, [], `页面抛错：${errors.join(" | ")}`);
   console.log("reply rail dom ok");

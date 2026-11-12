@@ -43,7 +43,7 @@ export function PreviewRestartButton({
       const result = await api.restartPreview(task.id, step.id);
       notify(result.url ? `预览已起：${browserPreviewUrl(result.url)}` : `预览已起（端口 ${result.port ?? "未知"}）`);
     } catch (reason) {
-      // 起不来那一句同样是「认出哪几个服务、各自怎么起」的一整份说明（见 FreeWorkflowToolbar
+      // 起不来那一句同样是「认出哪几个服务、各自怎么起」的一整份说明（见 useFreeWorkflowActions
       // 里同一处）——留着，等用户自己收。
       notify(reason instanceof Error ? reason.message : String(reason), { sticky: true });
     } finally {

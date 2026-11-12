@@ -1,14 +1,10 @@
 /* 对话框底部的回复框（含 `/` 命令与 @ 提及菜单），以及 /team、/duet 弹出的派生面板。 */
 .task-reply-shell { position: relative; flex: 0 0 auto; border-top: 0.5px solid var(--line); padding: 10px clamp(14px, 3vw, 34px) 14px; background: var(--canvas); }
-/* 输入框正上方那条 rail：自由工作流按钮 + 接力入口，任务跑着也照常可点。 */
-.task-reply-rail { display: flex; flex-wrap: wrap; align-items: center; gap: 1px; margin: 0 0 2px; }
-.task-reply-rail > .free-workflow-toolbar { margin: 0; }
-.task-reply-rail-button { display: inline-flex; height: 26px; flex: 0 0 auto; align-items: center; gap: 5px; border: 0; border-radius: 7px; background: transparent; padding: 0 8px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: -.01em; transition: background .12s ease, color .12s ease; }
-.task-reply-rail-button svg { flex: 0 0 auto; opacity: .72; }
-.task-reply-rail-button:hover { background: color-mix(in lch, var(--raised) 85%, var(--panel)); color: var(--ink); }
-.task-reply-rail-button:hover svg { opacity: 1; }
-.task-reply-rail-button:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 48%, transparent); outline-offset: 1px; }
-.task-reply-box { position: relative; overflow: hidden; border: 1px solid var(--line2); border-radius: 12px; background: var(--panel); box-shadow: var(--surface-shadow); }
+/* 输入框正上方那条只放状态（验收前置命令在跑）；动作都在框里那一行（reply-3）。 */
+.task-reply-rail { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0 0 6px; }
+.task-reply-rail:empty { display: none; }
+/* 不裁内容：「更多」要从框里往上开。圆角里的水印自己裁（agent-plate.css）。 */
+.task-reply-box { position: relative; border: 1px solid var(--line2); border-radius: 12px; background: var(--panel); box-shadow: var(--surface-shadow); }
 /* 高度有两个来源,但**只有一个写者**(lib/useAutoGrowTextarea.ts):没拖过时跟着输入的行数
    自动撑高(撑到上限就在框内滚),拖过之后照抄顶边拖动条(task-detail/ReplyResizeHandle.tsx)
    定的高度——那条拖动条的上限比自动撑高的上限宽,自动撑高的限度不限制用户拖。
@@ -21,8 +17,22 @@
 .task-reply-resize:hover::after,
 .task-reply-resize:focus-visible::after,
 .task-reply-resizing .task-reply-resize::after { opacity: .65; }
-.task-reply-actions { display: flex; height: 38px; align-items: center; gap: 8px; padding: 0 7px 6px 8px; color: var(--faint); font-size: 9.5px; }
-.task-reply-actions > span { margin-left: auto; }
+/* 框里那一行：附件、再审、打开预览、接力到…、更多在左，胶囊和发送键在右。 */
+.task-reply-actions { container-type: inline-size; display: flex; height: 40px; align-items: center; gap: 2px; padding: 0 7px 6px 6px; color: var(--muted); font-size: var(--t-xs); }
+.task-reply-actions-gap { flex: 1 1 0; min-width: 4px; }
+.task-reply-actions > .run-target-picker, .task-reply-actions > .send-key { margin-left: 6px; }
+.reply-act { position: relative; display: inline-flex; height: 28px; flex: 0 0 auto; align-items: center; gap: 5px; border: 0; border-radius: var(--r-sm); background: transparent; padding: 0 7px; color: var(--muted); font: inherit; font-size: var(--t-xs); font-weight: var(--w-medium); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.reply-act svg { flex: 0 0 auto; }
+.reply-act:hover:not(:disabled) { background: var(--hover-bg); color: var(--ink); }
+.reply-act:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.reply-act:disabled { cursor: not-allowed; opacity: .45; }
+/* 起了几个服务时，服务入口是一条能横着滚的窄条，挤在同一行里。 */
+.task-reply-actions .preview-service-links { flex: 0 1 300px; min-width: 0; margin: 0; padding: 0 4px; }
+/* 窄到放不下时，没在进行的动作先收成图标；正在审、正在起预览、已预约的照样带字。 */
+@container (max-width: 620px) {
+  .reply-act:not(.is-busy, .is-armed, [aria-pressed="true"], .is-repair) > span { display: none; }
+  .reply-act:not(.is-busy, .is-armed, [aria-pressed="true"], .is-repair) { width: 28px; justify-content: center; padding: 0; }
+}
 .task-reply-icon,
 .task-send-button { display: grid; width: 29px; height: 29px; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--muted); }
 .task-reply-icon:hover:not(:disabled) { background: var(--raised); color: var(--ink); }

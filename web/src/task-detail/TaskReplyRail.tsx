@@ -1,49 +1,20 @@
 import { Fragment, type ReactNode } from "react";
-import type { Task } from "@ash/shared";
-import { PaperPlaneTilt } from "@phosphor-icons/react";
-import type { Notify } from "../lib/notify.ts";
-import { FreeWorkflowToolbar } from "../free-workflow/FreeWorkflowToolbar.tsx";
 
-// 输入框正上方那一条快捷操作。共同点是「任务正跑着也得看得见、点得动」：自由工作流的
-// 派审/预览是这样，把整个任务接力到另一台机器也是这样——真要接力时任务多半正卡着，
-// 藏进标题栏的溢出菜单里等于要用户先猜它在哪儿（接力对话框自己会先把任务停下来）。
-export function TaskReplyRail({
-  task,
-  freeToolbar,
-  canHandoff,
-  gateWait,
-  onHandoff,
-  notify,
-}: {
-  task: Task;
-  /** 这个任务吃自由工作流那组按钮吗（判据与 FreeWorkflowToolbar 自己的一致）。 */
-  freeToolbar: boolean;
-  /** 接力入口给不给：单飞、没归档、不在队列里、没接力出去(或还悬着)。 */
-  canHandoff: boolean;
+// 输入框正上方那一条：只放状态（docs/ui-ux-audit reply-3）。动作都挪进了框里那一行
+// （TaskReplyActions.tsx），排着的消息、在传的附件由回复框自己摆。
+export function TaskReplyRail({ gateWait }: {
   /**
    * 验收前置命令那一条（折叠态；`AcceptGateWaitCard` 自己判要不要出现）。哨兵那一条原来
    * 和它并排住在这里，现在挪进了会话最后（feed-7，monitors/MonitorWaitLine.tsx）。
    */
   gateWait?: ReactNode;
-  onHandoff: () => void;
-  notify: Notify;
 }) {
-  const returning = task.handoff?.direction === "in"
-    || (task.handoff?.direction === "out" && task.handoff.pending
-      && Object.prototype.hasOwnProperty.call(task.handoff, "returnTransferId"));
   return (
     <div className="task-reply-rail">
-      {freeToolbar && <FreeWorkflowToolbar task={task} notify={notify} />}
-      {canHandoff && (
-        <button type="button" className="task-reply-rail-button" onClick={onHandoff}>
-          <PaperPlaneTilt size={13} />
-          <span>{returning ? "移回..." : "接力到..."}</span>
-        </button>
-      )}
       {/* 插槽关进一个带 key 的 Fragment 里，**这一层不是装饰**（当年这里有两个插槽）。
           它们是同一条 children 列表里的兄弟，而 key 由调用方给：TaskDetail 给两张卡的都是
           `task.id`，于是列表里出现了两个同 key 的兄弟。只要这条列表前面还有一个 `false`
-          （`canHandoff` 为假时那颗接力按钮就是 —— 在队列里的任务恒为假），React 就会从逐位
+          （当年 `canHandoff` 为假时那颗接力按钮就是 —— 在队列里的任务恒为假），React 就会从逐位
           比对退到按 key 查表那条路；查表那张图同 key 的后者覆盖前者，于是 `monitorWait`
           匹配到 `gateWait` 的 fiber、类型不符只好新挂一份，而**旧的那份没被登记成删除**
           —— 它的 DOM 节点就永远留在这条 rail 上。每次重渲染留一张，长开的页面上几十张

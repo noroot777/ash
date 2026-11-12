@@ -1,10 +1,11 @@
 import { setReopenDismissed } from "../preview-workspace/reopenPreference.ts";
 import { browserPreviewUrl } from "../lib/previewUrl.ts";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { Task } from "@ash/shared";
 import { MagnifyingGlass, MonitorPlay, SpinnerGap, StopCircle, Terminal } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import type { Notify } from "../lib/notify.ts";
+import { IconMenu, type IconMenuItem } from "../components/IconMenu.tsx";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
 import { FreeReviewProgress } from "./FreeReviewProgress.tsx";
 import { FreeReviewRepairButton } from "./FreeReviewRepairButton.tsx";
@@ -21,13 +22,22 @@ interface PreviewAction {
   token: number;
 }
 
-export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Notify }) {
-  const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
+/**
+ * 自由工作流在回复框那一行里的几颗键（docs/ui-ux-audit reply-3）：派审 / 再审、打开预览、
+ * 预览起来以后的服务入口，摆在框里左边那一排；预览日志进「更多」（`logItem`），对话框
+ * 由 `dialogs` 挂出来。`returnFocusRef` 是「更多」那颗键：关掉日志时焦点回到它上面。
+ */
+export function useFreeWorkflowActions({ task, notify, returnFocusRef }: {
+  task: Task;
+  notify: Notify;
+  returnFocusRef?: RefObject<HTMLElement | null>;
+}): { buttons: ReactNode; logItem: IconMenuItem | null; dialogs: ReactNode } {
+  const enabled = task.workflowMode === "free" && task.mode === "single" && !task.parentId && !task.reviewOf;
+  const free = useFreeWorkflowState(task.id, enabled);
   // 打开时就定下是哪一扇：审查在跑 = 调轮数，否则 = 派审/预约。按渲染时的 reviewing 现判的话，
   // 审查恰好在对话框开着时结束，调轮数那扇一收、派审那扇就会自己弹出来。
   const [reviewOpen, setReviewOpen] = useState<"rounds" | "review" | null>(null);
   const [logOpen, setLogOpen] = useState(false);
-  const logTrigger = useRef<HTMLButtonElement>(null);
   /**
    * 这颗按钮此刻正在做的那件事。**三件事必须分开**：`opening` 是「起预览的请求挂着」
    * （可以取消），`closing` 是「关一个已经起来的预览」，`canceling` 是「取消一次启动」。
@@ -195,56 +205,78 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Noti
     }
   };
 
-  if (task.workflowMode !== "free" || task.mode !== "single" || task.parentId || task.reviewOf) return null;
-  return (
+  if (!enabled) return { buttons: null, logItem: null, dialogs: null };
+  const buttons = (
     <>
-      <div className="free-workflow-toolbar" aria-label="自由工作流快捷操作">
-        {repairing && <FreeReviewProgress compact kind={view.autoRereview ? "auto_rereview" : "task_running"} />}
-        {stoppedRun && !taskBusy && view.freshness === "fresh" ? (
-          <FreeReviewRepairButton
-            taskId={task.id}
-            run={stoppedRun}
-            compact
-            className="is-review is-repair"
-            disabled={!taskReady || locked || waiting}
-            onChanged={free.setState}
-            notify={notify}
-          />
-        ) : null}
-        <button type="button" className={`is-review${reviewing ? " is-busy" : ""}${reservationArmed ? " is-armed" : ""}`} data-state={reviewing ? "reviewing" : reservationArmed ? "armed" : latestRun?.status ?? "idle"} disabled={!taskReady || locked || (!reviewing && waiting && !reservationMode)} onClick={() => setReviewOpen(reviewing ? "rounds" : "review")}>
-          {reviewing ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} weight="regular" />}
-          <span>{reviewLabel}</span>
-          {reservationArmed && <i className="free-review-armed-dot" aria-hidden="true" />}
-        </button>
-        {/* 启动中这颗是**可点的取消**，不是一颗灰着的「处理中」：那八分钟里用户唯一想做的
-            就是「我不等了」，而后端此刻确实收得掉（记录、pid、装依赖的进程都在盘上）。
-            审查/验证旁路回合进行中照样可点（previewBlocked 已经把它放过去了）：那种回合
-            只读工作区，用户此刻正该自己打开页面看一眼，后端为此同样放行。 */}
-        <button type="button" className={`is-preview${previewBusy ? " is-busy" : ""}`} data-state={action === "closing" ? "closing" : previewStarting ? "starting" : free.state?.preview.running ? "running" : "idle"} aria-pressed={!!free.state?.preview.running} disabled={!taskReady || previewBlocked || locked || action === "canceling" || action === "closing"} onClick={() => void (previewStarting ? cancelPreview() : togglePreview())}>
-          {previewBusy ? <SpinnerGap size={13} className="is-spinning" /> : free.state?.preview.running ? <StopCircle size={13} weight="regular" /> : <MonitorPlay size={13} weight="regular" />}
-          <span>{action === "closing" ? "关闭中" : action === "canceling" ? "取消中" : previewStarting ? "启动中·点此取消" : free.state?.preview.running ? "关闭预览" : "打开预览"}</span>
-        </button>
-        {/* 日志入口按 hasLog 给，不按 running 给：预览**起不来**的那一次同样留下了日志，
-            而那正是最需要看它的时候。读日志是只读动作，接力/验收锁死也照给。
-            logArmed 是启动期间的那一档：hasLog 要等这次 POST 回来才翻真，可日志从
-            spawn 之前就在长，最长两分钟。 */}
-        {(free.state?.preview.hasLog || logArmedHere) && (
-          <button ref={logTrigger} type="button" className="is-preview-log" data-testid="preview-log-open" onClick={() => setLogOpen(true)}>
-            <Terminal size={13} weight="regular" /><span>预览日志</span>
+      {repairing && <FreeReviewProgress compact kind={view.autoRereview ? "auto_rereview" : "task_running"} />}
+      {stoppedRun && !taskBusy && view.freshness === "fresh" ? (
+        <FreeReviewRepairButton
+          taskId={task.id}
+          run={stoppedRun}
+          compact
+          className="reply-act is-review is-repair"
+          disabled={!taskReady || locked || waiting}
+          onChanged={free.setState}
+          notify={notify}
+        />
+      ) : null}
+      <button type="button" className={`reply-act is-review${reviewing ? " is-busy" : ""}${reservationArmed ? " is-armed" : ""}`} data-state={reviewing ? "reviewing" : reservationArmed ? "armed" : latestRun?.status ?? "idle"} aria-label={reviewLabel} disabled={!taskReady || locked || (!reviewing && waiting && !reservationMode)} onClick={() => setReviewOpen(reviewing ? "rounds" : "review")}>
+        {reviewing ? <SpinnerGap size={14} className="is-spinning" /> : <MagnifyingGlass size={14} weight="regular" />}
+        <span>{reviewLabel}</span>
+        {reservationArmed && <i className="free-review-armed-dot" aria-hidden="true" />}
+      </button>
+      {/* 启动中这颗是**可点的取消**，不是一颗灰着的「处理中」：那八分钟里用户唯一想做的
+          就是「我不等了」，而后端此刻确实收得掉（记录、pid、装依赖的进程都在盘上）。
+          审查/验证旁路回合进行中照样可点（previewBlocked 已经把它放过去了）：那种回合
+          只读工作区，用户此刻正该自己打开页面看一眼，后端为此同样放行。 */}
+      {(() => {
+        const previewLabel = action === "closing" ? "关闭中" : action === "canceling" ? "取消中" : previewStarting ? "启动中·点此取消" : free.state?.preview.running ? "关闭预览" : "打开预览";
+        return (
+          <button type="button" className={`reply-act is-preview${previewBusy || previewStarting ? " is-busy" : ""}`} data-state={action === "closing" ? "closing" : previewStarting ? "starting" : free.state?.preview.running ? "running" : "idle"} aria-label={previewLabel} aria-pressed={!!free.state?.preview.running} disabled={!taskReady || previewBlocked || locked || action === "canceling" || action === "closing"} onClick={() => void (previewStarting ? cancelPreview() : togglePreview())}>
+            {previewBusy ? <SpinnerGap size={14} className="is-spinning" /> : free.state?.preview.running ? <StopCircle size={14} weight="regular" /> : <MonitorPlay size={14} weight="regular" />}
+            <span>{previewLabel}</span>
           </button>
-        )}
-        {free.state?.preview.running && <PreviewServiceLinks key={task.id} services={free.state.preview.services ?? []} url={free.state.preview.url} />}
-      </div>
+        );
+      })()}
+      {free.state?.preview.running && <PreviewServiceLinks key={task.id} services={free.state.preview.services ?? []} url={free.state.preview.url} />}
+    </>
+  );
+  // 日志入口按 hasLog 给，不按 running 给：预览**起不来**的那一次同样留下了日志，
+  // 而那正是最需要看它的时候。读日志是只读动作，接力/验收锁死也照给。
+  // logArmed 是启动期间的那一档：hasLog 要等这次 POST 回来才翻真，可日志从
+  // spawn 之前就在长，最长两分钟。
+  const logItem: IconMenuItem | null = free.state?.preview.hasLog || logArmedHere
+    ? { label: "预览日志", icon: <Terminal size={15} />, testId: "preview-log-open", onPick: () => setLogOpen(true) }
+    : null;
+  const dialogs = (
+    <>
       {logOpen && <PreviewLogDialog
         taskId={task.id}
         awaitingStart={action === "opening"}
         initialExpanded={(free.state?.preview.services?.length ?? 0) > 1 || (previewStarting && !free.state?.preview.services?.length)}
-        onClose={() => { setLogOpen(false); logTrigger.current?.focus(); }}
+        onClose={() => { setLogOpen(false); returnFocusRef?.current?.focus(); }}
         notify={notify}
       />}
       {/* 审查进行中这颗按钮管的是「这条链还能跑几轮」：那一刻没有新的审查可派，唯一还能改的就是轮数。 */}
       {reviewOpen === "rounds" && reviewing && <FreeReviewRoundsDialog taskId={task.id} run={reviewing} onChanged={free.setState} onClose={() => setReviewOpen(null)} notify={notify} />}
       {reviewOpen === "review" && <FreeReviewDialog taskId={task.id} state={free.state} reservationMode={reservationMode} onChanged={free.setState} onClose={() => setReviewOpen(null)} notify={notify} />}
+    </>
+  );
+  return { buttons, logItem, dialogs };
+}
+
+/** 不挂在回复框里、单独摆这几颗键时（夹具、调试页）：同一组键，日志照样在「更多」里。 */
+export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Notify }) {
+  const more = useRef<HTMLButtonElement>(null);
+  const { buttons, logItem, dialogs } = useFreeWorkflowActions({ task, notify, returnFocusRef: more });
+  if (!buttons) return null;
+  return (
+    <>
+      <div className="reply-acts free-workflow-toolbar" aria-label="自由工作流快捷操作">
+        {buttons}
+        {logItem && <IconMenu items={[logItem]} side="above" buttonRef={more} />}
+      </div>
+      {dialogs}
     </>
   );
 }

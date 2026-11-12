@@ -19,7 +19,7 @@ function ServiceLink({ service, label }: { service: PreviewServiceState; label: 
 export function PreviewServiceLinks({ services, url }: { services: PreviewServiceState[]; url: string | null }) {
   if (services.length < 2) {
     const href = services.length ? services[0].url : url;
-    return href && <a href={browserPreviewUrl(href)} target="_blank" rel="noreferrer" aria-label="在新窗口打开预览"><ArrowSquareOut size={13} /><span>预览页</span></a>;
+    return href && <a className="reply-act" href={browserPreviewUrl(href)} target="_blank" rel="noreferrer" aria-label="在新窗口打开预览"><ArrowSquareOut size={14} /><span>预览页</span></a>;
   }
   const links = services.filter((service) => service.url);
   if (!links.length) return null;

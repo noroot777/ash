@@ -3,26 +3,18 @@
 .is-workflow-mode .ui-tabs { width:max-content; max-width:100%; }
 .is-workflow-mode > .composer-field { width:min(100%,520px); }
 
-.task-reply-shell.has-top-rail { border-top:0; padding-top:6px; }
-.free-workflow-toolbar { position:relative; z-index:2; display:flex; width:max-content; max-width:100%; flex-wrap:wrap; align-items:center; gap:1px; margin:0 0 2px; overflow-x:auto; border:0; background:transparent; padding:0; box-shadow:none; }
-.free-workflow-toolbar button { position:relative; display:inline-flex; height:26px; flex:0 0 auto; align-items:center; gap:5px; border:0; border-radius:7px; background:transparent; padding:0 8px; color:var(--muted); font-size:11px; font-weight:600; letter-spacing:-.01em; transition:background .12s ease,color .12s ease; }
-.free-workflow-toolbar button svg { flex:0 0 auto; opacity:.72; }
-.free-workflow-toolbar button:hover:not(:disabled) { background:color-mix(in lch,var(--raised) 85%,var(--panel)); color:var(--ink); }
-.free-workflow-toolbar button:hover:not(:disabled) svg { opacity:1; }
-.free-workflow-toolbar button:focus-visible,.free-workflow-toolbar > a:focus-visible { outline:2px solid color-mix(in lch,var(--accent) 48%,transparent); outline-offset:1px; }
-.free-workflow-toolbar button:disabled { cursor:not-allowed; opacity:.38; }
-.free-review-progress { display:flex; min-height:31px; align-items:center; gap:6px; border-radius:7px; background:color-mix(in lch,var(--cyan) 8%,var(--panel)); padding:5px 7px; color:var(--cyan); font-size:10.5px; font-weight:650; }
+.free-workflow-toolbar { position:relative; z-index:2; display:flex; max-width:100%; flex-wrap:wrap; align-items:center; gap:2px; }
+.free-review-progress { display:flex; min-height:31px; align-items:center; gap:6px; border-radius:7px; background:color-mix(in lch,var(--cyan) 8%,var(--panel)); padding:5px 7px; color:var(--cyan); font-size:var(--t-xs); font-weight:var(--w-medium); }
 .free-review-progress.is-auto_rereview { background:color-mix(in lch,var(--amber) 9%,var(--panel)); color:var(--amber); }
-.free-review-progress.is-compact { height:26px; min-height:26px; flex:0 0 auto; padding:0 8px; font-size:11px; }
-.free-workflow-toolbar button.is-review.is-busy,.free-workflow-toolbar button.is-review.is-armed,.free-workflow-toolbar button.is-review[data-state="reviewing"] { background:color-mix(in lch,var(--accent) 8%,transparent); color:var(--accent); }
-.free-workflow-toolbar button.is-review[data-state="stopped"] { background:color-mix(in lch,var(--amber) 9%,transparent); color:var(--amber); }
-.free-workflow-toolbar button.is-review.is-repair { background:color-mix(in lch,var(--amber) 10%,transparent); box-shadow:inset 0 0 0 1px color-mix(in lch,var(--amber) 24%,transparent); color:var(--amber); }
-.free-workflow-toolbar button.is-review.is-repair:hover:not(:disabled) { background:color-mix(in lch,var(--amber) 16%,var(--panel)); color:var(--amber); }
-.free-review-armed-dot { width:6px; height:6px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 2px color-mix(in lch,var(--accent) 18%,transparent); }
-.free-workflow-toolbar button.is-preview.is-busy,.free-workflow-toolbar button.is-preview[aria-pressed="true"] { background:color-mix(in lch,var(--cyan) 8%,transparent); color:var(--cyan); }
-.free-workflow-toolbar button.is-busy svg,.free-workflow-toolbar button[data-state="reviewing"] svg,.free-workflow-toolbar button[aria-pressed="true"] svg { opacity:1; }
-.free-workflow-toolbar > a { display:inline-flex; height:26px; flex:0 0 auto; align-items:center; gap:4px; margin-left:2px; border:0; border-radius:7px; padding:0 8px; color:var(--muted); font-size:11px; font-weight:600; text-decoration:none; white-space:nowrap; }
-.free-workflow-toolbar > a:hover { background:color-mix(in lch,var(--raised) 85%,var(--panel)); color:var(--ink); }
+.free-review-progress.is-compact { height:28px; min-height:28px; flex:0 0 auto; padding:0 8px; }
+/* 回复框那一行里的派审 / 预览键（reply-act，见 task-reply.css）：底色和字色只在有状态时出（审查中、已预约、停了、要修、预览起着）。 */
+.reply-act.is-review.is-busy,.reply-act.is-review.is-armed,.reply-act.is-review[data-state="reviewing"] { background:color-mix(in oklab,var(--accent) 8%,transparent); color:var(--accent); }
+.reply-act.is-review[data-state="stopped"] { background:color-mix(in oklab,var(--amber) 9%,transparent); color:var(--amber); }
+.reply-act.is-review.is-repair { background:color-mix(in oklab,var(--amber) 10%,transparent); box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--amber) 24%,transparent); color:var(--amber); }
+.reply-act.is-review.is-repair:hover:not(:disabled) { background:color-mix(in oklab,var(--amber) 16%,var(--panel)); color:var(--amber); }
+.free-review-armed-dot { width:6px; height:6px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 2px color-mix(in oklab,var(--accent) 18%,transparent); }
+.reply-act.is-preview.is-busy,.reply-act.is-preview[aria-pressed="true"] { background:color-mix(in oklab,var(--cyan) 8%,transparent); color:var(--cyan); }
+.reply-act:is(.free-workflow-toolbar > a, a) { text-decoration:none; }
 
 .free-review-dialog { width:min(640px,calc(100vw - 28px)); max-height:min(760px,92vh); overflow:hidden; border:1px solid var(--line2); border-radius:15px; background:var(--panel); box-shadow:var(--shadow); }
 .free-review-dialog > header { display:grid; min-height:66px; grid-template-columns:34px minmax(0,1fr) 28px; align-items:center; gap:10px; border-bottom:1px solid var(--line); padding:10px 14px; }
@@ -233,8 +225,8 @@
 .preview-log-dialog > footer button:disabled { opacity:.45; }
 
 @media (max-width:800px) {
-  .free-workflow-toolbar { width:100%; }
-  .free-workflow-toolbar > a,.free-workflow-toolbar > .preview-service-links { display:none; }
+  /* 窄屏上服务入口收起（预览照样能关、日志照样在「更多」里）。 */
+  :is(.free-workflow-toolbar, .task-reply-actions) > :is(.preview-service-links, a.reply-act) { display:none; }
   .free-review-dialog-body { grid-template-columns:1fr; }
   .free-review-reviewers { border-right:0; border-bottom:1px solid var(--line); }
 }
@@ -264,7 +256,6 @@
 .preview-service-tab-name { max-width:180px; overflow:hidden; text-overflow:ellipsis; }
 .preview-log-selection { display:flex; min-width:0; align-items:baseline; gap:12px; padding:9px 14px 0; font-size:10.5px; }
 .preview-log-selection > span:first-child { flex:1; min-width:0; color:var(--muted); overflow-wrap:anywhere; }
-.free-workflow-toolbar:has(.preview-service-links) { width:100%; }
 .preview-service-links { display:flex; flex:1 0 100%; min-width:0; align-items:center; gap:10px; margin-top:3px; padding:2px 8px; }
 .preview-service-links-label { flex-shrink:0; color:var(--faint); font-size:10px; }
 .preview-service-links .preview-service-scroll > a { display:flex; height:26px; max-width:230px; flex:0 0 auto; align-items:center; gap:6px; border:1px solid var(--line); border-radius:6px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:11px; font-weight:500; text-decoration:none; }

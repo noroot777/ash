@@ -8,6 +8,7 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  border-radius: inherit;
   font-size: var(--plate-size, 30px);
   white-space: nowrap;
   pointer-events: none;

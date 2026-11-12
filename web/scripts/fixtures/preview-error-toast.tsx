@@ -10,7 +10,7 @@ import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
 import "../../src/styles/global.css";
 import "../../src/styles/workspace.css";
-import { FreeWorkflowToolbar } from "../../src/free-workflow/FreeWorkflowToolbar.tsx";
+import { FreeWorkflowToolbar } from "../../src/free-workflow/useFreeWorkflowActions.tsx";
 import { useToast, WorkspaceToast } from "../../src/workspace/WorkspaceToast.tsx";
 
 const reply = (body: unknown, status = 200) =>

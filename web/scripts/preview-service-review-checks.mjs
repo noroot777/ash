@@ -1,15 +1,20 @@
 import assert from "node:assert/strict";
 import { resizeViewport } from "./wait-until.mjs";
 
+// 预览日志在「更多」里（docs/ui-ux-audit reply-3）：入口是那颗「更多」，点开再点「预览日志」。
+const MORE = ".free-workflow-toolbar .ui-menu-anchor > button";
+const openPreviewLog = async (page) => {
+  await page.locator(MORE).click();
+  await page.getByTestId("preview-log-open").click();
+};
+
 export async function checkPreviewServiceRegressions(browser, base) {
   const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
   try {
     await page.goto(`${base}?mode=services-long`);
     await page.getByRole("button", { name: "关闭预览", exact: true }).focus();
     await page.keyboard.press("Tab");
-    assert(await page.getByTestId("preview-log-open").evaluate((el) => el === document.activeElement), "第一行的日志入口应先于第二行的服务链接获得焦点");
-    await page.keyboard.press("Tab");
-    assert(await page.locator(".preview-service-links a").first().evaluate((el) => el === document.activeElement), "日志入口之后应进入第二行的服务链接");
+    assert(await page.locator(".preview-service-links").evaluate((el) => el.contains(document.activeElement)), "「关闭预览」之后紧跟着服务链接");
 
     await resizeViewport(page, { width: 620, height: 900 });
     assert.equal(await page.locator(".preview-service-links").isVisible(), false, "窄屏应统一收起多服务预览链接");
@@ -17,14 +22,14 @@ export async function checkPreviewServiceRegressions(browser, base) {
     const singleLink = page.getByRole("link", { name: "在新窗口打开预览", includeHidden: true });
     await singleLink.waitFor({ state: "attached" });
     assert.equal(await singleLink.isVisible(), false, "窄屏单服务预览链接也应收起");
-    await page.getByTestId("preview-log-open").click();
+    await openPreviewLog(page);
     await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent === "single-service banner");
     const singleHeight = await page.locator(".preview-log-dialog").evaluate((el) => el.getBoundingClientRect().height);
     assert(singleHeight < 400, "单服务短日志不应被多服务 Tab 的固定高度撑满");
 
     await page.setViewportSize({ width: 1000, height: 900 });
     await page.goto(`${base}?mode=services-removed`);
-    await page.getByTestId("preview-log-open").click();
+    await openPreviewLog(page);
     await page.getByRole("tab", { name: /a4sms-icis/ }).click();
     await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent === "fresh api log");
     // 下面几处等的都是日志弹窗 2 秒一轮的轮询往前走几轮（服务消失、读取失败再恢复、服务列表迟到），
@@ -43,7 +48,7 @@ export async function checkPreviewServiceRegressions(browser, base) {
     assert(await page.getByRole("tab", { selected: true }).evaluate((el) => el === document.activeElement), "关闭按钮之后不能跳过服务 Tab 条");
 
     await page.goto(`${base}?mode=services-late`);
-    await page.getByTestId("preview-log-open").click();
+    await openPreviewLog(page);
     await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent?.includes("all service line 220"));
     assert.equal(await page.getByRole("tab").count(), 0);
     await page.getByRole("button", { name: "复制", exact: true }).focus();
@@ -56,10 +61,10 @@ export async function checkPreviewServiceRegressions(browser, base) {
     const shortHeight = await page.locator(".preview-log-dialog").evaluate((el) => el.getBoundingClientRect().height);
     assert.equal(shortHeight, multiHeight, "多服务 Tab 切换长短日志时窗口高度应保持稳定");
     await page.keyboard.press("Escape");
-    assert(await page.getByTestId("preview-log-open").evaluate((el) => el === document.activeElement), "关闭日志后应恢复入口焦点");
+    assert(await page.locator(MORE).evaluate((el) => el === document.activeElement), "关闭日志后焦点回到「更多」");
 
     await page.goto(`${base}?mode=services-many`);
-    await page.getByTestId("preview-log-open").click();
+    await openPreviewLog(page);
     const logBody = page.locator(".preview-log-body");
     await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent?.includes("all service line 220"));
     assert(await logBody.evaluate((el) => el === document.activeElement), "首开日志应聚焦正文，便于键盘阅读");
@@ -70,7 +75,7 @@ export async function checkPreviewServiceRegressions(browser, base) {
     assert.equal(await page.getByRole("dialog", { name: "预览日志" }).count(), 1, "空格应翻阅日志，不能触发关闭按钮");
 
     await page.goto(`${base}?mode=services-removed-error`);
-    await page.getByTestId("preview-log-open").click();
+    await openPreviewLog(page);
     await page.getByRole("tab", { name: /a4sms-icis/ }).click();
     await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent === "temporary log error #1");
     assert.match(await page.getByTestId("preview-log-state").textContent(), /正在运行/, "回退全部期间读取失败，不能把运行中的预览说成历史日志");
@@ -80,7 +85,7 @@ export async function checkPreviewServiceRegressions(browser, base) {
     assert.match(await page.getByTestId("preview-log-state").textContent(), /正在运行/);
 
     await page.goto(`${base}?mode=services-late-short`);
-    await page.getByTestId("preview-log-open").click();
+    await openPreviewLog(page);
     await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent === "startup banner");
     assert.equal(await page.getByRole("tab").count(), 0);
     const geometry = () => page.locator(".preview-log-dialog").evaluate((el) => ({

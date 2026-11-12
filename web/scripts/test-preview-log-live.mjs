@@ -13,6 +13,13 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { checkPreviewServiceRegressions } from "./preview-service-review-checks.mjs";
+
+// 预览日志在「更多」里（docs/ui-ux-audit reply-3）：这一页上「更多」里只有它，所以「更多」在 = 日志入口在。
+const MORE = ".free-workflow-toolbar .ui-menu-anchor > button";
+const openPreviewLog = async (page) => {
+  await page.locator(MORE).click();
+  await page.getByTestId("preview-log-open").click();
+};
 import { fetchLog, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 const web = await startWebServer();
@@ -27,12 +34,12 @@ try {
 
   const open = page.getByRole("button", { name: "打开预览" });
   await open.waitFor();
-  assert.equal(await page.getByTestId("preview-log-open").count(), 0, "还没起过预览就不该有日志入口");
+  assert.equal(await page.locator(MORE).count(), 0, "还没起过预览就不该有日志入口");
 
   // ① 启动请求挂着不回（现场里它可以挂两分钟），入口必须已经在。
   await open.click();
   // 那趟 POST 在这个夹具里永远不回，所以入口只要出现就证明它没等 POST —— 期限按负载给足，不必卡 3 秒。
-  await page.getByTestId("preview-log-open").waitFor();
+  await page.locator(MORE).waitFor();
   // 启动请求还挂着 —— 而这一段（装依赖 6 分钟 + 等就绪 2 分钟）必须有一颗**能点的取消**，
   // 不是一颗灰着的「处理中」：后端此刻确实收得掉（记录、pid、正在装依赖的进程都在盘上），
   // 界面点不到就等于那套取消不存在。
@@ -42,7 +49,7 @@ try {
 
   // ② 弹窗开轮询：第一次 GET 报的是「没在跑」（后端还没走到 startPreview），
   //    它仍然要接着看下去，正文得自己变长。
-  await page.getByTestId("preview-log-open").click();
+  await openPreviewLog(page);
   const state = page.getByTestId("preview-log-state");
   await state.waitFor();
   assert.match(await state.textContent() ?? "", /正在启动/, "启动期得说清楚它还在启动");
@@ -129,7 +136,7 @@ try {
   );
   assert.match(await race.getByTestId("notices").textContent() ?? "", /认出了 3 个/, "409 的原因得如实说出来");
   assert.equal(
-    await race.getByTestId("preview-log-open").count(),
+    await race.locator(MORE).count(),
     0,
     "spawn 之前就失败时不该留下日志入口——点开只会说「还没有预览日志」",
   );
@@ -137,7 +144,7 @@ try {
   const serviceSwitch = await browser.newPage({ viewport: { width: 1000, height: 900 } });
   await trackFetches(serviceSwitch, "/free-workflow/preview/log");
   await serviceSwitch.goto(`${base}?mode=service-switch`);
-  await serviceSwitch.getByTestId("preview-log-open").click();
+  await openPreviewLog(serviceSwitch);
   const serviceBody = serviceSwitch.locator(".preview-log-body");
   await serviceSwitch.waitForFunction(
     () => document.querySelector(".preview-log-body")?.textContent?.includes("all service line 220") ?? false,
