@@ -1,15 +1,16 @@
-/* 任务页（面 task）：头部 + 会话列（会话流、提问坞、回复框）+ 右侧面板。骨架照现状：面板通顶，头部只压在会话那一列上面。
+/* 任务页（面 task）：头部 + 会话列（会话流、提问坞、回复框；点「验收」时换成改动工作区）+ 右侧面板。骨架照现状：面板通顶，头部只压在会话那一列上面。
    头部是部件 head。件、次序、文案照 web/src/task-detail/TaskHeader.tsx：类型与来源、图钉、标题（可改名）、状态、主按钮、次级按钮、更多、面板开关。
    清单动了的只有三处：灰掉的按钮不画，它多说的半句接在状态词后面；时间住进右侧面板、「重新排队」进更多（head-1）；类型和来源拼成一颗两段胶囊，图钉是看得见的灰（head-2）。
+   「验收」不是一键合并：它把会话换成改动工作区（changes.js），这时这颗键的位置上是「返回对话」，真正的「验收通过」在工作区里。
    对外：ASH.parts.head = { set(status), state, accepted, destroy() }。
-   发 head:act { label }（验收 / 重试 / 运行 / 停止，由 live.js 接）、task:status { id, status }、task:title { id, title }；
-   听 task:status { id, status, accepted? }、task:pin { id, pinned }、insp:state { shut }。 */
+   发 head:act { label }（重试 / 运行 / 停止，由 live.js 接）、changes:open（验收、返回对话、更多里的「查看改动与审查」）、task:status { id, status }、task:title { id, title }；
+   听 task:status { id, status, accepted? }、task:pin { id, pinned }、insp:state { shut }、changes:state { open }。 */
 (() => {
   const { h, icon } = ASH;
   ASH.icons.download ??= '<path d="M8 2.5v8M4.5 7.5 8 11l3.5-3.5M3 13.5h10"/>';
 
   const KIND = { team: '团队', duet: '讨论' };
-  const KNOWN = ['running', 'waiting', 'failed', 'queued', 'stopped', 'done'];
+  const KNOWN = ['running', 'waiting', 'failed', 'queued', 'stopped', 'backlog', 'done'];
   /* 状态点指上去的那句话，照 TaskStatusDot.tsx */
   const DOT_SAY = { run: '运行中或排队中', queue: '运行中或排队中', wait: '需要人工输入', open: '已完成，等你验收', bad: '失败' };
 
@@ -22,6 +23,7 @@
     if (status === 'waiting') return { word: '等答复', dot: 'wait', acts: [] };
     if (status === 'failed') return { word: '失败', tail: accepted && '已验收', dot: 'bad', acts: [!accepted && ['验收', 'check', 'pri'], ['重试', 'redo', '']] };
     if (status === 'stopped') return { word: '已取消', tail: accepted && '已验收', dot: '', acts: [!accepted && ['验收', 'check', 'pri'], ['运行', 'play', '']] };
+    if (status === 'backlog') return { word: '待排期', dot: '', acts: [['运行', 'play', 'pri']] };
     return accepted ? { word: '验收完成', dot: '', acts: [] } : { word: '完成', dot: 'open', acts: [['验收', 'check', 'pri']] };
   }
 
@@ -79,7 +81,10 @@
           h('span.task-say', '它跟「重试」是两条路：重试会从中断处接着跑，标记完成则就此收尾，队列里排在后面的任务会开始跑。')] });
         if (yes) tell('done');
       };
-      const remove = () => ASH.confirm({ title: '删除任务', body: `确定删除“${task.title || '未命名任务'}”？此操作不可撤销。`, ok: '删除', danger: true });   /* 确认之后的事样机里没做 */
+      const remove = async () => {
+        const yes = await ASH.confirm({ title: '删除任务', body: `确定删除“${task.title || '未命名任务'}”？此操作不可撤销。`, ok: '删除', danger: true });
+        if (yes) ASH.todo('删掉这个任务之后的样子');
+      };
       const talk = () => ASH.parts.feed?.el?.innerText ?? '';
       const download = () => {
         const url = URL.createObjectURL(new Blob([talk()], { type: 'text/markdown;charset=utf-8' }));
@@ -96,18 +101,17 @@
         const close = ASH.menu(more, [
           ended && task.inQueue && { label: '重新排队', icon: 'queue', onpick: () => tell('queued') },
           ended && task.inQueue && '-',
-          { label: '刷新', icon: 'redo' },
-          { label: '查看改动与审查', icon: 'diff', onpick: () => ASH.emit('insp:open', { pane: 'scm' }) },
+          { label: '刷新', icon: 'redo', onpick: () => ASH.todo('重新读取这个任务') },
+          { label: '查看改动与审查', icon: 'diff', onpick: () => ASH.emit('changes:open') },
           { label: '复制全部对话', icon: 'copy', onpick: () => copy(talk()) },
           { label: '下载 Markdown', icon: 'download', onpick: download },
           { label: '复制任务链接', icon: 'copy', onpick: () => copy(location.href) },
           ended && '-',
           ended && { label: '标记为已完成', icon: 'check', onpick: markDone },
           '-',
-          { label: '归档任务', icon: 'box', disabled: status === 'running' || status === 'queued' },
-          { label: '删除任务', icon: 'trash', onpick: remove },
+          { label: '归档任务', icon: 'box', disabled: status === 'running' || status === 'queued', onpick: () => ASH.todo('归档之后的样子') },
+          { label: '删除任务', icon: 'trash', danger: true, onpick: remove },
         ].filter(Boolean), { place: 'bottom-end' });
-        close?.el.querySelector('.menu > button:last-child')?.classList.add('task-danger');
       } }, icon('more'));
 
       /* 面板开关：提示照现状（InspectorHost.tsx），没有快捷键。全应用那一条焦点环（a11y-1）认领在它身上 */
@@ -128,12 +132,12 @@
 
       el.append(h('div.task-name', kind, pin, title), says, acts, more, panel);
 
+      let working = false;   /* 改动工作区开着 */
       const press = (label) => {
+        if (label === '验收' || label === '返回对话') { ASH.emit('changes:open'); return; }
         /* 没有在跑的回合要停（排着队，或者状态是从别处改成运行中的）：直接落到已取消 */
         if (label === '停止排队' || (label === '停止' && !ASH.parts.live?.running)) { tell('stopped'); return; }
         ASH.emit('head:act', { label });
-        /* live.js 现在只接「重试」，没接「运行」：已取消的任务先在这里替它跑一轮；它接上以后这一句走不到 */
-        if (label === '运行' && !ASH.parts.live?.running) ASH.parts.live?.play?.('run', '运行');
       };
 
       /* 一行摆不下时（开着对照清单、右侧面板又展开）：量实际溢出，一档一档让，够了就停——
@@ -165,7 +169,8 @@
       let landing = 0;
       const paint = (first) => {
         const s = look(status, accepted);
-        const want = s.acts.filter(Boolean);
+        /* 改动工作区开着：「验收」这颗键的位置上是「返回对话」（这一屏唯一的返回口）；别的主动作照旧，返回补在它们旁边 */
+        const want = working ? [...s.acts.filter((act) => act && act[0] !== '验收'), ['返回对话', 'x', '']] : s.acts.filter(Boolean);
         const text = s.tail ? `${s.word} · ${s.tail}` : s.word;
         const dotStays = (dot.dataset.kind ?? '') === s.dot;
         const redraw = () => {
@@ -206,6 +211,7 @@
         ASH.on('task:status', ({ id, status: next, accepted: flag } = {}) => { if (id === task.id) apply(next, flag); }),
         ASH.on('task:pin', ({ id, pinned } = {}) => { if (id === task.id) setPin(Boolean(pinned)); }),
         ASH.on('insp:state', ({ shut } = {}) => setPanel(Boolean(shut))),
+        ASH.on('changes:state', ({ open } = {}) => { if (working !== Boolean(open)) { working = Boolean(open); paint(); } }),
       ];
       return {
         set(next) { apply(next); },
@@ -223,10 +229,12 @@
       const wrap = h('div.feed-wrap');
       const dock = h('div.dock');
       const reply = h('div', { id: 'reply' });
+      const work = h('section.changes', { hidden: true, 'aria-label': '改动与提交' });
       const insp = h('aside.task-insp', { id: 'insp', 'aria-label': '右侧面板' });
-      main.append(h('div.task', h('div.task-main', head, h('section.task-col', wrap, dock, reply)), insp));
-      const parts = [ASH.mount('head', head), ASH.mount('feed', wrap, { dock }), ASH.mount('reply', reply, { kind: 'task' }), ASH.mount('insp', insp), ASH.mount('live', main)];
-      return () => { for (const p of parts) p.destroy?.(); for (const name of ['head', 'feed', 'reply', 'insp', 'live']) delete ASH.parts[name]; };
+      main.append(h('div.task', h('div.task-main', head, h('section.task-col', wrap, dock, reply, work)), insp));
+      const parts = [ASH.mount('head', head), ASH.mount('feed', wrap, { dock }), ASH.mount('reply', reply, { kind: 'task' }), ASH.mount('insp', insp), ASH.mount('live', main),
+        ASH.mount('changes', work, { talk: [wrap, dock, reply] })];
+      return () => { for (const p of parts) p.destroy?.(); for (const name of ['head', 'feed', 'reply', 'insp', 'live', 'changes']) delete ASH.parts[name]; };
     },
   });
 })();

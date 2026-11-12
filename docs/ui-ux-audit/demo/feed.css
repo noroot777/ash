@@ -7,6 +7,8 @@
 .feed { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; justify-items: center; row-gap: 20px; height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 20px 24px 28px; }
 .feed > * { width: min(790px, 100%); }
 .feed > .is-gone { opacity: 0; transition: opacity var(--dur-1) var(--ease-in); }
+/* 会话区自己是一个 Tab 站：它和外框一样大，环画在里侧才不会被裁掉 */
+.feed:focus-visible { outline-offset: -2px; }
 
 /* 你发的话：靠右的泡，泡里一行「你 · 时间」，复制和删除指到才出 */
 .bubble-row { display: flex; justify-content: flex-end; padding-left: 38px; }
@@ -24,8 +26,10 @@
 /* 底下留的 10px 是给回合尾那一排的：它平时不显示，挂在回合下缘外面，出不出现都不改高度 */
 .turn { position: relative; display: grid; grid-template-columns: 20px minmax(0, 1fr); column-gap: 10px; padding-bottom: 10px; }
 .turn-av { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--overlay); color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-strong); line-height: 1; }
-.turn-head { display: flex; align-items: center; gap: 8px; min-height: 20px; color: var(--muted); font-size: var(--t-xs); }
-.turn-head b { font-weight: var(--w-strong); }
+/* 名字不让、后面那段（悬停才给的模型和时间）可以被省略：列再窄它也撑不宽这一行 */
+.turn-head { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 20px; color: var(--muted); font-size: var(--t-xs); }
+.turn-head b { flex: none; font-weight: var(--w-strong); }
+.turn-head .rt { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .turn-body { grid-column: 2; min-width: 0; }
 .turn-ref { display: flex; align-items: center; gap: 6px; min-height: 22px; color: var(--muted); font-size: var(--t-xs); }
 .turn-ref .i { width: 12px; height: 12px; color: var(--accent); }
@@ -47,7 +51,8 @@
 .md ul { padding-left: 1.4em; list-style: disc; }
 .md li + li { margin-top: 4px; }
 .md li::marker { color: var(--faint); font-variant-numeric: tabular-nums; }
-.md code { padding: 1px 5px; border-radius: 4px; background: var(--raised); color: var(--ink); font-size: var(--t-sm); }
+/* 行高收成 1：等宽字的上下伸部比正文高，不收的话它所在的那一行会被撑高 1px */
+.md code { padding: 1px 5px; border-radius: 4px; background: var(--raised); color: var(--ink); font-size: var(--t-sm); line-height: 1; }
 
 /* 执行过程：一句人话。点开是一步一行；每一步再点开是字段，原始参数再折一层 */
 .fold { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 26px; margin: 2px 0 2px -4px; padding: 0 6px 0 4px; border-radius: var(--r-sm); color: var(--muted); font-size: var(--t-xs); text-align: left; vertical-align: top; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
@@ -61,7 +66,10 @@
 .fold.is-flat:hover, .fold.is-flat:active { background: none; color: var(--muted); }
 .fold.is-flat > .i { opacity: 0; }
 /* 点开的那一块：高度一帧到位，内容淡入；收起先淡出再撤掉。会话流里不做高度动画，贴底才不会跟它抢 */
-.steps, .step-more, .step-more > pre, .sys-log, .auto-body, .rev-body, .qa-body { animation: unfold var(--dur-2) var(--ease-out); }
+/* 一串步骤是逐行来的：前六行隔 45ms 依次出现（--i 由 feed.js 给），整段不超过 400ms */
+.step-more, .step-more > pre, .sys-log, .auto-body, .qa-body, .steps > * { animation: unfold var(--dur-2) var(--ease-out) backwards; }
+.steps > * { animation-delay: calc(var(--i, 0) * 45ms); }
+.steps > .enter { animation-delay: 0s; }
 @keyframes unfold { from { opacity: 0; transform: translateY(-4px); } }
 .is-shutting { opacity: 0; transition: opacity var(--dur-1) var(--ease-in); }
 .steps { padding: 2px 0 8px; }
@@ -91,6 +99,11 @@
 /* 明细是一份流水：时间排在每一行的最前面 */
 .sys-log li { display: flex; gap: 10px; min-height: 22px; align-items: center; }
 .sys-log time { order: -1; color: var(--faint); font-variant-numeric: tabular-nums; }
+/* 行尾的小动作（复制、删除）：和回合尾一个规矩，指到这一行或键盘走到它才出 */
+.row-acts { display: inline-flex; gap: 2px; height: 20px; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.row-acts .ico { width: 20px; height: 20px; }
+:is(.sys, .auto, .qa):hover .row-acts, .row-acts:focus-within, .row-acts.is-shown, .row-acts:has(.is-done) { opacity: 1; }
+@media (hover: none) { .row-acts { opacity: 1; } }
 
 /* 「ash 自动输入」：还在你这一侧，但只是一行灰字。它靠右排，时间在字的前面 */
 .auto { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; padding-left: 38px; color: var(--muted); }
@@ -101,16 +114,15 @@
 .auto-body { width: min(520px, 100%); padding: 6px 12px 10px; border-radius: var(--r-md); background: var(--raised); }
 .auto-body .kv dt, .auto-body .kv dd { min-height: 24px; }
 
-/* 审查轮：出了结论的收成一行；左边那条线跟着结论走，不再一律是绿 */
-.rev.ok { --tone: var(--green); --tone-bg: var(--green-bg); } .rev.warn { --tone: var(--amber); --tone-bg: var(--amber-bg); } .rev.bad { --tone: var(--red); --tone-bg: var(--red-bg); }
-.rev > .sys-ic { color: var(--tone); }
+/* 审查轮：一行；左边那条线跟着结论走，不再一律是绿。还在审的时候没有颜色，结论那一格是带流光的「审查中」 */
+.rev.ok { --tone: var(--green); --tone-bg: var(--green-bg); } .rev.bad { --tone: var(--red); --tone-bg: var(--red-bg); }
+.rev > .sys-ic, .rev-main, .rev-chip { transition: color var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out), background var(--dur-2) var(--ease-out); }
+.rev.is-live .rev-chip { padding: 0; background: none; }
+.rev > .sys-ic { color: var(--tone, var(--faint)); }
 .rev-main { padding-left: 10px; border-left: 2px solid var(--tone, var(--line2)); }
 .rev-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-height: 24px; color: var(--muted); }
 .rev-head b { color: var(--ink); font-weight: var(--w-medium); }
-.rev-chip { height: 20px; padding: 0 7px; border-radius: var(--r-sm); background: var(--tone-bg); color: var(--tone); font-size: var(--t-xs); line-height: 20px; }
-.rev-body { margin-top: 6px; padding-left: 1.4em; list-style: decimal; color: var(--muted); }
-.rev-body li { padding: 2px 0; }
-.rev-body li::marker { color: var(--faint); }
+.rev-chip { height: 20px; padding: 0 7px; border-radius: var(--r-sm); background: var(--tone-bg); color: var(--tone, var(--muted)); font-size: var(--t-xs); line-height: 20px; }
 
 /* 答过的提问 */
 .qa > .sys-ic, .qa .sys-line b { color: var(--green); }
@@ -132,12 +144,12 @@
 .scroll-btn.is-idle:focus-visible { opacity: 1; pointer-events: auto; }
 
 /* 输入导航：左缘一把尺，一条刻度是你发过的一句话。悬停看原话，点了跳过去，Q 摊开 */
-.rail { position: absolute; left: 0; top: 50%; z-index: 7; translate: 0 -50%; padding: 6px 12px 6px 7px; }
-.rail::before { content: ""; position: absolute; left: 7px; top: 0; bottom: 0; width: 1px; background: var(--line2); }
-.rail button { display: block; height: 10px; padding: 0; }
-.rail button::before { content: ""; display: block; width: 16px; height: 1.5px; border-radius: 1px; background: var(--line2); transform: scaleX(0.5); transform-origin: left; transition: transform var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out); }
-.rail button.on::before { transform: scaleX(0.75); background: var(--muted); }
-.rail button:hover::before, .rail button:focus-visible::before { transform: none; background: var(--ink); }
+.feed-rail { position: absolute; left: 0; top: 50%; z-index: 7; translate: 0 -50%; padding: 6px 12px 6px 7px; }
+.feed-rail::before { content: ""; position: absolute; left: 7px; top: 0; bottom: 0; width: 1px; background: var(--line2); }
+.feed-rail button { display: block; height: 10px; padding: 0; }
+.feed-rail button::before { content: ""; display: block; width: 16px; height: 1.5px; border-radius: 1px; background: var(--line2); transform: scaleX(0.5); transform-origin: left; transition: transform var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out); }
+.feed-rail button.on::before { transform: scaleX(0.75); background: var(--muted); }
+.feed-rail button:hover::before, .feed-rail button:focus-visible::before { transform: none; background: var(--ink); }
 .rail-list { width: min(420px, 80vw); padding: 6px; }
 .rail-list button { display: flex; gap: 10px; width: 100%; padding: 7px 8px; border-radius: var(--r-sm); text-align: left; }
 .rail-list button:hover, .rail-list button:focus-visible { background: var(--hover-bg); }
@@ -147,8 +159,6 @@
 .dock { flex: none; padding: 0 24px; }
 .qcard { width: min(790px, 100%); margin: 0 auto 12px; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow), var(--surface-shadow); }
 .qcard.is-rising { position: absolute; left: 24px; right: 24px; bottom: 0; z-index: 9; width: min(790px, calc(100% - 48px)); will-change: transform; }
-.qcard.is-out { animation: dock-out 140ms var(--ease-in) both; }
-@keyframes dock-out { to { opacity: 0; transform: translateY(8px); } }
 .qcard > header { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 8px 0 14px; }
 .qcard > header > .i, .q-status { color: var(--cyan); }
 .qcard > header b { font-weight: var(--w-strong); }

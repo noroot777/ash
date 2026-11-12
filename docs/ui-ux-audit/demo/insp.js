@@ -3,14 +3,14 @@
      insp-panes.js  信息、文件、生成物、改动（看任务本身、看它改了什么）
      insp-work.js   子智能体、备忘、侧聊、工作流、审查、预览指正、哨兵（跟它一起干活）
    竖轨的形态、格数、次序、图标、快捷键都照现在的产品；改的是：选中只有一种长相、状态变成小点、
-   分三簇、再点一次收起、摘掉的格不自己回来。
+   分三簇、再点一次收起、摘掉的格不自己回来（信息、哨兵、子智能体照旧：下次进来还在）。
    对外：ASH.parts.insp = { open(pane, opts), shut(bool), setUsage(u), destroy() }
-   发 insp:state { shut, pane }、insp:review { state: start / armed / idle, round?, ok? }（面板上派审、预约、审完）、
-     task:status（信息格的状态下拉）、changes:open、diff:open { path }、preview:open、files:reveal { name? }（这四个只画了入口）。
-   听 insp:toggle { shut? }、insp:open { pane, round? }、task:status、run:state、reply:review、reply:send、
+   发 insp:state { shut, pane }、task:status（信息格的状态下拉）、changes:open、diff:open { path }、file:open { path }、folder:open { path }、
+     preview:open、files:reveal { name? }、queue:open（这几个去处别处接，没画的由 app.js 说一句）。
+   听 insp:toggle { shut? }、insp:open { pane, round? }、task:status、run:state、reply:send、
    usage { turn, ctx, files, add, del, elapsedMs, agent?, commit? }——带 turn 的是「一轮跑完了」：这一轮的量记到 agent（缺省 claude）
    那一行、轮数加一、用时累加；files / add / del 是跑完之后的总数，ctx 是上下文还剩百分之几。同一轮报两遍只记一次。
-   不带 turn 的按绝对值设（tokens 是 claude 那一行的累计）。 */
+   不带 turn 的按绝对值设（tokens 是 claude 那一行的累计）。审查的事各格直接读 ASH.review、听 review:change。 */
 (() => {
   const { h, icon } = ASH;
   const I = (ASH.insp ??= { build: {}, packs: [] });
@@ -50,9 +50,11 @@
   const ALIAS = { changes: 'scm', diff: 'scm', artifacts: 'made', memos: 'memo', 'side-chat': 'chat', workflow: 'flow', monitors: 'watch', subagents: 'agents' };
   const CELL = 32, GAP = 2, BREAK = 8, PAD = 4, INK = 20;   // 和 insp.css 里竖轨的尺寸是一套
   const CHORD_MS = 1000;                                    // I 加字母：和现在一样等一秒
-  const KNOWN = ['running', 'waiting', 'failed', 'queued', 'stopped', 'done'];
-  /* 这一次打开样机期间记住的三样：你摘掉 / 加回的格、停在哪一格、整栏收没收。切到别的面再回来不会被重置 */
+  const KNOWN = ['running', 'waiting', 'failed', 'queued', 'stopped', 'backlog', 'done'];
+  /* 这一次打开样机期间记住的三样：你摘掉 / 加回的格、停在哪一格、整栏收没收。切到别的面再回来不会被重置。
+     三格不记「摘掉」，照现在的产品：信息是必开格，下次打开面板它自己补回来；哨兵、子智能体是「用过才浮现」，这个任务用过，重新进来还会冒出来 */
   const mem = { off: new Set(), on: new Set(), pane: 'info', shut: false };
+  const COMES_BACK = ['info', 'watch', 'agents'];
 
   /* ---------- 各格共用的小件：六个公共件的造法，加几个小动作 ---------- */
   const sec = (text, count, ...tail) => h('h4.sec', {}, text, count != null && h('b', {}, count), tail);
@@ -61,6 +63,14 @@
     const dt = h('dt', label);
     const dd = h('dd', {}, value);
     return { dt, dd, show(on) { dt.hidden = !on; dd.hidden = !on; } };
+  };
+  /* 几行「标签 值」跟着状态出没（rows 是 [[pair, 在不在], …]）：要走的先淡出 120ms，新来的淡入，其余的行滑到新位置 */
+  const showRows = (list, rows) => {
+    const apply = () => { for (const [row, on] of rows) row.show(on); };
+    if (ASH.reduced() || !list.isConnected) { apply(); return; }
+    const going = rows.filter(([row, on]) => !on && !row.dt.hidden).flatMap(([row]) => [row.dt, row.dd]);
+    const fades = going.map((el) => el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 120, easing: 'ease-in', fill: 'forwards' }));
+    setTimeout(() => { for (const fade of fades) fade.cancel(); ASH.flip(list, apply); }, going.length ? 120 : 0);
   };
   const kv = (...rows) => h('dl.kv', {}, rows.filter(Boolean).flatMap((r) => (Array.isArray(r) ? [h('dt', r[0]), h('dd', {}, r.slice(1))] : r instanceof Node ? [r] : [r.dt, r.dd])));
   const go = (label, onclick, meta) => h('button.go', { type: 'button', onclick }, h('span.cut', label), meta, icon('chev'));
@@ -96,27 +106,16 @@
     return () => { area.value = ''; area.style.height = ''; };
   };
   const big = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : ASH.num(n));   // 用量：28.36M，和现在一样留两位
-  const clock = () => new Date().toTimeString().slice(0, 5);
-  I.kit = { sec, pair, kv, go, none, reenter, fold, leave, tool, copyBtn, grow, big, clock };
-  I.data = { branch: 'ash/QsjSuz_e', dir: '.worktrees/QsjSuz_ehsEW', session: '8c1e4f02', resume: 'claude --resume 8c1e4f02' };
-
-  /* 那两个文件还没接进 demo.html 时，由这里按次序补载；接上以后这一段不走 */
-  const PARTS = ['insp-panes.js', 'insp-work.js'];
-  const here = document.currentScript?.src ?? '';
-  I.loading = PARTS.every((name) => document.querySelector(`script[src$="${name}"]`)) ? null : Promise.all(PARTS.map((name) => new Promise((done) => {
-    const s = document.createElement('script');
-    s.src = here.replace(/[^/]*$/, name);
-    s.async = false;
-    s.onload = done;
-    s.onerror = done;
-    document.head.append(s);
-  }))).then(() => { I.loading = null; });
+  const clock = ASH.clock;
+  I.kit = { sec, pair, showRows, kv, go, none, reenter, fold, leave, tool, copyBtn, grow, big, clock };
+  const { branch, dir, session } = ASH.data.cur;
+  I.data = { branch, dir, session, resume: `claude --resume ${session}` };
 
   /* ---------- 面板里的账：跟着任务走，不跟着页面 ----------
      各格只造一次。切到别的面再回来，新审的轮次、写的备忘、侧聊、哨兵都还在；不在眼前的时候事件照收
      （一轮在后台跑完，回来时工作流、审查、用量都是对的）。每次进任务页重画的只有外壳：竖轨和面板头。
      c 是交给各格的控制器：c.acts[格] 是面板头上这一格自己的动作；c.on / c.emit 是这一栏内部的事件
-     （usage、status、run、review、send、round、show:<格>）；c.mark 画竖轨上那颗点 */
+     （usage、status、run、send、show:<格>）；c.mark 画竖轨上那颗点 */
   const cores = {};
   function coreOf(task) {
     if (cores[task.id]) return cores[task.id];
@@ -163,7 +162,6 @@
       core.running = next;
       core.whenBuilt(() => c.emit('run', next));
     });
-    ASH.on('reply:review', (d = {}) => { if (mine()) core.whenBuilt(() => c.emit('review', d.state)); });
     ASH.on('reply:send', (d = {}) => { if (mine()) core.whenBuilt(() => c.emit('send', d.text)); });
 
     const build = () => {
@@ -173,7 +171,7 @@
       core.shell?.attach();
       for (const fn of waiting.splice(0)) fn();
     };
-    if (I.loading) I.loading.then(build); else build();
+    build();
     return (cores[task.id] = core);
   }
 
@@ -188,7 +186,7 @@
     const offs = [];
     const preps = {};
     let cur = by(ctx.pane ?? mem.pane) ?? panes[0];      // 默认打开「信息」，不再有写着 Inspector 的空面板
-    let seen = false, openedAt = 0, chordAt = -Infinity;
+    let seen = false, openedAt = 0, removedAt = 0, chordAt = -Infinity;
     cur.on = true;
 
     const title = h('b');
@@ -231,7 +229,6 @@
       }
       title.textContent = cur.name;
       acts.replaceChildren(...(c.acts[cur.id] ?? []));
-      closeBtn.hidden = cur.id === 'info';             // 「信息」是必留格，不画关闭键
       closeBtn.setAttribute('aria-label', `把「${cur.name}」移出竖轨`);
       layout();
     }
@@ -254,7 +251,7 @@
     function setOn(p, on) {
       if (p.on === on) return;
       p.on = on;
-      mem[on ? 'on' : 'off'].add(p.id);
+      if (on || !COMES_BACK.includes(p.id)) mem[on ? 'on' : 'off'].add(p.id);
       mem[on ? 'off' : 'on'].delete(p.id);
       const settle = () => {
         if (p.on !== on) return;                        // 淡出的这一小会儿里又被加回来了
@@ -273,6 +270,7 @@
       mem.shut = next;
       /* 收起时焦点还在栏里的话，交给任务头上开合这一栏的那颗键 */
       if (next && el.contains(document.activeElement)) document.querySelector('[aria-controls="insp"]')?.focus({ preventScroll: true });
+      if (!next) setOn(by('info'), true);              // 「信息」摘掉过：重新打开面板时它自己补回来
       el.classList.toggle('is-snap', snap);
       el.classList.toggle('is-shut', next);
       if (snap) { void el.offsetWidth; el.classList.remove('is-snap'); }
@@ -297,16 +295,19 @@
       if (p !== cur) { open(p.id); return; }
       if (e.detail > 0 && performance.now() - openedAt > 350) shut(true);
     }
-    /* 关闭键 = 把这一格移出竖轨，面板切到它后面那一格（它是最后一格就切到前面那格）。
-       之后任务状态怎么变它都不会自己回来，只能从「+」或快捷键加回 */
+    /* 关闭键 = 把这一格移出竖轨，面板切到它后面那一格（它是最后一格就切到前面那格）；条上只剩它一格时，整栏收起。
+       之后任务状态怎么变它都不会自己回来，只能从「+」或快捷键加回。
+       摘完以后关闭键还在原地、指的已经是下一格：0.4 秒内紧跟着的那一下不算，连点两下不会连摘两格 */
     function remove() {
-      if (cur.id === 'info') return;
+      if (performance.now() - removedAt < 400) return;
+      removedAt = performance.now();
       const list = shown();
       const out = cur;
-      const i = list.indexOf(out);
+      const next = list[list.indexOf(out) + 1] ?? list[list.indexOf(out) - 1];
       setOn(out, false);
-      open((list[i + 1] ?? list[i - 1]).id);
-      (closeBtn.hidden ? cur.btn : closeBtn).focus({ preventScroll: true });
+      if (!next) { shut(true); cur = by('info'); mem.pane = 'info'; paint(); return; }
+      open(next.id);
+      closeBtn.focus({ preventScroll: true });
     }
     /* 「+」：全部十一格，已在条上的置灰。菜单朝左上开，不盖住竖轨 */
     function addMenu() {

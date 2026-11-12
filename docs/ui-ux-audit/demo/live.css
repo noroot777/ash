@@ -3,12 +3,15 @@
 /* 进行条就是那一行「执行过程」：进行时字上有流光（base.css 的 .shim）、后面跟着这一轮的用时；做完原地换成过去式 */
 .live-time { color: var(--faint); white-space: nowrap; opacity: 0; transition: opacity var(--dur-2) var(--ease-out); }
 .live-time.is-in { opacity: 1; }
+/* 标题换字的那一拍，用时跟着一起暗下去再亮回来，不会剩它一个数字悬着 */
+.live-time.is-in.is-dim { opacity: 0; transition-duration: var(--dur-1); }
 .live-time::before { content: "· "; }
 .live-time:empty { display: none; }
 
-/* 异常结束：同一行落定成红色的一句，「重试」紧跟在它后面，不用悬停 */
+/* 异常结束：同一行落定成红色的一句（红是换字那一刻才上的），「重试」和它一起进场、紧跟在后面，不用悬停 */
 .fold.is-failed, .fold.is-failed:hover, .fold.is-failed > .i { color: var(--red); }
 .retry { margin: 3px 0 0 6px; vertical-align: top; }
+.retry.is-out { opacity: 0; pointer-events: none; }
 
 /* 放字：新放出来的那几个字淡入，别的什么都不动。没有光标 */
 .w { animation: w-in 280ms linear both; }

@@ -39,9 +39,6 @@
 /* 面板开着的时候，开关是按下的样子（底色来自 .ico[aria-expanded]） */
 .task-panel[aria-expanded="true"] { color: var(--accent); }
 
-/* 「更多」里的删除是红的 */
-.menu > .task-danger, .menu > .task-danger > .i:first-child { color: var(--red); }
-
 /* 确认框里分两段说的话 */
 .task-say { display: block; }
 .task-say + .task-say { margin-top: 8px; }
@@ -51,3 +48,30 @@
 .task-acts > .is-bare > span, .task-kind.is-short > i > span { display: none; }
 .task-title.is-short { min-width: 3em; }
 .task-title.is-least { min-width: 0; }
+
+/* 改动工作区（changes.js）：顶替会话那一列。一行标题和验收动作，下面是分支、文件、提交——只画了骨架，差异没画 */
+.changes { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.changes-bar { flex: none; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 24px; border-bottom: 0.5px solid var(--line); }
+.changes-bar > b { font-weight: var(--w-strong); }
+.changes-done { display: inline-flex; align-items: center; gap: 6px; color: var(--green); font-size: var(--t-xs); font-weight: var(--w-medium); }
+.changes-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 24px 28px; }
+.changes-body > * { max-width: 790px; margin-inline: auto; }
+.changes-body > .note { margin-bottom: 12px; }
+.changes-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--muted); }
+.changes-meta > b { color: var(--ink); font: var(--w-medium) var(--t-sm) var(--font-mono); }
+.changes-meta > .num:first-of-type { margin-left: auto; }
+.changes-body li > button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; padding: 0 8px; border-radius: var(--r-sm); text-align: left; transition: background var(--dur-1) var(--ease-out); }
+.changes-body li > button:hover { background: var(--hover-bg); }
+.changes-body li .cut { flex: 1; }
+.changes-body li code, .changes-body li time { flex: none; color: var(--faint); font-size: var(--t-xs); }
+.changes-dir { color: var(--faint); }
+.changes .plus { color: var(--green); } .changes .minus { color: var(--red); }
+
+/* 派审 / 预约审查的对话框（review.js）：四行「标签 控件」，一个主动作 */
+.rv-dlg { width: min(440px, calc(100vw - 32px)); }
+.rv-dlg > h2 { margin-bottom: 12px; }
+.rv-row { display: grid; grid-template-columns: 104px minmax(0, 1fr); align-items: start; gap: 10px; min-height: 36px; }
+.rv-row > span { color: var(--muted); line-height: 28px; }
+.rv-row > div { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-height: 28px; color: var(--muted); }
+.rv-row textarea.field { width: 100%; height: auto; min-height: 52px; padding: 6px 10px; resize: none; line-height: 20px; }
+.rv-zero { font-size: var(--t-xs); }

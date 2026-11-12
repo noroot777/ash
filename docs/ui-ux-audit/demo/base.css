@@ -103,9 +103,11 @@ code, kbd, .mono { font-family: var(--font-mono); }
 .grow { flex: 1; min-width: 0; }
 .cut { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 焦点环：2px、外扩 2px，全应用一条（清单「可达性」第 1 条） */
+/* 焦点环：2px、外扩 2px，全应用一条（清单「可达性」第 1 条）。两处写明的例外：
+   贴边排成一列的行（菜单项、列表行）环画在行内，不然会顶到容器的边上；输入卡见下面 .inbox */
 :focus-visible, .is-focus { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 input:focus-visible, textarea:focus-visible { outline-offset: 0; }
+.menu > button:focus-visible, .menu > a:focus-visible, .rowring:focus-visible { outline-offset: -2px; }
 [disabled], .is-disabled { cursor: default; opacity: 0.45; }
 
 /* 图标 */
@@ -153,6 +155,12 @@ kbd, .kbd { padding: 1px 5px; border-radius: 4px; background: var(--overlay); co
 .note.ok { background: var(--green-bg); color: var(--ink); } .note.ok > .i { color: var(--green); }
 .note > .btn, .note > .link { margin-left: auto; flex: none; }
 .card { border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow); }
+/* 输入卡：外框是卡，里面是一个没有框的多行输入框（回复框、新建、聊天、助手、侧聊）。
+   它本来就是这一屏正在写字的地方，焦点不套 2px 的实环：卡自己那圈线换成焦点色，外面再晕开 2px */
+.inbox { position: relative; border-radius: var(--r-lg); background: var(--panel); box-shadow: 0 0 0 1px var(--line2), var(--surface-shadow); transition: box-shadow var(--dur-1) var(--ease-out); }
+.inbox:has(textarea:focus-visible) { box-shadow: 0 0 0 1px var(--focus-ring), 0 0 0 3px color-mix(in oklab, var(--focus-ring) 24%, transparent), var(--surface-shadow); }
+.inbox textarea { border: 0; background: none; resize: none; }
+.inbox textarea:focus-visible { outline: 0; }
 
 /* 分段：选中的那颗浮起来 */
 .seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--r-md); background: var(--overlay); }
@@ -169,6 +177,8 @@ kbd, .kbd { padding: 1px 5px; border-radius: 4px; background: var(--overlay); co
 .menu > button > .i:first-child { color: var(--muted); }
 .menu > button.danger, .menu > button.danger > .i:first-child { color: var(--red); }
 .menu kbd { margin-left: auto; background: none; color: var(--faint); }
+.menu > button > em { margin-left: auto; padding-left: 16px; color: var(--muted); font-size: var(--t-xs); font-style: normal; }
+.menu > button > em + kbd { margin-left: 8px; }
 .menu hr { height: 1px; margin: 4px 0; border: 0; background: var(--line); }
 .menu > small { display: block; padding: 6px 8px 2px; color: var(--faint); font-size: var(--t-xs); }
 
@@ -198,12 +208,23 @@ kbd, .kbd { padding: 1px 5px; border-radius: 4px; background: var(--overlay); co
 .sel > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sel > .i { width: 14px; height: 14px; color: var(--faint); transition: transform var(--dur-1) var(--ease-out); }
 .sel[aria-expanded="true"] > .i { transform: rotate(180deg); }
+/* 紧凑档：表格和键值行里用。无框、24 高，尖角一直在，指到才有底色 */
+.sel.sm { height: 24px; min-width: 0; padding: 0 4px 0 6px; border-radius: var(--r-sm); background: none; box-shadow: none; }
+.sel.sm:hover, .sel.sm[aria-expanded="true"] { background: var(--hover-bg); }
+.sel-menu [aria-selected="true"] > em { margin-right: 8px; }
 .sel-menu [aria-selected="true"]::after { content: ""; width: 10px; height: 6px; margin-left: auto; border: solid var(--accent); border-width: 0 0 1.6px 1.6px; transform: translateY(-2px) rotate(-45deg); }
 .field { height: 28px; padding: 0 10px; border: 0; border-radius: var(--r-md); background: var(--panel); box-shadow: var(--control-shadow); }
+/* 步进器：[−] 数 [+]，改轮数、改次数都用它 */
+.stepper { display: inline-flex; align-items: center; gap: 2px; }
+.stepper > output { min-width: 22px; text-align: center; color: var(--ink); font-weight: var(--w-medium); }
 .switch { position: relative; width: 30px; height: 18px; flex: none; border-radius: var(--r-full); background: var(--line2); transition: background var(--dur-1) var(--ease-out); }
 .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.2); transition: transform var(--dur-2) var(--ease-spring); }
 .switch[aria-checked="true"] { background: var(--accent); }
 .switch[aria-checked="true"]::after { transform: translateX(12px); }
+
+/* 短提示：保存、复制之后那一句（ASH.toast）。位置和长相照现在的产品：底部居中的一小条，自己走 */
+.toast { position: fixed; z-index: 95; left: 50%; bottom: 44px; max-width: min(460px, calc(100vw - 32px)); padding: 6px 12px; border-radius: var(--r-md); background: var(--panel); box-shadow: var(--control-shadow), var(--menu-shadow); color: var(--muted); font-size: var(--t-xs); pointer-events: none; opacity: 0; translate: -50% 4px; transition: opacity 120ms var(--ease-in), translate 120ms var(--ease-in); }
+.toast.is-in { opacity: 1; translate: -50% 0; transition: opacity var(--dur-2) var(--ease-out), translate var(--dur-2) var(--ease-out); }
 
 /* 提示：第一次等 0.4 秒，连着看下一个不等；键盘聚焦不等 */
 #tip { position: fixed; z-index: 100; padding: 3px 8px; border-radius: var(--r-sm); background: var(--ink); color: var(--panel); font-size: var(--t-xs); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
@@ -237,11 +258,11 @@ kbd, .kbd { padding: 1px 5px; border-radius: 4px; background: var(--overlay); co
 .flash { animation: flash 1.4s var(--ease-out); }
 @keyframes flash { 0%, 30% { background-color: color-mix(in oklab, var(--accent) 16%, transparent); } }
 
-/* 减少动效：全局一条。时长压到近乎为零而不是关掉——有的组件靠 animationend 收尾。
+/* 减少动效：全局一条。过渡直接关掉；动画压到近乎为零而不是关掉——有的组件靠 animationend 收尾。
    循环的换成静态等价物：流光变实色，转圈停住。（清单「可达性」第 3 条） */
-:root[data-motion="reduce"] *, :root[data-motion="reduce"] ::before, :root[data-motion="reduce"] ::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; animation-delay: 0s !important; transition-duration: 0.01ms !important; transition-delay: 0s !important; }
+:root[data-motion="reduce"] *, :root[data-motion="reduce"] ::before, :root[data-motion="reduce"] ::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; animation-delay: 0s !important; transition-duration: 0s !important; transition-delay: 0s !important; }
 :root[data-motion="reduce"] .shim { background: none; color: var(--muted); -webkit-text-fill-color: currentColor; }
 @media (prefers-reduced-motion: reduce) {
-  :root:not([data-motion="full"]) *, :root:not([data-motion="full"]) ::before, :root:not([data-motion="full"]) ::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; animation-delay: 0s !important; transition-duration: 0.01ms !important; transition-delay: 0s !important; }
+  :root:not([data-motion="full"]) *, :root:not([data-motion="full"]) ::before, :root:not([data-motion="full"]) ::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; animation-delay: 0s !important; transition-duration: 0s !important; transition-delay: 0s !important; }
   :root:not([data-motion="full"]) .shim { background: none; color: var(--muted); -webkit-text-fill-color: currentColor; }
 }

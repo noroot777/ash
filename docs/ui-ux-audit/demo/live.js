@@ -2,11 +2,12 @@
    正文是「攒够约 40 字」才来一块，工具只有一条「开始」、没有「结束」——动效都落在前端能做的那一侧：
    一行进行条（流光 + 用时，做完原地落定成过去式）、匀速放字 + 淡入、同一时刻只有一个「活的」信号。
    这一轮跟着任务走，不跟着页面：切到别的面它照常往下跑（侧栏那一行照样变），回来接着看。
-   对外：ASH.parts.live = { running, play(name, say), stop(), retry(), destroy() }，name 是 run / ask / fail / slow；
-   报告页隔着 iframe 递 { ash: 'play', name } 也能起一轮（正跑着的那一轮连同它留下的半截一起撤掉），{ ash: 'stop' } 是停。
+   对外：ASH.parts.live = { running, play(name, say), stop(), retry(), accept(), destroy() }，name 是 run / ask / fail / slow；
+   报告页隔着 iframe 递 { ash: 'play', name } 也能起一轮（正跑着的那一轮连同它留下的半截一起撤掉），{ ash: 'stop' } 是停；
+   嵌在报告里时，等你答复那一刻往外递 { ash: 'title', waiting }，报告拿它改自己的标签页标题。
    发 run:state { running }（同时发 run:start / run:end）、task:status { id, status, why }、
    usage { turn, tokens, ctx, files, add, del, elapsedMs, commit? }（turn 是这一轮的用量，其余是跑完之后的总数，ctx 是上下文还剩百分之几）；
-   听 reply:send / reply:stop（回复框）、head:act（任务头的停止 / 重试 / 运行 / 验收）。 */
+   听 reply:send / reply:stop / reply:steer（回复框）、head:act（任务头的停止 / 重试 / 运行）、review:start / review:done（审查那一行在会话里起、落）。 */
 (() => {
   const { h, $, icon } = ASH;
   const TITLE = document.title;
@@ -37,29 +38,33 @@
   }
   const thinkWord = (ms) => (ms >= 45000 ? '想了很久' : ms >= 15000 ? '还在想' : '在想');
 
-  const TEST = { verb: '跑', text: '裁定闸的回归测试', fields: { 命令: 'npm -w server run test:free-review', 目录: 'server', 时限: '10 分钟' } };
+  const cur = ASH.data.cur;
+  const [HEAD, PREV] = cur.commits;
+  const SQUASH = 'b7e2a94';
+  const TEST = { verb: '跑', text: cur.test.name, fields: { 命令: cur.test.cmd, 目录: 'server', 时限: '10 分钟' } };
   const SCRIPTS = {
     run: { say: '把这两条修复合成一个提交，再跑一遍回归。', events: [
       { think: 2400 },
-      { tool: { verb: '读', text: '`server/src/free-review-reservations.ts`' }, ms: 900 },
-      { tool: { verb: '读', text: '`server/scripts/test-free-review-ruling.ts`' }, ms: 1100 },
+      { tool: { verb: '读', text: '`server/src/later-send-recover.ts`' }, ms: 900 },
+      { tool: { verb: '读', text: '`server/scripts/test-later-send-recover.ts`' }, ms: 1100 },
       { tool: { verb: '跑', text: '`git log --oneline -3`', fields: { 命令: 'git log --oneline -3', 目录: '.' } }, ms: 1200 },
-      { text: '两条修复现在是两个提交：`b255e9ac` 和 `7c1d04e`。我把它们压成一个，说明里写清各自对应哪条审查意见，然后重跑回归。' },
+      { text: `两条修复现在是两个提交：\`${PREV[0]}\` 和 \`${HEAD[0]}\`。我把它们压成一个，说明里写清各自对应哪条审查意见，然后重跑回归。` },
       { tool: { verb: '跑', text: '`git reset --soft HEAD~2`' }, ms: 1100 },
-      { tool: { verb: '跑', text: '`git commit`', fields: { 命令: 'git commit -m "裁定后保留预约；开审前重新检查资格"', 目录: '.' } }, ms: 1200 },
+      { tool: { verb: '跑', text: '`git commit`', fields: { 命令: 'git commit -m "补发前重新核对：撤回的不发，时间回拨不重发"', 目录: '.' } }, ms: 1200 },
+      { tool: { verb: '写', text: '`docs/later-send.md`' }, ms: 1000 },
       { tool: TEST, ms: 3400 },
       { think: 1400 },
-      { text: '合成了一个提交 `e41f7a2`：**裁定后保留预约，每次开审前重新检查资格**。\n\n回归测试 14 条全部通过。改动没有超出这两条意见的范围，可以直接验收。' },
-      { end: { turn: 41800, files: 1, add: 12, del: 3, ctx: 3, commit: { hash: 'e41f7a2', text: '裁定后保留预约；开审前重新检查资格', squash: 2 } } },
+      { text: `合成了一个提交 \`${SQUASH}\`：**补发前重新核对，撤回的不发、时间回拨不重发**。\n\n回归测试 ${cur.test.pass} 条全部通过，补发的规则顺手记进了 \`docs/later-send.md\`。改动没有超出这两条意见的范围，可以直接验收。` },
+      { end: { turn: 41800, files: 1, add: 12, del: 3, ctx: 3, commit: { hash: SQUASH, text: '补发前重新核对：撤回的不发，时间回拨不重发', squash: 2 } } },
     ] },
     ask: { say: '回归偶尔会挂，看一下是不是用例本身的问题。', events: [
       { think: 1800 },
-      { tool: { verb: '读', text: '`server/scripts/test-free-review-ruling.ts`' }, ms: 1200 },
+      { tool: { verb: '读', text: '`server/scripts/test-later-send-recover.ts`' }, ms: 1200 },
       { tool: { verb: '搜', text: '「Date.now」于 `server/scripts`', fields: { 查找: 'Date.now', 范围: 'server/scripts' } }, ms: 1000 },
-      { text: '有一条用例依赖真实时钟：它等 50 毫秒后断言「已过期」，机器一忙就会差几毫秒。' },
+      { text: '有一条用例依赖真实时钟：它等 50 毫秒后断言「已经过点」，机器一忙就会差几毫秒。' },
       { ask: { q: '这条用例改成假时钟，还是把断言放宽？', options: ['改成假时钟', '把断言放宽到 ±1 秒'] } },
       { think: 1200 },
-      { tool: { verb: '改', text: '`server/scripts/test-free-review-ruling.ts`' }, ms: 1300 },
+      { tool: { verb: '改', text: '`server/scripts/test-later-send-recover.ts`' }, ms: 1300 },
       { tool: TEST, ms: 2400 },
       { text: '按你说的改好了，连跑 20 遍没有再挂。' },
       { end: { turn: 18600, files: 0, add: 8, del: 3, ctx: 2 } },
@@ -69,17 +74,35 @@
       { tool: TEST, ms: 3200 },
       { fail: 1 },
     ] },
-    slow: { say: '这个闸还有没有别的漏网的路径？仔细想想。', events: [
+    slow: { say: '补发还有没有别的漏网的情况？仔细想想。', events: [
       { think: 17000 },
-      { text: '想了一圈，还剩一条：任务被接力到另一台机器时，预约没有跟过去。这条我单独开一个任务记下来。' },
+      { text: '想了一圈，还剩一条：任务被接力到另一台机器时，待发送里的定时消息没有跟过去。这条我单独开一个任务记下来。' },
       { end: { turn: 9200, files: 0, add: 0, del: 0, ctx: 1 } },
     ] },
     /* 「重试」跑的那一轮：没有新的气泡，接着上一轮做 */
     again: { events: [
       { think: 1200 },
       { tool: TEST, ms: 2800 },
-      { text: '这次过了，14 条全部通过。上一次是测试端口被别的进程占着，和这次的改动没有关系。' },
+      { text: `这次过了，${cur.test.pass} 条全部通过。上一次是测试端口被别的进程占着，和这次的改动没有关系。` },
       { end: { turn: 6400, files: 0, add: 0, del: 0, ctx: 1 } },
+    ] },
+    /* 你点了「引导会话」：上一回合就地收住，这一回合接着你刚说的话做 */
+    steer: { events: [
+      { think: 1600 },
+      { tool: { verb: '读', text: '`server/src/later-send-recover.ts`' }, ms: 1000 },
+      { text: '收到，按你刚说的来。刚才那一步我先放下了，做到一半的改动没有提交。' },
+      { tool: TEST, ms: 2200 },
+      { text: `调整完了，回归 ${cur.test.pass} 条全部通过。` },
+      { end: { turn: 12400, files: 0, add: 4, del: 1, ctx: 1 } },
+    ] },
+    /* 审查没通过、这一趟还没到头：意见直接交给执行者，没有你的气泡 */
+    fix: { events: [
+      { think: 1400 },
+      { tool: { verb: '读', text: '`server/scripts/test-later-send-recover.ts`' }, ms: 1000 },
+      { tool: { verb: '改', text: '`server/scripts/test-later-send-recover.ts`' }, ms: 1200 },
+      { tool: TEST, ms: 2600 },
+      { text: `补上了「连着重启两次」这一种，回归 ${cur.test.pass + 1} 条全部通过。` },
+      { end: { turn: 15200, files: 0, add: 21, del: 0, ctx: 2 } },
     ] },
   };
   const PREP = { 'run-1': 'run', 'run-2': 'run', 'run-3': 'run', 'run-4': 'run', 'run-5': 'run', 'run-6': 'run', 'run-7': 'ask', 'run-8': 'fail' };
@@ -101,13 +124,13 @@
   let last = 'run';   /* 上一次跑的是哪段：停掉之后点「运行」接着跑它 */
   let seq = 0;
   /* 剧本里 end 写的是这一轮多出来的量；报给面板的是总数。起点和右侧面板一开始画的数对得上 */
-  const totals = { tokens: 48.9e6, files: 9, add: 371, del: 65, ctx: 65 };
+  const totals = { tokens: cur.use.claude.tokens + cur.use.codex.tokens, files: ASH.changes.rows.length, add: ASH.changes.sum('add'), del: ASH.changes.sum('del'), ctx: cur.remain };
   const rounds = [];   /* 跑完的每一轮报过的数：回到这一面时面板是新画的，照原样再报一遍 */
   /* 会话流不在页面上的时候（切到别的面了）：滚动的事不用做，新来的节点先记着，回来时会话流自己接上 */
   const feed = {
     follow: () => ASH.parts.feed?.follow?.(),
     pin: () => ASH.parts.feed?.pin?.(),
-    unask: () => ASH.parts.feed?.unask?.(),
+    unask: (then) => { if (ASH.parts.feed?.unask) ASH.parts.feed.unask(then); else then?.(); },
     append(...nodes) { run?.nodes.push(...nodes); if (ASH.parts.feed?.append) ASH.parts.feed.append(...nodes); else kit.kept.push(...nodes); },
   };
   const paintBtn = () => { const btn = $('#runBtn'); if (btn) btn.textContent = run ? '停止' : '运行一轮'; };
@@ -122,6 +145,11 @@
   const sleep = (ms) => hold((done) => { const id = setTimeout(done, ms); return () => clearTimeout(id); });
   const status = (state, why) => ASH.emit('task:status', { id: ASH.data.current, status: state, why });
   const busy = (on) => { ASH.emit('run:state', { running: on }); ASH.emit(on ? 'run:start' : 'run:end', { id: ASH.data.current }); };
+  /* 等你答复时标签页标题前多一个 ●；嵌在报告里看不到自己的标题，递给外面那一页去改 */
+  const waitingTitle = (on) => {
+    document.title = on ? `● 等你答复 · ${TITLE}` : TITLE;
+    if (parent !== window) parent.postMessage({ ash: 'title', waiting: on }, '*');
+  };
   /* 清单的圆圈跟着最新的那一处走 */
   const claimed = {};
   const marks = (el) => (el.dataset.m ?? '').split(' ').filter(Boolean);
@@ -152,20 +180,28 @@
     feed.follow();
     return strip;
   }
-  /* 换标题：每条至少停 1 秒；积压了就只留最新的一条 */
+  /* 换标题：每条至少停 1 秒；积压了就只留最新的一条。字换了宽度会变：后面的用时跟着滑过去，换字那一拍它和旧字一起暗下去 */
+  function swapLabel(strip, text) {
+    ASH.swap(strip.label, text, { row: strip.btn });
+    if (ASH.reduced()) return;
+    strip.time.classList.add('is-dim');
+    setTimeout(() => strip.time.classList.remove('is-dim'), 150);
+  }
   function relabel(strip, text) {
     clearTimeout(strip.pending);
     strip.said = text;
-    strip.pending = setTimeout(() => { strip.shownAt = performance.now(); ASH.swap(strip.label, text); }, Math.max(0, strip.shownAt + 1000 - performance.now()));
+    strip.pending = setTimeout(() => { strip.shownAt = performance.now(); swapLabel(strip, text); }, Math.max(0, strip.shownAt + 1000 - performance.now()));
   }
-  /* 落定：流光停、用时收走，同一行换成过去式（或者你给的那句话） */
-  function settle(strip, text, cls) {
+  /* 落定是一拍：流光停，旧句和用时按原来的颜色一起淡出；150ms 后同一行换成过去式（或者你给的那句话），
+     cls（失败的红）在换字的那一刻才加上，then 里是要和新句一起进场的东西（「重试」） */
+  function settle(strip, text, cls, then) {
     clearTimeout(strip.pending);
     strip.btn.classList.remove('is-live');
     strip.label.classList.remove('shim');
-    if (cls) strip.btn.classList.add(cls);
-    strip.time.remove();
-    ASH.swap(strip.label, text ?? summarize(strip.steps));
+    strip.time.classList.remove('is-in');
+    ASH.swap(strip.label, text ?? summarize(strip.steps), { row: strip.btn });
+    const land = () => { strip.time.remove(); if (cls) strip.btn.classList.add(cls); then?.(); };
+    if (ASH.reduced()) land(); else setTimeout(land, 150);
     delete strip.btn.dataset.m;
     delete strip.label.dataset.m;
     if (run?.strip === strip) run.strip = null;
@@ -246,17 +282,18 @@
   /* ---- 一轮 ---- */
   const retries = [];   /* 还挂在会话里的「重试」：重试一次就都收走 */
   function openTurn() {
-    const turn = kit.turn({});
+    const turn = kit.turn({ reply: run.reply });
+    run.reply = null;
     turn.el.classList.add('is-live');
     Object.assign(run, { turn, strip: null, flat: [], prose: [], steps: [], t0: performance.now() });
     feed.append(enter(turn.el));
   }
 
-  async function play(name = 'run', say) {
+  async function play(name = 'run', say, { reply = null } = {}) {
     const script = SCRIPTS[name];
     if (run || !script) return;
-    if (name !== 'again') last = name;
-    const r = (run = { name, dead: false, waits: new Map(), waiting: false, ask: null, answer: null, nodes: [], turn: null, strip: null, flat: [], prose: [], steps: [], t0: performance.now() });
+    if (SCRIPTS[name].say) last = name;
+    const r = (run = { name, reply, dead: false, steered: false, waits: new Map(), waiting: false, ask: null, answer: null, nodes: [], turn: null, strip: null, flat: [], prose: [], steps: [], t0: performance.now() });
     r.over = new Promise((done) => { r.end = done; });
     paintBtn();
     const text = say ?? script.say;
@@ -275,7 +312,7 @@
       openTurn();
       for (const ev of script.events) await step(ev);
     } catch (why) {
-      halt();
+      if (r.steered) { if (r.turn?.el.classList.contains('is-live')) collapse(); release(); } else halt();
       if (why !== STOP) throw why;
     }
   }
@@ -303,7 +340,7 @@
       r.ask = ev.ask;
       status('waiting', '等你答复');
       busy(false);
-      document.title = `● 等你答复 · ${TITLE}`;
+      waitingTitle(true);
       let got;
       try {
         got = await hold((done) => {
@@ -311,10 +348,10 @@
           showCard();
           return () => feed.unask();
         });
-      } finally { document.title = TITLE; r.answer = null; r.waiting = false; }
-      feed.unask();
+      } finally { waitingTitle(false); r.answer = null; r.waiting = false; }
+      /* 提问卡沉下去和答复落进会话是同一段：卡往下走的那 320ms 里，会话带着新来的这一行一起落回贴底 */
       feed.pin();
-      feed.append(enter(got.card ? kit.answer({ ...ev.ask, text: got.text, time: '刚刚' }) : kit.user(got.text, '刚刚')));
+      feed.unask(() => feed.append(enter(got.card ? kit.answer({ ...ev.ask, text: got.text, time: '刚刚' }) : kit.user(got.text, '刚刚'))));
       busy(true);
       status('running');
       await sleep(350);
@@ -322,13 +359,12 @@
     } else if (ev.fail) {
       /* 进行条原地落定成红色的一句，「重试」紧跟在它后面；退出码收在点开的那一层 */
       const strip = r.strip ?? openStrip('这一轮异常结束');
-      strip.put(h('p.step-note', `退出码 ${ev.fail}`));
-      settle(strip, '这一轮异常结束', 'is-failed');
       const again = h('button.btn.sm.retry', { type: 'button', onclick: () => retry() }, icon('redo'), '重试');
       retries.push(again);
-      strip.btn.after(again);
+      strip.put(h('p.step-note', `退出码 ${ev.fail}`));
+      settle(strip, '这一轮异常结束', 'is-failed', () => { if (retries.includes(again)) strip.btn.after(enter(again)); });
       claim(strip.btn, 'run-8');
-      r.turn.setMeta(`claude-opus-5-5 · high · 刚刚 · ${ASH.dur(performance.now() - r.t0)}`);
+      r.turn.setMeta(`${cur.model} · 刚刚 · ${ASH.dur(performance.now() - r.t0)}`);
       finish('failed');
     } else if (ev.end) {
       collapse();
@@ -370,7 +406,7 @@
       r.turn.body.prepend(enter(fold.btn), fold.list);
       claim(fold.btn, 'run-5');
     }
-    r.turn.setMeta(`claude-opus-5-5 · high · 刚刚 · ${total}`);
+    r.turn.setMeta(`${cur.model} · 刚刚 · ${total}`);
     const acts = r.turn.acts;
     r.turn.el.classList.remove('is-live');
     void acts.offsetWidth;   /* 这一排刚从「不画」出来，先让它以透明的样子落一次，下面那句才有过渡可走 */
@@ -385,12 +421,13 @@
     if (!r) return;
     if (r.turn?.el.classList.contains('is-live')) {
       settle(r.strip ?? openStrip('已停止'), '已停止');
-      r.turn.setMeta(`claude-opus-5-5 · high · 刚刚 · ${ASH.dur(performance.now() - r.t0)}`);
+      r.turn.setMeta(`${cur.model} · 刚刚 · ${ASH.dur(performance.now() - r.t0)}`);
     }
     finish('stopped');
   }
 
-  function finish(state) {
+  /* 这一轮不再往下走：钟停掉、还在等的都收掉。任务的状态由调用的人定 */
+  function release() {
     const r = run;
     clearInterval(r.clock);
     for (const undo of r.waits.values()) undo?.();
@@ -399,10 +436,13 @@
     r.turn?.el.classList.remove('is-live');
     run = null;
     paintBtn();
+    r.end();
+  }
+  function finish(state) {
+    release();
     busy(false);
     status(state);
     feed.follow();
-    r.end();
     /* 排着的那条只在这一轮正常结束后接着发；你自己停掉的，它留在原地等你 */
     const queued = state === 'done' ? ASH.parts.reply?.takeQueued?.() : null;
     if (queued) setTimeout(() => play('run', queued), 700);
@@ -419,8 +459,18 @@
   /* 重试：不发新的气泡，接着上一轮做 */
   function retry() {
     if (run) return;
-    for (const btn of retries.splice(0)) btn.remove();
+    for (const btn of retries.splice(0)) { btn.classList.add('is-out'); setTimeout(() => btn.remove(), ASH.reduced() ? 0 : 120); }
     play('again');
+  }
+  /* 引导会话：正在跑的那一回合就地收住（已经出来的步骤折成一行），你的话接在它后面，再另起一回合。任务一直是「运行中」 */
+  async function steer(msg = {}) {
+    const r = run;
+    if (!r || r.dead || r.waiting || !msg.text) return;
+    msg.taken = true;
+    r.steered = true;
+    stop();
+    await r.over;
+    play('steer', msg.text);
   }
   /* 换一段跑（报告页点了另一段）：正跑着的先停掉，它留下的半截一起撤走，台面上只剩新的这一段；连着点只认最后一次 */
   async function restart(name) {
@@ -435,14 +485,36 @@
     }
     if (mine === seq) play(name);
   }
+  /* 验收是盖一枚章，不是换状态：做完的落成「验收完成」；失败、已取消的还是原来的状态，后面多半句「已验收」 */
   function accept() {
     if (run) return;
-    status('accepted');
+    const state = ASH.parts.head?.state ?? 'done';
+    if (state === 'done') status('accepted'); else ASH.emit('task:status', { id: ASH.data.current, status: state, accepted: true });
     feed.pin();
-    feed.append(enter(kit.sys({ tone: 'ok', text: '已合并到 `main`', more: '3 条记录', time: '刚刚',
-      log: [['验收前置命令通过', ''], ['`ash/QsjSuz_e` 合并进 `main`，没有冲突', ''], ['任务分支和它的工作区已清理', '']] })));
+    feed.append(enter(kit.sys({ tone: 'ok', text: `已合并到 \`${cur.target}\``, more: '3 条记录', time: '刚刚',
+      log: [['验收前置命令通过', ''], [`\`${cur.branch}\` 合并进 \`${cur.target}\`，没有冲突`, ''], ['任务分支和它的工作区已清理', '']] })));
   }
 
+  /* 审查那一行在会话里：起一轮时是活的一行（「审查中」带流光），出了结论原地落定。人不在这一面时照样记着 */
+  const revRows = {};
+  ASH.on('review:start', ({ round, by } = {}) => {
+    const row = enter(kit.rev({ n: round, by }));
+    revRows[round] = row;
+    feed.pin();
+    feed.append(row);
+  });
+  ASH.on('review:done', ({ round, post, repair } = {}) => {
+    if (post) return;
+    revRows[round]?.settle(ASH.review.rounds.find((r) => r.n === round));
+    delete revRows[round];
+    if (!repair) return;
+    setTimeout(() => {
+      if (run) return;
+      feed.pin();
+      feed.append(enter(kit.sys({ glyph: 'clock', text: `第 ${round} 轮审查没通过，意见已交给执行者`, time: '刚刚' })));
+      play('fix', '', { reply: `回复第 ${round} 轮审查的意见` });
+    }, 900);
+  });
 
   /* ---- 部件：只管把这一面的按钮和事件接上。卸载时不停那一轮 ---- */
   ASH.part('live', {
@@ -452,11 +524,11 @@
       const offs = [
         ASH.on('reply:send', ({ text } = {}) => { if (run?.answer) run.answer(text); else play('run', text); }),
         ASH.on('reply:stop', stop),
+        ASH.on('reply:steer', steer),
         ASH.on('head:act', ({ label } = {}) => {
           if (label === '停止') stop();
           else if (label === '重试') retry();
           else if (label === '运行' || label === '继续') play(last, '');
-          else if (label === '验收') accept();
         }),
       ];
       const pick = () => (run ? stop() : ASH.menu(runBtn, [
@@ -471,7 +543,8 @@
       /* 报告把这一列嵌在 iframe 里；file:// 下两边互相碰不到脚本，只能递消息 */
       const onMessage = (e) => { if (e.data?.ash === 'play' && SCRIPTS[e.data.name]) restart(e.data.name); else if (e.data?.ash === 'stop') stop(); };
       addEventListener('message', onMessage);
-      for (const [id, name] of Object.entries(PREP)) ASH.prep[id] = () => { if (!run) play(name); };
+      /* 清单点到「执行中」的哪一条就演哪一段：正跑着的是别的段，先撤掉它再起 */
+      for (const [id, name] of Object.entries(PREP)) ASH.prep[id] = () => { if (!run) play(name); else if (run.name !== name) restart(name); };
       /* 回到这一面时那一轮还在：回复框的键、提问卡、面板上的数字对上现在的样子 */
       if (run && !run.waiting) ASH.emit('run:state', { running: true });
       if (run?.waiting) showCard(true);
@@ -479,7 +552,7 @@
 
       return {
         get running() { return Boolean(run) && !run.waiting; },
-        play, stop, retry,
+        play, stop, retry, accept,
         destroy() {
           seq++;
           for (const off of offs) off();

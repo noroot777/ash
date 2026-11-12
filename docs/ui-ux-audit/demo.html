@@ -29,7 +29,7 @@
   <button id="notesBtn" aria-pressed="false">对照清单</button>
   <button id="themeBtn" aria-pressed="false" data-m="a11y-keep">深色</button>
   <button id="motionBtn" aria-pressed="false" data-m="a11y-3">减少动效</button>
-  <a href="index.html#list">回报告</a>
+  <a href="index.html#list" id="backLink">回报告</a>
 </header>
 <div class="stage">
   <div class="app">
@@ -37,7 +37,7 @@
       <aside class="side" id="side" aria-label="侧栏"></aside>
       <main class="main" id="main"></main>
     </div>
-    <footer class="statusbar" id="statusbar" data-m="bar-keep"><span class="proj"><b>harness</b></span><span class="term">终端<kbd>G Z</kbd></span><span class="add">+</span><span class="grow"></span><span class="ok">已连接</span></footer>
+    <footer class="statusbar" id="statusbar" data-m="bar-keep"><span class="proj"><b>harness</b></span><span class="term"><svg class="i" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="m4.8 6.5 2 1.8-2 1.8M8.5 10.2h2.7"/></svg>终端<kbd>G Z</kbd></span><span class="add">+</span><span class="grow"></span><span class="ok">已连接</span></footer>
   </div>
   <aside class="notes" id="notes" aria-label="对照清单"><div></div></aside>
 </div>
@@ -45,8 +45,10 @@
 
 <script src="checklist.js" defer></script>
 <script src="demo/kit.js" defer></script>
+<script src="demo/data.js" defer></script>
 <script src="demo/app.js" defer></script>
 <script src="demo/target.js" defer></script>
+<script src="demo/review.js" defer></script>
 <script src="demo/notes.js" defer></script>
 <script src="demo/side.js" defer></script>
 <script src="demo/sendkey.js" defer></script>
@@ -56,6 +58,7 @@
 <script src="demo/insp-work.js" defer></script>
 <script src="demo/feed.js" defer></script>
 <script src="demo/task.js" defer></script>
+<script src="demo/changes.js" defer></script>
 <script src="demo/live.js" defer></script>
 <script src="demo/home-opts.js" defer></script>
 <script src="demo/home.js" defer></script>

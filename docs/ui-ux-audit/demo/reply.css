@@ -25,15 +25,16 @@
 .skey.is-dim > button { opacity: 0.45; }
 .skey.is-dim > .skey-opt:hover, .skey.is-dim > .skey-opt:focus-visible, .skey.is-dim > .skey-opt[aria-expanded="true"] { opacity: 1; }
 
-/* 键上的字：只在「这一条不会马上发出去」时出现。旧字 80ms 淡出，新字等 80ms 再 120ms 淡入 */
-.skey-txt { transition: opacity 120ms var(--ease-out) 80ms; }
+/* 键上的字：只在「这一条不会马上发出去」时出现。旧字先淡出，键变宽，新字再淡入 */
+.skey-txt { transition: opacity var(--dur-1) var(--ease-out) var(--dur-1); }
 .skey-txt:empty { display: none; }
-.skey-txt.is-out { opacity: 0; transition: opacity 80ms var(--ease-out); }
+.skey-txt.is-out { opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
 
-/* 图标叠在同一格里交叉淡：发送 ↔ 停止，尖角 ↔ 时钟 ↔ 沙漏。位置不跳 */
+/* 图标叠在同一格里交叉淡：发送 ↔ 停止，尖角 ↔ 时钟 ↔ 沙漏。一出一进同时走同一段时间，键面上任何一帧都有东西；
+   进来的那个从九成大长到原大，两个形状叠着的那一小会儿不会糊成一团 */
 .skey-glyph { display: grid; place-items: center; flex: none; }
-.skey-glyph > .i { grid-area: 1 / 1; width: var(--g); height: var(--g); stroke-width: 1.8; opacity: 0; transition: opacity 80ms var(--ease-out); }
-.skey-glyph > .i.is-on { opacity: 1; transition: opacity 120ms var(--ease-out) 80ms; }
+.skey-glyph > .i { grid-area: 1 / 1; width: var(--g); height: var(--g); stroke-width: 1.8; opacity: 0; transform: scale(0.9); transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out); }
+.skey-glyph > .i.is-on { opacity: 1; transform: none; }
 .skey-opt .skey-glyph > .i { width: 12px; height: 12px; stroke-width: 1.6; }
 
 /* 发送设置 / 启动设置浮层的内容（外壳是公共的 .pop）：上面选档，下面是这一档要填的那一样 */
@@ -67,8 +68,7 @@
 .reply-row > .btn { flex: none; padding: 0 8px; }
 .reply-row.is-out { opacity: 0; transform: translateY(-4px); pointer-events: none; }
 
-.reply-box { position: relative; border-radius: var(--r-lg); background: var(--panel); box-shadow: 0 0 0 1px var(--line2), var(--surface-shadow); }
-.reply-box:focus-within { box-shadow: 0 0 0 1px color-mix(in oklab, var(--focus-ring) 55%, var(--line2)), var(--surface-shadow); }
+/* 外框是公共的输入卡（base.css 的 .inbox）：框、底色、聚焦时的环都在那边 */
 
 /* 顶边的拖动条：平时看不见，指到或拖着时顶边亮一条线（只画直的那一段，不压圆角）。
    它只有 8px 高、贴着框线，套一圈焦点环会把框线盖住，聚焦时改成把这条线加粗、换成焦点环的颜色 */
@@ -92,13 +92,14 @@
 .reply-acts { position: relative; z-index: 1; display: flex; align-items: center; gap: 2px; padding: 4px 8px 8px; }
 .reply-acts > .btn { flex: none; padding: 0 8px; }
 .reply-acts > .btn[aria-pressed="true"] { color: var(--ink); }
+.reply-acts > .btn > .spin { width: 12px; height: 12px; margin: 1px; }
 .reply-acts > .caps { margin-left: 8px; background: var(--panel); }
 .reply-acts > .skey { margin-left: 8px; }
 .reply .ico:active, .reply .btn.quiet:active { background: var(--sel-bg); }
 
 /* 放不下时的退路，脚本量过以后写在 data-tight 上（reply.js 的 fitActs）：
    1 没有状态的动作只剩图标（提示还在），正在审、正在起预览、已预约的照样带字；2 胶囊收成只剩智能体；3 换行 */
-.reply-acts:is([data-tight="1"], [data-tight="2"], [data-tight="3"]) > .btn:not([aria-pressed="true"]) > span:not(.shim) { display: none; }
+.reply-acts:is([data-tight="1"], [data-tight="2"], [data-tight="3"]) > .btn:not([aria-pressed="true"], .is-busy) > span { display: none; }
 .reply-acts:is([data-tight="2"], [data-tight="3"]) > .caps > button:not(:first-child) { display: none; }
 .reply-acts:is([data-tight="2"], [data-tight="3"]) > .caps > button:first-child { border-radius: var(--r-md); }
 .reply-acts[data-tight="3"] { flex-wrap: wrap; justify-content: flex-end; row-gap: 4px; }
@@ -115,3 +116,7 @@
 .reply-shot-img { position: relative; display: block; overflow: hidden; border-radius: var(--r-sm); cursor: crosshair; }
 .reply-shot-img > img { display: block; max-width: 100%; max-height: 50vh; }
 .reply-shot-img > i { position: absolute; width: 20px; height: 20px; translate: -50% -50%; border-radius: 50%; background: var(--red); color: var(--on-accent); font: normal var(--w-strong) var(--t-xs)/20px var(--font-sans); text-align: center; }
+
+/* 敲 / 和 @ 出的那张浮层：一行是「填进去的字 + 说明」，高亮跟着上下键走 */
+.reply-hint { min-width: 280px; max-height: 240px; overflow-y: auto; }
+.reply-hint > button[data-active="true"] { background: var(--hover-bg); }

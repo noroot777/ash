@@ -29,14 +29,22 @@
     return (r.top < 36 && !el.closest('.dbar')) || r.top > innerHeight || r.left > innerWidth ? null : r;
   }
 
+  /* 圆圈整颗骑在目标左上角的外侧（它的右下角贴着目标的角），夹在窗口里；两条认领同一处时后一颗往右错开一颗 */
+  const PIN = 18;
   function place() {
     if (!document.body.classList.contains('notes-on')) { looping = false; return; }
+    const taken = [];
     for (const pin of $$('#pins button')) {
       const el = targetOf(pin.dataset.id);
       const r = el && visibleRect(el);
       pin.hidden = !r;
-      if (r) pin.style.translate = `${Math.round(r.left)}px ${Math.round(r.top)}px`;
       $(`.notes li[data-id="${pin.dataset.id}"]`)?.classList.toggle('off', !r);
+      if (!r) continue;
+      let x = Math.max(3, Math.min(Math.round(r.left) - PIN + 4, innerWidth - PIN - 3));
+      const y = Math.max(el.closest('.dbar') ? 1 : 39, Math.min(Math.round(r.top) - PIN + 4, innerHeight - PIN - 3));   /* 39：产品里的东西，圆圈不压到样机自己那条栏上 */
+      while (taken.some(([tx, ty]) => Math.abs(tx - x) < PIN && Math.abs(ty - y) < PIN)) x += PIN + 2;
+      taken.push([x, y]);
+      pin.style.translate = `${x}px ${y}px`;
     }
     const r = ringed?.isConnected ? ringed.getBoundingClientRect() : null;
     ring.classList.toggle('is-in', Boolean(r));
@@ -51,6 +59,8 @@
       for (const li of $$('.notes li')) li.classList.toggle('on', li.dataset.id === id);
       $(`.notes li[data-id="${id}"]`)?.scrollIntoView({ block: 'nearest' });
       for (const pin of $$('#pins button')) pin.classList.toggle('on', pin.dataset.id === id);
+      const back = $('#backLink');
+      if (back) back.href = `index.html#c-${id}`;   /* 「回报告」落回刚才那一条 */
       if (!el) return;
       el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: ASH.reduced() ? 'auto' : 'smooth' });
       ringed = el;

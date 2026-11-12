@@ -1,58 +1,25 @@
 /* 右侧面板前两簇的四格：信息、文件、生成物、改动。外壳在 insp.js（排在它后面加载）。
    每一格是一个造法 I.build.<格>(c) → 节点；c 是外壳给的控制器（c.st 任务状态、c.on / c.emit 栏内事件、c.acts 面板头动作、c.open 切格）。
    内容只用 base.css 的六个公共件，加 insp.css 里那几样收不进去的（文件行、缩略图、细条）。
-   样机里没有做下去的三个去处，只发事件：changes:open（改动工作区）、diff:open { path }（中间栏的差异）、files:reveal。 */
+   任务的事实取自 ASH.data.cur，改动的账是 ASH.changes（改动工作区看的也是它）。
+   通到别处的入口只发事件：changes:open（改动工作区）、diff:open / file:open / folder:open { path }、files:reveal、queue:open。 */
 (ASH.insp ??= { build: {}, packs: [] }).packs.push((I) => {
   const { h, icon } = ASH;
-  const { sec, pair, kv, go, reenter, fold, tool, copyBtn, big } = I.kit;
+  const { sec, pair, showRows, kv, go, reenter, fold, tool, copyBtn, big } = I.kit;
   const D = I.data;
-  const STATUS = { running: '运行中', waiting: '等答复', queued: '排队中', failed: '失败', stopped: '已取消', done: '完成' };   // 叫法和任务头一致
+  const cur = ASH.data.cur;
+  const m = ASH.changes;
+  const STATUS = { running: '运行中', waiting: '等答复', queued: '排队中', failed: '失败', stopped: '已取消', backlog: '待排期', done: '完成' };   // 叫法和任务头一致
+  const SETTABLE = ['backlog', 'done', 'failed', 'stopped'];   // 能手动设的四种，照 shared 的 USER_SETTABLE_STATUSES
   const pathLine = (copy) => h('p.insp-path', {}, icon('branch', 'sm'), h('b.cut', D.branch), h('span.cut', D.dir), copy && copyBtn(`${D.branch}  ${D.dir}`, '复制分支和目录'));
 
-  /* ---------- 改动的账：信息格那一行和改动格的清单看的是同一份 ---------- */
-  const CHANGED = [['test-free-review-dispute-gate.ts', 'server/scripts', 159, 6], ['free-review-ruling-release.ts', 'server/src', 96, 34], ['free-review-reservations.ts', 'server/src', 55, 2],
-    ['free-review-dispute.ts', 'server/src', 30, 18], ['free-workflow.ts', 'server/src', 11, 4], ['schema-free-workflow.ts', 'server/src/db', 9, 1],
-    ['index.ts', 'server/src', 4, 0], ['free-workflow.ts', 'shared/src', 4, 0], ['FreeReviewDisputeCard.tsx', 'web/src/free-workflow', 3, 0]];
-  const LATER = [['incidents.md', 'docs'], ['free-review-copy.ts', 'web/src/free-workflow'], ['README.md', 'server']];   // 再跑几轮时新碰到的文件
-  const COMMITS = [['b255e9ac', '开审前重新检查资格', '22:37'], ['7c1d04e', '裁定后保留预约，不再取消重挂', '22:34'],
-    ['3f0e2b8', '放行写进记录；补「裁定后再派审」的回归', '22:08'], ['a91c3d7', '裁定「不用改了」后放行等着的那一轮', '21:42']];
-  function changesOf(c) {
-    if (c.changes) return c.changes;
-    const m = c.changes = {
-      rows: CHANGED.map(([name, dir, add, del]) => ({ name, dir, add, del })),
-      commits: COMMITS.map(([hash, text, at]) => ({ hash, text, at })),
-      subs: [],
-      sum: (key) => m.rows.reduce((n, r) => n + r[key], 0),
-    };
-    /* 一轮跑完报来的是总数：多出来的文件添成新行，多出来的增删记到新行（没有新文件就记到头一行）上。
-       带 commit { hash, text, squash? } 时记一笔提交，squash 是它合掉了前面几个 */
-    c.on('usage', (u) => {
-      const dAdd = u.add == null ? 0 : u.add - m.sum('add');
-      const dDel = u.del == null ? 0 : u.del - m.sum('del');
-      const fresh = [];
-      for (let n = m.rows.length; u.files != null && n < u.files && LATER[n - CHANGED.length]; n += 1) {
-        const [name, dir] = LATER[n - CHANGED.length];
-        fresh.push({ name, dir, add: 0, del: 0, fresh: true });
-      }
-      m.rows.push(...fresh);
-      const into = fresh[0] ?? m.rows[0];
-      into.add = Math.max(0, into.add + dAdd);
-      into.del = Math.max(0, into.del + dDel);
-      if (u.commit) { m.commits.splice(0, u.commit.squash ?? 0); m.commits.unshift({ hash: u.commit.hash, text: u.commit.text, at: '刚刚' }); }
-      if (fresh.length || dAdd || dDel || u.commit) for (const fn of m.subs) fn();
-    });
-    return m;
-  }
-
   /* ---------- 信息：全部是「标签 值」一种行。上面一组能改，下面一组是事实 ---------- */
-  const REQ = '点了「这一轮不用改了」之后，审查还停在等待里，没有往下走；预约的那一轮也没有起来。裁定之后应该放行等着的那一轮，再按预约派下一轮，记录里要看得出是谁放行的。';
   I.build.info = (c) => {
     const { st, task } = c;
-    const m = changesOf(c);
-    const req = h('button.insp-req', { type: 'button', 'aria-expanded': 'false', onclick: () => req.setAttribute('aria-expanded', String(req.getAttribute('aria-expanded') !== 'true')) }, h('span', REQ));
+    const req = h('button.insp-req', { type: 'button', 'aria-expanded': 'false', onclick: () => req.setAttribute('aria-expanded', String(req.getAttribute('aria-expanded') !== 'true')) }, h('span', cur.req));
 
     /* 后续追问：折成一行，点开再看。回复框里再发一句，这里跟着多一条 */
-    const asks = [['11/10 22:31', '两条都改。改完跑一遍那个闸的回归。']];
+    const asks = cur.asks.map((ask) => [...ask]);
     const askList = h('ol.insp-asks');
     const askWide = h('dd.insp-wide', { hidden: true }, askList);
     const askBtn = h('button.insp-val', { type: 'button', 'aria-expanded': 'false', onclick: () => fold(askBtn, askWide) }, h('span'), icon('chev', 'sm insp-rot'));
@@ -63,20 +30,19 @@
     c.on('send', (text) => { if (text) { asks.push(['刚刚', text]); paintAsks(); } });
     paintAsks();
 
-    /* 状态：能手动设的是完成、失败、已取消，再加当前这一个 */
+    /* 状态：能手动设的是待排期、完成、失败、已取消，再加当前这一个 */
     const status = pair('状态');
     const paintStatus = (prev) => {
-      const values = ['done', 'failed', 'stopped'];
-      if (!values.includes(st.status)) values.unshift(st.status);
+      const values = SETTABLE.includes(st.status) ? SETTABLE : [st.status, ...SETTABLE];
       const had = status.dd.contains(document.activeElement);
-      const sel = ASH.select({ value: st.status, label: '状态', options: values.map((value) => ({ value, label: STATUS[value] })),
+      const sel = ASH.select({ compact: true, value: st.status, label: '状态', options: values.map((value) => ({ value, label: STATUS[value] })),
         onchange: (value) => { if (value !== st.status) ASH.emit('task:status', { id: ASH.data.current, status: value }); } });
       status.dd.replaceChildren(sel, ...(st.accepted ? [h('span.faint', '已验收')] : []));
       if (had) sel.focus({ preventScroll: true });
       if (prev && prev.status !== st.status) { sel.firstChild.textContent = STATUS[prev.status]; ASH.swap(sel.firstChild, STATUS[st.status]); }
     };
 
-    const labels = ['审查链'];
+    const labels = ['定时发送'];
     const tagIn = h('input.insp-tag-in', { placeholder: '添加', 'aria-label': '添加标签', size: 4, spellcheck: 'false' });
     const tags = h('span.insp-tags');
     const paintTags = () => tags.replaceChildren(...labels.map((name) => h('button.insp-tag', { type: 'button', 'aria-label': `移除标签「${name}」`, 'data-tip': '移除', onclick: () => { labels.splice(labels.indexOf(name), 1); paintTags(); tagIn.focus(); } }, h('span', name), icon('x'))), tagIn);
@@ -92,29 +58,29 @@
     const when = h('input.field.grow', { 'aria-label': '运行时间' });
     const saved = h('button.btn.sm', { type: 'button', onclick: () => { saved.textContent = '已保存'; setTimeout(() => { saved.textContent = '保存'; }, 1400); } }, '保存');
     const whenWide = h('dd.insp-wide.insp-when', { hidden: true }, when, saved);
-    const schedule = ASH.select({ value: 'none', label: '调度', options: [{ value: 'none', label: '不定时' }, { value: 'once', label: '一次性' }, { value: 'cron', label: '循环 Cron' }], onchange: (value) => {
+    const schedule = ASH.select({ compact: true, value: 'none', label: '调度', options: [{ value: 'none', label: '不定时' }, { value: 'once', label: '一次性' }, { value: 'cron', label: '循环 Cron' }], onchange: (value) => {
       whenWide.hidden = value === 'none';
       when.value = '';
       when.placeholder = value === 'cron' ? '分 时 日 月 周，如 0 9 * * 1-5' : '月/日 时:分，如 11/12 09:00';
       if (value !== 'none') { reenter(whenWide); when.focus(); }
     } });
 
-    /* 队列：排着的时候说第几位、下一个是谁；还能入队的时候给「排在谁后面」；已经结束的任务不进队列，这一行不出 */
+    /* 队列：排着的时候说第几位、下一个是谁；还能入队的时候给「排在谁后面」；已经结束的任务不进队列，这一行不出。
+       这两行跟着状态出没：有来有去，底下的行滑到新位置，不是一帧跳 28px */
     const queue = pair('队列');
     const next = pair('下一个', h('span.cut', '导出周报'));
     const others = ASH.data.tasks.filter((t) => t.id !== task.id && (t.status === 'running' || t.status === 'queued'));
-    const seeQueue = (e) => ASH.menu(e.currentTarget, ['这条队列 · 3 个任务', ...[others.find((t) => t.status === 'running')?.title ?? '斜杠补全', task.title, '导出周报'].map((label, i) => ({ label, kbd: `${i + 1} / 3` }))], { place: 'bottom-end' });
-    const paintQueue = () => {
+    const paintQueue = (first) => {
       const queued = st.status === 'queued';
       const open = st.status === 'running' || st.status === 'waiting';
-      queue.show(queued || open);
-      next.show(queued);
-      if (queued) queue.dd.replaceChildren(h('span.num', '第 2 / 3 位'), h('button.insp-val.end', { type: 'button', 'aria-haspopup': 'menu', onclick: seeQueue }, '查看队列'));
-      else if (open) queue.dd.replaceChildren(ASH.select({ value: '', label: '排在某任务之后', options: [{ value: '', label: '排在某任务之后…' }, ...others.map((t) => ({ value: t.id, label: `「${t.title}」之后` }))] }));
+      if (queued) queue.dd.replaceChildren(h('span.num', '第 2 / 3 位'), h('button.insp-val.end', { type: 'button', 'aria-haspopup': 'dialog', onclick: () => ASH.emit('queue:open') }, '查看队列 · 3 个任务'));
+      else if (open) queue.dd.replaceChildren(ASH.select({ compact: true, value: '', label: '排在某任务之后', options: [{ value: '', label: '排在某任务之后…' }, ...others.map((t) => ({ value: t.id, label: `「${t.title}」之后` }))] }));
+      const rows = [[queue, queued || open], [next, queued]];
+      if (first) for (const [row, on] of rows) row.show(on); else showRows(top, rows);
     };
 
     /* 用量：一个执行器一行、互不相加（负责人 8 月 7 日定的，照旧）。本轮是最近跑完的那一轮 */
-    const use = { claude: { tokens: 28.36e6, wakes: 4 }, codex: { tokens: 20.49e6, wakes: 4 } };
+    const use = { claude: { ...cur.use.claude }, codex: { ...cur.use.codex } };
     const cells = {};
     const useRow = (name, label) => {
       const tokens = h('span.num');
@@ -125,13 +91,13 @@
     };
     const turn = h('span.num');
     const time = h('span.num');
-    let elapsed = 4740000;
-    ASH.roll(turn, 418000);
+    let elapsed = cur.elapsed;
+    turn.textContent = ASH.num(cur.turn);
     ASH.roll(time, elapsed, { fmt: ASH.dur });
 
     /* 上下文：还剩多少。细条画的也是剩下的那一截，剩到 15% 以下变红 */
     const WINDOW = 200000;
-    let remain = 65;
+    let remain = cur.remain;
     const bar = h('span.insp-bar', {}, h('i'));
     const left = h('span.num');
     const paintCtx = () => {
@@ -164,7 +130,7 @@
         const name = use[u.agent] ? u.agent : 'claude';
         use[name].tokens += u.turn;
         use[name].wakes += 1;
-        ASH.roll(turn, u.turn);
+        ASH.swap(turn, ASH.num(u.turn));               // 「本轮」换了一轮：是另一个数，换字；不是同一个数在涨，不滚
         ASH.roll(cells[name].tokens, use[name].tokens, { fmt: big });
         cells[name].wakes.textContent = String(use[name].wakes);
         if (u.elapsedMs != null) elapsed += u.elapsedMs;
@@ -177,17 +143,17 @@
     });
     c.on('status', (now, prev) => { paintStatus(prev); paintQueue(); });
     paintStatus();
-    paintQueue();
     paintCtx();
     paintChanges();
 
     const top = kv(['追问', askBtn], askWide, status,
-      ['分组', ASH.select({ value: '', label: '分组', options: [{ value: '', label: '无分组' }, { value: 'g1', label: '审查链修复' }, { value: 'g2', label: '回复框' }] })],
+      ['分组', ASH.select({ compact: true, value: '', label: '分组', options: [{ value: '', label: '无分组' }, { value: 'g1', label: '定时与队列' }, { value: 'g2', label: '回复框' }] })],
       ['标签', tags], ['调度', schedule], whenWide, queue, next,
       ['续跑指令', h('span.faint', { 'data-tip': '任务暂停时才能改；没设就用标准的「继续」' }, '未设置')]);
+    paintQueue(true);
     return h('div', { 'data-m': 'insp-2' }, req, top, kv(
       ['来源', task.origin ?? '用户创建'],
-      ['创建', h('span.num', '11/10 21:34')],
+      ['创建', h('span.num', cur.created)],
       ['用时', time],
       useRow('claude', '用量'), useRow('codex', ''),
       ['本轮', turn],
@@ -196,17 +162,17 @@
       ['分支', h('span.cut', D.branch)],
       ['目录', h('span.cut', D.dir)],
       ['会话', h('span.num', D.session)],
-      ['续跑命令', h('span.cut', D.resume), copyBtn(D.resume, '复制续跑命令')]));
+      ['恢复命令', h('span.cut', D.resume), copyBtn(D.resume, '复制恢复命令')]));
   };
 
-  /* ---------- 文件：头上一行说清看的是哪条分支、哪个目录，下面是树。文件右边是大小 ---------- */
+  /* ---------- 文件：头上一行说清看的是哪条分支、哪个目录，下面是树。文件右边是大小；文件夹指到才出一颗「文件夹详情」 ---------- */
   const TREE = [
     ['node_modules', [], true],
-    ['output', [['复现-裁定后卡住.png', '184 KB'], ['放行后接着审.png', '201 KB'], ['修复后走一遍.mp4', '2.1 MB'], ['dispute-gate.log', '48 KB']], true],
-    ['docs', [['reviews', [['审查报告-第3轮.md', '6.2 KB'], ['回归记录.md', '3.1 KB']]], ['incidents.md', '41 KB']]],
-    ['server', [['scripts', [['test-free-review-dispute-gate.ts', '7.4 KB']]], ['src', [['db', [['schema-free-workflow.ts', '5.8 KB']]], ['free-review-dispute.ts', '9.6 KB'], ['free-review-reservations.ts', '6.1 KB'], ['free-review-ruling-release.ts', '4.3 KB'], ['free-workflow.ts', '22 KB'], ['index.ts', '3.9 KB']]], ['package.json', '2.2 KB']]],
-    ['shared', [['src', [['free-workflow.ts', '8.7 KB'], ['index.ts', '1.4 KB']]]]],
-    ['web', [['src', [['free-workflow', [['FreeReviewDisputeCard.tsx', '11 KB']]]]], ['index.html', '925 B']]],
+    ['output', [['复现-过点不发.png', '184 KB'], ['补发后带标记.png', '201 KB'], ['重启后补发.mp4', '2.1 MB'], ['later-send.log', '48 KB']], true],
+    ['docs', [['reviews', [['审查报告-第3轮.md', '6.2 KB'], ['回归记录.md', '3.1 KB']]], ['later-send.md', '4.4 KB']]],
+    ['server', [['scripts', [['test-later-send-recover.ts', '7.4 KB']]], ['src', [['index.ts', '3.9 KB'], ['later-send-recover.ts', '4.3 KB'], ['later-send-store.ts', '6.1 KB'], ['later-send.ts', '9.6 KB']]], ['package.json', '2.2 KB']]],
+    ['shared', [['src', [['index.ts', '1.4 KB'], ['later-send.ts', '2.7 KB']]]]],
+    ['web', [['src', [['reply', [['LaterRow.tsx', '5.2 KB']]]]], ['index.html', '925 B']]],
     ['AGENTS.md', '7.2 KB'], ['package.json', '2.9 KB'],
   ];
   I.build.files = (c) => {
@@ -221,11 +187,17 @@
           picked = path;
           for (const row of box.querySelectorAll('[aria-current]')) row.removeAttribute('aria-current');
           e.currentTarget.setAttribute('aria-current', 'true');
+          ASH.emit('file:open', { path });
         } }, icon('file', 'sm'), h('span.cut', name), h('span.meta', kids)));
       }
       const sub = level(kids, `${path}/`, depth + 1);
       sub.hidden = !opened.has(path);
-      return h(`li${hide ? '.is-ignored' : ''}`, {}, h('button.insp-row', { type: 'button', 'aria-expanded': String(!sub.hidden), style, onclick: (e) => { if (fold(e.currentTarget, sub)) opened.add(path); else opened.delete(path); } }, icon('chev', 'sm insp-rot'), h('span.cut', name)), sub);
+      /* 「文件夹详情」只跟着这一行出没：行和键包在一起，底下那一层不算在内 */
+      return h(`li${hide ? '.is-ignored' : ''}`, {},
+        h('div.insp-file', {},
+          h('button.insp-row', { type: 'button', 'aria-expanded': String(!sub.hidden), style, onclick: (e) => { if (fold(e.currentTarget, sub)) opened.add(path); else opened.delete(path); } }, icon('chev', 'sm insp-rot'), h('span.cut', name)),
+          tool('info', `打开 ${name} 文件夹详情`, () => ASH.emit('folder:open', { path }))),
+        sub);
     }));
     const paint = () => box.replaceChildren(level(TREE, '', 0));
     const eye = tool('eyeOff', '显示被 .gitignore 忽略的文件', () => {
@@ -239,7 +211,8 @@
     }, { 'aria-pressed': 'false' });
     c.acts.files = [
       tool('folderOpen', '在文件管理器中打开工作目录', () => ASH.emit('files:reveal')),
-      tool('code', '用编程 IDE 打开这个文件夹', (e) => ASH.menu(e.currentTarget, [{ label: 'VS Code' }, { label: 'Cursor' }, '-', { label: '重新探测本机 IDE', icon: 'redo' }], { place: 'bottom-end' }), { 'aria-haspopup': 'menu' }),
+      tool('code', '用编程 IDE 打开这个文件夹', (e) => ASH.menu(e.currentTarget, [{ label: 'VS Code', onpick: () => ASH.emit('files:reveal') }, { label: 'Cursor', onpick: () => ASH.emit('files:reveal') }, '-',
+        { label: '重新探测本机 IDE', icon: 'redo', onpick: () => ASH.todo('重新探测本机 IDE') }], { place: 'bottom-end' }), { 'aria-haspopup': 'menu' }),
       eye,
       tool('redo', '重新读取文件列表', () => { paint(); reenter(box); }),
     ];
@@ -247,15 +220,25 @@
     return [pathLine(false), box];
   };
 
-  /* ---------- 生成物：按类型分节。图片和视频才有缩略图，其余一行一条；来自哪、在哪个目录，悬停或聚焦再给 ---------- */
+  /* ---------- 生成物：按类型分节。图片和视频才有缩略图，其余一行一条。
+     来源只在「还没提交」时写出来（未提交 / 未跟踪），已提交的不写；在哪个目录、什么时候改的，悬停或聚焦再给 ---------- */
+  const MADE = {
+    image: [['复现-过点不发.png', '184 KB', '未跟踪', 'output', '11/09 14:18'], ['补发后带标记.png', '201 KB', '未跟踪', 'output', '11/09 15:14']],
+    video: [['重启后补发.mp4', '2.1 MB', '未跟踪', 'output', '11/09 15:15']],
+    doc: [['审查报告-第3轮.md', '6.2 KB', '', 'docs/reviews', '11/09 15:40'], ['回归记录.md', '3.1 KB', '', 'docs/reviews', '11/09 15:28'], ['later-send.log', '48 KB', '未跟踪', 'output', '11/09 15:28']],
+  };
   I.build.made = (c) => {
     const open = (name) => tool('ext', `用本机应用打开 ${name}`, () => ASH.emit('files:reveal', { name }));
-    const thumb = (kind, glyph, name, size) => h('div.insp-shot', {}, h(`button.insp-thumb${kind}`, { type: 'button', 'data-tip': '未纳入版本管理 · output' }, h('i', {}, icon(glyph)), h('span.cut', name), h('small', size)), open(name));
-    const line = (name, size, where) => h('li.insp-file', {}, h('button.insp-row', { type: 'button', 'data-tip': where, 'data-tip-side': 'left' }, icon('file', 'sm'), h('span.cut', name), h('span.meta', size)), open(name));
+    const where = (from, dir, at) => `${from === '未跟踪' ? '未纳入版本管理' : from || '已提交'} · ${dir} · ${at}`;
+    const see = (dir, name) => () => ASH.emit('file:open', { path: `${dir}/${name}` });
+    const thumb = (kind, glyph) => ([name, size, from, dir, at]) => h('div.insp-shot', {},
+      h(`button.insp-thumb${kind}`, { type: 'button', 'data-tip': where(from, dir, at), onclick: see(dir, name) }, h('i', {}, icon(glyph)), h('span.cut', name), h('small', from ? `${from} · ${size}` : size)), open(name));
+    const line = ([name, size, from, dir, at]) => h('li.insp-file', {},
+      h('button.insp-row', { type: 'button', 'data-tip': where(from, dir, at), 'data-tip-side': 'left', onclick: see(dir, name) }, icon('file', 'sm'), h('span.cut', name), from && h('span.insp-from', from), h('span.meta', size)), open(name));
     const root = h('div', { 'data-m': 'insp-10' },
-      sec('图片', 2), h('div.insp-thumbs', {}, thumb('', 'image', '复现-裁定后卡住.png', '184 KB'), thumb('', 'image', '放行后接着审.png', '201 KB')),
-      sec('视频', 1), h('div.insp-thumbs', {}, thumb('.video', 'play', '修复后走一遍.mp4', '2.1 MB')),
-      sec('文档', 3), h('ul', {}, line('审查报告-第3轮.md', '6.2 KB', '已提交 · docs/reviews'), line('回归记录.md', '3.1 KB', '已提交 · docs/reviews'), line('dispute-gate.log', '48 KB', '未纳入版本管理 · output')));
+      sec('图片', MADE.image.length), h('div.insp-thumbs', {}, MADE.image.map(thumb('', 'image'))),
+      sec('视频', MADE.video.length), h('div.insp-thumbs', {}, MADE.video.map(thumb('.video', 'play'))),
+      sec('文档', MADE.doc.length), h('ul', {}, MADE.doc.map(line)));
     c.acts.made = [tool('redo', '重新扫描生成物', () => reenter(root))];
     return root;
   };
@@ -263,7 +246,6 @@
   /* ---------- 改动：分支和目录一行，「只读」一行灰字；文件一行一条，同名的带上目录 ---------- */
   I.build.scm = (c) => {
     const { st } = c;
-    const m = changesOf(c);
     let tree = false, picked = null;
     const why = h('div.note', { hidden: true }, icon('lock'), h('span', '任务已经结束，这个工作区只看不改。要接着改，回一句话让它继续，或者派生一个新任务。'));
     const whyBtn = h('button.insp-row.insp-why', { type: 'button', 'aria-expanded': 'false', onclick: () => fold(whyBtn, why) }, icon('lock', 'sm'), h('span', '工作区只读'), icon('chev', 'sm insp-rot'));
@@ -322,7 +304,7 @@
       h('p.insp-clean', {}, icon('check', 'sm'), h('span.grow', '无未提交改动'), h('button.insp-val.end', { type: 'button', onclick: () => ASH.go('#/git') }, 'Git 工作台', icon('ext', 'sm'))),
       sec('本任务已提交改动', [files, ' 个文件 ', h('span.plus', {}, '+', add), ' ', h('span.minus', {}, '−', del)]),
       list,
-      go('打开改动工作区', () => ASH.emit('changes:open')),
+      go('查看完整 diff 与提交', () => ASH.emit('changes:open')),
       sec('最近提交'),
       log,
     ];

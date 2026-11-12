@@ -112,15 +112,17 @@
   };
   ASH.num = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(Math.round(n)));
 
-  /* 换字：旧的上去，新的上来。同一个元素连着换时只认最后一次 */
-  ASH.swap = (el, text) => {
+  /* 换字：旧的上去，新的上来。同一个元素连着换时只认最后一次。
+     字换了宽度会变：给了 row（它所在的那一排）时，排里别的东西从旧位置滑到新位置，不会一帧横跳 */
+  ASH.swap = (el, text, { row } = {}) => {
     clearTimeout(el._swap);
     if (el.textContent === text) { el.classList.remove('is-out'); return; }
     if (ASH.reduced()) { el.textContent = text; return; }
     el.classList.add('swap');
     el.classList.add('is-out');
     el._swap = setTimeout(() => {
-      el.textContent = text;
+      const put = () => { el.textContent = text; };
+      if (row?.isConnected) ASH.flip(row, put, { skip: el, ms: 200 }); else put();
       el.classList.remove('is-out');
       el.classList.add('is-pre');
       void el.offsetWidth;
@@ -128,8 +130,8 @@
     }, 150);
   };
 
-  /* 数字滚到新值：配等宽数字，位置不抖 */
-  ASH.roll = (el, to, { ms = 600, fmt = ASH.num } = {}) => {
+  /* 数字滚到新值：配等宽数字，位置不抖。时长和 --dur-3 同值 */
+  ASH.roll = (el, to, { ms = 320, fmt = ASH.num } = {}) => {
     const from = Number(el.dataset.v ?? to);
     el.dataset.v = to;
     el.classList.add('num');
@@ -137,26 +139,41 @@
     if (ASH.reduced() || from === to) { el.textContent = fmt(to); return; }
     const t0 = performance.now();
     const tick = (now) => {
-      const k = Math.min(1, (now - t0) / ms);
+      const k = Math.max(0, Math.min(1, (now - t0) / ms));   /* rAF 给的时刻可能比 t0 还早：不夹住的话第一帧会朝反方向冲一下 */
       el.textContent = fmt(from + (to - from) * (1 - (1 - k) ** 3));
       if (k < 1) el._roll = requestAnimationFrame(tick);
     };
     el._roll = requestAnimationFrame(tick);
   };
 
-  /* 重排：先记下每个孩子在哪，改完顺序，再让它们从原位滑到新位（只动 transform） */
-  ASH.flip = (container, mutate) => {
+  /* 重排：先记下每个孩子在哪，改完，再让它们从原位滑到新位（只动 transform）。
+     原来不在、或者原来藏着的（量出来是零）算新来的：淡入。skip 是自己另有过渡的那一个（它或者装着它的那个孩子不滑） */
+  ASH.flip = (container, mutate, { skip, ms = 320 } = {}) => {
     const kids = [...container.children];
     const before = new Map(kids.map((kid) => [kid, kid.getBoundingClientRect()]));
     mutate();
     if (ASH.reduced()) return;
+    const easing = 'cubic-bezier(0.22, 1, 0.36, 1)';
     for (const kid of container.children) {
+      if (skip && (kid === skip || kid.contains(skip))) continue;
       const was = before.get(kid);
       const now = kid.getBoundingClientRect();
-      if (!was) { kid.animate([{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }], { duration: 200, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }); continue; }
+      if (!now.width && !now.height) continue;
+      if (!was || (!was.width && !was.height)) { kid.animate([{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }], { duration: 200, easing }); continue; }
       const dx = was.left - now.left;
       const dy = was.top - now.top;
-      if (dx || dy) kid.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: 320, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+      if (dx || dy) kid.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: ms, easing });
     }
+  };
+
+  /* 短提示：保存、复制之后那一句。底部居中，2.4 秒后自己走；连着来只留最新的一句 */
+  let toastEl = null;
+  let toastTimer = 0;
+  ASH.toast = (text) => {
+    toastEl ??= document.body.appendChild(ASH.h('div.toast', { role: 'status' }));
+    toastEl.textContent = text;
+    toastEl.classList.add('is-in');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('is-in'), 2400);
   };
 })();

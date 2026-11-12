@@ -13,12 +13,12 @@
 .insp.is-snap, .insp.is-snap .insp-in { transition: none; }
 .insp-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
-/* 面板头：格名、这一格自己的动作、关闭键。不画底线，靠留白和下面的内容分开 */
-.insp-head { display: flex; align-items: center; gap: 2px; flex: none; height: 40px; padding: 0 8px 0 16px; }
+/* 面板头：格名、这一格自己的动作、关闭键。和任务头同高（44），两条基线对得上；不画底线，靠留白和下面的内容分开 */
+.insp-head { display: flex; align-items: center; gap: 2px; flex: none; height: 44px; padding: 0 8px 0 16px; }
 .insp-head > b { flex: none; font-weight: var(--w-strong); }
 .insp-acts { display: flex; align-items: center; gap: 2px; min-width: 0; }
-.insp-acts > .sel { height: 24px; min-width: 0; padding: 0 4px 0 8px; border-radius: var(--r-sm); background: none; box-shadow: none; color: var(--muted); font-size: var(--t-xs); transition: background var(--dur-1) var(--ease-out); }
-.insp-acts > .sel:hover, .insp-acts > .sel[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.insp-acts > .sel { color: var(--muted); font-size: var(--t-xs); }
+.insp-acts > .sel:hover, .insp-acts > .sel[aria-expanded="true"] { color: var(--ink); }
 .insp-acts > .ico[aria-pressed="true"] { background: var(--sel-bg); color: var(--ink); }
 .insp-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 16px 20px; }
 .insp-pane > :first-child { margin-top: 0; }
@@ -46,18 +46,20 @@
 .insp .kv { grid-template-columns: 52px minmax(0, 1fr); }
 .insp .kv + .kv { margin-top: 14px; }
 .insp .kv dd { white-space: nowrap; }
-.insp .faint, .insp-set .faint { color: var(--faint); }
+/* 面板里次要的字用 --muted：再浅一档在 13px 上读不清。只有图标和已被忽略的东西才用 --faint */
+.insp .faint, .insp-set .faint { color: var(--muted); }
+/* 面板里「在跑」的东西：主色的字，不扫光（扫光只留给会话流里正在动的那一行） */
+.insp-live { color: var(--accent); }
 .insp .plus { color: var(--green); }
 .insp .minus { color: var(--red); }
-/* 行里能点的值：平时就是一段字，悬停才显出是个按钮。Select 也摘掉外框，和旁边的值一个长相 */
-.insp-val, .insp .kv .sel { display: inline-flex; align-items: center; gap: 6px; height: 24px; min-width: 0; margin-left: -8px; padding: 0 8px; border-radius: var(--r-sm); background: none; box-shadow: none; transition: background var(--dur-1) var(--ease-out); }
-.insp-val:hover, .insp-val[aria-expanded="true"], .insp .kv .sel:hover, .insp .kv .sel[aria-expanded="true"] { background: var(--hover-bg); }
-.insp .kv .sel { padding-right: 4px; }
+/* 行里能点的值：平时就是一段字，悬停才显出是个按钮。下拉用公共的紧凑档（.sel.sm），尖角一直在——它就是「这一项能改」的全部说明；
+   这里只把它往左挪一个内边距，字和上下两行的值对齐 */
+.insp-val { display: inline-flex; align-items: center; gap: 6px; height: 24px; min-width: 0; margin-left: -8px; padding: 0 8px; border-radius: var(--r-sm); transition: background var(--dur-1) var(--ease-out); }
+.insp-val:hover, .insp-val[aria-expanded="true"] { background: var(--hover-bg); }
 .insp-val.end { margin: 0 -8px 0 auto; color: var(--muted); }
 .insp-val > .i { color: var(--faint); transition: transform var(--dur-1) var(--ease-out); }
+.insp .kv .sel { margin-left: -6px; }
 .insp .kv .sel > span { flex: 0 1 auto; }
-.insp .kv .sel > .i { opacity: 0; transition: opacity var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out); }
-.insp .kv .sel:hover > .i, .insp .kv .sel:focus-visible > .i, .insp .kv .sel[aria-expanded="true"] > .i { opacity: 1; }
 .insp-copy { opacity: 0; }
 .insp dd:hover > .insp-copy, .insp-path:hover > .insp-copy, .insp-copy:focus-visible { opacity: 1; }
 /* 一行里放不下、要占满两列的：点开的追问、调度的时间 */
@@ -73,7 +75,8 @@
 .insp-asks time { color: var(--faint); font-size: var(--t-xs); }
 .insp-asks p { line-height: 1.6; }
 .insp-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
-.insp-tag { display: inline-flex; align-items: center; gap: 2px; height: 22px; padding: 0 4px 0 8px; border-radius: var(--r-sm); background: var(--overlay); transition: background var(--dur-1) var(--ease-out); }
+.insp-tag { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; height: 22px; padding: 0 4px 0 8px; border-radius: var(--r-sm); background: var(--overlay); transition: background var(--dur-1) var(--ease-out); }
+.insp-tag > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .insp-tag:hover { background: var(--sel-bg); }
 .insp-tag > .i { width: 12px; height: 12px; color: var(--faint); }
 .insp-tag-in { width: 4em; height: 22px; padding: 0 4px; border: 0; border-radius: var(--r-sm); background: none; }
@@ -114,12 +117,15 @@ button.insp-row.is-in { padding-left: 28px; }
 .insp-clean > .i { color: var(--green); }
 .insp-dir { display: flex; align-items: center; gap: 6px; min-height: 26px; color: var(--muted); font-size: var(--t-xs); }
 .insp-dir > .i { color: var(--faint); }
-.is-ignored > .insp-row { color: var(--faint); }
+.is-ignored .insp-row { color: var(--muted); }
+.is-ignored .insp-row > .cut { opacity: 0.8; }
 .insp .go { width: calc(100% + 16px); min-height: 30px; }
 .insp-pane > .go { margin-top: 6px; }
 .insp-pane > .note { margin-bottom: 12px; }
 
-/* 生成物：只有图片和视频出缩略图，色块是 CSS 画的占位。「用本机应用打开」指到才出，换掉右边的大小 */
+/* 生成物：只有图片和视频出缩略图，色块是 CSS 画的占位。「用本机应用打开」指到才出，换掉右边的大小。
+   来源（未提交 / 未跟踪）只在还没提交时跟在名字后面，小一号 */
+.insp-from { flex: none; color: var(--muted); font-size: var(--t-xs); }
 .insp-thumbs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .insp-shot { position: relative; min-width: 0; }
 .insp-thumb { display: block; width: 100%; text-align: left; }
@@ -191,13 +197,12 @@ button.insp-row.is-in { padding-left: 28px; }
 .insp-msg > header > b { font-weight: var(--w-medium); }
 .insp-msg > header > time { color: var(--faint); font-size: var(--t-xs); }
 .insp-msg > p { line-height: 1.6; overflow-wrap: anywhere; }
-.insp-ask { position: sticky; bottom: 0; padding: 10px 8px 8px; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--control-shadow); }
-.insp-ask:has(> textarea:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.insp-ask > textarea { display: block; width: 100%; max-height: 160px; padding: 0 4px; border: 0; background: none; outline: none; line-height: 1.6; resize: none; }
+.insp-ask { position: sticky; bottom: 0; padding: 10px 8px 8px; }
+.insp-ask > textarea { display: block; width: 100%; max-height: 160px; padding: 0 4px; line-height: 1.6; }
 .insp-ask > div { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
 .insp-ask .caps { flex: 0 1 auto; min-width: 0; }
 .insp-ask .caps > button { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .insp-send { width: 28px; padding: 0; }
 
-@media (hover: none) { .insp-copy, .insp .kv .sel > .i, .insp-card-foot > .ico, .insp-shot > .ico, .insp-file > .ico { opacity: 1; } }
+@media (hover: none) { .insp-copy, .insp-card-foot > .ico, .insp-shot > .ico, .insp-file > .ico { opacity: 1; } }
 @media (max-width: 900px) { .insp { position: absolute; inset: 0 0 0 auto; z-index: 30; background: var(--canvas); } }
