@@ -21,7 +21,7 @@
 /* ── 写一条 ───────────────────────────────────────────────────────────────── */
 
 .task-memo-composer { display: grid; min-width: 0; gap: 8px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 9px; background: color-mix(in lch, var(--panel) 80%, var(--canvas)); padding: 10px; }
-.task-memo-composer textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 7px 8px; color: var(--ink); font: inherit; font-size: 11.5px; line-height: 1.75; outline: 0; resize: vertical; }
+.task-memo-composer textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 7px 8px; color: var(--ink); font: inherit; font-size: 11.5px; line-height: 1.75; outline: 0; resize: none; }
 .task-memo-composer textarea:focus { border-color: var(--accent); }
 .task-memo-composer__actions { display: flex; justify-content: flex-end; gap: 6px; }
 .task-memo-composer__actions button { display: inline-flex; min-height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 10px; color: var(--muted); font-size: 10.5px; }
@@ -56,7 +56,7 @@
 .task-memo-card__more:hover { text-decoration: underline; }
 
 .task-memo-card__edit { display: grid; gap: 7px; margin-top: 7px; }
-.task-memo-card__edit textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 7px; background: color-mix(in lch, var(--panel) 80%, var(--canvas)); padding: 7px 8px; color: var(--ink); font: inherit; font-size: 11.5px; line-height: 1.75; outline: 0; resize: vertical; }
+.task-memo-card__edit textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 7px; background: color-mix(in lch, var(--panel) 80%, var(--canvas)); padding: 7px 8px; color: var(--ink); font: inherit; font-size: 11.5px; line-height: 1.75; outline: 0; resize: none; }
 .task-memo-card__edit textarea:focus { border-color: var(--accent); }
 .task-memo-card__edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .task-memo-card__edit-actions button { display: inline-flex; min-height: 25px; align-items: center; gap: 4px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 9px; color: var(--muted); font-size: 10px; }

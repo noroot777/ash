@@ -7,6 +7,7 @@ import type { GitConflict } from "@ash/shared/git-workbench";
 import { emptyCommitGuidance } from "@ash/shared/git-workbench";
 import { workbenchApi } from "./api.ts";
 import type { Workbench } from "./useWorkbench.ts";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 function conflictBlocks(content: string) {
   const pattern =
@@ -430,7 +431,7 @@ export function ConflictDialog({
                           ? "最终结果 · 可直接编辑"
                           : "冲突标记已清除 · 请检查最终结果"}
                       </b>
-                      <textarea
+                      <AutoTextarea
                         className="cf-textarea"
                         aria-label="冲突解决结果"
                         value={draft}
@@ -438,6 +439,7 @@ export function ConflictDialog({
                         onChange={(event) => setDraft(event.target.value)}
                         spellCheck={false}
                         rows={12}
+                        maxLines={40}
                       />
                     </label>
                   </>

@@ -61,7 +61,7 @@
 .monitor-composer label { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 4px; }
 .monitor-composer label > span { color: var(--faint); font-size: 9.5px; }
 .monitor-composer textarea, .monitor-composer input, .monitor-composer select { width: 100%; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 6px 8px; color: var(--muted); font-size: 10.5px; outline: 0; }
-.monitor-composer textarea { resize: vertical; font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 9.5px; line-height: 1.6; }
+.monitor-composer textarea { resize: none; font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 9.5px; line-height: 1.6; }
 .monitor-composer input, .monitor-composer select { height: 30px; padding: 0 8px; }
 .monitor-composer textarea:focus, .monitor-composer input:focus, .monitor-composer select:focus { border-color: var(--accent); }
 .monitor-composer__hint { margin: -2px 0 0; color: var(--faint); font-size: 9px; line-height: 1.6; }

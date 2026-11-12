@@ -119,7 +119,7 @@
 /* 输入框铺满整张卡，带 offset 的默认焦点环会画到卡片外面去；焦点提示改由卡片自己的 focus-within 环承担。 */
 .chat-composer:focus-within { border-color: var(--chat-lilac); box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-violet) 13%, transparent); }
 .chat-shell .chat-composer textarea:focus-visible { outline: none; }
-.chat-composer textarea { display: block; width: 100%; resize: vertical; min-height: 74px; max-height: 190px; background: none; border: 0; padding: 14px 15px 8px; color: var(--chat-ink); font: inherit; font-size: 13px; line-height: 1.7; border-radius: 10px; outline: none; }
+.chat-composer textarea { display: block; width: 100%; resize: none; min-height: 74px; max-height: 190px; background: none; border: 0; padding: 14px 15px 8px; color: var(--chat-ink); font: inherit; font-size: 13px; line-height: 1.7; border-radius: 10px; outline: none; }
 .chat-composer textarea::placeholder { color: var(--chat-faint); }
 .chat-composer footer { display: flex; align-items: center; gap: 9px; padding: 8px 11px; }
 .chat-composer footer > button { background: none; border: 0; color: var(--chat-faint); padding: 3px; display: flex; border-radius: 5px; }

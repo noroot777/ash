@@ -33,7 +33,7 @@
    没有边界的透明区域,只有获得焦点时才看得出哪里能打字。 */
 .browser-access__field textarea {
   width: 100%;
-  resize: vertical;
+  resize: none;
   border: 1px solid var(--line2);
   border-radius: 8px;
   background: var(--canvas);

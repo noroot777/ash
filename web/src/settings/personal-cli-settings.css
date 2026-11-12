@@ -92,7 +92,7 @@
 
 .pcli-editor {
   width: 100%;
-  resize: vertical;
+  resize: none;
   font-family: var(--font-mono);
   font-size: var(--t-sm);
   line-height: 1.65;

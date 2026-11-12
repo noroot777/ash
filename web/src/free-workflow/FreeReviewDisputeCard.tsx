@@ -14,6 +14,7 @@ import {
 } from "./disputeCopy.ts";
 import { FreeReviewDebateReader } from "./FreeReviewDebateReader.tsx";
 import { FreeReviewDebateTranscript } from "./FreeReviewDebateTranscript.tsx";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 /**
  * 待确认的动作**连同它针对的那一条驳回**：打开确认框那一刻就定死，提交只认它。
@@ -157,7 +158,7 @@ export function FreeReviewDisputeCard({
   const noteField = (kind: DisputeResolutionKind) => (
     <label className="free-review-dispute-note">
       <span>{RESOLUTIONS[kind].note.label}</span>
-      <textarea
+      <AutoTextarea
         autoFocus
         rows={4}
         value={note}

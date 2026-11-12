@@ -141,7 +141,7 @@
 .task-derivation-note { position: relative; display: grid; gap: 6px; color: var(--muted); font-size: 10px; font-weight: 600; }
 .task-derivation-note textarea {
   width: 100%;
-  resize: vertical;
+  resize: none;
   border: 1px solid var(--line);
   border-radius: 9px;
   background: var(--canvas);

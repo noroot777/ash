@@ -38,6 +38,7 @@ import {
   derivedWorktreeDefaults,
   type TaskDerivationCommand,
 } from "./taskDerivation.ts";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 type ExecutorChoice = {
   profile: string;
@@ -481,7 +482,7 @@ export function TaskDerivationComposer({
             </div>
             <label className="task-derivation-note">
               <span>可选附言</span>
-              <textarea
+              <AutoTextarea
                 ref={noteRef}
                 value={note}
                 rows={3}
@@ -518,7 +519,7 @@ export function TaskDerivationComposer({
           <>
             <label className="task-derivation-note">
               <span>本次议题</span>
-              <textarea
+              <AutoTextarea
                 ref={topicRef}
                 value={topic}
                 rows={5}

@@ -3,6 +3,7 @@ import { ArrowUpRight, ArrowCounterClockwise, PencilSimple, Rectangle, TextT, Tr
 import { AnnotationCanvas } from "./AnnotationCanvas.tsx";
 import { ANNOTATION_COLORS, TOOL_LABELS, positionDescription, type Annotation, type AnnotationTool } from "./model.ts";
 import "./annotation.css";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 const TOOLS = [
   { tool: "rectangle", icon: Rectangle },
@@ -90,7 +91,7 @@ export function AnnotationEditor({ imageUrl, width, height, annotations, onChang
               <p className="annotation-position">{positionDescription(selected)}</p>
               {selected.tool === "text" && <label>图中文字<input ref={labelRef} value={selected.label} maxLength={100} disabled={disabled} placeholder="输入要写在图上的标签" onChange={(event) => update({ label: event.target.value })} /></label>}
               <label>目标描述（选填）<input value={selected.target} maxLength={300} disabled={disabled} placeholder="例如：右上角的保存按钮" onChange={(event) => update({ target: event.target.value })} /></label>
-              <label>修改意见（选填）<textarea ref={commentRef} rows={4} value={selected.comment} maxLength={5000} disabled={disabled} placeholder="这个位置希望怎么改？" onChange={(event) => update({ comment: event.target.value })} /></label>
+              <label>修改意见（选填）<AutoTextarea ref={commentRef} rows={4} value={selected.comment} maxLength={5000} disabled={disabled} placeholder="这个位置希望怎么改？" onChange={(event) => update({ comment: event.target.value })} /></label>
               <button className="annotation-delete" type="button" disabled={disabled} onClick={() => remove(selected.id)}><Trash size={14} />删除这条批注</button>
             </div>
           )}

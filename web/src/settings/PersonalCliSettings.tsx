@@ -10,6 +10,7 @@ import { ApiError } from "../lib/apiClient.ts";
 import { personalCliApi } from "../lib/authApi.ts";
 import { Button } from "../components/ui.tsx";
 import "./personal-cli-settings.css";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 export function PersonalCliSettings({ notify }: { notify: (message: string) => void }) {
   const [envs, setEnvs] = useState<PersonalCliEnv[]>([]);
@@ -231,7 +232,7 @@ function CliEnvBlock({
           </p>
         ) : (
           <>
-            <textarea
+            <AutoTextarea
               className="ui-input pcli-editor pcli-memory-editor"
               aria-label={`${env.agentType} 个人全局 ${env.memoryName}`}
               rows={12}
@@ -276,10 +277,11 @@ function CliEnvBlock({
           <div className="pcli-part-head">
             <b>编辑 /{editing.name}</b>
           </div>
-          <textarea
+          <AutoTextarea
             className="ui-input pcli-editor"
             aria-label={`${env.agentType} 技能 ${editing.name}`}
             rows={16}
+            maxLines={40}
             value={editing.body}
             onChange={(e) => setEditing({ ...editing, body: e.target.value })}
           />

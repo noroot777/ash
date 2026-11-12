@@ -284,6 +284,11 @@ button {
   cursor: pointer;
 }
 
+/* 输入框随内容长高（components/AutoTextarea.tsx），不留原生拖拽角。 */
+textarea {
+  resize: none;
+}
+
 a {
   color: inherit;
   text-decoration: none;

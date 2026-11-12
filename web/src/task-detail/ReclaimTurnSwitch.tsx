@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { LockOpen } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import type { HumanApprovalChallenge, HumanApprovalProof } from "../lib/taskNoticeApi.ts";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 // 「放开回合占位」那个开关。
 //
@@ -99,8 +100,8 @@ export function ReclaimTurnSwitch({ taskId, onDone }: { taskId: string; onDone?:
         <p>将申请保存为 JSON，在不受本机 agent 控制的设备上核对并签名。{remaining > 0
           ? `预计剩余有效期 ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}，以服务端校验为准，查看申请不会延长有效期。`
           : "本机计时显示可能已过期，仍可提交签名，由服务端校验；也可查看当前申请。"}</p>
-        <textarea aria-label="人工授权申请" readOnly value={JSON.stringify(challenge, null, 2)} rows={5} />
-        <textarea aria-label="人工授权结果" value={proof} onChange={(event) => setProof(event.target.value)} placeholder="粘贴签名授权 JSON" rows={3} disabled={busy} />
+        <AutoTextarea aria-label="人工授权申请" readOnly value={JSON.stringify(challenge, null, 2)} rows={5} />
+        <AutoTextarea aria-label="人工授权结果" value={proof} onChange={(event) => setProof(event.target.value)} placeholder="粘贴签名授权 JSON" rows={3} disabled={busy} />
         <button type="button" onClick={() => void release()} disabled={busy || !proof.trim()}>
           {busy ? "正在放开…" : "确认风险并放开回合占位"}
         </button>

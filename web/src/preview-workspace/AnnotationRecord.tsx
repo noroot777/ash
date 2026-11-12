@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { AnnotationBatch, AnnotationDraft } from "@ash/shared/page-annotation-batch";
 import { evidenceLabels } from "@ash/shared/page-annotation-batch";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 export function AnnotationRecord({ batch, item }: { batch: AnnotationBatch; item: AnnotationDraft }) {
   const images = batch.evidence.filter((entry) => entry.annotationId === item.id && entry.path);
@@ -18,7 +19,7 @@ export function AnnotationRecord({ batch, item }: { batch: AnnotationBatch; item
 export function AnnotationFollowup({ disabled, onSave }: { disabled: boolean; onSave: (comment: string) => Promise<boolean> }) {
   const [comment, setComment] = useState("");
   return <div className="annotation-followup">
-    <label>补充意见（另存为新批次）<textarea value={comment} maxLength={3500} disabled={disabled}
+    <label>补充意见（另存为新批次）<AutoTextarea value={comment} maxLength={3500} disabled={disabled}
       placeholder="继续说明这条意见，已发送的现场保持原样" onChange={(event) => setComment(event.target.value)} /></label>
     <button type="button" disabled={disabled || !comment.trim()} onClick={() => void onSave(comment).then((saved) => { if (saved) setComment(""); })}>存为新批次，预览后发送</button>
   </div>;

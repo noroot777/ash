@@ -26,6 +26,7 @@ import { useAcceptGate } from "../review/useAcceptGate.ts";
 import { AcceptanceWorkspaceCommit, AutoCommitOutcomeNotice } from "../review/AcceptanceWorkspaceCommit.tsx";
 import { acceptanceAutoCommitMessage, type AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
 import { useWorkspaceCommitVersion } from "../review/workspaceCommit.ts";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -409,7 +410,7 @@ export function AcceptanceControls({
       )}
       {action === "return" && (
         <ConfirmDialog title={duet ? "打回继续讨论？" : "打回继续修改？"} message={duet ? "这会把验收意见送回本次讨论，原来的两位讨论者会沿现有上下文继续形成结论。" : "这会把验收意见作为真人回复送入原任务会话，执行者会在原上下文继续处理。"} confirmLabel={duet ? "打回再讨论" : "打回修改"} busy={busy} onConfirm={() => void returnTask()} onClose={() => setAction(null)}>
-          <textarea className="team-return-feedback" value={feedback} autoFocus rows={5} placeholder={duet ? "写清需要补充讨论的问题与验收标准…" : "写清需要修改的内容与重新验收标准…"} onChange={(event) => setFeedback(event.target.value)} />
+          <AutoTextarea className="team-return-feedback" value={feedback} autoFocus rows={5} placeholder={duet ? "写清需要补充讨论的问题与验收标准…" : "写清需要修改的内容与重新验收标准…"} onChange={(event) => setFeedback(event.target.value)} />
         </ConfirmDialog>
       )}
     </>

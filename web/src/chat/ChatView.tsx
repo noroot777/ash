@@ -13,6 +13,7 @@ import { useDismissable } from "../lib/useDismissable.ts";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import "./chat.css";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 export function ChatView({ project, onTask, onExit }: {
   project: ProjectView; onTask: (task: TaskListItem) => void; onExit: () => void;
@@ -164,7 +165,7 @@ export function ChatView({ project, onTask, onExit }: {
         {room && <div className="chat-composer-area"><div className="chat-live-line">{active.length || snapshot?.context?.status === "compacting" ? <><span className="chat-live-dot" />{active.length ? `${active.map((message) => message.author).filter((name, index, all) => all.indexOf(name) === index).join("、")} 正在回复` : "正在整理群聊历史"}<button type="button" onClick={() => void chatApi.stop(room.id).then((result) => { if (selected.current === room.id) setSnapshot(result); }).catch((reason) => setError(String(reason)))}><Stop size={12} weight="fill" />停止回复</button></> : <span>所有成员安静待命</span>}</div>
           <ChatContextNotice context={snapshot?.context} />
           <div className="chat-composer">{mentionOpen && candidates.length > 0 && <div ref={mentionMenu} className="chat-mention-menu" role="listbox" aria-label="点名成员">{candidates.map((option, index) => <button role="option" aria-selected={index === mentionIndex % candidates.length} className={index === mentionIndex % candidates.length ? "is-selected" : ""} type="button" key={option.id} onClick={() => mention(option.name)}><span className={`chat-avatar tone-${index % 4}`}>{option.name.slice(0, 1).toUpperCase()}</span><strong>@{option.name}</strong><small>{option.hint}</small></button>)}</div>}
-            <textarea ref={input} aria-label="群聊消息输入" value={draft} maxLength={8000} disabled={sending} placeholder={`发消息到 #${room.name}，@ 选择成员、@all 唤醒全部…`} onChange={(event) => { setDraft(event.target.value); setMentionOpen(/(?:^|\s)@[^\s@]*$/u.test(event.target.value)); setMentionIndex(0); }} onKeyDown={(event) => {
+            <AutoTextarea ref={input} aria-label="群聊消息输入" value={draft} maxLength={8000} disabled={sending} placeholder={`发消息到 #${room.name}，@ 选择成员、@all 唤醒全部…`} onChange={(event) => { setDraft(event.target.value); setMentionOpen(/(?:^|\s)@[^\s@]*$/u.test(event.target.value)); setMentionIndex(0); }} onKeyDown={(event) => {
               if (event.nativeEvent.isComposing) return;
               if (event.key === "Escape") { setMentionOpen(false); return; }
               if (mentionOpen && candidates.length && ["ArrowDown", "ArrowUp", "Enter", "Tab"].includes(event.key)) {

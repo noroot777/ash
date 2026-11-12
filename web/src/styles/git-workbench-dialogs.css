@@ -72,7 +72,7 @@
 .gwb-design .cf-ai, .gwb-design .cf-editor { border-top: .5px solid var(--line); }
 .gwb-design .cf-editor { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .gwb-design .cf-textarea {
-  width: 100%; resize: vertical;
+  width: 100%; resize: none;
   border: 1px solid var(--line2); border-radius: 8px;
   padding: 8px 10px;
   font-family: var(--font-mono); font-size: 11px; line-height: 1.6;

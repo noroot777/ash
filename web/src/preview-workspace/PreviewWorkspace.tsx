@@ -19,6 +19,7 @@ import { createClientId } from "../lib/clientId.ts";
 import "./preview-workspace.css";
 import "./annotation-review.css";
 import "./preview-launcher.css";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 const tools = [
   { id: "element", label: "点选", icon: Cursor },
@@ -240,7 +241,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
           match={match} ready={canReview && ready} gen={state?.gen ?? ""} controller={batch} review={review}
           onLocate={locate} onContinue={continueItem} />}
         {selected && <div className="preview-workspace-detail">
-          <label>#{selected.number} 修改意见<textarea disabled={batch.locked} value={selected.comment} maxLength={4000} placeholder="希望这里怎么改？"
+          <label>#{selected.number} 修改意见<AutoTextarea disabled={batch.locked} value={selected.comment} maxLength={4000} placeholder="希望这里怎么改？"
             onChange={(event) => setItems((current) => current.map((item) => item.id === selected.id ? { ...item, comment: event.target.value } : item))} /></label>
           {!currentSelection && <p className="preview-workspace-memory">这是之前页面的标注，元素信息保留创建时的内容。</p>}
           <p className="preview-workspace-coordinates">{selected.context.route}<br />视口 {selected.context.viewport.width} × {selected.context.viewport.height}

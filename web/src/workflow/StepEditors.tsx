@@ -13,6 +13,7 @@ import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import { executorValue, parseExecutorValue, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { executorProfile, type ExecutorCatalog } from "./executorCatalog.ts";
 import type { FieldSpec } from "./stepFields.ts";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 export function SelectEditor({
   spec, value, onPick,
@@ -87,7 +88,7 @@ export function TextEditor({
 }) {
   return (
     <div className="wf-pop-form">
-      <textarea
+      <AutoTextarea
         className="wf-pop-text"
         value={value}
         rows={spec.key === "instruction" ? 3 : 1}

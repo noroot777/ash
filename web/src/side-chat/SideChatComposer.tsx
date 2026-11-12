@@ -10,6 +10,7 @@ import { executorRunSummary, isExecutorPickable, registeredAgentTypes } from "..
 import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSideChatMember } from "./useSideChatMember.ts";
 import type { useSideChat } from "./useSideChat.ts";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 type SideChatState = ReturnType<typeof useSideChat>;
 
@@ -48,7 +49,7 @@ export function SideChatComposer({ task, chat }: { task: Task; chat: SideChatSta
     <ChatContextNotice context={chat.snapshot?.context} />
     <UploadAttachmentList attachments={uploads.attachments} pending={uploads.pending} error={uploads.error} onRemove={uploads.remove} onCancel={uploads.cancel} />
     <div className="side-chat-input">
-      <textarea ref={input} aria-label="侧聊消息输入" placeholder={chat.quote ? "想问这段内容什么？" : "围绕主会话问个问题…"} disabled={!chat.ready} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} onPaste={uploads.onPaste} onKeyDown={(event) => {
+      <AutoTextarea ref={input} aria-label="侧聊消息输入" placeholder={chat.quote ? "想问这段内容什么？" : "围绕主会话问个问题…"} disabled={!chat.ready} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} onPaste={uploads.onPaste} onKeyDown={(event) => {
         if (isSendKeyEvent(event)) { event.preventDefault(); send(); }
       }} />
       <footer>

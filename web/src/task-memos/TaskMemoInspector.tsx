@@ -21,6 +21,7 @@ import {
   useTaskMemoDrafts,
   type MemoSlot,
 } from "./taskMemoDrafts.ts";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 const message = (reason: unknown) => (reason instanceof Error ? reason.message : String(reason));
 
@@ -90,7 +91,7 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
 
       {composing !== null && (
         <div className="task-memo-composer">
-          <textarea
+          <AutoTextarea
             autoFocus
             value={draft}
             rows={5}

@@ -412,7 +412,7 @@
   padding: 7px 10px;
   color: var(--ink);
   font: var(--t-xs) / 1.5 var(--font-mono);
-  resize: vertical;
+  resize: none;
   box-shadow: var(--control-shadow);
 }
 

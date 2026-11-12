@@ -14,7 +14,7 @@
 .preview-launch-custom { margin: 18px 0; }
 .preview-launch-custom summary { cursor: pointer; }
 .preview-launch-custom label { display: grid; gap: 8px; margin: 12px 0; }
-.preview-launch-custom textarea { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); font: 12px/1.7 var(--font-mono); resize: vertical; }
+.preview-launch-custom textarea { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); font: 12px/1.7 var(--font-mono); resize: none; }
 .preview-launch-custom small { display: block; margin-bottom: 10px; }
 .preview-port-guide { margin: 12px 0 14px; }
 .preview-port-guide .preview-port-rule { margin: 0 0 8px; font-size: 11px; line-height: 1.8; }

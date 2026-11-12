@@ -4,6 +4,7 @@ import { MAX_BROWSER_CDP_DOMAINS, browserCdpHostOf, normalizeBrowserCdpDomains }
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import "./project-browser-access.css";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 // 项目「浏览器登录态」授权节。
 //
@@ -75,7 +76,7 @@ export function ProjectBrowserAccessSettings({ project, onUpdated, notify, canMa
       </small>
     </div>
     <label className="browser-access__field">
-      <textarea
+      <AutoTextarea
         rows={4}
         spellCheck={false}
         placeholder={"x.com\nweibo.com"}

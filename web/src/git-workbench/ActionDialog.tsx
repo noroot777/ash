@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { GitAction, GitActionRequest } from "@ash/shared/git-workbench";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 export interface ActionField {
   key: string;
@@ -111,7 +112,7 @@ export function ActionDialog({
                 }
               />
             ) : field.type === "textarea" ? (
-              <textarea
+              <AutoTextarea
                 rows={4}
                 value={values[field.key]}
                 onChange={(event) =>

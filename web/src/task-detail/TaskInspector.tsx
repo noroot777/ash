@@ -18,6 +18,7 @@ import { QueueDrawer } from "./QueueDrawer.tsx";
 import { InspectorPromptContent } from "./InspectorPromptContent.tsx";
 import { TaskChangeSummary } from "./TaskChangeSummary.tsx";
 import { formatInstant, formatInstantRange, taskDurationInfo } from "./utils.ts";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 const STATUS_ORDER: TaskStatus[] = [
   "running", "idle", "paused", "awaiting_review", "queued", "backlog", "done", "failed", "canceled",
@@ -96,7 +97,7 @@ function ResumePromptEditor({
   if (editing && editable) {
     return (
       <div className="task-resume-editor is-editing">
-        <textarea
+        <AutoTextarea
           autoFocus
           rows={5}
           value={draft}

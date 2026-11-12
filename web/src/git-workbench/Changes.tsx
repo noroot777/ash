@@ -12,6 +12,7 @@ import type { AskAction } from "./ActionDialog.tsx";
 import { workbenchApi } from "./api.ts";
 import { ChangeFileList, type ChangeSource } from "./ChangeFileList.tsx";
 import { DiffView, discardLineGuidance } from "./DiffView.tsx";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 type Source = ChangeSource;
 const pathsOf = (files: GitFile[]) => [
@@ -188,7 +189,7 @@ export function Changes({
         />
         {summary && <p className="gwb-pane-title gwb-worktree-summary">{summary}</p>}
         <section className="gwb-commit-form commit-box">
-          <textarea
+          <AutoTextarea
             className="commit-input"
             id="gwb-message"
             aria-label="提交信息"

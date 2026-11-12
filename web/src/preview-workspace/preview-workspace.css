@@ -61,7 +61,7 @@ body:has(.preview-workspace.is-expanded) .palette-scrim { z-index: 185; }
 .preview-workspace-item small { color: var(--muted); font-size: 10px; }
 .preview-workspace-detail { border-top: 1px solid var(--line); padding-top: 14px; }
 .preview-workspace-detail label { display: grid; gap: 8px; color: var(--muted); font-size: 11px; }
-.preview-workspace-detail textarea { width: 100%; min-height: 95px; resize: vertical; border: 1px solid var(--line2); border-radius: 7px; padding: 8px; background: var(--canvas); color: var(--ink); font: 12px/1.7 var(--font-sans); }
+.preview-workspace-detail textarea { width: 100%; min-height: 95px; resize: none; border: 1px solid var(--line2); border-radius: 7px; padding: 8px; background: var(--canvas); color: var(--ink); font: 12px/1.7 var(--font-sans); }
 .preview-workspace-coordinates { color: var(--muted); font: 10px/1.7 var(--font-mono); overflow-wrap: anywhere; }
 .preview-element-card { overflow-wrap: anywhere; font-size: 11px; }
 .preview-element-card h4 { margin: 14px 0 8px; font-size: 12px; }

@@ -211,7 +211,7 @@ span.task-detail-title { display: block; width: auto; }
 .task-resume-editor button { border: 0; border-radius: 5px; background: transparent; padding: 3px 5px; color: var(--muted); font-size: 9.5px; }
 .task-resume-editor button:hover:not(:disabled) { background: var(--overlay); color: var(--ink); }
 .task-resume-editor pre { max-height: 160px; overflow: auto; margin: 0; border-top: 0.5px solid var(--line); padding: 7px; white-space: pre-wrap; word-break: break-word; color: var(--ink); font-family: var(--font-sans); font-size: 10.5px; line-height: 1.55; }
-.task-resume-editor textarea { display: block; width: 100%; resize: vertical; border: 0; background: transparent; padding: 8px; color: var(--ink); font-family: var(--font-sans); font-size: 10.5px; line-height: 1.55; outline: 0; }
+.task-resume-editor textarea { display: block; width: 100%; resize: none; border: 0; background: transparent; padding: 8px; color: var(--ink); font-family: var(--font-sans); font-size: 10.5px; line-height: 1.55; outline: 0; }
 .task-resume-editor footer { display: flex; min-height: 34px; align-items: center; gap: 4px; border-top: 0.5px solid var(--line); padding: 5px 6px; }
 .task-resume-editor footer > span { margin-right: auto; color: var(--faint); font-size: 8.5px; }
 .task-resume-editor button.is-primary { background: var(--accent); color: white; }

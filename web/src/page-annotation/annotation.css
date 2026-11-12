@@ -82,7 +82,7 @@
 .annotation-note-fields label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
 .annotation-note-fields input,
 .annotation-note-fields textarea { width: 100%; border: 1px solid var(--line2); border-radius: 7px; background: var(--canvas); padding: 8px; color: var(--ink); font: 12px/1.6 var(--font-sans); }
-.annotation-note-fields textarea { resize: vertical; min-height: 80px; }
+.annotation-note-fields textarea { resize: none; min-height: 80px; }
 .annotation-note-fields input:focus,
 .annotation-note-fields textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
 .annotation-dialog .annotation-delete { justify-self: start; border: 0; color: var(--red); }

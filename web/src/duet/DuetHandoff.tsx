@@ -14,6 +14,7 @@ import {
 import { api } from "../lib/api.ts";
 import { useFileMention } from "../lib/useFileMention.ts";
 import { FileMentionMenu } from "../components/MentionMenu.tsx";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 export type HandoffChoice = {
   note: string;
@@ -125,7 +126,7 @@ export function DuetHandoffModal({
           <ExecutorPickerField label="默认执行者" value={worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} override={worker} onChange={(profile, override) => setWorker({ profile, ...override })} onEffortChange={(effort) => setWorker((current) => ({ ...current, effort }))} />
         </div>
         {availabilityMessage && <p className="duet-handoff-warning"><Warning size={13} />{availabilityMessage}</p>}
-        <label className="duet-handoff-note"><span>可选附言</span><textarea ref={noteRef} rows={4} value={note} placeholder="补充执行重点、边界或验收要求…（@ 可引用工作区文件）"
+        <label className="duet-handoff-note"><span>可选附言</span><AutoTextarea ref={noteRef} rows={4} value={note} placeholder="补充执行重点、边界或验收要求…（@ 可引用工作区文件）"
           onChange={(event) => { setNote(event.target.value); mention.onValueChange(); }}
           onKeyDown={(event) => { mention.onKeyDown(event); }} />
           {mention.open && <FileMentionMenu mention={mention} label="引用工作区文件" />}

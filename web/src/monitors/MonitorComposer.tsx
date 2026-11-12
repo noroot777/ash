@@ -7,6 +7,7 @@ import type { MonitorWakeTarget } from "@ash/shared/monitor";
 import { neverExitsVerdict } from "@ash/shared/command-never-exits";
 import { END_CONDITION_HINT, parseEndCondition } from "@ash/shared/monitor-end-condition";
 import type { StartMonitorInput } from "./useTaskMonitors.ts";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 // **从共享常量推导，不要在这里另列一张表**：写死的那版在时长上限改掉之后整张失真
 // （选「2 小时」实际只盯 5 分钟，而且提交值恰好等于缺省值，连「已钳到边界」的回执都没有）。
@@ -112,7 +113,7 @@ export function MonitorComposer({
     >
       <label>
         <span>命令</span>
-        <textarea
+        <AutoTextarea
           rows={2}
           value={command}
           placeholder={'tail -F build.log | grep --line-buffered -E "ERROR|BUILD OK"'}

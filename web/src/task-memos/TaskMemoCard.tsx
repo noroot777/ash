@@ -11,6 +11,7 @@ import type { TaskMemo } from "@ash/shared/task-memo";
 import { TASK_MEMO_MAX_LEN } from "@ash/shared/task-memo";
 import { isModEnterEvent } from "../lib/sendKey.ts";
 import { formatInstant } from "../task-detail/utils.ts";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 /** 折起来时露几行。再少就看不出这条在说什么，再多就等于没折。 */
 const CLAMP_LINES = 7;
@@ -99,7 +100,7 @@ export function TaskMemoCard({ memo, busy, highlight, draft, onDraft, onSave, on
       </header>
       {editing ? (
         <div className="task-memo-card__edit">
-          <textarea
+          <AutoTextarea
             ref={input}
             value={draft ?? ""}
             maxLength={TASK_MEMO_MAX_LEN}

@@ -28,6 +28,7 @@ import {
   type ScmDiffTarget,
   type ScmPartialNotice,
 } from "./scmModel.ts";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 // 任务工作目录的「源代码管理」。
 //
@@ -324,7 +325,7 @@ export function ScmInspector({
 
       {!readOnly && !clean && (
         <section className="scm-commit">
-          <textarea
+          <AutoTextarea
             value={message}
             rows={2}
             placeholder={status.staged.length ? "提交信息（提交已暂存的改动）" : "提交信息（没有暂存内容时，提交全部改动）"}

@@ -55,7 +55,7 @@
 .task-question-option-key { display: grid; flex: 0 0 17px; height: 17px; place-items: center; border: 1px solid var(--line2); border-radius: 5px; color: var(--faint); font: 10px/1 var(--font-mono); }
 [aria-pressed="true"] .task-question-option-key { border-color: var(--cyan); background: var(--cyan); color: white; }
 .task-question-hint { display: block; padding: 0 0 7px; color: var(--faint); font-size: 10px; }
-.task-question-step textarea { width: 100%; min-height: 34px; resize: vertical; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); padding: 8px 10px; color: var(--ink); font: 12.5px/1.6 var(--font-sans); }
+.task-question-step textarea { width: 100%; min-height: 34px; resize: none; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); padding: 8px 10px; color: var(--ink); font: 12.5px/1.6 var(--font-sans); }
 .task-question-step textarea:focus { outline: 2px solid color-mix(in lch, var(--cyan) 22%, transparent); outline-offset: 1px; border-color: var(--cyan); background: var(--panel); }
 
 .task-question-card > footer { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; border-top: 1px solid var(--line); padding: 8px 12px; color: var(--muted); font-size: 10px; }

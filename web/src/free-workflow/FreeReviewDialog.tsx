@@ -29,6 +29,7 @@ import {
   type ReviewerRunDraft,
   type ReviewerRunSaveMode,
 } from "./ReviewerRunOverride.tsx";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 /**
  * 复审轮数是手填的：空串、小数、负号、超上限都要在这里判死，别让它走到提交那一刻
@@ -518,7 +519,7 @@ export function FreeReviewDialog({
               )}
               <label className="free-review-note">
                 <span>附言（可选）</span>
-                <textarea
+                <AutoTextarea
                   value={note}
                   maxLength={2000}
                   disabled={busy}

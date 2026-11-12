@@ -6,6 +6,7 @@ import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import { cliCatalogNote, useCliModelCatalog } from "../lib/cliModelCatalog.ts";
 import { api } from "../lib/api.ts";
 import { Button } from "../components/ui.tsx";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 type RefreshResult = { text: string; error: boolean };
 
@@ -124,7 +125,7 @@ export function ClaudeModelsSettings({ notify }: { notify: (message: string) => 
       </div>
       <label className="settings-row claude-model-custom">
         <b>自己添加完整 ID（每行一个，也可用逗号分隔）</b>
-        <textarea rows={3} value={models} disabled={loading || saving || !canEdit}
+        <AutoTextarea rows={3} value={models} disabled={loading || saving || !canEdit}
           placeholder={"claude-opus-4-6\nclaude-sonnet-4-6"}
           onChange={(event) => setModels(event.target.value)} />
       </label>

@@ -42,7 +42,7 @@
 .team-accept-conflict-files > span { display: block; color: currentColor; font-size: 9.5px; font-weight: 650; }
 .team-accept-conflict-files ul { display: grid; gap: 2px; margin: 4px 0 0; padding: 0; list-style: none; }
 .team-accept-conflict-files code { display: block; overflow-wrap: anywhere; color: currentColor; font-size: 9.5px; }
-.team-return-feedback { display: block; width: 100%; resize: vertical; border: 1px solid var(--line2); border-radius: 8px; background: var(--canvas); padding: 8px 9px; color: var(--ink); font-size: 11.5px; line-height: 1.5; outline: 0; }
+.team-return-feedback { display: block; width: 100%; resize: none; border: 1px solid var(--line2); border-radius: 8px; background: var(--canvas); padding: 8px 9px; color: var(--ink); font-size: 11.5px; line-height: 1.5; outline: 0; }
 .team-return-feedback:focus { border-color: color-mix(in lch,var(--accent) 55%,var(--line2)); }
 
 /* 验收确认框里那个「合并后提交代码」的勾（本次有效，默认跟项目设置）。 */

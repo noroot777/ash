@@ -54,7 +54,7 @@
 .side-chat-message .task-message-attachments { margin-top: 8px; }
 .side-chat-input footer .task-reply-icon { width: 26px; height: 26px; flex: 0 0 auto; }
 .side-chat-input:focus-within { border-color: var(--accent); }
-.side-chat-input textarea { display: block; width: 100%; min-height: 64px; max-height: 180px; resize: vertical; border: 0; outline: none; padding: 2px; color: var(--ink); background: transparent; font: inherit; line-height: 1.6; }
+.side-chat-input textarea { display: block; width: 100%; min-height: 64px; max-height: 180px; resize: none; border: 0; outline: none; padding: 2px; color: var(--ink); background: transparent; font: inherit; line-height: 1.6; }
 .side-chat-input footer { display: flex; gap: 6px; align-items: center; justify-content: space-between; margin-top: 6px; }
 /* 胶囊在这条里吃掉除发送键之外的宽度，三段各自省略号（run-target-picker.css）。
    智能体那段是 codex/claude 这类短词，侧栏窄下来时先保住它——要省略也该省略长模型名。 */

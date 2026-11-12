@@ -25,6 +25,7 @@ import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { WorkflowRail } from "../workflow/WorkflowRail.tsx";
 import type { SettingsSection } from "../settings/SettingsPage.tsx";
 import "./assistant.css";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 const STARTERS = [
   { label: "问用法", text: "任务显示失败，但智能体说已经做完了，该怎么排查？" },
@@ -123,7 +124,7 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit }:
       {chat.room && !configure && <div className="chat-composer-area">
         <div className="chat-live-line" role="status">{chat.busy ? <><span className="chat-live-dot" />正在回复<button type="button" onClick={() => void chat.stop()}><Stop size={12} weight="fill" />停止回复</button></> : <span>随时可以开始对话</span>}</div>
         <ChatContextNotice context={chat.snapshot?.context} />
-        <div className="chat-composer"><textarea ref={input} aria-label="给 ash 助手发消息" maxLength={8000} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} placeholder="描述你遇到的问题，或记得的任务内容…" onKeyDown={(event) => { if (isSendKeyEvent(event)) { event.preventDefault(); void chat.send(); } }} />
+        <div className="chat-composer"><AutoTextarea ref={input} aria-label="给 ash 助手发消息" maxLength={8000} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} placeholder="描述你遇到的问题，或记得的任务内容…" onKeyDown={(event) => { if (isSendKeyEvent(event)) { event.preventDefault(); void chat.send(); } }} />
           <footer><AssistantKnowledge /><span>直接发送，无需 @</span><button type="button" className="chat-send" aria-label="发送给助手" disabled={chat.busy || chat.sending || !chat.draft.trim() || !chat.snapshot} onClick={() => void chat.send()}><ArrowUp size={20} weight="bold" /></button></footer>
         </div><div className="chat-composer-hint">{sendKeys.send} 发送 · {sendKeys.newline} 换行 · /clear 清空上下文</div>
       </div>}

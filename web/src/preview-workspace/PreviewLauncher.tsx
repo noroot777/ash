@@ -5,6 +5,7 @@ import { request } from "../lib/apiClient.ts";
 import { useHostInfo } from "../lib/useHostInfo.ts";
 import { PreviewPortGuide } from "./PreviewPortGuide.tsx";
 import { createPreviewLaunchController, type PreviewLaunchState } from "./previewLaunchController.ts";
+import { AutoTextarea } from "../components/AutoTextarea.tsx";
 
 export function PreviewLauncher({ taskId, preview, refresh, hint }: {
   taskId: string; preview: FreeWorkflowPreviewState | null; refresh: () => Promise<void>; hint?: string;
@@ -59,7 +60,7 @@ export function PreviewLaunchOptions({ state, starting, stopped, failed = false,
     {info.truncated && <small>仅显示前 40 个候选。</small>}
     <details className="preview-launch-custom" open={!info.candidates.length && !info.configured && !selectedStep}>
       <summary>自填启动命令</summary>
-      <label>本次预览命令<textarea aria-label="本次预览命令" value={command} maxLength={MAX_PREVIEW_SCRIPT_LENGTH} disabled={busy}
+      <label>本次预览命令<AutoTextarea aria-label="本次预览命令" value={command} maxLength={MAX_PREVIEW_SCRIPT_LENGTH} disabled={busy}
         rows={4} spellCheck={false} onChange={(e) => setCommand(e.target.value)}
         placeholder={`在任务目录执行的启动脚本，可包含 cd 和多行命令，例如：\nnpm run dev -- --port ${previewPortRef("PORT", dialect)}`} /></label>
       <PreviewPortGuide dialect={dialect} command={command} disabled={busy} onFill={setCommand} />
