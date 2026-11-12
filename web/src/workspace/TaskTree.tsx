@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
 import { CaretRight } from "@phosphor-icons/react";
 import { useTaskReadState, type LookForTask } from "../lib/useTaskReadState.ts";
@@ -26,6 +26,7 @@ import {
 import { buildTaskTree, groupTaskModeProjects, keepVisibleInPreview, orderedTopLevelTasks, previewProjectTasks, previewTasksByAge, revealToIndex } from "./taskTreeModel.ts";
 import { OutboundStatusBar, type OutboundBar } from "./OutboundStatusBar.tsx";
 import { HandoffMachines } from "./HandoffMachines.tsx";
+import { useLayoutMotion } from "../lib/motion/index.ts";
 import { QueueDrawer } from "../task-detail/QueueDrawer.tsx";
 
 type TaskTreeProps = {
@@ -357,6 +358,9 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
   const rowContext = useMemo(() => ({ spread, peekAt, peekOut }), [peekAt, peekOut, spread]);
   // 执行者表按**全量**建（不是 scopedTasks）：团队的桶要它真实的执行者集合。
   const workerIndex = useMemo(() => indexWorkers(tasks), [tasks]);
+  // 一行的位置变了（比如有了新动静排到最上面）就从原处滑过去，新出现的淡入（run-6）。
+  const treeRef = useRef<HTMLElement>(null);
+  useLayoutMotion(treeRef, ".workspace-task-row-wrap");
   const treeActions = useMemo(
     () => ({ onStarred: onTaskStarred, notify, projectBadges, onOpenQueue: setOpenQueueId }),
     [notify, onTaskStarred, projectBadges],
@@ -364,7 +368,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
   return (
     <TaskTreeActionsProvider value={treeActions}>
     <SpreadRowProvider value={rowContext}>
-      <nav className="workspace-task-tree" aria-label={taskMode ? "任务模式列表" : "任务树"} onScroll={hide}>
+      <nav ref={treeRef} className="workspace-task-tree" aria-label={taskMode ? "任务模式列表" : "任务树"} onScroll={hide}>
         <ScopedTaskTree
           tasks={scopedTasks}
           allTasks={tasks}

@@ -1,8 +1,10 @@
+import { useRef, useState } from "react";
 import { CaretRight, File, Globe, Lightbulb, ListChecks, MagnifyingGlass, PencilSimple, Plug, Pulse, Robot, TerminalWindow, WarningCircle, X } from "@phosphor-icons/react";
 import { isVisibleExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
 import { describeEvent, isFlatStep, liveLabel, pastSummary, type StepView } from "../lib/executionWords.ts";
 import { useSwapText } from "../lib/useSwapText.ts";
 import { useNow } from "../lib/useNow.ts";
+import { useStagger } from "../lib/motion/index.ts";
 import { isCompactionEvent } from "../task-detail/compactionMarkers.ts";
 import { formatDuration } from "../task-detail/utils.ts";
 import "./live-strip.css";
@@ -146,13 +148,17 @@ export function ExecutionDetails(
   { events, running, awaiting = false, since }: { events: ExecutionEvent[]; running: boolean; awaiting?: boolean; since?: string | null },
 ) {
   events = events.filter(isVisibleExecutionEvent);
+  // 你点开的那一下，各步一条接一条出来（08「点睛」依次展开）。
+  const block = useRef<HTMLDetailsElement>(null);
+  const [opened, setOpened] = useState(0);
+  useStagger(block, ".task-execution-events > *", opened);
   if (!events.length) return null;
   /* data-selection-chrome:选中一段会话时整块不算正文。折叠条本身是 `summary`,选文那边
      认语义就够;要标的是**展开之后那些事件行** —— 它们是一堆普通 div,语义上说不出
      「这不是用户要的那段话」,只能在这里声明(见 side-chat/selectionContent.ts)。 */
   return (
-    <details className={`task-execution-block${executionBlockTone(events)}${running ? " is-live" : ""}`} data-selection-chrome="">
-      <summary>
+    <details ref={block} className={`task-execution-block${executionBlockTone(events)}${running ? " is-live" : ""}`} data-selection-chrome="">
+      <summary onClick={() => { if (!block.current?.open) setOpened((count) => count + 1); }}>
         <ExecutionSummaryLine events={events} running={running} awaiting={awaiting} since={since} />
       </summary>
       <ExecutionEventList events={events} />

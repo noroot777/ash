@@ -13,6 +13,7 @@ import { useDismissable } from "../../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../../lib/usePanelPlacement.ts";
 import { formatInstant, formatInstantRange, taskDurationInfo } from "../utils.ts";
 import type { InfoRunFacts } from "./infoRunFacts.ts";
+import { RollingNumber } from "../../lib/motion/index.ts";
 
 /** 一段字，指上去 / 键盘走到再说一句补充（不用原生 title）。 */
 function Tipped({ tip, children, className = "" }: { tip: string; children: React.ReactNode; className?: string }) {
@@ -38,7 +39,7 @@ function UsageValue({ label, usage, wakes }: { label: string; usage: TokenUsage;
       aria-label={[`${label} 累计 ${formatTokensExact(usageTotal(usage))} token`, total ? `${turns} 轮` : "", note].filter(Boolean).join("，")}
     >
       <span className="insp-faint">{label}</span>{" "}
-      <span className="insp-num">{formatTokens(usageTotal(usage))}</span>
+      <RollingNumber className="insp-num" value={usageTotal(usage)} format={formatTokens} />
       {total > 0 && (
         <span className="insp-faint">
           {" · "}
@@ -141,8 +142,8 @@ export function InfoRunRows({ task, sessions, facts }: { task: Task; sessions: S
       ))}
       {turn && (
         <InspRow label="本轮">
-          <span className="insp-num" aria-label={`本轮 ${formatTokensExact(usageTotal(turn))} token`}>
-            {formatTokens(usageTotal(turn))}
+          <span aria-label={`本轮 ${formatTokensExact(usageTotal(turn))} token`}>
+            <RollingNumber className="insp-num" value={usageTotal(turn)} format={formatTokens} />
           </span>
           {usageByExecutor.length > 1 && facts.turnLabel && <span className="insp-faint insp-cut">{facts.turnLabel}</span>}
         </InspRow>

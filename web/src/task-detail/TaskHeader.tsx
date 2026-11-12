@@ -25,6 +25,7 @@ import { TaskModeIcon, taskModeLabel, taskParentLink, taskParentRelation } from 
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { IconButton } from "../components/IconButton.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { useLayoutMotion } from "../lib/motion/index.ts";
 import { TaskPinButton } from "./TaskPinButton.tsx";
 import { headSteps, sealState, type HeadStep } from "./taskHeadSteps.ts";
 import { safeDownloadName } from "./utils.ts";
@@ -97,6 +98,9 @@ export function TaskHeader({
   const menuRoot = useRef<HTMLDivElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const pointerToggle = useRef(false);
+  // 头上的图标多一颗少一颗时，留下的滑到新位置（run-6）。
+  const acts = useRef<HTMLSpanElement>(null);
+  useLayoutMotion(acts, ":scope > *");
   const steps = headSteps(task);
   const seal = sealState(task);
   const canRequeue = task.parentId === null
@@ -197,7 +201,7 @@ export function TaskHeader({
         {task.parentId === null && <TaskPinButton task={task} onTogglePin={onTogglePin} notify={notify} />}
       </div>
       <span className="task-head-grow" />
-      <span className="task-head-acts">
+      <span className="task-head-acts" ref={acts}>
         {stepButtons.map(({ key, step }) => step ? (
           <IconButton
             key={key}

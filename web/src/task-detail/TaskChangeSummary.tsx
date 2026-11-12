@@ -7,6 +7,7 @@ import { useInspectorNav } from "../inspector/nav.tsx";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import { sharedTeamParent } from "../review/reviewModel.ts";
 import { branchDiffReason } from "../lib/branch-diff-reason.ts";
+import { RollingNumber } from "../lib/motion/index.ts";
 
 interface ChangeData {
   branch: string | null;
@@ -76,8 +77,8 @@ export function TaskChangeSummary({
                 {data.diff.available ? (
                   <>
                     <span className="insp-num">{data.diff.files.length} 个文件</span>
-                    <span className="insp-num insp-plus">+{additions}</span>
-                    <span className="insp-num insp-minus">−{deletions}</span>
+                    <RollingNumber className="insp-num insp-plus" value={additions} format={(n) => `+${n}`} />
+                    <RollingNumber className="insp-num insp-minus" value={deletions} format={(n) => `−${n}`} />
                   </>
                 ) : <span>查看改动</span>}
                 <span className="insp-num insp-faint">· {data.commits.length} 个提交</span>
