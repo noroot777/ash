@@ -237,7 +237,7 @@
         ], { place: 'bottom-end' }) }, icon('more'));
 
         return h('div.sv-set-tr', { role: 'row' }, who, cell(prov), cell(model), cell(level), cell(speed),
-          hasCfg && cell(h(`button.sv-set-cfg${pf.cfg ? '.is-set' : ''}`, { type: 'button', 'aria-label': pf.cfg ? `${pf.name} 覆盖了 CLI 配置：${pf.cfg}` : `编辑 ${pf.name} 对 CLI 配置的覆盖` },
+          hasCfg && cell(h(`button.sv-set-cfg${pf.cfg ? '.is-set' : ''}`, { type: 'button', 'aria-haspopup': 'dialog', 'aria-label': pf.cfg ? `${pf.name} 覆盖了 CLI 配置：${pf.cfg}` : `编辑 ${pf.name} 对 CLI 配置的覆盖`, onclick: () => ASH.todo('覆盖 CLI 配置的浮层') },
             icon('sliders', 'sm'), h('span.cut', pf.cfg || '未覆盖'))),
           h('div.sv-set-end', { role: 'cell' }, pf.def && h('span.sv-set-def', icon('star', 'sm fill'), '默认'), more));
       };
