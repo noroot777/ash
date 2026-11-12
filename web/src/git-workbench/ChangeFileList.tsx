@@ -235,9 +235,6 @@ function ChangeGroup({
           )}
         </div>
       </header>
-      {!files.length && (
-        <p className="empty-line">{source === "staged" ? "暂无已暂存文件" : "没有改动"}</p>
-      )}
       {layout === "tree"
         ? tree.rows.map((entry) => (
           entry.kind === "dir" ? (
@@ -343,7 +340,8 @@ export function ChangeFileList({
       </div>
       {!!status.merge.length && <ConflictGroup files={status.merge} onResolve={onResolve} />}
       <div className="gwb-file-groups">
-        {(["staged", "unstaged", "untracked"] as const).map((source) => (
+        {/* 空的分组整组不画：干净的仓库只在差异那一栏说一句「工作区是干净的」。 */}
+        {(["staged", "unstaged", "untracked"] as const).filter((source) => status[source].length).map((source) => (
           <ChangeGroup
             key={source}
             source={source}

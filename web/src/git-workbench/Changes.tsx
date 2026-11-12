@@ -59,15 +59,16 @@ export function Changes({
   const [message, setMessage] = useState("");
   const [amend, setAmend] = useState(false);
   const clean = gitChangeCount(data.status) === 0 && !data.status.truncated;
+  // 只在冲突、中途操作时说一句该去哪儿处理；干净的时候整页只在差异那一栏说一次。
   const summary = data.status.merge.length
     ? `${data.status.merge.length} 个冲突待解决 · 请在上方冲突面板处理`
     : emptyCommitGuidance(data.status)
       ? `当前${data.status.operation === "revert" ? "反做" : "拣选"}没有可提交的改动 · 请在上方跳过或中止`
       : data.status.operation
         ? "Git 操作尚未完成 · 请在上方继续或中止"
-        : clean
-          ? "所有改动已提交"
-          : "选择要提交的内容";
+        : null;
+  // 「干净」只算没有中途操作的那种：合并选了自己那一边、改动为零时，操作本身还没结束。
+  const settled = clean && !summary;
   useEffect(() => {
     let alive = true;
     setDiffError(null);
@@ -185,9 +186,7 @@ export function Changes({
           onStash={stash}
           onResolve={resolve}
         />
-        {(clean || data.status.merge.length > 0 || data.status.operation) && (
-          <p className="gwb-pane-title gwb-worktree-summary">{summary}</p>
-        )}
+        {summary && <p className="gwb-pane-title gwb-worktree-summary">{summary}</p>}
         <section className="gwb-commit-form commit-box">
           <textarea
             className="commit-input"
@@ -233,8 +232,15 @@ export function Changes({
         </section>
       </section>
       <section className="gwb-detail-pane diff-pane">
+        {/* 没选中文件：干净时整页只在这里说一句；不干净时要么下一拍就自动选上第一份，
+            要么只剩冲突 / 嵌套仓（清单那边已经说了怎么处理），这里都不再写字。 */}
+        {!selection ? (
+          <div className="gwb-empty empty-hint" role={settled ? "status" : undefined}>
+            {settled && "工作区是干净的"}
+          </div>
+        ) : <>
         <div className="gwb-pane-title diff-pane-head">
-          <code className="diff-path">{selection?.path || "差异预览"}</code>
+          <code className="diff-path">{selection.path}</code>
           {currentFile && (
             <span className="stat">
               {!!currentFile.additions && (
@@ -246,7 +252,7 @@ export function Changes({
             </span>
           )}
           <span className="flex-1" />
-          {selection && currentFile && (
+          {currentFile && (
             <>
               <button
                 className="mini-btn"
@@ -316,6 +322,7 @@ export function Changes({
               : undefined
           }
         />
+        </>}
       </section>
     </div>
   );

@@ -270,7 +270,7 @@ try {
   await tab("变更").click();
   const mergeOnlyChanges = await page.getByRole("region", { name: "工作区变更" }).innerText();
   assert.match(mergeOnlyChanges, /1 个冲突待解决 · 请在上方冲突面板处理/);
-  assert.doesNotMatch(mergeOnlyChanges, /所有改动已提交/);
+  assert.equal(await page.getByText("工作区是干净的", { exact: true }).count(), 0, "冲突或中途操作时不算干净");
   await expectEnabled(page.getByRole("button", { name: "中止操作", exact: true }), "abort regular merge");
   assert.equal(
     await page.getByRole("button", { name: "放弃冲突改动", exact: true }).count(),
@@ -448,17 +448,14 @@ try {
   await tab("变更").click();
   const pendingMergeChanges = await page.getByRole("region", { name: "工作区变更" }).innerText();
   assert.match(pendingMergeChanges, /Git 操作尚未完成 · 请在上方继续或中止/);
-  assert.doesNotMatch(pendingMergeChanges, /所有改动已提交/);
+  assert.equal(await page.getByText("工作区是干净的", { exact: true }).count(), 0, "冲突或中途操作时不算干净");
   const continueButton = page.getByRole("button", { name: "继续操作", exact: true });
   await expectEnabled(continueButton, "continue after resolving conflicts");
   await performAction(() => continueButton.click());
   await page.locator(".gwb-operation").waitFor({ state: "detached" });
   await expectEnabled(sync.getByRole("button", { name: "获取", exact: true }), "fetch after continue");
   assert.equal(git(info.root, "status", "--porcelain"), "", "continued merge should leave a clean worktree");
-  assert.match(
-    await page.getByRole("region", { name: "工作区变更" }).innerText(),
-    /所有改动已提交/,
-  );
+  await page.getByRole("status").filter({ hasText: /^工作区是干净的$/ }).waitFor();
 
   // rebase 冲突里的跳过按钮也走白名单弹窗，确认后真实结束操作。
   git(info.root, "checkout", "-qb", "browser/rebase-target");
@@ -530,7 +527,7 @@ try {
   await tab("变更").click();
   const stashConflictChanges = await page.getByRole("region", { name: "工作区变更" }).innerText();
   assert.match(stashConflictChanges, /1 个冲突待解决 · 请在上方冲突面板处理/);
-  assert.doesNotMatch(stashConflictChanges, /所有改动已提交/);
+  assert.equal(await page.getByText("工作区是干净的", { exact: true }).count(), 0, "冲突或中途操作时不算干净");
   await page.getByRole("button", { name: "打开冲突解决器", exact: true }).click();
   const stashConflictDialog = dialog(/解决冲突/);
   await stashConflictDialog.getByRole("button", { name: "采用对方", exact: true }).click();
@@ -543,10 +540,7 @@ try {
   await performAction(() =>
     page.getByRole("button", { name: /^提交（\d+ 个文件）$/ }).click());
   assert.equal(git(info.root, "status", "--porcelain"), "", "committed stash resolution should be clean");
-  assert.match(
-    await page.getByRole("region", { name: "工作区变更" }).innerText(),
-    /所有改动已提交/,
-  );
+  await page.getByRole("status").filter({ hasText: /^工作区是干净的$/ }).waitFor();
 
   // squash merge 冲突没有 MERGE_HEAD，必须提供带打字确认的独立放弃入口。
   git(info.root, "checkout", "-qb", "browser/squash-side");

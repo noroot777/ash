@@ -272,7 +272,9 @@ try {
   await performAction(() => page.getByRole("button", { name: /^提交（\d+ 个文件）$/ }).click());
   await waitMessage(/已提交暂存区内容/);
   await waitIdle();
-  assert.match(await page.getByRole("region", { name: "工作区变更" }).innerText(), /所有改动已提交/);
+  // 干净的工作区整页只说一次，说在差异那一栏；空的分组整组不画。
+  await page.getByRole("status").filter({ hasText: /^工作区是干净的$/ }).waitFor();
+  assert.equal(await page.getByRole("region", { name: "工作区变更" }).locator(".gwb-file-group").count(), 0);
 
   // 历史详情可建分支和标签；历史筛选、详情和路由都来自真实 Git。
   await tab("历史").click();
