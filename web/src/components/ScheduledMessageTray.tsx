@@ -4,6 +4,7 @@ import { ArrowUUpLeft, CaretDown, CaretUp, ChatsCircle, Clock, Hourglass, PaperP
 import { sendAfterState } from "../lib/sendAfter.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { formatInstant } from "../task-detail/utils.ts";
+import { HoverTip, useHoverTip } from "./HoverTip.tsx";
 import {
   bySendTime, scheduledMessageCounts, scheduledMessageExitCode, scheduledMessageMatches, scheduledMessageSource,
   scheduledMessageSummary, scheduledMessageText, type ScheduledMessageFilter,
@@ -37,6 +38,7 @@ function MessageRow({ message, busy, steering, steerable, onSteer, onWithdraw, o
   onInspect?: () => void;
   previewIndex?: number;
 }) {
+  const steerTip = useHoverTip();
   const displayText = scheduledMessageText(message);
   const label = displayText || (message.attachments.length ? `[${message.attachments.length} 个附件]` : "[空消息]");
   const summary = scheduledMessageSummary(message) || label;
@@ -62,11 +64,11 @@ function MessageRow({ message, busy, steering, steerable, onSteer, onWithdraw, o
     {message.agent && <span className="scheduled-message-agent">@{message.agent}</span>}
     <b>{onInspect ? <button type="button" className="scheduled-message-inspect" onClick={onInspect} aria-label={`查看完整输入：${summary}`}>{summary}</button> : summary}</b>
     {previewIndex !== undefined && exitCode !== null && <span className={`scheduled-message-preview-exit${exitCode !== 0 ? " is-attention" : ""}`}>exit {exitCode}</span>}
-    {source === "mine" && steerable && onSteer && <button type="button" className="scheduled-message-guide" disabled={busy}
-      aria-label={`用最早的排队消息“${displayText || "附件"}”引导会话`} onClick={() => onSteer(message.id)}>
+    {source === "mine" && steerable && onSteer && <><button type="button" className="scheduled-message-guide" disabled={busy}
+      aria-label={`用最早的排队消息“${displayText || "附件"}”引导会话`} onClick={() => { steerTip.hide(); onSteer(message.id); }} {...steerTip.anchorProps}>
       {steering ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" /> : <ChatsCircle size={13} weight="duotone" aria-hidden="true" />}
       <span>{steering ? "引导中" : "引导会话"}</span>
-    </button>}
+    </button><HoverTip at={steerTip.at}>不等这一轮结束，把这条直接接进正在进行的对话</HoverTip></>}
     {after?.stuck && source === "mine" && onSendNow && <button type="button" className="scheduled-message-guide scheduled-message-send-now" disabled={busy}
       aria-label={`不再等前置任务，把“${displayText || "附件"}”直接发出`} onClick={() => onSendNow(message.id)}>
       <PaperPlaneRight size={12} aria-hidden="true" /><span>直接发送</span>

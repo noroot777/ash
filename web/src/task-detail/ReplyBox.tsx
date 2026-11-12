@@ -4,7 +4,7 @@ import { sameExecutor } from "@ash/shared/executors";
 import { parseCliCommand } from "@ash/shared/cli-commands";
 import { X } from "@phosphor-icons/react";
 import { ScheduledMessageTray, useScheduledMessages } from "../components/ScheduledMessages.tsx";
-import { SendSplit, useLaterSend } from "../components/LaterSend.tsx";
+import { LaterSendKey, useLaterSend } from "../components/LaterSend.tsx";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { AgentPlate } from "../components/AgentPlate.tsx";
 import {
@@ -16,7 +16,6 @@ import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailabili
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { useReplyLayout } from "./useReplyLayout.ts";
 import { isMenuPickKeyEvent, isSendKeyEvent } from "../lib/sendKey.ts";
-import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { api, type ReplyTaskResult } from "../lib/api.ts";
 import { useProviders } from "../lib/modelCatalog.ts";
 import { AgentModelPicker } from "./AgentModelPicker.tsx";
@@ -125,7 +124,6 @@ export function ReplyBox({
   const [picker, setPicker] = useState<{ agent: AgentType } | null>(null);
   const later = useLaterSend(draft);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const sendKeys = useSendKeyLabels();
   // null = 没拖过,交给行数自动撑高(useAutoGrowTextarea)
   const replyHeight = useReplyHeight(SINGLE_REPLY_PIN);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
@@ -162,15 +160,17 @@ export function ReplyBox({
   const scopeDiscovery = cliCommand?.name === "goal" && cliCommand.args === "--scopes";
   const disabled = task.mode !== "single" || task.archived || (!hasConversation && !queueing && !scopeDiscovery);
   const inputDisabled = disabled && !command;
+  // 占位只有「回复…」，水印透出来（reply-1）。快捷键在发送键的提示里，「可以粘贴」在附件键的
+  // 提示里，「引导会话」在待发送那一条的键上；发不出去的原因指到发送键上才说。只有整个输入框
+  // 都用不了（不是单任务、归档了还没敲派生命令）时，原因才写在占位里——那时没有键可指。
   const reason = task.mode !== "single"
     ? "请在对应的团队或讨论页面继续操作"
     : task.archived
-      ? command ? "任务已归档；仍可输入 /team 或 /duet 创建派生任务…" : "任务已归档，无法继续回复"
-      : queueing
-        ? command ? "任务进行中；发送即排队，队尾可点“引导会话”" + `（${sendKeys.sendShort}）；也可输入 /team 或 /duet…` : `任务进行中，发送即排队；需要立即接入当前对话可在队尾点“引导会话”（${sendKeys.sendShort}）…`
-        : !hasConversation
-          ? command ? "可输入 /team 创建团队，或输入 /duet 发起讨论…" : "先运行任务，再继续回复"
-          : command ? `回复并继续（${sendKeys.sendShort} 发送）；输入 /team 或 /duet 可派生新任务…` : `回复并继续（${sendKeys.sendShort} 发送，可粘贴图片或文件）…`;
+      ? "任务已归档，无法继续回复"
+      : !hasConversation && !queueing && !scopeDiscovery
+        ? "先运行任务，再继续回复"
+        : null;
+  const placeholder = inputDisabled && reason ? reason : "回复…";
 
   const resetComposerState = () => {
     setCommandIndex(0);
@@ -550,7 +550,7 @@ export function ReplyBox({
           value={value}
           rows={3}
           disabled={inputDisabled}
-          placeholder={reason}
+          placeholder={placeholder}
           aria-label="回复任务"
           onChange={(event) => {
             const next = event.target.value;
@@ -633,24 +633,25 @@ export function ReplyBox({
               <X size={10} weight="bold" />
             </button>
           )}
-          <SendSplit
+          <LaterSendKey
             later={later}
-            label={queueing ? "排队发送" : "发送"}
-            status={uploads.uploading ? uploadingLabel(uploads.pending) : menuCompletes ? "补全" : commandActive && !menuSends ? "配置" : null}
-            ariaLabel={menuCompletes ? "把命令补进正文" : commandActive && !menuSends ? "打开派生配置" : queueing ? "排队发送，任务跑完自动发出" : "发送回复"}
-            sending={sending}
-            disabled={sending || uploads.uploading || ((!commandActive || menuSends) && (disabled || (!value.trim() && !uploads.attachments.length)))}
-            configDisabled={disabled || sending || uploads.uploading || commandActive || mention.open}
-            onSend={() => void send()}
-            stop={queueing && onStop ? {
-              label: task.status === "queued" ? "不排了" : "停止这一轮",
-              busy: stopping,
-              onStop: () => {
-                setStopping(true);
-                void onStop().finally(() => setStopping(false));
-              },
-            } : null}
+            action="发送回复"
             empty={!value.trim() && !uploads.attachments.length && !uploads.uploading}
+            running={queueing}
+            uploading={uploads.uploading ? uploadingLabel(uploads.pending) : null}
+            // 敲着命令时这颗键干的是别的事：补全命令、打开派生配置。归档的任务也能派生，所以不受下面那条拦。
+            override={menuCompletes ? { text: "补全", action: "把命令补进正文" }
+              : commandActive && !menuSends ? { text: "配置", action: "打开派生配置" } : null}
+            blocked={disabled ? reason ?? "现在发不出去" : null}
+            busy={sending}
+            onSend={() => void send()}
+            onStop={onStop ? () => {
+              setStopping(true);
+              void onStop().finally(() => setStopping(false));
+            } : undefined}
+            stopTip={task.status === "queued" ? "不排了" : "停止这一轮"}
+            stopBusy={stopping}
+            configDisabled={disabled || sending || uploads.uploading || commandActive || mention.open}
             tasks={tasks}
             projectId={task.projectId}
             taskId={task.id}

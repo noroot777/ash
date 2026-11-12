@@ -9,6 +9,7 @@ import {
 import { File as FileIcon, Paperclip, SpinnerGap, X } from "@phosphor-icons/react";
 import { maxBytesFor, type AttachmentKind } from "@ash/shared";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { api } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
 import { attachmentView } from "./utils.ts";
@@ -192,17 +193,21 @@ export function AttachmentPicker({
   disabled?: boolean;
 }) {
   const input = useRef<HTMLInputElement>(null);
+  // 「可以粘贴图片或文件」原来写在回复框的占位里，现在住在这颗键的提示上（reply-1）。
+  const tip = useHoverTip();
   return (
     <>
       <button
         className="task-reply-icon"
         type="button"
         disabled={disabled}
-        onClick={() => input.current?.click()}
+        onClick={() => { tip.hide(); input.current?.click(); }}
         aria-label="上传附件"
+        {...tip.anchorProps}
       >
         <Paperclip size={16} aria-hidden="true" />
       </button>
+      <HoverTip at={tip.at}>上传附件 · 也可以直接粘贴图片或文件</HoverTip>
       <input
         ref={input}
         className="task-visually-hidden"

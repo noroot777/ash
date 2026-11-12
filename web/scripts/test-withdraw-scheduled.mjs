@@ -96,7 +96,7 @@ try {
   assert.equal(await page.locator(".task-upload-chip img").count(), 1, "图片附件应还原成可预览的缩略图");
   assert.equal(await rows.getByText("排队里的原话", { exact: true }).count(), 0, "撤回成功后托盘上不该再留这一行");
   assert.deepEqual(deleted, ["msg-fail", "msg-ok"], "每次撤回都必须真的调用取消端点");
-  const sendButton = page.getByRole("button", { name: "排队发送，任务跑完自动发出" });
+  const sendButton = page.getByRole("button", { name: "排队发送" });
   assert.equal(await sendButton.isEnabled(), true, "撤回回来的内容应能直接再排一次队");
 
   // ③ 交错：发送请求在途时撤回另一条消息。撤回排在发送结算之后——发送先清掉它自己那份

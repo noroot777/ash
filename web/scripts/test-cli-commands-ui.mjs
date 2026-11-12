@@ -507,7 +507,7 @@ try {
       await liveReply.fill(`${text} `);
       const [returned] = await Promise.all([
         page.waitForResponse((value) => value.url().endsWith(`/tasks/${taskId}/reply`) && value.request().method() === "POST"),
-        page.getByRole("button", { name: /^(发送回复|排队发送，任务跑完自动发出)$/ }).click(),
+        page.getByRole("button", { name: /^(发送回复|排队发送)$/ }).click(),
       ]);
       const result = await returned.json();
       assert.equal(returned.status(), expectedStatus, `${text}: ${JSON.stringify(result)}`);

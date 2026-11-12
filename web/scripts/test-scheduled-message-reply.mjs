@@ -26,7 +26,7 @@ try {
     try {
       await page.goto(`${base}/scripts/fixtures/scheduled-message-reply.html?variant=${variant}`);
       const input = page.locator(variant === "single" ? ".task-reply-box textarea" : ".team-reply-box textarea");
-      const send = page.getByRole("button", { name: variant === "single" ? "排队发送，任务跑完自动发出" : "发送给调度者", exact: true });
+      const send = page.getByRole("button", { name: variant === "single" ? "排队发送" : "发送给调度者", exact: true });
       const settle = () => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const visibleSend = async (label) => {
         const result = await send.evaluate((element) => {

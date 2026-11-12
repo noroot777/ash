@@ -23,21 +23,6 @@
   .scheduled-message-row > .scheduled-message-guide { width: 24px; justify-content: center; padding: 0; }
   .scheduled-message-guide > span { display: none; }
 }
-/* 发送按钮:主按钮带文案 + 连体的「发送设置」段(studio-submit-mode),跟新建面板的
-   「创建并运行 ▸」同一套长相,只是按回复框的行高缩一号。浮层本身是 studio-popover。 */
-.send-split { display: inline-flex; flex: 0 0 auto; align-items: stretch; }
-.send-split-main { display: inline-flex; height: 29px; align-items: center; gap: 7px; border: 0; border-radius: 7px 0 0 7px; background: var(--accent); padding: 0 10px 0 11px; color: white; font-size: 11px; font-weight: 600; white-space: nowrap; box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-active) 28%, transparent), 0 1px 2px rgb(40 42 48 / 12%); }
-.send-split-main:hover:not(:disabled) { background: var(--accent-hover); }
-.send-split-main:disabled { opacity: .5; }
-.send-split-main:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 55%, transparent); outline-offset: 1px; }
-/* 在跑、输入框空着：主段就是停止键（同一格里换成方块）；打了字以后停止挪到左边这颗小键上。 */
-.send-split-main.is-stop { padding: 0 10px; }
-.send-split-halt { display: inline-grid; width: 24px; height: 24px; align-self: center; place-items: center; margin-right: 6px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--muted); }
-.send-split-halt:hover:not(:disabled) { background: var(--hover-bg); color: var(--ink); }
-.send-split .studio-submit-mode.studio-aux-button { height: 29px; gap: 4px; border-radius: 0 7px 7px 0; padding: 0 7px; }
-.send-split .studio-submit-mode.studio-aux-button:disabled { opacity: .5; }
-.team-reply-box footer .send-split-main,
-.team-reply-box footer .send-split .studio-submit-mode.studio-aux-button { height: 27px; }
 /* 托盘里「等某任务完成后发送」那一行:在等谁。等不到了(失败/取消/删除)标琥珀色,旁边给「直接发送」。 */
 .scheduled-message-row > .scheduled-message-after { max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-message-row > .scheduled-message-after.is-stuck { color: var(--amber); }

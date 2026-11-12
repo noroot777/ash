@@ -149,7 +149,7 @@
    style.height 上写会打架)。这里不设 max-height:那会把用户能拖到多高一起限死。 */
 .team-reply-box textarea { display: block; width: 100%; min-height: 44px; resize: none; border: 0; background: transparent; padding: 9px 11px 2px; color: var(--ink); font-size: 12px; outline: 0; }
 .team-reply-box footer { display: flex; height: 34px; align-items: center; gap: 7px; padding: 0 6px 5px; color: var(--faint); font-size: 9.5px; }
-.team-reply-box footer > .send-split { margin-left: auto; }
+.team-reply-box footer > .send-key { margin-left: auto; }
 
 /* 调度台回复框的 `/` 补全菜单：跟普通任务回复框那张同一副长相（见 task-reply.css）。 */
 .team-reply-command-menu {

@@ -5,12 +5,11 @@
 // 普通任务回复框与团队调度台回复框共用这一份,两边长得不一样会被当成 bug 报上来。
 import { useEffect, useState } from "react";
 import type { Group, ScheduledMessage, TaskListItem } from "@ash/shared";
-import { ArrowUp, Clock, HourglassMedium, PaperPlaneRight, SpinnerGap, Stop } from "@phosphor-icons/react";
+import { Clock } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import type { DraftHandle } from "../lib/DraftStore.tsx";
 import { sendAfterOptions } from "../lib/sendAfter.ts";
 import { useRovingChoice } from "../lib/useRovingChoice.ts";
-import { ComposerPopover } from "../composer/ComposerPopover.tsx";
 import { Dropdown } from "./Dropdown.tsx";
 import { defaultOnceTime, toLocalDateTime } from "./ScheduleControl.tsx";
 import { SendKey, type SendKeyStop } from "./SendKey.tsx";
@@ -25,12 +24,6 @@ const KINDS: { value: LaterKind; label: string; submit: string }[] = [
   { value: "after", label: "等任务完成", submit: "完成后发送" },
 ];
 const KIND_VALUES = KINDS.map((kind) => kind.value);
-
-function KindIcon({ kind }: { kind: LaterKind }) {
-  if (kind === "timed") return <Clock size={12} />;
-  if (kind === "after") return <HourglassMedium size={12} />;
-  return <PaperPlaneRight size={12} />;
-}
 
 /** 发送方式的读写。状态本身存在这份回复草稿里(DraftStore 的 later 字段),跟正文一起
  *  跨切任务保留、一起清掉;这里只负责解释它。 */
@@ -95,109 +88,6 @@ export type LaterSend = ReturnType<typeof useLaterSend>;
  */
 export type SendStop = { label: string; busy?: boolean; onStop: () => void };
 
-export function SendSplit({ later, label, status, ariaLabel, sending, disabled,
-  configDisabled, onSend, tasks, projectId, taskId, stop, empty }: {
-  later: LaterSend;
-  label: string;
-  status?: string | null;
-  ariaLabel: string;
-  sending: boolean;
-  disabled: boolean;
-  configDisabled: boolean;
-  onSend: () => void;
-  tasks: TaskListItem[];
-  projectId: string;
-  taskId: string;
-  /** 给了 = 任务正在跑 / 排着队，这颗键也管停。 */
-  stop?: SendStop | null;
-  /** 输入框里一个字、一个附件都没有（停止键占主段的判据之一）。 */
-  empty?: boolean;
-}) {
-  const configured = later.kind !== "now";
-  const text = status ?? (configured ? later.submitLabel : label);
-  const stopAsMain = !!stop && !!empty && !status && !sending;
-  return (
-    <span className="send-split">
-      {stop && !stopAsMain && (
-        <button type="button" className="send-split-halt" aria-label={stop.label} disabled={stop.busy} onClick={stop.onStop}>
-          {stop.busy ? <SpinnerGap size={12} className="is-spinning" aria-hidden="true" /> : <Stop size={12} weight="fill" aria-hidden="true" />}
-        </button>
-      )}
-      {stopAsMain ? (
-        <button type="button" className="send-split-main is-stop" aria-label={stop.label} disabled={stop.busy} onClick={stop.onStop}>
-          {stop.busy ? <SpinnerGap size={14} className="is-spinning" aria-hidden="true" /> : <Stop size={14} weight="fill" aria-hidden="true" />}
-        </button>
-      ) : (
-        <button type="button" className="send-split-main" disabled={disabled || (!status && !later.choice)}
-          aria-label={configured && !status ? text : ariaLabel} onClick={onSend}>
-          <span>{text}</span>{sending ? <SpinnerGap size={14} className="is-spinning" /> : <ArrowUp size={14} weight="bold" />}
-        </button>
-      )}
-      <ComposerPopover label="发送设置" value={KINDS.find((item) => item.value === later.kind)!.label}
-        disabled={configDisabled} className={`studio-submit-mode${configured ? " is-configured" : ""}`}
-        trigger={<KindIcon kind={later.kind} />}>
-        <LaterSendFields later={later} tasks={tasks} projectId={projectId} taskId={taskId} />
-      </ComposerPopover>
-    </span>
-  );
-}
-
-function LaterSendFields({ later, tasks, projectId, taskId }: {
-  later: LaterSend;
-  tasks: TaskListItem[];
-  projectId: string;
-  taskId: string;
-}) {
-  const [groups, setGroups] = useState<Group[]>([]);
-  const kindGroup = useRovingChoice(KIND_VALUES, later.kind, later.setKind);
-  // 分组名只用来给候选分段,拿不到就不分段,不挡选择。
-  useEffect(() => {
-    let alive = true;
-    api.groups(projectId).then((rows) => { if (alive) setGroups(rows); }).catch(() => undefined);
-    return () => { alive = false; };
-  }, [projectId]);
-
-  const target = tasks.find((task) => task.id === later.afterTaskId);
-  return <>
-    <div className="composer-launch-mode" {...kindGroup.groupProps} aria-label="发送方式">
-      <span>发送方式</span>
-      <div className="composer-launch-mode-grid">
-        {KINDS.map((kind) => (
-          <button key={kind.value} type="button" {...kindGroup.itemProps(kind.value)}
-            className={`composer-launch-mode-chip${later.kind === kind.value ? " is-active" : ""}`}
-            onClick={() => later.setKind(kind.value)}>
-            <KindIcon kind={kind.value} />{kind.label}
-          </button>
-        ))}
-      </div>
-    </div>
-    {later.kind === "timed" && (
-      <label className="schedule-field schedule-field--once">
-        <Clock size={13} aria-hidden="true" />
-        <input type="datetime-local" aria-label="发送时间" value={later.at}
-          min={toLocalDateTime(new Date(Date.now() + 60_000))}
-          onChange={(event) => later.setAt(event.target.value)} />
-      </label>
-    )}
-    {later.kind === "after" && (
-      <div className="composer-field composer-queue-after">
-        <Dropdown label="等哪个任务完成" value={later.afterTaskId}
-          placeholder="选择任务…" filterPlaceholder="筛选任务…"
-          options={sendAfterOptions({ tasks, groups, projectId, taskId })}
-          onChange={later.setAfterTaskId}
-          onClear={later.afterTaskId ? () => later.setKind("now") : undefined} clearLabel="不等了，立即发送" />
-      </div>
-    )}
-    {later.kind !== "now" && (
-      <p className="studio-help">
-        <KindIcon kind={later.kind} />
-        {later.kind === "timed" ? later.choice ? "到点自动发出，发出前可在待发送里撤回。" : later.blocker
-          : target ? `等「${target.title || "未命名任务"}」完成后自动发出。` : "先选一个要等的任务，它完成后自动发出。"}
-      </p>
-    )}
-  </>;
-}
-
 /**
  * 回复框用的发送键：共用发送键（SendKey.tsx）+ 尖角里的「发送设置」三档。调用方只给事实
  * （空没空、任务在不在跑、在不在传附件、还有什么别的原因发不出去），这里翻成那颗键的长相：
@@ -209,7 +99,7 @@ function LaterSendFields({ later, tasks, projectId, taskId }: {
  * 回车照旧走调用方自己的 send()，那里面要按 later.resolve() 再判一次。
  */
 export function LaterSendKey({ later, action = "发送", empty, running = false, uploading, blocked, busy = false,
-  override, onSend, onStop, stopTip = "停止这一轮", configDisabled = false, tasks, projectId, taskId, size = "sm" }: {
+  override, onSend, onStop, stopTip = "停止这一轮", stopBusy = false, configDisabled = false, tasks, projectId, taskId, size = "sm" }: {
   later: LaterSend;
   /** 立即那一档做的事，进读屏名和提示（「发送」「发送给调度者」）。 */
   action?: string;
@@ -224,6 +114,8 @@ export function LaterSendKey({ later, action = "发送", empty, running = false,
   onSend: () => void;
   onStop?: () => void;
   stopTip?: string;
+  /** 停止请求还在路上：停止键点不动，免得连按出两次。 */
+  stopBusy?: boolean;
   configDisabled?: boolean;
   tasks: TaskListItem[];
   projectId: string;
@@ -232,7 +124,7 @@ export function LaterSendKey({ later, action = "发送", empty, running = false,
 }) {
   const configured = later.kind !== "now";
   const target = tasks.find((task) => task.id === later.afterTaskId);
-  const stop: SendKeyStop | null = onStop ? { tip: stopTip, onStop } : null;
+  const stop: SendKeyStop | null = onStop ? { tip: stopTip, onStop, disabled: stopBusy } : null;
   const stopping = running && empty && !uploading && !override && !!stop;
   const time = later.kind === "timed" && later.choice ? new Date(later.at) : null;
   const text = uploading ?? override?.text ?? (configured ? later.submitLabel : running ? "排队发送" : "");

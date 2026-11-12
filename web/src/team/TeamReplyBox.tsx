@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ScheduledMessage, Task, TaskListItem } from "@ash/shared";
 import { cliCommandsForMode } from "@ash/shared/cli-commands";
 import { ScheduledMessageTray, useScheduledMessages } from "../components/ScheduledMessages.tsx";
-import { SendSplit, useLaterSend, type LaterChoice } from "../components/LaterSend.tsx";
+import { LaterSendKey, useLaterSend, type LaterChoice } from "../components/LaterSend.tsx";
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { FileMentionMenu } from "../components/MentionMenu.tsx";
 import type { ReplyTaskResult } from "../lib/api.ts";
@@ -192,13 +192,13 @@ export function TeamReplyBox({
         />
         <footer>
           <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending} />
-          <SendSplit
+          <LaterSendKey
             later={later}
-            label="发送"
-            status={uploads.uploading ? uploadingLabel(uploads.pending) : null}
-            ariaLabel="发送给调度者"
-            sending={sending}
-            disabled={disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)}
+            action="发送给调度者"
+            empty={!value.trim() && !uploads.attachments.length && !uploads.uploading}
+            uploading={uploads.uploading ? uploadingLabel(uploads.pending) : null}
+            blocked={disabled ? "任务已归档，无法继续回复" : null}
+            busy={sending}
             configDisabled={disabled || sending || uploads.uploading}
             onSend={() => void send()}
             tasks={tasks}

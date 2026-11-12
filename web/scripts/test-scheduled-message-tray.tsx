@@ -173,10 +173,12 @@ assert.match(reloadSource, /retainScheduledMessageActionError/, "reload 必须�
 const css = readSource(new URL("../src/styles/reply.css", import.meta.url));
 assert.match(css, /@container \(max-width: 520px\)[\s\S]*scheduled-message-guide[\s\S]*display: none/, "窄托盘必须把引导按钮降级成纯图标");
 const replySource = readSource(new URL("../src/task-detail/ReplyBox.tsx", import.meta.url));
+// 输入框里只写「回复…」（docs/ui-ux-audit reply-1）；队尾那颗引导键自己指上去说它做什么。
+assert.match(replySource, /: "回复…"/, "回复框占位只写「回复…」，原因只在发不出去时才写进去");
 assert.match(
-  replySource,
-  /command \? "任务进行中；发送即排队，队尾可点“引导会话”/,
-  "普通顶层任务即使支持派生命令，运行中提示也必须让用户发现队尾引导动作",
+  readSource(new URL("../src/components/ScheduledMessageTray.tsx", import.meta.url)),
+  /不等这一轮结束，把这条直接接进正在进行的对话/,
+  "队尾的引导键必须自己说清它做什么，用户才发现得了它",
 );
 // 撤回的回填只能发生在取消成功之后：失败了消息还挂在队列上，再往输入框塞一份就成了两条。
 // 团队那半的回复框在 e5107008 从 TeamView.tsx 拆进了 TeamReplyBox.tsx —— 这里读的是实现
