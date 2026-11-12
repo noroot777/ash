@@ -2,7 +2,6 @@ import { useMemo, useRef } from "react";
 import { File, Gavel, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
-import { runActivityExecutor, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import type { ConversationItem, ConversationSource } from "./conversationModel.ts";
 import { conversationTailKey } from "./conversationModel.ts";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
@@ -11,7 +10,8 @@ import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
-import { RunActivity } from "../components/RunActivity.tsx";
+import { LiveStrip } from "../components/LiveStrip.tsx";
+import { runActivityCopy, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import { MessageAttachments } from "./Attachments.tsx";
 import { conversationFeedRows, reviewLaneMessageRoles, type ReviewLaneMessageRole } from "./conversationReviewLanes.ts";
 import { conversationDebateRows } from "./conversationDebateRows.ts";
@@ -108,7 +108,7 @@ function AgentMessage({
           </header>
         )}
         {wakeReply && <MonitorWakeReply />}
-        <AgentTurnBody segments={item.segments} running={!item.endedAt} taskId={taskId} />
+        <AgentTurnBody segments={item.segments} running={!item.endedAt} taskId={taskId} since={live ? item.at : undefined} />
         {/* 跑着的这一回合还没说完，尾上的操作等它收口再出（run-5）。「N 条记录」是那一排里的一颗，
             摊开的流水在它下面。 */}
         {!live && <TurnActions item={item} markdown={item.markdown} onFork={onFork} onAskSideChat={onAskSideChat}
@@ -159,8 +159,6 @@ export function ConversationFeed({
   task,
   requirement,
   items: feedItems,
-  sessions,
-  pendingExecutor,
   loading,
   error,
   forkBlockedReason,
@@ -183,9 +181,7 @@ export function ConversationFeed({
    */
   requirement?: { text: string; at?: string | null } | null;
   items: ConversationItem[];
-  sessions: Session[];
-  /** 刚发出去、服务端还没落下会话行的那一回合目标(见 runActivityExecutor)。 */
-  pendingExecutor?: string | null;
+  sessions?: Session[];
   loading: boolean;
   error: Error | null;
   forkBlockedReason?: string | null;
@@ -243,11 +239,9 @@ export function ConversationFeed({
     [items, requirementAt, requirementText],
   );
   const activityPhase = runActivityPhase(task.status, runActivityTail(items));
-  const activityExecutor = runActivityExecutor({
-    sessions,
-    pending: pendingExecutor,
-    fallback: task.executorLabel ?? task.agentType,
-  });
+  const queuedCopy = task.status === "queued"
+    ? runActivityCopy({ status: task.status, mode: task.mode, phase: activityPhase ?? undefined, queuePosition: task.queuePosition })
+    : null;
   // 一整场辩论折成一行，排在回执归属之前 —— 反过来的话，那七条「轮到 X 发言」会先被
   // conversationSystemRows 收进某一回合的记录里，辩论就再也认不出自己的边界了。
   const { rows, receipts } = conversationSystemRows(conversationDebateRows(conversationFeedRows(items, { reviews }), { reviews }));
@@ -383,15 +377,10 @@ export function ConversationFeed({
               </ReviewerLane>
             );
           })}
-          {activityPhase && !loading && !error && (
-            <RunActivity
-              status={task.status}
-              mode={task.mode}
-              phase={activityPhase}
-              executor={activityExecutor}
-              queuePosition={task.queuePosition}
-            />
-          )}
+          {/* 等它开口的那一段只有一行进行条（run-2）；排着队时字不动，原因指上去看。 */}
+          {activityPhase && !loading && !error && (task.status === "queued"
+            ? <LiveStrip still since={null} text={queuedCopy?.title ?? "排着队"} tip={queuedCopy?.detail} />
+            : <LiveStrip since={task.liveSince} />)}
           {/* 正文一条都没读下来时这里是空的，但那不是「还没开始跑」——`forkBlockedReason`
               在场就说明读挂了，再劝用户点运行是把失败说成了空会话。 */}
           {!items.length && !loading && !error && !forkBlockedReason && !activityPhase && (

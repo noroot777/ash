@@ -102,7 +102,7 @@ try {
   assert.equal(posts.length, beforeOversize, "快捷键也不能提交过大的派生正文");
   await page.getByRole("button", { name: "正文读取失败", exact: true }).click();
   await page.getByText(/正文暂未读全/).waitFor();
-  await page.locator(".run-activity").waitFor();
+  await page.locator(".live-strip").waitFor();
   assert.equal(await forks.count(), 0);
   failOutput = false;
   await page.getByRole("button", { name: "刷新正文", exact: true }).click();

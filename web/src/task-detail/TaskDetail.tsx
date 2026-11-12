@@ -103,7 +103,6 @@ export function TaskDetail({
   const [derivationResetKey, setDerivationResetKey] = useState(0);
   // 刚发出去的那一回合由谁跑。会话行一落库就由它接管(见 runActivityExecutor),
   // 这里只补中间那一两秒;任务停下来就作废,免得下一次「运行」照抄旧目标。
-  const [pendingExecutor, setPendingExecutor] = useState<string | null>(null);
   // 读过 / 没读过的账（侧栏那一行的点）随打开的任务对齐；头上不再画状态点，返回值这里用不上。
   useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
@@ -171,12 +170,6 @@ export function TaskDetail({
     setDerivation(null);
     fileView.close();
   }, [fileView.close, initialReviewOpen, task.id]);
-  // 换任务一律作废(别把上一个任务的目标念到这一个头上);同一个任务停下来也作废,
-  // 免得下一次「运行」照抄旧目标。
-  useEffect(() => setPendingExecutor(null), [task.id]);
-  useEffect(() => {
-    if (task.status !== "running" && task.status !== "queued") setPendingExecutor(null);
-  }, [task.status]);
 
   // 中间那一栏换内容时，子智能体抽屉必须跟着收起来 —— 它盖在主区上面，不收的话用户
   // 点了「审查」/ 文件 / diff 只会看到原来那份执行详情（与 TeamView 同一口径）。
@@ -474,7 +467,6 @@ export function TaskDetail({
                       bodyReady={conversation.ready}
                       items={conversation.items}
                       sessions={conversation.sessions}
-                      pendingExecutor={pendingExecutor}
                       loading={conversation.refreshing}
                       error={conversation.error}
                       forkBlockedReason={forkReadBlock(conversation)}
@@ -593,8 +585,6 @@ export function TaskDetail({
                           notify(result.recorded ? "原生命令已执行，结果见会话记录" : result.text);
                           return result;
                         }
-                        // 这一轮真发出去了,横幅先按这个名字报,等会话行落库再由它接管。
-                        setPendingExecutor(executorLabel ?? null);
                         conversation.addUser(text, attachments);
                         notify(options.agent
                           ? `已召唤 @${options.agent}${options.model ? ` · ${options.model}` : ""}${options.reasoningEffort ? ` · ${options.reasoningEffort}` : ""} 继续任务`

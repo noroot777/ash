@@ -2,6 +2,9 @@ import { CaretRight, File, Globe, Lightbulb, ListChecks, MagnifyingGlass, Pencil
 import { isVisibleExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
 import { describeEvent, isFlatStep, liveLabel, pastSummary, type StepView } from "../lib/executionWords.ts";
 import { useSwapText } from "../lib/useSwapText.ts";
+import { useNow } from "../lib/useNow.ts";
+import { formatDuration } from "../task-detail/utils.ts";
+import "./live-strip.css";
 
 /* 执行过程:收着是一句话(在跑时「正在读 ReplyBox.tsx」,做完「读了 2 个文件，跑了 1 条命令」),
    点开一步一行(「读 ReplyBox.tsx」),每一行再点开是「字段 值」,原始参数再折一层。
@@ -102,7 +105,7 @@ export function executionBlockTone(events: ExecutionEvent[]): string {
  * 就会在上游恢复后一直写着正在重试。缺省 false:算不出来时宁可按普通一步说。
  */
 export function ExecutionSummaryLine(
-  { events, running, awaiting = false }: { events: ExecutionEvent[]; running: boolean; awaiting?: boolean },
+  { events, running, awaiting = false, since }: { events: ExecutionEvent[]; running: boolean; awaiting?: boolean; since?: string | null },
 ) {
   events = events.filter(isVisibleExecutionEvent);
   const text = running ? liveLabel(events, awaiting) : pastSummary(events);
@@ -110,9 +113,19 @@ export function ExecutionSummaryLine(
   return (
     <>
       <CaretRight className="task-execution-caret" size={12} weight="bold" aria-hidden="true" />
-      <span className={`task-execution-label swap${phase ? ` ${phase}` : ""}${running ? " shim" : ""}`}>{shown}</span>
+      {/* 等上游回话时没有东西在动：字上不扫光（run-9）。 */}
+      <span className={`task-execution-label swap${phase ? ` ${phase}` : ""}${running && !awaiting ? " shim" : ""}`}>{shown}</span>
+      {running && since && <LiveTime since={since} />}
     </>
   );
+}
+
+/** 在跑的那一行后面跟着这一轮已经跑了多久，过 2 秒才出（run-2）。 */
+function LiveTime({ since }: { since: string }) {
+  const now = useNow(true);
+  const start = Date.parse(since);
+  if (!Number.isFinite(start) || now - start < 2000) return null;
+  return <span className="task-execution-live-time num">{formatDuration(now - start)}</span>;
 }
 
 /** 光秃秃的事件行列表。外面已经有折叠壳时用它，别再套一层 `<details>`。 */
@@ -129,7 +142,7 @@ export function ExecutionEventList({ events }: { events: ExecutionEvent[] }) {
 }
 
 export function ExecutionDetails(
-  { events, running, awaiting = false }: { events: ExecutionEvent[]; running: boolean; awaiting?: boolean },
+  { events, running, awaiting = false, since }: { events: ExecutionEvent[]; running: boolean; awaiting?: boolean; since?: string | null },
 ) {
   events = events.filter(isVisibleExecutionEvent);
   if (!events.length) return null;
@@ -139,7 +152,7 @@ export function ExecutionDetails(
   return (
     <details className={`task-execution-block${executionBlockTone(events)}${running ? " is-live" : ""}`} data-selection-chrome="">
       <summary>
-        <ExecutionSummaryLine events={events} running={running} awaiting={awaiting} />
+        <ExecutionSummaryLine events={events} running={running} awaiting={awaiting} since={since} />
       </summary>
       <ExecutionEventList events={events} />
     </details>

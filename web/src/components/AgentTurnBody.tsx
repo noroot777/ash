@@ -59,6 +59,7 @@ export function AgentTurnBody({
   segments,
   running,
   taskId,
+  since,
 }: {
   segments: AgentContentSegment[];
   /** 这一回合还在飞（会话行还没落 endedAt）。在飞就不折，见 turnDocument。 */
@@ -68,6 +69,8 @@ export function AgentTurnBody({
    * 档退路——存量消息（落盘之前说的那些）唯一还拿得到图的路子，见 turnImages。
    */
   taskId?: string;
+  /** 在跑时，执行过程那一行后面跟着这一轮从哪一刻算起的用时（run-2）。 */
+  since?: string | null;
 }) {
   const turn = useMemo(
     () => turnDocument(segments, { live: running, taskId }),
@@ -96,6 +99,7 @@ export function AgentTurnBody({
             bare={!!fold && index < fold.stops}
             running={index === pulse}
             awaiting={awaiting && index === pulse}
+            since={index === pulse ? since : undefined}
           />
         ),
       })),
@@ -120,19 +124,19 @@ export function AgentTurnBody({
         }
         : {}),
     };
-  }, [turn, running, awaiting, foldOpen]);
+  }, [turn, running, awaiting, foldOpen, since]);
 
   return <MarkdownBody text={turn.text} layout={layout} />;
 }
 
 /* `awaiting` = 此刻正卡在上游等回话,只会落在脉冲那一步上(它就是正在发生的这一步):
    折叠条上那句「正在重试」要常驻,见 lib/executionWords.ts 的 liveLabel。 */
-function StopBody({ stop, bare, running, awaiting }: { stop: TurnStop; bare: boolean; running: boolean; awaiting: boolean }) {
+function StopBody({ stop, bare, running, awaiting, since }: { stop: TurnStop; bare: boolean; running: boolean; awaiting: boolean; since?: string | null }) {
   return (
     <>
       {bare
         ? <ExecutionEventList events={stop.events} />
-        : <ExecutionDetails events={stop.events} running={running} awaiting={awaiting} />}
+        : <ExecutionDetails events={stop.events} running={running} awaiting={awaiting} since={since} />}
       <MessageAttachments paths={stop.attachments} />
     </>
   );

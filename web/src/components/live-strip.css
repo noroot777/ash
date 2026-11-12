@@ -1,0 +1,10 @@
+/* 进行条（LiveStrip.tsx）：和执行过程收着时那一行同一副长相（字号、颜色、行高），只是前面
+   没有折角——它还没有可以点开的东西。用时淡进来，等宽数字，换秒数时不晃。 */
+.live-strip { display: flex; max-width: 790px; min-height: 24px; align-items: center; gap: 8px; margin: 2px 0 10px 30px; color: var(--muted); font-size: var(--t-xs); line-height: 1.5; }
+.live-strip-label { font-weight: var(--w-regular); white-space: nowrap; }
+.live-strip-time { color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; animation: live-strip-in var(--dur-2) var(--ease-out) backwards; }
+.task-execution-live-time { margin-left: 2px; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; animation: live-strip-in var(--dur-2) var(--ease-out) backwards; }
+@keyframes live-strip-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .live-strip-time, .task-execution-live-time { animation: none; }
+}
