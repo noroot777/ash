@@ -138,20 +138,42 @@ type AgentMessageProps = Parameters<typeof AgentMessageView>[0];
  * 它自己真的变了时才重画（重读回来补上了执行过程、被删了一截、旁边多了回执）。回调只认有没有：
  * 它们闭包里拿的都是稳定的 setter / 派发函数。
  */
-function sameSettledTurn(prev: AgentMessageProps, next: AgentMessageProps): boolean {
+export function sameSettledTurn(prev: AgentMessageProps, next: AgentMessageProps): boolean {
   if (prev.item === next.item && prev.taskActive === next.taskActive) return shallowRest(prev, next);
   const settled = (props: AgentMessageProps) => !!props.item.endedAt || !props.taskActive;
   if (!settled(prev) || !settled(next)) return false;
   const a = prev.item;
   const b = next.item;
-  const events = (item: typeof a) => item.segments.reduce((sum, segment) => sum + segment.events.length + segment.attachments.length, 0);
   return a.id === b.id && a.endedAt === b.endedAt && a.markdown === b.markdown && a.label === b.label
-    && a.segments.length === b.segments.length && events(a) === events(b)
+    && sameSegments(a.segments, b.segments)
     && a.continuation === b.continuation && a.wokenByMonitor === b.wokenByMonitor
     && a.reviewer?.round === b.reviewer?.round && a.run?.model === b.run?.model && a.run?.reasoningEffort === b.run?.reasoningEffort
-    && (a.sources?.length ?? 0) === (b.sources?.length ?? 0) && a.session?.exitStatus === b.session?.exitStatus
+    && sameJson(a.sources, b.sources) && sameJson(a.usage, b.usage) && a.session?.exitStatus === b.session?.exitStatus
     && shallowRest(prev, next);
 }
+
+/**
+ * 段落比内容，不比条数：重读回来的同一回合，工具详情、附件路径、配对的那份拷贝可能换了而条数
+ * 不变（第 1 轮审查）。逐项比一遍远比重画这一回合便宜。
+ */
+function sameSegments(left: AgentMessageProps["item"]["segments"], right: AgentMessageProps["item"]["segments"]): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  return left.every((segment, index) => {
+    const other = right[index]!;
+    return segment === other || (segment.id === other.id && segment.markdown === other.markdown && segment.awaiting === other.awaiting
+      && segment.attachments.join("\n") === other.attachments.join("\n")
+      && sameJson(segment.attachmentSources, other.attachmentSources)
+      && segment.events.length === other.events.length
+      && segment.events.every((event, at) => {
+        const twin = other.events[at]!;
+        return event === twin || (event.kind === twin.kind && event.label === twin.label && event.detail === twin.detail
+          && event.at === twin.at && sameJson(event.nativeWork, twin.nativeWork));
+      }));
+  });
+}
+
+const sameJson = (left: unknown, right: unknown) => left === right || JSON.stringify(left) === JSON.stringify(right);
 
 function shallowRest(prev: AgentMessageProps, next: AgentMessageProps): boolean {
   return prev.taskId === next.taskId && prev.hideTime === next.hideTime && prev.laneRole === next.laneRole
