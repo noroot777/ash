@@ -1,16 +1,13 @@
-/* 侧栏（改后）。外框（宽 260、内边距）在 shell.css，这里只管里面五段：顶行、新建一行、筛选一行、任务树、底部一行，外加从侧栏点开的两样浮层（项目菜单、⌘K）。
+/* 侧栏（改后）。外框（宽 260、内边距）在 shell.css，这里只管里面五段：顶行、新建一行、筛选一行、任务树、底部两行，外加从侧栏点开的三样（项目菜单、⌘K、从底边升起来的「项目 Git」）。
    一行只管一件事：在哪儿 / 新建 / 找 / 任务 / 去别处。尺寸照现在的侧栏（web/src/styles 的 workspace / task-tree / sidebar-spread / project-switcher / overlays）。 */
 
-/* ---------- 顶行：项目 · 分支 · 常用命令 ---------- */
+/* ---------- 顶行：项目 · 常用命令 ---------- */
 .side-top { display: flex; align-items: center; gap: 3px; height: 36px; flex: none; }
-.side-proj, .side-branch { display: flex; align-items: center; min-width: 0; height: 36px; border-radius: var(--r-md); transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
-.side-proj { flex: 1; gap: 7px; padding: 0 6px 0 5px; font-weight: var(--w-medium); text-align: left; }
+.side-proj { display: flex; flex: 1; align-items: center; gap: 7px; min-width: 0; height: 36px; padding: 0 6px 0 5px; border-radius: var(--r-md); font-weight: var(--w-medium); text-align: left; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
 .side-proj > .cut { flex: 1; }
-.side-branch { flex: 0 1 auto; gap: 4px; max-width: 46%; padding: 0 7px; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-regular); }
-.side-proj > .i, .side-branch > .i { width: 12px; height: 12px; color: var(--faint); }
-.side-proj:hover, .side-proj[aria-expanded="true"], .side-branch:hover { background: var(--hover-bg); }
-.side-branch:hover { color: var(--ink); }
-.side-proj:active, .side-branch:active, .side .ico:active { background: var(--sel-bg); }
+.side-proj > .i { width: 12px; height: 12px; color: var(--faint); }
+.side-proj:hover, .side-proj[aria-expanded="true"] { background: var(--hover-bg); }
+.side-proj:active, .side .ico:active { background: var(--sel-bg); }
 /* 项目头像：一块项目色加首字母。「任务模式」不是哪个项目，用中性底加清单图标 */
 .side-ava { display: grid; place-items: center; width: 18px; height: 18px; flex: none; border-radius: var(--r-sm); background: var(--violet); color: var(--on-accent); font: var(--w-strong) var(--t-xs)/1 var(--font-sans); }
 .side-ava[data-tone="green"] { background: var(--green); }
@@ -120,17 +117,53 @@
 .side-other-tasks { margin: 0 0 8px 7px; }
 .side-other-tasks > p { padding: 8px; color: var(--muted); font-size: var(--t-xs); }
 
-/* ---------- 底部一行：聊天、助手靠左（12px、次级文字色），收起靠右 ---------- */
-.side-foot { display: flex; align-items: center; gap: 2px; flex: none; padding: 5px 0 2px; border-top: 1px solid var(--line); }
-.side-foot > a { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 7px; border-radius: var(--r-sm); outline-offset: -2px; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+/* ---------- 底部两行（side-foot.js）：上一行是主仓的分支，下一行是聊天、助手靠左，深浅色和收起靠右。都是 12px、次级文字色 ---------- */
+.side-foot { flex: none; padding: 5px 0 2px; border-top: 1px solid var(--line); }
+.side-foot-row { display: flex; align-items: center; gap: 2px; }
+.side-foot a, .side-git { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 7px; border-radius: var(--r-sm); outline-offset: -2px; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
 .side-foot .i { width: 14px; height: 14px; }
-.side-foot > a:hover { background: var(--hover-bg); color: var(--ink); }
-.side-foot > a:active { background: var(--sel-bg); }
+.side-foot a:hover, .side-git:hover, .side-git[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.side-foot a:active, .side-git:active { background: var(--sel-bg); }
 /* 开着聊天、助手时那一颗是墨色、图标填实 */
-.side-foot > a[aria-current="page"] { color: var(--ink); }
-.side-foot > a[aria-current="page"] > .i { fill: color-mix(in oklab, currentColor 22%, transparent); }
+.side-foot a[aria-current="page"] { color: var(--ink); }
+.side-foot a[aria-current="page"] > .i { fill: color-mix(in oklab, currentColor 22%, transparent); }
+/* 分支那一行占满宽度：名字放不下就截，领先落后贴右 */
+.side-git { display: flex; width: 100%; text-align: left; }
+.side-git > .cut { flex: 1; }
+.side-git > em { flex: none; color: var(--faint); font-style: normal; }
+.side-theme-glyph { display: grid; }
 
-/* ---------- 项目菜单：当前项目、设置、深浅色、搜索、「切换到」、新建项目（浮层本体是公共件 .pop + .menu） ---------- */
+/* ---------- 「项目 Git」：从侧栏的底边升起来，盖住下半截；点别处落回去。外面一层只管把它裁在侧栏里（多出的 8px 是外壳的底边距，窗贴到状态栏上） ---------- */
+.side { position: relative; }
+.side-rise { position: absolute; inset: 0 0 -8px; z-index: 5; display: flex; align-items: flex-end; overflow: hidden; background: transparent; transition: background 200ms var(--ease-in); }
+.side-rise.is-up { background: color-mix(in oklab, var(--chrome) 50%, transparent); transition: background var(--dur-3) var(--ease-out); }
+.side-sheet { display: flex; flex-direction: column; width: calc(100% - 12px); max-height: 76%; margin: 0 6px; padding: 6px 6px 8px; border-radius: var(--r-lg) var(--r-lg) 0 0; background: var(--panel); box-shadow: var(--control-shadow), var(--shadow); transform: translateY(calc(100% + 28px)); transition: transform 200ms var(--ease-in); }
+.side-rise.is-up > .side-sheet { transform: none; transition: transform var(--dur-3) var(--ease-out); }
+.side-sheet-head { display: flex; align-items: center; gap: 2px; flex: none; height: 32px; padding-left: 7px; }
+.side-sheet-head > .i { width: 14px; height: 14px; margin-right: 5px; color: var(--muted); }
+.side-sheet-head > b { flex: 1; font-weight: var(--w-medium); }
+.side-sheet-head .ico { width: 26px; height: 26px; }
+.side-sheet-head .ico > .i { width: 14px; height: 14px; }
+/* 领先几个提交，写在推送那颗键上 */
+.side-sheet-push { display: inline-flex; align-items: center; }
+.side-sheet-push > em { min-width: 12px; margin-left: -3px; padding-right: 5px; color: var(--muted); font-size: var(--t-xs); font-style: normal; }
+.side-sheet-push > em:empty { display: none; }
+.side-sheet > .side-pm-find { flex: none; margin: 4px 1px 5px; }
+.side-sheet-list { flex: 1; min-height: 0; overflow-y: auto; }
+.side-sheet-list > button { font-size: var(--t-xs); }
+.side-sheet-list > button > .cut { flex: 1; }
+.side-sheet-list > button > em { padding-left: 10px; }
+/* 当前分支前面一个勾，别的空着同样的宽度 */
+.side-sheet-list > button::before { content: ""; width: 10px; height: 6px; flex: none; margin: 0 2px 3px; border: solid transparent; border-width: 0 0 1.6px 1.6px; transform: rotate(-45deg); }
+.side-sheet-list > [aria-selected="true"]::before { border-color: var(--ink); }
+.side-sheet-list > .none { padding: 18px 8px; }
+.side-sheet-go { display: flex; align-items: center; flex: none; height: 30px; margin-top: 5px; padding: 0 8px; border-top: 1px solid var(--line); border-radius: 0 0 var(--r-sm) var(--r-sm); color: var(--muted); font-size: var(--t-xs); outline-offset: -2px; transition: color var(--dur-1) var(--ease-out); }
+.side-sheet-go > span { flex: 1; }
+.side-sheet-go > .i { width: 12px; height: 12px; color: var(--faint); }
+.side-sheet-go:hover { color: var(--ink); }
+.side-sheet-note { flex: none; padding: 0 8px; color: var(--faint); font-size: var(--t-xs); line-height: 1.5; }
+
+/* ---------- 项目菜单：当前项目、设置、搜索、「切换到」、新建项目（浮层本体是公共件 .pop + .menu） ---------- */
 .side-pm { width: 304px; padding: 8px; }
 .side-pm-cur { display: flex; align-items: center; gap: 9px; padding: 4px 5px 6px; }
 .side-pm-2 { display: grid; flex: 1; min-width: 0; }
@@ -138,11 +171,8 @@
 .side-pm-2 > small { color: var(--muted); font-size: var(--t-xs); }
 .side-pm .menu > button > small { margin-left: auto; color: var(--muted); font-size: var(--t-xs); }
 .side-pm .menu > button > small + kbd { margin-left: 4px; }
-.side-pm-theme { display: flex; margin-top: 4px; }
-.side-pm-theme > button { display: inline-flex; flex: 1; align-items: center; justify-content: center; gap: 5px; }
-.side-pm-theme .i { width: 14px; height: 14px; }
 .side-pm-find { display: flex; align-items: center; gap: 7px; height: 30px; margin: 7px 0 3px; padding: 0 9px; border-radius: var(--r-md); box-shadow: inset 0 0 0 1px var(--line2); color: var(--faint); }
-.side-pm-find:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 0; }
+.side-pm-find:focus-within { outline: 2px solid var(--focus-soft); outline-offset: 0; }
 .side-pm-find > input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; }
 .side-pm-list { max-height: 310px; overflow-y: auto; }
 .side-pm-list > button { height: auto; gap: 9px; padding: 6px 7px; }

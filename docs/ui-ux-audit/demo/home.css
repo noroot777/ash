@@ -110,7 +110,7 @@
 .sv-home-pop .labels > button:active { background: var(--sel-bg); }
 .sv-home-pop .labels > button .i { color: var(--faint); }
 .sv-home-pop .labels > label { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px 0 6px; border-radius: var(--r-sm); box-shadow: inset 0 0 0 1px var(--line); color: var(--faint); }
-.sv-home-pop .labels > label:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.sv-home-pop .labels > label:focus-within { outline: 2px solid var(--focus-soft); outline-offset: 2px; }
 .sv-home-pop .labels input { width: 64px; padding: 0; border: 0; background: none; color: var(--ink); font-size: var(--t-xs); }
 .sv-home-pop .labels input:focus-visible { outline: 0; }
 

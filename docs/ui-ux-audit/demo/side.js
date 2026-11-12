@@ -1,9 +1,9 @@
 /* 侧栏。入口和文案照真实侧栏（web/src/workspace 的 WorkspaceSidebar / ProjectSwitcher / TaskTree / TaskTreeRows / HandoffMachines），一样不少；
-   变的是摆法——一行只管一件事（side-5）：顶行是「在哪儿」（项目、分支、常用命令），第二行是「新建」（新建任务、随手记），
-   第三行是「找」（一颗星加五颗点的筛选、搜索、打开任务列表），然后是任务，底下一行是「去别处」（聊天、助手）和收起。
+   变的是摆法——一行只管一件事（side-5）：顶行是「在哪儿」（项目、常用命令），第二行是「新建」（新建任务、随手记），
+   第三行是「找」（一颗星加五颗点的筛选、搜索、打开任务列表），然后是任务；最底下两行是主仓的分支，和「去别处」（聊天、助手）、深浅色、收起——那一块在 side-foot.js。
    任务树不写「置顶」「任务」两个标题：置顶的排在最前、行尾一颗图钉，和后面的隔一道缝；「其他机器」「其他项目」各折成一行、右边写有几个。
    行尾平时只有会让你换主意的东西：等你什么（一个短词）、团队任务、智能体开的、置顶、星标，都是灰图标；加星标的键指到才出。
-   清单里另外四条照旧：side-1 行首记号、side-2 行首与顶上圆点查同一张表、side-3「其他机器」排到任务后面并默认折起、side-4 底部一行。
+   清单里另外四条照旧：side-1 行首记号、side-2 行首与顶上圆点查同一张表、side-3「其他机器」排到任务后面并默认折起、side-4 底部那一块。
    对外：ASH.parts.side = { setStatus(id, status, why), setFilter(key), setPinned(id, on), setFar(open), refresh(), search() }；
    听 task:status、route；发 task:open { id }（点的不是当前这条任务时）、task:pin { id, pinned }。
    样机没画下去的去处（常用命令、随手记、任务模式、F 铺开的宽列表……）界面上照产品原样写，点了只在样机自己那条栏里说一句（ASH.todo）。 */
@@ -111,13 +111,11 @@
       /* 样机数据里没有星标，给一条让那颗星有东西可筛 */
       if (!tasks.some((task) => task.starred)) { const seed = byId('t-d2'); if (seed) seed.starred = true; }
 
-      /* ---------- 顶行：项目（点开是项目菜单）、分支、常用命令 ---------- */
+      /* ---------- 顶行：项目（点开是项目菜单）、常用命令。分支不在这一行了：它在最底下（side-foot.js） ---------- */
       const avatar = (who = name, cls = '') => h(`i.side-ava${cls}`, { 'aria-hidden': 'true', 'data-tone': OTHERS.find((p) => p.name === who)?.tone }, who[0].toUpperCase());
       const proj = h('button.side-proj', { type: 'button', 'aria-haspopup': 'menu', onclick: () => openProject() }, avatar(), h('span.cut', name), icon('caret', 'sm'));
       const cmdBtn = h('button.ico', { type: 'button', 'aria-label': '常用命令（G C）', 'aria-haspopup': 'dialog', 'data-tip': '常用命令', 'data-key': 'G C', onclick: todo('常用命令面板') }, icon('play', 'fill'));
-      const top = h('div.side-top', {}, proj,
-        h('button.side-branch', { type: 'button', 'aria-label': 'Git：分支 main，点击切换分支或同步', 'aria-haspopup': 'dialog', 'data-tip': '切换分支或同步', onclick: todo('切换分支的浮层') }, icon('branch'), h('span.cut', 'main'), icon('caret', 'sm')),
-        cmdBtn);
+      const top = h('div.side-top', {}, proj, cmdBtn);
 
       /* ---------- 第二行「新建」、第三行「找」。分组管理不在这里：它在项目菜单的「设置」和 ⌘K 里 ---------- */
       const fbtn = {};
@@ -164,11 +162,9 @@
         return { other, head, body };
       });
 
-      /* 底部一行（side-4）：左边是「去别处」——聊天、助手，12px 次级色；右边一颗收起。连接灯不在这里（状态栏右端一直写着「已连接」） */
-      const chatBtn = h('a', { href: '#/chat' }, icon('chat'), '聊天');
-      const helper = h('a', { href: '#/assistant', 'aria-label': 'ash 助手' }, icon('assistant'), '助手');
-      const foot = h('div.side-foot', { 'data-m': 'side-4' }, chatBtn, helper, h('span.grow'),
-        h('button.ico', { type: 'button', 'aria-label': '收起侧边栏', 'data-tip': '收起侧边栏', 'data-key': '⌘B', onclick: todo('收起侧栏') }, icon('sidebar')));
+      /* 底部那一块（side-4）在 side-foot.js：分支一行，下面是聊天、助手、深浅色、收起。连接灯不在这里（状态栏右端一直写着「已连接」） */
+      const foot = ASH.sideFoot();
+      const { chat: chatBtn, helper } = foot;
 
       /* ---------- 行：行首记号、标题、行尾那个短词，整行是一个链接（它的点击面铺满整行）。
          行尾另有四样小东西，都是灰图标：团队任务、智能体开的（点了去来源任务）、置顶、星标（加星标的键指到这一行才出）。照 TaskTreeRows.tsx，只是不再是彩色胶囊 ---------- */
@@ -178,6 +174,7 @@
         const title = h('span.side-row-title', task.title);
         const end = h('span.side-row-end');
         const link = h('a.side-row-main', { href: '#/task', onclick: (e) => { if (!open(task)) e.preventDefault(); } }, lead, title, end);
+        if (task.id === ASH.data.current) link.setAttribute('data-m', 'run-6');   /* 状态一变，这一行滑到最上面 */
         const glyph = (name, say) => h('span.side-row-glyph', { role: 'img', 'aria-label': say, 'data-tip': say, onclick: () => link.click() }, icon(name));
         const star = h('button.side-row-star', { type: 'button', onclick: () => setStarred(task, !task.starred) }, icon('star'));
         const from = task.origin && `${task.origin} · 来自「${byId(SOURCE[task.id])?.title ?? ''}」`;
@@ -393,13 +390,8 @@
         layout();
       }
 
-      /* ---------- 项目菜单：内容和次序照现在的——当前项目、设置、深浅色、搜索、「切换到」（任务模式排第一）、新建项目 ---------- */
+      /* ---------- 项目菜单：内容和次序照现在的——当前项目、设置、搜索、「切换到」（任务模式排第一）、新建项目。深浅色搬到了侧栏最底下 ---------- */
       function openProject() {
-        /* 深浅色和样机栏那颗「深色」、设置页那颗分段是同一份偏好（ASH.theme）；选完不收起菜单（现在也不收） */
-        const themes = [['system', '跟随系统', 'monitor'], ['light', '浅色', 'sun'], ['dark', '深色', 'moon']].map(([value, label, glyph]) =>
-          h('button', { type: 'button', 'data-v': value, onclick: () => ASH.theme.set(value) }, icon(glyph), label));
-        const paintTheme = () => { for (const btn of themes) btn.setAttribute('aria-pressed', String(btn.dataset.v === ASH.theme.pref)); };
-        const offTheme = ASH.on('theme:change', paintTheme);
         const input = h('input', { type: 'text', placeholder: '搜索项目…', 'aria-label': '搜索项目', autocomplete: 'off', spellcheck: 'false' });
         const list = h('div.menu.side-pm-list');
         const option = (lead, title, sub, tail, attrs) => h('button', { type: 'button', role: 'menuitemradio', ...attrs }, lead, h('span.side-pm-2', {}, h('b.cut', title), h('small.cut', sub)), tail);
@@ -413,18 +405,16 @@
           ].filter(Boolean);
           list.replaceChildren(h('small', '切换到'), ...(found.length ? found : [h('p.none', '没有匹配的项目')]));
         };
-        paintTheme();
         draw();
         const close = ASH.pop(proj, [
           h('div.side-pm-cur', {}, avatar(name, '.is-lg'), h('span.side-pm-2', {}, h('b.cut', name), h('small.cut', pathOf(name)))),
           h('div.menu', {}, h('button', { type: 'button', role: 'menuitem', onclick: () => { ASH.closePop(); ASH.go('#/settings/agents'); } },
             icon('gear'), h('span', '设置'), h('small', '智能体 · 项目 · 分组 · 归档'), h('kbd', 'G S'))),
-          h('div.seg.side-pm-theme', { role: 'group', 'aria-label': '配色' }, themes),
           h('label.side-pm-find', {}, icon('search'), input),
           list,
           h('div.menu.side-pm-new', {}, h('button', { type: 'button', role: 'menuitem', onclick: todo('新建项目') }, icon('folderPlus'), h('span', '新建项目'))),
-        ], { cls: 'side-pm', onclose: offTheme });
-        if (!close) { offTheme(); return; }
+        ], { cls: 'side-pm' });
+        if (!close) return;
         close.el.setAttribute('role', 'menu');
         close.el.setAttribute('aria-label', '项目切换');
         input.addEventListener('input', draw);
@@ -531,7 +521,7 @@
       for (const task of tasks) { buildRow(task); order[task.pinned ? 'pin' : 'task'].push(task.id); }
       count();
       tree.replaceChildren(...wanted());
-      el.replaceChildren(top, make, find, tree, foot);
+      el.replaceChildren(top, make, find, tree, foot.el, foot.layer);
       claim();
 
       ASH.on('task:status', ({ id, status, why, accepted } = {}) => apply(id, status, why, accepted));

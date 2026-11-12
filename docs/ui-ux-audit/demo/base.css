@@ -17,12 +17,13 @@
   --ink: lch(9.794% 0 282);
   --muted: lch(39.176% 1.25 282);
   --faint: lch(64.64% 1.25 282);
-  /* 能点的东西一律墨色：主按钮、发送键、开关、勾选、选中的那一格、链接、焦点环。
+  /* 实心的键一律纯黑（主按钮、发送键、开关、勾选）：不是正文那种带一点灰的墨色。选中的那一格、链接、焦点环是墨色。
      主色只留给状态（在跑的点、做完没验收的环、Git 图上的线）——颜色说的是「它怎么样了」，不是「这里能点」 */
-  --action: var(--ink);
-  --action-hover: lch(24% 0 282);
-  --action-active: lch(32% 0 282);
-  --on-action: var(--panel);
+  --action: #000;
+  --action-hover: #262626;
+  --action-active: #333;
+  --on-action: #fff;
+  --on-action-dim: #8a8a8a;   /* 点不了的时候键还是黑的，只有上面的字和箭头淡下去 */
   --accent: #5e6ad2;
   --accent-soft: lch(92.5% 12 286);
   --on-accent: #fff;
@@ -35,6 +36,7 @@
   --sel-bg: lch(89.54% 0.5 282);
   --lifted: var(--panel);
   --focus-ring: var(--ink);
+  --focus-soft: color-mix(in oklab, var(--ink) 40%, transparent);   /* 正在打字的那一格：里面有光标，环淡一档 */
   --shadow: lch(0 0 0 / 0.08) 0 9px 48px, lch(0 0 0 / 0.1) 0 6px 24px, lch(0 0 0 / 0.04) 0 1px 1px;
   --surface-shadow: lch(0 0 0 / 0.02) 0 3px 6px -2px, lch(0 0 0 / 0.04) 0 1px 1px;
   --control-shadow: lch(0 0 0 / 0.103) 0 0 0 1px, var(--surface-shadow);
@@ -73,9 +75,11 @@
   --ink: lch(92% 1 282);
   --muted: lch(67% 3 282);
   --faint: lch(48% 3 282);
-  --action-hover: lch(100% 0 282);
-  --action-active: lch(82% 1 282);
-  --on-action: var(--chrome);
+  --action: #fff;   /* 深色里反过来：纯白的键、纯黑的字 */
+  --action-hover: #e6e6e6;
+  --action-active: #d4d4d4;
+  --on-action: #000;
+  --on-action-dim: #8a8a8a;
   --accent: #7480e0;
   --accent-soft: lch(24% 20 286);
   --green: #3fba8c;
@@ -114,7 +118,7 @@ code, kbd, .mono { font-family: var(--font-mono); }
 /* 焦点环：2px、外扩 2px，全应用一条（清单「可达性」第 1 条）。两处写明的例外：
    贴边排成一列的行（菜单项、列表行）环画在行内，不然会顶到容器的边上；输入卡见下面 .inbox */
 :focus-visible, .is-focus { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-input:focus-visible, textarea:focus-visible { outline-offset: 0; }
+input:focus-visible, textarea:focus-visible { outline-color: var(--focus-soft); outline-offset: 0; }
 .menu > button:focus-visible, .menu > a:focus-visible, .rowring:focus-visible { outline-offset: -2px; }
 [disabled], .is-disabled { cursor: default; opacity: 0.45; }
 
@@ -129,6 +133,7 @@ input:focus-visible, textarea:focus-visible { outline-offset: 0; }
 .btn.pri { background: var(--action); box-shadow: none; color: var(--on-action); font-weight: var(--w-medium); }
 .btn.pri:hover { background: var(--action-hover); }
 .btn.pri:active { background: var(--action-active); }
+.btn.pri:is([disabled], .is-disabled) { background: var(--action); color: var(--on-action-dim); opacity: 1; }
 .btn.quiet { background: none; box-shadow: none; color: var(--muted); }
 .btn.quiet:hover { background: var(--hover-bg); color: var(--ink); }
 .btn.danger { color: var(--red); }
@@ -166,7 +171,7 @@ kbd, .kbd { padding: 1px 5px; border-radius: 4px; background: var(--overlay); co
 /* 输入卡：外框是卡，里面是一个没有框的多行输入框（回复框、新建、聊天、助手、侧聊）。
    它本来就是这一屏正在写字的地方，焦点不套 2px 的实环：卡自己那圈线换成焦点色，外面再晕开 2px */
 .inbox { position: relative; border-radius: var(--r-lg); background: var(--panel); box-shadow: 0 0 0 1px var(--line2), var(--surface-shadow); transition: box-shadow var(--dur-1) var(--ease-out); }
-.inbox:has(textarea:focus-visible) { box-shadow: 0 0 0 1px var(--focus-ring), 0 0 0 3px color-mix(in oklab, var(--focus-ring) 24%, transparent), var(--surface-shadow); }
+.inbox:has(textarea:focus-visible) { box-shadow: 0 0 0 1px var(--focus-soft), 0 0 0 3px color-mix(in oklab, var(--focus-ring) 10%, transparent), var(--surface-shadow); }
 .inbox textarea { border: 0; background: none; resize: none; }
 .inbox textarea:focus-visible { outline: 0; }
 

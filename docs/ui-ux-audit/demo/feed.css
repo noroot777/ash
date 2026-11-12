@@ -127,11 +127,10 @@ button.turn-cause:hover, button.turn-cause[aria-expanded="true"] { color: var(--
 .scroll-btn.is-idle { opacity: 0; pointer-events: none; }
 .scroll-btn.is-idle:focus-visible { opacity: 1; pointer-events: auto; }
 
-/* 输入导航：左缘一把尺，一条刻度是你发过的一句话。悬停看原话，点了跳过去，Q 摊开 */
+/* 输入导航（保留项，长相照现在的 conversation-input-rail.css）：左缘几条短横线，一条是你发过的一句话。悬停看原话，点了跳过去，Q 摊开 */
 .feed-rail { position: absolute; left: 0; top: 50%; z-index: 7; translate: 0 -50%; padding: 6px 12px 6px 7px; }
-.feed-rail::before { content: ""; position: absolute; left: 7px; top: 0; bottom: 0; width: 1px; background: var(--line2); }
 .feed-rail button { display: block; height: 10px; padding: 0; }
-.feed-rail button::before { content: ""; display: block; width: 16px; height: 1.5px; border-radius: 1px; background: var(--line2); transform: scaleX(0.5); transform-origin: left; transition: transform var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out); }
+.feed-rail button::before { content: ""; display: block; width: 16px; height: 1.5px; border-radius: 1px; background: color-mix(in srgb, var(--faint) 55%, transparent); transform: scaleX(0.5); transform-origin: left; transition: transform var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out); }
 .feed-rail button.on::before { transform: scaleX(0.75); background: var(--muted); }
 .feed-rail button:hover::before, .feed-rail button:focus-visible::before { transform: none; background: var(--ink); }
 .rail-list { width: min(420px, 80vw); padding: 6px; }

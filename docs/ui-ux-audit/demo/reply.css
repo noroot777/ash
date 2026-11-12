@@ -4,7 +4,7 @@
 .skey { --h: 29px; --opt: 24px; --g: 14px; display: inline-flex; flex: none; height: var(--h); color: var(--on-action); }
 .skey[data-size="36"] { --h: 36px; --opt: 26px; --g: 16px; }
 .skey[data-size="36"] > button { font-size: var(--t-sm); }
-.skey > button { position: relative; display: inline-flex; align-items: center; justify-content: center; height: 100%; color: inherit; font-size: var(--t-xs); font-weight: var(--w-medium); white-space: nowrap; transition: opacity var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out); }
+.skey > button { position: relative; display: inline-flex; align-items: center; justify-content: center; height: 100%; color: inherit; font-size: var(--t-xs); font-weight: var(--w-medium); white-space: nowrap; transition: opacity var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
 
 /* 主段的底色单独一层：键变宽变窄时布局一步到位，底色从旧位置滑到新位置（只动 transform，圆角不变形）。
    .skey-clip 向左多留 180px 只裁右边，.skey-bg 向右多铺 180px 只露左边的圆角。 */
@@ -15,14 +15,14 @@
 .skey-main:hover .skey-bg { background: var(--action-hover); }
 .skey-main:active .skey-bg { background: var(--action-active); }
 .skey-main[aria-disabled="true"] { cursor: default; }
-.skey-main[aria-disabled="true"] .skey-bg { background: var(--action); }
 
 .skey-opt { width: var(--opt); margin-left: 1px; border-radius: 0 var(--r-md) var(--r-md) 0; background: var(--action); }
 .skey-opt:hover, .skey-opt[aria-expanded="true"] { background: var(--action-hover); }
 .skey-opt:active { background: var(--action-active); }
 
-/* 发不出去：整颗键同明同暗；尖角照样点得动，指上去回到实色 */
-.skey.is-dim > button:not(.skey-halt) { opacity: 0.45; }
+/* 发不出去：键还是纯黑的，只有主段上的箭头和字淡下去；尖角照样点得动，不跟着淡 */
+.skey.is-dim > .skey-main { color: var(--on-action-dim); }
+.skey.is-dim > .skey-main:is(:hover, :active) .skey-bg { background: var(--action); }
 
 /* 在跑、又打了字：主段要用来发，停止挪到它左边这一颗上。和主段同高，不抢主色，指上去才是红的 */
 .skey > .skey-halt { width: var(--h); margin-right: 6px; border-radius: var(--r-md); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); animation: skey-halt-in var(--dur-2) var(--ease-out) both; }
@@ -30,7 +30,6 @@
 .skey > .skey-halt:active { background: var(--sel-bg); }
 .skey > .skey-halt > .i { width: var(--g); height: var(--g); }
 @keyframes skey-halt-in { from { opacity: 0; transform: scale(0.9); } }
-.skey.is-dim > .skey-opt:hover, .skey.is-dim > .skey-opt:focus-visible, .skey.is-dim > .skey-opt[aria-expanded="true"] { opacity: 1; }
 
 /* 键上的字：只在「这一条不会马上发出去」时出现。旧字先淡出，键变宽，新字再淡入 */
 .skey-txt { transition: opacity var(--dur-1) var(--ease-out) var(--dur-1); }
