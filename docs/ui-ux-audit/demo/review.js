@@ -1,6 +1,6 @@
 /* 审查的账和它的两张浮层。会话流里的审查行、回复框那颗键、右侧「审查」「工作流」两格读的都是 ASH.review 这一份，
    所以三处说的永远是同一轮、同一个结论。
-   rounds：验收前的各轮 { n, by, took, at, ok, notes }；posts：验收后对合并结果的审查 { commit, by, took, at, ok, notes }。
+   rounds：验收前的各轮 { n, by, took, at, ok, notes, note? }（note 是派这一轮时写的附言）；posts：验收后对合并结果的审查 { commit, by, took, at, ok, notes }。
    busy = 正在审的（第几轮 / 'post'）；armed = 约好「这一轮跑完就审」的那套设置；stale = 上一轮审完之后代码又动过；
    from / max = 这一趟从第几轮起、最多审到第几轮（未通过又没到头：意见交给执行者修，修完自动接着审）。
    key() 是回复框那颗键此刻的 { text, tip, busy, armed, off }；press(anchor) 是点它。
@@ -58,7 +58,7 @@
       const ok = !st.stale || noted;
       if (st.stale) noted = true;
       st.stale = false;
-      rounds.push({ n: what, by: plan.judge, check: plan.check, took, at, time: '刚刚', ok, fresh: true, notes: [ok ? '没有新的问题。' : '新加的回归没有覆盖「连着重启两次」这一种。'] });
+      rounds.push({ n: what, by: plan.judge, check: plan.check, note: plan.note.trim(), took, at, time: '刚刚', ok, fresh: true, notes: [ok ? '没有新的问题。' : '新加的回归没有覆盖「连着重启两次」这一种。'] });
       /* 没通过、这一趟还没到头、任务也闲着：意见交给执行者修，修完自动审下一轮 */
       const repair = !ok && what < st.max && !accepted && !live() && Boolean(ASH.parts.live?.play);
       if (repair) st.armed = { ...plan, chain: true };

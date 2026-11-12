@@ -192,7 +192,7 @@
     const opened = new Set();   // 点开着的那几份报告
 
     const record = (r) => {
-      const body = h('div.insp-report', { hidden: !opened.has(r) }, h('p', `${CHECK[r.check] ?? CHECK.logic} · ${r.at}`), r.ok ? h('p', r.notes[0]) : h('ol', {}, r.notes.map((line) => h('li', line))));
+      const body = h('div.insp-report', { hidden: !opened.has(r) }, h('p', `${CHECK[r.check] ?? CHECK.logic} · ${r.at}`), r.note && h('p', `附言：${r.note}`), r.ok ? h('p', r.notes[0]) : h('ol', {}, r.notes.map((line) => h('li', line))));
       const btn = h('button.go', { type: 'button', 'aria-expanded': String(opened.has(r)), 'data-round': r.n ?? null, onclick: () => { if (fold(btn, body)) opened.add(r); else opened.delete(r); } },
         h('span.cut', {}, r.n ? `第 ${r.n} 轮` : `${cur.target}@${r.commit}`, h('span.faint', ` ${r.by} · ${r.took}`)), h(`span.meta${r.ok ? '' : '.bad'}`, r.ok ? '已通过' : `未通过 · ${r.notes.length} 条`), icon('chev', 'insp-rot'));
       return h(`div${r.fresh ? '.enter' : ''}`, {}, btn, body);

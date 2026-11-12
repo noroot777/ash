@@ -158,7 +158,7 @@ button.insp-row.is-in { padding-left: 28px; }
 .insp-do { display: flex; gap: 6px; margin-top: 8px; }
 .insp-do > [aria-pressed="true"] { background: var(--sel-bg); }
 .insp-report { margin: 2px 0 10px; color: var(--muted); line-height: 1.6; }
-.insp-report > p:first-child { color: var(--faint); font-size: var(--t-xs); }
+.insp-report > p:first-child { font-size: var(--t-xs); }
 .insp-report > ol { padding-left: 18px; list-style: decimal; }
 .insp-report li + li { margin-top: 4px; }
 

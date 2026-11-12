@@ -1,6 +1,6 @@
 /* 会话流（部件 feed）：静态的一段会话 + 滚动钮 + 输入导航 + 提问坞。
    造回合、气泡、系统行、执行过程的那几个函数挂在 ASH.feedKit 上，执行中的模拟（live.js）用的是同一套。
-   结构和文案照 web/src/task-detail 的 ConversationFeed / SystemNotice / ReviewerLane / QuestionCard；和现状不一样的只有清单 feed-1 到 feed-13。
+   结构和文案照 web/src/task-detail 的 ConversationFeed / SystemNotice / ReviewerLane / QuestionCard；和现状不一样的只有清单 feed-1 到 feed-14。
    原始需求不在会话里出气泡（照现状，它住在右侧「信息」格）；输入导航的第一格是它，点了回到会话顶端。
    对外：ASH.parts.feed = { el, dock, follow(), pin(), stuck, append(...nodes), ask({ q, options, onanswer, instant }), unask(then?), destroy() }。
    unask(then)：提问卡沉下去，会话同一拍落回；then 里追加的东西（答复、新的一回合）并在这一段里一起走。
@@ -402,7 +402,7 @@
           follow();
         } }, icon('caret'));
         const el = h('section.qcard', { 'aria-label': '等待答复的问题', 'data-m': 'run-7' },
-          h('header', icon('help'), h('b.grow', '需要你的答复'), fold),
+          h('header', { 'data-m': 'feed-14' }, icon('help'), h('b.grow', '需要你的答复'), fold),
           h('div.q-body', h('p.q-title', q),
             options.length > 0 && h('div.opts', { role: 'group', 'aria-label': `${q}的建议答案，可多选` }, opts), input),
           h('footer', sendBtn));
@@ -438,7 +438,7 @@
       ASH.prep['feed-3'] = () => peek(...$$('.sys .rt, .rev .rt, .auto .rt, .sys .row-acts, .auto .row-acts', feed));
       ASH.prep['feed-4'] = () => { feed.scrollTop = Math.max(120, feed.scrollTop - 60); top.classList.remove('is-hidden', 'is-idle'); clearTimeout(idle); idle = setTimeout(rest, 2600); };
       ASH.prep['feed-6'] = () => { s.foldA.toggle(true); const last = s.foldA.list.lastElementChild; if ($('.step-more', last).hidden) unfold($('button', last), $('.step-more', last)); };
-      ASH.prep['feed-12'] = () => { if (!card) ask({ q: '回归里有一条用例依赖真实时钟，改成假时钟还是放宽断言？', options: ['改成假时钟', '把断言放宽到 ±1 秒'] }); };
+      ASH.prep['feed-12'] = ASH.prep['feed-14'] = () => { if (!card) ask({ q: '回归里有一条用例依赖真实时钟，改成假时钟还是放宽断言？', options: ['改成假时钟', '把断言放宽到 ±1 秒'] }); };
 
       buildRail();
       requestAnimationFrame(() => { feed.scrollTop = feed.scrollHeight; paintRail(); });
@@ -452,7 +452,7 @@
           sizes.disconnect();
           clearTimeout(idle);
           kit.changed = null;
-          for (const id of ['feed-1', 'feed-2', 'feed-3', 'feed-4', 'feed-6', 'feed-12']) delete ASH.prep[id];
+          for (const id of ['feed-1', 'feed-2', 'feed-3', 'feed-4', 'feed-6', 'feed-12', 'feed-14']) delete ASH.prep[id];
         },
       };
     },

@@ -162,7 +162,7 @@
       ['分支', h('span.cut', D.branch)],
       ['目录', h('span.cut', D.dir)],
       ['会话', h('span.num', D.session)],
-      ['恢复命令', h('span.cut', D.resume), copyBtn(D.resume, '复制恢复命令')]));
+      ['resume', h('span.cut', D.resume), copyBtn(D.resume, '复制 resume 命令')]));
   };
 
   /* ---------- 文件：头上一行说清看的是哪条分支、哪个目录，下面是树。文件右边是大小；文件夹指到才出一颗「文件夹详情」 ---------- */

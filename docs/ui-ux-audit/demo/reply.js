@@ -385,6 +385,7 @@
           for (const file of files) clearInterval(file.timer);
           delete ASH.prep['reply-2'];
           delete ASH.prep['reply-4'];
+          delete ASH.prep['reply-5'];
         },
       };
 
@@ -406,8 +407,9 @@
           paintRows();
         }),
       ];
-      /* 对照清单：发送设置要先打开；停止键要任务在跑才有——真跑一轮（没有执行模拟时自己演 4 秒） */
+      /* 对照清单：发送设置、派审对话框要先打开；停止键要任务在跑才有——真跑一轮（没有执行模拟时自己演 4 秒） */
       ASH.prep['reply-2'] = () => key.open();
+      ASH.prep['reply-5'] = () => { const k = ASH.review.key(); if (!k.off && !k.busy && !document.querySelector('.rv-dlg')) ASH.review.dialog(); };
       ASH.prep['reply-4'] = () => {
         if (running) return;
         if (ASH.parts.live?.play) { ASH.parts.live.play('run'); return; }
