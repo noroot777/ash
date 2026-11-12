@@ -155,6 +155,39 @@
   --lifted: var(--panel);
   --scrollbar: rgb(55 57 63 / 28%);
   --scrollbar-hover: rgb(55 57 63 / 44%);
+
+  /* 尺子（docs/ui-ux-audit 08「定尺」）。各面的字号、字重、圆角、动效只从这里取。
+     名字用短前缀（--t- / --w- / --r-），不用 --text- / --radius-：那两个是 Tailwind 的
+     主题命名空间，同名会把 rounded-sm、text-xs 这些工具类一起改掉。 */
+  --t-xs: 12px;
+  --t-sm: 13px;
+  --t-md: 14px;
+  --t-lg: 17px;
+  --t-xl: 22px;
+  /* 苹方真有的三款：中文落不到 450、550、650 上——450 排成中黑，550 往上全是中粗。 */
+  --w-regular: 400;
+  --w-medium: 500;
+  --w-strong: 600;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-full: 999px;
+  --dur-1: 120ms; /* 悬停、按下 */
+  --dur-2: 200ms; /* 菜单、提示、弹窗、切格、进场 */
+  --dur-3: 320ms; /* 面板、重排 */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-spring: linear(0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 25.3%, 0.849 31.5%, 0.937 38.1%, 0.968 41.8%, 0.991 45.7%, 1.006 50.1%, 1.015 55%, 1.017 63.9%, 1.001 85.9%, 1);
+
+  /* 能点的东西一律黑白：实心的键纯黑（不是正文那种带灰的墨色）；主色只留给状态。
+     点不了的时候键还是黑的，只有上面的字和箭头淡下去。 */
+  --action: #000;
+  --action-hover: #262626;
+  --action-active: #333;
+  --on-action: #fff;
+  --on-action-dim: #8a8a8a;
+  /* 正在打字的那一格：里面有光标，环淡一档，不然一进页面就是一个黑框。 */
+  --focus-soft: color-mix(in oklab, var(--ink) 40%, transparent);
 }
 
 /* 深色。由 lib/theme.ts(以及 index.html 首帧那段脚本)在根上拨 data-theme。
@@ -188,6 +221,12 @@
   --accent-active: #6a75d8;
   --focus-ring: #8790ec;
   --lifted: lch(25% 2.5 282);
+  /* 深色里实心的键反过来：白底黑字——纯黑放在深色底上看不见。 */
+  --action: #fff;
+  --action-hover: #e6e6e6;
+  --action-active: #d4d4d4;
+  --on-action: #000;
+  --on-action-dim: #8a8a8a;
   --scrollbar: rgb(200 202 212 / 22%);
   --scrollbar-hover: rgb(200 202 212 / 36%);
   --shadow: lch(0 0 0 / 0.4) 0 9px 48px,
