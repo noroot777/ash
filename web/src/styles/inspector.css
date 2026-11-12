@@ -1,3 +1,5 @@
+@import "./inspector-parts.css";
+
 .inspector-layout {
   display: flex;
   min-width: 0;
@@ -247,26 +249,24 @@
   flex-direction: column;
 }
 
-/* 图标条不写字，当前看的是哪一面板由这条头带说；关闭当前面板的入口也在这。 */
+/* 图标条不写字，当前看的是哪一面板由这条头带说；关闭当前面板的入口也在这。
+   和任务头同高（44），两条基线对得上；不画底线，靠留白和下面的内容分开。 */
 .inspector-host__panel-head {
   display: flex;
-  height: 34px;
-  flex: 0 0 34px;
+  height: 44px;
+  flex: 0 0 44px;
   align-items: center;
-  gap: 6px;
-  border-bottom: 0.5px solid var(--line);
-  background: color-mix(in lch, var(--canvas) 86%, var(--panel));
-  padding: 0 6px 0 12px;
+  gap: 2px;
+  padding: 0 8px 0 16px;
 }
 
 .inspector-host__panel-title {
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  color: var(--muted);
-  font-size: 10.5px;
-  font-weight: 650;
-  letter-spacing: 0.03em;
+  color: var(--ink);
+  font-size: var(--t-sm);
+  font-weight: var(--w-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -287,19 +287,20 @@
 
 .inspector-host__panel-close {
   display: grid;
-  width: 22px;
-  height: 22px;
-  flex: 0 0 22px;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
   place-items: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   background: transparent;
   padding: 0;
-  color: var(--faint);
+  color: var(--muted);
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 
 .inspector-host__panel-close:hover {
-  background: var(--overlay);
+  background: var(--hover-bg);
   color: var(--ink);
 }
 

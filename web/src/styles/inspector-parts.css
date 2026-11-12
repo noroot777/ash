@@ -1,0 +1,437 @@
+/* 右侧面板的六个公共件（inspector/parts.tsx）：分节标题、键值行、入口行、空状态、提示条、按钮，
+   外加面板头的小图标钮、复制钮和卡片外框。各格的内容只用这些件拼；收不进来的那几样各格自己补，
+   但字号、字重、圆角、动效一律取 global.css 的尺子。正文是 --t-sm，次要的字是 --muted。 */
+
+.inspector-host__content {
+  font-size: var(--t-sm);
+  font-weight: var(--w-regular);
+  line-height: 1.5;
+}
+
+/* 分节标题：小一号的灰字，分节靠上面那段留白 */
+.insp-sec {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 18px 0 6px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
+}
+
+.insp-sec:first-child {
+  margin-top: 0;
+}
+
+.insp-sec > b {
+  color: var(--faint);
+  font-weight: var(--w-regular);
+  font-variant-numeric: tabular-nums;
+}
+
+.insp-sec > :last-child:not(:first-child):not(b) {
+  margin-left: auto;
+}
+
+/* 键值行：标签一列（最多四个字），值一列，一种字号、一种行高 */
+.insp-kv {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 0 12px;
+  margin: 0;
+}
+
+.insp-kv + .insp-kv {
+  margin-top: 14px;
+}
+
+.insp-kv > dt,
+.insp-kv > dd {
+  display: flex;
+  min-width: 0;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.insp-kv > dt {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.insp-kv > dd {
+  white-space: nowrap;
+}
+
+.insp-kv > dd:hover > .insp-copy,
+.insp-kv > dd:focus-within > .insp-copy {
+  opacity: 1;
+}
+
+/* 一行里放不下、要占满两列的：点开的追问、表单、长段的字 */
+.insp-kv > .insp-kv__wide {
+  display: block;
+  grid-column: 1 / -1;
+  min-height: 0;
+  padding: 2px 0 8px;
+  white-space: normal;
+}
+
+/* 行里能点的值：平时就是一段字，悬停才显出是颗键。往左挪一个内边距，字和上下两行的值对齐 */
+.insp-val {
+  display: inline-flex;
+  min-width: 0;
+  height: 24px;
+  align-items: center;
+  gap: 6px;
+  margin-left: -8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  padding: 0 8px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.insp-val:hover:not(:disabled),
+.insp-val[aria-expanded="true"] {
+  background: var(--hover-bg);
+}
+
+.insp-val:disabled {
+  cursor: default;
+}
+
+.insp-val.is-end {
+  margin: 0 -8px 0 auto;
+  color: var(--muted);
+}
+
+.insp-val > svg {
+  flex: 0 0 auto;
+  color: var(--faint);
+  transition: transform var(--dur-1) var(--ease-out);
+}
+
+.insp-val[aria-expanded="true"] > .insp-rot {
+  transform: rotate(90deg);
+}
+
+.insp-cut {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.insp-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.insp-faint {
+  color: var(--muted);
+}
+
+.insp-live {
+  color: var(--accent);
+}
+
+.insp-plus {
+  color: var(--green);
+}
+
+.insp-minus {
+  color: var(--red);
+}
+
+.insp-mono {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--t-xs);
+}
+
+/* 入口行：整行可点，末尾一颗箭头；右边可带一段灰字 */
+.insp-go {
+  display: flex;
+  width: calc(100% + 16px);
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  margin: 0 -8px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  padding: 0 8px;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.insp-go:hover:not(:disabled) {
+  background: var(--hover-bg);
+}
+
+.insp-go:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.insp-go > .insp-cut {
+  flex: 1 1 auto;
+}
+
+.insp-meta {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.insp-meta.is-bad {
+  color: var(--red);
+}
+
+.insp-go__chev {
+  flex: 0 0 auto;
+  color: var(--faint);
+  transition: transform var(--dur-1) var(--ease-out);
+}
+
+.insp-go[aria-expanded="true"] > .insp-go__chev {
+  transform: rotate(90deg);
+}
+
+/* 空状态：一句话，至多一个动作 */
+.insp-none {
+  padding: 28px 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.insp-none > p {
+  margin: 0;
+}
+
+.insp-none > .insp-btn {
+  margin-top: 12px;
+}
+
+/* 提示条：一行灰底的字。警告 / 出错 / 好消息只换图标颜色和一层淡底，字一律是墨色 */
+.insp-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border-radius: var(--r-md);
+  background: var(--raised);
+  padding: 8px 10px;
+  color: var(--muted);
+}
+
+.insp-note__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.insp-note__icon > svg {
+  width: 14px;
+  height: 14px;
+}
+
+.insp-note__text {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.insp-note__text > p {
+  margin: 0;
+}
+
+.insp-note.is-warn { background: var(--amber-bg); color: var(--ink); }
+.insp-note.is-warn > .insp-note__icon { color: var(--amber); }
+.insp-note.is-bad { background: var(--red-bg); color: var(--ink); }
+.insp-note.is-bad > .insp-note__icon { color: var(--red); }
+.insp-note.is-ok { background: var(--green-bg); color: var(--ink); }
+.insp-note.is-ok > .insp-note__icon { color: var(--green); }
+
+.insp-note > .insp-btn {
+  flex: 0 0 auto;
+  margin: -2px 0 -2px auto;
+}
+
+/* 按钮：描边的默认键；实心的主键纯黑（深色主题反过来白底黑字）；安静键不描边；危险键只换红字 */
+.insp-btn {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: var(--panel);
+  padding: 0 11px;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--t-sm);
+  font-weight: var(--w-regular);
+  white-space: nowrap;
+  box-shadow: var(--control-shadow);
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out);
+}
+
+.insp-btn:hover:not(:disabled) {
+  background: var(--raised);
+}
+
+.insp-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.insp-btn[aria-pressed="true"] {
+  background: var(--sel-bg);
+}
+
+.insp-btn.is-pri {
+  background: var(--action);
+  color: var(--on-action);
+  font-weight: var(--w-medium);
+  box-shadow: none;
+}
+
+.insp-btn.is-pri:hover:not(:disabled) {
+  background: var(--action-hover);
+}
+
+.insp-btn.is-pri:active:not(:disabled) {
+  background: var(--action-active);
+}
+
+/* 点不了的时候主键还是黑的，只有字淡下去 */
+.insp-btn.is-pri:disabled {
+  background: var(--action);
+  color: var(--on-action-dim);
+  opacity: 1;
+}
+
+.insp-btn.is-quiet {
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.insp-btn.is-quiet:hover:not(:disabled) {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.insp-btn.is-danger {
+  color: var(--red);
+}
+
+.insp-btn.is-sm {
+  height: 24px;
+  border-radius: var(--r-sm);
+  padding: 0 9px;
+  font-size: var(--t-xs);
+}
+
+.insp-btn > svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+/* 面板头、行尾的小图标钮 */
+.insp-tool {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  padding: 0;
+  color: var(--muted);
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out);
+}
+
+.insp-tool:hover:not(:disabled),
+.insp-tool[aria-expanded="true"],
+.insp-tool[aria-pressed="true"] {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.insp-tool:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.insp-tool > svg {
+  width: 14px;
+  height: 14px;
+}
+
+.insp-copy {
+  opacity: 0;
+}
+
+.insp-copy:focus-visible {
+  opacity: 1;
+}
+
+/* 卡片：只统一外框 */
+.insp-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  padding: 10px 12px;
+}
+
+.insp-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.insp-sec:focus-visible,
+.insp-val:focus-visible,
+.insp-go:focus-visible,
+.insp-btn:focus-visible,
+.insp-tool:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+@media (hover: none) {
+  .insp-copy {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .insp-val,
+  .insp-go,
+  .insp-btn,
+  .insp-tool,
+  .insp-val > svg,
+  .insp-go__chev {
+    transition: none;
+  }
+}
+
+/* 用公共件拼起来的那几格的外层：左右 16 的边，顶上紧贴面板头 */
+.insp-pane {
+  padding: 4px 16px 20px;
+}
+
+.insp-pane > :first-child {
+  margin-top: 0;
+}

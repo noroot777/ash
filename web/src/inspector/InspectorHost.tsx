@@ -420,7 +420,7 @@ function InspectorHostState<Context>({
                 aria-label={narrow ? "收起 Inspector" : `关闭${activeDescriptor.title}`}
                 onClick={() => narrow ? setNarrowOpen(false) : closeTab(activeDescriptor.id)}
               >
-                <X size={12} weight="bold" aria-hidden="true" />
+                <X size={14} aria-hidden="true" />
               </button>
             </div>
             <div
