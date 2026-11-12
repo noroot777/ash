@@ -144,7 +144,7 @@ export function FreeWorkflowInspector({ task }: { task: Task }) {
   return (
     <div className="insp-pane free-workflow-inspector" ref={rootRef} aria-label="工作流">
       {items.length === 0
-        ? <InspNone>还没有发生过什么。任务执行或派审后，这里按先后记下来。</InspNone>
+        ? <InspNone>还没有发生过什么。</InspNone>
         : (
           <ol className="insp-tl free-workflow-generated" ref={listRef}>
             {items.map((item) => (

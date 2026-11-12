@@ -2,7 +2,7 @@ import type { Group, Session, Task, TaskListItem } from "@ash/shared";
 import { Browser, FolderOpen, GitPullRequest, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, Chats } from "@phosphor-icons/react";
 import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import type { InspectorDescriptor } from "../inspector/index.ts";
-import { PreviewWorkspaceEntry } from "../preview-workspace/PreviewWorkspace.tsx";
+import { InspButton, InspNone } from "../inspector/parts.tsx";
 import { NativeWorkInspector, type NativeWorkInspectorProps } from "./NativeWorkInspector.tsx";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
 import { ArtifactsInspector } from "../files/ArtifactsInspector.tsx";
@@ -209,7 +209,14 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     icon: <Browser size={14} />,
     defaultOpen: true,
     shortcut: "p",
-    render: (context) => <PreviewWorkspaceEntry onOpen={context.onOpenPreview} />,
+    // 空着的一格：一句话说这是干什么的，一颗键把预览指正在中间栏打开。
+    render: (context) => (
+      <div className="insp-pane">
+        <InspNone action={<InspButton onClick={context.onOpenPreview}>打开预览指正</InspButton>}>
+          在页面上圈出要改的地方，逐条写意见。
+        </InspNone>
+      </div>
+    ),
   },
   {
     // 和子智能体同一条「用过才浮现」：开合由 useMonitorInspector 按「这个任务挂过哨兵没有」

@@ -4,10 +4,11 @@
 // 以及会话里选中一段后浮条上的「添加到备忘」—— 后者加完会把面板切过来，所以这里要能
 // 指出刚进来的是哪条（justAddedId 的高亮）。
 import { useEffect, useState } from "react";
-import { NotePencil, Plus } from "@phosphor-icons/react";
+import { Plus } from "@phosphor-icons/react";
 import { TASK_MEMO_MAX_LEN } from "@ash/shared/task-memo";
 import type { TaskMemo } from "@ash/shared/task-memo";
 import { InspectorHeadActions } from "../inspector/index.ts";
+import { InspButton, InspNone, InspTool } from "../inspector/parts.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import type { Notify } from "../lib/notify.ts";
 import { isModEnterEvent } from "../lib/sendKey.ts";
@@ -75,16 +76,16 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
   return (
     <div className="task-memo-inspector" aria-label="任务备忘">
       <InspectorHeadActions>
-        <button
-          type="button"
-          className="task-memo-inspector__add"
-          aria-label="写一条备忘"
+        <InspTool
+          label="写一条备忘"
+          // 空态只留一句话，这一格是干什么的、还有哪个入口，指到这颗键上再说。
+          tip="只给你自己看，不进 agent 的上下文。会话里选中一段话，浮条上也有「添加到备忘」。"
           aria-expanded={composing !== null}
           disabled={pendingOn(null)}
           onClick={() => setMemoComposerDraft(taskId, composing === null ? "" : null)}
         >
-          <Plus size={13} weight="bold" aria-hidden="true" />
-        </button>
+          <Plus aria-hidden="true" />
+        </InspTool>
       </InspectorHeadActions>
 
       {error && <p className="task-memo-inspector__error" role="alert">{error}</p>}
@@ -137,16 +138,10 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
           ))}
         </div>
       ) : composing === null && (
-        <div className="task-memo-inspector__empty">
-          {/* 读不到的时候说「还在读」，别把读取中伪装成「没有备忘」。 */}
-          <p>{loaded ? "这个任务还没有备忘。" : loading ? "正在读备忘…" : "还没读到这个任务的备忘。"}</p>
-          <p>
-            备忘只给你自己看，不会进 agent 的上下文 —— 记下为什么这么定、哪段输出要留着回头看。
-          </p>
-          <p>
-            <NotePencil size={12} aria-hidden="true" /> 在会话里选中一段话，浮条上也有「添加到备忘」。
-          </p>
-        </div>
+        // 读不到的时候说「还在读」，别把读取中伪装成「没有备忘」。
+        <InspNone action={loaded ? <InspButton onClick={() => setMemoComposerDraft(taskId, "")}>写一条</InspButton> : undefined}>
+          {loaded ? "这个任务还没有备忘。" : loading ? "正在读备忘…" : "还没读到这个任务的备忘。"}
+        </InspNone>
       )}
 
       {deleting && (

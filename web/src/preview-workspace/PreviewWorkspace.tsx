@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { ArrowClockwise, ArrowCounterClockwise, ArrowUUpLeft, Browser, Cursor, PencilSimple, PushPin, Rectangle, Trash } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowCounterClockwise, ArrowUUpLeft, Cursor, PencilSimple, PushPin, Rectangle, Trash } from "@phosphor-icons/react";
 import type { PreviewAnnotation, PreviewAnnotationTool, PreviewPageContext } from "@ash/shared/page-annotation";
 import type { WorkspaceAnnotationEvent } from "./previewMessages.ts";
 import { PreviewWorkspaceLayout, isAnnotationUndo } from "./PreviewWorkspaceLayout.tsx";
@@ -28,16 +28,6 @@ const tools = [
   { id: "pin", label: "Pin", icon: PushPin },
 ] satisfies Array<{ id: PreviewAnnotationTool; label: string; icon: typeof Cursor }>;
 const labels: Record<PreviewAnnotationTool, string> = { element: "元素", rectangle: "矩形", pen: "画笔", pin: "位置" };
-
-export function PreviewWorkspaceEntry({ onOpen }: { onOpen: () => void }) {
-  return <div className="preview-workspace-entry">
-    <Browser size={28} />
-    <h3>在页面上指出修改位置</h3>
-    <p>使用项目预览配置或选择启动命令，在工作区打开预览，点选对象或圈画区域，再逐条填写意见。</p>
-    <button type="button" onClick={onOpen}>打开预览指正</button>
-    <small>标注自动保存为批次，发送前可预览内容与图像证据。</small>
-  </div>;
-}
 
 export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose: () => void }) {
   const { state, error: serviceError, refresh } = usePreviewServices(taskId);

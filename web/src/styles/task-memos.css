@@ -5,16 +5,7 @@
    踩过同一个坑，见 monitors.css 顶部）。 */
 .task-memo-inspector { min-width: 0; padding: 11px 12px 16px; }
 
-.task-memo-inspector__add { display: grid; width: 22px; height: 22px; place-items: center; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); color: var(--muted); }
-.task-memo-inspector__add:hover { background: var(--raised); color: var(--ink); }
-.task-memo-inspector__add[aria-expanded="true"] { border-color: color-mix(in lch, var(--accent) 45%, var(--line2)); background: color-mix(in lch, var(--accent) 10%, var(--panel)); color: var(--accent); }
-
 .task-memo-inspector__error { margin: 0 0 9px; color: var(--red); font-size: 10.5px; line-height: 1.6; }
-
-.task-memo-inspector__empty { color: var(--faint); font-size: 10.5px; line-height: 1.7; }
-.task-memo-inspector__empty > p { margin: 0 0 8px; }
-.task-memo-inspector__empty > p:first-child { color: var(--muted); font-weight: 600; }
-.task-memo-inspector__empty svg { vertical-align: -1px; margin-right: 3px; }
 
 .task-memo-inspector__list { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 
