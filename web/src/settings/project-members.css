@@ -28,14 +28,14 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: var(--t-md);
 }
 
 .pmem-tag {
   padding: 1px 7px;
   border-radius: 999px;
   border: 1px solid var(--line);
-  font-size: 11px;
+  font-size: var(--t-xs);
   color: var(--muted);
 }
 
@@ -51,7 +51,7 @@
 }
 
 .pmem-note {
-  font-size: 12px;
+  font-size: var(--t-xs);
   color: var(--muted);
 }
 
@@ -70,8 +70,8 @@
 
 .pmem-block h3 {
   margin: 0;
-  font-size: 14px;
-  font-weight: 620;
+  font-size: var(--t-md);
+  font-weight: var(--w-medium);
 }
 
 .pmem-block h3 + .pmem-add {
@@ -101,7 +101,7 @@
   padding: 8px 10px;
   border-radius: 6px;
   background: var(--raised);
-  font-size: 12.5px;
+  font-size: var(--t-sm);
   word-break: break-all;
   user-select: all;
 }

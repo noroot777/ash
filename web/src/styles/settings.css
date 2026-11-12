@@ -4,6 +4,7 @@
   height: 100%;
   grid-template-columns: 240px minmax(0, 1fr);
   background: var(--canvas);
+  font-weight: var(--w-regular);
 }
 
 .settings-sidebar {
@@ -25,7 +26,7 @@
   background: transparent;
   padding: 0 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--t-xs);
   text-align: left;
 }
 
@@ -49,12 +50,10 @@
 .settings-nav-label {
   overflow: hidden;
   margin: 0 9px 5px;
-  color: var(--faint);
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
   text-overflow: ellipsis;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -67,7 +66,7 @@
   background: transparent;
   padding: 0 9px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--t-xs);
   text-align: left;
 }
 
@@ -153,8 +152,8 @@
 .settings-section h2 {
   margin: 0 0 8px 2px;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 650;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
   letter-spacing: 0.015em;
 }
 
@@ -204,15 +203,15 @@
 
 .settings-row b,
 .settings-danger-row b {
-  font-size: 13px;
-  font-weight: 550;
+  font-size: var(--t-sm);
+  font-weight: var(--w-medium);
 }
 
 .settings-row small,
 .settings-danger-row small,
 .settings-field > span {
-  color: var(--faint);
-  font-size: 11px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 /* 行尾的下拉（components/Select.tsx 的表单档）：宽度跟着选中项走，太长时省略，不把左边的说明挤没。 */
@@ -228,7 +227,7 @@
 
 .settings-row > span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--t-xs);
 }
 
 .settings-field {
@@ -270,7 +269,7 @@
   border-top: 1px solid var(--line);
   padding: 10px 16px;
   color: var(--amber);
-  font-size: 11px;
+  font-size: var(--t-xs);
 }
 
 .settings-health i {
@@ -297,8 +296,8 @@
   border-top: 1px solid var(--line);
   background: color-mix(in lch, var(--raised) 55%, var(--panel));
   padding: 10px 14px;
-  color: var(--faint);
-  font-size: 11px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .settings-agent-card {
@@ -337,15 +336,15 @@
 
 .settings-agent-copy b {
   overflow: hidden;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .settings-agent-copy small {
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .settings-agent-row label {
@@ -354,11 +353,9 @@
 }
 
 .settings-agent-row label > span {
-  color: var(--faint);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
 }
 
 .settings-agent-row input,
@@ -372,7 +369,7 @@
   background: var(--canvas);
   padding: 0 8px;
   outline: 0;
-  font-size: 11px;
+  font-size: var(--t-xs);
 }
 
 .settings-paused {
@@ -381,7 +378,7 @@
   background: var(--green-bg);
   padding: 2px 7px;
   color: var(--green);
-  font-size: 10px;
+  font-size: var(--t-xs);
   white-space: nowrap;
 }
 
@@ -391,7 +388,7 @@
   background: transparent;
   padding: 4px;
   color: var(--accent);
-  font-size: 10px;
+  font-size: var(--t-xs);
   white-space: nowrap;
 }
 
@@ -502,8 +499,8 @@
 }
 
 .settings-group-main > span {
-  color: var(--faint);
-  font-size: 11px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   white-space: nowrap;
 }
 
@@ -512,8 +509,8 @@
   align-items: flex-start;
   gap: 8px;
   padding: 0 2px 1px;
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .settings-resume-queue > span,
@@ -525,7 +522,7 @@
 
 .settings-resume-queue > strong {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-weight: 500;
+  font-weight: var(--w-regular);
 }
 
 .settings-resume-dots {
@@ -535,7 +532,7 @@
   flex-wrap: wrap;
   gap: 1px 3px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 9px;
+  font-size: var(--t-xs);
   line-height: 12px;
 }
 
@@ -572,15 +569,15 @@
 
 .settings-archive-card article b {
   overflow: hidden;
-  font-size: 12px;
-  font-weight: 550;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .settings-archive-card article small {
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .settings-archive-id {
@@ -623,8 +620,8 @@
 .settings-note,
 .settings-empty {
   margin: 0;
-  color: var(--faint);
-  font-size: 11px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .settings-muted {

@@ -13,8 +13,8 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: var(--faint);
-  font-size: 11px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .team-presets-loading.is-error {
@@ -52,8 +52,8 @@
 }
 
 .team-presets-list-meta b {
-  font-size: 11px;
-  font-weight: 650;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
 }
 
 .team-presets-list-meta span {
@@ -63,8 +63,8 @@
   place-items: center;
   border-radius: 999px;
   background: var(--panel);
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .team-presets-list-add {
@@ -77,8 +77,8 @@
   background: transparent;
   padding: 0 6px;
   color: var(--accent);
-  font-size: 9px;
-  font-weight: 650;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
 }
 
 .team-presets-list-add:hover,
@@ -96,8 +96,8 @@
   place-content: center;
   justify-items: center;
   gap: 8px;
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .team-presets-list-item {
@@ -132,8 +132,8 @@
 
 .team-presets-list-item > b {
   margin-bottom: 1px;
-  font-size: 11px;
-  font-weight: 650;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
 }
 
 .team-presets-list-role {
@@ -144,8 +144,8 @@
   grid-template-columns: 14px minmax(0, 1fr);
   align-items: center;
   gap: 5px;
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .team-presets-list-role.is-worker { --role-color: #287567; }
@@ -183,13 +183,13 @@
 }
 
 .team-preset-editor-head b {
-  font-size: 12px;
-  font-weight: 650;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
 }
 
 .team-preset-editor-head small {
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .team-preset-editor-head > div:last-child {
@@ -212,11 +212,9 @@
 
 .team-preset-name-field > span,
 .team-preset-role-fields label > span {
-  color: var(--faint);
-  font-size: 9px;
-  font-weight: 650;
-  letter-spacing: 0.045em;
-  text-transform: uppercase;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
 }
 
 /* 输入框和旁边的下拉（components/Select.tsx 的表单档）同高同框。 */
@@ -257,13 +255,13 @@
 }
 
 .team-preset-review-row b {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
 }
 
 .team-preset-review-row small {
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .team-preset-role {
@@ -305,8 +303,8 @@
 
 .team-preset-role > header b {
   overflow: hidden;
-  font-size: 11px;
-  font-weight: 650;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -319,7 +317,7 @@
   background: color-mix(in srgb, var(--amber) 8%, transparent);
   padding: 6px 8px;
   color: var(--amber);
-  font-size: 10px;
+  font-size: var(--t-xs);
   line-height: 1.6;
 }
 

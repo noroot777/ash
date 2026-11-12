@@ -38,20 +38,20 @@
 }
 
 .providers-intro b {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
   letter-spacing: -0.01em;
 }
 
 .providers-intro small {
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .provider-row {
   display: grid;
   min-height: 62px;
-  grid-template-columns: 30px minmax(180px, 1fr) auto minmax(130px, 0.7fr) 28px 28px;
+  grid-template-columns: 30px minmax(120px, 1fr) auto minmax(100px, 0.7fr) 28px 28px;
   align-items: center;
   gap: 10px;
   border-bottom: 1px solid var(--line);
@@ -66,8 +66,8 @@
   border-radius: 8px;
   background: color-mix(in lch, var(--violet) 16%, var(--panel));
   color: color-mix(in lch, var(--violet) 72%, var(--ink));
-  font-size: 11px;
-  font-weight: 750;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
 }
 
 .provider-protocol.is-openai {
@@ -82,15 +82,15 @@
 }
 
 .provider-copy b {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
 }
 
 .provider-copy small,
 .provider-default-model {
   overflow: hidden;
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -115,7 +115,7 @@
   padding: 3px 7px;
   color: var(--amber);
   font-family: inherit;
-  font-size: 9px;
+  font-size: var(--t-xs);
   white-space: nowrap;
 }
 
@@ -207,16 +207,16 @@ button.provider-mount-state:hover {
 
 .provider-protocol-pick b {
   color: var(--ink);
-  font-size: 12px;
-  font-weight: 650;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
 }
 
 /* 这家供应商能挂给哪些执行器 —— 用户认的是 CLI 名字，协议名才是实现细节。 */
 .provider-protocol-pick small {
   overflow: hidden;
-  color: var(--faint);
+  color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--t-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -239,13 +239,13 @@ button.provider-mount-state:hover {
 }
 
 .provider-conversion-field b {
-  font-size: 11px;
-  font-weight: 650;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
 }
 
 .provider-conversion-field small {
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   line-height: 1.45;
 }
 
@@ -305,13 +305,13 @@ button.provider-mount-state:hover {
 }
 
 .provider-pinned-head b {
-  font-size: 11px;
-  font-weight: 650;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
 }
 
 .provider-pinned-head small {
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   line-height: 1.45;
 }
 
@@ -415,13 +415,13 @@ button.provider-mount-state:hover {
 }
 
 .provider-context-title b {
-  font-size: 11px;
-  font-weight: 650;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
 }
 
 .provider-context-title small {
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   line-height: 1.45;
 }
 
@@ -430,8 +430,8 @@ button.provider-mount-state:hover {
   border-radius: 999px;
   background: var(--raised);
   padding: 3px 8px;
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .provider-context-summary.is-active {
@@ -461,7 +461,7 @@ button.provider-mount-state:hover {
 
 .provider-context-panel > small.is-error {
   color: var(--red);
-  font-size: 9px;
+  font-size: var(--t-xs);
 }
 
 .provider-context-list {
@@ -499,15 +499,15 @@ button.provider-mount-state:hover {
 .provider-context-list .ui-choice > span:last-child {
   overflow: hidden;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .provider-context-list li > span {
   flex: none;
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .provider-context-list li.is-enabled > span {
@@ -546,7 +546,7 @@ button.provider-mount-state:hover {
   flex: none;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-xs);
 }
 
 .provider-pinned-list small {
@@ -554,7 +554,7 @@ button.provider-mount-state:hover {
   flex: 1;
   overflow: hidden;
   color: var(--green);
-  font-size: 9.5px;
+  font-size: var(--t-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -576,7 +576,7 @@ button.provider-mount-state:hover {
   border-radius: 7px;
   background: var(--panel);
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--t-xs);
 }
 .provider-test-action:hover:not(:disabled) {
   border-color: color-mix(in lch, var(--accent) 40%, var(--line));

@@ -13,10 +13,10 @@
 
 .handoff-source-row { flex-wrap: wrap; gap: 8px; }
 .settings-row > .handoff-source-label { flex: 1 1 100%; gap: 4px; }
-.handoff-source-label label { font-weight: 600; }
+.handoff-source-label label { font-weight: var(--w-medium); }
 .handoff-source-label small { font-family: var(--mono, monospace); overflow-wrap: anywhere; }
 .handoff-source-row .ui-input { flex: 1 1 230px; min-width: 0; }
-.handoff-source-feedback { flex: 1 1 100%; margin: 0; color: var(--accent); font-size: 11px; }
+.handoff-source-feedback { flex: 1 1 100%; margin: 0; color: var(--accent); font-size: var(--t-xs); }
 .handoff-source-feedback.is-error { color: var(--red); }
 #handoff-source-addresses { scroll-margin-top: 20px; }
 
@@ -33,7 +33,7 @@
   color: var(--muted);
 }
 .handoff-target-key .ui-input { flex: 1 1 0; min-width: 0; }
-.handoff-target-key small { flex: 1 1 auto; font-size: 11px; }
+.handoff-target-key small { flex: 1 1 auto; font-size: var(--t-xs); }
 .handoff-target-row.is-draft { border-top: 1px solid var(--line2); padding-top: 9px; }
 
 /* 来源行:对端自报的实例模式芯片 + 批准前的知情提示。 */
@@ -43,8 +43,8 @@
   background: var(--raised);
   padding: 1px 6px;
   color: var(--muted);
-  font-weight: 500;
-  font-size: 10px;
+  font-weight: var(--w-regular);
+  font-size: var(--t-xs);
 }
 .handoff-peer-warn {
   display: block;
@@ -52,7 +52,7 @@
   border-left: 2px solid var(--amber);
   padding-left: 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--t-xs);
   line-height: 1.5;
 }
 
@@ -60,8 +60,8 @@
 .handoff-peer-note {
   display: block;
   margin-top: 5px;
-  color: var(--faint);
-  font-size: 11px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   line-height: 1.5;
 }
 
@@ -73,8 +73,8 @@
   border-radius: 7px;
   background: var(--canvas);
   padding: 3px 8px;
-  color: var(--faint);
-  font-size: 10.5px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   white-space: nowrap;
 }
 .handoff-approval-state.is-pending {
@@ -111,7 +111,7 @@
   background: var(--canvas);
   padding: 3px 8px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: var(--t-xs);
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   letter-spacing: 0.02em;
   white-space: nowrap;
@@ -120,22 +120,22 @@ button.handoff-fingerprint { cursor: pointer; }
 button.handoff-fingerprint:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
 /* 还没配对过:不是错误,只是「首次申请后才会记住」,所以用最弱的一档。 */
-.handoff-fingerprint.is-unknown { border-style: dashed; color: var(--faint); font-family: inherit; }
+.handoff-fingerprint.is-unknown { border-style: dashed; color: var(--muted); font-family: inherit; }
 
 /* 接力来源(入站信任表)。待批准的那条要显眼——它是唯一需要用户动手的一档。 */
 .handoff-peer-head { border-top: 1px solid var(--line); padding-top: 10px; }
 /* 空状态直挂卡片，得自己补出 .settings-row 的左右内边距才能跟上下各行对齐。 */
-.handoff-peer-empty { margin: 0; padding: 12px 16px; color: var(--faint); font-size: 11px; line-height: 1.7; }
-.handoff-peer-row small { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10.5px; }
+.handoff-peer-empty { margin: 0; padding: 12px 16px; color: var(--muted); font-size: var(--t-xs); line-height: 1.7; }
+.handoff-peer-row small { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--t-xs); }
 .handoff-peer-actions { display: flex; flex: none; align-items: center; gap: 4px; }
 .handoff-peer-state {
   margin-left: 6px;
   border-radius: 5px;
   background: var(--canvas);
   padding: 1px 6px;
-  color: var(--faint);
-  font-weight: 500;
-  font-size: 10px;
+  color: var(--muted);
+  font-weight: var(--w-regular);
+  font-size: var(--t-xs);
 }
 .handoff-peer-row.is-pending .handoff-peer-state {
   background: color-mix(in lch, var(--amber) 18%, var(--panel));
@@ -161,7 +161,7 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   background: var(--canvas);
   padding: 7px 10px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--t-xs);
   line-height: 1.65;
 }
 .handoff-peer-line > svg { flex: none; margin-top: 2px; color: var(--accent); }
@@ -202,7 +202,7 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   margin: 6px 0 0;
   padding-left: 18px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: var(--t-xs);
   line-height: 1.5;
 }
 .handoff-capability-ack {
@@ -211,7 +211,7 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   gap: 7px;
   margin-top: 8px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: var(--t-xs);
   line-height: 1.5;
   cursor: pointer;
 }

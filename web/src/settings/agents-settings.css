@@ -111,14 +111,14 @@
 }
 
 .agent-profile-args-popover-head b {
-  font-size: 12px;
+  font-size: var(--t-xs);
 }
 
 .agent-profile-args-popover-head small,
 .agent-profile-args-popover-actions > span {
   overflow: hidden;
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -132,7 +132,7 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--faint);
+  color: var(--muted);
 }
 
 .agent-profile-args-popover-head > button:hover {
@@ -167,13 +167,13 @@
 }
 
 .agent-profile-override > label b {
-  font-size: 12px;
+  font-size: var(--t-xs);
 }
 
 .agent-profile-override-shadows {
-  color: var(--faint);
+  color: var(--muted);
   font-family: var(--mono, ui-monospace, monospace);
-  font-size: 10px;
+  font-size: var(--t-xs);
 }
 
 .agent-profile-override-input {
@@ -188,19 +188,19 @@
   border-radius: 7px;
   background: var(--panel);
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--t-xs);
   padding: 5px 8px;
 }
 
 .agent-profile-override-input > small {
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .agent-profile-override > p {
   margin: 0;
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
   line-height: 1.5;
 }
 
@@ -219,7 +219,7 @@
 .agent-profile-override-hint p {
   margin: 0;
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--t-xs);
   line-height: 1.5;
 }
 
@@ -235,8 +235,8 @@
 }
 
 .agent-args-head small {
-  color: var(--faint);
-  font-size: 9px;
+  color: var(--muted);
+  font-size: var(--t-xs);
 }
 
 .agent-args-list {
@@ -263,7 +263,7 @@
   background: transparent;
   padding: 0 7px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--t-xs);
   outline: 0;
 }
 
@@ -275,7 +275,7 @@
   border: 0;
   border-left: 1px solid var(--line);
   background: transparent;
-  color: var(--faint);
+  color: var(--muted);
 }
 
 .agent-arg-token > button:not(.ui-button):hover {
@@ -293,7 +293,7 @@
   padding-inline: 7px;
   border: 0;
   box-shadow: none;
-  font-size: 10px;
+  font-size: var(--t-xs);
 }
 
 .agent-args-editor.is-compact .agent-args-head small {
@@ -320,11 +320,9 @@
 .provider-protocol-pick > span,
 .provider-model-field > label,
 .agent-args-head > span {
-  color: var(--faint);
-  font-size: 9px;
-  font-weight: 650;
-  letter-spacing: 0.045em;
-  text-transform: uppercase;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
 }
 
 .provider-form-actions {

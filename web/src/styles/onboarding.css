@@ -17,6 +17,7 @@
   padding: 32px 20px;
   overflow: auto;
   background: var(--chrome);
+  font-weight: var(--w-regular);
 }
 
 .onboarding-card {
@@ -48,7 +49,7 @@
   border-radius: 999px;
   background: none;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: var(--t-sm);
   cursor: pointer;
   transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
 }
@@ -61,7 +62,7 @@
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--raised);
-  font-size: 11px;
+  font-size: var(--t-xs);
   font-style: normal;
   font-variant-numeric: tabular-nums;
 }
@@ -74,7 +75,7 @@
   border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
   background: color-mix(in srgb, var(--accent) 8%, var(--panel));
   color: var(--ink);
-  font-weight: 560;
+  font-weight: var(--w-medium);
 }
 
 .onboarding-rail-step.is-done i {
@@ -91,13 +92,13 @@
 
 .onboarding-head h1 {
   margin: 0;
-  font-size: 21px;
-  font-weight: 650;
+  font-size: var(--t-xl);
+  font-weight: var(--w-strong);
 }
 
 .onboarding-head p {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--t-sm);
   line-height: 1.65;
   color: var(--muted);
 }
@@ -110,7 +111,7 @@
 
 .onboarding-muted {
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--t-sm);
   line-height: 1.6;
   color: var(--muted);
 }
@@ -145,7 +146,7 @@
 .onboarding-blocked {
   flex-basis: 100%;
   margin: 0;
-  font-size: 11.5px;
+  font-size: var(--t-xs);
   line-height: 1.5;
   color: var(--amber);
   /* 补不上 ash MCP 时原因里带着要手工加的那段配置，换行得留着才抄得走。 */
@@ -159,7 +160,7 @@
   align-items: center;
   gap: 10px;
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--t-sm);
   color: var(--amber);
 }
 
@@ -172,12 +173,12 @@
 }
 
 .onboarding-rows b {
-  font-size: 13px;
+  font-size: var(--t-sm);
   color: var(--ink);
 }
 
 .onboarding-rows small {
-  font-size: 11.5px;
+  font-size: var(--t-xs);
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -189,7 +190,7 @@
   align-items: center;
   gap: 4px;
   flex: none;
-  font-size: 11.5px;
+  font-size: var(--t-xs);
   color: var(--accent);
 }
 
@@ -226,11 +227,11 @@
 }
 
 .onboarding-pick b {
-  font-size: 13px;
+  font-size: var(--t-sm);
 }
 
 .onboarding-pick small {
-  font-size: 11.5px;
+  font-size: var(--t-xs);
   color: var(--muted);
   font-family: var(--font-mono);
   overflow: hidden;

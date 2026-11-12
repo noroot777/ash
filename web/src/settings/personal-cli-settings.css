@@ -15,8 +15,8 @@
 
 .pcli-block h3 {
   margin: 0;
-  font-size: 15px;
-  font-weight: 620;
+  font-size: var(--t-md);
+  font-weight: var(--w-medium);
 }
 
 .pcli-block--unsupported {
@@ -25,7 +25,7 @@
 
 .pcli-path {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--t-xs);
   line-height: 1.6;
   color: var(--muted);
   word-break: break-all;
@@ -48,7 +48,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  font-size: 13px;
+  font-size: var(--t-sm);
 }
 
 .pcli-skills {
@@ -67,13 +67,13 @@
   padding: 7px 10px;
   border-radius: 8px;
   background: var(--raised);
-  font-size: 13px;
+  font-size: var(--t-sm);
 }
 
 .pcli-skills li > span {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--t-xs);
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -86,7 +86,7 @@
   background: none;
   color: var(--accent);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--t-sm);
   cursor: pointer;
 }
 
@@ -94,7 +94,7 @@
   width: 100%;
   resize: vertical;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--t-sm);
   line-height: 1.65;
 }
 

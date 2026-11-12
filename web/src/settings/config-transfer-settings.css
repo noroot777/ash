@@ -9,7 +9,7 @@
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--amber) 30%, var(--line));
   background: color-mix(in srgb, var(--amber) 8%, var(--panel));
-  font-size: 12.5px;
+  font-size: var(--t-sm);
   line-height: 1.7;
   color: var(--muted);
 }
@@ -25,8 +25,8 @@
 
 .cfgx-block h3 {
   margin: 0;
-  font-size: 15px;
-  font-weight: 620;
+  font-size: var(--t-md);
+  font-weight: var(--w-medium);
 }
 
 .cfgx-kinds {
@@ -39,7 +39,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--t-sm);
   cursor: pointer;
 }
 
@@ -61,7 +61,7 @@
   padding: 12px 14px;
   border-radius: 8px;
   background: var(--raised);
-  font-size: 13px;
+  font-size: var(--t-sm);
   line-height: 1.7;
 }
 
@@ -73,11 +73,11 @@
 .cfgx-staged ul {
   margin: 0;
   padding-left: 18px;
-  font-size: 12.5px;
+  font-size: var(--t-sm);
   color: var(--muted);
 }
 
 .cfgx-muted {
-  font-size: 12.5px;
+  font-size: var(--t-sm);
   color: var(--muted);
 }

@@ -10,7 +10,7 @@
   border-color: color-mix(in lch, var(--accent) 24%, var(--line));
   background: color-mix(in lch, var(--accent) 7%, var(--panel));
   color: var(--accent);
-  font-weight: 600;
+  font-weight: var(--w-medium);
 }
 
 .task-confirm-dialog.preview-command-help-dialog {
@@ -34,7 +34,7 @@
   margin-top: 20px;
   padding-right: 10px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--t-sm);
   line-height: 1.8;
   overflow-wrap: anywhere;
 }
@@ -53,14 +53,14 @@
   align-self: center;
   margin-right: auto;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--t-xs);
 }
 
 .preview-command-help-content h3 {
   margin: 0 0 6px;
   color: var(--ink);
-  font-size: 13px;
-  font-weight: 650;
+  font-size: var(--t-sm);
+  font-weight: var(--w-medium);
 }
 
 .preview-command-help-content p {
@@ -78,7 +78,7 @@
   background: var(--raised);
   padding: 12px;
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--t-xs);
   white-space: pre-wrap;
 }
 
@@ -99,6 +99,6 @@
   }
 
   .preview-command-help-dialog > .task-confirm-header h2 {
-    font-size: 18px;
+    font-size: var(--t-lg);
   }
 }

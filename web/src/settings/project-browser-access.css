@@ -11,7 +11,7 @@
 }
 .browser-access__intro small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--t-xs);
   line-height: 1.7;
 }
 .browser-access__intro code {
@@ -19,7 +19,7 @@
   border-radius: 4px;
   background: var(--raised);
   font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-  font-size: 11.5px;
+  font-size: var(--t-xs);
   color: var(--ink);
 }
 
@@ -40,7 +40,7 @@
   padding: 8px 10px;
   outline: 0;
   font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-  font-size: 12.5px;
+  font-size: var(--t-sm);
   line-height: 1.6;
 }
 .browser-access__field textarea:focus {
@@ -54,7 +54,7 @@
   overflow-wrap: anywhere;
   word-break: break-word;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--t-xs);
   line-height: 1.6;
 }
 
@@ -67,10 +67,10 @@
 }
 .browser-access__foot small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--t-xs);
 }
 /* 名单非空 = 这个项目现在真的能用你的登录态,值得比普通说明更显眼一点。 */
 .browser-access__active {
   color: var(--ink);
-  font-weight: 600;
+  font-weight: var(--w-medium);
 }
