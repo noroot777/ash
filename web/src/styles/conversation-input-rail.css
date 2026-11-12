@@ -171,7 +171,7 @@
   content: "";
 }
 
-.conversation-input-menu button > span:first-of-type { font-weight: 500; word-break: break-word; }
+.conversation-input-menu button > span:first-of-type { font-weight: var(--w-medium); word-break: break-word; }
 .conversation-input-menu button > time { color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .conversation-input-menu-rest {

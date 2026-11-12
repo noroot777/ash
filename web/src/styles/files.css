@@ -29,7 +29,7 @@
 .file-tree__glyph { display:grid; flex:0 0 auto; place-items:center; color:var(--faint); }
 .file-tree__row.is-active .file-tree__glyph { color:var(--ink); }
 .file-tree__name { min-width:0; flex:1; overflow:hidden; color:var(--muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
-.file-tree__row.is-active .file-tree__name { color:var(--ink); font-weight:600; }
+.file-tree__row.is-active .file-tree__name { color:var(--ink); font-weight:var(--w-medium); }
 .file-tree__tag { flex:0 0 auto; border-radius:3px; background:var(--overlay); padding:0 3px; color:var(--faint); font-size:8px; font-style:normal; }
 .file-tree__row small { flex:0 0 auto; color:var(--faint); font-family:var(--font-mono); font-size:8.5px; }
 :is(.file-tree__head, .file-tree__row)[data-git-kind] { --file-git-color:var(--amber); }
@@ -38,7 +38,7 @@
 :is(.file-tree__head, .file-tree__row):is([data-git-kind="renamed"], [data-git-kind="copied"]) { --file-git-color:var(--accent); }
 .file-tree__head[data-git-kind] .file-tree__where b, .file-tree__head[data-git-kind] .file-tree__where svg { color:var(--file-git-color); }
 .file-tree__row[data-git-kind] .file-tree__name, .file-tree__row[data-git-kind] .file-tree__glyph { color:var(--file-git-color); }
-.file-tree__git-badge { width:12px; flex:0 0 12px; color:var(--file-git-color); text-align:center; font-family:var(--font-mono); font-size:9px; font-weight:600; }
+.file-tree__git-badge { width:12px; flex:0 0 12px; color:var(--file-git-color); text-align:center; font-family:var(--font-mono); font-size:9px; font-weight:var(--w-medium); }
 
 /* 行是一颗按钮，所以「打开文件夹详情」只能是它的兄弟，绝对定位压在行尾那点留白上。
    悬停/聚焦才现身：24px 的行里常驻第二颗按钮会挤掉文件名，也是误点重灾区。 */
@@ -108,20 +108,20 @@
 .folder-viewer__body { display:flex; width:100%; max-width:860px; min-height:0; flex-direction:column; gap:14px; padding:18px 20px 26px; }
 .folder-viewer__stats { display:flex; flex-wrap:wrap; gap:8px; }
 .folder-viewer__stat { min-width:116px; flex:1; border:.5px solid var(--line); border-radius:10px; background:var(--panel); padding:10px 12px; }
-.folder-viewer__stat b { display:block; color:var(--ink); font-size:17px; font-weight:680; letter-spacing:-.02em; }
+.folder-viewer__stat b { display:block; color:var(--ink); font-size:17px; font-weight:var(--w-medium); letter-spacing:-.02em; }
 .folder-viewer__stat span { color:var(--faint); font-size:10px; }
 .folder-viewer__stat[data-tone="dirty"] b { color:var(--amber); }
 .folder-viewer__stat[data-tone="untracked"] b { color:var(--green); }
 .folder-viewer__section { overflow:hidden; border:.5px solid var(--line); border-radius:10px; background:var(--panel); }
-.folder-viewer__section > h3 { display:flex; align-items:center; justify-content:space-between; margin:0; border-bottom:.5px solid var(--line); padding:8px 12px; color:var(--muted); font-size:10.5px; font-weight:600; }
-.folder-viewer__section > h3 em { color:var(--faint); font-style:normal; font-weight:450; }
+.folder-viewer__section > h3 { display:flex; align-items:center; justify-content:space-between; margin:0; border-bottom:.5px solid var(--line); padding:8px 12px; color:var(--muted); font-size:10.5px; font-weight:var(--w-medium); }
+.folder-viewer__section > h3 em { color:var(--faint); font-style:normal; font-weight:var(--w-regular); }
 .folder-viewer__list { display:flex; flex-direction:column; }
 .folder-viewer__item { display:flex; width:100%; align-items:center; gap:8px; border:0; border-top:.5px solid var(--line); background:transparent; padding:7px 12px; text-align:left; }
 .folder-viewer__item:first-child { border-top:0; }
 .folder-viewer__item:hover { background:var(--raised); }
 .folder-viewer__item.is-ignored { opacity:.55; }
 .folder-viewer__item > svg { flex:0 0 auto; color:var(--faint); }
-.folder-viewer__item b { min-width:0; flex:1; overflow:hidden; color:var(--ink); font-size:11.5px; font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
+.folder-viewer__item b { min-width:0; flex:1; overflow:hidden; color:var(--ink); font-size:11.5px; font-weight:var(--w-medium); text-overflow:ellipsis; white-space:nowrap; }
 .folder-viewer__item small { flex:0 0 auto; color:var(--faint); font-family:var(--font-mono); font-size:9.5px; }
 .folder-viewer__note { display:flex; gap:7px; margin:0; border:1px dashed var(--line2); border-radius:10px; padding:10px 12px; color:var(--faint); font-size:10.5px; line-height:1.7; }
 .folder-viewer__note > svg { margin-top:2px; flex:0 0 auto; color:var(--amber); }
@@ -130,7 +130,7 @@
    「这台机器没废纸篓」是要当心而不是要命，走琥珀那一档。 */
 .file-delete__fact { display:flex; gap:9px; margin-top:13px; border:1px solid var(--line); border-radius:12px; background:var(--raised); padding:11px 13px; }
 .file-delete__fact > span { display:grid; flex:0 0 auto; place-items:start; margin-top:1px; color:var(--muted); }
-.file-delete__fact b { display:block; color:var(--ink); font-size:11.5px; font-weight:600; }
+.file-delete__fact b { display:block; color:var(--ink); font-size:11.5px; font-weight:var(--w-medium); }
 .file-delete__fact p { margin:3px 0 0; color:var(--faint); font-size:10.5px; line-height:1.65; }
 .file-delete__fact.is-danger { border-color:color-mix(in oklab,var(--red) 30%,var(--line)); background:color-mix(in oklab,var(--red) 7%,var(--panel)); }
 .file-delete__fact.is-danger > span, .file-delete__fact.is-danger b { color:var(--red); }
@@ -143,7 +143,7 @@
 
 .file-delete__type { margin-top:13px; }
 .file-delete__type label { display:block; margin-bottom:6px; color:var(--muted); font-size:11px; }
-.file-delete__type label b { color:var(--ink); font-family:var(--font-mono); font-weight:650; }
+.file-delete__type label b { color:var(--ink); font-family:var(--font-mono); font-weight:var(--w-medium); }
 .file-delete__type input { width:100%; border:1px solid var(--line2); border-radius:9px; background:var(--panel); padding:9px 11px; color:var(--ink); font-family:var(--font-mono); font-size:12px; }
 .file-delete__error { display:flex; align-items:center; gap:6px; margin:11px 0 0; color:var(--red); font-size:10.5px; }
 .file-delete__error.is-busy { color:var(--faint); }
@@ -158,8 +158,8 @@
 .file-openwith__hint { margin:0; padding:8px 10px; color:var(--faint); font-size:10px; }
 .file-openwith__hint.is-error { color:var(--red); }
 .file-openwith__app { display:flex; min-width:0; flex-direction:column; gap:1px; }
-.file-openwith__app b { display:flex; align-items:center; gap:4px; color:var(--ink); font-size:11px; font-weight:550; }
+.file-openwith__app b { display:flex; align-items:center; gap:4px; color:var(--ink); font-size:11px; font-weight:var(--w-medium); }
 .file-openwith__app b > svg { color:var(--muted); }
 .file-openwith__app small { overflow:hidden; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
 /* 「上次用的」：排在第一行那个的轻标记，别做成彩色徽章跟文件名抢注意力。 */
-.file-openwith__app b em { flex:0 0 auto; border-radius:3px; background:var(--overlay); padding:0 4px; color:var(--faint); font-size:8.5px; font-style:normal; font-weight:500; }
+.file-openwith__app b em { flex:0 0 auto; border-radius:3px; background:var(--overlay); padding:0 4px; color:var(--faint); font-size:8.5px; font-style:normal; font-weight:var(--w-medium); }

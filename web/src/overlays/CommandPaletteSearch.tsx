@@ -112,7 +112,7 @@ export function SearchPreview({ hit, query, onOpen }: { hit: SearchHit | undefin
             {hit.kind === "task" ? <SearchStatus hit={hit} /> : <NotePencil size={16} className="text-muted" />}
           </span>
           <div className="min-w-0 flex-1">
-            <h2 className="flex min-w-0 items-center gap-1.5 text-sm font-semibold leading-5 text-ink">
+            <h2 className="flex min-w-0 items-center gap-1.5 text-sm font-medium leading-5 text-ink">
               <span className="min-w-0"><Highlight text={hit.title} query={query} /></span>
               {isIdMatch(hit) && <IdMatchBadge />}
             </h2>
@@ -169,7 +169,7 @@ export function SearchHitRow({
         <span className="grid size-[15px] shrink-0 place-items-center">
           {hit.kind === "task" ? <SearchStatus hit={hit} /> : <NotePencil size={15} className="text-muted" />}
         </span>
-        <span className="palette-hit-title min-w-0 truncate font-semibold text-ink"><Highlight text={hit.title} query={query} /></span>
+        <span className="palette-hit-title min-w-0 truncate font-medium text-ink"><Highlight text={hit.title} query={query} /></span>
         {isIdMatch(hit) && <IdMatchBadge />}
         {hit.kind === "task" && hit.archived && <span className="shrink-0 rounded bg-overlay px-1 text-[9px] text-faint">已归档</span>}
         {hit.kind === "note" && hit.taskCount > 0 && <span className="shrink-0 rounded bg-overlay px-1 text-[9px] text-faint">已转 {hit.taskCount} 个任务</span>}

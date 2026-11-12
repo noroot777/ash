@@ -20,7 +20,7 @@
 .review-inspector__status.is-verify_failed { background: var(--red-bg); color: var(--red); }
 .review-inspector__actions { display: grid; gap: 4px; margin-top: 11px; }
 .review-inspector__actions button { display: flex; min-height: 31px; align-items: center; gap: 6px; border: 0; border-radius: 7px; background: transparent; padding: 5px 7px; color: var(--muted); font-size: 10.5px; text-align: left; }
-.review-inspector__actions button:first-child { background: color-mix(in oklab,var(--ink) 8%,var(--panel)); color: var(--ink); font-weight: 650; }
+.review-inspector__actions button:first-child { background: color-mix(in oklab,var(--ink) 8%,var(--panel)); color: var(--ink); font-weight: var(--w-medium); }
 .review-inspector__actions button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .review-inspector__actions button:disabled { cursor: not-allowed; opacity: 0.48; }
 .review-inspector__actions button span { min-width: 0; flex: 1; }
@@ -45,9 +45,9 @@
 .review-round.is-verified { border-color: color-mix(in oklab,var(--green) 25%,var(--line)); }
 .review-round.is-verify-failed, .review-round.is-inconclusive { border-color: color-mix(in oklab,var(--red) 30%,var(--line)); }
 .review-round > button { display: flex; width: 100%; min-height: 37px; align-items: center; gap: 7px; border: 0; background: transparent; padding: 5px 8px; text-align: left; }
-.review-round > button > span { display: grid; width: 22px; height: 22px; flex: 0 0 22px; place-items: center; border-radius: 50%; background: var(--raised); color: var(--muted); font-size: 9.5px; font-weight: 750; }
+.review-round > button > span { display: grid; width: 22px; height: 22px; flex: 0 0 22px; place-items: center; border-radius: 50%; background: var(--raised); color: var(--muted); font-size: 9.5px; font-weight: var(--w-medium); }
 .review-round > button > b { color: var(--ink); font-size: 10.5px; white-space: nowrap; }
-.review-round > button > em { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; background: color-mix(in oklab,var(--ink) 9%,var(--raised)); padding: 2px 6px; color: var(--ink); font-size: 9.5px; font-style: normal; font-weight: 650; white-space: nowrap; }
+.review-round > button > em { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; background: color-mix(in oklab,var(--ink) 9%,var(--raised)); padding: 2px 6px; color: var(--ink); font-size: 9.5px; font-style: normal; font-weight: var(--w-medium); white-space: nowrap; }
 .review-round.is-verified > button > em { background: var(--green-bg); color: var(--green); }
 .review-round.is-verify-failed > button > em, .review-round.is-inconclusive > button > em { background: var(--red-bg); color: var(--red); }
 .review-round > button > small { min-width: 0; overflow: hidden; color: var(--faint); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
@@ -74,7 +74,7 @@
    换行的正文，跟旁边的报告 markdown 区分开。 */
 .review-note { border-left: 2px solid color-mix(in oklab,var(--ink) 45%,var(--line)); border-radius: 0 6px 6px 0; background: color-mix(in oklab,var(--ink) 4%,var(--panel)); padding: 6px 9px; }
 .review-note + * { margin-top: 9px; }
-.review-note > b { display: block; color: var(--ink); font-size: 9px; font-weight: 700; letter-spacing: .04em; }
+.review-note > b { display: block; color: var(--ink); font-size: 9px; font-weight: var(--w-medium); letter-spacing: .04em; }
 .review-note > p { overflow-wrap: anywhere; margin: 3px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; white-space: pre-wrap; }
 
 .review-inspector__targets { border-bottom: 0.5px solid var(--line); padding: 12px 14px; }
@@ -110,7 +110,7 @@
 /* 截图始终留在抽屉底边；数量只增加横向长度，不再把报告正文越顶越短。 */
 .review-screenshot-strip { min-width: 0; }
 .review-screenshot-strip > header { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; color: var(--faint); font-size: 9px; }
-.review-screenshot-strip > header > span { display: inline-flex; align-items: center; gap: 4px; font-weight: 650; }
+.review-screenshot-strip > header > span { display: inline-flex; align-items: center; gap: 4px; font-weight: var(--w-medium); }
 .review-screenshot-strip > header > em { border-radius: 999px; background: var(--overlay); padding: 1px 5px; color: var(--muted); font-style: normal; }
 .review-screenshot-strip > header > small { margin-left: auto; color: var(--faint); font-size: 8.5px; }
 .review-screenshot-strip__rail { display: flex; min-width: 0; gap: 7px; overflow-x: auto; overscroll-behavior-x: contain; padding-bottom: 2px; scroll-snap-type: x proximity; }

@@ -118,7 +118,7 @@
 }
 .status-bar__tab-open b {
   overflow: hidden;
-  font-weight: 600;
+  font-weight: var(--w-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

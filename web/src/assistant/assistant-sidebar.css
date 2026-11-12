@@ -23,7 +23,7 @@
 .assistant-knowledge summary { cursor: pointer; padding: 4px 0; }
 .assistant-knowledge summary > svg { display: inline; margin: 0 6px 0 2px; vertical-align: -3px; }
 .assistant-knowledge dl { margin: 15px 0 0; }
-.assistant-knowledge dt { color: var(--assistant-rail-ink); font-weight: 600; }
+.assistant-knowledge dt { color: var(--assistant-rail-ink); font-weight: var(--w-medium); }
 .assistant-knowledge dd { margin: 4px 0 13px; line-height: 1.8; }
 .assistant-knowledge p { margin: 0; padding: 10px 0 4px; border-top: 1px solid var(--assistant-rail-line); line-height: 1.8; }
 .assistant-knowledge-panel { position: absolute; z-index: 3; left: 0; bottom: calc(100% + 8px); width: min(340px, 100%); max-height: min(440px, 50vh); overflow: auto; padding: 18px; border: 1px solid var(--assistant-rail-line); border-radius: 10px; background: var(--panel); box-shadow: 0 8px 35px #2d435d20; }

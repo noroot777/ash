@@ -3,13 +3,13 @@
    执行过程折叠块在 execution-trace.css，它用到的流光与换字在 motion-text.css。 */
 .task-message { position: relative; max-width: 790px; margin-bottom: 20px; }
 .task-message--agent { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; }
-.task-message-avatar { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; background: var(--overlay); color: var(--muted); font-size: 8px; font-weight: 750; }
+.task-message-avatar { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; background: var(--overlay); color: var(--muted); font-size: 8px; font-weight: var(--w-medium); }
 .task-message-content { min-width: 0; }
 .task-message header,
 .task-user-bubble header { display: flex; min-height: 20px; align-items: center; gap: 6px; color: var(--faint); font-size: 10.5px; }
 .task-message header b,
-.task-user-bubble header b { color: var(--muted); font-weight: 650; }
-.task-turn-duration { color: var(--faint); font-size: inherit; font-weight: 450; }
+.task-user-bubble header b { color: var(--muted); font-weight: var(--w-medium); }
+.task-turn-duration { color: var(--faint); font-size: inherit; font-weight: var(--w-regular); }
 /* 回合头只留名字；模型、智能水平、时间、用时是后面那一句，指到这一回合才出（feed-1）。
    名字不让，那一句可以被省略：列再窄它也撑不宽这一行。 */
 .task-message header.turn-head { gap: 8px; min-width: 0; color: var(--muted); font-size: var(--t-xs); }
@@ -72,14 +72,14 @@
 }
 .task-user-bubble > header { gap: 8px; }
 .task-message--user:not(.is-system-authored) header { color: color-mix(in oklab, var(--muted) 72%, var(--faint)); }
-.task-message--user:not(.is-system-authored) header b { color: color-mix(in oklab, var(--ink) 70%, var(--muted)); font-weight: 600; }
+.task-message--user:not(.is-system-authored) header b { color: color-mix(in oklab, var(--ink) 70%, var(--muted)); font-weight: var(--w-medium); }
 .task-user-bubble > header time { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .task-user-bubble > header button { flex: none; color: var(--muted); }
 .task-user-bubble > p {
   margin: 7px 0 0;
   color: color-mix(in oklab, var(--ink) 88%, var(--muted));
   font-size: 12.5px;
-  font-weight: 400;
+  font-weight: var(--w-regular);
   line-height: 1.75;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -116,13 +116,13 @@
 .task-markdown h4,
 .task-markdown h5,
 .task-markdown h6 { margin: 16px 0 7px; color: var(--ink); line-height: 1.35; }
-.task-markdown h1 { font-size: 18px; font-weight: 700; }
-.task-markdown h2 { font-size: 15px; font-weight: 700; }
-.task-markdown h3 { font-size: 13.5px; font-weight: 680; }
-.task-markdown h4 { font-size: 12.5px; font-weight: 680; }
-.task-markdown h5 { font-size: 11.5px; font-weight: 680; }
-.task-markdown h6 { color: var(--muted); font-size: 11px; font-weight: 680; }
-.task-markdown strong { color: var(--ink); font-weight: 650; }
+.task-markdown h1 { font-size: 18px; font-weight: var(--w-strong); }
+.task-markdown h2 { font-size: 15px; font-weight: var(--w-strong); }
+.task-markdown h3 { font-size: 13.5px; font-weight: var(--w-medium); }
+.task-markdown h4 { font-size: 12.5px; font-weight: var(--w-medium); }
+.task-markdown h5 { font-size: 11.5px; font-weight: var(--w-medium); }
+.task-markdown h6 { color: var(--muted); font-size: 11px; font-weight: var(--w-medium); }
+.task-markdown strong { color: var(--ink); font-weight: var(--w-medium); }
 .task-markdown a { color: var(--ink); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 /* 引用块跟系统旁注（.conversation-note）是同一档「不是正文在说话」的东西：agent 输出里
    的引用多半就是 ash 自己插的注记（「正在压缩上下文…」之类）。字号行高跟旁注对齐，
@@ -135,7 +135,7 @@
 .task-markdown table { width: 100%; min-width: 420px; border-collapse: collapse; font-size: 11.5px; line-height: 1.5; }
 .task-markdown th,
 .task-markdown td { border: 1px solid var(--line2); padding: 6px 8px; text-align: left; vertical-align: top; }
-.task-markdown th { background: var(--raised); color: var(--ink); font-weight: 650; }
+.task-markdown th { background: var(--raised); color: var(--ink); font-weight: var(--w-medium); }
 .task-markdown td { background: color-mix(in oklab, var(--panel) 82%, transparent); }
 .task-markdown th > :first-child,
 .task-markdown td > :first-child { margin-top: 0; }
@@ -173,7 +173,7 @@
 .markdown-report-dialog { display: grid; width: min(880px, 94vw); max-height: min(760px, 90vh); grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line2); border-radius: 13px; background: var(--panel); box-shadow: var(--shadow); }
 .markdown-report-dialog > header { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding: 11px 12px 11px 16px; }
 .markdown-report-dialog > header > div { min-width: 0; }
-.markdown-report-dialog > header span { display: block; color: var(--faint); font-size: 9px; font-weight: 650; letter-spacing: .04em; }
+.markdown-report-dialog > header span { display: block; color: var(--faint); font-size: 9px; font-weight: var(--w-medium); letter-spacing: .04em; }
 .markdown-report-dialog h2 { overflow: hidden; margin: 2px 0 0; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .markdown-report-dialog > header button { display: grid; width: 28px; height: 28px; flex: none; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--muted); }
 .markdown-report-dialog > header button:hover { background: var(--raised); color: var(--ink); }
@@ -293,7 +293,7 @@
 .task-turn-remedy { display: grid; gap: 8px; justify-items: start; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2, transparent); }
 .task-turn-remedy p { display: flex; align-items: flex-start; gap: 6px; margin: 0; font-size: 12px; line-height: 1.6; color: var(--faint); }
 .task-turn-remedy svg { flex: none; margin-top: 3px; }
-.task-turn-remedy strong { color: var(--text); font-weight: 600; }
+.task-turn-remedy strong { color: var(--text); font-weight: var(--w-medium); }
 /* 结论那一段:凭据对不上时下面跟一颗「重新加载页面」。跟上面那颗开关共用一行的话,
    flex 会把它挤成两行(实测「重新加载页/面」),所以这里改成纵向摞 —— 一句话、一个出路。 */
 .task-turn-remedy p.task-turn-remedy__result { display: grid; gap: 6px; justify-items: start; color: var(--text); }

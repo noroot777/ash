@@ -102,7 +102,7 @@
   padding: 8px 9px 4px;
   color: var(--faint);
   font-size: 9px;
-  font-weight: 700;
+  font-weight: var(--w-medium);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -134,7 +134,7 @@
 .palette-row b {
   overflow: hidden;
   font-size: 12px;
-  font-weight: 550;
+  font-weight: var(--w-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -283,7 +283,7 @@
 
 .notes-panel > header b {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--w-strong);
 }
 
 .notes-panel > header span {
@@ -406,7 +406,7 @@
 .note-row-main b {
   overflow: hidden;
   font-size: 11px;
-  font-weight: 550;
+  font-weight: var(--w-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -446,7 +446,7 @@
   padding: 0 2px;
   color: var(--faint);
   font-size: 9px;
-  font-weight: 550;
+  font-weight: var(--w-medium);
   white-space: nowrap;
   transition: color 150ms ease;
 }
@@ -514,7 +514,7 @@
   flex: none;
   color: var(--faint);
   font-size: 9px;
-  font-weight: 600;
+  font-weight: var(--w-medium);
   white-space: nowrap;
 }
 

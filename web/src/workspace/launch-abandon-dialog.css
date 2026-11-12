@@ -34,7 +34,7 @@
 
 .launch-abandon__scope-title {
   margin: 4px 0 0;
-  font-weight: 600;
+  font-weight: var(--w-medium);
   font-size: 12px;
 }
 

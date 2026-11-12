@@ -34,7 +34,7 @@
   flex: 1;
   overflow: hidden;
   font-size: 10.5px;
-  font-weight: 500;
+  font-weight: var(--w-medium);
   letter-spacing: 0.02em;
   text-overflow: ellipsis;
   white-space: nowrap;

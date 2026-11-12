@@ -47,7 +47,7 @@
 
 .groups-panel-heading b {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--w-strong);
 }
 
 .groups-panel-heading small {

@@ -72,7 +72,7 @@
   overflow: hidden;
   color: var(--ink);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: var(--w-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -129,7 +129,7 @@
 .run-target-picker.is-chip .effort-picker-trigger { padding-right: 9px; }
 .run-target-picker.is-chip .run-target-seg--model,
 .run-target-picker.is-chip .effort-picker-trigger { border-left-color: var(--line2); }
-.run-target-picker.is-chip .run-target-seg > b { font-family: var(--font-mono); font-size: 10.5px; font-weight: 550; }
+.run-target-picker.is-chip .run-target-seg > b { font-family: var(--font-mono); font-size: 10.5px; font-weight: var(--w-medium); }
 .run-target-picker.is-chip .run-target-seg > code { font-size: 10px; }
 .run-target-picker.is-chip .effort-picker-trigger > em { font-size: 10px; }
 
@@ -172,7 +172,7 @@
   color: var(--ink);
   font-size: 11px;
   font-style: normal;
-  font-weight: 550;
+  font-weight: var(--w-medium);
 }
 .effort-picker-trigger > svg { flex: 0 0 auto; }
 .effort-picker-trigger:hover:not(:disabled),
@@ -219,7 +219,7 @@
   text-align: left;
 }
 .effort-picker-panel > button:hover { background: var(--sel-bg); }
-.effort-picker-panel > button > b { color: var(--ink); font-size: 12px; font-weight: 550; }
+.effort-picker-panel > button > b { color: var(--ink); font-size: 12px; font-weight: var(--w-medium); }
 .effort-picker-panel > button > span {
   min-width: 0;
   flex: 1;

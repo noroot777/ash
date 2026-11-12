@@ -5,7 +5,7 @@
 .scheduled-message-summary { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 7px 12px; }
 .scheduled-message-stack { display: grid; width: var(--queue-icon); height: var(--queue-icon); flex: 0 0 auto; place-items: center; border-radius: 8px; background: var(--queue-soft); color: var(--accent); }
 .scheduled-message-summary-copy { display: flex; min-width: 0; flex: 1; flex-wrap: wrap; align-items: baseline; gap: 1px 8px; }
-.scheduled-message-summary-copy strong { display: flex; align-items: center; gap: 7px; color: var(--ink); font-size: 12px; font-weight: 600; }
+.scheduled-message-summary-copy strong { display: flex; align-items: center; gap: 7px; color: var(--ink); font-size: 12px; font-weight: var(--w-medium); }
 .scheduled-message-summary-copy strong span { border-radius: 4px; background: var(--queue-soft); padding: 2px 5px; color: var(--accent); font: 10px var(--font-mono); }
 .scheduled-message-summary-copy small { min-width: 0; color: var(--faint); font-size: 10px; line-height: 1.5; }
 .scheduled-message-toggle { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; border: 0; border-radius: 5px; background: transparent; padding: 6px 0 6px 6px; color: var(--ink); font-size: 10px; white-space: nowrap; }
@@ -15,7 +15,7 @@
 .scheduled-message-previews .scheduled-message-position { width: 13px; color: var(--faint); font: 9px var(--font-mono); }
 .scheduled-message-previews .scheduled-message-row > svg { flex-shrink: 0; color: var(--faint); }
 .scheduled-message-previews .scheduled-message-row > em, .scheduled-message-previews .scheduled-message-row > time { color: var(--faint); font-size: 9px; }
-.scheduled-message-previews .scheduled-message-row > b { color: var(--muted); font-size: 11px; font-weight: 500; }
+.scheduled-message-previews .scheduled-message-row > b { color: var(--muted); font-size: 11px; font-weight: var(--w-medium); }
 .scheduled-message-previews .scheduled-message-agent { display: none; }
 .scheduled-message-previews .scheduled-message-row > button { flex-shrink: 0; }
 .scheduled-message-previews .scheduled-message-managed { max-width: 120px; white-space: normal; }

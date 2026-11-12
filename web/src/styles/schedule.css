@@ -102,7 +102,7 @@
 }
 
 .duet-context .schedule-control small {
-  font-weight: 450;
+  font-weight: var(--w-regular);
   letter-spacing: normal;
   text-transform: none;
 }

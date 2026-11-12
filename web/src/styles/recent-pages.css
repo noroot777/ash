@@ -83,7 +83,7 @@
   background: #f2b564;
   color: #17191f;
   font-size: 25px;
-  font-weight: 780;
+  font-weight: var(--w-strong);
   letter-spacing: -.08em;
   box-shadow: 0 12px 30px rgb(0 0 0 / 22%);
 }
@@ -96,7 +96,7 @@
 
 .auth-brand-copy > span {
   color: #f2b564;
-  font: 700 9px/1 var(--font-mono);
+  font: var(--w-medium) 9px/1 var(--font-mono);
   letter-spacing: .15em;
 }
 
@@ -104,7 +104,7 @@
   max-width: 360px;
   margin: 15px 0 0;
   font-size: clamp(25px, 3vw, 38px);
-  font-weight: 710;
+  font-weight: var(--w-strong);
   line-height: 1.18;
   letter-spacing: -.055em;
 }
@@ -138,9 +138,9 @@
 }
 
 .auth-brand-points li > span { display: grid; gap: 1px; }
-.auth-brand-points b { color: #f6f4ed; font-size: 11.5px; font-weight: 620; }
+.auth-brand-points b { color: #f6f4ed; font-size: 11.5px; font-weight: var(--w-medium); }
 .auth-brand-points small { color: rgb(246 244 237 / 48%); font-size: 9.5px; }
-.auth-brand-foot { position: relative; z-index: 1; margin: 24px 0 0; color: rgb(246 244 237 / 28%); font: 600 8px/1 var(--font-mono); letter-spacing: .13em; }
+.auth-brand-foot { position: relative; z-index: 1; margin: 24px 0 0; color: rgb(246 244 237 / 28%); font: var(--w-medium) 8px/1 var(--font-mono); letter-spacing: .13em; }
 
 .auth-stage-content {
   position: relative;
@@ -169,7 +169,7 @@
   display: block;
   margin-bottom: 12px;
   color: var(--muted);
-  font: 750 9px/1 var(--font-mono);
+  font: var(--w-medium) 9px/1 var(--font-mono);
   letter-spacing: .15em;
   content: "ASH ACCESS";
 }
@@ -182,7 +182,7 @@
 .auth-shell .auth-card h1,
 .auth-shell .auth-key-reveal h2 {
   font-size: clamp(27px, 3.2vw, 36px);
-  font-weight: 720;
+  font-weight: var(--w-strong);
   line-height: 1.16;
   letter-spacing: -.045em;
 }
@@ -202,7 +202,7 @@
 .auth-shell .auth-key-reveal > .ui-button--primary {
   min-height: 42px;
   border-radius: 11px;
-  font-weight: 680;
+  font-weight: var(--w-medium);
   box-shadow: 0 10px 24px color-mix(in oklab, #000 20%, transparent);
 }
 
@@ -229,7 +229,7 @@
   border-radius: 12px;
   background: var(--panel);
   color: var(--muted);
-  font: 720 10px/1 var(--font-mono);
+  font: var(--w-medium) 10px/1 var(--font-mono);
   content: "01";
 }
 
@@ -239,7 +239,7 @@
 .auth-choice span { font-size: 12px; line-height: 1.65; }
 
 .auth-field { gap: 7px; }
-.auth-field > span { color: var(--ink); font-size: 11px; font-weight: 680; }
+.auth-field > span { color: var(--ink); font-size: 11px; font-weight: var(--w-medium); }
 .auth-field small { font-size: 10.5px; }
 .auth-field-row { gap: 14px; }
 .auth-actions { gap: 9px; padding-top: 4px; }

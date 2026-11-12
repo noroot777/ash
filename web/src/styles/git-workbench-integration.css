@@ -82,11 +82,11 @@
 .gwb-design .gwb-page { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 18px 28px; }
 .gwb-design .gwb-section-head { display: flex; align-items: center; gap: 8px; margin: 2px 0 12px; }
 .gwb-design .gwb-section-head > div { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; }
-.gwb-design .gwb-section-head h2 { font-size: 13.5px; font-weight: 650; margin: 0; }
+.gwb-design .gwb-section-head h2 { font-size: 13.5px; font-weight: var(--w-medium); margin: 0; }
 .gwb-design .gwb-section-head p { font-size: 11px; color: var(--faint); margin: 0; }
 .gwb-design .gwb-section-head > input { width: 210px; }
 .gwb-design .gwb-ref-section { margin-bottom: 18px; }
-.gwb-design .gwb-ref-section h3 { display: flex; gap: 7px; font-size: 11.5px; font-weight: 650; margin: 0 0 6px; padding: 0 4px; }
+.gwb-design .gwb-ref-section h3 { display: flex; gap: 7px; font-size: 11.5px; font-weight: var(--w-medium); margin: 0 0 6px; padding: 0 4px; }
 .gwb-design .gwb-muted-empty { font-size: 11px; color: var(--faint); padding: 0 10px; }
 .gwb-design .gwb-ref-row .branch-name { max-width: 40%; }
 .gwb-design .gwb-ref-row .branch-name b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -108,7 +108,7 @@
 .gwb-design .oplog-time { padding-top: 3px; }
 .gwb-design .gwb-journal-body { flex: 1; min-width: 0; }
 .gwb-design .gwb-journal-body header { display: flex; align-items: center; gap: 9px; }
-.gwb-design .gwb-journal-body header strong { font-size: 12px; font-weight: 550; }
+.gwb-design .gwb-journal-body header strong { font-size: 12px; font-weight: var(--w-medium); }
 .gwb-design .gwb-journal-body header em { margin-left: auto; font-style: normal; font-size: 10.5px; }
 .gwb-design .gwb-journal-entry.is-succeeded header em { color: var(--green); }
 .gwb-design .gwb-journal-entry.is-failed header em, .gwb-design .gwb-journal-entry.is-conflict header em { color: var(--red); }
@@ -155,11 +155,11 @@
 section.task-confirm-dialog.gwb-design { width: 440px; max-width: calc(100vw - 40px); max-height: 76vh; display: flex; flex-direction: column; gap: 0; padding: 0; border: none; border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); font: 12.5px var(--font-sans); animation: none; }
 section.task-confirm-dialog.gwb-design > .task-confirm-header { display: flex; align-items: center; padding: 12px 16px 8px; gap: 0; flex-shrink: 0; }
 section.task-confirm-dialog.gwb-design > .task-confirm-header > span, section.task-confirm-dialog.gwb-design .task-confirm-header small { display: none; }
-section.task-confirm-dialog.gwb-design .task-confirm-header h2 { font-size: 13px; font-weight: 650; margin: 0; letter-spacing: normal; }
+section.task-confirm-dialog.gwb-design .task-confirm-header h2 { font-size: 13px; font-weight: var(--w-strong); margin: 0; letter-spacing: normal; }
 section.task-confirm-dialog.gwb-design .task-confirm-header > button { width: 22px; height: 22px; padding: 0; border: none; border-radius: 5px; box-shadow: none; }
 section.task-confirm-dialog.gwb-design > .task-confirm-message { margin: 0; padding: 2px 16px 8px; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
 section.task-confirm-dialog.gwb-design > footer { display: flex; justify-content: flex-end; padding: 10px 16px 14px; gap: 8px; border: none; margin: 0; flex-shrink: 0; }
-section.task-confirm-dialog.gwb-design > footer button { height: 28px; min-height: 28px; min-width: 0; padding: 0 12px; border: none; border-radius: 8px; font-size: 12px; font-weight: 500; background: var(--panel); color: var(--ink); box-shadow: var(--control-shadow); }
+section.task-confirm-dialog.gwb-design > footer button { height: 28px; min-height: 28px; min-width: 0; padding: 0 12px; border: none; border-radius: 8px; font-size: 12px; font-weight: var(--w-medium); background: var(--panel); color: var(--ink); box-shadow: var(--control-shadow); }
 section.task-confirm-dialog.gwb-design > footer button.is-primary { background: var(--action); color: var(--on-action); box-shadow: none; }
 section.task-confirm-dialog.gwb-design > footer button.is-danger { background: var(--red); color: #fff; box-shadow: none; }
 section.task-confirm-dialog.gwb-design > footer button:hover:not(:disabled) { transform: none; box-shadow: var(--control-hover-shadow); }
@@ -209,7 +209,7 @@ section.gwb-rebase-dialog.gwb-design { width: 720px; }
 }
 @media (max-width: 480px) { .gwb-design .sync-group .top-btn span { display: none; } }
 .gwb-design .gwb-tag-info { display: flex; align-items: center; flex: 1; gap: 12px; min-width: 0; }
-.gwb-design .gwb-tag-info strong { font: 600 11.5px var(--font-mono); min-width: 120px; }
+.gwb-design .gwb-tag-info strong { font: var(--w-medium) 11.5px var(--font-mono); min-width: 120px; }
 .gwb-design .gwb-tag-info span { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; color: var(--faint); }
 .gwb-design .gwb-tag-info code { font-size: 10px; color: var(--faint); }
 .gwb-design .gwb-remotes { font-size: 11.5px; color: var(--muted); }
@@ -221,7 +221,7 @@ section.gwb-rebase-dialog.gwb-design { width: 720px; }
 .gwb-design .gwb-conflict-editor { font-size: 11.5px; background: var(--panel); border: .5px solid var(--line); border-radius: 10px; }
 .gwb-design .cf-sides { min-width: 0; }
 .gwb-design .cf-side { min-width: 0; }
-.gwb-design button:not([class]) { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 22px; padding: 0 8px; border-radius: 6px; background: var(--panel); box-shadow: var(--control-shadow); color: var(--muted); font: 500 11px var(--font-sans); }
+.gwb-design button:not([class]) { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 22px; padding: 0 8px; border-radius: 6px; background: var(--panel); box-shadow: var(--control-shadow); color: var(--muted); font: var(--w-medium) 11px var(--font-sans); }
 .gwb-design button.gwb-danger { color: var(--red); }
 .gwb-design .gwb-backup-section summary, .gwb-design .gwb-remotes summary { cursor: pointer; padding: 8px 0; }
 .gwb-design .gwb-backup-section .gwb-ref-row { display: flex; gap: 10px; align-items: center; padding: 8px; border-bottom: .5px solid var(--line); }

@@ -9,10 +9,10 @@
   padding: 0 10px;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 500;
-  /* 高度写死 28px 的按钮**不可能**正确渲染换行的文字：中文可逐字断行，被 flex 压窄
-     一点就竖排成一列并溢出盒子（2026-08-05 设置页「立即重新扫描」实拍）。这是所有
-     按钮共有的性质，所以护在这里，别等下一处再补一次。 */
+  font-weight: var(--w-medium);
+                                                    
+                                                 
+                                 
   white-space: nowrap;
   box-shadow: var(--control-shadow);
   transition: background-color 150ms ease-out, border-color 150ms ease-out,
@@ -191,7 +191,7 @@ header:hover .task-pin,
 
 .ui-tabs button {
   height: 22px;
-  /* 高度写死,折行只会把字挤出盒子(中文可逐字断行),同 .ui-button 那条。 */
+                                                 
   white-space: nowrap;
   border: 0;
   border-radius: 9999px;
@@ -199,7 +199,7 @@ header:hover .task-pin,
   padding: 0 10px;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: var(--w-medium);
 }
 
 .ui-tabs button:hover {
@@ -317,7 +317,7 @@ header:hover .task-pin,
   padding: 0 8px;
   color: var(--muted);
   font-size: 11px;
-  font-weight: 500;
+  font-weight: var(--w-medium);
 }
 
 .ui-status-chip:hover {

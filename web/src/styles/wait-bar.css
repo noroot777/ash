@@ -23,9 +23,9 @@
 .wait-bar__bar { display: flex; width: 100%; min-width: 0; height: 26px; align-items: center; gap: 6px; border: 0; border-radius: 8px; background: transparent; padding: 0 8px; color: var(--wait-tint); text-align: left; }
 .wait-bar__bar:hover { background: color-mix(in oklab, var(--wait-tint) 9%, var(--panel)); }
 .wait-bar__bar > svg { flex: 0 0 auto; }
-.wait-bar__bar > b { flex: 0 0 auto; color: var(--ink); font-size: 11px; font-weight: 650; letter-spacing: -.01em; }
+.wait-bar__bar > b { flex: 0 0 auto; color: var(--ink); font-size: 11px; font-weight: var(--w-medium); letter-spacing: -.01em; }
 /* 摘要是这一行里唯一可长可短的东西,所以压缩和省略号都落在它身上:期限和箭头不许被挤掉。 */
-.wait-bar__brief { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--muted); font-size: 10.5px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.wait-bar__brief { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--muted); font-size: 10.5px; font-weight: var(--w-regular); text-overflow: ellipsis; white-space: nowrap; }
 .wait-bar__caret { flex: 0 0 auto; color: var(--faint); transition: transform .12s ease; }
 /* 展开后摘要就该让位:下面那份正文把每一条都写全了(各自的期限也在),条上再留一份
    「头一个 + 期限」就是同一句话印两遍。只留标题——它此刻的作用是这张卡的抬头。 */
@@ -33,7 +33,7 @@
 .wait-bar.is-open .wait-bar__bar > b { flex: 1 1 auto; }
 .wait-bar.is-open .wait-bar__caret { transform: rotate(180deg); }
 .wait-bar__body { padding: 0 11px; }
-.wait-bar__when { flex: 0 0 auto; margin-left: auto; color: var(--faint); font-size: 9.5px; font-weight: 400; white-space: nowrap; }
+.wait-bar__when { flex: 0 0 auto; margin-left: auto; color: var(--faint); font-size: 9.5px; font-weight: var(--w-regular); white-space: nowrap; }
 .wait-bar__note { margin: 8px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.65; }
 /* 交代原文是 agent 对自己说的话,排成引文好跟说明本身分开。 */
 .wait-bar__note q { color: var(--muted); quotes: "「" "」"; }

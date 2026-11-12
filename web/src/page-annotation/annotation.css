@@ -47,7 +47,7 @@
 .annotation-dialog button[aria-pressed="true"] { border-color: var(--ink); background: var(--sel-bg); color: var(--ink); }
 .annotation-header { display: flex; flex-shrink: 0; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); padding: 14px 20px; }
 .annotation-header > svg { color: var(--muted); }
-.annotation-header h2 { margin: 0; font-size: 18px; font-weight: 680; }
+.annotation-header h2 { margin: 0; font-size: 18px; font-weight: var(--w-strong); }
 .annotation-header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .annotation-header > button { margin-left: auto; border: 0; }
 .annotation-source-info { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); padding: 8px 16px; color: var(--muted); font-size: 11px; }
@@ -71,11 +71,11 @@
 .annotation-empty { margin: 10px 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .annotation-list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
 .annotation-dialog .annotation-note-select { width: 100%; justify-content: flex-start; gap: 9px; padding: 9px; text-align: left; }
-.annotation-note-select > b { display: grid; width: 24px; height: 24px; flex-shrink: 0; place-items: center; border-radius: 50%; color: #fff; font: 700 11px var(--font-mono); }
+.annotation-note-select > b { display: grid; width: 24px; height: 24px; flex-shrink: 0; place-items: center; border-radius: 50%; color: #fff; font: var(--w-medium) 11px var(--font-mono); }
 .annotation-note-select > span { display: grid; min-width: 0; gap: 3px; }
 .annotation-note-select strong,
 .annotation-note-select small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.annotation-note-select strong { font-size: 12px; font-weight: 600; }
+.annotation-note-select strong { font-size: 12px; font-weight: var(--w-medium); }
 .annotation-note-select small { color: var(--muted); font-size: 11px; }
 .annotation-note-fields { display: grid; gap: 12px; border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
 .annotation-position { margin: 0; color: var(--muted); font: 10px/1.6 var(--font-mono); }

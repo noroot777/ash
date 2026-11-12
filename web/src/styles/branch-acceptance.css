@@ -13,7 +13,7 @@
 }
 .branch-acceptance-panel > * { min-width:0; grid-column:1 / -1; }
 .branch-acceptance-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.branch-acceptance-heading h3 { display:flex; align-items:center; gap:7px; margin:0; color:var(--ink); font-size:11.5px; font-weight:650; }
+.branch-acceptance-heading h3 { display:flex; align-items:center; gap:7px; margin:0; color:var(--ink); font-size:11.5px; font-weight:var(--w-medium); }
 .branch-acceptance-heading h3 > svg { color:var(--muted); }
 .branch-acceptance-panel button {
   display:inline-flex;
@@ -49,7 +49,7 @@
 .branch-acceptance-route dd > svg { flex-shrink:0; color:var(--faint); }
 .branch-acceptance-route code { overflow-wrap:anywhere; font-family:var(--font-mono); font-size:11.5px; }
 .branch-acceptance-target { position:relative; }
-.branch-acceptance-target dd { color:var(--accent); font-weight:550; }
+.branch-acceptance-target dd { color:var(--accent); font-weight:var(--w-medium); }
 .branch-acceptance-target .branch-acceptance-arrow { position:absolute; top:21px; left:-28px; color:var(--faint); }
 .branch-acceptance-panel > .merge-target-editor { grid-column:2; align-self:end; }
 .branch-acceptance-panel > .merge-target-editor.is-expanded { grid-column:1 / -1; border-top:1px solid var(--line); padding-top:10px; }

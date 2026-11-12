@@ -37,7 +37,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
-  font-weight: 550;
+  font-weight: var(--w-medium);
 }
 
 .workspace-project-trigger > svg {
@@ -55,7 +55,7 @@
   background: var(--accent);
   color: white;
   font-size: 9px;
-  font-weight: 750;
+  font-weight: var(--w-medium);
 }
 
 /* 一颗项目色的小圆点，不写首字母。给「说一句就够、不能抢戏」的地方用（任务模式里的
@@ -143,14 +143,14 @@
 .workspace-project-current b,
 .workspace-project-option b {
   font-size: 12.5px;
-  font-weight: 600;
+  font-weight: var(--w-medium);
 }
 
 .workspace-project-current small,
 .workspace-project-option small {
   color: var(--faint);
   font-size: 10.5px;
-  font-weight: 450;
+  font-weight: var(--w-regular);
 }
 
 .workspace-project-settings {
@@ -218,7 +218,7 @@
   padding: 2px 6px 5px;
   color: var(--faint);
   font-size: 9.5px;
-  font-weight: 750;
+  font-weight: var(--w-medium);
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }
@@ -253,7 +253,7 @@
   color: var(--ink);
   text-align: left;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: var(--w-medium);
 }
 
 .workspace-project-create:hover {

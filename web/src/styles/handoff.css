@@ -39,12 +39,12 @@
 .handoff-symbol i:first-child { top: 9px; left: 8px; }
 .handoff-symbol i:last-child { right: 8px; bottom: 8px; background: var(--raised); }
 .handoff-dialog-header > div { min-width: 0; flex: 1; }
-.handoff-dialog-header h2 { margin-top: 3px; font-size: 20px; font-weight: 720; letter-spacing: -0.035em; }
+.handoff-dialog-header h2 { margin-top: 3px; font-size: 20px; font-weight: var(--w-strong); letter-spacing: -0.035em; }
 .handoff-eyebrow {
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 9px;
-  font-weight: 750;
+  font-weight: var(--w-medium);
   letter-spacing: .14em;
 }
 .handoff-dialog-close {
@@ -130,7 +130,7 @@
 .handoff-result-panel h3 { margin: 14px 0 0; color: var(--ink); font-size: 26px; letter-spacing: -0.04em; }
 .handoff-progress > p,
 .handoff-result-panel > p { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
-.handoff-progress-plan-title { width: min(420px, 100%); margin-top: 28px; color: var(--faint); font-size: 9.5px; font-weight: 700; text-align: left; letter-spacing: .08em; }
+.handoff-progress-plan-title { width: min(420px, 100%); margin-top: 28px; color: var(--faint); font-size: 9.5px; font-weight: var(--w-medium); text-align: left; letter-spacing: .08em; }
 .handoff-progress ul { display: grid; width: min(420px, 100%); grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 9px auto 0; padding: 0; text-align: left; list-style: none; }
 .handoff-progress li { display: grid; min-width: 0; grid-template-columns: 26px minmax(0, 1fr); gap: 9px; border: 1px solid var(--line); border-radius: 11px; background: var(--raised); padding: 11px; }
 .handoff-progress li > span { display: grid; width: 26px; height: 26px; place-items: center; border-radius: 8px; background: var(--accent-soft); color: var(--accent); }
@@ -146,11 +146,11 @@
 .handoff-result-facts span { border: 1px solid var(--line); border-radius: 999px; background: var(--raised); padding: 7px 11px; color: var(--muted); font-size: 10px; }
 .handoff-result-facts b { color: var(--ink); }
 .handoff-result-panel .handoff-notes { width: min(520px, 100%); margin-top: 20px; text-align: left; }
-.handoff-local-open { display: inline-flex; height: 36px; align-items: center; gap: 6px; margin-top: 24px; border: 1px solid var(--action); border-radius: 10px; background: var(--action); padding: 0 15px; color: var(--on-action); font-size: 11.5px; font-weight: 700; cursor: pointer; box-shadow: 0 10px 24px color-mix(in oklab, #000 22%, transparent); }
+.handoff-local-open { display: inline-flex; height: 36px; align-items: center; gap: 6px; margin-top: 24px; border: 1px solid var(--action); border-radius: 10px; background: var(--action); padding: 0 15px; color: var(--on-action); font-size: 11.5px; font-weight: var(--w-medium); cursor: pointer; box-shadow: 0 10px 24px color-mix(in oklab, #000 22%, transparent); }
 .handoff-local-open:hover { filter: brightness(.97); transform: translateY(-1px); }
 
 .handoff-dialog > footer { padding-top: 2px; }
-.handoff-dialog > footer button { height: 36px; border-radius: 10px; padding-inline: 16px; font-weight: 650; }
+.handoff-dialog > footer button { height: 36px; border-radius: 10px; padding-inline: 16px; font-weight: var(--w-medium); }
 
 @keyframes handoff-dialog-enter { from { opacity: 0; transform: translateY(10px) scale(.985); } }
 @keyframes handoff-orbit { to { transform: rotate(360deg); } }
@@ -212,7 +212,7 @@
 
 .handoff-settings-link {
   color: var(--ink);
-  font-weight: 600;
+  font-weight: var(--w-medium);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -392,7 +392,7 @@
 .handoff-bulk-field > span {
   color: var(--muted);
   font-size: 11px;
-  font-weight: 600;
+  font-weight: var(--w-medium);
 }
 
 .handoff-bulk-field select {
@@ -409,7 +409,7 @@
 .handoff-bulk-project-fixed strong {
   color: var(--ink);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: var(--w-medium);
 }
 
 .handoff-bulk-toggle {
@@ -459,7 +459,7 @@
 
 .handoff-bulk-failures li b {
   overflow: hidden;
-  font-weight: 600;
+  font-weight: var(--w-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -539,7 +539,7 @@
 
 .handoff-bulk-list li b {
   font-size: 12px;
-  font-weight: 600;
+  font-weight: var(--w-medium);
   overflow-wrap: anywhere;
 }
 

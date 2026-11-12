@@ -41,7 +41,7 @@ function Section({ title, count, children }: { title: string; count: number; chi
   return (
     <section className="min-h-0 min-w-0 overflow-y-auto">
       <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
-        <h3 className="text-[9px] font-bold uppercase tracking-[0.08em] text-faint">{title}</h3>
+        <h3 className="text-[9px] font-medium uppercase tracking-[0.08em] text-faint">{title}</h3>
         <span className="rounded-full bg-overlay px-1.5 py-0.5 text-[9px] tabular-nums text-muted">{count}</span>
       </div>
       <div className="p-2">{children}</div>

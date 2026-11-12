@@ -26,7 +26,7 @@
 
 .composer-preset-heading b {
   font-size: 10.5px;
-  font-weight: 650;
+  font-weight: var(--w-medium);
 }
 
 .composer-preset-heading span {
@@ -105,7 +105,7 @@
 .composer-preset-card > b {
   overflow: hidden;
   font-size: 11px;
-  font-weight: 620;
+  font-weight: var(--w-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -228,7 +228,7 @@
 .composer-preset-dialog > label > span {
   color: var(--muted);
   font-size: 10px;
-  font-weight: 600;
+  font-weight: var(--w-medium);
 }
 
 .composer-preset-dialog > footer {

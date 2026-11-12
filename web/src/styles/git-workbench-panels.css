@@ -79,7 +79,7 @@
 .gwb-design .ref-chip {
   display: inline-flex; align-items: center;
   height: 16px; padding: 0 6px; border-radius: 9999px;
-  font-size: 9.5px; font-weight: 600; font-family: var(--font-mono);
+  font-size: 9.5px; font-weight: var(--w-medium); font-family: var(--font-mono);
   background: var(--accent-soft); color: var(--accent);
   white-space: nowrap;
 }
@@ -104,7 +104,7 @@
   padding: 1px 7px; border-radius: 9999px;
   background: var(--overlay); color: var(--muted);
 }
-.gwb-design .detail-msg { font-size: 13px; font-weight: 600; padding-right: 30px; }
+.gwb-design .detail-msg { font-size: 13px; font-weight: var(--w-medium); padding-right: 30px; }
 .gwb-design .detail-meta {
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
   font-size: 10.5px; color: var(--faint);
@@ -128,17 +128,17 @@
   flex: 0 0 auto; min-width: 180px;
   color: var(--muted);
 }
-.gwb-design .branch-row .branch-name b { font-weight: 600; font-family: var(--font-mono); font-size: 11.5px; color: var(--ink); }
+.gwb-design .branch-row .branch-name b { font-weight: var(--w-medium); font-family: var(--font-mono); font-size: 11.5px; color: var(--ink); }
 .gwb-design .branch-row.is-remote .branch-name b { color: var(--muted); }
 .gwb-design .cur-tag {
-  font-style: normal; font-size: 9px; font-weight: 650;
+  font-style: normal; font-size: 9px; font-weight: var(--w-medium);
   padding: 0 5px; height: 14px; line-height: 14px; border-radius: 9999px;
   background: var(--accent); color: #fff;
 }
 .gwb-design .task-chip {
   display: inline-flex; align-items: center; gap: 5px;
   height: 18px; padding: 0 7px; border-radius: 9999px;
-  font-size: 10px; font-weight: 550;
+  font-size: 10px; font-weight: var(--w-medium);
   background: color-mix(in oklab, var(--cyan) 12%, var(--panel)); color: var(--cyan);
   white-space: nowrap;
 }
@@ -171,11 +171,11 @@
   font-size: 12px; text-align: left; border-radius: 0;
 }
 .gwb-design .stash-index { font-size: 10px; color: var(--faint); flex: 0 0 auto; }
-.gwb-design .stash-msg { font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gwb-design .stash-msg { font-weight: var(--w-medium); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gwb-design .session-chip {
   flex: 0 0 auto;
   height: 16px; padding: 0 6px; border-radius: 9999px;
-  font-size: 9.5px; font-weight: 600; line-height: 16px;
+  font-size: 9.5px; font-weight: var(--w-medium); line-height: 16px;
   background: var(--overlay); color: var(--muted);
 }
 .gwb-design .session-chip.is-mine { background: var(--accent-soft); color: var(--accent); }
@@ -192,9 +192,9 @@
 .gwb-design .wt-card.is-main { background: color-mix(in oklab, var(--accent) 4%, var(--panel)); }
 .gwb-design .wt-head { display: flex; align-items: center; gap: 8px; }
 .gwb-design .wt-icon { color: var(--accent); display: inline-flex; }
-.gwb-design .wt-path { font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
+.gwb-design .wt-path { font-family: var(--font-mono); font-size: 12px; font-weight: var(--w-medium); }
 .gwb-design .wt-dirty { font-size: 10.5px; color: var(--faint); }
-.gwb-design .wt-dirty.is-dirty { color: var(--amber); font-weight: 550; }
+.gwb-design .wt-dirty.is-dirty { color: var(--amber); font-weight: var(--w-medium); }
 .gwb-design .wt-meta { display: flex; align-items: center; gap: 9px; font-size: 11px; color: var(--muted); flex-wrap: wrap; }
 .gwb-design .wt-meta code { font-size: 11px; }
 .gwb-design .wt-actions { display: flex; gap: 6px; }
@@ -208,7 +208,7 @@
 .gwb-design .lock-card.is-held { background: color-mix(in oklab, var(--amber) 7%, var(--panel)); }
 .gwb-design .lock-head { display: flex; align-items: center; gap: 7px; font-size: 12.5px; margin-bottom: 4px; }
 .gwb-design .lock-line { margin: 0; font-size: 11.5px; color: var(--muted); }
-.gwb-design .lock-line.is-busy { color: var(--amber); font-weight: 550; display: flex; align-items: center; gap: 6px; }
+.gwb-design .lock-line.is-busy { color: var(--amber); font-weight: var(--w-medium); display: flex; align-items: center; gap: 6px; }
 .gwb-design .lock-dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--amber); animation: lock-pulse 1.1s ease-in-out infinite;
@@ -226,15 +226,15 @@
 .gwb-design .oplog-time { flex: 0 0 64px; font-size: 10px; color: var(--faint); }
 .gwb-design .actor-chip {
   flex: 0 0 auto; height: 17px; padding: 0 7px; border-radius: 9999px;
-  font-size: 9.5px; font-weight: 600; line-height: 17px;
+  font-size: 9.5px; font-weight: var(--w-medium); line-height: 17px;
 }
 .gwb-design .actor-user { background: var(--accent-soft); color: var(--accent); }
 .gwb-design .actor-agent { background: color-mix(in oklab, var(--cyan) 14%, var(--panel)); color: var(--cyan); }
 .gwb-design .actor-accept { background: var(--green-bg); color: var(--green); }
 .gwb-design .oplog-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.gwb-design .oplog-main b { font-size: 12px; font-weight: 550; }
+.gwb-design .oplog-main b { font-size: 12px; font-weight: var(--w-medium); }
 .gwb-design .oplog-cmd { font-size: 10px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gwb-design .oplog-result { flex: 0 0 auto; font-size: 10.5px; font-weight: 600; }
+.gwb-design .oplog-result { flex: 0 0 auto; font-size: 10.5px; font-weight: var(--w-medium); }
 .gwb-design .oplog-result.is-ok { color: var(--green); }
 .gwb-design .oplog-result.is-fail { color: var(--red); }
 .gwb-design .oplog-noundo { flex: 0 0 auto; width: 20px; text-align: center; color: var(--faint); }

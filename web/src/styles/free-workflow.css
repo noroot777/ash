@@ -25,7 +25,7 @@
 .reviewer-profile-summary code:last-of-type { flex:0 0 auto; }
 .reviewer-profile-fields { display:grid; gap:10px; }
 .reviewer-profile-fields > label { display:grid; gap:5px; }
-.reviewer-profile-fields > label > span { color:var(--faint); font-size:9px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
+.reviewer-profile-fields > label > span { color:var(--faint); font-size:9px; font-weight:var(--w-medium); letter-spacing:.05em; text-transform:uppercase; }
 .reviewer-profile-fields input { width:100%; height:32px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; }
 
 /* 执行者驳回卡：审查链停在这里等用户裁定。只有图标是琥珀色，整块不上色
@@ -62,7 +62,7 @@
 .folded-prose > button { display:flex; width:100%; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:5px 8px; color:var(--muted); font-size:9.5px; cursor:pointer; text-align:left; }
 .folded-prose > button:hover { background:var(--raised); color:var(--ink); }
 .folded-prose > button > svg { flex:none; transition:transform .12s ease; }
-.folded-prose > button > b { flex:1; min-width:0; font-weight:500; }
+.folded-prose > button > b { flex:1; min-width:0; font-weight:var(--w-medium); }
 .folded-prose > button > em { flex:none; color:var(--faint); font-size:8.5px; font-style:normal; font-variant-numeric:tabular-nums; }
 .folded-prose.is-open > button > svg { transform:rotate(90deg); }
 .folded-prose.is-open > button { border-bottom-left-radius:0; border-bottom-right-radius:0; }
@@ -79,7 +79,7 @@
 .free-review-debate .task-markdown { margin-top:3px; color:var(--muted); font-size:10px; line-height:1.6; }
 /* 每段发言的那一句人话：逐段只读它就能看出这场辩论辩到哪了，完整发言折在下面。 */
 .free-review-debate__gist { margin:3px 0 4px; color:var(--ink); font-size:10px; line-height:1.55; }
-.free-review-debate.is-reading .free-review-debate__gist { margin:5px 0 7px; font-size:12px; font-weight:600; }
+.free-review-debate.is-reading .free-review-debate__gist { margin:5px 0 7px; font-size:12px; font-weight:var(--w-medium); }
 .free-review-debate__pending { margin:3px 0 0; color:var(--faint); font-size:9.5px; }
 /* 「全宽阅读」：面板这一栏只有 ~540px，七段发言在里面是一根一万像素高的细条。 */
 .free-review-debate__expand { display:inline-flex; flex:none; align-items:center; gap:4px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:1px 7px; color:var(--muted); font-size:9px; cursor:pointer; }
@@ -95,11 +95,11 @@
 .free-review-debate.is-reading > ol { gap:20px; margin:0; }
 .free-review-debate.is-reading li { border-left-width:2px; padding-left:14px; }
 .free-review-debate.is-reading li > span { gap:7px; margin-bottom:4px; font-size:10px; }
-.free-review-debate.is-reading li > span b { font-size:11px; font-weight:650; color:var(--muted); }
+.free-review-debate.is-reading li > span b { font-size:11px; font-weight:var(--w-medium); color:var(--muted); }
 .free-review-debate.is-reading li > span em { font-size:10px; }
 .free-review-debate.is-reading .task-markdown { margin-top:0; color:var(--ink); font-size:12.5px; line-height:1.68; }
 .free-review-debate.is-reading .free-review-debate__pending { font-size:11.5px; }
-.free-review-debate-exchanges { display:grid; gap:5px; padding:0 2px; }.free-review-debate-exchanges > b { color:var(--ink); font-size:10px; }.free-review-debate-exchanges > div { display:flex; gap:5px; }.free-review-debate-exchanges > div > button { width:32px; height:28px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); color:var(--muted); font-size:10.5px; }.free-review-debate-exchanges > div > button.is-selected { border-color:color-mix(in oklab,var(--ink) 40%,var(--line2)); background:color-mix(in oklab,var(--ink) 10%,var(--panel)); color:var(--ink); font-weight:700; }.free-review-debate-exchanges > small { color:var(--faint); font-size:9px; line-height:1.5; }
+.free-review-debate-exchanges { display:grid; gap:5px; padding:0 2px; }.free-review-debate-exchanges > b { color:var(--ink); font-size:10px; }.free-review-debate-exchanges > div { display:flex; gap:5px; }.free-review-debate-exchanges > div > button { width:32px; height:28px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); color:var(--muted); font-size:10.5px; }.free-review-debate-exchanges > div > button.is-selected { border-color:color-mix(in oklab,var(--ink) 40%,var(--line2)); background:color-mix(in oklab,var(--ink) 10%,var(--panel)); color:var(--ink); font-weight:var(--w-medium); }.free-review-debate-exchanges > small { color:var(--faint); font-size:9px; line-height:1.5; }
 .review-round-dispute { margin-top:12px; border-top:1px solid var(--line); padding-top:10px; }.review-round-dispute > b { display:block; margin-bottom:6px; color:var(--amber); font-size:var(--t-xs); font-weight:var(--w-medium); }.review-round-dispute > .free-review-debate { margin-top:8px; }
 /* 历史记录里同样先摆那一句人话（和驳回卡一个读法），几千字依据折在它下面。 */
 .review-round-dispute__gist { margin:0 0 6px; color:var(--ink); font-size:var(--t-sm); line-height:1.6; }
@@ -125,7 +125,7 @@
 .preview-log-body { flex:1; min-height:0; overflow:auto; margin:0; background:var(--canvas); padding:12px 14px; color:var(--muted); font-size:11px; line-height:1.55; tab-size:2; white-space:pre-wrap; word-break:break-word; user-select:text; }
 .preview-log-dialog > footer { display:flex; min-height:52px; align-items:center; justify-content:flex-end; gap:8px; border-top:1px solid var(--line); padding:9px 14px; }
 .preview-log-dialog > footer > span { margin-right:auto; color:var(--faint); font-size:9.5px; }
-.preview-log-dialog > footer button { display:inline-flex; height:30px; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:9px; background:var(--panel); padding:0 12px; color:var(--muted); font-size:11px; font-weight:620; }
+.preview-log-dialog > footer button { display:inline-flex; height:30px; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:9px; background:var(--panel); padding:0 12px; color:var(--muted); font-size:11px; font-weight:var(--w-medium); }
 .preview-log-dialog > footer button:hover:not(:disabled) { border-color:color-mix(in oklab,var(--ink) 40%,var(--line)); color:var(--ink); }
 .preview-log-dialog > footer button:disabled { opacity:.45; }
 
@@ -152,7 +152,7 @@
 .preview-service-scroll-control:disabled { opacity:.3; }
 .preview-service-strip button:focus-visible,.preview-service-scroll a:focus-visible { outline-offset:-2px; }
 .preview-log-services { min-width:0; border-bottom:1px solid var(--line); padding:6px 12px 0; }
-.preview-log-services .preview-service-scroll > button { display:flex; height:37px; flex:0 0 auto; align-items:center; gap:7px; border:0; border-radius:7px 7px 0 0; background:transparent; padding:0 12px; color:var(--muted); font-size:11px; font-weight:550; white-space:nowrap; }
+.preview-log-services .preview-service-scroll > button { display:flex; height:37px; flex:0 0 auto; align-items:center; gap:7px; border:0; border-radius:7px 7px 0 0; background:transparent; padding:0 12px; color:var(--muted); font-size:11px; font-weight:var(--w-medium); white-space:nowrap; }
 .preview-log-services .preview-service-scroll > button:hover { background:var(--raised); color:var(--ink); }
 .preview-log-services .preview-service-scroll > button[aria-selected="true"] { background:color-mix(in oklab,var(--ink) 6%,transparent); box-shadow:inset 0 -2px var(--ink); color:var(--ink); }
 .preview-log-services [aria-selected="true"] .preview-service-count { background:color-mix(in oklab,var(--ink) 12%,transparent); color:var(--ink); }
@@ -161,7 +161,7 @@
 .preview-log-selection > span:first-child { flex:1; min-width:0; color:var(--muted); overflow-wrap:anywhere; }
 .preview-service-links { display:flex; flex:1 0 100%; min-width:0; align-items:center; gap:10px; margin-top:3px; padding:2px 8px; }
 .preview-service-links-label { flex-shrink:0; color:var(--faint); font-size:10px; }
-.preview-service-links .preview-service-scroll > a { display:flex; height:26px; max-width:230px; flex:0 0 auto; align-items:center; gap:6px; border:1px solid var(--line); border-radius:6px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:11px; font-weight:500; text-decoration:none; }
+.preview-service-links .preview-service-scroll > a { display:flex; height:26px; max-width:230px; flex:0 0 auto; align-items:center; gap:6px; border:1px solid var(--line); border-radius:6px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:11px; font-weight:var(--w-medium); text-decoration:none; }
 .preview-service-links .preview-service-scroll > a:hover { border-color:var(--line2); background:var(--raised); color:var(--ink); }
 .preview-service-links .preview-service-scroll > a > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .preview-service-links .preview-service-scroll > a > svg { flex-shrink:0; color:var(--faint); }

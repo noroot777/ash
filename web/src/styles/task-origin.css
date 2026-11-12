@@ -27,7 +27,7 @@
 
 .task-origin-bar b {
   flex: 0 0 auto;
-  font-weight: 650;
+  font-weight: var(--w-medium);
 }
 
 .task-origin-bar span {

@@ -46,9 +46,9 @@
   background: color-mix(in oklab, var(--accent) 13%, var(--panel));
   color: var(--accent);
 }
-.debate-lane-head > b { flex: none; color: color-mix(in oklab, var(--accent) 66%, var(--ink)); font-size: 11px; font-weight: 680; }
+.debate-lane-head > b { flex: none; color: color-mix(in oklab, var(--accent) 66%, var(--ink)); font-size: 11px; font-weight: var(--w-medium); }
 .debate-lane-by { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.debate-lane-verdict { flex: none; border-radius: 999px; padding: 1px 7px; font-size: 9.5px; font-weight: 650; }
+.debate-lane-verdict { flex: none; border-radius: 999px; padding: 1px 7px; font-size: 9.5px; font-weight: var(--w-medium); }
 .debate-lane-verdict.is-running { background: color-mix(in oklab, var(--cyan) 11%, var(--panel)); color: color-mix(in oklab, var(--cyan) 72%, var(--ink)); }
 .debate-lane-verdict.is-failed { background: color-mix(in oklab, var(--red) 11%, var(--panel)); color: var(--red); }
 .debate-lane-verdict.is-verdict { background: color-mix(in oklab, var(--amber) 12%, var(--panel)); color: var(--amber); }
@@ -144,7 +144,7 @@
   background: var(--panel);
   padding: 11px 15px;
 }
-.debate-reader__sheet > header b { display: block; color: var(--ink); font-size: 12.5px; font-weight: 660; }
+.debate-reader__sheet > header b { display: block; color: var(--ink); font-size: 12.5px; font-weight: var(--w-medium); }
 .debate-reader__sheet > header small { color: var(--faint); font-size: 10.5px; }
 .debate-reader__sheet > header button {
   display: inline-flex;

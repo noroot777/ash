@@ -57,13 +57,13 @@
 .auth-card h1 {
   margin: 0;
   font-size: 20px;
-  font-weight: 650;
+  font-weight: var(--w-strong);
 }
 
 .auth-card h2 {
   margin: 0;
   font-size: 17px;
-  font-weight: 620;
+  font-weight: var(--w-strong);
 }
 
 .auth-note {
@@ -160,7 +160,7 @@
   font-size: 13px;
 }
 .auth-field > span {
-  font-weight: 550;
+  font-weight: var(--w-medium);
 }
 
 .auth-field small {

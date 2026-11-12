@@ -28,7 +28,7 @@
 .preview-port-samples > span { font-size: 11px; color: var(--muted); }
 .preview-port-samples > div { display: flex; flex-wrap: wrap; gap: 7px; }
 .preview-workspace .preview-port-samples button { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 7px 10px; text-align: left; color: var(--ink); border-color: var(--line); }
-.preview-port-samples button b { font-size: 11px; font-weight: 600; }
+.preview-port-samples button b { font-size: 11px; font-weight: var(--w-medium); }
 .preview-port-samples button code { font: 11px/1.5 var(--font-mono); color: var(--muted); overflow-wrap: anywhere; }
 .preview-launch-error, .preview-launch-log { max-height: 260px; overflow: auto; padding: 12px; border: 1px solid var(--line); border-radius: 7px; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.7 var(--font-mono); }
 .preview-launch-error { color: var(--red); }

@@ -26,7 +26,7 @@ const externalValue = Annotation.define<boolean>();
 const wrapStorageKey = "ash:preview-command-wrap";
 const heightStorageKey = "ash:shell-editor-height";
 const highlighting = HighlightStyle.define([
-  { tag: tags.keyword, color: "var(--accent)", fontWeight: "600" },
+  { tag: tags.keyword, color: "var(--accent)", fontWeight: "500" },
   { tag: [tags.string, tags.special(tags.string)], color: "var(--green)" },
   { tag: [tags.variableName, tags.definition(tags.variableName)], color: "var(--cyan)" },
   { tag: [tags.standard(tags.variableName), tags.operator], color: "var(--accent)" },

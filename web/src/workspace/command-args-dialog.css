@@ -17,12 +17,12 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: var(--w-medium);
   color: var(--ink);
 }
 .command-args__field > span em {
   font-style: normal;
-  font-weight: 400;
+  font-weight: var(--w-regular);
   font-size: 11px;
   color: var(--faint);
 }

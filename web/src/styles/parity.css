@@ -13,7 +13,7 @@
   padding-top: 6px;
   color: var(--faint);
   font-size: 9.5px;
-  font-weight: 650;
+  font-weight: var(--w-medium);
 }
 
 .task-derived-links > div {
@@ -50,7 +50,7 @@
   overflow: hidden;
   color: var(--ink);
   font-size: 10.5px;
-  font-weight: 580;
+  font-weight: var(--w-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -81,7 +81,7 @@
 .composer-label-field > span {
   color: var(--muted);
   font-size: 10px;
-  font-weight: 550;
+  font-weight: var(--w-medium);
 }
 
 .composer-label-field .task-label-editor {
@@ -102,7 +102,7 @@
 .task-delete-note { margin: 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
 .task-delete-failure { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); }
 .task-delete-failure > header { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 6px; padding: 7px 9px; color: var(--faint); }
-.task-delete-failure > header > span { font-size: 9.5px; font-weight: 650; }
+.task-delete-failure > header > span { font-size: 9.5px; font-weight: var(--w-medium); }
 .task-delete-failure code { overflow: hidden; color: var(--ink); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .task-delete-stderr { max-height: 150px; overflow: auto; margin: 0; border-top: 1px solid color-mix(in oklab, var(--red) 22%, var(--line)); background: color-mix(in oklab, var(--red) 5%, var(--panel)); padding: 8px 9px; white-space: pre-wrap; word-break: break-word; color: var(--red); font-family: var(--font-mono); font-size: 10px; line-height: 1.45; }
 .task-delete-force > .task-delete-stderr { border: 1px solid color-mix(in oklab, var(--red) 22%, var(--line)); border-radius: 8px; }

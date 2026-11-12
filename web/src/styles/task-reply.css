@@ -46,7 +46,7 @@
 .task-upload-chip > span { min-width: 0; }
 .task-upload-chip b,
 .task-upload-chip small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-upload-chip b { color: var(--ink); font-size: 10.5px; font-weight: 550; }
+.task-upload-chip b { color: var(--ink); font-size: 10.5px; font-weight: var(--w-medium); }
 .task-upload-chip small { color: var(--faint); font-size: 9px; }
 .task-upload-chip > button { position: absolute; top: 3px; right: 3px; display: grid; width: 17px; height: 17px; place-items: center; border: 0; border-radius: 4px; background: var(--raised); color: var(--faint); }
 /* 在途的那张：虚线边 + 底部一条按已传字节走的进度线。远程访问时上传要十几秒，
@@ -92,7 +92,7 @@
 .task-reply-command-menu > button:hover,
 .task-reply-command-menu > button[aria-selected="true"] { background: var(--sel-bg); }
 .task-reply-command-menu b { flex: 0 0 auto; color: var(--ink); font-family: var(--font-mono); font-size: 11.5px; }
-.task-reply-command-menu span { flex: 0 0 auto; font-size: 11.5px; font-weight: 600; }
+.task-reply-command-menu span { flex: 0 0 auto; font-size: 11.5px; font-weight: var(--w-medium); }
 .task-reply-command-menu em { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 /* 技能一多这张菜单就得能滚（本机 57 条）；键盘选中项的 scrollIntoView 在 SlashMenu 里。 */
 .task-reply-command-menu { max-height: min(46vh, 340px); overflow-y: auto; }
@@ -134,14 +134,14 @@
 }
 .task-derivation-card.is-team .task-derivation-header > span { background: color-mix(in oklab, var(--cyan) 12%, var(--panel)); color: var(--cyan); }
 .task-derivation-header > div { display: grid; min-width: 0; gap: 1px; }
-.task-derivation-header b { font-size: 12px; font-weight: 650; }
+.task-derivation-header b { font-size: 12px; font-weight: var(--w-medium); }
 .task-derivation-header small { color: var(--faint); font-size: 9.5px; }
 .task-derivation-header .ui-button { margin-left: auto; }
 .task-derivation-body { display: grid; gap: 11px; padding: 12px; }
 .task-derivation-role-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .task-derivation-role { min-width: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--canvas); padding: 9px; }
-.task-derivation-review { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 10.5px; font-weight: 600; }
-.task-derivation-note { position: relative; display: grid; gap: 6px; color: var(--muted); font-size: 10px; font-weight: 600; }
+.task-derivation-review { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 10.5px; font-weight: var(--w-medium); }
+.task-derivation-note { position: relative; display: grid; gap: 6px; color: var(--muted); font-size: 10px; font-weight: var(--w-medium); }
 .task-derivation-note textarea {
   width: 100%;
   resize: none;
@@ -151,7 +151,7 @@
   padding: 8px 10px;
   color: var(--ink);
   font-size: 12px;
-  font-weight: 450;
+  font-weight: var(--w-regular);
   line-height: 1.55;
 }
 /* 附言里的 `/` 补全：派生面板本身是滚动的，菜单贴着输入框往下挂，别用 bottom:100%
@@ -170,7 +170,7 @@
   background: var(--panel);
   padding: 5px;
   box-shadow: var(--menu-shadow);
-  font-weight: 450;
+  font-weight: var(--w-regular);
 }
 .task-derivation-slash-menu > small { display: block; padding: 4px 7px 5px; color: var(--faint); font-size: 9.5px; }
 .task-derivation-slash-menu > button { display: flex; width: 100%; min-height: 35px; align-items: baseline; gap: 9px; border: 0; border-radius: 7px; background: transparent; padding: 7px 8px; text-align: left; }
@@ -187,11 +187,11 @@
   top: 100%;
   left: 0;
   margin-top: 5px;
-  font-weight: 450;
+  font-weight: var(--w-regular);
 }
 .task-derivation-duet-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .task-derivation-gate { display: grid; gap: 6px; }
-.task-derivation-gate > span { color: var(--muted); font-size: 10px; font-weight: 550; }
+.task-derivation-gate > span { color: var(--muted); font-size: 10px; font-weight: var(--w-medium); }
 .task-derivation-gate .ui-choice { min-height: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 0 9px; }
 .task-derivation-explainer { margin: -2px 0 0; color: var(--faint); font-size: 9.5px; }
 .task-derivation-footer {

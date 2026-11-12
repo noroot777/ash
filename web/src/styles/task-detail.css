@@ -144,7 +144,7 @@ span.task-detail-title { display: block; width: auto; }
 .task-queue-drawer { position: fixed; z-index: 95; top: 0; right: 0; bottom: 0; display: flex; width: min(430px, 92vw); flex-direction: column; border-left: 1px solid var(--line2); background: var(--panel); box-shadow: -24px 0 60px rgb(40 42 48 / 18%); }
 .task-queue-drawer > header { display: flex; height: 48px; flex: 0 0 48px; align-items: center; border-bottom: 0.5px solid var(--line); padding: 0 12px 0 16px; }
 .task-queue-drawer > header div { display: flex; align-items: baseline; gap: 8px; }
-.task-queue-drawer > header span { color: var(--faint); font-size: 9.5px; font-weight: 750; text-transform: uppercase; }
+.task-queue-drawer > header span { color: var(--faint); font-size: 9.5px; font-weight: var(--w-medium); text-transform: uppercase; }
 .task-queue-drawer > header b { font-size: 12px; }
 .task-queue-drawer > header button { display: grid; width: 28px; height: 28px; margin-left: auto; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--faint); }
 .task-queue-hint,

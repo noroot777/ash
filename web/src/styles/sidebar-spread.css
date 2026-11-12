@@ -157,7 +157,7 @@
   color: var(--faint);
   font-size: 9.5px;
   font-style: normal;
-  font-weight: 600;
+  font-weight: var(--w-medium);
   letter-spacing: 0.02em;
 }
 
@@ -221,7 +221,7 @@
   transition: background-color 150ms ease-out, color 150ms ease-out;
 }
 
-.workspace-spread-filter b { font-weight: 600; }
+.workspace-spread-filter b { font-weight: var(--w-medium); }
 
 .workspace-spread-filter span {
   margin-left: 5px;
@@ -364,7 +364,7 @@
 .workspace-spread-peek-head b {
   color: var(--muted);
   font-size: 10.5px;
-  font-weight: 650;
+  font-weight: var(--w-medium);
 }
 
 .workspace-spread-peek-head span {

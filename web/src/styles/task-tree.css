@@ -69,7 +69,7 @@
   padding: 0 6px;
   color: var(--muted);
   font-size: 10px;
-  font-weight: 600;
+  font-weight: var(--w-medium);
   font-variant-numeric: tabular-nums;
   cursor: pointer;
 }
@@ -123,8 +123,8 @@
 }
 
 .workspace-task-title {
-  /* 标题右端要空出来的两段:--title-fade 是纯溢出时的渐隐长度,--title-clear 是行尾
-     被占时额外抹掉的那格(没被占就是 0,标题用满整行)。 */
+                                                          
+                                   
   --title-fade: 18px;
   --title-clear: calc(var(--tail-busy) * var(--task-row-tail));
   min-width: 0;
@@ -133,7 +133,7 @@
   white-space: nowrap;
   color: color-mix(in oklab, var(--ink) 52%, var(--muted));
   font-size: 13px;
-  font-weight: 400;
+  font-weight: var(--w-regular);
   -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - var(--title-fade) - var(--title-clear)), transparent calc(100% - var(--title-clear)));
   mask-image: linear-gradient(90deg, #000 calc(100% - var(--title-fade) - var(--title-clear)), transparent calc(100% - var(--title-clear)));
 }
@@ -171,7 +171,7 @@
 }
 
 .workspace-task-row-wrap.is-selected .workspace-task-title {
-  font-weight: 400;
+  font-weight: var(--w-regular);
 }
 
 /* 「任务模式」下标题前面那枚项目徽标。它住在行按钮**内部**（标题的兄弟），铺开态的列
@@ -190,7 +190,7 @@
   max-width: 92px;
   color: var(--faint);
   font-size: 10.5px;
-  font-weight: 550;
+  font-weight: var(--w-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

@@ -388,7 +388,7 @@
   overflow: hidden;
   color: var(--ink);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: var(--w-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

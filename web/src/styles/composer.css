@@ -51,7 +51,7 @@
 
 .composer-slash-menu b {
   color: var(--ink);
-  font: 600 11px var(--font-mono);
+  font: var(--w-medium) 11px var(--font-mono);
 }
 
 .composer-slash-menu span {
@@ -104,7 +104,7 @@
 .composer-toggle-field > span {
   color: var(--muted);
   font-size: 10px;
-  font-weight: 550;
+  font-weight: var(--w-medium);
 }
 
 .composer-field input,
@@ -201,7 +201,7 @@
   color: var(--ink);
   font-size: 9px;
   font-style: normal;
-  font-weight: 600;
+  font-weight: var(--w-medium);
 }
 
 .composer-toggle-field .ui-choice {
@@ -229,7 +229,7 @@
   margin-bottom: 8px;
   color: var(--muted);
   font-size: 9.5px;
-  font-weight: 650;
+  font-weight: var(--w-medium);
 }
 
 .composer-override-group > div {

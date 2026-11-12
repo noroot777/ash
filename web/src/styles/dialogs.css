@@ -59,9 +59,9 @@
 }
 
 .task-confirm-dialog > .task-confirm-header > div { display: grid; min-width: 0; gap: 4px; }
-.task-confirm-dialog > .task-confirm-header small { color: var(--muted); font: 750 8.5px/1 var(--font-mono); letter-spacing: .13em; }
+.task-confirm-dialog > .task-confirm-header small { color: var(--muted); font: var(--w-medium) 8.5px/1 var(--font-mono); letter-spacing: .13em; }
 .task-confirm-dialog > .task-confirm-header:has(> span.is-danger) small { color: var(--red); }
-.task-confirm-dialog > .task-confirm-header h2 { overflow: hidden; margin: 0; font-size: 20px; font-weight: 710; letter-spacing: -.035em; text-overflow: ellipsis; white-space: nowrap; }
+.task-confirm-dialog > .task-confirm-header h2 { overflow: hidden; margin: 0; font-size: 20px; font-weight: var(--w-strong); letter-spacing: -.035em; text-overflow: ellipsis; white-space: nowrap; }
 
 .task-confirm-dialog > .task-confirm-header > button {
   display: grid;
@@ -92,7 +92,7 @@
   border-radius: 10px;
   padding-inline: 15px;
   font-size: 11.5px;
-  font-weight: 640;
+  font-weight: var(--w-medium);
   transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
 
@@ -139,7 +139,7 @@
 }
 
 .create-project-mode > span:last-child { display: grid; min-width: 0; gap: 3px; }
-.create-project-mode b { color: var(--ink); font-size: 12.5px; font-weight: 670; }
+.create-project-mode b { color: var(--ink); font-size: 12.5px; font-weight: var(--w-medium); }
 .create-project-mode small { color: var(--faint); font-size: 9.5px; line-height: 1.45; }
 .create-project-mode:hover:not(:disabled) { border-color: color-mix(in oklab, var(--ink) 35%, var(--line)); box-shadow: 0 8px 22px rgb(35 37 48 / 6%); transform: translateY(-1px); }
 
@@ -153,7 +153,7 @@
 
 .quick-create-fields { gap: 13px; margin-top: 18px; }
 .quick-create-fields label { gap: 7px; }
-.quick-create-fields label > span { color: var(--muted); font-size: 10.5px; font-weight: 620; }
+.quick-create-fields label > span { color: var(--muted); font-size: 10.5px; font-weight: var(--w-medium); }
 .quick-create-fields input,
 .quick-create-fields select { height: 39px; border-radius: 10px; background: color-mix(in oklab, var(--canvas) 72%, var(--panel)); padding-inline: 11px; box-shadow: inset 0 1px 0 color-mix(in oklab, var(--panel) 72%, transparent); }
 .quick-create-fields .create-project-health { border-radius: 11px; padding: 10px 12px; }
@@ -187,7 +187,7 @@
 .free-review-dialog > header p { margin-top: 4px; font-size: 10.5px; }
 .free-review-dialog-body { min-height: 0; max-height: none; }
 .free-review-dialog > footer { min-height: 58px; align-items: center; padding: 11px 18px; }
-.free-review-dialog > footer button { height: 36px; border-radius: 10px; padding-inline: 15px; font-weight: 630; }
+.free-review-dialog > footer button { height: 36px; border-radius: 10px; padding-inline: 15px; font-weight: var(--w-medium); }
 
 .composer-preset-dialog,
 .duet-handoff-modal { border-radius: 20px; padding: 21px; }
@@ -197,7 +197,7 @@
 .duet-handoff-modal > header > span { width: 42px; height: 42px; border-radius: 13px; }
 .composer-preset-dialog > header > span { flex: 0 0 42px; }
 .composer-preset-dialog > footer button,
-.duet-handoff-modal footer button { height: 36px; border-radius: 10px; padding-inline: 14px; font-weight: 630; }
+.duet-handoff-modal footer button { height: 36px; border-radius: 10px; padding-inline: 14px; font-weight: var(--w-medium); }
 .duet-handoff-modal { width: min(600px, calc(100vw - 32px)); }
 
 .markdown-report-dialog { border-radius: 22px; }

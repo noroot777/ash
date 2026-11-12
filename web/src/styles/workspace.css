@@ -56,7 +56,7 @@
   padding: 2px 7px;
   color: var(--muted);
   font-size: 9.5px;
-  font-weight: 750;
+  font-weight: var(--w-medium);
 }
 
 .workspace-app-title {
@@ -65,7 +65,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12.5px;
-  font-weight: 550;
+  font-weight: var(--w-medium);
 }
 
 .workspace-app-status {
@@ -75,7 +75,7 @@
   gap: 5px;
   color: var(--muted);
   font-size: 10px;
-  font-weight: 600;
+  font-weight: var(--w-medium);
 }
 
 .workspace-app-status i {
@@ -131,7 +131,7 @@
 
 .workspace-inspector-slot span {
   font-size: 11.5px;
-  font-weight: 650;
+  font-weight: var(--w-medium);
 }
 
 .workspace-inspector-slot small {
@@ -166,7 +166,7 @@
   margin-bottom: 8px;
   color: var(--ink);
   font-size: 10px;
-  font-weight: 750;
+  font-weight: var(--w-medium);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -174,7 +174,7 @@
 .workspace-empty-state h1 {
   margin: 0;
   font-size: 20px;
-  font-weight: 600;
+  font-weight: var(--w-strong);
   letter-spacing: -0.025em;
 }
 
@@ -200,7 +200,7 @@
   gap: 8px;
   color: var(--muted);
   font-size: 10px;
-  font-weight: 650;
+  font-weight: var(--w-medium);
 }
 
 .workspace-task-placeholder-kicker i {
@@ -212,13 +212,13 @@
 
 .workspace-task-placeholder-kicker b {
   color: var(--green);
-  font-weight: 650;
+  font-weight: var(--w-medium);
 }
 
 .workspace-task-placeholder h1 {
   margin: 13px 0 16px;
   font-size: clamp(24px, 3vw, 36px);
-  font-weight: 600;
+  font-weight: var(--w-strong);
   letter-spacing: -0.045em;
   line-height: 1.15;
 }
@@ -252,7 +252,7 @@
 .workspace-task-placeholder dt {
   color: var(--faint);
   font-size: 9px;
-  font-weight: 700;
+  font-weight: var(--w-medium);
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }
@@ -383,7 +383,7 @@
   padding: 0 12px;
   color: var(--ink);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--w-medium);
   text-align: left;
 }
 
