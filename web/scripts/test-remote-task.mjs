@@ -12,7 +12,8 @@ const handoffBanner = readSource(new URL("../src/task-detail/HandoffBanner.tsx",
 const handoffViews = readSource(new URL("../src/task-detail/HandoffDialogViews.tsx", import.meta.url));
 const returnView = readSource(new URL("../src/task-detail/HandoffReturnView.tsx", import.meta.url));
 const taskDetail = readSource(new URL("../src/task-detail/TaskDetail.tsx", import.meta.url));
-const replyRail = readSource(new URL("../src/task-detail/TaskReplyRail.tsx", import.meta.url));
+// 接力 / 移回那颗键在回复框那一行动作里（docs/ui-ux-audit reply-3）。
+const replyRail = readSource(new URL("../src/task-detail/TaskReplyActions.tsx", import.meta.url));
 const taskHeader = readSource(new URL("../src/task-detail/TaskHeader.tsx", import.meta.url));
 const handoffSettings = readSource(new URL("../src/settings/HandoffSettings.tsx", import.meta.url));
 const handoffAudit = readSource(new URL("../src/task-detail/HandoffAuditBanner.tsx", import.meta.url));
