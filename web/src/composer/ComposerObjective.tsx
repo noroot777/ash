@@ -1,4 +1,4 @@
-import type { ClipboardEventHandler, KeyboardEvent, RefObject } from "react";
+import { useLayoutEffect, type ClipboardEventHandler, type KeyboardEvent, type RefObject } from "react";
 import type { TaskMode } from "@ash/shared";
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { isMenuPickKeyEvent, isSendKeyEvent } from "../lib/sendKey.ts";
@@ -20,8 +20,16 @@ export function ComposerObjective({ body, mode, textareaRef, onChange, onPaste, 
   /** `@` 引用项目文件那一套：菜单自己画，键盘先给它过一手（返回 true = 已被吃掉）。 */
   mention?: { menu: React.ReactNode; onKeyDown: (event: KeyboardEvent) => boolean };
 }) {
+  // 起步三行，随内容长高（上限由样式的 max-height 管，到顶后框内滚动）。先清成 auto 再量，
+  // 删字时才缩得回来。
+  useLayoutEffect(() => {
+    const area = textareaRef.current;
+    if (!area) return;
+    area.style.height = "auto";
+    area.style.height = `${area.scrollHeight}px`;
+  }, [body, textareaRef]);
   return <div className="composer-objective">
-    <textarea ref={textareaRef} autoFocus aria-label="任务目标" value={body} onPaste={onPaste}
+    <textarea ref={textareaRef} autoFocus rows={3} aria-label="任务目标" value={body} onPaste={onPaste}
       onChange={(event) => onChange(event.target.value)}
       placeholder={mode === "team" ? "想让团队完成什么？\n\n写下目标，剩下的交给团队。"
         : mode === "duet" ? "有什么想一起讨论？\n\n写下背景、方案，或一个还没想清楚的问题。" : "想完成什么？\n\n一个问题、一个想法，或一个完整的目标。"}
