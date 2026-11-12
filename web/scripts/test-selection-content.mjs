@@ -100,9 +100,9 @@ try {
   };
 
   // ① 用户报的那一幕:从上一条回复的结论拖到下一条回复的结论。中间横着上一条的账目
-  //    尾栏、下一条的头像与身份头、以及那条折起来的「执行过程 · 2 工具」。
+  //    尾栏、下一条的头像与身份头、以及那条折起来的「跑了 2 条命令」。
   const raw = await select({ text: "第 2 条改完，测试也过了。" }, { text: "第 3 条改完了。" });
-  assert.match(raw, /执行过程/, "原生选区确实扫到了执行过程(没扫到的话这条用例什么都没证明)");
+  assert.match(raw, /跑了 2 条命令/, "原生选区确实扫到了执行过程(没扫到的话这条用例什么都没证明)");
   assert.equal(await take(), "第 2 条改完，测试也过了。\n\n接下来做第 3 条。\n\n第 3 条改完了。",
     "段内那两段的换行照旧在(靠排版,不是靠文本节点首尾相接)");
   assert.equal(await page.getByTestId("taken-from").textContent(), "memo");
@@ -113,12 +113,12 @@ try {
 
   // ② 装置压在选区头上:从折叠摘要里起步,到下一段正文收尾。
   await page.getByTestId("clear").click();
-  await select({ text: "执行过程 · 2 工具" }, { text: "第 3 条改完了。" });
+  await select({ text: "跑了 2 条命令" }, { text: "第 3 条改完了。" });
   assert.equal(await take(), "第 3 条改完了。");
 
   // ③ 装置压在选区尾上:从正文起步,停在下一条的折叠摘要里。
   await page.getByTestId("clear").click();
-  await select({ text: "第 2 条改完，测试也过了。" }, { text: "执行过程 · 2 工具" });
+  await select({ text: "第 2 条改完，测试也过了。" }, { text: "跑了 2 条命令" });
   assert.equal(await take(), "第 2 条改完，测试也过了。\n\n接下来做第 3 条。");
 
   // ④ 选区横跨两块装置、中间一个字正文都没有(上一条的账目尾栏 → 下一条的头像身份头):
@@ -132,7 +132,7 @@ try {
   // ⑤ 反过来:选区**整个**落在一块装置里 = 用户就是冲它去的,原样给他。
   //    折叠摘要那几个字是这样,点开之后里面那条命令也是这样。
   await page.getByTestId("clear").click();
-  const summaryRaw = await select({ text: "执行过程 · 6 工具" }, { text: "执行过程 · 6 工具" });
+  const summaryRaw = await select({ text: "跑了 6 条命令" }, { text: "跑了 6 条命令" });
   assert.equal(await take(), summaryRaw, "整个落在装置内时一个字节都不改");
   await page.getByTestId("clear").click();
   await page.locator(".task-execution-block").first().evaluate((element) => { element.open = true; });
@@ -152,7 +152,7 @@ try {
   await select({ text: "第 2 条改完就接着做第 3 条。" }, { text: "第 2 条改完，测试也过了。" });
   const across = await take();
   assert.equal(across, "第 2 条改完就接着做第 3 条。\n\n第 2 条改完，测试也过了。");
-  for (const noise of ["执行过程", "case-1-", "先把启动自检", "本轮", "Claude 1", "用时", "你"]) {
+  for (const noise of ["条命令", "case-1-", "先把启动自检", "本轮", "Claude 1", "用时", "你"]) {
     assert.equal(across.includes(noise), false, `取到的正文里混进了「${noise}」`);
   }
 
@@ -255,7 +255,7 @@ try {
   });
   await page.getByText("Claude 2", { exact: true }).scrollIntoViewIfNeeded();
   await settle();
-  await select({ text: "Claude 2" }, { text: "执行过程 · 2 工具" });
+  await select({ text: "Claude 2" }, { text: "跑了 2 条命令" });
   // 空转是「一帧一轮」（审查实测 1.1 秒 66 次），所以观察窗按帧数给：先让这一次选区自己
   // 引起的那几下收完（约 18 帧 ≈ 原先的 300ms），再数接下来 30 帧（≈ 原先的 500ms）里还来了
   // 几次。负载重时每帧更慢，但每帧一轮的空转照样每帧至少一次，数出来的不会因此变少。

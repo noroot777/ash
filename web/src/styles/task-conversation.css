@@ -1,6 +1,6 @@
-/* 任务会话流：气泡、markdown 正文、执行过程折叠块、账目胶囊、附件、提问卡。
+/* 任务会话流：气泡、markdown 正文、账目胶囊、附件、提问卡。
    外壳（头部、侧栏、抽屉）在 task-detail.css，回复框与派生面板在 task-reply.css，
-   执行块用到的两个动效在 task-motion.css。 */
+   执行过程折叠块在 execution-trace.css，它用到的流光与换字在 motion-text.css。 */
 .task-message { position: relative; max-width: 790px; margin-bottom: 20px; }
 .task-message--agent { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; }
 .task-message-avatar { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; background: var(--overlay); color: var(--muted); font-size: 8px; font-weight: 750; }
@@ -193,53 +193,7 @@
   .review-report-more svg { transition: none; }
 }
 
-/* 执行步骤现在住在 `.task-markdown` 里面(整条消息一次解析,见 markdownLayout),那层给的
-   行高是正文的 1.7 —— 小字的行高得自己钉住,否则一长串工具行每条都胖 2px。 */
-.task-execution-block { max-width: 680px; margin: 2px 0 1px; border: 0; color: color-mix(in srgb, var(--faint) 76%, transparent); font-size: 9.5px; line-height: 1.5; }
-.task-execution-block > summary { display: inline-flex; max-width: 100%; cursor: pointer; align-items: center; gap: 4px; border-radius: 5px; padding: 2px 3px; list-style: none; opacity: .72; transition: color 150ms ease, opacity 150ms ease; }
-.task-execution-block > summary:hover { color: var(--faint); opacity: 1; }
-.task-execution-block > summary::-webkit-details-marker { display: none; }
-.task-execution-block > summary:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 38%, transparent); outline-offset: 1px; }
-.task-execution-caret { flex: none; opacity: .52; transition: transform 140ms ease; }
-.task-execution-block[open] > summary .task-execution-caret { transform: rotate(90deg); }
-.task-execution-label { max-width: min(58vw, 520px); overflow: hidden; font-weight: 450; text-overflow: ellipsis; white-space: nowrap; }
-.task-execution-block.has-error > summary { color: color-mix(in srgb, var(--red) 68%, var(--faint)); }
-.task-execution-block.has-error .t-shimmer { --shimmer-base: color-mix(in srgb, var(--red) 52%, transparent); --shimmer-highlight: color-mix(in srgb, var(--red) 72%, transparent); }
-/* 过程提示（上游在重试、还在等回话）：折起来时也得看得出这一轮里上游闹过脾气，但它
-   跟「出了岔子」不是一回事 —— 琥珀比红色轻一档，而且 has-error 在类名上就压着它
-   （executionBlockTone 只给其中一个）。 */
-.task-execution-block.has-notice > summary { color: color-mix(in lch, var(--amber) 42%, var(--faint)); }
-.task-execution-block.has-notice .t-shimmer { --shimmer-base: color-mix(in lch, var(--amber) 34%, transparent); --shimmer-highlight: color-mix(in lch, var(--amber) 58%, transparent); }
-.task-execution-pulse { width: 3px; height: 3px; flex: none; border-radius: 50%; background: currentColor; opacity: .72; }
-.task-execution-events { margin: 1px 0 1px 7px; border-left: 1px solid color-mix(in srgb, var(--line) 72%, transparent); padding: 1px 0 2px 6px; }
-/* 回合级折叠：折起来只剩最后一次工具动作之后说的话。摘要条沿用执行块那身小字，
-   折进去的正文仍是正文，字号颜色都得回到气泡基准，否则展开像看脚注。 */
-.task-turn-process { max-width: 100%; color: inherit; font-size: inherit; }
-.task-turn-process > summary { color: color-mix(in srgb, var(--faint) 76%, transparent); font-size: 9.5px; }
-.task-turn-process-body { margin: 2px 0 3px 7px; border-left: 1px solid color-mix(in srgb, var(--line) 72%, transparent); padding: 2px 0 2px 9px; }
-/* 外层已经有这条竖线了，事件列表不必再画一条。 */
-.task-turn-process-body .task-execution-events { margin: 0; border-left: 0; padding: 0; }
-.task-tool-line { margin-top: 2px; border: 0; color: color-mix(in srgb, var(--faint) 82%, transparent); font-size: 9.5px; }
-.task-tool-line summary,
-.task-tool-line .task-tool-head { display: flex; max-width: 100%; cursor: pointer; align-items: baseline; gap: 6px; border-radius: 6px; padding: 3px 6px; list-style: none; }
-.task-tool-line.is-flat .task-tool-head { cursor: default; }
-.task-tool-line summary:hover { color: var(--muted); }
-.task-tool-line summary::-webkit-details-marker { display: none; }
-.task-tool-line svg,
-.task-tool-line summary > span:first-child,
-.task-tool-line .task-tool-head > span:first-child { flex: none; align-self: center; }
-.task-tool-name { flex: none; font-weight: 500; }
-/* 展开后直接看见执行了什么:命令/文件走等宽,占满剩余宽度,超长省略。 */
-.task-tool-summary { flex: 1 1 auto; min-width: 0; overflow: hidden; color: color-mix(in srgb, var(--faint) 92%, transparent); font-family: var(--font-mono); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
-.task-tool-line summary:hover .task-tool-summary { color: var(--muted); }
-.task-tool-line pre { max-height: 220px; overflow: auto; margin: 4px 0 2px 6px; border-left: 2px solid var(--line); padding: 4px 8px; white-space: pre-wrap; }
-.task-tool-line--error { color: var(--red); }
-/* 「提示 · 上游返回 502 …」那一行。正文在 .task-tool-summary 那一格（会省略、会等宽），
-   所以这里只负责把整行调成琥珀，别再单独给 name 上色把两段割开。 */
-.task-tool-line--notice { color: color-mix(in lch, var(--amber) 30%, var(--faint)); }
-.task-tool-line--notice .task-tool-summary { color: color-mix(in lch, var(--amber) 26%, var(--faint)); }
-.task-tool-line--notice summary:hover,
-.task-tool-line--notice summary:hover .task-tool-summary { color: color-mix(in lch, var(--amber) 52%, var(--muted)); }
+/* 执行过程那个折叠块（工具、思考、提示、异常）的样式在 execution-trace.css。 */
 /* 一条气泡的尾栏：会话 id、resume 命令、三颗账目胶囊全在这一行。 */
 .task-message-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px; }
 .task-message-footer button { max-width: 240px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
@@ -366,10 +320,6 @@
 
 @media (hover: none), (pointer: coarse) {
   .task-user-bubble > header button { width: 28px; height: 28px; opacity: 1; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .task-execution-caret { transition: none; }
 }
 
 /* 取不到的那张图留下的一行小字（MarkdownBody 的 MissingImage）。安静、单行、可选中 ——

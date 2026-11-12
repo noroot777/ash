@@ -1,7 +1,7 @@
 /* 会话里选中一段 → 三颗按钮拿到的那段文本。跑法:npm -w web run test:selection-content
  *
  * 必须用**真实的 ConversationFeed**:要钉的东西只存在于真实渲染结构里 —— 气泡头上的
- * 身份与时间、折起来的「执行过程 · N 工具」、尾栏的账目胶囊,它们和正文在 DOM 里是
+ * 身份与时间、折起来的执行过程摘要(「跑了 N 条命令」)、尾栏的账目胶囊,它们和正文在 DOM 里是
  * 混排的,跨消息拖选必然扫过。手搓几个 div 证明不了选区会不会把它们一起捞走。
  */
 import { useEffect, useState } from "react";

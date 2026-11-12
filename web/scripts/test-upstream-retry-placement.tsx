@@ -14,7 +14,7 @@ import type { AgentEvent, ServerEvent } from "@ash/shared";
 import {
   ExecutionDetails,
   executionBlockTone,
-  executionCountsLabel,
+  executionSummaryText,
   hasExecutionError,
 } from "../src/components/ExecutionTrace.tsx";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
@@ -70,7 +70,8 @@ assert.equal(events[1]!.detail, RETRY, "提示的正文走 detail（label 那一
 assert.equal(agent.markdown, output, "正文一个字都不许被这条提示挤掉");
 
 // ── 2) 它是提示不是异常:不计异常数、折叠条不标红 ──────────────────────────────
-assert.equal(executionCountsLabel(events), "执行过程 · 2 工具 · 1 提示");
+// 提示单独记在摘要末尾,不并进异常:折起来也看得出「这一轮里上游闹过脾气」,但不是出了岔子。
+assert.equal(executionSummaryText(events), "读了 1 个文件，跑了 1 条命令，1 条提示");
 assert.equal(hasExecutionError(events), false, "一次可恢复的重试把成功回合标成了有异常");
 assert.equal(executionBlockTone(events), " has-notice");
 assert.equal(

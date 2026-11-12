@@ -1,0 +1,118 @@
+/* 执行过程折叠块（components/ExecutionTrace.tsx）：收着是一句话，点开一步一行，每一行再点开是
+   「字段 值」，原始参数再折一层。普通会话、回合级过程折叠、侧聊、duet、团队都用这一份。
+
+   字号 12px、次级文字色：它是正文旁边的说明，不是被禁用的东西（feed-8）。
+   在跑时那一句话上的流光、换字用 motion-text.css 的 .shim / .swap。
+
+   这一块住在 `.task-markdown` 里面（整条消息一次解析，见 markdownLayout），那层给的行高是
+   正文的 1.7 —— 小字的行高得自己钉住，否则一长串工具行每条都胖一截。
+
+   展开只动 opacity 和 transform、不动高度：贴底滚动（useStickToBottom）盯着会话区的
+   高度，高度逐帧变化它就逐帧跟。点开那一下高度一帧到位，里面的东西淡进来。 */
+.task-execution-block { max-width: 680px; margin: 2px 0 1px; border: 0; color: var(--muted); font-size: var(--t-xs); line-height: 1.5; }
+.task-execution-block > summary {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 24px;
+  margin-left: -4px;
+  cursor: pointer;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--r-sm);
+  padding: 0 6px 0 4px;
+  list-style: none;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.task-execution-block > summary:hover { background: var(--hover-bg); color: var(--ink); }
+.task-execution-block > summary::-webkit-details-marker { display: none; }
+.task-execution-block > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.task-execution-caret { flex: none; color: var(--faint); transition: transform var(--dur-1) var(--ease-out); }
+.task-execution-block[open] > summary .task-execution-caret { transform: rotate(90deg); }
+.task-execution-label { min-width: 0; max-width: min(58vw, 520px); overflow: hidden; font-weight: var(--w-regular); text-overflow: ellipsis; white-space: nowrap; }
+
+/* 出过异常：红色压过一切（executionBlockTone 只给 has-error / has-notice 其中一个）。 */
+.task-execution-block.has-error > summary { color: color-mix(in lch, var(--red) 82%, var(--muted)); }
+.task-execution-block.has-error .shim { --shim-base: color-mix(in lch, var(--red) 70%, var(--muted)); --shim-hi: var(--red); }
+/* 过程提示（上游在重试、还在等回话）：折起来时也得看得出这一轮里上游闹过脾气，但它
+   跟「出了岔子」不是一回事 —— 琥珀比红色轻一档。 */
+.task-execution-block.has-notice > summary { color: color-mix(in lch, var(--amber) 58%, var(--muted)); }
+.task-execution-block.has-notice .shim { --shim-base: color-mix(in lch, var(--amber) 50%, var(--muted)); --shim-hi: var(--amber); }
+
+.task-execution-events { margin: 0 0 4px 2px; border-left: 1px solid var(--line2); padding: 2px 0 2px 10px; }
+
+/* 回合级折叠：折起来只剩最后一次工具动作之后说的话。摘要条沿用执行块那身字，
+   折进去的正文仍是正文，字号颜色都得回到气泡基准，否则展开像看脚注。 */
+.task-turn-process { max-width: 100%; color: inherit; font-size: inherit; }
+.task-turn-process > summary { color: var(--muted); font-size: var(--t-xs); line-height: 1.5; }
+.task-turn-process-body { margin: 2px 0 4px 2px; border-left: 1px solid var(--line2); padding: 2px 0 2px 10px; }
+/* 外层已经有这条竖线了，事件列表不必再画一条。 */
+.task-turn-process-body .task-execution-events { margin: 0; border-left: 0; padding: 0; }
+
+/* 一步：图标 + 动词 + 对象 + 行尾淡字。 */
+.task-tool-line { border: 0; color: var(--muted); font-size: var(--t-xs); }
+.task-tool-line > summary,
+.task-tool-line > .task-tool-head {
+  display: flex;
+  max-width: 100%;
+  min-height: 24px;
+  cursor: pointer;
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--r-sm);
+  padding: 0 6px 0 2px;
+  list-style: none;
+  transition: color var(--dur-1) var(--ease-out);
+}
+.task-tool-line.is-flat > .task-tool-head { cursor: default; }
+.task-tool-line > summary:hover,
+.task-tool-line[open] > summary { color: var(--ink); }
+.task-tool-line > summary::-webkit-details-marker { display: none; }
+.task-tool-line > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -1px; }
+.task-tool-line svg { flex: none; color: var(--faint); }
+.task-tool-verb { flex: none; white-space: nowrap; }
+/* 对象可以缩，行尾那半句先缩：窄的时候宁可丢「于 web/src」，不丢文件名。 */
+.task-tool-object { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-tool-object.is-mono { font-family: var(--font-mono); }
+.task-tool-tail { flex: 0 1000 auto; min-width: 0; overflow: hidden; color: var(--faint); text-overflow: ellipsis; white-space: nowrap; }
+
+/* 异常、失败：红只在图标和字上，不加底色。 */
+.task-tool-line--error,
+.task-tool-line.is-failed { color: var(--red); }
+.task-tool-line--error svg,
+.task-tool-line.is-failed svg { color: var(--red); }
+/* 「提示 · 上游返回 502 …」那一行：整行调成琥珀。 */
+.task-tool-line--notice { color: color-mix(in lch, var(--amber) 62%, var(--muted)); }
+.task-tool-line--notice svg { color: var(--amber); }
+.task-tool-line--notice > summary:hover,
+.task-tool-line--notice[open] > summary { color: color-mix(in lch, var(--amber) 80%, var(--ink)); }
+
+/* 点开：「字段 值」，原始参数再折一层。左边让过图标，跟动词对齐。 */
+.task-tool-more { padding: 2px 0 8px 23px; }
+.task-tool-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 14px; row-gap: 2px; margin: 0; }
+.task-tool-fields > div { display: contents; }
+.task-tool-fields dt { color: var(--faint); }
+.task-tool-fields dd { max-height: 9lh; margin: 0; overflow: auto; color: var(--ink); font-family: var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-tool-raw { margin-top: 4px; }
+.task-tool-raw > summary { display: inline-flex; cursor: pointer; border-radius: var(--r-sm); color: var(--muted); list-style: none; text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; transition: color var(--dur-1) var(--ease-out); }
+.task-tool-raw > summary::-webkit-details-marker { display: none; }
+.task-tool-raw > summary:hover,
+.task-tool-raw[open] > summary { color: var(--ink); }
+.task-tool-raw > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.task-tool-more pre { max-height: 260px; margin: 6px 0 0; overflow: auto; border-radius: var(--r-sm); background: var(--overlay); padding: 8px 10px; color: var(--muted); font: var(--t-xs) / 1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 你自己点开的那一下：里面的东西淡进来、往下落 4px。高度不做动画（见文件头）。 */
+.task-execution-block[open] > .task-execution-events,
+.task-turn-process[open] > .task-turn-process-body,
+.task-tool-line[open] > .task-tool-more,
+.task-tool-raw[open] > pre { animation: task-trace-unfold var(--dur-2) var(--ease-out); }
+@keyframes task-trace-unfold { from { opacity: 0; transform: translateY(-4px); } }
+
+:root[data-motion="reduce"] :is(.task-execution-caret, .task-execution-block > summary, .task-tool-line > summary, .task-tool-raw > summary) { transition: none; }
+:root[data-motion="reduce"] :is(.task-execution-events, .task-turn-process-body, .task-tool-more, .task-tool-raw > pre) { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) :is(.task-execution-caret, .task-execution-block > summary, .task-tool-line > summary, .task-tool-raw > summary) { transition: none; }
+  :root:not([data-motion="full"]) :is(.task-execution-events, .task-turn-process-body, .task-tool-more, .task-tool-raw > pre) { animation: none; }
+}
+
+/* 子智能体抽屉里「执行中，内容实时更新」前面那个小点（NativeAgentConversation）。折叠条上已经不用它了。 */
+.task-execution-pulse { width: 3px; height: 3px; flex: none; border-radius: 50%; background: currentColor; opacity: .72; }

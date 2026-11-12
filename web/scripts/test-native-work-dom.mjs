@@ -157,7 +157,7 @@ try {
   assert.match(await conversation.innerText(), /收到的输入[\s\S]*需要检查一个不会自然换行的超长说明/);
   assert.ok(!(await conversation.innerText()).includes("未记录主会话给它的输入"));
   await conversation.locator(".task-execution-block > summary").click();
-  assert.match(await conversation.innerText(), /思考过程|分析/);
+  assert.match(await conversation.innerText(), /思考\s*核对侧栏事件的归属/);
   assert.match(await conversation.innerText(), /NativeWorkInspector.tsx/);
   await page.getByRole("button", { name: "推送执行进展", exact: true }).click();
   await conversation.getByText("实时进展 1：工具调用和输出已经接入。", { exact: true }).waitFor();

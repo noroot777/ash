@@ -88,8 +88,8 @@ try {
   await control("forward-mode", {});
   await input.fill("比较方案 A 和 B"); await send.click();
   await page.locator(".side-chat-message.is-agent").last().getByText("建议选择方案 B。", { exact: true }).waitFor();
-  // 说完之后过程折起来待在正文上方，条上按主会话那套词报数。
-  assert.match(await page.locator(".side-chat-message.is-agent").last().innerText(), /执行过程 · 1 分析 · 1 工具/);
+  // 说完之后过程折起来待在正文上方，条上按主会话那套词说（只有一步时直接说那一步）。
+  assert.match(await page.locator(".side-chat-message.is-agent").last().innerText(), /跑了 git log --oneline \| head/);
   assert.equal((await state()).delivered.length, 0);
   const firstRoom = await roomPicker.inputValue();
   await page.getByRole("button", { name: "切换主任务状态" }).click();

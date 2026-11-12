@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ExecutionDetails, executionCountsLabel } from "../src/components/ExecutionTrace.tsx";
+import { ExecutionDetails, executionSummaryText } from "../src/components/ExecutionTrace.tsx";
 import type { ExecutionEvent } from "../src/lib/executionTrace.ts";
 import type { AgentEvent, ServerEvent } from "@ash/shared";
 import { applyDuetEvent, emptyDuet, rebuildDuetState } from "../src/duet/duetState.ts";
@@ -19,8 +19,9 @@ const activity: ExecutionEvent = { kind: "tool", label: "Agent",
   nativeWork: { type: "activity", id: "a", event: { kind: "text", text: "子智能体的完整实时正文" } } };
 const events = [call, progress, nested, activity];
 const html = renderToStaticMarkup(<ExecutionDetails events={events} running={false} />);
-assert.equal(executionCountsLabel(events), "执行过程 · 1 工具");
-assert.equal((html.match(/class="task-tool-name"/g) ?? []).length, 1);
+// 只剩那一次派活:摘要直接说那一步。
+assert.equal(executionSummaryText(events), "派了 子智能体「派活」");
+assert.equal((html.match(/class="task-tool-verb"/g) ?? []).length, 1);
 assert.ok(!html.includes("不应出现在主执行过程的进度"));
 assert.ok(!html.includes("子智能体的完整实时正文"));
 assert.equal(renderToStaticMarkup(<ExecutionDetails events={[progress, nested]} running={false} />), "");
@@ -57,12 +58,14 @@ for (const name of ["Agent", "spawn_agent"]) {
     const reloaded = rebuildDuetState([JSON.parse(JSON.stringify({ ...live, done: undefined }))]).turns[0]!;
     for (const turn of [live, reloaded]) {
       assert.equal(turn.events.length, 7);
-      assert.equal(executionCountsLabel(turn.events), "执行过程 · 1 分析 · 6 工具");
+      // 读、改按文件去重(都是 plan.md);只说前三类,两次派活并进「另有 2 步」;思考不计数。
+      assert.equal(executionSummaryText(turn.events), "读了 1 个文件，改了 1 个，跑了 2 条命令，另有 2 步");
       const markup = renderToStaticMarkup(<ExecutionDetails events={turn.events} running={!turn.done} />);
-      assert.equal((markup.match(/class="task-tool-name"/g) ?? []).length, 7);
-      assert.ok(markup.includes(">Edit</span>") && markup.includes(">Read</span>") && markup.includes("npm test"));
+      assert.equal((markup.match(/class="task-tool-verb"/g) ?? []).length, 7);
+      assert.ok(markup.includes(">改</span>") && markup.includes(">读</span>") && markup.includes("npm test"));
       assert.ok(markup.includes("旧执行器的派活记录"), "unmarked legacy Agent tools stay visible");
-      assert.ok(!/子智能体|child-only|嵌套派活/.test(markup));
+      // 盯的是子智能体那条线上的**内容**漏没漏进来;折叠条自己会说「派了 子智能体「…」」,那是派活这一步本身。
+      assert.ok(!/子智能体内容|子智能体结果|子智能体错误|child-only|嵌套派活/.test(markup));
       assert.equal(turn.text, "讨论结论");
       assert.equal(turn.error, undefined, "a child's error does not become the speaker's failure");
     }

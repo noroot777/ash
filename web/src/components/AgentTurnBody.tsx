@@ -126,7 +126,7 @@ export function AgentTurnBody({
 }
 
 /* `awaiting` = 此刻正卡在上游等回话,只会落在脉冲那一步上(它就是正在发生的这一步):
-   折叠条上那句「正在重试」要常驻,见 ExecutionTrace 的 TransientExecutionLabel。 */
+   折叠条上那句「正在重试」要常驻,见 lib/executionWords.ts 的 liveLabel。 */
 function StopBody({ stop, bare, running, awaiting }: { stop: TurnStop; bare: boolean; running: boolean; awaiting: boolean }) {
   return (
     <>

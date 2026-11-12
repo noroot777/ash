@@ -1,0 +1,62 @@
+/* 两样会动的字，全应用共用（docs/ui-ux-audit 06、07）。
+
+   .shim —— 「它在跑」只有这一种画法：字上扫过一道光，扫 1.1 秒、歇 1.3 秒（周期 2.4s，
+   扫的那段占 46%）。只挂在纯文字的元素上：字色是透明的，里面要是有图标会跟着不见。
+   颜色从两个变量取，外层按语气改它们就行（出错的那一行把它们换成红色系）：
+     --shim-base  字本来的颜色（缺省 --muted）
+     --shim-hi    扫过去那道光（缺省 --ink）
+
+   .swap —— 换字：旧的上去、新的上来。配 lib/useSwapText.ts，它负责在 .is-out / .is-pre
+   之间切；时长读这里的 --swap-dur，两边只写一处。
+
+   减少动效时（系统偏好，或根上 data-motion="reduce"；data-motion="full" 压过系统偏好）
+   流光变成实色、换字直接换。 */
+:root {
+  --swap-dur: 150ms;
+}
+
+.shim {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background: linear-gradient(
+      100deg,
+      var(--shim-base, var(--muted)) 40%,
+      var(--shim-hi, var(--ink)) 50%,
+      var(--shim-base, var(--muted)) 60%
+    )
+    100% 0 / 250% 100% no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: shim 2.4s linear infinite;
+}
+@keyframes shim {
+  0% { background-position: 100% 0; }
+  46%, 100% { background-position: 0% 0; }
+}
+
+.swap {
+  display: inline-block;
+  transition:
+    opacity var(--swap-dur) var(--ease-out),
+    transform var(--swap-dur) var(--ease-out),
+    filter var(--swap-dur) var(--ease-out);
+}
+.swap.is-out { opacity: 0; transform: translateY(-4px); filter: blur(2px); }
+.swap.is-pre { opacity: 0; transform: translateY(4px); filter: blur(2px); transition: none; }
+
+:root[data-motion="reduce"] .shim {
+  background: none;
+  color: var(--shim-base, var(--muted));
+  -webkit-text-fill-color: currentColor;
+  animation: none;
+}
+:root[data-motion="reduce"] .swap { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) .shim {
+    background: none;
+    color: var(--shim-base, var(--muted));
+    -webkit-text-fill-color: currentColor;
+    animation: none;
+  }
+  :root:not([data-motion="full"]) .swap { transition: none; }
+}

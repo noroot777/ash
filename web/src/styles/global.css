@@ -24,7 +24,8 @@
 @import "./task-detail.css";
 @import "./task-conversation.css";
 @import "./question-card.css";
-@import "./task-motion.css";
+@import "./execution-trace.css";
+@import "./motion-text.css";
 @import "./task-reply.css";
 @import "./agent-plate.css";
 @import "./agent-run-meta.css";
