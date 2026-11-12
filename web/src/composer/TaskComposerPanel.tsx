@@ -496,7 +496,6 @@ export function TaskComposerPanel({
         <span className="composer-header-grow" aria-hidden="true" />
         {home.count && <span className="composer-header-count">{home.count}</span>}
       </header> : <header className="composer-header">
-        <span className="workspace-kind-chip">新建</span>
         <b>{fork ? "派生新任务" : "新建任务"}</b>
         <span>{project.name}</span>
         <span className="composer-header-grow" aria-hidden="true" />
