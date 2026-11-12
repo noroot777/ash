@@ -1,13 +1,14 @@
 /* 右侧面板（改后）：这个文件是外壳（竖轨、面板头、开合、快捷键）和各格共用的账。
-   十一格的内容在另外两个文件里，各自把造法登记到 ASH.insp：
+   十一格的内容在另外三个文件里，各自把造法登记到 ASH.insp：
      insp-panes.js  信息、文件、生成物、改动（看任务本身、看它改了什么）
-     insp-work.js   子智能体、备忘、侧聊、工作流、审查、预览指正、哨兵（跟它一起干活）
+     insp-work.js   备忘、工作流、审查、预览指正、哨兵（跟它一起干活）
+     insp-talk.js   子智能体、侧聊（它派出去的、你另开的那几路话）
    竖轨的形态、格数、次序、图标、快捷键都照现在的产品；改的是：选中只有一种长相、状态变成小点、
    分三簇、再点一次收起、摘掉的格不自己回来（信息、哨兵、子智能体照旧：下次进来还在）。
    对外：ASH.parts.insp = { open(pane, opts), shut(bool), setUsage(u), destroy() }
    发 insp:state { shut, pane }、task:status（信息格的状态下拉）、changes:open、diff:open { path }、file:open { path }、folder:open { path }、
      preview:open、files:reveal { name? }、queue:open（这几个去处别处接，没画的由 app.js 说一句）。
-   听 insp:toggle { shut? }、insp:open { pane, round? }、task:status、run:state、reply:send、
+   听 insp:toggle { shut? }、insp:open { pane, round?, quote? }、task:status、run:state、reply:send、
    usage { turn, ctx, files, add, del, elapsedMs, agent?, commit? }——带 turn 的是「一轮跑完了」：这一轮的量记到 agent（缺省 claude）
    那一行、轮数加一、用时累加；files / add / del 是跑完之后的总数，ctx 是上下文还剩百分之几。同一轮报两遍只记一次。
    不带 turn 的按绝对值设（tokens 是 claude 那一行的累计）。审查的事各格直接读 ASH.review、听 review:change。 */
@@ -33,13 +34,13 @@
   for (const [name, path] of Object.entries(ICONS)) ASH.icons[name] ??= path;
 
   /* 次序就是竖轨的次序；g 是第几簇（看任务本身｜看它改了什么｜跟它一起干活）；on = 默认在条上。
-     子智能体、哨兵「用过才浮现」：这个任务没用过子智能体，所以它只在「+」里；哨兵用过，在条上。 */
+     子智能体、哨兵「用过才浮现」：这个任务两样都用过，所以都在条上。 */
   const PANES = [
     { id: 'info', name: '信息', icon: 'info', key: 'i', g: 1, on: true },
     { id: 'files', name: '文件', icon: 'folderOpen', key: 'f', g: 2, on: true },
     { id: 'made', name: '生成物', icon: 'images', key: 'a', g: 2, on: true },
     { id: 'scm', name: '改动', icon: 'pull', key: 'g', g: 2, on: true },
-    { id: 'agents', name: '子智能体', icon: 'bot', key: 's', g: 3, on: false },
+    { id: 'agents', name: '子智能体', icon: 'bot', key: 's', g: 3, on: true },
     { id: 'memo', name: '备忘', icon: 'notePencil', key: 'b', g: 3, on: true },
     { id: 'chat', name: '侧聊', icon: 'chats', key: 'c', g: 3, on: true },
     { id: 'flow', name: '工作流', icon: 'shuffle', key: 'w', g: 3, on: true },
@@ -357,7 +358,7 @@
     const on = (evt, fn) => offs.push(ASH.on(evt, (data) => { if (!gone()) fn(data ?? {}); }));
     addEventListener('keydown', onKey, true);
     on('insp:toggle', (d) => shut(typeof d.shut === 'boolean' ? d.shut : undefined));
-    on('insp:open', (d) => open(d.pane ?? 'info', { round: d.round }));
+    on('insp:open', (d) => open(d.pane ?? 'info', { round: d.round, quote: d.quote }));
 
     /* 对照清单：目标不在眼前的，先把整栏展开、切到那一格。各格的造法还没到齐时，等到齐了再定位一次 */
     const prep = (id, fn) => { preps[id] = ASH.prep[id] = () => { if (core.built) fn(); else core.whenBuilt(() => ASH.focusMark?.(id)); }; };
@@ -365,7 +366,7 @@
     const show = (pane) => () => open(pane, { snap: true });
     for (const id of ['insp-1', 'insp-3', 'insp-keep']) prep(id, reveal);
     prep('insp-4', () => { setOn(by('files'), true); reveal(); });
-    for (const [id, pane] of [['insp-2', 'info'], ['insp-5', 'review'], ['insp-6', 'scm'], ['insp-7', 'scm'], ['insp-8', 'flow'], ['insp-9', 'watch'], ['insp-10', 'made'], ['insp-11', 'preview']]) prep(id, show(pane));
+    for (const [id, pane] of [['insp-2', 'info'], ['insp-5', 'review'], ['insp-6', 'scm'], ['insp-7', 'scm'], ['insp-8', 'flow'], ['insp-9', 'watch'], ['insp-10', 'made'], ['insp-11', 'preview'], ['insp-12', 'agents'], ['insp-13', 'chat']]) prep(id, show(pane));
 
     core.shell = shell;
     paint();

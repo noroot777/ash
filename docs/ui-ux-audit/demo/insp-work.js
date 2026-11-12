@@ -1,4 +1,4 @@
-/* 右侧面板第三簇的七格：子智能体、备忘、侧聊、工作流、审查、预览指正、哨兵。外壳在 insp.js（排在它后面加载）。
+/* 右侧面板第三簇里的五格：备忘、工作流、审查、预览指正、哨兵（子智能体、侧聊在 insp-talk.js）。外壳在 insp.js（排在它后面加载）。
    每一格是一个造法 I.build.<格>(c) → 节点；c 是外壳给的控制器（c.st 任务状态、c.on / c.emit 栏内事件、c.acts 面板头动作、c.mark 竖轨上的点）。
    审查的账不在这里：「审查」「工作流」两格读 ASH.review、听 review:change / review:start，所以它们和会话流里的审查行、回复框那颗键说的是同一轮。
    每格在这一次打开样机期间只造一次，切到别的面再回来还是原样；所以这里的定时器不用收，让它自己走完。
@@ -12,8 +12,6 @@
   const R = ASH.review;
   const ENDED = ['done', 'failed', 'stopped', 'backlog'];
   const live = (text) => h('span.insp-live', text);
-
-  I.build.agents = () => none('这个任务没有用过子智能体。');
 
   /* ---------- 备忘：一条一张卡；没有的时候只有一句话加一颗「写一条」。有了，竖轨上那格才有灰点 ---------- */
   I.build.memo = (c) => {
@@ -74,60 +72,6 @@
     c.acts.memo = [addBtn];
     paint();
     return [editor, list, empty];
-  };
-
-  /* ---------- 侧聊：一个输入框，占位那句话就是全部说明；多的话收在面板头的 ⓘ 里 ---------- */
-  I.build.chat = (c) => {
-    const rooms = [];
-    let room = null, timer = 0;
-    const log = h('div.insp-log', { role: 'log', 'aria-label': '侧聊消息' });
-    const area = h('textarea', { rows: 1, placeholder: '围绕主会话问个问题…', 'aria-label': '侧聊消息输入' });
-    const reset = grow(area);
-    const who = ASH.target({ value: { agent: 'claude', model: null, level: null }, label: '侧聊执行器', place: 'top-start' });
-    const sendBtn = h('button.btn.pri.insp-send', { type: 'button', 'aria-label': '发送侧聊消息', disabled: true, onclick: () => send() }, icon('up'));
-    const say = (name, ...kids) => h('article.insp-msg.enter', {}, h('header', {}, h('b', name), h('time', clock())), h('p', {}, kids));
-    /* 哪一下算发送跟「发送键」设置走，说明里的键名每次打开现取 */
-    const help = tool('info', '侧聊说明', () => {
-      const caps = ASH.sendKey.caps();
-      ASH.pop(help, h('div.insp-help', {},
-        h('p', {}, '围绕主会话独立提问，不打断主任务。需要回传时，直接说：', h('code', '把结论告诉主任务'), '。'),
-        h('p', '首次发送时带入主会话快照；主会话特别长时会先整理一份摘要，要多等一会儿。关闭面板保留对话与草稿。'),
-        h('p', {}, '输入框里 ', h('kbd', caps.send), ' 发送，', h('kbd', caps.newline), ' 换行；截图和文件可直接粘贴或用回形针选取。')), { place: 'bottom-end' });
-    }, { 'aria-haspopup': 'dialog' });
-    /* 聊过以后头上才多出「切换」和「新建」 */
-    const paintActs = () => c.setActs('chat', rooms.length ? [
-      ASH.select({ compact: true, value: room ? String(rooms.indexOf(room)) : '', label: '切换侧聊', options: [{ value: '', label: '新侧聊' }, ...rooms.map((r, i) => ({ value: String(i), label: r.name }))], onchange: (value) => pick(value === '' ? null : rooms[Number(value)]) }),
-      tool('plus', '新建侧聊', () => pick(null), { disabled: !room }),
-      help,
-    ] : [help]);
-    function pick(next) {
-      if (room) room.nodes = [...log.children];
-      room = next;
-      log.replaceChildren(...(next?.nodes ?? []));
-      paintActs();
-      area.focus();
-    }
-    function send() {
-      const text = area.value.trim();
-      if (!text || timer) return;
-      reset();
-      sendBtn.disabled = true;
-      if (!room) { room = { name: `侧聊 ${rooms.length + 1} · ${clock()}`, nodes: [] }; rooms.push(room); paintActs(); }
-      const reply = say('侧聊助手', live('在想'));
-      log.append(say('你', text), reply);
-      reply.scrollIntoView({ block: 'nearest' });
-      timer = setTimeout(() => {
-        timer = 0;
-        reply.lastChild.replaceChildren('补发只在启动时跑一次：过了点还没发的，按原定时间排好挨个发出去，每条标一句「补发」。主会话没有被打断。');
-        reenter(reply);
-        reply.scrollIntoView({ block: 'nearest' });
-        sendBtn.disabled = !area.value.trim();
-      }, 1400);
-    }
-    area.addEventListener('input', () => { sendBtn.disabled = Boolean(timer) || !area.value.trim(); });
-    area.addEventListener('keydown', (e) => { if (ASH.sendKey.hit(e)) { e.preventDefault(); send(); } });
-    c.acts.chat = [help];
-    return [log, h('div.insp-ask.inbox', {}, area, h('div', {}, tool('clip', '添加文件或图片', () => ASH.todo('添加文件或图片')), who.el, h('span.grow'), sendBtn))];
   };
 
   /* ---------- 工作流：发生过什么，按先后一行一条。相邻的「任务执行」合成一条，右边是合计用时，点开才是一段段的。

@@ -2,10 +2,10 @@
    正文是「攒够约 40 字」才来一块，工具只有一条「开始」、没有「结束」——动效都落在前端能做的那一侧：
    一行进行条（流光 + 用时，做完原地落定成过去式）、匀速放字 + 淡入、同一时刻只有一个「活的」信号。
    这一轮跟着任务走，不跟着页面：切到别的面它照常往下跑（侧栏那一行照样变），回来接着看。
-   对外：ASH.parts.live = { running, play(name, say), stop(), retry(), accept(), destroy() }，name 是 run / ask / fail / slow / watch；
+   对外：ASH.parts.live = { running, play(name, say), stop(), retry(), accept(), destroy() }，name 是 run / ask / fail / slow / watch / agents；
    报告页隔着 iframe 递 { ash: 'play', name } 也能起一轮（正跑着的那一轮连同它留下的半截一起撤掉），{ ash: 'stop' } 是停；
    嵌在报告里时，等你答复那一刻往外递 { ash: 'title', waiting }，报告拿它改自己的标签页标题。
-   发 run:state { running }（同时发 run:start / run:end）、task:status { id, status, why }、
+   发 run:state { running }（同时发 run:start / run:end）、agents:spawn（这一轮派出一个子智能体，右侧面板那一格接）、task:status { id, status, why }、
    usage { turn, tokens, ctx, files, add, del, elapsedMs, commit? }（turn 是这一轮的用量，其余是跑完之后的总数，ctx 是上下文还剩百分之几）；
    听 reply:send / reply:stop / reply:steer（回复框）、task:act（任务头的重试 / 运行）、review:start / review:done（审查那一行在会话里起、落）。 */
 (() => {
@@ -90,6 +90,25 @@
       { tool: { verb: '读', text: '`server/logs/later-send-test.log`' }, ms: 1000 },
       { text: `三遍都过了，每遍 ${cur.test.pass} 条。之前偶尔挂的那一条是端口被占，和补发的逻辑没有关系。` },
       { end: { turn: 14800, files: 0, add: 0, del: 0, ctx: 1 } },
+    ] },
+    /* 派三个子智能体分头查：会话里是三步「派」，各自在做什么、带回了什么在右边「子智能体」那一格（agents:spawn） */
+    agents: { say: '补发还会不会漏别的入口？分头查一下。', events: [
+      { think: 1500 },
+      { tool: { verb: '派', text: '子智能体：查接力到别的机器时待发送跟不跟', spawn: { title: '查接力到别的机器时待发送跟不跟', kind: 'Explore', model: 'haiku-4-5', ms: 6400,
+        acts: ['在搜「later_messages」', '在读 server/src/handoff.ts', '在读 server/src/later-send-store.ts'],
+        input: '任务接力到另一台机器时，待发送里的定时消息有没有跟过去？看接力打包了哪些东西。只读代码，不要改。',
+        result: '没有跟过去。接力只打包了会话和工作区，待发送里的定时消息留在原来那台机器上；到点时那台机器要是关着，这几条就不会发。' } }, ms: 500 },
+      { tool: { verb: '派', text: '子智能体：查任务归档时待发送怎么处理', spawn: { title: '查任务归档时待发送怎么处理', kind: 'Explore', model: 'haiku-4-5', ms: 4200,
+        acts: ['在搜「archive」', '在读 server/src/archive.ts'],
+        input: '任务被归档时，它名下还没发的定时消息怎么处理？会不会归档以后还发出去，或者再也发不出去。只读代码，不要改。',
+        result: '不会漏。归档时会把这个任务名下没发的定时消息一并撤回，之后的补发也会跳过撤回的。' } }, ms: 500 },
+      { tool: { verb: '派', text: '子智能体：查改了系统时区以后会不会重发', spawn: { title: '查改了系统时区以后会不会重发', kind: 'Explore', model: 'haiku-4-5', ms: 5200,
+        acts: ['在读 server/src/later-send.ts', '在读 server/src/later-send-recover.ts', '在跑 时区换算的小脚本'],
+        input: '改了系统时区以后，定时消息会不会提前、推迟或者重发一遍？只读代码，可以跑只读的小脚本验证。',
+        result: '不会。原定时间存的是不带时区的时刻，换时区不影响先后；补发那一笔记录按消息去重，不会发第二遍。' } }, ms: 7200 },
+      { think: 1300 },
+      { text: '三路都查完了，漏的只有一处：**任务接力到另一台机器时，待发送里的定时消息没有跟过去。**归档和换时区都没有问题。\n\n这一处不在这次的范围里，我没有动。要修的话单开一个任务。' },
+      { end: { turn: 22600, files: 0, add: 0, del: 0, ctx: 2 } },
     ] },
     /* 「重试」跑的那一轮：没有新的气泡，接着上一轮做；回合头名字后面写着「重试」 */
     again: { events: [
@@ -341,6 +360,7 @@
       strip.steps.push(ev.tool);
       r.steps.push(ev.tool);
       strip.add(ev.tool);
+      if (ev.tool.spawn) ASH.emit('agents:spawn', ev.tool.spawn);
       feed.follow();
       await sleep(ev.ms);
     } else if (ev.text) {
@@ -562,6 +582,7 @@
         { label: '中途失败', icon: 'warn', onpick: () => play('fail') },
         { label: '想得很久（17 秒）', icon: 'clock', onpick: () => play('slow') },
         { label: '中途挂哨兵等结果', icon: 'pulse', onpick: () => play('watch') },
+        { label: '派子智能体分头查', icon: 'bot', onpick: () => play('agents') },
       ]));
       runBtn.hidden = false;
       runBtn.addEventListener('click', pick);

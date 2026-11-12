@@ -75,7 +75,9 @@
     const body = h('div.turn-body');
     const el = h('article.turn', h('span.turn-av', { 'aria-hidden': 'true' }, agent[0].toUpperCase()), head, body);
     const more = h('button.ico.sm', { type: 'button', 'aria-label': '更多', 'aria-haspopup': 'menu', 'data-tip': '更多',
-      onclick: () => ASH.menu(more, [{ label: '删除这条回复', icon: 'trash', onpick: () => drop(el) }]) }, icon('more'));
+      onclick: () => ASH.menu(more, [
+        { label: '在侧聊里问这一段', icon: 'chats', onpick: () => ASH.emit('insp:open', { pane: 'chat', quote: $$(':scope > .md', body).at(-1)?.innerText.trim().split('\n')[0] }) },
+        { label: '删除这条回复', icon: 'trash', onpick: () => drop(el) }]) }, icon('more'));
     const acts = h('footer.turn-acts',
       copyBtn('复制这条回复', () => $$(':scope > .md', body).map((md) => md.innerText).join('\n\n')),
       h('button.ico.sm', { type: 'button', 'aria-label': '派生新任务', 'data-tip': '派生新任务', onclick: () => ASH.go('#/new') }, icon('fork')), more);
