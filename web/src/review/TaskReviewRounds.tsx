@@ -6,6 +6,7 @@ import { useMemo, useRef, useState } from "react";
 import type { TaskReviewRound } from "@ash/shared";
 import { InspButton, InspNone, InspRecord, InspSec } from "../inspector/parts.tsx";
 import { useInspectorRequest } from "../inspector/nav.tsx";
+import { RequestMissNote } from "../inspector/RequestMissNote.tsx";
 import { api } from "../lib/api.ts";
 import {
   ReviewRoundBody,
@@ -51,19 +52,21 @@ export function TaskReviewRounds({
   });
 
   // 会话里那一句「第 N 轮验证…」点过来：展开那一轮（同号的独立审查与就地验证并存时认最近那条）。
-  // 记录还在读就先不收下这份请求，读到了再办。
-  useInspectorRequest("review", (params) => {
+  // 记录还在读就先不收下这份请求，读到了再办；读到的那一份里没有，重读一次再认，还没有就
+  // 说出来（见 useInspectorRequest）。
+  const requestMiss = useInspectorRequest("review", (params) => {
     const { round } = reviewTargetOf(params);
     const hit = round == null ? null : rounds.findLast((entry) => entry.round === round);
-    if (!hit) return state.loading ? "wait" : undefined;
+    if (!hit) return state.loading ? "wait" : "missing";
     const key = roundKey(hit);
     setOpenKeys((current) => new Set(current).add(key));
     requestAnimationFrame(() => rootRef.current?.querySelector(`[data-record="${CSS.escape(key)}"]`)?.scrollIntoView({ block: "nearest" }));
-  }, rounds);
+  }, { version: rounds, refresh: () => state.reload(true) });
 
   return (
     <section ref={rootRef} aria-label="验证记录">
       <InspSec count={rounds.length || undefined}>验证记录</InspSec>
+      <RequestMissNote miss={requestMiss} what="那一轮验证" />
       {state.loading && <InspNone>正在读取验证记录…</InspNone>}
       {!state.loading && state.error && (
         <InspNone action={<InspButton size="sm" onClick={() => void state.reload()}>重试</InspButton>}>

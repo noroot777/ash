@@ -8,6 +8,7 @@ import { Plus } from "@phosphor-icons/react";
 import { MONITOR_RECOVERY_LABEL, type MonitorKind, type TaskMonitor } from "@ash/shared/monitor";
 import { InspectorHeadActions } from "../inspector/index.ts";
 import { useInspectorRequest } from "../inspector/nav.tsx";
+import { RequestMissNote } from "../inspector/RequestMissNote.tsx";
 import { InspNone, InspNote, InspSec, InspTool } from "../inspector/parts.tsx";
 import { MonitorCard } from "./MonitorCard.tsx";
 import { MonitorComposer } from "./MonitorComposer.tsx";
@@ -77,16 +78,17 @@ export function MonitorInspector({
   }, [monitors.monitors]);
   const rows = useMemo(() => groups.flatMap((group) => group.rows), [groups]);
 
-  // 会话里那一行「在哨兵格里看」带着哨兵 id 过来：把那张卡滚进视野、焦点放上去。
-  useInspectorRequest("monitors", (params) => {
+  // 会话里那一行「在哨兵格里看」带着哨兵 id 过来：把那张卡滚进视野、焦点放上去。列表还没读到
+  // 就等；读到的那一份里没有（刚挂上的那条还没进列表），重读一次再认，还没有就说出来。
+  const requestMiss = useInspectorRequest("monitors", (params) => {
     const id = typeof params.monitorId === "string" ? params.monitorId : null;
     const card = id ? cards.current.get(id) : null;
-    if (!card) return monitors.ready || monitors.error ? undefined : "wait"; // 列表还没读到：等它
+    if (!card) return monitors.ready || monitors.error ? "missing" : "wait";
     card.scrollIntoView({ block: "nearest" });
     card.focus({ preventScroll: true });
     card.classList.add("is-flash");
     window.setTimeout(() => card.classList.remove("is-flash"), 1600);
-  }, rows);
+  }, { version: rows, refresh: () => monitors.reload() });
 
   return (
     <div className="insp-pane monitor-inspector">
@@ -103,6 +105,7 @@ export function MonitorInspector({
           </InspTool>
         </InspectorHeadActions>
       )}
+      <RequestMissNote miss={requestMiss} what="那个哨兵" />
       {monitors.error && <p className="insp-hint is-bad monitor-inspector__error" role="alert">{monitors.error}</p>}
       {blockedReason && <div className="monitor-inspector__blocked"><InspNote>{blockedReason}</InspNote></div>}
       {form !== null && (

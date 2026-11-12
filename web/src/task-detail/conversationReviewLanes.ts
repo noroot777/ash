@@ -329,6 +329,21 @@ function attachReports(lanes: ConversationReviewLane[], reviews: readonly FreeRe
   }
 }
 
+/**
+ * 这一条「开始」是不是接着正开着的那张卡跑（同一轮的重跑：「重跑上一回合」/「从中断处继续」），
+ * 不另开一张只有半截的历史卡。**认不出是同一场就不并**：并错了，后面那一场的结论就记到前一场
+ * 头上，点它打开的是另一份报告（第 3 轮审查）。
+ *   - 两边都说了是哪一场：同一场才接着（同号不同场是重新派审又从第 1 轮数起）；
+ *   - 带类型的旁注：服务端重跑时一定标 `rerun`，没标就是新开的一场——哪怕前一张卡没说是哪一场
+ *     （升级前落的、收尾那一条没写进来）；
+ *   - 只有原文的老旁注没有别的线索，同来源同轮号就算重跑（那时候的老样子）。
+ */
+function continuesLane(active: ActiveLane, start: VerifyNoteMark): boolean {
+  if (start.kind !== active.source || start.round !== active.round) return false;
+  if (start.runId && active.runId) return start.runId === active.runId;
+  return start.rerun ?? true;
+}
+
 // D 方案的结构推导：把「第 N 轮验证开始」「自由工作流第 N 轮审查开始」「合并结果审查开始」
 // 各自圈出的那一段折成一张结论卡，历史轮默认收起、只留结论和报告入口。
 export function conversationFeedRows(
@@ -345,11 +360,9 @@ export function conversationFeedRows(
 
   for (const item of items) {
     const start = laneStart(item);
-    // 同一轮的重跑（「重跑上一回合」/「从中断处继续」）接着原来那张卡跑，不另开一张
-    // 只有半截的历史卡。
-    const rerun = !!active && !!start && start.kind === active.source && start.round === active.round
-      // 同号不同场（重新派审又从第 1 轮数起）是新的一场，不是重跑。
-      && (!start.runId || !active.runId || start.runId === active.runId);
+    const rerun = !!active && !!start && continuesLane(active, start);
+    // 重跑那一条说了是哪一场、开轮那一条（升级前落的）没说：这张卡从此认这一场。
+    if (rerun && start.runId) active!.runId ??= start.runId;
     if (active && start && !rerun) pushActive({ superseded: true });
     else if (active && closeBefore(active, item)) pushActive();
     if (!active && start) {

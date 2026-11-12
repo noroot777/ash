@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 
 /**
  * 面板里的东西要「切到别的格」时用的那条线：信息格里那行改动统计点了去「改动」，工作流里
@@ -29,22 +29,73 @@ export function useInspectorNav(): InspectorNav | null {
 }
 
 /**
- * 收「给 `id` 这一格」的请求：每来一份就调一次 `handle`，然后告诉宿主收下了。挂载时已经有
- * 一份（刚被 openTab 切过来）也照收。
- *
- * 切到那一格不等于办成了：刚挂上的那一格往往还在读数据，要找的那条还不在。`handle` 返回
- * `"wait"` = 还没读完、这份先别清；`version`（那一格的数据）一变就再交给它一次，直到它办成
- * 或确认找不到（返回别的）才收下。
+ * 那一格处理一份请求的结果：`void` = 找到了、办成了；`"wait"` = 数据还没读到，先别清；
+ * `"missing"` = 读到的那一份里没有要找的那条。
  */
-export function useInspectorRequest(id: string, handle: (params: InspectorRequest) => void | "wait", version?: unknown) {
+export type InspectorRequestOutcome = void | "wait" | "missing";
+
+/** 一份请求确认办不成：还留着它说了什么，「重试」原样再发一次。 */
+export type InspectorRequestMiss = { params: InspectorRequest; retry: () => void; dismiss: () => void };
+
+/**
+ * 收「给 `id` 这一格」的请求：每来一份就调一次 `handle`，**办成或者确认办不成才告诉宿主收下**。
+ * 挂载时已经有一份（刚被 openTab 切过来）也照收。
+ *
+ * 切到那一格不等于办成了，手里有数据也不等于找过了：刚挂上的那一格往往还在读；读到的也可能
+ * 是点之前的旧快照（新一场审查刚结束、缓存里还没有它）。所以：
+ *   - `"wait"`：`version`（那一格的数据）一变就再交给它一次；
+ *   - `"missing"`：先 `refresh` 一次——拿一份**这份请求之后才发起**的新数据再认；还没有，或者
+ *     压根没给 `refresh`，才算确认办不成。办不成不悄悄吞掉：返回值是这份请求，那一格把它
+ *     说出来、给一个「重试」（见 RequestMissNote）。
+ */
+export function useInspectorRequest(
+  id: string,
+  handle: (params: InspectorRequest) => InspectorRequestOutcome,
+  { version, refresh }: { version?: unknown; refresh?: () => Promise<unknown> } = {},
+): InspectorRequestMiss | null {
   const nav = useInspectorNav();
   const handleRef = useRef(handle);
   handleRef.current = handle;
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
   const request = nav?.request;
   const consume = nav?.consume;
+  const openTab = nav?.openTab;
+  // 哪一份请求已经为它重读过一次、那一趟落地没有。
+  const refreshed = useRef<{ seq: number; settled: boolean } | null>(null);
+  const [landed, setLanded] = useState(0);
+  const [missed, setMissed] = useState<InspectorRequest | null>(null);
   useEffect(() => {
     if (!request || request.id !== id) return;
-    if (handleRef.current(request.params) === "wait") return;
+    const outcome = handleRef.current(request.params);
+    if (outcome === "wait") return;
+    if (outcome === "missing") {
+      const attempt = refreshed.current?.seq === request.seq ? refreshed.current : null;
+      const reload = refreshRef.current;
+      if (!attempt && reload) {
+        const mine = { seq: request.seq, settled: false };
+        refreshed.current = mine;
+        // 读失败也算这一趟落地了：再认一次还没有，就是办不成（那一格自己会说读失败）。
+        void reload().catch(() => {}).finally(() => {
+          mine.settled = true;
+          if (refreshed.current === mine) setLanded((value) => value + 1);
+        });
+        return;
+      }
+      if (attempt && !attempt.settled) return;
+      setMissed(request.params);
+    } else {
+      setMissed(null);
+    }
     consume?.(request.seq);
-  }, [consume, id, request, version]);
+  }, [consume, id, request, version, landed]);
+  if (!missed) return null;
+  return {
+    params: missed,
+    retry: () => {
+      setMissed(null);
+      openTab?.(id, missed);
+    },
+    dismiss: () => setMissed(null),
+  };
 }

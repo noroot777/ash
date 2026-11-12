@@ -1,6 +1,6 @@
-// 会话里那一句审查结论点过去，右侧审查格要展开**那一场的那一轮**（第 1、2 轮审查 F2）。
-// 两场派审都有「第 1 轮」，旧那场还启动失败重跑过一次；审查记录要过一会儿才读到；就地验证走
-// 另一个面板。派审那一侧的卡片是拿时间线经 conversationFeedRows 推出来的（跟会话流同一条路），
+// 会话里那一句审查结论点过去，右侧审查格要展开**那一场的那一轮**（第 1~3 轮审查 F2）。
+// 两场派审都有「第 1 轮」，旧那场还启动失败重跑过一次；审查记录要过一会儿才读到，读到的也可能
+// 是点之前的旧快照；重读了也没有就说出来、能重试；就地验证走另一个面板。派审那一侧的卡片是拿时间线经 conversationFeedRows 推出来的（跟会话流同一条路），
 // 点不点得过去也走会话流同一个判据（laneRoundOpener）。
 import { StrictMode, useCallback, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
@@ -18,7 +18,7 @@ import "../../src/styles/global.css";
 
 declare global {
   interface Window {
-    __releaseReviews?: () => void;
+    __reviews?: { hold: (taskId: string) => void; release: (taskId: string) => void; set: (taskId: string, ids: string[]) => void };
     __releaseRounds?: () => void;
     __pendingRequest?: Record<string, () => string | null>;
     __lanes?: Record<string, { title: string; runId: string | null }[]>;
@@ -38,6 +38,7 @@ const run = (id: string, at: string, name: string): FreeReviewRun => ({
   rounds: [{ round: 1, status: "passed", conclusion: "verified", reviewedCommit: "head", reportMarkdown: `# ${name}`, screenshots: [], startedAt: at, endedAt: at }],
 } as unknown as FreeReviewRun);
 const runs = [run("old-run", "2026-11-11T10:00:00.000Z", "旧一场"), run("new-run", "2026-11-12T10:00:00.000Z", "新一场")];
+const ghost = run("ghost-run", "2026-11-12T12:00:00.000Z", "后来补上的一场");
 
 // 时间线上的审查段。旧那场是升级前落的（开始那一条不带 runId，只能按时间窗口配）：第一次启动
 // 失败，重跑那次才出结论——两张卡都是旧那场的第 1 轮。新那场的开始那一条带着 runId。还有一张
@@ -46,13 +47,16 @@ type Notice = Record<string, unknown>;
 const start = (round: number | null, extra: Notice = {}): Notice => ({ kind: "review.start", source: "free", round, reviewer: "审查", ...extra });
 const verdict = (round: number | null, value: string, extra: Notice = {}): Notice => ({ kind: "review.verdict", source: "free", round, verdict: value, reviewer: "审查", ...extra });
 const session = { id: "s-main", taskId: "nav-task", agentType: "claude", role: "main", startedAt: "2026-11-01T00:00:00.000Z", endedAt: "2026-11-13T00:00:00.000Z" };
-const rowsOf = (timeline: [string, Notice][]) => conversationFeedRows(
+// 第二项是原文：只有原文的老旁注（带类型那一版之前落的）不给 notice。
+const rowsOf = (timeline: [string, Notice | string][], reviews: FreeReviewRun[] = runs) => conversationFeedRows(
   buildConversationItems([{
     session,
-    output: timeline.map(([at, notice]) => `\x1e${JSON.stringify({ t: "system", text: "审查", notice, at })}`).join("\n"),
+    output: timeline.map(([at, notice]) => `\x1e${JSON.stringify(typeof notice === "string"
+      ? { t: "system", text: notice, at }
+      : { t: "system", text: "审查", notice, at })}`).join("\n"),
     trace: [],
   }] as never, [session] as never, []),
-  { reviews: runs },
+  { reviews },
 ).filter((row): row is ConversationReviewLane => row.kind === "review-lane");
 const freeLanes = rowsOf([
   ["2026-11-10T09:00:00.000Z", start(2)],
@@ -73,22 +77,57 @@ const supersededLanes = rowsOf([
   ["2026-11-12T10:01:00.000Z", start(1, { runId: "new-run" })],
   ["2026-11-12T10:30:00.000Z", verdict(1, "passed")],
 ]);
-window.__lanes = Object.fromEntries([["free", freeLanes], ["superseded", supersededLanes]]
+// 升级前那场的开始没说是哪一场、收尾那一条也没写进来，升级后新一场又从第 1 轮开始：带类型的
+// 开始没标 rerun 就是新开的一场，后面那句结论归新一场（第 3 轮审查）。
+const mixedLanes = rowsOf([
+  ["2026-11-11T10:01:00.000Z", start(1)],
+  ["2026-11-12T10:01:00.000Z", start(1, { runId: "new-run" })],
+  ["2026-11-12T10:30:00.000Z", verdict(1, "passed")],
+]);
+// 开轮那一条没说是哪一场、重跑那一条说了：同一张卡，认重跑说的那一场（不靠时间窗口，没给审查记录）。
+const adoptedLanes = rowsOf([
+  ["2026-11-11T10:01:00.000Z", start(1)],
+  ["2026-11-11T10:05:00.000Z", start(1, { rerun: true, runId: "old-run" })],
+  ["2026-11-11T10:30:00.000Z", verdict(1, "passed")],
+], []);
+// 只有原文的老旁注没有别的线索：同来源同轮号照旧算重跑。
+const textLanes = rowsOf([
+  ["2026-11-11T10:01:00.000Z", "自由工作流第 1 轮审查开始：审查 · 逻辑检查。"],
+  ["2026-11-11T10:05:00.000Z", "自由工作流第 1 轮审查从中断处继续。"],
+  ["2026-11-11T10:30:00.000Z", "自由工作流第 1 轮审查通过。"],
+], []);
+window.__lanes = Object.fromEntries([["free", freeLanes], ["superseded", supersededLanes], ["mixed", mixedLanes], ["adopted", adoptedLanes], ["text", textLanes]]
   .map(([name, lanes]) => [name, (lanes as ConversationReviewLane[]).map((item) => ({ title: item.title, runId: item.runId }))]));
 
-// 审查记录由测试放行：放行之前点过来的那一下必须等着，不能被当场收掉。
-let releaseReviews: () => void = () => {};
-const reviewsLoaded = new Promise<void>((resolve) => { releaseReviews = resolve; });
-window.__releaseReviews = () => releaseReviews();
+// 每个任务的审查记录由测试放行：放行之前发出的 GET 都挂着；放行时按当时设下的那一份回。
+type Served = { runs: FreeReviewRun[]; version: number; gate: Promise<void>; open: () => void };
+const served = new Map<string, Served>();
+const serve = (taskId: string, list: FreeReviewRun[], held: boolean) => {
+  const entry: Served = { runs: list, version: 1, gate: Promise.resolve(), open: () => {} };
+  if (held) entry.gate = new Promise((resolve) => { entry.open = resolve; });
+  served.set(taskId, entry);
+};
+const byId = new Map([...runs, ghost].map((item) => [item.id, item]));
+window.__reviews = {
+  hold: (taskId) => { const entry = served.get(taskId)!; entry.gate = new Promise((resolve) => { entry.open = resolve; }); },
+  release: (taskId) => served.get(taskId)!.open(),
+  set: (taskId, ids) => { const entry = served.get(taskId)!; entry.runs = ids.map((id) => byId.get(id)!); entry.version += 1; },
+};
 api.freeWorkflow = (async (taskId: string) => {
-  await reviewsLoaded;
+  const entry = served.get(taskId)!;
+  await entry.gate;
   return {
-    taskId, stateVersion: 1, selectedReviewerId: null, workspaceHead: "head", workspaceDirty: false,
-    reviewReservation: { armed: false }, preview: { running: false }, executions: [], reviews: runs,
+    taskId, stateVersion: entry.version, selectedReviewerId: null, workspaceHead: "head", workspaceDirty: false,
+    reviewReservation: { armed: false }, preview: { running: false }, executions: [], reviews: entry.runs,
   };
 }) as unknown as typeof api.freeWorkflow;
 
-const task = { id: "nav-task", title: "导航", projectId: "p", mode: "single", status: "done", stage: "implemented", workflowMode: "free", parentId: null, archived: false } as unknown as Task;
+const taskOf = (id: string) => ({ id, title: "导航", projectId: "p", mode: "single", status: "done", stage: "implemented", workflowMode: "free", parentId: null, archived: false } as unknown as Task);
+const task = taskOf("nav-task");
+serve(task.id, runs, true);
+// 已经读到过一份（只有旧那场）：新一场刚结束就点它，手里那份是旧快照。
+const staleTask = taskOf("nav-stale");
+serve(staleTask.id, runs.slice(0, 1), false);
 
 const lane = (id: string, source: ConversationReviewLane["source"], runId: string | null, round: number, label: string): ConversationReviewLane => ({
   kind: "review-lane", id, source, round, totalRounds: null, title: `第 ${round} 轮`, items: [], reviewerLabel: label,
@@ -119,8 +158,13 @@ function Host({ name, lanes, names, workflowMode, children }: {
     setRequest({ id: "review", params, seq: seq.current });
   };
   (window.__pendingRequest ??= {})[name] = () => (request ? JSON.stringify(request.params) : null);
+  // 「重试」走的就是这一条：原样再发一份请求。
+  const openTab = (id: string, params?: InspectorRequest) => {
+    seq.current += 1;
+    setRequest({ id, params: params ?? {}, seq: seq.current });
+  };
   return (
-    <InspectorNavProvider value={{ request, consume, openTab: () => {} }}>
+    <InspectorNavProvider value={{ request, consume, openTab }}>
       <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
         <div>{lanes.map((item, index) => (
           <div key={item.id} data-lane={names[index]}>
@@ -141,7 +185,20 @@ function Shell() {
       <Host name="free" lanes={freeLanes} names={laneNames} workflowMode="free">
         <FreeReviewPane task={task} notify={() => {}} />
       </Host>
-      <Host name="verify" lanes={[lane("verify", "inline", null, 1, "就地验证")]} names={["verify"]} workflowMode="preset">
+      <Host
+        name="stale"
+        lanes={[mixedLanes[1]!, lane("ghost", "free", "ghost-run", 1, "后来补上的一场")]}
+        names={["stale-new", "ghost"]}
+        workflowMode="free"
+      >
+        <FreeReviewPane task={staleTask} notify={() => {}} />
+      </Host>
+      <Host
+        name="verify"
+        lanes={[lane("verify", "inline", null, 1, "就地验证"), lane("verify-3", "inline", null, 3, "没有这一轮")]}
+        names={["verify", "verify-3"]}
+        workflowMode="preset"
+      >
         <TaskReviewRounds taskId={task.id} state={rounds} emptyMessage="没有记录" />
       </Host>
     </main>
