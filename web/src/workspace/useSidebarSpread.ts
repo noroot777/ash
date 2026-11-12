@@ -5,6 +5,7 @@ import { TASK_BATCH_LIMIT } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { onTaskMemoWrite, taskMemoWrites } from "../task-memos/taskMemoStore.ts";
 import { indexWorkers, spreadBucket, workersFrom, type SpreadBucket, type WorkerIndex } from "../lib/taskAttention.ts";
+import { taskLook } from "../lib/taskLook.ts";
 import { scopeHasFilters, scopeTasks, visibleInScope, type TaskScope } from "./taskScope.ts";
 import { orderedTopLevelTasks } from "./taskTreeModel.ts";
 
@@ -37,7 +38,8 @@ export const SPREAD_DOT_FILTERS = SPREAD_FILTERS.filter(
 
 export type SpreadCounts = Record<SpreadFilter, number>;
 
-// 分堆的判据见 lib/taskAttention.ts 的 spreadBucket。
+// 分堆的判据见 lib/taskAttention.ts 的 spreadBucket；计数和筛选都经 lib/taskLook 的 taskLook 取它 ——
+// 侧栏行首那颗记号也从那里取，两边查的是同一张表。
 
 // 星标不是第六个桶：它是用户手动的软记号，与自动状态正交（同一个任务既可以
 // 「在跑」也可以带星标）。所以筛选判据单独一条，不进 spreadBucket。
@@ -47,7 +49,7 @@ export type SpreadCounts = Record<SpreadFilter, number>;
 export function matchesSpreadFilter(task: TaskListItem, filter: SpreadFilter, workers: TaskListItem[] = []): boolean {
   if (filter === "all") return true;
   if (filter === "starred") return task.starredAt != null;
-  return spreadBucket(task, workers) === filter;
+  return taskLook(task, workers).bucket === filter;
 }
 
 // 筛选按钮（铺开态的胶囊、窄态的点）共用同一份计数：口径分两处写，早晚会对不上。
@@ -62,7 +64,7 @@ export function spreadCounts(tasks: TaskListItem[], scope: TaskScope): SpreadCou
     if (task.archived || task.parentId || !visibleInScope(task, scope)) continue;
     counts.all += 1;
     if (task.starredAt != null) counts.starred += 1;
-    counts[spreadBucket(task, workersFrom(workers, task.id))] += 1;
+    counts[taskLook(task, workersFrom(workers, task.id)).bucket] += 1;
   }
   return counts;
 }

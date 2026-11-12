@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import type { HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
 import { CaretRight } from "@phosphor-icons/react";
-import { useTaskReadState, type IndicatorForTask } from "../lib/useTaskReadState.ts";
+import { useTaskReadState, type LookForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { RevealMore, useKeyedReveal, useReveal } from "./TaskReveal.tsx";
 import { SpreadPeekLayer, SpreadRowProvider, useSpreadPeek } from "./TaskSpread.tsx";
@@ -54,7 +54,7 @@ function ScopedTaskTree({
   allTasks,
   selectedTaskId,
   onTask,
-  indicatorForTask,
+  lookForTask,
   filter,
   onClearFilter,
   emptyText,
@@ -68,7 +68,7 @@ function ScopedTaskTree({
   allTasks: TaskListItem[];
   selectedTaskId: string | null;
   onTask: (task: TaskListItem) => void;
-  indicatorForTask: IndicatorForTask;
+  lookForTask: LookForTask;
   filter: SpreadFilter;
   onClearFilter: () => void;
   // 一条不剩时说什么。单项目态是「还没有任务」，任务模式得说清它本来就只收两类行，
@@ -102,8 +102,8 @@ function ScopedTaskTree({
   // taskTreeModel 的 keepVisibleInPreview —— 跟 previewTasksByAge 挨着，测试也钉在那儿。
   // 团队的问题写在执行者身上，所以要把 workers 一起递进去。
   const keepVisible = useCallback(
-    (task: TaskListItem) => keepVisibleInPreview(task, indicatorForTask(task), workersFrom(workerIndex, task.id)),
-    [indicatorForTask, workerIndex],
+    (task: TaskListItem) => keepVisibleInPreview(task, lookForTask(task).indicator, workersFrom(workerIndex, task.id)),
+    [lookForTask, workerIndex],
   );
   const keptBySection = useMemo(
     () => sections.map((section) => ({
@@ -187,11 +187,11 @@ function ScopedTaskTree({
               allTasks={allTasks}
               selectedTaskId={selectedTaskId}
               onTask={onTask}
-              indicatorForTask={indicatorForTask}
+              lookForTask={lookForTask}
               showProject={showProject}
             />
           ) : (
-            <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} showProject={showProject} />
+            <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} lookForTask={lookForTask} showProject={showProject} />
           ),
         )}
         <RevealMore
@@ -273,14 +273,14 @@ function OtherProject({
   allTasks,
   selectedTaskId,
   onTask,
-  indicatorForTask,
+  lookForTask,
 }: {
   project: ProjectView;
   tasks: TaskListItem[];
   allTasks: TaskListItem[];
   selectedTaskId: string | null;
   onTask: (task: TaskListItem) => void;
-  indicatorForTask: IndicatorForTask;
+  lookForTask: LookForTask;
 }) {
   const [expanded, setExpanded] = useState(false);
   const ordered = useMemo(() => orderedTopLevelTasks(tasks), [tasks]);
@@ -302,7 +302,7 @@ function OtherProject({
       {expanded && (
         <div className="workspace-other-project-tasks">
           {visible.map((task) => (
-            <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
+            <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} lookForTask={lookForTask} />
           ))}
           {ordered.length > TASK_PREVIEW_LIMIT && (
             <RevealMore revealed={revealed} total={overflow} onMore={more} onCollapse={collapse} />
@@ -315,7 +315,7 @@ function OtherProject({
 }
 
 export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTaskId, selectedRemoteTaskId, spread, onTask, onRemoteTask, onTaskStarred, onHandoffFinished, onQueueChanged, outbound, notify }: TaskTreeProps) {
-  const { indicatorForTask } = useTaskReadState(tasks, selectedTaskId);
+  const { lookForTask } = useTaskReadState(tasks, selectedTaskId);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
   // 主列表看哪些行只由作用域决定（scopeTasks 是唯一判据，跟计数、筛选、铺开取数同源）。
   const scopedTasks = useMemo(() => scopeTasks(activeTasks, scope), [activeTasks, scope]);
@@ -334,8 +334,8 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
   // 执行者表按**全量**建（不是 scopedTasks）：团队的桶要它真实的执行者集合。
   const workerIndex = useMemo(() => indexWorkers(tasks), [tasks]);
   const treeActions = useMemo(
-    () => ({ onStarred: onTaskStarred, notify, projectBadges, workerIndex, onOpenQueue: setOpenQueueId }),
-    [notify, onTaskStarred, projectBadges, workerIndex],
+    () => ({ onStarred: onTaskStarred, notify, projectBadges, onOpenQueue: setOpenQueueId }),
+    [notify, onTaskStarred, projectBadges],
   );
   return (
     <TaskTreeActionsProvider value={treeActions}>
@@ -346,7 +346,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
           allTasks={tasks}
           selectedTaskId={selectedTaskId}
           onTask={onTask}
-          indicatorForTask={indicatorForTask}
+          lookForTask={lookForTask}
           filter={spread.filter}
           onClearFilter={() => spread.setFilter("all")}
           emptyText={taskMode ? "没有在跑、等你答复或待验收的任务" : "还没有任务"}
@@ -367,7 +367,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
                 allTasks={tasks}
                 selectedTaskId={selectedTaskId}
                 onTask={onTask}
-                indicatorForTask={indicatorForTask}
+                lookForTask={lookForTask}
               />
             ))}
           </section>

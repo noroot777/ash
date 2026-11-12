@@ -309,6 +309,22 @@
   color: var(--ink);
 }
 
+/* 行尾那两三个字（等你答复）：定长、不截，标题让它。行尾被星标占着的时候它自己往左让，
+   标题就不用再为星标抹掉一截。 */
+.workspace-task-word {
+  flex: 0 0 auto;
+  margin-right: calc(var(--tail-busy) * var(--task-row-tail));
+  padding-left: 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  white-space: nowrap;
+  transition: margin-right var(--dur-1) var(--ease-out);
+}
+
+.workspace-task-row-wrap.has-word .workspace-task-title {
+  --title-clear: 0px;
+}
+
 .workspace-task-row-wrap.is-selected .workspace-task-title {
   font-weight: 400;
 }

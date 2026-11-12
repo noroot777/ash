@@ -1,7 +1,7 @@
 import type { TaskListItem } from "@ash/shared";
 import { isListedTopLevel, sortByUpdated, sortPinned, visibleOnThisMachine } from "@ash/shared/task-order";
 import { hasFailed, needsYourCommand } from "../lib/taskAttention.ts";
-import type { TaskStatusIndicator } from "../lib/useTaskReadState.ts";
+import type { TaskStatusIndicator } from "../lib/taskLook.ts";
 
 // 先后规则（更新时间倒序、置顶在前）住在 shared/src/task-order.ts：飞书的 /tasks 也按它排。
 export { visibleOnThisMachine };
@@ -36,10 +36,10 @@ export const TASK_PREVIEW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 // 没盖的章（unaccepted）、坏在半路的活（失败）、以及停在那儿等你指挥的（提问中 /
 // 验证没通过，团队时问题写在执行者身上，所以要连 workers 一起看）。
 //
-// 失败这一档不能靠行首那颗点来认：它走 "error"，而 error 只在**未读**时才亮
-// （见 useTaskReadState），点开看过一眼就熄了。跟着点走的话，失败的任务只在头 24 小时
-// 露个面，之后缩进「显示更多」—— 而失败恰恰是越老越该被人看见的一档。
-// 等你指挥的同理：一条卡着等答复超过一天的任务被折进「展开(20/N)」，
+// 失败这一档直接问 hasFailed，不绕行首那颗点：点现在虽然一直红着（见 lib/taskLook），
+// 可团队调度台上的失败要连执行者一起看，判据留在一处更稳 —— 失败恰恰是越老越该被人
+// 看见的一档，不能因为旧就缩进「显示更多」。
+// 等你指挥的：一条卡着等答复超过一天的任务被折进「展开(20/N)」，
 // 恰好是最该一眼看见的那类行，路径反而更长。
 //
 // 判据放在这里而不是留在组件里，是为了跟 previewTasksByAge 挨着、并且能被测试直接钉住：

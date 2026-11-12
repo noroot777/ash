@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { deriveTaskStatusIndicator, readEventForTask, reconcileReadState } from "../src/lib/useTaskReadState.ts";
+import { taskLook } from "../src/lib/taskLook.ts";
 
 function task(id, updatedAt) {
   return {
@@ -36,7 +37,7 @@ assert.equal(
 const restartedSecond = { ...second, updatedAt: "2026-08-20T03:00:00.000Z", endedAt: "2026-08-20T03:00:00.000Z" };
 assert.notEqual(afterFullFetch.second.event, readEventForTask(restartedSecond));
 
-const dot = (over) => deriveTaskStatusIndicator({ ...task("dot", "2026-08-20T01:00:00.000Z"), ...over });
+const dot = (over, unread = false) => deriveTaskStatusIndicator({ ...task("dot", "2026-08-20T01:00:00.000Z"), ...over }, [], unread);
 
 assert.equal(dot({ question: "选哪条？" }), "attention", "有待答问题 = 等你说话");
 assert.equal(dot({ status: "paused" }), "attention", "暂停本身不能证明有后台任务");
@@ -55,6 +56,35 @@ assert.equal(
   "working",
   "验收前置命令正在跑：先说「有东西在跑」，别再显示成静静等你验收",
 );
+// 侧栏行首那张表（side-1 / side-2）：失败一直红、在跑和排队分开、验收过看过的空着。
+assert.equal(dot({ status: "failed" }), "error", "失败看没看过都是红点");
+assert.equal(dot({ status: "failed" }, true), "error");
+assert.equal(dot({ status: "done", stage: "verify_failed" }), "error", "验证没过也是摔了");
+assert.equal(dot({ status: "failed", stage: "accepted" }), "error", "盖过章又摔了的，事实是坏的");
+assert.equal(dot({ status: "running" }), "active");
+assert.equal(dot({ status: "awaiting_review" }), "active", "审查在跑 = 机器在动");
+assert.equal(dot({ status: "queued" }), "queued");
+assert.equal(dot({ status: "canceled" }), null, "取消的不亮");
+assert.equal(dot({ status: "done", stage: "accepted" }), null, "验收过也看过的空着");
+assert.equal(deriveTaskStatusIndicator({ ...task("dot", "2026-08-20T01:00:00.000Z"), stage: "accepted" }, [], true), "success", "验收过没看：绿点");
+assert.equal(dot({ status: "done" }), "unaccepted", "做完没验收：一直在");
+{
+  const look = taskLook({ ...task("ask", "2026-08-20T01:00:00.000Z"), status: "paused", question: "  要不要\n顺手把旧接口删掉？ " });
+  assert.equal(look.mark, "wait");
+  assert.equal(look.bucket, "todo", "行首琥珀、顶上「需要你处理」：同一张表");
+  assert.equal(look.word, "等你答复");
+  assert.equal(look.detail, "要不要 顺手把旧接口删掉？");
+  const parked = taskLook({ ...task("parked", "2026-08-20T01:00:00.000Z"), status: "paused", monitorRunning: true });
+  assert.equal(parked.mark, "breathe", "等哨兵：会呼吸的琥珀点");
+  assert.equal(parked.word, null, "等哨兵行尾不写字");
+  const failed = taskLook({ ...task("failed", "2026-08-20T01:00:00.000Z"), status: "failed" });
+  assert.deepEqual([failed.mark, failed.bucket], ["bad", "todo"]);
+  const running = taskLook({ ...task("run", "2026-08-20T01:00:00.000Z"), status: "running" });
+  assert.deepEqual([running.mark, running.bucket], ["run", "run"]);
+  const quiet = taskLook({ ...task("quiet", "2026-08-20T01:00:00.000Z"), stage: "accepted" });
+  assert.deepEqual([quiet.mark, quiet.say, quiet.bucket], [null, "", "accepted"]);
+}
+
 const lead = { ...task("lead", "2026-08-20T01:00:00.000Z"), mode: "team", status: "idle" };
 const worker = (over) => ({ ...task("w", "2026-08-20T01:00:00.000Z"), parentId: "lead", ...over });
 assert.equal(deriveTaskStatusIndicator(lead, [worker({ question: "问你" })]), "attention");
@@ -64,6 +94,10 @@ assert.equal(deriveTaskStatusIndicator({ ...lead, status: "paused" }, []), "atte
 assert.equal(deriveTaskStatusIndicator({ ...lead, status: "paused", monitorRunning: true }, []), "working");
 assert.equal(deriveTaskStatusIndicator(lead, [worker({ status: "paused", monitorRunning: true, question: "问你" })]), "attention");
 assert.equal(deriveTaskStatusIndicator({ ...lead, acceptGateRunning: true }, []), "working");
+assert.equal(deriveTaskStatusIndicator(lead, [worker({ status: "queued" })]), "queued");
+assert.equal(deriveTaskStatusIndicator(lead, [worker({ status: "done" }), worker({ status: "failed" })]), "error", "执行者摔了、收了工没盖章：一直红");
+assert.equal(deriveTaskStatusIndicator({ ...lead, stage: "accepted" }, [worker({ status: "failed" })]), null, "盖过章就不再红");
+assert.equal(deriveTaskStatusIndicator({ ...lead, status: "failed" }, []), "error", "调度台自己摔了");
 
 // 「它在干等上游」那颗红环:停滞是**派生事实**(标记 + 会话未收尾 + 任务在跑,三条都在
 // server/src/task-store.ts 的投影里),而后台水位只盯那个标记列 —— 乱序到达的旧响应能把

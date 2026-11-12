@@ -3,15 +3,15 @@ import type { ProjectView, TaskListItem } from "@ash/shared";
 import { statusCounts, workersOf } from "@ash/shared/team";
 import { CaretRight, ChatsCircle, ListNumbers, PaperPlaneTilt, Star, UsersThree } from "@phosphor-icons/react";
 import { OriginTaskChip, TaskCreationBadge, taskParentLink } from "../components/TaskOrigin.tsx";
-import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { api } from "../lib/api.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
-import { type IndicatorForTask } from "../lib/useTaskReadState.ts";
+import type { TaskLook } from "../lib/taskLook.ts";
+import { type LookForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { RevealMore, useReveal } from "./TaskReveal.tsx";
 import { SpreadRowCells, useSpreadRow } from "./TaskSpread.tsx";
 import { advanceHiddenReveal } from "./taskTreeModel.ts";
-import { spreadBucket, workersFrom, type WorkerIndex } from "./useSidebarSpread.ts";
 
 // 侧栏任务树的**一行**长什么样：状态点、星标、团队展开、铺开后多出来的那几格。
 // 分节、排序和「哪些行进来」在 TaskTree.tsx / taskTreeModel.ts。
@@ -28,9 +28,6 @@ type TaskTreeActions = {
   projectBadges: Map<string, ProjectView> | null;
   // 行尾队列徽标点开队列抽屉;抽屉挂在 TaskTree 顶层,入口用 context 递下来。
   onOpenQueue: (queueId: string) => void;
-  // 团队的状态桶写在执行者身上（见 lib/taskAttention 的 spreadBucket），行也要读它，
-  // 否则「需要你处理」的底色在团队行上判据跟筛选条不是同一套。
-  workerIndex: WorkerIndex;
 };
 
 const TaskTreeActionsContext = createContext<TaskTreeActions | null>(null);
@@ -74,10 +71,34 @@ export function useCollapsedSections() {
   return { collapsed, toggle };
 }
 
-export function StatusMarker({ indicator }: { indicator: ReturnType<IndicatorForTask> }) {
-  return indicator
-    ? <TaskStatusDot indicator={indicator} surface="workspace" />
-    : <i className="workspace-status-dot workspace-status-dot--quiet" aria-hidden="true" />;
+// 行首那颗记号：画什么、指上去说什么都查 lib/taskLook 的那张表（顶上的筛选也查它）。
+// 验收过也看过的什么都不画 —— 槽位还在（外面那格 22px），标题照样对齐。
+export function RowMark({ look, small = false }: { look: TaskLook; small?: boolean }) {
+  const tip = useHoverTip();
+  if (!look.mark) return null;
+  return (
+    <>
+      <i
+        className={`workspace-status-dot workspace-status-dot--${look.mark}${small ? " workspace-status-dot--small" : ""}`}
+        role="img"
+        aria-label={look.say}
+        {...(small ? {} : tip.anchorProps)}
+      />
+      {!small && <HoverTip at={tip.at}>{look.say}</HoverTip>}
+    </>
+  );
+}
+
+// 行尾那两三个字（等你答复）：定长、不截，标题让它；问题本身指上去再看。
+function RowWord({ look }: { look: TaskLook }) {
+  const tip = useHoverTip();
+  if (!look.word) return null;
+  return (
+    <>
+      <span className="workspace-task-word" {...(look.detail ? tip.anchorProps : {})}>{look.word}</span>
+      {look.detail && <HoverTip at={tip.at}>{look.detail}</HoverTip>}
+    </>
+  );
 }
 
 // 星标：用户手动的软记号（与自动状态正交）。已标的常驻行尾，未标的 hover 才浮出。
@@ -126,7 +147,7 @@ export function TaskRow({
   allTasks,
   selectedTaskId,
   onTask,
-  indicatorForTask,
+  lookForTask,
   child = false,
   showOrigin = true,
   showProject = true,
@@ -138,7 +159,7 @@ export function TaskRow({
   allTasks: TaskListItem[];
   selectedTaskId: string | null;
   onTask: (task: TaskListItem) => void;
-  indicatorForTask: IndicatorForTask;
+  lookForTask: LookForTask;
   child?: boolean;
   showOrigin?: boolean;
   // 行首那枚项目徽标画不画。默认画（有徽标表就说明是任务模式）；**被项目分组装着的行
@@ -149,7 +170,7 @@ export function TaskRow({
   trailing?: React.ReactNode;
 }) {
   const selected = selectedTaskId === task.id;
-  const indicator = indicatorForTask(task);
+  const look = lookForTask(task);
   const hasOrigin = showOrigin && taskParentLink(task, allTasks) !== null;
   // 当前就在本机运行的任务（含接力转入、已经移回）按普通任务展示；接力只在真正
   // 离开本机但尚未确认的存档行上留图标。确认转出的任务本来就只出现在“其他机器”。
@@ -181,11 +202,10 @@ export function TaskRow({
     : null;
   const hasMeta = task.mode === "duet" || showHandoffMeta || trailing != null || queueBadge != null;
   const project = canStar && showProject ? actions?.projectBadges?.get(task.projectId) : undefined;
-  const bucket = spreadCells ? spreadBucket(task, workersFrom(actions?.workerIndex, task.id)) : null;
   return (
-    <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${bucket === "todo" ? " is-todo" : ""}${task.starredAt != null ? " has-star" : ""}${queueBadge ? " has-queue" : ""}${canStar ? " can-star" : ""}`}>
+    <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${spreadCells && look.bucket === "todo" ? " is-todo" : ""}${look.word ? " has-word" : ""}${task.starredAt != null ? " has-star" : ""}${queueBadge ? " has-queue" : ""}${canStar ? " can-star" : ""}`}>
       <span className="workspace-task-leading">
-        {leading ?? <StatusMarker indicator={indicator} />}
+        {leading ?? <RowMark look={look} />}
       </span>
       <button
         className={`workspace-task-row${child ? " workspace-task-row--child" : ""}${hasOrigin ? " workspace-task-row--has-origin" : ""}`}
@@ -197,6 +217,7 @@ export function TaskRow({
       >
         {project && <TaskProjectBadge project={project} />}
         <span className="workspace-task-title">{task.title || "未命名任务"}</span>
+        <RowWord look={look} />
         <TaskCreationBadge task={task} />
         {hasMeta && (
           <span className="workspace-task-meta">
@@ -233,7 +254,7 @@ export function TaskRow({
   );
 }
 
-function WorkerSummary({ workers, indicatorForTask }: { workers: TaskListItem[]; indicatorForTask: IndicatorForTask }) {
+function WorkerSummary({ workers, lookForTask }: { workers: TaskListItem[]; lookForTask: LookForTask }) {
   if (!workers.length) return null;
   const buckets = statusCounts(workers);
   const summary = buckets.map((bucket) => `${bucket.n} ${bucket.label}`).join(" · ");
@@ -248,12 +269,9 @@ function WorkerSummary({ workers, indicatorForTask }: { workers: TaskListItem[];
               : bucket.status === "queued"
                 ? !worker.question && (worker.status === "queued" || worker.status === "backlog")
                 : !worker.question && worker.status === bucket.status)
-            && indicatorForTask(worker) != null,
+            && lookForTask(worker).mark != null,
           );
-          const indicator = sample ? indicatorForTask(sample) : null;
-          return sample && indicator
-            ? <TaskStatusDot key={bucket.label} indicator={indicator} surface="workspace" small />
-            : null;
+          return sample ? <RowMark key={bucket.label} look={lookForTask(sample)} small /> : null;
         })}
       </span>
     </span>
@@ -266,7 +284,7 @@ export function TeamRow({
   allTasks,
   selectedTaskId,
   onTask,
-  indicatorForTask,
+  lookForTask,
   showProject = true,
 }: {
   task: TaskListItem;
@@ -274,7 +292,7 @@ export function TeamRow({
   allTasks: TaskListItem[];
   selectedTaskId: string | null;
   onTask: (task: TaskListItem) => void;
-  indicatorForTask: IndicatorForTask;
+  lookForTask: LookForTask;
   showProject?: boolean;
 }) {
   const workers = workersOf(tasks, task.id);
@@ -291,7 +309,7 @@ export function TeamRow({
     [revealIndex, selectedWorkerIndex],
   );
   useRevealHiddenSelection(overflowSelectedId, revealOverflowWorkers);
-  const indicator = indicatorForTask(task);
+  const look = lookForTask(task);
   const visibleWorkers = workers.slice(0, TASK_PREVIEW_LIMIT + revealed);
   useEffect(() => {
     if (selectedWorker) setExpanded(true);
@@ -303,12 +321,12 @@ export function TeamRow({
         allTasks={allTasks}
         selectedTaskId={selectedTaskId}
         onTask={onTask}
-        indicatorForTask={indicatorForTask}
+        lookForTask={lookForTask}
         showProject={showProject}
         wrapperClassName={`workspace-team-row${expanded ? " is-expanded" : ""}`}
         leading={
           <span className="workspace-team-leading">
-            <StatusMarker indicator={indicator} />
+            <RowMark look={look} />
             <button
               className="workspace-team-caret"
               type="button"
@@ -323,7 +341,7 @@ export function TeamRow({
         }
         trailing={
           <>
-            <WorkerSummary workers={workers} indicatorForTask={indicatorForTask} />
+            <WorkerSummary workers={workers} lookForTask={lookForTask} />
             <UsersThree size={13} weight="fill" className="workspace-task-kind" aria-label="团队任务" />
           </>
         }
@@ -339,7 +357,7 @@ export function TeamRow({
               showOrigin={false}
               selectedTaskId={selectedTaskId}
               onTask={onTask}
-              indicatorForTask={indicatorForTask}
+              lookForTask={lookForTask}
               trailing={<span className="workspace-worker-executor">{worker.executorLabel || worker.agentType || "执行者"}</span>}
             />
           ))}

@@ -473,7 +473,8 @@ try {
   // 执行者不进这一档：验收是顶层任务的事。
   assert.equal(deriveTaskStatusIndicator(statusTask({ status: "done", parentId: "team-status" }), [], false), null);
   assert.equal(deriveTaskStatusIndicator(statusTask({ status: "failed" }), [], true), "error");
-  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "failed" }), [], false), null);
+  // 失败看过之后照样红（侧栏那张表，见 lib/taskLook）：失败是越老越该被看见的一档。
+  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "failed" }), [], false), "error");
   assert.equal(deriveTaskStatusIndicator(statusTask({ status: "canceled" }), [], false), null);
   assert.deepEqual(readTaskIds({ id: "worker-status", parentId: "team-status" }), ["worker-status", "team-status"]);
   assert.deepEqual(readTaskIds({ id: "team-status", parentId: null }), ["team-status"]);
@@ -505,7 +506,9 @@ try {
     null,
   );
   assert.equal(deriveTaskStatusIndicator(teamLead, [{ ...runningWorker, status: "failed" }], true), "error");
-  assert.equal(deriveTaskStatusIndicator(teamLead, [{ ...runningWorker, status: "canceled" }], true), "error");
+  // 执行者被取消不算摔了：整队收工、没盖章，就是等你验收。
+  assert.equal(deriveTaskStatusIndicator(teamLead, [{ ...runningWorker, status: "canceled" }], true), "unaccepted");
+  assert.equal(deriveTaskStatusIndicator(teamLead, [{ ...runningWorker, status: "failed" }], false), "error");
   assert.equal(deriveTaskStatusIndicator({ ...teamLead, status: "failed" }, [], true), "error");
   const runningTeamEvent = readEventForTask(teamLead, [runningWorker]);
   const settledTeamEvent = readEventForTask(teamLead, [{

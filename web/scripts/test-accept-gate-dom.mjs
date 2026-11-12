@@ -597,7 +597,9 @@ try {
     const { page, store } = await open({ query: "?dots=1", events: true, tasks: rows });
     const assertDots = async kind => {
       for (const row of rows) {
-        const dot = page.locator(`[data-task-id="${row.id}"] .${row.mode === "team" ? "team" : "workspace"}-status-dot--${kind}`);
+        // 侧栏那套记号的类名是 taskLook 的 mark（等你 = wait、会自己回来 = breathe），团队那套是档位名。
+        const variant = row.mode === "team" ? kind : { attention: "wait", working: "breathe" }[kind];
+        const dot = page.locator(`[data-task-id="${row.id}"] .${row.mode === "team" ? "team" : "workspace"}-status-dot--${variant}`);
         await dot.waitFor();
         assert.equal(await dot.evaluate(element => getComputedStyle(element).animationName), kind === "working" ? "task-status-dot-pulse" : "none");
       }

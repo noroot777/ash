@@ -17,7 +17,7 @@ function Fixture() {
     <h1>任务创建来源验证</h1><p>独立临时数据库中的真实创建记录</p>
     <div style={{ display: "flex", gap: 24 }}>
       <aside className="workspace-sidebar" style={{ width: 360 }}>
-        {tasks.map(task => <TaskRow key={task.id} task={task} allTasks={tasks} selectedTaskId={selected?.id || null} indicatorForTask={() => null} onTask={setSelected} />)}
+        {tasks.map(task => <TaskRow key={task.id} task={task} allTasks={tasks} selectedTaskId={selected?.id || null} lookForTask={() => ({ indicator: null, mark: null, say: "", bucket: "done", word: null, detail: null })} onTask={setSelected} />)}
       </aside>
       <section style={{ flex: 1, minWidth: 0 }}>
         {selected && <>

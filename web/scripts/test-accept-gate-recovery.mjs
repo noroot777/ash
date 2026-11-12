@@ -32,15 +32,15 @@ export async function testAcceptGateRecovery({ open, run, basis }) {
       store.tasks = [fresh];
       await emit(page, { type: "task.updated", task: fresh });
       await page.waitForFunction(running => document.querySelector("[data-task-id='gate-task'] [aria-label]")
-        ?.classList.contains("workspace-status-dot--working") === running, running);
+        ?.classList.contains("workspace-status-dot--breathe") === running, running);
       // 扣住的那份旧快照此刻才放回去，并等页面把它读完。
       release.resolve();
       await fetchesSettled(page, 0, "迟到的旧任务快照已被页面消费完");
-      assert.equal((await dot.getAttribute("class")).includes("--working"), running);
+      assert.equal((await dot.getAttribute("class")).includes("--breathe"), running);
       // SSE 事件在 emit 那次 evaluate 里同步派发，冲刷一轮渲染就能读。
       await emit(page, { type: "task.updated", task: { ...task, [field]: !running, backgroundRevision: running ? 0 : 1 } });
       await settlePage(page);
-      assert.equal((await dot.getAttribute("class")).includes("--working"), running);
+      assert.equal((await dot.getAttribute("class")).includes("--breathe"), running);
       await capture(page, `${field}-${running ? "start" : "stop"}-after-old-snapshot`);
     }
     await page.close();

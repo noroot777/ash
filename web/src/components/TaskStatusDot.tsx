@@ -1,17 +1,9 @@
 import { CircleDashed } from "@phosphor-icons/react";
-import type { TaskStatusIndicator } from "../lib/useTaskReadState.ts";
+import { TASK_LOOK, type TaskStatusIndicator } from "../lib/taskLook.ts";
 
-const INDICATOR_LABELS: Record<TaskStatusIndicator, string> = {
-  pending: "尚未开始",
-  active: "运行中或排队中",
-  attention: "需要人工输入",
-  working: "有东西在后台跑着，它会自己回来",
-  stalled: "在干等模型上游回话，没有任何输出",
-  unaccepted: "已完成，等你验收",
-  success: "已完成，有未读动态",
-  error: "失败或取消，有未读动态",
-};
-
+// 指上去那句话跟侧栏行首读的是同一列（lib/taskLook 的 TASK_LOOK），两处说法不会各写各的。
+// surface="workspace" 画的是侧栏那套记号（类名是 TASK_LOOK 的 mark，侧栏不画的档位就空着）；
+// 侧栏自己的行用 TaskTreeRows 的 RowMark，这里留给只想借那副长相的地方。
 export function TaskStatusDot({
   indicator,
   surface,
@@ -22,11 +14,12 @@ export function TaskStatusDot({
   small?: boolean;
 }) {
   const base = surface === "workspace" ? "workspace-status-dot" : "team-status-dot";
-  const label = INDICATOR_LABELS[indicator];
-  const hasIcon = indicator === "pending";
+  const { mark, say: label } = TASK_LOOK[indicator];
+  const variant = surface === "workspace" ? mark : indicator;
+  const hasIcon = surface === "team" && indicator === "pending";
   return (
     <i
-      className={`${base} ${base}--${indicator}${small ? ` ${base}--small` : ""}${hasIcon ? " task-status-dot--has-icon" : ""}`}
+      className={`${base}${variant ? ` ${base}--${variant}` : ""}${small ? ` ${base}--small` : ""}${hasIcon ? " task-status-dot--has-icon" : ""}`}
       title={label}
       aria-label={label}
     >
