@@ -14,7 +14,7 @@
 //    线正是这个形状：干活 → 预览 → 等我点头 → 自动验证 → 合并并清理）。措辞含糊等于
 //    把最后一道说明拆了。
 //
-// 「人工强制通过」拆成独立导出（`ForcePassVerifyButton`），因为它有**两个表面**：线路图
+// 「人工强制通过」拆成独立导出（`useForcePassVerify` 和套着它的 `ForcePassVerifyButton`），因为它有**两个表面**：线路图
 // 上那一站底下，和验证页顶上那排动作。同一件不可逆的事在两处必须是同一个确认框、同一
 // 条判据；两处各写一份，迟早只有一处会跟着后端改。「再验一轮」不必拆——验证页本来就有
 // 一颗更全的「验一轮」（能挑执行器），这里那颗是给「不想挑、就照原样再来一次」的人。
@@ -70,22 +70,15 @@ function forcePassIsDestructive(def: WorkflowDef, stationId: string): boolean {
   return segmentAfter(def, stationId).some((step) => step.kind === "accept");
 }
 
-export function ForcePassVerifyButton({
-  task,
-  def,
-  stationId,
-  className,
-  disabled,
-  onBusy,
-  onTaskUpdated,
-  notify,
-}: {
+/**
+ * 「人工强制通过」这一按本身：先弹确认框照实说按完会发生什么，确认了才签字。按钮长什么样
+ * 由各个表面自己定（线路图那一站底下是一颗按钮，审查格里收在「更多」里），确认框和判据
+ * 只有这一份。`dialog` 要由调用方渲染出来。
+ */
+export function useForcePassVerify({ task, def, stationId, onBusy, onTaskUpdated, notify }: {
   task: Task;
   def: WorkflowDef;
   stationId: string;
-  /** 宿主表面自己那套按钮长相；红/主色那一档由这里按「会不会真合并」决定。 */
-  className?: string;
-  disabled?: boolean;
   onBusy?: (busy: boolean) => void;
   onTaskUpdated: (task: Task) => void;
   notify: (message: string) => void;
@@ -119,28 +112,54 @@ export function ForcePassVerifyButton({
     }
   };
 
+  const dialog = asking ? (
+    <ConfirmDialog
+      title="人工强制通过这一站验证？"
+      message={forcePassMessage(def, stationId, task)}
+      confirmLabel="强制通过"
+      danger={destructive}
+      busy={busy}
+      onConfirm={() => void forcePass()}
+      onClose={() => setAsking(false)}
+    />
+  ) : null;
+
+  return { ask: () => setAsking(true), busy, inFlight, destructive, dialog };
+}
+
+export function ForcePassVerifyButton({
+  task,
+  def,
+  stationId,
+  className,
+  disabled,
+  onBusy,
+  onTaskUpdated,
+  notify,
+}: {
+  task: Task;
+  def: WorkflowDef;
+  stationId: string;
+  /** 宿主表面自己那套按钮长相；红/主色那一档由这里按「会不会真合并」决定。 */
+  className?: string;
+  disabled?: boolean;
+  onBusy?: (busy: boolean) => void;
+  onTaskUpdated: (task: Task) => void;
+  notify: (message: string) => void;
+}) {
+  const force = useForcePassVerify({ task, def, stationId, onBusy, onTaskUpdated, notify });
   return (
     <>
       <button
         type="button"
-        className={[className, destructive ? "is-danger" : "is-primary"].filter(Boolean).join(" ")}
-        disabled={inFlight || busy || disabled}
-        onClick={() => setAsking(true)}
+        className={[className, force.destructive ? "is-danger" : "is-primary"].filter(Boolean).join(" ")}
+        disabled={force.inFlight || force.busy || disabled}
+        onClick={force.ask}
       >
-        {busy ? <SpinnerGap size={13} className="is-spinning" /> : <SealCheck size={13} weight="fill" />}
-        <span>{busy ? "放行中" : "人工强制通过"}</span>
+        {force.busy ? <SpinnerGap size={13} className="is-spinning" /> : <SealCheck size={13} weight="fill" />}
+        <span>{force.busy ? "放行中" : "人工强制通过"}</span>
       </button>
-      {asking && (
-        <ConfirmDialog
-          title="人工强制通过这一站验证？"
-          message={forcePassMessage(def, stationId, task)}
-          confirmLabel="强制通过"
-          danger={destructive}
-          busy={busy}
-          onConfirm={() => void forcePass()}
-          onClose={() => setAsking(false)}
-        />
-      )}
+      {force.dialog}
     </>
   );
 }

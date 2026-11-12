@@ -139,6 +139,10 @@
   color: var(--accent);
 }
 
+.insp-bad {
+  color: var(--red);
+}
+
 .insp-plus {
   color: var(--green);
 }

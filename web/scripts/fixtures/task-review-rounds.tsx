@@ -45,7 +45,7 @@ createRoot(document.getElementById("root")!).render(
     <div style={{ display: "flex", height: 640 }}>
       <div style={{ flex: 1 }} />
       <aside className="inspector-host" style={{ width: 360, minWidth: 360 }}>
-        <div className="review-inspector">
+        <div className="insp-pane review-pane" style={{ overflow: "auto", height: "100%" }}>
           <TaskReviewRounds
             taskId="t1"
             state={{ info: { reviewRequested: true, rounds }, loading: false, error: null, reload: async () => undefined }}

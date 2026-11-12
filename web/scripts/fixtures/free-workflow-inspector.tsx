@@ -2,6 +2,7 @@ import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
 import { FreeWorkflowInspector } from "../../src/free-workflow/FreeWorkflowInspector.tsx";
+import { FreeReviewPane } from "../../src/free-workflow/FreeReviewPane.tsx";
 import { FreeWorkflowToolbar } from "../../src/free-workflow/useFreeWorkflowActions.tsx";
 import { FreeReviewDialog } from "../../src/free-workflow/FreeReviewDialog.tsx";
 import type { FreeWorkflowApiState } from "../../src/lib/api.ts";
@@ -634,28 +635,28 @@ createRoot(document.getElementById("root")!).render(
           <FreeWorkflowInspector task={task} />
         </aside>
         <aside className="inspector-host review-only-fixture" style={{ width: 380, height: 640 }}>
-          <FreeWorkflowInspector task={task} reviewOnly onOpenReview={() => undefined} notify={() => undefined} />
+          <FreeReviewPane task={task} onOpenReview={() => undefined} notify={() => undefined} />
         </aside>
       </div>
       <AcceptanceFixture task={acceptanceTask} className="acceptance-fixture" />
       <AcceptanceFixture task={reviewingAcceptanceTask} className="acceptance-blocked-fixture" />
       <PostMergeFixture />
       <aside className="inspector-host post-merge-inspector-fixture" style={{ width: 380, height: 420, marginTop: 20, marginLeft: "auto" }}>
-        <FreeWorkflowInspector task={postMergeTask} reviewOnly onOpenReview={() => undefined} onOpenTask={() => undefined} notify={() => undefined} />
+        <FreeReviewPane task={postMergeTask} onOpenReview={() => undefined} onOpenTask={() => undefined} notify={() => undefined} />
       </aside>
       <aside className="inspector-host repair-fixture" style={{ width: 380, height: 360, marginTop: 20, marginLeft: "auto" }}>
-        <FreeWorkflowInspector task={repairTask} reviewOnly notify={() => undefined} />
+        <FreeReviewPane task={repairTask} notify={() => undefined} />
       </aside>
       {/* 预约槽里的附言：run 还没建，附言只在 reviewReservation 上。跟上面那条工具栏共用
           同一个 taskId 的共享状态，所以工具栏存下预约后这里应立刻显示出来。 */}
       <aside className="inspector-host reservation-inspector-fixture" style={{ width: 380, height: 360, marginTop: 20, marginLeft: "auto" }}>
-        <FreeWorkflowInspector task={manualChatTask} reviewOnly notify={() => undefined} />
+        <FreeReviewPane task={manualChatTask} notify={() => undefined} />
       </aside>
       <aside className="inspector-host waived-stale-fixture" style={{ width: 380, height: 360, marginTop: 20, marginLeft: "auto" }}>
-        <FreeWorkflowInspector task={waivedStaleTask} reviewOnly notify={() => undefined} />
+        <FreeReviewPane task={waivedStaleTask} notify={() => undefined} />
       </aside>
       <aside className="inspector-host waived-fresh-fixture" style={{ width: 380, height: 360, marginTop: 20, marginLeft: "auto" }}>
-        <FreeWorkflowInspector task={waivedFreshTask} reviewOnly notify={() => undefined} />
+        <FreeReviewPane task={waivedFreshTask} notify={() => undefined} />
       </aside>
       {/* 摆在最后、不进顶部那条网格：往顶上加一行会把下面所有东西推下去，审查证据抽屉里
           的截图就被挤出视口，点不着了（实测）。 */}

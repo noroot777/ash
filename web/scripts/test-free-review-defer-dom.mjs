@@ -246,9 +246,14 @@ try {
     // 同一张卡里的状态行（那个没有 class 的 <p>）是「灰小字」的基准值：摘要跟它同款就
     // 说明通用段落规则又把它压了回去。
     const plain = node.parentElement.querySelector("p:not([class])");
-    return { fontSize: style.fontSize, color: style.color, plainColor: getComputedStyle(plain).color };
+    return {
+      fontSize: Number.parseFloat(style.fontSize),
+      plainSize: Number.parseFloat(getComputedStyle(plain).fontSize),
+      color: style.color,
+      plainColor: getComputedStyle(plain).color,
+    };
   });
-  assert.equal(gistStyle.fontSize, "11px", "摘要必须比周围的字大，否则读者第一眼落不到它身上");
+  assert.ok(gistStyle.fontSize > gistStyle.plainSize, `摘要必须比周围的字大，否则读者第一眼落不到它身上（摘要 ${gistStyle.fontSize}px，状态行 ${gistStyle.plainSize}px）`);
   assert.notEqual(
     gistStyle.color,
     gistStyle.plainColor,

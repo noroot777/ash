@@ -25,23 +25,8 @@
 .review-inspector__actions button:disabled { cursor: not-allowed; opacity: 0.48; }
 .review-inspector__actions button span { min-width: 0; flex: 1; }
 .review-inspector__actions button > svg:last-child { margin-left: auto; }
-/* 「人工强制通过」那颗。写在 hover 规则**之后**是必须的：同特异性时后写的赢，否则一
-   悬停就褪回中性灰，看着像换了一颗按钮。红色只在这一按会连带真合并时出现。 */
-.review-inspector__actions button.is-primary { background: color-mix(in lch,var(--accent) 8%,var(--panel)); color: var(--accent); font-weight: 650; }
-.review-inspector__actions button.is-primary:hover:not(:disabled) { background: color-mix(in lch,var(--accent) 15%,var(--panel)); color: var(--accent); }
-.review-inspector__actions button.is-danger { background: color-mix(in lch,var(--red) 8%,var(--panel)); color: var(--red); font-weight: 650; }
-.review-inspector__actions button.is-danger:hover:not(:disabled) { background: color-mix(in lch,var(--red) 15%,var(--panel)); color: var(--red); }
 .review-inspector__notice { margin: 7px 7px 0; color: var(--faint); font-size: 9.5px; line-height: 1.5; }
 .review-inspector__notice.is-warning { color: var(--red); }
-.review-inspector__dispatch { border-bottom: 0.5px solid var(--line); background: color-mix(in lch,var(--panel) 80%,var(--canvas)); padding: 12px 14px; }
-.review-inspector__dispatch > p { margin: 0 0 9px; color: var(--faint); font-size: 9.5px; line-height: 1.5; }
-.review-inspector__fields { display: grid; gap: 8px; }
-.review-inspector__fields label { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 4px; }
-.review-inspector__fields label > span { color: var(--faint); font-size: 9.5px; }
-.review-inspector__fields input, .review-inspector__fields select { width: 100%; height: 30px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 0 8px; color: var(--muted); font-size: 10.5px; outline: 0; }
-.review-inspector__fields input:focus, .review-inspector__fields select:focus { border-color: var(--accent); }
-.review-inspector__dispatch > button { display: inline-flex; min-height: 29px; align-items: center; gap: 5px; margin-top: 10px; border: 0; border-radius: 7px; background: var(--accent); padding: 0 10px; color: white; font-size: 10.5px; font-weight: 650; }
-.review-inspector__dispatch > button:disabled { cursor: not-allowed; opacity: 0.48; }
 /* 读取中 / 读取失败 / 空 —— 这三条也长在审查对象列表里，得躲开条目按钮那套强样式，
    否则「重试」会长得像列表里多出来的一条。 */
 .review-inspector__targets .review-inspector__empty { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -91,7 +76,6 @@
 .review-note + * { margin-top: 9px; }
 .review-note > b { display: block; color: var(--accent); font-size: 9px; font-weight: 700; letter-spacing: .04em; }
 .review-note > p { overflow-wrap: anywhere; margin: 3px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; white-space: pre-wrap; }
-.review-inspector__overview .review-note { margin-top: 9px; }
 
 .review-inspector__targets { border-bottom: 0.5px solid var(--line); padding: 12px 14px; }
 .review-inspector__targets > header { margin-bottom: 7px; }

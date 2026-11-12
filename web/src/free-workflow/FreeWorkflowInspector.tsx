@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type {
   FreeReviewRound,
   FreeReviewRun,
@@ -6,38 +6,19 @@ import type {
   Task,
 } from "@ash/shared";
 import {
-  CaretRight,
   CheckCircle,
-  GitCommit,
-  HandPalm,
   MagnifyingGlass,
   SpinnerGap,
   WarningCircle,
-  Wrench,
 } from "@phosphor-icons/react";
-import { FoldedProse } from "../components/FoldedProse.tsx";
-import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
-import { MarkdownBody, ReviewReportBody } from "../components/MarkdownBody.tsx";
-import { reportFileResolver } from "../components/markdownPolicy.ts";
-import { api, type FreeWorkflowApiState } from "../lib/api.ts";
-import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
-import { ReviewNote } from "../review/ReviewNote.tsx";
-import { ReviewScreenshotStrip } from "../review/ReviewScreenshotStrip.tsx";
-import { FreeReviewDebateTranscript } from "./FreeReviewDebateTranscript.tsx";
-import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
-import { FreeReviewDisputeCard } from "./FreeReviewDisputeCard.tsx";
-import { FreeReviewProgress } from "./FreeReviewProgress.tsx";
-import { FreeReviewRepairButton } from "./FreeReviewRepairButton.tsx";
-import { FreeReviewRoundsDialog } from "./FreeReviewRoundsDialog.tsx";
-import { DISPUTE_PROSE_LABELS } from "./disputeCopy.ts";
-import { freeReviewView } from "./freeReviewCopy.ts";
+import type { FreeWorkflowApiState } from "../lib/api.ts";
+import { FreeReviewRoundDrawer } from "./FreeReviewRoundBody.tsx";
+import { recurrenceText, reviewKey, reviewRoundLabel, timing } from "./freeReviewRounds.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 
 type Activity =
   | { type: "execution"; at: string; key: string; execution: FreeWorkflowExecution }
   | { type: "review"; at: string; key: string; run: FreeReviewRun; round: FreeReviewRound };
-
-type ReviewActivity = Extract<Activity, { type: "review" }>;
 
 // 只收「让任务本身往前走了一步」的事。打开/关闭预览不算——那是随手开一眼看效果的
 // 看片器，开十次也不改变任务走到了哪儿，摆进这条线只会把真正的进展冲淡。
@@ -54,32 +35,6 @@ function actualActivities(state: FreeWorkflowApiState | null): Activity[] {
   return activities.sort((a, b) => a.at.localeCompare(b.at) || a.key.localeCompare(b.key));
 }
 
-const TIME_FORMAT = new Intl.DateTimeFormat("zh-CN", {
-  month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
-});
-
-function timeText(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : TIME_FORMAT.format(date);
-}
-
-function durationText(startedAt: string, endedAt: string | null): string | null {
-  if (!endedAt) return null;
-  const ms = Date.parse(endedAt) - Date.parse(startedAt);
-  if (!Number.isFinite(ms) || ms < 0) return null;
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds} 秒`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} 分钟`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours} 小时 ${minutes % 60} 分钟`;
-}
-
-function timing(startedAt: string, endedAt: string | null): string {
-  const duration = durationText(startedAt, endedAt);
-  return `${timeText(startedAt)}${duration ? ` · ${duration}` : ""}`;
-}
-
 function executionLabel(execution: FreeWorkflowExecution): string {
   if (execution.status === "running") return "正在进行";
   if (execution.status === "completed") return "已完成";
@@ -88,153 +43,18 @@ function executionLabel(execution: FreeWorkflowExecution): string {
   return "执行失败";
 }
 
-function reviewRoundLabel(round: FreeReviewRound): string {
-  if (round.status === "reviewing") return "审查中";
-  if (round.conclusion === "verified") return "已通过";
-  if (round.conclusion === "verify_failed") return `未通过${disputeSuffix(round)}${recurrenceSuffix(round)}`;
-  return "异常";
-}
-
-// 同一类问题连着几轮没收口、这一轮的修复已经换成「改全或交给你选」（服务端熔断，见
-// server/src/review-recurrence.ts）。措辞与时间线那一条同源，刷新后照样在。
-function recurrenceSuffix(round: FreeReviewRound): string {
-  return round.recurrence ? ` · 同类问题第 ${round.recurrence} 轮未收口，已熔断` : "";
-}
-
-// 驳回过的轮次不能只显示「未通过」：那一轮到底是照改了、还是被用户判作废了，是两件
-// 完全不同的事，列表和抽屉标题都得带着说。
-//
-// 「只提了转出、一条都没驳」要单独说：执行者那时说的恰恰是**报告是对的**，只是不该
-// 在这个任务里修。一律写「已驳回」会让用户以为双方在争这条意见成不成立，从而把
-// 「转为独立任务」当成「采纳执行者」的同义词按下去（卡片标题同判据）。
-function deferOnly(round: FreeReviewRound): boolean {
-  return !!round.dispute?.deferReason && !round.dispute.reason;
-}
-
-function disputeSuffix(round: FreeReviewRound): string {
-  const dispute = round.dispute;
-  if (!dispute) return "";
-  if (dispute.resolution === "withdrawn") return " · 意见已作废";
-  if (dispute.resolution === "deferred") return " · 已转独立任务";
-  if (dispute.resolution === "upheld") return " · 驳回未获支持";
-  if (dispute.supersededAt) return " · 已被新一轮审查取代";
-  if (dispute.debates.at(-1)?.status === "running") return " · 辩论中";
-  return deferOnly(round) ? " · 执行者提出越界" : " · 执行者已驳回";
-}
-
-function disputeStateText(round: FreeReviewRound): string {
-  const dispute = round.dispute;
-  if (!dispute) return "执行者驳回";
-  // 这一行是**历史记录**里的状态条，措辞跟着裁定屏走（用户 2026-10-20 要的是人话）：
-  // 说「谁不认什么、你当时怎么判的」，不说状态枚举的名字。
-  const who = deferOnly(round) ? "执行者说这几条该另开任务改" : "执行者不认这一轮意见";
-  if (dispute.resolution === "withdrawn") return `${who} · 你判了这一轮不用改`;
-  if (dispute.resolution === "deferred") return `${who} · 你把它转成了独立任务`;
-  if (dispute.resolution === "upheld") return `${who} · 你让它接着改了`;
-  if (dispute.supersededAt) return `${who} · 你没裁定，另派了一轮审查`;
-  return dispute.debates.at(-1)?.status === "running" ? `${who} · 双方辩论中` : `${who} · 等你拍板`;
-}
-
-function reviewKey(runId: string, round: number): string {
-  return `${runId}:${round}`;
-}
-
-function reviewStatusIcon(round: FreeReviewRound) {
-  if (round.status === "reviewing") return <SpinnerGap size={11} className="is-spinning" />;
-  if (round.conclusion === "verified") return <CheckCircle size={11} weight="fill" />;
-  return <WarningCircle size={11} weight="fill" />;
-}
-
-export function FreeWorkflowInspector({
-  task,
-  reviewOnly = false,
-  onOpenReview,
-  onOpenTask,
-  notify,
-}: {
-  task: Task;
-  reviewOnly?: boolean;
-  onOpenReview?: () => void;
-  onOpenTask?: (taskId: string) => void;
-  notify?: (message: string) => void;
-}) {
+/** 「工作流」格（自由工作流）：真正发生过的执行与审查，按先后一行一条。 */
+export function FreeWorkflowInspector({ task }: { task: Task }) {
   const free = useFreeWorkflowState(task.id);
   const [selectedReviewKey, setSelectedReviewKey] = useState<string | null>(null);
-  // 打开时定下是哪一扇（同 Toolbar）：审查在跑 = 调轮数，否则 = 派审/预约。
-  const [reviewDialogOpen, setReviewDialogOpen] = useState<"rounds" | "review" | null>(null);
-  const [postMergeDialogOpen, setPostMergeDialogOpen] = useState(false);
-  const [repairBusy, setRepairBusy] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const workflowListRef = useRef<HTMLOListElement>(null);
-  const reviewListRef = useRef<HTMLDivElement>(null);
-  const postMergeReviewListRef = useRef<HTMLDivElement>(null);
   const state = free.state;
   const activities = useMemo(() => actualActivities(state), [state]);
-  const reviewActivities = activities.filter((activity): activity is ReviewActivity => activity.type === "review");
-  const workspaceReviewActivities = reviewActivities.filter((activity) => activity.run.target?.kind !== "accepted_merge");
-  const postMergeReviewActivities = reviewActivities.filter((activity) => activity.run.target?.kind === "accepted_merge");
   const opened = selectedReviewKey
-    ? reviewActivities.find((activity) => reviewKey(activity.run.id, activity.round.round) === selectedReviewKey) ?? null
+    ? activities.find((activity): activity is Extract<Activity, { type: "review" }> =>
+        activity.type === "review" && reviewKey(activity.run.id, activity.round.round) === selectedReviewKey) ?? null
     : null;
-  const latestReview = workspaceReviewActivities.at(-1);
-  const postMergeRuns = state?.reviews.filter((run) => run.target?.kind === "accepted_merge") ?? [];
-  const latestPostMerge = postMergeRuns[0];
-  const latestPostMergeRound = latestPostMerge?.rounds.at(-1);
-  const postMergeRepairTaskId = latestPostMerge?.target?.kind === "accepted_merge"
-    ? latestPostMerge.target.repairTaskId
-    : null;
-  const acceptedTarget = task.stage === "accepted" && task.acceptedTargetBranch && task.acceptedBaseCommit && task.acceptedMergeCommit
-    ? { branch: task.acceptedTargetBranch, baseCommit: task.acceptedBaseCommit, mergeCommit: task.acceptedMergeCommit }
-    : null;
-  const view = freeReviewView(state, task);
-  const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale, disputedRound, disputedRun, waivedRound, debateRunning } = view;
-  // 审查结束时调轮数那扇随之作废（同 Toolbar）。
-  useEffect(() => {
-    if (!reviewing) setReviewDialogOpen((open) => open === "rounds" ? null : open);
-  }, [!!reviewing]);
-  const taskReady = task.status !== "backlog";
-  // waiting 只锁「立即派审/修复」，预约与取消预约照常（同 Toolbar，也与后端口径一致）。
-  // waiting / reservationMode 都由 freeReviewCopy.ts 的 freeReviewView 算,两个表面共用
-  // 一份定义 —— 各写各的时候就漂过。
-  // 接力出去的任务在本机是历史存档，后端一律 409 —— 判据必须与 Toolbar 完全一样，
-  // 否则同一个派审动作会出现「底部那颗灰、这里这颗能点（点了吃 409）」。
-  const locked = task.stage === "accepted" || task.stage === "merged" || !!task.archived
-    || task.handoff?.direction === "out";
-  const reviewActionLabel = reviewing
-    ? "调整审查轮数"
-    : reservationMode
-      ? (reservationArmed ? "调整预约复审" : "预约复审")
-      : stale
-        ? "审查新改动"
-        : workspaceReviewActivities.length ? "再审一轮" : "派审查";
-  const exhausted = stoppedRun && stoppedRun.currentRound > stoppedRun.retryLimit;
-  const overviewDetail = reviewing
-    ? `第 ${reviewing.currentRound} 轮审查中`
-    : disputedRound
-      ? `第 ${disputedRound.round} 轮未通过 · ${deferOnly(disputedRound) ? "执行者提出越界" : "执行者已驳回"}，${debateRunning ? "双方辩论中" : "等你裁定"}`
-      : waivedRound
-        // 裁定完不是终点：执行者在提出驳回/转出之前，多半已经把「认可且在本任务边界内」
-        // 的那几条改掉了（`disputeOption` 的第一条就要求它先改完再提）。那部分代码**一轮
-        // 都没审过**，而这一轮的结论已经作不得数了。所以代码确实变过（stale）时要把下一步
-        // 说出来，指向上面那颗此刻正好写着「审查新改动」的按钮。
-        // 只在 stale 时说：freshness 为 unknown（缺锚点 / 工作区读不到）时无从判断执行者
-        // 到底改没改，凭空劝人再审一轮可能是白烧一轮。
-        ? (waivedRound.dispute?.resolution === "deferred"
-          ? `第 ${waivedRound.round} 轮未通过 · 你已把越界的那几条转为独立任务`
-          : `第 ${waivedRound.round} 轮未通过 · 你已采纳执行者说法，这条意见作废`)
-          + (stale ? "；执行者这一轮改的代码还没审过，点上面「审查新改动」再审一轮" : "")
-        : repairing
-      ? `第 ${latestRun?.currentRound ?? 1} 轮未通过 · 任务修改中`
-      : stoppedRun && stale
-        ? `第 ${stoppedRun.currentRound} 轮未通过 · 之后代码有变化，建议审查新改动`
-        : stoppedRun
-          ? `第 ${stoppedRun.currentRound} 轮未通过${view.autoRereview ? " · 修复后自动复审" : exhausted ? " · 自动复审已停止" : ""}`
-          : stale
-            ? "已通过，但之后代码有变化 · 结论可能过期"
-            : view.freshness === "unknown" && latestRun?.status === "passed"
-              ? "已通过 · 无法确认结论是否仍对应当前代码"
-              : latestReview ? `最近一轮${reviewRoundLabel(latestReview.round)}` : "尚未派审";
-  const overviewStatus = disputedRound ? "disputed" : repairing ? "repairing" : stale ? "stale" : null;
 
   if (free.loading && !free.state) return <div className="free-workflow-inspector is-loading"><SpinnerGap size={14} className="is-spinning" />正在生成实际工作流…</div>;
   if (free.error && !free.state) return <div className="free-workflow-inspector is-loading is-error"><WarningCircle size={14} />{free.error}</div>;
@@ -243,288 +63,6 @@ export function FreeWorkflowInspector({
     const key = reviewKey(run.id, round.round);
     setSelectedReviewKey((current) => current === key ? null : key);
   };
-
-  const openLatestPostMerge = () => {
-    if (latestPostMerge && latestPostMergeRound) selectReview(latestPostMerge, latestPostMergeRound);
-  };
-
-  const createPostMergeRepair = async () => {
-    if (!latestPostMerge || repairBusy || !notify || !onOpenTask) return;
-    setRepairBusy(true);
-    try {
-      const repair = await api.createPostMergeRepairTask(task.id, latestPostMerge.id);
-      await free.reload(true);
-      notify(`已创建独立修复任务「${repair.title}」`);
-      onOpenTask(repair.id);
-    } catch (error) {
-      notify(error instanceof Error ? error.message : "修复任务创建失败");
-    } finally {
-      setRepairBusy(false);
-    }
-  };
-
-  const drawer = opened && (
-    <ImagePreviewGroup isolated>
-      <ReviewEvidenceDrawer
-        anchorRef={rootRef}
-        keepOpenRef={reviewOnly
-          ? opened.run.target?.kind === "accepted_merge" ? postMergeReviewListRef : reviewListRef
-          : workflowListRef}
-        title={opened.run.target?.kind === "accepted_merge"
-          ? `合并结果审查 · ${opened.run.target.mergeCommit.slice(0, 8)}`
-          : `第 ${opened.round.round} 轮审查`}
-        subtitle={`${reviewRoundLabel(opened.round)} · ${opened.run.reviewerName} · ${opened.run.checkMode === "logic" ? "逻辑检查" : "语法检查"}`}
-        onClose={() => setSelectedReviewKey(null)}
-        footer={opened.round.screenshots.length ? (
-          <ReviewScreenshotStrip items={opened.round.screenshots.map((name) => ({
-            key: name,
-            name,
-            src: api.freeReviewFileUrl(task.id, opened.run.id, opened.round.round, name),
-            label: `第 ${opened.round.round} 轮 · ${name}`,
-          }))} />
-        ) : undefined}
-      >
-        <div className="review-round-body">
-          {opened.run.note && <ReviewNote text={opened.run.note} />}
-          {opened.round.reportMarkdown
-            ? <ReviewReportBody
-                text={opened.round.reportMarkdown}
-                reportKey={`${opened.run.id}:${opened.round.round}`}
-                conclusion={opened.round.conclusion}
-                // 文档根归属（相对路径 → 证据目录；绝对路径 → 被审任务工作目录）一处定
-                // 清楚，判据见 markdownPolicy 的 reportFileResolver。
-                resolveFile={reportFileResolver(
-                  (name) => api.freeReviewFileUrl(task.id, opened.run.id, opened.round.round, name),
-                  task.id,
-                )}
-              />
-            : <p>报告尚未生成。</p>}
-          {/* 驳回与辩论跟报告长在同一轮上，读结论的人必须在同一个地方读到「执行者不认这条、
-              理由是什么」。这里只回放，裁定入口在审查面板那张卡上（一个动作一个入口）。 */}
-          {opened.round.dispute && (
-            <div className="review-round-dispute">
-              <b>{disputeStateText(opened.round)}</b>
-              {/* 和驳回卡同一个读法：那一句人话摆出来，几千字依据折起来（用户 2026-10-20
-                  「一大篇文字都看不懂」）。老记录没有那一句，正文就默认摊开。 */}
-              {opened.round.dispute.summary && (
-                <p className="review-round-dispute__gist">{opened.round.dispute.summary}</p>
-              )}
-              {opened.round.dispute.reason && (
-                <FoldedProse
-                  label={DISPUTE_PROSE_LABELS.reason}
-                  text={opened.round.dispute.reason}
-                  open={!opened.round.dispute.summary}
-                />
-              )}
-              {opened.round.dispute.deferReason && (
-                <FoldedProse
-                  label={DISPUTE_PROSE_LABELS.defer}
-                  text={opened.round.dispute.deferReason}
-                  open={!opened.round.dispute.summary}
-                  tone="defer"
-                />
-              )}
-              {opened.round.dispute.debates.map((debate, index) => (
-                <FreeReviewDebateTranscript
-                  key={debate.id}
-                  debate={debate}
-                  ordinal={opened.round.dispute!.debates.length > 1 ? index + 1 : null}
-                />
-              ))}
-              {/* 裁定要点是**用户**写的那一段，跟驳回理由和发言不是一回事，所以单独摆
-                  在最后（时间顺序也在最后）。裁定完那张卡就收了，不在这儿留一份的话，
-                  用户自己写的话下次打开就只剩时间线里那 60 字摘要。 */}
-              {opened.round.dispute.resolutionNote && (
-                <div className="review-round-dispute__note">
-                  <b>你裁定时写的要点</b>
-                  <MarkdownBody text={opened.round.dispute.resolutionNote} />
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </ReviewEvidenceDrawer>
-    </ImagePreviewGroup>
-  );
-
-  if (reviewOnly) {
-    return (
-      <>
-        <div className="review-inspector free-workflow-review-inspector" aria-label="自由任务审查" ref={rootRef}>
-          {acceptedTarget && (
-            <section className="post-merge-review-card" aria-label="合并结果审查">
-              <header>
-                <span><GitCommit size={13} /></span>
-                <div>
-                  <b>合并结果</b>
-                  <small>{acceptedTarget.branch} · {acceptedTarget.baseCommit.slice(0, 8)} → {acceptedTarget.mergeCommit.slice(0, 8)}</small>
-                </div>
-                <em>可选</em>
-              </header>
-              <p>{latestPostMerge?.status === "reviewing"
-                ? "正在冻结的验收快照上审查，原任务仍保持已验收。"
-                : latestPostMerge?.status === "passed"
-                  ? "最近一次合并结果审查已通过。"
-                  : latestPostMerge?.status === "stopped"
-                    ? "最近一次审查未通过；可另建修复任务，不会重开原任务。"
-                    : latestPostMerge?.status === "failed"
-                      ? "最近一次审查异常停止，可重新发起。"
-                      : "需要时再检查最终集成状态，不影响已完成验收。"}</p>
-              <div>
-                {latestPostMergeRound && (
-                  <button type="button" onClick={openLatestPostMerge}>
-                    <MagnifyingGlass size={12} />{latestPostMerge?.status === "reviewing" ? "查看审查进度" : "查看审查结果"}
-                  </button>
-                )}
-                {latestPostMerge?.status === "stopped" && !postMergeRepairTaskId && onOpenTask && (
-                  <button type="button" disabled={repairBusy} onClick={() => void createPostMergeRepair()}>
-                    {repairBusy ? <SpinnerGap size={12} className="is-spinning" /> : <Wrench size={12} />}{repairBusy ? "创建中…" : "创建修复任务"}
-                  </button>
-                )}
-                {postMergeRepairTaskId && onOpenTask && (
-                  <button type="button" onClick={() => onOpenTask(postMergeRepairTaskId)}><CaretRight size={12} />打开修复任务</button>
-                )}
-                {latestPostMerge?.status !== "reviewing" && (
-                  <button type="button" onClick={() => setPostMergeDialogOpen(true)}>
-                    <MagnifyingGlass size={12} />{latestPostMerge ? "再审一次" : "开始审查"}
-                  </button>
-                )}
-              </div>
-            </section>
-          )}
-          <section className="review-inspector__overview">
-            <header>
-              <span className={`review-inspector__status${overviewStatus ? ` is-${overviewStatus}` : latestReview?.round.conclusion ? ` is-${latestReview.round.conclusion}` : ""}`}>
-                {disputedRound
-                  ? <HandPalm size={13} weight="fill" />
-                  : repairing
-                    ? <SpinnerGap size={13} className="is-spinning" />
-                    : stale
-                      ? <MagnifyingGlass size={13} />
-                      : latestReview ? reviewStatusIcon(latestReview.round) : <MagnifyingGlass size={13} />}
-              </span>
-              <div>
-                <b>{workspaceReviewActivities.length ? `${workspaceReviewActivities.length} 轮审查` : "实现阶段审查"}</b>
-                <small>{overviewDetail}</small>
-              </div>
-            </header>
-            <div className="review-inspector__actions">
-              {repairing && <FreeReviewProgress kind={view.autoRereview ? "auto_rereview" : "task_running"} />}
-              {/* 挂着待裁定的驳回时，「按意见修复」让位给下面那张卡——同一个动作在两处
-                  各写一半措辞，用户按哪一颗都不知道自己是不是顺手把驳回否掉了。
-                  已裁定作废（或已转独立任务）的那一轮更不能再修：确认框刚说完「执行者
-                  不再按它修改」，转出去的那几条也已经有别的任务在承接。
-                  后端 manualRepairBlocker 同样挡着，这里不是唯一防线。 */}
-              {stoppedRun && !taskBusy && !disputedRound && !waivedRound && view.freshness === "fresh" && notify && (
-                <FreeReviewRepairButton
-                  taskId={task.id}
-                  run={stoppedRun}
-                  className="is-repair"
-                  disabled={!taskReady || locked || waiting}
-                  onChanged={free.setState}
-                  notify={notify}
-                />
-              )}
-              {!locked && <button
-                type="button"
-                disabled={!taskReady || locked || !notify || (!reviewing && waiting && !reservationMode)}
-                onClick={() => setReviewDialogOpen(reviewing ? "rounds" : "review")}
-              >
-                {reviewing ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} />}
-                <span>{reviewActionLabel}</span>
-              </button>}
-              {onOpenReview && <button type="button" onClick={onOpenReview}><span>打开改动工作区</span><CaretRight size={13} /></button>}
-            </div>
-            {/* 预约还没变成 run，附言只躺在预约槽里；不摆出来的话，用户只能靠重新打开
-                派审对话框才知道自己预约时写了什么。 */}
-            {reservationArmed && state?.reviewReservation.note && (
-              <ReviewNote text={state.reviewReservation.note} label="预约附言" />
-            )}
-          </section>
-
-          {disputedRound && disputedRun && notify && (
-            <FreeReviewDisputeCard
-              // 一张卡 = 一条驳回：换成另一条（轮询、另一个窗口裁掉了这条）就整张重建，
-              // 开着的确认框、写了一半的要点都跟着旧那条走掉，不留给新那条。
-              key={`${task.id}:${disputedRun.id}:${disputedRound.round}`}
-              taskId={task.id}
-              run={disputedRun}
-              round={disputedRound}
-              disabled={locked || taskBusy || !!reviewing}
-              onChanged={free.setState}
-              notify={notify}
-              // 卡上只有执行者的说法；审查者那一半在报告里，用户不该为了读它先去
-              // 「审查记录」列表里认第几轮。
-              onOpenReport={() => selectReview(disputedRun, disputedRound)}
-            />
-          )}
-
-          <section className="review-inspector__targets" aria-label="自由审查轮次">
-            <header>
-              <b>审查记录</b>
-              <small>{workspaceReviewActivities.length ? `已记录 ${workspaceReviewActivities.length} 轮审查，点开在左侧看报告与截图` : "结论、报告与截图集中保存在这里"}</small>
-            </header>
-            <div ref={reviewListRef}>
-              {!workspaceReviewActivities.length && <p className="review-inspector__empty">{locked ? "该任务在验收前没有实现阶段审查记录。" : "点击上方“派审查”，选择审查者、检查类型和自动复审次数。"}</p>}
-              {workspaceReviewActivities.map((activity) => {
-                const key = reviewKey(activity.run.id, activity.round.round);
-                const failed = activity.round.status !== "reviewing" && activity.round.conclusion !== "verified";
-                return (
-                  <button
-                    type="button"
-                    key={key}
-                    className={key === selectedReviewKey ? "is-selected" : failed ? "is-failed" : ""}
-                    aria-expanded={key === selectedReviewKey}
-                    onClick={() => selectReview(activity.run, activity.round)}
-                  >
-                    <span>
-                      <b>第 {activity.round.round} 轮</b>
-                      <small>{activity.run.reviewerName} · {activity.run.checkMode === "logic" ? "逻辑检查" : "语法检查"} · {timing(activity.round.startedAt, activity.round.endedAt)}{activity.run.note ? " · 含附言" : ""}</small>
-                    </span>
-                    <em>{reviewStatusIcon(activity.round)}{reviewRoundLabel(activity.round)}</em>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-          {postMergeReviewActivities.length > 0 && (
-            <section className="review-inspector__targets post-merge-review-records" aria-label="合并结果审查记录">
-              <header><b>合并结果审查</b><small>固定针对验收快照；失败不会重开原任务</small></header>
-              <div ref={postMergeReviewListRef}>
-                {postMergeReviewActivities.map((activity) => {
-                  const key = reviewKey(activity.run.id, activity.round.round);
-                  const failed = activity.round.status !== "reviewing" && activity.round.conclusion !== "verified";
-                  return (
-                    <button type="button" key={key} className={key === selectedReviewKey ? "is-selected" : failed ? "is-failed" : ""} aria-expanded={key === selectedReviewKey} onClick={() => selectReview(activity.run, activity.round)}>
-                      <span><b>{activity.run.target?.kind === "accepted_merge" ? `${activity.run.target.branch}@${activity.run.target.mergeCommit.slice(0, 8)}` : "验收快照"}</b><small>{activity.run.reviewerName} · {timing(activity.round.startedAt, activity.round.endedAt)}{activity.run.note ? " · 含附言" : ""}</small></span>
-                      <em>{reviewStatusIcon(activity.round)}{reviewRoundLabel(activity.round)}</em>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-        </div>
-        {drawer}
-        {reviewDialogOpen === "rounds" && notify && reviewing && (
-          <FreeReviewRoundsDialog taskId={task.id} run={reviewing} onChanged={free.setState} onClose={() => setReviewDialogOpen(null)} notify={notify} />
-        )}
-        {reviewDialogOpen === "review" && notify && (
-          <FreeReviewDialog
-            taskId={task.id}
-            state={state}
-            reservationMode={reservationMode}
-            onChanged={free.setState}
-            onClose={() => setReviewDialogOpen(null)}
-            notify={notify}
-          />
-        )}
-        {postMergeDialogOpen && notify && acceptedTarget && (
-          <FreeReviewDialog taskId={task.id} state={state} reservationMode={false} postMergeTarget={acceptedTarget} onChanged={free.setState} onClose={() => setPostMergeDialogOpen(false)} notify={notify} />
-        )}
-      </>
-    );
-  }
 
   return (
     <>
@@ -541,23 +79,31 @@ export function FreeWorkflowInspector({
                   <div><b>任务执行</b><small>{executionLabel(activity.execution)} · {timing(activity.execution.startedAt, activity.execution.endedAt)}</small></div>
                 </li>;
               }
-              if (activity.type === "review") {
-                const active = activity.round.status === "reviewing";
-                const passed = activity.round.conclusion === "verified";
-                const key = reviewKey(activity.run.id, activity.round.round);
-                return <li key={activity.key} className={active ? "is-active" : passed ? "is-done" : "is-warning"}>
-                  <button type="button" aria-expanded={selectedReviewKey === key} onClick={() => selectReview(activity.run, activity.round)}>
-                    <span>{active ? <SpinnerGap size={14} className="is-spinning" /> : passed ? <CheckCircle size={14} weight="fill" /> : <MagnifyingGlass size={14} />}</span>
-                    <div><b>{activity.run.reviewerName} · {activity.run.checkMode === "logic" ? "逻辑检查" : "语法检查"}</b><small>{reviewRoundLabel(activity.round)} · 第 {activity.round.round} 轮 / 最多 {activity.run.retryLimit + 1} 轮 · {timing(activity.round.startedAt, activity.round.endedAt)}{activity.run.note ? " · 含附言" : ""}</small></div>
-                  </button>
-                </li>;
-              }
+              const active = activity.round.status === "reviewing";
+              const passed = activity.round.conclusion === "verified";
+              const key = reviewKey(activity.run.id, activity.round.round);
+              const recurrence = recurrenceText(activity.round);
+              return <li key={activity.key} className={active ? "is-active" : passed ? "is-done" : "is-warning"}>
+                <button type="button" aria-expanded={selectedReviewKey === key} onClick={() => selectReview(activity.run, activity.round)}>
+                  <span>{active ? <SpinnerGap size={14} className="is-spinning" /> : passed ? <CheckCircle size={14} weight="fill" /> : <MagnifyingGlass size={14} />}</span>
+                  <div><b>{activity.run.reviewerName} · {activity.run.checkMode === "logic" ? "逻辑检查" : "语法检查"}</b><small>{reviewRoundLabel(activity.round)}{recurrence ? ` · ${recurrence}` : ""} · 第 {activity.round.round} 轮 / 最多 {activity.run.retryLimit + 1} 轮 · {timing(activity.round.startedAt, activity.round.endedAt)}{activity.run.note ? " · 含附言" : ""}</small></div>
+                </button>
+              </li>;
             })}
           </ol>
           {!activities.length && <p>目前还没有实际工作流记录；任务执行或派审后，这里会按发生顺序补出记录。</p>}
         </section>
       </div>
-      {drawer}
+      {opened && (
+        <FreeReviewRoundDrawer
+          taskId={task.id}
+          run={opened.run}
+          round={opened.round}
+          anchorRef={rootRef}
+          keepOpenRef={workflowListRef}
+          onClose={() => setSelectedReviewKey(null)}
+        />
+      )}
     </>
   );
 }

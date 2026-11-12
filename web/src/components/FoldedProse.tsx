@@ -24,7 +24,7 @@ export function FoldedProse({ label, text, open: initiallyOpen = false, tone = n
 }) {
   // 展开状态挂在**这份内容**上，不挂在「组件这个位置」上。`useState(initiallyOpen)` 只在
   // 首次挂载时取值，而历史报告抽屉切换轮次时复用的是同一个 FoldedProse 位置
-  // （FreeWorkflowInspector 的 reason/defer 两处）：甲轮手动展开会跟着切到乙轮，乙轮那条
+  // （FreeReviewRoundBody 的 reason/defer 两处）：甲轮手动展开会跟着切到乙轮，乙轮那条
   // 该默认摊开的老记录反倒是收起的 —— 用户以为「这条没写理由」（第 1 轮审查 N1 实测）。
   //
   // 身份直接用正文本身：内容一换就回到这份内容自己的默认档，内容没换（父级重渲染）就保留

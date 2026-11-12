@@ -1,14 +1,10 @@
-// 单任务的验证记录：列表留在 inspector 里，正文改由抽屉装。
-//
-// 原来是把每一轮整篇铺在侧栏里（`ReviewEvidence`）。侧栏只有 340px 宽，一份验证报告加
-// 两张证据截图就能撑到近 2000px 高——可视区不到一半，看完一轮要往下拖一千多像素，而且
-// 拖着拖着就不知道自己在第几轮。团队那边早就改成「点一条、左边弹一屉」了，这里是同一个
-// 毛病的另一半，用的也是同一个抽屉组件。
+// 单任务的验证记录：一轮一行（第几轮、在哪验、右边是结论），点开就在这一行底下铺报告；
+// 嫌窄就点正文第一行末尾那颗图标，同一份正文装进贴着面板左边缘的抽屉里看。
 //
 // 粒度按各自的主语走：团队一屏里有多个被审对象，列的是对象；单任务只有它自己，列的是轮次。
 import { useMemo, useRef, useState } from "react";
-import { SpinnerGap } from "@phosphor-icons/react";
-import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
+import type { TaskReviewRound } from "@ash/shared";
+import { InspButton, InspNone, InspRecord, InspSec } from "../inspector/parts.tsx";
 import { api } from "../lib/api.ts";
 import {
   ReviewRoundBody,
@@ -16,12 +12,19 @@ import {
   roundWhere,
   type TaskReviewState,
 } from "../team/ReviewEvidence.tsx";
-import { ReviewEvidenceDrawer } from "./ReviewEvidenceDrawer.tsx";
+import { ReviewInlineReport } from "./ReviewInlineReport.tsx";
 import { ReviewScreenshotStrip } from "./ReviewScreenshotStrip.tsx";
 
 // 同一个轮次号可以既有独立审查又有就地验证两条记录，光靠 round 认不出是哪一条。
 function roundKey(round: { round: number; where: string }) {
   return `${round.round}-${round.where}`;
+}
+
+function roundTone(round: TaskReviewRound): "plain" | "bad" | "live" {
+  // 只有「未通过 / 无结论」标红。进行中那轮还没有结论，先标成红的等于提前判它死刑。
+  const status = roundState(round).className;
+  if (status === "is-verifying") return "live";
+  return status === "is-verify-failed" || status === "is-inconclusive" ? "bad" : "plain";
 }
 
 export function TaskReviewRounds({
@@ -36,78 +39,62 @@ export function TaskReviewRounds({
   onOpenTask?: (taskId: string) => void;
 }) {
   const rounds = useMemo(() => state.info?.rounds ?? [], [state.info]);
-  // 默认不弹：一进来就盖住列表反而更难挑，跟团队那边同一个规矩。
-  const [openKey, setOpenKey] = useState<string | null>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const opened = openKey ? rounds.find((round) => roundKey(round) === openKey) ?? null : null;
+  // 默认都收着：一进来就铺满报告反而更难挑。
+  const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const rootRef = useRef<HTMLElement>(null);
+  const toggle = (key: string) => setOpenKeys((current) => {
+    const next = new Set(current);
+    if (!next.delete(key)) next.add(key);
+    return next;
+  });
 
   return (
-    // 这层不带样式，只是抽屉量位置用的锚点：留白由里面的 section 自己管，套两层会变成双份内边距。
-    <div ref={rootRef}>
-      <section className="review-inspector__targets" aria-label="验证轮次">
-        <header>
-          <b>验证记录</b>
-          <small>{rounds.length ? `已记录 ${rounds.length} 轮真实运行验证，点开在左侧看报告与截图` : "结论、报告与截图集中保存在这里"}</small>
-        </header>
-        <div ref={listRef}>
-          {state.loading && (
-            <p className="review-inspector__empty"><SpinnerGap size={13} className="is-spinning" />正在读取验证记录…</p>
-          )}
-          {!state.loading && state.error && (
-            <p className="review-inspector__empty is-error">
-              验证记录加载失败：{state.error}
-              <button type="button" onClick={() => void state.reload()}>重试</button>
-            </p>
-          )}
-          {!state.loading && !state.error && !rounds.length && (
-            <p className="review-inspector__empty">{emptyMessage}</p>
-          )}
+    <section ref={rootRef} aria-label="验证记录">
+      <InspSec count={rounds.length || undefined}>验证记录</InspSec>
+      {state.loading && <InspNone>正在读取验证记录…</InspNone>}
+      {!state.loading && state.error && (
+        <InspNone action={<InspButton size="sm" onClick={() => void state.reload()}>重试</InspButton>}>
+          验证记录加载失败：{state.error}
+        </InspNone>
+      )}
+      {!state.loading && !state.error && !rounds.length && <InspNone>{emptyMessage}</InspNone>}
+      {rounds.length > 0 && (
+        <div className="insp-recs">
           {rounds.map((round) => {
             const key = roundKey(round);
             const status = roundState(round);
-            // 只有「未通过 / 无结论」标红。进行中那轮还没有结论，先标成红的等于提前判它死刑。
-            const failed = status.className === "is-verify-failed" || status.className === "is-inconclusive";
+            const screenshots = round.screenshots.length ? (
+              <ReviewScreenshotStrip items={round.screenshots.map((name) => ({
+                key: name,
+                name,
+                src: api.taskReviewFileUrl(taskId, round.round, name),
+                label: `第 ${round.round} 轮 · ${name}`,
+              }))} />
+            ) : null;
             return (
-              <button
-                type="button"
+              <InspRecord
                 key={key}
-                className={key === openKey ? "is-selected" : failed ? "is-failed" : ""}
-                aria-expanded={key === openKey}
-                onClick={() => setOpenKey((current) => current === key ? null : key)}
+                data-record={key}
+                title={`第 ${round.round} 轮`}
+                sub={roundWhere(round)}
+                status={status.label}
+                tone={roundTone(round)}
+                open={openKeys.has(key)}
+                onToggle={() => toggle(key)}
               >
-                <span><b>第 {round.round} 轮</b><small>{roundWhere(round)}</small></span>
-                <em>{status.icon}{status.label}</em>
-              </button>
+                <ReviewInlineReport
+                  title={`第 ${round.round} 轮验证`}
+                  subtitle={`${status.label} · ${roundWhere(round)}`}
+                  anchorRef={rootRef}
+                  screenshots={screenshots}
+                >
+                  <ReviewRoundBody taskId={taskId} round={round} onOpenTask={onOpenTask} includeScreenshots={false} />
+                </ReviewInlineReport>
+              </InspRecord>
             );
           })}
         </div>
-      </section>
-
-      {opened && (
-        // 图片分组包住正文和底部截图带：翻大图时左右键只在这一轮证据之间走。
-        <ImagePreviewGroup isolated>
-          <ReviewEvidenceDrawer
-            anchorRef={rootRef}
-            keepOpenRef={listRef}
-            title={`第 ${opened.round} 轮验证`}
-            subtitle={`${roundState(opened).label} · ${roundWhere(opened)}`}
-            onClose={() => setOpenKey(null)}
-            footer={opened.screenshots.length ? (
-              <ReviewScreenshotStrip items={opened.screenshots.map((name) => ({
-                key: name,
-                name,
-                src: api.taskReviewFileUrl(taskId, opened.round, name),
-                label: `第 ${opened.round} 轮 · ${name}`,
-              }))} />
-            ) : undefined}
-          >
-            <div className="review-round-body">
-              <ReviewRoundBody taskId={taskId} round={opened} onOpenTask={onOpenTask} includeScreenshots={false} />
-            </div>
-          </ReviewEvidenceDrawer>
-        </ImagePreviewGroup>
       )}
-    </div>
+    </section>
   );
 }

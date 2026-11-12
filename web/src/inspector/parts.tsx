@@ -170,3 +170,33 @@ export function InspCard({ children, className = "", as: Tag = "article", ...res
 }) {
   return <Tag className={`insp-card ${className}`.trim()} {...rest}>{children}</Tag>;
 }
+
+/**
+ * 一条记录：一行（名字、一段灰字、右边的状态），点开就在这一行底下铺正文。审查各轮、
+ * 合并结果审查都是它。`tone` 只改右边那段状态的颜色：没通过是红字，在跑是主色字。
+ */
+export const InspRecord = forwardRef<HTMLDivElement, {
+  title: ReactNode;
+  sub?: ReactNode;
+  status: ReactNode;
+  tone?: "plain" | "bad" | "live";
+  open: boolean;
+  onToggle: () => void;
+  label?: string;
+  children?: ReactNode;
+} & { "data-record"?: string }>(function InspRecord({ title, sub, status, tone = "plain", open, onToggle, label, children, ...rest }, ref) {
+  return (
+    <div ref={ref} className={`insp-rec${open ? " is-open" : ""}`} data-record={rest["data-record"]}>
+      <InspGo
+        aria-expanded={open}
+        aria-label={label}
+        meta={<span className={tone === "bad" ? "insp-bad" : tone === "live" ? "insp-live" : undefined}>{status}</span>}
+        onClick={onToggle}
+      >
+        {title}
+        {sub != null && <span className="insp-faint"> {sub}</span>}
+      </InspGo>
+      {open && <div className="insp-rec__body">{children}</div>}
+    </div>
+  );
+});

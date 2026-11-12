@@ -13,6 +13,7 @@ import { TaskInspector } from "./TaskInspector.tsx";
 import { TaskReviewInspector } from "./TaskReviewInspector.tsx";
 import { WorkflowInspector } from "../workflow/WorkflowInspector.tsx";
 import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.tsx";
+import { FreeReviewPane } from "../free-workflow/FreeReviewPane.tsx";
 import { SideChatPane } from "../side-chat/SideChatPane.tsx";
 import { monitorBlockedReason } from "@ash/shared/monitor";
 import { MonitorInspector } from "../monitors/MonitorInspector.tsx";
@@ -188,7 +189,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     defaultOpen: true,
     shortcut: "r",
     render: (context) => context.task.workflowMode === "free"
-      ? <FreeWorkflowInspector task={context.task} reviewOnly onOpenReview={context.onOpenReview} onOpenTask={context.onOpenTask} notify={context.notify} />
+      ? <FreeReviewPane task={context.task} onOpenReview={context.onOpenReview} onOpenTask={context.onOpenTask} notify={context.notify} />
       : <TaskReviewInspector {...context} />,
   },
   {

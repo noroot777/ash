@@ -10,14 +10,18 @@ try {
   await page.goto(`${web.origin}/scripts/fixtures/free-workflow-inspector.html`);
 
   const reviewOnly = page.locator(".review-only-fixture");
-  const reviewRounds = reviewOnly.locator(".review-inspector__targets button");
+  // 「审查」格里一轮一行（InspRecord），点开就在这一行底下铺报告。
+  const reviewRounds = reviewOnly.locator(".insp-rec > .insp-go");
   await reviewRounds.first().waitFor();
 
   const repairFixture = page.locator(".repair-fixture");
   const repairToolbar = page.locator(".toolbar-repair-fixture");
   const repairButton = repairToolbar.getByRole("button", { name: "按意见修复" });
   await repairButton.waitFor();
-  assert.match(await repairFixture.locator(".review-inspector__overview small").innerText(), /自动复审已停止/);
+  assert.match(await repairFixture.locator(".insp-now").innerText(), /自动复审已停止/);
+  // 一句结论配一个主动作：未通过、任务闲着、结论对得上当前代码时，主动作就是「按意见修复」。
+  assert.deepEqual(await repairFixture.locator(".insp-do > button").allInnerTexts(), ["按意见修复", "再审一轮"], "审查格顶上只有一个主动作，其余（只剩一项时）直接摆出来");
+  assert.match(await repairFixture.locator(".insp-do > button").first().getAttribute("class"), /is-pri/, "有事要你办时主动作是实心的");
   await repairButton.click();
   await page.waitForFunction(() => window.__repairRequests === 1);
   assert.equal(await page.evaluate(() => window.__repairRequests), 1, "一键修复只应发送一次请求");
@@ -141,17 +145,31 @@ try {
   await page.waitForFunction(() => window.__reservationRequests === 3);
   await reviewDialog.waitFor({ state: "detached" });
   assert.equal(await page.evaluate(() => window.__reservationRetryLimit), 7, "手填的轮数必须原样提交");
-  assert.deepEqual(await reviewRounds.locator("b").allInnerTexts(), ["第 1 轮", "第 1 轮"], "自由审查 inspector 应和普通任务一样按轮列出记录");
-  assert.match(await reviewRounds.first().locator("small").innerText(), /含附言$/, "带附言的那一轮要在记录条上留标记");
+  assert.deepEqual(
+    (await reviewRounds.locator(".insp-cut").allInnerTexts()).map((text) => text.replace(/\s+/g, " ").slice(0, 5)),
+    ["第 1 轮", "第 1 轮"],
+    "自由审查格应和普通任务一样按轮列出记录",
+  );
+  assert.equal(await reviewOnly.locator(".insp-rec__body").count(), 0, "审查正文默认收着");
   assert.equal(await page.locator(".review-evidence-drawer").count(), 0, "审查正文默认不弹出");
   await reviewRounds.first().click();
 
+  const inline = reviewOnly.locator(".insp-rec__body").first();
+  await inline.waitFor();
+  assert.equal(await reviewRounds.first().getAttribute("aria-expanded"), "true");
+  // 附言是这一轮审查的输入，摆在报告正文之上才好拿它对着结论核对。
+  assert.match(await inline.locator(".review-note").innerText(), /派审附言[\s\S]*重点核对退款分支的边界条件。/, "就地展开的报告里要带出这一轮的附言");
+  assert.equal(await inline.getByRole("heading", { name: "审查结论" }).count(), 1, "报告应就地按 Markdown 正文渲染");
+  assert.equal(await inline.locator("pre").count(), 0, "报告不再退化成原始 pre 文本");
+  assert.equal(await inline.locator(".review-screenshot-strip img[role=button]").count(), 6, "就地展开时截图也在");
+  assert.equal(await page.locator(".review-evidence-drawer").count(), 0, "就地展开不弹抽屉");
+
+  // 嫌窄就点那一行末尾的图标：同一份正文装进贴着面板左边缘的抽屉里。
+  await inline.getByRole("button", { name: "在左侧铺开看" }).click();
   const drawer = page.locator(".review-evidence-drawer");
   await drawer.waitFor();
-  // 附言是这一轮审查的输入，摆在报告正文之上才好拿它对着结论核对。
   assert.match(await drawer.locator(".review-note").innerText(), /派审附言[\s\S]*重点核对退款分支的边界条件。/, "报告抽屉里要带出这一轮的附言");
   assert.equal(await drawer.getByRole("heading", { name: "审查结论" }).count(), 1, "报告应在左侧抽屉按 Markdown 正文渲染");
-  assert.equal(await drawer.locator("pre").count(), 0, "报告不再退化成原始 pre 文本");
 
   const shots = drawer.locator(".review-screenshot-strip");
   assert.equal(await shots.locator("a").count(), 0, "自由审查截图不应再是新页面链接");
@@ -169,13 +187,15 @@ try {
   const lightbox = page.getByRole("dialog", { name: /图片预览/ });
   await lightbox.waitFor();
   assert.equal(page.context().pages().length, pageCount, "点截图必须留在当前页面");
-  assert.equal(await page.getByText("1 / 6", { exact: true }).count(), 1);
+  assert.equal(await page.getByText("1 / 6", { exact: true }).count(), 1, "抽屉里那一组只数它自己的六张");
   assert.match(await lightbox.locator("img").getAttribute("src"), /free-workflow\/review-file\?run=run-abc&round=1&name=shot-one\.png$/);
   await page.keyboard.press("Escape");
   await lightbox.waitFor({ state: "detached" });
   assert.equal(await drawer.count(), 1, "关闭大图时审查抽屉应保留");
-  await reviewRounds.first().click();
+  await page.keyboard.press("Escape");
   await drawer.waitFor({ state: "detached" });
+  await reviewRounds.first().click();
+  assert.equal(await reviewOnly.locator(".insp-rec__body").count(), 0, "再点一次那一行就收起来");
 
   const workflow = page.locator(".workflow-inspector-fixture");
   const activities = workflow.locator(".free-workflow-generated li");
@@ -192,7 +212,7 @@ try {
   assert.equal(await drawer.getByRole("heading", { name: "审查结论" }).count(), 1);
 
   await activities.nth(3).getByRole("button").click();
-  assert.equal(await drawer.locator(".review-round-body p").first().innerText(), "报告尚未生成。", "点第二次审查应在同一抽屉切换记录");
+  assert.equal(await drawer.locator(".review-round-body p").first().innerText(), "还在审，报告写完会出现在这里。", "点第二次审查应在同一抽屉切换记录（那一轮还在审）");
   assert.equal(await drawer.locator(".review-evidence-drawer__footer").count(), 0, "没有截图的轮次不应留下空白底栏");
   await activities.nth(3).getByRole("button").click();
   await drawer.waitFor({ state: "detached" });
@@ -249,24 +269,33 @@ try {
   assert.equal(await page.evaluate(() => window.__postMergeRequests), 1, "快照入口应发起一次合并结果审查");
 
   const postMergeInspector = page.locator(".post-merge-inspector-fixture");
-  await postMergeInspector.getByRole("region", { name: "合并结果审查", exact: true }).waitFor();
-  await postMergeInspector.getByRole("button", { name: "查看审查进度" }).waitFor();
-  assert.equal(await postMergeInspector.getByText("可选", { exact: true }).count(), 1, "Inspector 应明确标注合并结果审查是可选操作");
-  assert.match(await postMergeInspector.getByRole("region", { name: "合并结果审查", exact: true }).innerText(), /原任务仍保持已验收/);
+  const postMergeHead = postMergeInspector.getByRole("region", { name: "合并结果审查", exact: true });
+  await postMergeHead.waitFor();
+  // 刚从快照入口发起了一次合并结果审查：共享状态刷新后这一格的结论跟着变。
+  await postMergeHead.locator(".insp-now", { hasText: "合并结果审查中" }).waitFor();
+  // 审查在跑时没有主动作；「查看审查进度」和「打开改动工作区」收在「更多」里。
+  await postMergeHead.getByRole("button", { name: "更多" }).click();
+  await page.getByRole("menuitem", { name: "查看审查进度" }).click();
+  await postMergeInspector.locator(".insp-rec__body").first().waitFor();
 
   // 裁定完不是终点：执行者在提驳回之前已经把「认可且在边界内」的那几条改掉了，那部分
   // 代码一轮都没审过，而这一轮的结论又作不得数了。概览必须把下一步说出来，否则这条链
   // 静悄悄地停在原地，用户只会以为「已经处理完了」。
-  const waivedStale = page.locator(".waived-stale-fixture .review-inspector__overview small");
+  const waivedStale = page.locator(".waived-stale-fixture .insp-now");
   await waivedStale.waitFor();
   assert.match(await waivedStale.innerText(), /转为独立任务/);
   assert.match(
     await waivedStale.innerText(),
-    /还没审过.*审查新改动/,
+    /还没审过/,
     "裁定完且代码变过时，概览要指出执行者改的那部分还没审过、该再派一轮",
   );
   // 另一半：工作区没变过就别劝人再审——那一轮什么都审不出来，纯烧额度。
-  const waivedFresh = page.locator(".waived-fresh-fixture .review-inspector__overview small");
+  assert.equal(
+    await page.locator(".waived-stale-fixture .insp-do > button").first().innerText(),
+    "审查新改动",
+    "代码变过时主动作就是「审查新改动」",
+  );
+  const waivedFresh = page.locator(".waived-fresh-fixture .insp-now");
   await waivedFresh.waitFor();
   assert.match(await waivedFresh.innerText(), /这条意见作废/);
   assert.doesNotMatch(
@@ -278,10 +307,10 @@ try {
   // 裁定要点得在这一轮的审查记录里留一份：裁定一落，驳回卡就收了，用户自己写的那段话
   // 除了时间线上那句摘要就再无去处。它是**用户**的话，所以跟驳回理由分块摆。
   const waivedFixture = page.locator(".waived-fresh-fixture");
-  await waivedFixture.locator(".review-inspector__targets button").first().click();
-  const waivedDrawer = page.locator(".review-evidence-drawer");
-  await waivedDrawer.waitFor();
-  const resolutionNote = waivedDrawer.locator(".review-round-dispute__note");
+  await waivedFixture.locator(".insp-rec > .insp-go").first().click();
+  const waivedBody = waivedFixture.locator(".insp-rec__body").first();
+  await waivedBody.waitFor();
+  const resolutionNote = waivedBody.locator(".review-round-dispute__note");
   await resolutionNote.waitFor();
   assert.match(await resolutionNote.innerText(), /你裁定时写的要点/, "要标明这段是用户自己写的");
   assert.match(
@@ -293,8 +322,8 @@ try {
   // 裁定过的那几条，服务端派审时会自动讲给下一位审查者（free-review-settled.ts）。
   // 派审面上必须说出这件事：不说的话用户无从知道它已经自动化了，只会照旧每轮手打一句
   // 「有异议的已经转为新任务，只审查本次改动内容」（用户 2026-09-30 反馈）。
-  await waivedFixture.locator(".review-inspector__targets button").first().click();
-  await waivedDrawer.waitFor({ state: "detached" });
+  await waivedFixture.locator(".insp-rec > .insp-go").first().click();
+  await waivedBody.waitFor({ state: "detached" });
   await waivedFixture.getByRole("button", { name: "再审一轮" }).click();
   await reviewDialog.getByRole("heading", { name: "派审查" }).waitFor();
   assert.match(

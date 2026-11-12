@@ -1,0 +1,229 @@
+/* 右侧「审查」格（free-workflow/FreeReviewPane.tsx、task-detail/TaskReviewInspector.tsx）和各格共用的
+   「顶上一句结论 + 一个主动作 + 更多」（inspector/InspHead.tsx）、点开就地看的记录（InspRecord）。
+   公共件在 inspector-parts.css。 */
+
+/* 顶上那一块：一句结论、一排动作 */
+.insp-head {
+  margin: 0 0 18px;
+}
+
+.insp-now {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--t-md);
+  font-weight: var(--w-medium);
+  line-height: 1.4;
+}
+
+.insp-now > svg,
+.insp-now__icon {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--muted);
+}
+
+.insp-now.is-ok > .insp-now__icon { color: var(--green); }
+.insp-now.is-bad > .insp-now__icon { color: var(--red); }
+.insp-now.is-stale > .insp-now__icon,
+.insp-now.is-hold > .insp-now__icon { color: var(--amber); }
+.insp-now.is-busy > svg { color: var(--accent); }
+
+.insp-do {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.insp-do:empty {
+  display: none;
+}
+
+/* 动作底下那一行小字：按不了的时候说一句为什么 */
+.insp-hint {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  line-height: 1.5;
+}
+
+.insp-hint.is-bad {
+  color: var(--red);
+}
+
+.insp-head > .review-note {
+  margin-top: 10px;
+}
+
+/* 「更多」的菜单 */
+.insp-more-menu {
+  position: fixed;
+  z-index: 60;
+}
+
+.insp-more-menu > .ui-menu {
+  width: auto;
+  min-width: 180px;
+  max-width: 280px;
+}
+
+.insp-more-menu .ui-menu-item {
+  font-size: var(--t-sm);
+}
+
+/* 记录：一行一条，点开就在底下铺正文 */
+.insp-recs {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+}
+
+.insp-rec,
+.insp-rec__body,
+.insp-report {
+  min-width: 0;
+}
+
+.review-pane > section + section {
+  margin-top: 18px;
+}
+
+.insp-rec__body {
+  margin: 2px 0 10px;
+}
+
+.insp-report {
+  color: var(--ink);
+  font-size: var(--t-xs);
+  line-height: 1.6;
+}
+
+.insp-report__meta {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  color: var(--muted);
+}
+
+.insp-report__meta > .insp-cut {
+  flex: 1 1 auto;
+}
+
+/* 报告正文：右侧面板里用小一号的正文字，不再是 10.5px 的灰字 */
+.insp-report .review-round-body,
+.review-pane .review-round-body {
+  color: var(--ink);
+  font-size: var(--t-xs);
+  line-height: 1.6;
+}
+
+.insp-report .review-round-body .task-markdown {
+  font-size: var(--t-xs);
+  line-height: 1.6;
+}
+
+.insp-report .review-round-body > .insp-note {
+  margin-bottom: 8px;
+}
+
+.insp-report .review-screenshot-strip {
+  margin-top: 10px;
+}
+
+.insp-report .review-screenshot-strip > header,
+.insp-report .review-screenshot-strip__item span,
+.insp-report .review-round__open-task {
+  font-size: var(--t-xs);
+}
+
+.insp-report .review-round__open-task {
+  height: 24px;
+  border-radius: var(--r-sm);
+  background: transparent;
+  padding: 0 8px;
+  margin-left: -8px;
+  color: var(--ink);
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.insp-report .review-round__open-task:hover {
+  background: var(--hover-bg);
+}
+
+/* 派审附言、预约附言：用户自己写的输入，长得像引用——一条竖线加原样换行的正文 */
+.review-pane .review-note {
+  border-left: 2px solid var(--line2);
+  border-radius: 0;
+  background: transparent;
+  padding: 2px 0 2px 10px;
+}
+
+.review-pane .review-note > b {
+  color: var(--muted);
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
+  letter-spacing: 0;
+}
+
+.review-pane .review-note > p {
+  color: var(--ink);
+  font-size: var(--t-xs);
+}
+
+/* 折起来的长正文、辩论回放：在这一格里同样用正文字号 */
+.review-pane .folded-prose > button,
+.review-pane .free-review-debate > header b,
+.review-pane .free-review-debate li > span b,
+.review-pane .free-review-debate__gist,
+.review-pane .free-review-debate__pending,
+.review-pane .free-review-debate-exchanges > b,
+.review-pane .free-review-debate-exchanges > div > button {
+  font-size: var(--t-xs);
+}
+
+.review-pane .folded-prose > button > em,
+.review-pane .free-review-debate > header small,
+.review-pane .free-review-debate li > span em,
+.review-pane .free-review-debate__expand,
+.review-pane .free-review-debate__quote,
+.review-pane .free-review-debate-exchanges > small {
+  font-size: var(--t-xs);
+}
+
+.review-pane .folded-prose.is-open .task-markdown,
+.review-pane .free-review-debate .task-markdown {
+  color: var(--ink);
+  font-size: var(--t-xs);
+}
+
+.review-pane .free-review-debate-exchanges > div > button.is-selected {
+  background: var(--sel-bg);
+  color: var(--ink);
+  font-weight: var(--w-medium);
+}
+
+/* 预设工作流「验一轮」点开的那一块：一行执行器、一句说明、两颗键 */
+.review-pane__dispatch {
+  margin: -6px 0 18px;
+  border-radius: var(--r-lg);
+  background: var(--raised);
+  padding: 10px 12px;
+}
+
+.review-pane__dispatch > .insp-hint {
+  margin-top: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .insp-report .review-round__open-task {
+    transition: none;
+  }
+}

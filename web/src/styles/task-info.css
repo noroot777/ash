@@ -123,10 +123,6 @@ button.insp-req:focus-visible {
   background: var(--red);
 }
 
-.insp-bad {
-  color: var(--red);
-}
-
 /* 能指上去看补充的一段字：不画虚线，指到才说 */
 .insp-has-tip {
   min-width: 0;

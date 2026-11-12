@@ -1,5 +1,6 @@
 @import "./inspector-parts.css";
 @import "./task-info.css";
+@import "./review-pane.css";
 
 .inspector-layout {
   display: flex;
