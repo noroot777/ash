@@ -94,7 +94,8 @@ export function useWorkbench(
           ? reason.message
           : "Git 操作失败，请查看操作日志";
       if (mounted.current) setMessage(text);
-      notify(text);
+      // 推送失败在顶栏下面那一条里讲（原因、先拉取、原始输出），这里不再另弹一次同一句。
+      if (action.kind !== "push") notify(text);
     } finally {
       if (mounted.current) await refresh();
       running.current = false;

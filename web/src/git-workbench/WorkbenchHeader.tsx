@@ -18,6 +18,7 @@ import type { Workbench } from "./useWorkbench.ts";
 import type { AskAction } from "./ActionDialog.tsx";
 import { WorkbenchMenu } from "./WorkbenchMenu.tsx";
 import { openGitWorkbench } from "./navigation.ts";
+import { pullMenuItems } from "./pullMenu.ts";
 
 export function WorkbenchHeader({
   projectId,
@@ -172,25 +173,7 @@ export function WorkbenchHeader({
           className="top-btn"
           label="拉取"
           disabled={w.blocked || !branch?.upstream}
-          items={[
-            {
-              label: "仅快进 · 分叉时停止",
-              onClick: () => void w.run({ kind: "pull", strategy: "ff-only" }),
-            },
-            {
-              label: "拉取并合并",
-              onClick: () => void w.run({ kind: "pull", strategy: "merge" }),
-            },
-            ...(!managed
-              ? [
-                  {
-                    label: "拉取并变基",
-                    onClick: () =>
-                      void w.run({ kind: "pull", strategy: "rebase" as const }),
-                  },
-                ]
-              : []),
-          ]}
+          items={pullMenuItems(w, !!managed)}
         >
           <ArrowDown size={14} />
           <span>拉取</span>

@@ -122,6 +122,19 @@
 .gwb-design .gwb-banner.is-error, .gwb-design .gwb-error { color: var(--red); }
 .gwb-design .gwb-result { color: var(--muted); background: var(--panel); }
 .gwb-design .gwb-result span { flex: 1; min-width: 0; max-height: 64px; overflow: auto; white-space: pre-wrap; }
+/* 推送失败：一句原因 + 一个动作（先拉取）+ 查看详情，原始输出展开在原因下面。 */
+.gwb-design .gwb-push-fail { display: flex; align-items: flex-start; gap: 8px; flex-shrink: 0; margin: 8px 10px 0; padding: 6px 8px 6px 10px; border-radius: var(--r-md); background: var(--red-bg); color: var(--ink); font-size: var(--t-xs); }
+.gwb-design .gwb-push-fail-icon { flex-shrink: 0; margin-top: 4px; color: var(--red); }
+.gwb-design .gwb-push-fail-main { flex: 1; min-width: 0; }
+.gwb-design .gwb-push-fail-main > p { margin: 0; line-height: 24px; overflow-wrap: anywhere; }
+.gwb-design .gwb-push-fail-main b { font-weight: var(--w-medium); }
+.gwb-design .gwb-push-fail-acts { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.gwb-design .gwb-push-fail-acts .ui-btn { height: 24px; padding: 0 9px; border-radius: var(--r-sm); font-size: var(--t-xs); font-weight: var(--w-medium); }
+.gwb-design .gwb-push-fail-more { height: 24px; padding: 0 8px; border-radius: var(--r-sm); color: var(--muted); font-size: var(--t-xs); transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.gwb-design .gwb-push-fail-more:hover { background: var(--hover-bg); color: var(--ink); }
+.gwb-design .gwb-push-raw { position: relative; margin: 6px 0 2px; }
+.gwb-design .gwb-push-raw > pre { margin: 0; max-height: 160px; overflow: auto; padding: 8px 36px 8px 10px; border-radius: var(--r-sm); background: var(--panel); font: var(--w-regular) var(--t-xs)/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.gwb-design .gwb-push-raw > .icon-btn { position: absolute; top: 4px; right: 4px; }
 .gwb-design .gwb-operation { font-size: 12px; background: color-mix(in lch, var(--red) 8%, var(--canvas)); border-bottom: .5px solid var(--line); padding: 7px 14px; }
 .gwb-design .gwb-operation > header { display: flex; align-items: center; gap: 8px; color: var(--red); flex-wrap: wrap; }
 .gwb-design .gwb-operation > header > span { color: var(--muted); }

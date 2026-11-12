@@ -18,6 +18,7 @@ import { ConflictDialog } from "./ConflictDialog.tsx";
 import { openGitWorkbench } from "./navigation.ts";
 import { WorkbenchHeader } from "./WorkbenchHeader.tsx";
 import { WorkbenchNavIcon } from "./WorkbenchNavIcon.tsx";
+import { PushFailure } from "./PushFailure.tsx";
 import "../styles/git-workbench.css";
 
 const views = [
@@ -198,13 +199,23 @@ export function GitWorkbench({
       {data?.status.truncated && (
         <p className="gwb-banner">变更超过 2,000 条，当前列表未全部显示。</p>
       )}
-      {(w.message ||
-        (latest &&
-          ["failed", "conflict", "interrupted"].includes(latest.state))) && (
-        <div className="gwb-result" role="status">
-          <span>{w.message || latest?.message}</span>
-          <button onClick={() => navigate("log")}>查看日志</button>
-        </div>
+      {pushFailed && latestHere ? (
+        <PushFailure
+          key={latestHere.id}
+          entry={latestHere}
+          workbench={w}
+          canPull={!!branch?.upstream}
+          managed={!!data?.worktrees.some((tree) => tree.path === data.root && tree.managed)}
+        />
+      ) : (
+        (w.message ||
+          (latest &&
+            ["failed", "conflict", "interrupted"].includes(latest.state))) && (
+          <div className="gwb-result" role="status">
+            <span>{w.message || latest?.message}</span>
+            <button onClick={() => navigate("log")}>查看日志</button>
+          </div>
+        )
       )}
       {data && (!!data.status.merge.length || data.status.operation) && (
         <section className="gwb-operation">
