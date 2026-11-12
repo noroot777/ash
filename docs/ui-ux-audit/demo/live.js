@@ -1,7 +1,7 @@
 /* 执行中（部件 live）：把一轮从发出到落定演一遍。数据按 ash 真实的粒度来——
    正文是「攒够约 40 字」才来一块，工具只有一条「开始」、没有「结束」——动效都落在前端能做的那一侧：
    一行进行条（流光 + 用时，做完原地落定成过去式）、匀速放字 + 淡入、同一时刻只有一个「活的」信号。
-   剧本在 live-scripts.js，数字和拆字在 live-words.js。这一轮跟着任务走，不跟着页面：切到别的面它照常往下跑（侧栏那一行照样变），回来接着看。
+   剧本在 live-scripts.js，数字和拆字在 live-words.js，进行条在 live-strip.js。这一轮跟着任务走，不跟着页面：切到别的面它照常往下跑（侧栏那一行照样变），回来接着看。
    对外：ASH.parts.live = { running, play(name, say), stop(), retry(), accept(), destroy() }，name 是 run / ask / fail / slow / squeeze / squeezeFail / stall / compact / watch / watchSay / agents；
    报告页隔着 iframe 递 { ash: 'play', name } 也能起一轮（正跑着的那一轮连同它留下的半截一起撤掉），{ ash: 'stop' } 是停；
    嵌在报告里时，等你答复那一刻往外递 { ash: 'title', waiting }，报告拿它改自己的标签页标题。
@@ -17,7 +17,7 @@
   const STOP = 'stopped';
   const QUIT = 'quit';   /* 不等哨兵了：这一轮到此为止，台面已经收好 */
   const rand = (n) => Math.floor(Math.random() * n);
-  const { plain, short, summarize, anyBad, thinkWord, atoms } = ASH.liveWords;
+  const { plain, short, summarize, anyBad, atoms } = ASH.liveWords;
   /* 进场只演一次：演完把类摘掉，这个节点以后再被挂回页面（切走又回来）就不会重播 */
   const enter = (el) => {
     const done = (e) => { if (e.target !== el) return; el.classList.remove('enter'); el.removeEventListener('animationend', done); };
@@ -75,77 +75,13 @@
     el.dataset.m = [...new Set([...marks(el), ...ids.split(' ')])].join(' ');
   };
 
-  /* ---- 进行条：就是那一行「执行过程」。同一时刻只有它或者正在出的正文是「活的」 ---- */
-  function openStrip(text, thinking = false) {
-    const strip = kit.fold(text);
-    const now = performance.now();
-    Object.assign(strip, { time: h('span.live-time.num'), steps: [], thinking, said: text, since: now, shownAt: now, pending: 0 });
-    strip.btn.classList.add('is-live');
-    strip.label.classList.add('shim');
-    strip.label.after(strip.time);
-    enter(strip.btn);
-    run.turn.body.append(strip.btn, strip.list);
-    run.flat.push(strip.btn, strip.list);
-    run.strip = strip;
-    claim(strip.label, 'run-2');   /* 两条认领在同一处会叠成一颗圆圈：「在想」认字，「跟着工具换标题」认这一行 */
-    claim(strip.btn, 'run-3');
-    tick();
-    feed.follow();
-    return strip;
-  }
-  /* 换标题：每条至少停 1 秒；积压了就只留最新的一条。字换了宽度会变：后面的用时跟着滑过去，换字那一拍它和旧字一起暗下去 */
-  function swapLabel(strip, text) {
-    ASH.swap(strip.label, text, { row: strip.btn });
-    if (ASH.reduced()) return;
-    strip.time.classList.add('is-dim');
-    setTimeout(() => strip.time.classList.remove('is-dim'), 150);
-  }
-  function relabel(strip, text) {
-    clearTimeout(strip.pending);
-    strip.said = text;
-    strip.pending = setTimeout(() => { strip.shownAt = performance.now(); swapLabel(strip, text); }, Math.max(0, strip.shownAt + 1000 - performance.now()));
-  }
-  /* 进行条换一种说法。它一共四种：在想 / 正在做什么 / 在等哨兵 / 中途插进来的事（在压缩上下文、上游没回话在重试）。
-     后两种后面的用时是「这件事花了多久」，调的人先把 run.s0 拨到这一刻。still = 这会儿没有东西在动（等哨兵、等上游）：字上没有流光；
-     until 是最迟等到几点；thinking = 换回「在想」接着走 */
-  function restate(strip, text, { still = false, thinking = false, until } = {}) {
-    clearTimeout(strip.pending);
-    strip.thinking = thinking;
-    strip.said = text;
-    strip.since = strip.shownAt = performance.now();
-    strip.btn.classList.toggle('is-wait', still);
-    strip.label.classList.toggle('shim', !still);
-    strip.time.classList.remove('is-in');
-    if (strip.label.textContent !== text) swapLabel(strip, text);
-    strip.until?.remove();
-    strip.until = until ? h('span.live-until.num', `最迟 ${until}`) : null;
-    if (strip.until) strip.time.after(strip.until);
-  }
-  /* 落定是一拍：流光停，旧句和用时按原来的颜色一起淡出；150ms 后同一行换成过去式（或者你给的那句话），
-     cls（失败的红）在换字的那一刻才加上，then 里是要和新句一起进场的东西（「重试」） */
-  function settle(strip, text, cls, then) {
-    clearTimeout(strip.pending);
-    strip.btn.classList.remove('is-live', 'is-wait');
-    strip.label.classList.remove('shim');
-    strip.time.classList.remove('is-in');
-    strip.until?.remove();
-    ASH.swap(strip.label, text ?? summarize(strip.steps), { row: strip.btn });
-    strip.btn.classList.toggle('has-bad', !text && anyBad(strip.steps));
-    const land = () => { strip.time.remove(); if (cls) strip.btn.classList.add(cls); then?.(); };
-    if (ASH.reduced()) land(); else setTimeout(land, 150);
-    delete strip.btn.dataset.m;
-    delete strip.label.dataset.m;
-    if (run?.strip === strip) run.strip = null;
-  }
-  /* 用时过 2 秒才跟上来；「在想」过 15 秒换一次说法 */
+  /* ---- 进行条在 live-strip.js。这里的钟多管一样：歇着等哨兵时，那一行「在等哨兵」后面等了多久 ---- */
+  const strips = ASH.liveStrip({ now: () => run, claim, enter, follow: () => feed.follow() });
+  const { open: openStrip, relabel, restate, settle } = strips;
   function tick() {
-    const now = performance.now();
     const p = run?.parked;
-    if (p?.line) p.line.time.textContent = ASH.dur(now - p.since);
-    const strip = run?.strip;
-    if (!strip) return;
-    if (now - run.s0 >= 2000) { strip.time.textContent = ASH.dur(now - run.s0); strip.time.classList.add('is-in'); }
-    if (strip.thinking && thinkWord(now - strip.since) !== strip.said) relabel(strip, thinkWord(now - strip.since));
+    if (p?.line) p.line.time.textContent = ASH.dur(performance.now() - p.since);
+    strips.tick();
   }
 
   /* ---- 放字：来的是一坨一坨，放出去是匀的。每 40ms 放一点，积压越多放得越快；新放出的字 280ms 淡入，淡完把包着它的 span 拆掉 ---- */
