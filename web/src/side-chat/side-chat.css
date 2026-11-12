@@ -13,7 +13,6 @@
 .side-chat-scroll-wrap { flex: 1; min-height: 0; position: relative; }
 .side-chat-scroll { height: 100%; overflow: auto; overscroll-behavior: contain; padding: 12px 14px 18px; }
 .side-chat-snap { width: fit-content; margin: 0 auto 12px; border-radius: var(--r-sm); color: var(--muted); font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
-.side-chat-snap:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .side-chat-log { display: flex; flex-direction: column; gap: 14px; }
 .side-chat-message { min-width: 0; overflow-wrap: anywhere; }
 .side-chat-message .task-markdown { font-size: var(--t-sm); line-height: 1.7; }
@@ -24,7 +23,6 @@
 .side-chat-me .task-markdown > :first-child { margin-top: 0; }
 .side-chat-me .task-markdown > :last-child { margin-bottom: 0; }
 .side-chat-me__quote { display: -webkit-box; overflow: hidden; margin: 0 0 4px; border-left: 2px solid var(--line2); padding-left: 8px; color: var(--muted); font-size: var(--t-xs); line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 1; }
-.side-chat-me__quote:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .side-chat-me .task-message-attachments { margin-top: 6px; }
 
 /* 它的话：靠左、不加框；执行过程在正文上方折着 */
@@ -44,10 +42,9 @@
 .side-chat-receipt > svg { flex: 0 0 auto; margin-top: 3px; }
 .side-chat-receipt.is-sent > svg { color: var(--green); }
 .side-chat-receipt.is-error { color: var(--red); }
-.side-chat-receipt > span:focus-visible { border-radius: 2px; outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.side-chat-receipt > span:focus-visible { border-radius: 2px; }
 .side-chat-receipt__undo { border: 0; border-radius: var(--r-sm); background: transparent; padding: 2px 4px; color: var(--ink); font-size: var(--t-xs); text-decoration: underline; text-underline-offset: 2px; }
 .side-chat-receipt__undo:hover { background: var(--hover-bg); }
-.side-chat-receipt__undo:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .side-chat-sys { align-self: center; color: var(--muted); font-size: var(--t-xs); text-align: center; }
 .side-chat-sys .task-markdown { font-size: var(--t-xs); }
 
@@ -58,10 +55,11 @@
 .side-chat-quote { display: flex; min-width: 0; align-items: center; gap: 6px; margin: 0 0 6px; color: var(--muted); }
 .side-chat-quote > svg { flex: 0 0 auto; }
 .side-chat-quote blockquote { min-width: 0; flex: 1 1 auto; overflow: hidden; margin: 0; color: var(--muted); font-size: var(--t-xs); text-overflow: ellipsis; white-space: nowrap; }
-.side-chat-quote blockquote:focus-visible { border-radius: 2px; outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.side-chat-quote blockquote:focus-visible { border-radius: 2px; }
 .side-chat-input { border: 1px solid var(--line2); border-radius: var(--r-lg); background: var(--panel); padding: 8px; transition: border-color var(--dur-1) var(--ease-out); }
 .side-chat-input:focus-within { border-color: var(--focus-soft); box-shadow: 0 0 0 1px var(--focus-soft); }
-.side-chat-input textarea { display: block; width: 100%; min-height: 56px; max-height: 180px; resize: none; border: 0; outline: none; padding: 2px; color: var(--ink); background: transparent; font: inherit; line-height: 1.6; }
+.side-chat-input textarea { display: block; width: 100%; min-height: 56px; max-height: 180px; resize: none; border: 0; padding: 2px; color: var(--ink); background: transparent; font: inherit; line-height: 1.6; }
+.side-chat-input textarea:focus-visible { outline: 0; }
 /* 附件卡片沿用主会话那套（task-reply.css / task-conversation.css）。侧栏只有三百来像素宽，
    190px 的固定上限会让两张图挤成一行半，这里改成跟着栏宽走。 */
 .side-chat-compose .task-upload-list { margin: 0 0 8px; }
@@ -79,7 +77,6 @@
 .side-chat-primary.insp-tool:disabled { background: var(--raised); color: var(--faint); opacity: 1; }
 .side-chat-note { color: var(--muted); font-size: var(--t-xs); }
 .side-chat-latest { display: flex; align-items: center; gap: 4px; position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-full); padding: 4px 10px; font-size: var(--t-xs); }
-.side-chat-latest:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
 @media (hover: none) {
   .side-chat-ans__acts { opacity: 1; }

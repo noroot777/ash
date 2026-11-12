@@ -25,7 +25,6 @@
   --accent: #7196cc;
   --accent-soft: lch(23% 14 268);
 }
-.assistant-shell button:focus-visible,.assistant-shell input:focus-visible,.assistant-shell textarea:focus-visible,.assistant-shell .chat-connection:focus-visible { outline-color: var(--accent); }
 .assistant-shell .chat-rail,.assistant-shell .chat-channels button,.assistant-shell .chat-rail-note strong { color: var(--assistant-rail-ink); }
 .assistant-shell .chat-brand > svg { color: var(--accent); }
 .assistant-shell .chat-rail header button,.assistant-shell .chat-channel-label,.assistant-shell .chat-channel-label button,.assistant-shell .chat-project small,.assistant-shell .chat-rail-note { color: var(--assistant-rail-muted); }

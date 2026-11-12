@@ -57,11 +57,9 @@
   color: var(--ink);
   font: inherit;
   line-height: 20px;
-  outline: none;
   transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
 }
 .free-review-note::placeholder { color: var(--faint); }
-.free-review-note:focus { border-color: var(--focus-soft); box-shadow: 0 0 0 1px var(--focus-soft); }
 .free-review-note:disabled { opacity: 0.55; }
 
 .free-review-dialog > footer { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; margin-top: 2px; }

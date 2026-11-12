@@ -533,7 +533,7 @@
   border: 0;
   border-radius: 7px;
   background: transparent;
-  outline-offset: -1px;
+  outline-offset: -2px;
 }
 .wf-lib-title { font-size: 16px; font-weight: 600; color: var(--ink); }
 .wf-lib-desc { font-size: 12.5px; color: var(--muted); }

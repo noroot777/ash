@@ -89,7 +89,7 @@
 .home-todo button { display:flex; align-items:center; gap:10px; width:100%; min-height:36px; border:0; border-radius:var(--r-md); padding:0 16px; background:transparent; color:var(--ink); font-size:var(--t-sm); text-align:left; transition:background var(--dur-1) var(--ease-out); }
 .home-todo button:hover { background:var(--hover-bg); }
 .home-todo button:active { background:var(--sel-bg); }
-.home-todo button:focus-visible { outline:2px solid var(--focus-soft); outline-offset:-2px; }
+.home-todo button:focus-visible { outline-offset:-2px; }
 .home-todo-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .home-todo-why { flex:none; color:var(--muted); font-size:var(--t-xs); white-space:nowrap; }
 .home-todo-when { flex:none; width:64px; color:var(--faint); font-size:var(--t-xs); text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }

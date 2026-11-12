@@ -56,7 +56,6 @@
 .monitor-card__fold > svg { transition: transform var(--dur-1) var(--ease-out); }
 .monitor-card__fold[aria-expanded="true"] { color: var(--ink); }
 .monitor-card__fold[aria-expanded="true"] > svg { transform: rotate(90deg); }
-.monitor-card__fold:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 
 .monitor-card__details { min-width: 0; margin-top: 4px; }
 .monitor-card__details[hidden] { display: none; }
@@ -79,10 +78,9 @@
 .monitor-composer label { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 4px; }
 .monitor-composer label > span,
 .monitor-composer legend { color: var(--muted); font-size: var(--t-xs); }
-.monitor-composer textarea, .monitor-composer input, .monitor-composer select { width: 100%; border: 1px solid var(--line2); border-radius: var(--r-sm); background: var(--panel); padding: 6px 8px; color: var(--ink); font-size: var(--t-sm); outline: 0; }
+.monitor-composer textarea, .monitor-composer input, .monitor-composer select { width: 100%; border: 1px solid var(--line2); border-radius: var(--r-sm); background: var(--panel); padding: 6px 8px; color: var(--ink); font-size: var(--t-sm); }
 .monitor-composer textarea { resize: none; font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--t-xs); line-height: 1.6; }
 .monitor-composer input, .monitor-composer select { height: 30px; padding: 0 8px; }
-.monitor-composer textarea:focus, .monitor-composer input:focus, .monitor-composer select:focus { border-color: var(--focus-soft); box-shadow: 0 0 0 1px var(--focus-soft); }
 .monitor-composer__hint { margin: -2px 0 0; color: var(--muted); font-size: var(--t-xs); line-height: 1.5; }
 .monitor-composer__wake,
 .monitor-composer__ending { display: grid; gap: 6px; margin: 0; border: 0; padding: 0; }

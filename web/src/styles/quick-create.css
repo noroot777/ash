@@ -29,13 +29,7 @@
   border-radius: 8px;
   background: var(--canvas);
   padding: 0 9px;
-  outline: 0;
   font-size: 12px;
-}
-
-.quick-create-fields input:focus,
-.quick-create-fields select:focus {
-  border-color: var(--accent);
 }
 
 .quick-create-fields .create-project-health {

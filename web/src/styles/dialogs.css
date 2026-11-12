@@ -156,8 +156,6 @@
 .quick-create-fields label > span { color: var(--muted); font-size: 10.5px; font-weight: 620; }
 .quick-create-fields input,
 .quick-create-fields select { height: 39px; border-radius: 10px; background: color-mix(in oklab, var(--canvas) 72%, var(--panel)); padding-inline: 11px; box-shadow: inset 0 1px 0 color-mix(in oklab, var(--panel) 72%, transparent); }
-.quick-create-fields input:focus,
-.quick-create-fields select:focus { border-color: color-mix(in oklab, var(--accent) 72%, var(--line)); box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 9%, transparent); }
 .quick-create-fields .create-project-health { border-radius: 11px; padding: 10px 12px; }
 .create-project-target { border: 1px dashed var(--line2); border-radius: 10px; background: var(--raised); padding: 8px 10px; }
 .create-project-note,

@@ -25,7 +25,6 @@
 }
 .task-execution-block > summary:hover { background: var(--hover-bg); color: var(--ink); }
 .task-execution-block > summary::-webkit-details-marker { display: none; }
-.task-execution-block > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .task-execution-caret { flex: none; color: var(--faint); transition: transform var(--dur-1) var(--ease-out); }
 .task-execution-block[open] > summary .task-execution-caret { transform: rotate(90deg); }
 .task-execution-label { min-width: 0; max-width: min(58vw, 520px); overflow: hidden; font-weight: var(--w-regular); text-overflow: ellipsis; white-space: nowrap; }
@@ -67,7 +66,7 @@
 .task-tool-line > summary:hover,
 .task-tool-line[open] > summary { color: var(--ink); }
 .task-tool-line > summary::-webkit-details-marker { display: none; }
-.task-tool-line > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -1px; }
+.task-tool-line > summary:focus-visible { outline-offset: -2px; }
 .task-tool-line svg { flex: none; color: var(--faint); }
 .task-tool-verb { flex: none; white-space: nowrap; }
 /* 对象可以缩，行尾那半句先缩：窄的时候宁可丢「于 web/src」，不丢文件名。 */
@@ -97,7 +96,6 @@
 .task-tool-raw > summary::-webkit-details-marker { display: none; }
 .task-tool-raw > summary:hover,
 .task-tool-raw[open] > summary { color: var(--ink); }
-.task-tool-raw > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .task-tool-more pre { max-height: 260px; margin: 6px 0 0; overflow: auto; border-radius: var(--r-sm); background: var(--overlay); padding: 8px 10px; color: var(--muted); font: var(--t-xs) / 1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* 你自己点开的那一下：里面的东西淡进来、往下落 4px。高度不做动画（见文件头）。 */

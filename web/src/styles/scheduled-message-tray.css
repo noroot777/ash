@@ -44,7 +44,6 @@
 .scheduled-message-empty { padding: 28px 12px; color: var(--faint); font-size: 11px; text-align: center; }
 .scheduled-message-announcement { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .scheduled-message-cancel-text { max-height: 150px; overflow: auto; overflow-wrap: anywhere; color: var(--muted); font-size: 11px; white-space: pre-wrap; }
-.scheduled-message-card :is(button, summary, [tabindex]):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @container (max-width: 520px) {
   .scheduled-message-previews .scheduled-message-row { flex-wrap: wrap; padding-block: 5px; }
   .scheduled-message-previews .scheduled-message-row > b { flex-basis: calc(100% - 95px); }

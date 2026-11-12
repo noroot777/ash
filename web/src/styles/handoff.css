@@ -165,10 +165,8 @@
   border-radius: 8px;
   background: var(--canvas);
   padding: 0 10px;
-  outline: 0;
   color: var(--ink);
 }
-.handoff-quick-add input:focus { border-color: var(--accent); }
 .handoff-quick-add > button { justify-self: end; margin-top: 4px; }
 
 .handoff-field { display: grid; gap: 5px; margin: 10px 0; }
@@ -197,7 +195,6 @@
   border-radius: 7px;
   background: var(--canvas);
   padding: 0 8px;
-  outline: 0;
   color: var(--ink);
   font-size: 11.5px;
 }
@@ -220,7 +217,7 @@
   text-underline-offset: 3px;
 }
 .handoff-settings-link:hover { text-decoration-thickness: 2px; }
-.handoff-settings-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+.handoff-settings-link:focus-visible { border-radius: 2px; }
 
 .handoff-check { display: flex; align-items: center; gap: 6px; margin: 12px 0 0; color: var(--ink); font-size: 11.5px; }
 

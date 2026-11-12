@@ -12,7 +12,6 @@
 .accept-workspace-commit-actions { display: flex; flex-shrink: 0; gap: 5px; }
 .accept-workspace-commit button { display: inline-flex; min-height: 29px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 4px 8px; color: var(--ink); font-size: 11px; }
 .accept-workspace-commit button:disabled { cursor: not-allowed; opacity: .5; }
-.accept-workspace-commit button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 600px) { .accept-workspace-commit { flex-wrap: wrap; } .accept-workspace-commit-actions { width: 100%; justify-content: flex-end; } }
 /* 验收动作提到顶栏:它是这一屏唯一的动作,不该跟着卡片一起被折叠收走。它带来的那串状态卡
    (失败详情、待提交、验收前置命令…)各自铺满顶栏下沿一整行,摆放次序就是它们在

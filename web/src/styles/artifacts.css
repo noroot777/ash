@@ -24,7 +24,6 @@
   text-align: left;
   cursor: pointer;
 }
-.artifacts__thumb-card:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 /* 缩略图区固定比例：一格一格高矮不齐的网格扫起来比不齐的文字还累。 */
 .artifacts__thumb {
   display: grid;

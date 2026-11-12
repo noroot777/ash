@@ -75,7 +75,6 @@
 .task-message--user:not(.is-system-authored) header b { color: color-mix(in oklab, var(--accent) 70%, var(--muted)); font-weight: 600; }
 .task-user-bubble > header time { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .task-user-bubble > header button { flex: none; color: var(--muted); }
-.task-user-bubble > header button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .task-user-bubble > p {
   margin: 7px 0 0;
   color: color-mix(in oklab, var(--ink) 88%, var(--muted));
@@ -271,7 +270,6 @@
 .context-compact-row > label { color: var(--faint); font-size: 10px; }
 .context-compact-input { display: inline-flex; align-items: center; gap: 4px; }
 .context-compact-input input { width: 76px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 3px 6px; color: var(--ink); font-family: var(--font-mono); font-size: 10.5px; text-align: right; }
-.context-compact-input input:focus { border-color: var(--accent); outline: none; }
 .context-compact-input > small { width: 28px; color: var(--faint); font-size: 9px; }
 .context-compact-preset { border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 3px 6px; color: var(--faint); font-size: 9.5px; white-space: nowrap; }
 .context-compact-preset:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
@@ -364,7 +362,6 @@
   cursor: pointer;
 }
 .task-markdown-image-retry:hover { color: var(--text); }
-.task-markdown-image-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* 删除消息：跟复制同一颗皮肤（头部图标、尾栏胶囊），紧挨着复制排在它右边；悬停转红，说明这是删。 */
 .task-message header .copy-button + .message-delete-button,

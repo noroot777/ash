@@ -232,11 +232,6 @@
   box-shadow: var(--control-shadow);
 }
 
-.team-preset-name-field input:focus-visible,
-.team-preset-role-fields input:focus-visible {
-  outline: 1px solid var(--focus-soft);
-}
-
 .team-preset-review-row {
   display: flex;
   min-height: 52px;

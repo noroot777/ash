@@ -1,7 +1,7 @@
 .team-view { position: relative; display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; background: var(--canvas); }
 .team-header { --task-header-gap: 8px; position: relative; z-index: 14; display: flex; height: 44px; flex: 0 0 44px; align-items: center; gap: var(--task-header-gap); border-bottom: .5px solid var(--line); padding: 0 10px 0 14px; background: var(--canvas); }
 .team-kind { flex: 0 0 auto; border-radius: 5px; background: color-mix(in oklab, var(--accent) 10%, var(--raised)); padding: 2px 7px; color: var(--accent); font-size: 9.5px; font-weight: 750; }
-.team-header > input { width: 130px; min-width: 90px; flex: 1; overflow: hidden; border: 0; border-radius: 5px; background: transparent; padding: 3px 5px; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; outline: 0; }
+.team-header > input { width: 130px; min-width: 90px; flex: 1; overflow: hidden; border: 0; border-radius: 5px; background: transparent; padding: 3px 5px; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; }
 .team-header > input:hover, .team-header > input:focus { background: var(--raised); }
 .team-busy-pill { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; border-radius: 999px; padding: 3px 5px; color: var(--muted); font-size: 10px; font-weight: 650; }
 .team-header-actions { display: flex; align-items: center; gap: 5px; }
@@ -147,7 +147,9 @@
 /* 高度跟着输入行数走,拖过之后照抄顶边拖动条定的高度——跟普通任务回复框同一套
    (只有 lib/useAutoGrowTextarea.ts 一个写者,所以原生右下角把手必须关掉:两套都往
    style.height 上写会打架)。这里不设 max-height:那会把用户能拖到多高一起限死。 */
-.team-reply-box textarea { display: block; width: 100%; min-height: 44px; resize: none; border: 0; background: transparent; padding: 9px 11px 2px; color: var(--ink); font-size: 12px; outline: 0; }
+.team-reply-box textarea { display: block; width: 100%; min-height: 44px; resize: none; border: 0; background: transparent; padding: 9px 11px 2px; color: var(--ink); font-size: 12px; }
+.team-reply-box:has(textarea:focus-visible) { border-color: var(--focus-soft); box-shadow: 0 0 0 3px color-mix(in oklab, var(--focus-ring) 10%, transparent), var(--surface-shadow); }
+.team-reply-box textarea:focus-visible { outline: 0; }
 .team-reply-box footer { display: flex; height: 34px; align-items: center; gap: 7px; padding: 0 6px 5px; color: var(--faint); font-size: 9.5px; }
 .team-reply-box footer > .send-key { margin-left: auto; }
 

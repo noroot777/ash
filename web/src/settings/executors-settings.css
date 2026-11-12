@@ -276,7 +276,7 @@
   font-style: normal;
 }
 .profile-row-menu > button:hover:not(:disabled),
-.profile-row-menu > button:focus-visible { background: var(--hover-bg); outline: none; }
+.profile-row-menu > button:focus-visible { background: var(--hover-bg); outline-offset: -2px; }
 .profile-row-menu > button.is-danger,
 .profile-row-menu > button.is-danger > svg { color: var(--red); }
 .profile-row-menu > hr { height: 1px; margin: 4px 0; border: 0; background: var(--line); }

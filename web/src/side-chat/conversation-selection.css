@@ -6,4 +6,4 @@
 .conversation-selection-action button:hover { background: var(--hover-bg); }
 .conversation-selection-action svg { color: var(--accent); }
 /* 外壳 overflow: hidden 会把外扩的描边裁掉，所以焦点框往里画。 */
-.conversation-selection-action button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.conversation-selection-action button:focus-visible { outline-offset: -2px; }

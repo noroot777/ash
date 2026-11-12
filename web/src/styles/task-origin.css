@@ -59,7 +59,6 @@
 .task-origin-chip > button:focus-visible {
   background: var(--overlay);
   color: var(--ink);
-  outline: none;
 }
 
 /* 只有智能体创建的任务才有这颗徽标（见 TaskCreationBadge）。 */

@@ -26,8 +26,7 @@
 .reviewer-profile-fields { display:grid; gap:10px; }
 .reviewer-profile-fields > label { display:grid; gap:5px; }
 .reviewer-profile-fields > label > span { color:var(--faint); font-size:9px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
-.reviewer-profile-fields input { width:100%; height:32px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; outline:0; }
-.reviewer-profile-fields input:focus { border-color:var(--accent); box-shadow:0 0 0 2px color-mix(in oklab,var(--accent) 12%,transparent); }
+.reviewer-profile-fields input { width:100%; height:32px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; }
 
 /* 执行者驳回卡：审查链停在这里等用户裁定。只有图标是琥珀色，整块不上色
    —— 这不是又坏了一处，而是两个 agent 没谈拢，需要人来拍板。 */
@@ -108,7 +107,7 @@
 /* 裁定要点是用户自己写的那段，配色跟驳回理由（琥珀=执行者的话）分开，免得读成同一个人说的。 */
 .review-round-dispute__note { margin-top:10px; border:1px solid var(--line); border-radius:var(--r-md); background:var(--raised); padding:8px 10px; }.review-round-dispute__note > b { display:block; margin-bottom:4px; color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-medium); }.review-round-dispute__note .task-markdown { color:var(--ink); font-size:var(--t-xs); line-height:1.6; }
 /* 裁定确认框里的要点输入：三档共用，措辞由 NOTE_FIELDS 换。 */
-.free-review-dispute-note { display:grid; gap:5px; padding:0 2px; }.free-review-dispute-note > span { color:var(--ink); font-size:10px; }.free-review-dispute-note > textarea { border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:7px 8px; color:var(--ink); font-size:10.5px; line-height:1.6; resize: none; }.free-review-dispute-note > textarea:focus-visible { border-color:color-mix(in oklab,var(--accent) 45%,var(--line2)); outline:none; }.free-review-dispute-note > small { color:var(--faint); font-size:9px; line-height:1.5; }
+.free-review-dispute-note { display:grid; gap:5px; padding:0 2px; }.free-review-dispute-note > span { color:var(--ink); font-size:10px; }.free-review-dispute-note > textarea { border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:7px 8px; color:var(--ink); font-size:10.5px; line-height:1.6; resize: none; }.free-review-dispute-note > small { color:var(--faint); font-size:9px; line-height:1.5; }
 
 /* 预览日志：起不来的时候唯一的现场。等宽、可选中、默认贴底。 */
 .preview-log-dialog { display:flex; flex-direction:column; width:min(860px,calc(100vw - 28px)); max-height:min(760px,92vh); overflow:hidden; border:1px solid var(--line2); border-radius:15px; background:var(--panel); box-shadow:var(--shadow); }
@@ -151,7 +150,7 @@
 .preview-service-strip .preview-service-scroll-control { display:grid; width:24px; height:24px; flex:0 0 24px; place-items:center; border:1px solid var(--line); border-radius:6px; background:var(--panel); padding:0; color:var(--muted); }
 .preview-service-strip .preview-service-scroll-control:hover:not(:disabled) { background:var(--raised); color:var(--ink); }
 .preview-service-scroll-control:disabled { opacity:.3; }
-.preview-service-strip button:focus-visible,.preview-service-scroll a:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.preview-service-strip button:focus-visible,.preview-service-scroll a:focus-visible { outline-offset:-2px; }
 .preview-log-services { min-width:0; border-bottom:1px solid var(--line); padding:6px 12px 0; }
 .preview-log-services .preview-service-scroll > button { display:flex; height:37px; flex:0 0 auto; align-items:center; gap:7px; border:0; border-radius:7px 7px 0 0; background:transparent; padding:0 12px; color:var(--muted); font-size:11px; font-weight:550; white-space:nowrap; }
 .preview-log-services .preview-service-scroll > button:hover { background:var(--raised); color:var(--ink); }

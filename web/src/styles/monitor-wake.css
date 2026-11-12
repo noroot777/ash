@@ -39,7 +39,7 @@
 .monitor-wake-meta button:hover { color: var(--ink); background: var(--raised); }
 .monitor-wake-meta button.is-copied { color: var(--green); }
 .monitor-wake-meta button.is-copy-failed { color: var(--red); }
-.monitor-wake-meta button:focus-visible, .monitor-wake-head:focus-visible, .monitor-wake-raw summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.monitor-wake-meta button:focus-visible, .monitor-wake-head:focus-visible, .monitor-wake-raw summary:focus-visible { outline-offset: -2px; }
 .monitor-wake-fold-action { display: inline-flex; flex: none; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; transition: color 140ms ease; }
 .monitor-wake-head:hover .monitor-wake-fold-action { color: var(--accent); }
 .monitor-wake-fold-action svg { flex: none; transition: transform 140ms ease; }

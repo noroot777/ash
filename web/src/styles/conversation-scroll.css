@@ -32,11 +32,6 @@
   opacity: 1;
 }
 
-.conversation-scroll-button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
 .conversation-scroll-button.is-hidden {
   pointer-events: none;
   opacity: 0;

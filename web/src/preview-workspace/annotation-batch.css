@@ -2,7 +2,6 @@
 .annotation-batch-panel p { margin: 0; line-height: 1.6; }
 .annotation-batch-panel small { display: block; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
 .annotation-batch-paste { padding: 10px; border: 1px dashed var(--line); border-radius: 6px; }
-.annotation-batch-paste:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 .annotation-batch-panel button { padding: 6px 10px; }
 .annotation-batch-panel button:disabled { opacity: .45; cursor: not-allowed; }
 .annotation-batch-panel .annotation-batch-submit,

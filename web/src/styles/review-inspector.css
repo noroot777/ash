@@ -114,7 +114,7 @@
 .review-screenshot-strip > header > em { border-radius: 999px; background: var(--overlay); padding: 1px 5px; color: var(--muted); font-style: normal; }
 .review-screenshot-strip > header > small { margin-left: auto; color: var(--faint); font-size: 8.5px; }
 .review-screenshot-strip__rail { display: flex; min-width: 0; gap: 7px; overflow-x: auto; overscroll-behavior-x: contain; padding-bottom: 2px; scroll-snap-type: x proximity; }
-.review-screenshot-strip__rail:focus-visible { border-radius: 6px; outline: 2px solid color-mix(in oklab,var(--accent) 38%,transparent); outline-offset: 2px; }
+.review-screenshot-strip__rail:focus-visible { border-radius: 6px; }
 .review-screenshot-strip__item { width: 112px; min-width: 112px; overflow: hidden; flex: 0 0 112px; border: 1px solid var(--line); border-radius: 7px; background: var(--canvas); scroll-snap-align: start; }
 .review-screenshot-strip__item:hover { border-color: color-mix(in oklab,var(--accent) 42%,var(--line)); }
 .review-screenshot-strip__item img { display: block; width: 100%; aspect-ratio: 16/9; background: var(--panel); object-fit: cover; }

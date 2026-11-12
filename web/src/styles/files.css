@@ -145,7 +145,6 @@
 .file-delete__type label { display:block; margin-bottom:6px; color:var(--muted); font-size:11px; }
 .file-delete__type label b { color:var(--ink); font-family:var(--font-mono); font-weight:650; }
 .file-delete__type input { width:100%; border:1px solid var(--line2); border-radius:9px; background:var(--panel); padding:9px 11px; color:var(--ink); font-family:var(--font-mono); font-size:12px; }
-.file-delete__type input:focus { border-color:var(--accent); outline:none; }
 .file-delete__error { display:flex; align-items:center; gap:6px; margin:11px 0 0; color:var(--red); font-size:10.5px; }
 .file-delete__error.is-busy { color:var(--faint); }
 

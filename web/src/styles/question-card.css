@@ -55,7 +55,7 @@
 [aria-pressed="true"] .task-question-option-key { border-color: var(--cyan); background: var(--cyan); color: white; }
 .task-question-hint { display: block; padding: 0 0 7px; color: var(--faint); font-size: 10px; }
 .task-question-step textarea { width: 100%; min-height: 34px; resize: none; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); padding: 8px 10px; color: var(--ink); font: 12.5px/1.6 var(--font-sans); }
-.task-question-step textarea:focus { outline: 2px solid color-mix(in oklab, var(--cyan) 22%, transparent); outline-offset: 1px; border-color: var(--cyan); background: var(--panel); }
+.task-question-step textarea:focus { background: var(--panel); }
 
 .task-question-card > footer { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; border-top: 1px solid var(--line); padding: 8px 12px; color: var(--muted); font-size: 10px; }
 .task-question-card > footer > span:first-child { margin-right: auto; }
@@ -63,7 +63,7 @@
 .task-question-nav:hover:not(:disabled) { border-color: var(--line2); color: var(--ink); }
 .task-question-send { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; border: 0; border-radius: 7px; padding: 0 13px; background: var(--cyan); color: white; font-size: 12px; font-weight: 600; }
 .task-question-card button:disabled { opacity: .48; cursor: not-allowed; }
-.task-question-card button:focus-visible { outline: 2px solid var(--cyan); outline-offset: -3px; }
+.task-question-card button:focus-visible { outline-offset: -2px; }
 .task-question-error { margin: 0; padding: 0 14px 10px; color: var(--red); font-size: 12px; overflow-wrap: anywhere; }
 
 /* 答过的提问：你的一个气泡（气泡本身的样子在 task-conversation.css），问题引在答案上面。 */
@@ -77,7 +77,6 @@
 }
 .task-question-quote:hover,
 .task-question-quote[aria-expanded="true"] { color: var(--ink); }
-.task-question-quote:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .task-question-quote-number { flex: none; font-variant-numeric: tabular-nums; font-weight: var(--w-medium); }
 .task-question-quote-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; min-width: 0; overflow: hidden; overflow-wrap: anywhere; }
 .task-question-quote-full { margin: 6px 0 0 12px; color: var(--muted); font-size: var(--t-xs); line-height: 1.6; }

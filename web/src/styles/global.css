@@ -354,17 +354,31 @@ code,
   32% { opacity: 1; transform: translateY(-2px); }
 }
 
+/* 焦点环（a11y-1）：全应用一条，2px、外扩 2px，不压在控件自己那圈线上。例外三种：
+   ① 打字的输入框：环贴着自己的边，颜色淡一档（--focus-soft）——里面已经有光标了；
+   ② 贴着滚动区边缘排成一列的整行（菜单项、列表行）：环画在行内，外扩会被容器裁掉；
+   ③ 回复框这类输入卡：里面的输入框不套环，环画在卡上（各自的 :has(textarea:focus-visible)）。 */
 :focus-visible,
 .is-focus {
-  outline: 1px solid var(--focus-ring);
-  outline-offset: 0;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 input:focus-visible,
 textarea:focus-visible,
-select:focus-visible,
+[contenteditable]:focus-visible,
 .ui-input.is-focus {
-  outline-offset: -1px;
+  outline-color: var(--focus-soft);
+  outline-offset: 0;
+}
+
+input:is([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"]):focus-visible {
+  outline-color: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+:is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], [role="treeitem"], [role="row"]):focus-visible {
+  outline-offset: -2px;
 }
 
 [disabled],

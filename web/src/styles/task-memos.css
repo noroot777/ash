@@ -24,13 +24,10 @@
   font: inherit;
   font-size: var(--t-sm);
   line-height: 1.6;
-  outline: 0;
   resize: none;
   transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
 }
 .task-memo-composer textarea::placeholder { color: var(--faint); }
-.task-memo-composer textarea:focus,
-.task-memo-card__edit textarea:focus { border-color: var(--focus-soft); box-shadow: 0 0 0 1px var(--focus-soft); }
 .task-memo-composer__actions,
 .task-memo-card__edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
@@ -48,7 +45,6 @@
 
 .task-memo-card__more { margin-top: 4px; border: 0; border-radius: var(--r-sm); background: transparent; padding: 2px 4px; margin-left: -4px; color: var(--ink); font: inherit; font-size: var(--t-xs); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .task-memo-card__more:hover { background: var(--hover-bg); }
-.task-memo-card__more:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 
 .task-memo-card__foot { display: flex; min-height: 24px; align-items: center; gap: 2px; margin-top: 4px; color: var(--muted); font-size: var(--t-xs); }
 .task-memo-card__foot > time { flex: 1 1 auto; font-variant-numeric: tabular-nums; }

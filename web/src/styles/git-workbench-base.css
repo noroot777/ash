@@ -25,7 +25,6 @@
 .gwb-design code, .gwb-design .mono { font-family: var(--font-mono); }
 .gwb-design ::placeholder { color: var(--faint); }
 .gwb-design ::selection { background: color-mix(in oklab, var(--accent) 18%, transparent); }
-.gwb-design :focus-visible { outline: 1px solid var(--focus-ring); outline-offset: 0; }
 .gwb-design [disabled], .gwb-design .is-disabled { cursor: default; opacity: 0.42; pointer-events: none; }
 .gwb-design .is-hidden { display: none !important; }
 .gwb-design .flex-1 { flex: 1; }
@@ -174,7 +173,6 @@
   border: 1px solid var(--line2); border-radius: 7px;
   background: var(--panel); font-size: 12px;
 }
-.gwb-design .ui-input:focus-visible { outline-offset: -1px; }
 
 /* ---------- 菜单 ---------- */
 .gwb-design .menu {

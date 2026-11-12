@@ -66,10 +66,11 @@
   border:1px solid var(--line2); border-radius:var(--r-md); background:var(--overlay); padding:0 8px;
   color:var(--faint);
 }
-.project-git-panel__search:focus-within { border-color:var(--line2); box-shadow:var(--focus-soft); }
+.project-git-panel__search:focus-within { outline:2px solid var(--focus-soft); outline-offset:0; }
+.project-git-panel__search input:focus-visible { outline:0; }
 .project-git-panel__search input {
   width:100%; min-width:0; height:28px; border:0; background:transparent; color:var(--ink);
-  font-size:var(--t-xs); outline:none;
+  font-size:var(--t-xs);
 }
 
 .project-git-panel__tools { display:flex; flex:0 0 auto; align-items:center; gap:1px; }

@@ -1,7 +1,7 @@
 .project-preview .preview-mode-choice { display: inline-flex; flex: none; align-items: center; gap: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--raised); padding: 3px; }
 .preview-mode-choice label { display: inline-flex; min-height: 28px; align-items: center; gap: 7px; border-radius: 6px; padding: 4px 10px; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-regular); white-space: nowrap; cursor: pointer; }
 .preview-mode-choice label:has(input:checked) { background: var(--panel); color: var(--ink); box-shadow: var(--surface-shadow); }
-.preview-mode-choice label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.preview-mode-choice label:has(input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .preview-mode-choice label:has(input:disabled) { opacity: .6; cursor: default; }
 .project-preview input:is([type="radio"], [type="checkbox"]) { width: 14px; height: 14px; margin: 0; flex: none; accent-color: var(--accent); }
 .project-preview .preview-script-field { align-items: flex-start; border-bottom: 0; padding-bottom: 8px; }
@@ -29,7 +29,7 @@
 .preview-service-toggle:has(input:disabled) { cursor:default; }
 .project-preview .preview-service-name { min-width:0; width:100%; height:28px; border:1px solid transparent; border-radius:5px; background:transparent; color:var(--ink); padding:0 5px; font-size: var(--t-xs); font-weight: var(--w-medium); text-overflow:ellipsis; }
 .project-preview .preview-service-name:hover:not(:read-only) { border-color:var(--line); background:var(--canvas); }
-.project-preview .preview-service-name:focus { outline:2px solid var(--accent); outline-offset:1px; background:var(--panel); }
+.project-preview .preview-service-name:focus { background:var(--panel); }
 .preview-service-options { display:flex; align-items:center; gap:12px; padding-inline:8px; font-size: var(--t-xs); }
 .preview-service-options > label, .preview-service-options > .preview-service-kind { display:inline-flex; flex-shrink:0; align-items:center; gap:6px; color:var(--muted); white-space:nowrap; }
 .preview-service-options .preview-service-primary { min-height:26px; border-radius:5px; padding:0 6px; cursor:pointer; }
@@ -37,7 +37,7 @@
 .preview-service-primary:hover:not(:has(input:disabled)) { background:var(--raised); }
 .preview-service-primary:has(input:disabled) { color: var(--faint); cursor:default; }
 .project-preview .preview-service-primary input { width:12px; height:12px; }
-.preview-service-primary:has(input:focus-visible), .preview-service-toggle:has(input:focus-visible) { outline:2px solid var(--accent); outline-offset:1px; }
+.preview-service-primary:has(input:focus-visible), .preview-service-toggle:has(input:focus-visible) { outline:2px solid var(--focus-ring); outline-offset:2px; }
 .preview-service-heading .preview-service-remove { width:28px; min-width:28px; height:28px; padding:0; border-radius:5px; color: var(--muted); }
 .preview-service-heading .preview-service-remove:hover:not(:disabled) { background:color-mix(in oklab,var(--red) 7%,var(--panel)); color:var(--red); }
 .preview-service-command { min-width:0; margin:7px 0 0 32px; }

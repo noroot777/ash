@@ -22,7 +22,6 @@
 .wait-bar.is-open { flex-basis: 100%; padding-bottom: 9px; }
 .wait-bar__bar { display: flex; width: 100%; min-width: 0; height: 26px; align-items: center; gap: 6px; border: 0; border-radius: 8px; background: transparent; padding: 0 8px; color: var(--wait-tint); text-align: left; }
 .wait-bar__bar:hover { background: color-mix(in oklab, var(--wait-tint) 9%, var(--panel)); }
-.wait-bar__bar:focus-visible { outline: 2px solid color-mix(in oklab, var(--wait-tint) 48%, transparent); outline-offset: 1px; }
 .wait-bar__bar > svg { flex: 0 0 auto; }
 .wait-bar__bar > b { flex: 0 0 auto; color: var(--ink); font-size: 11px; font-weight: 650; letter-spacing: -.01em; }
 /* 摘要是这一行里唯一可长可短的东西,所以压缩和省略号都落在它身上:期限和箭头不许被挤掉。 */

@@ -45,8 +45,6 @@
 
 .insp-path > [tabindex]:focus-visible {
   border-radius: 2px;
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
 }
 
 .insp-path:hover > .insp-copy,
@@ -118,12 +116,6 @@
   color: var(--ink);
   font: inherit;
   line-height: 1.5;
-}
-
-.scm-commit textarea:focus {
-  border-color: var(--focus-soft);
-  box-shadow: 0 0 0 1px var(--focus-soft);
-  outline: none;
 }
 
 .scm-commit__submit {

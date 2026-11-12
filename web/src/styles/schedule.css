@@ -46,13 +46,6 @@
   padding: 0 8px;
   color: var(--ink);
   font-size: 10.5px;
-  outline: 0;
-}
-
-.schedule-kind-field select:focus,
-.composer-launch-mode select:focus,
-.schedule-field input:focus {
-  border-color: var(--accent);
 }
 
 .schedule-field {

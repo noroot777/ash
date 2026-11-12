@@ -292,7 +292,6 @@
 .workspace-spread-dot.is-empty:focus-visible i,
 .workspace-spread-dot.is-empty.is-on i { opacity: 1; }
 
-.workspace-spread-dot:focus-visible { outline: none; }
 
 .workspace-spread-dot.is-on i {
   background: var(--spread-dot);

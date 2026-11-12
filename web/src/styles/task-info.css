@@ -129,11 +129,6 @@ button.insp-req:focus-visible {
   border-radius: 2px;
 }
 
-.insp-has-tip:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
-}
-
 /* 一行里可能很长的值（续跑指令）：最多三行 */
 .insp-clamp {
   display: -webkit-box;
@@ -189,12 +184,6 @@ button.insp-req:focus-visible {
   color: var(--ink);
   font: inherit;
   line-height: 1.5;
-  outline: 0;
-}
-
-.insp-field:focus {
-  border-color: var(--focus-soft);
-  box-shadow: 0 0 0 1px var(--focus-soft);
 }
 
 /* 行里的下拉：平时就是一段字加一颗尖角（尖角就是「这一项能改」的全部说明），悬停才显出底色。
@@ -313,7 +302,6 @@ button.insp-req:focus-visible {
   padding: 0;
   color: var(--ink);
   font-size: var(--t-xs);
-  outline: 0;
 }
 
 .insp-kv .task-label-editor input::placeholder {
@@ -338,11 +326,6 @@ button.insp-req:focus-visible {
   padding: 0 8px;
   color: var(--ink);
   font-size: var(--t-sm);
-  outline: 0;
-}
-
-.insp-kv .schedule-field input:focus {
-  border-color: var(--focus-soft);
 }
 
 .task-inspector > .insp-note {

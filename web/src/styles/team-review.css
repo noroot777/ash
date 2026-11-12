@@ -42,8 +42,7 @@
 .team-accept-conflict-files > span { display: block; color: currentColor; font-size: 9.5px; font-weight: 650; }
 .team-accept-conflict-files ul { display: grid; gap: 2px; margin: 4px 0 0; padding: 0; list-style: none; }
 .team-accept-conflict-files code { display: block; overflow-wrap: anywhere; color: currentColor; font-size: 9.5px; }
-.team-return-feedback { display: block; width: 100%; resize: none; border: 1px solid var(--line2); border-radius: 8px; background: var(--canvas); padding: 8px 9px; color: var(--ink); font-size: 11.5px; line-height: 1.5; outline: 0; }
-.team-return-feedback:focus { border-color: color-mix(in oklab,var(--accent) 55%,var(--line2)); }
+.team-return-feedback { display: block; width: 100%; resize: none; border: 1px solid var(--line2); border-radius: 8px; background: var(--canvas); padding: 8px 9px; color: var(--ink); font-size: 11.5px; line-height: 1.5; }
 
 /* 验收确认框里那个「合并后提交代码」的勾（本次有效，默认跟项目设置）。 */
 .team-accept-commit { display: flex; align-items: flex-start; gap: 8px; border: 1px solid var(--line2); border-radius: 8px; background: var(--canvas); padding: 9px 10px; }
@@ -209,7 +208,6 @@
 .accept-gate-card.is-idle > header > span:first-child { background: transparent; color: var(--faint); }
 .accept-gate-edit { display: grid; gap: 5px; }
 .accept-gate-edit input { width: 100%; height: 30px; border: 1px solid var(--line2); border-radius: 7px; background: var(--canvas); padding: 0 9px; color: var(--ink); font-size: 10.5px; }
-.accept-gate-edit input:focus { border-color: var(--accent); outline: none; }
 .accept-gate-edit small { color: var(--faint); font-size: 9.5px; line-height: 1.55; }
 .accept-gate-edit small b { display: inline; color: var(--muted); font-size: 9.5px; }
 /* 门禁基准三档（AcceptGateBaselineChoice）。设置页和门禁卡共用；选择器带上 role 是为了压过

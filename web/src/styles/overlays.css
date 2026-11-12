@@ -60,7 +60,6 @@
   flex: 1;
   border: 0;
   background: transparent;
-  outline: 0;
   font-size: 14px;
 }
 
@@ -229,7 +228,6 @@
   padding: 2px 6px;
   color: var(--muted);
   font-size: 9px;
-  outline: 0;
 }
 
 .palette-sort:hover,
@@ -352,12 +350,20 @@
   color: var(--faint);
 }
 
+.notes-list-tools label:focus-within {
+  outline: 2px solid var(--focus-soft);
+  outline-offset: 0;
+}
+
+.notes-list-tools input:focus-visible {
+  outline: 0;
+}
+
 .notes-list-tools input {
   min-width: 0;
   flex: 1;
   border: 0;
   background: transparent;
-  outline: 0;
   font-size: 11px;
 }
 
@@ -426,7 +432,7 @@
 }
 
 .note-pick:focus-visible .ui-checkbox {
-  outline: 2px solid color-mix(in oklab, var(--accent) 45%, transparent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -563,7 +569,6 @@
   border: 0;
   background: transparent;
   padding: 18px 20px;
-  outline: 0;
   font-size: 13px;
   line-height: 1.8;
 }
@@ -577,8 +582,11 @@
   cursor: text;
 }
 
+/* 编辑区铺满整格，外扩的环会被格子裁掉，焦点画成里面一圈淡墨。 */
+.note-editor > textarea:focus-visible,
 .note-editor-preview:focus-visible {
-  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--accent) 32%, transparent);
+  outline: 0;
+  box-shadow: inset 0 0 0 2px var(--focus-soft);
 }
 
 .note-editor-preview .task-markdown {

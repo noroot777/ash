@@ -43,7 +43,7 @@
 .annotation-dialog button:disabled { cursor: default; opacity: .5; }
 .annotation-dialog button:focus-visible,
 .screenshot-annotation-trigger:focus-visible,
-.annotation-dialog summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.annotation-dialog summary:focus-visible { outline-offset: 2px; }
 .annotation-dialog button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .annotation-header { display: flex; flex-shrink: 0; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); padding: 14px 20px; }
 .annotation-header > svg { color: var(--accent); }
@@ -83,8 +83,6 @@
 .annotation-note-fields input,
 .annotation-note-fields textarea { width: 100%; border: 1px solid var(--line2); border-radius: 7px; background: var(--canvas); padding: 8px; color: var(--ink); font: 12px/1.6 var(--font-sans); }
 .annotation-note-fields textarea { resize: none; min-height: 80px; }
-.annotation-note-fields input:focus,
-.annotation-note-fields textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
 .annotation-dialog .annotation-delete { justify-self: start; border: 0; color: var(--red); }
 .annotation-reply-preview { flex-shrink: 0; border-top: 1px solid var(--line); padding: 8px 16px; color: var(--muted); font-size: 11px; }
 .annotation-reply-preview > summary { cursor: pointer; }

@@ -111,7 +111,6 @@ header:hover .task-pin,
   border-radius: 8px;
   background: var(--panel);
   padding: 0 12px;
-  outline: 0;
   font-size: 13px;
   transition: border-color 150ms ease-out, opacity 150ms ease-out;
 }

@@ -3,7 +3,6 @@
 .preview-workspace button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .preview-workspace button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .preview-workspace button:disabled { opacity: .45; cursor: default; }
-.preview-workspace button:focus-visible, .preview-workspace select:focus-visible, .preview-workspace textarea:focus-visible, .preview-workspace summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .preview-workspace-header { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
 .preview-workspace-header > svg { color: var(--accent); }
 .preview-workspace-header h2 { margin: 0; font-size: 17px; }

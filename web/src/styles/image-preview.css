@@ -102,7 +102,7 @@
 
 .image-zoom-controls button:hover:not(:disabled) { background: rgb(255 255 255 / 14%); }
 .image-zoom-controls button:disabled { opacity: 0.38; }
-.image-zoom-controls button:focus-visible { outline: 2px solid rgb(255 255 255 / 82%); outline-offset: 1px; }
+.image-zoom-controls button:focus-visible { outline: 2px solid rgb(255 255 255 / 82%); outline-offset: 2px; }
 
 @media (max-width: 640px) {
   .image-preview-lightbox { padding: 56px 48px 48px; }

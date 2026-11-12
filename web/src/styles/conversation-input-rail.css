@@ -188,7 +188,7 @@
 .conversation-input-menu-rest > span { white-space: pre-wrap; word-break: break-word; }
 .conversation-input-menu-files { display: inline-flex; align-items: center; gap: 3px; color: var(--faint); }
 .conversation-input-menu button:hover,
-.conversation-input-menu button:focus-visible { outline: 0; background: var(--glass-row); color: var(--ink); }
+.conversation-input-menu button:focus-visible { outline-offset: -2px; background: var(--glass-row); color: var(--ink); }
 /* 挑中的那一行多垫了一层底，它的时间跟着提一级，不然反倒是最难读的一行。 */
 .conversation-input-menu button:is(:hover, :focus-visible) > time { color: var(--muted); }
 .conversation-input-menu button.is-current { color: var(--ink); }

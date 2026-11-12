@@ -10,7 +10,10 @@
    自动撑高(撑到上限就在框内滚),拖过之后照抄顶边拖动条(task-detail/ReplyResizeHandle.tsx)
    定的高度——那条拖动条的上限比自动撑高的上限宽,自动撑高的限度不限制用户拖。
    浏览器原生的右下角把手仍然关着:两套机制都往 style.height 上写会互相打架。 */
-.task-reply-box textarea { display: block; width: 100%; min-height: 58px; resize: none; border: 0; background: transparent; padding: 10px 12px 2px; color: var(--ink); font-size: 12.5px; line-height: 1.55; outline: 0; }
+.task-reply-box textarea { display: block; width: 100%; min-height: 58px; resize: none; border: 0; background: transparent; padding: 10px 12px 2px; color: var(--ink); font-size: 12.5px; line-height: 1.55; }
+/* 回复框是输入卡：里面的输入框不套环，环画在卡上——卡自己那圈线换成淡墨，外面再晕开一圈。 */
+.task-reply-box:has(textarea:focus-visible) { border-color: var(--focus-soft); box-shadow: 0 0 0 3px color-mix(in oklab, var(--focus-ring) 10%, transparent), var(--surface-shadow); }
+.task-reply-box textarea:focus-visible { outline: 0; }
 /* 拖动条贴在回复框自己的上边(框内侧):框有 overflow:hidden 来裁圆角和水印,
    所以热区不能像侧栏那样探出边界,只能贴着内沿。z-index 要压过 textarea 那一层。 */
 .task-reply-resize { position: absolute; z-index: 5; top: 0; right: 0; left: 0; height: 8px; cursor: row-resize; }
@@ -25,7 +28,6 @@
 .reply-act { position: relative; display: inline-flex; height: 28px; flex: 0 0 auto; align-items: center; gap: 5px; border: 0; border-radius: var(--r-sm); background: transparent; padding: 0 7px; color: var(--muted); font: inherit; font-size: var(--t-xs); font-weight: var(--w-medium); white-space: nowrap; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
 .reply-act svg { flex: 0 0 auto; }
 .reply-act:hover:not(:disabled) { background: var(--hover-bg); color: var(--ink); }
-.reply-act:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .reply-act:disabled { cursor: not-allowed; opacity: .45; }
 /* 起了几个服务时，服务入口是一条能横着滚的窄条，挤在同一行里。 */
 .task-reply-actions .preview-service-links { flex: 0 1 300px; min-width: 0; margin: 0; padding: 0 4px; }
@@ -151,9 +153,7 @@
   font-size: 12px;
   font-weight: 450;
   line-height: 1.55;
-  outline: 0;
 }
-.task-derivation-note textarea:focus { border-color: var(--accent); }
 /* 附言里的 `/` 补全：派生面板本身是滚动的，菜单贴着输入框往下挂，别用 bottom:100%
    （附言在面板底部，往上弹会盖住执行器那排选择器）。 */
 .task-derivation-slash-menu {

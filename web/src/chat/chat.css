@@ -27,7 +27,6 @@
 }
 .chat-shell button { cursor: pointer; }
 .chat-shell button:disabled { opacity: .45; cursor: not-allowed; }
-.chat-shell button:focus-visible, .chat-shell input:focus-visible, .chat-shell textarea:focus-visible { outline: 2px solid var(--chat-lilac); outline-offset: 3px; }
 .chat-shell button { transition: background 160ms ease, color 160ms ease, transform 180ms ease, box-shadow 180ms ease; }
 .chat-shell button:active:not(:disabled) { transform: scale(.97); }
 .chat-rail { width: 204px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--chat-plum); color: #eee6f5; padding: 24px 14px 18px; }
@@ -55,7 +54,7 @@
 /* 连接状态只剩一颗点：透明边框把命中区撑到 14px（负 margin 抵消占位），指上去或键盘聚焦时由 HoverTip 说明状态。
    两种状态都只改 background-color——用 background 简写会把 background-clip 重置回 border-box，点会连透明边框一起涂满。 */
 .chat-connection { box-sizing: content-box; flex: none; width: 6px; height: 6px; border-radius: 50%; background-color: var(--amber); background-clip: padding-box; border: 4px solid transparent; margin: -4px -4px -4px -2px; }
-.chat-connection:focus-visible { outline: 2px solid var(--chat-lilac); outline-offset: -3px; }
+.chat-connection:focus-visible { outline-offset: -2px; }
 .chat-connection.is-connected { background-color: var(--green); }
 .chat-member-count { display: flex; align-items: center; gap: 7px; padding: 5px 10px; border-radius: 7px; border: 1px solid var(--chat-line); color: var(--chat-muted); background: var(--chat-paper); font-size: 12px; }
 .chat-member-count:hover { box-shadow: 0 3px 12px #382a4010; }
