@@ -53,7 +53,8 @@ export function liveLabel(events: ExecutionEvent[], awaiting: boolean): string {
   if (awaiting && latest?.kind === "notice") return collapse(latest.detail ?? "") || "正在等上游回话";
   const step = [...visible].reverse().find((event) => event.kind !== "notice");
   if (!step) return pastSummary(visible);
-  if (step.kind === "thinking") return "正在思考";
+  // 跟进行条那一档同一个说法(样机 live-words.js 的 thinkWord):在想 / 想了一会儿。
+  if (step.kind === "thinking") return "在想";
   if (step.kind === "error") return `异常：${collapse(step.label)}`;
   const view = describeEvent(step);
   if (view.failed) return `${view.object} 失败了`;
