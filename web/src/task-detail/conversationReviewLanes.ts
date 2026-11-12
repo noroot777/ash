@@ -42,6 +42,11 @@ export type ConversationReviewLane = {
   complete: boolean;
   reportAvailable: boolean;
   report: ReviewLaneReport | null;
+  /**
+   * 这一轮属于哪一场派审（`FreeReviewRun.id`）——有没有报告都配得上。轮号不是身份：重新派审
+   * 从第 1 轮数起，点这一句去审查格时靠它认出是哪一场。就地验证、配不上 run 的为 null。
+   */
+  runId: string | null;
   defaultCollapsed: boolean;
   /** 未通过时报告里有几条意见（服务端在结论旁注上给的）。老记录、通过的轮次是 null。 */
   findings: number | null;
@@ -287,6 +292,7 @@ function attachReports(lanes: ConversationReviewLane[], reviews: readonly FreeRe
     const lane = matching.at(-1);
     if (!lane) continue;
     assigned.add(lane.id);
+    lane.runId = candidate.runId;
     // 审查者会话还没落盘时卡上没有气泡可推名字，用配到的这一 run 补齐。
     lane.reviewerLabel ??= candidate.reviewerName || null;
     lane.reviewerModel ??= candidate.model;
@@ -357,6 +363,7 @@ export function conversationFeedRows(
         complete: false,
         reportAvailable: false,
         report: null,
+        runId: null,
         defaultCollapsed: false,
         findings: null,
         reviewerSpoke: false,

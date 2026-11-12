@@ -81,12 +81,12 @@ export function MonitorInspector({
   useInspectorRequest("monitors", (params) => {
     const id = typeof params.monitorId === "string" ? params.monitorId : null;
     const card = id ? cards.current.get(id) : null;
-    if (!card) return;
+    if (!card) return monitors.ready || monitors.error ? undefined : "wait"; // 列表还没读到：等它
     card.scrollIntoView({ block: "nearest" });
     card.focus({ preventScroll: true });
     card.classList.add("is-flash");
     window.setTimeout(() => card.classList.remove("is-flash"), 1600);
-  });
+  }, rows);
 
   return (
     <div className="insp-pane monitor-inspector">

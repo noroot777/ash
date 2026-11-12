@@ -256,9 +256,12 @@ function InspectorHostState<Context>({
   }, []);
 
   const openTab = useCallback((id: string, params?: InspectorRequest) => {
+    // 新的一次打开顶掉还没办成的那份（那一格可能还在等数据）：用户已经换了想看的东西。
     if (params) {
       requestSeq.current += 1;
       setRequest({ id, params, seq: requestSeq.current });
+    } else {
+      setRequest(null);
     }
     switchedAt.current = performance.now();
     removedAt.current = 0;

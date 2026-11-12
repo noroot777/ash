@@ -37,6 +37,7 @@ import {
   type TaskDerivationCommand,
 } from "./taskDerivation.ts";
 import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
+import { reviewTargetRequest } from "../review/reviewTarget.ts";
 import { DerivedTaskLinks } from "../components/DerivedTaskLinks.tsx";
 import { TaskReplyRail } from "./TaskReplyRail.tsx";
 import { useTaskReplyActions } from "./TaskReplyActions.tsx";
@@ -512,7 +513,7 @@ export function TaskDetail({
                       ) : undefined}
                       reviews={free.state?.reviews}
                       // 会话里那一句审查结论点过来：审查格展开那一轮（feed-10 / insp-5）。
-                      onOpenReviewPanel={(round) => openTab("review", round != null ? { round } : undefined)}
+                      onOpenReviewPanel={(target) => openTab("review", target ? reviewTargetRequest(target) : undefined)}
                       // 会话区底部的常驻卡。提问要人答，所以它留在会话里（答案就在那条
                       // 对话上下文里）；哨兵是「它自己会回来」，一行就够，落在回复框上方
                       // 那条 rail 上（见下面的 monitorWait）。

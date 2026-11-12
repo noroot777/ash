@@ -5,6 +5,7 @@
 import { useMemo, useRef, useState } from "react";
 import type { TaskReviewRound } from "@ash/shared";
 import { InspButton, InspNone, InspRecord, InspSec } from "../inspector/parts.tsx";
+import { useInspectorRequest } from "../inspector/nav.tsx";
 import { api } from "../lib/api.ts";
 import {
   ReviewRoundBody,
@@ -13,6 +14,7 @@ import {
   type TaskReviewState,
 } from "../team/ReviewEvidence.tsx";
 import { ReviewInlineReport } from "./ReviewInlineReport.tsx";
+import { reviewTargetOf } from "./reviewTarget.ts";
 import { ReviewScreenshotStrip } from "./ReviewScreenshotStrip.tsx";
 
 // 同一个轮次号可以既有独立审查又有就地验证两条记录，光靠 round 认不出是哪一条。
@@ -47,6 +49,17 @@ export function TaskReviewRounds({
     if (!next.delete(key)) next.add(key);
     return next;
   });
+
+  // 会话里那一句「第 N 轮验证…」点过来：展开那一轮（同号的独立审查与就地验证并存时认最近那条）。
+  // 记录还在读就先不收下这份请求，读到了再办。
+  useInspectorRequest("review", (params) => {
+    const { round } = reviewTargetOf(params);
+    const hit = round == null ? null : rounds.findLast((entry) => entry.round === round);
+    if (!hit) return state.loading ? "wait" : undefined;
+    const key = roundKey(hit);
+    setOpenKeys((current) => new Set(current).add(key));
+    requestAnimationFrame(() => rootRef.current?.querySelector(`[data-record="${CSS.escape(key)}"]`)?.scrollIntoView({ block: "nearest" }));
+  }, rounds);
 
   return (
     <section ref={rootRef} aria-label="验证记录">

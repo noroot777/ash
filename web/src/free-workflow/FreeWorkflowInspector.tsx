@@ -12,6 +12,7 @@ import type { FreeWorkflowApiState } from "../lib/api.ts";
 import { FreeReviewRoundDrawer } from "./FreeReviewRoundBody.tsx";
 import { recurrenceText, reviewKey, reviewRoundLabel, reviewRoundTone, timeText } from "./freeReviewRounds.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
+import { reviewTargetRequest } from "../review/reviewTarget.ts";
 
 // 「工作流」格（自由工作流）：真正发生过的事，按先后一行一条。打开/关闭预览不算——那是随手
 // 开一眼看效果的看片器，开十次也不改变任务走到了哪儿，摆进这条线只会把真正的进展冲淡。
@@ -155,7 +156,7 @@ export function FreeWorkflowInspector({ task }: { task: Task }) {
                     className="insp-row insp-go"
                     aria-expanded={nav ? undefined : drawerKey === reviewKey(item.run.id, item.round.round)}
                     onClick={() => {
-                      if (nav) nav.openTab("review", { runId: item.run.id, round: item.round.round });
+                      if (nav) nav.openTab("review", reviewTargetRequest({ source: item.run.target?.kind === "accepted_merge" ? "merge" : "free", runId: item.run.id, round: item.round.round }));
                       else setDrawerKey((current) => {
                         const key = reviewKey(item.run.id, item.round.round);
                         return current === key ? null : key;

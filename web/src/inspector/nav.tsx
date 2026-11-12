@@ -31,8 +31,12 @@ export function useInspectorNav(): InspectorNav | null {
 /**
  * 收「给 `id` 这一格」的请求：每来一份就调一次 `handle`，然后告诉宿主收下了。挂载时已经有
  * 一份（刚被 openTab 切过来）也照收。
+ *
+ * 切到那一格不等于办成了：刚挂上的那一格往往还在读数据，要找的那条还不在。`handle` 返回
+ * `"wait"` = 还没读完、这份先别清；`version`（那一格的数据）一变就再交给它一次，直到它办成
+ * 或确认找不到（返回别的）才收下。
  */
-export function useInspectorRequest(id: string, handle: (params: InspectorRequest) => void) {
+export function useInspectorRequest(id: string, handle: (params: InspectorRequest) => void | "wait", version?: unknown) {
   const nav = useInspectorNav();
   const handleRef = useRef(handle);
   handleRef.current = handle;
@@ -40,7 +44,7 @@ export function useInspectorRequest(id: string, handle: (params: InspectorReques
   const consume = nav?.consume;
   useEffect(() => {
     if (!request || request.id !== id) return;
-    handleRef.current(request.params);
+    if (handleRef.current(request.params) === "wait") return;
     consume?.(request.seq);
-  }, [consume, id, request]);
+  }, [consume, id, request, version]);
 }

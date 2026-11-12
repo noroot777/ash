@@ -4,6 +4,7 @@ import { ReviewReportDialog } from "../components/MarkdownBody.tsx";
 import type { ReviewFileTarget } from "../components/markdownPolicy.ts";
 import { api } from "../lib/api.ts";
 import { ReviewNote } from "../review/ReviewNote.tsx";
+import type { ReviewTarget } from "../review/reviewTarget.ts";
 import type { ConversationReviewLane, ReviewLaneConclusion } from "./conversationReviewLanes.ts";
 import { NoticeLine } from "./SystemNotice.tsx";
 import { reviewVerdictText, reviewVerdictTone, type ReviewVerdictWord } from "./timelineNoticeCopy.ts";
@@ -53,10 +54,10 @@ export function ReviewerLane({
   lane: ConversationReviewLane;
   children: ReactNode;
   /**
-   * 出了结论的轮次点一下去右侧「审查」格、展开这一轮。不给（只读视图、团队时间线没有那一格）
-   * 就在原处摊开这一轮的经过。
+   * 出了结论的轮次点一下去右侧「审查」格、展开这一轮（带着来源和那一场，见 review/reviewTarget）。
+   * 不给（只读视图、团队时间线没有那一格）就在原处摊开这一轮的经过。
    */
-  onOpenRound?: (round: number | null) => void;
+  onOpenRound?: (target: ReviewTarget) => void;
 }) {
   // 收了口的一轮（出了结论，或者到头了也没给出结论）收成一行；还在跑的保留整张卡。
   if (lane.complete) return <ReviewMilestone taskId={taskId} lane={lane} onOpenRound={onOpenRound}>{children}</ReviewMilestone>;
@@ -71,7 +72,7 @@ function ReviewMilestone({ taskId, lane, children, onOpenRound }: {
   taskId: string;
   lane: ConversationReviewLane;
   children: ReactNode;
-  onOpenRound?: (round: number | null) => void;
+  onOpenRound?: (target: ReviewTarget) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [report, setReport] = useState<ReviewFileTarget | null>(null);
@@ -94,7 +95,7 @@ function ReviewMilestone({ taskId, lane, children, onOpenRound }: {
       <NoticeLine
         view={view}
         tail={reviewLaneTail(lane)}
-        onOpen={onOpenRound ? () => onOpenRound(lane.round) : () => setExpanded((value) => !value)}
+        onOpen={onOpenRound ? () => onOpenRound({ source: lane.source, runId: lane.runId, round: lane.round }) : () => setExpanded((value) => !value)}
         openLabel={onOpenRound ? "在右侧审查格里打开这一轮" : expanded ? "收起这一轮的经过" : "展开这一轮的经过"}
       />
       {!onOpenRound && expanded && (

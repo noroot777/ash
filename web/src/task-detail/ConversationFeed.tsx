@@ -18,6 +18,7 @@ import { conversationDebateRows } from "./conversationDebateRows.ts";
 import { conversationSystemRows, laneReceipts, type TurnReceipt } from "./conversationSystemRows.ts";
 import { DebateLane } from "./DebateLane.tsx";
 import { ReviewerLane } from "./ReviewerLane.tsx";
+import type { ReviewTarget } from "../review/reviewTarget.ts";
 import { NoticeLine, noticeTail, SystemAuthoredMessage } from "./SystemNotice.tsx";
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
 import { noticeView, turnFailureView } from "./timelineNoticeCopy.ts";
@@ -245,7 +246,7 @@ export function ConversationFeed({
    * `round`：会话里那一行审查结论被点了，要在审查格里展开的是哪一轮（合并结果审查没有
    * 轮号，给 null）；「去裁定」不带。
    */
-  onOpenReviewPanel?: (round?: number | null) => void;
+  onOpenReviewPanel?: (target?: ReviewTarget) => void;
   questionHistory?: QuestionRecord[];
   liveQuestionHistory?: boolean;
   /**

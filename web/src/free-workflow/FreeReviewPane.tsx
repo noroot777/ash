@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { FreeReviewRound, FreeReviewRun, Task } from "@ash/shared";
 import { InspActions, InspConclusion, InspMainButton, InspMore, type InspMainAction, type InspMoreItem, type InspTone } from "../inspector/InspHead.tsx";
 import { useInspectorRequest } from "../inspector/nav.tsx";
+import { reviewTargetOf } from "../review/reviewTarget.ts";
 import { InspNone, InspRecord, InspSec } from "../inspector/parts.tsx";
 import { api } from "../lib/api.ts";
 import { ReviewNote } from "../review/ReviewNote.tsx";
@@ -94,13 +95,18 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify }: {
     return next;
   });
 
-  // 别处（会话流里那一行审查、工作流格里那一轮）点过来：展开那一轮。没指明哪条链时认最近那条。
+  // 别处（会话流里那一句审查结论、工作流格里那一轮）点过来：展开那一场的那一轮。认的是
+  // 「来源 + 那一场 + 轮号」（见 review/reviewTarget）；带不出那一场的老时间线才退回同来源里
+  // 最近那场的同号轮。审查记录还没读到时先不收下这份请求，读到了再办。
   useInspectorRequest("review", (params) => {
-    const round = typeof params.round === "number" ? params.round : null;
-    const runId = typeof params.runId === "string" ? params.runId : null;
-    const hit = [...all].reverse().find((entry) => (runId ? entry.run.id === runId : true) && (round == null || entry.round.round === round));
+    const target = reviewTargetOf(params);
+    if (target.source === "inline") return; // 就地验证不在这一格里，别拿同号的派审顶上
+    const pool = target.source === "merge" ? postMerge : workspace;
+    const hit = [...pool].reverse().find((entry) => (target.runId ? entry.run.id === target.runId : true)
+      && (target.round == null || entry.round.round === target.round));
     if (hit) reveal(reviewKey(hit.run.id, hit.round.round));
-  });
+    else if (!state && !free.error) return "wait";
+  }, all);
 
   if (free.loading && !state) return <div className="insp-pane"><InspConclusion tone="busy">正在读取审查记录…</InspConclusion></div>;
   if (free.error && !state) return <div className="insp-pane"><InspNone>{free.error}</InspNone></div>;
