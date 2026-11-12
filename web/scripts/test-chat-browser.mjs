@@ -162,22 +162,21 @@ try {
   await page.getByText("你已停止这次回复。", { exact: false }).waitFor();
   assert.equal(await page.getByText("这个群的独立消息。", { exact: true }).count(), 0);
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.getByRole("button", { name: "单任务", exact: true }).click();
+  // 聊天页不再挂任务模式条：从聊天去新建任务走侧栏的「新建任务」，回聊天走侧栏的「聊天」。
+  const openComposer = () => page.getByRole("button", { name: "新建任务" }).click();
+  const openChat = () => page.getByRole("button", { name: "聊天", exact: true }).click();
+  await openComposer();
   const objective = page.locator(".composer-objective textarea");
   await objective.fill("切换聊天后，这份任务草稿仍然保留。");
   const modeTabs = page.getByRole("tablist", { name: "任务模式" });
-  const chatTab = modeTabs.getByRole("tab", { name: "聊天", exact: true });
   assert.equal(await objective.count(), 1, "合并后只保留新版目标输入框");
   assert.equal(await page.locator(".studio-card").count(), 1);
-  assert.equal(await modeTabs.count(), 1, "聊天与任务模式共用新版内联模式栏");
-  // 模式栏 = `MODES` 那三格 + 外挂的两个入口(`extraModeTabs`:聊天、助手)。按**名字**钉
-  // 而不是数个数:2026-09-09 加「助手」那一刀把数字从 4 变成 5,而「4 不等于 5」说不出
-  // 是多了谁还是少了谁 —— 这条用例要盯的本来就是「聊天入口跟任务模式并排在同一栏里」。
-  assert.deepEqual(await modeTabs.getByRole("tab").allInnerTexts(), ["单任务", "团队", "讨论", "聊天", "助手"]);
+  assert.equal(await modeTabs.count(), 1, "新建面板只有一条模式栏");
+  // 模式栏只剩任务的三种模式；聊天、助手的入口在侧栏，不再外挂在这一栏里。
+  assert.deepEqual(await modeTabs.getByRole("tab").allInnerTexts(), ["单任务", "团队", "讨论"]);
   for (const name of ["团队", "讨论", "单任务"]) {
     await modeTabs.getByRole("tab", { name, exact: true }).click();
     assert.equal(await objective.inputValue(), "切换聊天后，这份任务草稿仍然保留。");
-    assert.equal(await chatTab.isVisible(), true, `${name} 模式保留聊天入口`);
   }
   await page.getByRole("button", { name: "收起侧边栏", exact: true }).click();
   for (const width of [320, 390, 700, 900, 1440]) {
@@ -198,22 +197,21 @@ try {
     name: "merge-draft.txt", mimeType: "text/plain", buffer: Buffer.from("合并兼容验证附件"),
   });
   await page.locator(".task-upload-chip.is-uploading").waitFor();
-  assert.equal(await chatTab.isDisabled(), true, "上传期间不能切走聊天丢失在途附件");
   releaseUpload();
   await page.locator(".task-upload-chip.is-uploading").waitFor({ state: "detached" });
-  assert.equal(await chatTab.isEnabled(), true);
   assert.equal(await page.locator(".task-upload-chip").count(), 1, "附件只展示一次");
   await page.screenshot({ path: `${output}/composer-chat-merged.png`, animations: "disabled" });
-  await chatTab.click();
+  await openChat();
   await input.waitFor();
-  await page.getByRole("button", { name: "单任务", exact: true }).click();
+  await openComposer();
+  await objective.waitFor();
   assert.equal(await objective.inputValue(), "切换聊天后，这份任务草稿仍然保留。");
   // 种子附件与上传附件在 2026-09-08(ec832dcf「新建任务框草稿暂存」)合并成了同一列表,
   // `SeedAttachmentList` 随之删掉 —— 往返之后要在**同一个** `.task-upload-chip` 列表里
   // 原样找到它,`.composer-seed-attachment` 这一档前端已经不存在了。
   await page.locator(".task-upload-chip").getByText("merge-draft.txt", { exact: true }).waitFor();
   assert.equal(await page.locator(".task-upload-chip").count(), 1, "聊天往返保留附件且不重复");
-  await chatTab.click();
+  await openChat();
   await input.waitFor();
   const currentRoomId = await page.evaluate(() => localStorage.getItem("ash:chat:chat-demo"));
   assert.ok(currentRoomId);
@@ -325,7 +323,7 @@ try {
   await page.screenshot({ path: `${output}/chat-clear-compaction-after-reload.png`, animations: "disabled" });
   console.log("chat review browser passed: running 停止文案精确校验、短群无虚构整理状态、三成员前台整理时停止和 /clear 刷新后均无内部英文异常。");
   assert.deepEqual(errors, []);
-  console.log("chat browser passed: 创建群聊、三段成员选择、键盘点名、@all 唤醒全体、群聊改名、重复点选当前群不掉空态、贴底时隐藏「最新消息」且点击真的回到底部、无点名静默、禁止转发唤醒、实际模拟源码及 node_modules 写入均被标记失败且刷新保留警告、不误建任务、任务卡实时状态、停止持久化、详情回跳、390px 窄屏、减少动态效果、群间隔离、新编辑器四模式入口、320–1440px 模式栏、上传切换门禁、跨模式任务草稿与附件保留；无页面异常。");
+  console.log("chat browser passed: 创建群聊、三段成员选择、键盘点名、@all 唤醒全体、群聊改名、重复点选当前群不掉空态、贴底时隐藏「最新消息」且点击真的回到底部、无点名静默、禁止转发唤醒、实际模拟源码及 node_modules 写入均被标记失败且刷新保留警告、不误建任务、任务卡实时状态、停止持久化、详情回跳、390px 窄屏、减少动态效果、群间隔离、新建面板三模式栏、320–1440px 模式栏、聊天往返后任务草稿与附件保留；无页面异常。");
 } catch (error) {
   await page?.screenshot({ path: `${output}/chat-failure.png` }).catch(() => {});
   throw error;

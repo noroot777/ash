@@ -62,9 +62,12 @@ try {
   const people = page.getByRole("button", { name: /^谁来做：/ });
   const space = page.getByRole("button", { name: /^工作目录：/ });
   const flow = page.getByRole("button", { name: /^如何交付：/ });
+  // 发送键淡下去时「为什么发不出去」挂在它的 aria-describedby 上（指上去的提示说的也是这一句）。
+  const blockedReason = () => page.locator(".studio-card .send-key-main").evaluate((element) =>
+    document.getElementById(element.getAttribute("aria-describedby") ?? "")?.textContent ?? "");
   await objective.fill("保留我写好的目标");
   await page.getByRole("button", { name: /^智能体：/ }).waitFor();
-  await page.waitForFunction(() => !document.querySelector(".studio-submit")?.disabled);
+  await page.waitForFunction(() => document.querySelector(".studio-card .send-key-main")?.getAttribute("aria-disabled") !== "true");
   assert.equal(await page.locator(".studio-popover:visible").count(), 0);
   assert.equal(await page.locator(".studio-card .run-target-picker:visible").count(), 1);
   assert.equal(await page.locator(".studio-card .composer-config").count(), 0);
@@ -118,11 +121,11 @@ try {
   await flow.click();
   await page.getByRole("dialog", { name: "如何交付", exact: true }).locator(".composer-toggle-field > span").click();
   assert.match(await flow.getAttribute("aria-label"), /自动结束/);
-  await page.getByRole("button", { name: "任务示例", exact: true }).click();
+  await page.getByRole("button", { name: "更多选项", exact: true }).click();
   await page.getByRole("button", { name: /解决一个问题/ }).click();
   assert.match(await objective.inputValue(), /^保留我写好的目标\n\n请帮我/);
   assert.equal(await page.getByRole("tab", { name: "单任务", exact: true }).getAttribute("aria-selected"), "true");
-  await page.getByRole("button", { name: "任务示例", exact: true }).click();
+  await page.getByRole("button", { name: "更多选项", exact: true }).click();
   await page.getByRole("button", { name: /讨论一个方案/ }).click();
   assert.equal(await page.getByRole("tab", { name: "讨论", exact: true }).getAttribute("aria-selected"), "true");
   await switchMode("单任务");
@@ -139,7 +142,7 @@ try {
   await page.getByLabel("一次性运行时间").fill("");
   await page.keyboard.press("Escape");
   assert.equal(await page.getByRole("button", { name: "创建并定时" }).isDisabled(), true);
-  assert.match(await page.locator(".studio-input-status").innerText(), /请选择一次性运行时间/);
+  assert.match(await blockedReason(), /请选择一次性运行时间/);
   await objective.press("Control+Enter");
   assert.equal(created.length, 0, "隐藏定时面板后快捷键也不能绕过门禁");
   for (const width of [320, 390, 700, 900]) {
@@ -174,7 +177,7 @@ try {
   await page.getByRole("radio", { name: "创建并排队" }).click();
   await page.keyboard.press("Escape");
   assert.equal(await page.getByRole("button", { name: "创建并排队", exact: true }).isDisabled(), true, "没选目标不能创建");
-  assert.match(await page.locator(".studio-input-status").innerText(), /选择要接在哪个任务之后/);
+  assert.match(await blockedReason(), /选择要接在哪个任务之后/);
   await openLaunch();
   await page.locator(".composer-queue-after .ui-select-trigger").click();
   const teamRow = page.locator(".ui-dropdown-row", { hasText: "常驻团队任务" });
@@ -255,7 +258,7 @@ try {
   await page.locator(".composer-queue-after .ui-select-trigger").click();
   await page.locator(".ui-dropdown-row", { hasText: "存量待办任务" }).click();
   await page.keyboard.press("Escape");
-  await page.waitForFunction(() => !document.querySelector(".studio-submit")?.disabled);
+  await page.waitForFunction(() => document.querySelector(".studio-card .send-key-main")?.getAttribute("aria-disabled") !== "true");
   await page.getByRole("button", { name: /^组织与标签：/ }).click();
   await page.getByRole("button", { name: /^分组/ }).click();
   await page.locator(".ui-dropdown-row", { hasText: "新建分组" }).click();
@@ -264,7 +267,7 @@ try {
   await page.getByRole("textbox", { name: "分组名称" }).waitFor({ state: "hidden" });
   await clickOutside();
   assert.equal(await page.getByRole("button", { name: "创建并排队", exact: true }).isDisabled(), true, "新建分组后旧排队目标必须被清掉");
-  assert.match(await page.locator(".studio-input-status").innerText(), /选择要接在哪个任务之后/);
+  assert.match(await blockedReason(), /选择要接在哪个任务之后/);
   assert.match(await page.getByTestId("notices").innerText(), /已清除排队目标/);
 
   // 排队请求本身失败时如实分开报两段:任务已创建、排队失败,不冒充成功。

@@ -12,7 +12,7 @@ try {
   const url = `${web.origin}/scripts/fixtures/composer-branches.html`;
   const objective = page.getByRole("textbox", { name: "任务目标" });
   const directory = page.getByRole("button", { name: /^工作目录：/ });
-  const submit = page.locator(".studio-submit");
+  const submit = page.locator(".studio-card .send-key-main");
   const records = async () => JSON.parse(await page.getByTestId("created").innerText());
   const directoryLabel = () => directory.getAttribute("aria-label");
   const AUTOMATIC = "跟随项目分支（创建时确定）";

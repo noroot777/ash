@@ -110,7 +110,8 @@ try {
 
   const objective = page.locator(".composer-objective textarea");
   await objective.fill("把这张图上的问题修掉");
-  const submit = page.getByRole("button", { name: "创建并运行", exact: true });
+  // 发送键的读屏名跟着键上的字走（在传时是「上传中 N%」），所以按位置找它。
+  const submit = page.locator(".studio-card .send-key-main");
   await submit.waitFor();
 
   // ① 粘上去的那一刻就得有东西代表它，而且看得出在动。
@@ -122,7 +123,7 @@ try {
     /上传中 \d+%/,
     "在途卡片要写明进度百分比",
   );
-  assert.match(await page.locator(".studio-input-status").innerText(), /上传中 \d+%/, "底栏也要说在传");
+  assert.match(await submit.innerText(), /上传中 \d+%/, "发送键上也要说在传");
   assert.equal(await page.locator(".task-upload-chip img").count(), 0, "还没传完不该出现正式缩略图");
 
   // ② 传完之前不许创建：附件路径是上传成功才有的，这时候创建等于把刚粘的图扔了。
@@ -138,7 +139,7 @@ try {
   //     藏起来只会让用户以为已经传完（第 1 轮审查 P1）。
   await switchTab("讨论");
   assert.equal(await page.locator(".task-upload-chip.is-uploading").count(), 1, "切到讨论后在途卡片必须还在");
-  assert.match(await page.locator(".studio-input-status").innerText(), /上传中 \d+%/, "讨论模式底栏也要说在传");
+  assert.match(await submit.innerText(), /上传中 \d+%/, "讨论模式发送键上也要说在传");
   assert.equal(await submit.isDisabled(), true, "讨论模式同样不能在上传未完成时创建");
   await page.getByRole("tab", { name: "单任务", exact: true }).click();
 
@@ -176,9 +177,9 @@ try {
   await page.getByText("queued-second.png", { exact: true }).waitFor({ state: "detached" });
   assert.equal(await page.locator(".task-upload-chip.is-uploading").count(), 1, "取消排队那张时第一张还在传");
   assert.match(
-    await page.locator(".studio-input-status").innerText(),
-    /上传中 \d+%/,
-    "取消一张之后底栏要按剩下的一张算，不能还写着 2 个",
+    await submit.innerText(),
+    /^上传中 \d+%$/,
+    "取消一张之后发送键要按剩下的一张算，不能还写着 2 个",
   );
   await page.getByRole("button", { name: "取消上传 queued-first.png" }).click();
   await page.getByText("queued-first.png", { exact: true }).waitFor({ state: "detached" });

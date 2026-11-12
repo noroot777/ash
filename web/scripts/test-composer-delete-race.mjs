@@ -92,7 +92,7 @@ try {
   const submitQueued = async (text, target = "存量待办任务") => {
     await page.getByRole("button", { name: /^智能体：/ }).waitFor();
     await objective.fill(text);
-    await page.waitForFunction(() => !document.querySelector(".studio-submit")?.disabled);
+    await page.waitForFunction(() => document.querySelector(".studio-card .send-key-main")?.getAttribute("aria-disabled") !== "true");
     await page.getByRole("button", { name: /^启动设置：/ }).click();
     await page.getByRole("radio", { name: "创建并排队" }).click();
     await page.locator(".composer-queue-after .ui-select-trigger").click();

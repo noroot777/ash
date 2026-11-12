@@ -84,10 +84,9 @@ function Fixture() {
     </section>
 
     <section>
-      <ComposerLaunchControl mode={launch} at="" cron="" busy={false} canSubmit
+      <ComposerLaunchControl mode={launch} at="" cron="" busy={false} blocked={null}
         onModeChange={(mode) => { setLaunch(mode); note(`launch:${mode}`); }}
         onAtChange={() => {}} onCronChange={() => {}} onSubmit={() => {}}
-        attachmentTool={null} executorTools={null}
         queueUnavailable="团队任务不支持排队" />
     </section>
 

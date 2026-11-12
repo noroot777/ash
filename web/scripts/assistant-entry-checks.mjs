@@ -43,7 +43,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
 
   await configureProjects({ empty: false });
   await page.goto(fixtureUrl);
-  await page.getByRole("heading", { name: "从任务树选择一项" }).waitFor();
+  await page.locator(".task-composer-panel.is-home").waitFor();
 
   await page.getByRole("button", { name: "聊天", exact: true }).first().click();
   await page.getByRole("region", { name: "聊天模式" }).waitFor();
@@ -56,7 +56,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   await page.goBack();
   await page.getByRole("region", { name: "ash 助手" }).waitFor();
   await page.getByRole("button", { name: "关闭助手" }).click();
-  await page.getByRole("heading", { name: "从任务树选择一项" }).waitFor();
+  await page.locator(".task-composer-panel.is-home").waitFor();
   assert.doesNotMatch(page.url(), /[?&]view=chat(?:&|$)/u, "popstate clears a stale chat origin before assistant closes");
 
   await page.getByRole("button", { name: "聊天", exact: true }).first().click();
@@ -74,7 +74,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   assert.match(page.url(), /[?&]view=chat(?:&|$)/u, "assistant reload preserves the chat return path");
   await configureProjects({ empty: false });
   await page.getByRole("button", { name: "返回工作区" }).click();
-  await page.getByRole("heading", { name: "从任务树选择一项" }).waitFor();
+  await page.locator(".task-composer-panel.is-home").waitFor();
 
   await configureProjects({ empty: true });
   const confirmedEmptyProjects = page.waitForResponse(response => response.url().endsWith("/api/projects") && response.status() === 200);
@@ -96,7 +96,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   assert.doesNotMatch(page.url(), /[?&]view=chat(?:&|$)/u, "eventually empty project list keeps URL and workspace consistent");
   await configureProjects({ empty: false });
   await page.goto(fixtureUrl);
-  await page.getByRole("heading", { name: "从任务树选择一项" }).waitFor();
+  await page.locator(".task-composer-panel.is-home").waitFor();
 
   const separator = () => page.getByRole("separator", { name: "调整任务树宽度" });
   const setSidebarWidth = async width => {
@@ -246,7 +246,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   assert.match(page.url(), /[?&]view=assistant(?:&|$)/u);
   assert.equal(await footerAssistant.getAttribute("aria-pressed"), "true", "footer entry reflects assistant view");
   await page.getByRole("button", { name: "关闭助手" }).click();
-  await page.getByRole("heading", { name: "从任务树选择一项" }).waitFor();
+  await page.locator(".task-composer-panel.is-home").waitFor();
   assert.doesNotMatch(page.url(), /[?&]view=chat(?:&|$)/u, "footer assistant exit returns to workspace");
 
   await page.getByRole("button", { name: "聊天", exact: true }).first().click();
@@ -264,19 +264,19 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   const workspaceNoteId = await convertNewNote("从工作区助手转来的随手记");
   assert.match(page.url(), /[?&]view=create(?:&|$)/u, "workspace assistant note conversion opens composer immediately");
   assert.equal(await objective.inputValue(), "从工作区助手转来的随手记");
-  await page.getByRole("tab", { name: "ash 助手" }).click();
+  await footerAssistant.click();
   await page.getByRole("button", { name: "关闭助手" }).click();
   await objective.waitFor();
   assert.equal(await objective.inputValue(), "从工作区助手转来的随手记", "workspace note seed is applied once");
   await createAndCheckNoteLink(workspaceNoteId);
 
   await page.goto(fixtureUrl);
-  await page.getByRole("heading", { name: "从任务树选择一项" }).waitFor();
+  await page.locator(".task-composer-panel.is-home").waitFor();
   await page.getByRole("button", { name: "新建任务" }).click();
   await objective.waitFor();
   await page.getByRole("tab", { name: "团队", exact: true }).click();
   await objective.fill("保留这份团队任务草稿");
-  await page.getByRole("tab", { name: "ash 助手" }).click();
+  await footerAssistant.click();
   await page.getByRole("region", { name: "ash 助手" }).waitFor();
   assert.match(page.url(), /[?&]from=composer(?:&|$)/u, "assistant URL records its composer origin");
   assert.match(page.url(), /[?&]mode=team(?:&|$)/u, "assistant URL records the composer mode");
@@ -285,7 +285,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   assert.equal(await objective.inputValue(), "保留这份团队任务草稿", "composer draft survives an assistant round trip");
   assert.equal(await page.getByRole("tab", { name: "团队", exact: true }).getAttribute("aria-selected"), "true",
     "composer mode survives an assistant round trip");
-  await page.getByRole("tab", { name: "ash 助手" }).click();
+  await footerAssistant.click();
   await page.reload();
   await page.getByRole("region", { name: "ash 助手" }).waitFor();
   await page.getByRole("button", { name: "关闭助手" }).click();
@@ -294,20 +294,20 @@ export async function checkAssistantEntry(page, fixtureUrl) {
     "composer mode survives an assistant page reload");
   await page.getByRole("tab", { name: "团队", exact: true }).click();
   await objective.fill("原有的团队草稿");
-  await page.getByRole("tab", { name: "ash 助手" }).click();
+  await footerAssistant.click();
   const composerNoteId = await convertNewNote("从原新建任务来源的助手转来的随手记");
   assert.match(page.url(), /[?&]view=create(?:&|$)/u);
   assert.match(page.url(), /[?&]mode=single(?:&|$)/u, "note conversion switches directly to single-task composer");
   const mergedNoteDraft = "从原新建任务来源的助手转来的随手记\n\n原有的团队草稿";
   assert.equal(await objective.inputValue(), mergedNoteDraft, "converted note seed and existing composer draft are both retained");
-  await page.getByRole("tab", { name: "ash 助手" }).click();
+  await footerAssistant.click();
   await page.getByRole("button", { name: "关闭助手" }).click();
   await objective.waitFor();
   assert.equal(await objective.inputValue(), mergedNoteDraft, "assistant round trip does not apply the note seed twice");
   await createAndCheckNoteLink(composerNoteId);
 
   await page.goto(fixtureUrl);
-  await page.getByRole("heading", { name: "从任务树选择一项" }).waitFor();
+  await page.locator(".task-composer-panel.is-home").waitFor();
   await page.getByRole("button", { name: "聊天", exact: true }).first().click();
   await page.getByRole("region", { name: "聊天模式" }).waitFor();
   const chatNoteId = await convertNewNote("从聊天来源转来的随手记");
@@ -317,7 +317,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   await createAndCheckNoteLink(chatNoteId);
 
   await page.goto(fixtureUrl);
-  await page.getByRole("heading", { name: "从任务树选择一项" }).waitFor();
+  await page.locator(".task-composer-panel.is-home").waitFor();
   await page.getByRole("button", { name: "收起侧边栏" }).click();
   const collapsed = page.getByRole("complementary", { name: "已收起的侧边栏" });
   assert.equal(await collapsed.getByRole("button", { name: "聊天" }).count(), 0, "collapsed sidebar has no chat-shaped duplicate");

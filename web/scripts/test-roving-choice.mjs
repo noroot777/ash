@@ -109,7 +109,7 @@ try {
   assert.equal(await text("service"), "svc-worker", "在「全部」上再左键,回绕到最后一个服务");
 
   // ── ③ 禁用的那一档跳过去 + ⑤ 整组在 portal 里 ──────────────────────────
-  await page.locator(".studio-submit-mode").click();
+  await page.locator(".send-key-opt").click();
   const launch = await groupState("启动方式");
   assert.deepEqual(
     launch.filter((item) => item.disabled).map((item) => item.value),
