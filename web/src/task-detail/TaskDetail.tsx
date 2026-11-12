@@ -47,6 +47,7 @@ import type { ComposerDraft } from "../composer/composerDraft.ts";
 import { forkReadBlock, snapshotConversationFork } from "./conversationFork.ts";
 import { useTaskInspectorStack } from "./useTaskInspectorStack.ts";
 import { MemoSelectionScope } from "../task-memos/MemoSelectionScope.tsx";
+import { stageSideChatQuote } from "../side-chat/sideChatQuote.ts";
 import { useAddReplyQuote } from "./replyQuote.ts";
 
 
@@ -503,6 +504,7 @@ export function TaskDetail({
                           await conversation.refetch();
                         }
                         : undefined}
+                      onAskSideChat={(quote) => { stageSideChatQuote(task.id, quote); openTab("side-chat"); }}
                       reviews={free.state?.reviews}
                       onOpenReviewPanel={() => openTab("review")}
                       // 会话区底部的常驻卡。提问要人答，所以它留在会话里（答案就在那条

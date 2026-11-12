@@ -113,7 +113,7 @@
     "//test:claude-trace-accounting": "气泡上的「本轮」只认逐条的 accounting 标记，读侧不许按数据形状猜口径：没标记的旧 codex trace 才在读侧求差，claude 旧 trace 由历史回填逐条改写成真实增量。钉住「有标记的一律原样显示」和那条被证伪的恒等式不许回来。",
     "test:claude-trace-accounting": "node --experimental-strip-types scripts/test-claude-trace-accounting.mjs",
     "test:turn-fold-dom": "node scripts/test-turn-fold-dom.mjs",
-    "test:conversation-continuation": "tsx scripts/test-conversation-continuation.tsx",
+    "test:conversation-continuation": "tsx --import ./scripts/ignore-css-hooks.mjs scripts/test-conversation-continuation.tsx",
     "test:conversation-steer": "node --experimental-strip-types scripts/test-conversation-steer.mjs",
     "test:context-meter": "tsx scripts/test-context-meter.tsx",
     "test:context-compact-quick": "node scripts/test-context-compact-quick.mjs",

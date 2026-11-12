@@ -1,5 +1,5 @@
 import { useMemo, useRef } from "react";
-import { File, Gavel, ShieldCheck, GitFork } from "@phosphor-icons/react";
+import { File, Gavel, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import { runActivityExecutor, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
@@ -7,13 +7,11 @@ import type { ConversationItem, ConversationSource } from "./conversationModel.t
 import { conversationTailKey } from "./conversationModel.ts";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
-import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
-import { MessageFooter } from "../components/MessageFooter.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
 import { conversationFeedRows, reviewLaneMessageRoles, type ReviewLaneMessageRole } from "./conversationReviewLanes.ts";
 import { conversationDebateRows } from "./conversationDebateRows.ts";
@@ -44,6 +42,7 @@ import { monitorWakeInput, monitorWakeReplyIds } from "./monitorWakeModel.ts";
 import { mergeNoticeItems, useRejectionNotices } from "./useRejectionNotices.ts";
 import { ReclaimTurnSwitch } from "./ReclaimTurnSwitch.tsx";
 import { DeleteMessageButton, MessageDeleteProvider } from "./MessageDelete.tsx";
+import { TurnActions } from "./TurnActions.tsx";
 import { conversationInputAnchor, conversationInputs } from "./conversationInputs.ts";
 
 // 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
@@ -60,53 +59,43 @@ function ReviewerBadge({ round }: { round: number | null }) {
 function AgentMessage({
   item,
   taskId,
-  retry,
   hideTime,
   laneRole,
   onFork,
+  onAskSideChat,
   wakeReply,
+  taskActive,
 }: {
   item: Extract<ConversationItem, { kind: "agent" }>;
   /** 这条发言是在哪个任务的工作目录里说的（正文里的图靠它去那个目录取），见 AgentTurnBody。 */
   taskId: string;
-  /** 这条气泡是不是「上一回合崩了」的那一条：给了就在尾栏挂重试按钮。 */
-  retry?: React.ReactNode;
   /** 紧邻的旁注已经显示了同一个时间。 */
   hideTime?: boolean;
   /** 这条气泡在审查卡里的位置：卡头已经把身份（lead 还包括时间）说过一遍了。 */
   laneRole?: ReviewLaneMessageRole;
   onFork?: () => void;
+  onAskSideChat?: (quote: string) => void;
   wakeReply?: boolean;
+  /** 任务此刻在跑或排着。没有结束时刻的那一回合只有这时才算「还在说」——历史记录缺了结束时刻不算。 */
+  taskActive: boolean;
 }) {
   const duration = durationBetween(item.at, item.endedAt);
   const reviewer = item.reviewer;
   const showIdentity = !item.continuation && !laneRole;
   // 轮次徽标只是卡头标题（「第 N 轮审查」）的复读，卡里一律不出。
   const showBadge = !!reviewer && !item.continuation && !laneRole;
-  const showTime = !hideTime && !!item.at && laneRole !== "lead";
-  const showDuration = !!duration && laneRole !== "lead";
-  // 头部一个元素都不剩时整条不渲染，复制按钮改挂尾栏——留一条空白横杠比复读还难看。
-  const headless = !showIdentity && !showBadge && !showTime && !showDuration;
-  const footerActions = headless || onFork || retry ? (
-    <>
-      {headless && <CopyButton
-        className="task-message-copy-action"
-        value={item.markdown}
-        ariaLabel="复制这条回复"
-        label="复制这条回复"
-        icon
-        iconSize={12}
-      />}
-      {headless && <DeleteMessageButton item={item} label="删除" />}
-      {onFork && <button type="button" className="task-message-copy-action" onClick={onFork}>
-        <GitFork size={12} aria-hidden="true" />派生新任务
-      </button>}
-      {retry}
-    </>
-  ) : undefined;
+  // 回合头只留名字（docs/ui-ux-audit feed-1）：模型、智能水平、时间、用时排成一句，
+  // 指到这一回合才出现。审查卡头已经说过时间的那条（lead）不再说。
+  const meta = [
+    showIdentity && item.run ? item.run.model || "CLI 默认" : null,
+    showIdentity && item.run ? item.run.reasoningEffort || "默认" : null,
+    !hideTime && item.at && laneRole !== "lead" ? formatInstant(item.at) : null,
+    duration && laneRole !== "lead" ? `${duration} 用时` : null,
+  ].filter(Boolean).join(" · ");
+  const live = !item.endedAt && taskActive;
   return (
     <article
-      className={`task-message task-message--agent${item.continuation ? " is-continuation" : ""}${reviewer ? " is-reviewer" : ""}${laneRole ? " is-lane-owned" : ""}`}
+      className={`task-message task-message--agent${item.continuation ? " is-continuation" : ""}${reviewer ? " is-reviewer" : ""}${laneRole ? " is-lane-owned" : ""}${live ? " is-live" : ""}`}
     >
       {/* 卡头左边已经有一颗同样的盾：卡里每条发言再挂一颗，只是把同一个身份画两遍。 */}
       {!laneRole && (
@@ -115,36 +104,17 @@ function AgentMessage({
         </span>
       )}
       <div className="task-message-content">
-        {!headless && (
-          <header>
-            {showIdentity && (
-              <span className="agent-run-identity">
-                <b>{item.label}</b>
-                <AgentRunMeta run={item.run} />
-              </span>
-            )}
+        {(showIdentity || showBadge || meta) && (
+          <header className="turn-head">
+            {showIdentity && <b>{item.label}</b>}
             {showBadge && <ReviewerBadge round={reviewer.round} />}
-            {showTime && <time>{formatInstant(item.at)}</time>}
-            {showDuration && (
-              <small className="task-turn-duration" title={`开始 ${formatInstant(item.at)} · 结束 ${formatInstant(item.endedAt)}`}>
-                {item.continuation || laneRole ? "" : "· "}⏱ {duration} 用时
-              </small>
-            )}
-            <CopyButton value={item.markdown} ariaLabel="复制这条回复" icon />
-            <DeleteMessageButton item={item} />
+            {meta && <span className="turn-meta">{meta}</span>}
           </header>
         )}
         {wakeReply && <MonitorWakeReply />}
         <AgentTurnBody segments={item.segments} running={!item.endedAt} taskId={taskId} />
-        {/* 账目一律在尾栏，头部不放。位置不许随「是不是会话最后一条」变——
-            那样同一个数会在气泡顶和气泡底之间跳，而这条规则用户看不见。 */}
-        <MessageFooter
-          turnUsage={item.usage}
-          session={item.showSessionMeta ? item.session : null}
-          sessionUsage={item.sessionUsage}
-          sessionContext={item.sessionContext}
-          actions={footerActions}
-        />
+        {/* 跑着的这一回合还没说完，尾上的操作等它收口再出（run-5）。 */}
+        {!live && <TurnActions item={item} markdown={item.markdown} onFork={onFork} onAskSideChat={onAskSideChat} />}
       </div>
     </article>
   );
@@ -198,6 +168,7 @@ export function ConversationFeed({
   footer,
   dock,
   onForkReply,
+  onAskSideChat,
   reviews,
   onOpenReviewPanel,
   systemNoticeMode,
@@ -228,6 +199,8 @@ export function ConversationFeed({
    */
   dock?: React.ReactNode;
   onForkReply?: (replyId: string) => void;
+  /** 回合尾「更多」里的「在侧聊里问这一段」。不给就没有这一项（没有侧聊的视图）。 */
+  onAskSideChat?: (quote: string) => void;
   /** 自由派审的落盘记录：折叠卡靠它反查报告的 runId（旁注里只有轮号）。 */
   reviews?: readonly FreeReviewRun[] | null;
   /**
@@ -337,6 +310,8 @@ export function ConversationFeed({
           hideTime={hiddenTimes.has(item.id)}
           laneRole={laneRole}
           onFork={onForkReply && !loading && !error && !forkBlockedReason && canForkReply(item) ? () => onForkReply(item.id) : undefined}
+          onAskSideChat={onAskSideChat}
+          taskActive={task.status === "running" || task.status === "queued"}
         />
       );
     }

@@ -123,7 +123,7 @@ try {
   await page.getByRole("button", { name: "刷新正文", exact: true }).click();
   // 等这一轮读完再数：提示在 refetch 一开始就清掉了，那会儿正文还没落地、按钮也还没画。
   await page.waitForFunction(
-    () => [...document.querySelectorAll("button")].filter((b) => b.textContent?.trim() === "派生新任务").length === 1,
+    () => document.querySelectorAll('button[aria-label="派生新任务"]').length === 1,
   );
   assert.ok(!(await page.evaluate(() => document.body.innerText.includes("执行过程读取失败"))), "提示跟着消失");
   assert.deepEqual(errors, []);

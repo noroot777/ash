@@ -54,7 +54,7 @@ const persisted = render();
 assert.equal(count(persisted, "<time>"), 2, "折叠摘要和隐藏明细各保留一次旁注时间");
 assert.doesNotMatch(persisted, /task-message--agent[^>]*>[\s\S]*?<header>[\s\S]*?<time>/, "续写段不应重复旁注时间");
 assert.equal(count(persisted, 'aria-label="复制这条回复"'), 1, "压平消息头不能删掉复制入口");
-assert.match(persisted, /task-message-copy-action/, "无用时的续写段应把复制入口放到尾栏");
+assert.match(persisted, /class="turn-acts"[\s\S]*?aria-label="复制这条回复"/, "复制入口住在回合尾那一排");
 
 const team = renderToStaticMarkup(
   <TeamFeed

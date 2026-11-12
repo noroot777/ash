@@ -10,6 +10,22 @@
 .task-message header b,
 .task-user-bubble header b { color: var(--muted); font-weight: 650; }
 .task-turn-duration { color: var(--faint); font-size: inherit; font-weight: 450; }
+/* 回合头只留名字；模型、智能水平、时间、用时是后面那一句，指到这一回合才出（feed-1）。
+   名字不让，那一句可以被省略：列再窄它也撑不宽这一行。 */
+.task-message header.turn-head { gap: 8px; min-width: 0; color: var(--muted); font-size: var(--t-xs); }
+.task-message header.turn-head b { flex: none; color: var(--muted); font-weight: var(--w-medium); }
+.turn-meta { min-width: 0; overflow: hidden; color: var(--faint); font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.task-message--agent:hover > .task-message-content > .turn-head .turn-meta,
+.task-message--agent:focus-within > .task-message-content > .turn-head .turn-meta { opacity: 1; }
+/* 回合尾那一排（TurnActions）：平时不画，自己不占高度、往下探进两条消息之间的空里，
+   出不出现会话都不跳。复制刚给过反馈、菜单开着的时候不随悬停进出。 */
+.turn-acts { display: flex; height: 0; align-items: flex-start; gap: 2px; margin: 2px 0 0 -6px; opacity: 0; transition: opacity var(--dur-2) var(--ease-out); }
+.task-message--agent:hover .turn-acts,
+.task-message--agent:focus-within .turn-acts,
+.turn-acts.is-shown,
+.turn-acts:has([aria-expanded="true"]) { opacity: 1; }
+.task-message--agent:has(.turn-acts) { margin-bottom: 30px; }
+@media (hover: none) { .turn-meta, .turn-acts { opacity: 1; } }
 .task-message header button,
 .task-user-bubble header button { display: grid; width: 22px; height: 22px; margin-left: auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--faint); opacity: 0; }
 .task-message:hover header button,

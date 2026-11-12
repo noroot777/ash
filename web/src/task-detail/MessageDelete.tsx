@@ -21,16 +21,43 @@ export function MessageDeleteProvider({ onDelete, children }: { onDelete?: Delet
 /** 有出处的那几种气泡（会话里的一段，或一段只有执行过程的 trace）。 */
 export type DeletableItem = { sources?: ConversationSource[] };
 
+/**
+ * 删除这一条要走的那一步：有没有得删、发起删除、以及那张确认框。按钮之外的入口
+ * （回合尾「更多」里的一项）用它，确认框和删除动作跟按钮是同一份。
+ */
+export function useMessageDelete(item: DeletableItem) {
+  const remove = useContext(MessageDeleteContext);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const sources = item.sources;
+  const available = !!remove && !!sources?.length;
+  const dialog = available && confirming ? (
+    <ConfirmDialog
+      title="删除这条消息？"
+      message="删除后无法恢复，智能体之后也读不到它：下一轮会换一条新的会话，只带着删除后留下的记录继续。"
+      confirmLabel="删除"
+      danger
+      busy={busy}
+      onConfirm={() => {
+        setBusy(true);
+        void remove(sources).finally(() => {
+          setBusy(false);
+          setConfirming(false);
+        });
+      }}
+      onClose={() => setConfirming(false)}
+    />
+  ) : null;
+  return { available, request: () => setConfirming(true), dialog };
+}
+
 export function DeleteMessageButton({ item, label }: {
   item: DeletableItem;
   /** 尾栏那种描边胶囊要带字；气泡头部只有图标。 */
   label?: string;
 }) {
-  const remove = useContext(MessageDeleteContext);
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  if (!remove || !item.sources?.length) return null;
-  const sources = item.sources;
+  const remove = useMessageDelete(item);
+  if (!remove.available) return null;
   return (
     <>
       <button
@@ -41,29 +68,13 @@ export function DeleteMessageButton({ item, label }: {
           // 哨兵卡的按钮落在 <summary> 里，点击默认会连带开合整张卡。
           event.preventDefault();
           event.stopPropagation();
-          setConfirming(true);
+          remove.request();
         }}
       >
         <Trash size={label ? 12 : 13} aria-hidden="true" />
         {label}
       </button>
-      {confirming && (
-        <ConfirmDialog
-          title="删除这条消息？"
-          message="删除后无法恢复，智能体之后也读不到它：下一轮会换一条新的会话，只带着删除后留下的记录继续。"
-          confirmLabel="删除"
-          danger
-          busy={busy}
-          onConfirm={() => {
-            setBusy(true);
-            void remove(sources).finally(() => {
-              setBusy(false);
-              setConfirming(false);
-            });
-          }}
-          onClose={() => setConfirming(false)}
-        />
-      )}
+      {remove.dialog}
     </>
   );
 }

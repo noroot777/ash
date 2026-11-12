@@ -16,3 +16,42 @@
 .ui-icon-button:hover:not(:disabled),
 .ui-icon-button[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
 .ui-icon-button:active:not(:disabled) { background: var(--sel-bg); }
+.ui-icon-button.is-copied { color: var(--green); }
+.ui-icon-button.is-copy-failed { color: var(--red); }
+
+/* 「更多」弹出来的那张菜单（components/IconMenu.tsx）。和任务头的更多菜单同一种长相。 */
+.ui-menu-anchor { position: relative; display: inline-flex; }
+.ui-menu {
+  position: absolute;
+  z-index: 70;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 180px;
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  padding: 4px;
+  box-shadow: var(--control-shadow), var(--menu-shadow);
+  transform-origin: top left;
+  animation: task-menu-in var(--dur-2) var(--ease-out);
+}
+.ui-menu.is-end { right: 0; left: auto; transform-origin: top right; }
+.ui-menu button {
+  display: flex;
+  width: 100%;
+  height: 30px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  padding: 0 8px;
+  color: var(--ink);
+  text-align: left;
+  font-size: var(--t-sm);
+  white-space: nowrap;
+}
+.ui-menu button > svg { flex: none; color: var(--muted); }
+.ui-menu button:hover:not(:disabled) { background: var(--hover-bg); }
+.ui-menu button:focus-visible { outline-offset: -2px; }
+.ui-menu button.is-danger,
+.ui-menu button.is-danger > svg { color: var(--red); }

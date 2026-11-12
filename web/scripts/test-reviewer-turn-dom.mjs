@@ -194,14 +194,14 @@ try {
   // 写在头上，气泡再报一次就是同一行文字上下叠两遍。
   for (const index of [0, 2]) {
     assert.equal(
-      await messages.nth(index).locator(".agent-run-identity").count(),
+      await messages.nth(index).locator(".turn-head > b").count(),
       1,
       `第 ${index + 1} 段该报身份`,
     );
   }
   for (const index of [1, 3, 4]) {
     assert.equal(
-      await messages.nth(index).locator(".agent-run-identity").count(),
+      await messages.nth(index).locator(".turn-head > b").count(),
       0,
       `第 ${index + 1} 段在审查卡里，身份由卡头代言`,
     );

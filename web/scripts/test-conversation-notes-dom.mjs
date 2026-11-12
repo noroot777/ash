@@ -92,12 +92,12 @@ try {
   const messages = page.locator(".task-message--agent");
   assert.equal(await messages.count(), 6, "实时旁注后的工具应并回当前回合，不另拆第七段");
   // 第一段照常报身份；被旁注隔开的后几段接着上一段排版，不重报执行器名。
-  assert.equal(await messages.nth(0).locator(".agent-run-identity").count(), 1);
-  assert.equal(await messages.nth(1).locator(".agent-run-identity").count(), 0, "旁注不该让会话重报身份");
-  assert.equal(await messages.nth(2).locator(".agent-run-identity").count(), 0);
-  assert.equal(await messages.nth(3).locator(".agent-run-identity").count(), 0);
+  assert.equal(await messages.nth(0).locator(".turn-head > b").count(), 1);
+  assert.equal(await messages.nth(1).locator(".turn-head > b").count(), 0, "旁注不该让会话重报身份");
+  assert.equal(await messages.nth(2).locator(".turn-head > b").count(), 0);
+  assert.equal(await messages.nth(3).locator(".turn-head > b").count(), 0);
   assert.equal(
-    await page.locator(".task-message--agent.is-continuation header time").count(),
+    await page.locator(".task-message--agent.is-continuation .turn-meta").filter({ hasText: /\d:\d\d/ }).count(),
     0,
     "旁注已经显示同一时间时，续写段不该再重复",
   );
@@ -107,12 +107,11 @@ try {
     "每段回复都必须保留复制入口",
   );
   // 真人插过话之后是新的一段，身份要回来；回合边界之后同理。
-  assert.equal(await messages.nth(4).locator(".agent-run-identity").count(), 1, "真人插话后必须重新报身份");
-  assert.equal(await messages.nth(5).locator(".agent-run-identity").count(), 1, "回合边界之后必须重新报身份");
+  assert.equal(await messages.nth(4).locator(".turn-head > b").count(), 1, "真人插话后必须重新报身份");
+  assert.equal(await messages.nth(5).locator(".turn-head > b").count(), 1, "回合边界之后必须重新报身份");
   assert.match(await notes.last().innerText(), /已预约完成后审查.*08\/10 15:02/s, "实时旁注应在自身行内显示精确时间");
   assert.equal(await messages.last().locator(".task-tool-line").count(), 1, "旁注后到达的工具应显示在旁注之前的当前回合里");
-  assert.equal(await messages.last().locator(".task-message-footer").count(), 1, "会话统计条应留在旁注之前的当前回合里");
-  assert.equal(await notes.last().evaluate((note) => note === note.parentElement?.lastElementChild), true, "实时旁注应稳定留在当前回合与统计条之后");
+  assert.equal(await notes.last().evaluate((note) => note === note.parentElement?.lastElementChild), true, "实时旁注应稳定留在当前回合之后");
 
   await resizeViewport(page, { width: 390, height: 1000 });
   const narrowTime = await notes.last().locator("summary time").evaluate((time) => {
