@@ -1,4 +1,5 @@
 import { isUserFollowUp } from "@ash/shared";
+import type { TaskCreationOrigin } from "@ash/shared/task-origin";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { attachmentView, parseAttachmentText } from "./utils.ts";
 
@@ -19,9 +20,17 @@ export type ConversationInput = {
 };
 
 /**
- * 原始需求在会话流里没有气泡（首条会话直接从 agent 的回复开始），它的位置就是会话顶端。
+ * 原始需求不在会话正文里（首条会话直接从 agent 的回复开始）：会话流拿任务正文在最顶上补画
+ * 第一颗气泡，条目 id 就是它。
  */
 export const REQUIREMENT_INPUT_ID = "requirement";
+
+/** 原始需求那颗气泡头上写谁说的：真人建的（含没记来源的老任务）是「你」，其余照来源写。 */
+export function requirementAuthor(origin: TaskCreationOrigin | null | undefined): string {
+  if (!origin || origin.kind === "user") return "你";
+  if (origin.kind === "system") return "系统";
+  return origin.executorLabel || origin.agentType || "智能体";
+}
 
 /** 用户气泡上挂这个属性、值是条目 id：导航条按它找到那颗气泡，滚过去。 */
 const CONVERSATION_INPUT_ATTRIBUTE = "data-conversation-input";

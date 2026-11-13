@@ -309,7 +309,7 @@ export function TaskDetail({
   };
 
   return (
-    <TaskFileLinks taskId={task.id} onOpenFile={openFileInCenter} onOpenFolder={openFolderInCenter}>
+    <TaskFileLinks taskId={task.id} onOpenFile={openFileInCenter} onOpenFolder={openFolderInCenter} onOpenError={notify}>
       <InspectorHost
         contextKey={inspectorContextKey}
         descriptors={inspectors}
@@ -411,6 +411,7 @@ export function TaskDetail({
                     if (latestPostMerge?.status === "reviewing") openTab("review");
                     else setPostMergeDialogOpen(true);
                   } : undefined}
+                  onClose={() => changeReviewOpen(false)}
                 />
               ) : fileView.filePath ? (
                 <FileViewer
@@ -462,7 +463,7 @@ export function TaskDetail({
                     >
                     <ConversationFeed
                       task={task}
-                      requirement={{ text: task.body, at: task.createdAt }}
+                      requirement={{ text: task.body, at: task.createdAt, origin: task.creationOrigin }}
                       questionHistory={task.questionHistory}
                       liveQuestionHistory
                       historyReady={conversation.transcriptReady}

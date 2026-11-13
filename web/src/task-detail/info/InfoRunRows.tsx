@@ -1,6 +1,7 @@
-// 「信息」格下半截：这个任务跑得怎么样了。来源、时间、用量（一个执行器一行）、本轮、上下文，
-// 以及会话号和 resume 命令。后四样以前是会话最后一条回复尾巴上的药丸，搬到这里以后取数
+// 「信息」格下半截：这个任务跑得怎么样了。来源、时间、用量（一个执行器一行）、上下文，
+// 以及会话号和 resume 命令。后三样以前是会话最后一条回复尾巴上的药丸，搬到这里以后取数
 // 照旧（会话行上的账本 + 会话流里最新那条气泡的直播值，见 infoRunFacts.ts），只是换成「标签 值」。
+// 每一回合各自烧了多少收在那一回合尾的「更多」菜单里（TurnActions）。
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Session, Task, TokenUsage } from "@ash/shared";
 import { addUsage, formatTokens, formatTokensExact, hasContext, hasUsage, usageTotal } from "@ash/shared/usage";
@@ -104,7 +105,7 @@ function ContextValue({ facts }: { facts: InfoRunFacts }) {
   );
 }
 
-/** 来源、创建、用时、用量（一个执行器一行）、本轮、上下文。 */
+/** 来源、创建、用时、用量（一个执行器一行）、上下文。 */
 export function InfoRunRows({ task, sessions, facts }: { task: Task; sessions: Session[]; facts: InfoRunFacts }) {
   // 一个 agent 一行，**不同 agent 绝不相加**：单价、上下文、缓存策略都不是一回事，
   // 加出来那个数不代表任何东西（用户 2026-08-07 明确要求分开看）。同一个执行器名下的
@@ -125,7 +126,6 @@ export function InfoRunRows({ task, sessions, facts }: { task: Task; sessions: S
   }, [sessions]);
   const duration = taskDurationInfo(task);
   const range = formatInstantRange(task.startedAt, task.endedAt);
-  const turn = hasUsage(facts.turnUsage) ? facts.turnUsage : null;
   return (
     <>
       <InspRow label="来源"><span className="insp-cut">{taskCreationLabel(task.creationOrigin)}</span></InspRow>
@@ -140,14 +140,6 @@ export function InfoRunRows({ task, sessions, facts }: { task: Task; sessions: S
           <UsageValue label={label} usage={usage} wakes={wakes} />
         </InspRow>
       ))}
-      {turn && (
-        <InspRow label="本轮">
-          <span aria-label={`本轮 ${formatTokensExact(usageTotal(turn))} token`}>
-            <RollingNumber className="insp-num" value={usageTotal(turn)} format={formatTokens} />
-          </span>
-          {usageByExecutor.length > 1 && facts.turnLabel && <span className="insp-faint insp-cut">{facts.turnLabel}</span>}
-        </InspRow>
-      )}
       {(hasContext(facts.context) || facts.compacting) && (
         <InspRow label="上下文"><ContextValue facts={facts} /></InspRow>
       )}
@@ -155,12 +147,30 @@ export function InfoRunRows({ task, sessions, facts }: { task: Task; sessions: S
   );
 }
 
-/** 分支、目录、会话号、resume 命令。后两样可复制。 */
+/** 独立工作区是从哪儿开出来的：起点所在的分支，后面淡淡带上起点提交。还没跑过也有（建任务时就定了）。 */
+export function InfoBaseRow({ task }: { task: Task }) {
+  if (!task.useWorktree) return null;
+  const commit = task.worktreeStartCommit;
+  const base = task.worktreeBaseBranch || task.worktreeBase;
+  if (!base && !commit) return null;
+  const short = commit?.slice(0, 7);
+  return (
+    <InspRow label="基于">
+      <Tipped tip={commit ? `起点提交 ${commit}` : `${base}（还没开工，起点到时再定）`} className="insp-cut">
+        {base ?? <span className="insp-num">{short}</span>}
+        {base && short && !commit!.startsWith(base) && <span className="insp-faint insp-num"> · {short}</span>}
+      </Tipped>
+    </InspRow>
+  );
+}
+
+/** 起点、分支、目录、会话号、resume 命令。后几样可复制。 */
 export function InfoSessionRows({ task, session, notify }: { task: Task; session: Session | undefined; notify: (message: string) => void }) {
-  if (!session) return null;
+  if (!session) return <InfoBaseRow task={task} />;
   const cliId = session.cliSessionId;
   return (
     <>
+      <InfoBaseRow task={task} />
       {session.branch && (
         <InspRow label="分支" className={task.useWorktree ? "" : "is-danger"}>
           <Tipped tip={task.useWorktree ? session.branch : `${session.branch}（没有独立工作区，直接在这条分支上改）`} className="insp-cut">{session.branch}</Tipped>

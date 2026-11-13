@@ -1,10 +1,8 @@
 import type { Session, Task, TaskListItem } from "@ash/shared";
 import { agentMix } from "@ash/shared/team";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
-import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { InspKv, InspRow } from "../inspector/parts.tsx";
-import { InfoRequest } from "../task-detail/info/InfoAsk.tsx";
-import { InfoRunRows, InfoSessionRows } from "../task-detail/info/InfoRunRows.tsx";
+import { InfoBaseRow, InfoRunRows, InfoSessionRows } from "../task-detail/info/InfoRunRows.tsx";
 import { EMPTY_RUN_FACTS } from "../task-detail/info/infoRunFacts.ts";
 import type { Notify } from "../lib/notify.ts";
 import { teamLeadLabel, teamReviewerLabel, teamWorkerLabel } from "./teamModel.ts";
@@ -39,9 +37,9 @@ function RoleRow({ role, executor, model, effort, off = false }: {
 }
 
 /**
- * 团队的「信息」格，跟单飞任务那一格同一副版式：最上面是原始需求（两行，点开看全），下面是
- * 「标签 值」一种行——先是三个角色各由谁来当、派出了几个人，再是工作区（分支、目录、合入目标、
- * 会话），最后是来源、时间、用量。
+ * 团队的「信息」格，跟单飞任务那一格同一副版式：「标签 值」一种行——先是三个角色各由谁来当、
+ * 派出了几个人，再是工作区（分支、目录、合入目标、会话），最后是来源、时间、用量。原始需求是
+ * 调度流里的第一颗气泡。
  */
 export function TeamInfoPanel({ task, workers, sessions, notify }: {
   task: Task;
@@ -56,10 +54,6 @@ export function TeamInfoPanel({ task, workers, sessions, notify }: {
 
   return (
     <div className="team-info-panel insp-pane" aria-label="团队信息">
-      <ImagePreviewGroup isolated>
-        <InfoRequest body={task.body} />
-      </ImagePreviewGroup>
-
       <InspKv label="执行配置">
         <RoleRow
           role="调度者"
@@ -90,6 +84,7 @@ export function TeamInfoPanel({ task, workers, sessions, notify }: {
       <InspKv label="工作区">
         {latestSession ? <InfoSessionRows task={task} session={latestSession} notify={say} /> : (
           <>
+            <InfoBaseRow task={task} />
             <InspRow label="分支"><span className="insp-faint">项目当前分支</span></InspRow>
             <InspRow label="目录"><span className="insp-faint">{task.useWorktree ? "尚未记录" : "共享项目目录"}</span></InspRow>
           </>

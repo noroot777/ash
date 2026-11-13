@@ -12,9 +12,9 @@
 .composer-header > .composer-header-count { flex:none; margin-right:4px; }
 
 .composer-scroll { min-height:0; overflow-y:auto; background:var(--canvas); }
-/* 一条 720 的居中列。上边距是定值而不是算出来的居中：输入变高、下面多出列表时卡片不跳。
+/* 一条 1200 的居中列（底排的选项入口 + 谁来做 + 发送键要能排成一行）。上边距是定值而不是算出来的居中：输入变高、下面多出列表时卡片不跳。
    首页没有模式那一行，把那 40px 让出来，卡片在两面落在同一个位置。 */
-.is-studio .composer-inner { --top:clamp(56px,19vh,160px); width:min(720px,calc(100% - 48px)); margin:0 auto; padding:var(--top) 0 48px; }
+.is-studio .composer-inner { --top:clamp(56px,19vh,160px); width:min(1200px,calc(100% - 64px)); margin:0 auto; padding:var(--top) 0 48px; }
 .is-studio.is-home .composer-inner { padding-top:calc(var(--top) + 40px); }
 
 /* 卡片上方：三种模式，一组分段 */
@@ -34,15 +34,16 @@
 .is-studio .composer-slash-menu, .is-studio .composer-mention-menu { left:12px; max-width:calc(100% - 24px); }
 .studio-card > .task-upload-list { padding:4px 12px 0; }
 
-/* 底排：附件、选项入口、空白、谁来做、发送键。入口不压缩；只有「组织与标签」的字会变长
-   （分组名 · 几个标签），位置不够时收它。卡片窄到放不下时入口只留图标。 */
+/* 底排：附件、选项入口在左，谁来做 + 发送键一组靠右。入口不压缩；只有「组织与标签」的字会变长
+   （分组名 · 几个标签），位置不够时收它。一行放不下时右边那一组整组换到下一行、仍靠右，
+   谁都不压谁；卡片窄到连入口都放不下时入口只留图标。 */
 .studio-card { container-type:inline-size; }
-.studio-card > .composer-footer { display:flex; align-items:center; gap:4px; min-height:54px; padding:8px 10px 10px; }
+.studio-card > .composer-footer { display:flex; flex-wrap:wrap; align-items:center; gap:6px 4px; min-height:54px; padding:8px 10px 10px; }
 .studio-card > .composer-footer .task-reply-icon { display:grid; width:28px; height:28px; flex:none; place-items:center; border:0; border-radius:var(--r-md); background:transparent; color:var(--muted); transition:background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
 .studio-card > .composer-footer .task-reply-icon:hover:not(:disabled) { background:var(--hover-bg); color:var(--ink); }
 .studio-card > .composer-footer .task-reply-icon > svg { width:16px; height:16px; }
 .composer-opts { display:flex; flex:0 1 auto; min-width:0; align-items:center; gap:2px; margin-left:4px; }
-.composer-foot-grow { flex:1; min-width:8px; }
+.composer-foot-run { display:flex; flex:0 1 auto; min-width:0; align-items:center; margin-left:auto; padding-left:4px; }
 .composer-opt { display:inline-flex; flex:none; min-width:0; height:28px; align-items:center; gap:6px; border:0; border-radius:var(--r-md); padding:0 8px; background:transparent; color:var(--muted); font-size:var(--t-xs); white-space:nowrap; transition:background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
 .composer-opt > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
 .composer-opt > svg { flex:none; }
@@ -68,7 +69,7 @@
 .studio-preset-run { display:inline-flex; min-width:0; align-items:center; gap:6px; margin:0 8px; color:var(--muted); font-size:var(--t-xs); }
 .studio-preset-run > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .studio-preset-run > svg { flex-shrink:0; }
-.studio-card > .composer-footer > .send-key { margin-left:4px; }
+.composer-foot-run > .send-key { margin-left:4px; }
 
 /* 回复框旧的连体发送键里那半截「发送设置」（换成共用发送键之后就可以删） */
 .studio-card > .studio-input-status { padding:0 16px 10px; color:var(--muted); font-size:var(--t-xs); }
@@ -153,7 +154,6 @@
 
 @media(max-width:700px) {
   .is-studio .composer-inner { width:calc(100% - 28px); }
-  .studio-card > .composer-footer { flex-wrap:wrap; row-gap:6px; }
   .studio-inline-executor .run-target-seg--agent > span { display:none; }
   .studio-popover .run-target-seg { padding:0 6px; }
 }

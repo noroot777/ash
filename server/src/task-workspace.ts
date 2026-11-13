@@ -37,7 +37,7 @@ const isDirSync = (p: string) => {
 type WorkspaceTask = Pick<
   typeof tasks.$inferSelect,
   "id" | "projectId" | "parentId" | "useWorktree" | "worktreeBase" | "reviewOf"
-> & { worktreeStartCommit?: string | null; mergeTargetBranch?: string | null };
+> & { worktreeStartCommit?: string | null; mergeTargetBranch?: string | null; worktreeBaseBranch?: string | null };
 
 // base 降级(登记的基线分支已经没了，这次按仓库当前 HEAD 起的)必须**落回任务行**，
 // 不能只在返回值里说一句：diff 和验收各自拿 `task.worktreeBase` 再解析一次目标分支
@@ -56,7 +56,7 @@ async function persistBaseFallback(task: WorkspaceTask, ws: Workspace): Promise<
   if ((task.worktreeBase ?? "").trim() !== fallback.requested) return;
   await db
     .update(tasks)
-    .set({ worktreeBase: fallback.used, updatedAt: now() })
+    .set({ worktreeBase: fallback.used, worktreeBaseBranch: fallback.used, updatedAt: now() })
     .where(eq(tasks.id, task.id));
   fallback.persisted = true;
 }
@@ -282,5 +282,9 @@ export async function taskWorkspace(task: WorkspaceTask, repoPath: string): Prom
   const explicitBase = task.worktreeBase?.trim();
   const ws = await prepareWorktree(repoPath, task.id, explicitBase || shared.branch);
   await persistBaseFallback(task, ws);
+  // 未冻结起点的执行者在这一刻才从领队的共享分支开叉：分支名此时才定（只记一次）
+  if (!explicitBase && shared.branch && !ws.baseFallback && !task.worktreeBaseBranch) {
+    await db.update(tasks).set({ worktreeBaseBranch: shared.branch }).where(eq(tasks.id, task.id));
+  }
   return ws;
 }

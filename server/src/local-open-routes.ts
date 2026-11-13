@@ -1,7 +1,9 @@
 import type { Hono } from "hono";
 import { getConnInfo } from "@hono/node-server/conninfo";
-import { realpath } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { resolve, dirname, sep } from "node:path";
+import { kindOf } from "./artifact-kind.js";
 import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { expandHome } from "./git.js";
@@ -51,6 +53,29 @@ export async function resolveAllowedLocalPath(raw: string, roots: string[]): Pro
   return null;
 }
 
+/**
+ * 白名单之外再放一类：家目录底下的**音视频文件**。成片常常不落在任何项目里（`~/Movies`、
+ * `~/koubo-slim/`、素材库），对话里提到了却点不开。只放这一类，是因为白名单防的是
+ * 「交给系统默认程序打开」那一下能执行东西（`.app`、`.command`、脚本）——音视频交给的是
+ * 播放器。类型按 realpath 之后的真名判：`x.mp4` 软链到一个 `.app` 照样被拒。
+ */
+async function homeMediaPath(raw: string): Promise<string | null> {
+  if (!raw.trim()) return null;
+  const target = await realpath(resolve(expandHome(raw))).catch(() => null);
+  if (!target || windowsPathRejection(target)) return null;
+  const kind = kindOf(target);
+  if (kind !== "video" && kind !== "audio") return null;
+  const home = await realpath(homedir()).catch(() => null);
+  if (!home || !isInsidePath(home, target, sep)) return null;
+  return (await stat(target).catch(() => null))?.isFile() ? target : null;
+}
+
+/** `/open-local` 打得开的本机路径：白名单目录里的任何东西，或家目录里的音视频（homeMediaPath）。 */
+export async function resolveOpenableLocalPath(raw: string): Promise<string | null> {
+  return await resolveAllowedLocalPath(raw, [...CONFIGURED_ROOTS, ...await registeredProjectRoots()])
+    ?? await homeMediaPath(raw);
+}
+
 export async function registeredProjectRoots(): Promise<string[]> {
   const rows = await db.select({ repoPath: projects.repoPath }).from(projects);
   return rows
@@ -78,10 +103,7 @@ export function mountLocalOpenRoutes(api: Hono): void {
     if (!isTrustedLocalOpenRemote(getConnInfo(c).remote.address)) {
       return c.text("只允许本机或 Tailscale 网内设备调用 open-local", 403);
     }
-    const target = await resolveAllowedLocalPath(
-      c.req.query("path") ?? "",
-      [...CONFIGURED_ROOTS, ...await registeredProjectRoots()],
-    );
+    const target = await resolveOpenableLocalPath(c.req.query("path") ?? "");
     if (!target) {
       return c.text("local path is missing, outside the allowlist, or does not exist", 400);
     }

@@ -194,7 +194,7 @@ export function RemoteTaskDetail({
         <section className="task-detail-main" aria-label="远程任务会话">
           <ConversationFeed
             task={task}
-            requirement={snapshot ? { text: snapshot.task.body, at: snapshot.task.createdAt } : null}
+            requirement={snapshot ? { text: snapshot.task.body, at: snapshot.task.createdAt, origin: snapshot.task.creationOrigin } : null}
             items={items}
             bodyReady={settledKey === remoteKey}
             questionHistory={snapshot?.task.questionHistory ?? []}

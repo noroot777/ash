@@ -182,10 +182,10 @@ export function ConversationInputRail({
     const container = scrollRef.current;
     const input = inputs[index];
     if (!container || !input) return;
+    // 原始需求那颗气泡就在最顶上，落点总是顶端（照样闪一下那颗气泡）。
     let top = 0;
-    let bubble: HTMLElement | null = null;
+    const bubble = container.querySelector<HTMLElement>(conversationInputSelector(input.id));
     if (input.id !== REQUIREMENT_INPUT_ID) {
-      bubble = container.querySelector<HTMLElement>(conversationInputSelector(input.id));
       if (!bubble) return;
       top = bubble.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - JUMP_OFFSET;
     }

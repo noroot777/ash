@@ -256,6 +256,7 @@ export interface HandoffManifest {
     useWorktree: boolean;
     worktreeBase: string | null;
     worktreeStartCommit?: string | null;
+    worktreeBaseBranch?: string | null;
     mergeTargetBranch?: string | null;
     baseTaskId?: string | null;
     acceptedSourceCommit?: string | null;

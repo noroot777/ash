@@ -291,7 +291,7 @@ export function TeamView({
   };
 
   return (
-    <TaskFileLinks taskId={task.id} onOpenFile={openFileInCenter} onOpenFolder={openFolderInCenter}>
+    <TaskFileLinks taskId={task.id} onOpenFile={openFileInCenter} onOpenFolder={openFolderInCenter} onOpenError={notify}>
       <InspectorHost
         contextKey={`team:${task.id}`}
         descriptors={inspectors}

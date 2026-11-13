@@ -1,35 +1,13 @@
-// 「信息」格最上面的两样：原始需求（两行，点开看全）和后续追问（折成一行「N 条」，点开再看），
-// 加上续跑指令那一行。附件链接、图片预览照旧走 InspectorPromptContent。
+// 「信息」格里我说过的话：后续追问（折成一行「N 条」，点开再看）和续跑指令那一行。原始需求
+// 不在这里，它是会话流里的第一颗气泡。附件链接、图片预览照旧走 InspectorPromptContent。
 import { useEffect, useState } from "react";
 import { CaretRight } from "@phosphor-icons/react";
 import { InspButton, InspRow } from "../../inspector/parts.tsx";
 import { isSendKeyEvent } from "../../lib/sendKey.ts";
 import { useSendKeyLabels } from "../../lib/useComposerSendKey.ts";
 import { InspectorPromptContent } from "../InspectorPromptContent.tsx";
-import { formatInstant, parseAttachmentText } from "../utils.ts";
+import { formatInstant } from "../utils.ts";
 import { AutoTextarea } from "../../components/AutoTextarea.tsx";
-
-/** 原始需求：收着时是两行字（整块可点），点开是全文加附件链接，底下一颗「收起」。 */
-export function InfoRequest({ body }: { body: string }) {
-  const [open, setOpen] = useState(false);
-  const parsed = parseAttachmentText(body);
-  const preview = parsed.body.trim();
-  const attachments = parsed.paths.length;
-  if (!preview && !attachments) return <p className="insp-req is-empty">这个任务没有正文说明。</p>;
-  if (!open) {
-    return (
-      <button type="button" className="insp-req" aria-expanded="false" aria-label="原始需求，点开看全文" onClick={() => setOpen(true)}>
-        <span>{preview || `${attachments} 个附件`}</span>
-      </button>
-    );
-  }
-  return (
-    <div className="insp-req is-open" aria-label="原始需求">
-      <InspectorPromptContent text={body} emptyText="这个任务没有正文说明。" />
-      <InspButton variant="quiet" size="sm" aria-expanded="true" onClick={() => setOpen(false)}>收起</InspButton>
-    </div>
-  );
-}
 
 export interface InfoFollowUp { text: string; attachments: string[]; at?: string }
 

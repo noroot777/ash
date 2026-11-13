@@ -576,29 +576,31 @@ export function TaskComposerPanel({
             <UploadAttachmentList attachments={uploads.attachments} pending={uploads.pending}
               error={uploads.error} onRemove={uploads.remove} onCancel={uploads.cancel} />
           </ImagePreviewGroup>
-          {/* 底排：附件、选项入口在左；谁来做、发送键守在右下角（和回复框一个落点）。 */}
+          {/* 底排：附件、选项入口在左；谁来做、发送键守在右下角（和回复框一个落点）。
+              一行放不下时右边那一组整组换到下一行、仍靠右，不压缩、不叠到左边的入口上。 */}
           <footer className="composer-footer">
             <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />
             <div className="composer-opts">{home
               ? <>{options.where}<ComposerExpand onExpand={home.onExpand} /></>
               : <>{options.work}{options.where}{options.org}{options.more}</>}<ComposerShortcutHelp /></div>
-            <span className="composer-foot-grow" aria-hidden="true" />
-            {executorTools}
-            <ComposerLaunchControl
-              mode={launchMode}
-              at={scheduleAt}
-              cron={scheduleCron}
-              busy={busy}
-              blocked={blockReason}
-              uploading={uploads.uploading ? uploadingLabel(uploads.pending) : null}
-              error={scheduleError || queueTargetError}
-              onModeChange={changeLaunchMode}
-              onAtChange={setScheduleAt}
-              onCronChange={setScheduleCron}
-              onSubmit={() => void submit()}
-              queueSlot={queueAfter.slot}
-              queueUnavailable={queueUnavailable}
-            />
+            <div className="composer-foot-run">
+              {executorTools}
+              <ComposerLaunchControl
+                mode={launchMode}
+                at={scheduleAt}
+                cron={scheduleCron}
+                busy={busy}
+                blocked={blockReason}
+                uploading={uploads.uploading ? uploadingLabel(uploads.pending) : null}
+                error={scheduleError || queueTargetError}
+                onModeChange={changeLaunchMode}
+                onAtChange={setScheduleAt}
+                onCronChange={setScheduleCron}
+                onSubmit={() => void submit()}
+                queueSlot={queueAfter.slot}
+                queueUnavailable={queueUnavailable}
+              />
+            </div>
           </footer>
           {allAttachments.length > 0 && <div className="studio-input-status" role="status">{allAttachments.length} 个附件</div>}
           </div></>}

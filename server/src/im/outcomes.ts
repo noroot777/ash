@@ -28,7 +28,7 @@ import { tasks } from "../db/schema.js";
 import type { ConclusionTransaction } from "../regression-conclusion-commit.js";
 import { now } from "../util.js";
 import type { TaskView } from "./attention.js";
-import { acceptedLabel } from "./cards.js";
+import { acceptedLabel, projectPrefix } from "./cards.js";
 import { readMeta, writeMeta } from "./meta.js";
 import { scrubTitle } from "./scrub.js";
 
@@ -65,7 +65,7 @@ export async function outcomesOf(view: TaskView): Promise<Outcome[]> {
     }).from(tasks).where(eq(tasks.id, task.id))).at(0)
     : undefined;
   // 门禁在前：绿了紧接着自动合并时，两条按事情发生的先后发。
-  return [
+  const outcomes: Outcome[] = [
     ...await reviewOutcome(view, title),
     run
       ? { kind: "gate", value: `${run.id}:${run.status}`,
@@ -74,6 +74,9 @@ export async function outcomesOf(view: TaskView): Promise<Outcome[]> {
     ...(accepted && isAcceptedStage(accepted.stage as TaskStage | null)
       ? [{ kind: "result" as const, text: `${acceptedLabel(accepted)}：${title}`, value: accepted.identity }] : []),
   ];
+  // 项目名在最前面（同卡片标题）：value 是账上的身份，不受项目改名影响
+  const prefix = projectPrefix(view.projectName);
+  return outcomes.map((outcome) => outcome.text ? { ...outcome, text: `${prefix}${outcome.text}` } : outcome);
 }
 
 const REVIEW_SINCE = "review-outcomes-since";

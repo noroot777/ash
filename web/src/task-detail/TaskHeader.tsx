@@ -19,7 +19,6 @@ import {
   SpinnerGap,
   Trash,
   UsersThree,
-  X,
 } from "@phosphor-icons/react";
 import { TaskModeIcon, taskModeLabel, taskParentLink, taskParentRelation } from "../components/TaskOrigin.tsx";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
@@ -235,7 +234,8 @@ export function TaskHeader({
             <GitCommit size={16} weight="bold" aria-hidden="true" />
           </IconButton>
         )}
-        {seal ? (
+        {/* 验收台开着时，回去的口在验收台顶栏右端（TaskReviewWorkspace），这里不再另放一颗。 */}
+        {seal && (
           <IconButton
             label={seal === "done" ? "已验收" : "验收"}
             tip={seal === "done" ? "已验收 · 打开改动工作区" : "验收 · 打开改动工作区"}
@@ -244,10 +244,6 @@ export function TaskHeader({
             onClick={onReview}
           >
             <SealCheck size={17} weight={seal === "done" ? "fill" : "regular"} aria-hidden="true" />
-          </IconButton>
-        ) : reviewOpen && (
-          <IconButton label="返回对话" onClick={onReview}>
-            <X size={16} aria-hidden="true" />
           </IconButton>
         )}
       </span>

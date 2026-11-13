@@ -60,11 +60,18 @@ function linkButton(ctx: CardContext): CardButton[] {
   return ctx.link ? [{ text: "在 ash 中打开", url: ctx.link }] : [];
 }
 
+/**
+ * 任务通知开头的项目名：「【项目】」。放在标题最前面而不是副标题里 —— 飞书的会话列表、系统推送只露出标题那一截，
+ * 一眼要能分清是哪个项目的事。卡片标题和文字通知（outcomes.ts）都用它。
+ */
+export function projectPrefix(projectName: string | null | undefined): string {
+  return projectName?.trim() ? `【${scrubTitle(projectName, 30)}】` : "";
+}
+
 function header(view: TaskView, kind: Turn["kind"], tone?: CardTone, label = KIND_LABEL[kind]) {
-  const project = scrubTitle(view.projectName, 30);
   return {
-    title: scrubTitle(view.task.title),
-    subtitle: project ? `${project} · ${label}` : label,
+    title: `${projectPrefix(view.projectName)}${scrubTitle(view.task.title)}`,
+    subtitle: label,
     tone: tone ?? KIND_TONE[kind],
   };
 }
@@ -249,9 +256,9 @@ export function todoText(titles: string[], total: number, tail: string): string 
 }
 
 export interface SummaryItem {
+  /** 卡片标题原样（已经以「【项目】」开头）。 */
   title: string;
   kind: Turn["kind"];
-  projectName: string;
 }
 
 /** 一口气要推好几张卡时（刚绑定、重启后积压），先发这一张汇总，逐张的等你要了再推。 */
@@ -263,7 +270,7 @@ export function summaryCard(items: SummaryItem[], envelope: string): CardModel {
     blocks: [
       ...shown.map((item): CardBlock => ({
         type: "text",
-        text: `· ${scrubTitle(item.title, 40)} —— ${KIND_LABEL[item.kind]}${item.projectName ? `（${scrubTitle(item.projectName, 20)}）` : ""}`,
+        text: `· ${scrubTitle(item.title, 60)} —— ${KIND_LABEL[item.kind]}`,
       })),
       ...(items.length > shown.length ? [{ type: "note" as const, text: `另有 ${items.length - shown.length} 件没列出。` }] : []),
       { type: "buttons", buttons: [{ text: "逐张推给我（每次 5 张）", style: "primary", value: value(envelope, "push") }] },

@@ -115,12 +115,23 @@ export function hasUsage(u: TokenUsage | null | undefined): u is TokenUsage {
   return !!u && usageTotal(u) > 0;
 }
 
-/** 1234 → "1,234";12345 → "12.3k";1234567 → "1.23M"。给一眼扫的场合用。 */
+/**
+ * 1234 → "1,234";12345 → "12.3k";1234567 → "1.23M";1234567890 → "1.23B"。给一眼扫的场合用:
+ * 一万以下照写,往上收成 k / M / B。舍入后够到下一档就进位(999,960 写 "1.00M",不写 "1000.0k")。
+ */
 export function formatTokens(n: number): string {
   if (!Number.isFinite(n) || n < 0) return "0";
-  if (n < 10_000) return n.toLocaleString("en-US");
-  if (n < 1_000_000) return `${(n / 1_000).toFixed(1)}k`;
-  return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n < 10_000) return Math.round(n).toLocaleString("en-US");
+  const tiers = [
+    { unit: "k", size: 1_000, digits: 1 },
+    { unit: "M", size: 1_000_000, digits: 2 },
+    { unit: "B", size: 1_000_000_000, digits: 2 },
+  ];
+  for (const [index, tier] of tiers.entries()) {
+    const text = (n / tier.size).toFixed(tier.digits);
+    if (Number(text) < 1_000 || index === tiers.length - 1) return `${text}${tier.unit}`;
+  }
+  return "0";
 }
 
 /** 精确值,给明细/无障碍标签用。 */

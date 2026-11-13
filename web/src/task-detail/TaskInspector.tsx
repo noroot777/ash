@@ -8,7 +8,7 @@ import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import { taskParentLink } from "../components/TaskOrigin.tsx";
 import { InspKv, InspNote, InspRow } from "../inspector/parts.tsx";
 import { TaskChangeSummary } from "./TaskChangeSummary.tsx";
-import { InfoFollowUps, InfoRequest, InfoResumePrompt, type InfoFollowUp } from "./info/InfoAsk.tsx";
+import { InfoFollowUps, InfoResumePrompt, type InfoFollowUp } from "./info/InfoAsk.tsx";
 import { InfoQueue } from "./info/InfoQueue.tsx";
 import { InfoRunRows, InfoSessionRows } from "./info/InfoRunRows.tsx";
 import { InfoSchedule } from "./info/InfoSchedule.tsx";
@@ -19,9 +19,10 @@ const STATUS_ORDER: TaskStatus[] = [
 ];
 
 /**
- * 右侧「信息」格。最上面是原始需求（两行，点开看全），下面全是「标签 值」一种行、一种字号：
- * 上一组是能改的（追问、状态、分组、标签、调度、队列、续跑指令），下一组是事实（来源、时间、
- * 用量、本轮、上下文、改动、分支、目录、会话、resume）。分节只靠留白。
+ * 右侧「信息」格。全是「标签 值」一种行、一种字号：上一组是能改的（追问、状态、分组、标签、
+ * 调度、队列、续跑指令），下一组是事实（来源、时间、用量、上下文、改动、分支、目录、会话、
+ * resume）。分节只靠留白。原始需求是会话流里的第一颗气泡，每一回合的用量在那一回合尾的
+ * 「更多」菜单里，都不在这里重复。
  *
  * 执行器/模型/智能水平不在这里露面：它们跑到一半就能改，这里写下的只会是「此刻的配置」而
  * 不是「这段历史里谁在跑」。当前配置看对话框底部那颗三段胶囊；真正跑过的执行器见「用量」。
@@ -90,7 +91,6 @@ export function TaskInspector({
   return (
     <div className="task-inspector insp-pane" aria-label="任务信息">
       <ImagePreviewGroup isolated>
-        <InfoRequest body={task.body} />
         <InspKv label="任务属性">
           <InfoFollowUps followUps={followUps} />
           <InspRow label="状态">

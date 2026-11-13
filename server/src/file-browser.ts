@@ -361,7 +361,10 @@ export async function openRawStream(root: WorkspaceRoot, relPath: string, range?
   const abs = await resolveInRoot(root.path, relPath);
   const info = await stat(abs).catch(() => null);
   if (!info || info.isDirectory()) throw Object.assign(new Error("文件不存在"), { status: 404 });
-  if (info.size > MAX_RAW_BYTES) throw Object.assign(new Error("文件过大，无法在线预览"), { status: 413 });
+  const mime = MIME_BY_EXTENSION[extensionOf(abs)] ?? "application/octet-stream";
+  // 音视频不设上限：字节是流式吐的、不进内存，`<video>` 还会按区间一段段取；成片动辄几百 MB，拦下就是「点开了放不出来」。
+  const streamed = mime.startsWith("video/") || mime.startsWith("audio/");
+  if (!streamed && info.size > MAX_RAW_BYTES) throw Object.assign(new Error("文件过大，无法在线预览"), { status: 413 });
   const window = parseByteRange(range, info.size);
   return {
     stream: window ? createReadStream(abs, { start: window.start, end: window.end }) : createReadStream(abs),
@@ -369,7 +372,7 @@ export async function openRawStream(root: WorkspaceRoot, relPath: string, range?
     size: window ? window.end - window.start + 1 : info.size,
     total: info.size,
     range: window,
-    mime: MIME_BY_EXTENSION[extensionOf(abs)] ?? "application/octet-stream",
+    mime,
     name: basename(abs),
     absPath: abs,
   };

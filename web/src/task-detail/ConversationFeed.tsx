@@ -2,11 +2,13 @@ import { memo, useMemo, useRef, useState, type ReactNode } from "react";
 import { File, Gavel, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
+import type { TaskCreationOrigin } from "@ash/shared/task-origin";
 import type { ConversationItem, ConversationSource } from "./conversationModel.ts";
 import { conversationTailKey } from "./conversationModel.ts";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
+import { AgentIcon, hasAgentIcon } from "../components/AgentIcon.tsx";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -43,9 +45,9 @@ import { monitorWakeInput, monitorWakeReplyIds } from "./monitorWakeModel.ts";
 import { foldMonitorWakes } from "./monitorWakeTurns.ts";
 import { mergeNoticeItems, useRejectionNotices } from "./useRejectionNotices.ts";
 import { ReclaimTurnSwitch } from "./ReclaimTurnSwitch.tsx";
-import { DeleteMessageButton, MessageDeleteProvider } from "./MessageDelete.tsx";
+import { DeleteMessageButton, MessageDeleteProvider, type DeletableItem } from "./MessageDelete.tsx";
 import { TurnActions } from "./TurnActions.tsx";
-import { conversationInputAnchor, conversationInputs } from "./conversationInputs.ts";
+import { conversationInputAnchor, conversationInputs, REQUIREMENT_INPUT_ID, requirementAuthor } from "./conversationInputs.ts";
 
 // 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
 // 自己的会话里（常常还是同一个执行器），不标出来的话它跟上一条实现回合长得一模一样。
@@ -107,6 +109,9 @@ function AgentMessageView({
     duration && laneRole !== "lead" ? `${duration} 用时` : null,
   ].filter(Boolean).join(" · ");
   const live = !item.endedAt && taskActive;
+  // 认得出是哪家的就画那家的标，认不出（自定义 CLI）才退回执行器名的首字母。
+  const branded = !reviewer && hasAgentIcon(item.agentType);
+  const head = showIdentity || showBadge || !!meta;
   // 看着它收口的那一下：尾栏淡入一次、约两秒后收回，过程摘要那一行淡入（run-5）。
   const justEnded = useJustEnded(live);
   return (
@@ -115,17 +120,19 @@ function AgentMessageView({
     >
       {/* 卡头左边已经有一颗同样的盾：卡里每条发言再挂一颗，只是把同一个身份画两遍。 */}
       {!laneRole && (
-        <span className="task-message-avatar" aria-hidden="true">
-          {item.continuation ? "" : reviewer ? <ShieldCheck size={13} weight="fill" /> : item.label.slice(0, 1).toUpperCase()}
+        <span className={`task-message-avatar${branded ? " is-branded" : ""}`} aria-hidden="true">
+          {item.continuation ? "" : reviewer ? <ShieldCheck size={13} weight="fill" /> : branded ? <AgentIcon agent={item.agentType} size={16} /> : item.label.slice(0, 1).toUpperCase()}
         </span>
       )}
       <div className="task-message-content">
-        {(showIdentity || showBadge || meta) && (
+        {head && (
           <header className="turn-head">
             {showIdentity && <b>{item.label}</b>}
             {showIdentity && item.wokenByMonitor && <span className="turn-cause">被哨兵叫醒</span>}
             {showBadge && <ReviewerBadge round={reviewer.round} />}
             {meta && <span className="turn-meta">{meta}</span>}
+            {/* 删除紧跟在那一句后面，跟它一起指到才出；还在说的那一回合删不了，按钮自己会缺席。 */}
+            {!live && <DeleteMessageButton item={item} />}
           </header>
         )}
         {wakeReply && <MonitorWakeReply />}
@@ -133,7 +140,7 @@ function AgentMessageView({
         {footnote?.node}
         {/* 跑着的这一回合还没说完，尾上的操作等它收口再出（run-5）。「N 条记录」是那一排里的一颗，
             摊开的流水在它下面。 */}
-        {!live && <TurnActions item={item} markdown={item.markdown} onFork={onFork} onAskSideChat={onAskSideChat}
+        {!live && <TurnActions item={item} removeInMenu={!head} markdown={item.markdown} usage={item.usage} onFork={onFork} onAskSideChat={onAskSideChat}
           records={receipts?.length ? <TurnReceiptsToggle count={receipts.length} open={log.open} onToggle={log.toggle} logId={log.logId} /> : undefined} />}
         {!live && receipts && <TurnReceiptLog receipts={receipts} open={log.open} logId={log.logId} />}
         {/* 还在说的那一回合没有尾栏，记录先单独挂在正文下面（同样指到才出）。 */}
@@ -157,7 +164,7 @@ export function sameSettledTurn(prev: AgentMessageProps, next: AgentMessageProps
   if (!settled(prev) || !settled(next)) return false;
   const a = prev.item;
   const b = next.item;
-  return a.id === b.id && a.endedAt === b.endedAt && a.markdown === b.markdown && a.label === b.label
+  return a.id === b.id && a.endedAt === b.endedAt && a.markdown === b.markdown && a.label === b.label && a.agentType === b.agentType
     && sameSegments(a.segments, b.segments)
     && a.continuation === b.continuation && a.wokenByMonitor === b.wokenByMonitor
     && a.reviewer?.round === b.reviewer?.round && a.run?.model === b.run?.model && a.run?.reasoningEffort === b.run?.reasoningEffort
@@ -204,27 +211,49 @@ function UserMessage({
   item: Extract<ConversationItem, { kind: "user" }>;
   preserveSystemStyle?: boolean;
 }) {
-  // 刚发出去的那一句上移 4px 淡入（run-1）；页面打开时已经在的不动。
-  const [fresh] = useState(() => !!item.at && Date.now() - Date.parse(item.at) < 5000);
-  const parsed = parseAttachmentText(item.text);
-  const displayBody = annotationBatchDisplayText(parsed.body) ?? parsed.body;
   if (item.isAnswer || isQuestionAnswer(item.text)) return <AnsweredQuestionMessage text={item.text} id={item.id} at={item.at} deletable={item} />;
-  const paths = [...parsed.paths, ...item.attachments];
   const bySystem = !!item.bySystem;
   const reviewPrompt = isReviewSystemPrompt(item.text);
   if (bySystem && (!preserveSystemStyle || monitorWakeInput(item)) && !reviewPrompt) {
     return <SystemAuthoredMessage item={item} />;
   }
+  return <UserBubble id={item.id} author={bySystem ? "系统" : "你"} text={item.text} attachments={item.attachments} at={item.at} bySystem={bySystem} deletable={item} />;
+}
+
+/**
+ * 原始需求：任务正文画成会话的第一颗气泡。它是任意一段需求文字，不是会话里的协议消息——
+ * 正文碰巧以「【答复】」开头也不当答复卡、不当系统代写，直接走普通气泡；谁说的照任务来源写，
+ * 没有删除（它不在会话正文里）。
+ */
+function RequirementMessage({ requirement }: { requirement: { text: string; at?: string | null; origin?: TaskCreationOrigin | null } }) {
+  return <UserBubble id={REQUIREMENT_INPUT_ID} author={requirementAuthor(requirement.origin)} text={requirement.text} attachments={[]} at={requirement.at ?? undefined} />;
+}
+
+function UserBubble({ id, author, text, attachments, at, bySystem = false, deletable }: {
+  /** 条目 id：左侧输入导航按它找到这颗气泡。 */
+  id: string;
+  author: string;
+  text: string;
+  attachments: readonly string[];
+  at?: string;
+  bySystem?: boolean;
+  deletable?: DeletableItem;
+}) {
+  // 刚发出去的那一句上移 4px 淡入（run-1）；页面打开时已经在的不动。
+  const [fresh] = useState(() => !!at && Date.now() - Date.parse(at) < 5000);
+  const parsed = parseAttachmentText(text);
+  const displayBody = annotationBatchDisplayText(parsed.body) ?? parsed.body;
+  const paths = [...parsed.paths, ...attachments];
   return (
     <article className={`task-message task-message--user${bySystem ? " is-system-authored" : ""}${fresh ? " is-fresh" : ""}`}>
-      <div className="task-user-bubble" {...conversationInputAnchor(item.id)}>
+      <div className="task-user-bubble" {...conversationInputAnchor(id)}>
         <header>
-          <b>{bySystem ? "系统" : "你"}</b>
-          {item.at && <time>{formatInstant(item.at)}</time>}
+          <b>{author}</b>
+          {at && <time>{formatInstant(at)}</time>}
           {displayBody && (
             <CopyButton value={displayBody} ariaLabel="复制这条回复" icon />
           )}
-          <DeleteMessageButton item={item} />
+          {deletable && <DeleteMessageButton item={deletable} />}
         </header>
         {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <p>{displayBody}</p>)}
         <MessageAttachments paths={paths} />
@@ -254,10 +283,10 @@ export function ConversationFeed({
 }: {
   task: TaskListItem;
   /**
-   * 原始需求（任务正文与创建时刻）。会话流里没有它的气泡，左侧输入导航靠它排出第一格；
-   * 列表项不带正文，拿不到就只排追问。
+   * 原始需求（任务正文、创建时刻、谁建的）。会话正文里没有它，这里在最顶上补画第一颗气泡，
+   * 左侧输入导航也靠它排出第一格；列表项不带正文，拿不到就既不画也不排。
    */
-  requirement?: { text: string; at?: string | null } | null;
+  requirement?: { text: string; at?: string | null; origin?: TaskCreationOrigin | null } | null;
   items: ConversationItem[];
   sessions?: Session[];
   loading: boolean;
@@ -483,6 +512,7 @@ export function ConversationFeed({
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
+          {requirement && inputs[0]?.id === REQUIREMENT_INPUT_ID && <RequirementMessage requirement={requirement} />}
           {rows.map((row) => {
             if (row.kind === "item") return renderItem(row.item);
             if (row.kind === "system-action") {
