@@ -24,7 +24,7 @@ import { durationBetween, formatInstant, parseAttachmentText } from "../task-det
 import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
 import { MonitorWakeReply } from "../task-detail/MonitorWakeInput.tsx";
 import { monitorWakeReplyIds } from "../task-detail/monitorWakeModel.ts";
-import { conversationInputAnchor, conversationInputs } from "../task-detail/conversationInputs.ts";
+import { conversationInputAnchor, conversationInputs, REQUIREMENT_INPUT_ID, requirementAuthor } from "../task-detail/conversationInputs.ts";
 
 function AgentRow({
   row,
@@ -67,7 +67,11 @@ function AgentRow({
   );
 }
 
-function UserRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"] }) {
+function UserRow({ row, author }: {
+  row: Extract<TeamFeedRow, { kind: "conv" }>["item"];
+  /** 头上写谁说的；不给就按 bySystem 写「系统」或「你」。原始需求那颗按任务来源给。 */
+  author?: string;
+}) {
   if (row.kind !== "user") return null;
   if (row.isAnswer || isQuestionAnswer(row.text)) return <AnsweredQuestionMessage text={row.text} id={row.id} at={row.at} />;
   const parsed = parseAttachmentText(row.text);
@@ -80,7 +84,7 @@ function UserRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"] 
   return (
     <article className={`team-feed-user${bySystem ? " is-system-authored" : ""}`}>
       <div {...conversationInputAnchor(row.id)}>
-        <header><b>{bySystem ? "系统" : "你"}</b>{row.at && <time>{formatInstant(row.at)}</time>}</header>
+        <header><b>{author ?? (bySystem ? "系统" : "你")}</b>{row.at && <time>{formatInstant(row.at)}</time>}</header>
         {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <p>{displayBody}</p>)}
         <MessageAttachments paths={paths} />
       </div>
@@ -205,11 +209,15 @@ export function TeamFeed({
   const scroll = useRef<HTMLDivElement>(null);
   const byId = new Map(workers.map((worker) => [worker.id, worker]));
   const wakeReplies = monitorWakeReplyIds(rows.flatMap((row) => row.kind === "conv" ? [row.item] : []));
-  // 调度台的原始需求同样不在流里（首条会话从调度者的拆解开始），左侧导航靠它排出第一格。
+  // 调度台的原始需求同样不在会话正文里（首条会话从调度者的拆解开始）：流的最顶上拿任务正文
+  // 补画第一颗气泡，左侧导航也靠它排出第一格。
   const inputs = useMemo(
     () => conversationInputs({ text: task.body, at: task.createdAt }, rows.flatMap((row) => row.kind === "conv" ? [row.item] : [])),
     [rows, task.body, task.createdAt],
   );
+  const requirementItem: Extract<TeamFeedRow, { kind: "conv" }>["item"] | null = inputs[0]?.id === REQUIREMENT_INPUT_ID
+    ? { kind: "user", id: REQUIREMENT_INPUT_ID, text: task.body, attachments: [], at: task.createdAt }
+    : null;
   const hiddenTimes = new Set<string>();
   let previousConversationItem: Extract<TeamFeedRow, { kind: "conv" }>["item"] | null = null;
   for (const row of rows) {
@@ -236,6 +244,7 @@ export function TeamFeed({
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region">
         <section className="team-feed" aria-label="团队调度流" ref={scroll}>
+          {requirementItem && <UserRow row={requirementItem} author={requirementAuthor(task.creationOrigin)} />}
           {!rows.length && !activityPhase && <p className="team-feed-empty">运行后，调度者的拆解、派活、执行者提问与汇报会按发生顺序出现在这里。</p>}
           {rows.map((row) => {
             if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} indicatorForTask={indicatorForTask} />;

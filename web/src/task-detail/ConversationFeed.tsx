@@ -2,6 +2,7 @@ import { Fragment, memo, useMemo, useRef, useState } from "react";
 import { File, Gavel, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
+import type { TaskCreationOrigin } from "@ash/shared/task-origin";
 import type { ConversationItem, ConversationSource } from "./conversationModel.ts";
 import { conversationTailKey } from "./conversationModel.ts";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
@@ -39,7 +40,7 @@ import { mergeNoticeItems, useRejectionNotices } from "./useRejectionNotices.ts"
 import { ReclaimTurnSwitch } from "./ReclaimTurnSwitch.tsx";
 import { DeleteMessageButton, MessageDeleteProvider } from "./MessageDelete.tsx";
 import { TurnActions } from "./TurnActions.tsx";
-import { conversationInputAnchor, conversationInputs } from "./conversationInputs.ts";
+import { conversationInputAnchor, conversationInputs, REQUIREMENT_INPUT_ID, requirementAuthor } from "./conversationInputs.ts";
 
 // 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
 // 自己的会话里（常常还是同一个执行器），不标出来的话它跟上一条实现回合长得一模一样。
@@ -120,7 +121,7 @@ function AgentMessageView({
         <AgentTurnBody segments={item.segments} running={!item.endedAt} taskId={taskId} since={live ? item.at : undefined} />
         {/* 跑着的这一回合还没说完，尾上的操作等它收口再出（run-5）。「N 条记录」是那一排里的一颗，
             摊开的流水在它下面。 */}
-        {!live && <TurnActions item={item} markdown={item.markdown} onFork={onFork} onAskSideChat={onAskSideChat}
+        {!live && <TurnActions item={item} markdown={item.markdown} usage={item.usage} onFork={onFork} onAskSideChat={onAskSideChat}
           records={receipts?.length ? <TurnReceiptsToggle count={receipts.length} open={log.open} onToggle={log.toggle} logId={log.logId} /> : undefined} />}
         {!live && receipts && <TurnReceiptLog receipts={receipts} open={log.open} logId={log.logId} />}
         {/* 还在说的那一回合没有尾栏，记录先单独挂在正文下面（同样指到才出）。 */}
@@ -185,9 +186,12 @@ function shallowRest(prev: AgentMessageProps, next: AgentMessageProps): boolean 
 
 function UserMessage({
   item,
+  author,
   preserveSystemStyle = false,
 }: {
   item: Extract<ConversationItem, { kind: "user" }>;
+  /** 头上写谁说的；不给就按 bySystem 写「系统」或「你」。原始需求那颗按任务来源给。 */
+  author?: string;
   preserveSystemStyle?: boolean;
 }) {
   // 刚发出去的那一句上移 4px 淡入（run-1）；页面打开时已经在的不动。
@@ -205,7 +209,7 @@ function UserMessage({
     <article className={`task-message task-message--user${bySystem ? " is-system-authored" : ""}${fresh ? " is-fresh" : ""}`}>
       <div className="task-user-bubble" {...conversationInputAnchor(item.id)}>
         <header>
-          <b>{bySystem ? "系统" : "你"}</b>
+          <b>{author ?? (bySystem ? "系统" : "你")}</b>
           {item.at && <time>{formatInstant(item.at)}</time>}
           {displayBody && (
             <CopyButton value={displayBody} ariaLabel="复制这条回复" icon />
@@ -240,10 +244,10 @@ export function ConversationFeed({
 }: {
   task: TaskListItem;
   /**
-   * 原始需求（任务正文与创建时刻）。会话流里没有它的气泡，左侧输入导航靠它排出第一格；
-   * 列表项不带正文，拿不到就只排追问。
+   * 原始需求（任务正文、创建时刻、谁建的）。会话正文里没有它，这里在最顶上补画第一颗气泡，
+   * 左侧输入导航也靠它排出第一格；列表项不带正文，拿不到就既不画也不排。
    */
-  requirement?: { text: string; at?: string | null } | null;
+  requirement?: { text: string; at?: string | null; origin?: TaskCreationOrigin | null } | null;
   items: ConversationItem[];
   sessions?: Session[];
   loading: boolean;
@@ -302,6 +306,9 @@ export function ConversationFeed({
     () => conversationInputs(requirementText === undefined ? null : { text: requirementText, at: requirementAt }, items),
     [items, requirementAt, requirementText],
   );
+  const requirementItem: Extract<ConversationItem, { kind: "user" }> | null = inputs[0]?.id === REQUIREMENT_INPUT_ID
+    ? { kind: "user", id: REQUIREMENT_INPUT_ID, text: requirementText!, attachments: [], ...(requirementAt ? { at: requirementAt } : {}) }
+    : null;
   const activityPhase = runActivityPhase(task.status, runActivityTail(items));
   const queuedCopy = task.status === "queued"
     ? runActivityCopy({ status: task.status, mode: task.mode, phase: activityPhase ?? undefined, queuePosition: task.queuePosition })
@@ -414,6 +421,7 @@ export function ConversationFeed({
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
+          {requirementItem && <UserMessage item={requirementItem} author={requirementAuthor(requirement?.origin)} />}
           {rows.map((row) => {
             if (row.kind === "item") return renderItem(row.item);
             if (row.kind === "system-action") {

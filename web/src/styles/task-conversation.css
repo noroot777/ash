@@ -259,6 +259,15 @@
 .token-usage-panel .is-total dt { color: var(--ink); }
 .token-usage-panel footer { margin-top: 7px; color: var(--muted); font-size: var(--t-xs); line-height: 1.55; }
 
+/* 回合尾「更多」菜单底下的本轮用量：标题一行，下面是明细，合计那行压一条细线。 */
+.turn-usage > span { display: block; margin-bottom: 4px; color: var(--muted); }
+.turn-usage dl { margin: 0; }
+.turn-usage dl > div { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 16px; padding: 1px 0; }
+.turn-usage dt { color: var(--faint); }
+.turn-usage dd { margin: 0; color: var(--muted); font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.turn-usage .is-total { margin-top: 3px; border-top: 1px solid var(--line); padding-top: 4px; }
+.turn-usage .is-total dt, .turn-usage .is-total dd { color: var(--ink); }
+
 /* 面板底部的快捷设置：明细里那几个数从哪来，就在同一个面板里改得动。
    默认收起成一行 —— 这颗胶囊的主业仍是「看一眼还剩多少」，表单不该抢在前面。 */
 .context-compact-quick { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }

@@ -1,45 +1,6 @@
 /* 右侧「信息」格（task-detail/TaskInspector.tsx 与 task-detail/info/*）。公共件在 inspector-parts.css，
-   这里只补它收不进去的几样：原始需求那两行、追问清单、上下文细条、行内的下拉 / 标签 / 输入框。 */
+   这里只补它收不进去的几样：追问清单、上下文细条、行内的下拉 / 标签 / 输入框。 */
 
-/* 原始需求：两行截断，整块可点；点开是全文加附件链接 */
-.insp-req {
-  display: block;
-  width: 100%;
-  margin: 0 0 14px;
-  border: 0;
-  background: transparent;
-  padding: 0;
-  color: var(--ink);
-  font: inherit;
-  line-height: 1.6;
-  text-align: left;
-  transition: color var(--dur-1) var(--ease-out);
-}
-
-.insp-req > span {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-button.insp-req:hover {
-  color: var(--muted);
-}
-
-button.insp-req:focus-visible {
-  border-radius: var(--r-sm);
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.insp-req.is-empty {
-  color: var(--muted);
-}
-
-.insp-req.is-open > pre,
 .insp-asks pre {
   margin: 0;
   color: var(--ink);
@@ -47,10 +8,6 @@ button.insp-req:focus-visible {
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.insp-req.is-open > .insp-btn {
-  margin: 4px 0 0 -9px;
 }
 
 .task-inspector .task-inspector-attachment-links {

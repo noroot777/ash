@@ -55,5 +55,7 @@
 .ui-menu button > svg { flex: none; color: var(--muted); }
 .ui-menu button:hover:not(:disabled) { background: var(--hover-bg); }
 .ui-menu button:focus-visible { outline-offset: -2px; }
+/* 菜单底部只读的那一块（IconMenu 的 info），比如回合尾的本轮用量。 */
+.ui-menu-info { padding: 6px 8px 4px; color: var(--muted); font-size: var(--t-xs); cursor: default; }
 .ui-menu button.is-danger,
 .ui-menu button.is-danger > svg { color: var(--red); }

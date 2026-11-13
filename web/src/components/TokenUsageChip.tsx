@@ -106,7 +106,8 @@ export function TokenUsageChip({
   );
 }
 
-function UsageRows({ turn, session }: { turn: TokenUsage | null; session: TokenUsage | null }) {
+/** 用量明细那几行（输入 / 缓存读 / 缓存写 / 输出 / 其中思考 / 合计）。回合尾「更多」菜单里的本轮用量也用它。 */
+export function UsageRows({ turn, session }: { turn: TokenUsage | null; session: TokenUsage | null }) {
   const rows: { label: string; pick: (u: TokenUsage) => number }[] = [
     { label: "输入", pick: (u) => u.input },
     { label: "缓存读", pick: (u) => u.cacheRead },

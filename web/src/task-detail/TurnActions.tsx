@@ -1,8 +1,11 @@
 import type { ReactNode } from "react";
+import type { TokenUsage } from "@ash/shared";
+import { hasUsage } from "@ash/shared/usage";
 import { ChatsCircle, Check, Copy, GitFork, Trash, X } from "@phosphor-icons/react";
 import { IconButton } from "../components/IconButton.tsx";
 import { IconMenu, type IconMenuItem } from "../components/IconMenu.tsx";
 import { useCopyFeedback } from "../components/CopyButton.tsx";
+import { UsageRows } from "../components/TokenUsageChip.tsx";
 import { useMessageDelete, type DeletableItem } from "./MessageDelete.tsx";
 
 /**
@@ -10,12 +13,14 @@ import { useMessageDelete, type DeletableItem } from "./MessageDelete.tsx";
  * 或键盘走进来才出现；触屏上常显（样式在 task-conversation.css 的 `.turn-acts`）。
  *
  * 这一排自己不占高度——往下探进两条消息之间的空里，出不出现会话都不跳。
- * 本轮用量、会话号、上下文水位不在这里，住在右侧「信息」格。`records` 是记在这一回合上的
- * 回执（「N 条记录」），有才给。
+ * 这一回合烧了多少 token 收在「更多」菜单底下，点开才看；会话累计、会话号、上下文水位
+ * 住在右侧「信息」格。`records` 是记在这一回合上的回执（「N 条记录」），有才给。
  */
-export function TurnActions({ item, markdown, onFork, onAskSideChat, records }: {
+export function TurnActions({ item, markdown, usage, onFork, onAskSideChat, records }: {
   item: DeletableItem;
   markdown: string;
+  /** 这一回合的用量。null = 那家 CLI 不报账，菜单里就不出这一块。 */
+  usage?: TokenUsage | null;
   onFork?: () => void;
   /** 「在侧聊里问这一段」：带上这一回合最后一段的第一行去侧聊。 */
   onAskSideChat?: (quote: string) => void;
@@ -48,10 +53,19 @@ export function TurnActions({ item, markdown, onFork, onAskSideChat, records }: 
           <GitFork size={14} aria-hidden="true" />
         </IconButton>
       )}
-      <IconMenu items={more} />
+      <IconMenu items={more} info={hasUsage(usage) ? <TurnUsage usage={usage} /> : undefined} />
       {records}
       {remove.dialog}
     </footer>
+  );
+}
+
+function TurnUsage({ usage }: { usage: TokenUsage }) {
+  return (
+    <div className="turn-usage" aria-label="本轮 Token 用量">
+      <span>本轮 Token</span>
+      <UsageRows turn={usage} session={null} />
+    </div>
   );
 }
 
