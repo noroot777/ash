@@ -48,7 +48,7 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
   onOpenReview?: () => void;
   onOpenTask?: (taskId: string) => void;
   notify?: (message: string) => void;
-  /** 此刻能「继续本轮审查」的那一轮和那个动作（任务头那颗图标同一份）。不给 = 结论行不换主按钮。 */
+  /** 此刻能「继续本轮审查」的那一轮和那个动作（会话尾注上那颗同一份）。不给 = 结论行不换主按钮。 */
   reviewRetry?: ReviewRetryAction | null;
 }) {
   const free = useFreeWorkflowState(task.id);
@@ -180,7 +180,7 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
       };
     }
     // 这一轮还能续（服务端给了 `round.retry`）：主动作就是接着把这一轮审完。「再审一轮」是另开一条链、
-    // 新会话、从头审，退到更多里 —— 把它摆在前面，用户就只剩任务头那颗不带字的图标能续这一轮。
+    // 新会话、从头审，退到更多里 —— 把它摆在前面，续这一轮在审查格上就没有明面上的入口了。
     const retryRound = reviewRetry && latestRun?.id === reviewRetry.review.runId
       ? latestRun.rounds.find((round) => round.round === reviewRetry.review.round)
       : undefined;

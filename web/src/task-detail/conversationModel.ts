@@ -1,4 +1,4 @@
-import type { ContextUsage, Session, SessionRole, TokenUsage, TurnOutcome } from "@ash/shared";
+import type { ContextUsage, Session, SessionRole, TokenUsage, TurnInterruption, TurnOutcome } from "@ash/shared";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 import { addUsage, usageTotal } from "@ash/shared/usage";
 import type { SessionTraceEntry } from "../lib/api.ts";
@@ -150,6 +150,8 @@ export type ConversationItem =
       aside?: boolean;
       /** 服务端给的「这是哪一类事」（shared/src/timeline-notice.ts）。老记录、非时间线旁注没有。 */
       notice?: TimelineNotice;
+      /** 直播那一路的异常回合边界：这一回合怎么断的（结尾 done 事件带的，见 Session.turnInterruption）。 */
+      interruption?: TurnInterruption;
     };
 
 export type PersistedConversation = { session: Session; output: string; trace?: SessionTraceEntry[] };

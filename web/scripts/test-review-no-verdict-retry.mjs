@@ -6,7 +6,8 @@
 // ① 能续：审查格主按钮是「继续本轮审查」、点了走那个动作；「再审一轮」在更多里；结论那句带原因；
 //    会话里说原因的那句尾注后面挂同一个动作；
 // ② 不能续：两处都不带，主按钮照旧「再审一轮」；
-// ③ 续过之后（round.retry 没了）：审查格、尾注、任务头三处一起没了。
+// ③ 续过之后（round.retry 没了）：审查格、尾注都没了；
+// ④ 任务头上没有回合级的重来图标：能续这一轮时入口在审查格和尾注上，不在头上。
 // 跑：npm -w web run test:review-no-verdict-retry
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -55,8 +56,12 @@ try {
 
   // ③ 续过之后
   assert.equal(await after.getByRole("button", { name: "继续本轮审查" }).count(), 0, "续过了：审查格与尾注都没了");
-  assert.deepEqual(await page.evaluate(() => window.__header),
-    { "t-retry": "review", "t-blocked": null, "t-after": null }, "任务头那颗图标吃的是同一份可用性，一起出、一起没");
+
+  // ④ 任务头
+  for (const scope of [retry, blocked, after]) {
+    assert.equal(await scope.locator(".task-detail-header").getByRole("button", { name: /继续本轮审查|重试/ }).count(), 0,
+      "任务头没有回合级的重来图标");
+  }
 
   console.log("review no-verdict retry tests passed");
 } finally {

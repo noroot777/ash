@@ -43,7 +43,7 @@ import { TaskReplyRail } from "./TaskReplyRail.tsx";
 import { useTaskReplyActions } from "./TaskReplyActions.tsx";
 import { useWaitingTitle } from "./useWaitingTitle.ts";
 import { FreeReviewDialog } from "../free-workflow/FreeReviewDialog.tsx";
-import { freeReviewRetryIdentity, turnRetryCopy, turnRetryTarget, type TurnRetryTarget } from "./turnRetry.ts";
+import { freeReviewRetryIdentity, turnRetryTarget, type TurnRetryTarget } from "./turnRetry.ts";
 import { useExecutorGate } from "./ExecutorGate.tsx";
 import type { ComposerDraft } from "../composer/composerDraft.ts";
 import { forkReadBlock, snapshotConversationFork } from "./conversationFork.ts";
@@ -109,16 +109,17 @@ export function TaskDetail({
   useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
   // Inspector 栈（哪几格存在、默认开哪几格）整块在 useTaskInspectorStack.ts。
-  // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点、验收后快照入口和会话尾栏的异常回合重试。
+  // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点、验收后快照入口和「继续本轮审查」的可用性。
   const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount, free, runFacts } =
     useTaskInspectorStack(task, allTasks, conversation);
-  // 「上一回合崩了、任务却停在终态」的那颗重来：住在任务头上（不用悬停、也不跟着会话滚走），
-  // 判据和服务端 retryTurnRejection 对齐（turnRetry.ts）。
+  // 「上一回合崩了、任务却停在终态」的那颗重来，判据和服务端 retryTurnRejection 对齐（turnRetry.ts）。
+  // 它落在说这件事的地方，带字：普通回合挂在会话里那一回合失败那句话后面；审查档挂在审查格结论行
+  // 和会话尾注上。同一个动作、同一份可用性（见 TurnRetryAction / ReviewRetryAction）。
   const turnRetry = turnRetryTarget(task, conversation.items, {
     reviewRetry: freeReviewRetryIdentity(free.state?.reviews),
     sessions: conversation.sessions,
   });
-  // 审查档那一份还挂在审查格结论行和会话尾注上：同一个动作、同一份可用性（见 ReviewRetryAction）。
+  const crashedTurnRetry = turnRetry?.kind === "turn" ? { sessionId: turnRetry.sessionId, run: () => retryTurn(turnRetry) } : null;
   const reviewRetry = turnRetry?.kind === "review" ? { review: turnRetry.review, run: () => retryTurn(turnRetry) } : null;
   const followUps = useMemo(
     () => conversation.items.flatMap((item) => (
@@ -366,10 +367,6 @@ export function TaskDetail({
                 busy={busy}
                 refreshing={conversation.refreshing}
                 reviewOpen={reviewOpen}
-                turnRetry={turnRetry ? {
-                  ...turnRetryCopy(turnRetry),
-                  run: () => retryTurn(turnRetry),
-                } : null}
                 onTitle={(title) => patch({ title, autoTitle: false })}
                 onTogglePin={() => patch({ pinnedAt: task.pinnedAt != null ? null : Date.now() })}
                 onPrimary={(action) => void perform(action)}
@@ -525,6 +522,7 @@ export function TaskDetail({
                         />
                       ) : undefined}
                       reviewRetry={reviewRetry}
+                      turnRetry={crashedTurnRetry}
                       reviews={free.state?.reviews}
                       // 会话里那一句审查结论点过来：审查格展开那一轮（feed-10 / insp-5）。
                       onOpenReviewPanel={(target) => openTab("review", target ? reviewTargetRequest(target) : undefined)}

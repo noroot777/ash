@@ -295,6 +295,7 @@ export function appendLiveTimeline(
         text: failed ? `执行异常结束 · exit ${event.exitStatus}` : "本轮执行结束",
         tone: failed ? "error" : "neutral",
         variant: "boundary",
+        ...(failed && event.interruption ? { interruption: event.interruption } : {}),
       });
       continue;
     }

@@ -1,16 +1,21 @@
 // 一轮异常结束以后，会话里留下的那一句（docs/ui-ux-audit run-8）。
 //
-// 直播那一路有回合边界事件（「执行异常结束 · exit 1」），由 noticeView 落定成「这一轮异常结束」；
-// 刷新以后那条边界没了，就从会话行认：每条会话**最后一回合**的会话行报的是异常收口，就在那一回合
-// 后面补同一句。失败要一直看得见（重试在任务头上）。
+// 直播那一路有回合边界事件（「执行异常结束 · exit 1」，带着结尾 done 事件给的「怎么断的」），由
+// noticeView 落定成「这一轮中断 · 模型上游连不上（503）」；刷新以后那条边界没了，就从会话行认：
+// 每条会话**最后一回合**的会话行报的是异常收口，就在那一回合后面补同一句，原因取会话行上同一份
+// （Session.turnInterruption）。老记录没有原因，就还是「这一轮异常结束」。失败要一直看得见：此刻
+// 能重试时，「重试这一回合」就挂在这句话后面（ConversationFeed）。
 import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
-import type { Session, TurnOutcome } from "@ash/shared";
+import type { Session, TurnInterruption, TurnOutcome } from "@ash/shared";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationItem } from "./conversationModel.ts";
 import { legacyTier } from "./legacyNoticeTable.ts";
 
-/** 补出来的那一句：点开看到的原文（退出码），以及它落在什么时刻（会话行的收口时刻）。 */
-export type CrashedTurn = { text: string; at?: string };
+/**
+ * 补出来的那一句：点开看到的原文（退出码），它落在什么时刻（会话行的收口时刻），以及服务端判的
+ * 怎么断的（老记录没有）。
+ */
+export type CrashedTurn = { text: string; at?: string; interruption?: TurnInterruption };
 
 /** agent 条目 id → 补出来的那一句。 */
 export function crashedTurns(items: readonly ConversationItem[]): Map<string, CrashedTurn> {
@@ -29,6 +34,7 @@ export function crashedTurns(items: readonly ConversationItem[]): Map<string, Cr
     out.set(item.id, {
       text: session.exitStatus != null ? `执行异常结束 · exit ${session.exitStatus}` : "执行异常结束：这一轮没有正常收口",
       at: session.endedAt ?? undefined,
+      ...(session.turnInterruption ? { interruption: session.turnInterruption } : {}),
     });
   }
   return out;

@@ -152,6 +152,8 @@ const EVENT_SIZE: SizeTable<EventItem> = {
   verify: () => 0,
   aside: () => 0,
   notice: () => 0,
+  // 失败那句话照它说、点开是它的经过：读得到的字。
+  interruption: (value) => value ? value.reason.length + value.detail.length : 0,
   text: (value) => value.length,
 };
 const EVENT_KEYS = Object.keys(EVENT_SIZE) as (keyof EventItem)[];

@@ -1,15 +1,16 @@
 // 一轮审查中途断了（模型上游连不上）之后，「继续本轮审查」在审查格和会话尾注上的样子。
 //
 // 三种情形并排，每一份都照 TaskDetail 那条链路从审查状态推出动作（freeReviewRetryIdentity →
-// turnRetryTarget → 审查档），不是手塞一个 prop —— 任务头那颗图标吃的也是这一份：
+// turnRetryTarget → 审查档），不是手塞一个 prop；任务头照样摆出来，好看它头上没有回合级的那颗图标：
 //   retry   这一轮能续（服务端给了 round.retry）：审查格主按钮、尾注都带「继续本轮审查」；
 //   blocked 这一轮没结论但不能续（没有 round.retry）：两处都不带，主按钮照旧是「再审一轮」；
-//   after   续过了（这一轮又审起来了，round.retry 没了）：两处连同任务头一起没了。
+//   after   续过了（这一轮又审起来了，round.retry 没了）：两处都没了。
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type { FreeReviewRound, FreeReviewRun, Session, Task } from "@ash/shared";
 import { FreeReviewPane } from "../../src/free-workflow/FreeReviewPane.tsx";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
+import { TaskHeader } from "../../src/task-detail/TaskHeader.tsx";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
 import { freeReviewRetryIdentity, turnRetryTarget, type ReviewRetryAction } from "../../src/task-detail/turnRetry.ts";
 import type { FreeWorkflowApiState } from "../../src/lib/api.ts";
@@ -49,9 +50,8 @@ window.fetch = (input, init) => {
   return nativeFetch(input, init);
 };
 
-const log = window as unknown as { __retried: string[]; __header: Record<string, string | null> };
+const log = window as unknown as { __retried: string[] };
 log.__retried = [];
-log.__header = {};
 
 // 会话：审查者说了两句、跑了构建，然后 ash 落下没结论那句和原因那句（同 server 写的形状）。
 const session = (taskId: string) => ({
@@ -65,17 +65,25 @@ const output = [
 ].join("\n");
 
 function Case({ id }: { id: keyof typeof STATES }) {
-  const task = { id, title: id, body: "", mode: "single", status: "done", agentType: "codex", workflowMode: "free", archived: false, stage: null } as unknown as Task;
+  const task = {
+    id, title: id, body: "", mode: "single", status: "done", agentType: "codex", workflowMode: "free", archived: false, stage: null,
+    parentId: null, queueId: null, handoff: null, question: null, resumePrompt: null, verifyRound: null,
+  } as unknown as Task;
   const sessions = [session(id)];
   const items = buildConversationItems([{ session: sessions[0]!, output, trace: [] }], sessions, [] as never);
-  // TaskDetail 同一条推法：任务头那颗图标、审查格、尾注吃的都是这一份。
+  // TaskDetail 同一条推法：审查格、尾注吃的都是这一份。
   const target = turnRetryTarget(task, items, { reviewRetry: freeReviewRetryIdentity(STATES[id]!.reviews), sessions });
-  log.__header[id] = target?.kind ?? null;
   const reviewRetry: ReviewRetryAction | null = target?.kind === "review"
     ? { review: target.review, run: async () => { log.__retried.push(id); } }
     : null;
+  const noop = () => {};
   return (
     <section className={`${id}-fixture`} style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 16, marginBottom: 24 }}>
+      <div style={{ gridColumn: "1 / -1" }}>
+        <TaskHeader task={task} allTasks={[task]} conversationMarkdown="" busy={false} refreshing={false} reviewOpen={false}
+          onTitle={async () => {}} onTogglePin={async () => {}} onPrimary={noop} onRequeue={noop} onArchive={noop} onRefresh={noop}
+          onReview={noop} onOpenTask={noop} onDelete={noop} notify={noop} />
+      </div>
       <div className="feed"><ConversationFeed task={task} items={items} sessions={sessions} questionHistory={[]} loading={false} error={null}
         reviews={STATES[id]!.reviews} reviewRetry={reviewRetry} /></div>
       <div className="pane"><FreeReviewPane task={task} notify={() => {}} onOpenReview={() => {}} reviewRetry={reviewRetry} /></div>

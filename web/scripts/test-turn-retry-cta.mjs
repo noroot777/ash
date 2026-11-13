@@ -1,0 +1,69 @@
+// 普通回合异常结束以后，那一回合失败那句话带上原因、后面挂「重试这一回合」；任务头不再有那颗
+// 不带字的重试图标（夹具见 fixtures/turn-retry-cta.tsx，每一份都照 TaskDetail 那条链路推出动作）。
+//
+// 现场（2026-11-13）：续聊回合崩了，会话里只有一句「这一轮异常结束」，点开是「执行异常结束 · exit 1」；
+// 能重来的只有任务头一颗不带字的图标，用户没认出来，也看不到出了什么错。这份回归盯：
+// ① 刷新以后与开着页面看两路：那句话是「这一轮中断 · 模型上游连不上（503）」，点开是带执行器原话的经过，
+//    后面挂「重试这一回合」、点了走那个动作；两路结果一样；
+// ② 老记录（没有结构化原因）：那句话照老样子「这一轮异常结束」，动作照样在；
+// ③ 不能重试（后面又跑过一回合、手动停止的、任务在跑）：没有动作；
+// ④ 任务头上没有回合级的重试图标。
+// 跑：npm -w web run test:turn-retry-cta
+import assert from "node:assert/strict";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
+
+const web = await startWebServer();
+let browser;
+try {
+  browser = await launchChrome();
+  const page = await browser.newPage({ viewport: { width: 1000, height: 2400 } });
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${web.origin}/scripts/fixtures/turn-retry-cta.html`);
+  const scope = (name) => page.locator(`.t-${name}-fixture`);
+  await scope("running").locator(".task-detail-header").waitFor();
+  const footnoteOf = (name) => scope(name).locator(".feed .turn-footnote");
+
+  // ① 两路
+  const shapes = [];
+  for (const name of ["persisted", "live"]) {
+    const line = footnoteOf(name).filter({ hasText: "这一轮中断 · 模型上游连不上（503）" });
+    assert.equal(await line.count(), 1, `${name}：那句话带上服务端判的原因`);
+    const cta = line.getByRole("button", { name: "重试这一回合" });
+    assert.equal(await cta.count(), 1, `${name}：那句话后面挂「重试这一回合」`);
+    assert.equal(await line.locator("button.turn-footnote-part .system-event-cta").count(), 0, `${name}：键不落在那半句自己的展开键里`);
+    await line.getByRole("button", { name: /这一轮中断/ }).click();
+    assert.match(await scope(name).locator(".turn-footnote-detail").innerText(), /执行器的原话：「unexpected status 503 Service Unavailable」/,
+      `${name}：点开是带执行器原话的经过`);
+    await cta.click();
+    // 字与键的排布（时刻不算：直播那条边界本来就不带时刻）。
+    shapes.push(await line.locator(".turn-footnote-line").evaluate((node) => [...node.children]
+      .filter((child) => child.tagName !== "TIME").map((child) => child.textContent).join("|")));
+  }
+  assert.deepEqual(await page.evaluate(() => window.__retried), ["t-persisted", "t-live"], "点了走的是「重试这一回合」那个动作");
+  assert.equal(shapes[0], shapes[1], "开着页面看和刷新以后是同一个样子");
+
+  // ② 老记录
+  const legacy = footnoteOf("legacy").filter({ hasText: "这一轮异常结束" });
+  assert.equal(await legacy.count(), 1, "老记录：那句话照老样子");
+  assert.equal(await legacy.getByText(/这一轮中断/).count(), 0, "老记录：不编原因");
+  assert.equal(await legacy.getByRole("button", { name: "重试这一回合" }).count(), 1, "老记录：动作照样在");
+
+  // ③ 不能重试
+  assert.equal(await footnoteOf("later").filter({ hasText: "这一轮中断 · 模型上游连不上（503）" }).count(), 1, "后面又跑过一回合：那句话还在");
+  for (const name of ["later", "stopped", "running"]) {
+    assert.equal(await scope(name).getByRole("button", { name: "重试这一回合" }).count(), 0, `${name}：不能重试，没有动作`);
+  }
+  assert.equal(await footnoteOf("stopped").filter({ hasText: /这一轮(中断|异常结束)/ }).count(), 0, "手动停止的不算异常");
+
+  // ④ 任务头
+  for (const name of ["persisted", "live", "legacy", "later", "stopped", "running"]) {
+    assert.equal(await scope(name).locator(".task-detail-header").getByRole("button", { name: /重试|继续本轮审查/ }).count(), 0,
+      `${name}：任务头没有回合级的重试图标`);
+  }
+  assert.deepEqual(errors, [], "页面没有报错");
+  console.log("turn retry cta tests passed");
+} finally {
+  await browser?.close();
+  await web.close();
+}
