@@ -32,6 +32,7 @@ import { existsSync } from "node:fs";
 import { previewState } from "./preview-public.js";
 import { reviewTurnInFlight } from "./review-turn.js";
 import { profilesOwnedBy } from "./auth/owned-executors.js";
+import { noVerdictCauses } from "./review-no-verdict-legacy.js";
 
 export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;
 
@@ -174,6 +175,9 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
     const found = recurrences.get(recurrenceKey(runId, round));
     return found ? { recurrence: found.length } : {};
   };
+  // 没给出结论的那几轮为什么没给：存过的照用，没存过的（那份记录上线之前断的）按盘上的事实现算。
+  // 只给此刻还是「error 且没结论」的：续过、又出了结论的那一轮，旧原因不再作数。
+  const noVerdicts = await noVerdictCauses(taskId, roundRows.filter((round) => round.status === "error" && !round.conclusion));
   const reviews: FreeReviewRun[] = runs.map((run) => ({
     id: run.id,
     reviewerId: run.reviewerId,
@@ -225,8 +229,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
       endedAt: round.endedAt,
       ...(awaiting.has(round.id) ? { awaitsInputDecision: true } : {}),
       ...(retry && round.id === retryRound?.id ? { retry } : {}),
-      // 只在这一轮此刻还是「error 且没结论」时给：续过、又出了结论的那一轮，旧原因不再作数。
-      ...(round.noVerdict && round.status === "error" && !round.conclusion ? { noVerdict: round.noVerdict } : {}),
+      ...(noVerdicts.has(round.id) ? { noVerdict: noVerdicts.get(round.id)! } : {}),
     })),
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
