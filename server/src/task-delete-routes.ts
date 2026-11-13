@@ -4,6 +4,8 @@
 // 最高的一块:它跟建任务、改任务不共用任何局部状态,只靠 `mountTaskDeleteRoutes(api)`
 // 挂回去。`deleteTaskCompletely` 跟着一起搬——项目删除那条路(project-routes.ts)也
 // 调它,留在建任务那份文件里只会让人以为它跟建任务有关。
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 import type { TaskWorkspaceDiscardResult } from "@ash/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
@@ -20,6 +22,7 @@ import { branchDeletionRejection, deleteTaskBranchRefs } from "./task-branch-pla
 import { taskBusyRejection } from "./task-busy.js";
 import { forgetTaskUnconfirmed } from "./session-turns.js";
 import { withRepoLock } from "./repo-lock.js";
+import { DATA_DIR, RUNS_DIR } from "./paths.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 
 // 删一个任务:关联状态 + 任务行本身,**一个出口、一个原子批**。自由审查链(run/round)、预约槽、
@@ -44,6 +47,10 @@ export async function deleteTaskCompletely(taskId: string): Promise<void> {
     // 删成了还是删一半失败,由它按「任务行还在不在」收口(见 claude-monitor-backfill.ts)。
     await settleTaskRevocation(taskId);
   }
+  // 行删成了再收磁盘：会话正文、原始日志、验收快照、草稿区。任务没了就再没有入口读它们，
+  // 单删、连带删子任务、删项目三条路都走这里，不留只能手动清的孤儿目录。
+  rmSync(join(RUNS_DIR, taskId), { recursive: true, force: true });
+  rmSync(join(DATA_DIR, "scratch", taskId), { recursive: true, force: true });
 }
 
 async function deleteTaskRows(taskId: string): Promise<void> {

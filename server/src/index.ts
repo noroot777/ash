@@ -266,6 +266,11 @@ async function initializeServer() {
     });
     if (gates.interrupted || gates.resumed || gates.settled) console.log(`[ash] 验收前置命令：接管 ${gates.resumed} 条，`
       + `按退出结果结算 ${gates.settled} 条，被重启打断 ${gates.interrupted} 条`);
+    // 已了结任务名下的验收快照（macOS 结算时留下的存量）。排在对账之后：判据要看门禁行的最终状态。
+    const { sweepGateSnapshots } = await import("./accept-gate-reclaim.js");
+    void sweepGateSnapshots()
+      .then((removed) => { if (removed) console.log(`[ash] 回收 ${removed} 份已了结任务的验收快照`); })
+      .catch((err) => console.error("[ash] 验收快照回收失败（不影响运行）:", err));
     // 自由审查对账要排在 reattach 之后：它以「有没有接回的 reviewer 会话」为判据，
     // 收拾死在投递链上的 reviewing run（详见 free-review-reconcile.ts）。
     const { reconcileFreeReviews } = await import("./free-review-reconcile.js");

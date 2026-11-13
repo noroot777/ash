@@ -41,7 +41,7 @@ export async function cleanupGateSnapshot(taskId: string, runId: string): Promis
   const logPath = acceptGateLogPath(taskId, runId);
   const launch = readGateLaunch(logPath);
   if (launch?.confinementEnrolled && gateScopeNotice(launch.confinementId)) {
-    appendGateLog(logPath, `\n[ash] macOS 兼容监督已收尾；独立测试快照保留：${gateSnapshotPath(taskId, runId)}\n`);
+    appendGateLog(logPath, `\n[ash] macOS 兼容监督已收尾；独立测试快照保留到任务验收、归档或删除：${gateSnapshotPath(taskId, runId)}\n`);
     return;
   }
   await removeGateSnapshot(taskId, runId);
