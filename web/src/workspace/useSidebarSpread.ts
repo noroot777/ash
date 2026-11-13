@@ -3,7 +3,7 @@ import type { TaskFollowUp, TaskListItem } from "@ash/shared";
 import type { TaskMemoDigest } from "@ash/shared/task-memo";
 import { TASK_BATCH_LIMIT } from "@ash/shared";
 import { api } from "../lib/api.ts";
-import { useServerEvents } from "../lib/events.ts";
+import { useSpreadFollowUps } from "./useSpreadFollowUps.ts";
 import { onTaskMemoWrite, taskMemoWrites } from "../task-memos/taskMemoStore.ts";
 import { indexWorkers, spreadBucket, workersFrom, type SpreadBucket, type WorkerIndex } from "../lib/taskAttention.ts";
 import { taskLook } from "../lib/taskLook.ts";
@@ -149,22 +149,9 @@ export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revisi
   const [open, setOpen] = useState(false);
   const [laidOut, setLaidOut] = useState(false);
   const [filter, setFilter] = useState<SpreadFilter>("all");
-  const [followUps, setFollowUps] = useState<Map<string, TaskFollowUp>>(new Map());
   const [memos, setMemos] = useState<Map<string, TaskMemoDigest>>(new Map());
   const [bodies, setBodies] = useState<Map<string, string>>(new Map());
-  const [loaded, setLoaded] = useState<Set<string>>(new Set());
   const closeTimer = useRef<number | null>(null);
-  // 追问那一列每个任务的「正文版本」：这个任务的会话正文一变（删了几段、又说了一句）就 +1。
-  // 铺开时批量取到的那句是**那一刻**的摘要，正文删过之后它就不再是事实 —— 外面那一格照旧
-  // 显示它，等于把删掉的话又摆出来（第 2 轮审查）。版本号同时挡住迟到的批量应答：发出时
-  // 记下的版本跟回来时对不上，那一格已经单独重取过了，以那一发为准。
-  const followUpWrites = useRef(new Map<string, number>());
-  // 单独重取**已经落进 state** 的那一版。批量应答回来时，正文变过、而那一发还没回来的
-  // 任务既不能用批量里的旧句子，也不能说「问过了、没有」，只能先算没读到。
-  const followUpApplied = useRef(new Map<string, number>());
-  const followUpAsked = useRef(new Set<string>());
-  const openRef = useRef(open);
-  openRef.current = open;
 
   useEffect(() => {
     if (open) {
@@ -194,41 +181,14 @@ export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revisi
   const idsKey = useMemo(() => [...orderedIds].sort().join(","), [orderedIds]);
   const orderedRef = useRef(orderedIds);
   orderedRef.current = orderedIds;
+  const currentIds = useCallback(() => orderedRef.current, []);
+  // 追问那一列的取法、失效边界全在这个 hook 里（读取世代 + 正文版本）。
+  const { followUps, loaded } = useSpreadFollowUps(open, idsKey, currentIds, revision);
 
   useEffect(() => {
     if (!open || !idsKey) return;
     let alive = true;
     const ids = orderedRef.current;
-    // 追问那一列**只问头一批**：每条都要摸一次盘，一千多个任务全问一遍就是把铺开
-    // 这个「扫一眼」的动作变成一次全盘扫描。`loaded` 只记真问过的那批，剩下的行显示
-    // 「还没读到」而不是「还没追问过」—— 后者是在编。
-    const asked = ids.slice(0, TASK_BATCH_LIMIT);
-    followUpAsked.current = new Set(asked);
-    const sentAt = new Map(asked.map((taskId) => [taskId, followUpWrites.current.get(taskId) ?? 0]));
-    // 上一次铺开留下的句子一并清掉（跟 fillByBatch 同一条）：收起期间删过的话，重开时
-    // 不能在批量应答回来之前、或者它挂了之后，继续摆在那一格里。
-    setFollowUps(new Map());
-    setLoaded(new Set());
-    api.followUps(asked)
-      .then((rows) => {
-        if (!alive) return;
-        const fresh = new Map(rows.map((row) => [row.taskId, row]));
-        const version = (taskId: string) => followUpWrites.current.get(taskId) ?? 0;
-        const pending = (taskId: string) => version(taskId) !== sentAt.get(taskId)
-          && followUpApplied.current.get(taskId) !== version(taskId);
-        setFollowUps((current) => {
-          const next = new Map<string, TaskFollowUp>();
-          for (const taskId of asked) {
-            if (pending(taskId)) continue;
-            const row = (version(taskId) !== sentAt.get(taskId) ? current : fresh).get(taskId);
-            if (row) next.set(taskId, row);
-          }
-          return next;
-        });
-        setLoaded(new Set(asked.filter((taskId) => !pending(taskId))));
-      })
-      // 读不到就让那一列留白。铺开是个扫一眼的动作，为它弹一条错误提示更吵。
-      .catch(() => {});
     // 备忘虽然跟追问合用那一格，取法却跟**正文**一样：分批取完整批。按 `asked` 问
     // （本轮第一版）会让第 TASK_BATCH_LIMIT 行之后的任务永远显示不出备忘 —— 而
     // 写备忘只动 task_memos.updated_at、不动 tasks 行的排序时间，给一个旧任务记一条
@@ -265,35 +225,6 @@ export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revisi
     });
     return () => { alive = false; stop(); };
   }, [open]);
-
-  // 正文变了就只重取那一个任务的那一句。只管问过的那批：别的行本来就显示「没读到」。
-  // 重取挂了就把那一格退回「没读到」—— 留着旧摘要就是在摆一句可能已经删掉的话。
-  useServerEvents(useCallback((event) => {
-    if (event.type !== "conversation.redacted" && event.type !== "conversation.turn") return;
-    const taskId = event.taskId;
-    if (!openRef.current || !followUpAsked.current.has(taskId)) return;
-    const version = (followUpWrites.current.get(taskId) ?? 0) + 1;
-    followUpWrites.current.set(taskId, version);
-    const current = () => followUpWrites.current.get(taskId) === version;
-    api.followUps([taskId])
-      .then((rows) => {
-        if (!current()) return;
-        followUpApplied.current.set(taskId, version);
-        setFollowUps((map) => {
-          const next = new Map(map);
-          if (rows[0]) next.set(taskId, rows[0]);
-          else next.delete(taskId);
-          return next;
-        });
-        setLoaded((set) => new Set(set).add(taskId));
-      })
-      .catch(() => {
-        // 不记 applied：这一版没读到，批量应答回来时它仍算「没读到」，不能被当成「问过了、没有」。
-        if (!current()) return;
-        setFollowUps((map) => { const next = new Map(map); next.delete(taskId); return next; });
-        setLoaded((set) => { const next = new Set(set); next.delete(taskId); return next; });
-      });
-  }, []));
 
   const toggle = useCallback(() => setOpen((value) => !value), []);
   const close = useCallback(() => setOpen(false), []);

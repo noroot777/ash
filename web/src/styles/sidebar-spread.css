@@ -335,11 +335,17 @@
    position:fixed，跟列表布局互不相干 —— 弹出来一行都不会动。
    z-index 低于大图（220），所以点开图之后卡片不会压在遮罩上面。 */
 
+/* 整张卡的高度封在视口里，装不下的部分由卡片自己滚：全部追问、备忘、附件和提示是一段段
+   往下拼的，只给其中一段设上限挡不住它们的总和（第 3 轮审查：30 条追问 + 一段长备忘，
+   卡片底边伸出屏幕、滚轮也够不着）。定位那边（SpreadPeekCard）按同一个 PEEK_MARGIN 留边。 */
 .workspace-spread-peek {
   position: fixed;
   z-index: 60;
   width: max-content;
   max-width: 520px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-radius: 12px;
   background: var(--panel);
   padding: 12px 14px 13px;
@@ -384,11 +390,9 @@
   white-space: pre-wrap;
 }
 
-/* 悬停「追问」时列的全部追问：新的在上，一条一段。整列一起滚（而不是每条各自滚），
-   翻旧的那几条时不会在一张小卡里套出好几个滚动条。 */
+/* 悬停「追问」时列的全部追问：新的在上，一条一段。不单独滚 —— 整张卡就是那个滚动容器，
+   一张小卡里不套第二个滚动条，往下翻就能一路翻到备忘。 */
 .workspace-spread-peek-asks {
-  max-height: 52vh;
-  overflow: auto;
   margin: 0;
   padding: 0;
   list-style: none;
