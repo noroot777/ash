@@ -33,7 +33,7 @@ import { RUNS_DIR } from "./paths.js";
 import { DeliveryCrossingUnwritable, recordDeliveryCrossing } from "./delivery-crossing.js";
 import { createTurnInputSettlement } from "./turn-input-settlement.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
-import { isMonitorWakeTurn, recordUserConversationTurn } from "./conversation-turn.js";
+import { isMonitorWakeTurn, recordSystemResumeTurn, recordUserConversationTurn } from "./conversation-turn.js";
 import { workerPreambleFor } from "./team/dispatch.js";
 import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
 import { reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
@@ -59,7 +59,7 @@ import { takeResumePrompt } from "./task-resume-prompt.js";
 import { questionSupersededNote, supersedableQuestion, supersedeQuestion } from "./task-question-supersede.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
-  COLLAB_INVITE, SYS_MARKER,
+  COLLAB_INVITE,
   backgroundWaitFor, COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER, followUpRailNote, PLANNING_TURN,
   WORKSPACE_RESET, WORKSPACE_RESET_MARKER,
 } from "./run-prompts.js";
@@ -560,10 +560,9 @@ export async function continueTask(
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
     if (opts.system) {
-      // Backend-initiated 继续: a 〔系统〕 trace (its own bubble), NOT a 你→ reply.
-      // Persist as a structured turn (reload) and emit a matching system event (live).
-      writeTurn(out, { t: "system", agent, text: SYS_MARKER }, turnStart);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: SYS_MARKER, at: turnStart } });
+      // Backend-initiated 继续: a 〔系统〕 trace carrying who resumed it, NOT a 你→ reply.
+      const resume = { reason: opts.system, ...(sideTurn ? { side: true as const } : {}) };
+      recordSystemResumeTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, at: turnStart, resume });
     } else {
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
       // the human/backend turn as its own bubble; the matching event keeps every client live.

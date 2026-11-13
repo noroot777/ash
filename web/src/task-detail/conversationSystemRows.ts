@@ -272,9 +272,12 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
   return { rows: out, receipts, footnotes };
 }
 
-/** 预览开关那几种老记录（见 isPreviewLifecycleNotice）在认归属之前就拿掉，哪儿都不出现。 */
+/**
+ * 认归属之前就拿掉、哪儿都不出现的：预览开关那几种老记录（见 isPreviewLifecycleNotice），以及
+ * 缘由已经写到它起头的回合头上的系统续跑记录（见 turnCause）。
+ */
 function shown(item: ConversationItem): boolean {
-  return item.kind !== "event" || !isPreviewLifecycleNotice(item.text);
+  return item.kind !== "event" || (!item.onTurnHead && !isPreviewLifecycleNotice(item.text));
 }
 
 export function conversationSystemRows(

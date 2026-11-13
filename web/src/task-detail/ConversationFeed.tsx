@@ -47,6 +47,7 @@ import { canForkReply } from "./conversationFork.ts";
 import { MonitorWakeReply } from "./MonitorWakeInput.tsx";
 import { monitorWakeInput, monitorWakeReplyIds } from "./monitorWakeModel.ts";
 import { foldMonitorWakes } from "./monitorWakeTurns.ts";
+import { turnCauseText } from "./turnCause.ts";
 import { mergeNoticeItems, useRejectionNotices } from "./useRejectionNotices.ts";
 import { ReclaimTurnSwitch } from "./ReclaimTurnSwitch.tsx";
 import { DeleteMessageButton, MessageDeleteProvider, type DeletableItem } from "./MessageDelete.tsx";
@@ -103,6 +104,7 @@ function AgentMessageView({
   const duration = durationBetween(item.at, item.endedAt);
   const reviewer = item.reviewer;
   const showIdentity = !item.continuation && !laneRole;
+  const cause = turnCauseText(item);
   // 轮次徽标只是卡头标题（「第 N 轮审查」）的复读，卡里一律不出。
   const showBadge = !!reviewer && !item.continuation && !laneRole;
   // 回合头只留名字（docs/ui-ux-audit feed-1）：模型、智能水平、时间、用时排成一句，
@@ -133,7 +135,7 @@ function AgentMessageView({
         {head && (
           <header className="turn-head">
             {showIdentity && <b>{item.label}</b>}
-            {showIdentity && item.wokenByMonitor && <span className="turn-cause">被哨兵叫醒</span>}
+            {showIdentity && cause && <span className="turn-cause">{cause}</span>}
             {showBadge && <ReviewerBadge round={reviewer.round} />}
             {meta && <span className="turn-meta">{meta}</span>}
             {/* 删除紧跟在那一句后面，跟它一起指到才出；还在说的那一回合删不了，按钮自己会缺席。 */}
@@ -171,7 +173,7 @@ export function sameSettledTurn(prev: AgentMessageProps, next: AgentMessageProps
   const b = next.item;
   return a.id === b.id && a.endedAt === b.endedAt && a.markdown === b.markdown && a.label === b.label && a.agentType === b.agentType
     && sameSegments(a.segments, b.segments)
-    && a.continuation === b.continuation && a.wokenByMonitor === b.wokenByMonitor
+    && a.continuation === b.continuation && a.wokenByMonitor === b.wokenByMonitor && a.resumeCause?.reason === b.resumeCause?.reason
     && a.reviewer?.round === b.reviewer?.round && a.run?.model === b.run?.model && a.run?.reasoningEffort === b.run?.reasoningEffort
     && sameJson(a.sources, b.sources) && sameJson(a.usage, b.usage) && a.session?.exitStatus === b.session?.exitStatus
     && shallowRest(prev, next);
