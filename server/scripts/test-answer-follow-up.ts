@@ -36,7 +36,7 @@ const [{ db, ensureSchema }, schema, pending, runs, runRoutes, { bus }, legacy, 
   import("../src/scheduler.js"),
   import("../src/status.js"),
 ]);
-const { groups, projects, queueItems, scheduledMessages, sessions, tasks } = schema;
+const { groups, projects, queueItems, scheduledMessages, sessions, sessionTurns, tasks } = schema;
 await ensureSchema();
 const api = new Hono();
 runRoutes.mountTaskRunRoutes(api);
@@ -98,11 +98,17 @@ const answer = async (id: string, text: string) => {
 };
 const trayOf = async (id: string) => (await (await api.request(`/tasks/${id}/scheduled-messages`)).json()) as ScheduledMessage[];
 // 提问那一轮结算时落进会话的那句说明,写法与 single-run.ts 落盘一致(TURN_SENTINEL + JSON)。
-const writeQuestionNote = (taskId: string, text: string, noteAt: string) => {
-  const path = transcript.sessionTranscriptPath(taskId, `${taskId}-prev`);
+const writeQuestionNote = (taskId: string, text: string, noteAt: string, sessionId = `${taskId}-prev`) => {
+  const path = transcript.sessionTranscriptPath(taskId, sessionId);
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, `\n${transcript.TURN_SENTINEL}${JSON.stringify({ t: "system", agent: "claude", text, level: "notice", at: noteAt })}\n`);
 };
+// 那一回合的区间(single-run.ts 收口时 recordTurnSpan 落的那一行):结算说明的时刻就是它的 endedAt。
+const turnSpan = (taskId: string, startedAt: string, endedAt: string, sessionId = `${taskId}-prev`) =>
+  db.insert(sessionTurns).values({ id: `${sessionId}-${startedAt}`, sessionId, taskId, cwd: root, startedAt, endedAt, outcome: "completed" });
+const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
+const historyOf = (answerId: string, question: string) => JSON.stringify([{ id: answerId, question,
+  questionOptions: null, questionItems: null, answeredAt: at, answer: "要", reply: "【答复】\n要" }]);
 const legacyAnswer = (id: string, taskId: string, text: string, createdAt: string): typeof scheduledMessages.$inferInsert => ({
   id, taskId, text, attachments: "[]", agent: null, mode: "queued", sendAt: createdAt, status: "pending",
   createdAt, sentAt: null, deliveringSince: null, execution: true, answerId: `${id}-answer`,
@@ -117,6 +123,7 @@ try {
   // ── ① 同队有人在跑:答复当场开出续聊回合 ─────────────────────────────────────────
   // 队列 [A(done,续聊里提了问), B(在跑), C(failed,执行型答复在等), D(done,旧版落下的答复)]。
   const [A, B, C, D, D2, C2] = [T("a"), T("b"), T("c"), T("d"), T("d2"), T("c2")];
+  const [E1, E2, E3] = [T("e1"), T("e2"), T("e3")];
   const askedD2 = "要不要也更新截图？";
   await db.insert(tasks).values([
     row(A, "done", { question: "要不要顺手把文档也改了？", endedAt: earlier }),
@@ -124,13 +131,16 @@ try {
     row(C, "failed", { endedAt: later }),
     row(D, "done", { endedAt: earlier }),
     // 答复排下之后又续聊过一轮:endedAt 被那一轮重写到了答复之后。
-    row(D2, "done", { endedAt: later, questionHistory: JSON.stringify([{ id: "fu-legacy-d2-answer", question: askedD2,
-      questionOptions: null, questionItems: null, answeredAt: at, answer: "要", reply: "【答复】\n要" }]) }),
+    row(D2, "done", { endedAt: later, questionHistory: historyOf("fu-legacy-d2-answer", askedD2) }),
+    // E1/E2/E3:会话证据拿不准的三种,endedAt 都在排下之后(判据 ② 不成立)。
+    row(E1, "failed", { endedAt: later, questionHistory: historyOf("fu-legacy-e1-answer", askedD2) }),
+    row(E2, "done", { endedAt: later, questionHistory: historyOf("fu-legacy-e2-other-answer", askedD2) }),
+    row(E3, "done", { endedAt: later, questionHistory: historyOf("fu-legacy-e3-answer", askedD2) }),
     // 执行回合里问的题,答复排下后起跑失败落 failed,恰好同一毫秒。
     row(C2, "failed", { endedAt: at }),
   ]);
-  for (const id of [A, C, D, D2, C2]) await withSession(id);
-  await enqueue("fu-queue-1", [A, B, C, D, D2, C2]);
+  for (const id of [A, C, D, D2, C2, E1, E2, E3]) await withSession(id);
+  await enqueue("fu-queue-1", [A, B, C, D, D2, C2, E1, E2, E3]);
   assert.equal((await api.request(`/tasks/${B}/run`, { method: "POST" })).status, 202, "B 应能启动");
   await waitFor(async () => (await taskOf(B)).status === "running" && runs.isRunning(B), "B 没有跑起来");
 
@@ -152,9 +162,23 @@ try {
   // D2:之后又续聊过一轮、endedAt 晚于排下时刻,但会话里那道题的结算说明是「续聊回合以提问结束」→ 续聊。
   // C :执行回合里问的(会话里最近那句是「本回合以提问暂停」),后来起跑失败落 failed → 仍执行型。
   // C2:同上但 endedAt 恰与排下同一毫秒,会话里也读不到说明 → 不确定就留着执行型。
+  // E1:更早一轮续聊问过同一道题,但排下前最后一回合在另一份会话里、那份文件读不到 → 留执行型。
+  // E2:最后一回合确是续聊问的这道题,但答复对不上提问记录(没有题面可核)→ 留执行型。
+  // E3:最后一回合那份会话里有一行坏掉的回合记录 → 留执行型。
   const dText = "旧版落下的答复(fu-legacy-d)";
   const cText = "暂停时排下的答复(fu-legacy-c)";
   writeQuestionNote(D2, notes.followUpQuestionNote(askedD2, "已完成"), earlier);
+  await turnSpan(D2, minutesAgo(2), earlier);
+  writeQuestionNote(E1, notes.followUpQuestionNote(askedD2, "已完成"), minutesAgo(3));
+  await turnSpan(E1, minutesAgo(4), minutesAgo(3));
+  await db.insert(sessions).values({ id: `${E1}-new`, taskId: E1, role: "single", agentType: "claude", executor: "claude@test",
+    cwd: root, cliSessionId: `${E1}-cli-new`, startedAt: minutesAgo(2) });
+  await turnSpan(E1, minutesAgo(2), earlier, `${E1}-new`);
+  writeQuestionNote(E2, notes.followUpQuestionNote(askedD2, "已完成"), earlier);
+  await turnSpan(E2, minutesAgo(2), earlier);
+  writeQuestionNote(E3, notes.followUpQuestionNote(askedD2, "已完成"), earlier);
+  appendFileSync(transcript.sessionTranscriptPath(E3, `${E3}-prev`), `\n${transcript.TURN_SENTINEL}{"t":"system","text":\n`);
+  await turnSpan(E3, minutesAgo(2), earlier);
   writeQuestionNote(C, notes.followUpQuestionNote("更早一轮续聊里的题", "已完成"), new Date(Date.now() - 120_000).toISOString());
   writeQuestionNote(C, notes.pausedQuestionNote("继续第三步吗？"), earlier);
   await db.insert(scheduledMessages).values([
@@ -162,6 +186,9 @@ try {
     legacyAnswer("fu-legacy-d2", D2, "截图也更新(fu-legacy-d2)", at),
     legacyAnswer("fu-legacy-c", C, cText, at),
     legacyAnswer("fu-legacy-c2", C2, "同一毫秒的答复(fu-legacy-c2)", at),
+    legacyAnswer("fu-legacy-e1", E1, "会话缺了一份(fu-legacy-e1)", at),
+    legacyAnswer("fu-legacy-e2", E2, "对不上记录(fu-legacy-e2)", at),
+    legacyAnswer("fu-legacy-e3", E3, "会话有坏行(fu-legacy-e3)", at),
   ]);
   // ⑤ 托盘:C 被 B 挡着时,接口说的是 B,不是「等本任务这一轮」。
   const cTray = await trayOf(C);
@@ -177,6 +204,9 @@ try {
   assert.equal(await executionOf("fu-legacy-d2"), false, "endedAt 被后来的续聊重写,也按提问那一轮的记录认成续聊");
   assert.equal(await executionOf("fu-legacy-c"), true, "执行回合里问的题仍是执行型");
   assert.equal(await executionOf("fu-legacy-c2"), true, "同一毫秒不算排下时已是终态");
+  assert.equal(await executionOf("fu-legacy-e1"), true, "最后一回合的会话读不到,不拿更早一次同题面的续聊提问作证");
+  assert.equal(await executionOf("fu-legacy-e2"), true, "答复对不上提问记录,不算证据");
+  assert.equal(await executionOf("fu-legacy-e3"), true, "会话里有解析不了的回合行,不算证据");
   assert.equal(await legacy.restoreFollowUpAnswers(), 0, "认过一次就写进行里,再跑不重复");
   assert.equal((await trayOf(D))[0]?.wait, null, "D 那条按续聊判,没有挡着它的东西");
 
