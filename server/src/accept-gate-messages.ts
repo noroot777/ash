@@ -24,7 +24,10 @@ type GateFailureDetails = { command: string; summary: string; logPath: string; t
  */
 export const gateFailurePrompt = (details: GateFailureDetails) =>
   `【验收未通过 · 验收前置命令没过】\n` +
-  `本次验收触发了项目设置的验收前置命令，ash 在合并**之前**于独立快照 \`${details.cwd}\` 跑了它（${details.executionNotice ? "停止后快照保留到任务验收、归档或删除" : "停止后快照会删除"}）。\n` +
+  (details.failure === "entry_missing"
+    // 没起跑的那一档不许说「跑了它」：同一份输入后面还要附「命令没有起跑」那句（第 1 轮审查 N1）。
+    ? `本次验收触发了项目设置的验收前置命令，ash 在合并**之前**于独立快照 \`${details.cwd}\` 核对了它的入口，没有起跑。\n`
+    : `本次验收触发了项目设置的验收前置命令，ash 在合并**之前**于独立快照 \`${details.cwd}\` 跑了它（${details.executionNotice ? "停止后快照保留到任务验收、归档或删除" : "停止后快照会删除"}）。\n`) +
   (details.executionNotice ? `${details.executionNotice}\n` : "") +
   (details.preview
     ? `这个项目的门禁基准是「合并预览」：快照里先把 \`${details.preview.branch}\`@${details.preview.commit.slice(0, 8)} 合进了任务分支，`

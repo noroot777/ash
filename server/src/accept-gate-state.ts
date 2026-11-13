@@ -40,7 +40,9 @@ export async function gateMergeSource(repoPath: string, basis: Pick<TaskRow, "ac
  */
 export function gateView(row: GateRow): AcceptGateView {
   return {
-    executionNotice: gateScopeNotice(row.executionMode ?? readGateLaunch(row.logPath)?.confinementId),
+    // 执行方式只说真起过的那一次：没起跑（entry_missing）就没有「实际执行」可言。
+    executionNotice: row.failure === "entry_missing" ? null
+      : gateScopeNotice(row.executionMode ?? readGateLaunch(row.logPath)?.confinementId),
     id: row.id,
     taskId: row.taskId,
     command: row.command,

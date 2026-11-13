@@ -44,7 +44,8 @@ export { recoverAcceptGates } from "./accept-gate-recover.js";
 export { rehandOffAcceptGate } from "./accept-gate-handoff.js";
 export type { AcceptGateChoices } from "./accept-gate-handoff.js";
 import type { AcceptGateChoices } from "./accept-gate-handoff.js";
-import { encodeGateEntryProbe, entryCertainlyMissing, gateEntryNote, probeGateEntry, type GateEntryProbe } from "./accept-gate-entry.js";
+import { encodeGateEntryProbe, entryCertainlyMissing, gateEntryNote } from "./accept-gate-entry.js";
+import { probeGateEntryWithTarget } from "./accept-gate-entry-target.js";
 import { gateBaselineMatches, gateBaselineNotice, gateDriftBesidesTree, resolveGateBaseline, type GateBaselineBlock,
   type GateBaselinePlan } from "./accept-gate-baseline.js";
 import { handOffConflict } from "./accept-conflict.js";
@@ -314,7 +315,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     }
     // **起跑前**核一眼这条命令点名要跑的东西在不在这份快照里（纯读，判据见 accept-gate-entry.ts）。
     // 一次定死、跟着这一行落盘，之后只读不重算：跑完之后再核拿到的是跑完之后的状态。
-    const entry = await probeWithTarget(snapshotCwd, plan);
+    const entry = await probeGateEntryWithTarget(snapshotCwd, plan);
     await db.update(acceptGateRuns)
       .set({ entryProbe: encodeGateEntryProbe(entry), previewCommit,
         // 凭据记快照**实际**用的那一份，不是判定那一刻读到的：两者之间项目改了配置，记下的就是测过的。
@@ -378,18 +379,6 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     await noteIfStillAlive(taskId, logPath, await stopGateRun(runId));
   }
   return row ? gateView(row) : null;
-}
-
-/**
- * 起跑前那份入口事实。核得准、又不在快照里的时候，顺带核一眼它在目标分支上有没有（卡片上那句话的
- * 后半句）—— 只读那一个文件的树条目，读不出来就如实记 null。
- */
-async function probeWithTarget(snapshotCwd: string, plan: PendingStart): Promise<GateEntryProbe | null> {
-  const probe = probeGateEntry(snapshotCwd, plan.command);
-  if (!entryCertainlyMissing(probe) || !plan.targetBranch || !plan.targetCommit) return probe;
-  const has = await readOnlyGit(plan.repoPath, ["ls-tree", plan.targetCommit, "--", probe!.file])
-    .then(({ stdout }) => / blob /.test(stdout), () => null);
-  return { ...probe!, target: { branch: plan.targetBranch, has } };
 }
 
 /** 登记了却没能发射（主流程中途出错）时把登记撤掉，别留一条永远不跑的意图。 */

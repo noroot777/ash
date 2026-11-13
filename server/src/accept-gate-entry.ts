@@ -38,6 +38,11 @@
 //  · **核得准**（`certain`）：入口是一个具体文件（`./kb.sh`、`scripts/verify.sh`）。shell 对含
 //    `/` 的名字不查 PATH，也没有配置能把它挪走 —— 快照里没有，这条命令就不可能跑起来。这一档
 //    **不起跑**，直接说「被测的这棵树里没有它」，再附一句它在目标分支上有没有。
+//    「没有」必须是**内核对同一个字符串**给出的 ENOENT/ENOTDIR：拿原样的路径从快照根去 stat，
+//    不先做 `normalize`。词法折叠 `..` 跟内核不等价 —— `./alias/../runner.sh` 里 alias 是目录
+//    软链时，内核先进软链再退一级，跑的是 `real/runner.sh`，而折叠后核的是根目录下并不存在的
+//    `runner.sh`，一条能跑绿的命令就被挡在门外（第 1 轮审查 F1 实测）。读不出来（权限之类）不算
+//    「没有」，交白卷。目标分支那半句另有一套（accept-gate-entry-target.ts）。
 //  · **核不准**：npm 脚本。runner 去哪份 manifest 找脚本，四层配置（命令行、环境变量、`.npmrc`、
 //    workspace）都能改，这一层读的只是命令行上解释出来的那份。所以照常起跑；红了只把起跑前
 //    看到的那件事和原始输出并排摆出来，不下结论。
@@ -66,7 +71,7 @@
 //
 // 答案在 spawn 之前一次定下来，落到 accept_gate_runs.entryProbe 上，之后只许读它、不许重算
 // （跑完再核一次拿到的是跑完之后的状态，见上面②）。
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, relative } from "node:path";
 
 /** 这条命令点名要跑的东西，分能核实的两种。其余形状一律认不出（见文件头）。 */
@@ -283,6 +288,19 @@ export function insideTree(treeDir: string, name: string): string | null {
   return !inside || (!inside.startsWith("..") && !isAbsolute(inside)) ? resolved : null;
 }
 
+/**
+ * 这个相对路径从 `treeDir` 起，内核解析得到没有。**原样拼接、不 normalize**：`..` 和软链交给内核按
+ * 跟 shell 一模一样的规则解，核的就是 shell 真会去找的那个东西（见文件头）。只有 ENOENT / ENOTDIR
+ * 才算「没有」；其余读不出来的一律 null。
+ */
+function entryOnDisk(treeDir: string, name: string): boolean | null {
+  try { statSync(`${treeDir}/${name}`); return true; }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? false : null;
+  }
+}
+
 /** 脚本那一档要核的那份 manifest；踩出树就没地方核。 */
 function manifestInTree(treeDir: string, ask: GateEntryAsk): string | null {
   if (ask.kind !== "script") return null;
@@ -294,7 +312,7 @@ function manifestInTree(treeDir: string, ask: GateEntryAsk): string | null {
  * **spawn 之前**把这条命令点名要跑的东西核一眼。认不出的形状、读不动的 manifest 一律 null
  * （交白卷）。
  *
- * 一个进程都不起：只 `existsSync` 和读一份 manifest 的文本。为什么不去问 npm（它才最知道自己
+ * 一个进程都不起：只 `stat` 一个路径和读一份 manifest 的文本。为什么不去问 npm（它才最知道自己
  * 会读哪份 manifest）见文件头 —— 那条路第 8 轮被判死：它答的是**查询那一次**的状态，而且替
  * 用户多跑了两次项目代码。
  */
@@ -302,10 +320,9 @@ export function probeGateEntry(treeDir: string, command: string): GateEntryProbe
   const ask = gateEntryAsk(command);
   if (!ask) return null;
   if (ask.kind === "path") {
-    const resolved = insideTree(treeDir, ask.name);
-    return resolved
-      ? { ask: ask.name, file: entryFile(ask), resolved: existsSync(resolved), by: "被测快照里的文件", certain: true }
-      : null;
+    const present = insideTree(treeDir, ask.name) ? entryOnDisk(treeDir, ask.name) : null;
+    return present === null ? null
+      : { ask: ask.name, file: entryFile(ask), resolved: present, by: "被测快照里的文件", certain: true };
   }
   const file = manifestInTree(treeDir, ask);
   if (!file) return null;

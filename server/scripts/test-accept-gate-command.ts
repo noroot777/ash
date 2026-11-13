@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnAcceptGate, stopAcceptGate, type GateExit } from "../src/accept-gate-process.js";
 import { IS_WINDOWS, userShellLaunch } from "../src/platform.js";
 import { decodeGateEntryProbe, encodeGateEntryProbe, entryCertainlyMissing, gateEntryAsk, gateEntryNote, probeGateEntry,
   scriptDefinedIn } from "../src/accept-gate-entry.js";
+import { entryInCommit } from "../src/accept-gate-entry-target.js";
 
 const PROBE_BY = "被测快照 package.json 的 scripts";
 
@@ -274,6 +275,48 @@ try {
     writeFileSync(join(tree, "kb.sh"), "#!/bin/sh\n", { mode: 0o755 });
     assert.equal(entryCertainlyMissing(probeGateEntry(tree, "CI=1 ./kb.sh test full")), false, "在树里就照常起跑");
     assert.equal(entryCertainlyMissing(absent), false, "脚本那一档不在也不拦：核不准");
+    // 「没有」必须是内核对**原样那个字符串**给的答案（第 1 轮审查 F1）：alias 是目录软链时，
+    // `./alias/../runner.sh` 里的 `..` 由内核从软链指向的目录退一级，跑的是 real/runner.sh；
+    // 词法折叠会去核根目录下并不存在的 runner.sh，把一条能跑绿的命令挡在门外。
+    mkdirSync(join(tree, "real/nested"), { recursive: true });
+    writeFileSync(join(tree, "real/runner.sh"), "#!/bin/sh\necho ACTUALLY_RAN\n", { mode: 0o755 });
+    symlinkSync("real/nested", join(tree, "alias"));
+    symlinkSync("real", join(tree, "launcher"));
+    for (const command of ["./alias/../runner.sh", "./launcher/runner.sh", "./real/nested/../runner.sh"]) {
+      assert.equal(execFileSync("sh", ["-lc", command], { cwd: tree, encoding: "utf8" }).trim(), "ACTUALLY_RAN",
+        `测试自己的前提：shell 真能跑 ${command}`);
+      assert.equal(probeGateEntry(tree, command)?.resolved, true, `shell 跑得到的就不许说没有：${command}`);
+      assert.equal(entryCertainlyMissing(probeGateEntry(tree, command)), false, `更不许拦下起跑：${command}`);
+    }
+    assert.equal(entryCertainlyMissing(probeGateEntry(tree, "./launcher/gone.sh")), true, "穿过软链也确实没有的，照样核得准");
+    assert.equal(entryCertainlyMissing(probeGateEntry(tree, "./real/runner.sh/x")), true, "中间一级是文件（ENOTDIR）也算没有");
+    // 读不出来（权限）不等于没有：交白卷，不拦。root 跑测试时权限挡不住，这条前提不成立就跳过。
+    mkdirSync(join(tree, "locked"));
+    chmodSync(join(tree, "locked"), 0o000);
+    try {
+      if (process.getuid?.() !== 0) assert.equal(probeGateEntry(tree, "./locked/x.sh"), null, "读不出来就交白卷，不说没有");
+    } finally { chmodSync(join(tree, "locked"), 0o755); }
+
+    // 目标分支那半句：在目标提交的树里逐级走，碰上软链 / `..` 就说读不出来，绝不把「没找到直接条目」
+    // 说成「没有」（第 1 轮审查 F2：`./launcher/x.sh` 在 ls-tree 里是空的，shell 却跑得到）。
+    const gitIn = (...args: string[]) => execFileSync("git", ["-C", tree, ...args], { encoding: "utf8" }).trim();
+    gitIn("init", "-q", "-b", "main");
+    gitIn("add", "-A");
+    gitIn("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "-m", "fixture");
+    for (const [file, expected] of [
+      ["real/runner.sh", true],
+      ["./real/runner.sh", true],
+      ["launcher/runner.sh", null],
+      ["alias/../runner.sh", null],
+      ["real/gone.sh", false],
+      ["gone/runner.sh", false],
+      ["real/runner.sh/x", false],
+      ["REAL/runner.sh", null],
+      ["real", null],
+      [":!real/runner.sh", false],
+    ] as const) {
+      assert.equal(await entryInCommit(tree, "HEAD", file), expected, `目标树里核 ${file}`);
+    }
     // 落盘与读回：`file` 缺了就当没核过（去目标分支上核的就是它）；没有 `certain` 的旧行当核不准 ——
     // 那时还没有「不起跑」这一档，不能事后替它说「没起跑」。
     const probe = probeGateEntry(tree, "npm --prefix child run test:accept")!;

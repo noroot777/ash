@@ -8,13 +8,14 @@
 // 由 test-accept-gate.ts 在同一个进程里调用，共用它的临时库和夹具。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { db } from "../src/db/index.js";
 import { acceptGateRuns, projects, sessions, tasks } from "../src/db/schema.js";
 import { acceptTask } from "../src/task-accept.js";
 import { acceptGateState } from "../src/accept-gate.js";
+import { gateFailureInputFor } from "../src/accept-gate-messages.js";
 import { sessionTranscriptPath } from "../src/transcript.js";
 import { releaseHeldTurn } from "../src/turn-lock.js";
 
@@ -68,6 +69,11 @@ export async function testGateEntry(ctx: Ctx): Promise<void> {
   const card = (await acceptGateState(taskId)).latest!;
   assert.equal(card.entryNote, sentence, "卡片上是一句确定的话，带目标分支上的情形");
   assert.equal(card.failure, "entry_missing");
+  assert.equal(card.executionNotice, null, "没起跑就没有「实际执行」的说明");
+  const prompt = gateFailureInputFor(card, wsPath);
+  assert.equal(prompt.includes("跑了它"), false, "交回的输入不许说「跑了它」（第 1 轮审查 N1）");
+  assert.match(prompt, /核对了它的入口，没有起跑/);
+  assert.ok(prompt.includes(sentence), "入口那句话原样附上");
   assert.equal(JSON.parse(blocked.entryProbe ?? "null")?.target?.has, true, "目标分支上的情形起跑前一次定下、跟着这一行落盘");
   assert.match(readFileSync(blocked.logPath, "utf8"), new RegExp(sentence.slice(0, 20)), "日志里也写着这句");
   if (!first.accepted) assert.ok(first.error?.includes(sentence), "MCP/HTTP 回执里也给出这句，不只甩原始报错");
@@ -98,6 +104,32 @@ export async function testGateEntry(ctx: Ctx): Promise<void> {
   assert.equal(real.row.exitCode, 4);
   assert.equal(real.view.entryNote, null, "入口在树里，就没有入口那句话");
 
+  // ③′ 穿过目录软链再 `..` 的入口（第 1 轮审查 F1）：shell 跑得到，就必须照常起跑 —— 词法折叠会去核
+  //     根目录下并不存在的 runner.sh，把它挡在门外。
+  mkdirSync(join(wsPath, "real/nested"), { recursive: true });
+  writeFileSync(join(wsPath, "real/nested/keep"), "\n");
+  writeFileSync(join(wsPath, "real/runner.sh"), "#!/bin/sh\necho RUNNER_RAN\nexit 5\n", { mode: 0o755 });
+  symlinkSync("real/nested", join(wsPath, "alias"));
+  git(wsPath, "add", "-A");
+  git(wsPath, "commit", "-m", "runner behind a directory symlink");
+  const viaLink = await again("./alias/../runner.sh");
+  assert.notEqual(viaLink.row.pid, null, "shell 跑得到的入口必须真的起跑");
+  assert.equal(viaLink.row.failure, "exit_code");
+  assert.equal(viaLink.row.exitCode, 5, "跑的就是 real/runner.sh");
+  assert.equal(viaLink.view.entryNote, null);
+
+  // ③″ 目标分支上要穿过目录软链才找得到它（第 1 轮审查 F2）：快照里确实没有，照样不起跑；但目标树里
+  //     不解软链，后半句只许说「没读出来」，不许说「也没有」。
+  mkdirSync(join(repo, "lib"), { recursive: true });
+  writeFileSync(join(repo, "lib/only-target.sh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  symlinkSync("lib", join(repo, "launcher"));
+  git(repo, "add", "-A");
+  git(repo, "commit", "-m", "target-only script behind a directory symlink");
+  const linkedTarget = await again("./launcher/only-target.sh");
+  assert.equal(linkedTarget.row.failure, "entry_missing");
+  assert.equal(linkedTarget.view.entryNote,
+    "被测的这棵树里没有 ./launcher/only-target.sh，命令没有起跑。目标分支 main 上有没有它，这次没读出来。");
+
   // ④ 核不准（npm 脚本）：照常起跑，红了只并排摆起跑前看到的那件事。
   assert.doesNotThrow(() => execFileSync("sh", ["-lc", "command -v npm"], { stdio: "ignore" }),
     "这一条用真实 npm（门禁用登录 shell 起命令），登录 shell 里得有 npm");
@@ -111,5 +143,5 @@ export async function testGateEntry(ctx: Ctx): Promise<void> {
     "起跑前看到：被测快照 package.json 的 scripts 里没有 test:accept（这一项核不准，npm 可能按配置去别处找）。");
   assert.match(script.view.logTail, /Missing script/, "原始报错就摆在旁边");
 
-  console.log("accept gate entry: 入口文件不在树里=不起跑+确定的一句话（目标分支有/没有）/ 入口在树里照常红 / npm 脚本核不准照常跑、只并排摆事实 全部通过");
+  console.log("accept gate entry: 入口文件不在树里=不起跑+确定的一句话（目标分支有/没有）/ 入口在树里照常红 / 穿过软链的入口按内核解析 / 目标树里软链只说没读出来 / npm 脚本核不准照常跑、只并排摆事实 全部通过");
 }
