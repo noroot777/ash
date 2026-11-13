@@ -165,7 +165,7 @@
 .review-verdict-text[aria-expanded="true"] { color: var(--ink); }
 .review-verdict > .turn-footnote-lane { align-self: stretch; margin-left: -8px; }
 @media (hover: hover) {
-  .review-verdict { margin-top: 26px; }
+  .review-verdict { margin-top: var(--bubble-head-band); }
   .review-verdict-text { padding: 6px 15px 7px; }
   .review-verdict-bubble > header {
     position: absolute;

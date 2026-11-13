@@ -78,6 +78,14 @@ try {
     return { above: line.bottom <= bubble.top + 1, right: Math.abs(bubble.right - line.right) <= 4 };
   });
   assert.deepEqual(placed, { above: true, right: true }, "浮在气泡上方右侧");
+  // 上一回合尾那一排和这一行都住在两条之间的空里，各占一条带子：不叠在同一行上。
+  const bands = await page.locator(".task-conversation > .review-verdict").evaluateAll((els) => els.map((el) => {
+    const acts = el.previousElementSibling.querySelector(":scope > .task-message-content > .turn-acts");
+    const actsBottom = Math.max(...[...acts.children].map((child) => child.getBoundingClientRect().bottom));
+    return Math.round(el.querySelector(".review-verdict-bubble > header").getBoundingClientRect().top - actsBottom);
+  }));
+  assert.equal(bands.length, 2);
+  assert.ok(bands.every((gap) => gap >= 6), `气泡上方那一行整个落在上一回合尾栏下面：${bands}`);
   assert.equal(
     await page.evaluate(() => getComputedStyle(document.querySelector(".review-verdict-bubble > header b")).fontWeight),
     "500",
