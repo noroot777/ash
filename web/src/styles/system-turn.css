@@ -216,8 +216,10 @@ button.turn-footnote-part:focus-visible { outline: 2px solid var(--focus-ring); 
 .turn-receipt { display: flex; min-height: 22px; flex-wrap: wrap; align-items: center; gap: 0 10px; }
 .turn-receipt > time { color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .turn-receipt-text { min-width: 0; overflow-wrap: anywhere; }
-/* 每一条前面那枚图标：说的是哪一类事（哨兵、审查、验收……），跟检查器里那一格同一枚。贴着字，比时刻那一档的间距紧。 */
-.turn-receipt > .notice-icon { display: inline-flex; margin-right: -4px; color: var(--faint); }
+/* 图标 + 那一句 + 删除是一列：占满时刻后面剩下的宽度（basis 0，不会整列换到下一行），字在列里折行。 */
+.turn-receipt-body { display: flex; flex: 1 1 0; min-width: 0; align-items: flex-start; gap: 0 6px; }
+/* 每一条前面那枚图标：说的是哪一类事（哨兵、审查、验收……），跟检查器里那一格同一枚。高一行，折行时贴着第一行。 */
+.turn-receipt-body > .notice-icon { display: inline-flex; flex: none; height: 1lh; align-items: center; color: var(--faint); }
 .turn-receipt-more {
   margin-left: -4px;
   border: 0;

@@ -126,13 +126,25 @@ try {
   });
   assert.equal(leading.first, true, "时刻排在每一条最前面");
   // 每一条前面一枚图标，贴在字前面；读屏不念它（字已经说清了）。
-  assert.equal(await log.locator(".turn-receipt > .notice-icon svg").count(), 8, "每一条都有图标");
+  assert.equal(await log.locator(".turn-receipt-body > .notice-icon svg").count(), 8, "每一条都有图标");
   const icon = await log.locator(".turn-receipt").nth(1).evaluate((el) => {
-    const glyph = el.querySelector(":scope > .notice-icon");
+    const glyph = el.querySelector(".turn-receipt-body > .notice-icon");
     const text = el.querySelector(".turn-receipt-text").getBoundingClientRect();
     return { hidden: glyph.getAttribute("aria-hidden"), before: glyph.getBoundingClientRect().right <= text.left };
   });
   assert.deepEqual(icon, { hidden: "true", before: true });
+  // 窄栏：字在图标后面那一列里折行，不整句掉到图标下面（审查第 1 轮实测的那种）。
+  await resizeViewport(page, { width: 320, height: 1300 });
+  const rows = await log.locator(".turn-receipt").evaluateAll((items) => items.map((el) => {
+    const glyph = el.querySelector(".turn-receipt-body > .notice-icon").getBoundingClientRect();
+    const range = document.createRange();
+    range.selectNodeContents(el.querySelector(".turn-receipt-text"));
+    const lines = range.getClientRects();
+    return { sameLine: Math.abs(lines[0].top - glyph.top) < glyph.height, after: glyph.right <= lines[0].left, lines: lines.length };
+  }));
+  assert.ok(rows.some((row) => row.lines > 1), "窄栏里至少有一条真折了行，不然这一条什么都没证明");
+  assert.ok(rows.every((row) => row.sameLine && row.after), `字的第一行跟图标同一行：${JSON.stringify(rows)}`);
+  await resizeViewport(page, { width: 1000, height: 1300 });
   assert.equal(leading.before, true);
   assert.match(leading.label, /\d\d\/\d\d \d\d:\d\d/, "读屏拿到完整的日期时刻");
   await page.mouse.move(990, 5);
