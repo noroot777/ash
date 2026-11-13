@@ -40,17 +40,30 @@ export function IconMenu({ label = "更多", items, info, placement, size = "sm"
   const menu = useRef<HTMLDivElement>(null);
   const [flipped, setFlipped] = useState(false);
   useDismissable({ enabled: open, containerRef: root, onClose: () => setOpen(false), restoreFocusRef: button });
-  // 打开的那一下量一次：下面露不全、上面放得下才翻，两头都不够就照旧开在下面（滚一下能看全）。
+  // 开着的时候一直量：下面露不全、上面放得下才开在上面，两头都不够就照旧开在下面（滚一下能看全）。
+  // 打开后会话还会滚、窗口还会变，方向跟着重算，两个方向都能换回来。
   useLayoutEffect(() => {
     if (!open) {
       setFlipped(false);
       return;
     }
-    if (side !== "below" || !menu.current || !root.current) return;
-    const rect = menu.current.getBoundingClientRect();
-    const visible = visibleRange(root.current);
-    const roomAbove = root.current.getBoundingClientRect().top - visible.top;
-    if (rect.bottom > visible.bottom && roomAbove >= rect.height + 4) setFlipped(true);
+    if (side !== "below") return;
+    const place = () => {
+      const anchor = root.current;
+      const panel = menu.current;
+      if (!anchor || !panel) return;
+      const height = panel.offsetHeight + 4;
+      const visible = visibleRange(anchor);
+      const at = anchor.getBoundingClientRect();
+      setFlipped(visible.bottom - at.bottom < height && at.top - visible.top >= height);
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
   }, [open, side]);
   if (!items.length && !info) return null;
   return (

@@ -38,7 +38,7 @@ import { monitorWakeInput, monitorWakeReplyIds } from "./monitorWakeModel.ts";
 import { foldMonitorWakes } from "./monitorWakeTurns.ts";
 import { mergeNoticeItems, useRejectionNotices } from "./useRejectionNotices.ts";
 import { ReclaimTurnSwitch } from "./ReclaimTurnSwitch.tsx";
-import { DeleteMessageButton, MessageDeleteProvider } from "./MessageDelete.tsx";
+import { DeleteMessageButton, MessageDeleteProvider, type DeletableItem } from "./MessageDelete.tsx";
 import { TurnActions } from "./TurnActions.tsx";
 import { conversationInputAnchor, conversationInputs, REQUIREMENT_INPUT_ID, requirementAuthor } from "./conversationInputs.ts";
 
@@ -186,35 +186,54 @@ function shallowRest(prev: AgentMessageProps, next: AgentMessageProps): boolean 
 
 function UserMessage({
   item,
-  author,
   preserveSystemStyle = false,
 }: {
   item: Extract<ConversationItem, { kind: "user" }>;
-  /** 头上写谁说的；不给就按 bySystem 写「系统」或「你」。原始需求那颗按任务来源给。 */
-  author?: string;
   preserveSystemStyle?: boolean;
 }) {
-  // 刚发出去的那一句上移 4px 淡入（run-1）；页面打开时已经在的不动。
-  const [fresh] = useState(() => !!item.at && Date.now() - Date.parse(item.at) < 5000);
-  const parsed = parseAttachmentText(item.text);
-  const displayBody = annotationBatchDisplayText(parsed.body) ?? parsed.body;
   if (item.isAnswer || isQuestionAnswer(item.text)) return <AnsweredQuestionMessage text={item.text} id={item.id} at={item.at} deletable={item} />;
-  const paths = [...parsed.paths, ...item.attachments];
   const bySystem = !!item.bySystem;
   const reviewPrompt = isReviewSystemPrompt(item.text);
   if (bySystem && (!preserveSystemStyle || monitorWakeInput(item)) && !reviewPrompt) {
     return <SystemAuthoredMessage item={item} />;
   }
+  return <UserBubble id={item.id} author={bySystem ? "系统" : "你"} text={item.text} attachments={item.attachments} at={item.at} bySystem={bySystem} deletable={item} />;
+}
+
+/**
+ * 原始需求：任务正文画成会话的第一颗气泡。它是任意一段需求文字，不是会话里的协议消息——
+ * 正文碰巧以「【答复】」开头也不当答复卡、不当系统代写，直接走普通气泡；谁说的照任务来源写，
+ * 没有删除（它不在会话正文里）。
+ */
+function RequirementMessage({ requirement }: { requirement: { text: string; at?: string | null; origin?: TaskCreationOrigin | null } }) {
+  return <UserBubble id={REQUIREMENT_INPUT_ID} author={requirementAuthor(requirement.origin)} text={requirement.text} attachments={[]} at={requirement.at ?? undefined} />;
+}
+
+function UserBubble({ id, author, text, attachments, at, bySystem = false, deletable }: {
+  /** 条目 id：左侧输入导航按它找到这颗气泡。 */
+  id: string;
+  author: string;
+  text: string;
+  attachments: readonly string[];
+  at?: string;
+  bySystem?: boolean;
+  deletable?: DeletableItem;
+}) {
+  // 刚发出去的那一句上移 4px 淡入（run-1）；页面打开时已经在的不动。
+  const [fresh] = useState(() => !!at && Date.now() - Date.parse(at) < 5000);
+  const parsed = parseAttachmentText(text);
+  const displayBody = annotationBatchDisplayText(parsed.body) ?? parsed.body;
+  const paths = [...parsed.paths, ...attachments];
   return (
     <article className={`task-message task-message--user${bySystem ? " is-system-authored" : ""}${fresh ? " is-fresh" : ""}`}>
-      <div className="task-user-bubble" {...conversationInputAnchor(item.id)}>
+      <div className="task-user-bubble" {...conversationInputAnchor(id)}>
         <header>
-          <b>{author ?? (bySystem ? "系统" : "你")}</b>
-          {item.at && <time>{formatInstant(item.at)}</time>}
+          <b>{author}</b>
+          {at && <time>{formatInstant(at)}</time>}
           {displayBody && (
             <CopyButton value={displayBody} ariaLabel="复制这条回复" icon />
           )}
-          <DeleteMessageButton item={item} />
+          {deletable && <DeleteMessageButton item={deletable} />}
         </header>
         {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <p>{displayBody}</p>)}
         <MessageAttachments paths={paths} />
@@ -306,9 +325,6 @@ export function ConversationFeed({
     () => conversationInputs(requirementText === undefined ? null : { text: requirementText, at: requirementAt }, items),
     [items, requirementAt, requirementText],
   );
-  const requirementItem: Extract<ConversationItem, { kind: "user" }> | null = inputs[0]?.id === REQUIREMENT_INPUT_ID
-    ? { kind: "user", id: REQUIREMENT_INPUT_ID, text: requirementText!, attachments: [], ...(requirementAt ? { at: requirementAt } : {}) }
-    : null;
   const activityPhase = runActivityPhase(task.status, runActivityTail(items));
   const queuedCopy = task.status === "queued"
     ? runActivityCopy({ status: task.status, mode: task.mode, phase: activityPhase ?? undefined, queuePosition: task.queuePosition })
@@ -421,7 +437,7 @@ export function ConversationFeed({
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
-          {requirementItem && <UserMessage item={requirementItem} author={requirementAuthor(requirement?.origin)} />}
+          {requirement && inputs[0]?.id === REQUIREMENT_INPUT_ID && <RequirementMessage requirement={requirement} />}
           {rows.map((row) => {
             if (row.kind === "item") return renderItem(row.item);
             if (row.kind === "system-action") {

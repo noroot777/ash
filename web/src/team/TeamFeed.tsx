@@ -67,24 +67,35 @@ function AgentRow({
   );
 }
 
-function UserRow({ row, author }: {
-  row: Extract<TeamFeedRow, { kind: "conv" }>["item"];
-  /** 头上写谁说的；不给就按 bySystem 写「系统」或「你」。原始需求那颗按任务来源给。 */
-  author?: string;
-}) {
+function UserRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"] }) {
   if (row.kind !== "user") return null;
   if (row.isAnswer || isQuestionAnswer(row.text)) return <AnsweredQuestionMessage text={row.text} id={row.id} at={row.at} />;
-  const parsed = parseAttachmentText(row.text);
-  const displayBody = annotationBatchDisplayText(parsed.body) ?? parsed.body;
-  const paths = [...parsed.paths, ...row.attachments];
   const bySystem = !!row.bySystem;
   if (bySystem && !isReviewSystemPrompt(row.text)) {
     return <SystemAuthoredMessage item={row} surface="team" />;
   }
+  return <UserBubble id={row.id} author={bySystem ? "系统" : "你"} text={row.text} attachments={row.attachments} at={row.at} bySystem={bySystem} />;
+}
+
+/**
+ * 一颗普通的输入气泡。调度台的原始需求（任务正文）直接用它画第一颗、不经 UserRow：那是任意一段
+ * 需求文字，以「【答复】」开头也不当答复卡、不当系统代写（同 ConversationFeed 的 RequirementMessage）。
+ */
+function UserBubble({ id, author, text, attachments, at, bySystem = false }: {
+  id: string;
+  author: string;
+  text: string;
+  attachments: readonly string[];
+  at?: string;
+  bySystem?: boolean;
+}) {
+  const parsed = parseAttachmentText(text);
+  const displayBody = annotationBatchDisplayText(parsed.body) ?? parsed.body;
+  const paths = [...parsed.paths, ...attachments];
   return (
     <article className={`team-feed-user${bySystem ? " is-system-authored" : ""}`}>
-      <div {...conversationInputAnchor(row.id)}>
-        <header><b>{author ?? (bySystem ? "系统" : "你")}</b>{row.at && <time>{formatInstant(row.at)}</time>}</header>
+      <div {...conversationInputAnchor(id)}>
+        <header><b>{author}</b>{at && <time>{formatInstant(at)}</time>}</header>
         {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <p>{displayBody}</p>)}
         <MessageAttachments paths={paths} />
       </div>
@@ -215,9 +226,6 @@ export function TeamFeed({
     () => conversationInputs({ text: task.body, at: task.createdAt }, rows.flatMap((row) => row.kind === "conv" ? [row.item] : [])),
     [rows, task.body, task.createdAt],
   );
-  const requirementItem: Extract<TeamFeedRow, { kind: "conv" }>["item"] | null = inputs[0]?.id === REQUIREMENT_INPUT_ID
-    ? { kind: "user", id: REQUIREMENT_INPUT_ID, text: task.body, attachments: [], at: task.createdAt }
-    : null;
   const hiddenTimes = new Set<string>();
   let previousConversationItem: Extract<TeamFeedRow, { kind: "conv" }>["item"] | null = null;
   for (const row of rows) {
@@ -244,7 +252,9 @@ export function TeamFeed({
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region">
         <section className="team-feed" aria-label="团队调度流" ref={scroll}>
-          {requirementItem && <UserRow row={requirementItem} author={requirementAuthor(task.creationOrigin)} />}
+          {inputs[0]?.id === REQUIREMENT_INPUT_ID && (
+            <UserBubble id={REQUIREMENT_INPUT_ID} author={requirementAuthor(task.creationOrigin)} text={task.body} attachments={[]} at={task.createdAt} />
+          )}
           {!rows.length && !activityPhase && <p className="team-feed-empty">运行后，调度者的拆解、派活、执行者提问与汇报会按发生顺序出现在这里。</p>}
           {rows.map((row) => {
             if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} indicatorForTask={indicatorForTask} />;
