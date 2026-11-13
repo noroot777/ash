@@ -4,6 +4,7 @@ import { useScrollEdges } from "../lib/useScrollEdges.ts";
 import { motionReduced } from "../lib/useSwapText.ts";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { useUserScrolling } from "../lib/useUserScrolling.ts";
+import { useSearchReveal } from "../search/useSearchReveal.ts";
 import type { ConversationInput } from "../task-detail/conversationInputs.ts";
 import { ConversationInputRail } from "./ConversationInputRail.tsx";
 
@@ -14,6 +15,7 @@ export function ConversationScrollControls({
   resetKey,
   tailKey,
   inputs,
+  revealReady,
 }: {
   scrollRef: RefObject<HTMLElement | null>;
   resetKey: ResetKey;
@@ -25,8 +27,14 @@ export function ConversationScrollControls({
    * 否则跳过去读着读着,下一条新消息就把人拽回了底部。
    */
   inputs?: readonly ConversationInput[];
+  /**
+   * 给了就表示这是一个任务的会话（resetKey 即任务 id），接 ⌘K「打开命中、落到命中处」的待办；
+   * 值是正文读完了没有，见 useSearchReveal。群聊、侧聊这类不是任务会话的表面不给。
+   */
+  revealReady?: boolean;
 }) {
   const { noteUserScrollIntent, resume, hold } = useStickToBottom(scrollRef, resetKey, tailKey);
+  useSearchReveal(scrollRef, revealReady === undefined || typeof resetKey !== "string" ? null : resetKey, !!revealReady, noteUserScrollIntent);
   const { atTop, atBottom } = useScrollEdges(scrollRef, resetKey);
   const top = useRef<HTMLButtonElement>(null);
   const scrolling = useUserScrolling(scrollRef, resetKey, top);

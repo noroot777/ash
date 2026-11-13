@@ -28,6 +28,7 @@ import { GitOverviewPanel, GitProjectStep } from "./CommandPaletteGit.tsx";
 import { SearchHitList, SearchPreview } from "./CommandPaletteSearch.tsx";
 import { usePaletteSearch } from "./usePaletteSearch.ts";
 import { usePaletteSelection } from "./usePaletteSelection.ts";
+import { requestSearchReveal } from "../search/searchReveal.ts";
 import "../styles/palette-search.css";
 import {
   ScopeProjectStep,
@@ -381,6 +382,9 @@ export function CommandPalette({
         return;
       }
       const task = tasks.find((row) => row.id === hit.id) ?? await api.task(hit.id);
+      // 命中在正文或会话里：会话直接落到那一处、把词闪几下（search/searchReveal.ts）。
+      // 标题 / id 命中要找的就是这个任务本身，照常落在最新一条。归档的去的是归档页，没有会话可落。
+      if (!hit.archived && (hit.field === "body" || hit.field === "conversation")) requestSearchReveal(hit.id, query, hit.snippet);
       onTask(task);
       if (hit.archived) onSettings("archive");
     }).catch((error: unknown) => notify(error instanceof Error ? error.message : "搜索结果打开失败"));

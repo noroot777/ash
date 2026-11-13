@@ -402,7 +402,7 @@ export function DuetView({
           {/* resetKey 只认「换了哪个任务」。以前它还混着 turns.length,于是每开一轮都被
               当成换任务、无条件拽到底 —— 读历史读到一半就被打断(审查 B5)。新一轮该不该
               跟,现在由下面这个内容版本说了算:贴着底就跟,在上面读历史就不动。 */}
-          <ConversationScrollControls scrollRef={scrollRef} resetKey={task.id} inputs={inputs}
+          <ConversationScrollControls scrollRef={scrollRef} resetKey={task.id} inputs={inputs} revealReady={!duet.loading}
             tailKey={contentVersion(turns, duetTurnSize,
               (turn) => `${turn.round}:${turn.speaker}:${turn.done ? 1 : 0}`)} />
         </div>

@@ -221,7 +221,12 @@ export function useStickToBottom(
   const noteUserScrollIntent = useCallback((detachFromBottom = true) => {
     userScrollIntentRef.current = true;
     detachingUserIntentRef.current = detachFromBottom;
-    if (detachFromBottom) stuckRef.current = false;
+    if (detachFromBottom) {
+      stuckRef.current = false;
+      // 首屏那次「落到最新一条」还没来得及执行时，往回看的意图同样作数：读者（或替他跳转的
+      // 导航条、⌘K 落点）刚把视口挪到别处，下一帧不能再被这张一次性放行拽回底部。
+      forceStickRef.current = false;
+    }
     programmaticScrollRef.current = false;
     clearTimeoutRef(userIntentTimeoutRef);
     userIntentTimeoutRef.current = window.setTimeout(() => {
