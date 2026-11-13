@@ -1,5 +1,5 @@
 import { eq, sql } from "drizzle-orm";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent, TurnOutcome } from "@ash/shared";
 import { NO_RESUMABLE_SESSION_NOTE, ROTATION_ALREADY_ANNOUNCED } from "@ash/shared/session-notes";
 import { db } from "../db/index.js";
 import { sessions } from "../db/schema.js";
@@ -399,15 +399,20 @@ async function endTurn(lead: Lead): Promise<void> {
   // 无条件记 completed 的那一版于是让时间线红着写「已按失败结算」、区间却是成功
   // (第 1 轮审查第 2 条,已实测)。结论由下结论的一方钉在回合身份上(../turn-stall-verdict.ts),
   // 这里只用上面取走的那一份;写完销账 —— 这一轮的区间已经落定,不会再有人来读。
+  const outcome: TurnOutcome = watchdogFailed ? "failed" : "completed";
   await recordTurnSpan({
     sessionId: lead.sessId,
     taskId: lead.taskId,
     cwd: lead.cwd,
     startedAt: turnStart,
     endedAt: endIso,
-    outcome: watchdogFailed ? "failed" : "completed",
+    outcome,
   });
   clearStallFailure(lead.sessId, turnStart);
+  // 直播那一路的回合边界,带着**同一份**结局(见 AgentEvent 的 turnEnd.turnOutcome):被熔断的
+  // 那一轮执行器报的是正常收口,只有它说得清。排在投递攒着的汇报之前 —— 那一下会开新回合,
+  // 边界落在新回合的输出后面就画错了位置。不知道是哪一轮(没有身份)就不带结局。
+  publish(lead, { kind: "turnEnd", ...(turnStart ? { turnOutcome: outcome } : {}) });
   writeTurnEnd(lead.out, endIso);
   flushSessionNotices(lead);
   // 还有回合在手：攒着的执行者汇报等它真正空下来再合并送（省一轮模型调用本来就是这么来的）,
