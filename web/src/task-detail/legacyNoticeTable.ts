@@ -26,6 +26,7 @@
 // 以提问暂停、你自己停的）界面别处已经在说，是回执。
 
 import { ACCEPT_GATE_FAILURE_LABELS } from "@ash/shared/accept-gate";
+import { COMMAND_NOTE_HEAD } from "@ash/shared/command-note";
 
 /** 判法 1：只有提醒才这么起头（注释是写它的文件，便于对照）。 */
 const ALERT_LEADS: readonly RegExp[] = [
@@ -144,39 +145,43 @@ const GATE_FAILED = new RegExp(`\` (?:未通过|被打断|已取消)：(?:${GATE
  * 跑绿了的那一句后面**什么都不补**（补的说明只有超时、被收掉时才有），整句一定以「` 通过（rc=0）。」收尾；
  * 没跑绿的结尾不是成败本身，就是服务端写死的说明。所以认结尾：结尾是跑绿了的就是回执，否则是提醒。
  */
+const GATE_HEAD = "验收前置命令 `";
+
 function gateVerdict(text: string): "passed" | "failed" | null {
-  if (!text.startsWith("验收前置命令 `")) return null;
-  if (/` 通过（rc=0）。?$/.test(text)) return "passed";
+  if (!text.startsWith(GATE_HEAD)) return null;
+  if (/` 通过（rc=0）。?\s*$/.test(text)) return "passed";
   return GATE_FAILED.test(text) ? "failed" : null;
 }
 
 export type CommandVerdict = "passed" | "failed" | "unknown";
 
-const COMMAND_HEAD = "跑了一条命令：`";
-
 /**
- * workflow-steps：「跑了一条命令：`<命令>`（通过|没通过）」，后面换行接命令的输出。命令和输出都是任意
- * 文字（命令可以跨行、可以引一段「`（没通过）」），开头结尾都夹着引文，单看字面切不准命令在哪儿结束。
+ * workflow-steps：「跑了一条命令：`<命令>`（通过|没通过）」，后面换行接命令的输出（生成那一头在
+ * @ash/shared/command-note，格式以它为准）。命令和输出都是任意文字（命令可以跨行、可以引一段
+ * 「`（没通过）」），开头结尾都夹着引文，单看字面切不准命令在哪儿结束。
  *
- * 所以把每一种切法都列出来：命令在某个「`（通过）/（没通过）」之前结束、后面是服务端那种接法。真的那一种
- * 一定在里面——各种切法给的成败一样，那就是它；不一样，再拿任务工作流里写的那几条命令（`commands`）
- * 逐字对一遍，对得上唯一一种切法就是它；还定不了就是认不出。
+ * 所以把每一种切法都列出来：命令在某个「`（通过）/（没通过）」之前结束、后面是换行或者整句到头。真的
+ * 那一种一定在里面——各种切法给的成败一样，那就是它；不一样，再拿任务工作流里写的那几条命令（`commands`）
+ * 逐字对一遍，对得上唯一一种切法就是它；还定不了、或者一种切法都列不出来，就是认不出。
+ *
+ * 切法只认「换行或到头」，不要求换行后面还有字：没通过的原因可以是空串（命令只吐了空白，裁完就空了），
+ * 那句话以「（没通过）\n」结尾，展示前再裁一道空白就只剩「（没通过）」。要求后面非空，真的那一种切法
+ * 就会掉出去，剩下引文里那段「`（通过）」说了算——把失败认成回执。多列几种切法只会多一些认不出，
+ * 少列真的那一种就会认反。
  */
 export function commandVerdict(text: string, commands: readonly string[] = []): CommandVerdict | null {
-  if (!text.startsWith(COMMAND_HEAD)) return null;
-  const rest = text.slice(COMMAND_HEAD.length);
-  // 没通过的那句换行后面一定有原因（至少是「命令失败」）；通过的那句要么就此结尾，要么换行接非空的输出。
+  if (!text.startsWith(COMMAND_NOTE_HEAD)) return null;
+  const rest = text.slice(COMMAND_NOTE_HEAD.length);
   const verdictAt = (end: number): "passed" | "failed" | null => {
     const tail = rest.slice(end);
-    if (/^`（没通过）\n[\s\S]/.test(tail)) return "failed";
-    return /^`（通过）(?:$|\n[\s\S])/.test(tail) ? "passed" : null;
+    if (/^`（没通过）(?:\n|$)/.test(tail)) return "failed";
+    return /^`（通过）(?:\n|$)/.test(tail) ? "passed" : null;
   };
   const cuts = new Map<number, "passed" | "failed">();
   for (let end = rest.indexOf("`（"); end >= 0; end = rest.indexOf("`（", end + 1)) {
     const verdict = verdictAt(end);
     if (verdict) cuts.set(end, verdict);
   }
-  if (!cuts.size) return null;
   const verdicts = new Set(cuts.values());
   if (verdicts.size === 1) return [...verdicts][0]!;
   const known = new Set([...new Set(commands)].flatMap((cmd) => cuts.has(cmd.length) && rest.startsWith(cmd) ? [cuts.get(cmd.length)!] : []));
@@ -204,6 +209,17 @@ function head(raw: string): string {
   return raw.replace(/^〔系统〕/, "").trimStart();
 }
 
+/**
+ * 整句是服务端的固定格式、中间原样夹着你写的字（命令、命令的输出、哨兵的描述）的那几种。它们只能按
+ * 格式认（commandVerdict / gateVerdict / RECEIPT_LEADS），**不能**再拿去全文找字：命令里写一句
+ * 「第 2 轮审查通过」「现在由你裁定：」，全文找字的那几处（审查轮起止、待裁定、工作区恢复…）就把
+ * 一条没通过的命令认成了别的事。认老记录的各处先问它一声，是就只交给 legacyTier。
+ */
+export function quotesUserText(raw: string): boolean {
+  const text = head(raw);
+  return text.startsWith(COMMAND_NOTE_HEAD) || text.startsWith(GATE_HEAD) || RECEIPT_LEADS.some((lead) => lead.test(text));
+}
+
 function alertShape(text: string): boolean {
   return ALERT_LEADS.some((lead) => lead.test(text)) || ALERT_ENDINGS.some((ending) => ending.test(text));
 }
@@ -215,13 +231,16 @@ export type LegacyTier = "alert" | "receipt" | "unknown";
  * 工作流里跑的那条命令从字面上认不出成败的是 `unknown`（见 commandVerdict）。
  * `settlement`：这是一条结算说明（`level:"notice"`），多认 SETTLEMENT_LEADS 那几句。
  * `commands`：这个任务的工作流里写的那几条命令，认命令那一句时拿来对。
+ * `source`：落盘的原话（没裁空白、没换预览地址）。命令那一句和门禁摘要按格式切，切点靠的是原话里
+ * 的每一个字——展示前那几道归一会改掉命令里的地址、裁掉结尾的换行，拿改过的字去对工作流里的命令就对不上。
  */
-export function legacyTier(raw: string, options: { settlement?: boolean; commands?: readonly string[] } = {}): LegacyTier {
+export function legacyTier(raw: string, options: { settlement?: boolean; commands?: readonly string[]; source?: string } = {}): LegacyTier {
   const text = head(raw);
   if (RECEIPT_LEADS.some((lead) => lead.test(text))) return "receipt";
-  const command = commandVerdict(text, options.commands);
+  const said = head(options.source ?? raw);
+  const command = commandVerdict(said, options.commands);
   if (command) return command === "failed" ? "alert" : command === "passed" ? "receipt" : "unknown";
-  const gate = gateVerdict(text);
+  const gate = gateVerdict(said);
   if (gate) return gate === "failed" ? "alert" : "receipt";
   if (options.settlement && SETTLEMENT_LEADS.some((lead) => lead.test(text))) return "alert";
   return alertShape(text) ? "alert" : "receipt";

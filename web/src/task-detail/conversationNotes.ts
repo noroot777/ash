@@ -7,6 +7,7 @@
 //   boundary 回合边界(本轮执行结束 / 执行异常结束 / 本回合结束),保留整宽横线
 import { SESSION_POISON_DIAGNOSIS_PREFIX, stripSessionNotes } from "@ash/shared/session-notes";
 import type { TimelineNotice } from "@ash/shared/timeline-notice";
+import { quotesUserText } from "./legacyNoticeTable.ts";
 
 // notice = 结算说明（「这一轮为什么落成这个状态」）。它由服务端**显式标记**（事件和落盘
 // 行上的 level:"notice"），不参与下面的关键词推断 —— 这类说明里天然带着「未完成」，猜出
@@ -98,7 +99,8 @@ const STARTS = /开始|重跑上一回合|从中断处继续/;
 const DEBATE_NOTE = /辩论/;
 
 export function verifyNoteOf(text: string): VerifyNoteMark | null {
-  if (DEBATE_NOTE.test(text)) return null;
+  // 命令、哨兵描述里写的「第 N 轮审查…」不是审查轮的起止（见 quotesUserText）。
+  if (DEBATE_NOTE.test(text) || quotesUserText(text)) return null;
   const matched = VERIFY_NOTE.exec(text);
   if (matched) {
     const round = Number(matched[2]);

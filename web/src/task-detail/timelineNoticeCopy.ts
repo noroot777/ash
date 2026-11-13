@@ -16,12 +16,13 @@
 // 系统注记）退回老读法：认原文里的几个固定说法，再按起头表（legacyNoticeTable）认要你知道的
 // 那几句，其余一律是回执。只有这一处还在读原文。
 import { LEGACY_SYS_MARKER, STAGE_LABELS, type TaskStage } from "@ash/shared";
+import { normalizeSessionNoteText } from "@ash/shared/session-notes";
 import type { TimelineNotice, TimelineReviewSource } from "@ash/shared/timeline-notice";
 import { previewNoticeText } from "../lib/previewUrl.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
 import { isWorkspaceRecoveryNote, verifyNoteOf } from "./conversationNotes.ts";
 import { pendingDisputeEvent } from "./systemNoticeModel.ts";
-import { legacyTier } from "./legacyNoticeTable.ts";
+import { legacyTier, quotesUserText } from "./legacyNoticeTable.ts";
 
 export type NoticeTier = "milestone" | "alert" | "reply" | "receipt";
 /**
@@ -203,6 +204,8 @@ export type NoticeContext = {
 };
 
 function legacyView(item: NoticeSource, raw: string, context: NoticeContext): NoticeView {
+  // 夹着你写的字的那几种只按格式认，先于下面那些全文找字的说法（见 quotesUserText）。
+  if (quotesUserText(item.text)) return legacyTierView(item, raw, context);
   if (isWorkspaceRecoveryNote(item.text)) {
     return {
       tier: "alert", tone: "neutral", topic: "other", text: "工作区已恢复，会话内容都在",
@@ -225,7 +228,14 @@ function legacyView(item: NoticeSource, raw: string, context: NoticeContext): No
     if (/未能正常给出结论/.test(raw)) return view("milestone", "warn", "review", reviewVerdictText(mark.kind, mark.round, "inconclusive"), raw);
   }
   if (item.text.includes(LEGACY_SYS_MARKER)) return generic("receipt", "neutral", raw);
-  const tier = legacyTier(raw, { settlement: item.tone === "notice", commands: context.commands });
+  return legacyTierView(item, raw, context);
+}
+
+function legacyTierView(item: NoticeSource, raw: string, context: NoticeContext): NoticeView {
+  // 按格式切的那几句拿落盘原话去切：展示用的 raw 裁过空白、换过预览地址（noticeRawText）。
+  // 原话在读进来时归一过一道轮换旁注的旧文案（normalizeSessionNoteText），工作流里的命令也照样归一了再对。
+  const commands = context.commands?.flatMap((cmd) => [cmd, normalizeSessionNoteText(cmd)]);
+  const tier = legacyTier(raw, { settlement: item.tone === "notice", commands, source: item.text });
   // 命令里、输出里各引了一段像成败的字，字面上切不出是哪一种：说认不出，原文点开看，不替它猜成败。
   if (tier === "unknown") return view("alert", "warn", "other", "跑了一条命令，老记录里认不出它通过没有", raw);
   return generic(tier, tier === "alert" ? "warn" : "neutral", raw);

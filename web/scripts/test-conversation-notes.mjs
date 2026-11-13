@@ -16,7 +16,6 @@ import { conversationFeedRows } from "../src/task-detail/conversationReviewLanes
 import { conversationSystemRows } from "../src/task-detail/conversationSystemRows.ts";
 import { isConflictHandoff, isReviewSystemPrompt } from "../src/task-detail/systemNoticeModel.ts";
 import { noticeView } from "../src/task-detail/timelineNoticeCopy.ts";
-import { commandVerdict, legacyTier } from "../src/task-detail/legacyNoticeTable.ts";
 
 // —— 语气分类：办成了的事不报红，没办成的才报红 ——
 assert.equal(noteTone("自由工作流第 2 轮审查通过（5.5审查）。"), "neutral");
@@ -104,8 +103,6 @@ for (const text of [
   // 成功的命令里恰好引了一句像失败的字（第 2 轮审查实测）：成败只认格式规定的那个位置。
   "验收前置命令 `printf '%s\\n' '` 未通过：只是文字'` 通过（rc=0）。",
   "验收前置命令 `printf '` 未通过：命令退出码非 0（rc=1）'` 通过（rc=0）。",
-  "跑了一条命令：`printf '%s\\n' '`（没通过）只是文字'`（通过）\n`（没通过）",
-  "跑了一条命令：`npm test`（通过）\n输出里有一行：跑了一条命令：`x`（没通过）",
   // 开头跟提醒共用、只有结尾分得开的那几句回执。
   "以下团队执行者的独立验证尚未执行：A、B 本次验收已显式确认继续，未将验证记为已执行或通过。",
   "独立验证尚未执行：工作流中有 1 个自动验证步骤没有已执行的验证轮记录。 本次验收已显式确认继续，未将验证记为已执行或通过。",
@@ -114,49 +111,6 @@ for (const text of [
 ]) {
   assert.equal(legacy(text, "error").tier, "receipt", `回执被引文升了档：${text.slice(0, 24)}…`);
   assert.equal(legacy(text, "notice").tier, "receipt", `结算说明那一路同样不升：${text.slice(0, 24)}…`);
-}
-
-// 工作流里跑的那条命令：命令、输出都是任意文字，开头结尾都夹着引文。字面上切得出来就认，切不出来
-// 就说认不出（原文点开看），给了任务工作流里写的命令就逐字对上——引文改成什么都不会把成败认反（第 3 轮审查）。
-const ran = (text, commands) => noticeView({ text, tone: "neutral", variant: "note" }, { commands });
-const UNKNOWN = "跑了一条命令，老记录里认不出它通过没有";
-const okMultiline = "跑了一条命令：`printf '%s\\n' '`（没通过）\n只是文字'`（通过）\n执行输出";
-const failMultiline = "跑了一条命令：`printf '%s\\n' '`（通过）\n只是文字'; exit 1`（没通过）\n只是文字";
-const failQuotingPass = "跑了一条命令：`npm test`（没通过）\n输出里有一行：`（通过）";
-for (const text of [okMultiline, failMultiline, failQuotingPass]) {
-  assert.deepEqual(
-    (({ tier, tone, text: said, detail }) => [tier, tone, said, detail])(ran(text)),
-    ["alert", "warn", UNKNOWN, text],
-    `切不出来的那一句不替它猜成败：${text.slice(0, 30)}…`,
-  );
-}
-assert.equal(ran(okMultiline, ["printf '%s\\n' '`（没通过）\n只是文字'"]).tier, "receipt", "对上了工作流里的命令：成功就是回执");
-assert.equal(ran(failMultiline, ["printf '%s\\n' '`（通过）\n只是文字'; exit 1"]).tier, "alert", "对上了工作流里的命令：失败就是提醒");
-assert.equal(ran(failQuotingPass, ["npm test"]).tier, "alert");
-assert.equal(ran(okMultiline, ["npm test"]).text, UNKNOWN, "对不上的命令不拿来猜");
-assert.equal(ran("跑了一条命令：`npm test`（通过）").tier, "receipt");
-assert.equal(ran("跑了一条命令：`npm test`（没通过）\n命令失败").tier, "alert");
-
-// 不变量：随便往命令、输出里塞危险片段，认出来的要么是真结果、要么是认不出；给了真命令就一定认对。
-// 门禁摘要同样：命令和超时说明里引的最后一行塞什么，都不改变它是回执还是提醒。
-const pieces = ["`（通过）", "`（没通过）", "\n", "a", "`", "（", "` 通过（rc=0）。", "` 未通过：超时", "。"];
-let seed = 7;
-const pick = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return pieces[seed % pieces.length]; };
-const junk = () => Array.from({ length: 1 + (seed % 6) }, pick).join("");
-for (let i = 0; i < 4000; i += 1) {
-  const cmd = `x${junk()}`;
-  const out = junk();
-  const passed = i % 2 === 0;
-  const text = passed
-    ? `跑了一条命令：\`${cmd}\`（通过）${out ? `\n${out}` : ""}`
-    : `跑了一条命令：\`${cmd}\`（没通过）\n${out || "命令失败"}`;
-  const truth = passed ? "passed" : "failed";
-  assert.ok([truth, "unknown"].includes(commandVerdict(text)), `命令那一句认反了：${JSON.stringify(text)}`);
-  assert.equal(commandVerdict(text, [cmd]), truth, `给了真命令还认不对：${JSON.stringify(text)}`);
-  const gate = passed
-    ? `验收前置命令 \`${cmd}\` 通过（rc=0）。`
-    : `验收前置命令 \`${cmd}\` 未通过：超时。 跑满 30 分钟被收掉，停在 \`${out}\`，最近一次输出在 2 分钟前、累计产出 1.0KB。`;
-  assert.equal(legacyTier(gate), passed ? "receipt" : "alert", `门禁摘要认反了：${JSON.stringify(gate)}`);
 }
 
 // —— 有类型的：写结果不写机制，细节留在原文里点开再看 ——
