@@ -67,6 +67,7 @@ final class OfflineView: NSView {
   @objc private func retry() { onRetry?() }
   @objc private func openLog() { if let log { NSWorkspace.shared.open(log) } }
 
-  // 盖住页面时别让点击、滚动漏到底下的 WKWebView。
-  override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) ?? self }
+  // 不重写 hitTest：AppKit 默认就是「显示时盖住的范围归自己、隐藏时返回 nil」，点击既不会
+  // 漏到底下的页面，也不会在占位收起后继续被吞。曾写成 `super.hitTest(point) ?? self`，
+  // 隐藏时 super 返回 nil 被兜成 self，整个窗口点什么都没反应。
 }
