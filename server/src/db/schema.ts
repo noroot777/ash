@@ -692,7 +692,7 @@ export const queueAdvanceIntents = sqliteTable("queue_advance_intents", {
 // 接力的三张表住在 schema-handoff.ts（见那份的说明）。这里转发，导入路径不变。
 export { handoffPeers, handoffLocalPeerKeys, handoffLocalKeyRevisions } from "./schema-handoff.js";
 // 哨兵表住在隔壁（见 schema-monitors.ts 的说明）。这里转发，导入路径不变。
-export { monitors, monitorPendingCalls, monitorScanCursors, monitorReclaimDebts } from "./schema-monitors.js";
+export { monitors, monitorReclaimDebts } from "./schema-monitors.js";
 export { taskBackgroundRevisions } from "./schema-task-background.js";
 export { taskDiskCleanups } from "./schema-run-disk.js";
 export { regressionChecks } from "./schema-regression-checks.js";

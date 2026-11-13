@@ -26,18 +26,6 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_materialization TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_physical TEXT",
   "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
-  // 读取层的两份独立状态:可续读位置 probe、永久缺口全集 gaps(JSON 数组)。
-  "ALTER TABLE monitor_scan_cursors ADD COLUMN probe INTEGER NOT NULL DEFAULT 0",
-  "ALTER TABLE monitor_scan_cursors ADD COLUMN gaps TEXT NOT NULL DEFAULT '[]'",
-  // 这个文件报的 CLI 身份:来源**全集**的持久依据(第 6 轮审查 N2)。旧行 NULL = 还没读到过,
-  // 那时「只有我这一个来源」证明不了,于是不认领无归属的存量行 —— 保守的那一边。
-  "ALTER TABLE monitor_scan_cursors ADD COLUMN source TEXT",
-  // 这份位置是哪一代消费语义下确认的（第 9/10 轮审查）。旧行 NULL = 第一代,没有当代戳的
-  // 一律重放一遍 —— 旧代确认掉的事实（被键挤掉的卡、没合并的终态）只能靠重读补回来。
-  "ALTER TABLE monitor_scan_cursors ADD COLUMN semantics INTEGER",
-  // 调用发生时那一行报的 CLI 身份。旧行 NULL = 当初没记,那时只能靠 source_run 自证来源
-  // (键的重建在 migrations.ts 的 repairPendingCallKey —— SQLite 改不了主键)。
-  "ALTER TABLE monitor_pending_calls ADD COLUMN cli_session_id TEXT",
   // 身份还没补全时,把「那一刻 spawn 的」这个时间锚留在债上:哨兵行和身份边条都可能先没了,
   // 而缺了锚,一次查询失败就被永久固化成「这条证不出身份」(第 10 轮审查 F2-B)。
   "ALTER TABLE monitor_reclaim_debts ADD COLUMN spawn_anchor_ms INTEGER",
@@ -61,8 +49,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE monitors ADD COLUMN timeout_ms INTEGER",
   // 起点锚点的误差界。存量行一律 NULL = 无法重验 ⇒ 对外只给时长（见 schema-monitors.ts）。
   "ALTER TABLE monitors ADD COLUMN start_anchor_width_ms INTEGER",
-  // 起它的那个 tool_use id。检查点的另一半:位置之前的配对关系靠它从库里重建
-  // （见 claude-monitor-commit.ts 的文件头）。存量行 NULL，读到回执时顺手补上。
+  // 起它的那个 tool_use id。存量行 NULL。
   "ALTER TABLE monitors ADD COLUMN tool_use_id TEXT",
   // 代次结论与起点下界的持久化依据(见 schema-monitors.ts)。存量行一律 NULL。
   "ALTER TABLE monitors ADD COLUMN source_run TEXT",

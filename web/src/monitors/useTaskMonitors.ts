@@ -4,7 +4,7 @@
 // server 重启都带不走它），代价就是「有个进程在后台跑着」这件事再没有别的地方看得见。
 // 只在 agent 的对话里说一句「已起哨兵」不算数——刷新页面后就什么都不剩了。
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { MonitorRecovery, MonitorWakeTarget, TaskMonitor } from "@ash/shared/monitor";
+import type { MonitorWakeTarget, TaskMonitor } from "@ash/shared/monitor";
 import { ApiError, api } from "../lib/api.ts";
 import { catchUpAbortKind } from "../lib/catchUp.ts";
 import { useServerEvents } from "../lib/events.ts";
@@ -48,18 +48,6 @@ export type TaskMonitorsState = ReturnType<typeof useTaskMonitors>;
 
 export function useTaskMonitors(taskId: string) {
   const [monitors, setMonitors] = useState<TaskMonitor[]>([]);
-  /**
-   * 「这份列表读完了没有」。
-   *
-   * 面板为空有**三种**完全不同的含义，一种都不能混进另一种（第 6 轮要求分开前两种，第 7 轮
-   * 实测第三种被当成了第二种）：
-   *
-   * ① 还没读完（`recovery.pending`）——扫描撞上单次上限、会话文件读不开、有记录没落库……
-   * ② 确实没用过哨兵（`recovery` 非空且 `pending:false`）；
-   * ③ **不知道**（`recovery === null`）——这份状态自己都没读到。把它当成 ② 就又把「未确认」
-   *    说成了「没有」，而这正是整个功能起点那一幕。
-   */
-  const [recovery, setRecovery] = useState<MonitorRecovery | null>(null);
   const [stoppingIds, setStoppingIds] = useState<ReadonlySet<string>>(() => new Set());
   /**
    * 报错连同**它是谁的、从哪来的**一起存。
@@ -133,26 +121,9 @@ export function useTaskMonitors(taskId: string) {
     const seq = ++stamp.current.seq;
     const mine = () => stamp.current.gen === gen && stamp.current.seq === seq;
     try {
-      // 两条一起问。恢复状态单独一条端点（理由见 monitor-routes.ts），服务端那一侧会等同
-      // 一次回填跑完，所以两份响应反映同一轮扫描。
-      //
-      // **只有 404 才算「这个服务端没有这个概念」**（新前端配旧 server）。其它失败是「不
-      // 知道」，必须如实留成 null——上一版一律 catch 成 null 并当作 `pending:false`，等于
-      // 把暂态读失败说成「确实没有待恢复的」（第 7 轮审查）。
-      const [next, pending] = await Promise.all([
-        api.taskMonitors(taskId, signal),
-        api.monitorRecovery(taskId, signal).then(
-          (value): MonitorRecovery | null => value,
-          (reason): MonitorRecovery | null => (
-            reason instanceof ApiError && reason.status === 404
-              ? { pending: false, reasons: [], attempts: 0, exhausted: false }
-              : null
-          ),
-        ),
-      ]);
+      const next = await api.taskMonitors(taskId, signal);
       if (!mine()) return true;
       setMonitors(next);
-      setRecovery(pending);
       // 只收走自己那条。用户动作的回执不归它管——抹掉就等于那句话只闪了一下。
       setFailure((current) => (current?.kind === "list" ? null : current));
       setLoadedTaskId(taskId);
@@ -183,7 +154,6 @@ export function useTaskMonitors(taskId: string) {
     // (追平层那一侧也换了代次并掐断在途那一发;这里的 stamp 兜住「掐之前就已经 resolve」。)
     stamp.current = { gen: stamp.current.gen + 1, seq: 0, taskId };
     setMonitors([]);
-    setRecovery(null);
     setFailure(null);
     setStoppingIds(new Set());
     void catchUp.run();
@@ -199,8 +169,8 @@ export function useTaskMonitors(taskId: string) {
    * **每次连上都重新对账一遍**（第 11 轮审查 F2）,**断线就把这一代次作废**（第 5 轮 N1）。
    *
    * 「又连上了」不等于「这份快照还完整」：事件流没有历史回放（server/src/routes.ts 只订阅
-   * 当前 bus、不带事件 id、没有 Last-Event-ID），断线期间起的哨兵、结束的哨兵、变化的恢复
-   * 状态一条都补不回来，于是页面停在旧列表上，手动刷新才对得上（审查用真实 EventSource
+   * 当前 bus、不带事件 id、没有 Last-Event-ID），断线期间起的哨兵、结束的哨兵
+   * 一条都补不回来，于是页面停在旧列表上，手动刷新才对得上（审查用真实 EventSource
    * 断线重连 + 真页面实测：open 次数增加、请求数一条没多、卡片数不变）。
    *
    * 首次连上也要对一次：挂载时那一发列表请求和事件流的建立是并发的，中间那段的事件同样
@@ -260,11 +230,6 @@ export function useTaskMonitors(taskId: string) {
   const ready = loadedTaskId === taskId;
   return {
     monitors: ready ? monitors : [],
-    /**
-     * 恢复状态：`pending:true` = 还没读完；`pending:false` = 确实没有待恢复的；
-     * **`null` = 不知道**（这一份自己都没读到）。归属判据同列表。
-     */
-    recovery: ready ? recovery : null,
     stoppingIds,
     error: failure?.taskId === taskId ? failure.message : null,
     /** 真 = 上一次提交被「说不清叫谁」拒了:表单要让人指定一个唤醒目标再来。 */

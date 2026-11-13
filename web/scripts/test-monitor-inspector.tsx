@@ -54,10 +54,9 @@ const projected: TaskMonitor = {
 };
 
 
-function state(monitors: TaskMonitor[], recovery: TaskMonitorsState["recovery"] = null): TaskMonitorsState {
+function state(monitors: TaskMonitor[]): TaskMonitorsState {
   return {
     monitors,
-    recovery,
     stoppingIds: new Set(),
     error: null,
     needsWakeTarget: false,
@@ -68,61 +67,19 @@ function state(monitors: TaskMonitor[], recovery: TaskMonitorsState["recovery"] 
   };
 }
 
-/** 默认是「已确认没有待恢复的事实」——`null` 是另一回事（见下面的第三态）。 */
 const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, waiting = false) =>
   renderToStaticMarkup(
     <MonitorInspector
-      monitors={state(monitors, { pending: false, reasons: [], attempts: 0, exhausted: false })}
+      monitors={state(monitors)}
       blockedReason={blockedReason}
       waiting={waiting}
     />,
   );
 
-/** 面板 + 一份「还没读完」的恢复状态。 */
-const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
-  <MonitorInspector
-    monitors={state(monitors, { pending: true, reasons: ["scan-unfinished"], attempts: 2, exhausted: false })}
-    blockedReason={null}
-  />,
-);
-
-// ── 空面板有两种含义，不能说成同一句话 ──────────────────────────────────────
-//
-// 「这个任务确实没用过哨兵」和「历史还没读完，先给你看这些」要分开。混成一句时第二种会被
-// 当成第一种——而那正是整个功能起点那一幕的翻版（面板说没有，agent 说在等 Monitor 通知）。
+// ── 空面板只说一句，不带解释 ──────────────────────────────────────────────
 {
   const empty = panel([]);
   assert.match(empty, /这个任务上还没有哨兵/, "确实没有时就直说");
-  // **第三态：不知道。** 恢复状态自己都没读到（暂态读失败）时，「这个任务没用过哨兵」是
-  // 一句没有依据的强断言——那正是整个功能起点那一幕（第 7 轮审查）。
-  const unknown = renderToStaticMarkup(
-    <MonitorInspector monitors={state([], null)} blockedReason={null} />,
-  );
-  assert.doesNotMatch(unknown, /这个任务上还没有哨兵/, "拿不到恢复状态时不许断言「没用过」");
-  assert.match(unknown, /读不到这个任务的监听恢复状态/, "要如实说读不到");
-  const pending = panelPending([]);
-  assert.doesNotMatch(pending, /这个任务上还没有哨兵/, "还没读完时不许说「没有哨兵」");
-  assert.match(pending, /历史/, "要说清是还没读完");
-  assert.match(pending, /还有历史没读完/, "而且说得出是哪一类（MONITOR_RECOVERY_LABEL）");
-  // 有卡片时同样要说：那份列表可能只是其中一部分。
-  assert.match(panelPending([projected]), /历史监听还没读完/, "有卡片时这条提示也要在");
-  assert.match(pending, /正在自动继续/, "还在推的时候就说正在推");
-
-  // **预算用完之后不能再说「正在自动继续」**：那时定时器已经停了，等的是下一次真实请求
-  // （第 8 轮审查不拦项 1）。
-  const exhausted = renderToStaticMarkup(
-    <MonitorInspector
-      monitors={state([], { pending: true, reasons: ["scan-failed"], attempts: 8, exhausted: true })}
-      blockedReason={null}
-    />,
-  );
-  assert.doesNotMatch(exhausted, /正在自动继续/, "预算用完了就不许说「正在自动继续」");
-  assert.match(exhausted, /已重试多次仍没读完/, "要说清试了很多次还没读完");
-  assert.match(exhausted, /每次打开这一格都会再推一轮/, "并且说清它怎么继续");
-  // 反过来也不许把「已停止」说死：读这份状态的那次请求自己就把预算还回去、又推了一轮，
-  // 所以页面上「自动重试已停止」这句话在闭环里从来不成立（第 9 轮审查不拦项 3）。
-  assert.doesNotMatch(exhausted, /已停止/, "闭环里它不是停着的：别说成已停止");
-  assert.doesNotMatch(exhausted, /这个任务上还没有哨兵/, "预算用完也不许谎称没用过");
 }
 
 // ── 时长的说法不能进位成「X 分 60 秒」 ──────────────────────────────────────

@@ -10,9 +10,8 @@ import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { latchWaitersOnDelete } from "./pending-after.js";
 import { publishPendingMessages } from "./pending-messages.js";
-import { acceptGateRuns, freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, taskMemos, taskNotices, taskWrites, tasks, teamInbound, taskBranchReceipts, taskDiskCleanups } from "./db/schema.js";
-import { revokeTaskMonitors, settleTaskRevocation } from "./claude-monitor-backfill.js";
-import { clearScanCursorsStatement } from "./claude-monitor-cursors.js";
+import { acceptGateRuns, freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, taskMemos, taskNotices, taskWrites, tasks, teamInbound, taskBranchReceipts, taskDiskCleanups } from "./db/schema.js";
+import { beginTaskRevocation, settleTaskRevocation } from "./claude-monitor-revoked.js";
 import { stopMonitorsForTask } from "./monitor-reclaim.js";
 import { stopAcceptGatesForTask } from "./accept-gate.js";
 import { deleteTaskSideChats } from "./chat/lifecycle.js";
@@ -35,8 +34,7 @@ import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.j
 //
 // **而且必须在同一个原子批里**(第 6 轮审查 F1):一条一条删的话,中间任何一条失败都留下
 // 「任务还在、它的行已经没了」—— 审查实测 10 个失败点里有 6 个让留下来的任务永久丢卡:
-// monitors 删完之后再失败,ash 那张历史卡没有任何重建路径;sessions 也删完之后再失败,连内置
-// Monitor 的重建依据(按会话找 run 文件)都没了,刷新多少次都回不来。`db.batch` 在同一个
+// monitors 删完之后再失败,那几张历史卡没有任何重建路径,刷新多少次都回不来。`db.batch` 在同一个
 // BEGIN…COMMIT 里同步跑完这些语句,中途抛错整批回滚:**要么任务连同它的一切都没了,要么一切
 // 原样还在**,不存在第三种状态。
 //
@@ -47,7 +45,7 @@ export async function deleteTaskCompletely(taskId: string): Promise<{ diskReclai
   try {
     await deleteTaskRows(taskId);
   } finally {
-    // 删成了还是删一半失败,由它按「任务行还在不在」收口(见 claude-monitor-backfill.ts)。
+    // 删成了还是删一半失败,由它按「任务行还在不在」收口(见 claude-monitor-revoked.ts)。
     await settleTaskRevocation(taskId);
   }
   return { diskReclaimed: await reclaimDeletedTaskDisk(taskId) };
@@ -58,14 +56,14 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   //
   // 它们都读「删除之前的状态」才找得到要收的东西(旁聊房间、git ref、哨兵的 pid),所以只能
   // 排在前面;代价是删除失败时它们已经做了。这不影响 F1 那条不变量——**卡片和它的重建依据
-  // 全在批里**(monitors / sessions / pending / cursors),这里停掉的是进程、删掉的是 git ref。
-  revokeTaskMonitors(taskId);
+  // 全在批里**(monitors / sessions),这里停掉的是进程、删掉的是 git ref。
+  beginTaskRevocation(taskId);
   await deleteTaskSideChats(taskId);
   await deleteTaskBranchRefs(taskId);
   // 哨兵:**先把进程停了再删行**。顺序反过来就再也没人知道那个 pid 是谁的,它会一直
   // 跑到机器重启为止 —— 这是整个功能最容易留下的垃圾(进程本来就是故意脱离 ash 的)。
-  // 上面那行 `revokeTaskMonitors` 必须排在所有删除之前:它关掉内置 Monitor 那四个 writer
-  // 的落库资格(门闸,覆盖整个删除期),并作废进程内缓着的扫描状态/恢复责任。
+  // 上面那行 `beginTaskRevocation` 必须排在所有删除之前:它关掉监听那几个 writer 的落库
+  // 资格(门闸,覆盖整个删除期,见 claude-monitor-revoked.ts)。
   // `destroy`：用户要求这个任务的一切就此结束，审查还在进行也不留 —— 下面那一批删除紧接着
   // 就把 pid 这个唯一线索一起带走（见 monitors.ts 的 MonitorStopIntent）。
   //
@@ -119,11 +117,6 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     // **`monitor_reclaim_debts` 刻意不在这里。** 那张表记的是「这个 pid 该停、但没停掉」,
     // 它的全部意义就是活得比任务久 —— 跟着任务一起删等于把唯一线索再丢一次(第 3 轮审查
     // F1)。收档只有一个出口:能追的线索都追空了(monitor-reclaim-debts.ts 的清扫)。
-    // 还没配上 `task_started` 的那几条调用（见 claude-monitor-pending.ts）：任务都删了，
-    // 它们再也不会被配上，留下就是没有任何入口能清的孤儿行。
-    db.delete(monitorPendingCalls).where(eq(monitorPendingCalls.taskId, taskId)),
-    // 历史扫描读到哪儿了（见 claude-monitor-cursors.ts）：任务都没了，这几行再没人会用。
-    clearScanCursorsStatement(taskId),
     db.delete(teamInbound).where(eq(teamInbound.taskId, taskId)), // 调度台还没送出的入站消息
     db.delete(noteTasks).where(eq(noteTasks.taskId, taskId)),
     // 任务备忘:只有这个任务一个入口能读到它,任务没了就是再也打不开的孤儿行。

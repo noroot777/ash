@@ -44,9 +44,6 @@ import {
 import { reapClaudeMonitors } from "./claude-monitor-reaped.js";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
-import {
-  noteMonitorRecovery, noteMonitorRecoveryBySession, type MonitorRecoveryReason,
-} from "./claude-monitor-recovery.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { id, now } from "./util.js";
@@ -74,26 +71,24 @@ export class ClaudeMonitorTrace {
   /**
    * 查过库、确认**不是**本任务投影的后台任务 id（普通后台 Bash 之类）。
    *
-   * `claimed` 只是快路径：命中就处理，**不命中不能直接丢**——回填可能刚刚往库里补了一行
-   * （GET 触发，不经过这个实例），或者上一轮留下的行这一轮还没认回来。原来不命中就 return，
-   * 于是「先认领空名单、后回填插入、再来真 completed」这条顺序下通知被丢光，EOF 最后把它
-   * 收成 lost 而不是来源报的 exited（第 4 轮审查实测 lateBackfill）。
+   * `claimed` 只是快路径：命中就处理，**不命中不能直接丢**——上一轮留下的行这一轮可能还没
+   * 认回来，或者同一条会话的另一个实例（接管前后）刚刚往库里写了一行。原来不命中就 return，
+   * 于是「先认领空名单、后插入、再来真 completed」这条顺序下通知被丢光，EOF 最后把它
+   * 收成 lost 而不是来源报的 exited（第 4 轮审查实测）。
    *
    * 改成不命中时查一次库裁决，并把「查过且当时没命中」记在这里，避免对每条通知都查库
    * ——实测一个长任务里 76 条 task_started 有 64 条是普通后台 Bash。
    *
-   * **但这个否定结论必须能失效。** 「此刻库里没有这一行」不等于「它不是 Monitor」：回填可能
-   * 还没跑到，或者上一次写库失败了。永久否定会让那条通知之后即使行出现了也永远被短路掉
+   * **但这个否定结论必须能失效。** 「此刻库里没有这一行」不等于「它不是 Monitor」：别的写入
+   * 可能还没落地，或者上一次写库失败了。永久否定会让那条通知之后即使行出现了也永远被短路掉
    * （第 5 轮审查按代码推断指出）。
    *
    * 失效**两道都要**：
-   * - **精确信号**：`bus` 上的 `task.monitors`。投影行有任何增减都会发它（回填补行、实时
-   *   open 都算），正好就是「再查一次会有不同答案」的那一刻。响应是立即的。
+   * - **精确信号**：`bus` 上的 `task.monitors`。投影行有任何增减都会发它，正好就是「再查
+   *   一次会有不同答案」的那一刻。响应是立即的。
    * - **兜底时限**（`FOREIGN_MAX_MS`）：万一有哪条写入路径忘了 publish，否定结论也不该变成
    *   永久的。只靠信号就是把正确性押在「每个 writer 都记得发事件」上。
    *
-   * （一开始只做了 30 秒 TTL，自测里立刻发现回填补行是秒级内的事、那条通知仍被短路——时间
-   * 阈值本来就是猜测。但反过来只留信号也不够，所以两道并存，各补对方的短板。）
    */
   private foreign = new Map<string, number>();
   /** 否定结论最多撑这么久（兜底，正常由 bus 信号提前作废）。 */
@@ -121,20 +116,11 @@ export class ClaudeMonitorTrace {
    * （见 executors/detached.ts），积压的事件会一口气涌进来，那时的 `Date.now()` 比真实起点
    * 晚几分钟甚至几小时。
    *
-   * 所以起点跟历史重建一样按**区间**判：下界取这个来源时刻（必然 ≤ 真实启动时刻，`tool_use`
-   * 块就在那条 assistant 事件里），上界取事件到达时刻（必然 ≥ 真实启动时刻），区间宽到超过
-   * 共用容差就说「起点不明」。实时与重建的证据档位不同，承诺相同。
+   * 所以起点按**区间**判：下界取这个来源时刻（必然 ≤ 真实启动时刻，`tool_use` 块就在那条
+   * assistant 事件里），上界取事件到达时刻（必然 ≥ 真实启动时刻），区间宽到超过共用容差就说
+   * 「起点不明」。
    */
   private lastEventAt: string | null = null;
-  /**
-   * 这条会话属于哪个 ash 任务。**正常跑的时候就记下来**，别等到出事才去查。
-   *
-   * 出事那条路是「写库两次都失败了，现在要把这件事记进恢复账本」——而记账需要 taskId。
-   * 上一版在那一刻才去查 `locateSession`，可磁盘/权限这类故障通常还没好，这一查照样失败，
-   * 于是 catch 一兜：既没有待恢复任务、也没有重试定时器，一次性事实就这么没了（第 7 轮
-   * 审查按代码推断）。恢复责任本身不能押在「再查一次同一个失败资源」上。
-   */
-  private taskId = "";
   /** 串行化写库：同一个后台任务的 started/notification 可能紧挨着到。 */
   private chain: Promise<unknown> = Promise.resolve();
   private cliSessionId = "";
@@ -203,8 +189,8 @@ export class ClaudeMonitorTrace {
    * 那条投影在这个进程里再也没机会落库（第 5 轮审查按代码推断指出这一条）。
    *
    * 只重试一次、而且隔一小会儿：BUSY 这类争用通常瞬间就过去了；真的是逻辑错误时重试也救不
-   * 回来，继续往下拖反而会积压事件流。重试仍失败就留诊断——历史回填那条路还能把它补回来
-   * （文件一直在追加，游标式扫描会重读到这条事实）。
+   * 回来，继续往下拖反而会积压事件流。重试仍失败就只留诊断：这是一份旁路投影，丢一张卡
+   * 不该拖垮事件流。
    */
   private queue(job: () => Promise<void>): void {
     const once = async (): Promise<void> => {
@@ -217,11 +203,7 @@ export class ClaudeMonitorTrace {
       }
     };
     this.chain = this.chain.then(once, once).catch((e) => {
-      this.warn("记账重试后仍失败，已留账等自动恢复", e);
-      // **事实已经从事件流里消费掉了**（pending/byToolUse 都删了，来源侧不会再发）。原来
-      // 这里只有一句「历史回填会再补」，而历史回填本身只在用户打开面板时才跑——留账交给
-      // 恢复账本自己退避重排（第 6 轮审查的类问题之一）。
-      this.noteRecovery("write-failed");
+      this.warn("记账重试后仍失败，这一条没有记上", e);
     });
   }
 
@@ -235,24 +217,6 @@ export class ClaudeMonitorTrace {
     if (this.warned >= 3) return;
     this.warned += 1;
     console.warn(`[ash] 内置 Monitor 投影${what}（session=${this.cliSessionId || "未知"}）:`, detail);
-  }
-
-  /**
-   * 把「有事实没确认落地」记到这条会话所属的 ash 任务上。
-   *
-   * 要查一次会话才知道 taskId——这条路只在真失败时才走，多查一次库换一条不丢的事实。
-   */
-  private noteRecovery(reason: MonitorRecoveryReason): void {
-    // 先用正常跑的时候记下的归属（见 `taskId`）。
-    if (this.taskId) {
-      noteMonitorRecovery(this.taskId, reason);
-      return;
-    }
-    // **一次都没查成功过**（第一条 Monitor 就撞上库故障，或接管实例还没查过）。这时不能
-    // 再去查同一个正在失败的资源——上一版就是这么做的，于是 catch 一兜，责任凭空消失，
-    // 而来源事实早已消费完（第 8 轮审查实测 firstLookup）。改成挂在**这条流自己的身份**
-    // 上：CLI 会话 id 不用查库就有，等库好了由恢复账本自己解析成 taskId。
-    noteMonitorRecoveryBySession(this.cliSessionId, reason);
   }
 
   /**
@@ -308,8 +272,7 @@ export class ClaudeMonitorTrace {
     const nativeId = callId ? this.byToolUse.get(callId) : undefined;
     if (!nativeId) {
       // 回执配不上 `task_started` ⇒ 这次调用压根没起来（启动被拒、入参校验失败）。那条悬着
-      // 的调用当场清掉，别留到 `finishAll` ——判据是「配不上」而不是回执里的错误文案，与历史
-      // 扫描同一套（见 claude-monitor-scan.ts 的同一处；第 11 轮审查点名的对称位置）。
+      // 的调用当场清掉，别留到 `finishAll` ——判据是「配不上」而不是回执里的错误文案。
       if (callId) this.pending.delete(callId);
       return;
     }
@@ -469,18 +432,15 @@ export class ClaudeMonitorTrace {
 
   private async open(
     nativeId: string, call: MonitorCall, seen: { at: string; widthMs: number },
-    /** 起它的那个 tool_use id。落到行上，历史侧才配得回它的起手回执（见
-     *  claude-monitor-commit.ts 的「检查点的两半」）。 */
+    /** 起它的那个 tool_use id，落到行上。 */
     toolUseId: string,
   ): Promise<void> {
     // 代次凭据**先取**（多数情况下已经冻好、同步返回）：它和下面那道落库资格门闸之间不能
     // 再插一个 await，否则又把「查到会话之后、写之前问」那个窗口拉开了。
     const origin = await this.runOrigin();
     const found = await locateSession(this.cliSessionId);
-    if (found) this.taskId = found.taskId; // 归属趁手记下（见 `taskId`）
-    // 这个任务正在删/已经删了：实时这一侧也要问一句落库资格。它不在回填的 inflight 里，
-    // 那份 finally 的补偿够不着它（第 5 轮审查 F1 指出的 writer 盲点）。查到会话之后、写
-    // 之前问，窗口缩到一条语句；真有漏网的由启动期孤儿清扫收（sweepOrphanClaudeMonitors）。
+    // 这个任务正在删/已经删了：落库前先问一句资格。查到会话之后、写之前问，窗口缩到一条
+    // 语句；剩下那一条的窗口由下面的同批落库资格兜住。
     if (found && isTaskRevoked(found.taskId)) return;
     if (!found) {
       // 认不出会话就落不了库。安静跳过是对的（不能因此拖垮事件流），但要留下线索——
@@ -549,8 +509,7 @@ export class ClaudeMonitorTrace {
       // 一代的 pid 和 run，于是死活裁决拿新进程给它续命，刷新也不自愈）。
       sourcePid: origin.pid,
       sourcePidStartedAt: origin.pidStartedAt,
-      // 同一份凭据里的 run 文件。pid 已经够判死活了，但两边写同一套列，历史侧的代次裁决
-      // （claude-monitor-reconcile.ts 的 reconcileLiveness）才不必对实时行网开一面。
+      // 同一份凭据里的 run 文件：收尾按它圈出「这一代起的」（claude-monitor-reaped.ts）。
       sourceRun: origin.runPath || null,
       // 起点的下界：实时投影自己就看着它到达，锚点是 `observed`，所以下界就是那一刻。
       startLowAt: startedAt,
@@ -564,7 +523,6 @@ export class ClaudeMonitorTrace {
     const origin = await this.runOrigin();
     const found = await locateSession(this.cliSessionId);
     if (!found) return;
-    this.taskId = found.taskId;
     if (isTaskRevoked(found.taskId)) return;   // 落库资格，同 `open`
     // 认行的来源证据同样只认绑定下来的那一代（`sessions` 当下那一列已经是下一代人的）。
     const rowId = await this.locateRow(found.taskId, nativeId, origin.runPath);
@@ -572,8 +530,7 @@ export class ClaudeMonitorTrace {
     const row = (await db.select().from(monitors).where(eq(monitors.id, rowId))).at(0);
     // **不看状态**：回执带来的是时长和起点，跟这一行此刻是不是终态没有关系。原来这里有一道
     // `monitorStatusCorrectable` 闸、WHERE 里又按状态过滤了一遍，于是「完成抢先于回执到达」
-    // 的那种（命令瞬间结束）时长永远补不上，卡片永远写着「期限未知」——跟历史回填那一侧
-    // 的 casAtRace 是同一个类问题，只是入口在实时这一边（第 6 轮审查）。
+    // 的那种（命令瞬间结束）时长永远补不上，卡片永远写着「期限未知」（第 6 轮审查）。
     if (!row) return;
     await db.update(monitors).set({
       sourceLifetime: lifetime,
@@ -600,12 +557,11 @@ export class ClaudeMonitorTrace {
     const origin = await this.runOrigin();
     const found = await locateSession(this.cliSessionId);
     if (!found) return;
-    this.taskId = found.taskId;
     if (isTaskRevoked(found.taskId)) return;   // 落库资格，同 `open`
     const rowId = await this.locateRow(found.taskId, nativeId, origin.runPath);
     if (!rowId) {
       // 库里**暂时**没有。多数情况是这条后台任务不是 Monitor 起的（普通后台 Bash），
-      // 但也可能是回填还没跑到 / 上次写库失败了——所以这个结论会在投影行变化时整批作废
+      // 但也可能是别的写入还没落地 / 上次写库失败了——所以这个结论会在投影行变化时整批作废
       // （见 `foreign` 和构造函数里的订阅）。
       this.foreign.set(nativeId, Date.now());
       return;
@@ -614,21 +570,16 @@ export class ClaudeMonitorTrace {
     // `lost` 也要让路：那是 ash 推断的，来源侧后到的真终态是事实（见 monitorStatusCorrectable）。
     if (!row || !monitorStatusCorrectable(row.status)) return;
     // **条件更新**：WHERE 里再查一次旧状态，不是只按 id 写。读和写之间隔着 await，期间另一个
-    // writer（回填的 merge / 死活裁决）可能已经落了一个来源终态；只按 id 写会把它覆盖掉。
-    // 对称的 revive/bury 一开始就在 SQL 里带了这个条件，这两处之前漏了（第 5 轮审查指出）。
-    const result = await db.update(monitors).set({
+    // writer（接管前后的另一个实例）可能已经落了一个来源终态；只按 id 写会把它覆盖掉。
+    // 条件没对上（0 行）就是那条终态已经先落地了，这一条不必再写。
+    await db.update(monitors).set({
       status,
       endedAt: now(),
       // **文案归一在一处**（`claudeMonitorEndedReason`）：来源侧回合收尾成批停止时，summary
       // 填的就是那条描述本身，原样写进去卡片就变成「已停止 / <描述>」——两行都没说出它其实
-      // 是被收走的（见那个函数的实测行序）。历史回填那条路同样调它。
+      // 是被收走的（见那个函数的实测行序）。
       endedReason: claudeMonitorEndedReason(status as MonitorStatus, summary, row.description),
     }).where(and(eq(monitors.id, rowId), inArray(monitors.status, ["running", "lost"])));
-    // 条件更新 0 行 = 这条来源终态**没有**落地（期间别的 writer 改了状态）。来源侧不会重发，
-    // 所以要留账让回填那条路重读一次并重新裁决，不能就这么算了（第 6 轮审查的类问题）。
-    if (Number((result as { rowsAffected?: number } | null)?.rowsAffected ?? 0) === 0) {
-      noteMonitorRecovery(found.taskId, "update-missed");
-    }
     bus.publish({ type: "task.monitors", taskId: row.taskId });
   }
 
@@ -668,7 +619,7 @@ export class ClaudeMonitorTrace {
       if (!cliSessionId) return;
       await reapClaudeMonitors(cliSessionId, await this.runOrigin(), this.openedAt);
     });
-    // 队列永不 reject（`queue` 的 catch 兜住并留账），所以这里原样交出去就行。
+    // 队列永不 reject（`queue` 的 catch 兜住），所以这里原样交出去就行。
     return this.chain.then(() => undefined);
   }
 }

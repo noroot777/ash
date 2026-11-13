@@ -169,69 +169,6 @@ export const MONITOR_START_EVIDENCE = ["observed", "receipt-window"] as const;
 export type MonitorStartEvidence = (typeof MONITOR_START_EVIDENCE)[number];
 
 /**
- * 投影账本里「观察到了、还没确认落地」的那些事实 —— 对外契约。
- *
- * 这份投影的每一条事实都是**一次性**的（来源侧不会重发、游标读过就往前走），所以
- * 「没确认落地」必须是一个能看见、能继续推进的状态，而不是一行日志。判据与自动推进在
- * `server/src/claude-monitor-recovery.ts`，界面照 `MONITOR_RECOVERY_LABEL` 说人话。
- *
- * 为什么要让用户看见：面板为空有两种完全不同的含义——「这个任务确实没用过哨兵」和「还没
- * 读完，先给你看这些」。混成同一句话时，第二种会被当成第一种（而这正是整个功能的起点
- * 那一幕：面板说没有，agent 说在等 Monitor 通知）。
- */
-export const MONITOR_RECOVERY_REASONS = [
-  "scan-unfinished",  // 扫描没读到 EOF（单次字节上限）
-  "scan-failed",      // 会话文件读失败
-  "write-failed",     // 事实已消费，落库失败
-  "update-missed",    // 条件更新 0 行（并发改了状态）
-  "liveness-failed",  // 死活裁决失败（扫描读完了不等于纠正做完了）
-  "orphan-overflow",  // 这一轮要裁决的迟到事实顶到单轮上限，剩下的分到后面几轮
-  // 读过的事实既配不上内存状态、也配不上库里已提交的行，而这一轮的读取位置跳过了那段
-  // 前缀（见 server/src/claude-monitor-commit.ts 的「检查点的两半」）。不许当成读完了：
-  // 回到一个确定可重放的位置重读一遍。
-  "checkpoint-incomplete",
-  // 文件末尾有半行(没有换行符)。多半是正在被追加,下一轮就完整了;但**已经结束的文件**里
-  // 这半行是永久的,而它可能正是最后一条完成通知。不许当成读完了:留账、按退避再读。
-  "tail-incomplete",
-  // 有一条记录比单次读取窗口还长,已经整条跳过(见 claude-monitor-read.ts)。那一条里要是
-  // 带着 Monitor 的入参或回执,这一轮的事实就是缺的——缺口要说出来,不能静悄悄销账。
-  "record-skipped",
-  // 库的持久身份键还没核验成当代形状(换键的迁移失败了,见 server/src/db/schema-readiness.ts)。
-  // 事实照常读、照常显示,但「这一段读完了」不许落盘——旧键会吞掉同号不同来源的调用。
-  "schema-unready",
-] as const;
-export type MonitorRecoveryReason = (typeof MONITOR_RECOVERY_REASONS)[number];
-
-export const MONITOR_RECOVERY_LABEL: Record<MonitorRecoveryReason, string> = {
-  "scan-unfinished": "还有历史没读完",
-  "scan-failed": "有会话文件读失败",
-  "write-failed": "有记录没写进库",
-  "update-missed": "有状态更新被并发改动挡下",
-  "liveness-failed": "有存活状态没核对完",
-  "orphan-overflow": "迟到的事实较多，正在分批补",
-  "checkpoint-incomplete": "有回执还配不上，正在回头重读",
-  "tail-incomplete": "最后一行还没写完，稍后再读",
-  "record-skipped": "有一条记录过长已跳过，事实可能不全",
-  "schema-unready": "数据库还没升级完，进度先不记",
-};
-
-export type MonitorRecovery = {
-  /**
-   * 还有没确认落地的事实。
-   *
-   * **注意第三态**：前端拿不到这份状态时（暂态读失败）既不是 true 也不是 false，而是
-   * 「不知道」——把它当 false 就又把「未确认」说成了「没有」。那一档在前端用 `null`
-   * 表示（见 web/src/monitors/useTaskMonitors.ts 的 recovery）。
-   */
-  pending: boolean;
-  reasons: MonitorRecoveryReason[];
-  /** 已经自动重试了几次。 */
-  attempts: number;
-  /** 退避预算用完了：定时器停了，等下一次真实请求再推。 */
-  exhausted: boolean;
-};
-
-/**
  * 这个字符串是不是**已知的那两档来源**。白名单判定，不是 `!= null`——库里存着别的字符串
  * 时那是脏数据。
  *
@@ -465,8 +402,8 @@ export interface TaskMonitor {
    * 什么时候挂上的」说出口**。
    *
    * 为什么非得多这一列：`started_at` 在库里是 `NOT NULL`，而历史投影允许它退化 ——
-   * `anchor.startedAt ?? startedAtLow ?? fileStartedAt ?? now()`（见
-   * server/src/claude-monitor-commit.ts）。退到后两档时那个值仍然是一个**合法日期**，
+   * `anchor.startedAt ?? startedAtLow ?? fileStartedAt ?? now()`（当年的历史扫描就是这么
+   * 落的）。退到后两档时那个值仍然是一个**合法日期**，
    * 所以「能解析成日期就是真实时刻」这条判据一个字都挡不住它：第 1 轮审查用真实 backfill +
    * 真实 `listMonitors` 复现到的卡片，同一行上先写「起于 10/19 10:00」再写「总共盯 10 分钟
    * （起点不确定）」—— 前一个只是那一整轮执行开始的时刻，偏差可达该轮此前已经跑掉的时长。

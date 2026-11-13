@@ -52,8 +52,7 @@ async function rebuildWithNullableEnd(client: Client): Promise<void> {
   //
   // 别自己写 `BEGIN IMMEDIATE`/`COMMIT`：这个 client 自己管事务（`node-sqlite-client.ts`
   // 顶部那段），裸 BEGIN 会撞上它的长事务账目、等 5 秒然后报「数据库正在提交其它操作」,
-  // 于是整条迁移被 catch 成一句 warn、表还是老形状。`repairPendingCallKey` 那个重建就是
-  // 这么做的,照它来。
+  // 于是整条迁移被 catch 成一句 warn、表还是老形状。
   await client.batch([
     "DROP TABLE IF EXISTS session_turns_rebuilt",
     TABLE_DDL,
