@@ -76,7 +76,7 @@
 // 「不许说已经没了」。macOS 上因此**少了一项能力**:跨重启认回「甩掉进程组、但还带着记号的
 // 后代」做不到了 —— 那一档照实落 `suspected`:留责任、留身份、如实说证不出,不下刀。
 import { IS_WINDOWS, isPidAlive, isProcessGroupAlive, killOne, killTree } from "./platform.js";
-import { occupiedByLaterGeneration, processIdentity, processUnitEvidence } from "./proc.js";
+import { occupantStartedAfter, processIdentity, processUnitEvidence } from "./proc.js";
 import {
   processGroupMembersSync, stillSameGeneration, type ProcessMember,
 } from "./process-generation.js";
@@ -96,9 +96,9 @@ import {
  *   `reclaimMonitorProcess` 的 `fresh`。
  * - `not-ours` = 这个号现在是**另一个**进程(ps 答出来了,启动时刻**确实**对不上;locale 不同
  *   由 `processIdentity` 在同一份快照上的时间戳比较兜住,不会被误报成这一档)。不许杀 —— 那是别人的进程。
- * - `superseded` = `not-ours` 里**剩下的线索也都答出来、都是空的**那一部分:原进程已经不在、
- *   原进程组也已经结束、记号在任何活进程上都读不到。它跟 `traceless` 同一个强度,只是根那一问
- *   的答案不同(号上有人,但那是后来的另一代),所以同样只授权收档(见 `rootSuperseded`)。
+ * - `superseded` = 号上有人,但**能证明**那是原进程之后才起来的另一个进程,而且剩下的线索也都
+ *   答出来、都是空的:原进程已经不在、原进程组也已经结束、记号在任何活进程上都读不到。它跟
+ *   `traceless` 同一个强度,只是根那一问的答案不同,所以同样只授权收档(见 `rootSuperseded`)。
  *
  * 剩下这四档**都不许据此收档**(也都不许下刀):
  * - `suspected` = **进程表的展示文本里看得见这次创建的记号,但这个平台切不出真实环境项边界**
@@ -114,8 +114,8 @@ import {
  *   `pid_started_at` 为空的行)原来会走到 `same` → `ours-alive` → **发击杀信号**,而那条
  *   路上「看见一个进程活着」被当成了「已证明有权回收它」。原命令早已跑完、号被系统复用时,
  *   下刀打的就是别人的进程(接回、清扫、重复停止三条路都消费这一档)。
- * - `not-ours` 本身也不许收档:它只回答了「这个号上现在是别人」。剩下那几问(记号、原进程组)
- *   有一问答不出来、或者答出来不是空的,就停在这一档;都答出来、都是空的才升成 `superseded`。
+ * - `not-ours` 本身也不许收档:它只回答了「这个号上现在是别人」,而且这一答依据的是不带时区的
+ *   展示时间。证得出换代(不靠那串时间)、剩下几问也都答成空的,才升成 `superseded`。
  *   几档的区别只在于**记下来的理由**和日志措辞,不在于要不要负责(`stateNote` 按档各说一句)。
  */
 export type ReclaimState =
@@ -147,26 +147,44 @@ export const refutesRoot = (state: ReclaimState): boolean =>
   state === "not-ours" || state === "superseded";
 
 /**
- * **号被复用,本身就是原进程组已经结束的证明** —— `not-ours` 能不能升成 `superseded` 的那一问。
+ * 号上的新主人要比锚**晚这么久**才算换代的证明。这道余量只防一件事:锚是 ash 落盘那一刻的
+ * 墙钟,新主人的启动时刻是现在的墙钟减去已运行时长 —— 两次读墙钟之间时钟被拨过的话,
+ * 活着的原进程也能显得「晚起来」(Linux 上已运行时长按开机计时,墙钟往前拨多少它就晚多少)。
+ * 余量之内的一律不升档、照旧留账;真实的复用现场隔的是天(2026-11-13 实库 11 笔最少 2.5 天)。
+ */
+const REUSE_MARGIN_MS = 60 * 60_000;
+
+/**
+ * **号被复用,本身就是原进程组已经结束的证明** —— `not-ours`/`unverifiable` 能不能升成
+ * `superseded` 的那一问。
  *
  * 为什么能升:POSIX 规定一个进程号在它的进程**以及以它为组号的进程组**都结束之前不会被重新
  * 分配(XBD「Process ID Reuse」;Linux 的 `struct pid` 被 PGID/SID 引用着就不释放,XNU 分配
- * 新号时跳过 `pgfind`/`session` 还占着的号)。所以这个号上**已经是更晚的另一代**时:
+ * 新号时跳过 `pgfind`/`session` 还占着的号)。所以这个号上**确定是另一个进程**时:
  *  · 原进程不在 —— 一个号同一时刻只属于一个进程(僵尸也占着号);
  *  · 原进程组也不在 —— 组还有人,这个号就分配不出去。现在若有同号的组,那是新主人自己的;
  *  · 再加上记号那一问答出 `none`(问全了、一个都没有)—— 带着记号离组的后代也不在。
  * 能追的三条线索全答出来、全是空的,跟 `traceless` 是同一个强度;剩下那种「同时清掉环境又
  * 自建会话」的后代,两档都一样证不出(见 `isTracelessState`)。
  *
- * 为什么判据收得这么紧(这一层宁可留着也不许把活进程当成不在了):
+ * **「确定是另一个进程」不认记录在案的那串启动时刻**(第 1 轮审查 F1):`lstart` 是按当时 `TZ`
+ * 渲染、自己不带时区的展示文本,换个时区重启,同一个进程读出来就能差出几个小时 —— 拿它比先后,
+ * 一条清掉了环境(记号问不着)的活命令会被判成「换代」并永久收档(审查实测 UTC→北京时间)。
+ * 证据换成两样都不带时区的东西:
+ *  · `startedByMs` —— ash 自己落盘的绝对时刻,原进程**最晚**在这一刻之前已经起来(身份边条
+ *    的 spawn 时刻、债行的创建时刻,见 `MonitorUnit`);
+ *  · 号上现在那个进程的「已运行时长」(`occupantStartedAfter`)。
+ * 它起得比锚还晚(再加一道防拨钟的余量)⇒ 它不可能是原进程。
+ *
+ * 判据收得这么紧,因为这一层宁可留着也不许把活进程当成不在了:
  *  · 只认 `none`:`suspected`(文字还看得见)推翻「已经没了」,`unprovable`(问不出来 / 存量行
  *    没有记号)什么都不证明 —— 开机账上那笔「colima 守护进程还带着记号」就停在 `suspected`;
- *  · 只认**更晚**的那一代(`occupiedByLaterGeneration`):复用的新主人一定起得更晚,读出来更早
- *    说明这次读数本身不可信(时钟被拨过),不拿它当复用的证明;
+ *  · 没有锚、已运行时长问不出来、落在余量之内 ⇒ 一律不升;
  *  · win32 不升:那边没有进程组这条保证,记号这一问也答不出 `none`。
  */
-function rootSuperseded(pid: number, recorded: string | null, mark: MarkVerdict): boolean {
-  return !IS_WINDOWS && mark === "none" && !!recorded && occupiedByLaterGeneration(pid, recorded);
+function rootSuperseded(pid: number, mark: MarkVerdict, startedByMs: number | null | undefined): boolean {
+  return !IS_WINDOWS && mark === "none" && typeof startedByMs === "number" && Number.isFinite(startedByMs)
+    && occupantStartedAfter(pid, startedByMs + REUSE_MARGIN_MS);
 }
 
 /**
@@ -267,6 +285,12 @@ export type MonitorUnit = {
   unitToken: string | null;
   /** 命令原文:只用于日志与存量行的时间锚核对,**不作归属凭证**。 */
   command?: string | null;
+  /**
+   * 原进程**最晚**在这一刻之前已经起来(纪元毫秒,ash 自己落盘的绝对时刻:身份边条的 spawn
+   * 时刻、债行的创建时刻)。只用来证明「号上现在那个是后来的另一个」(见 `rootSuperseded`);
+   * 缺了它只会少收档,不会多下刀 —— 所以可选,缺省的方向是保守的。
+   */
+  startedByMs?: number | null;
 };
 
 /** 记号那一问的原话。**每一刀之前的重核要用同一份**,不许换一条更宽的判据(见下)。 */
@@ -348,7 +372,8 @@ export function reclaimEvidence(
       && markVerdict === "unprovable" && unit.unitToken && !opts.fresh) {
       return reclaimEvidence(pid, pidStartedAt, unit, { ...opts, fresh: true });
     }
-    if (state === "not-ours" && rootSuperseded(pid, pidStartedAt, markVerdict)) {
+    if ((state === "not-ours" || state === "unverifiable")
+      && rootSuperseded(pid, markVerdict, unit.startedByMs)) {
       return { state: "superseded", markVerdict, members: [] };
     }
     return { state, markVerdict, members: [] };
@@ -574,7 +599,7 @@ export function stateNote(state: ReclaimState): string {
   if (state === "ours-alive") return "还活着";
   if (state === "ours-orphans") return "起它的那个进程已退、这次创建的后代还在(记号认得出来)";
   if (state === "superseded")
-    return "原进程已不存在：这个号已被更晚起来的另一个进程占用（号被复用 ⇒ 原进程与原进程组都已结束），"
+    return "原进程已不存在：这个号已被原进程之后才起来的另一个进程占用（号被复用 ⇒ 原进程与原进程组都已结束），"
       + "记号在任何活进程上都读不到 —— 能追的线索到此为止（判据见 rootSuperseded）";
   if (state === "not-ours") return "这个号现在是另一个进程，原进程退出无法确认";
   if (state === "suspected")

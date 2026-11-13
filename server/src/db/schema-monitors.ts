@@ -381,8 +381,9 @@ export const monitorReclaimDebts = sqliteTable("monitor_reclaim_debts", {
   pid: integer("pid").notNull(),
   pidStartedAt: text("pid_started_at"),
   /**
-   * `pid_started_at` 还空着时,**把身份补全所需要的那个时间锚**留在这一笔上
-   * (`spawn` 返回 pid 的那一刻,见 monitor-spawn 的身份边条)。
+   * **`spawn` 返回 pid 的那一刻**(纪元毫秒,见 monitor-spawn 的身份边条)。两个用途:
+   * `pid_started_at` 还空着时拿它补全身份;号被复用时拿它证明「号上那个是后来才起来的」
+   * (它不带时区,`pid_started_at` 那串展示时间带不了这个证明,见 evidence 的 `rootSuperseded`)。
    *
    * 为什么债上也要留一份:哨兵行和它的身份边条都可能先没了(任务被删、正常收尾清掉边条),
    * 而那之后这笔债就是这个进程唯一的线索。缺了锚,「这一刻 ps 答不出来」会被永久固化成

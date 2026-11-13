@@ -271,7 +271,22 @@ export type ReclaimTicket = {
   command: string;
   /** 这一次创建独有的资源记号 —— 归属与整项退出的唯一凭证(见 `reclaimEvidence`)。 */
   unitToken: string | null;
+  /** 原进程最晚在这一刻之前已经起来(见 `startedByOf`)。 */
+  startedByMs: number | null;
 };
+
+/**
+ * 原进程**最晚**在哪一刻之前已经起来 —— 手里 ash 自己落盘的绝对时刻里取最早的那个:spawn
+ * 返回那一刻的锚,以及债行的创建时刻(这个号是 spawn 返回的,债一定记在它之后)。都是纪元
+ * 时刻,不吃 ps 那串不带时区的展示时间(见 evidence 的 `rootSuperseded`)。
+ */
+function startedByOf(d: { spawnAnchorMs?: number | null; createdAt?: string | null }): number | null {
+  const known = [d.spawnAnchorMs ?? NaN, d.createdAt ? Date.parse(d.createdAt) : NaN].filter(Number.isFinite);
+  return known.length ? Math.min(...known) : null;
+}
+const unitOfDebt = <T extends { unitToken: string | null; command?: string | null;
+  spawnAnchorMs?: number | null; createdAt?: string | null }>(d: T): MonitorUnit =>
+  ({ unitToken: d.unitToken, command: d.command, startedByMs: startedByOf(d) });
 
 /** 需要补记的那一笔(落盘失败时原样带着,供重试)。 */
 type DebtInput = {
@@ -439,7 +454,7 @@ export async function reclaimMonitorProcess(
   // **先补身份再判档**:补得上就按完整身份走(该杀的杀、该销的销),补不上才落到「不知道」。
   const identity = await completeIdentity({ ...m, pid });
   const pidStartedAt = identity.pidStartedAt;
-  const unit: MonitorUnit = { unitToken: m.unitToken, command: m.command };
+  const unit: MonitorUnit = { unitToken: m.unitToken, command: m.command, startedByMs: identity.anchorMs };
   // **判档吃备忘、发信号自己 fresh**(第 14 轮审查 F1):这一问要走两遍全表 `ps -E`(本机
   // 约 160ms),而判档这一份只决定「记什么、该不该动手」—— 备忘最多 400ms,而唯一能造出
   // 「资源存在但扫描里没有」的动作(起进程)会当场把它作废。真正需要当代证据的是下刀那一刻,
@@ -447,8 +462,9 @@ export async function reclaimMonitorProcess(
   const state = reclaimState(pid, pidStartedAt, unit);
   const debt: DebtInput = {
     monitorId: m.id, taskId: m.taskId, pid, pidStartedAt,
-    // 身份还没补全就把锚一起留下:哨兵行和边条都可能先没了,之后这笔债是唯一的线索。
-    spawnAnchorMs: pidStartedAt ? null : identity.anchorMs,
+    // 锚一起留下:哨兵行和边条都可能先没了,之后这笔债是唯一的线索 —— 身份没补全时靠它补,
+    // 号被复用时靠它证明「号上那个是后来的」(`startedByOf`)。
+    spawnAnchorMs: identity.anchorMs,
     unitToken: m.unitToken, identityDisproved: identity.disproved,
     command: m.command, reason: `${reason}（${stateNote(state)}）`,
   };
@@ -472,7 +488,10 @@ export async function reclaimMonitorProcess(
   if (!accounted) return { state: "unaccounted", debt };
   return {
     state: "owed",
-    ticket: { monitorId: m.id, pid, pidStartedAt, command: m.command, unitToken: m.unitToken },
+    ticket: {
+      monitorId: m.id, pid, pidStartedAt, command: m.command, unitToken: m.unitToken,
+      startedByMs: identity.anchorMs,
+    },
   };
 }
 
@@ -509,7 +528,7 @@ export async function settleReclaim(outcome: ReclaimOutcome, deadlineMs = 3_000)
     //
     // **追空了也要先把身份留住**(第 14 轮审查 F2):上一版这里无论补记成不成都返回 `closed`
     // —— 于是「该留责任却没留下来」被一句「线索追空了」洗掉,销毁前核对再也拦不下删除。
-    const traceless = await confirmTraceless(debt.pid, debt.pidStartedAt, deadlineMs, debt);
+    const traceless = await confirmTraceless(debt.pid, debt.pidStartedAt, deadlineMs, unitOfDebt(debt));
     if (traceless) {
       if (await ensureIdentityArchived(debt, stateNote(traceless)) !== "failed") return "closed";
       console.error(
@@ -557,7 +576,7 @@ function scheduleReclaimPersist(debt: DebtInput, step = 0): void {
       // 线索已经空了也要把这一笔补上:它是「这件事发生过」的唯一记录(只是补完就收档)。
       // **补不上就接着爬梯子**(第 14 轮审查 F2):上一版这一支无论成不成都 `return`,于是
       // 「追空」成了停止重试的理由 —— 而这一档恰恰是身份只剩这一行的那一档。
-      const state = reclaimState(debt.pid, debt.pidStartedAt, debt);
+      const state = reclaimState(debt.pid, debt.pidStartedAt, unitOfDebt(debt));
       if (isTracelessState(state)) {
         if (await ensureIdentityArchived(debt, stateNote(state)) !== "failed") return;
         scheduleReclaimPersist(debt, step + 1);
@@ -608,7 +627,8 @@ async function settleDebt(monitorId: string): Promise<boolean> {
   });
   debt = { ...debt, pidStartedAt };
   // 判档吃备忘,发信号那一刀由 `shootProvenUnitNow` 自己 fresh 取证(同 `reclaimMonitorProcess`)。
-  const state = reclaimState(debt.pid, debt.pidStartedAt, debt);
+  const unit = unitOfDebt(debt);
+  const state = reclaimState(debt.pid, debt.pidStartedAt, unit);
   if (isTracelessState(state)) {
     await closeDebtAndAnchor(monitorId, stateNote(state));
     return true;
@@ -623,7 +643,7 @@ async function settleDebt(monitorId: string): Promise<boolean> {
     // **这一刀自己重新取证**(第 14 轮审查 F1):上面那一份判完之后隔着 `completeIdentity` 等
     // 几次 `await`,拿它当授权就是把一次性的凭证存成了跨等待可复用的裸 pid 数组。
     shootProvenUnitNow(debt.pid, debt.pidStartedAt, debt, "SIGKILL");
-    const traceless = await confirmTraceless(debt.pid, debt.pidStartedAt, 1_000, debt);
+    const traceless = await confirmTraceless(debt.pid, debt.pidStartedAt, 1_000, unit);
     if (traceless) {
       await closeDebtAndAnchor(monitorId, stateNote(traceless));
       console.error(`[ash] 回收责任已收档 monitor=${monitorId} pid=${debt.pid}（补杀成功,线索已空）`);

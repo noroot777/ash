@@ -13,7 +13,7 @@
 // 折成布尔的那一份(`isSameProcess`)只是它的投影,给只需要是/否的两个老使用方用 ——
 // 谁都不许在投影之外再补一次查询,理由见 `processIdentity` 的注释。
 import { liveMonitorUnitsSync } from "./monitor-unit-scan.js";
-import { inspectProcessSync, isPidRunning } from "./platform.js";
+import { inspectProcessSync, isPidRunning, processElapsedSecondsSync } from "./platform.js";
 import type { ProcessMember } from "./process-generation.js";
 
 export type ProcessInfo = {
@@ -91,17 +91,17 @@ export function processIdentity(pid: number, expectedStartedAt?: string | null):
 }
 
 /**
- * 「这个号上现在是一个**比记录那一代更晚**起来的进程」—— 只在答得出、而且严格更晚时为真。
+ * 「这个号上现在的进程,**确定**是在 `instantMs` 之后才起来的」—— 问不出来一律 false。
  *
- * 它比 `different` 多要了一个方向:号被复用,新主人一定是在原主人之后起来的。读出来更早
- * (时钟被拨过、读数本身不可信)说明这一次的「对不上」没法当作复用的证明,按「不是」处理。
- * 一次快照、纯比较,跟 `processIdentity` 同一份判据;问不出来、比不出来一律 false。
+ * 不拿 `lstart` 比:那是一段不带时区的展示文本,记录时和现在的 `TZ` 不同,同一个进程读出来
+ * 就能「更晚」几个小时(第 1 轮审查 F1 实测:UTC 下记录、北京时间下重读,活着的原进程被判成
+ * 换代)。这里用的是不带时区的「已运行时长」(`processElapsedSecondsSync`),它只有秒级、
+ * 截断,所以按**最早可能**的启动时刻比:宁可比不出来,不许比出一个不成立的「更晚」。
  */
-export function occupiedByLaterGeneration(pid: number, recordedStartedAt: string): boolean {
-  const info = inspectProcess(pid);
-  const recordedMs = parseStartedAt(recordedStartedAt);
-  if (!info || info.startedAtMs === null || recordedMs === null) return false;
-  return info.startedAtMs > recordedMs;
+export function occupantStartedAfter(pid: number, instantMs: number): boolean {
+  const elapsed = processElapsedSecondsSync(pid);
+  if (elapsed === null) return false;
+  return Date.now() - (elapsed + 1) * 1000 > instantMs;
 }
 
 /**

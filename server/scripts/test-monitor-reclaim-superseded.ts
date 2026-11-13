@@ -1,8 +1,8 @@
 // **号被复用的那几笔账:能证明原进程已经不在,就自己了结;证明不了,一笔都不许了结。**
 //
 // 开机账上那批永远对不平的记录(2026-11-13 实测 11 笔,单笔重试 52–340 次)全是同一个现场:
-// 记录的那个号上现在是**更晚起来的另一个进程**,记号在任何活进程上都读不到。上一版把它停在
-// `not-ours`(「原进程退出无法确认」),每次开机重试、重报一遍。可号被复用本身就是证明 ——
+// 记录的那个号上现在是**原进程之后才起来的另一个进程**,记号在任何活进程上都读不到。上一版把
+// 它停在 `not-ours`(「原进程退出无法确认」),每次开机重试、重报一遍。可号被复用本身就是证明 ——
 // POSIX 在一个号的进程**和以它为组号的进程组**都结束之前不会把它分配出去(判据与理由见
 // monitor-reclaim-evidence.ts 的 `rootSuperseded`)。
 //
@@ -10,7 +10,12 @@
 //  ① 能证明的那一种:收档、戳上写清依据、之后清扫不再碰它、也不碰号上的新主人;
 //     接回那一侧遇到同样的现场,责任行生下来就是收档态(不再新添一笔永远平不了的账);
 //  ② 证明不了的几种**一笔都不许了结**:原进程的后代还带着记号活着(开机账上那笔 colima 守护
-//     进程就是这一幕)、读出来的新主人反而更早(读数不可信)、ps 这一刻问不出来。
+//     进程就是这一幕)、**原进程自己还活着、只是换了时区重读**(第 1 轮审查 F1:`lstart` 不带
+//     时区,UTC 下记录、北京时间下重读,清掉了环境的活命令曾被判成换代并永久收档)、新主人起在
+//     锚之后但没超出防拨钟的余量、ps 这一刻问不出来。
+//
+// 「换代」的证据是两个不带时区的量:ash 落盘的绝对时刻(债行的创建时刻 / 身份边条的 spawn 时刻)
+// 和号上那个进程的已运行时长。台子里的「债是两小时前记的」就是这么来的。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -19,14 +24,17 @@ import {
   db, insertMonitorRow, isPidAlive, makeTask, monitors, reattachMonitors, schema, teardown, until,
 } from "./monitors-fixture.js";
 import { STUBBORN, debtRow, withPsOutage } from "./monitor-reclaim-fixture.js";
+import { writeFileSync } from "node:fs";
 import { inspectProcess } from "../src/proc.js";
 import { MONITOR_UNIT_ENV, invalidateMonitorUnitScan, monitorUnitProofGrade } from "../src/monitor-unit-scan.js";
+import { monitorSpawnIdentityPath } from "../src/monitor-spawn.js";
 
 const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.js");
 const { isTracelessState, reclaimState } = await import("../src/monitor-reclaim-evidence.js");
 const { killTree } = await import("../src/platform.js");
 
-const SUPERSEDED_NOTE = /原进程已不存在.*已被更晚起来的另一个进程占用/;
+const SUPERSEDED_NOTE = /原进程已不存在.*已被原进程之后才起来的另一个进程占用/;
+const HOUR = 3_600_000;
 
 /** 台子自己起的进程:各条用例结束各收各的,teardown 前再兜一遍。 */
 const spawned: number[] = [];
@@ -54,15 +62,25 @@ const lstartAt = (ms: number): string => {
   return `${day} ${mon} ${String(d.getDate()).padStart(2, " ")} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())} ${d.getFullYear()}`;
 };
 const startedMsOf = (pid: number): number => inspectProcess(pid)!.startedAtMs!;
+/** 判档时带上债行那个锚(跟清扫那一侧同一种取法:创建时刻)。 */
+const debtUnit = async (monId: string) => {
+  const d = (await debtRow(monId))!;
+  return { unitToken: d.unitToken, startedByMs: Date.parse(d.createdAt) };
+};
 
-/** 一笔「上一辈子没收掉」的账:号是 `pid`,记录的那一代起在 `recorded`,记号是 `token`。 */
-async function insertDebt(pid: number, recorded: string, token: string): Promise<string> {
+/**
+ * 一笔「上一辈子没收掉」的账:号是 `pid`,记录的那一代起在 `recorded`,记号是 `token`,
+ * 这一行在 `createdAt` 那一刻落盘(缺省两小时前 —— 原进程最晚那时已经起来了)。
+ */
+async function insertDebt(
+  pid: number, recorded: string, token: string, createdAt = new Date(Date.now() - 2 * HOUR).toISOString(),
+): Promise<string> {
   const monitorId = `mon-superseded-${randomUUID()}`;
   await db.insert(schema.monitorReclaimDebts).values({
     monitorId, taskId: "task-gone", pid, pidStartedAt: recorded, spawnAnchorMs: null,
     unitToken: token, identityDisprovedAt: null, command: "sleep 600",
     reason: "上一辈子把它停了，但退出从没被确认（这个号现在是另一个进程，原进程退出无法确认）",
-    lastError: null, attempts: 0, createdAt: new Date().toISOString(), lastAttemptAt: null,
+    lastError: null, attempts: 0, createdAt, lastAttemptAt: null,
     closedAt: null, closedNote: null,
   });
   return monitorId;
@@ -70,12 +88,15 @@ async function insertDebt(pid: number, recorded: string, token: string): Promise
 
 try {
   {
-    // ① 号上是**更晚**起来的另一个进程,记号一个都读不到 ⇒ 原进程与原进程组都已结束,收档。
+    // ① 号上的进程起在债落盘之后(原进程最晚那时已经起来了),记号一个都读不到
+    //    ⇒ 原进程与原进程组都已结束,收档。
     const stranger = await spawnStubborn();
-    const recorded = lstartAt(startedMsOf(stranger) - 3_600_000);
+    const recorded = lstartAt(startedMsOf(stranger) - 3 * HOUR);
     const monId = await insertDebt(stranger, recorded, `fixture-${randomUUID()}`);
-    assert.equal(reclaimState(stranger, recorded, (await debtRow(monId))!), "superseded",
-      "号被更晚的一代占着、记号问全了也没有 ⇒ 这一档是 superseded,不再是「原进程退出无法确认」");
+    assert.equal(reclaimState(stranger, recorded, await debtUnit(monId)), "superseded",
+      "号被后来的进程占着、记号问全了也没有 ⇒ 这一档是 superseded,不再是「原进程退出无法确认」");
+    assert.equal(reclaimState(stranger, recorded, { unitToken: (await debtRow(monId))!.unitToken }), "not-ours",
+      "没有 ash 落盘的锚就证不出换代:只凭那串展示时间不升档");
 
     await sweepMonitorReclaimDebts();
     const closed = (await debtRow(monId))!;
@@ -97,9 +118,9 @@ try {
     const token = `fixture-${randomUUID()}`;
     const survivor = await spawnStubborn({ [MONITOR_UNIT_ENV]: token });
     const stranger = await spawnStubborn();
-    const recorded = lstartAt(startedMsOf(stranger) - 3_600_000);
+    const recorded = lstartAt(startedMsOf(stranger) - 3 * HOUR);
     const monId = await insertDebt(stranger, recorded, token);
-    assert.equal(isTracelessState(reclaimState(stranger, recorded, (await debtRow(monId))!)), false,
+    assert.equal(isTracelessState(reclaimState(stranger, recorded, await debtUnit(monId))), false,
       "记号还在活进程上 ⇒ 不管号被谁占了,都不许判成「追空了」");
 
     await sweepMonitorReclaimDebts();
@@ -118,15 +139,39 @@ try {
   }
 
   {
-    // ③ 读出来的新主人反而**更早** —— 复用的新主人不可能起得比原主人早,这次读数不配当证明。
+    // ③ **原进程自己还活着**、命令清掉了环境(记号问不着),只是记录时和现在的时区不同
+    //    (第 1 轮审查 F1 的复现):`lstart` 不带时区,两次读数能差出好几个小时 —— 不许据此收档。
+    const realTz = process.env.TZ;
+    const original = await spawnStubborn();
+    let recorded: string;
+    try {
+      process.env.TZ = "UTC";
+      recorded = inspectProcess(original)!.startedAt!;
+      process.env.TZ = "Asia/Shanghai";
+      assert.notEqual(inspectProcess(original)!.startedAt, recorded, "台子前提:换了时区,同一个进程读出来的展示时间变了");
+      // 债在原进程起来之后才落盘 —— 生产里就是这个顺序。
+      const monId = await insertDebt(original, recorded, `fixture-${randomUUID()}`, new Date().toISOString());
+      assert.equal(isTracelessState(reclaimState(original, recorded, await debtUnit(monId))), false,
+        "原进程还活着:展示时间变了也不许判成「追空了」");
+      await sweepMonitorReclaimDebts();
+      assert.equal((await debtRow(monId))!.closedAt, null, "原进程还活着的账一笔都不许了结");
+      assert.equal(isPidAlive(original), true, "也不许因此下刀");
+    } finally {
+      if (realTz === undefined) delete process.env.TZ; else process.env.TZ = realTz;
+    }
+    await reap(original);
+  }
+
+  {
+    // ③' 号上那个确实起在锚之后,但没超出防拨钟的余量 —— 证明不够硬,照旧留着。
     const stranger = await spawnStubborn();
-    const recorded = lstartAt(startedMsOf(stranger) + 3_600_000);
-    const monId = await insertDebt(stranger, recorded, `fixture-${randomUUID()}`);
-    assert.equal(reclaimState(stranger, recorded, (await debtRow(monId))!), "not-ours",
-      "对不上、但方向不对 ⇒ 停在 not-ours,不升成可收档的那一档");
+    const recorded = lstartAt(startedMsOf(stranger) - 3 * HOUR);
+    const monId = await insertDebt(stranger, recorded, `fixture-${randomUUID()}`,
+      new Date(Date.now() - 10 * 60_000).toISOString());
+    assert.equal(reclaimState(stranger, recorded, await debtUnit(monId)), "not-ours");
     await sweepMonitorReclaimDebts();
     const row = (await debtRow(monId))!;
-    assert.equal(row.closedAt, null, "证明不了就留着");
+    assert.equal(row.closedAt, null, "余量之内不了结");
     assert.equal(row.attempts, 1, "照旧记一次没收掉");
     await reap(stranger);
   }
@@ -134,11 +179,12 @@ try {
   {
     // ④ ps 这一刻问不出来 —— 什么都不许声称,账留着。
     const stranger = await spawnStubborn();
-    const recorded = lstartAt(startedMsOf(stranger) - 3_600_000);
+    const recorded = lstartAt(startedMsOf(stranger) - 3 * HOUR);
     const monId = await insertDebt(stranger, recorded, `fixture-${randomUUID()}`);
+    const unit = await debtUnit(monId);
     await withPsOutage(stranger, async () => {
       invalidateMonitorUnitScan();
-      assert.equal(isTracelessState(reclaimState(stranger, recorded, (await debtRow(monId))!)), false,
+      assert.equal(isTracelessState(reclaimState(stranger, recorded, unit)), false,
         "问不出来不是「追空了」");
       await sweepMonitorReclaimDebts();
     });
@@ -152,12 +198,16 @@ try {
 
   {
     // ⑤ 接回那一侧遇到同样的现场:责任行生下来就是收档态,不再新添一笔永远平不了的账。
+    //    锚是身份边条上那个 spawn 时刻(运行中的行不会撤边条)。
     const taskId = await makeTask({ status: "running" });
     const stranger = await spawnStubborn();
-    const recorded = lstartAt(startedMsOf(stranger) - 3_600_000);
+    const recorded = lstartAt(startedMsOf(stranger) - 3 * HOUR);
     const monId = await insertMonitorRow(taskId, {
       status: "running", pid: stranger, pidStartedAt: recorded, unitToken: `fixture-${randomUUID()}`,
     });
+    const logPath = (await db.select().from(monitors).where(eq(monitors.id, monId))).at(0)!.logPath;
+    writeFileSync(monitorSpawnIdentityPath(logPath),
+      JSON.stringify({ pid: stranger, spawnedAtMs: Date.now() - 3 * HOUR }));
     await reattachMonitors();
     const mon = (await db.select().from(monitors).where(eq(monitors.id, monId))).at(0)!;
     assert.equal(mon.status, "lost");
@@ -173,4 +223,4 @@ try {
   for (const pid of spawned) if (isPidAlive(pid)) killTree(pid, "SIGKILL");
   await teardown();
 }
-console.log("✓ 号被更晚一代占用、记号无残留 ⇒ 开机/接回当场了结并写明依据,之后不再重试 / 原进程后代还带记号、读数方向不对、ps 不可用 ⇒ 一笔都不了结 均受回归保护");
+console.log("✓ 号被原进程之后起来的进程占用、记号无残留 ⇒ 开机/接回当场了结并写明依据,之后不再重试 / 原进程后代还带记号、原进程活着只是换了时区、余量之内、ps 不可用 ⇒ 一笔都不了结 均受回归保护");
