@@ -9,6 +9,8 @@
 //   ⑥ 团队页同一套：头上有那一句，那条记录不再单独一行。
 //   ⑦ 几条会话交错续跑（先后起跑、稍后才各自开口）：每条会话认自己的那一条，别的会话的续跑、输入、
 //      旁路续跑都碰不到它；落盘重建和直播到达一样，任务页和团队页一样。
+//   ⑧ 独立的续跑不被当成重复记录丢掉：同一会话十几秒内又续跑一次、几条会话同一毫秒起续跑，开着页面
+//      看都各有起因；真正的重复（刷新快照与直播各到一份同一条记录）仍只留一份。
 import assert from "node:assert/strict";
 import type { Session } from "@ash/shared";
 import { appendMonitorWake, type MonitorWakeEvent } from "@ash/shared/monitor-wake";
@@ -254,6 +256,69 @@ for (const reason of RESUME_REASONS) {
     { kind: "server", id: "e3", event: { taskId: "t1", sessionId: "s1", role: "single", agentType: "claude", turnStartedAt: at(11), event: { kind: "text", text: "好的。" } } as never },
   ]);
   assert.equal(agents(typed).some((turn) => turn.resumeCause), false, "你插了话之后开口的回合不是续跑起的头");
+}
+
+// ⑧ 独立的续跑不被当成重复 ────────────────────────────────────────────────────────
+{
+  const sec = (minute: number, second: number) => new Date(T0 + minute * 60_000 + second * 1000).toISOString();
+  const s1 = session({ id: "s1", endedAt: null });
+  const s2 = session({ id: "s2", agentType: "codex", executor: "codex@cpa", startedAt: at(1), endedAt: null } as Partial<Session>);
+  const ev = (id: string, sessionId: string, event: Record<string, unknown>, turnStartedAt?: string): TimelineEntry => ({
+    kind: "server", id,
+    event: { taskId: "t1", sessionId, role: "single", agentType: sessionId === "s1" ? "claude" : "codex", ...(turnStartedAt ? { turnStartedAt } : {}), event } as never,
+  });
+  const causes = (items: ConversationItem[]) => ({
+    task: feed(items).causes.filter(Boolean),
+    team: agents(teamFeedRows(items, []).flatMap((row) => row.kind === "conv" ? [row.item] : [])).map((turn) => turnCauseText(turn)).filter(Boolean),
+  });
+  const opening = [line({ t: "user", agent: "claude", text: "s1 开工", at: at(0) }), "s1 第一回合。", end(2)].join("");
+  const openingTrace = [run(0), text(1, 0, "s1 第一回合。")];
+  const quickResume = line({ t: "system", agent: "claude", text: MARKER, resume: { reason: "queue" }, at: sec(10, 0) });
+  const quickTrace = [...openingTrace, { at: sec(10, 0), turnStartedAt: sec(10, 0), event: { kind: "run", model: "claude-opus-5-5", reasoningEffort: "high" } },
+    { at: sec(10, 2), turnStartedAt: sec(10, 0), event: { kind: "text", text: "很快跑完了。" } }];
+
+  // A. 快照里已有上一次续跑（12:10:00，三秒就跑完），页面随后只收到 12 秒后又一次续跑的直播。
+  const rapidLive = buildConversationItems([{
+    session: s1, output: [opening, quickResume, "很快跑完了。", line({ t: "agentEnd", at: sec(10, 3) })].join(""), trace: quickTrace as never,
+  }], [s1], [
+    ev("e1", "s1", { kind: "system", text: MARKER, at: sec(10, 12), resume: { reason: "run" } }),
+    ev("e2", "s1", { kind: "text", text: "又接着跑完了。" }, sec(10, 12)),
+  ]);
+  const rapidDisk = buildConversationItems([{
+    session: s1,
+    output: [opening, quickResume, "很快跑完了。", line({ t: "agentEnd", at: sec(10, 3) }),
+      line({ t: "system", agent: "claude", text: MARKER, resume: { reason: "run" }, at: sec(10, 12) }), "又接着跑完了。", end(11)].join(""),
+    trace: [...quickTrace, { at: sec(10, 12), turnStartedAt: sec(10, 12), event: { kind: "run", model: "claude-opus-5-5", reasoningEffort: "high" } },
+      { at: sec(10, 20), turnStartedAt: sec(10, 12), event: { kind: "text", text: "又接着跑完了。" } }] as never,
+  }], [s1], []);
+  assert.deepEqual(causes(rapidDisk), { task: ["队列续跑", "手动续跑"], team: ["队列续跑", "手动续跑"] });
+  assert.deepEqual(causes(rapidLive), causes(rapidDisk), "十几秒内又续跑一次：新那条被当成上一条的副本丢了");
+
+  // B. 两条会话同一毫秒起续跑。
+  const sameMs = buildConversationItems([
+    { session: s1, output: opening, trace: openingTrace as never },
+    { session: s2, output: [line({ t: "user", agent: "codex", text: "s2 开工", at: at(1) }), "s2 第一回合。", end(3)].join(""), trace: [run(1), text(2, 1, "s2 第一回合。")] as never },
+  ], [s1, s2], [
+    ev("e1", "s1", { kind: "system", text: MARKER, at: at(10), resume: { reason: "queue" } }),
+    ev("e2", "s2", { kind: "system", text: MARKER, at: at(10), resume: { reason: "retry" } }),
+    ev("e3", "s1", { kind: "text", text: "s1 接着跑完了。" }, at(10)),
+    ev("e4", "s2", { kind: "text", text: "s2 接着跑完了。" }, at(10)),
+  ]);
+  assert.deepEqual(causes(sameMs), { task: ["队列续跑", "你点了重试"], team: ["队列续跑", "你点了重试"] }, "同一毫秒的两次续跑被当成一条");
+
+  // 真正的重复：刷新快照里已经有这条记录，直播又到了同一条（同会话、同一时刻）——只留一份。
+  const doubled = buildConversationItems([{
+    session: s1, output: [opening, quickResume, "很快跑完了。"].join(""), trace: quickTrace as never,
+  }], [s1], [ev("e1", "s1", { kind: "system", text: MARKER, at: sec(10, 0), resume: { reason: "queue" } })]);
+  assert.equal(resumeEvents(doubled).length, 1, "快照与直播各到一份同一条续跑，应只留一份");
+  assert.deepEqual(causes(doubled).task, ["队列续跑"]);
+  // 直播重投了同一条事件（同会话、同一时刻）：紧挨着的两份只留一份。
+  const redelivered = buildConversationItems([{ session: s1, output: opening, trace: openingTrace as never }], [s1], [
+    ev("e1", "s1", { kind: "system", text: MARKER, at: at(10), resume: { reason: "queue" } }),
+    ev("e1b", "s1", { kind: "system", text: MARKER, at: at(10), resume: { reason: "queue" } }),
+    ev("e2", "s1", { kind: "text", text: "接着跑完了。" }, at(10)),
+  ]);
+  assert.equal(resumeEvents(redelivered).length, 1);
 }
 
 console.log("turn-cause ok");

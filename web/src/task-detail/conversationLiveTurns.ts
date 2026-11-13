@@ -24,6 +24,11 @@ const SNAPSHOT_DUPLICATE_WINDOW_MS = 30_000;
 // received over SSE. Keep the persisted copy and discard only the live copy
 // whose event time is close to that exact persisted sentinel. The timestamp
 // guard matters because idle-recycle notices legitimately repeat every 30 min.
+//
+// 系统续跑记录不吃这个容差：每一次续跑写的都是同一句原文，「同文字、30 秒内」认不出是不是
+// 同一次——一轮很快结束又续跑一次，新那条就被当成上一条的副本丢掉，它起头的回合头上便没了
+// 起因。它的落盘 sentinel 与直播事件是同一个时刻写下的（server 的 recordSystemResumeTurn），
+// 按会话 + 时刻精确对上才是同一条。
 function timelineAfterPersistedTurns(
   timeline: TimelineEntry[],
   persistedTurns: PersistedTurnTimes,
@@ -31,9 +36,13 @@ function timelineAfterPersistedTurns(
   const remaining = new Map([...persistedTurns].map(([key, times]) => [key, [...times]]));
   return timeline.filter((entry) => {
     const marker = entry.kind === "user"
-      ? { key: turnKey("user", entry.text), at: entry.at }
+      ? { key: turnKey("user", entry.text), at: entry.at, window: SNAPSHOT_DUPLICATE_WINDOW_MS }
       : entry.event.event.kind === "system"
-        ? { key: turnKey("system", entry.event.event.text, entry.event.sessionId), at: entry.event.event.at }
+        ? {
+            key: turnKey("system", entry.event.event.text, entry.event.sessionId),
+            at: entry.event.event.at,
+            window: resumeNoteOf(entry.event.event.text, entry.event.event.resume) ? 0 : SNAPSHOT_DUPLICATE_WINDOW_MS,
+          }
         : null;
     if (!marker) return true;
     const liveTime = Date.parse(marker.at);
@@ -43,7 +52,7 @@ function timelineAfterPersistedTurns(
     for (let index = 1; index < candidates.length; index += 1) {
       if (Math.abs(candidates[index]! - liveTime) < Math.abs(candidates[nearest]! - liveTime)) nearest = index;
     }
-    if (Math.abs(candidates[nearest]! - liveTime) > SNAPSHOT_DUPLICATE_WINDOW_MS) return true;
+    if (Math.abs(candidates[nearest]! - liveTime) > marker.window) return true;
     candidates.splice(nearest, 1);
     return false;
   });
@@ -213,10 +222,13 @@ function appendAgent(items: ConversationItem[], event: LiveAgentEvent, sessions:
   return item;
 }
 
+// 紧挨着的同一条旁注只留一份。会话也得对上：几条会话同一毫秒各写一条同样的话（同时起续跑）
+// 是几件事，不是重复。
 function appendEvent(items: ConversationItem[], item: ConversationEventItem): void {
   const last = items[items.length - 1];
   if (
     last?.kind === "event"
+    && last.sessionId === item.sessionId
     && last.text === item.text
     && last.at === item.at
     && last.tone === item.tone
