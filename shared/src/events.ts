@@ -162,6 +162,8 @@ export type ServerEvent =
   | { type: "task.status"; taskId: string; status: TaskStatus; updatedAt: string; startedAt?: string | null; endedAt?: string | null; activeMs?: number | null; liveSince?: string | null }
   | { type: "task.stage"; taskId: string; stage: TaskStage | null; updatedAt: string }
   | { type: "task.review"; taskId: string }
+  // 任务「此刻能做什么」重算了（shared/src/task-actions.ts）。只推给打开过这个任务的页面所关心的那些任务。
+  | { type: "task.actions"; taskId: string; actions: import("./task-actions.ts").TaskActions }
   // 验收前置命令起了/跑完了。只发信号不带载荷（同 task.monitors）：界面按它重拉
   // `/tasks/:id/accept-gate` —— 载荷里有日志尾巴，几分钟一条的广播不该驮着它。
   | { type: "task.acceptGate"; taskId: string }

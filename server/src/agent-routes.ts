@@ -23,6 +23,7 @@ import { defaultClearScope, dispatchBlockReason } from "./auth/dispatch-gate.js"
 import {
   ensureExecutorAshMcp, executorAshMcpState, registeredExecutorAshMcp, storedExtraArgs,
 } from "./auth/executor-ash-mcp.js";
+import { markAllTaskActionsDirty } from "./task-actions-dirty.js";
 
 const toAgent = (r: typeof agents.$inferSelect) => ({
   id: r.id,
@@ -222,6 +223,8 @@ export function mountAgentRoutes(api: Hono): void {
     const written = clearDefault ? (await db.batch([clearDefault, write]))[1] : await write;
     const updated = written.at(0);
     if (!updated) return c.json({ error: "not found" }, 404); // 与开头预读那条同一句话
+    // 「重跑上一回合」核的是会话记下的执行器指纹：profile 一改，打开着的任务都要重算。
+    markAllTaskActionsDirty();
     return c.json(await toGatedAgent(updated));
   });
 
@@ -231,6 +234,7 @@ export function mountAgentRoutes(api: Hono): void {
     if (!existing || !(await canUseOwned(existing, actorOf(c)))) return c.json({ error: "not found" }, 404);
     await db.delete(agents).where(eq(agents.id, aid));
     await detachTaskRefs("executorId", aid);
+    markAllTaskActionsDirty();
     return c.json({ deleted: true });
   });
 }

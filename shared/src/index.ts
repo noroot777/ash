@@ -575,6 +575,9 @@ export type { NativeAgentActivity, NativeWorkEvent, NativeWorkStatus } from "./n
 // 子路径：本文件不能转发运行时函数）。老会话的「继续」标记仍从这里导出，web 有两处在读它。
 export const LEGACY_SYS_MARKER = "〔系统〕继续（从中断处）";
 export type { ConvSeg } from "./session-output.ts";
+export type {
+  ActionVerdict, PrimaryAction, PrimaryActionKind, ReviewRetryIdentity, RetryTurnAction, TaskActions,
+} from "./task-actions.ts";
 
 // 「答复」是回答 agent 提问的那条，走 /tasks/:id/answer 时由服务端加的前缀。
 export const ANSWER_PREFIX = "【答复】";

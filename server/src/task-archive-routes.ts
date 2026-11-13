@@ -2,13 +2,11 @@
 // 不动 status），门禁与团队连带见各路由内注释。磁盘上的 worktree/分支按全局设置
 // `archiveClean` 一起收，那一段在 task-archive-cleanup.ts。
 import type { TaskStatus } from "@ash/shared";
-import { canArchive } from "@ash/shared";
 import { summarizeArchiveCleanup } from "@ash/shared/project";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
-import { hasActiveFreeReview } from "./free-workflow.js";
 import { stopMonitorsForTask } from "./monitor-reclaim.js";
 import { reclaimGateSnapshots } from "./accept-gate-reclaim.js";
 import { isAcceptingTask, isAdmitting } from "./acceptance-lock.js";
@@ -18,6 +16,8 @@ import { cleanupArchivedWorkspaces } from "./task-archive-cleanup.js";
 import { acceptedHeadRef, commitAt } from "./task-branch-plan.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { enrichTasks } from "./task-store.js";
+import { readActionFacts } from "./task-actions.js";
+import { archiveVerdict } from "./task-action-verdicts.js";
 import { detectTaskWorkspace } from "./workspace-cleanup.js";
 import { haltTeam } from "./team/session.js";
 import { now } from "./util.js";
@@ -33,11 +33,13 @@ export function mountTaskArchiveRoutes(api: Hono): void {
     if (!r) return c.json({ error: "not found" }, 404);
     // idempotent：已经归档了就什么都不做（清理也不重跑——它在第一次归档时就做过了）
     if (r.archived) return c.json({ task: (await enrichTasks([r]))[0], cleanup: null });
-    if (!canArchive(r.status as TaskStatus)) {
-      return c.json({ error: "只有已完成/失败/已取消的任务可以归档", status: r.status }, 409);
-    }
-    // 归档 = 冻结。回合被占（status 尚未落 running）、自由审查正在进行、或验收正在执行时
-    // 归档，会让一个「冻结」任务上继续跑回合/审查/合并写入——先等它结束或停掉再归档。
+    // 状态不是终态、团队执行者（跟着团队一起归档）、就地验证轮没结束、自由审查正在进行：
+    // 判据见 archiveVerdict，界面上那颗「归档」读同一份。
+    const verdict = archiveVerdict(await readActionFacts(r));
+    if (!verdict.ok) return c.json({ error: verdict.reason, ...verdict.detail }, 409);
+    // 归档 = 冻结。回合被占（status 尚未落 running）或验收正在执行时归档，会让一个「冻结」
+    // 任务上继续跑回合/合并写入——先等它结束或停掉再归档。这几把锁只在内存里、转瞬即逝，
+    // 不进判据（进了也只会在锁放开那一刻变成过期的「不能归档」），撞上了就如实说。
     if (isTurnClaimed(r.id)) {
       return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再归档", status: r.status }, 409);
     }
@@ -47,16 +49,6 @@ export function mountTaskArchiveRoutes(api: Hono): void {
     // 名下正在加成员（派活、建执行者 / 审查）：归档在它落库之前做完，新来的就落在已归档的团队名下、照样能跑。
     if (isAdmitting(r.id)) {
       return c.json({ error: "名下正在加入新的任务（执行者、子任务或审查），结束后再归档" }, 409);
-    }
-    if (r.workflowMode === "free" && await hasActiveFreeReview(r.id)) {
-      return c.json({ error: "自由审查正在进行，结束后再归档" }, 409);
-    }
-    // 就地验证轮中途提问后,旁路结算会把 status 放回原终态(done/failed),而 verifyRound
-    // 和 question 都还挂着——只看 status/turn 的门禁会放行,于是「已冻结」的任务被答复后
-    // 继续结算,最后留下 archived=true + stage=verifying 的死局(审查实测)。验证轮没结束
-    // 就是还在进行,先答复/停掉它再归档。
-    if (r.verifyRound !== null) {
-      return c.json({ error: "就地验证轮还没结束（可能正等你答复），处理完再归档", status: r.status }, 409);
     }
     // 团队归档会连 children 一起冻结：任一执行者还在验收(含发布尾段)/回合中时归档，
     // 冻结的任务会继续产生外部副作用(审查实测:child beginAccepting 后归档 lead 200)。

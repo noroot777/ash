@@ -3,13 +3,9 @@ import type {
   ScheduledMessage,
   ScheduledMessageMode,
   ScheduledMessageStatus,
-  TaskStatus,
-} from "@ash/shared";
-import {
-  canSingleRun,
 } from "@ash/shared";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } from "./cua.js";
 import { db } from "./db/index.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
@@ -33,7 +29,9 @@ import { pendingMessagePresence } from "./pending-wait.js";
 import { isOvertaken, queueBlockedText, queueBlockerDetails, repackQueue, tailOrder } from "./queues.js";
 import { queueClaimError, seatThenStart } from "./queue-seat.js";
 import { claimOwnTurn, heldForAcceptance, releaseTurn, stopTask, turnBusyText } from "./runs.js";
-import { noted } from "./user-action-rejection.js";
+import { noted, type RejectedAction } from "./user-action-rejection.js";
+import { readActionFacts, mountTaskActionRoutes } from "./task-actions.js";
+import { requeueVerdict, retryVerdict, runVerdict, stopVerdict, type Verdict } from "./task-action-verdicts.js";
 import { mountTurnReclaimRoutes } from "./turn-reclaim-routes.js";
 import { stopStartingTurn } from "./stop-starting-turn.js";
 import { handoffBlockReason } from "./handoff-guard.js";
@@ -60,7 +58,15 @@ import { failureVersionOf } from "./task-result-version.js";
 // 回合锁、状态还停在终态)刚认领的占位在链上立刻可见,整队在跑守卫不再被双双穿过
 // (第 6/7 轮审查)。
 
+// 判据挡回的统一出口（判据本体见 task-action-verdicts.ts，界面上那颗键读的是同一份）。队列挡路
+// 这类用户在别处才看得见原因的，照旧往任务时间线留一笔（`noted`）。
+async function refuse(c: Context, taskId: string, action: RejectedAction, verdict: Exclude<Verdict, { ok: true }>) {
+  const body = { error: verdict.reason, ...verdict.detail };
+  return c.json(verdict.note ? await noted(taskId, action, body) : body, 409);
+}
+
 export function mountTaskRunRoutes(api: Hono): void {
+  mountTaskActionRoutes(api);
   mountTurnReclaimRoutes(api);
   mountTaskArchiveRoutes(api);
   mountTaskRetryTurnRoutes(api);
@@ -92,29 +98,12 @@ api.post("/tasks/:id/run", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
-  if (r.archived) return c.json({ error: "任务已归档，先取消归档再运行", archived: true }, 409);
-  // 接力出去的任务是历史存档,本机启动就是双机并跑(审查实测:横幅说着存档,点「运行」
-  // 真的新建了 session)。硬拦在服务端,前端隐藏按钮只是补充。
-  {
-    const blocked = handoffBlockReason(r.handoff);
-    if (blocked) return c.json({ error: blocked, handoff: true }, 409);
-  }
-  // 单条手动 Run：普通任务允许 backlog / canceled / failed / paused。team 的
-  // idle 也可运行:它不是终态,只是常驻调度台待命,点击会接回同一 CLI 会话。
-  const runnable =
-    r.mode === "team"
-      ? !["running", "queued", "awaiting_review"].includes(r.status)
-      : canSingleRun(r.status as TaskStatus);
-  if (!runnable) return c.json({ error: "任务当前状态不可运行", status: r.status }, 409);
+  // 归档、接力出去（本机这份是历史存档，启动就是双机并跑）、状态不可运行、验证轮 / 提问挂着、
+  // 队列挡路：判据见 task-action-verdicts.ts 的 runVerdict，界面上那颗「运行 / 继续」读同一份。
+  const verdict = runVerdict(await readActionFacts(r));
+  if (!verdict.ok) return refuse(c, taskId, "运行", verdict);
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
-  const blocking = await queueBlockerDetails(taskId);
-  if (blocking.length) {
-    return c.json(
-      await noted(taskId, "运行", { error: queueBlockedText(blocking), blockedBy: blocking.map((b) => b.id) }),
-      409,
-    );
-  }
   // Fire-and-forget; progress streams over /api/events.
   // team 也走「先占位、再镜像查验收锁」这一套（占位对常驻调度台本身没用途,runTask 的
   // team 分支会立刻还回来）—— 它只为让 202 是真话:早先 team 分支排在这两道检查**之前**
@@ -227,6 +216,9 @@ api.post("/tasks/:id/stop", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
+  // 有没有东西可停：判据见 stopVerdict（回复框、讨论页、命令面板那颗停止读同一份）。
+  const verdict = stopVerdict(await readActionFacts(r));
+  if (!verdict.ok) return refuse(c, taskId, "停止", verdict);
   if (await cancelQueueAdvance(taskId)) return c.json({ stopped: true, note: "已撤销待启动的队列运行请求" });
   if (stopTask(taskId)) return c.json({ stopped: true });
   if (r.status === "queued" || r.status === "running") {
@@ -552,12 +544,9 @@ api.post("/tasks/:id/retry", async (c) => {
     .then((body) => (typeof body?.expectedFailure === "string" ? body.expectedFailure : undefined), () => undefined);
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
-  if (r.archived) return c.json({ error: "任务已归档，先取消归档再重试", archived: true }, 409);
-  {
-    const blocked = handoffBlockReason(r.handoff);
-    if (blocked) return c.json({ error: blocked, handoff: true }, 409);
-  }
-  if (r.status !== "failed") return c.json({ error: "只有失败的任务可以重试", status: r.status }, 409);
+  // 判据见 retryVerdict（界面上那颗「重试」读同一份）。
+  const verdict = retryVerdict(await readActionFacts(r));
+  if (!verdict.ok) return refuse(c, taskId, "重试", verdict);
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
   // 同 /run:原子占位,并发重试只有一个能 202;duet 走同一把锁。
@@ -609,20 +598,15 @@ api.post("/tasks/:id/requeue", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
-  if (r.archived) return c.json({ error: "任务已归档，先取消归档再重新排队", archived: true }, 409);
-  {
-    const blocked = handoffBlockReason(r.handoff);
-    if (blocked) return c.json({ error: blocked, handoff: true }, 409);
-  }
-  if (r.status === "running" || r.status === "queued")
-    return c.json({ error: "任务正在进行，不需要重新排队", status: r.status }, 409);
-  if (r.status !== "failed" && r.status !== "canceled")
-    return c.json({ error: "只有失败/已取消的任务需要重新排队", status: r.status }, 409);
+  // 判据见 requeueVerdict（详情头的更多菜单、信息格的队列、命令面板读同一份）。
+  const verdict = requeueVerdict(await readActionFacts(r));
+  if (!verdict.ok) return c.json({ error: verdict.reason, ...verdict.detail }, 409);
   // 团队验收占着这一位（team-acceptance-hold.ts）：落回 backlog 会让验收守卫当场拒掉这次验收，等验收结束再排。
   if (heldForAcceptance(taskId)) return c.json({ error: turnBusyText(taskId, "重新排队"), status: r.status }, 409);
 
   const myItem = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
-  if (!myItem) return c.json({ error: "任务不在任何队列里，直接点运行即可" }, 400);
+  // 判据刚看过它在队列里；这中间被移出队列算撞车。
+  if (!myItem) return c.json({ error: "任务不在任何队列里，直接点运行即可" }, 409);
   const queueId = myItem.queueId;
 
   const items = await db

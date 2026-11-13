@@ -16,6 +16,7 @@ import { waitForStartReceipt } from "./task-start-receipt.js";
 import { reportGroupStartFailure } from "./group-start-failure.js";
 import { clearQueueAdvanceIntent, recordQueueAdvanceIntent, refuseQueueAdvance } from "./queue-advance-admission.js";
 import { heldByMonitors, withMonitorHolds, type QueueRow } from "./queue-monitor-hold.js";
+import { markGroupActionsDirty } from "./task-actions-dirty.js";
 
 const MAX_PARALLEL = 4;
 let pauseGeneration = 0;
@@ -44,6 +45,8 @@ export async function pauseGroup(groupId: string): Promise<void> {
   // 没有成员在跑时暂停只改了 groups.paused,不会有任何任务换状态:托盘的等待说明得单独通知。
   void import("./pending-wait.js").then(({ republishGroupWaits }) => republishGroupWaits(groupId))
     .catch((err) => console.error(`[ash] republishGroupWaits(${groupId}) failed:`, err));
+  // 同理：没换状态的成员，「重跑上一回合」「停止」这些结论也变了（task-actions.ts）。
+  markGroupActionsDirty(groupId);
   const members = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
   for (const t of members) {
     // status 可能在队列推进/续聊交错时短暂失真；只要有活 handle，先杀进程永远优先。

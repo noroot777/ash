@@ -234,42 +234,61 @@ export function latestSessionOf<T extends RetryTurnSession>(rows: T[]): T | null
   return [...rows].sort((left, right) => turnAt(left).localeCompare(turnAt(right))).at(-1) ?? null;
 }
 
-// 能不能重跑。纯函数：路由只负责取数据、占回合锁，判据全在这里，好钉测试。
-// 返回 null = 放行；否则是要原样回给前端的那句拒绝理由。
-export function retryTurnRejection(facts: RetryTurnFacts): { error: string; detail?: Record<string, unknown> } | null {
-  const { task, latest } = facts;
-  const kind = facts.kind ?? (latest ? retryTurnKindOf(latest) : "turn");
-  if (task.archived) return { error: "任务已归档，先取消归档再重试", detail: { archived: true } };
+/**
+ * 重跑判据的结论。`hidden` = 界面上不该出这颗键（上一回合没崩、或者归别的入口管）；不带 = 键照出、
+ * 灰着说原因（分组暂停、队列挡路、执行器变了 —— 这几样用户能自己去解）。下发给前端的那份
+ * （task-actions.ts）与路由的 409 用的是同一个结论。
+ */
+export type RetryTurnRejection = { error: string; detail?: Record<string, unknown>; hidden?: true };
+
+const hiddenRejection = (error: string, detail?: Record<string, unknown>): RetryTurnRejection => ({ error, detail, hidden: true });
+
+/**
+ * 只看任务行就能下的那几条。拆出来是因为下发结论时要先过它再决定查不查会话（读会话正文要摸盘）：
+ * 在跑的任务、归档的任务连会话都不必读。`retryTurnRejection` 第一步就是它，两边永远同序。
+ */
+export function retryTurnTaskRejection(task: RetryTurnTask): RetryTurnRejection | null {
+  if (task.archived) return hiddenRejection("任务已归档，先取消归档再重试", { archived: true });
   {
     const blocked = handoffBlockReason(task.handoff);
-    if (blocked) return { error: blocked, detail: { handoff: true } };
+    if (blocked) return hiddenRejection(blocked, { handoff: true });
   }
   // 只做单飞任务：duet 有自己的 gate 语义、团队调度台是常驻会话，两边的「上一回合」
   // 都不是这里这套 user/agent 交替的形状，硬套只会把它们的状态机搅乱。
-  if (task.mode !== "single") return { error: "只有单飞任务支持重跑上一回合", detail: { mode: task.mode } };
-  if (!latest && kind !== "review") return { error: "任务还没跑过，没有可重跑的回合" };
-  // 前端按钮挂在某一条会话的尾栏上；带上 sessionId 就是在说「我要重跑的是**我看到的
-  // 那一条**」。它不是最新会话就说明中间又跑过一轮，页面是旧的 —— 拒绝而不是照跑。
-  if (facts.wantedSessionId && facts.wantedSessionId !== latest?.id) {
-    return { error: "页面上的会话不是最新一次，刷新后再试", detail: { sessionId: latest?.id } };
-  }
+  if (task.mode !== "single") return hiddenRejection("只有单飞任务支持重跑上一回合", { mode: task.mode });
   if (task.status === "running" || task.status === "queued") {
-    return { error: "任务正在运行或排队，结束后再重试", detail: { status: task.status } };
+    return hiddenRejection("任务正在运行或排队，结束后再重试", { status: task.status });
   }
   // 遗留的提问 / 检查点续跑指令必须先处理：它们各自有入口（答复、继续），而且这两个
   // 字段在结算与对账里都被当成「这条链在等答复」的正常态，带着它们重投会让等待中的那
   // 条链收不了尾（口径同 startFreeReview）。
-  if (task.question) return { error: "任务正在等你答复，先回答再决定要不要重跑", detail: { question: true } };
-  if (task.resumePrompt) return { error: "任务挂着待续跑指令，先让它继续，不必重跑上一回合", detail: { resumePrompt: true } };
+  if (task.question) return hiddenRejection("任务正在等你答复，先回答再决定要不要重跑", { question: true });
+  if (task.resumePrompt) return hiddenRejection("任务挂着待续跑指令，先让它继续，不必重跑上一回合", { resumePrompt: true });
   // 验证轮的轮次号还挂着 = 那一轮就地验证没出结论。它是旁路回合，重投等于顶着同一个轮号
   // 另跑一段普通回合（判据同 `/verify` 与 `task-accept-guard.ts`）。
   if (task.verifyRound !== null) {
-    return { error: `第 ${task.verifyRound} 轮就地验证还没出结论，等它结束再重试`, detail: { verifyRound: task.verifyRound } };
+    return hiddenRejection(`第 ${task.verifyRound} 轮就地验证还没出结论，等它结束再重试`, { verifyRound: task.verifyRound });
+  }
+  return null;
+}
+
+// 能不能重跑。纯函数：路由只负责取数据、占回合锁，判据全在这里，好钉测试。
+// 返回 null = 放行；否则是要原样回给前端的那句拒绝理由。
+export function retryTurnRejection(facts: RetryTurnFacts): RetryTurnRejection | null {
+  const { task, latest } = facts;
+  const kind = facts.kind ?? (latest ? retryTurnKindOf(latest) : "turn");
+  const taskRejection = retryTurnTaskRejection(task);
+  if (taskRejection) return taskRejection;
+  if (!latest && kind !== "review") return hiddenRejection("任务还没跑过，没有可重跑的回合");
+  // 前端按钮挂在某一条会话的尾栏上；带上 sessionId 就是在说「我要重跑的是**我看到的
+  // 那一条**」。它不是最新会话就说明中间又跑过一轮，页面是旧的 —— 拒绝而不是照跑。
+  if (facts.wantedSessionId && facts.wantedSessionId !== latest?.id) {
+    return hiddenRejection("页面上的会话不是最新一次，刷新后再试", { sessionId: latest?.id });
   }
   // **主动停止/暂停也会留下非零退出码**（多数 CLI 吃 SIGTERM 后按 signal 写 exitStatus=1）。
   // 那不是崩溃，重投等于把用户刚亲手停下的那句话再跑一遍；界面上这种状态给的是「运行」。
   if (latest?.stoppedAs) {
-    return { error: "上一回合是你手动停止的，不是异常结束；要继续请用运行", detail: { stoppedAs: latest.stoppedAs } };
+    return hiddenRejection("上一回合是你手动停止的，不是异常结束；要继续请用运行", { stoppedAs: latest.stoppedAs });
   }
   // 退出码只在**重投档**上当「崩没崩」的判据。审查档另有权威判据，而且更准：那一轮到底
   // 有没有给出结论（`free_review_rounds.status='error'` + run `failed`，见
@@ -277,15 +296,29 @@ export function retryTurnRejection(facts: RetryTurnFacts): { error: string; deta
   // mid-response」照样 exit 0（2026-09-11 实测：reviewer 会话 exit 0、审查链却停在 failed，
   // 时间线上明写「未能正常给出结论，已停止自动链」，界面却一个重跑入口都没有）。
   // 「算不算异常结束」整份住在 `@ash/shared/turn-outcome`:三个信号的优先级(真人停止 >
-  // 这一轮自己的权威结局 > 退出码)写在那里,**前端那颗按钮读同一份** —— 两边各写一份 if
-  // 就是在等下一次漂开,审查 F2 要修的恰恰是同一句判据在两端各错一次(都只看退出码)。
+  // 这一轮自己的权威结局 > 退出码)写在那里 —— 两边各写一份 if 就是在等下一次漂开,审查 F2
+  // 要修的恰恰是同一句判据在两端各错一次(都只看退出码)。
   // 审查档不吃这一条:它另有更准的判据(上面那段注释)。
   if (kind !== "review" && latest
     && !turnEndedAbnormally({ ...latest, turnOutcome: facts.turnOutcome })) {
-    return {
-      error: "上一回合不是异常结束，不需要重跑",
-      detail: { exitStatus: latest.exitStatus, turnOutcome: facts.turnOutcome ?? null },
-    };
+    return hiddenRejection("上一回合不是异常结束，不需要重跑",
+      { exitStatus: latest.exitStatus, turnOutcome: facts.turnOutcome ?? null });
+  }
+  // 剩下的普通档身份核对排在「能自己去解」的那几条前面：上一回合根本不是这里能重跑的形状时，
+  // 键就不该出，说「分组暂停了」只会让人去恢复分组之后再碰一次壁。
+  if (kind !== "review" && latest) {
+    // 只放行普通实现回合：lead/voiceA/voiceB 这些身份连「上一回合」的形状都不同。
+    if (latest.role !== "single") return hiddenRejection("上一回合是旁路会话，这里重跑不了", { role: latest.role });
+    // 旁路回合（就地验证、`/compact` 这类 CLI 原生命令）用的是任务当前的默认配置重投，
+    // 跑的根本不是那一轮的验证者；它们各有自己的重来入口。
+    if (latest.sideTurn) return hiddenRejection("上一回合是验证/命令旁路回合，请从它自己的入口重来", { sideTurn: true });
+    // failed 归头部那颗「重试」，canceled/paused/backlog 归「运行」。
+    if (task.status !== "done") {
+      return hiddenRejection("只有停在「已完成」的任务才谈得上重跑上一回合", { status: task.status });
+    }
+  }
+  if (kind === "review" && task.workflowMode !== "free") {
+    return hiddenRejection("上一回合是审查旁路会话，重跑它请走审查那条路", { role: "reviewer" });
   }
   if (facts.groupPaused) return { error: "所在分组已暂停，先恢复分组再重试", detail: { groupPaused: true } };
   // 同 /run：任务的执行回合（续跑档、执行型重投），同队有人在执行、或前面还有没让位的，就
@@ -309,25 +342,10 @@ export function retryTurnRejection(facts: RetryTurnFacts): { error: string; deta
     return { error: "上一回合用的执行器配置已被改过，重跑不再是原样重放；请在对话框里 @ 它重新发一遍", detail: { profileDrift: "changed" } };
   }
   if (kind === "review") {
-    if (task.workflowMode !== "free") {
-      return { error: "上一回合是审查旁路会话，重跑它请走审查那条路", detail: { role: "reviewer" } };
-    }
     if (facts.reviewBlocker) return { error: facts.reviewBlocker, detail: { role: "reviewer" } };
     return null;
   }
-  if (!latest) return { error: "任务还没跑过，没有可重跑的回合" };
-  // 剩下的只放行普通实现回合：lead/voiceA/voiceB 这些身份连「上一回合」的形状都不同。
-  if (latest.role !== "single") {
-    return { error: "上一回合是旁路会话，这里重跑不了", detail: { role: latest.role } };
-  }
-  // 旁路回合（就地验证、`/compact` 这类 CLI 原生命令）用的是任务当前的默认配置重投，
-  // 跑的根本不是那一轮的验证者；它们各有自己的重来入口。
-  if (latest.sideTurn) {
-    return { error: "上一回合是验证/命令旁路回合，请从它自己的入口重来", detail: { sideTurn: true } };
-  }
-  if (task.status !== "done") {
-    return { error: "只有停在「已完成」的任务才谈得上重跑上一回合", detail: { status: task.status } };
-  }
+  if (!latest) return hiddenRejection("任务还没跑过，没有可重跑的回合");
   return null;
 }
 

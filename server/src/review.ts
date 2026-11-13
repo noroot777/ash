@@ -31,7 +31,8 @@ import { bus } from "./bus.js";
 import { evidenceHeaders } from "./evidence-path.js";
 import { db } from "./db/index.js";
 import { agents, projects, regressionEvidence, tasks } from "./db/schema.js";
-import { handoffBlockReason } from "./handoff-guard.js";
+import { readActionFacts } from "./task-actions.js";
+import { verifyVerdict } from "./task-action-verdicts.js";
 import {
   nextReviewRound,
   readConclusion,
@@ -164,23 +165,11 @@ export async function startVerifyRound(
   // archived（归档先完成则拒）。
   const target = (await db.select().from(tasks).where(eq(tasks.id, targetId))).at(0);
   if (!target) throw new Error("被验任务不存在");
-  if (target.reviewOf) throw new Error("审查任务自身不能再验");
-  if (target.archived) throw new Error("任务已归档（只读），先取消归档再派验证");
-  if (target.mode !== "single") throw new Error("当前只支持验证 single 任务");
-  if (target.status === "running" || target.status === "queued") {
-    throw new Error("目标仍在运行或排队，结束后再验");
-  }
-  // 等待答复/续跑的任务不能派验证：验证结算把 question/resumePrompt 当「验证者本轮
-  // 中途提问」的正常等待态，派验证之前就存在的字段会让这一轮永远收不了尾——
-  // verifyRound 挂着、第二次派验证 400（审查实测）。与自由派审同一门禁。
-  if (target.question || target.resumePrompt) {
-    throw new Error("任务正等待答复或续跑，处理后再派验证");
-  }
-  if (target.verifyRound) throw new Error("该任务已有一轮验证正在进行");
+  // 审查任务、非单飞、归档、接力出去、在跑、等答复 / 续跑（派之前就挂着的话这一轮永远收不了尾）、
+  // 已有一轮在验：判据见 verifyVerdict，界面上那颗「验一轮」读同一份。
+  const verdict = verifyVerdict(await readActionFacts(target));
+  if (!verdict.ok) throw new Error(verdict.reason);
   const legacy = await legacyReviewTasks(targetId);
-  if (legacy.some((review) => ["backlog", "queued", "running", "paused"].includes(review.status))) {
-    throw new Error("该任务已有一轮审查尚未结束");
-  }
   const round = nextReviewRound(legacy.length + (target.verifyRounds ?? 0));
   // 这一轮验的是线上**哪一站**。轮次号（round）仍然全局递增——它是证据目录名
   // `review/round-<n>`，一条线上有好几站验证时按站数会撞车。判定用的「这一站验到第几
@@ -464,15 +453,9 @@ export function mountReviewRoutes(api: Hono): void {
     const taskId = c.req.param("id");
     const target = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!target) return c.json({ error: "not found" }, 404);
-    if (target.reviewOf) return c.json({ error: "审查任务自身不能再验" }, 409);
-    if (target.mode !== "single") return c.json({ error: "当前只支持验证 single 任务", mode: target.mode }, 409);
-    if (target.archived) return c.json({ error: "归档任务不能验证" }, 409);
-    // 接力出去的任务是历史存档:验证轮会真跑代码、往 worktree 里写证据,不给开。
-    const handedOff = handoffBlockReason(target.handoff);
-    if (handedOff) return c.json({ error: handedOff, handoff: true }, 409);
-    if (target.status === "running" || target.status === "queued") {
-      return c.json({ error: "目标仍在运行或排队，结束后再验", status: target.status }, 409);
-    }
+    // 快速失败；占回合之后 startVerifyRound 用同一份判据再权威核一遍。
+    const verdict = verifyVerdict(await readActionFacts(target));
+    if (!verdict.ok) return c.json({ error: verdict.reason, ...verdict.detail }, 409);
     const body = await c.req.json<ReviewDispatchInput>().catch(() => ({} as ReviewDispatchInput));
     if (body.agentType !== undefined && !AGENT_TYPES.includes(body.agentType)) {
       return c.json({ error: "未知的 reviewer agentType", agentType: body.agentType }, 400);
