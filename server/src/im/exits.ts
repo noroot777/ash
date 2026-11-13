@@ -14,7 +14,7 @@ import { db } from "../db/index.js";
 import { imActions, imOutbox } from "../db/schema-im.js";
 import { now } from "../util.js";
 import type { Turn } from "./attention.js";
-import { neutralCard, summaryCard, todoText } from "./cards.js";
+import { neutralCard, projectPrefix, summaryCard, todoText, type SummaryItem } from "./cards.js";
 import { renderCard } from "./feishu/cards.js";
 import { readOptions } from "./meta.js";
 import { cardHeaderOf, type OutboxGuard, type OutboxRow } from "./outbox.js";
@@ -98,16 +98,18 @@ export class OutboxExits implements OutboxGuard {
     }
     const content = row.kind === "summary"
       ? JSON.stringify(renderCard(summaryCard(summaryItems(keep), await envelopeOf(row.id))))
-      : JSON.stringify({ text: todoText(keep.map((item) => cardHeaderOf(item.content).title), keep.length, "清单刚有变动，发 /todo 看最新的。") });
+      : JSON.stringify({ text: todoText(summaryItems(keep).map((item) => item.title), keep.length, "清单刚有变动，发 /todo 看最新的。") });
     await db.update(imOutbox).set({ content, scope: JSON.stringify({ ...scope, rowIds: keep.map((item) => item.id) }), updatedAt: now() })
       .where(and(eq(imOutbox.id, row.id), eq(imOutbox.content, row.content)));
   }
 }
 
-export function summaryItems(rows: OutboxRow[]): { title: string; kind: Turn["kind"]; projectName: string }[] {
+export function summaryItems(rows: OutboxRow[]): SummaryItem[] {
   return rows.map((row) => {
     const header = cardHeaderOf(row.content);
-    return { title: header.title, kind: row.kind as Turn["kind"], projectName: header.subtitle?.split(" · ")[0] ?? "" };
+    // 项目名挪进标题之前发出的卡：项目还在副标题「项目 · 状态」里，补回标题开头
+    const legacy = header.title.startsWith("【") ? "" : header.subtitle?.split(" · ").at(-2);
+    return { title: `${projectPrefix(legacy)}${header.title}`, kind: row.kind as Turn["kind"] };
   });
 }
 

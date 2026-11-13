@@ -105,6 +105,9 @@ try {
   const passedText = textOf(lastCard());
   assert.match(passedText, /审查通过，等你验收/);
   assert.doesNotMatch(passedText, /完成了，等你验收/, "不再另说一遍「完成了」");
+  const passedHeader = lastCard().header;
+  assert.match(passedHeader.title.content, /^【飞书项目】/, "卡片标题最前面是项目名");
+  assert.equal(passedHeader.subtitle?.content, "审查通过，等你验收", "项目名不在副标题里再说一遍");
 
   // ── ⑤ 通过之后又跑了一轮：那次通过不算这一版的 ───────────────────────────
   fake.reset();
@@ -153,7 +156,7 @@ try {
     await reconcile(id);
     const notices = await noticesOf(id);
     assert.equal(notices.length, 1, `${status}：审查通过单独发一条，重复对账不重发`);
-    assert.match(JSON.parse(notices[0]!.content).text, /^审查通过：/);
+    assert.match(JSON.parse(notices[0]!.content).text, /^【飞书项目】审查通过：/);
     assert.ok(notices[0]!.messageId, "发出去了");
   }
 
@@ -197,7 +200,7 @@ try {
     await reconcile(id);
     const notices = await noticesOf(id);
     assert.equal(notices.length, 1, `${label}：重复对账不重发`);
-    assert.match(JSON.parse(notices[0]!.content).text, /^审查通过：/);
+    assert.match(JSON.parse(notices[0]!.content).text, /^【飞书项目】审查通过：/);
   }
 
   // ── ⑬ 卡和通知读同一份视图 ─────────────────────────────────────────────

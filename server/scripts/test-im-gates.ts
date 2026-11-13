@@ -130,7 +130,7 @@ try {
     await im.reconciler.reconcile(["g2"]);
     await im.settle();
     const notice = fake.sends().map((call) => textOf(contentOf(call))).find((text) => text.includes("「关口 g2」"));
-    assert.match(notice ?? "", /^已验收：「关口 g2」/, `完成通知照实说：${notice}`);
+    assert.match(notice ?? "", /^【飞书项目】已验收：「关口 g2」/, `完成通知照实说：${notice}`);
   }
 
   // ── ② 网页先放了第一道，再点第一道的旧卡 ───────────────────────────────
