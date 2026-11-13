@@ -36,11 +36,11 @@ export type GateRequest = GateAction & { expectedVersion?: number };
 export type CompactionPhase = "start" | "done" | "cancelled" | "failed";
 /**
  * 一条执行故障**确知来自模型 API** 时，执行器在归一那一层挂上的类型（server/src/executors/model-failure.ts）：
- * context_overflow 对话超出模型长度上限 / invalid_request 请求被模型拒收 / auth 认证 / rate_limit 限流 /
- * unavailable 暂时连不上（5xx、断流、超时）。`status` = 模型 API 回的 HTTP 状态码，拿不到给 null。
+ * context_overflow 对话超出模型长度上限 / quota_exhausted 账户额度、余额或套餐用完 / invalid_request 请求被
+ * 模型拒收 / auth 认证 / rate_limit 短时限流 / unavailable 暂时连不上（5xx、断流、超时）。只有最后两类会自行恢复。`status` = 模型 API 回的 HTTP 状态码，拿不到给 null。
  * 没有这一项 = 来源不明（进程崩、MCP、CLI 自己的错），读端不许据一个状态码就说成「上游」。
  */
-export type ModelFailureKind = "context_overflow" | "invalid_request" | "auth" | "rate_limit" | "unavailable";
+export type ModelFailureKind = "context_overflow" | "quota_exhausted" | "invalid_request" | "auth" | "rate_limit" | "unavailable";
 export interface ModelFailure { kind: ModelFailureKind; status: number | null }
 
 export type AgentEvent =

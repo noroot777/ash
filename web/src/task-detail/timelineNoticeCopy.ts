@@ -166,7 +166,7 @@ function typedView(notice: TimelineNotice, raw: string): NoticeView {
     // 经过、报告写没写、下一步都在原文里点开看。归明面：要用户知道、多半还要用户点「继续本轮审查」。
     case "review.no_verdict":
       return view("alert", "warn", "other", "review",
-        `${reviewRoundName(notice.source, notice.round)}${notice.cause.kind === "interrupted" ? "中断" : "没上报结论"}：${notice.cause.reason}`, raw);
+        `${reviewRoundName(notice.source ?? "free", notice.round)}${notice.cause.kind === "interrupted" ? "中断" : "没上报结论"}：${notice.cause.reason}`, raw);
     case "accept.done":
       return accepted(raw, notice.target, !!notice.noCommit, notice.tag);
     // 不再靠认「现在由你裁定」那几个字找到它。

@@ -6,14 +6,20 @@
 // 「403」可能是本机某个 MCP 的，见数就当模型认证坏了是误诊（审查 I2TbHFxtSVAv 第 1 轮第 1 条）。
 //
 // 分类本身也不能只看状态码：同是 4xx，「对话超出长度上限」原样继续还会撞上，「限流」等一会儿
-// 就好，「认证」得先修凭据 —— 读端据它给下一步，所以三者必须分开。
+// 就好，「认证」得先修凭据 —— 读端据它给下一步，所以必须分开。读端只对 `rate_limit` / `unavailable`
+// 两类说「等一会儿再继续」，所以这两类只给**确知会自行恢复**的那种：同是 429，「账户额度用完了、
+// 去看套餐和账单」等多久都不会好（审查 I2TbHFxtSVAv 第 2 轮第 1 条）。判定顺序因此是「原话里说清了
+// 要用户处理的（超长、额度）」先于「状态码」，状态码先于「原话里的宽泛字眼」。
 import type { ModelFailure } from "@ash/shared";
 
 /** 原话里说的是「对话 / 输入超出模型长度上限」。 */
 const OVERFLOW = /prompt is too long|context[ _-]?(?:length|window)|maximum context|too many tokens|exceeds? (?:the )?(?:context|token|max)|input (?:is )?too long|context_length_exceeded/i;
 /** 没有状态码时，说的是「这一刻连不上模型」（断流、网络层错误、过载、超时）。 */
 const UNAVAILABLE = /stream disconnected|ECONNRESET|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|socket hang up|connection (?:lost|reset|refused|closed)|overloaded|service unavailable|bad gateway|gateway time-?out|timed out/i;
-const RATE_LIMIT = /rate.?limit|too many requests|quota/i;
+/** 原话里说的是「账户额度 / 余额 / 套餐用完了」：要用户去处理，等多久都不会自己好。 */
+const QUOTA = /insufficient_quota|exceeded your (?:current )?quota|quota (?:exceeded|exhausted|has been exhausted)|resource_exhausted|billing|credit balance|out of credits|insufficient (?:balance|credits?|funds)|payment required|usage limit|spending limit|budget (?:exceeded|limit)/i;
+/** 没有状态码时，说的是短时限流（不提额度）。 */
+const RATE_LIMIT = /rate.?limit|too many requests/i;
 
 /**
  * 按状态码和原话归类。`status` 由调用方从**它认得的那个位置**取（claude 的 `api_error_status`、
@@ -22,6 +28,7 @@ const RATE_LIMIT = /rate.?limit|too many requests|quota/i;
  */
 export function modelFailureOf(message: string, status: number | null): ModelFailure | null {
   if (OVERFLOW.test(message) || status === 413) return { kind: "context_overflow", status };
+  if (QUOTA.test(message) || status === 402) return { kind: "quota_exhausted", status };
   if (status != null) {
     if (status === 429) return { kind: "rate_limit", status };
     if (status === 401 || status === 403) return { kind: "auth", status };

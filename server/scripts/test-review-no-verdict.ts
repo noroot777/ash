@@ -119,7 +119,10 @@ try {
   {
     assert.deepEqual(codexErrorEvent({ error: { message: UPSTREAM_503 } })?.event.model, { kind: "unavailable", status: 503 },
       "codex 重试完了还是错：按 codex 自己写状态码的位置取 503，不取错误页里的 504");
-    assert.equal(codexErrorEvent({ willRetry: true, error: { message: UPSTREAM_503 } })?.event.model, undefined, "重试中的不挂");
+    const retrying = codexErrorEvent({ willRetry: true, error: { message: UPSTREAM_503 } })!;
+    assert.equal(retrying.counted, false, "重试中的不算执行故障");
+    assert.deepEqual(retrying.event, { kind: "error", message: UPSTREAM_503, level: "notice", affectsTurn: false, model: { kind: "unavailable", status: 503 } },
+      "重试提示也挂类型：看门狗熔断时据它说状态码（第 2 轮审查 N1）");
     assert.deepEqual(codexTurnError("exceeded retry limit, last status: 429 Too Many Requests").model, { kind: "rate_limit", status: 429 });
     assert.deepEqual(codexTurnError("stream disconnected before completion: error sending request").model, { kind: "unavailable", status: null });
     assert.deepEqual(codexTurnError("Codex ran out of room in the model's context window.").model, { kind: "context_overflow", status: null });
@@ -127,6 +130,16 @@ try {
     assert.deepEqual(modelFailureOf("prompt is too long: 210000 tokens > 200000 maximum", 400), { kind: "context_overflow", status: 400 });
     assert.deepEqual(modelFailureOf("invalid_request_error: tools.0.name is invalid", 400), { kind: "invalid_request", status: 400 });
     assert.deepEqual(modelFailureOf("invalid x-api-key", 401), { kind: "auth", status: 401 });
+    // 额度 / 余额用完了：要用户去处理，不归到「等一会儿就好」的限流（第 2 轮审查第 1 条）。
+    const quota = "You exceeded your current quota, please check your plan and billing details. (insufficient_quota)";
+    assert.deepEqual(modelFailureOf(quota, 429), { kind: "quota_exhausted", status: 429 }, "429 insufficient_quota 是额度，不是限流");
+    assert.deepEqual(codexTurnError(`exceeded retry limit, last status: 429 Too Many Requests: ${quota}`).model, { kind: "quota_exhausted", status: 429 });
+    assert.deepEqual(modelFailureOf("payment required", 402), { kind: "quota_exhausted", status: 402 });
+    assert.deepEqual(modelFailureOf("Your credit balance is too low to access the Anthropic API.", 400), { kind: "quota_exhausted", status: 400 });
+    assert.deepEqual(modelFailureOf("RESOURCE_EXHAUSTED: Quota exceeded for quota metric", null), { kind: "quota_exhausted", status: null });
+    assert.deepEqual(modelFailureOf("You've hit your usage limit. Upgrade to Pro or try again later.", null), { kind: "quota_exhausted", status: null });
+    assert.deepEqual(modelFailureOf("Rate limit reached for requests per min. Please try again in 20s.", 429), { kind: "rate_limit", status: 429 }, "纯限流仍是限流");
+    assert.deepEqual(modelFailureOf("rate_limit_error: too many requests", null), { kind: "rate_limit", status: null });
 
     // claude：真解析器，result 带 api_error_status 的才挂；进程 stderr 里的 403（本机 MCP 回的）不挂。
     const stub = join(stage, "claude-stub.mjs");
@@ -147,6 +160,9 @@ try {
     assert.deepEqual(overloaded[0]?.model, { kind: "unavailable", status: 529 }, "claude CLI 写成 API Error: N 的也认");
     const mcp = await claudeErrors([{ type: "system", session_id: "c3" }], "MCP server \"linear\" failed: HTTP 403 Forbidden", 1);
     assert.ok(mcp.length && mcp.every((event) => event.model === undefined), "进程 stderr 来源不明，不挂模型类型");
+    const claudeRetry = await claudeErrors([{ type: "system", session_id: "c4" },
+      { type: "system", subtype: "api_retry", session_id: "c4", attempt: 1, max_retries: 10, retry_delay_ms: 1000, error_status: 529, error: "overloaded_error" }]);
+    assert.deepEqual(claudeRetry[0]?.model, { kind: "unavailable", status: 529 }, "claude 的重试提示也挂类型（第 2 轮审查 N1）");
   }
 
   // ── 1. 回合中途断了 ─────────────────────────────────────────────────────────
@@ -181,6 +197,11 @@ try {
     await auth.note({ failure: { exitStatus: 1, verdict: null, error: { message: "HTTP 401: invalid x-api-key", model: { kind: "auth", status: 401 } } } });
     assert.deepEqual(await auth.cause(), { kind: "interrupted", reason: "模型认证失败（401）" });
     assert.match(auth.timeline(), /先把这个执行器的模型凭据修好/);
+    const quota = await scene();
+    await quota.note({ failure: { exitStatus: 1, verdict: null, error: codexTurnError(`exceeded retry limit, last status: 429 Too Many Requests: You exceeded your current quota (insufficient_quota)`) } });
+    assert.deepEqual(await quota.cause(), { kind: "interrupted", reason: "模型账户额度用完了（429）" });
+    assert.doesNotMatch(quota.timeline(), /限流|等上游恢复|等.{0,4}过去/, "额度用完了不叫人等");
+    assert.match(quota.timeline(), /等下去不会自己好：先去看这个执行器的模型账户/);
     // 来源不明的报错（MCP、进程 stderr）里带个状态码：不归到模型，照实说执行器异常退出。
     const unknown = await scene();
     await unknown.note({ failure: { exitStatus: 1, verdict: null, error: { message: "MCP server \"linear\" failed: HTTP 403 Forbidden" } } });
@@ -190,6 +211,13 @@ try {
     const tripped = await scene();
     await tripped.note({ failure: { exitStatus: 0, verdict: { kind: "tripped", reason: "15 分钟里只收到重试类错误" }, error: null } });
     assert.deepEqual(await tripped.cause(), { kind: "interrupted", reason: "模型上游连不上" });
+    // 熔断前那几次重试带了状态码：按它说（第 2 轮审查 N1）；重试撞的是额度，就说额度。
+    const trippedCode = await scene();
+    await trippedCode.note({ failure: { exitStatus: 0, verdict: { kind: "tripped", reason: "15 分钟里只收到重试类错误" }, error: null,
+      retrying: codexErrorEvent({ willRetry: true, error: { message: UPSTREAM_503 } })!.event.model } });
+    assert.deepEqual(await trippedCode.cause(), { kind: "interrupted", reason: "模型上游连不上（503）" });
+    assert.equal(interruptionOf({ exitStatus: 0, verdict: { kind: "tripped", reason: "" }, error: null, retrying: { kind: "quota_exhausted", status: 429 } }, null).reason,
+      "模型账户额度用完了（429）");
     // 不是上游的崩溃：按退出码说，不冒充上游。
     const crash = await scene();
     await crash.note({ failure: { exitStatus: 137, verdict: null, error: null } });
@@ -258,8 +286,10 @@ try {
   // ── 5. 接线 ───────────────────────────────────────────────────────────────
   {
     const run = readFileSync(new URL("../src/single-run.ts", import.meta.url), "utf8");
-    assert.match(run, /const failure = executionFailed \? \{ exitStatus, verdict: watchdogFailure, error: lastExecutionError \} : null;/,
-      "单飞收尾按「这一回合自己异常结束」交事实：退出码、看门狗判决、那条执行故障");
+    assert.match(run, /const failure = executionFailed\s*\? \{ exitStatus, verdict: watchdogFailure, error: lastExecutionError, retrying: lastRetryModel \}\s*: null;/,
+      "单飞收尾按「这一回合自己异常结束」交事实：退出码、看门狗判决、那条执行故障、重试提示撞的类型");
+    assert.match(run, /if \(emittedEvent\.kind === "error" && emittedEvent\.model && isExecutionNotice\(emittedEvent\)\) lastRetryModel = emittedEvent\.model;/,
+      "重试提示上的类型记下来");
     assert.match(run, /noteReviewerChannelGap\(\{[^}]*failure \}\)/, "交进说明里");
     assert.match(run, /sawExecutionError = true; if \(!lastExecutionError\?\.model \|\| emittedEvent\.model\) lastExecutionError = emittedEvent;/,
       "带模型类型的那条不被后面的执行诊断汇总盖掉");

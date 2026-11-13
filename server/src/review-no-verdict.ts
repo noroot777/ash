@@ -30,6 +30,8 @@ export type TurnFailure = {
   verdict: { kind: string; reason: string } | null;
   /** 这一回合执行器报过的那条执行故障（有模型 API 类型的优先，见 single-run）。 */
   error: Pick<Extract<AgentEvent, { kind: "error" }>, "message" | "model"> | null;
+  /** 这一回合重试提示撞的是哪一类（执行器挂在重试提示上的）：看门狗熔断时据它说状态码。省略 = 没有。 */
+  retrying?: ModelFailure | null;
 };
 
 export type Interruption = {
@@ -63,6 +65,12 @@ function modelCopy(model: ModelFailure): { reason: string; fact: string; next: s
       return { reason: `模型上游连不上${code}`, fact: `模型上游连不上${fact}`, next: `等上游恢复后${RESUME}` };
     case "rate_limit":
       return { reason: `模型上游限流${code}`, fact: `模型上游限流${fact}`, next: `等限流过去后${RESUME}` };
+    case "quota_exhausted":
+      return {
+        reason: `模型账户额度用完了${code}`,
+        fact: `模型 API 说这个执行器的账户额度、余额或套餐用完了${fact}`,
+        next: `等下去不会自己好：先去看这个执行器的模型账户（套餐、额度、账单），处理好之后再${RESUME}`,
+      };
     case "auth":
       return { reason: `模型认证失败${code}`, fact: `模型 API 拒绝了这个执行器的凭据${fact}`, next: `先把这个执行器的模型凭据修好，再${RESUME}` };
     case "context_overflow":
@@ -89,7 +97,8 @@ const VERDICT_REASON: Record<string, string> = {
 
 /**
  * 这一回合是怎么断的。依据按来源确知的程度排：执行器挂了类型的模型 API 失败 > 看门狗熔断
- * （`tripped` = 整段时间只收到上游的重试类错误，本身就是「连不上」）> 进程信号 / 其余判决 /
+ * （`tripped` = 整段时间只收到上游的重试类错误：按最后那次重试撞的类型说，没带类型就是「连不上」）
+ * > 进程信号 / 其余判决 /
  * 退出码。后几种来源不明，就照实说「执行器异常退出」，带上原话，不替它归因。
  */
 export function interruptionOf(failure: TurnFailure, diagnostics: Pick<RunDiagnostics, "failureReason" | "exitSignal"> | null): Interruption {
@@ -97,7 +106,7 @@ export function interruptionOf(failure: TurnFailure, diagnostics: Pick<RunDiagno
   const said = raw ? `执行器的原话：「${excerpt(raw)}」` : "";
   const exit = failure.exitStatus !== 0 ? `执行器以 exit ${failure.exitStatus} 结束` : "";
   const model: ModelFailure | null = failure.error?.model
-    ?? (failure.verdict?.kind === "tripped" ? { kind: "unavailable", status: null } : null);
+    ?? (failure.verdict?.kind === "tripped" ? failure.retrying ?? { kind: "unavailable", status: null } : null);
   if (model) {
     const copy = modelCopy(model);
     return { reason: copy.reason, detail: [copy.fact, exit, said].filter(Boolean).join("，"), next: copy.next };
