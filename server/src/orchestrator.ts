@@ -3,7 +3,6 @@ import { loadMarkdownImageSeed, markdownImageAccounting } from "./agent-image-jo
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
-import { isGoalRecovery } from "@ash/shared/cli-commands";
 import { deliverLeadInterjection } from "./team/lead-interjection.js";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
@@ -34,7 +33,7 @@ import { DeliveryCrossingUnwritable, recordDeliveryCrossing } from "./delivery-c
 import { createTurnInputSettlement } from "./turn-input-settlement.js";
 import { runTracePaths } from "./transcript.js";
 import { writeSystemNote } from "./turn-system-note.js";
-import { isMonitorWakeTurn, recordUserConversationTurn } from "./conversation-turn.js";
+import { isMonitorWakeTurn, recordSystemResumeTurn, recordUserConversationTurn } from "./conversation-turn.js";
 import { workerPreambleFor } from "./team/dispatch.js";
 import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
 import { reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
@@ -60,7 +59,7 @@ import { takeResumePrompt } from "./task-resume-prompt.js";
 import { questionSupersededNote, supersedableQuestion, supersedeQuestion } from "./task-question-supersede.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
-  COLLAB_INVITE, SYS_MARKER,
+  COLLAB_INVITE,
   backgroundWaitFor, COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER, followUpRailNote, PLANNING_TURN,
   WORKSPACE_RESET, WORKSPACE_RESET_MARKER,
 } from "./run-prompts.js";
@@ -121,7 +120,7 @@ export async function continueTask(
     }
     return false;
   };
-  const { head, nativeCommand, slash, goalExecution, options, retired } = await withTurnPreflight(taskId, opts.turnHeld, async () => {
+  const { head, nativeCommand, slash, goalExecution, inputExecution, options, retired } = await withTurnPreflight(taskId, opts.turnHeld, async () => {
     const prepared = await prepareContinuationEntry(taskId, userText, opts);
     // **原生命令不退休任何审查轮**。退休要拦的是「新方向来了,旧轮次不许回来把它改回去」
     // (review-retirement.ts 顶部),而原生命令整条归 CLI 本地执行、不进模型,既不是执行也
@@ -222,12 +221,12 @@ export async function continueTask(
     if (sideTurn && sessionRole === "single") reclaimTurn(taskId, turn, nativeCommand ? "native" : "side");
     // 「这一回合是任务的执行」:system(后端代写的续跑)或 executionTurn(让位交接
     // 把用户回复当启动输入)。只影响续聊判定,输入来源各自另算(见 opts.executionTurn)。
-    const execution = !!opts.system || !!opts.executionTurn || isGoalRecovery(slash);
+    const execution = !!opts.system || !!opts.executionTurn || inputExecution;
     const checkpointFollowUp = !execution && !opts.byBackend
       && task.status === "paused" && !!task.resumePrompt;
     const goalPriorStatus = startStatus;
     const followUpFrom = goalExecution
-      ? !isGoalRecovery(slash) && !opts.system && ["done", "failed", "canceled"].includes(goalPriorStatus) ? goalPriorStatus : null
+      ? !inputExecution && !opts.system && ["done", "failed", "canceled"].includes(goalPriorStatus) ? goalPriorStatus : null
       : sideTurn
         ? (task.status === "running" || task.status === "queued" ? null : task.status)
         : !execution && (["done", "failed", "canceled"].includes(task.status) || checkpointFollowUp)
@@ -562,9 +561,9 @@ export async function continueTask(
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
     const noteTarget = { out, taskId, sessionId: sessId, role: sessionRole, agentType: agent, at: turnStart };
     if (opts.system) {
-      // Backend-initiated 继续: a 〔系统〕 trace (its own bubble), NOT a 你→ reply.
-      // Persist as a structured turn (reload) and emit a matching system event (live).
-      writeSystemNote(noteTarget, SYS_MARKER);
+      // Backend-initiated 继续: a 〔系统〕 trace carrying who resumed it, NOT a 你→ reply.
+      const resume = { reason: opts.system, ...(sideTurn ? { side: true as const } : {}) };
+      recordSystemResumeTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, at: turnStart, resume });
     } else {
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
       // the human/backend turn as its own bubble; the matching event keeps every client live.

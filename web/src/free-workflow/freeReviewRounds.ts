@@ -65,12 +65,32 @@ function disputeSuffix(round: FreeReviewRound): string {
   return deferOnly(round) ? " · 执行者提出越界" : " · 执行者已驳回";
 }
 
+/**
+ * 这一轮没给出结论是哪一类（服务端判的，见 `FreeReviewRound.noVerdict`）：回合中途断了 / 收尾了
+ * 没上报。老记录没有这一项，照旧叫「异常」。
+ */
+function noVerdictHead(round: FreeReviewRound): string {
+  if (!round.noVerdict) return "异常";
+  return round.noVerdict.kind === "interrupted" ? "中断" : "没上报结论";
+}
+
+/** 结论行那一句里轮号后面的半句：「中断 · 模型上游连不上（503）」。老记录给「异常」。 */
+export function noVerdictText(round: FreeReviewRound): string {
+  return round.noVerdict ? `${noVerdictHead(round)} · ${round.noVerdict.reason}` : noVerdictHead(round);
+}
+
+/** 点开那一轮、报告还没有时那一句：「这一轮中断：模型上游连不上（503），报告尚未生成。」 */
+export function missingReportText(round: FreeReviewRound): string {
+  if (round.status === "reviewing") return "还在审，报告写完会出现在这里。";
+  return round.noVerdict ? `这一轮${noVerdictHead(round)}：${round.noVerdict.reason}，报告尚未生成。` : "报告尚未生成。";
+}
+
 /** 一轮的结论，记录行右边那一段。 */
 export function reviewRoundLabel(round: FreeReviewRound): string {
   if (round.status === "reviewing") return "审查中";
   if (round.conclusion === "verified") return "已通过";
   if (round.conclusion === "verify_failed") return `未通过${disputeSuffix(round)}`;
-  return "异常";
+  return noVerdictHead(round);
 }
 
 export function reviewRoundTone(round: FreeReviewRound): "plain" | "bad" | "live" {

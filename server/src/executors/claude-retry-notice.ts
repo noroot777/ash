@@ -11,6 +11,9 @@
 // 一律 `level:"notice"`:重试期间回合仍然正常进行中,裸 error 的代价见 session-notice.ts 顶部。
 // 「最终失败了没有」由收尾的 result / synthetic 消息答,这里只负责把过程留在它发生的位置上。
 
+import type { ModelFailure } from "@ash/shared";
+import { modelFailureOf } from "./model-failure.js";
+
 /** 这条原始事件是不是一次重试。 */
 export const isClaudeRetry = (ev: { type?: unknown; subtype?: unknown }): boolean =>
   ev.type === "system" && ev.subtype === "api_retry";
@@ -34,4 +37,9 @@ export function claudeRetryMessage(ev: Record<string, any>): string {
   if (attempt) parts.push(max ? `第 ${attempt}/${max} 次` : `第 ${attempt} 次`);
   if (wait) parts.push(`等 ${wait >= 1000 ? `${Math.round(wait / 1000)} 秒` : `${(wait / 1000).toFixed(1)} 秒`}`);
   return `${cause}，正在重试${parts.length ? `（${parts.join("，")}）` : ""}`;
+}
+
+/** 这次重试撞的是模型 API 的哪一类(model-failure.ts):两个入口都挂上,看门狗熔断掉这一轮时原因据它说。 */
+export function claudeRetryModel(ev: Record<string, any>): ModelFailure | null {
+  return modelFailureOf(typeof ev.error === "string" ? ev.error : "", Number(ev.error_status) || null);
 }
