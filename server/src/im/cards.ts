@@ -335,3 +335,27 @@ export function confirmCard(title: string, text: string, envelope: string, dange
     ],
   };
 }
+
+/**
+ * 新设备申请连进这台 ash（自用模式，auth/remote-pairing.ts）。配对码和那台设备屏幕上的对得上才是同一台 ——
+ * 递申请不用任何凭证，同一个网里别人的设备也递得上来。
+ */
+export function pairCard(request: { name: string; code: string; address: string }, envelope: string): CardModel {
+  return {
+    title: "新设备想连接这台 ash",
+    tone: "orange",
+    blocks: [
+      { type: "text", text: `「${scrubTitle(request.name, 40)}」，来自 ${request.address}\n它屏幕上的配对码应为 ${request.code}` },
+      {
+        type: "buttons",
+        buttons: [
+          {
+            text: "允许", style: "primary", value: value(envelope, "approve"),
+            confirm: { title: "允许这台设备连接？", text: "允许之后它能完整操作这台 ash，包括终端。配对码对不上、或者不是你自己在连，就别允许。" },
+          },
+          { text: "拒绝", value: value(envelope, "deny") },
+        ],
+      },
+    ],
+  };
+}

@@ -43,7 +43,7 @@ import { parseAttachmentText } from "@ash/shared/attachments";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { isAcceptingTask } from "./acceptance-lock.js";
-import { noted } from "./user-action-rejection.js";
+import { noted, type RejectedAction } from "./user-action-rejection.js";
 import { db } from "./db/index.js";
 import { groups, sessions, tasks } from "./db/schema.js";
 import { profileDrift } from "./executors/index.js";
@@ -56,7 +56,8 @@ import { turnOutcome } from "./session-turns.js";
 import type { TurnOutcome } from "./session-turns.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { continueTask } from "./orchestrator.js";
-import { queueBlockers } from "./queues.js";
+import { inputStartsExecution } from "./task-continuation-entry.js";
+import { queueBlockedText, queueBlockerDetails, type QueueBlocker } from "./queues.js";
 import { claimQueueSeat, queueClaimError, type QueueSeat } from "./queue-seat.js";
 import { claimOwnTurn, releaseTurn } from "./runs.js";
 import { RESUME_PROMPT } from "./run-prompts.js";
@@ -112,6 +113,28 @@ async function lastInputSeg(path: string): Promise<NonAgentSeg | null> {
   return null;
 }
 
+type UserSeg = Extract<NonAgentSeg, { kind: "user" }>;
+
+/**
+ * 重投档要原样重投的那句话。`execution` = 这句话交给 continueTask 会被当成任务的执行而不是
+ * 续聊(`inputStartsExecution`,如 `/goal resume`):原终态护不住,队列也按它在执行看。
+ */
+export type ResendInput = {
+  text: string; paths: string[]; bySystem: boolean; monitorWake: UserSeg["monitorWake"]; execution: boolean;
+};
+
+// 上一回合的输入能不能原样重投:是 user 段、且去掉附件标记后还剩点东西。不能就落续跑档。
+// `agentType` 是重投要交给的那个执行器:斜杠命令按它的命令表解析,跟 continueTask 同口径。
+export function resendInputOf(seg: NonAgentSeg | null, agentType: string): ResendInput | null {
+  if (seg?.kind !== "user") return null;
+  const { body, paths } = parseAttachmentText(seg.text);
+  const text = body.trim();
+  if (!text && !paths.length) return null;
+  return {
+    text, paths, bySystem: !!seg.bySystem, monitorWake: seg.monitorWake, execution: inputStartsExecution(agentType, text),
+  };
+}
+
 export type RetryTurnTask = {
   archived: boolean;
   mode: string;
@@ -141,8 +164,13 @@ export type RetryTurnFacts = {
   /** 分档。省略 = 按 `latest` 的身份分(只带 sessionId 的老请求)。 */
   kind?: RetryTurnKind;
   wantedSessionId?: string;
-  /** 同队列排在前面、还没完成的任务。 */
-  blockedBy?: string[];
+  /**
+   * 普通回合里,上一回合可以原样重投的那句话(`resendInputOf`),只要它是不是执行型。有 = 重投档,
+   * 没有 = 续跑档。省略按没有算:续跑档是要过队列那道闸的那一档,不知道的时候往严里判。
+   */
+  resend?: Pick<ResendInput, "execution"> | null;
+  /** 同队列里挡着它执行的成员(`queueBlockerDetails`)。只有执行回合会被它挡。 */
+  blockedBy?: QueueBlocker[];
   /** 所在分组被暂停（`scheduler.ts` 同样拒绝拉起暂停组的成员）。 */
   groupPaused?: boolean;
   /**
@@ -168,6 +196,34 @@ export type RetryTurnKind = "turn" | "review";
 
 export function retryTurnKindOf(latest: RetryTurnSession): RetryTurnKind {
   return latest.role === "reviewer" ? "review" : "turn";
+}
+
+/**
+ * 重跑落在哪一档。普通回合再按上一回合的输入分两档:
+ * - resend:把上一句话重投给同一条会话;
+ * - resume:没有可重投的原话,`system:"retry"` 续跑。
+ * review 是旁路回合。
+ */
+export type RetryTurnTier = "review" | "resend" | "resume";
+
+type ResendFact = RetryTurnFacts["resend"];
+
+export function retryTurnTierOf(kind: RetryTurnKind, resend: ResendFact): RetryTurnTier {
+  return kind === "review" ? "review" : resend ? "resend" : "resume";
+}
+
+/**
+ * 这一次重跑是不是**任务的执行**:续跑档是;重投档看那句话本身 —— 普通的一句是终态任务上的
+ * 续聊(`followUpFrom` 护着原终态),`/goal resume` 这类执行型输入不是;审查档是旁路回合,不是。
+ * 是执行就占队列执行位、过队列那道闸,不是就两样都不碰。
+ */
+export function retryTurnIsExecution(kind: RetryTurnKind, resend: ResendFact): boolean {
+  return kind !== "review" && (!resend || resend.execution);
+}
+
+/** 留痕里的操作名,跟用户按的那颗按钮同名(user-action-rejection.ts 的判据)。 */
+export function retryTurnActionOf(kind: RetryTurnKind): RejectedAction {
+  return kind === "review" ? "继续本轮审查" : "重试这一回合";
 }
 
 // 会话行**跨回合复用**：恢复一条旧 CLI 会话只更新 `turnStartedAt`，`startedAt` 停在它第一
@@ -232,10 +288,14 @@ export function retryTurnRejection(facts: RetryTurnFacts): { error: string; deta
     };
   }
   if (facts.groupPaused) return { error: "所在分组已暂停，先恢复分组再重试", detail: { groupPaused: true } };
-  // 同 /run：串行队列里排在前面的还没完，这一颗就不该抢跑。少了这道闸，队尾任务上的
-  // 重试按钮就成了插队入口。
-  if (facts.blockedBy?.length) {
-    return { error: "队列前面还有未完成的任务，先把它们处理完或把本任务移出队列", detail: { blockedBy: facts.blockedBy } };
+  // 同 /run：任务的执行回合（续跑档、执行型重投），同队有人在执行、或前面还有没让位的，就
+  // 不该抢跑 —— 少了这道闸，队里任务上的重试按钮就成了插队入口。其余不是执行：审查档是旁路
+  // 回合（派审本来就不查队列），普通重投是终态任务的续聊（手打同一句话发出去也不受队列限制，
+  // 见 task-reply.ts），队列按 followUpFrom 把它们看成原终态，既不因此停住、也不因此多拉一个
+  // 成员。挡它们，串行队列只要还在往下跑，队里已完成成员上断掉的那一回合就续不了。
+  // 这里只是快速失败；执行回合真正的互斥是下面路由里的 claimQueueSeat。
+  if (retryTurnIsExecution(kind, facts.resend) && facts.blockedBy?.length) {
+    return { error: queueBlockedText(facts.blockedBy), detail: { blockedBy: facts.blockedBy.map((b) => b.id) } };
   }
   // 「原样再跑一遍上一回合」的**保真前提**：那条 profile 还是当时那套执行环境。profile 是
   // 可编辑可删的（改 target 就换了台机器、改供应商就换了套账号），只存主键说不清这件事 ——
@@ -280,7 +340,9 @@ export type RetryTurnRequest = { sessionId?: string; review?: ReviewRetryIdentit
 export async function readRetryTurnFacts(
   taskId: string,
   request: RetryTurnRequest = {},
-): Promise<{ task: TaskRow; latest: SessionRow | null; kind: RetryTurnKind; facts: RetryTurnFacts } | null> {
+): Promise<{
+  task: TaskRow; latest: SessionRow | null; kind: RetryTurnKind; resend: ResendInput | null; facts: RetryTurnFacts;
+} | null> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return null;
   const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
@@ -304,16 +366,24 @@ export async function readRetryTurnFacts(
     const bound = run ? reviewRetrySessionId(task, run) : null;
     latest = rows.find((row) => row.id === bound) ?? null;
   }
+  // 重投还是续跑,要读会话正文最后一段输入才知道;判据(队列那道闸)和路由走哪档读的是同一份。
+  // 重投交给的执行器就是那条会话自己的(路由按它记下的 profile 重放)。
+  const resend = kind === "turn" && latest
+    ? resendInputOf(await lastInputSeg(readableRunPath(sessionTranscriptPath(taskId, latest.id))).catch(() => null),
+      latest.agentType ?? task.agentType)
+    : null;
   return {
     task,
     latest: latest ?? null,
     kind,
+    resend,
     facts: {
       task,
       latest: latest ?? null,
       kind,
       wantedSessionId: request.review ? undefined : request.sessionId,
-      blockedBy: await queueBlockers(taskId),
+      resend,
+      blockedBy: retryTurnIsExecution(kind, resend) ? await queueBlockerDetails(taskId) : [],
       groupPaused: !!group?.paused,
       // 老会话行没记指纹（null）时返回 null = 无从核对，按老行为放行。
       profileDrift: latest ? await profileDrift(latest.executorId, latest.executorFingerprint) : null,
@@ -333,14 +403,16 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
     // 挡回就留痕(`noted`,判据见那边):这颗按钮按下去没反应时,用户刷新页面后要能看出
     // 「点过、没成、因为什么」。下面每条 409 同理,**除了**一眼能从界面读到的那种
     // (任务已删、上一回合不存在 → 那本来就不显示这颗按钮)。
+    // 这一刻还没读会话,按请求认按钮:页面上的「继续本轮审查」带着审查身份来。
     if (checkpointBlocked) {
-      return c.json(await noted(taskId, "重跑上一回合", { error: checkpointBlocked, checkpoint: true }), 409);
+      return c.json(await noted(taskId, retryTurnActionOf(body.review ? "review" : "turn"), { error: checkpointBlocked, checkpoint: true }), 409);
     }
     const first = await readRetryTurnFacts(taskId, body);
     if (!first) return c.json({ error: "not found" }, 404);
-    const rejection = retryTurnRejection(first.facts);
-    if (rejection) return c.json(await noted(taskId, "重跑上一回合", { error: rejection.error, ...rejection.detail }), 409);
     const kind = first.kind;
+    const action = retryTurnActionOf(kind);
+    const rejection = retryTurnRejection(first.facts);
+    if (rejection) return c.json(await noted(taskId, action, { error: rejection.error, ...rejection.detail }), 409);
     // 同 /run、/retry：原子占位，并发只有一个能 202。占位身份跟着分支走 —— 审查重跑此刻
     // 还没有审查回合，冒充 reviewer 会让迟到的结论上报被当成本回合的（见
     // reportFreeReviewConclusion 的 turnRole 校验）。
@@ -349,17 +421,17 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
     // (本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
     const turn = claimOwnTurn(taskId, kind === "review" ? "dispatch" : "single");
     if (!turn) {
-      return c.json(await noted(taskId, "重跑上一回合", { error: "任务回合正在进行，结束后再重试", status: first.task.status }), 409);
+      return c.json(await noted(taskId, action, { error: "任务回合正在进行，结束后再重试", status: first.task.status }), 409);
     }
     // 占位之后的每一条出路都必须交接或释放这把锁：漏一条就是「500 一次、之后永远 409，
     // 只能重启服务」。所以 handed 只在**真正把 turnHeld 交给下游**的那一刻才置位。
     let handed = false;
-    // 队列执行占位(重投/resume 档才占,见下;审查档是旁路回合,不是任务执行)。
+    // 队列执行占位(只有任务的执行回合才占,见下 retryTurnIsExecution)。
     let seat: QueueSeat | null = null;
     try {
       // 占位后镜像检查验收锁，否则下游撞上验收锁静默 return，202 就成了谎报。
       if (isAcceptingTask(taskId)) {
-        return c.json(await noted(taskId, "重跑上一回合", { error: "任务正在验收（含发布尾段），结束后再重试", status: first.task.status }), 409);
+        return c.json(await noted(taskId, action, { error: "任务正在验收（含发布尾段），结束后再重试", status: first.task.status }), 409);
       }
       // ── 占位后权威重查（口径同 review.ts）──
       // 上面那一遍是在**没有任何互斥**的情况下读的：从读完到 claimOwnTurn 之间隔着好几个
@@ -372,12 +444,12 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       if (!fresh || again) {
         const body = { error: again?.error ?? "任务已被删除", ...(again?.detail ?? {}) };
         // 任务真被删了就没地方留痕了(那条记录读不出来),其余照记。
-        return c.json(fresh ? await noted(taskId, "重跑上一回合", body) : body, 409);
+        return c.json(fresh ? await noted(taskId, action, body) : body, 409);
       }
       const { task } = fresh!;
       // 分支在占位前后必须是同一个：占位身份是按它选的，变了就等于按错的身份占了锁。
       if (fresh!.kind !== kind) {
-        return c.json(await noted(taskId, "重跑上一回合", { error: "上一回合在这中间变了，刷新后再试", sessionId: fresh!.latest?.id }), 409);
+        return c.json(await noted(taskId, action, { error: "上一回合在这中间变了，刷新后再试", sessionId: fresh!.latest?.id }), 409);
       }
 
       // 交接必须**有人接住错误**：`void continueTask(...)` 在下游接管这把锁之前抛错（它
@@ -415,7 +487,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
           const { resumed, dispatched } = await reopenFailedFreeReview(taskId);
           return c.json({ started: true, mode: "review", resumed, dispatched }, 202);
         } catch (error) {
-          return c.json(await noted(taskId, "重跑上一回合", { error: errorText(error) }), 409);
+          return c.json(await noted(taskId, action, { error: errorText(error) }), 409);
         }
       }
 
@@ -437,51 +509,51 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
         : latest.agentType === task.agentType
           ? {}
           : { agent: latest.agentType as AgentType, model: null, reasoningEffort: null };
-      const seg = await lastInputSeg(readableRunPath(sessionTranscriptPath(taskId, latest.id))).catch(() => null);
-      if (seg?.kind === "user") {
-        const { body: text, paths } = parseAttachmentText(seg.text);
-        const trimmed = text.trim();
-        if (trimmed || paths.length) {
-          handoff(continueTask(taskId, trimmed, {
-            ...route,
-            actingUserId: acting,
-            attachments: paths,
-            // 后端代写的那句（审查打回等）重投时仍标 by:"system"：作者没变，重来一次不该
-            // 把机器的话记成我说的。
-            byBackend: !!seg.bySystem,
-            monitorWake: seg.monitorWake,
-            resumeSessionId: latest.id,
-            turnHeld: turn,
-            // 判据是在这里读的，CLI 却要到几个 await 之后才真正起来（执行器解析、worktree
-            // 准备）：起跑前再核一遍冻结事实，不然「暂停分组已经 200 返回」和「重试把 CLI
-            // 拉起来」会同时成立（第 1 轮审查 finding 1）。
-            freezeGuard: true,
-          }), "重跑上一回合");
-          return c.json({ started: true, mode: "resend" }, 202);
+      // 重投还是续跑、是不是执行,按占位后那一遍读到的定(判据放行的就是这一档)。
+      const resend = fresh!.resend;
+      // **执行回合**(续跑档,或重投一句执行型输入如 `/goal resume`)必须先认领队列执行占位
+      // (queue-seat.ts):从这里到 CLI 真正拉起之间隔着解析执行器、准备 worktree 等一串 await,
+      // 任务状态却一直停在 done —— 消息补投扫描在这个窗口里按 DB 状态判定「整队空闲」,会放行
+      // 同队另一个失败成员的执行型回复,两个任务一起跑(第 7 轮审查:普通 HTTP 并发 10/10 复现)。
+      // claimQueueSeat 与扫描、/run、/fire、/retry、队列推进共用同一条认领链,占到位后这段
+      // 窗口对任何入口都可见。普通重投不占:它重放的是续聊回合(followUpFrom 护住原终态),队列
+      // 对续聊本就豁免,占位反而会让一次聊天重跑把整条队列挡住;审查档同理(旁路回合)。
+      // 执行型重投也照样占:只看「有原话可重投」就豁免,`/goal resume` 会绕过队列跟同队成员
+      // 一起跑(本任务第 1 轮审查 F1,已实测)。
+      if (retryTurnIsExecution(kind, resend)) {
+        const claim = await claimQueueSeat(taskId);
+        if (!claim.ok) {
+          return c.json(await noted(taskId, action, { error: queueClaimError(claim), blockedBy: claim.blockers }), 409);
         }
+        seat = claim.seat;
       }
-      // 上一回合是系统续跑（会话里最后一段不是 user）：没有可重投的原话，改用续跑提示。
+      if (resend) {
+        handoff(continueTask(taskId, resend.text, {
+          ...route,
+          actingUserId: acting,
+          attachments: resend.paths,
+          // 后端代写的那句（审查打回等）重投时仍标 by:"system"：作者没变，重来一次不该
+          // 把机器的话记成我说的。
+          byBackend: resend.bySystem,
+          monitorWake: resend.monitorWake,
+          resumeSessionId: latest.id,
+          turnHeld: turn,
+          // 判据是在这里读的，CLI 却要到几个 await 之后才真正起来（执行器解析、worktree
+          // 准备）：起跑前再核一遍冻结事实，不然「暂停分组已经 200 返回」和「重试把 CLI
+          // 拉起来」会同时成立（第 1 轮审查 finding 1）。
+          freezeGuard: true,
+        }), action);
+        return c.json({ started: true, mode: "resend" }, 202);
+      }
+      // 上一回合是系统续跑（会话里最后一段不是 user）：没有可重投的原话，改用续跑提示
+      // (system:"retry" → followUpFrom=null,任务的执行回合,队列占位上面已经认领)。
       // 会话行记着 profile 时仍旧钉死那一条会话；老行退回 `resumeOrRunTask`（它按任务的
       // agentType 挑会话，跟界面头部那颗「运行」同一条路）。
-      //
-      // 这一档是**任务的执行回合**(system:"retry" → followUpFrom=null),必须先认领队列
-      // 执行占位(queue-seat.ts):从这里到 CLI 真正拉起之间隔着解析执行器、准备 worktree
-      // 等一串 await,任务状态却一直停在 done —— 消息补投扫描在这个窗口里按 DB 状态判定
-      // 「整队空闲」,会放行同队另一个失败成员的执行型回复,两个任务一起跑(第 7 轮审查:
-      // 普通 HTTP 并发 10/10 复现)。claimQueueSeat 与扫描、/run、/fire、/retry、队列推进
-      // 共用同一条认领链,占到位后这段窗口对任何入口都可见。上面的重投档不占:它重放的是
-      // 续聊回合(followUpFrom 护住原终态),队列对续聊本就豁免,占位反而会让一次聊天重跑
-      // 把整条队列挡住;审查档同理(旁路回合,不是任务执行)。
-      const claim = await claimQueueSeat(taskId);
-      if (!claim.ok) {
-        return c.json(await noted(taskId, "重跑上一回合", { error: queueClaimError(claim), blockedBy: claim.blockers }), 409);
-      }
-      seat = claim.seat;
       handoff(
         latest.executorId
           ? continueTask(taskId, RESUME_PROMPT, { ...route, actingUserId: acting, system: "retry", resumeSessionId: latest.id, turnHeld: turn, freezeGuard: true })
           : resumeOrRunTask(taskId, { reason: "retry", turnHeld: turn, actingUserId: acting }),
-        "重跑上一回合",
+        action,
       );
       return c.json({ started: true, mode: "resume" }, 202);
     } finally {

@@ -29,7 +29,7 @@ import { mountTaskSessionRoutes } from "./task-session-routes.js";
 import { mountTaskSteerRoutes } from "./task-steer.js";
 import { flushPendingForTask, publishPendingMessages } from "./pending-messages.js";
 import { withAfterGates } from "./pending-after.js";
-import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
+import { isOvertaken, queueBlockedText, queueBlockerDetails, repackQueue, tailOrder } from "./queues.js";
 import { queueClaimError, seatThenStart } from "./queue-seat.js";
 import { claimOwnTurn, heldForAcceptance, releaseTurn, stopTask, turnBusyText } from "./runs.js";
 import { noted } from "./user-action-rejection.js";
@@ -107,10 +107,10 @@ api.post("/tasks/:id/run", async (c) => {
   if (!runnable) return c.json({ error: "任务当前状态不可运行", status: r.status }, 409);
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
-  const blockedBy = await queueBlockers(taskId);
-  if (blockedBy.length) {
+  const blocking = await queueBlockerDetails(taskId);
+  if (blocking.length) {
     return c.json(
-      await noted(taskId, "运行", { error: "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列", blockedBy }),
+      await noted(taskId, "运行", { error: queueBlockedText(blocking), blockedBy: blocking.map((b) => b.id) }),
       409,
     );
   }
@@ -189,10 +189,10 @@ api.post("/tasks/:id/fire", async (c) => {
   // runTask 遇验收锁/单飞锁会静默 return——202 就成了谎报「已触发一轮全新运行」（审查实测）。
   if (isAcceptingTask(taskId))
     return c.json(await noted(taskId, "触发新一轮", { error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }), 409);
-  const blockedBy = await queueBlockers(taskId);
-  if (blockedBy.length) {
+  const blocking = await queueBlockerDetails(taskId);
+  if (blocking.length) {
     return c.json(
-      await noted(taskId, "触发新一轮", { error: "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列", blockedBy }),
+      await noted(taskId, "触发新一轮", { error: queueBlockedText(blocking), blockedBy: blocking.map((b) => b.id) }),
       409,
     );
   }
@@ -560,19 +560,19 @@ api.post("/tasks/:id/retry", async (c) => {
   // 同 /run:原子占位,并发重试只有一个能 202;duet 走同一把锁。
   const turn = claimOwnTurn(taskId, r.mode === "duet" ? "duet" : "single");
   if (!turn) {
-    return c.json(await noted(taskId, "重跑上一回合", { error: turnBusyText(taskId, "重试"), status: r.status }), 409);
+    return c.json(await noted(taskId, "重试", { error: turnBusyText(taskId, "重试"), status: r.status }), 409);
   }
   // 占位后镜像检查验收锁:否则 runTask/resumeDuet 撞上验收锁静默 return,202 是谎报。
   if (isAcceptingTask(taskId)) {
     releaseTurn(taskId, turn);
-    return c.json(await noted(taskId, "重跑上一回合", { error: "任务正在验收（含发布尾段），结束后再重试", status: r.status }), 409);
+    return c.json(await noted(taskId, "重试", { error: "任务正在验收（含发布尾段），结束后再重试", status: r.status }), 409);
   }
   // 占着回合再核是哪一次失败：占位之前读的那一行可能已经过时（别处刚重试过、又失败了一次）。
   if (expectedFailure !== undefined) {
     const held = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!held || held.status !== "failed" || failureVersionOf(held) !== expectedFailure) {
       releaseTurn(taskId, turn);
-      return c.json(await noted(taskId, "重跑上一回合", {
+      return c.json(await noted(taskId, "重试", {
         error: "要重试的那次失败之后任务又跑过了：请看最新的状态再重试", stale: true, status: held?.status ?? r.status,
       }), 409);
     }
@@ -588,7 +588,7 @@ api.post("/tasks/:id/retry", async (c) => {
       ? resumeDuet(taskId, { turnHeld: turn, actingUserId: acting })
       : resumeOrRunTask(taskId, { reason: "retry", turnHeld: turn, actingUserId: acting }));
   if (!started.ok) {
-    return c.json(await noted(taskId, "重跑上一回合", { error: queueClaimError(started), blockedBy: started.blockers }), 409);
+    return c.json(await noted(taskId, "重试", { error: queueClaimError(started), blockedBy: started.blockers }), 409);
   }
   return c.json({ started: true }, 202);
 });

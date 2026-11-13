@@ -115,24 +115,23 @@ api.get("/health", (c) => c.json({
 // running/queued 的个数已经不对了：agent 输出走文件之后，多数单飞任务重启不会断。
 // 动态 import：这条路只在人工重启时被打一次，没必要把 reattach 那条链拉进启动路径。
 //
-// 多人模式下打这条的是**宿主机上的运维者**,他手里没有任何网页登录态,所以闸把它按
+// 打这条的是**宿主机上的运维者**,多人模式下他手里没有任何网页登录态,所以闸把它按
 // 「路径形状放行、凭证在路由内校验」处理(同 provider relay 的先例,见
 // auth/middleware.ts `HOST_MAINTENANCE_PATHS`)。凭证是单实例锁文件里那串 token:
 // 文件 0600,读得到它 = 读得到 ash 数据目录 = 本来就能直接读库,所以这里回任务标题
 // 不额外扩大暴露面。反过来,**登录用户照常能打**:前端也会用这条。
+//
+// 匿名那一档两种模式都要校验:自用模式下匿名 = 别的机器没带访问密钥就来打(本机跑
+// 重启脚本是本机直连,不是匿名),免登录名单放行的只是路径形状。
 api.get("/restart-impact", async (c) => {
-  const { isMultiUser } = await import("./auth/mode.js");
-  if (await isMultiUser()) {
-    const { actorOf } = await import("./auth/context.js");
-    const anonymous = actorOf(c).kind === "anonymous";
-    if (anonymous) {
-      const { liveLockToken } = await import("./singleton.js");
-      const expected = liveLockToken();
-      const given = c.req.header("x-ash-host-token")?.trim() ?? "";
-      // 没拿到锁(ASH_ALLOW_MULTI=1)时这条凭证根本不存在 —— 拒绝,别拿空串对空串放行。
-      if (!expected || !secretsEqual(given, expected)) {
-        return c.json({ error: "请先登录", needsAuth: true }, 401);
-      }
+  const { actorOf } = await import("./auth/context.js");
+  if (actorOf(c).kind === "anonymous") {
+    const { liveLockToken } = await import("./singleton.js");
+    const expected = liveLockToken();
+    const given = c.req.header("x-ash-host-token")?.trim() ?? "";
+    // 没拿到锁(ASH_ALLOW_MULTI=1)时这条凭证根本不存在 —— 拒绝,别拿空串对空串放行。
+    if (!expected || !secretsEqual(given, expected)) {
+      return c.json({ error: "请先登录", needsAuth: true }, 401);
     }
   }
   const { restartImpact } = await import("./reattach.js");

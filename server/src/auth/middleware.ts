@@ -1,4 +1,9 @@
-// 鉴权中间件:多人模式下所有请求的第一道闸(§三)。
+// 鉴权中间件:所有请求的第一道闸(§三)。
+//
+// 两种模式走同一条流程,差别只在「身份从哪来」:多人模式认 users 表上的人(cookie 会话 /
+// Bearer key);自用模式只有机主一个人,认的是「本机直连」、机主放进来的设备或访问密钥
+// (auth/remote-access.ts —— 连得上端口不算身份)。认不出来的一律是匿名,只碰得到下面那张
+// 免登录名单。
 //
 // **覆盖面是正面清单,不是黑名单**(审查修订 C9):`/api/*`、`/mobile`、`/review`、
 // preview 端点全部在闸内;豁口只有三类,写死在 PUBLIC_PATHS / 判定函数里。
@@ -12,10 +17,10 @@
 //   ③ Bearer 认证的请求天然免疫(浏览器不会自动附加 Authorization 头),所以只对
 //      cookie 身份做 ②
 //
-// ② 的覆盖面是**两段**,别只记住第一段:cookie 身份那一段,加上**匿名打免登录名单**
-// 那一段。后者不带任何凭证,却照样能改服务端状态 —— 首启 `/auth/setup` 就是,跨站一发
-// 就把未配置的实例锁进攻击者指定的多人模式(第 1 轮审查 P1)。自用模式下这道闸整条
-// 穿透,所以 `/auth/setup` 自己也留了一份同样的判据。
+// ② 的覆盖面是**两段**,别只记住第一段:浏览器会自动带上的身份那一段(cookie,以及自用
+// 模式的「本机直连」—— 机主的浏览器替别的站点打进回环,和带着 cookie 是一回事),加上
+// **匿名打免登录名单**那一段。后者不带任何凭证,却照样能改服务端状态 —— 首启
+// `/auth/setup` 就是,跨站一发就把未配置的实例锁进攻击者指定的多人模式(第 1 轮审查 P1)。
 import type { Context, MiddlewareHandler, Next } from "hono";
 import { getCookie } from "hono/cookie";
 import { eq } from "drizzle-orm";
@@ -24,6 +29,7 @@ import { tasks } from "../db/schema.js";
 import { SINGLE_ACTOR, ANONYMOUS_ACTOR, setActor, type Actor } from "./context.js";
 import { imGate } from "./im-actor.js";
 import { isMultiUser } from "./mode.js";
+import { noteOwnerHolder, ownerProof } from "./remote-access.js";
 import { resolveSession, touchUser, findUserByKey } from "./store.js";
 
 export const SESSION_COOKIE = "ash_session";
@@ -36,6 +42,11 @@ const PUBLIC_API_PATHS = new Set([
   "/api/auth/state",
   "/api/auth/login",
   "/api/auth/setup",
+  // 自用模式下一台新设备申请进来(auth/remote-pairing.ts):要求先登录是死结。凭据在
+  // 路由里验 —— 申请只是排进机主的待办,领结果要申请时发的 secret,兑码要机主出示的码。
+  "/api/auth/pair",
+  "/api/auth/pair/claim",
+  "/api/auth/pair/redeem",
   // ── 机器对机器的接力端点 ────────────────────────────────────────────────
   // 它们由**对端的 ash 服务端**来调,拿不到本机的 cookie 也没有本机的 key,所以走
   // 不了这道闸;它们自己那套闸更严:ed25519 签名 + 来源机审批 + §十一 的用户级 key。
@@ -97,7 +108,8 @@ const PEER_REFS_PATH = /^\/api\/handoff\/projects\/[^/]+\/refs$/;
  * 「会被打断的任务数」算成 0 —— 闸静默失效,不加 FORCE 的重启照样打断 queued 任务
  * (第 1 轮审查 P1)。
  *
- * 同样只放行**形状**:响应里带着任务标题(多人模式下是跨人数据),所以路由自己要校验
+ * 同样只放行**形状**:响应里带着任务标题(多人模式下是跨人数据,自用模式下匿名 = 没带
+ * 访问密钥的别的机器),所以路由自己对匿名一律校验
  * `x-ash-host-token` —— 单实例锁文件里那串随机 token,只有读得到 ash 数据目录的人拿得到
  * (见 routes.ts 的 `/restart-impact` 与 singleton.ts `liveLockToken`)。
  */
@@ -164,6 +176,18 @@ export function crossSiteRejection(headers: {
     ? null
     : "跨站请求已被拒绝（写操作只接受本站发起）";
 }
+
+/**
+ * 自用模式下别的机器没带密钥就来调 API 时的答复。读到它的常常是另一台机器上的脚本或
+ * agent,所以把「去哪拿、怎么带」一次说全。
+ */
+const REMOTE_ACCESS_REFUSAL =
+  "这台 ash 只认本机直连、配对过的设备和访问密钥：用浏览器打开它的地址会自动申请配对，"
+  + "在它本机点「允许」即可；脚本每个请求带 Authorization: Bearer <访问密钥>，"
+  + "密钥在它本机的「设置 → 默认规则 → 远程访问」里";
+
+/** 请求指名要找的主机。进程内派发没有 Host 头,取 URL 里的(与 human-request.ts 同一口径)。 */
+const requestHost = (c: Context): string => c.req.header("host") ?? new URL(c.req.url).host;
 
 /**
  * agent 回连身份:MCP 带着 `x-ash-source-task-id` + `x-ash-turn-token` 来
@@ -243,31 +267,44 @@ export function authGate(): MiddlewareHandler {
     const im = await imGate(c, next);
     if (im !== null) return im;
 
-    if (!(await isMultiUser())) {
-      setActor(c, (await agentActor(c)) ?? SINGLE_ACTOR);
-      return next();
-    }
-
+    const multi = await isMultiUser();
     // 模式已经是 multi 却还没建出管理员(转换中途崩了)—— **这里不开任何后门**。
     // 补做首启走的是既有的免登录名单:`/api/auth/state` 决定要不要出向导、
     // `/api/auth/setup` 把管理员补出来(routes.ts 的 `resuming` 分支不查管理员身份),
     // SPA 壳照常渲染。曾经这里是「setActor(SINGLE_ACTOR) + next()」放行**全部路径**:
     // 那一刻库里已经装着真实的项目和任务,等于未登录访客拿到实例管理员的全部读写权
     // (审查 P0 实测:`GET /api/tasks` 200 回出别人的任务)。
-    const actor = (await agentActor(c)) ?? (await cookieActor(c)) ?? (await bearerActor(c));
+    //
+    // 回合凭证两种模式都排第一:agent 的权限恰好是它那条任务的权限,不该因为它跑在
+    // 本机就升成机主。
+    let actor: Actor | null = await agentActor(c);
+    // 浏览器会替页面自动带上的身份,才有 CSRF 可言。
+    let ambient = false;
+    if (!actor && multi) {
+      actor = (await cookieActor(c)) ?? (await bearerActor(c));
+      ambient = actor !== null;
+    } else if (!actor) {
+      const proof = ownerProof(c, getCookie(c, SESSION_COOKIE));
+      if (proof) {
+        actor = SINGLE_ACTOR;
+        noteOwnerHolder(c, proof.holder);
+      }
+      ambient = proof?.how === "local" || proof?.how === "cookie";
+    }
 
     if (actor) {
-      // CSRF 只对 cookie 身份成立:Bearer 与回合凭证都要显式设头,浏览器不会替
-      // 第三方站点自动附加(见文件顶部)。
-      if (actor.kind === "user" && WRITE_METHODS.has(c.req.method) && !c.req.header("authorization")) {
+      setActor(c, actor);
+      // 带着 `Authorization` 的请求不查:那个头浏览器不会替第三方站点自动附加,跨站要带
+      // 它就得先过预检,而这边不给放行(见文件顶部)。
+      if (ambient && WRITE_METHODS.has(c.req.method) && !c.req.header("authorization")) {
         const rejection = crossSiteRejection({
           secFetchSite: c.req.header("sec-fetch-site"),
           origin: c.req.header("origin"),
-          host: c.req.header("host"),
+          host: requestHost(c),
         });
-        if (rejection) return c.json({ error: rejection }, 403);
+        // 真人专属动作被拒要留痕(用户刷新后还看得出「按过、被拒了」),别的路径它只回 403。
+        if (rejection) return (await import("./human-request.js")).rejectHumanRequest(c, rejection);
       }
-      setActor(c, actor);
       return next();
     }
 
@@ -285,7 +322,7 @@ export function authGate(): MiddlewareHandler {
         const rejection = crossSiteRejection({
           secFetchSite: c.req.header("sec-fetch-site"),
           origin: c.req.header("origin"),
-          host: c.req.header("host"),
+          host: requestHost(c),
         });
         if (rejection) return c.json({ error: rejection }, 403);
       }
@@ -294,10 +331,10 @@ export function authGate(): MiddlewareHandler {
     // 壳可以打开(登录页要渲染),数据一律不行。
     if (isSpaShell(path)) return next();
     if (path.startsWith("/api/")) {
-      return c.json({ error: "请先登录", needsAuth: true }, 401);
+      return c.json({ error: multi ? "请先登录" : REMOTE_ACCESS_REFUSAL, needsAuth: true }, 401);
     }
     // /mobile 与 /review 不是 SPA 壳:前者是手机 app 的静态站(它自己有 key 字段,
     // 但外框页与导出资源都得先登录才给),后者直接暴露待审视频文件。
-    return c.text("请先登录 ash 后再访问（多人模式）", 401);
+    return c.text("请先打开 ash 首页登录，再访问这个地址", 401);
   };
 }

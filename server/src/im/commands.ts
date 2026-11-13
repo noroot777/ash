@@ -297,6 +297,19 @@ export class CommandRunner {
     return { ok: false, text: "认不出这张确认卡", final: false };
   }
 
+  /** 配对卡上的「允许 / 拒绝」（pairing.ts）。申请不在了（过期、别处处理过）不是没办成：收起来，照实说。 */
+  async paired(principal: ImPrincipal, payload: Record<string, unknown>, decision: "approve" | "deny"): Promise<Outcome> {
+    const id = typeof payload.requestId === "string" ? payload.requestId : "";
+    const result = await this.deps.ash.post<{ name?: string }>(principal, `/api/remote-access/requests/${encodeURIComponent(id)}/${decision}`);
+    if (result.ok) {
+      return decision === "approve"
+        ? { ok: true, final: true, text: `已允许「${scrubTitle(result.data.name ?? "", 40)}」连接。` }
+        : { ok: true, final: true, tone: "grey", text: "已拒绝。" };
+    }
+    if (failureOf(result) === "absent") return { ok: true, final: true, tone: "grey", text: "这张申请已经过期，或者在别处处理过了。" };
+    return { ok: false, text: scrubText(result.error, 300), final: false };
+  }
+
   /** 建任务并开跑（确认卡的「确定」、表单的提交）。 */
   private async createAndRun(
     principal: ImPrincipal, projectId: string, title: string, body: unknown, autoTitle = false, attachments: string[] = [],

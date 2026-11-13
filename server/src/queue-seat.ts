@@ -25,7 +25,7 @@
 import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { queueItems, tasks } from "./db/schema.js";
-import { manualStartBlockers } from "./queues.js";
+import { describeQueueBlockers, manualStartBlockers, queueBlockedText, type QueueBlocker } from "./queues.js";
 import { SEAT_ROLLBACK_ROLE, claimNonTurn, releaseTurn, whenTurnIdle } from "./runs.js";
 import type { TurnOwner } from "./runs.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
@@ -76,6 +76,8 @@ export type QueueSeatClaim =
   | {
     ok: false;
     blockers: string[];
+    /** 同队挡路时,挡路的是哪几条(带标题);transient/self 那两档没有。 */
+    blocking?: QueueBlocker[];
     /** 数据库临时故障,不是同队在跑。 */
     transient?: boolean;
     /** 挡路的是**这个任务自己的另一代占位**,不是同队别的成员。 */
@@ -85,12 +87,12 @@ export type QueueSeatClaim =
 // 手动启动入口(/run、/fire、/retry、重跑上一回合)的认领失败话术。transient(数据库
 // 临时故障)时必须说真话:把一次可重试的写失败报成「同队有人在跑」,用户会去等一个
 // 不存在的前项(第 ll7XKsu_ps0n 链第 2 轮指出)。
-export function queueClaimError(r: { blockers: string[]; transient?: boolean; self?: boolean }): string {
+export function queueClaimError(r: { blockers: string[]; blocking?: readonly QueueBlocker[]; transient?: boolean; self?: boolean }): string {
   // transient(数据库临时故障)和 self(这个任务自己的另一代占位)都必须说真话:套用
   // 「同队有人在跑」会让用户去等一个不存在的前项。
   return r.transient || r.self
     ? r.blockers.join("；")
-    : "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列";
+    : queueBlockedText(r.blocking ?? []);
 }
 
 // 所有「检查整队 → 占位/落 queued」的临界区排在这一条链上依次执行。队列很小、临界区里
@@ -122,11 +124,9 @@ export async function claimQueueSeat(taskId: string): Promise<QueueSeatClaim> {
     if (!items.some((i) => i.taskId === taskId)) return { ok: true, seat: null }; // 排队间隙被移出了队列
     const rows = await db.select().from(tasks).where(inArray(tasks.id, items.map((i) => i.taskId)));
     const position = new Map(items.map((i) => [i.taskId, i.position]));
-    const blockers = manualStartBlockers(
-      rows.map((r) => ({ ...r, position: position.get(r.id) ?? 0 })),
-      taskId,
-    );
-    if (blockers.length) return { ok: false, blockers };
+    const members = rows.map((r) => ({ ...r, position: position.get(r.id) ?? 0 }));
+    const blockers = manualStartBlockers(members, taskId);
+    if (blockers.length) return { ok: false, blockers, blocking: describeQueueBlockers(members, blockers) };
     const current = rows.find((row) => row.id === taskId);
     if (!current) return { ok: false, blockers: ["任务已删除"] };
     // 同一个任务不许叠第二代占位。`manualStartBlockers(rows, taskId)` 不把 taskId 自己算作
@@ -250,7 +250,7 @@ export async function seatThenStart(
   // 凭据只能由占位那一刻产生,所以它是参数。
   owner: TurnOwner,
   start: (seat: QueueSeat | null) => Promise<unknown>,
-): Promise<{ ok: true } | { ok: false; blockers: string[]; transient?: boolean; self?: boolean }> {
+): Promise<{ ok: true } | { ok: false; blockers: string[]; blocking?: QueueBlocker[]; transient?: boolean; self?: boolean }> {
   let claim: QueueSeatClaim;
   try {
     claim = await claimQueueSeat(taskId);
