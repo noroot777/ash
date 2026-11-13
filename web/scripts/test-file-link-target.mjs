@@ -26,11 +26,13 @@ for (const [text, expected] of [
   // 空格、括号是合法的文件名字符：有没有这个文件交给服务端答，这里不许先挡掉（审查第 1 轮 N1）。
   ["docs/release notes.md", "docs/release notes.md"],
   ["docs/plan(final).md", "docs/plan(final).md"],
+  // 家目录原样交给服务端展开：成片常落在 `~/Movies`，在工作区外，由 locate 判本机打不打得开。
+  ["~/Movies/ash-promo.mp4", "~/Movies/ash-promo.mp4"],
 ]) {
   assert.equal(codeFilePath(text, TASK), expected, `行内代码 ${text}`);
 }
 
-// 不像路径的：命令、调用、版本号、网址、家目录、glob——一条都不去问。
+// 不像路径的：命令、调用、版本号、网址、别人的家目录、glob——一条都不去问。
 for (const text of [
   "npm run build",
   "useWorktree=false",
@@ -38,7 +40,7 @@ for (const text of [
   "v1.2",
   "1.0.3",
   "https://example.com/a.md",
-  "~/notes/a.md",
+  "~bob/notes/a.md",
   "src/**/*.ts",
   "--flag/x",
   "complete_task",

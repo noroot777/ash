@@ -41,7 +41,7 @@ import { markdownImageRefs } from "@ash/shared/markdown-images";
 import { imagePreviewTarget, taskFilePath, unavailableImage } from "../components/markdownPolicy.ts";
 import { api } from "../lib/api.ts";
 import type { AgentContentSegment, AttachmentSource } from "./conversationModel.ts";
-import { attachmentView } from "./utils.ts";
+import { attachmentView, isAudioPath, isVideoPath } from "./utils.ts";
 
 type Edit = { start: number; end: number; text: string };
 
@@ -153,6 +153,8 @@ export function turnImageDocument(
   const edits: Edit[] = [];
   const taken = new Map<string, number>();
   for (const ref of refs) {
+    // `![](成片.mp4)` 不是图：原样留给渲染点画成链接（MarkdownBody 的 img），改写成取图地址只会是一张裂图
+    if (isVideoPath(ref.destination) || isAudioPath(ref.destination)) continue;
     const list = records.get(ref.destination);
     let url: string | null;
     // 这处引用领走的那份拷贝。**改写真的落下去了才算领走** —— 认领的唯一后果是把卡片从

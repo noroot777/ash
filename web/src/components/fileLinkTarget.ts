@@ -20,6 +20,7 @@ const EXTENSION = /\.[A-Za-z][\w-]{0,9}$/;
  */
 const NOT_PATH = /[\n`'"<>|*?{}$;,=]/;
 const DRIVE = /^[A-Za-z]:[\\/]/;
+const HOME = /^~[\\/]/;
 /** ash 自己建的任务工作区：`<仓库>/.worktrees/<任务>/<相对路径>`。 */
 const WORKTREE = /(?:^|[/\\])\.worktrees[/\\]([^/\\]+)[/\\](.+)$/;
 
@@ -44,8 +45,9 @@ function placed(taskId: string, path: string, baseDir: string): string | null {
   const worktree = WORKTREE.exec(path);
   if (worktree) return worktree[1] === taskId ? joinRelative("", worktree[2]!) : path;
   if (path.startsWith("/") || path.startsWith("\\") || DRIVE.test(path)) return path;
-  // `~` 要展开成谁的家目录只有 agent 那台机器知道。
-  if (path.startsWith("~")) return null;
+  // `~/…` 原样交给服务端：agent 跟 ash 在同一台机器上，家目录由它展开（成片常落在 `~/Movies`）。
+  // `~user/…` 不认。
+  if (path.startsWith("~")) return HOME.test(path) ? path : null;
   return joinRelative(baseDir, path);
 }
 
@@ -89,7 +91,7 @@ export function codeFilePath(text: string, taskId: string): string | null {
   if (!raw || raw.length > 400) return null;
   if (/^file:\/\//i.test(raw)) return linkFilePath(raw, taskId);
   const path = raw.replace(LINE_SUFFIX, "");
-  if (!path || NOT_PATH.test(path) || /^[-~]/.test(path)) return null;
+  if (!path || NOT_PATH.test(path) || path.startsWith("-") || (path.startsWith("~") && !HOME.test(path))) return null;
   if (hasUrlScheme(path) && !DRIVE.test(path)) return null;
   // 形状：带目录分隔符，或者末尾是个扩展名（`package.json`、`AGENTS.md`）。
   if (!/[/\\]/.test(path) && !EXTENSION.test(path)) return null;

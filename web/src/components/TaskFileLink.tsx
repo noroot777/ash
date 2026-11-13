@@ -10,7 +10,7 @@ import {
 import { FileText, Folder } from "@phosphor-icons/react";
 import { locateTaskFile, useTaskFileTarget, type TaskFileTarget } from "../lib/taskFileLocate.ts";
 import { codeFilePath, linkFilePath } from "./fileLinkTarget.ts";
-import { isDocumentRelative, isLocalOpenHref } from "./markdownPolicy.ts";
+import { isDocumentRelative, isLocalOpenHref, openLocalPath } from "./markdownPolicy.ts";
 
 // 正文里提到的文件点一下就在中间栏摊开——跟「生成物」「文件」两格同一个出口。
 //
@@ -31,20 +31,31 @@ type FileLinks = {
 
 const FileLinksContext = createContext<FileLinks | null>(null);
 
-export function TaskFileLinks({ taskId, onOpenFile, onOpenFolder, children }: {
+export function TaskFileLinks({ taskId, onOpenFile, onOpenFolder, onOpenError, children }: {
   taskId: string;
   onOpenFile: (path: string) => void;
   onOpenFolder: (path: string) => void;
+  /** 工作区外的本机文件交给本机程序打开，没打开时说一句。 */
+  onOpenError: (message: string) => void;
   children: ReactNode;
 }) {
   // 回调走 ref：调用点传的是每次渲染新建的箭头函数，进了 context 的值就会让整篇会话里
   // 每一处路径跟着重渲染。
-  const latest = useRef({ onOpenFile, onOpenFolder });
-  latest.current = { onOpenFile, onOpenFolder };
+  const latest = useRef({ onOpenFile, onOpenFolder, onOpenError });
+  latest.current = { onOpenFile, onOpenFolder, onOpenError };
   const value = useMemo((): FileLinks => ({
     taskId,
     baseDir: "",
-    open: (target) => (target.kind === "dir" ? latest.current.onOpenFolder : latest.current.onOpenFile)(target.path),
+    open: (target) => {
+      // 工作区外的（成片常落在 `~/Movies`、素材库）中间栏摊不开，交给本机的播放器 / 访达
+      if (target.local) {
+        void openLocalPath(target.path).catch((reason: unknown) => {
+          latest.current.onOpenError(reason instanceof Error ? reason.message : String(reason));
+        });
+        return;
+      }
+      (target.kind === "dir" ? latest.current.onOpenFolder : latest.current.onOpenFile)(target.path);
+    },
   }), [taskId]);
   return <FileLinksContext.Provider value={value}>{children}</FileLinksContext.Provider>;
 }

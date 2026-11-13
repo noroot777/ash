@@ -13,7 +13,8 @@
 //     点得开的链接变回普通文字；
 //   • 缓存满了只清没人在看的那些。
 
-export type TaskFileTarget = { path: string; kind: "file" | "dir" };
+/** `local` = 工作区外、本机打得开的路径（`path` 是绝对路径），点了交给本机程序（`/api/open-local`）。 */
+export type TaskFileTarget = { path: string; kind: "file" | "dir"; local?: true };
 export type LocateEntries = Record<string, TaskFileTarget | null>;
 
 export type Known = {

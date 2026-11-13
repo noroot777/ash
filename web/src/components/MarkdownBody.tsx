@@ -9,6 +9,8 @@ import { rehypeFreshText } from "./freshText.ts";
 import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./ImagePreview.tsx";
 import { splitReviewReport } from "./reviewReportSections.ts";
 import { isLocalFileHref } from "./fileLinkTarget.ts";
+import { destinationFilePath } from "@ash/shared/markdown-images";
+import { isAudioPath, isVideoPath } from "../task-detail/utils.ts";
 import { CodeBlockScope, MarkdownCode, TaskFileLinkBase, useTaskFileHref } from "./TaskFileLink.tsx";
 import {
   insertIndexOf,
@@ -115,85 +117,91 @@ function markdownComponents(latest: { current: MarkdownContext }): Components {
   const resolveFile = (destination: string) => latest.current.resolveFile?.(destination) ?? null;
   const onReviewReport = (target: ReviewFileTarget) => latest.current.onReviewReport(target);
   const onActionError = (message: string | null) => latest.current.onActionError(message);
-  return {
-    a: ({ node: _node, href, onClick, ...props }) => {
-      // 指着工作区里文件的链接(`[方案](docs/plan.md)`)摊在中间栏,见 TaskFileLink。
-      // 证据目录里的报告除外:它不在工作区里,还是那个报告弹窗。
-      const evidence = reviewFileTarget(href);
-      const fileLink = useTaskFileHref(evidence ? undefined : href);
-      const reviewFile = evidence ?? resolveFile(href ?? "") ?? null;
-      const reviewMarkdown = reviewFile !== null && /\.md$/i.test(reviewFile.name);
-      const localOpen = localOpenUrl(href);
-      // 指向图片的链接跟内嵌图走同一个灯箱（也就跟同一条消息里的其它图编在一组，
-      // 能左右翻）。按住 ⌘/Ctrl/Shift 或中键仍然是浏览器原来那套「新标签页打开」，
-      // 由 PreviewableImageLink 自己让路。
-      const image = imagePreviewTarget(href, resolveFile);
-      if (image) {
-        return (
-          <PreviewableImageLink
-            {...props}
-            src={image.url}
-            href={image.url}
-            alt={image.name}
-            label={image.name}
-            onClick={onClick}
-          />
-        );
-      }
-      if (fileLink) {
-        return (
-          <a
-            {...props}
-            href={href}
-            className="task-file-link-anchor"
-            onClick={(event) => {
-              onClick?.(event);
-              if (event.defaultPrevented) return;
-              event.preventDefault();
-              onActionError(null);
-              void fileLink.open().then((opened) => {
-                if (opened) return;
-                if (localOpen) return openLocalPath(href || localOpen);
-                onActionError("工作目录里找不到这个文件");
-              }).catch((reason: unknown) => {
-                onActionError(reason instanceof Error ? reason.message : String(reason));
-              });
-            }}
-          >
-            {fileLink.glyph}
-            {props.children}
-          </a>
-        );
-      }
+  const a: NonNullable<Components["a"]> = ({ node: _node, href, onClick, ...props }) => {
+    // 指着工作区里文件的链接(`[方案](docs/plan.md)`)摊在中间栏,见 TaskFileLink。
+    // 证据目录里的报告除外:它不在工作区里,还是那个报告弹窗。
+    const evidence = reviewFileTarget(href);
+    const fileLink = useTaskFileHref(evidence ? undefined : href);
+    const reviewFile = evidence ?? resolveFile(href ?? "") ?? null;
+    const reviewMarkdown = reviewFile !== null && /\.md$/i.test(reviewFile.name);
+    const localOpen = localOpenUrl(href);
+    // 指向图片的链接跟内嵌图走同一个灯箱（也就跟同一条消息里的其它图编在一组，
+    // 能左右翻）。按住 ⌘/Ctrl/Shift 或中键仍然是浏览器原来那套「新标签页打开」，
+    // 由 PreviewableImageLink 自己让路。
+    const image = imagePreviewTarget(href, resolveFile);
+    if (image) {
+      return (
+        <PreviewableImageLink
+          {...props}
+          src={image.url}
+          href={image.url}
+          alt={image.name}
+          label={image.name}
+          onClick={onClick}
+        />
+      );
+    }
+    if (fileLink) {
       return (
         <a
           {...props}
-          href={reviewFile?.url ?? localOpen ?? href}
-          target={localOpen || reviewMarkdown ? undefined : "_blank"}
-          rel={localOpen || reviewMarkdown ? undefined : "noreferrer"}
+          href={href}
+          className="task-file-link-anchor"
           onClick={(event) => {
             onClick?.(event);
             if (event.defaultPrevented) return;
-            if (reviewMarkdown) {
-              event.preventDefault();
-              onReviewReport(reviewFile);
-              return;
-            }
-            if (!localOpen) return;
             event.preventDefault();
             onActionError(null);
-            void openLocalPath(href || localOpen).catch((reason: unknown) => {
+            void fileLink.open().then((opened) => {
+              if (opened) return;
+              if (localOpen) return openLocalPath(href || localOpen);
+              onActionError("工作目录里找不到这个文件");
+            }).catch((reason: unknown) => {
               onActionError(reason instanceof Error ? reason.message : String(reason));
             });
           }}
-        />
+        >
+          {fileLink.glyph}
+          {props.children}
+        </a>
       );
-    },
+    }
+    return (
+      <a
+        {...props}
+        href={reviewFile?.url ?? localOpen ?? href}
+        target={localOpen || reviewMarkdown ? undefined : "_blank"}
+        rel={localOpen || reviewMarkdown ? undefined : "noreferrer"}
+        onClick={(event) => {
+          onClick?.(event);
+          if (event.defaultPrevented) return;
+          if (reviewMarkdown) {
+            event.preventDefault();
+            onReviewReport(reviewFile);
+            return;
+          }
+          if (!localOpen) return;
+          event.preventDefault();
+          onActionError(null);
+          void openLocalPath(href || localOpen).catch((reason: unknown) => {
+            onActionError(reason instanceof Error ? reason.message : String(reason));
+          });
+        }}
+      />
+    );
+  };
+  return {
+    a,
     img: ({ src, alt }) => {
       const raw = typeof src === "string" ? src : "";
       // 空地址也**一个字都不画**：react-markdown 的 urlTransform 会把它不认的协议
       // （`file:` 就是一个）整个清空，画出来就是一张没有 src 的裂图（审查第 1 轮 F2）。
       if (!raw) return null;
+      // `![](成片.mp4)`：`<img>` 放不了视频，画出来只是一张裂图。当成指向它的链接，点了跟正文里提到的文件同一个出口。
+      if (isVideoPath(raw) || isAudioPath(raw)) {
+        const Link = a;
+        return <Link href={raw}>{alt || destinationFilePath(raw)?.split(/[\\/]/).pop() || raw}</Link>;
+      }
       // 作废标记:归属不可信那一处,任何 resolver 都不许再把它救活成当前文件
       // (审查第 2 轮 F1)。必须在解析之前就认掉。
       const unavailable = unavailableImageOrigin(raw);
