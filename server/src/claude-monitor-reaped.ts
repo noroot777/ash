@@ -34,7 +34,7 @@ import { and, desc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
 import { CLAUDE_MONITOR_ENDED_REASON } from "@ash/shared/monitor-claude";
 import { bus } from "./bus.js";
 import type { MonitorRunOrigin } from "./claude-monitor-origin.js";
-import { isTaskRevoked } from "./claude-monitor-revoked.js";
+import { admitWrite } from "./claude-monitor-write-queue.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, sessions } from "./db/schema.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
@@ -144,7 +144,9 @@ export async function reapClaudeMonitors(
     byTask.set(missed.taskId, entry);
   }
   for (const [taskId, tally] of byTask) {
-    if (isTaskRevoked(taskId)) continue;
+    // 确认删掉了才跳过；正在删就抛出去等结果（删除回滚的话这句话还得落，见 `admitWrite`）。
+    // 已经落下的那几条由 eventKey 兜住，整笔重来不会重复。
+    if (!admitWrite(taskId)) continue;
     const sessionId = await sessionOf(cliSessionId, taskId);
     const text = reapedNotice(tally, missed?.taskId === taskId ? missed : undefined);
     const written = await appendTaskTimeline(taskId, receiptLine(text), {

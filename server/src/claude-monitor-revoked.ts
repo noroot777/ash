@@ -71,6 +71,15 @@ export function releaseTaskRevocation(taskId: string): void {
 export const isTaskRevoked = (taskId: string): boolean => revoked.has(taskId);
 
 /**
+ * 闸处在哪一档；没关就是 `null`。
+ *
+ * 只问「能不能写」的调用方用上面那个就够了（挡住、让调用方重来）。**手里压着一次性事实的**
+ * 写入方必须分开看：`deleting` 只是「先别写」—— 删除可能整批回滚、`settle` 再把闸打开，这时
+ * 放弃就是永久丢账；只有 `deleted` 才是「可以放弃了」（见 claude-monitor-write-queue.ts）。
+ */
+export const taskRevocation = (taskId: string): Revocation["state"] | null => revoked.get(taskId)?.state ?? null;
+
+/**
  * 删除流程收口：**按「任务行还在不在」决定那道闸是关死还是打开**（第 5 轮审查 F1）。
  *
  * 由 `deleteTaskCompletely` 的 finally 调用 —— 删除的全部语句（含任务行本身）都在它里面，

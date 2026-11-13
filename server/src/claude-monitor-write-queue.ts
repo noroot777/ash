@@ -13,8 +13,11 @@
 // - **失败的那一笔留在队头**，按阶梯退避、到顶后按最长那一档一直试下去；后面的排在它后头，
 //   先后顺序不变（`close` 必须落在 `open` 之后，收尾必须数到前面每一笔）。库一恢复，队头
 //   最多再等一档就写成，后面的紧跟着全部落地。
-// - **销账只有三种理由**，每一种都是确定的结论，不是「等烦了」：写成了；任务被删了（明确
-//   撤销，`revoked` 说了算）；库已经关了（进程在退出，这份内存账本本来就要跟着没）。
+// - **销账只有三种理由**，每一种都是确定的结论，不是「等烦了」：写成了；任务**确认**删掉了
+//   （`deleted`）；库已经关了（进程在退出，这份内存账本本来就要跟着没）。**删除中**（`deleting`）
+//   不是理由：删除可能整批回滚、任务还在，那时已经放手的事实就永远回不来了（新一轮第 1 轮审查
+//   实测：删除失败回滚后，排着的卡片和收尾说明全没了）。删除中只是先等着，结果出来再说 ——
+//   队头那道闸和每一笔 job 自己落库前那道闸都按这个分（`admitWrite`）。
 // - **注定写不成的单独认出来**（约束冲突、类型不符、语句本身错了这类）：等多久都是同一个
 //   结果，留着只会把后面每一笔一起堵死。这类直接丢掉并留诊断。判据只看错误本身，认不出
 //   来的一律当作「库暂时不可用」继续等 —— 宁可多等，不可错丢。
@@ -27,15 +30,36 @@
 //
 // 进程崩溃时还压在内存里的那几笔会跟着没：这份投影没有自己的持久待写表，开机清扫
 // （`loseDeadClaudeMonitors`）只负责把已经落库、却没人收尾的行收成「进程已不在」。
+import { taskRevocation } from "./claude-monitor-revoked.js";
 import { dbClient } from "./db/index.js";
 
 export type WriteJob = () => Promise<void>;
 /** 这一笔是哪一类事实：`start` = 一个监听起来了；`update` = 一张已有卡片的状态变化。 */
 export type WriteFact = "start" | "update";
 
+/**
+ * job 里落库前问到「任务正在删」时抛它：这一笔**先等着**，删除有了结果再说（见文件头）。
+ * 队列认得它，不算失败、不报诊断。
+ */
+export class TaskDeletingError extends Error {
+  constructor(readonly taskId: string) {
+    super(`任务 ${taskId} 正在删除，这一笔等删除有结果再写`);
+  }
+}
+
+/**
+ * 一笔一次性事实落库前的那道闸：`true` = 写；`false` = 任务确认删掉了，这一笔可以放弃；
+ * 任务**正在删**就抛 `TaskDeletingError`，让队列把它留着等。
+ */
+export function admitWrite(taskId: string): boolean {
+  const state = taskRevocation(taskId);
+  if (state === "deleting") throw new TaskDeletingError(taskId);
+  return state !== "deleted";
+}
+
 export type WriteQueueOptions = {
-  /** 这一笔还要不要：返回 true = 任务已被明确撤销（删掉了），立即销账、不留诊断。 */
-  revoked: () => boolean;
+  /** 这条流所属任务的删除闸在哪一档（见 `taskRevocation`）；还不知道归哪个任务就给 `null`。 */
+  revocation: () => "deleting" | "deleted" | null;
   /** 旁路诊断（调用方负责限频和带上会话身份）。 */
   warn: (what: string, detail: unknown) => void;
   /** 一笔带 `fact` 的事实被丢掉了（溢出 / 注定写不成）。撤销和库已关闭不算丢。 */
@@ -66,6 +90,8 @@ export class MonitorWriteQueue {
   static retryMs = [50, 250, 1_000, 4_000];
   /** 队里最多压多少笔事实。 */
   static maxBacklog = 1_000;
+  /** 任务正在删时多久再看一眼（删除是一批语句，通常几毫秒就有结果）。 */
+  static deferMs = 50;
 
   private chain: Promise<void> = Promise.resolve();
   private backlog = 0;
@@ -130,21 +156,33 @@ export class MonitorWriteQueue {
 
   private async commit(job: WriteJob, fact: WriteFact | undefined): Promise<void> {
     const ladder = MonitorWriteQueue.retryMs;
-    for (let attempt = 0; ; attempt += 1) {
-      if (this.opts.revoked()) return;
+    const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+    for (let failures = 0; ;) {
+      const gate = this.opts.revocation();
+      if (gate === "deleted") return;
+      if (gate === "deleting") {
+        await pause(MonitorWriteQueue.deferMs);
+        continue;
+      }
       try {
         await job();
-        if (attempt > 0) this.opts.warn(`记账在第 ${attempt + 1} 次尝试时写成了`, "此前积压的事件随后依次补上");
+        if (failures > 0) this.opts.warn(`记账在第 ${failures + 1} 次尝试时写成了`, "此前积压的事件随后依次补上");
         return;
       } catch (e) {
+        // job 里那道闸问到了「正在删」（队头那道还不知道是哪个任务时，或者收尾涉及别的任务时）。
+        if (e instanceof TaskDeletingError) {
+          await pause(MonitorWriteQueue.deferMs);
+          continue;
+        }
         if (dbClient.closed) return; // 进程在退出：内存账本本来就要跟着没
         if (permanentWriteFailure(e)) {
           this.opts.warn("记账失败且重试也不会成功，这一条没有记上", e);
           if (fact) this.opts.dropped?.(fact);
           return;
         }
-        if (attempt === 0) this.opts.warn("记账失败，留在队头退避重试，写成之前后面的事件排着等", e);
-        await new Promise<void>((resolve) => setTimeout(resolve, ladder[Math.min(attempt, ladder.length - 1)]));
+        if (failures === 0) this.opts.warn("记账失败，留在队头退避重试，写成之前后面的事件排着等", e);
+        await pause(ladder[Math.min(failures, ladder.length - 1)]!);
+        failures += 1;
       }
     }
   }

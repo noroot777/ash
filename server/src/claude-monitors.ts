@@ -42,9 +42,9 @@ import {
   hasRunOrigin, locateSession, runOriginOfSession, UNKNOWN_RUN_ORIGIN, type MonitorRunOrigin,
 } from "./claude-monitor-origin.js";
 import { reapClaudeMonitors } from "./claude-monitor-reaped.js";
-import { isTaskRevoked } from "./claude-monitor-revoked.js";
+import { taskRevocation } from "./claude-monitor-revoked.js";
 import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
-import { MonitorWriteQueue, type WriteFact } from "./claude-monitor-write-queue.js";
+import { admitWrite, MonitorWriteQueue, type WriteFact } from "./claude-monitor-write-queue.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { id, now } from "./util.js";
@@ -189,7 +189,7 @@ export class ClaudeMonitorTrace {
    * 只覆写同几列。`finishAll` 排在同一条队列上，所以收尾天然等前面的责任收口。
    */
   private readonly writes = new MonitorWriteQueue({
-    revoked: () => !!this.taskId && isTaskRevoked(this.taskId),
+    revocation: () => (this.taskId ? taskRevocation(this.taskId) : null),
     warn: (what, detail) => this.warn(what, detail),
     dropped: (fact) => { this.missed[fact === "start" ? "starts" : "updates"] += 1; },
   });
@@ -450,8 +450,9 @@ export class ClaudeMonitorTrace {
     const found = await locateSession(this.cliSessionId);
     if (found) this.taskId = found.taskId;
     // 这个任务正在删/已经删了：落库前先问一句资格。查到会话之后、写之前问，窗口缩到一条
-    // 语句；剩下那一条的窗口由下面的同批落库资格兜住。
-    if (found && isTaskRevoked(found.taskId)) return;
+    // 语句；剩下那一条的窗口由下面的同批落库资格兜住。确认删掉了才放弃，正在删就抛出去
+    // 让队列留着等 —— 删除可能整批回滚（见 `admitWrite`）。
+    if (found && !admitWrite(found.taskId)) return;
     if (!found) {
       // 认不出会话就落不了库。安静跳过是对的（不能因此拖垮事件流），但要留下线索——
       // 否则用户看到的是「agent 说挂上了，面板永远空着」，而日志里什么都没有。
@@ -534,7 +535,7 @@ export class ClaudeMonitorTrace {
     const found = await locateSession(this.cliSessionId);
     if (found) this.taskId = found.taskId;
     if (!found) return;
-    if (isTaskRevoked(found.taskId)) return;   // 落库资格，同 `open`
+    if (!admitWrite(found.taskId)) return;   // 落库资格，同 `open`
     // 认行的来源证据同样只认绑定下来的那一代（`sessions` 当下那一列已经是下一代人的）。
     const rowId = await this.locateRow(found.taskId, nativeId, origin.runPath);
     if (!rowId) return;
@@ -569,7 +570,7 @@ export class ClaudeMonitorTrace {
     const found = await locateSession(this.cliSessionId);
     if (found) this.taskId = found.taskId;
     if (!found) return;
-    if (isTaskRevoked(found.taskId)) return;   // 落库资格，同 `open`
+    if (!admitWrite(found.taskId)) return;   // 落库资格，同 `open`
     const rowId = await this.locateRow(found.taskId, nativeId, origin.runPath);
     if (!rowId) {
       // 库里**暂时**没有。多数情况是这条后台任务不是 Monitor 起的（普通后台 Bash），

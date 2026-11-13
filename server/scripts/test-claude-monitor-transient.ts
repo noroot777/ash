@@ -7,7 +7,9 @@
 //    全数进去（第 2 轮审查实测：上一版 5 个只落 1 个，说明也写 1 个）；
 // ③ 流结束时库还坏着：收尾最多等 `finishWaitMs` 就放行，收尾那一笔留在队里，恢复后照样补上，
 //    且按流结束那一刻圈范围，不会把下一代刚起的监听一起收掉；
-// ④ 任务被删了（明确撤销）：队头那一笔立即销账，不会对着一个已删的任务一直重试；
+// ④ 删任务：**删除中只是先等着，确认删掉了才放弃**。删除失败整批回滚时，排着的卡片、收尾和
+//    说明一笔不少地接着写（新一轮第 1 轮审查实测：上一版把「正在删」当成「删掉了」，回滚后
+//    全没了）；队头那道闸、job 自己落库前那道闸、收尾按任务那道闸三处同一个分法；
 // ⑤ 积压有上界：超出的新事件不进队，收尾那一笔不受限制；丢掉的那几个**算进收尾说明的总数、
 //    并说清没能记成卡片**，不是只写进日志（第 3 轮审查）；
 // ⑥ 注定写不成的（约束冲突、代码错）不占着队头，后面的照常写，丢掉的同样报出来；
@@ -20,7 +22,10 @@ import { join } from "node:path";
 
 const { ClaudeMonitorTrace } = await import("../src/claude-monitors.js");
 const { MonitorWriteQueue, permanentWriteFailure } = await import("../src/claude-monitor-write-queue.js");
-const { beginTaskRevocation, releaseTaskRevocation } = await import("../src/claude-monitor-revoked.js");
+const { beginTaskRevocation, confirmTaskRevocation, releaseTaskRevocation } = await import("../src/claude-monitor-revoked.js");
+const { TaskDeletingError } = await import("../src/claude-monitor-write-queue.js");
+const { dbClient } = await import("../src/db/index.js");
+const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
 const { reapClaudeMonitors } = await import("../src/claude-monitor-reaped.js");
 const { bus } = await import("../src/bus.js");
 
@@ -143,7 +148,44 @@ async function main(): Promise<void> {
     check(!!s.notice()?.includes("1 个"), "③晚到的收尾说明只数这一代（1 个）", String(s.notice()));
   }
 
-  // ── ④ 任务被删（明确撤销）：不再对着它一直重试 ────────────────────────────────
+  // ── ④a 真删除失败回滚：删除中排着的那几笔一笔不丢 ─────────────────────────────
+  {
+    const wait = ClaudeMonitorTrace.finishWaitMs;
+    ClaudeMonitorTrace.finishWaitMs = 300;
+    const s = await session("delete-rollback");
+    startMonitor(s.trace, s.cli, "d1");
+    await s.trace.settled();
+    const restore = breakReads();
+    startMonitor(s.trace, s.cli, "d2");
+    await s.trace.finishAll();               // 收尾有界放行：d2 和收尾都还排着，任务这时可以被删
+    check(pendingOf(s.trace) === 2, "④a（前提）流结束后 d2 和收尾仍排在队里", `排着 ${pendingOf(s.trace)} 笔`);
+    // 删除批在真正执行前停一会儿再失败：这段时间里库已经好了、闸是「删除中」。
+    const realBatch = dbClient.batch.bind(dbClient);
+    let held = -1;
+    (dbClient as any).batch = async (stmts: any[], mode?: any) => {
+      if (!stmts.some((st) => /delete from "tasks"/i.test(String(st?.sql ?? st)))) return realBatch(stmts, mode);
+      await sleep(ladderTotal * 3);
+      held = pendingOf(s.trace);
+      throw new Error("INJECTED_DELETE_FAILURE");
+    };
+    // 库先好、闸紧跟着在同一拍里关上（删除一进门就同步关闸）：队头下一次醒来看到的已经是
+    // 「删除中」，夹在中间的是删除本身要读的那几下，不能让它们撞上注入。
+    restore();
+    const deleting = deleteTaskCompletely(s.taskId);
+    const failed = await deleting.then(() => false, () => true);
+    (dbClient as any).batch = realBatch;
+    ClaudeMonitorTrace.finishWaitMs = wait;
+    check(failed, "④a（前提）删除确实失败了、任务还在");
+    check(held === 2, "④a删除中库已经好了，那两笔也只是先等着，不写、不丢", `删除中还排着 ${held} 笔`);
+    await s.trace.settled();
+    s.stop();
+    const rows = await rowsOf(s.cli);
+    check(ids(rows) === "b-d1,b-d2", "④a删除回滚后，删除中排着的那张卡照样补上", ids(rows));
+    check(rows.every((r) => r.status === "lost"), "④a收尾也照样做了（两张都收成「进程已不在」）", rows.map((r) => r.status).join(","));
+    check(s.notices().length === 1 && s.notices()[0]!.includes("2 个"), "④a收尾说明照样落下、数字完整（2 个）", String(s.notice()));
+  }
+
+  // ── ④b 确认删掉了：队头那一笔才销账 ──────────────────────────────────────────
   {
     const s = await session("revoked");
     startMonitor(s.trace, s.cli, "r");
@@ -151,12 +193,47 @@ async function main(): Promise<void> {
     const restore = breakReads();
     s.trace.event({ type: "system", subtype: "task_notification", task_id: "b-r", status: "completed", summary: "", session_id: s.cli });
     await sleep(ladderTotal);
-    check(pendingOf(s.trace) === 1, "④库坏着时那条终态在排队重试", `还排着 ${pendingOf(s.trace)} 笔`);
+    check(pendingOf(s.trace) === 1, "④b库坏着时那条终态在排队重试", `还排着 ${pendingOf(s.trace)} 笔`);
     beginTaskRevocation(s.taskId);
+    await sleep(ladderTotal * 2);
+    check(pendingOf(s.trace) === 1, "④b删除中不销账", `还排着 ${pendingOf(s.trace)} 笔`);
+    confirmTaskRevocation(s.taskId);
     await Promise.race([s.trace.settled(), sleep(1_000)]);
-    check(pendingOf(s.trace) === 0, "④任务进入删除，队头那一笔立即销账（库仍然坏着）", `还排着 ${pendingOf(s.trace)} 笔`);
+    check(pendingOf(s.trace) === 0, "④b确认删掉了，队头那一笔立即销账（库仍然坏着）", `还排着 ${pendingOf(s.trace)} 笔`);
     releaseTaskRevocation(s.taskId);
     restore();
+    await s.trace.finishAll();
+    s.stop();
+  }
+
+  // ── ④c job 自己那道闸：这条流还不知道归哪个任务时，删除中同样只是等着 ─────────────
+  {
+    const s = await session("job-gate");
+    // 带着显式来源的流不在构造时查会话，第一次知道自己归哪个任务是在 job 里 —— 队头那道闸
+    // 这时帮不上忙，挡的是 job 落库前那一道。
+    const trace = new ClaudeMonitorTrace(s.cli, { pid: 999_999, pidStartedAt: null, runPath: "" });
+    await trace.settled();
+    beginTaskRevocation(s.taskId);
+    startMonitor(trace, s.cli, "j");
+    await sleep(ladderTotal * 2);
+    check(pendingOf(trace) === 1, "④c删除中 job 自己那道闸没放手", `还排着 ${pendingOf(trace)} 笔`);
+    check((await rowsOf(s.cli)).length === 0, "④c删除中确实没写");
+    releaseTaskRevocation(s.taskId);   // 删除回滚
+    await trace.settled();
+    check(ids(await rowsOf(s.cli)) === "b-j", "④c回滚后那张卡照样落库", ids(await rowsOf(s.cli)));
+
+    // ── ④d 收尾按任务那道闸：删除中抛出去等结果，回滚后说明照样落下 ─────────────────
+    const key = `claude-monitors-reaped:${s.cli}:job-gate`;
+    const origin = { pid: null, pidStartedAt: null, runPath: "" };
+    beginTaskRevocation(s.taskId);
+    const deferred = await reapClaudeMonitors(s.cli, origin, "1970-01-01T00:00:00.000Z", undefined, { eventKey: key })
+      .then(() => null, (e) => e);
+    check(deferred instanceof TaskDeletingError, "④d删除中收尾不跳过说明，而是抛出去等结果", String(deferred));
+    check(s.notices().length === 0, "④d删除中说明确实没落");
+    releaseTaskRevocation(s.taskId);
+    await reapClaudeMonitors(s.cli, origin, "1970-01-01T00:00:00.000Z", undefined, { eventKey: key });
+    check(s.notices().length === 1, "④d回滚后整笔重来，说明照样落下", `${s.notices().length} 条`);
+    await trace.finishAll();
     await s.trace.finishAll();
     s.stop();
   }
@@ -193,7 +270,7 @@ async function main(): Promise<void> {
     const warns: string[] = [];
     const dropped: string[] = [];
     const q = new MonitorWriteQueue({
-      revoked: () => false, warn: (what) => warns.push(what), dropped: (fact) => dropped.push(fact),
+      revocation: () => null, warn: (what) => warns.push(what), dropped: (fact) => dropped.push(fact),
     });
     let attempts = 0;
     let after = false;
@@ -246,7 +323,7 @@ async function main(): Promise<void> {
     process.exitCode = 1;
   } else {
     console.log("✓ 内置 Monitor 实时投影的写库责任：暂态故障后照样落库 / 长故障期间的事实恢复后全部补上且收尾计数完整 / "
-      + "流结束时库还坏着收尾有界放行、恢复后补上且不误收下一代 / 任务删除即销账 / 积压有上界且丢掉的算进说明 / 写不成的不堵队头 / "
+      + "流结束时库还坏着收尾有界放行、恢复后补上且不误收下一代 / 删除中只等不丢、回滚后照样补上、确认删掉才销账 / 积压有上界且丢掉的算进说明 / 写不成的不堵队头 / "
       + "说明没写成就重试且只落一遍 均受回归保护");
   }
 }
