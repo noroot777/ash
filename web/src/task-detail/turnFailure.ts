@@ -17,8 +17,18 @@ import { legacyTier } from "./legacyNoticeTable.ts";
  */
 export type CrashedTurn = { text: string; at?: string; interruption?: TurnInterruption };
 
-/** agent 条目 id → 补出来的那一句。 */
-export function crashedTurns(items: readonly ConversationItem[]): Map<string, CrashedTurn> {
+/**
+ * agent 条目 id → 补出来的那一句。
+ *
+ * 「这一回合收口了没有」认权威结局：会话行带了结局（`turnOutcome`）就说明那一回合已经收口，不再
+ * 另要会话行的收尾时刻 —— 跟重试入口（turnRetry.ts）读同一份判据，不然会话行晚一步时就出现「能
+ * 重试、却没有说这件事的那句话、键也无处可挂」（第 1 轮审查第 1 条）。不知道结局时才拿收尾时刻
+ * 兜底：回合还开着的时候，会话行上的退出码是上一个进程的。
+ *
+ * `retrySessionId` = 此刻能「重试这一回合」的那条会话（turnRetryTarget 普通档）：它的最后一回合
+ * 必定补一句。可重试本身就是「这一回合异常结束」的证据，入口只挂在这句话后面，少了它就没地方挂。
+ */
+export function crashedTurns(items: readonly ConversationItem[], retrySessionId?: string | null): Map<string, CrashedTurn> {
   const lastBySession = new Map<string, number>();
   items.forEach((item, index) => {
     if (item.kind === "agent" && item.session && !item.reviewer) lastBySession.set(item.session.id, index);
@@ -27,7 +37,8 @@ export function crashedTurns(items: readonly ConversationItem[]): Map<string, Cr
   for (const index of lastBySession.values()) {
     const item = items[index] as Extract<ConversationItem, { kind: "agent" }>;
     const session = item.session!;
-    if (!session.endedAt || !turnEndedAbnormally(session)) continue;
+    const retryable = !!retrySessionId && session.id === retrySessionId;
+    if (!retryable && (!(session.turnOutcome || session.endedAt) || !turnEndedAbnormally(session))) continue;
     // 直播那一路已经落了一条异常边界：那一条就是这一句，不再补。
     const next = items.slice(index + 1).find((entry) => entry.kind !== "event" || entry.variant === "boundary");
     if (next?.kind === "event" && next.variant === "boundary" && next.tone === "error") continue;

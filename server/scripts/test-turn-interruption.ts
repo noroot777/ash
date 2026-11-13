@@ -6,11 +6,14 @@
 // （review-no-verdict.ts），这里盯普通回合用的是同一套判法、同一份结构，并且跟着回合走。
 //
 // 覆盖：
-//   1. 续聊回合非零退出、codex 诊断原因是上游 503：会话行上是「模型上游连不上（503）」，带执行器原话
-//   2. 没有诊断文件、只有退出码：「执行器异常退出（exit N）」
+//   1. 续聊回合非零退出、执行器归一层报的是模型上游 503：会话行上是「模型上游连不上（503）」，带执行器原话
+//   2. 没有模型类型、只有退出码：「执行器异常退出（exit N）」；原话里的 HTTP 数字不冒充模型故障
+//      （本机工具的 403、没带类型的 400），归一层报了「对话超长」就照它说（第 1 轮审查第 2 条）
 //   3. 被手动停止的、正常结束的：不给原因（就算调用方塞了一份也不落）；老记录（那一列为空）也没有
 //   4. 收过口的回合不被改写：后到的收尾不把原因改掉
-//   5. 接线：单飞收尾只在结局是 failed 时判，同一份既落回合、也跟着 done 播出去
+//   5. 刷新跨过结算：先读回合再读会话行，拼不出「已判失败、会话行却没收尾」（第 1 轮审查第 1 条）
+//   6. 诊断文件字段类型坏了：不抛，照退出码说（第 1 轮审查 N1）
+//   7. 接线：单飞收尾只在结局是 failed 时判，同一份既落回合、也跟着 done 播出去
 //
 // 跑：npm -w server run test:turn-interruption
 import assert from "node:assert/strict";
@@ -34,6 +37,7 @@ try {
   await ensureSchema();
   const { projects, sessions } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
+  const { eq } = await import("drizzle-orm");
   const { runTracePaths } = await import("../src/transcript.js");
   const { RUNS_DIR } = await import("../src/paths.js");
   const { openTurn, recordTurnSpan } = await import("../src/session-turns.js");
@@ -72,10 +76,11 @@ try {
     return { taskId, sessId, close, session };
   };
 
-  // ── 1. 上游 503（codex 诊断文件） ───────────────────────────────────────────
+  // ── 1. 上游 503（执行器归一层带了类型） ─────────────────────────────────────
   {
     const s = await scene({ diagnostics: { failureKind: "nonzero_exit", failureReason: UPSTREAM_503, exitSignal: null } });
-    const interruption = turnInterruptionOf(s.taskId, s.sessId, at, { exitStatus: 1, verdict: null, lastError: null });
+    const interruption = turnInterruptionOf(s.taskId, s.sessId, at,
+      { exitStatus: 1, verdict: null, error: { message: UPSTREAM_503, model: { kind: "unavailable", status: 503 } } });
     await s.close("failed", interruption);
     const got = (await s.session()).turnInterruption;
     assert.equal(got?.reason, "模型上游连不上（503）", "页面上那半句是上游那一类，带状态码");
@@ -88,17 +93,27 @@ try {
   // ── 2. 没有诊断文件，只有退出码 ───────────────────────────────────────────
   {
     const s = await scene({ agentType: "claude" });
-    await s.close("failed", turnInterruptionOf(s.taskId, s.sessId, at, { exitStatus: 2, verdict: null, lastError: null }));
+    await s.close("failed", turnInterruptionOf(s.taskId, s.sessId, at, { exitStatus: 2, verdict: null, error: null }));
     assert.deepEqual((await s.session()).turnInterruption, { reason: "执行器异常退出（exit 2）", detail: "执行器异常退出（exit 2）" });
-    // 回合里报过的执行故障（claude 的 API Error）照样认得出上游。
-    const claude = await scene({ agentType: "claude" });
-    await claude.close("failed", turnInterruptionOf(claude.taskId, claude.sessId, at,
-      { exitStatus: 1, verdict: null, lastError: "API Error: 529 {\"type\":\"overloaded_error\"}" }));
-    assert.equal((await claude.session()).turnInterruption?.reason, "模型上游连不上（529）");
+    // 原话里有 HTTP 数字、却没带模型类型：来源不明，不归成模型故障。
+    for (const message of ["MCP tool failed: HTTP 403 Forbidden from local tool server", "API Error: 400 bad thing"]) {
+      const odd = await scene({ agentType: "claude" });
+      await odd.close("failed", turnInterruptionOf(odd.taskId, odd.sessId, at, { exitStatus: 1, verdict: null, error: { message, model: undefined } }));
+      const got = (await odd.session()).turnInterruption!;
+      assert.equal(got.reason, "执行器异常退出（exit 1）", `「${message}」不冒充模型故障`);
+      assert.match(got.detail, /执行器的原话/, "原话照样带上");
+    }
+    // 归一层报的是对话超长：照它说，不说「连不上」。
+    const overflow = await scene({ agentType: "claude" });
+    await overflow.close("failed", turnInterruptionOf(overflow.taskId, overflow.sessId, at, {
+      exitStatus: 1, verdict: null,
+      error: { message: "API Error: 400 {\"error\":{\"message\":\"context window exceeded\"}}", model: { kind: "context_overflow", status: 400 } },
+    }));
+    assert.equal((await overflow.session()).turnInterruption?.reason, "对话超出模型长度上限");
     // 看门狗判「后台跑完了却没开始整理」：说那件事，不冒充执行故障。
     const wrapup = await scene({ agentType: "claude" });
     await wrapup.close("failed", turnInterruptionOf(wrapup.taskId, wrapup.sessId, at,
-      { exitStatus: 0, verdict: { kind: "wrapup_missing", reason: "后台都跑完了" }, lastError: null }));
+      { exitStatus: 0, verdict: { kind: "wrapup_missing", reason: "后台都跑完了" }, error: null }));
     assert.equal((await wrapup.session()).turnInterruption?.reason, "后台工作跑完了，智能体没开始整理结果");
   }
 
@@ -129,7 +144,44 @@ try {
     assert.equal((await s.session()).turnInterruption?.reason, "执行器异常退出（exit 1）", "认第一次收口");
   }
 
-  // ── 5. 接线 ───────────────────────────────────────────────────────────────
+  // ── 5. 刷新跨过结算 ───────────────────────────────────────────────────────
+  {
+    const s = await scene({ agentType: "claude" });
+    // 回合还开着：会话行没收尾。
+    await db.update(sessions).set({ endedAt: null, exitStatus: null }).where(eq(sessions.id, s.sessId));
+    // 读到一半时落下一次收口，按 single-run 的顺序：先写会话行，再落回合。插在第一条读之后。
+    const original = dbClient.execute.bind(dbClient);
+    let settled = false;
+    (dbClient as { execute: typeof dbClient.execute }).execute = (async (...args: Parameters<typeof dbClient.execute>) => {
+      const result = await original(...args);
+      if (!settled) {
+        settled = true;
+        (dbClient as { execute: typeof dbClient.execute }).execute = original;
+        await db.update(sessions).set({ endedAt: end, exitStatus: 1 }).where(eq(sessions.id, s.sessId));
+        await s.close("failed", { reason: "执行器异常退出（exit 1）", detail: "执行器异常退出（exit 1）" });
+      }
+      return result;
+    }) as typeof dbClient.execute;
+    const mid = await s.session();
+    (dbClient as { execute: typeof dbClient.execute }).execute = original;
+    assert.equal(settled, true, "确实在读到一半时落了收口");
+    assert.ok(!(mid.turnOutcome === "failed" && !mid.endedAt), "读到「已判失败」时，会话行一定已经收尾");
+    const after = await s.session();
+    assert.equal(after.turnOutcome, "failed");
+    assert.equal(after.turnInterruption?.reason, "执行器异常退出（exit 1）", "下一次读补齐");
+    const routes = readFileSync(new URL("../src/task-session-routes.ts", import.meta.url), "utf8");
+    assert.match(routes, /const facts = await turnFactsForTask\(taskId\);\s*const rows = await db\.select\(\)\.from\(sessions\)/,
+      "先读回合，再读会话行");
+  }
+
+  // ── 6. 诊断文件字段类型坏了 ───────────────────────────────────────────────
+  {
+    const s = await scene({ diagnostics: { failureReason: 503, exitSignal: { bad: true } } });
+    const got = turnInterruptionOf(s.taskId, s.sessId, at, { exitStatus: 3, verdict: null, error: null });
+    assert.deepEqual(got, { reason: "执行器异常退出（exit 3）", detail: "执行器异常退出（exit 3）" }, "坏诊断当没有，照退出码说");
+  }
+
+  // ── 7. 接线 ───────────────────────────────────────────────────────────────
   {
     const run = readFileSync(new URL("../src/single-run.ts", import.meta.url), "utf8");
     assert.match(run, /const interruption = failure && turnOutcome === "failed" \? turnInterruptionOf\(taskId, sessId, a\.turnStart, failure\) : null;/,

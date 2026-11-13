@@ -372,8 +372,9 @@ export function ConversationFeed({
   const queuedCopy = task.status === "queued"
     ? runActivityCopy({ status: task.status, mode: task.mode, phase: activityPhase ?? undefined, queuePosition: task.queuePosition })
     : null;
-  // 一轮异常结束：那一回合尾注里的一句（刷新以后从会话行认出来的，见 turnFailure）。
-  const crashed = crashedTurns(items);
+  // 一轮异常结束：那一回合尾注里的一句（刷新以后从会话行认出来的，见 turnFailure）。此刻能重试的
+  // 那一回合必定有这一句，「重试这一回合」就挂在它后面。
+  const crashed = crashedTurns(items, turnRetry?.sessionId);
   // 一整场辩论折成一行，排在回执归属之前 —— 反过来的话，那七条「轮到 X 发言」会先被
   // conversationSystemRows 收进某一回合的记录里，辩论就再也认不出自己的边界了。
   // 认老记录里「跑了一条命令」那一句的成败时，拿这个任务工作流里写的命令逐字对。

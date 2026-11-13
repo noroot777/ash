@@ -159,6 +159,23 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
     }
   };
 
+  // 这一轮还能续（服务端给了 `round.retry`，经 turnRetryTarget 成了 `reviewRetry`）：主动作就是接着
+  // 把这一轮审完。按**轮次身份**认（哪一场、第几轮），工作区审查和合并结果审查一样；另开一场（「再审
+  // 一轮」/「再审一次」）是新会话从头审，退到更多里 —— 它摆在前面的话，续这一轮在审查格上就没有
+  // 明面上的入口了（合并结果审查还没开口就断了时，会话里也没有尾注可挂）。
+  const resumable = reviewRetry
+    ? all.find(({ run, round }) => run.id === reviewRetry.review.runId && round.round === reviewRetry.review.round)
+    : undefined;
+  const resume: InspMainAction | undefined = reviewRetry && resumable ? {
+    label: "继续本轮审查",
+    onClick: () => {
+      setRetrying(true);
+      void reviewRetry.run().finally(() => setRetrying(false));
+    },
+    pri: true,
+    disabled: retrying,
+  } : undefined;
+
   const conclude = (): Conclusion => {
     if (acceptedTarget) {
       const again = (): InspMainAction => ({ label: latestPost ? "再审一次" : "开始审查", onClick: () => setDialog("post"), disabled: !notify, dialog: true });
@@ -166,9 +183,21 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
         ? [{ key: "see", label: latestPost.status === "reviewing" ? "查看审查进度" : "查看审查结果", onSelect: () => reveal(reviewKey(latestPost.id, latestPostRound.round)) }]
         : [];
       if (!latestPost) return { tone: "ok", text: "已合并，合并结果还没审过", main: again(), more: openWorkspace };
+      if (resume && resumable?.run.id === latestPost.id) {
+        return {
+          tone: resumable.round.status === "reviewing" ? "busy" : "bad",
+          text: resumable.round.status === "reviewing" ? "合并结果审查中" : `合并结果审查${noVerdictText(resumable.round)}`,
+          main: resume,
+          more: [...see, { key: "again", label: "再审一次", onSelect: () => setDialog("post"), disabled: !notify }, ...openWorkspace],
+        };
+      }
       if (latestPost.status === "reviewing") return { tone: "busy", text: "合并结果审查中", more: [...see, ...openWorkspace] };
       if (latestPost.status === "passed") return { tone: "ok", text: "合并结果已通过", main: again(), more: [...see, ...openWorkspace] };
-      if (latestPost.status === "failed") return { tone: "bad", text: "合并结果审查异常停止", main: again(), more: [...see, ...openWorkspace] };
+      if (latestPost.status === "failed") {
+        // 没结论的那一轮带上服务端判的原因；老记录没有就照旧。
+        const why = latestPostRound?.noVerdict ? noVerdictText(latestPostRound) : "异常停止";
+        return { tone: "bad", text: `合并结果审查${why}`, main: again(), more: [...see, ...openWorkspace] };
+      }
       const fix: InspMainAction | undefined = postRepairTaskId && onOpenTask
         ? { label: "打开修复任务", onClick: () => onOpenTask(postRepairTaskId) }
         : onOpenTask ? { label: postRepairBusy ? "创建中…" : "创建修复任务", onClick: () => void createPostRepair(), pri: true, disabled: postRepairBusy } : undefined;
@@ -179,20 +208,12 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
         more: [...see, ...(fix ? [{ key: "again", label: "再审一次", onSelect: () => setDialog("post"), disabled: !notify }] : []), ...openWorkspace],
       };
     }
-    // 这一轮还能续（服务端给了 `round.retry`）：主动作就是接着把这一轮审完。「再审一轮」是另开一条链、
-    // 新会话、从头审，退到更多里 —— 把它摆在前面，续这一轮在审查格上就没有明面上的入口了。
-    const retryRound = reviewRetry && latestRun?.id === reviewRetry.review.runId
-      ? latestRun.rounds.find((round) => round.round === reviewRetry.review.round)
-      : undefined;
-    if (reviewRetry && retryRound) {
-      const resume = async () => {
-        setRetrying(true);
-        try { await reviewRetry.run(); } finally { setRetrying(false); }
-      };
+    if (resumable && resume && resumable.run.target?.kind !== "accepted_merge") {
+      const { round } = resumable;
       return {
-        tone: retryRound.status === "reviewing" ? "busy" : "bad",
-        text: `第 ${retryRound.round} 轮${retryRound.status === "reviewing" ? "审查中" : noVerdictText(retryRound)}`,
-        main: { label: "继续本轮审查", onClick: () => void resume(), pri: true, disabled: retrying },
+        tone: round.status === "reviewing" ? "busy" : "bad",
+        text: `第 ${round.round} 轮${round.status === "reviewing" ? "审查中" : noVerdictText(round)}`,
+        main: resume,
         more: [...dispatchItem(), ...openWorkspace],
       };
     }

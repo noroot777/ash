@@ -7,7 +7,9 @@
 //    会话里说原因的那句尾注后面挂同一个动作；
 // ② 不能续：两处都不带，主按钮照旧「再审一轮」；
 // ③ 续过之后（round.retry 没了）：审查格、尾注都没了；
-// ④ 任务头上没有回合级的重来图标：能续这一轮时入口在审查格和尾注上，不在头上。
+// ④ 合并结果审查中断、能续：同样是「继续本轮审查」，「再审一次」在更多里，结论带原因，尾注叫
+//    「合并结果审查」（第 1 轮审查第 2 条与 N2）。
+// ⑤ 任务头上没有回合级的重来图标：能续这一轮时入口在审查格和尾注上，不在头上。
 // 跑：npm -w web run test:review-no-verdict-retry
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -23,6 +25,7 @@ try {
   const after = page.locator(".t-after-fixture");
   for (const scope of [retry, blocked]) await scope.locator(".insp-head").getByText(/第 1 轮中断/).waitFor();
   await after.locator(".insp-head").getByText("第 1 轮审查中").waitFor();
+  await page.locator(".t-merge-fixture .insp-head").getByText(/合并结果审查中断/).waitFor();
 
   // ① 能续
   const head = retry.locator(".insp-head");
@@ -57,8 +60,22 @@ try {
   // ③ 续过之后
   assert.equal(await after.getByRole("button", { name: "继续本轮审查" }).count(), 0, "续过了：审查格与尾注都没了");
 
-  // ④ 任务头
-  for (const scope of [retry, blocked, after]) {
+  // ④ 合并结果审查
+  const merge = page.locator(".t-merge-fixture");
+  const mergeHead = merge.locator(".insp-head");
+  assert.match(await mergeHead.innerText(), /合并结果审查中断 · 模型上游连不上（503）/, "合并结果那句也带原因");
+  assert.equal(await mergeHead.getByRole("button", { name: "再审一次" }).count(), 0, "「再审一次」不摆在明面上");
+  await mergeHead.getByRole("button", { name: "继续本轮审查" }).click();
+  await mergeHead.getByRole("button", { name: "更多" }).click();
+  assert.equal(await page.locator("[role=menu]").getByText("再审一次").count(), 1, "「再审一次」退到更多里");
+  await page.keyboard.press("Escape");
+  const mergeNote = merge.locator(".feed .turn-footnote").filter({ hasText: "合并结果审查中断：模型上游连不上（503）" });
+  assert.equal(await mergeNote.count(), 1, "尾注沿用「合并结果审查」的叫法");
+  await mergeNote.getByRole("button", { name: "继续本轮审查" }).click();
+  assert.deepEqual(await page.evaluate(() => window.__retried), ["t-retry", "t-retry", "t-merge", "t-merge"], "两处走同一个动作");
+
+  // ⑤ 任务头
+  for (const scope of [retry, blocked, after, merge]) {
     assert.equal(await scope.locator(".task-detail-header").getByRole("button", { name: /继续本轮审查|重试/ }).count(), 0,
       "任务头没有回合级的重来图标");
   }

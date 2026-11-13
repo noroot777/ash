@@ -25,6 +25,7 @@ import type { ConsumedOutput } from "./types.js";
 import { claudeRetryMessage, isClaudeRetry } from "./claude-retry-notice.js";
 import { normalizeClaudeCliError, shortJson, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
 import { ClaudeRequestTimer } from "./request-timing.js";
+import { claudeApiStatus, modelFailureOf } from "./model-failure.js";
 
 // resident 非空 = 常驻模式:`result` 行只代表「一个回合说完了」(→ turnEnd),
 // 流要一直开着;只有进程真的没了才 done。
@@ -322,7 +323,9 @@ async function* claudeStreamEvents(
       // 故障级 error ——「最终失败了没有」由那条答,这里只负责把过程留在它发生的位置上。
       // 措辞与子智能体那一路共用一处(claude-retry-notice.ts):同一条原始事件有两个入口。
       if (isClaudeRetry(ev)) {
-        push({ kind: "error", message: claudeRetryMessage(ev), level: "notice", affectsTurn: false });
+        // 带上这次重试撞的是哪一类：看门狗熔断掉这一轮时，原因据它说得出状态码（model-failure.ts）。
+        const model = modelFailureOf(typeof ev.error === "string" ? ev.error : "", Number(ev.error_status) || null);
+        push({ kind: "error", message: claudeRetryMessage(ev), level: "notice", affectsTurn: false, ...(model ? { model } : {}) });
       }
       // **这一条紧跟在上面那句重试提示后面**,而它只是把 CLI 会话身份报一遍 —— 不是上游回话了。
       // 停滞看门狗因此不能把「不是错误」当成「有进展」:那样每一条重试都被自己后面这一句当场
@@ -465,9 +468,15 @@ async function* claudeStreamEvents(
         const detail = typeof ev.result === "string" && ev.result.trim()
           ? ev.result.trim()
           : errors.length ? errors.join("; ") : `result: ${ev.subtype}`;
+        // 这一条确知是模型 API 的结局时（带着 api_error_status，或 CLI 写成「API Error: N」）挂上
+        // 类型，读端据它说「上游连不上 / 超出长度上限 / 限流…」；CLI 自己的失败不挂。
+        const reported = Number(ev.api_error_status);
+        const status = Number.isInteger(reported) && reported >= 100 ? reported : claudeApiStatus(detail);
+        const model = status != null ? modelFailureOf(detail, status) : null;
         push({
           kind: "error",
           message: ev.api_error_status ? `HTTP ${ev.api_error_status}: ${detail}` : detail,
+          ...(model ? { model } : {}),
         });
       }
       // 单飞这一路的回合结束本来就是收台(见 ClaudeControlBridge.reapsAtTurnEnd);用户插话

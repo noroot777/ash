@@ -5,7 +5,8 @@
 // 能重来的只有任务头一颗不带字的图标，用户没认出来，也看不到出了什么错。这份回归盯：
 // ① 刷新以后与开着页面看两路：那句话是「这一轮中断 · 模型上游连不上（503）」，点开是带执行器原话的经过，
 //    后面挂「重试这一回合」、点了走那个动作；两路结果一样；
-// ② 老记录（没有结构化原因）：那句话照老样子「这一轮异常结束」，动作照样在；
+// ② 老记录（没有结构化原因）：那句话照老样子「这一轮异常结束」，动作照样在；会话行已判失败却还没有
+//    收尾时刻（第 1 轮审查第 1 条）：那句话和动作也都在；
 // ③ 不能重试（后面又跑过一回合、手动停止的、任务在跑）：没有动作；
 // ④ 任务头上没有回合级的重试图标。
 // 跑：npm -w web run test:turn-retry-cta
@@ -48,6 +49,9 @@ try {
   assert.equal(await legacy.count(), 1, "老记录：那句话照老样子");
   assert.equal(await legacy.getByText(/这一轮中断/).count(), 0, "老记录：不编原因");
   assert.equal(await legacy.getByRole("button", { name: "重试这一回合" }).count(), 1, "老记录：动作照样在");
+  const noEnd = footnoteOf("no-end").filter({ hasText: "这一轮异常结束" });
+  assert.equal(await noEnd.count(), 1, "已判失败、会话行没收尾：那句话照样补出来");
+  assert.equal(await noEnd.getByRole("button", { name: "重试这一回合" }).count(), 1, "已判失败、会话行没收尾：动作挂在那句话后面");
 
   // ③ 不能重试
   assert.equal(await footnoteOf("later").filter({ hasText: "这一轮中断 · 模型上游连不上（503）" }).count(), 1, "后面又跑过一回合：那句话还在");
@@ -57,7 +61,7 @@ try {
   assert.equal(await footnoteOf("stopped").filter({ hasText: /这一轮(中断|异常结束)/ }).count(), 0, "手动停止的不算异常");
 
   // ④ 任务头
-  for (const name of ["persisted", "live", "legacy", "later", "stopped", "running"]) {
+  for (const name of ["persisted", "live", "legacy", "no-end", "later", "stopped", "running"]) {
     assert.equal(await scope(name).locator(".task-detail-header").getByRole("button", { name: /重试|继续本轮审查/ }).count(), 0,
       `${name}：任务头没有回合级的重试图标`);
   }

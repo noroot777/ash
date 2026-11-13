@@ -14,6 +14,7 @@
 // `../session-notice.ts` 顶部),**重试完了还是错 = 裸 error**。前者由回合级停滞看门狗
 // (`../turn-stall.ts`)负责「等到该动手了没有」,这里只负责如实说出来。
 import type { AgentEvent } from "@ash/shared";
+import { codexTurnError } from "./model-failure.js";
 
 export interface CodexErrorNotification {
   willRetry?: unknown;
@@ -38,7 +39,10 @@ export function codexErrorEvent(p: CodexErrorNotification): CodexErrorEvent | nu
   // 不限流:重连间隔由上游定,实测那 220 条最密也隔 27 秒、中位数 80 秒(不存在刷屏),而
   // 压条数会让「已重试 N 次」这个数字失真 —— 它正是看门狗的判据。连环刷起来由看门狗熔断。
   if (p.willRetry) {
-    return { event: { kind: "error", message, level: "notice", affectsTurn: false }, counted: false };
+    // 重试中的也带上类型：看门狗熔断掉这一轮时，原因据它说得出状态码（model-failure.ts）。
+    const { model } = codexTurnError(message);
+    return { event: { kind: "error", message, level: "notice", affectsTurn: false, ...(model ? { model } : {}) }, counted: false };
   }
-  return { event: { kind: "error", message }, counted: true };
+  // 重试完了还是错：这就是这一轮对模型那次请求的结局，认得出类型就挂上（model-failure.ts）。
+  return { event: codexTurnError(message), counted: true };
 }

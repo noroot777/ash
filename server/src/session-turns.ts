@@ -343,25 +343,51 @@ export async function turnOutcome(
 const readOutcome = (value: unknown): TurnOutcome | null =>
   value === "completed" || value === "failed" || value === "stopped" ? value : null;
 
+/** 库里那一格「怎么断的」怎么读：形状不对的一律当没有（老记录、手改过的行）。 */
+function readInterruption(value: unknown): TurnInterruption | null {
+  if (typeof value !== "string" || !value) return null;
+  try {
+    const parsed = JSON.parse(value) as Partial<TurnInterruption>;
+    return typeof parsed?.reason === "string" && parsed.reason && typeof parsed.detail === "string"
+      ? { reason: parsed.reason, detail: parsed.detail }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 一条会话上每个回合收口时记下的事：结局，以及断了的话怎么断的。内层键都是回合起点。 */
+export type SessionTurnFacts = {
+  /** 原样就是 `Session.turnOutcomes` 的形状。 */
+  outcomes: Record<string, TurnOutcome | null>;
+  /** 只有断过的回合有键（见 `Session.turnInterruption`）。 */
+  interruptions: Record<string, TurnInterruption>;
+};
+
 /**
- * 一个任务名下**每个回合**的结局:会话 id → (回合起点 → 结局)。两层键合起来就是
- * `session_turns` 的唯一键;回合起点跟 trace 条目的 `turnStartedAt` 是同一个值,所以内层原样
- * 就是 `Session.turnOutcomes` 的形状。
+ * 一个任务名下**每个回合**收口时记下的事:会话 id → 结局 + 怎么断的。两层键合起来就是
+ * `session_turns` 的唯一键;回合起点跟 trace 条目的 `turnStartedAt` 是同一个值。
+ *
+ * **结局和原因出自同一条 SELECT**:它们是同一条收口语句写下的(`writeTurnRow` ③),分两次读的话
+ * 中间落下一次收口,就会读出「结局还不知道、原因已经有了」这种半截快照。
  *
  * 批量版给列表/详情那种要一次带出很多会话的出口用(逐条查会变成 N 条 SQL);解释口径与上面
  * 那条单条版共用 `readOutcome`,两边漂开就是这条链上所有事故的形状。
  */
-export async function turnOutcomesForTask(taskId: string): Promise<Map<string, Record<string, TurnOutcome | null>>> {
+export async function turnFactsForTask(taskId: string): Promise<Map<string, SessionTurnFacts>> {
   const read = await dbClient.execute({
-    sql: "SELECT session_id, started_at, outcome FROM session_turns WHERE task_id = :tid",
+    sql: "SELECT session_id, started_at, outcome, interruption FROM session_turns WHERE task_id = :tid",
     args: { tid: taskId },
   });
-  const bySession = new Map<string, Record<string, TurnOutcome | null>>();
+  const bySession = new Map<string, SessionTurnFacts>();
   for (const row of read.rows) {
     const sid = String(row.session_id);
-    const turns = bySession.get(sid) ?? {};
-    turns[String(row.started_at)] = readOutcome(row.outcome);
-    bySession.set(sid, turns);
+    const facts = bySession.get(sid) ?? { outcomes: {}, interruptions: {} };
+    const at = String(row.started_at);
+    facts.outcomes[at] = readOutcome(row.outcome);
+    const interruption = readInterruption(row.interruption);
+    if (interruption) facts.interruptions[at] = interruption;
+    bySession.set(sid, facts);
   }
   return bySession;
 }

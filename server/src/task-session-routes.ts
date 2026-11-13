@@ -5,7 +5,7 @@
 // 是里面唯一一块「只读、不碰回合所有权」的东西，切走对那边的并发不变量零影响。
 import { readFile } from "node:fs/promises";
 import { mergeImageJournal } from "./agent-image-journal.js";
-import type { Session, TurnInterruption, TurnOutcome } from "@ash/shared";
+import type { Session } from "@ash/shared";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { actorOf } from "./auth/context.js";
@@ -17,8 +17,7 @@ import { backfillArtifactUploads, eventAttachmentPath } from "./uploads.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
-import { turnOutcomesForTask } from "./session-turns.js";
-import { turnInterruptionsForTask } from "./turn-interruption.js";
+import { turnFactsForTask, type SessionTurnFacts } from "./session-turns.js";
 import { failedTurnNotices, replaysFailureScene, sessionWaiting } from "./session-waiting.js";
 import { turnOutcome } from "./session-turns.js";
 import {
@@ -37,8 +36,7 @@ import { enrichNativeWorkModels } from "./native-work-models.js";
 async function toSession(
   r: typeof sessions.$inferSelect,
   run: { model: string | null; reasoningEffort: string | null } = { model: null, reasoningEffort: null },
-  turnOutcomes: Record<string, TurnOutcome | null> = {},
-  interruptions: Record<string, TurnInterruption> = {},
+  { outcomes: turnOutcomes, interruptions }: SessionTurnFacts = { outcomes: {}, interruptions: {} },
 ): Promise<Session> {
   // 版本得从**这条会话的 rollout 实际写在的那个目录**里读(会话行记着;老行按当时的
   // 规则解释)。按宿主机默认目录读的话,隔离档下列表恒为「读不出版本」,而起跑守卫那边
@@ -79,11 +77,15 @@ async function toSession(
 
 
 export async function sessionsForTask(taskId: string): Promise<Session[]> {
+  // **先读回合、后读会话行**，顺序就是这份快照一致的理由：单飞收口先写会话行（收尾时刻、退出码），
+  // 再落回合（结局、怎么断的）（single-run.ts）。先读回合时读到的结局，它的会话行此刻必然已经写好；
+  // 反过来读，中间落下一次收口，就会拼出「这一回合已判失败、会话行却还没收尾」的半截快照 —— 页面
+  // 照它判「能重试」，却补不出失败那句话（第 1 轮审查第 1 条）。反方向那半截（回合还开着、会话行
+  // 已收尾）读端按退出码兜底，两处说的仍是同一件事，下一次读就补齐。
+  const facts = await turnFactsForTask(taskId);
   const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
-  const [runMeta, outcomes, interruptions] = await Promise.all([
-    sessionRunMeta(taskId, rows), turnOutcomesForTask(taskId), turnInterruptionsForTask(taskId),
-  ]);
-  return Promise.all(rows.map((row) => toSession(row, runMeta.get(row.id), outcomes.get(row.id), interruptions.get(row.id))));
+  const runMeta = await sessionRunMeta(taskId, rows);
+  return Promise.all(rows.map((row) => toSession(row, runMeta.get(row.id), facts.get(row.id))));
 }
 
 /**

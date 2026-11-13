@@ -5,6 +5,7 @@
 //   persisted 刷新以后：会话行带着服务端判的「怎么断的」，那句话从会话行补出来；
 //   live      开着页面看：会话行还是老的，原因跟着直播那条结尾事件（done.interruption）到；
 //   legacy    老记录：没有原因，那句话照老样子，动作照样在；
+//   no-end    会话行已判失败、却还没有收尾时刻和退出码（读到一半落了收口的那种快照）：那句话和动作照样在；
 //   later     崩过以后又跑过一回合（别的会话）：那句话还在，动作不在；
 //   stopped   手动停止的（非零退出）：不算异常，什么都不补；
 //   running   任务在跑：那句话在，动作不在。
@@ -53,6 +54,10 @@ const SCENES: Record<string, (id: string) => Scene> = {
   },
   legacy: (id) => {
     const s = session(id, "s1", { turnOutcome: null });
+    return { sessions: [s], persisted: [{ session: s, output: "按意见改一下构建脚本。", trace: [] }] };
+  },
+  "no-end": (id) => {
+    const s = session(id, "s1", { endedAt: null, exitStatus: null });
     return { sessions: [s], persisted: [{ session: s, output: "按意见改一下构建脚本。", trace: [] }] };
   },
   later: (id) => {
