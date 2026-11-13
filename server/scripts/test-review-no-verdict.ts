@@ -572,6 +572,13 @@ try {
     const noJournal = await tripScene();
     writeTrace(noJournal, [retry(QUOTA_429), { kind: "error", message: TRIP }, retry(QUOTA_429)]);
     assert.deepEqual(await tripCause(noJournal), UNKNOWN_CAUSE, "日志里压根没有这一回合：同样不猜");
+    // 日志里那一格类型不认得（异常写入、版本回退留下的）：跟装回内存时同一道校验，当没有。
+    const oddKind = await tripScene();
+    appendStallVerdict({ at, sessionId: oddKind.sessId, turnStartedAt: at, reason: TRIP, since: at, model: { kind: "overheated", status: 503 } as never });
+    assert.deepEqual(await tripCause(oddKind), UNKNOWN_CAUSE, "不认得的类型不往下游送");
+    const oddStatus = await tripScene();
+    appendStallVerdict({ at, sessionId: oddStatus.sessId, turnStartedAt: at, reason: TRIP, since: at, model: { kind: "quota_exhausted", status: "429" } as never });
+    assert.deepEqual(await tripCause(oddStatus), ["interrupted", "模型账户额度用完了", undefined], "状态码类型不对就当没有，类型照认");
     // 别的回合的判决不算这一回合的。
     const otherTurn = await tripScene();
     appendStallVerdict({ at, sessionId: otherTurn.sessId, turnStartedAt: "2026-11-13T09:00:00.000Z", reason: TRIP, since: at, model: { kind: "quota_exhausted", status: 429 } });

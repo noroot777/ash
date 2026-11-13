@@ -33,6 +33,7 @@ import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { readableRunPath, sessionTracePath } from "./transcript.js";
 import { readStallJournal, type StallVerdictRecord } from "./turn-stall-journal.js";
 import { isWatchdogText } from "./turn-stall-text.js";
+import { trustedModel } from "./turn-stall-verdict.js";
 
 type RoundRow = typeof freeReviewRounds.$inferSelect;
 type ExecutionError = Extract<AgentEvent, { kind: "error" }>;
@@ -123,7 +124,8 @@ function trippedModel(disk: Disk, turn: ReviewerTurn): ModelFailure | null {
   const record = disk.verdicts()
     .filter((verdict) => verdict.sessionId === turn.sessionId && verdict.turnStartedAt === turn.startedAt && verdict.model !== undefined)
     .at(-1);
-  return record?.model ?? null;
+  // 日志里的那一格跟重启装回内存时过同一道校验：不认得的类型当没有（turn-stall-verdict.ts）。
+  return record ? trustedModel(record.model) : null;
 }
 
 /** 这一任务名下每个审查回合：回合行为主，没有回合行的老会话按会话行上记的最后一回合补一条。 */
