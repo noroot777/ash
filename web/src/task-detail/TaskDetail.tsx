@@ -488,6 +488,11 @@ export function TaskDetail({
                       // 为了不让人点了才知道（团队调度台、duet 还没接「下一轮重建上下文」）。
                       onDeleteMessage={task.mode === "single" && !handedOut && task.status !== "running" && task.status !== "queued"
                         ? async (sources) => {
+                          // 一条都不发：多条会话是逐条删的，先删了别的再撞上这条就成了删一半。
+                          if (sources.some((source) => "trace" in source && source.entangled)) {
+                            notify("这条消息有几步和另一条消息记在同一时刻，分不开，没法单独删除");
+                            return;
+                          }
                           try {
                             for (const sessionId of new Set(sources.map((source) => source.sessionId))) {
                               await api.deleteConversationSegments(sessionId, sources.filter((source) => source.sessionId === sessionId)

@@ -72,28 +72,42 @@ export function segmentTraceWindow(segments: readonly ConvSeg[], index: number):
  * 时间段要是因此缩了，盘上真有的那条就漏在段外，服务端删得「成功」、原文却留着。指纹只数
  * 盘上那份（服务端按 [from, to] 取**整条**盘上 trace 重算）。只剩记账事件（run / usage）的一截
  * 没有要删的，不报。
+ *
+ * 服务端按时间段删，段里有什么删什么；指纹只能证明「段里的内容跟页面看到的一样」，证明不了
+ * 「段里每一条都是这颗气泡的」。别的气泡的步子恰好记在端点那一毫秒（trace 的时刻只精确到
+ * 毫秒，不同回合的事件可以同刻），它就落在段里。`owned` 是这颗气泡领到的全部条目：段里只要
+ * 有一条可删事件不在其中，这一截就分不开，出处标成 `entangled`、指纹给一个服务端永远算不出
+ * 来的值 —— 页面据此整次拒绝（TaskDetail 的删除动作），绕过页面直接交给服务端也只会 409。
+ * 不能把别人的那条数进指纹求个对得上：那等于替用户授权删掉另一颗气泡。
  */
 export function traceSpanSource(
   sessionId: string,
   trace: readonly SessionTraceEntry[],
   readSide: ReadonlySet<SessionTraceEntry>,
   entries: readonly SessionTraceEntry[],
+  owned: ReadonlySet<SessionTraceEntry> = new Set(entries),
 ): ConversationSource | null {
   const deletable = entries.filter((entry) => !traceKeptOnDelete(entry.event.kind))
     .sort((left, right) => time(left.at) - time(right.at));
   if (!deletable.length) return null;
   const from = deletable[0]!.at;
   const to = deletable.at(-1)!.at;
-  const span = trace.filter((entry) => !readSide.has(entry) && time(entry.at) >= time(from) && time(entry.at) <= time(to));
-  return { sessionId, trace: { from, to, fingerprint: traceSpanFingerprint(span) } };
+  const span = trace.filter((entry) => time(entry.at) >= time(from) && time(entry.at) <= time(to));
+  if (span.some((entry) => !owned.has(entry) && !traceKeptOnDelete(entry.event.kind))) {
+    return { sessionId, trace: { from, to, fingerprint: ENTANGLED }, entangled: true };
+  }
+  return { sessionId, trace: { from, to, fingerprint: traceSpanFingerprint(span.filter((entry) => !readSide.has(entry))) } };
 }
+
+/** 分不开的那一截的指纹：服务端算出来的总是 `trace:<条数>:<哈希>`，对不上这个。 */
+const ENTANGLED = "trace:entangled";
 
 /**
  * 气泡领到、却落在它正文时间窗外的那几步，按 trace 里连续的几截报成时间段出处。
  *
  * `trace` 是整条会话的 trace（分组就是从这份里切的，条目是同一批对象）。一截遇到别的气泡的
- * 步子就断开，不会顺手删到别人。领到的每一条可删事件都落进某一截，一条不跳 —— 宁可让指纹对
- * 不上、服务端整次拒绝，也不能删一半还报删好了。
+ * 步子就断开；端点那一毫秒还夹着别人的，由 traceSpanSource 标成分不开。领到的每一条可删事件
+ * 都落进某一截，一条不跳 —— 宁可让指纹对不上、整次拒绝，也不能删一半还报删好了。
  */
 export function strayTraceSources(
   sessionId: string,
@@ -117,5 +131,6 @@ export function strayTraceSources(
     if (!run) runs.push(run = []);
     run.push(entry);
   }
-  return runs.flatMap((entries) => traceSpanSource(sessionId, trace, readSide, entries) ?? []);
+  const owned = new Set(claimed);
+  return runs.flatMap((entries) => traceSpanSource(sessionId, trace, readSide, entries, owned) ?? []);
 }

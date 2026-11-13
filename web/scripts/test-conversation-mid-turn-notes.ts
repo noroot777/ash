@@ -259,11 +259,11 @@ function deleteBubble(
     ];
   } catch (error) {
     // 服务端认定页面上那份跟盘上对不上，整次拒绝：什么都没动。
-    if (error instanceof RedactRefusal) return { refused: true as const, left: trace, items: [] as ConversationItem[] };
+    if (error instanceof RedactRefusal) return { refused: true as const, sources, left: trace, items: [] as ConversationItem[] };
     throw error;
   }
   const left = redactTrace(traceRaw, windows).split("\n").filter(Boolean).map((line) => JSON.parse(line));
-  return { refused: false as const, left, items: buildConversationItems([{ session, output: redacted.text, trace: left } as never], [session], []) };
+  return { refused: false as const, sources, left, items: buildConversationItems([{ session, output: redacted.text, trace: left } as never], [session], []) };
 }
 {
   const { left, items } = deleteBubble(between, (bubbles) => bubbles[0]!);
@@ -343,6 +343,50 @@ for (const [label, event] of realTails) {
 assert.equal(deleteBubble([{ turn: SESSION_AT }, { say: "先读文件。", at: "2026-11-13T03:45:00.000Z" },
   { note: "后台还有子代理在跑", at: "2026-11-13T03:46:00.000Z" }, { tool: "pwd", at: "2026-11-13T03:46:10.000Z" },
   { tool: "shot", at: "2026-11-13T03:46:20.000Z", event: realTails[1]![1] }], (bubbles) => bubbles[0]!).refused, false);
+
+// ── 10) 删除出处：两颗气泡各有一步恰好记在同一毫秒，删其中一颗不许带走另一颗的 ───────────
+// trace 的时刻只精确到毫秒，上一回合最后一步和下一回合的起点、第一步可以同刻。删除时间段落到
+// 那一毫秒，段里就夹着别人的步子：指纹对得上只说明内容没变，不说明那一条也归这颗气泡。结局
+// 只许是整次拒绝（页面看 entangled 不发请求，绕过页面服务端也不认），被删的那颗都得原样留着。
+const SAME_MS = "2026-11-13T03:46:10.000Z";
+const otherTurns: [string, Record<string, unknown>][] = [
+  ["工具", { kind: "tool", name: "tool", detail: "B 回合的输出" }],
+  // 附件不进指纹、又在 trace 末尾（会被认成读侧补出来的）：光靠指纹拦不住它。
+  ["附件", { kind: "attachment", path: "/tmp/b.png" }],
+];
+for (const [otherLabel, otherEvent] of otherTurns) {
+  const other: Step[] = [{ turn: SAME_MS }, { tool: `B 回合的${otherLabel}`, at: SAME_MS, event: otherEvent }];
+  for (const [shapeLabel, head] of [
+    ["正文回合窗外那一步", [
+      { turn: SESSION_AT },
+      { say: "回合 A 的回复。", at: "2026-11-13T03:45:00.000Z" },
+      { note: "后台子代理仍在跑", at: "2026-11-13T03:45:30.000Z" },
+      { tool: "A 回合的工具", at: SAME_MS },
+    ]],
+    ["只有执行过程的回合", [{ turn: SESSION_AT }, { tool: "A 回合的工具", at: SAME_MS }]],
+  ] as [string, Step[]][]) {
+    const steps = [...head, ...other];
+    const bubbles = agents(rebuild(steps));
+    assert.equal(bubbles.length, 2, `${shapeLabel}：A、B 是两颗气泡`);
+    // [删哪颗, 另一颗那一步所在回合的起点]
+    for (const [owner, index, keepsTurn] of [["A", 0, SAME_MS], ["B", 1, SESSION_AT]] as const) {
+      const result = deleteBubble(steps, (all) => all[index]!);
+      assert.ok(result.sources.some((source) => "trace" in source && source.entangled),
+        `${shapeLabel}，B 那一步是${otherLabel}：删 ${owner} 的出处要标成分不开，页面整次拒绝`);
+      assert.ok(result.left.some((entry) => entry.at === SAME_MS && entry.turnStartedAt === keepsTurn && !traceKeptOnDelete(entry.event.kind)),
+        `${shapeLabel}，B 那一步是${otherLabel}：删 ${owner} 不许带走另一颗那一步`);
+      assert.equal(result.refused, true, `${shapeLabel}，B 那一步是${otherLabel}：绕过页面交给服务端也得整次拒绝`);
+    }
+  }
+}
+{
+  // 差一毫秒就分得开：照常删掉，另一颗原样留着。
+  const steps: Step[] = [{ turn: SESSION_AT }, { tool: "A 回合的工具", at: SAME_MS },
+    { turn: "2026-11-13T03:46:10.001Z" }, { tool: "B 回合的工具", at: "2026-11-13T03:46:10.001Z" }];
+  const result = deleteBubble(steps, (all) => all[0]!);
+  assert.equal(result.refused, false);
+  assert.deepEqual(agents(result.items).map(stepsOf), [["B 回合的工具"]]);
+}
 
 rmSync(stage, { recursive: true, force: true });
 console.log("conversation mid-turn notes tests passed");

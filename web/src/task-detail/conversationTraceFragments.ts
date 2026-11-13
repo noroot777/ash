@@ -53,7 +53,8 @@ export function appendTraceFragments(
     const entries = withoutEchoedProse(pending.entries);
     if (!entries.some((entry) => !traceKeptOnDelete(entry.event.kind))) return;
     const traceSegments = contentSegments(entries, "", `persisted:trace-segment:${session.id}:${pending.turn}`);
-    // 指名用整组原样的事件（含被当成复读滤掉的正文）：服务端那边看到的就是这一份。
+    // 指名用整组原样的事件（含被当成复读滤掉的正文）：服务端那边看到的就是这一份，这颗气泡
+    // 领到的也就是这一份。
     const source = traceSpanSource(session.id, sessionTrace, readSide, pending.entries);
     items.push({
       kind: "agent",

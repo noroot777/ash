@@ -42,7 +42,8 @@ export type TimelineEntry =
 export type ConversationSource =
   // answerId：这段答复对的是哪条问答记录（问答卡认出来的那条，见 QuestionHistory.tsx）。
   | { sessionId: string; index: number; fingerprint: string; answerId?: string }
-  | { sessionId: string; trace: { from: string; to: string; fingerprint: string } };
+  // entangled：这段时间里夹着别的气泡的步子，删不开（见 conversationTraceSources 的 traceSpanSource）。
+  | { sessionId: string; trace: { from: string; to: string; fingerprint: string }; entangled?: true };
 // deleted：已删除的段排版时仍占原位（回合起止靠它推），buildConversationItems 收尾前拿掉。
 type PersistedOrigin = { sources?: ConversationSource[]; deleted?: true };
 
