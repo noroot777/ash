@@ -6,7 +6,8 @@
 // 删除，就不会再有门禁围着它跑，「怕误伤还在跑的后代」也就不再成立——留着只是占地方
 // （实测每份 80M～1G，带 .venv / node_modules 的整仓副本，不到三周攒了 15G）。
 //
-// 回收点：验收落章、归档、删除各当场收一次；启动时再整体扫一遍，补上存量和那几处没收成的。
+// 回收点：验收落章、归档、删除各当场收一次；启动时和之后每 6 小时再整体扫一遍
+// （run-disk-maintenance.ts），补上存量和那几处没收成的。
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
