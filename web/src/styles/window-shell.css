@@ -1,0 +1,51 @@
+/* 装进原生窗口（macOS app）时的排法。壳那一半、两边的约定都写在
+   desktop/macos/Sources/WindowChrome.swift：壳把红绿灯浮在页面左上角，并在 <html> 上给出
+   --window-titlebar-height（红绿灯那一条多高）、--window-controls-width（它占掉左边多宽）。
+   浏览器里这两个变量不存在，下面全部按 0 算，等于没有这份文件。 */
+
+/* 默认：整页布局把红绿灯那一条让出来。新页面不知道壳的存在，也不会被红绿灯压住。 */
+.workspace-system-layout {
+  padding-top: var(--window-titlebar-height, 0px);
+}
+
+/* 主工作区和设置页把那一条用起来：内容顶到窗口顶，只有左栏在红绿灯下面起排。
+   --window-inset-* 只在这种时候非零 —— 里面的规则读它，不用再各自判断「我是不是压在红绿灯下面」。
+   顶上有接力审批横幅时不成立：那时红绿灯下面是横幅上方的留白，下面照常排。 */
+.workspace-system-layout:has(> .handoff-approval-slot:empty + .workspace-shell),
+.workspace-system-layout:has(> :first-child > .handoff-approval-slot:empty):has(> .settings-shell) {
+  --window-inset-top: var(--window-titlebar-height, 0px);
+  --window-inset-left: var(--window-controls-width, 0px);
+  padding-top: 0;
+}
+
+/* 8px 是 .workspace-shell 自己的上内边距，两段加起来正好让开红绿灯。 */
+.workspace-sidebar {
+  padding-top: max(8px, calc(var(--window-inset-top, 0px) - 8px));
+}
+
+/* 收起后的那一列比红绿灯窄，撑到同宽，不让红绿灯骑在主区卡片的边上。 */
+.workspace-sidebar--collapsed {
+  width: max(54px, var(--window-inset-left, 0px));
+  min-width: max(54px, var(--window-inset-left, 0px));
+}
+
+.settings-sidebar {
+  padding-top: max(18px, var(--window-inset-top, 0px));
+}
+
+/* 窄屏：外壳没有内边距了，一次只有一栏，哪一栏在顶上哪一栏让。 */
+@media (max-width: 720px) {
+  .workspace-sidebar {
+    padding-top: max(8px, var(--window-inset-top, 0px));
+  }
+
+  .workspace-narrow-back {
+    padding-left: max(12px, var(--window-inset-left, 0px));
+  }
+}
+
+/* 主区顶栏就是这扇窗的标题栏：整条空白处都能拖窗口（顶上那一条本来就能拖，这里把下半截补齐）。
+   栏里的按钮、输入框不受影响，壳只认空白处。 */
+.workspace-main :is(.workspace-app-bar, .task-detail-header, .team-header, .duet-header, .chat-header, .composer-header) {
+  --window-drag: drag;
+}

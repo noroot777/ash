@@ -22,7 +22,13 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Ash.
 
 导出下载先写目标目录内的独立临时文件，完成后再原子替换目标文件。下载失败或在完成前退出不会删除已有文件。每笔下载在 `~/Library/Application Support/dev.ash.mac/downloads` 留一张带锁的登记；app 被强杀或断电留下的隐藏暂存目录（目标文件夹里的 `.ash-download-…`）下次启动时照登记回收，仍在写的下载持着锁、不会被碰。
 
-定点回归入口为 `node scripts/test-macos-client.mjs`（仅 macOS）：覆盖下载提交/失败/中途退出与暂存回收、就绪判据、Swift/Node 锁身份、双向启动时序、超时重试、请求合并和启动错误诊断，使用临时仓库及独立端口，不停真实服务。
+定点回归入口为 `node scripts/test-macos-client.mjs`（仅 macOS）：覆盖下载提交/失败/中途退出与暂存回收、就绪判据、红绿灯下面的页面仍收得到点击与窗口拖拽（探针窗口在屏幕外，不抢焦点）、Swift/Node 锁身份、双向启动时序、超时重试、请求合并和启动错误诊断，使用临时仓库及独立端口，不停真实服务。
+
+## 窗口
+
+内容铺到窗口顶，红绿灯浮在页面左上角，不单占一行标题栏。页面要给它让位，所以是页面先表态：`web/index.html` 里有 `<meta name="ash-window-chrome" content="overlay">` 才铺上去，没有这一行的文档（旧版本的 ash、同源的其它页面）仍是普通标题栏。壳把红绿灯的实际高宽量出来交给页面（`--window-titlebar-height` / `--window-controls-width`，全屏时为 0），页面这一半在 `web/src/styles/window-shell.css`：主工作区和设置页把那一条用起来，其它整页布局默认让开。顶上那一条的空白处、以及页面用 `--window-drag: drag` 划进来的顶栏都能拖窗口，双击跟随系统设置。
+
+两头有先后：先让服务端用上新的 `web/dist`，再装新 app —— 反过来也不会坏，只是在页面更新之前仍是普通标题栏。
 
 连别的 ash：`defaults write dev.ash.mac AshURL http://192.168.1.187:4317`，或启动时带 `ASH_URL`；非本机地址不会替它起服务。换仓库：`defaults write dev.ash.mac AshRepoPath <仓库根>`。
 
@@ -37,6 +43,7 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Ash.
 | `Sources/LoginService.swift` | 登录时启动的 LaunchAgent |
 | `Sources/AppDelegate.swift` | 生命周期与菜单（⌘C/⌘V 靠编辑菜单分发，不能省） |
 | `Sources/BrowserWindowController.swift` | 窗口、WKWebView、离线探活、菜单动作 |
+| `Sources/WindowChrome.swift` | 内容铺到窗口顶：量红绿灯、和页面的约定、拖窗口 |
 | `Sources/WebViewBridge.swift` | 外链、新窗口、选文件、下载、JS 对话框 |
 | `Sources/DownloadTransaction.swift` | 另存为的暂存、原子替换与中断后的回收 |
 | `Sources/OfflineView.swift` | 服务不在时的那一屏 |

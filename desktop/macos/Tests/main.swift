@@ -62,6 +62,9 @@ if mode == "reclaim" {
   DownloadTransaction.reclaimAbandoned()
   exit(0)
 }
+if mode == "chrome" {
+  runWindowChromeProbe()
+}
 if mode == "lock" {
   print(try ServerStartLock.path(repo: AshConfig.repoURL!, port: AshConfig.baseURL.port!))
   exit(0)

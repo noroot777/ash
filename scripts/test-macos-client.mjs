@@ -26,8 +26,8 @@ copyFileSync(join(root, "scripts/start-detached.mjs"), join(repo, "scripts/start
 copyFileSync(join(root, "scripts/macos-server-lock.mjs"), join(repo, "scripts/macos-server-lock.mjs"));
 
 const build = spawnSync("swiftc", ["-swift-version", "5",
-  ...["AshHealth", "DownloadTransaction", "ServerStartLock", "ServerLauncher"].map((name) => join(root, `desktop/macos/Sources/${name}.swift`)),
-  join(root, "desktop/macos/Tests/main.swift"), "-o", binary], { encoding: "utf8" });
+  ...["AshHealth", "DownloadTransaction", "ServerStartLock", "ServerLauncher", "WindowChrome"].map((name) => join(root, `desktop/macos/Sources/${name}.swift`)),
+  ...["main", "WindowChromeProbe"].map((name) => join(root, `desktop/macos/Tests/${name}.swift`)), "-o", binary], { encoding: "utf8" });
 assert.equal(build.status, 0, build.stderr);
 
 async function freePort() {
@@ -134,6 +134,11 @@ try {
   result = await launch(binary, ["reclaim"], env).done;
   assert.deepEqual(readdirSync(journal), [], "an entry unreachable for a month is given up");
   console.log("PASS: reclaim spares live downloads, collects killed ones, ignores malformed entries, expires unreachable ones");
+
+  // 探针窗口摆在屏幕外、不激活应用；页面是内联的，不碰任何服务。
+  result = await launch(binary, ["chrome"], env).done;
+  assert.equal(result.status, 0, result.output);
+  console.log("PASS: page under the window controls keeps its clicks; empty title strip and marked bars drag the window; documents that never opted in keep the ordinary title bar");
 
   let healthStatus = 200;
   let healthBody = "";

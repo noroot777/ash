@@ -6,6 +6,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   let webView: WKWebView
   let offlineView = OfflineView()
   var downloads: [ObjectIdentifier: DownloadTransaction] = [:]
+  private var chrome: WindowChrome?
   private var observations: [NSKeyValueObservation] = []
   private var healthTimer: Timer?
 
@@ -30,13 +31,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     window.title = "ash"
     window.minSize = NSSize(width: 720, height: 480)
     window.isReleasedWhenClosed = false
-    // 标题栏透明 + 窗口底色跟页面的 theme-color 走，标题栏与页面顶栏连成一片，浅深色都对得上。
-    window.titlebarAppearsTransparent = true
     window.tabbingMode = .disallowed
     super.init(window: window)
 
     window.delegate = self
     window.contentView = makeContent()
+    // 内容铺到窗口顶，红绿灯浮在页面上（见 WindowChrome）。窗口底色仍跟页面的 theme-color 走，
+    // 页面还没画出来的那一瞬和占位页都是同一个底色。
+    chrome = WindowChrome(window: window, webView: webView)
     // 位置和大小记在 UserDefaults 里，下次原样打开。
     window.setFrameAutosaveName("AshMainWindow")
     if !window.setFrameUsingName("AshMainWindow") { window.center() }
@@ -77,6 +79,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
       },
     ]
   }
+
+  // 进全屏在动画开始前就让页面收回留白，出全屏等红绿灯回来再让出来。
+  func windowWillEnterFullScreen(_ notification: Notification) { chrome?.setFullScreen(true) }
+  func windowDidFailToEnterFullScreen(_ window: NSWindow) { chrome?.setFullScreen(false) }
+  func windowDidExitFullScreen(_ notification: Notification) { chrome?.setFullScreen(false) }
 
   func loadHome() {
     stopHealthPolling()
