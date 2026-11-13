@@ -115,40 +115,71 @@ export const EXECUTOR_REGRESSION_RECORDING =
   "整套回归不要在本轮跑，也不要只在回复里自述测试通过。";
 
 /**
- * 建任务时落哪种工作方式——`POST /tasks` 与批量建任务**共用这一份**判据，默认值和门禁都从
- * 这里出，两处各写一份早晚漂。
+ * 一条任务落哪种工作方式——新建（`POST /tasks`、批量）和改类型（`PATCH mode`）**共用这一份**
+ * 判据，默认值和门禁都从这里出，各写一份早晚漂。
  *
  * 起手式（preset）已停止新建（2026-11-13 用户拍板：先关入口，引擎和站点线代码保留）：
- * - **外部新建的顶层单任务**只能是自由工作流。显式要 preset、或带着起手式
- *   （`workflow` / `workflowId`）来的一律拒，并说清楚原因——静默改成 free 的话，调用方
- *   以为自己拿到了一条带验证站的线，其实什么都没有。
- * - 团队/讨论任务、派生执行者（`parentId`）、审查任务（`reviewOf`）在内部仍落 preset：
- *   团队执行者的自动派审就跑在这条线的引擎上。它们反过来容不下 free。
+ * - **顶层单任务**只能是自由工作流。显式要 preset、或带着起手式（`workflow` / `workflowId`）
+ *   来的一律拒，并说清楚原因——静默改成 free 的话，调用方以为自己拿到了一条带验证站的线。
+ *   团队/讨论改成单任务同理：改完就是一条新的顶层起手式任务。
+ * - 团队/讨论任务、派生执行者（`parentId`）、审查任务（`reviewOf`）仍落 preset：团队执行者的
+ *   自动派审就跑在这条线的引擎上。它们反过来容不下 free。
  * 已经建好的起手式任务不受影响，详情、站点线、续跑照常。
+ *
+ * 判的必须是**最终落库的那份身份**，不是请求里写了什么：调用方传一个假的 `reviewOf`、空串的
+ * `parentId` 或一个不认识的 `mode`，落库后就是一条普通顶层单任务，拿请求字段判等于让外部
+ * 自己声明豁免。所以 `mode` 在这里校验取值，关联由调用方核实、归一之后再传进来。
  */
+export const TASK_MODES = ["single", "team", "duet"] as const;
+
 export const PRESET_CREATION_CLOSED =
   "起手式（预设工作流）已停止新建：普通单任务一律走自由工作流，" +
   "不要再传 workflowMode=\"preset\"、workflow 或 workflowId。已有的起手式任务照常查看和续跑。";
 
-export function createWorkflowMode(req: {
+export const PRESET_CONVERSION_CLOSED =
+  "起手式（预设工作流）已停止新建：这条任务走的是预设工作流，改成单任务就成了一条新的起手式任务。" +
+  "要单任务请另建一条（自动走自由工作流）。";
+
+type WorkflowShape = {
+  mode: string;
+  /** 已核实存在、会原样落库的关联；没有就是 null */
+  parentId: string | null;
+  reviewOf: string | null;
+};
+
+const topLevelSingle = (shape: WorkflowShape) =>
+  shape.mode === "single" && shape.parentId == null && shape.reviewOf == null;
+
+/** 这份身份配不配这种工作方式；配就是 null。 */
+export function workflowModeMisfit(shape: WorkflowShape & { workflowMode: string }):
+  { kind: "preset-closed" | "free-misfit"; error: string; status: 409 } | null {
+  if (topLevelSingle(shape) && shape.workflowMode === "preset") {
+    return { kind: "preset-closed", error: PRESET_CREATION_CLOSED, status: 409 };
+  }
+  if (!topLevelSingle(shape) && shape.workflowMode === "free") {
+    return { kind: "free-misfit", error: "自由工作流只适用于普通单任务", status: 409 };
+  }
+  return null;
+}
+
+export function createWorkflowMode(req: Partial<WorkflowShape> & {
   workflowMode?: string | null;
-  mode?: string | null;
-  parentId?: string | null;
-  reviewOf?: string | null;
   workflow?: unknown;
   workflowId?: string | null;
 }): { workflowMode: TaskWorkflowMode } | { error: string; status: 400 | 409 } {
-  const topLevelSingle = (req.mode ?? "single") === "single" && req.parentId == null && req.reviewOf == null;
-  const workflowMode = req.workflowMode ?? (topLevelSingle ? "free" : "preset");
+  const shape: WorkflowShape = { mode: req.mode ?? "single", parentId: req.parentId ?? null, reviewOf: req.reviewOf ?? null };
+  if (!(TASK_MODES as readonly string[]).includes(shape.mode)) {
+    return { error: "mode 只能是 single、team 或 duet", status: 400 };
+  }
+  const workflowMode = req.workflowMode ?? (topLevelSingle(shape) ? "free" : "preset");
   if (!(TASK_WORKFLOW_MODES as readonly string[]).includes(workflowMode)) {
     return { error: "workflowMode 只能是 free 或 preset", status: 400 };
   }
-  if (topLevelSingle && (workflowMode === "preset" || req.workflow != null || req.workflowId != null)) {
+  if (topLevelSingle(shape) && (req.workflow != null || req.workflowId != null)) {
     return { error: PRESET_CREATION_CLOSED, status: 409 };
   }
-  if (!topLevelSingle && workflowMode === "free") {
-    return { error: "自由工作流只适用于普通单任务", status: 409 };
-  }
+  const misfit = workflowModeMisfit({ ...shape, workflowMode });
+  if (misfit) return misfit;
   return { workflowMode: workflowMode as TaskWorkflowMode };
 }
 

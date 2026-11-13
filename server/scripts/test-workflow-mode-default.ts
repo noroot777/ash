@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { releaseTmpDb } from "./tmp-db.js";
 
@@ -67,6 +68,30 @@ try {
     "被拒的请求一条都不能落库",
   );
 
+  // 判的是落库的身份，不是请求里写的：假的审查关联、空串关联、不认识的类型都换不来豁免。
+  const fakeReview = await createTask({ title: "假审查", reviewOf: "does-not-exist", workflowMode: "preset" });
+  assert.equal(fakeReview.status, 404, "不存在的 reviewOf 要当场拒");
+  for (const [label, body] of [
+    ["真实但不落库的 reviewOf", { reviewOf: "parent" }],
+    ["空串 reviewOf", { reviewOf: "" }],
+    ["空串 parentId", { parentId: "" }],
+  ] as const) {
+    const res = await createTask({ title: label, workflowMode: "preset", ...body });
+    assert.equal(res.status, 409, `${label} 换不来 preset 豁免`);
+    assert.match((await res.json()).error, /已停止新建/);
+  }
+  const freeWithEmptyParent = await (await createTask({ title: "空串父任务", parentId: "" })).json();
+  assert.equal(freeWithEmptyParent.parentId, null, "空串关联与省略同义，不原样落库");
+  assert.equal(freeWithEmptyParent.workflowMode, "free");
+  const badKind = await createTask({ title: "乱写的类型", mode: "anything", workflowMode: "preset" });
+  assert.equal(badKind.status, 400, "不认识的 mode 不能落库，更不能拿来豁免");
+  assert.match((await badKind.json()).error, /mode 只能是/);
+  assert.equal(
+    (await db.select().from(tasks)).filter((t) => t.workflowMode === "preset" && t.mode === "single" && !t.parentId).length,
+    0,
+    "这些请求一条都不能落成顶层 preset 单任务",
+  );
+
   // ── ③ 内部那几类：默认仍是 preset，且不能 409 ───────────────────────────
   const team = await createTask({ mode: "team", title: "团队" });
   assert.equal(team.status, 201, `团队任务不能吃 ${team.status}`);
@@ -91,6 +116,33 @@ try {
   const badMode = await createTask({ workflowMode: "freee" });
   assert.equal(badMode.status, 400);
   console.log("✓ 单任务:默认 free;要起手式一律 409 并说明;团队/讨论/派生仍是 preset 且不吃 409");
+
+  // ── 改类型：按改完的身份重新判 ───────────────────────────────────────────
+  const patchTask = (id: string, body: Record<string, unknown>) => api.request(`/tasks/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const teamId = (await (await createTask({ mode: "team", title: "先建团队" })).json()).id;
+  const duetId = (await (await createTask({ mode: "duet", title: "先建讨论" })).json()).id;
+  for (const id of [teamId, duetId]) {
+    const res = await patchTask(id, { mode: "single" });
+    assert.equal(res.status, 409, "团队/讨论改成单任务就是新的顶层起手式任务，要拒");
+    assert.match((await res.json()).error, /改成单任务就成了一条新的起手式任务/);
+    const [row] = await db.select().from(tasks).where(eq(tasks.id, id));
+    assert.notEqual(row!.mode, "single", "被拒就不能写进去");
+  }
+  const freeToTeam = await patchTask(plain.id, { mode: "team" });
+  assert.equal(freeToTeam.status, 409, "自由工作流的单任务改成团队同样不成立");
+  assert.equal((await patchTask(plain.id, { mode: "anything" })).status, 400);
+  assert.equal((await patchTask(teamId, { mode: "team", title: "同类型不算改" })).status, 200);
+
+  // 历史起手式单任务（停止新建之前留下的）：类型不变的编辑照常。
+  await db.insert(tasks).values({ id: "legacy", projectId: "p", title: "八月留下的", body: "", agentType: "claude", mode: "single", status: "paused", workflowMode: "preset", createdAt: at, updatedAt: at });
+  const legacyEdit = await patchTask("legacy", { title: "改个名", labels: ["历史"] });
+  assert.equal(legacyEdit.status, 200, "历史起手式任务的普通编辑不能被新规则拦住");
+  assert.equal((await legacyEdit.json()).workflowMode, "preset");
+  console.log("✓ 改类型:团队/讨论→单任务、free 单任务→团队都拒;非法类型 400;历史起手式任务照常编辑");
 
   // ── ④ 批量路由：同一份判据 ──────────────────────────────────────────────
   const batchPlain = await (await batch({ tasks: [{ title: "一" }, { title: "二" }] })).json();

@@ -6,6 +6,7 @@
 // 协议那份措辞旁边——而回合协议的措辞是最经不起误改的东西。
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { createWorkflowMode } from "@ash/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
 import { AGENT_TYPE, MODE, TASK_STATUS, WORKFLOW_MODE, taskShape } from "../schemas.js";
 
@@ -221,6 +222,12 @@ server.registerTool(
   },
   async ({ repoPath, tasks, groupName, mode, chain, agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch, workflowMode, run }) => {
     try {
+      // 先用服务端那份判据（`createWorkflowMode`）预检一遍：批量接口才是拒绝的地方，但走到那一步
+      // 之前项目和分组已经建好了，被拒时会留下一个空分组。
+      for (const [i, task] of tasks.entries()) {
+        const resolved = createWorkflowMode({ workflowMode: task.workflowMode ?? workflowMode });
+        if ("error" in resolved) return fail(new Error(`tasks[${i}]: ${resolved.error}`));
+      }
       const project = (await call("POST", "/projects/resolve", { repoPath })) as { id: string; name: string };
       // resolve（找到或复用）而非每次新建，避免同名分组被反复建出重复副本。
       const group = (await call("POST", "/groups/resolve", { projectId: project.id, name: groupName ?? "task-chain", mode })) as {
