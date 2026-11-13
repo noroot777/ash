@@ -80,7 +80,26 @@ const dotItems = buildConversationItems([{
   output: ["第一回合。", verdict(1, "2026-09-01T05:10:00.000Z"), "第二回合。", verdict(2, "2026-09-01T05:20:00.000Z")].join("\n"),
   trace: [],
 }], [session], []);
+// 收了口的审查轮：被审回合之后靠右的一颗气泡，结论之后的验收贴在它下面。`?verdicts=failed` 是
+// 最后一件事就是「未通过」的那一种。
+const start = (round: number, at: string) => turn("system", `自由工作流第 ${round} 轮审查开始：5.5审查 · 逻辑检查。`, at,
+  { notice: { kind: "review.start", source: "free", round } });
+const passed = turn("system", "自由工作流第 2 轮审查通过（5.5审查）。", "2026-09-01T05:30:00.000Z",
+  { notice: { kind: "review.verdict", source: "free", round: 2, verdict: "passed" } });
+const verdictItems = (failedLast: boolean) => buildConversationItems([{
+  session,
+  output: (failedLast
+    ? ["第一回合。", start(1, "2026-09-01T05:05:00.000Z"), verdict(1, "2026-09-01T05:10:00.000Z")]
+    : [
+      "第一回合。", start(1, "2026-09-01T05:05:00.000Z"), verdict(1, "2026-09-01T05:10:00.000Z"),
+      "修复回合。", start(2, "2026-09-01T05:25:00.000Z"), passed,
+      turn("system", "验收完成：目标分支 main（worktree 与任务分支已删除）。", "2026-09-01T05:40:00.000Z", { notice: { kind: "accept.done", target: "main" } }),
+      turn("system", "验收阶段更新：验收完成（accepted）", "2026-09-01T05:40:01.000Z", { notice: { kind: "stage", stage: "accepted" } }),
+    ]).join("\n"),
+  trace: [],
+}], [session], []);
 const query = new URLSearchParams(window.location.search);
+const feedItems = query.has("verdicts") ? verdictItems(query.get("verdicts") === "failed") : query.has("dots") ? dotItems : items;
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -99,7 +118,7 @@ createRoot(document.getElementById("root")!).render(
         ))}
       </main>
     ) : <div style={{ height: "100vh", background: "var(--bg)" }}>
-      <ConversationFeed task={task} items={query.has("dots") ? dotItems : items} sessions={[session]} loading={false} error={null} />
+      <ConversationFeed task={task} items={feedItems} sessions={[session]} loading={false} error={null} />
     </div>}
   </StrictMode>,
 );

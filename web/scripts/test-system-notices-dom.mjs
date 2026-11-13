@@ -178,6 +178,44 @@ try {
     await dots.close();
   }
 
+  // —— 收了口的审查轮：被审回合之后靠右一颗气泡，结论之后的验收贴在它下面（靠右、时刻在字前面）——
+  for (const theme of ["light", "dark"]) {
+    const reviewed = await browser.newPage({ viewport: { width: 1000, height: 900 }, colorScheme: theme });
+    await reviewed.goto(`${fixture}?verdicts`);
+    await reviewed.locator(".review-verdict").nth(1).waitFor();
+    const flow = await reviewed.locator(".task-conversation > *").evaluateAll((els) => els.flatMap((el) =>
+      el.classList.contains("review-verdict") ? [`结论:${el.querySelector(".review-verdict-text").textContent}`]
+        : el.classList.contains("task-message--agent") ? ["回合"] : []));
+    assert.deepEqual(flow, ["回合", "结论:第 1 轮审查未通过", "回合", "结论:第 2 轮审查通过"], `${theme}：结论夹在被审回合和下一回合之间`);
+    assert.equal(await reviewed.locator(".task-conversation > .task-message--agent .turn-footnote").count(), 0, "最后那个回合下面没有这两句");
+    assert.equal(await reviewed.locator(".turn-footnote-dot").count(), 0, `${theme}：后面又起了回合的未通过、通过都不带颜色`);
+    const trailing = reviewed.locator(".review-verdict").nth(1).locator(":scope > .turn-footnote.is-trailing");
+    assert.deepEqual(await trailing.locator(".turn-footnote-text").allTextContents(), ["已验收，合并到 main"]);
+    const edges = await reviewed.locator(".review-verdict").nth(1).evaluate((el) => {
+      const bubble = el.querySelector(".review-verdict-bubble").getBoundingClientRect();
+      const text = el.querySelector(".turn-footnote.is-trailing .turn-footnote-part").getBoundingClientRect();
+      const tail = el.querySelector(".turn-footnote.is-trailing .turn-footnote-tail").getBoundingClientRect();
+      const style = getComputedStyle(el.querySelector(".review-verdict-bubble"));
+      return { right: Math.abs(bubble.right - text.right) <= 3, below: text.top >= bubble.bottom, tailFirst: tail.right <= text.left, background: style.backgroundColor };
+    });
+    assert.deepEqual(edges, { right: true, below: true, tailFirst: true, background: "rgba(0, 0, 0, 0)" }, `${theme}：贴在气泡下面、右缘对齐；藏着的时刻在字前面`);
+    await reviewed.close();
+
+    const failed = await browser.newPage({ viewport: { width: 1000, height: 900 }, colorScheme: theme });
+    await failed.goto(`${fixture}?verdicts=failed`);
+    await failed.locator(".review-verdict").waitFor();
+    const red = await failed.evaluate(() => {
+      const probe = document.createElement("i");
+      probe.style.color = "var(--red)";
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    });
+    assert.equal(await failed.locator(".review-verdict[role=status] .review-verdict-text .turn-footnote-dot").evaluate((el) => getComputedStyle(el).backgroundColor), red, `${theme}：最后一件事是未通过，字前一颗红点`);
+    await failed.close();
+  }
+
   await resizeViewport(page, { width: 390, height: 900 });
   const geometry = await page.evaluate(() => ({
     overflow: document.documentElement.scrollWidth > innerWidth,

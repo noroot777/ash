@@ -1,5 +1,5 @@
-// 审查轮在会话里的实际渲染：出了结论的一轮是被审那一回合尾注里的一句（谁审的、用时指到才出），
-// 还在跑的一轮是一张卡。判定逻辑由 test:reviewer-turn 钉住，这里钉的是「看得出来」和「没动别的」。
+// 审查轮在会话里的实际渲染：出了结论的一轮是被审那一回合之后、靠右的一颗审查结论气泡（谁审的、
+// 用时指到才出），还在跑的一轮是一张卡。判定逻辑由 test:reviewer-turn 钉住，这里钉的是「看得出来」和「没动别的」。
 // 设 SHOT=<路径> 可以顺带截一张图自查版式。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -38,26 +38,52 @@ try {
     assert.equal(await messages.nth(index).locator(".turn-head > b").count(), 1, `第 ${index + 1} 段该报身份`);
   }
 
-  // 收了口的审查轮不占行：结论记在它前面那一回合上，同一回合重审过的只留最近一次。
-  assert.equal(await page.locator(".review-milestone, .notice-line").count(), 0, "审查结论不再独占一行");
-  // 摊开一轮以后审查者的发言也是 .task-message--agent：按顶层那两回合认，不按下标数。
-  const footnoteOf = (index) => page.locator(".task-conversation > .task-message--agent").nth(index).locator(":scope > .task-message-content > .turn-footnote");
+  // 收了口的审查轮是被审那一回合之后单独一行的气泡；同一回合重审过的只留最近一次。
+  assert.equal(await page.locator(".review-milestone, .notice-line").count(), 0);
+  const order = await page.locator(".task-conversation > *").evaluateAll((els) => els.map((el) =>
+    el.classList.contains("review-verdict") ? `结论:${el.querySelector(".review-verdict-text").textContent}`
+      : el.classList.contains("verify-lane") ? "审查卡"
+        : el.classList.contains("task-message--agent") ? "回合" : null).filter(Boolean));
   assert.deepEqual(
-    await messages.evaluateAll((els) => els.map((el) => [...el.querySelectorAll(".turn-footnote-text")].map((t) => t.textContent))),
-    [["第 2 轮验证未通过"], ["第 1 轮审查通过"]],
-    "一回合一句结论；自由派审不沿用就地验证的「验证」；重跑、重审过的不并排",
+    order,
+    ["回合", "结论:第 2 轮验证未通过", "回合", "结论:第 1 轮审查通过", "审查卡"],
+    "结论夹在被审回合和下一回合之间；自由派审不沿用就地验证的「验证」；重跑、重审过的不并排",
   );
+  assert.equal(await page.locator(".task-conversation > .task-message--agent .turn-footnote").count(), 0, "被审回合下面不再说审查结论");
   assert.equal(await page.locator(".turn-footnote-dot").count(), 0, "前一回合上的未通过是过去的事，通过不带颜色");
-  assert.equal(await page.locator(".turn-footnote svg").count(), 0, "尾注没有图标");
+  const bubbles = page.locator(".task-conversation > .review-verdict");
+  const first = bubbles.nth(0);
+  // 靠右，跟你的气泡同一列；不垫底色，只有一圈细边。
+  const shape = await first.locator(".review-verdict-bubble").evaluate((el) => {
+    const conversation = document.querySelector(".task-conversation");
+    const style = getComputedStyle(conversation);
+    const right = conversation.getBoundingClientRect().right - Number.parseFloat(style.paddingRight);
+    const bubble = getComputedStyle(el);
+    return { gap: Math.round(right - el.getBoundingClientRect().right), background: bubble.backgroundColor, border: bubble.borderTopWidth, icons: el.querySelectorAll(".review-verdict-text svg").length };
+  });
+  assert.deepEqual(shape, { gap: 0, background: "rgba(0, 0, 0, 0)", border: "1px", icons: 0 });
 
-  // 谁审的、用时、时刻跟在字后面，指到才出。
-  const first = footnoteOf(0);
-  assert.equal(await first.locator(".turn-footnote-tail").innerText(), "codex@cpa·gpt-5.6-sol · 30m 0s · 08/10 12:10");
+  // 「审查者 · 谁审的 · 用时 · 时刻」指到气泡才在它上方浮出，不占排版高度：指上指下会话不跳。
+  const head = first.locator(".review-verdict-bubble > header");
+  assert.equal(await head.textContent(), "审查者 · codex@cpa·gpt-5.6-sol · 30m 0s · 08/10 12:10");
   await page.mouse.move(990, 5);
-  await page.waitForFunction(() => getComputedStyle(document.querySelector(".turn-footnote-tail")).opacity === "0");
-  await first.hover();
-  await page.waitForFunction(() => getComputedStyle(document.querySelector(".turn-footnote-tail")).opacity === "1");
-  assert.equal(await footnoteOf(1).locator(".turn-footnote-tail").innerText(), "claude@5.5审查 · 12m 0s · 08/10 23:13");
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".review-verdict-bubble > header")).opacity === "0");
+  const before = await messages.nth(1).boundingBox();
+  await first.locator(".review-verdict-bubble").hover();
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".review-verdict-bubble > header")).opacity === "1");
+  assert.deepEqual(await messages.nth(1).boundingBox(), before, "那一行出不出现，会话都不跳");
+  const placed = await first.evaluate((el) => {
+    const bubble = el.querySelector(".review-verdict-bubble").getBoundingClientRect();
+    const line = el.querySelector(".review-verdict-bubble > header").getBoundingClientRect();
+    return { above: line.bottom <= bubble.top + 1, right: Math.abs(bubble.right - line.right) <= 4 };
+  });
+  assert.deepEqual(placed, { above: true, right: true }, "浮在气泡上方右侧");
+  assert.equal(
+    await page.evaluate(() => getComputedStyle(document.querySelector(".review-verdict-bubble > header b")).fontWeight),
+    "500",
+    "「审查者」跟你的气泡上「你」同一种字重",
+  );
+  assert.equal(await bubbles.nth(1).locator(".review-verdict-bubble > header").textContent(), "审查者 · claude@5.5审查 · 12m 0s · 08/10 23:13");
 
   // 还在跑的那一轮照旧是整张卡：看得见审查者在说什么（这一轮还没开口，卡里是空的）。
   const lanes = page.locator(".verify-lane");
@@ -103,27 +129,34 @@ try {
   assert.equal(await secondLog.locator(".turn-receipt-lane").getByRole("button", { name: "审查报告" }).count(), 0);
   await abortedEntry.click();
 
-  // 没有右侧审查格可去（只读视图）：点那一句就在尾注下面摊开这一轮；键盘走得到。
-  const part = first.locator("button.turn-footnote-part");
+  // 没有右侧审查格可去（只读视图）：点气泡就在它下面摊开这一轮；键盘走得到。
+  await page.mouse.move(990, 5);
+  const part = first.locator("button.review-verdict-text");
   await part.focus();
+  // 键盘走到气泡，那一行同样浮出。
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".review-verdict-bubble > header")).opacity === "1");
   await page.keyboard.press("Enter");
   assert.equal(await part.getAttribute("aria-expanded"), "true");
-  const body = first.locator(".turn-footnote-lane");
+  const body = first.locator(":scope > .turn-footnote-lane");
   await body.waitFor();
   const reviewerTurn = body.locator(".task-message--agent.is-reviewer");
   assert.equal(await reviewerTurn.count(), 1, "审查者的发言在这一轮里");
-  assert.equal(await reviewerTurn.locator(".turn-head > b").count(), 0, "身份由那一句代言");
+  assert.equal(await reviewerTurn.locator(".turn-head > b").count(), 0, "身份由气泡代言");
   assert.equal(await reviewerTurn.locator(".task-message-avatar").count(), 0, "摊开的那一轮里不再挂头像");
-  const aligned = await page.evaluate(() => {
-    const line = document.querySelector(".turn-footnote-text").getBoundingClientRect();
-    const turn = document.querySelector(".turn-footnote-lane .task-message-content").getBoundingClientRect();
-    return { line: Math.round(line.left), turn: Math.round(turn.left) };
+  const spread = await page.evaluate(() => {
+    const lane = document.querySelector(".review-verdict > .turn-footnote-lane").getBoundingClientRect();
+    const bubble = document.querySelector(".review-verdict-bubble").getBoundingClientRect();
+    const executor = document.querySelector(".task-conversation > .task-message--agent .task-message-content").getBoundingClientRect();
+    return { left: Math.round(lane.left - executor.left), wider: lane.width > bubble.width, below: lane.top >= bubble.bottom };
   });
-  assert.ok(aligned.turn >= aligned.line, "摊开的发言收在那一句下面，不往外凸");
+  assert.deepEqual(spread, { left: 0, wider: true, below: true }, "摊开的那一块在气泡下面、占满正文宽度，左缘跟回合正文对齐");
+  assert.equal(await body.getByRole("button", { name: "审查报告" }).count(), 0, "报告键在气泡那一行里，摊开的经过里不再出一颗");
 
-  // 报告沿用现有应用内 Markdown 弹层，不另开标签页。
+  // 报告键在指到才出的那一行里，键盘走得到；沿用现有应用内 Markdown 弹层，不另开标签页。
   const pageCount = page.context().pages().length;
-  await body.getByRole("button", { name: "审查报告" }).click();
+  const reportKey = head.getByRole("button", { name: "审查报告" });
+  await reportKey.focus();
+  await page.keyboard.press("Enter");
   const reportDialog = page.getByRole("dialog", { name: /report\.md/ });
   await reportDialog.waitFor();
   await reportDialog.getByText(/第 2 轮审查报告/).waitFor();
@@ -131,15 +164,17 @@ try {
   await reportDialog.getByRole("button", { name: "关闭审查报告" }).click();
 
   // 自由派审走另一条带 runId 的路由；启动失败那一次不占用后来重跑生成的报告。
-  await footnoteOf(1).locator("button.turn-footnote-part").click();
-  const freeBody = footnoteOf(1).locator(".turn-footnote-lane");
+  await bubbles.nth(1).locator("button.review-verdict-text").click();
+  const freeBody = bubbles.nth(1).locator(":scope > .turn-footnote-lane");
   assert.equal(await freeBody.locator(".task-message--agent.is-reviewer").count(), 1, "自由派审的正文归它自己那一轮");
-  await freeBody.getByRole("button", { name: "审查报告" }).click();
+  await bubbles.nth(1).locator(".review-verdict-bubble").hover();
+  await bubbles.nth(1).locator(".review-verdict-bubble > header").getByRole("button", { name: "审查报告" }).click();
   const freeDialog = page.getByRole("dialog", { name: /report\.md/ });
   await freeDialog.getByText(/自由派审报告 fr1 第 1 轮/).waitFor();
   await freeDialog.getByRole("button", { name: "关闭审查报告" }).click();
+  await bubbles.nth(1).locator("button.review-verdict-text").click();
   await part.click();
-  assert.equal(await first.locator(".turn-footnote-lane").count(), 0, "再点一下收起");
+  assert.equal(await first.locator(":scope > .turn-footnote-lane").count(), 0, "再点一下收起");
 
   // 执行方恢复普通任务原来的无卡片排版。
   const layout = await page.evaluate(() => {
@@ -162,6 +197,14 @@ try {
   assert.equal(layout.laneLine, 2, "审查身份线细细一根");
 
   await page.setViewportSize({ width: 760, height: 1200 });
+  const verdictFits = await page.evaluate(() => {
+    const conversation = document.querySelector(".task-conversation").getBoundingClientRect();
+    return [...document.querySelectorAll(".review-verdict-bubble")].every((el) => {
+      const box = el.getBoundingClientRect();
+      return box.left >= conversation.left && box.right <= conversation.right;
+    });
+  });
+  assert.equal(verdictFits, true, "窄屏下气泡不撑破正文宽度");
   const narrow = await page.evaluate(() => {
     const conversation = document.querySelector(".task-conversation");
     const style = getComputedStyle(conversation);
@@ -200,7 +243,8 @@ try {
     };
     return {
       laneBy: ratio(document.querySelector(".verify-lane-by")),
-      footnote: ratio(document.querySelector(".turn-footnote-text")),
+      verdict: ratio(document.querySelector(".review-verdict-text")),
+      verdictHead: ratio(document.querySelector(".review-verdict-bubble > header b")),
     };
   });
   for (const [name, value] of Object.entries(contrasts)) {
@@ -208,6 +252,19 @@ try {
   }
 
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
+
+  // 触屏没有悬停：那一行常显在气泡里。
+  const touch = await browser.newPage({ viewport: { width: 390, height: 900 }, hasTouch: true, isMobile: true });
+  await touch.goto(`${web.origin}/scripts/fixtures/reviewer-turn.html`);
+  await touch.locator(".review-verdict").first().waitFor();
+  const touchHead = await touch.evaluate(() => {
+    const bubble = document.querySelector(".review-verdict-bubble").getBoundingClientRect();
+    const line = document.querySelector(".review-verdict-bubble > header");
+    const box = line.getBoundingClientRect();
+    return { opacity: getComputedStyle(line).opacity, inside: box.top >= bubble.top && box.bottom <= bubble.bottom };
+  });
+  assert.deepEqual(touchHead, { opacity: "1", inside: true });
+  await touch.close();
   console.log("reviewer-turn-dom ok");
 } finally {
   await browser?.close();

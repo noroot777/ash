@@ -1,13 +1,14 @@
 // 回合的尾注：一回合之后发生的、要你知道的那几件事，并成回合正文下面的一句小灰字。
 //
 // 哪些事进尾注由分档表定（timelineNoticeCopy：milestone / alert 两档）；记在哪一回合上由
-// conversationSystemRows 定。这里只管「并成一句」：
-//   - 每件事只留最近一句（审查结论、验收、异常结束、其余要你知道的各一句），重跑、重审过的
-//     不并排，被盖过的照样在「N 条记录」里；
+// conversationSystemRows 定。收了口的审查轮不在尾注里：它是审查者对执行者说的话，在会话右边
+// 自己占一行（ReviewVerdict），跟在它后面的那几句贴在它下面，同样用这里并成一句。
+// 这里只管「并成一句」：
+//   - 每件事只留最近一句（验收、异常结束、其余要你知道的各一句），被盖过的照样在「N 条记录」里；
 //   - 验收成了以后，它之前那些要你知道的（验收暂缓之类）退回记录；
 //   - 最多三句，按先后排。
-// 颜色只说现在的事：尾注所在的回合是会话里最后一个回合、后面又没有你的话，它才是「现在」，
-// 这时坏消息字前才有一颗小圆点（`live`）。
+// 颜色只说现在的事：尾注所在的回合（或审查结论）是会话里最后一件事、后面又没有你的话，它才是
+// 「现在」，这时坏消息字前才有一颗小圆点（`live`）。
 import type { ConversationItem } from "./conversationModel.ts";
 import type { TurnReceipt } from "./conversationSystemRows.ts";
 import { verifyMarkOf } from "./conversationNotes.ts";
@@ -22,8 +23,6 @@ type EventItem = Extract<ConversationItem, { kind: "event" }>;
 export type FootnotePart =
   /** 一条时间线记录（里程碑 / 要你知道的）。 */
   | { kind: "event"; id: string; at?: string; view: NoticeView; item?: EventItem }
-  /** 收了口的一轮审查：点它去审查格的那一轮，或者就地摊开那一轮的经过。 */
-  | { kind: "review"; id: string; at?: string; view: NoticeView; lane: ConversationReviewLane }
   /** 这一轮异常结束（刷新以后从会话行认出来的，见 turnFailure）。 */
   | { kind: "failure"; id: string; at?: string; view: NoticeView };
 
@@ -64,7 +63,7 @@ export function laneVerdictEvent(lane: ConversationReviewLane): EventItem | null
   return lane.items.findLast((item): item is EventItem => item.kind === "event" && verifyMarkOf(item)?.phase === "end") ?? null;
 }
 
-/** 指到才出的那半句：谁审的、用时、什么时候出的结论。 */
+/** 指到审查结论才出的那一行：谁审的、用时、什么时候出的结论。 */
 export function reviewLaneTail(lane: ConversationReviewLane): string {
   return [lane.reviewerLabel, durationBetween(lane.startedAt, lane.endedAt), formatInstant(lane.endedAt)]
     .filter(Boolean)
@@ -77,7 +76,6 @@ export function noticeTail(view: Pick<NoticeView, "meta">, at?: string): string 
 }
 
 export function footnotePartTail(part: FootnotePart): string | null {
-  if (part.kind === "review") return reviewLaneTail(part.lane) || null;
   return noticeTail(part.view, part.at);
 }
 
@@ -95,8 +93,8 @@ export function composeFootnote(parts: readonly FootnotePart[]): FootnotePart[] 
 
 /**
  * 一轮审查摆出来的样子由哪些东西定：那一句（结论、几条意见），点它去哪儿（哪一场、哪一轮），
- * 摊开以后有什么（报告入口、派审附言、谁审的、用时、那一轮里的每一条）。尾注里那半句、记录里
- * 那一条都拿它当签名——审查记录晚到一步补上了哪一场、有没有报告，签名就变，那一回合就重画。
+ * 摊开以后有什么（报告入口、派审附言、谁审的、用时、那一轮里的每一条）。记录里那一条拿它当
+ * 签名——审查记录晚到一步补上了哪一场、有没有报告，签名就变，那一回合就重画。
  */
 export function laneKey(lane: ConversationReviewLane): string {
   return JSON.stringify([
@@ -117,7 +115,7 @@ export function footnoteKey(footnote: TurnFootnote | undefined, extra = ""): str
   if (!footnote) return extra;
   return [
     footnote.live ? "live" : "past",
-    ...footnote.parts.map((part) => `${part.id}:${part.at}:${viewKey(part.view)}:${part.kind === "review" ? laneKey(part.lane) : ""}`),
+    ...footnote.parts.map((part) => `${part.id}:${part.at}:${viewKey(part.view)}`),
     extra,
   ].join("|");
 }
