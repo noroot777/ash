@@ -15,7 +15,7 @@
 //   · 这一轮的执行故障：结算时手上那条 —— 会话 trace 里这一回合那一段就是消费链当场落下的事件，
 //     照单飞收尾同一条挑法重放（见 `executionErrorOf`）。执行器原始事件文件不用：那里还有执行器
 //     收尾之后才到、没进消费链的行，也分不出哪些是它自己后来补的汇总；
-//   · 看门狗熔断时说原因用的类型：**熔断那一刻**冻结的那条（见 `trippedModel`）。
+//   · 看门狗熔断时说原因用的类型：**熔断那一刻**冻结的那条，只认判决日志里记下的（见 `trippedModel`）。
 // trace 里的事件没挂类型（挂类型那一版之前落的，或者当场就认不出），就是类型不明：照实说
 // 「执行器异常退出（exit N）」，原话摆出来 —— 不从原话里另找状态码（为什么见 review-no-verdict.ts
 // 文件头）。一样都读不到的轮次给 null，页面照老样子。
@@ -25,7 +25,6 @@
 import { readFileSync } from "node:fs";
 import type { AgentEvent, ModelFailure } from "@ash/shared";
 import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
-import { producesWork } from "@ash/shared/waiting";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRounds, sessions, sessionTurns } from "./db/schema.js";
@@ -34,7 +33,6 @@ import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { readableRunPath, sessionTracePath } from "./transcript.js";
 import { readStallJournal, type StallVerdictRecord } from "./turn-stall-journal.js";
 import { isWatchdogText } from "./turn-stall-text.js";
-import { errorFacts } from "./turn-stall.js";
 
 type RoundRow = typeof freeReviewRounds.$inferSelect;
 type ExecutionError = Extract<AgentEvent, { kind: "error" }>;
@@ -110,34 +108,22 @@ function executionErrorOf(events: readonly AgentEvent[]): ExecutionError | null 
 
 /**
  * 看门狗熔断这一回合时说原因用的那个模型 API 类型。在线那一路是**熔断那一刻**把 `lastModel`（这一段
- * 停滞里最后收到的那条错误的类型）冻进判决的（turn-stall.ts 的 `markStallFailure`），之后到的改不了它。
- *   1. 判决日志里这个回合的那条判决（销账了、还没压缩掉的也在）：它记的就是冻结的那一份。带类型那
- *      一格之前写的旧记录说不出来，往下找。
- *   2. 执行过程里认得出**它只可能是哪个**：trace 的落盘顺序不等于消费顺序 —— 正在处理的那条事件
- *      触发了熔断时，红字先落、那条事件后落；红字之后也可能是熔断以后才到的。所以不按位置挑「最后
- *      一条」，而是把可能是它的那些都算上：红字之前最后一次进展（它结束了上一段停滞）以后的错误，
- *      加上红字之后的全部。它们类型都一样（含都没类型），答案就是它；不一样就说不清。找不到红字
- *      （日志里压缩掉了、或者是接管那一路的说法）就不划进展那条线，整个回合的错误都算上。
- *   3. 一条都没有：认不出，给 null，那半句照实说「类型不明」。
+ * 停滞里最后收到的那条错误的类型；静默档熔断时一条错误都没有，就是 null）冻进判决的（turn-stall.ts
+ * 的 `markStallFailure`），之后到的改不了它。
+ *
+ * 能证明那一刻是什么的，只有判决日志里这个回合的那条判决（销账了、还没压缩掉的也在）：它记的就是
+ * 冻结的那一份。日志里没有（压缩掉了），或者是带类型那一格之前写的旧记录，就是认不出 —— 给 null，
+ * 那半句照实说「回合长时间没有进展，被自动终止」，原话摆出来。
+ *
+ * 不从执行过程（trace）里反推：落盘顺序不等于消费顺序（触发熔断的那条错误排在红字后面），红字之后
+ * 还有熔断以后才到的错误，而「那一刻一条错误都没有」也是合法的冻结结果 —— trace 里看得到的错误
+ * 类型再一致，也证明不了冻结的就是它（第 3、4、5 轮审查第 1 条，三种反推依次被反例推翻）。
  */
-function trippedModel(disk: Disk, turn: ReviewerTurn, stallReason: string): ModelFailure | null {
+function trippedModel(disk: Disk, turn: ReviewerTurn): ModelFailure | null {
   const record = disk.verdicts()
     .filter((verdict) => verdict.sessionId === turn.sessionId && verdict.turnStartedAt === turn.startedAt && verdict.model !== undefined)
     .at(-1);
-  if (record) return record.model ?? null;
-  const events = consumedEvents(disk.trace(turn.sessionId), turn.startedAt);
-  const trip = events.findIndex((event) => event.kind === "error" && event.message.startsWith(stallReason));
-  const candidates = new Map<string, ModelFailure | null>();
-  events.forEach((event, i) => {
-    if (ashOwn(event)) return;
-    if (i < trip && producesWork(event)) {
-      candidates.clear();
-      return;
-    }
-    const facts = errorFacts(event);
-    if (facts) candidates.set(JSON.stringify(facts.model), facts.model);
-  });
-  return candidates.size === 1 ? [...candidates.values()][0]! : null;
+  return record?.model ?? null;
 }
 
 /** 这一任务名下每个审查回合：回合行为主，没有回合行的老会话按会话行上记的最后一回合补一条。 */
@@ -204,7 +190,7 @@ function interruptionOfTurn(taskId: string, disk: Disk, turn: ReviewerTurn): Int
   const facts = failed
     ? interruptionOf({
       exitStatus: exitStatus ?? 0,
-      verdict: turn.stallReason ? { kind: "tripped", reason: turn.stallReason, model: trippedModel(disk, turn, turn.stallReason) } : null,
+      verdict: turn.stallReason ? { kind: "tripped", reason: turn.stallReason, model: trippedModel(disk, turn) } : null,
       error: executionErrorOf(consumedEvents(disk.trace(turn.sessionId), turn.startedAt)),
     }, diagnostics)
     : null;

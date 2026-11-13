@@ -65,7 +65,7 @@ function rawLogHint(facts: StallFacts): string {
 /**
  * 这一句是看门狗自己说的吗(这个文件出的每一句都以这三个抬头之一开头,回归测试逐个核对)。
  * 它们以 error 的形状落在执行过程里,跟执行器报的错排在一起,但它们是看门狗**说出来**的,不是
- * 它**观察到**的,也不算这一轮的执行故障 —— 事后照执行过程重放当时的判断
+ * 它**观察到**的,也不算这一轮的执行故障 —— 事后照执行过程重放当时挑出的执行故障
  * (review-no-verdict-legacy.ts)时得把它们拣出去。
  */
 export function isWatchdogText(message: string): boolean {

@@ -18,11 +18,11 @@
 //   5. 看门狗熔断的原因取自熔断判据的同一批事件：穿过子智能体包装、只认最后那条、恢复过就不沿用
 //      （第 3 轮审查第 1 条）；判决没类型时不说成「上游连不上」
 //   6. 单飞收尾把「这一回合自己异常结束」的事实交进来（接线）
-//   7. 那份记录上线之前断掉、没存过原因的轮次：状态接口按盘上的事实现算（诊断文件、原始事件、会话
-//      与回合行、报告在不在）；原话进结构，类型只认执行器归一层重放出来的；什么都读不到就不带。
-//      看门狗熔断的老回合：诊断里的停止请求不当成「你停的」，熔断原因的类型取重试通知里最后那条
-//      （第 1 轮复审第 1、3 条）。原始事件里主线程和子智能体线程混在一起：只有主线程顶层的终局错误
-//      算这一轮的执行故障，子线程的错误只按看门狗口径参与熔断类型（第 2 轮复审第 1 条）
+//   7. 那份记录上线之前断掉、没存过原因的轮次：状态接口按盘上的事实现算（诊断文件、会话 trace、
+//      判决日志、会话与回合行、报告在不在）；原话进结构，只认执行器说的；类型只认当时挂上的，执行
+//      故障只认消费链收到过的（原始事件文件不读）；什么都读不到就不带。看门狗熔断的老回合：诊断里
+//      的停止请求不当成「你停的」（第 1 轮复审第 1 条）；熔断原因的类型只认判决日志里冻结的那份，
+//      不从执行过程反推（第 3～5 轮复审第 1 条）。子智能体线程的失败不算这一轮的执行故障（第 2 轮复审）
 //
 // 跑：npm -w server run test:review-no-verdict
 import assert from "node:assert/strict";
@@ -230,7 +230,16 @@ try {
     await tripped.note({ failure: { exitStatus: 0, verdict: { kind: "tripped", reason: "15 分钟里只收到重试类错误" }, error: null } });
     assert.deepEqual(await tripped.cause(), { kind: "interrupted", reason: "回合长时间没有进展，被自动终止" });
     assert.doesNotMatch(tripped.timeline(), /上游连不上|等上游恢复|限流/, "类型缺了不替它编一个会自己恢复的原因");
-    assert.match(tripped.timeline(), /先看上面的原话弄清卡在哪里/);
+    // 执行器一句话都没说：熔断诊断是 ash 自己的判断，进说明但标明是谁说的，不当成执行器的原话。
+    assert.match(tripped.timeline(), /ash 的判断：「15 分钟里只收到重试类错误」/);
+    assert.match(tripped.timeline(), /先看上面的判断弄清卡在哪里/);
+    assert.doesNotMatch(tripped.timeline(), /执行器的原话/);
+    assert.equal((await tripped.stored())?.said, undefined, "结构里的原话只放执行器说的");
+    // 执行器说过话（诊断里记着）：原话是它的，判断不再另说。
+    const trippedSaid = await scene({ diagnostics: { failureReason: "stream disconnected before completion" } });
+    await trippedSaid.note({ failure: { exitStatus: 0, verdict: { kind: "tripped", reason: "15 分钟里只收到重试类错误" }, error: null } });
+    assert.match(trippedSaid.timeline(), /执行器的原话：「stream disconnected before completion」/);
+    assert.match(trippedSaid.timeline(), /先看上面的原话弄清卡在哪里/);
     // 判决带了类型（看门狗按熔断的同一批错误取的）：按它说，带状态码（第 2 轮审查 N1）。
     const trippedCode = await scene();
     await trippedCode.note({ failure: { exitStatus: 0, error: null,
@@ -487,8 +496,7 @@ try {
     assert.deepEqual(await unreported.api(), { kind: "unreported", reason: "回合收尾了，结论没报上来" });
     // 看门狗熔断的老回合：终止是看门狗发的停止请求（诊断里 stopRequested=true），结局是 failed、
     // 不是你停的（第 1 轮复审第 1 条）。原因的类型跟新断的轮次一样，只认**熔断那一刻**冻结的那条
-    // （第 1 轮复审第 3 条、第 3、4 轮复审第 1 条）：判决日志里记的；日志压缩掉了，执行过程里认得出
-    // 它只可能是哪个才说；认不出就说类型不明。
+    // （第 1 轮复审第 3 条、第 3～5 轮复审第 1 条）：判决日志里记的；日志里没有就说类型不明。
     const { appendStallVerdict } = await import("../src/turn-stall-journal.js");
     const stallText = await import("../src/turn-stall-text.js");
     const KILLED = { ...LIVE_DIAGNOSTICS, terminationKind: "manual_stop", failureKind: null, failureReason: null, stopRequested: true, exitStatus: 143, structuredErrors: [] };
@@ -522,7 +530,7 @@ try {
     writeTrace(journaled, [retry("Reconnecting... 1/5"), { kind: "error", message: TRIP }, retry("Reconnecting... 2/5"), childRetry(RATE_429)]);
     writeEvents(journaled, [{ method: "error", params: { willRetry: true, error: { message: "Reconnecting... 2/5" } } }]);
     assert.deepEqual(await tripCause(journaled), QUOTA_CAUSE, "看门狗发的停止请求不算你停的；类型取判决冻结的那条");
-    assert.match((await journaled.api())?.said ?? "", /15 分钟里只收到重试类错误/, "没有执行故障时原话是那份熔断诊断");
+    assert.equal((await journaled.api())?.said, undefined, "执行器一句话都没说：没有原话，熔断诊断是 ash 自己的话，不冒充");
     // 判决日志里记的就是「没类型」：照它说类型不明，执行过程里的、消费之后才到的终局错误都盖不掉。
     const journaledNone = await tripScene();
     appendStallVerdict({ at, sessionId: journaledNone.sessId, turnStartedAt: at, reason: TRIP, since: at, model: null });
@@ -532,48 +540,34 @@ try {
       { method: "error", params: { willRetry: false, error: { message: QUOTA_429 } } },
     ]);
     assert.deepEqual(await tripCause(journaledNone), UNKNOWN_CAUSE, "执行器收尾之后才到的终局错误不盖过冻结的判决（第 4 轮复审 B）");
-    assert.match((await journaledNone.api())?.said ?? "", /15 分钟里只收到重试类错误/, "原话也不被它替换");
+    assert.equal((await journaledNone.api())?.said, undefined, "原话也不被它替换");
 
-    // 日志压缩掉了（或者是带类型那一格之前的旧记录）：trace 的落盘顺序不是消费顺序 —— 触发熔断的那条
-    // 错误排在红字后面（第 4 轮复审 A）。两种排法、两个方向都试：可能是它的那几条类型不一，就说不清。
-    for (const [mode, events] of [
-      ["触发那条没类型", [retry(QUOTA_429), { kind: "error", message: TRIP }, retry("Reconnecting... 2/5")]],
-      ["触发那条是额度", [retry("Reconnecting... 2/5"), { kind: "error", message: TRIP }, retry(QUOTA_429)]],
-      ["熔断后才到主线程 429", [retry(QUOTA_429), retry("Reconnecting... 2/5"), { kind: "error", message: TRIP }, retry(QUOTA_429)]],
-      ["熔断后才到子线程 429", [retry("Reconnecting... 2/5"), { kind: "error", message: TRIP }, childRetry(QUOTA_429)]],
+    // 日志里没有冻结的那份（压缩掉了、或者是带类型那一格之前的旧记录）：执行过程里看得到什么都不反推。
+    // 前三种是第 3、4 轮反推被推翻的排法；最后两种是第 5 轮的：静默档熔断时一条错误都没有（冻结的是
+    // null），熔断之后才到的错误类型再一致也不是它；以及整回合只有一种类型的错误。
+    const SILENT_TRIP = stallText.silentTurnTripText(facts);
+    for (const [mode, reason, events] of [
+      ["触发那条没类型", TRIP, [retry(QUOTA_429), { kind: "error", message: TRIP }, retry("Reconnecting... 2/5")]],
+      ["触发那条是额度", TRIP, [retry("Reconnecting... 2/5"), { kind: "error", message: TRIP }, retry(QUOTA_429)]],
+      ["熔断后才到子线程 429", TRIP, [retry("Reconnecting... 2/5"), { kind: "error", message: TRIP }, childRetry(QUOTA_429)]],
+      ["静默熔断后才到子线程 429", SILENT_TRIP, [{ kind: "error", message: stallText.silentTurnWarningText(facts), level: "notice", affectsTurn: false },
+        { kind: "error", message: SILENT_TRIP }, childRetry(QUOTA_429)]],
+      ["整回合只有额度", TRIP, [childRetry(QUOTA_429), { kind: "error", message: warning, level: "notice", affectsTurn: false }, retry(QUOTA_429),
+        { kind: "error", message: TRIP }, retry(QUOTA_429)]],
     ] as const) {
-      const s = await tripScene();
-      appendStallVerdict({ at, sessionId: s.sessId, turnStartedAt: at, reason: TRIP, since: at });
+      const s = await scene({ diagnostics: KILLED });
+      await settle(s, "failed", 143, null, reason);
+      appendStallVerdict({ at, sessionId: s.sessId, turnStartedAt: at, reason, since: at });
       writeTrace(s, [...events]);
-      assert.deepEqual(await tripCause(s), UNKNOWN_CAUSE, `${mode}：证明不了是哪一条，不猜`);
+      assert.deepEqual(await tripCause(s), UNKNOWN_CAUSE, `${mode}：证明不了冻结的是哪个，不猜`);
     }
-    // 能证明的：这一段停滞里（红字之前最后一次进展以后，加上红字之后的）错误类型都一样 —— 主线程、
-    // 子线程都认（看门狗穿过子智能体包装），看门狗自己那句警告不算它观察到的错误；那次进展之前的
-    // 错误属于上一段停滞，也不算。
-    const traced = await tripScene();
-    writeTrace(traced, [retry("Reconnecting... 1/5"), { kind: "text", text: "接着审。" } as never, childRetry(QUOTA_429),
-      { kind: "error", message: warning, level: "notice", affectsTurn: false }, retry(QUOTA_429),
-      { kind: "error", message: `${TRIP}\n注意:这个结论没能写进磁盘` }, retry(QUOTA_429)]);
-    assert.deepEqual(await tripCause(traced), QUOTA_CAUSE, "这一段停滞里只有额度一种：就是它");
-    // 红字之后的进展不划线（那可能是熔断之后才到的）。
-    const lateProgress = await tripScene();
-    writeTrace(lateProgress, [retry("Reconnecting... 1/5"), { kind: "error", message: TRIP }, { kind: "text", text: "…" } as never, retry(QUOTA_429)]);
-    assert.deepEqual(await tripCause(lateProgress), UNKNOWN_CAUSE);
-    // 找不到红字（接管那一路的说法、或者没落下来）：整个回合的错误都算上。
-    const noRed = await tripScene();
-    writeTrace(noRed, [retry(QUOTA_429), { kind: "text", text: "…" } as never, retry(QUOTA_429)]);
-    assert.deepEqual(await tripCause(noRed), QUOTA_CAUSE, "整回合只有额度：就是它");
-    const noRedMixed = await tripScene();
-    writeTrace(noRedMixed, [retry("Reconnecting... 1/5"), { kind: "text", text: "…" } as never, retry(QUOTA_429)]);
-    assert.deepEqual(await tripCause(noRedMixed), UNKNOWN_CAUSE, "没有红字就划不了进展那条线");
-    // 执行过程里一条错误都没有（只有原始事件）：认不出。
-    const rawOnly = await tripScene();
-    writeEvents(rawOnly, [{ method: "error", params: { willRetry: true, error: { message: QUOTA_429 } } }]);
-    assert.deepEqual(await tripCause(rawOnly), UNKNOWN_CAUSE, "原始事件不拿来定熔断类型");
-    // 别的回合的不算这一回合的。
+    const noJournal = await tripScene();
+    writeTrace(noJournal, [retry(QUOTA_429), { kind: "error", message: TRIP }, retry(QUOTA_429)]);
+    assert.deepEqual(await tripCause(noJournal), UNKNOWN_CAUSE, "日志里压根没有这一回合：同样不猜");
+    // 别的回合的判决不算这一回合的。
     const otherTurn = await tripScene();
-    appendSessionTrace(otherTurn.taskId, otherTurn.sessId, "2026-11-13T09:00:00.000Z", retry(QUOTA_429) as never);
-    assert.deepEqual(await tripCause(otherTurn), UNKNOWN_CAUSE, "只看这一回合（turnStartedAt）的执行过程");
+    appendStallVerdict({ at, sessionId: otherTurn.sessId, turnStartedAt: "2026-11-13T09:00:00.000Z", reason: TRIP, since: at, model: { kind: "quota_exhausted", status: 429 } });
+    assert.deepEqual(await tripCause(otherTurn), UNKNOWN_CAUSE, "只认这一回合（sessionId + turnStartedAt）的判决");
 
     // 子智能体线程先报了额度用完、审查者接着干，最后主线程自己出了本地故障退出：说的是主线程那条，
     // 原话也是它的（第 2 轮复审第 1 条）。子线程的失败在 trace 里是包成子智能体活动的那一条。

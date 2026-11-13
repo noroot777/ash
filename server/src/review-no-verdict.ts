@@ -111,9 +111,12 @@ const VERDICT_REASON: Record<string, string> = {
  * 也可能根本没有错误（静默档），叫人干等就是替它编了一个会自己恢复的原因（第 3 轮审查第 1 条）。
  */
 export function interruptionOf(failure: TurnFailure, diagnostics: Pick<RunDiagnostics, "failureReason" | "exitSignal"> | null): Interruption {
-  const raw = failure.error?.message?.trim() || diagnostics?.failureReason?.trim() || failure.verdict?.reason?.trim() || "";
+  // 原话只认执行器自己说的（它报的错、诊断里记的那段）。判决的原文是 ash 自己的话（看门狗的熔断
+  // 诊断、核实不了的说明）：执行器一句都没说过的时候它照样进说明，但标明是谁说的，不进 `quote`。
+  const raw = failure.error?.message?.trim() || diagnostics?.failureReason?.trim() || "";
   const quote = raw ? excerpt(raw) : null;
-  const said = quote ? `执行器的原话：「${quote}」` : "";
+  const judged = failure.verdict?.reason?.trim();
+  const said = quote ? `执行器的原话：「${quote}」` : judged ? `ash 的判断：「${excerpt(judged)}」` : "";
   const exit = failure.exitStatus !== 0 ? `执行器以 exit ${failure.exitStatus} 结束` : "";
   const model: ModelFailure | null = failure.error?.model ?? (failure.verdict?.kind === "tripped" ? failure.verdict.model ?? null : null);
   if (model) {
@@ -123,7 +126,7 @@ export function interruptionOf(failure: TurnFailure, diagnostics: Pick<RunDiagno
   if (failure.verdict?.kind === "tripped") {
     const reason = "回合长时间没有进展，被自动终止";
     return {
-      reason, detail: [reason, exit, said].filter(Boolean).join("，"), next: `先看上面的原话弄清卡在哪里，处理好之后再${RESUME}`,
+      reason, detail: [reason, exit, said].filter(Boolean).join("，"), next: `先看上面的${quote ? "原话" : "判断"}弄清卡在哪里，处理好之后再${RESUME}`,
       quote, vague: true,
     };
   }
