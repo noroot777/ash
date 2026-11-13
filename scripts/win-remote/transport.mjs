@@ -20,6 +20,10 @@ import { psq } from "./ps.mjs";
 
 const DEFAULT_HOST = process.env.WIN_REMOTE_HOST ?? "http://192.168.1.187:4317";
 
+// 对端 ash 的访问密钥。自用模式的 ash 只认本机直连和这把密钥(server/src/auth/remote-access.ts),
+// 而这套脚本正是从另一台机器去调它的终端 API —— 不带就是 401。每一跳都要带,所以收在这一处。
+const authHeaders = () => (process.env.WIN_REMOTE_KEY ? { authorization: `Bearer ${process.env.WIN_REMOTE_KEY}` } : {});
+
 // 命令期限之外,额外留给「杀树 + 确认退干净 + 把已经写下的输出捞回来 + 回传」的时间。
 // 对端那段收尾最长要:等 Kill 后确认 10s + 补刀 1.5s + 容器轮询 5s + 落盘等待 0.3s + 上传。
 // 30 秒是这条链路的上界再加一点余量 —— 它只在命令真的超时时才会用掉。
@@ -53,7 +57,7 @@ async function api(path, init = {}, host = DEFAULT_HOST) {
   const signal = init.signal ?? controlSignal();
   let res;
   try {
-    res = await fetch(`${host}/api${path}`, { ...init, signal });
+    res = await fetch(`${host}/api${path}`, { ...init, headers: { ...authHeaders(), ...init.headers }, signal });
   } catch (e) {
     // 期限型 signal 到点时,DOMException 的原文是 "The operation was aborted due to timeout" ——
     // 看不出是哪一跳、对着谁、等了多久。换成人话。
@@ -64,6 +68,12 @@ async function api(path, init = {}, host = DEFAULT_HOST) {
       throw new Error(`${init.method ?? "GET"} ${path} → ${limit}内没等到 ${host} 的响应(对端 ash 没在跑,或者卡住了)`);
     }
     throw e;
+  }
+  if (res.status === 401) {
+    throw new Error(
+      `${init.method ?? "GET"} ${path} → 401:对端 ash 要访问密钥。在那台机器上打开 ash「设置 → 默认规则 → 远程访问」`
+        + `(或在它本机 curl http://127.0.0.1:4317/api/remote-access)拿到后,用 WIN_REMOTE_KEY=<密钥> 传进来`,
+    );
   }
   if (!res.ok) throw new Error(`${init.method ?? "GET"} ${path} → ${res.status} ${await res.text().catch(() => "")}`);
   return res.status === 204 ? null : res.json();
@@ -285,7 +295,7 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
     let preview = "";
     pump = (async () => {
       const res = await fetch(`${host}/api/projects/${pid}/terminal/sessions/${session.id}/events?after=0`, {
-        headers: { accept: "text/event-stream" },
+        headers: { accept: "text/event-stream", ...authHeaders() },
         signal: ac.signal,
       });
       const reader = res.body.getReader();
