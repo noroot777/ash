@@ -1,7 +1,5 @@
 import Foundation
 
-/// 壳连哪台 ash。壳只是 :4317 那份 web 的窗口，服务端的启停仍归 `npm run restart`，
-/// 这里不拉起、不重启任何进程。
 enum AshConfig {
   /// 优先级：环境变量 ASH_URL > `defaults write dev.ash.mac AshURL <url>` > 本机 4317。
   static let baseURL: URL = {

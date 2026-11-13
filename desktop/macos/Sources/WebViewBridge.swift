@@ -121,13 +121,28 @@ extension BrowserWindowController: WKNavigationDelegate, WKUIDelegate, WKDownloa
     guard let window else { return completionHandler(nil) }
     panel.beginSheetModal(for: window) { result in
       guard result == .OK, let url = panel.url else { return completionHandler(nil) }
-      // NSSavePanel 已经问过「要替换吗」，WKDownload 却拒绝写已存在的文件，这里先挪走旧的。
-      try? FileManager.default.removeItem(at: url)
-      completionHandler(url)
+      do {
+        let transaction = try DownloadTransaction(destination: url)
+        self.downloads[ObjectIdentifier(download)] = transaction
+        completionHandler(transaction.temporaryURL)
+      } catch {
+        completionHandler(nil)
+        self.present(NSAlert(error: error)) { _ in }
+      }
+    }
+  }
+
+  func downloadDidFinish(_ download: WKDownload) {
+    guard let transaction = downloads.removeValue(forKey: ObjectIdentifier(download)) else { return }
+    do {
+      try transaction.commit()
+    } catch {
+      present(NSAlert(error: error)) { _ in }
     }
   }
 
   func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+    downloads.removeValue(forKey: ObjectIdentifier(download))?.discard()
     let alert = NSAlert(error: error)
     present(alert) { _ in }
   }

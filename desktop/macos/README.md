@@ -18,6 +18,12 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Ash.
 - 「ash → 登录时启动 ash 服务」（装好后第一次打开默认勾上）：一份 `~/Library/LaunchAgents/dev.ash.server.plist`，登录时跑一次 `Ash --start-server`，同一套逻辑、不开窗口。日志 `/tmp/ash-mac-login.log`。
 - 服务日志在 `/tmp/ash-4317.log`，起不来时占位页上有「日志」按钮。
 
+客户端、登录项和 `npm run restart` 在 macOS 上共用按仓库真实路径和端口区分的启动锁；其他仓库的重启不会阻止当前实例。重启退出或失败后，客户端会重新检查并尝试启动；等待超时会显示可重试的错误，无窗口入口返回失败。启动 shell 的报错会保留在独立启动器日志中。
+
+导出下载先写目标目录内的独立临时文件，完成后再原子替换目标文件。下载失败或在完成前退出不会删除已有文件。
+
+定点回归入口为 `node scripts/test-macos-client.mjs`（仅 macOS）：覆盖下载提交/失败/中途退出、Swift/Node 锁身份、双向启动时序、超时重试、请求合并和启动错误诊断，使用临时仓库及独立端口，不停真实服务。
+
 连别的 ash：`defaults write dev.ash.mac AshURL http://192.168.1.187:4317`，或启动时带 `ASH_URL`；非本机地址不会替它起服务。换仓库：`defaults write dev.ash.mac AshRepoPath <仓库根>`。
 
 ## 文件

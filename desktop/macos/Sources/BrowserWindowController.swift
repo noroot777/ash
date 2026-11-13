@@ -5,6 +5,7 @@ import WebKit
 final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
   let webView: WKWebView
   let offlineView = OfflineView()
+  var downloads: [ObjectIdentifier: DownloadTransaction] = [:]
   private var observations: [NSKeyValueObservation] = []
   private var healthTimer: Timer?
 
@@ -102,8 +103,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         switch outcome {
         case .ready:
           self.loadHome()
-        case .restartInProgress:
-          self.offlineView.show(title: "npm run restart 正在换服务", detail: "换好后会自动载入。", busy: true)
         case .failed(let reason):
           self.offlineView.show(title: "ash 服务没起来", detail: reason, busy: false, log: launcher.logURL)
         }

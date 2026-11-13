@@ -13,21 +13,24 @@ enum LoginService {
       .appendingPathComponent("Library/LaunchAgents/\(label).plist")
   }
 
-  static var isEnabled: Bool { FileManager.default.fileExists(atPath: plistURL.path) }
+  static var isEnabled: Bool {
+    FileManager.default.fileExists(atPath: plistURL.path)
+      && launchctl(["print", "gui/\(getuid())/\(label)"]) == 0
+  }
 
   /// app 启动时调：装进「应用程序」后第一次打开就默认开上（用户要的就是「不用自己起服务」），
   /// 之后尊重菜单里的开关。从构建目录里直接跑的那份不自动登记，免得把一个随时会被删的
   /// 路径写进登录项。已开着但 app 换了位置时重写一份。
-  static func reconcileAtLaunch() {
+  static func reconcileAtLaunch() throws {
     let configured = "LoginServiceConfigured"
     let installed = ["/Applications/", "\(NSHomeDirectory())/Applications/"].contains { Bundle.main.bundlePath.hasPrefix($0) }
     if installed && !UserDefaults.standard.bool(forKey: configured) {
-      UserDefaults.standard.set(true, forKey: configured)
-      try? setEnabled(true)
+      try setEnabled(true)
       return
     }
-    guard installed, isEnabled, registeredExecutable != Bundle.main.executablePath else { return }
-    try? setEnabled(true)
+    guard installed, FileManager.default.fileExists(atPath: plistURL.path),
+          !isEnabled || registeredExecutable != Bundle.main.executablePath else { return }
+    try setEnabled(true)
   }
 
   private static var registeredExecutable: String? {
@@ -40,12 +43,19 @@ enum LoginService {
   static func setEnabled(_ enabled: Bool) throws {
     let domain = "gui/\(getuid())"
     // 先卸再装：app 挪过位置或重装后，旧那份里的可执行路径就过期了。
-    launchctl(["bootout", "\(domain)/\(label)"])
+    if launchctl(["print", "\(domain)/\(label)"]) == 0 {
+      try checkedLaunchctl(["bootout", "\(domain)/\(label)"])
+    }
     guard enabled else {
-      try? FileManager.default.removeItem(at: plistURL)
+      if FileManager.default.fileExists(atPath: plistURL.path) {
+        try FileManager.default.removeItem(at: plistURL)
+      }
+      UserDefaults.standard.set(true, forKey: "LoginServiceConfigured")
       return
     }
-    guard let executable = Bundle.main.executablePath else { return }
+    guard let executable = Bundle.main.executablePath else {
+      throw NSError(domain: NSCocoaErrorDomain, code: NSFileNoSuchFileError)
+    }
     let plist: [String: Any] = [
       "Label": label,
       "ProgramArguments": [executable, "--start-server"],
@@ -58,8 +68,19 @@ enum LoginService {
     ]
     try FileManager.default.createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
     let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-    try data.write(to: plistURL)
-    launchctl(["bootstrap", domain, plistURL.path])
+    try data.write(to: plistURL, options: .atomic)
+    try checkedLaunchctl(["bootstrap", domain, plistURL.path])
+    guard isEnabled else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO)) }
+    UserDefaults.standard.set(true, forKey: "LoginServiceConfigured")
+  }
+
+  private static func checkedLaunchctl(_ args: [String]) throws {
+    let status = launchctl(args)
+    guard status == 0 else {
+      throw NSError(domain: "AshLoginService", code: Int(status), userInfo: [
+        NSLocalizedDescriptionKey: "登录项操作失败：launchctl \(args.joined(separator: " "))（\(status)）",
+      ])
+    }
   }
 
   @discardableResult

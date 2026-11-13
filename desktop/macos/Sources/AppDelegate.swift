@@ -5,11 +5,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.mainMenu = MainMenu.build()
-    LoginService.reconcileAtLaunch()
     let controller = BrowserWindowController()
     windowController = controller
     controller.showWindow(nil)
     NSApp.activate(ignoringOtherApps: true)
+    do { try LoginService.reconcileAtLaunch() } catch { NSAlert(error: error).runModal() }
   }
 
   // 关窗不退出：ash 是常驻的工作台，像邮件 / Slack 那样点 Dock 图标就回来；⌘Q 才是真退出。

@@ -8,9 +8,6 @@ if CommandLine.arguments.contains("--start-server") {
   case .ready:
     print("ash 服务已就绪：\(AshConfig.baseURL.absoluteString)")
     exit(0)
-  case .restartInProgress:
-    print("npm run restart 正在换服务，未插手")
-    exit(0)
   case .failed(let reason):
     print("ash 服务没起来：\(reason)")
     exit(1)
