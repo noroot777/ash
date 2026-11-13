@@ -35,7 +35,7 @@
 // `stall_reason=NULL` 就把它解释成「没熔断过」。所以判决的事实落在一个不可能排在别人事务后面
 // 的地方(`turn-stall-journal.ts`:另一个文件、同步写、写完 fsync),库那一格降级成给界面和接口
 // 读的投影。这里只认一件事:**注册进来的那一半必须在返回之前把事实存住,并如实报它存住了没有**。
-import type { ModelFailure } from "@ash/shared";
+import type { ModelFailure, ModelFailureKind } from "@ash/shared";
 import { now } from "./util.js";
 
 /**
@@ -291,6 +291,22 @@ export function __resetStallFailures(): void {
   failures.clear();
 }
 
+/** 认得的模型故障类型。写成全量表：shared 那边加一类，这里编译不过，不会悄悄当成不认得。 */
+const MODEL_FAILURE_KINDS: Record<ModelFailureKind, true> = {
+  context_overflow: true, quota_exhausted: true, invalid_request: true, auth: true, rate_limit: true, unavailable: true,
+};
+
+/**
+ * 盘上那份 `model` 只认形状完全对的：类型在表里、状态码是数或 null。别的（异常写入、版本回退留下的）
+ * 一律当没有 —— 判决本身照留，只是说不出是哪一类模型故障；放进去的话，下游按类型挑措辞那一步
+ * 拿到一个不认得的类型就读挂了，这一轮连「怎么断的」都说不出（第 2 轮审查 N1）。
+ */
+function trustedModel(value: unknown): ModelFailure | null {
+  const model = value as Partial<ModelFailure> | null | undefined;
+  if (!model || typeof model.kind !== "string" || !Object.hasOwn(MODEL_FAILURE_KINDS, model.kind)) return null;
+  return { kind: model.kind, status: typeof model.status === "number" ? model.status : null };
+}
+
 /**
  * 启动时把**落盘的那些**装进内存(`turn-stall-persist.ts` 在模块加载时调一次)。
  *
@@ -308,7 +324,7 @@ export function loadStallFailures(
   for (const record of records) {
     const k = key(record.sessionId, record.turnStartedAt);
     if (failures.has(k)) continue;
-    failures.set(k, { kind: "tripped", reason: record.reason, at: record.at, since: record.since ?? record.at, model: typeof record.model?.kind === "string" ? record.model : null, durable: true });
+    failures.set(k, { kind: "tripped", reason: record.reason, at: record.at, since: record.since ?? record.at, model: trustedModel(record.model), durable: true });
     loaded += 1;
   }
   return loaded;

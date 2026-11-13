@@ -229,7 +229,7 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
       const failure = acc.failureOf?.(turnId);
       if (failure) {
         const id = `failure:${turnId}`;
-        const view = turnFailureView(failure.text);
+        const view = turnFailureView(failure.text, failure.interruption);
         // 排在这一回合后面的那些记录前头：它是这一回合自己的收场。
         order.set(id, index);
         note({ kind: "failure", id, at: failure.at, view }, { id, at: failure.at, view });
