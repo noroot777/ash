@@ -42,8 +42,11 @@ const NO_SOURCE =
 
 const localUrl = () => `http://127.0.0.1:${currentListeningPort() ?? 4317}`;
 
-/** 没得可搬时自己拼的那条。仓库里还没 build 出 MCP 产物就返回 null(别登记一个不存在的入口)。 */
-function builtinEntry(): AshMcpEntry | null {
+/**
+ * 没得可搬时自己拼的那条 —— 也就是「指向这份 ash 自己」的那条(host-setup.ts 拿它认「指没指向这里」)。
+ * 仓库里还没 build 出 MCP 产物就返回 null(别登记一个不存在的入口)。
+ */
+export function builtinEntry(): AshMcpEntry | null {
   if (!existsSync(MCP_ENTRY)) return null;
   return { command: mcpNodeCommand(), args: [MCP_ENTRY], env: { ASH_URL: localUrl() } };
 }
