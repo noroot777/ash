@@ -19,6 +19,7 @@ import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import { useReplyLayout } from "../task-detail/useReplyLayout.ts";
+import { registerReplyInput } from "../task-detail/replyQuote.ts";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import {
   ReplyResizeHandle,
@@ -85,6 +86,8 @@ export function TeamReplyBox({
   useEffect(() => {
     setError(null);
   }, [task.id]);
+  // 会话里「改了再发」放回草稿之后要把光标送进这个框（见 task-detail/replyQuote.ts）。
+  useEffect(() => registerReplyInput(task.id, inputRef.current), [task.id]);
   // 正在飞的那一次发送；撤回排在它后面，见下面的 withdraw。
   const inFlightSend = useRef<Promise<void> | null>(null);
   const send = (): Promise<void> => {

@@ -19,6 +19,15 @@ export function joinDraftText(restored: string, current: string): string {
 }
 
 /**
+ * 发过的一句放回草稿再改（气泡上「改了再发」）：跟撤回同样是合并，只多一条——草稿里已经
+ * 有这一句了就不再接一遍，连点两下不会叠出两份。这里的子串判断只决定「加不加」，从不删字。
+ */
+export function reuseDraftText(sent: string, current: string): string {
+  const text = sent.trim();
+  return text && current.includes(text) ? current : joinDraftText(text, current);
+}
+
+/**
  * 把消息里存的附件路径还原成对话框里的附件卡片。
  *
  * 服务端只记路径，字节数无从得知（`size` 因此留空，卡片不显示大小）；不在

@@ -89,6 +89,8 @@
 .team-feed-user > div { max-width: min(680px,88%); border: 1px solid color-mix(in oklab, var(--ink) 28%, var(--line)); border-radius: 9px; background: color-mix(in oklab, var(--ink) 7%, var(--panel)); padding: 8px 11px; }
 .team-feed-user header { display: flex; gap: 6px; color: var(--muted); font-size: var(--t-xs); }
 .team-feed-user header b { color: var(--muted); }
+.team-feed-user header .message-reuse-button { display: grid; width: 20px; height: 20px; flex: none; margin-left: auto; place-items: center; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
+.team-feed-user header .message-reuse-button:hover { background: var(--raised); color: var(--ink); }
 .team-feed-user p { margin: 2px 0 0; color: var(--ink); font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; }
 /* 跟任务会话的气泡同一个做法（task-conversation.css）：只装内容，指到才在上方浮出谁发的、几点。 */
 @media (hover: hover) {

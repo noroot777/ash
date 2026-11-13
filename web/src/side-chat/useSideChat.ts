@@ -4,7 +4,8 @@ import { chatApi } from "../chat/chatApi.ts";
 import { api } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
 import type { UploadAttachment, UploadingFile } from "../task-detail/Attachments.tsx";
-import { clearSideChatQuote, moveNewSideChatQuote, sideChatMessageBody, useSideChatQuote } from "./sideChatQuote.ts";
+import { attachmentsFromPaths, mergeAttachments, reuseDraftText } from "../task-detail/withdrawDraft.ts";
+import { clearSideChatQuote, moveNewSideChatQuote, sideChatMessageBody, stageSideChatQuote, useSideChatQuote } from "./sideChatQuote.ts";
 import { newSideChatScope, readSideStorage as read, sideAttachmentsKey as filesKey, sideDraftKey as draftKey, sideRequestKey as requestKey, writeSideStorage as write } from "./sideChatStorage.ts";
 
 const finished = (status: string) => ["done", "failed", "stopped"].includes(status);
@@ -53,6 +54,8 @@ export function useSideChat(taskId: string) {
   const [draft, setDraftState] = useState(() => read(draftKey(newScope)) ?? "");
   const [attachments, setAttachmentsState] = useState<UploadAttachment[]>(() => readAttachments(newScope));
   const [pending, setPendingState] = useState<UploadingFile[]>([]);
+  // 每「改了再发」一次加一：输入框按它取焦点、光标落到末尾。
+  const [reused, setReused] = useState(0);
   const [sending, setSending] = useState(false);
   const [savingMember, setSavingMember] = useState(false);
   const [proposedMember, setProposedMember] = useState<{ roomId: string; member: ChatMember } | null>(null);
@@ -265,6 +268,14 @@ export function useSideChat(taskId: string) {
   // 头带上的选择框同时也是禁用的，这一句挡的是别的表面直接调过来的情况。
   const select = (id: string | null) => { if (!locked.current && !savingMember && !uploading.current.length) chooseRoom(id); };
   const removeQuote = () => { if (quote) clearSideChatQuote(taskId, roomId, quote.id); };
+  // 你问过的一句放回输入框改了再发：问的那句并回草稿、附件并回附件卡（同主会话，见
+  // task-detail/withdrawDraft.ts），带着的主会话选文重新挂成引用——只有一个引用位，原先挂着的那段让位。
+  const reuse = (input: { question: string; quote: string | null; paths: readonly string[] }) => {
+    setDraft(reuseDraftText(input.question, draft));
+    setAttachments((current) => mergeAttachments(attachmentsFromPaths([...input.paths]), current));
+    if (input.quote && input.quote !== quote?.text) stageSideChatQuote(taskId, input.quote);
+    setReused((count) => count + 1);
+  };
   // 「发给主任务」：把一条答完的回答原文交给主任务（主任务在跑就排着）；回执跟着快照回来。
   const forward = async (messageId: string) => {
     if (!roomId) return;
@@ -279,5 +290,5 @@ export function useSideChat(taskId: string) {
       if (current) apply(await chatApi.snapshot(current));
     } catch (reason) { if (alive.current && selected.current === current) setError(String(reason)); }
   };
-  return { rooms, room, snapshot, ready, loaded, connected, error: sendError || error, memberError, memberUncertain, draft, attachments, pending, quote, removeQuote, sending, savingMember, busy, canSend, select, setDraft, setAttachments, setPending, saveMember, send, stop, reload, forward, revoke };
+  return { rooms, room, snapshot, ready, loaded, connected, error: sendError || error, memberError, memberUncertain, draft, attachments, pending, quote, removeQuote, reuse, reused, sending, savingMember, busy, canSend, select, setDraft, setAttachments, setPending, saveMember, send, stop, reload, forward, revoke };
 }

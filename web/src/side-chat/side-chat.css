@@ -24,6 +24,12 @@
 .side-chat-me .task-markdown > :last-child { margin-bottom: 0; }
 .side-chat-me__quote { display: -webkit-box; overflow: hidden; margin: 0 0 4px; border-left: 2px solid var(--line2); padding-left: 8px; color: var(--muted); font-size: var(--t-xs); line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 1; }
 .side-chat-me .task-message-attachments { margin-top: 6px; }
+/* 「改了再发」浮在气泡左边，不占排版高度；指到这一条才出。 */
+.side-chat-me { position: relative; }
+.side-chat-me__reuse { position: absolute; top: 4px; right: 100%; display: grid; width: 22px; height: 22px; margin-right: 4px; place-items: center; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--faint); opacity: 0; cursor: pointer; transition: opacity var(--dur-1) var(--ease-out); }
+.side-chat-me:hover .side-chat-me__reuse,
+.side-chat-me__reuse:focus-visible { opacity: 1; }
+.side-chat-me__reuse:hover { background: var(--raised); color: var(--ink); }
 
 /* 它的话：靠左、不加框；执行过程在正文上方折着 */
 .side-chat-ans .task-execution-block { max-width: 100%; margin-bottom: 6px; font-size: var(--t-xs); }
@@ -79,7 +85,7 @@
 .side-chat-latest { display: flex; align-items: center; gap: 4px; position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-full); padding: 4px 10px; font-size: var(--t-xs); }
 
 @media (hover: none) {
-  .side-chat-ans__acts { opacity: 1; }
+  .side-chat-ans__acts, .side-chat-me__reuse { opacity: 1; }
 }
 
 @media (max-width: 720px) {
