@@ -147,12 +147,30 @@ export function InfoRunRows({ task, sessions, facts }: { task: Task; sessions: S
   );
 }
 
-/** 分支、目录、会话号、resume 命令。后两样可复制。 */
+/** 独立工作区是从哪儿开出来的：起点所在的分支，后面淡淡带上起点提交。还没跑过也有（建任务时就定了）。 */
+export function InfoBaseRow({ task }: { task: Task }) {
+  if (!task.useWorktree) return null;
+  const commit = task.worktreeStartCommit;
+  const base = task.worktreeBaseBranch || task.worktreeBase;
+  if (!base && !commit) return null;
+  const short = commit?.slice(0, 7);
+  return (
+    <InspRow label="基于">
+      <Tipped tip={commit ? `起点提交 ${commit}` : `${base}（还没开工，起点到时再定）`} className="insp-cut">
+        {base ?? <span className="insp-num">{short}</span>}
+        {base && short && !commit!.startsWith(base) && <span className="insp-faint insp-num"> · {short}</span>}
+      </Tipped>
+    </InspRow>
+  );
+}
+
+/** 起点、分支、目录、会话号、resume 命令。后几样可复制。 */
 export function InfoSessionRows({ task, session, notify }: { task: Task; session: Session | undefined; notify: (message: string) => void }) {
-  if (!session) return null;
+  if (!session) return <InfoBaseRow task={task} />;
   const cliId = session.cliSessionId;
   return (
     <>
+      <InfoBaseRow task={task} />
       {session.branch && (
         <InspRow label="分支" className={task.useWorktree ? "" : "is-danger"}>
           <Tipped tip={task.useWorktree ? session.branch : `${session.branch}（没有独立工作区，直接在这条分支上改）`} className="insp-cut">{session.branch}</Tipped>

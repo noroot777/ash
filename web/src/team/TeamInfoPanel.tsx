@@ -2,7 +2,7 @@ import type { Session, Task, TaskListItem } from "@ash/shared";
 import { agentMix } from "@ash/shared/team";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { InspKv, InspRow } from "../inspector/parts.tsx";
-import { InfoRunRows, InfoSessionRows } from "../task-detail/info/InfoRunRows.tsx";
+import { InfoBaseRow, InfoRunRows, InfoSessionRows } from "../task-detail/info/InfoRunRows.tsx";
 import { EMPTY_RUN_FACTS } from "../task-detail/info/infoRunFacts.ts";
 import type { Notify } from "../lib/notify.ts";
 import { teamLeadLabel, teamReviewerLabel, teamWorkerLabel } from "./teamModel.ts";
@@ -84,6 +84,7 @@ export function TeamInfoPanel({ task, workers, sessions, notify }: {
       <InspKv label="工作区">
         {latestSession ? <InfoSessionRows task={task} session={latestSession} notify={say} /> : (
           <>
+            <InfoBaseRow task={task} />
             <InspRow label="分支"><span className="insp-faint">项目当前分支</span></InspRow>
             <InspRow label="目录"><span className="insp-faint">{task.useWorktree ? "尚未记录" : "共享项目目录"}</span></InspRow>
           </>

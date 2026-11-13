@@ -3,7 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { BranchDependency } from "@ash/shared/branch-plan";
 import { db } from "./db/index.js";
 import { tasks, projects, taskBranchReceipts } from "./db/schema.js";
-import { expandHome, isGitRepo, localBranchExists, resolveTaskMergeTarget, resolveWorktreeBranchName } from "./git.js";
+import { expandHome, isGitRepo, localBranchExists, resolveTaskMergeTarget, resolveWorktreeBranchName, symbolicBranch } from "./git.js";
 import { execFileText as exec } from "./exec.js";
 import { withRepoLock } from "./repo-lock.js";
 import type { BranchPlanReads } from "./branch-plan-reads.js";
@@ -107,6 +107,10 @@ export async function initializeBranchPlan(row: typeof tasks.$inferInsert & { id
     : parent ? await finalTarget(repo, parent) : await resolveTaskMergeTarget(repo, base && await localBranchExists(repo, branchName(base)) ? base : null);
   row.worktreeBase = base;
   row.worktreeStartCommit = start;
+  // 起点所在的分支：没指定就是此刻项目检出的那条；指定的是提交号、tag 时记不出分支
+  row.worktreeBaseBranch = base
+    ? await localBranchExists(repo, branchName(base)) ? branchName(base) : null
+    : await symbolicBranch(repo);
   row.mergeTargetBranch = target;
   row.baseTaskId = parent?.id ?? null;
   await exec("git", ["-C", expandHome(repo), "update-ref", baseRef(row.id), start, ""]);

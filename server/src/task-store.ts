@@ -113,6 +113,7 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   useWorktree: r.useWorktree,
   worktreeBase: r.worktreeBase,
   worktreeStartCommit: r.worktreeStartCommit,
+  worktreeBaseBranch: r.worktreeBaseBranch ?? null,
   mergeTargetBranch: r.mergeTargetBranch,
   baseTaskId: r.baseTaskId,
   acceptedSourceCommit: r.acceptedSourceCommit,
