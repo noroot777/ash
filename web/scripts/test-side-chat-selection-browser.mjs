@@ -114,6 +114,36 @@ try {
   await page.getByTestId("outside-target").click();
   await ask.waitFor({ state: "hidden" });
 
+  // 真鼠标双击选词：选区在第二下按下时就成形、浮条随即弹出，紧跟着那一下 click 落在正文上
+  // —— 它是这次选词手势的收尾，不是「点了外面」。只看最后浮条在不在证明不了什么：以前它被
+  // 那一下 click 拆掉，又被 pointerup 排的下一帧碰巧画回来。所以盯的是「弹出来之后一次都
+  // 没被拆过」。三击选段同理。
+  await page.evaluate(() => {
+    window.__toolbarRemovals = 0;
+    new MutationObserver((records) => {
+      for (const record of records) for (const node of record.removedNodes) {
+        if (node instanceof Element && node.classList.contains("conversation-selection-action")) window.__toolbarRemovals += 1;
+      }
+    }).observe(document.body, { childList: true });
+  });
+  for (const clickCount of [2, 3]) {
+    const box = await primary.boundingBox();
+    await page.evaluate(() => { window.__toolbarRemovals = 0; });
+    // 按住 80ms 再松：人手双击第二下按着的那一截里，浮条已经按选区弹出来了。
+    await page.mouse.click(box.x + 40, box.y + box.height / 2, { clickCount, delay: 80 });
+    assert.notEqual(await page.evaluate(() => window.getSelection()?.toString() ?? ""), "", `${clickCount} 击选中了正文`);
+    await ask.waitFor();
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.evaluate(() => window.__toolbarRemovals), 0, `${clickCount} 击收尾的 click 不能把浮条拆掉`);
+    await page.keyboard.press("Escape");
+    await ask.waitFor({ state: "hidden" });
+  }
+  // 会话里的点击归选区管：点正文别处选区收起，浮条跟着撤掉。
+  await selectContents(primary);
+  await ask.waitFor();
+  await primary.click();
+  await ask.waitFor({ state: "hidden" });
+
   // 选文送进主对话框:写进草稿、光标落到引用下面、既有草稿原样保留,且一路不碰侧聊。
   const replySelection = await selectContents(primary);
   await addToReply.waitFor();
