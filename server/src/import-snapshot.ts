@@ -13,6 +13,7 @@
 // 指向源数据根的路径，在副本里指的都是副本自己那一份文件；源数据根以外的路径（项目、worktree、
 // CLI 的配置目录）一个字不动。
 import { DatabaseSync } from "node:sqlite";
+import { DIRECTION_REVOKED_SQL } from "./task-direction-epoch.js";
 
 export type ImportPreparation = {
   /** 每一类被停下来的东西各多少条，给导入完成的提示用。 */
@@ -79,9 +80,6 @@ function holdRuntime(db: DatabaseSync): Record<string, number> {
   run(null, "monitor_reclaim_debts", ["closed_at", "closed_note"],
     `UPDATE monitor_reclaim_debts SET closed_at=?, closed_note=? WHERE closed_at IS NULL`, at, HELD_NOTE);
   run(null, "monitor_pending_calls", ["task_id"], `DELETE FROM monitor_pending_calls`);
-  run(null, "tasks", ["wait_ownership"],
-    `UPDATE tasks SET wait_ownership=json_remove(wait_ownership, '$.deliveredReview.pid', '$.deliveredReview.unitToken')
-     WHERE json_valid(wait_ownership) AND json_extract(wait_ownership, '$.deliveredReview') IS NOT NULL`);
   run(null, "scheduled_messages", ["delivering_since", "delivering_owner"],
     `UPDATE scheduled_messages SET delivering_since=NULL, delivering_owner=NULL WHERE delivering_since IS NOT NULL OR delivering_owner IS NOT NULL`);
 
@@ -104,6 +102,35 @@ function holdRuntime(db: DatabaseSync): Record<string, number> {
     `UPDATE free_review_debates SET status='failed', finished_at=COALESCE(finished_at, ?), updated_at=? WHERE status='running'`, at, at);
   run(null, "free_review_debate_turns", ["status", "ended_at"],
     `UPDATE free_review_debate_turns SET status='error', ended_at=COALESCE(ended_at, ?) WHERE status='speaking'`, at);
+
+  // ── 审查链的执行权限（第 2 轮审查 F1）。审查结算、收尾、修复投递、续审都不认 pid，认的是
+  // 「任务还停在当初那个方向上」+ 库里那一份计划，开机对账（`reconcileRegressionSettlements`、
+  // `reconcileReviewStarts`、`reconcileRegressionFinalizations`，以及之后每 30 秒那一趟）照着计划
+  // 接着做：重投修复、推后续站、清合并审查的工作区 —— 而工作区、仓库都不随数据根搬过来，做的就是
+  // 源实例的事。所以两头一起封：
+  //   · 权限：每个任务的方向世代 +1，导入前记下的方向身份从此一律对不上（审查那一侧见 `reviewIdentityMatches`）；
+  //   · 计划：收尾计划标成已了结（被取代），待补的结算不再补，续审 / 派审在途的凭据全部撤掉。
+  //     有几步（停哨兵、清工作区）不过身份那一关，光推世代挡不住它们，所以计划本身也要封。
+  run(null, "tasks", ["direction_epoch", "active_turn_token", "active_direction_token", "active_direction_version"],
+    `UPDATE tasks SET ${DIRECTION_REVOKED_SQL}`);
+  run("reviews", "regression_evidence", ["finalization"],
+    `UPDATE regression_evidence SET finalization=json_set(json_remove(finalization, '$.runningStep', '$.blockedStep'),
+       '$.completed', json('true'), '$.superseded', json('true'))
+     WHERE json_valid(finalization) AND json_type(finalization) = 'object'
+       AND COALESCE(json_extract(finalization, '$.completed'), 0) = 0`);
+  run(null, "regression_evidence", ["settlement"],
+    `UPDATE regression_evidence SET settlement=json_set(settlement, '$.pending', json('false'))
+     WHERE json_valid(settlement) AND json_extract(settlement, '$.pending') = 1`);
+  run(null, "regression_evidence", ["continuation"],
+    `UPDATE regression_evidence SET continuation=NULL WHERE continuation IS NOT NULL`);
+  // 等待归属里属于审查链的那几格：派审 / 修复投递 / 验收收尾 / 回合归属 / 已送达的审查输入（带源进程 pid）。
+  // 提问和检查点留着 —— 那是任务停在那里等人的状态，续不续由用户在这一份里决定。
+  run(null, "tasks", ["wait_ownership"],
+    `UPDATE tasks SET wait_ownership=json_remove(wait_ownership, '$.start', '$.repairDelivery',
+       '$.acceptedFinalization', '$.turn', '$.deliveredReview')
+     WHERE json_valid(wait_ownership)`);
+  run(null, "tasks", ["wait_ownership"], `UPDATE tasks SET wait_ownership=NULL WHERE wait_ownership='{}'`);
+  run(null, "free_review_rounds", ["dispatch"], `UPDATE free_review_rounds SET dispatch=NULL WHERE dispatch IS NOT NULL`);
 
   // ── 开机或到点会自己动起来的意图：停用，定义留着。
   run("schedules", "schedules", ["enabled"], `UPDATE schedules SET enabled=0 WHERE enabled<>0`);
@@ -147,7 +174,8 @@ function relocatePaths(db: DatabaseSync, sourceRoots: string[], targetRoot: stri
       if (!rows.length) continue;
       const update = db.prepare(`UPDATE "${table}" SET "${name}"=? WHERE ${keyRefs.map((ref) => `${ref}=?`).join(" AND ")}`);
       for (const row of rows) {
-        const next = row.v.replace(pattern, target);
+        // 回调返回字面量：目标路径里的 `$&`、`$$` 之类不能被当成替换模板展开（第 2 轮审查 F4）。
+        const next = row.v.replace(pattern, () => target);
         if (next === row.v) continue;
         update.run(next, ...keys.map((_, i) => row[`k${i}`]));
         relocated++;

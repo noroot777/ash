@@ -239,7 +239,7 @@
     "test:data-root": "tsx scripts/test-data-root.ts",
     "//test:host-ash-mcp": "独立 app 首启替本机 CLI 接 ash MCP：只碰装了的那几家、没登记的补上、已指向这里的认得出、指向别处的一个字节不改并交回改法；node 真正执行的入口、命令、规范化后的完整地址三样对上才算指向这里（只有本机回环别名算同一台）。临时 HOME，不碰真配置。",
     "test:host-ash-mcp": "tsx scripts/test-host-ash-mcp.ts",
-    "//test:import-snapshot": "独立 app 导入旧数据：副本发布前洗掉源实例的进程身份、在飞的活落被打断、自动续跑意图停用（真接管入口对着洗过的库认不出活着的源进程）；源数据根下的路径改到新根，根外一个字不动。",
+    "//test:import-snapshot": "独立 app 导入旧数据：副本发布前洗掉源实例的进程身份、在飞的活落被打断、自动续跑意图停用（真接管入口对着洗过的库认不出活着的源进程）；审查链的方向身份与收尾 / 结算 / 续审计划一并作废（同一串开机对账：没洗的副本会替源实例重投修复，洗过的一行不动）；源数据根下的路径逐字改到新根（目标根带 `$&` 之类也不展开），根外一个字不动。",
     "test:import-snapshot": "tsx scripts/test-import-snapshot.ts",
     "test:duet-attachments": "tsx scripts/test-duet-attachments.ts",
     "//test:duet-gate-version": "收敛闸口的版本号：旧卡片（飞书消息、另一个标签页）点不中新开的那扇门、门继续等；老记录按开门序号补版本；重启补救那一路 stale 在占锁前就回；已结束的讨论带版本一律 409，不被旧卡拉起；请求体非法回 400。",
