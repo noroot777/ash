@@ -22,6 +22,7 @@ import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import type { TaskMonitorsState } from "../monitors/useTaskMonitors.ts";
 import type { InfoRunFacts } from "./info/infoRunFacts.ts";
 import { reviewPanelSources } from "../review/reviewTarget.ts";
+import type { ReviewRetryAction } from "./turnRetry.ts";
 
 export interface TaskInspectorContext {
   nativeWork: NativeWorkInspectorProps;
@@ -50,6 +51,8 @@ export interface TaskInspectorContext {
   activeFilePath: string | null;
   openScmDiff: ScmDiffTarget | null;
   onOpenScmDiff: (target: ScmDiffTarget) => void;
+  /** 此刻能「继续本轮审查」的那一轮和那个动作（任务头那颗图标同一份，见 turnRetry.ts）。 */
+  reviewRetry: ReviewRetryAction | null;
 
   notify: Notify;
 }
@@ -201,7 +204,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     shortcut: "r",
     // 判据跟会话里「这一轮能不能点过来」同一份（review/reviewTarget 的 reviewPanelSources）。
     render: (context) => reviewPanelSources(context.task.workflowMode).has("free")
-      ? <FreeReviewPane task={context.task} onOpenReview={context.onOpenReview} onOpenTask={context.onOpenTask} notify={context.notify} />
+      ? <FreeReviewPane task={context.task} onOpenReview={context.onOpenReview} onOpenTask={context.onOpenTask} notify={context.notify} reviewRetry={context.reviewRetry} />
       : <TaskReviewInspector {...context} />,
   },
   {

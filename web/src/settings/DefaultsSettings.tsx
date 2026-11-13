@@ -9,6 +9,7 @@ import { ColorThemeCard } from "./ColorThemeCard.tsx";
 import { ComposerSendKeyCard } from "./ComposerSendKeyCard.tsx";
 import { HandoffSettings } from "./HandoffSettings.tsx";
 import { InstanceModeCard } from "./InstanceModeCard.tsx";
+import { RemoteAccessCard } from "./RemoteAccessCard.tsx";
 import { SkillScanCard } from "./SkillScanCard.tsx";
 import { SettingsPathText } from "./SettingsPathText.tsx";
 import type { SettingsSection } from "./sections.ts";
@@ -118,6 +119,8 @@ export function DefaultsSettings({ notify, onOpen }: {
         onChangeSeconds={patchSkillRefresh}
         notify={notify}
       />
+      {/* 访问密钥是自用模式才有的东西：多人模式下每个人凭自己的 key 进。 */}
+      {!isMulti && <RemoteAccessCard notify={notify} />}
       {canManageInstance && (
         <InstanceModeCard
           settings={settings}

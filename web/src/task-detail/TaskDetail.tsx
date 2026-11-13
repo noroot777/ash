@@ -118,6 +118,8 @@ export function TaskDetail({
     reviewRetry: freeReviewRetryIdentity(free.state?.reviews),
     sessions: conversation.sessions,
   });
+  // 审查档那一份还挂在审查格结论行和会话尾注上：同一个动作、同一份可用性（见 ReviewRetryAction）。
+  const reviewRetry = turnRetry?.kind === "review" ? { review: turnRetry.review, run: () => retryTurn(turnRetry) } : null;
   const followUps = useMemo(
     () => conversation.items.flatMap((item) => (
       item.kind === "user" && isUserFollowUp(item)
@@ -338,6 +340,7 @@ export function TaskDetail({
             else refreshTask().catch(() => notify("队列已更新，但刷新任务状态失败"));
           },
           onTasksSynced: applySnapshots,
+          reviewRetry,
           onOpenFile: openFileInCenter,
           onOpenFolder: openFolderInCenter,
           activeFilePath: fileView.activePath,
@@ -521,6 +524,7 @@ export function TaskDetail({
                           notify={notify}
                         />
                       ) : undefined}
+                      reviewRetry={reviewRetry}
                       reviews={free.state?.reviews}
                       // 会话里那一句审查结论点过来：审查格展开那一轮（feed-10 / insp-5）。
                       onOpenReviewPanel={(target) => openTab("review", target ? reviewTargetRequest(target) : undefined)}

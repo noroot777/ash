@@ -285,7 +285,7 @@ export async function applyFailPolicy(
   }
   // 打回重做要等这个任务当前这一轮退干净：这些失败策略是在结算钩子里做的，那一刻
   // 任务的单飞锁还锁着，直接 continueTask 会被静默挡回、打回就此石沉大海。
-  continueWhenIdle(task.id, repairPrompt(round), { system: "wake" }, (error) => appendTaskTimeline(
+  continueWhenIdle(task.id, repairPrompt(round), { system: "repair" }, (error) => appendTaskTimeline(
     task.id,
     alertLine(`想把这一站打回重做，但唤醒任务时出错（${error}），请手动续跑。`),
   ));

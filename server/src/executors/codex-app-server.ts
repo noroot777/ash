@@ -30,6 +30,7 @@ import { CodexNativeCommands } from "./codex-native-commands.js";
 import { readCodexTurnTiming } from "./codex-rollout-timing.js";
 import { codexChangeWrites, codexCommandCwd } from "./tool-writes.js";
 import { isGoalExecution } from "@ash/shared/cli-commands";
+import { codexTurnError } from "./model-failure.js";
 /** 一个 app-server 进程承载一个单飞回合，收尾归档后关闭；配置仍来自用户本机。 */
 export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const child = opts.startProcess?.()
@@ -309,7 +310,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     const error = typeof turn?.error?.message === "string" ? turn.error.message : null;
     if (status === "failed" && error) {
       structuredErrors.push(error);
-      push({ kind: "error", message: error });
+      push(codexTurnError(error));
     } else if (status === "interrupted" && !stopRequested && !native.expectedInterruption) {
       push({ kind: "error", message: "Codex 当前回合被意外中断" });
     }

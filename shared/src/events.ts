@@ -12,6 +12,7 @@ import type { ContextUsage, TokenUsage, UsageAccountingMark } from "./usage.ts";
 import type { NativeWorkEvent } from "./native-work.ts";
 import type { MonitorWakeData } from "./monitor-wake.ts";
 import type { TimelineNotice } from "./timeline-notice.ts";
+import type { SystemResume } from "./system-resume.ts";
 
 // ── HITL gates (§7) ──────────────────────────────────────────────────────────
 export type GateName = "G1" | "G2"; // G2 is legacy, retained for historical events
@@ -34,6 +35,14 @@ export type GateRequest = GateAction & { expectedVersion?: number };
 // ── Executor streaming events (§12) ──────────────────────────────────────────
 /** 上下文压缩的三个时刻(见 AgentEvent 的 error 变体)。 */
 export type CompactionPhase = "start" | "done" | "cancelled" | "failed";
+/**
+ * 一条执行故障**确知来自模型 API** 时，执行器在归一那一层挂上的类型（server/src/executors/model-failure.ts）：
+ * context_overflow 对话超出模型长度上限 / quota_exhausted 账户额度、余额或套餐用完 / invalid_request 请求被
+ * 模型拒收 / auth 认证 / rate_limit 短时限流 / unavailable 暂时连不上（5xx、断流、超时）。只有最后两类会自行恢复。`status` = 模型 API 回的 HTTP 状态码，拿不到给 null。
+ * 没有这一项 = 来源不明（进程崩、MCP、CLI 自己的错），读端不许据一个状态码就说成「上游」。
+ */
+export type ModelFailureKind = "context_overflow" | "quota_exhausted" | "invalid_request" | "auth" | "rate_limit" | "unavailable";
+export interface ModelFailure { kind: ModelFailureKind; status: number | null }
 
 export type AgentEvent =
   | { kind: "thinking"; text: string }
@@ -67,7 +76,8 @@ export type AgentEvent =
   // 地方。不带这个标的 system 行是真的说给 agent 听的(「继续(从中断处)」那类),照旧当
   // 回合起点。
   // notice = 时间线旁注是哪一类事（见 timeline-notice.ts），与落盘 sentinel 同一份。
-  | { kind: "system"; text: string; at: string; level?: "notice"; aside?: true; notice?: TimelineNotice }
+  // resume = 这条是系统续跑的开头、是谁让它接着跑的（见 system-resume.ts），与落盘 sentinel 同一份。
+  | { kind: "system"; text: string; at: string; level?: "notice"; aside?: true; notice?: TimelineNotice; resume?: SystemResume }
   // 本回合的 token 用量,由执行器从 CLI 的收尾事件(claude 的 result / codex 的
   // turn.completed)解析。每回合至多一条,恒在该回合的 turnEnd/done 之前。拿不到
   // 用量的 CLI 一条都不发 —— 展示端据此判断「这家报不报账」。
@@ -109,7 +119,9 @@ export type AgentEvent =
   // (被 PreCompact hook 拦下、没有结论)是 `level:"notice"` 的一步,failed 是 affectsTurn=false
   // 的红色异常。展示端只认这个字段,
   // 不再从正文里找那两句引用 —— 正文是智能体说的话,任何一句都可能恰好跟提示同文。
-  | { kind: "error"; message: string; scope?: "session"; level?: "notice"; affectsTurn?: false; compaction?: CompactionPhase }
+  //
+  // model = 这条故障确知来自模型 API 时的类型（见 ModelFailure），只由执行器在认得出来源的那几处挂。
+  | { kind: "error"; message: string; scope?: "session"; level?: "notice"; affectsTurn?: false; compaction?: CompactionPhase; model?: ModelFailure }
   // 常驻会话（team 调度台）专用：一个回合说完了，但进程还活着等下一条消息。
   // 一次性 run() 永远不发这个 —— 它的回合结束就是进程结束(done)。
   // `background` = 这一刻还没跑完的后台子代理 / 工作流个数（只在有的时候带）。单飞据此先不

@@ -23,6 +23,7 @@ import { agentLabel, recordPersistedTurn, sessionRun } from "./conversationTurnP
 import { appendTraceFragments } from "./conversationTraceFragments.ts";
 import { readSideTail, segmentTraceWindow, strayTraceSources } from "./conversationTraceSources.ts";
 import { persistedTurnOutcome } from "./turnFailure.ts";
+import { resumeNoteOf } from "./turnCause.ts";
 
 type AgentItem = Extract<ConversationItem, { kind: "agent" }>;
 
@@ -239,6 +240,7 @@ export function appendPersistedSession(
       // 旧版轮换文案落在用户 .md 里的原文带 Markdown 标记、措辞也不一样；旁注是纯文本
       // 渲染，不归一就会把星号原样露出来（@ash/shared/session-notes）。
       const text = normalizeSessionNoteText(segment.text);
+      const resume = resumeNoteOf(text, segment.resume);
       items.push({
         kind: "event",
         id: `persisted:system:${session.id}:${index}`,
@@ -251,6 +253,7 @@ export function appendPersistedSession(
         verify: isVerifyNote(text, segment.notice),
         aside: asideAt.has(segment.at ?? ""),
         ...(segment.notice ? { notice: segment.notice } : {}),
+        ...(resume ? { resume } : {}),
         ...origin(index),
       });
       // 回合起点跟着**切点**走：切过的地方 trace 已经另成一组，下半截要靠这个起点认领

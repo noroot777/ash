@@ -27,6 +27,13 @@ export type TimelineReviewVerdict = "passed" | "failed" | "inconclusive" | "abor
  * dispute 驳回在等用户裁定。
  */
 export type ReviewWaitReason = "monitor" | "question" | "checkpoint" | "queued" | "busy" | "unsettled" | "dispute";
+/**
+ * 一轮审查为什么没给出结论（服务端在审查回合收尾时按真实情况判，见 server/src/review-no-verdict.ts）。
+ * interrupted = 回合自己中途断了（模型上游连不上、进程异常退出、被看门狗终止）；
+ * unreported = 回合正常收尾了，结论却没上报到 ash。
+ * `reason` 是一句短话（「模型上游连不上（503）」），展示端原样接在轮次后面，不再回头认原文。
+ */
+export interface ReviewNoVerdict { kind: "interrupted" | "unreported"; reason: string }
 
 export type TimelineNotice =
   // ── 里程碑 ──
@@ -44,6 +51,13 @@ export type TimelineNotice =
     /** 未通过时报告里抽得出几条意见。抽不出来就不给。 */
     findings?: number;
   }
+  /**
+   * 自由派审的某一轮没给出结论的原因（紧跟在 inconclusive 那句之后）。`source` = 工作区审查（free）
+   * 还是合并结果审查（merge），那一轮的叫法跟着它。`runId` + `round` 认的是哪一场哪一轮：展示端只在
+   * 这一轮此刻还能「继续本轮审查」时给它挂那个动作。`source` 缺省 = 更早一版写下的记录，那时只有
+   * 工作区审查会写这一条。
+   */
+  | { kind: "review.no_verdict"; source?: "free" | "merge"; runId: string; round: number; cause: ReviewNoVerdict }
   /** 验收做完了。`target` = 合进了哪条分支；`noCommit` = 只合进了工作区、等用户自己提交；`tag` = 只打了标签没合并。 */
   | { kind: "accept.done"; target: string | null; noCommit?: boolean; tag?: string | null }
   // ── 要用户拍板（明面）──
@@ -97,7 +111,7 @@ export type TimelineNotice =
 export type TimelineNoticeKind = TimelineNotice["kind"];
 
 const KINDS: ReadonlySet<string> = new Set<TimelineNoticeKind>([
-  "review.verdict", "accept.done", "review.dispute", "review.start", "review.repair", "stage",
+  "review.verdict", "review.no_verdict", "accept.done", "review.dispute", "review.start", "review.repair", "stage",
   "review.reserved", "review.unreserved", "review.launch",
   "monitor.started", "monitor.finished", "monitor.released", "monitor.handed", "complete.held", "review.waiting",
   "command.output", "receipt", "alert",

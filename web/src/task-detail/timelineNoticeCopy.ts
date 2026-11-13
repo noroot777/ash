@@ -162,6 +162,11 @@ function typedView(notice: TimelineNotice, raw: string): NoticeView {
       // 没能开始的那一轮不算「出了结论」，是出了岔子：同样进尾注，只是归明面那一档。
       return view(notice.verdict === "aborted" ? "alert" : "milestone", reviewVerdictTone(notice.verdict), "review", "review", text, raw);
     }
+    // 紧跟「没有给出结论」那句之后的原因：说它怎么没的（「第 1 轮审查中断：模型上游连不上（503）」），
+    // 经过、报告写没写、下一步都在原文里点开看。归明面：要用户知道、多半还要用户点「继续本轮审查」。
+    case "review.no_verdict":
+      return view("alert", "warn", "other", "review",
+        `${reviewRoundName(notice.source ?? "free", notice.round)}${notice.cause.kind === "interrupted" ? "中断" : "没上报结论"}：${notice.cause.reason}`, raw);
     case "accept.done":
       return accepted(raw, notice.target, !!notice.noCommit, notice.tag);
     // 不再靠认「现在由你裁定」那几个字找到它。
