@@ -187,24 +187,6 @@ async function untilEmpty(empty: () => boolean, within: number): Promise<boolean
   }
 }
 
-/**
- * 把 ash 自己写的一段文本**逐行**打上 `[ash] ` 标记。
- *
- * 不塞进 appendGateLog 里统一做（合并 main 时的决定）：main 那一侧往日志里内联「被收掉时
- * 的现场」走的是同一个函数，而现场要的就是原貌，替它加前缀等于改证据。所以这件事只由
- * **归类那一层自己写结论时**调用。
- *
- * 为什么归类那段非得逐行（第 8 轮审查 F1 之后被回归抓到的真 bug）：归类的第三件必要条件是
- * 「整份日志里除了 ash 的注记和 runner 自己的报错，没有别的程序写过东西」。可结论本身就是
- * 多行的（`String(error)` 还会带堆栈）。只给第一行打标记，后面几行就会被**自己**当成「别的
- * 程序写的」，于是同一份日志再归类一次就从「核到那个名字不在」退成「只敢报观察」。
- */
-export function stampAshNote(text: string): string {
-  return text.split("\n")
-    .map(line => line.trim().length === 0 || line.trimStart().startsWith("[ash]") ? line : `[ash] ${line}`)
-    .join("\n");
-}
-
 /** 往门禁日志追加一段。返回**有没有真写进去** —— 调用方要据此记账时不能想当然。 */
 export function appendGateLog(logPath: string, text: string): boolean {
   try {
@@ -226,22 +208,6 @@ export function acceptGateLogTail(logPath: string, bytes = ACCEPT_GATE_TAIL_BYTE
   if (!extra) return readTail(logPath, bytes).text;
   const room = Math.max(400, bytes - Buffer.byteLength(extra));
   return `${readTail(logPath, room).text}\n${extra}`;
-}
-
-/**
- * 日志**开头**若干字节。失败归类问的是「命令有没有来得及干活」，那只在开头看得出来
- * （accept-gate-miss.ts 的锚定判据）；尾巴那一份答不了这件事。
- */
-export function acceptGateLogHead(logPath: string, bytes: number): string {
-  try {
-    if (!existsSync(logPath)) return "";
-    const fd = openSync(logPath, "r");
-    try {
-      const buf = Buffer.alloc(Math.min(bytes, statSync(logPath).size));
-      readSync(fd, buf, 0, buf.length, 0);
-      return buf.toString("utf8");
-    } finally { closeSync(fd); }
-  } catch { return ""; }
 }
 
 /**

@@ -11,12 +11,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 不匹配、各重跑一次 —— 那时「依赖没换过」证明不了。
   "ALTER TABLE accept_gate_runs ADD COLUMN source_ambient TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN execution_mode TEXT",
-  // 门禁红了之后的归类结论(「命令在快照里不存在」那一类的出路)。旧行 NULL = 当初没归类过。
-  "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN entry_probe TEXT",
-  "ALTER TABLE accept_gate_runs ADD COLUMN miss_attribution TEXT",
-  // 上面那两个结论是哪一代判据生成的。旧行 NULL = 旧代,读侧不拿它当当前事实(第 2 轮审查 F1)。
-  "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis_generation TEXT",
   // 结算认领下来、还没办完的那份结论。旧行 NULL = 没有欠着的事（见 schema-accept-gate.ts）。
   "ALTER TABLE accept_gate_runs ADD COLUMN settlement TEXT",
   // 合并预览档的两样事实(见 schema-accept-gate.ts 同名列)。旧行 NULL = 分支快照。

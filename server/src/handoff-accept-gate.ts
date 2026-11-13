@@ -9,14 +9,9 @@ import { HandoffError, type HandoffManifest } from "./handoff-types.js";
 type GateRow = typeof acceptGateRuns.$inferSelect;
 export type HandoffGateRun = Pick<GateRow, "id" | "command" | "status" | "exitCode" | "failure" | "sourceCommit"
   | "targetBranch" | "targetCommit" | "fastForward" | "startedAt" | "finishedAt" | "handoffAt" | "handoffError">
-  // diagnosis 可选：旧 manifest 没有这个字段，迁入后按 null 处理（没归类过）。不带上它的话
-  // 迁入页面仍说「出路见下面那段结论」而下面什么都没有（第 1 轮审查 N2）。
-  & { executionMode?: GateRow["executionMode"]; diagnosis?: GateRow["diagnosis"];
-    entryProbe?: GateRow["entryProbe"]; missAttribution?: GateRow["missAttribution"];
-    // 那段结论是哪一代判据生成的。**必须跟着搬**：不搬的话迁入后全变 null=旧代,一份当代
-    // 的结论会在对端被当成失效历史;而对端版本比本机老时,它本机的闸照旧认不出我们的代号,
-    // 两头都停在保守的那一边(第 2 轮审查 F1)。旧 manifest 没这个字段 → null → 按旧代待。
-    diagnosisGeneration?: GateRow["diagnosisGeneration"] };
+  // entryProbe 可选：旧 manifest 没有这个字段，迁入后按 null 处理（没核过）。卡片上入口那句话
+  // 由它现算，不带上的话迁入之后那句话就没了。
+  & { executionMode?: GateRow["executionMode"]; entryProbe?: GateRow["entryProbe"] };
 const validId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 
 const ACCEPTANCE_FACTS = ["acceptedSourceCommit", "acceptedTargetBranch", "acceptedBaseCommit", "acceptedMergeCommit",
@@ -49,9 +44,9 @@ export function validateGatePayload(manifest: HandoffManifest): void {
       || typeof run.command !== "string" || typeof run.startedAt !== "string"
       // `command_missing` 这个类别已经撤掉了(第 10 轮审查 F1),但**旧机器导出的 payload 里
       // 可能还有**:读得进来、不许卡住导入;产生端再也不会写它。
-      || ![null, "exit_code", "timeout", "spawn_failed", "server_restarted", "canceled", "source_changed", "process_unconfirmed", "ownership_waived", "command_missing"].includes(run.failure)
+      || ![null, "exit_code", "timeout", "spawn_failed", "server_restarted", "canceled", "source_changed", "process_unconfirmed", "ownership_waived", "entry_missing", "command_missing"].includes(run.failure)
       || (run.exitCode != null && !Number.isInteger(run.exitCode))) throw new HandoffError("acceptGateRuns 记录非法");
-    for (const field of ["sourceCommit", "targetBranch", "targetCommit", "finishedAt", "handoffAt", "handoffError", "diagnosis", "entryProbe", "missAttribution", "diagnosisGeneration"] as const) {
+    for (const field of ["sourceCommit", "targetBranch", "targetCommit", "finishedAt", "handoffAt", "handoffError", "entryProbe"] as const) {
       if (run[field] != null && typeof run[field] !== "string") throw new HandoffError(`acceptGateRuns.${field} 非法`);
     }
     if (run.fastForward != null && typeof run.fastForward !== "boolean") throw new HandoffError("acceptGateRuns.fastForward 非法");
@@ -78,8 +73,7 @@ export async function collectGateRuns(taskId: string): Promise<HandoffGateRun[]>
     failure: row.failure, sourceCommit: row.sourceCommit, targetBranch: row.targetBranch, targetCommit: row.targetCommit,
     fastForward: row.fastForward, startedAt: row.startedAt, finishedAt: row.finishedAt,
     handoffAt: row.handoffAt, handoffError: row.handoffError, executionMode: row.executionMode,
-    diagnosis: row.diagnosis, entryProbe: row.entryProbe, missAttribution: row.missAttribution,
-    diagnosisGeneration: row.diagnosisGeneration }));
+    entryProbe: row.entryProbe }));
 }
 
 /**
@@ -104,13 +98,12 @@ export async function replaceGateRuns(store: Pick<typeof db, "select" | "delete"
     if (existing && existing.taskId !== manifest.task.id) throw new HandoffError("门禁运行身份与本机另一任务冲突", 409);
   }
   await store.delete(acceptGateRuns).where(eq(acceptGateRuns.taskId, manifest.task.id));
+  // 旧对端导出的 payload 里可能还有已经退役的列（db/migrations.ts 的 RETIRED_COLUMNS）：insert 只按
+  // 表里现有的列取值，多出来的键不落库。
   if (rows.length) await store.insert(acceptGateRuns).values(rows.map(row => ({
     ...row, taskId: manifest.task.id, projectId: manifest.targetProjectId,
     cwd: "（跨机迁入的历史快照，当前机器不可重跑）", logPath: transferredLogPath(manifest, row.id),
-    diagnosis: row.diagnosis ?? null,
     entryProbe: row.entryProbe ?? null,
-    missAttribution: row.missAttribution ?? null,
-    diagnosisGeneration: row.diagnosisGeneration ?? null,
     sourceFingerprint: null, pid: null, pidStartedAt: null, processPending: false, acceptOptions: null,
   })));
 }

@@ -162,14 +162,9 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, a
       // 交回去的是那一行，照旧版就会把一条真红说成「不会为此改代码」。
       const handed = (await api.rehandOffAcceptGate(task.id)).gate;
       await reload();
-      // 提示要跟这一次交回去的那份输入对上（第 1 轮审查 N3）：两边说反了，用户看到的是两句
-      // 相反的话。「不会为此改代码」这句**已经没有了**（第 10 轮审查 F1 撤掉了免修那副面孔），
-      // 所以这里只按归因说它第一步会先看什么。归因非空 = 起跑前核到那个名字不在这份快照里。
-      notify(handed.missAttribution === null
-        ? "已把这条红交回给智能体去修；修完再点验收，会自动重跑一遍这条命令"
-        : handed.missAttribution === "mine"
-          ? "已把这条结论交回给智能体；结论指向是这次改动把命令弄没的，它会先核这件事"
-          : "已把这条结论交回给智能体；结论说这条命令起跑前就解析不出来，它会先核这件事");
+      notify(handed.failure === "entry_missing"
+        ? "已交回给智能体：它会先看入口为什么不在被测的树里；修完再点验收，会自动重跑一遍这条命令"
+        : "已把这条红交回给智能体去修；修完再点验收，会自动重跑一遍这条命令");
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -294,25 +289,6 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, a
           {state.baselineBlock && !running && <p role="alert">{state.baselineBlock}</p>}
         </div>
       )}
-      {shown?.diagnosis && (
-        <div className="accept-gate-diagnosis" role="note">
-          <span>这条红是怎么来的</span>
-          {shown.diagnosis}
-        </div>
-      )}
-      {/*
-        旧判据那一代的结论。**不能当当前事实摆**（第 2 轮审查 F1）：它当时可能把一条真跑过
-        的红说成「一行都没跑到、不用改代码」。原文保留是为了让人核对当时到底说了什么，所以
-        标题和第一句都先把失效说破，再给原文。
-      */}
-      {shown?.legacyDiagnosis && (
-        <div className="accept-gate-diagnosis is-obsolete" role="note">
-          <span>历史结论（已失效，不是当前判断）</span>
-          {`这段是旧版本按已经撤回的判据写的，它可能把真跑过的红说成「没跑起来、不用改代码」。只留着给你核对当时的说法，请以日志为准。
-
-${shown.legacyDiagnosis}`}
-        </div>
-      )}
       {shown?.logTail && (
         <div className="accept-gate-log">
           <span>日志末尾{receipt?.run ? "（本次验收凭据那一次）" : settled || idle ? "（历史记录，不是本次凭据）" : ""}</span>
@@ -367,8 +343,7 @@ ${shown.legacyDiagnosis}`}
             {running && running.status !== "running" && running.processPending && <AcceptGateForceRelease key={running.id} taskId={task.id} runId={running.id} reload={reload} notify={notify} />}
             {state.command && latest?.status === "failed" && !running && !settled && !state.unavailable && (
               <button type="button" className={latest.handoff?.error ? "is-primary" : ""} disabled={busy || disabled} onClick={() => void handOff()}>
-                <ArrowUUpLeft size={13} />{latest.handoff && !latest.handoff.error ? "再交给智能体一次"
-                  : latest.missAttribution ? "把结论交给智能体" : "交给智能体去修"}
+                <ArrowUUpLeft size={13} />{latest.handoff && !latest.handoff.error ? "再交给智能体一次" : "交给智能体去修"}
               </button>
             )}
             {shown && (
@@ -420,12 +395,9 @@ function heading(
     if (!latest.stale) return "验收前置命令已通过";
     return latest.command !== state.command ? "上次通过的不是现在这条命令" : "上次通过的不是现在这棵树";
   }
-  // 「起跑前核到这份快照里没有它」跟「某条断言红了」在卡上要分开说：出路完全不同，而原先
-  // 两者都只写「验收前置命令未通过」，于是用户只能去翻 npm 的原始报错自己猜。
-  //
-  // **但不说「没能启动」**（第 10 轮审查 F1）：那句话需要能绑到真跑那一次执行身份上的证据，
-  // ash 没有。所以这儿只陈述起跑前读到的那件事，归因非空就是它。
-  if (latest.missAttribution) return "验收前置命令没过：起跑前核到这份快照里没有它";
+  // 入口是具体文件、快照里没有它：命令没起跑（server/src/accept-gate-entry.ts）。跟「某条断言
+  // 红了」出路完全不同，标题就得说出来，不让人去翻原始报错自己猜。
+  if (latest.failure === "entry_missing") return "验收前置命令没有起跑：入口不在被测的树里";
   return `验收前置命令${ACCEPT_GATE_STATUS_LABELS[latest.status]}`;
 }
 
@@ -475,36 +447,14 @@ function detail(
       : latest.handoff.error
         ? `已经试过把日志交回这个任务的智能体，但没叫醒它（${latest.handoff.error}）——那条红现在没人在管。`
         : "日志已经交回这个任务的智能体去修了。";
-  // 起跑前核到这份快照里没有它的时候，用户最容易做的事是去按「重跑一次」。那一问的答案
-  // 这儿**不预测**（见下面那段注释），但要把「出路在结论里」说破，否则他只会按着按钮空转。
-  if (latest.missAttribution) {
-    // 交过去的面孔只有一副（去定位、去修，见 accept-gate-messages.ts），所以这句话只说
-    // 它第一步会先核什么。「被要求不要改代码」那句已经撤掉了（第 10 轮审查 F1）。
-    const charge = latest.missAttribution === "mine"
-      ? "（结论指向是这次改动把它弄没的，它会先核这件事）"
-      : "（它会先核这件事：结论证明不了这条命令一行都没跑到）";
-    const told = !latest.handoff ? "结论还没交给智能体。"
-      : latest.handoff.error ? `已经试过把结论交回这个任务的智能体，但没叫醒它（${latest.handoff.error}）。`
-        : `结论已经交回这个任务的智能体了${charge}。`;
-    // **这里不摆出路**（第 1 轮审查 F4）：出路取决于「目标分支上到底有没有这条命令」，
-    // 而那件事只有下面那段结论核对过。在这儿补一句「合进来就行」，就是一句没核过的保证。
-    // 同理，末句只说「核到哪一步写在结论里」，不替它声称两边都核过了。
-    //
-    // **不预测重跑的结果**（第 6 轮审查 N1 实测）：这一档说的是「起跑前核过、这份快照里没有
-    // 它」，而那一问的答案还取决于 runner 的有效配置 —— 审查只改了隔离的那份用户 `.npmrc`
-    // （仓库、命令、依赖一个字没动），同一条命令就从红变绿；而 `stale` 比的是命令加源码/
-    // 依赖指纹（accept-gate-source.ts），里面既没有用户 npmrc 也没有进程环境，照旧报「没过
-    // 期」。指纹盖不住的输入就不能拿它当「输入没变」的证明，所以这儿只陈述当次那件事，剩下
-    // 的留给下一次真的执行。
-    const changed = latest.command !== state.command
-      ? `那次跑的是另一条命令（\`${latest.command}\`）。现在这条 \`${state.command}\` 在这棵树上一次都没跑过。`
-      : latest.stale ? "当前源码或依赖输入已经变了。" : "";
-    const predicts = `${changed}再点验收会重新执行这条命令，不会复用这次的结论；`
-      + "出路以下面那段结论为准 —— 它写了核到哪一步、哪几件没核出来。";
-    return `${summarizeAcceptGate(latest)}。这次没有合并、也没有清理，目标分支一动没动。${told}${predicts}`;
-  }
-  return `${summarizeAcceptGate(latest)}。这次没有合并、也没有清理，目标分支一动没动。${handoff}`
-    + (latest.status === "failed" ? "重新点「验收通过」会重新执行命令，即使代码没有变化，也不会直接复用这次失败；确认这条红跟这次改动无关，也可以明确选择跳过。" : "重新点验收会从头跑一遍。");
+  // 入口那句话（起跑前核到的事实）就放在状态这一行里，紧跟摘要：核得准的那一档它本身就是原因，
+  // 摘要不再重复；核不准的那一档它跟下面的日志末尾并排，结论留给读的人。
+  const missing = latest.failure === "entry_missing";
+  const said = missing && latest.entryNote ? latest.entryNote
+    : `${summarizeAcceptGate(latest)}。${latest.entryNote ?? ""}`;
+  return `${said}这次没有合并、也没有清理，目标分支一动没动。${handoff}`
+    + (missing ? "重新点「验收通过」会再核一遍入口；也可以明确选择跳过。"
+      : latest.status === "failed" ? "重新点「验收通过」会重新执行命令，即使代码没有变化，也不会直接复用这次失败；确认这条红跟这次改动无关，也可以明确选择跳过。" : "重新点验收会从头跑一遍。");
 }
 
 /**

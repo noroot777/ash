@@ -44,7 +44,7 @@ export { recoverAcceptGates } from "./accept-gate-recover.js";
 export { rehandOffAcceptGate } from "./accept-gate-handoff.js";
 export type { AcceptGateChoices } from "./accept-gate-handoff.js";
 import type { AcceptGateChoices } from "./accept-gate-handoff.js";
-import { encodeGateEntryProbe, probeGateEntry } from "./accept-gate-entry.js";
+import { encodeGateEntryProbe, entryCertainlyMissing, gateEntryNote, probeGateEntry, type GateEntryProbe } from "./accept-gate-entry.js";
 import { gateBaselineMatches, gateBaselineNotice, gateDriftBesidesTree, resolveGateBaseline, type GateBaselineBlock,
   type GateBaselinePlan } from "./accept-gate-baseline.js";
 import { handOffConflict } from "./accept-conflict.js";
@@ -312,16 +312,11 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
       physical = encodePhysical(await snapshotPhysical(plan.repoPath, plan.targetBranch, plan.baseline.previewBase, tree, snapshotCwd,
         plan.source.dependencies, await snapshotMaterialization(snapshotCwd)));
     }
-    // **起跑前**核一眼这条命令点名要跑的东西在不在这份快照里。「测试压根没启动」这个结论
-    // 整副面孔（不要改代码 / 出路是合分支或跳过）都压在这份事实上（第 2 轮审查 F1），所以
-    // 它只能是起跑那一刻的事实 —— 跑完之后再核拿到的是跑完之后的状态。
-    //
-    // 一次定死，之后只读不重算。它是**纯读**的（看文件在不在、读一份 manifest 的文本），
-    // 不起任何进程：第 7 轮那版把两条 npm 查询插进这一次执行里去问 runner 自己，第 8 轮审查
-    // 实测撤掉（答的是查询那一次的状态，还替用户多跑了两次项目代码）。因此它**不够**单独
-    // 授权「测试没启动」，只是三件必要条件之一 —— 另两件在 accept-gate-miss.ts。
+    // **起跑前**核一眼这条命令点名要跑的东西在不在这份快照里（纯读，判据见 accept-gate-entry.ts）。
+    // 一次定死、跟着这一行落盘，之后只读不重算：跑完之后再核拿到的是跑完之后的状态。
+    const entry = await probeWithTarget(snapshotCwd, plan);
     await db.update(acceptGateRuns)
-      .set({ entryProbe: encodeGateEntryProbe(probeGateEntry(snapshotCwd, plan.command)), previewCommit,
+      .set({ entryProbe: encodeGateEntryProbe(entry), previewCommit,
         // 凭据记快照**实际**用的那一份，不是判定那一刻读到的：两者之间项目改了配置，记下的就是测过的。
         ...(plan.baseline.previewBase ? { previewMaterialization: await snapshotMaterialization(snapshotCwd), previewPhysical: physical } : {}) })
       .where(eq(acceptGateRuns.id, runId));
@@ -329,6 +324,15 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     if (prepared?.status !== "running") {
       await cleanupGateSnapshot(taskId, runId);
       return prepared ? gateView(prepared) : null;
+    }
+    // 入口是一个具体文件、快照里没有它：这条命令不可能跑起来，**不起跑**，直接收成一条带原因的红。
+    // 走跟其它红同一条结算（时间线、交回修复、刷新后卡片上那句话都由它落盘）。
+    if (entryCertainlyMissing(entry)) {
+      appendGateLog(logPath, `[ash] ${gateEntryNote(entry, "failed")}\n`);
+      await stopGateRun(runId);
+      await settleGate(runId, { status: "failed", exitCode: null, failure: "entry_missing" });
+      const blocked = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
+      return blocked ? gateView(blocked) : null;
     }
     if (plan.choices.reviewAuthority) {
       const { withReviewAuthority } = await import("./review-ownership.js");
@@ -374,6 +378,18 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     await noteIfStillAlive(taskId, logPath, await stopGateRun(runId));
   }
   return row ? gateView(row) : null;
+}
+
+/**
+ * 起跑前那份入口事实。核得准、又不在快照里的时候，顺带核一眼它在目标分支上有没有（卡片上那句话的
+ * 后半句）—— 只读那一个文件的树条目，读不出来就如实记 null。
+ */
+async function probeWithTarget(snapshotCwd: string, plan: PendingStart): Promise<GateEntryProbe | null> {
+  const probe = probeGateEntry(snapshotCwd, plan.command);
+  if (!entryCertainlyMissing(probe) || !plan.targetBranch || !plan.targetCommit) return probe;
+  const has = await readOnlyGit(plan.repoPath, ["ls-tree", plan.targetCommit, "--", probe!.file])
+    .then(({ stdout }) => / blob /.test(stdout), () => null);
+  return { ...probe!, target: { branch: plan.targetBranch, has } };
 }
 
 /** 登记了却没能发射（主流程中途出错）时把登记撤掉，别留一条永远不跑的意图。 */

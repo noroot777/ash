@@ -1,7 +1,7 @@
 import { and, desc, eq, or } from "drizzle-orm";
 import { gateConfinementUnavailable, gateExecutionNotice, gateScopeNotice } from "./accept-gate-confinement.js";
 import { readGateLaunch } from "./accept-gate-launch.js";
-import { ACCEPT_GATE_DIAGNOSIS_GENERATION, normalizeAcceptGateBaseline, normalizeAcceptGateCommand, normalizeAcceptGateFailure, type AcceptGateBasis, type AcceptGateBasisMode, type AcceptGateState, type AcceptGateStatus, type AcceptGateView } from "@ash/shared/accept-gate";
+import { normalizeAcceptGateBaseline, normalizeAcceptGateCommand, normalizeAcceptGateFailure, type AcceptGateBasis, type AcceptGateBasisMode, type AcceptGateState, type AcceptGateStatus, type AcceptGateView } from "@ash/shared/accept-gate";
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects, tasks } from "./db/schema.js";
 import { gateLogReadable } from "./accept-gate-diagnosis.js";
@@ -12,6 +12,7 @@ import { existingTaskWorkspacePath, taskWorkspace } from "./task-workspace.js";
 import { gateDependencies, gateSnapshotPath, gateSourceMatches, readGateSource } from "./accept-gate-source.js";
 import { gateBaselineMatches, resolveGateBaseline } from "./accept-gate-baseline.js";
 import { decodePhysical, type GatePhysical } from "./accept-gate-physical.js";
+import { decodeGateEntryProbe, gateEntryNote } from "./accept-gate-entry.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
@@ -32,22 +33,12 @@ export async function gateMergeSource(repoPath: string, basis: Pick<TaskRow, "ac
 }
 
 /**
- * 一行记录投影成界面/交接/回执共用的那一份。**所有消费点都从这里拿**，所以结论的
- * 有效性闸只需要设在这一处（第 2 轮审查 F1）。
+ * 一行记录投影成界面/交接/回执共用的那一份。**所有消费点都从这里拿。**
  *
- * 那一闸是这么回事：第 10 轮撤回了「这条命令一行都没跑到、不要为它改代码」这个结论，但
- * 撤回只管得住生成侧 —— 撤回**之前**落盘的那些结论，刷新页面、在验收台上再交一次、跨机
- * 迁入时照旧原样端出来，于是一句已经被证伪的话继续当今天的事实用。所以这里按代号分流：
- *
- *  - 代号是当代的 → 结论与归因照常承担当前事实；
- *  - 代号不是当代的（含旧行的 null）→ 结论降到 `legacyDiagnosis`（只给人查证，带失效说明，
- *    不进交给 agent 的正式输入），归因一并作废 —— 它跟那段文字是同一次推断出来的。
- *
- * `failure` 另外归一：撤掉的 `command_missing` 这类值本身就是旧判据的结论，认不出就报
- * 「未通过、没有具体分类」，而 exit_code / timeout 是真实观测，不受代号影响。
+ * `failure` 归一：撤掉的 `command_missing` 这类值本身就是旧判据的结论，认不出就报
+ * 「未通过、没有具体分类」。入口那句话由落盘的起跑前事实现算，不另存一份结论。
  */
 export function gateView(row: GateRow): AcceptGateView {
-  const current = row.diagnosisGeneration === ACCEPT_GATE_DIAGNOSIS_GENERATION;
   return {
     executionNotice: gateScopeNotice(row.executionMode ?? readGateLaunch(row.logPath)?.confinementId),
     id: row.id,
@@ -57,12 +48,7 @@ export function gateView(row: GateRow): AcceptGateView {
     status: row.status as AcceptGateStatus,
     exitCode: row.exitCode ?? null,
     failure: normalizeAcceptGateFailure(row.failure),
-    diagnosis: current ? row.diagnosis ?? null : null,
-    legacyDiagnosis: current ? null : row.diagnosis ?? null,
-    // 归因同样只在当代有效；当代里认不出的值一律当 unknown —— 旧记录里可能存着已经撤掉的
-    // `not-mine`（第 10 轮审查 F2），而 unknown 的意思正是「先核一眼」，跟撤掉它的理由同向。
-    missAttribution: !current ? null
-      : row.missAttribution === "mine" ? "mine" : row.missAttribution ? "unknown" : null,
+    entryNote: gateEntryNote(decodeGateEntryProbe(row.entryProbe), row.status),
     startedAt: row.startedAt,
     finishedAt: row.finishedAt ?? null,
     sourceCommit: row.sourceCommit ?? null,

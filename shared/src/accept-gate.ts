@@ -57,30 +57,14 @@ export function normalizeAcceptGateBaseline(value: unknown): AcceptGateBaseline 
 }
 
 
-/** 没通过时具体是哪一种没通过。日志之外,用户第一眼读的就是这个。 */
 /**
- * 起跑前核到「这条命令点名的东西不在这份快照里」之后,**这件事看起来是不是这次改动造成的**。
+ * 没通过时具体是哪一种没通过。日志之外,用户第一眼读的就是这个。
  *
- * 只有两档,而且**两档都不免修**(第 10 轮审查 F2):
- *  - `mine`    起跑前核的那份定义,开工基线上有、这份快照里没了 → 线索指向这次改动,去核、去改;
- *  - `unknown` 其余全部(基线上也没有、目标 ref 读不到、非 git 快照、超预算…)→ 先核归因。
- *
- * **没有 not-mine 这一档**:它曾经用来授权「不要为这件事改任何代码」,而授权它的是**静态读**
- * 出来的那份定义 —— 两次静态读到同一个对象,证明不了 runner 真去找的就是那一份(PATH 上的
- * 同名包装器、`.npmrc`、workspace 配置都能把落点挪走)。证明不了就不许免修,所以这一档整个
- * 撤掉了:存在性只当线索,责任保留为未知。经过见 server/src/accept-gate-miss.ts 的文件头。
+ * `entry_missing` 是唯一**没起跑**的那一档:命令点名的入口是一个具体文件,起跑前核到被测的
+ * 这棵树里没有它(server/src/accept-gate-entry.ts)。npm 脚本那种核不准,照常起跑,不进这一档。
+ * 旧记录里可能还存着撤掉的 `command_missing`,读的那几处都做了兜底。
  */
-export type AcceptGateMissAttribution = "mine" | "unknown";
-
-/**
- * 没通过时具体是哪一种没通过。
- *
- * **没有「命令不存在」这一档**(第 10 轮审查 F1):真跑那一次有没有启动,得有能绑到这次执行
- * 身份上的证据才敢说,而起跑前的纯读 + 日志形状都给不出来。命令解析不出来仍然会得到一段
- * 结论(`diagnosis`),但失败类别照实留在它真实的那一档上(多半是 `exit_code`)。
- * 旧记录里可能还存着 `command_missing`,读的那几处都做了兜底。
- */
-export type AcceptGateFailure = "exit_code" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived";
+export type AcceptGateFailure = "exit_code" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived" | "entry_missing";
 
 export const ACCEPT_GATE_STATUS_LABELS: Record<AcceptGateStatus, string> = {
   running: "正在跑",
@@ -99,26 +83,13 @@ export const ACCEPT_GATE_FAILURE_LABELS: Record<AcceptGateFailure, string> = {
   source_changed: "测试修改了被测源码，不能用结果为原版本放行",
   process_unconfirmed: "尚未取得整次运行退出的证据",
   ownership_waived: "已确认风险并强制释放，未取得整次退出证据",
+  entry_missing: "入口不在被测的树里，没有起跑",
 };
-
-/**
- * 归类结论(`diagnosis` / `missAttribution`)是**哪一代判据**生成的。
- *
- * 为什么要这个东西(第 2 轮审查 F1):第 10 轮撤回了「这条命令一行都没跑到、不要为它改代码」
- * 那个结论,可**撤回只管得住生成侧** —— 撤回之前已经落盘的那些结论,刷新页面、再交一次给
- * agent、跨机迁入时照旧原样端出来,一句已经被证伪的话继续当今天的事实用。
- *
- * 所以结论落盘时把代号一起记下,读侧只认当代那一份:代号不匹配(含旧行的 null)一律**不承担
- * 当前结论**,原文只作为历史放进 `legacyDiagnosis`,界面上带失效说明给人查证。
- *
- * **改了结论的授权判据,就要把这个代号往前挪** —— 它是让旧结论自动失效的唯一机关。
- */
-export const ACCEPT_GATE_DIAGNOSIS_GENERATION = "2026-10-27-clue";
 
 /**
  * 把存下来的 failure 归一到**当前**的联合里。认不出的(撤掉的 `command_missing`、将来再撤的
  * 任何一档)一律 null = 「未通过,没有具体分类」 —— 旧类别本身就是旧判据下的结论,不能靠
- * 字段还在就继续当事实(第 2 轮审查 F1)。exit_code / timeout 这些是真实观测,照旧保留。
+ * 字段还在就继续当事实。exit_code / timeout 这些是真实观测,照旧保留。
  */
 export function normalizeAcceptGateFailure(value: unknown): AcceptGateFailure | null {
   // `Object.hasOwn` 而不是 `in`:`in` 连原型链一起认,`"toString"` 这种会被当成合法类别。
@@ -157,26 +128,11 @@ export interface AcceptGateView {
   /** 日志末尾若干行,够在界面上一眼看出红在哪 */
   logTail: string;
   /**
-   * 这一次红了之后的**归类结论**:为什么它不是「代码红了」、目标分支上是什么情形、
-   * 出路有哪几条。null = 没有可归类的结论(普通的测试红、或认不出)。
-   *
-   * 必须落盘而不是现算:用户看到这张卡可能已经是几小时后、刷新过好几次,而那几条 git
-   * 事实(目标分支当时是哪个提交)此后还会变 —— 现算出来的话,结论会跟着漂。
+   * 入口那件事的一句话(起跑前核到点名的入口不在被测的树里时才有):核得准的那一档说它不在、
+   * 没起跑、目标分支上有没有;核不准的那一档只陈述起跑前看到的,不下结论。null = 没有可说的。
+   * 由落盘的起跑前事实现算,刷新后照样在。
    */
-  diagnosis?: string | null;
-  /**
-   * **旧代号那一版**生成的结论原文(见 ACCEPT_GATE_DIAGNOSIS_GENERATION)。
-   *
-   * 非空就等于「这一次名下存着一段已经失效的结论」:它不是当前事实,不进交给 agent 的正式
-   * 输入,界面上只能带失效说明摆出来给人查证 —— 原文和日志都保留,但一个字都不许再承担
-   * 当前诊断或指导执行的作用(第 2 轮审查 F1)。
-   */
-  legacyDiagnosis?: string | null;
-  /**
-   * 见 AcceptGateMissAttribution。**非空就等于「起跑前核到那个名字不在这份快照里」**
-   * （归类落在 entry 那一档才会写它），卡片和交接拿它当这件事的信号。
-   */
-  missAttribution?: AcceptGateMissAttribution | null;
+  entryNote?: string | null;
   /**
    * 这一次的红交没交回给 agent 去修。null = 没交过(通过/取消/被打断都不交)。
    * `error` 非空 = 那一次没能叫醒它(回合被抢占、任务被归档之类),红还在那儿等人处理。

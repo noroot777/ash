@@ -211,6 +211,11 @@ const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
   { table: "monitor_scan_cursors", column: "gap_need", why: "缺口改为 gaps 全集" },
   // 飞书不再有「当前项目」：建任务在表单上选项目，助手按话里说的挑项目（im/commands.ts 顶部）
   { table: "im_bindings", column: "project_id", why: "飞书不再固定一个当前项目" },
+  // 门禁跑完之后从日志反推「跑没跑起来」的归因整个删了（入口不在树里改成起跑前就说清，见
+  // accept-gate-entry.ts）。删之前量过：105 次运行里这三列一行非空都没有。
+  { table: "accept_gate_runs", column: "diagnosis", why: "门禁事后归因已删除" },
+  { table: "accept_gate_runs", column: "miss_attribution", why: "门禁事后归因已删除" },
+  { table: "accept_gate_runs", column: "diagnosis_generation", why: "门禁事后归因已删除" },
 ];
 
 // 退役整表与退役列遵循同一原则：新库不创建，老库启动时幂等清理，失败只告警。

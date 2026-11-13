@@ -2,11 +2,11 @@
 // 从 accept-gate.ts 拆出来，起跑（accept-gate.ts）、取消/超时、重启恢复（accept-gate-recover.ts）
 // 共用这一份 —— 「第一个到的说了算」只有一个实现才说得算。
 import { and, eq, isNull } from "drizzle-orm";
-import { ACCEPT_GATE_DIAGNOSIS_GENERATION, ACCEPT_GATE_TIMEOUT_MS, summarizeAcceptGate } from "@ash/shared/accept-gate";
+import { ACCEPT_GATE_TIMEOUT_MS, summarizeAcceptGate } from "@ash/shared/accept-gate";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { acceptGateRuns } from "./db/schema.js";
-import { acceptGateLogPath, appendGateLog, stampAshNote } from "./accept-gate-process.js";
+import { acceptGateLogPath, appendGateLog } from "./accept-gate-process.js";
 import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { gateView } from "./accept-gate-state.js";
@@ -15,7 +15,6 @@ import { gateSnapshotPath, removeGateSnapshot, verifyGateSnapshot } from "./acce
 import { forgetGateProcess, stopGateRun } from "./accept-gate-ownership.js";
 import { readGateLaunch } from "./accept-gate-launch.js";
 import { gateScopeNotice } from "./accept-gate-confinement.js";
-import { diagnoseGateFailure } from "./accept-gate-attribution.js";
 import { followUpGate } from "./accept-gate-continue.js";
 import { gateExitOutcome, parseGateSettlement, readGateExit, type GateSettlement } from "./accept-gate-exit.js";
 import { freezeGateScene } from "./accept-gate-diagnosis.js";
@@ -152,27 +151,13 @@ export async function settleGate(
       commit: row.previewCommit ?? row.sourceCommit, fingerprint: row.sourceFingerprint ?? "", dependencies: [],
       ambient: row.sourceAmbient ?? "",
     })) outcome = { status: "failed", exitCode: outcome.exitCode, failure: "source_changed" };
-    // rc≠0 的那一档再问一句「这到底是不是代码红了」：命令点名要跑的东西在被测快照里解析
-    // 不出来时，线索、目标分支上的情形、出路都跟「修某条断言」不是一回事。认不出就是
-    // null，照旧按 exit_code 处理。判据见 accept-gate-miss.ts，I/O 在 accept-gate-attribution.ts。
-    // 传 outcome 而不是 row：`row` 是结算**前**读出来的那一行，上面的 exitCode 还是插入时
-    // 的 null，照它判就永远走不到按退出码兜底那一档（第 1 轮审查 N1）。
-    // 这一处的 catch **留着**：看门的结论已经落下来了（`outcome` 就是它），归因只是往上面再贴一句
-    // 「卡在哪」。它自己读不出来时正确的答案就是「不贴」—— 失败方向是少一句线索，不是放过一次验收。
-    const diagnosed = outcome.status === "failed" ? await diagnoseGateFailure(row, outcome).catch(() => null) : null;
-    // 展开保留 main 侧的 note / scene：看门的给出的「卡在哪」不能被这一步顶掉。
-    if (diagnosed) outcome = { ...outcome, failure: diagnosed.failure };
     const watching = live.get(row.taskId);
     const finishedAt = now();
     // 进程收干净了的 passed/failed 还欠一件事（续验收 / 交修），记号留着，办完才清。
     const owed = stopped && (outcome.status === "passed" || outcome.status === "failed");
     await db.update(acceptGateRuns)
       .set({ status: outcome.status, exitCode: outcome.exitCode, failure: outcome.failure, finishedAt, processPending: !stopped,
-        settlement: owed ? JSON.stringify({ ...outcome, scene: undefined }) : null,
-        diagnosis: diagnosed?.diagnosis ?? null, missAttribution: diagnosed?.attribution ?? null,
-        // 结论连**代号**一起落盘：判据下次再撤回时，这一代的结论就自动不再当事实用
-        // （第 2 轮审查 F1，闸在 gateView）。
-        diagnosisGeneration: diagnosed ? ACCEPT_GATE_DIAGNOSIS_GENERATION : null })
+        settlement: owed ? JSON.stringify({ ...outcome, scene: undefined }) : null })
       // 状态闸：上面那句读到的 running 和这一句之间隔着 await，只有真的还 running 才翻。
       .where(and(eq(acceptGateRuns.id, runId), eq(acceptGateRuns.status, "running")));
     outcomeSaved = true;
@@ -182,19 +167,14 @@ export async function settleGate(
     if (stopped) await cleanupGateSnapshot(row.taskId, runId).catch((error) => appendGateLog(row.logPath,
       `\n[ash] 快照没能删掉，它还留在 ${gateSnapshotPath(row.taskId, runId)}：${String(error)}\n`));
     if (watching?.runId === runId) { watching.watch.stop(); live.delete(row.taskId); }
-    const settled = { ...row, ...outcome, finishedAt, diagnosis: diagnosed?.diagnosis ?? null,
-      missAttribution: diagnosed?.attribution ?? null,
-      diagnosisGeneration: diagnosed ? ACCEPT_GATE_DIAGNOSIS_GENERATION : null };
+    const settled = { ...row, ...outcome, finishedAt };
     const view = gateView(settled);
-    // 结论也追加进日志，而它是**多行**的 —— 逐行打标记，别让后面几行被归类那一层当成
-    // 「别的程序写的」（见 accept-gate-process.ts 的 stampAshNote）。
-    appendGateLog(row.logPath, `\n[ash] ${finishedAt} ${summarizeAcceptGate(view)}\n`
-      + (diagnosed ? stampAshNote(`\n${diagnosed.diagnosis}\n`) : ""));
+    // 入口那句话（accept-gate-entry.ts）跟摘要放在同一行：核得准的那一档它就是「为什么没起跑」，
+    // 核不准的那一档它是起跑前看到的事实，原始输出就在日志里它的上面。
+    const entry = view.entryNote ? ` ${view.entryNote}` : "";
+    appendGateLog(row.logPath, `\n[ash] ${finishedAt} ${summarizeAcceptGate(view)}${entry}\n`);
     await appendTaskTimeline(row.taskId,
-      (view.status === "passed" ? receiptLine : alertLine)(`${summarizeAcceptGate(view)}。${outcome.note ? ` ${outcome.note}` : ""}${sceneFailure ? ` ${sceneFailure}` : ""}`));
-    // 归类结论要**单独进一条时间线**：它是用户刷新后唯一能找回「这条红是怎么来的」的地方，
-    // 跟在摘要那一行后面会被折进去（根 AGENTS.md「停止/暂停必须留下持久可见的状态」同款判据）。
-    if (diagnosed) await appendTaskTimeline(row.taskId, alertLine(diagnosed.diagnosis));
+      (view.status === "passed" ? receiptLine : alertLine)(`${summarizeAcceptGate(view)}。${entry}${outcome.note ? ` ${outcome.note}` : ""}${sceneFailure ? ` ${sceneFailure}` : ""}`));
     announceGate(row.taskId);
     finishOutcome();
     if (owed) await followUpGate({ ...settled, settlement: null }, view);

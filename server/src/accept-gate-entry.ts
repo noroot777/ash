@@ -1,8 +1,6 @@
 // 「这条命令点名要跑的是什么，**起跑那一刻**它在被测树里解析得出来吗」。
 //
-// 这一层只回答这一句，而门禁「测试压根没启动」那个结论**只许**由它授权。
-//
-// 为什么非得在起跑前问、而且事后的任何痕迹都不能替它（第 2 轮审查 F1 实测两条反例）：
+// 这一层只回答这一句。为什么非得在起跑前问、而且事后的任何痕迹都不能替它（第 2 轮审查 F1 实测两条反例）：
 //  ① **日志不说是哪一层在喊。** 顶层 `test:accept` 存在、已经打出 `ACCEPTANCE STARTED`，
 //     它内部调 `npm --prefix child run test:accept`，子项目没有同名脚本，于是日志里出现
 //     `Missing script: "test:accept"` —— 跟顶层缺失长得一模一样。
@@ -34,29 +32,37 @@
 //    「npm 列脚本不执行 script body」证明不了「整次查询没跑任何项目代码」。诊断没有资格
 //    擅自增加用户代码的执行次数。
 //
-// 所以这一层退回**纯读**：只看文件系统和那份 manifest 的文本，一个进程都不起。读出来的东西
-// 因此**只够当必要条件之一**——「测试没启动」那个结论由归类层（accept-gate-miss.ts）在三件
-// 事同时成立时才给，另两件都来自**真跑那一次自己的输出**。配置把落点改到别处时这一层会读错
-// 那份 manifest，但那种读错在归类层被另外两件事挡住（见那边的文件头）。
+// 所以这一层退回**纯读**：只看文件系统和那份 manifest 的文本，一个进程都不起。
+//
+// 读出来的东西分两种，处置不同：
+//  · **核得准**（`certain`）：入口是一个具体文件（`./kb.sh`、`scripts/verify.sh`）。shell 对含
+//    `/` 的名字不查 PATH，也没有配置能把它挪走 —— 快照里没有，这条命令就不可能跑起来。这一档
+//    **不起跑**，直接说「被测的这棵树里没有它」，再附一句它在目标分支上有没有。
+//  · **核不准**：npm 脚本。runner 去哪份 manifest 找脚本，四层配置（命令行、环境变量、`.npmrc`、
+//    workspace）都能改，这一层读的只是命令行上解释出来的那份。所以照常起跑；红了只把起跑前
+//    看到的那件事和原始输出并排摆出来，不下结论。
+//
+// 曾经还有第三种用法：跑完之后从日志里反推「刚才到底跑没跑起来」，拿这份事实当三件必要条件
+// 之一。那条路证明不了日志里那句报错是顶层命令喊的还是测试内部的子命令喊的，审查十轮后降级成
+// 「只给线索」，2026-11 整个删掉了。
 //
 // 规矩是**证明不了就交白卷**。判据是「这条命令的执行目标我能不能完整解释」，不是「它像不像
 // 我见过的形状」：
 //  · 命令里有任何读不准的 shell 语义（多步、分组、后台、变量、命令替换、通配、转义、未闭合
 //    引号），返回 null；注释按 shell 语义截断，不当成参数。第 6 轮审查实测两条反例：
-//    `(./runner.sh)` 旧版当成一个叫 `(./runner.sh)` 的文件去查、查不到就发免修令，而 shell
-//    真把括号里那条跑了；`./missing & ./runner.sh` 旧版只认前半截，拿它的缺失代表整条命令。
+//    `(./runner.sh)` 旧版当成一个叫 `(./runner.sh)` 的文件去查，而 shell 真把括号里那条跑了；
+//    `./missing & ./runner.sh` 旧版只认前半截，拿它的缺失代表整条命令。路径那一档据此拦下
+//    起跑，认错一次就是把一条能跑的命令挡在门外。
 //  · 选项**只认白名单**（换目录的、确定不吃词的开关、确定只影响输出的带值选项），其余一律
 //    返回 null —— 带不带等号都一样。靠黑名单逐条堵组合这条路已经证明走不通。
 //  · 只认那些**绝对没有默认行为**的子命令（`npm run X`、`npm test`），有默认行为的名字一律
 //    不认（`start`/`restart`/`stop`，还有 npm 内建的 `env` —— 第 6 轮审查实测
 //    `npm run env -- node fail.cjs` 真把 `fail.cjs` 跑了），而且子命令必须在最前
 //    （`npm test run` 不是「跑 run 这个脚本」）。
-//  · 只认 npm。pnpm/yarn 的配置层和内建脚本语义这台机器上没有实测环境，外推错了要发出去的
-//    是「测试一行都没跑、不要改代码」—— 那张白卷只是少下一个结论。
+//  · 只认 npm。pnpm/yarn 的配置层和内建脚本语义这台机器上没有实测环境，白卷只是少说一句事实。
 //
 // 反方向也要说清：`resolved: true` **只证明它在树里，不证明它跑起来了**（审查实测：一个存在
-// 但没有执行权限的脚本退 126，正文一行没跑）。所以 true 这一档的措辞里不许出现「确实跑起来
-// 了」—— 那句话这一层给不出来。
+// 但没有执行权限的脚本退 126，正文一行没跑）。
 //
 // 答案在 spawn 之前一次定下来，落到 accept_gate_runs.entryProbe 上，之后只许读它、不许重算
 // （跑完再核一次拿到的是跑完之后的状态，见上面②）。
@@ -74,18 +80,23 @@ export type GateEntryProbe = {
   ask: string;
   /**
    * 起跑前**真去读的那个文件**（相对被测树）：脚本那一档是那份 manifest，路径那一档就是它
-   * 自己。归因层核 git 历史时必须核**同一个文件**，否则两边各按自己的理解去解释命令行，
-   * 落点一挪就各说各话（第 9 轮审查 F2）。所以它是字段，不是从 `by` 那句话里抠出来的。
+   * 自己。去目标分支上核「有没有」时核的就是这一个，不从 `by` 那句话里抠。
    */
   file: string;
   /**
-   * 起跑那一刻它解析得出来没有。
-   *  - `false` 是「测试压根没启动」的**唯一**授权来源；
-   *  - `true` 只说明它在树里 —— **不**说明它跑起来了（权限、解释器都可能挡在后面）。
+   * 起跑那一刻它解析得出来没有。`true` 只说明它在树里 —— **不**说明它跑起来了（权限、
+   * 解释器都可能挡在后面）。
    */
   resolved: boolean;
-  /** 在哪儿核的，写给人看（也进结论正文）。 */
+  /** 在哪儿核的，写给人看。 */
   by: string;
+  /** 这份答案核得准不准（见文件头）：准的那一档答「不在」就不起跑。 */
+  certain: boolean;
+  /**
+   * 核得准、又不在的时候，它在目标分支上有没有（`has: null` = 读不出来）。没有合并目标的任务
+   * （直接在项目目录里干活）没有这一项。起跑前一次定下，跟着这一行落盘。
+   */
+  target?: { branch: string; has: boolean | null } | null;
 };
 
 /**
@@ -214,15 +225,15 @@ function runnerArgs(words: string[]): { positional: string[]; dir: string } | nu
  * 这条命令点名要跑的是什么。认不出来返回 null。
  *
  * 判据全在文件头：能读准的 shell 语义 + 没有默认行为的子命令 + 只认 npm。任何一条不满足就
- * 交白卷 —— 下游拿这个答案去说「测试一行都没跑、不要改代码」。
+ * 交白卷 —— 路径那一档的「不在」会直接拦下起跑。
  */
 export function gateEntryAsk(command: string): GateEntryAsk | null {
   const words = tokenize(command);
   if (!words) return null;
   // 前缀的环境变量赋值（`CI=1 npm run x`）不是入口，剥下来。它们也能换掉 runner 去哪儿找
   // 脚本（实测 `npm_config_workspace=child npm run test:accept` 真让它跑了子项目那个脚本）
-  // 或者换掉 `npm` 本身（`PATH=bin`），所以这一层读出来的那份 manifest 可能不是真要跑的
-  // 那份 —— 那种读错由归类层的另两件事挡住（见 accept-gate-miss.ts 文件头）。
+  // 或者换掉 `npm` 本身（`PATH=bin`）—— 脚本那一档因此只算核不准。路径那一档不受影响：
+  // 含 `/` 的名字 shell 不查 PATH。
   while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]!)) words.shift();
   const head = words[0];
   if (!head) return null;
@@ -272,7 +283,7 @@ export function insideTree(treeDir: string, name: string): string | null {
   return !inside || (!inside.startsWith("..") && !isAbsolute(inside)) ? resolved : null;
 }
 
-/** 脚本那一档要核的那份 manifest；踩出树就没地方核（归因层还要拿它去查 git 历史）。 */
+/** 脚本那一档要核的那份 manifest；踩出树就没地方核。 */
 function manifestInTree(treeDir: string, ask: GateEntryAsk): string | null {
   if (ask.kind !== "script") return null;
   const file = askManifest(ask);
@@ -286,9 +297,6 @@ function manifestInTree(treeDir: string, ask: GateEntryAsk): string | null {
  * 一个进程都不起：只 `existsSync` 和读一份 manifest 的文本。为什么不去问 npm（它才最知道自己
  * 会读哪份 manifest）见文件头 —— 那条路第 8 轮被判死：它答的是**查询那一次**的状态，而且替
  * 用户多跑了两次项目代码。
- *
- * 所以这个答案**不是**「测试没启动」的充分条件，只是三件必要条件中的一件；另两件由归类层从
- * 真跑那一次自己的输出里取（accept-gate-miss.ts 文件头）。
  */
 export function probeGateEntry(treeDir: string, command: string): GateEntryProbe | null {
   const ask = gateEntryAsk(command);
@@ -296,7 +304,7 @@ export function probeGateEntry(treeDir: string, command: string): GateEntryProbe
   if (ask.kind === "path") {
     const resolved = insideTree(treeDir, ask.name);
     return resolved
-      ? { ask: ask.name, file: entryFile(ask), resolved: existsSync(resolved), by: "被测快照里的文件" }
+      ? { ask: ask.name, file: entryFile(ask), resolved: existsSync(resolved), by: "被测快照里的文件", certain: true }
       : null;
   }
   const file = manifestInTree(treeDir, ask);
@@ -305,7 +313,29 @@ export function probeGateEntry(treeDir: string, command: string): GateEntryProbe
   try { text = readFileSync(join(treeDir, file), "utf8"); } catch { return null; }
   const defined = scriptDefinedIn(text, ask.name);
   return defined === null ? null
-    : { ask: ask.name, file, resolved: defined, by: `被测快照 ${file} 的 scripts` };
+    : { ask: ask.name, file, resolved: defined, by: `被测快照 ${file} 的 scripts`, certain: false };
+}
+
+/** 核得准、而且不在：这一档不起跑。 */
+export const entryCertainlyMissing = (probe: GateEntryProbe | null): boolean =>
+  !!probe && probe.certain && !probe.resolved;
+
+/**
+ * 卡片状态那一行、时间线、交回 agent 的输入共用的那句话。纯文本：日志和 MCP 回执都不渲染 markdown。
+ *
+ *  - 核得准的那一档（没起跑）：确定地说它不在，再附目标分支上的情形；
+ *  - 核不准的那一档（跑了、红了）：只陈述起跑前看到的，原始输出就摆在旁边，结论留给读的人；
+ *  - 其余（入口在、没核、绿了）：没有可说的，null。
+ */
+export function gateEntryNote(probe: GateEntryProbe | null, status: string): string | null {
+  if (!probe || probe.resolved || status !== "failed") return null;
+  if (!probe.certain) return `起跑前看到：${probe.by} 里没有 ${probe.ask}（这一项核不准，npm 可能按配置去别处找）。`;
+  const target = probe.target;
+  const there = !target ? ""
+    : target.has === true ? `目标分支 ${target.branch} 上有它。`
+      : target.has === false ? `目标分支 ${target.branch} 上也没有。`
+        : `目标分支 ${target.branch} 上有没有它，这次没读出来。`;
+  return `被测的这棵树里没有 ${probe.ask}，命令没有起跑。${there}`;
 }
 
 /** 落盘与读回。字段形状变了就当没核过 —— 跨机接力和旧行都可能带着老形状。 */
@@ -316,8 +346,13 @@ export function decodeGateEntryProbe(raw: string | null | undefined): GateEntryP
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as Partial<GateEntryProbe>;
-    return typeof value.ask === "string" && typeof value.file === "string"
-      && typeof value.resolved === "boolean" && typeof value.by === "string"
-      ? { ask: value.ask, file: value.file, resolved: value.resolved, by: value.by } : null;
+    if (typeof value.ask !== "string" || typeof value.file !== "string"
+      || typeof value.resolved !== "boolean" || typeof value.by !== "string") return null;
+    const target = value.target && typeof value.target.branch === "string"
+      && (value.target.has === null || typeof value.target.has === "boolean")
+      ? { branch: value.target.branch, has: value.target.has } : null;
+    // 没有 `certain` 的旧行一律当核不准：那时候还没有「不起跑」这一档，不能事后替它说「没起跑」。
+    return { ask: value.ask, file: value.file, resolved: value.resolved, by: value.by,
+      certain: value.certain === true, target };
   } catch { return null; }
 }
