@@ -10,8 +10,8 @@
 //
 // 判法跟回合收尾那一刻是**同一份**（`interruptionOf` / `noVerdictCause`），只是事实换成从盘上读：
 // 模型 API 的类型照旧只认执行器归一层给的 —— 把那一回合的原始事件按 codex 执行器当时的同一套
-// 归一（`codexErrorEvent` / `codexTurnError`）重放一遍，取它当时会挂上的那条错误；不在诊断原文里
-// 另找状态码（为什么见 review-no-verdict.ts 文件头）。读不到事件，就照实说「执行器异常退出（exit N）」，
+// 归一重放一遍（主线程 / 子智能体线程的归属也照当场那样分，见 `replayCodexEvents`），取它当时会
+// 挂上的那条错误；不在诊断原文里另找状态码（为什么见 review-no-verdict.ts 文件头）。读不到事件，就照实说「执行器异常退出（exit N）」，
 // 带上原话。一样都读不到的轮次给 null，页面照老样子。
 //
 // 为什么现算、不一次性补写进库：这份结构这一版刚多了原话，上一版写进库的那些也缺这一格，补写得
@@ -25,9 +25,11 @@ import { db } from "./db/index.js";
 import { freeReviewRounds, sessions, sessionTurns } from "./db/schema.js";
 import { codexErrorEvent } from "./executors/codex-error-event.js";
 import { codexTurnError } from "./executors/model-failure.js";
+import { CodexChildActivity } from "./executors/native-agent-activity.js";
 import { RUNS_DIR } from "./paths.js";
 import { interruptionOf, noVerdictCause, readTurnDiagnostics, reviewReportWritten, type Interruption } from "./review-no-verdict.js";
 import { readableRunPath, runTracePaths } from "./transcript.js";
+import { errorFacts } from "./turn-stall.js";
 
 type RoundRow = typeof freeReviewRounds.$inferSelect;
 type ExecutionError = Extract<AgentEvent, { kind: "error" }>;
@@ -42,21 +44,26 @@ type ReviewerTurn = {
   /** 只在这一回合是那条会话最后一回合时有：会话行上的退出码 / 被停的口径记的是最后一次。 */
   exitStatus: number | null;
   stoppedAs: string | null;
+  /** 会话行上的 CLI 会话 id（codex 是主线程 id）：认主线程时原始事件开头读不出来才用它。 */
+  cliSessionId: string | null;
 };
 
 const TAIL = 256 * 1024;
+const HEAD = 64 * 1024;
 
-/** 原始事件只读尾巴：回合最后那条错误一定在末尾，而这份文件常有几百 KB。 */
-function readTail(path: string): string {
+/** 原始事件读一头一尾：主线程身份在开头（起线程那一问的应答），回合最后那几条错误在末尾。 */
+function readEdge(path: string, edge: "head" | "tail"): string {
+  const budget = edge === "head" ? HEAD : TAIL;
   let fd: number | null = null;
   try {
     const size = statSync(path).size;
-    if (size <= TAIL) return readFileSync(path, "utf8");
+    if (size <= budget) return readFileSync(path, "utf8");
     fd = openSync(path, "r");
-    const buf = Buffer.allocUnsafe(TAIL);
-    const got = readSync(fd, buf, 0, TAIL, size - TAIL);
+    const buf = Buffer.allocUnsafe(budget);
+    const got = readSync(fd, buf, 0, budget, edge === "head" ? 0 : size - budget);
     const text = buf.subarray(0, got).toString("utf8");
-    return text.slice(text.indexOf("\n") + 1);
+    // 截断处切在半行中间：那半行不要。
+    return edge === "head" ? text.slice(0, text.lastIndexOf("\n") + 1) : text.slice(text.indexOf("\n") + 1);
   } catch {
     return "";
   } finally {
@@ -64,49 +71,83 @@ function readTail(path: string): string {
   }
 }
 
+const recordOf = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
+const parseLines = (text: string): Record<string, unknown>[] => text.split("\n").flatMap((line) => {
+  if (!line.trim()) return [];
+  try {
+    return [recordOf(JSON.parse(line))];
+  } catch {
+    return [];
+  }
+});
+
 const messageOf = (value: unknown): string | null => {
-  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
-  const error = record.error && typeof record.error === "object" ? record.error as Record<string, unknown> : {};
+  const record = recordOf(value);
+  const error = recordOf(record.error);
   const raw = record.message ?? error.message ?? record.error ?? record.detail;
   return typeof raw === "string" && raw.trim() ? raw : null;
 };
 
 /**
- * 按执行器自己的归一重放这一回合的原始事件（App Server 的 `error` 通知 / `turn/completed` 失败，
- * exec 的 `error` / `turn.failed`），取回收尾那一刻手上的两样事实，别的执行器没有这份文件就都没有：
- *   · `error`：这一轮的执行故障 —— 只算重试完了还是错的那些（`counted`），挑法跟单飞收尾一样：
- *     带模型类型的那条不被后面没类型的盖掉；
- *   · `stallModel`：看门狗熔断时据以说原因的那个类型 —— 它每收一条错误（重试中的也算）就把类型
- *     换成那一条的（turn-stall.ts 的 `lastModel`），所以这里同样只认**最后那条**错误，没类型就是没有。
- *     重试通知不升格成执行故障，它的类型也不丢。
+ * 这一回合的主线程是哪一条：执行器起线程（start / resume / fork）那一问的应答里的线程 id ——
+ * 它排在任何子线程之前（查子线程模型的 `thread/read` 应答也带线程 id，但只会在后面）。文件开头
+ * 读不出来时退回会话行上记的 CLI 会话 id。两样都没有就是不知道。
  */
-function replayCodexEvents(eventsPath: string): { error: ExecutionError | null; stallModel: ModelFailure | null } {
+function mainThreadOf(eventsPath: string, cliSessionId: string | null): string | null {
+  for (const line of parseLines(readEdge(eventsPath, "head"))) {
+    const id = recordOf(recordOf(line.result).thread).id;
+    if (typeof id === "string" && id) return id;
+  }
+  return cliSessionId;
+}
+
+/**
+ * 按执行器自己的归一重放这一回合的原始事件，取回收尾那一刻手上的两样事实（别的执行器没有这份
+ * 文件就都没有）。原始文件里主线程和子智能体线程的通知混在一起，归属照 codex-app-server.ts 当场
+ * 那样分：`threadId` 不是主线程的，走子线程那一路（`CodexChildActivity`，包成子智能体活动）；
+ * 主线程的（以及 exec 那种不分线程的）走主线程那一路（`codexErrorEvent` / `codexTurnError`）。
+ *   · `error`：这一轮的执行故障 —— 跟单飞收尾一样只认**主线程顶层**的、重试完了还是错的那些
+ *     （App Server 的 `error` 通知、失败的 `turn/completed`，exec 的 `error` / `turn.failed`）；
+ *     子线程失败不是父回合失败。挑法也一样：带模型类型的那条不被后面没类型的盖掉。分不出主线程
+ *     （不知道主线程是哪条）的带线程行不算进来：来源不明的不替它升格成这一轮的故障。
+ *   · `stallModel`：看门狗熔断时据以说原因的那个类型 —— 它穿过子智能体包装、重试中的也算，每收
+ *     一条错误就把类型换成那一条的（turn-stall.ts 的 `errorFacts` / `lastModel`），所以这里同样
+ *     把两路归一出来的每条事件交给 `errorFacts`，只认**最后那条**错误，没类型就是没有。
+ */
+function replayCodexEvents(eventsPath: string, cliSessionId: string | null): { error: ExecutionError | null; stallModel: ModelFailure | null } {
+  const main = mainThreadOf(eventsPath, cliSessionId);
+  const child = new CodexChildActivity();
   let picked: ExecutionError | null = null;
   let stallModel: ModelFailure | null = null;
-  const take = (event: ExecutionError) => {
-    stallModel = event.model ?? null;
-    if (!picked?.model || event.model) picked = event;
+  const seen = (events: AgentEvent[], execution: boolean) => {
+    for (const event of events) {
+      const facts = errorFacts(event);
+      if (!facts) continue;
+      stallModel = facts.model;
+      if (execution && event.kind === "error" && (!picked?.model || event.model)) picked = event;
+    }
   };
-  for (const line of readTail(eventsPath).split("\n")) {
-    if (!line.trim()) continue;
-    let ev: Record<string, unknown>;
-    try {
-      ev = JSON.parse(line) as Record<string, unknown>;
-    } catch {
+  for (const ev of parseLines(readEdge(eventsPath, "tail"))) {
+    const method = typeof ev.method === "string" ? ev.method : null;
+    const params = recordOf(ev.params);
+    const thread = typeof params.threadId === "string" && params.threadId ? params.threadId : null;
+    if (method && thread && thread !== main) {
+      // 子线程（或者主线程认不出来时任何带线程的行）：只按子智能体活动算，进停滞、不进执行故障。
+      seen(child.notification(method, params), false);
       continue;
     }
-    const params = ev.params && typeof ev.params === "object" ? ev.params as Record<string, unknown> : null;
-    if (ev.method === "error" && params) {
+    if (method === "error") {
       const reported = codexErrorEvent(params);
-      if (reported?.counted) take(reported.event);
-      else if (reported) stallModel = reported.event.model ?? null;
-    } else if (ev.method === "turn/completed" && params) {
-      const turn = params.turn && typeof params.turn === "object" ? params.turn as Record<string, unknown> : {};
+      if (reported) seen([reported.event], reported.counted);
+    } else if (method === "turn/completed") {
+      const turn = recordOf(params.turn);
       const message = turn.status === "failed" ? messageOf(turn) : null;
-      if (message) take(codexTurnError(message));
+      if (message) seen([codexTurnError(message)], true);
     } else if (ev.type === "turn.failed" || ev.type === "error") {
       const message = messageOf(ev);
-      if (message) take(codexTurnError(message));
+      if (message) seen([codexTurnError(message)], true);
     }
   }
   return { error: picked, stallModel };
@@ -116,7 +157,7 @@ function replayCodexEvents(eventsPath: string): { error: ExecutionError | null; 
 async function reviewerTurns(taskId: string): Promise<ReviewerTurn[]> {
   const sessionRows = await db.select({
     id: sessions.id, turnStartedAt: sessions.turnStartedAt, startedAt: sessions.startedAt, endedAt: sessions.endedAt,
-    exitStatus: sessions.exitStatus, stoppedAs: sessions.stoppedAs,
+    exitStatus: sessions.exitStatus, stoppedAs: sessions.stoppedAs, cliSessionId: sessions.cliSessionId,
   }).from(sessions).where(and(eq(sessions.taskId, taskId), eq(sessions.role, "reviewer")));
   if (!sessionRows.length) return [];
   const turnRows = await db.select({
@@ -131,14 +172,17 @@ async function reviewerTurns(taskId: string): Promise<ReviewerTurn[]> {
   };
   const out: ReviewerTurn[] = turnRows.map((turn) => {
     const last = lastOf(turn.sessionId, turn.startedAt);
-    return { ...turn, exitStatus: last?.exitStatus ?? null, stoppedAs: last?.stoppedAs ?? null };
+    return {
+      ...turn, exitStatus: last?.exitStatus ?? null, stoppedAs: last?.stoppedAs ?? null,
+      cliSessionId: bySession.get(turn.sessionId)?.cliSessionId ?? null,
+    };
   });
   for (const row of sessionRows) {
     const startedAt = row.turnStartedAt ?? row.startedAt;
     if (out.some((turn) => turn.sessionId === row.id && turn.startedAt === startedAt)) continue;
     out.push({
       sessionId: row.id, startedAt, endedAt: row.endedAt, outcome: null, stallReason: null,
-      exitStatus: row.exitStatus, stoppedAs: row.stoppedAs,
+      exitStatus: row.exitStatus, stoppedAs: row.stoppedAs, cliSessionId: row.cliSessionId,
     });
   }
   return out;
@@ -174,7 +218,7 @@ function interruptionOfTurn(taskId: string, turn: ReviewerTurn): Interruption | 
   const completed = turn.outcome === "completed" || (turn.outcome == null && exitStatus === 0);
   if (!failed && !completed) return undefined;
   const replay = failed
-    ? replayCodexEvents(readableRunPath(runTracePaths(join(RUNS_DIR, taskId), turn.sessionId, turn.startedAt).eventsPath))
+    ? replayCodexEvents(readableRunPath(runTracePaths(join(RUNS_DIR, taskId), turn.sessionId, turn.startedAt).eventsPath), turn.cliSessionId)
     : null;
   const facts = replay
     ? interruptionOf({

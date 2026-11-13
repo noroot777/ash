@@ -21,7 +21,8 @@
 //   7. 那份记录上线之前断掉、没存过原因的轮次：状态接口按盘上的事实现算（诊断文件、原始事件、会话
 //      与回合行、报告在不在）；原话进结构，类型只认执行器归一层重放出来的；什么都读不到就不带。
 //      看门狗熔断的老回合：诊断里的停止请求不当成「你停的」，熔断原因的类型取重试通知里最后那条
-//      （第 1 轮复审第 1、3 条）
+//      （第 1 轮复审第 1、3 条）。原始事件里主线程和子智能体线程混在一起：只有主线程顶层的终局错误
+//      算这一轮的执行故障，子线程的错误只按看门狗口径参与熔断类型（第 2 轮复审第 1 条）
 //
 // 跑：npm -w server run test:review-no-verdict
 import assert from "node:assert/strict";
@@ -479,6 +480,42 @@ try {
     const untypedCause = await untyped.api();
     assert.equal(untypedCause?.reason, "回合长时间没有进展，被自动终止");
     assert.equal(untypedCause?.vague, true);
+    // 子智能体线程先报了额度用完、审查者接着干，最后主线程自己出了本地故障退出：说的是主线程那条，
+    // 原话也是它的（第 2 轮复审第 1 条）。子线程的 error 和失败的 turn/completed 两个入口都试；主线程
+    // 按起线程那一问的应答认，读不出来就按会话行上的 CLI 会话 id 认。
+    const PARENT = "failed to decode app server response: invalid frame";
+    const childCases = [
+      { via: "error", line: { method: "error", params: { threadId: "child-thread", willRetry: false, error: { message: QUOTA_429 } } }, head: true },
+      { via: "turn/completed", line: { method: "turn/completed", params: { threadId: "child-thread", turn: { status: "failed", error: { message: QUOTA_429 } } } }, head: false },
+    ];
+    for (const { via, line, head } of childCases) {
+      const s = await scene({ diagnostics: { ...LIVE_DIAGNOSTICS, failureReason: PARENT, structuredErrors: [PARENT] } });
+      await settle(s, "failed", 1);
+      if (!head) await db.update(sessions).set({ cliSessionId: "parent-thread" }).where(eq(sessions.id, s.sessId));
+      writeEvents(s, [
+        ...(head ? [{ id: 1, result: { thread: { id: "parent-thread" } } }] : []),
+        { method: "turn/started", params: { threadId: "parent-thread", turn: { id: "parent-turn" } } },
+        line,
+        { method: "item/agentMessage/delta", params: { threadId: "parent-thread", delta: "子任务失败，我接着审。" } },
+        { method: "error", params: { threadId: "parent-thread", willRetry: false, error: { message: PARENT } } },
+      ]);
+      assert.deepEqual(await s.api(), { kind: "interrupted", reason: "执行器异常退出（exit 1）", said: PARENT, vague: true },
+        `子线程的 ${via} 不算这一轮的执行故障，也不顶替主线程的原话`);
+    }
+    // 看门狗熔断时最后那条错误来自子线程：照看门狗口径（穿过子智能体包装）取它的类型。
+    const childTrip = await scene({ diagnostics: KILLED });
+    await settle(childTrip, "failed", 143, null, "15 分钟里只收到重试类错误");
+    writeEvents(childTrip, [
+      { id: 1, result: { thread: { id: "parent-thread" } } },
+      { method: "error", params: { threadId: "child-thread", willRetry: true, error: { message: QUOTA_429 } } },
+    ]);
+    assert.equal((await childTrip.api())?.reason, "模型账户额度用完了（429）", "熔断类型跟看门狗一样穿过子线程包装");
+    // 认不出主线程（开头没有应答、会话行也没记）：带线程的终局错误来源不明，不升格成执行故障。
+    const unknownMain = await scene({ diagnostics: { ...LIVE_DIAGNOSTICS, failureReason: PARENT, structuredErrors: [PARENT] } });
+    await settle(unknownMain, "failed", 1);
+    writeEvents(unknownMain, [{ method: "error", params: { threadId: "some-thread", willRetry: false, error: { message: QUOTA_429 } } }]);
+    assert.deepEqual(await unknownMain.api(), { kind: "interrupted", reason: "执行器异常退出（exit 1）", said: PARENT, vague: true });
+
     // 同一份诊断、但回合行说是你停的：不补。
     const userStopped = await scene({ diagnostics: KILLED });
     await settle(userStopped, "stopped", 143, "canceled");

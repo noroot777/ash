@@ -170,7 +170,7 @@ function disarm() {
  * 包装要留着,逻辑子线程身份也要留着 —— 所以这里顺手把「它来自子线程」一起带出去,
  * 熔断诊断要用。
  */
-function errorFacts(event: AgentEvent): { message: string; notice: boolean; child: boolean; model: ModelFailure | null } | null {
+export function errorFacts(event: AgentEvent): { message: string; notice: boolean; child: boolean; model: ModelFailure | null } | null {
   const inner = event.kind === "tool" && event.nativeWork?.type === "activity" ? event.nativeWork.event : null;
   const err: AgentEvent | typeof inner = inner ?? event;
   if (!err || err.kind !== "error") return null;
