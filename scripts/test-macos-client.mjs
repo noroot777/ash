@@ -5,7 +5,7 @@
 // 覆盖：下载事务；红绿灯下的页面；「端口上是谁」的判据（自己那份 / 别的 ash / 不是 ash）；空数据根
 // 不起服务、首启选了才起；起服务用自带 node、数据根/端口/本机自用开关传对（终端配置盖不掉）、不漏启动器自己的变量；
 // 别的 ash 或别的程序占着端口时不起、说清是谁；窗口在线后端口换了人就撤下页面（导航与定时两道）；并发起服务只起一份；锁超时与重试；请求合并；
-// 进程起来就退时不干等；应答的 PID 对不上不算；启动器报错可见；运行时缺件；导入旧数据（WAL 里
+// 进程起来就退时不干等；应答的 PID 对不上不算；启动器报错可见；运行时缺件；构建号严格递增；安装不换正被用着的旧包；导入旧数据（WAL 里
 // 没落盘的写入也带过来、在暂存里洗过再发布、和起服务同一把锁、只往空数据根里放、失败与抢跑不留
 // 痕迹、上次发布到一半的残留先收掉、只复制不动源、互相包含与多人库拒绝、锁与缓存不搬）。
 import assert from "node:assert/strict";
@@ -361,6 +361,52 @@ try {
   assert.equal(result.status, 1);
   assert.match(result.output, /不完整/);
   console.log("PASS: launcher stderr is visible in failure result; an incomplete bundle says so");
+
+  // ── 构建号：同一秒、时钟回拨、并发构建都拿到严格更大的号 ──
+  const book = join(temporary, "build-number");
+  writeFileSync(book, "");
+  const allocate = (clock) => launch("/usr/bin/lockf", ["-k", book, process.execPath, join(root, "desktop/macos/scripts/build-number.mjs"), book],
+    clock ? { ASH_MAC_BUILD_CLOCK: clock } : {}).done.then((r) => { assert.equal(r.status, 0, r.output); return r.output.trim(); });
+  const numbers = [await allocate("2026-11-14T09:05:12Z"), await allocate("2026-11-14T09:05:12Z"), await allocate("2026-11-13T23:00:00Z")];
+  assert.deepEqual(numbers, ["20261114.090512", "20261114.090513", "20261114.090514"], "same second and a clock gone back still go up");
+  numbers.push(...await Promise.all(Array.from({ length: 8 }, () => allocate())));
+  const key = (n) => n.split(".").map(Number);
+  const ordered = [...numbers].sort((a, b) => key(a)[0] - key(b)[0] || key(a)[1] - key(b)[1]);
+  assert.equal(new Set(numbers).size, numbers.length, "concurrent builds never share a number");
+  assert.deepEqual(numbers.slice(0, 3), ordered.slice(0, 3));
+  assert.equal(readFileSync(book, "utf8").trim(), ordered.at(-1), "the book keeps the largest number handed out");
+  console.log("PASS: build numbers strictly increase across same-second, backdated and concurrent builds");
+
+  // ── 安装：旧 bundle 还有进程在用就不换；拷失败旧的原样不动 ──
+  const install = join(root, "desktop/macos/scripts/install-app.sh");
+  const apps = join(temporary, "Applications");
+  const fakeApp = (dir, version) => {
+    mkdirSync(join(dir, "Contents/Resources/app/server/dist"), { recursive: true });
+    writeFileSync(join(dir, "Contents/Resources/app/server/dist/index.js"), "setInterval(() => {}, 1000)");
+    writeFileSync(join(dir, "Contents/version"), version);
+  };
+  const newApp = join(temporary, "build", "Ash.app");
+  fakeApp(newApp, "new");
+  fakeApp(join(apps, "Ash.app"), "old");
+  const installed = () => readFileSync(join(apps, "Ash.app/Contents/version"), "utf8");
+  const oldServer = spawn(process.execPath, [join(apps, "Ash.app/Contents/Resources/app/server/dist/index.js")], { stdio: "ignore" });
+  children.add(oldServer);
+  await delay(200);
+  result = await launch("/bin/bash", [install, newApp, apps]).done;
+  assert.equal(result.status, 1, result.output);
+  assert.match(result.output, new RegExp(`${oldServer.pid} .*server/dist/index\\.js`), "the process still using the old bundle is named");
+  assert.equal(installed(), "old", "a bundle in use is not replaced");
+  oldServer.kill("SIGKILL");
+  await once(oldServer, "exit");
+  children.delete(oldServer);
+  result = await launch("/bin/bash", [install, join(temporary, "build", "missing.app"), apps]).done;
+  assert.equal(result.status, 1, result.output);
+  assert.equal(installed(), "old", "a failed install keeps the old app");
+  result = await launch("/bin/bash", [install, newApp, apps]).done;
+  assert.equal(result.status, 0, result.output);
+  assert.equal(installed(), "new");
+  assert.deepEqual(readdirSync(apps), ["Ash.app"], "no staging or replaced copy is left behind");
+  console.log("PASS: install refuses while anything still runs from the old bundle, keeps the old app on failure, swaps in place otherwise");
 
   // ── 导入旧数据 ──
   // 假的洗副本工具：记下参数，在它拿到的库上留个记号，按约定回一行 JSON；摆了 import-fail 就失败。

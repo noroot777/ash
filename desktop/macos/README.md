@@ -20,23 +20,26 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Ash.
 
 下载的 node 和装好的依赖缓存在 `build/cache/`，lockfile、各 workspace 的 package.json 或 node 版本变了才重装。
 
-版本：`CFBundleShortVersionString` 是给人看的（`build.sh` 里的 `VERSION`）；`CFBundleVersion` 单调递增，取构建所在提交的时间（UTC `日期.时分`），工作区有未提交改动时取当前时间。
+版本：`CFBundleShortVersionString` 是给人看的（`build.sh` 里的 `VERSION`）；`CFBundleVersion` 严格递增：样子是 UTC `日期.时分秒`，但每次构建都要比账本里上一个号大，不比它大（同一秒、从旧提交重打、时钟回拨）就在它上面加一，并发构建按锁排队（`scripts/build-number.mjs`）。账本是仓库 git 公共目录下的 `ash-mac-build-number`，各个 worktree 共用。
 
 ## 服务怎么起
 
-- 打开 app 先探 `/api/health`。端口上是**自己那份**（health 报的数据根就是 app 的数据根）就直接载页面；没人就用自带 node 起自带 server，带 `ASH_DATA_DIR=<数据根>`、`ASH_LOCAL_ONLY=1`。环境取自交互式登录 shell（`zsh -ilc`），claude、codex 这些 CLI 的 PATH、LANG 与终端里一致；node 不从 PATH 找。
+- 打开 app 先探 `/api/health`。端口上是**自己那份**才载页面：health 报的数据根是 app 的数据根、代码目录是 app 自带的那份、开着本机自用模式，三样都对上（`AshHealth.swift`，只看数据根的话仓库里指着同一份数据的开发实例也会被认成自己）。没人就用自带 node 起自带 server，带 `ASH_DATA_DIR=<数据根>`、`ASH_LOCAL_ONLY=1`。环境取自交互式登录 shell（`zsh -ilc`），claude、codex 这些 CLI 的 PATH、LANG 与终端里一致；数据根、端口、本机模式写成命令里的字面量、由 `env` 在 exec 那一下落定，终端配置里给开发实例 export 的同名变量盖不掉它们。node 不从 PATH 找。
+- 页面在的时候也一直认着人：本机地址的刷新、前进后退、页面自己跳转放行前各认一次，页面在时每秒再认一次。端口上换了人（比如服务停了、开发实例占上来）就把整页撤成空白（连同它的轮询，一个请求都不再发给新来的那份）、盖上说明，自己那份回来后回到原来的路由。
 - server 进自己的会话，**关窗、退出 app 都不停服务**，也不带走在跑的 agent。app 只负责起，不杀、不守护。
 - 端口被**别的 ash** 占着（比如仓库里 `npm run restart` 起的开发实例）不会连上去，窗口里说清是哪个进程、代码和数据在哪、怎么停；对方一停 app 就接着起自己那份。端口被不是 ash 的程序占着也一样说明。仓库开发实例以后换端口、用临时库起。
 - 「ash → 登录时启动 ash 服务」（装进「应用程序」后第一次打开默认勾上）：`~/Library/LaunchAgents/dev.ash.server.plist`，登录时跑一次 `Ash --start-server`，同一套逻辑、不开窗口。数据根还是空的时它不起（首启要先问用户）。
 - 日志在**数据根下的 `logs/`**：`server.log`（服务）、`login.log`（登录项），跟着数据走。起不来时占位页上有「日志」按钮。
-- 重装 app 不会重启已经在跑的服务：`install:mac` 发现旧 app 的服务还在跑时会提示，挑没有任务在跑的时候 `kill` 掉它，再打开 app。
+- 重装 app 不会重启已经在跑的服务，也不会换掉它脚下的代码：`install:mac` 先请窗口退出，再看还有没有进程在用 /Applications 里那份 bundle（服务，不管哪个端口；在跑的 agent 拉起的 ash MCP），有就不装、列出是谁（`scripts/install-app.sh`）。挑没有任务在跑的时候 `kill` 掉服务（agent 不跟着停），等 MCP 那几个任务这一轮结束，再装一次。新版先拷到旁边再换上，拷失败旧的原样不动。
 
 ## 第一次打开
 
 数据根里还没有 `ash.db` 时，先问数据从哪来：
 
 - **全新开始**：起一份空的，进入首启向导（供应商 → 执行器 → 项目）。
-- **导入已有数据…**：选一份 ash 数据目录（比如仓库的 `data/`）。**只复制、不移动**。库走 SQLite 在线备份（一致快照，源库正被另一份 server 写着也安全；它还开着时会先提醒），其余目录按文件复制（同一 APFS 卷上是克隆，不占第二份空间）；锁、在线标记、`deps/`、`tmp/` 不搬。多人模式的数据不能导（app 只跑自用模式）。库最后落，中途失败下次打开还是这一屏。已知局限：库里有些历史记录写的是源目录的绝对路径（旧会话的输出文件、监控日志等），导入后它们仍指向源目录，源目录删了那几条就读不到。
+- **导入已有数据…**：选一份 ash 数据目录（比如仓库的 `data/`）。**只复制、不移动**，源目录一个文件都不多。库走 SQLite 在线备份（一致快照，源库正被另一份 server 写着也安全；它还开着时会先提醒），其余目录按文件复制（同一 APFS 卷上是克隆，不占第二份空间）；锁、在线标记、`deps/`、`tmp/`、源的 `logs/` 不搬。多人模式的数据、和 app 数据根互相包含的目录不能导。
+  - **导入不是重启**：发布前用自带 node 跑一遍 server 的 `import-snapshot`。副本里不留任何认得出源实例进程的线索（pid、启动时刻、进程记号、没收干净的清理责任），在跑或排队的任务落「暂停」，在盯的哨兵、在跑的验收前置命令、进行中的审查落「结束/被打断」，定时任务停用（定义留着）、没发出的消息取消、队列推进作废 —— 否则副本开机会去接管、甚至停掉源实例正在跑的 agent，或在同一个仓库里再起一份。停下了哪些，导入完弹窗说一声。同一趟把库里落在源数据根下的绝对路径（会话输出、哨兵日志、附件、证据目录……）改到 app 的数据根，源数据根以外的路径一个字不动。
+  - 和起服务**同一把锁**：先在数据根里一个只属于这一次的暂存目录备齐、洗好，再拿锁发布；锁里重查数据根还空着（另一个窗口或登录项可能刚点了「全新开始」，那时这次导入作罢、那份数据不碰）。数据根里有认不出来的东西也拒绝。库最后落，是提交点；挪到一半的条目记在清单里，下次导入先收掉。
 
 连上自己那份之后，app 替本机装了的 CLI 接 ash MCP（`POST /api/ash-mcp/host-setup`，同注册执行器那一下：缺了才写、已有登记一律不覆盖），写进去的是 app 自带的 node 和 `mcp/dist`。已有登记**指向别处**的（比如仓库的 `mcp/dist`）不替你改，弹窗列出现在指向哪、改成什么，改不改你定；没接上的（macOS 上 codex 那一家 ash 不替你写）给出手工加的那一段。每个数据根自动查一次，之后从菜单「检查 ash MCP 登记…」随时再查。
 
@@ -52,7 +55,7 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 
 也可以 `defaults write dev.ash.mac AshDataDir <目录>` 换数据根、`defaults write dev.ash.mac AshURL http://192.168.1.187:4317` 连别的 ash（非本机地址不替它起服务，也不做身份判断）。
 
-定点回归：`node scripts/test-macos-client.mjs`（仅 macOS）。用真的 AshConfig / AshHealth / ServerLauncher / DataImport 加一份假的自带运行时，覆盖下载事务、红绿灯下的页面、「端口上是谁」的判据、空数据根不起、起服务的环境、占用提示、并发只起一份、锁超时、请求合并、起来就退、PID 核对、启动器报错、运行时缺件、导入（WAL 里的写入、只复制、多人库拒绝、残留替换）。server 那一半在 `npm -w server run test:host-ash-mcp`。
+定点回归：`node scripts/test-macos-client.mjs`（仅 macOS）。用真的 AshConfig / AshHealth / ServerLauncher / DataImport / BrowserWindowController 加一份假的自带运行时，覆盖下载事务、红绿灯下的页面、「端口上是谁」的判据（数据根 + 自带代码 + 本机模式）、窗口在线后端口换人（导航与定时两道）、空数据根不起、起服务的环境（终端配置盖不掉）、占用提示、并发只起一份、锁超时、请求合并、起来就退、PID 核对、启动器报错、运行时缺件、构建号、安装、导入（WAL 里的写入、暂存里洗过再发布、和起服务互斥、失败与抢跑不留痕迹、残留清单、停掉的源、互相包含、多人库拒绝）。server 那一半：`npm -w server run test:host-ash-mcp`（MCP 登记归类）、`npm -w server run test:import-snapshot`（导入不是重启：真的接管入口对着洗过的库认不出活着的源进程；路径重定位）。
 
 ## 窗口
 
@@ -65,16 +68,18 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 | 文件 | 管什么 |
 |---|---|
 | `scripts/bundle-runtime.mjs` | 把 node、产物、生产依赖装进 app |
+| `scripts/build-number.mjs` | 严格递增的 CFBundleVersion |
+| `scripts/install-app.sh` | 换进安装目录；旧包还有进程在用就不换 |
 | `Sources/AshConfig.swift` | 连哪台、自带运行时在哪、数据和日志放哪 |
-| `Sources/AshHealth.swift` | 「端口上是谁」的唯一判据 |
+| `Sources/AshHealth.swift` | 「端口上是谁」的唯一判据（数据根、自带代码、本机模式） |
 | `Sources/ServerLauncher.swift` | 起自带的服务；端口被占时说清是谁 |
 | `Sources/ServerStartLock.swift` | 同一数据根同时只有一处在起服务 |
 | `Sources/LaunchFlow.swift` | 窗口回到 ash 的那条路，首启的全新开始 / 导入 |
-| `Sources/DataImport.swift` | 导入旧数据 |
+| `Sources/DataImport.swift` | 导入旧数据：暂存、洗副本（`server/src/import-snapshot.ts`）、持锁发布 |
 | `Sources/HostMcpSetup.swift` | 替本机 CLI 接 ash MCP、把指向别处的摆给用户 |
 | `Sources/LoginService.swift` | 登录时启动的 LaunchAgent |
 | `Sources/AppDelegate.swift` | 生命周期与菜单（⌘C/⌘V 靠编辑菜单分发，不能省） |
-| `Sources/BrowserWindowController.swift` | 窗口、WKWebView、探活、菜单动作 |
+| `Sources/BrowserWindowController.swift` | 窗口、WKWebView、探活、页面在时认人、菜单动作 |
 | `Sources/WindowChrome.swift` | 内容铺到窗口顶：量红绿灯、和页面的约定、拖窗口 |
 | `Sources/WebViewBridge.swift` | 外链、新窗口、选文件、下载、JS 对话框 |
 | `Sources/DownloadTransaction.swift` | 另存为的暂存、原子替换与中断后的回收 |
