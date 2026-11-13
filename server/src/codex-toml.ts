@@ -422,18 +422,86 @@ function applyServerValue(server: CodexServer, path: string[], raw: string): boo
 
 function tomlString(raw: string): string | null {
   const v = raw.trim();
-  if (v.startsWith("'") && v.endsWith("'") && v.length >= 2) return v.slice(1, -1);
-  if (v.startsWith('"') && v.endsWith('"')) {
-    try { return JSON.parse(v) as string; } catch { return null; }
-  }
-  return null;
+  const read = readTomlString(v, 0);
+  return read && read.end === v.length ? read.value : null;
 }
 
-function tomlStringArray(raw: string): string[] {
+/** 数组里的全部字符串;有一个解不开就是 null(codex 自己也读不动这一条,别拿一截当整条)。 */
+function tomlStringArray(raw: string): string[] | null {
+  return tomlStringValues(raw);
+}
+
+const TOML_ESCAPES: Record<string, string> = { b: "\b", t: "\t", n: "\n", f: "\f", r: "\r", e: "\x1b", '"': '"', "\\": "\\" };
+
+/**
+ * 按 TOML 规则解码基本字符串的内容(引号之间那段)。上一版用 `JSON.parse` 顶替:它不认 `\U`、
+ * 却认 TOML 没有的 `\/`,跟 codex 读到的值对不上。认的转义取 TOML 1.1 的全集(多认 `\e`、`\xHH`):
+ * 这个解码器的用处是「codex 会读到什么」,多认只会多看见,不会漏看。`null` = 解不开。
+ */
+function decodeBasic(body: string, multiline: boolean): string | null {
+  let out = "";
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i]!;
+    if (ch !== "\\") { out += ch; continue; }
+    const next = body[i + 1];
+    if (next === undefined) return null;
+    if (multiline && /[ \t\r\n]/.test(next)) {
+      // 行尾反斜杠:吃掉它后面直到下一个非空白字符的全部空白和换行。
+      let j = i + 1;
+      while (j < body.length && /[ \t]/.test(body[j]!)) j++;
+      if (body[j] !== "\n" && body[j] !== "\r") return null;
+      while (j < body.length && /[ \t\r\n]/.test(body[j]!)) j++;
+      i = j - 1;
+      continue;
+    }
+    if (next in TOML_ESCAPES) { out += TOML_ESCAPES[next]; i++; continue; }
+    const width = next === "u" ? 4 : next === "U" ? 8 : next === "x" ? 2 : 0;
+    const hex = body.slice(i + 2, i + 2 + width);
+    if (!width || hex.length !== width || !/^[0-9a-f]+$/i.test(hex)) return null;
+    const code = parseInt(hex, 16);
+    if (code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return null;
+    out += String.fromCodePoint(code);
+    i += 1 + width;
+  }
+  return out;
+}
+
+/** 从 `at`(一个引号)读一个 TOML 字符串(四种引法都认),返回解码后的值和收尾后的下标。 */
+function readTomlString(text: string, at: number): { value: string; end: number } | null {
+  const delim = text.startsWith('"""', at) ? '"""' : text.startsWith("'''", at) ? "'''" : null;
+  if (delim) {
+    const found = scanMultiline(text, at + 3, delim);
+    if (found.end === null || found.bad) return null;
+    // 收尾那串可以是 3~5 个引号,多出来的一两个属于内容;紧跟开头的那个换行不算内容。
+    const body = text.slice(at + 3, found.end - 3).replace(/^\r?\n/, "");
+    const value = delim === "'''" ? body : decodeBasic(body, true);
+    return value === null ? null : { value, end: found.end };
+  }
+  if (text[at] === "'") {
+    const end = text.indexOf("'", at + 1);
+    return end < 0 || text.slice(at, end).includes("\n") ? null : { value: text.slice(at + 1, end), end: end + 1 };
+  }
+  if (text[at] !== '"') return null;
+  let j = at + 1;
+  while (j < text.length && text[j] !== '"' && text[j] !== "\n") j += text[j] === "\\" ? 2 : 1;
+  if (text[j] !== '"') return null;
+  const value = decodeBasic(text.slice(at + 1, j), false);
+  return value === null ? null : { value, end: j + 1 };
+}
+
+/**
+ * 一段值文本(去过注释的,见 `statements`)里**全部**字符串字面量解码后的值,按出现顺序;
+ * 内联表的键也在内。有一个解不开就是 null。给「codex 实际会读到什么」做核对用:原文里看不见的
+ * 东西(`\u002f` 之类的转义)解码后才看得见。
+ */
+export function tomlStringValues(value: string): string[] | null {
   const out: string[] = [];
-  for (const m of raw.matchAll(/"(?:[^"\\]|\\.)*"|'[^']*'/g)) {
-    const s = tomlString(m[0]);
-    if (s !== null) out.push(s);
+  for (let i = 0; i < value.length; i++) {
+    if (value[i] !== '"' && value[i] !== "'") continue;
+    const read = readTomlString(value, i);
+    if (!read) return null;
+    out.push(read.value);
+    i = read.end - 1;
   }
   return out;
 }
@@ -481,6 +549,25 @@ export function codexInjectionTarget(text: string): string | null {
   return names.find((n) => servers.get(n)!.enabled) ?? names[0] ?? null;
 }
 
+export type TomlPairSpan = { table: string[]; path: string[]; first: number; last: number; value: string };
+
+/**
+ * 每条键值对落在哪张表下、占哪几行 —— 给「只改某个键、别的字节一个不动」的就地改写用
+ * (mcp-registry/relocate.ts)。`table` 是它上面最近那个表头的路径(根级为空数组);`value` 是
+ * 去过行尾注释的值文本(跨行的拼好了),要看值就用 `tomlStringValues` 解它,别回头读原文行。
+ * 有读不通的语句就回 null:那种文本连「这个键在哪」都说不准,不许据此改。
+ */
+export function tomlPairSpans(text: string): TomlPairSpan[] | null {
+  const spans: TomlPairSpan[] = [];
+  let table: string[] = [];
+  for (const statement of statements(text)) {
+    if (statement.kind === "unparsed") return null;
+    if (statement.kind === "header") table = statement.path;
+    else spans.push({ table, path: statement.path, first: statement.first, last: statement.last, value: statement.value });
+  }
+  return spans;
+}
+
 /**
  * 把 `[mcp_servers.<name>]` 连同它的子表（`.env` 等）整段抠出来，表头一律改写成
  * `[mcp_servers.<as>…]` 的规范拼法（带引号、带行尾注释的表头都认，历史名顺手改成规范名）。
@@ -490,22 +577,6 @@ export function codexInjectionTarget(text: string): string | null {
  * 用内置模板 —— 一部分写在 `[mcp_servers]` 底下的点号键里时，只抠走 `.env` 那段会造出
  * 一条没有 command 的登记，codex 照样整份拒载。
  */
-/**
- * 每条键值对落在哪张表下、占哪几行 —— 给「只改某个键、别的字节一个不动」的就地改写用
- * (mcp-registry/relocate.ts)。`table` 是它上面最近那个表头的路径(根级为空数组)。
- * 有读不通的语句就回 null:那种文本连「这个键在哪」都说不准,不许据此改。
- */
-export function tomlPairSpans(text: string): { table: string[]; path: string[]; first: number; last: number }[] | null {
-  const spans: { table: string[]; path: string[]; first: number; last: number }[] = [];
-  let table: string[] = [];
-  for (const statement of statements(text)) {
-    if (statement.kind === "unparsed") return null;
-    if (statement.kind === "header") table = statement.path;
-    else spans.push({ table, path: statement.path, first: statement.first, last: statement.last });
-  }
-  return spans;
-}
-
 export function extractTomlTables(config: string, name: string, as = name): string | null {
   const lines = config.split(/\r?\n/);
   const heads = statements(config).filter(isHeader);

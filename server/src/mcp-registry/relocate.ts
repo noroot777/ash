@@ -16,8 +16,10 @@
 //      里每一处 ash 脚本提及都必须**恰好是**当前入口的一次完整出现;剩下任何一处(嵌在 `--require=…`、
 //      `sh -c "…"`、`NODE_OPTIONS` 里,或者跟当前入口写在同一个值里——第 5 轮审查:「值里出现过当前
 //      入口」证明不了「没有旧入口」)→ 登记失败并说清该改成什么。不发布一条已知会失效、还报成功的登记。
+//      判的是 CLI 解码后实际读到的值,细则见 `residue.ts`。
 import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { scanCodexToml, tomlPairSpans } from "../codex-toml.js";
+import { normalizePath, staleField, staleIn, staleStatement } from "./residue.js";
 import type { AshMcpNameFact } from "./types.js";
 
 export interface RelocateTarget {
@@ -42,30 +44,9 @@ const ABSOLUTE = /^([\\/]|~[\\/]|[a-z]:[\\/])/i;
  * 绝对路径里允许空格(`My Projects`),但空格后面又像一个参数/路径的开头,就是一整条命令行。
  */
 function isAshScript(value: unknown): value is string {
-  if (typeof value !== "string" || !ASH_SCRIPT_TAIL.test(value) || /^-|["'`;|&$<>]/.test(value)) return false;
+  if (typeof value !== "string" || !ASH_SCRIPT_TAIL.test(normalizePath(value)) || /^-|["'`;|&$<>]/.test(value)) return false;
   if (!ABSOLUTE.test(value)) return !/[\s=]/.test(value);
   return !/\s([-~\\/]|[a-z]:[\\/])/i.test(value);
-}
-
-/** ash 脚本的提及:`…/mcp/dist/index.js`,以及 node 会解析到它的目录写法 `…/mcp/dist`。 */
-const SCRIPT_MENTION = /mcp[\\/]dist(?:[\\/]index\.js(?![\w.-])|[\\/]?(?![\w.\\/-]))/i;
-/** 当前入口的一次「完整出现」两侧必须是这些字符(或者值的两端),否则它只是一条更长路径的一截。 */
-const OPEN = /[\s"'`=(,;&|]/;
-const CLOSE = /[\s"'`),;&|]/;
-
-/** 文本里有没有不是当前入口的 ash 脚本提及:当前入口的每一次完整出现先抹掉,再看还剩没有。 */
-function staleIn(text: string, entry: string): boolean {
-  let rest = "";
-  let from = 0;
-  for (let at = text.indexOf(entry); at !== -1; at = text.indexOf(entry, at + 1)) {
-    const end = at + entry.length;
-    const whole = (at === 0 || OPEN.test(text[at - 1]!)) && (end === text.length || CLOSE.test(text[end]!));
-    if (whole && at >= from) {
-      rest += `${text.slice(from, at)} `;
-      from = end;
-    }
-  }
-  return SCRIPT_MENTION.test(rest + text.slice(from));
 }
 
 const isNodeRunner = (command: string): boolean =>
@@ -77,7 +58,7 @@ export function relocateHostFact(fact: AshMcpNameFact | null, to: RelocateTarget
     const raw = relocateRaw(fact.raw, to);
     if (typeof raw === "string") return { why: raw };
     const left = staleField(raw, to.entry);
-    return left ? { why: unmovable(`${left} 还引用着旧的 ash 脚本`, null, to) } : { fact: { ...fact, raw } };
+    return left ? { why: unmovable(left, null, to) } : { fact: { ...fact, raw } };
   }
   if (fact.block) {
     // 截出来的那段跟扫整份文件得到的启动方式对不上(启动字段写在表头之外),而后者提到了旧的 ash
@@ -91,7 +72,7 @@ export function relocateHostFact(fact: AshMcpNameFact | null, to: RelocateTarget
     const block = relocateTomlBlock(fact.block, to);
     if ("why" in block) return block;
     const left = staleStatement(block.text, to.entry);
-    return left ? { why: unmovable(`${left} 还引用着旧的 ash 脚本`, null, to) } : { fact: { ...fact, block: block.text } };
+    return left ? { why: unmovable(left, null, to) } : { fact: { ...fact, block: block.text } };
   }
   return { fact };
 }
@@ -129,39 +110,6 @@ const sameLaunch = (a: { command?: string | null; args?: unknown } | undefined, 
 function staleMention(launch: Launch, to: RelocateTarget): string | null {
   for (const value of [launch.command, ...launch.args]) {
     if (typeof value === "string" && staleIn(value, to.entry)) return value;
-  }
-  return null;
-}
-
-/** JSON 族要发布的那整条里,第一个还引用着旧 ash 脚本的字符串值(返回它的字段路径)。 */
-function staleField(value: unknown, entry: string, path = ""): string | null {
-  if (typeof value === "string") return staleIn(value, entry) ? path || "登记" : null;
-  if (Array.isArray(value)) {
-    for (const [i, item] of value.entries()) {
-      const hit = staleField(item, entry, `${path}[${i}]`);
-      if (hit) return hit;
-    }
-  } else if (value && typeof value === "object") {
-    for (const [key, item] of Object.entries(value)) {
-      const hit = staleField(item, entry, path ? `${path}.${key}` : key);
-      if (hit) return hit;
-    }
-  }
-  return null;
-}
-
-/**
- * TOML 族要发布的那段里,第一条还引用着旧 ash 脚本的语句。按语句范围看,注释行不算;
- * 扫描器读不全的那段整段都算。
- */
-function staleStatement(block: string, entry: string): string | null {
-  const spans = tomlPairSpans(block);
-  if (!spans) return staleIn(block, entry) ? "宿主那段 TOML" : null;
-  const lines = block.split("\n");
-  for (const span of spans) {
-    if (staleIn(lines.slice(span.first, span.last + 1).join("\n"), entry)) {
-      return `[${span.table.join(".")}] 里的 ${span.path.join(".")}`;
-    }
   }
   return null;
 }

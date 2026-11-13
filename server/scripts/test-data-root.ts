@@ -189,6 +189,10 @@ const mixed = await bench("mixed",
 const nodeOptions = await bench("node-options",
   { command: "node", args: ["/old-checkout/mcp/dist/index.js"], env: { NODE_OPTIONS: "--require /old-checkout/mcp/dist/index.js" } },
   '[mcp_servers.ash]\\ncommand = "node"\\nargs = ["/old-checkout/mcp/dist/index.js"]\\n\\n[mcp_servers.ash.env]\\nNODE_OPTIONS = "--require /old-checkout/mcp/dist/index.js"\\n');
+// 路径藏在 TOML 的合法转义里(第 6 轮审查):原文上看不见 mcp/dist,codex 解码后就是旧入口。
+const escaped = await bench("escaped",
+  { command: "node", args: ["-e", "require(process.env.ASH_ENTRY)"], env: { ASH_ENTRY: "/old-checkout/mcp/dist/index.js" } },
+  '[mcp_servers.ash]\\ncommand = "node"\\nargs = ["-e", "require(process.env.ASH_ENTRY)"]\\n\\n[mcp_servers.ash.env]\\nASH_ENTRY = "/old-checkout/mcp\\\\u002fdist/index.js"\\n');
 const custom = await bench("custom",
   { type: "http", url: "https://ash.example/mcp" },
   '[mcp_servers.ash]\\ncommand = "/opt/my/ash-mcp"\\nargs = ["--fast"]\\n');
@@ -215,7 +219,7 @@ const L = (command, args) => relocateLaunch({ command, args }, to);
 const out = {
   built: existsSync(join(CODE_DIR, "mcp", "dist", "index.js")),
   entry: join(CODE_DIR, "mcp", "dist", "index.js"), node: mcpNodeCommand(), execPath: process.execPath,
-  tailored, ownNode, multiline, noexec, requireOpt, embedded, mixed, nodeOptions, custom, opencode: opencode.fact.raw,
+  tailored, ownNode, multiline, noexec, requireOpt, embedded, mixed, nodeOptions, escaped, custom, opencode: opencode.fact.raw,
   unmovable, commented,
   shapes: [
     L("node", ["--require", "/x/boot.cjs", "/old/mcp/dist/index.js"]),
@@ -289,7 +293,7 @@ const out = {
       assert.match(moved.embedded[family].why, /旧的安装位置/);
     }
     assert.ok(!moved.embedded.claudeEntry, "改不动就什么都不写进新隔离档");
-    for (const [bench, field] of [["mixed", /旧的安装位置/], ["nodeOptions", /NODE_OPTIONS/]] as const) {
+    for (const [bench, field] of [["mixed", /旧的安装位置/], ["nodeOptions", /NODE_OPTIONS/], ["escaped", /ASH_ENTRY/]] as const) {
       for (const family of ["claude", "codex"]) {
         assert.equal(moved[bench][family].ok, false, `${bench}:${family} 还引用着旧入口,不许报成功`);
         assert.match(moved[bench][family].why, field, `${bench}:${family} 说清是哪一处`);
@@ -303,6 +307,51 @@ const out = {
   }
   assert.deepEqual(moved.custom.claudeEntry, { type: "http", url: "https://ash.example/mcp" }, "远程登记原样搬");
   assert.ok(moved.custom.codexText.includes('command = "/opt/my/ash-mcp"'), "自定义启动命令原样搬");
+
+  // ── 收口判的是 CLI 解码后实际读到的值(纯函数,不依赖本地有没有 build 过 MCP) ──
+  const { relocateHostFact, relocateLaunch } = await import("../src/mcp-registry/relocate.js");
+  const { tomlStringValues } = await import("../src/codex-toml.js");
+  assert.deepEqual(tomlStringValues(String.raw`["a\u002fb", 'c\d', "\U0001F600", """
+x \
+   y""", '''z''']`), ["a/b", "c\\d", "😀", "x y", "z"], "TOML 四种引法 + 转义 + 行尾反斜杠");
+  assert.equal(tomlStringValues(String.raw`"\q"`), null, "不认的转义:解不开就是 null,不拿一截当整条");
+  assert.equal(tomlStringValues(String.raw`"\/"`), null, "JSON 认、TOML 不认的转义");
+  const target = { entry: "/new/mcp/dist/index.js", node: "/new/runtime/node", runnable: () => false };
+  const block = (text: string) => relocateHostFact({ status: "on", detail: "", block: text }, target) as Record<string, any>;
+  const raw = (entry: Record<string, unknown>) => relocateHostFact({ status: "on", detail: "", raw: entry }, target) as Record<string, any>;
+  // 行尾注释 codex 不读:提到旧路径也不算引用(第 6 轮审查的另一半)。
+  const comment = block('[mcp_servers.ash]\ncommand = "node"\nargs = ["/old/mcp/dist/index.js"]\n[mcp_servers.ash.env]\n'
+    + 'HARNESS_URL = "https://r.example" # 原先在 /old/mcp/dist/index.js\n');
+  assert.ok(comment.fact?.block.includes('args = ["/new/mcp/dist/index.js"]'), `行尾注释不算引用:${JSON.stringify(comment)}`);
+  for (const [name, text] of [
+    ["转义藏着的旧入口", String.raw`[mcp_servers.ash]
+command = "node"
+args = ["/new/mcp/dist/index.js"]
+[mcp_servers.ash.env]
+NODE_OPTIONS = "--require /old/mcp\u002Fdist/index.js"`],
+    ["多行字符串里的旧入口", '[mcp_servers.ash]\ncommand = "sh"\nargs = ["-c", """\nexec node /old/mcp/dist/index.js"""]\n'],
+    ["解不开的值", String.raw`[mcp_servers.ash]
+command = "node"
+args = ["/new/mcp/dist/index.js"]
+[mcp_servers.ash.env]
+X = "\q"`],
+  ] as const) {
+    const result = block(text);
+    assert.ok(typeof result.why === "string" && result.why.includes("/new/mcp/dist/index.js"), `${name}:报失败并说清该改成什么 ${JSON.stringify(result)}`);
+  }
+  // 路径的等价写法:整值的照样认出来换掉,嵌着的照样拦下。
+  assert.deepEqual(relocateLaunch({ command: "node", args: ["/old/mcp//dist/./index.js"] }, target),
+    { command: "/new/runtime/node", args: ["/new/mcp/dist/index.js"] }, "分隔符连写、./ 的整值路径照样换");
+  for (const [name, args] of [
+    ["x/..", ["-c", "node /old/mcp/dist/../dist/index.js"]],
+    ["反斜杠", ["/c", String.raw`node C:\old\mcp\dist\index.js`]],
+    ["百分号编码", ["--import=file:///old/mcp%2Fdist/index.js"]],
+    ["shell 引号拼接", ["-c", `node '/old/mcp/'"dist/index.js"`]],
+  ] as const) {
+    const result = raw({ command: "sh", args: [...args] });
+    assert.ok(typeof result.why === "string", `${name}:${JSON.stringify(result)}`);
+  }
+  assert.ok(raw({ command: "sh", args: ["-c", 'exec node "/new/mcp/dist/index.js"'] }).fact, "只引用当前入口的 shell 包装照样搬");
 
   console.log("test-data-root: ok");
 } finally {
