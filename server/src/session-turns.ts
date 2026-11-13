@@ -363,10 +363,12 @@ export type SessionTurnFacts = {
   outcomes: Record<string, TurnOutcome | null>;
   /** 只有断过的回合有键（原样就是 `Session.turnInterruptions`）。 */
   interruptions: Record<string, TurnInterruption>;
+  /** 每个回合收口的时刻，还开着就是 null（原样就是 `Session.turnEnds`）。 */
+  ends: Record<string, string | null>;
 };
 
 /** `session_turns` 里给页面用的那几列（读端 `sessionsForTask` 跟会话行同一个批读出来）。 */
-export type TurnFactRow = { sessionId: string; startedAt: string; outcome: unknown; interruption: unknown };
+export type TurnFactRow = { sessionId: string; startedAt: string; endedAt: string | null; outcome: unknown; interruption: unknown };
 
 /**
  * 一个任务名下**每个回合**收口时记下的事:会话 id → 结局 + 怎么断的。两层键合起来就是
@@ -382,8 +384,9 @@ export type TurnFactRow = { sessionId: string; startedAt: string; outcome: unkno
 export function turnFactsOf(rows: readonly TurnFactRow[]): Map<string, SessionTurnFacts> {
   const bySession = new Map<string, SessionTurnFacts>();
   for (const row of rows) {
-    const facts = bySession.get(row.sessionId) ?? { outcomes: {}, interruptions: {} };
+    const facts = bySession.get(row.sessionId) ?? { outcomes: {}, interruptions: {}, ends: {} };
     facts.outcomes[row.startedAt] = readOutcome(row.outcome);
+    facts.ends[row.startedAt] = typeof row.endedAt === "string" && row.endedAt ? row.endedAt : null;
     const interruption = readInterruption(row.interruption);
     if (interruption) facts.interruptions[row.startedAt] = interruption;
     bySession.set(row.sessionId, facts);

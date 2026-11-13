@@ -31,7 +31,14 @@ export type TaskReplyBody = {
   afterTaskId?: string;
   annotationBatchId?: string;
   annotationRevision?: number;
+  /** 页面给这一句的凭据（见 ContinueTaskOptions.clientKey）。只在当场投递时用得上。 */
+  clientKey?: string;
 };
+
+// 页面先画出来的那一句凭它认回服务端落下的那条（ContinueTaskOptions.clientKey）。只认短字符串：
+// 它原样进 .md 和实时事件。
+const clientKeyOf = (body: TaskReplyBody): { clientKey?: string } =>
+  typeof body.clientKey === "string" && body.clientKey && body.clientKey.length <= 128 ? { clientKey: body.clientKey } : {};
 
 function toScheduledMessage(r: typeof scheduledMessages.$inferSelect): ScheduledMessage {
   return {
@@ -174,7 +181,7 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
     }
     const seat = claim.seat;
     let stashed = false;
-    void continueTask(taskId, text, route)
+    void continueTask(taskId, text, { ...route, ...clientKeyOf(b) })
       .then(async (started) => {
         // 回合被别的执行抢占:原话退回托盘,仍按执行型等队列位置,不按续聊放行。
         if (!started) { await stash(); stashed = true; }
@@ -187,7 +194,7 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
       });
     return c.json({ started: true }, 202);
   }
-  void continueTask(taskId, text, route).then(async (started) => {
+  void continueTask(taskId, text, { ...route, ...clientKeyOf(b) }).then(async (started) => {
     if (started) return;
     await enqueueMessage({ taskId, text, ...route, agent: b.agent ?? null, ownerUserId: route.actingUserId });
     flushPendingWhenTurnIdle(taskId);

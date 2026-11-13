@@ -7,7 +7,10 @@ import { open, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { AgentEvent, AgentType } from "@ash/shared";
 import { isTokenUsage, isUsageAccountingMark } from "@ash/shared/usage";
+import type { RecordIdentity } from "@ash/shared/session-output";
 import { RUNS_DIR, RUNS_FALLBACK_DIR } from "./paths.js";
+import { nextRecordSeq } from "./session-seq.js";
+import { closeProse, sentinelIdentity } from "./transcript-identity.js";
 
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
 type TraceTextEvent = { kind: "text"; text: string };
@@ -23,6 +26,14 @@ export type SessionTraceEvent = AgentTraceEvent | TraceTextEvent | TraceUsageEve
 export type SessionTraceEntry = {
   at: string;
   turnStartedAt: string;
+  /** 这条会话的第几条记录（跟 .md 共用号段，见 session-seq.ts）。老记录没有。 */
+  seq?: number;
+  /**
+   * 盘上没有、服务端**读的时候**补出来的条目才有：journal = 图片账本补回的图（agent-image-journal.ts），
+   * models = 子智能体的模型档案（native-work-models.ts）。页面删消息时按盘上那份核对指纹，凭它把
+   * 这几条排除在外，不必按形状和位置去猜。落盘的条目永远没有这一位。
+   */
+  origin?: "journal" | "models";
   event: SessionTraceEvent;
 };
 
@@ -50,22 +61,26 @@ export function readableRunPath(path: string): string {
   return join(RUNS_FALLBACK_DIR, rel);
 }
 
+/** 落一条 trace，返回它领到的记录号（实时事件带上同一个号）。 */
 export function appendSessionTrace(
   taskId: string,
   sessionId: string,
   turnStartedAt: string,
   event: SessionTraceEvent,
   at = new Date().toISOString(),
-): void {
+): number {
   const path = sessionTracePath(taskId, sessionId);
+  // 号在写盘之前领：写失败了实时那一路照样带着它，页面上那一步不会因为盘坏了变成另一条。
+  const seq = nextRecordSeq(taskId, sessionId);
   try {
     mkdirSync(dirname(path), { recursive: true });
-    appendFileSync(path, `${JSON.stringify({ at, turnStartedAt, event } satisfies SessionTraceEntry)}\n`);
+    appendFileSync(path, `${JSON.stringify({ at, turnStartedAt, seq, event } satisfies SessionTraceEntry)}\n`);
   } catch (error) {
     // Trace persistence is diagnostic UI state. A disk failure must not alter the
     // executor's outcome, but it must remain visible to operators.
     console.warn(`[ash] failed to persist session trace ${sessionId}:`, error);
   }
+  return seq;
 }
 
 // 只读尾巴：判据要的那条事件属于**最后一回合**，它一定贴在文件末尾；整份读进来对长会话
@@ -176,6 +191,9 @@ function parseTraceLine(line: string): SessionTraceEntry | null {
   try {
     const entry = JSON.parse(line) as Partial<SessionTraceEntry>;
     if (typeof entry.at !== "string" || typeof entry.turnStartedAt !== "string") return null;
+    if (entry.seq !== undefined && (typeof entry.seq !== "number" || !Number.isInteger(entry.seq))) return null;
+    // 读的时候补出来的条目才带来源，盘上那一行带着它就是被写坏了（或者是谁手改的）：去掉，照盘上的算。
+    if (entry.origin !== undefined) delete entry.origin;
     return validTraceEvent(entry.event) ? entry as SessionTraceEntry : null;
   } catch {
     return null;
@@ -295,10 +313,16 @@ export function writeTurn(
   // aside:true = 任务时间线旁注（appendTaskTimeline 那一路）。同样必须落盘：它跟「继续
   // （从中断处）」那类真回合起点在盘上长得一模一样，而两者的读法正相反——旁注砸在回合
   // 中间纯属偶然，拿它当回合边界就会把一条回复劈成两半（见 shared/src/events.ts）。
-  turn: { t: "user" | "system"; agent: AgentType; text: string; by?: "system"; level?: "notice"; aside?: true; notice?: import("@ash/shared/timeline-notice").TimelineNotice; eventKey?: string; answerIds?: string[]; monitorWake?: import("@ash/shared/monitor-wake").MonitorWakeData; resume?: import("@ash/shared/system-resume").SystemResume },
+  // clientKey:页面发这一句时给的凭据(见 shared/src/session-output.ts 的 ConvSeg)。
+  turn: { t: "user" | "system"; agent: AgentType; text: string; by?: "system"; level?: "notice"; aside?: true; notice?: import("@ash/shared/timeline-notice").TimelineNotice; eventKey?: string; answerIds?: string[]; monitorWake?: import("@ash/shared/monitor-wake").MonitorWakeData; resume?: import("@ash/shared/system-resume").SystemResume; clientKey?: string },
   at: string,
-): void {
-  out.write(`\n${TURN_SENTINEL}${JSON.stringify({ ...turn, at })}\n`);
+  // 先领过号的那种(会话轮换旁注,见 transcript-identity.ts 的 reserveRecord)把号带进来;缺省就现领。
+  // 返回这一行的身份,实时事件带上同一份。流没绑定(团队调度台、duet)时不带身份、返回 null。
+  identity?: RecordIdentity | null,
+): RecordIdentity | null {
+  const id = sentinelIdentity(out, identity);
+  out.write(`\n${TURN_SENTINEL}${JSON.stringify({ ...turn, at, ...(id ?? {}) })}\n`);
+  return id;
 }
 
 // Fence where an agent turn ACTUALLY finished (real exec end), so per-turn 用时 in
@@ -306,10 +330,14 @@ export function writeTurn(
 // reply] — i.e. it excludes the idle wait while the agent sat waiting for you.
 // Distinct from writeTurn (which fences human/system interjections, not exec ends).
 export function writeTurnEnd(out: NodeJS.WritableStream, at: string): void {
-  out.write(`\n${TURN_SENTINEL}${JSON.stringify({ t: "agentEnd", at })}\n`);
+  const id = sentinelIdentity(out);
+  out.write(`\n${TURN_SENTINEL}${JSON.stringify({ t: "agentEnd", at, ...(id ?? {}) })}\n`);
 }
 
 export function writeRunError(out: NodeJS.WritableStream, message: string): void {
+  // 诊断块不是一条记录，但它把正文劈开了：后面的正文另起一段（带自己的标记行），否则盘上这段
+  // 正文的字数里夹着诊断，实时增量按字数认「盘上有了没有」就对不上。
+  closeProse(out);
   const quoted = message.trim().split("\n").map((line) => `> ${line}`).join("\n");
   out.write(`\n> **执行诊断**\n${quoted}\n`);
 }

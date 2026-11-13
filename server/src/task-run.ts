@@ -1,4 +1,5 @@
 import { mkdirSync, createWriteStream } from "node:fs";
+import { bindTranscript } from "./transcript-identity.js";
 import { markdownImageAccounting } from "./agent-image-journal.js";
 import { hintAshMcpForTurn } from "./ash-mcp-turn-hint.js";
 import { join } from "node:path";
@@ -293,14 +294,16 @@ export async function runTask(
     await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
+    // 这一回合写下的每一行记录都带身份（transcript-identity.ts）。
+    bindTranscript(out, { taskId, sessionId: sessId, turnStartedAt: turnStart });
     const baseNote = baseFallbackNote(ws.baseFallback);
     if (baseNote) {
       // fresh run 也会撞上「登记的 base 已经没了」（任务验收合并后分支被删，用户又点了
       // 一次运行）。这一档不像续聊那样起不来，但基线被换掉、甚至跟着改了任务登记值，
       // 只在日志里发生就等于没发生 —— 同样落一条持久可见的气泡。说不说由
       // baseFallbackNote 判（见 base-fallback-notice.ts），跟失败那条路共用一套。
-      writeTurn(out, { t: "system", agent: agentType, text: baseNote }, turnStart);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "system", text: baseNote, at: turnStart } });
+      const noted = writeTurn(out, { t: "system", agent: agentType, text: baseNote }, turnStart);
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, ...noted, event: { kind: "system", text: baseNote, at: turnStart } });
       baseFallbackTold = true;
     }
     await consumeSingleRun({

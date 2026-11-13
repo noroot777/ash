@@ -1,4 +1,5 @@
 import { mkdirSync, createWriteStream } from "node:fs";
+import { bindTranscript } from "./transcript-identity.js";
 import { loadMarkdownImageSeed, markdownImageAccounting } from "./agent-image-journal.js";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -559,6 +560,7 @@ export async function continueTask(
     });
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
+    bindTranscript(out, { taskId, sessionId: sessId, turnStartedAt: turnStart });
     const noteTarget = { out, taskId, sessionId: sessId, role: sessionRole, agentType: agent, at: turnStart };
     if (opts.system) {
       // Backend-initiated 继续: a 〔系统〕 trace carrying who resumed it, NOT a 你→ reply.
@@ -567,7 +569,7 @@ export async function continueTask(
     } else {
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
       // the human/backend turn as its own bubble; the matching event keeps every client live.
-      recordUserConversationTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text: userTurnText, at: turnStart, bySystem: opts.byBackend, monitorWake: opts.monitorWake, eventKey: opts.deliveryKey, answerIds: opts.answerIds });
+      recordUserConversationTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text: userTurnText, at: turnStart, bySystem: opts.byBackend, monitorWake: opts.monitorWake, eventKey: opts.deliveryKey, answerIds: opts.answerIds, clientKey: opts.clientKey });
     }
     // 上一回合尚未结算就收到回复时，消息会先排队，真正送达时任务已不再 paused；这条
     // 路径要在落盘后消费旧检查点，避免它继续挡完成与预约派审。若起点本来就是 paused，

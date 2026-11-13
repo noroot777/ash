@@ -12,19 +12,38 @@
 // `deleted:true` 的 sentinel 占住原来的位置：段落的序号、回合边界、trace 的切点都不因
 // 删除而挪动。默认解析把它们滤掉 —— 任何读正文的人（下一轮重建上下文、追问列表、重试
 // 取上一条输入、MCP 读转录）都天然读不到；只有要按原位排版的界面传 `keepDeleted`。
+//
+// **记录身份**（`seq` + `turnStartedAt`，见 RecordIdentity）：新写下的每一行 sentinel 都带着
+// 「这是这条会话的第几条记录、属于哪个回合」，agent 正文每一段开头另有一行 `t:"agent"` 的标记
+// 行带同一套身份（老解析器本来就跳过非删除的 `t:"agent"` 行，所以读者不受影响）。trace 的每一条
+// 与实时事件带的是同一个号（server/src/session-seq.ts 发号），页面据此归回合、去重，不再按时间
+// 和文字去猜。老记录没有这两位，读端照旧。
 import type { MonitorWakeData } from "./monitor-wake.ts";
 import { timelineNoticeOf, type TimelineNotice } from "./timeline-notice.ts";
 import { LEGACY_SYS_MARKER } from "./index.ts";
 import { systemResumeOf, type SystemResume } from "./system-resume.ts";
 
+/**
+ * 一条记录的身份：这条会话的第几条记录（`seq`，trace 与 .md 共用一个号段，实时事件带同一个值），
+ * 以及属于哪个回合（回合起点，跟 trace 的 `turnStartedAt`、`session_turns.started_at` 同一个值；
+ * null = 写下它的那一刻没有回合在跑）。老记录没有。
+ */
+export type RecordIdentity = { seq: number; turnStartedAt: string | null };
+
+// 身份那两位挂在每一种段上（老记录缺省）。agent 段的 `at` 是这段正文开头那一刻（标记行写下的），
+// `raw` 是盘上这段正文原样（没裁空白，`text` 是裁过的）：同一颗气泡被旁注劈开的几段按原样接回去，
+// 一个字不差；实时那一路的增量按它的字数认「哪些字盘上已经有了」。
+// clientKey：真人从页面发的那一句，页面先画出来的那份（乐观回显）凭它认回自己。
+type Identity = Partial<RecordIdentity>;
+
 export type ConvSeg =
-  | { kind: "agent"; text: string; endedAt?: string; deleted?: true }
+  | Identity & { kind: "agent"; text: string; endedAt?: string; at?: string; raw?: string; deleted?: true }
   // bySystem：走真人回合通道、但作者是后端的那种（验证打回、验收冲突交接）。
   // 它们**必须**是 user 回合（要 followUpFrom 护住任务原来的终态），所以只能另开一位来标。
   // answerIds：这一句承载的是哪几条问答答复（任务问答历史里那条记录的 id，task-answer.ts 在
   // 发出答复时写下）。删除与问答卡都按它认记录，不按答复原文猜 —— 两次答「可以」原文一模一样。
   // 删掉之后它仍留在墓碑行上（它不是正文，是身份）。
-  | { kind: "user"; text: string; at?: string; bySystem?: true; monitorWake?: MonitorWakeData; answerIds?: string[]; deleted?: true }
+  | Identity & { kind: "user"; text: string; at?: string; bySystem?: true; monitorWake?: MonitorWakeData; answerIds?: string[]; clientKey?: string; deleted?: true }
   // level:"notice" = 结算说明（「这一轮为什么落成这个状态」），由 server 结算时写下。
   // 展示端据此上「提示」的语气，而不是让关键词表去猜——说明里天然带着「未完成」这种词。
   // aside:true = 任务时间线旁注（appendTaskTimeline 写的那些：预约审查、验收阶段更新、
@@ -32,7 +51,7 @@ export type ConvSeg =
   // 常常正砸在某一回合说到一半的地方，所以展示端不能拿它当回合边界（见 events.ts）。
   // notice = 这条时间线旁注是哪一类事（见 timeline-notice.ts）。老记录没有。
   // resume = 系统续跑的缘由（见 system-resume.ts）。老记录、别的系统注记没有。
-  | { kind: "system"; text: string; at?: string; level?: "notice"; aside?: true; notice?: TimelineNotice; resume?: SystemResume; deleted?: true };
+  | Identity & { kind: "system"; text: string; at?: string; level?: "notice"; aside?: true; notice?: TimelineNotice; resume?: SystemResume; deleted?: true };
 
 /** 一段连同它在原文里占的行（含首尾，按 `\n` 切出来的行号）。删除就地改写靠它定位。 */
 export type SessionSegmentSpan = { seg: ConvSeg; first: number; last: number };
@@ -40,7 +59,19 @@ export type SessionSegmentSpan = { seg: ConvSeg; first: number; last: number };
 type Sentinel = {
   t?: string; text?: string; at?: string; by?: string; level?: string; aside?: boolean; notice?: unknown;
   monitorWake?: MonitorWakeData; answerIds?: unknown; resume?: unknown; deleted?: boolean;
+  seq?: unknown; turnStartedAt?: unknown; clientKey?: unknown;
 };
+
+/** sentinel 上的身份（形状不对就当没有：老记录、手改过的行）。 */
+export function recordIdentityOf(value: { seq?: unknown; turnStartedAt?: unknown }): RecordIdentity | null {
+  if (typeof value.seq !== "number" || !Number.isInteger(value.seq) || value.seq < 0) return null;
+  return { seq: value.seq, turnStartedAt: typeof value.turnStartedAt === "string" && value.turnStartedAt ? value.turnStartedAt : null };
+}
+
+const identityFields = (identity: RecordIdentity | null): Identity => identity ? { ...identity } : {};
+
+/** 一处 agentEnd（回合真正收口的那一刻）。新记录带着它是哪个回合的。 */
+export type AgentEndMark = Identity & { at?: string };
 
 const noticeOf = (value: unknown): { notice?: TimelineNotice } => {
   const notice = timelineNoticeOf(value);
@@ -58,17 +89,35 @@ const answerIdsOf = (value: unknown): { answerIds?: string[] } => {
 };
 
 export function parseSessionSpans(out: string): SessionSegmentSpan[] {
+  return parseSessionTranscript(out).spans;
+}
+
+/** 解析成段，外加每一处 agentEnd（回合收口时刻；页面拿它给没有回合行的回合兜底）。 */
+export function parseSessionTranscript(out: string): { spans: SessionSegmentSpan[]; agentEnds: AgentEndMark[] } {
   const spans: SessionSegmentSpan[] = [];
+  const agentEnds: AgentEndMark[] = [];
   let buf: string[] = [];
   let bufFirst = -1;
   let bufLast = -1;
   let skippingDiagnostic = false;
+  // 下一段正文的身份（它开头那一行标记）。段的行号从标记行算起：删除时整段连标记一起换成墓碑。
+  let marker: { identity: RecordIdentity; at?: string; line: number } | null = null;
   const push = (seg: ConvSeg, first: number, last = first) => spans.push({ seg, first, last });
   const flush = () => {
-    const t = buf.join("\n").trim();
-    if (t) push({ kind: "agent", text: t }, bufFirst, bufLast);
+    const raw = buf.join("\n");
+    const t = raw.trim();
+    if (t) {
+      push(
+        marker
+          ? { kind: "agent", text: t, ...marker.identity, ...(marker.at ? { at: marker.at } : {}), raw }
+          : { kind: "agent", text: t },
+        marker?.line ?? bufFirst,
+        bufLast,
+      );
+    }
     buf = [];
     bufFirst = -1;
+    marker = null;
   };
   out.split("\n").forEach((line, index) => {
     const trimmed = line.trim();
@@ -98,17 +147,24 @@ export function parseSessionSpans(out: string): SessionSegmentSpan[] {
       try { j = JSON.parse(line.slice(1)) as Sentinel; } catch { /* not a turn line — ordinary text */ }
       if (j) {
         flush();
+        const identity = recordIdentityOf(j);
         if (j.t === "agentEnd") {
           // Not a new bubble — it stamps where the agent turn that just flushed
           // actually finished, so per-turn 用时 excludes the idle wait that follows.
           const last = spans[spans.length - 1]?.seg;
           if (last?.kind === "agent") last.endedAt = j.at;
+          agentEnds.push({ ...identityFields(identity), ...(j.at ? { at: j.at } : {}) });
           return;
         }
         const deleted = j.deleted === true ? { deleted: true as const } : {};
         if (j.t === "agent") {
-          // 只有被删掉的 agent 正文才会落成 sentinel（正常正文是裸 Markdown）。
-          if (j.deleted === true) push({ kind: "agent", text: "", deleted: true }, index);
+          // 正常正文是裸 Markdown：带身份的新记录在每段开头多一行标记（身份留给紧跟着的那段正文），
+          // 被删掉的正文落成一行墓碑（身份留在墓碑上）。
+          if (j.deleted === true) {
+            push({ kind: "agent", text: "", deleted: true, ...identityFields(identity), ...(j.at ? { at: j.at } : {}) }, index);
+          } else if (identity) {
+            marker = { identity, at: j.at, line: index };
+          }
           return;
         }
         push(
@@ -121,6 +177,7 @@ export function parseSessionSpans(out: string): SessionSegmentSpan[] {
                 ...(j.aside === true ? { aside: true as const } : {}),
                 ...noticeOf(j.notice),
                 ...resumeOf(j.resume),
+                ...identityFields(identity),
                 ...deleted,
               }
             : {
@@ -129,6 +186,8 @@ export function parseSessionSpans(out: string): SessionSegmentSpan[] {
                 at: j.at,
                 ...(j.by === "system" ? { bySystem: true as const, ...(j.monitorWake ? { monitorWake: j.monitorWake } : {}) } : {}),
                 ...answerIdsOf(j.answerIds),
+                ...(typeof j.clientKey === "string" && j.clientKey ? { clientKey: j.clientKey } : {}),
+                ...identityFields(identity),
                 ...deleted,
               },
           index,
@@ -154,7 +213,7 @@ export function parseSessionSpans(out: string): SessionSegmentSpan[] {
     buf.push(line);
   });
   flush();
-  return spans;
+  return { spans, agentEnds };
 }
 
 /**
@@ -198,4 +257,18 @@ export function traceSpanFingerprint(entries: readonly { at: string; event: { ki
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
   return `trace:${kept.length}:${hash.toString(16)}`;
+}
+
+/**
+ * 带身份的一截执行过程的指纹（删除按身份指名时用，见 server/src/conversation-redact.ts 的 steps 那一种）：
+ * 按 `seq` 认条目，只数盘上那份（没有 `seq` 的是服务端读的时候补出来的，盘上没有）。
+ */
+export function traceStepsFingerprint(entries: readonly { seq?: number; event: { kind: string } }[]): string {
+  const kept = entries.filter((entry) => typeof entry.seq === "number" && !traceKeptOnDelete(entry.event.kind));
+  let hash = 0x811c9dc5;
+  for (const char of kept.map((entry) => `${entry.seq}|${entry.event.kind}`).join("\n")) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `steps:${kept.length}:${hash.toString(16)}`;
 }

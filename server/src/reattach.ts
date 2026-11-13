@@ -4,6 +4,7 @@
 // 二是依赖方向能保持单向 —— 这里 import single-run 的消费循环，orchestrator
 // 不 import 这里（它靠 runs.ts 的 isRunning 就能知道谁被接管了，不需要回引）。
 import { createWriteStream } from "node:fs";
+import { bindTranscript } from "./transcript-identity.js";
 import { loadMarkdownImageSeed, markdownImageAccounting } from "./agent-image-journal.js";
 import { join } from "node:path";
 import { and, eq, inArray } from "drizzle-orm";
@@ -211,6 +212,8 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       // 够得着它才声明在 try 外面,类型上是可空的)。
       const adoptedHandle = handle;
       const out = createWriteStream(join(RUNS_DIR, task.id, `${sess.id}.md`), { flags: "a" });
+      // 接回来的这一回合接着带身份写（号从盘上接回来，见 session-seq.ts）。
+      bindTranscript(out, { taskId: task.id, sessionId: sess.id, turnStartedAt: sess.turnStartedAt ?? sess.startedAt });
       // 不 await：多个任务并行接管，各自跑各自的（跟正常运行时一样）。
       void consumeSingleRun({
         taskId: task.id,

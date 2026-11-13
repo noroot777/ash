@@ -12,7 +12,6 @@ import type { AgentEvent, AgentType, SessionRole, TurnOutcome } from "@ash/share
 import { eq, sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
-import { bus } from "./bus.js";
 import { closeSessionTurns, recordTurnSpan } from "./session-turns.js";
 import { scanForTitle } from "./auto-title.js";
 import { applyAutoTitle } from "./auto-title-apply.js";
@@ -29,7 +28,7 @@ import {
   type SessionResumeFault,
 } from "./executors/session-lost.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "./transcript.js";
-import { noteAgentEventUpload } from "./uploads.js";
+import { createRunVoice } from "./single-run-voice.js";
 import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "./session-waiting.js";
 import {
@@ -136,17 +135,16 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     : null;
   // 终态只认第一次请求的那个,finally 那次兜底只准重试它 —— 理由见 createExecutionCloser。
   const closeExecution = createExecutionCloser(executionEventId, taskId);
-  // 会话轮换旁注的缓冲与落盘。**必须声明在 try 外面**：异常路径的兜底 flush 挂在
-  // finally 上，声明进 try 里它就不在作用域内了。
-  // 先取空再写：正常尾部（agentEnd 之后）跑一次，finally 再跑一次也只是空转 —— 既不会
-  // 把同一条写两遍，也不会往已经 end 掉的流上再写（写已 end 的流会当场打崩 server）。
-  const sessionNotices: { text: string; at: string; level?: "notice" }[] = [];
-  const flushSessionNotices = () => {
-    const notices = sessionNotices.splice(0);
-    for (const notice of notices) {
-      writeTurn(out, { t: "system", agent: agentType, text: notice.text, level: notice.level }, notice.at);
-    }
+  const runMeta = {
+    model: ex.model ?? null,
+    reasoningEffort: ex.reasoningEffort ?? null,
+    ...(verifyRound ? { verifyRound } : {}),
   };
+  // 对外说话的出口（实时 / trace / .md，同一条记录三处同一个身份，见 single-run-voice.ts）。**必须在
+  // try 外面**：异常路径的兜底 flushSessionNotices 挂在 finally 上，声明进 try 里它就不在作用域内了。
+  const { publishEvent, flushTraceText, noteSessionNotice, flushSessionNotices, emitText, persistTrace } = createRunVoice({
+    taskId, sessId, turnStart: a.turnStart, role, agentType, runMeta, out,
+  });
   try {
   let cliSessionId = a.cliSessionId;
   let exitStatus = 0;
@@ -166,33 +164,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   let watchdogFailure: StallVerdict | null = null;
   let titleDone = !a.autoTitle; // when autoTitle, swallow text until the title line is parsed
   let head = "";
-  let pendingTraceText = "";
-  const runMeta = {
-    model: ex.model ?? null,
-    reasoningEffort: ex.reasoningEffort ?? null,
-    ...(verifyRound ? { verifyRound } : {}),
-  };
   appendSessionTrace(taskId, sessId, a.turnStart, { kind: "run", ...runMeta });
-  const publishEvent = (event: AgentEvent) => bus.publish({
-    type: "agent.event", taskId, sessionId: sessId, role, agentType, ...runMeta, turnStartedAt: a.turnStart, event,
-  });
-  const flushTraceText = (at?: string) => {
-    if (!pendingTraceText) return;
-    appendSessionTrace(taskId, sessId, a.turnStart, { kind: "text", text: pendingTraceText }, at);
-    pendingTraceText = "";
-  };
-  // 会话轮换旁注：实时立刻播（用户正看着），落盘攒到 writeTurnEnd 之后再补 —— 见
-  // 事件循环里那段注释，夹在正文和 agentEnd 之间会让重建出来的回合用时失准。
-  const noteSessionNotice = (text: string, at = now(), level?: "notice") => {
-    sessionNotices.push({ text, at, level });
-    publishEvent({ kind: "system", text, at, ...(level ? { level } : {}) });
-  };
-  const emitText = (text: string) => {
-    if (!text) return;
-    out.write(text);
-    pendingTraceText += text;
-    publishEvent({ kind: "text", text });
-  };
   // 给标题窗口一个结论：命中就改名并把标题行摘掉，没命中就把攒下的正文原样放出去。
   // 返回 false = 还没有结论（窗口没走完），继续攒。
   const resolveTitle = async (flush: boolean) => {
@@ -204,29 +176,14 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     emitText(scan.text); // 命中的话标题行已被摘掉，其余原样放行
     return true;
   };
-  const persistTrace = (event: AgentEvent, at?: string) => {
-    // `context` 刻意不进 trace：trace 是「按回合回放各自的气泡」，而水位属于整条会话的
-    // 此刻、只有最后一个值有意义，它的家在 sessions 行上（setSessionContext）。
-    if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error" || event.kind === "usage" || event.kind === "attachment") {
-      // agent 自己产出的图(工具结果截图之类)也躺在 uploads 目录里,归属跟着这个任务走 ——
-      // 不登记的话多人模式下它是「无主资产」,同项目的人在会话里打不开(uploads.ts)。
-      // 团队那条链的同一处在 team/session-consumer.ts 的 traceLead:改一处记得看另一处。
-      noteAgentEventUpload(taskId, event);
-      flushTraceText();
-      appendSessionTrace(taskId, sessId, a.turnStart, event, at);
-    } else if (event.kind === "done" || event.kind === "turnEnd") {
-      flushTraceText();
-    }
-  };
-
   // 一条**持久可见**的红字:trace(按它发生的位置回放)+ `.md`(落盘产物)+ 当场推送。三处缺
   // 一不可 —— 项目规矩是「判据是用户刷新页面后仍能看出」,少了 trace 那一笔刷新就没了。
   // 熔断和「结局核实不了」两条路都用它,所以只留一份:措辞归 turn-stall.ts,送达归这里。
   const emitTurnError = (text: string) => {
     const event: AgentEvent = { kind: "error", message: text };
-    persistTrace(event);
+    const record = persistTrace(event);
     writeRunError(out, text);
-    publishEvent(event);
+    publishEvent(event, record);
   };
 
   /**
@@ -245,8 +202,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // 保证它不改变这一轮的成败 —— 上游恢复后正常答完的那一轮仍然算成功。
     warn: (text) => {
       const event: AgentEvent = { kind: "error", message: text, level: "notice", affectsTurn: false };
-      persistTrace(event);
-      publishEvent(event);
+      publishEvent(event, persistTrace(event));
     },
     // 持久那一半单独一个动作:它要报成败,看门狗据此重投到确认(理由见 StallActions.project)。
     project: (facts) => markSessionStalled(taskId, sessId, facts.since),
@@ -451,7 +407,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
           noteSessionNotice(emittedEvent.message);
           continue;
         }
-        persistTrace(emittedEvent);
+        const record = persistTrace(emittedEvent);
         // level:"notice" 的 error 只是过程里的一句提示（上游在重试、还在等回话）：照落
         // trace（于是它排在执行过程里它发生的那个位置），但下面三件事一件都不做 ——
         // 写红色诊断块、并进会话恢复故障、把这一轮判成有执行异常。判据见
@@ -465,7 +421,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
         }
         // 水位相反：**覆盖**。它属于整条会话的此刻，不属于某一个回合，所以也不进 trace。
         if (emittedEvent.kind === "context") await setSessionContext(sessId, emittedEvent.context);
-        publishEvent(emittedEvent);
+        publishEvent(emittedEvent, record);
       }
     }
   } catch (error) {
@@ -580,8 +536,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // 会把旧方向误记 failed/canceled、推进队列，还可能触发工作流/审查；若补放旧回合
     // 的 complete_task，又会让新方向一开始就继承一张错误的完成票。
     clearTurnStart(taskId);
-    writeTurn(out, { t: "system", agent: agentType, text: STEERED_NOTE }, endIso);
-    publishEvent({ kind: "system", text: STEERED_NOTE, at: endIso });
+    publishEvent({ kind: "system", text: STEERED_NOTE, at: endIso }, writeTurn(out, { t: "system", agent: agentType, text: STEERED_NOTE }, endIso));
     writeTurnEnd(out, endIso);
     out.end();
     return;
@@ -589,7 +544,8 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   if (doneEvent) {
     // 结尾带上**同一份**结局:exit 0 却被判失败、留了续跑交代后崩掉(那一支不写结算说明)的回合,
     // 直播那一路只有它说得清(见 AgentEvent 的 done.turnOutcome)。
-    const done = { ...doneEvent, turnOutcome, ...(interruption ? { interruption } : {}) };
+    // endedAt:跟上面落进 session_turns 的同一个时刻(页面上这一回合的结束时刻照它,见 AgentEvent 的 done)。
+    const done = { ...doneEvent, turnOutcome, endedAt: endIso, ...(interruption ? { interruption } : {}) };
     persistTrace(done, endIso);
     publishEvent(done);
   }

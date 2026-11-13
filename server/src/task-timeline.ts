@@ -9,6 +9,8 @@ import { db } from "./db/index.js";
 import { sessions } from "./db/schema.js";
 import { withRunFileLock } from "./run-file-lock.js";
 import { sessionTranscriptPath, TURN_SENTINEL, writeTurn } from "./transcript.js";
+import { bindTranscript, liveTranscript } from "./transcript-identity.js";
+import type { RecordIdentity } from "@ash/shared/session-output";
 import { now } from "./util.js";
 
 // Persist one system event to a task session and mirror it over SSE.
@@ -76,24 +78,17 @@ export async function appendTaskTimeline(
     }
 
     const at = now();
-    const transcriptPath = sessionTranscriptPath(taskId, session.id);
-    mkdirSync(dirname(transcriptPath), { recursive: true });
-    // 回合之外随时会来：与删除消息的改写排同一把锁（run-file-lock.ts）。
-    await withRunFileLock([transcriptPath], () => new Promise<void>((resolve, reject) => {
-      const out = createWriteStream(transcriptPath, { flags: "a" });
-      out.once("error", reject);
-      out.once("finish", resolve);
-      writeTurn(out, { t: "system", agent: session.agentType as AgentType, text, aside: true, notice,
-        ...(target?.eventKey ? { eventKey: target.eventKey } : {}),
-      }, at);
-      out.end();
-    }));
+    const line = { t: "system" as const, agent: session.agentType as AgentType, text, aside: true as const, notice,
+      ...(target?.eventKey ? { eventKey: target.eventKey } : {}),
+    };
+    const identity = await appendTranscriptLine(taskId, session, (out) => writeTurn(out, line, at));
     bus.publish({
       type: "agent.event",
       taskId,
       sessionId: session.id,
       role: session.role as SessionRole,
       agentType: session.agentType as AgentType,
+      ...identity,
       event: { kind: "system", text, at, aside: true, notice },
     });
     return true;
@@ -102,3 +97,34 @@ export async function appendTaskTimeline(
     return false;
   }
 }
+
+/**
+ * 往一条会话的正文里追加一行（回合之外的那些追加者共用：时间线旁注、会话轮换注记）。
+ *
+ * 这条会话此刻有回合在跑，就从那条正在写的流写（transcript-identity.ts 的「一条会话在跑的时候只有
+ * 一个写者」）：自己另开一条追加流的话，这一行会砸进正在流式写的正文中间。没在跑就另开一条，跟删除
+ * 消息的改写排同一把锁（run-file-lock.ts）；单飞那几种会话照样带身份（团队调度台、duet 的正文不带，
+ * 页面对它们一直走老读法）。返回这一行的身份，实时事件带上同一份。
+ */
+export async function appendTranscriptLine(
+  taskId: string,
+  session: { id: string; role: string },
+  write: (out: NodeJS.WritableStream) => RecordIdentity | null,
+): Promise<RecordIdentity | null> {
+  const running = liveTranscript(session.id);
+  if (running) return write(running);
+  const transcriptPath = sessionTranscriptPath(taskId, session.id);
+  mkdirSync(dirname(transcriptPath), { recursive: true });
+  return withRunFileLock([transcriptPath], () => new Promise<RecordIdentity | null>((resolve, reject) => {
+    const out = createWriteStream(transcriptPath, { flags: "a" });
+    if (identityRole(session.role)) bindTranscript(out, { taskId, sessionId: session.id, turnStartedAt: null });
+    let identity: RecordIdentity | null = null;
+    out.once("error", reject);
+    out.once("finish", () => resolve(identity));
+    identity = write(out);
+    out.end();
+  }));
+}
+
+/** 正文带身份的会话：单飞那一路写的那几种（团队调度台 lead、duet 的两位讨论者不算）。 */
+const identityRole = (role: string): boolean => role !== "lead" && role !== "voiceA" && role !== "voiceB";
