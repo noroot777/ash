@@ -11,7 +11,10 @@
 //      正常的那一轮 —— 直播 done 依次带 failed / failed / completed,快照按回合起点给出同一份,
 //      键跟 trace 的 turnStartedAt 对得上;最后一回合那一位(turnOutcome)照旧;
 //   ② 团队调度台:被看门狗熔断的那一轮执行器照样报正常收口 —— 直播 turnEnd 带 failed,
-//      自发开的下一轮带 completed,快照同上。
+//      自发开的下一轮带 completed,快照同上;
+//   ③ 调度台**没报 turnEnd 就关台**(第 1 轮审查):被熔断后进程 exit 0、或者直接崩掉 —— 直播的
+//      关台边界 done 带的是收口时判下的 failed,不是照退出码猜;答完待命以后进程才没的,不画
+//      关台边界,上一轮的 completed 不被改写。
 //
 // 跑法:npm -w server run test:turn-outcomes
 import assert from "node:assert/strict";
@@ -148,8 +151,46 @@ try {
     const second = starts.find((start) => start !== at)!;
     assert.deepEqual(session.turnOutcomes, { [at]: "failed", [second]: "completed" },
       "调度台的快照没按回合起点交出每一回合的结局(键要跟 trace 的 turnStartedAt 对得上)");
+    assert.deepEqual(liveEnds(taskId, "done"), [],
+      "两轮都由 turnEnd 收过口了,进程后来退出又画了一条关台边界 —— 那会被读成上一轮的结局");
     ok("团队调度台:熔断的那一轮直播与快照都是 failed,自发开的下一轮是 completed");
   }
+
+  // ── ③ 调度台没报 turnEnd 就关台 ─────────────────────────────────────────────
+  for (const [name, exitStatus, stalled] of [["lead-stall-close", 0, true], ["lead-crash-close", 1, false]] as const) {
+    const sessId = `sess-${name}`;
+    const run = await runLead(name, {
+      cliSessionId: `thread-${name}`,
+      script: async function* () {
+        yield { kind: "text", text: "这一轮还没说完。" };
+        if (stalled) markStallFailure(sessId, at, "注入:上游 10 分钟没有任何输出");
+        yield { kind: "done", exitStatus };
+      },
+    });
+    const taskId = (await run.task()).id;
+    assert.deepEqual(
+      liveEnds(taskId, "done").map((event) => [event.exitStatus, event.turnOutcome]),
+      [[exitStatus, "failed"]],
+      `调度台没报 turnEnd 就关台(exit ${exitStatus}),直播的关台边界没带上收口时判下的 failed`,
+    );
+    assert.deepEqual((await snapshot(taskId)).turnOutcomes, { [at]: "failed" });
+  }
+  {
+    const run = await runLead("lead-idle-exit", {
+      cliSessionId: "thread-lead-idle-exit",
+      script: async function* () {
+        yield { kind: "text", text: "答完了。" };
+        yield { kind: "turnEnd" };
+        yield { kind: "done", exitStatus: 1 }; // 待命中进程自己没了
+      },
+    });
+    const taskId = (await run.task()).id;
+    assert.deepEqual(liveEnds(taskId, "turnEnd").map((event) => event.turnOutcome), ["completed"]);
+    assert.deepEqual(liveEnds(taskId, "done"), [],
+      "答完待命后进程才退出,直播又画了一条按退出码判异常的关台边界,上一轮在页面上被说成失败");
+    assert.deepEqual((await snapshot(taskId)).turnOutcomes, { [at]: "completed" });
+  }
+  ok("调度台没报 turnEnd 就关台:熔断后 exit 0 / 崩掉都带 failed;答完待命后才退出不画关台边界");
 
   console.log("turn-outcomes: 全部通过");
 } finally {

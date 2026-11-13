@@ -27,7 +27,7 @@ import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { consumeInbound } from "./inbound-queue.js";
 import { sendToLead } from "./lead-delivery.js";
 // 会话行的写入口(摘牌闸、失败只上报)住在 lead-session-writes.ts,见那份顶部。
-import { persistOrReport, updateOwnSession } from "./lead-session-writes.js";
+import { flushPendingCredential, persistOrReport, updateOwnSession } from "./lead-session-writes.js";
 import type { PendingInbound } from "./inbound-queue.js";
 import {
   idleRotation,
@@ -178,7 +178,7 @@ async function consume(lead: Lead): Promise<void> {
         flushTraceText();
         await endTurn(lead);
         // 上一回合欠着的新会话凭据在这儿补:补上了,轮换事宜这才算真翻篇。
-        if (await flushPendingCredential(lead)) rotation = onFreshSession(rotation);
+        if (await flushPendingCredential(lead, leads)) rotation = onFreshSession(rotation);
         // 队首换人(排在后面的那一轮顶上来)由所有权层的 onFrontTurn 自己重挂,这里不补。
         continue;
       }
@@ -200,7 +200,7 @@ async function consume(lead: Lead): Promise<void> {
         // 那句「已作废」说没说过，三个一起归零）—— 但**只有凭据真写进库了才算数**。
         // 没写进去还翻篇的话,收尾会按「一切正常」处理:既不补写凭据也不再作废旧的,
         // 库里就永远不知道这条会话(见 flushPendingCredential)。
-        if (await flushPendingCredential(lead)) rotation = onFreshSession(rotation);
+        if (await flushPendingCredential(lead, leads)) rotation = onFreshSession(rotation);
         publish(lead, event);
         continue;
       }
@@ -290,7 +290,12 @@ async function consume(lead: Lead): Promise<void> {
             }
           }
         }
-        if (emittedEvent.kind === "done") exitStatus = emittedEvent.exitStatus;
+        // 进程的退出码只是 closeLead 判结局的一份输入,**原样播出去就早了**:被熔断的回合 exit 0、
+        // 受控停止却非零。直播的关台边界由 closeLead 按它收口的那一轮带结局补发。
+        if (emittedEvent.kind === "done") {
+          exitStatus = emittedEvent.exitStatus;
+          continue;
+        }
         if (!sessionNotice) publish(lead, emittedEvent);
         continue;
       }
@@ -313,51 +318,9 @@ async function consume(lead: Lead): Promise<void> {
   }
   flushTraceText();
   // 关台前最后一次补欠账:补上了就不该再按「这条会话作废了」收尾。
-  if (await flushPendingCredential(lead)) rotation = onFreshSession(rotation);
+  if (await flushPendingCredential(lead, leads)) rotation = onFreshSession(rotation);
   await closeLead(lead, exitStatus, rotation, aborted);
 }
-
-
-
-/**
- * 把 CLI 报上来的新会话凭据补进库,**返回「这一次真的补上了」**。
- *
- * 为什么不是写一次就算完:`lead.cliSessionId` 是内存里当场换掉的,库里那笔靠这次写入。
- * 写失败还当它成了的话,后面三层会一起替它兜底失效 —— 内存 id 已是新值,同一个 id 再报
- * 一次会被「变了才写」挡掉;轮换状态机已经翻篇,不再记得欠着账;closeLead 的正常收尾只
- * 写退出码/用时,不补凭据。于是一次瞬时故障就永久留下「进程还能跑、数据库不知道这条
- * 会话」的分叉:一旦空闲回收或重启,下一次只能 fresh,刚建立的上下文无提示丢失,库里要是
- * 还留着更老的 id 甚至会去续跑旧会话(2026-08-25 第 3 轮审查)。
- *
- * 所以欠账留在 lead 上,由 consume 在**每个回合收尾和关台前**再试;调用点都在 consume
- * 里,是因为补上之后必须连带把 rotation 翻篇 —— 那个状态是 consume 的局部变量,而且
- * 「凭据立住了」和「不必再按作废收尾」本来就是同一件事。
- */
-async function flushPendingCredential(lead: Lead): Promise<boolean> {
-  const patch = lead.pendingCredential;
-  if (!patch) return false;
-  // 只补写**当前这一代**凭据。中途判过 poisoned 的话,内存 id 已经被清成空串、库里的恢复
-  // 字段也刚清掉 —— 这时候把欠账补回去等于把刚判死的 thread 复活:用户看到的持久说明是
-  // 「下次开全新会话」,库里却又指回同一条坏 thread,而且补写成功还会顺手把 rotation 翻篇,
-  // 让 closeLead 也不再清它(2026-08-25 第 4 轮审查)。同代校验顺带挡住其它过代的路子。
-  if (!lead.cliSessionId || patch.cliSessionId !== lead.cliSessionId) {
-    lead.pendingCredential = null;
-    return false;
-  }
-  // 这条会话行可能已经被新进程接管了(工作目录被抽走那条路会复用同一行)。晚到的旧消费者
-  // 不能拿自己攒的这笔凭据盖掉新进程刚报上来的有效 id —— 跟 closeLead 里那道闸同一个理由。
-  // 欠账就此作废:那条行现在归新进程管,补不补轮不到这个已经出局的 handle 决定。
-  if (leads.get(lead.taskId) !== lead) {
-    lead.pendingCredential = null;
-    return false;
-  }
-  const ok = await updateOwnSession(lead, "新会话凭据", patch);
-  if (ok) lead.pendingCredential = null;
-  return ok;
-}
-
-
-
 
 
 // 一个回合说完了(进程还活着)。有攒下的执行者消息就立刻合并成一条继续跑,
@@ -550,18 +513,25 @@ async function closeLead(
   //
   // **整批判决在进循环之前一次取走**(第 2 轮审查 F3):循环体里有 await,第二轮往后再去读就
   // 落在回收窗口之后了 —— 上面的 `clearTurnStall` 已经让它退场,而退场不等于读者读过。
-  const watchdogFailures = new Map(closing.map((at) => [at, stallFailure(lead.sessId, at)]));
-  for (const startedAt of closing) {
-    const watchdogFailed = watchdogFailures.get(startedAt) ?? null;
+  const outcomes = new Map(closing.map((at): [string, TurnOutcome] => [at, stallFailure(lead.sessId, at) ? "failed" : closeOutcome]));
+  for (const [startedAt, outcome] of outcomes) {
     await recordTurnSpan({
       sessionId: lead.sessId,
       taskId: lead.taskId,
       cwd: lead.cwd,
       startedAt,
       endedAt: endIso,
-      outcome: watchdogFailed ? "failed" : closeOutcome,
+      outcome,
     });
     clearStallFailure(lead.sessId, startedAt);
+  }
+  // 直播的关台边界:结局取**执行器真正在跑的那一轮**(最早那个起点,同上面的墙钟),跟刚落进
+  // `session_turns` 的同一份。手上没有开着的回合(答完待命后进程才没的)就不画这条边界 —— 上一轮
+  // 已经由它自己的 `turnEnd` 收过口,进程后来怎么没的不是它的结局(F3 那条链);那种退出在下面
+  // 由红色说明照实讲。
+  if (closing.length) {
+    const front = closing.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a));
+    publish(lead, { kind: "done", exitStatus, turnOutcome: outcomes.get(front)! });
   }
   // CLI 否认了这条会话:把失效的 id 连同由它派生的三件套恢复命令一起清掉,下一次说话
   // 就会开一条全新会话(openResident 的判据就是「这行上有没有 cli_session_id」)。
