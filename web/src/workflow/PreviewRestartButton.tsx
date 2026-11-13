@@ -16,9 +16,11 @@ import { useState } from "react";
 import type { Task } from "@ash/shared";
 import type { WorkflowStep } from "@ash/shared/workflow";
 import { ArrowClockwise, SpinnerGap } from "@phosphor-icons/react";
+import { PreviewServiceLinks } from "../free-workflow/PreviewServiceLinks.tsx";
 import { api } from "../lib/api.ts";
 import { browserPreviewUrl } from "../lib/previewUrl.ts";
 import type { Notify } from "../lib/notify.ts";
+import { useTaskPreview } from "./useTaskPreview.ts";
 
 export function PreviewRestartButton({
   task,
@@ -30,6 +32,8 @@ export function PreviewRestartButton({
   notify: Notify;
 }) {
   const [busy, setBusy] = useState(false);
+  // 地址长在这一站上（起停都不往会话里写，见 useTaskPreview）。
+  const { preview, reload } = useTaskPreview(task.id);
   // 挂着轮次号 = 这一刻在跑的是就地验证轮（旁路回合，见文件头 ②）。verifyRound 在派验证
   // 之前写下、结算时清掉，正好覆盖整轮。
   const verifying = task.verifyRound != null;
@@ -48,6 +52,7 @@ export function PreviewRestartButton({
       notify(reason instanceof Error ? reason.message : String(reason), { sticky: true });
     } finally {
       setBusy(false);
+      reload();
     }
   };
 
@@ -58,6 +63,7 @@ export function PreviewRestartButton({
           {busy ? <SpinnerGap size={13} className="is-spinning" /> : <ArrowClockwise size={13} />}
           <span>{busy ? "启动中" : "重启预览"}</span>
         </button>
+        {preview?.running && !preview.starting && <PreviewServiceLinks key={task.id} services={preview.services ?? []} url={preview.url} />}
       </div>
       <p className="wf-vnote">
         {handedOff
@@ -68,7 +74,7 @@ export function PreviewRestartButton({
               ? "正在跑这一站的命令，等它打印出地址；起不来的话最多两分钟后报错。"
               : verifying
                 ? `第 ${task.verifyRound} 轮验证正在跑，但那一轮只读代码——现在起的预览就是被验的这一版，可以自己点开看。`
-                : "按原样再跑一次这一站，地址照常写进时间线（端口每次现借，跟上次不一样）。"}
+                : "按原样再跑一次这一站（端口每次现借，跟上次不一样）。"}
       </p>
     </>
   );
