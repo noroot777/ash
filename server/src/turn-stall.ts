@@ -77,7 +77,7 @@
 // 落盘、终止回合、回收句柄由各链传进来的 `StallActions` 做;唯一的例外是
 // `turn-stall-verdict.ts` —— 那也只是一张内存表,而「这一轮算失败」这个结论必须由下结论的
 // 这一方写下,见那个文件头。
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent, ModelFailure } from "@ash/shared";
 import { isExecutionNotice } from "./session-notice.js";
 import { producesWork } from "@ash/shared/waiting";
 import { markStallFailure, type StallVerdict } from "./turn-stall-verdict.js";
@@ -170,13 +170,13 @@ function disarm() {
  * 包装要留着,逻辑子线程身份也要留着 —— 所以这里顺手把「它来自子线程」一起带出去,
  * 熔断诊断要用。
  */
-function errorFacts(event: AgentEvent): { message: string; notice: boolean; child: boolean } | null {
+function errorFacts(event: AgentEvent): { message: string; notice: boolean; child: boolean; model: ModelFailure | null } | null {
   const inner = event.kind === "tool" && event.nativeWork?.type === "activity" ? event.nativeWork.event : null;
   const err: AgentEvent | typeof inner = inner ?? event;
   if (!err || err.kind !== "error") return null;
   // notice 的判据只有一份(session-notice.ts):包装内外同一个字段、同一个含义,
   // 所以解包之后照样过那一份,别在这儿另写一遍 `level === "notice"`。
-  return { message: err.message, notice: isExecutionNotice(err), child: !!inner };
+  return { message: err.message, notice: isExecutionNotice(err), child: !!inner, model: err.model ?? null };
 }
 
 /**
@@ -300,6 +300,7 @@ export function trackTurnStall(
   if (err.notice) stall.retries += 1;
   if (err.child) stall.childErrors += 1;
   stall.lastMessage = err.message.slice(0, 300);
+  stall.lastModel = err.model;
   evaluate(sessionId, stall);
 }
 
@@ -428,6 +429,7 @@ function openStall(
     retries: 0,
     childErrors: 0,
     lastMessage: "",
+    lastModel: null,
     // 这一轮停滞之前最后那条正常事件。身份不符 = 那是上一轮的,不算(常驻台一个持有者吃很多轮)。
     lastProgressKind: ((prior) => (prior?.turn === turnStartedAt ? prior.kind : null))(lastProgress.get(owner)),
     elapsedMs: 0,
@@ -460,6 +462,7 @@ const factsOf = (stall: Stall): StallFacts => ({
   retries: stall.retries,
   childErrors: stall.childErrors,
   lastMessage: stall.lastMessage,
+  lastModel: stall.lastModel,
   lastProgressKind: stall.lastProgressKind,
   elapsedMs: stall.elapsedMs,
 });
@@ -561,7 +564,7 @@ function evaluate(sessionId: string, stall: Stall): void {
   //     出现「用户看到已终止、重启接管后却按正常完成结算」(第 1 轮审查 F1,已实测)。
   // 所以这里拿的是**落盘结果**而不是「调过了」:`markStallFailure` 返回即落盘(持久那一半在
   // turn-stall-journal.ts / turn-stall-persist.ts,本模块不碰盘也不碰库)。
-  const durability = markStallFailure(stall.sessionId, stall.turnStartedAt, verdict, stall.since);
+  const durability = markStallFailure(stall.sessionId, stall.turnStartedAt, verdict, stall.since, stall.lastModel);
   // 没存住照样终止 —— 那一轮确实该停;但要**如实说一句**,别让用户以为这个结论一定还在。
   const text = durability === "lost-on-restart" ? `${verdict}\n${stallVolatileVerdictText()}` : verdict;
   try {

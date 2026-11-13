@@ -15,7 +15,9 @@
 //      写完（跟页面读报告同一个入口，第 1 轮审查 N1）
 //   3. 被停掉的、没产出过正文的：不说话，并把那一列清掉
 //   4. 状态接口只在这一轮仍是「error 且没结论」时带出 noVerdict；合并结果审查的尾注带 source=merge
-//   5. 单飞收尾把「这一回合自己异常结束」的事实交进来（接线）
+//   5. 看门狗熔断的原因取自熔断判据的同一批事件：穿过子智能体包装、只认最后那条、恢复过就不沿用
+//      （第 3 轮审查第 1 条）；判决没类型时不说成「上游连不上」
+//   6. 单飞收尾把「这一回合自己异常结束」的事实交进来（接线）
 //
 // 跑：npm -w server run test:review-no-verdict
 import assert from "node:assert/strict";
@@ -23,6 +25,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentEvent } from "@ash/shared";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-review-no-verdict-"));
@@ -207,17 +210,17 @@ try {
     await unknown.note({ failure: { exitStatus: 1, verdict: null, error: { message: "MCP server \"linear\" failed: HTTP 403 Forbidden" } } });
     assert.deepEqual(await unknown.cause(), { kind: "interrupted", reason: "执行器异常退出（exit 1）" });
     assert.doesNotMatch(unknown.timeline(), /上游|认证/, "不替来源不明的报错归因");
-    // 看门狗熔断：整段只收到上游的重试类错误，没有状态码也是连不上。
+    // 看门狗熔断、判决没带类型：不知道卡在什么上，就不说成「上游连不上、等等就好」（第 3 轮审查第 1 条）。
     const tripped = await scene();
     await tripped.note({ failure: { exitStatus: 0, verdict: { kind: "tripped", reason: "15 分钟里只收到重试类错误" }, error: null } });
-    assert.deepEqual(await tripped.cause(), { kind: "interrupted", reason: "模型上游连不上" });
-    // 熔断前那几次重试带了状态码：按它说（第 2 轮审查 N1）；重试撞的是额度，就说额度。
+    assert.deepEqual(await tripped.cause(), { kind: "interrupted", reason: "回合长时间没有进展，被自动终止" });
+    assert.doesNotMatch(tripped.timeline(), /上游连不上|等上游恢复|限流/, "类型缺了不替它编一个会自己恢复的原因");
+    assert.match(tripped.timeline(), /先看上面的原话弄清卡在哪里/);
+    // 判决带了类型（看门狗按熔断的同一批错误取的）：按它说，带状态码（第 2 轮审查 N1）。
     const trippedCode = await scene();
-    await trippedCode.note({ failure: { exitStatus: 0, verdict: { kind: "tripped", reason: "15 分钟里只收到重试类错误" }, error: null,
-      retrying: codexErrorEvent({ willRetry: true, error: { message: UPSTREAM_503 } })!.event.model } });
+    await trippedCode.note({ failure: { exitStatus: 0, error: null,
+      verdict: { kind: "tripped", reason: "15 分钟里只收到重试类错误", model: codexErrorEvent({ willRetry: true, error: { message: UPSTREAM_503 } })!.event.model } } });
     assert.deepEqual(await trippedCode.cause(), { kind: "interrupted", reason: "模型上游连不上（503）" });
-    assert.equal(interruptionOf({ exitStatus: 0, verdict: { kind: "tripped", reason: "" }, error: null, retrying: { kind: "quota_exhausted", status: 429 } }, null).reason,
-      "模型账户额度用完了（429）");
     // 不是上游的崩溃：按退出码说，不冒充上游。
     const crash = await scene();
     await crash.note({ failure: { exitStatus: 137, verdict: null, error: null } });
@@ -283,13 +286,83 @@ try {
     assert.equal((await freeWorkflowState(s.taskId)).reviews[0]!.rounds[0]!.noVerdict, undefined);
   }
 
-  // ── 5. 接线 ───────────────────────────────────────────────────────────────
+  // ── 5. 熔断的原因与熔断判据是同一批事件（第 3 轮审查第 1 条）──────────────────
+  // 看门狗穿过子智能体包装计错误、据此熔断；原因也必须从这同一批里取 —— 另收一份「重试类型」的
+  // 那一版只看顶层，子线程一直报额度用完、父回合被熔断，页面却说「上游连不上，等恢复」。
+  {
+    const { ClaudeChildActivity, CodexChildActivity } = await import("../src/executors/native-agent-activity.js");
+    const { trackTurnStall, __resetTurnStalls } = await import("../src/turn-stall.js");
+    const { stallFailure, __resetStallFailures } = await import("../src/turn-stall-verdict.js");
+    process.env.ASH_STALL_WARN_ERRORS = "0";
+    process.env.ASH_STALL_WARN_MS = "0";
+    process.env.ASH_STALL_TRIP_MS = "30";
+    process.env.ASH_STALL_TRIP_GRACE_MS = "0";
+    const TURN = "2026-11-13T12:00:00.000Z";
+    const actions = { taskId: "t-stall", warn() {}, trip() {}, resolve() {}, project: async () => true };
+    /** 按顺序喂进看门狗；`gap` 之前停一下，让停滞时长越过熔断阈值。 */
+    const feed = async (sessionId: string, batches: AgentEvent[][]) => {
+      const owner = {};
+      for (const [i, batch] of batches.entries()) {
+        if (i) await new Promise((resolve) => setTimeout(resolve, 60));
+        for (const event of batch) trackTurnStall(sessionId, owner, TURN, event, actions);
+      }
+      return stallFailure(sessionId, TURN);
+    };
+    const tripReason = (verdict: ReturnType<typeof stallFailure>) =>
+      interruptionOf({ exitStatus: 0, verdict, error: null }, null).reason;
+    const QUOTA = "You exceeded your current quota, please check your plan and billing details (insufficient_quota)";
+
+    // claude 子线程的重试：带上类型（与主线程同一份归一），熔断判决随之带上。
+    const claudeChild = new ClaudeChildActivity();
+    const claudeRetry = () => claudeChild.message({ type: "system", subtype: "api_retry", parent_tool_use_id: "tu-1",
+      attempt: 1, max_retries: 10, retry_delay_ms: 1000, error_status: 429, error: QUOTA });
+    assert.deepEqual((claudeRetry()[0] as { nativeWork?: { event?: { model?: unknown } } }).nativeWork?.event?.model,
+      { kind: "quota_exhausted", status: 429 }, "claude 子线程的重试提示挂类型");
+    const claudeVerdict = await feed("s-claude-child", [claudeRetry(), claudeRetry()]);
+    assert.equal(claudeVerdict?.kind, "tripped", "子线程一直重试，父回合被熔断");
+    assert.deepEqual(claudeVerdict?.model, { kind: "quota_exhausted", status: 429 }, "判决带着卡住它的那条错误的类型");
+    assert.equal(tripReason(claudeVerdict), "模型账户额度用完了（429）");
+
+    // codex 子线程：重试中的与子线程回合终局错误都走同一份归一。
+    const codexChild = new CodexChildActivity();
+    const codexRetry = () => codexChild.notification("error",
+      { threadId: "th-1", willRetry: true, error: { message: `unexpected status 429 Too Many Requests: ${QUOTA}` } });
+    const codexVerdict = await feed("s-codex-child", [codexRetry(), codexRetry()]);
+    assert.deepEqual(codexVerdict?.model, { kind: "quota_exhausted", status: 429 });
+    assert.equal(tripReason(codexVerdict), "模型账户额度用完了（429）");
+    const childEnd = codexChild.notification("turn/completed", { threadId: "th-1", turn: { error: { message: "unexpected status 503 Service Unavailable" } } });
+    assert.deepEqual((childEnd[0] as { nativeWork?: { event?: { model?: unknown } } }).nativeWork?.event?.model, { kind: "unavailable", status: 503 });
+
+    // 恢复过之后再卡住：旧那次的类型不带到新一次里；同一次里最后那条没类型，也不沿用前面的。
+    const typed: AgentEvent = { kind: "error", message: "上游返回 503", level: "notice", affectsTurn: false, model: { kind: "unavailable", status: 503 } };
+    const untyped: AgentEvent = { kind: "error", message: "上游没有响应，正在重试", level: "notice", affectsTurn: false };
+    const recovered = await feed("s-recovered", [[typed], [{ kind: "text", text: "接着干" }, untyped], [untyped]]);
+    assert.equal(recovered?.kind, "tripped");
+    assert.equal(recovered?.model ?? null, null, "恢复前那次的类型不算这次的原因");
+    assert.equal(tripReason(recovered), "回合长时间没有进展，被自动终止");
+    const lastUntyped = await feed("s-last-untyped", [[typed], [untyped]]);
+    assert.equal(lastUntyped?.model ?? null, null, "卡住它的是最后那条");
+
+    // 判决跨重启：类型跟着落盘，装回来还在；旧记录没有、坏的不认。
+    const { readStallJournal, pendingStallVerdicts } = await import("../src/turn-stall-journal.js");
+    const { loadStallFailures } = await import("../src/turn-stall-verdict.js");
+    const journaled = pendingStallVerdicts(readStallJournal()).find((record) => record.sessionId === "s-claude-child");
+    assert.deepEqual(journaled?.model, { kind: "quota_exhausted", status: 429 }, "落盘的判决带着类型");
+    __resetStallFailures();
+    loadStallFailures([journaled!, { ...journaled!, sessionId: "s-old", model: undefined }, { ...journaled!, sessionId: "s-bad", model: "429" as never }]);
+    assert.equal(tripReason(stallFailure("s-claude-child", TURN)), "模型账户额度用完了（429）", "重启装回来照样说额度");
+    assert.equal(stallFailure("s-old", TURN)?.model, null);
+    assert.equal(stallFailure("s-bad", TURN)?.model, null);
+    __resetTurnStalls();
+    __resetStallFailures();
+  }
+
+  // ── 6. 接线 ───────────────────────────────────────────────────────────────
   {
     const run = readFileSync(new URL("../src/single-run.ts", import.meta.url), "utf8");
-    assert.match(run, /const failure = executionFailed\s*\? \{ exitStatus, verdict: watchdogFailure, error: lastExecutionError, retrying: lastRetryModel \}\s*: null;/,
-      "单飞收尾按「这一回合自己异常结束」交事实：退出码、看门狗判决、那条执行故障、重试提示撞的类型");
-    assert.match(run, /if \(emittedEvent\.kind === "error" && emittedEvent\.model && isExecutionNotice\(emittedEvent\)\) lastRetryModel = emittedEvent\.model;/,
-      "重试提示上的类型记下来");
+    assert.match(run, /const failure = executionFailed \? \{ exitStatus, verdict: watchdogFailure, error: lastExecutionError \} : null;/,
+      "单飞收尾按「这一回合自己异常结束」交事实：退出码、看门狗判决（带熔断那条错误的类型）、那条执行故障");
+    assert.doesNotMatch(run, /lastRetryModel/, "熔断原因不另收一份：只认看门狗判决里的");
     assert.match(run, /noteReviewerChannelGap\(\{[^}]*failure \}\)/, "交进说明里");
     assert.match(run, /sawExecutionError = true; if \(!lastExecutionError\?\.model \|\| emittedEvent\.model\) lastExecutionError = emittedEvent;/,
       "带模型类型的那条不被后面的执行诊断汇总盖掉");

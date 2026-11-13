@@ -27,12 +27,13 @@ import type { StallVerdictKind } from "./turn-stall-verdict.js";
 /** 这一回合**自己**异常结束的事实（single-run 收尾时手上那几样）。没异常结束就不给。 */
 export type TurnFailure = {
   exitStatus: number;
-  /** 看门狗 / 执行器判下的那份结论（turn-stall-verdict.ts 的 StallVerdict 里那两样）。 */
-  verdict: { kind: string; reason: string } | null;
+  /**
+   * 看门狗 / 执行器判下的那份结论（turn-stall-verdict.ts 的 StallVerdict 里那几样）。熔断判决的
+   * `model` 是看门狗按它熔断的**同一批**错误取的（穿过子智能体包装、只认最后那条）。
+   */
+  verdict: { kind: string; reason: string; model?: ModelFailure | null } | null;
   /** 这一回合执行器报过的那条执行故障（有模型 API 类型的优先，见 single-run）。 */
   error: Pick<Extract<AgentEvent, { kind: "error" }>, "message" | "model"> | null;
-  /** 这一回合重试提示撞的是哪一类（执行器挂在重试提示上的）：看门狗熔断时据它说状态码。省略 = 没有。 */
-  retrying?: ModelFailure | null;
 };
 
 export type Interruption = {
@@ -99,20 +100,23 @@ const VERDICT_REASON: Record<Exclude<StallVerdictKind, "tripped">, string> = {
 };
 
 /**
- * 这一回合是怎么断的。依据按来源确知的程度排：执行器挂了类型的模型 API 失败 > 看门狗熔断
- * （`tripped` = 整段时间只收到上游的重试类错误：按最后那次重试撞的类型说，没带类型就是「连不上」）
- * > 进程信号 / 其余判决 /
- * 退出码。后几种来源不明，就照实说「执行器异常退出」，带上原话，不替它归因。
+ * 这一回合是怎么断的。依据按来源确知的程度排：执行器挂了类型的模型 API 失败 > 看门狗熔断时
+ * 卡住它的那条错误的类型 > 进程信号 / 其余判决 / 退出码。后几种来源不明，就照实说，带上原话，
+ * 不替它归因 —— 熔断判决没带类型也一样：类型缺了不等于「上游连不上、等等就好」，那可能是额度、
+ * 也可能根本没有错误（静默档），叫人干等就是替它编了一个会自己恢复的原因（第 3 轮审查第 1 条）。
  */
 export function interruptionOf(failure: TurnFailure, diagnostics: Pick<RunDiagnostics, "failureReason" | "exitSignal"> | null): Interruption {
   const raw = failure.error?.message?.trim() || diagnostics?.failureReason?.trim() || failure.verdict?.reason?.trim() || "";
   const said = raw ? `执行器的原话：「${excerpt(raw)}」` : "";
   const exit = failure.exitStatus !== 0 ? `执行器以 exit ${failure.exitStatus} 结束` : "";
-  const model: ModelFailure | null = failure.error?.model
-    ?? (failure.verdict?.kind === "tripped" ? failure.retrying ?? { kind: "unavailable", status: null } : null);
+  const model: ModelFailure | null = failure.error?.model ?? (failure.verdict?.kind === "tripped" ? failure.verdict.model ?? null : null);
   if (model) {
     const copy = modelCopy(model);
     return { reason: copy.reason, detail: [copy.fact, exit, said].filter(Boolean).join("，"), next: copy.next };
+  }
+  if (failure.verdict?.kind === "tripped") {
+    const reason = "回合长时间没有进展，被自动终止";
+    return { reason, detail: [reason, exit, said].filter(Boolean).join("，"), next: `先看上面的原话弄清卡在哪里，处理好之后再${RESUME}` };
   }
   const signal = diagnostics?.exitSignal;
   const reason = signal ? `执行器进程被 ${signal} 结束`
