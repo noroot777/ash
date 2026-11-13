@@ -33,12 +33,10 @@ function compactingNow(item: Extract<ConversationItem, { kind: "agent" }>): bool
 
 // 审查者另开的那条会话不是这个任务的会话：它是另一个执行器（常常是另一家 CLI）、另一个窗口、
 // 另一份压缩设置。审完它就成了会话流里最后一条，照「最后一条」取，信息格的上下文和「压缩设置」
-// 就整个换成审查者的，看着像任务换了执行器。认法跟审查徽标同一份：会话角色是 reviewer，
-// 或直播里会话行还没到、靠事件自带的角色认出来的独立审查回合（round 为 null）。就地验证轮
-// 搭在任务自己的会话上，那份上下文就是任务的，照常取。
+// 就整个换成审查者的，看着像任务换了执行器。按会话角色认，不按审查徽标认：徽标上的轮次会被
+// 审查区间补写，就地验证轮也带徽标，而它搭在任务自己的会话上，那份上下文就是任务的。
 function ownsTaskContext(item: Extract<ConversationItem, { kind: "agent" }>): boolean {
-  if (item.session?.role === "reviewer") return false;
-  return !(item.reviewer && item.reviewer.round === null);
+  return item.sessionRole !== "reviewer";
 }
 
 export function latestRunFacts(items: readonly ConversationItem[]): InfoRunFacts {

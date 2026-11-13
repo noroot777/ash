@@ -110,16 +110,38 @@ const agentItem = (segments, endedAt = null) => ({ kind: "agent", id: "a", markd
   assert.equal(liveLabel(events, false), COMPACT_SKIPPED, "进行条说被拦下，不说压缩了");
 }
 
-// ⑦ 审完以后：独立审查另开的会话排在会话流最后，信息格的上下文、「压缩设置」仍是任务执行者那条会话的。
+// ⑦ 独立审查另开的会话排在会话流最后，信息格的上下文、「压缩设置」仍是任务执行者那条会话的。
+//    走真实的组装链路：直播里审查会话行还没到时，徽标已被审查区间补成「第 1 轮」，归属不能跟着徽标走。
 {
-  const own = { id: "s-own", role: "single", agentType: "claude", context: { used: 264270, window: 1000000 } };
-  const reviewer = { id: "s-rev", role: "reviewer", agentType: "codex", context: { used: 155683, window: 258400 } };
-  const bubble = (session, extra = {}) => ({ ...agentItem([], at(9)), sessionId: session?.id ?? "s-live", session, ...extra });
-  const facts = latestRunFacts([bubble(own), bubble(reviewer, { reviewer: { round: null } })]);
-  assert.equal(facts.session, own, "压缩设置指向任务自己的执行器");
-  assert.equal(facts.context.window, 1000000, "上下文是执行者的窗口，不是审查者的");
-  assert.equal(latestRunFacts([bubble(own), bubble(undefined, { reviewer: { round: null } })]).session, own, "直播里会话行还没到的审查回合同样不算");
-  assert.equal(latestRunFacts([bubble(own), bubble(reviewer, { reviewer: { round: 2 } })]).session, own, "reviewer 会话上的验证轮同样不算");
+  const own = { id: "s-own", taskId: "t1", role: "single", agentType: "claude", executor: "claude 执行者", startedAt: at(0), endedAt: at(10), context: { used: 264270, window: 1000000 } };
+  const reviewer = { id: "s-rev", taskId: "t1", role: "reviewer", agentType: "codex", executor: "codex 审查者", startedAt: at(20), endedAt: null, context: { used: 155683, window: 258400 } };
+  const live = (session, event, index) => ({
+    kind: "server",
+    id: `live:${index}`,
+    event: { type: "agent.event", taskId: "t1", sessionId: session.id, role: session.role, agentType: session.agentType, event },
+  });
+  const timeline = [
+    live(own, { kind: "text", text: "执行者已完成" }, 1),
+    live(own, { kind: "context", context: own.context }, 2),
+    live(own, { kind: "system", text: "自由工作流第 1 轮审查开始", at: at(20), aside: true }, 3),
+    live(reviewer, { kind: "text", text: "独立审查正在进行" }, 4),
+    live(reviewer, { kind: "context", context: reviewer.context }, 5),
+  ];
+  for (const [label, sessions] of [["审查会话已加载", [own, reviewer]], ["直播里审查会话行还没到", [own]]]) {
+    const items = buildConversationItems([], sessions, timeline);
+    const review = items.filter((item) => item.kind === "agent").at(-1);
+    assert.equal(review.sessionId, reviewer.id, `${label}：审查者的气泡排在最后`);
+    assert.ok(review.reviewer, `${label}：审查者的气泡认得出是审查`);
+    const facts = latestRunFacts(items);
+    assert.equal(facts.session?.id, own.id, `${label}：压缩设置指向任务自己的执行器`);
+    assert.equal(facts.context?.window, own.context.window, `${label}：上下文是执行者的窗口，不是审查者的`);
+  }
+  assert.deepEqual(
+    buildConversationItems([], [own], timeline).filter((item) => item.kind === "agent").at(-1).reviewer,
+    { round: 1 },
+    "前提：会话行没到时徽标已被补成第 1 轮（这正是不能拿徽标认归属的原因）",
+  );
+  const bubble = (session, extra = {}) => ({ ...agentItem([], at(9)), sessionId: session.id, sessionRole: session.role, session, ...extra });
   const inline = { ...bubble(own, { reviewer: { round: 1 } }), sessionContext: { used: 300000, window: 1000000 } };
   assert.equal(latestRunFacts([bubble(own), inline]).context.used, 300000, "就地验证轮搭在任务自己的会话上，照常取最新那份");
   assert.equal(latestRunFacts([bubble(reviewer, { reviewer: { round: null } })]).session, null, "只有审查者说过话就没有任务自己的上下文");

@@ -1,4 +1,4 @@
-import type { ContextUsage, Session, TokenUsage } from "@ash/shared";
+import type { ContextUsage, Session, SessionRole, TokenUsage } from "@ash/shared";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 import { ANSWER_PREFIX } from "@ash/shared";
 import { parseSessionOutput, segmentFingerprint } from "@ash/shared/session-output";
@@ -56,6 +56,12 @@ export type ConversationItem =
        * 必填：每个拼 agent 条目的地方都得给，漏了编译不过（少给一处，那一路的头像就退回首字母）。
        */
       agentType: string | null;
+      /**
+       * 说这一回合的会话是什么角色（reviewer = 审查者另开的那条）。直播里会话行可能还没到，
+       * 就取 agent.event 自带的那份。跟 `reviewer` 是两回事：那是徽标，会被 applyVerifySpans
+       * 按审查区间补上轮次；这个是归属事实，排完版也不变。「这条会话是不是任务自己的」只问它。
+       */
+      sessionRole: SessionRole | null;
       at?: string | null;
       endedAt?: string | null;
       markerEndedAt?: string | null;
@@ -458,6 +464,7 @@ function appendPersistedSession(
         sessionId: session.id,
         label: agentLabel(session),
         agentType: session.agentType,
+        sessionRole: session.role,
         at: turnStartedAt,
         endedAt: null,
         markerEndedAt: segment.endedAt ?? null,
