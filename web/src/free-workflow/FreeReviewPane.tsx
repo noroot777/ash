@@ -48,7 +48,7 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
   onOpenReview?: () => void;
   onOpenTask?: (taskId: string) => void;
   notify?: (message: string) => void;
-  /** 此刻能「继续本轮审查」的那一轮和那个动作（任务头那颗图标同一份）。不给 = 结论行不换主按钮。 */
+  /** 此刻能「继续本轮审查」的那一轮和那个动作（会话尾注上那颗同一份）。不给 = 结论行不换主按钮。 */
   reviewRetry?: ReviewRetryAction | null;
 }) {
   const free = useFreeWorkflowState(task.id);
@@ -161,8 +161,8 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
 
   // 这一轮还能续（服务端给了 `round.retry`，经 turnRetryTarget 成了 `reviewRetry`）：主动作就是接着
   // 把这一轮审完。按**轮次身份**认（哪一场、第几轮），工作区审查和合并结果审查一样；另开一场（「再审
-  // 一轮」/「再审一次」）是新会话从头审，退到更多里 —— 它摆在前面的话，用户就只剩任务头那颗不带字的
-  // 图标能续这一轮。
+  // 一轮」/「再审一次」）是新会话从头审，退到更多里 —— 它摆在前面的话，续这一轮在审查格上就没有
+  // 明面上的入口了（合并结果审查还没开口就断了时，会话里也没有尾注可挂）。
   const resumable = reviewRetry
     ? all.find(({ run, round }) => run.id === reviewRetry.review.runId && round.round === reviewRetry.review.round)
     : undefined;

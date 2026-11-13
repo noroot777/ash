@@ -38,9 +38,9 @@ import {
   ReceiptReviewContext, TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts, type ReceiptReview,
 } from "./TurnReceipts.tsx";
 import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
-import { ReviewRetryCta } from "./ReviewRetryCta.tsx";
+import { RetryCta } from "./RetryCta.tsx";
 import { laneNoVerdicts, noVerdictPartId } from "./reviewNoVerdictCause.ts";
-import type { ReviewRetryAction } from "./turnRetry.ts";
+import type { ReviewRetryAction, TurnRetryAction } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
 import { isQuestionAnswer, type QuestionRecord } from "@ash/shared/questions";
@@ -293,6 +293,7 @@ export function ConversationFeed({
   reviews,
   onOpenReviewPanel,
   reviewRetry,
+  turnRetry,
   questionHistory,
   liveQuestionHistory,
   historyReady = true,
@@ -331,8 +332,10 @@ export function ConversationFeed({
    * 轮号，给 null）；「去裁定」不带。
    */
   onOpenReviewPanel?: (target?: ReviewTarget) => void;
-  /** 此刻能「继续本轮审查」的那一轮和那个动作（任务头那颗图标同一份）。不给 = 尾注上不挂。 */
+  /** 此刻能「继续本轮审查」的那一轮和那个动作（审查格主按钮同一份）。不给 = 尾注上不挂。 */
   reviewRetry?: ReviewRetryAction | null;
+  /** 此刻能「重试这一回合」的那条会话和那个动作（turnRetry.ts）。不给 = 失败那句话后面不挂。 */
+  turnRetry?: TurnRetryAction | null;
   questionHistory?: QuestionRecord[];
   liveQuestionHistory?: boolean;
   /**
@@ -372,8 +375,9 @@ export function ConversationFeed({
   const queuedCopy = task.status === "queued"
     ? runActivityCopy({ status: task.status, mode: task.mode, phase: activityPhase ?? undefined, queuePosition: task.queuePosition })
     : null;
-  // 一轮异常结束：那一回合尾注里的一句（刷新以后从会话行认出来的，见 turnFailure）。
-  const crashed = crashedTurns(items);
+  // 一轮异常结束：那一回合尾注里的一句（刷新以后从会话行认出来的，见 turnFailure）。此刻能重试的
+  // 那一回合必定有这一句，「重试这一回合」就挂在它后面。
+  const crashed = crashedTurns(items, turnRetry?.sessionId);
   // 一整场辩论折成一行，排在回执归属之前 —— 反过来的话，那七条「轮到 X 发言」会先被
   // conversationSystemRows 收进某一回合的记录里，辩论就再也认不出自己的边界了。
   // 认老记录里「跑了一条命令」那一句的成败时，拿这个任务工作流里写的命令逐字对。
@@ -432,8 +436,18 @@ export function ConversationFeed({
   const retryEventId = reviewRetry && !causeHostsRetry ? [...items].reverse().find((item) => item.kind === "event"
     && item.notice?.kind === "review.no_verdict"
     && item.notice.runId === reviewRetry.review.runId && item.notice.round === reviewRetry.review.round)?.id ?? null : null;
-  const isRetryable = (part: FootnotePart) => (part.kind === "cause" && part.id === retryCauseId)
-    || (part.kind === "event" && !!retryEventId && part.item?.id === retryEventId);
+  // 普通回合崩了、此刻能重试：「重试这一回合」挂在**那一回合**（会话里最后一条气泡，且就是要重跑的
+  // 那条会话）尾注里说它没办成的那半句后面 —— 直播那一路是异常回合边界，刷新以后是从会话行补出来的
+  // 那一句，两路都归「failure」这件事。那半句被别的几件事挤出了尾注（一回合最多三句），就挂在最后一句后面：
+  // 能重试时页面上一定要有这个入口。
+  const lastAgent = [...items].reverse().find((item) => item.kind === "agent");
+  const retryTurnFootnoteId = turnRetry && lastAgent?.kind === "agent" && lastAgent.session?.id === turnRetry.sessionId
+    ? `footnote:${lastAgent.id}` : null;
+  const turnRetryPartOf = (footnote: TurnFootnote) => footnote.id !== retryTurnFootnoteId ? null
+    : footnote.parts.findLast((part) => part.view.topic === "failure") ?? footnote.parts.at(-1) ?? null;
+  const isRetryable = (part: FootnotePart, footnote: TurnFootnote) => (part.kind === "cause" && part.id === retryCauseId)
+    || (part.kind === "event" && !!retryEventId && part.item?.id === retryEventId)
+    || turnRetryPartOf(footnote) === part;
   // 辩论条上的同一颗按钮：辩论就是为了裁定才开的，读完该能当场决定，而不是往上翻回
   // 那条旁注（用户 2026-09-27）。条件比旁注那颗更严一格——必须**这场辩论**辩的就是
   // 此刻待裁定的那条驳回，而且它已经说完了（还在跑时后端也会拒绝裁定）。
@@ -478,7 +492,7 @@ export function ConversationFeed({
           taskActive={task.status === "running" || task.status === "queued"}
           receipts={receiptsOf(item.id)}
           footnote={footnote?.parts.length
-            ? { node: renderFootnote(footnote), key: footnoteKey(footnote, footnote.parts.some(isRuled) ? "rule" : footnote.parts.some(isRetryable) ? "retry" : "") }
+            ? { node: renderFootnote(footnote), key: footnoteKey(footnote, footnote.parts.some(isRuled) ? "rule" : footnote.parts.some((part) => isRetryable(part, footnote)) ? "retry" : "") }
             : undefined}
         />
       );
@@ -518,7 +532,9 @@ export function ConversationFeed({
   };
   const renderFootnote = (footnote: TurnFootnote, placement?: "standalone" | "trailing") => (
     <FootnoteLine key={footnote.id} footnote={footnote} placement={placement}
-      actionFor={(part) => isRuled(part) ? ruleAction : isRetryable(part) && reviewRetry ? <ReviewRetryCta action={reviewRetry} /> : null} />
+      actionFor={(part) => isRuled(part) ? ruleAction
+        : turnRetry && turnRetryPartOf(footnote) === part ? <RetryCta label="重试这一回合" run={turnRetry.run} />
+          : isRetryable(part, footnote) && reviewRetry ? <RetryCta label="继续本轮审查" run={reviewRetry.run} /> : null} />
   );
   // 「N 条记录」里那一轮审查点开去哪儿：跟审查结论那颗气泡同一套。
   const receiptReview: ReceiptReview = {

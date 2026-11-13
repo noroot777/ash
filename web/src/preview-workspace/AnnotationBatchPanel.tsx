@@ -2,6 +2,7 @@ import { annotationBatchPrompt, batchStateLabels, evidenceLabels, sameAnnotation
 import { useAnnotationBatch } from "./useAnnotationBatch.ts";
 import { AnnotationBatchMismatch } from "./AnnotationBatchMismatch.tsx";
 import "./annotation-batch.css";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 type BatchController = ReturnType<typeof useAnnotationBatch>;
 export function AnnotationBatchPanel({ controller: c, selectedId, mismatchReason = null }: {
@@ -33,7 +34,7 @@ export function AnnotationBatchPanel({ controller: c, selectedId, mismatchReason
       <p>沿当前任务的回复链路投递，使用任务现有执行器配置。</p>
       <ol>{batch.items.map((item) => <li key={item.id}><strong>#{item.number} {item.comment}</strong><br />
         <code>{item.context.route}</code> · {item.context.viewport.width} × {item.context.viewport.height}<br />
-        滚动 {Math.round(item.context.scroll.x)}, {Math.round(item.context.scroll.y)} · {new Date(item.context.capturedAt).toLocaleString()}
+        滚动 {Math.round(item.context.scroll.x)}, {Math.round(item.context.scroll.y)} · {localeDateTime(item.context.capturedAt)}
       </li>)}</ol>
       <details><summary>查看将投递的完整文本</summary><pre>{annotationBatchPrompt(batch)}</pre></details>
       <button type="button" disabled={c.busy} onClick={c.cancelReview}>继续编辑</button>
@@ -41,7 +42,7 @@ export function AnnotationBatchPanel({ controller: c, selectedId, mismatchReason
     </section>}
     {!!batch?.evidence.length && <details open={c.review} className="annotation-batch-evidence"><summary>图像证据与缺失说明（{batch.evidence.filter((e) => e.path).length} 张图）</summary>
       {batch.evidence.map((entry) => <figure key={entry.id}>
-        <figcaption>#{batch.items.find((item) => item.id === entry.annotationId)?.number} · {evidenceLabels[entry.source]}<br />{new Date(entry.capturedAt).toLocaleString()}</figcaption>
+        <figcaption>#{batch.items.find((item) => item.id === entry.annotationId)?.number} · {evidenceLabels[entry.source]}<br />{localeDateTime(entry.capturedAt)}</figcaption>
         {entry.path && <img src={`/api/uploads/${encodeURIComponent(entry.path.split(/[\\/]/).pop()!)}`} alt={`${evidenceLabels[entry.source]}，批注 ${entry.annotationId}`} loading="lazy" />}
         {!entry.path && <strong>未附图</strong>}
         <small>{entry.missing.join("；")}</small>
@@ -53,7 +54,7 @@ export function AnnotationBatchPanel({ controller: c, selectedId, mismatchReason
     </div>}
     {!!c.records.length && <details><summary>已保存批次（{c.records.length}）</summary>
       {c.records.map((entry) => <button className="annotation-batch-history" type="button" key={entry.batch.id} disabled={c.busy || c.review}
-        onClick={() => void c.select(entry)}>{batchStateLabels[entry.state]} · {entry.batch.items.length} 条 · {new Date(entry.batch.createdAt).toLocaleString()}</button>)}
+        onClick={() => void c.select(entry)}>{batchStateLabels[entry.state]} · {entry.batch.items.length} 条 · {localeDateTime(entry.batch.createdAt)}</button>)}
     </details>}
   </div>;
 }

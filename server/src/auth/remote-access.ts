@@ -315,7 +315,9 @@ function noteSeen(device: RemoteDevice, address: string): void {
 //   · IP 字面量 —— 那个源上的页面只可能是 ash 自己给的;
 //   · 这台机器自己的主机名(含 `.local`);
 //   · 机主已经带着凭证用过的名字(自定义域名、tailnet 全名):先扫码或粘密钥进来一次,
-//     这个名字就记下了。带凭证的请求造不出来 —— cookie 按域名存,攻击者的域名下没有。
+//     这个名字就记下了。带凭证的请求造不出来 —— cookie 按域名存,攻击者的域名下没有;
+//   · 机主在设置里亲手填的对外地址(`configured`,飞书消息里的链接就指向它):填它要
+//     机主身份,攻击者写不进去。不认它的话,机主点开 ash 自己发来的链接反倒申请不了。
 // 别的名字不是进不来,只是不能走「申请」:扫码和访问密钥都要机主手里的东西,不吃这一套。
 
 const MAX_HOSTS = 16;
@@ -329,12 +331,22 @@ function hostNameOf(host: string | undefined): string {
   }
 }
 
-export function knownHost(host: string | undefined): boolean {
+function urlHostName(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return "";
+  }
+}
+
+/** `configured`:机主配置过的对外地址(完整 URL),见上面最后一条。 */
+export function knownHost(host: string | undefined, configured: readonly (string | null)[] = []): boolean {
   const name = hostNameOf(host);
   if (!name) return false;
   if (name === "localhost" || isIP(name.replace(/^\[|\]$/g, ""))) return true;
   const own = hostname().toLowerCase().replace(/\.local$/, "");
   if (own && (name === own || name === `${own}.local`)) return true;
+  if (configured.some((url) => url && urlHostName(url) === name)) return true;
   return loadState().hosts.includes(name);
 }
 

@@ -3,6 +3,7 @@ import type { ProjectView, SkillScanOverview, SkillScanRow, SkillSource } from "
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { Select } from "../components/Select.tsx";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 // 设置页里的「技能扫描」一块：刷新间隔 + 立即重新扫描 + 每个 **CLI 类型**扫到了什么。
 //
@@ -170,7 +171,7 @@ export function SkillScanCard({
             <span>
               {overview.cwd ? `项目根：${overview.cwd}` : "未选项目：只扫了个人级与插件级技能"}
             </span>
-            <span>扫描时间 {new Date(overview.scannedAt).toLocaleString()}</span>
+            <span>扫描时间 {localeDateTime(overview.scannedAt)}</span>
           </div>
         )}
       </div>

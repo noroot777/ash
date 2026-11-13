@@ -374,10 +374,18 @@ try {
     const journaled = pendingStallVerdicts(readStallJournal()).find((record) => record.sessionId === "s-claude-child");
     assert.deepEqual(journaled?.model, { kind: "quota_exhausted", status: 429 }, "落盘的判决带着类型");
     __resetStallFailures();
-    loadStallFailures([journaled!, { ...journaled!, sessionId: "s-old", model: undefined }, { ...journaled!, sessionId: "s-bad", model: "429" as never }]);
+    loadStallFailures([
+      journaled!, { ...journaled!, sessionId: "s-old", model: undefined }, { ...journaled!, sessionId: "s-bad", model: "429" as never },
+      // 能解析、类型却不在表里 / 状态码类型不对（异常写入、版本回退留下的）：类型不认，状态码当没有（第 2 轮审查 N1）。
+      { ...journaled!, sessionId: "s-odd-kind", model: { kind: "overheated", status: 503 } as never },
+      { ...journaled!, sessionId: "s-odd-status", model: { kind: "unavailable", status: "503" } as never },
+    ]);
     assert.equal(tripReason(stallFailure("s-claude-child", TURN)), "模型账户额度用完了（429）", "重启装回来照样说额度");
     assert.equal(stallFailure("s-old", TURN)?.model, null);
     assert.equal(stallFailure("s-bad", TURN)?.model, null);
+    assert.equal(stallFailure("s-odd-kind", TURN)?.model, null, "不认得的类型不放进来");
+    assert.equal(tripReason(stallFailure("s-odd-kind", TURN)), "回合长时间没有进展，被自动终止", "判决照留，照没有类型说");
+    assert.deepEqual(stallFailure("s-odd-status", TURN)?.model, { kind: "unavailable", status: null }, "状态码类型不对就当没有");
     __resetTurnStalls();
     __resetStallFailures();
   }

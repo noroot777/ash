@@ -23,6 +23,7 @@ import type { RunDiagnostics } from "./executors/diagnostics.js";
 import { freeReviewFile } from "./free-review-files.js";
 import { RUNS_DIR } from "./paths.js";
 import { readableRunPath, runTracePaths } from "./transcript.js";
+import type { StallVerdictKind } from "./turn-stall-verdict.js";
 
 /** 这一回合**自己**异常结束的事实（single-run 收尾时手上那几样）。没异常结束就不给。 */
 export type TurnFailure = {
@@ -97,11 +98,13 @@ function modelCopy(model: ModelFailure): { reason: string; fact: string; next: s
   }
 }
 
-const VERDICT_REASON: Record<string, string> = {
+// 穷举：加一种判决忘了写措辞就编译不过（tripped 归模型那一支）。
+const VERDICT_REASON: Record<Exclude<StallVerdictKind, "tripped">, string> = {
   unverified: "回合结局核实不了",
   background_timeout: "后台工作等到时限还没跑完",
   background_lost: "后台工作没跑完进程就没了",
   background_unverified: "后台工作跑没跑完核实不了",
+  wrapup_missing: "后台工作跑完了，智能体没开始整理结果",
 };
 
 /**
@@ -131,7 +134,7 @@ export function interruptionOf(failure: TurnFailure, diagnostics: Pick<RunDiagno
     };
   }
   const signal = diagnostics?.exitSignal;
-  const known = signal ? `执行器进程被 ${signal} 结束` : failure.verdict && VERDICT_REASON[failure.verdict.kind];
+  const known = signal ? `执行器进程被 ${signal} 结束` : failure.verdict && (VERDICT_REASON as Record<string, string>)[failure.verdict.kind];
   const reason = known || (failure.exitStatus !== 0 ? `执行器异常退出（exit ${failure.exitStatus}）` : "执行器报了执行故障");
   return { reason, detail: [reason, said].filter(Boolean).join("，"), next: RESUME, quote, vague: !known };
 }
@@ -141,7 +144,13 @@ export function readTurnDiagnostics(taskId: string, sessId: string, turnStart: s
   const path = readableRunPath(runTracePaths(join(RUNS_DIR, taskId), sessId, turnStart).diagnosticsPath);
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<RunDiagnostics>;
-    return parsed && typeof parsed === "object" && parsed.version === 1 ? parsed as RunDiagnostics : null;
+    if (!parsed || typeof parsed !== "object" || parsed.version !== 1) return null;
+    // 这份文件只是佐证：用到的两格类型不对就当那一格没有，别让一份坏诊断把回合收尾打断。
+    return {
+      ...parsed,
+      failureReason: typeof parsed.failureReason === "string" ? parsed.failureReason : null,
+      exitSignal: typeof parsed.exitSignal === "string" ? parsed.exitSignal : null,
+    } as RunDiagnostics;
   } catch {
     return null;
   }

@@ -51,7 +51,7 @@ export interface TaskInspectorContext {
   activeFilePath: string | null;
   openScmDiff: ScmDiffTarget | null;
   onOpenScmDiff: (target: ScmDiffTarget) => void;
-  /** 此刻能「继续本轮审查」的那一轮和那个动作（任务头那颗图标同一份，见 turnRetry.ts）。 */
+  /** 此刻能「继续本轮审查」的那一轮和那个动作（会话尾注上那颗同一份，见 turnRetry.ts）。 */
   reviewRetry: ReviewRetryAction | null;
 
   notify: Notify;

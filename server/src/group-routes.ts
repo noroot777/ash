@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { groups, projects, queueItems } from "./db/schema.js";
+import { republishGroupWaits } from "./pending-wait.js";
 import { repoKey } from "./git.js";
 import { pauseGroup, runGroupInBackground } from "./scheduler.js";
 import { createTasks } from "./task-store.js";
@@ -56,7 +57,11 @@ api.post("/groups/:id/run", async (c) => {
   const gid = c.req.param("id");
   const g = (await db.select().from(groups).where(eq(groups.id, gid))).at(0);
   if (!g) return c.json({ error: "not found" }, 404);
-  if (g.paused) await db.update(groups).set({ paused: false }).where(eq(groups.id, gid));
+  if (g.paused) {
+    await db.update(groups).set({ paused: false }).where(eq(groups.id, gid));
+    // 托盘上「分组已暂停」那几条要改口(pending-wait.ts)。
+    void republishGroupWaits(gid).catch((err) => console.error(`[ash] republishGroupWaits(${gid}) failed:`, err));
+  }
   void runGroupInBackground(gid);
   return c.json({ started: true }, 202);
 });

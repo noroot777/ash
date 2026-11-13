@@ -2,6 +2,7 @@ import { batchStateLabels } from "@ash/shared/page-annotation-batch";
 import type { useAnnotationBatch } from "./useAnnotationBatch.ts";
 import type { useAnnotationReview } from "./useAnnotationReview.ts";
 import { AnnotationFollowup, AnnotationRecord } from "./AnnotationRecord.tsx";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 export function AnnotationWaiting({ controller: c, review, starting, launchAvailable = false }: {
   controller: ReturnType<typeof useAnnotationBatch>; review: ReturnType<typeof useAnnotationReview>; starting: boolean; launchAvailable?: boolean;
@@ -20,9 +21,9 @@ export function AnnotationWaiting({ controller: c, review, starting, launchAvail
     {review.error && <p role="alert" className="preview-workspace-error">{review.error}</p>}
     {!sent.length && <p>尚无已发送批次，可使用右侧截图批注。</p>}
     {sent.map((record) => <section key={record.batch.id} className="annotation-waiting-batch">
-      <h4>{batchStateLabels[record.state]} · {new Date(record.batch.createdAt).toLocaleString()}</h4>
+      <h4>{batchStateLabels[record.state]} · {localeDateTime(record.batch.createdAt)}</h4>
       <small>批次 {record.batch.id}</small>
-      {record.review?.releasedAt && <p>智能体回合已释放：{new Date(record.review.releasedAt).toLocaleString()}（{record.review.roundStatus}）；用户已确认满意 {record.review.decisions.filter((d) => d.verdict === "satisfied").length} / {record.batch.items.length} 条</p>}
+      {record.review?.releasedAt && <p>智能体回合已释放：{localeDateTime(record.review.releasedAt)}（{record.review.roundStatus}）；用户已确认满意 {record.review.decisions.filter((d) => d.verdict === "satisfied").length} / {record.batch.items.length} 条</p>}
       {record.batch.items.map((item) => <article key={item.id}>
         <AnnotationRecord batch={record.batch} item={item} />
         <AnnotationFollowup disabled={c.busy || c.review} onSave={(comment) => c.followup(record.batch, item, comment)} />

@@ -6,7 +6,6 @@ import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
 import { deliverLeadInterjection } from "./team/lead-interjection.js";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
-import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields } from "./session-turns.js";
 import { forgetHeldTrigger } from "./free-review-reservations.js";
@@ -32,7 +31,8 @@ import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
 import { DeliveryCrossingUnwritable, recordDeliveryCrossing } from "./delivery-crossing.js";
 import { createTurnInputSettlement } from "./turn-input-settlement.js";
-import { writeTurn, runTracePaths } from "./transcript.js";
+import { runTracePaths } from "./transcript.js";
+import { writeSystemNote } from "./turn-system-note.js";
 import { isMonitorWakeTurn, recordSystemResumeTurn, recordUserConversationTurn } from "./conversation-turn.js";
 import { workerPreambleFor } from "./team/dispatch.js";
 import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
@@ -301,7 +301,7 @@ export async function continueTask(
     baseFallback = resolvedFallback;
     // 执行回合开跑，被裁定闸按住的旧预约触发作废（旁路回合不改代码不算；理由见 forgetHeldTrigger ①）。
     if (!sideTurn) await forgetHeldTrigger(taskId);
-    await setTaskStatus(taskId, "running");
+    await setTaskStatus(taskId, "running", { sideTurn });
     // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。摘牌
     // 刻意排在**所有可能抛错的解析之后**(执行器解析、工作目录解析都会抛):解析失败时
     // 什么都还没破坏,catch 恢复 status 就是完整恢复(审查实测:claude+haiku+high 在
@@ -559,6 +559,7 @@ export async function continueTask(
     });
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
+    const noteTarget = { out, taskId, sessionId: sessId, role: sessionRole, agentType: agent, at: turnStart };
     if (opts.system) {
       // Backend-initiated 继续: a 〔系统〕 trace carrying who resumed it, NOT a 你→ reply.
       const resume = { reason: opts.system, ...(sideTurn ? { side: true as const } : {}) };
@@ -588,16 +589,14 @@ export async function continueTask(
     if (workspaceReset) {
       // 让用户也看见:agent 这一轮是在一个空目录上重新开始的。只发 toast 不算数,
       // 刷新后仍要能看出来(见 AGENTS.md 关于持久可见状态的约定)。
-      writeTurn(out, { t: "system", agent, text: WORKSPACE_RESET_MARKER }, turnStart);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: WORKSPACE_RESET_MARKER, at: turnStart } });
+      writeSystemNote(noteTarget, WORKSPACE_RESET_MARKER);
     }
     const baseNote = baseFallbackNote(baseFallback);
     if (baseNote) {
       // 同上,这一条说的是「基线去哪了」:任务登记的 base 已经没了(验收合并后分支被删是
       // 最常见的一种)。工作目录是不是跟着新建了、是从谁起的、登记值有没有一并改掉,措辞
       // 里三件分开说 —— 紧挨着上面那条 WORKSPACE_RESET_MARKER,含糊一点两条就会互相打架。
-      writeTurn(out, { t: "system", agent, text: baseNote }, turnStart);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: baseNote, at: turnStart } });
+      writeSystemNote(noteTarget, baseNote);
       baseFallbackTold = true;
     }
 

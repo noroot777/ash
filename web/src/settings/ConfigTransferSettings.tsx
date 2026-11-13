@@ -10,6 +10,7 @@ import { ApiError } from "../lib/apiClient.ts";
 import { configTransferApi } from "../lib/authApi.ts";
 import { Button } from "../components/ui.tsx";
 import "./config-transfer-settings.css";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 type ImportResult = { imported: Record<string, number>; skipped: string[]; notes: string[] };
 
@@ -129,7 +130,7 @@ export function ConfigTransferSettings({ notify }: { notify: (message: string) =
           <div className="cfgx-staged">
             <p>
               <code>{staged.fileName}</code>
-              {staged.bundle.exportedAt ? `（导出于 ${new Date(staged.bundle.exportedAt).toLocaleString()}）` : null}
+              {staged.bundle.exportedAt ? `（导出于 ${localeDateTime(staged.bundle.exportedAt)}）` : null}
             </p>
             <ul>
               {staged.bundle.kinds.map((kind) => (

@@ -8,6 +8,7 @@ import { CommitGraphRow, useCommitGraph } from "./CommitGraph.tsx";
 import { WorkbenchMenu } from "./WorkbenchMenu.tsx";
 import { RebaseDialog } from "./RebaseDialog.tsx";
 import { HistorySplit } from "./HistorySplit.tsx";
+import { localeDate, localeDateTime } from "../lib/localeFormat.ts";
 
 export function History({
   projectId,
@@ -380,7 +381,7 @@ export function History({
                     </span>
                     <span className="commit-author">{commit.author}</span>
                     <time className="commit-time">
-                      {new Date(commit.at).toLocaleDateString(undefined, {
+                      {localeDate(commit.at, undefined, {
                         month: "short",
                         day: "numeric",
                       })}
@@ -438,7 +439,7 @@ export function History({
                 <strong className="detail-msg">{selected.subject}</strong>
                 <div className="detail-meta">
                   <span>{selected.author}</span>
-                  <time>{new Date(selected.at).toLocaleString()}</time>
+                  <time>{localeDateTime(selected.at)}</time>
                   <span>{selected.parents.length} 个父提交</span>
                 </div>
                 <div className="detail-menu">

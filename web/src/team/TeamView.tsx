@@ -36,6 +36,7 @@ import { TEAM_INSPECTORS, type TeamInspectorContext } from "./TeamInspector.tsx"
 import { TeamReviewWorkspace } from "./TeamReviewWorkspace.tsx";
 import { activeTeamHaltMarker, leadTurns, teamFeedRows } from "./teamModel.ts";
 import { useWorkerLiveLines } from "./workerLiveLines.ts";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 
 function WorkerDrawer({
@@ -440,7 +441,7 @@ export function TeamView({
                 if ("scheduled" in result) {
                   notify(result.message.mode === "after"
                     ? `已安排在「${allTasks.find((item) => item.id === result.message.afterTaskId)?.title || "所选任务"}」完成后发送给调度者`
-                    : `已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送给调度者`);
+                    : `已安排 ${localeDateTime(result.message.sendAt)} 发送给调度者`);
                   return result;
                 }
                 conversation.addUser(text, attachments);
