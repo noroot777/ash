@@ -3,6 +3,7 @@
 //  · 读完就从本进程环境里拿掉，子进程（agent、预览、终端）不继承；
 //  · 代码根不是 git 检出时没有「自己的仓库」（REPO_DIR = null）；
 //  · MCP 登记写哪个 node：自带运行时写绝对路径，否则照旧走 PATH 上的 `node`；
+//  · 宿主那条是旧检出的标准本机登记时，新隔离档按这份 ash 现拼，自定义 / 远程登记照旧原样搬；
 //  · `ASH_LOCAL_ONLY` 同样读完即删。
 //
 // paths.js 在模块加载时就把环境变量冻成常量，所以每个场景起一个子进程。
@@ -102,6 +103,61 @@ const out = {
   assert.equal(node.bundledPick, node.bundled, "自带运行时：写它的绝对路径（那台机器可能根本没装 node）");
   assert.equal(node.onPath, "node", "仓库实例：照旧写 node，nvm 升级后不会留下一个失效的绝对路径");
   assert.equal(node.noPath, "/opt/nvm/versions/node/v24/bin/node", "PATH 上没有 node：只剩自己这一份能跑");
+
+  // ── 搬到独立 app 之后新建的隔离档：宿主那条是旧检出的标准本机登记 → 按这份 ash 现拼；
+  //    用户自定义 / 远程的登记 → 照旧原样搬 ──
+  const moved = probe({ ASH_DATA_DIR: data }, `
+const { existsSync, mkdirSync, readFileSync, writeFileSync } = await import("node:fs");
+const { join } = await import("node:path");
+const { CODE_DIR } = await import(${JSON.stringify(new URL("paths.js", src).href)});
+const { registerAshMcp, mcpNodeCommand, isStockLocalLaunch } = await import(${JSON.stringify(new URL("mcp-registry/register.js", src).href)});
+const root = ${JSON.stringify(join(root, "mcp-move"))};
+const bench = async (name, claudeEntry, codexToml) => {
+  const host = join(root, name, "home"), dir = join(root, name, "iso");
+  mkdirSync(join(host, ".codex"), { recursive: true });
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(host, ".claude.json"), JSON.stringify({ mcpServers: { ash: claudeEntry } }));
+  writeFileSync(join(host, ".codex", "config.toml"), codexToml);
+  const claude = await registerAshMcp({ agentType: "claude", dir, hostHome: host, env: {} });
+  const codex = await registerAshMcp({ agentType: "codex", dir, hostHome: host, env: {} });
+  return {
+    claude, codex,
+    claudeEntry: JSON.parse(readFileSync(join(dir, ".claude.json"), "utf8")).mcpServers.ash,
+    codexText: readFileSync(join(dir, "config.toml"), "utf8"),
+  };
+};
+const stock = await bench("stock",
+  { type: "stdio", command: "node", args: ["/old-checkout/mcp/dist/index.js"], env: { ASH_URL: "http://127.0.0.1:4317" } },
+  '[mcp_servers.ash]\\ncommand = "node"\\nargs = ["/old-checkout/mcp/dist/index.js"]\\n');
+const custom = await bench("custom",
+  { type: "http", url: "https://ash.example/mcp" },
+  '[mcp_servers.ash]\\ncommand = "/opt/my/ash-mcp"\\nargs = ["--fast"]\\n');
+const out = {
+  built: existsSync(join(CODE_DIR, "mcp", "dist", "index.js")),
+  entry: join(CODE_DIR, "mcp", "dist", "index.js"), node: mcpNodeCommand(),
+  stock, custom,
+  shapes: [
+    isStockLocalLaunch({ command: "node", args: ["/a/mcp/dist/index.js"], ashUrl: null }),
+    isStockLocalLaunch({ command: "/usr/bin/node", args: ["/a/mcp/dist/index.js"], ashUrl: "http://localhost:4317" }),
+    isStockLocalLaunch({ command: "node", args: ["/a/mcp/dist/index.js"], ashUrl: "http://10.0.0.5:4317" }),
+    isStockLocalLaunch({ command: "node", args: ["/a/my-mcp.js"], ashUrl: null }),
+    isStockLocalLaunch({ command: "node", args: ["--inspect", "/a/mcp/dist/index.js"], ashUrl: null }),
+  ],
+};`) as Record<string, any>;
+  assert.deepEqual(moved.shapes, [true, true, false, false, false], "只有 ash 自己装出来的那种形状才算标准本机登记");
+  assert.equal(moved.stock.claude.ok, true);
+  assert.equal(moved.stock.codex.ok, true);
+  if (moved.built) {
+    assert.deepEqual(moved.stock.claudeEntry.args, [moved.entry], "旧检出的入口不许搬进新隔离档");
+    assert.equal(moved.stock.claudeEntry.command, moved.node, "启动命令按这份 ash 的运行时选");
+    assert.ok(moved.stock.codexText.includes(JSON.stringify(moved.entry)), "TOML 族同理");
+    assert.ok(!moved.stock.codexText.includes("/old-checkout/"), "TOML 族同理");
+  } else {
+    console.log("（没 build 过 mcp/dist/index.js：拼不出新登记，退回照搬宿主那条，现拼那一半跳过）");
+    assert.deepEqual(moved.stock.claudeEntry.args, ["/old-checkout/mcp/dist/index.js"]);
+  }
+  assert.deepEqual(moved.custom.claudeEntry, { type: "http", url: "https://ash.example/mcp" }, "远程登记原样搬");
+  assert.ok(moved.custom.codexText.includes('command = "/opt/my/ash-mcp"'), "自定义启动命令原样搬");
 
   console.log("test-data-root: ok");
 } finally {

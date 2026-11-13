@@ -30,6 +30,7 @@ import { SINGLE_ACTOR, ANONYMOUS_ACTOR, setActor, type Actor } from "./context.j
 import { imGate } from "./im-actor.js";
 import { isMultiUser } from "./mode.js";
 import { noteOwnerHolder, ownerProof } from "./remote-access.js";
+import { LOCAL_ONLY, LOCAL_ONLY_REFUSAL } from "../local-only.js";
 import { resolveSession, touchUser, findUserByKey } from "./store.js";
 
 export const SESSION_COOKIE = "ash_session";
@@ -331,7 +332,7 @@ export function authGate(): MiddlewareHandler {
     // 壳可以打开(登录页要渲染),数据一律不行。
     if (isSpaShell(path)) return next();
     if (path.startsWith("/api/")) {
-      return c.json({ error: multi ? "请先登录" : REMOTE_ACCESS_REFUSAL, needsAuth: true }, 401);
+      return c.json({ error: multi ? "请先登录" : LOCAL_ONLY ? LOCAL_ONLY_REFUSAL : REMOTE_ACCESS_REFUSAL, needsAuth: true }, 401);
     }
     // /mobile 与 /review 不是 SPA 壳:前者是手机 app 的静态站(它自己有 key 字段,
     // 但外框页与导出资源都得先登录才给),后者直接暴露待审视频文件。

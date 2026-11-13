@@ -30,7 +30,7 @@ import {
   ashMcpHostSources, ashMcpOpaqueSibling, effectiveConfigState, readingFor, resolveAshMcp, siteFileFor,
 } from "./sources.js";
 import type {
-  AshMcpComposeOpts, AshMcpEntry, AshMcpMechanism, AshMcpNameFact, AshMcpShape,
+  AshMcpComposeOpts, AshMcpEntry, AshMcpLaunch, AshMcpMechanism, AshMcpNameFact, AshMcpShape,
 } from "./types.js";
 
 /** 这份 ash 自带的 MCP 服务入口（仓库检出或独立 app 的 bundle 里）。宿主没登记过时按它现拼一条。 */
@@ -227,7 +227,7 @@ function composeEntry(
     enabled: mechanism.writeEnabled === true,
     ...(mechanism.writeType ? { type: mechanism.writeType } : {}),
   };
-  const host = hostFact(agentType, hostHome, env);
+  const host = portableHostFact(hostFact(agentType, hostHome, env));
   if (blockShape(shape)) {
     // 宿主那段原样搬(连子表一起),没有就按一条登记现渲染一段。
     let block = host?.block ?? null;
@@ -278,6 +278,36 @@ function hostFact(agentType: string, hostHome: string, env: NodeJS.ProcessEnv): 
   const sources = ashMcpHostSources(agentType, env, hostHome);
   const found = resolveAshMcp(sources, readingFor(mechanism));
   return found.state === "present" ? found.fact ?? null : null;
+}
+
+/**
+ * 宿主那条登记**值不值得照搬**。照搬是为了保住用户自己的写法(远程 `type:"http"`、自定义
+ * 启动命令、`cwd`/`timeout`……);但宿主那条要是**本机 ash 的标准 stdio 登记**(node 起
+ * `…/mcp/dist/index.js`、连本机),它描述的是「当初装 ash 的那一份在哪」,不是用户的意思 ——
+ * 从仓库版换到独立 app 之后,照搬出来的是旧检出的入口和系统里的 `node`,旧仓库一删、或者
+ * 机器上根本没装 node,新隔离档里的 agent 就连不上 MCP、交不了卷。这种按这份 ash 现拼
+ * (`builtinEntry`:当前运行时 + 当前入口 + 当前端口),只有拼不出来(还没 build 出 MCP)才退回照搬。
+ *
+ * 只管**新写**的那一条:目标配置里已经有的登记照旧一律不覆盖(见文件顶部的边界)。
+ */
+function portableHostFact(fact: AshMcpNameFact | null): AshMcpNameFact | null {
+  if (!fact || !isStockLocalLaunch(fact.launch) || !existsSync(MCP_ENTRY)) return fact;
+  return null;
+}
+
+/** `<node> <…/mcp/dist/index.js>`,且 ASH_URL 没写或指向本机 —— ash 自己装出来的那种形状。 */
+export function isStockLocalLaunch(launch: AshMcpLaunch | null | undefined): boolean {
+  if (!launch?.command || !Array.isArray(launch.args) || launch.args.length !== 1) return false;
+  const runner = (launch.command.split(/[\\/]/).pop() ?? "").replace(/\.exe$/i, "");
+  if (!/^(node|nodejs)$/i.test(runner)) return false;
+  const script = launch.args[0];
+  if (typeof script !== "string" || !/(^|[\\/])mcp[\\/]dist[\\/]index\.js$/i.test(script)) return false;
+  if (!launch.ashUrl) return true;
+  try {
+    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(new URL(launch.ashUrl).hostname);
+  } catch {
+    return false;
+  }
 }
 
 /**
