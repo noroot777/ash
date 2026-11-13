@@ -180,6 +180,13 @@ try {
     //    于是白卷落在探针那一层,见下面那一组真跑用例。
     ["yarn_x=1 yarn run accept", null],
     ["CI=1 TZ=UTC npm run test:accept", { kind: "script", name: "test:accept", dir: "." }],
+    // 认赋值看去引号之前的原样（第 3 轮审查 F1）：名字或等号被引住，它就是要执行的命令，后面的只是参数。
+    ["'CHECK=./runner.sh' ./not-an-entry.sh", { kind: "path", name: "CHECK=./runner.sh" }],
+    ['"CHECK=./runner.sh" ./not-an-entry.sh', { kind: "path", name: "CHECK=./runner.sh" }],
+    ["CHECK'=./runner.sh' ./not-an-entry.sh", { kind: "path", name: "CHECK=./runner.sh" }],
+    ['C"HECK"=1 ./not-an-entry.sh', null],
+    ["CHECK=./runner.sh ./not-an-entry.sh", { kind: "path", name: "./not-an-entry.sh" }],
+    ["CHECK='./runner.sh' ./not-an-entry.sh", { kind: "path", name: "./not-an-entry.sh" }],
     // ③ shell 注释按语义截断:注释里那个 `--prefix .` 不是真的目录(旧版拿它覆盖了 child)。
     ["npm --prefix child run test:accept # --prefix .", { kind: "script", name: "test:accept", dir: "child" }],
     ["npm run test:accept # 这后面写什么都不执行", { kind: "script", name: "test:accept", dir: "." }],
@@ -275,6 +282,19 @@ try {
     writeFileSync(join(tree, "kb.sh"), "#!/bin/sh\n", { mode: 0o755 });
     assert.equal(entryCertainlyMissing(probeGateEntry(tree, "CI=1 ./kb.sh test full")), false, "在树里就照常起跑");
     assert.equal(entryCertainlyMissing(absent), false, "脚本那一档不在也不拦：核不准");
+    // 被引住的首词是命令本身（第 3 轮审查 F1）：shell 跑的是 `CHECK=.` 目录下那个脚本，`./not-an-entry.sh`
+    // 只是它的参数 —— 不许把参数当成入口、更不许据此拦下起跑。不加引号的那条才是「赋值 + 执行第二个词」。
+    mkdirSync(join(tree, "CHECK=."));
+    writeFileSync(join(tree, "CHECK=./runner.sh"), "#!/bin/sh\necho QUOTED_HEAD_RAN\n", { mode: 0o755 });
+    for (const command of ["'CHECK=./runner.sh' ./not-an-entry.sh", '"CHECK=./runner.sh" ./not-an-entry.sh']) {
+      assert.equal(execFileSync("sh", ["-lc", command], { cwd: tree, encoding: "utf8" }).trim(), "QUOTED_HEAD_RAN",
+        `测试自己的前提：shell 跑的是被引住的首词 ${command}`);
+      assert.deepEqual(probeGateEntry(tree, command),
+        { ask: "CHECK=./runner.sh", file: "CHECK=./runner.sh", resolved: true, by: "被测快照里的文件", certain: true }, command);
+    }
+    assert.equal(entryCertainlyMissing(probeGateEntry(tree, "CHECK=./runner.sh ./not-an-entry.sh")), true,
+      "不加引号才是赋值：入口是第二个词，它确实不在");
+    rmSync(join(tree, "CHECK=."), { recursive: true });
     // 「没有」必须是内核对**原样那个字符串**给的答案（第 1 轮审查 F1）：alias 是目录软链时，
     // `./alias/../runner.sh` 里的 `..` 由内核从软链指向的目录退一级，跑的是 real/runner.sh；
     // 词法折叠会去核根目录下并不存在的 runner.sh，把一条能跑绿的命令挡在门外。

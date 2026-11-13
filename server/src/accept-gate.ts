@@ -269,12 +269,11 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
       + (baselineNotice ? `[ash] baseline: ${baselineNotice}（预览基准 ${plan.baseline.targetBranch} = ${plan.baseline.previewBase}）\n` : "")
       + `[ash] $ ${plan.command}\n\n`);
     const executionNotice = gateExecutionNotice();
-    if (executionNotice) appendGateLog(logPath, `[ash] ${executionNotice}\n`);
     await appendTaskTimeline(
       taskId,
       receiptLine(`验收前置命令准备起跑：\`${plan.command}\`（独立快照 ${snapshotCwd}，源自 ${plan.cwd}）。先核对入口，核过才起进程；rc=0 且进程监督收尾后才会继续合并；`
         + `绿了会自动把这次验收做完，红了会把日志交回这个任务去修。`
-        + (executionNotice ? ` ${executionNotice}` : "")
+        + (executionNotice ? ` 若起跑：${executionNotice}` : "")
         + (baselineNotice ? ` ${baselineNotice}。`
           : plan.fastForward === false
             ? ` 注意：目标分支 ${plan.targetBranch} 已经领先于这棵树，所以它验的不是最终的合并结果。`
@@ -341,6 +340,9 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
       const { withReviewAuthority } = await import("./review-ownership.js");
       await withReviewAuthority(plan.choices.reviewAuthority, async () => {});
     }
+    // 执行方式的说明写在核过入口之后：没起跑的那份日志不该先说「实际执行验收命令」（第 3 轮审查 N1）。
+    const executionNotice = gateExecutionNotice();
+    if (executionNotice) appendGateLog(logPath, `[ash] ${executionNotice}\n`);
     started = await spawnAcceptGate({
       command: plan.command,
       cwd: snapshotCwd,

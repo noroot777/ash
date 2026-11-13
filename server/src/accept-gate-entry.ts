@@ -143,6 +143,16 @@ const SAFE_SWITCHES = new Set(["--silent", "-s", "--quiet", "--no-audit", "--no-
 const SAFE_VALUED = new Set(["--loglevel", "--log-level"]);
 
 /**
+ * 一个词：`text` 是去掉引号之后 runner 拿到的那一份，`raw` 是它在命令里的原样。
+ *
+ * 两份都得留着：shell 的有些判断看的是**去引号之前**的样子。前缀赋值就是一例 —— 只有等号和
+ * 它前面的名字都没被引起来，这个词才是赋值；`'CHECK=./runner.sh' ./x.sh` 里整个首词被引住，
+ * 它是要执行的那条命令，`./x.sh` 只是参数。旧版去引号之后再认赋值，把真入口剥掉、把参数当成
+ * 入口，「核得准」那一档于是把一条能跑绿的命令挡在门外（第 3 轮审查 F1 实测）。
+ */
+type Word = { text: string; raw: string };
+
+/**
  * 把命令切成词。**读不准就返回 null**，绝不猜。
  *
  * 只处理一件 shell 语义：成对的引号（`npm run 'test:accept'` 里那个名字，runner 拿到的是
@@ -150,7 +160,7 @@ const SAFE_VALUED = new Set(["--loglevel", "--log-level"]);
  * 替换、通配、转义、未闭合引号。分组和 `&` 是第 6 轮审查实测补上的 —— 它们不改变「有东西
  * 被跑了」这件事，却让旧版去查一个字面上并不存在的文件名。
  */
-function tokenize(command: string): string[] | null {
+function tokenize(command: string): Word[] | null {
   // `2>&1` 里那个 `&` 是重定向的一部分，不是后台 —— 先把 `>&1` / `<&0` 这类摘掉再筛控制符，
   // 否则一条普普通通的 `npm run x > out.log 2>&1` 会被整条拒掉（回归用例当场抓到）。
   // `&>` 留着不摘:那是另一种重定向写法,下面那个重定向正则读不准它,宁可交白卷。
@@ -158,7 +168,7 @@ function tokenize(command: string): string[] | null {
   if (/[;\n\r|&()]/.test(control)) return null;            // 多步 / 分组 / 后台：没有「一个入口」可言
   if (/[`$]/.test(command)) return null;                   // 命令替换 / 变量：入口是算出来的
   if (/[\\*?[\]{}~]/.test(command)) return null;           // 转义 / 通配 / 花括号展开
-  const words: string[] = [];
+  const words: Word[] = [];
   let at = 0;
   while (at < command.length) {
     if (/\s/.test(command[at]!)) { at++; continue; }
@@ -168,6 +178,7 @@ function tokenize(command: string): string[] | null {
     // 重定向整段跳过：它不是一个步骤，也不是入口。
     const redirect = /^\d*[<>]{1,2}\s*\S+/.exec(command.slice(at));
     if (redirect) { at += redirect[0].length; continue; }
+    const start = at;
     let word = "";
     while (at < command.length && !/\s/.test(command[at]!)) {
       const quote = command[at]!;
@@ -180,7 +191,7 @@ function tokenize(command: string): string[] | null {
     }
     // 词中间夹着重定向符（`x>log`）那种，我切不准。
     if (/[<>]/.test(word)) return null;
-    words.push(word);
+    words.push({ text: word, raw: command.slice(start, at) });
   }
   return words;
 }
@@ -233,13 +244,15 @@ function runnerArgs(words: string[]): { positional: string[]; dir: string } | nu
  * 交白卷 —— 路径那一档的「不在」会直接拦下起跑。
  */
 export function gateEntryAsk(command: string): GateEntryAsk | null {
-  const words = tokenize(command);
-  if (!words) return null;
+  const tokens = tokenize(command);
+  if (!tokens) return null;
   // 前缀的环境变量赋值（`CI=1 npm run x`）不是入口，剥下来。它们也能换掉 runner 去哪儿找
   // 脚本（实测 `npm_config_workspace=child npm run test:accept` 真让它跑了子项目那个脚本）
   // 或者换掉 `npm` 本身（`PATH=bin`）—— 脚本那一档因此只算核不准。路径那一档不受影响：
   // 含 `/` 的名字 shell 不查 PATH。
-  while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]!)) words.shift();
+  // 认赋值看的是**原样**那一份（见 `Word`）：名字和等号有一个字符被引住，它就不是赋值。
+  while (tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0]!.raw)) tokens.shift();
+  const words = tokens.map(word => word.text);
   const head = words[0];
   if (!head) return null;
   if (head === "npm") {
