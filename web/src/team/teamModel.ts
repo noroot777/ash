@@ -1,7 +1,8 @@
 import type { Group, Session, Task, TaskListItem, TaskStatus } from "@ash/shared";
 import { taskDisplayStatus } from "@ash/shared";
-import { timeMs, type Batch, type FeedRow as SharedFeedRow } from "@ash/shared/team";
+import { mergeFeed, timeMs, type Batch, type FeedRow as SharedFeedRow } from "@ash/shared/team";
 import type { ConversationItem } from "../task-detail/conversationModel.ts";
+import { foldMonitorWakes } from "../task-detail/monitorWakeTurns.ts";
 
 export type TeamFeedRow = SharedFeedRow<ConversationItem, Batch>;
 export type LeadTurn = { from: number; to: number | null };
@@ -57,6 +58,15 @@ export function leadTurns(items: ConversationItem[]): LeadTurn[] {
     const from = timeMs(item.at);
     return from === null ? [] : [{ from, to: timeMs(item.endedAt) }];
   });
+}
+
+/**
+ * 调度台的会话流：哨兵叫醒照任务会话同一套规则并回（monitorWakeTurns），执行者的来信（提问、完成、失败）
+ * 算说给调度者听的一次输入，打断一段。并完再跟派活卡按时间排在一起。
+ */
+export function teamFeedRows(items: readonly ConversationItem[], batches: readonly Batch[]): TeamFeedRow[] {
+  const folded = foldMonitorWakes(items, { isInput: (item) => parseInbound(item.text) !== null });
+  return mergeFeed(folded, batches, teamFeedOptions());
 }
 
 export function teamFeedOptions() {

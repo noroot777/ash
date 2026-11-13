@@ -48,6 +48,7 @@ function AgentRow({
           {!row.continuation && (
             <span className="agent-run-identity">
               <b>{row.label}</b>
+              {row.wokenByMonitor && <span className="turn-cause">被哨兵叫醒</span>}
               <AgentRunMeta run={row.run} />
             </span>
           )}
