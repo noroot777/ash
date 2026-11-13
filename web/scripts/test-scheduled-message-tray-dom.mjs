@@ -33,7 +33,9 @@ try {
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (/\/tasks\/[^/]+\/scheduled-messages$/.test(path)) {
-      await route.fulfill({ json: pending });
+      // 能不能引导由服务端判(task-steer-gate.ts):这里照它的口径,只给最早一条用户自己的排队消息。
+      const first = pending.find((item) => item.mode === "queued" && !item.origin && !item.sessionRole);
+      await route.fulfill({ json: pending.map((item) => ({ ...item, steerable: item === first })) });
     } else if (/\/scheduled-messages\/[^/]+\/steer$/.test(path)) {
       const messageId = path.split("/").at(-2);
       steered.push(messageId);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ScheduledMessage } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
@@ -61,6 +61,10 @@ export function useScheduledMessages(taskId: string) {
     return () => { alive = false; };
   }, [taskId]);
 
+  const waitsOn = useRef<ReadonlySet<string>>(new Set());
+  waitsOn.current = messages.length ? new Set([taskId, ...messages.flatMap((message) =>
+    message.wait?.kind === "queue" ? message.wait.blockers.map((blocker) => blocker.id) : [])]) : new Set();
+
   const add = useCallback((message: ScheduledMessage) => {
     setActionError(null);
     setMessages((current) => bySendTime([...current.filter((item) => item.id !== message.id), message]));
@@ -70,8 +74,10 @@ export function useScheduledMessages(taskId: string) {
   // 排队消息一发出去任务立刻又回到 running,「任务不在跑了」那个空档前端常常一次都
   // 看不到 —— 靠它反推就会把已经进了会话的消息一直挂在托盘上。
   useServerEvents((event) => {
-    if (event.type !== "task.pendingMessages" || event.taskId !== taskId) return;
-    void reload({ quiet: true });
+    if (event.type === "task.pendingMessages" && event.taskId === taskId) void reload({ quiet: true });
+    // 每条在等什么、能不能引导(wait / steerable)是服务端按此刻的状态算的:本任务或点名挡着它的
+    // 那几条换了状态,托盘就得跟着改口,否则会一直说着「等某某」而那条早就跑完了。
+    if (event.type === "task.status" && waitsOn.current.has(event.taskId)) void reload({ quiet: true });
   });
 
   // 服务端只有「取消」这一个动作；界面上它是**撤回**——调用方在取消成功后把这条
@@ -105,6 +111,8 @@ export function useScheduledMessages(taskId: string) {
       // 端点只有在原话真正落进同一会话、服务端已标 sent 后才返回成功；SSE 是权威
       // 收口，这里同步少一行只是让按钮点击后的反馈不受网络事件时序影响。
       setMessages((current) => current.filter((message) => message.id !== messageId));
+      // 队首换了人,剩下那几条能不能引导要服务端重新判(steerable),别等 SSE 那一拍。
+      void reload({ quiet: true });
     } catch (reason) {
       // 失败不做乐观删除：消息仍在队列，用户可以继续等或再次尝试引导。
       setActionError({ messageId, message: reason instanceof Error ? reason.message : String(reason) });
