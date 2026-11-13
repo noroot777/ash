@@ -78,10 +78,30 @@ try {
   await messages.nth(1).locator(".turn-receipts-toggle").click();
   assert.deepEqual(
     await messages.nth(1).locator(".turn-receipt-text").allInnerTexts(),
-    ["第 3 轮验证通过", "第 1 轮审查没有给出结论", "第 1 轮审查通过"],
-    "被盖过的结论照样在记录里",
+    ["第 3 轮验证通过", "第 1 轮审查没能开始", "第 1 轮审查通过"],
+    "被盖过的结论照样在记录里；没能开始的那一轮不说成没有结论",
   );
   assert.equal(await page.locator(".turn-receipt-log").filter({ hasText: "继续（从中断处）" }).count(), 1, "审查轮里的续跑标记不外露");
+  // 被盖过的那几轮尾注里不再说，记录里那一条就是它的入口：没有审查格可去，就在记录下面摊开那一轮。
+  const secondLog = messages.nth(1).locator(".turn-receipt-log");
+  const supersededVerify = secondLog.locator("button.turn-receipt-more", { hasText: "第 3 轮验证通过" });
+  await supersededVerify.click();
+  assert.equal(await supersededVerify.getAttribute("aria-expanded"), "true");
+  const supersededBody = secondLog.locator(".turn-receipt-lane .turn-footnote-lane");
+  await supersededBody.waitFor();
+  assert.equal(await supersededBody.locator(".task-message--agent.is-reviewer").count(), 1, "被盖过的那一轮的发言还找得回来");
+  await supersededBody.getByRole("button", { name: "审查报告" }).click();
+  const supersededReport = page.getByRole("dialog", { name: /report\.md/ });
+  await supersededReport.getByText(/第 3 轮审查报告/).waitFor();
+  await supersededReport.getByRole("button", { name: "关闭审查报告" }).click();
+  await supersededVerify.click();
+  assert.equal(await secondLog.locator(".turn-receipt-lane").count(), 0, "再点一下收起");
+  // 启动失败那一次不能占用后来重跑生成的报告。
+  const abortedEntry = secondLog.locator("button.turn-receipt-more", { hasText: "第 1 轮审查没能开始" });
+  await abortedEntry.click();
+  await secondLog.locator(".turn-receipt-lane").waitFor();
+  assert.equal(await secondLog.locator(".turn-receipt-lane").getByRole("button", { name: "审查报告" }).count(), 0);
+  await abortedEntry.click();
 
   // 没有右侧审查格可去（只读视图）：点那一句就在尾注下面摊开这一轮；键盘走得到。
   const part = first.locator("button.turn-footnote-part");

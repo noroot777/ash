@@ -58,6 +58,44 @@ assert.equal(legacy("预览没起来（`npm run dev`）\n端口被占用").tier,
 assert.equal(legacy("预约审查仍在等待：回合还没结束。", "error").tier, "receipt", "表里没有的起头一律是回执");
 assert.equal(legacy("〔系统〕已预约完成后审查：5.5审查。").tier, "receipt", "老记录的〔系统〕前缀是回执");
 assert.equal(legacy("〔系统〕已预约完成后审查：5.5审查。").text.startsWith("〔系统〕"), false, "前缀不进摆出来的那句");
+// 起头表对齐服务端每一处 alertLine，起头是拼出来的（门禁摘要、预览回收没成、带标签起头的……）也认得出。
+for (const text of [
+  "验收没有执行：点验收时看到的那一版之后，任务又跑出了新的结果。看过最新的再验收。",
+  "这一下没有执行：点的是这条线上一段的卡，它已经离开了那一道「等我点头」。看过它现在停在哪一站再点。",
+  "验收前置命令接管降级：临时进程信息不可读",
+  "验收前置命令 `npm test` 未通过：命令退出码非 0（rc=1）。",
+  "这条命令点名要跑的 「test:e2e」 在被测快照里解析不出来（起跑前核过）：多半就是它起不来。",
+  "这一轮没能起跑：worktree 建不出来\n\n你刚发的这条消息**没有送达** agent，原文如下，修好后可以重发：\n\n继续",
+  "〔系统〕任务登记的基线分支 feat/x 已不存在，本次工作目录改按仓库当前 main 新建，任务登记的基线未改动",
+  "预览异常：端口被占用",
+  "预览清理暂缓：EACCES",
+  "预览停止记录暂时无法读写（EACCES）；请检查任务记录目录权限或磁盘状态后重试。（任务已归档）",
+  "重跑上一回合未能启动：回合被其它执行抢占，请再试一次。",
+  "重跑上一回合启动失败：spawn ENOENT；可以再试一次。",
+  "这条线停在「自动验证」这一站：自动复审轮数已经用完，等你处理后再手动派一轮。",
+  "更新基线发生冲突或 rebase 失败；原子分支和工作区未修改，请在子任务中处理后重新验证",
+  "合并已完成：成果已合入 main（提交 abc）。清理尚未完成。为避免删除正在使用或尚未结算的 worktree，清理已暂缓。x 阶段停在 merged，稍后可重新验收继续清理。",
+  "合并已完成，结果已保留。预览停止记录暂时无法读写；请检查任务记录目录权限或磁盘状态后重试。验收收尾暂缓，处理后可再次验收。",
+  "以下团队执行者的独立验证尚未执行：A 本次验收未执行，需明确确认仍要验收。",
+  "自由工作流第 2 轮审查的任务书被协议层明确拒收，审查者一个字都没收到，这一轮按未完成收尾；重跑这一轮即可重新投递。",
+  "执行者这一回合结束时没有调用 debate_reply 交卷；辩论已中止；驳回仍在等你裁定，也可以再开一轮辩论。",
+  "〔系统〕定时消息未发送，已取消（原定 2026-11-13 10:00）：任务已归档",
+  "哨兵没能开工：回归测试。命令解析失败",
+  "升级迁移：上一版「合并&清理」失败；请从验收页重新验收或人工处理。",
+]) assert.equal(legacy(text).tier, "alert", `漏认了一句要你知道的：${text.slice(0, 24)}…`);
+// 只认整条记录的外层写法：回执里引了别人的话（哨兵的描述、命令），不让引文决定它摆在哪儿。
+for (const text of [
+  "哨兵已起：检查条目太多放不进指令时的恢复行为（node replay.mjs）",
+  "哨兵结束：处理未发送，已取消，exit=0",
+  "哨兵已起：复现「辩论已中止；驳回仍在等你裁定，也可以再开一轮辩论。」",
+  "哨兵已起：盯「预览没起来」那条路（npm run e2e）",
+  "门禁交接：修复输入已持久入队，按原审查权限等待投递（日志 /tmp/x.log）。",
+  "升级迁移：上一版「合并&清理」已记录合并完成，验收标记已补上（合并区间无从考证，未伪造）。",
+  "验收前置命令 `npm test` 通过（rc=0）。",
+]) {
+  assert.equal(legacy(text, "error").tier, "receipt", `回执被引文升了档：${text.slice(0, 24)}…`);
+  assert.equal(legacy(text, "notice").tier, "receipt", `结算说明那一路同样不升：${text.slice(0, 24)}…`);
+}
 
 // —— 有类型的：写结果不写机制，细节留在原文里点开再看 ——
 const typed = (notice, text = "原文") => noticeView({ text, tone: "neutral", variant: "note", notice });
@@ -163,13 +201,38 @@ assert.equal(figure3.footnotes.get("a1")?.live, false, "后面又起了回合，
 const rerun = conversationSystemRows([agent("a1"), lane("l1", 1, "verify_failed"), lane("l2", 2, "verify_failed")]);
 assert.equal(sentence(rerun.footnotes.get("a1")), "第 2 轮审查未通过");
 assert.deepEqual([rerun.footnotes.get("a1")?.live, rerun.footnotes.get("a1")?.parts[0].view.tone], [true, "bad"]);
+// 被盖过的那一轮在记录里还认得出是哪一轮：记录带着它，点开能去那一轮或者就地摊开。
+assert.deepEqual(rerun.receipts.get("a1")?.map((r) => r.lane?.id), ["l1", "l2"]);
+
+// 派审没能开始：收口以后照样说「没能开始」、红点，不说成「没有给出结论」。
+const abortedLane = conversationFeedRows([
+  { kind: "agent", id: "a1", segments: [] },
+  { kind: "event", id: "s1", text: "自由工作流第 1 轮审查开始", variant: "note", tone: "neutral", at: "2026-11-13T01:00:00.000Z", notice: { kind: "review.start", source: "free", round: 1 } },
+  { kind: "event", id: "e1", text: "自由工作流第 1 轮审查启动失败：审查者不可用", variant: "note", tone: "error", at: "2026-11-13T01:01:00.000Z", notice: { kind: "review.verdict", source: "free", round: 1, verdict: "aborted" } },
+]);
+const aborted = conversationSystemRows(abortedLane.map((row) => row.kind === "review-lane" ? row : { kind: "item", item: row.item }));
+assert.deepEqual(
+  (({ text, tone, tier }) => [text, tone, tier])(aborted.footnotes.get("a1")?.parts[0].view ?? {}),
+  ["第 1 轮审查没能开始", "bad", "alert"],
+);
+const legacyAborted = conversationSystemRows(conversationFeedRows([
+  { kind: "agent", id: "a1", segments: [] },
+  { kind: "event", id: "s1", text: "自由工作流第 1 轮审查开始（5.5审查）。", variant: "note", tone: "neutral", at: "2026-11-13T01:00:00.000Z" },
+  { kind: "event", id: "e1", text: "自由工作流第 1 轮审查启动失败：审查者不可用", variant: "note", tone: "error", at: "2026-11-13T01:01:00.000Z" },
+]).map((row) => row.kind === "review-lane" ? row : { kind: "item", item: row.item }));
+assert.equal(sentence(legacyAborted.footnotes.get("a1")), "第 1 轮审查没能开始", "没有类型的老记录同样认得出没能开始");
 
 // 一轮异常结束是那一回合尾注里的一句；明面的话同一回合只留最近一句。
 const crashed = conversationSystemRows(
   [agent("a1"), ev("x1", "预览没起来", { kind: "alert" }), ev("x2", "验收暂缓：回归还在跑", { kind: "alert" })],
-  { failures: new Map([["a1", "执行异常结束 · exit 1"]]) },
+  { failures: new Map([["a1", { text: "执行异常结束 · exit 1", at: "2026-11-13T01:00:00.000Z" }]]) },
 );
 assert.equal(sentence(crashed.footnotes.get("a1")), "这一轮异常结束 · 验收暂缓：回归还在跑");
+// 刷新以后补出来的那一句跟直播那一路一样：有时刻，也在这一回合的记录里（排在最前，它是这一回合自己的收场）。
+assert.equal(crashed.footnotes.get("a1")?.parts[0].at, "2026-11-13T01:00:00.000Z");
+assert.deepEqual(crashed.receipts.get("a1")?.map((r) => [r.id, r.at]), [
+  ["failure:a1", "2026-11-13T01:00:00.000Z"], ["x1", undefined], ["x2", undefined],
+]);
 
 // 图二：没有类型的老记录夹在两个回合之间，一条都不占行。
 const figure2 = conversationSystemRows([

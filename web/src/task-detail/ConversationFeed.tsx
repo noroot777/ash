@@ -30,7 +30,9 @@ import { crashedTurns } from "./turnFailure.ts";
 import { QuestionDock } from "./QuestionDock.tsx";
 import { useJustEnded } from "./useJustEnded.ts";
 import { conversationKeys } from "./conversationKeys.ts";
-import { TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts } from "./TurnReceipts.tsx";
+import {
+  ReceiptReviewContext, TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts, type ReceiptReview,
+} from "./TurnReceipts.tsx";
 import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
@@ -326,11 +328,14 @@ export function ConversationFeed({
     conversationDebateRows(conversationFeedRows(items, { reviews }), { reviews }),
     { failures: crashed },
   );
-  // 审查卡里（正在跑的那张、尾注里摊开的那一轮）的旁注同样记在审查者那一回合上（见 laneReceipts）。
+  // 审查卡里（正在跑的那张、尾注里摊开的那一轮、记录里点开的那一轮）的旁注同样记在审查者那一回合上
+  // （见 laneReceipts）。
   const shownLanes: ConversationReviewLane[] = [
     ...rows.flatMap((row) => row.kind === "review-lane" ? [row] : []),
     ...[...footnotes.values(), ...rows.flatMap((row) => row.kind === "footnote" ? [row.footnote] : [])]
       .flatMap((footnote) => footnote.parts.flatMap((part) => part.kind === "review" ? [part.lane] : [])),
+    ...[...receipts.values(), ...rows.flatMap((row) => row.kind === "footnote" ? [row.receipts] : [])]
+      .flatMap((list) => list.flatMap((receipt) => receipt.lane ? [receipt.lane] : [])),
   ];
   const lanes = new Map(shownLanes.map((lane) => [lane.id, laneReceipts(lane)] as const));
   const laneViews = [...lanes.values()];
@@ -452,6 +457,12 @@ export function ConversationFeed({
       renderLane={renderLaneRows}
     />
   );
+  // 「N 条记录」里那一轮审查点开去哪儿：跟尾注那半句同一套。
+  const receiptReview: ReceiptReview = {
+    taskId: task.id,
+    reviewOpener: (lane) => laneRoundOpener(lane, task.workflowMode, onOpenReviewPanel),
+    renderLane: renderLaneRows,
+  };
   // 前面没有回合可挂的那几句：留在原处，同一种小灰字；它们的记录跟在后面。
   const renderFootnoteRow = (row: ConversationFootnoteRow) => row.footnote.parts.length ? (
     <div className="footnote-row" key={row.id}>
@@ -464,6 +475,7 @@ export function ConversationFeed({
     <QuestionHistoryProvider key={task.id} taskId={task.id} history={questionHistory} live={liveQuestionHistory}
       messages={items.flatMap((item) => item.kind === "user" ? [item] : [])}>
     <MessageDeleteProvider onDelete={onDeleteMessage}>
+    <ReceiptReviewContext.Provider value={receiptReview}>
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
@@ -520,6 +532,7 @@ export function ConversationFeed({
       </div>
       <QuestionDock>{dock}</QuestionDock>
     </ImagePreviewGroup>
+    </ReceiptReviewContext.Provider>
     </MessageDeleteProvider>
     </QuestionHistoryProvider>
   );

@@ -4,6 +4,7 @@ import { conflictContextEvent, isConflictHandoff } from "./systemNoticeModel.ts"
 import { verifyMarkOf } from "./conversationNotes.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import { noticeView, turnFailureView, type NoticeView } from "./timelineNoticeCopy.ts";
+import type { CrashedTurn } from "./turnFailure.ts";
 import { composeFootnote, laneVerdictEvent, laneVerdictView, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 
 type EventItem = Extract<ConversationItem, { kind: "event" }>;
@@ -18,6 +19,8 @@ export type TurnReceipt = {
   view: NoticeView;
   /** 原条目：删除消息、取原文都从它拿。就地验证靠阶段翻档收口的那一轮没有结论旁注，为空。 */
   item?: EventItem;
+  /** 一轮审查的结论：点它去那一轮（被后一轮盖过、尾注里不再说的那一轮，入口就剩这一条）。 */
+  lane?: ConversationReviewLane;
 };
 
 export type ConversationSystemActionRow = {
@@ -91,8 +94,8 @@ type Accessors<Row> = {
   laneOf?: (row: Row) => ConversationReviewLane | null;
   /** 这一行是你说的话：它后面的尾注都成了过去的事。 */
   yoursOf?: (row: Row) => boolean;
-  /** 这一回合异常结束了：尾注里补「这一轮异常结束」（原文是退出码）。 */
-  failureOf?: (turnId: string) => string | undefined;
+  /** 这一回合异常结束了：尾注里补「这一轮异常结束」（原文是退出码），记录里同样有一条。 */
+  failureOf?: (turnId: string) => CrashedTurn | undefined;
 };
 
 /**
@@ -168,7 +171,7 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
       const end = laneVerdictEvent(lane);
       const view = laneVerdictView(lane);
       const at = end?.at ?? lane.endedAt ?? undefined;
-      const receipt: TurnReceipt = { id: end?.id ?? lane.id, at, view, ...(end ? { item: end } : {}) };
+      const receipt: TurnReceipt = { id: end?.id ?? lane.id, at, view, lane, ...(end ? { item: end } : {}) };
       order.set(receipt.id, index);
       note({ kind: "review", id: lane.id, at, view, lane }, receipt);
       return;
@@ -181,7 +184,13 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
       orphan = null;
       turn = turnId;
       const failure = acc.failureOf?.(turnId);
-      if (failure) note({ kind: "failure", id: `failure:${turnId}`, view: turnFailureView(failure) }, null);
+      if (failure) {
+        const id = `failure:${turnId}`;
+        const view = turnFailureView(failure.text);
+        // 排在这一回合后面的那些记录前头：它是这一回合自己的收场。
+        order.set(id, index);
+        note({ kind: "failure", id, at: failure.at, view }, { id, at: failure.at, view });
+      }
       return;
     }
     if (acc.breaksSegment(row)) closeSegment();
@@ -215,7 +224,7 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
 
 export function conversationSystemRows(
   rows: ConversationDebateFeedRow[],
-  options: { failures?: ReadonlyMap<string, string> } = {},
+  options: { failures?: ReadonlyMap<string, CrashedTurn> } = {},
 ): ConversationDisplay {
   type Grouped = ConversationDebateFeedRow | ConversationSystemActionRow;
   const display = attach<Grouped>(groupConflictHandoffs(rows), {

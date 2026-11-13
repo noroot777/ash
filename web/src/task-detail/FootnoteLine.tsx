@@ -60,7 +60,6 @@ export function FootnoteLine({
   deletable?: DeletableItem;
 }) {
   const [open, setOpen] = useState<string | null>(null);
-  const [report, setReport] = useState<ReviewFileTarget | null>(null);
   const bodyId = useId();
   const { parts, live } = footnote;
   if (!parts.length) return null;
@@ -122,21 +121,35 @@ export function FootnoteLine({
       {opened && opened.kind !== "review" && opened.view.detail && opened.view.topic !== "accept" && (
         <p className="turn-footnote-detail" id={bodyId}>{opened.view.detail}</p>
       )}
-      {lane && (
-        <div className="turn-footnote-lane" id={bodyId}>
-          {lane.reportAvailable && lane.report && taskId && (
-            <button
-              type="button"
-              className="turn-footnote-report"
-              onClick={() => setReport({ name: "report.md", url: laneReportUrl(taskId, lane.report!) })}
-            >
-              <FileText size={12} aria-hidden="true" />审查报告
-            </button>
-          )}
-          {lane.note && <ReviewNote text={lane.note} />}
-          {renderLane?.(lane)}
-        </div>
+      {lane && <LaneBody lane={lane} id={bodyId} taskId={taskId} renderLane={renderLane} />}
+    </div>
+  );
+}
+
+/**
+ * 就地摊开的那一轮审查：报告、派审附言、那一轮的经过。尾注里那半句、「N 条记录」里被后一轮
+ * 盖过的那一条（TurnReceipts）点开都是它。
+ */
+export function LaneBody({ lane, id, taskId, renderLane }: {
+  lane: ConversationReviewLane;
+  id: string;
+  taskId?: string;
+  renderLane?: (lane: ConversationReviewLane) => ReactNode;
+}) {
+  const [report, setReport] = useState<ReviewFileTarget | null>(null);
+  return (
+    <div className="turn-footnote-lane" id={id}>
+      {lane.reportAvailable && lane.report && taskId && (
+        <button
+          type="button"
+          className="turn-footnote-report"
+          onClick={() => setReport({ name: "report.md", url: laneReportUrl(taskId, lane.report!) })}
+        >
+          <FileText size={12} aria-hidden="true" />审查报告
+        </button>
       )}
+      {lane.note && <ReviewNote text={lane.note} />}
+      {renderLane?.(lane)}
       {report && <ReviewReportDialog target={report} onReviewReport={setReport} onClose={() => setReport(null)} />}
     </div>
   );

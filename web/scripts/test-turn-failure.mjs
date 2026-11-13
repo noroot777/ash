@@ -8,11 +8,15 @@ const sess = (over = {}) => ({ id: "s1", role: "single", endedAt: "2026-11-12T00
 const agent = (id, session, over = {}) => ({ kind: "agent", id, session, segments: [], markdown: "", ...over });
 const boundary = (tone) => ({ kind: "event", id: "b", text: "执行异常结束 · exit 1", variant: "boundary", tone });
 
-assert.deepEqual([...crashedTurns([agent("a1", sess()), agent("a2", sess())])], [["a2", "执行异常结束 · exit 1"]], "只补在这条会话的最后一回合后面");
+assert.deepEqual(
+  [...crashedTurns([agent("a1", sess()), agent("a2", sess())])],
+  [["a2", { text: "执行异常结束 · exit 1", at: "2026-11-12T00:00:00.000Z" }]],
+  "只补在这条会话的最后一回合后面；时刻是会话行收口的那一刻",
+);
 assert.equal(crashedTurns([agent("a1", sess({ exitStatus: 0 }))]).size, 0, "正常收口不补");
 assert.equal(crashedTurns([agent("a1", sess({ endedAt: null }))]).size, 0, "还在跑的会话不补");
 assert.equal(crashedTurns([agent("a1", sess({ stoppedAs: "user" }))]).size, 0, "手动停下的不算异常");
-assert.equal(crashedTurns([agent("a1", sess({ exitStatus: 0, turnOutcome: "failed" }))]).get("a1"), "执行异常结束 · exit 0", "权威结局优先于退出码");
+assert.equal(crashedTurns([agent("a1", sess({ exitStatus: 0, turnOutcome: "failed" }))]).get("a1")?.text, "执行异常结束 · exit 0", "权威结局优先于退出码");
 assert.equal(crashedTurns([agent("a1", sess(), { reviewer: { round: 1 } })]).size, 0, "审查会话有自己的卡");
 assert.equal(crashedTurns([agent("a1", sess()), boundary("error")]).size, 0, "直播那一路已经有异常边界");
 assert.equal(crashedTurns([agent("a1", sess()), boundary("neutral")]).size, 1, "正常边界不顶替异常那一句");

@@ -4,6 +4,7 @@ import type { ConversationItem } from "./conversationModel.ts";
 import { stageOf, verifyMarkOf, type VerifyNoteMark } from "./conversationNotes.ts";
 import { monitorWakeInput } from "./monitorWakeModel.ts";
 import { monitorWakeFedReviewer } from "./conversationReviewer.ts";
+import type { ReviewVerdictWord } from "./timelineNoticeCopy.ts";
 
 export type ReviewLaneConclusion = "verified" | "verify_failed" | "inconclusive" | null;
 export type ReviewLaneSource = VerifyNoteMark["kind"];
@@ -39,6 +40,11 @@ export type ConversationReviewLane = {
   startedAt: string | null;
   endedAt: string | null;
   conclusion: ReviewLaneConclusion;
+  /**
+   * 收这一轮的那条结论旁注原本怎么说的：`conclusion` 把「没能开始」并进了「没有结论」（卡片的
+   * 状态只分三档），收成一句话时得把它找回来——没跑起来的一轮是出了岔子，不是审完了没给结论。
+   */
+  verdict: ReviewVerdictWord | null;
   complete: boolean;
   reportAvailable: boolean;
   report: ReviewLaneReport | null;
@@ -142,6 +148,13 @@ function conclusionOf(item: ConversationItem): ReviewLaneConclusion {
   return "inconclusive";
 }
 
+/** 结论旁注原本的那个词（见 ConversationReviewLane.verdict）。只在 conclusionOf 认出了结论时调用。 */
+function verdictOf(item: ConversationItem, conclusion: Exclude<ReviewLaneConclusion, null>): ReviewVerdictWord {
+  if (item.kind === "event" && item.notice?.kind === "review.verdict") return item.notice.verdict;
+  if (item.kind === "event" && !item.notice && verifyMarkOf(item)?.phase === "end" && /启动失败/.test(item.text)) return "aborted";
+  return conclusion === "verified" ? "passed" : conclusion === "verify_failed" ? "failed" : "inconclusive";
+}
+
 function laneStart(item: ConversationItem): VerifyNoteMark | null {
   if (item.kind !== "event") return null;
   const mark = verifyMarkOf(item);
@@ -202,7 +215,10 @@ function addToLane(lane: ActiveLane, item: ConversationItem): void {
   lane.items.push(item);
   lane.endedAt = itemEnd(item) ?? lane.endedAt;
   const conclusion = conclusionOf(item);
-  if (conclusion) lane.conclusion = conclusion;
+  if (conclusion) {
+    lane.conclusion = conclusion;
+    lane.verdict = verdictOf(item, conclusion);
+  }
   if (item.kind === "event" && item.notice?.kind === "review.verdict") {
     lane.findings = item.notice.findings ?? lane.findings;
     lane.reviewerLabel ??= item.notice.reviewer ?? null;
@@ -219,7 +235,10 @@ function finishLane(
   lane: ActiveLane,
   { complete = false, superseded = false }: { complete?: boolean; superseded?: boolean } = {},
 ): ConversationReviewLane {
-  if (superseded && lane.conclusion === null) lane.conclusion = "inconclusive";
+  if (superseded && lane.conclusion === null) {
+    lane.conclusion = "inconclusive";
+    lane.verdict = "inconclusive";
+  }
   lane.complete = complete || superseded || lane.conclusion !== null;
   // 就地验证的报告只能推：跑完且审查者确实说过话，就当那一轮有 report.md。
   // 自由派审不用推，下面 attachReports 拿得到落盘状态里的 reportMarkdown。
@@ -381,6 +400,7 @@ export function conversationFeedRows(
         startedAt: item.at ?? null,
         endedAt: item.at ?? null,
         conclusion: null,
+        verdict: null,
         complete: false,
         reportAvailable: false,
         report: null,

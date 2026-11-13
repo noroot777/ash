@@ -39,16 +39,21 @@ const VERDICT: Record<Exclude<ReviewLaneConclusion, null>, ReviewVerdictWord> = 
   inconclusive: "inconclusive",
 };
 
-/** 出了结论的那一轮收成的一句：「第 3 轮审查通过」「第 2 轮审查未通过，2 条意见」。 */
+/** 收这一轮的那个词：先认结论旁注原本的说法（「没能开始」不并进「没有结论」）。 */
+function laneVerdict(lane: ConversationReviewLane): ReviewVerdictWord {
+  return lane.verdict ?? (lane.conclusion ? VERDICT[lane.conclusion] : "inconclusive");
+}
+
+/** 出了结论的那一轮收成的一句：「第 3 轮审查通过」「第 2 轮审查未通过，2 条意见」「第 1 轮审查没能开始」。 */
 export function reviewLaneSentence(lane: ConversationReviewLane): string {
-  const verdict = lane.conclusion ? VERDICT[lane.conclusion] : "inconclusive";
-  return reviewVerdictText(lane.source, lane.round, verdict, lane.findings);
+  return reviewVerdictText(lane.source, lane.round, laneVerdict(lane), lane.findings);
 }
 
 export function laneVerdictView(lane: ConversationReviewLane): NoticeView {
-  const verdict = lane.conclusion ? VERDICT[lane.conclusion] : "inconclusive";
+  const verdict = laneVerdict(lane);
   return {
-    tier: "milestone", tone: reviewVerdictTone(verdict), topic: "review",
+    // 没能开始的那一轮跟带类型的旁注同一档（timelineNoticeCopy 的 review.verdict）。
+    tier: verdict === "aborted" ? "alert" : "milestone", tone: reviewVerdictTone(verdict), topic: "review",
     text: reviewLaneSentence(lane), detail: null, dispute: false,
   };
 }
@@ -93,7 +98,7 @@ export function footnoteKey(footnote: TurnFootnote | undefined, extra = ""): str
   return [
     footnote.live ? "live" : "past",
     ...footnote.parts.map((part) => part.kind === "review"
-      ? `${part.id}:${part.lane.conclusion}:${part.lane.runId}:${part.lane.reportAvailable}:${part.lane.reviewerLabel}:${part.lane.items.length}`
+      ? `${part.id}:${part.lane.conclusion}:${part.lane.verdict}:${part.lane.runId}:${part.lane.reportAvailable}:${part.lane.reviewerLabel}:${part.lane.items.length}`
       : `${part.id}:${part.view.text}:${part.view.tone}`),
     extra,
   ].join("|");
