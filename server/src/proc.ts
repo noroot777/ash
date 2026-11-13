@@ -91,6 +91,20 @@ export function processIdentity(pid: number, expectedStartedAt?: string | null):
 }
 
 /**
+ * 「这个号上现在是一个**比记录那一代更晚**起来的进程」—— 只在答得出、而且严格更晚时为真。
+ *
+ * 它比 `different` 多要了一个方向:号被复用,新主人一定是在原主人之后起来的。读出来更早
+ * (时钟被拨过、读数本身不可信)说明这一次的「对不上」没法当作复用的证明,按「不是」处理。
+ * 一次快照、纯比较,跟 `processIdentity` 同一份判据;问不出来、比不出来一律 false。
+ */
+export function occupiedByLaterGeneration(pid: number, recordedStartedAt: string): boolean {
+  const info = inspectProcess(pid);
+  const recordedMs = parseStartedAt(recordedStartedAt);
+  if (!info || info.startedAtMs === null || recordedMs === null) return false;
+  return info.startedAtMs > recordedMs;
+}
+
+/**
  * `processIdentity` 再多问一档:**僵尸算已经退出**(`exited`)。
  *
  * 为什么必须另起一档而不是改上面那一份:僵尸的 `/proc/<pid>/stat` 还在、启动时刻照旧对得上,

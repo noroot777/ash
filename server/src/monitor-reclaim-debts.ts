@@ -70,7 +70,7 @@ import { db, dbClient } from "./db/index.js";
 import { monitorReclaimDebts, monitors } from "./db/schema.js";
 import {
   confirmTraceless, isTracelessState, killProvenUnit, reclaimState,
-  shootProvenUnitNow, stateNote, type MonitorUnit,
+  shootProvenUnitNow, stateNote, type MonitorUnit, type ReclaimState,
 } from "./monitor-reclaim-evidence.js";
 import { IS_WINDOWS } from "./platform.js";
 import { adoptSpawnIdentity } from "./monitor-adopt.js";
@@ -197,8 +197,8 @@ export type IdentityArchive = "existing" | "written" | "failed";
 export async function archiveTracelessIdentity(m: {
   id: string; taskId: string; pid: number; pidStartedAt: string | null;
   command: string; unitToken: string | null;
-}): Promise<IdentityArchive> {
-  const note = stateNote("traceless");
+}, state: ReclaimState): Promise<IdentityArchive> {
+  const note = stateNote(state);
   return ensureIdentityArchived({
     monitorId: m.id, taskId: m.taskId, pid: m.pid, pidStartedAt: m.pidStartedAt,
     spawnAnchorMs: null, unitToken: m.unitToken, command: m.command,
@@ -317,7 +317,7 @@ export type ReclaimOutcome =
  *
  * | 档 | 做什么 |
  * |---|---|
- * | `traceless` | 留档盖戳(**不删行**)→ `closed`;记不下来 → `unaccounted` |
+ * | `traceless` / `superseded` | 留档盖戳(**不删行**)→ `closed`;记不下来 → `unaccounted` |
  * | `ours-alive` | 记责任 + 杀(根自己的代次对得上,隔多久都是我们的) |
  * | `ours-orphans` | 记责任 + 杀 —— 这一档**只由真实环境项里的记号产生**,后代各自带着这一次创建的那条记号,跨几次重启都认得回来(第 12 轮审查 F1-A) |
  * | `not-ours` | 记责任、不杀(那是别人的进程) |
@@ -509,8 +509,9 @@ export async function settleReclaim(outcome: ReclaimOutcome, deadlineMs = 3_000)
     //
     // **追空了也要先把身份留住**(第 14 轮审查 F2):上一版这里无论补记成不成都返回 `closed`
     // —— 于是「该留责任却没留下来」被一句「线索追空了」洗掉,销毁前核对再也拦不下删除。
-    if (await confirmTraceless(debt.pid, debt.pidStartedAt, deadlineMs, debt)) {
-      if (await ensureIdentityArchived(debt, stateNote("traceless")) !== "failed") return "closed";
+    const traceless = await confirmTraceless(debt.pid, debt.pidStartedAt, deadlineMs, debt);
+    if (traceless) {
+      if (await ensureIdentityArchived(debt, stateNote(traceless)) !== "failed") return "closed";
       console.error(
         `[ash] 线索已追空,但最后一份身份留不下来 monitor=${debt.monitorId} pid=${debt.pid}`
         + ` 命令：${debt.command} —— 继续重试落盘`,
@@ -530,8 +531,9 @@ export async function settleReclaim(outcome: ReclaimOutcome, deadlineMs = 3_000)
     return "unaccounted";
   }
   const { ticket } = outcome;
-  if (await confirmTraceless(ticket.pid, ticket.pidStartedAt, deadlineMs, ticket)) {
-    await closeReclaimDebt(ticket.monitorId, stateNote("traceless"));
+  const traceless = await confirmTraceless(ticket.pid, ticket.pidStartedAt, deadlineMs, ticket);
+  if (traceless) {
+    await closeReclaimDebt(ticket.monitorId, stateNote(traceless));
     return "closed";
   }
   console.error(
@@ -555,8 +557,9 @@ function scheduleReclaimPersist(debt: DebtInput, step = 0): void {
       // 线索已经空了也要把这一笔补上:它是「这件事发生过」的唯一记录(只是补完就收档)。
       // **补不上就接着爬梯子**(第 14 轮审查 F2):上一版这一支无论成不成都 `return`,于是
       // 「追空」成了停止重试的理由 —— 而这一档恰恰是身份只剩这一行的那一档。
-      if (isTracelessState(reclaimState(debt.pid, debt.pidStartedAt, debt))) {
-        if (await ensureIdentityArchived(debt, stateNote("traceless")) !== "failed") return;
+      const state = reclaimState(debt.pid, debt.pidStartedAt, debt);
+      if (isTracelessState(state)) {
+        if (await ensureIdentityArchived(debt, stateNote(state)) !== "failed") return;
         scheduleReclaimPersist(debt, step + 1);
         return;
       }
@@ -620,8 +623,9 @@ async function settleDebt(monitorId: string): Promise<boolean> {
     // **这一刀自己重新取证**(第 14 轮审查 F1):上面那一份判完之后隔着 `completeIdentity` 等
     // 几次 `await`,拿它当授权就是把一次性的凭证存成了跨等待可复用的裸 pid 数组。
     shootProvenUnitNow(debt.pid, debt.pidStartedAt, debt, "SIGKILL");
-    if (await confirmTraceless(debt.pid, debt.pidStartedAt, 1_000, debt)) {
-      await closeDebtAndAnchor(monitorId, stateNote("traceless"));
+    const traceless = await confirmTraceless(debt.pid, debt.pidStartedAt, 1_000, debt);
+    if (traceless) {
+      await closeDebtAndAnchor(monitorId, stateNote(traceless));
       console.error(`[ash] 回收责任已收档 monitor=${monitorId} pid=${debt.pid}（补杀成功,线索已空）`);
       return true;
     }
@@ -629,8 +633,8 @@ async function settleDebt(monitorId: string): Promise<boolean> {
   // 剩下四档都是**不敢杀、也不敢收档**:
   //  · `suspected` —— 展示文本里还看得见这次创建的记号,但这台机器上切不出真实环境项边界,
   //    证不出它在谁身上(第 14 轮审查 F1);记号读得精确的那一种上面已经收掉了;
-  //  · `not-ours` —— 这个号现在是别人的,而**原来那个**退没退证明不了(它可能带着后代还在
-  //    这一组里,只是组长的号被占了);
+  //  · `not-ours` —— 这个号现在是别人的,而剩下的线索(记号、原进程组)还有一问没答成「空」。
+  //    都答成空的那一种已经在上面按 `superseded` 收掉了(见 evidence 的 `rootSuperseded`);
   //  · `unverifiable` —— 当初没记启动时刻,这个号上现在有人也证不出是不是它(第 9 轮 F3);
   //  · `unknown` —— 记号这一问自己没答出来(win32 读不到别的进程的环境块、或者 ps 失败),
   //    而根也已经不在:什么都不许声称。

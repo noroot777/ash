@@ -274,7 +274,7 @@ function superviseLiveness(row: Row, rt: Runtime): void {
     if (state === "traceless") {
       settleInBackground(row.id, "exited",
         "命令已经不在了（server 重启期间跑完的，拿不到退出码）", null);
-    } else if (state === "not-ours") {
+    } else if (state === "not-ours" || state === "superseded") {
       settleInBackground(row.id, "exited",
         "这个号现在是另一个进程了（原命令在停服期间结束，拿不到退出码）", null);
     }

@@ -6,7 +6,7 @@ import type { TaskMonitor } from "@ash/shared/monitor";
 import { db } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
-import { reclaimState } from "./monitor-reclaim-evidence.js";
+import { isTracelessState, reclaimState } from "./monitor-reclaim-evidence.js";
 import { detachMonitor, finish, serialize, toTaskMonitor } from "./monitors.js";
 import { appendTaskTimeline, noticeLine } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -130,7 +130,7 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
     // **pid 还空着的那一行也要走这一趟**(第 19 轮审查 F2):那是创建意图行(身份先落库、进程
     // 后起、pid 回填),它的结局恰恰最没确认 —— 判据交给 `reclaimMonitorProcess`,它会先问
     // 一遍认领、再按档位决定记责任还是收档,真的没有落点时才返回 `closed`。
-    if (row.pid === null || reclaimState(row.pid, row.pidStartedAt, row) !== "traceless") {
+    if (row.pid === null || !isTracelessState(reclaimState(row.pid, row.pidStartedAt, row))) {
       const outcome = await reclaimMonitorProcess(row, `${reason}（创建期取消后补收）`);
       if (await settleReclaim(outcome) === "unaccounted") {
         console.error(`[ash] 创建期取消后补收:既没确认退出、责任也没落库 monitor=${monitorId} pid=${row.pid}`);
