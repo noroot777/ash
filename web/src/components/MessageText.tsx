@@ -1,4 +1,5 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
+import { CaretDown } from "@phosphor-icons/react";
 import { splitMessageQuotes } from "../lib/messageQuotes.ts";
 import "./message-text.css";
 
@@ -16,18 +17,19 @@ export function MessageText({ text }: { text: string }) {
 }
 
 /**
- * 截成两行的引文，真被截掉了才能点开看全。
+ * 截成两行的引文，真被截掉了才在尾巴上给一颗展开键。
  *
- * 不做成按钮：截断只是视觉上的，全文一直在 DOM 里（读屏照读全文），引文也还是正文——按钮里
- * 的字选不中，选文取正文时也会被当成界面装置剔掉。点击时已经选中了字就不切换：那一下是拖选
- * 或双击选词的收尾，不是要展开。
+ * 展开收起只认那颗键，引文正文本身不接点击：正文要能选（选文取正文时按钮会被当成界面装置
+ * 剔掉，正文做成按钮就选不进去了），而点一下就改排版的正文接不住双击 —— 第一下 click 时
+ * 还没有选区，排版一变，第二下就落到挪过位置的另一句话上，选中的是别人的字。
  */
 function MessageQuote({ text }: { text: string }) {
-  const ref = useRef<HTMLQuoteElement>(null);
+  const body = useRef<HTMLSpanElement>(null);
+  const bodyId = useId();
   const [open, setOpen] = useState(false);
   const [clipped, setClipped] = useState(false);
   useLayoutEffect(() => {
-    const element = ref.current;
+    const element = body.current;
     if (!element) return;
     const measure = () => setClipped(element.scrollHeight > element.clientHeight + 1);
     measure();
@@ -35,14 +37,17 @@ function MessageQuote({ text }: { text: string }) {
     observer.observe(element);
     return () => observer.disconnect();
   }, [text]);
-  // 展开之后就量不出「截没截」了，得一直能点回去。
+  // 展开之后就量不出「截没截」了，得一直能收回去。
   const toggles = open || clipped;
-  return <blockquote
-    ref={ref}
-    className={`message-quote${open ? " is-open" : ""}${toggles ? " is-toggle" : ""}`}
-    onClick={toggles ? () => {
-      if (window.getSelection()?.isCollapsed === false) return;
-      setOpen((value) => !value);
-    } : undefined}
-  >{text}</blockquote>;
+  return <blockquote className={`message-quote${open ? " is-open" : ""}`}>
+    <span ref={body} id={bodyId} className="message-quote__text">{text}</span>
+    {toggles && <button
+      type="button"
+      className="message-quote__toggle"
+      aria-expanded={open}
+      aria-controls={bodyId}
+      aria-label={open ? "收起引文" : "展开引文"}
+      onClick={() => setOpen((value) => !value)}
+    ><CaretDown size={11} weight="bold" /></button>}
+  </blockquote>;
 }
