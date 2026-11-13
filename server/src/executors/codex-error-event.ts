@@ -14,6 +14,7 @@
 // `../session-notice.ts` 顶部),**重试完了还是错 = 裸 error**。前者由回合级停滞看门狗
 // (`../turn-stall.ts`)负责「等到该动手了没有」,这里只负责如实说出来。
 import type { AgentEvent } from "@ash/shared";
+import { codexTurnError } from "./model-failure.js";
 
 export interface CodexErrorNotification {
   willRetry?: unknown;
@@ -40,5 +41,6 @@ export function codexErrorEvent(p: CodexErrorNotification): CodexErrorEvent | nu
   if (p.willRetry) {
     return { event: { kind: "error", message, level: "notice", affectsTurn: false }, counted: false };
   }
-  return { event: { kind: "error", message }, counted: true };
+  // 重试完了还是错：这就是这一轮对模型那次请求的结局，认得出类型就挂上（model-failure.ts）。
+  return { event: codexTurnError(message), counted: true };
 }

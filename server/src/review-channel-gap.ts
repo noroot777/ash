@@ -26,7 +26,7 @@ import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
 import { and, eq } from "drizzle-orm";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { db } from "./db/index.js";
-import { freeReviewRounds, sessions } from "./db/schema.js";
+import { freeReviewRounds, freeReviewRuns, sessions } from "./db/schema.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
 import { interruptionOf, noVerdictCause, readTurnDiagnostics, reviewReportWritten, type TurnFailure } from "./review-no-verdict.js";
@@ -218,6 +218,12 @@ async function concludedNothing(taskId: string, review: TurnReview | null) {
   return round && round.status === "error" && !round.conclusion ? round : null;
 }
 
+/** 这一场是工作区审查还是合并结果审查：尾注里那一轮的叫法跟着它（「第 N 轮审查」/「合并结果审查」）。 */
+async function reviewSourceOf(runId: string): Promise<"free" | "merge"> {
+  const run = (await db.select({ targetKind: freeReviewRuns.targetKind }).from(freeReviewRuns).where(eq(freeReviewRuns.id, runId))).at(0);
+  return run?.targetKind === "accepted_merge" ? "merge" : "free";
+}
+
 /**
  * 审查旁路回合收尾后补的那句说明。返回「说没说」，调用方不必据此做任何事。
  *
@@ -261,8 +267,7 @@ export async function noteReviewerChannelGap(a: {
     : null;
   let text: string;
   if (interruption) {
-    const next = `${interruption.upstream ? "等上游恢复后" : ""}点「继续本轮审查」，它会接着上一次的上下文从中断处往下审，不用从头重跑这一轮。`;
-    text = `这一轮审查是中途断掉的：${interruption.detail}。${report}${next}`;
+    text = `这一轮审查是中途断掉的：${interruption.detail}。${report}${interruption.next}`;
   } else {
     const evidence = turnEvidence(a);
     const check = HOW_TO_CHECK[a.agentType] ?? "检查该执行器的 ash MCP 登记";
@@ -286,7 +291,7 @@ export async function noteReviewerChannelGap(a: {
   // 说明会落到另一位智能体名下 —— 看记录的人在审查者那边什么也看不到（第 1 轮审查 N3）。
   await appendTaskTimeline(
     a.taskId,
-    noticeLine({ kind: "review.no_verdict", runId: round.runId, round: round.round, cause }, text),
+    noticeLine({ kind: "review.no_verdict", source: await reviewSourceOf(round.runId), runId: round.runId, round: round.round, cause }, text),
     { sessionId: a.sessId },
   );
   return true;

@@ -155,7 +155,8 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   // is_error/api_error_status 就是这种）。退出码只能说明进程活着走完，不能证明这一轮
   // 执行成功；自由工作流据此决定是否继续自动复审链。
   let sawExecutionError = false;
-  let lastExecutionError: string | null = null; // 那一条的原文：审查没结论时据它说怎么断的
+  // 最后一条执行故障，审查没结论时据它说怎么断的（`model` = 执行器认出它来自模型 API 时挂的类型）。
+  let lastExecutionError: Extract<AgentEvent, { kind: "error" }> | null = null;
   // CLI 否认过这条会话，或 Codex stderr 证明 thread 已 poisoned 吗（见
   // executors/session-lost.ts）。认下来的话这一轮收尾时要把失效 id 从库里清掉，
   // 否则每一次重试都在 --resume 同一条坏会话。
@@ -457,7 +458,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
         if (emittedEvent.kind === "error" && !isExecutionNotice(emittedEvent)) {
           // 有些 error 是需要留在红色诊断块里的旁路故障，但不代表模型回合失败（目前的
           // 实例是 Claude 自动压缩失败：压缩没成，后续 result 仍明确为 success）。
-          if (emittedEvent.affectsTurn !== false) { sawExecutionError = true; lastExecutionError = emittedEvent.message; }
+          if (emittedEvent.affectsTurn !== false) { sawExecutionError = true; if (!lastExecutionError?.model || emittedEvent.model) lastExecutionError = emittedEvent; }
           writeRunError(out, emittedEvent.message);
           sessionFault = mergeSessionResumeFault(sessionFault, emittedEvent.message);
         }
@@ -654,7 +655,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // 回合身份在结算期间还占着（orchestrator 在 consumeSingleRun 之后才 releaseTurn），
     // 这一轮绑的是哪一次审查就从那里整份读。
     const review = turnIdentity(taskId)?.review ?? null;
-    const failure = executionFailed ? { exitStatus, verdict: watchdogFailure, lastError: lastExecutionError } : null;
+    const failure = executionFailed ? { exitStatus, verdict: watchdogFailure, error: lastExecutionError } : null;
     await noteReviewerChannelGap({ taskId, sessId, turnStart: a.turnStart, agentType, stopped: !!stopped, review, failure })
       .catch((error) => { console.error(`[ash] noteReviewerChannelGap(${taskId}) failed:`, error); return false; });
   }

@@ -4,16 +4,22 @@
 // 503（auth_unavailable），重连 5 次后放弃、exit 1，report.md 一个字没写。ash 当时只会说一种话
 // ——「报告可能已经写完了，只是结论没能上报；最可能是手上没有 report_stage」——三处全错：报告
 // 没写、原因是上游、页面上也没有那颗按钮。那句话的判据从没看过「这一回合是不是自己崩的」，
-// 而 single-run 手上明明有退出码、执行故障、看门狗判决，codex 还落了一份诊断文件。
+// 而 single-run 手上明明有退出码、执行故障、看门狗判决。
+//
+// 「怎么断的」只认**来源确知**的事实：模型 API 的失败由执行器在归一那一层挂上类型
+// （`ModelFailure`，executors/model-failure.ts），这里按类型给原因和下一步；不在任意原文里找
+// 状态码 —— 一个 400「对话超出长度上限」、或者本机某个 MCP 回的 403，见数就说成「上游连不上，
+// 等它恢复」，用户照做只会再失败一次（审查 I2TbHFxtSVAv 第 1 轮第 1 条）。
 //
 // 这里只做事实整理，不碰落位：分类（`interruptionOf`）是纯函数，读盘（诊断文件、报告文件）
 // 各一个小工具，写进轮次那一列的是给页面用的结构（哪一类 + 一句话），时间线那句长话由
 // review-channel-gap.ts 拼。
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { AgentEvent, ModelFailure } from "@ash/shared";
 import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
 import type { RunDiagnostics } from "./executors/diagnostics.js";
-import { freeReviewReportPath } from "./free-review-files.js";
+import { freeReviewFile } from "./free-review-files.js";
 import { RUNS_DIR } from "./paths.js";
 import { runTracePaths } from "./transcript.js";
 
@@ -22,8 +28,8 @@ export type TurnFailure = {
   exitStatus: number;
   /** 看门狗 / 执行器判下的那份结论（turn-stall-verdict.ts 的 StallVerdict 里那两样）。 */
   verdict: { kind: string; reason: string } | null;
-  /** 这一回合执行器报过的最后一条执行故障（error 事件原文）。 */
-  lastError: string | null;
+  /** 这一回合执行器报过的那条执行故障（有模型 API 类型的优先，见 single-run）。 */
+  error: Pick<Extract<AgentEvent, { kind: "error" }>, "message" | "model"> | null;
 };
 
 export type Interruption = {
@@ -31,30 +37,9 @@ export type Interruption = {
   reason: string;
   /** 时间线长话里那一段：怎么断的，带状态码和执行器原话。 */
   detail: string;
-  /** 上游类的：下一步要先等上游恢复。 */
-  upstream: boolean;
+  /** 下一步：按断的原因说（等上游恢复 / 先修凭据 / 原样续还会撞上…）。 */
+  next: string;
 };
-
-/**
- * 原文里的 HTTP 状态码。只认**紧跟在「status / API Error / HTTP」后面**的那个数：同一段原文里
- * 常夹着网关错误页（现场那份里就有一句「Error reference number: 504」），见数就取会报错码。
- */
-const STATUS_PATTERNS = [
-  /(?:^|[^a-z])status(?:[ _]?code)?["']?\s*[:=]?\s*(\d{3})\b/i,
-  /\bAPI Error:?\s*(\d{3})\b/i,
-  /\bHTTP(?:\/[\d.]+)?\s+(\d{3})\b/i,
-];
-
-export function upstreamStatus(texts: readonly string[]): number | null {
-  for (const text of texts) for (const pattern of STATUS_PATTERNS) {
-    const code = Number(pattern.exec(text)?.[1]);
-    if (code >= 400 && code <= 599) return code;
-  }
-  return null;
-}
-
-/** 没有状态码、但说的是「连不上模型」的那几种（断流、重连、网络层错误、过载）。 */
-const UPSTREAM_WORDS = /stream disconnected|reconnecting|ECONNRESET|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|socket hang up|connection (?:lost|reset|refused|closed)|overloaded|rate.?limit|service unavailable|bad gateway|gateway time-?out|upstream/i;
 
 /** 执行器原话截一句：第一行、网页正文之前、200 字以内（网关错误页整段贴出来没人看得懂）。 */
 function excerpt(raw: string): string {
@@ -67,6 +52,34 @@ function excerpt(raw: string): string {
   return line.length > 200 ? `${line.slice(0, 199)}…` : line;
 }
 
+const RESUME = "点「继续本轮审查」，它会接着上一次的上下文从中断处往下审，不用从头重跑这一轮。";
+
+/** 模型 API 那几类：原因（页面那半句）和下一步。 */
+function modelCopy(model: ModelFailure): { reason: string; fact: string; next: string } {
+  const code = model.status != null ? `（${model.status}）` : "";
+  const fact = model.status != null ? `（状态码 ${model.status}）` : "";
+  switch (model.kind) {
+    case "unavailable":
+      return { reason: `模型上游连不上${code}`, fact: `模型上游连不上${fact}`, next: `等上游恢复后${RESUME}` };
+    case "rate_limit":
+      return { reason: `模型上游限流${code}`, fact: `模型上游限流${fact}`, next: `等限流过去后${RESUME}` };
+    case "auth":
+      return { reason: `模型认证失败${code}`, fact: `模型 API 拒绝了这个执行器的凭据${fact}`, next: `先把这个执行器的模型凭据修好，再${RESUME}` };
+    case "context_overflow":
+      return {
+        reason: "对话超出模型长度上限",
+        fact: `这一轮的对话超出了模型的长度上限${fact}`,
+        next: "原样「继续本轮审查」还会撞上同一个上限：换一个上下文更长的模型，或者「再审一轮」从新会话审起。",
+      };
+    case "invalid_request":
+      return {
+        reason: `模型拒收了这次请求${code}`,
+        fact: `模型 API 拒收了这次请求${fact}`,
+        next: "原样「继续本轮审查」多半还会被拒：先看上面原话里的原因，处理掉再继续，或者「再审一轮」从新会话审起。",
+      };
+  }
+}
+
 const VERDICT_REASON: Record<string, string> = {
   unverified: "回合结局核实不了",
   background_timeout: "后台工作等到时限还没跑完",
@@ -75,29 +88,25 @@ const VERDICT_REASON: Record<string, string> = {
 };
 
 /**
- * 这一回合是怎么断的。依据按可信程度排：执行器自己的诊断文件（codex）> 回合里报的执行故障
- * > 看门狗判决原文。上游类的只要任一份里有状态码、或者看门狗判了熔断（`tripped` = 整段时间
- * 只收到重试类错误），就按上游说。
+ * 这一回合是怎么断的。依据按来源确知的程度排：执行器挂了类型的模型 API 失败 > 看门狗熔断
+ * （`tripped` = 整段时间只收到上游的重试类错误，本身就是「连不上」）> 进程信号 / 其余判决 /
+ * 退出码。后几种来源不明，就照实说「执行器异常退出」，带上原话，不替它归因。
  */
 export function interruptionOf(failure: TurnFailure, diagnostics: Pick<RunDiagnostics, "failureReason" | "exitSignal"> | null): Interruption {
-  const texts = [diagnostics?.failureReason, failure.lastError, failure.verdict?.reason]
-    .filter((text): text is string => !!text?.trim());
-  const code = upstreamStatus(texts);
-  const upstream = code != null || failure.verdict?.kind === "tripped" || texts.some((text) => UPSTREAM_WORDS.test(text));
-  const said = texts[0] ? `执行器的原话：「${excerpt(texts[0])}」` : "";
+  const raw = failure.error?.message?.trim() || diagnostics?.failureReason?.trim() || failure.verdict?.reason?.trim() || "";
+  const said = raw ? `执行器的原话：「${excerpt(raw)}」` : "";
   const exit = failure.exitStatus !== 0 ? `执行器以 exit ${failure.exitStatus} 结束` : "";
-  if (upstream) {
-    const reason = code === 429 ? "模型上游限流（429）"
-      : code === 401 || code === 403 ? `模型上游拒绝了认证（${code}）`
-        : `模型上游连不上${code ? `（${code}）` : ""}`;
-    const facts = [`${reason.replace(/（\d+）$/, "")}${code ? `（状态码 ${code}）` : ""}`, exit, said].filter(Boolean);
-    return { reason, detail: facts.join("，"), upstream: true };
+  const model: ModelFailure | null = failure.error?.model
+    ?? (failure.verdict?.kind === "tripped" ? { kind: "unavailable", status: null } : null);
+  if (model) {
+    const copy = modelCopy(model);
+    return { reason: copy.reason, detail: [copy.fact, exit, said].filter(Boolean).join("，"), next: copy.next };
   }
   const signal = diagnostics?.exitSignal;
   const reason = signal ? `执行器进程被 ${signal} 结束`
     : (failure.verdict && VERDICT_REASON[failure.verdict.kind])
       || (failure.exitStatus !== 0 ? `执行器异常退出（exit ${failure.exitStatus}）` : "执行器报了执行故障");
-  return { reason, detail: [reason, said].filter(Boolean).join("，"), upstream: false };
+  return { reason, detail: [reason, said].filter(Boolean).join("，"), next: RESUME };
 }
 
 /** codex 落的那一份诊断（executors/diagnostics.ts）。别的执行器没有，读不出来就当没有。 */
@@ -111,11 +120,14 @@ export function readTurnDiagnostics(taskId: string, sessId: string, turnStart: s
   }
 }
 
-/** 这一轮的报告真写出来了吗：看文件，不猜。空文件不算。 */
+/**
+ * 这一轮的报告真写出来了吗：跟页面读报告**同一个入口**（`freeReviewFile`：普通文件、不是链接、
+ * 没有越出证据目录）。各认各的就会出现「这里说写好了、页面却说报告尚未生成」。空文件不算。
+ */
 export function reviewReportWritten(taskId: string, runId: string, round: number): boolean {
-  const path = freeReviewReportPath(taskId, runId, round);
   try {
-    return existsSync(path) && statSync(path).size > 0;
+    const file = freeReviewFile(taskId, runId, round, "report.md");
+    return !!file && readFileSync(file, "utf8").trim().length > 0;
   } catch {
     return false;
   }

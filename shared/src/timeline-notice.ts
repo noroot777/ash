@@ -52,10 +52,11 @@ export type TimelineNotice =
     findings?: number;
   }
   /**
-   * 自由派审的某一轮没给出结论的原因（紧跟在 inconclusive 那句之后）。`runId` + `round` 认的是
-   * 哪一场哪一轮：展示端只在这一轮此刻还能「继续本轮审查」时给它挂那个动作。
+   * 自由派审的某一轮没给出结论的原因（紧跟在 inconclusive 那句之后）。`source` = 工作区审查（free）
+   * 还是合并结果审查（merge），那一轮的叫法跟着它。`runId` + `round` 认的是哪一场哪一轮：展示端只在
+   * 这一轮此刻还能「继续本轮审查」时给它挂那个动作。
    */
-  | { kind: "review.no_verdict"; runId: string; round: number; cause: ReviewNoVerdict }
+  | { kind: "review.no_verdict"; source: "free" | "merge"; runId: string; round: number; cause: ReviewNoVerdict }
   /** 验收做完了。`target` = 合进了哪条分支；`noCommit` = 只合进了工作区、等用户自己提交；`tag` = 只打了标签没合并。 */
   | { kind: "accept.done"; target: string | null; noCommit?: boolean; tag?: string | null }
   // ── 要用户拍板（明面）──
