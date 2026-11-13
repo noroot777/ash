@@ -3,6 +3,7 @@ import type {
   FreeReviewCheckMode,
   FreeReviewDebate,
   FreeReviewDispute,
+  FreeReviewExpiredScreenshots,
   FreeReviewRun,
   FreeReviewRound,
   FreeWorkflowExecution,
@@ -23,7 +24,7 @@ import {
   projects,
   tasks,
 } from "./db/schema.js";
-import { freeReviewExpiredScreenshots, freeReviewScreenshots, readExpiredReviewImages, readFreeReviewReport } from "./free-review-files.js";
+import { freeReviewExpiredScreenshots, freeReviewScreenshots, readExpiredReviewImages, readFreeReviewReport, taskExpiredScreenshots } from "./free-review-files.js";
 import { debateViews } from "./free-review-debate.js";
 import { hasDispute } from "./free-review-dispute.js";
 import { worktreePathFor } from "./git.js";
@@ -130,6 +131,29 @@ export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowApi
   // 持续高频变更下的兜底：内容可能混杂，配读取前的小版本——宁可被更新的响应覆盖，
   // 不能拿可能混杂的内容反压新状态。
   return { ...last!, stateVersion: lastBefore };
+}
+
+// 只取「哪几张截图过了保留期」的那条轻量读取（引用它们的地方不一定订阅了整份状态，见前端
+// free-workflow/expiredEvidence.ts）。版本**必须跟整份状态同一个修订号、同一套前后相同判据**：
+// 前端两条来源落进同一份登记，靠修订号比新旧——各配各的号（或这条干脆不配号）就只能按到达
+// 顺序裁决，迟到的旧清单会把整份状态刚报出的过期抹掉（审查第 2 轮实测）。这条读到的清单
+// 跟它自己上次看到的不同，也推进修订号（同 freeWorkflowState 的证据指纹）：任何一条读取先
+// 看到磁盘变化，都会给新内容配上更大的号。
+const expiredFingerprints = new Map<string, string>();
+export function expiredScreenshotsState(taskId: string): FreeReviewExpiredScreenshots {
+  let last: FreeReviewExpiredScreenshots | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const before = revisionOf(taskId);
+    const rounds = taskExpiredScreenshots(taskId);
+    const fp = JSON.stringify(rounds);
+    if (expiredFingerprints.get(taskId) !== fp) {
+      expiredFingerprints.set(taskId, fp);
+      revisions.set(taskId, Math.max(revisionOf(taskId) + 1, Date.now()));
+    }
+    if (revisionOf(taskId) === before) return { stateVersion: before, rounds };
+    last = { stateVersion: before, rounds };
+  }
+  return last!;
 }
 
 async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiState> {

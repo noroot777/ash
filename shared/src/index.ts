@@ -29,6 +29,7 @@ export type {
   FreeReviewDisputeResolution,
   FreeReviewDisputeTarget,
   FreeReviewExecutorOverride,
+  FreeReviewExpiredScreenshots,
   FreeReviewRound,
   FreeReviewRoundsInput,
   FreeReviewRun,

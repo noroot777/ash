@@ -113,7 +113,9 @@ try {
   assert.deepEqual(expiredRound.screenshots, []);
   assert.deepEqual(expiredRound.expiredScreenshots, [...IMAGES].sort());
   assert.match(expiredRound.reportMarkdown, /# 报告/);
-  assert.equal((await fetchFile("accepted", accepted.runId, "a.png")).status, 410);
+  const gone = await fetchFile("accepted", accepted.runId, "a.png");
+  assert.equal(gone.status, 410);
+  assert.equal(gone.headers.get("cache-control"), "no-store", "410 不许被缓存：图回来之后同一个地址要能取到");
   assert.equal((await fetchFile("accepted", accepted.runId, "shots/b.jpg")).status, 410);
   assert.equal((await fetchFile("accepted", accepted.runId, "never.png")).status, 404, "从来没有的图仍是 404");
   assert.equal((await fetchFile("accepted", accepted.runId, "report.md")).status, 200);
@@ -123,17 +125,26 @@ try {
   assert.equal((await aliased("round=01&name=a.png")).status, 410, "轮次写成 01");
   assert.equal((await aliased(`round=1&name=${encodeURIComponent("shots\\b.jpg")}`)).status, 410, "子路径用反斜杠");
   // 任务级的过期清单：别的任务里引用这些证据的地方按它现取（审查第 1 轮 F2）
-  const listed = await (await api.request("/tasks/accepted/free-workflow/expired-screenshots")).json();
-  assert.deepEqual(listed, { rounds: [{ runId: accepted.runId, round: 1, names: [...IMAGES].sort() }] });
-  assert.deepEqual(await (await api.request("/tasks/active/free-workflow/expired-screenshots")).json(), { rounds: [] });
+  // 它跟整份状态带同一个修订号（审查第 2 轮第 2 条：前端两条来源靠它比新旧，不能按到达顺序）。
+  const expiredList = async (id: string) => (await api.request(`/tasks/${id}/free-workflow/expired-screenshots`)).json() as
+    Promise<{ stateVersion: number; rounds: unknown[] }>;
+  const listed = await expiredList("accepted");
+  assert.deepEqual(listed.rounds, [{ runId: accepted.runId, round: 1, names: [...IMAGES].sort() }]);
+  assert.equal(listed.stateVersion, (await freeWorkflowState("accepted")).stateVersion, "清单与整份状态同一个修订号");
+  assert.equal((await expiredList("accepted")).stateVersion, listed.stateVersion, "没变化就不推进");
+  assert.deepEqual((await expiredList("active")).rounds, []);
   assert.equal((await api.request("/tasks/nope/free-workflow/expired-screenshots")).status, 404);
 
   // 同名的图又回来了（例如接力带回）：以磁盘为准，不再算过期。这条路不发事件，靠状态指纹前进。
   const expiredVersion = (await freeWorkflowState("accepted")).stateVersion;
   writeFileSync(accepted.paths["a.png"]!, "back");
   utimesSync(accepted.paths["a.png"]!, (t0 + 100 * DAY) / 1000, (t0 + 100 * DAY) / 1000); // 别让它在下面的计数里被当成过期再删
+  // 先由轻量清单看到这个变化：它给新内容配更大的号，之后整份状态的号也不会回退到它之下。
+  const restoredList = await expiredList("accepted");
+  assert.ok(restoredList.stateVersion > expiredVersion, "清单先看到图回来了，也推进修订号");
+  assert.deepEqual(restoredList.rounds, [{ runId: accepted.runId, round: 1, names: ["c.webp", "shots/b.jpg"] }]);
   const restored = await round("accepted");
-  assert.ok((await freeWorkflowState("accepted")).stateVersion > expiredVersion, "图回来了也是可见变化，版本照样前进");
+  assert.ok((await freeWorkflowState("accepted")).stateVersion >= restoredList.stateVersion, "图回来了也是可见变化，版本照样前进");
   assert.deepEqual(restored.screenshots, ["a.png"]);
   assert.deepEqual(restored.expiredScreenshots, ["c.webp", "shots/b.jpg"]);
   assert.equal((await fetchFile("accepted", accepted.runId, "a.png")).status, 200);

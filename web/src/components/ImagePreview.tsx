@@ -17,6 +17,7 @@ import { CaretLeft, CaretRight, X } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { ImageZoomControls } from "./ImageZoomControls.tsx";
 import { useImageZoom } from "./useImageZoom.ts";
+import { refreshExpiredEvidence, useExpiredEvidence } from "../free-workflow/expiredEvidence.ts";
 
 type ImageProps = ComponentPropsWithoutRef<"img"> & { label?: string };
 type ImageLinkProps = ComponentPropsWithoutRef<"a"> & {
@@ -76,6 +77,9 @@ function ImageLightbox({
     onIndexChange((index + delta + images.length) % images.length);
   }, [grouped, images.length, index, onIndexChange]);
   const zoom = useImageZoom(current?.src ?? "", box);
+  // 灯箱也是一处引用：点开的可能是一张已过保留期的审查截图（正文里那条链接是在清单更新前画
+  // 的）。服务端说它没了就照实写，不摆一张裂图；取不到时顺手让那份清单重取（见 expiredEvidence）。
+  const expired = useExpiredEvidence(current?.src);
   const { zoomIn, zoomOut, reset: resetZoom } = zoom;
 
   // 大图是从别的浮层里点开的（审查抽屉、菜单、对话气泡），portal 到 body 之后 DOM 上就
@@ -142,20 +146,25 @@ function ImageLightbox({
           <CaretLeft size={24} weight="bold" aria-hidden="true" />
         </button>
       )}
-      <img
-        {...zoom.imageProps}
-        ref={zoom.imageRef}
-        src={current.src}
-        alt={current.alt}
-        draggable={false}
-        onMouseDown={(event) => event.stopPropagation()}
-      />
+      {expired
+        ? <p className="image-preview-lightbox__gone">已过保留期</p>
+        : (
+          <img
+            {...zoom.imageProps}
+            ref={zoom.imageRef}
+            src={current.src}
+            alt={current.alt}
+            draggable={false}
+            onMouseDown={(event) => event.stopPropagation()}
+            onError={() => refreshExpiredEvidence(current.src)}
+          />
+        )}
       {grouped && (
         <button className="image-preview-lightbox__next" type="button" aria-label="下一张图片" onClick={() => step(1)}>
           <CaretRight size={24} weight="bold" aria-hidden="true" />
         </button>
       )}
-      <ImageZoomControls zoom={zoom} />
+      {!expired && <ImageZoomControls zoom={zoom} />}
     </div>,
     document.body,
   );

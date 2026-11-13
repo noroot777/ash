@@ -460,6 +460,16 @@ export interface FreeReviewDispute {
   debates: FreeReviewDebate[];
 }
 
+/**
+ * 一个任务里过了保留期、已经删掉的审查截图（`GET /tasks/:id/free-workflow/expired-screenshots`）。
+ * `stateVersion` 跟 `FreeWorkflowState.stateVersion` 是**同一个修订号**：前端两条来源落进同一份
+ * 登记，靠它比新旧。
+ */
+export interface FreeReviewExpiredScreenshots {
+  stateVersion: number;
+  rounds: { runId: string; round: number; names: string[] }[];
+}
+
 export interface FreeReviewRound {
   round: number;
   status: FreeReviewRoundStatus;

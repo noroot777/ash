@@ -10,6 +10,7 @@ import type {
   BatchCreateTasksBody,
   ExecutorDowngradeItem,
   FreeReviewDispatchInput,
+  FreeReviewExpiredScreenshots,
   FreeReviewRoundsInput,
   FreeReviewDisputeResolution,
   FreeReviewDisputeTarget,
@@ -380,7 +381,7 @@ export const api = {
     exists: boolean; running: boolean; starting: boolean; command: string | null; url: string | null;
   }> => request(`/tasks/${id(taskId)}/free-workflow/preview/log${serviceId ? `?service=${id(serviceId)}` : ""}`),
   // 这个任务里过了保留期、已经删掉的审查截图（见 free-workflow/expiredEvidence）。
-  freeReviewExpiredScreenshots: (taskId: string): Promise<{ rounds: { runId: string; round: number; names: string[] }[] }> =>
+  freeReviewExpiredScreenshots: (taskId: string): Promise<FreeReviewExpiredScreenshots> =>
     request(`/tasks/${id(taskId)}/free-workflow/expired-screenshots`),
   freeReviewFileUrl: (taskId: string, runId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/free-workflow/review-file?run=${id(runId)}&round=${id(String(round))}&name=${id(name)}`),

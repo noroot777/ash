@@ -22,9 +22,9 @@ import {
   disputeTargetOf,
   resolveFreeReviewDispute,
 } from "./free-review-dispute.js";
-import { evidenceName, freeReviewExpiredScreenshots, freeReviewFile, readExpiredReviewImages, taskExpiredScreenshots } from "./free-review-files.js";
+import { evidenceName, freeReviewExpiredScreenshots, freeReviewFile, readExpiredReviewImages } from "./free-review-files.js";
 import { mountFreePreviewRoutes } from "./free-workflow-preview.js";
-import { freeWorkflowState } from "./free-workflow-state.js";
+import { expiredScreenshotsState, freeWorkflowState } from "./free-workflow-state.js";
 import { handoffBlockReasonById } from "./handoff-guard.js";
 import { createPostMergeRepairTask, startPostMergeReview } from "./post-merge-review.js";
 import { evidenceHeaders } from "./evidence-path.js";
@@ -198,10 +198,11 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
   });
   // 某个任务有哪几张截图过了保留期。引用它们的地方不一定在这个任务里（别的任务对话里点开的旧
   // 报告、贴过来的证据地址），前端按证据地址里的任务编号现取，不靠「用户先打开过那个任务」。
+  // 带着跟整份状态同一个修订号，前端两条来源靠它比新旧（见 expiredScreenshotsState）。
   api.get("/tasks/:id/free-workflow/expired-screenshots", async (c) => {
     const taskId = c.req.param("id");
     if (!(await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId))).length) return c.json({ error: "not found" }, 404);
-    return c.json({ rounds: taskExpiredScreenshots(taskId) });
+    return c.json(expiredScreenshotsState(taskId));
   });
   api.get("/tasks/:id/free-workflow/review-file", async (c) => {
     const taskId = c.req.param("id");
@@ -220,7 +221,8 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
       // 过了保留期删掉的截图如实说「没了、也不会回来」，跟「从来没有这个文件」分开。
       const normalized = evidenceName(name);
       const expired = !!normalized && freeReviewExpiredScreenshots(readExpiredReviewImages(taskId), runId, round, []).includes(normalized);
-      return expired ? c.json({ error: "已过保留期" }, 410) : c.json({ error: "not found" }, 404);
+      // 410 浏览器可以按启发式缓存：图后来被接力带回来，同一个地址照旧拿缓存里的 410。不许缓存。
+      return expired ? c.json({ error: "已过保留期" }, 410, { "cache-control": "no-store" }) : c.json({ error: "not found" }, 404);
     }
     return c.body(Uint8Array.from(readFileSync(file)), 200, headers);
   });
