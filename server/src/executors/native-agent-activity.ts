@@ -1,6 +1,7 @@
 import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
 import { codexErrorEvent } from "./codex-error-event.js";
-import { claudeRetryMessage, isClaudeRetry } from "./claude-retry-notice.js";
+import { codexTurnError } from "./model-failure.js";
+import { claudeRetryMessage, claudeRetryModel, isClaudeRetry } from "./claude-retry-notice.js";
 import { codexChangeWrites, codexCommandCwd } from "./tool-writes.js";
 
 export function childActivity(id: string, event: NativeAgentActivity): AgentEvent {
@@ -65,10 +66,11 @@ export class CodexChildActivity {
       // `childActivity`(恒为 `kind:"tool"`),所以它既不会写主时间线的红色诊断块、也不会置
       // `sawExecutionError` —— 子线程在重试不等于父回合有执行故障,这是刻意的。真正要穿过
       // 这层包装去判的只有回合级停滞看门狗(../turn-stall.ts 的 errorFacts):包装不是进展。
+      // 归一出来的那份类型(`model`)原样带进包装:熔断的原因就从这里来。
       const reported = codexErrorEvent(p);
       if (reported) push(reported.event);
     } else if (method === "turn/completed" && p.turn?.error?.message) {
-      push({ kind: "error", message: p.turn.error.message });
+      push(codexTurnError(p.turn.error.message));
     }
     return out;
   }
@@ -88,7 +90,8 @@ export class ClaudeChildActivity {
     // 全程静默:看门狗一条错误都收不到,报警与熔断都无从谈起(第 2 轮审查 F1 的同类缺口;
     // codex 那一侧的同一个洞是第 1 轮第 1 条)。措辞与主线程共用一处,见那个文件。
     if (isClaudeRetry(ev)) {
-      push({ kind: "error", message: claudeRetryMessage(ev), level: "notice" });
+      const model = claudeRetryModel(ev);
+      push({ kind: "error", message: claudeRetryMessage(ev), level: "notice", ...(model ? { model } : {}) });
     } else if (ev.type === "stream_event") {
       const stream = ev.event;
       if (stream?.type === "message_start") this.streamed.delete(id);

@@ -225,6 +225,8 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
       endedAt: round.endedAt,
       ...(awaiting.has(round.id) ? { awaitsInputDecision: true } : {}),
       ...(retry && round.id === retryRound?.id ? { retry } : {}),
+      // 只在这一轮此刻还是「error 且没结论」时给：续过、又出了结论的那一轮，旧原因不再作数。
+      ...(round.noVerdict && round.status === "error" && !round.conclusion ? { noVerdict: round.noVerdict } : {}),
     })),
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,

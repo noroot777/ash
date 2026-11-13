@@ -23,6 +23,12 @@ export type TurnRetryKind = "turn" | "review";
  */
 export type ReviewRetryIdentity = { runId: string; round: number; generation: string | null; sessionId: string | null };
 /**
+ * 「继续本轮审查」这个动作本身：认的是哪一轮、点下去做什么。任务头那颗图标、审查格结论行的主按钮、
+ * 会话里说这一轮为什么没结论的那句尾注，三处挂的是同一个 —— 可用性同一份（`turnRetryTarget` 的审查档），
+ * 点下去都走 TaskDetail 的 `retryTurn`（换执行器的确认、点完之后那句提示都在那里）。
+ */
+export type ReviewRetryAction = { review: ReviewRetryIdentity; run: () => Promise<void> };
+/**
  * exitStatus 可能是 0/null：审查档不看退出码（见下），按钮文案据此换说法。
  * 审查档的 `sessionId` 只是「续哪条审查会话的上下文」，可能为 null（一条都没有）；认人靠 `review`。
  */

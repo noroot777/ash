@@ -15,7 +15,7 @@ import { ReviewNote } from "../review/ReviewNote.tsx";
 import { ReviewScreenshotStrip } from "../review/ReviewScreenshotStrip.tsx";
 import { FreeReviewDebateTranscript } from "./FreeReviewDebateTranscript.tsx";
 import { DISPUTE_PROSE_LABELS } from "./disputeCopy.ts";
-import { checkModeText, disputeStateText, recurrenceText, reviewRoundLabel, timeRange } from "./freeReviewRounds.ts";
+import { checkModeText, disputeStateText, missingReportText, recurrenceText, reviewRoundLabel, timeRange } from "./freeReviewRounds.ts";
 
 function Screenshots({ taskId, run, round }: { taskId: string; run: FreeReviewRun; round: FreeReviewRound }) {
   if (!round.screenshots.length) return null;
@@ -48,7 +48,7 @@ export function FreeReviewRoundContent({ taskId, run, round }: { taskId: string;
               taskId,
             )}
           />
-        : <p className="insp-faint">{round.status === "reviewing" ? "还在审，报告写完会出现在这里。" : "报告尚未生成。"}</p>}
+        : <p className="insp-faint">{missingReportText(round)}</p>}
       {/* 驳回与辩论跟报告长在同一轮上，读结论的人必须在同一个地方读到「执行者不认这条、
           理由是什么」。这里只回放，裁定入口在审查格上面那张卡上（一个动作一个入口）。 */}
       {round.dispute && (

@@ -1,5 +1,6 @@
 import type { AgentType } from "./index.ts";
 import type { PreviewServiceState } from "./preview.ts";
+import type { ReviewNoVerdict } from "./timeline-notice.ts";
 
 export const TASK_WORKFLOW_MODES = ["free", "preset"] as const;
 export type TaskWorkflowMode = (typeof TASK_WORKFLOW_MODES)[number];
@@ -493,6 +494,11 @@ export interface FreeReviewRound {
    * `sessionId` = 这一轮输入实际进过的会话(续它的上下文);null = 这一轮还没有,会从头交代任务书。
    */
   retry?: { generation: string | null; sessionId: string | null };
+  /**
+   * 这一轮落 error 且没结论时，服务端判出的原因（哪一类 + 一句话）。省略 = 这一轮不是这种情形，
+   * 或者是加这一项之前的老记录（界面照老样子显示）。
+   */
+  noVerdict?: ReviewNoVerdict;
 }
 
 export interface FreeReviewRun {
