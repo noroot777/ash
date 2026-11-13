@@ -37,7 +37,7 @@ import { serialize } from "./monitors.js";
 import { confirmDone, hasConfirmed, revokeConfirmed } from "./task-confirmation.js";
 import { monitorsBlockingComplete, noteMonitorsDropped } from "./task-complete-monitors.js";
 import { clearAutoCheckpoint, writeResumePrompt } from "./task-resume-prompt.js";
-import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
+import { appendTaskTimeline, noticeLine } from "./task-timeline.js";
 import { now } from "./util.js";
 
 export type ConfirmCompleteResult =
@@ -109,7 +109,7 @@ export async function beginTerminalLanding(taskId: string): Promise<string | nul
       return null;
     }
     const note = `本回合要落的终态被拦下，改为检查点暂停：${blocked}`;
-    await landCheckpoint(taskId, "名下还有没了结的哨兵", note);
+    await landCheckpoint(taskId, "名下还有没了结的哨兵", note, "pending");
     await revokeConfirmation(taskId);
     return note;
   });
@@ -146,7 +146,7 @@ export async function confirmTaskComplete(a: {
       const note = a.holdOnBlock(blocked);
       // 身份条件进到这一笔写入里。换走了 = 一个字都没写,照「身份过期」回 —— 不是「业务受阻」:
       // 业务受阻会让调用方把这当成「它确实交了卷」而记一行时间线（第 1 轮审查 F3）。
-      if (!await landCheckpoint(a.taskId, "名下还有没了结的哨兵", note, a.where)) {
+      if (!await landCheckpoint(a.taskId, "名下还有没了结的哨兵", note, "pending", a.where)) {
         return { ok: false, error: a.staleError };
       }
       return { ok: false, error: blocked, blockedByMonitors: true, note };
@@ -198,7 +198,7 @@ export async function holdCompletionForNewMonitor(taskId: string, label: string)
     if (!await monitorsBlockingComplete(taskId)) return null;
     const note = `已撤掉本回合的完成确认：挂上哨兵「${label}」之后，这一轮改为检查点暂停 —— `
       + "任务一落 done 这个哨兵就会被一并停掉，它在等的结果也就没了。它醒来会把这条会话重新叫起来。";
-    await landCheckpoint(taskId, `随后挂上了哨兵「${label}」`, note);
+    await landCheckpoint(taskId, `随后挂上了哨兵「${label}」`, note, "new-monitor");
     await revokeConfirmation(taskId);
     return note;
   } catch (e) {
@@ -241,6 +241,7 @@ async function landCheckpoint(
   taskId: string,
   why: string,
   note: string,
+  after: "pending" | "new-monitor",
   where: (SQL | undefined)[] = [],
 ): Promise<boolean> {
   const wrote = await writeResumePrompt(taskId, checkpointResume(why), true, where);
@@ -254,6 +255,6 @@ async function landCheckpoint(
       .where(and(eq(tasks.id, taskId), ...where));
     if (!mine.length) return false;
   }
-  await appendTaskTimeline(taskId, receiptLine(note));
+  await appendTaskTimeline(taskId, noticeLine({ kind: "complete.held", after }, note));
   return true;
 }

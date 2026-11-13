@@ -19,6 +19,12 @@
 /** 审查是哪一种：自由派审 / 就地验证 / 合并结果审查。 */
 export type TimelineReviewSource = "free" | "inline" | "merge";
 export type TimelineReviewVerdict = "passed" | "failed" | "inconclusive" | "aborted";
+/**
+ * 预约的审查在等什么：monitor 哨兵还没把结果带回来 / question 任务在等用户答复 / checkpoint 任务
+ * 停在检查点 / queued 还有排队消息没发 / busy 这一刻有回合在跑 / unsettled 上一轮没正常收尾 /
+ * dispute 驳回在等用户裁定。
+ */
+export type ReviewWaitReason = "monitor" | "question" | "checkpoint" | "queued" | "busy" | "unsettled" | "dispute";
 
 export type TimelineNotice =
   // ── 里程碑 ──
@@ -65,6 +71,13 @@ export type TimelineNotice =
   | { kind: "monitor.finished"; description: string }
   /** 不再等某个哨兵的结果了。`finished` = 它那时已经跑完。 */
   | { kind: "monitor.released"; description: string; finished: boolean }
+  /**
+   * 想收工（确认完成）却被哨兵拦下，这一轮改成暂停等它。`after` = 是哪一种：`pending` 确认时
+   * 名下还有哨兵没了结 / `new-monitor` 确认之后又挂了一个哨兵。
+   */
+  | { kind: "complete.held"; after: "pending" | "new-monitor" }
+  /** 预约的审查到点了却还不能开始，预约留着。`why` = 在等什么（说法在展示端）。 */
+  | { kind: "review.waiting"; why: ReviewWaitReason }
   // ── 你那条命令的回答（常显：是你要看的东西）──
   /** 斜杠命令（/goal --scopes、/rename …）就地执行的结果。原文里带着命令本身和全部输出。 */
   | { kind: "command.output"; command: string }
@@ -77,7 +90,8 @@ export type TimelineNoticeKind = TimelineNotice["kind"];
 const KINDS: ReadonlySet<string> = new Set<TimelineNoticeKind>([
   "review.verdict", "accept.done", "review.dispute", "review.start", "review.repair", "stage",
   "review.reserved", "review.unreserved", "review.launch",
-  "monitor.started", "monitor.finished", "monitor.released", "command.output", "receipt", "alert",
+  "monitor.started", "monitor.finished", "monitor.released", "complete.held", "review.waiting",
+  "command.output", "receipt", "alert",
 ]);
 
 /**

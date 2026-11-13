@@ -4,6 +4,7 @@ import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import type { TurnReceipt } from "./conversationSystemRows.ts";
 import { LaneBody } from "./ReviewVerdict.tsx";
 import { DeleteMessageButton } from "./MessageDelete.tsx";
+import { NoticeIconGlyph } from "./NoticeIconGlyph.tsx";
 import { laneReviewTarget } from "./reviewLaneLinks.ts";
 import { formatInstant } from "./utils.ts";
 
@@ -44,6 +45,7 @@ function ReceiptEntry({ receipt, previousAt }: { receipt: TurnReceipt; previousA
   return (
     <li className={`turn-receipt tone-${view.tone}`}>
       {time && <time dateTime={receipt.at} aria-label={formatInstant(receipt.at)}>{time}</time>}
+      <NoticeIconGlyph icon={view.icon} />
       {lane && review ? (
         <button
           type="button"

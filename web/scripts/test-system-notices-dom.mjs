@@ -114,8 +114,8 @@ try {
   assert.deepEqual(
     await log.locator(".turn-receipt-text").allInnerTexts(),
     [
-      "审查已预约，这一轮跑完自动开始", "不再等「全量回归」了，它已经跑完", "已验收，合并到 main", "验收阶段：验收完成",
-      "冲突交接失败：没能叫醒该任务解冲突。", "本回合没有交卷：产物仍保留，可直接重试。", "工作区已恢复，会话内容都在", "本轮执行结束",
+      "审查已预约，这一轮跑完自动开始", "不再等哨兵「全量回归」了，它已经跑完", "已验收，合并到 main", "验收阶段：验收完成",
+      "合并有冲突，但没能叫醒任务去解", "本回合没有交卷：产物仍保留，可直接重试。", "工作区已恢复，会话内容都在", "本轮执行结束",
     ],
     "流水里每一条写的是结果；尾注里的那几句也在这里（删除在这里）",
   );
@@ -125,6 +125,14 @@ try {
     return { first: el.firstElementChild === time, before: time.getBoundingClientRect().right <= text.left, label: time.getAttribute("aria-label") };
   });
   assert.equal(leading.first, true, "时刻排在每一条最前面");
+  // 每一条前面一枚图标，贴在字前面；读屏不念它（字已经说清了）。
+  assert.equal(await log.locator(".turn-receipt > .notice-icon svg").count(), 8, "每一条都有图标");
+  const icon = await log.locator(".turn-receipt").nth(1).evaluate((el) => {
+    const glyph = el.querySelector(":scope > .notice-icon");
+    const text = el.querySelector(".turn-receipt-text").getBoundingClientRect();
+    return { hidden: glyph.getAttribute("aria-hidden"), before: glyph.getBoundingClientRect().right <= text.left };
+  });
+  assert.deepEqual(icon, { hidden: "true", before: true });
   assert.equal(leading.before, true);
   assert.match(leading.label, /\d\d\/\d\d \d\d:\d\d/, "读屏拿到完整的日期时刻");
   await page.mouse.move(990, 5);
