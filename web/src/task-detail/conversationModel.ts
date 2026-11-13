@@ -64,6 +64,15 @@ export type ConversationItem =
        */
       sessionRole: SessionRole | null;
       at?: string | null;
+      /**
+       * 这颗气泡属于哪一回合：服务端给这一回合的身份（trace 挂的、实时事件带的那个起点）。
+       * 实时那一路取事件自带的（见 conversationLiveTurns 的 liveTurnStart），落盘那一路取它
+       * 领到的那组 trace 的；都没有就是不知道，由会话行推。
+       *
+       * 跟 `at` 不是一回事：`at` 是画在气泡上的时刻，会被插话改写；团队调度台的落盘气泡按
+       * 用户说话那一刻编号，回合却从投递那一刻起算，两者差着一截。
+       */
+      turnStartedAt?: string | null;
       endedAt?: string | null;
       markerEndedAt?: string | null;
       /**
@@ -251,6 +260,7 @@ function notePlacement(
  * 派生快照读的是它），两截之间空一行才是一段话原来的样子。
  */
 function mergeTurnChunk(target: AgentItem, chunk: AgentItem): void {
+  target.turnStartedAt ??= chunk.turnStartedAt;
   target.markdown = [target.markdown, chunk.markdown].filter((text) => text.trim()).join("\n\n");
   target.segments.push(...chunk.segments);
   // 收口标记跟着后一截走：回合真正结束在哪一刻，只有最后那一截知道。
@@ -470,6 +480,7 @@ function appendPersistedSession(
         agentType: session.agentType,
         sessionRole: session.role,
         at: turnStartedAt,
+        turnStartedAt: traceEntries.at(-1)?.turnStartedAt ?? null,
         endedAt: null,
         markerEndedAt: segment.endedAt ?? null,
         turnOutcome: persistedTurnOutcome(session, traceEntries, turnStartedAt),
@@ -563,7 +574,9 @@ export function buildConversationItems(
     if (item.kind !== "agent") { previousItem = item; continue; }
     const firstTurn = !seenSessions.has(item.sessionId);
     seenSessions.add(item.sessionId);
-    const turnStartedAt = item.session ? latestTurnStart(item.session) : null;
+    // 气泡自己记着回合就认自己的；会话行上的是**此刻最新**那一回合，拿它给上一回合的气泡
+    // 补时间，下一回合一开始它就被标成了新回合的起点。
+    const turnStartedAt = item.turnStartedAt ?? (item.session ? latestTurnStart(item.session) : null);
     item.at = firstTurn
       ? item.session?.startedAt ?? item.at
       : adjacentInterjectionAt
@@ -645,17 +658,24 @@ export function buildConversationItems(
   // 身份那一条是给就地验证用的：验证轮是搭在被验任务身上的旁路回合、常复用同一条
   // 会话，中间只隔着一条「第 N 轮验证开始」的旁注 —— 按前三条判就成了「同一个人接着
   // 说」，于是审查者的发言连头像和名字都不重报，反而比不区分更糟。
+  //
+  // 两颗都记着回合、却不是同一回合的，同样不接：团队调度台被后台通知叫醒自己开的下一轮，
+  // 中间一条输入、一条边界都没有，按上面几条判就会被画成「同一段话的下半截」。
   let continuedSessionId: string | null = null;
   let continuedReviewer: string | null = null;
+  let continuedTurn: string | null = null;
   for (const item of items) {
     if (item.kind === "user") { continuedSessionId = null; continue; }
     if (item.kind === "event") {
       if (item.variant === "boundary") continuedSessionId = null;
       continue;
     }
-    item.continuation = continuedSessionId === item.sessionId && continuedReviewer === reviewerKey(item);
+    const turn = item.turnStartedAt ?? null;
+    item.continuation = continuedSessionId === item.sessionId && continuedReviewer === reviewerKey(item)
+      && (!turn || !continuedTurn || turn === continuedTurn);
     continuedSessionId = item.sessionId;
     continuedReviewer = reviewerKey(item);
+    continuedTurn = turn;
   }
 
   const sessionMetaSeen = new Set<string>();

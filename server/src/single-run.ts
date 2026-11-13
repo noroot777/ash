@@ -171,7 +171,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   };
   appendSessionTrace(taskId, sessId, a.turnStart, { kind: "run", ...runMeta });
   const publishEvent = (event: AgentEvent) => bus.publish({
-    type: "agent.event", taskId, sessionId: sessId, role, agentType, ...runMeta, event,
+    type: "agent.event", taskId, sessionId: sessId, role, agentType, ...runMeta, turnStartedAt: a.turnStart, event,
   });
   const flushTraceText = (at?: string) => {
     if (!pendingTraceText) return;
