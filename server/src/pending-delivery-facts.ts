@@ -10,8 +10,8 @@ import { groups, scheduledMessages, tasks } from "./db/schema.js";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
 import { withAfterGates, type AfterGate } from "./pending-after.js";
-import { deliveryVerdict, pendingExecutionIntent, type DeliveryVerdict } from "./pending-verdict.js";
-import { queueBlockers } from "./queues.js";
+import { deliveryVerdict, storedExecutionIntent, type DeliveryVerdict } from "./pending-verdict.js";
+import { queueBlockerDetails, type QueueBlocker } from "./queues.js";
 import { reviewDeliveryBlocked, reviewDeliveryFrom } from "./review-ownership.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
@@ -23,10 +23,12 @@ export interface DeliveryFacts {
   /** 这一次投递会开执行回合，要认领队列执行占位。 */
   needQueueCheck: boolean;
   queueBlocked: boolean;
+  /** 挡路的是哪几条(带标题,在跑的排前);没问队列或没被挡时为空。托盘的等待说明点名用。 */
+  queueBlocking: QueueBlocker[];
   groupPaused: boolean;
 }
 
-/** m.execution 由调用方按 pendingExecutionIntent 定好再传进来（扫描会把它写回库，这里不写）。 */
+/** m.execution 由调用方按 storedExecutionIntent 定好再传进来（扫描会把它写回库，这里不写）。 */
 export async function deliveryVerdictOf(m: Row & AfterGate, t: TaskRow | null, at: Date): Promise<{ verdict: DeliveryVerdict; facts: DeliveryFacts }> {
   // checkpoint 追问经待发送路径投递(定时发送、第一句还在回答时自动排队的第二句)
   // 时,与直接回复同判据旁路(task-reply.ts / orchestrator 的 checkpointFollowUp):
@@ -41,7 +43,8 @@ export async function deliveryVerdictOf(m: Row & AfterGate, t: TaskRow | null, a
   const needQueueCheck =
     t != null && t.mode === "single" && !checkpointFollowUp
     && (m.execution || t.status === "paused" || t.status === "backlog");
-  const queueBlocked = needQueueCheck ? (await queueBlockers(m.taskId)).length > 0 : false;
+  const queueBlocking = needQueueCheck ? await queueBlockerDetails(m.taskId) : [];
+  const queueBlocked = queueBlocking.length > 0;
   const groupPaused =
     t != null && t.mode === "single" && m.execution && t.groupId
       ? !!(await db.select().from(groups).where(eq(groups.id, t.groupId))).at(0)?.paused
@@ -56,7 +59,7 @@ export async function deliveryVerdictOf(m: Row & AfterGate, t: TaskRow | null, a
   const reviewBlocked = await reviewDeliveryBlocked(reviewDeliveryFrom(m), m.taskId);
   const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, monitorSource, reviewBlocked,
     reviewUncertain: t.waitOwnership?.start?.phase === "uncertain" } : null, at);
-  return { verdict, facts: { checkpointFollowUp, needQueueCheck, queueBlocked, groupPaused } };
+  return { verdict, facts: { checkpointFollowUp, needQueueCheck, queueBlocked, queueBlocking, groupPaused } };
 }
 
 /**
@@ -70,7 +73,7 @@ export async function deliversOnItsOwn(taskId: string, at = new Date()): Promise
     .where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "pending")));
   for (const m of await withAfterGates(rows)) {
     if (m.deliveringSince) return true;
-    const { verdict } = await deliveryVerdictOf({ ...m, execution: pendingExecutionIntent(m, t) }, t, at);
+    const { verdict } = await deliveryVerdictOf({ ...m, execution: storedExecutionIntent(m, t) }, t, at);
     if (verdict.action === "deliver") return true;
   }
   return false;

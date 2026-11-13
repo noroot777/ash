@@ -26,6 +26,10 @@
       "types": "./src/questions.ts",
       "default": "./src/questions.ts"
     },
+    "./scheduled-message-wait": {
+      "types": "./src/scheduled-message-wait.ts",
+      "default": "./src/scheduled-message-wait.ts"
+    },
     "./branch-plan": {
       "types": "./src/branch-plan.ts",
       "default": "./src/branch-plan.ts"

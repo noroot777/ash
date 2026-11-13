@@ -49,7 +49,7 @@ import { clearFired, cooling, deliveryInFlight, holdInFlight, noteFired } from "
 import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
-import { deliveryOptions, isDueForDelivery, pendingExecutionIntent } from "./pending-verdict.js";
+import { deliveryOptions, isDueForDelivery, pendingExecutionIntent, storedExecutionIntent } from "./pending-verdict.js";
 import { deliveryVerdictOf } from "./pending-delivery-facts.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { bindUploadsToTask } from "./uploads.js";
@@ -409,7 +409,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
       // 自激循环(第 6 轮审查:目录不修复时 2 秒 24 次失败)。
       if (retryBlocked(m.id, at.getTime())) continue;
       const t = (await db.select().from(tasks).where(eq(tasks.id, m.taskId))).at(0) ?? null;
-      const execution = pendingExecutionIntent(m, t);
+      const execution = storedExecutionIntent(m, t);
       if (execution !== m.execution) {
         await db.update(scheduledMessages).set({ execution }).where(and(eq(scheduledMessages.id, m.id), eq(scheduledMessages.status, "pending")));
         m.execution = execution;
