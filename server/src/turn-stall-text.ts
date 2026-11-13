@@ -62,23 +62,19 @@ function rawLogHint(facts: StallFacts): string {
   return found.length ? found.join("；") : `${dir}(本回合未单独落原始事件流)`;
 }
 
-/** 三种警告各自的抬头。下面的文案和 `isStallWarningText` 共用这一份,改一处另一处跟着变。 */
-const ERRORS_WARNING = "〔上游停滞〕";
-const SILENT_WARNING = "〔回合无输出〕";
-const ADOPTED_WARNING = "〔接管后无新进展〕";
-
 /**
- * 这一句是看门狗自己的警告吗。警告以 notice error 的形状落在执行过程里(跟上游的重试提示排在
- * 一起),但它是看门狗**说出来**的,不是它**观察到**的 —— 事后照执行过程重放看门狗当时的
- * 判断(review-no-verdict-legacy.ts)时得把它们拣出去。
+ * 这一句是看门狗自己说的吗(这个文件出的每一句都以这三个抬头之一开头,回归测试逐个核对)。
+ * 它们以 error 的形状落在执行过程里,跟执行器报的错排在一起,但它们是看门狗**说出来**的,不是
+ * 它**观察到**的,也不算这一轮的执行故障 —— 事后照执行过程重放当时的判断
+ * (review-no-verdict-legacy.ts)时得把它们拣出去。
  */
-export function isStallWarningText(message: string): boolean {
-  return [ERRORS_WARNING, SILENT_WARNING, ADOPTED_WARNING].some((mark) => message.startsWith(mark));
+export function isWatchdogText(message: string): boolean {
+  return ["〔上游停滞", "〔回合无输出", "〔接管"].some((mark) => message.startsWith(mark));
 }
 
 /** 警告档的文案。落进执行过程里它发生的那个位置,所以写成「此刻怎么了」。 */
 export function stallWarningText(facts: StallFacts): string {
-  return `${ERRORS_WARNING}自上一条正常输出以来只收到错误事件(${tally(facts)}),已经 ${minutes(facts.elapsedMs)}`
+  return `〔上游停滞〕自上一条正常输出以来只收到错误事件(${tally(facts)}),已经 ${minutes(facts.elapsedMs)}`
     + `没有任何模型输出或工具调用 —— 多半是模型上游连不上。${lastLine(facts)}`;
 }
 
@@ -98,7 +94,7 @@ export function stallTripText(facts: StallFacts): string {
  * 「上游停滞」那套重试统计 —— 那边有错误事件可数,这边一个字都没有。
  */
 export function silentTurnWarningText(facts: StallFacts): string {
-  return `${SILENT_WARNING}这一回合已经开始 ${minutes(facts.elapsedMs)},到现在一条模型输出、`
+  return `〔回合无输出〕这一回合已经开始 ${minutes(facts.elapsedMs)},到现在一条模型输出、`
     + "思考或工具调用都没有过。正常的长回合也会有安静的时候,但那是在它先说过些什么之后;"
     + "一条都没有通常意味着这一轮的输入压根没送进 agent,或者连接从头就没建起来。"
     + `会话 ${facts.sessionId},回合起于 ${facts.turnStartedAt}。`;
@@ -109,7 +105,7 @@ export function silentTurnWarningText(facts: StallFacts): string {
  * 也不许诺自动终止 —— 这一档不熔断(见 turn-stall.ts 的 `watchAdoptedSilence`)。
  */
 export function adoptedSilenceWarningText(facts: StallFacts): string {
-  return `${ADOPTED_WARNING}自 ${facts.since} 接管以来 ${minutes(facts.elapsedMs)}没有新的模型输出、`
+  return `〔接管后无新进展〕自 ${facts.since} 接管以来 ${minutes(facts.elapsedMs)}没有新的模型输出、`
     + "思考或工具调用。接管之前这一轮有没有产出核实不了(进展证明读不到),所以不按「没跑起来」"
     + "处理、也不会自动终止:它可能正在跑一个很长的工具,也可能早就卡住了 —— 请看一眼,确认卡住"
     + `就手动停止后重试。会话 ${facts.sessionId},回合起于 ${facts.turnStartedAt}。`;

@@ -5,33 +5,35 @@
 // EhQtqns9fnG2：用户第三次问同一件事）。可那一回合的事实大多还在：
 //   · 回合行（`session_turns`）：哪条审查会话、哪一刻开的、结局是 failed 还是 completed、看门狗判过熔断没有；
 //   · 会话行的退出码（只对那条会话的**最后一回合**作数）；
-//   · codex 落的那份诊断（退出码、退出信号、执行器原话）和原始事件；
+//   · codex 落的那份诊断（退出码、退出信号、执行器原话）；
+//   · 会话 trace：消费链当场落下的这一回合的事件（执行器报的错、看门狗的红字）；
+//   · 熔断判决日志（turn-stall-journal.ts，销账后压缩之前都还在）；
 //   · 报告文件在不在（跟页面读报告同一个入口）。
 //
-// 判法跟回合收尾那一刻是**同一份**（`interruptionOf` / `noVerdictCause`），只是事实换成从盘上读：
-// 模型 API 的类型照旧只认执行器归一层给的，不在诊断原文里另找状态码（为什么见 review-no-verdict.ts
-// 文件头）。两样事实各有各的时刻，取的地方也不同：
-//   · 这一轮的执行故障：结算时手上那条 —— 把原始事件按 codex 执行器当时的同一套归一重放一遍
-//     （主线程 / 子智能体线程的归属也照当场那样分，见 `replayCodexEvents`）；
-//   · 看门狗熔断时说原因用的类型：**熔断那一刻**冻结的那条（见 `trippedModel`），之后才到的错误不算。
-// 读不到事件，就照实说「执行器异常退出（exit N）」，带上原话。一样都读不到的轮次给 null，页面照老样子。
+// 判法跟回合收尾那一刻是**同一份**（`interruptionOf` / `noVerdictCause`），只是事实换成从盘上读。
+// 两样关于模型 API 的事实只认**在线确实消费过**的，类型只认当时挂上的，不另外重新归一：
+//   · 这一轮的执行故障：结算时手上那条 —— 会话 trace 里这一回合那一段就是消费链当场落下的事件，
+//     照单飞收尾同一条挑法重放（见 `executionErrorOf`）。执行器原始事件文件不用：那里还有执行器
+//     收尾之后才到、没进消费链的行，也分不出哪些是它自己后来补的汇总；
+//   · 看门狗熔断时说原因用的类型：**熔断那一刻**冻结的那条（见 `trippedModel`）。
+// trace 里的事件没挂类型（挂类型那一版之前落的，或者当场就认不出），就是类型不明：照实说
+// 「执行器异常退出（exit N）」，原话摆出来 —— 不从原话里另找状态码（为什么见 review-no-verdict.ts
+// 文件头）。一样都读不到的轮次给 null，页面照老样子。
 //
 // 为什么现算、不一次性补写进库：这份结构这一版刚多了原话，上一版写进库的那些也缺这一格，补写得
 // 两头都补；而现算的输入（结束了的回合、盘上的文件）不会再变，按回合身份记一份就只读一次盘。
-import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import type { AgentEvent, ModelFailure } from "@ash/shared";
 import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
+import { producesWork } from "@ash/shared/waiting";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRounds, sessions, sessionTurns } from "./db/schema.js";
-import { codexErrorEvent } from "./executors/codex-error-event.js";
-import { codexTurnError } from "./executors/model-failure.js";
-import { RUNS_DIR } from "./paths.js";
 import { interruptionOf, noVerdictCause, readTurnDiagnostics, reviewReportWritten, type Interruption } from "./review-no-verdict.js";
-import { readableRunPath, runTracePaths, sessionTracePath } from "./transcript.js";
-import { readStallJournal } from "./turn-stall-journal.js";
-import { isStallWarningText } from "./turn-stall-text.js";
+import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
+import { readableRunPath, sessionTracePath } from "./transcript.js";
+import { readStallJournal, type StallVerdictRecord } from "./turn-stall-journal.js";
+import { isWatchdogText } from "./turn-stall-text.js";
 import { errorFacts } from "./turn-stall.js";
 
 type RoundRow = typeof freeReviewRounds.$inferSelect;
@@ -47,143 +49,102 @@ type ReviewerTurn = {
   /** 只在这一回合是那条会话最后一回合时有：会话行上的退出码 / 被停的口径记的是最后一次。 */
   exitStatus: number | null;
   stoppedAs: string | null;
-  /** 会话行上的 CLI 会话 id（codex 是主线程 id）：认主线程时原始事件开头读不出来才用它。 */
-  cliSessionId: string | null;
 };
 
-const TAIL = 256 * 1024;
-const HEAD = 64 * 1024;
+/** 一次请求里要读的盘：同一条会话的 trace、判决日志都只读一遍。 */
+type Disk = { trace(sessionId: string): string; verdicts(): StallVerdictRecord[] };
 
-/** 原始事件读一头一尾：主线程身份在开头（起线程那一问的应答），回合最后那几条错误在末尾。 */
-function readEdge(path: string, edge: "head" | "tail"): string {
-  const budget = edge === "head" ? HEAD : TAIL;
-  let fd: number | null = null;
-  try {
-    const size = statSync(path).size;
-    if (size <= budget) return readFileSync(path, "utf8");
-    fd = openSync(path, "r");
-    const buf = Buffer.allocUnsafe(budget);
-    const got = readSync(fd, buf, 0, budget, edge === "head" ? 0 : size - budget);
-    const text = buf.subarray(0, got).toString("utf8");
-    // 截断处切在半行中间：那半行不要。
-    return edge === "head" ? text.slice(0, text.lastIndexOf("\n") + 1) : text.slice(text.indexOf("\n") + 1);
-  } catch {
-    return "";
-  } finally {
-    if (fd !== null) try { closeSync(fd); } catch { /* 关不上就算了 */ }
-  }
+function diskFor(taskId: string): Disk {
+  const traces = new Map<string, string>();
+  let verdicts: StallVerdictRecord[] | null = null;
+  return {
+    trace(sessionId) {
+      if (!traces.has(sessionId)) {
+        let text = "";
+        try {
+          text = readFileSync(readableRunPath(sessionTracePath(taskId, sessionId)), "utf8");
+        } catch { /* 没有 trace 就是什么都没消费过可读 */ }
+        traces.set(sessionId, text);
+      }
+      return traces.get(sessionId)!;
+    },
+    verdicts: () => (verdicts ??= readStallJournal().verdicts),
+  };
 }
 
 const recordOf = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
-const parseLines = (text: string): Record<string, unknown>[] => text.split("\n").flatMap((line) => {
-  if (!line.trim()) return [];
-  try {
-    return [recordOf(JSON.parse(line))];
-  } catch {
-    return [];
-  }
-});
-
-const messageOf = (value: unknown): string | null => {
-  const record = recordOf(value);
-  const error = recordOf(record.error);
-  const raw = record.message ?? error.message ?? record.error ?? record.detail;
-  return typeof raw === "string" && raw.trim() ? raw : null;
-};
-
-/**
- * 这一回合的主线程是哪一条：执行器起线程（start / resume / fork）那一问的应答里的线程 id ——
- * 它排在任何子线程之前（查子线程模型的 `thread/read` 应答也带线程 id，但只会在后面）。文件开头
- * 读不出来时退回会话行上记的 CLI 会话 id。两样都没有就是不知道。
- */
-function mainThreadOf(eventsPath: string, cliSessionId: string | null): string | null {
-  for (const line of parseLines(readEdge(eventsPath, "head"))) {
-    const id = recordOf(recordOf(line.result).thread).id;
-    if (typeof id === "string" && id) return id;
-  }
-  return cliSessionId;
+/** 这一回合在线消费过的事件：会话 trace 里 `turnStartedAt` 是它的那一段，按落盘顺序。 */
+function consumedEvents(trace: string, turnStartedAt: string): AgentEvent[] {
+  return trace.split("\n").flatMap((line) => {
+    // 一条会话的 trace 装着它的每一回合：先按回合身份粗筛，别的回合那些行不必解析。
+    if (!line.includes(turnStartedAt)) return [];
+    try {
+      const entry = recordOf(JSON.parse(line));
+      const event = recordOf(entry.event);
+      return entry.turnStartedAt === turnStartedAt && typeof event.kind === "string" ? [event as unknown as AgentEvent] : [];
+    } catch {
+      return [];
+    }
+  });
 }
 
+/** ash 自己说的那几句（熔断红字、警告、接管说明）：落在执行过程里，却不是执行器报的错。 */
+const ashOwn = (event: AgentEvent): boolean => event.kind === "error" && isWatchdogText(event.message);
+
 /**
- * 按执行器自己的归一重放这一回合的原始事件，取回收尾那一刻手上的执行故障（别的执行器没有这份
- * 文件就没有）。原始文件里主线程和子智能体线程的通知混在一起，归属照 codex-app-server.ts 当场
- * 那样分：`threadId` 不是主线程的是子线程的，子线程失败不是父回合失败，整行不看；主线程的（以及
- * exec 那种不分线程的）按 `codexErrorEvent` / `codexTurnError` 归一。跟单飞收尾一样只认重试完了
- * 还是错的那些（App Server 的 `error` 通知、失败的 `turn/completed`，exec 的 `error` / `turn.failed`）。
- * 挑法也一样：带模型类型的那条不被后面没类型的盖掉。分不出主线程（不知道主线程是哪条）的带线程行
- * 同样不看：来源不明的不替它升格成这一轮的故障。
- *
- * 熔断用的类型**不从这里取**：原始行没有时刻，分不出哪条在熔断之前（见 `trippedModel`）。
+ * 这一轮的执行故障，照单飞收尾（single-run.ts 里 `lastExecutionError` 那一处）同一条挑法：不是过程
+ * 提示（`isExecutionNotice`）、算这一轮成败（`affectsTurn` 不是 false）的 error；带模型类型的那条不被
+ * 后面没类型的盖掉。会话级的那种当场就没进这里（也没进 trace），老 trace 里有也不算。子智能体线程的
+ * 失败在 trace 里是包成子智能体活动的那一条（`kind:"tool"`），当场就不算父回合的故障，这里也不算。
  */
-function replayCodexEvents(eventsPath: string, cliSessionId: string | null): ExecutionError | null {
-  const main = mainThreadOf(eventsPath, cliSessionId);
+function executionErrorOf(events: readonly AgentEvent[]): ExecutionError | null {
   let picked: ExecutionError | null = null;
-  const seen = (event: ExecutionError) => {
+  for (const event of events) {
+    if (event.kind !== "error" || ashOwn(event) || isExecutionNotice(event) || isSessionScopeNotice(event) || event.affectsTurn === false) continue;
     if (!picked?.model || event.model) picked = event;
-  };
-  for (const ev of parseLines(readEdge(eventsPath, "tail"))) {
-    const method = typeof ev.method === "string" ? ev.method : null;
-    const params = recordOf(ev.params);
-    const thread = typeof params.threadId === "string" && params.threadId ? params.threadId : null;
-    if (method && thread && thread !== main) continue;
-    if (method === "error") {
-      const reported = codexErrorEvent(params);
-      if (reported?.counted && reported.event.kind === "error") seen(reported.event);
-    } else if (method === "turn/completed") {
-      const turn = recordOf(params.turn);
-      const message = turn.status === "failed" ? messageOf(turn) : null;
-      if (message) seen(codexTurnError(message));
-    } else if (ev.type === "turn.failed" || ev.type === "error") {
-      const message = messageOf(ev);
-      if (message) seen(codexTurnError(message));
-    }
   }
   return picked;
 }
 
 /**
- * 看门狗熔断这一回合时说原因用的那个模型 API 类型。在线那一路是**熔断那一刻**把 `lastModel`
- * 冻进判决的（turn-stall.ts 的 `markStallFailure`）：之后才到的错误 —— 杀进程那段时间里主线程
- * 又报的一条重试、子线程晚到的失败 —— 改不了它。所以事后也只认判决时刻之前的事实：
- *   1. 判决日志里这个回合的那条判决（销账了、还没压缩掉的也在）：它记的就是冻结的那一份。带
- *      类型那一格之前写的旧记录说不出来，往下找。
- *   2. 这一回合的执行过程（会话 trace）：它按消费顺序记下了看门狗看到的那些事件，熔断那句红字
- *      （以判决原文开头）也落在里面。只看红字之前的，照 `lastModel` 的取法认最后一条错误 ——
- *      穿过子智能体包装、重试中的也算；看门狗自己说的警告不是它观察到的，拣出去。
- *   3. 都找不到（日志压缩了、红字没落下来）：认不出，给 null，那半句照实说「类型不明」。
+ * 看门狗熔断这一回合时说原因用的那个模型 API 类型。在线那一路是**熔断那一刻**把 `lastModel`（这一段
+ * 停滞里最后收到的那条错误的类型）冻进判决的（turn-stall.ts 的 `markStallFailure`），之后到的改不了它。
+ *   1. 判决日志里这个回合的那条判决（销账了、还没压缩掉的也在）：它记的就是冻结的那一份。带类型那
+ *      一格之前写的旧记录说不出来，往下找。
+ *   2. 执行过程里认得出**它只可能是哪个**：trace 的落盘顺序不等于消费顺序 —— 正在处理的那条事件
+ *      触发了熔断时，红字先落、那条事件后落；红字之后也可能是熔断以后才到的。所以不按位置挑「最后
+ *      一条」，而是把可能是它的那些都算上：红字之前最后一次进展（它结束了上一段停滞）以后的错误，
+ *      加上红字之后的全部。它们类型都一样（含都没类型），答案就是它；不一样就说不清。找不到红字
+ *      （日志里压缩掉了、或者是接管那一路的说法）就不划进展那条线，整个回合的错误都算上。
+ *   3. 一条都没有：认不出，给 null，那半句照实说「类型不明」。
  */
-function trippedModel(taskId: string, turn: ReviewerTurn, stallReason: string): ModelFailure | null {
-  const record = readStallJournal().verdicts
+function trippedModel(disk: Disk, turn: ReviewerTurn, stallReason: string): ModelFailure | null {
+  const record = disk.verdicts()
     .filter((verdict) => verdict.sessionId === turn.sessionId && verdict.turnStartedAt === turn.startedAt && verdict.model !== undefined)
     .at(-1);
   if (record) return record.model ?? null;
-  let text = "";
-  try {
-    text = readFileSync(readableRunPath(sessionTracePath(taskId, turn.sessionId)), "utf8");
-  } catch {
-    return null;
-  }
-  let model: ModelFailure | null = null;
-  for (const entry of parseLines(text)) {
-    if (entry.turnStartedAt !== turn.startedAt) continue;
-    const event = recordOf(entry.event) as unknown as AgentEvent;
-    if (event.kind === "error" && typeof event.message === "string") {
-      if (event.message.startsWith(stallReason)) return model;
-      if (isStallWarningText(event.message)) continue;
+  const events = consumedEvents(disk.trace(turn.sessionId), turn.startedAt);
+  const trip = events.findIndex((event) => event.kind === "error" && event.message.startsWith(stallReason));
+  const candidates = new Map<string, ModelFailure | null>();
+  events.forEach((event, i) => {
+    if (ashOwn(event)) return;
+    if (i < trip && producesWork(event)) {
+      candidates.clear();
+      return;
     }
     const facts = errorFacts(event);
-    if (facts) model = facts.model;
-  }
-  return null;
+    if (facts) candidates.set(JSON.stringify(facts.model), facts.model);
+  });
+  return candidates.size === 1 ? [...candidates.values()][0]! : null;
 }
 
 /** 这一任务名下每个审查回合：回合行为主，没有回合行的老会话按会话行上记的最后一回合补一条。 */
 async function reviewerTurns(taskId: string): Promise<ReviewerTurn[]> {
   const sessionRows = await db.select({
     id: sessions.id, turnStartedAt: sessions.turnStartedAt, startedAt: sessions.startedAt, endedAt: sessions.endedAt,
-    exitStatus: sessions.exitStatus, stoppedAs: sessions.stoppedAs, cliSessionId: sessions.cliSessionId,
+    exitStatus: sessions.exitStatus, stoppedAs: sessions.stoppedAs,
   }).from(sessions).where(and(eq(sessions.taskId, taskId), eq(sessions.role, "reviewer")));
   if (!sessionRows.length) return [];
   const turnRows = await db.select({
@@ -198,17 +159,14 @@ async function reviewerTurns(taskId: string): Promise<ReviewerTurn[]> {
   };
   const out: ReviewerTurn[] = turnRows.map((turn) => {
     const last = lastOf(turn.sessionId, turn.startedAt);
-    return {
-      ...turn, exitStatus: last?.exitStatus ?? null, stoppedAs: last?.stoppedAs ?? null,
-      cliSessionId: bySession.get(turn.sessionId)?.cliSessionId ?? null,
-    };
+    return { ...turn, exitStatus: last?.exitStatus ?? null, stoppedAs: last?.stoppedAs ?? null };
   });
   for (const row of sessionRows) {
     const startedAt = row.turnStartedAt ?? row.startedAt;
     if (out.some((turn) => turn.sessionId === row.id && turn.startedAt === startedAt)) continue;
     out.push({
       sessionId: row.id, startedAt, endedAt: row.endedAt, outcome: null, stallReason: null,
-      exitStatus: row.exitStatus, stoppedAs: row.stoppedAs, cliSessionId: row.cliSessionId,
+      exitStatus: row.exitStatus, stoppedAs: row.stoppedAs,
     });
   }
   return out;
@@ -232,7 +190,7 @@ const turnFacts = new Map<string, Interruption | null>();
 const FACTS_LIMIT = 500;
 
 /** 这一回合怎么断的。`undefined` = 说不清（被停、什么都不知道），这一轮就不补原因。 */
-function interruptionOfTurn(taskId: string, turn: ReviewerTurn): Interruption | null | undefined {
+function interruptionOfTurn(taskId: string, disk: Disk, turn: ReviewerTurn): Interruption | null | undefined {
   const key = `${taskId}\u0000${turn.sessionId}\u0000${turn.startedAt}`;
   if (turnFacts.has(key)) return turnFacts.get(key)!;
   // 你停的、被引导截断的：回合结局 / 会话行上的停止口径是结算时落的业务事实。诊断里的
@@ -246,8 +204,8 @@ function interruptionOfTurn(taskId: string, turn: ReviewerTurn): Interruption | 
   const facts = failed
     ? interruptionOf({
       exitStatus: exitStatus ?? 0,
-      verdict: turn.stallReason ? { kind: "tripped", reason: turn.stallReason, model: trippedModel(taskId, turn, turn.stallReason) } : null,
-      error: replayCodexEvents(readableRunPath(runTracePaths(join(RUNS_DIR, taskId), turn.sessionId, turn.startedAt).eventsPath), turn.cliSessionId),
+      verdict: turn.stallReason ? { kind: "tripped", reason: turn.stallReason, model: trippedModel(disk, turn, turn.stallReason) } : null,
+      error: executionErrorOf(consumedEvents(disk.trace(turn.sessionId), turn.startedAt)),
     }, diagnostics)
     : null;
   if (turn.endedAt) {
@@ -265,12 +223,13 @@ export async function noVerdictCauses(taskId: string, rounds: readonly RoundRow[
   const out = new Map<string, ReviewNoVerdict>();
   const needDisk = rounds.filter((round) => !round.noVerdict || (round.noVerdict.kind === "interrupted" && !round.noVerdict.said));
   const turns = needDisk.length ? await reviewerTurns(taskId) : [];
+  const disk = diskFor(taskId);
   for (const round of rounds) {
     const stored = round.noVerdict;
     const derived = (() => {
       if (!needDisk.includes(round)) return null;
       const turn = closingTurn(turns, round);
-      const facts = turn ? interruptionOfTurn(taskId, turn) : undefined;
+      const facts = turn ? interruptionOfTurn(taskId, disk, turn) : undefined;
       return facts === undefined ? null : noVerdictCause(facts, reviewReportWritten(taskId, round.runId, round.round));
     })();
     if (!stored) {
