@@ -4,7 +4,7 @@ import { CliCommandValidationError } from "@ash/shared/cli-commands";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@ash/shared/cli-presets";
 import { inheritExecutorOverrides, sameExecutor } from "@ash/shared/executors";
 import { normalizeWorkflowDef } from "@ash/shared/workflow";
-import { TASK_WORKFLOW_MODES, freeWorkflowFits } from "@ash/shared/free-workflow";
+import { createWorkflowMode } from "@ash/shared/free-workflow";
 import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
@@ -160,7 +160,7 @@ api.post("/tasks", async (c) => {
     title: string;
     attachments?: string[];
     appendToQueue?: string; // 可选:把新任务追加到指定 queue 的尾部
-    workflowId?: string | null; // 挑哪条起手式;省略则按项目→全局默认解析
+    workflowId?: string | null; // 内部建的 preset 任务挑哪条起手式;省略则按项目→全局默认解析
   }>();
   // 建任务是**往一个项目里写东西**,所以先过可见性(§十二)。resourceGate 拦的是
   // `/tasks/:id/…`,建任务这条路上还没有 id,只有请求体里那个 projectId —— 漏了这一句,
@@ -191,27 +191,13 @@ api.post("/tasks", async (c) => {
   if ((b.parentId && heldForAcceptance(b.parentId)) || (b.reviewOf && heldForAcceptance(b.reviewOf))) {
     return c.json({ error: "所属团队正在验收，结束后再建它名下的执行者或审查", parentId: b.parentId ?? null, reviewOf: b.reviewOf ?? null }, 409);
   }
-  // 没显式指定就按**这个请求配不配自由工作流**推导（`freeWorkflowFits` 与下面三条门禁
-  // 共用同一份判据）。以前这里写死 `preset`，于是同一件事从界面建和从 MCP/脚本建会落到
-  // 两种模式上：新建面板默认选的是 free（`TaskComposerPanel`），而调用方压根不知道有
-  // `workflowMode` 这个字段可传，只能拿到 preset —— 拿到的那种任务没有「派审查 / 开预览」
-  // 入口（`FreeWorkflowToolbar` 第一行就按 workflowMode 整条返回 null），用户在界面上看到
-  // 的是一个功能被剪掉的任务，却找不到原因。
-  //
-  // 反过来**不能无条件默认 free**：团队/讨论任务、派生执行者、审查任务、自带起手式的请求
-  // 都容不下它，默认给它们 free 等于让老调用方凭空吃 409。所以判据必须就是门禁那一份。
-  const workflowMode = b.workflowMode ?? (freeWorkflowFits(b) ? "free" : "preset");
-  if (!(TASK_WORKFLOW_MODES as readonly string[]).includes(workflowMode)) {
-    return c.json({ error: "workflowMode 只能是 free 或 preset" }, 400);
-  }
-  if (workflowMode === "free" && ((b.mode ?? "single") !== "single" || b.parentId != null || b.reviewOf != null)) {
-    return c.json({ error: "自由工作流只适用于普通单任务" }, 409);
-  }
-  if (workflowMode === "free" && (b.workflow != null || b.workflowId != null)) {
-    return c.json({ error: "自由工作流不能同时携带起手式" }, 400);
-  }
-  // 新建面板允许**就地改这条线**（挑一个起手式再动两下），改完的那份直接随任务提交，
-  // 不用先在库里存一条。收下来的仍然只是一份快照,跟 workflowId 那条路殊途同归。
+  // 默认值与门禁同出一份判据（`createWorkflowMode`）：顶层单任务只能是自由工作流，
+  // 团队/讨论、派生执行者、审查任务在内部照旧落 preset。
+  const resolvedMode = createWorkflowMode(b);
+  if ("error" in resolvedMode) return c.json({ error: resolvedMode.error }, resolvedMode.status);
+  const { workflowMode } = resolvedMode;
+  // preset 任务可以随请求带一份就地改过的线，收下来的只是一份快照,跟 workflowId 那条路
+  // 殊途同归(顶层单任务带它已在上面被拒)。
   let inlineWorkflow: string | null = null;
   if (b.workflow !== undefined && b.workflow !== null) {
     const parsed = normalizeWorkflowDef(b.workflow);

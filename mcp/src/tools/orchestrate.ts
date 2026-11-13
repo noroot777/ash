@@ -64,8 +64,6 @@ server.registerTool(
   "batch_create_tasks",
   {
     title: "批量建任务到已有分组",
-    // workflowMode 的选型判据只住在 `WORKFLOW_MODE` 的字段说明里(它本来就渲染进同一份
-    // 工具清单),这段正文不复述 —— 两处各写一遍就会漂,还要在每个编排工具上各付一次。
     description: "往一个已存在的分组里批量创建 single 任务。chain:true → 建一个 queue 把这批按数组顺序串成 A→B→C→D(前一个 done 后下一个自动起跑),**只能用于 serial group**,parallel group 返回 400;要真并行就别开 chain。run:true 建完立即开跑。",
     inputSchema: {
       groupId: z.string(),

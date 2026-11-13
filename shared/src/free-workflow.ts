@@ -115,28 +115,41 @@ export const EXECUTOR_REGRESSION_RECORDING =
   "整套回归不要在本轮跑，也不要只在回复里自述测试通过。";
 
 /**
- * 「这个建任务请求容得下自由工作流吗」——**建任务路由的门禁与默认值共用同一份判据**。
+ * 建任务时落哪种工作方式——`POST /tasks` 与批量建任务**共用这一份**判据，默认值和门禁都从
+ * 这里出，两处各写一份早晚漂。
  *
- * 自由工作流只适用于普通单任务：团队/讨论任务、派生执行者（`parentId`）、审查任务
- * （`reviewOf`）各自有自己的编排，自带起手式（`workflow`/`workflowId`）的请求则是明摆着
- * 要走预设那条线。这几种传 `workflowMode: "free"` 一律 409/400。
- *
- * 之所以要把它抽成一个函数：默认值现在按它推导（没显式说就是「配得上就给 free」）。
- * 判据但凡和门禁差一个字，老调用方就会在自己什么都没改的情况下凭空吃 409——它们
- * 压根不知道有 `workflowMode` 这个字段。两处各写一份，早晚漂。
+ * 起手式（preset）已停止新建（2026-11-13 用户拍板：先关入口，引擎和站点线代码保留）：
+ * - **外部新建的顶层单任务**只能是自由工作流。显式要 preset、或带着起手式
+ *   （`workflow` / `workflowId`）来的一律拒，并说清楚原因——静默改成 free 的话，调用方
+ *   以为自己拿到了一条带验证站的线，其实什么都没有。
+ * - 团队/讨论任务、派生执行者（`parentId`）、审查任务（`reviewOf`）在内部仍落 preset：
+ *   团队执行者的自动派审就跑在这条线的引擎上。它们反过来容不下 free。
+ * 已经建好的起手式任务不受影响，详情、站点线、续跑照常。
  */
-export function freeWorkflowFits(req: {
+export const PRESET_CREATION_CLOSED =
+  "起手式（预设工作流）已停止新建：普通单任务一律走自由工作流，" +
+  "不要再传 workflowMode=\"preset\"、workflow 或 workflowId。已有的起手式任务照常查看和续跑。";
+
+export function createWorkflowMode(req: {
+  workflowMode?: string | null;
   mode?: string | null;
   parentId?: string | null;
   reviewOf?: string | null;
   workflow?: unknown;
   workflowId?: string | null;
-}): boolean {
-  return (req.mode ?? "single") === "single"
-    && req.parentId == null
-    && req.reviewOf == null
-    && req.workflow == null
-    && req.workflowId == null;
+}): { workflowMode: TaskWorkflowMode } | { error: string; status: 400 | 409 } {
+  const topLevelSingle = (req.mode ?? "single") === "single" && req.parentId == null && req.reviewOf == null;
+  const workflowMode = req.workflowMode ?? (topLevelSingle ? "free" : "preset");
+  if (!(TASK_WORKFLOW_MODES as readonly string[]).includes(workflowMode)) {
+    return { error: "workflowMode 只能是 free 或 preset", status: 400 };
+  }
+  if (topLevelSingle && (workflowMode === "preset" || req.workflow != null || req.workflowId != null)) {
+    return { error: PRESET_CREATION_CLOSED, status: 409 };
+  }
+  if (!topLevelSingle && workflowMode === "free") {
+    return { error: "自由工作流只适用于普通单任务", status: 409 };
+  }
+  return { workflowMode: workflowMode as TaskWorkflowMode };
 }
 
 export const FREE_REVIEW_CHECK_MODES = ["syntax", "logic"] as const;
