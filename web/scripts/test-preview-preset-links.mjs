@@ -1,10 +1,12 @@
 // 预设工作流「打开预览」那一站：起来了不往会话里写地址，入口就长在这一站上，刷新后照样在。
 // 跑：npm -w web run test:preview-preset-links
 //
-// 钉三条：
+// 钉五条：
 //   ① 没开着时不给链接（不能对着一个不在的服务给出入口）；
 //   ② 点「重启预览」起来之后，这一站出现能点的预览页链接，地址就是当前那一份；
-//   ③ 刷新页面（盘上那份预览还开着）不用再点，链接照样在。
+//   ③ 刷新页面（盘上那份预览还开着）不用再点，链接照样在；
+//   ④ 断线期间预览停了、那条事件丢了：重连那一下重读，旧链接不再冒充能打开；
+//   ⑤ 读不到当前状态时不给入口，读得到了再给回来（不靠下一条事件碰运气）。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
@@ -33,6 +35,24 @@ try {
   await page.goto(`${fixture}?running=1`);
   await link(page).waitFor({ timeout: 5000 });
   assert.equal(await link(page).getAttribute("href"), "http://localhost:51048/", "刷新以后这一站找不到预览地址");
+
+  // ④ 连上事件通道（之后只靠推，不再自己拉）；断线期间预览停了，事件没送到；重连。
+  const stage = (call) => page.evaluate(call);
+  await stage(() => window.__stage.open());
+  await stage(() => window.__stage.drop());
+  await stage(() => window.__stage.setRunning(false));
+  await stage(() => window.__stage.open());
+  await link(page).waitFor({ state: "detached", timeout: 2000 });
+
+  // ⑤ 连着的时候来一条事件，但那一次没读到：入口先收起来，读得到了自己回来。
+  await stage(() => window.__stage.setRunning(true));
+  await stage(() => window.__stage.review());
+  await link(page).waitFor({ timeout: 2000 });
+  await stage(() => window.__stage.failReads(true));
+  await stage(() => window.__stage.review());
+  await link(page).waitFor({ state: "detached", timeout: 2000 });
+  await stage(() => window.__stage.failReads(false));
+  await link(page).waitFor({ timeout: 6000 });
 
   console.log("preview preset links: ok");
 } finally {
