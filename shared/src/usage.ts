@@ -22,6 +22,21 @@ export interface TokenUsage {
   costUsd: number | null;
   /** 这份用量覆盖了几个回合:单轮恒 1,会话/任务累计是 n。 */
   turns: number;
+  /**
+   * 计上时的那几次模型请求:输出 token 之和、每次「请求发出 → 最后一个 token」的耗时之和。
+   * 输出速度 = output / ms(见 outputRate)。
+   *
+   * 只有执行器在原始流里亲眼看见起止的请求才算进来(server/src/executors/request-timing.ts),
+   * 所以这里的 output 可以小于上面那个 output;缺省 = 这一轮一次都没计上时(那家 CLI 不给
+   * 起止、接管重放、本字段上线之前的旧账),不是「速度为 0」。它是逐回合实测的,**不进会话
+   * 累计的库表**,只随回合的 usage 事件走。
+   */
+  timed?: OutputTiming;
+}
+
+export interface OutputTiming {
+  output: number;
+  ms: number;
 }
 
 /**
@@ -63,7 +78,18 @@ export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
     reasoning: a.reasoning + b.reasoning,
     costUsd: a.costUsd === null && b.costUsd === null ? null : (a.costUsd ?? 0) + (b.costUsd ?? 0),
     turns: a.turns + b.turns,
+    ...(a.timed || b.timed ? { timed: addTiming(a.timed, b.timed) } : {}),
   };
+}
+
+function addTiming(a: OutputTiming | undefined, b: OutputTiming | undefined): OutputTiming {
+  return { output: (a?.output ?? 0) + (b?.output ?? 0), ms: (a?.ms ?? 0) + (b?.ms ?? 0) };
+}
+
+/** 每秒输出多少 token;没计上时就是 null。 */
+export function outputRate(u: TokenUsage | null | undefined): number | null {
+  const timed = u?.timed;
+  return timed && timed.output > 0 && timed.ms > 0 ? (timed.output * 1000) / timed.ms : null;
 }
 
 export function sumUsage(items: Iterable<TokenUsage | null | undefined>): TokenUsage | null {
@@ -91,8 +117,16 @@ export function isTokenUsage(value: unknown): value is TokenUsage {
   const usage = value as Record<string, unknown>;
   const counted = (field: string): boolean => Number.isInteger(usage[field]) && (usage[field] as number) >= 0;
   if (!["input", "output", "cacheRead", "cacheWrite", "reasoning", "turns"].every(counted)) return false;
+  if (usage.timed !== undefined && !isOutputTiming(usage.timed)) return false;
   return usage.costUsd === null
     || (typeof usage.costUsd === "number" && Number.isFinite(usage.costUsd) && usage.costUsd >= 0);
+}
+
+function isOutputTiming(value: unknown): value is OutputTiming {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const { output, ms } = value as Record<string, unknown>;
+  return Number.isInteger(output) && (output as number) >= 0
+    && typeof ms === "number" && Number.isFinite(ms) && ms >= 0;
 }
 
 /** 认不出的 accounting 值一律按坏行丢掉 —— 判别联合加一支,这里就得跟着加一支。 */
