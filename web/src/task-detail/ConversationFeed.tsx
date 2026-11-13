@@ -25,7 +25,7 @@ import { CommandReply, SystemAuthoredMessage } from "./SystemNotice.tsx";
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
 import { noticeView } from "./timelineNoticeCopy.ts";
 import { FootnoteLine } from "./FootnoteLine.tsx";
-import { footnoteKey, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
+import { footnoteKey, receiptsKey, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 import { crashedTurns } from "./turnFailure.ts";
 import { QuestionDock } from "./QuestionDock.tsx";
 import { useJustEnded } from "./useJustEnded.ts";
@@ -192,8 +192,8 @@ function shallowRest(prev: AgentMessageProps, next: AgentMessageProps): boolean 
   return prev.taskId === next.taskId && prev.hideTime === next.hideTime && prev.laneRole === next.laneRole
     && prev.wakeReply === next.wakeReply && prev.taskActive === next.taskActive
     && !!prev.onFork === !!next.onFork && !!prev.onAskSideChat === !!next.onAskSideChat
-    && (prev.receipts?.length ?? 0) === (next.receipts?.length ?? 0)
-    && prev.receipts?.at(-1)?.id === next.receipts?.at(-1)?.id
+    // 记录与尾注比的是摆出来的全部内容（含里面那几轮审查晚到的身份、报告、附言），不只条数。
+    && receiptsKey(prev.receipts) === receiptsKey(next.receipts)
     && prev.footnote?.key === next.footnote?.key;
 }
 

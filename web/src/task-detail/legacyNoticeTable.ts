@@ -6,17 +6,25 @@
 // 就成了一行红色感叹号。这里改成**按起头认**：照服务端标成 `alertLine(...)` 的那批调用点
 // （server/src 里 `alertLine(` 的每一处），把它们写死的起头抄成一张表。表里没有的一律是回执。
 //
-// 认的是**整条记录的外层写法**：每一条都钉在行首（起头本身是变量的，比如「第 3 轮审查的任务书…」
-// 「重跑上一回合未能启动…」，就限定那段变量里没有冒号，或者钉住整句结尾），不在全文里找子串。
-// 带进来的描述、命令、报错原文什么话都可能有——「哨兵已起：检查条目太多放不进指令时的恢复行为」
-// 里引的那半句不能让一条回执升成警报。起头是变量拼出来的（门禁摘要、归因、预览回收没成……）就
-// 沿着生成它的函数把每一种起头都抄进来，不只抄调用点那一行。
+// 认的是**整条记录的外层写法**，判据只许落在服务端自己写的字上，不许落在它引进来的那一截上——
+// 描述、命令、分支名、标题、报错原文什么话都可能有（「哨兵已起：检查条目太多放不进指令时的恢复
+// 行为」、成功的命令里恰好有一句「` 未通过：」）。所以每一条只用下面三种判法之一：
+//   1. **开头**（`ALERT_LEADS`）：从第一个字起就是服务端写死的、只有提醒才这么起头的那几个字。
+//      起头里带变量的，变量只能是服务端的封闭取值（「自由工作流第 N 轮审查」「审查者 / 执行者」），
+//      不许是任意文字；开头之后不再往下匹配——判据已经在开头了，后面引了什么都不改变它。
+//   2. **结尾**（`ALERT_ENDINGS`）：开头跟回执共用（「独立验证尚未执行：…」既有「需明确确认」的
+//      提醒，也有「已显式确认继续」的回执），就认整句最后那几个服务端写死的字（`$` 钉住）。引进来
+//      的那一截都夹在中间，够不着结尾。
+//   3. **结构**（`ALERT_FORMS`）：成败写在引文**紧后面**的那两种（门禁摘要、工作流里跑的命令），
+//      按服务端拼它的格式解码，成败那个词只认封闭取值、只认格式规定的那个位置。
 //
 // 另一张是结算说明（服务端带 `level:"notice"` 落的那种，「这一轮为什么落成这个状态」）。它们
 // 一律没有类型，按同一个办法认：没交卷、被 ash 判失败的那几句要你知道；其余（等哨兵改落暂停、
 // 以提问暂停、你自己停的）界面别处已经在说，是回执。
 
-/** `alertLine(...)` 那批调用点的固定写法（注释是写它的文件，便于对照）。 */
+import { ACCEPT_GATE_FAILURE_LABELS } from "@ash/shared/accept-gate";
+
+/** 判法 1：只有提醒才这么起头（注释是写它的文件，便于对照）。 */
 const ALERT_LEADS: readonly RegExp[] = [
   // 验收
   /^验收暂缓[：:]/, // task-accept
@@ -25,10 +33,9 @@ const ALERT_LEADS: readonly RegExp[] = [
   /^合并清理警告[：:]/, // task-accept
   /^注意[：:]/, // task-accept / accept-gate（目标分支漂移）
   /^半删除工作区的剩余源码已与任务提交核对/, // task-accept
-  /^(合并已完成但按你的选择没有提交：|合并已完成：成果已合入|验收标签已创建)[\s\S]*清理尚未完成。/, // task-accept 清理那一段
-  /^(合并已完成，结果已保留。|标签已保留。)?[\s\S]*验收收尾暂缓，处理后可再次验收。$/, // task-accept-finalize（预览回收）
+  /^(合并已完成但按你的选择没有提交：|合并已完成：成果已合入 |验收标签已创建)/, // task-accept 清理那一段（「…清理尚未完成。」）
+  /^(合并已完成，结果已保留。|标签已保留。)?(预览启动正在退出，请稍后重试|预览已被另一趟启动替换|预览依赖仍被其他预览进程使用|预览停止记录暂时无法读写|已请求停止预览，但仍有进程未退出|预览进程仍存活，但暂时无法确认启动身份)/, // task-accept-finalize / preview / preview-process-stop（回收没成）
   /^(合并已完成，结果已保留。)?验收途中团队(又跑出了新的结果|加进了新的执行者)/, // task-accept-finalize / team-acceptance-hold
-  /^(以下团队执行者的)?独立验证尚未执行：/, // task-accept（需明确确认仍要验收）
   /^验收没有执行：点验收时看到的那一版之后/, // task-human-gate
   /^这一下没有执行：点的是这条线上一段的卡/, // task-human-gate
   /^替你提交这次合并没成功/, // task-accept-pending
@@ -41,11 +48,10 @@ const ALERT_LEADS: readonly RegExp[] = [
   /^更新基线发生冲突或 rebase 失败/, // task-base-update
   /^升级迁移：上一版(验收停在「合并进行中」|「合并&清理」失败)/, // db/migrations（要你重新验收的那两条；补上标记的那条是回执）
   /^冲突交接失败/, // accept-conflict
-  // 验收前置命令（门禁）
-  /^验收前置命令 `[\s\S]*` (未通过|被打断|已取消)：/, // accept-gate-settle（summarizeAcceptGate 没跑绿的那几档）
+  // 验收前置命令（门禁）。摘要那一句的成败在命令后面，见 ALERT_FORMS。
   /^这条命令点名要跑的/, // accept-gate-miss（单独一条的归因）
-  /^起跑前在 [\s\S]* 里没找到 /, // accept-gate-miss
-  /^日志里说 [\s\S]* 没解析出来，而这条命令点名要跑的也叫这个名字/, // accept-gate-miss
+  /^起跑前在 /, // accept-gate-miss
+  /^日志里说 /, // accept-gate-miss
   /^这一次红的原因看起来是有东西没解析出来/, // accept-gate-miss
   /^验收前置命令未执行/, // accept-gate
   /^验收前置命令尚未确认整棵进程树退出/, // accept-gate-settle
@@ -56,19 +62,19 @@ const ALERT_LEADS: readonly RegExp[] = [
   /^验收前置命令通过了，但当初那一下验收的选择/, // accept-gate-continue
   /^验收前置命令通过后自动继续验收/, // accept-gate-continue
   /^门禁交接失败/, // accept-gate-handoff
-  /^门禁交接：(已叫醒该任务|[\s\S]*看一眼会话里有没有这条修复要求)/, // accept-gate-handoff（已叫醒去修 / 交接不明；已入队等投递是回执）
+  /^门禁交接：已叫醒该任务/, // accept-gate-handoff（「交接不明」那一句见 ALERT_ENDINGS）
   // 审查
   /^自由工作流审查意见修复已取消/, // free-review-manual-repair
   /^合并结果审查临时工作区清理失败/, // free-review-round
   /^已裁定维持审查意见，但这次没能自动发起修复/, // free-review-dispute
   /^同类问题熔断的完整清单写不进证据目录/, // free-review-prompts
-  /^[^：:\n]{1,40}的任务书正在等一个空闲回合窗口，但这一轮的派发意图没能存进库里/, // free-review-dispatch（起头是「第 N 轮审查」这种标签）
+  /^(合并结果审查|自由工作流第 \d+ 轮审查)的任务书正在等一个空闲回合窗口，但这一轮的派发意图没能存进库里/, // free-review-dispatch
   /^(辩论第 \d+ 段没能起跑|辩论找不到正在发言的那一段|辩论的被辩对象已经不在了|服务重启时这一段辩论已经没有回合在跑|(审查者|执行者)这一(段被停止或异常结束|回合结束时没有调用 debate_reply 交卷))/, // free-review-debate
   /^审查预约已取消[：:]/, // free-review-reservations
   /^预约审查启动失败/, // free-review-reservations
   /^完成后审查预约已取消[：:]/, // reviewer-profiles
   /^修复执行回合异常结束，自动复审已取消/, // free-workflow
-  /^[^：:\n]{0,30}审查(回合已结束，但任务书有没有送进审查者手里|的任务书被协议层明确拒收|的任务书有没有送进审查者手里，已经确认不了)/, // review-input-verdict
+  /^(合并结果|自由工作流第 \d+ 轮)审查(回合已结束，但任务书有没有送进审查者手里|的任务书被协议层明确拒收|的任务书有没有送进审查者手里，已经确认不了)/, // review-input-verdict
   /^服务在审查输入交付期间中断/, // review-start-retry
   /^审查已完成，但后续工作流/, // review-finalization
   /^这一轮的审查报告可能已经写完了，只是结论没能上报到 ash/, // review-channel-gap
@@ -79,28 +85,23 @@ const ALERT_LEADS: readonly RegExp[] = [
   /^验证依据暂不可核验/, // regression-settlement
   /^本次验收明确补跑原审查尚未完成的尾段/, // regression-finalization
   /^强制通过之后想接着往下走，但出错了/, // verify-override
-  // 工作流的站
-  /^跑了一条命令：`[\s\S]*`（没通过）/, // workflow-steps
+  // 工作流的站。跑一条命令那一句的成败在命令后面，见 ALERT_FORMS。
   /^预览没起来/, // workflow-steps
-  /^这条线卡在「[^」]+」这一站，停下等你处理/, // workflow-steps
-  /^「[^」]+」已经打回重做 \d+ 次仍没过/, // workflow-steps
   /^想把这一站打回重做，但唤醒任务时出错/, // workflow-steps
-  /^这条线停在「[^」]+」这一站：自动复审轮数已经用完/, // workflow-advance
+  /^这条线停在「[^」]+」这一站：自动复审轮数已经用完/, // workflow-advance（站名是内置的那几个）
   /^想在「[^」]+」这一站开一轮验证，但没开起来/, // workflow-advance
   // 预览
   /^预览异常[：:]/, // preview-start
   /^预览清理暂缓[：:]/, // preview
   /^预览进程已自行退出/, // preview
   /^旧预览回收暂缓/, // status
-  /^(预览启动正在退出，请稍后重试|预览已被另一趟启动替换|预览依赖仍被其他预览进程使用|预览停止记录暂时无法读写|已请求停止预览，但仍有进程未退出|预览进程仍存活，但暂时无法确认启动身份)/, // preview / preview-process-stop（回收没成）
   // 起跑与回合
   /^这一轮没能起跑[：:]/, // turn-failure（含刚发的消息没送达）
-  /^任务登记的基线分支 [\s\S]* 已不存在/, // base-fallback-notice
+  /^任务登记的基线分支 /, // base-fallback-notice
   /^起跑预检提示/, // ash-mcp-launch-gate / ash-mcp-turn-hint
   /^本次启动失败，未能继续执行/, // queue-seat
   /^续聊未能启动/, // task-reply
-  /^[^：:\n]{1,20}未能启动：回合被其它执行抢占/, // task-retry-turn（「重跑上一回合」这种标签起头）
-  /^[^：:\n]{1,20}启动失败：[\s\S]*；可以再试一次。$/, // task-retry-turn
+  /^重跑上一回合(未能启动：回合被其它执行抢占|启动失败：)/, // task-retry-turn
   /^这一轮在启动前被撤回/, // turn-freeze
   /^这一轮改了代码，但没有确认完成/, // turn-baseline
   /^〔上游停滞·(重启后按失败收尾|上一次运行的结局核实不了)〕/, // turn-stall-text（重启对账）
@@ -112,8 +113,40 @@ const ALERT_LEADS: readonly RegExp[] = [
   /^持续目标尚未启动就遇到服务中断/, // task-reconcile
   /^原生目标清除失败/, // task-cli-command
   /^哨兵没能开工：/, // monitor-create-abort
-  /^哨兵「[\s\S]*」存着一条这一版读不出来的结束条件「/, // monitors
   /^(⚠️ 用户在无法核验|🔁 用户安全撤销了本次移回|🔁 对端确认未收到任务并登记撤销后)/, // handoff-routes
+];
+
+/** 判法 2：开头跟回执共用、只有结尾分得开的那几句。 */
+const ALERT_ENDINGS: readonly RegExp[] = [
+  // task-accept：「以下团队执行者的独立验证尚未执行：<标题…>」后面接「需明确确认」是提醒，接「已显式确认继续」是回执。
+  /^(以下团队执行者的)?独立验证尚未执行：[\s\S]*本次验收未执行，需明确确认仍要验收。$/,
+  // accept-gate-handoff：交接不明（「门禁交接：修复输入已持久入队…」是回执）。
+  /^门禁交接：[\s\S]*看一眼会话里有没有这条修复要求，没有的话在验收台上点「再交一次」（日志 [^\n]*）。$/,
+  // workflow-steps：站名是线上自己写的；「这条线卡在「X」这一站；线上写的是「问我一句」…」「…打回给 AI 重做（第 N 次）」是回执。
+  /^这条线卡在「[\s\S]+」这一站，停下等你处理。$/,
+  /^「[\s\S]+」已经打回重做 \d+ 次仍没过，按线上写的上限停下等你处理。$/,
+  // monitors：描述和结束条件都是原样引的。
+  /^哨兵「[\s\S]+」存着一条这一版读不出来的结束条件「[\s\S]*」（结束条件不是正则，是字样）。它不会提前收工，只会盯到到期——要让它早点收工，用改得对的条件另起一个。$/,
+];
+
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** 门禁没跑绿时摘要里的原因（shared/accept-gate 的标签；查不到标签的旧类别照实写「未通过」）。 */
+const GATE_WHY = [...Object.values(ACCEPT_GATE_FAILURE_LABELS), "未通过"].map(escape).join("|");
+/** 摘要里紧跟在命令后面的那个成败：「` 通过（rc=0）」或「` 未通过：<原因>（rc=N）」，后面是句号、空白或结尾。 */
+const GATE_VERDICT = new RegExp(`\` (通过（rc=0）|(?:未通过|被打断|已取消)：(?:${GATE_WHY})(?:（rc=-?\\d+）)?)(?=。|\\s|$)`, "g");
+
+/** 判法 3：成败写在引文紧后面的那两种，按格式解码。 */
+const ALERT_FORMS: ReadonlyArray<(text: string) => boolean> = [
+  // accept-gate-settle：`验收前置命令 \`<命令>\` <成败>。<服务端补的说明>`。命令里可能也有一段像成败的字，
+  // 但真的那一个在命令**后面**、它后面只剩服务端自己的话，所以认最后一个合格式的成败。
+  (text) => {
+    if (!text.startsWith("验收前置命令 `")) return false;
+    const verdict = [...text.matchAll(GATE_VERDICT)].at(-1)?.[1];
+    return !!verdict && !verdict.startsWith("通过");
+  },
+  // workflow-steps：`跑了一条命令：\`<命令>\`（通过|没通过）` 后面换行接输出。成败在第一行末尾（输出可能也有
+  // 一段像成败的字，它在换行后面），所以认第一个后面紧跟换行或结尾的那个。
+  (text) => /^跑了一条命令：`/.test(text) && /`（(没通过|通过)）(?:\n|$)/.exec(text)?.[1] === "没通过",
 ];
 
 /** 结算说明里要你知道的那几句（server/src/settle-status.ts 的落位说明）。 */
@@ -121,12 +154,11 @@ const SETTLEMENT_LEADS: readonly RegExp[] = [
   /^本回合没有交卷/, // 没调 complete_task，记未完成
   /^本回合被 ash 主动终止/, // 熔断
   /^本回合是上次 ash 中断时留下的/, // 读不出熔断判决
-  /^后台工作流\/子代理.*按未完成结算/, // 后台活没跑完
+  /^后台工作流\/子代理(等到时限还没跑完|还没跑完[,，]智能体进程就退出了)/, // 后台活没跑完
   /^ash 重启接管时读不出这个进程之前的输出/,
   /^持续目标已停止，尚未收到完成确认/,
   /^续聊回合(因上游连不上|是上次中断留下的|等后台工作|的后台工作|异常结束)/, // 续聊这一轮没办成（你自己停的、以提问结束的是回执）
   /^持续目标已(暂停|清除)；/, // 你那条 /goal pause、/goal clear 的结果：怎么续跑写在里面
-  ...ALERT_LEADS,
 ];
 
 /** 回执里最常引别人原话的那几种：不管后面引了什么，一律是回执。 */
@@ -138,14 +170,21 @@ function head(raw: string): string {
   return raw.replace(/^〔系统〕/, "").trimStart();
 }
 
+function alertShape(text: string): boolean {
+  return ALERT_LEADS.some((lead) => lead.test(text))
+    || ALERT_ENDINGS.some((ending) => ending.test(text))
+    || ALERT_FORMS.some((form) => form(text));
+}
+
 /** 没有类型的时间线记录：是不是服务端当时会标成 `alertLine` 的那一句。 */
 export function legacyAlert(raw: string): boolean {
   const text = head(raw);
-  return !RECEIPT_LEADS.some((lead) => lead.test(text)) && ALERT_LEADS.some((lead) => lead.test(text));
+  return !RECEIPT_LEADS.some((lead) => lead.test(text)) && alertShape(text);
 }
 
 /** 结算说明（`level:"notice"`）：是不是要你知道的那一句。其余是回执。 */
 export function settlementAlert(raw: string): boolean {
   const text = head(raw);
-  return !RECEIPT_LEADS.some((lead) => lead.test(text)) && SETTLEMENT_LEADS.some((lead) => lead.test(text));
+  return !RECEIPT_LEADS.some((lead) => lead.test(text))
+    && (SETTLEMENT_LEADS.some((lead) => lead.test(text)) || alertShape(text));
 }

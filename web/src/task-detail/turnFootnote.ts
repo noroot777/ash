@@ -9,6 +9,7 @@
 // 颜色只说现在的事：尾注所在的回合是会话里最后一个回合、后面又没有你的话，它才是「现在」，
 // 这时坏消息字前才有一颗小圆点（`live`）。
 import type { ConversationItem } from "./conversationModel.ts";
+import type { TurnReceipt } from "./conversationSystemRows.ts";
 import { verifyMarkOf } from "./conversationNotes.ts";
 import type { ConversationReviewLane, ReviewLaneConclusion } from "./conversationReviewLanes.ts";
 import {
@@ -92,14 +93,38 @@ export function composeFootnote(parts: readonly FootnotePart[]): FootnotePart[] 
     .slice(-MAX_PARTS);
 }
 
+/**
+ * 一轮审查摆出来的样子由哪些东西定：那一句（结论、几条意见），点它去哪儿（哪一场、哪一轮），
+ * 摊开以后有什么（报告入口、派审附言、谁审的、用时、那一轮里的每一条）。尾注里那半句、记录里
+ * 那一条都拿它当签名——审查记录晚到一步补上了哪一场、有没有报告，签名就变，那一回合就重画。
+ */
+export function laneKey(lane: ConversationReviewLane): string {
+  return JSON.stringify([
+    lane.id, lane.source, lane.round, lane.conclusion, lane.verdict, lane.findings, lane.runId,
+    lane.reportAvailable, lane.report, lane.note, lane.reviewerLabel, lane.startedAt, lane.endedAt,
+    lane.items.map((item) => item.kind === "agent"
+      ? [item.id, item.endedAt, item.markdown.length, item.segments.length]
+      : item.kind === "event" ? [item.id, item.text] : [item.id]),
+  ]);
+}
+
+function viewKey(view: NoticeView): string {
+  return JSON.stringify([view.text, view.tone, view.tier, view.detail, view.mono, view.meta]);
+}
+
 /** 尾注的签名：已经收口的回合只在它变了的时候重画（见 ConversationFeed 的 sameSettledTurn）。 */
 export function footnoteKey(footnote: TurnFootnote | undefined, extra = ""): string {
   if (!footnote) return extra;
   return [
     footnote.live ? "live" : "past",
-    ...footnote.parts.map((part) => part.kind === "review"
-      ? `${part.id}:${part.lane.conclusion}:${part.lane.verdict}:${part.lane.runId}:${part.lane.reportAvailable}:${part.lane.reviewerLabel}:${part.lane.items.length}`
-      : `${part.id}:${part.view.text}:${part.view.tone}`),
+    ...footnote.parts.map((part) => `${part.id}:${part.at}:${viewKey(part.view)}:${part.kind === "review" ? laneKey(part.lane) : ""}`),
     extra,
   ].join("|");
+}
+
+/** 记在一回合上的那份记录的签名：每一条摆出来的字、能不能点、点了去哪儿，变了就重画。 */
+export function receiptsKey(receipts: readonly TurnReceipt[] | undefined): string {
+  return (receipts ?? [])
+    .map((receipt) => `${receipt.id}:${receipt.at}:${receipt.item?.id ?? ""}:${viewKey(receipt.view)}:${receipt.lane ? laneKey(receipt.lane) : ""}`)
+    .join("|");
 }
