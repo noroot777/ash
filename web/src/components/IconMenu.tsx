@@ -17,11 +17,9 @@ export type IconMenuItem = {
  * 一颗「更多」图标键加它弹出来的那张菜单。回合尾、气泡这些地方的「更多」都是它：
  * 平时只画三个点，名字在提示里，菜单的关法（点外面、Esc、焦点回到键上）走 useDismissable。
  */
-export function IconMenu({ label = "更多", items, info, placement, size = "sm", align = "start", side = "below", buttonRef, className }: {
+export function IconMenu({ label = "更多", items, placement, size = "sm", align = "start", side = "below", buttonRef, className }: {
   label?: string;
   items: IconMenuItem[];
-  /** 菜单底部一块只读的说明（回合尾的本轮用量），排在菜单项下面。 */
-  info?: ReactNode;
   placement?: HoverTipPlacement;
   size?: "md" | "sm";
   /** 菜单贴着键的哪一边展开。 */
@@ -65,7 +63,7 @@ export function IconMenu({ label = "更多", items, info, placement, size = "sm"
       window.removeEventListener("resize", place);
     };
   }, [open, side]);
-  if (!items.length && !info) return null;
+  if (!items.length) return null;
   return (
     <span className={`ui-menu-anchor${className ? ` ${className}` : ""}`} ref={root}>
       <IconButton
@@ -94,7 +92,6 @@ export function IconMenu({ label = "更多", items, info, placement, size = "sm"
               {item.icon}{item.label}
             </button>
           ))}
-          {info && <>{items.length > 0 && <div className="ui-menu-separator" role="separator" />}<div className="ui-menu-info">{info}</div></>}
         </div>
       )}
     </span>

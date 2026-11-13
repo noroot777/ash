@@ -59,8 +59,8 @@ export function MessageFooter({
           label="复制 resume 命令"
         />
       )}
-      <TokenUsageChip turn={turnUsage} />
-      <TokenUsageChip session={total} />
+      <TokenUsageChip usage={turnUsage} />
+      <TokenUsageChip usage={total} scope="session" />
       <ContextMeterChip context={water} session={session} />
       {actions}
     </footer>
