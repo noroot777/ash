@@ -3,7 +3,7 @@
 //  · 读完就从本进程环境里拿掉，子进程（agent、预览、终端）不继承；
 //  · 代码根不是 git 检出时没有「自己的仓库」（REPO_DIR = null）；
 //  · MCP 登记写哪个 node：自带运行时写绝对路径，否则照旧走 PATH 上的 `node`；
-//  · 宿主那条是旧检出的标准本机登记时，新隔离档按这份 ash 现拼，自定义 / 远程登记照旧原样搬；
+//  · 宿主那条启动的是 ash 自己的 MCP 脚本时，新隔离档只换脚本入口和跑不起来的 node，其余字段原样留；
 //  · `ASH_LOCAL_ONLY` 同样读完即删。
 //
 // paths.js 在模块加载时就把环境变量冻成常量，所以每个场景起一个子进程。
@@ -104,13 +104,15 @@ const out = {
   assert.equal(node.onPath, "node", "仓库实例：照旧写 node，nvm 升级后不会留下一个失效的绝对路径");
   assert.equal(node.noPath, "/opt/nvm/versions/node/v24/bin/node", "PATH 上没有 node：只剩自己这一份能跑");
 
-  // ── 搬到独立 app 之后新建的隔离档：宿主那条是旧检出的标准本机登记 → 按这份 ash 现拼；
-  //    用户自定义 / 远程的登记 → 照旧原样搬 ──
+  // ── 搬到独立 app 之后新建的隔离档：宿主那条启动的是 ash 自己的 MCP 脚本 → 只把脚本入口换成
+  //    这一份、跑不起来的 node 换成能跑的，**其余字段（cwd/timeout/env/远端目标/工具白名单）原样留着**；
+  //    用户自定义 / 远程的登记 → 原样搬 ──
   const moved = probe({ ASH_DATA_DIR: data }, `
 const { existsSync, mkdirSync, readFileSync, writeFileSync } = await import("node:fs");
 const { join } = await import("node:path");
 const { CODE_DIR } = await import(${JSON.stringify(new URL("paths.js", src).href)});
-const { registerAshMcp, mcpNodeCommand, isStockLocalLaunch } = await import(${JSON.stringify(new URL("mcp-registry/register.js", src).href)});
+const { registerAshMcp, mcpNodeCommand } = await import(${JSON.stringify(new URL("mcp-registry/register.js", src).href)});
+const { launchesAshMcp, relocateHostFact } = await import(${JSON.stringify(new URL("mcp-registry/relocate.js", src).href)});
 const root = ${JSON.stringify(join(root, "mcp-move"))};
 const bench = async (name, claudeEntry, codexToml) => {
   const host = join(root, name, "home"), dir = join(root, name, "iso");
@@ -126,35 +128,74 @@ const bench = async (name, claudeEntry, codexToml) => {
     codexText: readFileSync(join(dir, "config.toml"), "utf8"),
   };
 };
-const stock = await bench("stock",
-  { type: "stdio", command: "node", args: ["/old-checkout/mcp/dist/index.js"], env: { ASH_URL: "http://127.0.0.1:4317" } },
-  '[mcp_servers.ash]\\ncommand = "node"\\nargs = ["/old-checkout/mcp/dist/index.js"]\\n');
+// 旧检出 + 一个已经不存在的 node,外加用户自己的定制和一个只写在 HARNESS_URL 里的远端目标。
+const tailored = await bench("tailored",
+  { type: "stdio", command: "/gone/bin/node", args: ["/old-checkout/mcp/dist/index.js"], cwd: "/work", timeout: 120000,
+    env: { HARNESS_URL: "https://remote.example:8443", ASH_RECONNECT_MS: "7000" } },
+  [
+    "[mcp_servers.ash]",
+    'command = "/gone/bin/node"',
+    'args = ["/old-checkout/mcp/dist/index.js"]',
+    "startup_timeout_sec = 120",
+    'enabled_tools = ["get_task"]',
+    "",
+    "[mcp_servers.ash.env]",
+    'HARNESS_URL = "https://remote.example:8443"',
+    'ASH_RECONNECT_MS = "7000"',
+    "",
+  ].join("\\n"));
+// 用户挑的 node 跑得起来:不动它,只换脚本入口。
+const ownNode = await bench("own-node",
+  { command: process.execPath, args: ["/old-checkout/mcp/dist/index.js"] },
+  '[mcp_servers.ash]\\ncommand = ' + JSON.stringify(process.execPath) + '\\nargs = ["/old-checkout/mcp/dist/index.js"]\\n');
 const custom = await bench("custom",
   { type: "http", url: "https://ash.example/mcp" },
   '[mcp_servers.ash]\\ncommand = "/opt/my/ash-mcp"\\nargs = ["--fast"]\\n');
+const to = { entry: "/new/mcp/dist/index.js", node: "/new/runtime/node", runnable: () => false };
+const opencode = relocateHostFact({ status: "on", detail: "",
+  raw: { type: "local", command: ["/gone/node", "/old/mcp/dist/index.js"], environment: { X: "1" }, timeout: 5 } }, to);
+const multiline = '[mcp_servers.ash]\\ncommand = "node"\\nargs = [\\n  "/old/mcp/dist/index.js",\\n]\\n';
+const untouched = relocateHostFact({ status: "on", detail: "", block: multiline,
+  launch: { command: "node", args: ["/old/mcp/dist/index.js"], ashUrl: null } }, to);
 const out = {
   built: existsSync(join(CODE_DIR, "mcp", "dist", "index.js")),
-  entry: join(CODE_DIR, "mcp", "dist", "index.js"), node: mcpNodeCommand(),
-  stock, custom,
+  entry: join(CODE_DIR, "mcp", "dist", "index.js"), node: mcpNodeCommand(), execPath: process.execPath,
+  tailored, ownNode, custom, opencode: opencode.raw, untouched: untouched.block === multiline,
   shapes: [
-    isStockLocalLaunch({ command: "node", args: ["/a/mcp/dist/index.js"], ashUrl: null }),
-    isStockLocalLaunch({ command: "/usr/bin/node", args: ["/a/mcp/dist/index.js"], ashUrl: "http://localhost:4317" }),
-    isStockLocalLaunch({ command: "node", args: ["/a/mcp/dist/index.js"], ashUrl: "http://10.0.0.5:4317" }),
-    isStockLocalLaunch({ command: "node", args: ["/a/my-mcp.js"], ashUrl: null }),
-    isStockLocalLaunch({ command: "node", args: ["--inspect", "/a/mcp/dist/index.js"], ashUrl: null }),
+    launchesAshMcp("node", ["/a/mcp/dist/index.js"]),
+    launchesAshMcp("/usr/bin/node", ["/a/mcp/dist/index.js", "--x"]),
+    launchesAshMcp("node", ["/a/my-mcp.js"]),
+    launchesAshMcp("node", ["--inspect", "/a/mcp/dist/index.js"]),
+    launchesAshMcp("/opt/my/ash-mcp", ["/a/mcp/dist/index.js"]),
   ],
 };`) as Record<string, any>;
-  assert.deepEqual(moved.shapes, [true, true, false, false, false], "只有 ash 自己装出来的那种形状才算标准本机登记");
-  assert.equal(moved.stock.claude.ok, true);
-  assert.equal(moved.stock.codex.ok, true);
+  assert.deepEqual(moved.shapes, [true, true, false, false, false], "只认 node 起 ash 自己那份 MCP 脚本的写法");
+  // 纯函数那一层(不依赖本地有没有 build 过 MCP):
+  assert.deepEqual(moved.opencode, {
+    type: "local", command: ["/new/runtime/node", "/new/mcp/dist/index.js"], environment: { X: "1" }, timeout: 5,
+  }, "opencode 那种数组写法:只换 node 和入口,别的键原样");
+  assert.equal(moved.untouched, true, "TOML 写法超出能安全改写的范围:原样搬,不丢字段");
+  for (const bench of ["tailored", "ownNode"]) {
+    assert.equal(moved[bench].claude.ok, true, `${bench}:claude`);
+    assert.equal(moved[bench].codex.ok, true, `${bench}:codex`);
+  }
   if (moved.built) {
-    assert.deepEqual(moved.stock.claudeEntry.args, [moved.entry], "旧检出的入口不许搬进新隔离档");
-    assert.equal(moved.stock.claudeEntry.command, moved.node, "启动命令按这份 ash 的运行时选");
-    assert.ok(moved.stock.codexText.includes(JSON.stringify(moved.entry)), "TOML 族同理");
-    assert.ok(!moved.stock.codexText.includes("/old-checkout/"), "TOML 族同理");
+    const { claudeEntry, codexText } = moved.tailored;
+    assert.deepEqual(claudeEntry, {
+      type: "stdio", command: moved.node, args: [moved.entry], cwd: "/work", timeout: 120000,
+      env: { HARNESS_URL: "https://remote.example:8443", ASH_RECONNECT_MS: "7000" },
+    }, "只换脚本入口和跑不起来的 node;cwd/timeout/env(含 HARNESS_URL 远端)原样留着");
+    for (const kept of [
+      "startup_timeout_sec = 120", 'enabled_tools = ["get_task"]', "[mcp_servers.ash.env]",
+      'HARNESS_URL = "https://remote.example:8443"', 'ASH_RECONNECT_MS = "7000"',
+      `command = ${JSON.stringify(moved.node)}`, `args = [${JSON.stringify(moved.entry)}]`,
+    ]) assert.ok(codexText.includes(kept), `TOML 族:${kept}\n${codexText}`);
+    assert.ok(!codexText.includes("/old-checkout/") && !codexText.includes("/gone/"), `TOML 族:旧位置不许留下\n${codexText}`);
+    assert.deepEqual(moved.ownNode.claudeEntry, { command: moved.execPath, args: [moved.entry] }, "跑得起来的 node 不动");
+    assert.ok(moved.ownNode.codexText.includes(`command = ${JSON.stringify(moved.execPath)}`));
   } else {
-    console.log("（没 build 过 mcp/dist/index.js：拼不出新登记，退回照搬宿主那条，现拼那一半跳过）");
-    assert.deepEqual(moved.stock.claudeEntry.args, ["/old-checkout/mcp/dist/index.js"]);
+    console.log("（没 build 过 mcp/dist/index.js：没有当前入口可换，退回原样搬，登记那一半跳过）");
+    assert.deepEqual(moved.tailored.claudeEntry.args, ["/old-checkout/mcp/dist/index.js"]);
   }
   assert.deepEqual(moved.custom.claudeEntry, { type: "http", url: "https://ash.example/mcp" }, "远程登记原样搬");
   assert.ok(moved.custom.codexText.includes('command = "/opt/my/ash-mcp"'), "自定义启动命令原样搬");
