@@ -42,6 +42,8 @@ function reviewFootprint(file: string): string {
       messages: rows("SELECT id, status FROM scheduled_messages ORDER BY id"),
       runs: rows("SELECT id, status FROM free_review_runs ORDER BY id"),
       rounds: rows("SELECT id, status, dispatch FROM free_review_rounds ORDER BY id"),
+      // 新开一条会话 = 开机对账真去起了 agent（这台测试里不该发生，PATH 上虽然没有 CLI，常见安装目录里可能有）。
+      sessions: rows("SELECT id FROM sessions ORDER BY id"),
     });
   } finally { db.close(); }
 }
@@ -184,6 +186,7 @@ try {
     .some((m) => m.id === "review-repair-g-r" && m.status === "pending");
   check("对照：没洗的副本开机会替源实例重投修复", controlRun ? [repairQueued(controlRun.before), repairQueued(controlRun.after)] : null,
     [false, true]);
+  check("对照组没真去起 agent", controlRun ? JSON.parse(controlRun.after).sessions : null, []);
 
   const { prepareImportedSnapshot } = await import("../src/import-snapshot.js");
   const report = prepareImportedSnapshot(file, [source], target);

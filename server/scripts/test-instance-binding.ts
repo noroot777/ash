@@ -9,7 +9,7 @@
 // 跑法：npm -w server run test:instance-binding
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer, connect } from "node:net";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -97,5 +97,11 @@ try {
 } finally {
   server.kill("SIGTERM");
   await new Promise((resolve) => server.exitCode !== null ? resolve(null) : server.once("exit", resolve));
-  rmSync(root, { recursive: true, force: true });
+  // 服务开机会问一下本机装着的 CLI（ash MCP 登记自检，auth/user-cli.ts），那个子进程可能比服务活得久、
+  // 往临时 HOME 里落一份配置：删完再看一会儿，又冒出来就再删。
+  for (let quiet = 0; quiet < 4;) {
+    rmSync(root, { recursive: true, force: true });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    quiet = existsSync(root) ? 0 : quiet + 1;
+  }
 }
