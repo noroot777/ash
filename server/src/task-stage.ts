@@ -8,7 +8,7 @@ import { db } from "./db/index.js";
 import { regressionEvidence, tasks } from "./db/schema.js";
 import { checkRegressionConclusion, presetConclusionRound } from "./regression-evidence-lifecycle.js";
 import { assertConclusionTask, commitRegressionConclusion, type ConclusionTask } from "./regression-conclusion-commit.js";
-import { RegressionConclusionRejected, RegressionEvidenceUnavailable } from "./regression-conclusion-errors.js";
+import { RegressionConclusionRejected } from "./regression-conclusion-errors.js";
 import { reviewRoundDir } from "./review-evidence.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { appendTaskTimeline, receiptLine, type TimelineLine, noticeLine } from "./task-timeline.js";
@@ -44,7 +44,6 @@ export async function setTaskStage(
 }
 
 export async function reportTaskStage(taskId: string, stage: TaskStage, opts: {
-  verificationBasis?: unknown;
   expectedTask?: ConclusionTask;
   expectedDirectionToken?: string | null;
   bySessionRecovery?: boolean;
@@ -63,7 +62,7 @@ export async function reportTaskStage(taskId: string, stage: TaskStage, opts: {
   const scope = await presetConclusionRound(task, db, opts.sourceTaskId);
   if (source.id !== taskId && scope?.reviewTaskId !== source.id) throw new RegressionConclusionRejected("当前来源不属于活动审查轮次");
   const checked = scope && (stage === "verified" || stage === "verify_failed")
-    ? await checkRegressionConclusion(taskId, reviewRoundDir(taskId, scope.round), stage, opts.verificationBasis)
+    ? await checkRegressionConclusion(taskId, reviewRoundDir(taskId, scope.round), stage)
     : undefined;
   const updatedAt = now();
   await commitRegressionConclusion(checked, async (transaction) => {
@@ -262,8 +261,8 @@ export function mountTaskStageRoutes(api: Hono): void {
   api.post("/tasks/:id/stage", async (c) => {
     const taskId = c.req.param("id");
     const body = await c.req
-      .json<{ stage?: unknown; verificationBasis?: unknown; recurs?: unknown }>()
-      .catch(() => ({}) as { stage?: unknown; verificationBasis?: unknown; recurs?: unknown });
+      .json<{ stage?: unknown; recurs?: unknown }>()
+      .catch(() => ({}) as { stage?: unknown; recurs?: unknown });
     if (!isTaskStage(body.stage)) {
       return c.json({ error: `stage 非法，只能是：${STAGE_ORDER.join(" | ")}` }, 400);
     }
@@ -304,13 +303,13 @@ export function mountTaskStageRoutes(api: Hono): void {
     try {
       const { reportFreeReviewConclusion } = await import("./free-workflow.js");
       const freeReview = await reportFreeReviewConclusion(taskId, body.stage, {
-        verificationBasis: body.verificationBasis, expectedTask: task, recurs: body.recurs,
+        expectedTask: task, recurs: body.recurs,
       });
       if (freeReview) {
         return c.json({ reported: true, taskId, stage: body.stage, freeReview, timelineRecorded: false });
       }
     } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : String(error) }, error instanceof RegressionEvidenceUnavailable ? 503 : 409);
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
     }
     if (task.workflowMode === "free") {
       return c.json({ error: "自由工作流不使用起手式 stage；请按需派审或预览，完成后从验收页验收" }, 409);
@@ -330,10 +329,9 @@ export function mountTaskStageRoutes(api: Hono): void {
 
     let result;
     try {
-      result = await reportTaskStage(taskId, body.stage, { verificationBasis: body.verificationBasis,
-        expectedTask: task, sourceTaskId, expectedSourceTask: source });
+      result = await reportTaskStage(taskId, body.stage, { expectedTask: task, sourceTaskId, expectedSourceTask: source });
     } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : String(error) }, error instanceof RegressionEvidenceUnavailable ? 503 : 409);
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
     }
     if (!result) return c.json({ error: "当前回合已经结束或已被引导，验收阶段未写入" }, 409);
     const { updatedAt, timelineRecorded } = result;

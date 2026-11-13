@@ -148,7 +148,8 @@ const BUDGETS: Record<string, number> = {
   "mcp/read_task_transcript": 1150,
   // 2026-11-03 +100（1952 → 2119 实测）：`recurs` 字段说明（`RECURS_FIELD_GUIDE`，≤ 200B），
   // 审查者声明同类问题承接的唯一入口。用户给的预算是「字段说明 ≤ 200 + 清单旁一句 ≤ 120」。
-  "mcp/report_stage": 2150,
+  // 2026-11-13 -330（2119 → 1791 实测）：旧口径的 `verificationBasis` 参数随那道闸一起删掉。
+  "mcp/report_stage": 1820,
   "mcp/requeue_task": 560,
   "mcp/resolve_group": 530,
   "mcp/resolve_project": 250,
