@@ -60,7 +60,6 @@ function AgentRow({
       <MessageFooter
         turnUsage={row.usage}
         session={row.showSessionMeta ? row.session : null}
-        sessionUsage={row.sessionUsage}
         sessionContext={row.sessionContext}
       />
     </article>

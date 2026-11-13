@@ -178,6 +178,11 @@ try {
   assert.equal(hasUsage(total), true);
   assert.equal(formatTokens(1_234), "1,234");
   assert.equal(formatTokens(49_024), "49.0k");
+  assert.equal(formatTokens(7_285_391), "7.29M");
+  assert.equal(formatTokens(386_420_000), "386.42M");
+  assert.equal(formatTokens(2_345_678_901), "2.35B", "几十亿不该写成「2345.68M」");
+  assert.equal(formatTokens(999_960), "1.00M", "舍入够到下一档要进位，不写「1000.0k」");
+  assert.equal(formatTokens(999_996_000), "1.00B");
   assert.equal(formatCost(null), null);
   assert.equal(formatCost(0.004), "<$0.01");
   assert.equal(formatCost(4.08), "$4.08");

@@ -6,11 +6,14 @@ import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
 
 /**
- * 「这一轮花了多少 token / 这条会话至今累计多少」的那颗胶囊：面上只有一个数，点开是明细。
+ * 「这一轮花了多少 token」的那颗胶囊：面上只有一个数，点开是明细。会话累计不显示
+ * （用户 2026-11-13）。
  *
  * 住两处：任务会话的回合尾那一排（派生和「更多」之间，跟那一排一起指到才出），团队流
- * 气泡的尾栏（本轮一颗、会话最后一条再多一颗累计）。上下文水位那颗（ContextMeterChip）
- * 借这颗的外形，两颗并排时长得像一家人。
+ * 气泡的尾栏。上下文水位那颗（ContextMeterChip）借这颗的外形，两颗并排时长得像一家人。
+ *
+ * 面上和明细里的数都走 formatTokens：一万以下照写，往上按 k / M / B 收成三四位有效数字
+ * ——几千万、几亿的时候写到个位只是一串读不过来的数。精确值留在读屏名里。
  *
  * 口径三条，都不在这里做决定、只负责如实显示：
  * ① 数字是**所有**进出模型的 token（缓存读也算），归一化在 `shared/src/usage.ts`；
@@ -19,16 +22,7 @@ import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
  *    或 @ 了别人插一手，各算各的，任何地方都不许把不同 agent 的账加成一个数
  *    —— 单价不同，加起来那个数不代表任何东西（用户 2026-08-07 明确要求分开）。
  */
-export function TokenUsageChip({
-  usage,
-  scope = "turn",
-  className,
-}: {
-  usage?: TokenUsage | null;
-  /** turn = 这一回合；session = 整条会话至今的累计。 */
-  scope?: "turn" | "session";
-  className?: string;
-}) {
+export function TokenUsageChip({ usage, className }: { usage?: TokenUsage | null; className?: string }) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -52,7 +46,6 @@ export function TokenUsageChip({
 
   if (!hasUsage(usage)) return null;
   const total = usageTotal(usage);
-  const name = scope === "turn" ? "本轮" : "累计";
 
   return (
     <>
@@ -62,10 +55,9 @@ export function TokenUsageChip({
         className={`token-usage-chip${className ? ` ${className}` : ""}`}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={`${name} ${formatTokensExact(total)} token；点击查看明细`}
+        aria-label={`本轮 ${formatTokensExact(total)} token；点击查看明细`}
         onClick={() => setOpen((current) => !current)}
       >
-        {scope === "session" && <span>累计</span>}
         <b>{formatTokens(total)}</b>
         <span>token</span>
       </button>
@@ -76,11 +68,11 @@ export function TokenUsageChip({
           tabIndex={-1}
           style={placementStyle(place)}
           role="dialog"
-          aria-label={`${name} Token 明细`}
+          aria-label="本轮 Token 明细"
         >
           <header>
-            <span>{name}{scope === "session" && usage.turns ? ` · ${usage.turns} 回合` : ""}</span>
-            <b>{formatTokensExact(total)}</b>
+            <span>本轮</span>
+            <b>{formatTokens(total)}</b>
           </header>
           <UsageBreakdown usage={usage} total={total} />
         </div>,
@@ -116,16 +108,16 @@ function UsageBreakdown({ usage, total }: { usage: TokenUsage; total: number }) 
       </div>
       <dl>
         {parts.map((part) => (
-          <div key={part.key}>
+          <div key={part.key} aria-label={`${part.label} ${formatTokensExact(usage[part.key])} token`}>
             <dt><i className={`is-${part.key}`} aria-hidden="true" />{part.label}</dt>
-            <dd>{formatTokensExact(usage[part.key])}</dd>
+            <dd>{formatTokens(usage[part.key])}</dd>
             <dd>{share(usage[part.key])}</dd>
           </div>
         ))}
         {usage.reasoning > 0 && (
           <div className="is-sub">
             <dt>其中思考</dt>
-            <dd>{formatTokensExact(usage.reasoning)}</dd>
+            <dd>{formatTokens(usage.reasoning)}</dd>
             <dd />
           </div>
         )}
