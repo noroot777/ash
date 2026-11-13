@@ -7,6 +7,7 @@ import { HighlightStyle, StreamLanguage, bracketMatching, indentUnit, syntaxHigh
 import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { tags } from "@lezer/highlight";
 import { MAX_PREVIEW_SCRIPT_LENGTH } from "@ash/shared/preview";
+import { localeNumber } from "../lib/localeFormat.ts";
 import "./shell-script-editor.css";
 
 // 项目里所有「写一段 shell 脚本」的编辑面：预览启动脚本（ProjectPreviewSettings）和常用
@@ -217,6 +218,6 @@ export function ShellScriptEditor({
       <span className="shell-editor__hint">{readOnly ? "拖底边调整高度 · 双击恢复自适应" : "Tab 缩进 · Esc 后按 Tab 移出 · 拖底边调整高度（双击恢复自适应）"}</span>
       <span className="shell-editor__grip" aria-hidden="true" />
     </div>
-    {limitReached && <div className="shell-editor__limit" role="alert">脚本最多 {maxLength.toLocaleString()} 个字符，本次输入未添加。</div>}
+    {limitReached && <div className="shell-editor__limit" role="alert">脚本最多 {localeNumber(maxLength)} 个字符，本次输入未添加。</div>}
   </div>;
 }

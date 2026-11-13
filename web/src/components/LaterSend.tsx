@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import type { Group, ScheduledMessage, TaskListItem } from "@ash/shared";
 import { Clock } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
+import { localeDateTime } from "../lib/localeFormat.ts";
 import type { DraftHandle } from "../lib/DraftStore.tsx";
 import { sendAfterOptions } from "../lib/sendAfter.ts";
 import { useRovingChoice } from "../lib/useRovingChoice.ts";
@@ -133,7 +134,7 @@ export function LaterSendKey({ later, action = "发送", empty, running = false,
       : empty ? "先写点内容"
         : blocked ?? (configured ? later.blocker : null);
   const tip = override ? override.action
-    : later.kind === "timed" && time ? `${time.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} 自动发出`
+    : later.kind === "timed" && time ? `${localeDateTime(time, "zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} 自动发出`
       : later.kind === "after" && target ? `等「${target.title || "未命名任务"}」完成后发出`
         : running ? "排队，这一轮结束后发出" : null;
   return (

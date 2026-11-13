@@ -52,6 +52,7 @@ import { MemoSelectionScope } from "../task-memos/MemoSelectionScope.tsx";
 import { stageSideChatQuote } from "../side-chat/sideChatQuote.ts";
 import { useAddReplyQuote } from "./replyQuote.ts";
 import { useReuseInput } from "./ReuseInput.tsx";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 
 export function TaskDetail({
@@ -595,7 +596,7 @@ export function TaskDetail({
                               : "任务在队列中等待，已排队；轮到它时自动发出")
                             : result.message.mode === "after"
                               ? `已安排在「${allTasks.find((item) => item.id === result.message.afterTaskId)?.title || "所选任务"}」完成后发送`
-                              : `已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送`);
+                              : `已安排 ${localeDateTime(result.message.sendAt)} 发送`);
                           return result;
                         }
                         if ("command" in result) {

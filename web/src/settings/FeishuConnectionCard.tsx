@@ -6,6 +6,7 @@ import { api } from "../lib/api.ts";
 import { FeishuSetupGuide } from "./FeishuSetupGuide.tsx";
 import { FeishuUsage } from "./FeishuUsage.tsx";
 import { NOT_CONNECTING, agoText, connectionView, formatTime } from "./feishuText.ts";
+import { localeTime } from "../lib/localeFormat.ts";
 
 // 连接卡：机器人此刻在不在线、为什么不在线、额度还剩多少。
 //
@@ -51,7 +52,7 @@ export function FeishuConnectionCard({ status, pollError, syncedAt, onStatus, no
             {pollError && (
               <small className="feishu-stale">
                 最近一次读取状态失败：{pollError}
-                {syncedAt ? `。上面显示的是 ${new Date(syncedAt).toLocaleTimeString("zh-CN")} 的状态` : ""}
+                {syncedAt ? `。上面显示的是 ${localeTime(syncedAt, "zh-CN")} 的状态` : ""}
               </small>
             )}
           </div>

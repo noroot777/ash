@@ -10,6 +10,7 @@ import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { toggleArchive } from "../lib/archive.ts";
 import { Select } from "../components/Select.tsx";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 // 归档那一下会不会连磁盘一起收。实例面的设置（不是一人一份）：它改的是这台机器上
 // 归档的行为，多人模式下只有实例管理员能动 —— 真正的闸在服务端，这里只是别把改不动
@@ -78,7 +79,7 @@ export function ArchiveSettings({ project, tasks, onTaskUpdated, notify }: {
             <div>
               <b>{task.title}</b>
               <small>
-                {task.mode === "team" ? "团队" : task.mode === "duet" ? "讨论" : "任务"} · {task.archivedAt ? new Date(task.archivedAt).toLocaleString("zh-CN") : "归档时间未知"} ·{" "}
+                {task.mode === "team" ? "团队" : task.mode === "duet" ? "讨论" : "任务"} · {task.archivedAt ? localeDateTime(task.archivedAt, "zh-CN") : "归档时间未知"} ·{" "}
                 <CopyButton className="settings-archive-id" value={task.id} label={task.id} ariaLabel="复制任务 id" />
               </small>
             </div>

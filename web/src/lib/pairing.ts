@@ -1,3 +1,4 @@
+import { localeDate } from "./localeFormat.ts";
 // 设备配对在界面上的两处(顶条、设置页的「远程访问」卡)共用的小东西。
 
 /** 一处处理完申请后喊一声,另一处立刻重读,不必等下一轮轮询。 */
@@ -12,7 +13,7 @@ export function seenLabel(iso: string): string {
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours} 小时前`;
   const days = Math.floor(hours / 24);
-  return days < 30 ? `${days} 天前` : new Date(at).toLocaleDateString();
+  return days < 30 ? `${days} 天前` : localeDate(at);
 }
 
 /**
