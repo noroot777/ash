@@ -296,3 +296,25 @@
   line-height: 1.7;
   color: var(--muted);
 }
+
+/* 配对页的四位数：两边各显示一份，机主靠它认设备，所以要一眼读得出。 */
+.auth-pair-code {
+  align-self: center;
+  padding: 6px 0 2px;
+  font-family: var(--font-mono);
+  font-size: 40px;
+  font-weight: var(--w-strong);
+  letter-spacing: 0.28em;
+  /* 字距加在每个字后面，最后一个字后的那一截会把整串数字挤偏。 */
+  margin-right: -0.28em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+/* 机主那一侧（顶条、设置页）行文里的配对码：和设备上那串大数字是同一个，要从句子里跳出来。 */
+.pair-code {
+  font-family: var(--font-mono);
+  font-weight: var(--w-strong);
+  letter-spacing: 0.08em;
+  color: var(--ink);
+}

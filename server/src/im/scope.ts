@@ -13,6 +13,8 @@
 //   room       聊天房间里智能体的回复 —— 房间还在、还归他、他还看得见；群聊房间还要群还绑着那个项目、
 //              这间还是他在这个群里的那一间；回复下面列出的任务（taskIds）也逐个核他还看得见；
 //   digest     列了一串别的卡（汇总卡、/todo）—— 逐行按那几行自己的来源核。
+//   instance   这台 ash 自己的事，不属于哪个项目（新设备申请连进来，pairing.ts）—— 只发单聊，只给自用模式的机主：
+//              多人模式下没有机主，实例的事归管理员在网页上办。
 //   reply      回给发话人的、他自己这次操作的结局（接口报错、拒绝的原因）—— 话是接口以他的身份算出来的，可报错
 //              原文常带着项目名、命令、路径，所以出口照样核：还是请求进来那一刻的那个人（单聊的绑定 / 群的绑定
 //              加发起人的绑定，都按那一刻的实例 —— Origin，不在操作办完之后按「现在的收件人」重新盖）、他此刻
@@ -28,7 +30,7 @@
 // 回给一次请求的东西（命令回执、确认卡、/todo 清单、房间回复、报错 —— request）一律按请求进来那一刻盖
 // （requestScope，Origin），连 task 也认那一刻的实例：活是替那一次绑定的那个人办的，办着的时候换绑给了
 // 另一个账号，此刻的绑定就是另一个人（审查第 2 轮实测：/project 取完列表时换绑，列表盖上新账号的实例照发）。
-// 只有给此刻订阅者的通知（决策卡、汇总卡，reconcile.ts）才按此刻的绑定盖（scopeFor）。正文里列着哪些
+// 只有给此刻订阅者的通知（决策卡、汇总卡，reconcile.ts；配对卡，pairing.ts）才按此刻的绑定盖（scopeFor）。正文里列着哪些
 // 资源也要记进来（projects、room 的 taskIds），出口逐个现核：只记「是谁」核不出列表里哪一项已经看不到了。
 //
 // 来源落了库（im_outbox / im_inbound 的 scope 列），会跨重启、跨升级活着：旧版本写下的那份缺什么，就当认不出
@@ -41,6 +43,7 @@ import { chatRooms, tasks } from "../db/schema.js";
 import { imOutbox } from "../db/schema-im.js";
 import { canSeeProject } from "../auth/visibility.js";
 import { imActorFor } from "../auth/im-actor.js";
+import { isMultiUser } from "../auth/mode.js";
 import type { Actor } from "../auth/context.js";
 import { roomVisibleTo } from "../chat/route-access.js";
 import { bindingOf, CHANNEL, ownerKeyOf, type BindingRow } from "./binding.js";
@@ -59,6 +62,7 @@ export type ScopeBody =
   | { kind: "projects"; projectIds: string[] }
   | { kind: "room"; roomId: string; projectId: string | null; taskIds?: string[] }
   | { kind: "digest"; rowIds: string[] }
+  | { kind: "instance" }
   | { kind: "reply"; projectId: string | null };
 
 /**
@@ -115,7 +119,7 @@ export function requestScope(origin: Origin, body: ScopeBody): OutboxScope {
 /** 回给一次请求的行：commands.ts 的回执（reply）和确认卡（confirm）、actions.ts 按钮没办成的原因（fail）。 */
 const REQUEST_ROW_KINDS: readonly string[] = ["reply", "confirm", "fail"];
 /** 给此刻订阅者的通知用的来源（reconcile.ts），写法从第一版起没变过；其余几种只该由 requestScope 写。 */
-const SUBSCRIBER_SCOPES: readonly string[] = ["task", "digest"];
+const SUBSCRIBER_SCOPES: readonly string[] = ["task", "digest", "instance"];
 
 /** 这一行是不是回给一次请求的（核不过换成固定说明，exits.ts withhold）：按 kind 列认，旧版本的来源里没有标记。 */
 export function answersRequest(row: Pick<OutboxRow, "scope" | "kind" | "taskId">): boolean {
@@ -200,6 +204,9 @@ export async function admit(appId: string, row: OutboxRow, titleOnly: readonly s
       // 群里的这一句要认得出是谁发起的：旧版本入队的没记，不发原文。
       if (viewer.group && !viewer.actor) return deny("没记下是谁发起的");
       return scope.projectId ? projectAdmission(viewer, scope.projectId, titleOnly) : pass();
+    case "instance":
+      if (viewer.group) return deny("个人的信息不发到群里");
+      return await isMultiUser() ? deny("多人模式下没有机主") : pass();
     case "digest": {
       if (nested) return deny("汇总里套汇总");
       for (const id of scope.rowIds) {

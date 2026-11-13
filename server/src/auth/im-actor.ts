@@ -82,6 +82,8 @@ const IM_ROUTES: ReadonlyArray<readonly [ImCall["method"], RegExp]> = [
   ["POST", /^\/api\/chats\/[^/]+\/(?:messages|stop)$/],
   // 飞书里发来的图片/文件转存
   ["POST", /^\/api\/uploads$/],
+  // 配对卡上的「允许 / 拒绝」(im/pairing.ts)。设备名册、出码、请设备出去、访问密钥都不在名单里
+  ["POST", /^\/api\/remote-access\/requests\/[^/]+\/(?:approve|deny)$/],
 ];
 
 export function imRouteAllowed(method: string, path: string): boolean {
