@@ -22,38 +22,122 @@ const { addUsage, isTokenUsage, outputRate } = await import("@ash/shared/usage")
 
 try {
   // ── ① codex:真实通知顺序(取自 2026-11-13 的 app-server 原始输出,时间戳换成小整数)
-  {
+  const codexTimer = () => {
     const t = new CodexRequestTimer();
-    const item = (method: string, type: string, at: number) =>
-      t.notification(method, { item: { type }, [method === "item/started" ? "startedAtMs" : "completedAtMs"]: at });
+    // at 传 null = 这条通知没带时间戳。
+    const item = (method: "item/started" | "item/completed", type: string, id: string | null, at: number | null) =>
+      t.notification(method, {
+        item: { type, ...(id ? { id } : {}) },
+        ...(at === null ? {} : { [method === "item/started" ? "startedAtMs" : "completedAtMs"]: at }),
+      });
     const usage = (outputTokens: number) => t.notification("thread/tokenUsage/updated", { tokenUsage: { last: { outputTokens } } });
-
-    item("item/started", "userMessage", 0);
-    item("item/completed", "userMessage", 0);
+    return { t, start: (type: string, id: string | null, at: number | null) => item("item/started", type, id, at),
+      done: (type: string, id: string | null, at: number | null) => item("item/completed", type, id, at), usage };
+  };
+  {
+    const { t, start, done, usage } = codexTimer();
+    start("userMessage", "u", 0);
+    done("userMessage", "u", 0);
     // 第 1 次请求:先说一句话再调命令,命令瞬间跑完,用量随后到。
-    item("item/started", "agentMessage", 5_000);
-    item("item/completed", "agentMessage", 5_100);
-    item("item/started", "commandExecution", 8_000); // 模型写完调用 = 这次请求的终点
-    item("item/completed", "commandExecution", 8_010); // 结果回来 = 下次请求的起点
+    start("agentMessage", "m1", 5_000);
+    done("agentMessage", "m1", 5_100);
+    start("commandExecution", "c1", 8_000); // 模型写完调用 = 这次请求的终点
+    done("commandExecution", "c1", 8_010); // 结果回来 = 下次请求的起点
     usage(160);
     // 第 2 次请求:命令跑了 6 秒,用量在命令跑着时就到了。
-    item("item/started", "reasoning", 15_010);
-    item("item/completed", "reasoning", 17_000);
-    item("item/started", "commandExecution", 18_010);
+    start("reasoning", "r2", 15_010);
+    done("reasoning", "r2", 17_000);
+    start("commandExecution", "c2", 18_010);
     usage(200);
-    item("item/completed", "commandExecution", 24_010);
+    done("commandExecution", "c2", 24_010);
     // 第 3 次请求:只有一个工具调用,没有思考也没有正文。
-    item("item/started", "commandExecution", 29_010);
-    item("item/completed", "commandExecution", 29_020);
+    start("commandExecution", "c3", 29_010);
+    done("commandExecution", "c3", 29_020);
     usage(40);
 
     assert.deepEqual(t.take(), { output: 400, ms: 8_000 + 10_000 + 5_000 }, "起点 = 输入齐的时刻,终点 = 模型最后写出的东西;工具耗时一律不算");
     assert.equal(t.take(), undefined, "take 之后清零");
 
     // 新回合:上一回合残留的「输入齐了」时刻不能当成这一回合第一次请求的起点。
-    item("item/started", "agentMessage", 40_000);
+    start("agentMessage", "m4", 40_000);
+    done("agentMessage", "m4", 41_000);
     usage(50);
     assert.equal(t.take(), undefined, "看不见起点(接管、缺用户消息)的请求整次不计");
+  }
+
+  // 同一次回复里两个工具串行:后一个等前一个跑完才开始,它的开始不是「模型刚写完」的凭据。
+  for (const firstToolMs of [0, 10_000]) {
+    const { t, start, done, usage } = codexTimer();
+    done("userMessage", "u", 0);
+    start("reasoning", "r", 1_000);
+    done("reasoning", "r", 2_000);
+    start("commandExecution", "a", 2_000);
+    done("commandExecution", "a", 2_000 + firstToolMs);
+    start("commandExecution", "b", 2_000 + firstToolMs);
+    done("commandExecution", "b", 2_000 + firstToolMs);
+    usage(100);
+    assert.equal(t.take(), undefined, `工具已经跑完之后才冒出来的东西分不清是在写还是在排队,整次不计(前一个工具 ${firstToolMs}ms)`);
+  }
+
+  // 同一次回复里并行开出去的两个工具:都在任何一个跑完之前开始,最后那个开始就是终点。
+  {
+    const { t, start, done, usage } = codexTimer();
+    done("userMessage", "u", 0);
+    start("commandExecution", "a", 1_000);
+    start("commandExecution", "b", 1_500);
+    done("commandExecution", "a", 9_000);
+    done("commandExecution", "b", 9_000);
+    usage(60);
+    assert.deepEqual(t.take(), { output: 60, ms: 1_500 });
+  }
+
+  // 模型条目缺终点:收尾通知没带时间戳 / 收尾通知压根没来。
+  for (const ending of ["untimed", "missing"] as const) {
+    const { t, start, done, usage } = codexTimer();
+    done("userMessage", "u", 0);
+    start("agentMessage", "m", 1_000);
+    if (ending === "untimed") done("agentMessage", "m", null);
+    usage(100);
+    assert.equal(t.take(), undefined, `模型条目结束时间未知(${ending}),整次不计`);
+  }
+
+  // 起点缺凭据:工具结果没带时间戳,下一次请求不能捡上上次的「输入齐了」当起点;用过的起点作废。
+  {
+    const { t, start, done, usage } = codexTimer();
+    done("userMessage", "u", 0);
+    start("reasoning", "r1", 1_000);
+    done("reasoning", "r1", 1_500);
+    start("commandExecution", "a", 2_000);
+    usage(100);
+    done("commandExecution", "a", null);
+    start("reasoning", "r2", 12_000);
+    done("reasoning", "r2", 13_000);
+    usage(100);
+    assert.deepEqual(t.take(), { output: 100, ms: 2_000 }, "只留起止完整的第一次请求");
+  }
+  {
+    const { t, start, done, usage } = codexTimer();
+    done("userMessage", "u", 0);
+    start("agentMessage", "m1", 1_000);
+    done("agentMessage", "m1", 2_000);
+    usage(100);
+    // 上一次请求没开工具,这一次之前也没有新的输入时刻。
+    start("agentMessage", "m2", 5_000);
+    done("agentMessage", "m2", 6_000);
+    usage(100);
+    assert.deepEqual(t.take(), { output: 100, ms: 2_000 }, "起点用过一次就作废");
+  }
+  {
+    const { t, start, done, usage } = codexTimer();
+    done("userMessage", "u", 0);
+    start("agentMessage", "m1", 1_000);
+    done("agentMessage", "m1", 2_000);
+    usage(100);
+    done("userMessage", "u2", null); // 中途插话没带时间戳:不能退回去用更早的时刻
+    start("agentMessage", "m2", 5_000);
+    done("agentMessage", "m2", 6_000);
+    usage(100);
+    assert.deepEqual(t.take(), { output: 100, ms: 2_000 }, "输入时刻缺凭据的那次请求不计");
   }
 
   // ── ① claude:message_start(带 ttft_ms)/ message_delta / message_stop,子智能体交错

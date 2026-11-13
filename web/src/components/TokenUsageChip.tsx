@@ -123,9 +123,9 @@ function UsageBreakdown({ usage, total }: { usage: TokenUsage; total: number }) 
           </div>
         )}
         {rate !== null && (
-          <div className="is-sub" aria-label={`输出速度每秒 ${Math.round(rate)} token`}>
+          <div className="is-sub" aria-label={`输出速度每秒 ${formatRate(rate)} token`}>
             <dt>速度</dt>
-            <dd>{Math.round(rate)}/s</dd>
+            <dd>{formatRate(rate)}/s</dd>
             <dd />
           </div>
         )}
@@ -133,3 +133,6 @@ function UsageBreakdown({ usage, total }: { usage: TokenUsage; total: number }) 
     </>
   );
 }
+
+/** 慢到个位数时留一位小数,不然 0.4 会写成 0,读着像「没在出字」。 */
+const formatRate = (rate: number) => (rate < 10 ? rate.toFixed(1) : String(Math.round(rate)));

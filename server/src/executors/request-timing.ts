@@ -64,43 +64,104 @@ export class ClaudeRequestTimer {
  *  - 起点 = 这次请求第一次出货之前,最后一个工具结果(或用户消息)完成的时刻 —— 输入齐了才发得出去;
  *  - 终点 = 模型这次写出来的最后一样东西:思考/正文的完成,或工具调用的开始(调用参数写完,
  *    工具才开跑)。工具跑多久不算模型的时间。
+ *
+ * 两头都要**有凭据**才计,哪一头说不清就整次丢掉:
+ *  - 起点:上一次请求开出去的工具必须全都带时间戳收了尾,否则不知道输入何时齐;一个「输入齐了」
+ *    的时刻只给紧接着的那一次请求用,用过就作废,不会被再下一次请求捡去当起点。
+ *  - 终点:这次的思考/正文都得带时间戳收尾;同一次回复里有工具已经跑完、之后才又冒出东西的,
+ *    分不清那是模型还在写、还是后一个工具在排队等前一个,也不计。
  */
 export class CodexRequestTimer {
   private ready: number | null = null;
-  private start: number | null = null;
-  private last: number | null = null;
+  private inputUnknown = false;
+  private readonly pendingTools = new Set<string>();
+  private response: CodexResponse | null = null;
   private readonly total = new TimingTotal();
 
   notification(method: string, p: any): void {
     const type = p?.item?.type;
-    if (method === "item/started" && typeof type === "string" && type !== "userMessage") {
-      this.produced(p.startedAtMs);
-    } else if (method === "item/completed" && typeof type === "string") {
-      if (type === "userMessage" || !MODEL_ITEMS.has(type)) this.inputReady(p.completedAtMs);
-      else this.produced(p.completedAtMs);
+    const id = typeof p?.item?.id === "string" ? p.item.id : null;
+    if (typeof type === "string" && type !== "userMessage" && method === "item/started") {
+      this.started(type, id, p.startedAtMs);
+    } else if (typeof type === "string" && method === "item/completed") {
+      this.completed(type, id, p.completedAtMs);
     } else if (method === "thread/tokenUsage/updated") {
+      const r = this.response;
+      this.response = null;
       const output = p?.tokenUsage?.last?.outputTokens;
-      if (this.start !== null && this.last !== null && typeof output === "number") this.total.add(output, this.last - this.start);
-      this.start = null;
-      this.last = null;
+      if (r && !r.broken && r.start !== null && r.last !== null && r.openModel.size === 0 && typeof output === "number") {
+        this.total.add(output, r.last - r.start);
+      }
     }
   }
 
   take(): OutputTiming | undefined {
     this.ready = null;
+    this.inputUnknown = false;
+    this.pendingTools.clear();
+    this.response = null;
     return this.total.take();
   }
 
-  private inputReady(at: unknown): void {
-    if (typeof at === "number") this.ready = Math.max(this.ready ?? at, at);
+  private started(type: string, id: string | null, at: unknown): void {
+    const r = this.current();
+    const tool = !MODEL_ITEMS.has(type);
+    if (tool) {
+      if (id) this.pendingTools.add(id);
+      else this.inputUnknown = true; // 认不出是谁,就等不到它收尾:下一次请求的起点从此说不清
+    }
+    if (typeof at !== "number" || !id || r.toolDoneAt !== null || (r.start !== null && at < r.start)) {
+      r.broken = true;
+      return;
+    }
+    r.last = Math.max(r.last ?? at, at);
+    if (tool) r.tools.add(id);
+    else r.openModel.add(id);
   }
 
-  private produced(at: unknown): void {
-    if (typeof at !== "number") return;
-    if (this.last === null) this.start = this.ready !== null && this.ready <= at ? this.ready : null;
-    this.last = Math.max(this.last ?? at, at);
+  private completed(type: string, id: string | null, at: unknown): void {
+    const timed = typeof at === "number";
+    if (type === "userMessage") {
+      if (timed) this.ready = Math.max(this.ready ?? at, at);
+      else this.inputUnknown = true;
+      return;
+    }
+    if (MODEL_ITEMS.has(type)) {
+      const r = this.response;
+      if (!r) return;
+      if (!id || !r.openModel.delete(id) || !timed) r.broken = true;
+      else r.last = Math.max(r.last ?? at, at);
+      return;
+    }
+    if (!id || !this.pendingTools.has(id) || !timed) return; // 没带时间戳就留在 pendingTools 里
+    this.pendingTools.delete(id);
+    this.ready = Math.max(this.ready ?? at, at);
+    if (this.response?.tools.has(id)) this.response.toolDoneAt ??= at;
+  }
+
+  /** 这一次请求;第一次出货时开出来,同时认领(并作废)那个「输入齐了」的时刻。 */
+  private current(): CodexResponse {
+    if (!this.response) {
+      const known = !this.inputUnknown && this.pendingTools.size === 0;
+      this.response = { start: known ? this.ready : null, last: null, openModel: new Set(), tools: new Set(), toolDoneAt: null, broken: false };
+      this.ready = null;
+      this.inputUnknown = false;
+    }
+    return this.response;
   }
 }
+
+type CodexResponse = {
+  start: number | null;
+  last: number | null;
+  /** 开始了、还没带时间戳收尾的思考/正文。 */
+  openModel: Set<string>;
+  /** 这次回复里开跑的工具。 */
+  tools: Set<string>;
+  /** 这次回复里第一个工具跑完的时刻。 */
+  toolDoneAt: number | null;
+  broken: boolean;
+};
 
 /** 模型自己写出来的 item。其余(命令、MCP、改文件、看图…)都是工具:开始 = 模型写完调用,完成 = 结果回来。 */
 const MODEL_ITEMS = new Set(["reasoning", "agentMessage", "plan"]);
