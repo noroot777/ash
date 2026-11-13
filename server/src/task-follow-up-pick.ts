@@ -21,3 +21,24 @@ export function latestFollowUp<T extends { at?: string | null }>(candidates: { s
   }
   return best?.seg ?? null;
 }
+
+/**
+ * 一个任务的全部追问排成一条从旧到新的线（侧栏铺开时悬停「追问」那一格要全列出来）。
+ *
+ * 口径跟 `latestFollowUp` 是同一套，排在最后的那句必然就是它挑出来的那句：按发言时刻比；
+ * 没时刻的老发言算比有时刻的都旧，彼此按会话开始先后（`order` 大 = 开始得早 = 更旧）；
+ * 同一条会话里时刻相同的，保留它们在正文里的先后（`index`）。
+ */
+export function orderFollowUps<T extends { at?: string | null }>(
+  candidates: { seg: T; order: number; index: number }[],
+): T[] {
+  return [...candidates]
+    .sort((a, b) => {
+      const at = a.seg.at ?? "";
+      const bt = b.seg.at ?? "";
+      if (at !== bt) return at < bt ? -1 : 1;
+      if (a.order !== b.order) return b.order - a.order;
+      return a.index - b.index;
+    })
+    .map((candidate) => candidate.seg);
+}

@@ -384,6 +384,37 @@
   white-space: pre-wrap;
 }
 
+/* 悬停「追问」时列的全部追问：新的在上，一条一段。整列一起滚（而不是每条各自滚），
+   翻旧的那几条时不会在一张小卡里套出好几个滚动条。 */
+.workspace-spread-peek-asks {
+  max-height: 52vh;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workspace-spread-peek-asks li + li {
+  margin-top: 9px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.workspace-spread-peek-asks time {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+}
+
+.workspace-spread-peek-asks p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+
 /* 悬浮卡里追问下面那一段备忘。上面一道分隔线：两段都是「我自己写的字」，不隔开的话
    会被读成同一条的下半截。 */
 .workspace-spread-peek-memo {

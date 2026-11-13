@@ -8,6 +8,7 @@ import { Image as ImageIcon, NotePencil } from "@phosphor-icons/react";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
 import type { SidebarSpread } from "./useSidebarSpread.ts";
+import { useTaskFollowUpList } from "./useTaskFollowUpList.ts";
 
 // 悬停多久才弹（扫列表时鼠标横穿一片行，立刻弹会一路闪），移开多久才收（留一段
 // 时间让鼠标从格子挪到卡片上，否则卡片里的图点不到）。
@@ -53,7 +54,6 @@ function firstLine(text: string): string {
   return text.split("\n").map((line) => line.trim()).find(Boolean) ?? "";
 }
 
-type Peeked = { title: string; subtitle: string; text: string; paths: string[] };
 
 /**
  * 追问那一格此刻该显示哪一样（用户 2026-10-28：「哪个的日期新就显示哪个」）。
@@ -88,24 +88,32 @@ const NO_FOLLOW_UP = "还没追问过";
 
 // raw 是这个任务的正文，undefined = 还没从后端读到（列表接口不带正文）。跟追问那一列
 // 同一条规矩：没读到就说没读到，不能写成「这个任务没有写需求」——那是在编。
-function peekContent(
+function bodyPeek(raw: string | undefined): { text: string; paths: string[] } {
+  const { body, paths } = parseAttachmentText(raw ?? "");
+  return { text: raw === undefined ? "还没读到这个任务的需求。" : (body || "这个任务没有写需求。"), paths };
+}
+
+/**
+ * 悬停「追问」那一格时卡片里列的那几条：我发过的**全部**追问，新的在上（跟外面那一格
+ * 显示的是同一句打头）。全部那份要悬停时单问一次（useTaskFollowUpList），没到之前先拿
+ * 铺开时批量取到的最后一条顶着 —— 那时还不知道一共几条，所以 `complete` 是 false，
+ * 不能写「1 条」。
+ */
+function askPeek(
   task: TaskListItem,
-  kind: PeekKind,
+  list: TaskFollowUp[] | undefined,
   last: TaskFollowUp | undefined,
   known: boolean,
-  raw: string | undefined,
-): Peeked {
-  if (kind === "body") {
-    const { body, paths } = parseAttachmentText(raw ?? "");
-    const text = raw === undefined ? "还没读到这个任务的需求。" : (body || "这个任务没有写需求。");
-    return { title: "原始需求", subtitle: task.title || "未命名任务", text, paths };
-  }
-  return {
-    title: "后续追问",
-    subtitle: last ? `我发的最新一条 · ${compactAge(last.at ?? task.updatedAt)}` : (known ? NO_FOLLOW_UP : "还没读到"),
-    text: last?.text || (known ? "这个任务你还没有追问过 —— 只有原始需求。" : "还没读到这个任务的追问。"),
-    paths: last?.attachments ?? [],
-  };
+): { asks: TaskFollowUp[]; complete: boolean; subtitle: string; empty: string } {
+  const complete = list !== undefined;
+  const asks = complete ? [...list].reverse() : (last ? [last] : []);
+  const knownNone = complete || known;
+  const newest = asks[0];
+  const subtitle = newest
+    ? `${complete ? `${asks.length} 条 · ` : ""}最近 ${compactAge(newest.at ?? task.updatedAt)}`
+    : (knownNone ? NO_FOLLOW_UP : "还没读到");
+  const empty = knownNone ? "这个任务你还没有追问过 —— 只有原始需求。" : "还没读到这个任务的追问。";
+  return { asks, complete, subtitle, empty };
 }
 
 // 备忘不止一条时在右端标一下：这一格只放得下最新那条，不标的话「还有别的」这件事
@@ -235,7 +243,10 @@ export function SpreadPeekCard({
 }) {
   const card = useRef<HTMLDivElement | null>(null);
   const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
-  const { title, subtitle, text, paths } = peekContent(peek.task, peek.kind, last, known, body);
+  const list = useTaskFollowUpList(peek.task, peek.kind === "last");
+  const ask = peek.kind === "last" ? askPeek(peek.task, list, last, known) : null;
+  const need = ask ? null : bodyPeek(body);
+  const hasImages = ask ? ask.asks.some((item) => item.attachments.length > 0) : (need?.paths.length ?? 0) > 0;
 
   // 排进全局的浮层栈：Esc 一次只退一层，所以这张卡片开着时那一下 Esc 归它，
   // 收起铺开得再按一次。大图开着时让给大图 —— 它是压在卡片上面的那一层。
@@ -253,7 +264,8 @@ export function SpreadPeekCard({
       ? Math.max(PEEK_MARGIN, peek.rect.top - size.height - 8)
       : below;
     setPlaced({ left: Math.round(left), top: Math.round(top) });
-  }, [peek]);
+    // 全部追问是悬停后才到的，到了卡片会变高 —— 得重新量一次，不然往下弹的会顶出屏幕。
+  }, [peek, list]);
 
   return createPortal(
     <div
@@ -265,10 +277,25 @@ export function SpreadPeekCard({
       onMouseLeave={onLeave}
     >
       <div className="workspace-spread-peek-head">
-        <b>{title}</b>
-        <span>{subtitle}</span>
+        <b>{ask ? "后续追问" : "原始需求"}</b>
+        <span>{ask ? ask.subtitle : (peek.task.title || "未命名任务")}</span>
       </div>
-      <p>{text}</p>
+      {need && <p>{need.text}</p>}
+      {need && need.paths.length > 0 && <MessageAttachments paths={need.paths} />}
+      {ask && (ask.asks.length ? (
+        <ol className="workspace-spread-peek-asks">
+          {ask.asks.map((item, index) => (
+            <li key={`${item.at ?? "old"}:${index}`}>
+              {/* 只有一条时时间已经在标题行上，不再每条重复一遍。 */}
+              {ask.asks.length > 1 && (
+                <time dateTime={item.at ?? undefined}>{item.at ? compactAge(item.at) : "早先"}</time>
+              )}
+              {item.text && <p>{item.text}</p>}
+              {item.attachments.length > 0 && <MessageAttachments paths={item.attachments} />}
+            </li>
+          ))}
+        </ol>
+      ) : <p>{ask.empty}</p>)}
       {/* 备忘排在追问**下面**（用户 2026-10-28 指定的位置）：两样都在这一张卡里，谁新
           只决定外面那一格显示哪条，不决定这里的先后 —— 先后固定，读起来才不会每次都变。 */}
       {peek.kind === "last" && memo && (
@@ -280,15 +307,10 @@ export function SpreadPeekCard({
           <p>{memo.text}</p>
           {/* 追问还没读到的那些行（只读头一批）：外面那一格显示的是备忘，但那不是
               「它更新」的结论 —— 没读到的东西不能拿来比（第 2 轮审查 N2）。 */}
-          {!known && <p className="workspace-spread-peek-caveat">这个任务的追问还没读到，所以不确定哪一条更新。</p>}
+          {!known && !ask?.complete && <p className="workspace-spread-peek-caveat">这个任务的追问还没读到，所以不确定哪一条更新。</p>}
         </div>
       )}
-      {paths.length > 0 && (
-        <>
-          <MessageAttachments paths={paths} />
-          <div className="workspace-spread-peek-tip">点图看大图 · <kbd>←</kbd><kbd>→</kbd> 翻页 · <kbd>Esc</kbd> 关</div>
-        </>
-      )}
+      {hasImages && <div className="workspace-spread-peek-tip">点图看大图 · <kbd>←</kbd><kbd>→</kbd> 翻页 · <kbd>Esc</kbd> 关</div>}
     </div>,
     document.body,
   );
