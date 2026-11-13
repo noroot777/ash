@@ -254,6 +254,27 @@ try {
   check("洗过的副本开机不接着做源实例的任何审查收尾", reviewFootprint(file) === washed, true);
   check("也没有替它重投修复", repairQueued(reviewFootprint(file)), false);
   check("再洗一遍没有要停的、也没有要改的路径", prepareImportedSnapshot(file, [source], target), { held: {}, relocated: 0 });
+
+  // 按值的格式改路径（第 3 轮审查 F3）：源根、目标根里都带 `"` 和 `\`，值有 JSON 数组、JSON 里套 JSON、
+  // 带大整数的 JSON、普通文本。
+  const quoted = join(root, "quoted.db");
+  const from = join(root, 'old"da\\ta');
+  const to = join(root, 'new"da\\ta-$&');
+  const small = new DatabaseSync(quoted);
+  small.exec("CREATE TABLE notes(id TEXT PRIMARY KEY, attachments TEXT, extra TEXT)");
+  const nested = `{"big":12345678901234567890,"payload":${JSON.stringify(JSON.stringify({ dir: `${from}/runs/x` }))}}`;
+  small.prepare("INSERT INTO notes VALUES(?,?,?)").run("n1", JSON.stringify([`${from}/uploads/a.png`]), nested);
+  small.prepare("INSERT INTO notes VALUES(?,?,?)").run("n2", `日志在 ${from}/runs/y.log`, JSON.stringify({ p: `${from}/z` }).replaceAll("/", "\\/"));
+  small.close();
+  check("带引号、反斜杠的根：每个值都改到", prepareImportedSnapshot(quoted, [from], to).relocated, 4);
+  const reread = new DatabaseSync(quoted, { readOnly: true });
+  const note = (id: string) => reread.prepare("SELECT attachments, extra FROM notes WHERE id=?").get(id) as { attachments: string; extra: string };
+  check("JSON 数组里的路径解码后改、编码回去", JSON.parse(note("n1").attachments), [`${to}/uploads/a.png`]);
+  check("JSON 里套着的 JSON 一样改", JSON.parse(JSON.parse(note("n1").extra).payload), { dir: `${to}/runs/x` });
+  check("数字原样（不经过一次解析再序列化）", note("n1").extra.startsWith('{"big":12345678901234567890,'), true);
+  check("普通文本按原文改", note("n2").attachments, `日志在 ${to}/runs/y.log`);
+  check("把 / 写成 \\/ 的 JSON 也认得出", JSON.parse(note("n2").extra), { p: `${to}/z` });
+  reread.close();
 } finally {
   agent.kill("SIGKILL");
   rmSync(root, { recursive: true, force: true });

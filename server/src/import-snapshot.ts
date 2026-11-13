@@ -150,6 +150,12 @@ function holdRuntime(db: DatabaseSync): Record<string, number> {
 /**
  * 库里所有文本值里，落在源数据根下的绝对路径改到新数据根。认路径的边界：根前面不能紧挨着
  * 路径字符（否则是更长路径的一截；`file://` 例外），后面只能是 `/` 或路径结束（`data` 不会吃掉 `data2`）。
+ *
+ * **按值的格式改**（第 3 轮审查 F3）：很多列存的是 JSON（附件列表、等待凭证、收尾计划……，有的还是
+ * JSON 里再套一层 JSON 字符串）。在序列化文本上直接换，源根里带 `"`、`\` 时认不出转义后的那一份，
+ * 目标根里带它们时又会把 JSON 写坏。所以 JSON 值逐个字符串字面量解码、改路径、再编码放回原位
+ * （数字、空白、键序一个字节都不动），套着的那层 JSON 递归处理；不是 JSON 的才按原文改。
+ * 改完的 JSON 必须还能解析，否则整次导入失败，不发布一份坏库。
  */
 function relocatePaths(db: DatabaseSync, sourceRoots: string[], targetRoot: string): number {
   const roots = [...new Set(sourceRoots.map(trimSlash))].filter((root) => root.startsWith("/") && root !== trimSlash(targetRoot));
@@ -157,6 +163,17 @@ function relocatePaths(db: DatabaseSync, sourceRoots: string[], targetRoot: stri
   const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = new RegExp(`(?:(?<=file://)|(?<![\\w./~-]))(?:${roots.sort((a, b) => b.length - a.length).map(escape).join("|")})(?=/|$|[^\\w.~-])`, "g");
   const target = trimSlash(targetRoot);
+  // 回调返回字面量：目标路径里的 `$&`、`$$` 之类不能被当成替换模板展开（第 2 轮审查 F4）。
+  const rewrite = (text: string) => text.replace(pattern, () => target);
+  // 候选行的粗筛：源根原文，加上它在一层、两层、三层 JSON 字符串里的样子。
+  const encoded = new Set<string>();
+  for (const root of roots) {
+    let form = root;
+    for (let depth = 0; depth < 4; depth++, form = JSON.stringify(form).slice(1, -1)) {
+      encoded.add(form);
+      encoded.add(form.replaceAll("/", "\\/")); // 有的编码器把 / 写成 \/
+    }
+  }
   let relocated = 0;
   const tables = db.prepare(`SELECT name, wr FROM pragma_table_list WHERE schema='main' AND type='table' AND name NOT LIKE 'sqlite_%'`)
     .all() as { name: string; wr: number }[];
@@ -168,21 +185,40 @@ function relocatePaths(db: DatabaseSync, sourceRoots: string[], targetRoot: stri
     const keyRefs = keys.map((k) => (k === "rowid" ? "rowid" : `"${k}"`));
     const keyList = keyRefs.map((ref, i) => `${ref} AS k${i}`).join(", ");
     for (const { name } of info) {
-      const hits = roots.map((root) => `instr("${name}", '${root.replace(/'/g, "''")}') > 0`).join(" OR ");
+      const hits = [...encoded].map((form) => `instr("${name}", '${form.replace(/'/g, "''")}') > 0`).join(" OR ");
       const rows = db.prepare(`SELECT ${keyList}, "${name}" AS v FROM "${table}" WHERE typeof("${name}")='text' AND (${hits})`)
         .all() as Record<string, string>[];
       if (!rows.length) continue;
       const update = db.prepare(`UPDATE "${table}" SET "${name}"=? WHERE ${keyRefs.map((ref) => `${ref}=?`).join(" AND ")}`);
       for (const row of rows) {
-        // 回调返回字面量：目标路径里的 `$&`、`$$` 之类不能被当成替换模板展开（第 2 轮审查 F4）。
-        const next = row.v.replace(pattern, () => target);
+        const next = relocateText(row.v, rewrite);
         if (next === row.v) continue;
+        if (isJson(row.v) && !isJson(next)) throw new Error(`导入改路径时把 ${table}.${name} 的 JSON 写坏了，导入作罢`);
         update.run(next, ...keys.map((_, i) => row[`k${i}`]));
         relocated++;
       }
     }
   }
   return relocated;
+}
+
+/** 合法 JSON 的字符串字面量（JSON 里引号只出现在字面量里，所以从左往右扫正好一个个切出来）。 */
+const JSON_STRING = /"(?:[^"\\]|\\.)*"/g;
+
+function isJson(text: string): boolean {
+  try { JSON.parse(text); return true; } catch { return false; }
+}
+
+/** 一个文本值：JSON 就按字面量逐个解码改写再编码回去，否则按原文改。 */
+function relocateText(text: string, rewrite: (text: string) => string): string {
+  const trimmed = text.trimStart();
+  if (!/^[[{"]/.test(trimmed) || !isJson(text)) return rewrite(text);
+  return text.replace(JSON_STRING, (literal) => {
+    const value = JSON.parse(literal) as string;
+    // 字符串里套着的又是一份 JSON（收尾计划的 payload 之类）就接着按 JSON 改。
+    const next = /^\s*[[{]/.test(value) && isJson(value) ? relocateText(value, rewrite) : rewrite(value);
+    return next === value ? literal : JSON.stringify(next);
+  });
 }
 
 function trimSlash(path: string): string {
