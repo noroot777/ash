@@ -12,9 +12,9 @@
 .composer-header > .composer-header-count { flex:none; margin-right:4px; }
 
 .composer-scroll { min-height:0; overflow-y:auto; background:var(--canvas); }
-/* 一条 1200 的居中列（底排的选项入口 + 谁来做 + 发送键要能排成一行）。上边距是定值而不是算出来的居中：输入变高、下面多出列表时卡片不跳。
+/* 一条 960 的居中列（底排的选项入口 + 谁来做 + 发送键要能排成一行）。上边距是定值而不是算出来的居中：输入变高、下面多出列表时卡片不跳。
    首页没有模式那一行，把那 40px 让出来，卡片在两面落在同一个位置。 */
-.is-studio .composer-inner { --top:clamp(56px,19vh,160px); width:min(1200px,calc(100% - 64px)); margin:0 auto; padding:var(--top) 0 48px; }
+.is-studio .composer-inner { --top:clamp(56px,19vh,160px); width:min(960px,calc(100% - 48px)); margin:0 auto; padding:var(--top) 0 48px; }
 .is-studio.is-home .composer-inner { padding-top:calc(var(--top) + 40px); }
 
 /* 卡片上方：三种模式，一组分段 */
@@ -29,7 +29,7 @@
 .studio-card { position:relative; border-radius:var(--r-lg); background:var(--panel); box-shadow:0 0 0 1px var(--line2), var(--surface-shadow); transition:box-shadow var(--dur-1) var(--ease-out); }
 .studio-card:has(textarea:focus-visible) { box-shadow:0 0 0 1px var(--focus-soft), 0 0 0 3px color-mix(in oklab, var(--focus-ring) 10%, transparent), var(--surface-shadow); }
 .is-studio .composer-objective { margin:0; }
-.is-studio .composer-objective textarea { display:block; width:100%; min-height:92px; max-height:40vh; overflow-y:auto; border:0; border-radius:var(--r-lg) var(--r-lg) 0 0; padding:14px 16px 6px; background:transparent; color:var(--ink); font-size:var(--t-md); line-height:24px; resize:none; outline:0; box-shadow:none; }
+.is-studio .composer-objective textarea { display:block; width:100%; min-height:168px; max-height:40vh; overflow-y:auto; border:0; border-radius:var(--r-lg) var(--r-lg) 0 0; padding:14px 16px 6px; background:transparent; color:var(--ink); font-size:var(--t-md); line-height:24px; resize:none; outline:0; box-shadow:none; }
 .is-studio .composer-objective textarea:focus-visible { outline:0; }
 .is-studio .composer-slash-menu, .is-studio .composer-mention-menu { left:12px; max-width:calc(100% - 24px); }
 .studio-card > .task-upload-list { padding:4px 12px 0; }
