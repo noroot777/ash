@@ -1,5 +1,6 @@
 import type { UploadAttachment } from "./Attachments.tsx";
 import { attachmentView } from "./utils.ts";
+import { createClientId } from "../lib/clientId.ts";
 
 /**
  * 对话框草稿的加减法：撤回一条待发送消息时怎么把内容放回去，发送成功后又该摘掉哪些。
@@ -18,12 +19,48 @@ export function joinDraftText(restored: string, current: string): string {
   return `${left}\n\n${current}`;
 }
 
+/** 上一次「改了再发」放回的是哪一条（`source`），放完草稿是哪个正文版本、哪一份附件数组。 */
+export type ReuseMark = { source: string; textVersion: DraftText["textVersion"]; attachments: UploadAttachment[] };
+
+/**
+ * 发过的一句放回草稿再改（气泡上「改了再发」）：跟撤回同样是合并，只多一条——**同一条**
+ * 刚放回过、之后草稿正文和附件都没动，就是连点，正文不再接一遍。
+ *
+ * 判据是「哪一条 + 草稿版本」，不看草稿里有没有这几个字：放回「继续」时草稿写着「不要继续」，
+ * 那是另一句意思相反的话，不是放回过的结果（第 1 轮审查实测，子串判断把它吞掉了）。附件按
+ * 选择身份（路径 + 选择记号的序列）比，不按数组引用：确认到达后草稿会被重读、重建成一份新数组，
+ * 那不是用户编辑（第 4 轮审查实测，按引用比会把它当成动过、连点又接一遍正文）。
+ *
+ * 连点也是一次认领：正文换上 `version`、附件换上 `restored` 带来的新选择记号，在途或迟到的
+ * 旧发送都清不走它。纯函数——新版本号和新选择由调用方在外面备好，放进状态 updater 里重复
+ * 执行也得到同一个结果（开发模式的 StrictMode 会重放 updater，第 3 轮审查实测）。
+ */
+export function reuseDraft<Version extends number | string>(
+  input: { source: string; text: string },
+  restored: UploadAttachment[],
+  current: DraftText & { attachments: UploadAttachment[] },
+  last: ReuseMark | null | undefined,
+  version: Version,
+): { text: string; attachments: UploadAttachment[]; textVersion: Version; mark: ReuseMark } {
+  const again = !!last && last.source === input.source && last.textVersion === current.textVersion
+    && sameSelections(last.attachments, current.attachments);
+  const attachments = mergeAttachments(restored, current.attachments);
+  return {
+    text: again ? current.text : joinDraftText(input.text, current.text),
+    attachments,
+    textVersion: version,
+    mark: { source: input.source, textVersion: version, attachments },
+  };
+}
+
 /**
  * 把消息里存的附件路径还原成对话框里的附件卡片。
  *
  * 服务端只记路径，字节数无从得知（`size` 因此留空，卡片不显示大小）；不在
  * `data/uploads/` 下的路径没有可访问 URL，只能当普通文件显示——但路径本身照样能
  * 跟着下一次发送原样送回去，这正是撤回要保住的东西。
+ *
+ * 每一份都带一个新的选择记号：放回就是又选了一次，在途那次发送摘不到它（见 dropSentAttachments）。
  */
 export function attachmentsFromPaths(paths: string[]): UploadAttachment[] {
   const seen = new Set<string>();
@@ -33,18 +70,28 @@ export function attachmentsFromPaths(paths: string[]): UploadAttachment[] {
     if (!path || seen.has(path)) continue;
     seen.add(path);
     const view = attachmentView(path);
-    restored.push({ url: view.url, path, name: view.name, kind: view.image ? "image" : "file" });
+    restored.push({ url: view.url, path, name: view.name, kind: view.image ? "image" : "file", selection: createClientId() });
   }
   return restored;
 }
 
-/** 撤回的附件并回草稿：撤回的排前面，同一路径只留一份（草稿里那份优先保留其大小等信息）。 */
+/**
+ * 撤回的附件并回草稿：撤回的排前面，同一路径只留一份。草稿里已有的那份保留其大小等信息，
+ * 但换上这一次的选择记号——用户刚又选了它，正在飞的那次发送结算时就不该把它当成自己的摘走。
+ */
 export function mergeAttachments(
   restored: UploadAttachment[],
   current: UploadAttachment[],
 ): UploadAttachment[] {
+  const again = new Map(restored.map((attachment) => [attachment.path, attachment]));
   const currentPaths = new Set(current.map((attachment) => attachment.path));
-  return [...restored.filter((attachment) => !currentPaths.has(attachment.path)), ...current];
+  return [
+    ...restored.filter((attachment) => !currentPaths.has(attachment.path)),
+    ...current.map((attachment) => {
+      const chosen = again.get(attachment.path);
+      return chosen ? { ...attachment, selection: chosen.selection } : attachment;
+    }),
+  ];
 }
 
 /**
@@ -62,18 +109,39 @@ export function mergeAttachments(
  * 那「发送在途时撤回另一条消息」怎么办？靠顺序而不是靠猜：撤回等这一次发送结算完再
  * 回填（见 ReplyBox / TeamView 的 withdraw），清空发生在合并之前，两边都不用推断。
  */
-export function clearSentDraft(current: string, draftAtSend: string): string {
-  return current === draftAtSend ? "" : current;
+/** 正文连同它的版本（DraftStore 的 textVersion；侧聊落在本地存储里，是字符串）。 */
+export type DraftText = { text: string; textVersion?: number | string };
+
+export function clearSentDraft(current: DraftText, draftAtSend: DraftText): string {
+  // 字面相等之外还要版本相同：清掉再放回同一句，字一样，却是又选了一次，不是提交的那一份。
+  return current.text === draftAtSend.text && current.textVersion === draftAtSend.textVersion ? "" : current.text;
+}
+
+const selectionKey = (attachment: SentSelection) => `${attachment.path}\u0000${attachment.selection ?? ""}`;
+
+/** 两份附件是不是同一组选择（顺序、路径、选择记号都一样）；数组是不是同一个对象无所谓。 */
+export function sameSelections(left: readonly SentSelection[], right: readonly SentSelection[]): boolean {
+  return left.length === right.length && left.every((attachment, index) => selectionKey(attachment) === selectionKey(right[index]!));
+}
+
+/** 一次发送提交时带走的是哪几次选择：路径 + 选择记号。可以落进 localStorage（侧聊的发送请求）。 */
+export type SentSelection = { path: string; selection?: string };
+
+export function sentSelections(attachments: readonly UploadAttachment[]): SentSelection[] {
+  return attachments.map(({ path, selection }) => (selection ? { path, selection } : { path }));
 }
 
 /**
- * 附件按路径摘：路径是附件的唯一标识，「这一个是不是刚发出去的那一个」有确定答案，
- * 不像正文那样要猜——所以这里可以精确减，在途期间新加进来的原样留着。
+ * 附件按**提交时的那几次选择**摘：路径和选择记号都对上才算「刚发出去的那一份」。
+ *
+ * 只认路径不够：发送在飞时用户又把同一张图放回草稿（撤回、「改了再发」），路径一模一样，
+ * 旧发送一结算就把新放回的那张一起摘了（「改了再发」第 2 轮审查实测，迟到的远端确认同样如此）。
+ * 选择记号是确定的身份，不用猜，在途期间新加进来、又选了一次的都原样留着。
  */
 export function dropSentAttachments(
   current: UploadAttachment[],
-  sentPaths: string[],
+  sent: readonly SentSelection[],
 ): UploadAttachment[] {
-  const sent = new Set(sentPaths);
-  return current.filter((attachment) => !sent.has(attachment.path));
+  const gone = new Set(sent.map(selectionKey));
+  return current.filter((attachment) => !gone.has(selectionKey(attachment)));
 }

@@ -51,6 +51,7 @@ import { useTaskInspectorStack } from "./useTaskInspectorStack.ts";
 import { MemoSelectionScope } from "../task-memos/MemoSelectionScope.tsx";
 import { stageSideChatQuote } from "../side-chat/sideChatQuote.ts";
 import { useAddReplyQuote } from "./replyQuote.ts";
+import { useReuseInput } from "./ReuseInput.tsx";
 
 
 export function TaskDetail({
@@ -145,6 +146,7 @@ export function TaskDetail({
   const handedOut = task.handoff?.direction === "out" && !task.handoff.pending;
   // 选中会话正文后的「添加到对话」：写进这个任务的回复草稿。没有对话框的任务不给这个入口。
   const addToReply = useAddReplyQuote(task.id);
+  const reuseInput = useReuseInput(task.id);
   useWaitingTitle(!!task.question, task.id);
   // 回复框那一行左边的动作：再审、打开预览、接力到…（reply-3）。
   const replyActions = useTaskReplyActions({ task, canHandoff, onHandoff: () => onHandoff?.(task), notify });
@@ -499,6 +501,8 @@ export function TaskDetail({
                         }
                         : undefined}
                       onAskSideChat={(quote) => { stageSideChatQuote(task.id, quote); openTab("side-chat"); }}
+                      // 跟回复框可用同一口径（ReplyBox 的 disabled）：框是灰的，放回去也没法发。
+                      onReuseInput={task.mode === "single" && !task.archived && !handedOut && hasConversation ? reuseInput : undefined}
                       // 任务停下来等哨兵：会话最后多一行「在等哨兵…」（feed-7）。在跑的时候不出——
                       // 那时挂上的哨兵是执行过程里的一步，事件排着队等这一轮跑完。
                       footer={task.status !== "running" && task.status !== "queued" && (liveMonitors.length || liveBuiltinCount) ? (

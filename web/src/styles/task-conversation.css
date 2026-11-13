@@ -423,7 +423,7 @@ button.context-meter-chip.is-tight { background: color-mix(in oklab, var(--red) 
 
 /* 删除消息：跟复制同一颗皮肤（头部图标、尾栏胶囊），紧挨着复制排在它右边；悬停转红，说明这是删。 */
 .task-message header .copy-button + .message-delete-button,
-.task-user-bubble header .copy-button + .message-delete-button { margin-left: 0; }
+.task-user-bubble header :is(.copy-button, .message-reuse-button) + :is(.message-reuse-button, .message-delete-button) { margin-left: 0; }
 .task-message header button.message-delete-button:hover,
 .task-user-bubble header button.message-delete-button:hover,
 .monitor-wake-meta button.message-delete-button:hover,

@@ -47,6 +47,7 @@ import { mergeNoticeItems, useRejectionNotices } from "./useRejectionNotices.ts"
 import { ReclaimTurnSwitch } from "./ReclaimTurnSwitch.tsx";
 import { DeleteMessageButton, MessageDeleteProvider, type DeletableItem } from "./MessageDelete.tsx";
 import { TurnActions } from "./TurnActions.tsx";
+import { ReuseInputButton, type ReusableInput } from "./ReuseInput.tsx";
 import { conversationInputAnchor, conversationInputs, REQUIREMENT_INPUT_ID, requirementAuthor } from "./conversationInputs.ts";
 
 // 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
@@ -207,9 +208,11 @@ function shallowRest(prev: AgentMessageProps, next: AgentMessageProps): boolean 
 function UserMessage({
   item,
   preserveSystemStyle = false,
+  onReuse,
 }: {
   item: Extract<ConversationItem, { kind: "user" }>;
   preserveSystemStyle?: boolean;
+  onReuse?: (input: ReusableInput) => void;
 }) {
   if (item.isAnswer || isQuestionAnswer(item.text)) return <AnsweredQuestionMessage text={item.text} id={item.id} at={item.at} deletable={item} />;
   const bySystem = !!item.bySystem;
@@ -217,7 +220,7 @@ function UserMessage({
   if (bySystem && (!preserveSystemStyle || monitorWakeInput(item)) && !reviewPrompt) {
     return <SystemAuthoredMessage item={item} />;
   }
-  return <UserBubble id={item.id} author={bySystem ? "系统" : "你"} text={item.text} attachments={item.attachments} at={item.at} bySystem={bySystem} deletable={item} />;
+  return <UserBubble id={item.id} author={bySystem ? "系统" : "你"} text={item.text} attachments={item.attachments} at={item.at} bySystem={bySystem} deletable={item} onReuse={onReuse} />;
 }
 
 /**
@@ -225,11 +228,14 @@ function UserMessage({
  * 正文碰巧以「【答复】」开头也不当答复卡、不当系统代写，直接走普通气泡；谁说的照任务来源写，
  * 没有删除（它不在会话正文里）。
  */
-function RequirementMessage({ requirement }: { requirement: { text: string; at?: string | null; origin?: TaskCreationOrigin | null } }) {
-  return <UserBubble id={REQUIREMENT_INPUT_ID} author={requirementAuthor(requirement.origin)} text={requirement.text} attachments={[]} at={requirement.at ?? undefined} />;
+function RequirementMessage({ requirement, onReuse }: {
+  requirement: { text: string; at?: string | null; origin?: TaskCreationOrigin | null };
+  onReuse?: (input: ReusableInput) => void;
+}) {
+  return <UserBubble id={REQUIREMENT_INPUT_ID} author={requirementAuthor(requirement.origin)} text={requirement.text} attachments={[]} at={requirement.at ?? undefined} onReuse={onReuse} />;
 }
 
-function UserBubble({ id, author, text, attachments, at, bySystem = false, deletable }: {
+function UserBubble({ id, author, text, attachments, at, bySystem = false, deletable, onReuse }: {
   /** 条目 id：左侧输入导航按它找到这颗气泡。 */
   id: string;
   author: string;
@@ -238,12 +244,15 @@ function UserBubble({ id, author, text, attachments, at, bySystem = false, delet
   at?: string;
   bySystem?: boolean;
   deletable?: DeletableItem;
+  /** 放回对话框改了再发。系统代写的、页面批注批次（截图与页面数据放不回文字框）不给。 */
+  onReuse?: (input: ReusableInput) => void;
 }) {
   // 刚发出去的那一句上移 4px 淡入（run-1）；页面打开时已经在的不动。
   const [fresh] = useState(() => !!at && Date.now() - Date.parse(at) < 5000);
   const parsed = parseAttachmentText(text);
   const displayBody = annotationBatchDisplayText(parsed.body) ?? parsed.body;
   const paths = [...parsed.paths, ...attachments];
+  const reusable = !bySystem && displayBody === parsed.body && (!!parsed.body || paths.length > 0);
   return (
     <article className={`task-message task-message--user${bySystem ? " is-system-authored" : ""}${fresh ? " is-fresh" : ""}`}>
       <div className="task-user-bubble" {...conversationInputAnchor(id)}>
@@ -253,6 +262,7 @@ function UserBubble({ id, author, text, attachments, at, bySystem = false, delet
           {displayBody && (
             <CopyButton value={displayBody} ariaLabel="复制这条回复" icon />
           )}
+          {onReuse && reusable && <ReuseInputButton onReuse={() => onReuse({ source: id, text: parsed.body, paths })} />}
           {deletable && <DeleteMessageButton item={deletable} />}
         </header>
         {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <p>{displayBody}</p>)}
@@ -280,6 +290,7 @@ export function ConversationFeed({
   historyReady = true,
   bodyReady = true,
   onDeleteMessage,
+  onReuseInput,
 }: {
   task: TaskListItem;
   /**
@@ -328,6 +339,8 @@ export function ConversationFeed({
   bodyReady?: boolean;
   /** 删掉一条已落盘的消息。不给就一颗删除按钮都不出（正在跑、团队/研讨任务、只读视图）。 */
   onDeleteMessage?: (sources: ConversationSource[]) => Promise<void>;
+  /** 你发的那几句（含原始需求）放回对话框改了再发。不给就不出这颗键（没有对话框的视图）。 */
+  onReuseInput?: (input: ReusableInput) => void;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   // 被挡回的用户操作合进同一条任务历史。正文读到手之后**无条件合** —— 「有没有正文」跟「这段历史该不该
@@ -449,7 +462,7 @@ export function ConversationFeed({
       );
     }
     if (item.kind === "user") {
-      return <UserMessage key={keys.get(item.id) ?? item.id} item={item} preserveSystemStyle={preserveSystemStyle} />;
+      return <UserMessage key={keys.get(item.id) ?? item.id} item={item} preserveSystemStyle={preserveSystemStyle} onReuse={onReuseInput} />;
     }
     if (preserveSystemStyle) {
       return (
@@ -512,7 +525,7 @@ export function ConversationFeed({
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
-          {requirement && inputs[0]?.id === REQUIREMENT_INPUT_ID && <RequirementMessage requirement={requirement} />}
+          {requirement && inputs[0]?.id === REQUIREMENT_INPUT_ID && <RequirementMessage requirement={requirement} onReuse={onReuseInput} />}
           {rows.map((row) => {
             if (row.kind === "item") return renderItem(row.item);
             if (row.kind === "system-action") {

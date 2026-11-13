@@ -4,11 +4,24 @@ import { chatApi } from "../chat/chatApi.ts";
 import { api } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
 import type { UploadAttachment, UploadingFile } from "../task-detail/Attachments.tsx";
-import { clearSideChatQuote, moveNewSideChatQuote, sideChatMessageBody, useSideChatQuote } from "./sideChatQuote.ts";
-import { newSideChatScope, readSideStorage as read, sideAttachmentsKey as filesKey, sideDraftKey as draftKey, sideRequestKey as requestKey, writeSideStorage as write } from "./sideChatStorage.ts";
+import { attachmentsFromPaths, clearSentDraft, dropSentAttachments, reuseDraft, sentSelections, type ReuseMark, type SentSelection } from "../task-detail/withdrawDraft.ts";
+import { clearSideChatQuote, moveNewSideChatQuote, sideChatMessageBody, stageSideChatQuote, useSideChatQuote } from "./sideChatQuote.ts";
+import { newSideChatScope, readSideStorage as read, sideAttachmentsKey as filesKey, sideDraftKey as draftKey, sideDraftVersionKey as versionKey, sideRequestKey as requestKey, writeSideStorage as write } from "./sideChatStorage.ts";
 
 const finished = (status: string) => ["done", "failed", "stopped"].includes(status);
-type SendRequest = { id: string; body: string; draft?: string; quoteId?: string; attachments?: string[] };
+// `sent`：这次提交带走的是哪几次选择（路径 + 选择记号），确认到了只摘它们；`draftVersion`：提交时
+// 正文的版本，确认到了只在版本没变时清正文。老版本存下的请求没有，各自退回按路径 / 按字面。
+type SendRequest = { id: string; body: string; draft?: string; draftVersion?: string; quoteId?: string; attachments?: string[]; sent?: SentSelection[] };
+
+// 草稿正文连同版本一起落盘：正文变了（或调用方点名要认领）就换一个版本。
+const draftVersionOf = (scope: string) => read(versionKey(scope)) ?? undefined;
+function saveDraft(scope: string, text: string, version?: string) {
+  if (version) write(versionKey(scope), version);
+  else if ((read(draftKey(scope)) ?? "") !== text) write(versionKey(scope), createClientId());
+  write(draftKey(scope), text);
+}
+/** 每份侧聊草稿上一次「改了再发」的记号（判连点）。在事件里读写，不进状态 updater。 */
+const reuseMarks = new Map<string, ReuseMark>();
 const sameMember = (a: ChatMember, b: ChatMember) => a.agentType === b.agentType && a.executorId === b.executorId
   && a.model === b.model && a.reasoningEffort === b.reasoningEffort && a.name === b.name;
 const samePaths = (a: string[] | undefined, b: string[]) => JSON.stringify(a ?? []) === JSON.stringify(b);
@@ -53,6 +66,8 @@ export function useSideChat(taskId: string) {
   const [draft, setDraftState] = useState(() => read(draftKey(newScope)) ?? "");
   const [attachments, setAttachmentsState] = useState<UploadAttachment[]>(() => readAttachments(newScope));
   const [pending, setPendingState] = useState<UploadingFile[]>([]);
+  // 每「改了再发」一次加一：输入框按它取焦点、光标落到末尾。
+  const [reused, setReused] = useState(0);
   const [sending, setSending] = useState(false);
   const [savingMember, setSavingMember] = useState(false);
   const [proposedMember, setProposedMember] = useState<{ roomId: string; member: ChatMember } | null>(null);
@@ -63,6 +78,9 @@ export function useSideChat(taskId: string) {
   const initialized = useRef(false);
   const memberQueue = useRef(Promise.resolve());
   const memberRevision = useRef(0);
+  // 正在飞的发送（一组，同主会话 DraftStore 的 trackSend）。「改了再发」排在它们后面放回，
+  // 连点判得准；归属不靠这个顺序，靠正文版本和选择记号。
+  const inFlight = useRef(new Set<Promise<void>>());
   const memberPending = useRef(false);
   const confirmedMembers = useRef(new Map<string, ChatMember>());
   const attached = useRef(attachments);
@@ -97,15 +115,22 @@ export function useSideChat(taskId: string) {
       const request = JSON.parse(read(requestKey(value.room.id)) ?? "null") as SendRequest | null;
       if (request && value.messages.some((message) => message.id === request.id && message.role === "user")) {
         acknowledged = true;
-        if (read(draftKey(value.room.id)) === (request.draft ?? request.body)) {
-          write(draftKey(value.room.id), ""); clearedDraft = true;
+        // 正文同理只清提交的那一份：字面一样不算，版本也得是提交时那个——发送报错后清掉、
+        // 又把同一句放回来，字一样，却是又选了一次（「改了再发」第 3 轮审查实测）。旧版本存下的
+        // 请求没记版本：未知就是未知，不拿草稿此刻的版本去补——只有草稿也从没换过版本（升级后
+        // 没人动过）才算还是那一份；认领过的有了版本，旧确认清不走它（第 4 轮审查实测）。
+        const stored = { text: read(draftKey(value.room.id)) ?? "", textVersion: draftVersionOf(value.room.id) };
+        const sentText = { text: request.draft ?? request.body, textVersion: request.draftVersion };
+        if (stored.text && !clearSentDraft(stored, sentText)) {
+          saveDraft(value.room.id, ""); clearedDraft = true;
         }
-        // 只摘**这一次发出去的那几张**（按路径做差集，跟主会话回复框的 dropSentAttachments
-        // 同一条判据）：发送在途的那一两秒里用户完全可能又粘一张，整份清空会把它一起扔掉，
+        // 只摘**这一次发出去的那几次选择**（跟主会话回复框的 dropSentAttachments 同一条判据）：
+        // 发送在途的那一两秒里用户完全可能又粘一张、又把同一张图放回来，整份清空会把它一起扔掉，
         // 而「发的那几张必须和手上这几张一模一样才清」则相反——刚粘的那张让条件不成立，
-        // 已经发出去的旧图就赖在草稿里，下一条消息把它重复带上一遍。
-        const sent = new Set(request.attachments ?? []);
-        const kept = readAttachments(value.room.id).filter((file) => !sent.has(file.path));
+        // 已经发出去的旧图就赖在草稿里，下一条消息把它重复带上一遍。确认可能迟到（发送报了错、
+        // 远端其实收下了，之后才由快照带回来），那时草稿早换了几轮，只认选择记号才摘不错。
+        const sent = request.sent ?? (request.attachments ?? []).map((path) => ({ path }));
+        const kept = dropSentAttachments(readAttachments(value.room.id), sent);
         write(filesKey(value.room.id), JSON.stringify(kept));
         remainingFiles = kept;
         if (request.quoteId) clearSideChatQuote(taskId, value.room.id, request.quoteId);
@@ -169,7 +194,7 @@ export function useSideChat(taskId: string) {
   const canSend = loaded && (!roomId || !!snapshot) && !busy && !sending && !savingMember && !memberUncertain
     && !pending.length && (!!draft.trim() || attachments.length > 0);
   const setDraft = (value: string) => {
-    write(draftKey(selected.current ?? newScope), value);
+    saveDraft(selected.current ?? newScope, value);
     setDraftState(value);
   };
   const setAttachments = (update: SetStateAction<UploadAttachment[]>) => {
@@ -211,7 +236,13 @@ export function useSideChat(taskId: string) {
       }
     } finally { if (alive.current && revision === memberRevision.current) setSavingMember(false); }
   };
-  const send = async (member: ChatMember | undefined) => {
+  const send = (member: ChatMember | undefined) => {
+    const run = runSend(member);
+    inFlight.current.add(run);
+    void run.finally(() => { inFlight.current.delete(run); });
+    return run;
+  };
+  const runSend = async (member: ChatMember | undefined) => {
     if (!member || !canSend || locked.current || memberPending.current) return;
     locked.current = true; setSending(true); setError(""); setSendError("");
     let targetId = roomId;
@@ -219,9 +250,9 @@ export function useSideChat(taskId: string) {
     let previous: SendRequest | null = null;
     try { previous = JSON.parse(read(requestKey(scope)) ?? "null"); } catch { /* Recreate invalid local metadata. */ }
     const paths = attached.current.map((file) => file.path);
-    const request: SendRequest = { id: previous?.body === body && samePaths(previous.attachments, paths) ? previous.id : createClientId(), body, draft: draft.trim(), quoteId: quote?.id, attachments: paths };
+    saveDraft(scope, draft.trim());
+    const request: SendRequest = { id: previous?.body === body && samePaths(previous.attachments, paths) ? previous.id : createClientId(), body, draft: draft.trim(), draftVersion: draftVersionOf(scope), quoteId: quote?.id, attachments: paths, sent: sentSelections(attached.current) };
     write(requestKey(scope), JSON.stringify(request));
-    write(draftKey(scope), draft.trim());
     try {
       if (!targetId) {
         const key = `ash:side-chat:create:${taskId}`;
@@ -230,9 +261,9 @@ export function useSideChat(taskId: string) {
         const created = await chatApi.createSideChat(taskId, member, id);
         targetId = created.id;
         write(requestKey(targetId), JSON.stringify(request));
-        write(draftKey(targetId), read(draftKey(newScope)) ?? request.draft!);
+        saveDraft(targetId, read(draftKey(newScope)) ?? request.draft!, draftVersionOf(newScope) ?? request.draftVersion);
         write(filesKey(targetId), read(filesKey(newScope)) ?? "[]");
-        write(draftKey(newScope), ""); write(requestKey(newScope), "null"); write(filesKey(newScope), "[]");
+        saveDraft(newScope, ""); write(requestKey(newScope), "null"); write(filesKey(newScope), "[]");
         write(selectionKey, targetId); write(key, "");
         selected.current = targetId; initialized.current = true;
         moveNewSideChatQuote(taskId, targetId);
@@ -265,6 +296,23 @@ export function useSideChat(taskId: string) {
   // 头带上的选择框同时也是禁用的，这一句挡的是别的表面直接调过来的情况。
   const select = (id: string | null) => { if (!locked.current && !savingMember && !uploading.current.length) chooseRoom(id); };
   const removeQuote = () => { if (quote) clearSideChatQuote(taskId, roomId, quote.id); };
+  // 你问过的一句放回输入框改了再发：问的那句并回草稿、附件并回附件卡（同主会话，见
+  // task-detail/withdrawDraft.ts），带着的主会话选文重新挂成引用——只有一个引用位，原先挂着的那段让位。
+  // 按此刻存着的那份草稿并（等过发送，闭包里的 draft 可能已经是旧的）。放回的附件是新的
+  // 选择，之后哪次确认迟到也摘不走它。
+  // 放回就是认领：正文换新版本、附件换新选择，之后哪次确认迟到也清不走它们。
+  const reuse = async (input: { source: string; question: string; quote: string | null; paths: readonly string[] }) => {
+    while (inFlight.current.size) await Promise.allSettled([...inFlight.current]);
+    const scope = selected.current ?? newScope;
+    const current = { text: read(draftKey(scope)) ?? "", textVersion: draftVersionOf(scope), attachments: attached.current };
+    const next = reuseDraft({ source: input.source, text: input.question }, attachmentsFromPaths([...input.paths]), current, reuseMarks.get(scope), createClientId());
+    reuseMarks.set(scope, next.mark);
+    saveDraft(scope, next.text, next.textVersion);
+    setDraftState(next.text);
+    setAttachments(next.attachments);
+    if (input.quote) stageSideChatQuote(taskId, input.quote);
+    setReused((count) => count + 1);
+  };
   // 「发给主任务」：把一条答完的回答原文交给主任务（主任务在跑就排着）；回执跟着快照回来。
   const forward = async (messageId: string) => {
     if (!roomId) return;
@@ -279,5 +327,5 @@ export function useSideChat(taskId: string) {
       if (current) apply(await chatApi.snapshot(current));
     } catch (reason) { if (alive.current && selected.current === current) setError(String(reason)); }
   };
-  return { rooms, room, snapshot, ready, loaded, connected, error: sendError || error, memberError, memberUncertain, draft, attachments, pending, quote, removeQuote, sending, savingMember, busy, canSend, select, setDraft, setAttachments, setPending, saveMember, send, stop, reload, forward, revoke };
+  return { rooms, room, snapshot, ready, loaded, connected, error: sendError || error, memberError, memberUncertain, draft, attachments, pending, quote, removeQuote, reuse, reused, sending, savingMember, busy, canSend, select, setDraft, setAttachments, setPending, saveMember, send, stop, reload, forward, revoke };
 }

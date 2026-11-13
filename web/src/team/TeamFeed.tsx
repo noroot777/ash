@@ -25,6 +25,7 @@ import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type Inbo
 import { MonitorWakeReply } from "../task-detail/MonitorWakeInput.tsx";
 import { monitorWakeReplyIds } from "../task-detail/monitorWakeModel.ts";
 import { conversationInputAnchor, conversationInputs, REQUIREMENT_INPUT_ID, requirementAuthor } from "../task-detail/conversationInputs.ts";
+import { ReuseInputButton, type ReusableInput } from "../task-detail/ReuseInput.tsx";
 
 function AgentRow({
   row,
@@ -66,35 +67,41 @@ function AgentRow({
   );
 }
 
-function UserRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"] }) {
+function UserRow({ row, onReuse }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]; onReuse?: (input: ReusableInput) => void }) {
   if (row.kind !== "user") return null;
   if (row.isAnswer || isQuestionAnswer(row.text)) return <AnsweredQuestionMessage text={row.text} id={row.id} at={row.at} />;
   const bySystem = !!row.bySystem;
   if (bySystem && !isReviewSystemPrompt(row.text)) {
     return <SystemAuthoredMessage item={row} surface="team" />;
   }
-  return <UserBubble id={row.id} author={bySystem ? "系统" : "你"} text={row.text} attachments={row.attachments} at={row.at} bySystem={bySystem} />;
+  return <UserBubble id={row.id} author={bySystem ? "系统" : "你"} text={row.text} attachments={row.attachments} at={row.at} bySystem={bySystem} onReuse={onReuse} />;
 }
 
 /**
  * 一颗普通的输入气泡。调度台的原始需求（任务正文）直接用它画第一颗、不经 UserRow：那是任意一段
  * 需求文字，以「【答复】」开头也不当答复卡、不当系统代写（同 ConversationFeed 的 RequirementMessage）。
  */
-function UserBubble({ id, author, text, attachments, at, bySystem = false }: {
+function UserBubble({ id, author, text, attachments, at, bySystem = false, onReuse }: {
   id: string;
   author: string;
   text: string;
   attachments: readonly string[];
   at?: string;
   bySystem?: boolean;
+  /** 放回对话框改了再发，判据同 ConversationFeed 的 UserBubble。 */
+  onReuse?: (input: ReusableInput) => void;
 }) {
   const parsed = parseAttachmentText(text);
   const displayBody = annotationBatchDisplayText(parsed.body) ?? parsed.body;
   const paths = [...parsed.paths, ...attachments];
+  const reusable = !bySystem && displayBody === parsed.body && (!!parsed.body || paths.length > 0);
   return (
     <article className={`team-feed-user${bySystem ? " is-system-authored" : ""}`}>
       <div {...conversationInputAnchor(id)}>
-        <header><b>{author}</b>{at && <time>{formatInstant(at)}</time>}</header>
+        <header>
+          <b>{author}</b>{at && <time>{formatInstant(at)}</time>}
+          {onReuse && reusable && <ReuseInputButton onReuse={() => onReuse({ source: id, text: parsed.body, paths })} />}
+        </header>
         {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <p>{displayBody}</p>)}
         <MessageAttachments paths={paths} />
       </div>
@@ -205,6 +212,7 @@ export function TeamFeed({
   delegatingIds,
   indicatorForTask,
   historyReady = true,
+  onReuseInput,
 }: {
   task: Task;
   rows: TeamFeedRow[];
@@ -215,6 +223,8 @@ export function TeamFeed({
   indicatorForTask: IndicatorForTask;
   /** 会话正文读完之前算不出「哪些问答还没出现在正文里」，见 ConversationFeed 同名参数。 */
   historyReady?: boolean;
+  /** 你发的那几句（含原始需求）放回对话框改了再发；归档了没有对话框就不给。 */
+  onReuseInput?: (input: ReusableInput) => void;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const byId = new Map(workers.map((worker) => [worker.id, worker]));
@@ -252,7 +262,7 @@ export function TeamFeed({
       <div className="conversation-scroll-region">
         <section className="team-feed" aria-label="团队调度流" ref={scroll}>
           {inputs[0]?.id === REQUIREMENT_INPUT_ID && (
-            <UserBubble id={REQUIREMENT_INPUT_ID} author={requirementAuthor(task.creationOrigin)} text={task.body} attachments={[]} at={task.createdAt} />
+            <UserBubble id={REQUIREMENT_INPUT_ID} author={requirementAuthor(task.creationOrigin)} text={task.body} attachments={[]} at={task.createdAt} onReuse={onReuseInput} />
           )}
           {!rows.length && !activityPhase && <p className="team-feed-empty">运行后，调度者的拆解、派活、执行者提问与汇报会按发生顺序出现在这里。</p>}
           {rows.map((row) => {
@@ -261,7 +271,7 @@ export function TeamFeed({
             // 执行者各有自己的工作目录（团队共享那一档也一样按会话行走），所以按发言
             // 所属的会话取任务，不是一律用调度台。
             if (item.kind === "agent") return <AgentRow key={row.key} row={item} taskId={item.session?.taskId ?? task.id} hideTime={hiddenTimes.has(item.id)} wakeReply={wakeReplies.has(item.id)} />;
-            if (item.kind === "user") return <UserRow key={row.key} row={item} />;
+            if (item.kind === "user") return <UserRow key={row.key} row={item} onReuse={onReuseInput} />;
             const inbound = parseInbound(item.text);
             if (inbound) {
               return (
