@@ -3,7 +3,7 @@
 // 「这个应用坏了」而不是「我该登录」。
 //
 // 自用模式下在 ash 所在的那台机器上打开,这一层**整体透明**:直接渲染 children,不多一个
-// DOM 节点。从别的设备打开时先过访问密钥那一屏(`needsAccessKey`)。
+// DOM 节点。从别的设备打开时先过配对那一屏(`needsAccessKey`)。
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { AuthState } from "@ash/shared";
 import { authApi } from "../lib/authApi.ts";
@@ -12,6 +12,7 @@ import { FirstRunWizard } from "../onboarding/FirstRunWizard.tsx";
 import { AuthShell } from "./AuthShell.tsx";
 import { ClaimPage } from "./ClaimPage.tsx";
 import { LoginPage } from "./LoginPage.tsx";
+import { PairPage, dropPairCode } from "./PairPage.tsx";
 import { ProjectJoinPage } from "./ProjectJoinPage.tsx";
 import { SetupWizard } from "./SetupWizard.tsx";
 import { AuthContext } from "./authContext.ts";
@@ -57,6 +58,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
+  // 已经进得来的设备又扫了一次码:那个码用不上,别让它留在地址栏里被收藏、被转发。
+  const admitted = state !== null && !state.needsAccessKey;
+  useEffect(() => {
+    if (admitted) dropPairCode();
+  }, [admitted]);
+
   // 领完 key / 加完项目之后要回到工作台:换 URL + 重新问一次状态。
   const leaveRoute = useCallback(() => {
     window.history.replaceState(null, "", "/");
@@ -86,7 +93,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
 
   // 排在向导之前:没认出机主的时候,连「要不要首启」都不该由这个访客来答。
-  if (state.needsAccessKey) return <LoginPage accessKey pendingJoin={null} onDone={refresh} />;
+  if (state.needsAccessKey) return <PairPage onDone={refresh} />;
   if (state.needsSetup) return <SetupWizard state={state} onDone={refresh} />;
   if (state.mode === "multi" && !state.user) {
     // 项目加入链接:没登录时先引导登录,登录完自动回到这条链接(计划 §六:

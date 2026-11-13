@@ -13,7 +13,7 @@ node scripts/win-remote.mjs test --all          # 跑三条 Windows 专属回归
 node scripts/win-remote.mjs test x --no-sync    # 跳过同步,重跑上次那份代码
 ```
 
-环境变量:`WIN_REMOTE_KEY`(对端 ash 的访问密钥——自用模式的 ash 只认本机直连和这把密钥,
+环境变量:`WIN_REMOTE_KEY`(对端 ash 的访问密钥——自用模式的 ash 对别处来的脚本只认这把密钥,
 不带就是 401;在那台 Windows 上打开 ash「设置 → 默认规则 → 远程访问」拿,或在它本机
 `curl http://127.0.0.1:4317/api/remote-access`)、`WIN_REMOTE_HOST`(默认 `http://192.168.1.187:4317`)、`WIN_REMOTE_SELF`(本机对外 IP,
 自动探测不准时用)、`WIN_REMOTE_PROJECT`(对端项目 id,自动按 `repoPath` 猜歪了时用;给了不存在的

@@ -89,3 +89,31 @@
   overflow-wrap: anywhere;
   user-select: all;
 }
+
+/* 「添加设备」展开的那一块：左边二维码，右边是码里那条地址。 */
+.settings-pair-code {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  border-bottom: 1px solid var(--line);
+  padding: 4px 16px 16px;
+}
+.settings-pair-code > div {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  gap: 8px;
+}
+.settings-pair-code small {
+  color: var(--muted);
+  font-size: var(--t-xs);
+}
+.settings-pair-hosts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.qr-code {
+  flex: none;
+  border-radius: 8px;
+}

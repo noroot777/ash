@@ -2,7 +2,7 @@
 // 前端要先问「现在是什么模式、我登没登」才知道该渲染哪一屏。
 import type { Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
-import type { AuthState, InviteInfo, RemoteAccessView, UserRole } from "@ash/shared";
+import type { AuthState, InviteInfo, UserRole } from "@ash/shared";
 import { dirNameFromNameHint, suggestDirName, suggestGitEmail, userDirNameError } from "@ash/shared/multiuser";
 import { hostname } from "node:os";
 import { actorOf, authErrorResponse, isAccountHolder, requireAdmin } from "./context.js";
@@ -33,9 +33,9 @@ import {
   touchUser,
 } from "./store.js";
 import { needsOnboarding } from "../onboarding.js";
-import {
-  ensureRemoteAccessKey, isLocalDirect, remoteKeyMatches, remoteSessionToken, rotateRemoteAccessKey,
-} from "./remote-access.js";
+import { connectionOf, deviceByToken, enrollDevice, peerAddress, remoteKeyMatches, removeDevice } from "./remote-access.js";
+import { mountRemoteAccessRoutes } from "./remote-access-routes.js";
+import { deviceName } from "./remote-pairing.js";
 import { initUserCliEnv } from "./user-cli.js";
 import { claimExistingDataFor, conversionPreflight } from "./conversion.js";
 
@@ -102,12 +102,15 @@ export function mountAuthRoutes(api: Hono): void {
     });
     if (rejection) return c.json({ error: rejection }, 403);
     const { key } = await c.req.json<{ key?: string }>().catch(() => ({ key: "" }));
-    // 自用模式:别的设备粘访问密钥换会话。没有 users 行,所以没有 user 可回。
+    // 自用模式:粘访问密钥也是「放一台设备进来」的一条路(另两条见 remote-pairing.ts),
+    // 换出来的是这台设备自己的凭证 —— 机主在名册里看得到它、能单独移除。没有 users 行,
+    // 所以没有 user 可回。
     if (!(await isMultiUser())) {
       if (!remoteKeyMatches(key ?? "")) {
         return c.json({ error: "访问密钥不对。现在这一把在 ash 所在那台机器的「设置 → 默认规则 → 远程访问」里" }, 401);
       }
-      issueSessionCookie(c, remoteSessionToken()!);
+      const { token } = enrollDevice({ name: deviceName(c.req.header("user-agent")), via: "key", address: peerAddress(c) });
+      issueSessionCookie(c, token);
       return c.json({ user: null });
     }
     const user = await findUserByKey((key ?? "").trim());
@@ -120,7 +123,11 @@ export function mountAuthRoutes(api: Hono): void {
   });
 
   api.post("/auth/logout", async (c) => {
-    await deleteSession(getCookie(c, SESSION_COOKIE) ?? "");
+    const session = getCookie(c, SESSION_COOKIE) ?? "";
+    await deleteSession(session);
+    // 自用模式:登出 = 这台设备自己退出名册,凭证当场作废。
+    const device = deviceByToken(session);
+    if (device) removeDevice(device.id, connectionOf(c));
     deleteCookie(c, SESSION_COOKIE, { path: "/" });
     return c.json({ ok: true });
   });
@@ -321,34 +328,7 @@ export function mountAuthRoutes(api: Hono): void {
     return c.json({ ok: true });
   });
 
-  // ── 自用模式的访问密钥(auth/remote-access.ts)──────────────────────────────
-  // 查看与更换**只在本机直连时给**:凭密钥进来的设备能用这台 ash,但不该能读出密钥
-  // 再转交给第三台,更不该能把机主的其它设备踢下线。没有本机浏览器的机器(无头服务器)
-  // 在那台机器上 `curl http://127.0.0.1:<端口>/api/remote-access` 即可。
-  const remoteAccessRefusal = async (c: Context): Promise<{ error: string; status: 403 | 409 } | null> => {
-    if (await isMultiUser()) return { error: "多人模式下每个人用自己的 key，没有这把访问密钥", status: 409 };
-    if (actorOf(c).kind !== "single" || !isLocalDirect(c)) {
-      return { error: "访问密钥只能在 ash 所在的那台机器上查看和更换", status: 403 };
-    }
-    return null;
-  };
-
-  api.get("/remote-access", async (c) => {
-    const refusal = await remoteAccessRefusal(c);
-    if (refusal?.status === 409) return c.json({ error: refusal.error }, 409);
-    const view: RemoteAccessView = refusal ? { local: false } : { local: true, key: ensureRemoteAccessKey() };
-    return c.json(view);
-  });
-
-  api.post("/remote-access/rotate", async (c) => {
-    const refusal = await remoteAccessRefusal(c);
-    if (refusal) return c.json({ error: refusal.error }, refusal.status);
-    const view: RemoteAccessView = { local: true, key: rotateRemoteAccessKey() };
-    // 已经签发出去的预览凭证是地址里的一串随机数,不认密钥:不一起作废的话,被踢掉的
-    // 那台设备还能顺着开着的预览页继续用到凭证过期。
-    (await import("../preview-access.js")).revokePreviewGrants();
-    return c.json(view);
-  });
+  mountRemoteAccessRoutes(api, issueSessionCookie);
 
   // ── 宿主机逃生门(§三)──────────────────────────────────────────────────────
   // 唯一管理员丢 key 时的出路。它**不是 HTTP 端点**,而是 scripts/ash-admin.mjs 直接

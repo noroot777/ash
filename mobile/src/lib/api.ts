@@ -25,7 +25,7 @@ import type {
   TaskReviewInfo,
   ReviewDispatchInput,
 } from "@ash/shared";
-import type { AuthState } from "@ash/shared/multiuser";
+import type { AuthState, PairClaim, PairTicket } from "@ash/shared/multiuser";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import { normalizeMonitorDto } from "@ash/shared/monitor";
 import type { TaskMonitor } from "@ash/shared/monitor";
@@ -118,7 +118,14 @@ const j = async (r: Response) => {
   return r.json();
 };
 
-/** 配了 key 就每请求带上:多人模式是个人 key,自用模式是那台 ash 的访问密钥。 */
+/** 配对那两条的失败是要给人看的(「这个地址还不认得」「等着的太多了」),取服务端写好的那句话。 */
+const jSaid = async (r: Response) => {
+  if (r.ok) return r.json();
+  const body = (await r.json().catch(() => null)) as { error?: string } | null;
+  throw new Error(body?.error ?? String(r.status));
+};
+
+/** 配了 key 就每请求带上:多人模式是个人 key,自用模式是配对时发给这台手机的凭证(或访问密钥)。 */
 const authHeader = (): Record<string, string> => {
   const key = getApiKey();
   return key ? { authorization: `Bearer ${key}` } : {};
@@ -146,6 +153,21 @@ export const api = {
     fetch(`${url.replace(/\/+$/, "")}/api/auth/state`, {
       headers: key ? { authorization: `Bearer ${key}` } : {},
     }).then(j),
+
+  // 自用模式的设备配对:递一张申请,等机主在电脑上点「允许」,再来领这台手机的凭证。
+  // 和上面两条一样发生在保存之前,所以地址显式传。
+  pairOpen: (url: string, name?: string): Promise<PairTicket> =>
+    fetch(`${url.replace(/\/+$/, "")}/api/auth/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    }).then(jSaid),
+  pairClaim: (url: string, ticket: { id: string; secret: string }): Promise<PairClaim> =>
+    fetch(`${url.replace(/\/+$/, "")}/api/auth/pair/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: ticket.id, secret: ticket.secret }),
+    }).then(jSaid),
 
   // 同一条端点的「已经连上了」版本:用存好的地址和 key 问「我是谁、我的目录在哪」。
   // 新建项目那一屏靠它决定路径框要不要锁前缀(多人模式下服务端只收我目录里的路径)。

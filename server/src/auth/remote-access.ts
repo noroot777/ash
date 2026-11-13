@@ -6,10 +6,12 @@
 //
 //   ① **请求确实从这台机器上直接发出**(回环连接)。坐在机器前的人、本机的 MCP / hook /
 //      脚本都属于这一档,照旧零摩擦。
-//   ② **拿得出访问密钥**。别的设备(手机、另一台电脑的浏览器、别处的脚本)凭它进:
-//      网页粘一次换 cookie,程序每请求带 `Authorization: Bearer`。
+//   ② **机主放进来的设备**。每台设备一把自己的凭证(浏览器是 cookie,手机 app 是
+//      `Authorization: Bearer`),可以单独移除。放进来有三条路(remote-pairing.ts):
+//      设备申请、机主点「允许」;扫机主出示的一次性二维码;粘访问密钥。
+//   ③ **拿得出访问密钥**。给脚本用:每请求带 `Authorization: Bearer`,不登记成设备。
 //
-// 两条都不满足就是匿名,只碰得到免登录名单(middleware.ts)—— 接力那几条端点在名单里,
+// 都不满足就是匿名,只碰得到免登录名单(middleware.ts)—— 接力那几条端点在名单里,
 // 它们自有 ed25519 签名 + 来源机审批那一套,不靠这里。
 //
 // ## 「本机直连」不能只看 socket 地址
@@ -26,16 +28,20 @@
 // 进程内派发(`app.fetch` 直接调,没有 socket)按本机算:它根本没经过网络。真正从外面
 // 转述进来的那一类(飞书通道)在这道判据之前就由 imGate 单独认了身份。
 //
-// ## 密钥放哪
+// ## 凭证放哪
 //
 // `<db>.remote-access.json`(0600),与接力身份的私钥同一个道理(handoff-identity.ts):
-// 库会被 preview-seed 快照、被备份来回搬,凭证跟着走就等于多发了一份。明文存放 —— 读得到
-// 这个目录的人本来就读得到库里的供应商 key 和接力私钥,哈希挡不住任何人,却会让机主加
-// 第二台设备时只能重置、把第一台踢下线。
-import { createHmac } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+// 库会被 preview-seed 快照、被备份来回搬,凭证跟着走就等于多发了一份。
+//   · 访问密钥明文存放 —— 读得到这个目录的人本来就读得到库里的供应商 key 和接力私钥,
+//     哈希挡不住任何人,却会让机主想再看一眼时只能重置。
+//   · 设备凭证只存 sha256:它发出去之后没有人需要再看一眼。
+import { createHash, randomBytes } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { isIP, type Socket } from "node:net";
+import { hostname } from "node:os";
 import { dirname } from "node:path";
 import type { Context } from "hono";
+import type { RemoteDeviceVia } from "@ash/shared";
 import { resolveAshDbFile } from "../db/path.js";
 import { isLoopbackAddress } from "../dir-picker.js";
 import { secretsEqual } from "../openai-converter/common.js";
@@ -76,11 +82,24 @@ export function isLocalDirectOrigin(origin: RequestOrigin): boolean {
   return isLoopbackHost(origin.host);
 }
 
-export function requestOrigin(c: Context): RequestOrigin {
-  const env = c.env as { incoming?: { socket?: { remoteAddress?: string } }; server?: { incoming?: { socket?: { remoteAddress?: string } } } } | undefined;
+/** 这次请求底下的 TCP 连接。`null` = 进程内派发,根本没有连接。 */
+function socketOf(c: Context): Socket | undefined | null {
+  const env = c.env as { incoming?: { socket?: Socket }; server?: { incoming?: { socket?: Socket } } } | undefined;
   const incoming = env?.server?.incoming ?? env?.incoming;
+  return incoming ? incoming.socket : null;
+}
+
+/** 对端地址,只用来给机主看「这台设备从哪连进来的」。不参与任何判定。 */
+export function peerAddress(c: Context): string {
+  const socket = socketOf(c);
+  if (socket === null) return "本机";
+  return (socket?.remoteAddress ?? "").replace(/^::ffff:/i, "") || "未知地址";
+}
+
+export function requestOrigin(c: Context): RequestOrigin {
+  const socket = socketOf(c);
   return {
-    remoteAddress: incoming ? incoming.socket?.remoteAddress : null,
+    remoteAddress: socket === null ? null : socket?.remoteAddress,
     host: c.req.header("host") ?? new URL(c.req.url).host,
     forwarded: FORWARDED_HEADERS.some((name) => c.req.header(name) !== undefined),
   };
@@ -88,82 +107,256 @@ export function requestOrigin(c: Context): RequestOrigin {
 
 export const isLocalDirect = (c: Context): boolean => isLocalDirectOrigin(requestOrigin(c));
 
-// ── 访问密钥 ────────────────────────────────────────────────────────────────
+// ── 落盘的那份状态:访问密钥 + 设备名册 ──────────────────────────────────────
 
-interface KeyFile {
-  version: 1;
-  key: string;
+export interface RemoteDevice {
+  id: string;
+  name: string;
+  /** 设备凭证的 sha256。凭证本体只在发出去的那一刻存在。 */
+  tokenHash: string;
+  via: RemoteDeviceVia;
   createdAt: string;
+  lastSeenAt: string;
+  /** 最近一次连进来的对端地址(展示用)。 */
+  address: string;
 }
 
-const keyFilePath = (): string => `${resolveAshDbFile()}.remote-access.json`;
+interface StateFile {
+  version: 1;
+  /** 还没人看过「远程访问」时没有密钥:那时脚本进不来,设备配对不受影响。 */
+  key?: string;
+  createdAt?: string;
+  devices?: RemoteDevice[];
+  hosts?: string[];
+}
+
+interface State {
+  key: string | null;
+  createdAt: string;
+  devices: RemoteDevice[];
+  /** 机主实际用过的访问名字,见 `knownHost`。 */
+  hosts: string[];
+}
+
+const stateFilePath = (): string => `${resolveAshDbFile()}.remote-access.json`;
 
 // 按路径缓存:同一个进程里换了 ASH_DB(回归测试模拟两台机器)就得重读。
-let cached: { path: string; key: string | null } | null = null;
+let cached: { path: string; state: State } | null = null;
 
-function readKey(): string | null {
-  const path = keyFilePath();
-  if (cached?.path === path) return cached.key;
-  let key: string | null = null;
+function loadState(): State {
+  const path = stateFilePath();
+  if (cached?.path === path) return cached.state;
+  const state: State = { key: null, createdAt: new Date().toISOString(), devices: [], hosts: [] };
   if (existsSync(path)) {
     try {
-      const file = JSON.parse(readFileSync(path, "utf8")) as Partial<KeyFile>;
-      if (file.version === 1 && typeof file.key === "string" && file.key.length >= 32) key = file.key;
+      const file = JSON.parse(readFileSync(path, "utf8")) as Partial<StateFile>;
+      if (file.version === 1) {
+        if (typeof file.key === "string" && file.key.length >= 32) state.key = file.key;
+        if (typeof file.createdAt === "string") state.createdAt = file.createdAt;
+        if (Array.isArray(file.devices)) {
+          state.devices = file.devices.filter((d) => d && typeof d.id === "string" && typeof d.tokenHash === "string");
+        }
+        if (Array.isArray(file.hosts)) state.hosts = file.hosts.filter((h) => typeof h === "string");
+      }
     } catch {
-      // 读不懂的文件当作没有密钥:远程一律进不来,本机下一次查看时重发一把。
+      // 读不懂的文件当作空的:远程一律进不来,本机不受影响,重新配对即可。
     }
   }
-  cached = { path, key };
-  return key;
+  cached = { path, state };
+  return state;
 }
 
-function writeKey(key: string): string {
-  const path = keyFilePath();
+function saveState(state: State): void {
+  const path = stateFilePath();
   mkdirSync(dirname(path), { recursive: true });
-  const file: KeyFile = { version: 1, key, createdAt: new Date().toISOString() };
-  writeFileSync(path, JSON.stringify(file, null, 2), { mode: 0o600 });
+  const file: StateFile = {
+    version: 1,
+    ...(state.key ? { key: state.key } : {}),
+    createdAt: state.createdAt,
+    devices: state.devices,
+    hosts: state.hosts,
+  };
+  // 先写旁边再改名:写到一半断电留下半个文件,等于把所有设备一起踢下线。
+  const staging = `${path}.tmp`;
+  writeFileSync(staging, JSON.stringify(file, null, 2), { mode: 0o600 });
   // 已存在的文件 writeFileSync 不改权限,补一次(Windows 上是空操作)。
-  try { chmodSync(path, 0o600); } catch { /* 文件系统不支持权限位 */ }
-  cached = { path, key };
-  return key;
+  try { chmodSync(staging, 0o600); } catch { /* 文件系统不支持权限位 */ }
+  renameSync(staging, path);
+  cached = { path, state };
 }
+
+// ── 访问密钥 ────────────────────────────────────────────────────────────────
 
 /** 现在这把密钥;还没有就发一把。只给「本机查看」那条路用 —— 验证方不该顺手造密钥。 */
 export function ensureRemoteAccessKey(): string {
-  return readKey() ?? writeKey(mintKey());
-}
-
-/** 换一把。旧密钥和它换出来的所有网页会话当场失效(会话 token 是从密钥派生的)。 */
-export function rotateRemoteAccessKey(): string {
-  return writeKey(mintKey());
+  const state = loadState();
+  if (!state.key) {
+    state.key = mintKey();
+    saveState(state);
+  }
+  return state.key;
 }
 
 /**
- * 网页登录后种下的会话 token。从密钥派生而不是另存一张表:换密钥 = 所有会话一起失效,
- * 这正是「重新生成」该有的语义,也省掉一份要跟着库搬来搬去的状态。HMAC 单向,cookie
- * 泄露了也推不回密钥。
+ * 换一把。旧密钥当场失效,**凭它进来的设备一并移除**(`via: "key"`):换密钥要回答的
+ * 就是「这把密钥漏了怎么办」,拿它登过的浏览器不跟着走的话等于没换。机主亲手点过
+ * 「允许」或出示过二维码的那些设备不靠这把密钥,不受牵连。
  */
-const sessionTokenOf = (key: string): string =>
-  createHmac("sha256", key).update("ash-remote-session-v1").digest("base64url");
+export function rotateRemoteAccessKey(): string {
+  const state = loadState();
+  const dropped = state.devices.filter((d) => d.via === "key");
+  state.devices = state.devices.filter((d) => d.via !== "key");
+  state.key = mintKey();
+  saveState(state);
+  severConnections(KEY_HOLDER);
+  for (const device of dropped) severConnections(device.id);
+  return state.key;
+}
 
 export function remoteKeyMatches(candidate: string): boolean {
-  const key = readKey();
+  const { key } = loadState();
   return !!key && secretsEqual(candidate.trim(), key);
 }
 
-/** 登录成功后发给浏览器的 cookie 值。没有密钥时为 null(那时也不可能登录成功)。 */
-export function remoteSessionToken(): string | null {
-  const key = readKey();
-  return key ? sessionTokenOf(key) : null;
+// ── 设备名册 ────────────────────────────────────────────────────────────────
+
+const hashToken = (token: string): string => createHash("sha256").update(token).digest("hex");
+
+/** 登记一台设备,回它的凭证(只此一次)。 */
+export function enrollDevice(input: { name: string; via: RemoteDeviceVia; address: string }): { device: RemoteDevice; token: string } {
+  const state = loadState();
+  const token = `ashd_${randomBytes(32).toString("base64url")}`;
+  const at = new Date().toISOString();
+  const device: RemoteDevice = {
+    id: randomBytes(9).toString("base64url"),
+    name: input.name,
+    tokenHash: hashToken(token),
+    via: input.via,
+    createdAt: at,
+    lastSeenAt: at,
+    address: input.address,
+  };
+  state.devices.push(device);
+  saveState(state);
+  return { device, token };
 }
 
-/** 自用模式的身份判定:本机直连,或者带着有效的密钥 / 会话。都不是就回 null(匿名)。 */
-export function ownerProof(c: Context, sessionCookie: string | undefined): OwnerProof | null {
-  if (isLocalDirect(c)) return "local";
-  const key = readKey();
-  if (!key) return null;
+export const listDevices = (): RemoteDevice[] => loadState().devices;
+
+export function deviceByToken(token: string | undefined): RemoteDevice | null {
+  if (!token?.startsWith("ashd_")) return null;
+  const hash = hashToken(token);
+  return loadState().devices.find((d) => d.tokenHash === hash) ?? null;
+}
+
+/**
+ * 移除一台设备:凭证作废,它还开着的连接一并掐断 —— 事件流是一条长连接,只作废凭证的话
+ * 被移除的设备还能顺着它一直看下去。`keep` 是「正在办这件事的那条连接」(设备自己登出时
+ * 就是它自己),掐了它这次应答就发不回去。
+ */
+export function removeDevice(id: string, keep?: Socket | null): boolean {
+  const state = loadState();
+  if (!state.devices.some((d) => d.id === id)) return false;
+  state.devices = state.devices.filter((d) => d.id !== id);
+  saveState(state);
+  severConnections(id, keep);
+  return true;
+}
+
+// 「最近活跃」只是给机主认设备用的,不值得每个请求写一次盘。
+const SEEN_FLUSH_MS = 5 * 60_000;
+
+function noteSeen(device: RemoteDevice, address: string): void {
+  const now = Date.now();
+  if (device.address === address && now - Date.parse(device.lastSeenAt) < SEEN_FLUSH_MS) return;
+  device.lastSeenAt = new Date(now).toISOString();
+  device.address = address;
+  saveState(loadState());
+}
+
+// ── 认得的访问名字 ───────────────────────────────────────────────────────────
+//
+// 「申请 → 允许」这条路有一个别的路没有的口子:递申请不要任何凭证,而 DNS 重绑定能让
+// 机主自己的浏览器替攻击页递一张 —— 机主看到的是一张来自自己电脑的申请,顺手点了允许,
+// 攻击页就领到凭证。重绑定的前提是页面开在攻击者控制的**域名**下,所以只收从认得的名字
+// 打开的页面递来的申请:
+//   · IP 字面量 —— 那个源上的页面只可能是 ash 自己给的;
+//   · 这台机器自己的主机名(含 `.local`);
+//   · 机主已经带着凭证用过的名字(自定义域名、tailnet 全名):先扫码或粘密钥进来一次,
+//     这个名字就记下了。带凭证的请求造不出来 —— cookie 按域名存,攻击者的域名下没有。
+// 别的名字不是进不来,只是不能走「申请」:扫码和访问密钥都要机主手里的东西,不吃这一套。
+
+const MAX_HOSTS = 16;
+
+function hostNameOf(host: string | undefined): string {
+  if (!host) return "";
+  try {
+    return new URL(`http://${host.trim()}`).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return "";
+  }
+}
+
+export function knownHost(host: string | undefined): boolean {
+  const name = hostNameOf(host);
+  if (!name) return false;
+  if (name === "localhost" || isIP(name.replace(/^\[|\]$/g, ""))) return true;
+  const own = hostname().toLowerCase().replace(/\.local$/, "");
+  if (own && (name === own || name === `${own}.local`)) return true;
+  return loadState().hosts.includes(name);
+}
+
+function rememberHost(host: string | undefined): void {
+  const name = hostNameOf(host);
+  if (!name || knownHost(host)) return;
+  const state = loadState();
+  state.hosts = [...state.hosts, name].slice(-MAX_HOSTS);
+  saveState(state);
+}
+
+// ── 凭证名下的活连接 ─────────────────────────────────────────────────────────
+
+const KEY_HOLDER = "key";
+const connections = new Map<string, Set<Socket>>();
+
+function holdConnection(holder: string, socket: Socket | undefined | null): void {
+  if (!socket || socket.destroyed) return;
+  let held = connections.get(holder);
+  if (!held) connections.set(holder, held = new Set());
+  if (held.has(socket)) return;
+  held.add(socket);
+  socket.once("close", () => {
+    held.delete(socket);
+    if (!held.size && connections.get(holder) === held) connections.delete(holder);
+  });
+}
+
+function severConnections(holder: string, keep?: Socket | null): void {
+  for (const socket of connections.get(holder) ?? []) {
+    if (socket !== keep) socket.destroy();
+  }
+}
+
+/** 这次请求底下的连接,给 `removeDevice` 的 `keep` 用。 */
+export const connectionOf = (c: Context): Socket | null => socketOf(c) ?? null;
+
+// ── 判定 ────────────────────────────────────────────────────────────────────
+
+/** 自用模式的身份判定:本机直连、放进来的设备、访问密钥。都不是就回 null(匿名)。 */
+export function ownerProof(c: Context, sessionCookie: string | undefined): { how: OwnerProof; deviceId: string | null } | null {
+  if (isLocalDirect(c)) return { how: "local", deviceId: null };
   const bearer = /^Bearer\s+(\S+)$/i.exec((c.req.header("authorization") ?? "").trim())?.[1];
-  if (bearer && secretsEqual(bearer, key)) return "bearer";
-  if (sessionCookie && secretsEqual(sessionCookie, sessionTokenOf(key))) return "cookie";
-  return null;
+  const host = requestOrigin(c).host;
+  if (bearer && remoteKeyMatches(bearer)) {
+    holdConnection(KEY_HOLDER, socketOf(c));
+    rememberHost(host);
+    return { how: "bearer", deviceId: null };
+  }
+  const viaBearer = deviceByToken(bearer);
+  const device = viaBearer ?? deviceByToken(sessionCookie);
+  if (!device) return null;
+  holdConnection(device.id, socketOf(c));
+  rememberHost(host);
+  noteSeen(device, peerAddress(c));
+  return { how: viaBearer ? "bearer" : "cookie", deviceId: device.id };
 }

@@ -1,7 +1,7 @@
 // 自用模式的身份判定回归。要钉住的只有一句话:
 //
-//   **连得上端口不算机主。** 机主 = 请求确实从 ash 所在的那台机器直接发出,或者拿得出
-//   访问密钥(server/src/auth/remote-access.ts)。
+//   **连得上端口不算机主。** 机主 = 请求确实从 ash 所在的那台机器直接发出,或者是机主
+//   放进来的设备,或者拿得出访问密钥(server/src/auth/remote-access.ts)。
 //
 // 这条原先不成立:自用模式下鉴权闸整条穿透,而服务监听所有网卡 —— 局域网里任何一台机器
 // 都能派任务、读代码、开终端。所以这里**走真实的 TCP 连接**(起一个监听所有网卡的 server),
@@ -14,14 +14,17 @@
 //      一律 401,只碰得到免登录名单和 SPA 壳。
 //   ④ 访问密钥:Bearer 与网页登录(cookie)两条路都进得来;密钥只在本机读得到、换得了。
 //   ⑤ 浏览器自动带上的身份(本机直连、cookie)写操作要过跨站判定;Bearer 不用。
-//   ⑥ 换密钥:旧密钥和它换出来的会话当场失效。
-//   ⑦ 免登录名单里「路由自己验凭证」的那条(/restart-impact):自用模式的匿名同样要验。
+//   ⑥ 配对:申请要机主点了「允许」才领得到凭证;一次性码只兑一次;放不放谁、名册里有谁
+//      匿名一概碰不到;移除一台设备,它的凭证和开着的长连接一起断。
+//   ⑦ 换密钥:旧密钥和凭它进来的设备当场失效,机主亲手放进来的不受牵连。
+//   ⑧ 免登录名单里「路由自己验凭证」的那条(/restart-impact):自用模式的匿名同样要验。
+//   ⑨ 多人模式没有设备配对。
 //
 // 跑法(不设 ASH_DB 时自己开一个临时库):
 //   npm -w server run test:remote-access
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
-import { Agent, request as httpRequest, type Server } from "node:http";
+import { Agent, request as httpRequest, type IncomingMessage, type Server } from "node:http";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
@@ -37,6 +40,7 @@ const mode = await import("../src/auth/mode.js");
 const { authGate } = await import("../src/auth/middleware.js");
 const { mountAuthRoutes } = await import("../src/auth/routes.js");
 const { isLocalDirectOrigin, isLoopbackHost } = await import("../src/auth/remote-access.js");
+const pairing = await import("../src/auth/remote-pairing.js");
 
 await ensureSchema();
 
@@ -72,6 +76,10 @@ mountAuthRoutes(api);
 // 闸下的普通数据端点替身(测的是闸,不是某条业务路由)。
 api.get("/canary", (c) => c.json({ secret: "任务标题" }));
 api.post("/canary", (c) => c.json({ wrote: true }));
+// 一条开着不关的长连接(事件流的替身)。
+api.get("/stream", () => new Response(new ReadableStream({ start: (controller) => controller.enqueue(new TextEncoder().encode(": open\n\n")) }), {
+  headers: { "content-type": "text/event-stream" },
+}));
 // 免登录名单里的一条(接力的本机公开身份),替身。它得一直对匿名开着。
 api.get("/handoff/identity", (c) => c.json({ fingerprint: "stub" }));
 const app = new Hono();
@@ -120,6 +128,17 @@ function call(
     req.end(payload ?? undefined);
   });
 }
+/** 开一条长连接,回「应答头到了」之后的那个响应;`closed` 在连接被掐断时兑现。 */
+function openStream(path: string, opts: { address?: string; headers?: Record<string, string> }): Promise<{ res: IncomingMessage; closed: Promise<void> }> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: opts.address ?? "127.0.0.1", port, path, agent: direct, headers: opts.headers }, (res) => {
+      res.resume();
+      resolve({ res, closed: new Promise<void>((done) => res.once("close", () => done())) });
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
 /** 「不是本机直连」的三种来路。每一种都得落到同一个结论上。 */
 const REMOTE: { name: string; address?: string; headers: Record<string, string> }[] = [
   { name: "同机反代(带 X-Forwarded-For)", headers: { "x-forwarded-for": "203.0.113.9" } },
@@ -163,7 +182,7 @@ try {
     assert.equal((await call("/api/remote-access", remote)).status, 401, `${remote.name}:密钥端点不在免登录名单里`);
     assert.equal((await call("/review/current/a.mp4", remote)).status, 401, `${remote.name}:待审视频`);
     assert.equal((await call("/api/handoff/identity", remote)).status, 200, `${remote.name}:接力身份仍对匿名开着`);
-    assert.equal((await call("/", remote)).text, "shell", `${remote.name}:壳要打得开(访问密钥页就渲染在它里面)`);
+    assert.equal((await call("/", remote)).text, "shell", `${remote.name}:壳要打得开(配对页就渲染在它里面)`);
     const state = await call("/api/auth/state", remote);
     assert.deepEqual(
       { mode: state.body.mode, needsAccessKey: state.body.needsAccessKey, needsOnboarding: state.body.needsOnboarding },
@@ -202,9 +221,12 @@ try {
     const cookie = { ...remote.headers, cookie: login.cookie };
     assert.equal((await call("/api/canary", { ...remote, headers: cookie })).status, 200, `${remote.name}:cookie`);
 
-    // 凭密钥进来的设备能用,但读不到密钥、也换不了它。
+    // 凭密钥进来的设备能用,但读不到密钥、也换不了它。它在名册里,认得出哪台是自己。
     const peek = await call("/api/remote-access", { ...remote, headers: cookie });
-    assert.deepEqual(peek.body, { local: false });
+    assert.equal(peek.body.local, false);
+    assert.equal(peek.body.key, undefined);
+    const mine = (peek.body.devices as { via: string; current: boolean }[]).filter((d) => d.current);
+    assert.deepEqual(mine.map((d) => d.via), ["key"], `${remote.name}:粘密钥进来的浏览器登记成一台设备`);
     assert.equal((await call("/api/remote-access/rotate", { ...remote, method: "POST", headers: cookie })).status, 403);
     assert.equal((await call("/api/remote-access/rotate", { ...remote, method: "POST", headers: bearer })).status, 403);
 
@@ -233,7 +255,144 @@ try {
     200, "页面自己发的照常放行",
   );
 
-  // ── ⑥ 换密钥:旧的和它换出来的会话当场失效 ──────────────────────────────
+  // ── ⑥ 配对 ──────────────────────────────────────────────────────────────
+  const outsider = REMOTE[0]!;
+  const phone = {
+    ...outsider,
+    headers: {
+      ...outsider.headers,
+      "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+    },
+  };
+  type Device = { id: string; name: string; via: string; current: boolean };
+  const roster = async (headers?: Record<string, string>) =>
+    (await call("/api/remote-access", headers ? { ...outsider, headers } : {})).body.devices as Device[];
+
+  // 申请 → 允许 → 领凭证。
+  const ticket = await call("/api/auth/pair", { ...phone, method: "POST", body: {} });
+  assert.equal(ticket.status, 200, ticket.text);
+  assert.match(String(ticket.body.code), /^\d{4}$/, "两边核对用的四位数");
+  const asked = (await call("/api/remote-access/requests")).body.requests as { id: string; name: string; code: string }[];
+  assert.deepEqual(
+    asked.map((r) => [r.id, r.name, r.code]), [[ticket.body.id, "iPhone · Safari", ticket.body.code]],
+    "机主看到的是认得出的名字和同一个数",
+  );
+  const ticketOf = { id: ticket.body.id, secret: ticket.body.secret };
+  const approvePath = `/api/remote-access/requests/${String(ticket.body.id)}/approve`;
+  // 申请的人自己批不了,也看不到别人的申请和名册。
+  assert.equal((await call(approvePath, { ...phone, method: "POST" })).status, 401, "匿名批不了自己");
+  assert.equal((await call("/api/remote-access/requests", phone)).status, 401);
+  assert.equal((await call("/api/remote-access/pair-code", { ...phone, method: "POST" })).status, 401, "匿名出不了码");
+  const early = await call("/api/auth/pair/claim", { ...phone, method: "POST", body: ticketOf });
+  assert.equal(early.body.status, "pending");
+  assert.equal(early.cookie, null, "机主没点头之前什么都领不到");
+  assert.equal((await call("/api/canary", phone)).status, 401);
+
+  assert.equal((await call(approvePath, { method: "POST" })).status, 200);
+  assert.equal((await call(approvePath, { method: "POST" })).status, 404, "一张申请只决定一次");
+  const thief = await call("/api/auth/pair/claim", { ...phone, method: "POST", body: { ...ticketOf, secret: "guess" } });
+  assert.equal(thief.body.status, "gone", "只知道申请号、没有 secret 的领不走别人的批准");
+  assert.equal(thief.cookie, null);
+  const claimed = await call("/api/auth/pair/claim", { ...phone, method: "POST", body: ticketOf });
+  assert.equal(claimed.body.status, "approved", claimed.text);
+  assert.ok(claimed.cookie);
+  const paired = { ...outsider.headers, cookie: claimed.cookie };
+  assert.equal((await call("/api/canary", { ...outsider, headers: paired })).status, 200, "配对后凭 cookie 进");
+  assert.equal(
+    (await call("/api/canary", { ...outsider, headers: { ...outsider.headers, authorization: `Bearer ${String(claimed.body.token)}` } })).status,
+    200, "手机 app 带不了 cookie,同一把凭证当 Bearer 用",
+  );
+  assert.equal(
+    (await call("/api/auth/pair/claim", { ...phone, method: "POST", body: ticketOf })).body.status, "gone",
+    "批准只兑一次凭证",
+  );
+  assert.deepEqual(
+    (await roster(paired)).filter((d) => d.current).map((d) => [d.name, d.via]), [["iPhone · Safari", "approval"]],
+  );
+  assert.equal((await call("/api/auth/pair", { method: "POST", body: {} })).status, 409, "本机不用配对");
+  assert.equal((await call("/api/auth/pair", { ...outsider, method: "POST", body: {}, headers: paired })).status, 409, "已经进来的不重复配对");
+  // 落盘的只有凭证的哈希。
+  assert.equal(readFileSync(keyFile, "utf8").includes(String(claimed.body.token)), false, "设备凭证不落明文");
+
+  // 递申请不要凭证,所以只收从认得的地址打开的页面递来的:DNS 重绑定能让机主自己的
+  // 浏览器替攻击页递一张「来自本机」的申请,等机主顺手点允许。
+  const rebound = { headers: { ...phone.headers, host: `rebind.example:${port}` } };
+  const reboundAsk = await call("/api/auth/pair", { ...rebound, method: "POST", body: {} });
+  assert.equal(reboundAsk.status, 403, `不认得的域名递不了申请 ${reboundAsk.text}`);
+  assert.equal(((await call("/api/remote-access/requests")).body.requests as unknown[]).length, 0, "机主那边不该多出一张");
+  // 这样的名字不是进不来:扫码(要机主手里的码)照样行,用过一次之后就认得了。
+  const viaName = { headers: { ...phone.headers, host: `my-ash.example:${port}` } };
+  assert.equal((await call("/api/auth/pair", { ...viaName, method: "POST", body: {} })).status, 403);
+  const nameCode = await call("/api/remote-access/pair-code", { method: "POST" });
+  const nameScan = await call("/api/auth/pair/redeem", { ...viaName, method: "POST", body: { code: nameCode.body.code } });
+  assert.equal(nameScan.status, 200, nameScan.text);
+  const nameHeaders = { ...viaName.headers, cookie: nameScan.cookie! };
+  assert.equal((await call("/api/canary", { headers: nameHeaders })).status, 200);
+  const nameAsk = await call("/api/auth/pair", { ...viaName, method: "POST", body: {} });
+  assert.equal(nameAsk.status, 200, "机主带着凭证用过的名字就认得了");
+  assert.equal((await call(`/api/remote-access/requests/${String(nameAsk.body.id)}/deny`, { method: "POST" })).status, 200);
+  assert.equal((await call("/api/auth/pair", { ...rebound, method: "POST", body: {} })).status, 403, "别的域名照旧不认");
+  const nameId = (await call("/api/remote-access", { headers: nameHeaders })).body.devices as Device[];
+  assert.equal((await call(`/api/remote-access/devices/${nameId.find((d) => d.current)!.id}`, { method: "DELETE" })).status, 200);
+
+  // 拒绝。
+  const refusedTicket = await call("/api/auth/pair", { ...phone, method: "POST", body: { name: "阿明的平板" } });
+  const refusedOf = { id: refusedTicket.body.id, secret: refusedTicket.body.secret };
+  // 已经进来的设备也能替机主处理申请(进得来的本来就开得了终端)。
+  const viaPaired = await call(`/api/remote-access/requests/${String(refusedTicket.body.id)}/deny`, { ...outsider, method: "POST", headers: paired });
+  assert.equal(viaPaired.status, 200, viaPaired.text);
+  assert.equal(viaPaired.body.name, "阿明的平板", "手机 app 自己报的名字");
+  const refused = await call("/api/auth/pair/claim", { ...phone, method: "POST", body: refusedOf });
+  assert.equal(refused.body.status, "denied");
+  assert.equal(refused.cookie, null);
+
+  // 扫码:机主出示的一次性码。
+  const shownCode = await call("/api/remote-access/pair-code", { method: "POST" });
+  assert.equal(shownCode.status, 200, shownCode.text);
+  assert.ok(Array.isArray(shownCode.body.hosts));
+  assert.equal((await call("/api/auth/pair/redeem", { ...phone, method: "POST", body: { code: "not-the-code" } })).status, 410);
+  const scanned = await call("/api/auth/pair/redeem", { ...phone, method: "POST", body: { code: shownCode.body.code } });
+  assert.equal(scanned.status, 200, scanned.text);
+  assert.ok(scanned.cookie);
+  const scannedHeaders = { ...outsider.headers, cookie: scanned.cookie };
+  assert.equal((await call("/api/canary", { ...outsider, headers: scannedHeaders })).status, 200);
+  assert.equal(
+    (await call("/api/auth/pair/redeem", { ...phone, method: "POST", body: { code: shownCode.body.code } })).status, 410,
+    "码只兑一次:被人拍走也没用",
+  );
+  assert.deepEqual((await roster(scannedHeaders)).filter((d) => d.current).map((d) => d.via), ["code"]);
+
+  // 过期与上限(直接拨时钟)。
+  {
+    const t0 = Date.parse("2026-01-01T00:00:00Z");
+    const stale = pairing.openPairRequest({ name: "x", address: "10.0.0.1" }, t0)!;
+    assert.equal(pairing.claimPairRequest(stale.id, stale.secret, "10.0.0.1", t0 + 10 * 60_000).status, "gone", "申请十分钟后作废");
+    const staleCode = pairing.mintPairCode(t0);
+    assert.equal(pairing.redeemPairCode(staleCode.code, { name: "x", address: "10.0.0.1" }, t0 + 5 * 60_000), null, "码五分钟后作废");
+    const t1 = t0 + 60 * 60_000;
+    for (let i = 0; i < 3; i++) assert.ok(pairing.openPairRequest({ name: "x", address: "10.0.0.2" }, t1));
+    assert.equal(pairing.openPairRequest({ name: "x", address: "10.0.0.2" }, t1), null, "同一个地址刷不满机主的待办");
+    for (let i = 0; i < 5; i++) assert.ok(pairing.openPairRequest({ name: "x", address: `10.0.1.${i}` }, t1));
+    assert.equal(pairing.openPairRequest({ name: "x", address: "10.0.2.1" }, t1), null, "总数也有上限");
+    assert.equal(pairing.pendingPairRequests(t1 + 10 * 60_000).length, 0);
+  }
+
+  // 移除一台设备:凭证作废,它开着的长连接一并掐断。
+  const stream = await openStream("/api/stream", { ...outsider, headers: scannedHeaders });
+  assert.equal(stream.res.statusCode, 200);
+  const scannedId = (await roster(scannedHeaders)).find((d) => d.current)!.id;
+  assert.equal((await call(`/api/remote-access/devices/${scannedId}`, { ...phone, method: "DELETE" })).status, 401, "匿名请不走别人");
+  const removed = await call(`/api/remote-access/devices/${scannedId}`, { method: "DELETE" });
+  assert.equal(removed.status, 200, removed.text);
+  assert.equal((removed.body.devices as Device[]).some((d) => d.id === scannedId), false);
+  await Promise.race([
+    stream.closed,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("被移除的设备还开着的长连接没有被掐断")), 3_000)),
+  ]);
+  assert.equal((await call("/api/canary", { ...outsider, headers: scannedHeaders })).status, 401, "被移除的设备当场进不来");
+  assert.equal((await call(`/api/remote-access/devices/${scannedId}`, { method: "DELETE" })).status, 404);
+
+  // ── ⑦ 换密钥:旧密钥和凭它进来的设备当场失效 ──────────────────────────────
   const via = REMOTE[0]!;
   const oldLogin = await call("/api/auth/login", { ...via, method: "POST", body: { key } });
   const oldCookie = { ...via.headers, cookie: oldLogin.cookie! };
@@ -243,12 +402,19 @@ try {
   const nextKey = String(rotated.body.key);
   assert.notEqual(nextKey, key);
   assert.equal((await call("/api/canary", { ...via, headers: { ...via.headers, authorization: `Bearer ${key}` } })).status, 401, "旧密钥");
-  assert.equal((await call("/api/canary", { ...via, headers: oldCookie })).status, 401, "旧密钥换出来的会话");
+  assert.equal((await call("/api/canary", { ...via, headers: oldCookie })).status, 401, "粘旧密钥进来的浏览器");
   assert.equal((await call("/api/auth/login", { ...via, method: "POST", body: { key } })).status, 401);
   assert.equal((await call("/api/canary", { ...via, headers: { ...via.headers, authorization: `Bearer ${nextKey}` } })).status, 200);
   assert.equal((await call("/api/canary")).status, 200, "本机不受换密钥影响");
+  assert.equal((await call("/api/canary", { ...outsider, headers: paired })).status, 200, "机主点过「允许」的设备不靠密钥,不受牵连");
+  assert.deepEqual((rotated.body.devices as Device[]).map((d) => d.via), ["approval"]);
 
-  // ── ⑦ 名单只放行路径形状,凭证在路由里验 —— 自用模式的匿名也不例外 ─────────
+  // 登出 = 这台设备自己退出名册。
+  assert.equal((await call("/api/auth/logout", { ...outsider, method: "POST", headers: paired })).status, 200);
+  assert.equal((await call("/api/canary", { ...outsider, headers: paired })).status, 401);
+  assert.deepEqual(await roster(), []);
+
+  // ── ⑧ 名单只放行路径形状,凭证在路由里验 —— 自用模式的匿名也不例外 ─────────
   // /restart-impact 住在 routes.ts 自己身上,所以挂真的那张 `api`。进程内派发 + 非回环
   // Host 就是匿名(判据见 ①),不必为它再起一个 server。
   const { api: realApi } = await import("../src/routes.js");
@@ -258,6 +424,13 @@ try {
   const peeked = await real.request("http://192.168.1.20:4317/api/restart-impact");
   assert.equal(peeked.status, 401, `别的机器不带凭证看不到「谁在跑」:${await peeked.text()}`);
   assert.equal((await real.request("http://localhost:4317/api/restart-impact")).status, 200, "本机的重启脚本照常问得到");
+
+  // ── ⑨ 多人模式没有设备配对:那边每个人凭自己的 key 登录 ─────────────────────
+  await mode.setInstanceMode("multi", join(stage, "root"));
+  for (const path of ["/api/auth/pair", "/api/auth/pair/claim", "/api/auth/pair/redeem"]) {
+    assert.equal((await call(path, { ...outsider, method: "POST", body: {} })).status, 409, `多人模式 ${path}`);
+  }
+  assert.equal((await call("/api/remote-access/requests", outsider)).status, 401);
 } finally {
   direct.destroy();
   server.closeAllConnections();

@@ -83,7 +83,7 @@ export function SetupWizard({ state, onDone }: { state: AuthState; onDone: () =>
         <button type="button" className="auth-choice" onClick={() => void chooseSingle()} disabled={busy}>
           <b>只有我自己</b>
           <span>
-            在这台机器上打开就用，别的设备凭访问密钥进。CLI 继续用这台机器上的登录态
+            在这台机器上打开就用，别的设备配对后进。CLI 继续用这台机器上的登录态
             （<code>~/.claude</code> 等），订阅照用。
           </span>
         </button>

@@ -1,8 +1,9 @@
 // 鉴权中间件:所有请求的第一道闸(§三)。
 //
 // 两种模式走同一条流程,差别只在「身份从哪来」:多人模式认 users 表上的人(cookie 会话 /
-// Bearer key);自用模式只有机主一个人,认的是「本机直连」或访问密钥(auth/remote-access.ts
-// —— 连得上端口不算身份)。认不出来的一律是匿名,只碰得到下面那张免登录名单。
+// Bearer key);自用模式只有机主一个人,认的是「本机直连」、机主放进来的设备或访问密钥
+// (auth/remote-access.ts —— 连得上端口不算身份)。认不出来的一律是匿名,只碰得到下面那张
+// 免登录名单。
 //
 // **覆盖面是正面清单,不是黑名单**(审查修订 C9):`/api/*`、`/mobile`、`/review`、
 // preview 端点全部在闸内;豁口只有三类,写死在 PUBLIC_PATHS / 判定函数里。
@@ -41,6 +42,11 @@ const PUBLIC_API_PATHS = new Set([
   "/api/auth/state",
   "/api/auth/login",
   "/api/auth/setup",
+  // 自用模式下一台新设备申请进来(auth/remote-pairing.ts):要求先登录是死结。凭据在
+  // 路由里验 —— 申请只是排进机主的待办,领结果要申请时发的 secret,兑码要机主出示的码。
+  "/api/auth/pair",
+  "/api/auth/pair/claim",
+  "/api/auth/pair/redeem",
   // ── 机器对机器的接力端点 ────────────────────────────────────────────────
   // 它们由**对端的 ash 服务端**来调,拿不到本机的 cookie 也没有本机的 key,所以走
   // 不了这道闸;它们自己那套闸更严:ed25519 签名 + 来源机审批 + §十一 的用户级 key。
@@ -176,8 +182,9 @@ export function crossSiteRejection(headers: {
  * agent,所以把「去哪拿、怎么带」一次说全。
  */
 const REMOTE_ACCESS_REFUSAL =
-  "这台 ash 只认本机直连和访问密钥：在它本机打开「设置 → 默认规则 → 远程访问」拿到密钥，"
-  + "网页粘一次即可，程序每个请求带 Authorization: Bearer <密钥>";
+  "这台 ash 只认本机直连、配对过的设备和访问密钥：用浏览器打开它的地址会自动申请配对，"
+  + "在它本机点「允许」即可；脚本每个请求带 Authorization: Bearer <访问密钥>，"
+  + "密钥在它本机的「设置 → 默认规则 → 远程访问」里";
 
 /** 请求指名要找的主机。进程内派发没有 Host 头,取 URL 里的(与 human-request.ts 同一口径)。 */
 const requestHost = (c: Context): string => c.req.header("host") ?? new URL(c.req.url).host;
@@ -279,7 +286,7 @@ export function authGate(): MiddlewareHandler {
     } else if (!actor) {
       const proof = ownerProof(c, getCookie(c, SESSION_COOKIE));
       if (proof) actor = SINGLE_ACTOR;
-      ambient = proof === "local" || proof === "cookie";
+      ambient = proof?.how === "local" || proof?.how === "cookie";
     }
 
     if (actor) {

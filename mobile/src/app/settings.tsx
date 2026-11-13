@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
-import { View, Text, ScrollView, KeyboardAvoidingView, Platform } from "react-native";
+import { useCallback, useEffect, useState } from "react";
+import { View, Text, ScrollView, KeyboardAvoidingView, Platform, Pressable } from "react-native";
 import { useRouter } from "expo-router";
+import type { PairTicket } from "@ash/shared/multiuser";
 import { getApiKey, getBaseURL, setApiKey, setBaseURL } from "@/lib/config";
 import { api } from "@/lib/api";
 import { refreshAll } from "@/lib/data";
@@ -9,17 +10,51 @@ import { Button, Input } from "@/components/ui";
 
 type Status = { kind: "idle" | "testing" | "ok" | "fail"; msg?: string };
 
+/** 配对时报给电脑那边的名字:机主靠它认出「就是我手上这台」。网页导出版不报,让服务端按浏览器认。 */
+const DEVICE_NAME =
+  Platform.OS === "ios" ? "iPhone · ash app" : Platform.OS === "android" ? "Android · ash app" : undefined;
+
 export default function Settings() {
   const router = useRouter();
   const theme = useTheme();
   const [url, setUrl] = useState(getBaseURL() ?? "");
   const [key, setKey] = useState(getApiKey() ?? "");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
-  // 这台后端要哪一种 key?多人模式要个人 key;自用模式从手机连过去要那台 ash 的访问密钥
-  // (只有和 ash 同机的模拟器才不用)。都不用时不显示那一栏 —— 别拿一个填不上的输入框
-  // 拦人。地址一变就重探一次。
+  // 这台后端怎么认人?多人模式要个人 key;自用模式从手机连过去要先配对(只有和 ash 同机
+  // 的模拟器才不用):点保存就递一张申请,在电脑上点「允许」即可,什么都不用填。那把给
+  // 脚本用的访问密钥也能填,但要自己点开。地址一变就重探一次。
   const [multi, setMulti] = useState<boolean | null>(null);
   const [needsKey, setNeedsKey] = useState<boolean | null>(null);
+  const [manualKey, setManualKey] = useState(false);
+  const [pairing, setPairing] = useState<{ url: string; ticket: PairTicket } | null>(null);
+
+  const finish = useCallback(async (v: string, credential: string, who?: string) => {
+    await setBaseURL(v);
+    await setApiKey(credential);
+    await refreshAll();
+    setStatus({ kind: "ok", msg: who ? `已连接 · ${who}` : "已连接" });
+    if (router.canGoBack()) router.back();
+    else router.replace("/");
+  }, [router]);
+
+  // 等电脑那边点头。
+  useEffect(() => {
+    if (!pairing) return;
+    let alive = true;
+    const check = async () => {
+      try {
+        const claim = await api.pairClaim(pairing.url, pairing.ticket);
+        if (!alive || claim.status === "pending") return;
+        setPairing(null);
+        if (claim.status === "approved") await finish(pairing.url, claim.token);
+        else setStatus({ kind: "fail", msg: claim.status === "denied" ? "这次申请被拒绝了" : "申请过期了，再点一次" });
+      } catch {
+        // 断网或后端重启中:下一轮再问。
+      }
+    };
+    const timer = setInterval(() => void check(), 2_000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [pairing, finish]);
 
   useEffect(() => {
     const v = url.trim().replace(/\/+$/, "");
@@ -61,21 +96,19 @@ export default function Settings() {
         return;
       }
       if (state.needsAccessKey) {
-        setStatus({
-          kind: "fail",
-          msg: key.trim() ? "访问密钥不对（可能已被重新生成）" : "这台 ash 需要访问密钥",
-        });
+        if (manualKey && key.trim()) {
+          setStatus({ kind: "fail", msg: "访问密钥不对（可能已被重新生成）" });
+          return;
+        }
+        // 这台手机还没被放进来(或者之前的凭证被移除了):递一张申请,等电脑那边点头。
+        setPairing({ url: v, ticket: await api.pairOpen(v, DEVICE_NAME) });
+        setStatus({ kind: "idle" });
         return;
       }
       // 自用模式下只在「不带 key 就进不去」时才存它:同机模拟器那种本来就不用的,不留一把
       // 多余的凭证在手机上。
       const keyed = state.mode === "multi" || (await api.authState(v, "")).needsAccessKey === true;
-      await setBaseURL(v);
-      await setApiKey(keyed ? key.trim() : "");
-      await refreshAll();
-      setStatus({ kind: "ok", msg: state.user ? `已连接 · ${state.user.name}` : "已连接" });
-      if (router.canGoBack()) router.back();
-      else router.replace("/");
+      await finish(v, keyed ? key.trim() : "", state.user?.name);
     } catch (e) {
       setStatus({ kind: "fail", msg: `连接失败：${e instanceof Error ? e.message : String(e)}` });
     }
@@ -104,7 +137,7 @@ export default function Settings() {
           />
         </View>
 
-        {needsKey !== false && (
+        {needsKey !== false && (multi !== false || manualKey) && (
           <View style={{ gap: 6 }}>
             <Text style={{ color: theme.faint, fontSize: 12 }}>
               {multi === false ? "访问密钥" : "你的 key"}
@@ -126,7 +159,30 @@ export default function Settings() {
           </View>
         )}
 
-        <Button label={status.kind === "testing" ? "测试中…" : "测试并保存"} onPress={save} disabled={status.kind === "testing"} />
+        {pairing ? (
+          <View style={{ gap: 10, alignItems: "center", paddingVertical: 8 }}>
+            <Text style={{ color: theme.muted, fontSize: 13, lineHeight: 19, textAlign: "center" }}>
+              在跑着 ash 的那台电脑上点「允许」，这里会自己连上。
+            </Text>
+            <Text
+              accessibilityLabel={`配对码 ${pairing.ticket.code}`}
+              style={{ color: theme.ink, fontSize: 40, fontWeight: "600", letterSpacing: 10, fontVariant: ["tabular-nums"] }}
+            >
+              {pairing.ticket.code}
+            </Text>
+            <Button label="取消" variant="secondary" onPress={() => setPairing(null)} />
+          </View>
+        ) : (
+          <Button label={status.kind === "testing" ? "测试中…" : "测试并保存"} onPress={save} disabled={status.kind === "testing"} />
+        )}
+
+        {multi === false && needsKey && !pairing ? (
+          <Pressable onPress={() => setManualKey((value) => !value)} accessibilityRole="button">
+            <Text style={{ color: theme.faint, fontSize: 12, textDecorationLine: "underline" }}>
+              {manualKey ? "不用密钥，改为向电脑申请配对" : "改用访问密钥"}
+            </Text>
+          </Pressable>
+        ) : null}
 
         {status.msg ? <Text style={{ color: statusColor, fontSize: 13 }}>{status.msg}</Text> : null}
 
