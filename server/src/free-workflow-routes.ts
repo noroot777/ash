@@ -22,7 +22,7 @@ import {
   disputeTargetOf,
   resolveFreeReviewDispute,
 } from "./free-review-dispute.js";
-import { freeReviewExpiredScreenshots, freeReviewFile, readExpiredReviewImages } from "./free-review-files.js";
+import { evidenceName, freeReviewExpiredScreenshots, freeReviewFile, readExpiredReviewImages, taskExpiredScreenshots } from "./free-review-files.js";
 import { mountFreePreviewRoutes } from "./free-workflow-preview.js";
 import { freeWorkflowState } from "./free-workflow-state.js";
 import { handoffBlockReasonById } from "./handoff-guard.js";
@@ -196,6 +196,13 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     try { return c.json(await cancelFreeReviewReservation(c.req.param("id"))); }
     catch (error) { return c.json(errorBody(error), 409); }
   });
+  // 某个任务有哪几张截图过了保留期。引用它们的地方不一定在这个任务里（别的任务对话里点开的旧
+  // 报告、贴过来的证据地址），前端按证据地址里的任务编号现取，不靠「用户先打开过那个任务」。
+  api.get("/tasks/:id/free-workflow/expired-screenshots", async (c) => {
+    const taskId = c.req.param("id");
+    if (!(await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId))).length) return c.json({ error: "not found" }, 404);
+    return c.json({ rounds: taskExpiredScreenshots(taskId) });
+  });
   api.get("/tasks/:id/free-workflow/review-file", async (c) => {
     const taskId = c.req.param("id");
     const runId = c.req.query("run") ?? "";
@@ -211,7 +218,8 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     const file = freeReviewFile(taskId, runId, round, name);
     if (!file) {
       // 过了保留期删掉的截图如实说「没了、也不会回来」，跟「从来没有这个文件」分开。
-      const expired = freeReviewExpiredScreenshots(readExpiredReviewImages(taskId), runId, round, []).includes(name);
+      const normalized = evidenceName(name);
+      const expired = !!normalized && freeReviewExpiredScreenshots(readExpiredReviewImages(taskId), runId, round, []).includes(normalized);
       return expired ? c.json({ error: "已过保留期" }, 410) : c.json({ error: "not found" }, 404);
     }
     return c.body(Uint8Array.from(readFileSync(file)), 200, headers);

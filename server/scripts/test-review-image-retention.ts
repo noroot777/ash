@@ -3,6 +3,10 @@
 //   · 了结满 7 天删截图，report.md / review.diff / 日志一份不碰；
 //   · 进行中、了结未满 7 天、两次清扫之间重新打开又验收的任务不受影响；
 //   · 删掉的那几张在状态里报成 expiredScreenshots、证据接口回 410，而不是「从来没有」的 404；
+//     等价写法（`round=01`、`shots\b.jpg`）认作同一张；任务级的过期清单接口给别的任务里引用它的
+//     地方现取（审查第 1 轮 F2、N1）；
+//   · 清扫改了证据，状态修订号必须前进并发 task.review——否则开着的页面把新快照当重复拒收
+//     （审查第 1 轮 F1）。图又回来了也一样；
 //   · 删之前先记过期清单，记不上就一张不删；符号链接一律不跟；
 //   · 跟同编号的接力导入按目录锁互斥：导入持锁期间把任务重新打开，清扫读到的是导入之后的状态。
 import assert from "node:assert/strict";
@@ -25,6 +29,7 @@ try {
   const { commitAcceptanceStage } = await import("../src/review-acceptance.js");
   const { commitReopenAcceptedStage } = await import("../src/task-stage.js");
   const { withTaskDirLock } = await import("../src/task-dir-lock.js");
+  const { bus } = await import("../src/bus.js");
   const { Hono } = await import("hono");
   const { eq } = await import("drizzle-orm");
   await ensureSchema();
@@ -82,7 +87,12 @@ try {
   assert.equal((await sweepRunRetention(t0 + 6 * DAY)).screenshots.removed, 0, "未满 7 天不删");
 
   // ── 满 7 天：只删图，文字产物都在 ──
+  const versionBefore = (await freeWorkflowState("accepted")).stateVersion;
+  const activeVersion = (await freeWorkflowState("active")).stateVersion;
+  const notified = new Set<string>();
+  const unsubscribe = bus.subscribe((event) => { if (event.type === "task.review") notified.add(event.taskId); });
   const swept = await sweepRunRetention(t0 + 7 * DAY);
+  unsubscribe();
   assert.equal(swept.screenshots.removed, 6, "验收的、归档的各 3 张");
   assert.ok(swept.screenshots.bytes > 0);
   for (const task of [accepted, archived]) {
@@ -92,6 +102,11 @@ try {
   assert.deepEqual(images(active), [true, true, true], "进行中的任务不管多旧都不碰");
   assert.deepEqual(images(finishedOnly), [true, true, true], "没验收也没归档的不在范围内");
   assert.deepEqual(images(late), [true, true, true], "了结才 4 天的不碰");
+
+  // ── 清扫改了证据：修订号前进、发事件；没动的任务版本不变 ──
+  assert.deepEqual([...notified].sort(), ["accepted", "archived"], "删了图的任务各发一次 task.review");
+  assert.ok((await freeWorkflowState("accepted")).stateVersion > versionBefore, "删图之后状态修订号必须前进");
+  assert.equal((await freeWorkflowState("active")).stateVersion, activeVersion, "没动的任务版本不变");
 
   // ── 删了的如实报出来：状态里有 expiredScreenshots，接口回 410；文字照常读 ──
   const expiredRound = await round("accepted");
@@ -103,11 +118,22 @@ try {
   assert.equal((await fetchFile("accepted", accepted.runId, "never.png")).status, 404, "从来没有的图仍是 404");
   assert.equal((await fetchFile("accepted", accepted.runId, "report.md")).status, 200);
   assert.equal((await round("active")).expiredScreenshots, undefined, "没删过的轮次不带这个字段");
+  // 等价写法认作同一张（审查第 1 轮 N1）
+  const aliased = (query: string) => api.request(`/tasks/accepted/free-workflow/review-file?run=${accepted.runId}&${query}`);
+  assert.equal((await aliased("round=01&name=a.png")).status, 410, "轮次写成 01");
+  assert.equal((await aliased(`round=1&name=${encodeURIComponent("shots\\b.jpg")}`)).status, 410, "子路径用反斜杠");
+  // 任务级的过期清单：别的任务里引用这些证据的地方按它现取（审查第 1 轮 F2）
+  const listed = await (await api.request("/tasks/accepted/free-workflow/expired-screenshots")).json();
+  assert.deepEqual(listed, { rounds: [{ runId: accepted.runId, round: 1, names: [...IMAGES].sort() }] });
+  assert.deepEqual(await (await api.request("/tasks/active/free-workflow/expired-screenshots")).json(), { rounds: [] });
+  assert.equal((await api.request("/tasks/nope/free-workflow/expired-screenshots")).status, 404);
 
-  // 同名的图又回来了（例如接力带回）：以磁盘为准，不再算过期。
+  // 同名的图又回来了（例如接力带回）：以磁盘为准，不再算过期。这条路不发事件，靠状态指纹前进。
+  const expiredVersion = (await freeWorkflowState("accepted")).stateVersion;
   writeFileSync(accepted.paths["a.png"]!, "back");
   utimesSync(accepted.paths["a.png"]!, (t0 + 100 * DAY) / 1000, (t0 + 100 * DAY) / 1000); // 别让它在下面的计数里被当成过期再删
   const restored = await round("accepted");
+  assert.ok((await freeWorkflowState("accepted")).stateVersion > expiredVersion, "图回来了也是可见变化，版本照样前进");
   assert.deepEqual(restored.screenshots, ["a.png"]);
   assert.deepEqual(restored.expiredScreenshots, ["c.webp", "shots/b.jpg"]);
   assert.equal((await fetchFile("accepted", accepted.runId, "a.png")).status, 200);

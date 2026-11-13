@@ -110,6 +110,29 @@ export function expiredRoundKey(runId: string, round: number): string {
   return `${runId}/round-${round}`;
 }
 
+/**
+ * 证据身份的规范写法：轮次按数（`01`、`1.0` 都是第 1 轮，跟证据接口的 `Number(round)` 同一口径），
+ * 文件名按 `evidenceSegments` 拆段再用 `/` 拼（`shots\a.png` 就是 `shots/a.png`）。读文件和
+ * 判过期都过这一道，否则同一张图在一边认得、另一边认不得。
+ */
+export function evidenceName(name: string): string | null {
+  return evidenceSegments(name)?.join("/") ?? null;
+}
+
+/** 这个任务每一轮里过了保留期、已经删掉的截图（还在磁盘上的不算）。 */
+export function taskExpiredScreenshots(taskId: string): { runId: string; round: number; names: string[] }[] {
+  const out: { runId: string; round: number; names: string[] }[] = [];
+  const expired = readExpiredReviewImages(taskId);
+  for (const key of Object.keys(expired)) {
+    const match = /^(.+)\/round-([1-9]\d*)$/.exec(key);
+    if (!match) continue;
+    const [runId, round] = [match[1]!, Number(match[2])];
+    const names = freeReviewExpiredScreenshots(expired, runId, round, freeReviewScreenshots(taskId, runId, round));
+    if (names.length) out.push({ runId, round, names });
+  }
+  return out;
+}
+
 export function readExpiredReviewImages(taskId: string): Record<string, string[]> {
   try {
     const parsed = JSON.parse(readFileSync(join(RUNS_DIR, taskId, EXPIRED_REVIEW_IMAGES), "utf8")) as unknown;

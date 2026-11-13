@@ -379,6 +379,9 @@ export const api = {
     text: string; truncated: boolean; updatedAt: string | null;
     exists: boolean; running: boolean; starting: boolean; command: string | null; url: string | null;
   }> => request(`/tasks/${id(taskId)}/free-workflow/preview/log${serviceId ? `?service=${id(serviceId)}` : ""}`),
+  // 这个任务里过了保留期、已经删掉的审查截图（见 free-workflow/expiredEvidence）。
+  freeReviewExpiredScreenshots: (taskId: string): Promise<{ rounds: { runId: string; round: number; names: string[] }[] }> =>
+    request(`/tasks/${id(taskId)}/free-workflow/expired-screenshots`),
   freeReviewFileUrl: (taskId: string, runId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/free-workflow/review-file?run=${id(runId)}&round=${id(String(round))}&name=${id(name)}`),
   // 人工替这一站「自动验证」签字放行。**后端会接着把这一站之后那一段跑掉**——线上

@@ -10,6 +10,7 @@
 // 对一张再也回不来的图是误导。先记后删：记不上就一张不删（抛错，这个任务的截图这一趟跳过）。
 import { lstatSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { bus } from "./bus.js";
 import {
   EXPIRED_REVIEW_IMAGES,
   expiredRoundKey,
@@ -78,6 +79,9 @@ export const reviewImages: RetainedKind = {
         /* 删不掉：清单里记着也无妨，文件还在就照常显示 */
       }
     }
+    // 开着这个任务的页面要立刻换成「已过保留期」：发事件推进状态修订号、叫前端重取。指纹里
+    // 也算了证据（free-workflow-state.ts），这里是不等轮询的那一半。
+    if (removed) bus.publish({ type: "task.review", taskId });
     return { removed, bytes };
   },
 };

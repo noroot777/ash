@@ -28,6 +28,7 @@ import { debateViews } from "./free-review-debate.js";
 import { hasDispute } from "./free-review-dispute.js";
 import { worktreePathFor } from "./git.js";
 import { workspaceSnapshot, type WorkspaceSnapshot } from "./workspace-fingerprint.js";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { previewState } from "./preview-public.js";
 import { reviewTurnInFlight } from "./review-turn.js";
@@ -284,7 +285,13 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
   // 警示（审查实测）。版本在指纹核对后取——DB 读取期间的变更会由随后的事件 bump +
   // SSE 重取覆盖，方向自愈。reviewTurn 一并入指纹：它不落库、也不单独发事件，靠状态
   // 变更顺带 bump 的话，旁路回合起落那一下前端可能拿不到新版本。
-  const fp = `${workspace.head}|${workspace.dirty}|${workspace.fingerprint}|${task.status}|${reviewTurn}`;
+  // 证据目录里的东西（报告正文、截图、过了保留期删掉的那几张）是**读的时候现从磁盘取**的，
+  // 改它的一方不一定发事件：保留期清扫、接力把文件带回来、有人手动删。内容变了版本不变，前端
+  // 就会把这份新快照当成重复拒收（审查实测：清扫后开着的页面一直停在旧截图）。所以它们也进
+  // 指纹，跟工作区同一个道理。
+  const evidence = createHash("sha1").update(JSON.stringify(reviews.map((run) => run.rounds.map((round) =>
+    [run.id, round.round, round.reportMarkdown, round.screenshots, round.expiredScreenshots ?? []])))).digest("hex");
+  const fp = `${workspace.head}|${workspace.dirty}|${workspace.fingerprint}|${task.status}|${reviewTurn}|${evidence}`;
   if (workspaceFingerprints.get(taskId) !== fp) {
     workspaceFingerprints.set(taskId, fp);
     revisions.set(taskId, Math.max(revisionOf(taskId) + 1, Date.now()));

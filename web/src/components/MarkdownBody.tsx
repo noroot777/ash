@@ -12,7 +12,7 @@ import { isLocalFileHref } from "./fileLinkTarget.ts";
 import { destinationFilePath } from "@ash/shared/markdown-images";
 import { isAudioPath, isVideoPath } from "../task-detail/utils.ts";
 import { CodeBlockScope, MarkdownCode, TaskFileLinkBase, useTaskFileHref } from "./TaskFileLink.tsx";
-import { useExpiredEvidence } from "../free-workflow/expiredEvidence.ts";
+import { refreshExpiredEvidence, useExpiredEvidence } from "../free-workflow/expiredEvidence.ts";
 import {
   insertIndexOf,
   regionIndexOf,
@@ -106,7 +106,9 @@ function MarkdownImage({ alt, origin, url, name }: {
       alt={alt}
       label={alt || name}
       // 站外地址失败照旧交给浏览器自己的 alt：那是对面站点的事，报「取不到」帮不上忙。
-      onError={() => { if (sameOriginUrl(url)) setFailed(url); }}
+      // 同源取不到时顺手重取这张图所属任务的过期清单：页面开着时清扫跑过，那张图该改口说
+      // 「已过保留期」，而不是一直挂着「再试一次」（不是证据地址的什么都不做）。
+      onError={() => { if (sameOriginUrl(url)) { setFailed(url); refreshExpiredEvidence(url); } }}
     />
   );
 }
