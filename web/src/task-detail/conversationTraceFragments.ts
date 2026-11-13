@@ -1,18 +1,20 @@
 // 没有正文、只剩执行过程的回合 —— 从 conversationModel.ts 拆出来（单文件 700 行的约定）。
 import type { Session } from "@ash/shared";
-import { traceKeptOnDelete, traceSpanFingerprint, type ConvSeg } from "@ash/shared/session-output";
+import { traceKeptOnDelete, type ConvSeg } from "@ash/shared/session-output";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationItem } from "./conversationModel.ts";
 import { reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";
 import { contentSegments } from "./conversationSegments.ts";
 import { traceRun, traceUsage } from "./conversationTraceGroups.ts";
+import { traceSpanSource } from "./conversationTraceSources.ts";
 import { agentLabel, compactTurnText, sessionRun } from "./conversationTurnParts.ts";
 
 /**
  * 把没被任何正文段认领的 trace 组铺成「执行过程」气泡，追加到 `items` 末尾。
  *
  * 这种气泡在 .md 里没有对应的段，删除时按它在 trace 里占的时间段指名（`sources` 的 trace
- * 那一种，服务端在 server/src/conversation-redact.ts 按同一时间段重算指纹）。
+ * 那一种，服务端在 server/src/conversation-redact.ts 按同一时间段重算指纹；`sessionTrace` /
+ * `readSide` 是整条 trace 和其中读侧补出来的那几条，见 conversationTraceSources）。
  */
 export function appendTraceFragments(
   items: ConversationItem[],
@@ -20,6 +22,8 @@ export function appendTraceFragments(
   segments: readonly ConvSeg[],
   traceGroups: Map<string, SessionTraceEntry[]>,
   consumedTrace: Set<string>,
+  sessionTrace: readonly SessionTraceEntry[],
+  readSide: ReadonlySet<SessionTraceEntry>,
 ): void {
   // A failed turn can contain only tools/errors and no assistant prose. Keep
   // its execution block visible instead of dropping the persisted trace.
@@ -50,7 +54,7 @@ export function appendTraceFragments(
     if (!entries.some((entry) => !traceKeptOnDelete(entry.event.kind))) return;
     const traceSegments = contentSegments(entries, "", `persisted:trace-segment:${session.id}:${pending.turn}`);
     // 指名用整组原样的事件（含被当成复读滤掉的正文）：服务端那边看到的就是这一份。
-    const spanAt = pending.entries.filter((entry) => !traceKeptOnDelete(entry.event.kind)).map((entry) => entry.at).sort();
+    const source = traceSpanSource(session.id, sessionTrace, readSide, pending.entries);
     items.push({
       kind: "agent",
       id: `persisted:trace:${session.id}:${pending.turn}`,
@@ -68,10 +72,7 @@ export function appendTraceFragments(
       usage: traceUsage(entries),
       markdown: traceSegments.map((segment) => segment.markdown).join(""),
       segments: traceSegments,
-      sources: [{
-        sessionId: session.id,
-        trace: { from: spanAt[0]!, to: spanAt.at(-1)!, fingerprint: traceSpanFingerprint(pending.entries) },
-      }],
+      sources: source ? [source] : [],
     });
   };
   for (const [traceTurn, entries] of [...traceGroups].sort(([left], [right]) => Date.parse(left) - Date.parse(right))) {

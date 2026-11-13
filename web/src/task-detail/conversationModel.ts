@@ -24,7 +24,7 @@ import type { LiveAgentEvent, PersistedTurnTimes } from "./conversationTurnParts
 import { agentLabel, latestTurnStart, recordPersistedTurn, sessionRun } from "./conversationTurnParts.ts";
 import { appendLiveTimeline } from "./conversationLiveTurns.ts";
 import { appendTraceFragments } from "./conversationTraceFragments.ts";
-import { segmentTraceWindow, strayTraceSources } from "./conversationTraceSources.ts";
+import { readSideTail, segmentTraceWindow, strayTraceSources } from "./conversationTraceSources.ts";
 import { contentVersion } from "../lib/useStickToBottom.ts";
 import { conversationItemSize } from "./conversationContentSize.ts";
 export { conversationToMarkdown } from "./conversationMarkdown.ts";
@@ -279,6 +279,8 @@ function appendPersistedSession(
   });
   const sessionTrace = normalizedPersistedTrace(trace, session);
   const traceGroups = groupedTrace(sessionTrace);
+  // 服务端读的时候接在末尾补出来的几条，删除出处的指纹不数它们（见 conversationTraceSources）。
+  const readSide = readSideTail(sessionTrace);
   const consumedTrace = new Set<string>();
   // ── 一遍过认三件事：谁是旁注、哪条旁注要把上下两截并回一颗气泡、trace 从哪儿切开 ──
   //
@@ -479,7 +481,7 @@ function appendPersistedSession(
       // 领到的步子落在这段正文的删除时间窗外（记录之后那几步）：另报成 trace 出处，删这颗
       // 气泡时一起删掉（见 conversationTraceSources）。
       if (!chunk.deleted) {
-        chunk.sources!.push(...strayTraceSources(session.id, sessionTrace, traceEntries, segmentTraceWindow(segments, index)));
+        chunk.sources!.push(...strayTraceSources(session.id, sessionTrace, readSide, traceEntries, segmentTraceWindow(segments, index)));
       }
       // 中间只隔着一条「那一刻回合还在飞」的旁注 —— 这就是同一回合的下半截，并回去。
       // 身份再核一道：同一条会话上换轮验证也算换人（reviewerKey），换了人就不是同一段
@@ -500,7 +502,7 @@ function appendPersistedSession(
     }
   });
   // 没有正文、只剩执行过程的回合（conversationTraceFragments.ts）。
-  appendTraceFragments(items, session, segments, traceGroups, consumedTrace);
+  appendTraceFragments(items, session, segments, traceGroups, consumedTrace, sessionTrace, readSide);
 
   /* 「这条会话**此刻**还卡在上游等回话」是**服务端给的一位事实**(`Session.awaitingUpstream`,
      判据见 server/src/session-waiting.ts),落在这条会话最后那颗气泡上 —— 折叠条读的就是

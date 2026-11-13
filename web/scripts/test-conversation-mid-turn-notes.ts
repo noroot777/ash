@@ -29,7 +29,8 @@ const { redactTranscript, redactTrace, traceSpanWindow } = await import("../../s
 type Agent = Extract<ConversationItem, { kind: "agent" }>;
 type Step =
   | { say: string; at: string }
-  | { tool: string; at: string }
+  // event：盘上那条事件的原样（子智能体、附件…）；缺省是一条名叫 tool 的普通工具调用。
+  | { tool: string; at: string; event?: Record<string, unknown> }
   | { note: string; at: string; aside?: boolean }
   | { user: string; at: string; bySystem?: boolean }
   | { turn: string; verifyRound?: number }
@@ -66,7 +67,7 @@ function persisted(steps: readonly Step[]) {
       md += `${step.say}\n`;
       trace.push({ at: step.at, turnStartedAt: turnAt, event: { kind: "text", text: `${step.say}\n` } });
     } else if ("tool" in step) {
-      trace.push({ at: step.at, turnStartedAt: turnAt, event: { kind: "tool", name: step.tool } });
+      trace.push({ at: step.at, turnStartedAt: turnAt, event: step.event ?? { kind: "tool", name: step.tool } });
     } else if ("note" in step) {
       md += sentinel({ t: "system", agent: "codex", text: step.note, at: step.at, ...(step.aside === false ? {} : { aside: true }) });
     } else if ("user" in step) {
@@ -90,7 +91,7 @@ function live(steps: readonly Step[], from = 0): TimelineEntry[] {
     if ("turn" in step) verifyRound = step.verifyRound;
     else if (index < from) continue;
     else if ("say" in step) timeline.push(server({ kind: "text", text: `${step.say}\n` }));
-    else if ("tool" in step) timeline.push(server({ kind: "tool", name: step.tool }));
+    else if ("tool" in step) timeline.push(server(step.event ?? { kind: "tool", name: step.tool }));
     else if ("note" in step) timeline.push(server({ kind: "system", text: step.note, at: step.at, aside: step.aside !== false }));
     else if ("user" in step) timeline.push({ kind: "user", id: `live-${timeline.length}`, text: step.user, attachments: [], at: step.at, bySystem: step.bySystem, sessionId: "s1" });
     else timeline.push(server({ kind: "turnEnd" }));
@@ -232,18 +233,28 @@ const toolsUntilSteer: Step[] = [
 }
 
 // ── 7) 删除出处：并进来的那几步跟着气泡一起删，删别的气泡照旧 ─────────────────
-/** 照页面那样把一颗气泡的出处交给服务端的删除函数，返回删完之后的 .md 和 trace。 */
-function deleteBubble(steps: readonly Step[], pick: (bubbles: Agent[]) => Agent) {
+/**
+ * 照页面那样把一颗气泡的出处交给服务端的删除函数，返回删完之后盘上的 .md 和 trace。
+ *
+ * `readSide`：服务端读 trace 时接在末尾补出来、盘上没有的那几条（server 的 mergeImageJournal /
+ * enrichNativeWorkModels）。页面拿到的是「盘上原样 + 这几条」，服务端删除时重算指纹只看盘上那份。
+ */
+function deleteBubble(
+  steps: readonly Step[],
+  pick: (bubbles: Agent[]) => Agent,
+  readSide: (disk: ReturnType<typeof persisted>["trace"]) => ReturnType<typeof persisted>["trace"] = () => [],
+) {
   const { output, trace } = persisted(steps);
   const traceRaw = trace.map((entry) => JSON.stringify(entry)).join("\n");
-  const sources = pick(agents(rebuild(steps))).sources ?? [];
+  const session = sessionOf(steps, false);
+  const served = buildConversationItems([{ session, output, trace: [...trace, ...readSide(trace)] } as never], [session], []);
+  const sources = pick(agents(served)).sources ?? [];
   const redacted = redactTranscript(output, sources.flatMap((source) => "index" in source ? [source] : []));
   const windows = [
     ...redacted.windows,
     ...sources.flatMap((source) => "trace" in source ? [traceSpanWindow(traceRaw, source.trace)] : []),
   ];
   const left = redactTrace(traceRaw, windows).split("\n").filter(Boolean).map((line) => JSON.parse(line));
-  const session = sessionOf(steps, false);
   return { left, items: buildConversationItems([{ session, output: redacted.text, trace: left } as never], [session], []) };
 }
 {
@@ -260,6 +271,33 @@ function deleteBubble(steps: readonly Step[], pick: (bubbles: Agent[]) => Agent)
 {
   const { items } = deleteBubble(monitorWait, (bubbles) => bubbles[0]!);
   assert.deepEqual(agents(items).map((item) => compact(item.markdown)), ["测试全绿。"], "删等哨兵那一回合，连 pause_task 那一步一起没了");
+}
+
+// ── 8) 删除出处：子智能体那种回合，盘上的每一步都得删掉 ─────────────────────
+// 服务端读的时候会给子智能体补一条模型档案，时刻照抄那条真事件、接在 trace 末尾（盘上没有）。
+// 指纹不能数它，可跟它同一毫秒的那条真事件（子智能体交回的正文）一样得删；盘上本来就存着的
+// status 为 unknown 的子智能体事件、只剩一张图的那一截，也都是真内容，一条都不能留。
+const AGENT_AT = "2026-11-13T03:46:10.000Z";
+const subagents: Step[] = [
+  { turn: SESSION_AT },
+  { say: "派两个子代理去读。", at: "2026-11-13T03:45:00.000Z" },
+  { note: "后台还有 2 个子代理在跑", at: "2026-11-13T03:46:00.000Z" },
+  { tool: "Agent", at: AGENT_AT, event: { kind: "tool", name: "Agent", detail: "已写入 36 条，文件在 /tmp/raw.json",
+    nativeWork: { type: "agent", id: "toolu_1", status: "completed", result: "已写入 36 条，文件在 /tmp/raw.json" } } },
+  { tool: "Agent", at: "2026-11-13T03:46:20.000Z", event: { kind: "tool", name: "Agent", nativeWork: { type: "agent", id: "toolu_2", status: "unknown" } } },
+  { note: "后台的子代理都结束了", at: "2026-11-13T03:47:00.000Z" },
+  { tool: "shot.png", at: "2026-11-13T03:47:10.000Z", event: { kind: "attachment", path: "/tmp/shot.png" } },
+  { note: "预览已回收", at: "2026-11-13T03:47:20.000Z" },
+  { say: "两份都读完了。", at: "2026-11-13T03:48:00.000Z" },
+];
+{
+  const { left, items } = deleteBubble(subagents, (bubbles) => bubbles[0]!, (disk) => [{
+    at: AGENT_AT, turnStartedAt: SESSION_AT,
+    event: { kind: "tool", name: "Agent", detail: "unknown", nativeWork: { type: "agent", id: "toolu_1", status: "unknown", model: "claude-opus-5-5", at: AGENT_AT } },
+  }].filter(() => disk.length > 0));
+  assert.deepEqual(left.filter((entry) => !traceKeptOnDelete(entry.event.kind)), [],
+    "跟读侧补出来的条目同一毫秒的真事件、盘上 status 为 unknown 的子智能体、只剩一张图的那一截，都得跟着回合删掉");
+  assert.equal(agents(items).length, 0);
 }
 
 rmSync(stage, { recursive: true, force: true });
