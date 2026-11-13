@@ -101,6 +101,7 @@ const AGENT_SIZE: SizeTable<AgentItem> = {
   sessionId: () => 0,
   label: () => 0,
   agentType: () => 0,
+  sessionRole: () => 0,
   at: () => 0,
   endedAt: () => 0,
   markerEndedAt: () => 0,

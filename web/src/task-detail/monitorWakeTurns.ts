@@ -195,6 +195,7 @@ function wokenTurn(
     sessionId: wake.sessionId ?? template.sessionId,
     label: template.label,
     agentType: template.agentType,
+    sessionRole: template.sessionRole,
     session: template.session,
     run: template.run,
     at: wake.at,

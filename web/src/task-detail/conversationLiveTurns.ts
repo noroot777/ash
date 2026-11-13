@@ -167,6 +167,7 @@ function appendAgent(items: ConversationItem[], event: LiveAgentEvent, sessions:
     sessionId: event.sessionId,
     label: agentLabel(session, event),
     agentType: event.agentType ?? session?.agentType ?? null,
+    sessionRole: event.role ?? session?.role ?? null,
     at: turnStartedAt,
     endedAt: null,
     markerEndedAt: null,
