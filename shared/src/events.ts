@@ -133,7 +133,7 @@ export type AgentEvent =
   // `unfinished` = 进程没了的那一刻名下还有后台子代理 / 工作流没跑完（单飞据此不按完成结算）；
   // `unknown` = 后台状态核实不了（重启接管时读不出之前的输出），计数只是已知的那部分。
   // `interruption` = 这一回合怎么断的(只在异常结束时带),跟落进 `session_turns.interruption` 的同一份
-  // (见 Session.turnInterruption):直播那一路的失败那句话照它说,刷新以后照会话行说,两路一个样。
+  // (见 Session.turnInterruptions):直播那一路的失败那句话照它说,刷新以后照会话行说,两路一个样。
   | { kind: "done"; exitStatus: number; unfinished?: { agent: number; workflow: number; unknown?: true }; turnOutcome?: TurnOutcome; interruption?: TurnInterruption };
 
 // synthesis = 收敛后的合稿轮(共同方案);impl/review are legacy transcript speakers

@@ -465,7 +465,8 @@ export async function runTurn(args: {
     // 目录后进程被它打掉,断言明明全过了还是 exit 1)。
     await finished(out).catch(() => { /* 具体原因在 outFailure 里,下面统一报 */ });
     if (outFailure) console.warn(`[ash] duet 这一轮的 transcript 没写成 (${rowId}):`, outFailure);
-    await db
+    // 会话行的收尾跟下面的回合收口同一个原子批落(`recordTurnSpan` 的 `alongside`,理由同单飞)。
+    const closeRow = db
       .update(sessions)
       .set({
         exitStatus: exit,
@@ -489,6 +490,7 @@ export async function runTurn(args: {
       startedAt: turnStart,
       endedAt: endIso,
       outcome: peekStopped(taskId) ? "stopped" : exit !== 0 || errorMsg ? "failed" : "completed",
+      alongside: closeRow,
     });
     // 这一轮结算完了,销账。讨论自己不读那份判决(判据是手边的 `errorMsg`,见上面 trip 的注释),
     // 但**写是共享状态机写的** —— 熔断过的回合在那张表里有一条,不撤就一直占着(第 2 轮审查 F2:

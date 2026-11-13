@@ -4,6 +4,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { sessions } from "../db/schema.js";
+import { recordTurnSpan } from "../session-turns.js";
 import { now } from "../util.js";
 import { reportLeadFailure } from "./lead-voice.js";
 import type { Lead } from "./session-types.js";
@@ -44,6 +45,26 @@ export type SessionPatch = Parameters<ReturnType<typeof sessionUpdate>["set"]>[0
 export async function updateOwnSession(lead: Lead, what: string, patch: SessionPatch, at = now()): Promise<boolean> {
   if (lead.retired) return false;
   return persistOrReport(lead, what, () => sessionUpdate().set(patch).where(eq(sessions.id, lead.sessId)), at);
+}
+
+/**
+ * 会话行这一笔**跟一次回合收口同一个原子批**落(`recordTurnSpan` 的 `alongside`):页面一次读出来的
+ * 会话行和回合行得是同一刻的,分两笔写,中间那一刻怎么读都能读出半截(理由见 session-turns.ts 的
+ * `TurnSideWrite`)。闸和失败口径都跟 `updateOwnSession` 一样:摘牌了会话行一个字不写(回合照落,
+ * 那是这台自己跑过的回合);写不成只上报不外抛,返回会话行那一笔成没成。
+ */
+export async function closeOwnSessionWithTurn(
+  lead: Lead,
+  what: string,
+  patch: SessionPatch,
+  span: Omit<Parameters<typeof recordTurnSpan>[0], "alongside">,
+  at = now(),
+): Promise<boolean> {
+  if (lead.retired) {
+    await recordTurnSpan(span);
+    return false;
+  }
+  return persistOrReport(lead, what, () => recordTurnSpan({ ...span, alongside: sessionUpdate().set(patch).where(eq(sessions.id, lead.sessId)) }), at);
 }
 
 /**

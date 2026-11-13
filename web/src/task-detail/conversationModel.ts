@@ -79,6 +79,8 @@ export type ConversationItem =
       wokenByMonitor?: boolean;
       /** 这一回合自己的结局（服务端按回合交出来的，见 turnFailure 的 turnFailed）。缺省/null = 不知道。 */
       turnOutcome?: TurnOutcome | null;
+      /** 同一回合怎么断的（`Session.turnInterruptions` 里这一回合那份），跟 `turnOutcome` 一起带。 */
+      turnInterruption?: TurnInterruption;
       session?: Session;
       run?: { model: string | null; reasoningEffort: string | null };
       /**
@@ -150,7 +152,7 @@ export type ConversationItem =
       aside?: boolean;
       /** 服务端给的「这是哪一类事」（shared/src/timeline-notice.ts）。老记录、非时间线旁注没有。 */
       notice?: TimelineNotice;
-      /** 直播那一路的异常回合边界：这一回合怎么断的（结尾 done 事件带的，见 Session.turnInterruption）。 */
+      /** 直播那一路的异常回合边界：这一回合怎么断的（结尾 done 事件带的，见 Session.turnInterruptions）。 */
       interruption?: TurnInterruption;
     };
 

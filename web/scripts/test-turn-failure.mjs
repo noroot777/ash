@@ -1,6 +1,6 @@
 // 一轮异常结束以后会话里那一句（docs/ui-ux-audit run-8）：刷新以后从会话行认出来，补在那条会话
-// 最后一回合后面（带上会话行上服务端判的怎么断的）；直播那一路已经落了异常边界就不重复；正常收口、
-// 手动停、审查会话都不补。
+// 最后一回合后面（带上会话行上服务端判的怎么断的）；历史回合按它自己的结局和原因补；直播那一路已经落了
+// 异常边界就不重复；正常收口、手动停、审查会话都不补。
 // 跑:npm -w web run test:turn-failure
 import assert from "node:assert/strict";
 import { crashedTurns } from "../src/task-detail/turnFailure.ts";
@@ -15,8 +15,23 @@ assert.deepEqual(
   "只补在这条会话的最后一回合后面；时刻是会话行收口的那一刻",
 );
 const cause = { reason: "模型上游连不上（503）", detail: "模型上游连不上（状态码 503）" };
-assert.deepEqual(crashedTurns([agent("a1", sess({ turnInterruption: cause }))]).get("a1")?.interruption, cause,
+assert.deepEqual(crashedTurns([agent("a1", sess({ turnStartedAt: "T1", turnInterruptions: { T1: cause } }))]).get("a1")?.interruption, cause,
   "服务端判的怎么断的跟着会话行带出来；老记录没有就不带（上一条）");
+{
+  // 同一条会话重试成功以后：前一回合按它自己的结局和原因补，成功的那一回合不补，会话行上那份不串过去。
+  const after = sess({ turnStartedAt: "T2", exitStatus: 0, turnOutcome: "completed", turnInterruptions: { T1: cause } });
+  const got = crashedTurns([
+    agent("a1", after, { turnStartedAt: "T1", turnOutcome: "failed", turnInterruption: cause }),
+    agent("a1b", after, { turnStartedAt: "T1", turnOutcome: "failed", turnInterruption: cause }),
+    agent("a2", after, { turnStartedAt: "T2", turnOutcome: "completed" }),
+  ]);
+  assert.deepEqual([...got], [["a1b", { text: "执行异常结束：这一轮没有正常收口", at: undefined, interruption: cause }]],
+    "历史回合补在它最后一颗气泡上，带它自己的原因；退出码、收尾时刻是最后一回合的，不借");
+  assert.equal(crashedTurns([
+    agent("a1", after, { turnStartedAt: "T1", turnOutcome: "failed" }), boundary("error"),
+    agent("a2", after, { turnStartedAt: "T2", turnOutcome: "completed" }),
+  ]).size, 0, "直播那一路历史回合后面已经有异常边界");
+}
 assert.equal(crashedTurns([agent("a1", sess({ exitStatus: 0 }))]).size, 0, "正常收口不补");
 assert.equal(crashedTurns([agent("a1", sess({ endedAt: null }))]).size, 0, "还在跑的会话不补（不知道结局，会话行上的退出码是上一个进程的）");
 assert.equal(crashedTurns([agent("a1", sess({ endedAt: null, exitStatus: null, turnOutcome: "failed" }))]).size, 1,

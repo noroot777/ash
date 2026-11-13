@@ -27,7 +27,7 @@ import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { consumeInbound } from "./inbound-queue.js";
 import { sendToLead } from "./lead-delivery.js";
 // 会话行的写入口(摘牌闸、失败只上报)住在 lead-session-writes.ts,见那份顶部。
-import { flushPendingCredential, persistOrReport, updateOwnSession } from "./lead-session-writes.js";
+import { closeOwnSessionWithTurn, flushPendingCredential, persistOrReport, updateOwnSession, type SessionPatch } from "./lead-session-writes.js";
 import type { PendingInbound } from "./inbound-queue.js";
 import {
   idleRotation,
@@ -330,7 +330,7 @@ async function endTurn(lead: Lead): Promise<void> {
   // 执行器报的「一个回合说完了」关掉的是**队首**那一轮,不是 `lead.turnStart` 此刻写着的那个
   // —— 用户插话会在上一轮还开着时就把下一轮投进去,照那个字段结算等于用旧回合的结束事件把
   // 新回合提前收口（机制与后果见 lead-turns.ts 顶部,第 1 轮审查 F1）。注销排在写库之前：
-  // 下面那两次写都可能失败,失败时照样不能留一个「还在跑」的身份给读端（第 6 轮必须修 1）。
+  // 下面那次写可能失败,失败时照样不能留一个「还在跑」的身份给读端（第 6 轮必须修 1）。
   const turnStart = releaseHeldTurn(lead);
   // **判决在这一刻就取走**(第 2 轮审查 F3,同一条不变量):调用方刚刚 `clearTurnStall` 让它退场,
   // 而下面到写区间之间隔着一次写库 await —— 那段窗口里另一轮熔断的回收扫描完全可能把这条
@@ -339,20 +339,6 @@ async function endTurn(lead: Lead): Promise<void> {
   const spent = turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(turnStart)) : 0;
   // 手上还攥着别的回合 = 插话那一轮还排着/跑着,这台**并没有空下来**。
   const idleNow = !lead.busy;
-  // 写库失败绝不能把下面整段收尾一起带走 —— writeTurnEnd、旁注落盘、待送消息、落 idle
-  // 全在后面(理由见 persistOrReport)。丢的只是这一行用时统计。
-  await updateOwnSession(
-    lead,
-    "回合收尾状态",
-    {
-      // `ended_at` 说的是「这条会话此刻没有回合在跑」。手上还有回合时写上它,读端判「还在
-      // 写」的那一道就会被这个陈旧快照否决,正在跑的这一轮被算成「开了没收口」、区间夹到
-      // 旧起点附近,之后落盘的东西全被排除（同一条链的另一头是第 1 轮审查 F3）。
-      ...(idleNow ? { endedAt: endIso } : {}),
-      activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}`,
-    },
-    endIso,
-  );
   // 这一回合的区间（产物归属按它认人，不按会话寿命——常驻调度台那一行从开台活到收工）。
   // 走到这里通常就是**执行器自己报的「这一轮说完了」**,结局 completed:进程继续待命,它后来
   // 怎么没的(空闲回收、异常退出)属于另一件事,不许回头改写这一轮(门禁在 `writeTurnRow` 的
@@ -363,14 +349,22 @@ async function endTurn(lead: Lead): Promise<void> {
   // (第 1 轮审查第 2 条,已实测)。结论由下结论的一方钉在回合身份上(../turn-stall-verdict.ts),
   // 这里只用上面取走的那一份;写完销账 —— 这一轮的区间已经落定,不会再有人来读。
   const outcome: TurnOutcome = watchdogFailed ? "failed" : "completed";
-  await recordTurnSpan({
-    sessionId: lead.sessId,
-    taskId: lead.taskId,
-    cwd: lead.cwd,
-    startedAt: turnStart,
-    endedAt: endIso,
-    outcome,
-  });
+  // 会话行那一笔跟这一回合的收口同一个原子批落(`closeOwnSessionWithTurn`)。写库失败绝不能把
+  // 下面整段收尾一起带走 —— writeTurnEnd、旁注落盘、待送消息、落 idle 全在后面(理由见
+  // persistOrReport)。丢的只是这一行用时统计。
+  await closeOwnSessionWithTurn(
+    lead,
+    "回合收尾状态",
+    {
+      // `ended_at` 说的是「这条会话此刻没有回合在跑」。手上还有回合时写上它,读端判「还在
+      // 写」的那一道就会被这个陈旧快照否决,正在跑的这一轮被算成「开了没收口」、区间夹到
+      // 旧起点附近,之后落盘的东西全被排除（同一条链的另一头是第 1 轮审查 F3）。
+      ...(idleNow ? { endedAt: endIso } : {}),
+      activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}`,
+    },
+    { sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: turnStart, endedAt: endIso, outcome },
+    endIso,
+  );
   clearStallFailure(lead.sessId, turnStart);
   // 直播那一路的回合边界,带着**同一份**结局(见 AgentEvent 的 turnEnd.turnOutcome):被熔断的
   // 那一轮执行器报的是正常收口,只有它说得清。排在投递攒着的汇报之前 —— 那一下会开新回合,
@@ -514,25 +508,6 @@ async function closeLead(
   // **整批判决在进循环之前一次取走**(第 2 轮审查 F3):循环体里有 await,第二轮往后再去读就
   // 落在回收窗口之后了 —— 上面的 `clearTurnStall` 已经让它退场,而退场不等于读者读过。
   const outcomes = new Map(closing.map((at): [string, TurnOutcome] => [at, stallFailure(lead.sessId, at) ? "failed" : closeOutcome]));
-  for (const [startedAt, outcome] of outcomes) {
-    await recordTurnSpan({
-      sessionId: lead.sessId,
-      taskId: lead.taskId,
-      cwd: lead.cwd,
-      startedAt,
-      endedAt: endIso,
-      outcome,
-    });
-    clearStallFailure(lead.sessId, startedAt);
-  }
-  // 直播的关台边界:结局取**执行器真正在跑的那一轮**(最早那个起点,同上面的墙钟),跟刚落进
-  // `session_turns` 的同一份。手上没有开着的回合(答完待命后进程才没的)就不画这条边界 —— 上一轮
-  // 已经由它自己的 `turnEnd` 收过口,进程后来怎么没的不是它的结局(F3 那条链);那种退出在下面
-  // 由红色说明照实讲。
-  if (closing.length) {
-    const front = closing.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a));
-    publish(lead, { kind: "done", exitStatus, turnOutcome: outcomes.get(front)! });
-  }
   // CLI 否认了这条会话:把失效的 id 连同由它派生的三件套恢复命令一起清掉,下一次说话
   // 就会开一条全新会话(openResident 的判据就是「这行上有没有 cli_session_id」)。
   // 退出码 0 也要求上:正常收尾的回合不该因为正文里出现过这句话就丢掉会话。
@@ -544,27 +519,40 @@ async function closeLead(
   // 被接管的一方连这条会话行也不许再 finalize:接管那条路会**复用同一行**(openLead 的
   // resuming 分支),新进程刚把 endedAt/exitStatus 清成 null 表示「这一段正在跑」。晚到的
   // 旧收尾一写,页面就同时看到「调度台在线」和「这条会话已退出」;activeMs 还会把两段
-  // 重叠的墙钟时间重复计一遍(2026-08-26 第 7 轮审查)。这道闸现在住在 updateOwnSession
-  // 里(第 9 轮审查:只在这儿挡,beginTurn/endTurn 就漏了),这里只管别把收尾停在半路 ——
-  // 事件流、写流与内存 lead 仍须正常释放。
-  const persisted = await updateOwnSession(
-    lead,
-    "调度台收尾状态",
-    {
-      exitStatus,
-      // **受控停止与「进程自己崩了」在退出码上一模一样**:CLI 吃 SIGTERM 后按 signal 写非零。
-      // 单飞早就为此单独落了这一列(single-run.ts),团队这条收尾路一直只写退出码,于是读端
-      // 只能拿退出码当结局 —— 用户点了「停止全组」,已经恢复过的那几条过程提示被当成失败
-      // 现场重新挂回手机上(第 4 轮审查 F1,已实测)。三条受控路(停止全组 / 工作目录被抽走 /
-      // 空闲回收)共用这一笔:`lead.closing` 就是它们各自的名字。谁来读见 session-waiting.ts
-      // 的 failedTurnNotices 与 task-retry-turn.ts。
-      stoppedAs: lead.closing ?? stopSettle,
-      endedAt: endIso,
-      activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}`,
-      ...(dropSession ? LOST_SESSION_PATCH : {}),
-    },
-    endIso,
-  );
+  // 重叠的墙钟时间重复计一遍(2026-08-26 第 7 轮审查)。这道闸现在住在 updateOwnSession /
+  // closeOwnSessionWithTurn 里(第 9 轮审查:只在这儿挡,beginTurn/endTurn 就漏了),这里只管
+  // 别把收尾停在半路 —— 事件流、写流与内存 lead 仍须正常释放。
+  const rowPatch: SessionPatch = {
+    exitStatus,
+    // **受控停止与「进程自己崩了」在退出码上一模一样**:CLI 吃 SIGTERM 后按 signal 写非零。
+    // 单飞早就为此单独落了这一列(single-run.ts),团队这条收尾路一直只写退出码,于是读端
+    // 只能拿退出码当结局 —— 用户点了「停止全组」,已经恢复过的那几条过程提示被当成失败
+    // 现场重新挂回手机上(第 4 轮审查 F1,已实测)。三条受控路(停止全组 / 工作目录被抽走 /
+    // 空闲回收)共用这一笔:`lead.closing` 就是它们各自的名字。谁来读见 session-waiting.ts
+    // 的 failedTurnNotices 与 task-retry-turn.ts。
+    stoppedAs: lead.closing ?? stopSettle,
+    endedAt: endIso,
+    activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}`,
+    ...(dropSession ? LOST_SESSION_PATCH : {}),
+  };
+  // 会话行那一笔跟**最后收的那一回合**同一个原子批落(`closeOwnSessionWithTurn`):页面一次读出来的
+  // 会话行与回合行才是同一刻的。一个回合都没攥着(答完待命后进程才没的)就单独写它。
+  let persisted = !outcomes.size && await updateOwnSession(lead, "调度台收尾状态", rowPatch, endIso);
+  let left = outcomes.size;
+  for (const [startedAt, outcome] of outcomes) {
+    const span = { sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt, endedAt: endIso, outcome };
+    if (--left) await recordTurnSpan(span);
+    else persisted = await closeOwnSessionWithTurn(lead, "调度台收尾状态", rowPatch, span, endIso);
+    clearStallFailure(lead.sessId, startedAt);
+  }
+  // 直播的关台边界:结局取**执行器真正在跑的那一轮**(最早那个起点,同上面的墙钟),跟刚落进
+  // `session_turns` 的同一份。手上没有开着的回合(答完待命后进程才没的)就不画这条边界 —— 上一轮
+  // 已经由它自己的 `turnEnd` 收过口,进程后来怎么没的不是它的结局(F3 那条链);那种退出在下面
+  // 由红色说明照实讲。
+  if (closing.length) {
+    const front = closing.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a));
+    publish(lead, { kind: "done", exitStatus, turnOutcome: outcomes.get(front)! });
+  }
   // 没写进去就不能沿用「恢复字段已清掉」的文案:库里那个坏 id 还在,下一次照样撞它。
   // (superseded 那一路 dropSession 恒为 false,所以「摘牌导致没写」不会走进这句。)
   if (!persisted && dropSession) dropNote = SESSION_DROP_PERSISTENCE_FAILED_NOTE;

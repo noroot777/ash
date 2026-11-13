@@ -1,4 +1,5 @@
 import { dbClient } from "./db/index.js";
+import type { InValue } from "./db/node-sqlite-client.js";
 import type { TurnInterruption, TurnOutcome } from "@ash/shared";
 import { id } from "./util.js";
 import { clearTurnActive, closedAlready, markTurnActive, markTurnOpenedHere } from "./session-turn-registry.js";
@@ -360,34 +361,32 @@ function readInterruption(value: unknown): TurnInterruption | null {
 export type SessionTurnFacts = {
   /** 原样就是 `Session.turnOutcomes` 的形状。 */
   outcomes: Record<string, TurnOutcome | null>;
-  /** 只有断过的回合有键（见 `Session.turnInterruption`）。 */
+  /** 只有断过的回合有键（原样就是 `Session.turnInterruptions`）。 */
   interruptions: Record<string, TurnInterruption>;
 };
+
+/** `session_turns` 里给页面用的那几列（读端 `sessionsForTask` 跟会话行同一个批读出来）。 */
+export type TurnFactRow = { sessionId: string; startedAt: string; outcome: unknown; interruption: unknown };
 
 /**
  * 一个任务名下**每个回合**收口时记下的事:会话 id → 结局 + 怎么断的。两层键合起来就是
  * `session_turns` 的唯一键;回合起点跟 trace 条目的 `turnStartedAt` 是同一个值。
  *
- * **结局和原因出自同一条 SELECT**:它们是同一条收口语句写下的(`writeTurnRow` ③),分两次读的话
- * 中间落下一次收口,就会读出「结局还不知道、原因已经有了」这种半截快照。
+ * **只做解释,不读库**:这些行必须跟会话行出自**同一个原子读批**(`sessionsForTask`)。会话行
+ * (收尾时刻、退出码、当前回合起点)和回合行(结局、怎么断的)是收尾那一个批一起写下的
+ * (`recordTurnSpan` 的 `alongside`),分两次读,中间落下一次收口就会拼出半截快照 —— 换哪种读的
+ * 先后顺序都只是换一种半截(第 1、2 轮审查第 1 条)。
  *
- * 批量版给列表/详情那种要一次带出很多会话的出口用(逐条查会变成 N 条 SQL);解释口径与上面
- * 那条单条版共用 `readOutcome`,两边漂开就是这条链上所有事故的形状。
+ * 解释口径与单条版 `turnOutcome` 共用 `readOutcome`,两边漂开就是这条链上所有事故的形状。
  */
-export async function turnFactsForTask(taskId: string): Promise<Map<string, SessionTurnFacts>> {
-  const read = await dbClient.execute({
-    sql: "SELECT session_id, started_at, outcome, interruption FROM session_turns WHERE task_id = :tid",
-    args: { tid: taskId },
-  });
+export function turnFactsOf(rows: readonly TurnFactRow[]): Map<string, SessionTurnFacts> {
   const bySession = new Map<string, SessionTurnFacts>();
-  for (const row of read.rows) {
-    const sid = String(row.session_id);
-    const facts = bySession.get(sid) ?? { outcomes: {}, interruptions: {} };
-    const at = String(row.started_at);
-    facts.outcomes[at] = readOutcome(row.outcome);
+  for (const row of rows) {
+    const facts = bySession.get(row.sessionId) ?? { outcomes: {}, interruptions: {} };
+    facts.outcomes[row.startedAt] = readOutcome(row.outcome);
     const interruption = readInterruption(row.interruption);
-    if (interruption) facts.interruptions[at] = interruption;
-    bySession.set(sid, facts);
+    if (interruption) facts.interruptions[row.startedAt] = interruption;
+    bySession.set(row.sessionId, facts);
   }
   return bySession;
 }
@@ -415,6 +414,23 @@ type TurnWrite =
   | "collided"
   /** 行在,这一批没有新事实可加（重放）。 */
   | "present";
+
+/**
+ * 一条要跟回合收口**同一个原子批**落下的写入：收尾那一下的会话行 UPDATE（收尾时刻、退出码、停止
+ * 标记、当前回合起点）。drizzle 的查询构造器原样传进来（它是惰性的，`toSQL()` 只出语句不执行）。
+ *
+ * 为什么要同批：页面判「这一轮崩了、能重试、怎么断的」要的是会话行和回合行**同一刻**的样子，读端
+ * 也是一个批读出来的（`sessionsForTask`）。两笔分开写，中间那一刻无论哪种读法都能读出半截
+ * （第 1、2 轮审查第 1 条）。
+ */
+export type TurnSideWrite = { toSQL(): { sql: string; params: unknown[] } };
+/** 批里带着的那一笔，`landed` 由写批的那一处在批提交之后置上（降级补写只补没落的）。 */
+type SideWrite = { write: TurnSideWrite; landed: boolean };
+
+function sideStatement(write: TurnSideWrite): { sql: string; args: InValue[] } {
+  const { sql, params } = write.toSQL();
+  return { sql, args: params as InValue[] };
+}
 
 /**
  * 「开过这一轮」的那一批写入：加计数 + 落回合行 + **把已知的收尾时刻合并上去**。
@@ -447,6 +463,7 @@ async function writeTurnRow(
   input: TurnStartInput,
   close: TurnClose | null,
   fresh: boolean,
+  alongside?: SideWrite,
 ): Promise<TurnWrite> {
   const args = {
     row: id(),
@@ -506,7 +523,10 @@ async function writeTurnRow(
               WHERE session_id = :sid AND started_at = :at AND :wake = 1 AND monitor_wake = 0`,
       args: { sid: args.sid, at: args.at, wake: args.wake },
     },
+    // 跟这一收口同生共死的那条会话行写入（`recordTurnSpan` 的 `alongside`）。排在最后,不占上面的结果位。
+    ...(alongside ? [sideStatement(alongside.write)] : []),
   ]);
+  if (alongside) alongside.landed = true;
   if (inserted.rowsAffected > 0) return "inserted";
   if (merged.rowsAffected > 0) return "merged";
   if (collided.rowsAffected > 0) return "collided";
@@ -526,11 +546,12 @@ async function persistTurn(
   input: TurnStartInput,
   close: TurnClose | null = null,
   fresh = false,
+  alongside?: SideWrite,
 ): Promise<TurnWrite> {
   // 绑在身份上的来源由这里合进去,不靠调用方知道:收尾补插、补欠账那几路都不知道这一轮是不是
   // 唤醒。写成了(行在、那一位已置上)才解绑,之后由库里那一位回答。
   const monitorWake = !!input.monitorWake || boundMonitorWake(input.sessionId, input.startedAt);
-  const wrote = await writeTurnRow({ ...input, monitorWake }, close, fresh);
+  const wrote = await writeTurnRow({ ...input, monitorWake }, close, fresh, alongside);
   confirmTurn(input.sessionId, input.startedAt);
   if (monitorWake) unbindTurnSource(input.sessionId, input.startedAt);
   return wrote;
@@ -595,21 +616,36 @@ export async function recordTurnSpan(input: {
   outcome: TurnOutcome;
   /** 这一轮怎么断的（只在 outcome = failed 时给，见 turn-interruption.ts）。 */
   interruption?: TurnInterruption | null;
+  /**
+   * 收尾那一下的会话行写入，跟这一收口**同一个原子批**落（理由见 `TurnSideWrite`）。
+   * **它照旧会抛**：批没写成就单独再写它一次，那一次的错原样交给调用方（跟从前它单独写在前面
+   * 时一样）；回合那一笔仍按下面的降级口径不抛。
+   */
+  alongside?: TurnSideWrite;
 }): Promise<void> {
   // 起点取不到就没有区间可言（宁可不记，也不要记一条起点是「现在」的假区间：那会把
-  // 这一回合真正写出来的东西全判到区间之外）。
-  if (!input.startedAt) return;
+  // 这一回合真正写出来的东西全判到区间之外）。会话行那一笔照样要落。
+  if (!input.startedAt) {
+    if (input.alongside) await dbClient.execute(sideStatement(input.alongside));
+    return;
+  }
   const startedAt = input.startedAt;
   // 收尾了就不再是活动身份。放在写库**之前**：这一行只影响「还在写吗」的判断,写库失败时
   // 更要让它回到「未知」那一档,而不是继续被当成正在跑（区间会一直开到无穷）。顺带也把
   // 「这个身份是本进程自己关的」这件事记进水位,撞号判据靠它分得出自己和别人（`closedAlready`）。
   clearTurnActive(input.sessionId, startedAt);
+  const side = input.alongside ? { write: input.alongside, landed: false } : undefined;
   try {
     await persistTurn(
       { sessionId: input.sessionId, taskId: input.taskId, cwd: input.cwd, startedAt },
       { endedAt: input.endedAt, outcome: input.outcome, interruption: input.outcome === "failed" ? input.interruption : null },
+      false,
+      side,
     );
   } catch (error) {
+    // 批是同生共死的：批没提交，会话行那一笔也没落。单独补写它，写不成就照旧抛给调用方。
+    // 只补没落的：那条 UPDATE 带累加（`active_ms`），批已提交之后再写一次就加了两遍。
+    if (side && !side.landed) await dbClient.execute(sideStatement(side.write));
     console.warn(`[ash] 回合区间没落盘（产物归属降级为按会话寿命认）: ${String(error)}`);
   }
 }

@@ -7,7 +7,8 @@
 //    后面挂「重试这一回合」、点了走那个动作；两路结果一样；
 // ② 老记录（没有结构化原因）：那句话照老样子「这一轮异常结束」，动作照样在；会话行已判失败却还没有
 //    收尾时刻（第 1 轮审查第 1 条）：那句话和动作也都在；
-// ③ 不能重试（后面又跑过一回合、手动停止的、任务在跑）：没有动作；
+// ③ 不能重试（后面又跑过一回合、手动停止的、任务在跑）：没有动作；同一条会话重试成功以后（刷新与开着
+//    页面看两路）：前一回合那句话和原因还在它自己后面，没有动作（第 2 轮审查第 2 条）；
 // ④ 任务头上没有回合级的重试图标。
 // 跑：npm -w web run test:turn-retry-cta
 import assert from "node:assert/strict";
@@ -55,13 +56,23 @@ try {
 
   // ③ 不能重试
   assert.equal(await footnoteOf("later").filter({ hasText: "这一轮中断 · 模型上游连不上（503）" }).count(), 1, "后面又跑过一回合：那句话还在");
-  for (const name of ["later", "stopped", "running"]) {
+  for (const name of ["retried", "retried-live"]) {
+    const line = footnoteOf(name).filter({ hasText: "这一轮中断 · 模型上游连不上（503）" });
+    assert.equal(await line.count(), 1, `${name}：重试成功以后，前一回合那句话和原因还在`);
+    await line.getByRole("button", { name: /这一轮中断/ }).click();
+    assert.match(await scope(name).locator(".turn-footnote-detail").innerText(), /执行器的原话/, `${name}：还点得开原因`);
+    const text = await scope(name).locator(".feed").innerText();
+    assert.ok(text.indexOf("改到一半。") < text.indexOf("这一轮中断") && text.indexOf("这一轮中断") < text.indexOf("重试好了。"),
+      `${name}：那句话挂在失败那一回合后面，不在重试成功的那一回合后面`);
+    assert.equal(await footnoteOf(name).filter({ hasText: /这一轮(中断|异常结束)/ }).count(), 1, `${name}：成功的那一回合不补`);
+  }
+  for (const name of ["later", "stopped", "running", "retried", "retried-live"]) {
     assert.equal(await scope(name).getByRole("button", { name: "重试这一回合" }).count(), 0, `${name}：不能重试，没有动作`);
   }
   assert.equal(await footnoteOf("stopped").filter({ hasText: /这一轮(中断|异常结束)/ }).count(), 0, "手动停止的不算异常");
 
   // ④ 任务头
-  for (const name of ["persisted", "live", "legacy", "no-end", "later", "stopped", "running"]) {
+  for (const name of ["persisted", "live", "legacy", "no-end", "later", "retried", "retried-live", "stopped", "running"]) {
     assert.equal(await scope(name).locator(".task-detail-header").getByRole("button", { name: /重试|继续本轮审查/ }).count(), 0,
       `${name}：任务头没有回合级的重试图标`);
   }

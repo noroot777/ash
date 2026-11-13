@@ -2,14 +2,15 @@
 //
 // 直播那一路有回合边界事件（「执行异常结束 · exit 1」，带着结尾 done 事件给的「怎么断的」），由
 // noticeView 落定成「这一轮中断 · 模型上游连不上（503）」；刷新以后那条边界没了，就从会话行认：
-// 每条会话**最后一回合**的会话行报的是异常收口，就在那一回合后面补同一句，原因取会话行上同一份
-// （Session.turnInterruption）。老记录没有原因，就还是「这一轮异常结束」。失败要一直看得见：此刻
-// 能重试时，「重试这一回合」就挂在这句话后面（ConversationFeed）。
+// 哪一回合自己的结局是失败（或者会话**最后一回合**的会话行报的是异常收口），就在那一回合后面补同一句，
+// 原因取那一回合自己的（Session.turnInterruptions）。老记录没有原因，就还是「这一轮异常结束」。失败要
+// 一直看得见：此刻能重试时，「重试这一回合」就挂在可重试那一回合的这句话后面（ConversationFeed）。
 import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
 import type { Session, TurnInterruption, TurnOutcome } from "@ash/shared";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationItem } from "./conversationModel.ts";
 import { legacyTier } from "./legacyNoticeTable.ts";
+import { latestTurnStart } from "./conversationTurnParts.ts";
 
 /**
  * 补出来的那一句：点开看到的原文（退出码），它落在什么时刻（会话行的收口时刻），以及服务端判的
@@ -18,34 +19,50 @@ import { legacyTier } from "./legacyNoticeTable.ts";
 export type CrashedTurn = { text: string; at?: string; interruption?: TurnInterruption };
 
 /**
- * agent 条目 id → 补出来的那一句。
+ * agent 条目 id → 补出来的那一句。**每个异常结束的回合各补一句**，补在那一回合的最后一颗气泡上。
  *
- * 「这一回合收口了没有」认权威结局：会话行带了结局（`turnOutcome`）就说明那一回合已经收口，不再
- * 另要会话行的收尾时刻 —— 跟重试入口（turnRetry.ts）读同一份判据，不然会话行晚一步时就出现「能
- * 重试、却没有说这件事的那句话、键也无处可挂」（第 1 轮审查第 1 条）。不知道结局时才拿收尾时刻
- * 兜底：回合还开着的时候，会话行上的退出码是上一个进程的。
+ * 两种证据：
+ * - 回合**自己**的结局（`turnOutcome`，服务端按回合交出来的）是失败 —— 历史回合只认这一样。同一条
+ *   会话重试成功以后，前一回合那句话刷新后还得在原处，原因取那一回合自己的（`turnInterruption`），
+ *   只看会话最后一回合的那一版一续跑就把它丢了（第 2 轮审查第 2 条）。
+ * - 会话**最后一回合**再加会话行上那份：会话行带了结局（`turnOutcome`）就说明那一回合已经收口，
+ *   不再另要会话行的收尾时刻 —— 跟重试入口（turnRetry.ts）读同一份判据，不然会话行晚一步时就出现
+ *   「能重试、却没有说这件事的那句话、键也无处可挂」（第 1 轮审查第 1 条）。不知道结局时才拿收尾
+ *   时刻兜底：回合还开着的时候，会话行上的退出码是上一个进程的。
  *
  * `retrySessionId` = 此刻能「重试这一回合」的那条会话（turnRetryTarget 普通档）：它的最后一回合
  * 必定补一句。可重试本身就是「这一回合异常结束」的证据，入口只挂在这句话后面，少了它就没地方挂。
+ * 重试入口只挂那一句（ConversationFeed），历史回合的那几句只说事。
  */
 export function crashedTurns(items: readonly ConversationItem[], retrySessionId?: string | null): Map<string, CrashedTurn> {
   const lastBySession = new Map<string, number>();
+  const lastByTurn = new Map<string, number>();
   items.forEach((item, index) => {
-    if (item.kind === "agent" && item.session && !item.reviewer) lastBySession.set(item.session.id, index);
+    if (item.kind !== "agent" || !item.session || item.reviewer) return;
+    lastBySession.set(item.session.id, index);
+    // 认不出是哪一回合的气泡（没有回合身份的老记录）不单独成段，只走下面「最后一回合」那条。
+    if (item.turnStartedAt) lastByTurn.set(`${item.session.id}\u0000${item.turnStartedAt}`, index);
   });
+  const latest = new Set(lastBySession.values());
   const out = new Map<string, CrashedTurn>();
-  for (const index of lastBySession.values()) {
+  for (const index of new Set([...lastByTurn.values(), ...latest])) {
     const item = items[index] as Extract<ConversationItem, { kind: "agent" }>;
     const session = item.session!;
-    const retryable = !!retrySessionId && session.id === retrySessionId;
-    if (!retryable && (!(session.turnOutcome || session.endedAt) || !turnEndedAbnormally(session))) continue;
+    const sessionSays = latest.has(index) && (
+      (!!retrySessionId && session.id === retrySessionId)
+      || (!!(session.turnOutcome || session.endedAt) && turnEndedAbnormally(session))
+    );
+    if (!sessionSays && !turnFailed(item)) continue;
     // 直播那一路已经落了一条异常边界：那一条就是这一句，不再补。
     const next = items.slice(index + 1).find((entry) => entry.kind !== "event" || entry.variant === "boundary");
     if (next?.kind === "event" && next.variant === "boundary" && next.tone === "error") continue;
+    // 会话行上的退出码、收尾时刻、原因说的都是**最后一回合**；历史回合只有它自己那一份原因。
+    const interruption = item.turnInterruption
+      ?? (sessionSays ? session.turnInterruptions?.[latestTurnStart(session) ?? session.startedAt] : undefined);
     out.set(item.id, {
-      text: session.exitStatus != null ? `执行异常结束 · exit ${session.exitStatus}` : "执行异常结束：这一轮没有正常收口",
-      at: session.endedAt ?? undefined,
-      ...(session.turnInterruption ? { interruption: session.turnInterruption } : {}),
+      text: sessionSays && session.exitStatus != null ? `执行异常结束 · exit ${session.exitStatus}` : "执行异常结束：这一轮没有正常收口",
+      at: sessionSays ? session.endedAt ?? undefined : undefined,
+      ...(interruption ? { interruption } : {}),
     });
   }
   return out;
@@ -63,8 +80,15 @@ export function turnFailed(item: Extract<ConversationItem, { kind: "agent" }>): 
 }
 
 /** 落盘重建那一路的一截回合是哪一回合：它领到的 trace 自己记着回合起点（切过组的下半截也一样），没有 trace 就用重建推出来的起点。 */
+const persistedTurnKey = (trace: readonly SessionTraceEntry[], turnStartedAt: string) => trace[0]?.turnStartedAt ?? turnStartedAt;
+
 export function persistedTurnOutcome(session: Session, trace: readonly SessionTraceEntry[], turnStartedAt: string): TurnOutcome | null {
-  return session.turnOutcomes?.[trace[0]?.turnStartedAt ?? turnStartedAt] ?? null;
+  return session.turnOutcomes?.[persistedTurnKey(trace, turnStartedAt)] ?? null;
+}
+
+/** 同一回合怎么断的（`Session.turnInterruptions`），跟 `persistedTurnOutcome` 认同一个回合身份。 */
+export function persistedTurnInterruption(session: Session, trace: readonly SessionTraceEntry[], turnStartedAt: string): TurnInterruption | undefined {
+  return session.turnInterruptions?.[persistedTurnKey(trace, turnStartedAt)];
 }
 
 /**

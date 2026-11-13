@@ -7,6 +7,8 @@
 //   legacy    老记录：没有原因，那句话照老样子，动作照样在；
 //   no-end    会话行已判失败、却还没有收尾时刻和退出码（读到一半落了收口的那种快照）：那句话和动作照样在；
 //   later     崩过以后又跑过一回合（别的会话）：那句话还在，动作不在；
+//   retried   同一条会话失败一回合、重试成功（刷新以后）：前一回合那句话和原因还在原处，动作不在；
+//   retried-live  同上，开着页面看；
 //   stopped   手动停止的（非零退出）：不算异常，什么都不补；
 //   running   任务在跑：那句话在，动作不在。
 import { StrictMode } from "react";
@@ -28,18 +30,27 @@ const CAUSE: TurnInterruption = {
 const log = window as unknown as { __retried: string[] };
 log.__retried = [];
 
+const at2 = "2026-11-13T12:10:00.000Z";
+const end2 = "2026-11-13T12:12:00.000Z";
+const mark = (turn: Record<string, unknown>) => `\n\x1e${JSON.stringify(turn)}\n`;
+
 const session = (taskId: string, id: string, over: Partial<Session> = {}) => ({
   id, taskId, agentType: "codex", role: "single", executor: "codex", startedAt: at, turnStartedAt: at, endedAt: end,
   exitStatus: 1, turnOutcome: "failed", ...over,
 }) as unknown as Session;
-const live = (taskId: string, sessionId: string, id: string, event: unknown): TimelineEntry => ({
-  kind: "server", id, event: { type: "agent.event", taskId, sessionId, role: "single", agentType: "codex", event },
+const live = (taskId: string, sessionId: string, id: string, event: unknown, turnStartedAt?: string): TimelineEntry => ({
+  kind: "server", id, event: { type: "agent.event", taskId, sessionId, role: "single", agentType: "codex", event, turnStartedAt },
 } as never);
+/** 同一条会话重试成功以后的会话行：最后一回合正常收口，前一回合的结局和原因按回合带着。 */
+const retried = (taskId: string) => session(taskId, "s1", {
+  turnStartedAt: at2, endedAt: end2, exitStatus: 0, turnOutcome: "completed",
+  turnOutcomes: { [at]: "failed", [at2]: "completed" }, turnInterruptions: { [at]: CAUSE },
+});
 
 type Scene = { status?: Task["status"]; sessions: Session[]; persisted: PersistedConversation[]; timeline?: TimelineEntry[] };
 const SCENES: Record<string, (id: string) => Scene> = {
   persisted: (id) => {
-    const s = session(id, "s1", { turnInterruption: CAUSE });
+    const s = session(id, "s1", { turnInterruptions: { [at]: CAUSE } });
     return { sessions: [s], persisted: [{ session: s, output: "按意见改一下构建脚本。", trace: [] }] };
   },
   live: (id) => {
@@ -61,11 +72,35 @@ const SCENES: Record<string, (id: string) => Scene> = {
     return { sessions: [s], persisted: [{ session: s, output: "按意见改一下构建脚本。", trace: [] }] };
   },
   later: (id) => {
-    const crashed = session(id, "s1", { turnInterruption: CAUSE });
+    const crashed = session(id, "s1", { turnInterruptions: { [at]: CAUSE } });
     const next = session(id, "s2", { startedAt: "2026-11-13T12:10:00.000Z", turnStartedAt: "2026-11-13T12:10:00.000Z", endedAt: "2026-11-13T12:12:00.000Z", exitStatus: 0, turnOutcome: "completed" });
     return {
       sessions: [crashed, next],
       persisted: [{ session: crashed, output: "按意见改一下构建脚本。", trace: [] }, { session: next, output: "又跑了一回合，好了。", trace: [] }],
+    };
+  },
+  retried: (id) => {
+    const s = retried(id);
+    const output = [
+      mark({ t: "user", text: "按意见改一下构建脚本。", at }), "改到一半。", mark({ t: "agentEnd", at: end }),
+      mark({ t: "user", text: "按意见改一下构建脚本。", at: at2 }), "重试好了。", mark({ t: "agentEnd", at: end2 }),
+    ].join("");
+    const trace = [
+      { at: "2026-11-13T12:01:00.000Z", turnStartedAt: at, event: { kind: "tool", name: "Edit", detail: "{}" } },
+      { at: "2026-11-13T12:11:00.000Z", turnStartedAt: at2, event: { kind: "tool", name: "Edit", detail: "{}" } },
+    ];
+    return { sessions: [s], persisted: [{ session: s, output, trace: trace as never }] };
+  },
+  "retried-live": (id) => {
+    const s = retried(id);
+    return {
+      sessions: [s], persisted: [],
+      timeline: [
+        live(id, "s1", "live:text", { kind: "text", text: "改到一半。" }, at),
+        live(id, "s1", "live:done", { kind: "done", exitStatus: 1, turnOutcome: "failed", interruption: CAUSE }, at),
+        live(id, "s1", "live:text2", { kind: "text", text: "重试好了。" }, at2),
+        live(id, "s1", "live:done2", { kind: "done", exitStatus: 0, turnOutcome: "completed" }, at2),
+      ],
     };
   },
   stopped: (id) => {
@@ -73,7 +108,7 @@ const SCENES: Record<string, (id: string) => Scene> = {
     return { sessions: [s], persisted: [{ session: s, output: "按意见改一下构建脚本。", trace: [] }] };
   },
   running: (id) => {
-    const s = session(id, "s1", { turnInterruption: CAUSE });
+    const s = session(id, "s1", { turnInterruptions: { [at]: CAUSE } });
     return { status: "running", sessions: [s], persisted: [{ session: s, output: "按意见改一下构建脚本。", trace: [] }] };
   },
 };

@@ -78,10 +78,14 @@ export interface Session {
    */
   turnOutcomes?: Record<string, TurnOutcome | null>;
   /**
-   * 最后一回合(`turnStartedAt` 那一轮)怎么断的,跟 `turnOutcome` 同一个回合。null/缺省 = 没有:
-   * 没断、还开着、或者是这份结构出现之前的老记录 —— 读端照老样子只说「这一轮异常结束」。
+   * 这条会话上**每一个断过的回合**怎么断的(`session_turns.interruption`),键跟 `turnOutcomes`
+   * 一样是回合起点。要按回合带:同一条会话重试成功以后,前一回合那句失败说明刷新后还得在原处
+   * (第 2 轮审查第 2 条),只带最后一回合的那一版一续跑就把它丢了。
+   *
+   * 某一回合没有键 = 没有:没断、还开着、或者是这份结构出现之前的老记录 —— 读端照老样子只说
+   * 「这一轮异常结束」。
    */
-  turnInterruption?: TurnInterruption | null;
+  turnInterruptions?: Record<string, TurnInterruption>;
   /**
    * 这条会话**此刻**还卡在上游等回话吗 —— 服务端那份权威状态(server/src/session-waiting.ts)
    * 按回合身份判出来的一位,不是数据库里的列。

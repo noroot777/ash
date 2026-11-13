@@ -111,6 +111,8 @@ const AGENT_SIZE: SizeTable<AgentItem> = {
   continuation: () => 0,
   wokenByMonitor: () => 0,
   turnOutcome: () => 0,
+  // 断过的回合尾上那句失败说明照它说（跟事件条目的 interruption 同一口径）。
+  turnInterruption: (value) => value ? value.reason.length + value.detail.length : 0,
   session: () => 0,
   run: () => 0,
   reviewer: () => 0,

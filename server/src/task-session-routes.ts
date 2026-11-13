@@ -12,12 +12,12 @@ import { actorOf } from "./auth/context.js";
 import { canSeeProject } from "./auth/visibility.js";
 import { deleteConversationSegments, RedactRefusal, type RedactTarget } from "./conversation-redact.js";
 import { db } from "./db/index.js";
-import { sessions, tasks } from "./db/schema.js";
+import { sessionTurns, sessions, tasks } from "./db/schema.js";
 import { backfillArtifactUploads, eventAttachmentPath } from "./uploads.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
-import { turnFactsForTask, type SessionTurnFacts } from "./session-turns.js";
+import { turnFactsOf, type SessionTurnFacts } from "./session-turns.js";
 import { failedTurnNotices, replaysFailureScene, sessionWaiting } from "./session-waiting.js";
 import { turnOutcome } from "./session-turns.js";
 import {
@@ -70,20 +70,27 @@ async function toSession(
     // 每一回合的也带上:会话一续跑,只剩最后一回合的那一位就答不了「前一回合崩没崩」,
     // 而哨兵叫醒并不并回要的正是它(见 Session.turnOutcomes)。
     turnOutcomes,
-    // 最后一回合怎么断的（turn-interruption.ts）：页面上失败那句话照它说，不认结算说明的字。
-    turnInterruption: interruptions[r.turnStartedAt ?? r.startedAt] ?? null,
+    // 每个断过的回合怎么断的（turn-interruption.ts）：页面上失败那句话照它说，不认结算说明的字。
+    turnInterruptions: interruptions,
   };
 }
 
 
 export async function sessionsForTask(taskId: string): Promise<Session[]> {
-  // **先读回合、后读会话行**，顺序就是这份快照一致的理由：单飞收口先写会话行（收尾时刻、退出码），
-  // 再落回合（结局、怎么断的）（single-run.ts）。先读回合时读到的结局，它的会话行此刻必然已经写好；
-  // 反过来读，中间落下一次收口，就会拼出「这一回合已判失败、会话行却还没收尾」的半截快照 —— 页面
-  // 照它判「能重试」，却补不出失败那句话（第 1 轮审查第 1 条）。反方向那半截（回合还开着、会话行
-  // 已收尾）读端按退出码兜底，两处说的仍是同一件事，下一次读就补齐。
-  const facts = await turnFactsForTask(taskId);
-  const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
+  // **会话行和回合行出自同一个原子读批**：两边是收尾那一个批一起写下的（`recordTurnSpan` 的
+  // `alongside`），分两条读，中间落下一次收口就拼出半截快照 —— 先读会话行是「回合已判失败、会话行
+  // 还没收尾」，先读回合是「会话行已收尾、回合结局还不知道」（exit 0 却判失败的那一轮连重试都给
+  // 不出），换顺序只是换一种半截（第 1、2 轮审查第 1 条）。
+  const [rows, turns] = await db.batch([
+    db.select().from(sessions).where(eq(sessions.taskId, taskId)),
+    db.select({
+      sessionId: sessionTurns.sessionId,
+      startedAt: sessionTurns.startedAt,
+      outcome: sessionTurns.outcome,
+      interruption: sessionTurns.interruption,
+    }).from(sessionTurns).where(eq(sessionTurns.taskId, taskId)),
+  ]);
+  const facts = turnFactsOf(turns);
   const runMeta = await sessionRunMeta(taskId, rows);
   return Promise.all(rows.map((row) => toSession(row, runMeta.get(row.id), facts.get(row.id))));
 }

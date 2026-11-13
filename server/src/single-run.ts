@@ -527,7 +527,9 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   const dropSession = !steered && shouldDropSession(sessionFault, exitStatus);
   const turnOutcome: TurnOutcome = steered || stopped ? "stopped" : executionFailed ? "failed" : "completed";
   await closeExecution(steered ? "canceled" : stopped ?? (executionFailed ? "failed" : "completed"), endIso);
-  await db
+  // 会话行的收尾**不在这里单独写**:它跟下面的回合收口同一个原子批落(`recordTurnSpan` 的
+  // `alongside`),页面一次读出来的两边才是同一刻的(第 1、2 轮审查第 1 条)。
+  const closeRow = db
     .update(sessions)
     .set({
       exitStatus,
@@ -570,6 +572,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     endedAt: endIso,
     outcome: turnOutcome,
     interruption,
+    alongside: closeRow,
   });
   if (steered) {
     // 「引导会话」只截断旧回合：任务仍是 running，新消息已持有 scheduled_messages

@@ -8,7 +8,7 @@ import { contentSegments } from "./conversationSegments.ts";
 import { traceRun, traceUsage } from "./conversationTraceGroups.ts";
 import { traceSpanSource } from "./conversationTraceSources.ts";
 import { agentLabel, compactTurnText, sessionRun } from "./conversationTurnParts.ts";
-import { persistedTurnOutcome } from "./turnFailure.ts";
+import { persistedTurnInterruption, persistedTurnOutcome } from "./turnFailure.ts";
 
 /**
  * 把没被任何正文段认领的 trace 组铺成「执行过程」气泡，追加到 `items` 末尾。
@@ -70,6 +70,7 @@ export function appendTraceFragments(
       endedAt: null,
       markerEndedAt: null,
       turnOutcome: persistedTurnOutcome(session, entries, pending.turn),
+      turnInterruption: persistedTurnInterruption(session, entries, pending.turn),
       session,
       run: traceRun(entries) ?? sessionRun(session),
       reviewer: reviewerOf(traceVerifyRound(entries), session?.role),

@@ -5,7 +5,7 @@
 // 退出码 —— 页面上那句「这一轮异常结束」点开是「执行异常结束 · exit 1」，看不出出了什么错
 // （用户 2026-11-13）。这里把同一套判法用到每一个异常结束的回合上：single-run 收口时判一次，
 // 跟回合结局一起落进 `session_turns.interruption`（刷新以后从会话行带出，读端是 session-turns.ts 的
-// `turnFactsForTask`），同时跟着结尾的
+// `turnFactsOf`），同时跟着结尾的
 // `done` 事件播出去（直播那一路），两路是同一份。
 //
 // 没有诊断文件的执行器（claude 等）按 `interruptionOf` 已有的退路走：回合里报的执行故障、退出码。
