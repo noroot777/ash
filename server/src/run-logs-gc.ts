@@ -5,9 +5,8 @@
 // 任务一结束就再没有人会看第二眼——正文早已提炼进 data/runs/<task>/<sess>.md，
 // 网页读的也是那份。所以留着只是占地方。
 //
-// 刻意**不碰** codex-events.jsonl / stderr.log：那是 server/CLAUDE.md 明文规定
-// 的「Codex 单任务失败证据链」，删除属于政策变更，不该由这个清理器顺手决定。
-// （实测那批文件是目前 data/runs 的大头，要不要设保留期得单独拍板。）
+// 不碰 codex-events.jsonl / stderr.log：它们是失败取证的现场，按「任务了结 + 宽限期」
+// 回收，规则在 run-trace-retention.ts。
 import { readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { eq, isNull } from "drizzle-orm";

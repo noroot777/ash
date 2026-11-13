@@ -44,7 +44,7 @@ export function SideChatPane({ task }: { task: Task }) {
         <div className="side-chat-log" role="log" aria-label="侧聊消息" aria-live="polite">
           {messages.length >= 500 && <p className="side-chat-note">显示最近 500 条消息，更早记录仍保留。</p>}
           {messages.map((message) => (
-            <SideChatMessage key={message.id} message={message} onForward={(id) => void chat.forward(id)} onRevoke={(id) => void chat.revoke(id)} />
+            <SideChatMessage key={message.id} message={message} onForward={(id) => void chat.forward(id)} onRevoke={(id) => void chat.revoke(id)} onReuse={chat.reuse} />
           ))}
         </div>
       </div>

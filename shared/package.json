@@ -118,6 +118,10 @@
       "types": "./src/workflow.ts",
       "default": "./src/workflow.ts"
     },
+    "./command-note": {
+      "types": "./src/command-note.ts",
+      "default": "./src/command-note.ts"
+    },
     "./workflow-policy": {
       "types": "./src/workflow-policy.ts",
       "default": "./src/workflow-policy.ts"

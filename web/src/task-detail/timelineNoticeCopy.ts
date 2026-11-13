@@ -1,36 +1,50 @@
-// 会话里「ash 自己说的话」的那一张表：每一类事摆在哪一档、什么语气、写成哪句话。
+// 会话里「ash 自己说的话」的那一张表：每一类事摆在哪一档、说的是哪件事、写成哪句话。
 //
 // 类型由服务端写时间线时给（shared/src/timeline-notice.ts）。这里**写结果，不写机制**：
 // 「已验收，合并到 main」「不再等回归测试了，它已经跑完」—— 分支名、退出码、理由这些细节
 // 在原文里，点开再看（`detail`）。
 //
 // 四档：
-//   milestone 里程碑，会话里常显一行（审查出了结论、验收了）。
-//   alert     出了岔子、或者要你拍板的，留在会话明面上。
-//   reply     你那条斜杠命令的回答：是你要看的东西，常显一行，点开是全文。
-//   receipt   回执，记在它所属的那一回合上，平时不画（conversationSystemRows 负责归属）。
+//   milestone 里程碑：审查出了结论、验收了。
+//   alert     出了岔子、或者要你拍板的。
+//   reply     你那条斜杠命令的回答：是你要看的东西，在原处常显，点开是全文。
+//   receipt   回执，记在它所属的那一回合上，平时不画。
+// 前两档是所属回合的尾注（回合正文下面那一句小灰字），归属与「并成一句」见
+// conversationSystemRows / turnFootnote。
 //
-// 没有类型的老记录（这份类型出现之前落盘的、以及回合里那几种不走时间线的系统注记）退回老读法：
-// 认原文里的几个固定说法、再按关键词猜语气。只有这一处还在读原文。
+// 没有类型的老记录（这份类型出现之前落盘的、线上老服务端写的、以及回合里那几种不走时间线的
+// 系统注记）退回老读法：认原文里的几个固定说法，再按起头表（legacyNoticeTable）认要你知道的
+// 那几句，其余一律是回执。只有这一处还在读原文。
 import { LEGACY_SYS_MARKER, STAGE_LABELS, type TaskStage } from "@ash/shared";
+import { normalizeSessionNoteText } from "@ash/shared/session-notes";
 import type { TimelineNotice, TimelineReviewSource } from "@ash/shared/timeline-notice";
 import { previewNoticeText } from "../lib/previewUrl.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
 import { isWorkspaceRecoveryNote, verifyNoteOf } from "./conversationNotes.ts";
 import { pendingDisputeEvent } from "./systemNoticeModel.ts";
+import { legacyTier, quotesUserText } from "./legacyNoticeTable.ts";
 
 export type NoticeTier = "milestone" | "alert" | "reply" | "receipt";
-/** 颜色只落在行首那颗图标上：ok 绿、warn 琥珀、bad 红、neutral 灰。 */
+/**
+ * 这句话报的是好消息还是坏消息。尾注默认全灰；只有它还是现在的事（见 turnFootnote）时，
+ * warn / bad 两种在字前面多一颗小圆点：bad 红 = 没办成，warn 琥珀 = 要你知道或要你拍板。
+ * ok / neutral 不带任何颜色。
+ */
 export type NoticeTone = "ok" | "warn" | "bad" | "neutral";
-/** 图标形状：审查用盾，其余按语气。 */
-export type NoticeGlyph = "review" | "check" | "warn" | "info" | "recovery";
+/**
+ * 说的是哪件事。同一回合的尾注每件事只留最近一句（见 turnFootnote）：review 审查结论、
+ * accept 验收了、failure 这一轮异常结束、other 其余要你知道的。
+ */
+export type NoticeTopic = "review" | "accept" | "failure" | "other";
 
 export type NoticeView = {
   tier: NoticeTier;
   tone: NoticeTone;
-  glyph: NoticeGlyph;
+  topic: NoticeTopic;
   /** 摆在会话里 / 流水里的那一句。 */
   text: string;
+  /** 句子里要换成等宽字的那一截（分支名、标签名）。 */
+  mono?: string;
   /** 点开再看的原文。跟 `text` 说的是同一句时为 null。 */
   detail: string | null;
   /** 「执行者驳回了审查意见，等你裁定」——这一条上挂「去裁定」。 */
@@ -102,17 +116,29 @@ function lead(raw: string): { text: string; detail: string | null } {
 function view(
   tier: NoticeTier,
   tone: NoticeTone,
-  glyph: NoticeGlyph,
+  topic: NoticeTopic,
   text: string,
   raw: string,
-  dispute = false,
+  extra: Partial<Pick<NoticeView, "dispute" | "mono">> = {},
 ): NoticeView {
-  return { tier, tone, glyph, text, detail: raw && raw !== text ? raw : null, dispute };
+  return { tier, tone, topic, text, detail: raw && raw !== text ? raw : null, dispute: false, ...extra };
 }
 
 function generic(tier: NoticeTier, tone: NoticeTone, raw: string): NoticeView {
   const head = lead(raw);
-  return { tier, tone, glyph: tone === "ok" ? "check" : tone === "neutral" ? "info" : "warn", text: head.text, detail: head.detail, dispute: false };
+  return { tier, tone, topic: "other", text: head.text, detail: head.detail, dispute: false };
+}
+
+/** 「已验收，合并到 feat/x」：分支名换成等宽字。 */
+function accepted(raw: string, target: string | null, noCommit: boolean, tag?: string | null): NoticeView {
+  if (tag) return view("milestone", "ok", "accept", `已验收，打上标签 ${tag}`, raw, { mono: tag });
+  if (!target) return view("milestone", "ok", "accept", "已验收", raw);
+  return view("milestone", "ok", "accept", `已验收，合并到 ${target}${noCommit ? "，等你提交" : ""}`, raw, { mono: target });
+}
+
+/** 「第 2 轮审查意见被驳回，等你裁定」：原文（驳回理由、几条出路）点开再看。 */
+function disputed(raw: string, round: number | null): NoticeView {
+  return view("alert", "warn", "other", `${round ? `第 ${round} 轮` : ""}审查意见被驳回，等你裁定`, raw, { dispute: true });
 }
 
 /** 有类型的那一条：整张表就在这个 switch 里。 */
@@ -120,47 +146,41 @@ function typedView(notice: TimelineNotice, raw: string): NoticeView {
   switch (notice.kind) {
     case "review.verdict": {
       const text = reviewVerdictText(notice.source, notice.round, notice.verdict, notice.findings);
-      // 没能开始的那一轮不算「出了结论」，是出了岔子：同样常显，只是归明面那一档。
+      // 没能开始的那一轮不算「出了结论」，是出了岔子：同样进尾注，只是归明面那一档。
       return view(notice.verdict === "aborted" ? "alert" : "milestone", reviewVerdictTone(notice.verdict), "review", text, raw);
     }
-    case "accept.done": {
-      const text = notice.tag
-        ? `已验收，打上标签 ${notice.tag}`
-        : notice.target
-          ? `已验收，合并到 ${notice.target}${notice.noCommit ? "，等你提交" : ""}`
-          : "已验收";
-      return view("milestone", "ok", "check", text, raw);
-    }
-    // 这一张卡的样子不动（原文 + 「去裁定」），只是不再靠认「现在由你裁定」那几个字找到它。
+    case "accept.done":
+      return accepted(raw, notice.target, !!notice.noCommit, notice.tag);
+    // 不再靠认「现在由你裁定」那几个字找到它。
     case "review.dispute":
-      return { tier: "alert", tone: "warn", glyph: "review", text: raw, detail: null, dispute: true };
+      return disputed(raw, notice.round);
     case "review.start":
-      return view("receipt", "neutral", "review", `${reviewRoundName(notice.source, notice.round)}${notice.rerun ? "接着跑" : "开始"}`, raw);
+      return view("receipt", "neutral", "other", `${reviewRoundName(notice.source, notice.round)}${notice.rerun ? "接着跑" : "开始"}`, raw);
     case "review.repair":
-      return view("receipt", "neutral", "review", `意见已交给执行者，按${reviewRoundName(notice.source, notice.round)}的意见改`, raw);
+      return view("receipt", "neutral", "other", `意见已交给执行者，按${reviewRoundName(notice.source, notice.round)}的意见改`, raw);
     case "stage":
-      return view("receipt", "neutral", "info", `验收阶段：${stageLabel(notice.stage)}`, raw);
+      return view("receipt", "neutral", "other", `验收阶段：${stageLabel(notice.stage)}`, raw);
     case "review.reserved":
-      return view("receipt", "neutral", "review", notice.updated ? "审查预约已更新，这一轮跑完自动开始" : "审查已预约，这一轮跑完自动开始", raw);
+      return view("receipt", "neutral", "other", notice.updated ? "审查预约已更新，这一轮跑完自动开始" : "审查已预约，这一轮跑完自动开始", raw);
     case "review.unreserved":
-      return view("receipt", "neutral", "review", "审查预约已取消", raw);
+      return view("receipt", "neutral", "other", "审查预约已取消", raw);
     case "review.launch":
-      return view("receipt", "neutral", "review", "这一轮跑完，预约的审查开始", raw);
+      return view("receipt", "neutral", "other", "这一轮跑完，预约的审查开始", raw);
     case "monitor.started":
-      return view("receipt", "neutral", "info", `开始盯：${notice.description}`, raw);
+      return view("receipt", "neutral", "other", `开始盯：${notice.description}`, raw);
     case "monitor.finished":
-      return view("receipt", "neutral", "info", `「${notice.description}」结束了`, raw);
+      return view("receipt", "neutral", "other", `「${notice.description}」结束了`, raw);
     case "monitor.released":
-      return view("receipt", "neutral", "info", `不再等「${notice.description}」了${notice.finished ? "，它已经跑完" : ""}`, raw);
+      return view("receipt", "neutral", "other", `不再等「${notice.description}」了${notice.finished ? "，它已经跑完" : ""}`, raw);
     case "monitor.handed":
-      return view("receipt", "neutral", "info", "哨兵结果在这一回合里交给了它", raw);
+      return view("receipt", "neutral", "other", "哨兵结果在这一回合里交给了它", raw);
     case "command.output": {
       // 是你要看的东西：输出整段摆出来（命令本身那一行拿掉，指到这一行时写在时刻前面）。
       const output = raw.split("\n")
         .filter((line) => line.trim() !== notice.command && line.trim() !== `命令：${notice.command}`)
         .join("\n")
         .trim();
-      return { tier: "reply", tone: "neutral", glyph: "info", text: output || raw, detail: null, dispute: false, meta: notice.command };
+      return { tier: "reply", tone: "neutral", topic: "other", text: output || raw, detail: null, dispute: false, meta: notice.command };
     }
     case "receipt":
       return generic("receipt", "neutral", raw);
@@ -171,41 +191,68 @@ function typedView(notice: TimelineNotice, raw: string): NoticeView {
 
 const LEGACY_ACCEPTED = /^验收完成：目标分支\s*(\S+?)(（改动已合入其工作区|；|。|$)/;
 const LEGACY_FREE_MERGED = /^自由工作流合并&清理完成：已安全合并\s*\S+\s*→\s*(\S+?)(，|；|。|$)/;
+const LEGACY_DISPUTE_ROUND = /（第\s*(\d+)\s*轮/;
 
-/** 没有类型的老记录：认几个固定说法，其余按服务端当时标的语气（或关键词）分档。 */
-function legacyView(item: NoticeSource, raw: string): NoticeView {
+/**
+ * 没有类型的老记录：认几个固定说法（验收了、审查结论、等你裁定、工作区重建），再按起头表认
+ * 要你知道的那几句；其余一律是回执。**不按关键词猜语气**：原文里带「失败」「错误」的多半只是
+ * 引了一段描述或命令（「哨兵已起：等回归跑完（npm test || echo FAILED）」），据此升成常显
+ * 的红字，回执就成了警报。服务端标了 `level:"notice"` 的结算说明也照同一个办法认，不一律升档。
+ */
+/** 认老记录时用得上的、这个任务自己的东西。 */
+export type NoticeContext = {
+  /** 任务工作流里写的那几条命令：认「跑了一条命令」那一句的成败时拿来逐字对（legacyNoticeTable 的 commandVerdict）。 */
+  commands?: readonly string[];
+};
+
+function legacyView(item: NoticeSource, raw: string, context: NoticeContext): NoticeView {
+  // 夹着你写的字的那几种只按格式认，先于下面那些全文找字的说法（见 quotesUserText）。
+  if (quotesUserText(item.text)) return legacyTierView(item, raw, context);
   if (isWorkspaceRecoveryNote(item.text)) {
     return {
-      tier: "alert", tone: "neutral", glyph: "recovery", text: "工作区已恢复，会话内容都在",
+      tier: "alert", tone: "neutral", topic: "other", text: "工作区已恢复，会话内容都在",
       detail: "原目录已不存在，系统已重建空工作区；会话与用户消息均已保留。", dispute: false,
     };
   }
-  if (pendingDisputeEvent(item.text)) return { tier: "alert", tone: "warn", glyph: "review", text: raw, detail: null, dispute: true };
-  const accepted = LEGACY_ACCEPTED.exec(raw) ?? LEGACY_FREE_MERGED.exec(raw);
-  if (accepted) return view("milestone", "ok", "check", `已验收，合并到 ${accepted[1]}${accepted[2]?.startsWith("（") ? "，等你提交" : ""}`, raw);
-  if (/^验收通过：/.test(raw)) return view("milestone", "ok", "check", "已验收", raw);
-  // 审查段外面落单的结论旁注（它那一段的开头不在这份记录里）：照样常显成一句结论。
+  if (pendingDisputeEvent(item.text)) {
+    const round = LEGACY_DISPUTE_ROUND.exec(raw)?.[1];
+    return disputed(raw, round ? Number(round) : null);
+  }
+  const merged = LEGACY_ACCEPTED.exec(raw) ?? LEGACY_FREE_MERGED.exec(raw);
+  if (merged) return accepted(raw, merged[1]!, !!merged[2]?.startsWith("（"));
+  if (/^验收通过：/.test(raw)) return accepted(raw, null, false);
+  // 审查段外面落单的结论旁注（它那一段的开头不在这份记录里）：照样是一句结论。
   const mark = verifyNoteOf(raw);
   if (mark?.phase === "end" && mark.kind !== "inline") {
     if (/审查通过/.test(raw)) return view("milestone", "ok", "review", reviewVerdictText(mark.kind, mark.round, "passed"), raw);
     if (/审查(仍)?未通过/.test(raw)) return view("milestone", "bad", "review", reviewVerdictText(mark.kind, mark.round, "failed"), raw);
+    if (/启动失败/.test(raw)) return view("alert", "bad", "review", reviewVerdictText(mark.kind, mark.round, "aborted"), raw);
+    if (/未能正常给出结论/.test(raw)) return view("milestone", "warn", "review", reviewVerdictText(mark.kind, mark.round, "inconclusive"), raw);
   }
   if (item.text.includes(LEGACY_SYS_MARKER)) return generic("receipt", "neutral", raw);
-  if (item.tone === "notice") return generic("alert", "warn", raw);
-  if (item.tone === "error") return generic("alert", "bad", raw);
-  return generic("receipt", "neutral", raw);
+  return legacyTierView(item, raw, context);
 }
 
-export function noticeView(item: NoticeSource): NoticeView {
+function legacyTierView(item: NoticeSource, raw: string, context: NoticeContext): NoticeView {
+  // 按格式切的那几句拿落盘原话去切：展示用的 raw 裁过空白、换过预览地址（noticeRawText）。
+  // 原话在读进来时归一过一道轮换旁注的旧文案（normalizeSessionNoteText），工作流里的命令也照样归一了再对。
+  const commands = context.commands?.flatMap((cmd) => [cmd, normalizeSessionNoteText(cmd)]);
+  const tier = legacyTier(raw, { settlement: item.tone === "notice", commands, source: item.text });
+  // 命令里、输出里各引了一段像成败的字，字面上切不出是哪一种：说认不出，原文点开看，不替它猜成败。
+  if (tier === "unknown") return view("alert", "warn", "other", "跑了一条命令，老记录里认不出它通过没有", raw);
+  return generic(tier, tier === "alert" ? "warn" : "neutral", raw);
+}
+
+export function noticeView(item: NoticeSource, context: NoticeContext = {}): NoticeView {
   const raw = noticeRawText(item.text);
   // 回合边界（直播那一路的「本轮执行结束」「执行异常结束 · exit 1」）不走时间线：
-  // 正常收口是回执，异常收口留在明面上。
+  // 正常收口是回执，异常收口是那一回合尾注里的一句。
   // 异常收口落定成一句「这一轮异常结束」，退出码点开再看（run-8）。
   if (item.variant === "boundary") return item.tone === "error" ? turnFailureView(raw) : generic("receipt", "neutral", raw);
-  return item.notice ? typedView(item.notice, raw) : legacyView(item, raw);
+  return item.notice ? typedView(item.notice, raw) : legacyView(item, raw, context);
 }
 
 /** 一轮异常结束的那一句（直播那一路的回合边界、刷新以后从会话行认出来的都用它）。 */
 export function turnFailureView(raw: string): NoticeView {
-  return view("alert", "bad", "warn", "这一轮异常结束", raw);
+  return view("alert", "bad", "failure", "这一轮异常结束", raw);
 }

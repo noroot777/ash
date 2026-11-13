@@ -74,98 +74,75 @@
 .system-action-wrap .system-action-line b { color: var(--ink); }
 .system-action-wrap .system-action-line > p > span { color: var(--muted); }
 
-/* 会话里常显的那一行：里程碑（审查出了结论、验收了），或者出了岔子 / 等你裁定。
-   一行一句，图标落在头像轴上；颜色只在图标上，结论写在字里。整行是一颗键。
-   谁审的、用时、时刻（.notice-line-tail）紧跟在字后面，指到这一行才显示，触屏上常显。 */
-.notice-line {
-  display: grid;
-  max-width: 790px;
-  grid-template-columns: 20px minmax(0, 1fr);
-  column-gap: 10px;
-  align-items: start;
-  margin: 8px 0 14px;
-}
-.notice-line-icon { display: grid; width: 20px; height: 20px; margin-top: 2px; place-items: center; color: var(--faint); transition: color var(--dur-2) var(--ease-out); }
-.notice-line.tone-ok .notice-line-icon { color: var(--green); }
-.notice-line.tone-warn .notice-line-icon { color: var(--amber); }
-.notice-line.tone-bad .notice-line-icon { color: var(--red); }
-.notice-line-main { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 0 6px; }
-.notice-line-button {
-  display: inline-flex;
-  max-width: 100%;
-  min-height: 24px;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0 10px;
-  margin-left: -6px;
+/* 回合的尾注（FootnoteLine）：回合之后发生的、要你知道的事，并成正文下面的一句小灰字——
+   跟回合头起因、「执行过程」那一行同一档。没有图标、没有底色，左缘跟正文对齐。
+   几件事中间一个间隔号；最近那一句的时刻（.turn-footnote-tail）指到才出，触屏上常显。
+   颜色只说现在的事：还成立的坏消息字前一颗 6px 小圆点，其余全灰。 */
+.turn-footnote { max-width: 790px; margin-top: 6px; color: var(--muted); font-size: var(--t-xs); line-height: 1.6; }
+.turn-footnote.is-standalone { margin: 4px 0 14px 30px; }
+.turn-footnote-line { margin: 0; overflow-wrap: anywhere; }
+.turn-footnote-part {
+  display: inline;
+  margin: 0;
   border: 0;
   border-radius: var(--r-sm);
   background: transparent;
-  padding: 0 6px;
-  color: var(--muted);
+  padding: 0;
+  color: inherit;
   font: inherit;
-  font-size: var(--t-sm);
-  font-weight: var(--w-regular);
-  line-height: 1.6;
   text-align: left;
-  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 2px;
+  transition: color var(--dur-1) var(--ease-out), text-decoration-color var(--dur-1) var(--ease-out);
 }
-button.notice-line-button { cursor: pointer; }
-button.notice-line-button:hover,
-button.notice-line-button[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
-button.notice-line-button:active { background: var(--sel-bg); }
-button.notice-line-button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.notice-line-text { min-width: 0; overflow-wrap: anywhere; }
-/* 命令的回答原样分行（/goal --scopes 一类是好几行的清单）。 */
-.notice-line.is-reply .notice-line-text { white-space: pre-wrap; }
-.notice-line-tail {
+button.turn-footnote-part { cursor: pointer; }
+button.turn-footnote-part:hover,
+button.turn-footnote-part[aria-expanded="true"] { color: var(--ink); text-decoration-color: currentColor; }
+button.turn-footnote-part:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.turn-footnote-mono { font-family: var(--font-mono); font-size: inherit; }
+.turn-footnote-sep { margin: 0 6px; color: var(--faint); }
+.turn-footnote-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: var(--r-full);
+  vertical-align: 0.08em;
+}
+.turn-footnote-dot.is-bad { background: var(--red); }
+.turn-footnote-dot.is-warn { background: var(--amber); }
+.turn-footnote-line > .system-event-cta { margin-left: 8px; vertical-align: middle; }
+.turn-footnote-tail {
+  margin-left: 10px;
   color: var(--faint);
-  font-size: var(--t-xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   opacity: 0;
   transition: opacity var(--dur-1) var(--ease-out);
 }
-.notice-line:hover .notice-line-tail,
-.notice-line:focus-within .notice-line-tail { opacity: 1; }
-.notice-line-detail {
-  flex-basis: 100%;
+.turn-footnote:hover .turn-footnote-tail,
+.turn-footnote:focus-within .turn-footnote-tail,
+.command-reply:hover .turn-footnote-tail,
+.command-reply:focus-within .turn-footnote-tail { opacity: 1; }
+.turn-footnote-line > .message-delete-button { margin-left: 6px; }
+.turn-footnote-detail {
   margin: 4px 0 2px;
   border-left: 1px solid var(--line2);
   padding-left: 12px;
-  color: var(--muted);
-  font-size: var(--t-xs);
-  line-height: 1.6;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   animation: notice-unfold var(--dur-2) var(--ease-out) backwards;
 }
-.notice-line-action { display: inline-flex; flex: none; }
-.notice-line-main.is-flow { display: block; }
-.notice-line-main.is-flow > .notice-line-button { display: inline; }
-.notice-line-main.is-flow .notice-line-tail { margin-left: 10px; }
-.notice-line-main.is-flow .notice-line-action { margin-left: 8px; vertical-align: middle; }
-/* 审查进行中那一句（右侧卡头）走一道流光，出了结论就停。 */
-.notice-line-text.is-live {
-  background: linear-gradient(90deg, var(--muted) 40%, var(--ink) 50%, var(--muted) 60%) 0 0 / 300% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: notice-shimmer 1.8s linear infinite;
-}
-@keyframes notice-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
-@keyframes notice-unfold { from { opacity: 0; transform: translateY(-2px); } }
-
-/* 出了结论的审查轮：一句里程碑。没有右侧「审查」格可去时（只读视图），点开在原处摊开这一轮。 */
-.review-milestone { max-width: 790px; }
-.review-milestone > .notice-line { margin-bottom: 8px; }
-.review-milestone-body {
-  margin: 0 0 18px 30px;
+/* 一轮审查就地摊开（审查结论气泡、记录里那一条，没有右侧「审查」格可去时）。 */
+.turn-footnote-lane {
+  margin: 6px 0 12px;
   border-left: 1px solid var(--line2);
   padding: 4px 0 4px 14px;
+  font-size: var(--t-sm);
   animation: notice-unfold var(--dur-2) var(--ease-out) backwards;
 }
-.review-milestone-report {
+.turn-footnote-report {
   display: inline-flex;
   min-height: 24px;
   align-items: center;
@@ -179,7 +156,27 @@ button.notice-line-button:focus-visible { outline: 2px solid var(--focus-ring); 
   font-size: var(--t-xs);
   cursor: pointer;
 }
-.review-milestone-report:hover { background: var(--hover-bg); }
+.turn-footnote-report:hover { background: var(--hover-bg); }
+.turn-footnote-report:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* 贴在审查结论下面的那几句：靠右对齐气泡。藏着的时刻排到字前面，否则它占着的空会把字从气泡的
+   右缘推开。 */
+.turn-footnote.is-trailing { max-width: 100%; margin: 6px 2px 0 0; }
+.turn-footnote.is-trailing > .turn-footnote-line { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: flex-end; }
+.turn-footnote.is-trailing .turn-footnote-tail { order: -1; margin: 0 10px 0 0; }
+.turn-footnote.is-trailing .turn-footnote-line > .system-event-cta { align-self: center; }
+.turn-footnote.is-trailing > .turn-footnote-detail { text-align: left; }
+/* 前面没有回合可挂的那一句：它的记录跟在后面，同样指到才出。 */
+.footnote-row > .turn-footnote.is-standalone { margin-bottom: 0; }
+.footnote-row > .turn-receipts { margin: 0 0 14px 30px; }
+.footnote-row:hover > .turn-receipts,
+.footnote-row:focus-within > .turn-receipts { opacity: 1; }
+
+/* 你那条斜杠命令的回答：原样分行，左缘跟正文对齐。 */
+.command-reply { max-width: 790px; margin: 4px 0 14px 30px; color: var(--muted); font-size: var(--t-sm); line-height: 1.6; }
+.command-reply-text { display: inline; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.command-reply > .turn-footnote-tail { font-size: var(--t-xs); }
+
+@keyframes notice-unfold { from { opacity: 0; transform: translateY(-2px); } }
 
 /* 记在回合上的回执。平时不画，指到这一回合才多一颗「N 条记录」；点开是一份带时刻的流水，
    时刻排在每一条最前面。触屏上常显；点开以后一直在。 */
@@ -233,6 +230,7 @@ button.notice-line-button:focus-visible { outline: 2px solid var(--focus-ring); 
 .turn-receipt-more:hover,
 .turn-receipt-more[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
 .turn-receipt-more:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.turn-receipt-lane { flex-basis: 100%; margin: 2px 0 6px; color: var(--muted); }
 .turn-receipt-detail {
   flex-basis: 100%;
   margin: 2px 0 6px;
@@ -243,13 +241,8 @@ button.notice-line-button:focus-visible { outline: 2px solid var(--focus-ring); 
 }
 
 @media (hover: none) {
-  .notice-line-tail,
+  .turn-footnote-tail,
   .turn-receipts { opacity: 1; }
-}
-/* 减少动效时流光换成实色字。 */
-:root[data-motion="reduce"] .notice-line-text.is-live { animation: none; color: var(--muted); background: none; }
-@media (prefers-reduced-motion: reduce) {
-  :root:not([data-motion="full"]) .notice-line-text.is-live { animation: none; color: var(--muted); background: none; }
 }
 
 /* 团队时间线上的回合边界：一条很淡的分隔线和说明。 */
@@ -292,3 +285,7 @@ button.notice-line-button:focus-visible { outline: 2px solid var(--focus-ring); 
 .system-event-cta:active { background: var(--action-active); }
 .system-event-cta:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .system-event-cta svg { flex: none; }
+
+/* 团队时间线上执行者的话不带头像列：单独那一句贴着正文左缘。 */
+.team-feed .turn-footnote.is-standalone,
+.team-feed .command-reply { margin-left: 0; }

@@ -1,20 +1,19 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Coins } from "@phosphor-icons/react";
 import type { TokenUsage } from "@ash/shared";
-import { formatTokens, formatTokensExact, hasUsage, usageTotal } from "@ash/shared/usage";
+import { formatTokens, formatTokensExact, hasUsage, outputRate, usageTotal } from "@ash/shared/usage";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
 
 /**
- * 「这一轮花了多少 token / 这条会话至今累计多少」的那颗胶囊。
+ * 「这一轮花了多少 token」的那颗胶囊：面上只有一个数，点开是明细。会话累计不显示
+ * （用户 2026-11-13）。
  *
- * **位置固定在气泡尾栏**（`MessageFooter`），头部一颗都不放：每条气泡的尾栏有「本轮」，
- * 会话最后一条的尾栏再多「会话」累计和上下文水位，三颗一行。曾经按「是不是会话最后一条」
- * 决定本轮挂头还是挂尾，同一个数在顶和底之间跳，规则还看不见（用户 2026-08-07 报「位置
- * 不正常」，随后拍板三颗一律归底）。
+ * 住两处：任务会话的回合尾那一排（派生和「更多」之间，跟那一排一起指到才出），团队流
+ * 气泡的尾栏。上下文水位那颗（ContextMeterChip）借这颗的外形，两颗并排时长得像一家人。
  *
- * 两个数都给的调用方仍然支持（浮层是双列的），只是眼下没人这么用。
+ * 面上和明细里的数都走 formatTokens：一万以下照写，往上按 k / M / B 收成三四位有效数字
+ * ——几千万、几亿的时候写到个位只是一串读不过来的数。精确值留在读屏名里。
  *
  * 口径三条，都不在这里做决定、只负责如实显示：
  * ① 数字是**所有**进出模型的 token（缓存读也算），归一化在 `shared/src/usage.ts`；
@@ -23,24 +22,14 @@ import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
  *    或 @ 了别人插一手，各算各的，任何地方都不许把不同 agent 的账加成一个数
  *    —— 单价不同，加起来那个数不代表任何东西（用户 2026-08-07 明确要求分开）。
  */
-export function TokenUsageChip({
-  turn,
-  session,
-  className,
-}: {
-  /** 这一回合的用量。 */
-  turn?: TokenUsage | null;
-  /** 整条会话至今的累计用量。 */
-  session?: TokenUsage | null;
-  className?: string;
-}) {
+export function TokenUsageChip({ usage, className }: { usage?: TokenUsage | null; className?: string }) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const place = usePanelPlacement(triggerRef, panelRef, {
-    minWidth: 232,
-    minHeight: 120,
-    fallbackHeight: 200,
+    minWidth: 248,
+    minHeight: 150,
+    fallbackHeight: 210,
     enabled: open,
   });
 
@@ -55,37 +44,8 @@ export function TokenUsageChip({
     if (open) panelRef.current?.focus();
   }, [open]);
 
-  const showTurn = hasUsage(turn);
-  const showSession = hasUsage(session);
-  if (!showTurn && !showSession) return null;
-
-  const parts = [
-    showTurn ? `本轮 ${formatTokens(usageTotal(turn))}` : "",
-    showSession ? `总 ${formatTokens(usageTotal(session))}` : "",
-  ].filter(Boolean);
-  const spoken = [
-    showTurn ? `本轮 ${formatTokensExact(usageTotal(turn))} token` : "",
-    showSession ? `本会话累计 ${formatTokensExact(usageTotal(session))} token` : "",
-  ].filter(Boolean).join("，");
-
-  const panel = open && (
-    <div
-      className={`token-usage-panel is-cols-${showTurn && showSession ? 2 : 1}`}
-      ref={panelRef}
-      tabIndex={-1}
-      style={placementStyle(place)}
-      role="dialog"
-      aria-label="Token 用量明细"
-    >
-      <header>
-        <span>Token 用量</span>
-        {showTurn && <span>本轮</span>}
-        {showSession && <span>会话</span>}
-      </header>
-      <UsageRows turn={showTurn ? turn : null} session={showSession ? session : null} />
-      <footer>缓存读按上游报的原样计入总量；它便宜得多，但确实进了上下文。</footer>
-    </div>
-  );
+  if (!hasUsage(usage)) return null;
+  const total = usageTotal(usage);
 
   return (
     <>
@@ -95,46 +55,84 @@ export function TokenUsageChip({
         className={`token-usage-chip${className ? ` ${className}` : ""}`}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={`${spoken}；点击查看明细`}
+        aria-label={`本轮 ${formatTokensExact(total)} token；点击查看明细`}
         onClick={() => setOpen((current) => !current)}
       >
-        <Coins size={11} weight="fill" aria-hidden="true" />
-        {parts.join(" · ")}
+        <b>{formatTokens(total)}</b>
+        <span>token</span>
       </button>
-      {panel && createPortal(panel, document.body)}
+      {open && createPortal(
+        <div
+          className="usage-panel"
+          ref={panelRef}
+          tabIndex={-1}
+          style={placementStyle(place)}
+          role="dialog"
+          aria-label="本轮 Token 明细"
+        >
+          <header>
+            <span>本轮</span>
+            <b>{formatTokens(total)}</b>
+          </header>
+          <UsageBreakdown usage={usage} total={total} />
+        </div>,
+        document.body,
+      )}
     </>
   );
 }
 
-/** 用量明细那几行（输入 / 缓存读 / 缓存写 / 输出 / 其中思考 / 合计）。回合尾「更多」菜单里的本轮用量也用它。 */
-export function UsageRows({ turn, session }: { turn: TokenUsage | null; session: TokenUsage | null }) {
-  const rows: { label: string; pick: (u: TokenUsage) => number }[] = [
-    { label: "输入", pick: (u) => u.input },
-    { label: "缓存读", pick: (u) => u.cacheRead },
-    { label: "缓存写", pick: (u) => u.cacheWrite },
-    { label: "输出", pick: (u) => u.output },
-    { label: "其中思考", pick: (u) => u.reasoning },
-    { label: "合计", pick: usageTotal },
-  ];
-  const shown = rows.filter((row) =>
-    (turn ? row.pick(turn) : 0) > 0 || (session ? row.pick(session) : 0) > 0);
+/** 账目的四份，次序固定（先进后出），每一回合拿来比的时候色块不换位置。 */
+const PARTS: { key: "input" | "cacheRead" | "cacheWrite" | "output"; label: string }[] = [
+  { key: "input", label: "输入" },
+  { key: "cacheRead", label: "缓存读" },
+  { key: "cacheWrite", label: "缓存写" },
+  { key: "output", label: "输出" },
+];
 
+/**
+ * 一条按占比切开的横条，下面一份一行：数和占比。缓存读按上游报的原样计入总量——它便宜得多，
+ * 但确实进了上下文；横条让「这一轮大头是缓存读」一眼看得出，不用再写一句说明。
+ * 思考算在输出里，挂在输出下面一行，不进横条；输出速度同样挂在那儿，这一轮没计上时就不出现。
+ */
+function UsageBreakdown({ usage, total }: { usage: TokenUsage; total: number }) {
+  const parts = PARTS.filter((part) => usage[part.key] > 0);
+  const rate = outputRate(usage);
+  const share = (n: number) => {
+    const pct = (n / total) * 100;
+    return pct >= 1 ? `${Math.round(pct)}%` : "<1%";
+  };
   return (
-    <dl>
-      {shown.map((row) => (
-        <div key={row.label} className={row.label === "合计" ? "is-total" : undefined}>
-          <dt>{row.label}</dt>
-          {turn && <dd>{formatTokensExact(row.pick(turn))}</dd>}
-          {session && <dd>{formatTokensExact(row.pick(session))}</dd>}
-        </div>
-      ))}
-      {!!session?.turns && (
-        <div className="is-turns">
-          <dt>回合数</dt>
-          {turn && <dd>1</dd>}
-          <dd>{session.turns}</dd>
-        </div>
-      )}
-    </dl>
+    <>
+      <div className="usage-bar" aria-hidden="true">
+        {parts.map((part) => <span key={part.key} className={`is-${part.key}`} style={{ flexGrow: usage[part.key] }} />)}
+      </div>
+      <dl>
+        {parts.map((part) => (
+          <div key={part.key} aria-label={`${part.label} ${formatTokensExact(usage[part.key])} token`}>
+            <dt><i className={`is-${part.key}`} aria-hidden="true" />{part.label}</dt>
+            <dd>{formatTokens(usage[part.key])}</dd>
+            <dd>{share(usage[part.key])}</dd>
+          </div>
+        ))}
+        {usage.reasoning > 0 && (
+          <div className="is-sub">
+            <dt>其中思考</dt>
+            <dd>{formatTokens(usage.reasoning)}</dd>
+            <dd />
+          </div>
+        )}
+        {rate !== null && (
+          <div className="is-sub" aria-label={`输出速度每秒 ${formatRate(rate)} token`}>
+            <dt>速度</dt>
+            <dd>{formatRate(rate)}/s</dd>
+            <dd />
+          </div>
+        )}
+      </dl>
+    </>
   );
 }
+
+/** 慢到个位数时留一位小数,不然 0.4 会写成 0,读着像「没在出字」;再慢就只说不到 0.1。 */
+const formatRate = (rate: number) => (rate < 0.1 ? "<0.1" : rate < 10 ? rate.toFixed(1) : String(Math.round(rate)));

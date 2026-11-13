@@ -1,110 +1,56 @@
-import { ArrowClockwise, CheckCircle, Info, ShieldCheck, WarningCircle } from "@phosphor-icons/react";
-import { useId, useState, type ReactNode } from "react";
+import { Info, WarningCircle } from "@phosphor-icons/react";
+import type { ReactNode } from "react";
 import { openGitWorkbench } from "../git-workbench/navigation.ts";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { previewNoticeText } from "../lib/previewUrl.ts";
 import { MessageAttachments } from "./Attachments.tsx";
+import { FootnoteLine } from "./FootnoteLine.tsx";
 import { MonitorWakeInput } from "./MonitorWakeInput.tsx";
 import { monitorWakeInput } from "./monitorWakeModel.ts";
 import type { ConversationItem } from "./conversationModel.ts";
 import { DeleteMessageButton } from "./MessageDelete.tsx";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 import { conflictFiles, isConflictHandoff, systemPromptBody, systemPromptSummary, systemPromptTitle } from "./systemNoticeModel.ts";
-import { noticeView, type NoticeGlyph, type NoticeView } from "./timelineNoticeCopy.ts";
+import { noticeView, type NoticeView } from "./timelineNoticeCopy.ts";
+import { noticeTail } from "./turnFootnote.ts";
 
 type EventItem = Extract<ConversationItem, { kind: "event" }>;
-type EventLike = Pick<EventItem, "text" | "at" | "tone" | "variant" | "notice" | "sources">;
-
-export function NoticeIcon({ glyph }: { glyph: NoticeGlyph }) {
-  if (glyph === "review") return <ShieldCheck size={14} weight="fill" />;
-  if (glyph === "check") return <CheckCircle size={14} weight="fill" />;
-  if (glyph === "recovery") return <ArrowClockwise size={14} weight="bold" />;
-  if (glyph === "warn") return <WarningCircle size={14} weight="fill" />;
-  return <Info size={14} weight="fill" />;
-}
+type EventLike = Pick<EventItem, "id" | "text" | "at" | "tone" | "variant" | "notice" | "sources">;
 
 /**
- * 会话里常显的那一行：里程碑（审查出了结论、验收了），或者出了岔子 / 要你拍板的。
- *
- * 一行一句，图标落在头像轴上，颜色只在图标上，结论写在字里。`tail`（谁审的、用时、时刻）
- * 紧跟在字后面，指到这一行才显示，触屏上常显。整行是一颗键：给了 `onOpen` 就去那儿
- * （审查轮去右侧「审查」格），否则有原文细节时就地摊开它。
+ * 你那条斜杠命令的回答（/goal --scopes 一类）：是你要看的东西，在原处常显、原样分行，左缘跟
+ * 正文对齐。是哪条命令、什么时候答的，指到再看。
  */
-export function NoticeLine({
-  view,
-  tail,
-  onOpen,
-  openLabel,
-  action,
-  deletable,
-  live = false,
-}: {
-  view: Pick<NoticeView, "tier" | "tone" | "glyph" | "text" | "detail">;
-  tail?: string | null;
-  onOpen?: () => void;
-  /** onOpen 去哪儿，读屏用（「在审查格里打开第 3 轮」）。 */
-  openLabel?: string;
-  /** 「去裁定」这一类：摆在这一行最后，不跟着整行的键走。 */
-  action?: ReactNode;
-  deletable?: EventLike;
-  /** 还没出结论（审查进行中）：字上走一道流光。 */
-  live?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const detailId = useId();
-  const expandable = !onOpen && !!view.detail;
-  const line = (
-    <>
-      <span className={`notice-line-text${live ? " is-live" : ""}`} data-selection-content="">{view.text}</span>
-      {tail && <time className="notice-line-tail">{tail}</time>}
-    </>
-  );
+export function CommandReply({ item, view }: { item: EventLike; view: NoticeView }) {
+  const tail = noticeTail(view, item.at);
   return (
-    <div
-      className={`notice-line is-${view.tier} tone-${view.tone}`}
-      role={view.tier === "alert" ? "status" : undefined}
-    >
-      <span className="notice-line-icon" aria-hidden="true"><NoticeIcon glyph={view.glyph} /></span>
-      <div className={`notice-line-main${onOpen || expandable ? "" : " is-flow"}`}>
-        {onOpen || expandable ? (
-          <button
-            type="button"
-            className="notice-line-button"
-            aria-label={openLabel ? `${view.text}，${openLabel}` : undefined}
-            aria-expanded={expandable ? open : undefined}
-            aria-controls={expandable ? detailId : undefined}
-            onClick={() => (onOpen ? onOpen() : setOpen((value) => !value))}
-          >
-            {line}
-          </button>
-        ) : (
-          // 不能点的一行按文字排：「去裁定」这类动作接在最后一行字后面，不另起一行。
-          <span className="notice-line-button is-static">
-            {line}
-            {action && <span className="notice-line-action">{action}</span>}
-          </span>
-        )}
-        {(onOpen || expandable) && action && <span className="notice-line-action">{action}</span>}
-        {deletable && <DeleteMessageButton item={deletable} />}
-        {expandable && open && <p className="notice-line-detail" id={detailId}>{view.detail}</p>}
-      </div>
+    <div className="command-reply">
+      <p className="command-reply-text" data-selection-content="">{view.text}</p>
+      {tail && <time className="turn-footnote-tail">{tail}</time>}
+      <DeleteMessageButton item={item} />
     </div>
   );
 }
 
-/** 指到才出的那半句：（是哪条命令 ·）时刻。 */
-export function noticeTail(view: Pick<NoticeView, "meta">, at?: string): string | null {
-  return [view.meta, at ? formatInstant(at) : ""].filter(Boolean).join(" · ") || null;
-}
-
-/** 一条时间线旁注，按它的类型摆成常显的一行（团队时间线、审查卡里也用这一份）。 */
+/**
+ * 一条时间线旁注单独摆成一句（团队时间线上用：那里没有回合尾注可归、也没有「N 条记录」，
+ * 所以删除留在这一句上）。长相跟任务会话里的尾注同一种小灰字。
+ */
 export function SystemEventNote({ item, action }: { item: EventLike; action?: ReactNode }) {
   const view = noticeView(item);
-  return <NoticeLine view={view} tail={noticeTail(view, item.at)} action={action} deletable={item} />;
+  if (view.tier === "reply") return <CommandReply item={item} view={view} />;
+  return (
+    <FootnoteLine
+      placement="standalone"
+      footnote={{ id: item.id, live: false, parts: [{ kind: "event", id: item.id, at: item.at, view }] }}
+      actionFor={action ? () => action : undefined}
+      deletable={item}
+    />
+  );
 }
 
 /** 团队时间线上的回合边界：一条很淡的分隔线和一句说明。 */
-export function SystemBoundary({ item, surface = "task" }: { item: EventLike; surface?: "task" | "team" }) {
+export function SystemBoundary({ item, surface = "task" }: { item: Omit<EventLike, "id">; surface?: "task" | "team" }) {
   return (
     <div className={`${surface === "team" ? "team-feed-event" : "task-event-line"} system-boundary${item.tone === "error" ? " is-error" : ""}`}>
       <span className="system-boundary-rule" aria-hidden="true" />

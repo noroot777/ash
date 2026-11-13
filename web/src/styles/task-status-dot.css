@@ -4,8 +4,9 @@
    档位和「画成哪个记号」都在 taskLook.ts 一处定 —— 这里只负责长什么样,**两套一起改**:
    同一个档位在两处颜色不同,等于告诉用户它们是两回事。
 
-   读法:实心点 = 此刻的事实(在跑主色、等你琥珀、失败红、验收过没看绿);环 = 等你动手
-   (做完没验收靛蓝环、卡在上游红环)或者还没轮到(排队灰环);呼吸只给「会自己回来」的那一档。
+   读法:会动 = 它自己在往前走、不用你管(在跑主色、等哨兵琥珀),两种会动的靠颜色分;不动 =
+   轮到你(等你说话琥珀、失败红、验收过没看绿、做完没验收靛蓝环、卡在上游红环)或者还没轮到
+   它(排队灰环)。会动的两档同一个关键帧、同一个节拍;减少动效时都静止。
    验收过也看过的什么都不画,槽位留着,标题照样对齐。 */
 .workspace-status-dot {
   box-sizing: border-box;
@@ -23,20 +24,24 @@
   flex-basis: 5px;
 }
 
-.workspace-status-dot--run { background: var(--accent); }
+.workspace-status-dot--run {
+  background: var(--accent);
+  animation: task-status-dot-pulse 1.35s ease-in-out infinite;
+  will-change: opacity, transform;
+}
 .workspace-status-dot--wait { background: var(--amber); }
 .workspace-status-dot--bad { background: var(--red); }
 .workspace-status-dot--new { background: var(--green); }
 /* 排在队里、还没轮到:一圈灰,不抢眼 */
 .workspace-status-dot--queue { box-shadow: inset 0 0 0 1.5px var(--faint); }
-/* 「等一件会自己回来的事」（挂着哨兵、验收前置命令正在跑）：同一种黄，但会呼吸。
+/* 「等一件会自己回来的事」（挂着哨兵、验收前置命令正在跑）：同一种黄，但跟在跑那颗一样跳。
    静止的黄只表示「等你说话」，两者一眼分得开，也不用再多造一种颜色。 */
 .workspace-status-dot--breathe {
   background: var(--amber);
   animation: task-status-dot-pulse 1.35s ease-in-out infinite;
   will-change: opacity, transform;
 }
-/* 停滞 = 它看着在跑，其实在干等模型上游：红环。不呼吸正好说「它没在动」，跟实心红的
+/* 停滞 = 它看着在跑，其实在干等模型上游：红环。不跳正好说「它没在动」，跟实心红的
    失败也分得开，那一档是已经收场了。 */
 .workspace-status-dot--stalled {
   background: color-mix(in oklab, var(--red) 16%, transparent);
@@ -62,14 +67,20 @@
   }
 }
 
+/* 减少动效：会动的那两档停在原大小，不停在关键帧的末一帧（全局那条只把时长压到 0）。 */
+:root[data-motion="reduce"] :is(.workspace-status-dot--run, .workspace-status-dot--breathe, .team-status-dot--active, .team-status-dot--working) { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) :is(.workspace-status-dot--run, .workspace-status-dot--breathe, .team-status-dot--active, .team-status-dot--working) { animation: none; }
+}
+
 .team-status-dot { display: inline-block; box-sizing: border-box; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; font-style: normal; }
 .team-status-dot--pending { border: 1px dashed var(--muted); background: transparent; }
-.team-status-dot--active { background: var(--accent); }
+.team-status-dot--active { background: var(--accent); animation: task-status-dot-pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
 .team-status-dot--queued { box-shadow: inset 0 0 0 1.5px var(--faint); }
 .team-status-dot--attention { background: var(--amber); }
-/* 同 .workspace-status-dot--breathe：静止黄=等你说话，呼吸黄=等一件会自己回来的事。 */
+/* 同 .workspace-status-dot--breathe：静止黄=等你说话，跳动的黄=等一件会自己回来的事。 */
 .team-status-dot--working { background: var(--amber); animation: task-status-dot-pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
-/* 同 .workspace-status-dot--stalled：红环=在干等上游，不呼吸因为它没在动。 */
+/* 同 .workspace-status-dot--stalled：红环=在干等上游，不跳因为它没在动。 */
 .team-status-dot--stalled { border: 1.5px solid var(--red); background: color-mix(in oklab, var(--red) 16%, transparent); }
 .team-status-dot--unaccepted { border: 1.5px solid var(--accent); background: color-mix(in oklab, var(--accent) 16%, transparent); }
 .team-status-dot--success { background: var(--green); }

@@ -19,6 +19,7 @@ import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import { useReplyLayout } from "../task-detail/useReplyLayout.ts";
+import { registerReplyInput } from "../task-detail/replyQuote.ts";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import {
   ReplyResizeHandle,
@@ -29,6 +30,7 @@ import {
   attachmentsFromPaths,
   clearSentDraft,
   dropSentAttachments,
+  sentSelections,
   joinDraftText,
   mergeAttachments,
 } from "../task-detail/withdrawDraft.ts";
@@ -85,14 +87,12 @@ export function TeamReplyBox({
   useEffect(() => {
     setError(null);
   }, [task.id]);
-  // 正在飞的那一次发送；撤回排在它后面，见下面的 withdraw。
-  const inFlightSend = useRef<Promise<void> | null>(null);
+  // 会话里「改了再发」放回草稿之后要把光标送进这个框（见 task-detail/replyQuote.ts）。
+  useEffect(() => registerReplyInput(task.id, inputRef.current), [task.id]);
+  // 正在飞的那一次发送登记在草稿上；撤回、会话里「改了再发」排在它后面（见 DraftStore 的 afterSend）。
   const send = (): Promise<void> => {
     const run = runSend();
-    inFlightSend.current = run;
-    void run.finally(() => {
-      if (inFlightSend.current === run) inFlightSend.current = null;
-    });
+    draft.trackSend(run);
     return run;
   };
   const runSend = async () => {
@@ -105,19 +105,24 @@ export function TeamReplyBox({
     }
     setSending(true);
     setError(null);
-    // 发出去的是这一份；成功后只在草稿逐字还是这一份时才清掉，动过就整份留着
+    // 发出去的是这一份；成功后只在草稿还是这一份（字面和版本都没变）时才清掉，动过就整份留着
     // （见 task-detail/withdrawDraft.ts 的 clearSentDraft）。
-    const draftAtSend = value;
+    const draftAtSend = { text: value, textVersion: draft.value.textVersion };
     const laterAtSend = draft.later;
     const sentText = value.trim();
     const sentPaths = uploads.attachments.map((attachment) => attachment.path);
+    // 发送结算只摘这一次提交的那几次选择（路径 + 选择记号），途中又放回的同一张图留着。
+    const sentSelection = sentSelections(uploads.attachments);
     try {
       const result = await onSend(sentText, sentPaths, choice);
       // 执行器门禁弹了对话框、用户点了取消:草稿和附件一个字都不能清。
       if (result === null) return;
       if ("scheduled" in result) scheduled.add(result.message);
-      setValue((current) => clearSentDraft(current, draftAtSend));
-      draft.setAttachments((current) => dropSentAttachments(current, sentPaths));
+      draft.update((current) => {
+        const text = clearSentDraft(current, draftAtSend);
+        return text === current.text ? current : { ...current, text };
+      });
+      draft.setAttachments((current) => dropSentAttachments(current, sentSelection));
       uploads.clearError();
       draft.setLater((current) => (current === laterAtSend ? null : current));
     } catch (reason) {
@@ -131,7 +136,7 @@ export function TeamReplyBox({
   // 合并前面,免得两边互相猜草稿里哪一段是谁的。
   const withdraw = async (message: ScheduledMessage) => {
     if (!await scheduled.cancel(message.id)) return;
-    await inFlightSend.current;
+    await draft.afterSend();
     setValue((current) => joinDraftText(message.text, current));
     draft.setAttachments((current) => mergeAttachments(attachmentsFromPaths(message.attachments), current));
     later.restore(message);

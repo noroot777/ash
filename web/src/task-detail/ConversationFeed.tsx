@@ -1,4 +1,4 @@
-import { Fragment, memo, useMemo, useRef, useState } from "react";
+import { memo, useMemo, useRef, useState, type ReactNode } from "react";
 import { File, Gavel, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
@@ -8,6 +8,7 @@ import { conversationTailKey } from "./conversationModel.ts";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
+import { AgentIcon, hasAgentIcon } from "../components/AgentIcon.tsx";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -16,18 +17,25 @@ import { runActivityCopy, runActivityPhase, runActivityTail } from "@ash/shared/
 import { MessageAttachments } from "./Attachments.tsx";
 import { conversationFeedRows, reviewLaneMessageRoles, type ReviewLaneMessageRole } from "./conversationReviewLanes.ts";
 import { conversationDebateRows } from "./conversationDebateRows.ts";
-import { conversationSystemRows, laneReceipts, type TurnReceipt } from "./conversationSystemRows.ts";
+import { conversationSystemRows, laneReceipts, type ConversationFootnoteRow, type TurnReceipt } from "./conversationSystemRows.ts";
 import { DebateLane } from "./DebateLane.tsx";
-import { ReviewerLane, laneRoundOpener } from "./ReviewerLane.tsx";
+import { ReviewerLane } from "./ReviewerLane.tsx";
+import { laneRoundOpener } from "./reviewLaneLinks.ts";
+import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import type { ReviewTarget } from "../review/reviewTarget.ts";
-import { NoticeLine, noticeTail, SystemAuthoredMessage } from "./SystemNotice.tsx";
+import { CommandReply, SystemAuthoredMessage } from "./SystemNotice.tsx";
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
-import { noticeView, turnFailureView } from "./timelineNoticeCopy.ts";
+import { noticeView, type NoticeContext } from "./timelineNoticeCopy.ts";
+import { FootnoteLine } from "./FootnoteLine.tsx";
+import { ReviewVerdict } from "./ReviewVerdict.tsx";
+import { footnoteKey, receiptsKey, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 import { crashedTurns } from "./turnFailure.ts";
 import { QuestionDock } from "./QuestionDock.tsx";
 import { useJustEnded } from "./useJustEnded.ts";
 import { conversationKeys } from "./conversationKeys.ts";
-import { TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts } from "./TurnReceipts.tsx";
+import {
+  ReceiptReviewContext, TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts, type ReceiptReview,
+} from "./TurnReceipts.tsx";
 import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
@@ -40,6 +48,7 @@ import { mergeNoticeItems, useRejectionNotices } from "./useRejectionNotices.ts"
 import { ReclaimTurnSwitch } from "./ReclaimTurnSwitch.tsx";
 import { DeleteMessageButton, MessageDeleteProvider, type DeletableItem } from "./MessageDelete.tsx";
 import { TurnActions } from "./TurnActions.tsx";
+import { ReuseInputButton, type ReusableInput } from "./ReuseInput.tsx";
 import { conversationInputAnchor, conversationInputs, REQUIREMENT_INPUT_ID, requirementAuthor } from "./conversationInputs.ts";
 
 // 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
@@ -65,6 +74,7 @@ function AgentMessageView({
   wakeReply,
   taskActive,
   receipts,
+  footnote,
 }: {
   item: Extract<ConversationItem, { kind: "agent" }>;
   /** 这条发言是在哪个任务的工作目录里说的（正文里的图靠它去那个目录取），见 AgentTurnBody。 */
@@ -80,6 +90,11 @@ function AgentMessageView({
   taskActive: boolean;
   /** 记在这一回合上的回执（conversationSystemRows）。 */
   receipts?: readonly TurnReceipt[];
+  /**
+   * 这一回合的尾注（验收了、这一轮没办成……那一句小灰字），摆在正文下面、
+   * 回合尾那排操作上面。`key` 是它的签名：收口的回合只在它变了时重画。
+   */
+  footnote?: { node: ReactNode; key: string };
 }) {
   const log = useTurnReceipts();
   const duration = durationBetween(item.at, item.endedAt);
@@ -96,6 +111,8 @@ function AgentMessageView({
     duration && laneRole !== "lead" ? `${duration} 用时` : null,
   ].filter(Boolean).join(" · ");
   const live = !item.endedAt && taskActive;
+  // 认得出是哪家的就画那家的标，认不出（自定义 CLI）才退回执行器名的首字母。
+  const branded = !reviewer && hasAgentIcon(item.agentType);
   const head = showIdentity || showBadge || !!meta;
   // 看着它收口的那一下：尾栏淡入一次、约两秒后收回，过程摘要那一行淡入（run-5）。
   const justEnded = useJustEnded(live);
@@ -105,8 +122,8 @@ function AgentMessageView({
     >
       {/* 卡头左边已经有一颗同样的盾：卡里每条发言再挂一颗，只是把同一个身份画两遍。 */}
       {!laneRole && (
-        <span className="task-message-avatar" aria-hidden="true">
-          {item.continuation ? "" : reviewer ? <ShieldCheck size={13} weight="fill" /> : item.label.slice(0, 1).toUpperCase()}
+        <span className={`task-message-avatar${branded ? " is-branded" : ""}`} aria-hidden="true">
+          {item.continuation ? "" : reviewer ? <ShieldCheck size={13} weight="fill" /> : branded ? <AgentIcon agent={item.agentType} size={16} /> : item.label.slice(0, 1).toUpperCase()}
         </span>
       )}
       <div className="task-message-content">
@@ -122,6 +139,7 @@ function AgentMessageView({
         )}
         {wakeReply && <MonitorWakeReply />}
         <AgentTurnBody segments={item.segments} running={!item.endedAt} taskId={taskId} since={live ? item.at : undefined} />
+        {footnote?.node}
         {/* 跑着的这一回合还没说完，尾上的操作等它收口再出（run-5）。「N 条记录」是那一排里的一颗，
             摊开的流水在它下面。 */}
         {!live && <TurnActions item={item} removeInMenu={!head} markdown={item.markdown} usage={item.usage} onFork={onFork} onAskSideChat={onAskSideChat}
@@ -148,7 +166,7 @@ export function sameSettledTurn(prev: AgentMessageProps, next: AgentMessageProps
   if (!settled(prev) || !settled(next)) return false;
   const a = prev.item;
   const b = next.item;
-  return a.id === b.id && a.endedAt === b.endedAt && a.markdown === b.markdown && a.label === b.label
+  return a.id === b.id && a.endedAt === b.endedAt && a.markdown === b.markdown && a.label === b.label && a.agentType === b.agentType
     && sameSegments(a.segments, b.segments)
     && a.continuation === b.continuation && a.wokenByMonitor === b.wokenByMonitor
     && a.reviewer?.round === b.reviewer?.round && a.run?.model === b.run?.model && a.run?.reasoningEffort === b.run?.reasoningEffort
@@ -183,16 +201,19 @@ function shallowRest(prev: AgentMessageProps, next: AgentMessageProps): boolean 
   return prev.taskId === next.taskId && prev.hideTime === next.hideTime && prev.laneRole === next.laneRole
     && prev.wakeReply === next.wakeReply && prev.taskActive === next.taskActive
     && !!prev.onFork === !!next.onFork && !!prev.onAskSideChat === !!next.onAskSideChat
-    && (prev.receipts?.length ?? 0) === (next.receipts?.length ?? 0)
-    && prev.receipts?.at(-1)?.id === next.receipts?.at(-1)?.id;
+    // 记录与尾注比的是摆出来的全部内容（含记录里那几轮审查晚到的身份、报告、附言），不只条数。
+    && receiptsKey(prev.receipts) === receiptsKey(next.receipts)
+    && prev.footnote?.key === next.footnote?.key;
 }
 
 function UserMessage({
   item,
   preserveSystemStyle = false,
+  onReuse,
 }: {
   item: Extract<ConversationItem, { kind: "user" }>;
   preserveSystemStyle?: boolean;
+  onReuse?: (input: ReusableInput) => void;
 }) {
   if (item.isAnswer || isQuestionAnswer(item.text)) return <AnsweredQuestionMessage text={item.text} id={item.id} at={item.at} deletable={item} />;
   const bySystem = !!item.bySystem;
@@ -200,7 +221,7 @@ function UserMessage({
   if (bySystem && (!preserveSystemStyle || monitorWakeInput(item)) && !reviewPrompt) {
     return <SystemAuthoredMessage item={item} />;
   }
-  return <UserBubble id={item.id} author={bySystem ? "系统" : "你"} text={item.text} attachments={item.attachments} at={item.at} bySystem={bySystem} deletable={item} />;
+  return <UserBubble id={item.id} author={bySystem ? "系统" : "你"} text={item.text} attachments={item.attachments} at={item.at} bySystem={bySystem} deletable={item} onReuse={onReuse} />;
 }
 
 /**
@@ -208,11 +229,14 @@ function UserMessage({
  * 正文碰巧以「【答复】」开头也不当答复卡、不当系统代写，直接走普通气泡；谁说的照任务来源写，
  * 没有删除（它不在会话正文里）。
  */
-function RequirementMessage({ requirement }: { requirement: { text: string; at?: string | null; origin?: TaskCreationOrigin | null } }) {
-  return <UserBubble id={REQUIREMENT_INPUT_ID} author={requirementAuthor(requirement.origin)} text={requirement.text} attachments={[]} at={requirement.at ?? undefined} />;
+function RequirementMessage({ requirement, onReuse }: {
+  requirement: { text: string; at?: string | null; origin?: TaskCreationOrigin | null };
+  onReuse?: (input: ReusableInput) => void;
+}) {
+  return <UserBubble id={REQUIREMENT_INPUT_ID} author={requirementAuthor(requirement.origin)} text={requirement.text} attachments={[]} at={requirement.at ?? undefined} onReuse={onReuse} />;
 }
 
-function UserBubble({ id, author, text, attachments, at, bySystem = false, deletable }: {
+function UserBubble({ id, author, text, attachments, at, bySystem = false, deletable, onReuse }: {
   /** 条目 id：左侧输入导航按它找到这颗气泡。 */
   id: string;
   author: string;
@@ -221,12 +245,15 @@ function UserBubble({ id, author, text, attachments, at, bySystem = false, delet
   at?: string;
   bySystem?: boolean;
   deletable?: DeletableItem;
+  /** 放回对话框改了再发。系统代写的、页面批注批次（截图与页面数据放不回文字框）不给。 */
+  onReuse?: (input: ReusableInput) => void;
 }) {
   // 刚发出去的那一句上移 4px 淡入（run-1）；页面打开时已经在的不动。
   const [fresh] = useState(() => !!at && Date.now() - Date.parse(at) < 5000);
   const parsed = parseAttachmentText(text);
   const displayBody = annotationBatchDisplayText(parsed.body) ?? parsed.body;
   const paths = [...parsed.paths, ...attachments];
+  const reusable = !bySystem && displayBody === parsed.body && (!!parsed.body || paths.length > 0);
   return (
     <article className={`task-message task-message--user${bySystem ? " is-system-authored" : ""}${fresh ? " is-fresh" : ""}`}>
       <div className="task-user-bubble" {...conversationInputAnchor(id)}>
@@ -236,6 +263,7 @@ function UserBubble({ id, author, text, attachments, at, bySystem = false, delet
           {displayBody && (
             <CopyButton value={displayBody} ariaLabel="复制这条回复" icon />
           )}
+          {onReuse && reusable && <ReuseInputButton onReuse={() => onReuse({ source: id, text: parsed.body, paths })} />}
           {deletable && <DeleteMessageButton item={deletable} />}
         </header>
         {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <p>{displayBody}</p>)}
@@ -263,6 +291,7 @@ export function ConversationFeed({
   historyReady = true,
   bodyReady = true,
   onDeleteMessage,
+  onReuseInput,
 }: {
   task: TaskListItem;
   /**
@@ -311,6 +340,8 @@ export function ConversationFeed({
   bodyReady?: boolean;
   /** 删掉一条已落盘的消息。不给就一颗删除按钮都不出（正在跑、团队/研讨任务、只读视图）。 */
   onDeleteMessage?: (sources: ConversationSource[]) => Promise<void>;
+  /** 你发的那几句（含原始需求）放回对话框改了再发。不给就不出这颗键（没有对话框的视图）。 */
+  onReuseInput?: (input: ReusableInput) => void;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   // 被挡回的用户操作合进同一条任务历史。正文读到手之后**无条件合** —— 「有没有正文」跟「这段历史该不该
@@ -332,12 +363,29 @@ export function ConversationFeed({
   const queuedCopy = task.status === "queued"
     ? runActivityCopy({ status: task.status, mode: task.mode, phase: activityPhase ?? undefined, queuePosition: task.queuePosition })
     : null;
+  // 一轮异常结束：那一回合尾注里的一句（刷新以后从会话行认出来的，见 turnFailure）。
+  const crashed = crashedTurns(items);
   // 一整场辩论折成一行，排在回执归属之前 —— 反过来的话，那七条「轮到 X 发言」会先被
   // conversationSystemRows 收进某一回合的记录里，辩论就再也认不出自己的边界了。
-  const { rows, receipts } = conversationSystemRows(conversationDebateRows(conversationFeedRows(items, { reviews }), { reviews }));
-  // 审查进行中那张卡里的旁注同样记在审查者那一回合上（见 laneReceipts）。
-  const lanes = new Map(rows.flatMap((row) => row.kind === "review-lane" ? [[row.id, laneReceipts(row)] as const] : []));
-  const receiptsOf = (id: string) => receipts.get(id) ?? [...lanes.values()].find((lane) => lane.receipts.has(id))?.receipts.get(id);
+  // 认老记录里「跑了一条命令」那一句的成败时，拿这个任务工作流里写的命令逐字对。
+  const noticeContext: NoticeContext = {
+    commands: task.workflow?.steps.flatMap((step) => step.kind === "command" ? [step.p.cmd] : []),
+  };
+  const { rows, receipts, footnotes } = conversationSystemRows(
+    conversationDebateRows(conversationFeedRows(items, { reviews }), { reviews }),
+    { failures: crashed, context: noticeContext },
+  );
+  // 审查卡里（正在跑的那张、审查结论气泡下面摊开的那一轮、记录里点开的那一轮）的旁注同样记在审查者
+  // 那一回合上（见 laneReceipts）。
+  const shownLanes: ConversationReviewLane[] = [
+    ...rows.flatMap((row) => row.kind === "review-lane" ? [row] : row.kind === "verdict" ? [row.lane] : []),
+    ...[...receipts.values(), ...rows.flatMap((row) => row.kind === "footnote" ? [row.receipts] : [])]
+      .flatMap((list) => list.flatMap((receipt) => receipt.lane ? [receipt.lane] : [])),
+  ];
+  const lanes = new Map(shownLanes.map((lane) => [lane.id, laneReceipts(lane)] as const));
+  const laneViews = [...lanes.values()];
+  const receiptsOf = (id: string) => receipts.get(id) ?? laneViews.find((lane) => lane.receipts.has(id))?.receipts.get(id);
+  const footnoteOf = (id: string) => footnotes.get(id) ?? laneViews.find((lane) => lane.footnotes.has(id))?.footnotes.get(id);
   const wakeReplies = monitorWakeReplyIds(items);
   // 「执行者驳回了，现在由你裁定」那条旁注上挂一颗「去裁定」——那句话把出路列了出来，
   // 却没给任何能点的东西（用户 2026-09-24：「直接给个按钮不行吗」）。
@@ -348,9 +396,16 @@ export function ConversationFeed({
   //
   // 按钮只把人送到那张卡跟前，不在这里复制四个出口：每个出口都带自己的确认框和说明
   // （「作废」和「转出去」的差别就写在那些文字里），复制一份必然漂成两套说法。
-  const disputeEventId = onOpenReviewPanel && openDisputeIn(reviews)
-    ? [...items].reverse().find((item) => item.kind === "event" && noticeView(item).dispute)?.id ?? null
-    : null;
+  const lastDisputeId = [...items].reverse().find((item) => item.kind === "event" && noticeView(item).dispute)?.id ?? null;
+  const disputeEventId = onOpenReviewPanel && openDisputeIn(reviews) ? lastDisputeId : null;
+  // 尾注里「等你裁定」那一句的点只说现在：裁定过的（或者后来又驳回过一次的）就不再是要你拍板的事。
+  // 拿不到审查记录的视图不知道裁没裁，照位置判。
+  const disputeOpen = (part: FootnotePart) => part.kind === "event" && part.item?.id === lastDisputeId
+    && (reviews == null || !!openDisputeIn(reviews));
+  const settleDisputes = (footnote: TurnFootnote | undefined): TurnFootnote | undefined => footnote && {
+    ...footnote,
+    parts: footnote.parts.map((part) => part.view.dispute && !disputeOpen(part) ? { ...part, view: { ...part.view, tone: "neutral" as const } } : part),
+  };
   const ruleAction = disputeEventId ? (
     <button type="button" className="system-event-cta" onClick={() => onOpenReviewPanel!()}>
       <Gavel size={11} weight="fill" aria-hidden="true" />去裁定
@@ -377,7 +432,6 @@ export function ConversationFeed({
     ) hiddenTimes.add(item.id);
   }
 
-  const crashed = crashedTurns(items);
   const keys = conversationKeys(items);
   const renderItem = (
     item: ConversationItem,
@@ -385,10 +439,10 @@ export function ConversationFeed({
     laneRole?: ReviewLaneMessageRole,
   ) => {
     if (item.kind === "agent") {
-      const failure = crashed.get(item.id);
+      const footnote = settleDisputes(footnoteOf(item.id));
       return (
-        <Fragment key={keys.get(item.id) ?? item.id}>
         <AgentMessage
+          key={keys.get(item.id) ?? item.id}
           item={item}
           // 审查会话、团队执行者的发言都挂在**自己那个任务**上，工作目录各是各的；
           // 会话行缺失（记录读不全）时才退到当前任务。
@@ -400,13 +454,14 @@ export function ConversationFeed({
           onAskSideChat={onAskSideChat}
           taskActive={task.status === "running" || task.status === "queued"}
           receipts={receiptsOf(item.id)}
+          footnote={footnote?.parts.length
+            ? { node: renderFootnote(footnote), key: footnoteKey(footnote, footnote.parts.some(isRuled) ? "rule" : "") }
+            : undefined}
         />
-        {failure && <NoticeLine view={turnFailureView(failure)} />}
-        </Fragment>
       );
     }
     if (item.kind === "user") {
-      return <UserMessage key={keys.get(item.id) ?? item.id} item={item} preserveSystemStyle={preserveSystemStyle} />;
+      return <UserMessage key={keys.get(item.id) ?? item.id} item={item} preserveSystemStyle={preserveSystemStyle} onReuse={onReuseInput} />;
     }
     if (preserveSystemStyle) {
       return (
@@ -420,34 +475,62 @@ export function ConversationFeed({
         </p>
       );
     }
-    return renderNotice(item, noticeView(item));
+    // 走到这里的只有归属之外单独摆的那几条（辩论兜底以外不会发生）：同一种小灰字。
+    const view = noticeView(item, noticeContext);
+    if (view.tier === "reply") return <CommandReply key={item.id} item={item} view={view} />;
+    return renderFootnote({ id: item.id, live: false, parts: [{ kind: "event", id: item.id, at: item.at, view, item }] }, "standalone");
   };
-  // 常显的那一行（里程碑 / 出了岔子 / 等你裁定）。回执不走这里，它们记在回合上。
-  const renderNotice = (item: Extract<ConversationItem, { kind: "event" }>, view: ReturnType<typeof noticeView>) => (
-    <NoticeLine
-      key={item.id}
-      view={view}
-      tail={noticeTail(view, item.at)}
-      action={item.id === disputeEventId ? ruleAction : undefined}
-      deletable={item}
-    />
+  // 「去裁定」挂在等你裁定的那半句后面（只有此刻还挂着的那一条）。
+  const isRuled = (part: FootnotePart) => part.kind === "event" && !!disputeEventId && part.item?.id === disputeEventId;
+  // 审查结论那一轮就地摊开时的经过：卡里的旁注照样记在审查者那一回合上。
+  const renderLaneRows = (lane: ConversationReviewLane) => {
+    const roles = reviewLaneMessageRoles(lane);
+    return lanes.get(lane.id)!.rows.map((entry) => entry.kind === "item"
+      ? renderItem(entry.item, true, roles.get(entry.item.id))
+      : entry.kind === "reply"
+        ? <CommandReply key={entry.id} item={entry.item} view={entry.view} />
+        : renderFootnoteRow(entry));
+  };
+  const renderFootnote = (footnote: TurnFootnote, placement?: "standalone" | "trailing") => (
+    <FootnoteLine key={footnote.id} footnote={footnote} placement={placement} actionFor={(part) => isRuled(part) ? ruleAction : null} />
   );
+  // 「N 条记录」里那一轮审查点开去哪儿：跟审查结论那颗气泡同一套。
+  const receiptReview: ReceiptReview = {
+    taskId: task.id,
+    reviewOpener: (lane) => laneRoundOpener(lane, task.workflowMode, onOpenReviewPanel),
+    renderLane: renderLaneRows,
+  };
+  // 前面没有回合可挂的那几句：留在原处，同一种小灰字；它们的记录跟在后面。
+  const renderFootnoteRow = (row: ConversationFootnoteRow) => row.footnote.parts.length ? (
+    <div className="footnote-row" key={row.id}>
+      {renderFootnote(settleDisputes(row.footnote)!, "standalone")}
+      <TurnReceipts receipts={row.receipts} />
+    </div>
+  ) : <TurnReceipts key={row.id} receipts={row.receipts} standalone />;
 
   return (
     <QuestionHistoryProvider key={task.id} taskId={task.id} history={questionHistory} live={liveQuestionHistory}
       messages={items.flatMap((item) => item.kind === "user" ? [item] : [])}>
     <MessageDeleteProvider onDelete={onDeleteMessage}>
+    <ReceiptReviewContext.Provider value={receiptReview}>
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
-          {requirement && inputs[0]?.id === REQUIREMENT_INPUT_ID && <RequirementMessage requirement={requirement} />}
+          {requirement && inputs[0]?.id === REQUIREMENT_INPUT_ID && <RequirementMessage requirement={requirement} onReuse={onReuseInput} />}
           {rows.map((row) => {
             if (row.kind === "item") return renderItem(row.item);
             if (row.kind === "system-action") {
               return <SystemAuthoredMessage key={row.id} item={row.item} related={row.related} />;
             }
-            if (row.kind === "notice") return renderNotice(row.item, row.view);
-            if (row.kind === "receipt-log") return <TurnReceipts key={row.id} receipts={row.receipts} standalone />;
+            if (row.kind === "footnote") return renderFootnoteRow(row);
+            if (row.kind === "reply") return <CommandReply key={row.id} item={row.item} view={row.view} />;
+            if (row.kind === "verdict") {
+              return (
+                <ReviewVerdict key={row.id} lane={row.lane} live={row.live} taskId={task.id}
+                  onOpenRound={laneRoundOpener(row.lane, task.workflowMode, onOpenReviewPanel)} renderLane={renderLaneRows}
+                  trailing={renderFootnote(settleDisputes(row.footnote)!, "trailing")} />
+              );
+            }
             if (row.kind === "debate-lane") {
               return (
                 <DebateLane
@@ -462,14 +545,10 @@ export function ConversationFeed({
                 />
               );
             }
-            const roles = reviewLaneMessageRoles(row);
+            // 收了口的审查轮不在这里（它是上面那颗审查结论气泡）；走到这里的是还在跑的那张卡。
             return (
               <ReviewerLane key={row.id} taskId={task.id} lane={row} onOpenRound={laneRoundOpener(row, task.workflowMode, onOpenReviewPanel)}>
-                {lanes.get(row.id)!.rows.map((entry) => entry.kind === "item"
-                  ? renderItem(entry.item, true, roles.get(entry.item.id))
-                  : entry.kind === "notice"
-                    ? renderNotice(entry.item, entry.view)
-                    : <TurnReceipts key={entry.id} receipts={entry.receipts} standalone />)}
+                {renderLaneRows(row)}
               </ReviewerLane>
             );
           })}
@@ -494,10 +573,11 @@ export function ConversationFeed({
           {historyReady && <QuestionHistoryRemainder />}
           {footer}
         </div>
-        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={conversationTailKey(items)} inputs={inputs} />
+        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={conversationTailKey(items)} inputs={inputs} revealReady={bodyReady} />
       </div>
       <QuestionDock>{dock}</QuestionDock>
     </ImagePreviewGroup>
+    </ReceiptReviewContext.Provider>
     </MessageDeleteProvider>
     </QuestionHistoryProvider>
   );

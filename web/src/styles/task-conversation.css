@@ -1,9 +1,18 @@
 /* 任务会话流：气泡、markdown 正文、账目胶囊、附件、提问卡。
    外壳（头部、侧栏、抽屉）在 task-detail.css，回复框与派生面板在 task-reply.css，
    执行过程折叠块在 execution-trace.css，它用到的流光与换字在 motion-text.css。 */
+:root {
+  /* 两条消息之间的空里住着两样指到才出、不占排版高度的东西：上一回合尾那一排（.turn-acts，2px 离正文
+     + 最高那颗「N 条记录」26px），下一颗气泡上方那一行（谁说的、几点，22px 一行 + 4px 离气泡）。
+     各占一条带子，不能叠在同一行上：叠了，指到哪一边出来的那一行都分不清是上一条的尾还是下一条的头。 */
+  --turn-acts-band: 28px;
+  --bubble-head-band: 26px;
+}
 .task-message { position: relative; max-width: 790px; margin-bottom: 20px; }
 .task-message--agent { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; }
 .task-message-avatar { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; background: var(--overlay); color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
+/* 画的是那家的标：标自己就是个完整的形，不再垫一枚灰圆。 */
+.task-message-avatar.is-branded { background: transparent; }
 .task-message-content { min-width: 0; }
 .task-message header,
 .task-user-bubble header { display: flex; min-height: 20px; align-items: center; gap: 6px; color: var(--muted); font-size: var(--t-xs); }
@@ -42,7 +51,8 @@
 .task-message--agent.is-just-ended .turn-acts { opacity: 1; }
 .task-message--agent.is-just-ended .task-turn-process > summary { animation: turn-settle-in var(--dur-2) var(--ease-out) backwards; }
 @keyframes turn-settle-in { from { opacity: 0; } }
-.task-message--agent:has(.turn-acts) { margin-bottom: 30px; }
+/* 尾栏那一排下面还要留出一段空，下一回合的头才不像是贴着它长出来的。 */
+.task-message--agent:has(.turn-acts) { margin-bottom: calc(var(--turn-acts-band) + 14px); }
 @media (hover: none) { .turn-meta, .turn-acts, .task-message header.turn-head .message-delete-button { opacity: 1; } }
 .task-message header button,
 .task-user-bubble header button { display: grid; width: 22px; height: 22px; margin-left: auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--faint); opacity: 0; }
@@ -93,7 +103,12 @@
    跟上一条的下边距折叠，出不出现会话都不跳。系统代发卡照旧带头——「系统」两个字就是它的内容。
    复制刚给过反馈时整行跟着现形，否则按钮自己的 opacity:1 会被父级的 0 吞掉。触屏没有悬停，保持原样。 */
 @media (hover: hover) {
-  .task-message--user:not(.is-system-authored) { margin-top: 26px; }
+  .task-message--user:not(.is-system-authored) { margin-top: var(--bubble-head-band); }
+  /* 紧跟在带尾栏的回合后面：上下外边距会折叠成较大的那一个，两条带子就叠进同一行了，得把两条加起来
+     再隔开一点。审查结论气泡（reviewer-turn.css）是同一种做法，一并在这里算。 */
+  .task-message--agent:has(> .task-message-content > .turn-acts) + :is(.task-message--user:not(.is-system-authored), .review-verdict) {
+    margin-top: calc(var(--turn-acts-band) + 8px + var(--bubble-head-band));
+  }
   .task-message--user:not(.is-system-authored) > .task-user-bubble { position: relative; padding: 9px 15px 10px; }
   .task-message--user:not(.is-system-authored) > .task-user-bubble > header {
     position: absolute;
@@ -245,13 +260,21 @@
 .task-message-footer button.copy-button.is-copied { border-color: color-mix(in oklab, var(--green) 45%, var(--line)); background: transparent; color: var(--green); }
 .task-message-footer button.copy-button.is-copy-failed { border-color: color-mix(in oklab, var(--red) 45%, var(--line)); background: transparent; color: var(--red); }
 
-/* Token 用量。三颗都在尾栏里，跟 .task-message-footer 的按钮同款外形。 */
-.token-usage-chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--muted); font-family: var(--font-mono); font-size: var(--t-xs); white-space: nowrap; }
-.token-usage-chip:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
+/* Token 用量胶囊（TokenUsageChip）：无边、浅底、圆头，面上一个数，单位淡一档。回合尾那一排
+   和团队流尾栏都用它；写成 button.xxx 并排在尾栏按钮那条后面，压得过 .task-message-footer button
+   的描边等宽字。上下文水位那颗（.context-meter-chip）借这副外形。 */
+button.token-usage-chip { display: inline-flex; height: 24px; max-width: none; align-items: center; gap: 4px; border: 0; border-radius: 999px; background: color-mix(in oklab, var(--ink) 4%, transparent); padding: 0 9px; color: var(--faint); font-family: inherit; font-size: var(--t-xs); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer; transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+button.token-usage-chip b { color: var(--muted); font-weight: var(--w-medium); }
+button.token-usage-chip:hover,
+button.token-usage-chip[aria-expanded="true"] { background: var(--hover-bg); color: var(--muted); }
+button.token-usage-chip:hover b,
+button.token-usage-chip[aria-expanded="true"] b { color: var(--ink); }
+button.token-usage-chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
 /* 上下文水位。借 .token-usage-chip 的外形（两颗并排要长得像一家人），只多一条进度条；
    进红区才变色 —— 中间再插一档黄色，「变色」这个信号就不值钱了。 */
-.context-meter-chip.is-tight { border-color: var(--red); color: var(--red); }
+button.context-meter-chip { color: var(--muted); }
+button.context-meter-chip.is-tight { background: color-mix(in oklab, var(--red) 10%, transparent); color: var(--red); }
 .context-meter-bar { display: inline-block; width: 22px; height: 3px; overflow: hidden; border-radius: 2px; background: var(--line2); }
 .context-meter-bar > span { display: block; height: 100%; background: currentColor; opacity: 0.75; }
 
@@ -284,14 +307,26 @@
 .token-usage-panel .is-total dt { color: var(--ink); }
 .token-usage-panel footer { margin-top: 7px; color: var(--muted); font-size: var(--t-xs); line-height: 1.55; }
 
-/* 回合尾「更多」菜单底下的本轮用量：标题一行，下面是明细，合计那行压一条细线。 */
-.turn-usage > span { display: block; margin-bottom: 4px; color: var(--muted); }
-.turn-usage dl { margin: 0; }
-.turn-usage dl > div { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 16px; padding: 1px 0; }
-.turn-usage dt { color: var(--faint); }
-.turn-usage dd { margin: 0; color: var(--muted); font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
-.turn-usage .is-total { margin-top: 3px; border-top: 1px solid var(--line); padding-top: 4px; }
-.turn-usage .is-total dt, .turn-usage .is-total dd { color: var(--ink); }
+/* 用量明细浮层：头一行名字和合计，下面一条按占比切开的横条，再下面一份一行（色点、数、占比）。
+   色块次序固定、颜色克制：缓存读最浅（便宜、复用的），缓存写中灰，输入深灰，输出一抹青。
+   窗口矮时定位给的 max-height 只把盒子压短，内容还得在盒子里滚得到（overflow-y），否则末几行掉出视口。 */
+.usage-panel { position: fixed; z-index: 60; width: 248px; overflow-y: auto; overscroll-behavior: contain; border-radius: var(--r-lg); background: var(--panel); padding: 12px 14px 10px; box-shadow: var(--control-shadow), var(--menu-shadow); color: var(--muted); font-size: var(--t-xs); font-variant-numeric: tabular-nums; outline: none; animation: task-menu-in var(--dur-2) var(--ease-out); }
+.usage-panel > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.usage-panel > header b { color: var(--ink); font-size: var(--t-sm); font-weight: var(--w-strong); }
+.usage-bar { display: flex; height: 6px; gap: 2px; margin: 9px 0 10px; overflow: hidden; border-radius: 999px; }
+.usage-bar > span { min-width: 2px; flex-basis: 0; }
+.usage-panel dl { display: grid; gap: 4px; margin: 0; }
+.usage-panel dl > div { display: grid; grid-template-columns: 1fr auto 34px; align-items: baseline; gap: 10px; }
+.usage-panel dt { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); }
+.usage-panel dd { margin: 0; color: var(--ink); text-align: right; }
+.usage-panel dd + dd { color: var(--faint); }
+.usage-panel dl > div.is-sub dt { padding-left: 14px; color: var(--faint); }
+.usage-panel dl > div.is-sub dd { color: var(--muted); }
+.usage-panel dt > i { width: 7px; height: 7px; flex: none; border-radius: 2px; }
+.usage-panel .is-input { background: color-mix(in oklab, var(--ink) 72%, var(--panel)); }
+.usage-panel .is-cacheRead { background: color-mix(in oklab, var(--ink) 16%, var(--panel)); }
+.usage-panel .is-cacheWrite { background: color-mix(in oklab, var(--ink) 40%, var(--panel)); }
+.usage-panel .is-output { background: var(--cyan); }
 
 /* 面板底部的快捷设置：明细里那几个数从哪来，就在同一个面板里改得动。
    默认收起成一行 —— 这颗胶囊的主业仍是「看一眼还剩多少」，表单不该抢在前面。 */
@@ -401,7 +436,7 @@
 
 /* 删除消息：跟复制同一颗皮肤（头部图标、尾栏胶囊），紧挨着复制排在它右边；悬停转红，说明这是删。 */
 .task-message header .copy-button + .message-delete-button,
-.task-user-bubble header .copy-button + .message-delete-button { margin-left: 0; }
+.task-user-bubble header :is(.copy-button, .message-reuse-button) + :is(.message-reuse-button, .message-delete-button) { margin-left: 0; }
 .task-message header button.message-delete-button:hover,
 .task-user-bubble header button.message-delete-button:hover,
 .monitor-wake-meta button.message-delete-button:hover,
@@ -410,16 +445,19 @@
 .system-action-line .message-delete-button,
 .conversation-note .message-delete-button,
 .system-boundary .message-delete-button,
-.notice-line .message-delete-button,
+.turn-footnote .message-delete-button,
+.command-reply .message-delete-button,
 .turn-receipt .message-delete-button { display: inline-grid; flex: none; width: 18px; height: 18px; align-self: center; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--faint); opacity: 0; cursor: pointer; vertical-align: middle; }
 .system-action-wrap:hover .system-action-line .message-delete-button,
 .conversation-note:hover .message-delete-button,
 .system-boundary:hover .message-delete-button,
-.notice-line:hover .message-delete-button,
+.turn-footnote:hover .message-delete-button,
+.command-reply:hover .message-delete-button,
 .turn-receipt:hover .message-delete-button,
 .message-delete-button:focus-visible { opacity: 1; }
 .system-action-line .message-delete-button:hover,
 .conversation-note .message-delete-button:hover,
 .system-boundary .message-delete-button:hover,
-.notice-line .message-delete-button:hover,
+.turn-footnote .message-delete-button:hover,
+.command-reply .message-delete-button:hover,
 .turn-receipt .message-delete-button:hover { background: var(--raised); color: var(--red); }

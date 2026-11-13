@@ -22,6 +22,12 @@ export type UploadAttachment = {
   name: string;
   size?: number;
   kind: AttachmentKind;
+  /**
+   * 这一份是哪一次「选进草稿」的。撤回、会话里「改了再发」放回附件，每放一次都是一次新的
+   * 选择，哪怕路径跟草稿里正挂着、正被一次发送带走的那份一样；发送结算只摘自己提交时的那几次
+   * 选择（见 withdrawDraft.ts 的 dropSentAttachments）。直接上传的没有，它的路径本身就是新的。
+   */
+  selection?: string;
 };
 
 // 在途的那几个：远程访问时一张图能传十几秒，这段时间界面上必须有东西代表它，

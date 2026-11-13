@@ -31,9 +31,9 @@ export async function seedGoalRecoveryTranscripts(root) {
 export async function runGoalRecoveryUi({ page, base, screenshots, sessionEnds, idleTask, readInvocations }) {
   // 命令的回答在会话里常显，整段原样分行（命令本身指到那一行才写在时刻前面）。
   const expandNotice = async (text) => {
-    const notice = page.locator(".notice-line.is-reply").filter({ hasText: text }).last();
+    const notice = page.locator(".command-reply").filter({ hasText: text }).last();
     await notice.waitFor();
-    return notice.locator(".notice-line-text").innerText();
+    return notice.locator(".command-reply-text").innerText();
   };
   const send = async (taskId, text, expectedStatus) => {
     const previous = await sessionEnds(taskId);

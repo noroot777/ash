@@ -37,6 +37,7 @@ import {
   attachmentsFromPaths,
   clearSentDraft,
   dropSentAttachments,
+  sentSelections,
   joinDraftText,
   mergeAttachments,
 } from "./withdrawDraft.ts";
@@ -381,16 +382,11 @@ export function ReplyBox({
     standing.commit({ ...standing.config, reasoningEffort: effort || null });
   };
 
-  // 正在飞的那一次发送。撤回要排在它后面（见下面的 withdraw）：清空和合并谁先谁后
-  // 一旦确定，就不必再去草稿里猜哪一段是刚发出去的。
-  const inFlightSend = useRef<Promise<void> | null>(null);
-
+  // 正在飞的那一次发送登记在草稿上：撤回、会话里「改了再发」都排在它后面（见 DraftStore
+  // 的 afterSend）。清空和合并谁先谁后一旦确定，就不必再去草稿里猜哪一段是刚发出去的。
   const send = (): Promise<void> => {
     const run = runSend().then(() => {});
-    inFlightSend.current = run;
-    void run.finally(() => {
-      if (inFlightSend.current === run) inFlightSend.current = null;
-    });
+    draft.trackSend(run);
     return run;
   };
 
@@ -414,12 +410,14 @@ export function ReplyBox({
     setSending(true);
     setSendError(null);
     setCommandResult(null);
-    // 发出去的是这一份。成功后只在草稿**逐字还是这一份**时才清掉；动过就整份留着，
+    // 发出去的是这一份。成功后只在草稿**还是这一份**（字面和版本都没变）时才清掉；动过就整份留着，
     // 绝不去猜哪一段是刚发出去的（见 withdrawDraft.ts 的 clearSentDraft）。
-    const draftAtSend = value;
+    const draftAtSend = { text: value, textVersion: draft.value.textVersion };
     const laterAtSend = draft.later;
     const sentText = annotation?.text ?? value.trim();
     const sentPaths = annotation?.attachments ?? uploads.attachments.map((attachment) => attachment.path);
+    // 发送结算只摘这一次提交的那几次选择（路径 + 选择记号），途中又放回的同一张图留着。
+    const sentSelection = sentSelections(uploads.attachments);
     try {
       // 改完执行器立刻按发送时，PATCH 可能还在飞 —— 回复的 POST 先到，服务端读到的
       // 仍是旧执行器，这一句照旧由旧的跑。先等写回落地，落不下去就别发：静默按旧
@@ -447,8 +445,11 @@ export function ReplyBox({
       if ("scheduled" in result) scheduled.add(result.message);
       if ("command" in result && !result.recorded && currentTaskId.current === task.id) setCommandResult({ taskId: task.id, text: result.text });
       if (!annotation) {
-        setValue((current) => clearSentDraft(current, draftAtSend));
-        draft.setAttachments((current) => dropSentAttachments(current, sentPaths));
+        draft.update((current) => {
+          const text = clearSentDraft(current, draftAtSend);
+          return text === current.text ? current : { ...current, text };
+        });
+        draft.setAttachments((current) => dropSentAttachments(current, sentSelection));
         uploads.clearError();
         // 发送方式跟正文同口径：发送途中被改过就留着，那是下一条的设置。
         draft.setLater((current) => (current === laterAtSend ? null : current));
@@ -472,7 +473,7 @@ export function ReplyBox({
   // 顺序一确定,两边都不必去猜草稿里哪一段是谁的(靠猜会猜错,2026-08-27 审查实测)。
   const withdraw = async (message: ScheduledMessage) => {
     if (!await scheduled.cancel(message.id)) return;
-    await inFlightSend.current;
+    await draft.afterSend();
     setValue((current) => joinDraftText(message.text, current));
     draft.setAttachments((current) => mergeAttachments(attachmentsFromPaths(message.attachments), current));
     if (message.agent) {

@@ -115,9 +115,8 @@
 .chat-live-line > button { display: flex; gap: 4px; align-items: center; margin-left: auto; padding: 2px 5px; color: color-mix(in oklab, var(--red) 50%, var(--chat-muted)); background: none; border: 0; font-size: var(--t-xs); }
 .chat-live-dot { width: 5px; height: 5px; background: var(--chat-lilac); border-radius: 50%; animation: chat-dot 1.3s ease-in-out infinite; }
 .chat-composer { border: 1px solid var(--chat-line2); border-radius: 10px; box-shadow: 0 2px 9px #382a4006; position: relative; transition: box-shadow 180ms ease, border-color 180ms ease; }
-/* 输入框铺满整张卡，带 offset 的默认焦点环会画到卡片外面去；焦点提示改由卡片自己的 focus-within 环承担。 */
+/* 输入框铺满整张卡，焦点提示由卡片自己的 focus-within 承担。 */
 .chat-composer:focus-within { border-color: var(--focus-soft); box-shadow: 0 0 0 3px color-mix(in oklab, var(--focus-ring) 10%, transparent); }
-.chat-shell .chat-composer textarea:focus-visible { outline: none; }
 .chat-composer textarea { display: block; width: 100%; resize: none; min-height: 74px; max-height: 190px; background: none; border: 0; padding: 14px 15px 8px; color: var(--chat-ink); font: inherit; font-size: 13px; line-height: 1.7; border-radius: 10px; outline: none; }
 .chat-composer textarea::placeholder { color: var(--chat-faint); }
 .chat-composer footer { display: flex; align-items: center; gap: 9px; padding: 8px 11px; }

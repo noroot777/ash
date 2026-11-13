@@ -51,6 +51,8 @@ export type DeleteTaskResult = {
   deletedTaskIds?: string[];
   childCleanups?: (TaskWorkspaceDiscardResult & { taskId: string })[];
   childLeftovers?: { taskId: string; leftover: TaskWorkspaceLeftover }[];
+  /** 磁盘目录没收干净的任务：任务已删，服务端留了待办会定时重试。 */
+  diskCleanupPending?: string[];
 };
 
 export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;

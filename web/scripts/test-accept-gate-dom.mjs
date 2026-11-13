@@ -457,13 +457,14 @@ try {
     await bar.getByText("NEW PROGRESS 500 / 640", { exact: true }).waitFor();
     await page.emulateMedia({ reducedMotion: "reduce" });
     const animations = await page.evaluate(() => {
-      return ["workspace-status-dot--active", "workspace-status-dot--working", "team-status-dot--active", "team-status-dot--working"].map(className => {
+      // 会动的那两档（在跑、等哨兵），侧栏和团队两套类名。
+      return ["workspace-status-dot--run", "workspace-status-dot--breathe", "team-status-dot--active", "team-status-dot--working"].map(className => {
         const dot = document.createElement("span");
         dot.className = className;
         document.body.append(dot);
         const style = getComputedStyle(dot);
-        // 全局那条减少动效规则（motion-text.css）把呼吸压到 0.01ms、只跑一遍，停在静止的样子。
-        const still = style.animationName === "none" || (Number.parseFloat(style.animationDuration) < 0.001 && style.animationIterationCount === "1");
+        // 减少动效时停在原大小（task-status-dot.css 那条 animation: none）。
+        const still = style.animationName === "none";
         dot.remove();
         return still;
       });

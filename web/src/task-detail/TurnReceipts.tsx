@@ -1,7 +1,23 @@
-import { useId, useState } from "react";
+import { createContext, useContext, useId, useState, type ReactNode } from "react";
+import type { ReviewTarget } from "../review/reviewTarget.ts";
+import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import type { TurnReceipt } from "./conversationSystemRows.ts";
+import { LaneBody } from "./ReviewVerdict.tsx";
 import { DeleteMessageButton } from "./MessageDelete.tsx";
+import { laneReviewTarget } from "./reviewLaneLinks.ts";
 import { formatInstant } from "./utils.ts";
+
+/**
+ * 记录里那一轮审查点开去哪儿：跟审查结论那颗气泡同一套（ReviewVerdict 的 onOpenRound / renderLane）。
+ * 会话那一层给一份；没给的地方（团队时间线、单测里单摆的记录）那一条就只是一句字。
+ */
+export type ReceiptReview = {
+  taskId?: string;
+  reviewOpener?: (lane: ConversationReviewLane) => ((target: ReviewTarget) => void) | undefined;
+  renderLane?: (lane: ConversationReviewLane) => ReactNode;
+};
+
+export const ReceiptReviewContext = createContext<ReceiptReview | null>(null);
 
 /**
  * 一条回执的时刻：同一天的只写「15:16」，跨了天（或第一条就不是今天）才带上日期。
@@ -18,13 +34,28 @@ function clock(at: string | undefined, previous: string | undefined): string {
 function ReceiptEntry({ receipt, previousAt }: { receipt: TurnReceipt; previousAt?: string }) {
   const [open, setOpen] = useState(false);
   const detailId = useId();
-  const { view } = receipt;
+  const review = useContext(ReceiptReviewContext);
+  const { view, lane } = receipt;
   const time = clock(receipt.at, previousAt);
   const text = <span className="turn-receipt-text">{view.text}</span>;
+  // 被同一回合后来那一轮盖过的审查：会话里不再画它的气泡，这一条就是它的入口——去审查格的那一轮，
+  // 认不出去哪儿就在下面摊开那一轮的经过。
+  const go = lane && review ? review.reviewOpener?.(lane) : undefined;
   return (
     <li className={`turn-receipt tone-${view.tone}`}>
       {time && <time dateTime={receipt.at} aria-label={formatInstant(receipt.at)}>{time}</time>}
-      {view.detail ? (
+      {lane && review ? (
+        <button
+          type="button"
+          className="turn-receipt-more"
+          aria-label={go ? `${view.text}，在右侧审查格里打开这一轮` : undefined}
+          aria-expanded={go ? undefined : open}
+          aria-controls={go ? undefined : detailId}
+          onClick={() => (go ? go(laneReviewTarget(lane)) : setOpen((value) => !value))}
+        >
+          {text}
+        </button>
+      ) : view.detail ? (
         <button
           type="button"
           className="turn-receipt-more"
@@ -35,8 +66,13 @@ function ReceiptEntry({ receipt, previousAt }: { receipt: TurnReceipt; previousA
           {text}
         </button>
       ) : text}
-      <DeleteMessageButton item={receipt.item} />
-      {view.detail && open && <p className="turn-receipt-detail" id={detailId}>{view.detail}</p>}
+      {receipt.item && <DeleteMessageButton item={receipt.item} />}
+      {lane && review && !go && open && (
+        <div className="turn-receipt-lane">
+          <LaneBody lane={lane} id={detailId} taskId={review.taskId} renderLane={review.renderLane} />
+        </div>
+      )}
+      {!(lane && review) && view.detail && open && <p className="turn-receipt-detail" id={detailId}>{view.detail}</p>}
     </li>
   );
 }

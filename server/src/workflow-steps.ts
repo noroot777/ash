@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { acceptPlan, segmentAfter } from "@ash/shared/workflow-policy";
 import type { WorkflowDef, WorkflowStep } from "@ash/shared/workflow";
 import { STEP_LABELS } from "@ash/shared/workflow";
+import { commandFailedNote, commandPassedNote, type CommandFailure } from "@ash/shared/command-note";
 import { db } from "./db/index.js";
 import { projects, regressionEvidence, tasks } from "./db/schema.js";
 import { augmentedEnv } from "./executors/spawn.js";
@@ -77,11 +78,6 @@ export interface SegmentOptions {
   onStepFailure?: (stepId: string, halted?: boolean) => Promise<void>;
 }
 
-function shorten(text: string, max = 600): string {
-  const trimmed = text.trim();
-  return trimmed.length > max ? `…${trimmed.slice(-max)}` : trimmed;
-}
-
 // 「在哪儿跑」：任务工作区 = 它自己那份（worktree 或项目目录），项目根目录 = 仓库本身。
 // 这两个在没开 worktree 时本来就是同一个地方，选项的意义只在开了 worktree 的任务上。
 async function cwdFor(task: TaskRow, where: "workspace" | "repo"): Promise<string | null> {
@@ -109,15 +105,11 @@ async function runCommand(task: TaskRow, step: CommandStep, authority?: ReviewAu
       timeout: COMMAND_TIMEOUT_MS,
       maxBuffer: 8 * 1024 * 1024,
     });
-    const out = shorten(`${stdout}${stderr}`, 400);
-    await appendTaskTimeline(task.id, receiptLine(`跑了一条命令：\`${step.p.cmd}\`（通过）${out ? `\n${out}` : ""}`));
+    await appendTaskTimeline(task.id, receiptLine(commandPassedNote(step.p.cmd, stdout, stderr)));
     return { ok: true };
   } catch (error) {
-    const err = error as { stdout?: string; stderr?: string; message?: string; killed?: boolean };
-    const reason = err.killed
-      ? `超时（${Math.round(COMMAND_TIMEOUT_MS / 60_000)} 分钟）`
-      : shorten(`${err.stderr ?? ""}${err.stdout ?? ""}` || err.message || "命令失败");
-    await appendTaskTimeline(task.id, alertLine(`跑了一条命令：\`${step.p.cmd}\`（没通过）\n${reason}`));
+    const { text, reason } = commandFailedNote(step.p.cmd, error as CommandFailure, Math.round(COMMAND_TIMEOUT_MS / 60_000));
+    await appendTaskTimeline(task.id, alertLine(text));
     return { ok: false, failed: step, reason };
   }
 }

@@ -198,12 +198,7 @@
 }
 
 .workspace-project-search:focus-within {
-  outline: 2px solid var(--focus-soft);
-  outline-offset: 0;
-}
-
-.workspace-project-search input:focus-visible {
-  outline: 0;
+  border-color: var(--focus-soft);
 }
 
 .workspace-project-search input {

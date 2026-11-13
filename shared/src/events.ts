@@ -7,7 +7,7 @@
 // (见 server/CLAUDE.md「执行器与模型」最后一条)。`import type` / `export type`
 // 编译期就被抹掉,所以安全 —— 下面对 ./index.js 的反向 type import 同理。
 import type { AgentType, DuetConsensusBy, QuestionItem, Task, TaskStage, TaskStatus } from "./index.ts";
-import type { SessionRole } from "./session.ts";
+import type { SessionRole, TurnOutcome } from "./session.ts";
 import type { ContextUsage, TokenUsage, UsageAccountingMark } from "./usage.ts";
 import type { NativeWorkEvent } from "./native-work.ts";
 import type { MonitorWakeData } from "./monitor-wake.ts";
@@ -117,10 +117,12 @@ export type AgentEvent =
   // `since` = 从哪一刻开始等的（重启接管不重新起算期限）。`interrupted` = 这个结尾是 ash 插话
   // 打断出来的，进程还要接着跑下一段。`epoch` = 这个结尾属于第几个回合（ResidentHandle.epoch）：
   // 消费到它时已经开了新回合，它就过期了，不再据它收台或开始等。
-  | { kind: "turnEnd"; background?: { agent: number; workflow: number; since?: string }; interrupted?: true; epoch?: number }
+  // `turnOutcome`(两种结尾都可能带)= 这一回合自己的结局,跟落进 `session_turns.outcome` 的同一份
+  // (见 Session.turnOutcomes)。进程 exit 0 却被判失败的那种只有它说得清;缺省 = 不知道。
+  | { kind: "turnEnd"; background?: { agent: number; workflow: number; since?: string }; interrupted?: true; epoch?: number; turnOutcome?: TurnOutcome }
   // `unfinished` = 进程没了的那一刻名下还有后台子代理 / 工作流没跑完（单飞据此不按完成结算）；
   // `unknown` = 后台状态核实不了（重启接管时读不出之前的输出），计数只是已知的那部分。
-  | { kind: "done"; exitStatus: number; unfinished?: { agent: number; workflow: number; unknown?: true } };
+  | { kind: "done"; exitStatus: number; unfinished?: { agent: number; workflow: number; unknown?: true }; turnOutcome?: TurnOutcome };
 
 // synthesis = 收敛后的合稿轮(共同方案);impl/review are legacy transcript speakers
 export type DuetSpeaker = "A" | "B" | "synthesis" | "impl" | "review" | "user";

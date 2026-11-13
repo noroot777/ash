@@ -5,6 +5,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ServerEvent, Session } from "@ash/shared";
 import { TeamFeed } from "../src/team/TeamFeed.tsx";
+import { teamFeedRows } from "../src/team/teamModel.ts";
 import { buildConversationItems, type TimelineEntry } from "../src/task-detail/conversationModel.ts";
 import { monitorWakeInput, monitorWakeReplyIds } from "../src/task-detail/monitorWakeModel.ts";
 import { outputEvent, endEvent, wakePayload } from "./fixtures/monitor-wake-data.ts";
@@ -58,11 +59,16 @@ async function verify(taskRow: Parameters<typeof enrichTasks>[0][number], sessio
     assert.equal(monitorWakeInput(input)!.eventCount, 2);
     assert.equal(monitorWakeInput(input)!.hasCheckpoint, false);
     assert.equal(monitorWakeReplyIds(items).size, 1);
-    const html = renderToStaticMarkup(<TeamFeed task={task} rows={items.map((item) => ({ kind: "conv", key: item.id, item }))}
+    // 调度台没挂过这条哨兵（夹具直接往队列里塞的），叫醒另起一回合：叫醒那一下是它执行过程里的一步，不再单独画卡。
+    const html = renderToStaticMarkup(<TeamFeed task={task} rows={teamFeedRows(items, [])}
       workers={[]} onOpenWorker={() => undefined} onAskLead={() => undefined} delegatingIds={new Set()} indicatorForTask={() => null} />);
-    assert.match(html, /monitor-wake-input/);
-    assert.match(html, /monitor-wake-reply/);
-    assert.doesNotMatch(html, /<b>你<\/b>|含续跑交代/);
+    assert.doesNotMatch(html, /monitor-wake-input/);
+    assert.match(html, /被哨兵叫醒/);
+    assert.match(html, /哨兵「/);
+    assert.match(html, /收到失败结果，核对后继续。/);
+    // 「你」只能是流顶那颗原始需求，叫醒不算你说的话。
+    assert.equal(html.split("<b>你</b>").length - 1, html.includes('data-conversation-input="requirement"') ? 1 : 0);
+    assert.doesNotMatch(html, /含续跑交代/);
     assert.match(html, /FAIL: regression failed/);
     assert.match(html, /退出码 1/);
   }
