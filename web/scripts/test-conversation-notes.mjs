@@ -16,6 +16,7 @@ import { conversationFeedRows } from "../src/task-detail/conversationReviewLanes
 import { conversationSystemRows } from "../src/task-detail/conversationSystemRows.ts";
 import { isConflictHandoff, isReviewSystemPrompt } from "../src/task-detail/systemNoticeModel.ts";
 import { noticeView } from "../src/task-detail/timelineNoticeCopy.ts";
+import { laneVerdictView } from "../src/task-detail/turnFootnote.ts";
 
 // —— 语气分类：办成了的事不报红，没办成的才报红 ——
 assert.equal(noteTone("自由工作流第 2 轮审查通过（5.5审查）。"), "neutral");
@@ -186,7 +187,8 @@ assert.deepEqual(attached.receipts.get("a2")?.map((r) => r.id), ["r3"]);
 assert.equal(sentence(attached.footnotes.get("a1")), "已验收，合并到 main");
 assert.equal(attached.footnotes.get("a1")?.live, false, "后面有你的话，它就是过去的事");
 
-// 图三：审查通过以后验收。收了口的审查轮不再把段切开，结论连同后面的验收记在它前面那一回合上。
+// 图三：审查通过以后验收。收了口的审查轮不再把段切开，是被审那一回合之后单独一行的审查结论；
+// 结论之后才发生的那几句贴在它下面，不回到回合的尾注里。每一句（连同结论）都在那一回合的记录里。
 const lane = (id, round, conclusion, extra = {}) => ({
   kind: "review-lane", id, source: "free", round, totalRounds: null, title: `第 ${round} 轮审查`,
   items: [{ kind: "event", id: `${id}:end`, text: `自由工作流第 ${round} 轮审查${conclusion === "verified" ? "通过" : "未通过"}`, at: `2026-11-13T0${round}:00:00.000Z`, variant: "note", tone: "neutral", notice: { kind: "review.verdict", source: "free", round, verdict: conclusion === "verified" ? "passed" : "failed" } }],
@@ -206,21 +208,30 @@ const figure3 = conversationSystemRows([
   ev("acc", "验收完成：目标分支 feat/ui-revamp", { kind: "accept.done", target: "feat/ui-revamp" }),
   ev("s2", "验收阶段更新：已验收", { kind: "stage", stage: "accepted" }),
 ]);
-assert.deepEqual(rowIds(figure3), ["u0", "a1", "a2"], "审查轮和验收那几步都不占行，末尾没有单挂的「N 条记录」");
-assert.equal(sentence(figure3.footnotes.get("a2")), "第 5 轮审查通过 · 已验收，合并到 feat/ui-revamp", "两件事并成一句；验收成了，之前的验收暂缓退回记录");
-assert.deepEqual(figure3.receipts.get("a2")?.map((r) => r.id), ["l5:end", "gate", "s1", "acc", "s2"], "尾注里的每一句也在记录里");
-assert.equal(figure3.footnotes.get("a2")?.live, true, "最后一个回合、后面没有你的话：它是现在的事");
-assert.equal(sentence(figure3.footnotes.get("a1")), "第 4 轮审查未通过");
-assert.equal(figure3.footnotes.get("a1")?.live, false, "后面又起了回合，未通过就是过去的事，点熄掉");
+const verdictRow = (display, id) => display.rows.find((row) => row.kind === "verdict" && row.lane.id === id);
+assert.deepEqual(rowIds(figure3), ["u0", "a1", "verdict:l4", "a2", "verdict:l5"], "结论夹在被审回合和下一回合之间；验收那几步不占行，末尾没有单挂的「N 条记录」");
+assert.equal(figure3.footnotes.get("a2"), undefined, "被审回合下面不再说审查结论，结论之后的验收也不挂回它");
+assert.equal(sentence(verdictRow(figure3, "l5").footnote), "已验收，合并到 feat/ui-revamp", "贴在结论下面；验收成了，之前的验收暂缓退回记录");
+assert.deepEqual(figure3.receipts.get("a2")?.map((r) => r.id), ["l5:end", "gate", "s1", "acc", "s2"], "结论和贴在它下面的每一句也在记录里");
+assert.deepEqual([verdictRow(figure3, "l5").live, verdictRow(figure3, "l5").footnote.live], [true, true], "最后一件事、后面没有你的话：它是现在的事");
+assert.equal(figure3.footnotes.get("a1"), undefined);
+assert.equal(verdictRow(figure3, "l4").live, false, "后面又起了回合，未通过就是过去的事，点熄掉");
+assert.equal(sentence(verdictRow(figure3, "l4").footnote), "", "意见已交给执行者是回执，不贴在结论下面");
 
-// 同一回合上重审过的只留最近那一次结论；最后一个回合上的「未通过」字前带点。
-const rerun = conversationSystemRows([agent("a1"), lane("l1", 1, "verify_failed"), lane("l2", 2, "verify_failed")]);
-assert.equal(sentence(rerun.footnotes.get("a1")), "第 2 轮审查未通过");
-assert.deepEqual([rerun.footnotes.get("a1")?.live, rerun.footnotes.get("a1")?.parts[0].view.tone], [true, "bad"]);
+// 同一回合上重审过的只留最近那一次结论；它是最后一件事时「未通过」字前带点。被盖过的那一行撤掉，
+// 贴在它下面的那几句发生在新结论之前，回到回合的尾注。
+const rerun = conversationSystemRows([
+  agent("a1"), lane("l1", 1, "verify_failed"), ev("x1", "预览没起来", { kind: "alert" }), lane("l2", 2, "verify_failed"),
+]);
+assert.deepEqual(rowIds(rerun), ["a1", "verdict:l2"]);
+assert.deepEqual([verdictRow(rerun, "l2").live, verdictRow(rerun, "l2").lane.conclusion], [true, "verify_failed"]);
+assert.equal(sentence(rerun.footnotes.get("a1")), "预览没起来");
+assert.equal(rerun.footnotes.get("a1")?.live, false, "结论排在它后面，回合下面那句就不是现在的事");
 // 被盖过的那一轮在记录里还认得出是哪一轮：记录带着它，点开能去那一轮或者就地摊开。
-assert.deepEqual(rerun.receipts.get("a1")?.map((r) => r.lane?.id), ["l1", "l2"]);
+assert.deepEqual(rerun.receipts.get("a1")?.map((r) => r.lane?.id ?? r.id), ["l1", "x1", "l2"]);
 
 // 派审没能开始：收口以后照样说「没能开始」、红点，不说成「没有给出结论」。
+const verdictView = (display) => laneVerdictView(display.rows.find((row) => row.kind === "verdict").lane);
 const abortedLane = conversationFeedRows([
   { kind: "agent", id: "a1", segments: [] },
   { kind: "event", id: "s1", text: "自由工作流第 1 轮审查开始", variant: "note", tone: "neutral", at: "2026-11-13T01:00:00.000Z", notice: { kind: "review.start", source: "free", round: 1 } },
@@ -228,7 +239,7 @@ const abortedLane = conversationFeedRows([
 ]);
 const aborted = conversationSystemRows(abortedLane.map((row) => row.kind === "review-lane" ? row : { kind: "item", item: row.item }));
 assert.deepEqual(
-  (({ text, tone, tier }) => [text, tone, tier])(aborted.footnotes.get("a1")?.parts[0].view ?? {}),
+  (({ text, tone, tier }) => [text, tone, tier])(verdictView(aborted)),
   ["第 1 轮审查没能开始", "bad", "alert"],
 );
 const legacyAborted = conversationSystemRows(conversationFeedRows([
@@ -236,7 +247,19 @@ const legacyAborted = conversationSystemRows(conversationFeedRows([
   { kind: "event", id: "s1", text: "自由工作流第 1 轮审查开始（5.5审查）。", variant: "note", tone: "neutral", at: "2026-11-13T01:00:00.000Z" },
   { kind: "event", id: "e1", text: "自由工作流第 1 轮审查启动失败：审查者不可用", variant: "note", tone: "error", at: "2026-11-13T01:01:00.000Z" },
 ]).map((row) => row.kind === "review-lane" ? row : { kind: "item", item: row.item }));
-assert.equal(sentence(legacyAborted.footnotes.get("a1")), "第 1 轮审查没能开始", "没有类型的老记录同样认得出没能开始");
+assert.equal(verdictView(legacyAborted).text, "第 1 轮审查没能开始", "没有类型的老记录同样认得出没能开始");
+
+// 结论之前的（这一轮异常结束）留在回合下面；前面没有回合可挂的结论照样单独一行，删除在原处那份记录里。
+const failedThenReviewed = conversationSystemRows(
+  [agent("a1"), lane("l1", 1, "verified")],
+  { failures: new Map([["a1", { text: "执行异常结束 · exit 1", at: "2026-11-13T00:30:00.000Z" }]]) },
+);
+assert.equal(sentence(failedThenReviewed.footnotes.get("a1")), "这一轮异常结束");
+assert.equal(sentence(verdictRow(failedThenReviewed, "l1").footnote), "");
+const noTurn = conversationSystemRows([user("u0"), lane("l1", 1, "verified"), ev("acc", "验收完成", { kind: "accept.done", target: "main" })]);
+assert.deepEqual(rowIds(noTurn), ["u0", "verdict:l1", "footnote:l1:end"]);
+assert.deepEqual(noTurn.rows[2].receipts.map((r) => r.id), ["l1:end", "acc"]);
+assert.equal(sentence(verdictRow(noTurn, "l1").footnote), "已验收，合并到 main");
 
 // 一轮异常结束是那一回合尾注里的一句；明面的话同一回合只留最近一句。
 const crashed = conversationSystemRows(

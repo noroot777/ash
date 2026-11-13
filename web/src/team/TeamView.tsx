@@ -20,6 +20,7 @@ import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
 import { QuestionCard } from "../task-detail/QuestionCard.tsx";
+import { useReuseInput } from "../task-detail/ReuseInput.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { useSubagents } from "../task-detail/useSubagents.tsx";
@@ -112,6 +113,7 @@ export function TeamView({
   const delegatingRef = useRef(new Set<string>());
   const { indicatorForTask, markTaskRead } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
+  const reuseInput = useReuseInput(task.id);
   // 子智能体执行详情和执行者详情都是从左侧推出来的抽屉，一次只留一个。
   const subagents = useSubagents(TEAM_INSPECTORS, {
     taskId: task.id,
@@ -418,6 +420,7 @@ export function TeamView({
                   delegatingIds={delegatingIds}
                   indicatorForTask={indicatorForTask}
                   historyReady={conversation.transcriptReady}
+                  onReuseInput={task.archived ? undefined : reuseInput}
                 />
               </MemoSelectionScope>
               {/* 验收前置命令那一条，跟普通任务详情页同一个组件、同一条 rail 几何（第 1 轮

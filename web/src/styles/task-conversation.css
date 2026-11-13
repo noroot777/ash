@@ -1,6 +1,13 @@
 /* 任务会话流：气泡、markdown 正文、账目胶囊、附件、提问卡。
    外壳（头部、侧栏、抽屉）在 task-detail.css，回复框与派生面板在 task-reply.css，
    执行过程折叠块在 execution-trace.css，它用到的流光与换字在 motion-text.css。 */
+:root {
+  /* 两条消息之间的空里住着两样指到才出、不占排版高度的东西：上一回合尾那一排（.turn-acts，2px 离正文
+     + 最高那颗「N 条记录」26px），下一颗气泡上方那一行（谁说的、几点，22px 一行 + 4px 离气泡）。
+     各占一条带子，不能叠在同一行上：叠了，指到哪一边出来的那一行都分不清是上一条的尾还是下一条的头。 */
+  --turn-acts-band: 28px;
+  --bubble-head-band: 26px;
+}
 .task-message { position: relative; max-width: 790px; margin-bottom: 20px; }
 .task-message--agent { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; }
 .task-message-avatar { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; background: var(--overlay); color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
@@ -44,7 +51,8 @@
 .task-message--agent.is-just-ended .turn-acts { opacity: 1; }
 .task-message--agent.is-just-ended .task-turn-process > summary { animation: turn-settle-in var(--dur-2) var(--ease-out) backwards; }
 @keyframes turn-settle-in { from { opacity: 0; } }
-.task-message--agent:has(.turn-acts) { margin-bottom: 30px; }
+/* 尾栏那一排下面还要留出一段空，下一回合的头才不像是贴着它长出来的。 */
+.task-message--agent:has(.turn-acts) { margin-bottom: calc(var(--turn-acts-band) + 14px); }
 @media (hover: none) { .turn-meta, .turn-acts, .task-message header.turn-head .message-delete-button { opacity: 1; } }
 .task-message header button,
 .task-user-bubble header button { display: grid; width: 22px; height: 22px; margin-left: auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--faint); opacity: 0; }
@@ -95,7 +103,12 @@
    跟上一条的下边距折叠，出不出现会话都不跳。系统代发卡照旧带头——「系统」两个字就是它的内容。
    复制刚给过反馈时整行跟着现形，否则按钮自己的 opacity:1 会被父级的 0 吞掉。触屏没有悬停，保持原样。 */
 @media (hover: hover) {
-  .task-message--user:not(.is-system-authored) { margin-top: 26px; }
+  .task-message--user:not(.is-system-authored) { margin-top: var(--bubble-head-band); }
+  /* 紧跟在带尾栏的回合后面：上下外边距会折叠成较大的那一个，两条带子就叠进同一行了，得把两条加起来
+     再隔开一点。审查结论气泡（reviewer-turn.css）是同一种做法，一并在这里算。 */
+  .task-message--agent:has(> .task-message-content > .turn-acts) + :is(.task-message--user:not(.is-system-authored), .review-verdict) {
+    margin-top: calc(var(--turn-acts-band) + 8px + var(--bubble-head-band));
+  }
   .task-message--user:not(.is-system-authored) > .task-user-bubble { position: relative; padding: 9px 15px 10px; }
   .task-message--user:not(.is-system-authored) > .task-user-bubble > header {
     position: absolute;
@@ -423,7 +436,7 @@ button.context-meter-chip.is-tight { background: color-mix(in oklab, var(--red) 
 
 /* 删除消息：跟复制同一颗皮肤（头部图标、尾栏胶囊），紧挨着复制排在它右边；悬停转红，说明这是删。 */
 .task-message header .copy-button + .message-delete-button,
-.task-user-bubble header .copy-button + .message-delete-button { margin-left: 0; }
+.task-user-bubble header :is(.copy-button, .message-reuse-button) + :is(.message-reuse-button, .message-delete-button) { margin-left: 0; }
 .task-message header button.message-delete-button:hover,
 .task-user-bubble header button.message-delete-button:hover,
 .monitor-wake-meta button.message-delete-button:hover,

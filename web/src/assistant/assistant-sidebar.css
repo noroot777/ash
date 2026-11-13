@@ -8,7 +8,7 @@
 .assistant-history-actions { display: flex; }
 .assistant-history-actions button { display: flex; }
 .assistant-history-search { display: flex; align-items: center; gap: 7px; min-width: 0; margin: 0 0 8px; padding: 8px; border: 1px solid var(--assistant-rail-line); border-radius: 7px; color: var(--assistant-rail-muted); }
-.assistant-history-search:focus-within { outline: 2px solid var(--focus-soft); outline-offset: 0; }
+.assistant-history-search:focus-within { border-color: var(--focus-soft); }
 .assistant-history-search > svg { flex-shrink: 0; }
 .assistant-shell .assistant-history-search input { width: 100%; min-width: 0; background: transparent; border: 0; outline: none; font-size: var(--t-xs); }
 .assistant-history-search input::placeholder { color: var(--assistant-rail-muted); }

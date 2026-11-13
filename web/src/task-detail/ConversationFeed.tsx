@@ -27,6 +27,7 @@ import { CommandReply, SystemAuthoredMessage } from "./SystemNotice.tsx";
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
 import { noticeView, type NoticeContext } from "./timelineNoticeCopy.ts";
 import { FootnoteLine } from "./FootnoteLine.tsx";
+import { ReviewVerdict } from "./ReviewVerdict.tsx";
 import { footnoteKey, receiptsKey, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 import { crashedTurns } from "./turnFailure.ts";
 import { QuestionDock } from "./QuestionDock.tsx";
@@ -47,6 +48,7 @@ import { mergeNoticeItems, useRejectionNotices } from "./useRejectionNotices.ts"
 import { ReclaimTurnSwitch } from "./ReclaimTurnSwitch.tsx";
 import { DeleteMessageButton, MessageDeleteProvider, type DeletableItem } from "./MessageDelete.tsx";
 import { TurnActions } from "./TurnActions.tsx";
+import { ReuseInputButton, type ReusableInput } from "./ReuseInput.tsx";
 import { conversationInputAnchor, conversationInputs, REQUIREMENT_INPUT_ID, requirementAuthor } from "./conversationInputs.ts";
 
 // 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
@@ -89,7 +91,7 @@ function AgentMessageView({
   /** 记在这一回合上的回执（conversationSystemRows）。 */
   receipts?: readonly TurnReceipt[];
   /**
-   * 这一回合的尾注（审查出了结论、验收了、这一轮没办成……那一句小灰字），摆在正文下面、
+   * 这一回合的尾注（验收了、这一轮没办成……那一句小灰字），摆在正文下面、
    * 回合尾那排操作上面。`key` 是它的签名：收口的回合只在它变了时重画。
    */
   footnote?: { node: ReactNode; key: string };
@@ -199,7 +201,7 @@ function shallowRest(prev: AgentMessageProps, next: AgentMessageProps): boolean 
   return prev.taskId === next.taskId && prev.hideTime === next.hideTime && prev.laneRole === next.laneRole
     && prev.wakeReply === next.wakeReply && prev.taskActive === next.taskActive
     && !!prev.onFork === !!next.onFork && !!prev.onAskSideChat === !!next.onAskSideChat
-    // 记录与尾注比的是摆出来的全部内容（含里面那几轮审查晚到的身份、报告、附言），不只条数。
+    // 记录与尾注比的是摆出来的全部内容（含记录里那几轮审查晚到的身份、报告、附言），不只条数。
     && receiptsKey(prev.receipts) === receiptsKey(next.receipts)
     && prev.footnote?.key === next.footnote?.key;
 }
@@ -207,9 +209,11 @@ function shallowRest(prev: AgentMessageProps, next: AgentMessageProps): boolean 
 function UserMessage({
   item,
   preserveSystemStyle = false,
+  onReuse,
 }: {
   item: Extract<ConversationItem, { kind: "user" }>;
   preserveSystemStyle?: boolean;
+  onReuse?: (input: ReusableInput) => void;
 }) {
   if (item.isAnswer || isQuestionAnswer(item.text)) return <AnsweredQuestionMessage text={item.text} id={item.id} at={item.at} deletable={item} />;
   const bySystem = !!item.bySystem;
@@ -217,7 +221,7 @@ function UserMessage({
   if (bySystem && (!preserveSystemStyle || monitorWakeInput(item)) && !reviewPrompt) {
     return <SystemAuthoredMessage item={item} />;
   }
-  return <UserBubble id={item.id} author={bySystem ? "系统" : "你"} text={item.text} attachments={item.attachments} at={item.at} bySystem={bySystem} deletable={item} />;
+  return <UserBubble id={item.id} author={bySystem ? "系统" : "你"} text={item.text} attachments={item.attachments} at={item.at} bySystem={bySystem} deletable={item} onReuse={onReuse} />;
 }
 
 /**
@@ -225,11 +229,14 @@ function UserMessage({
  * 正文碰巧以「【答复】」开头也不当答复卡、不当系统代写，直接走普通气泡；谁说的照任务来源写，
  * 没有删除（它不在会话正文里）。
  */
-function RequirementMessage({ requirement }: { requirement: { text: string; at?: string | null; origin?: TaskCreationOrigin | null } }) {
-  return <UserBubble id={REQUIREMENT_INPUT_ID} author={requirementAuthor(requirement.origin)} text={requirement.text} attachments={[]} at={requirement.at ?? undefined} />;
+function RequirementMessage({ requirement, onReuse }: {
+  requirement: { text: string; at?: string | null; origin?: TaskCreationOrigin | null };
+  onReuse?: (input: ReusableInput) => void;
+}) {
+  return <UserBubble id={REQUIREMENT_INPUT_ID} author={requirementAuthor(requirement.origin)} text={requirement.text} attachments={[]} at={requirement.at ?? undefined} onReuse={onReuse} />;
 }
 
-function UserBubble({ id, author, text, attachments, at, bySystem = false, deletable }: {
+function UserBubble({ id, author, text, attachments, at, bySystem = false, deletable, onReuse }: {
   /** 条目 id：左侧输入导航按它找到这颗气泡。 */
   id: string;
   author: string;
@@ -238,12 +245,15 @@ function UserBubble({ id, author, text, attachments, at, bySystem = false, delet
   at?: string;
   bySystem?: boolean;
   deletable?: DeletableItem;
+  /** 放回对话框改了再发。系统代写的、页面批注批次（截图与页面数据放不回文字框）不给。 */
+  onReuse?: (input: ReusableInput) => void;
 }) {
   // 刚发出去的那一句上移 4px 淡入（run-1）；页面打开时已经在的不动。
   const [fresh] = useState(() => !!at && Date.now() - Date.parse(at) < 5000);
   const parsed = parseAttachmentText(text);
   const displayBody = annotationBatchDisplayText(parsed.body) ?? parsed.body;
   const paths = [...parsed.paths, ...attachments];
+  const reusable = !bySystem && displayBody === parsed.body && (!!parsed.body || paths.length > 0);
   return (
     <article className={`task-message task-message--user${bySystem ? " is-system-authored" : ""}${fresh ? " is-fresh" : ""}`}>
       <div className="task-user-bubble" {...conversationInputAnchor(id)}>
@@ -253,6 +263,7 @@ function UserBubble({ id, author, text, attachments, at, bySystem = false, delet
           {displayBody && (
             <CopyButton value={displayBody} ariaLabel="复制这条回复" icon />
           )}
+          {onReuse && reusable && <ReuseInputButton onReuse={() => onReuse({ source: id, text: parsed.body, paths })} />}
           {deletable && <DeleteMessageButton item={deletable} />}
         </header>
         {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <p>{displayBody}</p>)}
@@ -280,6 +291,7 @@ export function ConversationFeed({
   historyReady = true,
   bodyReady = true,
   onDeleteMessage,
+  onReuseInput,
 }: {
   task: TaskListItem;
   /**
@@ -328,6 +340,8 @@ export function ConversationFeed({
   bodyReady?: boolean;
   /** 删掉一条已落盘的消息。不给就一颗删除按钮都不出（正在跑、团队/研讨任务、只读视图）。 */
   onDeleteMessage?: (sources: ConversationSource[]) => Promise<void>;
+  /** 你发的那几句（含原始需求）放回对话框改了再发。不给就不出这颗键（没有对话框的视图）。 */
+  onReuseInput?: (input: ReusableInput) => void;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   // 被挡回的用户操作合进同一条任务历史。正文读到手之后**无条件合** —— 「有没有正文」跟「这段历史该不该
@@ -361,12 +375,10 @@ export function ConversationFeed({
     conversationDebateRows(conversationFeedRows(items, { reviews }), { reviews }),
     { failures: crashed, context: noticeContext },
   );
-  // 审查卡里（正在跑的那张、尾注里摊开的那一轮、记录里点开的那一轮）的旁注同样记在审查者那一回合上
-  // （见 laneReceipts）。
+  // 审查卡里（正在跑的那张、审查结论气泡下面摊开的那一轮、记录里点开的那一轮）的旁注同样记在审查者
+  // 那一回合上（见 laneReceipts）。
   const shownLanes: ConversationReviewLane[] = [
-    ...rows.flatMap((row) => row.kind === "review-lane" ? [row] : []),
-    ...[...footnotes.values(), ...rows.flatMap((row) => row.kind === "footnote" ? [row.footnote] : [])]
-      .flatMap((footnote) => footnote.parts.flatMap((part) => part.kind === "review" ? [part.lane] : [])),
+    ...rows.flatMap((row) => row.kind === "review-lane" ? [row] : row.kind === "verdict" ? [row.lane] : []),
     ...[...receipts.values(), ...rows.flatMap((row) => row.kind === "footnote" ? [row.receipts] : [])]
       .flatMap((list) => list.flatMap((receipt) => receipt.lane ? [receipt.lane] : [])),
   ];
@@ -449,7 +461,7 @@ export function ConversationFeed({
       );
     }
     if (item.kind === "user") {
-      return <UserMessage key={keys.get(item.id) ?? item.id} item={item} preserveSystemStyle={preserveSystemStyle} />;
+      return <UserMessage key={keys.get(item.id) ?? item.id} item={item} preserveSystemStyle={preserveSystemStyle} onReuse={onReuseInput} />;
     }
     if (preserveSystemStyle) {
       return (
@@ -466,11 +478,11 @@ export function ConversationFeed({
     // 走到这里的只有归属之外单独摆的那几条（辩论兜底以外不会发生）：同一种小灰字。
     const view = noticeView(item, noticeContext);
     if (view.tier === "reply") return <CommandReply key={item.id} item={item} view={view} />;
-    return renderFootnote({ id: item.id, live: false, parts: [{ kind: "event", id: item.id, at: item.at, view, item }] }, true);
+    return renderFootnote({ id: item.id, live: false, parts: [{ kind: "event", id: item.id, at: item.at, view, item }] }, "standalone");
   };
   // 「去裁定」挂在等你裁定的那半句后面（只有此刻还挂着的那一条）。
   const isRuled = (part: FootnotePart) => part.kind === "event" && !!disputeEventId && part.item?.id === disputeEventId;
-  // 尾注里那一轮审查就地摊开时的经过：卡里的旁注照样记在审查者那一回合上。
+  // 审查结论那一轮就地摊开时的经过：卡里的旁注照样记在审查者那一回合上。
   const renderLaneRows = (lane: ConversationReviewLane) => {
     const roles = reviewLaneMessageRoles(lane);
     return lanes.get(lane.id)!.rows.map((entry) => entry.kind === "item"
@@ -479,18 +491,10 @@ export function ConversationFeed({
         ? <CommandReply key={entry.id} item={entry.item} view={entry.view} />
         : renderFootnoteRow(entry));
   };
-  const renderFootnote = (footnote: TurnFootnote, standalone = false) => (
-    <FootnoteLine
-      key={footnote.id}
-      footnote={footnote}
-      taskId={task.id}
-      standalone={standalone}
-      actionFor={(part) => isRuled(part) ? ruleAction : null}
-      reviewOpener={(lane) => laneRoundOpener(lane, task.workflowMode, onOpenReviewPanel)}
-      renderLane={renderLaneRows}
-    />
+  const renderFootnote = (footnote: TurnFootnote, placement?: "standalone" | "trailing") => (
+    <FootnoteLine key={footnote.id} footnote={footnote} placement={placement} actionFor={(part) => isRuled(part) ? ruleAction : null} />
   );
-  // 「N 条记录」里那一轮审查点开去哪儿：跟尾注那半句同一套。
+  // 「N 条记录」里那一轮审查点开去哪儿：跟审查结论那颗气泡同一套。
   const receiptReview: ReceiptReview = {
     taskId: task.id,
     reviewOpener: (lane) => laneRoundOpener(lane, task.workflowMode, onOpenReviewPanel),
@@ -499,7 +503,7 @@ export function ConversationFeed({
   // 前面没有回合可挂的那几句：留在原处，同一种小灰字；它们的记录跟在后面。
   const renderFootnoteRow = (row: ConversationFootnoteRow) => row.footnote.parts.length ? (
     <div className="footnote-row" key={row.id}>
-      {renderFootnote(settleDisputes(row.footnote)!, true)}
+      {renderFootnote(settleDisputes(row.footnote)!, "standalone")}
       <TurnReceipts receipts={row.receipts} />
     </div>
   ) : <TurnReceipts key={row.id} receipts={row.receipts} standalone />;
@@ -512,7 +516,7 @@ export function ConversationFeed({
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
-          {requirement && inputs[0]?.id === REQUIREMENT_INPUT_ID && <RequirementMessage requirement={requirement} />}
+          {requirement && inputs[0]?.id === REQUIREMENT_INPUT_ID && <RequirementMessage requirement={requirement} onReuse={onReuseInput} />}
           {rows.map((row) => {
             if (row.kind === "item") return renderItem(row.item);
             if (row.kind === "system-action") {
@@ -520,6 +524,13 @@ export function ConversationFeed({
             }
             if (row.kind === "footnote") return renderFootnoteRow(row);
             if (row.kind === "reply") return <CommandReply key={row.id} item={row.item} view={row.view} />;
+            if (row.kind === "verdict") {
+              return (
+                <ReviewVerdict key={row.id} lane={row.lane} live={row.live} taskId={task.id}
+                  onOpenRound={laneRoundOpener(row.lane, task.workflowMode, onOpenReviewPanel)} renderLane={renderLaneRows}
+                  trailing={renderFootnote(settleDisputes(row.footnote)!, "trailing")} />
+              );
+            }
             if (row.kind === "debate-lane") {
               return (
                 <DebateLane
@@ -534,7 +545,7 @@ export function ConversationFeed({
                 />
               );
             }
-            // 收了口的审查轮不在这里（它是被审那一回合尾注里的一句）；走到这里的是还在跑的那张卡。
+            // 收了口的审查轮不在这里（它是上面那颗审查结论气泡）；走到这里的是还在跑的那张卡。
             return (
               <ReviewerLane key={row.id} taskId={task.id} lane={row} onOpenRound={laneRoundOpener(row, task.workflowMode, onOpenReviewPanel)}>
                 {renderLaneRows(row)}
@@ -562,7 +573,7 @@ export function ConversationFeed({
           {historyReady && <QuestionHistoryRemainder />}
           {footer}
         </div>
-        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={conversationTailKey(items)} inputs={inputs} />
+        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={conversationTailKey(items)} inputs={inputs} revealReady={bodyReady} />
       </div>
       <QuestionDock>{dock}</QuestionDock>
     </ImagePreviewGroup>

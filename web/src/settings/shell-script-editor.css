@@ -2,7 +2,7 @@
    高度由 --shell-editor-height 给(自适应内容 / 用户拖出来的值,见组件顶部注释),
    .cm-editor 吃这个高度、.cm-scroller 负责滚 —— 这是 CM6 的定高写法。 */
 .shell-editor { flex: 1; min-width: 0; width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--ink); }
-.shell-editor:has(.cm-focused) { outline: 2px solid var(--focus-soft); outline-offset: 0; }
+.shell-editor:has(.cm-focused) { border-color: var(--focus-soft); }
 .shell-editor__toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; min-height: 32px; padding: 5px 10px; border-bottom: 1px solid var(--line); background: var(--raised); color: var(--muted); font-size: var(--t-xs); }
 .shell-editor__toolbar > span { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); }
 .shell-editor__toolbar > span > span { font-family: var(--font-sans); color: var(--muted); }

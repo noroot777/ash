@@ -134,7 +134,7 @@ button.turn-footnote-part:focus-visible { outline: 2px solid var(--focus-ring); 
   white-space: pre-wrap;
   animation: notice-unfold var(--dur-2) var(--ease-out) backwards;
 }
-/* 尾注里那一轮审查就地摊开（没有右侧「审查」格可去时）。 */
+/* 一轮审查就地摊开（审查结论气泡、记录里那一条，没有右侧「审查」格可去时）。 */
 .turn-footnote-lane {
   margin: 6px 0 12px;
   border-left: 1px solid var(--line2);
@@ -158,6 +158,13 @@ button.turn-footnote-part:focus-visible { outline: 2px solid var(--focus-ring); 
 }
 .turn-footnote-report:hover { background: var(--hover-bg); }
 .turn-footnote-report:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* 贴在审查结论下面的那几句：靠右对齐气泡。藏着的时刻排到字前面，否则它占着的空会把字从气泡的
+   右缘推开。 */
+.turn-footnote.is-trailing { max-width: 100%; margin: 6px 2px 0 0; }
+.turn-footnote.is-trailing > .turn-footnote-line { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: flex-end; }
+.turn-footnote.is-trailing .turn-footnote-tail { order: -1; margin: 0 10px 0 0; }
+.turn-footnote.is-trailing .turn-footnote-line > .system-event-cta { align-self: center; }
+.turn-footnote.is-trailing > .turn-footnote-detail { text-align: left; }
 /* 前面没有回合可挂的那一句：它的记录跟在后面，同样指到才出。 */
 .footnote-row > .turn-footnote.is-standalone { margin-bottom: 0; }
 .footnote-row > .turn-receipts { margin: 0 0 14px 30px; }

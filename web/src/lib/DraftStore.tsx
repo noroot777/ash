@@ -12,6 +12,7 @@ import {
 } from "react";
 import type { UploadAttachment, UploadingFile } from "../task-detail/Attachments.tsx";
 import type { ScreenshotDraft } from "../page-annotation/model.ts";
+import type { ReuseMark } from "../task-detail/withdrawDraft.ts";
 
 // 「还没发出去的那份东西」统一放这里：对话框的回复草稿、主工作区新建任务框里的草稿，
 // 都是同一件事 —— 组件卸载（切任务、去设置、开聊天）不该把用户敲的字和粘的图弄丢。
@@ -34,7 +35,18 @@ export type Draft = {
   // 切走再回来正文还在、条件却变回立即发送,按下去就提前发了(第 1 轮审查实测)。
   // 缺省 / null = 立即发送。
   later?: LaterDraft | null;
+  // 正文的版本：正文每变一次就换一个（updateDraft 自动换），「改了再发」认领时也换。发送结算
+  // 只在版本仍是提交那一刻的才清正文——字面相等不等于还是那一份：清掉再放回同一句，字一样，
+  // 却是用户又选了一次（「改了再发」审查第 3 轮实测，迟到的确认把它清了）。
+  textVersion?: number;
+  // 上一次「改了再发」放回的是哪一条、放完草稿是哪个版本；判连点用（见 withdrawDraft.ts 的
+  // reuseDraft）。跟草稿放在同一份状态里，判定与更新一次完成。
+  reuse?: ReuseMark | null;
 };
+
+let textVersions = 0;
+/** 一个新的正文版本。只比相等，跳号无所谓。 */
+export const nextTextVersion = () => (textVersions += 1);
 
 /** 选了「稍后」时的那份设置。时间过期、等的任务没了也原样留着,由用户改,不静默退回立即发。 */
 export type LaterDraft = { kind: "timed" | "after"; at: string; afterTaskId: string };
@@ -43,6 +55,8 @@ type DraftContextValue = {
   drafts: Record<string, Draft>;
   updateDraft: (key: string, update: (current: Draft) => Draft) => void;
   readDraft: (key: string) => Draft;
+  trackSend: (key: string, run: Promise<unknown>) => void;
+  afterSend: (key: string) => Promise<void>;
 };
 
 const EMPTY_DRAFT: Draft = { text: "", attachments: [], pendingUploads: [], noteIds: [] };
@@ -62,7 +76,8 @@ export function DraftProvider({ children }: { children: ReactNode }) {
   const updateDraft = useCallback((key: string, update: (current: Draft) => Draft) => {
     setDrafts((current) => {
       const previous = current[key] ?? EMPTY_DRAFT;
-      const next = update(previous);
+      let next = update(previous);
+      if (next.text !== previous.text && next.textVersion === previous.textVersion) next = { ...next, textVersion: nextTextVersion() };
       if (!next.text && next.attachments.length === 0 && next.pendingUploads.length === 0
         && next.noteIds.length === 0 && !next.screenshot && !next.later) {
         if (!(key in current)) return current;
@@ -74,11 +89,32 @@ export function DraftProvider({ children }: { children: ReactNode }) {
         && next.pendingUploads === previous.pendingUploads
         && next.noteIds === previous.noteIds
         && next.screenshot === previous.screenshot
-        && next.later === previous.later) return current;
+        && next.later === previous.later
+        && next.textVersion === previous.textVersion
+        && next.reuse === previous.reuse) return current;
       return { ...current, [key]: next };
     });
   }, []);
-  const value = useMemo(() => ({ drafts, updateDraft, readDraft }), [drafts, updateDraft, readDraft]);
+  // 正在飞的发送。它们结算时按「发送那一刻的那一份」摘草稿（clearSentDraft /
+  // dropSentAttachments），所以对话框之外往草稿里放东西（撤回、会话里「改了再发」）排在它们
+  // 后面：先清后并。这只是辅助——附件归属靠选择记号兜底，顺序乱了也摘不错。
+  // 每份草稿记**一组**而不是一个：发送中再按一次发送键，那一次早退的调用不能把真正还在飞的
+  // 那次顶掉（「改了再发」第 2 轮审查实测，顶掉后等待形同虚设）。
+  const sends = useRef(new Map<string, Set<Promise<unknown>>>());
+  const trackSend = useCallback((key: string, run: Promise<unknown>) => {
+    const runs = sends.current.get(key) ?? new Set<Promise<unknown>>();
+    sends.current.set(key, runs);
+    runs.add(run);
+    const done = () => {
+      runs.delete(run);
+      if (!runs.size && sends.current.get(key) === runs) sends.current.delete(key);
+    };
+    run.then(done, done);
+  }, []);
+  const afterSend = useCallback(async (key: string) => {
+    for (let runs = sends.current.get(key); runs?.size; runs = sends.current.get(key)) await Promise.allSettled([...runs]);
+  }, []);
+  const value = useMemo(() => ({ drafts, updateDraft, readDraft, trackSend, afterSend }), [drafts, updateDraft, readDraft, trackSend, afterSend]);
   return <DraftContext.Provider value={value}>{children}</DraftContext.Provider>;
 }
 
@@ -107,13 +143,22 @@ export type DraftHandle = {
   clearIfUnchanged: (submitted: Draft) => void;
   /** 整份丢掉（发送/创建成功，或用户自己按了「清空」）。 */
   clear: () => void;
+  /**
+   * 一次改好几个字段（正文 + 附件），拿到的是此刻 Store 里的那一份。判断要同时看几个字段的
+   * 操作（「改了再发」判连点）用它，免得各自的 setter 在不同时刻读到不同版本。
+   */
+  update: (next: (current: Draft) => Draft) => void;
+  /** 登记一次正在飞的发送（它结算时会摘掉自己那一份）。 */
+  trackSend: (run: Promise<unknown>) => void;
+  /** 等这份草稿上在飞的发送都结算完；外部往草稿里放东西前先等它。 */
+  afterSend: () => Promise<void>;
 };
 
 export function useDraft(key: string): DraftHandle {
   const context = useContext(DraftContext);
   if (!context) throw new Error("useDraft must be used inside DraftProvider");
   const draft = context.drafts[key] ?? EMPTY_DRAFT;
-  const { updateDraft, readDraft } = context;
+  const { updateDraft, readDraft, trackSend: track, afterSend: settle } = context;
   const setScreenshot = useCallback<Dispatch<SetStateAction<ScreenshotDraft | null>>>((next) => {
     updateDraft(key, (current) => ({
       ...current,
@@ -159,6 +204,9 @@ export function useDraft(key: string): DraftHandle {
     for (const pending of readDraft(key).pendingUploads) pending.abort();
     updateDraft(key, () => EMPTY_DRAFT);
   }, [key, readDraft, updateDraft]);
+  const update = useCallback((next: (current: Draft) => Draft) => updateDraft(key, next), [key, updateDraft]);
+  const trackSend = useCallback((run: Promise<unknown>) => track(key, run), [key, track]);
+  const afterSend = useCallback(() => settle(key), [key, settle]);
   return {
     screenshot: draft.screenshot ?? null,
     setScreenshot,
@@ -175,6 +223,9 @@ export function useDraft(key: string): DraftHandle {
     value: draft,
     clearIfUnchanged,
     clear,
+    update,
+    trackSend,
+    afterSend,
   };
 }
 

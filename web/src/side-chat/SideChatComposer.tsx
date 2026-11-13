@@ -33,8 +33,11 @@ export function SideChatComposer({ task, chat }: { task: Task; chat: SideChatSta
   };
   const send = () => { if (valid && chat.canSend) void chat.send(member); };
   useEffect(() => {
-    if (chat.ready) input.current?.focus({ preventScroll: true });
-  }, [chat.ready, chat.room?.id, chat.quote?.id]);
+    if (!chat.ready || !input.current) return;
+    input.current.focus({ preventScroll: true });
+    // 「改了再发」放回来的那句接在草稿前面，光标送到末尾，接着改。
+    if (chat.reused) input.current.setSelectionRange(input.current.value.length, input.current.value.length);
+  }, [chat.ready, chat.room?.id, chat.quote?.id, chat.reused]);
   const error = chat.error || chat.memberError || connection.error;
   const sendKeys = useSendKeyLabels();
   const quoteTip = useHoverTip();

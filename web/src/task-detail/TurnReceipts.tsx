@@ -2,13 +2,13 @@ import { createContext, useContext, useId, useState, type ReactNode } from "reac
 import type { ReviewTarget } from "../review/reviewTarget.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import type { TurnReceipt } from "./conversationSystemRows.ts";
-import { LaneBody } from "./FootnoteLine.tsx";
+import { LaneBody } from "./ReviewVerdict.tsx";
 import { DeleteMessageButton } from "./MessageDelete.tsx";
 import { laneReviewTarget } from "./reviewLaneLinks.ts";
 import { formatInstant } from "./utils.ts";
 
 /**
- * 记录里那一轮审查点开去哪儿：跟尾注里那半句同一套（FootnoteLine 的 reviewOpener / renderLane）。
+ * 记录里那一轮审查点开去哪儿：跟审查结论那颗气泡同一套（ReviewVerdict 的 onOpenRound / renderLane）。
  * 会话那一层给一份；没给的地方（团队时间线、单测里单摆的记录）那一条就只是一句字。
  */
 export type ReceiptReview = {
@@ -38,7 +38,7 @@ function ReceiptEntry({ receipt, previousAt }: { receipt: TurnReceipt; previousA
   const { view, lane } = receipt;
   const time = clock(receipt.at, previousAt);
   const text = <span className="turn-receipt-text">{view.text}</span>;
-  // 被同一回合后来那一轮盖过的审查：尾注里不再说它，这一条就是它的入口——去审查格的那一轮，
+  // 被同一回合后来那一轮盖过的审查：会话里不再画它的气泡，这一条就是它的入口——去审查格的那一轮，
   // 认不出去哪儿就在下面摊开那一轮的经过。
   const go = lane && review ? review.reviewOpener?.(lane) : undefined;
   return (

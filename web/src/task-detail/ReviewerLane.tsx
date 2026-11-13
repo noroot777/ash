@@ -5,9 +5,8 @@ import type { ReviewFileTarget } from "../components/markdownPolicy.ts";
 import { ReviewNote } from "../review/ReviewNote.tsx";
 import type { ReviewTarget } from "../review/reviewTarget.ts";
 import type { ConversationReviewLane, ReviewLaneConclusion } from "./conversationReviewLanes.ts";
-import { FootnoteLine } from "./FootnoteLine.tsx";
 import { laneReportUrl } from "./reviewLaneLinks.ts";
-import { laneVerdictView } from "./turnFootnote.ts";
+import { ReviewVerdict } from "./ReviewVerdict.tsx";
 import { durationBetween, formatInstant } from "./utils.ts";
 
 export { laneReviewTarget, laneRoundOpener } from "./reviewLaneLinks.ts";
@@ -30,8 +29,8 @@ function timing(lane: ConversationReviewLane): string | null {
 /**
  * 一轮审查。还在跑的保留整张卡：审查者正在说话，那是内容。
  *
- * 收了口的一轮在任务会话里不再占行，是被审那一回合尾注里的一句（conversationSystemRows）；
- * 这里的 `complete` 分支给单独摆一轮的地方用（没有回合可挂的、别处的视图）：同一种小灰字，
+ * 收了口的一轮在任务会话里是被审那一回合之后的一颗审查结论气泡（conversationSystemRows 收走、
+ * ConversationFeed 直接画 ReviewVerdict）；这里的 `complete` 分支给单独摆一轮的地方用：同一颗气泡，
  * 点了去右侧「审查」格的这一轮，或者就地摊开这一轮的经过。
  */
 export function ReviewerLane({
@@ -49,18 +48,7 @@ export function ReviewerLane({
    */
   onOpenRound?: (target: ReviewTarget) => void;
 }) {
-  if (lane.complete) {
-    const view = laneVerdictView(lane);
-    return (
-      <FootnoteLine
-        standalone
-        taskId={taskId}
-        footnote={{ id: lane.id, live: false, parts: [{ kind: "review", id: lane.id, at: lane.endedAt ?? undefined, view, lane }] }}
-        reviewOpener={() => onOpenRound}
-        renderLane={() => children}
-      />
-    );
-  }
+  if (lane.complete) return <ReviewVerdict lane={lane} taskId={taskId} onOpenRound={onOpenRound} renderLane={() => children} />;
   return <RunningReviewLane taskId={taskId} lane={lane}>{children}</RunningReviewLane>;
 }
 

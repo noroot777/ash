@@ -32,8 +32,8 @@
   white-space: nowrap;
 }
 
-/* 审查进行中的那一轮：一张卡，看得见审查者正在说什么。出了结论就收成被审那一回合尾注里的
-   一句（FootnoteLine，样式在 system-turn.css 的 .turn-footnote）。 */
+/* 审查进行中的那一轮：一张卡，看得见审查者正在说什么。出了结论就在原处收成一颗审查结论气泡
+   （ReviewVerdict，样式见本文件末尾的 .review-verdict）。 */
 .verify-lane {
   position: relative;
   width: 100%;
@@ -98,4 +98,90 @@
   .verify-lane-time { order: 2; margin-left: 26px; }
   .verify-lane-actions { margin-left: auto; }
   .verify-lane-time + .verify-lane-actions { margin-left: auto; }
+}
+
+/* 审查结论（ReviewVerdict）：审查者对执行者说的话，跟你的气泡同一列、同一种圆角。跟你的气泡分得开：
+   不垫底色只有一圈细边，字是次级灰，上下内边距小一档；不带图标、不带头像。整颗气泡就是那颗键
+   （.review-verdict-text 撑满它）。「审查者 · 谁审的 · 用时 · 时刻」那一行的做法跟你的气泡那一行
+   相同（见 task-conversation.css）：有悬停的设备上指到才在气泡上方右侧浮出，不占排版高度，位置是
+   这一行自己让出来的上边距；触屏上常显在气泡里。结论之后的那几句（.turn-footnote.is-trailing，
+   见 system-turn.css）贴在气泡下面靠右；就地摊开的那一轮占满正文宽度，左缘跟回合正文对齐。 */
+.review-verdict { display: flex; flex-direction: column; align-items: flex-end; margin: 6px 0 20px; padding-left: 38px; }
+.review-verdict-bubble {
+  position: relative;
+  min-width: 0;
+  max-width: min(640px, 88%);
+  border: 1px solid var(--line2);
+  border-radius: 16px 6px 16px 16px;
+  transition: border-color var(--dur-1) var(--ease-out);
+}
+.review-verdict-bubble:has(> .review-verdict-text:hover) { border-color: color-mix(in oklab, var(--ink) 24%, var(--line2)); }
+.review-verdict-bubble > header {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px 0;
+  color: color-mix(in oklab, var(--muted) 72%, var(--faint));
+  font-size: var(--t-xs);
+  white-space: nowrap;
+}
+.review-verdict-bubble > header b { flex: none; color: color-mix(in oklab, var(--ink) 70%, var(--muted)); font-weight: var(--w-medium); }
+.review-verdict-meta { min-width: 0; overflow: hidden; font-variant-numeric: tabular-nums; text-overflow: ellipsis; }
+.review-verdict-bubble > header button {
+  display: grid;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.review-verdict-bubble > header button:hover { background: var(--raised); color: var(--ink); }
+.review-verdict-bubble > header button:focus-visible,
+.review-verdict-text:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.review-verdict-text {
+  display: block;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  padding: 4px 16px 9px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.6;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition: color var(--dur-1) var(--ease-out);
+}
+.review-verdict-text:hover,
+.review-verdict-text[aria-expanded="true"] { color: var(--ink); }
+.review-verdict > .turn-footnote-lane { align-self: stretch; margin-left: -8px; }
+@media (hover: hover) {
+  .review-verdict { margin-top: var(--bubble-head-band); }
+  .review-verdict-text { padding: 6px 15px 7px; }
+  .review-verdict-bubble > header {
+    position: absolute;
+    right: 2px;
+    bottom: 100%;
+    height: 26px;
+    padding: 0 0 4px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--dur-1) var(--ease-out);
+  }
+  .review-verdict-bubble:is(:hover, :focus-within) > header { opacity: 1; pointer-events: auto; }
+  .review-verdict-bubble > header button { width: 22px; height: 22px; }
+}
+@media (max-width: 560px) {
+  .review-verdict { padding-left: 10px; }
+  .review-verdict-bubble { max-width: 96%; }
+  .review-verdict > .turn-footnote-lane { margin-left: 0; }
 }
