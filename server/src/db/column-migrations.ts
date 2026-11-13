@@ -410,4 +410,6 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE sessions ADD COLUMN context_rebuild_at TEXT",
   // 排队中的答复是哪一条问答的（见 db/schema.ts 同名列）。存量行 NULL = 不是答复。
   "ALTER TABLE scheduled_messages ADD COLUMN answer_id TEXT",
+  // 开工起点所在的分支名（见 db/schema.ts 同名列）。存量行 NULL = 没记过。
+  "ALTER TABLE tasks ADD COLUMN worktree_base_branch TEXT",
 ];

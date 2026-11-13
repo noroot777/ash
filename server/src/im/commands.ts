@@ -21,6 +21,7 @@ import type { BindingRow } from "./binding.js";
 import { BROWSE_PAGE, browseCard, Browser, browseScope, PICK_LIMIT, type BrowseView } from "./browse.js";
 import { confirmCard, newTaskCard, taskLink, todoText } from "./cards.js";
 import { createEnvelope, ENVELOPE_TTL_MS } from "./envelopes.js";
+import { summaryItems } from "./exits.js";
 import { renderCard, type CardModel } from "./feishu/cards.js";
 import { groupOf } from "./groups.js";
 import { readOptions } from "./meta.js";
@@ -195,7 +196,7 @@ export class CommandRunner {
     for (const row of open) if ((await admit(this.deps.appId, row, titleOnly)).ok) shown.push(row);
     if (!shown.length) return this.say(ctx, "眼下没有等你处理的事。", SYSTEM_SCOPE);
     const { released, left } = await this.deps.reconciler.run(() => this.deps.reconciler.release(ctx.dest.receiveId));
-    await this.say(ctx, todoText(shown.map((row) => cardHeaderOf(row.content).title), shown.length,
+    await this.say(ctx, todoText(summaryItems(shown).map((item) => item.title), shown.length,
       released ? `刚把其中 ${released} 张卡推了过来${left ? `，还有 ${left} 张，再发 /todo 继续` : ""}。` : "它们的卡片都已经在上面了。"),
     this.scoped(ctx, { kind: "digest", rowIds: shown.slice(0, 15).map((row) => row.id) }));
   }

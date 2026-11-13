@@ -355,6 +355,7 @@ async function importValidated(
     useWorktree,
     worktreeBase: useWorktree ? m.task.worktreeBase : null,
     worktreeStartCommit: useWorktree ? m.task.worktreeStartCommit ?? null : null,
+    worktreeBaseBranch: useWorktree ? m.task.worktreeBaseBranch ?? null : null,
     mergeTargetBranch: useWorktree ? m.task.mergeTargetBranch ?? null : null,
     baseTaskId: m.task.baseTaskId ?? null,
     acceptedSourceCommit: m.task.acceptedSourceCommit ?? null,

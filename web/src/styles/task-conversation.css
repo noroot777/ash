@@ -19,6 +19,8 @@
 .turn-meta { min-width: 0; overflow: hidden; color: var(--faint); font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
 .task-message--agent:hover > .task-message-content > .turn-head .turn-meta,
 .task-message--agent:focus-within > .task-message-content > .turn-head .turn-meta { opacity: 1; }
+/* 删除紧挨着那一句，不推到行尾：指到这一回合时它就在眼睛正读着的地方。 */
+.task-message header.turn-head .message-delete-button { flex: none; margin-left: -4px; }
 /* 回合尾那一排（TurnActions）：平时不画，自己不占高度、往下探进两条消息之间的空里，
    出不出现会话都不跳。复制刚给过反馈、菜单开着的时候不随悬停进出。 */
 .turn-acts { display: flex; height: 0; align-items: flex-start; gap: 2px; margin: 2px 0 0 -6px; opacity: 0; transition: opacity var(--dur-2) var(--ease-out); }
@@ -41,7 +43,7 @@
 .task-message--agent.is-just-ended .task-turn-process > summary { animation: turn-settle-in var(--dur-2) var(--ease-out) backwards; }
 @keyframes turn-settle-in { from { opacity: 0; } }
 .task-message--agent:has(.turn-acts) { margin-bottom: 30px; }
-@media (hover: none) { .turn-meta, .turn-acts { opacity: 1; } }
+@media (hover: none) { .turn-meta, .turn-acts, .task-message header.turn-head .message-delete-button { opacity: 1; } }
 .task-message header button,
 .task-user-bubble header button { display: grid; width: 22px; height: 22px; margin-left: auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--faint); opacity: 0; }
 .task-message:hover header button,

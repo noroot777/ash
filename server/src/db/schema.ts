@@ -210,6 +210,8 @@ export const tasks = sqliteTable("tasks", {
   workflowAt: text("workflow_at"),
   worktreeBase: text("worktree_base"),
   worktreeStartCommit: text("worktree_start_commit"),
+  // 开工起点所在的分支名（只给人看，见 shared Task.worktreeBaseBranch）。
+  worktreeBaseBranch: text("worktree_base_branch"),
   mergeTargetBranch: text("merge_target_branch"),
   baseTaskId: text("base_task_id"),
   acceptedSourceCommit: text("accepted_source_commit"),

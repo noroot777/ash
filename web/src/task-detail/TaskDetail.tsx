@@ -309,7 +309,7 @@ export function TaskDetail({
   };
 
   return (
-    <TaskFileLinks taskId={task.id} onOpenFile={openFileInCenter} onOpenFolder={openFolderInCenter}>
+    <TaskFileLinks taskId={task.id} onOpenFile={openFileInCenter} onOpenFolder={openFolderInCenter} onOpenError={notify}>
       <InspectorHost
         contextKey={inspectorContextKey}
         descriptors={inspectors}

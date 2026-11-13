@@ -8,7 +8,7 @@
 //
 // 跑：npm -w server run test:task-file-raw
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -16,7 +16,11 @@ import { Hono } from "hono";
 const stage = mkdtempSync(join(tmpdir(), "ash-file-raw-"));
 const repo = join(stage, "repo");
 const work = join(stage, "work");
+const home = join(stage, "home");
 process.env.ASH_DB = join(stage, "ash.db");
+// 家目录指到舞台里：⑦ 的「家目录里的成片」不碰真家目录
+process.env.HOME = home;
+process.env.USERPROFILE = home;
 
 const [{ db, ensureSchema }, schema, { mountFileRoutes }] = await Promise.all([
   import("../src/db/index.js"),
@@ -76,6 +80,35 @@ try {
   response = await raw("live", join(work, "output", "shot.txt"), "&workspaceOnly=1");
   assert.equal(response.status, 200);
   assert.equal(await response.text(), "任务自己那一份");
+
+  // ⑥ 大文件：音视频不设上限（流式吐、`<video>` 按区间取），别的照旧 413。稀疏文件，不真占盘。
+  writeFileSync(join(work, "output", "film.mp4"), "");
+  truncateSync(join(work, "output", "film.mp4"), 65 * 1024 * 1024);
+  writeFileSync(join(work, "output", "big.png"), "");
+  truncateSync(join(work, "output", "big.png"), 65 * 1024 * 1024);
+  response = await api.request(`/tasks/live/file/raw?path=${encodeURIComponent("output/film.mp4")}`, { headers: { range: "bytes=0-99" } });
+  assert.equal(response.status, 206, "超过 64 MB 的视频照样能按区间取");
+  assert.equal(response.headers.get("content-range"), `bytes 0-99/${65 * 1024 * 1024}`);
+  await response.arrayBuffer();
+  response = await raw("live", "output/big.png");
+  assert.equal(response.status, 413, "非音视频的大文件照旧拒");
+
+  // ⑦ locate：工作区外的本机音视频，只对本机 / Tailscale 来源标成 local（点了交给本机播放器）
+  mkdirSync(join(home, "Movies"), { recursive: true });
+  writeFileSync(join(home, "Movies", "成片.mp4"), "mp4");
+  const locate = (env?: unknown) => api.request("/tasks/live/file/locate", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ paths: ["output/shot.txt", "~/Movies/成片.mp4", join(stage, "outside.txt"), "~/Movies/没有.mp4"] }),
+  }, env);
+  const local = { incoming: { socket: { remoteAddress: "127.0.0.1" } } };
+  const trusted = (await (await locate(local)).json() as { entries: Record<string, unknown> }).entries;
+  assert.deepEqual(trusted["output/shot.txt"], { path: "output/shot.txt", kind: "file" }, "工作区里的照旧在中间栏摊开");
+  assert.deepEqual(trusted["~/Movies/成片.mp4"], { path: realpathSync(join(home, "Movies", "成片.mp4")), kind: "file", local: true });
+  assert.equal(trusted[join(stage, "outside.txt")], null, "工作区外、白名单外的非音视频不给");
+  assert.equal(trusted["~/Movies/没有.mp4"], null);
+  const remote = (await (await locate({ incoming: { socket: { remoteAddress: "192.168.1.9" } } })).json() as { entries: Record<string, unknown> }).entries;
+  assert.equal(remote["~/Movies/成片.mp4"], null, "不在本机 / Tailscale 的来源打不开 open-local，不给它链接");
+  assert.equal((await (await locate()).json() as { entries: Record<string, unknown> }).entries["~/Movies/成片.mp4"], null, "问不出来源的按不可信算");
 
   console.log("任务工作目录原始字节(workspaceOnly)回归通过");
 } finally {

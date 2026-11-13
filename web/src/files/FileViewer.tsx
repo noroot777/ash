@@ -16,6 +16,7 @@ import { ImageZoomControls } from "../components/ImageZoomControls.tsx";
 import { useImageZoom } from "../components/useImageZoom.ts";
 import { api, type FileContent } from "../lib/api.ts";
 import { useZoomLayer, ZoomToggle } from "../lib/zoomLayer.tsx";
+import { isAudioPath, isVideoPath } from "../task-detail/utils.ts";
 import { formatSize, isImageName } from "./fileModel.ts";
 import { MARKDOWN_PATTERN, MarkdownFileBody } from "./MarkdownFileBody.tsx";
 import { OpenWithMenu } from "./OpenWithMenu.tsx";
@@ -44,9 +45,6 @@ function ImageBody({ src, name }: { src: string; name: string }) {
     </div>
   );
 }
-
-const VIDEO_PATTERN = /\.(?:mp4|m4v|mov|webm|mkv|ogv)$/i;
-const AUDIO_PATTERN = /\.(?:mp3|wav|m4a|aac|flac|ogg|opus|aiff)$/i;
 
 /**
  * 任务做出来的网页，就地渲染。
@@ -91,7 +89,7 @@ function Body({
     return <iframe className="file-viewer__pdf" src={rawUrl} aria-label={`${file.name} 预览`} />;
   }
   if (pageUrl && !showSource) return <PageBody url={pageUrl} path={file.path} />;
-  if (VIDEO_PATTERN.test(file.path)) {
+  if (isVideoPath(file.path)) {
     return (
       <div className="file-viewer__media">
         {/* eslint-disable-next-line jsx-a11y/media-has-caption -- 任务产出的视频没有字幕轨可挂 */}
@@ -99,7 +97,7 @@ function Body({
       </div>
     );
   }
-  if (AUDIO_PATTERN.test(file.path)) {
+  if (isAudioPath(file.path)) {
     return (
       <div className="file-viewer__media">
         <audio className="file-viewer__audio" src={rawUrl} controls preload="metadata" />

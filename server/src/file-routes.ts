@@ -1,4 +1,6 @@
 import type { Hono } from "hono";
+import { getConnInfo } from "@hono/node-server/conninfo";
+import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
 import {
   listDirectory,
@@ -16,6 +18,7 @@ import { openInIde, probeIdes } from "./openers/ide.js";
 import { listWorkspaceDir, searchWorkspaceFiles } from "./file-search.js";
 import { readFileGitStatus } from "./file-git-status.js";
 import { readTaskArtifacts } from "./task-artifacts.js";
+import { isTrustedLocalOpenRemote, resolveOpenableLocalPath } from "./local-open-routes.js";
 import { actorOf } from "./auth/context.js";
 import { visibleProjectIds } from "./auth/visibility.js";
 import { watchTaskWrites } from "./task-writes.js";
@@ -55,6 +58,19 @@ function messageOf(error: unknown): string {
 function publicRoot(root: WorkspaceRoot) {
   return { path: root.path, branch: root.branch, gitRepo: root.gitRepo, source: root.source };
 }
+
+/** 请求从哪来；不是经 node 服务端进来的（进程内直接调）就问不出来，按不可信算。 */
+function remoteAddressOf(c: Parameters<typeof getConnInfo>[0]): string | undefined {
+  try {
+    return getConnInfo(c).remote.address;
+  } catch {
+    return undefined;
+  }
+}
+
+type LocatedEntry = { path: string; kind: "file" | "dir"; local?: true };
+/** 本机绝对路径（含 `~/`）的样子；相对路径只在工作区里认。 */
+const LOCAL_SHAPE = /^(?:~[\\/]|\/|[A-Za-z]:[\\/])/;
 
 export function mountFileRoutes(api: Hono) {
   // 生成物面板的并发裁决靠「任务写过的位置」，记录从这一刻开始（见 task-writes.ts）。挂在
@@ -198,8 +214,20 @@ export function mountFileRoutes(api: Hono) {
       : [];
     if (paths.length > MAX_LOCATE_PATHS) return c.json({ error: `一次最多问 ${MAX_LOCATE_PATHS} 条路径` }, 400);
     const root = await rootFor(c.req.param("id"));
-    if (!root) return c.json({ entries: Object.fromEntries(paths.map((path) => [path, null])) });
-    return c.json({ entries: await locateEntries(root, paths) });
+    const entries: Record<string, LocatedEntry | null> = root
+      ? await locateEntries(root, paths)
+      : Object.fromEntries(paths.map((path) => [path, null]));
+    // 工作区外的本机路径（成片常落在 `~/Movies`、素材库）：`/open-local` 打得开的，标成 local，
+    // 点下去交给本机程序。打不开的人（不在本机 / Tailscale）不给，给了也只是一个点了报 403 的链接。
+    if (isTrustedLocalOpenRemote(remoteAddressOf(c))) {
+      await Promise.all(paths.map(async (path) => {
+        if (entries[path] || !LOCAL_SHAPE.test(path)) return;
+        const abs = await resolveOpenableLocalPath(path);
+        const info = abs ? await stat(abs).catch(() => null) : null;
+        if (abs && info) entries[path] = { path: abs, kind: info.isDirectory() ? "dir" : "file", local: true };
+      }));
+    }
+    return c.json({ entries });
   });
 
   api.post("/tasks/:id/file/reveal", async (c) => {

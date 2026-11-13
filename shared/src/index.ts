@@ -331,6 +331,9 @@ export interface Task {
   useWorktree?: boolean;
   worktreeBase?: string | null;
   worktreeStartCommit?: string | null;
+  // 开工起点所在的分支名，起点定下来那一刻记的（worktreeBase 为空时它就是当时项目检出的分支）。
+  // 只给人看：起点以 worktreeStartCommit 为准。null = 起点不是分支（提交号、tag、detached HEAD）或老任务。
+  worktreeBaseBranch?: string | null;
   mergeTargetBranch?: string | null;
   baseTaskId?: string | null;
   acceptedSourceCommit?: string | null;

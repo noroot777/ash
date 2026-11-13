@@ -20,7 +20,7 @@ export function ConversationScrollControls({
   /** 会话内容版本(`contentVersion`),决定「多出要看的东西了要不要跟过去」。 */
   tailKey: string | number;
   /**
-   * 我说过的话(`conversationInputs`):给了且不止一条,左侧就挂输入导航。跟上下两颗按钮
+   * 我说过的话(`conversationInputs`):有一条就挂左侧输入导航(只有原始需求也挂)。跟上下两颗按钮
    * 放在一起,是因为它也是「把视口挪到别处」的控件 —— 每一跳都得先跟贴底逻辑打招呼,
    * 否则跳过去读着读着,下一条新消息就把人拽回了底部。
    */
@@ -45,7 +45,7 @@ export function ConversationScrollControls({
 
   return (
     <>
-      {inputs && inputs.length > 1 && (
+      {inputs && inputs.length > 0 && (
         <ConversationInputRail
           // 换任务即换一条导航：悬停、摊开、读到哪一条都不该带过去。
           key={resetKey ?? undefined}

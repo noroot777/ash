@@ -99,6 +99,18 @@ export function isImagePath(path: string): boolean {
   return IMAGE_EXT.test(path.split(/[?#]/)[0] ?? "");
 }
 
+// 浏览器 `<video>` / `<audio>` 放得了的那几种（查看器据此摊播放器）。
+const VIDEO_EXT = /\.(?:mp4|m4v|mov|webm|mkv|ogv)$/i;
+const AUDIO_EXT = /\.(?:mp3|wav|m4a|aac|flac|ogg|opus|aiff)$/i;
+
+export function isVideoPath(path: string): boolean {
+  return VIDEO_EXT.test(path.split(/[?#]/)[0] ?? "");
+}
+
+export function isAudioPath(path: string): boolean {
+  return AUDIO_EXT.test(path.split(/[?#]/)[0] ?? "");
+}
+
 // 解析逻辑搬进了 shared（server 读「最后一条消息」时要用同一份），这里只转出去，
 // 免得所有调用点跟着改 import。
 export { parseAttachmentText } from "@ash/shared/attachments";

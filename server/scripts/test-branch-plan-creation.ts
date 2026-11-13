@@ -82,9 +82,13 @@ try {
     assert.equal(automatic.worktreeBase, null);
     assert.equal(automatic.worktreeStartCommit, featureStart);
     assert.equal(automatic.mergeTargetBranch, "version-upgrade");
+    assert.equal(automatic.worktreeBaseBranch, "version-upgrade", "没指定起点：记下建任务那一刻检出的分支");
     const explicit = await create("follow-current-branch", { worktreeBase: "main" });
     assert.equal(explicit.worktreeStartCommit, mainStart);
     assert.equal(explicit.mergeTargetBranch, "main");
+    assert.equal(explicit.worktreeBaseBranch, "main");
+    const pinned = await create("follow-current-branch", { worktreeBase: mainStart });
+    assert.equal(pinned.worktreeBaseBranch, null, "起点是提交号：不冒充成哪条分支");
     commit(repo, "later-upgrade.txt");
     git(repo, "checkout", "main");
     const workspace = await taskWorkspace(automatic, repo);

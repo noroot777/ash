@@ -96,6 +96,7 @@ function AgentMessageView({
     duration && laneRole !== "lead" ? `${duration} 用时` : null,
   ].filter(Boolean).join(" · ");
   const live = !item.endedAt && taskActive;
+  const head = showIdentity || showBadge || !!meta;
   // 看着它收口的那一下：尾栏淡入一次、约两秒后收回，过程摘要那一行淡入（run-5）。
   const justEnded = useJustEnded(live);
   return (
@@ -109,19 +110,21 @@ function AgentMessageView({
         </span>
       )}
       <div className="task-message-content">
-        {(showIdentity || showBadge || meta) && (
+        {head && (
           <header className="turn-head">
             {showIdentity && <b>{item.label}</b>}
             {showIdentity && item.wokenByMonitor && <span className="turn-cause">被哨兵叫醒</span>}
             {showBadge && <ReviewerBadge round={reviewer.round} />}
             {meta && <span className="turn-meta">{meta}</span>}
+            {/* 删除紧跟在那一句后面，跟它一起指到才出；还在说的那一回合删不了，按钮自己会缺席。 */}
+            {!live && <DeleteMessageButton item={item} />}
           </header>
         )}
         {wakeReply && <MonitorWakeReply />}
         <AgentTurnBody segments={item.segments} running={!item.endedAt} taskId={taskId} since={live ? item.at : undefined} />
         {/* 跑着的这一回合还没说完，尾上的操作等它收口再出（run-5）。「N 条记录」是那一排里的一颗，
             摊开的流水在它下面。 */}
-        {!live && <TurnActions item={item} markdown={item.markdown} usage={item.usage} onFork={onFork} onAskSideChat={onAskSideChat}
+        {!live && <TurnActions item={item} removeInMenu={!head} markdown={item.markdown} usage={item.usage} onFork={onFork} onAskSideChat={onAskSideChat}
           records={receipts?.length ? <TurnReceiptsToggle count={receipts.length} open={log.open} onToggle={log.toggle} logId={log.logId} /> : undefined} />}
         {!live && receipts && <TurnReceiptLog receipts={receipts} open={log.open} logId={log.logId} />}
         {/* 还在说的那一回合没有尾栏，记录先单独挂在正文下面（同样指到才出）。 */}
