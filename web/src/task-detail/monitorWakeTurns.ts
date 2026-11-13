@@ -10,7 +10,8 @@
 // 归属按**段**、按**哨兵的身份**认：
 //
 //   · 一段 = 同一条执行会话上连续的执行回合，中间没有别的输入（你的话、答复、审查意见这类系统代写的
-//     输入、团队调度台的执行者来信）、没有审查者发言、没有审查轮的起止、没有**异常**结束。回合正常
+//     输入、团队调度台的执行者来信）、没有审查者发言、没有审查轮的起止、没有**异常**结束（两路都认得出的那份事实，见 turnFailure 的
+//     endsTurnAbnormally）。回合正常
 //     结束（暂停等哨兵、完成）不打断一段——直播那一路每个回合后面都有一条回合边界，落盘重建那一路
 //     没有，拿它当打断，开着页面看和刷新以后看就是两个样子。
 //   · 一段里任何一个回合挂的哨兵都归这一段（比较见 monitorWakeOwner）。一次叫醒里只要有一条哨兵归
@@ -28,6 +29,7 @@ import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import type { AgentContentSegment, ConversationItem } from "./conversationModel.ts";
 import { monitorWakeInput, monitorWakePreview, type MonitorWakeInput } from "./monitorWakeModel.ts";
 import { claimStarts, claimWake, emptyClaims, ownsWake, type MonitorClaims } from "./monitorWakeOwner.ts";
+import { endsTurnAbnormally } from "./turnFailure.ts";
 import { MONITOR_WAKE_TOOL } from "../lib/toolPhrase.ts";
 import { durationBetween } from "./utils.ts";
 
@@ -49,7 +51,7 @@ export function foldMonitorWakes(items: readonly ConversationItem[], options: Mo
   // 审查者刚在这条会话上说过话、之后还没有别的输入：这时喂进这条会话的叫醒是给审查者的（就地验证
   // 跟执行者共用会话，回复还没来时只能这样认）。
   let reviewerSession: string | null = null;
-  const breaks = (item: EventItem) => (item.variant === "boundary" && item.tone === "error") || !!item.verify || !!options.isInput?.(item);
+  const breaks = (item: EventItem) => endsTurnAbnormally(item) || !!item.verify || !!options.isInput?.(item);
   // 叫醒和它的回复之间只许隔着旁注（回执、时间线记录）；隔着回合边界、审查轮起止、来信就不算它的回复。
   const transparent = (item: ConversationItem | undefined) => item?.kind === "event" && item.variant !== "boundary" && !breaks(item);
   for (let index = 0; index < items.length; index += 1) {
