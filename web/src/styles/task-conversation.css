@@ -98,6 +98,10 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* 引文贴着它下面那句话（回的就是它），跟上面的话隔开一点。 */
+.task-user-bubble > .message-quote { margin-top: 7px; }
+.task-user-bubble > .message-quote + p { margin-top: 4px; }
+.task-user-bubble > p + .message-quote { margin-top: 12px; }
 /* 你的气泡只装内容：谁发的、几点发的连同复制/删除，平时不画，指到气泡才在它上方右侧浮出。
    那一行不占排版高度，它的位置是这一条自己让出来的上边距（26px = 22px 一行 + 4px 离气泡的空），
    跟上一条的下边距折叠，出不出现会话都不跳。系统代发卡照旧带头——「系统」两个字就是它的内容。

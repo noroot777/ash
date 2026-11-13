@@ -29,6 +29,7 @@ import {
   noteReservationStillWaiting,
   readFreeReviewReservation,
   reservationWaitReason,
+  type ReservationWait,
 } from "./free-review-reservations.js";
 import { reviewingRun } from "./free-review-round.js";
 import { handoffBlockReason } from "./handoff-guard.js";
@@ -47,7 +48,7 @@ const retryPending = new Set<string>();
 export async function releaseReservationAfterRuling(taskId: string, opts: { retry?: boolean } = {}): Promise<void> {
   const note = opts.retry
     ? async () => false
-    : (reason: string, resumes?: string) => noteReservationStillWaiting(taskId, reason, resumes);
+    : (wait: ReservationWait, resumes?: string) => noteReservationStillWaiting(taskId, wait, resumes);
   if (!(await readFreeReviewReservation(taskId))?.armed) return;
   // **先占回合，再在锁里读全部判据**：资格只会在执行回合开跑时作废（forgetHeldTrigger ①），
   // 占住回合就没有执行回合能在「判完 → 开审」之间开跑；锁外读到的判据到消费那一刻可能已经
@@ -59,7 +60,7 @@ export async function releaseReservationAfterRuling(taskId: string, opts: { retr
     // 早过了（第 2 轮审查实测：只写一句「等当前回合结束」，放锁后什么都不会发生）。登记到
     // 它放锁之后再判一次；若接着开跑的是新的执行回合，它会作废资格，预约交给它自己的结算。
     retryAfterTurn(taskId);
-    await note("任务此刻有回合在进行", AFTER_CURRENT_TURN);
+    await note({ why: "busy", text: "任务此刻有回合在进行" }, AFTER_CURRENT_TURN);
     return;
   }
   try {
@@ -73,16 +74,16 @@ export async function releaseReservationAfterRuling(taskId: string, opts: { retr
     }
     // running/queued 由那一轮自己结算时消费。
     if (task.status === "running" || task.status === "queued") {
-      await note("任务此刻有回合在进行", AFTER_CURRENT_TURN);
+      await note({ why: "busy", text: "任务此刻有回合在进行" }, AFTER_CURRENT_TURN);
       return;
     }
     if (!heldByRuling(reservation)) {
-      await note("上一个执行回合没有正常结束");
+      await note({ why: "unsettled", text: "上一个执行回合没有正常结束" });
       return;
     }
     const { hasDeliverablePendingMessages } = await import("./pending-messages.js");
     if (await hasDeliverablePendingMessages(taskId)) {
-      await note("还有排队消息没送进会话，先把它们发完");
+      await note({ why: "queued", text: "还有排队消息没送进会话，先把它们发完" });
       return;
     }
     if (await reviewingRun(taskId)) return;

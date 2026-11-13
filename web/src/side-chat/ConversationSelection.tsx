@@ -60,7 +60,13 @@ export function ConversationSelection({ taskId, onAsk, onAddToReply, onAddToMemo
   };
   // 浮条实际有多宽取决于按钮个数和文案，量出来再贴边，别拿常数猜（猜小了会被右边缘切掉）。
   const [left, setLeft] = useState(8);
-  useDismissable({ enabled: !!selected, containerRef: toolbar, onClose: forget });
+  /*
+   * 会话区本身算浮条的「触发处」，点在里面不算点了外面：那里的点击归选区自己管 —— 选区
+   * 一变 selectionchange 就重算，收起了浮条跟着撤。要是也当成点外面，双击选词的第二下 click
+   * 落在正文上，会把刚弹出来的浮条当场关掉（选区还在，浮条却没了），能不能再出来全看后面
+   * 有没有别的事件碰巧再算一遍。三击选段、拖选的收尾都是同一回事。
+   */
+  useDismissable({ enabled: !!selected, containerRef: toolbar, restoreFocusRef: root, onClose: forget });
 
   useEffect(() => {
     forget();

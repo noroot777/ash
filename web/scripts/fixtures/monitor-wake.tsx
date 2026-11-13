@@ -6,6 +6,7 @@ import { endEvent, outputEvent, wakePayload } from "./monitor-wake-data.ts";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { buildConversationItems, type TimelineEntry } from "../../src/task-detail/conversationModel.ts";
 import { TeamFeed } from "../../src/team/TeamFeed.tsx";
+import { teamFeedRows } from "../../src/team/teamModel.ts";
 import { api } from "../../src/lib/api.ts";
 import "../../src/styles/global.css";
 
@@ -67,7 +68,7 @@ function Fixture() {
     </header>
     <div style={{ minHeight: 0, flex: 1, width: "100%", maxWidth: 1080, alignSelf: "center" }}>
       {team
-        ? <TeamFeed task={{ ...currentTask, mode: "team" }} rows={items.map((item) => ({ kind: "conv", key: item.id, item }))} workers={[]} onOpenWorker={() => undefined} onAskLead={() => undefined} delegatingIds={new Set()} indicatorForTask={() => null} />
+        ? <TeamFeed task={{ ...currentTask, mode: "team" }} rows={teamFeedRows(items, [])} workers={[]} onOpenWorker={() => undefined} onAskLead={() => undefined} delegatingIds={new Set()} indicatorForTask={() => null} />
         : <ConversationFeed task={currentTask} items={items} sessions={[production?.session ?? session]} loading={false} error={null} />}
     </div>
   </main>;

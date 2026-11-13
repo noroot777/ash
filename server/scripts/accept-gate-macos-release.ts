@@ -62,7 +62,7 @@ export async function testMacGateRelease(directory: string): Promise<object> {
     assert.equal(statSync(proofPath).mtimeMs, after, "released scanner must not keep rewriting evidence");
     assert.equal((await forceReleaseAcceptGate(taskId, runId)).ok, true);
     const details = { command: "test", summary: "failed", logPath, tail: "error", cwd: directory, sourceCwd: directory };
-    assert.match(gateFailurePrompt({ ...details, executionNotice: MAC_GATE_NOTICE }), /停止后快照保留，不自动删除/);
+    assert.match(gateFailurePrompt({ ...details, executionNotice: MAC_GATE_NOTICE }), /停止后快照保留到任务验收、归档或删除/);
     assert.doesNotMatch(gateFailurePrompt({ ...details, executionNotice: MAC_GATE_NOTICE }), /停止后快照会删除/);
     assert.match(gateFailurePrompt(details), /停止后快照会删除/);
     assert.match(gateStoppedSummary("macos-observed"), /已识别进程.*快照保留.*不代表未观察后代全部退出/);

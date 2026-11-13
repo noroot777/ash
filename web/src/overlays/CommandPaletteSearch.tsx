@@ -3,6 +3,7 @@ import type { SearchHit } from "@ash/shared";
 import type { SearchSort } from "@ash/shared/search";
 import { NotePencil } from "@phosphor-icons/react";
 import { formatInstant } from "../task-detail/utils.ts";
+import { highlightTerms } from "../search/searchTerms.ts";
 
 const FIELD_LABEL: Record<SearchHit["field"], string | null> = {
   // id 与 title 的证据本身就摆在行里(任务行的时间那一行开头总带着 id),不用再挂个小标签。
@@ -24,41 +25,6 @@ function isIdMatch(hit: SearchHit) {
 
 function SearchStatus({ hit }: { hit: Extract<SearchHit, { kind: "task" }> }) {
   return <span className={`palette-status is-${hit.status}`} />;
-}
-
-function highlightTerms(query: string): string[] {
-  const terms: string[] = [];
-  let value = "";
-  let quoted = false;
-  let excluded = false;
-  let started = false;
-  const flush = () => {
-    const term = value.trim();
-    if (term && !excluded) terms.push(term);
-    value = "";
-    excluded = false;
-    started = false;
-  };
-  for (let index = 0; index < query.length; index += 1) {
-    const character = query[index];
-    if (quoted) {
-      if (character === '"') quoted = false;
-      else value += character;
-    } else if (character === '"') {
-      quoted = true;
-      started = true;
-    } else if (character === "|" || /\s/.test(character)) {
-      flush();
-    } else if (!started && character === "-" && (index === 0 || /\s/.test(query[index - 1] ?? ""))) {
-      excluded = true;
-      started = true;
-    } else {
-      value += character;
-      started = true;
-    }
-  }
-  flush();
-  return [...new Set(terms)].sort((left, right) => right.length - left.length);
 }
 
 export function Highlight({ text, query }: { text: string; query: string }) {

@@ -7,6 +7,7 @@ import { reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";
 import { contentSegments } from "./conversationSegments.ts";
 import { traceRun, traceUsage } from "./conversationTraceGroups.ts";
 import { agentLabel, compactTurnText, sessionRun } from "./conversationTurnParts.ts";
+import { persistedTurnOutcome } from "./turnFailure.ts";
 
 /**
  * 把没被任何正文段认领的 trace 组铺成「执行过程」气泡，追加到 `items` 末尾。
@@ -57,11 +58,13 @@ export function appendTraceFragments(
       sessionId: session.id,
       label: agentLabel(session),
       agentType: session.agentType,
+      sessionRole: session.role,
       // 起点取第一条实质事件:被丢掉的复读正文往往比工具早好几分钟,拿组的 key 当起点
       // 会把「模型在写字」的时间算进这条执行过程的用时里。
       at: entries.find((entry) => entry.event.kind !== "usage")?.at ?? pending.turn,
       endedAt: null,
       markerEndedAt: null,
+      turnOutcome: persistedTurnOutcome(session, entries, pending.turn),
       session,
       run: traceRun(entries) ?? sessionRun(session),
       reviewer: reviewerOf(traceVerifyRound(entries), session?.role),

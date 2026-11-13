@@ -4,6 +4,7 @@ import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import type { TurnReceipt } from "./conversationSystemRows.ts";
 import { LaneBody } from "./ReviewVerdict.tsx";
 import { DeleteMessageButton } from "./MessageDelete.tsx";
+import { NoticeIconGlyph } from "./NoticeIconGlyph.tsx";
 import { laneReviewTarget } from "./reviewLaneLinks.ts";
 import { formatInstant } from "./utils.ts";
 
@@ -44,29 +45,33 @@ function ReceiptEntry({ receipt, previousAt }: { receipt: TurnReceipt; previousA
   return (
     <li className={`turn-receipt tone-${view.tone}`}>
       {time && <time dateTime={receipt.at} aria-label={formatInstant(receipt.at)}>{time}</time>}
-      {lane && review ? (
-        <button
-          type="button"
-          className="turn-receipt-more"
-          aria-label={go ? `${view.text}，在右侧审查格里打开这一轮` : undefined}
-          aria-expanded={go ? undefined : open}
-          aria-controls={go ? undefined : detailId}
-          onClick={() => (go ? go(laneReviewTarget(lane)) : setOpen((value) => !value))}
-        >
-          {text}
-        </button>
-      ) : view.detail ? (
-        <button
-          type="button"
-          className="turn-receipt-more"
-          aria-expanded={open}
-          aria-controls={detailId}
-          onClick={() => setOpen((value) => !value)}
-        >
-          {text}
-        </button>
-      ) : text}
-      {receipt.item && <DeleteMessageButton item={receipt.item} />}
+      {/* 图标、那一句、删除排在同一列里：窄栏时字在这一列里折行，不会整句掉到图标下面去。 */}
+      <span className="turn-receipt-body">
+        <NoticeIconGlyph icon={view.icon} />
+        {lane && review ? (
+          <button
+            type="button"
+            className="turn-receipt-more"
+            aria-label={go ? `${view.text}，在右侧审查格里打开这一轮` : undefined}
+            aria-expanded={go ? undefined : open}
+            aria-controls={go ? undefined : detailId}
+            onClick={() => (go ? go(laneReviewTarget(lane)) : setOpen((value) => !value))}
+          >
+            {text}
+          </button>
+        ) : view.detail ? (
+          <button
+            type="button"
+            className="turn-receipt-more"
+            aria-expanded={open}
+            aria-controls={detailId}
+            onClick={() => setOpen((value) => !value)}
+          >
+            {text}
+          </button>
+        ) : text}
+        {receipt.item && <DeleteMessageButton item={receipt.item} />}
+      </span>
       {lane && review && !go && open && (
         <div className="turn-receipt-lane">
           <LaneBody lane={lane} id={detailId} taskId={review.taskId} renderLane={review.renderLane} />

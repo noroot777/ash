@@ -212,12 +212,54 @@ function head(raw: string): string {
 /**
  * 整句是服务端的固定格式、中间原样夹着你写的字（命令、命令的输出、哨兵的描述）的那几种。它们只能按
  * 格式认（commandVerdict / gateVerdict / RECEIPT_LEADS），**不能**再拿去全文找字：命令里写一句
- * 「第 2 轮审查通过」「现在由你裁定：」，全文找字的那几处（审查轮起止、待裁定、工作区恢复…）就把
+ * 「第 2 轮审查通过」「现在由你裁定：」，全文找字的那几处（待裁定、工作区恢复…；审查轮起止已改成按起头认，见 REVIEW_ROUND_LEADS）就把
  * 一条没通过的命令认成了别的事。认老记录的各处先问它一声，是就只交给 legacyTier。
  */
 export function quotesUserText(raw: string): boolean {
   const text = head(raw);
   return text.startsWith(COMMAND_NOTE_HEAD) || text.startsWith(GATE_HEAD) || RECEIPT_LEADS.some((lead) => lead.test(text));
+}
+
+/**
+ * 审查轮的起止（没有类型的老记录；带类型的按类型认，见 conversationNotes 的 verifyMark）。同样**只认开头**：
+ * 全部会话记录里量过，真是一轮审查起止的那几句，服务端写死的说法都在句首；在全文里找「第 N 轮审查」，
+ * 引了哨兵描述、命令、审查意见的那些（「本回合要落的终态被拦下，改为检查点暂停：…（第 1 轮审查修复后重跑…）」
+ * 「你裁定把第 2 轮里超出本任务边界的…」「不再等哨兵「…第 4 轮审查…」…」）都会被认成一轮的起止，
+ * 把审查段和哨兵叫醒的并回一起切碎。
+ *
+ * `word` 是紧跟在开头后面的那个词，开区间还是收口看它（`ROUND_OPENERS`）。
+ */
+const REVIEW_ROUND_LEADS: readonly { kind: "inline" | "free" | "merge"; lead: RegExp }[] = [
+  // free-review-round / free-review-finalization
+  { kind: "free", lead: /^自由工作流第\s*(?<round>\d+)\s*轮审查(?<word>开始|重跑上一回合|从中断处继续|通过|未通过|未能正常给出结论|启动失败|已终止)/ },
+  // free-review-manual-repair（「完成修复」是更早的服务端写的）
+  { kind: "free", lead: /^已按自由工作流第\s*(?<round>\d+)\s*轮审查意见(?<word>发起修复|完成修复)/ },
+  // 收尾时不带轮号的那几条：复审次数用完、验证打回本身报错。
+  { kind: "free", lead: /^(?<word>自由工作流审查仍未通过|验证打回)/ },
+  // review / review-finalization / verify-override（就地验证）
+  { kind: "inline", lead: /^第\s*(?<round>\d+)\s*轮验证(?<word>开始|结束时|已结束|未通过|仍未通过|以|启动失败|已终止|没有给出结论)/ },
+  // 更早的服务端：就地验证叫「审查」的那几年，以及独立审查任务收尾的那一句。
+  { kind: "inline", lead: /^第\s*(?<round>\d+)\s*轮审查(?<word>未通过|仍未通过|任务\s*\S+\s*以)/ },
+  // post-merge-review：跑在验收后的只读快照上，从头到尾没有轮号。同前缀的杂音（「合并结果审查临时工作区清理
+  // 失败」）不在这张表里。
+  { kind: "merge", lead: /^合并结果审查(?<word>开始|重跑上一回合|从中断处继续|通过|未通过|未能正常给出结论|启动失败)/ },
+];
+// 开区间的词：「开始」，以及重跑那两句（「重跑上一回合」＝重发任务书从头跑，「从中断处继续」＝接着上一回合做）
+// ——它们开的都是同一轮的新回合，判成收口的话，重跑后审查者的发言会整段掉出区间。
+const ROUND_OPENERS = new Set(["开始", "重跑上一回合", "从中断处继续"]);
+
+export type LegacyReviewMark = { kind: "inline" | "free" | "merge"; round: number | null; phase: "start" | "end" };
+
+/** 没有类型的老记录是不是一轮审查的起止（按起头认，见 REVIEW_ROUND_LEADS）。 */
+export function legacyReviewMark(raw: string): LegacyReviewMark | null {
+  const text = head(raw);
+  for (const { kind, lead } of REVIEW_ROUND_LEADS) {
+    const groups = lead.exec(text)?.groups;
+    if (!groups) continue;
+    const round = groups.round === undefined ? null : Number(groups.round);
+    return { kind, round: Number.isFinite(round) ? round : null, phase: ROUND_OPENERS.has(groups.word ?? "") ? "start" : "end" };
+  }
+  return null;
 }
 
 function alertShape(text: string): boolean {

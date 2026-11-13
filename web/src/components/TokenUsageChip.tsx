@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { TokenUsage } from "@ash/shared";
-import { formatTokens, formatTokensExact, hasUsage, usageTotal } from "@ash/shared/usage";
+import { formatTokens, formatTokensExact, hasUsage, outputRate, usageTotal } from "@ash/shared/usage";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
 
@@ -93,10 +93,11 @@ const PARTS: { key: "input" | "cacheRead" | "cacheWrite" | "output"; label: stri
 /**
  * 一条按占比切开的横条，下面一份一行：数和占比。缓存读按上游报的原样计入总量——它便宜得多，
  * 但确实进了上下文；横条让「这一轮大头是缓存读」一眼看得出，不用再写一句说明。
- * 思考算在输出里，挂在输出下面一行，不进横条。
+ * 思考算在输出里，挂在输出下面一行，不进横条；输出速度同样挂在那儿，这一轮没计上时就不出现。
  */
 function UsageBreakdown({ usage, total }: { usage: TokenUsage; total: number }) {
   const parts = PARTS.filter((part) => usage[part.key] > 0);
+  const rate = outputRate(usage);
   const share = (n: number) => {
     const pct = (n / total) * 100;
     return pct >= 1 ? `${Math.round(pct)}%` : "<1%";
@@ -121,7 +122,17 @@ function UsageBreakdown({ usage, total }: { usage: TokenUsage; total: number }) 
             <dd />
           </div>
         )}
+        {rate !== null && (
+          <div className="is-sub" aria-label={`输出速度每秒 ${formatRate(rate)} token`}>
+            <dt>速度</dt>
+            <dd>{formatRate(rate)}/s</dd>
+            <dd />
+          </div>
+        )}
       </dl>
     </>
   );
 }
+
+/** 慢到个位数时留一位小数,不然 0.4 会写成 0,读着像「没在出字」;再慢就只说不到 0.1。 */
+const formatRate = (rate: number) => (rate < 0.1 ? "<0.1" : rate < 10 ? rate.toFixed(1) : String(Math.round(rate)));

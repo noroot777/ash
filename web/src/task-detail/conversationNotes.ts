@@ -7,7 +7,7 @@
 //   boundary 回合边界(本轮执行结束 / 执行异常结束 / 本回合结束),保留整宽横线
 import { SESSION_POISON_DIAGNOSIS_PREFIX, stripSessionNotes } from "@ash/shared/session-notes";
 import type { TimelineNotice } from "@ash/shared/timeline-notice";
-import { quotesUserText } from "./legacyNoticeTable.ts";
+import { legacyReviewMark } from "./legacyNoticeTable.ts";
 
 // notice = 结算说明（「这一轮为什么落成这个状态」）。它由服务端**显式标记**（事件和落盘
 // 行上的 level:"notice"），不参与下面的关键词推断 —— 这类说明里天然带着「未完成」，猜出
@@ -54,9 +54,6 @@ export function noteTone(text: string): ConversationEventTone {
 // 「自由工作流第 N 轮审查…」（free-workflow.ts）。两边分开认，因为它们能推出的东西不
 // 一样：就地验证是搭在被验任务自己会话上的，区间内说话的那个人**就是**审查者；自由
 // 派审另开一条 reviewer 会话，区间只能用来补轮次，不能拿来改别人的身份。
-//
-// 跟 noteTone 一样**只认关键词**：措辞由服务端那两处定，判错了最多是竖条颜色不对，
-// 不会把会话切错段。
 export type VerifyNoteMark = {
   kind: "inline" | "free" | "merge";
   round: number | null;
@@ -70,52 +67,13 @@ export type VerifyNoteMark = {
   rerun?: boolean;
 };
 
-const VERIFY_NOTE = /(自由工作流)?第\s*(\d+)\s*轮(验证|审查)/;
-// 收尾时不带轮号的那几条：复审次数用完、验证打回本身报错。
-const TAILS = /自由工作流审查仍未通过|验证打回/;
-// 合并结果审查（post-merge-review.ts）跑在验收后的只读快照上，从头到尾没有轮号，
-// 所以只能按前缀认。这里**不能**跟上面一样只认关键词：「合并结果审查临时工作区清理
-// 失败」「已从合并结果审查创建独立修复任务」都带同一个词却不是这一轮的起止，认宽了
-// 会把审查段切碎。故起止各用一张白名单，只收服务端确实写过的那几句。
-const MERGE_START = /^合并结果审查(开始|重跑上一回合|从中断处继续)/;
-const MERGE_END = /^合并结果审查(通过|未通过|未能正常给出结论|启动失败)/;
-// 开区间的词：「开始」，以及重跑那两句（「重跑上一回合」＝重发任务书从头跑，「从中断处
-// 继续」＝接着上一回合做）——它们开的都是同一轮的新回合，把它判成收口的话，重跑后审查者
-// 的发言会整段掉出区间（没徽标、也进不了折叠卡）。
-const STARTS = /开始|重跑上一回合|从中断处继续/;
 /**
- * 辩论的旁注**不是**审查轮的起止。
- *
- * 它们讲的是「这一轮审查意见被驳回之后，双方在辩它」，而不是「又开了一轮审查」——
- * 可措辞里天然带着轮号：`开始辩论第 1 轮审查意见：…`（free-review-debate.ts）。上面
- * 那条 VERIFY_NOTE 认的是「第 N 轮审查」这四个字，于是它被读成 `inline / round 1 /
- * start`（前缀「自由工作流」没在，所以还退化成了**验证**），当场开出一张「第 1 轮验证」
- * 的卡；而服务端从不为它写任何一条就地验证的收尾旁注，这张卡就**永远停在「进行中」**，
- * 还把第 1 段辩论发言吞了进去（用户 2026-09-24 截图报的）。
- *
- * 判据放在 verifyNoteOf 的**最前面**而不是改服务端文案：下一次有人在旁注里顺手写下
- * 「第 N 轮审查」同样会中招，parser 不该指望每一处文案都绕着它走。
+ * 没有类型的老记录：只认句首那几句服务端写死的说法（legacyNoticeTable 的 REVIEW_ROUND_LEADS，
+ * 跟认提醒的那张起头表放在一处）。辩论旁注（「开始辩论第 1 轮审查意见：…」）、引了哨兵描述或命令的
+ * 回执，开头都不是这几句，自然不算。
  */
-const DEBATE_NOTE = /辩论/;
-
 export function verifyNoteOf(text: string): VerifyNoteMark | null {
-  // 命令、哨兵描述里写的「第 N 轮审查…」不是审查轮的起止（见 quotesUserText）。
-  if (DEBATE_NOTE.test(text) || quotesUserText(text)) return null;
-  const matched = VERIFY_NOTE.exec(text);
-  if (matched) {
-    const round = Number(matched[2]);
-    return {
-      kind: matched[1] ? "free" : "inline",
-      round: Number.isFinite(round) ? round : null,
-      // 收区间的是：通过 / 未通过 / 以…结束 / 启动失败 / 按意见发起修复，其中
-      // 「启动失败」收的是一个根本没跑起来的区间。
-      phase: STARTS.test(text) ? "start" : "end",
-    };
-  }
-  if (MERGE_START.test(text)) return { kind: "merge", round: null, phase: "start" };
-  if (MERGE_END.test(text)) return { kind: "merge", round: null, phase: "end" };
-  if (TAILS.test(text)) return { kind: "free", round: null, phase: "end" };
-  return null;
+  return legacyReviewMark(text);
 }
 
 export function isVerifyNote(text: string, notice?: TimelineNotice): boolean {

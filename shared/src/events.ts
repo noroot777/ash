@@ -7,7 +7,7 @@
 // (见 server/CLAUDE.md「执行器与模型」最后一条)。`import type` / `export type`
 // 编译期就被抹掉,所以安全 —— 下面对 ./index.js 的反向 type import 同理。
 import type { AgentType, DuetConsensusBy, QuestionItem, Task, TaskStage, TaskStatus } from "./index.ts";
-import type { SessionRole } from "./session.ts";
+import type { SessionRole, TurnOutcome } from "./session.ts";
 import type { ContextUsage, TokenUsage, UsageAccountingMark } from "./usage.ts";
 import type { NativeWorkEvent } from "./native-work.ts";
 import type { MonitorWakeData } from "./monitor-wake.ts";
@@ -117,10 +117,12 @@ export type AgentEvent =
   // `since` = 从哪一刻开始等的（重启接管不重新起算期限）。`interrupted` = 这个结尾是 ash 插话
   // 打断出来的，进程还要接着跑下一段。`epoch` = 这个结尾属于第几个回合（ResidentHandle.epoch）：
   // 消费到它时已经开了新回合，它就过期了，不再据它收台或开始等。
-  | { kind: "turnEnd"; background?: { agent: number; workflow: number; since?: string }; interrupted?: true; epoch?: number }
+  // `turnOutcome`(两种结尾都可能带)= 这一回合自己的结局,跟落进 `session_turns.outcome` 的同一份
+  // (见 Session.turnOutcomes)。进程 exit 0 却被判失败的那种只有它说得清;缺省 = 不知道。
+  | { kind: "turnEnd"; background?: { agent: number; workflow: number; since?: string }; interrupted?: true; epoch?: number; turnOutcome?: TurnOutcome }
   // `unfinished` = 进程没了的那一刻名下还有后台子代理 / 工作流没跑完（单飞据此不按完成结算）；
   // `unknown` = 后台状态核实不了（重启接管时读不出之前的输出），计数只是已知的那部分。
-  | { kind: "done"; exitStatus: number; unfinished?: { agent: number; workflow: number; unknown?: true } };
+  | { kind: "done"; exitStatus: number; unfinished?: { agent: number; workflow: number; unknown?: true }; turnOutcome?: TurnOutcome };
 
 // synthesis = 收敛后的合稿轮(共同方案);impl/review are legacy transcript speakers
 export type DuetSpeaker = "A" | "B" | "synthesis" | "impl" | "review" | "user";
@@ -197,6 +199,11 @@ export type ServerEvent =
       // 需求」的发言长得一模一样（同执行器自审时连名字都一样）。跟 model/reasoningEffort
       // 一样按回合随流广播，落盘那份在 trace 的 run 事件里，两条路读出来必须一致。
       verifyRound?: number | null;
+      // 这条事件属于哪一回合：跟它落进 trace 时挂的那个 `turnStartedAt` 是同一个值。前端按它
+      // 给实时事件认气泡 —— 会话行上的 `turnStartedAt` 只说「此刻最新那一回合」，下一回合一
+      // 开始，拿它去认上一回合的事件就认错了（不经重读接着看的页面，上一回合会被劈成两颗）。
+      // 缺省 = 发出方不知道（回合外的旁注、老服务端），读端退回按会话行认。
+      turnStartedAt?: string | null;
       event: AgentEvent;
     }
   // A user-channel turn after it has been persisted to the session transcript.

@@ -32,6 +32,9 @@ export function publish(lead: Lead, event: AgentEvent): void {
     agentType: lead.agentType,
     model: lead.model,
     reasoningEffort: lead.reasoningEffort,
+    // 队首那一轮（= 执行器此刻在答的那一轮，trace 也挂在它上面）。会话行上记的是「最近一次
+    // 投入」，用户插话排队时两者不是同一个（见 lead-turns.ts 的 adoptFront）。
+    turnStartedAt: lead.turnStart,
     event,
   });
 }
