@@ -10,6 +10,9 @@
 //   ② 任务落终态时的钩子(status.ts)——排队消息的正常路径,做到「跑完立刻发出」,
 //      不让用户对着一条已经该发的消息干等最多 30 秒
 // 于是「排队」不需要第二套定时器:它就是一条永远已到期、但要等任务空闲的消息。
+//   ③ ②那次扫描**之后**、回合锁放开**之前**才入队的消息(结算钩子里入队的审查修复指令、
+//      撞上收尾窗口的回复/答复):②已经扫过、看不到它,所以入队方自己登记
+//      `flushPendingWhenTurnIdle` —— 锁一放就再扫一遍,不落回①。
 //
 // **②被挡回时不许退回去等①。** 投递有一串「一个字都没送出去」的出口(回合被抢占、
 // 验收互斥、调度台拒收),它们原本既不出声也不重排,结果就是消息静静躺在托盘里等那个
@@ -517,6 +520,12 @@ export function flushPendingForTask(taskId: string): void {
     if (dbClient.closed) return;
     console.error(`[ash] deliverPendingMessages(${taskId}) failed:`, err);
   });
+}
+
+// 触发源③(见文件头):任务空着就立刻扫,回合还占着就排到它放锁那一刻。重复触发无害 ——
+// 同一任务的投递有 inFlight 与租约兜着,只会多扫一遍。
+export function flushPendingWhenTurnIdle(taskId: string): void {
+  whenTurnIdle(taskId, () => flushPendingForTask(taskId));
 }
 
 // 让位交接(第 xNb655YqYzcA 链第 3 轮):队列推进 / 手动运行 / 重试要拉起一个任务时,

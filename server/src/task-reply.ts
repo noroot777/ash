@@ -10,7 +10,7 @@ import { actorOf, ownerIdOf } from "./auth/context.js";
 import { visibleTaskIds } from "./auth/visibility.js";
 import { continueTask } from "./orchestrator.js";
 import { AfterTargetGoneError, resolveAfterTarget } from "./pending-after.js";
-import { enqueueMessage, flushPendingForTask } from "./pending-messages.js";
+import { enqueueMessage, flushPendingWhenTurnIdle } from "./pending-messages.js";
 import { queueBlockers } from "./queues.js";
 import { claimQueueSeat } from "./queue-seat.js";
 import { nativeCliCommand } from "./skills.js";
@@ -18,7 +18,6 @@ import { leadTypeOf } from "./team/session.js";
 import { replyWithAnnotationBatch } from "./page-annotation-routes.js";
 import { taskCliCommand } from "./task-cli-command.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
-import { whenTurnIdle } from "./runs.js";
 
 export type TaskReplyBody = {
   text?: string;
@@ -184,28 +183,16 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
       .finally(async () => {
         if (seat) await seat.release().catch((err) => console.error(`[ash] 回复续跑 ${taskId} 释放执行位失败:`, err));
         // 先放执行位再登记唤醒:扫描要重新认领它,自己还占着就会被当成「已有启动路径」挡回。
-        if (stashed) deliverWhenTurnIdle(taskId);
+        if (stashed) flushPendingWhenTurnIdle(taskId);
       });
     return c.json({ started: true }, 202);
   }
   void continueTask(taskId, text, route).then(async (started) => {
     if (started) return;
     await enqueueMessage({ taskId, text, ...route, agent: b.agent ?? null, ownerUserId: route.actingUserId });
-    deliverWhenTurnIdle(taskId);
+    flushPendingWhenTurnIdle(taskId);
   }).catch((error) => {
     void appendTaskTimeline(taskId, alertLine(`续聊未能启动：${error instanceof Error ? error.message : String(error)}`)).catch((failure) => console.error("[ash] 续聊失败说明写入失败:", failure));
   });
   return c.json({ started: true }, 202);
-}
-
-/**
- * 回合被占、原话只能入队时，登记「这一轮一放开就送」。
- *
- * 占着回合的多半是**正在收尾**的上一轮:它落终态那一刻已经扫过一次待发送(status.ts 的
- * 补送钩子),那时这一行还不存在;锁放开时只会跑已经登记过的 `whenTurnIdle`。不在这里补
- * 一笔，这条回复就只能干等 30 秒一次的兜底 tick,托盘一直挂着「等待当前一轮结束」。
- * 重复触发无害：同一任务的投递有 inFlight 与租约兜着，只会多扫一遍。
- */
-function deliverWhenTurnIdle(taskId: string): void {
-  whenTurnIdle(taskId, () => flushPendingForTask(taskId));
 }

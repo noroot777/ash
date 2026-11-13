@@ -11,7 +11,7 @@ import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
 import { createDeliveryLease } from "./delivery-lease.js";
-import { abortDelivery, beginDelivery, deliveryOptions, flushPendingForTask, markSent } from "./pending-messages.js";
+import { abortDelivery, beginDelivery, deliveryOptions, flushPendingWhenTurnIdle, markSent } from "./pending-messages.js";
 import {
   isRunning,
   isCanceling,
@@ -21,7 +21,6 @@ import {
   type NativeSteerReservation,
   type StopSettle,
   turnRole,
-  whenTurnIdle,
 } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
@@ -210,7 +209,7 @@ async function deliverNativeSteer(
           message.taskId,
           receiptLine("Claude 未确认原生引导，已结束当前回合；这条排队消息会由新回合重新投递。"),
         );
-        whenTurnIdle(message.taskId, () => flushPendingForTask(message.taskId));
+        flushPendingWhenTurnIdle(message.taskId);
       }
     } else {
       // provider 已经接收，不能把原话退回队列再投一次；尽力把 sent 记账补齐。

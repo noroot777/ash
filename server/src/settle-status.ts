@@ -56,6 +56,15 @@ export async function afterSettlement(
     // Review orchestration is a post-settlement side effect. A failure here must
     // never rewrite an already-settled worker/reviewer status.
     console.error(`[ash] review settlement hook failed for ${taskId}:`, error);
+  } finally {
+    // 上面两个钩子会往托盘里放消息(审查未通过的修复指令、打回重做),而排队消息的「任务空下来」
+    // 扫描挂在**落状态那一刻**(status.ts) —— 比这里早,看不到它们;回合锁又要等调用方收完尾
+    // 才放。不在这里补登记,那条指令只能干等 30 秒一次的兜底 tick:用户看到「第 N 轮审查
+    // 未通过」之后执行者迟迟不动,库里 sent_at 全落在 tick 的相位上(2026-11-13 实测)。
+    // 动态 import 的理由同 status.ts:pending-messages 那条链会绕回本文件。
+    await import("./pending-messages.js")
+      .then(({ flushPendingWhenTurnIdle }) => flushPendingWhenTurnIdle(taskId))
+      .catch((error) => console.error(`[ash] 结算后的待发送唤醒登记失败 ${taskId}:`, error));
   }
 }
 

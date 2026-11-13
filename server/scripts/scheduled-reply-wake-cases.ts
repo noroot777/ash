@@ -46,4 +46,37 @@ export async function runReplyWakeCases(ctx: HandoffCaseContext): Promise<void> 
     return s !== "running" && s !== "queued";
   }, "排着的回复送出去的那一轮没有结算");
   console.log("✓ 回复撞上收尾窗口:原话入队,上一轮的锁一放立刻送达,不等兜底 tick");
+
+  // 同一个窗口的**答复**形态:提问那一轮已经落了 paused(所以答复不再被 409 挡回),run loop
+  // 却还在收尾、锁没放。团队调度者收到【执行者提问】就答,正好落在这一段里。
+  const askId = "scheduled-single-answer-settling";
+  const answer = "提问那一轮刚收尾就给的答复不许干等兜底(answer-wake)";
+  await db.insert(tasks).values({
+    ...taskRow(askId, "claude", "paused"), mode: "single", team: null, question: "接下来采用新方案还是旧方案？",
+  });
+  await db.insert(sessions).values({
+    id: "scheduled-answer-settling-prev", taskId: askId, role: "single", agentType: "claude",
+    executor: "claude@test", cwd: ctx.root, cliSessionId: "scheduled-answer-settling-cli", startedAt: ctx.at,
+  });
+  assert.equal(runs.claimTurn(askId), true, "测试自身前提:收尾中的提问那一轮应该占得到锁");
+  const answered = await api.request(`/tasks/${askId}/answer`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ answer }),
+  });
+  assert.equal(answered.status, 200, "提问回合已落 paused,答复应被接住");
+  const answerRow = async () => (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.taskId, askId))).at(0);
+  await waitFor(async () => (await answerRow())?.status === "pending", "锁还占着时这条答复应该原话入队");
+  assert.equal((await answerRow())?.execution, true, "被回合挡回的答复仍是执行型");
+  assert.equal(countIn(leadLog, "answer-wake"), 0, "锁还占着就不该把答复送进任何 stdin");
+
+  runs.releaseTurn(askId); // 提问那一轮的 run loop 收尾完毕
+  await waitFor(() => countIn(leadLog, "answer-wake") > 0,
+    "提问那一轮的锁一放,排着的答复就该送进会话 —— 没人登记唤醒的话它要干等 30 秒兜底 tick");
+  await waitFor(async () => (await answerRow())?.status === "sent", "答复送进会话之后这一行应标 sent");
+  await waitFor(async () => {
+    const s = (await db.select().from(tasks).where(eq(tasks.id, askId))).at(0)!.status;
+    return s !== "running" && s !== "queued";
+  }, "排着的答复送出去的那一轮没有结算");
+  assert.equal(countIn(leadLog, "answer-wake"), 1, "同一条答复只送一次");
+  console.log("✓ 答复撞上收尾窗口:原话入队,提问那一轮的锁一放立刻送达,不等兜底 tick");
 }
