@@ -26,6 +26,8 @@
 .task-message--agent:focus-within .turn-acts,
 .turn-acts.is-shown,
 .turn-acts:has([aria-expanded="true"]) { opacity: 1; }
+/* 「N 条记录」摊开以后流水接在这一排下面：这时它占住自己的高度，不压住流水的第一行。 */
+.turn-acts:has(.turn-receipts-toggle[aria-expanded="true"]) { height: auto; margin-bottom: 2px; }
 /* 刚发出去的那一句（run-1）：上移 4px 淡入。 */
 .task-message--user.is-fresh { animation: user-bubble-in var(--dur-2) var(--ease-out) backwards; }
 @keyframes user-bubble-in { from { opacity: 0; transform: translateY(4px); } }
@@ -374,16 +376,19 @@
 .system-action-line .message-delete-button,
 .conversation-note .message-delete-button,
 .system-boundary .message-delete-button,
-.notice-line .message-delete-button,
+.turn-footnote .message-delete-button,
+.command-reply .message-delete-button,
 .turn-receipt .message-delete-button { display: inline-grid; flex: none; width: 18px; height: 18px; align-self: center; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--faint); opacity: 0; cursor: pointer; vertical-align: middle; }
 .system-action-wrap:hover .system-action-line .message-delete-button,
 .conversation-note:hover .message-delete-button,
 .system-boundary:hover .message-delete-button,
-.notice-line:hover .message-delete-button,
+.turn-footnote:hover .message-delete-button,
+.command-reply:hover .message-delete-button,
 .turn-receipt:hover .message-delete-button,
 .message-delete-button:focus-visible { opacity: 1; }
 .system-action-line .message-delete-button:hover,
 .conversation-note .message-delete-button:hover,
 .system-boundary .message-delete-button:hover,
-.notice-line .message-delete-button:hover,
+.turn-footnote .message-delete-button:hover,
+.command-reply .message-delete-button:hover,
 .turn-receipt .message-delete-button:hover { background: var(--raised); color: var(--red); }

@@ -1,4 +1,4 @@
-// 审查轮在会话里的实际渲染：出了结论的一轮收成一句（颜色只在图标上，谁审的、用时指到才出），
+// 审查轮在会话里的实际渲染：出了结论的一轮是被审那一回合尾注里的一句（谁审的、用时指到才出），
 // 还在跑的一轮是一张卡。判定逻辑由 test:reviewer-turn 钉住，这里钉的是「看得出来」和「没动别的」。
 // 设 SHOT=<路径> 可以顺带截一张图自查版式。
 import assert from "node:assert/strict";
@@ -38,31 +38,26 @@ try {
     assert.equal(await messages.nth(index).locator(".turn-head > b").count(), 1, `第 ${index + 1} 段该报身份`);
   }
 
-  const milestones = page.locator(".review-milestone");
+  // 收了口的审查轮不占行：结论记在它前面那一回合上，同一回合重审过的只留最近一次。
+  assert.equal(await page.locator(".review-milestone, .notice-line").count(), 0, "审查结论不再独占一行");
+  // 摊开一轮以后审查者的发言也是 .task-message--agent：按顶层那两回合认，不按下标数。
+  const footnoteOf = (index) => page.locator(".task-conversation > .task-message--agent").nth(index).locator(":scope > .task-message-content > .turn-footnote");
   assert.deepEqual(
-    await milestones.evaluateAll((els) => els.map((el) => el.getAttribute("aria-label"))),
-    ["第 2 轮验证未通过", "第 3 轮验证通过", "第 1 轮审查没有给出结论", "第 1 轮审查通过"],
-    "一轮一句，结论写在字里；自由派审不沿用就地验证的「验证」",
+    await messages.evaluateAll((els) => els.map((el) => [...el.querySelectorAll(".turn-footnote-text")].map((t) => t.textContent))),
+    [["第 2 轮验证未通过"], ["第 1 轮审查通过"]],
+    "一回合一句结论；自由派审不沿用就地验证的「验证」；重跑、重审过的不并排",
   );
-  assert.deepEqual(
-    await milestones.locator(".notice-line").evaluateAll((els) => els.map((el) => [...el.classList].find((name) => name.startsWith("tone-")))),
-    ["tone-bad", "tone-ok", "tone-warn", "tone-ok"],
-  );
-  const colors = await milestones.locator(".notice-line").evaluateAll((els) => els.map((el) => ({
-    icon: getComputedStyle(el.querySelector(".notice-line-icon")).color,
-    text: getComputedStyle(el.querySelector(".notice-line-text")).color,
-  })));
-  assert.notEqual(colors[0].icon, colors[1].icon, "未通过与通过只在图标上分颜色");
-  assert.equal(new Set(colors.map((c) => c.text)).size, 1, "字都是同一种颜色");
+  assert.equal(await page.locator(".turn-footnote-dot").count(), 0, "前一回合上的未通过是过去的事，通过不带颜色");
+  assert.equal(await page.locator(".turn-footnote svg").count(), 0, "尾注没有图标");
 
-  // 谁审的、用时、时刻紧跟在字后面，指到才出。
-  const first = milestones.nth(0);
-  assert.equal(await first.locator(".notice-line-tail").innerText(), "codex@cpa·gpt-5.6-sol · 30m 0s · 08/10 12:10");
+  // 谁审的、用时、时刻跟在字后面，指到才出。
+  const first = footnoteOf(0);
+  assert.equal(await first.locator(".turn-footnote-tail").innerText(), "codex@cpa·gpt-5.6-sol · 30m 0s · 08/10 12:10");
   await page.mouse.move(990, 5);
-  await page.waitForFunction(() => getComputedStyle(document.querySelector(".review-milestone .notice-line-tail")).opacity === "0");
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".turn-footnote-tail")).opacity === "0");
   await first.hover();
-  await page.waitForFunction(() => getComputedStyle(document.querySelector(".review-milestone .notice-line-tail")).opacity === "1");
-  assert.equal(await milestones.nth(3).locator(".notice-line-tail").innerText(), "claude@5.5审查 · 12m 0s · 08/10 23:13");
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".turn-footnote-tail")).opacity === "1");
+  assert.equal(await footnoteOf(1).locator(".turn-footnote-tail").innerText(), "claude@5.5审查 · 12m 0s · 08/10 23:13");
 
   // 还在跑的那一轮照旧是整张卡：看得见审查者在说什么（这一轮还没开口，卡里是空的）。
   const lanes = page.locator(".verify-lane");
@@ -74,23 +69,34 @@ try {
 
   assert.equal(await page.getByText(/审查开始|审查重跑上一回合/).count(), 0, "开始旁注不在会话里");
   assert.equal(await page.getByText(/请先完整读取 report\.md/).count(), 0, "自由审查修复 prompt 不伪装成系统消息块");
-  // 普通任务的续跑标记是那一回合的一条记录，审查轮里的那条不外露。
+  // 普通任务的续跑标记、连同审查结论，都是那一回合的记录；审查轮里的那条续跑标记不外露。
   await messages.nth(0).hover();
   await messages.nth(0).locator(".turn-receipts-toggle").click();
-  assert.match(await messages.nth(0).locator(".turn-receipt-log").innerText(), /继续（从中断处）/);
-  assert.equal(await page.locator(".turn-receipts-toggle").count(), 1, "审查轮里的续跑标记不外露");
+  const firstLog = await messages.nth(0).locator(".turn-receipt-log").innerText();
+  assert.match(firstLog, /继续（从中断处）[\s\S]*第 2 轮验证未通过/);
+  await messages.nth(1).hover();
+  await messages.nth(1).locator(".turn-receipts-toggle").click();
+  assert.deepEqual(
+    await messages.nth(1).locator(".turn-receipt-text").allInnerTexts(),
+    ["第 3 轮验证通过", "第 1 轮审查没有给出结论", "第 1 轮审查通过"],
+    "被盖过的结论照样在记录里",
+  );
+  assert.equal(await page.locator(".turn-receipt-log").filter({ hasText: "继续（从中断处）" }).count(), 1, "审查轮里的续跑标记不外露");
 
-  // 没有右侧审查格可去（只读视图）：点那一句就地摊开这一轮。
-  await first.locator(":scope > .notice-line button.notice-line-button").click();
-  const body = first.locator(".review-milestone-body");
+  // 没有右侧审查格可去（只读视图）：点那一句就在尾注下面摊开这一轮；键盘走得到。
+  const part = first.locator("button.turn-footnote-part");
+  await part.focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await part.getAttribute("aria-expanded"), "true");
+  const body = first.locator(".turn-footnote-lane");
   await body.waitFor();
   const reviewerTurn = body.locator(".task-message--agent.is-reviewer");
   assert.equal(await reviewerTurn.count(), 1, "审查者的发言在这一轮里");
   assert.equal(await reviewerTurn.locator(".turn-head > b").count(), 0, "身份由那一句代言");
   assert.equal(await reviewerTurn.locator(".task-message-avatar").count(), 0, "摊开的那一轮里不再挂头像");
   const aligned = await page.evaluate(() => {
-    const line = document.querySelector(".review-milestone .notice-line-text").getBoundingClientRect();
-    const turn = document.querySelector(".review-milestone-body .task-message-content").getBoundingClientRect();
+    const line = document.querySelector(".turn-footnote-text").getBoundingClientRect();
+    const turn = document.querySelector(".turn-footnote-lane .task-message-content").getBoundingClientRect();
     return { line: Math.round(line.left), turn: Math.round(turn.left) };
   });
   assert.ok(aligned.turn >= aligned.line, "摊开的发言收在那一句下面，不往外凸");
@@ -104,18 +110,16 @@ try {
   assert.equal(page.context().pages().length, pageCount);
   await reportDialog.getByRole("button", { name: "关闭审查报告" }).click();
 
-  // 启动失败那一轮不能占用后来重跑生成的报告；自由派审走另一条带 runId 的路由。
-  await milestones.nth(2).locator(":scope > .notice-line button.notice-line-button").click();
-  assert.equal(await milestones.nth(2).getByRole("button", { name: "审查报告" }).count(), 0);
-  await milestones.nth(3).locator(":scope > .notice-line button.notice-line-button").click();
-  const freeBody = milestones.nth(3).locator(".review-milestone-body");
+  // 自由派审走另一条带 runId 的路由；启动失败那一次不占用后来重跑生成的报告。
+  await footnoteOf(1).locator("button.turn-footnote-part").click();
+  const freeBody = footnoteOf(1).locator(".turn-footnote-lane");
   assert.equal(await freeBody.locator(".task-message--agent.is-reviewer").count(), 1, "自由派审的正文归它自己那一轮");
   await freeBody.getByRole("button", { name: "审查报告" }).click();
   const freeDialog = page.getByRole("dialog", { name: /report\.md/ });
   await freeDialog.getByText(/自由派审报告 fr1 第 1 轮/).waitFor();
   await freeDialog.getByRole("button", { name: "关闭审查报告" }).click();
-  await first.locator(":scope > .notice-line button.notice-line-button").click();
-  assert.equal(await first.locator(".review-milestone-body").count(), 0, "再点一下收起");
+  await part.click();
+  assert.equal(await first.locator(".turn-footnote-lane").count(), 0, "再点一下收起");
 
   // 执行方恢复普通任务原来的无卡片排版。
   const layout = await page.evaluate(() => {
@@ -176,7 +180,7 @@ try {
     };
     return {
       laneBy: ratio(document.querySelector(".verify-lane-by")),
-      milestone: ratio(document.querySelector(".review-milestone .notice-line-text")),
+      footnote: ratio(document.querySelector(".turn-footnote-text")),
     };
   });
   for (const [name, value] of Object.entries(contrasts)) {

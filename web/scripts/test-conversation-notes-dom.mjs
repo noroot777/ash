@@ -20,24 +20,28 @@ try {
   });
   await page.goto(`${web.origin}/scripts/fixtures/conversation-notes.html`);
 
-  // 这份 fixture 全是**没有类型的老记录**：照样分得出三档。
-  const lines = page.locator(".notice-line");
-  await lines.first().waitFor();
-  assert.deepEqual(
-    await lines.locator(".notice-line-text").allInnerTexts(),
-    ["第 2 轮审查通过", "已验收，合并到 feat/free-pipeline", "第 3 轮审查未通过", "工作区已恢复，会话内容都在", "本回合没有交卷"],
-    "会话里常显的只有里程碑和要你知道的那几条",
-  );
+  // 这份 fixture 全是**没有类型的老记录**：照样认得出哪几句要你知道，它们是所属回合的尾注。
   const messages = page.locator(".task-message--agent");
+  await messages.first().waitFor();
+  assert.equal(await page.locator(".notice-line").count(), 0, "没有独占一行、图标落在头像轴上的旁注");
+  const footnoteTexts = await messages.evaluateAll((elements) => elements.map((el) =>
+    [...el.querySelectorAll(".turn-footnote-text")].map((text) => text.textContent).join(" · ")));
+  assert.deepEqual(
+    footnoteTexts,
+    ["", "第 2 轮审查通过 · 已验收，合并到 feat/free-pipeline", "第 3 轮审查未通过 · 工作区已恢复，会话内容都在", "", "本回合没有交卷", ""],
+    "会话里要你知道的那几句并成各自回合的尾注",
+  );
   const receiptCounts = await messages.evaluateAll((elements) => elements.map((el) =>
     el.querySelector(".turn-receipts-toggle")?.textContent ?? ""));
   assert.deepEqual(
     receiptCounts,
-    ["1 条记录", "2 条记录", "1 条记录", "", "1 条记录", "1 条记录"],
-    "其余的回执记在各自所属的回合上，一条不少（预约、验收阶段、迁移说明、会话轮换、回合边界、实时预约）",
+    ["1 条记录", "4 条记录", "3 条记录", "", "2 条记录", "1 条记录"],
+    "回执连同尾注里的每一句都记在各自所属的回合上，一条不少（预约、验收阶段、迁移说明、会话轮换、回合边界、实时预约）",
   );
   // 回合边界不再横贯会话：正常收口是那一回合上的一条记录。
   assert.equal(await page.locator(".task-event-line, .system-boundary").count(), 0);
+  // 后面又起了回合，它们都是过去的事：没有一颗彩色的点。
+  assert.equal(await page.locator(".turn-footnote-dot").count(), 0, "过去回合上的未通过、结算说明都是灰字");
   const openLog = async (index) => {
     const message = messages.nth(index);
     await message.hover();
@@ -46,23 +50,22 @@ try {
   };
 
   // 会话轮换旁注是中性事实：一个 exit 0 的成功回合、甚至用户自己点的「停止全组」都会带
-  // 一句。它既不该是红的，也不该把 Markdown 标记原样露给用户（旁注是纯文本渲染）。
+  // 一句。它是回执，也不该把 Markdown 标记原样露给用户（旁注是纯文本渲染）。
   const rotationLog = await openLog(2);
-  const rotation = rotationLog.locator(".turn-receipt").first();
+  const rotation = rotationLog.locator(".turn-receipt").filter({ hasText: "CLI 会话" });
   assert.equal(await rotation.evaluate((el) => el.classList.contains("tone-neutral")), true, "会话轮换旁注被渲染成异常");
   if (await rotation.locator(".turn-receipt-more").count()) await rotation.locator(".turn-receipt-more").click();
   assert.match(await rotation.innerText(), /ash 已经把这个失效的 id 清掉/, "会话轮换的原文点开看得到");
   assert.doesNotMatch(await rotation.textContent(), /\*\*/, "旁注是纯文本，Markdown 标记会原样露给用户");
 
-  // 结算说明（level:"notice"）：留在明面上，但不许是红的（它讲的是流程，不是故障）——
-  // 颜色只在行首图标上，是琥珀。整句点开再看。
-  const settlement = lines.filter({ hasText: "本回合没有交卷" });
-  assert.equal(await settlement.evaluate((el) => el.classList.contains("tone-warn")), true, "结算说明该拿到提示语气");
-  assert.equal(await settlement.evaluate((el) => el.classList.contains("tone-bad")), false, "结算说明被渲染成红色异常 —— 第一次用的人会读成「它崩了」");
-  await settlement.locator(".notice-line-button").click();
-  assert.match(await settlement.innerText(), /这不是崩溃.*点重试会从中断处接着跑/s, "结算说明展开后必须能读到完整原因和下一步");
-  const failed = lines.filter({ hasText: "第 3 轮审查未通过" });
-  assert.equal(await failed.evaluate((el) => el.classList.contains("tone-bad")), true, "没办成的那条看得出来不一样");
+  // 结算说明（level:"notice"）：是那一回合尾注里的一句，字是灰的（它讲的是流程，不是故障）。
+  // 整句点开再看。
+  const settlement = messages.nth(4).locator(".turn-footnote");
+  const settlementPart = settlement.locator("button.turn-footnote-part").filter({ hasText: "本回合没有交卷" });
+  const grey = await page.evaluate(() => [...document.querySelectorAll(".turn-footnote-text")].map((el) => getComputedStyle(el).color));
+  assert.equal(new Set(grey).size, 1, "尾注的字一律是同一种灰，结算说明不许被渲染成红色异常");
+  await settlementPart.click();
+  assert.match(await settlement.locator(".turn-footnote-detail").innerText(), /这不是崩溃.*点重试会从中断处接着跑/s, "结算说明展开后必须能读到完整原因和下一步");
 
   assert.equal(await messages.count(), 6, "实时旁注后的工具应并回当前回合，不另拆第七段");
   // 第一段照常报身份；被旁注隔开的后几段接着上一段排版，不重报执行器名。
@@ -103,7 +106,7 @@ try {
     return {
       body: size(document.querySelector(".task-message--agent .task-markdown p")),
       log: size(document.querySelector(".turn-receipt-log")),
-      line: size(document.querySelector(".notice-line-text")),
+      line: size(document.querySelector(".turn-footnote")),
     };
   });
   assert.ok(metrics.log < metrics.body, "回合记录不能比 agent 正文更抢眼");

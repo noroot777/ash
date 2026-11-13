@@ -22,14 +22,14 @@ try {
   const open = page.locator(".open-fixture");
   const resolved = page.locator(".resolved-fixture");
   const readonly = page.locator(".readonly-fixture");
-  await open.locator(".notice-line").first().waitFor();
+  await open.locator(".turn-footnote").first().waitFor();
 
   // 前置：三份渲染的是同一条旁注，差别只在审查链状态和有没有入口。
   for (const [name, scope] of [["open", open], ["resolved", resolved], ["readonly", readonly]]) {
     assert.match(
       await scope.innerText(),
-      /现在由你裁定/,
-      `${name}: 旁注本身必须一直在——它是历史记录，不随裁定消失`,
+      /第 2 轮审查意见被驳回，等你裁定/,
+      `${name}: 那一句必须一直在——它是历史记录，不随裁定消失`,
     );
   }
 
@@ -50,6 +50,8 @@ try {
     "裁定完就不该再有按钮：它指向的那张卡已经不在了，只按文本匹配会留下一颗点了白点的按钮",
   );
 
+  assert.equal(await resolved.locator(".turn-footnote-dot").count(), 0, "裁定完了，那一句就是过去的事，不再带点");
+
   // ③ 没有入口就一颗都不给。
   assert.equal(
     await readonly.getByRole("button", { name: "去裁定" }).count(),
@@ -57,15 +59,19 @@ try {
     "没有 onOpenReviewPanel 的场合（只读会话、团队时间线）不给按钮",
   );
 
-  // 按钮不能摆进那一行自己的键里：那样点一下会连带把这一行展开/收起。
+  // 按钮不能摆进那半句自己的键里：那样点一下会连带把原文展开/收起。
   assert.equal(
-    await open.locator(":is(summary, button.notice-line-button) .system-event-cta").count(),
+    await open.locator(":is(summary, button.turn-footnote-part) .system-event-cta").count(),
     0,
-    "按钮不能落在那一行自己的键里——点击会被当成展开/收起",
+    "按钮不能落在那半句自己的键里——点击会被当成展开/收起",
   );
-  // 这一条是要你拍板的：留在会话明面上，不收进回合记录。
-  assert.equal(await open.locator(".notice-line.is-alert").filter({ hasText: "现在由你裁定" }).count(), 1);
-  assert.equal(await open.locator(".turn-receipt").filter({ hasText: "现在由你裁定" }).count(), 0);
+  // 这一句是要你拍板的：是那一回合的尾注，原文点那半句就地摊开。
+  const ruling = open.locator(".turn-footnote button.turn-footnote-part").filter({ hasText: "等你裁定" });
+  assert.equal(await ruling.count(), 1);
+  await ruling.click();
+  assert.match(await open.locator(".turn-footnote-detail").innerText(), /现在由你裁定/, "驳回的原文点开再看");
+  // 还在等你：最后一个回合上的这一句字前一颗琥珀点；裁定完它就是过去的事。
+  assert.equal(await open.locator(".turn-footnote-dot.is-warn").count(), 1, "等你裁定的那一句字前一颗琥珀点");
 
   // ④ 长什么样也得测。前三条全过、按钮却是竖着的三个字——它被自动排进了旁注左边那条
   //    20px 的头像列（用户 2026-09-24 截图：「这个按钮做的也太儿戏了」）。DOM 断言对这类
@@ -74,7 +80,8 @@ try {
     await page.setViewportSize({ width, height: 1200 });
     const mode = `${width}px`;
     const cta = await page.locator(".open-fixture .system-event-cta").boundingBox();
-    const text = await page.locator(".open-fixture .notice-line-text").first().evaluate((el) => {
+    const tail = await page.locator(".open-fixture .turn-footnote-tail").boundingBox();
+    const text = await page.locator(".open-fixture .turn-footnote-text").first().evaluate((el) => {
       // 正文可能折成好几行：量最后一行，「去裁定」接在那一行后面。
       const rects = [...el.getClientRects()];
       const last = rects.at(-1);
@@ -103,8 +110,9 @@ try {
     );
     assert(
       cta.x >= text.x + text.width - 1,
-      `${mode}: 「去裁定」排在这条旁注的最后，不插在正文和时间之间`,
+      `${mode}: 「去裁定」紧跟在那半句后面`,
     );
+    assert(tail && tail.x >= cta.x + cta.width - 1, `${mode}: 指到才出的时刻排在键的后面，键不会左右挪`);
   }
 
   console.log("dispute timeline cta tests passed");

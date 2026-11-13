@@ -37,71 +37,68 @@ try {
   await action.getByText("流程记录 3 条", { exact: true }).click();
   assert.match(await action.innerText(), /开始验收.*验收未完成.*冲突交接/s, "原始流程记录仍可展开核对");
 
-  // —— 会话里平时只有你说的、它说的、里程碑一句，以及出了岔子 / 要你知道的 ——
-  const lines = page.locator(".task-conversation-feed .notice-line, .notice-line");
+  // —— 会话里占行的只有你说的、它说的；ash 的话是所属回合最后那一句小灰字（尾注） ——
+  assert.equal(await page.locator(".notice-line, .review-milestone").count(), 0, "图标落在头像轴上的独占一行整个退役");
+  const owner = page.locator(".task-message--agent").filter({ hasText: "冲突已经解决并提交。" });
+  const footnotes = page.locator(".turn-footnote");
+  assert.equal(await footnotes.count(), 1, "回执、明面的话都不在会话里另占一行");
+  const footnote = owner.locator(".turn-footnote");
   assert.deepEqual(
-    await lines.locator(".notice-line-text").allInnerTexts(),
-    ["已验收，合并到 main", "冲突交接失败：没能叫醒该任务解冲突。", "本回合没有交卷：产物仍保留，可直接重试。", "工作区已恢复，会话内容都在"],
-    "回执（审查已预约、不再等、验收阶段、本轮执行结束）不在会话里占行",
+    await footnote.locator(".turn-footnote-text").allInnerTexts(),
+    ["已验收，合并到 main", "工作区已恢复，会话内容都在"],
+    "几件事并成一句；明面的话只留最近那一句",
   );
-  assert.deepEqual(
-    await lines.evaluateAll((elements) => elements.map((el) => [...el.classList].filter((name) => /^(is|tone)-/.test(name)).join(" "))),
-    ["is-milestone tone-ok", "is-alert tone-bad", "is-alert tone-warn", "is-alert tone-neutral"],
-  );
-  const milestone = lines.first();
-  const iconColors = await lines.evaluateAll((elements) => elements.map((el) => ({
-    icon: getComputedStyle(el.querySelector(".notice-line-icon")).color,
-    text: getComputedStyle(el.querySelector(".notice-line-text")).color,
-  })));
-  assert.notEqual(iconColors[0].icon, iconColors[0].text, "颜色只落在行首图标上");
-  assert.equal(new Set(iconColors.map((c) => c.text)).size, 1, "几档的字是同一种颜色，结论写在字里");
-
-  // 头像轴：图标中心对智能体头像中心，字对正文起点。
-  const axis = await page.evaluate(() => {
-    const avatar = document.querySelector(".task-message-avatar").getBoundingClientRect();
-    const body = document.querySelector(".task-message-content").getBoundingClientRect();
-    const line = document.querySelector(".notice-line");
-    const icon = line.querySelector(".notice-line-icon").getBoundingClientRect();
-    const text = line.querySelector(".notice-line-text").getBoundingClientRect();
-    const actionIcon = document.querySelector(".system-action-icon").getBoundingClientRect();
-    const actionMain = document.querySelector(".system-action-main").getBoundingClientRect();
+  assert.equal(await footnote.locator("svg").count(), 0, "尾注没有图标");
+  assert.equal(await footnote.locator(".turn-footnote-dot").count(), 0, "通过、已验收、中性的话不带任何颜色");
+  const look = await page.evaluate(() => {
+    const message = [...document.querySelectorAll(".task-message--agent")].find((el) => el.textContent.includes("冲突已经解决并提交。"));
+    const note = message.querySelector(".turn-footnote");
+    const body = message.querySelector(".task-turn-markdown, .task-markdown") ?? message.querySelector(".task-message-content");
+    const acts = message.querySelector(".turn-acts").getBoundingClientRect();
+    const mono = note.querySelector(".turn-footnote-mono");
+    const style = getComputedStyle(note);
     return {
-      avatar: Math.round(avatar.left + avatar.width / 2),
-      icon: Math.round(icon.left + icon.width / 2),
-      action: Math.round(actionIcon.left + actionIcon.width / 2),
-      body: Math.round(body.left),
-      text: Math.round(text.left),
-      actionMain: Math.round(actionMain.left),
+      left: Math.round(note.getBoundingClientRect().left),
+      body: Math.round(body.getBoundingClientRect().left),
+      aboveActs: note.getBoundingClientRect().bottom <= acts.top + 1,
+      fontSize: style.fontSize,
+      color: style.color,
+      headColor: getComputedStyle(message.querySelector(".turn-head")).color,
+      background: style.backgroundColor,
+      mono: mono.textContent,
+      monoFamily: getComputedStyle(mono).fontFamily,
+      monoBackground: getComputedStyle(mono).backgroundColor,
+      weights: [...note.querySelectorAll("*")].map((el) => getComputedStyle(el).fontWeight),
     };
   });
-  assert.equal(axis.icon, axis.avatar, "里程碑图标落在头像轴上");
-  assert.equal(axis.action, axis.avatar, "系统长提示同样进入头像轴");
-  assert.equal(axis.text, axis.body, "里程碑的字与智能体正文起点对齐");
-  assert.equal(axis.actionMain, axis.body, "系统长提示正文与智能体正文起点对齐");
+  assert.equal(look.left, look.body, "尾注的左缘跟正文对齐，不在头像那一列");
+  assert.equal(look.aboveActs, true, "尾注在回合尾那排悬停操作上面");
+  assert.equal(look.fontSize, "12px", "跟回合头那句起因同一档字号");
+  assert.equal(look.color, look.headColor, "跟回合头同一种次级灰");
+  assert.equal(look.background, "rgba(0, 0, 0, 0)", "不垫底色");
+  assert.equal(look.mono, "main", "分支名换成等宽字");
+  assert.match(look.monoFamily, /mono|Menlo|Consolas|Courier/i);
+  assert.equal(look.monoBackground, "rgba(0, 0, 0, 0)", "等宽字不垫底色");
+  assert.ok(look.weights.every((weight) => ["400", "500", "600"].includes(weight)), `字重只用 400/500/600：${look.weights}`);
 
-  // 里程碑的时刻紧跟在字后面，指到这一行才出。
-  const tailOpacity = () => milestone.locator(".notice-line-tail").evaluate((el) => getComputedStyle(el).opacity);
+  // 指到尾注才出最近那一句的时刻；它跟在字后面。
+  const tail = footnote.locator(".turn-footnote-tail");
   await page.mouse.move(990, 5);
-  await page.waitForFunction(() => getComputedStyle(document.querySelector(".notice-line-tail")).opacity === "0");
-  await milestone.hover();
-  await page.waitForFunction(() => getComputedStyle(document.querySelector(".notice-line-tail")).opacity === "1");
-  assert.equal(await tailOpacity(), "1");
-  const tailGap = await milestone.evaluate((el) => {
-    const text = el.querySelector(".notice-line-text").getBoundingClientRect();
-    const tail = el.querySelector(".notice-line-tail").getBoundingClientRect();
-    return Math.round(tail.left - text.right);
-  });
-  assert.ok(tailGap >= 0 && tailGap <= 16, `时刻紧跟在字后面（隔了 ${tailGap}px）`);
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".turn-footnote-tail")).opacity === "0");
+  await footnote.hover();
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".turn-footnote-tail")).opacity === "1");
+  assert.match(await tail.innerText(), /09\/01 \d\d:10/, "取最近那一句的时刻");
 
-  // 长原文只写一句，点开那一行才看全文。
-  const workspace = lines.nth(3);
-  await workspace.locator(".notice-line-button").click();
-  assert.match(await workspace.locator(".notice-line-detail").innerText(), /原目录已不存在/);
-  assert.equal(await workspace.locator(".notice-line-button").getAttribute("aria-expanded"), "true");
+  // 有原文细节的那半句点了就地摊开原文；能点的是一颗键（键盘走得到）。
+  const recovery = footnote.locator("button.turn-footnote-part").filter({ hasText: "工作区已恢复" });
+  await recovery.focus();
+  await page.keyboard.press("Enter");
+  assert.match(await footnote.locator(".turn-footnote-detail").innerText(), /原目录已不存在/);
+  assert.equal(await recovery.getAttribute("aria-expanded"), "true");
+  assert.equal(await footnote.locator(".turn-footnote-part.is-static").filter({ hasText: "已验收" }).count(), 1, "验收那句不能点");
+  await recovery.evaluate((el) => el.blur());
 
-  // —— 回执记在它所属的那一回合上：平时不画，指到这一回合才有「N 条记录」 ——
-  const owner = page.locator(".task-message--agent").filter({ hasText: "冲突已经解决并提交。" });
-  // 收了口的回合里，「N 条记录」是回合尾那一排悬停操作里的一颗（复制 / 派生 / 更多 旁边）。
+  // —— 回执、连同尾注里的每一句，都记在这一回合上：指到这一回合才有「N 条记录」 ——
   const receipts = owner.locator(".turn-acts");
   assert.equal(await owner.locator(".turn-receipts-toggle").count(), 1, "回执记到了它之前最近的那一回合上");
   const actsOpacity = () => receipts.evaluate((el) => getComputedStyle(el).opacity);
@@ -110,14 +107,17 @@ try {
   await owner.hover();
   await page.waitForFunction(() => getComputedStyle(document.querySelector(".turn-acts:has(.turn-receipts-toggle)")).opacity === "1");
   const toggle = receipts.locator(".turn-receipts-toggle");
-  assert.equal(await toggle.innerText(), "4 条记录");
+  assert.equal(await toggle.innerText(), "8 条记录");
   await toggle.click();
   assert.equal(await toggle.getAttribute("aria-expanded"), "true");
   const log = owner.locator(".turn-receipt-log");
   assert.deepEqual(
     await log.locator(".turn-receipt-text").allInnerTexts(),
-    ["审查已预约，这一轮跑完自动开始", "不再等「全量回归」了，它已经跑完", "验收阶段：验收完成", "本轮执行结束"],
-    "流水里每一条写的是结果",
+    [
+      "审查已预约，这一轮跑完自动开始", "不再等「全量回归」了，它已经跑完", "已验收，合并到 main", "验收阶段：验收完成",
+      "冲突交接失败：没能叫醒该任务解冲突。", "本回合没有交卷：产物仍保留，可直接重试。", "工作区已恢复，会话内容都在", "本轮执行结束",
+    ],
+    "流水里每一条写的是结果；尾注里的那几句也在这里（删除在这里）",
   );
   const leading = await log.locator(".turn-receipt").first().evaluate((el) => {
     const time = el.querySelector(":scope > time");
@@ -141,15 +141,42 @@ try {
   await page.locator(".turn-receipts-toggle").first().focus();
   await page.waitForFunction(() => getComputedStyle(document.querySelector(".turn-acts:has(.turn-receipts-toggle)")).opacity === "1", null, { timeout: 2000 });
 
-  // 触屏没有「指到」：回执那颗键与里程碑的时刻常显。
+  // 触屏没有「指到」：回执那颗键与尾注的时刻常显。
   const touch = await browser.newContext({ viewport: { width: 390, height: 900 }, hasTouch: true, isMobile: true });
   const touchPage = await touch.newPage();
   await touchPage.goto(fixture);
-  await touchPage.locator(".notice-line").first().waitFor();
+  await touchPage.locator(".turn-footnote").first().waitFor();
   assert.equal(await touchPage.evaluate(() => matchMedia("(hover: none)").matches), true, "模拟的触屏得真是「没有指到」");
-  assert.equal(await touchPage.locator(".notice-line-tail").first().evaluate((el) => getComputedStyle(el).opacity), "1", "触屏上时刻常显");
+  assert.equal(await touchPage.locator(".turn-footnote-tail").first().evaluate((el) => getComputedStyle(el).opacity), "1", "触屏上时刻常显");
   assert.equal(await touchPage.locator(".turn-acts:has(.turn-receipts-toggle)").first().evaluate((el) => getComputedStyle(el).opacity), "1", "触屏上「N 条记录」常显");
   await touch.close();
+
+  // —— 颜色只说现在的事：前一个回合上的「未通过」是灰字，最后一个回合上的字前有红点 ——
+  for (const theme of ["light", "dark"]) {
+    const dots = await browser.newPage({ viewport: { width: 1000, height: 900 }, colorScheme: theme });
+    await dots.goto(`${fixture}?dots`);
+    await dots.locator(".turn-footnote").nth(1).waitFor();
+    const state = await dots.locator(".turn-footnote").evaluateAll((notes) => notes.map((note) => ({
+      text: note.querySelector(".turn-footnote-text").textContent,
+      dot: note.querySelector(".turn-footnote-dot") ? getComputedStyle(note.querySelector(".turn-footnote-dot")).backgroundColor : null,
+      size: note.querySelector(".turn-footnote-dot")?.getBoundingClientRect().width ?? null,
+      color: getComputedStyle(note.querySelector(".turn-footnote-text")).color,
+    })));
+    const red = await dots.evaluate(() => {
+      const probe = document.createElement("i");
+      probe.style.color = "var(--red)";
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    });
+    assert.deepEqual(state.map((entry) => entry.text), ["第 1 轮审查未通过", "第 2 轮审查未通过"]);
+    assert.equal(state[0].dot, null, `${theme}：后面又起了回合，点熄掉`);
+    assert.equal(state[1].dot, red, `${theme}：最后一个回合上没办成的那一句字前一颗红点`);
+    assert.equal(state[1].size, 6, "6px 的小圆点");
+    assert.equal(state[0].color, state[1].color, `${theme}：字本身一律是灰的，颜色只在点上`);
+    await dots.close();
+  }
 
   await resizeViewport(page, { width: 390, height: 900 });
   const geometry = await page.evaluate(() => ({

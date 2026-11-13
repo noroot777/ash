@@ -32,8 +32,8 @@
   white-space: nowrap;
 }
 
-/* 审查进行中的那一轮：一张卡，看得见审查者正在说什么。出了结论就收成会话里的一句
-   （ReviewerLane 的 ReviewMilestone，样式在 system-turn.css 的 .notice-line）。 */
+/* 审查进行中的那一轮：一张卡，看得见审查者正在说什么。出了结论就收成被审那一回合尾注里的
+   一句（FootnoteLine，样式在 system-turn.css 的 .turn-footnote）。 */
 .verify-lane {
   position: relative;
   width: 100%;
@@ -86,11 +86,11 @@
 .verify-lane-body > :first-child { margin-top: 0; }
 .verify-lane-body > :last-child { margin-bottom: 0; }
 /* 卡里（进行中）和就地摊开的那一轮（只读视图里点开的里程碑）里，审查者的发言一样排。 */
-:is(.verify-lane, .review-milestone-body) .task-message--agent { width: 100%; margin-left: 0; border: 0; border-radius: 0; background: transparent; padding: 0; box-shadow: none; }
+:is(.verify-lane, .turn-footnote-lane) .task-message--agent { width: 100%; margin-left: 0; border: 0; border-radius: 0; background: transparent; padding: 0; box-shadow: none; }
 /* 身份由卡头代言的那几条连头像列一起收掉——盾形在卡头已经有一颗，正文顺势对齐卡内边距。 */
-:is(.verify-lane, .review-milestone-body) .task-message--agent.is-lane-owned { grid-template-columns: minmax(0, 1fr); gap: 0; }
-:is(.verify-lane, .review-milestone-body) .task-message--agent::before { content: none; }
-:is(.verify-lane, .review-milestone-body) .task-message--user.is-system-authored { padding-right: 0; padding-left: 0; }
+:is(.verify-lane, .turn-footnote-lane) .task-message--agent.is-lane-owned { grid-template-columns: minmax(0, 1fr); gap: 0; }
+:is(.verify-lane, .turn-footnote-lane) .task-message--agent::before { content: none; }
+:is(.verify-lane, .turn-footnote-lane) .task-message--user.is-system-authored { padding-right: 0; padding-left: 0; }
 
 @media (max-width: 680px) {
   .verify-lane-head { flex-wrap: wrap; }

@@ -121,8 +121,8 @@ for (const render of [renderTeam]) {
   assert.match(html, /monitor-wake-expand">查看完整输入与来源/);
   assert.doesNotMatch(html, /monitor-wake-avatar|monitor-wake-context|不是普通通知/);
   assert.ok(html.includes(combined.text));
-  // 前面那条时间线旁注照常在：任务会话里是一颗「N 条记录」（回执不占行），团队时间线上是一行。
-  assert.match(html, /turn-receipts|notice-line/);
+  // 前面那条时间线旁注照常在：任务会话里是一颗「N 条记录」（回执不占行），团队时间线上是一句小灰字。
+  assert.match(html, /turn-receipts|turn-footnote/);
   assert.doesNotMatch(html, /已送达 Agent|任务成功/);
   assert.equal(count(render([notice, reply]), 'class="monitor-wake-input '), 0);
   assert.equal(count(render([user(output)]), 'class="monitor-wake-reply"'), 0);

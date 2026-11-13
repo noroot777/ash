@@ -116,16 +116,16 @@ const noteLane = conversationFeedRows(protocolItems, { reviews: [{
 }] as never }).find((row): row is ConversationReviewLane => row.kind === "review-lane");
 assert.ok(noteLane);
 assert.equal(noteLane.note, noteText, "附言从 run 上补进审查卡");
-// 收了口的一轮在会话里只剩一句结论：附言、报告、证据都在右侧「审查」格那一轮里。
+// 收了口的一轮单独摆时只剩一句小灰字：附言、报告、证据都在右侧「审查」格那一轮里。
 const noteMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={noteLane}>{null}</ReviewerLane>);
-assert.match(noteMarkup, /class="review-milestone"/, "出了结论的一轮收成一行");
+assert.match(noteMarkup, /class="turn-footnote is-standalone"/, "出了结论的一轮收成一句");
 assert.match(noteMarkup, />第 3 轮审查未通过</, "结论写在字里");
-assert.match(noteMarkup, /class="notice-line is-milestone tone-bad"/, "颜色只落在行首图标那一档");
-assert.match(noteMarkup, /<time class="notice-line-tail">5\.5审查 · 40m 0s · /, "谁审的、用时、时刻紧跟在字后面");
+assert.doesNotMatch(noteMarkup, /<svg|turn-footnote-dot/, "没有图标；单独摆的一轮是过去的事，不带颜色");
+assert.match(noteMarkup, /<time class="turn-footnote-tail">5\.5审查 · 40m 0s · /, "谁审的、用时、时刻紧跟在字后面");
 assert.doesNotMatch(noteMarkup, /重点看 SSE 断线重连/, "附言不摊在会话里");
 const opened: Array<number | null> = [];
 const linkedMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={noteLane} onOpenRound={(round) => opened.push(round)}>{null}</ReviewerLane>);
-assert.match(linkedMarkup, /aria-label="第 3 轮审查未通过，在右侧审查格里打开这一轮"/, "接上审查格时整行就是去那一轮的键");
+assert.match(linkedMarkup, /aria-label="第 3 轮审查未通过，在右侧审查格里打开这一轮"/, "接上审查格时那一句就是去那一轮的键");
 // 还在跑的那一轮照旧是整张卡：附言是这一轮审查的输入，卡里必须看得见。
 const runningNoteLane = { ...noteLane, complete: false, conclusion: null, defaultCollapsed: false };
 const runningNoteMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={runningNoteLane}>{null}</ReviewerLane>);

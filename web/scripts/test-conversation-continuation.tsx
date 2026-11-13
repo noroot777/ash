@@ -73,7 +73,8 @@ const team = renderToStaticMarkup(
   />,
 );
 assert.equal(count(team, "<time"), 1, "团队旁注也应自己显示时间，续写段不再另起一行");
-assert.match(team, /notice-line[^>]*>[\s\S]*>已预约完成后审查。<\/span><time class="notice-line-tail">/);
+assert.match(team, /turn-footnote is-standalone[^>]*>[\s\S]*>已预约完成后审查。<\/span><\/span><time class="turn-footnote-tail">/, "团队时间线上是同一种小灰字，时刻跟在字后面");
+assert.doesNotMatch(team, /<svg[^>]*>[\s\S]*已预约完成后审查/, "团队时间线上的旁注不带图标");
 assert.doesNotMatch(team, /team-feed-agent[^>]*><header>/, "团队续写没有额外元信息时不应留下空消息头");
 
 const reviewPrompt: ConversationItem = {

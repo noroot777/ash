@@ -35,7 +35,7 @@ function ReceiptEntry({ receipt, previousAt }: { receipt: TurnReceipt; previousA
           {text}
         </button>
       ) : text}
-      <DeleteMessageButton item={receipt.item} />
+      {receipt.item && <DeleteMessageButton item={receipt.item} />}
       {view.detail && open && <p className="turn-receipt-detail" id={detailId}>{view.detail}</p>}
     </li>
   );

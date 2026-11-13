@@ -72,9 +72,19 @@ const items = buildConversationItems([{ session, output, trace: [] }], [session]
   },
 }] as never);
 
+// 颜色只说现在的事：前一个回合上的「未通过」是灰字，最后一个回合上的字前有红点。
+const verdict = (round: number, at: string) => turn("system", `自由工作流第 ${round} 轮审查未通过，意见已发回会话。`, at,
+  { notice: { kind: "review.verdict", source: "free", round, verdict: "failed" } });
+const dotItems = buildConversationItems([{
+  session,
+  output: ["第一回合。", verdict(1, "2026-09-01T05:10:00.000Z"), "第二回合。", verdict(2, "2026-09-01T05:20:00.000Z")].join("\n"),
+  trace: [],
+}], [session], []);
+const query = new URLSearchParams(window.location.search);
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {new URLSearchParams(window.location.search).has("boundaries") ? (
+    {query.has("boundaries") ? (
       <main style={{ padding: 20, background: "var(--bg)" }}>
         {(["task", "team"] as const).map((surface) => (
           <div key={surface} data-surface={surface}>
@@ -89,7 +99,7 @@ createRoot(document.getElementById("root")!).render(
         ))}
       </main>
     ) : <div style={{ height: "100vh", background: "var(--bg)" }}>
-      <ConversationFeed task={task} items={items} sessions={[session]} loading={false} error={null} />
+      <ConversationFeed task={task} items={query.has("dots") ? dotItems : items} sessions={[session]} loading={false} error={null} />
     </div>}
   </StrictMode>,
 );

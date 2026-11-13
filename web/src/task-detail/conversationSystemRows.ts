@@ -3,17 +3,21 @@ import type { ConversationDebateFeedRow } from "./conversationDebateRows.ts";
 import { conflictContextEvent, isConflictHandoff } from "./systemNoticeModel.ts";
 import { verifyMarkOf } from "./conversationNotes.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
-import { noticeView, type NoticeView } from "./timelineNoticeCopy.ts";
+import { noticeView, turnFailureView, type NoticeView } from "./timelineNoticeCopy.ts";
+import { composeFootnote, laneVerdictEvent, laneVerdictView, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 
 type EventItem = Extract<ConversationItem, { kind: "event" }>;
 
-/** 记在某一回合上的一条回执：平时不画，指到那一回合才有「N 条记录」，点开是一份带时刻的流水。 */
+/**
+ * 记在某一回合上的一条记录：平时不画，指到那一回合才有「N 条记录」，点开是一份带时刻的流水。
+ * 尾注里的每一句同时也是这里的一条（删除在这里）。
+ */
 export type TurnReceipt = {
   id: string;
   at?: string;
   view: NoticeView;
-  /** 原条目：删除消息、取原文都从它拿。 */
-  item: EventItem;
+  /** 原条目：删除消息、取原文都从它拿。就地验证靠阶段翻档收口的那一轮没有结论旁注，为空。 */
+  item?: EventItem;
 };
 
 export type ConversationSystemActionRow = {
@@ -23,34 +27,37 @@ export type ConversationSystemActionRow = {
   related: EventItem[];
 };
 
-/** 常显的那一行：里程碑（审查出了结论、验收了），或者出了岔子 / 要你拍板的。 */
-export type ConversationNoticeRow = {
-  kind: "notice";
+/**
+ * 前面没有回合可挂的那几句（任务还没跑过就验收了、两段真人插话之间只有系统动作……）：留在
+ * 原处，跟回合的尾注同一种小灰字；没有要说的、只有回执的，就只是一颗「N 条记录」。
+ */
+export type ConversationFootnoteRow = {
+  kind: "footnote";
+  id: string;
+  footnote: TurnFootnote;
+  receipts: TurnReceipt[];
+};
+
+/** 你那条斜杠命令的回答：是你要看的东西，在原处常显。 */
+export type ConversationReplyRow = {
+  kind: "reply";
   id: string;
   item: EventItem;
   view: NoticeView;
 };
 
-/**
- * 找不到所属回合的回执（这一段里一回合都没有：任务还没跑过就预约了审查、两段真人插话之间
- * 只有系统动作……）。它们照样平时不画，只在原处留一颗「N 条记录」。
- */
-export type ConversationReceiptLogRow = {
-  kind: "receipt-log";
-  id: string;
-  receipts: TurnReceipt[];
-};
-
 export type ConversationDisplayRow =
   | ConversationDebateFeedRow
   | ConversationSystemActionRow
-  | ConversationNoticeRow
-  | ConversationReceiptLogRow;
+  | ConversationFootnoteRow
+  | ConversationReplyRow;
 
 export type ConversationDisplay = {
   rows: ConversationDisplayRow[];
-  /** agent 条目 id → 记在它上面的回执（按时间先后）。 */
+  /** agent 条目 id → 记在它上面的记录（按时间先后）。 */
   receipts: ReadonlyMap<string, TurnReceipt[]>;
+  /** agent 条目 id → 它的尾注。 */
+  footnotes: ReadonlyMap<string, TurnFootnote>;
 };
 
 /**
@@ -76,88 +83,177 @@ function groupConflictHandoffs(rows: ConversationDebateFeedRow[]): Array<Convers
   return grouped;
 }
 
+type Accessors<Row> = {
+  turnIdOf: (row: Row) => string | null;
+  breaksSegment: (row: Row) => boolean;
+  eventOf: (row: Row) => EventItem | null;
+  /** 收了口的一轮审查（它不再占行，结论记到被审的那一回合上）。 */
+  laneOf?: (row: Row) => ConversationReviewLane | null;
+  /** 这一行是你说的话：它后面的尾注都成了过去的事。 */
+  yoursOf?: (row: Row) => boolean;
+  /** 这一回合异常结束了：尾注里补「这一轮异常结束」（原文是退出码）。 */
+  failureOf?: (turnId: string) => string | undefined;
+};
+
 /**
- * 回执归到哪一回合 —— 判据只有「它跟谁在同一段里」：
+ * ash 自己说的话归到哪一回合 —— 判据只有「它跟谁在同一段里」：
  *
- * - 段只由**你的话**（以及后端代写、占着真人回合的那种）和**一整轮审查 / 辩论**来分；
- * - 段里已经有回合了，回执记在**最近那一回合**上：回合跑着时顺带发生的事（开始盯、暂停），
- *   回合跑完紧跟着的事（审查已预约、这一轮跑完预约的审查开始），都是那一回合的后话；
- * - 段里还没有回合，就等这一段的第一回合来认领（「意见已交给执行者」→ 按意见改的那一回合）；
- * - 等到段落结束也没有回合来认，就在原处留一颗只有「N 条记录」的行。
- *
- * 里程碑与要你知道的那几种照常占一行，不打断归属：它们之后的回执仍记在同一回合上。
+ * - 段只由**你的话**（以及后端代写、占着真人回合的那种）和**辩论**来分。收了口的审查轮不分段：
+ *   它审的是前面那一回合的产出，结论连同它后面的验收和回执，都记在**它前面最近的那个回合**上；
+ * - 段里已经有回合了，回执和尾注都记在**最近那一回合**上：回合跑着时顺带发生的事（开始盯、暂停），
+ *   回合跑完紧跟着的事（审查已预约、审查出了结论、验收了），都是那一回合的后话；
+ * - 段里还没有回合：回执等这一段的第一回合来认领（「意见已交给执行者」→ 按意见改的那一回合），
+ *   等到段落结束也没有回合来认，就在原处留一颗「N 条记录」；要你知道的那几句不往后挂，在原处
+ *   留一句同样的小灰字。
  */
-function attachReceipts<Row extends { kind: string }>(
-  rows: Row[],
-  turnIdOf: (row: Row) => string | null,
-  breaksSegment: (row: Row) => boolean,
-  eventOf: (row: Row) => EventItem | null,
-): { rows: Array<Row | ConversationNoticeRow | ConversationReceiptLogRow>; receipts: Map<string, TurnReceipt[]> } {
-  const out: Array<Row | ConversationNoticeRow | ConversationReceiptLogRow> = [];
+function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>): {
+  rows: Array<Row | ConversationFootnoteRow | ConversationReplyRow>;
+  receipts: Map<string, TurnReceipt[]>;
+  footnotes: Map<string, TurnFootnote>;
+} {
+  const out: Array<Row | ConversationFootnoteRow | ConversationReplyRow> = [];
   const receipts = new Map<string, TurnReceipt[]>();
+  const parts = new Map<string, FootnotePart[]>();
+  const order = new Map<string, number>();
   let turn: string | null = null;
   let pending: TurnReceipt[] = [];
+  let orphan: { row: ConversationFootnoteRow; parts: FootnotePart[] } | null = null;
+  const orphans: Array<{ row: ConversationFootnoteRow; parts: FootnotePart[] }> = [];
   const give = (id: string, list: TurnReceipt[]) => {
     if (list.length) receipts.set(id, [...receipts.get(id) ?? [], ...list]);
   };
-  const flushOrphans = () => {
-    if (!pending.length) return;
-    out.push({ kind: "receipt-log", id: `receipt-log:${pending[0]!.id}`, receipts: pending });
-    pending = [];
+  const openOrphan = (id: string) => {
+    orphan = { row: { kind: "footnote", id: `footnote:${id}`, footnote: { id: `footnote:${id}`, parts: [], live: false }, receipts: [] }, parts: [] };
+    orphans.push(orphan);
+    out.push(orphan.row);
+    return orphan;
   };
-  for (const row of rows) {
-    const event = eventOf(row);
+  const note = (part: FootnotePart, receipt: TurnReceipt | null) => {
+    if (turn) {
+      parts.set(turn, [...parts.get(turn) ?? [], part]);
+      if (receipt) give(turn, [receipt]);
+      return;
+    }
+    const home = orphan ?? openOrphan(part.id);
+    home.parts.push(part);
+    if (receipt) home.row.receipts.push(receipt);
+  };
+  const closeSegment = () => {
+    if (pending.length) {
+      const home = orphan ?? openOrphan(pending[0]!.id);
+      home.row.receipts = [...home.row.receipts, ...pending]
+        .sort((left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0));
+    }
+    pending = [];
+    orphan = null;
+    turn = null;
+  };
+  rows.forEach((row, index) => {
+    const event = acc.eventOf(row);
     if (event) {
       const view = noticeView(event);
-      if (view.tier !== "receipt") {
-        out.push({ kind: "notice", id: `notice:${event.id}`, item: event, view });
-        continue;
+      if (view.tier === "reply") {
+        out.push({ kind: "reply", id: `reply:${event.id}`, item: event, view });
+        return;
       }
-      const receipt = { id: event.id, at: event.at, view, item: event };
-      if (turn) give(turn, [receipt]);
+      const receipt: TurnReceipt = { id: event.id, at: event.at, view, item: event };
+      order.set(receipt.id, index);
+      if (view.tier !== "receipt") note({ kind: "event", id: event.id, at: event.at, view, item: event }, receipt);
+      else if (turn) give(turn, [receipt]);
       else pending.push(receipt);
-      continue;
+      return;
     }
-    const turnId = turnIdOf(row);
+    const lane = acc.laneOf?.(row);
+    if (lane) {
+      const end = laneVerdictEvent(lane);
+      const view = laneVerdictView(lane);
+      const at = end?.at ?? lane.endedAt ?? undefined;
+      const receipt: TurnReceipt = { id: end?.id ?? lane.id, at, view, ...(end ? { item: end } : {}) };
+      order.set(receipt.id, index);
+      note({ kind: "review", id: lane.id, at, view, lane }, receipt);
+      return;
+    }
+    const turnId = acc.turnIdOf(row);
     if (turnId) {
+      out.push(row);
       give(turnId, pending);
       pending = [];
+      orphan = null;
       turn = turnId;
-    } else if (breaksSegment(row)) {
-      flushOrphans();
-      turn = null;
+      const failure = acc.failureOf?.(turnId);
+      if (failure) note({ kind: "failure", id: `failure:${turnId}`, view: turnFailureView(failure) }, null);
+      return;
     }
+    if (acc.breaksSegment(row)) closeSegment();
     out.push(row);
+  });
+  closeSegment();
+
+  const footnotes = new Map<string, TurnFootnote>();
+  for (const [id, list] of parts) footnotes.set(id, { id: `footnote:${id}`, parts: composeFootnote(list), live: false });
+  for (const entry of orphans) entry.row.footnote = { ...entry.row.footnote, parts: composeFootnote(entry.parts) };
+  // 现在的事：会话里最后一个有话要说的回合（或原处那一句），后面又没有你的话。
+  for (let index = out.length - 1; index >= 0; index -= 1) {
+    const row = out[index]!;
+    if (row.kind === "footnote") {
+      const own = row as ConversationFootnoteRow;
+      if (!own.footnote.parts.length) continue;
+      own.footnote = { ...own.footnote, live: true };
+      break;
+    }
+    if (row.kind === "reply") continue;
+    const turnId = acc.turnIdOf(row as Row);
+    if (turnId) {
+      const footnote = footnotes.get(turnId);
+      if (footnote) footnotes.set(turnId, { ...footnote, live: true });
+      break;
+    }
+    if (acc.yoursOf?.(row as Row)) break;
   }
-  flushOrphans();
-  return { rows: out, receipts };
+  return { rows: out, receipts, footnotes };
 }
 
-export function conversationSystemRows(rows: ConversationDebateFeedRow[]): ConversationDisplay {
+export function conversationSystemRows(
+  rows: ConversationDebateFeedRow[],
+  options: { failures?: ReadonlyMap<string, string> } = {},
+): ConversationDisplay {
   type Grouped = ConversationDebateFeedRow | ConversationSystemActionRow;
-  const { rows: display, receipts } = attachReceipts<Grouped>(
-    groupConflictHandoffs(rows),
-    (row) => row.kind === "item" && row.item.kind === "agent" ? row.item.id : null,
-    (row) => row.kind !== "item" || row.item.kind === "user",
-    (row) => row.kind === "item" && row.item.kind === "event" ? row.item : null,
-  );
-  return { rows: display, receipts };
+  const display = attach<Grouped>(groupConflictHandoffs(rows), {
+    turnIdOf: (row) => row.kind === "item" && row.item.kind === "agent" ? row.item.id : null,
+    // 辩论分段；正在跑的审查卡不分（它收口以后就是被审那一回合尾注里的一句）。
+    breaksSegment: (row) => row.kind === "debate-lane" || row.kind === "system-action" || (row.kind === "item" && row.item.kind === "user"),
+    eventOf: (row) => row.kind === "item" && row.item.kind === "event" ? row.item : null,
+    laneOf: (row) => row.kind === "review-lane" && row.complete ? row : null,
+    yoursOf: (row) => row.kind === "item" && row.item.kind === "user" && !row.item.bySystem,
+    failureOf: (id) => options.failures?.get(id),
+  });
+  return display as ConversationDisplay;
 }
 
-export type LaneRow = { kind: "item"; item: ConversationItem } | ConversationNoticeRow | ConversationReceiptLogRow;
+export type LaneRow = { kind: "item"; item: ConversationItem } | ConversationFootnoteRow | ConversationReplyRow;
 
 /**
  * 同一套归属，用在一轮审查里：卡里的旁注同样不单独占行，记在审查者那一回合上。
- * 收了口的一轮，那条结论旁注就是会话里那一句本身，不在摊开的经过里再说一遍。
+ * 收了口的一轮，那条结论旁注就是被审那一回合尾注里的那一句本身，不在摊开的经过里再说一遍。
+ * 卡里的尾注不带颜色（那是过去的一轮，或者正在跑、还没有现在的结论）。
  */
-export function laneReceipts(lane: Pick<ConversationReviewLane, "items" | "complete">): { rows: LaneRow[]; receipts: ReadonlyMap<string, TurnReceipt[]> } {
+export function laneReceipts(lane: Pick<ConversationReviewLane, "items" | "complete">): {
+  rows: LaneRow[];
+  receipts: ReadonlyMap<string, TurnReceipt[]>;
+  footnotes: ReadonlyMap<string, TurnFootnote>;
+} {
   const items = lane.complete
     ? lane.items.filter((item) => item.kind !== "event" || verifyMarkOf(item)?.phase !== "end")
     : lane.items;
-  return attachReceipts<{ kind: "item"; item: ConversationItem }>(
+  const attached = attach<{ kind: "item"; item: ConversationItem }>(
     items.map((item) => ({ kind: "item", item })),
-    (row) => row.item.kind === "agent" ? row.item.id : null,
-    (row) => row.item.kind === "user",
-    (row) => row.item.kind === "event" ? row.item : null,
+    {
+      turnIdOf: (row) => row.item.kind === "agent" ? row.item.id : null,
+      breaksSegment: (row) => row.item.kind === "user",
+      eventOf: (row) => row.item.kind === "event" ? row.item : null,
+    },
   );
+  const footnotes = new Map([...attached.footnotes].map(([id, footnote]) => [id, { ...footnote, live: false }]));
+  const rows = attached.rows.map((row) => row.kind === "footnote" ? { ...row, footnote: { ...row.footnote, live: false } } : row);
+  return { rows, receipts: attached.receipts, footnotes };
 }

@@ -33,7 +33,7 @@ assert.equal(
   "已知的 worktree 重建回执应拿到专用单行样式",
 );
 assert.equal(isWorkspaceRecoveryNote("合并清理警告：worktree 未能删除"), false, "普通 worktree 旁注不能误判为恢复回执");
-// —— 没有类型的老记录：按原文里的几个固定说法和语气分三档 ——
+// —— 没有类型的老记录：认几个固定说法，再按起头表认要你知道的那几句；其余一律是回执 ——
 const legacy = (text, tone = "neutral") => noticeView({ text, tone, variant: "note" });
 assert.equal(legacy("开始验收：准备安全合并。").tier, "receipt");
 assert.deepEqual(
@@ -41,7 +41,21 @@ assert.deepEqual(
   ["milestone", "已验收，合并到 main"],
 );
 assert.equal(legacy("本回合没有交卷：产物仍保留。", "notice").tier, "alert");
-assert.deepEqual([legacy("验收未完成：合并发生冲突。", "error").tier, legacy("验收未完成：合并发生冲突。", "error").tone], ["alert", "bad"]);
+assert.deepEqual([legacy("验收未完成：合并发生冲突。", "error").tier, legacy("验收未完成：合并发生冲突。", "error").tone], ["alert", "warn"]);
+// 图二：原文里带「失败」「错误」的多半只是引了一段描述或命令，不能据此升成常显的一句。
+for (const tone of ["neutral", "error"]) {
+  assert.equal(legacy("哨兵已起：等回归跑完，失败就报错误（npm test || echo FAILED）", tone).tier, "receipt", "哨兵已起是回执");
+  assert.equal(legacy("哨兵结束：等回归跑完，失败就报错误", tone).tier, "receipt", "哨兵结束是回执");
+}
+// 终态被拦下改落暂停：不管走时间线那一条（带不带类型）还是带 level:"notice" 的结算说明，都是回执。
+const held = "本回合要落的终态被拦下，改为检查点暂停：还有 1 个哨兵没了结（回归测试 未完成）";
+assert.equal(legacy(held, "error").tier, "receipt");
+assert.equal(legacy(held, "notice").tier, "receipt");
+assert.equal(noticeView({ text: held, tone: "neutral", variant: "note", notice: { kind: "receipt" } }).tier, "receipt");
+assert.equal(legacy("分组被暂停,本回合被中止 —— 任务落为已暂停", "notice").tier, "receipt", "你自己停的不用再告诉你");
+assert.equal(legacy("本回合被 ash 主动终止:上游连不上", "notice").tier, "alert", "被 ash 判失败的结算说明要你知道");
+assert.equal(legacy("预览没起来（`npm run dev`）\n端口被占用").tier, "alert", "照 alertLine 调用点的起头认");
+assert.equal(legacy("预约审查仍在等待：回合还没结束。", "error").tier, "receipt", "表里没有的起头一律是回执");
 assert.equal(legacy("〔系统〕已预约完成后审查：5.5审查。").tier, "receipt", "老记录的〔系统〕前缀是回执");
 assert.equal(legacy("〔系统〕已预约完成后审查：5.5审查。").text.startsWith("〔系统〕"), false, "前缀不进摆出来的那句");
 
@@ -62,7 +76,12 @@ assert.deepEqual(
 );
 assert.equal(typed({ kind: "review.verdict", source: "free", round: 3, verdict: "passed" }).text, "第 3 轮审查通过");
 assert.equal(typed({ kind: "review.verdict", source: "free", round: 1, verdict: "aborted" }).tier, "alert", "没能开始的一轮是出了岔子");
-assert.equal(typed({ kind: "review.dispute", round: 1 }, "执行者驳回了审查意见，等你裁定").dispute, true);
+assert.deepEqual(
+  (({ dispute, text, detail }) => [dispute, text, detail])(typed({ kind: "review.dispute", round: 1 }, "执行者不认这一轮审查意见（第 1 轮 · x）。")),
+  [true, "第 1 轮审查意见被驳回，等你裁定", "执行者不认这一轮审查意见（第 1 轮 · x）。"],
+  "等你裁定是尾注里的一句，理由点开再看",
+);
+assert.equal(typed({ kind: "accept.done", target: "feat/ui-revamp" }).mono, "feat/ui-revamp", "分支名换成等宽字");
 assert.equal(typed({ kind: "alert" }, "预览没起来：端口被占用。").tier, "alert");
 // 你那条斜杠命令的回答是你要看的东西：不收进回合记录。
 const scopes = typed({ kind: "command.output", command: "/goal --scopes" }, "/goal --scopes\n已保存的目标作用域（ash 快照，不启动模型）：\n- codex：让 test/auth 全过");
@@ -84,10 +103,12 @@ assert.equal(isConflictHandoff("【自动验证未通过 · 第 1 轮】\n请处
 assert.equal(isReviewSystemPrompt("【自由工作流审查未通过 · 第 1 轮】\n请处理"), true);
 assert.equal(isReviewSystemPrompt("【验收未通过 · 需要你解冲突】\n请处理"), false);
 
-// —— 回执记在它所属的那一回合上，不在会话里占行 ——
+// —— 回执记在它所属的那一回合上，不在会话里占行；要你知道的是那一回合的尾注 ——
 const ev = (id, text, notice, tone = "neutral") => ({ kind: "item", item: { kind: "event", id, text, variant: "note", tone, ...(notice ? { notice } : {}) } });
 const agent = (id) => ({ kind: "item", item: { kind: "agent", id, segments: [] } });
 const user = (id) => ({ kind: "item", item: { kind: "user", id, text: "你说的", attachments: [] } });
+const rowIds = (display) => display.rows.map((row) => row.kind === "item" ? row.item.id : row.id);
+const sentence = (footnote) => footnote?.parts.map((part) => part.view.text).join(" · ");
 const attached = conversationSystemRows([
   user("u0"),
   ev("r0", "意见已交给执行者", { kind: "review.repair", source: "free", round: 1 }),
@@ -102,12 +123,73 @@ const attached = conversationSystemRows([
   ev("r4", "孤零零的一条", { kind: "receipt" }),
 ]);
 assert.deepEqual(
-  attached.rows.map((row) => row.kind === "item" ? row.item.id : `${row.kind}:${row.kind === "receipt-log" ? row.receipts.map((r) => r.id).join("+") : row.item.id}`),
-  ["u0", "a1", "notice:m1", "u1", "a2", "u2", "receipt-log:r4"],
-  "会话里只剩你说的、它说的、里程碑一句；找不到回合的回执原处留一颗「N 条记录」",
+  rowIds(attached),
+  ["u0", "a1", "u1", "a2", "u2", "footnote:r4"],
+  "会话里只剩你说的、它说的；找不到回合的回执原处留一颗「N 条记录」",
 );
-assert.deepEqual(attached.receipts.get("a1")?.map((r) => r.id), ["r0", "r1", "r2"], "段里还没回合的回执等第一回合来认，之后的记在最近那一回合上，里程碑不打断归属");
+assert.deepEqual(attached.receipts.get("a1")?.map((r) => r.id), ["r0", "r1", "m1", "r2"], "段里还没回合的回执等第一回合来认，之后的记在最近那一回合上；尾注那一句也在记录里");
 assert.deepEqual(attached.receipts.get("a2")?.map((r) => r.id), ["r3"]);
+assert.equal(sentence(attached.footnotes.get("a1")), "已验收，合并到 main");
+assert.equal(attached.footnotes.get("a1")?.live, false, "后面有你的话，它就是过去的事");
+
+// 图三：审查通过以后验收。收了口的审查轮不再把段切开，结论连同后面的验收记在它前面那一回合上。
+const lane = (id, round, conclusion, extra = {}) => ({
+  kind: "review-lane", id, source: "free", round, totalRounds: null, title: `第 ${round} 轮审查`,
+  items: [{ kind: "event", id: `${id}:end`, text: `自由工作流第 ${round} 轮审查${conclusion === "verified" ? "通过" : "未通过"}`, at: `2026-11-13T0${round}:00:00.000Z`, variant: "note", tone: "neutral", notice: { kind: "review.verdict", source: "free", round, verdict: conclusion === "verified" ? "passed" : "failed" } }],
+  reviewerLabel: "5.5审查", reviewerModel: null, reviewerEffort: null, note: null,
+  startedAt: null, endedAt: `2026-11-13T0${round}:00:00.000Z`, conclusion, complete: true,
+  reportAvailable: false, report: null, runId: null, defaultCollapsed: true, findings: null, ...extra,
+});
+const figure3 = conversationSystemRows([
+  user("u0"),
+  agent("a1"),
+  lane("l4", 4, "verify_failed"),
+  ev("rep", "意见已交给执行者", { kind: "review.repair", source: "free", round: 4 }),
+  agent("a2"),
+  lane("l5", 5, "verified"),
+  ev("gate", "验收暂缓：回归还在跑", { kind: "alert" }),
+  ev("s1", "验收阶段更新：已合并", { kind: "stage", stage: "merged" }),
+  ev("acc", "验收完成：目标分支 feat/ui-revamp", { kind: "accept.done", target: "feat/ui-revamp" }),
+  ev("s2", "验收阶段更新：已验收", { kind: "stage", stage: "accepted" }),
+]);
+assert.deepEqual(rowIds(figure3), ["u0", "a1", "a2"], "审查轮和验收那几步都不占行，末尾没有单挂的「N 条记录」");
+assert.equal(sentence(figure3.footnotes.get("a2")), "第 5 轮审查通过 · 已验收，合并到 feat/ui-revamp", "两件事并成一句；验收成了，之前的验收暂缓退回记录");
+assert.deepEqual(figure3.receipts.get("a2")?.map((r) => r.id), ["l5:end", "gate", "s1", "acc", "s2"], "尾注里的每一句也在记录里");
+assert.equal(figure3.footnotes.get("a2")?.live, true, "最后一个回合、后面没有你的话：它是现在的事");
+assert.equal(sentence(figure3.footnotes.get("a1")), "第 4 轮审查未通过");
+assert.equal(figure3.footnotes.get("a1")?.live, false, "后面又起了回合，未通过就是过去的事，点熄掉");
+
+// 同一回合上重审过的只留最近那一次结论；最后一个回合上的「未通过」字前带点。
+const rerun = conversationSystemRows([agent("a1"), lane("l1", 1, "verify_failed"), lane("l2", 2, "verify_failed")]);
+assert.equal(sentence(rerun.footnotes.get("a1")), "第 2 轮审查未通过");
+assert.deepEqual([rerun.footnotes.get("a1")?.live, rerun.footnotes.get("a1")?.parts[0].view.tone], [true, "bad"]);
+
+// 一轮异常结束是那一回合尾注里的一句；明面的话同一回合只留最近一句。
+const crashed = conversationSystemRows(
+  [agent("a1"), ev("x1", "预览没起来", { kind: "alert" }), ev("x2", "验收暂缓：回归还在跑", { kind: "alert" })],
+  { failures: new Map([["a1", "执行异常结束 · exit 1"]]) },
+);
+assert.equal(sentence(crashed.footnotes.get("a1")), "这一轮异常结束 · 验收暂缓：回归还在跑");
+
+// 图二：没有类型的老记录夹在两个回合之间，一条都不占行。
+const figure2 = conversationSystemRows([
+  agent("a1"),
+  ev("o1", "哨兵已起：等回归跑完（npm test || echo 失败）", undefined, "error"),
+  ev("o2", "哨兵结束：等回归跑完，失败就报错误", undefined, "error"),
+  ev("o3", "本回合要落的终态被拦下，改为检查点暂停：还有 1 个哨兵没了结", undefined, "notice"),
+  ev("o4", "本回合要落的终态被拦下，改为检查点暂停：还有 1 个哨兵没了结", undefined, "error"),
+  agent("a2"),
+]);
+assert.deepEqual(rowIds(figure2), ["a1", "a2"]);
+assert.deepEqual(figure2.receipts.get("a1")?.map((r) => r.id), ["o1", "o2", "o3", "o4"]);
+assert.equal(figure2.footnotes.get("a1"), undefined, "没有要你知道的，就没有尾注");
+
+// 前面确实没有回合可挂（任务没跑过就验收）：留在原处一句小灰字，它的记录跟着。
+const orphan = conversationSystemRows([user("u0"), ev("acc", "验收完成", { kind: "accept.done", target: "main" }), ev("s", "阶段", { kind: "stage", stage: "accepted" })]);
+assert.deepEqual(rowIds(orphan), ["u0", "footnote:acc"]);
+assert.deepEqual(orphan.rows[1].receipts.map((r) => r.id), ["acc", "s"]);
+assert.deepEqual([sentence(orphan.rows[1].footnote), orphan.rows[1].footnote.live], ["已验收，合并到 main", true]);
+
 const oneLog = conversationSystemRows([ev("first", "第一条", { kind: "receipt" })]);
 const growingLog = conversationSystemRows([ev("first", "第一条", { kind: "receipt" }), ev("second", "第二条", { kind: "receipt" })]);
 assert.equal(oneLog.rows[0].id, growingLog.rows[0].id, "同一组追加回执时 React key 必须稳定，展开态不能被冲掉");

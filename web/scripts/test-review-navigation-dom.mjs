@@ -30,7 +30,8 @@ try {
   assert.deepEqual(lanes.adopted.map((lane) => lane.runId), ["old-run"], "重跑那一条说了是哪一场，整张卡认它");
   assert.deepEqual(lanes.text.map((lane) => lane.runId), [null], "只有原文的老旁注同号照旧算重跑");
 
-  const milestone = (name) => page.locator(`[data-lane="${name}"] .review-milestone button`).first();
+  // 审查结论那半句（尾注里那颗键）。
+  const milestone = (name) => page.locator(`[data-lane="${name}"] .turn-footnote button.turn-footnote-part`).first();
   await milestone("old").waitFor();
   const expanded = (pane, record) => page.locator(`[data-pane="${pane}"] [data-record="${record}"] [aria-expanded]`).first().getAttribute("aria-expanded");
   const freeKey = async (runId) => page.locator(`[data-pane="free"] [data-record^="${runId}"]`).first().getAttribute("data-record");
@@ -54,9 +55,10 @@ try {
 
   // ②' 认不出的两张：不发请求，在原处展开这一轮的经过。
   for (const name of ["legacy", "inline-in-free"]) {
-    assert.match(await milestone(name).getAttribute("aria-label") ?? "", /展开这一轮的经过$/, `${name} 不说要去审查格`);
+    assert.doesNotMatch(await milestone(name).getAttribute("aria-label") ?? "", /审查格/, `${name} 不说要去审查格`);
+    assert.equal(await milestone(name).getAttribute("aria-expanded"), "false", `${name} 是就地摊开的键`);
     await milestone(name).click();
-    await page.locator(`[data-lane="${name}"] .review-milestone-body`).waitFor();
+    await page.locator(`[data-lane="${name}"] .turn-footnote-lane`).waitFor();
     assert.equal(await page.evaluate(() => window.__pendingRequest.free()), null, `${name} 不往审查格发请求`);
   }
 

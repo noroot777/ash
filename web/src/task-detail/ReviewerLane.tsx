@@ -2,13 +2,15 @@ import { useEffect, useId, useState, type ReactNode } from "react";
 import { FileText, ShieldCheck } from "@phosphor-icons/react";
 import { ReviewReportDialog } from "../components/MarkdownBody.tsx";
 import type { ReviewFileTarget } from "../components/markdownPolicy.ts";
-import { api } from "../lib/api.ts";
 import { ReviewNote } from "../review/ReviewNote.tsx";
-import { reviewPanelSources, reviewTargetLocatable, type ReviewTarget } from "../review/reviewTarget.ts";
+import type { ReviewTarget } from "../review/reviewTarget.ts";
 import type { ConversationReviewLane, ReviewLaneConclusion } from "./conversationReviewLanes.ts";
-import { NoticeLine } from "./SystemNotice.tsx";
-import { reviewVerdictText, reviewVerdictTone, type ReviewVerdictWord } from "./timelineNoticeCopy.ts";
+import { FootnoteLine } from "./FootnoteLine.tsx";
+import { laneReportUrl } from "./reviewLaneLinks.ts";
+import { laneVerdictView } from "./turnFootnote.ts";
 import { durationBetween, formatInstant } from "./utils.ts";
+
+export { laneReviewTarget, laneRoundOpener } from "./reviewLaneLinks.ts";
 
 function stateOf(conclusion: ReviewLaneConclusion, complete: boolean) {
   if (conclusion === "verified") return { className: "is-verified", label: "已通过" };
@@ -25,42 +27,13 @@ function timing(lane: ConversationReviewLane): string | null {
   return `${start}${end && end !== start ? `–${end}` : ""}${duration ? ` · ${duration}` : ""}`;
 }
 
-const VERDICT: Record<Exclude<ReviewLaneConclusion, null>, ReviewVerdictWord> = {
-  verified: "passed",
-  verify_failed: "failed",
-  inconclusive: "inconclusive",
-};
-
-/** 出了结论的那一轮收成的一句：「第 3 轮审查通过」「第 2 轮审查未通过，2 条意见」。 */
-export function reviewLaneSentence(lane: ConversationReviewLane): string {
-  const verdict = lane.conclusion ? VERDICT[lane.conclusion] : "inconclusive";
-  return reviewVerdictText(lane.source, lane.round, verdict, lane.findings);
-}
-
-/** 点这一轮去审查格时带的话：来源、那一场、第几轮（见 review/reviewTarget）。 */
-export function laneReviewTarget(lane: ConversationReviewLane): ReviewTarget {
-  return { source: lane.source, runId: lane.runId, round: lane.round };
-}
-
 /**
- * 这一轮点了去不去审查格：认得出是哪一条记录（老时间线配不上那一场、这个任务的审查格不装这一类
- * 都算认不出）才给 `open`，否则不给——ReviewerLane 就在原处展开，不去审查格猜。
+ * 一轮审查。还在跑的保留整张卡：审查者正在说话，那是内容。
+ *
+ * 收了口的一轮在任务会话里不再占行，是被审那一回合尾注里的一句（conversationSystemRows）；
+ * 这里的 `complete` 分支给单独摆一轮的地方用（没有回合可挂的、别处的视图）：同一种小灰字，
+ * 点了去右侧「审查」格的这一轮，或者就地摊开这一轮的经过。
  */
-export function laneRoundOpener(
-  lane: ConversationReviewLane,
-  workflowMode: string | null | undefined,
-  open: ((target: ReviewTarget) => void) | undefined,
-): ((target: ReviewTarget) => void) | undefined {
-  return open && reviewTargetLocatable(laneReviewTarget(lane), reviewPanelSources(workflowMode)) ? open : undefined;
-}
-
-/** 指到才出的那半句：谁审的、用时、什么时候出的结论。 */
-export function reviewLaneTail(lane: ConversationReviewLane): string {
-  return [lane.reviewerLabel, durationBetween(lane.startedAt, lane.endedAt), formatInstant(lane.endedAt)]
-    .filter(Boolean)
-    .join(" · ");
-}
-
 export function ReviewerLane({
   taskId,
   lane,
@@ -76,65 +49,19 @@ export function ReviewerLane({
    */
   onOpenRound?: (target: ReviewTarget) => void;
 }) {
-  // 收了口的一轮（出了结论，或者到头了也没给出结论）收成一行；还在跑的保留整张卡。
-  if (lane.complete) return <ReviewMilestone taskId={taskId} lane={lane} onOpenRound={onOpenRound}>{children}</ReviewMilestone>;
-  return <RunningReviewLane taskId={taskId} lane={lane}>{children}</RunningReviewLane>;
-}
-
-/**
- * 出了结论的审查轮：一行一句，整行可点。颜色只在行首那颗盾上，结论写在字里；谁审的、
- * 用时、时刻指到再看。点开去右侧「审查」格的这一轮（报告、附言、证据都在那儿）。
- */
-function ReviewMilestone({ taskId, lane, children, onOpenRound }: {
-  taskId: string;
-  lane: ConversationReviewLane;
-  children: ReactNode;
-  onOpenRound?: (target: ReviewTarget) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const [report, setReport] = useState<ReviewFileTarget | null>(null);
-  const bodyId = useId();
-  const verdict = lane.conclusion ? VERDICT[lane.conclusion] : "inconclusive";
-  const view = {
-    tier: "milestone" as const,
-    tone: reviewVerdictTone(verdict),
-    glyph: "review" as const,
-    text: reviewLaneSentence(lane),
-    detail: null,
-  };
-  const openReport = () => {
-    const target = lane.report;
-    if (!target) return;
-    setReport({ name: "report.md", url: reportUrl(taskId, target) });
-  };
-  return (
-    <section className="review-milestone" aria-label={view.text}>
-      <NoticeLine
-        view={view}
-        tail={reviewLaneTail(lane)}
-        onOpen={onOpenRound ? () => onOpenRound(laneReviewTarget(lane)) : () => setExpanded((value) => !value)}
-        openLabel={onOpenRound ? "在右侧审查格里打开这一轮" : expanded ? "收起这一轮的经过" : "展开这一轮的经过"}
+  if (lane.complete) {
+    const view = laneVerdictView(lane);
+    return (
+      <FootnoteLine
+        standalone
+        taskId={taskId}
+        footnote={{ id: lane.id, live: false, parts: [{ kind: "review", id: lane.id, at: lane.endedAt ?? undefined, view, lane }] }}
+        reviewOpener={() => onOpenRound}
+        renderLane={() => children}
       />
-      {!onOpenRound && expanded && (
-        <div className="review-milestone-body" id={bodyId}>
-          {lane.reportAvailable && lane.report && (
-            <button type="button" className="review-milestone-report" onClick={openReport}>
-              <FileText size={12} aria-hidden="true" />审查报告
-            </button>
-          )}
-          {lane.note && <ReviewNote text={lane.note} />}
-          {children}
-        </div>
-      )}
-      {report && <ReviewReportDialog target={report} onReviewReport={setReport} onClose={() => setReport(null)} />}
-    </section>
-  );
-}
-
-function reportUrl(taskId: string, target: NonNullable<ConversationReviewLane["report"]>): string {
-  return target.kind === "inline"
-    ? api.taskReviewFileUrl(taskId, target.round, "report.md")
-    : api.freeReviewFileUrl(taskId, target.runId, target.round, "report.md");
+    );
+  }
+  return <RunningReviewLane taskId={taskId} lane={lane}>{children}</RunningReviewLane>;
 }
 
 /** 审查进行中：保留整张卡，看得见审查者正在说什么。 */
@@ -169,7 +96,7 @@ function RunningReviewLane({
   const openReport = () => {
     const target = lane.report;
     if (!target) return;
-    setReport({ name: "report.md", url: reportUrl(taskId, target) });
+    setReport({ name: "report.md", url: laneReportUrl(taskId, target) });
   };
 
   return (
