@@ -1,40 +1,34 @@
-// 哨兵结果的回合内交付(monitor-turn-handoff.ts)与「最后一批输出 + 结束」并成一次(monitor-events.ts
-// 的 `deferFlush`),外加三条哨兵时间线记录带上 monitorId。
+// 哨兵结果的回合内交付(monitor-turn-handoff.ts):交出去、带回回执号才算送到(monitor-turn-ack.ts)、
+// 收口时结清。「最后一批输出 + 结束」并成一次那一半在 test-monitor-merge-window.ts。
 //
-//  ① pause_task 那一刻结果已在托盘 ⇒ 不暂停、不记检查点,返回里带着结果;会话里一条带类型的记录
-//  ② complete_task 被「结果排着没送到」拦下 ⇒ 随 409 交出去;再调一次就过
+//  ① pause_task 那一刻结果已在托盘 ⇒ 不暂停、不记检查点,返回里带着结果和回执号;会话里一条带类型的记录
+//  ② complete_task 被「结果排着没送到」拦下 ⇒ 随 409 交出去;带回回执号再调一次就过
 //  ③ 两个出口撞在同一刻:恰好一个拿走
 //  ④ 审查者的结果不会被执行回合收走
 //  ⑤ 那一轮没正常收口 ⇒ 退回待发送,熬得过终态连坐、终态上等着(不作废)
-//  ⑥ 开机那一扫:记号挂在没接回来的回合上 ⇒ 退回;⑥b 正常收口、MCP 却没发回确认 ⇒ 退回
-//  ⑦ 空闲任务上 `echo A; exit 0` / 命中 stopWhen:一条消息、两类事件、一次唤醒
-//  ⑧ 第 1 轮审查:领取之后出错 ⇒ 退回、再调一次照交(F1);挑完候选之后方向换了 ⇒ 一行都领不到
-//    (F2);扫描读到之后行换了领取者 ⇒ 不碰(F3);合并窗口里别的触发源领不走(F4);老行认结束(N1)
-//  ⑨ 第 2 轮审查:领取之后出错、什么都没补上 ⇒ 没有确认就拦着完成、算丢了再交一次(1);业务拒绝里的
-//    结果正文写着 ECONNRESET ⇒ 补捞认得出是 ash 应答过的,不退回、不补录(2);积压过的老行窗口已过 ⇒
-//    最新一批另起一行,跟「结束」并在一起(3)
-//  ⑩ 第 3 轮审查:并发的两次 pause 不重复交、不换交付号,迟到的旧号确认不到(1);明确放弃了的
-//    「交过没确认」不拦完成、不再交,审查等待那一侧同一份集合(2);窗口末尾才到的最新一批有自己完整的
-//    窗口,不被它前面那一行的期限带走;持续输出时最多两行、最新一批单独一行(3);不分执行器、真 MCP
-//    那一侧拿到返回就确认,不声明会确认的调用方不交(4)
+//  ⑥ 开机那一扫:记号挂在没接回来的回合上 ⇒ 退回;⑥b 正常收口、却没带回回执号 ⇒ 退回
+//  ⑧ 第 1 轮审查:挑完候选之后方向换了 ⇒ 一行都领不到(F2);扫描读到之后行换了领取者 ⇒ 不碰(F3);
+//    老行认结束(N1)
+//  ⑨ 领取之后出错、什么都没补上 ⇒ 拦着完成、回合里不再交、收口时退回(第 2 轮 1 / 第 4 轮 2);业务
+//    拒绝里的结果正文写着 ECONNRESET ⇒ 补捞认得出是 ash 应答过的,不退回、不补录(第 2 轮 2)
+//  ⑩ 第 3 轮审查:并发的两次 pause 不重复交、不换回执号(1);明确放弃了的「交过没确认」不拦完成、
+//    审查等待那一侧同一份集合(2);不分执行器,带不回回执号的调用方不交(4)
+//  ⑪ 第 4 轮审查:MCP 拿到了返回不算 agent 收到 —— 不带回回执号,完成照样拦着(1);过多久都不在回合里
+//    重交、迟到的回执号照样认(2);断线补录的那次调用里带着的回执号也认
 import assert from "node:assert/strict";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { serve } from "@hono/node-server";
-import { delimiter, join } from "node:path";
-import { and, eq, sql } from "drizzle-orm";
+import { join } from "node:path";
+import { eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
-import { appendMonitorWake } from "@ash/shared/monitor-wake";
 import { ASH_TURN_IDENTITY_ENV } from "@ash/shared/mcp";
-import {
-  db, makeTask, monitors, now, pending, pendingOf, reviewInFlight, root, runs, scheduledMessages,
-  sessions, startMonitor, tasks, teardown, until,
-} from "./monitors-fixture.js";
-import { installFakeClaude } from "./scheduled-messages-fixture.js";
-import { mountTaskRunRoutes } from "../src/task-run-routes.js";
+import { db, monitors, now, pending, pendingOf, reviewInFlight, root, runs, scheduledMessages, tasks, teardown } from "./monitors-fixture.js";
+import { api, liveTurn, notices, onSelect, post, queuedResult, rowOf, sleep, taskOf } from "./monitor-turn-handoff-fixture.js";
 import {
   handMonitorResultsOnPause, returnOrphanTurnHandoffs, settleTurnHandoffs,
 } from "../src/monitor-turn-handoff.js";
+import { confirmHandoffs } from "../src/monitor-turn-ack.js";
 import { answeredMcpError, isUndeliveredMcpFailure } from "@ash/shared/mcp-delivery";
 import { detachedPathsFor } from "../src/executors/detached.js";
 import { replayUndeliveredMcpCalls } from "../src/mcp-handoff.js";
@@ -42,106 +36,12 @@ import { RUNS_DIR } from "../src/paths.js";
 import { unsettledMonitorResponsibility } from "../src/monitor-responsibility.js";
 import { settleTaskStatus } from "../src/settle-status.js";
 import { deliveryVerdict } from "../src/pending-verdict.js";
-import { sessionTranscriptPath, TURN_SENTINEL } from "../src/transcript.js";
 import { id } from "../src/util.js";
 
-type Row = typeof scheduledMessages.$inferSelect;
-const log = join(root, "turn-handoff-input.log");
-process.env.PATH = `${installFakeClaude(root)}${delimiter}${process.env.PATH ?? ""}`;
-process.env.ASH_ALLOW_REAL_AGENT = "1";
-process.env.ASH_TEST_LEAD_LOG = log;
-
-const api = new Hono();
-mountTaskRunRoutes(api);
-/** 默认按 ash 的 MCP 那样声明「我会确认」(`monitorAck`);要演不声明的调用方就显式传 false。 */
-const post = (path: string, token: string, body: Record<string, unknown> = {}, headers: Record<string, string> = {}) =>
-  api.request(path, {
-    method: "POST", headers: { "content-type": "application/json", "x-ash-turn-token": token, ...headers },
-    body: JSON.stringify({ monitorAck: true, ...body }),
-  });
-/** MCP 那一侧拿到返回之后发回的确认(monitor-turn-ack.ts)。返回确认到了几行。 */
-const ack = async (taskId: string, hand: string | undefined) =>
-  ((await (await post(`/tasks/${taskId}/monitor-results/ack`, "", { hand })).json()) as { acked: number }).acked;
-/** 把那一次交付挪到「交出去太久」那一侧(算丢了)。 */
+/** 把那一次交付挪到很久以前:回合里过多久都不重交(第 4 轮审查 2)。 */
 const age = (messageId: string) => db.update(scheduledMessages)
-  .set({ turnHandoff: sql`json_set(${scheduledMessages.turnHandoff}, '$.at', ${new Date(Date.now() - 31_000).toISOString()})` })
+  .set({ turnHandoff: sql`json_set(${scheduledMessages.turnHandoff}, '$.at', ${new Date(Date.now() - 600_000).toISOString()})` })
   .where(eq(scheduledMessages.id, messageId));
-
-/**
- * 在生产代码某一次 `db.select(<投影>).from(<表>)` 出结果之后先做一件事(可以抛错、可以改库),
- * 用来站进「读完、还没写」那条缝里。`pick` 按投影认是哪一次;返回撤掉这层的函数。
- */
-function onSelect(
-  table: unknown, pick: (projection: Record<string, unknown> | undefined) => boolean,
-  act: (rows: unknown[]) => Promise<unknown[]>,
-): () => void {
-  const original = db.select.bind(db);
-  (db as { select: unknown }).select = (...args: unknown[]) => {
-    const query = (original as (...a: unknown[]) => { from: (t: unknown) => unknown })(...args);
-    const from = query.from.bind(query);
-    query.from = (t: unknown) => {
-      const builder = from(t) as { then: (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) => Promise<unknown> };
-      if (t !== table || !pick(args[0] as Record<string, unknown> | undefined)) return builder;
-      const then = builder.then.bind(builder);
-      builder.then = (ok, ko) => then((rows) => act(rows as unknown[])).then(ok, ko);
-      return builder;
-    };
-    return query;
-  };
-  return () => { (db as { select: unknown }).select = original; };
-}
-const rowOf = async (messageId: string) =>
-  (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, messageId))).at(0)!;
-const taskOf = async (taskId: string) => (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** 一条正在跑的执行回合:回合锁 + 令牌落库并绑上 + 一条会话(时间线落在它上面)。 */
-async function liveTurn(opts: {
-  role?: string; review?: { run: string; round: number }; agentType?: string; token?: string;
-} = {}) {
-  const taskId = await makeTask();
-  const owner = runs.claimOwnTurn(taskId, opts.role ?? "single", opts.review ?? null);
-  assert.ok(owner, "占得到回合");
-  const token = opts.token ?? `turn-${id()}`;
-  await db.update(tasks).set({ activeTurnToken: token }).where(eq(tasks.id, taskId));
-  runs.bindTurnToken(taskId, token);
-  const sessionId = `s-${id()}`;
-  await db.insert(sessions).values({
-    id: sessionId, taskId, role: "single", agentType: opts.agentType ?? "claude", executor: opts.agentType ?? "claude",
-    cwd: root, startedAt: now(), turnStartedAt: now(),
-  });
-  return { taskId, token, owner: owner!, sessionId };
-}
-
-/** 一条哨兵 + 它排在托盘里的一条结果(形状跟 `mergeOrEnqueueMonitorEvent` 新建那一支一致)。 */
-async function queuedResult(taskId: string, text: string, opts: {
-  kind?: "output" | "ended"; reviewer?: { run: string; round: number };
-} = {}): Promise<Row & { monitorId: string }> {
-  const monitorId = id();
-  await db.insert(monitors).values({
-    id: monitorId, taskId, command: "fixture", description: `desc-${text}`, cwd: root, status: "exited",
-    logPath: join(root, `${monitorId}.log`), startedAt: now(),
-    expiresAt: new Date(Date.now() + 600_000).toISOString(),
-    sourceRole: opts.reviewer ? "reviewer" : "single",
-    sourceReviewRun: opts.reviewer?.run ?? null, sourceReviewRound: opts.reviewer?.round ?? null,
-  });
-  const message = pending.pendingMessageRow({
-    taskId, text, origin: `monitor:${monitorId}`,
-    turnSource: opts.reviewer ? { role: "reviewer", review: opts.reviewer } : { role: "single" },
-    monitorWake: appendMonitorWake(null, { kind: opts.kind ?? "ended", monitorId, source: `desc-${text}`, body: text }),
-  });
-  await db.insert(scheduledMessages).values(message);
-  return { ...message, monitorId };
-}
-
-/** 会话转录里认得出来的那几条带类型的旁注。 */
-function notices(taskId: string, sessionId: string): Array<{ kind: string; [key: string]: unknown }> {
-  const path = sessionTranscriptPath(taskId, sessionId);
-  if (!existsSync(path)) return [];
-  return readFileSync(path, "utf8").split("\n").filter((line) => line.startsWith(TURN_SENTINEL))
-    .map((line) => JSON.parse(line.slice(TURN_SENTINEL.length)) as { notice?: { kind: string } })
-    .flatMap((turn) => turn.notice ? [turn.notice] : []);
-}
 
 try {
   // ── ① pause_task:结果已到 ⇒ 不暂停,当场交出 ──────────────────────────────────
@@ -154,10 +54,9 @@ try {
     assert.equal(body.paused, false, "没有暂停");
     assert.match(body.note, /没有暂停/);
     assert.match(body.monitorResults, /RESULT_READY_PAUSE/, "结果原文随返回交出");
-    assert.match(body.monitorResultsReceipt, /^[0-9a-f]{12}$/, "带着这一次的交付号");
-    assert.equal((await rowOf(result.id)).turnHandoff?.ackedAt, undefined, "确认之前不算送到");
-    assert.equal(await ack(taskId, body.monitorResultsReceipt), 1);
-    assert.ok((await rowOf(result.id)).turnHandoff?.ackedAt, "确认落在行上");
+    assert.match(body.monitorResultsReceipt, /^[0-9a-f]{12}$/, "带着这一次的回执号");
+    assert.ok(body.note.includes(`monitorReceipt="${body.monitorResultsReceipt}"`), "返回里那句话告诉它怎么带回来");
+    assert.equal((await rowOf(result.id)).turnHandoff?.ackedAt, undefined, "带回来之前不算送到");
     assert.equal((await taskOf(taskId)).resumePrompt, null, "不记检查点");
     const after = await rowOf(result.id);
     assert.equal(after.status, "sent");
@@ -169,8 +68,11 @@ try {
     assert.equal(handed!.via, "pause");
     assert.deepEqual(handed!.monitorWake.events.map((e) => [e.monitorId, e.kind]), [[result.monitorId, "ended"]]);
     // 托盘空了之后再调 = 老路:记检查点、这一轮会落 paused。
-    const again = await post(`/tasks/${taskId}/pause`, token, { resumePrompt: "继续：别的" });
+    // 这一次带回回执号 ⇒ 确认落在行上。
+    const again = await post(`/tasks/${taskId}/pause`, token,
+      { resumePrompt: "继续：别的", monitorReceipt: body.monitorResultsReceipt });
     assert.equal(((await again.json()) as { paused: boolean }).paused, true);
+    assert.ok((await rowOf(result.id)).turnHandoff?.ackedAt, "确认落在行上");
     // 正常收口(留了检查点)且确认过 ⇒ 送达,记号销掉。
     await settleTurnHandoffs(taskId, token, true);
     const settled = await rowOf(result.id);
@@ -191,9 +93,9 @@ try {
     assert.match(body.monitorResults, /RESULT_READY_COMPLETE/);
     assert.equal((await taskOf(taskId)).completeConfirmedAt, null);
     assert.equal((await rowOf(result.id)).status, "sent");
-    assert.equal(await ack(taskId, body.monitorResultsReceipt), 1);
-    const second = await post(`/tasks/${taskId}/complete`, token);
-    assert.equal(second.status, 200, "它收到了(确认过)⇒ 闸放行");
+    assert.equal((await post(`/tasks/${taskId}/complete`, token)).status, 409, "没带回回执号 ⇒ 照样拦着");
+    const second = await post(`/tasks/${taskId}/complete`, token, { monitorReceipt: body.monitorResultsReceipt });
+    assert.equal(second.status, 200, "带回回执号 = 它读到了 ⇒ 闸放行");
     assert.ok((await taskOf(taskId)).completeConfirmedAt);
     await settleTurnHandoffs(taskId, token, true);
     assert.equal((await rowOf(result.id)).turnTakenBy, null, "交卷收口 ⇒ 送达");
@@ -212,7 +114,7 @@ try {
     const row = await rowOf(result.id);
     if (handed) assert.equal(row.deliveringSince, null);
     else assert.equal(row.status, "pending");
-    if (handed) assert.equal(await ack(taskId, handed.hand), 1);
+    if (handed) assert.equal(await confirmHandoffs(taskId, token, [handed.hand]), 1);
     await settleTurnHandoffs(taskId, token, true);
     runs.releaseTurn(taskId, owner);
   }
@@ -256,7 +158,7 @@ try {
     const res = await post(`/tasks/${taskId}/pause`, nextToken, { resumePrompt: "继续" });
     const again = (await res.json()) as { monitorResults?: string; monitorResultsReceipt?: string };
     assert.match(again.monitorResults ?? "", new RegExp(`RETURNED_${label}`));
-    assert.equal(await ack(taskId, again.monitorResultsReceipt), 1);
+    assert.equal(await confirmHandoffs(taskId, nextToken, [again.monitorResultsReceipt!]), 1);
     await settleTurnHandoffs(taskId, nextToken, true);
     runs.releaseTurn(taskId, next!);
   }
@@ -279,7 +181,7 @@ try {
     assert.ok(row.turnReturnedAt);
   }
 
-  // ── ⑥b 正常收口、MCP 却没发回确认(返回没回到它手上)⇒ 退回 ─────────────────────────
+  // ── ⑥b 正常收口、却没带回回执号(返回没回到它手上)⇒ 退回 ───────────────────────────
   {
     const { taskId, token, owner } = await liveTurn();
     const result = await queuedResult(taskId, "NO_RECEIPT");
@@ -294,7 +196,7 @@ try {
     await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, result.id));
   }
 
-  // ── ⑧/⑨-1 领取之后那一步出错(而且什么都不补)⇒ 没确认:拦着完成,算丢了再交一次,收口时退回 ────
+  // ── ⑧/⑨-1 领取之后那一步出错(而且什么都不补)⇒ 没确认:拦着完成、回合里不再交,收口时退回 ────
   for (const ending of ["再调一次", "直接收口"] as const) {
     const { taskId, token, owner } = await liveTurn();
     const result = await queuedResult(taskId, `MUST_READ_${ending}`);
@@ -315,20 +217,19 @@ try {
       const second = await post(`/tasks/${taskId}/complete`, token);
       assert.equal(second.status, 409, "没确认 ⇒ 照样拦下(第 2 轮审查 1:第二次不许直接完成)");
       const inflight = (await second.json()) as { error: string; monitorResults?: string };
-      assert.equal(inflight.monitorResults, undefined, "还在路上的不再交(第 3 轮审查 1)");
-      assert.match(inflight.error, /交给过你、还没确认送到/);
+      assert.equal(inflight.monitorResults, undefined, "回合里不再交第二遍");
+      assert.match(inflight.error, /还没带回回执号/);
       await age(result.id);
-      const third = await post(`/tasks/${taskId}/complete`, token);
-      assert.equal(third.status, 409, "交出去太久 ⇒ 算丢了,再交一次");
-      const again = (await third.json()) as { monitorResults?: string; monitorResultsReceipt?: string };
-      assert.match(again.monitorResults ?? "", new RegExp(`MUST_READ_${ending}`));
-      assert.notEqual(again.monitorResultsReceipt, held.turnHandoff?.hand, "换了一个交付号");
-      assert.equal(await ack(taskId, held.turnHandoff?.hand), 0, "迟到的旧号确认不到");
-      assert.equal((await post(`/tasks/${taskId}/complete`, token)).status, 409, "旧号确认不算数");
-      assert.equal(await ack(taskId, again.monitorResultsReceipt), 1);
-      assert.equal((await post(`/tasks/${taskId}/complete`, token)).status, 200, "收到了才放行");
+      const later = (await (await post(`/tasks/${taskId}/complete`, token)).json()) as { monitorResults?: string };
+      assert.equal(later.monitorResults, undefined, "过了多久都不重交:慢不等于丢(第 4 轮审查 2)");
+      // 它没见过那次返回 ⇒ 走 pause_task 收尾,收口时退回、唤醒那一路再送。
+      const paused = await post(`/tasks/${taskId}/pause`, token, { resumePrompt: "继续" });
+      assert.equal(((await paused.json()) as { paused: boolean }).paused, true);
       await settleTurnHandoffs(taskId, token, true);
-      assert.equal((await rowOf(result.id)).turnTakenBy, null, "确认过 ⇒ 送达");
+      const back = await rowOf(result.id);
+      assert.equal(back.status, "pending", "没确认 ⇒ 退回");
+      assert.ok(back.turnReturnedAt);
+      await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, result.id));
     } else {
       await settleTurnHandoffs(taskId, token, true);
       const back = await rowOf(result.id);
@@ -346,7 +247,7 @@ try {
     const first = await post(`/tasks/${taskId}/complete`, token);
     assert.equal(first.status, 409);
     const body = await first.json() as { error: string; monitorResults: string; monitorResultsReceipt: string };
-    assert.equal(await ack(taskId, body.monitorResultsReceipt), 1);
+    assert.equal(await confirmHandoffs(taskId, token, [body.monitorResultsReceipt]), 1);
     // MCP 端交给 agent 的那段话(`failWithMonitorResults` 的形状),agent 随后调了 pause_task、成功了。
     const rendered = answeredMcpError(409, "POST", `/tasks/${taskId}/complete`, `${body.error}\n\n${body.monitorResults}`);
     assert.equal(isUndeliveredMcpFailure({ message: rendered }), false, "ash 应答过的拒绝不算没送达");
@@ -370,7 +271,7 @@ try {
     runs.releaseTurn(taskId, owner);
   }
 
-  // ── ⑩-1 并发的两次 pause_task:只有一次交出去、交付号不被换掉;旧号/错号确认不到 ──────────
+  // ── ⑩-1 并发的两次 pause_task:只有一次交出去、回执号不被换掉;错号/别的回合确认不到 ──────────
   {
     const { taskId, token, owner } = await liveTurn();
     const result = await queuedResult(taskId, "CONCURRENT_PAUSE");
@@ -381,12 +282,14 @@ try {
     assert.match(handed[0]!.monitorResults!, /CONCURRENT_PAUSE/);
     assert.equal(replies.find((b) => b.monitorResults === undefined)!.paused, true, "另一次照老路记检查点");
     const row = await rowOf(result.id);
-    assert.equal(row.turnHandoff?.hand, handed[0]!.monitorResultsReceipt, "交付号还是交出去的那一个");
-    // 还在路上 ⇒ 再来一次也不交。
-    assert.equal(await handMonitorResultsOnPause(taskId, token, []), null, "在路上的不再交");
-    assert.equal(await ack(taskId, "0123456789ab"), 0, "别的号确认不到");
-    assert.equal(await ack(taskId, handed[0]!.monitorResultsReceipt), 1);
-    assert.equal(await ack(taskId, handed[0]!.monitorResultsReceipt), 0, "确认只落一次");
+    assert.equal(row.turnHandoff?.hand, handed[0]!.monitorResultsReceipt, "回执号还是交出去的那一个");
+    await age(result.id);
+    assert.equal(await handMonitorResultsOnPause(taskId, token, []), null, "过了多久都不再交");
+    const hand = handed[0]!.monitorResultsReceipt!;
+    assert.equal(await confirmHandoffs(taskId, token, ["0123456789ab"]), 0, "别的号确认不到");
+    assert.equal(await confirmHandoffs(taskId, "turn-other", [hand]), 0, "别的回合带回来的不算");
+    assert.equal(await confirmHandoffs(taskId, token, [hand]), 1, "迟到多久的回执号都照样认");
+    assert.equal(await confirmHandoffs(taskId, token, [hand]), 0, "确认只落一次");
     await settleTurnHandoffs(taskId, token, true);
     assert.equal((await rowOf(result.id)).turnTakenBy, null, "确认过 + 正常收口 ⇒ 送达");
     runs.releaseTurn(taskId, owner);
@@ -403,7 +306,6 @@ try {
     assert.equal((await post(`/tasks/${taskId}/complete`, token)).status, 409, "没确认就拦着");
     await db.update(monitors).set({ resultsAbandonedAt: now() }).where(eq(monitors.id, result.monitorId));
     assert.deepEqual(await classes(), [], "明确放弃了 ⇒ 不再是未了结的责任");
-    await age(result.id);
     const done = await post(`/tasks/${taskId}/complete`, token);
     assert.equal(done.status, 200, "放弃了的不拦完成");
     assert.equal(((await done.json()) as { monitorResults?: string }).monitorResults, undefined, "也不再交");
@@ -411,7 +313,7 @@ try {
     await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, result.id));
   }
 
-  // ── ⑩-4 不分执行器:gemini 的回合照样交;不声明会确认的调用方(升级前的 MCP)不交 ───────────
+  // ── ⑩-4 不分执行器:gemini 的回合照样交;带不回回执号的调用方(升级前的 MCP)不交 ───────────
   {
     const { taskId, token, owner } = await liveTurn({ agentType: "gemini" });
     const result = await queuedResult(taskId, "ANY_EXECUTOR");
@@ -423,12 +325,14 @@ try {
     const body = (await res.json()) as { paused: boolean; monitorResults?: string; monitorResultsReceipt?: string };
     assert.equal(body.paused, false, "gemini 的回合也交");
     assert.match(body.monitorResults ?? "", /ANY_EXECUTOR/);
-    assert.equal(await ack(taskId, body.monitorResultsReceipt), 1);
+    assert.equal(await confirmHandoffs(taskId, token, [body.monitorResultsReceipt!]), 1);
     await settleTurnHandoffs(taskId, token, true);
     runs.releaseTurn(taskId, owner);
   }
 
-  // ── ⑩-4b 真 MCP 那一侧:pause_task 工具拿到返回 ⇒ 先发回确认,再把结果交给执行器 ────────────
+  // ── ⑪-1 真 MCP 那一侧:pause_task 工具拿到返回、交给执行器 —— MCP 收到不算 agent 收到 ────────────
+  // 第 4 轮审查 1 的现场:MCP 拿到了返回(这里是工具函数真的返回了),agent 却没再带回回执号 ⇒ 完成
+  // 照样拦着;带回来(同一个工具、`monitorReceipt`)才放行。
   {
     const token = `turn-${id()}`;
     const server = serve({ fetch: new Hono().route("/api", api).fetch, hostname: "127.0.0.1", port: 0 });
@@ -437,17 +341,46 @@ try {
     process.env[ASH_TURN_IDENTITY_ENV.turnToken] = token;
     const { taskId, owner } = await liveTurn({ token, agentType: "opencode" });
     const result = await queuedResult(taskId, "VIA_REAL_MCP");
-    const handlers = new Map<string, (args: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }>>();
+    const handlers = new Map<string, (args: Record<string, unknown>) => Promise<{ isError?: boolean; content: Array<{ text: string }> }>>();
     const { registerTaskTurnTools } = await import("../../mcp/src/tools/task-turn.js");
     registerTaskTurnTools({
       registerTool(name: string, _config: unknown, handler: never) { handlers.set(name, handler); },
     } as never);
     const out = await handlers.get("pause_task")!({ taskId, resumePrompt: "继续", directionToken: "" });
-    server.close();
     assert.match(out.content[0]!.text, /没有暂停[\s\S]*VIA_REAL_MCP/, "执行器拿到的是摊开的结果");
-    assert.ok((await rowOf(result.id)).turnHandoff?.ackedAt, "交给执行器之前已经确认");
+    assert.equal((await rowOf(result.id)).turnHandoff?.ackedAt, undefined, "MCP 拿到了不算 agent 收到");
+    const blocked = await handlers.get("complete_task")!({ taskId, directionToken: "" });
+    assert.equal(blocked.isError, true, "没带回回执号 ⇒ 完成照样拦着");
+    const hand = /monitorReceipt="([0-9a-f]{12})"/.exec(out.content[0]!.text)?.[1];
+    assert.ok(hand, "回执号就在它读到的那段话里");
+    const done = await handlers.get("complete_task")!({ taskId, directionToken: "", monitorReceipt: hand });
+    server.close();
+    assert.notEqual(done.isError, true, "带回回执号 ⇒ 放行");
+    assert.ok((await rowOf(result.id)).turnHandoff?.ackedAt);
     await settleTurnHandoffs(taskId, token, true);
     assert.equal((await rowOf(result.id)).turnTakenBy, null);
+    runs.releaseTurn(taskId, owner);
+  }
+
+  // ── ⑪-2 断线补录:那次 complete_task 带着回执号、通道断了 ⇒ 补录时回执号一起认 ────────────────
+  {
+    const { taskId, token, owner, sessionId } = await liveTurn();
+    const result = await queuedResult(taskId, "REPLAYED_RECEIPT");
+    const handed = await handMonitorResultsOnPause(taskId, token, []);
+    assert.ok(handed);
+    const turnStart = now();
+    const out = detachedPathsFor(join(RUNS_DIR, taskId), sessionId, turnStart).out;
+    mkdirSync(join(RUNS_DIR, taskId), { recursive: true });
+    appendFileSync(out, [
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "c1", name: "mcp__ash__complete_task",
+        input: { taskId, monitorReceipt: handed!.hand } }] } }),
+      JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "c1", is_error: true,
+        content: "连不上 ash server：fetch failed ECONNREFUSED" }] } }),
+    ].join("\n") + "\n");
+    assert.equal(await replayUndeliveredMcpCalls({ taskId, sessId: sessionId, turnStart, agentType: "claude" }), 1);
+    assert.ok((await rowOf(result.id)).turnHandoff?.ackedAt, "补录的那次调用里带着的回执号照样认");
+    assert.ok((await taskOf(taskId)).completeConfirmedAt, "认了之后闸放行、确认落库");
+    await settleTurnHandoffs(taskId, token, true);
     runs.releaseTurn(taskId, owner);
   }
 
@@ -517,164 +450,6 @@ try {
     assert.deepEqual(handed?.monitorWake.events.map((e) => e.kind), ["ended"]);
     await settleTurnHandoffs(taskId, token, true);
     runs.releaseTurn(taskId, owner);
-  }
-
-  // ── ⑧ F4:合并窗口落在行上 ⇒ 巡检、按任务扫描、回合里的交付都领不走 ─────────────────
-  {
-    const taskId = await makeTask({ status: "paused" });
-    await db.insert(sessions).values({
-      id: `s-${id()}`, taskId, role: "single", agentType: "claude", executor: "claude", cwd: root,
-      startedAt: new Date(Date.now() - 60_000).toISOString(), endedAt: new Date(Date.now() - 30_000).toISOString(),
-    });
-    const started = await startMonitor({ taskId, command: "echo FINAL_OUTPUT; sleep 0.9; exit 0", description: "grace-bypass" });
-    assert.ok(started.ok);
-    const monitorId = started.ok ? started.monitor.id : "";
-    const origin = `monitor:${monitorId}`;
-    const ofMonitor = () => db.select().from(scheduledMessages).where(eq(scheduledMessages.origin, origin));
-    await until("输出进了托盘", async () => (await ofMonitor()).some((m) => m.text.includes("FINAL_OUTPUT")));
-    assert.ok((await ofMonitor())[0]!.mergeHoldUntil, "那一行带着合并窗口");
-    await pending.deliverPendingMessages();
-    await pending.deliverPendingMessages(taskId);
-    const held = await ofMonitor();
-    assert.deepEqual(held.map((m) => m.status), ["pending"], "窗口里谁来领都领不走");
-    await until("结束并进来、一起送出", async () => (await ofMonitor()).every((m) => m.status === "sent")
-      && (await ofMonitor()).some((m) => /哨兵结束/.test(m.text)));
-    const rows = await ofMonitor();
-    assert.equal(rows.length, 1, "只有一条消息");
-    assert.deepEqual((rows[0]!.monitorWake?.events ?? []).map((e) => e.kind), ["output", "ended"]);
-    await until("那一回合跑完", async () => !runs.isTurnClaimed(taskId));
-  }
-
-  // ── ⑨-3 忙着时积压过一条进展、窗口早过了;最后一行紧跟着退出 ⇒ 最后一批跟「结束」并在一起 ─────
-  {
-    const { taskId, owner } = await liveTurn();
-    const started = await startMonitor({
-      taskId, command: "echo FIRST_PROGRESS; sleep 3; echo FINAL_OUTPUT; sleep 0.9; exit 0", description: "backlog-then-final",
-    });
-    assert.ok(started.ok);
-    const origin = `monitor:${started.ok ? started.monitor.id : ""}`;
-    const ofMonitor = async () => (await db.select().from(scheduledMessages).where(eq(scheduledMessages.origin, origin)))
-      .sort((x, y) => x.createdAt.localeCompare(y.createdAt));
-    await until("最后一行进了托盘", async () => (await ofMonitor()).some((m) => m.text.includes("FINAL_OUTPUT")), 10_000);
-    const before = await ofMonitor();
-    assert.equal(before.length, 2, "窗口过了的老行不收新的那一批:另起一行");
-    assert.doesNotMatch(before[0]!.text, /FINAL_OUTPUT/);
-    // 回合收口、任务空了,巡检随即来领:积压的那一行可以走,最新那一批不行。
-    runs.releaseTurn(taskId, owner);
-    await db.update(tasks).set({ status: "paused" }).where(eq(tasks.id, taskId));
-    await pending.deliverPendingMessages();
-    const final = (await ofMonitor()).find((m) => m.text.includes("FINAL_OUTPUT"))!;
-    assert.equal(final.status, "pending", "最新那一批在窗口里,谁来领都领不走");
-    // 同一个任务两次唤醒之间有 5 秒冷却(pending-messages.ts `cooling`),第二条要等下一趟巡检
-    // (生产上是 30 秒那一趟);这里过了冷却手动扫一次。
-    await until("结束并进最新那一行", async () => (await ofMonitor()).some((m) => /哨兵结束/.test(m.text)));
-    await sleep(5_500);
-    await pending.deliverPendingMessages();
-    await until("两行都送出", async () => {
-      const rows = await ofMonitor();
-      return rows.every((m) => m.status === "sent") && rows.some((m) => /哨兵结束/.test(m.text));
-    });
-    const rows = await ofMonitor();
-    assert.equal(rows.length, 2, "积压一行 + 最后一批与结束一行");
-    assert.deepEqual((rows[1]!.monitorWake?.events ?? []).map((e) => e.kind), ["output", "ended"]);
-    assert.match(rows[1]!.text, /FINAL_OUTPUT[\s\S]*哨兵结束/);
-    await until("回合都跑完", async () => !runs.isTurnClaimed(taskId));
-  }
-
-  // ── ⑩-3a 最新一批到在前一行窗口的末尾 ⇒ 它有自己完整的窗口,不被前一行的期限带走 ──────────
-  // 第 3 轮审查的现场:第一批 t0 进来、窗口到 t0+2;第二批 t0+1.2 到,并进那一行就只剩 0.8 秒,
-  // t0+2 那一刻被(这里是回合里的交付)单独领走,紧跟着的「结束」另起一行。
-  {
-    const { taskId, token, owner } = await liveTurn();
-    const started = await startMonitor({
-      taskId, command: "echo FIRST_PROGRESS; sleep 1.2; echo FINAL_OUTPUT; sleep 1.6; exit 0", description: "near-window-edge",
-    });
-    assert.ok(started.ok);
-    const origin = `monitor:${started.ok ? started.monitor.id : ""}`;
-    const ofMonitor = async () => (await db.select().from(scheduledMessages).where(eq(scheduledMessages.origin, origin)))
-      .sort((x, y) => x.createdAt.localeCompare(y.createdAt));
-    await until("最后一批进了托盘", async () => (await ofMonitor()).some((m) => m.text.includes("FINAL_OUTPUT")), 10_000);
-    const first = (await ofMonitor())[0]!;
-    assert.doesNotMatch(first.text, /FINAL_OUTPUT/, "最新一批不并进还在窗口里的前一行");
-    await sleep(Math.max(0, Date.parse(first.mergeHoldUntil!) - Date.now()) + 50);
-    const handed = await handMonitorResultsOnPause(taskId, token, []);
-    assert.match(handed?.text ?? "", /FIRST_PROGRESS/, "前一行窗口过了,照常交");
-    assert.doesNotMatch(handed?.text ?? "", /FINAL_OUTPUT/, "最新一批还在它自己的窗口里");
-    assert.equal(await ack(taskId, handed?.hand), 1);
-    await until("结束并进最新那一批", async () => (await ofMonitor()).some((m) => /哨兵结束/.test(m.text)), 10_000);
-    const final = (await ofMonitor()).find((m) => m.text.includes("FINAL_OUTPUT"))!;
-    assert.deepEqual((final.monitorWake?.events ?? []).map((e) => e.kind), ["output", "ended"], "最后一批跟「结束」一起");
-    assert.equal(final.mergeHoldUntil, null, "「结束」到了就解除窗口");
-    await settleTurnHandoffs(taskId, token, true);
-    runs.releaseTurn(taskId, owner);
-    await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, final.id));
-  }
-
-  // ── ⑩-3b 持续输出:同一条哨兵最多两行(积压 + 最新一批),最新那一批单独一行、带自己的窗口 ──────
-  {
-    const { taskId, owner } = await liveTurn();
-    const started = await startMonitor({
-      taskId, command: "echo P1; sleep 2.5; echo P2; sleep 0.5; echo P3; sleep 0.5; echo P4; sleep 0.5; exit 0",
-      description: "steady-output",
-    });
-    assert.ok(started.ok);
-    const origin = `monitor:${started.ok ? started.monitor.id : ""}`;
-    const ofMonitor = async () => (await db.select().from(scheduledMessages).where(eq(scheduledMessages.origin, origin)))
-      .sort((x, y) => x.createdAt.localeCompare(y.createdAt));
-    let most = 0;
-    await until("结束入队", async () => {
-      const rows = await ofMonitor();
-      most = Math.max(most, rows.length);
-      return rows.some((m) => /哨兵结束/.test(m.text));
-    }, 15_000);
-    const rows = await ofMonitor();
-    assert.ok(most <= 2 && rows.length === 2, `最多两行(见过 ${most} 行)`);
-    assert.match(rows[0]!.text, /P1[\s\S]*P2[\s\S]*P3/, "更早的那几批并成积压那一行");
-    assert.doesNotMatch(rows[0]!.text, /P4/);
-    assert.deepEqual((rows[1]!.monitorWake?.events ?? []).map((e) => e.kind), ["output", "ended"],
-      "最新那一批单独一行,跟「结束」并在一起");
-    assert.match(rows[1]!.text, /P4[\s\S]*哨兵结束/);
-    assert.deepEqual(rows.map((m) => m.mergeHoldUntil), [null, null], "「结束」到了两行一起解除");
-    runs.releaseTurn(taskId, owner);
-    await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.origin, origin));
-  }
-
-  // ── ⑦ 空闲任务:最后一批输出与「结束」并成一条、只叫醒一次 ─────────────────────
-  for (const [label, command, stopWhen] of [
-    ["自己退出", "echo LAST_LINE_A; exit 0", undefined],
-    ["命中 stopWhen", "echo READY_HIT; sleep 30", "READY_HIT"],
-  ] as const) {
-    const taskId = await makeTask({ status: "paused" });
-    const sessionId = `s-${id()}`;
-    await db.insert(sessions).values({
-      id: sessionId, taskId, role: "single", agentType: "claude", executor: "claude", cwd: root,
-      startedAt: new Date(Date.now() - 60_000).toISOString(), endedAt: new Date(Date.now() - 30_000).toISOString(),
-    });
-    const started = await startMonitor({ taskId, command, description: `merge-${label}`, ...(stopWhen ? { stopWhen } : {}) });
-    assert.ok(started.ok, `${label}:挂得上`);
-    const monitorId = started.ok ? started.monitor.id : "";
-    const origin = `monitor:${monitorId}`;
-    await until(`${label}:结束通知入队`, async () => (await db.select().from(scheduledMessages)
-      .where(eq(scheduledMessages.origin, origin))).some((m) => /哨兵结束/.test(m.text)));
-    await until(`${label}:那一回合跑完`, async () => !runs.isTurnClaimed(taskId) && existsSync(log)
-      && readFileSync(log, "utf8").includes(monitorId));
-    await sleep(2_500);   // 过了合并窗口,确认没有第二次唤醒
-    const rows = await db.select().from(scheduledMessages).where(eq(scheduledMessages.origin, origin));
-    assert.equal(rows.length, 1, `${label}:只有一条消息`);
-    const kinds = (rows[0]!.monitorWake?.events ?? []).map((e) => e.kind);
-    assert.deepEqual(kinds, ["output", "ended"], `${label}:两类事件都在`);
-    assert.match(rows[0]!.text, stopWhen ? /READY_HIT[\s\S]*哨兵结束/ : /LAST_LINE_A[\s\S]*哨兵结束[\s\S]*退出码 0/);
-    // 第三件:三条哨兵记录里起止两条带着 monitorId。
-    const kindsWithId = notices(taskId, sessionId)
-      .filter((n) => (n.kind === "monitor.started" || n.kind === "monitor.finished") && n.monitorId === monitorId)
-      .map((n) => n.kind);
-    assert.deepEqual(kindsWithId.sort(), ["monitor.finished", "monitor.started"], `${label}:起止记录带 monitorId`);
-    const status = (await db.select({ status: monitors.status }).from(monitors).where(eq(monitors.id, monitorId))).at(0)?.status;
-    assert.equal(status, stopWhen ? "matched" : "exited");
-    // 只起过一个唤醒回合:这条哨兵的消息从入队到送达只有那一行,而它只被领走一次。
-    const sent = await db.select().from(scheduledMessages)
-      .where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "sent")));
-    assert.equal(sent.length, 1, `${label}:恰好一次唤醒`);
   }
 
   console.log("monitor turn handoff ok");

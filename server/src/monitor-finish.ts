@@ -14,7 +14,7 @@ import { monitorEventTally } from "@ash/shared/monitor-silence";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { drainOwed, hitOf, linesBody, matchedReason, renderLines } from "./monitor-consume.js";
-import { deliverResultHandoff } from "./monitor-events.js";
+import { deliverResultHandoff, endFinishHold, holdWhileFinishing } from "./monitor-events.js";
 import { ensureSupervised } from "./monitor-handover.js";
 import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
 import { clearSpawnIdentity } from "./monitor-spawn.js";
@@ -121,8 +121,12 @@ export async function finish(
     return;
   }
   try {
+    // 收尾期间这条哨兵名下的行谁都领不走,做完才放(见 `holdWhileFinishing`)。压不上不挡收尾:
+    // 最坏是退回到「只有窗口那一个定时器在等」。
+    await holdWhileFinishing(monitorId).catch((e) => console.error(`[ash] 收尾压住待发行失败 monitor=${monitorId}:`, e));
     await finishHeld(monitorId, status, reason, exitCode, opts);
   } finally {
+    await endFinishHold(monitorId).catch((e) => console.error(`[ash] 收尾解除待发行失败 monitor=${monitorId}:`, e));
     release();
   }
 }

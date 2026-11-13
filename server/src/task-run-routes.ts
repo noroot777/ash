@@ -44,8 +44,8 @@ import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { mountTaskQuestionRoutes } from "./task-question-routes.js";
 import { occupyResumePrompt } from "./task-resume-prompt.js";
-import { handMonitorResultsOnPause, PAUSE_HANDED_NOTE } from "./monitor-turn-handoff.js";
-import { mountMonitorAckRoute } from "./monitor-turn-ack.js";
+import { handMonitorResultsOnPause, pauseHandedNote } from "./monitor-turn-handoff.js";
+import { receiptHands } from "./monitor-turn-ack.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { failureVersionOf } from "./task-result-version.js";
 
@@ -65,7 +65,6 @@ export function mountTaskRunRoutes(api: Hono): void {
   mountTaskRetryTurnRoutes(api);
   mountTaskScheduleRoutes(api);
   mountTaskSessionRoutes(api);
-  mountMonitorAckRoute(api);
   mountTaskSteerRoutes(api);
   mountTaskQuestionRoutes(api);
   // 收敛闸口 `POST /tasks/:id/gate`(放行 / 打回 / 注入意见 / 提问)住在 duet/gate-route.ts。
@@ -260,8 +259,8 @@ api.post("/tasks/:id/stop", async (c) => {
 // 只接受 running 任务(agent 必须自己在跑才能合法地说"我到检查点了")。
 api.post("/tasks/:id/pause", async (c) => {
   const taskId = c.req.param("id");
-  const b = await c.req.json<{ resumePrompt?: string; monitorAck?: boolean }>()
-    .catch(() => ({}) as { resumePrompt?: string; monitorAck?: boolean });
+  type PauseBody = { resumePrompt?: string; monitorAck?: boolean; monitorReceipt?: string };
+  const b = await c.req.json<PauseBody>().catch(() => ({}) as PauseBody);
   const rp = (b.resumePrompt ?? "").trim();
   if (!rp) return c.json({ error: "resumePrompt 不能为空 —— 否则 resume 时没东西喂给 agent" }, 400);
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -298,11 +297,13 @@ api.post("/tasks/:id/pause", async (c) => {
       : eq(tasks.activeDirectionToken, r.activeDirectionToken),
   ];
   // 托盘里已经有本来会把这一轮叫醒的哨兵结果 ⇒ 不暂停、不记检查点,当场交出去(monitor-turn-handoff.ts)。
-  // 只交给会发回确认的调用方(`monitorAck`,ash 的 MCP;没有确认就永远算没送到,见 monitor-turn-ack.ts)。
-  const handed = b.monitorAck === true ? await handMonitorResultsOnPause(taskId, r.activeTurnToken, identity) : null;
+  // 只交给带得回回执号的调用方(`monitorAck`,ash 的 MCP;带不回就永远算没送到,见 monitor-turn-ack.ts);
+  // 这一次带回来的回执号先确认。
+  const handed = await handMonitorResultsOnPause(taskId, r.activeTurnToken, identity,
+    { receipts: receiptHands(b.monitorReceipt), take: b.monitorAck === true });
   if (handed) {
     return c.json({
-      paused: false, note: PAUSE_HANDED_NOTE, monitorResults: handed.text,
+      paused: false, note: pauseHandedNote(handed.hand), monitorResults: handed.text,
       monitorResultsHanded: handed.count, monitorResultsReceipt: handed.hand,
     });
   }
@@ -321,7 +322,8 @@ api.post("/tasks/:id/pause", async (c) => {
 // **名下还挂着会被这次完成毁掉的哨兵时一律拒绝**(见 task-complete-monitors.ts)。
 api.post("/tasks/:id/complete", async (c) => {
   const taskId = c.req.param("id");
-  const completeBody = await c.req.json<{ monitorAck?: boolean }>().catch(() => ({}) as { monitorAck?: boolean });
+  type CompleteBody = { monitorAck?: boolean; monitorReceipt?: string };
+  const completeBody = await c.req.json<CompleteBody>().catch(() => ({}) as CompleteBody);
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.status !== "running") return c.json({ error: "只能在任务正在运行时确认完成", status: r.status }, 409);
@@ -355,7 +357,8 @@ api.post("/tasks/:id/complete", async (c) => {
         : eq(tasks.activeDirectionToken, r.activeDirectionToken),
     ],
     staleError: "当前回合已经结束或已被引导，完成确认未写入",
-    // 同 /pause:只交给会发回确认的调用方。
+    // 同 /pause:只交给带得回回执号的调用方;这一次带回来的回执号先确认。
+    receipts: { token: r.activeTurnToken, hands: receiptHands(completeBody.monitorReceipt) },
     ...(completeBody.monitorAck === true ? { handOver: { token: r.activeTurnToken } } : {}),
   });
   if (!confirm.ok) {

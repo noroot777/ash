@@ -17,13 +17,12 @@
 //
 // ② **不丢,宁可重复**。交出去那一刻只是「已交」,不是「已送达」:返回之后还隔着 MCP 进程、执行器、
 //    一条可能断掉的通道,那一轮也完全可能随后崩掉、被停。所以行上记下**交给了哪一轮**
-//    (`turn_taken_by` = 那一轮的回合令牌)和**这一次的交付号**(`turn_handoff`,随返回一起交出),
-//    而「送到了」**只认一个证据**:MCP 那一侧拿到这次返回后发回来的确认(monitor-turn-ack.ts)。
-//    服务端这一侧写下的任何一笔都不算 —— 出错之后补的那一笔写入本身也会失败,所以这里不做补偿,
-//    出错就让它停在「交了、没确认」:
-//      · 没确认的那几行是完成闸的第四类(monitor-responsibility.ts),照样拦着完成;**还在路上的
-//        不再交**(并发的另一次调用正带着它们,再交就是同一批出现两遍、交付号被换掉),交出去
-//        太久算丢了的,同一轮再调 `pause_task` / `complete_task` 时换一个号再交;
+//    (`turn_taken_by` = 那一轮的回合令牌)和**这一次的回执号**(`turn_handoff`,随返回一起交出),
+//    而「送到了」**只认一个证据**:agent 下一次 pause_task / complete_task 时把这个回执号带了回来
+//    (monitor-turn-ack.ts)。服务端、MCP 这一侧写下的任何一笔都不算 —— 出错之后补的那一笔写入本身
+//    也会失败,所以这里不做补偿,出错就让它停在「交了、没确认」:
+//      · 没确认的那几行是完成闸的第四类(monitor-responsibility.ts),照样拦着完成;**回合里不再交第
+//        二遍**(不管过了多久:慢不等于丢,再交就是同一批出现两遍、回执号被换掉);
 //      · 那一轮收口(`settleTurnHandoffs`,在 `settleTaskStatus` 最前面调):正常收口(交卷 / 留了
 //        检查点 / 提问,续聊与旁路回合则是干净退出)**且**确认过 = 送达,销掉记号;其余(没确认、
 //        失败、被停、看门狗熔断、没交卷就退出)= 没送达,退回 pending,并记下 `turn_returned_at`;
@@ -34,7 +33,7 @@
 //    的 pending 行在任务终态时**留着等下一次起跑**(`cancelPendingMonitorEvents` 的
 //    `keepReturned`、`deliveryVerdict` 的 wait),下一轮跑起来再从两个出口之一送达。
 //    所有退回与销记号都按「行 id + 当时的领取者」做 CAS,不拿旧快照推断现在是谁的。
-//    不发确认的调用方(请求里没带 `monitorAck`,比如升级前起的 MCP 进程)不做回合内交付,照老路唤醒。
+//    带不回回执号的调用方(请求里没带 `monitorAck`,比如升级前起的 MCP 进程)不做回合内交付,照老路唤醒。
 //
 // ③ **只交给本来会被它叫醒的那条会话**。判据跟唤醒那一路投递时恢复的身份是同一份:
 //    消息上的 `session_role` + `review_run`/`review_round`(入队时从哨兵行抄下来,见
@@ -54,8 +53,7 @@ import { monitorEventSourceState } from "./monitor-session.js";
 import { serialize } from "./monitors.js";
 import { hasPendingDeliveryRecovery } from "./pending-delivery-recovery.js";
 import { turnIdentity } from "./runs.js";
-import { handInFlight, newHand } from "./monitor-turn-ack.js";
-import { unsettledMonitorResponsibility } from "./monitor-responsibility.js";
+import { confirmHandoffs, newHand } from "./monitor-turn-ack.js";
 import { appendTaskTimeline, noticeLine, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
 import type { SQL } from "drizzle-orm";
@@ -63,7 +61,7 @@ import type { SQL } from "drizzle-orm";
 type Row = typeof scheduledMessages.$inferSelect;
 
 /**
- * 交到 agent 手上的那一份:正文(原样拼进工具返回)+ 交付号(MCP 拿到后凭它发回确认)+ 结构化来源
+ * 交到 agent 手上的那一份:正文(原样拼进工具返回)+ 回执号(agent 下一次调用时带回来)+ 结构化来源
  * (落进会话记录)。
  */
 export type HandedMonitorResults = { text: string; hand: string; monitorWake: MonitorWakeData; count: number };
@@ -71,14 +69,18 @@ export type HandedMonitorResults = { text: string; hand: string; monitorWake: Mo
 // ── 返回里那句话 ──────────────────────────────────────────────────────────────
 // 「结果已经给你了、接着做」只在**返回**里说:工具说明常驻每个回合的上下文、有字节预算,
 // 而这句话只在真交了的那一次有用。
-export const PAUSE_HANDED_NOTE =
+/** 回执号那一句:下一次调用带回来才算收到(monitor-turn-ack.ts)。 */
+const receiptAsk = (hand: string): string =>
+  `下一次调 pause_task 或 complete_task 时带上 monitorReceipt="${hand}"，证明你收到了；不带的话回合结束后会再送一遍。`;
+
+export const pauseHandedNote = (hand: string): string =>
   "没有暂停：调用这一刻你名下的哨兵结果已经到了，就在下面，这一回合接着做。"
-  + "还有别的要等就再调一次 pause_task，没有了就 complete_task。";
+  + "还有别的要等就再调一次 pause_task，没有了就 complete_task。" + receiptAsk(hand);
 
 /** `still` = 交完之后完成闸里还剩的那句拒绝(`null` = 没剩)。 */
-export const completeHandedNote = (still: string | null): string =>
+export const completeHandedNote = (still: string | null, hand: string): string =>
   "完成确认这一次没有生效：你名下有哨兵结果到了、还没送到你手上，现在随这次返回交给你（就在下面），先看过再定。"
-  + (still ? `看完之后还有这一层：${still}` : "看完没有别的要做，再调一次 complete_task 就能确认。");
+  + (still ? `看完之后还有这一层：${still}` : "看完没有别的要做，再调一次 complete_task 就能确认。") + receiptAsk(hand);
 
 /**
  * **这一轮已经开始收口了** —— 收口那一刻起不许再交(键 = 任务,值 = 那一轮的令牌)。
@@ -120,7 +122,7 @@ function handedWake(rows: Row[]): MonitorWakeData {
 
 /**
  * 这一轮调用 `pause_task` / `complete_task` 的那一刻,托盘里**本来就会把这条会话叫醒**的
- * 哨兵结果,当场交给它;这一轮早先交过、算丢了(见 monitor-turn-ack.ts)的那几行一起再交一次。
+ * 哨兵结果,当场交给它。早先交过、还没带回回执号的那几行**不再交**(见 monitor-turn-ack.ts)。
  * 没有可交的 = `null`(调用方照老路走)。
  *
  * **调用方必须排在 `task:<id>` 那条队列上**(完成闸、结算的结清都在那上面,见 `closing`)。
@@ -162,14 +164,11 @@ export async function takeMonitorResultsForTurn(a: {
     if (await monitorEventSourceState(m.origin) === "stale") continue;
     candidates.push(m);
   }
-  // 这一轮早先交过、交出去太久还没确认的(那一次返回出错 / 没回到它手上):这一次一起再交。
-  // 还在路上的不碰(文件头 ②)。
-  const owed = await lostRows(a.taskId, token);
-  if (!candidates.length && !owed.length) return null;
+  if (!candidates.length) return null;
   const handoff = { hand: newHand(), at };
   const claimable = exists(db.select({ one: sql`1` }).from(tasks).where(eligible));
   // 同一个条件、一条语句(文件头 ①):唤醒那一路刚领走的、挑完之后身份变了的,都不会出现在 returning 里。
-  const claimed = candidates.length ? await db.update(scheduledMessages)
+  const claimed = await db.update(scheduledMessages)
     .set({ status: "sent", sentAt: at, turnTakenBy: token, turnHandoff: handoff })
     .where(and(
       inArray(scheduledMessages.id, candidates.map((m) => m.id)),
@@ -178,19 +177,7 @@ export async function takeMonitorResultsForTurn(a: {
       or(isNull(scheduledMessages.mergeHoldUntil), lte(scheduledMessages.mergeHoldUntil, at)),
       claimable,
     ))
-    .returning() : [];
-  // 按挑出来那一刻的交付号做 CAS:这中间迟到的确认落进来了的,就不再交、也不把它的确认冲掉。
-  const reissued: Row[] = [];
-  for (const m of owed) {
-    reissued.push(...await db.update(scheduledMessages).set({ turnHandoff: handoff })
-      .where(and(eq(scheduledMessages.id, m.id), eq(scheduledMessages.status, "sent"),
-        eq(scheduledMessages.turnTakenBy, token), claimable,
-        m.turnHandoff
-          ? sql`json_extract(${scheduledMessages.turnHandoff}, '$.hand') = ${m.turnHandoff.hand}
-            AND json_extract(${scheduledMessages.turnHandoff}, '$.ackedAt') IS NULL`
-          : isNull(scheduledMessages.turnHandoff)))
-      .returning());
-  }
+    .returning();
   // 来源审查在挑完之后结束了的:原样还回去(不打退回记号),唤醒那一路会照来源失效作废它。
   const stale: string[] = [];
   for (const m of claimed) if (await monitorEventSourceState(m.origin) === "stale") stale.push(m.id);
@@ -199,7 +186,7 @@ export async function takeMonitorResultsForTurn(a: {
       .where(and(inArray(scheduledMessages.id, stale), eq(scheduledMessages.status, "sent"),
         eq(scheduledMessages.turnTakenBy, token)));
   }
-  const taken = [...reissued, ...claimed.filter((m) => !stale.includes(m.id))]
+  const taken = claimed.filter((m) => !stale.includes(m.id))
     .sort((x, y) => x.sendAt.localeCompare(y.sendAt) || x.createdAt.localeCompare(y.createdAt) || x.id.localeCompare(y.id));
   if (claimed.length) {
     bus.publish({ type: "task.pendingMessages", taskId: a.taskId });
@@ -209,7 +196,7 @@ export async function takeMonitorResultsForTurn(a: {
   const body = taken.map((m) => m.text).join("\n\n");
   const monitorWake = handedWake(taken);
   // 会话里留一条带类型的记录:交了哪几条哨兵的什么、什么时候。写不下来就不交(这几行停在「交了、
-  // 没确认」,到点再交、收口时退回):没有这条记录,刷新之后谁也看不出这一轮里发生过这件事。
+  // 没确认」,收口时退回):没有这条记录,刷新之后谁也看不出这一轮里发生过这件事。
   const recorded = await appendTaskTimeline(a.taskId,
     noticeLine({ kind: "monitor.handed", via: a.via, monitorWake }, body), { sessionId: session.id });
   if (!recorded) return null;
@@ -217,28 +204,20 @@ export async function takeMonitorResultsForTurn(a: {
 }
 
 /**
- * 这一轮交过、交出去太久还没确认的那几行 —— 从完成闸那份集合的第四类里取(monitor-responsibility.ts),
- * 所以「明确放弃了的不算」跟闸是同一条规则:放弃了的不拦完成,也不再交。
- */
-async function lostRows(taskId: string, token: string): Promise<Row[]> {
-  const ids = (await unsettledMonitorResponsibility(db, taskId))
-    .flatMap((r) => (r.cls === "handed" && r.messageId ? [r.messageId] : []));
-  if (!ids.length) return [];
-  const held = await db.select().from(scheduledMessages).where(and(
-    inArray(scheduledMessages.id, ids), eq(scheduledMessages.status, "sent"), eq(scheduledMessages.turnTakenBy, token),
-  ));
-  return held.filter((m) => !handInFlight(m.turnHandoff));
-}
-
-/**
  * `pause_task` 那一刻:有可交的就交、这次不暂停;没有就 `null`,调用方照老路记检查点。
+ * `receipts` = 这一次调用带回来的回执号(先确认,再交);`take: false` = 调用方带不回回执号,只确认不交。
  *
  * 排在 `task:<id>` 那条队列上 —— 跟完成闸、结算的结清同一条(见 `closing`)。
  */
 export async function handMonitorResultsOnPause(
   taskId: string, token: string | null, where: (SQL | undefined)[],
+  o: { receipts?: string[]; take?: boolean } = {},
 ): Promise<HandedMonitorResults | null> {
-  return serialize(`task:${taskId}`, () => takeMonitorResultsForTurn({ taskId, token, where, via: "pause" }));
+  return serialize(`task:${taskId}`, async () => {
+    // 先认它带回来的回执号:这一次调用本身就是「我读到了那次返回」的证据。
+    await confirmHandoffs(taskId, token, o.receipts ?? []);
+    return o.take === false ? null : takeMonitorResultsForTurn({ taskId, token, where, via: "pause" });
+  });
 }
 
 /**

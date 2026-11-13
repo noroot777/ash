@@ -35,6 +35,8 @@ import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
 import { confirmTaskComplete } from "./task-complete.js";
+import { confirmHandoffs, receiptHands } from "./monitor-turn-ack.js";
+import { serialize } from "./monitors.js";
 import { reportTaskStage } from "./task-stage.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 
@@ -237,6 +239,7 @@ async function applyReplay(
       // 一笔没有身份条件,方向换走之后会把旧方向的暂停指令写到新方向头上（第 1 轮审查 F3）。
       holdOnBlock: (blocked) =>
         "完成确认当时因 MCP 通道中断没能送达，补录时被哨兵闸拦下，这一轮改为检查点暂停：" + blocked,
+      receipts: await replayedReceipts(taskId, call),
     });
     if (!confirm.ok) {
       console.warn(`[ash] replay complete_task(${taskId}) rejected: ${confirm.error}`);
@@ -253,6 +256,8 @@ async function applyReplay(
     // **走 occupyResumePrompt 而不是自己 db.update**:这一笔是一次新占用,代次必须 +1,否则在途
     // 的旧凭证能凭「数值相等」冒领这一格（第 3 轮审查 F1-A,HTTP 那条入口已实测）。整行广播也
     // 在那一层里（前端的派审/预约入口靠这一列灰掉）。
+    const receipts = await replayedReceipts(taskId, call);
+    await serialize(`task:${taskId}`, () => confirmHandoffs(taskId, receipts.token, receipts.hands));
     const occupied = await occupyResumePrompt(taskId, prompt.trim(), false, [
       directionToken === undefined ? undefined : directionToken === null
         ? isNull(tasks.activeDirectionToken)
@@ -262,6 +267,15 @@ async function applyReplay(
     return "检查点暂停当时因 MCP 通道中断没能送达，已补录续跑指令。";
   }
   return null;
+}
+
+/**
+ * 那一次调用参数里带着的回执号(monitor-turn-ack.ts):它是 agent 自己发出的,证明它读到了那次
+ * 返回 —— 通道断了不改变这一点。按这一轮的回合令牌认(补捞排在结算之前,令牌还是它的)。
+ */
+async function replayedReceipts(taskId: string, call: McpCallRecord): Promise<{ token: string | null; hands: string[] }> {
+  const turn = (await db.select({ token: tasks.activeTurnToken }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  return { token: turn?.token ?? null, hands: receiptHands(call.args.monitorReceipt) };
 }
 
 /**

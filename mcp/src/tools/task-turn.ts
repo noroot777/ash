@@ -153,10 +153,11 @@ server.registerTool(
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id(任务 prompt 前言里有)"),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
+      monitorReceipt: z.string().optional().describe("上次返回给的回执号,有就原样填"),
     },
   },
-  async ({ taskId, directionToken }) => {
-    return callWithMonitorResults(taskId, `/tasks/${taskId}/complete`, {}, directionToken);
+  async ({ taskId, directionToken, monitorReceipt }) => {
+    return callWithMonitorResults(`/tasks/${taskId}/complete`, { monitorReceipt }, directionToken);
   },
 );
 
@@ -172,10 +173,11 @@ server.registerTool(
       taskId: z.string().describe("当前正在执行的任务 id"),
       resumePrompt: z.string().min(1).describe("下次被 resume 时喂给你的 user 消息 —— 就当成一条「继续：…」replied 写"),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
+      monitorReceipt: z.string().optional().describe("上次返回给的回执号,有就原样填"),
     },
   },
-  async ({ taskId, resumePrompt, directionToken }) => {
-    return callWithMonitorResults(taskId, `/tasks/${taskId}/pause`, { resumePrompt }, directionToken);
+  async ({ taskId, resumePrompt, directionToken, monitorReceipt }) => {
+    return callWithMonitorResults(`/tasks/${taskId}/pause`, { resumePrompt, monitorReceipt }, directionToken);
   },
 );
 

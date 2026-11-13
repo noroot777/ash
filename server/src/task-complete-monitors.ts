@@ -232,7 +232,7 @@ function blockingMessage({ live, unread, inflight, handed }: Blocking): string |
     inflight.length
       ? `${inflight.length} 条哨兵刚跑完、结束通知正在送往你手上（${nameList(inflight)}）`
       : null,
-    handed.length ? `${handed.length} 条哨兵结果交给过你、还没确认送到你手上（${nameList(handed)}）` : null,
+    handed.length ? `${handed.length} 条哨兵结果交给过你、你还没带回回执号（${nameList(handed)}）` : null,
   ].filter(Boolean).join("，以及 ");
   return (
     `完成确认被拦下：你名下还有 ${what}。`
@@ -255,9 +255,9 @@ function blockingMessage({ live, unread, inflight, handed }: Blocking): string |
         + "每分钟还会巡检一遍，不需要你做什么）。确实不要了也可以对它调 stop_monitor。"
       : "")
     + (handed.length
-      ? "⑤ 交给过你的那几条：它们在你另一次 pause_task / complete_task 的返回里，确认送到通常就在那次返回"
-        + "的同一刻，**等几秒再调一次 complete_task**；那次返回要是没到你手上，过半分钟再调会把它们重新交给你。"
-        + "不要了也可以对它那条哨兵调 stop_monitor。"
+      ? "⑤ 交给过你的那几条：它们在你另一次 pause_task / complete_task 的返回里，那次返回给了一个回执号 ——"
+        + "看到了就在 complete_task 里带上 monitorReceipt（原样填那个号）再调一次；没看到那次返回就走①，"
+        + "这一回合结束后会再送一遍。不要了也可以对它那条哨兵调 stop_monitor。"
       : "")
   );
 }

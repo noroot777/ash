@@ -39,6 +39,7 @@ import { monitorsBlockingComplete, monitorsBlockingDetail, noteMonitorsDropped }
 import {
   completeHandedNote, takeMonitorResultsForTurn, type HandedMonitorResults,
 } from "./monitor-turn-handoff.js";
+import { confirmHandoffs } from "./monitor-turn-ack.js";
 import { clearAutoCheckpoint, writeResumePrompt } from "./task-resume-prompt.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -152,21 +153,27 @@ export async function confirmTaskComplete(a: {
    * 已经结束,交给它等于交给一个读不到的人。这一次仍然不算确认 —— 结果可能是失败,得它看过再定。
    */
   handOver?: { token: string | null };
+  /**
+   * 这一次调用带回来的回执号(monitor-turn-ack.ts):先确认,再过闸 —— 交给过它的那几条只有这样才
+   * 不再拦着。断线补录也给:那一笔就是 agent 自己发出的那次调用,参数里带着它读到的号。
+   */
+  receipts?: { token: string | null; hands: string[] };
 }): Promise<ConfirmCompleteResult> {
   const result = await serialize(`task:${a.taskId}`, async (): Promise<ConfirmCompleteResult> => {
-    // 回合里交过、还没确认送到的那几行是闸的第四类(monitor-responsibility.ts),跟托盘里排着的
-    // 一样拦着完成;其中交出去太久、算丢了的那几行,下面这次会重新交(monitor-turn-ack.ts)。
+    if (a.receipts) await confirmHandoffs(a.taskId, a.receipts.token, a.receipts.hands);
+    // 回合里交过、还没带回回执号的那几行是闸的第四类(monitor-responsibility.ts),跟托盘里排着的
+    // 一样拦着完成;它们不再交第二遍(monitor-turn-ack.ts),要么带回回执号,要么收口时退回再送。
     const gate = await monitorsBlockingDetail(a.taskId);
     const blocked = gate.message;
-    if (blocked && a.handOver && (gate.unread > 0 || gate.handed > 0)) {
+    if (blocked && a.handOver && gate.unread > 0) {
       const handed = await takeMonitorResultsForTurn({
         taskId: a.taskId, token: a.handOver.token, where: a.where, via: "complete",
       });
       if (handed) {
         // 交完再问一次闸:剩下的(还在盯的、正在入队的)照旧拦,说法照旧;刚交的这几行正随这次返回
-        // 送过去,不算进去。这一步抛了也不用补:它们没有确认,下一次照样拦着、到点照样再交。
+        // 送过去,不算进去。这一步抛了也不用补:它们没有确认,下一次照样拦着、收口时退回再送。
         const still = (await monitorsBlockingDetail(a.taskId, { withHanded: false })).message;
-        return { ok: false, error: completeHandedNote(still), blockedByMonitors: true, handed };
+        return { ok: false, error: completeHandedNote(still, handed.hand), blockedByMonitors: true, handed };
       }
     }
     if (blocked) {

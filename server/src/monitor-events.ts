@@ -73,7 +73,7 @@ export async function pushToTask(
     .orderBy(asc(scheduledMessages.createdAt), asc(scheduledMessages.id)));
   const latest = waiting.at(-1) ?? null;
   // **输出那一批 ⇒ 它所在的那一行在窗口内不许投递**(合并窗口,见 `deferFlush`);「结束」那一笔
-  // 并进最新那一行、并把这条哨兵所有行的窗口一起解除,当场一次送走。窗口落在行上而不是某一个触发
+  // 并进最新那一行、再把这条哨兵所有行的窗口一起解除,当场一次送走。窗口落在行上而不是某一个触发
   // 源上,谁先来领都得等它;不分任务忙闲,忙着的那一轮可能下一刻就收口。团队调度台不等:它的常驻
   // 会话说着话也接得住。
   //
@@ -86,12 +86,22 @@ export async function pushToTask(
   const at = Date.now();
   const hold = !handoffToken && event?.kind !== "ended" && task.mode !== "team";
   if (!hold) {
-    await mergeOrEnqueueMonitorEvent(row, text, latest, handoffToken, event, null);
-    await releaseMergeHolds(row.taskId, origin);
+    // **两步的顺序就是不变量**(第 4 轮审查 4):先把「结束」落进最新那一行,**窗口原样不动**
+    // (另起一行时带上这几行里最晚的那个期限);再用**一条语句**解除这条哨兵所有行的窗口。中间
+    // 断掉(解除那一笔失败、进程没了)时,带着「结束」的那一行仍跟前面的积压一起压着,谁也不会
+    // 先把「结束」送到进展前面;到期了也是积压那一行先到期、先送。重投那一侧认出「这一笔已经
+    // 入过队」时也会把解除补做完,才销凭证(`deliverResultHandoff`)。
+    const latestHold = waiting.reduce<string | null>(
+      (max, m) => (m.mergeHoldUntil && (!max || m.mergeHoldUntil > max) ? m.mergeHoldUntil : max), null);
+    await mergeOrEnqueueMonitorEvent(row, text, latest, handoffToken, event, latestHold);
+    await releaseMergeHolds(origin);
     flushNow(row.id, row.taskId);
     return true;
   }
-  const holdUntil = new Date(at + MONITOR_END_GRACE_MS).toISOString();
+  // 收尾正在进行(进程已经退了,ash 还在记账):这一批跟着收尾的期限压着,见 `holdWhileFinishing`。
+  const grace = new Date(at + MONITOR_END_GRACE_MS).toISOString();
+  const finishing = finishHolds.get(row.id);
+  const holdUntil = finishing && finishing > grace ? finishing : grace;
   const backlog = waiting.at(-2);
   // 已经有积压那一行:最新那一行并进它、腾出来装这一批。没有(或者腾的那一下落空):这一批另起一行,
   // 原来最新的那一行就成了积压,期限照旧。
@@ -146,13 +156,49 @@ async function shiftNewestBatch(
   return true;
 }
 
-/** 「结束」到了:这条哨兵名下还在等的每一行都不再等,跟它一起送走(一次唤醒)。 */
-async function releaseMergeHolds(taskId: string, origin: string): Promise<void> {
-  await db.update(scheduledMessages).set({ mergeHoldUntil: null }).where(and(
-    eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.origin, origin),
+/**
+ * 「结束」到了 / 收尾做完了:这条哨兵名下还在等的每一行都不再等(一条语句,要么全解除要么都不动)。
+ * 返回解除了哪几个任务头上的行。
+ */
+export async function releaseMergeHolds(origin: string): Promise<string[]> {
+  if (dbClient.closed) return [];
+  const released = await db.update(scheduledMessages).set({ mergeHoldUntil: null }).where(and(
+    eq(scheduledMessages.origin, origin),
+    eq(scheduledMessages.status, "pending"), isNull(scheduledMessages.deliveringSince),
+    isNotNull(scheduledMessages.mergeHoldUntil),
+  )).returning({ taskId: scheduledMessages.taskId });
+  return [...new Set(released.map((m) => m.taskId))];
+}
+
+/**
+ * **收尾期间这条哨兵名下的行谁都领不走**(第 4 轮审查 3)。
+ *
+ * 进程退了之后,ash 还要排干最后几行、写终态、把「结束」入队 —— 这段时间可能比合并窗口长(库忙、
+ * 磁盘慢)。上一版只让窗口到期那一个定时器等收尾做完,巡检、按任务扫描、批量领取、回合里的交付
+ * 都只认行上的期限,于是最后一批输出被它们先领走,「结束」另起一行再叫一次。所以等待落在**行上**:
+ * 收尾一开始就把这条哨兵所有还在等的行的期限推到收尾结束(上限 `FINISH_HOLD_MS`,只在 ash 自己
+ * 没了、收尾没做完时才会真等满),收尾期间新排的那一批也带这个期限;「结束」落进来、或者收尾
+ * 做完(不管有没有「结束」)就解除。所有出口读的都是同一个期限(`isDueForDelivery`、回合里那条
+ * 领取的条件),所以谁也绕不过去,重启之后也还在。团队调度台的行本来就不压(`merge_hold_until`
+ * 为空),这里不动它们。
+ */
+const FINISH_HOLD_MS = 30_000;
+const finishHolds = new Map<string, string>();
+
+export async function holdWhileFinishing(monitorId: string): Promise<void> {
+  const until = new Date(Date.now() + FINISH_HOLD_MS).toISOString();
+  finishHolds.set(monitorId, until);
+  if (dbClient.closed) return;
+  await db.update(scheduledMessages).set({ mergeHoldUntil: until }).where(and(
+    eq(scheduledMessages.origin, monitorMessageOrigin(monitorId)),
     eq(scheduledMessages.status, "pending"), isNull(scheduledMessages.deliveringSince),
     isNotNull(scheduledMessages.mergeHoldUntil),
   ));
+}
+
+export async function endFinishHold(monitorId: string): Promise<void> {
+  finishHolds.delete(monitorId);
+  for (const taskId of await releaseMergeHolds(monitorMessageOrigin(monitorId))) flushPendingForTask(taskId);
 }
 
 /**
@@ -258,6 +304,9 @@ export async function deliverResultHandoff(monitorId: string): Promise<HandoffOu
     // 凭证照样销掉。先查那一步留着只是省掉一次必然失败的写（第 3 轮审查 N1）。
     let duplicate = false;
     let delivered = false;
+    // 「这一笔已经入过队」只证明入了队:解除窗口那一步(`pushToTask` 里紧跟着的那一笔)可能没做成。
+    // 销凭证之前把它补做完(幂等),否则前面积压的那几行要等自己的期限、排到「结束」后面去。
+    if (sentAlready) await releaseMergeHolds(monitorMessageOrigin(row.id));
     if (!sentAlready) {
       try {
         const header = `【哨兵结束】${row.description}（monitorId=${row.id}）`;
@@ -268,6 +317,7 @@ export async function deliverResultHandoff(monitorId: string): Promise<HandoffOu
       } catch (e) {
         if (!isHandoffTokenConflict(e)) throw e;
         duplicate = true;
+        await releaseMergeHolds(monitorMessageOrigin(row.id));
       }
     }
     await db
