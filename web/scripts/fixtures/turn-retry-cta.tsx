@@ -10,11 +10,14 @@
 //   retried   同一条会话失败一回合、重试成功（刷新以后）：前一回合那句话和原因还在原处，动作不在；
 //   retried-live  同上，开着页面看；
 //   retried-tools 同一条会话，失败那一回合只跑了工具、没来得及说话，重试成功（刷新以后）：那句话和原因照样在；
+//   woken-retried 挂了哨兵等构建，被叫醒后那一回合失败（回复并回等它的那一回合），重试成功（刷新以后）：那句话和
+//                 叫醒那一回合自己的原因照样在；
 //   stopped   手动停止的（非零退出）：不算异常，什么都不补；
 //   running   任务在跑：那句话在，动作不在。
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type { Session, Task, TurnInterruption } from "@ash/shared";
+import { appendMonitorWake } from "@ash/shared/monitor-wake";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { TaskHeader } from "../../src/task-detail/TaskHeader.tsx";
 import { buildConversationItems, type PersistedConversation, type TimelineEntry } from "../../src/task-detail/conversationModel.ts";
@@ -100,6 +103,26 @@ const SCENES: Record<string, (id: string) => Scene> = {
     ].join("");
     const trace = [
       { at: "2026-11-13T12:01:00.000Z", turnStartedAt: at, event: { kind: "tool", name: "Read", detail: "{\"file_path\":\"/repo/build.sh\"}" } },
+      { at: "2026-11-13T12:11:00.000Z", turnStartedAt: at2, event: { kind: "tool", name: "Edit", detail: "{}" } },
+    ];
+    return { sessions: [s], persisted: [{ session: s, output, trace: trace as never }] };
+  },
+  "woken-retried": (id) => {
+    const woke = "2026-11-13T12:05:00.000Z";
+    const s = session(id, "s1", {
+      turnStartedAt: at2, endedAt: end2, exitStatus: 0, turnOutcome: "completed",
+      turnOutcomes: { [at]: "completed", [woke]: "failed", [at2]: "completed" }, turnInterruptions: { [woke]: CAUSE },
+    });
+    const event = { kind: "output" as const, monitorId: "m1", source: "构建", body: "BUILD FAILED" };
+    const output = [
+      mark({ t: "user", text: "按意见改一下构建脚本。", at }), "改好了，挂哨兵等构建。", mark({ t: "agentEnd", at: "2026-11-13T12:02:00.000Z" }),
+      mark({ t: "user", text: `【哨兵事件】构建（monitorId=m1）\nBUILD FAILED`, monitorWake: appendMonitorWake(null, event), by: "system", at: woke }),
+      "构建挂了，接着看。",
+      mark({ t: "user", text: "按意见改一下构建脚本。", at: at2 }), "重试好了。", mark({ t: "agentEnd", at: end2 }),
+    ].join("");
+    const trace = [
+      { at: "2026-11-13T12:01:00.000Z", turnStartedAt: at, event: { kind: "tool", name: "mcp__ash__start_monitor", detail: JSON.stringify({ description: "构建", command: "npm run build" }) } },
+      { at: "2026-11-13T12:06:00.000Z", turnStartedAt: woke, event: { kind: "tool", name: "Read", detail: "{}" } },
       { at: "2026-11-13T12:11:00.000Z", turnStartedAt: at2, event: { kind: "tool", name: "Edit", detail: "{}" } },
     ];
     return { sessions: [s], persisted: [{ session: s, output, trace: trace as never }] };

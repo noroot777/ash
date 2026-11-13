@@ -18,6 +18,22 @@ import { latestTurnStart } from "./conversationTurnParts.ts";
  */
 export type CrashedTurn = { text: string; at?: string; interruption?: TurnInterruption };
 
+/** 一颗气泡**最后那一回合**的身份、结局、原因：三样是一个整体，见 `tailTurnFacts`。 */
+export type TurnFacts = Pick<Extract<ConversationItem, { kind: "agent" }>, "turnKey" | "turnOutcome" | "turnInterruption">;
+
+/**
+ * 这颗气泡最后那一回合的事实，三样一起取。会话模型里**每一个把两截拼成一颗气泡的地方**（同一回合被旁注
+ * 劈开的两截、哨兵叫醒后的回复并回等它的那一回合）都整组换成后一截的，不许单挑一样：只接走结局、留着前一截
+ * 的身份、丢掉后一截原因的那一版，重试成功一刷新，叫醒后失败的那一回合就只剩「这一轮异常结束」（第 4 轮
+ * 审查第 1 条）。直播那一路的气泡没有 `turnKey`，身份就是事件带的起点。
+ */
+export function tailTurnFacts(item: Extract<ConversationItem, { kind: "agent" }>): TurnFacts {
+  return { turnKey: item.turnKey ?? item.turnStartedAt ?? undefined, turnOutcome: item.turnOutcome ?? null, turnInterruption: item.turnInterruption };
+}
+
+/** 最后那一回合还开着、也认不出是哪一回合（叫醒送进去了、回复还没来）：三样都是不知道。 */
+export const OPEN_TURN_FACTS: TurnFacts = { turnKey: undefined, turnOutcome: null, turnInterruption: undefined };
+
 /**
  * agent 条目 id → 补出来的那一句。**每个异常结束的回合各补一句**，补在那一回合的最后一颗气泡上。
  *
