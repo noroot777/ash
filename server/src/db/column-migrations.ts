@@ -423,4 +423,6 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN worktree_base_branch TEXT",
   // 团队调度台这一行此刻归哪一台（见 schema-sessions.ts 同名列）。存量行 NULL。
   "ALTER TABLE sessions ADD COLUMN lead_holder TEXT",
+  // 这一段暂停在等哨兵(见 db/schema.ts 同名列)。存量行 NULL 由队列观察到在等时补上。
+  "ALTER TABLE tasks ADD COLUMN monitor_hold_at TEXT",
 ];

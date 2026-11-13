@@ -10,6 +10,7 @@ import { runDuet } from "./duet/index.js";
 import { deliverPendingMessages, reclaimStaleDeliveries } from "./pending-messages.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { replayQueueAdvances } from "./queue-advance-retry.js";
+import { sweepReleasedQueueMembers } from "./queue-monitor-hold.js";
 import { reportSuspectTurns } from "./turn-lock-reclaim.js";
 
 // ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
@@ -150,6 +151,8 @@ export async function tick() {
   // 排队消息的正常触发源是任务落终态时的钩子,这里是定时消息的到期路径兼兜底。
   await deliverPendingMessages();
   await replayQueueAdvances();
+  // 等过哨兵、放开了却没人推的队列成员:事件那一路漏掉时由这里接住(queue-monitor-hold.ts)。
+  await sweepReleasedQueueMembers().catch((error) => console.error("[ash] 欠着的队列推进巡检出错:", error));
 }
 
 // Catch-up on startup: missed one-shots (at < now, never fired) fire once via the
