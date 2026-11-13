@@ -7,6 +7,7 @@ import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { openCodexResident } from "./codex-resident.js";
 import { findArchivedRollout, readCodexContext } from "./codex-rollout.js";
+import { readCodexTurnTiming } from "./codex-rollout-timing.js";
 import { archiveVisibleCodexSession, unarchiveCodexThread } from "./codex-session-archive.js";
 import { spawnForRun, detachedInfo, type DetachedChild } from "./detached.js";
 import { cleanupAfterRun, spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
@@ -465,6 +466,13 @@ async function* codexStreamEvents(
   // 返回 null，界面自然不显示，任务结算仍照常进行。
   let contextDone = false;
   for await (const next of events.drain()) {
+    // 每次请求的耗时同样只在 rollout 里(./codex-rollout-timing.ts)。exec 拿不到回合 id,
+    // 取这个进程起跑之后开始的那一回合。
+    if (next.kind === "usage") {
+      const timed = await readCodexTurnTiming(threadId, { latestSince: contextOptions.contextNotBeforeMs }, contextOptions.configDir);
+      yield timed ? { ...next, usage: { ...next.usage, timed } } : next;
+      continue;
+    }
     if (next.kind === "done" && !contextDone) {
       contextDone = true;
       const context = await readCodexContext(threadId, contextOptions.contextNotBeforeMs, contextOptions.configDir);
