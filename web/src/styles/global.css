@@ -356,26 +356,27 @@ code,
 }
 
 /* 焦点环（a11y-1）：全应用一条，2px、外扩 2px，不压在控件自己那圈线上。例外三种：
-   ① 打字的输入框：环贴着自己的边，颜色淡一档（--focus-soft）——里面已经有光标了；
+   ① 打字的输入框不画环——光标在闪就是焦点，再套一圈环，压在框自己的边上、或者框住整块
+      没边的编辑区（命令面板、随手记正文），读出来都是一个突兀的黑框。有自己边线的，边线
+      变深一档；没边线的什么都不加；嵌在搜索框、回复框这类卡里的，由卡自己把边线变深
+      （各自的 :focus-within / :has(textarea:focus-visible)）；
    ② 贴着滚动区边缘排成一列的整行（菜单项、列表行）：环画在行内，外扩会被容器裁掉；
-   ③ 回复框这类输入卡：里面的输入框不套环，环画在卡上（各自的 :has(textarea:focus-visible)）。 */
+   ③ tabindex="-1" 的容器（弹层、对话框、跳转定位的卡）不在 Tab 路上，只会被脚本聚焦，
+      焦点落在那里不是人走到的位置，不画环——从快捷键打开时整块面板会被框一圈。 */
 :focus-visible,
 .is-focus {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
-input:focus-visible,
-textarea:focus-visible,
-[contenteditable]:focus-visible,
+:is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"]), textarea, [contenteditable]):focus-visible,
 .ui-input.is-focus {
-  outline-color: var(--focus-soft);
-  outline-offset: 0;
+  outline: 0;
+  border-color: var(--focus-soft);
 }
 
-input:is([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"]):focus-visible {
-  outline-color: var(--focus-ring);
-  outline-offset: 2px;
+[tabindex="-1"]:focus-visible {
+  outline: 0;
 }
 
 :is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], [role="treeitem"], [role="row"]):focus-visible {

@@ -351,12 +351,7 @@
 }
 
 .notes-list-tools label:focus-within {
-  outline: 2px solid var(--focus-soft);
-  outline-offset: 0;
-}
-
-.notes-list-tools input:focus-visible {
-  outline: 0;
+  border-color: var(--focus-soft);
 }
 
 .notes-list-tools input {
@@ -582,11 +577,11 @@
   cursor: text;
 }
 
-/* 编辑区铺满整格，外扩的环会被格子裁掉，焦点画成里面一圈淡墨。 */
-.note-editor > textarea:focus-visible,
+/* 编辑区铺满整格，环会框住整块读成一个框（打字时的 textarea 已由全局规则去环）；
+   预览只在键盘移入时才算聚焦，用一层极淡的底标出。 */
 .note-editor-preview:focus-visible {
   outline: 0;
-  box-shadow: inset 0 0 0 2px var(--focus-soft);
+  background: color-mix(in oklab, var(--ink) 3%, transparent);
 }
 
 .note-editor-preview .task-markdown {
