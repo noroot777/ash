@@ -1,6 +1,8 @@
 import type { AgentType, SessionRole } from "@ash/shared";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
+import type { SystemResume } from "@ash/shared/system-resume";
 import { bus } from "./bus.js";
+import { SYS_MARKER } from "./run-prompts.js";
 import { writeTurn } from "./transcript.js";
 
 export type UserTurnOrigin = { bySystem?: boolean; monitorWake?: MonitorWakeData };
@@ -45,5 +47,26 @@ export function recordUserConversationTurn(input: UserTurnOrigin & {
     ...(input.bySystem ? { bySystem: true as const } : {}),
     ...(isMonitorWakeTurn(input) ? { monitorWake: input.monitorWake } : {}),
     ...answerIds,
+  });
+}
+
+/**
+ * 后端起的续跑（`continueTask` 带 `system`）：一条〔系统〕记录（独立一颗，不是「你 →」），
+ * 落盘（刷新后重建）和直播事件各一份，都带着**是谁让它接着跑的**（resume）。原文不变：
+ * 审查段的起止、刷新时去重都还认这句原文。
+ */
+export function recordSystemResumeTurn(input: {
+  taskId: string;
+  sessionId: string;
+  role: SessionRole;
+  agentType: AgentType;
+  out: NodeJS.WritableStream;
+  at: string;
+  resume: SystemResume;
+}): void {
+  writeTurn(input.out, { t: "system", agent: input.agentType, text: SYS_MARKER, resume: input.resume }, input.at);
+  bus.publish({
+    type: "agent.event", taskId: input.taskId, sessionId: input.sessionId, role: input.role, agentType: input.agentType,
+    event: { kind: "system", text: SYS_MARKER, at: input.at, resume: input.resume },
   });
 }

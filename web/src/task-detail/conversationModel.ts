@@ -5,6 +5,7 @@ import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
 import type { TimelineNotice } from "@ash/shared/timeline-notice";
 import { applyVerifySpans, reviewerKey } from "./conversationReviewer.ts";
+import { markSystemResumes, type ResumeNote } from "./turnCause.ts";
 import type { AgentContentSegment } from "./conversationSegments.ts";
 import type { LiveAgentEvent, PersistedTurnTimes } from "./conversationTurnParts.ts";
 import { latestTurnStart } from "./conversationTurnParts.ts";
@@ -77,6 +78,8 @@ export type ConversationItem =
       continuation?: boolean;
       /** 这一回合是哨兵叫醒的、叫醒的那条哨兵不归前面那一段（比如等的时候你插过话），另起的一回合，见 monitorWakeTurns。 */
       wokenByMonitor?: boolean;
+      /** 这一回合是系统续跑起的头（见 turnCause）。reason=null：老记录没写缘由。 */
+      resumeCause?: { reason: ResumeNote["reason"] };
       /** 这一回合自己的结局（服务端按回合交出来的，见 turnFailure 的 turnFailed）。缺省/null = 不知道。 */
       turnOutcome?: TurnOutcome | null;
       session?: Session;
@@ -150,6 +153,10 @@ export type ConversationItem =
       aside?: boolean;
       /** 服务端给的「这是哪一类事」（shared/src/timeline-notice.ts）。老记录、非时间线旁注没有。 */
       notice?: TimelineNotice;
+      /** 这条是系统续跑的开头（「〔系统〕继续（从中断处）」），连同缘由（见 turnCause）。 */
+      resume?: ResumeNote;
+      /** 缘由已经写在它起头的那一回合头上了：不再作为一条记录出现。 */
+      onTurnHead?: true;
     };
 
 export type PersistedConversation = { session: Session; output: string; trace?: SessionTraceEntry[] };
@@ -240,6 +247,8 @@ export function buildConversationItems(
   // 时间线到这里才排完（落盘排好序 + 直播按到达追加），身份也才补得齐。必须排在下面
   // 那轮 continuation 判定之前：那一轮拿 reviewer 当断点用。
   applyVerifySpans(items);
+  // 审查者身份到这里才补齐：系统续跑认领回合要避开审查者那一侧。
+  markSystemResumes(items);
 
   const orderedSessions = [...sessions].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
   const runBounds = new Map<string, SessionRunBounds>();
@@ -355,7 +364,8 @@ export function buildConversationItems(
   for (const item of items) {
     if (item.kind === "user") { continuedSessionId = null; continue; }
     if (item.kind === "event") {
-      if (item.variant === "boundary") continuedSessionId = null;
+      // 系统续跑起了新一回合：它头上要写起因，不能被画成上一段话的下半截。
+      if (item.variant === "boundary" || item.onTurnHead) continuedSessionId = null;
       continue;
     }
     const turn = item.turnStartedAt ?? null;
