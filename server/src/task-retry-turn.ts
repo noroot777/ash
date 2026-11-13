@@ -56,6 +56,7 @@ import { turnOutcome } from "./session-turns.js";
 import type { TurnOutcome } from "./session-turns.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { continueTask } from "./orchestrator.js";
+import { inputStartsExecution } from "./task-continuation-entry.js";
 import { queueBlockedText, queueBlockerDetails, type QueueBlocker } from "./queues.js";
 import { claimQueueSeat, queueClaimError, type QueueSeat } from "./queue-seat.js";
 import { claimOwnTurn, releaseTurn } from "./runs.js";
@@ -114,16 +115,24 @@ async function lastInputSeg(path: string): Promise<NonAgentSeg | null> {
 
 type UserSeg = Extract<NonAgentSeg, { kind: "user" }>;
 
-/** 重投档要原样重投的那句话。 */
-export type ResendInput = { text: string; paths: string[]; bySystem: boolean; monitorWake: UserSeg["monitorWake"] };
+/**
+ * 重投档要原样重投的那句话。`execution` = 这句话交给 continueTask 会被当成任务的执行而不是
+ * 续聊(`inputStartsExecution`,如 `/goal resume`):原终态护不住,队列也按它在执行看。
+ */
+export type ResendInput = {
+  text: string; paths: string[]; bySystem: boolean; monitorWake: UserSeg["monitorWake"]; execution: boolean;
+};
 
 // 上一回合的输入能不能原样重投:是 user 段、且去掉附件标记后还剩点东西。不能就落续跑档。
-export function resendInputOf(seg: NonAgentSeg | null): ResendInput | null {
+// `agentType` 是重投要交给的那个执行器:斜杠命令按它的命令表解析,跟 continueTask 同口径。
+export function resendInputOf(seg: NonAgentSeg | null, agentType: string): ResendInput | null {
   if (seg?.kind !== "user") return null;
   const { body, paths } = parseAttachmentText(seg.text);
   const text = body.trim();
   if (!text && !paths.length) return null;
-  return { text, paths, bySystem: !!seg.bySystem, monitorWake: seg.monitorWake };
+  return {
+    text, paths, bySystem: !!seg.bySystem, monitorWake: seg.monitorWake, execution: inputStartsExecution(agentType, text),
+  };
 }
 
 export type RetryTurnTask = {
@@ -156,11 +165,11 @@ export type RetryTurnFacts = {
   kind?: RetryTurnKind;
   wantedSessionId?: string;
   /**
-   * 普通回合里,上一回合的输入能不能原样重投(`resendInputOf`)。能 = 重投档,不能 = 续跑档。
-   * 省略按不能算:续跑档是要过队列那道闸的那一档,不知道的时候往严里判。
+   * 普通回合里,上一回合可以原样重投的那句话(`resendInputOf`),只要它是不是执行型。有 = 重投档,
+   * 没有 = 续跑档。省略按没有算:续跑档是要过队列那道闸的那一档,不知道的时候往严里判。
    */
-  resendable?: boolean;
-  /** 同队列里挡着它执行的成员(`queueBlockerDetails`)。只有续跑档会被它挡。 */
+  resend?: Pick<ResendInput, "execution"> | null;
+  /** 同队列里挡着它执行的成员(`queueBlockerDetails`)。只有执行回合会被它挡。 */
   blockedBy?: QueueBlocker[];
   /** 所在分组被暂停（`scheduler.ts` 同样拒绝拉起暂停组的成员）。 */
   groupPaused?: boolean;
@@ -191,14 +200,25 @@ export function retryTurnKindOf(latest: RetryTurnSession): RetryTurnKind {
 
 /**
  * 重跑落在哪一档。普通回合再按上一回合的输入分两档:
- * - resend:把上一句话重投给同一条会话 —— 终态任务上的续聊回合,`followUpFrom` 护着原终态;
- * - resume:没有可重投的原话,`system:"retry"` 续跑 —— 这才是任务的执行回合。
- * review 是旁路回合。三档里只有 resume 占队列执行位,队列那道闸也只挡它。
+ * - resend:把上一句话重投给同一条会话;
+ * - resume:没有可重投的原话,`system:"retry"` 续跑。
+ * review 是旁路回合。
  */
 export type RetryTurnTier = "review" | "resend" | "resume";
 
-export function retryTurnTierOf(kind: RetryTurnKind, resendable: boolean | undefined): RetryTurnTier {
-  return kind === "review" ? "review" : resendable ? "resend" : "resume";
+type ResendFact = RetryTurnFacts["resend"];
+
+export function retryTurnTierOf(kind: RetryTurnKind, resend: ResendFact): RetryTurnTier {
+  return kind === "review" ? "review" : resend ? "resend" : "resume";
+}
+
+/**
+ * 这一次重跑是不是**任务的执行**:续跑档是;重投档看那句话本身 —— 普通的一句是终态任务上的
+ * 续聊(`followUpFrom` 护着原终态),`/goal resume` 这类执行型输入不是;审查档是旁路回合,不是。
+ * 是执行就占队列执行位、过队列那道闸,不是就两样都不碰。
+ */
+export function retryTurnIsExecution(kind: RetryTurnKind, resend: ResendFact): boolean {
+  return kind !== "review" && (!resend || resend.execution);
 }
 
 /** 留痕里的操作名,跟用户按的那颗按钮同名(user-action-rejection.ts 的判据)。 */
@@ -268,13 +288,13 @@ export function retryTurnRejection(facts: RetryTurnFacts): { error: string; deta
     };
   }
   if (facts.groupPaused) return { error: "所在分组已暂停，先恢复分组再重试", detail: { groupPaused: true } };
-  // 同 /run：续跑档是任务的执行回合，同队有人在执行、或前面还有没让位的，就不该抢跑 ——
-  // 少了这道闸，队里任务上的重试按钮就成了插队入口。另两档不是执行：审查档是旁路回合（派审
-  // 本来就不查队列），重投档是终态任务的续聊（手打同一句话发出去也不受队列限制，见
-  // task-reply.ts），队列按 followUpFrom 把它们看成原终态，既不因此停住、也不因此多拉一个
-  // 成员。挡这两档，串行队列只要还在往下跑，队里已完成成员上断掉的那一回合就续不了。
-  // 这里只是快速失败；续跑档真正的互斥是下面路由里的 claimQueueSeat。
-  if (retryTurnTierOf(kind, facts.resendable) === "resume" && facts.blockedBy?.length) {
+  // 同 /run：任务的执行回合（续跑档、执行型重投），同队有人在执行、或前面还有没让位的，就
+  // 不该抢跑 —— 少了这道闸，队里任务上的重试按钮就成了插队入口。其余不是执行：审查档是旁路
+  // 回合（派审本来就不查队列），普通重投是终态任务的续聊（手打同一句话发出去也不受队列限制，
+  // 见 task-reply.ts），队列按 followUpFrom 把它们看成原终态，既不因此停住、也不因此多拉一个
+  // 成员。挡它们，串行队列只要还在往下跑，队里已完成成员上断掉的那一回合就续不了。
+  // 这里只是快速失败；执行回合真正的互斥是下面路由里的 claimQueueSeat。
+  if (retryTurnIsExecution(kind, facts.resend) && facts.blockedBy?.length) {
     return { error: queueBlockedText(facts.blockedBy), detail: { blockedBy: facts.blockedBy.map((b) => b.id) } };
   }
   // 「原样再跑一遍上一回合」的**保真前提**：那条 profile 还是当时那套执行环境。profile 是
@@ -347,8 +367,10 @@ export async function readRetryTurnFacts(
     latest = rows.find((row) => row.id === bound) ?? null;
   }
   // 重投还是续跑,要读会话正文最后一段输入才知道;判据(队列那道闸)和路由走哪档读的是同一份。
+  // 重投交给的执行器就是那条会话自己的(路由按它记下的 profile 重放)。
   const resend = kind === "turn" && latest
-    ? resendInputOf(await lastInputSeg(readableRunPath(sessionTranscriptPath(taskId, latest.id))).catch(() => null))
+    ? resendInputOf(await lastInputSeg(readableRunPath(sessionTranscriptPath(taskId, latest.id))).catch(() => null),
+      latest.agentType ?? task.agentType)
     : null;
   return {
     task,
@@ -360,8 +382,8 @@ export async function readRetryTurnFacts(
       latest: latest ?? null,
       kind,
       wantedSessionId: request.review ? undefined : request.sessionId,
-      resendable: !!resend,
-      blockedBy: retryTurnTierOf(kind, !!resend) === "resume" ? await queueBlockerDetails(taskId) : [],
+      resend,
+      blockedBy: retryTurnIsExecution(kind, resend) ? await queueBlockerDetails(taskId) : [],
       groupPaused: !!group?.paused,
       // 老会话行没记指纹（null）时返回 null = 无从核对，按老行为放行。
       profileDrift: latest ? await profileDrift(latest.executorId, latest.executorFingerprint) : null,
@@ -404,7 +426,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
     // 占位之后的每一条出路都必须交接或释放这把锁：漏一条就是「500 一次、之后永远 409，
     // 只能重启服务」。所以 handed 只在**真正把 turnHeld 交给下游**的那一刻才置位。
     let handed = false;
-    // 队列执行占位(重投/resume 档才占,见下;审查档是旁路回合,不是任务执行)。
+    // 队列执行占位(只有任务的执行回合才占,见下 retryTurnIsExecution)。
     let seat: QueueSeat | null = null;
     try {
       // 占位后镜像检查验收锁，否则下游撞上验收锁静默 return，202 就成了谎报。
@@ -487,8 +509,24 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
         : latest.agentType === task.agentType
           ? {}
           : { agent: latest.agentType as AgentType, model: null, reasoningEffort: null };
-      // 重投还是续跑按占位后那一遍读到的定(判据放行的就是这一档)。
+      // 重投还是续跑、是不是执行,按占位后那一遍读到的定(判据放行的就是这一档)。
       const resend = fresh!.resend;
+      // **执行回合**(续跑档,或重投一句执行型输入如 `/goal resume`)必须先认领队列执行占位
+      // (queue-seat.ts):从这里到 CLI 真正拉起之间隔着解析执行器、准备 worktree 等一串 await,
+      // 任务状态却一直停在 done —— 消息补投扫描在这个窗口里按 DB 状态判定「整队空闲」,会放行
+      // 同队另一个失败成员的执行型回复,两个任务一起跑(第 7 轮审查:普通 HTTP 并发 10/10 复现)。
+      // claimQueueSeat 与扫描、/run、/fire、/retry、队列推进共用同一条认领链,占到位后这段
+      // 窗口对任何入口都可见。普通重投不占:它重放的是续聊回合(followUpFrom 护住原终态),队列
+      // 对续聊本就豁免,占位反而会让一次聊天重跑把整条队列挡住;审查档同理(旁路回合)。
+      // 执行型重投也照样占:只看「有原话可重投」就豁免,`/goal resume` 会绕过队列跟同队成员
+      // 一起跑(本任务第 1 轮审查 F1,已实测)。
+      if (retryTurnIsExecution(kind, resend)) {
+        const claim = await claimQueueSeat(taskId);
+        if (!claim.ok) {
+          return c.json(await noted(taskId, action, { error: queueClaimError(claim), blockedBy: claim.blockers }), 409);
+        }
+        seat = claim.seat;
+      }
       if (resend) {
         handoff(continueTask(taskId, resend.text, {
           ...route,
@@ -507,23 +545,10 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
         }), action);
         return c.json({ started: true, mode: "resend" }, 202);
       }
-      // 上一回合是系统续跑（会话里最后一段不是 user）：没有可重投的原话，改用续跑提示。
+      // 上一回合是系统续跑（会话里最后一段不是 user）：没有可重投的原话，改用续跑提示
+      // (system:"retry" → followUpFrom=null,任务的执行回合,队列占位上面已经认领)。
       // 会话行记着 profile 时仍旧钉死那一条会话；老行退回 `resumeOrRunTask`（它按任务的
       // agentType 挑会话，跟界面头部那颗「运行」同一条路）。
-      //
-      // 这一档是**任务的执行回合**(system:"retry" → followUpFrom=null),必须先认领队列
-      // 执行占位(queue-seat.ts):从这里到 CLI 真正拉起之间隔着解析执行器、准备 worktree
-      // 等一串 await,任务状态却一直停在 done —— 消息补投扫描在这个窗口里按 DB 状态判定
-      // 「整队空闲」,会放行同队另一个失败成员的执行型回复,两个任务一起跑(第 7 轮审查:
-      // 普通 HTTP 并发 10/10 复现)。claimQueueSeat 与扫描、/run、/fire、/retry、队列推进
-      // 共用同一条认领链,占到位后这段窗口对任何入口都可见。上面的重投档不占:它重放的是
-      // 续聊回合(followUpFrom 护住原终态),队列对续聊本就豁免,占位反而会让一次聊天重跑
-      // 把整条队列挡住;审查档同理(旁路回合,不是任务执行)。
-      const claim = await claimQueueSeat(taskId);
-      if (!claim.ok) {
-        return c.json(await noted(taskId, action, { error: queueClaimError(claim), blockedBy: claim.blockers }), 409);
-      }
-      seat = claim.seat;
       handoff(
         latest.executorId
           ? continueTask(taskId, RESUME_PROMPT, { ...route, actingUserId: acting, system: "retry", resumeSessionId: latest.id, turnHeld: turn, freezeGuard: true })

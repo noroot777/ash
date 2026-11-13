@@ -8,10 +8,12 @@
 //  Q2 重投档:同上;重投期间挡路的成员完成,队列照常往下拉下一个(没被这条续聊卡住);
 //  Q3 续跑档:同队有人在执行 → 仍然 409,带 blockedBy,那句话点名挡路任务的标题;留痕记「重试这一回合」;
 //  Q4 /run 被同队成员挡回:那句话点名挡路任务的标题;
-//  Q5 审查档被别的原因挡回:留痕的操作名是「继续本轮审查」。
+//  Q5 审查档被别的原因挡回:留痕的操作名是「继续本轮审查」;
+//  Q6 执行型重投(上一句是 `/goal resume`):它不是续聊,同队有人在执行就 409,一个字不进执行器
+//     (第 1 轮审查 F1:只凭「有原话可重投」就豁免,两条任务同时在跑)。
 //
 // 执行器是装在 PATH 上的假 claude:收到输入就记一行、一直挂着,直到用例放行那个任务。
-// 跑:npm -w server run test:retry-turn-queue
+// 跑:npm -w server run test:retry-turn(跟纯判据那份一起跑)
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -269,6 +271,23 @@ try {
     assert.deepEqual(await noticeActions(ids.done), ["继续本轮审查"], "审查档留痕跟按钮同名");
     await db.update(groups).set({ paused: false }).where(eq(groups.id, "g"));
     console.log("✓ Q5 审查档被挡回:留痕记「继续本轮审查」");
+  }
+
+  // ── Q6 执行型重投 ──────────────────────────────────────────────────────────
+  {
+    const ids = await seedQueue("q6", {});
+    const sessionId = await crashedTurn(ids.done, { t: "user", text: "/goal resume" });
+    const res = await post(`/tasks/${ids.done}/retry-turn`, { sessionId });
+    const body = await res.json() as { error?: string; blockedBy?: string[] };
+    assert.equal(res.status, 409, `恢复持续目标是任务的执行,同队有人在执行就得挡,实际 ${res.status}`);
+    assert.deepEqual(body.blockedBy, [ids.running]);
+    assert.match(body.error ?? "", /「q6 正在执行的那条」正在运行/);
+    await sleep(300);
+    assert.equal((await row(ids.done)).status, "done", "被挡回的那条不开新回合");
+    assert.equal(await sessionCount(ids.done), 1);
+    assert.deepEqual(inputsOf(ids.done), [], "一个字都没进执行器");
+    assert.deepEqual(await noticeActions(ids.done), ["重试这一回合"]);
+    console.log("✓ Q6 执行型重投(/goal resume):同队有人在执行仍 409,不跟它一起跑");
   }
 } finally {
   for (const taskId of started) release(taskId);

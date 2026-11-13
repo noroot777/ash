@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import type { RetryTurnFacts, RetryTurnSession, RetryTurnTask } from "../src/task-retry-turn.js";
 import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
 import {
-  lastInputOf, latestSessionOf, resendInputOf, retryTurnActionOf, retryTurnKindOf, retryTurnRejection, retryTurnTierOf,
+  lastInputOf, latestSessionOf, resendInputOf, retryTurnActionOf, retryTurnKindOf, retryTurnIsExecution, retryTurnRejection, retryTurnTierOf,
 } from "../src/task-retry-turn.js";
 import { describeQueueBlockers, queueBlockedText, type QueueBlocker } from "../src/queues.js";
 
@@ -149,8 +149,16 @@ assert.ok(why(task(), sess({ id: "a" }), { groupPaused: true }), "分组暂停�
   assert.match(resume.error, /「正在执行的那条」正在运行/, "那句话点名挡路的是哪条");
   assert.deepEqual(resume.detail?.blockedBy, ["y"], "409 里照旧带 blockedBy(任务 id)");
   assert.equal(retryTurnTierOf("turn", undefined), "resume", "不知道能不能重投时按续跑档算,往严里判");
-  assert.equal(why(task(), sess({ id: "a" }), { resendable: true, blockedBy: [running] }), null,
+  assert.equal(retryTurnIsExecution("turn", undefined), true);
+  assert.equal(why(task(), sess({ id: "a" }), { resend: { execution: false }, blockedBy: [running] }), null,
     "重投档:终态任务的续聊,手打同一句话也不受队列限制");
+  // 第 1 轮审查 F1:`/goal resume` 重投后被执行层认作任务执行(followUpFrom=null),只凭「有原话
+  // 可重投」就豁免,它会跟同队成员一起跑。
+  assert.equal(retryTurnTierOf("turn", { execution: true }), "resend", "执行型输入照样是重投,原话不丢");
+  assert.equal(retryTurnIsExecution("turn", { execution: true }), true, "但它是任务的执行");
+  assert.match(why(task(), sess({ id: "a" }), { resend: { execution: true }, blockedBy: [running] }) ?? "",
+    /「正在执行的那条」正在运行/, "执行型重投同队有人在执行就挡");
+  assert.equal(retryTurnIsExecution("review", undefined), false, "审查档是旁路回合");
   assert.equal(why(task({ workflowMode: "free" }), sess({ id: "a", role: "reviewer" }), { reviewBlocker: null, blockedBy: [running] }), null,
     "审查档:旁路回合,派审本来就不查队列");
   assert.equal(retryTurnActionOf("review"), "继续本轮审查", "留痕跟按钮同名");
@@ -178,10 +186,20 @@ assert.ok(why(task(), sess({ id: "a" }), { groupPaused: true }), "分组暂停�
   }
 }
 // 能不能重投:是 user 段且去掉附件标记后还剩点东西。
-assert.equal(resendInputOf(lastInputOf(turn("user", "把标题也改一下")))?.text, "把标题也改一下");
-assert.equal(resendInputOf(lastInputOf(turn("user", "   "))), null, "空话没得重投,落续跑档");
-assert.equal(resendInputOf(lastInputOf(turn("system", "继续（从中断处）"))), null, "系统续跑提示不重投");
-assert.equal(resendInputOf(null), null, "没有输入段");
+assert.equal(resendInputOf(lastInputOf(turn("user", "把标题也改一下")), "claude")?.text, "把标题也改一下");
+assert.equal(resendInputOf(lastInputOf(turn("user", "   ")), "claude"), null, "空话没得重投,落续跑档");
+assert.equal(resendInputOf(lastInputOf(turn("system", "继续（从中断处）")), "claude"), null, "系统续跑提示不重投");
+assert.equal(resendInputOf(null, "claude"), null, "没有输入段");
+// 是不是执行型,读的是执行层那一份判据(task-continuation-entry.ts 的 inputStartsExecution):
+// 两种执行器、普通与带 --scope 的恢复目标都是,开新目标、暂停目标、普通聊天都不是。
+for (const agent of ["claude", "codex"]) {
+  for (const text of ["/goal resume", "/goal resume --scope main"]) {
+    assert.equal(resendInputOf(lastInputOf(turn("user", text)), agent)?.execution, true, `${agent}: ${text} 是任务的执行`);
+  }
+  for (const text of ["把标题也改一下", "/goal 把测试跑绿", "/goal pause"]) {
+    assert.equal(resendInputOf(lastInputOf(turn("user", text)), agent)?.execution, false, `${agent}: ${text} 不是`);
+  }
+}
 // profile 可编辑可删:改一次模型就换了个脑子,改一次供应商就换了套账号。「原样再跑一遍」
 // 的前提是那套执行环境还在,对不上就得让用户明确决定,不能拿新环境冒充原样重放。
 assert.ok(why(task(), sess({ id: "a" }), { profileDrift: "missing" }), "执行器被删了,重跑不了");
