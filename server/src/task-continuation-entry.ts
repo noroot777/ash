@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
-import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
+import { isGoalExecution, isGoalRecovery, parseCliCommand, type CliCommand } from "@ash/shared/cli-commands";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { withTurnPreflight } from "./turn-entry-guard.js";
@@ -19,6 +19,20 @@ type ContinuationEntryOptions = {
   turnHeld?: TurnIdentity | null;
 };
 
+/**
+ * 一句用户输入交给 continueTask 时,**光凭这句话本身**就会被当成任务的执行(而不是续聊):
+ * 结算不按 followUpFrom 护回原终态,队列也按它在执行看。现在只有恢复持续目标(`/goal resume`,
+ * 含 `--scope` 形式)是这样。continueTask 判 execution、「重试这一回合」判要不要过队列那道闸,
+ * 读的都是这一份 —— 两边各写一份,重投 `/goal resume` 就会绕过队列跟同队成员一起跑。
+ */
+export function commandStartsExecution(slash: CliCommand | null): boolean {
+  return isGoalRecovery(slash);
+}
+
+export function inputStartsExecution(agentType: string, userText: string): boolean {
+  return commandStartsExecution(parseCliCommand(agentType, userText));
+}
+
 export async function prepareContinuationEntry<Options extends ContinuationEntryOptions>(
   taskId: string,
   userText: string,
@@ -36,7 +50,7 @@ export async function prepareContinuationEntry<Options extends ContinuationEntry
       options.actingUserId ?? head.ownerUserId,
     ) : undefined;
     return {
-      head, nativeCommand, slash, goalExecution: isGoalExecution(slash),
+      head, nativeCommand, slash, goalExecution: isGoalExecution(slash), inputExecution: commandStartsExecution(slash),
       options: goalRoute ? { ...options, ...goalRoute } : options,
     };
   });
