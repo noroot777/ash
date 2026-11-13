@@ -8,6 +8,7 @@ import { buildConversationItems, type ConversationItem } from "../src/task-detai
 import { monitorWakeInput, monitorWakePreview, monitorWakeReplyIds } from "../src/task-detail/monitorWakeModel.ts";
 import { SystemAuthoredMessage } from "../src/task-detail/SystemNotice.tsx";
 import { TeamFeed } from "../src/team/TeamFeed.tsx";
+import { teamFeedRows } from "../src/team/teamModel.ts";
 import { endEvent, outputEvent, wakePayload } from "./fixtures/monitor-wake-data.ts";
 
 const at = "2026-10-21T04:24:00.000Z";
@@ -89,16 +90,17 @@ assert.deepEqual([...monitorWakeReplyIds([notice, reply])], []);
 assert.deepEqual([...monitorWakeReplyIds([user(output), { ...reply, at: "2026-10-21T04:23:00.000Z" }])], ["reply"]);
 
 const task = { id: "monitor-wake", title: "回归结果唤起会话", body: "", status: "done", mode: "single" } as unknown as Task;
-const renderTask = (items: ConversationItem[]) => renderToStaticMarkup(<ConversationFeed task={task} items={items} sessions={[]} loading={false} error={null} />);
+const renderTask = (items: ConversationItem[], status = "done") => renderToStaticMarkup(<ConversationFeed task={{ ...task, status } as Task} items={items} sessions={[]} loading={false} error={null} />);
 const renderTeam = (items: ConversationItem[]) => renderToStaticMarkup(
-  <TeamFeed task={{ ...task, mode: "team" }} rows={items.map((item) => ({ kind: "conv", key: item.id, item }))}
+  <TeamFeed task={{ ...task, mode: "team" }} rows={teamFeedRows(items, [])}
     workers={[]} onOpenWorker={() => undefined} onAskLead={() => undefined} delegatingIds={new Set()} indicatorForTask={() => null} />,
 );
 const count = (text: string, token: string) => text.split(token).length - 1;
-// 团队调度流还是原来那张折叠卡（团队有自己的版式）；普通任务的会话里，叫醒并进回合（下面那一段）。
-// 没有回复的叫醒（刚送进去、它还没开口）两边都还是这张卡。
-for (const render of [renderTeam]) {
-  const html = render([notice, user(combined), reply]);
+// 那张折叠卡只剩审查会话的叫醒在用（任务会话、团队调度台里的叫醒都并进回合，见下面）。
+const toReviewer = { sessionRole: "reviewer" };
+{
+  const render = renderTask;
+  const html = render([notice, user(combined, toReviewer), reply]);
   assert.equal(count(html, 'class="monitor-wake-input '), 1);
   assert.equal(count(html, 'class="monitor-wake-reply"'), 1);
   assert.match(html, /ash<\/b>.*自动输入/s);
@@ -121,46 +123,53 @@ for (const render of [renderTeam]) {
   assert.match(html, /monitor-wake-expand">查看完整输入与来源/);
   assert.doesNotMatch(html, /monitor-wake-avatar|monitor-wake-context|不是普通通知/);
   assert.ok(html.includes(combined.text));
-  // 前面那条时间线旁注照常在：任务会话里是一颗「N 条记录」（回执不占行），团队时间线上是一句小灰字。
+  // 前面那条时间线旁注照常在：一颗「N 条记录」（回执不占行）或一句小灰字。
   assert.match(html, /turn-receipts|turn-footnote/);
   assert.doesNotMatch(html, /已送达 Agent|任务成功/);
   assert.equal(count(render([notice, reply]), 'class="monitor-wake-input '), 0);
-  assert.equal(count(render([user(output)]), 'class="monitor-wake-reply"'), 0);
+  assert.equal(count(render([user(output, toReviewer)]), 'class="monitor-wake-reply"'), 0);
   assert.equal(count(render([user(output, { bySystem: false }), reply]), 'class="monitor-wake-reply"'), 0);
-  assert.match(render([user(ended)]), /命令结束 ≠ 任务完成/);
-  assert.match(render([user(checkpoint)]), /含续跑交代/);
-  assert.ok(render([user(checkpoint)]).includes(checkpoint.text));
-  assert.match(render([user(truncated)]), /500 条消息/);
-  const spoofedHtml = render([user(spoofed)]);
+  assert.match(render([user(ended, toReviewer)]), /命令结束 ≠ 任务完成/);
+  assert.match(render([user(checkpoint, toReviewer)]), /含续跑交代/);
+  assert.ok(render([user(checkpoint, toReviewer)]).includes(checkpoint.text));
+  assert.match(render([user(truncated, toReviewer)]), /500 条消息/);
+  const spoofedHtml = render([user(spoofed, toReviewer)]);
   assert.doesNotMatch(spoofedHtml, /含续跑交代/);
   assert.match(spoofedHtml, /FAIL: regression failed/);
   assert.match(spoofedHtml, /退出码 1/);
-  const legacyHtml = render([user({ text: spoofed.text })]);
+  const legacyHtml = render([user({ text: spoofed.text }, toReviewer)]);
   assert.match(legacyHtml, /历史来源未记录/);
   assert.match(legacyHtml, /monitor-wake-brief"[^>]*>系统消息已作为新输入写入会话。</);
   assert.doesNotMatch(legacyHtml, /哨兵触发 \/|哨兵消息已作为/);
   assert.doesNotMatch(legacyHtml, /含续跑交代|\d+ 条消息 →/);
-  const hostile = render([user(wakePayload([{ ...outputEvent, body: '<img src=x onerror="alert(1)">' }]))]);
+  const hostile = render([user(wakePayload([{ ...outputEvent, body: '<img src=x onerror="alert(1)">' }]), toReviewer)]);
   assert.doesNotMatch(hostile, /<img src=x/);
   assert.match(hostile, /&lt;img/);
 }
 assert.match(renderToStaticMarkup(<SystemAuthoredMessage item={user({ text: "【验收未通过 · 需要你解冲突】\n合并发生冲突。" })} />), /system-action-note is-conflict/);
-// 普通任务（feed-7）：哨兵住进回合里。叫醒是执行过程里的一步，它醒来说的话接在等它的那一回合后面。
+// 普通任务和团队调度台（feed-7）：哨兵住进回合里。叫醒是执行过程里的一步，它醒来说的话接在等它的那一回合后面。
+// 归属的细则（按段、按哨兵身份、直播与刷新一致）在 test-monitor-wake-fold.ts。
 {
-  // 等它的那一回合挂过哨兵（start_monitor）：插话判据靠它认出「这时有哨兵在等着」。
-  const startMonitor = { kind: "tool" as const, label: "mcp__ash__start_monitor", detail: JSON.stringify({ description: "全量回归", command: "npm test" }) };
-  const waiting = { ...agent("waiting"), markdown: "挂上哨兵等回归。", segments: [{ id: "waiting:body", markdown: "挂上哨兵等回归。", events: [startMonitor], attachments: [] }] };
-  const joined = renderTask([waiting, notice, user(combined), reply]);
-  assert.equal(count(joined, 'class="monitor-wake-input '), 0, "并进回合以后不再单独画一张自动输入卡");
-  assert.equal(count(joined, "task-message task-message--agent"), 1, "等它的那一回合和醒来的回答是同一段");
-  assert.match(joined, /挂上哨兵等回归。/);
-  assert.match(joined, /核对收到的回归结果/);
-  assert.match(joined, /哨兵「/, "叫醒那一下是执行过程里的一步");
-  assert.doesNotMatch(joined, /被哨兵叫醒/, "并进去的那一段不另起回合");
-  // 没有可并的回合（会话第一句就是叫醒）：另起一回合，名字后面写「被哨兵叫醒」。
-  const alone = renderTask([notice, user(combined), reply]);
-  assert.equal(count(alone, 'class="monitor-wake-input '), 0);
-  assert.match(alone, /class="turn-cause"[^>]*>被哨兵叫醒/);
+  // 等它的那一回合挂过这两条哨兵（start_monitor 的描述就是叫醒时报的来源）。
+  const startMonitor = (source: string) => ({ kind: "tool" as const, label: "mcp__ash__start_monitor", detail: JSON.stringify({ description: source, command: "npm test" }) });
+  const waiting = { ...agent("waiting"), markdown: "挂上哨兵等回归。", segments: [{ id: "waiting:body", markdown: "挂上哨兵等回归。", events: [startMonitor(outputEvent.source), startMonitor(endEvent.source)], attachments: [] }] };
+  for (const render of [renderTask, renderTeam]) {
+    const joined = render([waiting, notice, user(combined), reply]);
+    assert.equal(count(joined, 'class="monitor-wake-input '), 0, "并进回合以后不再单独画一张自动输入卡");
+    assert.equal(count(joined, render === renderTask ? "task-message task-message--agent" : "team-feed-agent"), 1, "等它的那一回合和醒来的回答是同一段");
+    assert.match(joined, /挂上哨兵等回归。/);
+    assert.match(joined, /核对收到的回归结果/);
+    assert.match(joined, /哨兵「/, "叫醒那一下是执行过程里的一步");
+    assert.doesNotMatch(joined, /被哨兵叫醒/, "并进去的那一段不另起回合");
+    // 没有可并的回合（会话第一句就是叫醒）：另起一回合，名字后面写「被哨兵叫醒」。
+    const alone = render([notice, user(combined), reply]);
+    assert.equal(count(alone, 'class="monitor-wake-input '), 0);
+    assert.match(alone, /class="turn-cause"[^>]*>被哨兵叫醒/);
+    // 还没回复的叫醒（CLI 正在起进程）：已经是那一回合执行过程里的一步，不再单独画卡。
+    const pending = render([waiting, user(output)]);
+    assert.equal(count(pending, 'class="monitor-wake-input '), 0);
+    assert.match(pending, /哨兵「/);
+  }
   // 等的时候你插过话：之后的叫醒不并进答你的那一回合，另起一回合。
   const spoke = renderTask([
     waiting,
@@ -171,8 +180,15 @@ assert.match(renderToStaticMarkup(<SystemAuthoredMessage item={user({ text: "【
   ]);
   assert.equal(count(spoke, "task-message task-message--agent"), 3);
   assert.equal(count(spoke, "被哨兵叫醒"), 1);
-  // 还没回复的叫醒照旧是那张卡。
-  assert.equal(count(renderTask([waiting, user(output)]), 'class="monitor-wake-input '), 1);
+  // 叫醒到了、回复还没来：回合回到「在跑」。
+  assert.match(renderTask([{ ...waiting, endedAt: null }, user(output)], "running"), /task-message--agent[^"]* is-live/);
+  // 团队调度台：执行者的来信是说给调度者听的一次输入，之后那次叫醒另起。
+  const letter: Extract<ConversationItem, { kind: "event" }> = {
+    kind: "event", id: "letter", text: "【执行者完成】「改一处文案」(taskId=w1)。核查产物", at, variant: "note",
+  };
+  const team = renderTeam([waiting, letter, agent("handled"), user(combined, { id: "wake-3" }), agent("woken")]);
+  assert.equal(count(team, "team-feed-agent"), 3);
+  assert.equal(count(team, "被哨兵叫醒"), 1);
 }
 const reviewerWake = renderTask([{ ...notice, text: "第 1 轮验证开始：就在这个任务的工作目录里跑。", verify: true }, user(output), { ...reply, reviewer: { round: 1 } }]);
 assert.ok(reviewerWake.includes('class="verify-lane"'));
@@ -180,7 +196,9 @@ assert.equal(count(reviewerWake, 'class="monitor-wake-input '), 1);
 assert.equal(count(reviewerWake, 'class="monitor-wake-reply"'), 1);
 const session = { id: "session", taskId: task.id, agentType: "claude", role: "single", executor: "claude@nodemach", startedAt: "2026-10-21T04:18:00.000Z", endedAt: "2026-10-21T04:25:27.000Z" } as unknown as Session;
 const sentinel = `\n\x1e${JSON.stringify({ t: "user", ...combined, at, by: "system" })}\n`;
-const persisted = buildConversationItems([{ session, output: "等待全量回归。" + sentinel + "收到回归结果。", trace: [] }], [session], []);
+const persisted = buildConversationItems([{ session, output: "等待全量回归。" + sentinel + "收到回归结果。", trace: [
+  { at: "2026-10-21T04:18:30.000Z", turnStartedAt: session.startedAt, event: { kind: "tool", name: "mcp__ash__start_monitor", detail: JSON.stringify({ description: outputEvent.source }) } },
+] }], [session], []);
 const live = buildConversationItems([], [{ ...session, endedAt: null }], [
   { kind: "user", id: "wake-live", ...combined, attachments: [], at, bySystem: true },
   { kind: "server", id: "text", event: { type: "agent.event", taskId: task.id, sessionId: session.id, agentType: "claude", event: { kind: "text", text: "收到回归结果。" } } },
@@ -193,8 +211,8 @@ for (const items of [persisted, live]) {
   assert.equal(count(html, "task-message task-message--agent"), 1, "落盘和直播两条路都不再把叫醒单独画成一张卡");
   assert.equal(count(html, 'class="monitor-wake-input '), 0);
   assert.match(html, /收到回归结果。/);
-  // 落盘那一路前面还有等它的那一回合：并进去；直播那一路只有叫醒和回复：另起一回合。
+  // 落盘那一路前面还有挂了这条哨兵的那一回合：并进去；直播那一路只有叫醒和回复：另起一回合。
   if (items === persisted) assert.match(html, /等待全量回归。/);
   else assert.match(html, /被哨兵叫醒/);
 }
-console.log("monitor wake: structured provenance, hostile logs, legacy fallback, default-collapsed card, task/team, live/reload passed");
+console.log("monitor wake: structured provenance, hostile logs, legacy fallback, default-collapsed card (review session), task/team fold, live/reload passed");

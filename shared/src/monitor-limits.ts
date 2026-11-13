@@ -83,6 +83,14 @@ export const MONITOR_BATCH_MS = 300;
  */
 export const MONITOR_RETRY_FLUSH_MS = 2_000;
 /**
+ * 一批输出**会立刻把空闲的任务叫醒**时,先等多久看进程是不是马上就退(server 的 `pushToTask`)。
+ *
+ * 命令打完最后一行就退出是最常见的收尾(回归哨兵 `REGRESSION_FINISHED` 那一行之后就是退出):
+ * 不等的话,那一批先起一个唤醒回合,紧跟着的「结束」只能排在它后面再叫醒一次。等到了就跟
+ * 「结束」并成一条;等不到就照常送 —— 一直在吐行的哨兵每一批因此最多晚这么久。
+ */
+export const MONITOR_END_GRACE_MS = 2_000;
+/**
  * **一批最多吃多少行**。超出的留在缓冲里，下一批接着来（见 server 的 `flushBuffer`）。
  *
  * 这是个**上界**而不是调优参数（第 2 轮审查 F1）：一次 tail 回调能带回几万行（一条

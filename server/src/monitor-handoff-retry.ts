@@ -119,6 +119,9 @@ export function startResultHandoffSweeper(intervalMs = SWEEP_INTERVAL_MS): void 
         );
       }
     }).catch((e) => console.error("[ash] 结束通知巡检这一趟出错:", e));
+    // 同一趟顺手兜住回合内交付的残留:那一轮的结算没能结清它(写失败),它就一直藏在 sent 里。
+    void import("./monitor-turn-handoff.js").then((m) => m.returnOrphanTurnHandoffs())
+      .catch((e) => console.error("[ash] 回合内交付巡检这一趟出错:", e));
   }, intervalMs);
   (sweeper as { unref?: () => void }).unref?.();
 }

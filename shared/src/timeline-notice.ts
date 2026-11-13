@@ -16,6 +16,8 @@
 // 原文就是它的话）。专门的 kind 只给展示端确实要据参数换说法、或者要据它搭结构（审查段的
 // 起止）的那几类。
 
+import type { MonitorWakeData } from "./monitor-wake.ts";
+
 /** 审查是哪一种：自由派审 / 就地验证 / 合并结果审查。 */
 export type TimelineReviewSource = "free" | "inline" | "merge";
 export type TimelineReviewVerdict = "passed" | "failed" | "inconclusive" | "aborted";
@@ -59,12 +61,19 @@ export type TimelineNotice =
   | { kind: "review.unreserved" }
   /** 执行回合跑完，预约的审查开始派发。 */
   | { kind: "review.launch" }
+  // 哨兵这几条都带 `monitorId`（老记录没有）：描述相同的两条哨兵靠它分开。
   /** 挂上了一个哨兵。 */
-  | { kind: "monitor.started"; description: string }
+  | { kind: "monitor.started"; description: string; monitorId?: string }
   /** 哨兵自己结束了。 */
-  | { kind: "monitor.finished"; description: string }
+  | { kind: "monitor.finished"; description: string; monitorId?: string }
   /** 不再等某个哨兵的结果了。`finished` = 它那时已经跑完。 */
-  | { kind: "monitor.released"; description: string; finished: boolean }
+  | { kind: "monitor.released"; description: string; finished: boolean; monitorId?: string }
+  /**
+   * 哨兵结果在**回合里**就交到了 agent 手上（它调 pause_task / complete_task 那一刻结果已经
+   * 到了，随返回一起给，不再暂停再叫醒）。`monitorWake` 跟唤醒输入上那一份同一个形状
+   * （shared/src/monitor-wake.ts），记录的时刻就是交付的时刻。
+   */
+  | { kind: "monitor.handed"; via: "pause" | "complete"; monitorWake: MonitorWakeData }
   // ── 你那条命令的回答（常显：是你要看的东西）──
   /** 斜杠命令（/goal --scopes、/rename …）就地执行的结果。原文里带着命令本身和全部输出。 */
   | { kind: "command.output"; command: string }
@@ -77,7 +86,7 @@ export type TimelineNoticeKind = TimelineNotice["kind"];
 const KINDS: ReadonlySet<string> = new Set<TimelineNoticeKind>([
   "review.verdict", "accept.done", "review.dispute", "review.start", "review.repair", "stage",
   "review.reserved", "review.unreserved", "review.launch",
-  "monitor.started", "monitor.finished", "monitor.released", "command.output", "receipt", "alert",
+  "monitor.started", "monitor.finished", "monitor.released", "monitor.handed", "command.output", "receipt", "alert",
 ]);
 
 /**

@@ -5,6 +5,7 @@ import type { ContextUsage, Session } from "@ash/shared";
 import { stableBlockBoundary } from "@ash/shared/markdown-images";
 import { addUsage } from "@ash/shared/usage";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
+import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
 import { eventTone, isVerifyNote, noteTone } from "./conversationNotes.ts";
 import { appendExecutionEvent, isVisibleExecutionEvent } from "../lib/executionTrace.ts";
 import { reviewerKey, reviewerKeyOf, reviewerOf } from "./conversationReviewer.ts";
@@ -195,6 +196,7 @@ function appendAgent(items: ConversationItem[], event: LiveAgentEvent, sessions:
     sessionId: event.sessionId,
     label: agentLabel(session, event),
     agentType: event.agentType ?? session?.agentType ?? null,
+    sessionRole: event.role ?? session?.role ?? null,
     at: turnStartedAt,
     turnStartedAt,
     endedAt: null,
@@ -285,17 +287,21 @@ export function appendLiveTimeline(
       continue;
     }
     if (event.kind === "done") {
+      // 带了这一回合自己的结局就照它（exit 0 却被判失败的那种只有它说得清），没带才看退出码。
+      const failed = turnEndedAbnormally({ exitStatus: event.exitStatus, turnOutcome: event.turnOutcome });
       appendEvent(items, {
         kind: "event",
         id: entry.id,
-        text: event.exitStatus === 0 ? "本轮执行结束" : `执行异常结束 · exit ${event.exitStatus}`,
-        tone: event.exitStatus === 0 ? "neutral" : "error",
+        text: failed ? `执行异常结束 · exit ${event.exitStatus}` : "本轮执行结束",
+        tone: failed ? "error" : "neutral",
         variant: "boundary",
       });
       continue;
     }
     if (event.kind === "turnEnd") {
-      appendEvent(items, { kind: "event", id: entry.id, text: "本回合结束，等待下一条消息", variant: "boundary" });
+      appendEvent(items, event.turnOutcome === "failed"
+        ? { kind: "event", id: entry.id, text: "执行异常结束", tone: "error", variant: "boundary" }
+        : { kind: "event", id: entry.id, text: "本回合结束，等待下一条消息", variant: "boundary" });
       continue;
     }
     // session 是执行器的内部簿记事件(心跳/回合结束都会重发),旧 UI 就不渲染;

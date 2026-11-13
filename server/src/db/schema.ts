@@ -564,6 +564,15 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // 把旧协议当时根本没给过的证明力追认给它(第 2 轮自由审查 F1 跨进程实测:同一段交代
   // 在升级后被执行了两遍)。null = 旧代开的,它的沉默什么都不证明,只能按交付不明处理。
   crossingProtocol: text("crossing_protocol"),
+  // 哨兵结果**在回合里**交给了哪一轮（那一轮的 active_turn_token）。status='sent' 且非空 = 已交、
+  // 等那一轮收口才算数；没有确认送到就退回 pending（monitor-turn-handoff.ts 文件头）。
+  turnTakenBy: text("turn_taken_by"),
+  // 那一次交付的交付号 + 时刻 + MCP 发回确认的时刻（monitor-turn-ack.ts）：没有 ackedAt 就不算送到。
+  turnHandoff: text("turn_handoff", { mode: "json" }).$type<{ hand: string; at: string; ackedAt?: string }>(),
+  // 回合里交过、那一轮没正常收口而退回来的时刻。非空的 pending 行熬得过终态连坐，等下一次起跑送达。
+  turnReturnedAt: text("turn_returned_at"),
+  // 哨兵输出那一批在这一刻之前不投递，等紧跟着的「结束」并进来（monitor-events.ts `pushToTask`）。
+  mergeHoldUntil: text("merge_hold_until"),
 });
 
 // Queue items: ordered list of tasks where each task waits for the one
@@ -685,5 +694,6 @@ export { handoffPeers, handoffLocalPeerKeys, handoffLocalKeyRevisions } from "./
 // 哨兵表住在隔壁（见 schema-monitors.ts 的说明）。这里转发，导入路径不变。
 export { monitors, monitorPendingCalls, monitorScanCursors, monitorReclaimDebts } from "./schema-monitors.js";
 export { taskBackgroundRevisions } from "./schema-task-background.js";
+export { taskDiskCleanups } from "./schema-run-disk.js";
 export { regressionChecks } from "./schema-regression-checks.js";
 export { regressionEvidence } from "./schema-regression-evidence.js";

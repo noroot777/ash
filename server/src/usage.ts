@@ -218,7 +218,9 @@ export async function recordSessionUsageEvent(
   turnStartedAt: string | null,
 ): Promise<UsageEvent> {
   const booked = await addSessionUsage(sessId, event.usage, usageAccountingFor(agentType, cliSessionId), turnStartedAt);
-  return { ...event, usage: booked.usage, accounting: booked.accounting };
+  // 计时是这一回合亲眼量的,不是累计快照,不经过上面的求差;账本也不记它,原样随事件走。
+  const { timed } = event.usage;
+  return { ...event, usage: timed ? { ...booked.usage, timed } : booked.usage, accounting: booked.accounting };
 }
 
 /**

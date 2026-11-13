@@ -573,7 +573,7 @@ export function ConversationFeed({
           {historyReady && <QuestionHistoryRemainder />}
           {footer}
         </div>
-        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={conversationTailKey(items)} inputs={inputs} />
+        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={conversationTailKey(items)} inputs={inputs} revealReady={bodyReady} />
       </div>
       <QuestionDock>{dock}</QuestionDock>
     </ImagePreviewGroup>

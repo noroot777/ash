@@ -31,7 +31,7 @@ async function abandonResults(row: typeof monitors.$inferSelect, reason: string)
   if (row.status === "running") return;
   await appendTaskTimeline(
     row.taskId,
-    noticeLine({ kind: "monitor.released", description: row.description, finished: true },
+    noticeLine({ kind: "monitor.released", monitorId: row.id, description: row.description, finished: true },
       `不再等哨兵「${row.description}」的结果了（理由「${reason}」）。它早已结束（${row.status}），`
     + "这一次只是把「必须先收下它的结果」这条放行条件撤掉；已经排在待发送里的事件照旧会送到。"),
   ).catch(() => undefined);

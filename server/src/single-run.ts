@@ -8,13 +8,14 @@
 // 职责（续聊/原生/手停/提问/检查点/严格完成协议/哨兵闸），而且被引导、重试、测试直接调。
 import { cleanupSettled, nothingToCollect, type CleanupResult } from "./executors/kill.js";
 import type { WriteStream } from "node:fs";
-import type { AgentEvent, AgentType, SessionRole } from "@ash/shared";
-import { and, eq, sql } from "drizzle-orm";
+import type { AgentEvent, AgentType, SessionRole, TurnOutcome } from "@ash/shared";
+import { eq, sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { closeSessionTurns, recordTurnSpan } from "./session-turns.js";
 import { scanForTitle } from "./auto-title.js";
+import { applyAutoTitle } from "./auto-title-apply.js";
 import {
   adoptRun, bindNativeSteer, finalizeAbandonedRun, takeSteered, takeStopped, turnIdentity,
 } from "./runs.js";
@@ -148,7 +149,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   try {
   let cliSessionId = a.cliSessionId;
   let exitStatus = 0;
-  let doneEvent: AgentEvent | null = null;
+  let doneEvent: Extract<AgentEvent, { kind: "done" }> | null = null;
   let streamError: unknown = null;
   // CLI 有时把 API 层失败报成 error 事件后仍以 exit 0 收尾（Claude 的
   // is_error/api_error_status 就是这种）。退出码只能说明进程活着走完，不能证明这一轮
@@ -189,29 +190,12 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     pendingTraceText += text;
     publishEvent({ kind: "text", text });
   };
-  // 智能体自己起的标题（见 auto-title.ts）。没解析到就什么也不做：任务留着建它时那个
-  // 临时名（body 首行），下一次 fresh run 还会再试一次——autoTitle 只在真的改成时才关。
-  const applyAutoTitle = async (newTitle: string | null) => {
-    if (!newTitle) return;
-    const updatedAt = now();
-    // 条件里带上 auto_title=1:**这一轮跑到一半时任务可能已经被显式改过名了** —— 用户在
-    // 界面上改，或者 agent 自己调 patch_task 改。那句改名的语义是「这就是标题」，不该被
-    // 随后吐出来的 `标题：xxx` 盖回去。titleDone 是回合开头读的快照，答不了「此刻库里
-    // 还允不允许自动命名」，只有库自己答得了。没更新到行就当什么都没发生，连事件也不发。
-    const hit = await db
-      .update(tasks)
-      .set({ title: newTitle, autoTitle: false, updatedAt })
-      .where(and(eq(tasks.id, taskId), eq(tasks.autoTitle, true)))
-      .returning({ id: tasks.id });
-    if (!hit.length) return;
-    bus.publish({ type: "task.title", taskId, title: newTitle, updatedAt });
-  };
   // 给标题窗口一个结论：命中就改名并把标题行摘掉，没命中就把攒下的正文原样放出去。
   // 返回 false = 还没有结论（窗口没走完），继续攒。
   const resolveTitle = async (flush: boolean) => {
     const scan = scanForTitle(head, flush);
     if (scan.kind === "buffer") return false;
-    await applyAutoTitle(scan.title);
+    await applyAutoTitle(taskId, scan.title); // 智能体自己起的标题(见 auto-title.ts)
     titleDone = true;
     head = "";
     emitText(scan.text); // 命中的话标题行已被摘掉，其余原样放行
@@ -538,6 +522,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   // 普通 lost 仍要求非零退出，防止正文碰巧出现原话；poisoned 是 stderr 诊断生成的
   // error，即使 exit 0 / turn.completed 也必须清掉。
   const dropSession = !steered && shouldDropSession(sessionFault, exitStatus);
+  const turnOutcome: TurnOutcome = steered || stopped ? "stopped" : executionFailed ? "failed" : "completed";
   await closeExecution(steered ? "canceled" : stopped ?? (executionFailed ? "failed" : "completed"), endIso);
   await db
     .update(sessions)
@@ -577,7 +562,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     cwd: a.cwd,
     startedAt: a.turnStart,
     endedAt: endIso,
-    outcome: steered || stopped ? "stopped" : executionFailed ? "failed" : "completed",
+    outcome: turnOutcome,
   });
   if (steered) {
     // 「引导会话」只截断旧回合：任务仍是 running，新消息已持有 scheduled_messages
@@ -592,8 +577,11 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     return;
   }
   if (doneEvent) {
-    persistTrace(doneEvent, endIso);
-    publishEvent(doneEvent);
+    // 结尾带上**同一份**结局:exit 0 却被判失败、留了续跑交代后崩掉(那一支不写结算说明)的回合,
+    // 直播那一路只有它说得清(见 AgentEvent 的 done.turnOutcome)。
+    const done = { ...doneEvent, turnOutcome };
+    persistTrace(done, endIso);
+    publishEvent(done);
   }
   if (dropSession) {
     const note = sessionResumeFaultNote(sessionFault!);

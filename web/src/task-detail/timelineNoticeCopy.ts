@@ -172,6 +172,8 @@ function typedView(notice: TimelineNotice, raw: string): NoticeView {
       return view("receipt", "neutral", "other", `「${notice.description}」结束了`, raw);
     case "monitor.released":
       return view("receipt", "neutral", "other", `不再等「${notice.description}」了${notice.finished ? "，它已经跑完" : ""}`, raw);
+    case "monitor.handed":
+      return view("receipt", "neutral", "other", "哨兵结果在这一回合里交给了它", raw);
     case "command.output": {
       // 是你要看的东西：输出整段摆出来（命令本身那一行拿掉，指到这一行时写在时刻前面）。
       const output = raw.split("\n")

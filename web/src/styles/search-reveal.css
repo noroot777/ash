@@ -1,0 +1,10 @@
+/* ⌘K 打开命中后会话里那一下闪烁（search/searchReveal.ts）。亮灭由脚本切换 ——
+   ::highlight() 上挂不了动画。落点那一处颜色更重，其余出现处只淡淡标一下。 */
+::highlight(search-reveal) {
+  background-color: color-mix(in oklab, var(--accent) 22%, transparent);
+}
+
+::highlight(search-reveal-current) {
+  background-color: color-mix(in oklab, var(--accent) 48%, transparent);
+  color: var(--ink);
+}

@@ -1,4 +1,4 @@
-import type { ContextUsage, Session, TokenUsage } from "@ash/shared";
+import type { ContextUsage, Session, SessionRole, TokenUsage, TurnOutcome } from "@ash/shared";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 import { ANSWER_PREFIX } from "@ash/shared";
 import { parseSessionOutput, segmentFingerprint } from "@ash/shared/session-output";
@@ -24,6 +24,7 @@ import type { LiveAgentEvent, PersistedTurnTimes } from "./conversationTurnParts
 import { agentLabel, latestTurnStart, recordPersistedTurn, sessionRun } from "./conversationTurnParts.ts";
 import { appendLiveTimeline } from "./conversationLiveTurns.ts";
 import { appendTraceFragments } from "./conversationTraceFragments.ts";
+import { persistedTurnOutcome } from "./turnFailure.ts";
 import { contentVersion } from "../lib/useStickToBottom.ts";
 import { conversationItemSize } from "./conversationContentSize.ts";
 export { conversationToMarkdown } from "./conversationMarkdown.ts";
@@ -56,6 +57,12 @@ export type ConversationItem =
        * 必填：每个拼 agent 条目的地方都得给，漏了编译不过（少给一处，那一路的头像就退回首字母）。
        */
       agentType: string | null;
+      /**
+       * 说这一回合的会话是什么角色（reviewer = 审查者另开的那条）。直播里会话行可能还没到，
+       * 就取 agent.event 自带的那份。跟 `reviewer` 是两回事：那是徽标，会被 applyVerifySpans
+       * 按审查区间补上轮次；这个是归属事实，排完版也不变。「这条会话是不是任务自己的」只问它。
+       */
+      sessionRole: SessionRole | null;
       at?: string | null;
       /**
        * 这颗气泡属于哪一回合：服务端给这一回合的身份（trace 挂的、实时事件带的那个起点）。
@@ -82,8 +89,10 @@ export type ConversationItem =
       showSessionMeta?: boolean;
       /** 上一条说话的还是同一个会话、中间只隔着旁注：接着上一段说，不再重报头像和执行器名。 */
       continuation?: boolean;
-      /** 这一回合是哨兵叫醒的、没能并回等它的那一回合（等的时候你插过话），见 monitorWakeTurns。 */
+      /** 这一回合是哨兵叫醒的、叫醒的那条哨兵不归前面那一段（比如等的时候你插过话），另起的一回合，见 monitorWakeTurns。 */
       wokenByMonitor?: boolean;
+      /** 这一回合自己的结局（服务端按回合交出来的，见 turnFailure 的 turnFailed）。缺省/null = 不知道。 */
+      turnOutcome?: TurnOutcome | null;
       session?: Session;
       run?: { model: string | null; reasoningEffort: string | null };
       /**
@@ -258,6 +267,7 @@ function mergeTurnChunk(target: AgentItem, chunk: AgentItem): void {
   target.markerEndedAt = chunk.markerEndedAt ?? target.markerEndedAt;
   target.usage = target.usage && chunk.usage ? addUsage(target.usage, chunk.usage) : chunk.usage ?? target.usage;
   target.run = target.run ?? chunk.run;
+  target.turnOutcome = chunk.turnOutcome ?? target.turnOutcome;
   target.sources = [...target.sources ?? [], ...chunk.sources ?? []];
 }
 
@@ -468,10 +478,12 @@ function appendPersistedSession(
         sessionId: session.id,
         label: agentLabel(session),
         agentType: session.agentType,
+        sessionRole: session.role,
         at: turnStartedAt,
         turnStartedAt: traceEntries.at(-1)?.turnStartedAt ?? null,
         endedAt: null,
         markerEndedAt: segment.endedAt ?? null,
+        turnOutcome: persistedTurnOutcome(session, traceEntries, turnStartedAt),
         session,
         run: traceRun(traceEntries) ?? sessionRun(session),
         reviewer: reviewerOf(traceVerifyRound(traceEntries), session?.role),

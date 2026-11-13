@@ -274,7 +274,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       // 跨重启接回来的那一份也照旧认它。
       stopWhen: input.stopWhen?.trim() || null,
       // 还没开始跑,自然一行都没命中过（这一列的语义见 schema-monitors.ts 的 `hitLine`）。
-      hitLine: null,
+      hitLine: null, finishingSince: null,
       // **同一个瞬间**算两列：分别取 Date.now() 会差 1ms，而对外那个到期时刻是
       // `started_at + timeout_ms` 现算的（见 toTaskMonitor），差值会变成「库里写的」与
       // 「卡片显示的」不一致。
@@ -397,7 +397,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       //    了,一次性结局缓冲会当场把它结算成 exited),那时再写「已起」就排在「结束」后面了。
       //    排在 ⑤ 上膛之前是另一条:上膛到放行之间**不许再有 await**(⑤ 的注释)。没上膛成的
       //    那一路由 `abortRegistration` 追一句「哨兵没能开工」更正。
-      await appendTaskTimeline(row.taskId, noticeLine({ kind: "monitor.started", description: row.description }, `哨兵已起：${row.description}（${command}）`));
+      await appendTaskTimeline(row.taskId, noticeLine({ kind: "monitor.started", monitorId: row.id, description: row.description }, `哨兵已起：${row.description}（${command}）`));
       announced = true;
 
       // ⑤ **上膛**:写进完整身份,同一条语句里证明「这次创建此刻仍然该放行」(见 `armRow`)。

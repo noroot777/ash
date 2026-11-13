@@ -49,6 +49,7 @@ function AgentRow({
           {!row.continuation && (
             <span className="agent-run-identity">
               <b>{row.label}</b>
+              {row.wokenByMonitor && <span className="turn-cause">被哨兵叫醒</span>}
               <AgentRunMeta run={row.run} />
             </span>
           )}
@@ -302,7 +303,7 @@ export function TeamFeed({
           {historyReady && <QuestionHistoryRemainder />}
           {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadLabel(task)} queuePosition={task.queuePosition} />}
         </section>
-        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={teamTailKey(rows)} inputs={inputs} />
+        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={teamTailKey(rows)} inputs={inputs} revealReady={historyReady} />
       </div>
     </ImagePreviewGroup>
     </QuestionHistoryProvider>

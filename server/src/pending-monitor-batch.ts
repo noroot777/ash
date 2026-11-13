@@ -9,6 +9,7 @@ import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js"
 import { retryBlocked } from "./pending-redelivery.js";
 import { isDueForDelivery } from "./pending-verdict.js";
 import { mintLeaseStamp } from "./delivery-fence.js";
+import { endNotOwed, endOwedOrigins, finishingNow } from "./monitor-end-owed.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
 
@@ -46,18 +47,23 @@ export async function beginPendingBatch(message: Row): Promise<Row[]> {
     const first = pending.findIndex((candidate) => candidate.id === message.id);
     if (first < 0) return [];
     const at = new Date();
+    const owed = await endOwedOrigins(message.taskId, transaction);
     const selected: Row[] = [];
     for (const candidate of pending.slice(first)) {
       if (candidate.deliveringSince !== null || batchTarget(candidate) !== target
-        || !isDueForDelivery(candidate, at) || retryBlocked(candidate.id, at.getTime())) break;
+        || !isDueForDelivery(candidate, at) || retryBlocked(candidate.id, at.getTime())
+        // 还欠着一声「结束」的哨兵名下的行这一批不带(monitor-end-owed.ts):结束并进来之后一起送。
+        || owed.has(candidate.origin!)) break;
       selected.push(candidate);
     }
-    if (!selected.length) return [];
+    // 收尾槽位只在内存里:发 CAS 之前同步再问一次,挑完之后才开始收尾的那条也不带走。
+    if (!selected.length || selected.some((candidate) => finishingNow(candidate.origin))) return [];
     // 同一笔领取铸一个租约值,整批共用:后面的归还/确认凭它证明「还是这一次」(delivery-fence.ts)。
     const claimed = await transaction.update(scheduledMessages).set({ deliveringSince: mintLeaseStamp() })
       .where(and(
         inArray(scheduledMessages.id, selected.map((candidate) => candidate.id)),
         eq(scheduledMessages.status, "pending"), isNull(scheduledMessages.deliveringSince),
+        endNotOwed,
       )).returning();
     if (claimed.length !== selected.length) throw new Error("哨兵批次投递租约未完整领取");
     return claimed.sort(pendingMessageOrder);

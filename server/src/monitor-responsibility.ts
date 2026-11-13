@@ -1,4 +1,4 @@
-// **哨兵的「未了结责任」集合** —— 三类,一条语句读齐。
+// **哨兵的「未了结责任」集合** —— 四类,一条语句读齐。
 //
 // 为什么独立成文件:这个集合有**两个**提问者,而它们问的是同一件事。
 //
@@ -12,10 +12,12 @@
 // (日志:WRITER_PENDING origin="monitor:m" / SOURCE_ACTIVE false / PENDING_AFTER_RECOVERY
 // status="canceled")。所以这里**只提供集合**,语义由各自的调用点解释。
 //
-// 三类分别是什么、为什么必须在**一条语句**里读齐(SQLite 单语句自带一致快照;拆成三条
+// 前三类分别是什么、为什么必须在**一条语句**里读齐(SQLite 单语句自带一致快照;拆成三条
 // SELECT 会让一份正在从第三类转移到第二类的责任从指缝里漏过去),全部写在
-// task-complete-monitors.ts 的文件头,这里不复述。
-import { and, eq, isNotNull, isNull, like, or, sql } from "drizzle-orm";
+// task-complete-monitors.ts 的文件头,这里不复述。第四类(`handed`)是回合里交出去、还没确认
+// 送到的那几行(monitor-turn-handoff.ts ②):它们跟第二类是同一份责任换了个状态,所以放弃、
+// 来源审查这两条规则也跟第二类同一份 —— 写在同一个集合里,两个提问者自然一起认。
+import { and, eq, isNotNull, isNull, like, or, sql, type SQL } from "drizzle-orm";
 import { unionAll } from "drizzle-orm/sqlite-core";
 import { db } from "./db/index.js";
 import { monitors, scheduledMessages } from "./db/schema.js";
@@ -28,8 +30,13 @@ export type ResponsibilityReader = typeof db | ConclusionTransaction;
 export const MONITOR_ORIGIN_PREFIX = "monitor:";
 
 export type MonitorResponsibilityRow = {
-  /** 哪一类:`live` 还在盯 / `unread` 结果排在待发送 / `handoff` 结局已定、通知还没入队。 */
+  /**
+   * 哪一类:`live` 还在盯 / `unread` 结果排在待发送 / `handoff` 结局已定、通知还没入队 /
+   * `handed` 回合里交出去了、还没确认送到。
+   */
   cls: string;
+  /** 那条待发送消息的 id(只有第二、四类非空)。 */
+  messageId: string | null;
   monitorId: string | null;
   origin: string | null;
   description: string | null;
@@ -73,6 +80,7 @@ export async function unsettledMonitorResponsibility(
     reviewGeneration: monitors.sourceReviewGeneration,
   };
   const noMessageSource = {
+    messageId: sql<string | null>`NULL`.as("message_id"),
     messageReviewRun: sql<string | null>`NULL`.as("message_review_run"),
     messageReviewRound: sql<number | null>`NULL`.as("message_review_round"),
   };
@@ -91,10 +99,13 @@ export async function unsettledMonitorResponsibility(
       eq(monitors.taskId, taskId), eq(monitors.kind, "ash"),
       isNotNull(monitors.resultHandoffAt), isNull(monitors.resultsAbandonedAt),
     ));
-  // 第二类:还排在待发送托盘里的哨兵结果。
-  const unread = executor
+  // 第二类(还排在待发送托盘里的)与第四类(回合里交出去、还没确认送到的)是**同一份结果**的
+  // 两个状态,按同一套规则读:哨兵行没了的照样算;行还在但已经被明确放弃的不算(理由见
+  // task-complete-monitors.ts)。
+  const messages = (cls: "unread" | "handed", state: SQL) => executor
     .select({
-      cls: sql<string>`'unread'`.as("cls"), origin: scheduledMessages.origin, ...shape,
+      cls: sql<string>`${sql.raw(`'${cls}'`)}`.as("cls"), origin: scheduledMessages.origin, ...shape,
+      messageId: sql<string | null>`${scheduledMessages.id}`.as("message_id"),
       messageReviewRun: scheduledMessages.reviewRun,
       messageReviewRound: scheduledMessages.reviewRound,
     })
@@ -102,12 +113,16 @@ export async function unsettledMonitorResponsibility(
     .leftJoin(monitors, eq(monitors.id, sql`substr(${scheduledMessages.origin}, ${MONITOR_ORIGIN_PREFIX.length + 1})`))
     .where(and(
       eq(scheduledMessages.taskId, taskId),
-      eq(scheduledMessages.status, "pending"),
+      state,
       like(scheduledMessages.origin, `${MONITOR_ORIGIN_PREFIX}%`),
-      // 哨兵行没了的照样算;行还在但已经被明确放弃的不算(理由见 task-complete-monitors.ts)。
       or(isNull(monitors.id), isNull(monitors.resultsAbandonedAt)),
     ));
+  const unread = messages("unread", eq(scheduledMessages.status, "pending"));
+  const handed = messages("handed", and(
+    eq(scheduledMessages.status, "sent"), isNotNull(scheduledMessages.turnTakenBy),
+    sql`json_extract(${scheduledMessages.turnHandoff}, '$.ackedAt') IS NULL`,
+  )!);
   // **最宽的那一支放第一位**:`unionAll` 的结果类型取第一支,而第二类是 LEFT JOIN(哨兵行可能
   // 没了),它的列全是可空的。另两支的非空列可以赋进可空类型,反过来编译不过。
-  return await unionAll(unread, live, handoff);
+  return await unionAll(unread, handed, live, handoff);
 }
