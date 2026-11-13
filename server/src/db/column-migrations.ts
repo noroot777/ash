@@ -116,6 +116,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 失败一次就把它丢了,重试时两份来源都是空的,结局被写成「它已经不在了」(第 2 轮审查 N1)。
   // 存量行 NULL = 没命中过(或者当初没记),读的那一侧照旧按日志重算。
   "ALTER TABLE monitors ADD COLUMN hit_line TEXT",
+  // 收尾已经开始的时刻(见 schema-monitors.ts 的 finishing_since)。存量行 NULL = 没开始过收尾。
+  "ALTER TABLE monitors ADD COLUMN finishing_since TEXT",
   "ALTER TABLE monitor_reclaim_debts ADD COLUMN unit_token TEXT",
   // 「线索追到这里为止」的戳。**不是销账**:整项退出在当前平台证不出,所以行留着只盖戳
   // (见 schema-monitors.ts 的 closed_at、第 13 轮审查 F1-B)。存量行 NULL = 还在追。

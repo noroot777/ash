@@ -294,9 +294,13 @@ setInterval(() => {}, 1000);
   );
   // **收尾所有权的形状**（第 1 轮审查 F1）。Ⓒ 那两条路是时序,只保护跑到过的那两个出口;
   // 哪天又有人拿「`runtimes` 里还取不取得到」当防重入判据,时序未必再撞上,形状一定对不上。
-  assert.match(src, /const finishing = new Map<string, Promise<void>>\(\)/, "收尾所有权要有一个槽位");
+  // 槽位住在 monitor-end-owed.ts(它同时是「这条哨兵还欠着结束」的一份证据,领取入口都要问),
+  // monitor-finish.ts 从那边取用、原样转出。
+  const SLOT = readSource(join(HERE, "../src/monitor-end-owed.ts"));
+  assert.match(SLOT, /const finishing = new Map<string, Promise<void>>\(\)/, "收尾所有权要有一个槽位");
   assert.match(src, /async function finishHeld\(/, "本体只许由持有者跑");
-  assert.match(src, /export function claimFinish\(/, "不走 finish 的那条终态写入也要能加入同一份所有权");
+  assert.match(SLOT, /export function claimFinish\(/, "不走 finish 的那条终态写入也要能加入同一份所有权");
+  assert.match(src, /export \{ claimFinish, finishInFlight \}/, "收尾那边用的是同一个槽位");
   // **放弃型必须留在所有权之外**。让它们也等,「停止赢了就是赢了」当场变成「按了停,页面一直
   // 转」(第 21 轮审查 F2;实测让两边互等,那条回归直接挂住)。两处入口都得自报身份,不许靠
   // 这一层去猜 `endedBy`/`keepBuffered`。

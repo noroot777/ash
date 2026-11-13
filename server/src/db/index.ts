@@ -177,7 +177,7 @@ export async function ensureSchema() {
       unit_token TEXT, ended_by TEXT,
       results_abandoned_at TEXT, results_abandoned_reason TEXT,
       result_handoff_at TEXT, result_handoff_text TEXT,
-      stop_when TEXT, hit_line TEXT
+      stop_when TEXT, hit_line TEXT, finishing_since TEXT
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS monitor_reclaim_debts (

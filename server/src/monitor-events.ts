@@ -88,9 +88,9 @@ export async function pushToTask(
   if (!hold) {
     // **两步的顺序就是不变量**(第 4 轮审查 4):先把「结束」落进最新那一行,**窗口原样不动**
     // (另起一行时带上这几行里最晚的那个期限);再用**一条语句**解除这条哨兵所有行的窗口。中间
-    // 断掉(解除那一笔失败、进程没了)时,带着「结束」的那一行仍跟前面的积压一起压着,谁也不会
-    // 先把「结束」送到进展前面;到期了也是积压那一行先到期、先送。重投那一侧认出「这一笔已经
-    // 入过队」时也会把解除补做完,才销凭证(`deliverResultHandoff`)。
+    // 断掉(解除那一笔失败、进程没了)时交接凭证还在,这条哨兵名下的行一行都领不走(monitor-end-owed.ts
+    // ③),期限到了也一样;重投那一侧认出「这一笔已经入过队」时把解除补做完,才销凭证
+    // (`deliverResultHandoff`)—— 销掉的那一刻几行一起放行。
     const latestHold = waiting.reduce<string | null>(
       (max, m) => (m.mergeHoldUntil && (!max || m.mergeHoldUntil > max) ? m.mergeHoldUntil : max), null);
     await mergeOrEnqueueMonitorEvent(row, text, latest, handoffToken, event, latestHold);
@@ -98,10 +98,8 @@ export async function pushToTask(
     flushNow(row.id, row.taskId);
     return true;
   }
-  // 收尾正在进行(进程已经退了,ash 还在记账):这一批跟着收尾的期限压着,见 `holdWhileFinishing`。
-  const grace = new Date(at + MONITOR_END_GRACE_MS).toISOString();
-  const finishing = finishHolds.get(row.id);
-  const holdUntil = finishing && finishing > grace ? finishing : grace;
+  // 收尾正在进行(进程已经退了,ash 还在记账)时不必另压:欠着结束的哨兵名下谁都领不走(monitor-end-owed.ts)。
+  const holdUntil = new Date(at + MONITOR_END_GRACE_MS).toISOString();
   const backlog = waiting.at(-2);
   // 已经有积压那一行:最新那一行并进它、腾出来装这一批。没有(或者腾的那一下落空):这一批另起一行,
   // 原来最新的那一行就成了积压,期限照旧。
@@ -171,37 +169,6 @@ export async function releaseMergeHolds(origin: string): Promise<string[]> {
 }
 
 /**
- * **收尾期间这条哨兵名下的行谁都领不走**(第 4 轮审查 3)。
- *
- * 进程退了之后,ash 还要排干最后几行、写终态、把「结束」入队 —— 这段时间可能比合并窗口长(库忙、
- * 磁盘慢)。上一版只让窗口到期那一个定时器等收尾做完,巡检、按任务扫描、批量领取、回合里的交付
- * 都只认行上的期限,于是最后一批输出被它们先领走,「结束」另起一行再叫一次。所以等待落在**行上**:
- * 收尾一开始就把这条哨兵所有还在等的行的期限推到收尾结束(上限 `FINISH_HOLD_MS`,只在 ash 自己
- * 没了、收尾没做完时才会真等满),收尾期间新排的那一批也带这个期限;「结束」落进来、或者收尾
- * 做完(不管有没有「结束」)就解除。所有出口读的都是同一个期限(`isDueForDelivery`、回合里那条
- * 领取的条件),所以谁也绕不过去,重启之后也还在。团队调度台的行本来就不压(`merge_hold_until`
- * 为空),这里不动它们。
- */
-const FINISH_HOLD_MS = 30_000;
-const finishHolds = new Map<string, string>();
-
-export async function holdWhileFinishing(monitorId: string): Promise<void> {
-  const until = new Date(Date.now() + FINISH_HOLD_MS).toISOString();
-  finishHolds.set(monitorId, until);
-  if (dbClient.closed) return;
-  await db.update(scheduledMessages).set({ mergeHoldUntil: until }).where(and(
-    eq(scheduledMessages.origin, monitorMessageOrigin(monitorId)),
-    eq(scheduledMessages.status, "pending"), isNull(scheduledMessages.deliveringSince),
-    isNotNull(scheduledMessages.mergeHoldUntil),
-  ));
-}
-
-export async function endFinishHold(monitorId: string): Promise<void> {
-  finishHolds.delete(monitorId);
-  for (const taskId of await releaseMergeHolds(monitorMessageOrigin(monitorId))) flushPendingForTask(taskId);
-}
-
-/**
  * 输出那一批**先不叫醒**,等 `MONITOR_END_GRACE_MS` 看进程是不是马上就退 —— 打完最后一行就退出
  * 是最常见的收尾,不等的话这一批先起一个回合,紧跟着的「结束」只能排在它后面再叫醒一次。
  *
@@ -210,10 +177,9 @@ export async function endFinishHold(monitorId: string): Promise<void> {
  * 过了之后**触发**那一次投递;进程这期间没了,那一行照旧在,巡检到点就送。
  *
  * 等到了 = 收尾那一笔把「结束」并进最新那一行、解除这条哨兵所有行的窗口、当场送(`flushNow` 顺手撤掉
- * 这些定时器)。到点时
- * 收尾正在进行(进程已经退了,收尾还在排干/回收/落终态)就等它做完再送:要等的那件事已经发生,
- * 剩下的只是 ash 自己的记账,这时先送等于亲手把一条拆成两条。命中 `stopWhen` 那一批走的也是
- * 这条:命中当场就排上了收尾,所以实际上不等 —— 收尾一入队就把它们一起送出去。
+ * 这些定时器)。到点时收尾正在进行(进程已经退了,收尾还在排干/回收/落终态)、或者结束已定还没入队:
+ * 这一次触发什么都领不走(monitor-end-owed.ts),等那一笔交接做完由它那边触发。命中 `stopWhen`
+ * 那一批走的也是这条:命中当场就排上了收尾,收尾一入队就把它们一起送出去。
  */
 const deferred = new Map<string, Set<NodeJS.Timeout>>();
 
@@ -226,10 +192,7 @@ function deferFlush(monitorId: string, taskId: string, until: string): void {
   const timer = setTimeout(() => {
     timers.delete(timer);
     if (!timers.size) deferred.delete(monitorId);
-    void import("./monitor-finish.js").then(async ({ finishInFlight }) => {
-      await finishInFlight(monitorId);
-      flushPendingForTask(taskId);
-    }).catch(() => flushPendingForTask(taskId));
+    flushPendingForTask(taskId);
   }, Math.max(0, Date.parse(until) - Date.now()));
   (timer as { unref?: () => void }).unref?.();
   timers.add(timer);
@@ -332,6 +295,9 @@ export async function deliverResultHandoff(monitorId: string): Promise<HandoffOu
     // 一直写着「完成被它堵着」和一个没有用处的「不再等它的结果」,直到用户自己刷新页面。
     // 放在这里而不是四个 return 各写一遍:上面那条 UPDATE 是四条出口的共同销账点。
     bus.publish({ type: "task.monitors", taskId: row.taskId });
+    // 凭证在的时候这条哨兵名下谁都领不走(monitor-end-owed.ts ③),上面入队那一下的投递触发因此落空:
+    // 销完才是放行的那一刻,在这里再触发一次。
+    flushPendingForTask(row.taskId);
     if (sentAlready || duplicate) return "already";
     if (!delivered) {
       console.error(

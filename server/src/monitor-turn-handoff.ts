@@ -57,6 +57,7 @@ import { confirmHandoffs, newHand } from "./monitor-turn-ack.js";
 import { appendTaskTimeline, noticeLine, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
 import type { SQL } from "drizzle-orm";
+import { endNotOwed, endOwedOrigins, finishingNow } from "./monitor-end-owed.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
 
@@ -158,13 +159,16 @@ export async function takeMonitorResultsForTurn(a: {
     like(scheduledMessages.origin, "monitor:%"),
     isNull(scheduledMessages.checkpointTaken),
   ));
+  // 还欠着一声「结束」的哨兵名下的行这一轮不交(monitor-end-owed.ts):结束并进来之后一起交。
+  const owed = await endOwedOrigins(a.taskId);
   const candidates: Row[] = [];
   for (const m of pending) {
-    if (!targetsTurn(m, turn)) continue;
+    if (!targetsTurn(m, turn) || owed.has(m.origin!)) continue;
     if (await monitorEventSourceState(m.origin) === "stale") continue;
     candidates.push(m);
   }
-  if (!candidates.length) return null;
+  // 收尾槽位只在内存里:发 CAS 之前同步再问一次。
+  if (!candidates.length || candidates.some((m) => finishingNow(m.origin))) return null;
   const handoff = { hand: newHand(), at };
   const claimable = exists(db.select({ one: sql`1` }).from(tasks).where(eligible));
   // 同一个条件、一条语句(文件头 ①):唤醒那一路刚领走的、挑完之后身份变了的,都不会出现在 returning 里。
@@ -175,6 +179,7 @@ export async function takeMonitorResultsForTurn(a: {
       eq(scheduledMessages.status, "pending"),
       isNull(scheduledMessages.deliveringSince),
       or(isNull(scheduledMessages.mergeHoldUntil), lte(scheduledMessages.mergeHoldUntil, at)),
+      endNotOwed,
       claimable,
     ))
     .returning();

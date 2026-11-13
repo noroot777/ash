@@ -14,7 +14,8 @@ import { monitorEventTally } from "@ash/shared/monitor-silence";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { drainOwed, hitOf, linesBody, matchedReason, renderLines } from "./monitor-consume.js";
-import { deliverResultHandoff, endFinishHold, holdWhileFinishing } from "./monitor-events.js";
+import { deliverResultHandoff } from "./monitor-events.js";
+import { claimFinish, finishInFlight, flushMonitorRows, markFinishing } from "./monitor-end-owed.js";
 import { ensureSupervised } from "./monitor-handover.js";
 import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
 import { clearSpawnIdentity } from "./monitor-spawn.js";
@@ -63,30 +64,12 @@ function reportOwedDropped(monitorId: string, owed: string[], why: string): void
  * **等不出死锁**:排干要的是 `serialize(monitorId)` 那条队列,而消费层那两个出口一律 `void`
  * 调 `finish`(见 `settleInBackground`),等在槽位上的那一笔不占着队列;会等的那几个入口
  * (自退、到期、接回)手里一条队列都没有。
- */
-const finishing = new Map<string, Promise<void>>();
-
-/** 这条哨兵此刻有没有人正在收尾(手里可能还握着没交出去的行)。`null` = 没有。 */
-export const finishInFlight = (monitorId: string): Promise<void> | null => finishing.get(monitorId) ?? null;
-
-/**
- * 占下「这条哨兵的收尾归我」。占到 = 一个幂等的 release;占不到 = `null`。
  *
- * 给**不走 `finish` 的那条终态写入**用(`finishOffline`:它整段跑在 `serialize(row.id)` 上,
- * 所以它只能退出不能等 —— 排干也要那条队列)。
+ * **槽位本身住在 monitor-end-owed.ts**:它同时是「这条哨兵还欠着结束」的第一份证据,每个领取入口
+ * 都要问。`claimFinish` 也给**不走 `finish` 的那条终态写入**用(`finishOffline`:它整段跑在
+ * `serialize(row.id)` 上,所以它只能退出不能等 —— 排干也要那条队列)。
  */
-export function claimFinish(monitorId: string): (() => void) | null {
-  if (finishing.has(monitorId)) return null;
-  let settle!: () => void;
-  finishing.set(monitorId, new Promise<void>((resolve) => { settle = resolve; }));
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    finishing.delete(monitorId);
-    settle();
-  };
-}
+export { claimFinish, finishInFlight };
 
 /**
  * 收尾。三条路都可能到这儿（过期、进程自己退出、有人点停），只做一次。
@@ -114,20 +97,21 @@ export async function finish(
   if (!release) {
     // 槽位被占着。非放弃型合并到那一笔上;放弃型照旧往下走(它不欠投递,见 `finishing`)。
     if (!opts.abandon) {
-      await (finishing.get(monitorId) ?? Promise.resolve());
+      await (finishInFlight(monitorId) ?? Promise.resolve());
       return;
     }
     await finishHeld(monitorId, status, reason, exitCode, opts);
     return;
   }
   try {
-    // 收尾期间这条哨兵名下的行谁都领不走,做完才放(见 `holdWhileFinishing`)。压不上不挡收尾:
-    // 最坏是退回到「只有窗口那一个定时器在等」。
-    await holdWhileFinishing(monitorId).catch((e) => console.error(`[ash] 收尾压住待发行失败 monitor=${monitorId}:`, e));
+    // 占到槽位的这一刻起,这条哨兵名下的行谁都领不走(monitor-end-owed.ts ①);这一笔让它活过重启(②)。
+    await markFinishing(monitorId);
     await finishHeld(monitorId, status, reason, exitCode, opts);
   } finally {
-    await endFinishHold(monitorId).catch((e) => console.error(`[ash] 收尾解除待发行失败 monitor=${monitorId}:`, e));
+    // 放手**不等于放行**:终态落定了还欠着入队的,凭证照旧挡着(③),由交接那一笔做完再送。
+    // 这里只把不再欠的那几行触发一次(扫描到点也会捡)。
     release();
+    void flushMonitorRows(monitorId).catch((e) => console.error(`[ash] 收尾后触发投递失败 monitor=${monitorId}:`, e));
   }
 }
 

@@ -35,6 +35,7 @@ import { clearSpawnIdentity } from "./monitor-spawn.js";
 import { attach, ensureSupervised, finish, finishOffline, isAshKind, serialize, type Row }
   from "./monitors.js";
 import { IS_WINDOWS } from "./platform.js";
+import { clearFinishing } from "./monitor-end-owed.js";
 
 /**
  * 开机把上一个 server 留下的哨兵接回来。进程本来就没跟着死（这是整件事的全部意义），
@@ -219,6 +220,8 @@ async function takeOver(row: Row): Promise<"attached" | "lost" | "ended"> {
       await finish(row.id, "expired", "盯满了约定的时长（server 重启期间到期）", null);
       return "ended";
     }
+    // 收尾做到一半 ash 没了、进程却还是那一个:它回到在盯,不再欠结束(monitor-end-owed.ts ②)。
+    if (state === "ours-alive" && row.finishingSince) await clearFinishing(row.id);
     attach(row);
     return "attached";
   }

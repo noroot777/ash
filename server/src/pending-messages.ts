@@ -51,6 +51,7 @@ import { pendingMessageOrder } from "./pending-monitor-batch.js";
 import { hasPendingDeliveryRecovery } from "./pending-delivery-recovery.js";
 import { insertAfterMessage, withAfterGates, type AfterGate } from "./pending-after.js";
 import { forgetDeliveryCrossing } from "./delivery-crossing.js";
+import { endNotOwed, endOwedOrigins, finishingNow } from "./monitor-end-owed.js";
 import {
   CHECKPOINT_RUN_ORIGIN, preparePendingCheckpointStart, recoverPendingCheckpoints,
   reconcileCheckpointDeliveries,
@@ -274,10 +275,19 @@ export async function beginDelivery(messageId: string): Promise<Row | null> {
         eq(scheduledMessages.id, messageId),
         eq(scheduledMessages.status, "pending"),
         isNull(scheduledMessages.deliveringSince),
+        // 还欠着一声「结束」的哨兵名下的行谁都领不走(monitor-end-owed.ts)。
+        endNotOwed,
       ),
     )
     .returning();
-  return claimed.at(0) ?? null;
+  const row = claimed.at(0) ?? null;
+  // 槽位那一份只在内存里,跟 CAS 同一个 tick 里问不了库 —— 领到了再核一次,正在收尾就原样还回去。
+  if (row && finishingNow(row.origin)) {
+    await db.update(scheduledMessages).set({ deliveringSince: null })
+      .where(and(eq(scheduledMessages.id, row.id), eq(scheduledMessages.deliveringSince, row.deliveringSince!)));
+    return null;
+  }
+  return row;
 }
 
 // 原话已经进会话了,这才落 sent。用 status='pending' 兜一道:等待期间用户手动取消过的
@@ -397,9 +407,13 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
     .where(and(eq(scheduledMessages.status, "pending"), isNull(scheduledMessages.deliveringSince)));
   const pending = (await withAfterGates(taskId ? all.filter((m) => m.taskId === taskId) : all))
     .sort(pendingMessageOrder);
+  const owed = await endOwedOrigins(taskId);
   const fired = new Set<string>();
   for (const m of pending) {
     try {
+      // 还欠着一声「结束」的哨兵名下的行:等那一笔交接做完(monitor-end-owed.ts),它那边会再触发。
+      // 这是它自己的等待语义,不是滞留。
+      if (m.origin && owed.has(m.origin)) continue;
       if (checkpointFailures.has(m.taskId) || fired.has(m.taskId) || inFlight.has(m.taskId) || hasPendingDeliveryRecovery(m.taskId)
         || cooling(m.taskId, at.getTime())) continue;
       // 下一次允许重试的时刻没到就不碰:退避只写在重投定时器上管不住别的触发源 ——

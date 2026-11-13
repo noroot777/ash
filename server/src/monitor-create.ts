@@ -274,7 +274,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       // 跨重启接回来的那一份也照旧认它。
       stopWhen: input.stopWhen?.trim() || null,
       // 还没开始跑,自然一行都没命中过（这一列的语义见 schema-monitors.ts 的 `hitLine`）。
-      hitLine: null,
+      hitLine: null, finishingSince: null,
       // **同一个瞬间**算两列：分别取 Date.now() 会差 1ms，而对外那个到期时刻是
       // `started_at + timeout_ms` 现算的（见 toTaskMonitor），差值会变成「库里写的」与
       // 「卡片显示的」不一致。
