@@ -22,7 +22,7 @@ import { ClaudeMonitorTrace } from "../claude-monitors.js";
 import { runOriginOfChild } from "../claude-monitor-origin.js";
 import { consumedEvents, holdSince, startsTurn } from "./claude-recovery.js";
 import type { ConsumedOutput } from "./types.js";
-import { claudeRetryMessage, isClaudeRetry } from "./claude-retry-notice.js";
+import { claudeRetryMessage, claudeRetryModel, isClaudeRetry } from "./claude-retry-notice.js";
 import { normalizeClaudeCliError, shortJson, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
 import { ClaudeRequestTimer } from "./request-timing.js";
 import { claudeApiStatus, modelFailureOf } from "./model-failure.js";
@@ -323,8 +323,7 @@ async function* claudeStreamEvents(
       // 故障级 error ——「最终失败了没有」由那条答,这里只负责把过程留在它发生的位置上。
       // 措辞与子智能体那一路共用一处(claude-retry-notice.ts):同一条原始事件有两个入口。
       if (isClaudeRetry(ev)) {
-        // 带上这次重试撞的是哪一类：看门狗熔断掉这一轮时，原因据它说得出状态码（model-failure.ts）。
-        const model = modelFailureOf(typeof ev.error === "string" ? ev.error : "", Number(ev.error_status) || null);
+        const model = claudeRetryModel(ev);
         push({ kind: "error", message: claudeRetryMessage(ev), level: "notice", affectsTurn: false, ...(model ? { model } : {}) });
       }
       // **这一条紧跟在上面那句重试提示后面**,而它只是把 CLI 会话身份报一遍 —— 不是上游回话了。

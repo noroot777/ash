@@ -8,7 +8,7 @@
 // 职责（续聊/原生/手停/提问/检查点/严格完成协议/哨兵闸），而且被引导、重试、测试直接调。
 import { cleanupSettled, nothingToCollect, type CleanupResult } from "./executors/kill.js";
 import type { WriteStream } from "node:fs";
-import type { AgentEvent, AgentType, ModelFailure, SessionRole, TurnOutcome } from "@ash/shared";
+import type { AgentEvent, AgentType, SessionRole, TurnOutcome } from "@ash/shared";
 import { eq, sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
@@ -157,7 +157,6 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   let sawExecutionError = false;
   // 最后一条执行故障，审查没结论时据它说怎么断的（`model` = 执行器认出它来自模型 API 时挂的类型）。
   let lastExecutionError: Extract<AgentEvent, { kind: "error" }> | null = null;
-  let lastRetryModel: ModelFailure | null = null; // 重试提示撞的是哪一类：看门狗熔断时据它说原因
   // CLI 否认过这条会话，或 Codex stderr 证明 thread 已 poisoned 吗（见
   // executors/session-lost.ts）。认下来的话这一轮收尾时要把失效 id 从库里清掉，
   // 否则每一次重试都在 --resume 同一条坏会话。
@@ -456,7 +455,6 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
         // trace（于是它排在执行过程里它发生的那个位置），但下面三件事一件都不做 ——
         // 写红色诊断块、并进会话恢复故障、把这一轮判成有执行异常。判据见
         // session-notice.ts#isExecutionNotice。
-        if (emittedEvent.kind === "error" && emittedEvent.model && isExecutionNotice(emittedEvent)) lastRetryModel = emittedEvent.model;
         if (emittedEvent.kind === "error" && !isExecutionNotice(emittedEvent)) {
           // 有些 error 是需要留在红色诊断块里的旁路故障，但不代表模型回合失败（目前的
           // 实例是 Claude 自动压缩失败：压缩没成，后续 result 仍明确为 success）。
@@ -657,7 +655,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // 回合身份在结算期间还占着（orchestrator 在 consumeSingleRun 之后才 releaseTurn），
     // 这一轮绑的是哪一次审查就从那里整份读。
     const review = turnIdentity(taskId)?.review ?? null;
-    const failure = executionFailed ? { exitStatus, verdict: watchdogFailure, error: lastExecutionError, retrying: lastRetryModel } : null;
+    const failure = executionFailed ? { exitStatus, verdict: watchdogFailure, error: lastExecutionError } : null;
     await noteReviewerChannelGap({ taskId, sessId, turnStart: a.turnStart, agentType, stopped: !!stopped, review, failure })
       .catch((error) => { console.error(`[ash] noteReviewerChannelGap(${taskId}) failed:`, error); return false; });
   }
