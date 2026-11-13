@@ -145,7 +145,8 @@ async function request(method: string, path: string, body: unknown, directionTok
     }
   }
   const text = await res.text();
-  if (!res.ok) throw new Error(`HTTP ${res.status} ${method} ${path} — ${text}`);
+  // 原文另挂在 `body` 上:个别工具要从拒绝里取结构化内容(如随拒绝一起交出的哨兵结果)。
+  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status} ${method} ${path} — ${text}`), { body: text });
   return text;
 }
 

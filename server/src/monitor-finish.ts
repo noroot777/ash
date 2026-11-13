@@ -295,7 +295,7 @@ async function finishHeld(
       return;
     }
     publish(row.taskId);
-    await appendTaskTimeline(row.taskId, noticeLine({ kind: "monitor.finished", description: row.description },
+    await appendTaskTimeline(row.taskId, noticeLine({ kind: "monitor.finished", monitorId: row.id, description: row.description },
       `哨兵结束：${row.description}${code}。${reason}（${tally}）`));
     // 入队 + 销凭证。顺序反过来那条缝又回来了(见 `deliverResultHandoff`)。
     if (endNotice) await deliverResultHandoff(monitorId);

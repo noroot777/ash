@@ -397,7 +397,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       //    了,一次性结局缓冲会当场把它结算成 exited),那时再写「已起」就排在「结束」后面了。
       //    排在 ⑤ 上膛之前是另一条:上膛到放行之间**不许再有 await**(⑤ 的注释)。没上膛成的
       //    那一路由 `abortRegistration` 追一句「哨兵没能开工」更正。
-      await appendTaskTimeline(row.taskId, noticeLine({ kind: "monitor.started", description: row.description }, `哨兵已起：${row.description}（${command}）`));
+      await appendTaskTimeline(row.taskId, noticeLine({ kind: "monitor.started", monitorId: row.id, description: row.description }, `哨兵已起：${row.description}（${command}）`));
       announced = true;
 
       // ⑤ **上膛**:写进完整身份,同一条语句里证明「这次创建此刻仍然该放行」(见 `armRow`)。

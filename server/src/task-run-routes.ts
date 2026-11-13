@@ -44,6 +44,7 @@ import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { mountTaskQuestionRoutes } from "./task-question-routes.js";
 import { occupyResumePrompt } from "./task-resume-prompt.js";
+import { handMonitorResultsOnPause, PAUSE_HANDED_NOTE } from "./monitor-turn-handoff.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { failureVersionOf } from "./task-result-version.js";
 
@@ -284,7 +285,7 @@ api.post("/tasks/:id/pause", async (c) => {
   // 是 1,于是一个在途的旧凭证合法地填回来、占住位置,真正新的那一段再也退不回去（第 3 轮审查
   // F1-A `F2_HTTP_PAUSE_GENERATION_BYPASS`）。身份 CAS 跟这一笔写在同一条语句里（见那一层）；
   // 整行广播也在那一层，前端的派审/预约/修复入口靠这一列灰掉。
-  const occupied = await occupyResumePrompt(taskId, rp, false, [
+  const identity = [
     eq(tasks.status, "running"),
     r.activeTurnToken === null
       ? isNull(tasks.activeTurnToken)
@@ -292,7 +293,13 @@ api.post("/tasks/:id/pause", async (c) => {
     r.activeDirectionToken === null
       ? isNull(tasks.activeDirectionToken)
       : eq(tasks.activeDirectionToken, r.activeDirectionToken),
-  ]);
+  ];
+  // 托盘里已经有本来会把这一轮叫醒的哨兵结果 ⇒ 不暂停、不记检查点,当场交出去(monitor-turn-handoff.ts)。
+  const handed = await handMonitorResultsOnPause(taskId, r.activeTurnToken, identity);
+  if (handed) {
+    return c.json({ paused: false, note: PAUSE_HANDED_NOTE, monitorResults: handed.text, monitorResultsHanded: handed.count });
+  }
+  const occupied = await occupyResumePrompt(taskId, rp, false, identity);
   if (!occupied) return c.json({ error: "当前回合已经结束或已被引导，检查点未写入" }, 409);
   return c.json({ paused: true, willSettleAs: "paused" });
 });
@@ -340,8 +347,14 @@ api.post("/tasks/:id/complete", async (c) => {
         : eq(tasks.activeDirectionToken, r.activeDirectionToken),
     ],
     staleError: "当前回合已经结束或已被引导，完成确认未写入",
+    handOver: { token: r.activeTurnToken },
   });
-  if (!confirm.ok) return c.json({ error: confirm.error }, 409);
+  if (!confirm.ok) {
+    return c.json({
+      error: confirm.error,
+      ...(confirm.handed ? { monitorResults: confirm.handed.text, monitorResultsHanded: confirm.handed.count } : {}),
+    }, 409);
+  }
   // **`willSettleAs` 得跟结算真会落的那个一致**(第 2 轮审查 R2-2:这里回 done、实际落 paused,
   // agent 据此以为活干完了)。结算的优先级是「提问 > 检查点 > 完成」(settle-status.ts):手里
   // 还攥着一段续跑指令,这一轮就落 paused。系统为哨兵写的那段已经在闸放行时清掉了,所以能

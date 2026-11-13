@@ -176,6 +176,10 @@ async function initializeServer() {
   // 预览永远不接管、不结算真 agent。即使某份旧库没洗干净，这道硬闸也保证它不碰真进程。
   if (!IS_PREVIEW_INSTANCE) {
     await reattachRunningTasks();
+    // 回合里交出去、那一轮却没被接回来的哨兵结果退回待发送 —— 必须夹在这两步之间
+    // (顺序的理由见 monitor-turn-handoff.ts 的 `returnOrphanTurnHandoffs`)。
+    await (await import("./monitor-turn-handoff.js")).returnOrphanTurnHandoffs()
+      .catch((err) => console.error("[ash] 退回孤儿回合内交付失败（不影响启动）:", err));
     await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
 
     // 撞在故障窗口里丢掉的那次队列推进补回来(判据与边界见 scheduler.ts 的

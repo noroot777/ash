@@ -208,7 +208,16 @@ const nameList = (items: { label: string }[]): string => {
  * **有意识的**取舍，而不是撞上一堵没有门的墙。
  */
 export async function monitorsBlockingComplete(taskId: string): Promise<string | null> {
-  const { live, unread, inflight } = await blockingSets(taskId);
+  return (await monitorsBlockingDetail(taskId)).message;
+}
+
+/** 同上,外加「结果排着没送到」那一类有几条(完成那一刻要不要当场交给它,见 task-complete.ts)。 */
+export async function monitorsBlockingDetail(taskId: string): Promise<{ message: string | null; unread: number }> {
+  const sets = await blockingSets(taskId);
+  return { message: blockingMessage(sets), unread: sets.unread.length };
+}
+
+function blockingMessage({ live, unread, inflight }: Blocking): string | null {
   if (live.length === 0 && unread.length === 0 && inflight.length === 0) return null;
   const what = [
     live.length ? `${live.length} 个哨兵还在盯着（${nameList(live)}）` : null,

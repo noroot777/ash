@@ -137,6 +137,9 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 按「来源未知」处理(退回时不改来源列,照旧只认代次)。
   "ALTER TABLE scheduled_messages ADD COLUMN checkpoint_auto INTEGER",
   "ALTER TABLE scheduled_messages ADD COLUMN checkpoint_generation INTEGER",
+  // 哨兵结果在回合里交出去的那一轮 / 那一轮没收口退回的时刻(见 schema.ts)。存量行 NULL。
+  "ALTER TABLE scheduled_messages ADD COLUMN turn_taken_by TEXT",
+  "ALTER TABLE scheduled_messages ADD COLUMN turn_returned_at TEXT",
   "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
   "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
   "ALTER TABLE tasks ADD COLUMN started_at TEXT",

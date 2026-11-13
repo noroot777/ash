@@ -35,7 +35,8 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { serialize } from "./monitors.js";
 import { confirmDone, hasConfirmed, revokeConfirmed } from "./task-confirmation.js";
-import { monitorsBlockingComplete, noteMonitorsDropped } from "./task-complete-monitors.js";
+import { monitorsBlockingComplete, monitorsBlockingDetail, noteMonitorsDropped } from "./task-complete-monitors.js";
+import { completeHandedNote, takeMonitorResultsForTurn, type HandedMonitorResults } from "./monitor-turn-handoff.js";
 import { clearAutoCheckpoint, writeResumePrompt } from "./task-resume-prompt.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -62,6 +63,11 @@ export type ConfirmCompleteResult =
        * 暂停指令被补到了新方向头上）。
        */
       note?: string;
+      /**
+       * 拦下它的里面有「结果到了、还没送到手上」那一类,而且调用方给了 `handOver`:那几条已经
+       * **随这次拒绝当场交出去了**(monitor-turn-handoff.ts)。`error` 是交完之后闸里还剩什么。
+       */
+      handed?: HandedMonitorResults;
     };
 
 // ── ③ 的那把闩 ───────────────────────────────────────────────────────────────
@@ -138,9 +144,25 @@ export async function confirmTaskComplete(a: {
    * 落它的是这个入口自己,所以它和上面那次身份判断用的是同一份 CAS 条件、同一段临界区。
    */
   holdOnBlock?: (blocked: string) => string;
+  /**
+   * 被闸拦下、而拦它的里面有排着没送到的结果时,把本来会叫醒**这一轮**的那几条当场交出去
+   * (这一轮的回合令牌)。**只有 HTTP 给**:那条路上 agent 正在等这次返回;断线补录的那一轮
+   * 已经结束,交给它等于交给一个读不到的人。这一次仍然不算确认 —— 结果可能是失败,得它看过再定。
+   */
+  handOver?: { token: string | null };
 }): Promise<ConfirmCompleteResult> {
   const result = await serialize(`task:${a.taskId}`, async (): Promise<ConfirmCompleteResult> => {
-    const blocked = await monitorsBlockingComplete(a.taskId);
+    const gate = await monitorsBlockingDetail(a.taskId);
+    const blocked = gate.message;
+    if (blocked && a.handOver && gate.unread > 0) {
+      const handed = await takeMonitorResultsForTurn({
+        taskId: a.taskId, token: a.handOver.token, where: a.where, via: "complete",
+      });
+      if (handed) {
+        // 交完再问一次闸:剩下的(还在盯的、正在入队的)照旧拦,说法照旧。
+        return { ok: false, error: completeHandedNote(await monitorsBlockingComplete(a.taskId)), blockedByMonitors: true, handed };
+      }
+    }
     if (blocked) {
       if (!a.holdOnBlock) return { ok: false, error: blocked, blockedByMonitors: true };
       const note = a.holdOnBlock(blocked);

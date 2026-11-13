@@ -59,6 +59,8 @@ export type DeliveryMessageView = {
   origin?: string | null;
   /** mode=after:前置任务完成了没有。由调用方经 pending-after.ts 查好贴上,纯函数不碰库。 */
   afterDone?: boolean;
+  /** 回合里交过、那一轮没收口退回来的哨兵结果(monitor-turn-handoff.ts ②):终态上等下一次起跑。 */
+  turnReturnedAt?: string | null;
 };
 export type DeliveryVerdict =
   | { action: "deliver" }
@@ -101,7 +103,9 @@ export function deliveryVerdict(
     if (task.monitorSource === "stale")
       return { action: "cancel", reason: "起这个哨兵的那次审查已经结束，它的事件不再唤醒任务" };
     if (monitorBlockedReason(task, { activeReview: task.monitorSource === "live" }) !== null)
-      return { action: "cancel", reason: "任务已经结束，这条哨兵事件不再唤醒它" };
+      return message.turnReturnedAt
+        ? { action: "wait" }
+        : { action: "cancel", reason: "任务已经结束，这条哨兵事件不再唤醒它" };
   }
   if (!isDueForDelivery(message, at)) return { action: "wait" };
   // 常驻调度台(team)正在说话时也接得住,所以只有单任务需要等它闲下来。

@@ -35,6 +35,7 @@ import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
 import { confirmTaskComplete } from "./task-complete.js";
+import { returnTurnHandoffs } from "./monitor-turn-handoff.js";
 import { reportTaskStage } from "./task-stage.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 
@@ -218,6 +219,11 @@ async function applyReplay(
     await reportTaskStage(taskId, stage, { verificationBasis: call.args.verificationBasis,
       expectedDirectionToken: directionToken, bySessionRecovery: true, sourceTaskId: sourceSession?.taskId });
     return `验证结论（${stage}）当时因 MCP 通道中断没能写回，已从本回合的调用记录中补录。`;
+  }
+  // 那次调用可能已经把排着的哨兵结果交了出去、只是返回没回来:补录前先退回,别让这一轮被补成
+  // 「正常收口」时把它们当成送达(monitor-turn-handoff.ts 的 `returnTurnHandoffs`)。
+  if (call.tool === "complete_task" || call.tool === "pause_task") {
+    await returnTurnHandoffs(taskId, "交出结果的那次调用因 MCP 通道中断没回到它手上");
   }
   if (call.tool === "complete_task") {
     // **走共用入口**(task-complete.ts):这条旁路豁免的是「活跃回合」那道身份闸,不是业务约束。

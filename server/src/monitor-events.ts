@@ -13,7 +13,7 @@
 // ② **一条事件 = 唤醒一次 = 一个真实的模型回合。** 所以合并是第一位的。
 import { and, eq, inArray, isNull, like, notInArray } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
-import { handoffToken, mergeMonitorEventText, monitorMessageOrigin } from "@ash/shared/monitor";
+import { handoffToken, mergeMonitorEventText, MONITOR_END_GRACE_MS, monitorMessageOrigin } from "@ash/shared/monitor";
 import { appendMonitorWake, readMonitorWake, type MonitorWakeEvent } from "@ash/shared/monitor-wake";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
@@ -51,7 +51,7 @@ export async function pushToTask(
   // 「谁按 {status, archived} 两字段读 tasks」被回归精确注入的（test-monitor-races ㉒），
   // 这一处跟它撞同一个形状就会把那条注入骗走，让别人的用例静默变成空测。
   const task = (await db
-    .select({ id: tasks.id, status: tasks.status, archived: tasks.archived })
+    .select({ id: tasks.id, status: tasks.status, archived: tasks.archived, mode: tasks.mode })
     .from(tasks)
     .where(eq(tasks.id, row.taskId))).at(0);
   if (!task || await monitorWakeGate(task, {
@@ -70,8 +70,50 @@ export async function pushToTask(
       isNull(scheduledMessages.deliveringSince),
     ))).at(0) ?? null;
   await mergeOrEnqueueMonitorEvent(row, text, existing, handoffToken, event);
-  flushPendingForTask(row.taskId);
+  // **输出那一批、任务又空着 ⇒ 投递稍等一下**(见 `deferFlush`);「结束」那一笔一律当场送。
+  // 任务在忙时不用等:消息本来就排在托盘里,随后的「结束」会并进同一行。团队调度台不等:
+  // 它的常驻会话说着话也接得住,投递时机归它自己那条路。
+  if (!handoffToken && event?.kind !== "ended" && task.mode !== "team"
+    && task.status !== "running" && task.status !== "queued") {
+    deferFlush(row.id, row.taskId);
+  } else {
+    flushNow(row.id, row.taskId);
+  }
   return true;
+}
+
+/**
+ * 输出那一批**先不叫醒**,等 `MONITOR_END_GRACE_MS` 看进程是不是马上就退 —— 打完最后一行就退出
+ * 是最常见的收尾,不等的话这一批先起一个回合,紧跟着的「结束」只能排在它后面再叫醒一次。
+ *
+ * 消息已经落库了(读取位置在那之后才推进,见 monitor-consume.ts ①),这里推迟的只是**触发
+ * 投递**那一下:进程这期间没了,托盘里那一行照旧在,开机扫描就送。
+ *
+ * 等到了 = 收尾那一笔把「结束」并进同一行、当场送(`flushNow` 顺手撤掉这个定时器)。到点时
+ * 收尾正在进行(进程已经退了,收尾还在排干/回收/落终态)就等它做完再送:要等的那件事已经发生,
+ * 剩下的只是 ash 自己的记账,这时先送等于亲手把一条拆成两条。命中 `stopWhen` 那一批走的也是
+ * 这条:命中当场就排上了收尾,所以实际上不等 —— 收尾一入队就把它们一起送出去。
+ */
+const deferred = new Map<string, NodeJS.Timeout>();
+
+function deferFlush(monitorId: string, taskId: string): void {
+  if (deferred.has(monitorId)) return;   // 已经在等:后来的批次并进同一行,不往后顺延
+  const timer = setTimeout(() => {
+    deferred.delete(monitorId);
+    void import("./monitor-finish.js").then(async ({ finishInFlight }) => {
+      await finishInFlight(monitorId);
+      flushPendingForTask(taskId);
+    }).catch(() => flushPendingForTask(taskId));
+  }, MONITOR_END_GRACE_MS);
+  (timer as { unref?: () => void }).unref?.();
+  deferred.set(monitorId, timer);
+}
+
+function flushNow(monitorId: string, taskId: string): void {
+  const timer = deferred.get(monitorId);
+  if (timer) clearTimeout(timer);
+  deferred.delete(monitorId);
+  flushPendingForTask(taskId);
 }
 
 /**
@@ -273,7 +315,8 @@ export async function mergeOrEnqueueMonitorEvent(
 export async function cancelPendingMonitorEvents(
   taskId: string,
   // `keep` = 这几条哨兵的事件留着（它们属于一次还在进行的审查）；`only` = 只作废这几条的。
-  scope: { keep?: string[]; only?: string[] } = {},
+  // `keepReturned` = 回合里交过、那一轮没收口退回来的留着等下一次起跑（monitor-turn-handoff.ts ②）。
+  scope: { keep?: string[]; only?: string[]; keepReturned?: boolean } = {},
 ): Promise<void> {
   if (dbClient.closed) return;
   // **显式给了空的 `only` = 没有要作废的**,不是「那就收全部」:下面 `only` 为空时会退回
@@ -294,6 +337,7 @@ export async function cancelPendingMonitorEvents(
         ? inArray(scheduledMessages.origin, origins.only)
         : like(scheduledMessages.origin, "monitor:%"),
       ...(origins.keep.length ? [notInArray(scheduledMessages.origin, origins.keep)] : []),
+      ...(scope.keepReturned ? [isNull(scheduledMessages.turnReturnedAt)] : []),
     ));
   publishPendingMessages(taskId);
   await recoverPendingCheckpoints(taskId);
