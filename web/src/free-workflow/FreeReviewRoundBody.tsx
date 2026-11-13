@@ -17,10 +17,12 @@ import { FreeReviewDebateTranscript } from "./FreeReviewDebateTranscript.tsx";
 import { DISPUTE_PROSE_LABELS } from "./disputeCopy.ts";
 import { checkModeText, disputeStateText, recurrenceText, reviewRoundLabel, timeRange } from "./freeReviewRounds.ts";
 
+const hasScreenshots = (round: FreeReviewRound) => round.screenshots.length > 0 || !!round.expiredScreenshots?.length;
+
 function Screenshots({ taskId, run, round }: { taskId: string; run: FreeReviewRun; round: FreeReviewRound }) {
-  if (!round.screenshots.length) return null;
+  if (!hasScreenshots(round)) return null;
   return (
-    <ReviewScreenshotStrip items={round.screenshots.map((name) => ({
+    <ReviewScreenshotStrip expired={round.expiredScreenshots?.length} items={round.screenshots.map((name) => ({
       key: name,
       name,
       src: api.freeReviewFileUrl(taskId, run.id, round.round, name),
@@ -110,7 +112,7 @@ export function FreeReviewRoundDrawer({ taskId, run, round, anchorRef, keepOpenR
         title={drawerTitle(run, round)}
         subtitle={drawerSubtitle(run, round)}
         onClose={onClose}
-        footer={round.screenshots.length ? <Screenshots taskId={taskId} run={run} round={round} /> : undefined}
+        footer={hasScreenshots(round) ? <Screenshots taskId={taskId} run={run} round={round} /> : undefined}
       >
         <div className="review-round-body"><FreeReviewRoundContent taskId={taskId} run={run} round={round} /></div>
       </ReviewEvidenceDrawer>
@@ -132,7 +134,7 @@ export function FreeReviewRoundBody({ taskId, run, round, anchorRef }: {
       title={drawerTitle(run, round)}
       subtitle={drawerSubtitle(run, round)}
       anchorRef={anchorRef}
-      screenshots={round.screenshots.length ? <Screenshots taskId={taskId} run={run} round={round} /> : null}
+      screenshots={hasScreenshots(round) ? <Screenshots taskId={taskId} run={run} round={round} /> : null}
     >
       <FreeReviewRoundContent taskId={taskId} run={run} round={round} />
     </ReviewInlineReport>

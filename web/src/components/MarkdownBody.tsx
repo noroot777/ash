@@ -12,6 +12,7 @@ import { isLocalFileHref } from "./fileLinkTarget.ts";
 import { destinationFilePath } from "@ash/shared/markdown-images";
 import { isAudioPath, isVideoPath } from "../task-detail/utils.ts";
 import { CodeBlockScope, MarkdownCode, TaskFileLinkBase, useTaskFileHref } from "./TaskFileLink.tsx";
+import { useExpiredEvidence } from "../free-workflow/expiredEvidence.ts";
 import {
   insertIndexOf,
   regionIndexOf,
@@ -45,16 +46,21 @@ import {
  * 都拿不到）。所以只报「取不到」加上 agent 原文写的那个地址 —— 那是唯一能让人自己去核
  * 实的东西。
  */
-function MissingImage({ origin, alt, onRetry }: {
+function MissingImage({ origin, alt, expired = false, onRetry }: {
   origin: string;
-  alt?: string;
+  alt?: ReactNode;
+  /**
+   * 服务端明说这张审查截图过了保留期、已经删掉（见 free-workflow/expiredEvidence）。这是唯一
+   * 说得出原因的一种，所以照实写，也不给「再试一次」——它不会回来。
+   */
+  expired?: boolean;
   /** 给了就显示「再试一次」——同源的临时失败(503、鉴权刷新、文件稍后补齐)是可以恢复的。 */
   onRetry?: () => void;
 }) {
   return (
     <span className="task-markdown-image-missing">
-      <span className="task-markdown-image-missing-tag">图取不到</span>
-      <code>{alt ? `${alt} · ${imageOriginLabel(origin)}` : imageOriginLabel(origin)}</code>
+      <span className="task-markdown-image-missing-tag">{expired ? "已过保留期" : "图取不到"}</span>
+      <code>{alt ? <>{alt} · {imageOriginLabel(origin)}</> : imageOriginLabel(origin)}</code>
       {onRetry && (
         <button type="button" className="task-markdown-image-retry" onClick={onRetry}>再试一次</button>
       )}
@@ -129,6 +135,9 @@ function markdownComponents(latest: { current: MarkdownContext }): Components {
     // 能左右翻）。按住 ⌘/Ctrl/Shift 或中键仍然是浏览器原来那套「新标签页打开」，
     // 由 PreviewableImageLink 自己让路。
     const image = imagePreviewTarget(href, resolveFile);
+    const expired = useExpiredEvidence(image?.url);
+    // 指向一张已过保留期的截图：点开只会是一个空灯箱，就地说清楚，原来那段链接文字留着。
+    if (image && expired) return <MissingImage origin={href ?? ""} alt={props.children} expired />;
     if (image) {
       return (
         <PreviewableImageLink
@@ -194,6 +203,9 @@ function markdownComponents(latest: { current: MarkdownContext }): Components {
     a,
     img: ({ src, alt }) => {
       const raw = typeof src === "string" ? src : "";
+      // 解析提到最前只是为了让下面这个 hook 每次都调到；作废标记照旧不许被任何 resolver 解。
+      const image = raw && !unavailableImageOrigin(raw) ? imagePreviewTarget(raw, resolveFile) : null;
+      const expired = useExpiredEvidence(image?.url);
       // 空地址也**一个字都不画**：react-markdown 的 urlTransform 会把它不认的协议
       // （`file:` 就是一个）整个清空，画出来就是一张没有 src 的裂图（审查第 1 轮 F2）。
       if (!raw) return null;
@@ -206,7 +218,7 @@ function markdownComponents(latest: { current: MarkdownContext }): Components {
       // (审查第 2 轮 F1)。必须在解析之前就认掉。
       const unavailable = unavailableImageOrigin(raw);
       if (unavailable) return <MissingImage origin={unavailable} alt={alt} />;
-      const image = imagePreviewTarget(raw, resolveFile);
+      if (image && expired) return <MissingImage origin={raw} alt={alt} expired />;
       // 解不出来的本机路径（agent 自己机器上的地址，浏览器一个都取不到）报一行小字。
       if (!image && isLocalImageReference(raw)) return <MissingImage origin={raw} alt={alt} />;
       return <MarkdownImage url={image?.url ?? raw} name={image?.name} alt={alt ?? ""} origin={raw} />;

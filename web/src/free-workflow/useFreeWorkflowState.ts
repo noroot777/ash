@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
+import { recordExpiredEvidence } from "./expiredEvidence.ts";
 
 type StateListener = (state: FreeWorkflowApiState) => void;
 
@@ -20,6 +21,7 @@ function publish(taskId: string, state: FreeWorkflowApiState): void {
   const current = states.get(taskId);
   if (current && current.stateVersion >= state.stateVersion) return; // 不比现值新，丢弃
   states.set(taskId, state);
+  recordExpiredEvidence(taskId, state);
   for (const listener of taskListeners) listener(state);
 }
 

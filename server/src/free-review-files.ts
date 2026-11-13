@@ -100,3 +100,39 @@ function listFreeEvidence(taskId: string, runId: string, round: number, extensio
 export function freeReviewScreenshots(taskId: string, runId: string, round: number): string[] {
   return listFreeEvidence(taskId, runId, round, EVIDENCE_IMAGE_EXTENSIONS);
 }
+
+// 过了保留期被删掉的截图记在任务目录根上的这一份（review-image-retention.ts 删之前先写）：
+// `{ "<审查>/round-<N>": ["a.png", "shots/b.png"] }`。放在任务目录根而不是证据目录里——证据
+// 目录归审查者写，它在那儿放一份同名文件就能把一张从没存在过的图说成「过期了」。
+export const EXPIRED_REVIEW_IMAGES = ".expired-review-images.json";
+
+export function expiredRoundKey(runId: string, round: number): string {
+  return `${runId}/round-${round}`;
+}
+
+export function readExpiredReviewImages(taskId: string): Record<string, string[]> {
+  try {
+    const parsed = JSON.parse(readFileSync(join(RUNS_DIR, taskId, EXPIRED_REVIEW_IMAGES), "utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, string[]> = {};
+    for (const [key, names] of Object.entries(parsed)) {
+      if (Array.isArray(names)) out[key] = names.filter((name): name is string => typeof name === "string");
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 这一轮里**过了保留期、已经删掉**的截图。记过但此刻文件还在的不算（删失败了，或者接力又把
+ * 同名的图带了回来）——在不在以磁盘为准，记录只负责说清「不在」是哪一种不在。
+ */
+export function freeReviewExpiredScreenshots(
+  expired: Record<string, string[]>,
+  runId: string,
+  round: number,
+  present: readonly string[],
+): string[] {
+  return (expired[expiredRoundKey(runId, round)] ?? []).filter((name) => !present.includes(name));
+}

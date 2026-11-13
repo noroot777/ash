@@ -472,6 +472,11 @@ export interface FreeReviewRound {
   disputedFingerprint?: string | null;
   reportMarkdown: string;
   screenshots: string[];
+  /**
+   * 任务了结满保留期（ASH_TRACE_KEEP_DAYS，默认 7 天）后被删掉的截图，名字与 `screenshots` 同一
+   * 口径；报告里引用它们的地方画成「已过保留期」。省略 = 这一轮没有删过（绝大多数轮次）。
+   */
+  expiredScreenshots?: string[];
   /** 执行者对这一轮结论的驳回；null = 没驳回过（绝大多数轮次）。 */
   dispute: FreeReviewDispute | null;
   /**

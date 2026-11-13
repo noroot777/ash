@@ -22,7 +22,7 @@ import {
   disputeTargetOf,
   resolveFreeReviewDispute,
 } from "./free-review-dispute.js";
-import { freeReviewFile } from "./free-review-files.js";
+import { freeReviewExpiredScreenshots, freeReviewFile, readExpiredReviewImages } from "./free-review-files.js";
 import { mountFreePreviewRoutes } from "./free-workflow-preview.js";
 import { freeWorkflowState } from "./free-workflow-state.js";
 import { handoffBlockReasonById } from "./handoff-guard.js";
@@ -209,7 +209,11 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     const headers = evidenceHeaders(name);
     if (!headers) return c.json({ error: "非法的审查文件路径或类型" }, 400);
     const file = freeReviewFile(taskId, runId, round, name);
-    if (!file) return c.json({ error: "not found" }, 404);
+    if (!file) {
+      // 过了保留期删掉的截图如实说「没了、也不会回来」，跟「从来没有这个文件」分开。
+      const expired = freeReviewExpiredScreenshots(readExpiredReviewImages(taskId), runId, round, []).includes(name);
+      return expired ? c.json({ error: "已过保留期" }, 410) : c.json({ error: "not found" }, 404);
+    }
     return c.body(Uint8Array.from(readFileSync(file)), 200, headers);
   });
 }

@@ -23,7 +23,7 @@ import {
   projects,
   tasks,
 } from "./db/schema.js";
-import { freeReviewScreenshots, readFreeReviewReport } from "./free-review-files.js";
+import { freeReviewExpiredScreenshots, freeReviewScreenshots, readExpiredReviewImages, readFreeReviewReport } from "./free-review-files.js";
 import { debateViews } from "./free-review-debate.js";
 import { hasDispute } from "./free-review-dispute.js";
 import { worktreePathFor } from "./git.js";
@@ -174,6 +174,12 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
     const found = recurrences.get(recurrenceKey(runId, round));
     return found ? { recurrence: found.length } : {};
   };
+  const expiredImages = readExpiredReviewImages(taskId);
+  const screenshotsOf = (runId: string, round: number) => {
+    const screenshots = freeReviewScreenshots(taskId, runId, round);
+    const expired = freeReviewExpiredScreenshots(expiredImages, runId, round, screenshots);
+    return expired.length ? { screenshots, expiredScreenshots: expired } : { screenshots };
+  };
   const reviews: FreeReviewRun[] = runs.map((run) => ({
     id: run.id,
     reviewerId: run.reviewerId,
@@ -205,7 +211,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
       reviewedFingerprint: round.reviewedFingerprint,
       disputedFingerprint: round.disputedFingerprint,
       reportMarkdown: readFreeReviewReport(taskId, run.id, round.round),
-      screenshots: freeReviewScreenshots(taskId, run.id, round.round),
+      ...screenshotsOf(run.id, round.round),
       dispute: hasDispute(round)
         ? {
             summary: round.disputeSummary ?? null,
