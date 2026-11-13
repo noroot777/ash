@@ -194,18 +194,20 @@ try {
       }
       return true;
     });
+    // 断言只看面板那一层：fixture 自己还在 data-testid 里抄着一份报错。
     const alert = page.locator(".monitor-inspector__error");
+    const emptyState = page.locator(".monitor-inspector__empty", { hasText: empty });
     await alert.waitFor();
-    assert.equal(await page.getByText(empty).count(), 0, "列表读失败时不许说「还没有哨兵」");
+    assert.equal(await emptyState.count(), 0, "列表读失败时不许说「还没有哨兵」");
     await page.getByRole("button", { name: "手动起一个哨兵" }).click();
     await page.locator(".monitor-composer textarea").fill("echo review-smoke");
     await page.getByRole("button", { name: "起一个哨兵", exact: true }).click();
-    await page.getByText("不许起（测试桩）").waitFor();
-    assert.equal(await page.getByText(empty).count(), 0, "起一个被拒之后，列表照样没读成功过，不许说「还没有哨兵」");
+    await alert.filter({ hasText: "不许起（测试桩）" }).waitFor();
+    assert.equal(await emptyState.count(), 0, "起一个被拒之后，列表照样没读成功过，不许说「还没有哨兵」");
     await page.getByRole("button", { name: "取消", exact: true }).click();
-    assert.equal(await page.getByText(empty).count(), 0, "收起表单之后也一样");
+    assert.equal(await emptyState.count(), 0, "收起表单之后也一样");
     listOk = true;
-    await page.getByText(empty).waitFor();   // 追平层自己重读，读成功了这句才该出现
+    await emptyState.waitFor();   // 追平层自己重读，读成功了这句才该出现
     await page.close();
   }
 
