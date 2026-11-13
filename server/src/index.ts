@@ -20,6 +20,7 @@ import { CODE_DIR, DATA_DIR, REPO_DIR } from "./paths.js";
 import { recordListeningPort } from "./listening-port.js";
 import { guardMonitorHook } from "./monitor-hook-failsafe.js";
 import { mountPreviewProxy, attachPreviewUpgrades } from "./preview-proxy.js";
+import { instanceBinding } from "./instance-binding.js";
 import { responseCompression } from "./response-compression.js";
 import { mountPreviewOpenRoutes } from "./preview-access.js";
 
@@ -406,6 +407,9 @@ async function initializeServer() {
 }
 
 const app = new Hono();
+// 最先一道：请求点名要的是另一份 ash（端口换过人）就什么都不执行，预览代理、静态页面一起
+// （为什么非得在服务端做见 instance-binding.ts）。
+app.use("*", instanceBinding());
 // 预览资源凭证在已认证的任务入口签发；资源侧再核对有效期、运行代和项目权限。
 mountPreviewProxy(app);
 // 预览代理之后挂压缩:被代理的开发服务器自己管编码,其余接口与页面资源一律经它(为什么、

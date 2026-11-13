@@ -18,6 +18,7 @@ import { listModels } from "./llm.js";
 import { previousResidualLockPublic } from "./singleton.js";
 import { CODE_DIR, DATA_DIR } from "./paths.js";
 import { LOCAL_ONLY } from "./local-only.js";
+import { INSTANCE_ID } from "./instance-binding.js";
 import { isLocalDirect } from "./auth/remote-access.js";
 import { mountHostAshMcpRoutes } from "./host-ash-mcp-routes.js";
 import { mountQueueRoutes } from "./queues.js";
@@ -117,7 +118,9 @@ api.get("/health", (c) => c.json({
   // 「端口上这份是谁」：数据根和代码根。mac app 靠它认出 :4317 上是不是它自己起的那份（别的
   // ash —— 比如仓库里的开发实例 —— 占着时不能悄悄连上去当成自己的）。路径只答本机直连：
   // 这个端点免登录，别的机器不该从这里读到这台机器的目录结构。
-  ...(isLocalDirect(c) ? { instance: { dataDir: DATA_DIR, codeDir: CODE_DIR, localOnly: LOCAL_ONLY } } : {}),
+  // `id` 是这个进程的实例号：认过人的窗口拿它给页面请求打上记号，换了人的那一份据此拒收
+  // （instance-binding.ts）。
+  ...(isLocalDirect(c) ? { instance: { id: INSTANCE_ID, dataDir: DATA_DIR, codeDir: CODE_DIR, localOnly: LOCAL_ONLY } } : {}),
 }));
 
 // 「现在重启会打断谁」。scripts/restart.mjs 的安全闸靠它决定拦不拦 —— 只数
