@@ -5,7 +5,7 @@
 // 是里面唯一一块「只读、不碰回合所有权」的东西，切走对那边的并发不变量零影响。
 import { readFile } from "node:fs/promises";
 import { mergeImageJournal } from "./agent-image-journal.js";
-import type { Session } from "@ash/shared";
+import type { Session, TurnOutcome } from "@ash/shared";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { actorOf } from "./auth/context.js";
@@ -36,7 +36,7 @@ import { enrichNativeWorkModels } from "./native-work-models.js";
 async function toSession(
   r: typeof sessions.$inferSelect,
   run: { model: string | null; reasoningEffort: string | null } = { model: null, reasoningEffort: null },
-  turnOutcome: Session["turnOutcome"] = null,
+  turnOutcomes: Record<string, TurnOutcome | null> = {},
 ): Promise<Session> {
   // 版本得从**这条会话的 rollout 实际写在的那个目录**里读(会话行记着;老行按当时的
   // 规则解释)。按宿主机默认目录读的话,隔离档下列表恒为「读不出版本」,而起跑守卫那边
@@ -66,7 +66,10 @@ async function toSession(
     awaitingUpstream: sessionWaiting(r.id, r.turnStartedAt).length > 0,
     // 这一轮**自己**的结局也跟着出门:进程退出码答不了「ash 判这一轮成没成」,而重试入口
     // 要的恰恰是后者(见 Session.turnOutcome;被看门狗终止的回合多半 exit 0)。
-    turnOutcome,
+    turnOutcome: turnOutcomes[r.turnStartedAt ?? r.startedAt] ?? null,
+    // 每一回合的也带上:会话一续跑,只剩最后一回合的那一位就答不了「前一回合崩没崩」,
+    // 而哨兵叫醒并不并回要的正是它(见 Session.turnOutcomes)。
+    turnOutcomes,
   };
 }
 
@@ -74,11 +77,7 @@ async function toSession(
 export async function sessionsForTask(taskId: string): Promise<Session[]> {
   const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
   const [runMeta, outcomes] = await Promise.all([sessionRunMeta(taskId, rows), turnOutcomesForTask(taskId)]);
-  return Promise.all(rows.map((row) => toSession(
-    row,
-    runMeta.get(row.id),
-    outcomes.get(`${row.id}@${row.turnStartedAt ?? row.startedAt}`) ?? null,
-  )));
+  return Promise.all(rows.map((row) => toSession(row, runMeta.get(row.id), outcomes.get(row.id))));
 }
 
 /**
