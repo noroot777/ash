@@ -1,4 +1,5 @@
 import AppKit
+import os
 
 /// 换代码之前的那道闸：装新版 app = 重启它里面的服务。先问 server「现在重启会打断谁」
 /// （RestartImpact），没人会被打断就直接换；会打断就把是谁、几个摆给用户，让他选「等它们跑完」
@@ -253,7 +254,10 @@ final class UpdateGate {
     return prompt.choices.indices.contains(index) ? prompt.choices[index] : .cancel
   }
 
+  /// 记进系统日志（Console.app 里按子系统 = bundle id、类别 update 过滤）：事后查「为什么没装 / 为什么问了」。
+  static let logger = Logger(subsystem: AshConfig.bundleID, category: "update")
+
   private func log(_ message: String) {
-    NSLog("[ash-update] %@", message)
+    Self.logger.notice("\(message, privacy: .public)")
   }
 }

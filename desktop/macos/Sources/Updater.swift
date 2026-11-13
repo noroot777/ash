@@ -61,7 +61,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate {
     let code = (error as NSError).code
     // 「没有新版」也走这里，那不算放弃了已经下好的那份。
     if code != Int(SUError.noUpdateError.rawValue) { readyVersion = nil }
-    NSLog("[ash-update] Sparkle 中止：%@", error.localizedDescription)
+    UpdateGate.logger.notice("Sparkle 中止：\(error.localizedDescription, privacy: .public)")
   }
 
   private func label(_ item: SUAppcastItem) -> String {
