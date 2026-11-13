@@ -134,5 +134,5 @@ function UsageBreakdown({ usage, total }: { usage: TokenUsage; total: number }) 
   );
 }
 
-/** 慢到个位数时留一位小数,不然 0.4 会写成 0,读着像「没在出字」。 */
-const formatRate = (rate: number) => (rate < 10 ? rate.toFixed(1) : String(Math.round(rate)));
+/** 慢到个位数时留一位小数,不然 0.4 会写成 0,读着像「没在出字」;再慢就只说不到 0.1。 */
+const formatRate = (rate: number) => (rate < 0.1 ? "<0.1" : rate < 10 ? rate.toFixed(1) : String(Math.round(rate)));
