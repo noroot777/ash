@@ -1,0 +1,11 @@
+/* 用户消息里的引文（MessageText.tsx）：淡一档、左边一道竖线、截成两行。跟答过的提问卡里那段
+   问题引文同一种长相（question-card.css 的 .task-question-quote）；离上下文多远由各自的容器定。 */
+.message-quote {
+  margin: 0; padding: 0 0 0 10px; border-left: 2px solid var(--line2);
+  color: var(--muted); font-size: var(--t-xs); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere;
+  transition: color var(--dur-1) var(--ease-out);
+}
+.message-quote:not(.is-open) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.message-quote.is-toggle { cursor: pointer; }
+.message-quote.is-toggle:hover,
+.message-quote.is-open { color: var(--ink); }

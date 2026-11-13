@@ -12,6 +12,7 @@ import { AgentIcon, hasAgentIcon } from "../components/AgentIcon.tsx";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { MessageText } from "../components/MessageText.tsx";
 import { LiveStrip } from "../components/LiveStrip.tsx";
 import { runActivityCopy, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import { MessageAttachments } from "./Attachments.tsx";
@@ -266,7 +267,7 @@ function UserBubble({ id, author, text, attachments, at, bySystem = false, delet
           {onReuse && reusable && <ReuseInputButton onReuse={() => onReuse({ source: id, text: parsed.body, paths })} />}
           {deletable && <DeleteMessageButton item={deletable} />}
         </header>
-        {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <p>{displayBody}</p>)}
+        {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <MessageText text={displayBody} />)}
         <MessageAttachments paths={paths} />
       </div>
     </article>
