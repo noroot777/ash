@@ -19,27 +19,36 @@ export function joinDraftText(restored: string, current: string): string {
   return `${left}\n\n${current}`;
 }
 
-/** 上一次「改了再发」放回的是哪一条（`source`），放完草稿是什么样（正文 + 附件那一份数组）。 */
-export type ReuseMark = { source: string; text: string; attachments: UploadAttachment[] };
+/** 上一次「改了再发」放回的是哪一条（`source`），放完草稿是哪个正文版本、哪一份附件数组。 */
+export type ReuseMark = { source: string; textVersion: DraftText["textVersion"]; attachments: UploadAttachment[] };
 
 /**
  * 发过的一句放回草稿再改（气泡上「改了再发」）：跟撤回同样是合并，只多一条——**同一条**
- * 刚放回过、之后草稿正文和附件都没动，就是连点，原样返回不再放一遍。
+ * 刚放回过、之后草稿正文和附件都没动，就是连点，正文不再接一遍。
  *
  * 判据是「哪一条 + 草稿版本」，不看草稿里有没有这几个字：放回「继续」时草稿写着「不要继续」，
  * 那是另一句意思相反的话，不是放回过的结果（第 1 轮审查实测，子串判断把它吞掉了）。附件按
  * 数组身份比：发送结算、增删附件都会换一份新数组，引用相同 ⇔ 放回之后没人碰过。
+ *
+ * 连点也是一次认领：正文换上 `version`、附件换上 `restored` 带来的新选择记号，在途或迟到的
+ * 旧发送都清不走它。纯函数——新版本号和新选择由调用方在外面备好，放进状态 updater 里重复
+ * 执行也得到同一个结果（开发模式的 StrictMode 会重放 updater，第 3 轮审查实测）。
  */
-export function reuseDraft(
-  input: { source: string; text: string; paths: readonly string[] },
-  current: { text: string; attachments: UploadAttachment[] },
-  last: ReuseMark | null,
-): ReuseMark {
-  if (last && last.source === input.source && last.text === current.text && last.attachments === current.attachments) return last;
+export function reuseDraft<Version extends number | string>(
+  input: { source: string; text: string },
+  restored: UploadAttachment[],
+  current: DraftText & { attachments: UploadAttachment[] },
+  last: ReuseMark | null | undefined,
+  version: Version,
+): { text: string; attachments: UploadAttachment[]; textVersion: Version; mark: ReuseMark } {
+  const again = !!last && last.source === input.source && last.textVersion === current.textVersion
+    && last.attachments === current.attachments;
+  const attachments = mergeAttachments(restored, current.attachments);
   return {
-    source: input.source,
-    text: joinDraftText(input.text, current.text),
-    attachments: mergeAttachments(attachmentsFromPaths([...input.paths]), current.attachments),
+    text: again ? current.text : joinDraftText(input.text, current.text),
+    attachments,
+    textVersion: version,
+    mark: { source: input.source, textVersion: version, attachments },
   };
 }
 
@@ -99,8 +108,12 @@ export function mergeAttachments(
  * 那「发送在途时撤回另一条消息」怎么办？靠顺序而不是靠猜：撤回等这一次发送结算完再
  * 回填（见 ReplyBox / TeamView 的 withdraw），清空发生在合并之前，两边都不用推断。
  */
-export function clearSentDraft(current: string, draftAtSend: string): string {
-  return current === draftAtSend ? "" : current;
+/** 正文连同它的版本（DraftStore 的 textVersion；侧聊落在本地存储里，是字符串）。 */
+export type DraftText = { text: string; textVersion?: number | string };
+
+export function clearSentDraft(current: DraftText, draftAtSend: DraftText): string {
+  // 字面相等之外还要版本相同：清掉再放回同一句，字一样，却是又选了一次，不是提交的那一份。
+  return current.text === draftAtSend.text && current.textVersion === draftAtSend.textVersion ? "" : current.text;
 }
 
 /** 一次发送提交时带走的是哪几次选择：路径 + 选择记号。可以落进 localStorage（侧聊的发送请求）。 */

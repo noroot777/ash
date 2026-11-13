@@ -12,6 +12,7 @@ import {
 } from "react";
 import type { UploadAttachment, UploadingFile } from "../task-detail/Attachments.tsx";
 import type { ScreenshotDraft } from "../page-annotation/model.ts";
+import type { ReuseMark } from "../task-detail/withdrawDraft.ts";
 
 // 「还没发出去的那份东西」统一放这里：对话框的回复草稿、主工作区新建任务框里的草稿，
 // 都是同一件事 —— 组件卸载（切任务、去设置、开聊天）不该把用户敲的字和粘的图弄丢。
@@ -34,7 +35,18 @@ export type Draft = {
   // 切走再回来正文还在、条件却变回立即发送,按下去就提前发了(第 1 轮审查实测)。
   // 缺省 / null = 立即发送。
   later?: LaterDraft | null;
+  // 正文的版本：正文每变一次就换一个（updateDraft 自动换），「改了再发」认领时也换。发送结算
+  // 只在版本仍是提交那一刻的才清正文——字面相等不等于还是那一份：清掉再放回同一句，字一样，
+  // 却是用户又选了一次（「改了再发」审查第 3 轮实测，迟到的确认把它清了）。
+  textVersion?: number;
+  // 上一次「改了再发」放回的是哪一条、放完草稿是哪个版本；判连点用（见 withdrawDraft.ts 的
+  // reuseDraft）。跟草稿放在同一份状态里，判定与更新一次完成。
+  reuse?: ReuseMark | null;
 };
+
+let textVersions = 0;
+/** 一个新的正文版本。只比相等，跳号无所谓。 */
+export const nextTextVersion = () => (textVersions += 1);
 
 /** 选了「稍后」时的那份设置。时间过期、等的任务没了也原样留着,由用户改,不静默退回立即发。 */
 export type LaterDraft = { kind: "timed" | "after"; at: string; afterTaskId: string };
@@ -64,7 +76,8 @@ export function DraftProvider({ children }: { children: ReactNode }) {
   const updateDraft = useCallback((key: string, update: (current: Draft) => Draft) => {
     setDrafts((current) => {
       const previous = current[key] ?? EMPTY_DRAFT;
-      const next = update(previous);
+      let next = update(previous);
+      if (next.text !== previous.text && next.textVersion === previous.textVersion) next = { ...next, textVersion: nextTextVersion() };
       if (!next.text && next.attachments.length === 0 && next.pendingUploads.length === 0
         && next.noteIds.length === 0 && !next.screenshot && !next.later) {
         if (!(key in current)) return current;
@@ -76,7 +89,9 @@ export function DraftProvider({ children }: { children: ReactNode }) {
         && next.pendingUploads === previous.pendingUploads
         && next.noteIds === previous.noteIds
         && next.screenshot === previous.screenshot
-        && next.later === previous.later) return current;
+        && next.later === previous.later
+        && next.textVersion === previous.textVersion
+        && next.reuse === previous.reuse) return current;
       return { ...current, [key]: next };
     });
   }, []);

@@ -105,9 +105,9 @@ export function TeamReplyBox({
     }
     setSending(true);
     setError(null);
-    // 发出去的是这一份；成功后只在草稿逐字还是这一份时才清掉，动过就整份留着
+    // 发出去的是这一份；成功后只在草稿还是这一份（字面和版本都没变）时才清掉，动过就整份留着
     // （见 task-detail/withdrawDraft.ts 的 clearSentDraft）。
-    const draftAtSend = value;
+    const draftAtSend = { text: value, textVersion: draft.value.textVersion };
     const laterAtSend = draft.later;
     const sentText = value.trim();
     const sentPaths = uploads.attachments.map((attachment) => attachment.path);
@@ -118,7 +118,10 @@ export function TeamReplyBox({
       // 执行器门禁弹了对话框、用户点了取消:草稿和附件一个字都不能清。
       if (result === null) return;
       if ("scheduled" in result) scheduled.add(result.message);
-      setValue((current) => clearSentDraft(current, draftAtSend));
+      draft.update((current) => {
+        const text = clearSentDraft(current, draftAtSend);
+        return text === current.text ? current : { ...current, text };
+      });
       draft.setAttachments((current) => dropSentAttachments(current, sentSelection));
       uploads.clearError();
       draft.setLater((current) => (current === laterAtSend ? null : current));

@@ -410,9 +410,9 @@ export function ReplyBox({
     setSending(true);
     setSendError(null);
     setCommandResult(null);
-    // 发出去的是这一份。成功后只在草稿**逐字还是这一份**时才清掉；动过就整份留着，
+    // 发出去的是这一份。成功后只在草稿**还是这一份**（字面和版本都没变）时才清掉；动过就整份留着，
     // 绝不去猜哪一段是刚发出去的（见 withdrawDraft.ts 的 clearSentDraft）。
-    const draftAtSend = value;
+    const draftAtSend = { text: value, textVersion: draft.value.textVersion };
     const laterAtSend = draft.later;
     const sentText = annotation?.text ?? value.trim();
     const sentPaths = annotation?.attachments ?? uploads.attachments.map((attachment) => attachment.path);
@@ -445,7 +445,10 @@ export function ReplyBox({
       if ("scheduled" in result) scheduled.add(result.message);
       if ("command" in result && !result.recorded && currentTaskId.current === task.id) setCommandResult({ taskId: task.id, text: result.text });
       if (!annotation) {
-        setValue((current) => clearSentDraft(current, draftAtSend));
+        draft.update((current) => {
+          const text = clearSentDraft(current, draftAtSend);
+          return text === current.text ? current : { ...current, text };
+        });
         draft.setAttachments((current) => dropSentAttachments(current, sentSelection));
         uploads.clearError();
         // 发送方式跟正文同口径：发送途中被改过就留着，那是下一条的设置。
