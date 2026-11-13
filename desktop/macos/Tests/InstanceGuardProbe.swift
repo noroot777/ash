@@ -6,7 +6,7 @@ import WebKit
 /// 真的 BrowserWindowController（窗口不上屏），服务是测试脚本摆的假应答者。协议走 stdin/stdout：
 /// 页面载好打印 `LOADED <url>`，读到一行 `FLIPPED` 后（脚本已经把端口换成别的 ash），`reload` 模式
 /// 当场刷新一次 —— 定时认人调得很慢，验的是导航那一道；`watch` 模式什么都不做，验定时那一道。
-/// 撤下后打印 `BLANKED …`，再读到 `BACK` 后等页面回来打印 `RESTORED <url>`。
+/// 撤下后打印 `BLANKED …`，再读到 `BACK` 后等页面回来打印 `RESTORED <url>`，读到 `DONE` 退出。
 func runInstanceGuardProbe(mode: String) -> Never {
   DispatchQueue.global().asyncAfter(deadline: .now() + 60) {
     fputs("FAIL: instance guard probe timed out\n", stderr)
@@ -65,5 +65,7 @@ func runInstanceGuardProbe(mode: String) -> Never {
   spin(until: { received("BACK") }, "our service coming back")
   spin(until: { controller.offlineView.isHidden && webView.title == "OURS" && !webView.isLoading }, "the page coming back")
   say("RESTORED \(webView.url!.absoluteString)")
+  // 页面回来之后发的请求要带上新的实例号，脚本看到了再放行退出。
+  spin(until: { received("DONE") }, "the script to finish")
   exit(0)
 }

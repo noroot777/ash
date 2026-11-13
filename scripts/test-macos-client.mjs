@@ -94,7 +94,7 @@ fs.writeFileSync(${JSON.stringify(seen)},JSON.stringify({cwd:process.cwd(),dataD
 ${exitAtOnce ? "process.exit(1);" : ""}
 fs.writeFileSync(path.join(dataDir,'ash.db'),'');
 http.createServer((req,res)=>{res.setHeader('Content-Type','application/json');
-res.end(JSON.stringify({ok:true,pid:process.pid+${pidOffset},instance:{dataDir,codeDir:path.resolve(__dirname,'../..'),
+res.end(JSON.stringify({ok:true,pid:process.pid+${pidOffset},instance:{id:'svc-'+process.pid,dataDir,codeDir:path.resolve(__dirname,'../..'),
   localOnly:process.env.ASH_LOCAL_ONLY==='1'}}));})
 .listen(Number(process.env.PORT),'127.0.0.1');`);
 }
@@ -208,7 +208,7 @@ try {
     assert.equal(await probe(200, { ok: true, pid: 1 }), "FOREIGN", "an ash that does not say where its data lives is not ours");
     assert.equal(await probe(200, { ok: true, pid: 1, instance: { dataDir: join(temporary, "elsewhere"), codeDir: "/repo/" } }),
       "FOREIGN", "another data root is another ash");
-    const ours = { dataDir: `${dataAlias}/`, codeDir: `${runtimeAlias}/`, localOnly: true };
+    const ours = { id: "inst-1", dataDir: `${dataAlias}/`, codeDir: `${runtimeAlias}/`, localOnly: true };
     assert.equal(await probe(200, { ok: true, pid: 1, instance: ours }), "READY",
       "same data root and same bundled code by realpath, local-only");
     assert.equal(await probe(200, { ok: true, pid: 1, instance: { ...ours, codeDir: "/repo/" } }), "FOREIGN",
@@ -217,6 +217,8 @@ try {
       "the bundled code without local-only mode was not started by the app");
     assert.equal(await probe(200, { ok: true, pid: 1, instance: { dataDir: ours.dataDir, codeDir: ours.codeDir } }), "FOREIGN",
       "an ash that does not report its mode is not ours");
+    assert.equal(await probe(200, { ok: true, pid: 1, instance: { ...ours, id: undefined } }), "FOREIGN",
+      "an ash without an instance id cannot be bound to, so it is not ours");
 
     // 仓库里的服务指着 app 的数据根：一样不连，说清哪一样对不上。
     healthBody = JSON.stringify({ ok: true, pid: 4343, instance: { ...ours, codeDir: "/Users/someone/code/ash/", localOnly: false } });
@@ -240,25 +242,39 @@ try {
   assert.equal(await probe(200, ""), "DOWN", "nobody listening");
   console.log("PASS: own instance is recognised by data root + bundled code + local-only; another ash or a non-ash on the port is reported, never joined");
 
-  // ── 窗口在线之后端口换了人：刷新那一下拦住；什么都不点也会被定时认人撤下；换回来回到原路由 ──
+  // ── 窗口在线之后端口换了人 ──
+  // 应答者照真服务的规矩办（server/src/instance-binding.ts）：请求带着别人的实例号就 409、什么都不执行。
+  // 页面每 30ms 发一次写请求：换人那一刻正在路上的、撤页之前又发出去的，新来那份一条都不许执行；
+  // 刷新那一下拦住、什么都不点也会被定时认人撤下；自家服务重起（实例号换了）时换上新的接着用；
+  // 换回来回到原路由。
   let occupant = "ours";
-  const foreignPages = [];
+  let generation = 1;
+  const idOf = () => occupant === "ours" ? `ours-${generation}` : "foreign-1";
+  const requests = [];
   await withResponder(port, (request, response) => {
     const ours = occupant === "ours";
     if (request.url === "/api/health") {
       response.setHeader("Content-Type", "application/json");
-      response.end(JSON.stringify({ ok: true, pid: ours ? 1 : 4444,
-        instance: ours ? { dataDir: data, codeDir: runtime, localOnly: true } : { dataDir: "/elsewhere", codeDir: "/repo/", localOnly: false } }));
+      response.end(JSON.stringify({ ok: true, pid: ours ? 1 : 4444, instance: ours
+        ? { id: idOf(), dataDir: data, codeDir: runtime, localOnly: true }
+        : { id: idOf(), dataDir: "/elsewhere", codeDir: "/repo/", localOnly: false } }));
       return;
     }
-    if (!ours) foreignPages.push(request.url);
+    // 页面走 cookie，原生的补接请求（HostMcpSetup）走请求头，两样都按服务端的判据认。
+    const cookie = /(?:^|;\s*)ash_instance=([^;]+)/.exec(request.headers.cookie ?? "")?.[1] ?? request.headers["x-ash-instance"] ?? null;
+    const accepted = cookie === null || cookie === idOf();
+    requests.push({ occupant, id: idOf(), url: request.url, cookie, accepted });
+    if (!accepted) { response.statusCode = 409; response.end("{}"); return; }
+    if (request.url === "/api/write") { response.end("{}"); return; }
     response.setHeader("Content-Type", "text/html");
-    response.end(ours ? "<title>OURS</title><script>if(location.pathname==='/')history.replaceState(null,'','/route/abc')</script>"
-      : "<title>FOREIGN</title>");
+    response.end(ours ? "<title>OURS</title><script>if(location.pathname==='/')history.replaceState(null,'','/route/abc');"
+      + "setInterval(()=>fetch('/api/write',{method:'POST'}).catch(()=>{}),30)</script>" : "<title>FOREIGN</title>");
   }, async () => {
+    const writes = (id) => requests.filter((r) => r.url === "/api/write" && r.id === id);
     for (const mode of ["reload", "watch"]) {
       occupant = "ours";
-      foreignPages.length = 0;
+      generation += 1;
+      requests.length = 0;
       const guard = spawn(binary, ["guard", mode], { env: { ...process.env, ...env }, stdio: ["pipe", "pipe", "pipe"] });
       children.add(guard);
       let out = "";
@@ -266,21 +282,41 @@ try {
       guard.stderr.on("data", (chunk) => { out += chunk; });
       const exited = once(guard, "exit");
       await until(() => out.includes("LOADED"), `guard probe (${mode}) never loaded our page: ${out}`);
+      const bound = idOf();
+      await until(() => writes(bound).length > 2, `${mode}: the page never wrote`);
+      assert.deepEqual([...new Set(requests.map((r) => r.cookie))], [bound], `${mode}: every request carries the confirmed instance`);
+      if (mode === "watch") {
+        // 自家服务重起：实例号换了，定时认人换上新的，之后的写请求照常执行。
+        generation += 1;
+        const restarted = idOf();
+        await until(() => writes(restarted).some((r) => r.cookie === restarted && r.accepted),
+          `${mode}: the page never rebound to our restarted service`, 20000);
+      }
+      const before = idOf();
       occupant = "foreign";
       guard.stdin.write("FLIPPED\n");
       await until(() => out.includes("BLANKED"), `guard probe (${mode}) never covered the page: ${out}`, 20000);
       assert.match(out, /BLANKED url=about:blank content=\|\|\n/,
         `${mode}: the whole page is taken down, nothing of the other ash shown: ${out}`);
-      assert.deepEqual(foreignPages, [], `${mode}: no page load ever reached the other ash`);
+      const reached = requests.filter((r) => r.occupant === "foreign");
+      assert.deepEqual(reached.filter((r) => r.accepted), [], `${mode}: the other ash executed nothing the page sent`);
+      assert.ok(reached.every((r) => r.url === "/api/write" && r.cookie === before),
+        `${mode}: only in-flight writes reached it, all carrying our instance id: ${JSON.stringify(reached)}`);
+      if (mode === "watch") assert.ok(reached.length > 0, "watch: writes did race the swap (the case this guards)");
+      generation += 1;
       occupant = "ours";
       guard.stdin.write("BACK\n");
+      await until(() => out.includes("RESTORED"), `guard probe (${mode}) never came back: ${out}`, 20000);
+      const back = idOf();
+      await until(() => writes(back).some((r) => r.cookie === back && r.accepted), `${mode}: back on our new instance id`);
+      guard.stdin.write("DONE\n");
       const [status] = await exited;
       children.delete(guard);
       assert.equal(status, 0, out);
       assert.match(out, new RegExp(`RESTORED http://127\\.0\\.0\\.1:${port}/route/abc`), `${mode}: back to the same route: ${out}`);
     }
   });
-  console.log("PASS: an online window re-checks the instance on navigation and while idle; another ash taking the port takes the page down, our own coming back restores the route");
+  console.log("PASS: an online window binds every request to the confirmed instance (the other ash executes none of them), re-checks on navigation and while idle, rebinds after our own restart, and restores the route");
 
   // ── 空数据根：无窗口那一档不起，首启选了才起 ──
   serviceSource();

@@ -28,9 +28,13 @@ extension BrowserWindowController: WKNavigationDelegate, WKUIDelegate, WKDownloa
       // 本机地址：端口上可能已经换了人，放行之前认一次（见 BrowserWindowController 的 instanceLost）。
       AshHealth.probe { probe in
         DispatchQueue.main.async { [weak self] in
-          if AshHealth.isServing(probe) { return decisionHandler(.allow) }
-          decisionHandler(.cancel)
-          self?.instanceLost()
+          guard let self, let instance = AshHealth.ours(probe) else {
+            decisionHandler(.cancel)
+            self?.instanceLost()
+            return
+          }
+          // 自己那份重起过就先换上新的实例号，否则这一下载回来的是一张 409。
+          self.bind(instance) { decisionHandler(.allow) }
         }
       }
       return

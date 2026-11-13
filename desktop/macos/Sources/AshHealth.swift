@@ -7,6 +7,9 @@ import Foundation
 /// 以为在用 app，数据其实写进了另一份库。所以本机地址还要认它是不是本 app 起的那一份
 /// （`/api/health` 对本机直连会报 `instance`）：数据根是 app 的、代码是 app 自带的、开着本机自用
 /// 模式，三样都对上才算。只看数据根不够 —— 仓库里的开发实例完全可以指着 app 的数据根起。
+///
+/// 认人只能回答「刚才那一刻是谁」。认过之后页面、原生发的请求还得带上那一份的实例号（`id`），
+/// 端口换了人，新来的那份见到别人的实例号就不执行（server/src/instance-binding.ts）。
 enum AshProbe {
   /// 连不上（没人听这个端口）。
   case down
@@ -17,7 +20,8 @@ enum AshProbe {
 
 struct AshInstance {
   let pid: Int?
-  /// 旧版本的 ash 不报这三项。
+  /// 这个服务进程的实例号，每次起服务都换。旧版本的 ash 不报这四项。
+  let id: String?
   let dataDir: String?
   let codeDir: String?
   let localOnly: Bool?
@@ -27,7 +31,9 @@ struct AshInstance {
 
   /// 哪一样对不上（说给用户听），全对上是 nil。
   var mismatch: String? {
-    guard let dataDir, let codeDir, let localOnly else { return "它没报自己的代码和数据在哪（比这个 app 旧的版本），认不出来历。" }
+    guard let id, !id.isEmpty, let dataDir, let codeDir, let localOnly else {
+      return "它没报自己的实例号和代码、数据在哪（比这个 app 旧的版本），认不出来历。"
+    }
     guard AshHealth.samePath(dataDir, AshConfig.dataURL.path) else { return "它用的是另一份数据。" }
     guard AshHealth.samePath(codeDir, AshConfig.runtimeURL.path) else { return "它用的是 app 的数据，跑的却不是 app 自带的代码。" }
     guard localOnly else { return "它跑的是 app 自带的代码，但没开本机自用模式（不是 app 起的）。" }
@@ -46,6 +52,7 @@ enum AshHealth {
     let instance = health["instance"] as? [String: Any]
     return .ash(AshInstance(
       pid: health["pid"] as? Int,
+      id: instance?["id"] as? String,
       dataDir: instance?["dataDir"] as? String,
       codeDir: instance?["codeDir"] as? String,
       localOnly: instance?["localOnly"] as? Bool))
@@ -55,6 +62,12 @@ enum AshHealth {
   static func isServing(_ probe: AshProbe) -> Bool {
     guard case .ash(let instance) = probe else { return false }
     return !AshConfig.isLocal || instance.isOurs
+  }
+
+  /// 本机地址上认过的自己那一份；连别处的 ash、或者不是自己那份时是 nil。
+  static func ours(_ probe: AshProbe) -> AshInstance? {
+    guard AshConfig.isLocal, case .ash(let instance) = probe, instance.isOurs else { return nil }
+    return instance
   }
 
   /// 探一次。回调在 URLSession 的后台队列上。
