@@ -351,12 +351,7 @@
 }
 
 .notes-list-tools label:focus-within {
-  outline: 2px solid var(--focus-soft);
-  outline-offset: 0;
-}
-
-.notes-list-tools input:focus-visible {
-  outline: 0;
+  border-color: var(--focus-soft);
 }
 
 .notes-list-tools input {
@@ -582,12 +577,8 @@
   cursor: text;
 }
 
-/* 编辑区就是整格文档，进编辑态即自动聚焦，环会一直挂着、读成一个框；
-   打字时光标就是焦点，不画环。预览只在键盘移入时才算聚焦，用一层极淡的底标出。 */
-.note-editor > textarea:focus-visible {
-  outline: 0;
-}
-
+/* 编辑区铺满整格，环会框住整块读成一个框（打字时的 textarea 已由全局规则去环）；
+   预览只在键盘移入时才算聚焦，用一层极淡的底标出。 */
 .note-editor-preview:focus-visible {
   outline: 0;
   background: color-mix(in oklab, var(--ink) 3%, transparent);

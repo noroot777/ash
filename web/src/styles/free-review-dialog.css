@@ -16,7 +16,6 @@
   box-shadow: var(--shadow);
   outline: none;
 }
-.free-review-dialog:focus-visible { box-shadow: var(--shadow), 0 0 0 2px var(--focus-ring); }
 .free-review-dialog > h2 { margin: 0; font-size: var(--t-lg); font-weight: var(--w-strong); }
 .free-review-dialog__target { margin: -8px 0 0; color: var(--muted); font-size: var(--t-xs); line-height: 1.6; }
 .free-review-dialog__target code { font-family: var(--font-mono); color: var(--ink); }

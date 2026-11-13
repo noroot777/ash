@@ -39,8 +39,7 @@
   background: none; font-size: 12px; line-height: 1.5;
   min-height: 54px; padding: 0;
 }
-.gwb-design .commit-box:has(.commit-input:focus-visible) { outline: 2px solid var(--focus-soft); outline-offset: 0; }
-.gwb-design .commit-input:focus-visible { outline: 0; }
+.gwb-design .commit-box:has(.commit-input:focus-visible) { box-shadow: var(--surface-shadow), 0 0 0 1px var(--focus-soft); }
 .gwb-design .commit-row { display: flex; align-items: center; gap: 8px; }
 
 .gwb-design .diff-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }

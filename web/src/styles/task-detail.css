@@ -85,7 +85,6 @@
 span.task-detail-title { display: block; width: auto; }
 .task-detail-title:not(.is-readonly):hover,
 .task-detail-title:not(.is-readonly):focus { background: var(--raised); }
-.task-detail-title:not(.is-readonly):focus-visible { outline: 2px solid var(--focus-soft); outline-offset: 0; }
 
 /* 轮到你的那一步是墨色（头上别的图标都是灰的）。章验过了以后填实、退成灰——和图钉一个说法：
    实心 = 已经是了。欠着一步提交是琥珀：它是「要你动手」的状态。 */

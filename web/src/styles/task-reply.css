@@ -13,7 +13,6 @@
 .task-reply-box textarea { display: block; width: 100%; min-height: 58px; resize: none; border: 0; background: transparent; padding: 10px 12px 2px; color: var(--ink); font-size: 12.5px; line-height: 1.55; }
 /* 回复框是输入卡：里面的输入框不套环，环画在卡上——卡自己那圈线换成淡墨，外面再晕开一圈。 */
 .task-reply-box:has(textarea:focus-visible) { border-color: var(--focus-soft); box-shadow: 0 0 0 3px color-mix(in oklab, var(--focus-ring) 10%, transparent), var(--surface-shadow); }
-.task-reply-box textarea:focus-visible { outline: 0; }
 /* 拖动条贴在回复框自己的上边(框内侧):框有 overflow:hidden 来裁圆角和水印,
    所以热区不能像侧栏那样探出边界,只能贴着内沿。z-index 要压过 textarea 那一层。 */
 .task-reply-resize { position: absolute; z-index: 5; top: 0; right: 0; left: 0; height: 8px; cursor: row-resize; }
