@@ -1,8 +1,10 @@
 // 原始事件流的保留期（run-trace-retention.ts）：任务了结（验收 / 归档）之后再等满宽限期才删，
-// 别的一律不碰。宽限期从清扫第一次看到「已了结」那一刻起算——不是日志的修改时间（第 1 轮审查
-// F1：搁了一个月才验收的任务，一验收就被删）；保留天数填错按默认值，不能变成立刻删（F2）。
+// 别的一律不碰。宽限期从「这一次了结」起算——不是日志的修改时间（第 1 轮审查 F1：搁了一个月
+// 才验收的任务，一验收就被删），也不是很久以前那一次了结（第 2 轮审查 F1：两次清扫之间重新
+// 打开又验收、取回又归档，清扫一次都没看到中间状态）；保留天数填错按默认值，不能变成立刻删
+// （第 1 轮 F2）；一个任务目录出错不拦别的任务（第 2 轮 N1）。
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,6 +17,8 @@ try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, tasks } = await import("../src/db/schema.js");
   const { sweepRawTraces, traceKeepDays } = await import("../src/run-trace-retention.js");
+  const { commitAcceptanceStage } = await import("../src/review-acceptance.js");
+  const { commitReopenAcceptedStage } = await import("../src/task-stage.js");
   const { eq } = await import("drizzle-orm");
   await ensureSchema();
 
@@ -75,15 +79,56 @@ try {
   assert.equal(existsSync(orphan), true, "查不到任务行的目录不归这里管");
   for (const path of keepers) assert.equal(existsSync(path), true, `只删原始事件流，别的不碰：${path}`);
 
-  // ── 重新打开再了结：重新起算；了结之后新写的日志也要自己满宽限期 ──
-  await db.update(tasks).set({ stage: "verified" }).where(eq(tasks.id, "accepted"));
-  const reopened = events("accepted", -8, "s1-20261121T000000000Z"); // 重新打开期间写的（t0+8 天）
-  await sweepRawTraces(t0 + 8 * DAY); // 看到未了结：撤掉起算点
-  await db.update(tasks).set({ stage: "accepted" }).where(eq(tasks.id, "accepted"));
-  await sweepRawTraces(t0 + 9 * DAY); // 重新起算
-  assert.equal((await sweepRawTraces(t0 + 15 * DAY)).removed, 0, "从重新了结那一刻算，还没满");
-  assert.equal((await sweepRawTraces(t0 + 16 * DAY)).removed, 1);
-  assert.equal(existsSync(reopened), false);
+  // ── 两次清扫之间重新打开又验收（走生产的摘牌 / 落章）：身份换了，重新起算 ──
+  await task("reaccepted", { stage: "accepted", acceptanceId: "first-acceptance" });
+  const history = events("reaccepted", 30);
+  await sweepRawTraces(t0); // 第一次验收被看到
+  await commitReopenAcceptedStage("reaccepted");
+  await commitAcceptanceStage("reaccepted", "accepted");
+  // 中间一次清扫都没跑；现在离第一次验收已满 8 天，但这一次验收刚发生。
+  assert.equal((await sweepRawTraces(t0 + 8 * DAY)).removed, 0, "重新验收之后旧起点作废");
+  assert.equal(existsSync(history), true);
+  assert.equal((await sweepRawTraces(t0 + 14 * DAY)).removed, 0, "从重新验收被看到那一刻算，还没满");
+  assert.equal((await sweepRawTraces(t0 + 15 * DAY)).removed, 1);
+
+  // ── 两次清扫之间取回又归档：同理 ──
+  await task("rearchived", { archived: true, archivedAt: iso(t0) });
+  const archiveHistory = events("rearchived", 30);
+  await sweepRawTraces(t0);
+  await db.update(tasks).set({ archived: false, archivedAt: null }).where(eq(tasks.id, "rearchived"));
+  await db.update(tasks).set({ archived: true, archivedAt: iso(t0 + 8 * DAY) }).where(eq(tasks.id, "rearchived"));
+  assert.equal((await sweepRawTraces(t0 + 8 * DAY)).removed, 0, "重新归档之后旧起点作废");
+  assert.equal((await sweepRawTraces(t0 + 14 * DAY)).removed, 0);
+  assert.equal((await sweepRawTraces(t0 + 15 * DAY)).removed, 1);
+  assert.equal(existsSync(archiveHistory), false);
+
+  // ── 了结之后新写的日志也要自己满宽限期 ──
+  await task("late-write", { stage: "accepted", acceptanceId: "late" });
+  const early = events("late-write", 30);
+  await sweepRawTraces(t0); // 了结在 t0 被看到
+  const late = events("late-write", -10, "s1-20261123T000000000Z"); // 了结之后（t0+10 天）才写
+  await sweepRawTraces(t0 + 16 * DAY);
+  assert.equal(existsSync(early), false, "了结前的日志按了结起算，已满");
+  assert.equal(existsSync(late), true, "了结后写的日志自己还没满 7 天");
+  await sweepRawTraces(t0 + 17 * DAY);
+  assert.equal(existsSync(late), false);
+
+  // ── 一个目录出错不拦别的任务 ──
+  await task("stuck", { stage: "accepted", acceptanceId: "stuck" });
+  events("stuck", 30);
+  await sweepRawTraces(t0); // 落下起点
+  await db.update(tasks).set({ stage: "verified" }).where(eq(tasks.id, "stuck")); // 重新打开：要撤起点
+  const stuckDir = join(process.env.ASH_RUNS_DIR!, "stuck");
+  chmodSync(stuckDir, 0o500); // 起点撤不掉
+  await task("after", { stage: "accepted", acceptanceId: "after" });
+  const after = events("after", 30);
+  try {
+    await sweepRawTraces(t0);
+    assert.equal((await sweepRawTraces(t0 + 7 * DAY)).removed, 1, "别的任务照常清扫");
+    assert.equal(existsSync(after), false);
+  } finally {
+    chmodSync(stuckDir, 0o700);
+  }
 
   console.log("run trace retention: ok");
 } finally {

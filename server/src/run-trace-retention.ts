@@ -8,13 +8,16 @@
 // run-logs-gc.ts 在回合结束一天后回收。用户 2026-11-13 拍板「保留全文，设保留期」：任务验收或
 // 归档之后再留 KEEP_DAYS 天。
 //
-// **宽限期从哪一刻算**：从这里第一次看到任务「了结」（已验收或已归档）的那一刻，落一个
-// `.concluded-at` 时间戳；任务被重新打开（摘掉验收章、取回归档）就撤掉，下次了结重新起算。
-// 不去追「验收发生在哪一秒」：把 stage 写成 accepted 的路径有十几条（各种验收、团队联动、
-// 接力迁入、阶段恢复），逐条补时间戳必然漏一条，而漏的那一条就是一验收就删。观察时间不早于
-// 真实时间，最多晚一个清扫周期，只会多留不会早删；升级前已经了结的老任务也从第一次清扫起
-// 重新等满。另外同一份日志写完还要满 KEEP_DAYS 才删，接住「重新打开后又了结、清扫还没来得及
-// 看到中间那段」时新写的那几份。
+// **宽限期从哪一刻算**：从「这一次了结」开始。了结的身份不靠观察中间状态去猜，而是读生命周期层
+// 已经持久化的那两样：验收身份 `acceptanceId`（重新打开时清空，每一次新的验收都领新的，见
+// review-acceptance.ts / task-stage.ts）和归档时刻 `archivedAt`（取回时清空，每次归档重写）。
+// 清扫第一次看到某个身份就落一个 `.concluded-at`（身份 + 时刻）；身份一变——重新打开后又验收、
+// 取回后又归档，哪怕两次清扫之间整个来回都看不见——旧时刻作废、从此刻重新起算。归档另有确切
+// 时刻，起点取两者较晚的那个。观察时刻不早于真实验收时刻（最多晚一个清扫周期），所以只会多留
+// 不会早删；升级前已经了结的老任务也从第一次清扫起重新等满。没有逐个验收入口补时间戳：把
+// stage 写成 accepted 的路径有十几条，漏一条就是一验收就删。
+//
+// 同一份日志写完也要满 KEEP_DAYS：接住「了结之后又写了新日志」的那几份。
 //
 // 进行中的任务一律不碰，不管多旧；`.diagnostics.json` / `.stderr.log` 只有几百字节，失败分类和
 // stderr 尾巴都在里面，留着。
@@ -42,13 +45,71 @@ export function traceKeepDays(): number {
   return DEFAULT_KEEP_DAYS;
 }
 
-function readStamp(path: string): number | null {
+type TaskConclusion = { archived: boolean; archivedAt: string | null; stage: string | null; acceptanceId: string | null };
+
+/** 这一次了结的身份；还没了结（进行中）就是 null。 */
+function conclusionOf(row: TaskConclusion): { key: string; floorMs: number } | null {
+  if (!row.archived && row.stage !== "accepted") return null;
+  const parts = [
+    row.stage === "accepted" ? `acceptance:${row.acceptanceId ?? "legacy"}` : null,
+    row.archived ? `archived:${row.archivedAt ?? "legacy"}` : null,
+  ].filter(Boolean);
+  const archivedMs = row.archived && row.archivedAt ? Date.parse(row.archivedAt) : NaN;
+  return { key: parts.join("|"), floorMs: Number.isFinite(archivedMs) ? archivedMs : 0 };
+}
+
+/** 落盘的起点只在身份对得上时才算数。 */
+function readStamp(path: string, key: string): number | null {
   try {
-    const at = Date.parse(readFileSync(path, "utf8").trim());
-    return Number.isFinite(at) ? at : null;
+    const stamp = JSON.parse(readFileSync(path, "utf8")) as { key?: unknown; at?: unknown };
+    const at = typeof stamp.at === "string" ? Date.parse(stamp.at) : NaN;
+    return stamp.key === key && Number.isFinite(at) ? at : null;
   } catch {
     return null;
   }
+}
+
+async function sweepTask(taskId: string, nowMs: number, grace: number): Promise<{ removed: number; bytes: number }> {
+  const dir = join(RUNS_DIR, taskId);
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((name) => name.endsWith(SUFFIX));
+  } catch {
+    return { removed: 0, bytes: 0 };
+  }
+  const stampPath = join(dir, STAMP);
+  if (!names.length && !existsSync(stampPath)) return { removed: 0, bytes: 0 };
+  const row = (await db.select({ archived: tasks.archived, archivedAt: tasks.archivedAt, stage: tasks.stage, acceptanceId: tasks.acceptanceId })
+    .from(tasks).where(eq(tasks.id, taskId))).at(0);
+  // 任务行没了的目录不归这里管：删任务有自己的回收与重试（run-dir-reclaim.ts）。
+  if (!row) return { removed: 0, bytes: 0 };
+  const conclusion = conclusionOf(row);
+  if (!conclusion) {
+    rmSync(stampPath, { force: true }); // 进行中：起点作废
+    return { removed: 0, bytes: 0 };
+  }
+  const observed = readStamp(stampPath, conclusion.key);
+  if (observed === null) {
+    // 头一回看到这一次了结（或身份换了）：从此刻起算，这一趟一份不删。
+    writeFileSync(stampPath, `${JSON.stringify({ key: conclusion.key, at: new Date(nowMs).toISOString() })}\n`);
+    return { removed: 0, bytes: 0 };
+  }
+  const since = Math.max(observed, conclusion.floorMs);
+  let removed = 0;
+  let bytes = 0;
+  for (const name of names) {
+    const full = join(dir, name);
+    try {
+      const st = statSync(full);
+      if (Math.max(since, st.mtimeMs) + grace > nowMs) continue;
+      unlinkSync(full);
+      removed++;
+      bytes += st.size;
+    } catch {
+      /* 已经没了 / 没权限：跳过这一份 */
+    }
+  }
+  return { removed, bytes };
 }
 
 export async function sweepRawTraces(nowMs = Date.now()): Promise<{ removed: number; bytes: number }> {
@@ -62,38 +123,13 @@ export async function sweepRawTraces(nowMs = Date.now()): Promise<{ removed: num
     return { removed, bytes };
   }
   for (const taskId of taskIds) {
-    const dir = join(RUNS_DIR, taskId);
-    let names: string[];
+    // 逐任务隔离：一个目录出错（权限、被占用）不拦后面的任务。
     try {
-      names = readdirSync(dir).filter((name) => name.endsWith(SUFFIX));
-    } catch {
-      continue;
-    }
-    const stampPath = join(dir, STAMP);
-    if (!names.length && !existsSync(stampPath)) continue;
-    const row = (await db.select({ archived: tasks.archived, stage: tasks.stage }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-    // 任务行没了的目录不归这里管：删任务有自己的回收与重试（run-dir-reclaim.ts）。
-    if (!row) continue;
-    if (!(row.archived || row.stage === "accepted")) {
-      rmSync(stampPath, { force: true }); // 重新打开了：下次了结重新起算
-      continue;
-    }
-    const since = readStamp(stampPath);
-    if (since === null) {
-      try { writeFileSync(stampPath, `${new Date(nowMs).toISOString()}\n`); } catch { /* 下一趟再落 */ }
-      continue; // 宽限期从此刻开始
-    }
-    for (const name of names) {
-      const full = join(dir, name);
-      try {
-        const st = statSync(full);
-        if (Math.max(since, st.mtimeMs) + grace > nowMs) continue;
-        unlinkSync(full);
-        removed++;
-        bytes += st.size;
-      } catch {
-        /* 已经没了 / 没权限：跳过，清理永远不该拦住别的事 */
-      }
+      const swept = await sweepTask(taskId, nowMs, grace);
+      removed += swept.removed;
+      bytes += swept.bytes;
+    } catch (error) {
+      console.error(`[ash] 原始事件流清扫跳过 ${taskId}:`, error);
     }
   }
   return { removed, bytes };

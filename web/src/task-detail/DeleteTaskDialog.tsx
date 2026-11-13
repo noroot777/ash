@@ -64,6 +64,8 @@ export function DeleteTaskDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deletedIds, setDeletedIds] = useState<string[]>([]);
+  // 任务已删、目录没收干净（服务端记了账会定时重试）：如实说一句，不让人以为全干净了。
+  const [diskNote, setDiskNote] = useState("");
   const [rest, setRest] = useState<LeftoverItem[] | null>(null);
   // 这一次删除到底有没有请求清理——残留对话框的措辞得按它说话。
   const [requestedCleanup, setRequestedCleanup] = useState(false);
@@ -111,6 +113,8 @@ export function DeleteTaskDialog({
       });
       const ids = result.deletedTaskIds ?? [task.id];
       setDeletedIds(ids);
+      const note = result.diskCleanupPending?.length ? "，残留文件稍后自动清理" : "";
+      setDiskNote(note);
       const childTitles = new Map((probe?.children ?? []).map((child) => [child.taskId, child.title ?? child.taskId]));
       const items = itemsFromLeftovers(
         { taskId: task.id, leftover: result.leftover, cleanup: result.cleanup },
@@ -124,10 +128,10 @@ export function DeleteTaskDialog({
         return;
       }
       if (items.length) {
-        finishDeleted("任务已删除，worktree / 分支按选择保留", ids);
+        finishDeleted(`任务已删除，worktree / 分支按选择保留${note}`, ids);
         return;
       }
-      finishDeleted("任务已删除", ids);
+      finishDeleted(`任务已删除${note}`, ids);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -166,7 +170,7 @@ export function DeleteTaskDialog({
     setBusy(false);
     setError(failure);
     if (!still.length) {
-      finishDeleted("任务和 Git 残留已删除", deletedIds);
+      finishDeleted(`任务和 Git 残留已删除${diskNote}`, deletedIds);
       return;
     }
     setRest(still);
@@ -182,7 +186,7 @@ export function DeleteTaskDialog({
         busy={busy}
         danger
         onConfirm={() => void forceDiscard()}
-        onClose={() => finishDeleted("任务已删除，Git 残留已保留", deletedIds)}
+        onClose={() => finishDeleted(`任务已删除，Git 残留已保留${diskNote}`, deletedIds)}
       >
         <div className="task-delete-force">
           {rest.map((item) => (
