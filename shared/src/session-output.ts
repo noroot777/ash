@@ -15,6 +15,7 @@
 import type { MonitorWakeData } from "./monitor-wake.ts";
 import { timelineNoticeOf, type TimelineNotice } from "./timeline-notice.ts";
 import { LEGACY_SYS_MARKER } from "./index.ts";
+import { systemResumeOf, type SystemResume } from "./system-resume.ts";
 
 export type ConvSeg =
   | { kind: "agent"; text: string; endedAt?: string; deleted?: true }
@@ -30,19 +31,25 @@ export type ConvSeg =
   // 预览起停…）。它不是说给 agent 听的话，也不开/不收一个回合——落在哪一秒纯属偶然，
   // 常常正砸在某一回合说到一半的地方，所以展示端不能拿它当回合边界（见 events.ts）。
   // notice = 这条时间线旁注是哪一类事（见 timeline-notice.ts）。老记录没有。
-  | { kind: "system"; text: string; at?: string; level?: "notice"; aside?: true; notice?: TimelineNotice; deleted?: true };
+  // resume = 系统续跑的缘由（见 system-resume.ts）。老记录、别的系统注记没有。
+  | { kind: "system"; text: string; at?: string; level?: "notice"; aside?: true; notice?: TimelineNotice; resume?: SystemResume; deleted?: true };
 
 /** 一段连同它在原文里占的行（含首尾，按 `\n` 切出来的行号）。删除就地改写靠它定位。 */
 export type SessionSegmentSpan = { seg: ConvSeg; first: number; last: number };
 
 type Sentinel = {
   t?: string; text?: string; at?: string; by?: string; level?: string; aside?: boolean; notice?: unknown;
-  monitorWake?: MonitorWakeData; answerIds?: unknown; deleted?: boolean;
+  monitorWake?: MonitorWakeData; answerIds?: unknown; resume?: unknown; deleted?: boolean;
 };
 
 const noticeOf = (value: unknown): { notice?: TimelineNotice } => {
   const notice = timelineNoticeOf(value);
   return notice ? { notice } : {};
+};
+
+const resumeOf = (value: unknown): { resume?: SystemResume } => {
+  const resume = systemResumeOf(value);
+  return resume ? { resume } : {};
 };
 
 const answerIdsOf = (value: unknown): { answerIds?: string[] } => {
@@ -113,6 +120,7 @@ export function parseSessionSpans(out: string): SessionSegmentSpan[] {
                 ...(j.level === "notice" ? { level: "notice" as const } : {}),
                 ...(j.aside === true ? { aside: true as const } : {}),
                 ...noticeOf(j.notice),
+                ...resumeOf(j.resume),
                 ...deleted,
               }
             : {

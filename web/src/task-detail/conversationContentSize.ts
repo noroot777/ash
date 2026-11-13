@@ -110,6 +110,7 @@ const AGENT_SIZE: SizeTable<AgentItem> = {
   showSessionMeta: () => 0,
   continuation: () => 0,
   wokenByMonitor: () => 0,
+  resumeCause: () => 0,
   turnOutcome: () => 0,
   session: () => 0,
   run: () => 0,
@@ -152,6 +153,8 @@ const EVENT_SIZE: SizeTable<EventItem> = {
   verify: () => 0,
   aside: () => 0,
   notice: () => 0,
+  resume: () => 0,
+  onTurnHead: () => 0,
   text: (value) => value.length,
 };
 const EVENT_KEYS = Object.keys(EVENT_SIZE) as (keyof EventItem)[];

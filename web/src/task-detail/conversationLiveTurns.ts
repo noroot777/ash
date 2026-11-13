@@ -11,6 +11,7 @@ import { appendExecutionEvent, isVisibleExecutionEvent } from "../lib/executionT
 import { reviewerKey, reviewerKeyOf, reviewerOf } from "./conversationReviewer.ts";
 import type { AgentContentSegment, AgentTraceEvent } from "./conversationSegments.ts";
 import { auxEvent, awaitingAfterEvent } from "./conversationSegments.ts";
+import { resumeNoteOf } from "./turnCause.ts";
 import type { ConversationEventItem, ConversationItem, TimelineEntry } from "./conversationModel.ts";
 import type { AgentRun, LiveAgentEvent, PersistedTurnTimes } from "./conversationTurnParts.ts";
 import { agentLabel, latestTurnStart, sessionRun, turnKey } from "./conversationTurnParts.ts";
@@ -256,6 +257,7 @@ export function appendLiveTimeline(
     const event = entry.event.event;
     if (event.kind === "system") {
       const text = normalizeSessionNoteText(event.text);
+      const resume = resumeNoteOf(text, event.resume);
       appendEvent(items, {
         kind: "event",
         id: entry.id,
@@ -266,6 +268,7 @@ export function appendLiveTimeline(
         variant: "note",
         verify: isVerifyNote(text, event.notice),
         ...(event.notice ? { notice: event.notice } : {}),
+        ...(resume ? { resume } : {}),
         // 直播这一路认服务端的标就够了：旁注本来就不拆气泡（见 appendAgent 跨旁注回捞
         // 当前回合），带上它只是为了同样别去定这一回合的结束时刻。
         aside: event.aside === true,
