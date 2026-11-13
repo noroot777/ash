@@ -187,6 +187,16 @@ try {
     ['C"HECK"=1 ./not-an-entry.sh', null],
     ["CHECK=./runner.sh ./not-an-entry.sh", { kind: "path", name: "./not-an-entry.sh" }],
     ["CHECK='./runner.sh' ./not-an-entry.sh", { kind: "path", name: "./not-an-entry.sh" }],
+    // 切词只认 sh 自己的分词符（空格、制表符），子集之外的字符整条白卷（第 4 轮审查 F1）：JS 的 `\s`
+    // 还认 NBSP、全角空格、VT、FF、BOM，拿它切会把 `./verify<NBSP>accept.sh` 切成 `./verify`。
+    ...["\u00a0", "\u2003", "\u000b", "\u000c", "\ufeff"].map(odd => [`./verify${odd}accept.sh`, null] as const),
+    ["./\u6d4b\u8bd5.sh", null],
+    ["'./\u6d4b\u8bd5.sh'", null],
+    [">\u65e5\u5fd7.log ./kb.sh", null],
+    ["CI=1\t./kb.sh\ttest", { kind: "path", name: "./kb.sh" }],
+    [">\tout.log ./kb.sh", { kind: "path", name: "./kb.sh" }],
+    // `NAME+=` 在 bash 里是追加赋值、在 dash 里是命令：哪个 sh 说不准，白卷。
+    ["CHECK+=./runner.sh ./not-an-entry.sh", null],
     // ③ shell 注释按语义截断:注释里那个 `--prefix .` 不是真的目录(旧版拿它覆盖了 child)。
     ["npm --prefix child run test:accept # --prefix .", { kind: "script", name: "test:accept", dir: "child" }],
     ["npm run test:accept # 这后面写什么都不执行", { kind: "script", name: "test:accept", dir: "." }],
@@ -295,6 +305,12 @@ try {
     assert.equal(entryCertainlyMissing(probeGateEntry(tree, "CHECK=./runner.sh ./not-an-entry.sh")), true,
       "不加引号才是赋值：入口是第二个词，它确实不在");
     rmSync(join(tree, "CHECK=."), { recursive: true });
+    // 名字里夹着 sh 不认作分词符的空白：shell 跑得到整个名字，这一层不许切成半截再说「没有」。
+    writeFileSync(join(tree, "verify\u00a0accept.sh"), "#!/bin/sh\necho WHOLE_WORD_RAN\n", { mode: 0o755 });
+    assert.equal(execFileSync("sh", ["-lc", "./verify\u00a0accept.sh"], { cwd: tree, encoding: "utf8" }).trim(), "WHOLE_WORD_RAN",
+      "测试自己的前提：NBSP 在 sh 里不是分词符");
+    assert.equal(probeGateEntry(tree, "./verify\u00a0accept.sh"), null, "子集之外交白卷，照常起跑");
+    rmSync(join(tree, "verify\u00a0accept.sh"));
     // 「没有」必须是内核对**原样那个字符串**给的答案（第 1 轮审查 F1）：alias 是目录软链时，
     // `./alias/../runner.sh` 里的 `..` 由内核从软链指向的目录退一级，跑的是 real/runner.sh；
     // 词法折叠会去核根目录下并不存在的 runner.sh，把一条能跑绿的命令挡在门外。

@@ -53,6 +53,12 @@
 //
 // 规矩是**证明不了就交白卷**。判据是「这条命令的执行目标我能不能完整解释」，不是「它像不像
 // 我见过的形状」：
+//  · 这一层模拟的是 `sh` 怎么切词、认赋值、找命令。命令真交给别的解释器跑（Windows 上是 cmd /
+//    PowerShell，引号、扩展名补全都另一套），就一档都不算核得准（`runsUnderSh`）。
+//  · 切词只在一个**白名单子集**里做：可打印 ASCII 加空格、制表符。shell 只拿空格和制表符分词，
+//    JS 的 `\s` 却还认 NBSP、全角空格、VT、FF、BOM —— 拿它分词，`./verify<NBSP>accept.sh`
+//    就被切成 `./verify`，核了一个 shell 根本不会去找的名字（第 4 轮审查 F1 实测）。子集之外的
+//    字符一律交白卷，不逐个补特例。
 //  · 命令里有任何读不准的 shell 语义（多步、分组、后台、变量、命令替换、通配、转义、未闭合
 //    引号），返回 null；注释按 shell 语义截断，不当成参数。第 6 轮审查实测两条反例：
 //    `(./runner.sh)` 旧版当成一个叫 `(./runner.sh)` 的文件去查，而 shell 真把括号里那条跑了；
@@ -73,6 +79,7 @@
 // （跑完再核一次拿到的是跑完之后的状态，见上面②）。
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, relative } from "node:path";
+import { userShellLaunch } from "./platform.js";
 
 /** 这条命令点名要跑的东西，分能核实的两种。其余形状一律认不出（见文件头）。 */
 export type GateEntryAsk =
@@ -152,6 +159,15 @@ const SAFE_VALUED = new Set(["--loglevel", "--log-level"]);
  */
 type Word = { text: string; raw: string };
 
+/** sh 的分词符只有这两个（换行在上面已经整条拒掉）。 */
+const BLANK = /[ \t]/;
+
+/**
+ * 词边界、引号、赋值都只在这个子集里证明得了跟 sh 一致（见文件头）。注释之前**每一个**被读进来的
+ * 字符都过这一道；注释不执行，里面写什么都不影响入口。
+ */
+const SUPPORTED = /^[\t\x20-\x7e]*$/;
+
 /**
  * 把命令切成词。**读不准就返回 null**，绝不猜。
  *
@@ -171,23 +187,31 @@ function tokenize(command: string): Word[] | null {
   const words: Word[] = [];
   let at = 0;
   while (at < command.length) {
-    if (/\s/.test(command[at]!)) { at++; continue; }
+    if (BLANK.test(command[at]!)) { at++; continue; }
     // shell 注释：词首的 `#` 之后整条都不执行。旧版把它当普通词，于是注释里的
     // `# --prefix .` 覆盖掉了真正的 `--prefix child`（第 5 轮审查 F1 实测）。
     if (command[at] === "#") break;
     // 重定向整段跳过：它不是一个步骤，也不是入口。
-    const redirect = /^\d*[<>]{1,2}\s*\S+/.exec(command.slice(at));
-    if (redirect) { at += redirect[0].length; continue; }
+    const redirect = /^\d*[<>]{1,2}[ \t]*[^ \t]+/.exec(command.slice(at));
+    if (redirect) {
+      if (!SUPPORTED.test(redirect[0])) return null;
+      at += redirect[0].length;
+      continue;
+    }
     const start = at;
     let word = "";
-    while (at < command.length && !/\s/.test(command[at]!)) {
+    while (at < command.length && !BLANK.test(command[at]!)) {
       const quote = command[at]!;
       if (quote === "'" || quote === '"') {
         const close = command.indexOf(quote, at + 1);
         if (close < 0) return null;                        // 引号没闭合：读不了
+        if (!SUPPORTED.test(command.slice(at + 1, close))) return null;
         word += command.slice(at + 1, close);
         at = close + 1;
-      } else { word += quote; at++; }
+      } else {
+        if (!SUPPORTED.test(quote)) return null;
+        word += quote; at++;
+      }
     }
     // 词中间夹着重定向符（`x>log`）那种，我切不准。
     if (/[<>]/.test(word)) return null;
@@ -252,6 +276,8 @@ export function gateEntryAsk(command: string): GateEntryAsk | null {
   // 含 `/` 的名字 shell 不查 PATH。
   // 认赋值看的是**原样**那一份（见 `Word`）：名字和等号有一个字符被引住，它就不是赋值。
   while (tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0]!.raw)) tokens.shift();
+  // `NAME+=x` 在 bash（macOS 的 sh）里是追加赋值，在 dash 里是一条命令：哪个 sh 说不准，交白卷。
+  if (tokens.length && /^[A-Za-z_][A-Za-z0-9_]*\+=/.test(tokens[0]!.raw)) return null;
   const words = tokens.map(word => word.text);
   const head = words[0];
   if (!head) return null;
@@ -335,7 +361,7 @@ export function probeGateEntry(treeDir: string, command: string): GateEntryProbe
   if (ask.kind === "path") {
     const present = insideTree(treeDir, ask.name) ? entryOnDisk(treeDir, ask.name) : null;
     return present === null ? null
-      : { ask: ask.name, file: entryFile(ask), resolved: present, by: "被测快照里的文件", certain: true };
+      : { ask: ask.name, file: entryFile(ask), resolved: present, by: "被测快照里的文件", certain: runsUnderSh(command) };
   }
   const file = manifestInTree(treeDir, ask);
   if (!file) return null;
@@ -345,6 +371,9 @@ export function probeGateEntry(treeDir: string, command: string): GateEntryProbe
   return defined === null ? null
     : { ask: ask.name, file, resolved: defined, by: `被测快照 ${file} 的 scripts`, certain: false };
 }
+
+/** 这条命令真是交给 `sh` 跑的：切词、认赋值、找命令的规则才跟这一层一致（见文件头）。 */
+const runsUnderSh = (command: string): boolean => userShellLaunch(command).file === "sh";
 
 /** 核得准、而且不在：这一档不起跑。 */
 export const entryCertainlyMissing = (probe: GateEntryProbe | null): boolean =>
