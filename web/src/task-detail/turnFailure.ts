@@ -4,6 +4,8 @@
 // 刷新以后那条边界没了，就从会话行认：每条会话**最后一回合**的会话行报的是异常收口，就在那一回合
 // 后面补同一句。失败要一直看得见（重试在任务头上）。
 import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
+import type { Session, TurnOutcome } from "@ash/shared";
+import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationItem } from "./conversationModel.ts";
 import { legacyTier } from "./legacyNoticeTable.ts";
 
@@ -33,8 +35,24 @@ export function crashedTurns(items: readonly ConversationItem[]): Map<string, Cr
 }
 
 /**
- * 这条记录说的是「上一回合没有正常收口」——落盘重建和直播到达两路都认得出的那份事实（哨兵叫醒的并回
- * 拿它断段，见 monitorWakeTurns）。
+ * 这一回合自己的结局是失败（`Session.turnOutcomes` / 直播回合结尾带的 `turnOutcome`，服务端收口时写下的
+ * 同一份）。哨兵叫醒的并回拿它断段：异常结束之后来的叫醒不并进那一回合。
+ *
+ * 这是权威事实；服务端还没把每回合结局带出门时一律是「不知道」，只能退到下面那条从记录上认的判法——
+ * 那条认不全：留了续跑交代以后崩掉的回合不写结算说明，刷新后就认不出来。
+ */
+export function turnFailed(item: Extract<ConversationItem, { kind: "agent" }>): boolean {
+  return item.turnOutcome === "failed";
+}
+
+/** 落盘重建那一路的一截回合是哪一回合：它领到的 trace 自己记着回合起点（切过组的下半截也一样），没有 trace 就用重建推出来的起点。 */
+export function persistedTurnOutcome(session: Session, trace: readonly SessionTraceEntry[], turnStartedAt: string): TurnOutcome | null {
+  return session.turnOutcomes?.[trace[0]?.turnStartedAt ?? turnStartedAt] ?? null;
+}
+
+/**
+ * 这条记录说的是「上一回合没有正常收口」——不知道回合结局（见 turnFailed）时，落盘重建和直播到达两路
+ * 都认得出的那份记录（哨兵叫醒的并回拿它断段，见 monitorWakeTurns）。
  *
  * 只认两样：直播那一路的异常回合边界（「执行异常结束 · exit 1」），以及结算说明里「这一轮没办成」的那几句
  * （legacyNoticeTable 的 SETTLEMENT_LEADS，照服务端 settle-status 的落位说明抄的）。后者两路都有——服务端

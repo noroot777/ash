@@ -1,4 +1,4 @@
-import type { ContextUsage, Session, TokenUsage } from "@ash/shared";
+import type { ContextUsage, Session, TokenUsage, TurnOutcome } from "@ash/shared";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 import { ANSWER_PREFIX } from "@ash/shared";
 import { parseSessionOutput, segmentFingerprint } from "@ash/shared/session-output";
@@ -24,6 +24,7 @@ import type { LiveAgentEvent, PersistedTurnTimes } from "./conversationTurnParts
 import { agentLabel, latestTurnStart, recordPersistedTurn, sessionRun } from "./conversationTurnParts.ts";
 import { appendLiveTimeline } from "./conversationLiveTurns.ts";
 import { appendTraceFragments } from "./conversationTraceFragments.ts";
+import { persistedTurnOutcome } from "./turnFailure.ts";
 import { contentVersion } from "../lib/useStickToBottom.ts";
 import { conversationItemSize } from "./conversationContentSize.ts";
 export { conversationToMarkdown } from "./conversationMarkdown.ts";
@@ -75,6 +76,8 @@ export type ConversationItem =
       continuation?: boolean;
       /** 这一回合是哨兵叫醒的、叫醒的那条哨兵不归前面那一段（比如等的时候你插过话），另起的一回合，见 monitorWakeTurns。 */
       wokenByMonitor?: boolean;
+      /** 这一回合自己的结局（服务端按回合交出来的，见 turnFailure 的 turnFailed）。缺省/null = 不知道。 */
+      turnOutcome?: TurnOutcome | null;
       session?: Session;
       run?: { model: string | null; reasoningEffort: string | null };
       /**
@@ -248,6 +251,7 @@ function mergeTurnChunk(target: AgentItem, chunk: AgentItem): void {
   target.markerEndedAt = chunk.markerEndedAt ?? target.markerEndedAt;
   target.usage = target.usage && chunk.usage ? addUsage(target.usage, chunk.usage) : chunk.usage ?? target.usage;
   target.run = target.run ?? chunk.run;
+  target.turnOutcome = chunk.turnOutcome ?? target.turnOutcome;
   target.sources = [...target.sources ?? [], ...chunk.sources ?? []];
 }
 
@@ -461,6 +465,7 @@ function appendPersistedSession(
         at: turnStartedAt,
         endedAt: null,
         markerEndedAt: segment.endedAt ?? null,
+        turnOutcome: persistedTurnOutcome(session, traceEntries, turnStartedAt),
         session,
         run: traceRun(traceEntries) ?? sessionRun(session),
         reviewer: reviewerOf(traceVerifyRound(traceEntries), session?.role),

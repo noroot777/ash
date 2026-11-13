@@ -7,7 +7,8 @@
 //   ② 等的时候你插了话：另起；同一条哨兵后面的叫醒并进另起的那一回合（按 id 认）。
 //   ③ 三档身份：id、描述（空白归一，claude 内置 Monitor 也认；描述对上一次就绑定 id，同名不同 id 的不认）、
 //      没有结构化来源的老叫醒。
-//   ④ 异常结束之后来的叫醒不并，两路一致（含 exit 0 却被判失败）；正常结束的回合边界不挡、并进去以后拿掉。
+//   ④ 异常结束之后来的叫醒不并，两路一致（含 exit 0 却被判失败、回合结局失败却没有结算说明）；正常结束的
+//      回合边界不挡、并进去以后拿掉。
 //   ⑤ 落盘重建和直播到达两条路，并出来的回合一样——叫醒到了、回复还没来时也一样。
 //   ⑥ 审查会话的叫醒、审查者正在说话时的叫醒不并。
 //   ⑦ 并出来的回合带着原来几条的出处；id 是最后那一截，派生按它截上下文带得上醒来后的话。
@@ -138,9 +139,10 @@ const live = (tail: TimelineEntry[], exitStatus = 0) => foldMonitorWakes(buildCo
   liveWake,
   ...tail,
 ]));
-const reload = (output: string) => foldMonitorWakes(buildConversationItems([{
-  session: S, output, trace: [monitor(1, 0, W.source)] as never,
-}], [S], []));
+const reload = (output: string, extra: Partial<Session> = {}) => {
+  const s = { ...S, ...extra };
+  return foldMonitorWakes(buildConversationItems([{ session: s, output, trace: [monitor(1, 0, W.source)] as never }], [s], []));
+};
 const shape = (items: ConversationItem[]) => ({
   turns: agents(items).map((turn) => ({
     woken: !!turn.wokenByMonitor,
@@ -184,6 +186,22 @@ const shape = (items: ConversationItem[]) => ({
     assert.deepEqual(agents(crashedLive).map((turn) => !!turn.wokenByMonitor), [false, true], `异常结束（exit ${exitStatus}）之后的叫醒被并进了那一回合`);
     assert.deepEqual(shape(crashedLive).turns, shape(crashedReload).turns, `异常结束（exit ${exitStatus}）之后，直播和刷新以后画得不一样`);
   }
+  // 回合自己的结局：留了续跑交代以后崩掉的回合不写结算说明，只有服务端按回合记下的结局说得清。直播那一路
+  // 由回合结尾带着（exit 0 却被判失败也一样），落盘那一路由会话上按回合起点交出来的那份带着。
+  for (const exitStatus of [1, 0]) {
+    const crashedLive = foldMonitorWakes(buildConversationItems([], [S], [
+      liveEvent("e1", { kind: "text", text: "改好了，挂个哨兵跑回归。" }),
+      liveEvent("e2", { kind: "tool", name: "mcp__ash__start_monitor", detail: JSON.stringify({ description: W.source }) }),
+      liveEvent("e3", { kind: "done", exitStatus, turnOutcome: "failed" }),
+      liveWake,
+      liveEvent("e4", { kind: "text", text: "回归过了。" }),
+    ]));
+    const crashedReload = reload(["改好了，挂个哨兵跑回归。", end(2), wakeLine(10, [W]), "回归过了。"].join(""), { turnOutcomes: { [at(0)]: "failed" } });
+    assert.deepEqual(agents(crashedLive).map((turn) => !!turn.wokenByMonitor), [false, true], `回合结局是失败（exit ${exitStatus}、没有结算说明），之后的叫醒被并进了它`);
+    assert.deepEqual(shape(crashedLive).turns, shape(crashedReload).turns, `回合结局是失败（exit ${exitStatus}、没有结算说明），直播和刷新以后画得不一样`);
+  }
+  // 结局是正常完成的照旧并回。
+  assert.equal(agents(reload(["改好了，挂个哨兵跑回归。", end(2), wakeLine(10, [W]), "回归过了。"].join(""), { turnOutcomes: { [at(0)]: "completed" } })).length, 1);
 }
 
 // ③' 描述相同、id 不同 ─────────────────────────────────────────────────────────────
@@ -233,4 +251,4 @@ const shape = (items: ConversationItem[]) => ({
   assert.equal(wakes(foldMonitorWakes(inline)).length, 1, "审查者在说话时的叫醒被并进了执行回合");
 }
 
-console.log("✓ monitor wake fold: 修复回合不被切开、插话后另起并按 id 续并、三档身份（同名不同 id 不并）、异常结束不并且两路一致、直播与刷新一致（含回复未到）、审查叫醒不并、出处与派生落点");
+console.log("✓ monitor wake fold: 修复回合不被切开、插话后另起并按 id 续并、三档身份（同名不同 id 不并）、异常结束不并且两路一致（含只有回合结局能说清的）、直播与刷新一致（含回复未到）、审查叫醒不并、出处与派生落点");

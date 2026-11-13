@@ -10,8 +10,8 @@
 // 归属按**段**、按**哨兵的身份**认：
 //
 //   · 一段 = 同一条执行会话上连续的执行回合，中间没有别的输入（你的话、答复、审查意见这类系统代写的
-//     输入、团队调度台的执行者来信）、没有审查者发言、没有审查轮的起止、没有**异常**结束（两路都认得出的那份事实，见 turnFailure 的
-//     endsTurnAbnormally）。回合正常
+//     输入、团队调度台的执行者来信）、没有审查者发言、没有审查轮的起止、没有**异常**结束（回合自己的结局，
+//     见 turnFailure 的 turnFailed；不知道结局时退到两路都认得出的那几条记录，endsTurnAbnormally）。回合正常
 //     结束（暂停等哨兵、完成）不打断一段——直播那一路每个回合后面都有一条回合边界，落盘重建那一路
 //     没有，拿它当打断，开着页面看和刷新以后看就是两个样子。
 //   · 一段里任何一个回合挂的哨兵都归这一段（比较见 monitorWakeOwner）。一次叫醒里只要有一条哨兵归
@@ -29,7 +29,7 @@ import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import type { AgentContentSegment, ConversationItem } from "./conversationModel.ts";
 import { monitorWakeInput, monitorWakePreview, type MonitorWakeInput } from "./monitorWakeModel.ts";
 import { claimStarts, claimWake, emptyClaims, ownsWake, type MonitorClaims } from "./monitorWakeOwner.ts";
-import { endsTurnAbnormally } from "./turnFailure.ts";
+import { endsTurnAbnormally, turnFailed } from "./turnFailure.ts";
 import { MONITOR_WAKE_TOOL } from "../lib/toolPhrase.ts";
 import { durationBetween } from "./utils.ts";
 
@@ -67,6 +67,7 @@ export function foldMonitorWakes(items: readonly ConversationItem[], options: Mo
       if (run?.sessionId === item.sessionId) run.anchor = out.length - 1;
       else run = { anchor: out.length - 1, sessionId: item.sessionId, claims: emptyClaims() };
       claimStarts(run.claims, item);
+      if (turnFailed(item)) run = null;
       continue;
     }
     if (item.kind === "event") {
@@ -114,6 +115,7 @@ export function foldMonitorWakes(items: readonly ConversationItem[], options: Mo
     if (reply) {
       claimStarts(run.claims, reply);
       index = next;
+      if (turnFailed(reply)) run = null;
     }
   }
   return out;
@@ -148,6 +150,7 @@ function joinTurn(host: AgentItem, wake: UserItem, input: MonitorWakeInput, repl
       endedAt: settledAt,
       markerEndedAt: null,
       interrupted: false,
+      turnOutcome: null,
       sources: [...host.sources ?? [], ...wake.sources ?? []],
       segments,
     };
@@ -158,6 +161,7 @@ function joinTurn(host: AgentItem, wake: UserItem, input: MonitorWakeInput, repl
     endedAt: reply.endedAt,
     markerEndedAt: reply.markerEndedAt,
     interrupted: reply.interrupted,
+    turnOutcome: reply.turnOutcome,
     usage: reply.usage ?? host.usage,
     sessionUsage: reply.sessionUsage ?? host.sessionUsage,
     sessionContext: reply.sessionContext ?? host.sessionContext,
