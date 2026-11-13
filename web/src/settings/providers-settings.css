@@ -3,12 +3,9 @@
    那几组仍留在 agents-settings.css，所以 SettingsPage 要在它**之后**引入本文件，
    相对顺序不变、层叠结果也就不变。 */
 
-/* 正在被编辑的那一行留在原位当锚点；收起后原地闪一下，找得回来。 */
-.provider-row.is-editing {
-  background: color-mix(in oklab, var(--sel-bg) 40%, var(--panel));
-  box-shadow: inset 3px 0 0 var(--ink);
-}
-
+/* 供应商清单的一行走 settings-list.css 的 .settings-item（跟飞书页同一副骨架），这里只补
+   它自己的两件事：收起表单后原地闪一下（列表长了以后，光靠 toast 找不回刚才改的是哪一行），
+   以及「未挂到执行器」那颗状态是一条出路，点它去执行器设置挂上。 */
 .provider-row.is-just-edited {
   animation: provider-row-flash 2.6s ease-out;
 }
@@ -24,141 +21,21 @@
   :root:not([data-motion="full"]) .provider-row.is-just-edited { animation: none; background: color-mix(in oklab, var(--sel-bg) 45%, var(--panel)); }
 }
 
-.providers-intro {
-  display: flex;
-  min-height: 64px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  border-bottom: 1px solid var(--line);
-  padding: 12px 14px;
-}
-
-.providers-intro > div {
-  display: grid;
-  gap: 4px;
-}
-
-.providers-intro b {
-  font-size: var(--t-xs);
-  font-weight: var(--w-medium);
-  letter-spacing: -0.01em;
-}
-
-.providers-intro small {
-  color: var(--muted);
-  font-size: var(--t-xs);
-}
-
-.provider-row {
-  display: grid;
-  min-height: 62px;
-  grid-template-columns: 30px minmax(120px, 1fr) auto minmax(100px, 0.7fr) 28px 28px;
-  align-items: center;
-  gap: 10px;
-  border-bottom: 1px solid var(--line);
-  padding: 10px 14px;
-}
-
-.provider-protocol {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border-radius: 8px;
-  background: color-mix(in oklab, var(--violet) 16%, var(--panel));
-  color: color-mix(in oklab, var(--violet) 72%, var(--ink));
-  font-size: var(--t-xs);
-  font-weight: var(--w-medium);
-}
-
-.provider-protocol.is-openai {
-  background: color-mix(in oklab, var(--green) 14%, var(--panel));
-  color: color-mix(in oklab, var(--green) 72%, var(--ink));
-}
-
-.provider-copy {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.provider-copy b {
-  font-size: var(--t-xs);
-  font-weight: var(--w-medium);
-}
-
-.provider-copy small,
-.provider-default-model {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--t-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 状态列摆的是「这家能不能用」的两个前置条件：Key 和有没有执行器挂它。
-   同一种药丸、同一套配色（缺 = 琥珀，齐 = 绿），所以一行扫过去就知道还差哪个。 */
-.provider-state-stack {
+.provider-mount-link {
   display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 6px;
-}
-
-.provider-key-state,
-.provider-mount-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
   border: 0;
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--amber) 9%, transparent);
-  padding: 3px 7px;
-  color: var(--amber);
-  font-family: inherit;
-  font-size: var(--t-xs);
-  white-space: nowrap;
-}
-
-.provider-key-state.is-ready,
-.provider-mount-state.is-ready {
-  background: var(--green-bg);
-  color: var(--green);
-}
-
-/* 没人挂它时这颗药丸是条出路：点它直接去执行器设置挂上。 */
-button.provider-mount-state {
+  border-radius: 9999px;
+  background: transparent;
+  padding: 0;
   cursor: pointer;
 }
 
-button.provider-mount-state:hover {
-  background: color-mix(in oklab, var(--amber) 20%, transparent);
+.provider-mount-link > .ui-status-chip {
+  color: var(--amber);
 }
 
-/* 卡片上那两句处境说明(供应商读失败 / 挂载情况未知),末尾带一颗重试。 */
-.providers-mount-unknown,
-.providers-load-failed {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.provider-icon-action {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--faint);
-}
-
-.provider-icon-action:hover {
-  background: var(--raised);
-  color: var(--ink);
+.provider-mount-link:hover > .ui-status-chip {
+  background: color-mix(in oklab, var(--amber) 10%, transparent);
 }
 
 /* 表单里每一项都占满整行（协议是两张卡，其余是宽输入框），所以这里不再分两列；
@@ -595,28 +472,8 @@ button.provider-mount-state:hover {
   animation: provider-model-spin 0.8s linear infinite;
 }
 
-@media (max-width: 900px) {
-  .provider-row {
-    grid-template-columns: 30px minmax(160px, 1fr) auto auto 28px 28px;
-  }
-
-  .provider-default-model {
-    display: none;
-  }
-}
 
 @media (max-width: 680px) {
-  .provider-row {
-    grid-template-columns: 30px minmax(0, 1fr) auto 28px 28px;
-  }
-
-  /* 最窄这一档只留「还缺什么」:两颗绿药丸说的是「都齐了」,那在这个宽度上不值一列。
-     缺 Key 的那颗历来就是这么处理的,「未挂到执行器」跟它同一个判据。 */
-  .provider-key-state,
-  .provider-mount-state.is-ready {
-    display: none;
-  }
-
   .provider-test-action {
     min-width: 28px;
     font-size: 0;
@@ -648,5 +505,76 @@ button.provider-mount-state:hover {
   .provider-conversion-field {
     align-items: flex-start;
     flex-direction: column;
+  }
+}
+
+/* 设置页里就地展开的那张表单，排成跟飞书页同一副：左边字段名、右边控件，一行一个、细线隔开；
+   自带说明的几块（协议转换 / 选择器里的模型列表 / 1M 上下文）不再各套一个框。首启向导里那一份
+   （onboarding.css）卡片窄，照旧上下排。 */
+.providers-card .provider-form-grid {
+  gap: 0;
+}
+
+.providers-card .provider-form-grid > label.is-wide,
+.providers-card .provider-protocol-pick,
+.providers-card .provider-model-field {
+  grid-template-columns: 128px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 28px;
+  row-gap: 5px;
+  border-bottom: 1px solid var(--line);
+  padding: 12px 0;
+}
+
+.providers-card .provider-model-field > small {
+  grid-column: 2;
+}
+
+.providers-card :is(.provider-form-grid > label, .provider-protocol-pick, .provider-model-field) > :is(span, label) {
+  font-weight: var(--w-regular);
+}
+
+.providers-card :is(.provider-conversion-field, .provider-pinned-field, .provider-context-1m) {
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  padding: 12px 0;
+}
+
+.providers-card .provider-context-1m {
+  padding: 0;
+}
+
+.providers-card .provider-context-head {
+  padding-inline: 0;
+}
+
+.providers-card .provider-context-head:hover {
+  background: transparent;
+}
+
+.providers-card .provider-context-panel {
+  padding-inline: 0;
+}
+
+.providers-card :is(.provider-conversion-field, .provider-pinned-head, .provider-context-title) b {
+  font-size: var(--t-sm);
+}
+
+.providers-card .provider-form-actions {
+  padding-top: 4px;
+}
+
+/* 断点跟 settings-list.css 里「字段名改到控件上面」那一档同一个，理由也一样。 */
+@media (max-width: 900px) {
+  .providers-card .provider-form-grid > label.is-wide,
+  .providers-card .provider-protocol-pick,
+  .providers-card .provider-model-field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .providers-card .provider-model-field > small {
+    grid-column: 1;
   }
 }

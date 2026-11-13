@@ -1,0 +1,158 @@
+/* 设置页里「一份清单 + 就地编辑」那几节（供应商、执行模式、审查者）共用的骨架，跟飞书那一页
+   是同一副：灰色小节名 → 白卡 → 一行一项（左边名字 + 一行说明，右边状态和动作），细线分隔；
+   编辑就在那一行下面展开成「字段名 + 控件」的表单行，最后一条灰底卡脚放取消 / 保存。
+   颜色只留给状态（StatusChip 的那颗点），不给行首记号、不给胶囊铺底色。 */
+
+/* 清单里的一行。.settings-row 管字号和分隔线，这里只补「窄了就换行」：右边那一串状态和图标
+   按钮宁可掉到第二行，也不许把整行顶出卡片（供应商页的回归 test-provider-visibility 量的
+   就是这个）。 */
+.settings-item {
+  flex-wrap: wrap;
+  row-gap: 8px;
+  column-gap: 20px;
+}
+
+.settings-item > div {
+  flex: 1 1 220px;
+}
+
+.settings-item > div > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-row-actions {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px 8px;
+  margin-left: auto;
+}
+
+/* 行尾那段灰字（供应商的默认模型这类）：只是认行用的，太长就省略。 */
+.settings-row-actions > .settings-row-note {
+  max-width: 180px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 编辑 / 删除这类只有图标的动作：平时淡，指到才有底色。删除用 settings.css 的 .settings-icon-danger。 */
+.settings-icon-action {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--faint);
+}
+
+.settings-icon-action:hover,
+.settings-icon-action[aria-pressed="true"] {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+/* 正在编辑的那一行留在原位当锚点（编辑键保持按下），跟下面展开的表单之间不画线，连成一块。
+   不铺底色：有的卡片为了让浮层伸出去是 overflow: visible，底色会盖过圆角。 */
+.settings-item.is-editing {
+  border-bottom-color: transparent;
+}
+
+/* 就地展开的表单。字段一行一个：左边 128px 字段名（必要时带一句说明），右边控件。 */
+.settings-editor {
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-editor:last-child {
+  border-bottom: 0;
+}
+
+.settings-editor > .settings-field > label,
+.settings-editor > .settings-field > .settings-field-name {
+  display: grid;
+  width: 128px;
+  flex: none;
+  gap: 2px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+}
+
+.settings-editor > .settings-field > .settings-field-name > small {
+  color: var(--faint);
+  font-size: var(--t-xs);
+  line-height: 1.45;
+}
+
+/* 控件那一栏：吃满剩下的宽度，上限跟飞书页的输入框一样。 */
+.settings-editor > .settings-field > .settings-field-body {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  max-width: 520px;
+  gap: 5px;
+}
+
+.settings-field-body > small {
+  color: var(--amber);
+  font-size: var(--t-xs);
+  line-height: 1.5;
+}
+
+/* 三段胶囊（ExecutorPickerField）自带一行字段名，在这里和左边那一栏重复了：藏起来，
+   读屏照样从胶囊自己的 label 读到名字。 */
+.settings-field-body > .composer-field > span:first-child {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.settings-field-body > .composer-field {
+  margin: 0;
+}
+
+.settings-editor > .settings-field > .ui-choice {
+  flex: none;
+}
+
+.settings-editor > .settings-card-foot {
+  justify-content: flex-end;
+  border-bottom: 0;
+}
+
+.settings-editor > .settings-card-foot > span {
+  margin-right: auto;
+}
+
+/* 卡片里那一句处境说明（读取失败 / 还没有），末尾可带一颗重试。 */
+.settings-card > .settings-muted {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 设置页的卡片宽度 = 视口减掉 240px 侧栏和两边留白；视口到 900 以下，卡片里再让出 128px
+   字段名就只剩不到 300px 给三段胶囊，第三段会被挤成竖排。这一档起字段名改到控件上面。 */
+@media (max-width: 900px) {
+  .settings-editor > .settings-field {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .settings-editor > .settings-field > label,
+  .settings-editor > .settings-field > .settings-field-name { width: 100%; }
+  .settings-editor > .settings-field > .settings-field-body { max-width: none; }
+}

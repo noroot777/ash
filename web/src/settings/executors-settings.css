@@ -22,37 +22,18 @@
   overflow: visible;
 }
 
+/* 卡头是一行 .settings-row（名字 + 「几个 Profile · 默认是谁」，右边新增 / 全部删除），
+   跟飞书页卡头同一副；这里只把它压到表头上面那一档的高度。 */
 .agent-profile-group-head {
-  display: flex;
-  min-height: 44px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 8px 0 16px;
+  min-height: 56px;
+  border-bottom: 0;
+  padding-block: 10px;
 }
 
-.agent-profile-group-head > b {
-  font-family: var(--font-mono);
-  font-weight: var(--w-medium);
-}
-
-.agent-profile-group-head > small,
-.agent-profile-group-default {
+.agent-profile-group-head > div > small {
   overflow: hidden;
-  color: var(--muted);
-  font-size: var(--t-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.agent-profile-group-default {
-  min-width: 0;
-  max-width: 260px;
-  margin-left: auto;
-}
-
-.agent-profile-group-head .settings-icon-danger {
-  width: 28px;
-  height: 28px;
 }
 
 /* ---------- 表 ---------- */
@@ -485,6 +466,3 @@
   .agent-profile-table.has-overrides .agent-profile-row { min-width: 760px; }
 }
 
-@media (max-width: 680px) {
-  .agent-profile-group-default { display: none; }
-}

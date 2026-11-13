@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider } from "@ash/shared";
+import { Plus } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { ProvidersSection, type LoadState } from "./ProvidersSection.tsx";
@@ -30,6 +31,7 @@ export function ProvidersSettings({ notify, onOpen }: {
   const [providersState, setProvidersState] = useState<LoadState>("loading");
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [profilesState, setProfilesState] = useState<LoadState>("loading");
+  const [adding, setAdding] = useState(false);
 
   const loadProviders = useCallback(async () => {
     try {
@@ -68,6 +70,12 @@ export function ProvidersSettings({ notify, onOpen }: {
           <h1>供应商</h1>
           <p>管理模型协议、API 地址与密钥，再把供应商绑定到需要独立账号或模型目录的执行器。</p>
         </div>
+        {providers && !adding && (
+          <Button onClick={() => setAdding(true)}>
+            <Plus size={14} aria-hidden="true" />
+            添加供应商
+          </Button>
+        )}
       </header>
       {providers ? (
         <ProvidersSection
@@ -76,6 +84,8 @@ export function ProvidersSettings({ notify, onOpen }: {
           profilesState={profilesState}
           onRetryProfiles={() => void loadProfiles()}
           onOpenExecutors={onOpen ? () => onOpen("executors") : undefined}
+          adding={adding}
+          onAddingChange={setAdding}
           onChanged={load}
           notify={notify}
         />

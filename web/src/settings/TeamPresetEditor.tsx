@@ -1,5 +1,5 @@
 import type { AgentExecutorProfile, AgentType, TeamPresetConfig } from "@ash/shared";
-import { CrownSimple, MagnifyingGlass, Robot } from "@phosphor-icons/react";
+import { useId } from "react";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import { Toggle } from "../components/ui.tsx";
 import {
@@ -102,9 +102,9 @@ export function teamPresetConfigFromDraft(draft: TeamPresetDraft): TeamPresetCon
 }
 
 export const ROLE_META = {
-  lead: { label: "调度者", hint: "维持团队会话并分派工作", icon: CrownSimple },
-  worker: { label: "执行者", hint: "接收调度并完成具体任务", icon: Robot },
-  reviewer: { label: "审查者", hint: "在执行完成后独立验收", icon: MagnifyingGlass },
+  lead: { label: "调度者", hint: "维持团队会话并分派工作" },
+  worker: { label: "执行者", hint: "接收调度并完成具体任务" },
+  reviewer: { label: "审查者", hint: "在执行完成后独立验收" },
 } as const;
 
 function TeamRoleFields({
@@ -127,7 +127,6 @@ function TeamRoleFields({
   onChange: (value: RoleDraft) => void;
 }) {
   const meta = ROLE_META[role];
-  const Icon = meta.icon;
   // 调度者要维持一个常驻会话来分派工作,只有实现了 openResident 的执行器扛得住。
   // 别的类型存得进预设、套用时却会被 composer 判成「调度者当前不可运行」而挡住提交
   // ——那时用户已经配完了,所以这一步就把不合格的类型拿掉。
@@ -139,16 +138,12 @@ function TeamRoleFields({
     ? "未注册"
     : "不支持常驻会话";
   const typeProfiles = profiles.filter((profile) => typeOptions.includes(profile.type));
+  // 一个角色一行：左边角色名 + 它干什么，右边跟新建面板同一副形状的三段胶囊
+  // 「智能体 · 模型 · 智能水平」（composer/ExecutorPickerField.tsx）。
   return (
-    <section className={`team-preset-role is-${role}`}>
-      <header>
-        <span><Icon size={15} weight={role === "worker" ? "fill" : "regular"} aria-hidden="true" /></span>
-        <b>{meta.label}</b>
-        <small>{meta.hint}</small>
-      </header>
-      <div className="team-preset-role-fields">
-        {/* 跟新建面板同一副形状：一颗三段胶囊「智能体 · 模型 · 智能水平」。
-            见 composer/ExecutorPickerField.tsx。 */}
+    <div className="settings-field">
+      <span className="settings-field-name">{meta.label}<small>{meta.hint}</small></span>
+      <div className="settings-field-body">
         <ExecutorPickerField
           label={`${meta.label} 的智能体与模型`}
           value={executorValue({ agentType: value.agentType, executorId: value.executorId })}
@@ -166,21 +161,21 @@ function TeamRoleFields({
           })}
           onEffortChange={(effort) => onChange({ ...value, reasoningEffort: effort })}
         />
+        {staleType && (
+          <small>
+            {!preserveStaleType
+              ? typeOptions.length
+                ? "请在执行器胶囊里改选已注册的智能体类型。"
+                : leadOnly
+                  ? "还没有已注册且支持常驻会话的调度者类型。"
+                  : "还没有已注册的智能体类型。"
+              : staleReason === "未注册"
+                ? `${value.agentType} 当前没有已注册执行器；请先注册，或在执行器胶囊里改选其它类型。`
+                : `${value.agentType} 不支持常驻会话，当不了调度者；用这个预设建团队时会被拦下。请在执行器胶囊里改选其它类型。`}
+          </small>
+        )}
       </div>
-      {staleType && (
-        <p className="team-preset-role-warning">
-          {!preserveStaleType
-            ? typeOptions.length
-              ? "请在执行器胶囊里改选已注册的智能体类型。"
-              : leadOnly
-                ? "还没有已注册且支持常驻会话的调度者类型。"
-                : "还没有已注册的智能体类型。"
-            : staleReason === "未注册"
-              ? `${value.agentType} 当前没有已注册执行器；请先注册，或在执行器胶囊里改选其它类型。`
-              : `${value.agentType} 不支持常驻会话，当不了调度者；用这个预设建团队时会被拦下。请在执行器胶囊里改选其它类型。`}
-        </p>
-      )}
-    </section>
+    </div>
   );
 }
 
@@ -206,11 +201,16 @@ export function TeamPresetEditor({
     onChange({ ...draft, roles: { ...draft.roles, [role]: value } });
   };
 
+  const nameId = useId();
+
+  // 跟飞书页的表单同一副：一行一个字段，左边字段名、右边控件（styles/settings-list.css 的
+  // .settings-editor）。外层容器和底部的取消 / 保存由 ModesSettings 给。
   return (
-    <div className="team-preset-editor-fields">
-      <label className="team-preset-name-field">
-        <span>模式名称</span>
+    <>
+      <div className="settings-field">
+        <label htmlFor={nameId}>名称</label>
         <input
+          id={nameId}
           autoFocus
           maxLength={80}
           value={draft.name}
@@ -218,9 +218,9 @@ export function TeamPresetEditor({
           placeholder="如：Codex 调度 · Claude 执行"
           onChange={(event) => onChange({ ...draft, name: event.target.value })}
         />
-      </label>
-      <div className="team-preset-review-row">
-        <div><b>自动审查</b><small>执行结束后自动启动审查者验证结果</small></div>
+      </div>
+      <div className="settings-field">
+        <span className="settings-field-name">自动审查<small>执行结束后自动启动审查者验证结果</small></span>
         <Toggle
           checked={draft.review}
           disabled={busy}
@@ -240,6 +240,6 @@ export function TeamPresetEditor({
           onChange={(value) => changeRole(role, value)}
         />
       ))}
-    </div>
+    </>
   );
 }

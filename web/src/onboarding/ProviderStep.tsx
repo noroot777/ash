@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { LlmProvider } from "@ash/shared";
-import { CheckCircle, Plus } from "@phosphor-icons/react";
-import { Button } from "../components/ui.tsx";
+import { Plus } from "@phosphor-icons/react";
+import { Button, StatusChip } from "../components/ui.tsx";
 import { protocolLabel } from "../settings/agentProviderRules.ts";
 import { ProviderForm } from "../settings/ProvidersSection.tsx";
 
@@ -27,17 +27,13 @@ export function ProviderStep({ providers, onChanged, notify }: {
         <ul className="onboarding-rows">
           {providers.map((provider) => (
             <li key={provider.id}>
-              <span className={`provider-protocol is-${provider.protocol}`}>
-                {provider.protocol === "anthropic" ? "A" : "O"}
-              </span>
               <div>
                 <b>{provider.name}</b>
                 <small>{protocolLabel(provider.protocol)} · {provider.baseUrl}</small>
               </div>
-              <span className={`provider-key-state${provider.hasKey ? " is-ready" : ""}`}>
-                {provider.hasKey && <CheckCircle size={12} weight="fill" />}
+              <StatusChip tone={provider.hasKey ? "green" : "amber"}>
                 {provider.hasKey ? "Key 已保存" : "缺少 Key"}
-              </span>
+              </StatusChip>
             </li>
           ))}
         </ul>
