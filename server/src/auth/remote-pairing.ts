@@ -11,12 +11,15 @@
 //
 // 申请和码都只放在内存里:它们活不过十分钟,重启后设备那边重新申请一次就是了,落盘反而
 // 要多管一份过期清理。放进来之后的设备凭证才落盘(remote-access.ts)。
+//
+// 递了申请、机主做了决定,这两下往外报一声(`onPairEvent`):飞书通道据此给机主推一张能直接
+// 点的卡、在别处处理掉之后把卡收起来(im/pairing.ts)。这里不认识通道,只管报。
 import { createHash, randomBytes, randomInt } from "node:crypto";
 import { networkInterfaces } from "node:os";
 import type { PairClaim, PairCode, PairRequestView, PairTicket } from "@ash/shared";
 import { enrollDevice } from "./remote-access.js";
 
-const REQUEST_TTL_MS = 10 * 60_000;
+export const PAIR_REQUEST_TTL_MS = 10 * 60_000;
 const CODE_TTL_MS = 5 * 60_000;
 // 递申请不用任何凭证,所以要有上限:否则同一网段里的一台机器能把机主的页面刷成一墙弹窗。
 const MAX_REQUESTS = 8;
@@ -39,9 +42,34 @@ const codes = new Map<string, number>();
 
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 
+export type PairEvent =
+  | { kind: "opened"; request: PairRequestView }
+  | { kind: "decided"; id: string; name: string; approved: boolean };
+
+const listeners = new Set<(event: PairEvent) => void>();
+
+/** 订阅申请的动静。回调同步跑在递申请 / 做决定的那个请求里:只该记一笔就返回,抛错也不连累请求。 */
+export function onPairEvent(listener: (event: PairEvent) => void): () => void {
+  listeners.add(listener);
+  return () => void listeners.delete(listener);
+}
+
+function emit(event: PairEvent): void {
+  for (const listener of listeners) {
+    try {
+      listener(event);
+    } catch (error) {
+      console.error("[ash] 配对事件的订阅方出错:", error);
+    }
+  }
+}
+
+const viewOf = (r: PairRequest): PairRequestView =>
+  ({ id: r.id, name: r.name, address: r.address, code: r.code, createdAt: new Date(r.createdAt).toISOString() });
+
 function sweep(now: number): void {
   for (const [id, request] of requests) {
-    if (now - request.createdAt >= REQUEST_TTL_MS) requests.delete(id);
+    if (now - request.createdAt >= PAIR_REQUEST_TTL_MS) requests.delete(id);
   }
   for (const [hash, expiresAt] of codes) {
     if (now >= expiresAt) codes.delete(hash);
@@ -57,17 +85,17 @@ export function openPairRequest(input: { name: string; address: string }, now = 
   const id = randomBytes(9).toString("base64url");
   const secret = randomBytes(24).toString("base64url");
   const code = String(randomInt(0, 10_000)).padStart(4, "0");
-  requests.set(id, {
+  const request: PairRequest = {
     id, secretHash: sha256(secret), name: input.name, address: input.address, code, createdAt: now, status: "pending",
-  });
-  return { id, secret, code, expiresAt: new Date(now + REQUEST_TTL_MS).toISOString() };
+  };
+  requests.set(id, request);
+  emit({ kind: "opened", request: viewOf(request) });
+  return { id, secret, code, expiresAt: new Date(now + PAIR_REQUEST_TTL_MS).toISOString() };
 }
 
 export function pendingPairRequests(now = Date.now()): PairRequestView[] {
   sweep(now);
-  return [...requests.values()]
-    .filter((r) => r.status === "pending")
-    .map((r) => ({ id: r.id, name: r.name, address: r.address, code: r.code, createdAt: new Date(r.createdAt).toISOString() }));
+  return [...requests.values()].filter((r) => r.status === "pending").map(viewOf);
 }
 
 /** 机主的决定。回被决定的那张申请;已经过期或决定过的回 null。 */
@@ -76,6 +104,7 @@ export function decidePairRequest(id: string, approve: boolean, now = Date.now()
   const request = requests.get(id);
   if (!request || request.status !== "pending") return null;
   request.status = approve ? "approved" : "denied";
+  emit({ kind: "decided", id, name: request.name, approved: approve });
   return { name: request.name };
 }
 

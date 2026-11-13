@@ -108,8 +108,11 @@ export function mountRemoteAccessRoutes(api: Hono, issueSessionCookie: (c: Conte
   api.get("/remote-access/requests", async (c) =>
     (await ownerRefusal(c)) ?? c.json({ requests: pendingPairRequests() } satisfies { requests: PairRequestView[] }));
 
+  // 点头这一下还能从飞书里来:申请递上来时机主的飞书单聊会收到一张带「允许 / 拒绝」的卡
+  // (im/pairing.ts),点它的是绑定的那个人 —— 自用模式下就是机主。只放这一条:名册、出码、
+  // 请设备出去仍要回到 ash 页面(im-actor.ts 的白名单是另一道)。
   api.post("/remote-access/requests/:id/:decision{approve|deny}", async (c) => {
-    const refused = await ownerRefusal(c);
+    const refused = actorOf(c).kind === "im" && !(await isMultiUser()) ? null : await ownerRefusal(c);
     if (refused) return refused;
     const decided = decidePairRequest(c.req.param("id"), c.req.param("decision") === "approve");
     if (!decided) return c.json({ error: "这张申请已经过期或处理过了" }, 404);
