@@ -406,6 +406,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 这一回合是不是哨兵唤醒起的(见 schema-sessions.ts 同名列)。存量行由
   // monitor-wake-turns-backfill.ts 按转录回填一次。
   "ALTER TABLE session_turns ADD COLUMN monitor_wake INTEGER NOT NULL DEFAULT 0",
+  // 这一回合怎么断的(见 schema-sessions.ts 同名列)。存量行 NULL = 不知道,页面照老样子说。
+  "ALTER TABLE session_turns ADD COLUMN interruption TEXT",
   // usage_turns 里记在哨兵唤醒回合上的那几轮(见 schema-sessions.ts 同名列)。
   "ALTER TABLE sessions ADD COLUMN usage_monitor_wake_turns INTEGER",
   // 「等某任务完成后发送」的那个任务(mode=after)。存量行 NULL。

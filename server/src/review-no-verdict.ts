@@ -16,6 +16,7 @@ import type { RunDiagnostics } from "./executors/diagnostics.js";
 import { freeReviewReportPath } from "./free-review-files.js";
 import { RUNS_DIR } from "./paths.js";
 import { runTracePaths } from "./transcript.js";
+import type { StallVerdictKind } from "./turn-stall-verdict.js";
 
 /** 这一回合**自己**异常结束的事实（single-run 收尾时手上那几样）。没异常结束就不给。 */
 export type TurnFailure = {
@@ -67,11 +68,13 @@ function excerpt(raw: string): string {
   return line.length > 200 ? `${line.slice(0, 199)}…` : line;
 }
 
-const VERDICT_REASON: Record<string, string> = {
+// 穷举：加一种判决忘了写措辞就编译不过（tripped 归上游那一支）。
+const VERDICT_REASON: Record<Exclude<StallVerdictKind, "tripped">, string> = {
   unverified: "回合结局核实不了",
   background_timeout: "后台工作等到时限还没跑完",
   background_lost: "后台工作没跑完进程就没了",
   background_unverified: "后台工作跑没跑完核实不了",
+  wrapup_missing: "后台工作跑完了，智能体没开始整理结果",
 };
 
 /**
@@ -95,7 +98,7 @@ export function interruptionOf(failure: TurnFailure, diagnostics: Pick<RunDiagno
   }
   const signal = diagnostics?.exitSignal;
   const reason = signal ? `执行器进程被 ${signal} 结束`
-    : (failure.verdict && VERDICT_REASON[failure.verdict.kind])
+    : (failure.verdict && (VERDICT_REASON as Record<string, string>)[failure.verdict.kind])
       || (failure.exitStatus !== 0 ? `执行器异常退出（exit ${failure.exitStatus}）` : "执行器报了执行故障");
   return { reason, detail: [reason, said].filter(Boolean).join("，"), upstream: false };
 }

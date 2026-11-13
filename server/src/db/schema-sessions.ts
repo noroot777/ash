@@ -295,6 +295,12 @@ export const sessionTurns = sqliteTable(
      * 存量行由 `monitor-wake-turns-backfill.ts` 按转录里的唤醒回合回填。
      */
     monitorWake: integer("monitor_wake", { mode: "boolean" }).notNull().default(false),
+    /**
+     * 这一回合**怎么断的**(JSON:`{ reason, detail }`,shared 的 `TurnInterruption`),由收口那一下
+     * 跟 `outcome` 同一条语句写下(`turn-interruption.ts` 判)。只有 `outcome = failed` 的回合有;
+     * null = 没断,或者是这一列出现之前的老记录。
+     */
+    interruption: text("interruption"),
   },
   (t) => ({
     taskIdx: index("session_turns_task_idx").on(t.taskId, t.startedAt),

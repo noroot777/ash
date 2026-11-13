@@ -48,6 +48,7 @@ import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart } from "./turn-output.js";
 import { replayUndeliveredMcpCalls } from "./mcp-handoff.js";
 import { noteReviewerChannelGap, noteTurnChannelGap } from "./review-channel-gap.js";
+import { turnInterruptionOf } from "./turn-interruption.js";
 import { afterSettlement, settleTaskStatus } from "./settle-status.js";
 import { recordSessionUsageEvent, setSessionContext } from "./usage.js";
 import { markCliGoalStarted, persistRunGoal } from "./task-cli-state.js";
@@ -557,6 +558,9 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   // 「非零退出 **或** 中途报过执行故障」= 失败)。读端据此给失败现场,不再去猜进程退出码
   // —— 单飞这一路恰好是反方向那半边:`exit 0` 却报过执行故障的回合从前一条现场都给不出
   // (第 5 轮审查 F3,见 db/schema-sessions.ts 的 sessionTurns.outcome)。
+  // 这一回合怎么断的（turn-interruption.ts）：跟结局一起落在回合上，也跟着下面那条结尾事件播出去。
+  const failure = executionFailed ? { exitStatus, verdict: watchdogFailure, lastError: lastExecutionError } : null;
+  const interruption = failure && turnOutcome === "failed" ? turnInterruptionOf(taskId, sessId, a.turnStart, failure) : null;
   await recordTurnSpan({
     sessionId: sessId,
     taskId,
@@ -564,6 +568,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     startedAt: a.turnStart,
     endedAt: endIso,
     outcome: turnOutcome,
+    interruption,
   });
   if (steered) {
     // 「引导会话」只截断旧回合：任务仍是 running，新消息已持有 scheduled_messages
@@ -580,7 +585,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   if (doneEvent) {
     // 结尾带上**同一份**结局:exit 0 却被判失败、留了续跑交代后崩掉(那一支不写结算说明)的回合,
     // 直播那一路只有它说得清(见 AgentEvent 的 done.turnOutcome)。
-    const done = { ...doneEvent, turnOutcome };
+    const done = { ...doneEvent, turnOutcome, ...(interruption ? { interruption } : {}) };
     persistTrace(done, endIso);
     publishEvent(done);
   }
@@ -654,7 +659,6 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // 回合身份在结算期间还占着（orchestrator 在 consumeSingleRun 之后才 releaseTurn），
     // 这一轮绑的是哪一次审查就从那里整份读。
     const review = turnIdentity(taskId)?.review ?? null;
-    const failure = executionFailed ? { exitStatus, verdict: watchdogFailure, lastError: lastExecutionError } : null;
     await noteReviewerChannelGap({ taskId, sessId, turnStart: a.turnStart, agentType, stopped: !!stopped, review, failure })
       .catch((error) => { console.error(`[ash] noteReviewerChannelGap(${taskId}) failed:`, error); return false; });
   }

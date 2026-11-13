@@ -18,6 +18,13 @@ export type SessionRole =
  */
 export type TurnOutcome = "completed" | "failed" | "stopped";
 
+/**
+ * 一个回合**怎么断的**(`session_turns.interruption`,服务端 `turn-interruption.ts` 判的):只在
+ * 这一回合自己异常结束时有,手动停、被引导、正常收口都没有。`reason` 是页面上那半句(「模型上游
+ * 连不上（503）」),`detail` 是点开看的经过,带执行器原话。展示端照它说,不认结算说明的字。
+ */
+export type TurnInterruption = { reason: string; detail: string };
+
 export interface Session {
   id: string;
   taskId: string;
@@ -70,6 +77,11 @@ export interface Session {
    * 缺省 = 这份快照不提供它(目前服务端还没带出门);某一回合没有键或值为 null = 不知道。
    */
   turnOutcomes?: Record<string, TurnOutcome | null>;
+  /**
+   * 最后一回合(`turnStartedAt` 那一轮)怎么断的,跟 `turnOutcome` 同一个回合。null/缺省 = 没有:
+   * 没断、还开着、或者是这份结构出现之前的老记录 —— 读端照老样子只说「这一轮异常结束」。
+   */
+  turnInterruption?: TurnInterruption | null;
   /**
    * 这条会话**此刻**还卡在上游等回话吗 —— 服务端那份权威状态(server/src/session-waiting.ts)
    * 按回合身份判出来的一位,不是数据库里的列。

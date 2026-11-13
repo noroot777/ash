@@ -1,5 +1,5 @@
 import { dbClient } from "./db/index.js";
-import type { TurnOutcome } from "@ash/shared";
+import type { TurnInterruption, TurnOutcome } from "@ash/shared";
 import { id } from "./util.js";
 import { clearTurnActive, closedAlready, markTurnActive, markTurnOpenedHere } from "./session-turn-registry.js";
 // 对外的门面：登记层的公开函数在这里原样再导出一遍（理由见下面文件头的最后一段）。
@@ -376,8 +376,8 @@ type TurnStartInput = {
   monitorWake?: boolean;
 };
 
-/** 收口那一下知道的两件事:什么时候收的、收在什么结局上。开始那一下给 null。 */
-type TurnClose = { endedAt: string; outcome: TurnOutcome };
+/** 收口那一下知道的事:什么时候收的、收在什么结局上、断了的话怎么断的。开始那一下给 null。 */
+type TurnClose = { endedAt: string; outcome: TurnOutcome; interruption?: TurnInterruption | null };
 
 /** 这一批**实际**对那一行做了什么。两件判断都靠它,所以它只能来自批里语句的影响行数。 */
 type TurnWrite =
@@ -430,6 +430,7 @@ async function writeTurnRow(
     at: input.startedAt,
     end: close?.endedAt ?? null,
     outcome: close?.outcome ?? null,
+    interruption: close?.interruption ? JSON.stringify(close.interruption) : null,
     wake: input.monitorWake ? 1 : 0,
   };
   const [, inserted, merged, collided] = await dbClient.batch([
@@ -442,8 +443,8 @@ async function writeTurnRow(
       args: { sid: args.sid, at: args.at },
     },
     {
-      sql: `INSERT OR IGNORE INTO session_turns (id, session_id, task_id, cwd, started_at, ended_at, outcome, monitor_wake)
-              VALUES (:row, :sid, :task, :cwd, :at, :end, :outcome, :wake)`,
+      sql: `INSERT OR IGNORE INTO session_turns (id, session_id, task_id, cwd, started_at, ended_at, outcome, interruption, monitor_wake)
+              VALUES (:row, :sid, :task, :cwd, :at, :end, :outcome, :interruption, :wake)`,
       args,
     },
     {
@@ -453,10 +454,11 @@ async function writeTurnRow(
       // **结局跟 `ended_at` 同生共死**（同一道门禁、同一条语句）：一个常驻进程跑很多回合,
       // 它后来怎么没的只能结束它**还持有**的那些,绝不许追改一轮已经收口的成功回合 ——
       // 那正是「成功答完、待命时进程退出，手机上又挂出上一轮的重试」那条链（第 5 轮审查 F3）。
-      sql: `UPDATE session_turns SET ended_at = :end, outcome = :outcome, cwd = COALESCE(:cwd, cwd)
+      // 怎么断的（interruption）是结局的一部分，同一道门禁。
+      sql: `UPDATE session_turns SET ended_at = :end, outcome = :outcome, interruption = :interruption, cwd = COALESCE(:cwd, cwd)
               WHERE session_id = :sid AND started_at = :at
                 AND ended_at IS NULL AND :end IS NOT NULL`,
-      args: { sid: args.sid, at: args.at, end: args.end, outcome: args.outcome, cwd: args.cwd },
+      args: { sid: args.sid, at: args.at, end: args.end, outcome: args.outcome, interruption: args.interruption, cwd: args.cwd },
     },
     {
       // 只在**开始**那一下查（`:end IS NULL`）、且调用方说这是新的一轮（`:fresh`）时才算撞号。
@@ -565,6 +567,8 @@ export async function recordTurnSpan(input: {
    * F3 整条链的起点(语义见 `db/schema-sessions.ts` 的 `sessionTurns.outcome`)。
    */
   outcome: TurnOutcome;
+  /** 这一轮怎么断的（只在 outcome = failed 时给，见 turn-interruption.ts）。 */
+  interruption?: TurnInterruption | null;
 }): Promise<void> {
   // 起点取不到就没有区间可言（宁可不记，也不要记一条起点是「现在」的假区间：那会把
   // 这一回合真正写出来的东西全判到区间之外）。
@@ -577,7 +581,7 @@ export async function recordTurnSpan(input: {
   try {
     await persistTurn(
       { sessionId: input.sessionId, taskId: input.taskId, cwd: input.cwd, startedAt },
-      { endedAt: input.endedAt, outcome: input.outcome },
+      { endedAt: input.endedAt, outcome: input.outcome, interruption: input.outcome === "failed" ? input.interruption : null },
     );
   } catch (error) {
     console.warn(`[ash] 回合区间没落盘（产物归属降级为按会话寿命认）: ${String(error)}`);

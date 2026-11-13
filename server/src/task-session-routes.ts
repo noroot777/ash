@@ -5,7 +5,7 @@
 // 是里面唯一一块「只读、不碰回合所有权」的东西，切走对那边的并发不变量零影响。
 import { readFile } from "node:fs/promises";
 import { mergeImageJournal } from "./agent-image-journal.js";
-import type { Session, TurnOutcome } from "@ash/shared";
+import type { Session, TurnInterruption, TurnOutcome } from "@ash/shared";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { actorOf } from "./auth/context.js";
@@ -18,6 +18,7 @@ import { sessionCliConfigDir } from "./auth/run-env.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
 import { turnOutcomesForTask } from "./session-turns.js";
+import { turnInterruptionsForTask } from "./turn-interruption.js";
 import { failedTurnNotices, replaysFailureScene, sessionWaiting } from "./session-waiting.js";
 import { turnOutcome } from "./session-turns.js";
 import {
@@ -37,6 +38,7 @@ async function toSession(
   r: typeof sessions.$inferSelect,
   run: { model: string | null; reasoningEffort: string | null } = { model: null, reasoningEffort: null },
   turnOutcomes: Record<string, TurnOutcome | null> = {},
+  interruptions: Record<string, TurnInterruption> = {},
 ): Promise<Session> {
   // 版本得从**这条会话的 rollout 实际写在的那个目录**里读(会话行记着;老行按当时的
   // 规则解释)。按宿主机默认目录读的话,隔离档下列表恒为「读不出版本」,而起跑守卫那边
@@ -70,14 +72,18 @@ async function toSession(
     // 每一回合的也带上:会话一续跑,只剩最后一回合的那一位就答不了「前一回合崩没崩」,
     // 而哨兵叫醒并不并回要的正是它(见 Session.turnOutcomes)。
     turnOutcomes,
+    // 最后一回合怎么断的（turn-interruption.ts）：页面上失败那句话照它说，不认结算说明的字。
+    turnInterruption: interruptions[r.turnStartedAt ?? r.startedAt] ?? null,
   };
 }
 
 
 export async function sessionsForTask(taskId: string): Promise<Session[]> {
   const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
-  const [runMeta, outcomes] = await Promise.all([sessionRunMeta(taskId, rows), turnOutcomesForTask(taskId)]);
-  return Promise.all(rows.map((row) => toSession(row, runMeta.get(row.id), outcomes.get(row.id))));
+  const [runMeta, outcomes, interruptions] = await Promise.all([
+    sessionRunMeta(taskId, rows), turnOutcomesForTask(taskId), turnInterruptionsForTask(taskId),
+  ]);
+  return Promise.all(rows.map((row) => toSession(row, runMeta.get(row.id), outcomes.get(row.id), interruptions.get(row.id))));
 }
 
 /**
