@@ -10,6 +10,7 @@ import {
 } from "../src/task-detail/conversationReviewLanes.ts";
 import { ConversationFeed } from "../src/task-detail/ConversationFeed.tsx";
 import { ReviewerLane } from "../src/task-detail/ReviewerLane.tsx";
+import { ReviewVerdict } from "../src/task-detail/ReviewVerdict.tsx";
 
 const session = {
   id: "presentation",
@@ -116,16 +117,24 @@ const noteLane = conversationFeedRows(protocolItems, { reviews: [{
 }] as never }).find((row): row is ConversationReviewLane => row.kind === "review-lane");
 assert.ok(noteLane);
 assert.equal(noteLane.note, noteText, "附言从 run 上补进审查卡");
-// 收了口的一轮单独摆时只剩一句小灰字：附言、报告、证据都在右侧「审查」格那一轮里。
+// 收了口的一轮是一颗审查结论气泡：平时只有一句结论，附言、报告、证据都在右侧「审查」格那一轮里。
 const noteMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={noteLane}>{null}</ReviewerLane>);
-assert.match(noteMarkup, /class="turn-footnote is-standalone"/, "出了结论的一轮收成一句");
-assert.match(noteMarkup, />第 3 轮审查未通过</, "结论写在字里");
-assert.doesNotMatch(noteMarkup, /<svg|turn-footnote-dot/, "没有图标；单独摆的一轮是过去的事，不带颜色");
-assert.match(noteMarkup, /<time class="turn-footnote-tail">5\.5审查 · 40m 0s · /, "谁审的、用时、时刻紧跟在字后面");
+assert.match(noteMarkup, /class="review-verdict"/, "出了结论的一轮收成一颗气泡");
+assert.match(noteMarkup, /<button type="button" class="review-verdict-text"[^>]*><span data-selection-content="">第 3 轮审查未通过<\/span><\/button>/, "结论写在字里，不带颜色（单独摆的一轮是过去的事）");
+assert.doesNotMatch(noteMarkup, /turn-footnote-dot/, "过去的事不带点");
+assert.match(noteMarkup, /<header><b>审查者<\/b><span class="review-verdict-meta"> · 5\.5审查 · 40m 0s · /, "指到才出的那一行：发送者写在最前面，后面是谁审的、用时、时刻");
+assert.match(noteMarkup, /<button type="button" aria-label="审查报告">/, "有报告时那一行里带一颗报告键");
+assert.equal((noteMarkup.match(/<svg/g) ?? []).length, 1, "气泡里唯一的图形是报告键");
 assert.doesNotMatch(noteMarkup, /重点看 SSE 断线重连/, "附言不摊在会话里");
 const opened: Array<number | null> = [];
 const linkedMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={noteLane} onOpenRound={(round) => opened.push(round)}>{null}</ReviewerLane>);
-assert.match(linkedMarkup, /aria-label="第 3 轮审查未通过，在右侧审查格里打开这一轮"/, "接上审查格时那一句就是去那一轮的键");
+assert.match(linkedMarkup, /aria-label="第 3 轮审查未通过，在右侧审查格里打开这一轮"/, "接上审查格时整颗气泡就是去那一轮的键");
+const liveMarkup = renderToStaticMarkup(<ReviewVerdict lane={noteLane} live />);
+assert.match(liveMarkup, /<div class="review-verdict" role="status">/, "还是现在的未通过：读屏听得到");
+assert.match(liveMarkup, /<span class="turn-footnote-dot is-bad" aria-hidden="true"><\/span><span data-selection-content="">第 3 轮审查未通过/, "字前一颗红点");
+assert.doesNotMatch(renderToStaticMarkup(<ReviewVerdict lane={{ ...noteLane, conclusion: "verified", verdict: "passed" }} live />), /turn-footnote-dot|role="status"/, "通过不带任何颜色");
+assert.match(renderToStaticMarkup(<ReviewVerdict lane={{ ...noteLane, conclusion: "inconclusive", verdict: "inconclusive" }} live />), /turn-footnote-dot is-warn/, "没有给出结论：琥珀点");
+assert.doesNotMatch(renderToStaticMarkup(<ReviewVerdict lane={noteLane} />), /aria-label="审查报告"/, "拿不到任务（报告地址挂在任务上）就不出报告键");
 // 还在跑的那一轮照旧是整张卡：附言是这一轮审查的输入，卡里必须看得见。
 const runningNoteLane = { ...noteLane, complete: false, conclusion: null, defaultCollapsed: false };
 const runningNoteMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={runningNoteLane}>{null}</ReviewerLane>);

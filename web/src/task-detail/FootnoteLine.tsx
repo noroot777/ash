@@ -1,12 +1,5 @@
 import { Fragment, useId, useState, type ReactNode } from "react";
-import { FileText } from "@phosphor-icons/react";
-import { ReviewReportDialog } from "../components/MarkdownBody.tsx";
-import type { ReviewFileTarget } from "../components/markdownPolicy.ts";
-import { ReviewNote } from "../review/ReviewNote.tsx";
-import type { ReviewTarget } from "../review/reviewTarget.ts";
-import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import { DeleteMessageButton, type DeletableItem } from "./MessageDelete.tsx";
-import { laneReportUrl, laneReviewTarget } from "./reviewLaneLinks.ts";
 import type { NoticeView } from "./timelineNoticeCopy.ts";
 import { footnotePartTail, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 
@@ -24,39 +17,34 @@ function SentenceText({ view }: { view: Pick<NoticeView, "text" | "mono"> }) {
 }
 
 /** 坏消息、又还是现在的事：字前面一颗小圆点（红 = 没办成，琥珀 = 要你知道或拍板）。 */
-function Dot({ part, live }: { part: FootnotePart; live: boolean }) {
-  if (!live || (part.view.tone !== "bad" && part.view.tone !== "warn")) return null;
-  return <span className={`turn-footnote-dot is-${part.view.tone}`} aria-hidden="true" />;
+export function FootnoteDot({ tone, live }: { tone: NoticeView["tone"]; live: boolean }) {
+  if (!live || (tone !== "bad" && tone !== "warn")) return null;
+  return <span className={`turn-footnote-dot is-${tone}`} aria-hidden="true" />;
 }
 
 /**
  * 回合的尾注：回合正文下面、回合尾那排操作上面的一句小灰字（模型与归属见 turnFootnote /
  * conversationSystemRows）。没有图标、没有底色，几件事并成一句、中间一个间隔号。
  *
- * - 指到这一句（键盘走进来）才出最近那一句的时刻（谁审的 · 用时 · 时刻），触屏上常显；
- * - 审查结论那半句去右侧审查格的那一场那一轮（`reviewOpener` 认得出去哪儿才给），认不出就在
- *   这句下面摊开那一轮的经过（`renderLane`）；有原文细节的那半句点了就地摊开原文；
+ * - 指到这一句（键盘走进来）才出最近那一句的时刻（是哪条命令 · 时刻），触屏上常显；
+ * - 有原文细节的那半句点了就地摊开原文；
  * - 挂在某半句后面的键（「去裁定」）由 `actionFor` 给，紧跟在那半句后面，时刻排在键后面；
  * - 删除不在这里：每一句同时也是「N 条记录」里的一条，删除在那儿。只有没有记录可去的地方
  *   （团队时间线）才给 `deletable`。
+ *
+ * 审查结论不在这里（它在会话右边自己占一行，见 ReviewVerdict）；贴在它下面的那几句也用这一句，
+ * `placement="trailing"`：靠右，时刻排在字前面——藏着的时刻若在字后面，靠右的那句字就对不齐气泡。
  */
 export function FootnoteLine({
   footnote,
-  taskId,
   actionFor,
-  reviewOpener,
-  renderLane,
-  standalone = false,
+  placement = "turn",
   deletable,
 }: {
   footnote: TurnFootnote;
-  /** 摊开审查报告时用（报告的地址挂在任务上）。 */
-  taskId?: string;
   actionFor?: (part: FootnotePart) => ReactNode;
-  reviewOpener?: (lane: ConversationReviewLane) => ((target: ReviewTarget) => void) | undefined;
-  renderLane?: (lane: ConversationReviewLane) => ReactNode;
-  /** 前面没有回合可挂、在原处单独占一行的那一句。 */
-  standalone?: boolean;
+  /** turn = 回合正文下面；standalone = 前面没有回合可挂、在原处单独占一行；trailing = 贴在审查结论下面。 */
+  placement?: "turn" | "standalone" | "trailing";
   deletable?: DeletableItem;
 }) {
   const [open, setOpen] = useState<string | null>(null);
@@ -69,21 +57,7 @@ export function FootnoteLine({
 
   const sentence = (part: FootnotePart) => {
     const text = <span className="turn-footnote-text" data-selection-content=""><SentenceText view={part.view} /></span>;
-    if (part.kind === "review") {
-      const go = reviewOpener?.(part.lane);
-      return (
-        <button
-          type="button"
-          className="turn-footnote-part"
-          aria-label={go ? `${part.view.text}，在右侧审查格里打开这一轮` : undefined}
-          aria-expanded={go ? undefined : open === part.id}
-          aria-controls={go ? undefined : bodyId}
-          onClick={() => (go ? go(laneReviewTarget(part.lane)) : toggle(part.id))}
-        >
-          <Dot part={part} live={live} />{text}
-        </button>
-      );
-    }
+    const dot = <FootnoteDot tone={part.view.tone} live={live} />;
     // 验收那句只是报个结果，不能点（分支名已经写在字里，原文在「N 条记录」里点开）。
     if (part.view.detail && part.view.topic !== "accept") {
       return (
@@ -94,17 +68,16 @@ export function FootnoteLine({
           aria-controls={bodyId}
           onClick={() => toggle(part.id)}
         >
-          <Dot part={part} live={live} />{text}
+          {dot}{text}
         </button>
       );
     }
-    return <span className="turn-footnote-part is-static"><Dot part={part} live={live} />{text}</span>;
+    return <span className="turn-footnote-part is-static">{dot}{text}</span>;
   };
 
-  const lane = opened?.kind === "review" ? opened.lane : null;
   return (
     <div
-      className={`turn-footnote${standalone ? " is-standalone" : ""}`}
+      className={`turn-footnote${placement === "turn" ? "" : ` is-${placement}`}`}
       role={live && parts.some((part) => part.view.tone === "bad" || part.view.tone === "warn") ? "status" : undefined}
     >
       <p className="turn-footnote-line">
@@ -118,39 +91,9 @@ export function FootnoteLine({
         {tail && <time className="turn-footnote-tail">{tail}</time>}
         {deletable && <DeleteMessageButton item={deletable} />}
       </p>
-      {opened && opened.kind !== "review" && opened.view.detail && opened.view.topic !== "accept" && (
+      {opened && opened.view.detail && opened.view.topic !== "accept" && (
         <p className="turn-footnote-detail" id={bodyId}>{opened.view.detail}</p>
       )}
-      {lane && <LaneBody lane={lane} id={bodyId} taskId={taskId} renderLane={renderLane} />}
-    </div>
-  );
-}
-
-/**
- * 就地摊开的那一轮审查：报告、派审附言、那一轮的经过。尾注里那半句、「N 条记录」里被后一轮
- * 盖过的那一条（TurnReceipts）点开都是它。
- */
-export function LaneBody({ lane, id, taskId, renderLane }: {
-  lane: ConversationReviewLane;
-  id: string;
-  taskId?: string;
-  renderLane?: (lane: ConversationReviewLane) => ReactNode;
-}) {
-  const [report, setReport] = useState<ReviewFileTarget | null>(null);
-  return (
-    <div className="turn-footnote-lane" id={id}>
-      {lane.reportAvailable && lane.report && taskId && (
-        <button
-          type="button"
-          className="turn-footnote-report"
-          onClick={() => setReport({ name: "report.md", url: laneReportUrl(taskId, lane.report!) })}
-        >
-          <FileText size={12} aria-hidden="true" />审查报告
-        </button>
-      )}
-      {lane.note && <ReviewNote text={lane.note} />}
-      {renderLane?.(lane)}
-      {report && <ReviewReportDialog target={report} onReviewReport={setReport} onClose={() => setReport(null)} />}
     </div>
   );
 }

@@ -27,6 +27,7 @@ import { CommandReply, SystemAuthoredMessage } from "./SystemNotice.tsx";
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
 import { noticeView, type NoticeContext } from "./timelineNoticeCopy.ts";
 import { FootnoteLine } from "./FootnoteLine.tsx";
+import { ReviewVerdict } from "./ReviewVerdict.tsx";
 import { footnoteKey, receiptsKey, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 import { crashedTurns } from "./turnFailure.ts";
 import { QuestionDock } from "./QuestionDock.tsx";
@@ -89,7 +90,7 @@ function AgentMessageView({
   /** 记在这一回合上的回执（conversationSystemRows）。 */
   receipts?: readonly TurnReceipt[];
   /**
-   * 这一回合的尾注（审查出了结论、验收了、这一轮没办成……那一句小灰字），摆在正文下面、
+   * 这一回合的尾注（验收了、这一轮没办成……那一句小灰字），摆在正文下面、
    * 回合尾那排操作上面。`key` 是它的签名：收口的回合只在它变了时重画。
    */
   footnote?: { node: ReactNode; key: string };
@@ -199,7 +200,7 @@ function shallowRest(prev: AgentMessageProps, next: AgentMessageProps): boolean 
   return prev.taskId === next.taskId && prev.hideTime === next.hideTime && prev.laneRole === next.laneRole
     && prev.wakeReply === next.wakeReply && prev.taskActive === next.taskActive
     && !!prev.onFork === !!next.onFork && !!prev.onAskSideChat === !!next.onAskSideChat
-    // 记录与尾注比的是摆出来的全部内容（含里面那几轮审查晚到的身份、报告、附言），不只条数。
+    // 记录与尾注比的是摆出来的全部内容（含记录里那几轮审查晚到的身份、报告、附言），不只条数。
     && receiptsKey(prev.receipts) === receiptsKey(next.receipts)
     && prev.footnote?.key === next.footnote?.key;
 }
@@ -361,12 +362,10 @@ export function ConversationFeed({
     conversationDebateRows(conversationFeedRows(items, { reviews }), { reviews }),
     { failures: crashed, context: noticeContext },
   );
-  // 审查卡里（正在跑的那张、尾注里摊开的那一轮、记录里点开的那一轮）的旁注同样记在审查者那一回合上
-  // （见 laneReceipts）。
+  // 审查卡里（正在跑的那张、审查结论气泡下面摊开的那一轮、记录里点开的那一轮）的旁注同样记在审查者
+  // 那一回合上（见 laneReceipts）。
   const shownLanes: ConversationReviewLane[] = [
-    ...rows.flatMap((row) => row.kind === "review-lane" ? [row] : []),
-    ...[...footnotes.values(), ...rows.flatMap((row) => row.kind === "footnote" ? [row.footnote] : [])]
-      .flatMap((footnote) => footnote.parts.flatMap((part) => part.kind === "review" ? [part.lane] : [])),
+    ...rows.flatMap((row) => row.kind === "review-lane" ? [row] : row.kind === "verdict" ? [row.lane] : []),
     ...[...receipts.values(), ...rows.flatMap((row) => row.kind === "footnote" ? [row.receipts] : [])]
       .flatMap((list) => list.flatMap((receipt) => receipt.lane ? [receipt.lane] : [])),
   ];
@@ -466,11 +465,11 @@ export function ConversationFeed({
     // 走到这里的只有归属之外单独摆的那几条（辩论兜底以外不会发生）：同一种小灰字。
     const view = noticeView(item, noticeContext);
     if (view.tier === "reply") return <CommandReply key={item.id} item={item} view={view} />;
-    return renderFootnote({ id: item.id, live: false, parts: [{ kind: "event", id: item.id, at: item.at, view, item }] }, true);
+    return renderFootnote({ id: item.id, live: false, parts: [{ kind: "event", id: item.id, at: item.at, view, item }] }, "standalone");
   };
   // 「去裁定」挂在等你裁定的那半句后面（只有此刻还挂着的那一条）。
   const isRuled = (part: FootnotePart) => part.kind === "event" && !!disputeEventId && part.item?.id === disputeEventId;
-  // 尾注里那一轮审查就地摊开时的经过：卡里的旁注照样记在审查者那一回合上。
+  // 审查结论那一轮就地摊开时的经过：卡里的旁注照样记在审查者那一回合上。
   const renderLaneRows = (lane: ConversationReviewLane) => {
     const roles = reviewLaneMessageRoles(lane);
     return lanes.get(lane.id)!.rows.map((entry) => entry.kind === "item"
@@ -479,18 +478,10 @@ export function ConversationFeed({
         ? <CommandReply key={entry.id} item={entry.item} view={entry.view} />
         : renderFootnoteRow(entry));
   };
-  const renderFootnote = (footnote: TurnFootnote, standalone = false) => (
-    <FootnoteLine
-      key={footnote.id}
-      footnote={footnote}
-      taskId={task.id}
-      standalone={standalone}
-      actionFor={(part) => isRuled(part) ? ruleAction : null}
-      reviewOpener={(lane) => laneRoundOpener(lane, task.workflowMode, onOpenReviewPanel)}
-      renderLane={renderLaneRows}
-    />
+  const renderFootnote = (footnote: TurnFootnote, placement?: "standalone" | "trailing") => (
+    <FootnoteLine key={footnote.id} footnote={footnote} placement={placement} actionFor={(part) => isRuled(part) ? ruleAction : null} />
   );
-  // 「N 条记录」里那一轮审查点开去哪儿：跟尾注那半句同一套。
+  // 「N 条记录」里那一轮审查点开去哪儿：跟审查结论那颗气泡同一套。
   const receiptReview: ReceiptReview = {
     taskId: task.id,
     reviewOpener: (lane) => laneRoundOpener(lane, task.workflowMode, onOpenReviewPanel),
@@ -499,7 +490,7 @@ export function ConversationFeed({
   // 前面没有回合可挂的那几句：留在原处，同一种小灰字；它们的记录跟在后面。
   const renderFootnoteRow = (row: ConversationFootnoteRow) => row.footnote.parts.length ? (
     <div className="footnote-row" key={row.id}>
-      {renderFootnote(settleDisputes(row.footnote)!, true)}
+      {renderFootnote(settleDisputes(row.footnote)!, "standalone")}
       <TurnReceipts receipts={row.receipts} />
     </div>
   ) : <TurnReceipts key={row.id} receipts={row.receipts} standalone />;
@@ -520,6 +511,13 @@ export function ConversationFeed({
             }
             if (row.kind === "footnote") return renderFootnoteRow(row);
             if (row.kind === "reply") return <CommandReply key={row.id} item={row.item} view={row.view} />;
+            if (row.kind === "verdict") {
+              return (
+                <ReviewVerdict key={row.id} lane={row.lane} live={row.live} taskId={task.id}
+                  onOpenRound={laneRoundOpener(row.lane, task.workflowMode, onOpenReviewPanel)} renderLane={renderLaneRows}
+                  trailing={renderFootnote(settleDisputes(row.footnote)!, "trailing")} />
+              );
+            }
             if (row.kind === "debate-lane") {
               return (
                 <DebateLane
@@ -534,7 +532,7 @@ export function ConversationFeed({
                 />
               );
             }
-            // 收了口的审查轮不在这里（它是被审那一回合尾注里的一句）；走到这里的是还在跑的那张卡。
+            // 收了口的审查轮不在这里（它是上面那颗审查结论气泡）；走到这里的是还在跑的那张卡。
             return (
               <ReviewerLane key={row.id} taskId={task.id} lane={row} onOpenRound={laneRoundOpener(row, task.workflowMode, onOpenReviewPanel)}>
                 {renderLaneRows(row)}

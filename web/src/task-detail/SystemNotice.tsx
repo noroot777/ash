@@ -41,7 +41,7 @@ export function SystemEventNote({ item, action }: { item: EventLike; action?: Re
   if (view.tier === "reply") return <CommandReply item={item} view={view} />;
   return (
     <FootnoteLine
-      standalone
+      placement="standalone"
       footnote={{ id: item.id, live: false, parts: [{ kind: "event", id: item.id, at: item.at, view }] }}
       actionFor={action ? () => action : undefined}
       deletable={item}
