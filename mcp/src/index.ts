@@ -11,11 +11,15 @@
 // runtime.ts，共用入参形状在 schemas.ts。
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { holdCodeLease } from "@ash/shared/code-lease";
 import { BASE } from "./runtime.js";
 import { registerMonitorTools } from "./tools/monitor.js";
 import { registerOrchestrationTools } from "./tools/orchestrate.js";
 import { registerReadTranscriptTools } from "./tools/read-transcript.js";
 import { registerTaskTurnTools } from "./tools/task-turn.js";
+
+// 跑的是 app 里那份代码时登记一下，app 换包前据此知道还有 agent 用着它（code-lease.ts）。
+holdCodeLease("mcp");
 
 const server = new McpServer({ name: "ash", version: "0.1.0" });
 registerOrchestrationTools(server);

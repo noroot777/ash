@@ -10,6 +10,10 @@
       "types": "./src/accept-workspace.ts",
       "default": "./src/accept-workspace.ts"
     },
+    "./code-lease": {
+      "types": "./src/code-lease.ts",
+      "default": "./src/code-lease.ts"
+    },
     "./system-resume": {
       "types": "./src/system-resume.ts",
       "default": "./src/system-resume.ts"

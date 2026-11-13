@@ -4,8 +4,9 @@
 # 退出 app 不停服务（服务、agent 拉起的 ash MCP 都跑在 bundle 里的 node 和代码上）。这时把 bundle
 # 换掉，长驻的 node 已经加载的模块还是旧的，之后才加载的模块、静态资源、新起的 MCP 却读到新版本，
 # 一次运行里新旧混着跑；拷到一半失败还会把它们正用着的代码目录整个丢掉。所以：
-#   · 删任何东西之前先查还有没有进程在用目标 bundle（按真实文件身份认，别名、软链、路径里的
-#     特殊字符都不影响，见 bundle-users.sh），有就不装，说清是谁、怎么停；
+#   · 删任何东西之前先查还有没有进程在用目标 bundle（ash 服务和 MCP 启动时自己登记，另按真实文件
+#     身份补扫，别名、软链、相对路径、路径里的特殊字符都不影响，见 bundle-users.sh），有就不装，
+#     说清是谁、怎么停；
 #   · 同一个安装目录同一时刻只有一个安装在换（按目录的真实路径加锁，两个安装器排队）；
 #   · 新版先完整拷到旁边，再两次改名换上，拷失败、最后一步失败时旧的那份放回原处。
 set -euo pipefail
@@ -17,7 +18,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$DEST_DIR"
 
 if [[ -z "${ASH_INSTALL_LOCKED:-}" ]]; then
-  LOCK="${TMPDIR:-/tmp}/ash-install-$(md5 -qs "$(cd "$DEST_DIR" && pwd -P)").lock"
+  # 锁的位置只由目标目录的真实路径决定，不跟 TMPDIR 走：两个环境不同的安装器也排在同一把锁上。
+  LOCKS="${ASH_INSTALL_LOCKS:-/tmp/ash-install-locks}"
+  mkdir -p "$LOCKS" && chmod 1777 "$LOCKS" 2>/dev/null || true
+  LOCK="$LOCKS/$(md5 -qs "$(cd "$DEST_DIR" && pwd -P)").lock"
   ASH_INSTALL_LOCKED=1 exec lockf -k -t 600 "$LOCK" /bin/bash "$0" "$@"
 fi
 

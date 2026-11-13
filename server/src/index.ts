@@ -23,6 +23,10 @@ import { mountPreviewProxy, attachPreviewUpgrades } from "./preview-proxy.js";
 import { instanceBinding } from "./instance-binding.js";
 import { responseCompression } from "./response-compression.js";
 import { mountPreviewOpenRoutes } from "./preview-access.js";
+import { holdCodeLease } from "@ash/shared/code-lease";
+
+// 跑的是 app 里那份代码时登记一下，app 换包前据此知道这个服务还用着它（code-lease.ts）。
+holdCodeLease("server");
 
 let singletonLock: SingletonLock | null = null;
 let activeServer: ReturnType<typeof serve> | null = null;
