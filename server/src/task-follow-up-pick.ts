@@ -21,3 +21,35 @@ export function latestFollowUp<T extends { at?: string | null }>(candidates: { s
   }
   return best?.seg ?? null;
 }
+
+/**
+ * 一个任务的全部追问排成一条从旧到新的线（侧栏铺开时悬停「追问」那一格要全列出来）。
+ *
+ * 口径跟 `latestFollowUp` 是同一套，排在最后的那句必然就是它挑出来的那句：按发言时刻比；
+ * 没时刻的老发言算比有时刻的都旧，彼此按会话开始先后（`order` 大 = 开始得早 = 更旧）；
+ * 同一条会话里时刻相同的，保留它们在正文里的先后（`index`）。
+ */
+export function orderFollowUps<T extends { at?: string | null }>(
+  candidates: { seg: T; order: number; index: number }[],
+): T[] {
+  return [...candidates]
+    .sort((a, b) => {
+      const at = a.seg.at ?? "";
+      const bt = b.seg.at ?? "";
+      if (at !== bt) return at < bt ? -1 : 1;
+      if (a.order !== b.order) return b.order - a.order;
+      return a.index - b.index;
+    })
+    .map((candidate) => candidate.seg);
+}
+
+/**
+ * 一条会话的正文读下来之后，「全部追问」那份列表还算不算读全了。
+ *
+ * 判据跟 `/sessions/:id/output` 同一条：还没收口的会话可以还没建文件（那里面确实还没有
+ * 我的话）；已经收口了还找不到、或者文件在却读不动，就是丢了一截 —— 列表照样给出读到的
+ * 那些，但必须标成不全。
+ */
+export function readLeavesComplete(read: { ok: true } | { ok: false; missing: boolean }, ended: boolean): boolean {
+  return read.ok || (read.missing && !ended);
+}

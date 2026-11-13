@@ -11,7 +11,7 @@ import { db } from "./db/index.js";
 import { projects, queueItems, tasks } from "./db/schema.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { detectTaskWorkspace } from "./workspace-cleanup.js";
-import { followUpsFor } from "./task-follow-up.js";
+import { allFollowUpsOf, followUpsFor } from "./task-follow-up.js";
 import { cachedModelEfforts } from "./executors/model-probe.js";
 import { monitorBlockedReason } from "@ash/shared/monitor";
 import { claimOwnTurn, heldForAcceptance, releaseTurn, turnBusyText } from "./runs.js";
@@ -83,6 +83,15 @@ api.post("/tasks/follow-ups", async (c) => {
   const over = overBatchLimit(ids);
   if (over) return c.json(over, 400);
   return c.json(await followUpsFor(await visibleTaskIds(actorOf(c), ids)));
+});
+
+// 悬停铺开那一格时才拉：这一个任务我发过的全部追问，从旧到新（口径同上，读的也是会话 .md），
+// 外加读没读全（TaskFollowUpList.complete）。
+api.get("/tasks/:id/follow-ups", async (c) => {
+  const taskId = c.req.param("id");
+  const r = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
+  return c.json(await allFollowUpsOf(taskId));
 });
 
 // 正文批量取。跟上面那条同一个触发点（侧边栏铺开的「原始需求」列），同一套 id 上限，

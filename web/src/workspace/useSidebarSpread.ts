@@ -3,6 +3,7 @@ import type { TaskFollowUp, TaskListItem } from "@ash/shared";
 import type { TaskMemoDigest } from "@ash/shared/task-memo";
 import { TASK_BATCH_LIMIT } from "@ash/shared";
 import { api } from "../lib/api.ts";
+import { useSpreadFollowUps } from "./useSpreadFollowUps.ts";
 import { onTaskMemoWrite, taskMemoWrites } from "../task-memos/taskMemoStore.ts";
 import { indexWorkers, spreadBucket, workersFrom, type SpreadBucket, type WorkerIndex } from "../lib/taskAttention.ts";
 import { taskLook } from "../lib/taskLook.ts";
@@ -148,10 +149,8 @@ export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revisi
   const [open, setOpen] = useState(false);
   const [laidOut, setLaidOut] = useState(false);
   const [filter, setFilter] = useState<SpreadFilter>("all");
-  const [followUps, setFollowUps] = useState<Map<string, TaskFollowUp>>(new Map());
   const [memos, setMemos] = useState<Map<string, TaskMemoDigest>>(new Map());
   const [bodies, setBodies] = useState<Map<string, string>>(new Map());
-  const [loaded, setLoaded] = useState<Set<string>>(new Set());
   const closeTimer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -182,24 +181,14 @@ export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revisi
   const idsKey = useMemo(() => [...orderedIds].sort().join(","), [orderedIds]);
   const orderedRef = useRef(orderedIds);
   orderedRef.current = orderedIds;
+  const currentIds = useCallback(() => orderedRef.current, []);
+  // 追问那一列的取法、失效边界全在这个 hook 里（读取世代 + 正文版本）。
+  const { followUps, loaded } = useSpreadFollowUps(open, idsKey, currentIds, revision);
 
   useEffect(() => {
     if (!open || !idsKey) return;
     let alive = true;
     const ids = orderedRef.current;
-    // 追问那一列**只问头一批**：每条都要摸一次盘，一千多个任务全问一遍就是把铺开
-    // 这个「扫一眼」的动作变成一次全盘扫描。`loaded` 只记真问过的那批，剩下的行显示
-    // 「还没读到」而不是「还没追问过」—— 后者是在编。
-    const asked = ids.slice(0, TASK_BATCH_LIMIT);
-    setLoaded(new Set());
-    api.followUps(asked)
-      .then((rows) => {
-        if (!alive) return;
-        setFollowUps(new Map(rows.map((row) => [row.taskId, row])));
-        setLoaded(new Set(asked));
-      })
-      // 读不到就让那一列留白。铺开是个扫一眼的动作，为它弹一条错误提示更吵。
-      .catch(() => {});
     // 备忘虽然跟追问合用那一格，取法却跟**正文**一样：分批取完整批。按 `asked` 问
     // （本轮第一版）会让第 TASK_BATCH_LIMIT 行之后的任务永远显示不出备忘 —— 而
     // 写备忘只动 task_memos.updated_at、不动 tasks 行的排序时间，给一个旧任务记一条

@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { isUserFollowUp } from "@ash/shared";
 import { parseSessionOutput } from "@ash/shared/session-output";
-import { latestFollowUp } from "../src/task-follow-up-pick.ts";
+import { latestFollowUp, orderFollowUps, readLeavesComplete } from "../src/task-follow-up-pick.ts";
 
 // ── 算我发的 ────────────────────────────────────────────────────────────────
 
@@ -88,5 +88,37 @@ assert.equal(
   "都没时刻时按会话开始先后兜底",
 );
 assert.equal(latestFollowUp([]), null, "一句都没有就是没有");
+
+// ── 全部追问排成一条线 ──────────────────────────────────────────────────────
+// 悬停铺开那一格时列全部追问：从旧到新，而且最后一条必须就是 latestFollowUp 挑中的那句 ——
+// 外面那一格显示的和卡片里列在最新位置的不能是两句话。
+
+const all = [
+  { seg: { text: "执行会话里第一句", at: "2026-11-03T01:00:00.000Z" }, order: 4, index: 0 },
+  { seg: { text: "执行会话里最新的追问", at: "2026-11-03T08:50:00.000Z" }, order: 4, index: 1 },
+  { seg: { text: "审查里插的一句", at: "2026-11-03T04:10:00.000Z" }, order: 1, index: 0 },
+  { seg: { text: "较晚开始的老会话", at: null }, order: 2, index: 0 },
+  { seg: { text: "更早开始的老会话", at: null }, order: 3, index: 0 },
+  { seg: { text: "同一刻的后一句", at: "2026-11-03T01:00:00.000Z" }, order: 4, index: 2 },
+];
+assert.deepEqual(
+  orderFollowUps(all).map((seg) => seg.text),
+  ["更早开始的老会话", "较晚开始的老会话", "执行会话里第一句", "同一刻的后一句", "审查里插的一句", "执行会话里最新的追问"],
+  "按发言时刻从旧到新；没时刻的排最前、彼此按会话开始先后；同一刻保留正文顺序",
+);
+assert.equal(
+  orderFollowUps(all).at(-1)?.text,
+  latestFollowUp(all)?.text,
+  "列表最新那条就是外面那一格显示的那句",
+);
+assert.deepEqual(orderFollowUps([]), [], "一句都没有就是空列表");
+
+// ── 读没读全 ────────────────────────────────────────────────────────────────
+// 「全部追问」要报总数，少读一条会话就少算几句：读不动的会话不能被当成「里面没说过话」。
+
+assert.equal(readLeavesComplete({ ok: true }, true), true, "读到了就是读到了");
+assert.equal(readLeavesComplete({ ok: false, missing: true }, false), true, "还在跑的会话可以还没建文件");
+assert.equal(readLeavesComplete({ ok: false, missing: true }, true), false, "收了口还找不到文件 = 丢了一截");
+assert.equal(readLeavesComplete({ ok: false, missing: false }, false), false, "文件在却读不动（权限 / I/O）");
 
 console.log("✓ follow-up predicate");

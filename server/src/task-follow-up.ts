@@ -1,13 +1,14 @@
 import { open, stat } from "node:fs/promises";
-import type { ConvSeg, TaskFollowUp } from "@ash/shared";
+import type { ConvSeg, TaskFollowUp, TaskFollowUpList } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
 import { parseSessionOutput } from "@ash/shared/session-output";
 import { parseAttachmentText } from "@ash/shared/attachments";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
-import { desc, inArray } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { sessions } from "./db/schema.js";
-import { latestFollowUp } from "./task-follow-up-pick.js";
+import { latestFollowUp, orderFollowUps, readLeavesComplete } from "./task-follow-up-pick.js";
+import { readSessionOutput } from "./task-session-routes.js";
 import { sessionTranscriptPath } from "./transcript.js";
 
 type UserSeg = Extract<ConvSeg, { kind: "user" }>;
@@ -61,18 +62,24 @@ function toFollowUp(taskId: string, seg: UserSeg): TaskFollowUp {
   };
 }
 
+// 每个任务的会话 id，按开始时间倒序（0 = 最近开始的那条，即 latestFollowUp 的 order）。
+async function sessionIdsByTask(taskIds: string[]): Promise<Map<string, string[]>> {
+  const rows = await db
+    .select({ id: sessions.id, taskId: sessions.taskId, startedAt: sessions.startedAt })
+    .from(sessions)
+    .where(inArray(sessions.taskId, taskIds))
+    .orderBy(desc(sessions.startedAt));
+  const byTask = new Map<string, string[]>();
+  for (const row of rows) byTask.set(row.taskId, [...(byTask.get(row.taskId) ?? []), row.id]);
+  return byTask;
+}
+
 // 一批任务各自「我发的最后一条追问」。找不到（没跑过 / 文件没了 / 我压根没插过话）
 // 的任务直接不出现在结果里 —— 前端据此显示「还没追问过」，而不是把读盘失败伪装成空。
 export async function followUpsFor(taskIds: string[]): Promise<TaskFollowUp[]> {
   const unique = [...new Set(taskIds.filter((id) => typeof id === "string" && id))];
   if (!unique.length) return [];
-  const rows = await db
-    .select({ id: sessions.id, taskId: sessions.taskId, startedAt: sessions.startedAt })
-    .from(sessions)
-    .where(inArray(sessions.taskId, unique))
-    .orderBy(desc(sessions.startedAt));
-  const byTask = new Map<string, string[]>();
-  for (const row of rows) byTask.set(row.taskId, [...(byTask.get(row.taskId) ?? []), row.id]);
+  const byTask = await sessionIdsByTask(unique);
 
   // 任务的**每一条**会话都要读：最后一句话落在哪条会话里，不读是不知道的（见 latestFollowUp）。
   // 会话正文都不大（一次读到头的那一档就够），一个任务的会话挨个读，同时开着的文件仍是
@@ -91,4 +98,29 @@ export async function followUpsFor(taskIds: string[]): Promise<TaskFollowUp[]> {
     return seg ? toFollowUp(taskId, seg) : null;
   }));
   return results.filter((row): row is TaskFollowUp => row !== null && row.text.length + row.attachments.length > 0);
+}
+
+// 一个任务我发过的**全部**追问，从旧到新（侧栏铺开时悬停那一格才问，一次只问一个任务）。
+// 判据、截断、空消息的处理都跟上面那条同一份 —— 列表最后一条就是外面那一格显示的那句。
+// 这里每条会话都得整份读：要的是全部，不是末尾那一句，分档读尾巴省不下来。
+//
+// 跟上面那条不同，读不动的会话**不能悄悄跳过**：那边只回答「最后一句是什么」，这边要回答
+// 「一共说过几句」，少读一条会话就少算几句，所以读没读全要随结果一起交出去（complete）。
+export async function allFollowUpsOf(taskId: string): Promise<TaskFollowUpList> {
+  const rows = await db
+    .select({ id: sessions.id, endedAt: sessions.endedAt })
+    .from(sessions)
+    .where(eq(sessions.taskId, taskId))
+    .orderBy(desc(sessions.startedAt));
+  const candidates: { seg: UserSeg; order: number; index: number }[] = [];
+  let complete = true;
+  for (const [order, row] of rows.entries()) {
+    const read = await readSessionOutput(taskId, row.id);
+    if (read.ok) parseSessionOutput(read.value).filter(isFollowUp).forEach((seg, index) => candidates.push({ seg, order, index }));
+    if (!readLeavesComplete(read, row.endedAt != null)) complete = false;
+  }
+  const followUps = orderFollowUps(candidates)
+    .map((seg) => toFollowUp(taskId, seg))
+    .filter((row) => row.text.length + row.attachments.length > 0);
+  return { followUps, complete };
 }
