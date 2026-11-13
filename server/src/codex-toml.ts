@@ -145,7 +145,8 @@ export function scanCodexToml(text: string): CodexTomlScan {
 
 type Statement =
   | { kind: "header"; path: string[]; line: number; array: boolean }
-  | { kind: "pair"; path: string[]; value: string }
+  /** `first`/`last` = 这条键值对占的物理行(值跨行时 last > first),给就地改写用。 */
+  | { kind: "pair"; path: string[]; value: string; first: number; last: number }
   /** 这一行按 TOML 读不通 —— codex 自己也读不动，所以**不许**据此说「没有 ash」。 */
   | { kind: "unparsed"; why: string };
 
@@ -157,7 +158,7 @@ const isHeader = (s: Statement): s is Statement & { kind: "header" } => s.kind =
  */
 function statements(text: string): Statement[] {
   const out: Statement[] = [];
-  let pending: { path: string[]; value: string } | null = null;
+  let pending: { path: string[]; value: string; first: number } | null = null;
   let depth = 0;
   let ml: '"""' | "'''" | null = null;
   const lines = text.split(/\r?\n/);
@@ -168,7 +169,7 @@ function statements(text: string): Statement[] {
       if (scanned.bad) { out.push({ kind: "unparsed", why: scanned.bad }); return out; }
       pending.value += `\n${scanned.text}`;
       depth = scanned.depth; ml = scanned.ml;
-      if (!depth && !ml) { out.push({ kind: "pair", ...pending }); pending = null; }
+      if (!depth && !ml) { out.push({ kind: "pair", ...pending, last: n }); pending = null; }
       continue;
     }
     const line = raw.trim();
@@ -191,8 +192,8 @@ function statements(text: string): Statement[] {
     // 这份 TOML 本身不合法 ⇒ 后面的行怎么切都是猜,到此为止、如实答(上层据此 doubt)。
     if (scanned.bad) { out.push({ kind: "unparsed", why: scanned.bad }); return out; }
     depth = scanned.depth; ml = scanned.ml;
-    if (depth || ml) pending = { path: eq.path, value: scanned.text };
-    else out.push({ kind: "pair", path: eq.path, value: scanned.text });
+    if (depth || ml) pending = { path: eq.path, value: scanned.text, first: n };
+    else out.push({ kind: "pair", path: eq.path, value: scanned.text, first: n, last: n });
   }
   // **文件结尾处值还没收尾**（数组少一个 `]`、多行字符串少一个 `\"\"\"`）：这份 TOML 本身
   // 不合法，codex 整份拒载。那后面那些本该是表头/键的行全被当成了这个值的续行 —— 据此说
@@ -489,6 +490,22 @@ export function codexInjectionTarget(text: string): string | null {
  * 用内置模板 —— 一部分写在 `[mcp_servers]` 底下的点号键里时，只抠走 `.env` 那段会造出
  * 一条没有 command 的登记，codex 照样整份拒载。
  */
+/**
+ * 每条键值对落在哪张表下、占哪几行 —— 给「只改某个键、别的字节一个不动」的就地改写用
+ * (mcp-registry/relocate.ts)。`table` 是它上面最近那个表头的路径(根级为空数组)。
+ * 有读不通的语句就回 null:那种文本连「这个键在哪」都说不准,不许据此改。
+ */
+export function tomlPairSpans(text: string): { table: string[]; path: string[]; first: number; last: number }[] | null {
+  const spans: { table: string[]; path: string[]; first: number; last: number }[] = [];
+  let table: string[] = [];
+  for (const statement of statements(text)) {
+    if (statement.kind === "unparsed") return null;
+    if (statement.kind === "header") table = statement.path;
+    else spans.push({ table, path: statement.path, first: statement.first, last: statement.last });
+  }
+  return spans;
+}
+
 export function extractTomlTables(config: string, name: string, as = name): string | null {
   const lines = config.split(/\r?\n/);
   const heads = statements(config).filter(isHeader);

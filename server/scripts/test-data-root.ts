@@ -148,19 +148,39 @@ const tailored = await bench("tailored",
 const ownNode = await bench("own-node",
   { command: process.execPath, args: ["/old-checkout/mcp/dist/index.js"] },
   '[mcp_servers.ash]\\ncommand = ' + JSON.stringify(process.execPath) + '\\nargs = ["/old-checkout/mcp/dist/index.js"]\\n');
+// 合法但不是最简写法的 TOML:引号键、跨行数组、node 选项夹在脚本前。仍要搬成当前入口。
+const multiline = await bench("multiline",
+  { command: "node", args: ["--enable-source-maps", "/old-checkout/mcp/dist/index.js"] },
+  [
+    "[mcp_servers.ash]",
+    'command = "/gone/bin/node"',
+    '"args" = [',
+    '  "--enable-source-maps",',
+    '  "/old-checkout/mcp/dist/index.js", # 旧检出',
+    "]",
+    "startup_timeout_sec = 120",
+    "",
+  ].join("\\n"));
+// 文件还在但不能执行的 node:按跑不起来算,换掉。
+const deadNode = join(root, "dead", "bin", "node");
+mkdirSync(join(root, "dead", "bin"), { recursive: true });
+writeFileSync(deadNode, "", { mode: 0o644 });
+const noexec = await bench("noexec",
+  { command: deadNode, args: ["/old-checkout/mcp/dist/index.js"] },
+  '[mcp_servers.ash]\\ncommand = ' + JSON.stringify(deadNode) + '\\nargs = ["/old-checkout/mcp/dist/index.js"]\\n');
 const custom = await bench("custom",
   { type: "http", url: "https://ash.example/mcp" },
   '[mcp_servers.ash]\\ncommand = "/opt/my/ash-mcp"\\nargs = ["--fast"]\\n');
 const to = { entry: "/new/mcp/dist/index.js", node: "/new/runtime/node", runnable: () => false };
 const opencode = relocateHostFact({ status: "on", detail: "",
   raw: { type: "local", command: ["/gone/node", "/old/mcp/dist/index.js"], environment: { X: "1" }, timeout: 5 } }, to);
-const multiline = '[mcp_servers.ash]\\ncommand = "node"\\nargs = [\\n  "/old/mcp/dist/index.js",\\n]\\n';
-const untouched = relocateHostFact({ status: "on", detail: "", block: multiline,
+// 扫描器说是 ash 的脚本、块里却找不到那两条可改的语句:不许原样发布一条已知失效的登记。
+const unmovable = relocateHostFact({ status: "on", detail: "", block: '[mcp_servers.ash]\\ncommand = "node"\\n',
   launch: { command: "node", args: ["/old/mcp/dist/index.js"], ashUrl: null } }, to);
 const out = {
   built: existsSync(join(CODE_DIR, "mcp", "dist", "index.js")),
   entry: join(CODE_DIR, "mcp", "dist", "index.js"), node: mcpNodeCommand(), execPath: process.execPath,
-  tailored, ownNode, custom, opencode: opencode.raw, untouched: untouched.block === multiline,
+  tailored, ownNode, multiline, noexec, custom, opencode: opencode.fact.raw, unmovable,
   shapes: [
     launchesAshMcp("node", ["/a/mcp/dist/index.js"]),
     launchesAshMcp("/usr/bin/node", ["/a/mcp/dist/index.js", "--x"]),
@@ -169,13 +189,14 @@ const out = {
     launchesAshMcp("/opt/my/ash-mcp", ["/a/mcp/dist/index.js"]),
   ],
 };`) as Record<string, any>;
-  assert.deepEqual(moved.shapes, [true, true, false, false, false], "只认 node 起 ash 自己那份 MCP 脚本的写法");
+  assert.deepEqual(moved.shapes, [true, true, false, true, false], "认 node(可带选项)起 ash 自己那份 MCP 脚本的写法");
   // 纯函数那一层(不依赖本地有没有 build 过 MCP):
   assert.deepEqual(moved.opencode, {
     type: "local", command: ["/new/runtime/node", "/new/mcp/dist/index.js"], environment: { X: "1" }, timeout: 5,
   }, "opencode 那种数组写法:只换 node 和入口,别的键原样");
-  assert.equal(moved.untouched, true, "TOML 写法超出能安全改写的范围:原样搬,不丢字段");
-  for (const bench of ["tailored", "ownNode"]) {
+  assert.ok(typeof moved.unmovable.why === "string" && moved.unmovable.why.includes("/new/mcp/dist/index.js"),
+    "改不动就报失败,并说清该改成什么");
+  for (const bench of ["tailored", "ownNode", "multiline", "noexec"]) {
     assert.equal(moved[bench].claude.ok, true, `${bench}:claude`);
     assert.equal(moved[bench].codex.ok, true, `${bench}:codex`);
   }
@@ -193,6 +214,13 @@ const out = {
     assert.ok(!codexText.includes("/old-checkout/") && !codexText.includes("/gone/"), `TOML 族:旧位置不许留下\n${codexText}`);
     assert.deepEqual(moved.ownNode.claudeEntry, { command: moved.execPath, args: [moved.entry] }, "跑得起来的 node 不动");
     assert.ok(moved.ownNode.codexText.includes(`command = ${JSON.stringify(moved.execPath)}`));
+    const ml = moved.multiline.codexText;
+    assert.ok(ml.includes(`args = [${JSON.stringify("--enable-source-maps")}, ${JSON.stringify(moved.entry)}]`), `引号键 + 跨行数组 + node 选项:\n${ml}`);
+    assert.ok(ml.includes(`command = ${JSON.stringify(moved.node)}`) && ml.includes("startup_timeout_sec = 120"), ml);
+    assert.ok(!ml.includes("/old-checkout/") && !ml.includes("/gone/"), `旧位置不许留下:\n${ml}`);
+    assert.deepEqual(moved.multiline.claudeEntry.args, ["--enable-source-maps", moved.entry], "JSON 族同理:选项留着,只换脚本");
+    assert.equal(moved.noexec.claudeEntry.command, moved.node, "文件在但不能执行的 node 按跑不起来算");
+    assert.ok(moved.noexec.codexText.includes(`command = ${JSON.stringify(moved.node)}`));
   } else {
     console.log("（没 build 过 mcp/dist/index.js：没有当前入口可换，退回原样搬，登记那一半跳过）");
     assert.deepEqual(moved.tailored.claudeEntry.args, ["/old-checkout/mcp/dist/index.js"]);

@@ -26,7 +26,7 @@ import { resolveBin } from "../executors/bin-resolve.js";
 import { CODE_DIR } from "../paths.js";
 import { isInsidePath } from "../platform.js";
 import { ashMcpConfigDir, ashMcpMechanism } from "./catalog.js";
-import { commandRunnable, relocateHostFact } from "./relocate.js";
+import { relocateHostFact, type RelocateResult } from "./relocate.js";
 import {
   ashMcpHostSources, ashMcpOpaqueSibling, effectiveConfigState, readingFor, resolveAshMcp, siteFileFor,
 } from "./sources.js";
@@ -228,7 +228,9 @@ function composeEntry(
     enabled: mechanism.writeEnabled === true,
     ...(mechanism.writeType ? { type: mechanism.writeType } : {}),
   };
-  const host = portableHostFact(hostFact(agentType, hostHome, env));
+  const moved = portableHostFact(hostFact(agentType, hostHome, env));
+  if ("why" in moved) return moved;
+  const host = moved.fact;
   if (blockShape(shape)) {
     // 宿主那段原样搬(连子表一起),没有就按一条登记现渲染一段。
     let block = host?.block ?? null;
@@ -283,14 +285,15 @@ function hostFact(agentType: string, hostHome: string, env: NodeJS.ProcessEnv): 
 
 /**
  * 宿主那条登记搬进隔离档之前,把 ash 自己的安装位置(脚本入口、跑不起来的 node)改成这一份的;
- * 用户写的其余字段一个不动。缘由见 relocate.ts。还没 build 出 MCP 就原样搬。
+ * 用户写的其余字段一个不动,改不动就如实报失败。缘由见 relocate.ts。还没 build 出 MCP 就原样搬。
  */
-function portableHostFact(fact: AshMcpNameFact | null): AshMcpNameFact | null {
-  if (!existsSync(MCP_ENTRY)) return fact;
+function portableHostFact(fact: AshMcpNameFact | null): RelocateResult {
+  if (!existsSync(MCP_ENTRY)) return { fact };
   return relocateHostFact(fact, {
     entry: MCP_ENTRY,
     node: mcpNodeCommand(),
-    runnable: (command) => commandRunnable(command, (bin) => resolveBin(bin) !== null),
+    // 和 PATH 查找同一套判据:绝对路径也要是**可执行文件**,光「在」不算(目录、丢了执行位的都起不来)。
+    runnable: (command) => resolveBin(command) !== null,
   });
 }
 
