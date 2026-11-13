@@ -24,6 +24,7 @@ import type { LiveAgentEvent, PersistedTurnTimes } from "./conversationTurnParts
 import { agentLabel, latestTurnStart, recordPersistedTurn, sessionRun } from "./conversationTurnParts.ts";
 import { appendLiveTimeline } from "./conversationLiveTurns.ts";
 import { appendTraceFragments } from "./conversationTraceFragments.ts";
+import { segmentTraceWindow, strayTraceSources } from "./conversationTraceSources.ts";
 import { contentVersion } from "../lib/useStickToBottom.ts";
 import { conversationItemSize } from "./conversationContentSize.ts";
 export { conversationToMarkdown } from "./conversationMarkdown.ts";
@@ -276,7 +277,8 @@ function appendPersistedSession(
     sources: [{ sessionId: session.id, index, fingerprint: segmentFingerprint(segments[index]!) }],
     ...(segments[index]!.deleted ? { deleted: true as const } : {}),
   });
-  const traceGroups = groupedTrace(normalizedPersistedTrace(trace, session));
+  const sessionTrace = normalizedPersistedTrace(trace, session);
+  const traceGroups = groupedTrace(sessionTrace);
   const consumedTrace = new Set<string>();
   // ── 一遍过认三件事：谁是旁注、哪条旁注要把上下两截并回一颗气泡、trace 从哪儿切开 ──
   //
@@ -311,14 +313,18 @@ function appendPersistedSession(
   // agent 段认领之前：原生引导那一路插话前常常一个字都没吐（agent 正连着跑工具），既没有
   // .md 正文能顺手触发切分，等上一段领走整组之后也已经晚了。
   //
-  // 插话一律是切点。**砸进回合中间的注记（trace 判 inside）只在它前后都有本回合正文时
-  // 才是切点**：
-  // - 后面有正文：那种情形下 parseSessionOutput 已经在 sentinel 处把正文切成了两段 agent，
+  // 插话一律是切点。**砸进回合中间的注记（trace 判 inside）只在前面有本回合正文、并且
+  // 紧跟着的下一段就是本回合正文时才是切点**——不看它是哪一种记录：
+  // - 紧跟着正文：那种情形下 parseSessionOutput 已经在 sentinel 处把正文切成了两段 agent，
   //   trace 不跟着切，前面那截（旁注常常正好落在 agent 刚吐出一两个字的时候）就会把整组
   //   trace 连同几百次工具调用一起领走，真正写正文的那一段一个事件都拿不到。
-  // - 后面没正文就不能切：那一组 trace 会没人认领，落进「无正文兜底气泡」凭空多出一颗，
-  //   而直播那边旁注根本不拆气泡（见 appendAgent 跨旁注回捞当前回合），刷新前后就长得
-  //   不一样了。
+  // - 紧跟着的不是正文就不能切，哪怕再往后还有正文：切出来的那一截只有紧跟在切点后面的
+  //   正文会来领（turnStartedAt 跟着切点走），这里却是又一条记录（两条记录夹着几步）、一条
+  //   输入（等哨兵的那一回合就此收工，后面的正文是叫醒之后的新一轮），或者什么都没有。那一截
+  //   没人认领，落进「无正文兜底气泡」凭空多出一颗，还排在真回合后面被当成「正在跑」；而直播
+  //   那边旁注根本不拆气泡（见 appendAgent 跨旁注回捞当前回合），刷新前后就长得不一样了。
+  //   不切，这几步就留在前面那截的那一组里，跟着它并进这一回合的气泡（删除出处见
+  //   conversationTraceSources）。
   // - **前面**没有本回合正文同样不能切（用户 2026-09-16 报的）：切了一样凭空多出一颗兜底
   //   气泡，而且这回连 mergeTurnChunk 都救不回来 —— 上半截压根不是一颗气泡，没有并的对象。
   //   这正是「先连着跑几十分钟工具」那种回合的形状：旁注占了 .md 的第一行，等 agent 终于
@@ -361,8 +367,9 @@ function appendPersistedSession(
         && (midTurn || (placement === "unknown" && segment.aside))) {
         midTurnAt.add(segment.at);
       }
-      if (segments.slice(index + 1).some((later) => later.kind === "agent")
-        && (!midTurn || proseSinceTurnStart)) {
+      if (midTurn
+        ? proseSinceTurnStart && segments[index + 1]?.kind === "agent"
+        : segments.slice(index + 1).some((later) => later.kind === "agent")) {
         splitPoints.add(segment.at);
       }
     }
@@ -469,6 +476,11 @@ function appendPersistedSession(
         segments: contentSegments(traceEntries, segment.text, `persisted:segment:${session.id}:${index}`),
         ...origin(index),
       };
+      // 领到的步子落在这段正文的删除时间窗外（记录之后那几步）：另报成 trace 出处，删这颗
+      // 气泡时一起删掉（见 conversationTraceSources）。
+      if (!chunk.deleted) {
+        chunk.sources!.push(...strayTraceSources(session.id, sessionTrace, traceEntries, segmentTraceWindow(segments, index)));
+      }
       // 中间只隔着一条「那一刻回合还在飞」的旁注 —— 这就是同一回合的下半截，并回去。
       // 身份再核一道：同一条会话上换轮验证也算换人（reviewerKey），换了人就不是同一段
       // 话，哪怕旁注骗过了上面那道结构判据也粘不到一起。只有**自己带 run 事件**的那截
