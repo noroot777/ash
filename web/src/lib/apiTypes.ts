@@ -70,6 +70,10 @@ export type RemoteTaskSnapshot = {
 export type SessionTraceEntry = {
   at: string;
   turnStartedAt: string;
+  /** 这条记录在会话里的号（同 shared/src/session-output.ts 的 RecordIdentity）。老记录、读侧补出来的没有。 */
+  seq?: number;
+  /** 服务端**读的时候**补出来的（盘上没有）：图片账本补回的图、子智能体的模型档案。删除指纹不数它们。 */
+  origin?: "journal" | "models";
   event:
     | { kind: "text"; text: string }
     | { kind: "thinking"; text: string }

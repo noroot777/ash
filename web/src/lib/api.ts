@@ -289,6 +289,8 @@ export const api = {
       sendAt?: string;
       /** 等这个任务完成后再发(与 sendAt 二选一)。 */
       afterTaskId?: string;
+      /** 页面先画出来的那份(乐观回显)的凭据:服务端落盘、播出时原样带回,页面凭它认回同一句。 */
+      clientKey?: string;
     },
   ): Promise<ReplyTaskResult> =>
     request(`/tasks/${id(taskId)}/reply`, json("POST", { text, ...options })),
@@ -574,7 +576,11 @@ export const api = {
   // 页面上那份正文旧了服务端会 409，而不是删错一段。
   deleteConversationSegments: (
     sessionId: string,
-    segments: Array<{ index: number; fingerprint: string; answerId?: string } | { trace: { from: string; to: string; fingerprint: string } }>,
+    segments: Array<
+      | { index: number; fingerprint: string; answerId?: string }
+      | { trace: { from: string; to: string; fingerprint: string } }
+      | { steps: { turnStartedAt: string; after: number | null; until: number | null; fingerprint: string } }
+    >,
   ): Promise<{ deleted: number }> =>
     humanAction(`/sessions/${id(sessionId)}/conversation/delete`, json("POST", { segments })),
   duetTranscript: (taskId: string): Promise<unknown[]> =>

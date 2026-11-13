@@ -1,6 +1,11 @@
 // 直播那一路:把 SSE 到达的事件增量追加进已经排好的落盘时间线。
 // 从 conversationModel 拆出来的一块 —— 那边管「落盘 → 气泡」和最后几轮收口,这里只管
 // 「一条事件到了,写进哪颗气泡」。两边共用的小件在 conversationTurnParts。
+//
+// **只给老记录**:带身份的事件(带 `seq` 的,以及已认出带身份的会话上的回合收口)由 conversationAssembler
+// 按身份归位,不走这里。这里的「跨旁注回捞当前回合」「同文字 30 秒内算重复」都是猜法,只留给没有身份的
+// 老会话(团队调度台、duet、升级前的会话、老服务端),别再往上加新的猜法。
+// 往气泡里追加正文 / 执行过程那几个小件(appendAgentText 等)两边共用,身份那一路也调它们。
 import type { ContextUsage, Session } from "@ash/shared";
 import { stableBlockBoundary } from "@ash/shared/markdown-images";
 import { addUsage } from "@ash/shared/usage";
@@ -29,7 +34,7 @@ const SNAPSHOT_DUPLICATE_WINDOW_MS = 30_000;
 // 同一次——一轮很快结束又续跑一次，新那条就被当成上一条的副本丢掉，它起头的回合头上便没了
 // 起因。它的落盘 sentinel 与直播事件是同一个时刻写下的（server 的 recordSystemResumeTurn），
 // 按会话 + 时刻精确对上才是同一条。
-function timelineAfterPersistedTurns(
+export function timelineAfterPersistedTurns(
   timeline: TimelineEntry[],
   persistedTurns: PersistedTurnTimes,
 ): TimelineEntry[] {
@@ -58,7 +63,7 @@ function timelineAfterPersistedTurns(
   });
 }
 
-function liveRun(event: LiveAgentEvent): AgentRun | undefined {
+export function liveRun(event: LiveAgentEvent): AgentRun | undefined {
   if (event.model === undefined && event.reasoningEffort === undefined) return undefined;
   return {
     model: event.model?.trim() || null,
@@ -66,7 +71,7 @@ function liveRun(event: LiveAgentEvent): AgentRun | undefined {
   };
 }
 
-function currentSegment(agent: AgentItem): AgentContentSegment {
+export function currentSegment(agent: AgentItem): AgentContentSegment {
   const existing = agent.segments.at(-1);
   if (existing) return existing;
   const created = { id: `${agent.id}:segment:0`, markdown: "", events: [], attachments: [], awaiting: false };
@@ -74,14 +79,14 @@ function currentSegment(agent: AgentItem): AgentContentSegment {
   return created;
 }
 
-function appendAgentText(agent: AgentItem, text: string): void {
+export function appendAgentText(agent: AgentItem, text: string): void {
   agent.markdown += text;
   const segment = currentSegment(agent);
   segment.markdown += text;
   segment.awaiting = false; // 正文来了 = 上游回话了(见 AgentContentSegment.awaiting)
 }
 
-function appendAgentAux(agent: AgentItem, event: AgentTraceEvent): void {
+export function appendAgentAux(agent: AgentItem, event: AgentTraceEvent): void {
   let segment = currentSegment(agent);
   const normalized = auxEvent(event);
   /* 正文之后另起一段,只为**画得出来**的那一步(口径见 segmentHasVisibleContent)。
@@ -105,7 +110,7 @@ function appendAgentAux(agent: AgentItem, event: AgentTraceEvent): void {
   segment.awaiting = awaitingAfterEvent(normalized);
 }
 
-function appendAgentAttachment(agent: AgentItem, event: { path?: string; source?: string; ref?: number; pos?: number; lost?: boolean }): void {
+export function appendAgentAttachment(agent: AgentItem, event: { path?: string; source?: string; ref?: number; pos?: number; lost?: boolean }): void {
   const segment = currentSegment(agent);
   // **附件不切段**(落盘重建那一路同一条规矩,理由写在 conversationSegments):切了段就是
   // 把同一条消息的正文分成两份分别解析,语法边界跟着事件布局变(审查第 2 轮 F2)。
@@ -237,107 +242,108 @@ function appendEvent(items: ConversationItem[], item: ConversationEventItem): vo
 }
 
 /**
- * 把直播到达的事件追加到 `items` 末尾，返回各会话此刻的上下文水位。
+ * 把一条直播到达的老记录事件追加到 `items` 末尾（上下文水位记进 `liveContext`）。
  *
- * 落盘那一路必须已经排完序：直播是「按到达顺序往后接」，不再参与排序。
+ * 落盘那一路必须已经排完序：直播是「按到达顺序往后接」，不再参与排序。哪几条要接、哪几条是落盘那份的
+ * 重复拷贝，调用方先拿 timelineAfterPersistedTurns 筛过。
  */
-export function appendLiveTimeline(
+export function appendLiveEntry(
   items: ConversationItem[],
-  timeline: TimelineEntry[],
+  entry: TimelineEntry,
   sessions: Session[],
-  persistedTurns: PersistedTurnTimes,
-): Map<string, ContextUsage> {
-  // 直播里报上来的上下文水位，按会话取最后一条（覆盖语义，见 shared/src/usage.ts）。
-  const liveContext = new Map<string, ContextUsage>();
-  for (const entry of timelineAfterPersistedTurns(timeline, persistedTurns)) {
-    if (entry.kind === "user") {
-      items.push({
-        kind: "user",
-        id: entry.id,
-        text: entry.text,
-        attachments: entry.attachments,
-        at: entry.at,
-        isAnswer: entry.isAnswer,
-        bySystem: entry.bySystem,
-        monitorWake: entry.monitorWake,
-        answerIds: entry.answerIds,
-        sessionId: entry.sessionId,
-        sessionRole: entry.sessionRole ?? sessions.find((session) => session.id === entry.sessionId)?.role,
-      });
-      continue;
-    }
-    const event = entry.event.event;
-    if (event.kind === "system") {
-      const text = normalizeSessionNoteText(event.text);
-      const resume = resumeNoteOf(text, event.resume);
-      appendEvent(items, {
-        kind: "event",
-        id: entry.id,
-        text,
-        at: event.at,
-        sessionId: entry.event.sessionId,
-        tone: eventTone(text, event.notice, event.level),
-        variant: "note",
-        verify: isVerifyNote(text, event.notice),
-        ...(event.notice ? { notice: event.notice } : {}),
-        ...(resume ? { resume } : {}),
-        // 直播这一路认服务端的标就够了：旁注本来就不拆气泡（见 appendAgent 跨旁注回捞
-        // 当前回合），带上它只是为了同样别去定这一回合的结束时刻。
-        aside: event.aside === true,
-      });
-      continue;
-    }
-    // 会话轮换信号（`scope:"session"`，见 server 的 session-notice.ts）不是本回合的
-    // 失败：服务端已经把它转成持久 system 注记，这里再兜一道，免得任何漏转的直播事件
-    // 把一次 exit 0 的健康回合渲染成红色「异常」。
-    if (event.kind === "error" && event.scope === "session") {
-      appendEvent(items, {
-        kind: "event",
-        id: entry.id,
-        text: event.message,
-        sessionId: entry.event.sessionId,
-        tone: noteTone(event.message),
-        variant: "note",
-      });
-      continue;
-    }
-    if (event.kind === "done") {
-      // 带了这一回合自己的结局就照它（exit 0 却被判失败的那种只有它说得清），没带才看退出码。
-      const failed = turnEndedAbnormally({ exitStatus: event.exitStatus, turnOutcome: event.turnOutcome });
-      appendEvent(items, {
-        kind: "event",
-        id: entry.id,
-        text: failed ? `执行异常结束 · exit ${event.exitStatus}` : "本轮执行结束",
-        tone: failed ? "error" : "neutral",
-        variant: "boundary",
-        ...(failed && event.interruption ? { interruption: event.interruption } : {}),
-      });
-      continue;
-    }
-    if (event.kind === "turnEnd") {
-      appendEvent(items, event.turnOutcome === "failed"
-        ? { kind: "event", id: entry.id, text: "执行异常结束", tone: "error", variant: "boundary" }
-        : { kind: "event", id: entry.id, text: "本回合结束，等待下一条消息", variant: "boundary" });
-      continue;
-    }
-    // session 是执行器的内部簿记事件(心跳/回合结束都会重发),旧 UI 就不渲染;
-    // cliSessionId 已经在会话详情/恢复按钮那里可查,会话流里不展示。
-    if (event.kind === "session") continue;
-    const agent = appendAgent(items, entry.event, sessions);
-    if (event.kind === "text") appendAgentText(agent, event.text);
-    if (event.kind === "attachment") appendAgentAttachment(agent, event);
-    // 用量恒在本回合的 turnEnd/done 之前到，所以它落在的就是刚说完话的那条气泡。
-    if (event.kind === "usage") {
-      agent.usage = agent.usage ? addUsage(agent.usage, event.usage) : event.usage;
-      // 它不进执行过程那一列(只是这一轮的账),但**它到达就说明上游回了话** —— 等待状态
-      // 跟着解除,口径与落盘重建、讨论、服务端共用的那一份一致(第 4 轮审查 N1)。
-      currentSegment(agent).awaiting = false;
-    }
-    // 水位是覆盖不是累加：后到的那条就是此刻，跟它前面报过什么无关。
-    if (event.kind === "context") liveContext.set(entry.event.sessionId, event.context);
-    if (event.kind === "tool" || event.kind === "thinking" || event.kind === "error") {
-      appendAgentAux(agent, event);
-    }
+  liveContext: Map<string, ContextUsage>,
+): void {
+  if (entry.kind === "user") {
+    items.push({
+      kind: "user",
+      id: entry.id,
+      text: entry.text,
+      attachments: entry.attachments,
+      at: entry.at,
+      isAnswer: entry.isAnswer,
+      bySystem: entry.bySystem,
+      monitorWake: entry.monitorWake,
+      answerIds: entry.answerIds,
+      sessionId: entry.sessionId,
+      sessionRole: entry.sessionRole ?? sessions.find((session) => session.id === entry.sessionId)?.role,
+    });
+    return;
   }
-  return liveContext;
+  const event = entry.event.event;
+  if (event.kind === "system") {
+    appendEvent(items, liveSystemNote(entry.id, entry.event.sessionId, event));
+    return;
+  }
+  // 会话轮换信号（`scope:"session"`，见 server 的 session-notice.ts）不是本回合的
+  // 失败：服务端已经把它转成持久 system 注记，这里再兜一道，免得任何漏转的直播事件
+  // 把一次 exit 0 的健康回合渲染成红色「异常」。
+  if (event.kind === "error" && event.scope === "session") {
+    appendEvent(items, {
+      kind: "event",
+      id: entry.id,
+      text: event.message,
+      sessionId: entry.event.sessionId,
+      tone: noteTone(event.message),
+      variant: "note",
+    });
+    return;
+  }
+  if (event.kind === "done") {
+    // 带了这一回合自己的结局就照它（exit 0 却被判失败的那种只有它说得清），没带才看退出码。
+    const failed = turnEndedAbnormally({ exitStatus: event.exitStatus, turnOutcome: event.turnOutcome });
+    appendEvent(items, {
+      kind: "event",
+      id: entry.id,
+      text: failed ? `执行异常结束 · exit ${event.exitStatus}` : "本轮执行结束",
+      tone: failed ? "error" : "neutral",
+      variant: "boundary",
+      ...(failed && event.interruption ? { interruption: event.interruption } : {}),
+    });
+    return;
+  }
+  if (event.kind === "turnEnd") {
+    appendEvent(items, event.turnOutcome === "failed"
+      ? { kind: "event", id: entry.id, text: "执行异常结束", tone: "error", variant: "boundary" }
+      : { kind: "event", id: entry.id, text: "本回合结束，等待下一条消息", variant: "boundary" });
+    return;
+  }
+  // session 是执行器的内部簿记事件(心跳/回合结束都会重发),旧 UI 就不渲染;
+  // cliSessionId 已经在会话详情/恢复按钮那里可查,会话流里不展示。
+  if (event.kind === "session") return;
+  const agent = appendAgent(items, entry.event, sessions);
+  if (event.kind === "text") appendAgentText(agent, event.text);
+  if (event.kind === "attachment") appendAgentAttachment(agent, event);
+  // 用量恒在本回合的 turnEnd/done 之前到，所以它落在的就是刚说完话的那条气泡。
+  if (event.kind === "usage") {
+    agent.usage = agent.usage ? addUsage(agent.usage, event.usage) : event.usage;
+    // 它不进执行过程那一列(只是这一轮的账),但**它到达就说明上游回了话** —— 等待状态
+    // 跟着解除,口径与落盘重建、讨论、服务端共用的那一份一致(第 4 轮审查 N1)。
+    currentSegment(agent).awaiting = false;
+  }
+  // 水位是覆盖不是累加：后到的那条就是此刻，跟它前面报过什么无关。
+  if (event.kind === "context") liveContext.set(entry.event.sessionId, event.context);
+  if (event.kind === "tool" || event.kind === "thinking" || event.kind === "error") {
+    appendAgentAux(agent, event);
+  }
+}
+
+/** 直播到达的一条系统注记 → 旁注条目（老记录那一路与身份那一路共用）。 */
+export function liveSystemNote(id: string, sessionId: string, event: Extract<LiveAgentEvent["event"], { kind: "system" }>): ConversationEventItem {
+  const text = normalizeSessionNoteText(event.text);
+  const resume = resumeNoteOf(text, event.resume);
+  return {
+    kind: "event",
+    id,
+    text,
+    at: event.at,
+    sessionId,
+    tone: eventTone(text, event.notice, event.level),
+    variant: "note",
+    verify: isVerifyNote(text, event.notice),
+    ...(event.notice ? { notice: event.notice } : {}),
+    ...(resume ? { resume } : {}),
+    // 直播这一路认服务端的标就够了：旁注本来就不拆气泡（见 appendAgent 跨旁注回捞
+    // 当前回合），带上它只是为了同样别去定这一回合的结束时刻。
+    aside: event.aside === true,
+  };
 }

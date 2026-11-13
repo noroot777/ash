@@ -5,13 +5,26 @@
 // 画在这颗气泡里，却落在它那段正文的时间窗外面。光报正文段，回合删了、这几步却还留在 trace
 // 里（命令和输出原样都在），哪天不再被那段已删的正文领走，就冒成一颗只有过程的气泡。所以
 // 窗外那几步另报成 trace 时间段（服务端一次删除两种出处都收，见 server/src/conversation-redact.ts）。
+import type { Session } from "@ash/shared";
 import type { ConvSeg } from "@ash/shared/session-output";
 import { traceKeptOnDelete, traceSpanFingerprint } from "@ash/shared/session-output";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationSource } from "./conversationModel.ts";
 
 /**
- * 服务端**读的时候**补出来的那几条：盘上没有，只在页面拿到的这份里。两处补法都是**接在末尾**的
+ * 服务端**读的时候**补出来的那几条：盘上没有，只在页面拿到的这份里，删除指纹不数它们。
+ *
+ * 服务端给补出来的条目打了来源记号（`origin`），就只认记号。会话行带不带 `turnEnds` 是同一批服务端
+ * 改动带出来的，所以拿它分辨「这是认记号的服务端」：带了就只认记号、一条不猜；没带（老服务端）才退回
+ * 下面 readSideTail 那套按形状、按位置的推断 —— 那一套**只给老服务端**，别再扩。
+ */
+export function readSideEntries(trace: readonly SessionTraceEntry[], session: Pick<Session, "turnEnds">): Set<SessionTraceEntry> {
+  if (session.turnEnds === undefined) return readSideTail(trace);
+  return new Set(trace.filter((entry) => entry.origin !== undefined));
+}
+
+/**
+ * 老服务端（没打来源记号）的推断，见 readSideEntries。两处补法都是**接在末尾**的
  * —— 图片账本补回的图（server 的 mergeImageJournal：顶层附件，或子智能体那一层包在 tool 事件
  * 里的附件），之后是子智能体的模型档案（server 的 enrichNativeWorkModels：status 为 unknown 的
  * agent 事件）。所以从末尾往前认这三种形状、认到第一条别的就停：前面那一截就是盘上原样的顺序。
@@ -23,9 +36,8 @@ import type { ConversationSource } from "./conversationModel.ts";
  * 交回的图），看了位置也还有一种会认错 —— 盘上 trace 自己恰好以这几种形状收尾（停止、异常
  * 退出、没收到用量的回合都可能）。认错的后果只有一种：真有的那条照样在删除时间段里，指纹却
  * 少数了它，服务端整次拒绝删除（附件不进指纹，认错也不影响，照样删掉）。不会删一半还报删好了。
- * 要彻底不靠推断，得由服务端在读的时候给补出来的条目打上来源标记。
  */
-export function readSideTail(trace: readonly SessionTraceEntry[]): Set<SessionTraceEntry> {
+function readSideTail(trace: readonly SessionTraceEntry[]): Set<SessionTraceEntry> {
   const readSide = new Set<SessionTraceEntry>();
   for (let index = trace.length - 1; index >= 0; index -= 1) {
     const entry = trace[index]!;
