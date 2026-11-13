@@ -98,7 +98,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   func loadPage() {
     stopHealthPolling()
     guard AshConfig.isLocal else { return showPage() }
-    AshHealth.probe { probe in
+    AshHealth.probe(AshConfig.windowHealthURL) { probe in
       DispatchQueue.main.async { [weak self] in
         guard let self else { return }
         guard let instance = AshHealth.ours(probe) else { return self.instanceLost() }
@@ -111,18 +111,19 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     offlineView.isHidden = true
     // 失败页、撤下后的空白页之后 webView.url 不是 ash 的，此时回到撤下前的路由或首页；正常情况下
     // 原地重载保住当前路由。
-    let target = [webView.url, resumeURL].compactMap { $0 }.first(where: AshConfig.isSameOrigin) ?? AshConfig.baseURL
+    let target = [webView.url, resumeURL].compactMap { $0 }.first(where: AshConfig.isSameOrigin) ?? AshConfig.windowURL
     resumeURL = nil
     webView.load(URLRequest(url: target))
     startInstanceGuard()
   }
 
-  /// 页面之后发的每个请求（fetch、SSE、页面本身、预览）都带着认过的那一份的实例号：端口换了人，
-  /// 新来的那份见到别人的实例号就不执行（server/src/instance-binding.ts）。下面的定时认人和导航前
-  /// 认人只负责撤页和说明，挡写请求靠的是这一道。
+  /// 页面之后发的每个请求（fetch、SSE、页面本身、预览）都带着认过的那一份的实例号。窗口连的是这份
+  /// 服务专用的端口（AshConfig.windowPort），服务一停那个端口就空着，别的 ash 接不到窗口的请求；
+  /// 自己那份重起过、或者有谁照着同一个端口起了一份新版 ash，实例号对不上就不执行
+  /// （server/src/instance-binding.ts）。定时认人和导航前认人只负责撤页和说明。
   func bind(_ instance: AshInstance, then: @escaping () -> Void) {
     guard let id = instance.id, id != boundInstance else { return then() }
-    guard let host = AshConfig.baseURL.host,
+    guard let host = AshConfig.windowURL.host,
           let cookie = HTTPCookie(properties: [.name: Self.instanceCookie, .value: id, .domain: host, .path: "/"]) else {
       return then()
     }
@@ -154,7 +155,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   private func checkInstance() {
     guard !guardProbing, guardTimer != nil else { return }
     guardProbing = true
-    AshHealth.probe { probe in
+    AshHealth.probe(AshConfig.windowHealthURL) { probe in
       DispatchQueue.main.async { [weak self] in
         guard let self else { return }
         self.guardProbing = false
@@ -205,7 +206,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   }
 
   @objc func openInBrowser(_ sender: Any?) {
-    NSWorkspace.shared.open(webView.url ?? AshConfig.baseURL)
+    NSWorkspace.shared.open(webView.url.map(AshConfig.browserURL) ?? AshConfig.baseURL)
   }
 
   @objc func goBack(_ sender: Any?) { webView.goBack() }

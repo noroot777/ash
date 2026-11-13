@@ -25,6 +25,8 @@ struct AshInstance {
   let dataDir: String?
   let codeDir: String?
   let localOnly: Bool?
+  /// 它给 app 窗口监听的专用端口（server/src/window-port.ts），没监听上是 nil。
+  let windowPort: Int?
 
   /// 是不是本 app 管的那份。
   var isOurs: Bool { mismatch == nil }
@@ -37,6 +39,9 @@ struct AshInstance {
     guard AshHealth.samePath(dataDir, AshConfig.dataURL.path) else { return "它用的是另一份数据。" }
     guard AshHealth.samePath(codeDir, AshConfig.runtimeURL.path) else { return "它用的是 app 的数据，跑的却不是 app 自带的代码。" }
     guard localOnly else { return "它跑的是 app 自带的代码，但没开本机自用模式（不是 app 起的）。" }
+    guard windowPort == AshConfig.windowPort else {
+      return "它没在 app 窗口的专用端口 \(AshConfig.windowPort) 上监听（那个端口多半被别的程序占着，或者它不是这个版本的 app 起的）。"
+    }
     return nil
   }
 }
@@ -55,7 +60,8 @@ enum AshHealth {
       id: instance?["id"] as? String,
       dataDir: instance?["dataDir"] as? String,
       codeDir: instance?["codeDir"] as? String,
-      localOnly: instance?["localOnly"] as? Bool))
+      localOnly: instance?["localOnly"] as? Bool,
+      windowPort: instance?["windowPort"] as? Int))
   }
 
   /// 窗口能不能把页面载进来：本机地址必须是自己那份；连别处的 ash 时只要它是 ash。
@@ -71,8 +77,9 @@ enum AshHealth {
   }
 
   /// 探一次。回调在 URLSession 的后台队列上。
-  static func probe(completion: @escaping (AshProbe) -> Void) {
-    var request = URLRequest(url: AshConfig.healthURL, timeoutInterval: 1.5)
+  /// `url` 缺省问 4317 那一边（启动器认端口上是谁）；窗口认人问的是它自己连着的专用端口。
+  static func probe(_ url: URL = AshConfig.healthURL, completion: @escaping (AshProbe) -> Void) {
+    var request = URLRequest(url: url, timeoutInterval: 1.5)
     request.cachePolicy = .reloadIgnoringLocalCacheData
     URLSession.shared.dataTask(with: request) { data, response, _ in
       completion(classify(response: response, data: data))

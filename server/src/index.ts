@@ -21,6 +21,7 @@ import { recordListeningPort } from "./listening-port.js";
 import { guardMonitorHook } from "./monitor-hook-failsafe.js";
 import { mountPreviewProxy, attachPreviewUpgrades } from "./preview-proxy.js";
 import { instanceBinding } from "./instance-binding.js";
+import { listenWindowPort } from "./window-port.js";
 import { responseCompression } from "./response-compression.js";
 import { mountPreviewOpenRoutes } from "./preview-access.js";
 import { holdCodeLease } from "@ash/shared/code-lease";
@@ -656,6 +657,7 @@ app.get("/*", (c) => {
 
 // Bind the port before starting the scheduler. A process that cannot accept
 // HTTP callbacks must never be allowed to poll schedules or launch agents.
+await listenWindowPort(app.fetch, attachPreviewUpgrades);
 activeServer = serve({ fetch: app.fetch, port, ...(LOCAL_ONLY ? { hostname: LOCAL_ONLY_HOSTNAME } : {}) }, (info) => {
   // PORT=0 的测试/临时实例在绑定后才知道真实端口；接力清单读取这个动态值，才能把
   // 可回连地址带给对端，而不是把不可用的 0 端口写进任务历史。只写模块内状态，不能

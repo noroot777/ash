@@ -25,8 +25,9 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Ash.
 ## 服务怎么起
 
 - 打开 app 先探 `/api/health`。端口上是**自己那份**才载页面：health 报的数据根是 app 的数据根、代码目录是 app 自带的那份、开着本机自用模式，三样都对上（`AshHealth.swift`，只看数据根的话仓库里指着同一份数据的开发实例也会被认成自己）。没人就用自带 node 起自带 server，带 `ASH_DATA_DIR=<数据根>`、`ASH_LOCAL_ONLY=1`。环境取自交互式登录 shell（`zsh -ilc`），claude、codex 这些 CLI 的 PATH、LANG 与终端里一致；数据根、端口、本机模式写成命令里的字面量、由 `env` 在 exec 那一下落定，终端配置里给开发实例 export 的同名变量盖不掉它们。node 不从 PATH 找。
-- 认过人之后，页面发的每个请求（页面本身、fetch、SSE、预览）都带着那一份服务的实例号（cookie `ash_instance`，原生的补接请求放在请求头里）。实例号每次起服务都换；端口上换了人，新来的那份见到别人的实例号一律 409、什么都不执行（`server/src/instance-binding.ts`）——客户端没法在发请求之前确认 TCP 那头是谁，挡住写请求的是这一道。认不出实例号的旧版 ash 不认这一层，所以它们本来就不会被认成自己那份。
-- 页面在的时候也一直认着人：本机地址的刷新、前进后退、页面自己跳转放行前各认一次，页面在时每秒再认一次。端口上换了人（比如服务停了、开发实例占上来）就把整页撤成空白、盖上说明，自己那份回来后回到原来的路由；自己那份重起过（实例号换了）就换上新的重载一遍。这一道管的是提示和撤页，不是请求归属：撤页之前还在路上的请求由上一条挡下。
+- 窗口不连 4317，连这份服务**专用的端口**：app 按数据根的真实路径算出一个固定端口（42000–47999，`AshConfig.windowPort`；`ASH_MAC_WINDOW_PORT` 可指定），起服务时用 `ASH_WINDOW_PORT` 交给它，服务在 4317 之外再监听这个端口（只听 127.0.0.1），health 里报出来（`server/src/window-port.ts`）；health 报的专用端口对不上（没监听上、或者不是这一版 app 起的）也不算自己那份。4317 照旧给浏览器、CLI 和 MCP 用，「在浏览器中打开」换回 4317 的地址。这样自己那份一停，窗口的端口就空着：别的 ash 不管新旧都只会去占 4317，撤页之前页面还在发的请求连不上任何人。代价：窗口和浏览器是两个来源，主题、草稿这些存在页面本地的设置各管各的。
+- 认过人之后，页面发的每个请求（页面本身、fetch、SSE、预览）还都带着那一份服务的实例号（cookie `ash_instance`，原生的补接请求放在请求头里）。实例号每次起服务都换；自家服务原地重起过、或者专用端口上换了一份新版 ash，见到别人的实例号一律 409、什么都不执行（`server/src/instance-binding.ts`）。
+- 页面在的时候也一直认着人：本机地址的刷新、前进后退、页面自己跳转放行前各认一次，页面在时每秒再认一次。窗口的端口上不再是自己那份（比如服务停了）就把整页撤成空白、盖上说明，自己那份回来后回到原来的路由；自己那份重起过（实例号换了）就换上新的重载一遍。这一道管的是提示和撤页，不是请求归属：撤页之前还在路上的请求由上面两条挡下。
 - server 进自己的会话，**关窗、退出 app 都不停服务**，也不带走在跑的 agent。app 只负责起，不杀、不守护。
 - 端口被**别的 ash** 占着（比如仓库里 `npm run restart` 起的开发实例）不会连上去，窗口里说清是哪个进程、代码和数据在哪、怎么停；对方一停 app 就接着起自己那份。端口被不是 ash 的程序占着也一样说明。仓库开发实例以后换端口、用临时库起。
 - 「ash → 登录时启动 ash 服务」（装进「应用程序」后第一次打开默认勾上）：`~/Library/LaunchAgents/dev.ash.server.plist`，登录时跑一次 `Ash --start-server`，同一套逻辑、不开窗口。数据根还是空的时它不起（首启要先问用户）。
@@ -56,7 +57,7 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 
 也可以 `defaults write dev.ash.mac AshDataDir <目录>` 换数据根、`defaults write dev.ash.mac AshURL http://192.168.1.187:4317` 连别的 ash（非本机地址不替它起服务，也不做身份判断）。
 
-定点回归：`node scripts/test-macos-client.mjs`（仅 macOS）。用真的 AshConfig / AshHealth / ServerLauncher / DataImport / BrowserWindowController 加一份假的自带运行时，覆盖下载事务、红绿灯下的页面、「端口上是谁」的判据（数据根 + 自带代码 + 本机模式）、窗口在线后端口换人（页面持续写请求：换人那一刻在路上的、撤页前发出的都带着旧实例号被拒；导航与定时两道撤页；自家服务重起后换上新实例号）、空数据根不起、起服务的环境（终端配置盖不掉）、占用提示、并发只起一份、锁超时、请求合并、起来就退、PID 核对、启动器报错、运行时缺件、构建号、安装（别名目录、带正则字符的目录、相对路径起的包内可执行文件、两个安装器并发）、导入（WAL 里的写入、暂存里洗过再发布、和起服务互斥、失败与抢跑不留痕迹、残留清单、停掉的源、互相包含、多人库拒绝）。server 那一半：`npm -w server run test:host-ash-mcp`（MCP 登记归类）、`npm -w server run test:import-snapshot`（导入不是重启：真的接管入口对着洗过的库认不出活着的源进程；同一串开机对账对着没洗/洗过的副本各跑一遍，前者替源实例重投修复、后者一行不动；路径逐字重定位）、`npm -w server run test:instance-binding`（真服务：带着别人实例号的写请求、页面、预览与预览 WebSocket 一律 409 且不执行，health 照答）。
+定点回归：`node scripts/test-macos-client.mjs`（仅 macOS）。用真的 AshConfig / AshHealth / ServerLauncher / DataImport / BrowserWindowController 加一份假的自带运行时，覆盖下载事务、红绿灯下的页面、「端口上是谁」的判据（数据根 + 自带代码 + 本机模式）、窗口只连专用端口、在线后换人（自己那份停了、不认实例号的旧版 ash 接手 4317，页面持续写请求，一条都到不了 4317；导航与定时两道撤页；自家服务重起后换上新实例号）、空数据根不起、起服务的环境（终端配置盖不掉）、占用提示、并发只起一份、锁超时、请求合并、起来就退、PID 核对、启动器报错、运行时缺件、构建号、安装（别名目录、带正则字符的目录、相对路径起的包内可执行文件、两个安装器并发）、导入（WAL 里的写入、暂存里洗过再发布、和起服务互斥、失败与抢跑不留痕迹、残留清单、停掉的源、互相包含、多人库拒绝）。server 那一半：`npm -w server run test:host-ash-mcp`（MCP 登记归类）、`npm -w server run test:import-snapshot`（导入不是重启：真的接管入口对着洗过的库认不出活着的源进程；同一串开机对账对着没洗/洗过的副本各跑一遍，前者替源实例重投修复、后者一行不动；路径逐字重定位）、`npm -w server run test:instance-binding`（真服务：带着别人实例号的写请求、页面、预览与预览 WebSocket 一律 409 且不执行，health 照答；窗口专用端口上同一套判据，被占着时 health 报 null、服务照常起）。
 
 ## 窗口
 
@@ -73,7 +74,7 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 | `scripts/install-app.sh` | 换进安装目录（按目录加锁）；旧包还有进程在用就不换 |
 | `scripts/bundle-users.sh` | 还有哪些进程在用某个 .app（按真实文件身份认） |
 | `Sources/AshConfig.swift` | 连哪台、自带运行时在哪、数据和日志放哪 |
-| `Sources/AshHealth.swift` | 「端口上是谁」的唯一判据（数据根、自带代码、本机模式） |
+| `Sources/AshHealth.swift` | 「端口上是谁」的唯一判据（数据根、自带代码、本机模式、窗口专用端口） |
 | `Sources/ServerLauncher.swift` | 起自带的服务；端口被占时说清是谁 |
 | `Sources/ServerStartLock.swift` | 同一数据根同时只有一处在起服务 |
 | `Sources/LaunchFlow.swift` | 窗口回到 ash 的那条路，首启的全新开始 / 导入 |

@@ -47,10 +47,10 @@ enum HostMcpSetup {
     }
   }
 
-  /// 补接要写本机 CLI 的配置，只交给认过的自己那份去做：请求带上它的实例号，端口在这中间换了人，
-  /// 新来的那份见到别人的实例号就不执行（server/src/instance-binding.ts）。
+  /// 补接要写本机 CLI 的配置，只交给认过的自己那份去做：走窗口专用端口、带上它的实例号，中间换了人
+  /// 就连不上或者被拒（server/src/window-port.ts、instance-binding.ts）。
   private static func request(_ completion: @escaping (Result<[Host], Error>) -> Void) {
-    AshHealth.probe { probe in
+    AshHealth.probe(AshConfig.windowHealthURL) { probe in
       guard let id = AshHealth.ours(probe)?.id else {
         return DispatchQueue.main.async { completion(.failure(DataImport.Failure("端口上不是这个 app 的 ash 服务，没有去改 CLI 的登记。"))) }
       }
@@ -59,7 +59,7 @@ enum HostMcpSetup {
   }
 
   private static func send(instance: String, _ completion: @escaping (Result<[Host], Error>) -> Void) {
-    var request = URLRequest(url: AshConfig.baseURL.appendingPathComponent("api/ash-mcp/host-setup"), timeoutInterval: 60)
+    var request = URLRequest(url: AshConfig.windowURL.appendingPathComponent("api/ash-mcp/host-setup"), timeoutInterval: 60)
     request.httpMethod = "POST"
     request.setValue(instance, forHTTPHeaderField: "x-ash-instance")
     URLSession.shared.dataTask(with: request) { data, response, error in

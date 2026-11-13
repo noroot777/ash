@@ -100,14 +100,15 @@ final class ServerLauncher {
     // 登录 shell 只负责拼出 PATH、LANG 这些。.zprofile / .zshrc 跑在这段命令**之前**，里面给开发实例
     // export 过的 ASH_DATA_DIR、PORT、ASH_LOCAL_ONLY 会盖掉事先放进环境的值 —— 所以 app 定下的这几样
     // 写成命令里的字面量，由 `env` 在 exec 的边界上落定（shell 带来的 PORT 先清掉）。
-    // ASH_DATA_DIR / ASH_LOCAL_ONLY 是给 server 的，它读完就从自己的环境里删掉（见
-    // server/src/paths.ts、local-only.ts），agent 拿不到。`builtin cd`：rc 里常有 `alias cd=z`。
+    // ASH_DATA_DIR / ASH_LOCAL_ONLY / ASH_WINDOW_PORT（窗口专用端口）是给 server 的，它读完就从自己的
+    // 环境里删掉（见 server/src/paths.ts、local-only.ts、window-port.ts），agent 拿不到。`builtin cd`：rc 里常有 `alias cd=z`。
     let data = Self.quoted(AshConfig.dataURL.path)
     let node = Self.quoted(AshConfig.nodeURL.path)
     // 默认端口不传 PORT：server 的环境会一路继承给 agent 与应用内终端，多一个 PORT 会让
     // 里面起的前端 dev server 去抢 ash 的端口。
     let port = AshConfig.port == 4317 ? "" : " PORT=\(AshConfig.port)"
-    let script = "builtin cd -- \(data) && exec /usr/bin/env -u PORT ASH_DATA_DIR=\(data) ASH_LOCAL_ONLY=1\(port) "
+    let script = "builtin cd -- \(data) && exec /usr/bin/env -u PORT ASH_DATA_DIR=\(data) ASH_LOCAL_ONLY=1"
+      + " ASH_WINDOW_PORT=\(AshConfig.windowPort)\(port) "
       + "\(node) \(Self.quoted(AshConfig.detachScriptURL.path)) \(Self.quoted(logURL.path)) \(node) \(Self.quoted(AshConfig.serverEntryURL.path))"
     shell.arguments = ["-ilc", script]
     shell.environment = Self.terminalLikeEnvironment()

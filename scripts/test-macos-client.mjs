@@ -3,8 +3,8 @@
 // 测试的 node，server 是几行假服务），日常那一份 app 的数据与 :4317 一概不碰。
 //
 // 覆盖：下载事务；红绿灯下的页面；「端口上是谁」的判据（自己那份 / 别的 ash / 不是 ash）；空数据根
-// 不起服务、首启选了才起；起服务用自带 node、数据根/端口/本机自用开关传对（终端配置盖不掉）、不漏启动器自己的变量；
-// 别的 ash 或别的程序占着端口时不起、说清是谁；窗口在线后端口换了人就撤下页面（导航与定时两道）；并发起服务只起一份；锁超时与重试；请求合并；
+// 不起服务、首启选了才起；起服务用自带 node、数据根/端口/窗口专用端口/本机自用开关传对（终端配置盖不掉）、不漏启动器自己的变量；
+// 别的 ash 或别的程序占着端口时不起、说清是谁；窗口只连专用端口、在线后服务换了人就撤下页面（导航与定时两道）；并发起服务只起一份；锁超时与重试；请求合并；
 // 进程起来就退时不干等；应答的 PID 对不上不算；启动器报错可见；运行时缺件；构建号严格递增；安装不换正被用着的旧包；导入旧数据（WAL 里
 // 没落盘的写入也带过来、在暂存里洗过再发布、和起服务同一把锁、只往空数据根里放、失败与抢跑不留
 // 痕迹、上次发布到一半的残留先收掉、只复制不动源、互相包含与多人库拒绝、锁与缓存不搬）。
@@ -18,6 +18,7 @@ import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { testInstanceGuard } from "./macos-client-guard.mjs";
 
 assert.equal(process.platform, "darwin", "macOS-only regression");
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -90,12 +91,12 @@ function serviceSource({ pidOffset = 0, exitAtOnce = false } = {}) {
 fs.appendFileSync(${JSON.stringify(marker)},process.pid+'\\n');
 const dataDir=process.env.ASH_DATA_DIR;
 fs.writeFileSync(${JSON.stringify(seen)},JSON.stringify({cwd:process.cwd(),dataDir,localOnly:process.env.ASH_LOCAL_ONLY??null,
-  port:process.env.PORT??null,leaked:Object.keys(process.env).filter(k=>k.startsWith('ASH_MAC_'))}));
+  port:process.env.PORT??null,windowPort:process.env.ASH_WINDOW_PORT??null,leaked:Object.keys(process.env).filter(k=>k.startsWith('ASH_MAC_'))}));
 ${exitAtOnce ? "process.exit(1);" : ""}
 fs.writeFileSync(path.join(dataDir,'ash.db'),'');
 http.createServer((req,res)=>{res.setHeader('Content-Type','application/json');
 res.end(JSON.stringify({ok:true,pid:process.pid+${pidOffset},instance:{id:'svc-'+process.pid,dataDir,codeDir:path.resolve(__dirname,'../..'),
-  localOnly:process.env.ASH_LOCAL_ONLY==='1'}}));})
+  localOnly:process.env.ASH_LOCAL_ONLY==='1',windowPort:Number(process.env.ASH_WINDOW_PORT)}}));})
 .listen(Number(process.env.PORT),'127.0.0.1');`);
 }
 
@@ -130,9 +131,11 @@ async function withResponder(port, respond, body) {
 
 try {
   const port = await freePort();
+  const windowPort = await freePort();
   const journal = join(temporary, "journal");
   const env = {
     ASH_URL: `http://127.0.0.1:${port}`, ASH_DATA_DIR: data, ASH_MAC_RUNTIME: runtime, ASH_MAC_DOWNLOAD_JOURNAL: journal,
+    ASH_MAC_WINDOW_PORT: String(windowPort),
   };
 
   // ── 下载事务 ──
@@ -208,7 +211,7 @@ try {
     assert.equal(await probe(200, { ok: true, pid: 1 }), "FOREIGN", "an ash that does not say where its data lives is not ours");
     assert.equal(await probe(200, { ok: true, pid: 1, instance: { dataDir: join(temporary, "elsewhere"), codeDir: "/repo/" } }),
       "FOREIGN", "another data root is another ash");
-    const ours = { id: "inst-1", dataDir: `${dataAlias}/`, codeDir: `${runtimeAlias}/`, localOnly: true };
+    const ours = { id: "inst-1", dataDir: `${dataAlias}/`, codeDir: `${runtimeAlias}/`, localOnly: true, windowPort };
     assert.equal(await probe(200, { ok: true, pid: 1, instance: ours }), "READY",
       "same data root and same bundled code by realpath, local-only");
     assert.equal(await probe(200, { ok: true, pid: 1, instance: { ...ours, codeDir: "/repo/" } }), "FOREIGN",
@@ -219,6 +222,10 @@ try {
       "an ash that does not report its mode is not ours");
     assert.equal(await probe(200, { ok: true, pid: 1, instance: { ...ours, id: undefined } }), "FOREIGN",
       "an ash without an instance id cannot be bound to, so it is not ours");
+    assert.equal(await probe(200, { ok: true, pid: 1, instance: { ...ours, windowPort: null } }), "FOREIGN",
+      "our service that could not listen on the window's dedicated port cannot serve the window");
+    assert.equal(await probe(200, { ok: true, pid: 1, instance: { ...ours, windowPort: windowPort + 1 } }), "FOREIGN",
+      "a dedicated port other than the one the app derives is not this app's");
 
     // 仓库里的服务指着 app 的数据根：一样不连，说清哪一样对不上。
     healthBody = JSON.stringify({ ok: true, pid: 4343, instance: { ...ours, codeDir: "/Users/someone/code/ash/", localOnly: false } });
@@ -242,81 +249,9 @@ try {
   assert.equal(await probe(200, ""), "DOWN", "nobody listening");
   console.log("PASS: own instance is recognised by data root + bundled code + local-only; another ash or a non-ash on the port is reported, never joined");
 
-  // ── 窗口在线之后端口换了人 ──
-  // 应答者照真服务的规矩办（server/src/instance-binding.ts）：请求带着别人的实例号就 409、什么都不执行。
-  // 页面每 30ms 发一次写请求：换人那一刻正在路上的、撤页之前又发出去的，新来那份一条都不许执行；
-  // 刷新那一下拦住、什么都不点也会被定时认人撤下；自家服务重起（实例号换了）时换上新的接着用；
-  // 换回来回到原路由。
-  let occupant = "ours";
-  let generation = 1;
-  const idOf = () => occupant === "ours" ? `ours-${generation}` : "foreign-1";
-  const requests = [];
-  await withResponder(port, (request, response) => {
-    const ours = occupant === "ours";
-    if (request.url === "/api/health") {
-      response.setHeader("Content-Type", "application/json");
-      response.end(JSON.stringify({ ok: true, pid: ours ? 1 : 4444, instance: ours
-        ? { id: idOf(), dataDir: data, codeDir: runtime, localOnly: true }
-        : { id: idOf(), dataDir: "/elsewhere", codeDir: "/repo/", localOnly: false } }));
-      return;
-    }
-    // 页面走 cookie，原生的补接请求（HostMcpSetup）走请求头，两样都按服务端的判据认。
-    const cookie = /(?:^|;\s*)ash_instance=([^;]+)/.exec(request.headers.cookie ?? "")?.[1] ?? request.headers["x-ash-instance"] ?? null;
-    const accepted = cookie === null || cookie === idOf();
-    requests.push({ occupant, id: idOf(), url: request.url, cookie, accepted });
-    if (!accepted) { response.statusCode = 409; response.end("{}"); return; }
-    if (request.url === "/api/write") { response.end("{}"); return; }
-    response.setHeader("Content-Type", "text/html");
-    response.end(ours ? "<title>OURS</title><script>if(location.pathname==='/')history.replaceState(null,'','/route/abc');"
-      + "setInterval(()=>fetch('/api/write',{method:'POST'}).catch(()=>{}),30)</script>" : "<title>FOREIGN</title>");
-  }, async () => {
-    const writes = (id) => requests.filter((r) => r.url === "/api/write" && r.id === id);
-    for (const mode of ["reload", "watch"]) {
-      occupant = "ours";
-      generation += 1;
-      requests.length = 0;
-      const guard = spawn(binary, ["guard", mode], { env: { ...process.env, ...env }, stdio: ["pipe", "pipe", "pipe"] });
-      children.add(guard);
-      let out = "";
-      guard.stdout.on("data", (chunk) => { out += chunk; });
-      guard.stderr.on("data", (chunk) => { out += chunk; });
-      const exited = once(guard, "exit");
-      await until(() => out.includes("LOADED"), `guard probe (${mode}) never loaded our page: ${out}`);
-      const bound = idOf();
-      await until(() => writes(bound).length > 2, `${mode}: the page never wrote`);
-      assert.deepEqual([...new Set(requests.map((r) => r.cookie))], [bound], `${mode}: every request carries the confirmed instance`);
-      if (mode === "watch") {
-        // 自家服务重起：实例号换了，定时认人换上新的，之后的写请求照常执行。
-        generation += 1;
-        const restarted = idOf();
-        await until(() => writes(restarted).some((r) => r.cookie === restarted && r.accepted),
-          `${mode}: the page never rebound to our restarted service`, 20000);
-      }
-      const before = idOf();
-      occupant = "foreign";
-      guard.stdin.write("FLIPPED\n");
-      await until(() => out.includes("BLANKED"), `guard probe (${mode}) never covered the page: ${out}`, 20000);
-      assert.match(out, /BLANKED url=about:blank content=\|\|\n/,
-        `${mode}: the whole page is taken down, nothing of the other ash shown: ${out}`);
-      const reached = requests.filter((r) => r.occupant === "foreign");
-      assert.deepEqual(reached.filter((r) => r.accepted), [], `${mode}: the other ash executed nothing the page sent`);
-      assert.ok(reached.every((r) => r.url === "/api/write" && r.cookie === before),
-        `${mode}: only in-flight writes reached it, all carrying our instance id: ${JSON.stringify(reached)}`);
-      if (mode === "watch") assert.ok(reached.length > 0, "watch: writes did race the swap (the case this guards)");
-      generation += 1;
-      occupant = "ours";
-      guard.stdin.write("BACK\n");
-      await until(() => out.includes("RESTORED"), `guard probe (${mode}) never came back: ${out}`, 20000);
-      const back = idOf();
-      await until(() => writes(back).some((r) => r.cookie === back && r.accepted), `${mode}: back on our new instance id`);
-      guard.stdin.write("DONE\n");
-      const [status] = await exited;
-      children.delete(guard);
-      assert.equal(status, 0, out);
-      assert.match(out, new RegExp(`RESTORED http://127\\.0\\.0\\.1:${port}/route/abc`), `${mode}: back to the same route: ${out}`);
-    }
-  });
-  console.log("PASS: an online window binds every request to the confirmed instance (the other ash executes none of them), re-checks on navigation and while idle, rebinds after our own restart, and restores the route");
+  // ── 窗口在线之后服务换了人（scripts/macos-client-guard.mjs）──
+  await testInstanceGuard({ binary, env, port, windowPort, data, runtime, children, until });
+  console.log("PASS: an online window talks only to its service's dedicated port (nothing reaches whoever takes over 4317), binds every request to the confirmed instance, re-checks on navigation and while idle, rebinds after our own restart, and restores the route");
 
   // ── 空数据根：无窗口那一档不起，首启选了才起 ──
   serviceSource();
@@ -327,7 +262,7 @@ try {
   // 终端配置里给开发实例 export 过数据根、端口、模式，还有 `alias cd=…`：起服务照样用 app 定下的那几样。
   const shellHome = join(temporary, "shell-home");
   mkdirSync(shellHome);
-  const rc = `export ASH_DATA_DIR=${join(temporary, "dev-data")} PORT=1 ASH_LOCAL_ONLY=0\nalias cd=false\n`;
+  const rc = `export ASH_DATA_DIR=${join(temporary, "dev-data")} PORT=1 ASH_LOCAL_ONLY=0 ASH_WINDOW_PORT=1\nalias cd=false\n`;
   for (const name of [".zprofile", ".zshrc", ".bash_profile", ".bashrc"]) writeFileSync(join(shellHome, name), rc);
   const shellEnv = { ...env, HOME: shellHome };
   const first = launch(binary, ["start-fresh", "8"], shellEnv);
@@ -342,6 +277,7 @@ try {
   assert.equal(serverEnv.dataDir, data, "data root is handed to the server, whatever the shell rc exported");
   assert.equal(serverEnv.localOnly, "1", "the app always starts the local-only mode");
   assert.equal(serverEnv.port, String(port));
+  assert.equal(serverEnv.windowPort, String(windowPort), "the window's dedicated port is handed to the server");
   assert.equal(existsSync(join(temporary, "dev-data")), false, "the dev data root from the rc is never touched");
   assert.deepEqual(serverEnv.leaked, [], "launcher variables never reach the server");
   assert.equal(realpathSync(serverEnv.cwd), realpathSync(data), "server runs in the data root, not in some checkout");

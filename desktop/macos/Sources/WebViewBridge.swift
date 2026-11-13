@@ -26,7 +26,7 @@ extension BrowserWindowController: WKNavigationDelegate, WKUIDelegate, WKDownloa
     }
     if AshConfig.isSameOrigin(url) {
       // 本机地址：端口上可能已经换了人，放行之前认一次（见 BrowserWindowController 的 instanceLost）。
-      AshHealth.probe { probe in
+      AshHealth.probe(AshConfig.windowHealthURL) { probe in
         DispatchQueue.main.async { [weak self] in
           guard let self, let instance = AshHealth.ours(probe) else {
             decisionHandler(.cancel)
