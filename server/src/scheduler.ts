@@ -14,7 +14,7 @@ import { clearQueueAdvance, deferQueueAdvance, isQueueAdvanceCanceling, requestQ
 import { reclaimStrandedSeat, scheduleSeatReclaim } from "./queue-seat-reclaim.js";
 import { waitForStartReceipt } from "./task-start-receipt.js";
 import { reportGroupStartFailure } from "./group-start-failure.js";
-import { clearQueueAdvanceIntent, recordQueueAdvanceIntent, refuseHeldQueueAdvance, refuseQueueAdvance } from "./queue-advance-admission.js";
+import { clearQueueAdvanceIntent, recordQueueAdvanceIntent, refuseQueueAdvance } from "./queue-advance-admission.js";
 import { heldByMonitors, withMonitorHolds, type QueueRow } from "./queue-monitor-hold.js";
 
 const MAX_PARALLEL = 4;
@@ -24,8 +24,6 @@ type QueueAdvanceAttempt = {
   request?: QueueAdvanceRequest;
   candidate?: { taskId: string; generation: number };
   pauseGeneration: number;
-  /** 这一趟停在了哪个等哨兵的成员上(没停就是空)。 */
-  heldBy?: string;
 };
 
 // 暂停整组(POST /groups/:id/pause 与团队的「停止全组」共用这一份):置 paused、
@@ -103,7 +101,6 @@ export async function advanceQueue(queueId: string, request?: QueueAdvanceReques
   const attempt: QueueAdvanceAttempt = { request, pauseGeneration };
   const done = await retryableQueueAdvance(queueId, attempt, intent);
   if (intent || done.ok) return;
-  if (attempt.heldBy) throw await refuseHeldQueueAdvance(queueId, attempt.heldBy, done.error);
   // 候选是临界区里挑出来的,挑到了才知道该把这句话写给谁(没挑到就只剩日志与抛出)。
   throw await refuseQueueAdvance(queueId, attempt.candidate?.taskId ?? null, done.error);
 }
@@ -116,7 +113,7 @@ async function retryableQueueAdvance(
   intent: string | null,
 ): Promise<AdvanceOutcome> {
   try {
-    attempt.heldBy = await advanceQueueAttempt(queueId, attempt) ?? undefined;
+    await advanceQueueAttempt(queueId, attempt);
   } catch (error) {
     // 退避重试照旧登记:它在**同一个进程里**还救得回来,只是不能拿它当「已接受」的凭据
     // (那正是 F2 的错)。凭据在不在由 intent 说,这里只负责把这一趟的结果如实报上去;
@@ -129,15 +126,6 @@ async function retryableQueueAdvance(
   // 下一次重启平白再推一遍。抛出去的那条路**不删**:那正是要活过重启的那一份。
   // **只清自己那一代**:这段 await 期间可能又有一趟推进被接受(它 upsert 走了这一行),
   // 裸按 queueId 删就会把那份还没做完的恢复责任一起抹掉(第 1 轮自由审查 F2)。
-  // **停在等哨兵的成员上不算做完**:这一次推进要等它的哨兵了结才兑现,意图留着就是那笔欠账
-  // (由谁、在什么时候补推,见 queue-monitor-hold.ts)。
-  if (attempt.heldBy) {
-    if (intent) return { ok: true };
-    // 欠着、却没有凭证:哨兵了结时的补推认的就是意图行,没有它这条队列就再没人推。跟 F2 是同一条
-    // 口径 —— 不许按「已接受」收场;进程里接着重试,直到意图写进去(或者已经不再停在这儿)。
-    deferQueueAdvance(queueId, () => advanceQueue(queueId));
-    return { ok: false, error: new Error("推进意图写入失败") };
-  }
   if (intent) await clearQueueAdvanceIntent(queueId, intent);
   return { ok: true };
 }
@@ -154,20 +142,17 @@ export function advanceQueueInBackground(queueId: string): void {
   void advanceQueue(queueId).catch((error) => console.error(`[ash] 后台队列推进失败 queue=${queueId}:`, error));
 }
 
-/** 返回值非空 = 这一趟停在了这个等哨兵的成员上(推进还欠着)。 */
-async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt): Promise<string | null> {
+async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt): Promise<void> {
   const request = attempt.request;
-  let heldBy: string | null = null;
   // 「挑下一个」与「落 queued」收进队列认领临界区(queue-seat.ts,与手动运行/重跑/
   // 消息补投同一条链):分开的话,读完成员快照到落库之间的 await 窗口里,另一个入口
   // 刚认领的占位在这里看不见,按旧快照再拉起一个就是同队双跑(第 7 轮审查:跨入口
   // 竞争)。临界区里只做挑选与占位,真正拉起(resumeOrRunTask)在链外。
-  const next = await serializeQueueClaims<(QueueRow & {
+  const next = await serializeQueueClaims<(typeof tasks.$inferSelect & {
     reservation: TaskQueueReservation; advanceRequest: QueueAdvanceRequest; turn: TurnIdentity;
-  }) | "paused" | "held" | null>(async () => {
+  }) | "paused" | null>(async () => {
     const rows = await queueMembers(queueId);
-    const scan = scanQueue(rows);
-    const candidate = scan.next;
+    const candidate = selectNextInQueue(rows);
     // 上一次挑中的那位**换人了或换了交代**(有人点「暂停」、agent 自己写下新的等待、
     // 任务被移出队列)。作废的只是「上一次挑的那位 + 那枚旧凭证」,**不是「这条队列该推进」
     // 这件事** —— 早先这里直接 `return "paused"`,而此刻请求还没落库、也不再安排下一次,
@@ -186,9 +171,7 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
         || ["done", "failed", "canceled"].includes(target.status) || target.question || hasCliGoalHold(target.cliState)
         || target.monitorHold || (target.groupId && await isPaused(target.groupId))) {
         await clearQueueAdvance(request);
-        if (!target?.monitorHold) return "paused";
-        heldBy = target.id;
-        return "held";
+        return "paused";
       }
       if (!candidate || candidate.id !== request.taskId) {
         deferQueueAdvance(queueId);
@@ -206,8 +189,7 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
           && (t.status === "running" || t.status === "queued")
         ) noteMissedAdvance(t.id, queueId);
       }
-      heldBy = scan.monitorHold?.id ?? null;
-      return heldBy ? "held" : null;
+      return null;
     }
     // 队列绑定到 group:组被暂停时允许编辑队列(保存排队关系),但不启动任何成员。
     // 检查放在这里而不是各调用方 —— 建队列/插入/重排/移除/终态钩子全走本函数,
@@ -257,7 +239,7 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
     // 在其间把这把锁拔走、另一轮占上(本轮审查 F1)。
     return { ...candidate, reservation, advanceRequest, turn };
   });
-  if (next === "paused") return null;
+  if (next === "paused") return;
   if (next && typeof next === "object") {
     const prevStatus = next.status as TaskStatus; // 临界区里读到的占位前状态
     void waitForStartReceipt(next.id, () => resumeOrRunTask(next.id, { reason: "queue", turnHeld: next.turn })
@@ -277,10 +259,9 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
         console.error(`[ash] 队列启动回执确认失败(${next.id}):`, error);
         deferQueueAdvance(queueId);
       });
-    return null;
+    return;
   }
-  // 走到这里 next 只剩 null(挑不出人)或 "held"(停在等哨兵的成员上)。
-  if (!next || next === "held") {
+  if (!next) {
     // 没有可启动的成员 ≠ 队里没事可做:失败成员的**执行型待发送回复**(排队期间暂存
     // 的修改要求,见 pending-messages 的 execution)在等「整队无人在跑」才能投递。它的
     // 任务已是终态,不会再有自己的结算钩子来救,只推自己的 flush 又只看发起任务 ——
@@ -295,9 +276,8 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
         Promise.all(idle.map((t) => deliverPendingMessages(t.id).catch(() => undefined))),
       );
     }
-    return heldBy;
+    return;
   }
-  return null;
 }
 
 // 队列占位的兜底补偿搬到了 queue-seat-reclaim.ts(它自带一台重试状态机,而这份文件
@@ -337,28 +317,22 @@ export function queueStatus(t: { status: string; followUpFrom?: string | null })
 // → 在 05 点重新排队 → 05 和 06 一起跑)。守卫放这里,所有推进入口
 // (advanceQueue / runGroup / queues 的 reorder·remove·insert / requeue)一起受益。
 export function selectNextInQueue<T extends QueueMember>(rows: T[]): T | null {
-  return scanQueue(rows).next;
-}
-
-// 同一次扫描,外加「是不是停在一个等哨兵的成员上」:那一停是一笔还欠着的推进(见 retryableQueueAdvance)。
-export function scanQueue<T extends QueueMember>(rows: T[]): { next: T | null; monitorHold: T | null } {
   const live = rows.filter((t) => !t.archived && t.mode !== "team");
-  const none = { next: null, monitorHold: null };
-  if (live.some((t) => queueStatus(t) === "running" || queueStatus(t) === "queued")) return none;
+  if (live.some((t) => queueStatus(t) === "running" || queueStatus(t) === "queued")) return null;
 
   for (const t of live) {
     const s = queueStatus(t) as TaskStatus;
     if (s === "done" || s === "canceled" || s === "failed") continue;
-    if (s === "awaiting_review") return none; // 审查门:链停等用户
+    if (s === "awaiting_review") return null; // 审查门:链停等用户
     // 提问暂停(question 非空)≠ 检查点暂停:它在等 answer_question 带答复唤醒,
     // 队列跟着等,绝不能在这里用「继续」把它空手叫醒(问题会白问)。
-    if (s === "paused" && t.question) return none;
-    if (s === "paused" && hasCliGoalHold(t.cliState)) return none;
+    if (s === "paused" && t.question) return null;
+    if (s === "paused" && hasCliGoalHold(t.cliState)) return null;
     // 等哨兵的暂停同理:叫醒它的是哨兵结果,这时空手续跑,它只能看一眼哨兵还在跑、再暂停一次。
-    if (s === "paused" && t.monitorHold) return { next: null, monitorHold: t };
-    return { next: t, monitorHold: null }; // backlog / paused
+    if (s === "paused" && t.monitorHold) return null;
+    return t; // backlog / paused
   }
-  return none;
+  return null;
 }
 
 // 给定 queue,挑出"现在应该被拉起来的下一个 task"(或 null = 没有)。
@@ -533,20 +507,7 @@ type AcceptedAdvance = { generation: string | null };
 
 async function recoverQueueAdvance(queueId: string, accepted: AcceptedAdvance | null): Promise<void> {
   const rows = await queueMembers(queueId);
-  const scan = scanQueue(rows);
-  const candidate = scan.next;
-  if (scan.monitorHold) {
-    // 停在等哨兵的成员上:意图就是「它的哨兵了结时还得推一次」那笔欠账,留着。升级前那一版
-    // 不留这笔账,所以没有意图的也补一笔 —— 否则它的哨兵在这次重启里落了 lost、又没有结果
-    // 要送,就再没有人推这条队列(queue-monitor-hold.ts)。
-    //
-    // 补的办法是**当场接受一次推进**,不是只写意图行:从这一刻起这笔责任归 `advanceQueue`,意图
-    // 写失败时由它那条重试链(`retryableQueueAdvance` 的 held 分支)背着,重试兑现的是这次推进本身。
-    // 早先是写失败就抛、交给下面那层按 `accepted=null` 重来 —— 重来时哨兵若已经了结,队首就成了
-    // 一个「前面没有终态成员」的普通暂停,按存量兜底判据不推,欠账就此蒸发(第 2 轮审查 1)。
-    if (!accepted) await advanceQueue(queueId);
-    return;
-  }
+  const candidate = selectNextInQueue(rows);
   if (!candidate) {
     // 意图还挂着、队列却已经没有可推的人(成员被删光/全归档):留着它只会让每次重启都白扫
     // 一遍,这里就地了结 —— 但**只了结自己读到的那一代**:读成员这几步之间又被接受的那一趟

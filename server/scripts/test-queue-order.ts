@@ -3,7 +3,7 @@
 //   isOvertaken / tailOrder —— 重新排队该不该去队尾、去了以后顺序对不对
 // 跑:npm -w server run test:queue
 import assert from "node:assert/strict";
-import { queueStatus, scanQueue, selectNextInQueue, type QueueMember } from "../src/scheduler.js";
+import { queueStatus, selectNextInQueue, type QueueMember } from "../src/scheduler.js";
 import { isOvertaken, manualStartBlockers, runningMembers, tailOrder } from "../src/queues.js";
 
 const m = (id: string, status: string, extra: Partial<QueueMember> = {}): QueueMember => ({
@@ -54,17 +54,8 @@ assert.equal(
   null,
   "等哨兵的暂停不续跑,也不越过它",
 );
-assert.equal(scanQueue([m("01", "done"), m("02", "paused", { monitorHold: true }), m("03", "backlog")]).monitorHold?.id, "02",
-  "扫描要说出「停在了等哨兵的那一位上」:那是一笔还欠着的推进");
-assert.equal(scanQueue([m("01", "paused"), m("02", "backlog")]).monitorHold, null, "检查点暂停不是等哨兵");
-assert.equal(scanQueue([m("01", "paused"), m("02", "backlog")]).next?.id, "01");
-assert.equal(
-  scanQueue([m("01", "paused", { question: "选 A 还是 B?" }), m("02", "paused", { monitorHold: true })]).monitorHold,
-  null,
-  "停在提问上就不算等哨兵(它的哨兵还没轮到)",
-);
-assert.equal(scanQueue([m("01", "running"), m("02", "paused", { monitorHold: true })]).monitorHold, null,
-  "有人在跑时一个都不看");
+assert.equal(selectNextInQueue([m("01", "done"), m("02", "paused", { monitorHold: true }), m("03", "backlog")]), null);
+assert.equal(selectNextInQueue([m("01", "paused", { monitorHold: false }), m("02", "backlog")])?.id, "01", "检查点暂停不是等哨兵");
 
 // 归档成员仍占位置但不参与调度;团队任务(无终态)防御性跳过
 assert.equal(selectNextInQueue([m("01", "backlog", { archived: true }), m("02", "backlog")])?.id, "02");

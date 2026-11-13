@@ -17,7 +17,6 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { queueAdvanceIntents, tasks } from "./db/schema.js";
-import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { freshRunFailureTarget, reportTurnFailure } from "./turn-failure.js";
 import { id, now } from "./util.js";
 
@@ -91,24 +90,6 @@ export async function refuseQueueAdvance(
     } catch (error) {
       console.error(`[ash] 队列推进未接受的交代写入失败 task=${taskId}:`, error);
     }
-  }
-  return new Error(message);
-}
-
-/**
- * 同一种「没被接受」,但推进**停在一个等哨兵的成员上**(queue-monitor-hold.ts):没有谁该起跑,
- * 欠下的是「它的哨兵了结时再推一次」。交代写给那一位,说的是这件事本身,不套「这一轮没能起跑」
- * —— 它本来就不该起跑。
- */
-export async function refuseHeldQueueAdvance(queueId: string, taskId: string, cause: unknown): Promise<Error> {
-  const why = cause instanceof Error ? cause.message : String(cause);
-  const message = `队列推进未接受：队列停在这里等哨兵，「哨兵了结后接着往下推」这笔账没能落库（${why}）`;
-  console.error(`[ash] ${message} queue=${queueId} task=${taskId}`, cause);
-  try {
-    await appendTaskTimeline(taskId, alertLine(`${message}。ash 会在后台一直重试记下它；重试成功之前服务重启，`
-      + "哨兵了结后需要你手动点继续。"));
-  } catch (error) {
-    console.error(`[ash] 队列推进未接受的交代写入失败 task=${taskId}:`, error);
   }
   return new Error(message);
 }

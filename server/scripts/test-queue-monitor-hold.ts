@@ -11,7 +11,7 @@
 // 跑:npm -w server run test:monitor-checkpoint-recovery(本文件排在它后面)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
@@ -28,7 +28,8 @@ const { ClaudeExecutor } = await import("../src/executors/claude.js");
 const { CodexExecutor } = await import("../src/executors/codex.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
 const { advanceQueue, groupLaunchTargets, pickNextLaunchable, queueMembers, recoverQueueAdvances, runGroup } = await import("../src/scheduler.js");
-const { sweepOwedQueueAdvances } = await import("../src/queue-monitor-hold.js");
+const { sweepReleasedQueueMembers } = await import("../src/queue-monitor-hold.js");
+const { bus } = await import("../src/bus.js");
 const { deferQueueAdvance, replayQueueAdvances, requestQueueAdvance } = await import("../src/queue-advance-retry.js");
 const { noteMissedAdvance } = await import("../src/queue-seat.js");
 const { monitorsBlockingComplete } = await import("../src/task-complete-monitors.js");
@@ -97,9 +98,11 @@ for (const executor of [ClaudeExecutor.prototype, CodexExecutor.prototype]) {
 }
 
 // ── 故障注入:只在计数大于零时生效,其余时候原样放行 ───────────────────────────────
-// 推进意图那一笔写入失败(第 1 轮审查发现 2),以及哨兵事件复查那一趟的读取失败(发现 1)。
+// 推进意图那一笔写入失败、开机补办那一趟的读取失败,以及哨兵事件复查那一趟的读取失败 ——
+// 「还欠一次推进」从库里现推,这几处哪一处失败都不该让队列停死。
 let failIntentWrites = 0;
 let failRecheckReads = 0;
+let failBootReads = 0;
 const realInsert = db.insert.bind(db);
 const realSelect = db.select.bind(db);
 (db as { insert: unknown }).insert = (table: Parameters<typeof db.insert>[0]) => {
@@ -111,19 +114,17 @@ const realSelect = db.select.bind(db);
 };
 (db as { select: unknown }).select = (...args: Parameters<typeof db.select>) => {
   // 只打 queue-monitor-hold.ts 的 `recheck`:它的第一句读排在任何 await 之前,调用栈里认得出来。
-  if (failRecheckReads > 0 && new Error().stack?.includes("recheck")) {
+  const stack = new Error().stack ?? "";
+  if (failRecheckReads > 0 && stack.includes("recheck")) {
     failRecheckReads--;
     throw new Error("SQLITE_BUSY: 测试注入一次复查读取失败");
   }
+  if (failBootReads > 0 && stack.includes("recoverQueueAdvances")) {
+    failBootReads--;
+    throw new Error("SQLITE_BUSY: 测试注入一次开机补办读取失败");
+  }
   return realSelect(...args);
 };
-/** 这个任务的时间线里有没有这句话(时间线写在 runs/<taskId>/ 下的会话正文里)。 */
-const timelineHas = (taskId: string, text: string): boolean => {
-  const dir = join(root, "runs", taskId);
-  return existsSync(dir) && readdirSync(dir).some((name) => name.endsWith(".md")
-    && readFileSync(join(dir, name), "utf8").includes(text));
-};
-
 // ── 夹具 ──────────────────────────────────────────────────────────────────────
 await db.insert(schema.projects).values({ id: "qmh", name: "queue monitor hold", repoPath: root, createdAt: now() });
 await db.insert(schema.agents).values({ id: "qmh-claude", name: "claude@fixture", type: "claude", isDefault: true });
@@ -165,13 +166,12 @@ async function bothDone(q: { a: string; b: string }, label: string) {
 }
 
 /** 「这一刻起没人被叫醒」:隔一段再看,A 没有新回合、B 没开工、A 还停在 paused。 */
-async function assertHeld(q: { queueId: string; a: string; b: string }, turns: number, label: string) {
+async function assertHeld(q: { a: string; b: string }, turns: number, label: string) {
   await sleep(400);
   assert.equal(inputsOf(q.a).length, turns, `${label}:A 不该被叫起来跑新回合 —— ${JSON.stringify(inputsOf(q.a).slice(turns))}`);
   assert.equal(inputsOf(q.b).length, 0, `${label}:也不该越过 A 起 B`);
   assert.equal(await statusOf(q.a), "paused", `${label}:A 还停在 paused`);
   assert.equal(await statusOf(q.b), "backlog", label);
-  assert.ok(await intentOf(q.queueId), `${label}:这次推进还欠着(意图行留着),它的哨兵了结时才有人补推`);
 }
 
 /** 第一回合:按 `setup` 挂好哨兵(或别的现场),再用 pause_task 收尾。 */
@@ -222,7 +222,7 @@ try {
     assert.equal(inputsOf(q.a).length, 2, `A 恰好被叫醒一次:${JSON.stringify(inputsOf(q.a))}`);
     assert.ok(inputsOf(q.a)[1]!.includes(`HOLD_LIVE_${q.a}`), `叫醒的输入是哨兵结果:${inputsOf(q.a)[1]}`);
     assert.equal((await db.select().from(monitors).where(eq(monitors.id, monitorId)))[0]!.status, "exited");
-    assert.equal(await intentOf(q.queueId), undefined, "推进兑现了,欠账了结");
+    assert.equal(await intentOf(q.queueId), undefined, "推进意图照常了结");
     console.log("PASS: 挂着在跑的哨兵落 paused —— 六个自动推进入口都不续跑它;哨兵出结果叫醒一次,随后 B 起跑");
   }
 
@@ -311,7 +311,8 @@ try {
     console.log("PASS: 放弃已结束的哨兵 —— 队列随后按检查点续跑一次");
   }
 
-  // ⑥ 重启:没有意图行(升级前留下的现场),哨兵在接回时落 lost —— 队列照样不会永远停在它身上
+  // ⑥ 重启:没有意图行(升级前留下的现场),开机补办那一趟还撞上一次读失败,哨兵随后在接回时落 lost ——
+  //    队列照样不会永远停在它身上(第 3 轮审查 1:欠账不经过开机补办这一步)。
   {
     const q = await queuePair("restart");
     const dead = spawnSync("true").pid!;
@@ -321,24 +322,23 @@ try {
     });
     await assertHeld(q, 1, "重启之前");
     await db.delete(schema.queueAdvanceIntents).where(eq(schema.queueAdvanceIntents.queueId, q.queueId));
-    // 开机补记那一笔也撞上一次写失败:不许当它记下了,退避之后补记成功(第 1 轮审查发现 2 的同类位置)。
-    failIntentWrites = 1;
-    await recoverQueueAdvances();
-    assert.equal(failIntentWrites, 0, "补记确实撞上了那次注入");
-    await until("开机补记退避重试后落库", async () => !!await intentOf(q.queueId), 5_000);
+    failBootReads = 1;
+    await recoverQueueAdvances().catch(() => undefined);
+    assert.equal(failBootReads, 0, "开机补办确实撞上了那次注入");
     await assertHeld(q, 1, "开机补办(哨兵行还写着 running)");
     await reattachMonitors();
     await bothDone(q, "哨兵落 lost");
     assert.equal(inputsOf(q.a).length, 2, `A 恰好被叫醒一次:${JSON.stringify(inputsOf(q.a))}`);
-    console.log("PASS: 重启后哨兵落 lost —— 队列接着推,A 恰好被叫醒一次");
+    assert.ok(inputsOf(q.a)[1]!.includes("RESUME_RESTART"), inputsOf(q.a)[1]);
+    console.log("PASS: 重启(无意图行、开机补办读失败)后哨兵落 lost —— 队列接着推,A 恰好被叫醒一次");
   }
 
-  // ⑥b 同样的开机现场,但补记那一笔写失败、**重试之前**哨兵就被放弃了(第 2 轮审查 1):欠账不能因为
-  //     重试那一刻已经不在等哨兵就蒸发 —— 队首前面没有终态成员,存量兜底判据不会替它推。
+  // ⑥b 哨兵在 ash 停着的那段时间里就了结了(库里已写下放弃,开机后不会再有事件):调度 tick 的巡检
+  //     接住,不靠开机补办、也不靠意图行。
   {
-    const q = await queuePair("restart-abandon");
+    const q = await queuePair("restart-settled");
     let monitorId = "";
-    await firstTurnPaused(q, "RESUME_BOOT_ABANDON", async (taskId) => {
+    await firstTurnPaused(q, "RESUME_BOOT_SETTLED", async (taskId) => {
       monitorId = await insertMonitorRow(taskId, { status: "exited" });
       await db.update(monitors).set({
         sourceRole: "single", exitCode: 0, endedAt: now(), resultHandoffAt: now(), resultHandoffText: "不会送到的通知",
@@ -346,15 +346,16 @@ try {
     });
     await assertHeld(q, 1, "重启之前");
     await db.delete(schema.queueAdvanceIntents).where(eq(schema.queueAdvanceIntents.queueId, q.queueId));
-    failIntentWrites = 1;
+    await sleep(5);
+    await db.update(monitors).set({ resultsAbandonedAt: now(), resultsAbandonedReason: "不等了" })
+      .where(eq(monitors.id, monitorId));
     await recoverQueueAdvances();
-    assert.equal(failIntentWrites, 0, "补记确实撞上了那次注入");
-    assert.ok((await stopMonitorChecked(monitorId, "不等了")).ok, "赶在退避重试之前放弃");
-    assert.equal(await intentOf(q.queueId), undefined, "此刻库里还没有意图行");
-    await bothDone(q, "补记失败后先放弃、再重试");
+    await assertHeld(q, 1, "开机补办之后(这一笔不归它管)");
+    await sweepReleasedQueueMembers();
+    await bothDone(q, "巡检接住停机期间了结的哨兵");
     assert.equal(inputsOf(q.a).length, 2, `A 恰好续跑一次:${JSON.stringify(inputsOf(q.a))}`);
-    assert.ok(inputsOf(q.a)[1]!.includes("RESUME_BOOT_ABANDON"), inputsOf(q.a)[1]);
-    console.log("PASS: 开机补记失败、重试前哨兵被放弃 —— 欠账由重试兑现,A 续跑一次");
+    assert.ok(inputsOf(q.a)[1]!.includes("RESUME_BOOT_SETTLED"), inputsOf(q.a)[1]);
+    console.log("PASS: 停机期间哨兵了结、开机后没有事件 —— 巡检补推,A 续跑一次");
   }
 
   // ⑦ 名下没有哨兵的检查点暂停:行为不变,落 paused 就由队列续跑
@@ -384,6 +385,7 @@ try {
     const checkpointed = await member("qmh-parallel-checkpoint");
     await occupyResumePrompt(checkpointed, "等哨兵", false);
     await insertMonitorRow(checkpointed);
+    await sleep(2); // 夹具的哨兵 id 按毫秒取,同一毫秒插两条会撞主键
     const interrupted = await member("qmh-parallel-interrupted");
     await insertMonitorRow(interrupted);
     const plain = await member("qmh-parallel-plain");
@@ -417,20 +419,19 @@ try {
     await until("复查撞上了那次注入", async () => failRecheckReads === 0, 5_000);
     await sleep(400);
     assert.equal(inputsOf(q.a).length, 1, "事件那一路这次没接上(这正是要兜住的现场)");
-    assert.ok(await intentOf(q.queueId), "欠账还在");
-    await sweepOwedQueueAdvances();
+    await sweepReleasedQueueMembers();
     await bothDone(q, "巡检补推");
     assert.equal(inputsOf(q.a).length, 2, `A 恰好续跑一次:${JSON.stringify(inputsOf(q.a))}`);
     assert.ok(inputsOf(q.a)[1]!.includes("RESUME_AFTER_SWEEP"), inputsOf(q.a)[1]);
     console.log("PASS: 哨兵事件复查读失败 —— 调度 tick 的巡检补推,A 续跑一次");
   }
 
-  // ⑩ 停在等哨兵的成员上、推进意图那一笔写失败:不按「已接受」收场 —— 时间线留交代,进程里重试到
-  //    意图落库;哨兵随后被放弃时照常续跑
+  // ⑩ 落 paused 那一趟推进的意图写失败:这一趟本来就推不动(停在等哨兵的成员上),欠账也不记在意图上,
+  //    哨兵随后被放弃时照常续跑
   {
     const q = await queuePair("intent-failure");
     let monitorId = "";
-    await firstTurnPaused(q, "RESUME_AFTER_INTENT_RETRY", async (taskId) => {
+    await firstTurnPaused(q, "RESUME_AFTER_INTENT_FAILURE", async (taskId) => {
       monitorId = await insertMonitorRow(taskId, { status: "exited" });
       await db.update(monitors).set({
         sourceRole: "single", exitCode: 0, endedAt: now(), resultHandoffAt: now(), resultHandoffText: "不会送到的通知",
@@ -438,14 +439,32 @@ try {
       failIntentWrites = 1; // 打的是落 paused 那一刻状态钩子推的那一趟
     });
     assert.equal(failIntentWrites, 0, "落 paused 的那一趟确实撞上了注入");
-    await until("交代写进时间线", async () => timelineHas(q.a, "队列推进未接受"), 5_000);
-    await until("退避重试后意图落库", async () => !!await intentOf(q.queueId), 5_000);
-    await assertHeld(q, 1, "意图补上之后");
+    await assertHeld(q, 1, "意图写失败之后");
     assert.ok((await stopMonitorChecked(monitorId, "不等了")).ok);
-    await bothDone(q, "意图补上后放弃哨兵");
+    await bothDone(q, "意图写失败后放弃哨兵");
     assert.equal(inputsOf(q.a).length, 2, `A 恰好续跑一次:${JSON.stringify(inputsOf(q.a))}`);
-    assert.ok(inputsOf(q.a)[1]!.includes("RESUME_AFTER_INTENT_RETRY"), inputsOf(q.a)[1]);
-    console.log("PASS: 推进意图写失败 —— 不谎报接受,时间线留交代,重试补上后照常续跑");
+    assert.ok(inputsOf(q.a)[1]!.includes("RESUME_AFTER_INTENT_FAILURE"), inputsOf(q.a)[1]);
+    console.log("PASS: 推进意图写失败 —— 欠账不靠它,放弃哨兵后照常续跑");
+  }
+
+  // ⑪ 静止的检查点(旁路回合结算后 quiet 落回 paused):名下的哨兵早在它最后一个回合之前就了结了,
+  //    哨兵事件和巡检都不该把它续跑起来
+  {
+    const q = await queuePair("static");
+    await db.update(tasks).set({ status: "paused" }).where(eq(tasks.id, q.a));
+    await occupyResumePrompt(q.a, "RESUME_STATIC", false);
+    const monitorId = await insertMonitorRow(q.a, { status: "exited" });
+    const earlier = new Date(Date.now() - 60_000).toISOString();
+    await db.update(monitors).set({ sourceRole: "single", exitCode: 0, endedAt: earlier, resultsAbandonedAt: earlier })
+      .where(eq(monitors.id, monitorId));
+    await db.insert(schema.sessions).values({
+      id: `s-${q.a}`, taskId: q.a, role: "single", agentType: "claude", executor: "claude@fixture",
+      executorId: "qmh-claude", cliSessionId: `native-${q.a}`, cwd: root, startedAt: now(), turnStartedAt: now(), endedAt: now(),
+    });
+    bus.publish({ type: "task.monitors", taskId: q.a });
+    await sweepReleasedQueueMembers();
+    await assertHeld(q, 0, "静止检查点");
+    console.log("PASS: 静止的检查点 —— 哨兵事件与巡检都不续跑它");
   }
 
   assert.deepEqual(turnErrors, [], "夹具回合里的 pause/complete 都该成功");

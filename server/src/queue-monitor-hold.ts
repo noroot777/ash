@@ -10,22 +10,26 @@
 // 哨兵结果那一路(待发送投递),所以不会出现两边各起一个回合。
 //
 // 反方向:名下的哨兵都了结了、却没有结果要送(被放弃、重启后丢失),这一位就退回普通的检查点
-// 暂停,得有人再推一次队列,否则队列永远停在它身上。「停在这儿等过哨兵」记在推进意图上:等哨兵的
-// 那一趟推进不了结自己的意图(scheduler.ts 的 `retryableQueueAdvance`),所以意图行在 ⇔ 有一次被
-// 接受的推进还欠着。下面的监听只在意图还在、这一位已经不再被哨兵拖住时补推一次;意图落了库,
-// 重启之后(开机补办先读意图,哨兵随后才落 lost)同一条路照样接得上。
+// 暂停,得有人再推一次队列,否则队列永远停在它身上。
 //
-// 事件只是快的那一路,不是唯一的那一路:最后一个哨兵了结后不保证还有下一条事件,这一趟复查
-// 要是撞上一次读失败,欠账就没人管了(第 1 轮审查发现 1)。所以 30 秒的调度 tick 也扫一遍意图行
-// (`sweepOwedQueueAdvances`),停在等哨兵的成员上的跳过,其余的补推 —— 推进幂等,多推一次的
-// 代价只是一次空转判定。
+// 「还欠着这一次推进」不单独记账,从库里已有的两样事实现推(`owedAdvance`):这一位**最近一个
+// 执行回合开始之后**,它名下有哨兵了结过(结束、被放弃、重启后落 lost 都会写下时刻)。哨兵出了
+// 结果、把它叫醒的那一路会开一个更晚的回合,这个判据随之失效,所以不会两边各起一个回合;一个
+// 静止的检查点(旁路回合结算后 quiet 落回 paused,托盘来消息也不该把它续跑起来,见 queue-seat.ts
+// 里「第 2 轮语义保留」那一段)的哨兵早在它最后一个回合之前就了结了,判据不成立。
 //
-// 为什么非看意图不可:一个静止的检查点(旁路回合结算后 quiet 落回 paused)没有欠着的推进,
-// 托盘里来一条消息就把它续跑起来是另一个 bug(queue-seat.ts 里「第 2 轮语义保留」那一段)。
-import { eq } from "drizzle-orm";
+// 早先这笔账记在推进意图行上,于是每一条失败路径(意图写失败、开机补办读失败、重试撞上已经
+// 了结的哨兵…)都得单独想办法把它保住,三轮审查各找到一处漏的。现推的判据不经过任何一次写:
+// 中途哪一步失败,下一次再看,事实都还在原地。
+//
+// 谁来看:哨兵每一次了结都发 `task.monitors`、结果进出托盘都发 `task.pendingMessages`,下面的
+// 监听当场复查;最后一个哨兵了结后不保证还有下一条事件、复查也可能撞上读失败,所以 30 秒的
+// 调度 tick 再扫一遍所有暂停的队列成员(`sweepReleasedQueueMembers`),重启之后同样由它接上。
+// 只对「此刻轮到它」的那一位推:排在别人后面的,前面那位结算时自会推到它。
+import { and, eq, ne } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
-import { queueAdvanceIntents, queueItems, tasks } from "./db/schema.js";
+import { groups, monitors, queueItems, sessions, tasks } from "./db/schema.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 export type QueueRow = TaskRow & { monitorHold: boolean };
@@ -49,16 +53,44 @@ export async function withMonitorHolds(rows: TaskRow[]): Promise<QueueRow[]> {
   return out;
 }
 
-/** 调度 tick 的兜底:还欠着推进、又不再停在等哨兵的成员上的队列,补推一次。 */
-export async function sweepOwedQueueAdvances(): Promise<void> {
+/** 最近一个执行回合开始之后,名下有哨兵了结过吗(判据的来由见文件头)。 */
+async function owedAdvance(taskId: string): Promise<boolean> {
+  const turns = await db.select({ turnStartedAt: sessions.turnStartedAt, startedAt: sessions.startedAt })
+    .from(sessions)
+    .where(and(eq(sessions.taskId, taskId), eq(sessions.sideTurn, false), ne(sessions.role, "reviewer")));
+  const lastTurn = Math.max(...turns.map((t) => Date.parse(t.turnStartedAt ?? t.startedAt)).filter(Number.isFinite));
+  if (!Number.isFinite(lastTurn)) return false;
+  const settled = await db.select({ endedAt: monitors.endedAt, abandonedAt: monitors.resultsAbandonedAt })
+    .from(monitors).where(eq(monitors.taskId, taskId));
+  return settled.some((m) => [m.endedAt, m.abandonedAt].some((at) => !!at && Date.parse(at) > lastTurn));
+}
+
+/** 这一位在队列里等过哨兵、现在放开了、又正好轮到它 ⇒ 推一次。 */
+async function releaseIfOwed(taskId: string, queueId: string): Promise<void> {
+  const task = (await db.select({ status: tasks.status, archived: tasks.archived, groupId: tasks.groupId })
+    .from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (task?.status !== "paused" || task.archived) return;
+  if (task.groupId) {
+    const group = (await db.select({ paused: groups.paused }).from(groups).where(eq(groups.id, task.groupId))).at(0);
+    if (group?.paused) return;
+  }
+  if (await heldByMonitors(taskId) || !await owedAdvance(taskId)) return;
+  const { advanceQueue, pickNextLaunchable } = await import("./scheduler.js");
+  if ((await pickNextLaunchable(queueId))?.id !== taskId) return;
+  await advanceQueue(queueId);
+}
+
+/** 调度 tick 的兜底:扫所有暂停的队列成员,放开了却没人推的,补推一次。 */
+export async function sweepReleasedQueueMembers(): Promise<void> {
   if (dbClient.closed) return;
-  const { advanceQueue, queueMembers, scanQueue } = await import("./scheduler.js");
-  for (const { queueId } of await db.select({ queueId: queueAdvanceIntents.queueId }).from(queueAdvanceIntents)) {
+  const paused = await db.select({ taskId: queueItems.taskId, queueId: queueItems.queueId })
+    .from(queueItems).innerJoin(tasks, eq(tasks.id, queueItems.taskId))
+    .where(eq(tasks.status, "paused"));
+  for (const { taskId, queueId } of paused) {
     try {
-      if (scanQueue(await queueMembers(queueId)).monitorHold) continue;
-      await advanceQueue(queueId);
+      await releaseIfOwed(taskId, queueId);
     } catch (error) {
-      console.error(`[ash] 欠着的队列推进补推失败 queue=${queueId}(下一次 tick 再来):`, error);
+      console.error(`[ash] 等过哨兵的队列成员补推失败 task=${taskId}(下一次 tick 再来):`, error);
     }
   }
 }
@@ -67,15 +99,7 @@ async function recheck(taskId: string): Promise<void> {
   if (dbClient.closed) return;
   const item = (await db.select({ queueId: queueItems.queueId }).from(queueItems)
     .where(eq(queueItems.taskId, taskId))).at(0);
-  if (!item) return;
-  const owed = (await db.select({ queueId: queueAdvanceIntents.queueId }).from(queueAdvanceIntents)
-    .where(eq(queueAdvanceIntents.queueId, item.queueId))).at(0);
-  if (!owed) return;
-  const task = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (task?.status !== "paused") return;
-  if (await heldByMonitors(taskId)) return;
-  const { advanceQueueInBackground } = await import("./scheduler.js");
-  advanceQueueInBackground(item.queueId);
+  if (item) await releaseIfOwed(taskId, item.queueId);
 }
 
 // taskId → 这一趟检查期间又来过事件没有。一行输出一条事件,同一个任务的检查排成一趟、最后补一趟,
@@ -92,7 +116,7 @@ function onMonitorChange(taskId: string): void {
         await recheck(taskId);
       } while (checking.get(taskId));
     } catch (error) {
-      console.error(`[ash] 等哨兵的队列成员复查失败 task=${taskId}(调度 tick 会再扫到这笔欠账):`, error);
+      console.error(`[ash] 等哨兵的队列成员复查失败 task=${taskId}(调度 tick 会再扫到它):`, error);
     } finally {
       checking.delete(taskId);
     }
