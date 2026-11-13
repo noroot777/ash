@@ -1,12 +1,15 @@
 #!/bin/bash
-# 编出 ash 的 macOS 壳：一个 WKWebView 窗口，连 :4317（或 ASH_URL / defaults 里的 AshURL）。
-# 不用 Xcode 工程，只要 Xcode 命令行工具里的 swiftc。
+# 编出 ash 的 macOS app：一个 WKWebView 窗口，连 :4317（或 ASH_URL / defaults 里的 AshURL），
+# 服务没在跑就从主仓把它起起来。不用 Xcode 工程，只要 Xcode 命令行工具里的 swiftc。
 #
 #   desktop/macos/build.sh             # 产物 desktop/macos/build/Ash.app
-#   desktop/macos/build.sh --install   # 另拷一份到 ~/Applications/Ash.app 并打开
+#   desktop/macos/build.sh --install   # 装进 /Applications（不可写就 ~/Applications）并打开
+#   desktop/macos/build.sh --dmg       # 另出一份拖进「应用程序」安装的 build/Ash.dmg
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# 起服务用**主仓**：在 worktree 里构建也一样指回主仓，worktree 验收后就删了。
+REPO="$(dirname "$(git -C "$HERE" rev-parse --path-format=absolute --git-common-dir)")"
 BUILD="$HERE/build"
 APP="$BUILD/Ash.app"
 VERSION="0.1.0"
@@ -40,6 +43,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>AshRepoPath</key><string>$REPO</string>
   <key>CFBundleVersion</key><string>$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo 0)</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
@@ -56,12 +60,26 @@ PLIST
 codesign --force --sign - "$APP" >/dev/null
 echo "✓ $APP"
 
-if [[ "${1:-}" == "--install" ]]; then
-  DEST="$HOME/Applications/Ash.app"
-  mkdir -p "$HOME/Applications"
-  osascript -e 'tell application id "dev.ash.mac" to quit' >/dev/null 2>&1 || true
-  rm -rf "$DEST"
-  ditto "$APP" "$DEST"
-  echo "✓ $DEST"
-  open "$DEST"
-fi
+case "${1:-}" in
+  --install)
+    DEST_DIR="/Applications"
+    [[ -w "$DEST_DIR" ]] || DEST_DIR="$HOME/Applications"
+    DEST="$DEST_DIR/Ash.app"
+    mkdir -p "$DEST_DIR"
+    osascript -e 'tell application id "dev.ash.mac" to quit' >/dev/null 2>&1 || true
+    rm -rf "$DEST"
+    ditto "$APP" "$DEST"
+    echo "✓ $DEST"
+    open "$DEST"
+    ;;
+  --dmg)
+    STAGE="$BUILD/dmg"
+    rm -rf "$STAGE" "$BUILD/Ash.dmg"
+    mkdir -p "$STAGE"
+    ditto "$APP" "$STAGE/Ash.app"
+    ln -s /Applications "$STAGE/Applications"
+    hdiutil create -quiet -volname ash -srcfolder "$STAGE" -ov -format UDZO "$BUILD/Ash.dmg"
+    rm -rf "$STAGE"
+    echo "✓ $BUILD/Ash.dmg"
+    ;;
+esac

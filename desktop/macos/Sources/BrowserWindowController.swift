@@ -90,10 +90,27 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
   // MARK: 连不上服务
 
-  /// 服务没起或正在重启：显示原生占位，每 2 秒探一次 /api/health，通了自动载回来。
-  /// 不自己去拉起服务 —— 4317 的启停归用户的 `npm run restart`。
+  /// 连不上：本机地址就先替用户把服务起起来（见 ServerLauncher），起不来再说明原因。
+  /// 同时每 2 秒探一次 /api/health —— 服务也可能是别处（比如 `npm run restart`）起好的。
   func showOffline(_ error: Error) {
-    offlineView.show(address: AshConfig.baseURL.absoluteString, detail: error.localizedDescription)
+    let address = AshConfig.baseURL.absoluteString
+    let launcher = ServerLauncher.shared
+    if launcher.canLaunch {
+      offlineView.show(title: "正在启动 ash 服务…", detail: address, busy: true)
+      launcher.ensureRunning { [weak self] outcome in
+        guard let self, !self.offlineView.isHidden else { return }
+        switch outcome {
+        case .ready:
+          self.loadHome()
+        case .restartInProgress:
+          self.offlineView.show(title: "npm run restart 正在换服务", detail: "换好后会自动载入。", busy: true)
+        case .failed(let reason):
+          self.offlineView.show(title: "ash 服务没起来", detail: reason, busy: false, log: launcher.logURL)
+        }
+      }
+    } else {
+      offlineView.show(title: "连不上 \(address)", detail: "\(error.localizedDescription)\n服务起来后会自动载入。", busy: false)
+    }
     guard healthTimer == nil else { return }
     healthTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
       self?.probeHealth()

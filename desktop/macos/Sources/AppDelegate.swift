@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.mainMenu = MainMenu.build()
+    LoginService.reconcileAtLaunch()
     let controller = BrowserWindowController()
     windowController = controller
     controller.showWindow(nil)
@@ -20,6 +21,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+
+  @objc func toggleLoginService(_ sender: NSMenuItem) {
+    do {
+      try LoginService.setEnabled(!LoginService.isEnabled)
+    } catch {
+      NSAlert(error: error).runModal()
+    }
+  }
+}
+
+extension AppDelegate: NSMenuItemValidation {
+  func validateMenuItem(_ item: NSMenuItem) -> Bool {
+    if item.action == #selector(toggleLoginService(_:)) {
+      item.state = LoginService.isEnabled ? .on : .off
+    }
+    return true
+  }
 }
 
 /// 菜单不只是装饰：WKWebView 的 ⌘C / ⌘V / ⌘Z / ⌘A 全靠「编辑」菜单里的 responder 动作
@@ -53,6 +71,8 @@ enum MainMenu {
   private static func appMenu() -> NSMenu {
     let menu = NSMenu(title: "ash")
     menu.addItem(item("关于 ash", #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
+    menu.addItem(.separator())
+    menu.addItem(item("登录时启动 ash 服务", #selector(AppDelegate.toggleLoginService(_:))))
     menu.addItem(.separator())
     menu.addItem(item("隐藏 ash", #selector(NSApplication.hide(_:)), "h"))
     menu.addItem(item("隐藏其他", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]))

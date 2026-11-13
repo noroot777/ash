@@ -19,6 +19,15 @@ enum AshConfig {
 
   static var healthURL: URL { baseURL.appendingPathComponent("api/health") }
 
+  /// 自动起服务时用哪份仓库。build.sh 把**主仓**的路径（不是某个 worktree，worktree 验收后
+  /// 就删了）写进 Info.plist；`defaults write dev.ash.mac AshRepoPath <路径>` 可以改指。
+  static var repoURL: URL? {
+    let raw = UserDefaults.standard.string(forKey: "AshRepoPath")
+      ?? Bundle.main.object(forInfoDictionaryKey: "AshRepoPath") as? String
+    guard let raw, !raw.isEmpty else { return nil }
+    return URL(fileURLWithPath: raw, isDirectory: true)
+  }
+
   /// 同源判据：scheme + host + port。127.0.0.1 与 localhost 视为同一台，免得服务端回跳
   /// 到另一种写法时被当成外链踢去浏览器。
   static func isSameOrigin(_ url: URL) -> Bool {
