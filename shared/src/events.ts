@@ -199,6 +199,11 @@ export type ServerEvent =
       // 需求」的发言长得一模一样（同执行器自审时连名字都一样）。跟 model/reasoningEffort
       // 一样按回合随流广播，落盘那份在 trace 的 run 事件里，两条路读出来必须一致。
       verifyRound?: number | null;
+      // 这条事件属于哪一回合：跟它落进 trace 时挂的那个 `turnStartedAt` 是同一个值。前端按它
+      // 给实时事件认气泡 —— 会话行上的 `turnStartedAt` 只说「此刻最新那一回合」，下一回合一
+      // 开始，拿它去认上一回合的事件就认错了（不经重读接着看的页面，上一回合会被劈成两颗）。
+      // 缺省 = 发出方不知道（回合外的旁注、老服务端），读端退回按会话行认。
+      turnStartedAt?: string | null;
       event: AgentEvent;
     }
   // A user-channel turn after it has been persisted to the session transcript.

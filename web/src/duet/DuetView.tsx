@@ -20,6 +20,7 @@ import { executionEventsSize } from "../task-detail/conversationContentSize.ts";
 import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { MessageText } from "../components/MessageText.tsx";
 import { taskFileResolver } from "../components/markdownPolicy.ts";
 import { RunActivity } from "../components/RunActivity.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
@@ -88,7 +89,7 @@ function TurnBubble({
         {newRound && <div className="duet-round-divider"><span />第 {turn.round} 轮<span /></div>}
         <article className="duet-user-turn" {...(inputId ? conversationInputAnchor(inputId) : {})}>
           <header><b>你</b>{turn.target && <span>→ 讨论者 {turn.target}</span>}{turn.at && <time>{formatInstant(turn.at)}</time>}</header>
-          {said.body && <p>{said.body}</p>}
+          {said.body && <MessageText text={said.body} />}
           <MessageAttachments paths={said.paths} />
         </article>
       </div>

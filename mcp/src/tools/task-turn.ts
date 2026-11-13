@@ -25,6 +25,7 @@ import {
   PLAIN_SUMMARY_EXAMPLE, PLAIN_SUMMARY_GUIDE, RECURS_FIELD_GUIDE, REVIEW_VALIDATION_REQUIREMENT,
 } from "@ash/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
+import { callWithMonitorResults } from "./monitor-results.js";
 import { RECURS, TASK_STAGE } from "../schemas.js";
 
 export function registerTaskTurnTools(server: McpServer): void {
@@ -147,16 +148,16 @@ server.registerTool(
     description:
       "在执行中调用,告诉 ash:「本任务的目标我确定已经达成了」。回合结算时读到这个确认才会落 done;**没有确认的正常退出(exit 0)一律按未完成记 failed**——退出码不代表目标达成,报错后退出也是 exit 0。\n\n"
       + "用法:核实目标已达成(产物在、校验过)后,在结束回合前调一次,然后正常结束输出。**只能在任务正在跑时调用**。没完成就不要调:要等外部条件用 pause_task;做不下去就说明原因退出(记 failed,用户可重试续跑)。\n\n"
-      + "**名下还有没了结的哨兵时这个确认会被拒(409)**,两类都算:还在盯的,以及已经出了结果、还排在待发送里没送到你手上的(落 done 会把它们一并停掉/作废)。拒绝那句话里会列出是哪几个。出路:还要那个结果 → 改用 pause_task 收尾,等它叫醒你再确认;不要了 → 对那条哨兵调 stop_monitor(reason 写清为什么),它排着的结果一并按「明确放弃」算(**已经跑完的也一样要调**,放弃的是「必须先收下结果」这条条件,不是进程)。\n\n"
+      + "**名下还有没了结的哨兵时这个确认会被拒(409)**,两类都算:还在盯的,以及已经出了结果、还没送到你手上的(这些随 409 交给你,看过再定)。拒绝那句话里会列出是哪几个。出路:还要那个结果 → 改用 pause_task 收尾,等它叫醒你再确认;不要了 → 对那条哨兵调 stop_monitor(reason 写清为什么),它排着的结果一并按「明确放弃」算(**已经跑完的也一样要调**,放弃的是「必须先收下结果」这条条件,不是进程)。\n\n"
       + "**确认之后不要再挂哨兵**:那一刻这份确认会被当场撤掉(创建的返回里会明说),本回合改落检查点暂停。",
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id(任务 prompt 前言里有)"),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
+      monitorReceipt: z.string().optional().describe("上次返回给的回执号,有就原样填"),
     },
   },
-  async ({ taskId, directionToken }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/complete`, {}, directionToken)); }
-    catch (e) { return fail(e); }
+  async ({ taskId, directionToken, monitorReceipt }) => {
+    return callWithMonitorResults(`/tasks/${taskId}/complete`, { monitorReceipt }, directionToken);
   },
 );
 
@@ -165,18 +166,18 @@ server.registerTool(
   {
     title: "在检查点暂停(等续跑)",
     description:
-      "在执行中调用,告诉 ash:「我跑到一个检查点了,下次该继续时给我喂这段 prompt」。你这一回合自然结束后状态落 paused(不是 done);队列推进时会用 resumePrompt 把你叫醒、resume 同一个 CLI 会话(哨兵有结果时同理)。\n\n"
-      + "用法:先把检查点前的活正常做完,要暂停时调一次,然后正常退出当前回合。**只能在任务正在跑时调用**,resumePrompt 不能为空(否则 resume 时没东西喂你)。\n\n"
-      + "被具体问题卡住、要等人拍板时用 ask_question 而不是本工具:pause 是「到检查点等续跑」,ask 是「等答案」且会自动通知团队调度者。",
+      "在执行中调用,告诉 ash:「我跑到一个检查点了,下次该继续时给我喂这段 prompt」。你这一回合自然结束后状态落 paused(不是 done);队列推进或哨兵出结果时用 resumePrompt 叫醒你续同一会话(调用时结果已到就不暂停,随返回给你)。\n\n"
+      + "用法:先把检查点前的活做完,要暂停时调一次,然后正常退出当前回合。**只能在任务正在跑时调用**,resumePrompt 不能为空(否则 resume 时没东西喂你)。\n\n"
+      + "被具体问题卡住、要等人拍板时改用 ask_question:pause 是「到检查点等续跑」,ask 是「等答案」且会自动通知团队调度者。",
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id"),
       resumePrompt: z.string().min(1).describe("下次被 resume 时喂给你的 user 消息 —— 就当成一条「继续：…」replied 写"),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
+      monitorReceipt: z.string().optional().describe("上次返回给的回执号,有就原样填"),
     },
   },
-  async ({ taskId, resumePrompt, directionToken }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/pause`, { resumePrompt }, directionToken)); }
-    catch (e) { return fail(e); }
+  async ({ taskId, resumePrompt, directionToken, monitorReceipt }) => {
+    return callWithMonitorResults(`/tasks/${taskId}/pause`, { resumePrompt, monitorReceipt }, directionToken);
   },
 );
 

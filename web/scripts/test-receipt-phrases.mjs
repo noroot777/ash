@@ -19,6 +19,11 @@ assert.deepEqual(
   "原文点开再看",
 );
 assert.equal(typed({ kind: "complete.held", after: "new-monitor" }).text, "收工之后又派了哨兵，先暂停等它回来");
+assert.deepEqual(
+  (({ icon, text }) => [icon, text])(typed({ kind: "monitor.handed", via: "pause", monitorWake: { monitors: [] } })),
+  ["monitor", "哨兵结果在这一回合里交给了它"],
+  "回合里就交到手上的那一句同样是哨兵那一枚",
+);
 for (const tone of ["neutral", "notice", "error"]) {
   assert.deepEqual(
     (({ icon, text }) => [icon, text])(legacy(held, tone)),

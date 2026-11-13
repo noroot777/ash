@@ -12,6 +12,7 @@ import type { MonitorStatus } from "@ash/shared/monitor";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { deliverResultHandoff } from "./monitor-events.js";
+import { flushMonitorRows, markFinishing } from "./monitor-end-owed.js";
 import { ensureSupervised } from "./monitor-handover.js";
 import { tailLines } from "./monitor-spawn.js";
 import { hitOf, matchedReason } from "./monitor-consume.js";
@@ -67,6 +68,8 @@ export async function finishOffline(
       return;
     }
     try {
+      // 同在线那条收尾:占到槽位起这条哨兵名下的行谁都领不走,这一笔让它活过重启(monitor-end-owed.ts)。
+      await markFinishing(fresh.id);
       // **现有运行时在这里交接掉**(第 22 轮审查 N2):接回层现在给每一条运行行都先立 tail 和
       // 期限(连 pid 还空着的创建意图行也有),而这一趟判的就是「它已经不在了」。不撤的话一条
       // 已经写成终态的行还占着文件句柄、还在算自己的期限,到点再走一次收尾。撤之前照旧把
@@ -137,7 +140,7 @@ export async function finishOffline(
       }
       publish(base.taskId);
       // 同上:问日志文件,不问游标也不问这一趟读到哪(两者都只是「送出去多少」的影子)。
-      await appendTaskTimeline(base.taskId, noticeLine({ kind: "monitor.finished", description: base.description },
+      await appendTaskTimeline(base.taskId, noticeLine({ kind: "monitor.finished", monitorId: base.id, description: base.description },
         `哨兵结束：${base.description}。${note}（${tally}）`));
       await deliverResultHandoff(base.id);
     } finally {
@@ -150,8 +153,9 @@ export async function finishOffline(
       // 这次故障一起失败时,光打一行日志就等于把这条哨兵永久丢掉。
       await ensureSupervised(row.id, { holdingChain: true });
       // 监督挂回去之后才交还所有权:中间这一瞬要是让别的收尾进来,它看到的就是「没有运行时、
-      // 行还 running」那张老牌面。
+      // 行还 running」那张老牌面。放手不等于放行(还欠着入队的,凭证照旧挡着),这里只触发一次。
       release();
+      void flushMonitorRows(row.id).catch((e) => console.error(`[ash] 离线收尾后触发投递失败 monitor=${row.id}:`, e));
     }
   });
 }

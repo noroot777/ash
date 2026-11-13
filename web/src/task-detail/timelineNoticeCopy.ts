@@ -188,6 +188,8 @@ function typedView(notice: TimelineNotice, raw: string): NoticeView {
       return view("receipt", "neutral", "other", "monitor", monitorFinishedText(notice.description), raw);
     case "monitor.released":
       return view("receipt", "neutral", "other", "monitor", monitorReleasedText(notice.description, notice.finished), raw);
+    case "monitor.handed":
+      return view("receipt", "neutral", "other", "monitor", "哨兵结果在这一回合里交给了它", raw);
     case "complete.held":
       return view("receipt", "neutral", "other", "monitor", completeHeldText(notice.after), raw);
     case "command.output": {

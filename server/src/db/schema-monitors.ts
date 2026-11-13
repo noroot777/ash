@@ -91,6 +91,14 @@ export const monitors = sqliteTable("monitors", {
   resultHandoffAt: text("result_handoff_at"),
   resultHandoffText: text("result_handoff_text"),
   /**
+   * **收尾已经开始**的时刻(进程退了 / 到期了 / 命中了,ash 正在排干、写终态)。NULL = 没开始过。
+   *
+   * 它跟上面那对凭证一起回答「这条哨兵还欠着一声结束吗」(monitor-end-owed.ts):收尾开始到终态
+   * 落定这一段归它,终态落定到结束入队那一段归凭证。落库是为了活过重启 —— ash 死在这一段中间,
+   * 下次开机在接回把它收完之前,名下的末批照样谁都领不走。终态落定之后它就不再被读,不必清。
+   */
+  finishingSince: text("finishing_since"),
+  /**
    * **约定的结束条件**:哪一行一出现这条哨兵就收工。NULL = 没约定过。
    *
    * 存的是**字样**,不是正则源文:`BUILD OK|FAILED`、`^SWEEP_EXIT=`(语法见 shared 的

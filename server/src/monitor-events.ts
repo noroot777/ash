@@ -11,9 +11,9 @@
 //    等它跑完、空闲就立刻续会话、归档就作废、server 重启后不丢、界面托盘里看得见、用户
 //    能撤）`pending-messages.ts` 全都已经做对了，而且每一条都踩过坑。
 // ② **一条事件 = 唤醒一次 = 一个真实的模型回合。** 所以合并是第一位的。
-import { and, eq, inArray, isNull, like, notInArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, like, notInArray } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
-import { handoffToken, mergeMonitorEventText, monitorMessageOrigin } from "@ash/shared/monitor";
+import { handoffToken, mergeMonitorEventText, MONITOR_END_GRACE_MS, monitorMessageOrigin } from "@ash/shared/monitor";
 import { appendMonitorWake, readMonitorWake, type MonitorWakeEvent } from "@ash/shared/monitor-wake";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
@@ -51,7 +51,7 @@ export async function pushToTask(
   // 「谁按 {status, archived} 两字段读 tasks」被回归精确注入的（test-monitor-races ㉒），
   // 这一处跟它撞同一个形状就会把那条注入骗走，让别人的用例静默变成空测。
   const task = (await db
-    .select({ id: tasks.id, status: tasks.status, archived: tasks.archived })
+    .select({ id: tasks.id, status: tasks.status, archived: tasks.archived, mode: tasks.mode })
     .from(tasks)
     .where(eq(tasks.id, row.taskId))).at(0);
   if (!task || await monitorWakeGate(task, {
@@ -60,7 +60,8 @@ export async function pushToTask(
   }) !== null) return false;
 
   const origin = monitorMessageOrigin(row.id);
-  const existing = (await db
+  // 这条哨兵名下还在等投递的那几行,从旧到新。正常最多两行(见下)。
+  const waiting = (await db
     .select()
     .from(scheduledMessages)
     .where(and(
@@ -68,10 +69,140 @@ export async function pushToTask(
       eq(scheduledMessages.origin, origin),
       eq(scheduledMessages.status, "pending"),
       isNull(scheduledMessages.deliveringSince),
-    ))).at(0) ?? null;
-  await mergeOrEnqueueMonitorEvent(row, text, existing, handoffToken, event);
-  flushPendingForTask(row.taskId);
+    ))
+    .orderBy(asc(scheduledMessages.createdAt), asc(scheduledMessages.id)));
+  const latest = waiting.at(-1) ?? null;
+  // **输出那一批 ⇒ 它所在的那一行在窗口内不许投递**(合并窗口,见 `deferFlush`);「结束」那一笔
+  // 并进最新那一行、再把这条哨兵所有行的窗口一起解除,当场一次送走。窗口落在行上而不是某一个触发
+  // 源上,谁先来领都得等它;不分任务忙闲,忙着的那一轮可能下一刻就收口。团队调度台不等:它的常驻
+  // 会话说着话也接得住。
+  //
+  // **窗口只护最新那一批,而且每一批都有自己完整的一段**:最新那一批永远单独占最后一行、带
+  // 「它自己到达 + 2 秒」的期限;更早的那些并成它前面那一行(积压),期限不动。只靠「并进还在
+  // 窗口里的那一行」不够 —— 并进去的那一批沿用的是**别人的**期限,窗口末尾才到的那一批只剩一点点
+  // 余量,期限一到就被单独送走,紧跟着的「结束」只能另起一行再叫一次。也不顺延老行的期限:持续
+  // 输出时那样会把整行一直压着,而每一批最多只许比原来晚两秒。所以同一条哨兵名下最多两行在等
+  // (积压 + 最新),「结束」到来时两行一起解除。
+  const at = Date.now();
+  const hold = !handoffToken && event?.kind !== "ended" && task.mode !== "team";
+  if (!hold) {
+    // **两步的顺序就是不变量**(第 4 轮审查 4):先把「结束」落进最新那一行,**窗口原样不动**
+    // (另起一行时带上这几行里最晚的那个期限);再用**一条语句**解除这条哨兵所有行的窗口。中间
+    // 断掉(解除那一笔失败、进程没了)时交接凭证还在,这条哨兵名下的行一行都领不走(monitor-end-owed.ts
+    // ③),期限到了也一样;重投那一侧认出「这一笔已经入过队」时把解除补做完,才销凭证
+    // (`deliverResultHandoff`)—— 销掉的那一刻几行一起放行。
+    const latestHold = waiting.reduce<string | null>(
+      (max, m) => (m.mergeHoldUntil && (!max || m.mergeHoldUntil > max) ? m.mergeHoldUntil : max), null);
+    await mergeOrEnqueueMonitorEvent(row, text, latest, handoffToken, event, latestHold);
+    await releaseMergeHolds(origin);
+    flushNow(row.id, row.taskId);
+    return true;
+  }
+  // 收尾正在进行(进程已经退了,ash 还在记账)时不必另压:欠着结束的哨兵名下谁都领不走(monitor-end-owed.ts)。
+  const holdUntil = new Date(at + MONITOR_END_GRACE_MS).toISOString();
+  const backlog = waiting.at(-2);
+  // 已经有积压那一行:最新那一行并进它、腾出来装这一批。没有(或者腾的那一下落空):这一批另起一行,
+  // 原来最新的那一行就成了积压,期限照旧。
+  if (!(backlog && latest && await shiftNewestBatch(backlog, latest, text, event, holdUntil))) {
+    await mergeOrEnqueueMonitorEvent(row, text, null, undefined, event, holdUntil);
+  }
+  deferFlush(row.id, row.taskId, holdUntil);
   return true;
+}
+
+const SHIFT_LOST = Symbol("shift-lost");
+
+/**
+ * 把最新那一行并进积压那一行,最新那一行改装这一批、带它自己的期限。两笔在一个事务里:任何一笔
+ * 落空(那一行被领走了、刚被别的事件改过)就整个撤回、返回 `false`,调用方另起一行。
+ */
+async function shiftNewestBatch(
+  backlog: typeof scheduledMessages.$inferSelect,
+  newest: typeof scheduledMessages.$inferSelect,
+  text: string,
+  event: MonitorWakeEvent | undefined,
+  holdUntil: string,
+): Promise<boolean> {
+  // 带着结果交接身份 / 续跑交代的那一行有自己的身份,不搬它的正文。
+  if (newest.handoffToken || newest.checkpointTaken || backlog.checkpointTaken) return false;
+  const untouched = (m: typeof scheduledMessages.$inferSelect) => and(
+    eq(scheduledMessages.id, m.id), eq(scheduledMessages.status, "pending"),
+    isNull(scheduledMessages.deliveringSince), eq(scheduledMessages.text, m.text),
+  );
+  const previous = readMonitorWake(backlog.monitorWake);
+  const moved = readMonitorWake(newest.monitorWake);
+  const folded = previous && moved
+    ? moved.events.reduce((wake, e) => appendMonitorWake(wake, e),
+      { ...previous, omittedEvents: previous.omittedEvents + moved.omittedEvents })
+    : null;
+  try {
+    await db.transaction(async (transaction) => {
+      const first = await transaction.update(scheduledMessages)
+        .set({ text: mergeMonitorEventText(backlog.text, newest.text), monitorWake: folded })
+        .where(untouched(backlog)).returning({ id: scheduledMessages.id });
+      if (!first.length) throw SHIFT_LOST;
+      const second = await transaction.update(scheduledMessages)
+        .set({ text, monitorWake: event ? appendMonitorWake(null, event) : null, mergeHoldUntil: holdUntil })
+        .where(untouched(newest)).returning({ id: scheduledMessages.id });
+      if (!second.length) throw SHIFT_LOST;
+    }, { behavior: "immediate" });
+  } catch (e) {
+    if (e === SHIFT_LOST) return false;
+    throw e;
+  }
+  publishPendingMessages(newest.taskId);
+  return true;
+}
+
+/**
+ * 「结束」到了 / 收尾做完了:这条哨兵名下还在等的每一行都不再等(一条语句,要么全解除要么都不动)。
+ * 返回解除了哪几个任务头上的行。
+ */
+export async function releaseMergeHolds(origin: string): Promise<string[]> {
+  if (dbClient.closed) return [];
+  const released = await db.update(scheduledMessages).set({ mergeHoldUntil: null }).where(and(
+    eq(scheduledMessages.origin, origin),
+    eq(scheduledMessages.status, "pending"), isNull(scheduledMessages.deliveringSince),
+    isNotNull(scheduledMessages.mergeHoldUntil),
+  )).returning({ taskId: scheduledMessages.taskId });
+  return [...new Set(released.map((m) => m.taskId))];
+}
+
+/**
+ * 输出那一批**先不叫醒**,等 `MONITOR_END_GRACE_MS` 看进程是不是马上就退 —— 打完最后一行就退出
+ * 是最常见的收尾,不等的话这一批先起一个回合,紧跟着的「结束」只能排在它后面再叫醒一次。
+ *
+ * **不许早送的是那一行自己**(`merge_hold_until`,到期判据 `isDueForDelivery` 认它):巡检、
+ * 状态钩子、别的哨兵触发的扫描、回合里的交付,哪一路先到都领不走它。这里的定时器只负责窗口
+ * 过了之后**触发**那一次投递;进程这期间没了,那一行照旧在,巡检到点就送。
+ *
+ * 等到了 = 收尾那一笔把「结束」并进最新那一行、解除这条哨兵所有行的窗口、当场送(`flushNow` 顺手撤掉
+ * 这些定时器)。到点时收尾正在进行(进程已经退了,收尾还在排干/回收/落终态)、或者结束已定还没入队:
+ * 这一次触发什么都领不走(monitor-end-owed.ts),等那一笔交接做完由它那边触发。命中 `stopWhen`
+ * 那一批走的也是这条:命中当场就排上了收尾,收尾一入队就把它们一起送出去。
+ */
+const deferred = new Map<string, Set<NodeJS.Timeout>>();
+
+/**
+ * 到 `until` 再触发一次投递。每一批都排一个(搬进积压那一行的那几批,它们的定时器还按原来的期限,
+ * 到点时多扫一次而已):不去猜这一批最后落进了哪一行 —— 腾挪那一下可能落空、另起一行。
+ */
+function deferFlush(monitorId: string, taskId: string, until: string): void {
+  const timers = deferred.get(monitorId) ?? new Set<NodeJS.Timeout>();
+  const timer = setTimeout(() => {
+    timers.delete(timer);
+    if (!timers.size) deferred.delete(monitorId);
+    flushPendingForTask(taskId);
+  }, Math.max(0, Date.parse(until) - Date.now()));
+  (timer as { unref?: () => void }).unref?.();
+  timers.add(timer);
+  deferred.set(monitorId, timers);
+}
+
+function flushNow(monitorId: string, taskId: string): void {
+  for (const timer of deferred.get(monitorId) ?? []) clearTimeout(timer);
+  deferred.delete(monitorId);
+  flushPendingForTask(taskId);
 }
 
 /**
@@ -136,6 +267,9 @@ export async function deliverResultHandoff(monitorId: string): Promise<HandoffOu
     // 凭证照样销掉。先查那一步留着只是省掉一次必然失败的写（第 3 轮审查 N1）。
     let duplicate = false;
     let delivered = false;
+    // 「这一笔已经入过队」只证明入了队:解除窗口那一步(`pushToTask` 里紧跟着的那一笔)可能没做成。
+    // 销凭证之前把它补做完(幂等),否则前面积压的那几行要等自己的期限、排到「结束」后面去。
+    if (sentAlready) await releaseMergeHolds(monitorMessageOrigin(row.id));
     if (!sentAlready) {
       try {
         const header = `【哨兵结束】${row.description}（monitorId=${row.id}）`;
@@ -146,6 +280,7 @@ export async function deliverResultHandoff(monitorId: string): Promise<HandoffOu
       } catch (e) {
         if (!isHandoffTokenConflict(e)) throw e;
         duplicate = true;
+        await releaseMergeHolds(monitorMessageOrigin(row.id));
       }
     }
     await db
@@ -160,6 +295,9 @@ export async function deliverResultHandoff(monitorId: string): Promise<HandoffOu
     // 一直写着「完成被它堵着」和一个没有用处的「不再等它的结果」,直到用户自己刷新页面。
     // 放在这里而不是四个 return 各写一遍:上面那条 UPDATE 是四条出口的共同销账点。
     bus.publish({ type: "task.monitors", taskId: row.taskId });
+    // 凭证在的时候这条哨兵名下谁都领不走(monitor-end-owed.ts ③),上面入队那一下的投递触发因此落空:
+    // 销完才是放行的那一刻,在这里再触发一次。
+    flushPendingForTask(row.taskId);
     if (sentAlready || duplicate) return "already";
     if (!delivered) {
       console.error(
@@ -205,6 +343,8 @@ export async function mergeOrEnqueueMonitorEvent(
   /** 结果交接的身份：合并和新建**两支都要落下它**，否则重投会把同一笔再送一次（N1）。 */
   handoffToken?: string,
   event?: MonitorWakeEvent,
+  /** 新起一行时的合并窗口(`pushToTask`);「结束」并进已有那一行时(`null`)解除它。 */
+  holdUntil: string | null = null,
 ): Promise<void> {
   const previous = readMonitorWake(existing?.monitorWake);
   const monitorWake = event && (!existing || previous) ? appendMonitorWake(previous, event) : null;
@@ -215,6 +355,7 @@ export async function mergeOrEnqueueMonitorEvent(
         text: mergeMonitorEventText(existing.text, text),
         monitorWake,
         ...(handoffToken ? { handoffToken } : {}),
+        ...(holdUntil ? {} : { mergeHoldUntil: null }),
       })
       .where(and(
         eq(scheduledMessages.id, existing.id),
@@ -238,6 +379,7 @@ export async function mergeOrEnqueueMonitorEvent(
     await enqueueMessage({
       taskId: row.taskId, text, origin: monitorMessageOrigin(row.id),
       monitorWake: event ? appendMonitorWake(null, event) : null,
+      mergeHoldUntil: holdUntil,
       ownerUserId: row.ownerUserId,
       ...(handoffToken ? { handoffToken } : {}),
       // **角色和「为哪一次审查的哪一轮」一起交出去**:两样都记在哨兵行上,所以投递那一刻
@@ -273,7 +415,8 @@ export async function mergeOrEnqueueMonitorEvent(
 export async function cancelPendingMonitorEvents(
   taskId: string,
   // `keep` = 这几条哨兵的事件留着（它们属于一次还在进行的审查）；`only` = 只作废这几条的。
-  scope: { keep?: string[]; only?: string[] } = {},
+  // `keepReturned` = 回合里交过、那一轮没收口退回来的留着等下一次起跑（monitor-turn-handoff.ts ②）。
+  scope: { keep?: string[]; only?: string[]; keepReturned?: boolean } = {},
 ): Promise<void> {
   if (dbClient.closed) return;
   // **显式给了空的 `only` = 没有要作废的**,不是「那就收全部」:下面 `only` 为空时会退回
@@ -294,6 +437,7 @@ export async function cancelPendingMonitorEvents(
         ? inArray(scheduledMessages.origin, origins.only)
         : like(scheduledMessages.origin, "monitor:%"),
       ...(origins.keep.length ? [notInArray(scheduledMessages.origin, origins.keep)] : []),
+      ...(scope.keepReturned ? [isNull(scheduledMessages.turnReturnedAt)] : []),
     ));
   publishPendingMessages(taskId);
   await recoverPendingCheckpoints(taskId);

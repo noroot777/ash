@@ -10,6 +10,7 @@ import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
 import { stopMonitorsForTask } from "./monitor-reclaim.js";
+import { reclaimGateSnapshots } from "./accept-gate-reclaim.js";
 import { isAcceptingTask, isAdmitting } from "./acceptance-lock.js";
 import { claimWorkspaceTurn, isRunning, isTurnClaimed } from "./runs.js";
 import { setTaskStatus } from "./status.js";
@@ -111,6 +112,10 @@ export function mountTaskArchiveRoutes(api: Hono): void {
       }
     }
     const cleanup = await cleanupArchivedWorkspaces(await repoPathOf(r.projectId), cleanupTargets);
+    // 验收快照同理（见 accept-gate-reclaim.ts）。取回归档也用不上它：快照只在那次门禁结算时读过一次。
+    for (const target of cleanupTargets) {
+      await reclaimGateSnapshots(target.id).catch((error) => console.error(`[ash] 归档时回收快照失败（${target.id}）:`, error));
+    }
     const summary = summarizeArchiveCleanup(cleanup);
     if (summary) await appendTaskTimeline(r.id, receiptLine(`归档时清理工作区：${summary}。`));
     const task = (await enrichTasks([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0];

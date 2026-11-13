@@ -176,6 +176,10 @@ async function initializeServer() {
   // 预览永远不接管、不结算真 agent。即使某份旧库没洗干净，这道硬闸也保证它不碰真进程。
   if (!IS_PREVIEW_INSTANCE) {
     await reattachRunningTasks();
+    // 回合里交出去、那一轮却没被接回来的哨兵结果退回待发送 —— 必须夹在这两步之间
+    // (顺序的理由见 monitor-turn-handoff.ts 的 `returnOrphanTurnHandoffs`)。
+    await (await import("./monitor-turn-handoff.js")).returnOrphanTurnHandoffs()
+      .catch((err) => console.error("[ash] 退回孤儿回合内交付失败（不影响启动）:", err));
     await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
 
     // 撞在故障窗口里丢掉的那次队列推进补回来(判据与边界见 scheduler.ts 的
@@ -266,6 +270,10 @@ async function initializeServer() {
     });
     if (gates.interrupted || gates.resumed || gates.settled) console.log(`[ash] 验收前置命令：接管 ${gates.resumed} 条，`
       + `按退出结果结算 ${gates.settled} 条，被重启打断 ${gates.interrupted} 条`);
+    // 已了结任务的验收快照、过了保留期的原始事件流，启动后每 6 小时回收一次。排在门禁对账之后：
+    // 快照的判据要看门禁行的最终状态。
+    const { startRunDiskMaintenance } = await import("./run-disk-maintenance.js");
+    startRunDiskMaintenance();
     // 自由审查对账要排在 reattach 之后：它以「有没有接回的 reviewer 会话」为判据，
     // 收拾死在投递链上的 reviewing run（详见 free-review-reconcile.ts）。
     const { reconcileFreeReviews } = await import("./free-review-reconcile.js");
