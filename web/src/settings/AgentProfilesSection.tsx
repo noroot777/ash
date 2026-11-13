@@ -15,13 +15,6 @@ import { AgentProfileRow } from "./AgentProfileRow.tsx";
 import { ClaudeModelsSettings } from "./ClaudeModelsSettings.tsx";
 import { claudeModelMode, type ClaudeModelMode } from "./ProviderModelInput.tsx";
 
-function profileAvatar(type: AgentType) {
-  if (type === "claude") return "C";
-  if (type === "codex") return "X";
-  if (type === "antigravity") return "A";
-  return type.slice(0, 1).toUpperCase();
-}
-
 function nextLocalName(type: AgentType, profiles: AgentExecutorProfile[]) {
   const names = new Set(profiles.map((profile) => profile.name));
   let index = 1;
@@ -116,32 +109,35 @@ function AgentProfileGroup({
   // 一种 CLI 一张卡：卡头一行、一张表、（claude 才有的）模型目录收成卡底一行，点开再看。
   return (
     <section className={`settings-card agent-profile-group is-${type}`} aria-label={`${type} 执行器`}>
-      <header className="agent-profile-group-head">
-        <span className="settings-agent-avatar" aria-hidden="true">{profileAvatar(type)}</span>
-        <b>{type}</b>
-        <small>{profiles.length} 个 Profile</small>
-        <span className="agent-profile-group-default">默认 · {defaultProfile?.name ?? "内置本地执行器"}</span>
-        <Button
-          variant="ghost"
-          className="agent-profile-group-add"
-          disabled={adding || deleting || !!blockedByVersion}
-          onClick={() => void addLocal()}
-        >
-          {/* 措辞跟检测卡片那颗按钮保持一致 —— 同一页两个注册入口给不同说法,用户会
-              以为其中一个还有戏。完整升级说明就在上面那张卡片里,这里不重复。 */}
-          {blockedByVersion
-            ? <>请先升级</>
-            : <><Plus size={14} aria-hidden="true" />{adding ? "新增中…" : "新增"}</>}
-        </Button>
-        <button
-          type="button"
-          className="settings-icon-danger"
-          disabled={adding || deleting}
-          aria-label={`删除全部 ${type} 执行器`}
-          onClick={() => setConfirmDelete(true)}
-        >
-          <Trash size={15} aria-hidden="true" />
-        </button>
+      {/* 卡头跟飞书页那张「连接」卡的头一行同一副：左边名字 + 一行说明，右边动作。 */}
+      <header className="settings-row agent-profile-group-head">
+        <div>
+          <b>{type}</b>
+          <small>{profiles.length} 个 Profile · 默认 {defaultProfile?.name ?? "内置本地执行器"}</small>
+        </div>
+        <span className="settings-row-actions">
+          <Button
+            variant="ghost"
+            className="agent-profile-group-add"
+            disabled={adding || deleting || !!blockedByVersion}
+            onClick={() => void addLocal()}
+          >
+            {/* 措辞跟检测卡片那颗按钮保持一致 —— 同一页两个注册入口给不同说法,用户会
+                以为其中一个还有戏。完整升级说明就在上面那张卡片里,这里不重复。 */}
+            {blockedByVersion
+              ? <>请先升级</>
+              : <><Plus size={14} aria-hidden="true" />{adding ? "新增中…" : "新增"}</>}
+          </Button>
+          <button
+            type="button"
+            className="settings-icon-danger"
+            disabled={adding || deleting}
+            aria-label={`删除全部 ${type} 执行器`}
+            onClick={() => setConfirmDelete(true)}
+          >
+            <Trash size={14} aria-hidden="true" />
+          </button>
+        </span>
       </header>
       {/* 「CLI 配置」这一列只有声明过可覆盖项的 CLI 才有（目前只有 claude）。表头和行里
           的格子共用 hasCliConfigOverrides 这一个判据，列数才不会错位；栅格宽度由

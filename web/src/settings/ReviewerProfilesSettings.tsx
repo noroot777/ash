@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, ReviewerProfile } from "@ash/shared";
-import { MagnifyingGlass, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
+import { PencilSimple, Plus, Trash } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
@@ -15,10 +15,15 @@ import {
 } from "../free-workflow/ReviewerProfileFields.tsx";
 import { reviewerDeleteMessage } from "../free-workflow/freeReviewCopy.ts";
 
+/** 正在编辑哪一位：某个审查者的 id，或者「新建」那一张空表。 */
+const NEW = "new";
+
+// 设置 → 审查者。跟飞书页同一副骨架：一位审查者一行，点编辑就在那一行下面展开表单
+// （骨架样式在 styles/settings-list.css）。
 export function ReviewerProfilesSettings({ notify }: { notify: (message: string) => void }) {
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [reviewers, setReviewers] = useState<ReviewerProfile[]>([]);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<ReviewerDraft>(() => createReviewerDraft());
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -26,14 +31,18 @@ export function ReviewerProfilesSettings({ notify }: { notify: (message: string)
   const [deleteTarget, setDeleteTarget] = useState<ReviewerProfile | null>(null);
   const types = useMemo(() => registeredAgentTypes(profiles), [profiles]);
 
-  const select = (reviewer: ReviewerProfile) => {
-    setEditingId(reviewer.id);
+  const edit = (reviewer: ReviewerProfile) => {
+    if (editing === reviewer.id) {
+      setEditing(null);
+      return;
+    }
+    setEditing(reviewer.id);
     setDraft(reviewerDraft(reviewer));
   };
 
-  const startNew = (known = profiles) => {
-    setEditingId(null);
-    setDraft(createReviewerDraft(known));
+  const startNew = () => {
+    setEditing(NEW);
+    setDraft(createReviewerDraft(profiles));
   };
 
   const load = () => {
@@ -42,8 +51,6 @@ export function ReviewerProfilesSettings({ notify }: { notify: (message: string)
     Promise.all([api.reviewerProfiles(), api.agents()]).then(([nextReviewers, nextProfiles]) => {
       setReviewers(nextReviewers);
       setProfiles(nextProfiles);
-      if (nextReviewers[0]) select(nextReviewers[0]);
-      else startNew(nextProfiles);
     }).catch((error) => {
       setFailed(true);
       notify(error instanceof Error ? error.message : "审查者读取失败");
@@ -53,18 +60,19 @@ export function ReviewerProfilesSettings({ notify }: { notify: (message: string)
   useEffect(load, [notify]);
 
   const save = async () => {
-    if (!draft.name.trim() || busy) return;
+    if (!draft.name.trim() || busy || !editing) return;
+    const creating = editing === NEW;
     setBusy(true);
     try {
       const payload = reviewerPayload(draft, profiles);
-      const saved = editingId
-        ? await api.patchReviewerProfile(editingId, payload)
-        : await api.createReviewerProfile(payload);
-      setReviewers((current) => editingId
-        ? current.map((reviewer) => reviewer.id === saved.id ? saved : reviewer)
-        : [saved, ...current]);
-      select(saved);
-      notify(editingId ? `已保存审查者「${saved.name}」` : `已创建审查者「${saved.name}」`);
+      const saved = creating
+        ? await api.createReviewerProfile(payload)
+        : await api.patchReviewerProfile(editing, payload);
+      setReviewers((current) => creating
+        ? [saved, ...current]
+        : current.map((reviewer) => reviewer.id === saved.id ? saved : reviewer));
+      setEditing(null);
+      notify(creating ? `已创建审查者「${saved.name}」` : `已保存审查者「${saved.name}」`);
     } catch (error) {
       notify(error instanceof Error ? error.message : "审查者保存失败");
     } finally {
@@ -77,11 +85,9 @@ export function ReviewerProfilesSettings({ notify }: { notify: (message: string)
     setBusy(true);
     try {
       await api.deleteReviewerProfile(deleteTarget.id);
-      const rest = reviewers.filter((reviewer) => reviewer.id !== deleteTarget.id);
-      setReviewers(rest);
+      setReviewers((current) => current.filter((reviewer) => reviewer.id !== deleteTarget.id));
+      if (editing === deleteTarget.id) setEditing(null);
       setDeleteTarget(null);
-      if (rest[0]) select(rest[0]);
-      else startNew();
       notify(`已删除审查者「${deleteTarget.name}」`);
     } catch (error) {
       notify(error instanceof Error ? error.message : "审查者删除失败");
@@ -90,42 +96,76 @@ export function ReviewerProfilesSettings({ notify }: { notify: (message: string)
     }
   };
 
+  const editor = (
+    <div className="settings-editor">
+      <ReviewerProfileFields
+        draft={draft}
+        profiles={profiles}
+        types={types}
+        disabled={busy}
+        autoFocus={editing === NEW}
+        onChange={setDraft}
+      />
+      <div className="settings-card-foot">
+        {!profiles.length && <span>还没有执行器；先去「执行器」注册一个。</span>}
+        <Button variant="ghost" disabled={busy} onClick={() => setEditing(null)}>取消</Button>
+        <Button variant="primary" disabled={busy || !draft.name.trim() || !profiles.length} onClick={() => void save()}>
+          {busy ? "保存中…" : editing === NEW ? "创建审查者" : "保存"}
+        </Button>
+      </div>
+    </div>
+  );
+
   return (
     <>
       <header className="settings-heading">
         <div><h1>审查者</h1><p>保存多套智能体、模型与智能水平组合，供自由工作流按需派审。</p></div>
+        {!loading && !failed && editing !== NEW && (
+          <Button onClick={startNew}><Plus size={14} aria-hidden="true" />新建审查者</Button>
+        )}
       </header>
       <section className="settings-section">
         <h2>已保存的审查者</h2>
-        <div className="settings-card reviewer-settings-card">
-          {loading && <div className="reviewer-settings-status">正在读取审查者…</div>}
+        <div className="settings-card">
+          {loading && <p className="settings-muted">正在读取审查者…</p>}
           {!loading && failed && (
-            <div className="reviewer-settings-status is-error"><WarningCircle size={15} />读取失败<Button variant="ghost" onClick={load}>重试</Button></div>
+            <p className="settings-muted">审查者读取失败。<Button variant="ghost" onClick={load}>重试</Button></p>
           )}
-          {!loading && !failed && (
-            <div className="reviewer-settings-layout">
-              <aside>
-                <header><b>审查者</b><button type="button" onClick={() => startNew()}><Plus size={12} />新建</button></header>
-                {!reviewers.length && <p><MagnifyingGlass size={18} />还没有审查者</p>}
-                {reviewers.map((reviewer) => (
-                  <button key={reviewer.id} type="button" aria-selected={editingId === reviewer.id} onClick={() => select(reviewer)}>
-                    <b>{reviewer.name}</b>
-                    <ReviewerProfileSummary reviewer={reviewer} profiles={profiles} />
+          {editing === NEW && editor}
+          {!loading && !failed && !reviewers.length && editing !== NEW && (
+            <p className="settings-muted">还没有审查者。</p>
+          )}
+          {reviewers.map((reviewer) => (
+            <Fragment key={reviewer.id}>
+              <div className={`settings-row settings-item${editing === reviewer.id ? " is-editing" : ""}`}>
+                <div>
+                  <b>{reviewer.name}</b>
+                  <ReviewerProfileSummary reviewer={reviewer} profiles={profiles} />
+                </div>
+                <span className="settings-row-actions">
+                  <button
+                    type="button"
+                    className="settings-icon-action"
+                    aria-pressed={editing === reviewer.id}
+                    aria-label={editing === reviewer.id ? `收起 ${reviewer.name} 的编辑表单` : `编辑 ${reviewer.name}`}
+                    onClick={() => edit(reviewer)}
+                  >
+                    <PencilSimple size={14} />
                   </button>
-                ))}
-              </aside>
-              <div className="reviewer-settings-editor">
-                <header>
-                  <div><b>{editingId ? "编辑审查者" : "新建审查者"}</b><small>一套配置可在任意自由任务中重复使用。</small></div>
-                  <div>
-                    {editingId && <Button variant="danger" disabled={busy} onClick={() => setDeleteTarget(reviewers.find((item) => item.id === editingId) ?? null)}><Trash size={13} />删除</Button>}
-                    <Button variant="primary" disabled={busy || !draft.name.trim() || !profiles.length} onClick={() => void save()}>{busy ? "保存中…" : "保存"}</Button>
-                  </div>
-                </header>
-                <ReviewerProfileFields draft={draft} profiles={profiles} types={types} disabled={busy} onChange={setDraft} />
+                  <button
+                    type="button"
+                    className="settings-icon-danger"
+                    disabled={busy}
+                    aria-label={`删除 ${reviewer.name}`}
+                    onClick={() => setDeleteTarget(reviewer)}
+                  >
+                    <Trash size={14} />
+                  </button>
+                </span>
               </div>
-            </div>
-          )}
+              {editing === reviewer.id && editor}
+            </Fragment>
+          ))}
         </div>
       </section>
       {deleteTarget && <ConfirmDialog title="删除审查者" message={reviewerDeleteMessage(deleteTarget.name)} confirmLabel="删除" danger busy={busy} onConfirm={() => void remove()} onClose={() => setDeleteTarget(null)} />}

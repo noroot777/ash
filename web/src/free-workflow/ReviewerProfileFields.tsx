@@ -1,3 +1,4 @@
+import { useId } from "react";
 import type { AgentExecutorProfile, AgentType, ReviewerProfile } from "@ash/shared";
 import { executorProfileFor, executorRunSummary, executorValue, parseExecutorValue } from "../lib/agentAvailability.ts";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
@@ -78,47 +79,62 @@ export function ReviewerProfileSummary({
   );
 }
 
+/**
+ * 设置 → 审查者里就地展开的那几行字段。跟飞书页的表单同一副：一行一个，左边字段名、右边控件
+ * （样式在 styles/settings-list.css 的 .settings-editor）。
+ */
 export function ReviewerProfileFields({
   draft,
   profiles,
   types,
   disabled = false,
+  autoFocus = false,
   onChange,
 }: {
   draft: ReviewerDraft;
   profiles: AgentExecutorProfile[];
   types: AgentType[];
   disabled?: boolean;
+  /** 新建时直接落在名称框里。 */
+  autoFocus?: boolean;
   onChange: (draft: ReviewerDraft) => void;
 }) {
+  const nameId = useId();
   return (
-    <div className="reviewer-profile-fields">
-      <label>
-        <span>审查者名称</span>
+    <>
+      <div className="settings-field">
+        <label htmlFor={nameId}>名称</label>
         <input
+          id={nameId}
           value={draft.name}
           disabled={disabled}
+          autoFocus={autoFocus}
           placeholder="例如：Codex 严格逻辑审查"
           onChange={(event) => onChange({ ...draft, name: event.target.value })}
         />
-      </label>
-      <ExecutorPickerField
-        label="智能体 · 模型 · 智能水平"
-        value={draft.target}
-        types={types}
-        profiles={profiles}
-        knownProfiles={profiles}
-        fallbackType="codex"
-        override={{ model: draft.model, effort: draft.effort }}
-        disabled={disabled}
-        onChange={(target, override) => onChange({
-          ...draft,
-          target,
-          model: override.model,
-          effort: override.effort,
-        })}
-        onEffortChange={(effort) => onChange({ ...draft, effort })}
-      />
-    </div>
+      </div>
+      <div className="settings-field">
+        <span className="settings-field-name">智能体与模型</span>
+        <div className="settings-field-body">
+          <ExecutorPickerField
+            label="智能体 · 模型 · 智能水平"
+            value={draft.target}
+            types={types}
+            profiles={profiles}
+            knownProfiles={profiles}
+            fallbackType="codex"
+            override={{ model: draft.model, effort: draft.effort }}
+            disabled={disabled}
+            onChange={(target, override) => onChange({
+              ...draft,
+              target,
+              model: override.model,
+              effort: override.effort,
+            })}
+            onEffortChange={(effort) => onChange({ ...draft, effort })}
+          />
+        </div>
+      </div>
+    </>
   );
 }

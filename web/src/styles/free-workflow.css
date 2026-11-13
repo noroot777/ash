@@ -16,17 +16,13 @@
 .reply-act.is-preview.is-busy,.reply-act.is-preview[aria-pressed="true"] { background:color-mix(in oklab,var(--cyan) 8%,transparent); color:var(--cyan); }
 .reply-act:is(.free-workflow-toolbar > a, a) { text-decoration:none; }
 
-/* 审查者的配置一行（设置页「审查者」列表）和它的编辑表单。派审对话框本身见 free-review-dialog.css。 */
+/* 审查者的配置一行（设置页「审查者」列表、派审对话框的候选）。派审对话框本身见 free-review-dialog.css。 */
 .reviewer-profile-summary { display:flex; min-width:0; align-items:baseline; gap:4px; margin-top:2px; overflow:hidden; color:var(--muted); font-size:var(--t-xs); line-height:1.25; white-space:nowrap; }
 .reviewer-profile-summary > span { min-width:0; max-width:40%; overflow:hidden; flex:0 1 auto; text-overflow:ellipsis; }
 .reviewer-profile-summary i { flex:0 0 auto; color:var(--line2); font-style:normal; }
 .reviewer-profile-summary code { min-width:0; overflow:hidden; color:var(--muted); font-family:var(--font-mono); font-size:var(--t-xs); text-overflow:ellipsis; white-space:nowrap; }
 .reviewer-profile-summary code:first-of-type { flex:0 1 auto; }
 .reviewer-profile-summary code:last-of-type { flex:0 0 auto; }
-.reviewer-profile-fields { display:grid; gap:10px; }
-.reviewer-profile-fields > label { display:grid; gap:5px; }
-.reviewer-profile-fields > label > span { color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-medium); letter-spacing:.05em; text-transform:uppercase; }
-.reviewer-profile-fields input { width:100%; height:32px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; }
 
 /* 执行者驳回卡：审查链停在这里等用户裁定。只有图标是琥珀色，整块不上色
    —— 这不是又坏了一处，而是两个 agent 没谈拢，需要人来拍板。 */

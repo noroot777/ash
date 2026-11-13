@@ -294,13 +294,12 @@
   display: none;
 }
 
+/* 就地展开在供应商那一行下面，跟设置页其它「就地编辑」一样不铺底色、不加彩条。 */
 .provider-form {
   display: grid;
   gap: 12px;
   border-bottom: 1px solid var(--line);
-  border-left: 3px solid var(--ink);
-  background: color-mix(in oklab, var(--sel-bg) 24%, var(--panel));
-  padding: 14px 14px 14px 11px;
+  padding: 4px 16px 16px;
 }
 
 .provider-form-grid label,
@@ -344,10 +343,5 @@
   .agent-arg-token,
   .agent-arg-token.is-new {
     width: 100%;
-  }
-
-  .providers-intro {
-    align-items: flex-start;
-    flex-direction: column;
   }
 }

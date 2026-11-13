@@ -2,13 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentExecutorProfile, LlmProtocol, LlmProvider, ProviderModelListMode } from "@ash/shared";
 import {
   ArrowsClockwise,
-  CheckCircle,
   PencilSimple,
   Play,
-  Plus,
   Trash,
 } from "@phosphor-icons/react";
-import { Button, Toggle } from "../components/ui.tsx";
+import { Button, StatusChip, Toggle } from "../components/ui.tsx";
 import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
@@ -451,11 +449,8 @@ function ProviderRow({
 
   return (
     <>
-      <article className={`provider-row${justEdited ? " is-just-edited" : ""}${editing ? " is-editing" : ""}`}>
-        <span className={`provider-protocol is-${provider.protocol}`}>
-          {provider.protocol === "anthropic" ? "A" : "O"}
-        </span>
-        <div className="provider-copy">
+      <div className={`settings-row settings-item provider-row${justEdited ? " is-just-edited" : ""}${editing ? " is-editing" : ""}`}>
+        <div>
           <b>{provider.name}</b>
           <small>
             {protocolLabel(provider.protocol)} · {provider.baseUrl}
@@ -468,46 +463,42 @@ function ProviderRow({
         </div>
         {/* 一家供应商能用,要 Key 和「被某条执行器挂上」两件事同时成立 —— ash 自己不直连
             大模型,供应商只是执行器启动时注入的 base_url + key(server executors/index.ts)。
-            所以这两件事是同一级别的前置条件,并排摆、各自绿掉,缺哪个一眼看得见。
+            所以这两件事是同一级别的前置条件,并排摆、各自一颗状态点,缺哪个一眼看得见。
             没人挂它时任务里**根本列不出**它的模型(lib/modelCatalog.ts 的 groupSeeds),
             这句话必须在这里说,否则用户加完供应商只会得出「加了但用不了」。 */}
-        <span className="provider-state-stack">
-          <span className={`provider-key-state${provider.hasKey ? " is-ready" : ""}`}>
-            {provider.hasKey && <CheckCircle size={12} weight="fill" />}
+        <span className="settings-row-actions">
+          <StatusChip tone={provider.hasKey ? "green" : "amber"}>
             {provider.hasKey ? "Key 已保存" : "缺少 Key"}
-          </span>
+          </StatusChip>
           {!mountedBy ? null : mountedBy.length ? (
-            <span className="provider-mount-state is-ready">
-              <CheckCircle size={12} weight="fill" />
-              {mountedBy.length} 个执行器在用
-            </span>
+            <StatusChip tone="green">{mountedBy.length} 个执行器在用</StatusChip>
           ) : onOpenExecutors ? (
             <button
               type="button"
-              className="provider-mount-state"
+              className="provider-mount-link"
               aria-label={`${provider.name} 还没有执行器挂它，任务里选不到它的模型；去执行器设置挂上`}
               onClick={onOpenExecutors}
             >
-              未挂到执行器
+              <StatusChip tone="amber">未挂到执行器</StatusChip>
             </button>
           ) : (
-            <span className="provider-mount-state">未挂到执行器</span>
+            <StatusChip tone="amber">未挂到执行器</StatusChip>
           )}
+          <span className="settings-row-note">{provider.model || "未设默认模型"}</span>
+          <button
+            type="button"
+            className="settings-icon-action"
+            aria-pressed={editing}
+            onClick={() => setEditing((open) => !open)}
+            aria-label={editing ? `收起 ${provider.name} 的编辑表单` : `编辑 ${provider.name}`}
+          >
+            <PencilSimple size={14} />
+          </button>
+          <button type="button" className="settings-icon-danger" onClick={() => setConfirmDelete(true)} aria-label={`删除 ${provider.name}`}>
+            <Trash size={14} />
+          </button>
         </span>
-        <span className="provider-default-model">{provider.model || "未设默认模型"}</span>
-        <button
-          type="button"
-          className="provider-icon-action"
-          aria-pressed={editing}
-          onClick={() => setEditing((open) => !open)}
-          aria-label={editing ? `收起 ${provider.name} 的编辑表单` : `编辑 ${provider.name}`}
-        >
-          <PencilSimple size={14} />
-        </button>
-        <button type="button" className="settings-icon-danger" onClick={() => setConfirmDelete(true)} aria-label={`删除 ${provider.name}`}>
-          <Trash size={14} />
-        </button>
-      </article>
+      </div>
       {editing && (
         <ProviderForm
           provider={provider}
@@ -548,6 +539,8 @@ export function ProvidersSection({
   profilesState = "ready",
   onRetryProfiles,
   onOpenExecutors,
+  adding = false,
+  onAddingChange,
   onChanged,
   notify,
 }: {
@@ -558,10 +551,13 @@ export function ProvidersSection({
   profilesState?: LoadState;
   onRetryProfiles?: () => void;
   onOpenExecutors?: () => void;
+  /** 「添加供应商」是页级动作，按钮在页标题右边（ProvidersSettings），这里只管把表单摆出来。 */
+  adding?: boolean;
+  onAddingChange?: (adding: boolean) => void;
   onChanged: () => Promise<void>;
   notify: (message: string) => void;
 }) {
-  const [adding, setAdding] = useState(false);
+  const setAdding = (next: boolean) => onAddingChange?.(next);
   // 没读成功就没有「挂载情况」这件事可说 —— 行上一个字都不写,原因在卡片上说一次。
   const mountedBy = (provider: LlmProvider) =>
     profilesState === "ready" ? profiles.filter((profile) => profile.providerId === provider.id) : null;
@@ -569,17 +565,19 @@ export function ProvidersSection({
     <section className="settings-section">
       <h2>模型供应商</h2>
       <div className="settings-card providers-card">
-        <div className="providers-intro">
-          <div>
-            <b>Provider → Profile → 任务</b>
-            <small>Provider 保存协议、Base URL 与 Key；绑定后的 Profile 使用它的额度和完整模型目录。</small>
-          </div>
-          {!adding && (
-            <Button variant="primary" onClick={() => setAdding(true)}>
-              <Plus size={12} weight="bold" /> 添加供应商
-            </Button>
-          )}
-        </div>
+        {/* 新加的表单排在最上面：按钮在页标题那儿，点完得当场看得见表单，不能沉到一长串
+            供应商的底下去。 */}
+        {adding && (
+          <ProviderForm
+            notify={notify}
+            onCancel={() => setAdding(false)}
+            onSaved={async () => {
+              await onChanged();
+              setAdding(false);
+              notify("供应商已添加");
+            }}
+          />
+        )}
         {profilesState === "failed" && (
           // 「不知道挂没挂」说一次就够,不要每行重复一遍;重试也只需要一颗。
           <p className="settings-muted providers-mount-unknown" role="status">
@@ -600,17 +598,6 @@ export function ProvidersSection({
             notify={notify}
           />
         ))}
-        {adding && (
-          <ProviderForm
-            notify={notify}
-            onCancel={() => setAdding(false)}
-            onSaved={async () => {
-              await onChanged();
-              setAdding(false);
-              notify("供应商已添加");
-            }}
-          />
-        )}
       </div>
     </section>
   );
