@@ -29,6 +29,7 @@ import { mountTaskSessionRoutes } from "./task-session-routes.js";
 import { mountTaskSteerRoutes } from "./task-steer.js";
 import { flushPendingForTask, publishPendingMessages } from "./pending-messages.js";
 import { withAfterGates } from "./pending-after.js";
+import { pendingMessagePresence } from "./pending-wait.js";
 import { isOvertaken, queueBlockedText, queueBlockerDetails, repackQueue, tailOrder } from "./queues.js";
 import { queueClaimError, seatThenStart } from "./queue-seat.js";
 import { claimOwnTurn, heldForAcceptance, releaseTurn, stopTask, turnBusyText } from "./runs.js";
@@ -484,8 +485,10 @@ api.get("/tasks/:id/scheduled-messages", async (c) => {
     .orderBy(asc(scheduledMessages.sendAt), asc(scheduledMessages.createdAt), asc(scheduledMessages.id));
   // 等前置任务的那几条先按服务端判据过一遍(顺手锁存):托盘读 `afterDoneAt` 就是「等到了没」的
   // 权威答案。前置被停止/出错后状态放回 done 并不是又完成了一次,只看任务列表的状态会说错。
-  const gated = await withAfterGates(rows);
-  return c.json(gated.map(({ afterDone: _d, afterEndedAt: _e, afterWaitReason: _w, ...row }) => toScheduledMessage(row)));
+  // 每条此刻在等什么、能不能引导,按投递判定与引导前置条件同一份事实算(pending-wait.ts)。
+  const present = await pendingMessagePresence(c.req.param("id"), await withAfterGates(rows));
+  return c.json(present.map(({ afterDone: _d, afterEndedAt: _e, afterWaitReason: _w, wait, steerable, ...row }) =>
+    ({ ...toScheduledMessage(row), wait, steerable })));
 });
 
 // Cancel a pending scheduled message (by message id).
