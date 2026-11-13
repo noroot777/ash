@@ -456,7 +456,7 @@
 }
 
 /* 「追问还没读到」那句限定：比正文弱一档，别抢备忘内容的注意力。 */
-.workspace-spread-peek-caveat {
+p.workspace-spread-peek-caveat {
   margin-top: 6px;
   color: var(--muted);
   font-size: var(--t-xs);

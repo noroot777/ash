@@ -1,13 +1,14 @@
-import { open, readFile, stat } from "node:fs/promises";
-import type { ConvSeg, TaskFollowUp } from "@ash/shared";
+import { open, stat } from "node:fs/promises";
+import type { ConvSeg, TaskFollowUp, TaskFollowUpList } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
 import { parseSessionOutput } from "@ash/shared/session-output";
 import { parseAttachmentText } from "@ash/shared/attachments";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
-import { desc, inArray } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { sessions } from "./db/schema.js";
-import { latestFollowUp, orderFollowUps } from "./task-follow-up-pick.js";
+import { latestFollowUp, orderFollowUps, readLeavesComplete } from "./task-follow-up-pick.js";
+import { readSessionOutput } from "./task-session-routes.js";
 import { sessionTranscriptPath } from "./transcript.js";
 
 type UserSeg = Extract<ConvSeg, { kind: "user" }>;
@@ -102,18 +103,24 @@ export async function followUpsFor(taskIds: string[]): Promise<TaskFollowUp[]> {
 // 一个任务我发过的**全部**追问，从旧到新（侧栏铺开时悬停那一格才问，一次只问一个任务）。
 // 判据、截断、空消息的处理都跟上面那条同一份 —— 列表最后一条就是外面那一格显示的那句。
 // 这里每条会话都得整份读：要的是全部，不是末尾那一句，分档读尾巴省不下来。
-export async function allFollowUpsOf(taskId: string): Promise<TaskFollowUp[]> {
-  const sessionIds = (await sessionIdsByTask([taskId])).get(taskId) ?? [];
+//
+// 跟上面那条不同，读不动的会话**不能悄悄跳过**：那边只回答「最后一句是什么」，这边要回答
+// 「一共说过几句」，少读一条会话就少算几句，所以读没读全要随结果一起交出去（complete）。
+export async function allFollowUpsOf(taskId: string): Promise<TaskFollowUpList> {
+  const rows = await db
+    .select({ id: sessions.id, endedAt: sessions.endedAt })
+    .from(sessions)
+    .where(eq(sessions.taskId, taskId))
+    .orderBy(desc(sessions.startedAt));
   const candidates: { seg: UserSeg; order: number; index: number }[] = [];
-  for (const [order, sessionId] of sessionIds.entries()) {
-    try {
-      const text = await readFile(sessionTranscriptPath(taskId, sessionId), "utf8");
-      parseSessionOutput(text).filter(isFollowUp).forEach((seg, index) => candidates.push({ seg, order, index }));
-    } catch {
-      // 同上：读不动的那条会话跳过，别的照样算。
-    }
+  let complete = true;
+  for (const [order, row] of rows.entries()) {
+    const read = await readSessionOutput(taskId, row.id);
+    if (read.ok) parseSessionOutput(read.value).filter(isFollowUp).forEach((seg, index) => candidates.push({ seg, order, index }));
+    if (!readLeavesComplete(read, row.endedAt != null)) complete = false;
   }
-  return orderFollowUps(candidates)
+  const followUps = orderFollowUps(candidates)
     .map((seg) => toFollowUp(taskId, seg))
     .filter((row) => row.text.length + row.attachments.length > 0);
+  return { followUps, complete };
 }

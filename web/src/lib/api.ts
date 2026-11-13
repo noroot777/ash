@@ -29,6 +29,7 @@ import type {
   SkillScanOverview,
   Task,
   TaskFollowUp,
+  TaskFollowUpList,
   TaskListItem,
   TaskReviewInfo,
   TaskWorkspaceDiscardResult,
@@ -210,8 +211,9 @@ export const api = {
   // 侧边栏铺开那一下才调：一批任务各自「我发的最后一条追问」。没有的任务不在返回里。
   followUps: (taskIds: string[]): Promise<TaskFollowUp[]> =>
     request("/tasks/follow-ups", json("POST", { taskIds })),
-  // 悬停铺开的「追问」那一格才调：这一个任务我发过的全部追问，从旧到新。
-  taskFollowUps: (taskId: string): Promise<TaskFollowUp[]> => request(`/tasks/${id(taskId)}/follow-ups`),
+  // 悬停铺开的「追问」那一格才调：这一个任务我发过的全部追问，从旧到新，外加读没读全。
+  taskFollowUps: (taskId: string, signal?: AbortSignal): Promise<TaskFollowUpList> =>
+    request(`/tasks/${id(taskId)}/follow-ups`, { signal }),
   // 同上，铺开的「原始需求」列按需取正文（列表接口不带它）。
   taskBodies: (taskIds: string[]): Promise<{ taskId: string; body: string }[]> =>
     request("/tasks/bodies", json("POST", { taskIds })),

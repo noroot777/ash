@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { isUserFollowUp } from "@ash/shared";
 import { parseSessionOutput } from "@ash/shared/session-output";
-import { latestFollowUp, orderFollowUps } from "../src/task-follow-up-pick.ts";
+import { latestFollowUp, orderFollowUps, readLeavesComplete } from "../src/task-follow-up-pick.ts";
 
 // ── 算我发的 ────────────────────────────────────────────────────────────────
 
@@ -112,5 +112,13 @@ assert.equal(
   "列表最新那条就是外面那一格显示的那句",
 );
 assert.deepEqual(orderFollowUps([]), [], "一句都没有就是空列表");
+
+// ── 读没读全 ────────────────────────────────────────────────────────────────
+// 「全部追问」要报总数，少读一条会话就少算几句：读不动的会话不能被当成「里面没说过话」。
+
+assert.equal(readLeavesComplete({ ok: true }, true), true, "读到了就是读到了");
+assert.equal(readLeavesComplete({ ok: false, missing: true }, false), true, "还在跑的会话可以还没建文件");
+assert.equal(readLeavesComplete({ ok: false, missing: true }, true), false, "收了口还找不到文件 = 丢了一截");
+assert.equal(readLeavesComplete({ ok: false, missing: false }, false), false, "文件在却读不动（权限 / I/O）");
 
 console.log("✓ follow-up predicate");

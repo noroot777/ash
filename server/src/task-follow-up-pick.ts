@@ -42,3 +42,14 @@ export function orderFollowUps<T extends { at?: string | null }>(
     })
     .map((candidate) => candidate.seg);
 }
+
+/**
+ * 一条会话的正文读下来之后，「全部追问」那份列表还算不算读全了。
+ *
+ * 判据跟 `/sessions/:id/output` 同一条：还没收口的会话可以还没建文件（那里面确实还没有
+ * 我的话）；已经收口了还找不到、或者文件在却读不动，就是丢了一截 —— 列表照样给出读到的
+ * 那些，但必须标成不全。
+ */
+export function readLeavesComplete(read: { ok: true } | { ok: false; missing: boolean }, ended: boolean): boolean {
+  return read.ok || (read.missing && !ended);
+}

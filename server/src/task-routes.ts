@@ -85,7 +85,8 @@ api.post("/tasks/follow-ups", async (c) => {
   return c.json(await followUpsFor(await visibleTaskIds(actorOf(c), ids)));
 });
 
-// 悬停铺开那一格时才拉：这一个任务我发过的全部追问，从旧到新（口径同上，读的也是会话 .md）。
+// 悬停铺开那一格时才拉：这一个任务我发过的全部追问，从旧到新（口径同上，读的也是会话 .md），
+// 外加读没读全（TaskFollowUpList.complete）。
 api.get("/tasks/:id/follow-ups", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);

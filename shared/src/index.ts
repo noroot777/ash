@@ -426,6 +426,14 @@ export interface TaskFollowUp {
   attachments: string[];
 }
 
+// 悬停铺开的「追问」那一格时单问一个任务的**全部**追问（GET /tasks/:id/follow-ups），从旧到新。
+// `complete` = 这个任务每一条会话的正文都读到了。请求成功不等于读全了：有一条会话读不动，
+// 列表就可能少几条，这时前端不能报总数，更不能拿空列表说「还没追问过」。
+export interface TaskFollowUpList {
+  followUps: TaskFollowUp[];
+  complete: boolean;
+}
+
 /**
  * 按 id 批量问任务（追问、正文）时**一次**能问多少个。
  *

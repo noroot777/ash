@@ -8,7 +8,7 @@ import { Image as ImageIcon, NotePencil } from "@phosphor-icons/react";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
 import type { SidebarSpread } from "./useSidebarSpread.ts";
-import { useTaskFollowUpList } from "./useTaskFollowUpList.ts";
+import { useTaskFollowUpList, type FollowUpListState } from "./useTaskFollowUpList.ts";
 
 // 悬停多久才弹（扫列表时鼠标横穿一片行，立刻弹会一路闪），移开多久才收（留一段
 // 时间让鼠标从格子挪到卡片上，否则卡片里的图点不到）。
@@ -93,27 +93,43 @@ function bodyPeek(raw: string | undefined): { text: string; paths: string[] } {
   return { text: raw === undefined ? "还没读到这个任务的需求。" : (body || "这个任务没有写需求。"), paths };
 }
 
+const sameAsk = (a: TaskFollowUp, b: TaskFollowUp) => a.at === b.at && a.text === b.text;
+
 /**
  * 悬停「追问」那一格时卡片里列的那几条：我发过的**全部**追问，新的在上（跟外面那一格
- * 显示的是同一句打头）。全部那份要悬停时单问一次（useTaskFollowUpList），没到之前先拿
- * 铺开时批量取到的最后一条顶着 —— 那时还不知道一共几条，所以 `complete` 是 false，
- * 不能写「1 条」。
+ * 显示的是同一句打头）。全部那份要悬停时现问（useTaskFollowUpList），回来之前、或者那一发
+ * 挂了，先拿铺开时批量取到的最后一条顶着。
+ *
+ * 只有服务端说**读全了**（complete）才报总数、才敢说「还没追问过」：请求成功不等于每条
+ * 会话都读到了，少读一条就少算几句（第 1 轮审查）。没读全时照样列出读到的那些，再把
+ * 铺开时确知存在的那最后一条补进去，并在底下说一句「可能不全」。
  */
 function askPeek(
   task: TaskListItem,
-  list: TaskFollowUp[] | undefined,
+  state: FollowUpListState,
   last: TaskFollowUp | undefined,
   known: boolean,
-): { asks: TaskFollowUp[]; complete: boolean; subtitle: string; empty: string } {
-  const complete = list !== undefined;
-  const asks = complete ? [...list].reverse() : (last ? [last] : []);
-  const knownNone = complete || known;
+): { asks: TaskFollowUp[]; complete: boolean; subtitle: string; empty: string; caveat: string | null } {
+  const got = typeof state === "object" ? state : null;
+  const complete = got?.complete === true;
+  let asks = got ? [...got.followUps].reverse() : [];
+  if (!complete && last && !asks.some((item) => sameAsk(item, last))) {
+    // 稳定排序：时刻相同（含都没有时刻）的保持服务端给的先后。
+    asks = [last, ...asks].sort((a, b) => (b.at ?? "").localeCompare(a.at ?? ""));
+  }
+  // 「没追问过」只有两种来源说得出口：这一发读全了，或者还没回来 / 挂了时铺开那一批问过。
+  const knownNone = complete || (!got && known);
   const newest = asks[0];
   const subtitle = newest
     ? `${complete ? `${asks.length} 条 · ` : ""}最近 ${compactAge(newest.at ?? task.updatedAt)}`
     : (knownNone ? NO_FOLLOW_UP : "还没读到");
-  const empty = knownNone ? "这个任务你还没有追问过 —— 只有原始需求。" : "还没读到这个任务的追问。";
-  return { asks, complete, subtitle, empty };
+  const empty = knownNone
+    ? "这个任务你还没有追问过 —— 只有原始需求。"
+    : got ? "这个任务有会话记录读不出来，列不出追问。" : "还没读到这个任务的追问。";
+  const caveat = !asks.length || complete || state === "loading"
+    ? null
+    : got ? "有会话记录读不出来，这里可能不全。" : "全部追问没读到，只列出了最新一条。";
+  return { asks, complete, subtitle, empty, caveat };
 }
 
 // 备忘不止一条时在右端标一下：这一格只放得下最新那条，不标的话「还有别的」这件事
@@ -243,7 +259,7 @@ export function SpreadPeekCard({
 }) {
   const card = useRef<HTMLDivElement | null>(null);
   const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
-  const list = useTaskFollowUpList(peek.task, peek.kind === "last");
+  const list = useTaskFollowUpList(peek.task.id, peek.kind === "last");
   const ask = peek.kind === "last" ? askPeek(peek.task, list, last, known) : null;
   const need = ask ? null : bodyPeek(body);
   const hasImages = ask ? ask.asks.some((item) => item.attachments.length > 0) : (need?.paths.length ?? 0) > 0;
@@ -296,6 +312,7 @@ export function SpreadPeekCard({
           ))}
         </ol>
       ) : <p>{ask.empty}</p>)}
+      {ask?.caveat && <p className="workspace-spread-peek-caveat">{ask.caveat}</p>}
       {/* 备忘排在追问**下面**（用户 2026-10-28 指定的位置）：两样都在这一张卡里，谁新
           只决定外面那一格显示哪条，不决定这里的先后 —— 先后固定，读起来才不会每次都变。 */}
       {peek.kind === "last" && memo && (
