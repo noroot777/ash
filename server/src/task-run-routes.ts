@@ -45,6 +45,7 @@ import { enrichTasks } from "./task-store.js";
 import { mountTaskQuestionRoutes } from "./task-question-routes.js";
 import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { handMonitorResultsOnPause, PAUSE_HANDED_NOTE } from "./monitor-turn-handoff.js";
+import { mountMonitorAckRoute } from "./monitor-turn-ack.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { failureVersionOf } from "./task-result-version.js";
 
@@ -64,6 +65,7 @@ export function mountTaskRunRoutes(api: Hono): void {
   mountTaskRetryTurnRoutes(api);
   mountTaskScheduleRoutes(api);
   mountTaskSessionRoutes(api);
+  mountMonitorAckRoute(api);
   mountTaskSteerRoutes(api);
   mountTaskQuestionRoutes(api);
   // 收敛闸口 `POST /tasks/:id/gate`(放行 / 打回 / 注入意见 / 提问)住在 duet/gate-route.ts。
@@ -258,7 +260,8 @@ api.post("/tasks/:id/stop", async (c) => {
 // 只接受 running 任务(agent 必须自己在跑才能合法地说"我到检查点了")。
 api.post("/tasks/:id/pause", async (c) => {
   const taskId = c.req.param("id");
-  const b = await c.req.json<{ resumePrompt?: string }>().catch(() => ({}) as { resumePrompt?: string });
+  const b = await c.req.json<{ resumePrompt?: string; monitorAck?: boolean }>()
+    .catch(() => ({}) as { resumePrompt?: string; monitorAck?: boolean });
   const rp = (b.resumePrompt ?? "").trim();
   if (!rp) return c.json({ error: "resumePrompt 不能为空 —— 否则 resume 时没东西喂给 agent" }, 400);
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -295,9 +298,13 @@ api.post("/tasks/:id/pause", async (c) => {
       : eq(tasks.activeDirectionToken, r.activeDirectionToken),
   ];
   // 托盘里已经有本来会把这一轮叫醒的哨兵结果 ⇒ 不暂停、不记检查点,当场交出去(monitor-turn-handoff.ts)。
-  const handed = await handMonitorResultsOnPause(taskId, r.activeTurnToken, identity);
+  // 只交给会发回确认的调用方(`monitorAck`,ash 的 MCP;没有确认就永远算没送到,见 monitor-turn-ack.ts)。
+  const handed = b.monitorAck === true ? await handMonitorResultsOnPause(taskId, r.activeTurnToken, identity) : null;
   if (handed) {
-    return c.json({ paused: false, note: PAUSE_HANDED_NOTE, monitorResults: handed.text, monitorResultsHanded: handed.count });
+    return c.json({
+      paused: false, note: PAUSE_HANDED_NOTE, monitorResults: handed.text,
+      monitorResultsHanded: handed.count, monitorResultsReceipt: handed.hand,
+    });
   }
   const occupied = await occupyResumePrompt(taskId, rp, false, identity);
   if (!occupied) return c.json({ error: "当前回合已经结束或已被引导，检查点未写入" }, 409);
@@ -314,6 +321,7 @@ api.post("/tasks/:id/pause", async (c) => {
 // **名下还挂着会被这次完成毁掉的哨兵时一律拒绝**(见 task-complete-monitors.ts)。
 api.post("/tasks/:id/complete", async (c) => {
   const taskId = c.req.param("id");
+  const completeBody = await c.req.json<{ monitorAck?: boolean }>().catch(() => ({}) as { monitorAck?: boolean });
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.status !== "running") return c.json({ error: "只能在任务正在运行时确认完成", status: r.status }, 409);
@@ -347,12 +355,14 @@ api.post("/tasks/:id/complete", async (c) => {
         : eq(tasks.activeDirectionToken, r.activeDirectionToken),
     ],
     staleError: "当前回合已经结束或已被引导，完成确认未写入",
-    handOver: { token: r.activeTurnToken },
+    // 同 /pause:只交给会发回确认的调用方。
+    ...(completeBody.monitorAck === true ? { handOver: { token: r.activeTurnToken } } : {}),
   });
   if (!confirm.ok) {
+    const h = confirm.handed;
     return c.json({
       error: confirm.error,
-      ...(confirm.handed ? { monitorResults: confirm.handed.text, monitorResultsHanded: confirm.handed.count } : {}),
+      ...(h ? { monitorResults: h.text, monitorResultsHanded: h.count, monitorResultsReceipt: h.hand } : {}),
     }, 409);
   }
   // **`willSettleAs` 得跟结算真会落的那个一致**(第 2 轮审查 R2-2:这里回 done、实际落 paused,

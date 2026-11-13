@@ -37,7 +37,7 @@ import { serialize } from "./monitors.js";
 import { confirmDone, hasConfirmed, revokeConfirmed } from "./task-confirmation.js";
 import { monitorsBlockingComplete, monitorsBlockingDetail, noteMonitorsDropped } from "./task-complete-monitors.js";
 import {
-  completeHandedNote, owedHandoffNote, owedTurnHandoffs, takeMonitorResultsForTurn, type HandedMonitorResults,
+  completeHandedNote, takeMonitorResultsForTurn, type HandedMonitorResults,
 } from "./monitor-turn-handoff.js";
 import { clearAutoCheckpoint, writeResumePrompt } from "./task-resume-prompt.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
@@ -154,19 +154,18 @@ export async function confirmTaskComplete(a: {
   handOver?: { token: string | null };
 }): Promise<ConfirmCompleteResult> {
   const result = await serialize(`task:${a.taskId}`, async (): Promise<ConfirmCompleteResult> => {
+    // 回合里交过、还没确认送到的那几行是闸的第四类(monitor-responsibility.ts),跟托盘里排着的
+    // 一样拦着完成;其中交出去太久、算丢了的那几行,下面这次会重新交(monitor-turn-ack.ts)。
     const gate = await monitorsBlockingDetail(a.taskId);
-    // 第四类:回合里交过、它的事件流里却没有回执的(那一次返回出错 / 没回到它手上 —— 送没送到
-    // 只认回执,见 monitor-turn-handoff.ts ②)。跟托盘里排着的一样拦着完成。
-    const owed = await owedTurnHandoffs(a.taskId);
-    const blocked = gate.message ?? (owed ? owedHandoffNote(owed) : null);
-    if (blocked && a.handOver && (gate.unread > 0 || owed > 0)) {
+    const blocked = gate.message;
+    if (blocked && a.handOver && (gate.unread > 0 || gate.handed > 0)) {
       const handed = await takeMonitorResultsForTurn({
         taskId: a.taskId, token: a.handOver.token, where: a.where, via: "complete",
       });
       if (handed) {
-        // 交完再问一次闸:剩下的(还在盯的、正在入队的)照旧拦,说法照旧。这一步抛了也不用补:
-        // 刚交出去的那几行没有回执,下一次照样拦着、照样再交。
-        const still = await monitorsBlockingComplete(a.taskId);
+        // 交完再问一次闸:剩下的(还在盯的、正在入队的)照旧拦,说法照旧;刚交的这几行正随这次返回
+        // 送过去,不算进去。这一步抛了也不用补:它们没有确认,下一次照样拦着、到点照样再交。
+        const still = (await monitorsBlockingDetail(a.taskId, { withHanded: false })).message;
         return { ok: false, error: completeHandedNote(still), blockedByMonitors: true, handed };
       }
     }

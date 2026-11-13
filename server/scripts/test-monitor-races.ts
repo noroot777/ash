@@ -91,10 +91,16 @@ import {
   await until("第一条事件已排队", async () => (await pendingOf(taskId)).length > 0);
   const queued = (await pendingOf(taskId))[0]!;
 
-  // ⑬ 投递方抢租约那一刻拿到的必须是**此刻**那一行，而不是它选中时的快照。
+  // ⑬ 投递方抢租约那一刻拿到的必须是**此刻**那一行，而不是它选中时的快照。追加进已选中那一行
+  // 的路(monitor-events.ts `pushToTask`):第一行窗口过了之后来的那一批另起一行,再来一批时
+  // 把它搬进第一行(积压)、自己占最新那一行。
+  await sleep(Math.max(0, Date.parse(queued.mergeHoldUntil ?? now()) - Date.now()) + 50);
   appendFileSync(row.logPath, "SECOND_WHILE_WAITING\n");
-  await until("第二条已合并进同一行", async () =>
+  await until("第二条另起一行", async () =>
     (await pendingOf(taskId)).some((m) => m.text.includes("SECOND_WHILE_WAITING")));
+  appendFileSync(row.logPath, "THIRD_PUSHES_SECOND_BACK\n");
+  await until("第二条已搬进选中的那一行", async () =>
+    (await pendingOf(taskId)).some((m) => m.id === queued.id && m.text.includes("SECOND_WHILE_WAITING")));
   const claimed = await pending.beginDelivery(queued.id);
   assert.ok(claimed, "没抢到租约，这一段的前提就不成立");
   assert.equal(

@@ -25,7 +25,7 @@ import {
   PLAIN_SUMMARY_EXAMPLE, PLAIN_SUMMARY_GUIDE, RECURS_FIELD_GUIDE, REVIEW_VALIDATION_REQUIREMENT,
 } from "@ash/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
-import { failWithMonitorResults, okWithMonitorResults } from "./monitor-results.js";
+import { callWithMonitorResults } from "./monitor-results.js";
 import { RECURS, TASK_STAGE } from "../schemas.js";
 
 export function registerTaskTurnTools(server: McpServer): void {
@@ -156,8 +156,7 @@ server.registerTool(
     },
   },
   async ({ taskId, directionToken }) => {
-    try { return okWithMonitorResults(await call("POST", `/tasks/${taskId}/complete`, {}, directionToken)); }
-    catch (e) { return failWithMonitorResults(e); }
+    return callWithMonitorResults(taskId, `/tasks/${taskId}/complete`, {}, directionToken);
   },
 );
 
@@ -176,8 +175,7 @@ server.registerTool(
     },
   },
   async ({ taskId, resumePrompt, directionToken }) => {
-    try { return okWithMonitorResults(await call("POST", `/tasks/${taskId}/pause`, { resumePrompt }, directionToken)); }
-    catch (e) { return failWithMonitorResults(e); }
+    return callWithMonitorResults(taskId, `/tasks/${taskId}/pause`, { resumePrompt }, directionToken);
   },
 );
 

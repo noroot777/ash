@@ -180,14 +180,15 @@ async function sparedByReview(
  * 那条缝（见文件头）。它也覆盖「进程这中间死掉」：凭证留在库里，由重投器按它补送
  * （`redeliverResultHandoffs`），而在送出去之前闸一直看得见。
  */
-type Blocking = { live: MonitorFacts[]; unread: { label: string }[]; inflight: MonitorFacts[] };
+type Blocking = { live: MonitorFacts[]; unread: { label: string }[]; inflight: MonitorFacts[]; handed: { label: string }[] };
 
 async function blockingSets(taskId: string): Promise<Blocking> {
-  const out: Blocking = { live: [], unread: [], inflight: [] };
+  const out: Blocking = { live: [], unread: [], inflight: [], handed: [] };
   for (const r of await unsettledMonitorResponsibility(db, taskId)) {
     if (await sparedByReview({ sourceReviewRun: r.reviewRun, sourceReviewRound: r.reviewRound,
       sourceReviewGeneration: r.reviewGeneration })) continue;
     if (r.cls === "unread") out.unread.push({ label: labelOfRow(r) });
+    else if (r.cls === "handed") out.handed.push({ label: labelOfRow(r) });
     else if (r.cls === "handoff") out.inflight.push(factsOfRow(r));
     else out.live.push(factsOfRow(r));
   }
@@ -211,20 +212,27 @@ export async function monitorsBlockingComplete(taskId: string): Promise<string |
   return (await monitorsBlockingDetail(taskId)).message;
 }
 
-/** 同上,外加「结果排着没送到」那一类有几条(完成那一刻要不要当场交给它,见 task-complete.ts)。 */
-export async function monitorsBlockingDetail(taskId: string): Promise<{ message: string | null; unread: number }> {
+/**
+ * 同上,外加「结果排着没送到」「交过、还没确认送到」两类各几条(完成那一刻要不要当场交给它,见
+ * task-complete.ts)。`withHanded: false` = 刚交完、这一次返回正带着它们:那一类不算进这句话。
+ */
+export async function monitorsBlockingDetail(taskId: string, o: { withHanded?: boolean } = {}): Promise<{
+  message: string | null; unread: number; handed: number;
+}> {
   const sets = await blockingSets(taskId);
-  return { message: blockingMessage(sets), unread: sets.unread.length };
+  if (o.withHanded === false) sets.handed = [];
+  return { message: blockingMessage(sets), unread: sets.unread.length, handed: sets.handed.length };
 }
 
-function blockingMessage({ live, unread, inflight }: Blocking): string | null {
-  if (live.length === 0 && unread.length === 0 && inflight.length === 0) return null;
+function blockingMessage({ live, unread, inflight, handed }: Blocking): string | null {
+  if (live.length === 0 && unread.length === 0 && inflight.length === 0 && handed.length === 0) return null;
   const what = [
     live.length ? `${live.length} 个哨兵还在盯着（${nameList(live)}）` : null,
     unread.length ? `${unread.length} 条哨兵结果还排在待发送里、没送到你手上（${nameList(unread)}）` : null,
     inflight.length
       ? `${inflight.length} 条哨兵刚跑完、结束通知正在送往你手上（${nameList(inflight)}）`
       : null,
+    handed.length ? `${handed.length} 条哨兵结果交给过你、还没确认送到你手上（${nameList(handed)}）` : null,
   ].filter(Boolean).join("，以及 ");
   return (
     `完成确认被拦下：你名下还有 ${what}。`
@@ -245,6 +253,11 @@ function blockingMessage({ live, unread, inflight }: Blocking): string | null {
       ? "④ 正在送的那几条：**等一下再调一次 complete_task 就行** —— 它们是刚刚跑完的哨兵的结束通知，"
         + "ash 正在把它们送到你手上（通常就是下一个瞬间；这一笔万一写失败，有人按退避一直重试、"
         + "每分钟还会巡检一遍，不需要你做什么）。确实不要了也可以对它调 stop_monitor。"
+      : "")
+    + (handed.length
+      ? "⑤ 交给过你的那几条：它们在你另一次 pause_task / complete_task 的返回里，确认送到通常就在那次返回"
+        + "的同一刻，**等几秒再调一次 complete_task**；那次返回要是没到你手上，过半分钟再调会把它们重新交给你。"
+        + "不要了也可以对它那条哨兵调 stop_monitor。"
       : "")
   );
 }
