@@ -105,7 +105,7 @@ const ALERT_LEADS: readonly RegExp[] = [
   /^起跑预检提示/, // ash-mcp-launch-gate / ash-mcp-turn-hint
   /^本次启动失败，未能继续执行/, // queue-seat
   /^续聊未能启动/, // task-reply
-  /^重跑上一回合(未能启动：回合被其它执行抢占|启动失败：)/, // task-retry-turn
+  /^(重试这一回合|重跑上一回合)(未能启动：回合被其它执行抢占|启动失败：)/, // task-retry-turn（「重跑上一回合」是老记录的说法）
   /^这一轮在启动前被撤回/, // turn-freeze
   /^这一轮改了代码，但没有确认完成/, // turn-baseline
   /^〔上游停滞·(重启后按失败收尾|上一次运行的结局核实不了)〕/, // turn-stall-text（重启对账）
