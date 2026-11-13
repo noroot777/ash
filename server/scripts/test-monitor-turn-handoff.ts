@@ -6,12 +6,15 @@
 //  ③ 两个出口撞在同一刻:恰好一个拿走
 //  ④ 审查者的结果不会被执行回合收走
 //  ⑤ 那一轮没正常收口 ⇒ 退回待发送,熬得过终态连坐、终态上等着(不作废)
-//  ⑥ 开机那一扫:记号挂在没接回来的回合上 ⇒ 退回;⑥b 断线补录之前同样退回
+//  ⑥ 开机那一扫:记号挂在没接回来的回合上 ⇒ 退回;⑥b 正常收口、事件流里却没有回执 ⇒ 退回
 //  ⑦ 空闲任务上 `echo A; exit 0` / 命中 stopWhen:一条消息、两类事件、一次唤醒
 //  ⑧ 第 1 轮审查:领取之后出错 ⇒ 退回、再调一次照交(F1);挑完候选之后方向换了 ⇒ 一行都领不到
 //    (F2);扫描读到之后行换了领取者 ⇒ 不碰(F3);合并窗口里别的触发源领不走(F4);老行认结束(N1)
+//  ⑨ 第 2 轮审查:领取之后出错、什么都没补上 ⇒ 没有回执就拦着完成、再交一次(1);业务拒绝里的结果
+//    正文写着 ECONNRESET ⇒ 补捞认得出是 ash 应答过的,不退回、不补录(2);积压过的老行窗口已过 ⇒
+//    最新一批另起一行,跟「结束」并在一起(3)
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
@@ -23,8 +26,12 @@ import {
 import { installFakeClaude } from "./scheduled-messages-fixture.js";
 import { mountTaskRunRoutes } from "../src/task-run-routes.js";
 import {
-  handMonitorResultsOnPause, returnOrphanTurnHandoffs, returnTurnHandoffs, settleTurnHandoffs,
+  handMonitorResultsOnPause, returnOrphanTurnHandoffs, settleTurnHandoffs,
 } from "../src/monitor-turn-handoff.js";
+import { answeredMcpError, isUndeliveredMcpFailure } from "@ash/shared/mcp-delivery";
+import { detachedPathsFor } from "../src/executors/detached.js";
+import { replayUndeliveredMcpCalls } from "../src/mcp-handoff.js";
+import { RUNS_DIR } from "../src/paths.js";
 import { settleTaskStatus } from "../src/settle-status.js";
 import { deliveryVerdict } from "../src/pending-verdict.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "../src/transcript.js";
@@ -108,6 +115,13 @@ async function queuedResult(taskId: string, text: string, opts: {
   return { ...message, monitorId };
 }
 
+/** 执行器把那次工具返回记进了这条会话的事件流 —— 回执就从这里认(monitor-turn-receipt.ts)。 */
+function receive(taskId: string, sessionId: string, text: string): void {
+  mkdirSync(join(RUNS_DIR, taskId), { recursive: true });
+  appendFileSync(join(RUNS_DIR, taskId, `${sessionId}-fixture.agent-out.jsonl`),
+    `${JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id(), content: text }] } })}\n`);
+}
+
 /** 会话转录里认得出来的那几条带类型的旁注。 */
 function notices(taskId: string, sessionId: string): Array<{ kind: string; [key: string]: unknown }> {
   const path = sessionTranscriptPath(taskId, sessionId);
@@ -128,6 +142,8 @@ try {
     assert.equal(body.paused, false, "没有暂停");
     assert.match(body.note, /没有暂停/);
     assert.match(body.monitorResults, /RESULT_READY_PAUSE/, "结果原文随返回交出");
+    assert.match(body.monitorResults, /^\[ash-handoff:[0-9a-f]{12}\]\n/, "打头是这一次的回执号");
+    receive(taskId, sessionId, body.monitorResults);
     assert.equal((await taskOf(taskId)).resumePrompt, null, "不记检查点");
     const after = await rowOf(result.id);
     assert.equal(after.status, "sent");
@@ -141,7 +157,7 @@ try {
     // 托盘空了之后再调 = 老路:记检查点、这一轮会落 paused。
     const again = await post(`/tasks/${taskId}/pause`, token, { resumePrompt: "继续：别的" });
     assert.equal(((await again.json()) as { paused: boolean }).paused, true);
-    // 正常收口(留了检查点) ⇒ 送达,记号销掉。
+    // 正常收口(留了检查点)且事件流里有回执 ⇒ 送达,记号销掉。
     await settleTurnHandoffs(taskId, token, true);
     const settled = await rowOf(result.id);
     assert.equal(settled.status, "sent");
@@ -151,7 +167,7 @@ try {
 
   // ── ② complete_task:被排着的结果拦下 ⇒ 随 409 交出;再调一次就过 ───────────────
   {
-    const { taskId, token, owner } = await liveTurn();
+    const { taskId, token, owner, sessionId } = await liveTurn();
     const result = await queuedResult(taskId, "RESULT_READY_COMPLETE");
     const first = await post(`/tasks/${taskId}/complete`, token);
     assert.equal(first.status, 409, "这一次不算确认");
@@ -161,8 +177,9 @@ try {
     assert.match(body.monitorResults, /RESULT_READY_COMPLETE/);
     assert.equal((await taskOf(taskId)).completeConfirmedAt, null);
     assert.equal((await rowOf(result.id)).status, "sent");
+    receive(taskId, sessionId, body.monitorResults);
     const second = await post(`/tasks/${taskId}/complete`, token);
-    assert.equal(second.status, 200, "交完之后闸放行");
+    assert.equal(second.status, 200, "它收到了(有回执)⇒ 闸放行");
     assert.ok((await taskOf(taskId)).completeConfirmedAt);
     await settleTurnHandoffs(taskId, token, true);
     assert.equal((await rowOf(result.id)).turnTakenBy, null, "交卷收口 ⇒ 送达");
@@ -171,7 +188,7 @@ try {
 
   // ── ③ 两个出口撞在同一刻:恰好一个拿走 ────────────────────────────────────────
   for (let i = 0; i < 5; i += 1) {
-    const { taskId, token, owner } = await liveTurn();
+    const { taskId, token, owner, sessionId } = await liveTurn();
     const result = await queuedResult(taskId, `RACE_${i}`);
     const [handed, leased] = await Promise.all([
       handMonitorResultsOnPause(taskId, token, [eq(tasks.status, "running")]),
@@ -181,6 +198,7 @@ try {
     const row = await rowOf(result.id);
     if (handed) assert.equal(row.deliveringSince, null);
     else assert.equal(row.status, "pending");
+    if (handed) receive(taskId, sessionId, handed.text);
     await settleTurnHandoffs(taskId, token, true);
     runs.releaseTurn(taskId, owner);
   }
@@ -200,7 +218,7 @@ try {
 
   // ── ⑤ 没正常收口 ⇒ 退回,终态连坐收不走它 ─────────────────────────────────────
   for (const [label, exit, stopped] of [["崩掉", 1, null], ["被停", 0, "canceled"]] as const) {
-    const { taskId, token, owner } = await liveTurn();
+    const { taskId, token, owner, sessionId } = await liveTurn();
     const result = await queuedResult(taskId, `RETURNED_${label}`);
     assert.ok(await handMonitorResultsOnPause(taskId, token, []));
     const settled = await settleTaskStatus(taskId, exit, stopped);
@@ -222,7 +240,9 @@ try {
     await db.update(tasks).set({ activeTurnToken: nextToken }).where(eq(tasks.id, taskId));
     runs.bindTurnToken(taskId, nextToken);
     const res = await post(`/tasks/${taskId}/pause`, nextToken, { resumePrompt: "继续" });
-    assert.match(((await res.json()) as { monitorResults?: string }).monitorResults ?? "", new RegExp(`RETURNED_${label}`));
+    const again = ((await res.json()) as { monitorResults?: string }).monitorResults ?? "";
+    assert.match(again, new RegExp(`RETURNED_${label}`));
+    receive(taskId, sessionId, again);
     await settleTurnHandoffs(taskId, nextToken, true);
     runs.releaseTurn(taskId, next!);
   }
@@ -245,46 +265,84 @@ try {
     assert.ok(row.turnReturnedAt);
   }
 
-  // ── ⑥b 交出结果的那次调用返回没回来、要被断线补录 ⇒ 补录前先退回 ─────────────────
+  // ── ⑥b 正常收口、它的事件流里却没有回执(返回没回到它手上)⇒ 退回 ─────────────────
   {
     const { taskId, token, owner } = await liveTurn();
-    const result = await queuedResult(taskId, "REPLAYED");
+    const result = await queuedResult(taskId, "NO_RECEIPT");
     assert.ok(await handMonitorResultsOnPause(taskId, token, []));
-    await returnTurnHandoffs(taskId, "fixture:通道断了");
+    await settleTurnHandoffs(taskId, token, true);
     const row = await rowOf(result.id);
     assert.equal(row.status, "pending", "回到托盘");
     assert.ok(row.turnReturnedAt);
     assert.equal(row.turnTakenBy, null);
-    // 补录随后把这一轮补成正常收口:已经没有交出去的行,什么都不会被当成送达。
-    await settleTurnHandoffs(taskId, token, true);
-    assert.equal((await rowOf(result.id)).status, "pending");
+    assert.equal(row.turnHandoff, null);
     runs.releaseTurn(taskId, owner);
     await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, result.id));
   }
 
-  // ── ⑧ F1:领取之后那一步出错 ⇒ 按这次领取退回,再调一次照样交出来 ───────────────
-  {
-    const { taskId, token, owner } = await liveTurn();
-    const result = await queuedResult(taskId, "MUST_READ_BEFORE_DONE");
+  // ── ⑧/⑨-1 领取之后那一步出错(而且什么都不补)⇒ 没有回执:拦着完成、再交一次,收口时退回 ──────
+  for (const ending of ["再调一次", "直接收口"] as const) {
+    const { taskId, token, owner, sessionId } = await liveTurn();
+    const result = await queuedResult(taskId, `MUST_READ_${ending}`);
+    // 领取之后、返回构造之前:复核来源审查那一问读哨兵行。在这里抛 = 领取已经落库、返回没构造成。
     let injected = false;
-    const restore = onSelect(sessions, (p) => !!p && Object.keys(p).length === 1 && p.id === sessions.id, async (rows) => {
+    const restore = onSelect(monitors, (p) => !!p && "reviewGeneration" in p, async (rows) => {
       if (injected || (await rowOf(result.id)).status !== "sent") return rows;
       injected = true;
-      throw new Error("注入:领取之后读会话出错");
+      throw new Error("注入:领取之后出错");
     });
     const first = await post(`/tasks/${taskId}/complete`, token);
     restore();
     assert.ok(injected, "注入点真的落在领取之后");
     assert.equal(first.status, 500);
-    const back = await rowOf(result.id);
-    assert.equal(back.status, "pending", "领到的那一行退回托盘");
-    assert.equal(back.turnTakenBy, null);
-    assert.ok(back.turnReturnedAt);
-    const second = await post(`/tasks/${taskId}/complete`, token);
-    assert.equal(second.status, 409, "再调一次:没看过的结果照样拦下、照样交出");
-    assert.match(((await second.json()) as { monitorResults?: string }).monitorResults ?? "", /MUST_READ_BEFORE_DONE/);
-    assert.equal((await post(`/tasks/${taskId}/complete`, token)).status, 200);
+    const held = await rowOf(result.id);
+    assert.equal(held.status, "sent", "没有任何补偿写入:停在「交了、没有回执」");
+    if (ending === "再调一次") {
+      const second = await post(`/tasks/${taskId}/complete`, token);
+      assert.equal(second.status, 409, "没有回执 ⇒ 照样拦下、照样再交一次(第 2 轮审查 1:第二次不许直接完成)");
+      const again = ((await second.json()) as { monitorResults?: string }).monitorResults ?? "";
+      assert.match(again, new RegExp(`MUST_READ_${ending}`));
+      receive(taskId, sessionId, again);
+      assert.equal((await post(`/tasks/${taskId}/complete`, token)).status, 200, "收到了才放行");
+      await settleTurnHandoffs(taskId, token, true);
+      assert.equal((await rowOf(result.id)).turnTakenBy, null, "有回执 ⇒ 送达");
+    } else {
+      await settleTurnHandoffs(taskId, token, true);
+      const back = await rowOf(result.id);
+      assert.equal(back.status, "pending", "正常收口也不算送达:没有回执就退回");
+      assert.ok(back.turnReturnedAt);
+      await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, result.id));
+    }
+    runs.releaseTurn(taskId, owner);
+  }
+
+  // ── ⑨-2 业务拒绝里的结果正文写着 ECONNRESET ⇒ 补捞认得出是 ash 应答过的 ───────────────
+  {
+    const { taskId, token, owner, sessionId } = await liveTurn();
+    const result = await queuedResult(taskId, "ECONNRESET while running remote command");
+    const first = await post(`/tasks/${taskId}/complete`, token);
+    assert.equal(first.status, 409);
+    const body = await first.json() as { error: string; monitorResults: string };
+    // MCP 端交给 agent 的那段话(`failWithMonitorResults` 的形状),agent 随后调了 pause_task、成功了。
+    const rendered = answeredMcpError(409, "POST", `/tasks/${taskId}/complete`, `${body.error}\n\n${body.monitorResults}`);
+    assert.equal(isUndeliveredMcpFailure({ message: rendered }), false, "ash 应答过的拒绝不算没送达");
+    const turnStart = now();
+    const out = detachedPathsFor(join(RUNS_DIR, taskId), sessionId, turnStart).out;
+    const call = (useId: string, name: string) => JSON.stringify({ type: "assistant", message: { content: [
+      { type: "tool_use", id: useId, name: `mcp__ash__${name}`, input: { taskId, resumePrompt: "继续" } }] } });
+    const reply = (useId: string, isError: boolean, text: string) => JSON.stringify({ type: "user", message: { content: [
+      { type: "tool_result", tool_use_id: useId, is_error: isError, content: text }] } });
+    mkdirSync(join(RUNS_DIR, taskId), { recursive: true });
+    appendFileSync(out, [call("u1", "complete_task"), reply("u1", true, rendered),
+      call("u2", "pause_task"), reply("u2", false, "{\"paused\":true}")].join("\n") + "\n");
+    assert.equal(await replayUndeliveredMcpCalls({ taskId, sessId: sessionId, turnStart, agentType: "claude" }), 0,
+      "不替它补录 complete_task(它后来要的是暂停)");
+    assert.equal((await taskOf(taskId)).completeConfirmedAt, null);
+    const row = await rowOf(result.id);
+    assert.equal(row.status, "sent", "交过的结果没被退回");
+    assert.equal(row.turnTakenBy, token);
     await settleTurnHandoffs(taskId, token, true);
+    assert.equal((await rowOf(result.id)).turnTakenBy, null, "事件流里有回执 ⇒ 送达,不再叫醒一次");
     runs.releaseTurn(taskId, owner);
   }
 
@@ -380,6 +438,42 @@ try {
     assert.equal(rows.length, 1, "只有一条消息");
     assert.deepEqual((rows[0]!.monitorWake?.events ?? []).map((e) => e.kind), ["output", "ended"]);
     await until("那一回合跑完", async () => !runs.isTurnClaimed(taskId));
+  }
+
+  // ── ⑨-3 忙着时积压过一条进展、窗口早过了;最后一行紧跟着退出 ⇒ 最后一批跟「结束」并在一起 ─────
+  {
+    const { taskId, owner } = await liveTurn();
+    const started = await startMonitor({
+      taskId, command: "echo FIRST_PROGRESS; sleep 3; echo FINAL_OUTPUT; sleep 0.9; exit 0", description: "backlog-then-final",
+    });
+    assert.ok(started.ok);
+    const origin = `monitor:${started.ok ? started.monitor.id : ""}`;
+    const ofMonitor = async () => (await db.select().from(scheduledMessages).where(eq(scheduledMessages.origin, origin)))
+      .sort((x, y) => x.createdAt.localeCompare(y.createdAt));
+    await until("最后一行进了托盘", async () => (await ofMonitor()).some((m) => m.text.includes("FINAL_OUTPUT")), 10_000);
+    const before = await ofMonitor();
+    assert.equal(before.length, 2, "窗口过了的老行不收新的那一批:另起一行");
+    assert.doesNotMatch(before[0]!.text, /FINAL_OUTPUT/);
+    // 回合收口、任务空了,巡检随即来领:积压的那一行可以走,最新那一批不行。
+    runs.releaseTurn(taskId, owner);
+    await db.update(tasks).set({ status: "paused" }).where(eq(tasks.id, taskId));
+    await pending.deliverPendingMessages();
+    const final = (await ofMonitor()).find((m) => m.text.includes("FINAL_OUTPUT"))!;
+    assert.equal(final.status, "pending", "最新那一批在窗口里,谁来领都领不走");
+    // 同一个任务两次唤醒之间有 5 秒冷却(pending-messages.ts `cooling`),第二条要等下一趟巡检
+    // (生产上是 30 秒那一趟);这里过了冷却手动扫一次。
+    await until("结束并进最新那一行", async () => (await ofMonitor()).some((m) => /哨兵结束/.test(m.text)));
+    await sleep(5_500);
+    await pending.deliverPendingMessages();
+    await until("两行都送出", async () => {
+      const rows = await ofMonitor();
+      return rows.every((m) => m.status === "sent") && rows.some((m) => /哨兵结束/.test(m.text));
+    });
+    const rows = await ofMonitor();
+    assert.equal(rows.length, 2, "积压一行 + 最后一批与结束一行");
+    assert.deepEqual((rows[1]!.monitorWake?.events ?? []).map((e) => e.kind), ["output", "ended"]);
+    assert.match(rows[1]!.text, /FINAL_OUTPUT[\s\S]*哨兵结束/);
+    await until("回合都跑完", async () => !runs.isTurnClaimed(taskId));
   }
 
   // ── ⑦ 空闲任务:最后一批输出与「结束」并成一条、只叫醒一次 ─────────────────────

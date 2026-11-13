@@ -565,8 +565,10 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // 在升级后被执行了两遍)。null = 旧代开的,它的沉默什么都不证明,只能按交付不明处理。
   crossingProtocol: text("crossing_protocol"),
   // 哨兵结果**在回合里**交给了哪一轮（那一轮的 active_turn_token）。status='sent' 且非空 = 已交、
-  // 等那一轮收口才算数；没正常收口就退回 pending（monitor-turn-handoff.ts 文件头）。
+  // 等那一轮收口才算数；它自己的事件流里没有回执就退回 pending（monitor-turn-handoff.ts 文件头）。
   turnTakenBy: text("turn_taken_by"),
+  // 那一次交付的回执号 + 交给的会话 + 时刻：送没送到只认那条会话事件流里出现过这个回执号。
+  turnHandoff: text("turn_handoff", { mode: "json" }).$type<{ hand: string; session: string; at: string }>(),
   // 回合里交过、那一轮没正常收口而退回来的时刻。非空的 pending 行熬得过终态连坐，等下一次起跑送达。
   turnReturnedAt: text("turn_returned_at"),
   // 哨兵输出那一批在这一刻之前不投递，等紧跟着的「结束」并进来（monitor-events.ts `pushToTask`）。

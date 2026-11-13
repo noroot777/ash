@@ -11,7 +11,7 @@
 //    等它跑完、空闲就立刻续会话、归档就作废、server 重启后不丢、界面托盘里看得见、用户
 //    能撤）`pending-messages.ts` 全都已经做对了，而且每一条都踩过坑。
 // ② **一条事件 = 唤醒一次 = 一个真实的模型回合。** 所以合并是第一位的。
-import { and, eq, inArray, isNull, like, notInArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, notInArray } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
 import { handoffToken, mergeMonitorEventText, MONITOR_END_GRACE_MS, monitorMessageOrigin } from "@ash/shared/monitor";
 import { appendMonitorWake, readMonitorWake, type MonitorWakeEvent } from "@ash/shared/monitor-wake";
@@ -60,7 +60,8 @@ export async function pushToTask(
   }) !== null) return false;
 
   const origin = monitorMessageOrigin(row.id);
-  const existing = (await db
+  // 并进**最新**那一行:同一条哨兵名下可能同时排着积压的进展和窗口里的最新一批(见下)。
+  const latest = (await db
     .select()
     .from(scheduledMessages)
     .where(and(
@@ -68,14 +69,23 @@ export async function pushToTask(
       eq(scheduledMessages.origin, origin),
       eq(scheduledMessages.status, "pending"),
       isNull(scheduledMessages.deliveringSince),
-    ))).at(0) ?? null;
-  // **输出那一批 ⇒ 新起的那一行先不许投递**(合并窗口,见 `deferFlush`);「结束」那一笔并进来
-  // 就解除、当场送。不分任务忙闲:忙着的那一轮可能下一刻就收口,窗口落在行上而不是落在某一个
-  // 触发源上,谁先来领都得等它。团队调度台不等:它的常驻会话说着话也接得住,投递时机归它自己那条路。
+    ))
+    .orderBy(desc(scheduledMessages.createdAt), desc(scheduledMessages.id))).at(0) ?? null;
+  // **输出那一批 ⇒ 它所在的那一行在窗口内不许投递**(合并窗口,见 `deferFlush`);「结束」那一笔
+  // 并进最新那一行就解除、当场送。窗口落在行上而不是某一个触发源上,谁先来领都得等它;不分任务
+  // 忙闲,忙着的那一轮可能下一刻就收口。团队调度台不等:它的常驻会话说着话也接得住。
+  //
+  // **窗口只认最新那一批**:最新那一行的窗口已经过了(它是积压下来的进展,该送就送),这一批就
+  // 不并进去、另起一行带自己的窗口 —— 并进去的话它跟着沿用那个早已到期的期限,哪个触发源先到就
+  // 被单独送走,紧跟着的「结束」只能另起一行。也不往后顺延老行的期限:持续输出时那样会把整行
+  // 一直压着,而每一批最多只许比原来晚两秒。
+  const at = Date.now();
   const hold = !handoffToken && event?.kind !== "ended" && task.mode !== "team";
-  await mergeOrEnqueueMonitorEvent(row, text, existing, handoffToken, event,
-    hold ? new Date(Date.now() + MONITOR_END_GRACE_MS).toISOString() : null);
-  if (hold) deferFlush(row.id, row.taskId);
+  const open = !!latest?.mergeHoldUntil && Date.parse(latest.mergeHoldUntil) > at;
+  const existing = hold && latest && !open ? null : latest;
+  const holdUntil = hold ? new Date(at + MONITOR_END_GRACE_MS).toISOString() : null;
+  await mergeOrEnqueueMonitorEvent(row, text, existing, handoffToken, event, holdUntil);
+  if (holdUntil) deferFlush(row.id, row.taskId, holdUntil);
   else flushNow(row.id, row.taskId);
   return true;
 }
@@ -93,24 +103,29 @@ export async function pushToTask(
  * 剩下的只是 ash 自己的记账,这时先送等于亲手把一条拆成两条。命中 `stopWhen` 那一批走的也是
  * 这条:命中当场就排上了收尾,所以实际上不等 —— 收尾一入队就把它们一起送出去。
  */
-const deferred = new Map<string, NodeJS.Timeout>();
+const deferred = new Map<string, Set<NodeJS.Timeout>>();
 
-function deferFlush(monitorId: string, taskId: string): void {
-  if (deferred.has(monitorId)) return;   // 已经在等:后来的批次并进同一行,不往后顺延
+/**
+ * 到 `until` 再触发一次投递。每一批都排一个(并进还在窗口里那一行的那几批,它们的定时器晚于那一行
+ * 的期限,到点时多扫一次而已):不去猜这一批最后落进了哪一行 —— 合并那一发可能落空、另起一行。
+ */
+function deferFlush(monitorId: string, taskId: string, until: string): void {
+  const timers = deferred.get(monitorId) ?? new Set<NodeJS.Timeout>();
   const timer = setTimeout(() => {
-    deferred.delete(monitorId);
+    timers.delete(timer);
+    if (!timers.size) deferred.delete(monitorId);
     void import("./monitor-finish.js").then(async ({ finishInFlight }) => {
       await finishInFlight(monitorId);
       flushPendingForTask(taskId);
     }).catch(() => flushPendingForTask(taskId));
-  }, MONITOR_END_GRACE_MS);
+  }, Math.max(0, Date.parse(until) - Date.now()));
   (timer as { unref?: () => void }).unref?.();
-  deferred.set(monitorId, timer);
+  timers.add(timer);
+  deferred.set(monitorId, timers);
 }
 
 function flushNow(monitorId: string, taskId: string): void {
-  const timer = deferred.get(monitorId);
-  if (timer) clearTimeout(timer);
+  for (const timer of deferred.get(monitorId) ?? []) clearTimeout(timer);
   deferred.delete(monitorId);
   flushPendingForTask(taskId);
 }

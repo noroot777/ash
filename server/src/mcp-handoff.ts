@@ -35,7 +35,6 @@ import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
 import { confirmTaskComplete } from "./task-complete.js";
-import { returnTurnHandoffs } from "./monitor-turn-handoff.js";
 import { reportTaskStage } from "./task-stage.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 
@@ -280,13 +279,6 @@ export async function replayUndeliveredMcpCalls(a: {
   const { out } = detachedPathsFor(join(RUNS_DIR, a.taskId), a.sessId, a.turnStart);
   const calls = collectAshMcpCalls(out, a.agentType);
   if (!calls.length) return 0;
-  // 这一轮有一次 pause/complete 的返回没回到 agent 手上 ⇒ 那一次可能已经把哨兵结果交了出去。
-  // 不管随后补不补录、agent 后来重试成没成,这一轮都会收成正常收口,交出去的就被当成送达 ——
-  // 所以先退回(monitor-turn-handoff.ts ②)。宁可重复:它真读到过的那几条下一次会再送一遍。
-  if (calls.some((call) => !call.ok && (call.tool === "pause_task" || call.tool === "complete_task")
-    && call.args.taskId === a.taskId && isUndeliveredMcpFailure({ message: call.error }))) {
-    await returnTurnHandoffs(a.taskId, "交出结果的那次调用因 MCP 通道中断没回到它手上");
-  }
   const direction = (await db.select({
     token: tasks.activeDirectionToken,
     version: tasks.activeDirectionVersion,

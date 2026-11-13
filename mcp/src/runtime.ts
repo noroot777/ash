@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { ASH_TURN_IDENTITY_ENV, ASH_TURN_IDENTITY_FILE, isTurnIdentityPathEntry } from "@ash/shared/mcp";
-import { UNDELIVERED_NET_CODES } from "@ash/shared/mcp-delivery";
+import { answeredMcpError, UNDELIVERED_NET_CODES } from "@ash/shared/mcp-delivery";
 
 export const BASE = (process.env.ASH_URL ?? process.env.HARNESS_URL ?? "http://localhost:4317").replace(/\/+$/, "");
 
@@ -145,8 +145,12 @@ async function request(method: string, path: string, body: unknown, directionTok
     }
   }
   const text = await res.text();
-  // 原文另挂在 `body` 上:个别工具要从拒绝里取结构化内容(如随拒绝一起交出的哨兵结果)。
-  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status} ${method} ${path} — ${text}`), { body: text });
+  // 原文另挂在 `body` 上:个别工具要从拒绝里取结构化内容(如随拒绝一起交出的哨兵结果),
+  // 这时它得用同一个「已应答」形状重新写一遍(见 shared 的 `answeredMcpError`)。
+  if (!res.ok) {
+    throw Object.assign(new Error(answeredMcpError(res.status, method, path, text)),
+      { body: text, status: res.status, method, path });
+  }
   return text;
 }
 

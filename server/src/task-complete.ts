@@ -36,7 +36,9 @@ import { tasks } from "./db/schema.js";
 import { serialize } from "./monitors.js";
 import { confirmDone, hasConfirmed, revokeConfirmed } from "./task-confirmation.js";
 import { monitorsBlockingComplete, monitorsBlockingDetail, noteMonitorsDropped } from "./task-complete-monitors.js";
-import { completeHandedNote, takeMonitorResultsForTurn, undoHandOver, type HandedMonitorResults } from "./monitor-turn-handoff.js";
+import {
+  completeHandedNote, owedHandoffNote, owedTurnHandoffs, takeMonitorResultsForTurn, type HandedMonitorResults,
+} from "./monitor-turn-handoff.js";
 import { clearAutoCheckpoint, writeResumePrompt } from "./task-resume-prompt.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -153,18 +155,18 @@ export async function confirmTaskComplete(a: {
 }): Promise<ConfirmCompleteResult> {
   const result = await serialize(`task:${a.taskId}`, async (): Promise<ConfirmCompleteResult> => {
     const gate = await monitorsBlockingDetail(a.taskId);
-    const blocked = gate.message;
-    if (blocked && a.handOver && gate.unread > 0) {
+    // 第四类:回合里交过、它的事件流里却没有回执的(那一次返回出错 / 没回到它手上 —— 送没送到
+    // 只认回执,见 monitor-turn-handoff.ts ②)。跟托盘里排着的一样拦着完成。
+    const owed = await owedTurnHandoffs(a.taskId);
+    const blocked = gate.message ?? (owed ? owedHandoffNote(owed) : null);
+    if (blocked && a.handOver && (gate.unread > 0 || owed > 0)) {
       const handed = await takeMonitorResultsForTurn({
         taskId: a.taskId, token: a.handOver.token, where: a.where, via: "complete",
       });
       if (handed) {
-        // 交完再问一次闸:剩下的(还在盯的、正在入队的)照旧拦,说法照旧。
-        // 交了、返回却没构造成 ⇒ 凭这次领取退回(monitor-turn-handoff.ts ②):错误照抛,结果回托盘。
-        const still = await monitorsBlockingComplete(a.taskId).catch(async (error: unknown) => {
-          await undoHandOver(a.taskId, handed, "交出结果之后读完成闸出错，这一次没交到它手上");
-          throw error;
-        });
+        // 交完再问一次闸:剩下的(还在盯的、正在入队的)照旧拦,说法照旧。这一步抛了也不用补:
+        // 刚交出去的那几行没有回执,下一次照样拦着、照样再交。
+        const still = await monitorsBlockingComplete(a.taskId);
         return { ok: false, error: completeHandedNote(still), blockedByMonitors: true, handed };
       }
     }
