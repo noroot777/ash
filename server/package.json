@@ -166,7 +166,7 @@
     "test:session-waiting": "tsx scripts/test-session-waiting.ts",
     "test:session-read-errors": "tsx scripts/test-session-read-errors.ts",
     "test:conversation-turn": "tsx scripts/test-conversation-turn.ts",
-    "test:retry-turn": "tsx scripts/test-retry-turn.ts",
+    "test:retry-turn": "tsx scripts/test-retry-turn.ts && tsx scripts/test-retry-turn-queue.ts",
     "test:settlement-note": "tsx scripts/test-settlement-note.ts",
     "test:turn-freeze": "tsx scripts/test-turn-freeze.ts",
     "//test:free-review-dispatch-retry": "审查派发在回合锁释放点上抢不到位时重排而不是落终态:输一次不落终态、连输到界才停、跨重启补办、界用尽后落终态且理由具体、撤回那几种照旧一次落终态、幽灵锁被拔掉时重排同样被放走。",
