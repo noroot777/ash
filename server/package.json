@@ -237,7 +237,7 @@
     "test:mcp-handoff": "tsx scripts/test-mcp-handoff.ts",
     "//test:data-root": "代码目录只读、数据整体另放（独立 app）：ASH_DATA_DIR 带走库/runs/uploads/deps 且不往子进程传，单项覆盖仍优先；ASH_LOCAL_ONLY 同样读完即删；MCP 登记的 node 选择。",
     "test:data-root": "tsx scripts/test-data-root.ts",
-    "//test:host-ash-mcp": "独立 app 首启替本机 CLI 接 ash MCP：只碰装了的那几家、没登记的补上、已指向这里的认得出、指向别处的一个字节不改并交回改法；入口/命令/端口三样对上才算指向这里。临时 HOME，不碰真配置。",
+    "//test:host-ash-mcp": "独立 app 首启替本机 CLI 接 ash MCP：只碰装了的那几家、没登记的补上、已指向这里的认得出、指向别处的一个字节不改并交回改法；node 真正执行的入口、命令、规范化后的完整地址三样对上才算指向这里（只有本机回环别名算同一台）。临时 HOME，不碰真配置。",
     "test:host-ash-mcp": "tsx scripts/test-host-ash-mcp.ts",
     "//test:import-snapshot": "独立 app 导入旧数据：副本发布前洗掉源实例的进程身份、在飞的活落被打断、自动续跑意图停用（真接管入口对着洗过的库认不出活着的源进程）；源数据根下的路径改到新根，根外一个字不动。",
     "test:import-snapshot": "tsx scripts/test-import-snapshot.ts",

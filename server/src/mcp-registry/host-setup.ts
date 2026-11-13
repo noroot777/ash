@@ -66,29 +66,58 @@ export async function setUpHostAshMcp(): Promise<HostAshMcp[]> {
   return out;
 }
 
-/** 这条登记起的是不是这份 ash 的 MCP、连的是不是这个端口。 */
+/**
+ * 这条登记起的是不是这份 ash 的 MCP、连的是不是这一台：node 真正执行的那个脚本是这里的入口、
+ * 命令是同一个 node、ASH_URL 规范化之后是同一个地址。
+ */
 export function pointsAt(launch: AshMcpLaunch | null, wanted: AshMcpEntry): boolean {
   if (!launch?.command) return false;
   const [entry] = wanted.args;
-  if (!entry || !stringArgs(launch.args).some((arg) => samePath(arg, entry))) return false;
+  const script = scriptOf(stringArgs(launch.args));
+  if (!entry || !script || !samePath(script, entry)) return false;
   // `node` 这种裸命令只跟裸命令比:它跟着 PATH 走,换不换 node 不归这条登记管。
   const commandMatches = wanted.command.includes("/")
     ? samePath(launch.command, wanted.command)
     : launch.command === wanted.command;
-  return commandMatches && portOf(launch.ashUrl ?? DEFAULT_MCP_URL) === portOf(wanted.env.ASH_URL ?? localUrl());
+  const target = baseOf(launch.ashUrl ?? DEFAULT_MCP_URL);
+  return commandMatches && target !== null && target === baseOf(wanted.env.ASH_URL ?? localUrl());
 }
 
 /** MCP 服务自己没拿到 ASH_URL 时连的地址(mcp/src/runtime.ts)。 */
 const DEFAULT_MCP_URL = "http://localhost:4317";
 const localUrl = () => `http://127.0.0.1:${currentListeningPort() ?? 4317}`;
 
-function portOf(url: string): string {
-  try {
-    const parsed = new URL(url);
-    return parsed.port || (parsed.protocol === "https:" ? "443" : "80");
-  } catch {
-    return "";
+/** 带值的 node 选项(值是下一个参数)。`--x=y` 的写法自带值,不在这里。 */
+const NODE_VALUE_OPTIONS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "-C", "--conditions",
+  "--env-file", "--input-type", "--title", "--inspect-port", "--stack-size"]);
+/** 有了它们 node 就不执行脚本文件(求值/打印/检查/测试/stdin)。 */
+const NODE_NO_SCRIPT = new Set(["-e", "--eval", "-p", "--print", "-c", "--check", "--test", "--run", "-"]);
+
+/** node 这一串参数真正执行的脚本:第一个不是选项的参数;求值这类模式下没有脚本。 */
+function scriptOf(args: string[]): string | null {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") return args[i + 1] ?? null;
+    if (NODE_NO_SCRIPT.has(arg.split("=")[0])) return null;
+    if (!arg.startsWith("-")) return arg;
+    if (NODE_VALUE_OPTIONS.has(arg)) i++;
   }
+  return null;
+}
+
+/**
+ * 规范化之后的基址:协议、主机、端口、路径都算数(mcp 只去掉末尾的斜杠就拿它拼接口),
+ * 只把明确的本机回环别名当成同一台。解析不了 = 认不出,不算指向这里。
+ */
+function baseOf(url: string): string | null {
+  let parsed: URL;
+  try { parsed = new URL(url.trim()); } catch { return null; }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) return null;
+  const host = parsed.hostname.toLowerCase();
+  const loopback = host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+  const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  return `${parsed.protocol}//${loopback ? "loopback" : host}:${port}${parsed.pathname.replace(/\/+$/, "")}`;
 }
 
 function samePath(a: string, b: string): boolean {
