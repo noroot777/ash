@@ -7,6 +7,8 @@
 //   ④ 旁路回合起的续跑（审查、就地验证、辩论那一段）、审查者那一侧的回合不加这一句，记录照旧是回执。
 //   ⑤ 审查段的起止认法不变：真实历史会话夹具里的续跑记录带上缘由前后，审查段一模一样。
 //   ⑥ 团队页同一套：头上有那一句，那条记录不再单独一行。
+//   ⑦ 几条会话交错续跑（先后起跑、稍后才各自开口）：每条会话认自己的那一条，别的会话的续跑、输入、
+//      旁路续跑都碰不到它；落盘重建和直播到达一样，任务页和团队页一样。
 import assert from "node:assert/strict";
 import type { Session } from "@ash/shared";
 import { appendMonitorWake, type MonitorWakeEvent } from "@ash/shared/monitor-wake";
@@ -188,6 +190,70 @@ for (const reason of RESUME_REASONS) {
   assert.equal(resumeEvents(conv).length, 0, "团队页的续跑记录还单独画了一行");
   const legacy = teamFeedRows(persistedResume(line({ t: "system", agent: "claude", text: MARKER, at: at(10) })), []);
   assert.deepEqual(agents(legacy.flatMap((row) => row.kind === "conv" ? [row.item] : [])).map((turn) => turnCauseText(turn)), [null, "系统续跑"]);
+}
+
+// ⑦ 几条会话交错续跑 ──────────────────────────────────────────────────────────────
+{
+  const s1 = session({ id: "s1", endedAt: null });
+  const s2 = session({ id: "s2", agentType: "codex", executor: "codex@cpa", startedAt: at(1), endedAt: null } as Partial<Session>);
+  const first = (id: string, minute: number) => [
+    line({ t: "user", agent: "claude", text: `${id} 开工`, at: at(minute) }), `${id} 第一回合。`, end(minute + 2),
+  ].join("");
+  const firstTrace = (minute: number) => [run(minute), text(minute + 1, minute, "第一回合。")];
+  const resumeLine = (minute: number, resume: SystemResume) => line({ t: "system", agent: "claude", text: MARKER, resume, at: at(minute) });
+  // 在 s1 续跑之后、它开口之前，s2 那边可能发生的三件事。
+  const between: Array<{ name: string; s2Line: string; s2Live: Record<string, unknown>; s2Cause: string | null }> = [
+    { name: "s2 也续跑", s2Line: resumeLine(11, { reason: "retry" }), s2Live: { kind: "system", text: MARKER, at: at(11), resume: { reason: "retry" } }, s2Cause: "你点了重试" },
+    { name: "s2 起了一次旁路续跑", s2Line: resumeLine(11, { reason: "run", side: true }), s2Live: { kind: "system", text: MARKER, at: at(11), resume: { reason: "run", side: true } }, s2Cause: null },
+  ];
+  for (const { name, s2Line, s2Live, s2Cause } of between) {
+    const disk = buildConversationItems([
+      { session: s1, output: [first("s1", 0), resumeLine(10, { reason: "queue" }), "s1 接着跑完了。", end(13)].join(""), trace: [...firstTrace(0), run(10), text(12, 10, "s1 接着跑完了。")] as never },
+      { session: s2, output: [first("s2", 1), s2Line, "s2 接着跑完了。", end(15)].join(""), trace: [...firstTrace(1), run(11), text(14, 11, "s2 接着跑完了。")] as never },
+    ], [s1, s2], []);
+    const ev = (id: string, sessionId: string, event: Record<string, unknown>, turnStartedAt?: string): TimelineEntry => ({
+      kind: "server", id,
+      event: { taskId: "t1", sessionId, role: "single", agentType: sessionId === "s1" ? "claude" : "codex", ...(turnStartedAt ? { turnStartedAt } : {}), event } as never,
+    });
+    // 直播：两条续跑先后到达，回复要等第一条正文才成气泡。
+    const live = buildConversationItems([
+      { session: s1, output: first("s1", 0), trace: firstTrace(0) as never },
+      { session: s2, output: first("s2", 1), trace: firstTrace(1) as never },
+    ], [s1, s2], [
+      ev("e1", "s1", { kind: "system", text: MARKER, at: at(10), resume: { reason: "queue" } }),
+      ev("e2", "s2", s2Live),
+      ev("e3", "s1", { kind: "text", text: "s1 接着跑完了。" }, at(10)),
+      ev("e4", "s2", { kind: "text", text: "s2 接着跑完了。" }, at(11)),
+    ]);
+    for (const [path, items] of [["落盘重建", disk], ["直播到达", live]] as const) {
+      const causeOf = (sessionId: string) => agents(items).filter((turn) => turn.sessionId === sessionId).map((turn) => turnCauseText(turn));
+      assert.deepEqual(causeOf("s1"), [null, "队列续跑"], `${name}·${path}：s1 的起因被别的会话抹掉了`);
+      assert.deepEqual(causeOf("s2"), [null, s2Cause], `${name}·${path}：s2 的起因不对`);
+      const shown = feed(items);
+      assert.equal(shown.receipts.flat().filter((receipt) => receipt.includes(MARKER)).length, s2Cause ? 0 : 1, `${name}·${path}：任务页的续跑记录数不对`);
+      assert.equal(shown.inline.some((note) => note.includes(MARKER)), false, `${name}·${path}：续跑记录在原处单独画了一行`);
+      const team = teamFeedRows(items, []).flatMap((row) => row.kind === "conv" ? [row.item] : []);
+      assert.deepEqual(agents(team).map((turn) => turnCauseText(turn)).filter(Boolean), s2Cause ? ["队列续跑", s2Cause] : ["队列续跑"], `${name}·${path}：团队页起因不对`);
+      assert.equal(resumeEvents(team).length, s2Cause ? 0 : 1, `${name}·${path}：团队页的续跑记录数不对`);
+    }
+  }
+  // s1 续跑之后、开口之前，s2 收到一条输入：那是 s2 的事，s1 的待认领记录照旧在。
+  const live = buildConversationItems([
+    { session: s1, output: first("s1", 0), trace: firstTrace(0) as never },
+    { session: s2, output: first("s2", 1), trace: firstTrace(1) as never },
+  ], [s1, s2], [
+    { kind: "server", id: "e1", event: { taskId: "t1", sessionId: "s1", role: "single", agentType: "claude", event: { kind: "system", text: MARKER, at: at(10), resume: { reason: "queue" } } } as never },
+    { kind: "user", id: "u1", text: "s2 你看看这个", attachments: [], at: at(11), sessionId: "s2", sessionRole: "single", bySystem: true },
+    { kind: "server", id: "e3", event: { taskId: "t1", sessionId: "s1", role: "single", agentType: "claude", turnStartedAt: at(10), event: { kind: "text", text: "s1 接着跑完了。" } } as never },
+  ]);
+  assert.deepEqual(agents(live).filter((turn) => turn.sessionId === "s1").map((turn) => turnCauseText(turn)), [null, "队列续跑"], "别的会话收到的输入抹掉了这条会话的起因");
+  // 还没落到任何会话上的输入（你刚打的字）对每条会话都算插话：之后开口的不是续跑起的头。
+  const typed = buildConversationItems([{ session: s1, output: first("s1", 0), trace: firstTrace(0) as never }], [s1], [
+    { kind: "server", id: "e1", event: { taskId: "t1", sessionId: "s1", role: "single", agentType: "claude", event: { kind: "system", text: MARKER, at: at(10), resume: { reason: "queue" } } } as never },
+    { kind: "user", id: "u1", text: "等等，先改颜色", attachments: [], at: at(11) },
+    { kind: "server", id: "e3", event: { taskId: "t1", sessionId: "s1", role: "single", agentType: "claude", turnStartedAt: at(11), event: { kind: "text", text: "好的。" } } as never },
+  ]);
+  assert.equal(agents(typed).some((turn) => turn.resumeCause), false, "你插了话之后开口的回合不是续跑起的头");
 }
 
 console.log("turn-cause ok");
