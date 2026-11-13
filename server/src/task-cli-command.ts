@@ -10,7 +10,7 @@ import { appendTaskTimeline, alertLine, noticeLine } from "./task-timeline.js";
 import { preflightCliGoalCommand, readCliState, renameCliTask, resolvedCliState, saveCliState } from "./task-cli-state.js";
 import { formatClaudeGoal } from "./executors/claude-goal.js";
 import type { TaskReplyBody } from "./task-reply.js";
-import { enqueueMessage } from "./pending-messages.js";
+import { enqueueMessage, flushPendingWhenTurnIdle } from "./pending-messages.js";
 import { cliGoalScopeLabel, cliGoalScopeSelector, cliGoalScopes, formatCliGoalScopes, runnableCliGoalScope, selectCliGoalScope } from "./task-cli-goal-scopes.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { advanceQueueFromTask } from "./scheduler.js";
@@ -114,7 +114,10 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
         void import("./orchestrator.js").then(async ({ continueTask }) => {
           const route = { agent: agentType, executorId: session.executorId, actingUserId: userId };
           const text = `/goal clear --scope ${cliGoalScopeSelector(agentType, state)}`;
-          if (!await continueTask(task.id, text, route)) await enqueueMessage({ taskId: task.id, text, ...route, ownerUserId: userId });
+          if (await continueTask(task.id, text, route)) return;
+          // 回合又被别人占了:入队之后登记「放开了就送」(pending-messages.ts 文件头触发源③)。
+          await enqueueMessage({ taskId: task.id, text, ...route, ownerUserId: userId });
+          flushPendingWhenTurnIdle(task.id);
         })
           .catch((error) => appendTaskTimeline(task.id, alertLine(`原生目标清除失败：${String(error)}；请再次 /goal clear`), { agentType }));
       });

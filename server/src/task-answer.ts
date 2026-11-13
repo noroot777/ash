@@ -7,7 +7,7 @@ import { tasks } from "./db/schema.js";
 import { freeReviewResumeOptions } from "./free-workflow.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { continueTask } from "./orchestrator.js";
-import { enqueueMessage, pendingMessageRow, publishPendingMessages, deliverPendingMessages } from "./pending-messages.js";
+import { enqueueMessage, pendingMessageRow, publishPendingMessages, deliverPendingMessages, flushPendingWhenTurnIdle } from "./pending-messages.js";
 import { claimQueueSeat } from "./queue-seat.js";
 import { askingAgentFor } from "./task-question.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
@@ -100,19 +100,28 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
       return c.json({ answered: true, resumed: false, queued: true, blockedBy: claim.blockers, record });
     }
     const seat = claim.seat;
+    let stashed = false;
     void continueTask(taskId, answerText, { ...attachments, ...route, actingUserId: acting, answerIds })
       .then(async (started) => {
         if (started) return;
         // 回合被别的执行抢占:原话退回托盘,仍按执行型等队列位置,不按终态续聊放行。
         await enqueueMessage({ taskId, text: answerText, ...attachments, ...route, ownerUserId: acting, execution: true, answerId: record.id });
+        stashed = true;
       })
       .catch((err) => console.error(`[ash] 答复续跑 ${taskId} 异常:`, err))
-      .finally(() => { if (seat) void seat.release(); });
+      .finally(async () => {
+        if (seat) await seat.release().catch((err) => console.error(`[ash] 答复续跑 ${taskId} 释放执行位失败:`, err));
+        // 占着回合的多半是**还在收尾**的提问那一轮(状态已落 paused、锁还没放):它落状态时那次
+        // 扫描看不到这一行,所以登记「锁一放就送」(pending-messages.ts 文件头触发源③),否则
+        // 答复要干等 30 秒兜底 tick。先放执行位再登记:扫描要重新认领它(同 task-reply.ts)。
+        if (stashed) flushPendingWhenTurnIdle(taskId);
+      });
     return c.json({ answered: true, resumed: true, record });
   }
   void continueTask(taskId, answerText, { ...attachments, ...route, actingUserId: acting, answerIds }).then(async (started) => {
     if (started) return;
     await enqueueMessage({ taskId, text: answerText, ...attachments, ...route, ownerUserId: acting, answerId: record.id });
+    flushPendingWhenTurnIdle(taskId);
   });
   return c.json({ answered: true, resumed: true, record });
 }

@@ -21,7 +21,8 @@ export async function dispatchPendingMessage(
     team?: boolean;
     seat?: QueueSeat;
     onClaim: () => void;
-    onSettled?: () => void;
+    /** 摘掉这一次的「在途」标记(pending-in-flight.ts):回合起来了、或这一次投递收场,先到先摘。 */
+    release?: () => void;
   },
 ): Promise<void> {
   const refused = new Map<string, string>();
@@ -86,7 +87,8 @@ export async function dispatchPendingMessage(
       ...(context.team ? { throwOnTeamUnavailable: true } : {}),
       // 三档处置整份在 ./delivery-lease.ts(含「迟到的拒收由回执这条路自己归还」—— 三个入口
       // 各写一遍就会各漏一处,那正是第 2 轮自由审查 F3)。
-      onInputSettled: (acceptance) => lease.settle(acceptance),
+      // 回执一落定,这一回合就已经起来了:在途标记到此为止,不跟着挂到回合跑完。
+      onInputSettled: (acceptance) => lease.settle(acceptance).finally(() => context.release?.()),
     });
     if (lease.callerMustReturn()) {
       if (!monitor) {
@@ -128,7 +130,7 @@ export async function dispatchPendingMessage(
     if (lease.callerMustReturn() && !monitor) {
       for (const checkpoint of checkpoints.reverse()) await checkpoint.restore().catch(() => {});
     }
-    context.onSettled?.();
+    context.release?.();
     if (context.seat && lease.callerMustReturn()) await context.seat.release();
   }
 }
