@@ -4,8 +4,6 @@
 // 最高的一块:它跟建任务、改任务不共用任何局部状态,只靠 `mountTaskDeleteRoutes(api)`
 // 挂回去。`deleteTaskCompletely` 跟着一起搬——项目删除那条路(project-routes.ts)也
 // 调它,留在建任务那份文件里只会让人以为它跟建任务有关。
-import { rmSync } from "node:fs";
-import { join } from "node:path";
 import type { TaskWorkspaceDiscardResult } from "@ash/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
@@ -22,7 +20,7 @@ import { branchDeletionRejection, deleteTaskBranchRefs } from "./task-branch-pla
 import { taskBusyRejection } from "./task-busy.js";
 import { forgetTaskUnconfirmed } from "./session-turns.js";
 import { withRepoLock } from "./repo-lock.js";
-import { DATA_DIR, RUNS_DIR } from "./paths.js";
+import { clearTaskDiskPending, markTaskDiskPending, reclaimDeletedTaskDisk } from "./run-dir-reclaim.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 
 // 删一个任务:关联状态 + 任务行本身,**一个出口、一个原子批**。自由审查链(run/round)、预约槽、
@@ -40,17 +38,22 @@ import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.j
 // Monitor 的重建依据(按会话找 run 文件)都没了,刷新多少次都回不来。`db.batch` 在同一个
 // BEGIN…COMMIT 里同步跑完这些语句,中途抛错整批回滚:**要么任务连同它的一切都没了,要么一切
 // 原样还在**,不存在第三种状态。
-export async function deleteTaskCompletely(taskId: string): Promise<void> {
+//
+// 行删成了再收磁盘（会话正文、原始日志、验收快照、草稿区），单删、连带删子任务、删项目三条路
+// 都走这里。磁盘那一步失败不算删除失败——任务已经没了；它留下持久待办由后台重试，返回值
+// 只如实说「磁盘收干净了没有」（见 run-dir-reclaim.ts）。
+export async function deleteTaskCompletely(taskId: string): Promise<{ diskReclaimed: boolean }> {
+  markTaskDiskPending(taskId);
+  let deleted = false;
   try {
     await deleteTaskRows(taskId);
+    deleted = true;
   } finally {
     // 删成了还是删一半失败,由它按「任务行还在不在」收口(见 claude-monitor-backfill.ts)。
     await settleTaskRevocation(taskId);
+    if (!deleted) clearTaskDiskPending(taskId);
   }
-  // 行删成了再收磁盘：会话正文、原始日志、验收快照、草稿区。任务没了就再没有入口读它们，
-  // 单删、连带删子任务、删项目三条路都走这里，不留只能手动清的孤儿目录。
-  rmSync(join(RUNS_DIR, taskId), { recursive: true, force: true });
-  rmSync(join(DATA_DIR, "scratch", taskId), { recursive: true, force: true });
+  return { diskReclaimed: await reclaimDeletedTaskDisk(taskId) };
 }
 
 async function deleteTaskRows(taskId: string): Promise<void> {
@@ -177,8 +180,10 @@ api.delete("/tasks/:id", async (c) => {
   // children 的 Git 工作区必须与它们的行一起处理：只删行的话，独立 worktree/分支会变成
   // 数据库里查无此任务的孤儿资源，leftover 检测（按父任务 id）也看不到（审查实测）。
   const childCleanups: (TaskWorkspaceDiscardResult & { taskId: string })[] = [];
+  // 磁盘没收干净的任务（已留待办、后台会重试）。如实回给调用方，删除本身照样算成功。
+  const diskCleanupPending: string[] = [];
   for (const child of children) {
-    await deleteTaskCompletely(child.id);
+    if (!(await deleteTaskCompletely(child.id)).diskReclaimed) diskCleanupPending.push(child.id);
     if (project && child.useWorktree && (wantWorktree || wantBranch)) {
       childCleanups.push({
         taskId: child.id,
@@ -190,7 +195,7 @@ api.delete("/tasks/:id", async (c) => {
       });
     }
   }
-  await deleteTaskCompletely(tid);
+  if (!(await deleteTaskCompletely(tid)).diskReclaimed) diskCleanupPending.push(tid);
   let cleanup: TaskWorkspaceDiscardResult | null = null;
   if (project && (wantWorktree || wantBranch)) {
     cleanup = await discardTaskWorkspace(project.repoPath, tid, {
@@ -215,6 +220,7 @@ api.delete("/tasks/:id", async (c) => {
     deletedTaskIds: [tid, ...children.map((child) => child.id)],
     ...(childCleanups.length ? { childCleanups } : {}),
     ...(childLeftovers.length ? { childLeftovers } : {}),
+    ...(diskCleanupPending.length ? { diskCleanupPending } : {}),
   });
   });
 });
