@@ -15,9 +15,12 @@
 //   2. **结尾**（`ALERT_ENDINGS`）：开头跟回执共用（「独立验证尚未执行：…」既有「需明确确认」的
 //      提醒，也有「已显式确认继续」的回执），就认整句最后那几个服务端写死的字（`$` 钉住）。引进来
 //      的那一截都夹在中间，够不着结尾。
-//   3. **结构**（`ALERT_FORMS`）：成败写在引文**紧后面**的那两种（门禁摘要、工作流里跑的命令），
-//      按服务端拼它的格式解码，成败那个词只认封闭取值、只认格式规定的那个位置。
+//   3. **结构**：成败写在引文**紧后面**、开头又跟回执共用的那两种，各有一个解码函数——
+//      门禁摘要（`gateVerdict`）照样能从结尾认；工作流里跑的命令（`commandVerdict`）前后都夹着
+//      引文，从字面上**不一定**认得出，认不出就说认不出（`unknown`），不替它猜。
 //
+// 判据由此有一条不变量：引进来的那一截改成什么，都不会把一条记录从回执翻成提醒、或者反过来；
+// 最多让它从「认得出」变成「认不出」。
 // 另一张是结算说明（服务端带 `level:"notice"` 落的那种，「这一轮为什么落成这个状态」）。它们
 // 一律没有类型，按同一个办法认：没交卷、被 ash 判失败的那几句要你知道；其余（等哨兵改落暂停、
 // 以提问暂停、你自己停的）界面别处已经在说，是回执。
@@ -48,7 +51,7 @@ const ALERT_LEADS: readonly RegExp[] = [
   /^更新基线发生冲突或 rebase 失败/, // task-base-update
   /^升级迁移：上一版(验收停在「合并进行中」|「合并&清理」失败)/, // db/migrations（要你重新验收的那两条；补上标记的那条是回执）
   /^冲突交接失败/, // accept-conflict
-  // 验收前置命令（门禁）。摘要那一句的成败在命令后面，见 ALERT_FORMS。
+  // 验收前置命令（门禁）。摘要那一句的成败在命令后面，见 gateVerdict。
   /^这条命令点名要跑的/, // accept-gate-miss（单独一条的归因）
   /^起跑前在 /, // accept-gate-miss
   /^日志里说 /, // accept-gate-miss
@@ -85,7 +88,7 @@ const ALERT_LEADS: readonly RegExp[] = [
   /^验证依据暂不可核验/, // regression-settlement
   /^本次验收明确补跑原审查尚未完成的尾段/, // regression-finalization
   /^强制通过之后想接着往下走，但出错了/, // verify-override
-  // 工作流的站。跑一条命令那一句的成败在命令后面，见 ALERT_FORMS。
+  // 工作流的站。跑一条命令那一句的成败夹在引文中间，见 commandVerdict。
   /^预览没起来/, // workflow-steps
   /^想把这一站打回重做，但唤醒任务时出错/, // workflow-steps
   /^这条线停在「[^」]+」这一站：自动复审轮数已经用完/, // workflow-advance（站名是内置的那几个）
@@ -132,22 +135,53 @@ const ALERT_ENDINGS: readonly RegExp[] = [
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** 门禁没跑绿时摘要里的原因（shared/accept-gate 的标签；查不到标签的旧类别照实写「未通过」）。 */
 const GATE_WHY = [...Object.values(ACCEPT_GATE_FAILURE_LABELS), "未通过"].map(escape).join("|");
-/** 摘要里紧跟在命令后面的那个成败：「` 通过（rc=0）」或「` 未通过：<原因>（rc=N）」，后面是句号、空白或结尾。 */
-const GATE_VERDICT = new RegExp(`\` (通过（rc=0）|(?:未通过|被打断|已取消)：(?:${GATE_WHY})(?:（rc=-?\\d+）)?)(?=。|\\s|$)`, "g");
+/** 摘要里紧跟在命令后面、没跑绿的那个成败：「` 未通过：<原因>（rc=N）」，后面是句号、空白或结尾。 */
+const GATE_FAILED = new RegExp(`\` (?:未通过|被打断|已取消)：(?:${GATE_WHY})(?:（rc=-?\\d+）)?(?=。|\\s|$)`);
 
-/** 判法 3：成败写在引文紧后面的那两种，按格式解码。 */
-const ALERT_FORMS: ReadonlyArray<(text: string) => boolean> = [
-  // accept-gate-settle：`验收前置命令 \`<命令>\` <成败>。<服务端补的说明>`。命令里可能也有一段像成败的字，
-  // 但真的那一个在命令**后面**、它后面只剩服务端自己的话，所以认最后一个合格式的成败。
-  (text) => {
-    if (!text.startsWith("验收前置命令 `")) return false;
-    const verdict = [...text.matchAll(GATE_VERDICT)].at(-1)?.[1];
-    return !!verdict && !verdict.startsWith("通过");
-  },
-  // workflow-steps：`跑了一条命令：\`<命令>\`（通过|没通过）` 后面换行接输出。成败在第一行末尾（输出可能也有
-  // 一段像成败的字，它在换行后面），所以认第一个后面紧跟换行或结尾的那个。
-  (text) => /^跑了一条命令：`/.test(text) && /`（(没通过|通过)）(?:\n|$)/.exec(text)?.[1] === "没通过",
-];
+/**
+ * accept-gate-settle：「验收前置命令 `<命令>` <成败>。<服务端补的说明>」。命令是你写的，补的说明里也会
+ * 引命令最后吐的那一行（超时那种「停在 `<最后一行>`」），两头都可能有一段像成败的字，所以不在中间找。
+ * 跑绿了的那一句后面**什么都不补**（补的说明只有超时、被收掉时才有），整句一定以「` 通过（rc=0）。」收尾；
+ * 没跑绿的结尾不是成败本身，就是服务端写死的说明。所以认结尾：结尾是跑绿了的就是回执，否则是提醒。
+ */
+function gateVerdict(text: string): "passed" | "failed" | null {
+  if (!text.startsWith("验收前置命令 `")) return null;
+  if (/` 通过（rc=0）。?$/.test(text)) return "passed";
+  return GATE_FAILED.test(text) ? "failed" : null;
+}
+
+export type CommandVerdict = "passed" | "failed" | "unknown";
+
+const COMMAND_HEAD = "跑了一条命令：`";
+
+/**
+ * workflow-steps：「跑了一条命令：`<命令>`（通过|没通过）」，后面换行接命令的输出。命令和输出都是任意
+ * 文字（命令可以跨行、可以引一段「`（没通过）」），开头结尾都夹着引文，单看字面切不准命令在哪儿结束。
+ *
+ * 所以把每一种切法都列出来：命令在某个「`（通过）/（没通过）」之前结束、后面是服务端那种接法。真的那一种
+ * 一定在里面——各种切法给的成败一样，那就是它；不一样，再拿任务工作流里写的那几条命令（`commands`）
+ * 逐字对一遍，对得上唯一一种切法就是它；还定不了就是认不出。
+ */
+export function commandVerdict(text: string, commands: readonly string[] = []): CommandVerdict | null {
+  if (!text.startsWith(COMMAND_HEAD)) return null;
+  const rest = text.slice(COMMAND_HEAD.length);
+  // 没通过的那句换行后面一定有原因（至少是「命令失败」）；通过的那句要么就此结尾，要么换行接非空的输出。
+  const verdictAt = (end: number): "passed" | "failed" | null => {
+    const tail = rest.slice(end);
+    if (/^`（没通过）\n[\s\S]/.test(tail)) return "failed";
+    return /^`（通过）(?:$|\n[\s\S])/.test(tail) ? "passed" : null;
+  };
+  const cuts = new Map<number, "passed" | "failed">();
+  for (let end = rest.indexOf("`（"); end >= 0; end = rest.indexOf("`（", end + 1)) {
+    const verdict = verdictAt(end);
+    if (verdict) cuts.set(end, verdict);
+  }
+  if (!cuts.size) return null;
+  const verdicts = new Set(cuts.values());
+  if (verdicts.size === 1) return [...verdicts][0]!;
+  const known = new Set([...new Set(commands)].flatMap((cmd) => cuts.has(cmd.length) && rest.startsWith(cmd) ? [cuts.get(cmd.length)!] : []));
+  return known.size === 1 ? [...known][0]! : "unknown";
+}
 
 /** 结算说明里要你知道的那几句（server/src/settle-status.ts 的落位说明）。 */
 const SETTLEMENT_LEADS: readonly RegExp[] = [
@@ -171,20 +205,24 @@ function head(raw: string): string {
 }
 
 function alertShape(text: string): boolean {
-  return ALERT_LEADS.some((lead) => lead.test(text))
-    || ALERT_ENDINGS.some((ending) => ending.test(text))
-    || ALERT_FORMS.some((form) => form(text));
+  return ALERT_LEADS.some((lead) => lead.test(text)) || ALERT_ENDINGS.some((ending) => ending.test(text));
 }
 
-/** 没有类型的时间线记录：是不是服务端当时会标成 `alertLine` 的那一句。 */
-export function legacyAlert(raw: string): boolean {
-  const text = head(raw);
-  return !RECEIPT_LEADS.some((lead) => lead.test(text)) && alertShape(text);
-}
+export type LegacyTier = "alert" | "receipt" | "unknown";
 
-/** 结算说明（`level:"notice"`）：是不是要你知道的那一句。其余是回执。 */
-export function settlementAlert(raw: string): boolean {
+/**
+ * 没有类型的时间线记录摆在哪一档：服务端当时会标成 `alertLine` 的是 `alert`，其余是回执；
+ * 工作流里跑的那条命令从字面上认不出成败的是 `unknown`（见 commandVerdict）。
+ * `settlement`：这是一条结算说明（`level:"notice"`），多认 SETTLEMENT_LEADS 那几句。
+ * `commands`：这个任务的工作流里写的那几条命令，认命令那一句时拿来对。
+ */
+export function legacyTier(raw: string, options: { settlement?: boolean; commands?: readonly string[] } = {}): LegacyTier {
   const text = head(raw);
-  return !RECEIPT_LEADS.some((lead) => lead.test(text))
-    && (SETTLEMENT_LEADS.some((lead) => lead.test(text)) || alertShape(text));
+  if (RECEIPT_LEADS.some((lead) => lead.test(text))) return "receipt";
+  const command = commandVerdict(text, options.commands);
+  if (command) return command === "failed" ? "alert" : command === "passed" ? "receipt" : "unknown";
+  const gate = gateVerdict(text);
+  if (gate) return gate === "failed" ? "alert" : "receipt";
+  if (options.settlement && SETTLEMENT_LEADS.some((lead) => lead.test(text))) return "alert";
+  return alertShape(text) ? "alert" : "receipt";
 }

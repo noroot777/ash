@@ -21,7 +21,7 @@ import { previewNoticeText } from "../lib/previewUrl.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
 import { isWorkspaceRecoveryNote, verifyNoteOf } from "./conversationNotes.ts";
 import { pendingDisputeEvent } from "./systemNoticeModel.ts";
-import { legacyAlert, settlementAlert } from "./legacyNoticeTable.ts";
+import { legacyTier } from "./legacyNoticeTable.ts";
 
 export type NoticeTier = "milestone" | "alert" | "reply" | "receipt";
 /**
@@ -196,7 +196,13 @@ const LEGACY_DISPUTE_ROUND = /（第\s*(\d+)\s*轮/;
  * 引了一段描述或命令（「哨兵已起：等回归跑完（npm test || echo FAILED）」），据此升成常显
  * 的红字，回执就成了警报。服务端标了 `level:"notice"` 的结算说明也照同一个办法认，不一律升档。
  */
-function legacyView(item: NoticeSource, raw: string): NoticeView {
+/** 认老记录时用得上的、这个任务自己的东西。 */
+export type NoticeContext = {
+  /** 任务工作流里写的那几条命令：认「跑了一条命令」那一句的成败时拿来逐字对（legacyNoticeTable 的 commandVerdict）。 */
+  commands?: readonly string[];
+};
+
+function legacyView(item: NoticeSource, raw: string, context: NoticeContext): NoticeView {
   if (isWorkspaceRecoveryNote(item.text)) {
     return {
       tier: "alert", tone: "neutral", topic: "other", text: "工作区已恢复，会话内容都在",
@@ -219,17 +225,19 @@ function legacyView(item: NoticeSource, raw: string): NoticeView {
     if (/未能正常给出结论/.test(raw)) return view("milestone", "warn", "review", reviewVerdictText(mark.kind, mark.round, "inconclusive"), raw);
   }
   if (item.text.includes(LEGACY_SYS_MARKER)) return generic("receipt", "neutral", raw);
-  const alert = item.tone === "notice" ? settlementAlert(raw) : legacyAlert(raw);
-  return generic(alert ? "alert" : "receipt", alert ? "warn" : "neutral", raw);
+  const tier = legacyTier(raw, { settlement: item.tone === "notice", commands: context.commands });
+  // 命令里、输出里各引了一段像成败的字，字面上切不出是哪一种：说认不出，原文点开看，不替它猜成败。
+  if (tier === "unknown") return view("alert", "warn", "other", "跑了一条命令，老记录里认不出它通过没有", raw);
+  return generic(tier, tier === "alert" ? "warn" : "neutral", raw);
 }
 
-export function noticeView(item: NoticeSource): NoticeView {
+export function noticeView(item: NoticeSource, context: NoticeContext = {}): NoticeView {
   const raw = noticeRawText(item.text);
   // 回合边界（直播那一路的「本轮执行结束」「执行异常结束 · exit 1」）不走时间线：
   // 正常收口是回执，异常收口是那一回合尾注里的一句。
   // 异常收口落定成一句「这一轮异常结束」，退出码点开再看（run-8）。
   if (item.variant === "boundary") return item.tone === "error" ? turnFailureView(raw) : generic("receipt", "neutral", raw);
-  return item.notice ? typedView(item.notice, raw) : legacyView(item, raw);
+  return item.notice ? typedView(item.notice, raw) : legacyView(item, raw, context);
 }
 
 /** 一轮异常结束的那一句（直播那一路的回合边界、刷新以后从会话行认出来的都用它）。 */

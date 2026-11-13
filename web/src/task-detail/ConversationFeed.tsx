@@ -23,7 +23,7 @@ import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import type { ReviewTarget } from "../review/reviewTarget.ts";
 import { CommandReply, SystemAuthoredMessage } from "./SystemNotice.tsx";
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
-import { noticeView } from "./timelineNoticeCopy.ts";
+import { noticeView, type NoticeContext } from "./timelineNoticeCopy.ts";
 import { FootnoteLine } from "./FootnoteLine.tsx";
 import { footnoteKey, receiptsKey, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 import { crashedTurns } from "./turnFailure.ts";
@@ -324,9 +324,13 @@ export function ConversationFeed({
   const crashed = crashedTurns(items);
   // 一整场辩论折成一行，排在回执归属之前 —— 反过来的话，那七条「轮到 X 发言」会先被
   // conversationSystemRows 收进某一回合的记录里，辩论就再也认不出自己的边界了。
+  // 认老记录里「跑了一条命令」那一句的成败时，拿这个任务工作流里写的命令逐字对。
+  const noticeContext: NoticeContext = {
+    commands: task.workflow?.steps.flatMap((step) => step.kind === "command" ? [step.p.cmd] : []),
+  };
   const { rows, receipts, footnotes } = conversationSystemRows(
     conversationDebateRows(conversationFeedRows(items, { reviews }), { reviews }),
-    { failures: crashed },
+    { failures: crashed, context: noticeContext },
   );
   // 审查卡里（正在跑的那张、尾注里摊开的那一轮、记录里点开的那一轮）的旁注同样记在审查者那一回合上
   // （见 laneReceipts）。
@@ -431,7 +435,7 @@ export function ConversationFeed({
       );
     }
     // 走到这里的只有归属之外单独摆的那几条（辩论兜底以外不会发生）：同一种小灰字。
-    const view = noticeView(item);
+    const view = noticeView(item, noticeContext);
     if (view.tier === "reply") return <CommandReply key={item.id} item={item} view={view} />;
     return renderFootnote({ id: item.id, live: false, parts: [{ kind: "event", id: item.id, at: item.at, view, item }] }, true);
   };

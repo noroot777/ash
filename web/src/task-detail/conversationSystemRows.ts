@@ -3,7 +3,7 @@ import type { ConversationDebateFeedRow } from "./conversationDebateRows.ts";
 import { conflictContextEvent, isConflictHandoff } from "./systemNoticeModel.ts";
 import { verifyMarkOf } from "./conversationNotes.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
-import { noticeView, turnFailureView, type NoticeView } from "./timelineNoticeCopy.ts";
+import { noticeView, turnFailureView, type NoticeContext, type NoticeView } from "./timelineNoticeCopy.ts";
 import type { CrashedTurn } from "./turnFailure.ts";
 import { composeFootnote, laneVerdictEvent, laneVerdictView, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 
@@ -96,6 +96,8 @@ type Accessors<Row> = {
   yoursOf?: (row: Row) => boolean;
   /** 这一回合异常结束了：尾注里补「这一轮异常结束」（原文是退出码），记录里同样有一条。 */
   failureOf?: (turnId: string) => CrashedTurn | undefined;
+  /** 认老记录时用得上的、这个任务自己的东西（见 timelineNoticeCopy 的 NoticeContext）。 */
+  context?: NoticeContext;
 };
 
 /**
@@ -154,7 +156,7 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
   rows.forEach((row, index) => {
     const event = acc.eventOf(row);
     if (event) {
-      const view = noticeView(event);
+      const view = noticeView(event, acc.context);
       if (view.tier === "reply") {
         out.push({ kind: "reply", id: `reply:${event.id}`, item: event, view });
         return;
@@ -224,7 +226,7 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
 
 export function conversationSystemRows(
   rows: ConversationDebateFeedRow[],
-  options: { failures?: ReadonlyMap<string, CrashedTurn> } = {},
+  options: { failures?: ReadonlyMap<string, CrashedTurn>; context?: NoticeContext } = {},
 ): ConversationDisplay {
   type Grouped = ConversationDebateFeedRow | ConversationSystemActionRow;
   const display = attach<Grouped>(groupConflictHandoffs(rows), {
@@ -235,6 +237,7 @@ export function conversationSystemRows(
     laneOf: (row) => row.kind === "review-lane" && row.complete ? row : null,
     yoursOf: (row) => row.kind === "item" && row.item.kind === "user" && !row.item.bySystem,
     failureOf: (id) => options.failures?.get(id),
+    context: options.context,
   });
   return display as ConversationDisplay;
 }
