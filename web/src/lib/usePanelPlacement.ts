@@ -101,7 +101,11 @@ export function usePanelPlacement(
   return place;
 }
 
-/** 直接铺给 style 用；还没量出来时返回 undefined（首帧先让它自然渲染再定位）。 */
+/**
+ * 直接铺给 style 用；还没量出来时返回 undefined（首帧先让它自然渲染再定位）。
+ * 这里只给 maxHeight，不给 overflow：各家浮层滚的那一层不同（整块滚、只滚里面的列表，
+ * 检查器「更多」那层还是个零高的外壳），限高之后内容怎么滚得到由浮层自己的样式定。
+ */
 export function placementStyle(place: PanelPlacement | null): CSSProperties | undefined {
   return place
     ? {

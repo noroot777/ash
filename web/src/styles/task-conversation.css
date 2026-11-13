@@ -291,8 +291,9 @@ button.context-meter-chip.is-tight { background: color-mix(in oklab, var(--red) 
 .token-usage-panel footer { margin-top: 7px; color: var(--muted); font-size: var(--t-xs); line-height: 1.55; }
 
 /* 用量明细浮层：头一行名字和合计，下面一条按占比切开的横条，再下面一份一行（色点、数、占比）。
-   色块次序固定、颜色克制：缓存读最浅（便宜、复用的），缓存写中灰，输入深灰，输出一抹青。 */
-.usage-panel { position: fixed; z-index: 60; width: 248px; border-radius: var(--r-lg); background: var(--panel); padding: 12px 14px 10px; box-shadow: var(--control-shadow), var(--menu-shadow); color: var(--muted); font-size: var(--t-xs); font-variant-numeric: tabular-nums; outline: none; animation: task-menu-in var(--dur-2) var(--ease-out); }
+   色块次序固定、颜色克制：缓存读最浅（便宜、复用的），缓存写中灰，输入深灰，输出一抹青。
+   窗口矮时定位给的 max-height 只把盒子压短，内容还得在盒子里滚得到（overflow-y），否则末几行掉出视口。 */
+.usage-panel { position: fixed; z-index: 60; width: 248px; overflow-y: auto; overscroll-behavior: contain; border-radius: var(--r-lg); background: var(--panel); padding: 12px 14px 10px; box-shadow: var(--control-shadow), var(--menu-shadow); color: var(--muted); font-size: var(--t-xs); font-variant-numeric: tabular-nums; outline: none; animation: task-menu-in var(--dur-2) var(--ease-out); }
 .usage-panel > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .usage-panel > header b { color: var(--ink); font-size: var(--t-sm); font-weight: var(--w-strong); }
 .usage-bar { display: flex; height: 6px; gap: 2px; margin: 9px 0 10px; overflow: hidden; border-radius: 999px; }
