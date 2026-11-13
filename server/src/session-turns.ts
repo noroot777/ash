@@ -344,17 +344,26 @@ const readOutcome = (value: unknown): TurnOutcome | null =>
   value === "completed" || value === "failed" || value === "stopped" ? value : null;
 
 /**
- * 一个任务名下**每个回合**的结局,键是 `会话 id@回合起点`(`session_turns` 的唯一键)。
+ * 一个任务名下**每个回合**的结局:会话 id → (回合起点 → 结局)。两层键合起来就是
+ * `session_turns` 的唯一键;回合起点跟 trace 条目的 `turnStartedAt` 是同一个值,所以内层原样
+ * 就是 `Session.turnOutcomes` 的形状。
  *
  * 批量版给列表/详情那种要一次带出很多会话的出口用(逐条查会变成 N 条 SQL);解释口径与上面
  * 那条单条版共用 `readOutcome`,两边漂开就是这条链上所有事故的形状。
  */
-export async function turnOutcomesForTask(taskId: string): Promise<Map<string, TurnOutcome | null>> {
+export async function turnOutcomesForTask(taskId: string): Promise<Map<string, Record<string, TurnOutcome | null>>> {
   const read = await dbClient.execute({
     sql: "SELECT session_id, started_at, outcome FROM session_turns WHERE task_id = :tid",
     args: { tid: taskId },
   });
-  return new Map(read.rows.map((row) => [`${String(row.session_id)}@${String(row.started_at)}`, readOutcome(row.outcome)]));
+  const bySession = new Map<string, Record<string, TurnOutcome | null>>();
+  for (const row of read.rows) {
+    const sid = String(row.session_id);
+    const turns = bySession.get(sid) ?? {};
+    turns[String(row.started_at)] = readOutcome(row.outcome);
+    bySession.set(sid, turns);
+  }
+  return bySession;
 }
 
 /** 一个回合的身份,加上落这一行所需要的其余事实。 */

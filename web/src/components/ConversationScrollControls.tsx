@@ -1,9 +1,11 @@
-import { useRef, type RefObject } from "react";
+import { useCallback, useRef, type RefObject } from "react";
 import { ArrowDown, ArrowUp } from "@phosphor-icons/react";
 import { useScrollEdges } from "../lib/useScrollEdges.ts";
 import { motionReduced } from "../lib/useSwapText.ts";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { useUserScrolling } from "../lib/useUserScrolling.ts";
+import { abandonSearchReveal } from "../search/searchReveal.ts";
+import { useSearchReveal } from "../search/useSearchReveal.ts";
 import type { ConversationInput } from "../task-detail/conversationInputs.ts";
 import { ConversationInputRail } from "./ConversationInputRail.tsx";
 
@@ -14,6 +16,8 @@ export function ConversationScrollControls({
   resetKey,
   tailKey,
   inputs,
+  revealReady,
+  revealRoots,
 }: {
   scrollRef: RefObject<HTMLElement | null>;
   resetKey: ResetKey;
@@ -25,8 +29,32 @@ export function ConversationScrollControls({
    * 否则跳过去读着读着,下一条新消息就把人拽回了底部。
    */
   inputs?: readonly ConversationInput[];
+  /**
+   * 给了就表示这是一个任务的会话（resetKey 即任务 id），接 ⌘K「打开命中、落到命中处」的待办；
+   * 值是正文读完了没有，见 useSearchReveal。群聊、侧聊这类不是任务会话的表面不给。
+   */
+  revealReady?: boolean;
+  /** 滚动容器之外、同样属于这个任务正文的区域（duet 顶上的议题）：⌘K 落点在这些里面一起找。 */
+  revealRoots?: readonly RefObject<HTMLElement | null>[];
 }) {
-  const { noteUserScrollIntent, resume, hold } = useStickToBottom(scrollRef, resetKey, tailKey);
+  const revealTaskId = revealReady === undefined || typeof resetKey !== "string" ? null : resetKey;
+  // 读者自己挪了视口（滚轮、触控、按键、滚动条、导航条、回顶回底）就作废 ⌘K 的待办 —— 正文还没
+  // 读完、还没开始找的时候同样作数。落点自己让贴底别跟（revealDetach）走的是同一个入口，那一下
+  // 不是读者接手，不能把自己正在落的那张待办作废。
+  const placing = useRef(false);
+  const { noteUserScrollIntent, resume, hold } = useStickToBottom(
+    scrollRef, resetKey, tailKey, undefined,
+    revealTaskId ? () => { if (!placing.current) abandonSearchReveal(revealTaskId); } : undefined,
+  );
+  const revealDetach = useCallback((detachFromBottom: boolean) => {
+    placing.current = true;
+    try {
+      noteUserScrollIntent(detachFromBottom);
+    } finally {
+      placing.current = false;
+    }
+  }, [noteUserScrollIntent]);
+  useSearchReveal(scrollRef, revealTaskId, !!revealReady, revealDetach, revealRoots);
   const { atTop, atBottom } = useScrollEdges(scrollRef, resetKey);
   const top = useRef<HTMLButtonElement>(null);
   const scrolling = useUserScrolling(scrollRef, resetKey, top);

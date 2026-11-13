@@ -140,7 +140,8 @@ async function stopMonitorsForTaskLocked(
   for (const m of all) await serialize(m.id, async () => {});
   // 停掉进程还不够：这一刻**已经排在待发队列里**的哨兵事件同样会把任务重新拉起来。
   // 留下来的那几条例外:它们的事件正是审查在等的东西,跟着任务终态作废就等于白留。
-  await cancelPendingMonitorEvents(taskId, { keep: kept });
+  // 回合里交过又退回来的那几条也留着:那一轮没收口,不能确定 agent 读到了(删除/归档照收)。
+  await cancelPendingMonitorEvents(taskId, { keep: kept, keepReturned: intent === "task-settled" });
   return stopped;
 }
 

@@ -7,7 +7,7 @@ import type { GateConfinement } from "./accept-gate-confinement.js";
 
 export const MAC_GATE_ENV = "ASH_ACCEPT_GATE_UNIT";
 export const MAC_GATE_NOTICE = "macOS 兼容监督：实际执行验收命令，按进程组、已观察后代和继承标记收尾；"
-  + "不具备 cgroup/Job 的整次运行内核保证，清空标记并脱离的未观察后代可能无法识别。独立测试快照保留，不自动删除。";
+  + "不具备 cgroup/Job 的整次运行内核保证，清空标记并脱离的未观察后代可能无法识别。独立测试快照保留到任务验收、归档或删除时回收。";
 export const macGateToken = (logPath: string): string => createHash("sha256").update(logPath).digest("hex");
 export const isMacGateScope = (id: string | null | undefined): boolean => !!id?.startsWith("macos-observed:");
 

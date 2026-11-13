@@ -53,7 +53,7 @@ export function laneVerdictView(lane: ConversationReviewLane): NoticeView {
   const verdict = laneVerdict(lane);
   return {
     // 没能开始的那一轮跟带类型的旁注同一档（timelineNoticeCopy 的 review.verdict）。
-    tier: verdict === "aborted" ? "alert" : "milestone", tone: reviewVerdictTone(verdict), topic: "review",
+    tier: verdict === "aborted" ? "alert" : "milestone", tone: reviewVerdictTone(verdict), topic: "review", icon: "review",
     text: reviewLaneSentence(lane), detail: null, dispute: false,
   };
 }

@@ -5,12 +5,10 @@ import { normalizeProjectCommands, parseProjectCommands } from "@ash/shared/proj
 import { normalizeBrowserCdpDomains } from "@ash/shared/project";
 import { ACCEPT_GATE_BASELINES, MAX_ACCEPT_GATE_COMMAND, normalizeAcceptGateBaseline, normalizeAcceptGateCommand } from "@ash/shared/accept-gate";
 import { detectPreviewCandidates } from "./preview-command.js";
-import { rmSync } from "node:fs";
-import { join, basename } from "node:path";
+import { basename } from "node:path";
 import type { Context, Hono } from "hono";
 import type { Project, ProjectRole, ProjectView } from "@ash/shared";
 import { isBuiltinKey } from "@ash/shared/workflow-presets";
-import { RUNS_DIR, DATA_DIR } from "./paths.js";
 import { db } from "./db/index.js";
 import { projects, groups, tasks, notes, noteTasks } from "./db/schema.js";
 import { id, now } from "./util.js";
@@ -392,8 +390,6 @@ export function mountProjectRoutes(api: Hono): void {
         // 与单任务 DELETE 同一份级联（审查链/预约/事件/消息/会话/计划/队列位），不留
         // reconcile 收不掉的孤儿（state/event/message/queue item 都没有自愈入口）。
         await deleteTaskCompletely(t.id);
-        rmSync(join(RUNS_DIR, t.id), { recursive: true, force: true });
-        rmSync(join(DATA_DIR, "scratch", t.id), { recursive: true, force: true });
       }
       // 逐个删过了（`deleteTaskCompletely` 连任务行一起删），这一条是兜底：
       // 上面那轮开始之后才建出来的任务行也一并收掉。

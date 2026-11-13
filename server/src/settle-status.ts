@@ -24,6 +24,7 @@ import type { StallVerdictKind } from "./turn-stall-verdict.js";
 import { failedTurnLanding } from "./settle-landing.js";
 import { handleTaskSettlement } from "./review.js";
 import { handleFreeWorkflowSettlement } from "./free-workflow.js";
+import { settleTurnHandoffs } from "./monitor-turn-handoff.js";
 
 async function setStatus(
   taskId: string,
@@ -227,6 +228,13 @@ export async function settleTaskStatus(
   if (t?.completeConfirmedAt) {
     await db.update(tasks).set({ completeConfirmedAt: null, updatedAt: now() }).where(eq(tasks.id, taskId));
   }
+  // **这一轮在回合里拿过的哨兵结果,先按它怎么收口结清**(monitor-turn-handoff.ts 文件头 ②)。
+  // 正常收口 = 交卷 / 留检查点 / 提问(续聊与旁路回合是干净退出);其余一律退回待发送。必须排在
+  // 下面所有哨兵闸之前:退回来的那几行要被闸看见,没交卷的这一轮才会落检查点暂停、随后送达。
+  const closedNormally = !stopped && exitStatus === 0 && !reason
+    && (!!t?.followUpFrom || confirmed || !!t?.question || !!t?.resumePrompt || !STRICT_DONE);
+  await settleTurnHandoffs(taskId, t?.activeTurnToken ?? null, closedNormally)
+    .catch((error) => console.error(`[ash] 结清回合内交付的哨兵结果失败 task=${taskId}:`, error));
   // **确认在手 ≠ 可以落 done**(第 1 轮审查 F1)。确认那一刻过的那道哨兵闸只证明「那一刻」:
   // 之后还可以挂新哨兵、断线补录还能从旁路写进来一份确认。所以终态落位之前再问一次同一份
   // 判据 —— 这是那条不变量的最后一关,而且不依赖任何人调接口。拦下来不是失败,是**检查点

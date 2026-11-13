@@ -47,12 +47,26 @@ const UNDELIVERED_PHRASES = [
 ];
 
 /**
+ * **ash 已经应答过**的那种失败:MCP 端拿到 ash 的非 2xx 回复,就把它写成这个形状交给 agent
+ * (`mcp/src/runtime.ts` 的 `request()`、带结果的拒绝 `mcp/src/tools/monitor-results.ts` 共用)。
+ * 补捞那一侧据此认「对面回过话了」—— 这是格式上的约定,不是猜正文里有没有某个词:通道真断了
+ * 的时候,agent 记下的是执行器自己写的那句话,里面不会有 ash 的回复。
+ */
+export const answeredMcpError = (status: number, method: string, path: string, body: string): string =>
+  `HTTP ${status} ${method} ${path} — ${body}`;
+const ANSWERED = /HTTP [1-5]\d\d (?:GET|POST|PUT|PATCH|DELETE) \/\S* — /;
+export const isAnsweredMcpError = (text: string | null | undefined): boolean => !!text && ANSWERED.test(text);
+
+/**
  * 这次失败属于「没送达」吗——**宽口径，仅供叠了幂等白名单的补捞侧使用**。
  *
  * code 与 message 给哪个都行，两个都给就任一命中即可。
  */
 export function isUndeliveredMcpFailure(input: { code?: string | null; message?: string | null }): boolean {
   if (input.code && UNDELIVERED_NET_CODES.has(input.code)) return true;
+  // ash 已经应答过的拒绝,正文里写着什么都不算:它可能整段带着命令输出(随 409 交出的哨兵结果),
+  // 那里出现 `ECONNRESET` 是业务内容,不是这条通道断了。
+  if (isAnsweredMcpError(input.message)) return false;
   const text = (input.message ?? "").toLowerCase();
   if (!text) return false;
   if ([...UNDELIVERED_NET_CODES].some((code) => text.includes(code.toLowerCase()))) return true;

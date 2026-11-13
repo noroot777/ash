@@ -14,6 +14,7 @@ import { publishTaskUpdated } from "./task-store.js";
 import { holdDrift, holdScope } from "./team-acceptance-hold.js";
 import { now } from "./util.js";
 import type { AcceptGateSnapshot } from "./accept-gate.js";
+import { reclaimGateSnapshots } from "./accept-gate-reclaim.js";
 
 type Finalization = { sharedWorkers: SharedWorkerAcceptance | null; failure?: never }
   | { failure: AcceptFailure; sharedWorkers?: never };
@@ -58,6 +59,8 @@ export async function finalizeAcceptance(
   bus.publish({ type: "task.stage", taskId: task.id, stage: "accepted", updatedAt: now() });
   await appendTaskTimeline(task.id, noticeLine({ kind: "stage", stage: "accepted" }, "验收阶段更新：已验收（accepted）"));
   bus.publish({ type: "task.acceptGate", taskId: task.id });
+  // 验收落章之后不会再有门禁围着它跑，macOS 结算时留下的快照这时收掉（见 accept-gate-reclaim.ts）。
+  void reclaimGateSnapshots(task.id).catch((error) => console.error(`[ash] 验收后回收快照失败（${task.id}）:`, error));
   // 尾段 durable 进度：stage=accepted 先落、尾段后跑，进程死在中间的话重试会走
   // already_accepted 快路——不留痕迹，发布步骤就被静默永久漏掉。置位在这里、清零在
   // 尾段真正跑完之后，重试发现它还挂着就补跑。

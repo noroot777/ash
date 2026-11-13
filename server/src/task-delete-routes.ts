@@ -10,7 +10,7 @@ import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { latchWaitersOnDelete } from "./pending-after.js";
 import { publishPendingMessages } from "./pending-messages.js";
-import { acceptGateRuns, freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, taskMemos, taskNotices, taskWrites, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
+import { acceptGateRuns, freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, taskMemos, taskNotices, taskWrites, tasks, teamInbound, taskBranchReceipts, taskDiskCleanups } from "./db/schema.js";
 import { revokeTaskMonitors, settleTaskRevocation } from "./claude-monitor-backfill.js";
 import { clearScanCursorsStatement } from "./claude-monitor-cursors.js";
 import { stopMonitorsForTask } from "./monitor-reclaim.js";
@@ -20,6 +20,8 @@ import { branchDeletionRejection, deleteTaskBranchRefs } from "./task-branch-pla
 import { taskBusyRejection } from "./task-busy.js";
 import { forgetTaskUnconfirmed } from "./session-turns.js";
 import { withRepoLock } from "./repo-lock.js";
+import { reclaimDeletedTaskDisk } from "./run-dir-reclaim.js";
+import { now } from "./util.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 
 // 删一个任务:关联状态 + 任务行本身,**一个出口、一个原子批**。自由审查链(run/round)、预约槽、
@@ -37,13 +39,18 @@ import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.j
 // Monitor 的重建依据(按会话找 run 文件)都没了,刷新多少次都回不来。`db.batch` 在同一个
 // BEGIN…COMMIT 里同步跑完这些语句,中途抛错整批回滚:**要么任务连同它的一切都没了,要么一切
 // 原样还在**,不存在第三种状态。
-export async function deleteTaskCompletely(taskId: string): Promise<void> {
+//
+// 行删成了再收磁盘（会话正文、原始日志、验收快照、草稿区），单删、连带删子任务、删项目三条路
+// 都走这里。清理责任已经跟删行同批提交，所以磁盘这一步怎么失败都不会改写「已删除」——它
+// 不抛错，只如实说「磁盘收干净了没有」，没收干净的由后台重试（见 run-dir-reclaim.ts）。
+export async function deleteTaskCompletely(taskId: string): Promise<{ diskReclaimed: boolean }> {
   try {
     await deleteTaskRows(taskId);
   } finally {
     // 删成了还是删一半失败,由它按「任务行还在不在」收口(见 claude-monitor-backfill.ts)。
     await settleTaskRevocation(taskId);
   }
+  return { diskReclaimed: await reclaimDeletedTaskDisk(taskId) };
 }
 
 async function deleteTaskRows(taskId: string): Promise<void> {
@@ -131,6 +138,8 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     // 留下来就是永远不可见也没入口清理的孤儿（审查实测：删 lead 后两个内部组原样保留）。
     db.delete(groups).where(eq(groups.ownerTaskId, taskId)),
     db.delete(tasks).where(eq(tasks.id, taskId)),
+    // 磁盘清理的责任**跟删行同一批**落下（run-dir-reclaim.ts）：任务没了就一定有人接着收目录。
+    db.insert(taskDiskCleanups).values({ taskId, createdAt: now() }).onConflictDoNothing(),
   ]);
   // 库里的行删完了,写端内存里那几笔「没落账的开始意图」也得跟着走：它们本来只在「这条会话
   // 又开一个回合」时才有人去补、去划掉（session-turns.ts 的 flushUnconfirmed）,任务都没了
@@ -170,8 +179,10 @@ api.delete("/tasks/:id", async (c) => {
   // children 的 Git 工作区必须与它们的行一起处理：只删行的话，独立 worktree/分支会变成
   // 数据库里查无此任务的孤儿资源，leftover 检测（按父任务 id）也看不到（审查实测）。
   const childCleanups: (TaskWorkspaceDiscardResult & { taskId: string })[] = [];
+  // 磁盘没收干净的任务（已留待办、后台会重试）。如实回给调用方，删除本身照样算成功。
+  const diskCleanupPending: string[] = [];
   for (const child of children) {
-    await deleteTaskCompletely(child.id);
+    if (!(await deleteTaskCompletely(child.id)).diskReclaimed) diskCleanupPending.push(child.id);
     if (project && child.useWorktree && (wantWorktree || wantBranch)) {
       childCleanups.push({
         taskId: child.id,
@@ -183,7 +194,7 @@ api.delete("/tasks/:id", async (c) => {
       });
     }
   }
-  await deleteTaskCompletely(tid);
+  if (!(await deleteTaskCompletely(tid)).diskReclaimed) diskCleanupPending.push(tid);
   let cleanup: TaskWorkspaceDiscardResult | null = null;
   if (project && (wantWorktree || wantBranch)) {
     cleanup = await discardTaskWorkspace(project.repoPath, tid, {
@@ -208,6 +219,7 @@ api.delete("/tasks/:id", async (c) => {
     deletedTaskIds: [tid, ...children.map((child) => child.id)],
     ...(childCleanups.length ? { childCleanups } : {}),
     ...(childLeftovers.length ? { childLeftovers } : {}),
+    ...(diskCleanupPending.length ? { diskCleanupPending } : {}),
   });
   });
 });

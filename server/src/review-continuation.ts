@@ -156,8 +156,9 @@ function continuationLeaseHeld(owner: TaskRow, state: EvidenceRow): boolean {
  * 「没有」,round 以 `status:"error"`、`conclusion:null` 提前结账,那条 pending 随即被
  * `cancelPendingMonitorEvents` 作废(实测:WRITER_PENDING origin="monitor:m" →
  * PENDING_AFTER_RECOVERY status="canceled")。**进程结束推不出等待结束**:结果从产出到
- * 真正递到手上,中间整段都还是「有人在等」。所以改用完成闸那份同样的三类集合
- * (`unsettledMonitorResponsibility`:在跑 / 已排队未消费 / 结局已定待交接),一条语句读齐,
+ * 真正递到手上,中间整段都还是「有人在等」。所以改用完成闸那份同样的集合
+ * (`unsettledMonitorResponsibility`:在跑 / 已排队未消费 / 结局已定待交接 / 回合里交过
+ * 未确认),一条语句读齐,
  * 且跟本次结算读任务行、证据行同一个事务快照。
  *
  * 轮次归属两边任一命中都算:哨兵行自己记的那对,和**那条待发送消息入队时抄下来的**那对

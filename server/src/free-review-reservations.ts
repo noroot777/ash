@@ -5,7 +5,8 @@ import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { freeWorkflowStates, type FreeReviewReservationSource } from "./db/schema.js";
 import { withRulingGate } from "./free-review-ruling-gate.js";
-import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
+import type { ReviewWaitReason } from "@ash/shared/timeline-notice";
+import { appendTaskTimeline, alertLine, noticeLine } from "./task-timeline.js";
 import { now } from "./util.js";
 
 export type ReservedFreeReview = {
@@ -77,19 +78,23 @@ export async function disarmFreeReviewReservation(taskId: string): Promise<boole
 
 const RESUMES_ON_NEXT_TURN = "后续执行回合正常结束后自动开始，也可在审查面板里直接开审";
 
+/** 预约的审查在等什么：`why` 给展示端换说法，`text` 是落盘原文里那半句（点开再看）。 */
+export type ReservationWait = { why: ReviewWaitReason; text: string };
+
 /**
  * 中断后保留预约，同时把等待原因落在时间线上。`resumes` = 「它什么时候会接着走」，
  * 缺省是下一个执行回合正常结束；等的是别的事（如用户裁定）时由调用方说清。
  */
 export async function noteReservationStillWaiting(
   taskId: string,
-  reason: string,
+  wait: ReservationWait,
   resumes = RESUMES_ON_NEXT_TURN,
 ): Promise<boolean> {
   const slot = (await db.select({ armed: freeWorkflowStates.reviewArmed })
     .from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
   if (!slot?.armed) return false;
-  await appendTaskTimeline(taskId, receiptLine(`预约审查仍在等待：${reason}。预约已保留，${resumes}。`));
+  await appendTaskTimeline(taskId, noticeLine({ kind: "review.waiting", why: wait.why },
+    `预约审查仍在等待：${wait.text}。预约已保留，${resumes}。`));
   return true;
 }
 
@@ -101,15 +106,15 @@ export async function noteReservationStillWaiting(
  */
 export async function reservationWaitReason(
   task: { id: string; question?: string | null; resumePrompt?: string | null },
-): Promise<string> {
+): Promise<ReservationWait> {
   const { liveMonitorSummary } = await import("./monitor-session.js");
   const live = await liveMonitorSummary(task.id);
   if (live.count > 0) {
     const what = live.labels.length ? `（${live.labels.join("、")}）` : "";
-    return `这一轮挂着 ${live.count} 个哨兵在盯着${what}，等它把结果带回来、任务续跑结束后再审`;
+    return { why: "monitor", text: `这一轮挂着 ${live.count} 个哨兵在盯着${what}，等它把结果带回来、任务续跑结束后再审` };
   }
-  if (task.question) return "任务正在等你答复";
-  return "任务停在检查点等续跑";
+  if (task.question) return { why: "question", text: "任务正在等你答复" };
+  return { why: "checkpoint", text: "任务停在检查点等续跑" };
 }
 
 /** 读一条预约槽的完整快照（含版本令牌）。 */
@@ -371,7 +376,7 @@ async function startReservedFreeReviewHeld(
     // 记下来：裁定落地时凭它当场兑现，而不是再等一个不会来的执行回合。
     await db.update(freeWorkflowStates).set({ reviewHeldToken: sql`updated_at` })
       .where(and(eq(freeWorkflowStates.taskId, taskId), eq(freeWorkflowStates.reviewArmed, true)));
-    await noteReservationStillWaiting(taskId, "执行者驳回了上一轮审查意见，正等你裁定",
+    await noteReservationStillWaiting(taskId, { why: "dispute", text: "执行者驳回了上一轮审查意见，正等你裁定" },
       "裁定后自动开始（选「让它接着改」则等那一轮修复正常结束）");
     return;
   }

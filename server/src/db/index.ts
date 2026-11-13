@@ -177,7 +177,7 @@ export async function ensureSchema() {
       unit_token TEXT, ended_by TEXT,
       results_abandoned_at TEXT, results_abandoned_reason TEXT,
       result_handoff_at TEXT, result_handoff_text TEXT,
-      stop_when TEXT, hit_line TEXT
+      stop_when TEXT, hit_line TEXT, finishing_since TEXT
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS monitor_reclaim_debts (
@@ -188,6 +188,10 @@ export async function ensureSchema() {
       created_at TEXT NOT NULL, last_attempt_at TEXT,
       unit_token TEXT, closed_at TEXT, closed_note TEXT,
       identity_disproved_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS task_disk_cleanups (
+      task_id TEXT PRIMARY KEY, created_at TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT
     );
     CREATE TABLE IF NOT EXISTS agent_cleanup_debts (
       unit_token TEXT PRIMARY KEY,

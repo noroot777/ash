@@ -51,14 +51,18 @@ const t = setInterval(() => { i++; console.log("第 " + i + " 轮完成"); if (i
     return (row?.events ?? 0) >= 3;
   });
 
-  // ② 三批事件只占一行待发送消息 —— 任务此刻在 paused、投递链路要等它被 flush，
-  //    在那之前新事件一律合并进同一行。
-  const rows = await pendingOf(taskId);
-  assert.equal(rows.length, 1, `三批事件应合并成一条待发送消息，实际 ${rows.length} 条`);
-  assert.equal(rows[0]!.origin, `monitor:${monitorId}`, "待发送消息要标明是哪个哨兵推的");
+  // ② 三批事件最多占两行待发送消息 —— 更早的几批并成积压那一行、最新那一批单独一行带自己的
+  //    合并窗口（monitor-events.ts `pushToTask`）；两行到期后连着送，仍只唤醒一次。
+  const byAge = async () => (await pendingOf(taskId)).sort((x, y) => x.createdAt.localeCompare(y.createdAt));
+  const rows = await byAge();
+  assert.ok(rows.length >= 1 && rows.length <= 2, `三批事件最多占两行待发送消息，实际 ${rows.length} 条`);
+  for (const m of rows) assert.equal(m.origin, `monitor:${monitorId}`, "待发送消息要标明是哪个哨兵推的");
+  const joined = rows.map((m) => m.text).join("\n");
   for (const n of ["第 1 轮完成", "第 2 轮完成", "第 3 轮完成"]) {
-    assert.ok(rows[0]!.text.includes(n), `合并后的正文里少了「${n}」：${rows[0]!.text}`);
+    assert.ok(joined.includes(n), `合并后的正文里少了「${n}」：${joined}`);
   }
+  assert.ok(joined.indexOf("第 1 轮完成") < joined.indexOf("第 2 轮完成")
+    && joined.indexOf("第 2 轮完成") < joined.indexOf("第 3 轮完成"), "先后次序不能乱");
 
   // ③ 命令自己跑完 → exited + 一条收尾事件（合并进同一行）。
   await until("哨兵落 exited", async () => {
@@ -67,11 +71,11 @@ const t = setInterval(() => { i++; console.log("第 " + i + " 轮完成"); if (i
   });
   const after = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
   assert.equal(after.exitCode, 0, "命令退出码应被记下来");
-  const settled = await pendingOf(taskId);
-  assert.ok(settled[0]!.text.includes("【哨兵结束】"), "命令自己跑完要告诉 agent 一声");
+  const settled = (await byAge()).at(-1)!;
+  assert.ok(settled.text.includes("【哨兵结束】"), "命令自己跑完要告诉 agent 一声（并进最新那一行）");
   // 那条通知里要带上**推了几条**（用户 2026-10-21 要的那半件事）：agent 读到的只有这一句，
   // 光一个结束原因的话，它分不出「哨兵哑了」和「我漏读了几条」，只能靠猜。
-  assert.match(settled[0]!.text, /共推送 3 条事件/, "结束通知里要报出推了几条");
+  assert.match(settled.text, /共推送 3 条事件/, "结束通知里要报出推了几条");
   console.log("✓ 推事件 / 多批合并成一次唤醒 / 自己跑完落 exited / 收尾报出事件数");
 }
 // ── ③b 零输出:一个字都没吐就跑完了,那条通知必须**当场**把这件事说出来 ──────────

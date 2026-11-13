@@ -322,12 +322,12 @@ const byUser: MonitorCaller = { kind: "external" };
   const { reservationWaitReason } = await import("../src/free-review-reservations.js");
   const { liveMonitorSummary } = await import("../src/monitor-session.js");
 
-  assert.match(
-    await reservationWaitReason({ id: taskId, resumePrompt: "等套件" }),
-    /检查点/, "没挂哨兵时说的是「停在检查点等续跑」");
-  assert.match(
-    await reservationWaitReason({ id: taskId, question: "选哪个方案？" }),
-    /答复/, "挂着提问时说的是「等你答复」");
+  const idle = await reservationWaitReason({ id: taskId, resumePrompt: "等套件" });
+  assert.equal(idle.why, "checkpoint");
+  assert.match(idle.text, /检查点/, "没挂哨兵时说的是「停在检查点等续跑」");
+  const asking = await reservationWaitReason({ id: taskId, question: "选哪个方案？" });
+  assert.equal(asking.why, "question");
+  assert.match(asking.text, /答复/, "挂着提问时说的是「等你答复」");
 
   const row = (id: string, description: string, status: string) => ({
     id, taskId, kind: "ash", command: "sleep 30", description, cwd: root, status,
@@ -345,8 +345,9 @@ const byUser: MonitorCaller = { kind: "external" };
   const live = await liveMonitorSummary(taskId);
   assert.equal(live.count, 2, "只数还在盯着的 ash 哨兵");
   const reason = await reservationWaitReason({ id: taskId, resumePrompt: "等套件" });
-  assert.match(reason, /2 个哨兵/, "等待原因里要说清在等几个哨兵");
-  assert.match(reason, /等全量 unittest 跑完/, "还要说出它在盯什么,否则用户仍然不知道在等什么");
+  assert.equal(reason.why, "monitor", "挂着哨兵时归到「等哨兵」那一种，展示端据它换说法");
+  assert.match(reason.text, /2 个哨兵/, "等待原因里要说清在等几个哨兵");
+  assert.match(reason.text, /等全量 unittest 跑完/, "还要说出它在盯什么,否则用户仍然不知道在等什么");
 }
 
 // ── ⑨ 创建入口:来源由**请求自己**交上来,核验在入口做 ─────────────────────────────

@@ -114,8 +114,8 @@ try {
   assert.deepEqual(
     await log.locator(".turn-receipt-text").allInnerTexts(),
     [
-      "审查已预约，这一轮跑完自动开始", "不再等「全量回归」了，它已经跑完", "已验收，合并到 main", "验收阶段：验收完成",
-      "冲突交接失败：没能叫醒该任务解冲突。", "本回合没有交卷：产物仍保留，可直接重试。", "工作区已恢复，会话内容都在", "本轮执行结束",
+      "审查已预约，这一轮跑完自动开始", "不再等哨兵「全量回归」了，它已经跑完", "已验收，合并到 main", "验收阶段：验收完成",
+      "合并有冲突，但没能叫醒任务去解", "本回合没有交卷：产物仍保留，可直接重试。", "工作区已恢复，会话内容都在", "本轮执行结束",
     ],
     "流水里每一条写的是结果；尾注里的那几句也在这里（删除在这里）",
   );
@@ -125,6 +125,34 @@ try {
     return { first: el.firstElementChild === time, before: time.getBoundingClientRect().right <= text.left, label: time.getAttribute("aria-label") };
   });
   assert.equal(leading.first, true, "时刻排在每一条最前面");
+  // 每一条前面一枚图标，贴在字前面；读屏不念它（字已经说清了）。
+  assert.equal(await log.locator(".turn-receipt-body > .notice-icon svg").count(), 8, "每一条都有图标");
+  const icon = await log.locator(".turn-receipt").nth(1).evaluate((el) => {
+    const glyph = el.querySelector(".turn-receipt-body > .notice-icon");
+    const text = el.querySelector(".turn-receipt-text").getBoundingClientRect();
+    return { hidden: glyph.getAttribute("aria-hidden"), before: glyph.getBoundingClientRect().right <= text.left };
+  });
+  assert.deepEqual(icon, { hidden: "true", before: true });
+  // 窄栏：字在图标后面那一列里折行，不整句掉到图标下面（审查第 1 轮实测的那种）。
+  await resizeViewport(page, { width: 320, height: 1300 });
+  const rows = await log.locator(".turn-receipt").evaluateAll((items) => items.map((el) => {
+    const glyph = el.querySelector(".turn-receipt-body > .notice-icon").getBoundingClientRect();
+    const range = document.createRange();
+    range.selectNodeContents(el.querySelector(".turn-receipt-text"));
+    const lines = range.getClientRects();
+    const timeNode = el.querySelector(":scope > time");
+    const timeRange = document.createRange();
+    if (timeNode) timeRange.selectNodeContents(timeNode);
+    const time = timeNode ? timeRange.getClientRects()[0] : null;
+    return {
+      sameLine: Math.abs(lines[0].top - glyph.top) < glyph.height && (!time || Math.abs(lines[0].top - time.top) < 3),
+      after: glyph.right <= lines[0].left,
+      lines: lines.length,
+    };
+  }));
+  assert.ok(rows.some((row) => row.lines > 1), "窄栏里至少有一条真折了行，不然这一条什么都没证明");
+  assert.ok(rows.every((row) => row.sameLine && row.after), `字的第一行跟图标、时刻同一行（时刻不沿整段居中）：${JSON.stringify(rows)}`);
+  await resizeViewport(page, { width: 1000, height: 1300 });
   assert.equal(leading.before, true);
   assert.match(leading.label, /\d\d\/\d\d \d\d:\d\d/, "读屏拿到完整的日期时刻");
   await page.mouse.move(990, 5);

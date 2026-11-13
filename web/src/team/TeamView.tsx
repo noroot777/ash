@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Group, Task, TaskListItem } from "@ash/shared";
-import { batchesOf, mergeFeed, teamGroupsOf, waitingWorkers, workersOf } from "@ash/shared/team";
+import { batchesOf, teamGroupsOf, waitingWorkers, workersOf } from "@ash/shared/team";
 import { ArrowSquareOut } from "@phosphor-icons/react";
 import { SideDrawer } from "../components/SideDrawer.tsx";
 import { InspectorHost } from "../inspector/index.ts";
@@ -34,7 +34,7 @@ import { TeamAttentionBar } from "./TeamAttentionBar.tsx";
 import { TeamHeader } from "./TeamHeader.tsx";
 import { TEAM_INSPECTORS, type TeamInspectorContext } from "./TeamInspector.tsx";
 import { TeamReviewWorkspace } from "./TeamReviewWorkspace.tsx";
-import { activeTeamHaltMarker, leadTurns, teamFeedOptions } from "./teamModel.ts";
+import { activeTeamHaltMarker, leadTurns, teamFeedRows } from "./teamModel.ts";
 import { useWorkerLiveLines } from "./workerLiveLines.ts";
 
 
@@ -131,7 +131,7 @@ export function TeamView({
   const workerLiveLines = useWorkerLiveLines(task.id, workers);
   const teamGroups = useMemo(() => teamGroupsOf(groups, task.id, workers), [groups, task.id, workers]);
   const batches = useMemo(() => batchesOf(workers, teamGroups), [teamGroups, workers]);
-  const rows = useMemo(() => mergeFeed(conversation.items, batches, teamFeedOptions()), [batches, conversation.items]);
+  const rows = useMemo(() => teamFeedRows(conversation.items, batches), [batches, conversation.items]);
   const turns = useMemo(() => leadTurns(conversation.items), [conversation.items]);
   const historyHalt = activeTeamHaltMarker(conversation.items);
   const stopped = teamGroups.some((group) => group.paused) || (teamGroups.length === 0 && (historyHalt || localHalted));

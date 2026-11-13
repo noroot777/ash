@@ -435,7 +435,7 @@ export async function handleFreeWorkflowSettlement(
       if (reservation?.armed) {
         const { hasDeliverablePendingMessages } = await import("./pending-messages.js");
         if (await hasDeliverablePendingMessages(taskId)) {
-          await noteReservationStillWaiting(taskId, "还有排队消息没送进会话，先把它们发完");
+          await noteReservationStillWaiting(taskId, { why: "queued", text: "还有排队消息没送进会话，先把它们发完" });
           return true;
         }
       }
@@ -447,9 +447,12 @@ export async function handleFreeWorkflowSettlement(
       });
       return true;
     }
-    await noteReservationStillWaiting(taskId, !turnOk
-      ? "本回合被停止或异常结束"
-      : !exitObserved ? "本回合未确认完成，且没有收到正常退出事件" : "本回合仍处于等待执行或暂停状态");
+    await noteReservationStillWaiting(taskId, {
+      why: "unsettled",
+      text: !turnOk
+        ? "本回合被停止或异常结束"
+        : !exitObserved ? "本回合未确认完成，且没有收到正常退出事件" : "本回合仍处于等待执行或暂停状态",
+    });
     return true;
   }
 

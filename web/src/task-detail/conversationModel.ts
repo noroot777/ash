@@ -1,30 +1,15 @@
-import type { ContextUsage, Session, TokenUsage } from "@ash/shared";
+import type { ContextUsage, Session, SessionRole, TokenUsage, TurnOutcome } from "@ash/shared";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
-import { ANSWER_PREFIX } from "@ash/shared";
-import { parseSessionOutput, segmentFingerprint } from "@ash/shared/session-output";
 import { addUsage, usageTotal } from "@ash/shared/usage";
-import { normalizeSessionNoteText } from "@ash/shared/session-notes";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
-import { eventTone, isVerifyNote, verifyMark } from "./conversationNotes.ts";
 import type { TimelineNotice } from "@ash/shared/timeline-notice";
-import { applyVerifySpans, reviewerKey, reviewerKeyOf, reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";
+import { applyVerifySpans, reviewerKey } from "./conversationReviewer.ts";
 import type { AgentContentSegment } from "./conversationSegments.ts";
-import { contentSegments, markSegmentsAwaiting } from "./conversationSegments.ts";
-import {
-  groupedTrace,
-  normalizedPersistedTrace,
-  splitTraceGroupAt,
-  takeTraceGroup,
-  traceRun,
-  traceTurnStartAt,
-  traceUsage,
-} from "./conversationTraceGroups.ts";
 import type { LiveAgentEvent, PersistedTurnTimes } from "./conversationTurnParts.ts";
-import { agentLabel, latestTurnStart, recordPersistedTurn, sessionRun } from "./conversationTurnParts.ts";
+import { latestTurnStart } from "./conversationTurnParts.ts";
 import { appendLiveTimeline } from "./conversationLiveTurns.ts";
-import { appendTraceFragments } from "./conversationTraceFragments.ts";
-import { readSideTail, segmentTraceWindow, strayTraceSources } from "./conversationTraceSources.ts";
+import { appendPersistedSession } from "./conversationPersistedTurns.ts";
 import { contentVersion } from "../lib/useStickToBottom.ts";
 import { conversationItemSize } from "./conversationContentSize.ts";
 export { conversationToMarkdown } from "./conversationMarkdown.ts";
@@ -45,7 +30,7 @@ export type ConversationSource =
   // entangled：这段时间里夹着别的气泡的步子，删不开（见 conversationTraceSources 的 traceSpanSource）。
   | { sessionId: string; trace: { from: string; to: string; fingerprint: string }; entangled?: true };
 // deleted：已删除的段排版时仍占原位（回合起止靠它推），buildConversationItems 收尾前拿掉。
-type PersistedOrigin = { sources?: ConversationSource[]; deleted?: true };
+export type PersistedOrigin = { sources?: ConversationSource[]; deleted?: true };
 
 export type ConversationItem =
   | PersistedOrigin & {
@@ -58,7 +43,22 @@ export type ConversationItem =
        * 必填：每个拼 agent 条目的地方都得给，漏了编译不过（少给一处，那一路的头像就退回首字母）。
        */
       agentType: string | null;
+      /**
+       * 说这一回合的会话是什么角色（reviewer = 审查者另开的那条）。直播里会话行可能还没到，
+       * 就取 agent.event 自带的那份。跟 `reviewer` 是两回事：那是徽标，会被 applyVerifySpans
+       * 按审查区间补上轮次；这个是归属事实，排完版也不变。「这条会话是不是任务自己的」只问它。
+       */
+      sessionRole: SessionRole | null;
       at?: string | null;
+      /**
+       * 这颗气泡属于哪一回合：服务端给这一回合的身份（trace 挂的、实时事件带的那个起点）。
+       * 实时那一路取事件自带的（见 conversationLiveTurns 的 liveTurnStart），落盘那一路取它
+       * 领到的那组 trace 的；都没有就是不知道，由会话行推。
+       *
+       * 跟 `at` 不是一回事：`at` 是画在气泡上的时刻，会被插话改写；团队调度台的落盘气泡按
+       * 用户说话那一刻编号，回合却从投递那一刻起算，两者差着一截。
+       */
+      turnStartedAt?: string | null;
       endedAt?: string | null;
       markerEndedAt?: string | null;
       /**
@@ -75,8 +75,10 @@ export type ConversationItem =
       showSessionMeta?: boolean;
       /** 上一条说话的还是同一个会话、中间只隔着旁注：接着上一段说，不再重报头像和执行器名。 */
       continuation?: boolean;
-      /** 这一回合是哨兵叫醒的、没能并回等它的那一回合（等的时候你插过话），见 monitorWakeTurns。 */
+      /** 这一回合是哨兵叫醒的、叫醒的那条哨兵不归前面那一段（比如等的时候你插过话），另起的一回合，见 monitorWakeTurns。 */
       wokenByMonitor?: boolean;
+      /** 这一回合自己的结局（服务端按回合交出来的，见 turnFailure 的 turnFailed）。缺省/null = 不知道。 */
+      turnOutcome?: TurnOutcome | null;
       session?: Session;
       run?: { model: string | null; reasoningEffort: string | null };
       /**
@@ -137,13 +139,13 @@ export type ConversationItem =
        * 里的一个回合 —— agent 从没见过这些字，它落在哪一秒也纯属偶然，多半正砸在某个回合
        * 说到一半的地方。
        *
-       * 所以它**不许当回合边界用**：不切气泡（见下面的 mergeTurnChunk）、不定回合的起止
+       * 所以它**不许当回合边界用**：不切气泡（见 conversationPersistedTurns 的 mergeTurnChunk）、不定回合的起止
        * 时刻（见 at / endedAt 两轮）。拿它当边界的后果是一条回复被劈成两半，上半截平白得
        * 到一个「结束时刻」于是提前折叠、还挂上「派生新任务」——而那半截根本不是一条完整
        * 回复（用户 2026-09-14 反馈）。
        *
        * 来源：服务端 appendTaskTimeline 写的 `aside` 标；老会话没有这个标，落盘那一路改按
-       * trace 的回合分组推（见 notePlacement）。
+       * trace 的回合分组推（见 conversationPersistedTurns 的 notePlacement）。
        */
       aside?: boolean;
       /** 服务端给的「这是哪一类事」（shared/src/timeline-notice.ts）。老记录、非时间线旁注没有。 */
@@ -163,7 +165,6 @@ export const conversationTailKey = (items: readonly ConversationItem[]) =>
   contentVersion(items, conversationItemSize, (item) => item.id);
 
 export type ConversationEventItem = Extract<ConversationItem, { kind: "event" }>;
-type AgentItem = Extract<ConversationItem, { kind: "agent" }>;
 type SessionRunBounds = {
   endedAt: string | null;
   nextStartedAt: string | null;
@@ -204,56 +205,6 @@ function endsAfterStart(at: string | null | undefined, endedAt: string | null): 
 }
 
 /**
- * 这条旁注落在了会话的什么位置 —— 判据是 trace 的回合分组。
- *
- * - `inside`：某一组的 `turnStartedAt` **严格早于**它、组里又还有它之后的事件 —— 砸进了
- *   一个正在进行的回合，上下两截 .md 正文是同一个人同一轮说的话。
- * - `boundary`：有一组正是从它这一刻（或之后）起头的 —— 那是真换了一轮。「第 N 轮验证
- *   开始」就是这形状（写完旁注才拉起验证回合），真正的回合起点（「继续（从中断处）」）
- *   时刻更是**恰好等于**某一组的 `turnStartedAt`。
- * - `unknown`：trace 一条都没有 —— 整条会话没落盘、或写盘失败（服务端把 trace 写失败当
- *   非致命处理）。读端不能把「trace 一定在」当成正确性前提，所以这一档交给调用方按服务端
- *   的 `aside` 标兜底。
- *
- * **必须在 splitTraceGroupAt 动手之前调用** —— 那一步会按旁注改写分组，之后再问就问不
- * 出「原本是同一组」了。
- */
-function notePlacement(
-  groups: Map<string, SessionTraceEntry[]>,
-  at: string | undefined,
-): "inside" | "boundary" | "unknown" {
-  const time = Date.parse(at ?? "");
-  if (!Number.isFinite(time)) return "unknown";
-  let boundary = false;
-  for (const [turnStartedAt, entries] of groups) {
-    const start = Date.parse(turnStartedAt);
-    if (!Number.isFinite(start)) continue;
-    if (start >= time) { boundary = true; continue; }
-    if (entries.some((entry) => Date.parse(entry.at) >= time)) return "inside";
-  }
-  return boundary ? "boundary" : "unknown";
-}
-
-/**
- * 把「被旁注劈开的下半截」并回上一颗气泡 —— 它们本来就是同一回合、同一个人说的一段话。
- *
- * 只把两截**接起来**，分段一个都不动：每一截的 events / 正文早已各自跟自己那一小组
- * trace 对齐过（见 contentSegments 的 alignedSegments），接在一起就是这一回合完整的交错
- * 结构，折叠（turnLayout）也才有得切 —— 否则「最后一次动手」只能在半截里找，整轮折不出
- * 结论。分段各自渲染成独立的块，接缝处不需要补空行；补的那一下只归 `markdown`（复制、
- * 派生快照读的是它），两截之间空一行才是一段话原来的样子。
- */
-function mergeTurnChunk(target: AgentItem, chunk: AgentItem): void {
-  target.markdown = [target.markdown, chunk.markdown].filter((text) => text.trim()).join("\n\n");
-  target.segments.push(...chunk.segments);
-  // 收口标记跟着后一截走：回合真正结束在哪一刻，只有最后那一截知道。
-  target.markerEndedAt = chunk.markerEndedAt ?? target.markerEndedAt;
-  target.usage = target.usage && chunk.usage ? addUsage(target.usage, chunk.usage) : chunk.usage ?? target.usage;
-  target.run = target.run ?? chunk.run;
-  target.sources = [...target.sources ?? [], ...chunk.sources ?? []];
-}
-
-/**
  * 这条时间线项目算不算「插话」—— 能给相邻回合定起止时刻的那种。
  *
  * 真人回复、系统发给 agent 的话、回合边界都算；任务时间线旁注（aside）不算：它不开也
@@ -266,261 +217,6 @@ function isTurnInterjection(item: ConversationItem | null | undefined): boolean 
   return item.kind === "event" && !item.aside;
 }
 
-/** 把一条落盘会话（.md + trace）铺成气泡，追加到 `items` 末尾。 */
-function appendPersistedSession(
-  items: ConversationItem[],
-  { session, output, trace = [] }: PersistedConversation,
-  persistedTurns: PersistedTurnTimes,
-): void {
-  // 删掉的段也要：序号（气泡的出处）和回合边界都按原位算，到 buildConversationItems 收尾再拿掉。
-  const segments = parseSessionOutput(output, { keepDeleted: true });
-  const origin = (index: number): PersistedOrigin => ({
-    sources: [{ sessionId: session.id, index, fingerprint: segmentFingerprint(segments[index]!) }],
-    ...(segments[index]!.deleted ? { deleted: true as const } : {}),
-  });
-  const sessionTrace = normalizedPersistedTrace(trace, session);
-  const traceGroups = groupedTrace(sessionTrace);
-  // 服务端读的时候接在末尾补出来的几条，删除出处的指纹不数它们（见 conversationTraceSources）。
-  const readSide = readSideTail(sessionTrace);
-  const consumedTrace = new Set<string>();
-  // ── 一遍过认三件事：谁是旁注、哪条旁注要把上下两截并回一颗气泡、trace 从哪儿切开 ──
-  //
-  // 必须整个跑在切分**之前**：notePlacement 读的正是即将被改写的那份分组。
-  //
-  // 【谁是旁注】服务端的 aside 标覆盖全部 appendTaskTimeline 旁注（含落在两个回合之间的，
-  // 比如「第 N 轮验证开始」），它只决定「不拿它定回合起止」。
-  //
-  // 【并不并】看它落在哪：
-  // - inside  → 并。那一刻回合确实还在飞，是同一段话被劈成了两半。
-  // - boundary→ 不并。trace 摆明了下一轮从这儿起头，并了就是把实现者和审查者的发言粘成
-  //   一条（或把同一个人的两轮粘成一条）。
-  // - unknown → 听服务端的 aside 标。trace 哑了（整条会话没落盘、写盘失败）时，标着
-  //   aside 就说明这本来就不是回合边界；此时两截连 run 身份都读不出来，劈开只剩坏处：
-  //   上半截平白得到结束时刻，于是提前折叠、还挂出「派生新任务」。老会话没这个标，无
-  //   证据可依，维持老排法。
-  //
-  // 但 aside 标只说「不是回合起点」，**不说「回合还在飞」**，所以 trace 哑了的时候还要
-  // 另外两样**跟 trace 各走各路**的证据把边界旁注挡在外面，否则审查者的结论会被并进被审
-  // 的实现回合（第 2 轮审查报的）：
-  //
-  // - 上一段正文已经落了 agentEnd → 这一回合真收口了（服务端每个回合结束时写，见
-  //   transcript.ts 的 writeTurnEnd），后面的话是新一轮。
-  // - 这条旁注自己就是「第 N 轮验证/审查开始」那一类 → 它开的是**另一个人**的一轮
-  //   （白名单在 conversationNotes，applyVerifySpans 拿同一份划审查区间）。
-  //
-  // agentEnd 那条证据只在**本回合起点之后 .md 里确实落过正文**时才算数：没落过的话它讲的
-  // 是上一轮的事，对这一条旁注什么都没说。「回合开跑先连着跑几十分钟工具、一个字没吐」是
-  // 常态，这时整份 .md 是空的，旁注会被当成「回合还没开始」，两截再也并不回去。
-  //
-  // 【切不切】先按 .md 里的 sentinel 把 trace 切成段，再逐段发放。切分必须整体跑在任何
-  // agent 段认领之前：原生引导那一路插话前常常一个字都没吐（agent 正连着跑工具），既没有
-  // .md 正文能顺手触发切分，等上一段领走整组之后也已经晚了。
-  //
-  // 插话一律是切点。**砸进回合中间的注记（trace 判 inside）只在前面有本回合正文、并且
-  // 紧跟着的下一段就是本回合正文时才是切点**——不看它是哪一种记录：
-  // - 紧跟着正文：那种情形下 parseSessionOutput 已经在 sentinel 处把正文切成了两段 agent，
-  //   trace 不跟着切，前面那截（旁注常常正好落在 agent 刚吐出一两个字的时候）就会把整组
-  //   trace 连同几百次工具调用一起领走，真正写正文的那一段一个事件都拿不到。
-  // - 紧跟着的不是正文就不能切，哪怕再往后还有正文：切出来的那一截只有紧跟在切点后面的
-  //   正文会来领（turnStartedAt 跟着切点走），这里却是又一条记录（两条记录夹着几步）、一条
-  //   输入（等哨兵的那一回合就此收工，后面的正文是叫醒之后的新一轮），或者什么都没有。那一截
-  //   没人认领，落进「无正文兜底气泡」凭空多出一颗，还排在真回合后面被当成「正在跑」；而直播
-  //   那边旁注根本不拆气泡（见 appendAgent 跨旁注回捞当前回合），刷新前后就长得不一样了。
-  //   不切，这几步就留在前面那截的那一组里，跟着它并进这一回合的气泡（删除出处见
-  //   conversationTraceSources）。
-  // - **前面**没有本回合正文同样不能切（用户 2026-09-16 报的）：切了一样凭空多出一颗兜底
-  //   气泡，而且这回连 mergeTurnChunk 都救不回来 —— 上半截压根不是一颗气泡，没有并的对象。
-  //   这正是「先连着跑几十分钟工具」那种回合的形状：旁注占了 .md 的第一行，等 agent 终于
-  //   吐字，那段正文就被劈到了旁注下面 —— 用户看到的是「预约审查打断了正在跑的回合」，而且
-  //   同一条会话会在吐字的那一瞬当场变形。不切则整组 trace 完整留给后面那段正文，旁注照旧
-  //   排成这一回合的尾注，吐字前后长得一样。
-  //
-  // 真回合边界不受这条约束，它们**就是**新一轮的开头，前面没正文时那组 trace 本来就该单独
-  // 成一颗气泡：真人插话、「继续（从中断处）」这类说给 agent 听的系统注记，以及**带着 aside
-  // 标、却落在两个回合之间的**那种——「第 N 轮验证开始」就是（写完旁注才拉起验证回合，
-  // trace 判 boundary）。所以这里认的是 trace 的 inside，不是服务端的 aside 标：拿标当判据
-  // 会把这类真边界一起挡掉，审查者的正文退回普通气泡、连 reviewer 身份都丢了（第 1 轮审查报的）。
-  const asideAt = new Set<string>();
-  const midTurnAt = new Set<string>();
-  const splitPoints = new Set<string>();
-  let closedTurn = true;
-  let proseSinceTurnStart = false;
-  segments.forEach((segment, index) => {
-    if (segment.kind === "agent") {
-      closedTurn = !!segment.endedAt;
-      proseSinceTurnStart = true;
-      return;
-    }
-    if (segment.kind !== "system") {
-      // 真人插话：一律是切点，也一律是新一轮的开头。
-      if (segment.at) splitPoints.add(segment.at);
-      closedTurn = true;
-      proseSinceTurnStart = false;
-      return;
-    }
-    const placement = notePlacement(traceGroups, segment.at);
-    // **砸进某一回合中间**，判据只认 trace。服务端那个 aside 标管的是另一头：它覆盖全部
-    // appendTaskTimeline 旁注，连落在两回合**之间**的「第 N 轮验证开始」都带标——拿标去判
-    // 「切不切」，就会把那种真边界一起挡掉（第 1 轮审查报的）。
-    const midTurn = placement === "inside";
-    if (segment.at) {
-      if (midTurn || segment.aside === true) asideAt.add(segment.at);
-      if (!(closedTurn && proseSinceTurnStart)
-        && verifyMark(normalizeSessionNoteText(segment.text), segment.notice)?.phase !== "start"
-        && (midTurn || (placement === "unknown" && segment.aside))) {
-        midTurnAt.add(segment.at);
-      }
-      if (midTurn
-        ? proseSinceTurnStart && segments[index + 1]?.kind === "agent"
-        : segments.slice(index + 1).some((later) => later.kind === "agent")) {
-        splitPoints.add(segment.at);
-      }
-    }
-    // 只有「砸进回合中间」那种不开新一轮；其余的（trace 认下的边界、说给 agent 听的注记、
-    // trace 哑了没话说的）都按新一轮起头算，两样证据一起归零。
-    if (!midTurn) {
-      closedTurn = true;
-      proseSinceTurnStart = false;
-    }
-  });
-  let splitFrom = session.startedAt;
-  for (const segment of segments) {
-    if (segment.kind === "agent" || !segment.at || !splitPoints.has(segment.at)) continue;
-    splitTraceGroupAt(traceGroups, consumedTrace, splitFrom, segment.at);
-    splitFrom = segment.at;
-  }
-  let turnStartedAt = session.startedAt;
-  // 一段之后的下一个切点（不只看紧邻那一段）：它是这一段认领 trace 时的上界。
-  const nextSplitAt = (index: number): string | undefined => {
-    for (const later of segments.slice(index + 1)) {
-      if (later.kind !== "agent" && later.at && splitPoints.has(later.at)) return later.at;
-    }
-    return undefined;
-  };
-  // 这一回合还没说完的那颗气泡（被旁注劈开的上半截），以及「中间只隔着旁注」这件事。
-  let openTurn: AgentItem | null = null;
-  let acrossAside = false;
-  segments.forEach((segment, index) => {
-    if (segment.kind === "user") {
-      recordPersistedTurn(persistedTurns, "user", segment.text, segment.at);
-      items.push({
-        kind: "user",
-        id: `persisted:user:${session.id}:${index}`,
-        text: segment.text,
-        attachments: [],
-        at: segment.at,
-        isAnswer: segment.text.startsWith(ANSWER_PREFIX),
-        sessionId: session.id,
-        sessionRole: session.role,
-        // 后端代写、占着真人回合的那种（验证打回、验收冲突）。照常渲染成 user 气泡，
-        // 但「后续追问」不收它 —— 判据统一在 shared 的 isUserFollowUp。
-        bySystem: segment.bySystem,
-        monitorWake: segment.monitorWake,
-        answerIds: segment.answerIds,
-        ...origin(index),
-      });
-      turnStartedAt = segment.at ?? turnStartedAt;
-      openTurn = null;
-      acrossAside = false;
-    } else if (segment.kind === "system") {
-      recordPersistedTurn(persistedTurns, "system", segment.text, segment.at, session.id);
-      // 旧版轮换文案落在用户 .md 里的原文带 Markdown 标记、措辞也不一样；旁注是纯文本
-      // 渲染，不归一就会把星号原样露出来（@ash/shared/session-notes）。
-      const text = normalizeSessionNoteText(segment.text);
-      items.push({
-        kind: "event",
-        id: `persisted:system:${session.id}:${index}`,
-        text,
-        at: segment.at,
-        sessionId: session.id,
-        // 服务端标了 notice 就照它的，别再去猜（见 conversationNotes 的 tone 注释）。
-        tone: eventTone(text, segment.notice, segment.level),
-        variant: "note",
-        verify: isVerifyNote(text, segment.notice),
-        aside: asideAt.has(segment.at ?? ""),
-        ...(segment.notice ? { notice: segment.notice } : {}),
-        ...origin(index),
-      });
-      // 回合起点跟着**切点**走：切过的地方 trace 已经另成一组，下半截要靠这个起点认领
-      // 自己那几条事件。合并发生在气泡层面（见下面的 mergeTurnChunk），两者不冲突。
-      // 没切的旁注一步都不能动它：那一组 trace 还是完整的一份，起点一挪，后面那段正文就
-      // 拿着一个根本不存在的键去领，整组当场变成没人认领的兜底气泡。
-      // 起点取 trace 里实际那一组、而不是 sentinel 自己那一刻：写旁注到真起跑之间隔着
-      // 排队和拉起执行器，差出几秒是常态，照 sentinel 认就同样领不到（见 traceTurnStartAt）。
-      const sentinelAt = segment.at;
-      if (sentinelAt && splitPoints.has(sentinelAt)) {
-        turnStartedAt = traceTurnStartAt(traceGroups, consumedTrace, sentinelAt, nextSplitAt(index)) ?? sentinelAt;
-      }
-      if (midTurnAt.has(segment.at ?? "")) acrossAside = !!openTurn;
-      else { openTurn = null; acrossAside = false; }
-    } else {
-      const next = segments[index + 1];
-      // 下一段的 trace 已经被上面切成独立一组了，这一段不许靠 ±2 秒兜底把它捞过来。
-      // 判据跟切点保持同一份：agent 在切点之前一个字都没吐时，它自己那一组会被切空
-      // 删掉，兜底就正好会挑中切点之后那一组。
-      const boundary = next && next.kind !== "agent" && next.at && splitPoints.has(next.at)
-        ? next.at
-        : undefined;
-      const traceEntries = takeTraceGroup(traceGroups, consumedTrace, turnStartedAt, boundary);
-      const chunk: AgentItem = {
-        kind: "agent",
-        id: `persisted:agent:${session.id}:${index}`,
-        sessionId: session.id,
-        label: agentLabel(session),
-        agentType: session.agentType,
-        at: turnStartedAt,
-        endedAt: null,
-        markerEndedAt: segment.endedAt ?? null,
-        session,
-        run: traceRun(traceEntries) ?? sessionRun(session),
-        reviewer: reviewerOf(traceVerifyRound(traceEntries), session?.role),
-        usage: traceUsage(traceEntries),
-        markdown: segment.text,
-        segments: contentSegments(traceEntries, segment.text, `persisted:segment:${session.id}:${index}`),
-        ...origin(index),
-      };
-      // 领到的步子落在这段正文的删除时间窗外（记录之后那几步）：另报成 trace 出处，删这颗
-      // 气泡时一起删掉（见 conversationTraceSources）。
-      if (!chunk.deleted) {
-        chunk.sources!.push(...strayTraceSources(session.id, sessionTrace, readSide, traceEntries, segmentTraceWindow(segments, index)));
-      }
-      // 中间只隔着一条「那一刻回合还在飞」的旁注 —— 这就是同一回合的下半截，并回去。
-      // 身份再核一道：同一条会话上换轮验证也算换人（reviewerKey），换了人就不是同一段
-      // 话，哪怕旁注骗过了上面那道结构判据也粘不到一起。只有**自己带 run 事件**的那截
-      // 才有资格报身份：回合起点才写 run，下半截通常一条都没有（就地验证的审查者在自己
-      // 回合中间调 report_stage 就是这形状），拿它那份空身份去比就会把一个人的话劈成两
-      // 半、后半截还丢掉模型信息。
-      const ownIdentity = traceEntries.some((entry) => entry.event.kind === "run");
-      const sameSpeaker = !ownIdentity || reviewerKeyOf(openTurn?.reviewer) === reviewerKeyOf(chunk.reviewer);
-      // 删没删也得一样：并起来就分不开了，删掉的那半截会跟着留下来的一起显示。
-      if (openTurn && acrossAside && sameSpeaker && !openTurn.deleted === !chunk.deleted) {
-        mergeTurnChunk(openTurn, chunk);
-      } else {
-        items.push(chunk);
-        openTurn = chunk;
-      }
-      acrossAside = false;
-    }
-  });
-  // 没有正文、只剩执行过程的回合（conversationTraceFragments.ts）。
-  appendTraceFragments(items, session, segments, traceGroups, consumedTrace, sessionTrace, readSide);
-
-  /* 「这条会话**此刻**还卡在上游等回话」是**服务端给的一位事实**(`Session.awaitingUpstream`,
-     判据见 server/src/session-waiting.ts),落在这条会话最后那颗气泡上 —— 折叠条读的就是
-     末段(见 markSegmentsAwaiting)。
-     为什么不自己从 trace 的末条推:**那两份文件的缓冲进度不一样**。正文攒在
-     `pendingTraceText` 里,要等下一条非 text 事件或回合收口才落 `.trace.jsonl`,而 `.md`
-     是边流边写。于是一场「重试过、随后正常答完」的回合,刷新时 `.md` 已经是完整答复、
-     trace 却还停在那条提示上,读者照它反推就会在答案上方永久挂着「正在重试」——正是这个
-     任务要修的那个现象,只是换到了重建这一路(第 5 轮审查 F2)。
-     直播那一路的来源是事件顺序(conversationLiveTurns 边到边记),刷新之后再到达的输出会
-     照常把这一位覆盖回去;还没恢复的则一直挂着,这正是要的 sticky。 */
-  if (session.awaitingUpstream) {
-    const latest = [...items].reverse()
-      .find((item): item is AgentItem => item.kind === "agent" && item.sessionId === session.id);
-    if (latest) markSegmentsAwaiting(latest.segments);
-  }
-}
 
 export function buildConversationItems(
   persisted: PersistedConversation[],
@@ -566,7 +262,9 @@ export function buildConversationItems(
     if (item.kind !== "agent") { previousItem = item; continue; }
     const firstTurn = !seenSessions.has(item.sessionId);
     seenSessions.add(item.sessionId);
-    const turnStartedAt = item.session ? latestTurnStart(item.session) : null;
+    // 气泡自己记着回合就认自己的；会话行上的是**此刻最新**那一回合，拿它给上一回合的气泡
+    // 补时间，下一回合一开始它就被标成了新回合的起点。
+    const turnStartedAt = item.turnStartedAt ?? (item.session ? latestTurnStart(item.session) : null);
     item.at = firstTurn
       ? item.session?.startedAt ?? item.at
       : adjacentInterjectionAt
@@ -648,17 +346,24 @@ export function buildConversationItems(
   // 身份那一条是给就地验证用的：验证轮是搭在被验任务身上的旁路回合、常复用同一条
   // 会话，中间只隔着一条「第 N 轮验证开始」的旁注 —— 按前三条判就成了「同一个人接着
   // 说」，于是审查者的发言连头像和名字都不重报，反而比不区分更糟。
+  //
+  // 两颗都记着回合、却不是同一回合的，同样不接：团队调度台被后台通知叫醒自己开的下一轮，
+  // 中间一条输入、一条边界都没有，按上面几条判就会被画成「同一段话的下半截」。
   let continuedSessionId: string | null = null;
   let continuedReviewer: string | null = null;
+  let continuedTurn: string | null = null;
   for (const item of items) {
     if (item.kind === "user") { continuedSessionId = null; continue; }
     if (item.kind === "event") {
       if (item.variant === "boundary") continuedSessionId = null;
       continue;
     }
-    item.continuation = continuedSessionId === item.sessionId && continuedReviewer === reviewerKey(item);
+    const turn = item.turnStartedAt ?? null;
+    item.continuation = continuedSessionId === item.sessionId && continuedReviewer === reviewerKey(item)
+      && (!turn || !continuedTurn || turn === continuedTurn);
     continuedSessionId = item.sessionId;
     continuedReviewer = reviewerKey(item);
+    continuedTurn = turn;
   }
 
   const sessionMetaSeen = new Set<string>();

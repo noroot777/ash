@@ -27,6 +27,7 @@ import { findArchivedRollout, findRollout, readCodexContext } from "./codex-roll
 import { archiveCodexThread, codexArchiveNotice, CODEX_ARCHIVE_TIMEOUT_MS } from "./codex-session-archive.js";
 import { pruneArchivedCodexDesktopThreads } from "./codex-desktop-catalog.js";
 import { CodexNativeCommands } from "./codex-native-commands.js";
+import { readCodexTurnTiming } from "./codex-rollout-timing.js";
 import { codexChangeWrites, codexCommandCwd } from "./tool-writes.js";
 import { isGoalExecution } from "@ash/shared/cli-commands";
 /** 一个 app-server 进程承载一个单飞回合，收尾归档后关闭；配置仍来自用户本机。 */
@@ -63,6 +64,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   let resolvedModel = opts.model ?? "";
   let resolvedEffort = opts.reasoningEffort ?? null;
   let latestUsage: ThreadUsage | null = null;
+  let turnRequests = 0; // 本回合实时看到过几次用量,用来判断 rollout 落盘齐了没有(./codex-rollout-timing.ts)
   let contextEmitted = false;
   let stderr = "";
   let lastEventType: string | null = null;
@@ -312,9 +314,13 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       push({ kind: "error", message: "Codex 当前回合被意外中断" });
     }
     if (!(await native.afterTurn())) return;
+    const timed = latestUsage && completedId
+      ? await readCodexTurnTiming(threadId, { turnId: completedId }, opts.env?.CODEX_HOME, turnRequests)
+      : undefined;
+    if (settling || finished) return;
     if (!turnCompleted || completedId !== (reviewTurnId || turnId)) return;
     if (latestUsage) {
-      push({ kind: "usage", usage: usageEvent(latestUsage.total) });
+      push({ kind: "usage", usage: timed ? { ...usageEvent(latestUsage.total), timed } : usageEvent(latestUsage.total) });
     }
     finish(status === "completed" || (status === "interrupted" && native.expectedInterruption) ? 0 : 1);
   };
@@ -374,8 +380,8 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       // `turn/started` 到了就证明**这一轮的输入已经在 agent 手里**(它可能先于 `turn/start`
       // 的应答到达,adapter 自己的 turnStartVersion 就是为这个乱序准备的)。置上之后不许退回:
       // 后面断链只能是 unknown,不能冒充「一个字都没进去」(F4)。
-      case "turn/started": turnId = p.turn?.id ?? turnId; turnStartVersion += 1; turnCompleted = false; input.reached(); break;
-      case "thread/tokenUsage/updated": latestUsage = p.tokenUsage ?? latestUsage; break;
+      case "turn/started": turnId = p.turn?.id ?? turnId; turnStartVersion += 1; turnCompleted = false; turnRequests = 0; input.reached(); break;
+      case "thread/tokenUsage/updated": latestUsage = p.tokenUsage ?? latestUsage; turnRequests += 1; break;
       case "item/started": handleItemStarted(p.item); break;
       case "item/completed": handleItemCompleted(p.item); break;
       case "item/agentMessage/delta":

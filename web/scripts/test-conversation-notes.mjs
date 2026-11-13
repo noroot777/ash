@@ -122,8 +122,9 @@ assert.deepEqual(
 );
 assert.equal(typed({ kind: "accept.done", target: "main", noCommit: true }).text, "已验收，合并到 main，等你提交");
 assert.equal(typed({ kind: "accept.done", target: null, tag: "v1.2" }).text, "已验收，打上标签 v1.2");
-assert.equal(typed({ kind: "monitor.released", description: "回归测试", finished: true }).text, "不再等「回归测试」了，它已经跑完");
+assert.equal(typed({ kind: "monitor.released", description: "回归测试", finished: true }).text, "不再等哨兵「回归测试」了，它已经跑完");
 assert.equal(typed({ kind: "monitor.released", description: "回归测试", finished: true }).tier, "receipt");
+
 assert.equal(typed({ kind: "review.reserved", reviewer: "5.5审查", updated: false }).text, "审查已预约，这一轮跑完自动开始");
 assert.deepEqual(
   (({ tier, tone, text }) => [tier, tone, text])(typed({ kind: "review.verdict", source: "free", round: 2, verdict: "failed", findings: 2 })),
