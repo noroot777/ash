@@ -381,16 +381,11 @@ export function ReplyBox({
     standing.commit({ ...standing.config, reasoningEffort: effort || null });
   };
 
-  // 正在飞的那一次发送。撤回要排在它后面（见下面的 withdraw）：清空和合并谁先谁后
-  // 一旦确定，就不必再去草稿里猜哪一段是刚发出去的。
-  const inFlightSend = useRef<Promise<void> | null>(null);
-
+  // 正在飞的那一次发送登记在草稿上：撤回、会话里「改了再发」都排在它后面（见 DraftStore
+  // 的 afterSend）。清空和合并谁先谁后一旦确定，就不必再去草稿里猜哪一段是刚发出去的。
   const send = (): Promise<void> => {
     const run = runSend().then(() => {});
-    inFlightSend.current = run;
-    void run.finally(() => {
-      if (inFlightSend.current === run) inFlightSend.current = null;
-    });
+    draft.trackSend(run);
     return run;
   };
 
@@ -472,7 +467,7 @@ export function ReplyBox({
   // 顺序一确定,两边都不必去猜草稿里哪一段是谁的(靠猜会猜错,2026-08-27 审查实测)。
   const withdraw = async (message: ScheduledMessage) => {
     if (!await scheduled.cancel(message.id)) return;
-    await inFlightSend.current;
+    await draft.afterSend();
     setValue((current) => joinDraftText(message.text, current));
     draft.setAttachments((current) => mergeAttachments(attachmentsFromPaths(message.attachments), current));
     if (message.agent) {

@@ -43,6 +43,8 @@ type DraftContextValue = {
   drafts: Record<string, Draft>;
   updateDraft: (key: string, update: (current: Draft) => Draft) => void;
   readDraft: (key: string) => Draft;
+  trackSend: (key: string, run: Promise<unknown>) => void;
+  afterSend: (key: string) => Promise<void>;
 };
 
 const EMPTY_DRAFT: Draft = { text: "", attachments: [], pendingUploads: [], noteIds: [] };
@@ -78,7 +80,19 @@ export function DraftProvider({ children }: { children: ReactNode }) {
       return { ...current, [key]: next };
     });
   }, []);
-  const value = useMemo(() => ({ drafts, updateDraft, readDraft }), [drafts, updateDraft, readDraft]);
+  // 正在飞的那一次发送。它结算时会按「发送那一刻的那一份」摘草稿（clearSentDraft /
+  // dropSentAttachments），所以对话框之外往草稿里放东西（撤回、会话里「改了再发」）都得排在
+  // 它后面：先清后并，顺序一定，就不必去草稿里猜哪一份是谁的。
+  const sends = useRef(new Map<string, Promise<unknown>>());
+  const trackSend = useCallback((key: string, run: Promise<unknown>) => {
+    sends.current.set(key, run);
+    const done = () => { if (sends.current.get(key) === run) sends.current.delete(key); };
+    run.then(done, done);
+  }, []);
+  const afterSend = useCallback(async (key: string) => {
+    for (let run = sends.current.get(key); run; run = sends.current.get(key)) await run.catch(() => {});
+  }, []);
+  const value = useMemo(() => ({ drafts, updateDraft, readDraft, trackSend, afterSend }), [drafts, updateDraft, readDraft, trackSend, afterSend]);
   return <DraftContext.Provider value={value}>{children}</DraftContext.Provider>;
 }
 
@@ -107,13 +121,17 @@ export type DraftHandle = {
   clearIfUnchanged: (submitted: Draft) => void;
   /** 整份丢掉（发送/创建成功，或用户自己按了「清空」）。 */
   clear: () => void;
+  /** 登记一次正在飞的发送（它结算时会摘掉自己那一份）。 */
+  trackSend: (run: Promise<unknown>) => void;
+  /** 等这份草稿上在飞的发送都结算完；外部往草稿里放东西前先等它。 */
+  afterSend: () => Promise<void>;
 };
 
 export function useDraft(key: string): DraftHandle {
   const context = useContext(DraftContext);
   if (!context) throw new Error("useDraft must be used inside DraftProvider");
   const draft = context.drafts[key] ?? EMPTY_DRAFT;
-  const { updateDraft, readDraft } = context;
+  const { updateDraft, readDraft, trackSend: track, afterSend: settle } = context;
   const setScreenshot = useCallback<Dispatch<SetStateAction<ScreenshotDraft | null>>>((next) => {
     updateDraft(key, (current) => ({
       ...current,
@@ -159,6 +177,8 @@ export function useDraft(key: string): DraftHandle {
     for (const pending of readDraft(key).pendingUploads) pending.abort();
     updateDraft(key, () => EMPTY_DRAFT);
   }, [key, readDraft, updateDraft]);
+  const trackSend = useCallback((run: Promise<unknown>) => track(key, run), [key, track]);
+  const afterSend = useCallback(() => settle(key), [key, settle]);
   return {
     screenshot: draft.screenshot ?? null,
     setScreenshot,
@@ -175,6 +195,8 @@ export function useDraft(key: string): DraftHandle {
     value: draft,
     clearIfUnchanged,
     clear,
+    trackSend,
+    afterSend,
   };
 }
 

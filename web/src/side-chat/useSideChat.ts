@@ -4,7 +4,8 @@ import { chatApi } from "../chat/chatApi.ts";
 import { api } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
 import type { UploadAttachment, UploadingFile } from "../task-detail/Attachments.tsx";
-import { attachmentsFromPaths, mergeAttachments, reuseDraftText } from "../task-detail/withdrawDraft.ts";
+import { attachmentsFromPaths, mergeAttachments } from "../task-detail/withdrawDraft.ts";
+import { reuseInto } from "../task-detail/ReuseInput.tsx";
 import { clearSideChatQuote, moveNewSideChatQuote, sideChatMessageBody, stageSideChatQuote, useSideChatQuote } from "./sideChatQuote.ts";
 import { newSideChatScope, readSideStorage as read, sideAttachmentsKey as filesKey, sideDraftKey as draftKey, sideRequestKey as requestKey, writeSideStorage as write } from "./sideChatStorage.ts";
 
@@ -66,6 +67,9 @@ export function useSideChat(taskId: string) {
   const initialized = useRef(false);
   const memberQueue = useRef(Promise.resolve());
   const memberRevision = useRef(0);
+  // 正在飞的那一次发送。它确认时按发送那一刻的那一份摘草稿（逐字没动的正文、同路径的图），
+  // 「改了再发」排在它后面放回，免得刚放回的被当成已发出去的那份摘掉。
+  const inFlight = useRef<Promise<void> | null>(null);
   const memberPending = useRef(false);
   const confirmedMembers = useRef(new Map<string, ChatMember>());
   const attached = useRef(attachments);
@@ -214,7 +218,13 @@ export function useSideChat(taskId: string) {
       }
     } finally { if (alive.current && revision === memberRevision.current) setSavingMember(false); }
   };
-  const send = async (member: ChatMember | undefined) => {
+  const send = (member: ChatMember | undefined) => {
+    const run = runSend(member);
+    inFlight.current = run;
+    void run.finally(() => { if (inFlight.current === run) inFlight.current = null; });
+    return run;
+  };
+  const runSend = async (member: ChatMember | undefined) => {
     if (!member || !canSend || locked.current || memberPending.current) return;
     locked.current = true; setSending(true); setError(""); setSendError("");
     let targetId = roomId;
@@ -270,10 +280,13 @@ export function useSideChat(taskId: string) {
   const removeQuote = () => { if (quote) clearSideChatQuote(taskId, roomId, quote.id); };
   // 你问过的一句放回输入框改了再发：问的那句并回草稿、附件并回附件卡（同主会话，见
   // task-detail/withdrawDraft.ts），带着的主会话选文重新挂成引用——只有一个引用位，原先挂着的那段让位。
-  const reuse = (input: { question: string; quote: string | null; paths: readonly string[] }) => {
-    setDraft(reuseDraftText(input.question, draft));
+  // 正文按此刻存着的那份草稿并（等过发送，闭包里的 draft 可能已经是旧的）。
+  const reuse = async (input: { source: string; question: string; quote: string | null; paths: readonly string[] }) => {
+    while (inFlight.current) await inFlight.current;
+    const scope = selected.current ?? newScope;
+    setDraft(reuseInto(`side:${scope}`, { source: input.source, text: input.question }, read(draftKey(scope)) ?? ""));
     setAttachments((current) => mergeAttachments(attachmentsFromPaths([...input.paths]), current));
-    if (input.quote && input.quote !== quote?.text) stageSideChatQuote(taskId, input.quote);
+    if (input.quote) stageSideChatQuote(taskId, input.quote);
     setReused((count) => count + 1);
   };
   // 「发给主任务」：把一条答完的回答原文交给主任务（主任务在跑就排着）；回执跟着快照回来。

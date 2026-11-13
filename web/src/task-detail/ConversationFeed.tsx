@@ -245,7 +245,7 @@ function UserBubble({ id, author, text, attachments, at, bySystem = false, delet
           {displayBody && (
             <CopyButton value={displayBody} ariaLabel="复制这条回复" icon />
           )}
-          {onReuse && reusable && <ReuseInputButton onReuse={() => onReuse({ text: parsed.body, paths })} />}
+          {onReuse && reusable && <ReuseInputButton onReuse={() => onReuse({ source: id, text: parsed.body, paths })} />}
           {deletable && <DeleteMessageButton item={deletable} />}
         </header>
         {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <p>{displayBody}</p>)}

@@ -18,13 +18,19 @@ export function joinDraftText(restored: string, current: string): string {
   return `${left}\n\n${current}`;
 }
 
+/** 上一次「改了再发」放回的是哪一条（`source`），放完草稿正文是什么样（`text`）。 */
+export type ReuseMark = { source: string; text: string };
+
 /**
- * 发过的一句放回草稿再改（气泡上「改了再发」）：跟撤回同样是合并，只多一条——草稿里已经
- * 有这一句了就不再接一遍，连点两下不会叠出两份。这里的子串判断只决定「加不加」，从不删字。
+ * 发过的一句放回草稿再改（气泡上「改了再发」）：跟撤回同样是合并，只多一条——**同一条**
+ * 刚放回过、之后草稿一个字没动，就是连点，不再接一遍。
+ *
+ * 判据是「哪一条 + 草稿版本」，不看草稿里有没有这几个字：放回「继续」时草稿写着「不要继续」，
+ * 那是另一句意思相反的话，不是放回过的结果（第 1 轮审查实测，子串判断把它吞掉了）。
  */
-export function reuseDraftText(sent: string, current: string): string {
-  const text = sent.trim();
-  return text && current.includes(text) ? current : joinDraftText(text, current);
+export function reuseDraftText(sent: string, current: string, source: string, last: ReuseMark | null): ReuseMark {
+  if (last && last.source === source && last.text === current) return last;
+  return { source, text: joinDraftText(sent, current) };
 }
 
 /**

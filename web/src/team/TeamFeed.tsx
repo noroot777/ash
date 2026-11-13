@@ -101,7 +101,7 @@ function UserBubble({ id, author, text, attachments, at, bySystem = false, onReu
       <div {...conversationInputAnchor(id)}>
         <header>
           <b>{author}</b>{at && <time>{formatInstant(at)}</time>}
-          {onReuse && reusable && <ReuseInputButton onReuse={() => onReuse({ text: parsed.body, paths })} />}
+          {onReuse && reusable && <ReuseInputButton onReuse={() => onReuse({ source: id, text: parsed.body, paths })} />}
         </header>
         {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <p>{displayBody}</p>)}
         <MessageAttachments paths={paths} />

@@ -15,7 +15,7 @@ import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { ReuseInputButton } from "../task-detail/ReuseInput.tsx";
 
 /** 你发的那条：带了主会话选文时，那一段是一行引用，跟在你那句话上面。指到时左边浮出「改了再发」。 */
-function Mine({ message, onReuse }: { message: ChatMessage; onReuse: (input: { question: string; quote: string | null; paths: readonly string[] }) => void }) {
+function Mine({ message, onReuse }: { message: ChatMessage; onReuse: (input: { source: string; question: string; quote: string | null; paths: readonly string[] }) => void }) {
   const parsed = parseAttachmentText(message.body);
   const { quote, question } = splitSideChatBody(parsed.body);
   const tip = useHoverTip();
@@ -29,7 +29,7 @@ function Mine({ message, onReuse }: { message: ChatMessage; onReuse: (input: { q
       )}
       {question.trim() && <MarkdownBody text={question} />}
       {!!parsed.paths.length && <MessageAttachments paths={parsed.paths} />}
-      <ReuseInputButton className="side-chat-me__reuse" onReuse={() => onReuse({ question: question.trim(), quote, paths: parsed.paths })} />
+      <ReuseInputButton className="side-chat-me__reuse" onReuse={() => onReuse({ source: message.id, question: question.trim(), quote, paths: parsed.paths })} />
     </div>
   );
 }
