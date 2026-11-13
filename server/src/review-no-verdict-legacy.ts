@@ -9,10 +9,12 @@
 //   · 报告文件在不在（跟页面读报告同一个入口）。
 //
 // 判法跟回合收尾那一刻是**同一份**（`interruptionOf` / `noVerdictCause`），只是事实换成从盘上读：
-// 模型 API 的类型照旧只认执行器归一层给的 —— 把那一回合的原始事件按 codex 执行器当时的同一套
-// 归一重放一遍（主线程 / 子智能体线程的归属也照当场那样分，见 `replayCodexEvents`），取它当时会
-// 挂上的那条错误；不在诊断原文里另找状态码（为什么见 review-no-verdict.ts 文件头）。读不到事件，就照实说「执行器异常退出（exit N）」，
-// 带上原话。一样都读不到的轮次给 null，页面照老样子。
+// 模型 API 的类型照旧只认执行器归一层给的，不在诊断原文里另找状态码（为什么见 review-no-verdict.ts
+// 文件头）。两样事实各有各的时刻，取的地方也不同：
+//   · 这一轮的执行故障：结算时手上那条 —— 把原始事件按 codex 执行器当时的同一套归一重放一遍
+//     （主线程 / 子智能体线程的归属也照当场那样分，见 `replayCodexEvents`）；
+//   · 看门狗熔断时说原因用的类型：**熔断那一刻**冻结的那条（见 `trippedModel`），之后才到的错误不算。
+// 读不到事件，就照实说「执行器异常退出（exit N）」，带上原话。一样都读不到的轮次给 null，页面照老样子。
 //
 // 为什么现算、不一次性补写进库：这份结构这一版刚多了原话，上一版写进库的那些也缺这一格，补写得
 // 两头都补；而现算的输入（结束了的回合、盘上的文件）不会再变，按回合身份记一份就只读一次盘。
@@ -25,10 +27,11 @@ import { db } from "./db/index.js";
 import { freeReviewRounds, sessions, sessionTurns } from "./db/schema.js";
 import { codexErrorEvent } from "./executors/codex-error-event.js";
 import { codexTurnError } from "./executors/model-failure.js";
-import { CodexChildActivity } from "./executors/native-agent-activity.js";
 import { RUNS_DIR } from "./paths.js";
 import { interruptionOf, noVerdictCause, readTurnDiagnostics, reviewReportWritten, type Interruption } from "./review-no-verdict.js";
-import { readableRunPath, runTracePaths } from "./transcript.js";
+import { readableRunPath, runTracePaths, sessionTracePath } from "./transcript.js";
+import { readStallJournal } from "./turn-stall-journal.js";
+import { isStallWarningText } from "./turn-stall-text.js";
 import { errorFacts } from "./turn-stall.js";
 
 type RoundRow = typeof freeReviewRounds.$inferSelect;
@@ -104,53 +107,76 @@ function mainThreadOf(eventsPath: string, cliSessionId: string | null): string |
 }
 
 /**
- * 按执行器自己的归一重放这一回合的原始事件，取回收尾那一刻手上的两样事实（别的执行器没有这份
- * 文件就都没有）。原始文件里主线程和子智能体线程的通知混在一起，归属照 codex-app-server.ts 当场
- * 那样分：`threadId` 不是主线程的，走子线程那一路（`CodexChildActivity`，包成子智能体活动）；
- * 主线程的（以及 exec 那种不分线程的）走主线程那一路（`codexErrorEvent` / `codexTurnError`）。
- *   · `error`：这一轮的执行故障 —— 跟单飞收尾一样只认**主线程顶层**的、重试完了还是错的那些
- *     （App Server 的 `error` 通知、失败的 `turn/completed`，exec 的 `error` / `turn.failed`）；
- *     子线程失败不是父回合失败。挑法也一样：带模型类型的那条不被后面没类型的盖掉。分不出主线程
- *     （不知道主线程是哪条）的带线程行不算进来：来源不明的不替它升格成这一轮的故障。
- *   · `stallModel`：看门狗熔断时据以说原因的那个类型 —— 它穿过子智能体包装、重试中的也算，每收
- *     一条错误就把类型换成那一条的（turn-stall.ts 的 `errorFacts` / `lastModel`），所以这里同样
- *     把两路归一出来的每条事件交给 `errorFacts`，只认**最后那条**错误，没类型就是没有。
+ * 按执行器自己的归一重放这一回合的原始事件，取回收尾那一刻手上的执行故障（别的执行器没有这份
+ * 文件就没有）。原始文件里主线程和子智能体线程的通知混在一起，归属照 codex-app-server.ts 当场
+ * 那样分：`threadId` 不是主线程的是子线程的，子线程失败不是父回合失败，整行不看；主线程的（以及
+ * exec 那种不分线程的）按 `codexErrorEvent` / `codexTurnError` 归一。跟单飞收尾一样只认重试完了
+ * 还是错的那些（App Server 的 `error` 通知、失败的 `turn/completed`，exec 的 `error` / `turn.failed`）。
+ * 挑法也一样：带模型类型的那条不被后面没类型的盖掉。分不出主线程（不知道主线程是哪条）的带线程行
+ * 同样不看：来源不明的不替它升格成这一轮的故障。
+ *
+ * 熔断用的类型**不从这里取**：原始行没有时刻，分不出哪条在熔断之前（见 `trippedModel`）。
  */
-function replayCodexEvents(eventsPath: string, cliSessionId: string | null): { error: ExecutionError | null; stallModel: ModelFailure | null } {
+function replayCodexEvents(eventsPath: string, cliSessionId: string | null): ExecutionError | null {
   const main = mainThreadOf(eventsPath, cliSessionId);
-  const child = new CodexChildActivity();
   let picked: ExecutionError | null = null;
-  let stallModel: ModelFailure | null = null;
-  const seen = (events: AgentEvent[], execution: boolean) => {
-    for (const event of events) {
-      const facts = errorFacts(event);
-      if (!facts) continue;
-      stallModel = facts.model;
-      if (execution && event.kind === "error" && (!picked?.model || event.model)) picked = event;
-    }
+  const seen = (event: ExecutionError) => {
+    if (!picked?.model || event.model) picked = event;
   };
   for (const ev of parseLines(readEdge(eventsPath, "tail"))) {
     const method = typeof ev.method === "string" ? ev.method : null;
     const params = recordOf(ev.params);
     const thread = typeof params.threadId === "string" && params.threadId ? params.threadId : null;
-    if (method && thread && thread !== main) {
-      // 子线程（或者主线程认不出来时任何带线程的行）：只按子智能体活动算，进停滞、不进执行故障。
-      seen(child.notification(method, params), false);
-      continue;
-    }
+    if (method && thread && thread !== main) continue;
     if (method === "error") {
       const reported = codexErrorEvent(params);
-      if (reported) seen([reported.event], reported.counted);
+      if (reported?.counted && reported.event.kind === "error") seen(reported.event);
     } else if (method === "turn/completed") {
       const turn = recordOf(params.turn);
       const message = turn.status === "failed" ? messageOf(turn) : null;
-      if (message) seen([codexTurnError(message)], true);
+      if (message) seen(codexTurnError(message));
     } else if (ev.type === "turn.failed" || ev.type === "error") {
       const message = messageOf(ev);
-      if (message) seen([codexTurnError(message)], true);
+      if (message) seen(codexTurnError(message));
     }
   }
-  return { error: picked, stallModel };
+  return picked;
+}
+
+/**
+ * 看门狗熔断这一回合时说原因用的那个模型 API 类型。在线那一路是**熔断那一刻**把 `lastModel`
+ * 冻进判决的（turn-stall.ts 的 `markStallFailure`）：之后才到的错误 —— 杀进程那段时间里主线程
+ * 又报的一条重试、子线程晚到的失败 —— 改不了它。所以事后也只认判决时刻之前的事实：
+ *   1. 判决日志里这个回合的那条判决（销账了、还没压缩掉的也在）：它记的就是冻结的那一份。带
+ *      类型那一格之前写的旧记录说不出来，往下找。
+ *   2. 这一回合的执行过程（会话 trace）：它按消费顺序记下了看门狗看到的那些事件，熔断那句红字
+ *      （以判决原文开头）也落在里面。只看红字之前的，照 `lastModel` 的取法认最后一条错误 ——
+ *      穿过子智能体包装、重试中的也算；看门狗自己说的警告不是它观察到的，拣出去。
+ *   3. 都找不到（日志压缩了、红字没落下来）：认不出，给 null，那半句照实说「类型不明」。
+ */
+function trippedModel(taskId: string, turn: ReviewerTurn, stallReason: string): ModelFailure | null {
+  const record = readStallJournal().verdicts
+    .filter((verdict) => verdict.sessionId === turn.sessionId && verdict.turnStartedAt === turn.startedAt && verdict.model !== undefined)
+    .at(-1);
+  if (record) return record.model ?? null;
+  let text = "";
+  try {
+    text = readFileSync(readableRunPath(sessionTracePath(taskId, turn.sessionId)), "utf8");
+  } catch {
+    return null;
+  }
+  let model: ModelFailure | null = null;
+  for (const entry of parseLines(text)) {
+    if (entry.turnStartedAt !== turn.startedAt) continue;
+    const event = recordOf(entry.event) as unknown as AgentEvent;
+    if (event.kind === "error" && typeof event.message === "string") {
+      if (event.message.startsWith(stallReason)) return model;
+      if (isStallWarningText(event.message)) continue;
+    }
+    const facts = errorFacts(event);
+    if (facts) model = facts.model;
+  }
+  return null;
 }
 
 /** 这一任务名下每个审查回合：回合行为主，没有回合行的老会话按会话行上记的最后一回合补一条。 */
@@ -217,14 +243,11 @@ function interruptionOfTurn(taskId: string, turn: ReviewerTurn): Interruption | 
   const failed = turn.outcome === "failed" || (turn.outcome !== "completed" && exitStatus != null && exitStatus !== 0);
   const completed = turn.outcome === "completed" || (turn.outcome == null && exitStatus === 0);
   if (!failed && !completed) return undefined;
-  const replay = failed
-    ? replayCodexEvents(readableRunPath(runTracePaths(join(RUNS_DIR, taskId), turn.sessionId, turn.startedAt).eventsPath), turn.cliSessionId)
-    : null;
-  const facts = replay
+  const facts = failed
     ? interruptionOf({
       exitStatus: exitStatus ?? 0,
-      verdict: turn.stallReason ? { kind: "tripped", reason: turn.stallReason, model: replay.stallModel } : null,
-      error: replay.error,
+      verdict: turn.stallReason ? { kind: "tripped", reason: turn.stallReason, model: trippedModel(taskId, turn, turn.stallReason) } : null,
+      error: replayCodexEvents(readableRunPath(runTracePaths(join(RUNS_DIR, taskId), turn.sessionId, turn.startedAt).eventsPath), turn.cliSessionId),
     }, diagnostics)
     : null;
   if (turn.endedAt) {

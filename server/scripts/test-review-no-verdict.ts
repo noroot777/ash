@@ -455,31 +455,78 @@ try {
     await db.update(freeReviewRounds).set({ noVerdict: { kind: "unreported", reason: "回合收尾了，结论没报上来" } }).where(eq(freeReviewRounds.runId, unreported.runId));
     assert.deepEqual(await unreported.api(), { kind: "unreported", reason: "回合收尾了，结论没报上来" });
     // 看门狗熔断的老回合：终止是看门狗发的停止请求（诊断里 stopRequested=true），结局是 failed、
-    // 不是你停的；原因的类型跟新断的轮次一样取熔断时最后那条重试错误（第 1 轮复审第 1、3 条）。
+    // 不是你停的（第 1 轮复审第 1 条）。原因的类型跟新断的轮次一样，只认**熔断那一刻**冻结的那条
+    // （第 1 轮复审第 3 条、第 3 轮复审第 1 条）：判决日志里记的；日志压缩掉了，就是执行过程里熔断
+    // 那句红字之前最后那条错误；都确认不了就说类型不明。原始事件没有时刻，不拿它定熔断类型。
+    const { CodexChildActivity: ChildActivity } = await import("../src/executors/native-agent-activity.js");
+    const { appendStallVerdict } = await import("../src/turn-stall-journal.js");
+    const { stallWarningText } = await import("../src/turn-stall-text.js");
     const QUOTA_429 = "unexpected status 429 Too Many Requests: You exceeded your current quota (insufficient_quota)";
+    const RATE_429 = "exceeded retry limit, last status: 429 Too Many Requests";
     const KILLED = { ...LIVE_DIAGNOSTICS, terminationKind: "manual_stop", failureKind: null, failureReason: null, stopRequested: true, exitStatus: 143, structuredErrors: [] };
-    const tripped = await scene({ diagnostics: KILLED });
-    await settle(tripped, "failed", 143, null, "15 分钟里只收到重试类错误");
-    writeEvents(tripped, [
-      { method: "error", params: { willRetry: true, error: { message: QUOTA_429 } } },
-      { method: "item/agentMessage/delta", params: { delta: "…" } },
-      { method: "error", params: { willRetry: true, error: { message: QUOTA_429 } } },
-    ]);
-    const trippedCause = await tripped.api();
-    assert.equal(trippedCause?.kind, "interrupted", "看门狗发的停止请求不算你停的：照样补原因");
-    assert.equal(trippedCause?.reason, "模型账户额度用完了（429）", "熔断原因的类型取重试通知里最后那条，跟新断的轮次同一句");
-    assert.equal(trippedCause?.vague, undefined);
-    assert.match(trippedCause?.said ?? "", /15 分钟里只收到重试类错误/, "没有执行故障时原话是那份熔断诊断");
-    // 最后那条重试错误没类型：不沿用前面的，照实说被自动终止，标笼统。
-    const untyped = await scene({ diagnostics: KILLED });
-    await settle(untyped, "failed", 143, null, "15 分钟里只收到重试类错误");
-    writeEvents(untyped, [
-      { method: "error", params: { willRetry: true, error: { message: QUOTA_429 } } },
-      { method: "error", params: { willRetry: true, error: { message: "Reconnecting... 2/5" } } },
-    ]);
-    const untypedCause = await untyped.api();
-    assert.equal(untypedCause?.reason, "回合长时间没有进展，被自动终止");
-    assert.equal(untypedCause?.vague, true);
+    const TRIP = "〔上游停滞·已自动终止本回合〕15 分钟里只收到重试类错误";
+    const retry = (message: string) => codexErrorEvent({ willRetry: true, error: { message } })!.event;
+    const childRetry = (message: string) => new ChildActivity().notification("error", { threadId: "child-thread", willRetry: true, error: { message } })[0]!;
+    const warning = stallWarningText({ sessionId: "s", turnStartedAt: at, since: at, elapsedMs: 300_000, errors: 5, retries: 5, childErrors: 0, lastMessage: null, lastModel: null } as never);
+    /** 这一回合的执行过程（会话 trace），按看门狗消费的顺序。 */
+    const writeTrace = (s: Awaited<ReturnType<typeof scene>>, events: AgentEvent[]) => {
+      events.forEach((event, i) => appendSessionTrace(s.taskId, s.sessId, at, event as never, new Date(Date.parse(at) + 1000 * (i + 1)).toISOString()));
+    };
+    const tripScene = async () => {
+      const s = await scene({ diagnostics: KILLED });
+      await settle(s, "failed", 143, null, TRIP);
+      return s;
+    };
+    assert.equal(childRetry(QUOTA_429).kind, "tool", "子线程的重试是包成子智能体活动的那一条");
+
+    // 判决日志还在：照它冻结的类型说；之后才到的错误（主线程、子线程，原始事件里也有）改不了它。
+    const journaled = await tripScene();
+    appendStallVerdict({ at, sessionId: journaled.sessId, turnStartedAt: at, reason: TRIP, since: at, model: { kind: "quota_exhausted", status: 429 } });
+    writeTrace(journaled, [retry(QUOTA_429), { kind: "error", message: TRIP }, retry("Reconnecting... 2/5"), childRetry(RATE_429)]);
+    writeEvents(journaled, [{ method: "error", params: { willRetry: true, error: { message: "Reconnecting... 2/5" } } }]);
+    const journaledCause = await journaled.api();
+    assert.equal(journaledCause?.kind, "interrupted", "看门狗发的停止请求不算你停的：照样补原因");
+    assert.equal(journaledCause?.reason, "模型账户额度用完了（429）", "熔断原因的类型取判决冻结的那条，跟新断的轮次同一句");
+    assert.equal(journaledCause?.vague, undefined);
+    assert.match(journaledCause?.said ?? "", /15 分钟里只收到重试类错误/, "没有执行故障时原话是那份熔断诊断");
+    // 判决日志里记的就是「没类型」：照它说类型不明，不从执行过程里另找。
+    const journaledNone = await tripScene();
+    appendStallVerdict({ at, sessionId: journaledNone.sessId, turnStartedAt: at, reason: TRIP, since: at, model: null });
+    writeTrace(journaledNone, [retry(QUOTA_429), { kind: "error", message: TRIP }]);
+    assert.deepEqual([(await journaledNone.api())?.reason, (await journaledNone.api())?.vague], ["回合长时间没有进展，被自动终止", true]);
+
+    // 日志压缩掉了（或者是带类型那一格之前的旧记录）：按执行过程里熔断那句红字划界。重试的类型
+    // 在主线程、子线程都认（看门狗穿过子智能体包装），看门狗自己那句警告不是它观察到的错误。
+    const traced = await tripScene();
+    appendStallVerdict({ at, sessionId: traced.sessId, turnStartedAt: at, reason: TRIP, since: at });
+    writeTrace(traced, [retry("Reconnecting... 1/5"), childRetry(QUOTA_429), { kind: "error", message: warning, level: "notice", affectsTurn: false },
+      { kind: "error", message: `${TRIP}\n注意:这个结论没能写进磁盘` }, retry(RATE_429)]);
+    assert.equal((await traced.api())?.reason, "模型账户额度用完了（429）", "红字之前最后那条错误（子线程的）定类型，警告不算、红字之后的不算");
+
+    // 审查报的那个场景：熔断时最后那条错误没类型，之后主线程或子线程才到一条 429 —— 改不了熔断时的结论。
+    for (const [via, late] of [["主线程", retry(QUOTA_429)], ["子线程", childRetry(QUOTA_429)]] as const) {
+      const s = await tripScene();
+      writeTrace(s, [retry(QUOTA_429), retry("Reconnecting... 2/5"), { kind: "error", message: TRIP }, late]);
+      writeEvents(s, [
+        { id: 1, result: { thread: { id: "parent-thread" } } },
+        { method: "error", params: { threadId: "parent-thread", willRetry: true, error: { message: "Reconnecting... 2/5" } } },
+        via === "主线程"
+          ? { method: "error", params: { threadId: "parent-thread", willRetry: true, error: { message: QUOTA_429 } } }
+          : { method: "error", params: { threadId: "child-thread", willRetry: true, error: { message: QUOTA_429 } } },
+      ]);
+      const cause = await s.api();
+      assert.deepEqual([cause?.reason, cause?.vague], ["回合长时间没有进展，被自动终止", true], `熔断后才到的${via}错误不改写熔断时的类型`);
+    }
+    // 执行过程里找不到那句红字（没落下来）、日志也没有：确认不了边界，不用原始事件末尾那条顶上。
+    const unbounded = await tripScene();
+    writeTrace(unbounded, [retry(QUOTA_429)]);
+    writeEvents(unbounded, [{ method: "error", params: { willRetry: true, error: { message: QUOTA_429 } } }]);
+    assert.deepEqual([(await unbounded.api())?.reason, (await unbounded.api())?.vague], ["回合长时间没有进展，被自动终止", true]);
+    // 别的回合的红字不算这一回合的边界。
+    const otherTurn = await tripScene();
+    appendSessionTrace(otherTurn.taskId, otherTurn.sessId, "2026-11-13T09:00:00.000Z", retry(QUOTA_429) as never);
+    appendSessionTrace(otherTurn.taskId, otherTurn.sessId, "2026-11-13T09:00:00.000Z", { kind: "error", message: TRIP });
+    assert.equal((await otherTurn.api())?.vague, true, "只看这一回合（turnStartedAt）的执行过程");
     // 子智能体线程先报了额度用完、审查者接着干，最后主线程自己出了本地故障退出：说的是主线程那条，
     // 原话也是它的（第 2 轮复审第 1 条）。子线程的 error 和失败的 turn/completed 两个入口都试；主线程
     // 按起线程那一问的应答认，读不出来就按会话行上的 CLI 会话 id 认。
@@ -502,14 +549,6 @@ try {
       assert.deepEqual(await s.api(), { kind: "interrupted", reason: "执行器异常退出（exit 1）", said: PARENT, vague: true },
         `子线程的 ${via} 不算这一轮的执行故障，也不顶替主线程的原话`);
     }
-    // 看门狗熔断时最后那条错误来自子线程：照看门狗口径（穿过子智能体包装）取它的类型。
-    const childTrip = await scene({ diagnostics: KILLED });
-    await settle(childTrip, "failed", 143, null, "15 分钟里只收到重试类错误");
-    writeEvents(childTrip, [
-      { id: 1, result: { thread: { id: "parent-thread" } } },
-      { method: "error", params: { threadId: "child-thread", willRetry: true, error: { message: QUOTA_429 } } },
-    ]);
-    assert.equal((await childTrip.api())?.reason, "模型账户额度用完了（429）", "熔断类型跟看门狗一样穿过子线程包装");
     // 认不出主线程（开头没有应答、会话行也没记）：带线程的终局错误来源不明，不升格成执行故障。
     const unknownMain = await scene({ diagnostics: { ...LIVE_DIAGNOSTICS, failureReason: PARENT, structuredErrors: [PARENT] } });
     await settle(unknownMain, "failed", 1);
