@@ -36,8 +36,9 @@ export async function startPreview(taskId: string, step: PreviewStep, cwd: strin
   }
 }
 
-// 收掉一个任务的预览。reason 非空才往时间线写一行——刷新后仍能看出「预览被收了、
-// 为什么收的」，这是停止/暂停那条规矩的同一条判据。
+// 收掉一个任务的预览。收成了不往时间线写：预览开没开由预览键自己一直显示着，刷新后照样
+// 看得出，会话里再记一句「已回收」是同一件事说第二遍。reason 只用在没收干净时那句提醒里，
+// 传 null 连提醒也不写（调用方自己会把失败往上抛）。
 export async function stopPreview(taskId: string, reason: string | null): Promise<boolean> {
   return (await stopPreviewExcept(taskId, reason, null)).stopped;
 }
@@ -76,9 +77,8 @@ async function stopPreviewExcept(
   let pending = await retryPreviewStops(taskId);
   if (!record) {
     if (!marked) return stopOutcome(pending, false);
-    // 这一段还没有 url、也还没有 pid，能说的只有「取消了一次启动」——但必须说，
-    // 「刷新之后仍看得出我停过」是停止/暂停那条规矩的判据。
-    if (reason) await appendTaskTimeline(taskId, receiptLine(`预览启动已取消（${reason}）${pending.stopped ? "" : `；${pending.message}`}`));
+    // 取消成了不写（预览键回到没开的样子就是那句话）；只有上一趟没收干净时要说一句。
+    if (reason && !pending.stopped) await appendTaskTimeline(taskId, alertLine(`预览启动已取消（${reason}）；${pending.message}`));
     bus.publish({ type: "task.review", taskId });
     return stopOutcome(pending);
   }
@@ -91,8 +91,7 @@ async function stopPreviewExcept(
     pending = await retryPreviewStops(taskId);
   }
   const result = !pending.stopped && pending.reason === "record_error" ? pending : retired.stopped ? pending : retired;
-  if (reason) await appendTaskTimeline(taskId, (result.stopped
-    ? receiptLine(`预览已回收（${reason}）：${record.url ?? record.cmd}`) : alertLine(`${result.message}（${reason}）`)));
+  if (reason && !result.stopped) await appendTaskTimeline(taskId, alertLine(`${result.message}（${reason}）`));
   // 自由工作流状态里的 preview.running 变了就必须发事件：那份快照的版本号只由
   // task.review / task.status 递增，不发的话前端拿到的新快照版本相等，会被当成
   // 「不比现值新」丢掉——按钮就一直停在「关闭预览」上。

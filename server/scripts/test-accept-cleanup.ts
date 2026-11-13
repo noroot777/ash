@@ -371,6 +371,7 @@ try {
     });
     try {
       assert.equal(await stopPreview(s.task.id, "用户关闭预览"), false);
+      assert.match(timeline(s), /（用户关闭预览）/, "没收干净必须在会话里留一句提醒");
       assert.equal(readAnyPreview(s.task.id), null);
       assert.equal(existsSync(link), true, "残留进程退出前保留依赖软链");
       assert.equal(previewState(s.task.id).running, false);
@@ -508,6 +509,8 @@ try {
       const result = await accept(s.task.id);
       assert.equal(result.accepted, true, JSON.stringify(result));
       assert.throws(() => process.kill(-parent.pid!, 0), "忽略 TERM 的孤儿进程组必须退出后才能删目录");
+      const log = existsSync(join(root, "runs", s.task.id, `${s.task.projectId}.md`)) ? timeline(s) : "";
+      assert.doesNotMatch(log, /预览已回收/, "验收前回收成功不往会话里写记录");
       assert.equal(existsSync(s.path), false);
     } finally { killTree(parent.pid!, "SIGKILL"); }
     console.log("✓ dead preview leader does not bypass waiting for its TERM-resistant process group");

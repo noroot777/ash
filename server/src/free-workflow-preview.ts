@@ -15,7 +15,6 @@ import { workspacePreviewDirectory, workspacePreviewInput } from "./preview-work
 import { isMultiUser } from "./auth/mode.js";
 import { previewState } from "./preview-public.js";
 import { isTurnClaimed } from "./runs.js";
-import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { readPreview, readPreviewLog, isPreviewStarting, startPreview, stopPreview, beginPreviewStart, endPreviewStart, previewStartCanceled, PREVIEW_CANCELED, type PreviewStep } from "./preview.js";
 import { rerunGateClosed } from "./rerun-gate.js";
@@ -70,9 +69,9 @@ async function startFreePreview(taskId: string, input?: WorkspacePreviewInput) {
     if (busyGate()) throw new Error("任务正在修改代码，结束后再打开预览");
     const config = input?.config ?? (input?.command ? null : parsePreviewConfig(project.previewConfig ?? null));
     const selected = config?.mode === "services" ? config.services.filter((s) => s.enabled) : undefined;
-    const { command, source } = selected
-      ? { command: selected.map((s) => s.command).join("\n\n"), source: "configured" }
-      : resolvePreviewCommand(workspace.path, input?.command ?? project.previewCommand);
+    const command = selected
+      ? selected.map((s) => s.command).join("\n\n")
+      : resolvePreviewCommand(workspace.path, input?.command ?? project.previewCommand).command;
     const proxy = !!input || previewProxyEnabled(config?.proxy, await isMultiUser());
     // 起多大一摊照**项目配置**来，别在这儿替项目宣称意图。这里曾经写死 `"frontend"`：
     // 自由预览于是永远只起前端、`/api` 接回本机这台 ash，用户改完后端来预览里验，看到的
@@ -91,25 +90,19 @@ async function startFreePreview(taskId: string, input?: WorkspacePreviewInput) {
     };
     const result = await startPreview(taskId, step, workspace.path, gen, { services: selected, primaryServiceId: config?.primaryServiceId, proxy });
     if (!result.ok) throw new Error(result.reason);
-    // **起来了不等于还是我们的。** 从这里到 200 之间还有一个 await（写时间线），用户点的
-    // 关闭、重跑回收都可能落在这条缝里：进程被杀、记录被删，而这一趟手里攥着的还是那份旧
-    // record。就那么返回，用户会收到一句「预览已打开」外加一个已经死掉的地址（前端拿 200
-    // 就 window.open），比直接说没起来还糟。
+    // **起来了不等于还是我们的。** startPreview 那个 await 里，用户点的关闭、重跑回收都可能
+    // 落进来：进程被杀、记录被删，而这一趟手里攥着的还是那份旧 record。就那么返回，前端会
+    // 提示「预览已打开」并打开一个已经死掉的地址（拿 200 就 window.open），比直接说没起来还糟。
     //
     // 三样一起认：代号还在（没被取消）、盘上那条记录还是我们这一代、开跑那道门没关上
     // （管的是「记录刚被收、状态还没落库」那条缝）。
-    const mine = () => !previewStartCanceled(gen) && readPreview(taskId)?.gen === gen && !busyGate();
-    if (!mine()) throw new Error(PREVIEW_CANCELED);
-    // 预览只是「随手开一眼」：时间线留一行让刷新后仍看得见，但不进「实际工作流」那条
-    // 线——开关预览不改变任务本身走到了哪一步。命令是哪儿来的也写上：填过的那条跑错了
-    // 要去项目设置改，认出来的那条跑错了是另一回事。
-    await appendTaskTimeline(
-      taskId,
-      receiptLine(`自由工作流预览已打开（${input ? "预览指正" : source === "configured" ? "项目预览设置" : "自动识别"}：${command}）：${previewState(taskId).url ?? command}`),
-    );
-    if (!mine()) throw new Error(PREVIEW_CANCELED);
-    bus.publish({ type: "task.review", taskId });
-    return result.record;
+    //
+    // 起来了不往时间线写：预览开着由预览键和它旁边的服务链接一直显示着，会话里再记一句是第三遍。
+    if (!previewStartCanceled(gen) && readPreview(taskId)?.gen === gen && !busyGate()) {
+      bus.publish({ type: "task.review", taskId });
+      return result.record;
+    }
+    throw new Error(PREVIEW_CANCELED);
   } finally {
     endPreviewStart(taskId, gen);
     releaseFreeWorkflowAction(taskId, holder);

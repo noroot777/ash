@@ -271,7 +271,8 @@ async function testPendingAcceptance(root: string): Promise<void> {
         assert.equal(resumed.accepted, true, JSON.stringify(resumed));
         if (later) {
           assert.equal(isPidAlive(later.pid!), false);
-          assert.ok(readFileSync(join(dir, `${id}.md`), "utf8").includes("预览已回收（验收清理工作区前回收预览）：http://localhost:12345/"));
+          const transcript = join(dir, `${id}.md`);
+          assert.doesNotMatch(existsSync(transcript) ? readFileSync(transcript, "utf8") : "", /预览已回收/, "验收前回收成功不往会话里写记录");
         }
         assert.equal(existsSync(workspace.path), false);
       } else {

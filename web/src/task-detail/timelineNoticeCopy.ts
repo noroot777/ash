@@ -254,3 +254,18 @@ export function noticeView(item: NoticeSource, context: NoticeContext = {}): Not
 export function turnFailureView(raw: string): NoticeView {
   return view("alert", "bad", "failure", "这一轮异常结束", raw);
 }
+
+/**
+ * 预览开了、起了、收了、启动被取消——服务端已经不再写这几句（预览开没开由预览键和它旁边的
+ * 链接一直显示着，会话里再记一句是同一件事说第三遍），这里认的是之前落盘的那些老记录：
+ * 不进尾注、不进「N 条记录」、不算条数。只认服务端当时写死的起头（「自由工作流预览已打开：」
+ * 是更早那版不带命令来源的写法）。
+ *
+ * 留着的两种：「预览启动已取消（…）；<原因>」后半句说的是上一趟没收干净；「预览已回收：……
+ * 的进程已自行退出」是更早那版报服务挂了的话，不是关掉成功。
+ */
+const PREVIEW_LIFECYCLE = /^(?:自由工作流预览已打开[（：]|预览已起：|预览已回收（)|^预览启动已取消（[^）]*）$/;
+
+export function isPreviewLifecycleNotice(text: string): boolean {
+  return PREVIEW_LIFECYCLE.test(text.replace(/^〔系统〕/, "").trim());
+}

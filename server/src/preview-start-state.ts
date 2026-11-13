@@ -62,8 +62,7 @@ const onCancel = new Map<string, () => void>();
  * 标记的同时**把它从 starting 里摘掉**，两件事得分开表达：`canceledGens` 是给在跑的那趟
  * 自己看的墓碑（它下一个检查点凭这个退出，所以要一直留到它真的结束），`starting` 是对外
  * 说「这个任务正在起预览」的那句话 —— 已经取消掉的一代继续算在里面，用户就会在收到
- * 「已取消」之后刷新出一颗「关闭预览」，再点一次还照样回一句「停到了」，时间线上多出
- * 第二条「预览启动已取消」。
+ * 「已取消」之后刷新出一颗「关闭预览」，再点一次还照样回一句「停到了」。
  */
 export function cancelDriving(taskId: string, exceptGen: string | null): number {
   const gens = starting.get(taskId);

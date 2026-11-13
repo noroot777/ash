@@ -11,7 +11,7 @@ import type { ConversationItem } from "./conversationModel.ts";
 import { DeleteMessageButton } from "./MessageDelete.tsx";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 import { conflictFiles, isConflictHandoff, systemPromptBody, systemPromptSummary, systemPromptTitle } from "./systemNoticeModel.ts";
-import { noticeView, type NoticeView } from "./timelineNoticeCopy.ts";
+import { isPreviewLifecycleNotice, noticeView, type NoticeView } from "./timelineNoticeCopy.ts";
 import { noticeTail } from "./turnFootnote.ts";
 
 type EventItem = Extract<ConversationItem, { kind: "event" }>;
@@ -37,6 +37,7 @@ export function CommandReply({ item, view }: { item: EventLike; view: NoticeView
  * 所以删除留在这一句上）。长相跟任务会话里的尾注同一种小灰字。
  */
 export function SystemEventNote({ item, action }: { item: EventLike; action?: ReactNode }) {
+  if (isPreviewLifecycleNotice(item.text)) return null;
   const view = noticeView(item);
   if (view.tier === "reply") return <CommandReply item={item} view={view} />;
   return (
