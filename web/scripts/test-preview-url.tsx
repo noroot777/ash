@@ -17,12 +17,12 @@ assert.equal(browserPreviewUrl("http://localhost:5173/", "http://127.0.0.1:4317/
 assert.equal(browserPreviewUrl("https://preview.example/app/", remotePage), "https://preview.example/app/");
 assert.equal(browserPreviewUrl(path, "invalid page"), path);
 
-const freeText = `自由工作流预览已打开（手动）：${path}`;
-const presetText = `预览已起：${path}（\`npm run dev\`）`;
+const freeText = `预览进程已自行退出：${path}`;
+const presetText = `预览异常：${path} 没有响应（\`npm run dev\`）`;
 const directUrl = "http://localhost:51234/nested/?q=1#part";
 const directExpected = "http://ash.example:51234/nested/?q=1#part";
-const directFree = `自由工作流预览已打开（自动识别：npm run dev）：${directUrl}`;
-const directPreset = `预览已起：${directUrl}（\`npm run dev\`）`;
+const directFree = `预览进程已自行退出：${directUrl}`;
+const directPreset = `预览异常：${directUrl} 没有响应（\`npm run dev\`）`;
 for (const text of [freeText, presetText]) {
   assert.equal(previewNoticeText(text, remotePage), text.replace(path, expected));
 }
@@ -31,16 +31,16 @@ for (const text of [directFree, directPreset]) {
   assert.equal(previewNoticeText(text, "http://localhost:4317/"), text, "本地入口保留直连回环地址");
 }
 for (const host of ["localhost", "LOCALHOST", "127.0.0.1", "0.0.0.0", "[::1]", "[::]"]) {
-  assert.equal(previewNoticeText(`预览已起：https://${host}:51234/`, remotePage), "预览已起：https://ash.example:51234/");
+  assert.equal(previewNoticeText(`预览进程已自行退出：https://${host}:51234/`, remotePage), "预览进程已自行退出：https://ash.example:51234/");
 }
-assert.equal(previewNoticeText("预览已起：http://localhost:51234（启动成功）", remotePage), "预览已起：http://ash.example:51234/（启动成功）");
-assert.equal(previewNoticeText("预览已起：http://localhost:51234/。", remotePage), "预览已起：http://ash.example:51234/。");
+assert.equal(previewNoticeText("预览进程已自行退出：http://localhost:51234（npm run dev）", remotePage), "预览进程已自行退出：http://ash.example:51234/（npm run dev）");
+assert.equal(previewNoticeText("预览进程已自行退出：http://localhost:51234/。", remotePage), "预览进程已自行退出：http://ash.example:51234/。");
 assert.equal(previewNoticeText(directFree, "http://192.168.1.8:4317/"), directFree.replace("localhost", "192.168.1.8"));
 assert.equal(previewNoticeText(directFree, "http://[2001:db8::8]:4317/"), directFree.replace("localhost", "[2001:db8::8]"));
 for (const url of ["http://localhost.example:51234/", "http://127.0.0.10:51234/", "http://localhost@external.example/"]) {
-  assert.equal(previewNoticeText(`预览已起：${url}`, remotePage), `预览已起：${url}`, "不改写回环名称的非回环前缀");
+  assert.equal(previewNoticeText(`预览进程已自行退出：${url}`, remotePage), `预览进程已自行退出：${url}`, "不改写回环名称的非回环前缀");
 }
-assert.equal(previewNoticeText(`预览已起：${expected}`, remotePage), `预览已起：${expected}`);
+assert.equal(previewNoticeText(`预览进程已自行退出：${expected}`, remotePage), `预览进程已自行退出：${expected}`);
 assert.equal(previewNoticeText("无关路径：/api/tasks/preview-task/log", remotePage), "无关路径：/api/tasks/preview-task/log");
 assert.equal(previewNoticeText(`${path}\n${path}`, remotePage), `${expected}\n${expected}`);
 

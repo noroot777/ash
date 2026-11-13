@@ -636,7 +636,7 @@
    来处理」，长得不一样只会让人以为是两类东西。多出来的只有红色那一档：线上画着「合并
    并清理」时，强制通过会连带把合并做掉，按钮得先红给人看。 */
 .wf-vactions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
-.wf-vactions > button {
+.wf-vactions > :is(button, a.reply-act) {
   display: inline-flex;
   height: 27px;
   align-items: center;
@@ -649,7 +649,8 @@
   font-size: var(--t-xs);
   font-weight: var(--w-medium);
 }
-.wf-vactions > button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.wf-vactions > :is(button:not(:disabled), a.reply-act):hover { background: var(--raised); color: var(--ink); }
+.wf-vactions > .preview-service-links { margin-top: 0; padding: 0; }
 .wf-vactions > button:disabled { opacity: .55; cursor: not-allowed; }
 .wf-vactions > button.is-primary { border-color: var(--action); background: var(--action); color: var(--on-action); }
 .wf-vactions > button.is-danger { border-color: var(--red); background: var(--red); color: #fff; }

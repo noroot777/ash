@@ -133,13 +133,8 @@ async function runPreview(task: TaskRow, step: PreviewStep, workspace?: { input:
     ...(authority ? { beforeStart: () => withReviewAuthority(authority, async () => {}) } : {}),
     services, primaryServiceId: config?.primaryServiceId, proxy: !!workspace || previewProxyEnabled(project?.previewConfig?.proxy, await isMultiUser()),
   });
-  if (result.ok) {
-    await appendTaskTimeline(
-      task.id,
-      receiptLine(`预览已起：${previewState(task.id).url ?? `端口 ${result.record.port}`}（\`${step.p.cmd}\`）`),
-    );
-    return { ok: true };
-  }
+  // 起来了不往时间线写：站点状态和地址在线路图上、预览键旁边一直看得见。
+  if (result.ok) return { ok: true };
   await appendTaskTimeline(task.id, alertLine(`预览没起来（\`${step.p.cmd}\`）\n${result.reason}`));
   return { ok: false, failed: step, reason: result.reason };
 }
@@ -412,7 +407,7 @@ async function restartPreviewStep(taskId: string, stepId?: string | null, input?
         : steps.length ? "这条线上不止一站「打开预览」，得说清楚重启哪一站" : "这条线上没有「打开预览」这一站",
     };
   }
-  // 直接复用线自己跑这一站的那条路：成败两种时间线都由它写，刷新后仍看得见。
+  // 直接复用线自己跑这一站的那条路：没起来的那句时间线由它写。
   const result = await runPreview(task, step, input && gen ? { input, gen } : undefined, gen);
   if (!result.ok) return { ok: false, reason: result.reason ?? "预览没起来", code: "failed" };
   if (gen && (previewStartCanceled(gen) || rerunGateClosed(taskId) || readPreview(taskId)?.gen !== gen)) throw new Error(PREVIEW_CANCELED);

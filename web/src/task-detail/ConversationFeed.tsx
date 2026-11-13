@@ -26,7 +26,7 @@ import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import type { ReviewTarget } from "../review/reviewTarget.ts";
 import { CommandReply, SystemAuthoredMessage } from "./SystemNotice.tsx";
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
-import { noticeView, type NoticeContext } from "./timelineNoticeCopy.ts";
+import { isPreviewLifecycleNotice, noticeView, type NoticeContext } from "./timelineNoticeCopy.ts";
 import { FootnoteLine } from "./FootnoteLine.tsx";
 import { ReviewVerdict } from "./ReviewVerdict.tsx";
 import { footnoteKey, receiptsKey, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
@@ -464,6 +464,8 @@ export function ConversationFeed({
     if (item.kind === "user") {
       return <UserMessage key={keys.get(item.id) ?? item.id} item={item} preserveSystemStyle={preserveSystemStyle} onReuse={onReuseInput} />;
     }
+    // 辩论兜底那一路不经过 conversationSystemRows，预览开关那几种老记录在这里同样拿掉。
+    if (isPreviewLifecycleNotice(item.text)) return null;
     if (preserveSystemStyle) {
       return (
         <p

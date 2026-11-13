@@ -80,8 +80,9 @@ export async function testPreviewStopLinks(root: string): Promise<void> {
         assert.equal(await stopPreview(id, "用户关闭预览"), true, "当前代退出后重新核对历史依赖记录，本次关闭应直接成功");
         assert.equal(hasPendingPreviewStops(id), false, "关闭完成即释放已无人使用的历史资源，无需再点关闭或等清扫");
         assert.equal(readAnyPreview(id), null);
-        const log = readFileSync(join(dir, `${id}.md`), "utf8");
-        assert.ok(log.includes(`预览已回收（用户关闭预览）：${url}`), "成功时间线包含被关闭的预览地址");
+        const transcript = join(dir, `${id}.md`);
+        const log = existsSync(transcript) ? readFileSync(transcript, "utf8") : "";
+        assert.doesNotMatch(log, /预览已回收/, "关闭成功不往会话里写记录");
         assert.doesNotMatch(log, /依赖仍被其他预览进程使用/);
         assert.equal(existsSync(link), false);
         assert.equal(isPidAlive(newer.pid!), false);

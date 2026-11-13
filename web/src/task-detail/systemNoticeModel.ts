@@ -33,7 +33,7 @@ export function conflictFiles(text: string): string[] {
 }
 
 export function conflictContextEvent(text: string): boolean {
-  return /^开始验收[：:]|^验收未完成[：:].*冲突|^冲突交接[：:]|^预览已回收|卡在「?合并(?:并清理)?」?这一站/.test(text);
+  return /^开始验收[：:]|^验收未完成[：:].*冲突|^冲突交接[：:]|卡在「?合并(?:并清理)?」?这一站/.test(text);
 }
 
 /**

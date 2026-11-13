@@ -84,9 +84,9 @@ try {
     assert.equal(lastPreview(taskId)?.services?.[0]?.status, "failed", "自行退出的归档记录应当是 failed");
   }
 
-  // ② 用户主动关闭：杀进程那一下同样会触发看门狗，但它是**我们下的手**。时间线上只该留下
-  //    「预览已回收（用户关闭了…）」这一句，归档记录也得写成 stopped —— 界面上那个服务
-  //    因此显示「已停止」而不是红色的「失败」。
+  // ② 用户主动关闭：杀进程那一下同样会触发看门狗，但它是**我们下的手**。会话里一个字都
+  //    不该多（收成了不写，预览开没开由预览键显示），归档记录也得写成 stopped —— 界面上
+  //    那个服务因此显示「已停止」而不是红色的「失败」。
   {
     const taskId = "user-stop-task";
     const session = await seedSession(taskId);
@@ -98,9 +98,9 @@ try {
       // stopPreview 是等到进程确认退出才返回的（退出事件此刻已经排在队列里），再放一手让它跑完。
       await sleep(300);
       const text = timeline(taskId, session);
-      assert.match(text, /预览已回收（用户关闭了自由工作流预览）/, "主动关闭必须在时间线上留一句");
       assert.doesNotMatch(text, /预览异常/, "用户主动关掉的预览被报成了异常");
       assert.doesNotMatch(text, /自行退出/, "我们自己杀的进程被说成了「自行退出」");
+      assert.equal(text, "", `关闭成功了，会话里却多出了记录：${text}`);
       assert.equal(lastPreview(taskId)?.services?.[0]?.status, "stopped", "主动关闭的归档记录不该是 failed");
     } finally {
       killGroup(result.record.pid);
