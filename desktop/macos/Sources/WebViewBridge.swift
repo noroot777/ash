@@ -20,8 +20,19 @@ extension BrowserWindowController: WKNavigationDelegate, WKUIDelegate, WKDownloa
       return
     }
     let scheme = url.scheme?.lowercased() ?? ""
-    if ["about", "blob", "data"].contains(scheme) || AshConfig.isSameOrigin(url) {
+    if ["about", "blob", "data"].contains(scheme) || (AshConfig.isSameOrigin(url) && !AshConfig.isLocal) {
       decisionHandler(.allow)
+      return
+    }
+    if AshConfig.isSameOrigin(url) {
+      // 本机地址：端口上可能已经换了人，放行之前认一次（见 BrowserWindowController 的 instanceLost）。
+      AshHealth.probe { probe in
+        DispatchQueue.main.async { [weak self] in
+          if AshHealth.isServing(probe) { return decisionHandler(.allow) }
+          decisionHandler(.cancel)
+          self?.instanceLost()
+        }
+      }
       return
     }
     // 外站、预览地址、mailto: 之类一律交给系统默认程序，壳里只留 ash 自己。

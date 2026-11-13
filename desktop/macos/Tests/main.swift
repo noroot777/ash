@@ -82,6 +82,9 @@ if mode == "reclaim" {
 if mode == "chrome" {
   runWindowChromeProbe()
 }
+if mode == "guard" {
+  runInstanceGuardProbe(mode: CommandLine.arguments[2])
+}
 
 let destination = URL(fileURLWithPath: CommandLine.arguments[2])
 if mode == "pending" {

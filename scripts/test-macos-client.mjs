@@ -4,7 +4,7 @@
 //
 // 覆盖：下载事务；红绿灯下的页面；「端口上是谁」的判据（自己那份 / 别的 ash / 不是 ash）；空数据根
 // 不起服务、首启选了才起；起服务用自带 node、数据根/端口/本机自用开关传对（终端配置盖不掉）、不漏启动器自己的变量；
-// 别的 ash 或别的程序占着端口时不起、说清是谁；并发起服务只起一份；锁超时与重试；请求合并；
+// 别的 ash 或别的程序占着端口时不起、说清是谁；窗口在线后端口换了人就撤下页面（导航与定时两道）；并发起服务只起一份；锁超时与重试；请求合并；
 // 进程起来就退时不干等；应答的 PID 对不上不算；启动器报错可见；运行时缺件；导入旧数据（WAL 里
 // 没落盘的写入也带过来、在暂存里洗过再发布、和起服务同一把锁、只往空数据根里放、失败与抢跑不留
 // 痕迹、上次发布到一半的残留先收掉、只复制不动源、互相包含与多人库拒绝、锁与缓存不搬）。
@@ -38,9 +38,11 @@ symlinkSync(process.execPath, join(runtime, "node/bin/node"));
 copyFileSync(join(root, "scripts/start-detached.mjs"), join(runtime, "scripts/start-detached.mjs"));
 
 const build = spawnSync("swiftc", ["-swift-version", "5",
-  ...["AshConfig", "AshHealth", "DataImport", "DownloadTransaction", "ServerStartLock", "ServerLauncher", "WindowChrome"]
+  ...["AshConfig", "AshHealth", "DataImport", "DownloadTransaction", "ServerStartLock", "ServerLauncher", "WindowChrome",
+    "BrowserWindowController", "WebViewBridge", "LaunchFlow", "OfflineView", "HostMcpSetup"]
     .map((name) => join(root, `desktop/macos/Sources/${name}.swift`)),
-  ...["main", "WindowChromeProbe"].map((name) => join(root, `desktop/macos/Tests/${name}.swift`)), "-o", binary], { encoding: "utf8" });
+  ...["main", "WindowChromeProbe", "InstanceGuardProbe"].map((name) => join(root, `desktop/macos/Tests/${name}.swift`)),
+  "-o", binary], { encoding: "utf8" });
 assert.equal(build.status, 0, build.stderr);
 
 async function freePort() {
@@ -237,6 +239,48 @@ try {
   });
   assert.equal(await probe(200, ""), "DOWN", "nobody listening");
   console.log("PASS: own instance is recognised by data root + bundled code + local-only; another ash or a non-ash on the port is reported, never joined");
+
+  // ── 窗口在线之后端口换了人：刷新那一下拦住；什么都不点也会被定时认人撤下；换回来回到原路由 ──
+  let occupant = "ours";
+  const foreignPages = [];
+  await withResponder(port, (request, response) => {
+    const ours = occupant === "ours";
+    if (request.url === "/api/health") {
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ ok: true, pid: ours ? 1 : 4444,
+        instance: ours ? { dataDir: data, codeDir: runtime, localOnly: true } : { dataDir: "/elsewhere", codeDir: "/repo/", localOnly: false } }));
+      return;
+    }
+    if (!ours) foreignPages.push(request.url);
+    response.setHeader("Content-Type", "text/html");
+    response.end(ours ? "<title>OURS</title><script>if(location.pathname==='/')history.replaceState(null,'','/route/abc')</script>"
+      : "<title>FOREIGN</title>");
+  }, async () => {
+    for (const mode of ["reload", "watch"]) {
+      occupant = "ours";
+      foreignPages.length = 0;
+      const guard = spawn(binary, ["guard", mode], { env: { ...process.env, ...env }, stdio: ["pipe", "pipe", "pipe"] });
+      children.add(guard);
+      let out = "";
+      guard.stdout.on("data", (chunk) => { out += chunk; });
+      guard.stderr.on("data", (chunk) => { out += chunk; });
+      const exited = once(guard, "exit");
+      await until(() => out.includes("LOADED"), `guard probe (${mode}) never loaded our page: ${out}`);
+      occupant = "foreign";
+      guard.stdin.write("FLIPPED\n");
+      await until(() => out.includes("BLANKED"), `guard probe (${mode}) never covered the page: ${out}`, 20000);
+      assert.match(out, /BLANKED url=about:blank content=\|\|\n/,
+        `${mode}: the whole page is taken down, nothing of the other ash shown: ${out}`);
+      assert.deepEqual(foreignPages, [], `${mode}: no page load ever reached the other ash`);
+      occupant = "ours";
+      guard.stdin.write("BACK\n");
+      const [status] = await exited;
+      children.delete(guard);
+      assert.equal(status, 0, out);
+      assert.match(out, new RegExp(`RESTORED http://127\\.0\\.0\\.1:${port}/route/abc`), `${mode}: back to the same route: ${out}`);
+    }
+  });
+  console.log("PASS: an online window re-checks the instance on navigation and while idle; another ash taking the port takes the page down, our own coming back restores the route");
 
   // ── 空数据根：无窗口那一档不起，首启选了才起 ──
   serviceSource();

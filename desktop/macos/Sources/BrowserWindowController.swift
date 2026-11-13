@@ -9,6 +9,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   private var chrome: WindowChrome?
   private var observations: [NSKeyValueObservation] = []
   private var healthTimer: Timer?
+  private var guardTimer: Timer?
+  private var guardProbing = false
+  /// 页面因为端口换了人被撤下时停在哪个路由，自己那份回来后回到那里。
+  private var resumeURL: URL?
+  /// 页面在的时候多久认一次人。测试把它调大，单独验导航那一道。
+  static var instanceGuardInterval: TimeInterval = 1
   /// 「正在启动」那一屏晚一点才盖上：服务本来就在时探一下只要几毫秒，不该闪一下。
   var pendingStartingScreen: DispatchWorkItem?
 
@@ -90,12 +96,51 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   func loadPage() {
     stopHealthPolling()
     offlineView.isHidden = true
-    // 失败页之后 webView.url 可能是 nil，此时回首页；正常情况下原地重载保住当前路由。
-    if let url = webView.url, AshConfig.isSameOrigin(url) {
-      webView.load(URLRequest(url: url))
-    } else {
-      webView.load(URLRequest(url: AshConfig.baseURL))
+    // 失败页、撤下后的空白页之后 webView.url 不是 ash 的，此时回到撤下前的路由或首页；正常情况下
+    // 原地重载保住当前路由。
+    let target = [webView.url, resumeURL].compactMap { $0 }.first(where: AshConfig.isSameOrigin) ?? AshConfig.baseURL
+    resumeURL = nil
+    webView.load(URLRequest(url: target))
+    startInstanceGuard()
+  }
+
+  // MARK: 页面在的时候也一直认着人
+
+  /// 窗口只对认过的那一份服务开着页面。导航（刷新、前进后退、页面自己跳转）放行前各认一次
+  /// （WebViewBridge），但已经载好的页面自己发的请求、SSE 不经过导航 —— 端口上的服务换了人，它们
+  /// 就悄悄落到新来的那一份上。所以页面在的时候还要定时认：不是自己那份了就撤掉页面。
+  private func startInstanceGuard() {
+    guard AshConfig.isLocal, guardTimer == nil else { return }
+    guardTimer = Timer.scheduledTimer(withTimeInterval: Self.instanceGuardInterval, repeats: true) { [weak self] _ in
+      self?.checkInstance()
     }
+  }
+
+  func stopInstanceGuard() {
+    guardTimer?.invalidate()
+    guardTimer = nil
+  }
+
+  private func checkInstance() {
+    guard !guardProbing, guardTimer != nil else { return }
+    guardProbing = true
+    AshHealth.probe { probe in
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.guardProbing = false
+        if self.guardTimer != nil && !AshHealth.isServing(probe) { self.instanceLost() }
+      }
+    }
+  }
+
+  /// 端口上不再是认过的那一份：页面连同它的轮询、SSE 一起撤掉（一个请求都不再发给新来的那份），
+  /// 记下路由，回到 loadHome 认一遍 —— 被占着就盖上说明，自己那份回来了再载回去。
+  func instanceLost() {
+    stopInstanceGuard()
+    if let url = webView.url, AshConfig.isSameOrigin(url) { resumeURL = url }
+    webView.stopLoading()
+    webView.loadHTMLString("", baseURL: nil)
+    loadHome()
   }
 
   /// 后台每 2 秒探一次 /api/health，自己那份通了就载回去 —— 服务也可能是别处（登录项、

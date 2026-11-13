@@ -6,12 +6,14 @@ extension BrowserWindowController {
   /// 连别处的 ash 时直接载。
   func loadHome() {
     stopHealthPolling()
+    stopInstanceGuard()
     guard AshConfig.isLocal else { loadPage(); return }
     connect()
   }
 
   /// 页面载不进来（导航失败）。本机地址重走一遍 connect —— 服务可能挂了，也可能端口换了人。
   func showOffline(_ error: Error) {
+    stopInstanceGuard()
     if AshConfig.isLocal { connect(); return }
     offlineView.show(title: "连不上 \(AshConfig.baseURL.absoluteString)",
                      detail: "\(error.localizedDescription)\n服务起来后会自动载入。",
