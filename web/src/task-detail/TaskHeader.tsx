@@ -297,6 +297,9 @@ export function TaskHeader({
             <button type="button" role="menuitem" onClick={() => void copy(taskUrl, "已复制任务链接")}>
               <Copy size={14} />复制任务链接
             </button>
+            <button type="button" role="menuitem" onClick={() => void copy(task.id, "已复制任务 ID")}>
+              <Copy size={14} />复制任务 ID
+            </button>
             {canMarkDone && onMarkDone && <span role="separator" />}
             {canMarkDone && onMarkDone && (
               <button type="button" role="menuitem" onClick={() => { setMenu(false); onMarkDone(); }}>
