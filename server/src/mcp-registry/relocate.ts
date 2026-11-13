@@ -12,13 +12,12 @@
 //   ① 改写:命令或任一参数的**整个值**就是一条 ash 脚本路径 → 换成当前这一份(位置、启动器都不限);
 //      命令本身就是那个脚本 → 改成「node + 当前入口」。涉及 ash 脚本时,跑不起来的 node 换成能跑的,
 //      用户自己挑的能用就不动。
-//   ② 收口:改写之后,启动方式里只要还看得见**不是当前这一份**的 ash 脚本路径(嵌在 `--require=…`、
-//      `sh -c "node …"` 这类参数里,无法安全改写)→ 登记失败并说清该改成什么。不发布一条已知会失效、
-//      还报成功的登记。
+//   ② 收口:改写之后,**要发布的那整条**(启动方式、env、cwd……JSON 的每个字符串值,TOML 的每条语句)
+//      里每一处 ash 脚本提及都必须**恰好是**当前入口的一次完整出现;剩下任何一处(嵌在 `--require=…`、
+//      `sh -c "…"`、`NODE_OPTIONS` 里,或者跟当前入口写在同一个值里——第 5 轮审查:「值里出现过当前
+//      入口」证明不了「没有旧入口」)→ 登记失败并说清该改成什么。不发布一条已知会失效、还报成功的登记。
 import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
-import { resolve } from "node:path";
 import { scanCodexToml, tomlPairSpans } from "../codex-toml.js";
-import { boundaryKey } from "../platform.js";
 import type { AshMcpNameFact } from "./types.js";
 
 export interface RelocateTarget {
@@ -48,8 +47,26 @@ function isAshScript(value: unknown): value is string {
   return !/\s([-~\\/]|[a-z]:[\\/])/i.test(value);
 }
 
-/** 值里**提到了** ash 脚本路径(可能嵌在别的写法里)。 */
-const MENTIONS_ASH_SCRIPT = /mcp[\\/]dist[\\/]index\.js/i;
+/** ash 脚本的提及:`…/mcp/dist/index.js`,以及 node 会解析到它的目录写法 `…/mcp/dist`。 */
+const SCRIPT_MENTION = /mcp[\\/]dist(?:[\\/]index\.js(?![\w.-])|[\\/]?(?![\w.\\/-]))/i;
+/** 当前入口的一次「完整出现」两侧必须是这些字符(或者值的两端),否则它只是一条更长路径的一截。 */
+const OPEN = /[\s"'`=(,;&|]/;
+const CLOSE = /[\s"'`),;&|]/;
+
+/** 文本里有没有不是当前入口的 ash 脚本提及:当前入口的每一次完整出现先抹掉,再看还剩没有。 */
+function staleIn(text: string, entry: string): boolean {
+  let rest = "";
+  let from = 0;
+  for (let at = text.indexOf(entry); at !== -1; at = text.indexOf(entry, at + 1)) {
+    const end = at + entry.length;
+    const whole = (at === 0 || OPEN.test(text[at - 1]!)) && (end === text.length || CLOSE.test(text[end]!));
+    if (whole && at >= from) {
+      rest += `${text.slice(from, at)} `;
+      from = end;
+    }
+  }
+  return SCRIPT_MENTION.test(rest + text.slice(from));
+}
 
 const isNodeRunner = (command: string): boolean =>
   /^(node|nodejs)$/i.test((command.split(/[\\/]/).pop() ?? "").replace(/\.exe$/i, ""));
@@ -58,7 +75,9 @@ export function relocateHostFact(fact: AshMcpNameFact | null, to: RelocateTarget
   if (!fact) return { fact };
   if (fact.raw) {
     const raw = relocateRaw(fact.raw, to);
-    return typeof raw === "string" ? { why: raw } : { fact: { ...fact, raw } };
+    if (typeof raw === "string") return { why: raw };
+    const left = staleField(raw, to.entry);
+    return left ? { why: unmovable(`${left} 还引用着旧的 ash 脚本`, null, to) } : { fact: { ...fact, raw } };
   }
   if (fact.block) {
     // 截出来的那段跟扫整份文件得到的启动方式对不上(启动字段写在表头之外),而后者提到了旧的 ash
@@ -70,7 +89,9 @@ export function relocateHostFact(fact: AshMcpNameFact | null, to: RelocateTarget
       return { why: unmovable("宿主那条的启动字段不全在 [mcp_servers.ash] 表里", null, to) };
     }
     const block = relocateTomlBlock(fact.block, to);
-    return "why" in block ? { why: block.why } : { fact: { ...fact, block: block.text } };
+    if ("why" in block) return block;
+    const left = staleStatement(block.text, to.entry);
+    return left ? { why: unmovable(`${left} 还引用着旧的 ash 脚本`, null, to) } : { fact: { ...fact, block: block.text } };
   }
   return { fact };
 }
@@ -80,8 +101,8 @@ export function relocateHostFact(fact: AshMcpNameFact | null, to: RelocateTarget
  * 不变量 ②:改写不了的提及 → 字符串(给用户看的原因)。
  */
 export function relocateLaunch(launch: Launch, to: RelocateTarget): Launch | null | string {
-  const current = (value: string) => boundaryKey(resolve(value)) === boundaryKey(resolve(to.entry));
-  const stale = (value: unknown): value is string => isAshScript(value) && !current(value);
+  // 指着当前这份、只是写法不同(`./`、大小写)的也统一写成 to.entry:收口那一道按字面比对。
+  const stale = (value: unknown): value is string => isAshScript(value) && value !== to.entry;
   let { command, args } = launch;
   let touched = false;
   if (stale(command)) {
@@ -104,10 +125,43 @@ export function relocateLaunch(launch: Launch, to: RelocateTarget): Launch | nul
 const sameLaunch = (a: { command?: string | null; args?: unknown } | undefined, b: { command?: string | null; args?: unknown }) =>
   a?.command === b.command && JSON.stringify(a?.args ?? null) === JSON.stringify(b.args ?? null);
 
-/** 改写之后还看得见的、不是当前这一份的 ash 脚本提及。 */
+/** 改写之后启动方式里还看得见的、不是当前这一份的 ash 脚本提及。 */
 function staleMention(launch: Launch, to: RelocateTarget): string | null {
   for (const value of [launch.command, ...launch.args]) {
-    if (typeof value === "string" && MENTIONS_ASH_SCRIPT.test(value) && !value.includes(to.entry)) return value;
+    if (typeof value === "string" && staleIn(value, to.entry)) return value;
+  }
+  return null;
+}
+
+/** JSON 族要发布的那整条里,第一个还引用着旧 ash 脚本的字符串值(返回它的字段路径)。 */
+function staleField(value: unknown, entry: string, path = ""): string | null {
+  if (typeof value === "string") return staleIn(value, entry) ? path || "登记" : null;
+  if (Array.isArray(value)) {
+    for (const [i, item] of value.entries()) {
+      const hit = staleField(item, entry, `${path}[${i}]`);
+      if (hit) return hit;
+    }
+  } else if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      const hit = staleField(item, entry, path ? `${path}.${key}` : key);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+/**
+ * TOML 族要发布的那段里,第一条还引用着旧 ash 脚本的语句。按语句范围看,注释行不算;
+ * 扫描器读不全的那段整段都算。
+ */
+function staleStatement(block: string, entry: string): string | null {
+  const spans = tomlPairSpans(block);
+  if (!spans) return staleIn(block, entry) ? "宿主那段 TOML" : null;
+  const lines = block.split("\n");
+  for (const span of spans) {
+    if (staleIn(lines.slice(span.first, span.last + 1).join("\n"), entry)) {
+      return `[${span.table.join(".")}] 里的 ${span.path.join(".")}`;
+    }
   }
   return null;
 }
@@ -136,12 +190,9 @@ function relocateTomlBlock(block: string, to: RelocateTarget): { text: string } 
   const commandSpan = inMain("command");
   const argsSpan = inMain("args");
   const command = spec?.command;
-  // 读不全启动方式(没有 command、或者 args 写着却不是字符串数组):不知道该怎么改。提到了旧的
-  // ash 脚本就不能照搬;没提到的跟 ash 的安装位置无关,原样留着。
-  if (!command || !spans || (argsSpan.length && !Array.isArray(spec.args))) {
-    const mention = MENTIONS_ASH_SCRIPT.test(block) && !block.includes(to.entry);
-    return mention ? { why: unmovable("宿主那段 TOML 的启动方式读不全", null, to) } : { text: block };
-  }
+  // 读不全启动方式(没有 command、或者 args 写着却不是字符串数组):不知道该怎么改,原样交回去,
+  // 里面还引用着旧的 ash 脚本的话由收口那一道拦下。
+  if (!command || !spans || (argsSpan.length && !Array.isArray(spec.args))) return { text: block };
   const next = relocateLaunch({ command, args: (spec.args as string[] | null | undefined) ?? [] }, to);
   if (typeof next === "string") return { why: next };
   if (!next) return { text: block };

@@ -179,6 +179,16 @@ const requireOpt = await bench("require",
 const embedded = await bench("embedded",
   { command: "sh", args: ["-c", "exec node /old-checkout/mcp/dist/index.js"] },
   '[mcp_servers.ash]\\ncommand = "sh"\\nargs = ["-c", "exec node /old-checkout/mcp/dist/index.js"]\\n');
+// 同一个值里先拿当前入口做检查、再跑旧入口(第 5 轮审查):出现过当前入口证明不了没有旧入口。
+const current = join(CODE_DIR, "mcp", "dist", "index.js");
+const mixedShell = "node --check " + JSON.stringify(current) + " && exec node /old-checkout/mcp/dist/index.js";
+const mixed = await bench("mixed",
+  { command: "/bin/sh", args: ["-c", mixedShell] },
+  '[mcp_servers.ash]\\ncommand = "/bin/sh"\\nargs = ["-c", ' + JSON.stringify(mixedShell) + ']\\n');
+// 启动方式换干净了,env 里还让 node 预加载旧入口:同样起不来,同样不许发布。
+const nodeOptions = await bench("node-options",
+  { command: "node", args: ["/old-checkout/mcp/dist/index.js"], env: { NODE_OPTIONS: "--require /old-checkout/mcp/dist/index.js" } },
+  '[mcp_servers.ash]\\ncommand = "node"\\nargs = ["/old-checkout/mcp/dist/index.js"]\\n\\n[mcp_servers.ash.env]\\nNODE_OPTIONS = "--require /old-checkout/mcp/dist/index.js"\\n');
 const custom = await bench("custom",
   { type: "http", url: "https://ash.example/mcp" },
   '[mcp_servers.ash]\\ncommand = "/opt/my/ash-mcp"\\nargs = ["--fast"]\\n');
@@ -193,11 +203,20 @@ const unmovable = [
 // 截出来的那段只有 command,扫整份文件得到的启动方式里才有旧脚本(启动字段写在表头之外):不许照搬那一段。
 unmovable.push(relocateHostFact({ status: "on", detail: "", block: '[mcp_servers.ash]\\ncommand = "node"\\n',
   launch: { command: "node", args: ["/old/mcp/dist/index.js"], ashUrl: null } }, to));
+// JSON 族同一道收口:目录写法(node 会解析到 index.js)、当前入口只是更长路径的一截。
+const raw = (entry) => relocateHostFact({ status: "on", detail: "", raw: entry }, to);
+unmovable.push(raw({ command: "node", args: ["/old/mcp/dist"] }));
+unmovable.push(raw({ command: "sh", args: ["-c", "node /x/new/mcp/dist/index.js"] }));
+unmovable.push(raw({ command: "node", args: ["/new/mcp/dist/index.js"], cwd: "/old/mcp/dist" }));
+// 注释里提到旧路径不算引用;能换的照换。
+const commented = relocateHostFact({ status: "on", detail: "",
+  block: '[mcp_servers.ash]\\n# 以前是 /old/mcp/dist/index.js\\ncommand = "node"\\nargs = ["/old/mcp/dist/index.js"]\\n' }, to);
 const L = (command, args) => relocateLaunch({ command, args }, to);
 const out = {
   built: existsSync(join(CODE_DIR, "mcp", "dist", "index.js")),
   entry: join(CODE_DIR, "mcp", "dist", "index.js"), node: mcpNodeCommand(), execPath: process.execPath,
-  tailored, ownNode, multiline, noexec, requireOpt, embedded, custom, opencode: opencode.fact.raw, unmovable,
+  tailored, ownNode, multiline, noexec, requireOpt, embedded, mixed, nodeOptions, custom, opencode: opencode.fact.raw,
+  unmovable, commented,
   shapes: [
     L("node", ["--require", "/x/boot.cjs", "/old/mcp/dist/index.js"]),
     L("node", ["-r", "/x/boot.cjs", "--inspect", "/old/mcp/dist/index.js", "--x"]),
@@ -210,10 +229,12 @@ const out = {
     L("node", ["/Users/me/My Projects/ash/mcp/dist/index.js"]),
     L("cmd", ["/c", "C:\\\\node\\\\node.exe C:\\\\old\\\\mcp\\\\dist\\\\index.js"]),
     L("node", ["NODE_X=/old/mcp/dist/index.js"]),
+    L("node", ["/new/./mcp/dist/index.js"]),
   ],
 };`) as Record<string, any>;
   // 认脚本只看「整个值是不是一条 ash 脚本路径」,不解析 argv:位置、前面的选项、启动器都不限。
-  const [req, withOpts, bare, launcher, unrelated, current, eqForm, shell, spaced, winShell, assign] = moved.shapes;
+  const [req, withOpts, bare, launcher, unrelated, current, eqForm, shell, spaced, winShell, assign, dotted] = moved.shapes;
+  assert.deepEqual(dotted.args, ["/new/mcp/dist/index.js"], "指着当前这份但写法不同:统一成当前入口的写法");
   assert.deepEqual(req, { command: "/new/runtime/node", args: ["--require", "/x/boot.cjs", "/new/mcp/dist/index.js"] },
     "--require <文件> 这类带独立取值的选项:取值原样留着,只换脚本");
   assert.deepEqual(withOpts.args, ["-r", "/x/boot.cjs", "--inspect", "/new/mcp/dist/index.js", "--x"]);
@@ -231,8 +252,9 @@ const out = {
   }, "opencode 那种数组写法:只换 node 和入口,别的键原样");
   for (const result of moved.unmovable) {
     assert.ok(typeof result.why === "string" && result.why.includes("/new/mcp/dist/index.js"),
-      `TOML 族改不动就报失败,并说清该改成什么:${JSON.stringify(result)}`);
+      `改不动就报失败,并说清该改成什么:${JSON.stringify(result)}`);
   }
+  assert.ok(moved.commented.fact?.block.includes('args = ["/new/mcp/dist/index.js"]'), `注释不算引用:${JSON.stringify(moved.commented)}`);
   for (const bench of ["tailored", "ownNode", "multiline", "noexec", "requireOpt"]) {
     assert.equal(moved[bench].claude.ok, true, `${bench}:claude`);
     assert.equal(moved[bench].codex.ok, true, `${bench}:codex`);
@@ -267,6 +289,13 @@ const out = {
       assert.match(moved.embedded[family].why, /旧的安装位置/);
     }
     assert.ok(!moved.embedded.claudeEntry, "改不动就什么都不写进新隔离档");
+    for (const [bench, field] of [["mixed", /旧的安装位置/], ["nodeOptions", /NODE_OPTIONS/]] as const) {
+      for (const family of ["claude", "codex"]) {
+        assert.equal(moved[bench][family].ok, false, `${bench}:${family} 还引用着旧入口,不许报成功`);
+        assert.match(moved[bench][family].why, field, `${bench}:${family} 说清是哪一处`);
+      }
+      assert.ok(!moved[bench].claudeEntry && !moved[bench].codexText?.includes("/old-checkout/"), `${bench}:什么都不写`);
+    }
     assert.ok(!moved.embedded.codexText?.includes("/old-checkout/"), "改不动就什么都不写进新隔离档");
   } else {
     console.log("（没 build 过 mcp/dist/index.js：没有当前入口可换，退回原样搬，登记那一半跳过）");
