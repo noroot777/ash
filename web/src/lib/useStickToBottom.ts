@@ -139,7 +139,12 @@ export function useStickToBottom(
       表面漏传哪一个都该当场编译不过,而不是悄悄退化成不跟随。 */
   tailKey: string | number,
   threshold = STICK_TO_BOTTOM_THRESHOLD,
+  /** 读者自己挪了视口(往回看、往下翻、按 End、点回底)。别处替他挪位置的打算(⌘K 落点)
+      听这一个口子作废,不必各自再去认滚轮、触控、按键、滚动条。 */
+  onReaderMove?: () => void,
 ) {
+  const onReaderMoveRef = useRef(onReaderMove);
+  onReaderMoveRef.current = onReaderMove;
   const stuckRef = useRef(true);
   const programmaticScrollRef = useRef(false);
   const userScrollIntentRef = useRef(false);
@@ -219,6 +224,7 @@ export function useStickToBottom(
   }, []);
 
   const noteUserScrollIntent = useCallback((detachFromBottom = true) => {
+    onReaderMoveRef.current?.();
     userScrollIntentRef.current = true;
     detachingUserIntentRef.current = detachFromBottom;
     if (detachFromBottom) {
@@ -256,6 +262,7 @@ export function useStickToBottom(
   }, [scheduleStick]);
 
   const resumeStickToBottom = useCallback(() => {
+    onReaderMoveRef.current?.();
     stuckRef.current = true;
     detachingUserIntentRef.current = false;
     clearUserIntent();

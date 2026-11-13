@@ -179,6 +179,8 @@ export function DuetView({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [title, setTitle] = useState(task.title);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // 完整议题：任务正文画在会话流外面，⌘K 正文命中要在这里落（见 ConversationScrollControls 的 revealRoots）。
+  const topicRef = useRef<HTMLDivElement>(null);
   const { indicatorForTask } = useTaskReadState(allTasks, task.id);
 
   useEffect(() => setTitle(task.title), [task.id, task.title]);
@@ -341,7 +343,7 @@ export function DuetView({
       <ImagePreviewGroup isolated>
         <details className="duet-context">
           <summary>
-            <span className="duet-context-topic"><small>议题</small><b>{topicText}</b></span>
+            <span className="duet-context-topic"><small>议题</small><b data-search-skip="">{topicText}</b></span>
             <span className="duet-context-meta">
               <span className="is-a"><ChatCircle size={12} weight="fill" />{sessionsByRole.voiceA?.executor || config.voiceA}</span>
               <span className="is-b"><ChatTeardrop size={12} weight="fill" />{sessionsByRole.voiceB?.executor || config.voiceB}</span>
@@ -351,7 +353,7 @@ export function DuetView({
             <CaretDown className="duet-context-caret" size={13} weight="bold" />
           </summary>
           <div className="duet-context-details">
-            <div className="duet-context-full-topic">
+            <div className="duet-context-full-topic" ref={topicRef}>
               <small>完整议题</small><h2>{topicText}</h2><MessageAttachments paths={topic.paths} />
             </div>
             <ScheduleControl
@@ -402,7 +404,7 @@ export function DuetView({
           {/* resetKey 只认「换了哪个任务」。以前它还混着 turns.length,于是每开一轮都被
               当成换任务、无条件拽到底 —— 读历史读到一半就被打断(审查 B5)。新一轮该不该
               跟,现在由下面这个内容版本说了算:贴着底就跟,在上面读历史就不动。 */}
-          <ConversationScrollControls scrollRef={scrollRef} resetKey={task.id} inputs={inputs} revealReady={!duet.loading}
+          <ConversationScrollControls scrollRef={scrollRef} resetKey={task.id} inputs={inputs} revealReady={!duet.loading} revealRoots={[topicRef]}
             tailKey={contentVersion(turns, duetTurnSize,
               (turn) => `${turn.round}:${turn.speaker}:${turn.done ? 1 : 0}`)} />
         </div>

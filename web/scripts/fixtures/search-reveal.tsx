@@ -3,11 +3,12 @@
 // 会话外壳不用真的 ConversationFeed（它一挂就去拉接口），用的是同一套类名和同一个
 // ConversationScrollControls：贴底、待办、找词、落点、闪烁全是产品代码。
 // 外面用 `window.fixture` 驱动：挂上 / 卸下会话、正文读完没有、来一段新回复、从 ⌘K 发一张待办。
+// 会话流上面照 duet 那样摆一块折起来的议题：任务正文画在滚动容器外面，靠 revealRoots 交给查找器。
 import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ConversationScrollControls } from "../../src/components/ConversationScrollControls.tsx";
 import { contentVersion } from "../../src/lib/useStickToBottom.ts";
-import { requestSearchReveal } from "../../src/search/searchReveal.ts";
+import { pendingSearchReveal, requestSearchReveal } from "../../src/search/searchReveal.ts";
 import "../../src/styles/global.css";
 
 type Item = { id: string; text: string; fold?: string };
@@ -21,6 +22,8 @@ const seed: Item[] = [
   { id: "process", text: "过程收起来了。", fold: "这里排查了一下旁路通道的残留进程。" },
   ...Array.from({ length: 6 }, (_, index) => ({ id: `tail-${index}`, text: `第 ${index + 7} 段：接着干活。` })),
   { id: "last", text: "最后：编辑器那一块已经改好。" },
+  // İ 小写后长度会变：会话里有它，别的英文词照样不分大小写。
+  { id: "unicode", text: "İstanbul 那台机器上的 MixedCase 配置。" },
 ];
 
 declare global {
@@ -30,15 +33,24 @@ declare global {
       ready: (value: boolean) => void;
       append: () => void;
       request: (taskId: string, query: string, hint: string) => void;
+      pending: (taskId: string) => boolean;
     };
   }
 }
 
+const TOPIC = "议题：讨论一下议题专用词该怎么落地。";
+
 function Feed({ taskId, ready, items }: { taskId: string; ready: boolean; items: Item[] }) {
   const scroll = useRef<HTMLDivElement>(null);
+  const topic = useRef<HTMLDivElement>(null);
   const tailKey = contentVersion(items, (item) => item.text.length, (item) => item.id);
   return (
-    <div className="conversation-scroll-region" data-testid="region">
+    <>
+    <details data-testid="topic">
+      <summary><b data-search-skip="">{TOPIC}</b></summary>
+      <div ref={topic} data-testid="topic-full">{TOPIC}</div>
+    </details>
+    <div className="conversation-scroll-region" data-testid="region" style={{ minHeight: 0, flex: 1 }}>
       <div className="task-conversation" ref={scroll} data-testid="feed">
         {items.map((item) => (
           <article key={item.id} data-item={item.id} className="task-message" style={{ minHeight: 220 }}>
@@ -52,8 +64,9 @@ function Feed({ taskId, ready, items }: { taskId: string; ready: boolean; items:
           </article>
         ))}
       </div>
-      <ConversationScrollControls scrollRef={scroll} resetKey={taskId} tailKey={tailKey} revealReady={ready} />
+      <ConversationScrollControls scrollRef={scroll} resetKey={taskId} tailKey={tailKey} revealReady={ready} revealRoots={[topic]} />
     </div>
+    </>
   );
 }
 
@@ -67,6 +80,7 @@ function Fixture() {
       ready: setReady,
       append: () => setItems((list) => [...list, { id: `new-${list.length}`, text: "又来了一段新回复。" }]),
       request: requestSearchReveal,
+      pending: (taskId) => !!pendingSearchReveal(taskId),
     };
   }, []);
   return (

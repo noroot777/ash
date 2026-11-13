@@ -27,6 +27,8 @@ let pending: SearchRevealRequest | null = null;
 const listeners = new Set<() => void>();
 
 export function requestSearchReveal(taskId: string, query: string, hint: string) {
+  // 上一次还在闪的就此收掉：人已经去找下一处了，那几处的亮灭只会让他看错地方。
+  clearFlash();
   const terms = highlightTerms(query);
   pending = terms.length ? { taskId, terms, hint, expires: Date.now() + REQUEST_TTL_MS } : null;
   listeners.forEach((listener) => listener());
@@ -39,6 +41,17 @@ export function pendingSearchReveal(taskId: string): SearchRevealRequest | null 
 
 export function settleSearchReveal(request: SearchRevealRequest) {
   if (pending === request) pending = null;
+}
+
+/**
+ * 读者自己挪了这条会话（滚轮、触控、方向键、拖滚动条、导航条跳转、回顶回底）：这个任务的待办
+ * 作废。由贴底逻辑那个统一的「读者接手」入口调（useStickToBottom 的 onReaderMove），所以
+ * 会话还没读完、待办还没开始找的那几秒里也算数 —— 等读完了再落，就是把已经接手的人拽走。
+ */
+export function abandonSearchReveal(taskId: string) {
+  if (pending?.taskId !== taskId) return;
+  pending = null;
+  listeners.forEach((listener) => listener());
 }
 
 export function subscribeSearchReveal(listener: () => void): () => void {
@@ -56,8 +69,9 @@ type Occurrence = {
   closed: HTMLDetailsElement[];
 };
 
-// 按钮上的字、输入框、读屏专用的那些不是会话内容。
-const SKIP = "script, style, textarea, input, button, [aria-hidden='true']";
+// 按钮上的字、输入框、读屏专用的那些不是会话内容；`data-search-skip` 标的是同一段正文的
+// 缩略副本（duet 顶上那条截断的议题），落点该在完整的那一份上。
+const SKIP = "script, style, textarea, input, button, [aria-hidden='true'], [data-search-skip]";
 
 function textNodes(container: HTMLElement) {
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
@@ -87,27 +101,42 @@ function locate(nodes: { node: Text; start: number }[], offset: number, end: boo
   return [entry.node, offset - entry.start];
 }
 
-function closedFolds(element: Element, container: HTMLElement): HTMLDetailsElement[] | null {
+function closedFolds(element: Element): HTMLDetailsElement[] | null {
   const visible = typeof element.checkVisibility === "function"
     ? element.checkVisibility()
     : element.getClientRects().length > 0;
   if (visible) return [];
   const folds: HTMLDetailsElement[] = [];
-  for (let node: Element | null = element; node && node !== container; node = node.parentElement) {
+  // 一路找到顶，不停在查找区域的边上：duet 的议题区域自己就装在一个折起来的 `<details>` 里。
+  for (let node: Element | null = element; node; node = node.parentElement) {
     if (node instanceof HTMLDetailsElement && !node.open) folds.push(node);
   }
   // 既看不见、也不在折叠块里（藏起来的副本、display:none 的块）：落过去也什么都看不到。
   return folds.length ? folds : null;
 }
 
-/** 容器里所有词的所有出现处，按文档顺序。 */
+/**
+ * 不分大小写比较用的字符串，**跟原文逐位对齐**（偏移要拿回去定位 Range）。少数字符小写后长度
+ * 会变（İ → i̇），只有它们自己按原样留着，别的字照常折叠 —— 不能因为会话里有一个这样的字，
+ * 整条会话都退回大小写敏感。
+ */
+function foldCase(text: string): string {
+  const lowered = text.toLowerCase();
+  if (lowered.length === text.length) return lowered;
+  let folded = "";
+  for (const character of text) {
+    const lower = character.toLowerCase();
+    folded += lower.length === character.length ? lower : character;
+  }
+  return folded;
+}
+
+/** 一块区域里所有词的所有出现处，按文档顺序。 */
 export function findOccurrences(container: HTMLElement, terms: readonly string[]): SearchOccurrence[] {
   const { nodes, text } = textNodes(container);
   if (!nodes.length) return [];
-  // 少数字符小写后长度会变（如 İ），那样偏移就对不上原文了 —— 退回按原样比。
-  const lowered = text.toLowerCase();
-  const haystack = lowered.length === text.length ? lowered : text;
-  const needles = terms.map((term) => haystack === lowered ? term.toLowerCase() : term);
+  const haystack = foldCase(text);
+  const needles = terms.map(foldCase);
   const found: Occurrence[] = [];
   let position = 0;
   while (position < haystack.length) {
@@ -127,7 +156,7 @@ export function findOccurrences(container: HTMLElement, terms: readonly string[]
     range.setStart(...locate(nodes, index, false));
     range.setEnd(...locate(nodes, end, true));
     const element = range.startContainer.parentElement;
-    const closed = element ? closedFolds(element, container) : null;
+    const closed = element ? closedFolds(element) : null;
     if (closed) found.push({ range, term: needle, start: index, end, closed });
     position = end;
   }
@@ -184,8 +213,15 @@ export function pickOccurrence(found: readonly SearchOccurrence[], hint: string)
   return best;
 }
 
-/** 把落点摆到视口上部三分之一：正中偏上读着顺，又不贴着顶边。 */
+/**
+ * 把落点摆到视口上部三分之一：正中偏上读着顺，又不贴着顶边。落点不在会话滚动容器里（duet
+ * 顶上的议题）就只让它露出来，会话本身不动。
+ */
 export function scrollToOccurrence(container: HTMLElement, occurrence: Occurrence) {
+  if (!container.contains(occurrence.range.startContainer)) {
+    occurrence.range.startContainer.parentElement?.scrollIntoView({ block: "nearest" });
+    return;
+  }
   const rect = occurrence.range.getBoundingClientRect();
   const view = container.getBoundingClientRect();
   const top = rect.top - view.top + container.scrollTop - container.clientHeight / 3;

@@ -6,7 +6,9 @@
 //   · 落下去之后首屏那次「落到最新一条」、后面来的新回复都不把人拽回底部；
 //   · 词只在折好的执行过程里时，把那一块打开再落；
 //   · 关键词真的被标出来（CSS Custom Highlight），过一会儿自己收掉；
-//   · 任务已经开着时再从 ⌘K 打开它也照样落；等的那几秒里读者自己滚了就作罢。
+//   · 任务已经开着时再从 ⌘K 打开它也照样落；等的那几秒里读者自己接手了（滚轮、方向键）就作罢，
+//     会话还没读完时接手的也算；
+//   · 命中的正文画在会话流外面（duet 的议题）也能落；会话里有 İ 时英文词照样不分大小写。
 // 跑法：npm -w web run test:search-reveal-dom
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -97,18 +99,68 @@ try {
   }, null, { timeout: WAIT_TIMEOUT_MS });
   assert.equal(await currentText(), "旁路通道", "任务已经开着时再打开也照样落、照样标");
 
-  // ── 4. 等的那几秒里读者自己滚了：作罢，不再替他挪 ─────────────────────────
-  await page.evaluate(() => window.fixture.mount(null));
-  await page.evaluate(() => window.fixture.ready(false));
-  await page.evaluate(() => window.fixture.request("t3", "编辑器", "原始需求：设置页里的执行模式编辑器要压成一行。"));
-  await page.evaluate(() => window.fixture.mount("t3"));
-  await feed.waitFor();
-  await feed.hover();
-  await page.mouse.wheel(0, -200);
-  await page.evaluate(() => window.fixture.ready(true));
-  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
-  assert.ok((await placeOf("requirement")) < 0 || (await placeOf("requirement")) > 1, "读者已经接手，不该再跳到原始需求");
-  assert.equal(await highlighted("search-reveal-current"), false);
+  // ── 4. 正文还没读完时读者自己滚了：待办当场作废，读完了也不再替他挪 ─────────────
+  // 作废要在**读完之前**就生效（审查第 1 轮 #2：那时找词的那一侧还没挂上，滚轮没人听）。
+  const frames = () => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const takeOver = async (taskId, move) => {
+    await page.evaluate(() => window.fixture.mount(null));
+    await page.evaluate(() => window.fixture.ready(false));
+    await page.evaluate((taskId) => window.fixture.request(taskId, "编辑器", "原始需求：设置页里的执行模式编辑器要压成一行。"), taskId);
+    // 新的一张待办当场收掉上一段还在亮灭的闪烁：后面「没标出来」才说明得了问题。
+    assert.equal(await highlighted("search-reveal-current"), false, "发出新待办时上一次的闪烁就该收掉");
+    await page.evaluate((taskId) => window.fixture.mount(taskId), taskId);
+    await feed.waitFor();
+    await page.waitForFunction(() => {
+      const node = document.querySelector('[data-testid="feed"]');
+      return node && node.scrollTop > 0 && node.scrollHeight - node.scrollTop - node.clientHeight <= 2;
+    }, null, { timeout: WAIT_TIMEOUT_MS });
+    assert.equal(await page.evaluate((taskId) => window.fixture.pending(taskId), taskId), true, "挂上会话时待办还在");
+    await move();
+    assert.equal(await page.evaluate((taskId) => window.fixture.pending(taskId), taskId), false, "读者一接手，待办当场作废");
+    const held = await feed.evaluate((node) => node.scrollTop);
+    await page.evaluate(() => window.fixture.ready(true));
+    await frames();
+    await frames();
+    assert.equal(await feed.evaluate((node) => node.scrollTop), held, "读完了也不该把读者拽去原始需求");
+    assert.equal(await highlighted("search-reveal-current"), false);
+  };
+  await takeOver("t3", async () => {
+    const from = await feed.evaluate((node) => node.scrollTop);
+    await feed.hover();
+    await page.mouse.wheel(0, -200);
+    // 滚轮事件是异步送到页面的：等视口真的往上挪了（滚轮事件一定先于这次滚动派发）再看待办。
+    await page.waitForFunction((from) => document.querySelector('[data-testid="feed"]').scrollTop < from, from, { timeout: WAIT_TIMEOUT_MS });
+  });
+  // 方向键是同一个口子（贴底逻辑统一认的「读者接手」），不必另认一遍。
+  await takeOver("t4", async () => {
+    await page.evaluate(() => (document.activeElement instanceof HTMLElement) && document.activeElement.blur());
+    await page.keyboard.press("ArrowUp");
+  });
+
+  // ── 5. 命中的正文画在会话流外面（duet 顶上的议题）：在那儿落，打开那一块，会话本身不动 ──
+  await page.evaluate(() => window.fixture.mount("t5"));
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="feed"]');
+    return node && node.scrollTop > 0 && node.scrollHeight - node.scrollTop - node.clientHeight <= 2;
+  }, null, { timeout: WAIT_TIMEOUT_MS });
+  assert.equal(await page.getByTestId("topic").evaluate((node) => node.open), false);
+  await page.evaluate(() => window.fixture.request("t5", "议题专用词", "…讨论一下议题专用词该怎么落地。"));
+  await page.waitForFunction(() => CSS.highlights.has("search-reveal-current"), null, { timeout: WAIT_TIMEOUT_MS });
+  assert.equal(await page.getByTestId("topic").evaluate((node) => node.open), true, "议题那一块被打开");
+  assert.equal(await currentText(), "议题专用词");
+  assert.equal(
+    await page.evaluate(() => [...CSS.highlights.get("search-reveal-current")][0].startContainer.parentElement.dataset.testid),
+    "topic-full",
+    "落在完整的议题上，不是摘要条里截断的那一份",
+  );
+  assert.equal(await atBottom(), true, "落点不在会话流里时，会话本身不动");
+
+  // ── 6. 会话里有 İ（小写后长度会变）：别的英文词照样不分大小写 ─────────────────
+  await page.evaluate(() => window.fixture.request("t5", "mixedcase", ""));
+  await page.waitForFunction(() => {
+    const highlight = CSS.highlights.get("search-reveal-current");
+    return !!highlight && [...highlight][0].toString() === "MixedCase";
+  }, null, { timeout: WAIT_TIMEOUT_MS });
 
   assert.deepEqual(errors, []);
   console.log("search reveal DOM regression passed");
