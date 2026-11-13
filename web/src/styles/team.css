@@ -90,6 +90,14 @@
 .team-feed-user header { display: flex; gap: 6px; color: var(--muted); font-size: var(--t-xs); }
 .team-feed-user header b { color: var(--muted); }
 .team-feed-user p { margin: 2px 0 0; color: var(--ink); font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; }
+/* 跟任务会话的气泡同一个做法（task-conversation.css）：只装内容，指到才在上方浮出谁发的、几点。 */
+@media (hover: hover) {
+  .team-feed-user:not(.is-system-authored) { margin-top: 24px; }
+  .team-feed-user:not(.is-system-authored) > div { position: relative; }
+  .team-feed-user:not(.is-system-authored) > div > header { position: absolute; right: 2px; bottom: 100%; align-items: center; height: 24px; padding-bottom: 4px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity var(--dur-1) var(--ease-out); }
+  .team-feed-user:not(.is-system-authored) > div:is(:hover, :focus-within) > header { opacity: 1; pointer-events: auto; }
+  .team-feed-user:not(.is-system-authored) > div > header + * { margin-top: 0; }
+}
 .team-feed-tool { color: var(--muted); font-size: var(--t-xs); }
 .team-feed-tool summary { display: inline-flex; cursor: pointer; align-items: center; gap: 5px; border-radius: 5px; padding: 2px 5px; list-style: none; }
 .team-feed-tool pre { max-height: 180px; overflow: auto; border-left: 2px solid var(--line); white-space: pre-wrap; }

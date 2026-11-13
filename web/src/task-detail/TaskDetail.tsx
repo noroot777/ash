@@ -411,6 +411,7 @@ export function TaskDetail({
                     if (latestPostMerge?.status === "reviewing") openTab("review");
                     else setPostMergeDialogOpen(true);
                   } : undefined}
+                  onClose={() => changeReviewOpen(false)}
                 />
               ) : fileView.filePath ? (
                 <FileViewer

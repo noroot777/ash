@@ -86,6 +86,29 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* 你的气泡只装内容：谁发的、几点发的连同复制/删除，平时不画，指到气泡才在它上方右侧浮出。
+   那一行不占排版高度，它的位置是这一条自己让出来的上边距（26px = 22px 一行 + 4px 离气泡的空），
+   跟上一条的下边距折叠，出不出现会话都不跳。系统代发卡照旧带头——「系统」两个字就是它的内容。
+   复制刚给过反馈时整行跟着现形，否则按钮自己的 opacity:1 会被父级的 0 吞掉。触屏没有悬停，保持原样。 */
+@media (hover: hover) {
+  .task-message--user:not(.is-system-authored) { margin-top: 26px; }
+  .task-message--user:not(.is-system-authored) > .task-user-bubble { position: relative; padding: 9px 15px 10px; }
+  .task-message--user:not(.is-system-authored) > .task-user-bubble > header {
+    position: absolute;
+    right: 2px;
+    bottom: 100%;
+    height: 26px;
+    padding-bottom: 4px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--dur-1) var(--ease-out);
+  }
+  .task-message--user:not(.is-system-authored) > .task-user-bubble:is(:hover, :focus-within) > header,
+  .task-message--user:not(.is-system-authored) > .task-user-bubble > header:has(.is-copied, .is-copy-failed) { opacity: 1; pointer-events: auto; }
+  .task-message--user:not(.is-system-authored) > .task-user-bubble > header + *,
+  .task-message--user:not(.is-system-authored) > .task-user-bubble > header + .task-question-pair > :first-child { margin-top: 0; }
+}
 
 .task-markdown { min-width: 0; color: var(--muted); font-size: 12.5px; line-height: 1.7; overflow-wrap: anywhere; }
 .task-markdown > :first-child { margin-top: 3px; }
