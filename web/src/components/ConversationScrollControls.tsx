@@ -1,4 +1,4 @@
-import { useRef, type RefObject } from "react";
+import { useCallback, useRef, type RefObject } from "react";
 import { ArrowDown, ArrowUp } from "@phosphor-icons/react";
 import { useScrollEdges } from "../lib/useScrollEdges.ts";
 import { motionReduced } from "../lib/useSwapText.ts";
@@ -39,11 +39,22 @@ export function ConversationScrollControls({
 }) {
   const revealTaskId = revealReady === undefined || typeof resetKey !== "string" ? null : resetKey;
   // 读者自己挪了视口（滚轮、触控、按键、滚动条、导航条、回顶回底）就作废 ⌘K 的待办 —— 正文还没
-  // 读完、还没开始找的时候同样作数。
+  // 读完、还没开始找的时候同样作数。落点自己让贴底别跟（revealDetach）走的是同一个入口，那一下
+  // 不是读者接手，不能把自己正在落的那张待办作废。
+  const placing = useRef(false);
   const { noteUserScrollIntent, resume, hold } = useStickToBottom(
-    scrollRef, resetKey, tailKey, undefined, revealTaskId ? () => abandonSearchReveal(revealTaskId) : undefined,
+    scrollRef, resetKey, tailKey, undefined,
+    revealTaskId ? () => { if (!placing.current) abandonSearchReveal(revealTaskId); } : undefined,
   );
-  useSearchReveal(scrollRef, revealTaskId, !!revealReady, noteUserScrollIntent, revealRoots);
+  const revealDetach = useCallback((detachFromBottom: boolean) => {
+    placing.current = true;
+    try {
+      noteUserScrollIntent(detachFromBottom);
+    } finally {
+      placing.current = false;
+    }
+  }, [noteUserScrollIntent]);
+  useSearchReveal(scrollRef, revealTaskId, !!revealReady, revealDetach, revealRoots);
   const { atTop, atBottom } = useScrollEdges(scrollRef, resetKey);
   const top = useRef<HTMLButtonElement>(null);
   const scrolling = useUserScrolling(scrollRef, resetKey, top);

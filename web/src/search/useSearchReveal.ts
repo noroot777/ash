@@ -4,7 +4,7 @@ import {
   flashOccurrences,
   pendingSearchReveal,
   pickOccurrence,
-  scrollToOccurrence,
+  revealOccurrence,
   settleSearchReveal,
   subscribeSearchReveal,
 } from "./searchReveal.ts";
@@ -16,14 +16,16 @@ const UNFOLD_SETTLE_MS = 60;
  * 太贵；词要是只在不上屏的执行轨迹里，这样空转要一直转到待办过期。
  */
 const RETRY_GAP_MS = 250;
+/** 挪过去了词却没露出来（布局还在动）最多再试几次。试完还看不见就作罢，不闪、不算落地。 */
+const MAX_UNSEEN = 3;
 
 /**
  * 会话这一侧：⌘K 给这个任务挂了待办（requestSearchReveal），就在会话读完后把视口落到命中处、
  * 闪几下关键词。
  *
  * - `ready`：正文读完过一轮。之前落下去，正文一到又被挤走；也可能只找到了原始需求里那一处。
- * - `detach`：贴底逻辑的「读者要往回看」（useStickToBottom 的 noteUserScrollIntent）。落地之前
- *   先打这声招呼，否则首屏那次落到最新一条、或者下一条新消息，会把人从落点拽回底部。
+ * - `detach`：让贴底逻辑别再跟随（首屏那次落到最新一条、下一条新消息都会把人从落点拽回底部）。
+ *   它**不能**被当成读者接手 —— 那会把自己这张待办作废，见 ConversationScrollControls。
  * - `extraRoots`：滚动容器之外、同样算这个任务正文的区域（duet 顶上的议题）。命中的正文不一定
  *   画在会话流里，只扫滚动容器就永远找不到它。
  * - 读者自己接手了不在这里听：贴底逻辑有统一的入口，直接作废待办（abandonSearchReveal），
@@ -51,6 +53,7 @@ export function useSearchReveal(
     if (!request) return;
     let frame = 0;
     let unfolds = 0;
+    let unseen = 0;
     let timer = 0;
     let quietUntil = 0;
     let done = false;
@@ -76,9 +79,15 @@ export function useSearchReveal(
         schedule();
         return;
       }
-      finish();
       if (container.contains(target.range.startContainer)) detach(true);
-      scrollToOccurrence(container, target);
+      // 「挪过了」不等于「看得见」：量的是词本身，露不出来就不算落地（审查第 2 轮）。
+      if (!revealOccurrence(target)) {
+        if (++unseen >= MAX_UNSEEN) return finish();
+        quietUntil = performance.now() + RETRY_GAP_MS;
+        schedule();
+        return;
+      }
+      finish();
       flashOccurrences(found, target);
     };
     const schedule = () => {

@@ -116,19 +116,21 @@ function closedFolds(element: Element): HTMLDetailsElement[] | null {
 }
 
 /**
- * 不分大小写比较用的字符串，**跟原文逐位对齐**（偏移要拿回去定位 Range）。少数字符小写后长度
- * 会变（İ → i̇），只有它们自己按原样留着，别的字照常折叠 —— 不能因为会话里有一个这样的字，
- * 整条会话都退回大小写敏感。
+ * 不分大小写比较用的字符串，**跟原文逐位对齐**（偏移要拿回去定位 Range），会话和查询必须用
+ * 同一把折法。少数字符小写后长度会变（İ → i̇），只有它们自己按原样留着，别的字照常折叠 ——
+ * 不能因为会话里有一个这样的字，整条会话都退回大小写敏感。
  */
 function foldCase(text: string): string {
+  // 整串 toLowerCase 是**看上下文**的：同一个 Σ 在词尾折成 ς、在词中折成 σ，会话和查询里同一个
+  // 词所处的上下文不同就折不到一起。ς 一律再折成 σ（等长），两边就只剩字本身说了算。
   const lowered = text.toLowerCase();
-  if (lowered.length === text.length) return lowered;
+  if (lowered.length === text.length) return lowered.replaceAll("ς", "σ");
   let folded = "";
   for (const character of text) {
     const lower = character.toLowerCase();
     folded += lower.length === character.length ? lower : character;
   }
-  return folded;
+  return folded.replaceAll("ς", "σ");
 }
 
 /** 一块区域里所有词的所有出现处，按文档顺序。 */
@@ -213,19 +215,62 @@ export function pickOccurrence(found: readonly SearchOccurrence[], hint: string)
   return best;
 }
 
+const SCROLLS = /^(auto|scroll|overlay)$/;
+
 /**
- * 把落点摆到视口上部三分之一：正中偏上读着顺，又不贴着顶边。落点不在会话滚动容器里（duet
- * 顶上的议题）就只让它露出来，会话本身不动。
+ * 从里到外每一层**真能滚**的容器（overflow 是 auto/scroll）。overflow:hidden 的布局壳不在其中：
+ * 替它滚就是把整块布局挪走（duet 的议题区域撑高时，曾把任务顶上那排操作一起推出了画面）。
  */
-export function scrollToOccurrence(container: HTMLElement, occurrence: Occurrence) {
-  if (!container.contains(occurrence.range.startContainer)) {
-    occurrence.range.startContainer.parentElement?.scrollIntoView({ block: "nearest" });
-    return;
+function scrollers(node: Node): HTMLElement[] {
+  const list: HTMLElement[] = [];
+  for (let element = node.parentElement; element; element = element.parentElement) {
+    const style = getComputedStyle(element);
+    const vertical = SCROLLS.test(style.overflowY) && element.scrollHeight > element.clientHeight;
+    const horizontal = SCROLLS.test(style.overflowX) && element.scrollWidth > element.clientWidth;
+    if (vertical || horizontal) list.push(element);
   }
-  const rect = occurrence.range.getBoundingClientRect();
-  const view = container.getBoundingClientRect();
-  const top = rect.top - view.top + container.scrollTop - container.clientHeight / 3;
-  container.scrollTo({ top: Math.max(0, Math.min(top, container.scrollHeight - container.clientHeight)), behavior: "auto" });
+  return list;
+}
+
+/** 一个滚动容器此刻露出来的那块（去掉边框和滚动条）。 */
+function viewport(element: HTMLElement) {
+  const rect = element.getBoundingClientRect();
+  const top = rect.top + element.clientTop;
+  const left = rect.left + element.clientLeft;
+  return { top, left, bottom: top + element.clientHeight, right: left + element.clientWidth };
+}
+
+/** 落点有没有真的露在屏幕上：每一层滚动容器、连同窗口本身，都得框得住它。 */
+function onScreen(range: Range, layers: readonly HTMLElement[]): boolean {
+  const rect = range.getBoundingClientRect();
+  if (!rect.width && !rect.height) return false;
+  const boxes = [...layers.map(viewport), { top: 0, left: 0, bottom: window.innerHeight, right: window.innerWidth }];
+  return boxes.every((box) => rect.bottom > box.top && rect.top < box.bottom && rect.right > box.left && rect.left < box.right);
+}
+
+/**
+ * 把命中那几个字**本身**送进视线，返回它最后到底露没露出来。
+ *
+ * 量的是 Range，不是它所在的元素：一段 h2、一大段正文可以跨好几屏，「元素露出来了」不等于
+ * 「词露出来了」。从里到外一层层挪 —— 会话流、工具参数那种限高的小滚动框、横向滚的代码块、
+ * duet 顶上限高的议题区域都是同一回事：哪一层框不住它，就把那一层滚到它落在上部三分之一
+ * （横向落在左侧三分之一），已经框得住的那一层不动。挪完再问一遍框没框住，调用方据此决定
+ * 算不算落地 —— 露不出来就不闪、不算数。
+ */
+export function revealOccurrence(occurrence: Occurrence): boolean {
+  const { range } = occurrence;
+  const layers = scrollers(range.startContainer);
+  for (const layer of layers) {
+    const rect = range.getBoundingClientRect();
+    const box = viewport(layer);
+    if (rect.top < box.top || rect.bottom > box.bottom) {
+      layer.scrollTop += rect.top - (box.top + (box.bottom - box.top) / 3);
+    }
+    if (rect.left < box.left || rect.right > box.right) {
+      layer.scrollLeft += rect.left - (box.left + (box.right - box.left) / 3);
+    }
+  }
+  return onScreen(range, layers);
 }
 
 const ALL = "search-reveal";
