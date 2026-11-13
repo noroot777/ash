@@ -27,6 +27,7 @@ import { findArchivedRollout, findRollout, readCodexContext } from "./codex-roll
 import { archiveCodexThread, codexArchiveNotice, CODEX_ARCHIVE_TIMEOUT_MS } from "./codex-session-archive.js";
 import { pruneArchivedCodexDesktopThreads } from "./codex-desktop-catalog.js";
 import { CodexNativeCommands } from "./codex-native-commands.js";
+import { CodexRequestTimer } from "./request-timing.js";
 import { codexChangeWrites, codexCommandCwd } from "./tool-writes.js";
 import { isGoalExecution } from "@ash/shared/cli-commands";
 /** 一个 app-server 进程承载一个单飞回合，收尾归档后关闭；配置仍来自用户本机。 */
@@ -63,6 +64,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   let resolvedModel = opts.model ?? "";
   let resolvedEffort = opts.reasoningEffort ?? null;
   let latestUsage: ThreadUsage | null = null;
+  const requestTimer = new CodexRequestTimer(); // 每次模型请求的起止,见 ./request-timing.ts
   let contextEmitted = false;
   let stderr = "";
   let lastEventType: string | null = null;
@@ -314,7 +316,8 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     if (!(await native.afterTurn())) return;
     if (!turnCompleted || completedId !== (reviewTurnId || turnId)) return;
     if (latestUsage) {
-      push({ kind: "usage", usage: usageEvent(latestUsage.total) });
+      const timed = requestTimer.take();
+      push({ kind: "usage", usage: timed ? { ...usageEvent(latestUsage.total), timed } : usageEvent(latestUsage.total) });
     }
     finish(status === "completed" || (status === "interrupted" && native.expectedInterruption) ? 0 : 1);
   };
@@ -365,6 +368,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       for (const activity of codexChildWork(message.method, p)) push(activity);
       return;
     }
+    requestTimer.notification(message.method, p);
     switch (message.method) {
       case "turn/plan/updated": {
         push(nativePlanSnapshot(`plan:${p.turnId}`, p.plan, p.explanation));

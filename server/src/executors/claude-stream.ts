@@ -24,6 +24,7 @@ import { consumedEvents, holdSince, startsTurn } from "./claude-recovery.js";
 import type { ConsumedOutput } from "./types.js";
 import { claudeRetryMessage, isClaudeRetry } from "./claude-retry-notice.js";
 import { normalizeClaudeCliError, shortJson, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
+import { ClaudeRequestTimer } from "./request-timing.js";
 
 // resident 非空 = 常驻模式:`result` 行只代表「一个回合说完了」(→ turnEnd),
 // 流要一直开着;只有进程真的没了才 done。
@@ -133,6 +134,8 @@ async function* claudeStreamEvents(
   // 后台子代理 / 后台 Bash 的同类账本：认人同样要 tool_use、tool_result、system 三样一起看。
   // 它们随回合收尾被收走时在时间线上留一笔（见 ../claude-background-reaped.ts）。
   const background = new ClaudeBackgroundTrace(cliSessionId);
+  // 每次模型请求的起止(见 ./request-timing.ts),随回合的 usage 带出去。
+  const requestTimer = new ClaudeRequestTimer();
   // 接管时读不出水位之前那段:后台还有没有活、回合在不在进行,一概说不准(见 ./claude-recovery.ts)。
   // 回合结尾一律按「可能还有」先不收台,等到期限按未完成结算 —— 不能拿空账本判「没有后台工作」。
   let recoveryUnknown = false;
@@ -198,6 +201,8 @@ async function* claudeStreamEvents(
     for (const activity of nativeWork.claudeMessage(ev)) push(activity);
     // Monitor 的投影自己落库,接管时从库里认回来(../claude-monitors.ts),不重放。
     if (!replaying) claudeMonitors.event(ev);
+    // 计时用的是读到这一行的时刻,重放是一口气读完的旧输出,喂进来只会量出离谱的速度。
+    if (!replaying) requestTimer.event(ev);
     background.event(ev);
     // 主智能体开口了(或 CLI 起了新一轮):一个回合正在进行。后台任务的进度(system
     // task_*)不算 —— 回合结束之后它们照样在流里滚。
@@ -409,7 +414,8 @@ async function* claudeStreamEvents(
       flushText();
       if (ev.session_id) push({ kind: "session", cliSessionId: ev.session_id });
       const usage = claudeUsage(ev);
-      if (usage) push({ kind: "usage", usage });
+      const timed = requestTimer.take();
+      if (usage) push({ kind: "usage", usage: timed ? { ...usage, timed } : usage });
       // 水位跟着流水一起发。模型窗口仍优先用 claude 自报的(1M 只有那儿认得出),
       // 压缩配置则整份带上这个进程的启动快照：模型能力与“先在哪压缩”是两层数据，
       // 界面拿后者算真正的剩余量与触发点，不能为了显示 400k 把 1M 上限抹掉。
