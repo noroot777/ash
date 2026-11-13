@@ -102,6 +102,7 @@ const AGENT_SIZE: SizeTable<AgentItem> = {
   label: () => 0,
   agentType: () => 0,
   at: () => 0,
+  turnStartedAt: () => 0,
   endedAt: () => 0,
   markerEndedAt: () => 0,
   interrupted: () => 0,

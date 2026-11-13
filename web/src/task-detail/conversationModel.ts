@@ -57,6 +57,15 @@ export type ConversationItem =
        */
       agentType: string | null;
       at?: string | null;
+      /**
+       * 这颗气泡属于哪一回合：服务端给这一回合的身份（trace 挂的、实时事件带的那个起点）。
+       * 实时那一路取事件自带的（见 conversationLiveTurns 的 liveTurnStart），落盘那一路取它
+       * 领到的那组 trace 的；都没有就是不知道，由会话行推。
+       *
+       * 跟 `at` 不是一回事：`at` 是画在气泡上的时刻，会被插话改写；团队调度台的落盘气泡按
+       * 用户说话那一刻编号，回合却从投递那一刻起算，两者差着一截。
+       */
+      turnStartedAt?: string | null;
       endedAt?: string | null;
       markerEndedAt?: string | null;
       /**
@@ -242,6 +251,7 @@ function notePlacement(
  * 派生快照读的是它），两截之间空一行才是一段话原来的样子。
  */
 function mergeTurnChunk(target: AgentItem, chunk: AgentItem): void {
+  target.turnStartedAt ??= chunk.turnStartedAt;
   target.markdown = [target.markdown, chunk.markdown].filter((text) => text.trim()).join("\n\n");
   target.segments.push(...chunk.segments);
   // 收口标记跟着后一截走：回合真正结束在哪一刻，只有最后那一截知道。
@@ -459,6 +469,7 @@ function appendPersistedSession(
         label: agentLabel(session),
         agentType: session.agentType,
         at: turnStartedAt,
+        turnStartedAt: traceEntries.at(-1)?.turnStartedAt ?? null,
         endedAt: null,
         markerEndedAt: segment.endedAt ?? null,
         session,
@@ -551,7 +562,9 @@ export function buildConversationItems(
     if (item.kind !== "agent") { previousItem = item; continue; }
     const firstTurn = !seenSessions.has(item.sessionId);
     seenSessions.add(item.sessionId);
-    const turnStartedAt = item.session ? latestTurnStart(item.session) : null;
+    // 气泡自己记着回合就认自己的；会话行上的是**此刻最新**那一回合，拿它给上一回合的气泡
+    // 补时间，下一回合一开始它就被标成了新回合的起点。
+    const turnStartedAt = item.turnStartedAt ?? (item.session ? latestTurnStart(item.session) : null);
     item.at = firstTurn
       ? item.session?.startedAt ?? item.at
       : adjacentInterjectionAt
