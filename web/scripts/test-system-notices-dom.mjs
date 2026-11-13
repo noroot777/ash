@@ -140,10 +140,18 @@ try {
     const range = document.createRange();
     range.selectNodeContents(el.querySelector(".turn-receipt-text"));
     const lines = range.getClientRects();
-    return { sameLine: Math.abs(lines[0].top - glyph.top) < glyph.height, after: glyph.right <= lines[0].left, lines: lines.length };
+    const timeNode = el.querySelector(":scope > time");
+    const timeRange = document.createRange();
+    if (timeNode) timeRange.selectNodeContents(timeNode);
+    const time = timeNode ? timeRange.getClientRects()[0] : null;
+    return {
+      sameLine: Math.abs(lines[0].top - glyph.top) < glyph.height && (!time || Math.abs(lines[0].top - time.top) < 3),
+      after: glyph.right <= lines[0].left,
+      lines: lines.length,
+    };
   }));
   assert.ok(rows.some((row) => row.lines > 1), "窄栏里至少有一条真折了行，不然这一条什么都没证明");
-  assert.ok(rows.every((row) => row.sameLine && row.after), `字的第一行跟图标同一行：${JSON.stringify(rows)}`);
+  assert.ok(rows.every((row) => row.sameLine && row.after), `字的第一行跟图标、时刻同一行（时刻不沿整段居中）：${JSON.stringify(rows)}`);
   await resizeViewport(page, { width: 1000, height: 1300 });
   assert.equal(leading.before, true);
   assert.match(leading.label, /\d\d\/\d\d \d\d:\d\d/, "读屏拿到完整的日期时刻");
