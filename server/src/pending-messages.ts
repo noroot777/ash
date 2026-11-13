@@ -113,6 +113,8 @@ export function pendingMessageRow(input: {
   handoffToken?: string | null;
   /** 这条是哪一条问答的答复（见 schema 的 `answer_id`）；普通消息不填。 */
   answerId?: string | null;
+  /** 哨兵输出那一批:这一刻之前不投递(见 schema 的 `merge_hold_until`)。 */
+  mergeHoldUntil?: string | null;
 }): Row {
   return {
     id: id(),
@@ -152,6 +154,7 @@ export function pendingMessageRow(input: {
     crossingProtocol: null,
     turnTakenBy: null,
     turnReturnedAt: null,
+    mergeHoldUntil: input.mergeHoldUntil ?? null,
   };
 }
 
@@ -639,6 +642,7 @@ export async function hasDeliverablePendingMessages(taskId: string, at = new Dat
     .where(eq(tasks.id, taskId))).at(0);
   if (!task || task.archived) return false;
   if (task.mode !== "single" && task.mode !== "team") return false;
+  // 故意不读 `merge_hold_until`:合并窗口里的哨兵输出两秒内就会送,它照样算「等着送」、照样让结算让路。
   const rows = await db
     .select({
       mode: scheduledMessages.mode, sendAt: scheduledMessages.sendAt, origin: scheduledMessages.origin,

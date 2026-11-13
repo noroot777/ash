@@ -36,7 +36,7 @@ import { tasks } from "./db/schema.js";
 import { serialize } from "./monitors.js";
 import { confirmDone, hasConfirmed, revokeConfirmed } from "./task-confirmation.js";
 import { monitorsBlockingComplete, monitorsBlockingDetail, noteMonitorsDropped } from "./task-complete-monitors.js";
-import { completeHandedNote, takeMonitorResultsForTurn, type HandedMonitorResults } from "./monitor-turn-handoff.js";
+import { completeHandedNote, takeMonitorResultsForTurn, undoHandOver, type HandedMonitorResults } from "./monitor-turn-handoff.js";
 import { clearAutoCheckpoint, writeResumePrompt } from "./task-resume-prompt.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -160,7 +160,12 @@ export async function confirmTaskComplete(a: {
       });
       if (handed) {
         // 交完再问一次闸:剩下的(还在盯的、正在入队的)照旧拦,说法照旧。
-        return { ok: false, error: completeHandedNote(await monitorsBlockingComplete(a.taskId)), blockedByMonitors: true, handed };
+        // 交了、返回却没构造成 ⇒ 凭这次领取退回(monitor-turn-handoff.ts ②):错误照抛,结果回托盘。
+        const still = await monitorsBlockingComplete(a.taskId).catch(async (error: unknown) => {
+          await undoHandOver(a.taskId, handed, "交出结果之后读完成闸出错，这一次没交到它手上");
+          throw error;
+        });
+        return { ok: false, error: completeHandedNote(still), blockedByMonitors: true, handed };
       }
     }
     if (blocked) {

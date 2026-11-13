@@ -11,7 +11,9 @@
 // ① **只走一条路**。两个出口抢的是同一行、同一个条件:`status='pending' AND delivering_since
 //    IS NULL`。唤醒那一路用租约 CAS 领取(`beginPendingBatch`),这一路用同一个条件把它直接写成
 //    `sent` —— 谁的 UPDATE 真改到行谁就拿走,另一位那一行就不在候选里了。两边都只看这一个条件,
-//    所以不需要另一把锁。
+//    所以不需要另一把锁。**资格也写在那一条 UPDATE 里**(任务身份 / 方向 / running 作为 EXISTS
+//    子句,合并窗口作为同一条件):前面那几次 SELECT 只是挑候选,改方向、落终态发生在挑完之后,
+//    那一笔照样一行都改不到。来源审查在内存里判,改完再复核一次,失效的原样还回去。
 //
 // ② **不丢,宁可重复**。交出去那一刻只是「已交」,不是「已送达」:那一轮完全可能随后崩掉、被停,
 //    agent 来不及读到。所以行上记下**交给了哪一轮**(`turn_taken_by` = 那一轮的回合令牌),
@@ -23,9 +25,13 @@
 //    检查点暂停、随后被唤醒送达)。会被终态连坐的落位(失败、被取消)也收不走它:带着退回记号
 //    的 pending 行在任务终态时**留着等下一次起跑**(`cancelPendingMonitorEvents` 的
 //    `keepReturned`、`deliveryVerdict` 的 wait),下一轮跑起来再从两个出口之一送达。
+//    **交出去 ≠ 交到了它手上**:领取之后、返回构造完之前任何一步出错,领到的这几行按本次领取
+//    凭据(行 id + 这一轮的令牌)当场退回;会话记录没写下来也一样(退回、走老路)。返回构造完了
+//    却没回到 agent 手上(MCP 通道断了,`ECONNRESET` / `Transport closed`),由回合结算前的
+//    补捞看调用记录退回(mcp-handoff.ts)—— agent 之后重试成功也照退,宁可重复。
 //    ash 自己没了(那一轮的结算根本没跑)→ 开机 `returnOrphanTurnHandoffs` 把记号对不上任何
-//    接回来的回合的那几行同样退回;交出结果的那次调用返回没回到 agent 手上、随后被断线补录
-//    → 补录之前 `returnTurnHandoffs` 先退回(补录会把这一轮补成正常收口)。
+//    接回来的回合的那几行同样退回(逐任务排在 `task:<id>` 队列上、写之前复核归属)。
+//    所有退回与销记号都按「行 id + 当时的领取者」做 CAS,不拿旧快照推断现在是谁的。
 //
 // ③ **只交给本来会被它叫醒的那条会话**。判据跟唤醒那一路投递时恢复的身份是同一份:
 //    消息上的 `session_role` + `review_run`/`review_round`(入队时从哨兵行抄下来,见
@@ -35,7 +41,7 @@
 // 这一侧**不碰**:真人排的话、定时消息、其它系统消息(只认 `monitor:` 来源、queued 模式);
 // 团队调度台(只认 single 任务);带着续跑交代的那几行(`checkpoint_taken` 非空 —— 它们是唤醒
 // 那一路上一次没送成的,交代的转手只有那一路会做,见 monitor-checkpoint-handoff.ts)。
-import { and, eq, inArray, isNotNull, isNull, like } from "drizzle-orm";
+import { and, eq, exists, inArray, isNotNull, isNull, like, lte, or, sql } from "drizzle-orm";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { readMonitorWake, type MonitorWakeData, type MonitorWakeEvent } from "@ash/shared/monitor-wake";
 import { bus } from "./bus.js";
@@ -51,8 +57,13 @@ import type { SQL } from "drizzle-orm";
 
 type Row = typeof scheduledMessages.$inferSelect;
 
-/** 交到 agent 手上的那一份:正文(原样拼进工具返回)+ 结构化来源(落进会话记录)。 */
-export type HandedMonitorResults = { text: string; monitorWake: MonitorWakeData; count: number };
+/**
+ * 交到 agent 手上的那一份:正文(原样拼进工具返回)+ 结构化来源(落进会话记录)。
+ * `ids` + `token` 是这次领取的凭据:返回构造失败时凭它退回(`undoHandOver`)。
+ */
+export type HandedMonitorResults = {
+  text: string; monitorWake: MonitorWakeData; count: number; ids: string[]; token: string;
+};
 
 // ── 返回里那句话 ──────────────────────────────────────────────────────────────
 // 「结果已经给你了、接着做」只在**返回**里说:工具说明常驻每个回合的上下文、有字节预算,
@@ -96,7 +107,9 @@ function handedWake(rows: Row[]): MonitorWakeData {
       events.push(...wake.events);
       omittedEvents += wake.omittedEvents;
     } else {
-      events.push({ kind: "output", monitorId: monitorIdFromOrigin(row.origin) ?? "", source: "", body: row.text });
+      // 升级前入队的老行没有结构:正文里带着结束抬头就是结束(合并过的那种也以结束计),否则是输出。
+      const kind = row.text.includes("【哨兵结束】") ? "ended" : "output";
+      events.push({ kind, monitorId: monitorIdFromOrigin(row.origin) ?? "", source: "", body: row.text });
     }
   }
   return { version: 1, events, omittedEvents };
@@ -117,13 +130,14 @@ export async function takeMonitorResultsForTurn(a: {
   via: "pause" | "complete";
 }): Promise<HandedMonitorResults | null> {
   if (!a.token || dbClient.closed) return null;
+  const token = a.token;
   const turn = turnIdentity(a.taskId);
-  if (!turn || turn.token !== a.token || closing.get(a.taskId) === a.token) return null;
+  if (!turn || turn.token !== token || closing.get(a.taskId) === token) return null;
   // 唤醒那一路正在退回一批没送成的(补偿还没做完):那几行的去向归它,这里不插手。
   if (hasPendingDeliveryRecovery(a.taskId)) return null;
-  const task = (await db.select({ id: tasks.id }).from(tasks)
-    .where(and(eq(tasks.id, a.taskId), eq(tasks.mode, "single"), eq(tasks.archived, false), ...a.where))).at(0);
-  if (!task) return null;
+  const eligible = and(eq(tasks.id, a.taskId), eq(tasks.mode, "single"), eq(tasks.archived, false), ...a.where);
+  if (!(await db.select({ id: tasks.id }).from(tasks).where(eligible)).length) return null;
+  const at = now();
   const pending = await db.select().from(scheduledMessages).where(and(
     eq(scheduledMessages.taskId, a.taskId),
     eq(scheduledMessages.status, "pending"),
@@ -139,29 +153,62 @@ export async function takeMonitorResultsForTurn(a: {
     candidates.push(m);
   }
   if (!candidates.length) return null;
-  const at = now();
-  // 同一个条件、一条语句(文件头 ①):唤醒那一路刚领走的那几行不会出现在 returning 里。
-  const taken = (await db.update(scheduledMessages)
-    .set({ status: "sent", sentAt: at, turnTakenBy: a.token })
+  // 同一个条件、一条语句(文件头 ①):唤醒那一路刚领走的、挑完之后身份变了的,都不会出现在 returning 里。
+  const claimed = await db.update(scheduledMessages)
+    .set({ status: "sent", sentAt: at, turnTakenBy: token })
     .where(and(
       inArray(scheduledMessages.id, candidates.map((m) => m.id)),
       eq(scheduledMessages.status, "pending"),
       isNull(scheduledMessages.deliveringSince),
+      or(isNull(scheduledMessages.mergeHoldUntil), lte(scheduledMessages.mergeHoldUntil, at)),
+      exists(db.select({ one: sql`1` }).from(tasks).where(eligible)),
     ))
-    .returning())
-    .sort((x, y) => x.sendAt.localeCompare(y.sendAt) || x.createdAt.localeCompare(y.createdAt) || x.id.localeCompare(y.id));
-  if (!taken.length) return null;
-  bus.publish({ type: "task.pendingMessages", taskId: a.taskId });
-  bus.publish({ type: "task.monitors", taskId: a.taskId });
-  const handed = { text: taken.map((m) => m.text).join("\n\n"), monitorWake: handedWake(taken), count: taken.length };
-  // 会话里留一条带类型的记录:交了哪几条哨兵的什么、什么时候。落在这一轮自己那条会话上。
-  const session = (await db.select({ id: sessions.id }).from(sessions)
-    .where(and(eq(sessions.taskId, a.taskId), isNull(sessions.endedAt),
-      eq(sessions.role, turn.role === "reviewer" ? "reviewer" : "single")))
-    .orderBy(sessions.turnStartedAt)).at(-1);
-  await appendTaskTimeline(a.taskId, noticeLine({ kind: "monitor.handed", via: a.via, monitorWake: handed.monitorWake }, handed.text),
-    session ? { sessionId: session.id } : undefined);
-  return handed;
+    .returning();
+  if (!claimed.length) return null;
+  try {
+    // 来源审查在挑完之后结束了的:原样还回去(不打退回记号),唤醒那一路会照来源失效作废它。
+    const stale: string[] = [];
+    for (const m of claimed) if (await monitorEventSourceState(m.origin) === "stale") stale.push(m.id);
+    if (stale.length) {
+      await db.update(scheduledMessages).set({ status: "pending", sentAt: null, turnTakenBy: null })
+        .where(and(inArray(scheduledMessages.id, stale), eq(scheduledMessages.status, "sent"),
+          eq(scheduledMessages.turnTakenBy, token)));
+    }
+    const taken = claimed.filter((m) => !stale.includes(m.id))
+      .sort((x, y) => x.sendAt.localeCompare(y.sendAt) || x.createdAt.localeCompare(y.createdAt) || x.id.localeCompare(y.id));
+    bus.publish({ type: "task.pendingMessages", taskId: a.taskId });
+    bus.publish({ type: "task.monitors", taskId: a.taskId });
+    if (!taken.length) return null;
+    const handed: HandedMonitorResults = {
+      text: taken.map((m) => m.text).join("\n\n"), monitorWake: handedWake(taken), count: taken.length,
+      ids: taken.map((m) => m.id), token,
+    };
+    // 会话里留一条带类型的记录:交了哪几条哨兵的什么、什么时候。落在这一轮自己那条会话上。
+    // 写不下来就不交:没有这条记录,刷新之后谁也看不出这一轮里发生过这件事。
+    const session = (await db.select({ id: sessions.id }).from(sessions)
+      .where(and(eq(sessions.taskId, a.taskId), isNull(sessions.endedAt),
+        eq(sessions.role, turn.role === "reviewer" ? "reviewer" : "single")))
+      .orderBy(sessions.turnStartedAt)).at(-1);
+    const recorded = await appendTaskTimeline(a.taskId,
+      noticeLine({ kind: "monitor.handed", via: a.via, monitorWake: handed.monitorWake }, handed.text),
+      session ? { sessionId: session.id } : undefined);
+    if (!recorded) {
+      await undoHandOver(a.taskId, handed, "会话记录没写下来，这一次没交");
+      return null;
+    }
+    return handed;
+  } catch (error) {
+    await returnTaken(a.taskId, claimed.map((m) => ({ id: m.id, by: token })), "交出结果时出错，这一次没交到它手上");
+    throw error;
+  }
+}
+
+/**
+ * 交出去了、返回却没构造成(调用方随后那一步抛了):凭这次领取的凭据退回。
+ * **调用方必须排在 `task:<id>` 那条队列上**(同 `takeMonitorResultsForTurn`)。
+ */
+export async function undoHandOver(taskId: string, handed: HandedMonitorResults, why: string): Promise<void> {
+  await returnTaken(taskId, handed.ids.map((id) => ({ id, by: handed.token })), why);
 }
 
 /**
@@ -192,43 +239,54 @@ export async function settleTurnHandoffs(taskId: string, token: string | null, d
         isNotNull(scheduledMessages.turnTakenBy)));
     if (!held.length) return;
     const mine = held.filter((m) => delivered && m.by === token).map((m) => m.id);
-    const back = held.filter((m) => !mine.includes(m.id)).map((m) => m.id);
-    if (mine.length) {
+    const back = held.filter((m) => !mine.includes(m.id)).map((m) => ({ id: m.id, by: m.by! }));
+    if (mine.length && token) {
       await db.update(scheduledMessages).set({ turnTakenBy: null })
-        .where(and(inArray(scheduledMessages.id, mine), eq(scheduledMessages.status, "sent")));
+        .where(and(inArray(scheduledMessages.id, mine), eq(scheduledMessages.status, "sent"),
+          eq(scheduledMessages.turnTakenBy, token)));
     }
     if (back.length) await returnTaken(taskId, back, "这一回合没有正常收口");
   });
 }
 
 /**
- * 这一轮的 `pause_task` / `complete_task` 要被**断线补录**(mcp-handoff.ts):那一次调用服务端可能
- * 已经处理过、结果也交出去了,只是返回没回到 agent 手上(`Transport closed` 分不清这两种)。补录
- * 会把这一轮补成「正常收口」,于是交出去的那几条就被当成送达 —— 所以补录之前先把它们退回。
+ * 这一轮有一次 `pause_task` / `complete_task` 的返回**没回到 agent 手上**(mcp-handoff.ts 按调用
+ * 记录判):那一次服务端可能已经交了结果(MCP 通道断了分不清这两种)。随后的补录、或者 agent
+ * 自己重试成功,都会把这一轮收成「正常收口」,交出去的那几条就被当成送达 —— 所以先把它们退回。
  */
 export async function returnTurnHandoffs(taskId: string, why: string): Promise<void> {
   if (dbClient.closed) return;
   await serialize(`task:${taskId}`, async () => {
-    const held = await db.select({ id: scheduledMessages.id }).from(scheduledMessages)
+    const held = await db.select({ id: scheduledMessages.id, by: scheduledMessages.turnTakenBy })
+      .from(scheduledMessages)
       .where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "sent"),
         isNotNull(scheduledMessages.turnTakenBy)));
-    if (held.length) await returnTaken(taskId, held.map((m) => m.id), why);
+    if (held.length) await returnTaken(taskId, held.map((m) => ({ id: m.id, by: m.by! })), why);
   });
 }
 
-/** 退回 pending,并留下退回记号(它让这几行熬得过终态连坐,见文件头 ②)。 */
-async function returnTaken(taskId: string, ids: string[], why: string): Promise<void> {
-  const back = await db.update(scheduledMessages)
-    .set({ status: "pending", sentAt: null, turnTakenBy: null, turnReturnedAt: now() })
-    .where(and(inArray(scheduledMessages.id, ids), eq(scheduledMessages.status, "sent"),
-      isNotNull(scheduledMessages.turnTakenBy)))
-    .returning({ id: scheduledMessages.id });
-  if (!back.length) return;
+/**
+ * 退回 pending,并留下退回记号(它让这几行熬得过终态连坐,见文件头 ②)。
+ * 按「行 id + 当时的领取者」逐组 CAS:领取者已经换了的(先被退回、又交给了下一轮)一行都不碰。
+ */
+async function returnTaken(taskId: string, rows: Array<{ id: string; by: string }>, why: string): Promise<number> {
+  const byTaker = new Map<string, string[]>();
+  for (const r of rows) byTaker.set(r.by, [...(byTaker.get(r.by) ?? []), r.id]);
+  const back: string[] = [];
+  for (const [by, ids] of byTaker) {
+    back.push(...(await db.update(scheduledMessages)
+      .set({ status: "pending", sentAt: null, turnTakenBy: null, turnReturnedAt: now() })
+      .where(and(inArray(scheduledMessages.id, ids), eq(scheduledMessages.status, "sent"),
+        eq(scheduledMessages.turnTakenBy, by)))
+      .returning({ id: scheduledMessages.id })).map((m) => m.id));
+  }
+  if (!back.length) return 0;
   bus.publish({ type: "task.pendingMessages", taskId });
   bus.publish({ type: "task.monitors", taskId });
   await appendTaskTimeline(taskId, receiptLine(
     `回合里交给它的 ${back.length} 条哨兵结果退回了待发送：${why}，不能确定它读到了。下一次跑起来会再送一遍。`,
   ));
+  return back.length;
 }
 
 /**
@@ -239,15 +297,31 @@ async function returnTaken(taskId: string, ids: string[], why: string): Promise<
  * 那次连坐,见文件头 ②)。
  */
 export async function returnOrphanTurnHandoffs(): Promise<number> {
+  // 开机那一趟和每分钟那一趟可能撞上:同一时刻只跑一趟,后到的拿同一个结果。
+  sweeping ??= sweepOrphans().finally(() => { sweeping = null; });
+  return sweeping;
+}
+
+let sweeping: Promise<number> | null = null;
+
+async function sweepOrphans(): Promise<number> {
   if (dbClient.closed) return 0;
-  const held = await db.select({ id: scheduledMessages.id, taskId: scheduledMessages.taskId, by: scheduledMessages.turnTakenBy })
-    .from(scheduledMessages)
-    .where(and(eq(scheduledMessages.status, "sent"), isNotNull(scheduledMessages.turnTakenBy)));
-  const orphans = new Map<string, string[]>();
-  for (const m of held) {
-    if (turnIdentity(m.taskId)?.token === m.by) continue;
-    orphans.set(m.taskId, [...(orphans.get(m.taskId) ?? []), m.id]);
+  const taskIds = new Set((await db.select({ taskId: scheduledMessages.taskId }).from(scheduledMessages)
+    .where(and(eq(scheduledMessages.status, "sent"), isNotNull(scheduledMessages.turnTakenBy)))).map((m) => m.taskId));
+  let returned = 0;
+  // 逐任务排进 `task:<id>` 那条队列、在里面重读:领取、结算、补捞都排在同一条上,快照不跨过它们。
+  for (const taskId of taskIds) {
+    await serialize(`task:${taskId}`, async () => {
+      if (dbClient.closed) return;
+      const held = await db.select({ id: scheduledMessages.id, by: scheduledMessages.turnTakenBy })
+        .from(scheduledMessages)
+        .where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "sent"),
+          isNotNull(scheduledMessages.turnTakenBy)));
+      const token = turnIdentity(taskId)?.token;
+      const orphans = held.filter((m) => m.by !== token).map((m) => ({ id: m.id, by: m.by! }));
+      if (!orphans.length) return;
+      returned += await returnTaken(taskId, orphans, "ash 重启时那一回合没能接回来");
+    });
   }
-  for (const [taskId, ids] of orphans) await returnTaken(taskId, ids, "ash 重启时那一回合没能接回来");
-  return [...orphans.values()].reduce((n, ids) => n + ids.length, 0);
+  return returned;
 }

@@ -569,6 +569,8 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   turnTakenBy: text("turn_taken_by"),
   // 回合里交过、那一轮没正常收口而退回来的时刻。非空的 pending 行熬得过终态连坐，等下一次起跑送达。
   turnReturnedAt: text("turn_returned_at"),
+  // 哨兵输出那一批在这一刻之前不投递，等紧跟着的「结束」并进来（monitor-events.ts `pushToTask`）。
+  mergeHoldUntil: text("merge_hold_until"),
 });
 
 // Queue items: ordered list of tasks where each task waits for the one

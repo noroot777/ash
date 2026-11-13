@@ -61,6 +61,8 @@ export type DeliveryMessageView = {
   afterDone?: boolean;
   /** 回合里交过、那一轮没收口退回来的哨兵结果(monitor-turn-handoff.ts ②):终态上等下一次起跑。 */
   turnReturnedAt?: string | null;
+  /** 哨兵输出那一批等「结束」并进来的期限(monitor-events.ts `pushToTask`);没读这一列的视同没有。 */
+  mergeHoldUntil?: string | null;
 };
 export type DeliveryVerdict =
   | { action: "deliver" }
@@ -71,8 +73,10 @@ export type DeliveryVerdict =
 // 「一空闲就发」),after 消息看前置任务完成了没有(sendAt 对它只是入队时刻,绝不能
 // 落进钟点那一支 —— 那样它一入队就「到点」了)。抽出来是因为结算那边也要问同一句话(hasDeliverablePendingMessages),
 // 各写一份迟早漂移——真漂了的后果是一条定在明天的消息把预约审查挡一整天。
+// 排队消息唯一的例外是哨兵输出那一批的合并窗口:**放在这里**,每个领取入口(扫描、批次领取、
+// 投递判定)问的都是这一句,哪个触发源先到都绕不过它。
 export function isDueForDelivery(message: DeliveryMessageView, at: Date): boolean {
-  if (message.mode === "queued") return true;
+  if (message.mode === "queued") return !message.mergeHoldUntil || new Date(message.mergeHoldUntil) <= at;
   if (message.mode === "after") return message.afterDone === true;
   return new Date(message.sendAt) <= at;
 }

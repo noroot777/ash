@@ -220,11 +220,6 @@ async function applyReplay(
       expectedDirectionToken: directionToken, bySessionRecovery: true, sourceTaskId: sourceSession?.taskId });
     return `验证结论（${stage}）当时因 MCP 通道中断没能写回，已从本回合的调用记录中补录。`;
   }
-  // 那次调用可能已经把排着的哨兵结果交了出去、只是返回没回来:补录前先退回,别让这一轮被补成
-  // 「正常收口」时把它们当成送达(monitor-turn-handoff.ts 的 `returnTurnHandoffs`)。
-  if (call.tool === "complete_task" || call.tool === "pause_task") {
-    await returnTurnHandoffs(taskId, "交出结果的那次调用因 MCP 通道中断没回到它手上");
-  }
   if (call.tool === "complete_task") {
     // **走共用入口**(task-complete.ts):这条旁路豁免的是「活跃回合」那道身份闸,不是业务约束。
     // 第 1 轮审查 F1 实测过它绕开哨兵闸的样子:补录 1 条、确认写入、结算落 done、哨兵被停掉。
@@ -285,6 +280,13 @@ export async function replayUndeliveredMcpCalls(a: {
   const { out } = detachedPathsFor(join(RUNS_DIR, a.taskId), a.sessId, a.turnStart);
   const calls = collectAshMcpCalls(out, a.agentType);
   if (!calls.length) return 0;
+  // 这一轮有一次 pause/complete 的返回没回到 agent 手上 ⇒ 那一次可能已经把哨兵结果交了出去。
+  // 不管随后补不补录、agent 后来重试成没成,这一轮都会收成正常收口,交出去的就被当成送达 ——
+  // 所以先退回(monitor-turn-handoff.ts ②)。宁可重复:它真读到过的那几条下一次会再送一遍。
+  if (calls.some((call) => !call.ok && (call.tool === "pause_task" || call.tool === "complete_task")
+    && call.args.taskId === a.taskId && isUndeliveredMcpFailure({ message: call.error }))) {
+    await returnTurnHandoffs(a.taskId, "交出结果的那次调用因 MCP 通道中断没回到它手上");
+  }
   const direction = (await db.select({
     token: tasks.activeDirectionToken,
     version: tasks.activeDirectionVersion,

@@ -69,16 +69,14 @@ export async function pushToTask(
       eq(scheduledMessages.status, "pending"),
       isNull(scheduledMessages.deliveringSince),
     ))).at(0) ?? null;
-  await mergeOrEnqueueMonitorEvent(row, text, existing, handoffToken, event);
-  // **输出那一批、任务又空着 ⇒ 投递稍等一下**(见 `deferFlush`);「结束」那一笔一律当场送。
-  // 任务在忙时不用等:消息本来就排在托盘里,随后的「结束」会并进同一行。团队调度台不等:
-  // 它的常驻会话说着话也接得住,投递时机归它自己那条路。
-  if (!handoffToken && event?.kind !== "ended" && task.mode !== "team"
-    && task.status !== "running" && task.status !== "queued") {
-    deferFlush(row.id, row.taskId);
-  } else {
-    flushNow(row.id, row.taskId);
-  }
+  // **输出那一批 ⇒ 新起的那一行先不许投递**(合并窗口,见 `deferFlush`);「结束」那一笔并进来
+  // 就解除、当场送。不分任务忙闲:忙着的那一轮可能下一刻就收口,窗口落在行上而不是落在某一个
+  // 触发源上,谁先来领都得等它。团队调度台不等:它的常驻会话说着话也接得住,投递时机归它自己那条路。
+  const hold = !handoffToken && event?.kind !== "ended" && task.mode !== "team";
+  await mergeOrEnqueueMonitorEvent(row, text, existing, handoffToken, event,
+    hold ? new Date(Date.now() + MONITOR_END_GRACE_MS).toISOString() : null);
+  if (hold) deferFlush(row.id, row.taskId);
+  else flushNow(row.id, row.taskId);
   return true;
 }
 
@@ -86,8 +84,9 @@ export async function pushToTask(
  * 输出那一批**先不叫醒**,等 `MONITOR_END_GRACE_MS` 看进程是不是马上就退 —— 打完最后一行就退出
  * 是最常见的收尾,不等的话这一批先起一个回合,紧跟着的「结束」只能排在它后面再叫醒一次。
  *
- * 消息已经落库了(读取位置在那之后才推进,见 monitor-consume.ts ①),这里推迟的只是**触发
- * 投递**那一下:进程这期间没了,托盘里那一行照旧在,开机扫描就送。
+ * **不许早送的是那一行自己**(`merge_hold_until`,到期判据 `isDueForDelivery` 认它):巡检、
+ * 状态钩子、别的哨兵触发的扫描、回合里的交付,哪一路先到都领不走它。这里的定时器只负责窗口
+ * 过了之后**触发**那一次投递;进程这期间没了,那一行照旧在,巡检到点就送。
  *
  * 等到了 = 收尾那一笔把「结束」并进同一行、当场送(`flushNow` 顺手撤掉这个定时器)。到点时
  * 收尾正在进行(进程已经退了,收尾还在排干/回收/落终态)就等它做完再送:要等的那件事已经发生,
@@ -247,6 +246,8 @@ export async function mergeOrEnqueueMonitorEvent(
   /** 结果交接的身份：合并和新建**两支都要落下它**，否则重投会把同一笔再送一次（N1）。 */
   handoffToken?: string,
   event?: MonitorWakeEvent,
+  /** 新起一行时的合并窗口(`pushToTask`);并进已有那一行时不顺延,「结束」并进来则解除。 */
+  holdUntil: string | null = null,
 ): Promise<void> {
   const previous = readMonitorWake(existing?.monitorWake);
   const monitorWake = event && (!existing || previous) ? appendMonitorWake(previous, event) : null;
@@ -257,6 +258,7 @@ export async function mergeOrEnqueueMonitorEvent(
         text: mergeMonitorEventText(existing.text, text),
         monitorWake,
         ...(handoffToken ? { handoffToken } : {}),
+        ...(holdUntil ? {} : { mergeHoldUntil: null }),
       })
       .where(and(
         eq(scheduledMessages.id, existing.id),
@@ -280,6 +282,7 @@ export async function mergeOrEnqueueMonitorEvent(
     await enqueueMessage({
       taskId: row.taskId, text, origin: monitorMessageOrigin(row.id),
       monitorWake: event ? appendMonitorWake(null, event) : null,
+      mergeHoldUntil: holdUntil,
       ownerUserId: row.ownerUserId,
       ...(handoffToken ? { handoffToken } : {}),
       // **角色和「为哪一次审查的哪一轮」一起交出去**:两样都记在哨兵行上,所以投递那一刻

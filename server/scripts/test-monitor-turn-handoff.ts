@@ -8,6 +8,8 @@
 //  ⑤ 那一轮没正常收口 ⇒ 退回待发送,熬得过终态连坐、终态上等着(不作废)
 //  ⑥ 开机那一扫:记号挂在没接回来的回合上 ⇒ 退回;⑥b 断线补录之前同样退回
 //  ⑦ 空闲任务上 `echo A; exit 0` / 命中 stopWhen:一条消息、两类事件、一次唤醒
+//  ⑧ 第 1 轮审查:领取之后出错 ⇒ 退回、再调一次照交(F1);挑完候选之后方向换了 ⇒ 一行都领不到
+//    (F2);扫描读到之后行换了领取者 ⇒ 不碰(F3);合并窗口里别的触发源领不走(F4);老行认结束(N1)
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
@@ -36,10 +38,34 @@ process.env.ASH_TEST_LEAD_LOG = log;
 
 const api = new Hono();
 mountTaskRunRoutes(api);
-const post = (path: string, token: string, body: unknown = {}) => api.request(path, {
-  method: "POST", headers: { "content-type": "application/json", "x-ash-turn-token": token },
+const post = (path: string, token: string, body: unknown = {}, headers: Record<string, string> = {}) => api.request(path, {
+  method: "POST", headers: { "content-type": "application/json", "x-ash-turn-token": token, ...headers },
   body: JSON.stringify(body),
 });
+
+/**
+ * 在生产代码某一次 `db.select(<投影>).from(<表>)` 出结果之后先做一件事(可以抛错、可以改库),
+ * 用来站进「读完、还没写」那条缝里。`pick` 按投影认是哪一次;返回撤掉这层的函数。
+ */
+function onSelect(
+  table: unknown, pick: (projection: Record<string, unknown> | undefined) => boolean,
+  act: (rows: unknown[]) => Promise<unknown[]>,
+): () => void {
+  const original = db.select.bind(db);
+  (db as { select: unknown }).select = (...args: unknown[]) => {
+    const query = (original as (...a: unknown[]) => { from: (t: unknown) => unknown })(...args);
+    const from = query.from.bind(query);
+    query.from = (t: unknown) => {
+      const builder = from(t) as { then: (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) => Promise<unknown> };
+      if (t !== table || !pick(args[0] as Record<string, unknown> | undefined)) return builder;
+      const then = builder.then.bind(builder);
+      builder.then = (ok, ko) => then((rows) => act(rows as unknown[])).then(ok, ko);
+      return builder;
+    };
+    return query;
+  };
+  return () => { (db as { select: unknown }).select = original; };
+}
 const rowOf = async (messageId: string) =>
   (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, messageId))).at(0)!;
 const taskOf = async (taskId: string) => (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
@@ -234,6 +260,126 @@ try {
     assert.equal((await rowOf(result.id)).status, "pending");
     runs.releaseTurn(taskId, owner);
     await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, result.id));
+  }
+
+  // ── ⑧ F1:领取之后那一步出错 ⇒ 按这次领取退回,再调一次照样交出来 ───────────────
+  {
+    const { taskId, token, owner } = await liveTurn();
+    const result = await queuedResult(taskId, "MUST_READ_BEFORE_DONE");
+    let injected = false;
+    const restore = onSelect(sessions, (p) => !!p && Object.keys(p).length === 1 && p.id === sessions.id, async (rows) => {
+      if (injected || (await rowOf(result.id)).status !== "sent") return rows;
+      injected = true;
+      throw new Error("注入:领取之后读会话出错");
+    });
+    const first = await post(`/tasks/${taskId}/complete`, token);
+    restore();
+    assert.ok(injected, "注入点真的落在领取之后");
+    assert.equal(first.status, 500);
+    const back = await rowOf(result.id);
+    assert.equal(back.status, "pending", "领到的那一行退回托盘");
+    assert.equal(back.turnTakenBy, null);
+    assert.ok(back.turnReturnedAt);
+    const second = await post(`/tasks/${taskId}/complete`, token);
+    assert.equal(second.status, 409, "再调一次:没看过的结果照样拦下、照样交出");
+    assert.match(((await second.json()) as { monitorResults?: string }).monitorResults ?? "", /MUST_READ_BEFORE_DONE/);
+    assert.equal((await post(`/tasks/${taskId}/complete`, token)).status, 200);
+    await settleTurnHandoffs(taskId, token, true);
+    runs.releaseTurn(taskId, owner);
+  }
+
+  // ── ⑧ F2:挑完候选之后方向换了 ⇒ 领取那一笔一行都改不到 ─────────────────────────
+  {
+    const { taskId, token, owner } = await liveTurn();
+    await db.update(tasks).set({ activeDirectionToken: "dir-A" }).where(eq(tasks.id, taskId));
+    const result = await queuedResult(taskId, "DIRECTION_RACE");
+    let steered = false;
+    const restore = onSelect(tasks, (p) => !!p && Object.keys(p).length === 1 && p.id === tasks.id, async (rows) => {
+      if (!steered) {
+        steered = true;
+        await db.update(tasks).set({ activeDirectionToken: "dir-B" }).where(eq(tasks.id, taskId));
+      }
+      return rows;
+    });
+    const res = await post(`/tasks/${taskId}/pause`, token, { resumePrompt: "继续" }, { "x-ash-direction-token": "dir-A" });
+    restore();
+    assert.ok(steered, "方向是在资格那一问之后换的");
+    const body = await res.json() as { paused?: boolean; monitorResults?: string };
+    assert.equal(body.monitorResults, undefined, "过期请求拿不到结果");
+    assert.notEqual(body.paused, false);
+    const row = await rowOf(result.id);
+    assert.equal(row.status, "pending");
+    assert.equal(row.turnTakenBy, null);
+    runs.releaseTurn(taskId, owner);
+    await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, result.id));
+  }
+
+  // ── ⑧ F3:扫描读到之后,那一行换了领取者 ⇒ 退回按当时的领取者 CAS,不碰新一轮的 ──────
+  {
+    const { taskId, token, owner } = await liveTurn();
+    const result = await queuedResult(taskId, "ABA");
+    assert.ok(await handMonitorResultsOnPause(taskId, token, []));
+    runs.releaseTurn(taskId, owner);
+    const next = runs.claimOwnTurn(taskId, "single");
+    const nextToken = `turn-${id()}`;
+    runs.bindTurnToken(taskId, nextToken);
+    // 生产上领取与扫描排在同一条队列里,这条缝只能硬造:扫描读到旧领取者之后,行换成新一轮的。
+    let swapped = false;
+    const restore = onSelect(scheduledMessages, (p) => !!p && "by" in p && "id" in p, async (rows) => {
+      if (!swapped && (rows as Array<{ id: string }>).some((m) => m.id === result.id)) {
+        swapped = true;
+        await db.update(scheduledMessages).set({ turnTakenBy: nextToken }).where(eq(scheduledMessages.id, result.id));
+      }
+      return rows;
+    });
+    const returned = await returnOrphanTurnHandoffs();
+    restore();
+    assert.ok(swapped);
+    assert.equal(returned, 0, "旧快照里的领取者已经不是它了");
+    const row = await rowOf(result.id);
+    assert.equal(row.status, "sent");
+    assert.equal(row.turnTakenBy, nextToken, "新一轮的领取原样留着");
+    await settleTurnHandoffs(taskId, nextToken, true);
+    runs.releaseTurn(taskId, next!);
+  }
+
+  // ── ⑧ N1:升级前没有结构的老行,正文带结束抬头 ⇒ 记成结束 ────────────────────────
+  {
+    const { taskId, token, owner, sessionId } = await liveTurn();
+    const result = await queuedResult(taskId, "【哨兵结束】老哨兵（monitorId=x），退出码 0");
+    await db.update(scheduledMessages).set({ monitorWake: null }).where(eq(scheduledMessages.id, result.id));
+    assert.ok(await handMonitorResultsOnPause(taskId, token, []));
+    const handed = notices(taskId, sessionId).find((n) => n.kind === "monitor.handed") as
+      { monitorWake: { events: Array<{ kind: string }> } } | undefined;
+    assert.deepEqual(handed?.monitorWake.events.map((e) => e.kind), ["ended"]);
+    await settleTurnHandoffs(taskId, token, true);
+    runs.releaseTurn(taskId, owner);
+  }
+
+  // ── ⑧ F4:合并窗口落在行上 ⇒ 巡检、按任务扫描、回合里的交付都领不走 ─────────────────
+  {
+    const taskId = await makeTask({ status: "paused" });
+    await db.insert(sessions).values({
+      id: `s-${id()}`, taskId, role: "single", agentType: "claude", executor: "claude", cwd: root,
+      startedAt: new Date(Date.now() - 60_000).toISOString(), endedAt: new Date(Date.now() - 30_000).toISOString(),
+    });
+    const started = await startMonitor({ taskId, command: "echo FINAL_OUTPUT; sleep 0.9; exit 0", description: "grace-bypass" });
+    assert.ok(started.ok);
+    const monitorId = started.ok ? started.monitor.id : "";
+    const origin = `monitor:${monitorId}`;
+    const ofMonitor = () => db.select().from(scheduledMessages).where(eq(scheduledMessages.origin, origin));
+    await until("输出进了托盘", async () => (await ofMonitor()).some((m) => m.text.includes("FINAL_OUTPUT")));
+    assert.ok((await ofMonitor())[0]!.mergeHoldUntil, "那一行带着合并窗口");
+    await pending.deliverPendingMessages();
+    await pending.deliverPendingMessages(taskId);
+    const held = await ofMonitor();
+    assert.deepEqual(held.map((m) => m.status), ["pending"], "窗口里谁来领都领不走");
+    await until("结束并进来、一起送出", async () => (await ofMonitor()).every((m) => m.status === "sent")
+      && (await ofMonitor()).some((m) => /哨兵结束/.test(m.text)));
+    const rows = await ofMonitor();
+    assert.equal(rows.length, 1, "只有一条消息");
+    assert.deepEqual((rows[0]!.monitorWake?.events ?? []).map((e) => e.kind), ["output", "ended"]);
+    await until("那一回合跑完", async () => !runs.isTurnClaimed(taskId));
   }
 
   // ── ⑦ 空闲任务:最后一批输出与「结束」并成一条、只叫醒一次 ─────────────────────

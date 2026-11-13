@@ -140,6 +140,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 哨兵结果在回合里交出去的那一轮 / 那一轮没收口退回的时刻(见 schema.ts)。存量行 NULL。
   "ALTER TABLE scheduled_messages ADD COLUMN turn_taken_by TEXT",
   "ALTER TABLE scheduled_messages ADD COLUMN turn_returned_at TEXT",
+  "ALTER TABLE scheduled_messages ADD COLUMN merge_hold_until TEXT",
   "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
   "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
   "ALTER TABLE tasks ADD COLUMN started_at TEXT",
