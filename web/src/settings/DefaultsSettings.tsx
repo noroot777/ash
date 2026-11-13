@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { AppSettings } from "@ash/shared";
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
 import type { ComposerSendKey } from "@ash/shared";
-import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
+import { useIsInstanceAdmin, useIsLocalOnly, useIsMultiUser } from "../auth/authContext.ts";
 import { api } from "../lib/api.ts";
 import { WorkflowPicker, useWorkflows } from "../workflow/WorkflowPicker.tsx";
 import { ColorThemeCard } from "./ColorThemeCard.tsx";
@@ -24,6 +24,7 @@ export function DefaultsSettings({ notify, onOpen }: {
   // 多人模式下「任务默认值」是个人面(各存各的),而技能扫描间隔、接力那几项是实例面
   // (§八)。这里只负责别把改不动的东西显示成能改 —— 真正的闸在服务端。
   const isMulti = useIsMultiUser();
+  const localOnly = useIsLocalOnly();
   const isInstanceAdmin = useIsInstanceAdmin();
   const canManageInstance = !isMulti || isInstanceAdmin;
 
@@ -119,9 +120,10 @@ export function DefaultsSettings({ notify, onOpen }: {
         onChangeSeconds={patchSkillRefresh}
         notify={notify}
       />
-      {/* 访问密钥是自用模式才有的东西：多人模式下每个人凭自己的 key 进。 */}
-      {!isMulti && <RemoteAccessCard notify={notify} />}
-      {canManageInstance && (
+      {/* 访问密钥是自用模式才有的东西：多人模式下每个人凭自己的 key 进；本机自用模式下
+          别的设备连不进来，这两张卡（远程访问、转多人）都没有可做的事。 */}
+      {!isMulti && !localOnly && <RemoteAccessCard notify={notify} />}
+      {canManageInstance && !localOnly && (
         <InstanceModeCard
           settings={settings}
           loading={loading}

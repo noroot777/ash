@@ -11,6 +11,7 @@ import type { PairClaim, PairCode, PairRequestView, PairTicket, RemoteAccessView
 import { actorOf } from "./context.js";
 import { SESSION_COOKIE } from "./middleware.js";
 import { isMultiUser } from "./mode.js";
+import { LOCAL_ONLY, LOCAL_ONLY_REFUSAL } from "../local-only.js";
 import {
   connectionOf, deviceByToken, ensureRemoteAccessKey, isLocalDirect, knownHost, listDevices, peerAddress, removeDevice,
   requestOrigin, rotateRemoteAccessKey,
@@ -38,6 +39,13 @@ function viewFor(c: Context): RemoteAccessView {
 }
 
 export function mountRemoteAccessRoutes(api: Hono, issueSessionCookie: (c: Context, token: string) => void): void {
+  // 本机自用模式下这一整套都不存在:答一句明白话,别让请求掉进「接口不存在、多半是服务端
+  // 比前端旧」那条兜底,把人引去查一个不存在的版本问题。
+  if (LOCAL_ONLY) {
+    const off = (c: Context) => c.json({ error: LOCAL_ONLY_REFUSAL }, 403);
+    for (const path of ["/auth/pair", "/auth/pair/*", "/remote-access", "/remote-access/*"]) api.all(path, off);
+    return;
+  }
   // ── 设备那一侧 ─────────────────────────────────────────────────────────────
   // 这三条只对「还没进来」的请求有意义。已经进得来的(本机、已配对)来打一律拒:名册里
   // 不该多出一台本来就进得来的设备。

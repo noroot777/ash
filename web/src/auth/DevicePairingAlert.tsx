@@ -4,7 +4,7 @@ import { Check, Devices, Prohibit, SpinnerGap } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { authApi } from "../lib/authApi.ts";
 import { PAIR_REQUESTS_CHANGED_EVENT, seenLabel } from "../lib/pairing.ts";
-import { useIsMultiUser } from "./authContext.ts";
+import { useIsLocalOnly, useIsMultiUser } from "./authContext.ts";
 
 const POLL_MS = 4_000;
 
@@ -13,7 +13,10 @@ const POLL_MS = 4_000;
 //
 // 不用像那边一样筛「新鲜」:申请只活十分钟,过期了服务端自己就不再给。
 export function DevicePairingAlert({ notify }: { notify: (message: string) => void }) {
+  // 多人模式没有设备配对(那边每个人凭自己的 key 登录),本机自用模式连别的设备都连不进来。
   const multi = useIsMultiUser();
+  const localOnly = useIsLocalOnly();
+  const off = multi || localOnly;
   const [requests, setRequests] = useState<PairRequestView[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -31,8 +34,7 @@ export function DevicePairingAlert({ notify }: { notify: (message: string) => vo
   }, []);
 
   useEffect(() => {
-    // 多人模式没有设备配对,那边每个人凭自己的 key 登录。
-    if (multi) return;
+    if (off) return;
     void reload();
     const timer = window.setInterval(() => void reload(), POLL_MS);
     const onVisible = () => { if (document.visibilityState === "visible") void reload(); };
@@ -44,10 +46,10 @@ export function DevicePairingAlert({ notify }: { notify: (message: string) => vo
       document.removeEventListener("visibilitychange", onVisible);
       epoch.current += 1;
     };
-  }, [multi, reload]);
+  }, [off, reload]);
 
   const request = requests[0];
-  if (multi || !request) return null;
+  if (off || !request) return null;
 
   const decide = async (decision: "approve" | "deny") => {
     setBusy(true);

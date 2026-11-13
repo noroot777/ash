@@ -93,6 +93,17 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
 
   // 排在向导之前:没认出机主的时候,连「要不要首启」都不该由这个访客来答。
+  // 本机自用模式没有配对这回事:走到这里的只能是同机反代转进来的请求,说清楚就够了。
+  if (state.needsAccessKey && state.localOnly) {
+    return (
+      <AuthShell>
+        <div className="auth-card auth-card--service">
+          <h1>只接受本机访问</h1>
+          <p className="auth-note">请在 ash 所在的这台机器上直接打开。</p>
+        </div>
+      </AuthShell>
+    );
+  }
   if (state.needsAccessKey) return <PairPage onDone={refresh} />;
   if (state.needsSetup) return <SetupWizard state={state} onDone={refresh} />;
   if (state.mode === "multi" && !state.user) {

@@ -26,8 +26,8 @@
 // **这个文件不许 import paths.js**：那一份在模块加载时就把 `ASH_RUNS_DIR` 读成了常量，
 // 而这里的活儿恰恰是在那之前决定该把环境变量设成什么。
 import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { basename, dirname, join, resolve } from "node:path";
+import { dataRootFor } from "./data-root.js";
 import { canonicalResourceKey } from "./resource-claim.js";
 
 /** `<dir>/runs` 的主人只能叫这个名字。 */
@@ -52,15 +52,13 @@ export function resolveRepairResources(request: {
   runs?: string | undefined;
   apply: boolean;
   forceProduction?: boolean;
-  env?: { ASH_DB?: string | undefined; ASH_RUNS_DIR?: string | undefined };
+  env?: { ASH_DB?: string | undefined; ASH_RUNS_DIR?: string | undefined; ASH_DATA_DIR?: string | undefined };
   /** 只给测试用：伪造仓库的 data 目录。 */
   dataDir?: string;
 }): RepairResourceDecision {
-  const dataDir = request.dataDir
-    ? resolve(request.dataDir)
-    : fileURLToPath(new URL("../../data", import.meta.url));
-  const productionDb = canonicalResourceKey(join(dataDir, OWNER_DB_NAME));
   const env = request.env ?? {};
+  const dataDir = request.dataDir ? resolve(request.dataDir) : dataRootFor(env);
+  const productionDb = canonicalResourceKey(join(dataDir, OWNER_DB_NAME));
   const dbFile = canonicalResourceKey(
     request.db ? resolve(request.db) : env.ASH_DB ? resolve(env.ASH_DB) : productionDb,
   );

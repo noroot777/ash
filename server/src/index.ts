@@ -4,7 +4,6 @@ import { Hono } from "hono";
 import { existsSync, statSync, createReadStream, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Readable } from "node:stream";
-import { fileURLToPath } from "node:url";
 import { join, extname, normalize, sep } from "node:path";
 import type { Context } from "hono";
 import {
@@ -16,6 +15,8 @@ import { inspectPortCommand, inspectProcessSync, killPidsCommand, listenerPidsSy
 // 纯粹读一个环境变量，不碰 DB，所以可以静态 import（其余会打开库的模块一律等拿到锁之后）。
 import { stampHumanActionToken } from "./auth/human-action-token.js";
 import { IS_PREVIEW_INSTANCE } from "./preview-instance.js";
+import { LOCAL_ONLY, LOCAL_ONLY_HOSTNAME, LOCAL_ONLY_REFUSAL } from "./local-only.js";
+import { CODE_DIR, DATA_DIR, REPO_DIR } from "./paths.js";
 import { recordListeningPort } from "./listening-port.js";
 import { guardMonitorHook } from "./monitor-hook-failsafe.js";
 import { mountPreviewProxy, attachPreviewUpgrades } from "./preview-proxy.js";
@@ -121,7 +122,15 @@ async function initializeServer() {
       import("./auth/handoff-outbound.js"),
       import("./auth/context.js"),
     ]);
-  const instance = await modeModule.instanceConfig();
+  let instance = await modeModule.instanceConfig();
+  if (LOCAL_ONLY) {
+    if (instance.mode === "multi") throw new Error(`${LOCAL_ONLY_REFUSAL}；这份数据已经是多人模式，不能以本机自用模式打开`);
+    // 首启那一问的答案是开关已经给定的：直接落成自用，向导不出。
+    if (instance.mode === "") {
+      await modeModule.setInstanceMode("single", "");
+      instance = await modeModule.instanceConfig();
+    }
+  }
   if (instance.mode === "multi") {
     const { sweepExpiredSessions } = await import("./auth/store.js");
     await sweepExpiredSessions();
@@ -440,11 +449,9 @@ app.all("/api/*", (c) =>
 // catch-all "/*" 之前,否则被 SPA 兜底截走。SPA 那条 readFile 把整文件读进内存、不支持
 // Range;视频大且要拖动进度,所以这里单独用 createReadStream 流式 + 解析 Range 返回 206。
 // createReadStream 跟随软链,所以 review 目录放软链即可,无需拷贝原片。
-// 根目录默认跟随 ash 项目(review/ 在仓库根下,迁机器也不失效);可用 ASH_REVIEW_ROOT
-// 覆盖。src 与编译后的 dist 都在 server/ 下一层,../../ 均指向仓库根。
-const REVIEW_ROOT = normalize(
-  process.env.ASH_REVIEW_ROOT ?? fileURLToPath(new URL("../../review", import.meta.url)),
-);
+// 根目录默认跟随 ash 仓库(review/ 在仓库根下,迁机器也不失效);代码不在仓库里(独立 app,
+// bundle 只读、放不进软链)时落到数据目录下。可用 ASH_REVIEW_ROOT 覆盖。
+const REVIEW_ROOT = normalize(process.env.ASH_REVIEW_ROOT ?? join(REPO_DIR ?? DATA_DIR, "review"));
 app.get("/review", (c) => c.redirect("/review/"));
 app.get("/review/*", async (c) => {
   const rel = decodeURIComponent(new URL(c.req.url).pathname).replace(/^\/review\/?/, "");
@@ -506,7 +513,7 @@ app.get("/review/*", async (c) => {
 // Serve the built SPA in production. The path is resolved relative to this module
 // (works regardless of cwd). API/review/mobile routes above remain higher-priority
 // than the final web catch-all below.
-const WEB_DIST = fileURLToPath(new URL("../../web/dist", import.meta.url));
+const WEB_DIST = join(CODE_DIR, "web", "dist");
 const hasWebBuild = existsSync(join(WEB_DIST, "index.html"));
 
 const MIME: Record<string, string> = {
@@ -533,7 +540,7 @@ const MIME: Record<string, string> = {
 // config.ts 在 web 下默认用 location.origin)。app.json experiments.baseUrl="/mobile/app"
 // 让导出资源路径落在这个子前缀下。改了 mobile 代码要重新 build:mobile 再刷新。
 // 必须注册在下方 web/dist 的 "/*" catch-all 之前,否则被 SPA 兜底截走。
-const MOBILE_DIST = fileURLToPath(new URL("../../mobile/dist", import.meta.url));
+const MOBILE_DIST = join(CODE_DIR, "mobile", "dist");
 const hasMobile = existsSync(join(MOBILE_DIST, "index.html"));
 const mobileMiss = "手机预览还没构建 —— 在仓库根跑 `npm run build:mobile` 生成 mobile/dist 后刷新。";
 
@@ -641,7 +648,7 @@ app.get("/*", (c) => {
 
 // Bind the port before starting the scheduler. A process that cannot accept
 // HTTP callbacks must never be allowed to poll schedules or launch agents.
-activeServer = serve({ fetch: app.fetch, port }, (info) => {
+activeServer = serve({ fetch: app.fetch, port, ...(LOCAL_ONLY ? { hostname: LOCAL_ONLY_HOSTNAME } : {}) }, (info) => {
   // PORT=0 的测试/临时实例在绑定后才知道真实端口；接力清单读取这个动态值，才能把
   // 可回连地址带给对端，而不是把不可用的 0 端口写进任务历史。只写模块内状态，不能
   // 改 process.env.PORT：应用内终端和 agent 都会继承它，前端 dev server 会误抢 ash 端口。
@@ -667,7 +674,7 @@ activeServer = serve({ fetch: app.fetch, port }, (info) => {
     }
   }
   startupComplete = true;
-  console.log(`[ash] server on http://localhost:${info.port}`);
+  console.log(`[ash] server on http://${LOCAL_ONLY ? LOCAL_ONLY_HOSTNAME : "localhost"}:${info.port}${LOCAL_ONLY ? "（本机自用模式）" : ""}`);
 });
 
 attachPreviewUpgrades(activeServer as import("node:http").Server);
