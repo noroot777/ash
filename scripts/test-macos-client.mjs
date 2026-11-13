@@ -413,36 +413,66 @@ try {
   assert.equal(readFileSync(book, "utf8").trim(), ordered.at(-1), "the book keeps the largest number handed out");
   console.log("PASS: build numbers strictly increase across same-second, backdated and concurrent builds");
 
-  // ── 安装：旧 bundle 还有进程在用就不换；拷失败旧的原样不动 ──
+  // ── 安装：旧 bundle 还有进程在用就不换（按真实文件身份认）；拷失败旧的原样不动；两个安装器排队 ──
   const install = join(root, "desktop/macos/scripts/install-app.sh");
-  const apps = join(temporary, "Applications");
+  // 安装锁放在 TMPDIR 下，测试用自己的临时目录，跑完一起清掉。
+  const installEnv = { TMPDIR: temporary };
+  // 安装目录名里带正则字符，再给它一个软链别名：从哪个拼写拉起、从哪个拼写安装都得认出是同一个包。
+  const apps = join(temporary, "Apps [1]+ $x");
+  const appsAlias = join(temporary, "Applications-alias");
   const fakeApp = (dir, version) => {
     mkdirSync(join(dir, "Contents/Resources/app/server/dist"), { recursive: true });
     writeFileSync(join(dir, "Contents/Resources/app/server/dist/index.js"), "setInterval(() => {}, 1000)");
     writeFileSync(join(dir, "Contents/version"), version);
   };
   const newApp = join(temporary, "build", "Ash.app");
+  const newerApp = join(temporary, "build-2", "Ash.app");
   fakeApp(newApp, "new");
+  fakeApp(newerApp, "newer");
   fakeApp(join(apps, "Ash.app"), "old");
+  symlinkSync(apps, appsAlias);
   const installed = () => readFileSync(join(apps, "Ash.app/Contents/version"), "utf8");
-  const oldServer = spawn(process.execPath, [join(apps, "Ash.app/Contents/Resources/app/server/dist/index.js")], { stdio: "ignore" });
-  children.add(oldServer);
-  await delay(200);
-  result = await launch("/bin/bash", [install, newApp, apps]).done;
-  assert.equal(result.status, 1, result.output);
-  assert.match(result.output, new RegExp(`${oldServer.pid} .*server/dist/index\\.js`), "the process still using the old bundle is named");
-  assert.equal(installed(), "old", "a bundle in use is not replaced");
-  oldServer.kill("SIGKILL");
-  await once(oldServer, "exit");
-  children.delete(oldServer);
-  result = await launch("/bin/bash", [install, join(temporary, "build", "missing.app"), apps]).done;
+  // 系统 node 跑包里的脚本（脚本读完就关，只有命令行认得出），和包里的「node」本身在跑（可执行文件认得出；
+  // 拿一份 /bin/sleep 当它 —— 开发机上的 node 多半连着动态库，拷出来起不来）。
+  const bundledNode = join(apps, "Ash.app/Contents/Resources/node");
+  copyFileSync("/bin/sleep", bundledNode);
+  const users = [
+    ["script, started via the real path, installing via the alias", [process.execPath, join(apps, "Ash.app/Contents/Resources/app/server/dist/index.js")], appsAlias],
+    ["script, started via the alias, installing via the real path", [process.execPath, join(appsAlias, "Ash.app/Contents/Resources/app/server/dist/index.js")], apps],
+    // 命令行里一个 .app 都没有（相对路径起的），只能靠打开着的可执行文件认。
+    ["bundled executable started by a relative path", ["./node", "600"], apps,
+      join(appsAlias, "Ash.app/Contents/Resources")],
+  ];
+  for (const [label, [command, ...args], into, cwd = temporary] of users) {
+    const user = spawn(command, args, { stdio: "ignore", cwd });
+    children.add(user);
+    await delay(300);
+    result = await launch("/bin/bash", [install, newApp, into], installEnv).done;
+    assert.equal(result.status, 1, `${label}: ${result.output}`);
+    assert.match(result.output, new RegExp(`${user.pid} `), `${label}: the process still using the old bundle is named`);
+    assert.equal(installed(), "old", `${label}: a bundle in use is not replaced`);
+    user.kill("SIGKILL");
+    await once(user, "exit");
+    children.delete(user);
+  }
+  rmSync(bundledNode);
+  result = await launch("/bin/bash", [install, join(temporary, "build", "missing.app"), apps], installEnv).done;
   assert.equal(result.status, 1, result.output);
   assert.equal(installed(), "old", "a failed install keeps the old app");
-  result = await launch("/bin/bash", [install, newApp, apps]).done;
+  result = await launch("/bin/bash", [install, newApp, appsAlias], installEnv).done;
   assert.equal(result.status, 0, result.output);
   assert.equal(installed(), "new");
   assert.deepEqual(readdirSync(apps), ["Ash.app"], "no staging or replaced copy is left behind");
-  console.log("PASS: install refuses while anything still runs from the old bundle, keeps the old app on failure, swaps in place otherwise");
+  // 两个安装器同时换同一个目录（一个经别名）：排队换，各自完整，不留嵌套的暂存包。
+  const installers = [launch("/bin/bash", [install, newerApp, apps], installEnv), launch("/bin/bash", [install, newApp, appsAlias], installEnv)];
+  for (const racer of installers) {
+    result = await racer.done;
+    assert.equal(result.status, 0, result.output);
+  }
+  assert.ok(["new", "newer"].includes(installed()), installed());
+  assert.deepEqual(readdirSync(apps), ["Ash.app"], "racing installs leave exactly one app");
+  assert.deepEqual(readdirSync(join(apps, "Ash.app")), ["Contents"], "no staging bundle nested inside the installed one");
+  console.log("PASS: install refuses while anything still runs from the old bundle (whatever path spelling it was started or installed by), keeps the old app on failure, serialises racing installs, swaps in place otherwise");
 
   // ── 导入旧数据 ──
   // 假的洗副本工具：记下参数，在它拿到的库上留个记号，按约定回一行 JSON；摆了 import-fail 就失败。

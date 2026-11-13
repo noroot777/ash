@@ -93,8 +93,10 @@ case "${1:-}" in
     [[ -w "$DEST_DIR" ]] || DEST_DIR="$HOME/Applications"
     osascript -e 'tell application id "dev.ash.mac" to quit' >/dev/null 2>&1 || true
     # 窗口退出要一会儿；服务和 agent 的 MCP 不随它退，install-app.sh 见到还有人在用就不装。
+    # 认的是可执行文件的真实路径（lsof 报解析后的路径），装在别名目录下、路径带特殊字符都认得出。
+    GUI="$(cd "$DEST_DIR/Ash.app/Contents/MacOS" 2>/dev/null && pwd -P)/Ash" || GUI=""
     for _ in $(seq 1 50); do
-      pgrep -f -- "$DEST_DIR/Ash.app/Contents/MacOS/Ash" >/dev/null || break
+      [[ -n "$GUI" ]] && lsof -nP -w -a -d txt -c Ash -F n 2>/dev/null | grep -qxF "n$GUI" || break
       sleep 0.2
     done
     bash "$HERE/scripts/install-app.sh" "$APP" "$DEST_DIR"
