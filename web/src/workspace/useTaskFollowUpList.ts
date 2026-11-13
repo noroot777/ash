@@ -8,9 +8,10 @@ import { api } from "../lib/api.ts";
  * **每次悬停都重新问，不留缓存**：会话正文没有能在前端拿到的版本号 —— 任务的 updatedAt
  * 不是（删掉一条消息不动它，第 1 轮审查实测删过的原话从缓存里又冒出来），而为了省一次
  * 只读一个任务的请求去枚举「哪些写入会改正文」守不住。悬停本来就要等 PEEK_DELAY，
- * 这一发通常在卡片弹出前后就回来了；回来之前卡片先拿铺开时取到的最后一条顶着。
+ * 这一发通常在卡片弹出前后就回来了。
  *
- * "loading" = 还没回来；"failed" = 这一发挂了（下次悬停自然再问一次）。
+ * "loading" = 还没回来；"failed" = 这一发挂了（下次悬停自然再问一次）。这两种都是「不知道」，
+ * 卡片不拿铺开时批量取到的那句来补（理由见 TaskSpread 的 askPeek）。
  */
 export type FollowUpListState = TaskFollowUpList | "loading" | "failed";
 

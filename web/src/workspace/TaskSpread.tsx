@@ -93,42 +93,33 @@ function bodyPeek(raw: string | undefined): { text: string; paths: string[] } {
   return { text: raw === undefined ? "还没读到这个任务的需求。" : (body || "这个任务没有写需求。"), paths };
 }
 
-const sameAsk = (a: TaskFollowUp, b: TaskFollowUp) => a.at === b.at && a.text === b.text;
-
 /**
  * 悬停「追问」那一格时卡片里列的那几条：我发过的**全部**追问，新的在上（跟外面那一格
- * 显示的是同一句打头）。全部那份要悬停时现问（useTaskFollowUpList），回来之前、或者那一发
- * 挂了，先拿铺开时批量取到的最后一条顶着。
+ * 显示的是同一句打头）。
  *
- * 只有服务端说**读全了**（complete）才报总数、才敢说「还没追问过」：请求成功不等于每条
- * 会话都读到了，少读一条就少算几句（第 1 轮审查）。没读全时照样列出读到的那些，再把
- * 铺开时确知存在的那最后一条补进去，并在底下说一句「可能不全」。
+ * **只认这一次悬停现取的结果**（useTaskFollowUpList），不拿铺开时批量取到的那句来补：
+ * 那句是铺开那一刻的摘要，正文删过之后它就不是事实了，而批量接口读不动的会话是悄悄
+ * 跳过的，它说「没有」也证明不了没有（第 1、2 轮审查）。所以：
+ * - 只有服务端说**读全了**（complete）才报总数、才敢说「还没追问过」；
+ * - 没读全时只列读到的那些，底下说一句可能不全；
+ * - 还没回来、或者这一发挂了，就是不知道，不猜。
  */
 function askPeek(
   task: TaskListItem,
   state: FollowUpListState,
-  last: TaskFollowUp | undefined,
-  known: boolean,
 ): { asks: TaskFollowUp[]; complete: boolean; subtitle: string; empty: string; caveat: string | null } {
-  const got = typeof state === "object" ? state : null;
-  const complete = got?.complete === true;
-  let asks = got ? [...got.followUps].reverse() : [];
-  if (!complete && last && !asks.some((item) => sameAsk(item, last))) {
-    // 稳定排序：时刻相同（含都没有时刻）的保持服务端给的先后。
-    asks = [last, ...asks].sort((a, b) => (b.at ?? "").localeCompare(a.at ?? ""));
+  if (state === "loading") return { asks: [], complete: false, subtitle: "读取中", empty: "", caveat: null };
+  if (state === "failed") {
+    return { asks: [], complete: false, subtitle: "没读到", empty: "这次没读到这个任务的追问，移开再指一次会重读。", caveat: null };
   }
-  // 「没追问过」只有两种来源说得出口：这一发读全了，或者还没回来 / 挂了时铺开那一批问过。
-  const knownNone = complete || (!got && known);
+  const { complete } = state;
+  const asks = [...state.followUps].reverse();
   const newest = asks[0];
   const subtitle = newest
     ? `${complete ? `${asks.length} 条 · ` : ""}最近 ${compactAge(newest.at ?? task.updatedAt)}`
-    : (knownNone ? NO_FOLLOW_UP : "还没读到");
-  const empty = knownNone
-    ? "这个任务你还没有追问过 —— 只有原始需求。"
-    : got ? "这个任务有会话记录读不出来，列不出追问。" : "还没读到这个任务的追问。";
-  const caveat = !asks.length || complete || state === "loading"
-    ? null
-    : got ? "有会话记录读不出来，这里可能不全。" : "全部追问没读到，只列出了最新一条。";
+    : (complete ? NO_FOLLOW_UP : "没读全");
+  const empty = complete ? "这个任务你还没有追问过 —— 只有原始需求。" : "这个任务有会话记录读不出来，列不出追问。";
+  const caveat = asks.length && !complete ? "有会话记录读不出来，这里可能不全。" : null;
   return { asks, complete, subtitle, empty, caveat };
 }
 
@@ -238,7 +229,6 @@ export function useSpreadPeek(enabled: boolean) {
 
 export function SpreadPeekCard({
   peek,
-  last,
   memo,
   known,
   body,
@@ -247,7 +237,6 @@ export function SpreadPeekCard({
   onDismiss,
 }: {
   peek: Peek;
-  last: TaskFollowUp | undefined;
   /** 最近更新的那条备忘；undefined = 这个任务没有备忘（或者这一批没问过）。 */
   memo: TaskMemoDigest | undefined;
   known: boolean;
@@ -260,7 +249,7 @@ export function SpreadPeekCard({
   const card = useRef<HTMLDivElement | null>(null);
   const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
   const list = useTaskFollowUpList(peek.task.id, peek.kind === "last");
-  const ask = peek.kind === "last" ? askPeek(peek.task, list, last, known) : null;
+  const ask = peek.kind === "last" ? askPeek(peek.task, list) : null;
   const need = ask ? null : bodyPeek(body);
   const hasImages = ask ? ask.asks.some((item) => item.attachments.length > 0) : (need?.paths.length ?? 0) > 0;
 
@@ -311,7 +300,7 @@ export function SpreadPeekCard({
             </li>
           ))}
         </ol>
-      ) : <p>{ask.empty}</p>)}
+      ) : ask.empty && <p>{ask.empty}</p>)}
       {ask?.caveat && <p className="workspace-spread-peek-caveat">{ask.caveat}</p>}
       {/* 备忘排在追问**下面**（用户 2026-10-28 指定的位置）：两样都在这一张卡里，谁新
           只决定外面那一格显示哪条，不决定这里的先后 —— 先后固定，读起来才不会每次都变。 */}
@@ -344,7 +333,6 @@ export function SpreadPeekLayer({ peek, spread, onHold, onLeave, onDismiss }: {
   return (
     <SpreadPeekCard
       peek={peek}
-      last={spread.followUps.get(peek.task.id)}
       memo={spread.memos.get(peek.task.id)}
       known={spread.loaded.has(peek.task.id)}
       body={spread.bodies.get(peek.task.id)}
