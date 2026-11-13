@@ -19,7 +19,9 @@
 //      （第 3 轮审查第 1 条）；判决没类型时不说成「上游连不上」
 //   6. 单飞收尾把「这一回合自己异常结束」的事实交进来（接线）
 //   7. 那份记录上线之前断掉、没存过原因的轮次：状态接口按盘上的事实现算（诊断文件、原始事件、会话
-//      与回合行、报告在不在）；原话进结构，类型只认执行器归一层重放出来的；什么都读不到就不带
+//      与回合行、报告在不在）；原话进结构，类型只认执行器归一层重放出来的；什么都读不到就不带。
+//      看门狗熔断的老回合：诊断里的停止请求不当成「你停的」，熔断原因的类型取重试通知里最后那条
+//      （第 1 轮复审第 1、3 条）
 //
 // 跑：npm -w server run test:review-no-verdict
 import assert from "node:assert/strict";
@@ -392,12 +394,16 @@ try {
       traceWriteError: null, eventsPath: null, stderrPath: null,
     };
     /** 审查者那一回合在库里的样子：回合行的结局、会话行的退出码。 */
-    const settle = async (s: Awaited<ReturnType<typeof scene>>, outcome: string | null, exitStatus: number | null, stoppedAs: string | null = null) => {
+    const settle = async (s: Awaited<ReturnType<typeof scene>>, outcome: string | null, exitStatus: number | null, stoppedAs: string | null = null, stallReason: string | null = null) => {
       await db.update(sessions).set({ endedAt: end, exitStatus, stoppedAs }).where(eq(sessions.id, s.sessId));
       if (outcome) {
-        await db.insert(sessionTurns).values({ id: `${s.sessId}-turn`, sessionId: s.sessId, taskId: s.taskId, startedAt: at, endedAt: end, outcome } as typeof sessionTurns.$inferInsert);
+        await db.insert(sessionTurns).values({ id: `${s.sessId}-turn`, sessionId: s.sessId, taskId: s.taskId, startedAt: at, endedAt: end, outcome, stallReason } as typeof sessionTurns.$inferInsert);
       }
     };
+    const writeEvents = (s: Awaited<ReturnType<typeof scene>>, lines: unknown[]) => writeFileSync(
+      runTracePaths(join(RUNS_DIR, s.taskId), s.sessId, at).eventsPath,
+      `${lines.map((line) => typeof line === "string" ? line : JSON.stringify(line)).join("\n")}\n`,
+    );
     const EXPECTED_SAID = "unexpected status 503 Service Unavailable: auth_unavailable: no auth available";
 
     // 只有诊断文件：说不出类型，照实说退出码，原话摆出来（不从原文里找 503）。
@@ -447,6 +453,37 @@ try {
     await settle(unreported, "failed", 1);
     await db.update(freeReviewRounds).set({ noVerdict: { kind: "unreported", reason: "回合收尾了，结论没报上来" } }).where(eq(freeReviewRounds.runId, unreported.runId));
     assert.deepEqual(await unreported.api(), { kind: "unreported", reason: "回合收尾了，结论没报上来" });
+    // 看门狗熔断的老回合：终止是看门狗发的停止请求（诊断里 stopRequested=true），结局是 failed、
+    // 不是你停的；原因的类型跟新断的轮次一样取熔断时最后那条重试错误（第 1 轮复审第 1、3 条）。
+    const QUOTA_429 = "unexpected status 429 Too Many Requests: You exceeded your current quota (insufficient_quota)";
+    const KILLED = { ...LIVE_DIAGNOSTICS, terminationKind: "manual_stop", failureKind: null, failureReason: null, stopRequested: true, exitStatus: 143, structuredErrors: [] };
+    const tripped = await scene({ diagnostics: KILLED });
+    await settle(tripped, "failed", 143, null, "15 分钟里只收到重试类错误");
+    writeEvents(tripped, [
+      { method: "error", params: { willRetry: true, error: { message: QUOTA_429 } } },
+      { method: "item/agentMessage/delta", params: { delta: "…" } },
+      { method: "error", params: { willRetry: true, error: { message: QUOTA_429 } } },
+    ]);
+    const trippedCause = await tripped.api();
+    assert.equal(trippedCause?.kind, "interrupted", "看门狗发的停止请求不算你停的：照样补原因");
+    assert.equal(trippedCause?.reason, "模型账户额度用完了（429）", "熔断原因的类型取重试通知里最后那条，跟新断的轮次同一句");
+    assert.equal(trippedCause?.vague, undefined);
+    assert.match(trippedCause?.said ?? "", /15 分钟里只收到重试类错误/, "没有执行故障时原话是那份熔断诊断");
+    // 最后那条重试错误没类型：不沿用前面的，照实说被自动终止，标笼统。
+    const untyped = await scene({ diagnostics: KILLED });
+    await settle(untyped, "failed", 143, null, "15 分钟里只收到重试类错误");
+    writeEvents(untyped, [
+      { method: "error", params: { willRetry: true, error: { message: QUOTA_429 } } },
+      { method: "error", params: { willRetry: true, error: { message: "Reconnecting... 2/5" } } },
+    ]);
+    const untypedCause = await untyped.api();
+    assert.equal(untypedCause?.reason, "回合长时间没有进展，被自动终止");
+    assert.equal(untypedCause?.vague, true);
+    // 同一份诊断、但回合行说是你停的：不补。
+    const userStopped = await scene({ diagnostics: KILLED });
+    await settle(userStopped, "stopped", 143, "canceled");
+    assert.equal(await userStopped.api(), undefined);
+
     // 出了结论的轮次：不现算。
     const concluded = await scene({ diagnostics: LIVE_DIAGNOSTICS, status: "done", conclusion: "verified" });
     await settle(concluded, "failed", 1);

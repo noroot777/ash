@@ -9,7 +9,8 @@
 //   typed    新记录：原因记录是带类型的 review.no_verdict；
 //   vague    类型不明（只说得出退出码）：原话直接摆出来；
 //   blocked  这一轮不能续：没有按钮，原因照说；
-//   newchain 另开了一条链（能续的是新那一场）：老那一轮没有按钮，原因照说。
+//   newchain 另开了一条链（能续的是新那一场）：老那一轮没有按钮，原因照说；
+//   reported 先写了报告再断掉：审查格那一轮的记录里报告和原话都在。
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type { FreeReviewRound, FreeReviewRun, Session, Task } from "@ash/shared";
@@ -30,8 +31,8 @@ const TYPED: ReviewNoVerdict = { kind: "interrupted", reason: "模型上游连�
 const VAGUE: ReviewNoVerdict = { kind: "interrupted", reason: "执行器异常退出（exit 1）", said: SAID, vague: true };
 const LEGACY_GUESS = "这一轮的审查报告可能已经写完了，只是结论没能上报到 ash。这一轮没查到直接证据；最可能的原因是审查者手上根本没有 report_stage 这个工具（自查：codex mcp list --json（看 ash 在不在、enabled 是不是 true））：报告照样写得完整，只有最后一步上报做不到。修好之后点「继续本轮审查」，它会接着上一次的上下文只补上报，不用重跑这一轮。";
 
-const round = (runId: string, cause: ReviewNoVerdict | undefined, retry: boolean, at = START): FreeReviewRound => ({
-  round: 1, status: "error", conclusion: null, reviewedCommit: "c1", reportMarkdown: "", screenshots: [],
+const round = (runId: string, cause: ReviewNoVerdict | undefined, retry: boolean, at = START, reportMarkdown = ""): FreeReviewRound => ({
+  round: 1, status: "error", conclusion: null, reviewedCommit: "c1", reportMarkdown, screenshots: [],
   dispute: null, startedAt: at, endedAt: END, ...(cause ? { noVerdict: cause } : {}),
   ...(retry ? { retry: { generation: "g1", sessionId: "rev" } } : {}),
 });
@@ -55,6 +56,7 @@ const STATES: Record<string, FreeWorkflowApiState> = {
   "t-blocked": state("t-blocked", [run("run-1", round("run-1", TYPED, false))]),
   // 新那一场排在前面（服务端按创建时间倒序给）。
   "t-newchain": state("t-newchain", [run("run-2", round("run-2", TYPED, true, LATER), LATER), run("run-1", round("run-1", TYPED, false))]),
+  "t-reported": state("t-reported", [run("run-1", round("run-1", TYPED, true, START, "# 第 1 轮审查\n\n先看了 diff，写到一半。\n"))]),
 };
 
 const nativeFetch = window.fetch.bind(window);
@@ -112,6 +114,7 @@ createRoot(document.getElementById("root")!).render(
       <Case id="t-vague" />
       <Case id="t-blocked" />
       <Case id="t-newchain" />
+      <Case id="t-reported" />
     </div>
   </StrictMode>,
 );

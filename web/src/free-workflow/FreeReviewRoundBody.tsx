@@ -51,8 +51,9 @@ export function FreeReviewRoundContent({ taskId, run, round }: { taskId: string;
             )}
           />
         : <p className="insp-faint">{missingReportText(round)}</p>}
-      {/* 是什么错只有执行器自己说得出：报告没写成的那一轮，把它的原话摆在那句原因下面。 */}
-      {!round.reportMarkdown && round.status !== "reviewing" && noVerdictSaidText(round.noVerdict) && (
+      {/* 是什么错只有执行器自己说得出：没出结论的那一轮把它的原话摆出来 —— 跟报告写没写无关，
+          先写了报告再断掉的那一轮同样要知道断在哪儿。 */}
+      {round.status !== "reviewing" && noVerdictSaidText(round.noVerdict) && (
         <p className="insp-faint review-round-said">{noVerdictSaidText(round.noVerdict)}</p>
       )}
       {/* 驳回与辩论跟报告长在同一轮上，读结论的人必须在同一个地方读到「执行者不认这条、

@@ -22,7 +22,7 @@ import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
 import type { RunDiagnostics } from "./executors/diagnostics.js";
 import { freeReviewFile } from "./free-review-files.js";
 import { RUNS_DIR } from "./paths.js";
-import { runTracePaths } from "./transcript.js";
+import { readableRunPath, runTracePaths } from "./transcript.js";
 
 /** 这一回合**自己**异常结束的事实（single-run 收尾时手上那几样）。没异常结束就不给。 */
 export type TurnFailure = {
@@ -135,7 +135,7 @@ export function interruptionOf(failure: TurnFailure, diagnostics: Pick<RunDiagno
 
 /** codex 落的那一份诊断（executors/diagnostics.ts）。别的执行器没有，读不出来就当没有。 */
 export function readTurnDiagnostics(taskId: string, sessId: string, turnStart: string): RunDiagnostics | null {
-  const path = runTracePaths(join(RUNS_DIR, taskId), sessId, turnStart).diagnosticsPath;
+  const path = readableRunPath(runTracePaths(join(RUNS_DIR, taskId), sessId, turnStart).diagnosticsPath);
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<RunDiagnostics>;
     return parsed && typeof parsed === "object" && parsed.version === 1 ? parsed as RunDiagnostics : null;

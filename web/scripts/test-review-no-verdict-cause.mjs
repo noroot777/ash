@@ -9,7 +9,8 @@
 //   ② 新记录、能续：同一个位置、同一个样子，整页会话里按钮只有一颗；
 //   ③ 类型不明：原话不用点开就在那一句里；
 //   ④ 不能续 / 另开了新链：没有按钮，原因照说；
-//   ⑤ 审查格：结论行带原因，那一轮的记录里有原话。
+//   ⑤ 审查格：结论行带原因，那一轮的记录里有原话；先写了报告再断掉的那一轮，报告和原话都在
+//      （第 1 轮复审第 2 条）。
 // 跑：npm -w web run test:review-no-verdict-cause
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -22,7 +23,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 2400 } });
   await page.goto(`${web.origin}/scripts/fixtures/review-no-verdict-cause.html`);
   const scope = (id) => page.locator(`.${id}-fixture`);
-  for (const id of ["t-legacy", "t-typed", "t-vague", "t-blocked", "t-newchain"]) {
+  for (const id of ["t-legacy", "t-typed", "t-vague", "t-blocked", "t-newchain", "t-reported"]) {
     await scope(id).locator(".review-verdict").getByText("第 1 轮审查没有给出结论").waitFor();
     await scope(id).locator(".insp-head").getByText(/第 1 轮中断/).waitFor();
   }
@@ -69,6 +70,12 @@ try {
   const recs = await pane.locator(".insp-recs").innerText();
   assert.match(recs, /这一轮中断：模型上游连不上（503），报告尚未生成。/);
   assert.match(recs.replace(/\s+/g, ""), new RegExp(`执行器的原话：「${SAID.replace(/\s+/g, "")}」`), "记录里看得到原话");
+
+  const reported = scope("t-reported").locator(".pane");
+  await reported.locator(".insp-recs").getByText("第 1 轮").first().click();
+  await reported.locator(".insp-recs").getByText("先看了 diff，写到一半。").waitFor();
+  assert.match((await reported.locator(".insp-recs").innerText()).replace(/\s+/g, ""), new RegExp(`执行器的原话：「${SAID.replace(/\s+/g, "")}」`),
+    "报告在也照样看得到原话");
 
   console.log("review no-verdict cause tests passed");
 } finally {

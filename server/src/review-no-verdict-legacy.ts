@@ -18,7 +18,7 @@
 // 两头都补；而现算的输入（结束了的回合、盘上的文件）不会再变，按回合身份记一份就只读一次盘。
 import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent, ModelFailure } from "@ash/shared";
 import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
@@ -27,7 +27,7 @@ import { codexErrorEvent } from "./executors/codex-error-event.js";
 import { codexTurnError } from "./executors/model-failure.js";
 import { RUNS_DIR } from "./paths.js";
 import { interruptionOf, noVerdictCause, readTurnDiagnostics, reviewReportWritten, type Interruption } from "./review-no-verdict.js";
-import { runTracePaths } from "./transcript.js";
+import { readableRunPath, runTracePaths } from "./transcript.js";
 
 type RoundRow = typeof freeReviewRounds.$inferSelect;
 type ExecutionError = Extract<AgentEvent, { kind: "error" }>;
@@ -72,13 +72,19 @@ const messageOf = (value: unknown): string | null => {
 };
 
 /**
- * 这一回合 codex 当时会报出的那条执行故障：按执行器自己的归一重放原始事件（App Server 的 `error`
- * 通知 / `turn/completed` 失败，exec 的 `error` / `turn.failed`）。挑法跟单飞收尾一样：带模型类型的
- * 那条不被后面没类型的盖掉。别的执行器没有这份文件，给 null。
+ * 按执行器自己的归一重放这一回合的原始事件（App Server 的 `error` 通知 / `turn/completed` 失败，
+ * exec 的 `error` / `turn.failed`），取回收尾那一刻手上的两样事实，别的执行器没有这份文件就都没有：
+ *   · `error`：这一轮的执行故障 —— 只算重试完了还是错的那些（`counted`），挑法跟单飞收尾一样：
+ *     带模型类型的那条不被后面没类型的盖掉；
+ *   · `stallModel`：看门狗熔断时据以说原因的那个类型 —— 它每收一条错误（重试中的也算）就把类型
+ *     换成那一条的（turn-stall.ts 的 `lastModel`），所以这里同样只认**最后那条**错误，没类型就是没有。
+ *     重试通知不升格成执行故障，它的类型也不丢。
  */
-function replayedCodexError(eventsPath: string): ExecutionError | null {
+function replayCodexEvents(eventsPath: string): { error: ExecutionError | null; stallModel: ModelFailure | null } {
   let picked: ExecutionError | null = null;
+  let stallModel: ModelFailure | null = null;
   const take = (event: ExecutionError) => {
+    stallModel = event.model ?? null;
     if (!picked?.model || event.model) picked = event;
   };
   for (const line of readTail(eventsPath).split("\n")) {
@@ -93,6 +99,7 @@ function replayedCodexError(eventsPath: string): ExecutionError | null {
     if (ev.method === "error" && params) {
       const reported = codexErrorEvent(params);
       if (reported?.counted) take(reported.event);
+      else if (reported) stallModel = reported.event.model ?? null;
     } else if (ev.method === "turn/completed" && params) {
       const turn = params.turn && typeof params.turn === "object" ? params.turn as Record<string, unknown> : {};
       const message = turn.status === "failed" ? messageOf(turn) : null;
@@ -102,7 +109,7 @@ function replayedCodexError(eventsPath: string): ExecutionError | null {
       if (message) take(codexTurnError(message));
     }
   }
-  return picked;
+  return { error: picked, stallModel };
 }
 
 /** 这一任务名下每个审查回合：回合行为主，没有回合行的老会话按会话行上记的最后一回合补一条。 */
@@ -158,18 +165,22 @@ const FACTS_LIMIT = 500;
 function interruptionOfTurn(taskId: string, turn: ReviewerTurn): Interruption | null | undefined {
   const key = `${taskId}\u0000${turn.sessionId}\u0000${turn.startedAt}`;
   if (turnFacts.has(key)) return turnFacts.get(key)!;
+  // 你停的、被引导截断的：回合结局 / 会话行上的停止口径是结算时落的业务事实。诊断里的
+  // `stopRequested` 不算 —— 看门狗熔断同样是向执行器发停止请求，那一轮却是按失败结算的。
   if (turn.outcome === "stopped" || turn.stoppedAs) return undefined;
   const diagnostics = readTurnDiagnostics(taskId, turn.sessionId, turn.startedAt);
-  if (diagnostics?.stopRequested) return undefined;
   const exitStatus = typeof diagnostics?.exitStatus === "number" ? diagnostics.exitStatus : turn.exitStatus;
   const failed = turn.outcome === "failed" || (turn.outcome !== "completed" && exitStatus != null && exitStatus !== 0);
   const completed = turn.outcome === "completed" || (turn.outcome == null && exitStatus === 0);
   if (!failed && !completed) return undefined;
-  const facts = failed
+  const replay = failed
+    ? replayCodexEvents(readableRunPath(runTracePaths(join(RUNS_DIR, taskId), turn.sessionId, turn.startedAt).eventsPath))
+    : null;
+  const facts = replay
     ? interruptionOf({
       exitStatus: exitStatus ?? 0,
-      verdict: turn.stallReason ? { kind: "tripped", reason: turn.stallReason, model: null } : null,
-      error: replayedCodexError(runTracePaths(join(RUNS_DIR, taskId), turn.sessionId, turn.startedAt).eventsPath),
+      verdict: turn.stallReason ? { kind: "tripped", reason: turn.stallReason, model: replay.stallModel } : null,
+      error: replay.error,
     }, diagnostics)
     : null;
   if (turn.endedAt) {
