@@ -28,7 +28,8 @@ export type ReuseMark = { source: string; textVersion: DraftText["textVersion"];
  *
  * 判据是「哪一条 + 草稿版本」，不看草稿里有没有这几个字：放回「继续」时草稿写着「不要继续」，
  * 那是另一句意思相反的话，不是放回过的结果（第 1 轮审查实测，子串判断把它吞掉了）。附件按
- * 数组身份比：发送结算、增删附件都会换一份新数组，引用相同 ⇔ 放回之后没人碰过。
+ * 选择身份（路径 + 选择记号的序列）比，不按数组引用：确认到达后草稿会被重读、重建成一份新数组，
+ * 那不是用户编辑（第 4 轮审查实测，按引用比会把它当成动过、连点又接一遍正文）。
  *
  * 连点也是一次认领：正文换上 `version`、附件换上 `restored` 带来的新选择记号，在途或迟到的
  * 旧发送都清不走它。纯函数——新版本号和新选择由调用方在外面备好，放进状态 updater 里重复
@@ -42,7 +43,7 @@ export function reuseDraft<Version extends number | string>(
   version: Version,
 ): { text: string; attachments: UploadAttachment[]; textVersion: Version; mark: ReuseMark } {
   const again = !!last && last.source === input.source && last.textVersion === current.textVersion
-    && last.attachments === current.attachments;
+    && sameSelections(last.attachments, current.attachments);
   const attachments = mergeAttachments(restored, current.attachments);
   return {
     text: again ? current.text : joinDraftText(input.text, current.text),
@@ -116,6 +117,13 @@ export function clearSentDraft(current: DraftText, draftAtSend: DraftText): stri
   return current.text === draftAtSend.text && current.textVersion === draftAtSend.textVersion ? "" : current.text;
 }
 
+const selectionKey = (attachment: SentSelection) => `${attachment.path}\u0000${attachment.selection ?? ""}`;
+
+/** 两份附件是不是同一组选择（顺序、路径、选择记号都一样）；数组是不是同一个对象无所谓。 */
+export function sameSelections(left: readonly SentSelection[], right: readonly SentSelection[]): boolean {
+  return left.length === right.length && left.every((attachment, index) => selectionKey(attachment) === selectionKey(right[index]!));
+}
+
 /** 一次发送提交时带走的是哪几次选择：路径 + 选择记号。可以落进 localStorage（侧聊的发送请求）。 */
 export type SentSelection = { path: string; selection?: string };
 
@@ -134,7 +142,6 @@ export function dropSentAttachments(
   current: UploadAttachment[],
   sent: readonly SentSelection[],
 ): UploadAttachment[] {
-  const key = (attachment: SentSelection) => `${attachment.path}\u0000${attachment.selection ?? ""}`;
-  const gone = new Set(sent.map(key));
-  return current.filter((attachment) => !gone.has(key(attachment)));
+  const gone = new Set(sent.map(selectionKey));
+  return current.filter((attachment) => !gone.has(selectionKey(attachment)));
 }

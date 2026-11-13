@@ -116,9 +116,11 @@ export function useSideChat(taskId: string) {
       if (request && value.messages.some((message) => message.id === request.id && message.role === "user")) {
         acknowledged = true;
         // 正文同理只清提交的那一份：字面一样不算，版本也得是提交时那个——发送报错后清掉、
-        // 又把同一句放回来，字一样，却是又选了一次（「改了再发」第 3 轮审查实测）。
+        // 又把同一句放回来，字一样，却是又选了一次（「改了再发」第 3 轮审查实测）。旧版本存下的
+        // 请求没记版本：未知就是未知，不拿草稿此刻的版本去补——只有草稿也从没换过版本（升级后
+        // 没人动过）才算还是那一份；认领过的有了版本，旧确认清不走它（第 4 轮审查实测）。
         const stored = { text: read(draftKey(value.room.id)) ?? "", textVersion: draftVersionOf(value.room.id) };
-        const sentText = { text: request.draft ?? request.body, textVersion: request.draftVersion ?? stored.textVersion };
+        const sentText = { text: request.draft ?? request.body, textVersion: request.draftVersion };
         if (stored.text && !clearSentDraft(stored, sentText)) {
           saveDraft(value.room.id, ""); clearedDraft = true;
         }

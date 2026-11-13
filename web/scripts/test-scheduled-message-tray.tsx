@@ -217,6 +217,15 @@ assert.equal(clearSentDraft({ text: "方案 " }, { text: "方案" }), "方案 ",
 assert.equal(clearSentDraft({ text: "继续", textVersion: 3 }, { text: "继续", textVersion: 3 }), "", "字面和版本都没变才是提交的那一份");
 assert.equal(clearSentDraft({ text: "继续", textVersion: 5 }, { text: "继续", textVersion: 3 }), "继续",
   "清掉又放回同一句：字一样、版本换了，迟到的确认不得清掉（「改了再发」第 3 轮审查实测）");
+// 旧版本存下的提交没记版本：未知就是未知。草稿也从没换过版本才算那一份，认领过的清不走。
+assert.equal(clearSentDraft({ text: "继续" }, { text: "继续" }), "", "旧提交、草稿升级后没动过：照旧清掉");
+assert.equal(clearSentDraft({ text: "继续", textVersion: "v-new" }, { text: "继续" }), "继续",
+  "旧提交缺版本、草稿已被认领：迟到的确认不得清掉（第 4 轮审查实测）");
+{
+  const side = readSource(new URL("../src/side-chat/useSideChat.ts", import.meta.url));
+  assert.match(side, /textVersion: request\.draftVersion \}/, "侧聊确认按提交时记下的版本清正文");
+  assert.doesNotMatch(side, /request\.draftVersion \?\?/, "旧提交缺版本时不得拿草稿此刻的版本去补（第 4 轮审查实测）");
+}
 assert.deepEqual(
   dropSentAttachments(
     [{ path: "/tmp/late.pdf", name: "late.pdf", kind: "file", url: null },
@@ -266,7 +275,9 @@ assert.notEqual(
   assert.equal(reuseDraft(input, restore(), { ...settled, textVersion: 7 }, first.mark, 8).text, "继续\n\n继续\n\n不要继续",
     "正文动过（版本换了）就不算连点");
   assert.equal(reuseDraft(input, restore(), { ...settled, attachments: [...settled.attachments] }, first.mark, 8).text,
-    "继续\n\n继续\n\n不要继续", "附件动过（换了一份数组）也不算连点");
+    first.text, "确认到达后附件被重读成一份新数组，选择没变就还是连点（第 4 轮审查实测）");
+  assert.equal(reuseDraft(input, restore(), { ...settled, attachments: [] }, first.mark, 8).text,
+    "继续\n\n继续\n\n不要继续", "附件动过（删了一张）就不算连点");
   // 纯函数：同一组输入重放（StrictMode 重放 updater）得到同一个结果。
   const restored = restore();
   assert.deepEqual(reuseDraft(input, restored, settled, first.mark, 4), reuseDraft(input, restored, settled, first.mark, 4),
