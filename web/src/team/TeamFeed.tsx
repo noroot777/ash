@@ -302,7 +302,7 @@ export function TeamFeed({
           {historyReady && <QuestionHistoryRemainder />}
           {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadLabel(task)} queuePosition={task.queuePosition} />}
         </section>
-        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={teamTailKey(rows)} inputs={inputs} />
+        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={teamTailKey(rows)} inputs={inputs} revealReady={historyReady} />
       </div>
     </ImagePreviewGroup>
     </QuestionHistoryProvider>
