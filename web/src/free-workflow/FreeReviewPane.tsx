@@ -17,7 +17,8 @@ import { useFreeReviewRepair } from "./FreeReviewRepairButton.tsx";
 import { FreeReviewRoundBody } from "./FreeReviewRoundBody.tsx";
 import { FreeReviewRoundsDialog } from "./FreeReviewRoundsDialog.tsx";
 import { freeReviewView } from "./freeReviewCopy.ts";
-import { deferOnly, durationText, reviewKey, reviewRoundLabel, reviewRoundTone } from "./freeReviewRounds.ts";
+import { deferOnly, durationText, noVerdictText, reviewKey, reviewRoundLabel, reviewRoundTone } from "./freeReviewRounds.ts";
+import type { ReviewRetryAction } from "../task-detail/turnRetry.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 
 interface Conclusion {
@@ -42,11 +43,13 @@ function missedReview(params: InspectorRequest): string {
   return target.round == null ? "那一轮审查" : `第 ${target.round} 轮审查`;
 }
 
-export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify }: {
+export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewRetry }: {
   task: Task;
   onOpenReview?: () => void;
   onOpenTask?: (taskId: string) => void;
   notify?: (message: string) => void;
+  /** 此刻能「继续本轮审查」的那一轮和那个动作（任务头那颗图标同一份）。不给 = 结论行不换主按钮。 */
+  reviewRetry?: ReviewRetryAction | null;
 }) {
   const free = useFreeWorkflowState(task.id);
   const state = free.state;
@@ -56,6 +59,7 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify }: {
   // 打开时定下是哪一扇（同回复框那颗键）：审查在跑 = 调轮数，否则 = 派审/预约。
   const [dialog, setDialog] = useState<"rounds" | "review" | "post" | null>(null);
   const [postRepairBusy, setPostRepairBusy] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   const all = useMemo(() => entries(state?.reviews ?? []), [state]);
   const workspace = all.filter((entry) => entry.run.target?.kind !== "accepted_merge");
@@ -175,6 +179,23 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify }: {
         more: [...see, ...(fix ? [{ key: "again", label: "再审一次", onSelect: () => setDialog("post"), disabled: !notify }] : []), ...openWorkspace],
       };
     }
+    // 这一轮还能续（服务端给了 `round.retry`）：主动作就是接着把这一轮审完。「再审一轮」是另开一条链、
+    // 新会话、从头审，退到更多里 —— 把它摆在前面，用户就只剩任务头那颗不带字的图标能续这一轮。
+    const retryRound = reviewRetry && latestRun?.id === reviewRetry.review.runId
+      ? latestRun.rounds.find((round) => round.round === reviewRetry.review.round)
+      : undefined;
+    if (reviewRetry && retryRound) {
+      const resume = async () => {
+        setRetrying(true);
+        try { await reviewRetry.run(); } finally { setRetrying(false); }
+      };
+      return {
+        tone: retryRound.status === "reviewing" ? "busy" : "bad",
+        text: `第 ${retryRound.round} 轮${retryRound.status === "reviewing" ? "审查中" : noVerdictText(retryRound)}`,
+        main: { label: "继续本轮审查", onClick: () => void resume(), pri: true, disabled: retrying },
+        more: [...dispatchItem(), ...openWorkspace],
+      };
+    }
     if (reviewing) {
       return {
         tone: "busy",
@@ -229,7 +250,8 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify }: {
     const last = workspace.at(-1);
     if (stale) return { tone: "stale", text: `第 ${last?.round.round ?? 1} 轮已通过，之后代码有变化`, main: canDispatch ? dispatch(true) : undefined, more: openWorkspace };
     if (last) {
-      const label = reviewRoundLabel(last.round);
+      // 没结论的那一轮带上原因（服务端判的，老记录没有就照旧叫「异常」）。
+      const label = last.round.conclusion ? reviewRoundLabel(last.round) : noVerdictText(last.round);
       const unsure = view.freshness === "unknown" && latestRun?.status === "passed";
       return {
         tone: last.round.conclusion === "verified" ? "ok" : "bad",

@@ -38,6 +38,8 @@ import {
   ReceiptReviewContext, TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts, type ReceiptReview,
 } from "./TurnReceipts.tsx";
 import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
+import { ReviewRetryCta } from "./ReviewRetryCta.tsx";
+import type { ReviewRetryAction } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
 import { isQuestionAnswer, type QuestionRecord } from "@ash/shared/questions";
@@ -287,6 +289,7 @@ export function ConversationFeed({
   onAskSideChat,
   reviews,
   onOpenReviewPanel,
+  reviewRetry,
   questionHistory,
   liveQuestionHistory,
   historyReady = true,
@@ -325,6 +328,8 @@ export function ConversationFeed({
    * 轮号，给 null）；「去裁定」不带。
    */
   onOpenReviewPanel?: (target?: ReviewTarget) => void;
+  /** 此刻能「继续本轮审查」的那一轮和那个动作（任务头那颗图标同一份）。不给 = 尾注上不挂。 */
+  reviewRetry?: ReviewRetryAction | null;
   questionHistory?: QuestionRecord[];
   liveQuestionHistory?: boolean;
   /**
@@ -412,6 +417,13 @@ export function ConversationFeed({
       <Gavel size={11} weight="fill" aria-hidden="true" />去裁定
     </button>
   ) : null;
+  // 「这一轮审查为什么没结论」那句尾注后面挂「继续本轮审查」：那句话点名了这个动作。只挂在此刻
+  // 还能续的那一轮（同一场、同一轮）**最后一条**这样的尾注上 —— 续过了（round.retry 没了）、
+  // 另开了新链，`reviewRetry` 就换了人或者没了，这颗也就跟着不出。
+  const retryEventId = reviewRetry ? [...items].reverse().find((item) => item.kind === "event"
+    && item.notice?.kind === "review.no_verdict"
+    && item.notice.runId === reviewRetry.review.runId && item.notice.round === reviewRetry.review.round)?.id ?? null : null;
+  const isRetryable = (part: FootnotePart) => part.kind === "event" && !!retryEventId && part.item?.id === retryEventId;
   // 辩论条上的同一颗按钮：辩论就是为了裁定才开的，读完该能当场决定，而不是往上翻回
   // 那条旁注（用户 2026-09-27）。条件比旁注那颗更严一格——必须**这场辩论**辩的就是
   // 此刻待裁定的那条驳回，而且它已经说完了（还在跑时后端也会拒绝裁定）。
@@ -456,7 +468,7 @@ export function ConversationFeed({
           taskActive={task.status === "running" || task.status === "queued"}
           receipts={receiptsOf(item.id)}
           footnote={footnote?.parts.length
-            ? { node: renderFootnote(footnote), key: footnoteKey(footnote, footnote.parts.some(isRuled) ? "rule" : "") }
+            ? { node: renderFootnote(footnote), key: footnoteKey(footnote, footnote.parts.some(isRuled) ? "rule" : footnote.parts.some(isRetryable) ? "retry" : "") }
             : undefined}
         />
       );
@@ -495,7 +507,8 @@ export function ConversationFeed({
         : renderFootnoteRow(entry));
   };
   const renderFootnote = (footnote: TurnFootnote, placement?: "standalone" | "trailing") => (
-    <FootnoteLine key={footnote.id} footnote={footnote} placement={placement} actionFor={(part) => isRuled(part) ? ruleAction : null} />
+    <FootnoteLine key={footnote.id} footnote={footnote} placement={placement}
+      actionFor={(part) => isRuled(part) ? ruleAction : isRetryable(part) && reviewRetry ? <ReviewRetryCta action={reviewRetry} /> : null} />
   );
   // 「N 条记录」里那一轮审查点开去哪儿：跟审查结论那颗气泡同一套。
   const receiptReview: ReceiptReview = {
