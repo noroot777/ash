@@ -125,9 +125,12 @@ function liveTurnStart(event: LiveAgentEvent, session: Session | undefined): str
 /**
  * 这颗气泡属不属于这条事件所在的那一轮。
  *
- * 先认身份：气泡记着自己那一回合（`turnStartedAt`，见 ConversationItem）就直接比它。团队
- * 调度台的落盘气泡离不开这一条 —— 它按用户说话那一刻编号，回合却从投递那一刻起算，只比
- * `at` 的话，回合中间落一条记录，后面那几步就认不回去了。
+ * 先认身份：气泡记着自己那一回合（`turnStartedAt`，见 ConversationItem）就**只**比它，
+ * 对不上就是别的回合，时刻再怎么像也不认。两头都离不开这一条：
+ * - 团队调度台的落盘气泡按用户说话那一刻编号，回合却从投递那一刻起算，只比 `at` 的话，
+ *   回合中间落一条记录，后面那几步就认不回去了；
+ * - 反过来，`at` 会被插话时刻推晚，「不早于起点」那条时刻判据能把一颗别的回合的气泡
+ *   认成这一回合的。
  *
  * 身份不知道（老 trace、没落 trace 的会话）才按时刻比，判据是**不早于本回合起点**，不是
  * 「恰好等于」。等于曾经够用，是因为落盘气泡的 `at` 一般就取会话行上的 `turnStartedAt`；
@@ -139,7 +142,8 @@ function liveTurnStart(event: LiveAgentEvent, session: Session | undefined): str
  * 的起点，旧气泡自然落在它前面，照旧挡得住。
  */
 function withinTurn(item: AgentItem, turnStartedAt: string): boolean {
-  if (item.turnStartedAt === turnStartedAt || item.at === turnStartedAt) return true;
+  if (item.turnStartedAt) return item.turnStartedAt === turnStartedAt;
+  if (item.at === turnStartedAt) return true;
   const start = Date.parse(turnStartedAt);
   const itemTime = item.at ? Date.parse(item.at) : Number.NaN;
   return Number.isFinite(start) && Number.isFinite(itemTime) && itemTime >= start;
@@ -156,8 +160,15 @@ function appendAgent(items: ConversationItem[], event: LiveAgentEvent, sessions:
   const sameSpeaker = (item: ConversationItem): item is AgentItem => (
     item.kind === "agent" && item.sessionId === event.sessionId && reviewerKey(item) === reviewerKeyOf(reviewer)
   );
-  let current = last && sameSpeaker(last) ? last : undefined;
   const turnStartedAt = liveTurnStart(event, session);
+  // 一颗气泡能不能接着写，两个入口（末条就是它、跨过记录回捞到它）用同一个判据：同一个
+  // 人、同一回合、没收过口。「末条是同一个人」不等于同一回合 —— 团队调度台的 CLI 被后台
+  // 通知叫醒自己开下一轮时，中间既没有输入，也没有实时的回合边界（常驻台的 turnEnd 不往
+  // 前端播），新一轮的话就会接进上一轮那颗、连开始时刻和用时都沿用上一轮的。
+  // 会话行和事件都给不出回合时（找不到会话）才只认人，跟从前一样。
+  const joinable = (item: ConversationItem): item is AgentItem => sameSpeaker(item)
+    && (!turnStartedAt || (withinTurn(item, turnStartedAt) && !item.markerEndedAt));
+  let current = last && joinable(last) ? last : undefined;
   // 旁注可能在一回合仍流式输出时插进来；跨过它找这条事件所在那一轮的气泡，这样工具、
   // 用量和后续正文仍写回那一回合，而新一轮的系统起始提示不会吞掉上一回合。
   //
@@ -169,9 +180,7 @@ function appendAgent(items: ConversationItem[], event: LiveAgentEvent, sessions:
       const candidate = items[index]!;
       if (candidate.kind === "event" && candidate.variant === "note"
         && (candidate.aside === true || candidate.sessionId === event.sessionId)) continue;
-      if (sameSpeaker(candidate) && withinTurn(candidate, turnStartedAt) && !candidate.markerEndedAt) {
-        current = candidate;
-      }
+      if (joinable(candidate)) current = candidate;
       break;
     }
   }

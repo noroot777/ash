@@ -646,17 +646,24 @@ export function buildConversationItems(
   // 身份那一条是给就地验证用的：验证轮是搭在被验任务身上的旁路回合、常复用同一条
   // 会话，中间只隔着一条「第 N 轮验证开始」的旁注 —— 按前三条判就成了「同一个人接着
   // 说」，于是审查者的发言连头像和名字都不重报，反而比不区分更糟。
+  //
+  // 两颗都记着回合、却不是同一回合的，同样不接：团队调度台被后台通知叫醒自己开的下一轮，
+  // 中间一条输入、一条边界都没有，按上面几条判就会被画成「同一段话的下半截」。
   let continuedSessionId: string | null = null;
   let continuedReviewer: string | null = null;
+  let continuedTurn: string | null = null;
   for (const item of items) {
     if (item.kind === "user") { continuedSessionId = null; continue; }
     if (item.kind === "event") {
       if (item.variant === "boundary") continuedSessionId = null;
       continue;
     }
-    item.continuation = continuedSessionId === item.sessionId && continuedReviewer === reviewerKey(item);
+    const turn = item.turnStartedAt ?? null;
+    item.continuation = continuedSessionId === item.sessionId && continuedReviewer === reviewerKey(item)
+      && (!turn || !continuedTurn || turn === continuedTurn);
     continuedSessionId = item.sessionId;
     continuedReviewer = reviewerKey(item);
+    continuedTurn = turn;
   }
 
   const sessionMetaSeen = new Set<string>();

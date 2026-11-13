@@ -86,9 +86,11 @@ function happenings({ role = "single", stamp = true } = {}) {
     const event = { kind: "usage", usage: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: null, turns: 1 }, accounting: "incremental" };
     list.push({ at: time, md: "", trace: [{ at: time, turnStartedAt: turn, event }], live: live(turn, event) });
   };
+  // 常驻调度台的 turnEnd 服务端只拿来收回合、不往前端播（team/session-consumer.ts），实时流里
+  // 那一回合的结尾什么都没有；单飞的回合结束就是进程结束，播 done。
   const end = (time, turn) => list.push({
     at: time, md: sentinel({ t: "agentEnd", at: time }), trace: [],
-    live: live(turn, role === "lead" ? { kind: "turnEnd" } : { kind: "done", exitStatus: 0 }),
+    live: role === "lead" ? null : live(turn, { kind: "done", exitStatus: 0 }),
   });
   return { list, user, text, tool, aside, settle, usage, end };
 }
@@ -336,6 +338,85 @@ for (const rowTurn of [T1, T2]) {
   assert.deepEqual(next, idle, "团队调度台：下一回合一开始，上一回合的气泡就变了");
   assert.equal(owner(next, "mcp__ash__dispatch"), owner(next, "Glob"), "团队调度台：记录之后那几步该留在这一回合的气泡里");
   assert.equal(owner(next, "派好了"), owner(next, "Glob"));
+}
+
+// ── 团队调度台被后台通知叫醒、自己开的下一轮 ─────────────────────────────────
+//
+// 没有输入、实时流里也没有回合边界：只凭事件自己带的回合把两轮分开。
+{
+  const LEAD_T1 = "2026-11-13T06:00:00.120Z";
+  const LEAD_T1_SAID = "2026-11-13T06:00:00.000Z";
+  const LEAD_T2 = "2026-11-13T06:10:00.000Z";
+  const leadRow = (patch) => sessionRow({ role: "lead", startedAt: LEAD_T1, ...patch });
+  const leadEvent = (event, turn) => ({ ...liveEvent(event, { role: "lead", turnStartedAt: turn }) });
+  const persistedT1 = (ended) => [{
+    session: leadRow({ turnStartedAt: LEAD_T1, endedAt: null }),
+    output: sentinel({ t: "user", agent: "claude", text: "拆成三块派出去", at: LEAD_T1_SAID })
+      + "第一回合：已派出执行者，等待结果。"
+      + (ended ? sentinel({ t: "agentEnd", at: "2026-11-13T06:01:00.000Z" }) : ""),
+    trace: [
+      { at: LEAD_T1, turnStartedAt: LEAD_T1, event: { kind: "run", model: "claude-opus-5-5", reasoningEffort: "high" } },
+      { at: at(LEAD_T1, 5), turnStartedAt: LEAD_T1, event: { kind: "tool", name: "Glob", detail: "Glob" } },
+      { at: at(LEAD_T1, 9), turnStartedAt: LEAD_T1, event: { kind: "text", text: "第一回合：已派出执行者，等待结果。" } },
+    ],
+  }];
+  const spontaneous = [
+    leadEvent({ kind: "tool", name: "mcp__ash__list_tasks", detail: "list" }, LEAD_T2),
+    leadEvent({ kind: "text", text: "第二回合：后台任务通知唤醒，开始汇总结果。" }, LEAD_T2),
+  ];
+  const assertSplit = (items, label) => {
+    const bubbles = agents(items);
+    assert.equal(bubbles.length, 2, `${label}：自己开的下一轮被接进了上一轮`);
+    const [previous, next] = bubbles;
+    assert.ok(!previous.markdown.includes("第二回合"), `${label}：上一轮的气泡里混进了下一轮的话`);
+    assert.ok(!steps(previous).includes("mcp__ash__list_tasks"), `${label}：上一轮的气泡里混进了下一轮的步骤`);
+    assert.equal(next.at, LEAD_T2, `${label}：下一轮的气泡该从它自己的起点算`);
+    assert.equal(next.continuation, false, `${label}：下一轮要重新报身份，不画成上一段的下半截`);
+    return previous;
+  };
+
+  // 1. 页面在上一轮中途读的盘：记录之后那几步还留在上一轮，下一轮另起一颗。
+  {
+    const items = buildConversationItems(persistedT1(false), [leadRow({ turnStartedAt: LEAD_T2, endedAt: null })], [
+      asideNote(at(LEAD_T1, 20), "已派出 3 个执行者"),
+      leadEvent({ kind: "tool", name: "mcp__ash__dispatch", detail: "dispatch" }, LEAD_T1),
+      leadEvent({ kind: "text", text: "派好了。" }, LEAD_T1),
+      ...spontaneous,
+    ]);
+    const previous = assertSplit(items, "中途读盘");
+    assert.deepEqual(steps(previous), ["Glob", "mcp__ash__dispatch"]);
+    assert.match(previous.markdown, /派好了/);
+  }
+  // 2. 上一轮已经落盘收口（读盘那时调度台正待命）：同样另起一颗，上一轮的用时不变。
+  {
+    const items = buildConversationItems(persistedT1(true), [leadRow({ turnStartedAt: LEAD_T2, endedAt: null })], spontaneous);
+    const previous = assertSplit(items, "上一轮已收口");
+    assert.equal(previous.endedAt, "2026-11-13T06:01:00.000Z");
+  }
+  // 3. 全程实时：两轮都没落盘、中间什么都没有。
+  {
+    const items = buildConversationItems([], [leadRow({ turnStartedAt: LEAD_T2, endedAt: null })], [
+      liveUser(LEAD_T1_SAID, "拆成三块派出去", { sessionRole: "lead" }),
+      leadEvent({ kind: "text", text: "第一回合：已派出执行者，等待结果。" }, LEAD_T1),
+      ...spontaneous,
+    ]);
+    assertSplit(items, "全程实时");
+  }
+}
+
+// ── 身份对不上就不认，时刻再像也不行 ───────────────────────────────────────────
+//
+// 跨记录回捞到的那颗记着自己是另一回合的，哪怕它的 `at`（被插话推晚了）不早于这条事件
+// 的回合起点，也不能接进去。
+{
+  const OTHER = at(T1, -600);
+  const items = buildConversationItems(midTurnPersisted(), [sessionRow({ turnStartedAt: T1, endedAt: null })], [
+    asideNote(at(T1, 30)),
+    liveEvent({ kind: "text", text: "另一回合的话。" }, { turnStartedAt: OTHER }),
+  ]);
+  const bubbles = agents(items);
+  assert.equal(bubbles.length, 2, "回合身份不同的气泡不该被接上");
+  assert.equal(bubbles[1].markdown, "另一回合的话。");
 }
 
 console.log("conversation live turn owner: ok");
