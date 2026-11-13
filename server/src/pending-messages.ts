@@ -10,6 +10,9 @@
 //   ② 任务落终态时的钩子(status.ts)——排队消息的正常路径,做到「跑完立刻发出」,
 //      不让用户对着一条已经该发的消息干等最多 30 秒
 // 于是「排队」不需要第二套定时器:它就是一条永远已到期、但要等任务空闲的消息。
+//      ②靠得住有个前提:投递给任务挂的「在途」标记在它那一回合**起来时**就摘,冷却挡下的
+//      那一扫窗口一过有人补(pending-in-flight.ts)—— 否则排队消息起的回合,结束时这一扫
+//      会被上一次投递自己留下的去重账挡掉。
 //   ③ ②那次扫描**之后**、回合锁放开**之前**才入队的消息(结算钩子里入队的审查修复指令、
 //      撞上收尾窗口的回复/答复):②已经扫过、看不到它,所以入队方自己登记
 //      `flushPendingWhenTurnIdle` —— 锁一放就再扫一遍,不落回①。
@@ -42,6 +45,7 @@ import { releaseTurn, turnSourceReview, whenTurnIdle } from "./runs.js";
 import type { TurnIdentity, TurnSource } from "./runs.js";
 import { forgetStalled, forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, noteStalledPending, pendingMessageLabel, settleBusyAgain } from "./pending-delivery-timing.js";
 import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-redelivery.js";
+import { clearFired, cooling, deliveryInFlight, holdInFlight, noteFired } from "./pending-in-flight.js";
 import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
@@ -178,26 +182,7 @@ export async function enqueueMessage(input: Parameters<typeof pendingMessageRow>
 // 判定所需的任务/消息形状与三档判定(deliveryVerdict)、到期判据(isDueForDelivery)
 // 都住在 pending-verdict.ts —— 纯函数,无账本。
 
-// 一次投递之后的冷却:continueTask 对单任务是「先同步占住内存锁,再异步把状态
-// 改成 running」,中间那一小段里任务读出来还是空闲的。两个触发源(tick 与终态
-// 钩子)如果恰好挤在这道缝里,第二条消息会被标成 sent 却被 continueTask 的单飞
-// 锁直接丢掉——消息就凭空消失了。所以同一任务刚发过就先按住,下一次触发再说。
-const FIRE_COOLDOWN_MS = 5_000;
-const lastFiredAt = new Map<string, number>();
-
-function cooling(taskId: string, at: number): boolean {
-  const last = lastFiredAt.get(taskId);
-  return last != null && at - last < FIRE_COOLDOWN_MS;
-}
-
-// 已经排上、正在等这个任务当前那一轮退干净的投递。冷却窗口(5s)只够盖住
-// continueTask 内部那道缝,盖不住「等一轮跑完」。这段时间里同一任务的第二条消息
-// 绝不能也被排上,否则两条会挤在一起争同一个回合。
-//
-// 注意它只是**同进程内的去重**,不是「已认领」的标记 —— 等待期间那一行必须仍是
-// pending(见 deliverWhenIdle):进程随时可能被重启掐掉,内存里的等待回调会一起
-// 消失,行要是那时已经是 sent 就再也没人管它了。
-const inFlight = new Set<string>();
+// 冷却窗口与「在途」标记(两本同进程去重账)住在 pending-in-flight.ts。
 
 // 挡回之后的主动重投(退避账本)住在 pending-redelivery.ts:挡回的每一条出口调
 // `scheduleRedelivery` 记账并自排重投;所有扫描触发源进场先问 `retryBlocked`。
@@ -217,7 +202,7 @@ function forgetDeliveryBookkeeping(messageId: string): void {
 export async function abortDelivery(message: Row | Row[]): Promise<void> {
   const messages = Array.isArray(message) ? message : [message];
   if (!messages.length) return;
-  lastFiredAt.delete(messages[0]!.taskId);
+  clearFired(messages[0]!.taskId);
   await db
     .update(scheduledMessages)
     .set({ deliveringSince: null })
@@ -417,8 +402,8 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
       // 还欠着一声「结束」的哨兵名下的行:等那一笔交接做完(monitor-end-owed.ts),它那边会再触发。
       // 这是它自己的等待语义,不是滞留。
       if (m.origin && owed.has(m.origin)) continue;
-      if (checkpointFailures.has(m.taskId) || fired.has(m.taskId) || inFlight.has(m.taskId) || hasPendingDeliveryRecovery(m.taskId)
-        || cooling(m.taskId, at.getTime())) continue;
+      if (checkpointFailures.has(m.taskId) || fired.has(m.taskId) || deliveryInFlight(m.taskId) || hasPendingDeliveryRecovery(m.taskId)
+        || cooling(m.taskId, at.getTime(), () => flushPendingForTask(m.taskId))) continue;
       // 下一次允许重试的时刻没到就不碰:退避只写在重投定时器上管不住别的触发源 ——
       // 失败结算钩子、队列唤醒触发的扫描会绕过它,形成「失败→结算唤醒→再失败」的
       // 自激循环(第 6 轮审查:目录不修复时 2 秒 24 次失败)。
@@ -460,7 +445,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
           spans: { dueAt, busyMs, queuedAt }, team: true,
           onClaim: () => {
             fired.add(m.taskId);
-            lastFiredAt.set(m.taskId, Date.now());
+            noteFired(m.taskId);
           },
         });
       } else {
@@ -496,11 +481,11 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
           seat = claim.seat ?? undefined;
         }
         fired.add(m.taskId);
-        inFlight.add(m.taskId);
+        const release = holdInFlight(m.taskId);
         whenTurnIdle(m.taskId, () => void dispatchPendingMessage(m, {
           spans: { dueAt, busyMs, queuedAt }, seat,
-          onClaim: () => { lastFiredAt.set(m.taskId, Date.now()); },
-          onSettled: () => { inFlight.delete(m.taskId); },
+          onClaim: () => { noteFired(m.taskId); },
+          release,
         }));
       }
     } catch (error) {
@@ -523,7 +508,7 @@ export function flushPendingForTask(taskId: string): void {
 }
 
 // 触发源③(见文件头):任务空着就立刻扫,回合还占着就排到它放锁那一刻。重复触发无害 ——
-// 同一任务的投递有 inFlight 与租约兜着,只会多扫一遍。
+// 同一任务的投递有在途标记与租约兜着,只会多扫一遍。
 export function flushPendingWhenTurnIdle(taskId: string): void {
   whenTurnIdle(taskId, () => flushPendingForTask(taskId));
 }
@@ -535,7 +520,7 @@ export function flushPendingWhenTurnIdle(taskId: string): void {
 // 一整轮)。调用方(task-resume.ts)在选默认 RESUME_PROMPT / fresh 之前先问这里。
 //
 // 记账走投递链路同一套:beginDelivery 租约 → onDelivered 落 sent → 挡回 abort + 重投,
-// 所以 tick / 终态钩子 / 重投定时器靠租约与 inFlight 去重,同一条不会发两遍。
+// 所以 tick / 终态钩子 / 重投定时器靠租约与在途标记去重,同一条不会发两遍。
 // 队列占位不在这里认领:调用链的上游已经持有 —— 队列推进/分组启动在拉起前 setQueued,
 // 手动运行//fire//retry/重跑上一回合在路由里 claimQueueSeat(queue-seat.ts),这里再占
 // 一次反而会被自己的 queued 挡住。
@@ -562,7 +547,7 @@ export async function handDuePendingMessageToRun(
     throw new Error("任务仍有续跑交代，先交付检查点再交接普通输入");
   }
   // 已有投递在途:它自己会开回合,这里再开默认「继续」就是同一任务两路起跑。
-  if (inFlight.has(taskId)) return true;
+  if (deliveryInFlight(taskId)) return true;
   const at = new Date();
   const due = (await withAfterGates(await db
     .select()
@@ -580,8 +565,8 @@ export async function handDuePendingMessageToRun(
   if (!due) return false;
   const claimed = await beginDelivery(due.id);
   if (!claimed) return true; // 另一个触发源刚抢走:由它开回合
-  inFlight.add(taskId);
-  lastFiredAt.set(taskId, Date.now());
+  const release = holdInFlight(taskId);
+  noteFired(taskId);
   const queuedAt = Date.now();
   const dueAt = markDue(due.id, queuedAt);
   const busyMs = settleBusyAgain(due.id, queuedAt);
@@ -624,8 +609,8 @@ export async function handDuePendingMessageToRun(
       // 是用户显式动作,不加闸,与隔壁 RESUME/fresh 路径保持一致。
       freezeGuard: opts.freezeGuard ?? !opts.turnHeld,
       turnHeld: opts.turnHeld,
-      // 三档处置见 ./delivery-lease.ts(上面那只租约)。
-      onInputSettled: (acceptance) => lease.settle(acceptance),
+      // 三档处置见 ./delivery-lease.ts(上面那只租约)。回执一落定回合就起来了:在途标记到此为止。
+      onInputSettled: (acceptance) => lease.settle(acceptance).finally(release),
     });
     if (lease.callerMustReturn()) {
       // 同 deliverWhenIdle:「已接管回合」≠「已送达」,唯一可信的送达信号是 onDelivered。
@@ -644,7 +629,7 @@ export async function handDuePendingMessageToRun(
     await cancelPendingMessage(due, `续跑失败：${detail}`).catch(() => {});
     return true;
   } finally {
-    inFlight.delete(taskId);
+    release();
   }
 }
 
