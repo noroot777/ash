@@ -10,7 +10,8 @@
 // ③ 不能重试（后面又跑过一回合、手动停止的、任务在跑）：没有动作；同一条会话重试成功以后（刷新与开着
 //    页面看两路，失败那一回合只跑了工具、没说话的那种，以及哨兵叫醒后失败、回复并回等它那一回合的那种）：前一
 //    回合那句话和原因还在它自己后面，没有动作（第 2 轮审查第 2 条、第 3、4 轮审查第 1 条）；
-// ④ 任务头上没有回合级的重试图标。
+// ④ 任务头上没有回合级的重试图标；
+// ⑤ 服务端说此刻重来不了（能不能重来整份由服务端判，夹具带着它那一刻的结论）：动作灰着、指上去说原因，点了不走。
 // 跑：npm -w web run test:turn-retry-cta
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -96,8 +97,20 @@ try {
   }
   assert.equal(await footnoteOf("stopped").filter({ hasText: /这一轮(中断|异常结束)/ }).count(), 0, "手动停止的不算异常");
 
+  // ⑤ 灰着说原因
+  {
+    const cta = footnoteOf("blocked").getByRole("button", { name: "重试这一回合" });
+    assert.equal(await cta.count(), 1, "blocked：动作在");
+    assert.equal(await cta.getAttribute("aria-disabled"), "true", "blocked：灰着");
+    await cta.hover();
+    await page.getByText("所在分组已暂停，先恢复分组再重试这一回合").waitFor();
+    // aria-disabled 在 playwright 眼里就是点不了，强点一下看它确实不走。
+    await cta.click({ force: true });
+    assert.deepEqual(await page.evaluate(() => window.__retried), ["t-persisted", "t-live"], "blocked：点了不走");
+  }
+
   // ④ 任务头
-  for (const name of ["persisted", "live", "legacy", "no-end", "later", "retried", "retried-live", "retried-tools", "woken-retried", "stopped", "running"]) {
+  for (const name of ["persisted", "live", "legacy", "no-end", "later", "retried", "retried-live", "retried-tools", "woken-retried", "stopped", "running", "blocked"]) {
     assert.equal(await scope(name).locator(".task-detail-header").getByRole("button", { name: /重试|继续本轮审查/ }).count(), 0,
       `${name}：任务头没有回合级的重试图标`);
   }

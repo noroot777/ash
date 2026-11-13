@@ -189,7 +189,6 @@
     "test:duet-upload": "node scripts/test-duet-upload.mjs",
     "test:workflow-rail": "node --experimental-strip-types scripts/test-workflow-rail.mjs",
     "test:workflow-edit": "node --experimental-strip-types scripts/test-workflow-edit.mjs",
-    "test:turn-retry": "node --experimental-strip-types scripts/test-turn-retry.mjs",
     "test:turn-failure": "node --experimental-strip-types scripts/test-turn-failure.mjs",
     "test:conversation-keys": "node --experimental-strip-types scripts/test-conversation-keys.mjs",
     "test:fresh-text": "tsx --import ./scripts/ignore-css-hooks.mjs scripts/test-fresh-text.tsx",

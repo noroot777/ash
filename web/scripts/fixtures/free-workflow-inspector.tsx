@@ -500,6 +500,7 @@ function AcceptanceFixture({ task, className }: { task: Task; className: string 
     <section className={className}>
       <TaskHeader
         task={task}
+        actions={null}
         allTasks={[task]}
         reviewOpen={reviewOpen}
         conversationMarkdown=""
@@ -537,6 +538,7 @@ function PostMergeFixture() {
     <section className="post-merge-fixture">
       <TaskHeader
         task={postMergeTask}
+        actions={null}
         allTasks={[postMergeTask]}
         conversationMarkdown=""
         busy={false}

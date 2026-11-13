@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { normalizeDuetConfig } from "@ash/shared/duet";
-import type { GateAction, Session, Task, TaskListItem } from "@ash/shared";
+import type { GateAction, Session, Task, TaskActions, TaskListItem } from "@ash/shared";
 import { runActivityPhase } from "@ash/shared/run-activity";
-import { TEAM_DEFAULTS, canArchive, taskDisplayStatus } from "@ash/shared";
+import { TEAM_DEFAULTS, taskDisplayStatus } from "@ash/shared";
 import {
   Archive,
   CaretDown,
@@ -28,6 +28,9 @@ import { OriginTaskBar, TaskCreationBadge } from "../components/TaskOrigin.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api } from "../lib/api.ts";
 import { toggleArchive } from "../lib/archive.ts";
+import { blocker, refreshTaskActions, shown, useTaskActions } from "../lib/useTaskActions.ts";
+import { IconButton } from "../components/IconButton.tsx";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
@@ -129,11 +132,15 @@ function TurnBubble({
   );
 }
 
-function actionFor(task: Task): { kind: "run" | "retry" | "stop" | null; label: string } {
-  if (task.status === "running") return { kind: "stop", label: "停止" };
-  if (task.status === "failed") return { kind: "retry", label: "重试" };
-  if (task.status === "backlog" || task.status === "canceled" || task.status === "paused") return { kind: "run", label: task.status === "paused" ? "继续" : "运行" };
-  return { kind: null, label: task.status === "done" ? "已完成" : task.status === "awaiting_review" ? "等待裁决" : task.status === "queued" ? "排队中" : "进行中" };
+// 讨论头那颗主键：有东西可停时是停止，否则是此刻轮到你的那一步（出不出、点不点得了都照服务端的
+// 判据，lib/useTaskActions.ts）；两样都没有就灰着写一句现在的状态。
+function actionFor(task: Task, actions: TaskActions | null): { kind: "run" | "retry" | "stop" | null; label: string; blocked: string | null } {
+  if (shown(actions?.stop)) return { kind: "stop", label: task.status === "queued" ? "不排了" : "停止", blocked: blocker(actions!.stop) };
+  const primary = shown(actions?.primary) ? actions!.primary! : null;
+  if (primary) {
+    return { kind: primary.kind === "retry" ? "retry" : "run", label: primary.kind === "retry" ? "重试" : primary.kind === "resume" ? "继续" : "运行", blocked: blocker(primary) };
+  }
+  return { kind: null, label: task.status === "done" ? "已完成" : task.status === "awaiting_review" ? "等待裁决" : task.status === "queued" ? "排队中" : "进行中", blocked: null };
 }
 
 /* 一个回合里用户能读到多少字。跟会话流那张表同一条判据:正文、执行过程原文、结论与
@@ -218,7 +225,9 @@ export function DuetView({
     .sort((a, b) => timeMs(b.createdAt) - timeMs(a.createdAt)), [allTasks, task.id]);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const indicator = indicatorForTask(task);
-  const action = actionFor(task);
+  const actions = useTaskActions(task.id);
+  const action = actionFor(task, actions);
+  const actionTip = useHoverTip();
   const lastTurn = turns.at(-1);
   const activeTurn = latestActiveDuetTurn(turns);
   const activityPhase = runActivityPhase(
@@ -240,6 +249,7 @@ export function DuetView({
       notify(kind === "stop" ? "讨论已停止" : kind === "retry" ? "已重试失败轮次" : "讨论已启动");
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
+      void refreshTaskActions(task.id);
     } finally {
       setBusy(false);
     }
@@ -335,8 +345,11 @@ export function DuetView({
           {display.label}
         </span>
         <TaskTimeMeta task={task} />
-        <button type="button" className={action.kind === "stop" ? "is-stop" : "is-primary"} data-workspace-run-action={action.kind === "run" || action.kind === "retry" ? action.kind : undefined} disabled={busy || !action.kind || task.archived} onClick={() => action.kind && void perform(action.kind)}>{busy ? <SpinnerGap size={13} className="is-spinning" /> : action.kind === "stop" ? <Stop size={12} weight="fill" /> : <Play size={12} weight="fill" />}{action.label}</button>
-        {!task.archived && canArchive(task.status) && <button type="button" title="归档讨论" onClick={() => void archive()}><Archive size={13} /></button>}
+        <button type="button" className={`${action.kind === "stop" ? "is-stop" : "is-primary"}${action.blocked ? " is-disabled" : ""}`} data-workspace-run-action={action.kind === "run" || action.kind === "retry" ? action.kind : undefined} disabled={busy || !action.kind} aria-disabled={action.blocked ? true : undefined} {...(action.blocked ? actionTip.anchorProps : {})} onClick={() => action.kind && !action.blocked && void perform(action.kind)}>{busy ? <SpinnerGap size={13} className="is-spinning" /> : action.kind === "stop" ? <Stop size={12} weight="fill" /> : <Play size={12} weight="fill" />}{action.label}</button>
+        {action.blocked && <HoverTip at={actionTip.at}>{action.blocked}</HoverTip>}
+        {!task.archived && shown(actions?.archive) && (
+          <IconButton label="归档讨论" tip={blocker(actions!.archive) ?? "归档讨论"} className={actions!.archive.ok ? "" : "is-disabled"} aria-disabled={!actions!.archive.ok || undefined} onClick={() => { if (actions!.archive.ok) void archive(); }}><Archive size={13} /></IconButton>
+        )}
         {task.archived && <button type="button" onClick={() => void archive()}>取消归档</button>}
         <button type="button" title="删除讨论" onClick={() => setDeleteOpen(true)}><Trash size={13} /></button>
         </header>

@@ -13,6 +13,7 @@ import { InspActions, InspConclusion, InspMainButton, InspMore, type InspMoreIte
 import { InspButton, InspKv, InspRow } from "../inspector/parts.tsx";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
+import { blocker, refreshTaskActions, shown, useTaskActions } from "../lib/useTaskActions.ts";
 import { useTaskReviewInfo } from "../team/ReviewEvidence.tsx";
 import { TaskReviewRounds } from "../review/TaskReviewRounds.tsx";
 import { useForcePassVerify } from "../workflow/VerifyGateControls.tsx";
@@ -87,14 +88,6 @@ function latestRound(state: ReturnType<typeof useTaskReviewInfo>) {
   return state.info?.rounds.at(-1);
 }
 
-function dispatchBlockedReason(task: Task, active: boolean): string | null {
-  if (task.reviewOf) return "历史审查任务自身不能再验。";
-  if (task.archived) return "归档任务不能验证。";
-  if (task.status === "running" || task.status === "queued") return "任务结束运行或排队后才能验证。";
-  if (active) return "已有一轮验证正在进行。";
-  return null;
-}
-
 function firstRunnableSelection(
   profiles: AgentExecutorProfile[],
 ): Pick<ReviewSelection, "agentType" | "executorId"> | null {
@@ -164,7 +157,9 @@ export function TaskReviewInspector({
   const rounds = review.info?.rounds ?? [];
   const latest = latestRound(review);
   const activeRound = rounds.find((round) => REVIEW_IN_FLIGHT.has(round.reviewTaskStatus));
-  const blockedReason = dispatchBlockedReason(task, !!activeRound);
+  // 能不能再验一轮照服务端的判据（lib/useTaskActions.ts 的 `verify`），跟派审接口的挡板同一个函数。
+  const verify = useTaskActions(task.id)?.verify;
+  const blockedReason = blocker(verify);
   const registeredTypes = useMemo(() => registeredAgentTypes(profiles), [profiles]);
   const selectedProfileExists = !!selection.executorId
     && profiles.some((profile) => profile.id === selection.executorId && profile.type === selection.agentType);
@@ -187,7 +182,7 @@ export function TaskReviewInspector({
   }, [executorRunnable, profiles, profilesReady]);
 
   const dispatch = async () => {
-    if (blockedReason || dispatching || !profilesReady || !executorRunnable) return;
+    if (!verify?.ok || dispatching || !profilesReady || !executorRunnable) return;
     setDispatching(true);
     try {
       const { round } = await api.dispatchTaskReview(task.id, {
@@ -201,6 +196,7 @@ export function TaskReviewInspector({
       notify(`已开始第 ${round} 轮验证`);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
+      void refreshTaskActions(task.id);
     } finally {
       setDispatching(false);
     }
@@ -212,18 +208,18 @@ export function TaskReviewInspector({
     <section className="insp-head" aria-label="验证结论">
       <InspConclusion tone={now.tone}>{now.text}</InspConclusion>
       <InspActions>
-        {!activeRound && (
+        {/* 在验的那一轮已经写在结论里了，键就不出。 */}
+        {!activeRound && shown(verify) && (
           <InspMainButton action={{
             label: dispatching ? "启动中…" : "验一轮",
             onClick: () => setDispatchOpen((open) => !open),
-            disabled: !!blockedReason || dispatching,
+            disabled: dispatching,
+            blocked: blockedReason,
             pressed: dispatchOpen,
           }} />
         )}
         <InspMore items={extra ? [...workspace, extra] : workspace} />
       </InspActions>
-      {/* 按不了的时候说一句为什么（在验的那一轮已经写在结论里了）。 */}
-      {blockedReason && !activeRound && <p className="insp-hint">{blockedReason}</p>}
       {autoLimitReached && verifyStation && <p className="insp-hint">验证器不认账时，可以再验一轮，或在「更多」里由你签字强制通过。</p>}
     </section>
   );
@@ -238,7 +234,7 @@ export function TaskReviewInspector({
         )
         : head(null)}
 
-      {dispatchOpen && !blockedReason && (
+      {dispatchOpen && verify?.ok && (
         <section className="review-pane__dispatch" aria-label="验证配置">
           <InspKv>
             <InspRow label="执行器">

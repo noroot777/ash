@@ -1,7 +1,8 @@
 // 普通回合（续聊、自由工作流的自动修复）异常结束以后，失败那句话和「重试这一回合」的样子。
 //
-// 每一份都照 TaskDetail 那条链路推出动作（turnRetryTarget → 普通档 → ConversationFeed 的 turnRetry），
-// 任务头照样摆出来，好看它头上没有回合级的那颗图标：
+// 能不能重来是服务端判的（server/src/task-retry-turn.ts，随「此刻能做什么」下发），每一份带着它那一刻
+// 服务端会给的结论，照 TaskDetail 那条链路接成动作（retryTurnActions → 普通档 → ConversationFeed 的
+// turnRetry）；任务头照样摆出来，好看它头上没有回合级的那颗图标：
 //   persisted 刷新以后：会话行带着服务端判的「怎么断的」，那句话从会话行补出来；
 //   live      开着页面看：会话行还是老的，原因跟着直播那条结尾事件（done.interruption）到；
 //   legacy    老记录：没有原因，那句话照老样子，动作照样在；
@@ -13,15 +14,16 @@
 //   woken-retried 挂了哨兵等构建，被叫醒后那一回合失败（回复并回等它的那一回合），重试成功（刷新以后）：那句话和
 //                 叫醒那一回合自己的原因照样在；
 //   stopped   手动停止的（非零退出）：不算异常，什么都不补；
-//   running   任务在跑：那句话在，动作不在。
+//   running   任务在跑：那句话在，动作不在；
+//   blocked   服务端说此刻重来不了（所在分组暂停着）：动作灰着，指上去说原因，点了不走。
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import type { Session, Task, TurnInterruption } from "@ash/shared";
+import type { RetryTurnAction, Session, Task, TurnInterruption } from "@ash/shared";
 import { appendMonitorWake } from "@ash/shared/monitor-wake";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { TaskHeader } from "../../src/task-detail/TaskHeader.tsx";
 import { buildConversationItems, type PersistedConversation, type TimelineEntry } from "../../src/task-detail/conversationModel.ts";
-import { turnRetryTarget, type TurnRetryAction } from "../../src/task-detail/turnRetry.ts";
+import { retryTurnActions } from "../../src/task-detail/turnRetry.ts";
 import "../../src/styles/global.css";
 
 const at = "2026-11-13T12:00:00.000Z";
@@ -51,11 +53,13 @@ const retried = (taskId: string) => session(taskId, "s1", {
   turnOutcomes: { [at]: "failed", [at2]: "completed" }, turnInterruptions: { [at]: CAUSE },
 });
 
-type Scene = { status?: Task["status"]; sessions: Session[]; persisted: PersistedConversation[]; timeline?: TimelineEntry[] };
+/** 服务端此刻对「重试这一回合」的结论；不给 = 服务端判了不能重来（不出）。 */
+const RETRYABLE: RetryTurnAction = { ok: true, kind: "turn", sessionId: "s1" };
+type Scene = { status?: Task["status"]; sessions: Session[]; persisted: PersistedConversation[]; timeline?: TimelineEntry[]; retry?: RetryTurnAction };
 const SCENES: Record<string, (id: string) => Scene> = {
   persisted: (id) => {
     const s = session(id, "s1", { turnInterruptions: { [at]: CAUSE } });
-    return { sessions: [s], persisted: [{ session: s, output: "按意见改一下构建脚本。", trace: [] }] };
+    return { sessions: [s], persisted: [{ session: s, output: "按意见改一下构建脚本。", trace: [] }], retry: RETRYABLE };
   },
   live: (id) => {
     const s = session(id, "s1");
@@ -65,15 +69,16 @@ const SCENES: Record<string, (id: string) => Scene> = {
         live(id, "s1", "live:text", { kind: "text", text: "按意见改一下构建脚本。" }),
         live(id, "s1", "live:done", { kind: "done", exitStatus: 1, turnOutcome: "failed", interruption: CAUSE }),
       ],
+      retry: RETRYABLE,
     };
   },
   legacy: (id) => {
     const s = session(id, "s1", { turnOutcome: null });
-    return { sessions: [s], persisted: [{ session: s, output: "按意见改一下构建脚本。", trace: [] }] };
+    return { sessions: [s], persisted: [{ session: s, output: "按意见改一下构建脚本。", trace: [] }], retry: RETRYABLE };
   },
   "no-end": (id) => {
     const s = session(id, "s1", { endedAt: null, exitStatus: null });
-    return { sessions: [s], persisted: [{ session: s, output: "按意见改一下构建脚本。", trace: [] }] };
+    return { sessions: [s], persisted: [{ session: s, output: "按意见改一下构建脚本。", trace: [] }], retry: RETRYABLE };
   },
   later: (id) => {
     const crashed = session(id, "s1", { turnInterruptions: { [at]: CAUSE } });
@@ -147,6 +152,13 @@ const SCENES: Record<string, (id: string) => Scene> = {
     const s = session(id, "s1", { turnInterruptions: { [at]: CAUSE } });
     return { status: "running", sessions: [s], persisted: [{ session: s, output: "按意见改一下构建脚本。", trace: [] }] };
   },
+  blocked: (id) => {
+    const s = session(id, "s1", { turnInterruptions: { [at]: CAUSE } });
+    return {
+      sessions: [s], persisted: [{ session: s, output: "按意见改一下构建脚本。", trace: [] }],
+      retry: { ok: false, reason: "所在分组已暂停，先恢复分组再重试这一回合", kind: "turn", sessionId: "s1" },
+    };
+  },
 };
 
 function Case({ name }: { name: string }) {
@@ -157,15 +169,12 @@ function Case({ name }: { name: string }) {
     archived: false, stage: null, parentId: null, queueId: null, handoff: null, question: null, resumePrompt: null, verifyRound: null,
   } as unknown as Task;
   const items = buildConversationItems(scene.persisted, scene.sessions, scene.timeline ?? []);
-  // TaskDetail 同一条推法。
-  const target = turnRetryTarget(task, items, { sessions: scene.sessions });
-  const turnRetry: TurnRetryAction | null = target?.kind === "turn"
-    ? { sessionId: target.sessionId, run: async () => { log.__retried.push(id); } }
-    : null;
+  // TaskDetail 同一条接法。
+  const { turn: turnRetry } = retryTurnActions(scene.retry, async () => { log.__retried.push(id); });
   const noop = () => {};
   return (
     <section className={`${id}-fixture`} style={{ marginBottom: 24 }}>
-      <TaskHeader task={task} allTasks={[task]} conversationMarkdown="" busy={false} refreshing={false} reviewOpen={false}
+      <TaskHeader task={task} actions={null} allTasks={[task]} conversationMarkdown="" busy={false} refreshing={false} reviewOpen={false}
         onTitle={async () => {}} onTogglePin={async () => {}} onPrimary={noop} onRequeue={noop} onArchive={noop} onRefresh={noop}
         onReview={noop} onOpenTask={noop} onDelete={noop} notify={noop} />
       <div className="feed"><ConversationFeed task={task} items={items} sessions={scene.sessions} questionHistory={[]} loading={false} error={null}

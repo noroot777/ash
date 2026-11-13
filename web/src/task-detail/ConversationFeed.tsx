@@ -525,8 +525,8 @@ export function ConversationFeed({
   const renderFootnote = (footnote: TurnFootnote, placement?: "standalone" | "trailing") => (
     <FootnoteLine key={footnote.id} footnote={footnote} placement={placement}
       actionFor={(part) => isRuled(part) ? ruleAction
-        : turnRetry && turnRetryPartOf(footnote) === part ? <RetryCta label="重试这一回合" run={turnRetry.run} />
-          : isRetryable(part, footnote) && reviewRetry ? <RetryCta label="继续本轮审查" run={reviewRetry.run} /> : null} />
+        : turnRetry && turnRetryPartOf(footnote) === part ? <RetryCta label="重试这一回合" run={turnRetry.run} blocked={turnRetry.blocked} />
+          : isRetryable(part, footnote) && reviewRetry ? <RetryCta label="继续本轮审查" run={reviewRetry.run} blocked={reviewRetry.blocked} /> : null} />
   );
   // 「N 条记录」里那一轮审查点开去哪儿：跟审查结论那颗气泡同一套。
   const receiptReview: ReceiptReview = {

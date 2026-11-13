@@ -43,7 +43,8 @@ import { TaskReplyRail } from "./TaskReplyRail.tsx";
 import { useTaskReplyActions } from "./TaskReplyActions.tsx";
 import { useWaitingTitle } from "./useWaitingTitle.ts";
 import { FreeReviewDialog } from "../free-workflow/FreeReviewDialog.tsx";
-import { freeReviewRetryIdentity, turnRetryTarget, type TurnRetryTarget } from "./turnRetry.ts";
+import { retryTurnActions, type TurnRetryTarget } from "./turnRetry.ts";
+import { refreshTaskActions, shown, useTaskActions } from "../lib/useTaskActions.ts";
 import { useExecutorGate } from "./ExecutorGate.tsx";
 import type { ComposerDraft } from "../composer/composerDraft.ts";
 import { forkReadBlock, snapshotConversationFork } from "./conversationFork.ts";
@@ -110,18 +111,14 @@ export function TaskDetail({
   useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
   // Inspector 栈（哪几格存在、默认开哪几格）整块在 useTaskInspectorStack.ts。
-  // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点、验收后快照入口和「继续本轮审查」的可用性。
+  // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点和验收后快照入口。
   const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount, free, runFacts } =
     useTaskInspectorStack(task, allTasks, conversation);
-  // 「上一回合崩了、任务却停在终态」的那颗重来，判据和服务端 retryTurnRejection 对齐（turnRetry.ts）。
-  // 它落在说这件事的地方，带字：普通回合挂在会话里那一回合失败那句话后面；审查档挂在审查格结论行
-  // 和会话尾注上。同一个动作、同一份可用性（见 TurnRetryAction / ReviewRetryAction）。
-  const turnRetry = turnRetryTarget(task, conversation.items, {
-    reviewRetry: freeReviewRetryIdentity(free.state?.reviews),
-    sessions: conversation.sessions,
-  });
-  const crashedTurnRetry = turnRetry?.kind === "turn" ? { sessionId: turnRetry.sessionId, run: () => retryTurn(turnRetry) } : null;
-  const reviewRetry = turnRetry?.kind === "review" ? { review: turnRetry.review, run: () => retryTurn(turnRetry) } : null;
+  // 此刻能做什么（运行 / 停止 / 归档 / 重新排队 / 重跑上一回合 / 派验证）整份由服务端判，这里只照着画。
+  const actions = useTaskActions(task.id);
+  // 「上一回合崩了、任务却停在终态」的那颗重来落在说这件事的地方，带字：普通回合挂在会话里那一回合
+  // 失败那句话后面；审查档挂在审查格结论行和会话尾注上（turnRetry.ts）。
+  const { turn: crashedTurnRetry, review: reviewRetry } = retryTurnActions(actions?.retryTurn, (target) => retryTurn(target));
   const followUps = useMemo(
     () => conversation.items.flatMap((item) => (
       item.kind === "user" && isUserFollowUp(item)
@@ -222,7 +219,9 @@ export function TaskDetail({
       if (action === "unarchive") onTaskUpdate(await toggleArchive(task, notify));
       else await refreshTask();
     } catch (reason) {
+      // 被拒多半是撞车（另一个操作刚占住这个任务）：原因照说，结论顺手重取一份。
       notify(reason instanceof Error ? reason.message : String(reason));
+      void refreshTaskActions(task.id);
     } finally {
       setBusy(false);
     }
@@ -246,6 +245,7 @@ export function TaskDetail({
       await conversation.refetch();
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
+      void refreshTaskActions(task.id);
     }
   };
 
@@ -363,6 +363,7 @@ export function TaskDetail({
             <div className="task-detail">
               <TaskHeader
                 task={task}
+                actions={actions}
                 allTasks={allTasks}
                 conversationMarkdown={markdown}
                 busy={busy}
@@ -568,7 +569,7 @@ export function TaskDetail({
                       moreItems={replyActions.moreItems}
                       moreRef={replyActions.moreRef}
                       skills={skills.skills}
-                      onStop={() => perform("stop")}
+                      onStop={shown(actions?.stop) ? () => perform("stop") : undefined}
                       onStandingExecutorChange={async (next, label) => {
                         const updated = await api.patchTask(task.id, next);
                         onTaskUpdate(updated);

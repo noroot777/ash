@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
 import type { Group, ProjectView, TaskListItem } from "@ash/shared";
-import { canArchive, canSingleRun, TASK_STATUS_LABELS } from "@ash/shared";
+import { TASK_STATUS_LABELS } from "@ash/shared";
 import { isSearchQueryReady, SEARCH_MAX_HITS } from "@ash/shared/search";
 import {
   Archive,
@@ -22,6 +22,7 @@ import {
 } from "@phosphor-icons/react";
 import { api, type GitOverview } from "../lib/api.ts";
 import { toggleArchive } from "../lib/archive.ts";
+import { blocker, shown, useTaskActions } from "../lib/useTaskActions.ts";
 import type { SettingsSection } from "../settings/SettingsPage.tsx";
 import { TaskModeIcon, taskModeLabel, taskParentLink, taskParentMode } from "../components/TaskOrigin.tsx";
 import { GitOverviewPanel, GitProjectStep } from "./CommandPaletteGit.tsx";
@@ -154,6 +155,9 @@ export function CommandPalette({
     prefer: currentProject?.id ?? null, sort,
   });
 
+  // 当前任务那几条动作出不出、点不点得了，照服务端的判据（详情头读的是同一份）。
+  const taskActions = useTaskActions(open ? selectedTask?.id : null);
+
   const items = useMemo(() => {
     if (slashMode || step !== "search") return [];
     const result: PaletteItem[] = [];
@@ -189,70 +193,70 @@ export function CommandPalette({
           run: closeRun(() => onTask(parent.task!)),
         });
       }
-      if (!selectedTask.archived && canSingleRun(selectedTask.status)) {
-        const retry = selectedTask.status === "failed";
-        const label = retry ? "重试任务" : selectedTask.status === "paused" ? "继续任务" : "运行任务";
+      // 做不了的照样列出来、后面写着原因：点它只说原因，不发请求（键灰着的那一份同一句话）。
+      const gated = (verdict: Parameters<typeof blocker>[0], run: () => void | Promise<void>) => {
+        const reason = blocker(verdict);
+        return reason ? { detail: reason, run: closeRun(() => notify(reason)) } : { run };
+      };
+      const primary = shown(taskActions?.primary) ? taskActions!.primary! : null;
+      if (primary) {
+        const retry = primary.kind === "retry";
+        const label = retry ? "重试任务" : primary.kind === "resume" ? "继续任务" : "运行任务";
         result.push({
           key: "task:run",
           group: taskGroup,
           label,
           detail: "R",
           icon: <Play size={14} weight="fill" />,
-          // 先问再关自己:对话框住在 App 层,面板收起来了它照样在(第 6 轮审查:
-          // 这个入口按 canSingleRun 判断、不排除 duet,于是绕开了详情页那道闸)。
-          run: async () => {
+          // 先问再关自己:对话框住在 App 层,面板收起来了它照样在。
+          ...gated(primary, async () => {
             try {
               if (!(await confirmExecutorSwap(selectedTask.id))) return;
               onClose(); // 与 closeRun 的差别只在顺序:先确认、后收面板
               if (retry) await api.retryTask(selectedTask.id);
               else await api.runTask(selectedTask.id);
               onTaskUpdated(await api.task(selectedTask.id));
-              notify(retry ? "任务已重试" : selectedTask.status === "paused" ? "任务已继续" : "任务已启动");
+              notify(retry ? "任务已重试" : primary.kind === "resume" ? "任务已继续" : "任务已启动");
             } catch (error) {
               notify(error instanceof Error ? error.message : "命令执行失败");
             }
-          },
+          }),
         });
       }
-      if (
-        !dispatchedWorker
-        && !selectedTask.archived
-        && !!selectedTask.queueId
-        && (selectedTask.status === "failed" || selectedTask.status === "canceled")
-      ) {
+      if (shown(taskActions?.requeue)) {
         result.push({
           key: "task:requeue",
           group: taskGroup,
           label: "重新排队",
           detail: "回到队列等待",
           icon: <ListNumbers size={14} />,
-          run: closeRun(async () => {
+          ...gated(taskActions!.requeue, closeRun(async () => {
             const response = await api.requeueTask(selectedTask.id);
             onTaskUpdated(response.task);
             notify(response.movedToEnd ? "已重新排队并移到队尾" : "已重新排队");
-          }),
+          })),
         });
       }
-      if (!selectedTask.archived && (selectedTask.status === "running" || selectedTask.status === "queued")) {
+      if (shown(taskActions?.stop)) {
         result.push({
           key: "task:stop",
           group: taskGroup,
           label: selectedTask.mode === "team" ? "停止全组" : selectedTask.status === "queued" ? "停止排队" : "停止运行",
           icon: <Stop size={14} weight="fill" />,
-          run: closeRun(async () => {
+          ...gated(taskActions!.stop, closeRun(async () => {
             if (selectedTask.mode === "team") await api.teamHalt(selectedTask.id);
             else await api.stopTask(selectedTask.id);
             onTaskUpdated(await api.task(selectedTask.id));
             notify(selectedTask.mode === "team" ? "已停止全组" : "任务已停止");
-          }),
+          })),
         });
       }
+      if (selectedTask.archived && !dispatchedWorker) {
+        result.push({ key: "task:unarchive", group: taskGroup, label: "取消归档", icon: <ArrowCounterClockwise size={14} />, run: closeRun(async () => { onTaskUpdated(await toggleArchive(selectedTask, notify)); }) });
+      } else if (shown(taskActions?.archive)) {
+        result.push({ key: "task:archive", group: taskGroup, label: "归档任务", icon: <Archive size={14} />, ...gated(taskActions!.archive, closeRun(async () => { onTaskUpdated(await toggleArchive(selectedTask, notify)); })) });
+      }
       if (!dispatchedWorker) {
-        if (selectedTask.archived) {
-          result.push({ key: "task:unarchive", group: taskGroup, label: "取消归档", icon: <ArrowCounterClockwise size={14} />, run: closeRun(async () => { onTaskUpdated(await toggleArchive(selectedTask, notify)); }) });
-        } else if (canArchive(selectedTask.status)) {
-          result.push({ key: "task:archive", group: taskGroup, label: "归档任务", icon: <Archive size={14} />, run: closeRun(async () => { onTaskUpdated(await toggleArchive(selectedTask, notify)); }) });
-        }
         result.push({ key: "task:delete", group: taskGroup, label: "删除任务", icon: <Trash size={14} />, run: closeRun(() => onDeleteTask(selectedTask)) });
       }
     }
@@ -299,7 +303,7 @@ export function CommandPalette({
     return needle
       ? result.filter((item) => `${item.label} ${item.detail ?? ""} ${item.group} ${keysSearchText(item.keys)}`.toLocaleLowerCase().includes(needle))
       : result;
-  }, [confirmExecutorSwap, currentProject, groups, notify, onClose, onComposer, onDeleteTask, onNewGroup, onNewProject, onNote, onProject, onSettings, onTask, onTaskMode, onTaskUpdated, projects, query, selectedTask, slashMode, step, tasks]);
+  }, [confirmExecutorSwap, currentProject, groups, notify, onClose, onComposer, onDeleteTask, onNewGroup, onNewProject, onNote, onProject, onSettings, onTask, onTaskMode, onTaskUpdated, projects, query, selectedTask, slashMode, step, taskActions, tasks]);
 
   const normalTotal = items.length + hits.length;
 

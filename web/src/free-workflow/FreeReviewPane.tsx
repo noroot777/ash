@@ -159,7 +159,7 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
     }
   };
 
-  // 这一轮还能续（服务端给了 `round.retry`，经 turnRetryTarget 成了 `reviewRetry`）：主动作就是接着
+  // 这一轮还能续（服务端下发的「此刻能做什么」里有审查档的 `retryTurn`，经 retryTurnActions 成了 `reviewRetry`）：主动作就是接着
   // 把这一轮审完。按**轮次身份**认（哪一场、第几轮），工作区审查和合并结果审查一样；另开一场（「再审
   // 一轮」/「再审一次」）是新会话从头审，退到更多里 —— 它摆在前面的话，续这一轮在审查格上就没有
   // 明面上的入口了（合并结果审查还没开口就断了时，会话里也没有尾注可挂）。
@@ -174,6 +174,7 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
     },
     pri: true,
     disabled: retrying,
+    blocked: reviewRetry.blocked,
   } : undefined;
 
   const conclude = (): Conclusion => {

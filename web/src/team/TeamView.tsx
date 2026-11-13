@@ -12,6 +12,7 @@ import { ScmDiffViewer } from "../scm/ScmDiffViewer.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import { api, type TeamCuaStatus } from "../lib/api.ts";
 import { toggleArchive } from "../lib/archive.ts";
+import { refreshTaskActions, useTaskActions } from "../lib/useTaskActions.ts";
 import type { Notify } from "../lib/notify.ts";
 import { useTaskBody } from "../lib/useTaskBody.ts";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
@@ -228,6 +229,7 @@ export function TeamView({
     if (selectedWorker) markTaskRead(selectedWorker);
   }, [markTaskRead, selectedWorker]);
 
+  const actions = useTaskActions(task.id);
   const perform = async (action: "run" | "halt" | "resume" | "archive") => {
     // 起调度台 = 起一轮(团队三个角色各有一格执行器,别人的解析不到会降级到我的)。
     if ((action === "run" || action === "resume") && !(await confirmExecutorSwap(task.id))) return;
@@ -248,6 +250,7 @@ export function TeamView({
       if (action !== "archive") notify(action === "halt" ? "已停止全组，暂停状态会持久保留" : action === "resume" ? "已恢复全组" : "团队已启动");
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
+      void refreshTaskActions(task.id);
     } finally {
       setBusy(false);
     }
@@ -329,6 +332,7 @@ export function TeamView({
         <OriginTaskBar task={task} allTasks={allTasks} onOpen={openTaskById} />
         <TeamHeader
           task={task}
+          actions={actions}
           workers={workers}
           groups={teamGroups}
           haltedByHistory={teamGroups.length === 0 && (historyHalt || localHalted)}
