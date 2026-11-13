@@ -26,6 +26,7 @@ import { localUploadNames, registerUploads } from "./uploads.js";
 import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, worktreePathFor } from "./git.js";
 import { findResumableRollout } from "./executors/codex-rollout.js";
 import { assertHandoffNotCanceled, beginHandoffImport, endHandoffImport } from "./handoff-transfer-state.js";
+import { withTaskDirLock } from "./task-dir-lock.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { createTasks, publishTaskUpdated } from "./task-store.js";
 import { resumeOrRunTask } from "./task-resume.js";
@@ -74,7 +75,8 @@ export async function importHandoff(
   }
   try {
     assertHandoffNotCanceled(m.task.id, m.transferId, m.sourceFingerprint);
-    return await importValidated(m, context);
+    // 写文件到建任务行整段持目录锁：同一编号的旧清理（删过的任务留下的）不能插进来（task-dir-lock.ts）。
+    return await withTaskDirLock(m.task.id, () => importValidated(m, context));
   } finally {
     endHandoffImport(m.task.id);
   }

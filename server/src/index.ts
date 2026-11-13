@@ -266,6 +266,10 @@ async function initializeServer() {
     });
     if (gates.interrupted || gates.resumed || gates.settled) console.log(`[ash] 验收前置命令：接管 ${gates.resumed} 条，`
       + `按退出结果结算 ${gates.settled} 条，被重启打断 ${gates.interrupted} 条`);
+    // 已了结任务的验收快照、过了保留期的原始事件流，启动后每 6 小时回收一次。排在门禁对账之后：
+    // 快照的判据要看门禁行的最终状态。
+    const { startRunDiskMaintenance } = await import("./run-disk-maintenance.js");
+    startRunDiskMaintenance();
     // 自由审查对账要排在 reattach 之后：它以「有没有接回的 reviewer 会话」为判据，
     // 收拾死在投递链上的 reviewing run（详见 free-review-reconcile.ts）。
     const { reconcileFreeReviews } = await import("./free-review-reconcile.js");

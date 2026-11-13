@@ -63,6 +63,14 @@ export interface Session {
    */
   turnOutcome?: TurnOutcome | null;
   /**
+   * 这条会话上**每一回合**自己的结局(`session_turns.outcome`),键是回合起点(trace 的
+   * `turnStartedAt`)。`turnOutcome` 只答得了最后一回合;会话一续跑,前一回合崩没崩在读端就丢了
+   * —— 而哨兵叫醒要据此判「异常结束之后来的叫醒不并进那一回合」(web 的 monitorWakeTurns)。
+   *
+   * 缺省 = 这份快照不提供它(目前服务端还没带出门);某一回合没有键或值为 null = 不知道。
+   */
+  turnOutcomes?: Record<string, TurnOutcome | null>;
+  /**
    * 这条会话**此刻**还卡在上游等回话吗 —— 服务端那份权威状态(server/src/session-waiting.ts)
    * 按回合身份判出来的一位,不是数据库里的列。
    *

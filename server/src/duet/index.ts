@@ -7,7 +7,7 @@ import type { DuetConfig, DuetConsensusBy, GateAction, TaskStatus } from "@ash/s
 import { db } from "../db/index.js";
 import { tasks, projects, sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
-import { id, now } from "../util.js";
+import { id } from "../util.js";
 import { setTaskStatus } from "../status.js";
 import { takeCanceled, CanceledRun, claimOwnTurn, reclaimTurn, releaseTurn } from "../runs.js";
 import type { TurnIdentity } from "../runs.js";
@@ -27,6 +27,7 @@ import { runTurn, type Turn } from "./turn.js";
 import { dispatchRejection, executorOwnerScope, noteExecutorDowngrade } from "../auth/dispatch-gate.js";
 import { acknowledgeTaskStart } from "../task-start-receipt.js";
 import { runEnvForOwner } from "../auth/run-env.js";
+import { applyAutoTitle } from "../auto-title-apply.js";
 
 // duet 的所有权与 single 共用 runs.ts 那把单飞锁。这里原来是个模块内的 `running`
 // Set:调用方看不见它,于是 /run、/fire、/retry、scheduler 都能声称「已启动」而第二次
@@ -415,13 +416,8 @@ async function genDuetTitle(
     }
     const line = text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
     const newTitle = line.replace(/^标题[:：]\s*/, "").replace(/[`*"「」]/g, "").trim().slice(0, 20);
-    if (!newTitle) return;
-    // Don't clobber a title the user edited in the meantime.
-    const cur = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-    if (!cur?.autoTitle) return;
-    const updatedAt = now();
-    await db.update(tasks).set({ title: newTitle, autoTitle: false, updatedAt }).where(eq(tasks.id, taskId));
-    bus.publish({ type: "task.title", taskId, title: newTitle, updatedAt });
+    // 不盖掉期间被改过的名:判据在写入口里(条件更新),不是先查一眼。
+    await applyAutoTitle(taskId, newTitle || null);
   } catch {
     /* best effort */
   }
