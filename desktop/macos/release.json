@@ -1,9 +1,9 @@
 {
+  "//": "发版配置，见 desktop/macos/README.md「发版」。更新包和 appcast 放在素材库（公开仓库）里：appcast 在 appcastPath，zip 是 tag 为 <tagPrefix><版本>-<构建号> 的 Release 附件。publicKey 是 EdDSA 公钥（公开的，可以入库）；私钥只在登录钥匙串里，条目名是 keychainAccount。publicKey 一旦随第一版发出去就永远不能换：已装的 app 只认它。",
+  "repo": "noroot777/materials",
   "branch": "main",
   "appcastPath": "ash/mac/appcast.xml",
   "tagPrefix": "ash-mac-v",
-  "//": "发版配置，见 desktop/macos/README.md「发版」。更新包和 appcast 放在素材库（公开仓库）里：appcast 在 appcastPath，zip 是 tag 为 <tagPrefix><版本>-<构建号> 的 Release 附件。publicKey 是 EdDSA 公钥（公开的，可以入库）；私钥只在登录钥匙串里，条目名是 keychainAccount。publicKey 一旦随第一版发出去就永远不能换：已装的 app 只认它。",
-  "repo": "noroot777/materials",
   "keychainAccount": "dev.ash.mac",
   "publicKey": "qmEowTREgXY+e/AalqZkEISl/ii8GuSd0B3U5b34z+M="
 }
