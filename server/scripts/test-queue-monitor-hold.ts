@@ -333,6 +333,30 @@ try {
     console.log("PASS: 重启后哨兵落 lost —— 队列接着推,A 恰好被叫醒一次");
   }
 
+  // ⑥b 同样的开机现场,但补记那一笔写失败、**重试之前**哨兵就被放弃了(第 2 轮审查 1):欠账不能因为
+  //     重试那一刻已经不在等哨兵就蒸发 —— 队首前面没有终态成员,存量兜底判据不会替它推。
+  {
+    const q = await queuePair("restart-abandon");
+    let monitorId = "";
+    await firstTurnPaused(q, "RESUME_BOOT_ABANDON", async (taskId) => {
+      monitorId = await insertMonitorRow(taskId, { status: "exited" });
+      await db.update(monitors).set({
+        sourceRole: "single", exitCode: 0, endedAt: now(), resultHandoffAt: now(), resultHandoffText: "不会送到的通知",
+      }).where(eq(monitors.id, monitorId));
+    });
+    await assertHeld(q, 1, "重启之前");
+    await db.delete(schema.queueAdvanceIntents).where(eq(schema.queueAdvanceIntents.queueId, q.queueId));
+    failIntentWrites = 1;
+    await recoverQueueAdvances();
+    assert.equal(failIntentWrites, 0, "补记确实撞上了那次注入");
+    assert.ok((await stopMonitorChecked(monitorId, "不等了")).ok, "赶在退避重试之前放弃");
+    assert.equal(await intentOf(q.queueId), undefined, "此刻库里还没有意图行");
+    await bothDone(q, "补记失败后先放弃、再重试");
+    assert.equal(inputsOf(q.a).length, 2, `A 恰好续跑一次:${JSON.stringify(inputsOf(q.a))}`);
+    assert.ok(inputsOf(q.a)[1]!.includes("RESUME_BOOT_ABANDON"), inputsOf(q.a)[1]);
+    console.log("PASS: 开机补记失败、重试前哨兵被放弃 —— 欠账由重试兑现,A 续跑一次");
+  }
+
   // ⑦ 名下没有哨兵的检查点暂停:行为不变,落 paused 就由队列续跑
   {
     const q = await queuePair("checkpoint");

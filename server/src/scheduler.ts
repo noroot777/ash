@@ -537,12 +537,14 @@ async function recoverQueueAdvance(queueId: string, accepted: AcceptedAdvance | 
   const candidate = scan.next;
   if (scan.monitorHold) {
     // 停在等哨兵的成员上:意图就是「它的哨兵了结时还得推一次」那笔欠账,留着。升级前那一版
-    // 不留这笔账,所以没有意图的也补记一笔 —— 否则它的哨兵在这次重启里落了 lost、又没有结果
+    // 不留这笔账,所以没有意图的也补一笔 —— 否则它的哨兵在这次重启里落了 lost、又没有结果
     // 要送,就再没有人推这条队列(queue-monitor-hold.ts)。
-    // 补记失败就抛:调用方按「这条队列这次没恢复成」退避重来,不当它记下了。
-    if (!accepted && !(await recordQueueAdvanceIntent(queueId))) {
-      throw new Error("队列停在等哨兵的成员上，补记推进意图没能落库");
-    }
+    //
+    // 补的办法是**当场接受一次推进**,不是只写意图行:从这一刻起这笔责任归 `advanceQueue`,意图
+    // 写失败时由它那条重试链(`retryableQueueAdvance` 的 held 分支)背着,重试兑现的是这次推进本身。
+    // 早先是写失败就抛、交给下面那层按 `accepted=null` 重来 —— 重来时哨兵若已经了结,队首就成了
+    // 一个「前面没有终态成员」的普通暂停,按存量兜底判据不推,欠账就此蒸发(第 2 轮审查 1)。
+    if (!accepted) await advanceQueue(queueId);
     return;
   }
   if (!candidate) {
