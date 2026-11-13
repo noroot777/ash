@@ -8,14 +8,20 @@
 // ③ 流结束时库还坏着：收尾最多等 `finishWaitMs` 就放行，收尾那一笔留在队里，恢复后照样补上，
 //    且按流结束那一刻圈范围，不会把下一代刚起的监听一起收掉；
 // ④ 任务被删了（明确撤销）：队头那一笔立即销账，不会对着一个已删的任务一直重试；
-// ⑤ 积压有上界：超出的新事件不进队，收尾那一笔不受限制，数字跟落库的卡片对得上；
-// ⑥ 注定写不成的（约束冲突、代码错）不占着队头，后面的照常写。
-import { db, makeTask, monitors, now, sessions, teardown } from "./monitors-fixture.js";
+// ⑤ 积压有上界：超出的新事件不进队，收尾那一笔不受限制；丢掉的那几个**算进收尾说明的总数、
+//    并说清没能记成卡片**，不是只写进日志（第 3 轮审查）；
+// ⑥ 注定写不成的（约束冲突、代码错）不占着队头，后面的照常写，丢掉的同样报出来；
+// ⑦ 收尾说明自己没写成（写盘出错）不算写成：收尾留在队里重试，恢复后那句话照样落下，且只落
+//    一遍（第 3 轮审查实测：上一版把 `appendTaskTimeline` 的 false 当成功销账，说明永久缺失）。
+import { db, makeTask, monitors, now, root, sessions, teardown } from "./monitors-fixture.js";
 import { eq } from "drizzle-orm";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 const { ClaudeMonitorTrace } = await import("../src/claude-monitors.js");
 const { MonitorWriteQueue, permanentWriteFailure } = await import("../src/claude-monitor-write-queue.js");
 const { beginTaskRevocation, releaseTaskRevocation } = await import("../src/claude-monitor-revoked.js");
+const { reapClaudeMonitors } = await import("../src/claude-monitor-reaped.js");
 const { bus } = await import("../src/bus.js");
 
 let failures = 0;
@@ -56,7 +62,8 @@ async function session(name: string) {
   const trace = new ClaudeMonitorTrace(cli, ORIGIN);
   await trace.settled();                     // 认领上一轮那一步先走完
   const notice = () => notes.find((t) => t.includes("内置 Monitor"));
-  return { taskId, cli, trace, notice, stop };
+  const notices = () => notes.filter((t) => t.includes("内置 Monitor"));
+  return { taskId, cli, trace, notice, notices, stop };
 }
 
 /** 断言自己读库不走注入（注入只拦被测代码那一侧）。 */
@@ -171,7 +178,9 @@ async function main(): Promise<void> {
     MonitorWriteQueue.maxBacklog = cap;
     const rows = await rowsOf(s.cli);
     check(ids(rows) === "b-m1,b-m2,b-m3", "⑤进了队的三笔全部补上", ids(rows));
-    check(!!s.notice()?.includes("3 个"), "⑤收尾说明跟落库的卡片对得上（3 个）", String(s.notice()));
+    check(!!s.notice()?.includes("起了 5 个"), "⑤收尾说明的总数把没进队的两个也算上（5 个，不是 3 个）", String(s.notice()));
+    check(!!s.notice()?.includes("其中 2 个") && !!s.notice()?.includes("没能记成卡片"),
+      "⑤并且说清其中几个没能记成卡片（面板上只有 3 张）", String(s.notice()));
   }
 
   // ── ⑥ 注定写不成的不占着队头 ──────────────────────────────────────────────────
@@ -182,14 +191,53 @@ async function main(): Promise<void> {
     check(!permanentWriteFailure(Object.assign(new Error("busy"), { errcode: 5 })), "⑥SQLITE_BUSY 是等得好的");
     check(!permanentWriteFailure(new Error("不知道是什么")), "⑥认不出来的一律当作等得好的（宁可多等，不可错丢）");
     const warns: string[] = [];
-    const q = new MonitorWriteQueue({ revoked: () => false, warn: (what) => warns.push(what) });
+    const dropped: string[] = [];
+    const q = new MonitorWriteQueue({
+      revoked: () => false, warn: (what) => warns.push(what), dropped: (fact) => dropped.push(fact),
+    });
     let attempts = 0;
     let after = false;
-    q.push(async () => { attempts += 1; throw unique; });
+    q.push(async () => { attempts += 1; throw unique; }, { fact: "start" });
     q.push(async () => { after = true; });
     await Promise.race([q.settled(), sleep(1_000)]);
     check(attempts === 1 && after, "⑥写不成的那一笔试一次就丢、留诊断，后面那笔照常写", `attempts=${attempts} after=${after}`);
     check(warns.some((w) => w.includes("不会成功")), "⑥丢掉时留了诊断", warns.join(" | "));
+    check(dropped.join(",") === "start", "⑥丢掉的那一笔报给了调用方（收尾说明据此补数）", dropped.join(",") || "(没报)");
+  }
+
+  // ── ⑦ 收尾说明自己没写成：留在队里重试，恢复后只落一遍 ─────────────────────────
+  {
+    const wait = ClaudeMonitorTrace.finishWaitMs;
+    ClaudeMonitorTrace.finishWaitMs = 300;
+    const s = await session("notice-io");
+    startMonitor(s.trace, s.cli, "n");
+    await s.trace.settled();
+    // 把这个任务的时间线目录占成一个普通文件：建目录 / 写盘都报 ENOTDIR —— 真实的写盘故障。
+    const runs = join(root, "runs");
+    const taskDir = join(runs, s.taskId);
+    check(!existsSync(taskDir), "⑦（前提）这个任务的时间线目录还不存在");
+    mkdirSync(runs, { recursive: true });
+    writeFileSync(taskDir, "");
+    await s.trace.finishAll();
+    const [row] = await rowsOf(s.cli);
+    check(row?.status === "lost", "⑦卡片照常收成「进程已不在」", String(row?.status));
+    check(s.notices().length === 0, "⑦（注入生效）写盘出错期间说明确实没落下");
+    check(pendingOf(s.trace) === 1, "⑦说明没写成，收尾那一笔仍排在队里", `还排着 ${pendingOf(s.trace)} 笔`);
+    rmSync(taskDir);
+    await s.trace.settled();
+    ClaudeMonitorTrace.finishWaitMs = wait;
+    check(s.notices().length === 1 && s.notices()[0]!.includes("1 个"), "⑦恢复后那句说明照样落下，且只落一遍",
+      `${s.notices().length} 条`);
+    // 重试时已经落下的那条不再落第二遍：同一个稳定身份再收一次尾，什么都不多写。
+    const transcript = () => readFileSync(join(taskDir, `s-notice-io-${s.taskId}.md`), "utf8")
+      .split("\n").filter((line) => line.includes("内置 Monitor")).length;
+    check(transcript() === 1, "⑦时间线文件里只有一条", `${transcript()} 条`);
+    const key = (s.trace as any).openedAt as string;
+    await reapClaudeMonitors(s.cli, { pid: null, pidStartedAt: null, runPath: "" }, key, undefined,
+      { eventKey: `claude-monitors-reaped:${s.cli}:${key}` });
+    check(transcript() === 1 && s.notices().length === 1, "⑦同一摊收尾重跑一遍，说明不会落第二条",
+      `文件 ${transcript()} 条 / 推送 ${s.notices().length} 条`);
+    s.stop();
   }
 
   MonitorWriteQueue.retryMs = ladder;
@@ -198,7 +246,8 @@ async function main(): Promise<void> {
     process.exitCode = 1;
   } else {
     console.log("✓ 内置 Monitor 实时投影的写库责任：暂态故障后照样落库 / 长故障期间的事实恢复后全部补上且收尾计数完整 / "
-      + "流结束时库还坏着收尾有界放行、恢复后补上且不误收下一代 / 任务删除即销账 / 积压有上界 / 写不成的不堵队头 均受回归保护");
+      + "流结束时库还坏着收尾有界放行、恢复后补上且不误收下一代 / 任务删除即销账 / 积压有上界且丢掉的算进说明 / 写不成的不堵队头 / "
+      + "说明没写成就重试且只落一遍 均受回归保护");
   }
 }
 

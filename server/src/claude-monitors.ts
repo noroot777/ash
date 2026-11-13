@@ -44,7 +44,7 @@ import {
 import { reapClaudeMonitors } from "./claude-monitor-reaped.js";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
-import { MonitorWriteQueue } from "./claude-monitor-write-queue.js";
+import { MonitorWriteQueue, type WriteFact } from "./claude-monitor-write-queue.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { id, now } from "./util.js";
@@ -191,7 +191,14 @@ export class ClaudeMonitorTrace {
   private readonly writes = new MonitorWriteQueue({
     revoked: () => !!this.taskId && isTaskRevoked(this.taskId),
     warn: (what, detail) => this.warn(what, detail),
+    dropped: (fact) => { this.missed[fact === "start" ? "starts" : "updates"] += 1; },
   });
+  /**
+   * 写库队列丢掉的事实（积压溢出 / 注定写不成），按类数。回合收尾那条说明据此把数字补全、
+   * 并说出少了什么（见 claude-monitor-reaped.ts 的 `ReapMissed`）—— 只写进日志的话，用户看到
+   * 的是一个偏小却自称完整的数。
+   */
+  private readonly missed = { starts: 0, updates: 0 };
   /**
    * 这条会话归哪个任务。第一次查到会话就记下（一条 CLI 会话的归属不会变），给队列判「这一笔
    * 还要不要」用：库坏着的时候查不了会话，但任务被删这件事不该因此被一直重试下去。
@@ -200,7 +207,7 @@ export class ClaudeMonitorTrace {
   /** 流结束那一刻最多等队列多久（见 `finishAll`）。回归脚本可以改小。 */
   static finishWaitMs = 5_000;
 
-  private queue(job: () => Promise<void>, opts?: { always?: boolean }): void {
+  private queue(job: () => Promise<void>, opts?: { always?: boolean; fact?: WriteFact }): void {
     this.writes.push(job, opts);
   }
 
@@ -285,7 +292,7 @@ export class ClaudeMonitorTrace {
     const receipt = parseMonitorStartReceipt(text);
     if (receipt.lifetime === "unknown") return; // 认不出来就保持「未知」，别编一个
     this.byToolUse.delete(callId);
-    this.queue(() => this.applyReceipt(nativeId, receipt.lifetime, receipt.ms));
+    this.queue(() => this.applyReceipt(nativeId, receipt.lifetime, receipt.ms), { fact: "update" });
   }
 
   /** 每条 stream-json 事件都喂进来。 */
@@ -317,7 +324,7 @@ export class ClaudeMonitorTrace {
         const seen = this.startAnchor();
         // 同步认领，再排队落库：准入与落库之间隔着一个 await，中间到达的终态必须认得出来。
         this.claimed.add(taskId);
-        this.queue(() => this.open(taskId, call, seen, str(ev.tool_use_id)));
+        this.queue(() => this.open(taskId, call, seen, str(ev.tool_use_id)), { fact: "start" });
         return;
       }
       case "task_notification": {
@@ -335,7 +342,9 @@ export class ClaudeMonitorTrace {
         }
         // 不在 `claimed` 里也要排队：权威是库，不是这一个实例的内存名单（见 `foreign`）。
         // `close` 里的 `locateRow` 查不到就把它记进 `foreign`，下次直接短路。
-        this.queue(() => this.close(taskId, claudeMonitorStatus(ev.status), str(ev.summary)));
+        // 认领过的才算「一张卡的状态变化」；没认领过的多半是普通后台 Bash，丢了不该算进来。
+        this.queue(() => this.close(taskId, claudeMonitorStatus(ev.status), str(ev.summary)),
+          this.claimed.has(taskId) ? { fact: "update" } : undefined);
         return;
       }
       default:
@@ -625,7 +634,15 @@ export class ClaudeMonitorTrace {
       // 收尾本体连同「这一轮的监听全没了」那条时间线都在 `claude-monitor-reaped.ts`：
       // 只收自己这一代、以及为什么非记一笔不可，都写在那个文件头上。
       if (!cliSessionId) return;
-      await reapClaudeMonitors(cliSessionId, await this.runOrigin(), this.openedAt, until);
+      if (!this.taskId && (this.missed.starts || this.missed.updates)) {
+        this.warn("有事件没能记上，但一直没认出归哪个任务，收尾说明里没法补上", this.missed);
+      }
+      await reapClaudeMonitors(cliSessionId, await this.runOrigin(), this.openedAt, until, {
+        // 这一摊收尾的稳定身份：重试时同一句说明不会落两遍（见 reapClaudeMonitors）。
+        eventKey: `claude-monitors-reaped:${cliSessionId}:${this.openedAt}`,
+        missed: this.taskId && (this.missed.starts || this.missed.updates)
+          ? { taskId: this.taskId, ...this.missed } : undefined,
+      });
     }, { always: true });
     return this.writes.drain(ClaudeMonitorTrace.finishWaitMs).then((done) => {
       if (!done) this.warn(`收尾等了 ${ClaudeMonitorTrace.finishWaitMs}ms 还没写完，先放行`, `还有 ${this.writes.pending} 笔排着，库恢复后依次补上`);

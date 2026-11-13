@@ -18,21 +18,28 @@
 // - **注定写不成的单独认出来**（约束冲突、类型不符、语句本身错了这类）：等多久都是同一个
 //   结果，留着只会把后面每一笔一起堵死。这类直接丢掉并留诊断。判据只看错误本身，认不出
 //   来的一律当作「库暂时不可用」继续等 —— 宁可多等，不可错丢。
-// - **积压有上界**（`maxBacklog`）：库长时间不可用时，超出上界的新事实不再进队、留诊断。
-//   一个回合里内置 Monitor 的事件是几十条的量级，这个上界只在真出事时才够得着；收尾那一笔
-//   不受它限制，否则一次积压就让面板上留下永远「正在盯着」的卡。
+// - **积压有上界**（`maxBacklog`）：库长时间不可用时，超出上界的新事实不再进队。一个回合里
+//   内置 Monitor 的事件是几十条的量级，这个上界只在真出事时才够得着；收尾那一笔不受它限制，
+//   否则一次积压就让面板上留下永远「正在盯着」的卡。
+// - **丢掉的不能只记在日志里**：溢出和注定写不成这两种，凡是交进来时说明了自己是哪一类事实
+//   （`fact`）的，丢掉那一刻报给 `dropped`。调用方据此在回合收尾那条说明里如实说出「有几个
+//   没能记成卡片」—— 用户看到的数字不能比真实的少，又不告诉他少了。
 //
 // 进程崩溃时还压在内存里的那几笔会跟着没：这份投影没有自己的持久待写表，开机清扫
 // （`loseDeadClaudeMonitors`）只负责把已经落库、却没人收尾的行收成「进程已不在」。
 import { dbClient } from "./db/index.js";
 
 export type WriteJob = () => Promise<void>;
+/** 这一笔是哪一类事实：`start` = 一个监听起来了；`update` = 一张已有卡片的状态变化。 */
+export type WriteFact = "start" | "update";
 
 export type WriteQueueOptions = {
   /** 这一笔还要不要：返回 true = 任务已被明确撤销（删掉了），立即销账、不留诊断。 */
   revoked: () => boolean;
   /** 旁路诊断（调用方负责限频和带上会话身份）。 */
   warn: (what: string, detail: unknown) => void;
+  /** 一笔带 `fact` 的事实被丢掉了（溢出 / 注定写不成）。撤销和库已关闭不算丢。 */
+  dropped?: (fact: WriteFact) => void;
 };
 
 /** SQLite 主错误码里「等多久都是同一个结果」的那几类。 */
@@ -73,22 +80,24 @@ export class MonitorWriteQueue {
   }
 
   /**
-   * 交一笔进来。`always` 给收尾用：它不受积压上界限制（理由见文件头）。
+   * 交一笔进来。`always` 给收尾用：它不受积压上界限制（理由见文件头）。`fact` 说明这一笔是
+   * 哪一类事实，丢掉时据此报给 `dropped`；不带的（认不出归属的投机通知、收尾本身）丢了也不报。
    *
    * 每一笔都必须**可以安全重跑**：重试就是原样再调一次。
    */
-  push(job: WriteJob, opts: { always?: boolean } = {}): void {
+  push(job: WriteJob, opts: { always?: boolean; fact?: WriteFact } = {}): void {
     if (!opts.always && this.backlog >= MonitorWriteQueue.maxBacklog) {
       if (!this.overflowWarned) {
         this.overflowWarned = true;
         this.opts.warn(`积压已满（${MonitorWriteQueue.maxBacklog} 笔还没写成），之后的新事件不再记账`, "库长时间不可用");
       }
+      if (opts.fact) this.opts.dropped?.(opts.fact);
       return;
     }
     this.backlog += 1;
     const run = async (): Promise<void> => {
       try {
-        await this.commit(job);
+        await this.commit(job, opts.fact);
       } finally {
         this.backlog -= 1;
         if (this.backlog === 0) this.overflowWarned = false;
@@ -119,7 +128,7 @@ export class MonitorWriteQueue {
     }
   }
 
-  private async commit(job: WriteJob): Promise<void> {
+  private async commit(job: WriteJob, fact: WriteFact | undefined): Promise<void> {
     const ladder = MonitorWriteQueue.retryMs;
     for (let attempt = 0; ; attempt += 1) {
       if (this.opts.revoked()) return;
@@ -131,6 +140,7 @@ export class MonitorWriteQueue {
         if (dbClient.closed) return; // 进程在退出：内存账本本来就要跟着没
         if (permanentWriteFailure(e)) {
           this.opts.warn("记账失败且重试也不会成功，这一条没有记上", e);
+          if (fact) this.opts.dropped?.(fact);
           return;
         }
         if (attempt === 0) this.opts.warn("记账失败，留在队头退避重试，写成之前后面的事件排着等", e);
