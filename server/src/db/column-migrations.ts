@@ -25,6 +25,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_tree TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_materialization TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_physical TEXT",
+  // 那一次在快照里先跑的准备命令。旧行 NULL = 没配过（依赖借用工作区那一份）。
+  "ALTER TABLE accept_gate_runs ADD COLUMN prepare_command TEXT",
   "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
   // 读取层的两份独立状态:可续读位置 probe、永久缺口全集 gaps(JSON 数组)。
   "ALTER TABLE monitor_scan_cursors ADD COLUMN probe INTEGER NOT NULL DEFAULT 0",
@@ -343,6 +345,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE projects ADD COLUMN accept_auto_commit INTEGER NOT NULL DEFAULT 0",
   // 验收前置命令（点验收之后、动 git 之前跑，rc=0 才合并）。null = 不设门禁 = 老行为。
   "ALTER TABLE projects ADD COLUMN accept_gate_command TEXT",
+  // 门禁的准备命令（快照里先装依赖）。null = 不配 = 依赖照旧借用。
+  "ALTER TABLE projects ADD COLUMN accept_gate_prepare TEXT",
   // 门禁基准(分支快照 / 要求已含目标分支 / 合并预览)。存量项目落 branch = 老行为。
   "ALTER TABLE projects ADD COLUMN accept_gate_baseline TEXT NOT NULL DEFAULT 'branch'",
   // 那一按**实际**拿什么当凭据放的行（passed / skipped / unset + 真的跑绿的那一次）。

@@ -66,6 +66,7 @@ export function gateExitOutcome(exit: GateExit, timeoutMs = gateTimeoutMs()): Ga
   if (exit.elapsedMs !== undefined && exit.elapsedMs >= timeoutMs) return { status: "failed", exitCode: null, failure: "timeout",
     note: `命令跑了 ${minutes(exit.elapsedMs)} 分钟才退出（rc=${exit.code}），超过了 ${minutes(timeoutMs)} 分钟的上限，`
       + "按超时处理：过了时限的退出码不作数，不论那一刻 ash 在不在场。" };
+  if (exit.phase === "prepare" && exit.code !== 0) return { status: "failed", exitCode: exit.code, failure: "prepare_failed" };
   return exit.code === 0
     ? { status: "passed", exitCode: 0, failure: null }
     // 信号打死的那一条可能是取消/超时先发的刀 —— 那两条路自己会落更准的理由，
@@ -81,10 +82,11 @@ export function gateExitOutcome(exit: GateExit, timeoutMs = gateTimeoutMs()): Ga
 export function readGateExit(logPath: string, pid: number): GateExit | null {
   try {
     const record = JSON.parse(readFileSync(gateExitPath(logPath), "utf8")) as
-      { version?: unknown; pid?: unknown; code?: unknown; elapsedMs?: unknown };
+      { version?: unknown; pid?: unknown; code?: unknown; elapsedMs?: unknown; phase?: unknown };
     if (record.version !== 1 || record.pid !== pid || !Number.isSafeInteger(record.code)
       || typeof record.elapsedMs !== "number" || !Number.isFinite(record.elapsedMs) || record.elapsedMs < 0) return null;
-    return { code: record.code as number, signal: null, elapsedMs: record.elapsedMs };
+    return { code: record.code as number, signal: null, elapsedMs: record.elapsedMs,
+      ...(record.phase === "prepare" ? { phase: "prepare" as const } : {}) };
   } catch { return null; }
 }
 

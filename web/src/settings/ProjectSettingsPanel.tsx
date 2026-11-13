@@ -34,6 +34,7 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
   const [repoPath, setRepoPath] = useState(project.repoPath);
   const [busy, setBusy] = useState(false);
   const [gateCommand, setGateCommand] = useState(project.acceptGateCommand ?? "");
+  const [gatePrepare, setGatePrepare] = useState(project.acceptGatePrepare ?? "");
   const [confirmDelete, setConfirmDelete] = useState(false);
   // 路径体检只对**改得动路径的人**有意义:它探的是「你现在填的这条路走不走得通」。
   // 成员那边不但没有提交按钮,`/projects/check` 还会按路径钳制回 403(它是一台目录
@@ -61,6 +62,7 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
     setName(project.name);
     setRepoPath(project.repoPath);
     setGateCommand(project.acceptGateCommand ?? "");
+    setGatePrepare(project.acceptGatePrepare ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
   const dirty = name.trim() !== project.name || repoPath.trim() !== project.repoPath;
@@ -106,11 +108,18 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
     finally { setBusy(false); }
   };
   // 这条是**要敲一长串的命令**，所以跟名称/目录一样攒着按钮存；空串 = 不设门禁。
+  // 准备命令跟它是一套（先装依赖、再跑它），同一颗按钮一起存。
+  const nextGatePrepare = gatePrepare.trim() || null;
+  const gateDirty = (gateCommand.trim() || null) !== (project.acceptGateCommand ?? null)
+    || nextGatePrepare !== (project.acceptGatePrepare ?? null);
   const saveGateCommand = async () => {
     const next = gateCommand.trim() || null;
     setBusy(true);
     try {
-      onUpdated(await api.updateProject(project.id, { acceptGateCommand: next }));
+      onUpdated(await api.updateProject(project.id, {
+        ...(next !== (project.acceptGateCommand ?? null) ? { acceptGateCommand: next } : {}),
+        ...(nextGatePrepare !== (project.acceptGatePrepare ?? null) ? { acceptGatePrepare: nextGatePrepare } : {}),
+      }));
       notify(next ? "以后验收会先跑这条命令，rc=0 才合并" : "已撤掉验收前置命令，验收恢复为直接合并");
     }
     catch (error) { notify(error instanceof Error ? error.message : "验收前置命令保存失败"); }
@@ -244,6 +253,16 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
             onChange={(event) => setGateCommand(event.target.value)}
           />
         </label>
+        <label className="settings-field">
+          <span>准备命令</span>
+          <input
+            className="mono"
+            value={gatePrepare}
+            readOnly={!canManage}
+            placeholder="例如 npm ci --offline（留空 = 借用工作区的依赖）"
+            onChange={(event) => setGatePrepare(event.target.value)}
+          />
+        </label>
         <div className="settings-row"><div><small>
           点「验收通过」之后，先在<b>这个任务自己的工作区</b>里跑一遍它，rc=0 才会继续合并：
           绿了这次验收自动做完，不用再点；红了不合并、不清理，日志会交回那个任务去修。
@@ -254,7 +273,7 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
             <span>改了只影响之后的验收；已经跑过的记录不受影响。</span>
             <Button
               variant="primary"
-              disabled={busy || (gateCommand.trim() || null) === (project.acceptGateCommand ?? null)}
+              disabled={busy || !gateDirty}
               onClick={() => void saveGateCommand()}
             >{busy ? "保存中…" : "保存命令"}</Button>
           </div>

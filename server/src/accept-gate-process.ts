@@ -30,7 +30,9 @@ export function acceptGateLogPath(taskId: string, runId: string): string {
 
 export type GateExit = { code: number | null; signal: NodeJS.Signals | null;
   /** 启动器自己量的「起来到退出」用时（单调时钟，只有退出档里有）。时限按它判，见 accept-gate-exit.ts。 */
-  elapsedMs?: number };
+  elapsedMs?: number;
+  /** 退在哪一段：`prepare` = 准备命令没过、前置命令根本没起（只有退出档里有）。 */
+  phase?: "prepare" | "command" };
 
 /**
  * 起一条门禁命令。返回 pid 和它的**启动时间**（拿不到 pid 视为没起来，抛错）。
@@ -43,6 +45,8 @@ export type GateExit = { code: number | null; signal: NodeJS.Signals | null;
  */
 export async function spawnAcceptGate(opts: {
   command: string;
+  /** 先在同一个 cwd 里跑的准备命令。和前置命令同一个启动器、同一套监督：取消、超时、重启接管不分段。 */
+  prepare?: string | null;
   cwd: string;
   logPath: string;
   onExit: (exit: GateExit) => void;
@@ -62,6 +66,8 @@ export async function spawnAcceptGate(opts: {
     const environment = gateBootstrapEnvironment(augmentedEnv());
     if (IS_MAC) environment.bootstrap[MAC_GATE_ENV] = macGateToken(opts.logPath);
     const config = Buffer.from(JSON.stringify({ ...launch, cwd: opts.cwd,
+      ...(opts.prepare ? { prepare: userShellLaunch(opts.prepare),
+        prepared: `\n[ash] 准备命令通过，开跑验收前置命令\n[ash] $ ${opts.command}\n\n` } : {}),
       ...await gateSupervisorBootstrap(opts.logPath),
       restoreEnv: environment.restore,
       go: gateGoPath(opts.logPath), abort: gateAbortPath(opts.logPath), exit: gateExitPath(opts.logPath) })).toString("base64");

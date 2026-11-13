@@ -122,22 +122,34 @@ const timer = setInterval(() => {
   if (fs.existsSync(config.abort) || Date.now() > deadline) process.exit(125);
   if (!fs.existsSync(config.go)) return;
   clearInterval(timer);
-  const child = spawn(config.file, config.args, {
+  run(config.prepare ? "prepare" : "command");
+}, 20);
+// 配了准备命令就先跑它（同一个 cwd、同一份环境、同一棵受监督的进程树），rc=0 才接着起前置命令；
+// 中间 ash 要停它（abort）就不再起下一段。退出档记下停在哪一段：「准备没过」和「测试红了」是两件事。
+function run(phase) {
+  const launch = phase === "prepare" ? config.prepare : config;
+  const child = spawn(launch.file, launch.args, {
     cwd: config.cwd, stdio: ["ignore", 1, 2], windowsHide: true,
     env: { ...process.env, ...config.restoreEnv },
-    windowsVerbatimArguments: config.windowsVerbatimArguments
+    windowsVerbatimArguments: launch.windowsVerbatimArguments
   });
-  child.once("error", error => { console.error(error.message); finish(127, null); });
-  child.once("exit", (code, signal) => finish(code ?? (signal ? 128 : 127), signal));
-}, 20);
+  child.once("error", error => { console.error(error.message); finish(127, null, phase); });
+  child.once("exit", (code, signal) => {
+    const rc = code ?? (signal ? 128 : 127);
+    if (phase !== "prepare" || rc !== 0) return finish(rc, signal, phase);
+    if (fs.existsSync(config.abort)) return finish(125, null, phase);
+    fs.writeSync(1, config.prepared);
+    run("command");
+  });
+}
 // 退出码除了转发给起我的那个 ash，还要**先落盘**：那个 ash 可能已经重启了，新实例只能从这里
 // 认领结果。tmp+rename 保证要么整份、要么没有；写不进去也照常转发，不拿落盘失败改写结论。
 // elapsedMs 是本进程起来到现在的单调用时：时限按它判，跟 ash 在不在场、墙上时间有没有被校正都无关。
-function finish(code, childSignal) {
+function finish(code, childSignal, phase) {
   if (config.exit) try {
     const temporary = config.exit + "." + process.pid + ".tmp";
     const fd = fs.openSync(temporary, "w");
-    fs.writeSync(fd, JSON.stringify({ version: 1, pid: process.pid, code, childSignal: childSignal || null,
+    fs.writeSync(fd, JSON.stringify({ version: 1, pid: process.pid, code, childSignal: childSignal || null, phase,
       elapsedMs: Math.round(performance.now()), finishedAt: new Date().toISOString() }));
     fs.fsyncSync(fd);
     fs.closeSync(fd);

@@ -183,15 +183,18 @@ try {
     assert.equal(await card.locator(".accept-gate-edit input").count(), 0, "没点之前不该直接摆输入框");
 
     await card.getByRole("button", { name: "设一条" }).click();
-    const input = card.locator(".accept-gate-edit input");
+    // 前置命令与准备命令一套改：两格同一颗「保存」，只发改了的那几项。
+    const input = card.locator(".accept-gate-edit input[aria-label='验收前置命令']");
     await input.waitFor();
     assert.match(await card.locator(".accept-gate-edit small").textContent(), /项目设置/,
       "在任务页上改一个项目设置，必须说破它不只影响这一个任务");
     await input.fill("  ./kb.sh test full  ");
+    await card.locator(".accept-gate-edit input[aria-label='准备命令']").fill("  npm ci --offline  ");
     await card.getByRole("button", { name: "保存" }).click();
 
     await page.locator("[aria-label='操作结果']", { hasText: "验收前置命令" }).waitFor();
-    assert.deepEqual(store.patches, [{ acceptGateCommand: "./kb.sh test full" }], "两头空白要掐掉再发");
+    assert.deepEqual(store.patches, [{ acceptGateCommand: "./kb.sh test full", acceptGatePrepare: "npm ci --offline" }],
+      "两头空白要掐掉再发");
     assert.equal(await card.locator(".accept-gate-edit input").count(), 0, "保存完要收起输入框");
     await page.close();
   }
