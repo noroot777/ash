@@ -14,6 +14,10 @@ import { PreviewRestartButton } from "../../src/workflow/PreviewRestartButton.ts
 export const URL_READY = "http://localhost:51048/";
 let running = new URLSearchParams(location.search).get("running") === "1";
 let failReads = false;
+// 读当前预览要多久才回（毫秒）；hangNext = 下一发一直不回，直到被调用方放弃。
+let readDelay = 0;
+let hangNext = false;
+let reads = 0;
 
 // 事件通道换成能手动开、断、推的替身：断线重连那一下要不要重读，靠它来演。
 class FakeEventSource {
@@ -33,6 +37,9 @@ Object.assign(window, {
     // 只改服务端那一份、不发事件：演「这期间的事件丢了」。
     setRunning: (next: boolean) => { running = next; },
     failReads: (next: boolean) => { failReads = next; },
+    slowReads: (ms: number) => { readDelay = ms; },
+    hangNextRead: () => { hangNext = true; },
+    reads: () => reads,
   },
 });
 
@@ -53,7 +60,20 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     running = true;
     return reply({ ok: true, url: URL_READY, port: 51048 });
   }
-  if (pathname === "/api/tasks/T-1/preview" && method === "GET") return failReads ? reply({ error: "ash 不在线" }, 502) : reply(state());
+  if (pathname === "/api/tasks/T-1/preview" && method === "GET") {
+    reads += 1;
+    const hang = hangNext;
+    hangNext = false;
+    // 结果按请求**发出那一刻**的样子定，回得慢不改变它说的是哪一刻。
+    const answer = failReads ? reply({ error: "ash 不在线" }, 502) : reply(state());
+    if (hang || readDelay) {
+      await new Promise<void>((resolve, reject) => {
+        const timer = hang ? undefined : window.setTimeout(resolve, readDelay);
+        init?.signal?.addEventListener("abort", () => { window.clearTimeout(timer); reject(new DOMException("aborted", "AbortError")); });
+      });
+    }
+    return answer;
+  }
   if (pathname === "/api/events") return new Response("", { status: 204 });
   if (pathname.startsWith("/api/")) return reply({});
   return realFetch(input as never, init);
