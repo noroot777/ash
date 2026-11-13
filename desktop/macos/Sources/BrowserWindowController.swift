@@ -117,12 +117,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   }
 
   private func probeHealth() {
-    var request = URLRequest(url: AshConfig.healthURL, timeoutInterval: 1.5)
-    request.cachePolicy = .reloadIgnoringLocalCacheData
-    URLSession.shared.dataTask(with: request) { [weak self] _, response, _ in
-      guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+    AshHealth.probe { [weak self] ready in
+      guard ready else { return }
       DispatchQueue.main.async { self?.loadHome() }
-    }.resume()
+    }
   }
 
   private func stopHealthPolling() {

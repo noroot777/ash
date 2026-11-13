@@ -26,6 +26,12 @@ enum AshConfig {
     return URL(fileURLWithPath: raw, isDirectory: true)
   }
 
+  /// 下载事务的登记放哪（见 DownloadTransaction）。
+  static var downloadJournalURL: URL {
+    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent("dev.ash.mac/downloads", isDirectory: true)
+  }
+
   /// 同源判据：scheme + host + port。127.0.0.1 与 localhost 视为同一台，免得服务端回跳
   /// 到另一种写法时被当成外链踢去浏览器。
   static func isSameOrigin(_ url: URL) -> Bool {

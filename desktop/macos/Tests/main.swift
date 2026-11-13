@@ -7,6 +7,9 @@ enum AshConfig {
   static var repoURL: URL? {
     ProcessInfo.processInfo.environment["ASH_TEST_REPO"].map { URL(fileURLWithPath: $0) }
   }
+  static var downloadJournalURL: URL {
+    URL(fileURLWithPath: ProcessInfo.processInfo.environment["ASH_TEST_JOURNAL"]!, isDirectory: true)
+  }
 }
 
 func require(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -44,6 +47,19 @@ if mode == "coalesce" {
   while received < 8 && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
   require(received == 8, "every merged request receives a result")
   require(failed, "fixture intentionally fails")
+  exit(0)
+}
+if mode == "health" {
+  // 窗口从占位页恢复用的就是这一次不带 pid 的探测。
+  let done = DispatchSemaphore(value: 0)
+  var ready = false
+  AshHealth.probe { ready = $0; done.signal() }
+  done.wait()
+  print(ready ? "READY" : "NOT READY")
+  exit(0)
+}
+if mode == "reclaim" {
+  DownloadTransaction.reclaimAbandoned()
   exit(0)
 }
 if mode == "lock" {

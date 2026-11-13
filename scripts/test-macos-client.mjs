@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import { once } from "node:events";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,7 +26,7 @@ copyFileSync(join(root, "scripts/start-detached.mjs"), join(repo, "scripts/start
 copyFileSync(join(root, "scripts/macos-server-lock.mjs"), join(repo, "scripts/macos-server-lock.mjs"));
 
 const build = spawnSync("swiftc", ["-swift-version", "5",
-  ...["DownloadTransaction", "ServerStartLock", "ServerLauncher"].map((name) => join(root, `desktop/macos/Sources/${name}.swift`)),
+  ...["AshHealth", "DownloadTransaction", "ServerStartLock", "ServerLauncher"].map((name) => join(root, `desktop/macos/Sources/${name}.swift`)),
   join(root, "desktop/macos/Tests/main.swift"), "-o", binary], { encoding: "utf8" });
 assert.equal(build.status, 0, build.stderr);
 
@@ -88,19 +89,77 @@ async function stopServers() {
 try {
   const port = await freePort();
   logs.add(`/tmp/ash-${port}.log`);
-  const env = { ASH_TEST_REPO: repo, ASH_URL: `http://127.0.0.1:${port}` };
+  const journal = join(temporary, "journal");
+  const env = { ASH_TEST_REPO: repo, ASH_TEST_JOURNAL: journal, ASH_URL: `http://127.0.0.1:${port}` };
   const lock = macServerLockPath(repo, port);
   lockPaths.add(lock);
   const destination = join(temporary, "export.md");
   let result = await launch(binary, ["transactions", destination], env).done;
   assert.equal(result.status, 0, result.output);
+  assert.deepEqual(readdirSync(journal), [], "finished and failed transactions leave no journal entry");
+  const staged = () => readdirSync(temporary).filter((name) => name.startsWith(".ash-download-"));
+  assert.deepEqual(staged(), [], "finished and failed transactions leave no staging directory");
   writeFileSync(destination, "original");
   const pending = launch(binary, ["pending", destination], env);
   await until(() => pending.output().includes("PENDING"), "download fixture did not stage");
+  result = await launch(binary, ["reclaim"], env).done;
+  assert.equal(result.status, 0, result.output);
+  assert.equal(staged().length, 1, "reclaim must not touch a download another instance is still writing");
+  assert.equal(readdirSync(journal).length, 1, "live transaction keeps its journal entry");
   pending.child.kill("SIGKILL");
   await pending.done;
   assert.equal(readFileSync(destination, "utf8"), "original", "app exit preserves original");
+  assert.equal(staged().length, 1, "killed download leaves its staging directory behind");
+  result = await launch(binary, ["reclaim"], env).done;
+  assert.equal(result.status, 0, result.output);
+  assert.deepEqual(staged(), [], "next launch reclaims the abandoned staging directory");
+  assert.deepEqual(readdirSync(journal), [], "reclaimed transaction is forgotten");
+  assert.equal(readFileSync(destination, "utf8"), "original", "reclaim preserves original");
   console.log("PASS: download success, failure, failed commit and process exit preserve originals");
+
+  const victim = join(temporary, "victim");
+  mkdirSync(victim);
+  writeFileSync(join(victim, "keep"), "keep");
+  writeFileSync(join(journal, "11111111-1111-1111-1111-111111111111"), victim);
+  writeFileSync(join(journal, "22222222-2222-2222-2222-222222222222"), "");
+  const unplugged = join(journal, "33333333-3333-3333-3333-333333333333");
+  writeFileSync(unplugged, join(temporary, "unplugged-volume", ".ash-download-33333333-3333-3333-3333-333333333333"));
+  result = await launch(binary, ["reclaim"], env).done;
+  assert.equal(result.status, 0, result.output);
+  assert.equal(readFileSync(join(victim, "keep"), "utf8"), "keep", "a journal entry cannot make reclaim delete a foreign path");
+  assert.deepEqual(readdirSync(journal), ["33333333-3333-3333-3333-333333333333"],
+    "malformed entries are dropped; an unreachable destination folder keeps its entry for a later launch");
+  const longAgo = new Date(Date.now() - 31 * 24 * 3600 * 1000);
+  utimesSync(unplugged, longAgo, longAgo);
+  result = await launch(binary, ["reclaim"], env).done;
+  assert.deepEqual(readdirSync(journal), [], "an entry unreachable for a month is given up");
+  console.log("PASS: reclaim spares live downloads, collects killed ones, ignores malformed entries, expires unreachable ones");
+
+  let healthStatus = 200;
+  let healthBody = "";
+  const fakeHealth = createHttpServer((request, response) => {
+    response.statusCode = healthStatus;
+    response.end(healthBody);
+  });
+  fakeHealth.listen(0, "127.0.0.1");
+  await once(fakeHealth, "listening");
+  const probe = async (status, body) => {
+    healthStatus = status;
+    healthBody = body;
+    const probed = await launch(binary, ["health"], { ...env, ASH_URL: `http://127.0.0.1:${fakeHealth.address().port}` }).done;
+    assert.equal(probed.status, 0, probed.output);
+    return probed.output.trim();
+  };
+  try {
+    assert.equal(await probe(200, "<h1>Bad Gateway</h1>"), "NOT READY", "an HTTP 200 error page is not a ready ash");
+    assert.equal(await probe(200, JSON.stringify({ ok: false, pid: 1 })), "NOT READY", "ok:false is not ready");
+    assert.equal(await probe(503, JSON.stringify({ ok: true, pid: 1 })), "NOT READY", "non-200 is not ready");
+    assert.equal(await probe(200, JSON.stringify({ ok: true, pid: 1 })), "READY", "any healthy ash is ready, whoever started it");
+  } finally {
+    fakeHealth.closeAllConnections();
+    await new Promise((done) => fakeHealth.close(done));
+  }
+  console.log("PASS: window recovery uses the launcher's health criterion, not bare HTTP 200");
 
   result = await launch(binary, ["lock"], env).done;
   assert.equal(result.output.trim(), lock, "Swift and restart use identical lock identity");

@@ -129,20 +129,14 @@ final class ServerLauncher {
     return false
   }
 
-  /// 同步探一次 /api/health。只在后台队列上调。
+  /// 同步探一次（判据见 AshHealth）。只在后台队列上调。
   static func isHealthy(expectedPID: Int? = nil) -> Bool {
-    var request = URLRequest(url: AshConfig.healthURL, timeoutInterval: 1.5)
-    request.cachePolicy = .reloadIgnoringLocalCacheData
     let done = DispatchSemaphore(value: 0)
     var ok = false
-    URLSession.shared.dataTask(with: request) { data, response, _ in
-      if (response as? HTTPURLResponse)?.statusCode == 200,
-         let data, let health = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-        ok = health["ok"] as? Bool == true
-          && (expectedPID == nil || health["pid"] as? Int == expectedPID)
-      }
+    AshHealth.probe(expectedPID: expectedPID) { ready in
+      ok = ready
       done.signal()
-    }.resume()
+    }
     done.wait()
     return ok
   }
