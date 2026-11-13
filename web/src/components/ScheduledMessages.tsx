@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ScheduledMessage } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
@@ -61,23 +61,27 @@ export function useScheduledMessages(taskId: string) {
     return () => { alive = false; };
   }, [taskId]);
 
-  const waitsOn = useRef<ReadonlySet<string>>(new Set());
-  waitsOn.current = messages.length ? new Set([taskId, ...messages.flatMap((message) =>
-    message.wait?.kind === "queue" ? message.wait.blockers.map((blocker) => blocker.id) : [])]) : new Set();
-
+  // 入队回执(POST /reply)只有这一行本身,不带服务端按此刻事实算的 wait / steerable:它可能比
+  // task.pendingMessages 触发的那次重拉晚到,直接替换就会把完整的那份盖掉,引导键和等待说明一起
+  // 消失。所以已有同一行时保留那两项,再重拉一次拿权威值。
   const add = useCallback((message: ScheduledMessage) => {
     setActionError(null);
-    setMessages((current) => bySendTime([...current.filter((item) => item.id !== message.id), message]));
-  }, []);
+    setMessages((current) => {
+      const known = current.find((item) => item.id === message.id);
+      const merged = known ? { ...message, wait: known.wait, steerable: known.steerable } : message;
+      return bySendTime([...current.filter((item) => item.id !== message.id), merged]);
+    });
+    void reload({ quiet: true });
+  }, [reload]);
 
   // 托盘该少一行的唯一权威信号:服务端在入队/投递/取消时发的 task.pendingMessages。
   // 排队消息一发出去任务立刻又回到 running,「任务不在跑了」那个空档前端常常一次都
   // 看不到 —— 靠它反推就会把已经进了会话的消息一直挂在托盘上。
+  // 每条在等什么、能不能引导(wait / steerable)读的那些事实一变(本任务与同队成员换状态、队列
+  // 变动、分组暂停/恢复),服务端也发这同一个事件(server/src/pending-wait.ts 的失效通知)。
   useServerEvents((event) => {
-    if (event.type === "task.pendingMessages" && event.taskId === taskId) void reload({ quiet: true });
-    // 每条在等什么、能不能引导(wait / steerable)是服务端按此刻的状态算的:本任务或点名挡着它的
-    // 那几条换了状态,托盘就得跟着改口,否则会一直说着「等某某」而那条早就跑完了。
-    if (event.type === "task.status" && waitsOn.current.has(event.taskId)) void reload({ quiet: true });
+    if (event.type !== "task.pendingMessages" || event.taskId !== taskId) return;
+    void reload({ quiet: true });
   });
 
   // 服务端只有「取消」这一个动作；界面上它是**撤回**——调用方在取消成功后把这条

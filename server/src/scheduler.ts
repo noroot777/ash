@@ -40,6 +40,9 @@ export async function pauseGroup(groupId: string): Promise<void> {
     await transaction.update(tasks).set({ queueAdvanceRequest: null }).where(eq(tasks.groupId, groupId));
   }, { behavior: "immediate" });
   groupPauses.set(groupId, ++pauseGeneration);
+  // 没有成员在跑时暂停只改了 groups.paused,不会有任何任务换状态:托盘的等待说明得单独通知。
+  void import("./pending-wait.js").then(({ republishGroupWaits }) => republishGroupWaits(groupId))
+    .catch((err) => console.error(`[ash] republishGroupWaits(${groupId}) failed:`, err));
   const members = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
   for (const t of members) {
     // status 可能在队列推进/续聊交错时短暂失真；只要有活 handle，先杀进程永远优先。

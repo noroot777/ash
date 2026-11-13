@@ -25,27 +25,6 @@ export function pendingExecutionIntent(
     : message.execution;
 }
 
-/**
- * 托盘里**已经存着**的那一行此刻该不该按执行型投。扫描、推卡判定、托盘的等待说明读这一份;
- * 让位交接(/run、/retry 把它当首轮输入)是用户显式起跑,照旧用 `pendingExecutionIntent`。
- *
- * 多出来的只有一条:终态任务上的提问答复。续聊回合以提问结束时任务保持原终态(settle-status.ts
- * 续聊那一支),它的答复是又一个续聊回合;旧版 /answer 却一律去认领队列占位,同队有人在跑就把
- * 答复暂存成执行型,于是它要等整条队列跑完(2026-11-13 现场)。这些行在这里还原成续聊。
- *
- * 判据是「排下这条答复时任务已经是这个终态」:`createdAt >= endedAt`。`deliveryVerdict` 执行型
- * 那一支要守的「paused 时排下、起跑失败后落 failed」那一种,落 failed 盖的 endedAt 晚于排下的
- * 时刻,不会被放行;之后任务又被重跑过一次的,同样按执行型留着。
- */
-export function storedExecutionIntent(
-  message: Pick<Row, "agent" | "text" | "execution" | "answerId" | "createdAt">,
-  task: Pick<typeof tasks.$inferSelect, "mode" | "status" | "agentType" | "endedAt"> | null,
-): boolean {
-  if (!pendingExecutionIntent(message, task)) return false;
-  return !(message.answerId && task?.mode === "single" && ["done", "failed", "canceled"].includes(task.status)
-    && task.endedAt && message.createdAt >= task.endedAt);
-}
-
 // 判定所需的最小任务形状,写成结构类型,单测就能直接喂字面量。
 // queueBlocked = 这个任务在队列里且还没轮到(queueBlockers 非空)。只对 paused/
 // backlog 生效:对它们投递 = 开启真实执行回合,必须守「同队至多一个在跑」;终态

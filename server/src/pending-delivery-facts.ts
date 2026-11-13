@@ -10,7 +10,7 @@ import { groups, scheduledMessages, tasks } from "./db/schema.js";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
 import { withAfterGates, type AfterGate } from "./pending-after.js";
-import { deliveryVerdict, storedExecutionIntent, type DeliveryVerdict } from "./pending-verdict.js";
+import { deliveryVerdict, pendingExecutionIntent, type DeliveryVerdict } from "./pending-verdict.js";
 import { queueBlockerDetails, type QueueBlocker } from "./queues.js";
 import { reviewDeliveryBlocked, reviewDeliveryFrom } from "./review-ownership.js";
 
@@ -28,7 +28,7 @@ export interface DeliveryFacts {
   groupPaused: boolean;
 }
 
-/** m.execution 由调用方按 storedExecutionIntent 定好再传进来（扫描会把它写回库，这里不写）。 */
+/** m.execution 由调用方按 pendingExecutionIntent 定好再传进来（扫描会把它写回库，这里不写）。 */
 export async function deliveryVerdictOf(m: Row & AfterGate, t: TaskRow | null, at: Date): Promise<{ verdict: DeliveryVerdict; facts: DeliveryFacts }> {
   // checkpoint 追问经待发送路径投递(定时发送、第一句还在回答时自动排队的第二句)
   // 时,与直接回复同判据旁路(task-reply.ts / orchestrator 的 checkpointFollowUp):
@@ -73,7 +73,7 @@ export async function deliversOnItsOwn(taskId: string, at = new Date()): Promise
     .where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "pending")));
   for (const m of await withAfterGates(rows)) {
     if (m.deliveringSince) return true;
-    const { verdict } = await deliveryVerdictOf({ ...m, execution: storedExecutionIntent(m, t) }, t, at);
+    const { verdict } = await deliveryVerdictOf({ ...m, execution: pendingExecutionIntent(m, t) }, t, at);
     if (verdict.action === "deliver") return true;
   }
   return false;

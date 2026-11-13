@@ -20,6 +20,8 @@ const message = (index) => {
 };
 let pending = Array.from({ length: 10 }, (_, index) => message(index));
 let failCancel = false;
+// 置成一个 Promise 时,排队消息列表的 GET 先扣住、等它放行再答 —— 用来摆出「入队回执晚于重拉」的次序。
+let holdList = null;
 let releaseCancel;
 const deleted = [];
 const steered = [];
@@ -33,6 +35,7 @@ try {
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (/\/tasks\/[^/]+\/scheduled-messages$/.test(path)) {
+      if (holdList) await holdList;
       // 能不能引导由服务端判(task-steer-gate.ts):这里照它的口径,只给最早一条用户自己的排队消息。
       const first = pending.find((item) => item.mode === "queued" && !item.origin && !item.sessionRole);
       await route.fulfill({ json: pending.map((item) => ({ ...item, steerable: item === first })) });
@@ -152,6 +155,17 @@ try {
   await page.waitForFunction(() => document.querySelector(".scheduled-message-announcement")?.textContent?.startsWith("9 条"));
   assert.deepEqual(steered, ["msg-1"]);
   assert.match(await list.getByRole("button", { name: /引导会话/ }).getAttribute("aria-label"), /输入-6/);
+  // 入队回执(POST /reply 的那一行)不带 wait / steerable,而且可能晚于事件触发的重拉到达:
+  // 它不能把已经取到的完整记录盖掉 —— 重拉被扣着的这段时间里,引导键得一直在。
+  let releaseList;
+  holdList = new Promise((resolve) => { releaseList = resolve; });
+  await page.getByRole("button", { name: "模拟入队回执", exact: true }).click();
+  await settle();
+  assert.equal(await list.getByRole("button", { name: /引导会话/ }).count(), 1, "不完整的入队回执盖掉了引导键");
+  holdList = null;
+  releaseList();
+  await settle();
+  assert.equal(await list.getByRole("button", { name: /引导会话/ }).count(), 1);
   for (const count of [0, 1, 2, 3]) {
     await reload(Array.from({ length: count }, (_, index) => message(index)));
     assert.equal(await card.count(), count > 0 ? 1 : 0, "所有非空数量均只有一张卡片");

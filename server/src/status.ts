@@ -225,6 +225,9 @@ async function writeTaskStatus(
     .where(eq(sessions.taskId, taskId));
   const timing = runs.length ? runsTiming(runs) : {};
   bus.publish({ type: "task.status", taskId, status, updatedAt, startedAt, endedAt, ...timing });
+  // 托盘上「在等什么」读的就是这些状态(pending-wait.ts):本任务和同队挂着待发送消息的,通知重拉。
+  void import("./pending-wait.js").then(({ republishWaitsAround }) => republishWaitsAround(taskId))
+    .catch((err) => console.error(`[ash] republishWaitsAround(${taskId}) failed:`, err));
 
   // 队列推进钩子(DESIGN §3):任务进 done / canceled / failed / paused 时,
   // 如果它在某个 queue 里,触发那个 queue 的下一位推进。

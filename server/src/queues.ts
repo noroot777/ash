@@ -49,6 +49,9 @@ async function publishQueueMembers(taskIds: string[]): Promise<Map<string, Task>
   if (taskIds.length === 0) return new Map();
   await db.update(tasks).set({ updatedAt: now() }).where(inArray(tasks.id, taskIds));
   const published = await Promise.all(taskIds.map((taskId) => publishTaskUpdated(taskId)));
+  // 队列成员或顺序变了,托盘上「在等谁」也跟着变(pending-wait.ts)。
+  void import("./pending-wait.js").then(({ republishWaitsOf }) => republishWaitsOf(taskIds))
+    .catch((err) => console.error("[ash] 队列变更后通知托盘失败:", err));
   return new Map(published.filter((t): t is Task => t != null).map((t) => [t.id, t]));
 }
 
