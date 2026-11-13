@@ -9,6 +9,7 @@
 //   later     崩过以后又跑过一回合（别的会话）：那句话还在，动作不在；
 //   retried   同一条会话失败一回合、重试成功（刷新以后）：前一回合那句话和原因还在原处，动作不在；
 //   retried-live  同上，开着页面看；
+//   retried-tools 同一条会话，失败那一回合只跑了工具、没来得及说话，重试成功（刷新以后）：那句话和原因照样在；
 //   stopped   手动停止的（非零退出）：不算异常，什么都不补；
 //   running   任务在跑：那句话在，动作不在。
 import { StrictMode } from "react";
@@ -87,6 +88,18 @@ const SCENES: Record<string, (id: string) => Scene> = {
     ].join("");
     const trace = [
       { at: "2026-11-13T12:01:00.000Z", turnStartedAt: at, event: { kind: "tool", name: "Edit", detail: "{}" } },
+      { at: "2026-11-13T12:11:00.000Z", turnStartedAt: at2, event: { kind: "tool", name: "Edit", detail: "{}" } },
+    ];
+    return { sessions: [s], persisted: [{ session: s, output, trace: trace as never }] };
+  },
+  "retried-tools": (id) => {
+    const s = retried(id);
+    const output = [
+      mark({ t: "user", text: "按意见改一下构建脚本。", at }),
+      mark({ t: "user", text: "按意见改一下构建脚本。", at: at2 }), "重试好了。", mark({ t: "agentEnd", at: end2 }),
+    ].join("");
+    const trace = [
+      { at: "2026-11-13T12:01:00.000Z", turnStartedAt: at, event: { kind: "tool", name: "Read", detail: "{\"file_path\":\"/repo/build.sh\"}" } },
       { at: "2026-11-13T12:11:00.000Z", turnStartedAt: at2, event: { kind: "tool", name: "Edit", detail: "{}" } },
     ];
     return { sessions: [s], persisted: [{ session: s, output, trace: trace as never }] };

@@ -40,8 +40,10 @@ export function crashedTurns(items: readonly ConversationItem[], retrySessionId?
   items.forEach((item, index) => {
     if (item.kind !== "agent" || !item.session || item.reviewer) return;
     lastBySession.set(item.session.id, index);
-    // 认不出是哪一回合的气泡（没有回合身份的老记录）不单独成段，只走下面「最后一回合」那条。
-    if (item.turnStartedAt) lastByTurn.set(`${item.session.id}\u0000${item.turnStartedAt}`, index);
+    // 回合身份：落盘那一路是结局、原因查的那一个（turnKey），直播那一路是事件带的起点。两样都没有的
+    // （老记录）不单独成段，只走下面「最后一回合」那条。
+    const turn = item.turnKey ?? item.turnStartedAt;
+    if (turn) lastByTurn.set(`${item.session.id}\u0000${turn}`, index);
   });
   const latest = new Set(lastBySession.values());
   const out = new Map<string, CrashedTurn>();
@@ -79,16 +81,22 @@ export function turnFailed(item: Extract<ConversationItem, { kind: "agent" }>): 
   return item.turnOutcome === "failed";
 }
 
-/** 落盘重建那一路的一截回合是哪一回合：它领到的 trace 自己记着回合起点（切过组的下半截也一样），没有 trace 就用重建推出来的起点。 */
-const persistedTurnKey = (trace: readonly SessionTraceEntry[], turnStartedAt: string) => trace[0]?.turnStartedAt ?? turnStartedAt;
-
-export function persistedTurnOutcome(session: Session, trace: readonly SessionTraceEntry[], turnStartedAt: string): TurnOutcome | null {
-  return session.turnOutcomes?.[persistedTurnKey(trace, turnStartedAt)] ?? null;
-}
-
-/** 同一回合怎么断的（`Session.turnInterruptions`），跟 `persistedTurnOutcome` 认同一个回合身份。 */
-export function persistedTurnInterruption(session: Session, trace: readonly SessionTraceEntry[], turnStartedAt: string): TurnInterruption | undefined {
-  return session.turnInterruptions?.[persistedTurnKey(trace, turnStartedAt)];
+/**
+ * 落盘重建那一路的一截回合**是哪一回合、结局如何、怎么断的** —— 三样一起给，出自同一个回合身份：它领到的
+ * trace 自己记着回合起点（切过组的下半截也一样），没有 trace 就用重建推出来的起点。
+ *
+ * 落盘那一路**每一个**构造气泡的地方都只从这里拿（正文那一段、只有执行过程的兜底那一段）。分开取的那一版
+ * 让兜底气泡带上了结局和原因、却没带身份，历史失败那句话按回合认的时候就认不到它 —— 没来得及说话就失败的
+ * 那一回合，重试成功一刷新，失败说明就没了（第 3 轮审查第 1 条）。
+ */
+export function persistedTurnFacts(
+  session: Session,
+  trace: readonly SessionTraceEntry[],
+  turnStartedAt: string,
+): { turnKey: string; turnOutcome: TurnOutcome | null; turnInterruption?: TurnInterruption } {
+  const turnKey = trace[0]?.turnStartedAt ?? turnStartedAt;
+  const turnInterruption = session.turnInterruptions?.[turnKey];
+  return { turnKey, turnOutcome: session.turnOutcomes?.[turnKey] ?? null, ...(turnInterruption ? { turnInterruption } : {}) };
 }
 
 /**

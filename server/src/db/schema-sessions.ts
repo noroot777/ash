@@ -103,6 +103,16 @@ export const sessions = sqliteTable("sessions", {
    */
   contextRebuildAt: text("context_rebuild_at"),
   /**
+   * 团队调度台这一行**此刻归哪一台**:开台/接管时写一个新值(team/session.ts 的 openLead),那台
+   * 调度台之后对这一行的每一笔写都带上它当条件(team/lead-session-writes.ts 的 `ownRow`)。
+   *
+   * 为什么要落库而不是只看内存里的 `retired`:接管会**复用同一行**(工作目录被抽走那条路),而旧台
+   * 的写要等数据库空闲、收尾失败还要补写一次,判过「我还在台上」之后到语句真正执行之间隔着 await,
+   * 那段里新台可能已经把这一行清成「正在跑」。按内存判过的那一笔晚到,就会把新会话标成已退出、
+   * 抹掉它刚报上来的恢复凭据(第 3 轮审查第 2 条)。null = 单飞/duet 的行,或建在本列之前的老行。
+   */
+  leadHolder: text("lead_holder"),
+  /**
    * 这条会话**开过几个回合**（本列出现之后的那些；之前的历史在 `turns_base` 里）。
    *
    * 完整性的**第一手证据不是它**，而是 `session_turns` 里那一行：回合一开始就落行、收尾

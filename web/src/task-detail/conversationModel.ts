@@ -84,6 +84,11 @@ export type ConversationItem =
       turnOutcome?: TurnOutcome | null;
       /** 同一回合怎么断的（`Session.turnInterruptions` 里这一回合那份），跟 `turnOutcome` 一起带。 */
       turnInterruption?: TurnInterruption;
+      /**
+       * 上面两样是按哪个回合起点查的（落盘那一路，见 turnFailure 的 persistedTurnFacts）。跟 `turnStartedAt`
+       * 不是一回事：那一位只认服务端给这颗气泡的身份，没有就留空让别处由会话行推；这一位永远有值，三样同出一处。
+       */
+      turnKey?: string;
       session?: Session;
       run?: { model: string | null; reasoningEffort: string | null };
       /**

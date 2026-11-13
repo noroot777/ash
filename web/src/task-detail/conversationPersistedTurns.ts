@@ -22,7 +22,7 @@ import type { PersistedTurnTimes } from "./conversationTurnParts.ts";
 import { agentLabel, recordPersistedTurn, sessionRun } from "./conversationTurnParts.ts";
 import { appendTraceFragments } from "./conversationTraceFragments.ts";
 import { readSideTail, segmentTraceWindow, strayTraceSources } from "./conversationTraceSources.ts";
-import { persistedTurnInterruption, persistedTurnOutcome } from "./turnFailure.ts";
+import { persistedTurnFacts } from "./turnFailure.ts";
 import { resumeNoteOf } from "./turnCause.ts";
 
 type AgentItem = Extract<ConversationItem, { kind: "agent" }>;
@@ -77,6 +77,7 @@ function mergeTurnChunk(target: AgentItem, chunk: AgentItem): void {
   target.run = target.run ?? chunk.run;
   target.turnOutcome = chunk.turnOutcome ?? target.turnOutcome;
   target.turnInterruption = chunk.turnInterruption ?? target.turnInterruption;
+  target.turnKey ??= chunk.turnKey;
   target.sources = [...target.sources ?? [], ...chunk.sources ?? []];
 }
 
@@ -289,8 +290,7 @@ export function appendPersistedSession(
         turnStartedAt: traceEntries.at(-1)?.turnStartedAt ?? null,
         endedAt: null,
         markerEndedAt: segment.endedAt ?? null,
-        turnOutcome: persistedTurnOutcome(session, traceEntries, turnStartedAt),
-        turnInterruption: persistedTurnInterruption(session, traceEntries, turnStartedAt),
+        ...persistedTurnFacts(session, traceEntries, turnStartedAt),
         session,
         run: traceRun(traceEntries) ?? sessionRun(session),
         reviewer: reviewerOf(traceVerifyRound(traceEntries), session?.role),

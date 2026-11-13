@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import type { AgentEvent, TurnOutcome } from "@ash/shared";
 import { NO_RESUMABLE_SESSION_NOTE, ROTATION_ALREADY_ANNOUNCED } from "@ash/shared/session-notes";
 import { db } from "../db/index.js";
@@ -27,7 +27,7 @@ import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { consumeInbound } from "./inbound-queue.js";
 import { sendToLead } from "./lead-delivery.js";
 // 会话行的写入口(摘牌闸、失败只上报)住在 lead-session-writes.ts,见那份顶部。
-import { closeOwnSessionWithTurn, flushPendingCredential, persistOrReport, updateOwnSession, type SessionPatch } from "./lead-session-writes.js";
+import { closeOwnSessionWithTurn, flushPendingCredential, ownRow, persistOrReport, updateOwnSession, type SessionPatch } from "./lead-session-writes.js";
 import type { PendingInbound } from "./inbound-queue.js";
 import {
   idleRotation,
@@ -269,7 +269,8 @@ async function consume(lead: Lead): Promise<void> {
             if (leads.get(lead.taskId) === lead) {
               let note = sessionResumeFaultNote("poisoned");
               try {
-                await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, lead.sessId));
+                // 按持有者写(`ownRow`):上面那一眼之后要等数据库空闲,那段里被接管的话这一笔就落空。
+                await db.update(sessions).set(LOST_SESSION_PATCH).where(ownRow(lead));
                 // 只有真清成了才算「已经说过且属实」：收尾那两句据此不再重复整段。
                 rotation = onRotationPersisted(rotation);
               } catch (error) {

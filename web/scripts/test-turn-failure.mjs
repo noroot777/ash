@@ -27,6 +27,11 @@ assert.deepEqual(crashedTurns([agent("a1", sess({ turnStartedAt: "T1", turnInter
   ]);
   assert.deepEqual([...got], [["a1b", { text: "执行异常结束：这一轮没有正常收口", at: undefined, interruption: cause }]],
     "历史回合补在它最后一颗气泡上，带它自己的原因；退出码、收尾时刻是最后一回合的，不借");
+  // 只有执行过程的兜底气泡：服务端身份没给（turnStartedAt 空），结局和原因是按 turnKey 查的，就按它认回合。
+  assert.deepEqual(crashedTurns([
+    agent("a1", after, { turnKey: "T1", turnOutcome: "failed", turnInterruption: cause }),
+    agent("a2", after, { turnStartedAt: "T2", turnOutcome: "completed" }),
+  ]).get("a1")?.interruption, cause, "只跑了工具的失败回合也补，带它自己的原因");
   assert.equal(crashedTurns([
     agent("a1", after, { turnStartedAt: "T1", turnOutcome: "failed" }), boundary("error"),
     agent("a2", after, { turnStartedAt: "T2", turnOutcome: "completed" }),

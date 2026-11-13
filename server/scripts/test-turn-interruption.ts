@@ -17,6 +17,8 @@
 //   6. 诊断文件字段类型坏了：不抛，照退出码说（第 1 轮审查 N1）
 //   7. 接线：单飞收尾只在结局是 failed 时判，同一份既落回合、也跟着 done 播出去；单飞、duet、团队调度台
 //      三条收尾路的会话行都跟回合收口同批落
+//   8. 团队调度台被接管以后：旧台晚到的会话行写入（原批、批失败后的补写、单独的更新）按持有者代次落空，
+//      不把新台那一行标成已退出、不抹掉它的恢复凭据；旧台自己的回合照落（第 3 轮审查第 2 条）
 //
 // 跑：npm -w server run test:turn-interruption
 import assert from "node:assert/strict";
@@ -261,6 +263,55 @@ try {
     assert.equal(team.match(/updateOwnSession\(/g)?.length, 1, "只剩关台时一个回合都没攥着那一下单独写会话行");
     assert.match(run, /const done = \{ \.\.\.doneEvent, turnOutcome, \.\.\.\(interruption \? \{ interruption \} : \{\}\) \};/,
       "同一份跟着结尾事件播出去（直播那一路）");
+  }
+
+  // ── 8. 团队调度台被接管以后，旧台晚到的写 ─────────────────────────────────
+  {
+    const { closeOwnSessionWithTurn, updateOwnSession } = await import("../src/team/lead-session-writes.js");
+    const s = await scene({ agentType: "codex" });
+    const at2 = "2026-11-13T12:10:00.000Z";
+    const row = async () => (await db.select().from(sessions).where(eq(sessions.id, s.sessId)))[0]!;
+    // 旧台：开台时写下持有者代次，回合开着。
+    await db.update(sessions).set({ leadHolder: "old", endedAt: null, exitStatus: null, cliSessionId: "old-cli" }).where(eq(sessions.id, s.sessId));
+    const old = { taskId: s.taskId, sessId: s.sessId, holder: "old", retired: false } as never;
+    /** 新台接管同一行（openLead 的 resuming 分支那一笔的形状）。 */
+    const takeover = { leadHolder: "new", turnStartedAt: at2, endedAt: null, exitStatus: null, cliSessionId: "successor-cli" };
+    const span = { sessionId: s.sessId, taskId: s.taskId, cwd: repo, startedAt: at, endedAt: end, outcome: "failed" as const };
+    const patch = { endedAt: end, exitStatus: 1, cliSessionId: null };
+    const original = dbClient.batch.bind(dbClient);
+    try {
+      // ① 收尾那一批没写成，旧调用回到 catch 补写之前新台接管了这一行。
+      (dbClient as { batch: typeof dbClient.batch }).batch = (async () => {
+        (dbClient as { batch: typeof dbClient.batch }).batch = original;
+        await db.update(sessions).set(takeover).where(eq(sessions.id, s.sessId));
+        throw new Error("SQLITE_BUSY");
+      }) as typeof dbClient.batch;
+      assert.equal(await closeOwnSessionWithTurn(old, "调度台收尾状态", patch, span, end), true, "补写落空不算故障");
+    } finally {
+      (dbClient as { batch: typeof dbClient.batch }).batch = original;
+    }
+    const kept = { leadHolder: "new", turnStartedAt: at2, endedAt: null, exitStatus: null, cliSessionId: "successor-cli" };
+    const pick = (r: Awaited<ReturnType<typeof row>>) => ({
+      leadHolder: r.leadHolder, turnStartedAt: r.turnStartedAt, endedAt: r.endedAt, exitStatus: r.exitStatus, cliSessionId: r.cliSessionId,
+    });
+    assert.deepEqual(pick(await row()), kept, "批失败后的补写不覆盖接管后的新会话");
+    // ② 判过「还在台上」之后、语句真正执行之前就被接管了（等数据库空闲那一段）：原批里那一笔同样落空，回合照落。
+    await closeOwnSessionWithTurn(old, "调度台收尾状态", patch, span, end);
+    assert.deepEqual(pick(await row()), kept, "原批里的会话行那一笔不覆盖接管后的新会话");
+    assert.equal((await s.session()).turnOutcomes?.[at], "failed", "旧台自己跑过的那一回合照样收口");
+    // ③ 单独的会话行更新（回合说完、凭据补写走的那一个入口）同一道闸。
+    await updateOwnSession(old, "回合收尾状态", { endedAt: end, exitStatus: 1 }, end);
+    assert.deepEqual(pick(await row()), kept, "单独的会话行更新也挡得住");
+    // 还在台上的那一台照常写得进去。
+    const current = { taskId: s.taskId, sessId: s.sessId, holder: "new", retired: false } as never;
+    await updateOwnSession(current, "回合收尾状态", { exitStatus: 7 }, end);
+    assert.equal((await row()).exitStatus, 7, "持有这一行的那一台照常写");
+    const writes = readFileSync(new URL("../src/team/lead-session-writes.ts", import.meta.url), "utf8");
+    assert.equal(writes.match(/\.where\(ownRow\(lead\)\)/g)?.length, 2, "两个写入口都按持有者写");
+    const team = readFileSync(new URL("../src/team/session-consumer.ts", import.meta.url), "utf8");
+    assert.doesNotMatch(team, /\.where\(eq\(sessions\.id, lead\.sessId\)\)/, "调度台消费循环里不再有只按会话 id 的写");
+    const open = readFileSync(new URL("../src/team/session.ts", import.meta.url), "utf8");
+    assert.equal(open.match(/leadHolder: holder,/g)?.length, 2, "开台与接管都写下持有者代次");
   }
 
   console.log("✅ 普通回合怎么断的：上游带状态码与原话、只有退出码按退出码说、停止/正常/老记录不给、跟着回合与 done 走");
