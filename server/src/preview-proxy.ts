@@ -127,7 +127,7 @@ function forwardedHeaders(input: Headers | IncomingHttpHeaders, jar: PreviewCook
   const connection = pick("connection")?.toLowerCase().split(",").map((s) => s.trim()) ?? [];
   for (const [key, value] of entries) {
     const k = key.toLowerCase();
-    if (HOP_HEADERS.has(k) || connection.includes(k) || ["host", "cookie", "authorization", "origin", "referer", "accept-encoding", "content-length", "sec-fetch-site"].includes(k) || k.startsWith("x-ash-") || k.startsWith("x-forwarded-") || k === "forwarded") continue;
+    if (HOP_HEADERS.has(k) || connection.includes(k) || ["host", "cookie", "authorization", "origin", "referer", "accept-encoding", "content-length", "sec-fetch-site"].includes(k) || k.startsWith("x-ash-") || k.startsWith("x-forwarded-") || k === "forwarded" || k === "x-real-ip") continue;
     result[k] = value;
   }
   const site = pick("sec-fetch-site");

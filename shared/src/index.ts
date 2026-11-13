@@ -74,6 +74,7 @@ export type {
   ProjectInviteInfo,
   ProjectMemberView,
   ProjectRole,
+  RemoteAccessView,
   UserHandoffTarget,
   UserRole,
   UserStatus,

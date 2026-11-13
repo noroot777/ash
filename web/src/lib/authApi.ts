@@ -1,4 +1,4 @@
-// 多人模式的 API 客户端。单独一份而不是塞进 `api.ts` —— 那份端点清单已经顶到 700 行
+// 身份这一组(多人模式的账号、自用模式的访问密钥)的 API 客户端。单独一份而不是塞进 `api.ts` —— 那份端点清单已经顶到 700 行
 // 上限,而这一组的调用点也集中(登录页、向导、设置页的用户与个人 CLI 环境节)。
 import type {
   AuthState,
@@ -10,6 +10,7 @@ import type {
   ProjectInviteInfo,
   ProjectMemberView,
   ProjectRole,
+  RemoteAccessView,
   UserRole,
   UserView,
 } from "@ash/shared";
@@ -35,8 +36,12 @@ export const authApi = {
   // 才开始问」的那一个 RTT。预热只兑现一次,之后每一次都是真请求。
   state: async () => (await takeAuthProbe()) ?? (await request<AuthState>("/auth/state")),
 
-  login: (key: string) => request<{ user: UserView }>("/auth/login", json("POST", { key })),
+  // 自用模式下粘的是访问密钥,那边没有 users 行,所以 user 为 null。
+  login: (key: string) => request<{ user: UserView | null }>("/auth/login", json("POST", { key })),
   logout: () => request<{ ok: true }>("/auth/logout", json("POST")),
+  // 自用模式的访问密钥:只有在 ash 所在的那台机器上打开页面时才读得到、换得了。
+  remoteAccess: () => request<RemoteAccessView>("/remote-access"),
+  rotateRemoteAccess: () => request<RemoteAccessView>("/remote-access/rotate", json("POST")),
   rotateKey: () => request<{ key: string }>("/auth/rotate-key", json("POST")),
   recoveryHint: () => request<{ command: string; note: string }>("/auth/recovery-hint"),
 

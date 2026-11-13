@@ -118,7 +118,7 @@ const j = async (r: Response) => {
   return r.json();
 };
 
-/** 配了 key 就每请求带上;自用模式留空,服务端不看这个头。 */
+/** 配了 key 就每请求带上:多人模式是个人 key,自用模式是那台 ash 的访问密钥。 */
 const authHeader = (): Record<string, string> => {
   const key = getApiKey();
   return key ? { authorization: `Bearer ${key}` } : {};

@@ -79,3 +79,13 @@
   .settings-main .users-row::before,
   .settings-main .pmem-row::before { left: 14px; }
 }
+
+/* 行尾的一串密钥（自用模式的访问密钥）：等宽；显示全文时很长，允许在任意处折行。 */
+.settings-secret {
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--t-xs);
+  overflow-wrap: anywhere;
+  user-select: all;
+}

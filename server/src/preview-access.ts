@@ -136,6 +136,15 @@ async function previewsOwnRepo(taskId: string): Promise<boolean> {
   return !!row?.repoPath && samePlace(row.repoPath, REPO_DIR);
 }
 
+/**
+ * 把签发出去的预览凭证全部作废。自用模式换访问密钥时调:凭证是地址里的随机数,被预览
+ * 的服务又多半会把 `/api` 经回环转回这台 ash(本机直连 = 机主),所以它不跟着密钥失效
+ * 的话,「换密钥把那台设备踢掉」对开着预览页的设备就不成立。本机用户重开一次预览即可。
+ */
+export function revokePreviewGrants(): void {
+  for (const token of [...grants.keys()]) dropGrant(token);
+}
+
 export async function canUsePreview(grant: PreviewGrant): Promise<boolean> {
   const { isMultiUser } = await import("./auth/mode.js");
   const { projectOfTask, canSeeProject } = await import("./auth/visibility.js");

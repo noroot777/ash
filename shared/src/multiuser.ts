@@ -55,14 +55,20 @@ export interface ProjectMemberView {
 
 /**
  * `GET /api/auth/state` 的应答。前端整个 SPA 的第一道分叉靠它:
- * - `mode==="single"` → 直接进,零鉴权(现状)
+ * - `needsAccessKey` → 自用模式的访问密钥页(排在最前:没认出机主之前别的都不答)
  * - `needsSetup` → 首启向导
- * - `user===null` → 登录页
+ * - `mode==="multi"` 且 `user===null` → 登录页
+ * - `mode==="single"` → 直接进
  */
 export interface AuthState {
   mode: InstanceMode;
   /** 模式还没定过(首启)。single 模式选定后恒为 false。 */
   needsSetup: boolean;
+  /**
+   * 自用模式下这次请求没被认成机主:既不是从 ash 所在的那台机器直接发的,也没带访问
+   * 密钥。多人模式恒为 false(那边看 `user`)。
+   */
+  needsAccessKey: boolean;
   user: UserView | null;
   /** 多人模式的根目录(仅管理员可见完整值;普通用户看到的是自己那一层)。 */
   rootDir: string | null;
@@ -76,6 +82,15 @@ export interface AuthState {
    * 多人模式下没登录时恒为 false(那时该渲染登录页,「我还缺什么」也答不上)。
    */
   needsOnboarding: boolean;
+}
+
+/**
+ * `GET /api/remote-access`:自用模式的访问密钥。`key` 只在本机直连时给 —— 凭密钥进来的
+ * 设备看不到它,也换不了它。
+ */
+export interface RemoteAccessView {
+  local: boolean;
+  key?: string;
 }
 
 /** 领取邀请链接时先看到的说明页数据(还没生成 key)。 */

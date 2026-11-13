@@ -2,7 +2,7 @@
 // 前端要先问「现在是什么模式、我登没登」才知道该渲染哪一屏。
 import type { Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
-import type { AuthState, InviteInfo, UserRole } from "@ash/shared";
+import type { AuthState, InviteInfo, RemoteAccessView, UserRole } from "@ash/shared";
 import { dirNameFromNameHint, suggestDirName, suggestGitEmail, userDirNameError } from "@ash/shared/multiuser";
 import { hostname } from "node:os";
 import { actorOf, authErrorResponse, isAccountHolder, requireAdmin } from "./context.js";
@@ -33,6 +33,9 @@ import {
   touchUser,
 } from "./store.js";
 import { needsOnboarding } from "../onboarding.js";
+import {
+  ensureRemoteAccessKey, isLocalDirect, remoteKeyMatches, remoteSessionToken, rotateRemoteAccessKey,
+} from "./remote-access.js";
 import { initUserCliEnv } from "./user-cli.js";
 import { claimExistingDataFor, conversionPreflight } from "./conversion.js";
 
@@ -56,13 +59,17 @@ async function stateFor(c: Context): Promise<AuthState> {
   const config = await instanceConfig();
   const actor = actorOf(c);
   if (config.mode !== "multi") {
+    // 匿名 = 既不是本机直连、也没带访问密钥(auth/remote-access.ts)。这时只说「要密钥」,
+    // 别的一概不答 —— 登录之后重新问一次才轮到向导。
+    const locked = actor.kind === "anonymous";
     return {
       mode: "single",
       needsSetup: config.mode === "",
+      needsAccessKey: locked,
       user: null,
       rootDir: null,
       homeDir: null,
-      needsOnboarding: await needsOnboarding(actor),
+      needsOnboarding: locked ? false : await needsOnboarding(actor),
     };
   }
   const user = actor.kind === "user" && actor.userId ? await getUser(actor.userId) : null;
@@ -70,6 +77,7 @@ async function stateFor(c: Context): Promise<AuthState> {
   return {
     mode: "multi",
     needsSetup: needs,
+    needsAccessKey: false,
     user: user ? toUserView(user) : null,
     // 补做中(needs)时还没有人能登录,但根目录已经锁死了 —— 不把它交出去,向导那张表
     // 只能靠用户凭记忆填对,填错就是一个 409。
@@ -85,7 +93,6 @@ export function mountAuthRoutes(api: Hono): void {
 
   // ── 登录 / 登出 ───────────────────────────────────────────────────────────
   api.post("/auth/login", async (c) => {
-    if (!(await isMultiUser())) return c.json({ error: "自用模式不需要登录" }, 400);
     // 登录页本身也是写操作:没有这一道,别的站点能拿一把偷来的 key 在用户浏览器里
     // 静默换出一个会话 cookie。判据与中间件共用一份。
     const rejection = crossSiteRejection({
@@ -95,6 +102,14 @@ export function mountAuthRoutes(api: Hono): void {
     });
     if (rejection) return c.json({ error: rejection }, 403);
     const { key } = await c.req.json<{ key?: string }>().catch(() => ({ key: "" }));
+    // 自用模式:别的设备粘访问密钥换会话。没有 users 行,所以没有 user 可回。
+    if (!(await isMultiUser())) {
+      if (!remoteKeyMatches(key ?? "")) {
+        return c.json({ error: "访问密钥不对。现在这一把在 ash 所在那台机器的「设置 → 默认规则 → 远程访问」里" }, 401);
+      }
+      issueSessionCookie(c, remoteSessionToken()!);
+      return c.json({ user: null });
+    }
     const user = await findUserByKey((key ?? "").trim());
     if (!user) return c.json({ error: "这个 key 不对，或者账号已被删除" }, 401);
     if (user.status === "suspended") return c.json({ error: "这个账号已被停用，找管理员恢复" }, 403);
@@ -124,10 +139,10 @@ export function mountAuthRoutes(api: Hono): void {
   // ── 首启向导 / 模式转换 ───────────────────────────────────────────────────
   // 一个端点管两件事:它们的差别只有「库里有没有存量数据」,流程与校验完全一致。
   api.post("/auth/setup", async (c) => {
-    // CSRF 判据在这里**再落一道**,不是重复:`authGate` 在自用模式下是整条穿透的
-    // (§二「自用模式一行不拦」),而这条端点恰恰是自用模式里唯一能把实例**不可逆**
-    // 推进另一个状态的写操作 —— 跨站一发,用户的实例就翻成攻击者命名的多人模式,
-    // 他自己反倒只剩登录页,拿不到 key 就只能走宿主机逃生门(第 1 轮审查 P1)。
+    // CSRF 判据在这里**再落一道**:这条端点能把实例**不可逆**推进另一个状态 —— 跨站
+    // 一发,用户的实例就翻成攻击者命名的多人模式,他自己反倒只剩登录页,拿不到 key 就
+    // 只能走宿主机逃生门(第 1 轮审查 P1)。闸(`authGate`)现在两种模式都查,这一道留着
+    // 是因为这条路由也会被不经过闸的装配直接挂出去。
     // 判据与 `/auth/login`、中间件共用同一份 `crossSiteRejection`。
     const rejection = crossSiteRejection({
       secFetchSite: c.req.header("sec-fetch-site"),
@@ -140,6 +155,13 @@ export function mountAuthRoutes(api: Hono): void {
     // 后者必须也走这条路 —— 否则实例锁死在一个谁也进不去的多人模式里,只能手改库。
     const resuming = config.mode === "multi" && (await needsSetup());
     const first = config.mode === "" || resuming;
+    // 还没人认领的实例,谁先到谁就是管理员 —— 所以「先到」得是机主:本机直连,或者拿得出
+    // 访问密钥(密钥文件只有读得到 ash 数据目录的人拿得到)。否则局域网里任何一台机器都
+    // 能抢在机主前面把它设成自己的多人实例。补做(resuming)那一档不在此列:多人模式的
+    // 身份体系里没有访问密钥这回事,它沿用既有的免登录名单。
+    if (config.mode === "" && actorOf(c).kind === "anonymous") {
+      return c.json({ error: "首次设置要在 ash 所在的那台机器上做，或者先用访问密钥登录", needsAuth: true }, 401);
+    }
     // 已经定过模式 = 这是设置页危险区的转换,必须是管理员(自用模式下人人都是)。
     if (!first) {
       try {
@@ -297,6 +319,35 @@ export function mountAuthRoutes(api: Hono): void {
     // 而它此刻正是这个状态。回 409 只会在一条本来走通了的流程末尾报个假错。
     await consumeInvite(found.row.id);
     return c.json({ ok: true });
+  });
+
+  // ── 自用模式的访问密钥(auth/remote-access.ts)──────────────────────────────
+  // 查看与更换**只在本机直连时给**:凭密钥进来的设备能用这台 ash,但不该能读出密钥
+  // 再转交给第三台,更不该能把机主的其它设备踢下线。没有本机浏览器的机器(无头服务器)
+  // 在那台机器上 `curl http://127.0.0.1:<端口>/api/remote-access` 即可。
+  const remoteAccessRefusal = async (c: Context): Promise<{ error: string; status: 403 | 409 } | null> => {
+    if (await isMultiUser()) return { error: "多人模式下每个人用自己的 key，没有这把访问密钥", status: 409 };
+    if (actorOf(c).kind !== "single" || !isLocalDirect(c)) {
+      return { error: "访问密钥只能在 ash 所在的那台机器上查看和更换", status: 403 };
+    }
+    return null;
+  };
+
+  api.get("/remote-access", async (c) => {
+    const refusal = await remoteAccessRefusal(c);
+    if (refusal?.status === 409) return c.json({ error: refusal.error }, 409);
+    const view: RemoteAccessView = refusal ? { local: false } : { local: true, key: ensureRemoteAccessKey() };
+    return c.json(view);
+  });
+
+  api.post("/remote-access/rotate", async (c) => {
+    const refusal = await remoteAccessRefusal(c);
+    if (refusal) return c.json({ error: refusal.error }, refusal.status);
+    const view: RemoteAccessView = { local: true, key: rotateRemoteAccessKey() };
+    // 已经签发出去的预览凭证是地址里的一串随机数,不认密钥:不一起作废的话,被踢掉的
+    // 那台设备还能顺着开着的预览页继续用到凭证过期。
+    (await import("../preview-access.js")).revokePreviewGrants();
+    return c.json(view);
   });
 
   // ── 宿主机逃生门(§三)──────────────────────────────────────────────────────
