@@ -22,6 +22,8 @@ import {
   dropSentAttachments,
   joinDraftText,
   mergeAttachments,
+  reuseDraft,
+  sentSelections,
 } from "../src/task-detail/withdrawDraft.ts";
 
 const row = (id: string, text: string, sendAt: string): ScheduledMessage => ({
@@ -189,7 +191,9 @@ for (const [file, source] of [
 ] as const) {
   const withdraw = source.slice(source.indexOf("const withdraw = async"));
   assert.match(withdraw, /if \(!await scheduled\.cancel\(message\.id\)\) return;/, `${file} 撤回必须先取消成功再回填`);
-  assert.match(withdraw, /await inFlightSend\.current;/, `${file} 撤回必须等在途的发送先结算，靠顺序而不是靠猜`);
+  assert.match(withdraw, /await draft\.afterSend\(\);/, `${file} 撤回必须等在途的发送先结算，靠顺序而不是靠猜`);
+  // 在途发送登记在草稿库上（一组而不是一个），早退的那次调用顶不掉真正在飞的。
+  assert.match(source, /draft\.trackSend\(run\);/, `${file} 发送必须登记到草稿库，撤回和「改了再发」才等得到它`);
   assert.match(withdraw, /joinDraftText\(message\.text, current\)/, `${file} 撤回必须把正文放回草稿`);
   assert.match(withdraw, /attachmentsFromPaths\(message\.attachments\)/, `${file} 撤回必须把附件放回草稿`);
   // 发送结算只认「草稿逐字没变」这一条:任何形式的子串搜索都可能把用户新写的句子
@@ -197,7 +201,8 @@ for (const [file, source] of [
   const send = source.slice(source.indexOf("const runSend = async"), source.indexOf("const withdraw = async"));
   assert.match(send, /const draftAtSend = value;/, `${file} 发送要先留下整份草稿快照`);
   assert.match(send, /clearSentDraft\(current, draftAtSend\)/, `${file} 发送后只在草稿没动过时才清`);
-  assert.match(send, /dropSentAttachments\(current, sentPaths\)/, `${file} 附件按路径精确摘`);
+  assert.match(send, /const sentSelection = sentSelections\(uploads\.attachments\);/, `${file} 发送要记下提交的是哪几次选择`);
+  assert.match(send, /dropSentAttachments\(current, sentSelection\)/, `${file} 附件按提交时的选择精确摘`);
   assert.doesNotMatch(send, /setValue\(""\)|uploads\.clear\(\)/, `${file} 发送后不得无条件清空草稿`);
   assert.doesNotMatch(send, /indexOf\(sent|lastIndexOf\(sent/, `${file} 不得靠子串搜索去认「发出去的那一段」`);
 }
@@ -213,11 +218,43 @@ assert.deepEqual(
   dropSentAttachments(
     [{ path: "/tmp/late.pdf", name: "late.pdf", kind: "file", url: null },
       { path: "/tmp/sent.pdf", name: "sent.pdf", kind: "file", url: null }],
-    ["/tmp/sent.pdf"],
+    [{ path: "/tmp/sent.pdf" }],
   ).map((attachment) => attachment.path),
   ["/tmp/late.pdf"],
-  "发送只摘掉自己发出去的附件（路径是唯一标识，不用猜）",
+  "发送只摘掉自己发出去的附件（直接上传的路径就是唯一标识，不用猜）",
 );
+// 同一路径又选了一次（撤回、「改了再发」放回）：选择记号不同，在途那次发送结算时摘不走它。
+{
+  const shot = "data/uploads/abcdefghijkl-shot.png";
+  const [sentShot] = attachmentsFromPaths([shot]);
+  const sent = sentSelections([sentShot!]);
+  const reselected = mergeAttachments(attachmentsFromPaths([shot]), [sentShot!]);
+  assert.equal(reselected.length, 1, "又选一次不会变成两份");
+  assert.notEqual(reselected[0]!.selection, sentShot!.selection, "又选一次换上新的选择记号");
+  assert.deepEqual(dropSentAttachments(reselected, sent).map((attachment) => attachment.path), [shot],
+    "旧发送结算时不得摘掉途中又选进来的同一张图（「改了再发」第 2 轮审查实测）");
+  assert.deepEqual(dropSentAttachments([sentShot!], sent), [], "没再选过的那份照常摘掉");
+  assert.deepEqual(JSON.parse(JSON.stringify(sent)), sent, "提交的选择能原样落进本地存储（侧聊迟到确认靠它）");
+}
+assert.notEqual(
+  attachmentsFromPaths(["/tmp/a.pdf"])[0]!.selection,
+  attachmentsFromPaths(["/tmp/a.pdf"])[0]!.selection,
+  "每次还原都是一次新的选择",
+);
+
+// 「改了再发」的合并：判连点认「同一条 + 放回后草稿没动过」，不看草稿里有没有这几个字。
+{
+  const input = { source: "m1", text: "继续", paths: ["/tmp/a.pdf"] };
+  const first = reuseDraft(input, { text: "不要继续", attachments: [] }, null);
+  assert.equal(first.text, "继续\n\n不要继续", "草稿碰巧含着这几个字也照样放回（第 1 轮审查实测）");
+  assert.deepEqual(first.attachments.map((attachment) => attachment.path), ["/tmp/a.pdf"]);
+  assert.equal(reuseDraft(input, { text: first.text, attachments: first.attachments }, first), first, "放回后一点没动就是连点，原样不变");
+  assert.equal(reuseDraft({ ...input, source: "m2" }, { text: first.text, attachments: first.attachments }, first).text,
+    "继续\n\n继续\n\n不要继续", "换一条就不是连点");
+  assert.equal(reuseDraft(input, { text: "", attachments: [] }, first).text, "继续", "草稿被发送清掉之后再点，照样放回");
+  assert.notEqual(reuseDraft(input, { text: first.text, attachments: [...first.attachments] }, first), first,
+    "附件动过（换了一份数组）也不算连点");
+}
 
 // 回填的合并语义:撤回的内容排在已有草稿前面,同一路径的附件不重复。
 assert.equal(joinDraftText("撤回的话", ""), "撤回的话", "草稿为空时直接用撤回的正文");

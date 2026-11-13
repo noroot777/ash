@@ -37,6 +37,7 @@ import {
   attachmentsFromPaths,
   clearSentDraft,
   dropSentAttachments,
+  sentSelections,
   joinDraftText,
   mergeAttachments,
 } from "./withdrawDraft.ts";
@@ -415,6 +416,8 @@ export function ReplyBox({
     const laterAtSend = draft.later;
     const sentText = annotation?.text ?? value.trim();
     const sentPaths = annotation?.attachments ?? uploads.attachments.map((attachment) => attachment.path);
+    // 发送结算只摘这一次提交的那几次选择（路径 + 选择记号），途中又放回的同一张图留着。
+    const sentSelection = sentSelections(uploads.attachments);
     try {
       // 改完执行器立刻按发送时，PATCH 可能还在飞 —— 回复的 POST 先到，服务端读到的
       // 仍是旧执行器，这一句照旧由旧的跑。先等写回落地，落不下去就别发：静默按旧
@@ -443,7 +446,7 @@ export function ReplyBox({
       if ("command" in result && !result.recorded && currentTaskId.current === task.id) setCommandResult({ taskId: task.id, text: result.text });
       if (!annotation) {
         setValue((current) => clearSentDraft(current, draftAtSend));
-        draft.setAttachments((current) => dropSentAttachments(current, sentPaths));
+        draft.setAttachments((current) => dropSentAttachments(current, sentSelection));
         uploads.clearError();
         // 发送方式跟正文同口径：发送途中被改过就留着，那是下一条的设置。
         draft.setLater((current) => (current === laterAtSend ? null : current));

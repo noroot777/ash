@@ -4,13 +4,15 @@ import { chatApi } from "../chat/chatApi.ts";
 import { api } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
 import type { UploadAttachment, UploadingFile } from "../task-detail/Attachments.tsx";
-import { attachmentsFromPaths, mergeAttachments } from "../task-detail/withdrawDraft.ts";
+import { dropSentAttachments, sentSelections, type SentSelection } from "../task-detail/withdrawDraft.ts";
 import { reuseInto } from "../task-detail/ReuseInput.tsx";
 import { clearSideChatQuote, moveNewSideChatQuote, sideChatMessageBody, stageSideChatQuote, useSideChatQuote } from "./sideChatQuote.ts";
 import { newSideChatScope, readSideStorage as read, sideAttachmentsKey as filesKey, sideDraftKey as draftKey, sideRequestKey as requestKey, writeSideStorage as write } from "./sideChatStorage.ts";
 
 const finished = (status: string) => ["done", "failed", "stopped"].includes(status);
-type SendRequest = { id: string; body: string; draft?: string; quoteId?: string; attachments?: string[] };
+// `sent`：这次提交带走的是哪几次选择（路径 + 选择记号），确认到了只摘它们。老版本存下的请求没有，
+// 退回按路径（没有选择记号的那几份）。
+type SendRequest = { id: string; body: string; draft?: string; quoteId?: string; attachments?: string[]; sent?: SentSelection[] };
 const sameMember = (a: ChatMember, b: ChatMember) => a.agentType === b.agentType && a.executorId === b.executorId
   && a.model === b.model && a.reasoningEffort === b.reasoningEffort && a.name === b.name;
 const samePaths = (a: string[] | undefined, b: string[]) => JSON.stringify(a ?? []) === JSON.stringify(b);
@@ -107,12 +109,13 @@ export function useSideChat(taskId: string) {
         if (read(draftKey(value.room.id)) === (request.draft ?? request.body)) {
           write(draftKey(value.room.id), ""); clearedDraft = true;
         }
-        // 只摘**这一次发出去的那几张**（按路径做差集，跟主会话回复框的 dropSentAttachments
-        // 同一条判据）：发送在途的那一两秒里用户完全可能又粘一张，整份清空会把它一起扔掉，
+        // 只摘**这一次发出去的那几次选择**（跟主会话回复框的 dropSentAttachments 同一条判据）：
+        // 发送在途的那一两秒里用户完全可能又粘一张、又把同一张图放回来，整份清空会把它一起扔掉，
         // 而「发的那几张必须和手上这几张一模一样才清」则相反——刚粘的那张让条件不成立，
-        // 已经发出去的旧图就赖在草稿里，下一条消息把它重复带上一遍。
-        const sent = new Set(request.attachments ?? []);
-        const kept = readAttachments(value.room.id).filter((file) => !sent.has(file.path));
+        // 已经发出去的旧图就赖在草稿里，下一条消息把它重复带上一遍。确认可能迟到（发送报了错、
+        // 远端其实收下了，之后才由快照带回来），那时草稿早换了几轮，只认选择记号才摘不错。
+        const sent = request.sent ?? (request.attachments ?? []).map((path) => ({ path }));
+        const kept = dropSentAttachments(readAttachments(value.room.id), sent);
         write(filesKey(value.room.id), JSON.stringify(kept));
         remainingFiles = kept;
         if (request.quoteId) clearSideChatQuote(taskId, value.room.id, request.quoteId);
@@ -232,7 +235,7 @@ export function useSideChat(taskId: string) {
     let previous: SendRequest | null = null;
     try { previous = JSON.parse(read(requestKey(scope)) ?? "null"); } catch { /* Recreate invalid local metadata. */ }
     const paths = attached.current.map((file) => file.path);
-    const request: SendRequest = { id: previous?.body === body && samePaths(previous.attachments, paths) ? previous.id : createClientId(), body, draft: draft.trim(), quoteId: quote?.id, attachments: paths };
+    const request: SendRequest = { id: previous?.body === body && samePaths(previous.attachments, paths) ? previous.id : createClientId(), body, draft: draft.trim(), quoteId: quote?.id, attachments: paths, sent: sentSelections(attached.current) };
     write(requestKey(scope), JSON.stringify(request));
     write(draftKey(scope), draft.trim());
     try {
@@ -280,12 +283,15 @@ export function useSideChat(taskId: string) {
   const removeQuote = () => { if (quote) clearSideChatQuote(taskId, roomId, quote.id); };
   // 你问过的一句放回输入框改了再发：问的那句并回草稿、附件并回附件卡（同主会话，见
   // task-detail/withdrawDraft.ts），带着的主会话选文重新挂成引用——只有一个引用位，原先挂着的那段让位。
-  // 正文按此刻存着的那份草稿并（等过发送，闭包里的 draft 可能已经是旧的）。
+  // 按此刻存着的那份草稿并（等过发送，闭包里的 draft 可能已经是旧的）。放回的附件是新的
+  // 选择，之后哪次确认迟到也摘不走它。
   const reuse = async (input: { source: string; question: string; quote: string | null; paths: readonly string[] }) => {
     while (inFlight.current) await inFlight.current;
     const scope = selected.current ?? newScope;
-    setDraft(reuseInto(`side:${scope}`, { source: input.source, text: input.question }, read(draftKey(scope)) ?? ""));
-    setAttachments((current) => mergeAttachments(attachmentsFromPaths([...input.paths]), current));
+    const current = { text: read(draftKey(scope)) ?? "", attachments: attached.current };
+    const mark = reuseInto(`side:${scope}`, { source: input.source, text: input.question, paths: input.paths }, current);
+    if (mark.text !== current.text) setDraft(mark.text);
+    if (mark.attachments !== current.attachments) setAttachments(mark.attachments);
     if (input.quote) stageSideChatQuote(taskId, input.quote);
     setReused((count) => count + 1);
   };

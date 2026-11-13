@@ -80,17 +80,24 @@ export function DraftProvider({ children }: { children: ReactNode }) {
       return { ...current, [key]: next };
     });
   }, []);
-  // 正在飞的那一次发送。它结算时会按「发送那一刻的那一份」摘草稿（clearSentDraft /
-  // dropSentAttachments），所以对话框之外往草稿里放东西（撤回、会话里「改了再发」）都得排在
-  // 它后面：先清后并，顺序一定，就不必去草稿里猜哪一份是谁的。
-  const sends = useRef(new Map<string, Promise<unknown>>());
+  // 正在飞的发送。它们结算时按「发送那一刻的那一份」摘草稿（clearSentDraft /
+  // dropSentAttachments），所以对话框之外往草稿里放东西（撤回、会话里「改了再发」）排在它们
+  // 后面：先清后并。这只是辅助——附件归属靠选择记号兜底，顺序乱了也摘不错。
+  // 每份草稿记**一组**而不是一个：发送中再按一次发送键，那一次早退的调用不能把真正还在飞的
+  // 那次顶掉（「改了再发」第 2 轮审查实测，顶掉后等待形同虚设）。
+  const sends = useRef(new Map<string, Set<Promise<unknown>>>());
   const trackSend = useCallback((key: string, run: Promise<unknown>) => {
-    sends.current.set(key, run);
-    const done = () => { if (sends.current.get(key) === run) sends.current.delete(key); };
+    const runs = sends.current.get(key) ?? new Set<Promise<unknown>>();
+    sends.current.set(key, runs);
+    runs.add(run);
+    const done = () => {
+      runs.delete(run);
+      if (!runs.size && sends.current.get(key) === runs) sends.current.delete(key);
+    };
     run.then(done, done);
   }, []);
   const afterSend = useCallback(async (key: string) => {
-    for (let run = sends.current.get(key); run; run = sends.current.get(key)) await run.catch(() => {});
+    for (let runs = sends.current.get(key); runs?.size; runs = sends.current.get(key)) await Promise.allSettled([...runs]);
   }, []);
   const value = useMemo(() => ({ drafts, updateDraft, readDraft, trackSend, afterSend }), [drafts, updateDraft, readDraft, trackSend, afterSend]);
   return <DraftContext.Provider value={value}>{children}</DraftContext.Provider>;
@@ -121,6 +128,11 @@ export type DraftHandle = {
   clearIfUnchanged: (submitted: Draft) => void;
   /** 整份丢掉（发送/创建成功，或用户自己按了「清空」）。 */
   clear: () => void;
+  /**
+   * 一次改好几个字段（正文 + 附件），拿到的是此刻 Store 里的那一份。判断要同时看几个字段的
+   * 操作（「改了再发」判连点）用它，免得各自的 setter 在不同时刻读到不同版本。
+   */
+  update: (next: (current: Draft) => Draft) => void;
   /** 登记一次正在飞的发送（它结算时会摘掉自己那一份）。 */
   trackSend: (run: Promise<unknown>) => void;
   /** 等这份草稿上在飞的发送都结算完；外部往草稿里放东西前先等它。 */
@@ -177,6 +189,7 @@ export function useDraft(key: string): DraftHandle {
     for (const pending of readDraft(key).pendingUploads) pending.abort();
     updateDraft(key, () => EMPTY_DRAFT);
   }, [key, readDraft, updateDraft]);
+  const update = useCallback((next: (current: Draft) => Draft) => updateDraft(key, next), [key, updateDraft]);
   const trackSend = useCallback((run: Promise<unknown>) => track(key, run), [key, track]);
   const afterSend = useCallback(() => settle(key), [key, settle]);
   return {
@@ -195,6 +208,7 @@ export function useDraft(key: string): DraftHandle {
     value: draft,
     clearIfUnchanged,
     clear,
+    update,
     trackSend,
     afterSend,
   };

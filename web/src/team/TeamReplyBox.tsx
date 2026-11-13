@@ -30,6 +30,7 @@ import {
   attachmentsFromPaths,
   clearSentDraft,
   dropSentAttachments,
+  sentSelections,
   joinDraftText,
   mergeAttachments,
 } from "../task-detail/withdrawDraft.ts";
@@ -110,13 +111,15 @@ export function TeamReplyBox({
     const laterAtSend = draft.later;
     const sentText = value.trim();
     const sentPaths = uploads.attachments.map((attachment) => attachment.path);
+    // 发送结算只摘这一次提交的那几次选择（路径 + 选择记号），途中又放回的同一张图留着。
+    const sentSelection = sentSelections(uploads.attachments);
     try {
       const result = await onSend(sentText, sentPaths, choice);
       // 执行器门禁弹了对话框、用户点了取消:草稿和附件一个字都不能清。
       if (result === null) return;
       if ("scheduled" in result) scheduled.add(result.message);
       setValue((current) => clearSentDraft(current, draftAtSend));
-      draft.setAttachments((current) => dropSentAttachments(current, sentPaths));
+      draft.setAttachments((current) => dropSentAttachments(current, sentSelection));
       uploads.clearError();
       draft.setLater((current) => (current === laterAtSend ? null : current));
     } catch (reason) {
