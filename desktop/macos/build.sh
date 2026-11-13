@@ -1,6 +1,7 @@
 #!/bin/bash
-# 编出 ash 的 macOS app：一个 WKWebView 窗口，连 :4317（或 ASH_URL / defaults 里的 AshURL），
-# 服务没在跑就从主仓把它起起来。不用 Xcode 工程，只要 Xcode 命令行工具里的 swiftc。
+# 编出 ash 的 macOS app：自带 node 与 server/web/mcp 产物的一整份 ash，加一个 WKWebView 窗口。
+# 装好之后不依赖仓库检出，也不依赖系统里有没有 node。不用 Xcode 工程，只要 Xcode 命令行工具
+# 里的 swiftc；打包那一步（scripts/bundle-runtime.mjs）要本机有 node 和 npm。
 #
 #   desktop/macos/build.sh             # 产物 desktop/macos/build/Ash.app
 #   desktop/macos/build.sh --install   # 装进 /Applications（不可写就 ~/Applications）并打开
@@ -8,16 +9,31 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-# 起服务用**主仓**：在 worktree 里构建也一样指回主仓，worktree 验收后就删了。
-REPO="$(dirname "$(git -C "$HERE" rev-parse --path-format=absolute --git-common-dir)")"
 BUILD="$HERE/build"
 APP="$BUILD/Ash.app"
-VERSION="0.1.0"
+# 给人看的版本。Sparkle 比的是下面的 CFBundleVersion。
+VERSION="0.2.0"
+# CFBundleVersion 必须单调递增：取这次构建所在提交的时间（UTC，日期.时分），同一个提交构建
+# 几次都是同一个号；工作区有没提交的改动时取当前时间，免得和那个提交的正式构建撞号。
+# 拆成两段是因为 12 位的整数在一些版本比较实现里会溢出。
+cd "$HERE"
+if git diff --quiet HEAD 2>/dev/null && [[ -z "$(git ls-files --others --exclude-standard)" ]]; then
+  STAMP="$(git log -1 --format=%ct)"
+else
+  STAMP="$(date +%s)"
+fi
+BUILD_NUMBER="$(TZ=UTC date -r "$STAMP" +%Y%m%d.%H%M)"
+
+# 自带的 node 是 darwin-arm64 那一份，node-pty 也按本机架构现编，所以只在 Apple 芯片上出包。
+if [[ "$(uname -m)" != arm64 ]]; then
+  echo "✕ 只支持在 Apple 芯片（arm64）的 Mac 上构建" >&2
+  exit 1
+fi
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-swiftc -O -swift-version 5 -target "$(uname -m)-apple-macos14.0" \
+swiftc -O -swift-version 5 -target arm64-apple-macos14.0 \
   -framework AppKit -framework WebKit \
   "$HERE"/Sources/*.swift -o "$APP/Contents/MacOS/Ash"
 
@@ -29,6 +45,9 @@ if [[ ! -f "$ICNS" || "$HERE/scripts/make-icon.swift" -nt "$ICNS" ]]; then
   iconutil -c icns "$BUILD/AppIcon.iconset" -o "$ICNS"
 fi
 cp "$ICNS" "$APP/Contents/Resources/AppIcon.icns"
+
+# 自带的那份 ash：node、产物、生产依赖 → Contents/Resources/app。
+node "$HERE/scripts/bundle-runtime.mjs" "$APP/Contents/Resources"
 
 # ATS：页面走 http 连本机 / 局域网的 ash，所以放开本地网络与 web 内容里的明文加载。
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -43,8 +62,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
-  <key>AshRepoPath</key><string>$REPO</string>
-  <key>CFBundleVersion</key><string>$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo 0)</string>
+  <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
+  <key>AshSourceCommit</key><string>$(git rev-parse --short HEAD 2>/dev/null || echo unknown)</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticTermination</key><false/>
@@ -57,8 +76,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --sign - "$APP" >/dev/null
-echo "✓ $APP"
+# node 保留 nodejs.org 的官方签名；node-pty 是本机现编的（链接器已给 ad-hoc 签名），再按 ad-hoc
+# 签一遍，最后封整个 app。
+find "$APP/Contents/Resources/app/node_modules/node-pty/build/Release" -type f \( -name '*.node' -o -name spawn-helper \) \
+  -exec codesign --force --sign - {} + 2>/dev/null
+codesign --force --sign - "$APP" 2>/dev/null
+codesign --verify --deep --strict "$APP"
+echo "✓ ${APP}（${VERSION} / ${BUILD_NUMBER}）"
 
 case "${1:-}" in
   --install)
@@ -67,9 +91,16 @@ case "${1:-}" in
     DEST="$DEST_DIR/Ash.app"
     mkdir -p "$DEST_DIR"
     osascript -e 'tell application id "dev.ash.mac" to quit' >/dev/null 2>&1 || true
+    # 退出 app 不停服务：旧 app 起的那份 server 还在用旧 bundle 里的代码，换掉文件后它后面才加载
+    # 的模块会是新版本的，两版混着跑。先说清楚，让用户自己挑时候重启它。
+    RUNNING="$(curl -fsS --max-time 2 http://127.0.0.1:4317/api/health 2>/dev/null || true)"
     rm -rf "$DEST"
     ditto "$APP" "$DEST"
     echo "✓ $DEST"
+    if [[ "$RUNNING" == *"\"codeDir\":\"$DEST/"* || "$RUNNING" == *"\"codeDir\":\"/private$DEST/"* ]]; then
+      PID="$(printf '%s' "$RUNNING" | sed -n 's/.*"pid":\([0-9]*\).*/\1/p')"
+      echo "⚠ 旧版 app 起的 ash 服务（进程 ${PID}）还在跑旧代码：手上没有在跑的任务时 kill ${PID}，再打开 app 就换成新版。"
+    fi
     open "$DEST"
     ;;
   --dmg)

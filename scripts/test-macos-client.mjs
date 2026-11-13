@@ -1,32 +1,44 @@
+// mac app 的定点回归（仅 macOS）。编进测试驱动的是真的 AshConfig / AshHealth / ServerLauncher /
+// DataImport，配置全走环境变量：临时数据根、临时端口、一份假的「自带运行时」（node 就是跑这个
+// 测试的 node，server 是几行假服务），日常那一份 app 的数据与 :4317 一概不碰。
+//
+// 覆盖：下载事务；红绿灯下的页面；「端口上是谁」的判据（自己那份 / 别的 ash / 不是 ash）；空数据根
+// 不起服务、首启选了才起；起服务用自带 node、数据根与本机自用开关传对、不漏启动器自己的变量；
+// 别的 ash 或别的程序占着端口时不起、说清是谁；并发起服务只起一份；锁超时与重试；请求合并；
+// 进程起来就退时不干等；应答的 PID 对不上不算；启动器报错可见；运行时缺件；导入旧数据（WAL 里
+// 没落盘的写入也带过来、只复制不动源、多人库拒绝、锁与缓存不搬、上次没导完的残留被换掉）。
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { createServer as createHttpServer } from "node:http";
 import { once } from "node:events";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { macServerLockPath } from "./macos-server-lock.mjs";
 
 assert.equal(process.platform, "darwin", "macOS-only regression");
 const root = fileURLToPath(new URL("..", import.meta.url));
 const temporary = mkdtempSync(join(tmpdir(), "ash-macos-client-"));
-const repo = join(temporary, "repo");
+const runtime = join(temporary, "runtime");
+const data = join(temporary, "data");
 const binary = join(temporary, "client-tests");
 const children = new Set();
 const serverPids = new Set();
-const lockPaths = new Set();
 const fixturePids = new Set();
-const logs = new Set();
 const delay = (milliseconds) => new Promise((done) => setTimeout(done, milliseconds));
-mkdirSync(join(repo, "scripts"), { recursive: true });
-mkdirSync(join(repo, "server/dist"), { recursive: true });
-copyFileSync(join(root, "scripts/start-detached.mjs"), join(repo, "scripts/start-detached.mjs"));
-copyFileSync(join(root, "scripts/macos-server-lock.mjs"), join(repo, "scripts/macos-server-lock.mjs"));
+
+// 假的「自带运行时」：布局与 bundle-runtime.mjs 装出来的一致。
+mkdirSync(join(runtime, "node/bin"), { recursive: true });
+mkdirSync(join(runtime, "scripts"), { recursive: true });
+mkdirSync(join(runtime, "server/dist"), { recursive: true });
+symlinkSync(process.execPath, join(runtime, "node/bin/node"));
+copyFileSync(join(root, "scripts/start-detached.mjs"), join(runtime, "scripts/start-detached.mjs"));
 
 const build = spawnSync("swiftc", ["-swift-version", "5",
-  ...["AshHealth", "DownloadTransaction", "ServerStartLock", "ServerLauncher", "WindowChrome"].map((name) => join(root, `desktop/macos/Sources/${name}.swift`)),
+  ...["AshConfig", "AshHealth", "DataImport", "DownloadTransaction", "ServerStartLock", "ServerLauncher", "WindowChrome"]
+    .map((name) => join(root, `desktop/macos/Sources/${name}.swift`)),
   ...["main", "WindowChromeProbe"].map((name) => join(root, `desktop/macos/Tests/${name}.swift`)), "-o", binary], { encoding: "utf8" });
 assert.equal(build.status, 0, build.stderr);
 
@@ -40,11 +52,13 @@ async function freePort() {
 }
 
 function launch(command, args, env = {}) {
-  const child = spawn(command, args, { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+  const base = { ...process.env };
+  for (const key of ["ASH_DATA_DIR", "ASH_URL", "ASH_LOCAL_ONLY", "PORT"]) delete base[key];
+  const child = spawn(command, args, { env: { ...base, ...env }, stdio: ["ignore", "pipe", "pipe"] });
   children.add(child);
   let output = "";
-  child.stdout.on("data", (data) => { output += data; });
-  child.stderr.on("data", (data) => { output += data; });
+  child.stdout.on("data", (chunk) => { output += chunk; });
+  child.stderr.on("data", (chunk) => { output += chunk; });
   const done = new Promise((resolveResult, reject) => {
     child.once("error", reject);
     child.once("exit", (status, signal) => {
@@ -64,16 +78,27 @@ async function until(predicate, message, timeout = 15000) {
   assert.fail(message);
 }
 
-function serviceSource(body) {
-  writeFileSync(join(repo, "server/dist/index.js"), body);
+const marker = join(temporary, "started");
+const seen = join(temporary, "server-env.json");
+
+/** 假服务：记下自己的 pid 和看到的环境，像真 server 一样在数据根里建库，按 health 协议应答。 */
+function serviceSource({ pidOffset = 0, exitAtOnce = false } = {}) {
+  writeFileSync(join(runtime, "server/dist/index.js"), `const fs=require('node:fs');const http=require('node:http');const path=require('node:path');
+fs.appendFileSync(${JSON.stringify(marker)},process.pid+'\\n');
+const dataDir=process.env.ASH_DATA_DIR;
+fs.writeFileSync(${JSON.stringify(seen)},JSON.stringify({cwd:process.cwd(),dataDir,localOnly:process.env.ASH_LOCAL_ONLY??null,
+  port:process.env.PORT??null,leaked:Object.keys(process.env).filter(k=>k.startsWith('ASH_MAC_'))}));
+${exitAtOnce ? "process.exit(1);" : ""}
+fs.writeFileSync(path.join(dataDir,'ash.db'),'');
+http.createServer((req,res)=>{res.setHeader('Content-Type','application/json');
+res.end(JSON.stringify({ok:true,pid:process.pid+${pidOffset},instance:{dataDir,codeDir:path.resolve(__dirname,'../..')}}));})
+.listen(Number(process.env.PORT),'127.0.0.1');`);
 }
 
 function collectServers() {
-  const marker = join(repo, "started");
-  if (existsSync(marker)) {
-    for (const pid of readFileSync(marker, "utf8").trim().split("\n").map(Number)) {
-      if (pid > 1) serverPids.add(pid);
-    }
+  if (!existsSync(marker)) return;
+  for (const pid of readFileSync(marker, "utf8").trim().split("\n").map(Number)) {
+    if (pid > 1) serverPids.add(pid);
   }
 }
 
@@ -83,16 +108,30 @@ async function stopServers() {
   await delay(150);
   for (const pid of serverPids) { try { process.kill(pid, "SIGKILL"); } catch {} }
   serverPids.clear();
-  rmSync(join(repo, "started"), { force: true });
+  rmSync(marker, { force: true });
+}
+
+/** 端口上摆一个假的应答者，跑完 body 再撤。 */
+async function withResponder(port, respond, body) {
+  const server = createHttpServer(respond);
+  server.listen(port, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    return await body();
+  } finally {
+    server.closeAllConnections();
+    await new Promise((done) => server.close(done));
+  }
 }
 
 try {
   const port = await freePort();
-  logs.add(`/tmp/ash-${port}.log`);
   const journal = join(temporary, "journal");
-  const env = { ASH_TEST_REPO: repo, ASH_TEST_JOURNAL: journal, ASH_URL: `http://127.0.0.1:${port}` };
-  const lock = macServerLockPath(repo, port);
-  lockPaths.add(lock);
+  const env = {
+    ASH_URL: `http://127.0.0.1:${port}`, ASH_DATA_DIR: data, ASH_MAC_RUNTIME: runtime, ASH_MAC_DOWNLOAD_JOURNAL: journal,
+  };
+
+  // ── 下载事务 ──
   const destination = join(temporary, "export.md");
   let result = await launch(binary, ["transactions", destination], env).done;
   assert.equal(result.status, 0, result.output);
@@ -140,101 +179,79 @@ try {
   assert.equal(result.status, 0, result.output);
   console.log("PASS: page under the window controls keeps its clicks; empty title strip and marked bars drag the window; documents that never opted in keep the ordinary title bar");
 
+  // ── 端口上是谁 ──
+  mkdirSync(data, { recursive: true });
+  const dataAlias = join(temporary, "data-alias");
+  symlinkSync(data, dataAlias);
   let healthStatus = 200;
   let healthBody = "";
-  const fakeHealth = createHttpServer((request, response) => {
-    response.statusCode = healthStatus;
-    response.end(healthBody);
-  });
-  fakeHealth.listen(0, "127.0.0.1");
-  await once(fakeHealth, "listening");
   const probe = async (status, body) => {
     healthStatus = status;
-    healthBody = body;
-    const probed = await launch(binary, ["health"], { ...env, ASH_URL: `http://127.0.0.1:${fakeHealth.address().port}` }).done;
+    healthBody = typeof body === "string" ? body : JSON.stringify(body);
+    const probed = await launch(binary, ["health"], env).done;
     assert.equal(probed.status, 0, probed.output);
     return probed.output.trim();
   };
-  try {
-    assert.equal(await probe(200, "<h1>Bad Gateway</h1>"), "NOT READY", "an HTTP 200 error page is not a ready ash");
-    assert.equal(await probe(200, JSON.stringify({ ok: false, pid: 1 })), "NOT READY", "ok:false is not ready");
-    assert.equal(await probe(503, JSON.stringify({ ok: true, pid: 1 })), "NOT READY", "non-200 is not ready");
-    assert.equal(await probe(200, JSON.stringify({ ok: true, pid: 1 })), "READY", "any healthy ash is ready, whoever started it");
-  } finally {
-    fakeHealth.closeAllConnections();
-    await new Promise((done) => fakeHealth.close(done));
-  }
-  console.log("PASS: window recovery uses the launcher's health criterion, not bare HTTP 200");
+  await withResponder(port, (request, response) => {
+    response.statusCode = healthStatus;
+    response.end(healthBody);
+  }, async () => {
+    assert.equal(await probe(200, "<h1>Bad Gateway</h1>"), "NOT ASH", "an HTTP 200 error page is not ash");
+    assert.equal(await probe(200, { ok: false, pid: 1 }), "NOT ASH", "ok:false is not a ready ash");
+    assert.equal(await probe(503, { ok: true, pid: 1 }), "NOT ASH", "non-200 is not ready");
+    assert.equal(await probe(200, { ok: true, pid: 1 }), "FOREIGN", "an ash that does not say where its data lives is not ours");
+    assert.equal(await probe(200, { ok: true, pid: 1, instance: { dataDir: join(temporary, "elsewhere"), codeDir: "/repo/" } }),
+      "FOREIGN", "another data root is another ash");
+    assert.equal(await probe(200, { ok: true, pid: 1, instance: { dataDir: `${dataAlias}/`, codeDir: "/app/" } }),
+      "READY", "same data root by realpath, whoever started it");
 
-  result = await launch(binary, ["lock"], env).done;
-  assert.equal(result.output.trim(), lock, "Swift and restart use identical lock identity");
-  const alias = join(temporary, "repo-alias");
-  symlinkSync(repo, alias);
-  assert.equal(macServerLockPath(alias, port), lock);
-  assert.notEqual(macServerLockPath(repo, port + 1), lock);
-  assert.notEqual(macServerLockPath(temporary, port), lock);
-  result = await launch(binary, ["lock"], { ...env, ASH_TEST_REPO: alias }).done;
-  assert.equal(result.output.trim(), lock, "symlink aliases share lock");
+    // 被别的 ash 占着：不起、不连，说清是谁。
+    healthBody = JSON.stringify({ ok: true, pid: 4242, instance: { dataDir: "/Users/someone/code/ash/data", codeDir: "/Users/someone/code/ash/" } });
+    result = await launch(binary, ["start-fresh", "2"], env).done;
+    assert.equal(result.status, 2, result.output);
+    assert.match(result.output, /4242/);
+    assert.match(result.output, /\/Users\/someone\/code\/ash\//);
+    assert.match(result.output, /kill 4242/);
+    healthBody = "<h1>nginx</h1>";
+    result = await launch(binary, ["start-fresh", "2"], env).done;
+    assert.equal(result.status, 2, result.output);
+    assert.match(result.output, /不是 ash/);
+    assert.equal(existsSync(marker), false, "an occupied port must not get a second service");
+  });
+  assert.equal(await probe(200, ""), "DOWN", "nobody listening");
+  console.log("PASS: own instance is recognised by data root; another ash or a non-ash on the port is reported, never joined");
 
-  serviceSource(`const fs=require('node:fs');const http=require('node:http');
-fs.appendFileSync('started',process.pid+'\\n');
-http.createServer((req,res)=>{res.setHeader('Content-Type','application/json');res.end(JSON.stringify({ok:true,pid:process.pid}));}).listen(Number(process.env.PORT),'127.0.0.1');`);
-  const unrelated = launch(process.execPath, ["-e", "setTimeout(()=>{},60000)", "/unrelated/scripts/restart.mjs"]);
-  const first = launch(binary, ["start", "5"], env);
-  const second = launch(binary, ["start", "5"], env);
+  // ── 空数据根：无窗口那一档不起，首启选了才起 ──
+  serviceSource();
+  result = await launch(binary, ["start", "3"], env).done;
+  assert.equal(result.status, 3, result.output);
+  assert.equal(existsSync(marker), false, "an empty data root waits for the first-run choice");
+
+  const first = launch(binary, ["start-fresh", "8"], env);
+  const second = launch(binary, ["start-fresh", "8"], env);
   for (const launched of [first, second]) {
     result = await launched.done;
     assert.equal(result.status, 0, result.output);
   }
   collectServers();
   assert.equal(serverPids.size, 1, "concurrent GUI/headless launch starts one service");
-  assert.equal((await fetch(`${env.ASH_URL}/api/health`)).status, 200);
-  unrelated.child.kill();
-  await unrelated.done;
+  const serverEnv = JSON.parse(readFileSync(seen, "utf8"));
+  assert.equal(serverEnv.dataDir, data, "data root is handed to the server");
+  assert.equal(serverEnv.localOnly, "1", "the app always starts the local-only mode");
+  assert.equal(serverEnv.port, String(port));
+  assert.deepEqual(serverEnv.leaked, [], "launcher variables never reach the server");
+  assert.equal(realpathSync(serverEnv.cwd), realpathSync(data), "server runs in the data root, not in some checkout");
+  result = await launch(binary, ["start", "3"], env).done;
+  assert.equal(result.status, 0, "once initialised and running, the headless path just confirms it");
+  collectServers();
+  assert.equal(serverPids.size, 1);
   await stopServers();
-  console.log("PASS: unrelated restart ignored; simultaneous launch creates one healthy detached service");
+  console.log("PASS: empty data root waits for first run; one detached service with data root, local-only flag and clean env");
 
-  const restartFixture = join(repo, "scripts/restart.mjs");
-  const entered = join(temporary, "restart-entered");
-  writeFileSync(restartFixture, `import {coordinateMacRestart} from './macos-server-lock.mjs';
-import {writeFileSync} from 'node:fs';
-coordinateMacRestart(${JSON.stringify(repo)}, ${port});
-writeFileSync(${JSON.stringify(entered)},'entered');
-setTimeout(()=>process.exit(1),1200);`);
-  const restarting = launch(process.execPath, [restartFixture]);
-  await until(() => existsSync(entered), "restart did not acquire lock");
-  const duringRestart = launch(binary, ["start", "5"], env);
-  await delay(300);
-  assert.equal(existsSync(join(repo, "started")), false, "client must not launch while restart owns lock");
-  assert.equal((await restarting.done).status, 1);
-  result = await duringRestart.done;
-  assert.equal(result.status, 0, result.output);
-  await stopServers();
-  console.log("PASS: failed restart releases coordination; waiting client redecides and starts service");
-
-  const helper = join(repo, "scripts/start-detached.mjs");
-  const originalHelper = readFileSync(helper, "utf8");
-  const launchEntered = join(temporary, "launch-entered");
-  writeFileSync(helper, originalHelper.replace("const log =", `
-(await import('node:fs')).writeFileSync(${JSON.stringify(launchEntered)},'entered');
-await new Promise(resolveDelay=>setTimeout(resolveDelay,800));
-const log =`));
-  rmSync(entered, { force: true });
-  const clientFirst = launch(binary, ["start", "5"], env);
-  await until(() => existsSync(launchEntered), "client did not enter locked launch");
-  const restartSecond = launch(process.execPath, [restartFixture]);
-  await delay(200);
-  assert.equal(existsSync(entered), false, "restart must wait for client's locked launch");
-  result = await clientFirst.done;
-  assert.equal(result.status, 0, result.output);
-  await until(() => existsSync(entered), "restart did not acquire lock after client finished");
-  assert.equal((await restartSecond.done).status, 1);
-  writeFileSync(helper, originalHelper);
-  await stopServers();
-  console.log("PASS: reverse ordering also serializes restart after the client's launch");
-
-  rmSync(entered, { force: true });
-  const held = launch("/usr/bin/lockf", ["-k", lock, process.execPath, "-e",
+  // ── 锁超时与重试（数据根里已经有库了）──
+  const lockFile = join(data, ".mac-launch.lock");
+  const entered = join(temporary, "lock-entered");
+  const held = launch("/usr/bin/lockf", ["-k", lockFile, process.execPath, "-e",
     `require('node:fs').writeFileSync(${JSON.stringify(entered)},String(process.pid));setTimeout(()=>{},60000)`]);
   await until(() => existsSync(entered), "timeout fixture did not acquire lock");
   const holderPID = Number(readFileSync(entered, "utf8"));
@@ -245,38 +262,94 @@ const log =`));
   process.kill(holderPID, "SIGTERM");
   await held.done;
   fixturePids.delete(holderPID);
-  result = await launch(binary, ["start", "5"], env).done;
+  result = await launch(binary, ["start", "8"], env).done;
   assert.equal(result.status, 0, result.output);
   await stopServers();
   console.log("PASS: lock timeout is failure, not success; explicit retry recovers");
 
-  serviceSource("require('node:fs').appendFileSync('started',process.pid+'\\n');process.exit(1)");
+  // ── 进程起来就退：请求合并成一次，所有回调都拿到失败，不干等满时限 ──
+  serviceSource({ exitAtOnce: true });
+  const started = Date.now();
   result = await launch(binary, ["coalesce"], env).done;
   assert.equal(result.status, 0, result.output);
-  assert.equal(readFileSync(join(repo, "started"), "utf8").trim().split("\n").length, 1);
+  assert.match(result.output, /起来就退出了/);
+  assert.ok(Date.now() - started < 4500, "a service that died is reported before the timeout");
+  assert.equal(readFileSync(marker, "utf8").trim().split("\n").length, 1);
   await stopServers();
-  console.log("PASS: repeated launch requests coalesce and all callbacks receive failure");
+  console.log("PASS: repeated launch requests coalesce; a service that exits at once fails fast");
 
-  serviceSource(`const fs=require('node:fs');const http=require('node:http');
-fs.appendFileSync('started',process.pid+'\\n');
-http.createServer((req,res)=>res.end(JSON.stringify({ok:true,pid:process.pid+1}))).listen(Number(process.env.PORT),'127.0.0.1');`);
+  serviceSource({ pidOffset: 1 });
   result = await launch(binary, ["start", "1"], env).done;
   assert.equal(result.status, 1, "health from another PID cannot confirm the launched process");
   await stopServers();
   console.log("PASS: startup readiness checks the launched service PID");
 
-  writeFileSync(join(repo, "scripts/start-detached.mjs"), "console.error('injected launcher diagnostic');process.exit(7)");
+  writeFileSync(join(runtime, "scripts/start-detached.mjs"), "console.error('injected launcher diagnostic');process.exit(7)");
   result = await launch(binary, ["start", "1"], env).done;
   assert.equal(result.status, 1);
   assert.match(result.output, /injected launcher diagnostic/);
-  const diagnostic = result.output.match(/启动器日志：(\/tmp\/ash-mac-launch-[^\s]+)/)?.[1];
-  if (diagnostic) logs.add(diagnostic);
-  console.log("PASS: launcher stderr is visible in failure result");
+  rmSync(join(runtime, "scripts/start-detached.mjs"));
+  result = await launch(binary, ["start", "1"], env).done;
+  assert.equal(result.status, 1);
+  assert.match(result.output, /不完整/);
+  console.log("PASS: launcher stderr is visible in failure result; an incomplete bundle says so");
+
+  // ── 导入旧数据 ──
+  const source = join(temporary, "old-data");
+  mkdirSync(join(source, "runs", "task-1"), { recursive: true });
+  mkdirSync(join(source, "uploads"), { recursive: true });
+  mkdirSync(join(source, "deps", "cache"), { recursive: true });
+  mkdirSync(join(source, "tmp"), { recursive: true });
+  writeFileSync(join(source, "runs", "task-1", "transcript.jsonl"), "line\n");
+  writeFileSync(join(source, "uploads", "a.png"), "png");
+  writeFileSync(join(source, "ash.db.exits.jsonl"), "{}\n");
+  writeFileSync(join(source, "ash.db.ash-online.123.json"), "{}");
+  // 源库开着、WAL 模式、最后几笔还在 WAL 里没落进主文件 —— 跟正在跑的那份 server 一样。
+  const live = new DatabaseSync(join(source, "ash.db"));
+  live.exec("pragma journal_mode = wal; pragma wal_autocheckpoint = 0;");
+  live.exec("create table app_settings (key text primary key, value text); create table tasks (id text primary key)");
+  live.exec(`insert into app_settings values ('instanceMode', '"single"')`);
+  for (let i = 0; i < 50; i += 1) live.exec(`insert into tasks values ('t${i}')`);
+  writeFileSync(join(source, "ash.db.ash.lock"), JSON.stringify({ pid: process.pid, port: 4317, token: "x" }));
+  const before = readdirSync(source).sort();
+
+  rmSync(data, { recursive: true, force: true });
+  mkdirSync(join(data, "runs"), { recursive: true });
+  writeFileSync(join(data, "runs", "stale"), "from an import that never finished");
+  result = await launch(binary, ["import-inspect", source], env).done;
+  assert.equal(result.output.trim(), `OK live=${process.pid}`, "a source still opened by a server is reported");
+  result = await launch(binary, ["import", source], env).done;
+  assert.equal(result.status, 0, result.output);
+  assert.equal(readFileSync(join(data, "runs", "task-1", "transcript.jsonl"), "utf8"), "line\n");
+  assert.equal(readFileSync(join(data, "uploads", "a.png"), "utf8"), "png");
+  assert.equal(existsSync(join(data, "runs", "stale")), false, "leftovers of an unfinished import are replaced");
+  for (const skipped of ["deps", "tmp", "ash.db.ash.lock", "ash.db.ash-online.123.json", "ash.db-wal", "ash.db-shm", "ash.db.importing"]) {
+    assert.equal(existsSync(join(data, skipped)), false, `${skipped} is not carried over`);
+  }
+  const copied = new DatabaseSync(join(data, "ash.db"), { readOnly: true });
+  assert.equal(copied.prepare("select count(*) as n from tasks").get().n, 50, "writes still in the WAL come along");
+  copied.close();
+  assert.deepEqual(readdirSync(source).sort(), before, "the source directory is left as it was");
+  live.exec("insert into tasks values ('after')");
+  assert.equal(live.prepare("select count(*) as n from tasks").get().n, 51, "the source server keeps writing");
+  live.close();
+
+  result = await launch(binary, ["import", source], { ...env, ASH_DATA_DIR: source }).done;
+  assert.match(result.output, /app 自己的数据目录/);
+  result = await launch(binary, ["import", join(temporary, "runtime")], env).done;
+  assert.match(result.output, /没有 ash\.db/);
+  const multi = join(temporary, "multi-data");
+  mkdirSync(multi);
+  const multiDb = new DatabaseSync(join(multi, "ash.db"));
+  multiDb.exec(`create table app_settings (key text primary key, value text); insert into app_settings values ('instanceMode', '"multi"')`);
+  multiDb.close();
+  result = await launch(binary, ["import-inspect", multi], env).done;
+  assert.equal(result.status, 1);
+  assert.match(result.output, /多人模式/);
+  console.log("PASS: import takes a consistent snapshot of a live WAL database, copies the rest, leaves the source alone, refuses multi-user data");
 } finally {
   for (const child of children) child.kill("SIGKILL");
   for (const pid of fixturePids) { try { process.kill(pid, "SIGKILL"); } catch {} }
   await stopServers();
-  for (const lock of lockPaths) rmSync(lock, { force: true });
-  for (const log of logs) rmSync(log, { force: true });
   rmSync(temporary, { recursive: true, force: true });
 }

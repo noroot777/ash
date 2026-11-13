@@ -23,6 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 
+  @objc func checkHostMcp(_ sender: Any?) {
+    HostMcpSetup.check(window: windowController?.window)
+  }
+
   @objc func toggleLoginService(_ sender: NSMenuItem) {
     do {
       try LoginService.setEnabled(!LoginService.isEnabled)
@@ -37,6 +41,8 @@ extension AppDelegate: NSMenuItemValidation {
     if item.action == #selector(toggleLoginService(_:)) {
       item.state = LoginService.isEnabled ? .on : .off
     }
+    // 只有本机那份才有「替这台机器的 CLI 接 MCP」这回事。
+    if item.action == #selector(checkHostMcp(_:)) { return AshConfig.isLocal }
     return true
   }
 }
@@ -74,6 +80,7 @@ enum MainMenu {
     menu.addItem(item("关于 ash", #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
     menu.addItem(.separator())
     menu.addItem(item("登录时启动 ash 服务", #selector(AppDelegate.toggleLoginService(_:))))
+    menu.addItem(item("检查 ash MCP 登记…", #selector(AppDelegate.checkHostMcp(_:))))
     menu.addItem(.separator())
     menu.addItem(item("隐藏 ash", #selector(NSApplication.hide(_:)), "h"))
     menu.addItem(item("隐藏其他", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]))

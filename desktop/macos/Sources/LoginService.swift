@@ -3,8 +3,8 @@ import Foundation
 /// 「登录时启动 ash 服务」：一份 LaunchAgent，登录时跑一次 `Ash --start-server`
 /// （见 main.swift），起法与打开 app 时完全同一条路径，只是不开窗口。
 ///
-/// 只在登录那一刻跑一次，不设 KeepAlive：服务的重启归 `npm run restart`，launchd 若也守着它，
-/// restart 一杀它就被 launchd 拉回来，两边抢同一个端口。
+/// 只在登录那一刻跑一次，不设 KeepAlive：服务是 start-detached 放出去的独立进程，launchd
+/// 守不住它；真要守，用户手动停掉服务（比如要让开发实例临时占用端口）时它会被立刻拉回来。
 enum LoginService {
   static let label = "dev.ash.server"
 
@@ -12,6 +12,8 @@ enum LoginService {
     FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent("Library/LaunchAgents/\(label).plist")
   }
+
+  static var loginLog: URL { AshConfig.logURL.appendingPathComponent("login.log") }
 
   static var isEnabled: Bool {
     FileManager.default.fileExists(atPath: plistURL.path)
@@ -63,9 +65,11 @@ enum LoginService {
       "LimitLoadToSessionType": "Aqua",
       // server 由 start-detached 放进了自己的会话，这条只是再保一层：本 job 退出时 launchd 不清它的进程组。
       "AbandonProcessGroup": true,
-      "StandardOutPath": "/tmp/ash-mac-login.log",
-      "StandardErrorPath": "/tmp/ash-mac-login.log",
+      "StandardOutPath": loginLog.path,
+      "StandardErrorPath": loginLog.path,
     ]
+    // launchd 不替你建日志所在的目录。
+    try FileManager.default.createDirectory(at: AshConfig.logURL, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
     let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
     try data.write(to: plistURL, options: .atomic)
