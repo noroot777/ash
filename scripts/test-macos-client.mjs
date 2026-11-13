@@ -37,7 +37,7 @@ symlinkSync(process.execPath, join(runtime, "node/bin/node"));
 copyFileSync(join(root, "scripts/start-detached.mjs"), join(runtime, "scripts/start-detached.mjs"));
 
 const build = spawnSync("swiftc", ["-swift-version", "5",
-  ...["AshConfig", "AshHealth", "DataImport", "DownloadTransaction", "ServerStartLock", "ServerLauncher", "WindowChrome"]
+  ...["AshConfig", "AshHealth", "DataImport", "DatabaseBackup", "DownloadTransaction", "ServerControl", "ServerStartLock", "ServerLauncher", "WindowChrome"]
     .map((name) => join(root, `desktop/macos/Sources/${name}.swift`)),
   ...["main", "WindowChromeProbe"].map((name) => join(root, `desktop/macos/Tests/${name}.swift`)), "-o", binary], { encoding: "utf8" });
 assert.equal(build.status, 0, build.stderr);
@@ -323,7 +323,8 @@ try {
   assert.equal(readFileSync(join(data, "runs", "task-1", "transcript.jsonl"), "utf8"), "line\n");
   assert.equal(readFileSync(join(data, "uploads", "a.png"), "utf8"), "png");
   assert.equal(existsSync(join(data, "runs", "stale")), false, "leftovers of an unfinished import are replaced");
-  for (const skipped of ["deps", "tmp", "ash.db.ash.lock", "ash.db.ash-online.123.json", "ash.db-wal", "ash.db-shm", "ash.db.importing"]) {
+  for (const skipped of ["deps", "tmp", "ash.db.ash.lock", "ash.db.ash-online.123.json", "ash.db-wal", "ash.db-shm", "ash.db.importing",
+    "ash.db.importing-wal", "ash.db.importing-shm"]) {
     assert.equal(existsSync(join(data, skipped)), false, `${skipped} is not carried over`);
   }
   const copied = new DatabaseSync(join(data, "ash.db"), { readOnly: true });

@@ -25,6 +25,15 @@ final class ServerLauncher {
   /// `--start-server` 永远不替用户做这个决定 —— 否则登录项抢先建出空库，导入的入口就没了。
   var freshStartApproved = false
 
+  /// 正在换代码（UpdateGate 停了服务、在备份库、等 Sparkle 换 app）：这期间谁来要服务都不起，
+  /// 否则窗口的探活一发现服务不在，就会拿**旧版**代码再起一份，迁移前的备份和新版都白做。
+  /// 值是说给用户听的那句话。
+  var hold: String? {
+    get { requests.lock(); defer { requests.unlock() }; return held }
+    set { requests.lock(); held = newValue; requests.unlock() }
+  }
+  private var held: String?
+
   var logURL: URL { AshConfig.serverLogURL }
 
   private let queue = DispatchQueue(label: "dev.ash.server-launcher")
@@ -50,6 +59,7 @@ final class ServerLauncher {
 
   func ensureRunningSync(timeout: TimeInterval) -> Outcome {
     if let settled = Self.settle(AshHealth.probeSync()) { return settled }
+    if let hold { return .failed(hold) }
     guard AshConfig.isLocal else {
       return .failed("连不上 \(AshConfig.baseURL.absoluteString)。它不是本机地址，app 不会替它启动服务。")
     }
@@ -68,6 +78,7 @@ final class ServerLauncher {
     }
     defer { withExtendedLifetime(lock) {} }
     if let settled = Self.settle(AshHealth.probeSync()) { return settled }
+    if let hold { return .failed(hold) }
     let parts = [AshConfig.nodeURL, AshConfig.serverEntryURL, AshConfig.detachScriptURL]
     if let missing = parts.first(where: { !FileManager.default.fileExists(atPath: $0.path) }) {
       return .failed("app 里自带的 ash 不完整（缺 \(missing.path)）。重新装一次 Ash.app。")
@@ -147,7 +158,10 @@ final class ServerLauncher {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
       let probe = AshHealth.probeSync()
-      if case .ash(let instance) = probe, instance.isOurs, instance.pid == Int(pid) { return .ready }
+      if case .ash(let instance) = probe, instance.isOurs, instance.pid == Int(pid) {
+        ServerRecord.write(pid: Int(pid))
+        return .ready
+      }
       if case .ash(let instance) = probe, !instance.isOurs { return .occupied(Occupant.otherAsh(instance)) }
       if kill(pid, 0) != 0 && errno == ESRCH {
         return .failed("服务进程 \(pid) 起来就退出了：\n\(logTail())\n完整日志：\(logURL.path)")

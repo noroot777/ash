@@ -19,10 +19,7 @@ enum DataImport {
     let livePID: Int32?
   }
 
-  struct Failure: LocalizedError {
-    let errorDescription: String?
-    init(_ message: String) { errorDescription = message }
-  }
+  typealias Failure = SQLiteFile.Failure
 
   /// 看一眼这份目录能不能导：有库、不是 app 自己的数据根、不是多人模式。
   static func inspect(_ url: URL) throws -> Source {
@@ -54,7 +51,7 @@ enum DataImport {
     }
     let staged = dest.appendingPathComponent("ash.db.importing")
     try? fm.removeItem(at: staged)
-    try backup(from: source.url.appendingPathComponent("ash.db"), to: staged)
+    try SQLiteFile.snapshot(from: source.url.appendingPathComponent("ash.db"), to: staged)
     try fm.moveItem(at: staged, to: dest.appendingPathComponent("ash.db"))
   }
 
@@ -62,12 +59,13 @@ enum DataImport {
   /// 以及 app 自己放在数据根里的东西。
   static func skipped(_ name: String) -> Bool {
     let exact: Set<String> = ["ash.db", "ash.db-wal", "ash.db-shm", "ash.db-journal", "ash.db.importing",
-                              "deps", "tmp", "logs", "downloads", ".mac-launch.lock", ".DS_Store"]
+                              "deps", "tmp", "logs", "downloads", "backups",
+                              ".mac-launch.lock", ServerRecord.fileName, ".DS_Store"]
     return exact.contains(name) || name.hasSuffix(".ash.lock") || name.contains(".ash-online.")
   }
 
   private static func instanceMode(of db: URL) throws -> String {
-    let handle = try open(db, flags: SQLITE_OPEN_READONLY)
+    let handle = try SQLiteFile.open(db, flags: SQLITE_OPEN_READONLY)
     defer { sqlite3_close(handle) }
     var statement: OpaquePointer?
     guard sqlite3_prepare_v2(handle, "select value from app_settings where key = 'instanceMode'", -1, &statement, nil) == SQLITE_OK else {
@@ -78,47 +76,6 @@ enum DataImport {
     // 值是 JSON 编码的字符串（"\"single\""）。
     let raw = String(cString: text)
     return (try? JSONSerialization.jsonObject(with: Data(raw.utf8), options: .fragmentsAllowed) as? String) ?? raw
-  }
-
-  /// 在线备份：源库只读打开，一步拷完（一个读事务 = 一致快照），写库的进程不受影响。
-  private static func backup(from source: URL, to target: URL) throws {
-    let from = try open(source, flags: SQLITE_OPEN_READONLY)
-    defer { sqlite3_close(from) }
-    let to = try open(target, flags: SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE)
-    defer { sqlite3_close(to) }
-    guard let job = sqlite3_backup_init(to, "main", from, "main") else {
-      throw Failure("备份库失败：\(String(cString: sqlite3_errmsg(to)))")
-    }
-    var rc: Int32
-    var attempts = 0
-    repeat {
-      rc = sqlite3_backup_step(job, -1)
-      if rc == SQLITE_BUSY || rc == SQLITE_LOCKED {
-        attempts += 1
-        Thread.sleep(forTimeInterval: 0.1)
-      }
-    } while (rc == SQLITE_OK || rc == SQLITE_BUSY || rc == SQLITE_LOCKED) && attempts < 100
-    sqlite3_backup_finish(job)
-    guard rc == SQLITE_DONE else { throw Failure("备份库失败（\(rc)）：\(String(cString: sqlite3_errmsg(to)))") }
-    var statement: OpaquePointer?
-    defer { sqlite3_finalize(statement) }
-    guard sqlite3_prepare_v2(to, "pragma quick_check", -1, &statement, nil) == SQLITE_OK,
-          sqlite3_step(statement) == SQLITE_ROW, let text = sqlite3_column_text(statement, 0),
-          String(cString: text) == "ok" else {
-      throw Failure("导出来的库没通过完整性检查，没有导入。")
-    }
-  }
-
-  private static func open(_ url: URL, flags: Int32) throws -> OpaquePointer {
-    var handle: OpaquePointer?
-    let rc = sqlite3_open_v2(url.path, &handle, flags, nil)
-    guard rc == SQLITE_OK, let handle else {
-      let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "错误码 \(rc)"
-      sqlite3_close(handle)
-      throw Failure("打不开 \(url.path)：\(message)")
-    }
-    sqlite3_busy_timeout(handle, 5000)
-    return handle
   }
 
   /// server 的单实例锁是 JSON，`pid` 那一项还活着就是有人开着这份库。

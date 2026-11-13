@@ -20,6 +20,7 @@ extension BrowserWindowController {
   }
 
   private func connect() {
+    if let note = ServerLauncher.shared.hold { showInstalling(note); return }
     pendingStartingScreen?.cancel()
     let starting = DispatchWorkItem { [weak self] in
       self?.offlineView.show(title: "正在启动 ash 服务…", detail: AshConfig.baseURL.absoluteString, busy: true)
@@ -38,6 +39,7 @@ extension BrowserWindowController {
     case .ready:
       loadPage()
       HostMcpSetup.runOnceIfNeeded(window: window)
+      checkStaleServer()
     case .needsSetup:
       showFirstRun()
     case .occupied(let explanation):
@@ -49,8 +51,29 @@ extension BrowserWindowController {
       if FileManager.default.fileExists(atPath: log.path) {
         actions.insert(OfflineView.Action(title: "日志") { NSWorkspace.shared.open(log) }, at: 0)
       }
-      offlineView.show(title: "ash 服务没起来", detail: reason, actions: actions)
+      // 刚装完新版就起不来，多半是新版的迁移出了问题：指一下更新前的库备份在哪（怎么回到旧版见 README）。
+      var detail = reason
+      if let backup = DatabaseBackup.existing().first {
+        detail += "\n\n刚更新过的话：更新前的库备份在 \(backup.path)，配上那一版 app 能回到旧版。"
+        actions.insert(OfflineView.Action(title: "更新前的备份") {
+          NSWorkspace.shared.activateFileViewerSelecting([backup])
+        }, at: 0)
+      }
+      offlineView.show(title: "ash 服务没起来", detail: detail, actions: actions)
       startHealthPolling()
+    }
+  }
+
+  /// 端口上那份是旧版 app 起的（见 ServerRecord）：过 UpdateGate 换成新版。
+  private func checkStaleServer() {
+    guard UpdateGate.shared.phase == .idle else { return }
+    DispatchQueue.global(qos: .utility).async {
+      guard case .ash(let instance) = AshHealth.probeSync(), instance.isOurs,
+            let from = ServerRecord.staleVersion(servingPID: instance.pid) else { return }
+      DispatchQueue.main.async {
+        guard UpdateGate.shared.phase == .idle else { return }
+        UpdateGate.shared.request(.staleServer(from: from)) {}
+      }
     }
   }
 

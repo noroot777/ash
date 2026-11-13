@@ -33,10 +33,19 @@ enum AshConfig {
   static var serverEntryURL: URL { runtimeURL.appendingPathComponent("server/dist/index.js") }
   static var detachScriptURL: URL { runtimeURL.appendingPathComponent("scripts/start-detached.mjs") }
 
+  /// 正式那份是 dev.ash.mac。演练用的 app 换一个（build.sh 的 ASH_MAC_BUNDLE_ID），defaults、
+  /// 数据根、登录项就都跟日常那份分开；测试驱动不是 bundle，退回正式那个名字。
+  static var bundleID: String { Bundle.main.bundleIdentifier ?? "dev.ash.mac" }
+
+  /// 这份 app 的构建号（CFBundleVersion，单调递增，Sparkle 比的就是它）。
+  static var bundleVersion: String {
+    Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "dev"
+  }
+
   /// app 自己的那块地。
   static var supportURL: URL {
     FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appendingPathComponent("dev.ash.mac", isDirectory: true)
+      .appendingPathComponent(bundleID, isDirectory: true)
   }
 
   /// server 的数据根（库、runs、uploads……整份交给 `ASH_DATA_DIR`）。缺省就是 app 自己那块地；
@@ -55,6 +64,9 @@ enum AshConfig {
   /// 日志跟着数据根走（`<数据根>/logs`）：换临时数据根验证时不会混进日常那一份的日志里。
   static var logURL: URL { dataURL.appendingPathComponent("logs", isDirectory: true) }
   static var serverLogURL: URL { logURL.appendingPathComponent("server.log") }
+
+  /// 更新前的库备份（见 DatabaseBackup）。
+  static var backupURL: URL { dataURL.appendingPathComponent("backups", isDirectory: true) }
 
   /// 下载事务的登记放哪（见 DownloadTransaction）。
   static var downloadJournalURL: URL {

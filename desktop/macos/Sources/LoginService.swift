@@ -6,7 +6,10 @@ import Foundation
 /// 只在登录那一刻跑一次，不设 KeepAlive：服务是 start-detached 放出去的独立进程，launchd
 /// 守不住它；真要守，用户手动停掉服务（比如要让开发实例临时占用端口）时它会被立刻拉回来。
 enum LoginService {
-  static let label = "dev.ash.server"
+  /// 正式那份沿用最早的名字；演练用的 app（别的 bundle id）各登记各的，碰不到日常那条。
+  static var label: String {
+    AshConfig.bundleID == "dev.ash.mac" ? "dev.ash.server" : "\(AshConfig.bundleID).server"
+  }
 
   static var plistURL: URL {
     FileManager.default.homeDirectoryForCurrentUser

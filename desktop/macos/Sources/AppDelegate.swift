@@ -1,16 +1,34 @@
 import AppKit
+import Sparkle
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
   private var windowController: BrowserWindowController?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    AppUpdater.shared.start()
     NSApp.mainMenu = MainMenu.build()
     let controller = BrowserWindowController()
     windowController = controller
+    UpdateGate.shared.onHoldChanged = { [weak controller] note in
+      if let note { controller?.showInstalling(note) } else { controller?.loadHome() }
+    }
     controller.showWindow(nil)
     NSApp.activate(ignoringOtherApps: true)
     do { try LoginService.reconcileAtLaunch() } catch { NSAlert(error: error).runModal() }
     DispatchQueue.global(qos: .utility).async { DownloadTransaction.reclaimAbandoned() }
+  }
+
+  /// 退出时 Sparkle 会把下好的新版装上：先过 UpdateGate（会不会打断任务、停服务、备份库）。
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    guard let version = AppUpdater.shared.readyVersion, UpdateGate.shared.phase != .prepared else { return .terminateNow }
+    UpdateGate.shared.requestForQuit(version: version, whenDrained: { NSApp.terminate(nil) }) { allowed in
+      NSApp.reply(toApplicationShouldTerminate: allowed)
+    }
+    return .terminateLater
+  }
+
+  @objc func installPendingUpdate(_ sender: Any?) {
+    UpdateGate.shared.reconsider()
   }
 
   // 关窗不退出：ash 是常驻的工作台，像邮件 / Slack 那样点 Dock 图标就回来；⌘Q 才是真退出。
@@ -43,6 +61,13 @@ extension AppDelegate: NSMenuItemValidation {
     }
     // 只有本机那份才有「替这台机器的 CLI 接 MCP」这回事。
     if item.action == #selector(checkHostMcp(_:)) { return AshConfig.isLocal }
+    // 只在有一次更新排着（等任务跑完、或上次没装成）时出现。
+    if item.action == #selector(installPendingUpdate(_:)) {
+      let gate = UpdateGate.shared
+      item.isHidden = !gate.hasPending
+      item.title = gate.phase == .waiting ? "等任务跑完后安装更新…" : "安装更新…"
+      return gate.hasPending
+    }
     return true
   }
 }
@@ -78,6 +103,14 @@ enum MainMenu {
   private static func appMenu() -> NSMenu {
     let menu = NSMenu(title: "ash")
     menu.addItem(item("关于 ash", #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
+    if let target = AppUpdater.shared.menuTarget {
+      let check = item("检查更新…", #selector(SPUStandardUpdaterController.checkForUpdates(_:)))
+      check.target = target
+      menu.addItem(check)
+      let pending = item("安装更新…", #selector(AppDelegate.installPendingUpdate(_:)))
+      pending.isHidden = true
+      menu.addItem(pending)
+    }
     menu.addItem(.separator())
     menu.addItem(item("登录时启动 ash 服务", #selector(AppDelegate.toggleLoginService(_:))))
     menu.addItem(item("检查 ash MCP 登记…", #selector(AppDelegate.checkHostMcp(_:))))

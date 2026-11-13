@@ -98,6 +98,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
   }
 
+  /// 正在换代码（UpdateGate 停了服务）：盖上一屏、不探活，闸放开时 UpdateGate 会叫 loadHome。
+  func showInstalling(_ note: String) {
+    stopHealthPolling()
+    pendingStartingScreen?.cancel()
+    offlineView.show(title: note, detail: "在跑的任务不受影响，装好后自动接上。", busy: true)
+  }
+
   /// 后台每 2 秒探一次 /api/health，自己那份通了就载回去 —— 服务也可能是别处（登录项、
   /// 另一个窗口的重试）起好的，占着端口的那份也可能被用户停掉了。
   ///

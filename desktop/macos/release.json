@@ -1,0 +1,7 @@
+{
+  "//": "发版配置，见 desktop/macos/README.md「发版」。publicKey 是 EdDSA 公钥（公开的，可以入库）；私钥只在登录钥匙串里，钥匙串条目名是 keychainAccount。publicKey 一旦随第一版发出去就永远不能换：已装的 app 只认它。",
+  "repo": "noroot777/ash-mac-releases",
+  "branch": "main",
+  "keychainAccount": "dev.ash.mac",
+  "publicKey": ""
+}
