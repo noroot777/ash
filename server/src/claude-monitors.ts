@@ -44,6 +44,7 @@ import {
 import { reapClaudeMonitors } from "./claude-monitor-reaped.js";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
+import { MonitorWriteQueue } from "./claude-monitor-write-queue.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { id, now } from "./util.js";
@@ -52,8 +53,9 @@ import { id, now } from "./util.js";
  * 一条 claude 会话上的内置 Monitor 账本。**每个 stream 一个实例**（`tool_use_id` 只在
  * 一条会话内唯一）。
  *
- * 写库一律 fire-and-forget 并吞掉异常：这是一份旁路投影，记账失败绝不能把 agent 的事件
- * 流带崩——那会让一个本来好好的回合因为「界面上少显示一张卡」而整个失败。
+ * 写库一律 fire-and-forget、异常不回抛：这是一份旁路投影，记账失败绝不能把 agent 的事件
+ * 流带崩——那会让一个本来好好的回合因为「界面上少显示一张卡」而整个失败。失败的那一笔
+ * 也不丢，留在写库队列里重试到写成为止（claude-monitor-write-queue.ts）。
  */
 export class ClaudeMonitorTrace {
   /** tool_use_id → 那次 Monitor 调用的入参。等它的 task_started 来认领。 */
@@ -121,8 +123,6 @@ export class ClaudeMonitorTrace {
    * 「起点不明」。
    */
   private lastEventAt: string | null = null;
-  /** 串行化写库：同一个后台任务的 started/notification 可能紧挨着到。 */
-  private chain: Promise<unknown> = Promise.resolve();
   private cliSessionId = "";
   /**
    * 这条流的来源身份（起这些监听的是哪一代进程、哪个 run 文件）。
@@ -182,46 +182,26 @@ export class ClaudeMonitorTrace {
   }
 
   /**
-   * 串到写库链上，**落库成功才算交差**：失败的那一笔留在队头按阶梯退避重试，后面的事件
-   * 排在它后头等着。
-   *
-   * 为什么非重试不可：这些 job 是「已经从事件流里消费掉的事实」——`tool_use`/`task_started`
-   * 一旦处理过就从 `pending` 里删了，来源侧不会再发一遍，库里也没有任何别的地方能把它补回来。
-   * 只试两次就放手的话，一次几百毫秒的 SQLITE_BUSY 就让面板永久少一张卡，回合收尾那条
-   * 「为什么没唤醒」的说明也跟着缺（它数的正是这些行，见 claude-monitor-reaped.ts）。
+   * 写库责任交给 `MonitorWriteQueue`：**写成或被明确撤销才销账**，失败的那一笔留在队头退避
+   * 重试，后面的排在它后头（为什么不能试几次就放手，见那个文件头）。
    *
    * 每个 job 都可以安全重跑：`open` 先按来源查重再插，`close` 是带旧状态的条件更新，回执
-   * 只覆写同几列。`finishAll` 排在同一条链上，所以收尾天然等前面的责任收口。
-   *
-   * **积压有上界**：阶梯总共约 5 秒，够盖住争用这类暂态。一笔把阶梯试满了就说明库是真的
-   * 坏了，这时进入熔断——后面的各试一次就放手，免得每条事件再排 5 秒、把流结束那一刻的
-   * 收尾拖成分钟级；有一笔写成了就恢复阶梯。放手的那几笔只留诊断：这是一份旁路投影，
-   * 库整个不可用的时候不该拖住 agent 的事件流。
+   * 只覆写同几列。`finishAll` 排在同一条队列上，所以收尾天然等前面的责任收口。
    */
-  private static readonly RETRY_MS = [50, 250, 1_000, 4_000];
-  /** 熔断中：上一笔已经把阶梯试满还没写成。 */
-  private degraded = false;
+  private readonly writes = new MonitorWriteQueue({
+    revoked: () => !!this.taskId && isTaskRevoked(this.taskId),
+    warn: (what, detail) => this.warn(what, detail),
+  });
+  /**
+   * 这条会话归哪个任务。第一次查到会话就记下（一条 CLI 会话的归属不会变），给队列判「这一笔
+   * 还要不要」用：库坏着的时候查不了会话，但任务被删这件事不该因此被一直重试下去。
+   */
+  private taskId: string | null = null;
+  /** 流结束那一刻最多等队列多久（见 `finishAll`）。回归脚本可以改小。 */
+  static finishWaitMs = 5_000;
 
-  private queue(job: () => Promise<void>): void {
-    const run = async (): Promise<void> => {
-      const ladder = this.degraded ? [] : ClaudeMonitorTrace.RETRY_MS;
-      for (let attempt = 0; ; attempt += 1) {
-        try {
-          await job();
-          this.degraded = false;
-          return;
-        } catch (e) {
-          if (attempt >= ladder.length) {
-            this.degraded = true;
-            this.warn("记账退避重试后仍失败，这一条没有记上", e);
-            return;
-          }
-          if (attempt === 0) this.warn("记账失败，退避重试", e);
-          await new Promise((r) => setTimeout(r, ladder[attempt]));
-        }
-      }
-    };
-    this.chain = this.chain.then(run, run);
+  private queue(job: () => Promise<void>, opts?: { always?: boolean }): void {
+    this.writes.push(job, opts);
   }
 
   /**
@@ -252,7 +232,10 @@ export class ClaudeMonitorTrace {
     this.originReads += 1;
     const done = () => { this.originFreeze = null; };
     this.originFreeze = locateSession(this.cliSessionId).then((home) => {
-      if (home) this.origin ??= runOriginOfSession(home);
+      if (home) {
+        this.origin ??= runOriginOfSession(home);
+        this.taskId ??= home.taskId;
+      }
       done();
     }, done);
   }
@@ -456,6 +439,7 @@ export class ClaudeMonitorTrace {
     // 再插一个 await，否则又把「查到会话之后、写之前问」那个窗口拉开了。
     const origin = await this.runOrigin();
     const found = await locateSession(this.cliSessionId);
+    if (found) this.taskId = found.taskId;
     // 这个任务正在删/已经删了：落库前先问一句资格。查到会话之后、写之前问，窗口缩到一条
     // 语句；剩下那一条的窗口由下面的同批落库资格兜住。
     if (found && isTaskRevoked(found.taskId)) return;
@@ -539,6 +523,7 @@ export class ClaudeMonitorTrace {
   private async applyReceipt(nativeId: string, lifetime: MonitorLifetime, ms: number | null): Promise<void> {
     const origin = await this.runOrigin();
     const found = await locateSession(this.cliSessionId);
+    if (found) this.taskId = found.taskId;
     if (!found) return;
     if (isTaskRevoked(found.taskId)) return;   // 落库资格，同 `open`
     // 认行的来源证据同样只认绑定下来的那一代（`sessions` 当下那一列已经是下一代人的）。
@@ -573,6 +558,7 @@ export class ClaudeMonitorTrace {
   private async close(nativeId: string, status: string, summary: string): Promise<void> {
     const origin = await this.runOrigin();
     const found = await locateSession(this.cliSessionId);
+    if (found) this.taskId = found.taskId;
     if (!found) return;
     if (isTaskRevoked(found.taskId)) return;   // 落库资格，同 `open`
     const rowId = await this.locateRow(found.taskId, nativeId, origin.runPath);
@@ -611,8 +597,12 @@ export class ClaudeMonitorTrace {
    *
    * **返回值是「这一摊记完了」**：调用方（`executors/claude-stream.ts` 的 finally）等它一下，
    * 流结束那一刻投影就已经落定；不等的话收尾还排在队列里，而外面那一轮的会话更新随时可能
-   * 先落地（同一类问题的另一个出口，新一轮第 1 轮审查点名）。底层驱动是同步的，队列自身
-   * 又吞掉全部异常（见 `queue`），所以这个 await 不会把事件流拖住，也不会抛。
+   * 先落地（同一类问题的另一个出口，新一轮第 1 轮审查点名）。
+   *
+   * **但最多等 `finishWaitMs`**：库坏着的时候队头那一笔会一直重试（见 claude-monitor-write-queue.ts），
+   * 不能把 agent 的收尾无限期拖住。到点先放行，收尾那一笔**照旧留在队列里**，库一恢复就排在
+   * 前面那些事实后面补上 —— 数字里一个都不会少。晚到的收尾按**流结束那一刻**圈范围
+   * （`until`），不会把下一代刚起的监听一起收掉。返回值不会 reject。
    */
   finishAll(): Promise<void> {
     this.pending.clear();
@@ -622,6 +612,7 @@ export class ClaudeMonitorTrace {
     this.unsubscribe?.();
     this.unsubscribe = null;
     const cliSessionId = this.cliSessionId;
+    const until = now();
     // **排队之后再查**：还排在队列里的 open/close 都没跑完，提前取会拿到一份残缺名单。
     this.queue(async () => {
       if (dbClient.closed) return;
@@ -634,9 +625,15 @@ export class ClaudeMonitorTrace {
       // 收尾本体连同「这一轮的监听全没了」那条时间线都在 `claude-monitor-reaped.ts`：
       // 只收自己这一代、以及为什么非记一笔不可，都写在那个文件头上。
       if (!cliSessionId) return;
-      await reapClaudeMonitors(cliSessionId, await this.runOrigin(), this.openedAt);
+      await reapClaudeMonitors(cliSessionId, await this.runOrigin(), this.openedAt, until);
+    }, { always: true });
+    return this.writes.drain(ClaudeMonitorTrace.finishWaitMs).then((done) => {
+      if (!done) this.warn(`收尾等了 ${ClaudeMonitorTrace.finishWaitMs}ms 还没写完，先放行`, `还有 ${this.writes.pending} 笔排着，库恢复后依次补上`);
     });
-    // 队列永不 reject（`queue` 里每一笔自己兜住全部异常），所以这里原样交出去就行。
-    return this.chain.then(() => undefined);
+  }
+
+  /** 队里此刻排着的全部写完的那一刻（回归脚本用）。 */
+  settled(): Promise<void> {
+    return this.writes.settled();
   }
 }

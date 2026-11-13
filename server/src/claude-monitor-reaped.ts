@@ -30,7 +30,7 @@
 // 所以每轮至多记一条合并说明：这一轮起了几个、它们现在全没了、以及唤醒该走哪条路。时间线
 // 这条是 `aside`（agent 看不见，见 task-timeline.ts 文件头），所以它只是说给用户听的记账，
 // 不构成对下一个 agent 的指令。
-import { and, desc, eq, gte, inArray, isNull, or } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
 import { CLAUDE_MONITOR_ENDED_REASON } from "@ash/shared/monitor-claude";
 import { bus } from "./bus.js";
 import type { MonitorRunOrigin } from "./claude-monitor-origin.js";
@@ -81,9 +81,18 @@ const noticeScope = (origin: MonitorRunOrigin, openedAt: string) =>
  */
 export async function reapClaudeMonitors(
   cliSessionId: string, origin: MonitorRunOrigin, openedAt: string,
+  /**
+   * 流结束的那一刻。收尾通常就在这一刻跑，这道上界什么也不排除；库坏着、收尾排在写库队列
+   * 里晚了几分钟才跑时，同一条会话的下一代可能已经起了新的监听 —— 没有 run 凭据的会话
+   * （上面两个口径都退回「整条会话」/「流开始之后」）靠它才不会把那些一起收掉、一起数进去。
+   */
+  until?: string,
 ): Promise<void> {
   if (dbClient.closed || !cliSessionId) return;
-  const ours = and(eq(monitors.kind, "claude"), eq(monitors.cliSessionId, cliSessionId));
+  const ours = and(
+    eq(monitors.kind, "claude"), eq(monitors.cliSessionId, cliSessionId),
+    until ? lte(monitors.startedAt, until) : undefined,
+  );
 
   const live = await db
     .select({ id: monitors.id, taskId: monitors.taskId })

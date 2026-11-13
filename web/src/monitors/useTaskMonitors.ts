@@ -91,6 +91,14 @@ export function useTaskMonitors(taskId: string) {
    */
   const [loadedTaskId, setLoadedTaskId] = useState<string | null>(null);
   /**
+   * 这个任务的列表**真读成功过**（这一次进来之后）。只有读成功那一句会写它，只有换任务会清它。
+   *
+   * 不能从报错反推：报错只有一格，动作（起/停）一开始就清掉它、失败了再写成自己那句，于是
+   * 「首次读失败 → 起一个被拒」之后，那条读失败的痕迹已经被盖掉了，空态那句「还没有哨兵」
+   * 又冒出来（第 2 轮审查实测）。「读到过没有」是一件独立的事实，就单独存。
+   */
+  const [listedTaskId, setListedTaskId] = useState<string | null>(null);
+  /**
    * 「现在是哪个任务、这是它的第几次读取」。
    *
    * 宿主组件跨任务复用（切任务不重挂载），而 `setMonitors([])` 只能清掉当下那一份值、
@@ -127,6 +135,7 @@ export function useTaskMonitors(taskId: string) {
       // 只收走自己那条。用户动作的回执不归它管——抹掉就等于那句话只闪了一下。
       setFailure((current) => (current?.kind === "list" ? null : current));
       setLoadedTaskId(taskId);
+      setListedTaskId(taskId);
       return true;
     } catch (reason) {
       if (!mine()) return true;
@@ -155,6 +164,7 @@ export function useTaskMonitors(taskId: string) {
     stamp.current = { gen: stamp.current.gen + 1, seq: 0, taskId };
     setMonitors([]);
     setFailure(null);
+    setListedTaskId(null);
     setStoppingIds(new Set());
     void catchUp.run();
   }, [catchUp, taskId]);
@@ -236,10 +246,10 @@ export function useTaskMonitors(taskId: string) {
     needsWakeTarget: failure?.taskId === taskId && failure.kind === "action" && !!failure.needsWake,
     ready,
     /**
-     * 这一份列表**真读到了**（`ready` 只说这一轮结束了，读失败也算结束）。「这个任务上还没有
-     * 哨兵」是一句强断言：还在读、或者读失败了的时候，手上的空数组不是它的依据。
+     * 这一份列表**真读到过**（`ready` 只说这一轮结束了，读失败也算结束）。「这个任务上还没有
+     * 哨兵」是一句强断言：还在读、或者从没读成功过的时候，手上的空数组不是它的依据。
      */
-    listed: ready && !(failure?.taskId === taskId && failure.kind === "list"),
+    listed: ready && listedTaskId === taskId,
     start,
     stop,
     reload,

@@ -1,14 +1,21 @@
 // 内置 Monitor 实时投影的**写库责任**：事件一旦从流里消费掉，来源侧不会再发一遍，库里也没有
-// 别的地方能补回来（翻会话记录的历史扫描已经删了）。所以这份回归钉两件事：
+// 别的地方能补回来（翻会话记录的历史扫描已经删了）。所以一笔事实只有写成了或被明确撤销才
+// 销账（claude-monitor-write-queue.ts）。这份回归钉六件事：
 //
-// ① 一次几百毫秒的读库故障之后，卡片照样落库，回合收尾那条「为什么没唤醒」的说明照样留下
-//    （它数的正是这些行）；
-// ② 库整个不可用时积压有上界：试满一轮阶梯就熔断，后面的事件不再各排一整轮，流结束那一刻的
-//    收尾不会被拖成分钟级；库恢复后同一条流照常落库。
+// ① 一次几百毫秒的读库故障之后，卡片照样落库，回合收尾那条说明照样留下（它数的正是这些行）；
+// ② 库坏的时间远超退避阶梯：故障期间起的那几个**一个不丢**，库恢复后依次补上，收尾数字把它们
+//    全数进去（第 2 轮审查实测：上一版 5 个只落 1 个，说明也写 1 个）；
+// ③ 流结束时库还坏着：收尾最多等 `finishWaitMs` 就放行，收尾那一笔留在队里，恢复后照样补上，
+//    且按流结束那一刻圈范围，不会把下一代刚起的监听一起收掉；
+// ④ 任务被删了（明确撤销）：队头那一笔立即销账，不会对着一个已删的任务一直重试；
+// ⑤ 积压有上界：超出的新事件不进队，收尾那一笔不受限制，数字跟落库的卡片对得上；
+// ⑥ 注定写不成的（约束冲突、代码错）不占着队头，后面的照常写。
 import { db, makeTask, monitors, now, sessions, teardown } from "./monitors-fixture.js";
 import { eq } from "drizzle-orm";
 
 const { ClaudeMonitorTrace } = await import("../src/claude-monitors.js");
+const { MonitorWriteQueue, permanentWriteFailure } = await import("../src/claude-monitor-write-queue.js");
+const { beginTaskRevocation, releaseTaskRevocation } = await import("../src/claude-monitor-revoked.js");
 const { bus } = await import("../src/bus.js");
 
 let failures = 0;
@@ -19,9 +26,10 @@ const check = (ok: boolean, label: string, detail = "") => {
 };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const ORIGIN = { pid: null, pidStartedAt: null, runPath: "" };
+type Trace = InstanceType<typeof ClaudeMonitorTrace>;
 
 /** 像 claude-stream.ts 那样喂一次 Monitor 调用 + 它的 task_started。 */
-function startMonitor(trace: InstanceType<typeof ClaudeMonitorTrace>, cli: string, n: string): void {
+function startMonitor(trace: Trace, cli: string, n: string): void {
   const input = { command: `tail -F /tmp/${n}.log`, description: `监听 ${n}` };
   trace.event({ type: "assistant", timestamp: now(), message: { content: [{ type: "tool_use", name: "Monitor", input, id: `tu-${n}` }] } });
   trace.toolUse("Monitor", input, `tu-${n}`);
@@ -35,65 +43,162 @@ function breakReads(): () => void {
   return () => { (db as any).select = original; };
 }
 
-async function session(name: string): Promise<{ taskId: string; cli: string }> {
+/** 一个任务 + 它的 claude 会话 + 一条已经认领完上一轮的流 + 盯着它时间线的耳朵。 */
+async function session(name: string) {
   const taskId = await makeTask();
   const cli = `cli-${name}-${taskId}`;
   await db.insert(sessions).values({ id: `s-${name}-${taskId}`, taskId, role: "single", agentType: "claude",
     executor: "claude@test", cliSessionId: cli, cwd: "/tmp/wt", startedAt: now() });
-  return { taskId, cli };
+  const notes: string[] = [];
+  const stop = bus.subscribe((ev: any) => {
+    if (ev.type === "agent.event" && ev.taskId === taskId) notes.push(String(ev.event?.text ?? ""));
+  });
+  const trace = new ClaudeMonitorTrace(cli, ORIGIN);
+  await trace.settled();                     // 认领上一轮那一步先走完
+  const notice = () => notes.find((t) => t.includes("内置 Monitor"));
+  return { taskId, cli, trace, notice, stop };
 }
 
-const rowsOf = (cli: string) => db.select().from(monitors).where(eq(monitors.cliSessionId, cli));
+/** 断言自己读库不走注入（注入只拦被测代码那一侧）。 */
+const select = db.select.bind(db);
+const rowsOf = (cli: string) => select().from(monitors).where(eq(monitors.cliSessionId, cli));
+const pendingOf = (trace: Trace) => (trace as any).writes.pending as number;
+const ids = (rows: { nativeId: string | null }[]) => rows.map((r) => r.nativeId).sort().join(",") || "(空)";
 
 async function main(): Promise<void> {
   // ── ① 暂态故障：几百毫秒之后库好了，那笔事实不能丢 ───────────────────────────
   {
-    const { taskId, cli } = await session("transient");
-    const notes: string[] = [];
-    const stop = bus.subscribe((ev: any) => {
-      if (ev.type === "agent.event" && ev.taskId === taskId) notes.push(String(ev.event?.text ?? ""));
-    });
-    const trace = new ClaudeMonitorTrace(cli, ORIGIN);
-    await sleep(60);                         // 认领上一轮那一步先走完
+    const s = await session("transient");
     const restore = breakReads();
-    startMonitor(trace, cli, "flaky");
+    startMonitor(s.trace, s.cli, "flaky");
     await sleep(300);
     restore();
-    await trace.finishAll();
-    stop();
-    const rows = await rowsOf(cli);
+    await s.trace.finishAll();
+    s.stop();
+    const rows = await rowsOf(s.cli);
     check(rows.length === 1, "①短暂读库失败之后，那张卡照样落库", `${rows.length} 张`);
     check(rows[0]?.status === "lost", "①收尾照常把它收成「进程已不在」", String(rows[0]?.status));
-    const notice = notes.find((t) => t.includes("内置 Monitor"));
-    check(!!notice?.includes("1 个"), "①回合收尾那条说明照样留下，数字跟卡片对得上", String(notice));
+    check(!!s.notice()?.includes("1 个"), "①回合收尾那条说明照样留下，数字跟卡片对得上", String(s.notice()));
   }
 
-  // ── ② 库整个不可用：积压有上界，恢复后照常落库 ─────────────────────────────
+  // 后面几组把阶梯压到百毫秒级：要证的是「库坏得比整条阶梯久」，不是「等满真实的 5 秒」。
+  const ladder = MonitorWriteQueue.retryMs;
+  MonitorWriteQueue.retryMs = [20, 50, 100];
+  const ladderTotal = MonitorWriteQueue.retryMs.reduce((a, b) => a + b, 0);
+
+  // ── ② 库坏得远比阶梯久：故障期间的事实恢复后全部补上 ─────────────────────────
   {
-    const { cli } = await session("outage");
-    const trace = new ClaudeMonitorTrace(cli, ORIGIN);
-    await sleep(60);
+    const s = await session("outage");
     const restore = breakReads();
-    const began = Date.now();
-    for (const n of ["o1", "o2", "o3", "o4"]) startMonitor(trace, cli, n);
-    // 第一笔试满一轮阶梯（约 5 秒），后面三笔熔断后各试一次 —— 不是 4 × 5 秒。
-    await (trace as any).chain;
-    const waited = Date.now() - began;
+    for (const n of ["o1", "o2", "o3", "o4"]) startMonitor(s.trace, s.cli, n);
+    await sleep(ladderTotal * 10);
+    check((await rowsOf(s.cli)).length === 0, "②库不可用期间确实一张都没写成（注入生效）");
+    check(pendingOf(s.trace) === 4, "②阶梯早就试满了，那四笔仍然一笔不少地排着", `还排着 ${pendingOf(s.trace)} 笔`);
     restore();
-    check(waited < 8_000, "②库不可用时积压有上界：熔断之后不再每笔排一整轮", `${waited}ms`);
-    check((await rowsOf(cli)).length === 0, "②库不可用期间确实一张都没写成（注入生效）");
-    startMonitor(trace, cli, "after");
-    await trace.finishAll();
-    const rows = await rowsOf(cli);
-    check(rows.some((r) => r.nativeId === "b-after"), "②库恢复后同一条流照常落库（熔断会自己解除）",
-      rows.map((r) => r.nativeId).join(",") || "(空)");
+    startMonitor(s.trace, s.cli, "after");
+    await s.trace.finishAll();
+    s.stop();
+    const rows = await rowsOf(s.cli);
+    check(ids(rows) === "b-after,b-o1,b-o2,b-o3,b-o4", "②库恢复后故障期间起的那四个全部补上", ids(rows));
+    check(rows.every((r) => r.status === "lost"), "②补上的那些照样被收尾收成「进程已不在」",
+      rows.map((r) => r.status).join(","));
+    check(!!s.notice()?.includes("5 个"), "②收尾说明把故障期间的也数进去（5 个，不是 1 个）", String(s.notice()));
   }
 
+  // ── ③ 流结束时库还坏着：收尾有界放行，恢复后补上，不误收下一代 ────────────────
+  {
+    const wait = ClaudeMonitorTrace.finishWaitMs;
+    ClaudeMonitorTrace.finishWaitMs = 300;
+    const s = await session("finish-down");
+    const restore = breakReads();
+    startMonitor(s.trace, s.cli, "x");
+    const began = Date.now();
+    await s.trace.finishAll();
+    const waited = Date.now() - began;
+    check(waited < 1_500, "③库坏着时收尾最多等 finishWaitMs 就放行，不把 agent 的收尾拖住", `${waited}ms`);
+    check(pendingOf(s.trace) === 2, "③放行之后那一笔和收尾仍排在队里", `还排着 ${pendingOf(s.trace)} 笔`);
+    // 收尾放行之后、库恢复之前，同一条会话的下一代起了一个新监听（直接插行：insert 不走注入）。
+    await sleep(5);
+    await db.insert(monitors).values({
+      id: `next-${s.taskId}`, taskId: s.taskId, command: "tail -F next.log", description: "下一代的", cwd: "/tmp/wt",
+      status: "running", pid: null, pidStartedAt: null, logPath: "", offset: 0, events: 0, exitCode: null,
+      startedAt: now(), expiresAt: now(), endedAt: null, endedReason: null, ownerUserId: null,
+      kind: "claude", nativeId: "b-next", cliSessionId: s.cli, sourceLifetime: "unknown",
+    });
+    restore();
+    await s.trace.settled();
+    s.stop();
+    ClaudeMonitorTrace.finishWaitMs = wait;
+    const rows = new Map((await rowsOf(s.cli)).map((r) => [r.nativeId, r]));
+    check(rows.get("b-x")?.status === "lost", "③库恢复后那一笔补上、晚到的收尾照样把它收掉", String(rows.get("b-x")?.status));
+    check(rows.get("b-next")?.status === "running", "③晚到的收尾按流结束那一刻圈范围，下一代的不被收掉",
+      String(rows.get("b-next")?.status));
+    check(!!s.notice()?.includes("1 个"), "③晚到的收尾说明只数这一代（1 个）", String(s.notice()));
+  }
+
+  // ── ④ 任务被删（明确撤销）：不再对着它一直重试 ────────────────────────────────
+  {
+    const s = await session("revoked");
+    startMonitor(s.trace, s.cli, "r");
+    await s.trace.settled();                 // 先正常落一张卡：这条流已经知道自己归哪个任务
+    const restore = breakReads();
+    s.trace.event({ type: "system", subtype: "task_notification", task_id: "b-r", status: "completed", summary: "", session_id: s.cli });
+    await sleep(ladderTotal);
+    check(pendingOf(s.trace) === 1, "④库坏着时那条终态在排队重试", `还排着 ${pendingOf(s.trace)} 笔`);
+    beginTaskRevocation(s.taskId);
+    await Promise.race([s.trace.settled(), sleep(1_000)]);
+    check(pendingOf(s.trace) === 0, "④任务进入删除，队头那一笔立即销账（库仍然坏着）", `还排着 ${pendingOf(s.trace)} 笔`);
+    releaseTaskRevocation(s.taskId);
+    restore();
+    await s.trace.finishAll();
+    s.stop();
+  }
+
+  // ── ⑤ 积压有上界：超出的不进队，收尾不受限，数字跟卡片对得上 ───────────────────
+  {
+    const cap = MonitorWriteQueue.maxBacklog;
+    MonitorWriteQueue.maxBacklog = 3;
+    const s = await session("overflow");
+    const restore = breakReads();
+    for (const n of ["m1", "m2", "m3", "m4", "m5"]) startMonitor(s.trace, s.cli, n);
+    check(pendingOf(s.trace) === 3, "⑤积压到上界就不再进队", `排着 ${pendingOf(s.trace)} 笔`);
+    const finished = s.trace.finishAll();
+    check(pendingOf(s.trace) === 4, "⑤收尾那一笔不受上界限制", `排着 ${pendingOf(s.trace)} 笔`);
+    restore();
+    await finished;
+    await s.trace.settled();
+    s.stop();
+    MonitorWriteQueue.maxBacklog = cap;
+    const rows = await rowsOf(s.cli);
+    check(ids(rows) === "b-m1,b-m2,b-m3", "⑤进了队的三笔全部补上", ids(rows));
+    check(!!s.notice()?.includes("3 个"), "⑤收尾说明跟落库的卡片对得上（3 个）", String(s.notice()));
+  }
+
+  // ── ⑥ 注定写不成的不占着队头 ──────────────────────────────────────────────────
+  {
+    const unique = Object.assign(new Error("UNIQUE constraint failed"), { errcode: 2067 }); // SQLITE_CONSTRAINT_UNIQUE
+    check(permanentWriteFailure(unique), "⑥约束冲突（扩展码）认得出是写不成的");
+    check(permanentWriteFailure(new TypeError("x is undefined")), "⑥代码自己的错认得出是写不成的");
+    check(!permanentWriteFailure(Object.assign(new Error("busy"), { errcode: 5 })), "⑥SQLITE_BUSY 是等得好的");
+    check(!permanentWriteFailure(new Error("不知道是什么")), "⑥认不出来的一律当作等得好的（宁可多等，不可错丢）");
+    const warns: string[] = [];
+    const q = new MonitorWriteQueue({ revoked: () => false, warn: (what) => warns.push(what) });
+    let attempts = 0;
+    let after = false;
+    q.push(async () => { attempts += 1; throw unique; });
+    q.push(async () => { after = true; });
+    await Promise.race([q.settled(), sleep(1_000)]);
+    check(attempts === 1 && after, "⑥写不成的那一笔试一次就丢、留诊断，后面那笔照常写", `attempts=${attempts} after=${after}`);
+    check(warns.some((w) => w.includes("不会成功")), "⑥丢掉时留了诊断", warns.join(" | "));
+  }
+
+  MonitorWriteQueue.retryMs = ladder;
   if (failures) {
     console.error(`\n${failures} 条断言未通过`);
     process.exitCode = 1;
   } else {
-    console.log("✓ 内置 Monitor 实时投影的写库责任：暂态故障后照样落库且收尾留痕 / 库不可用时积压有上界、恢复后照常落库 均受回归保护");
+    console.log("✓ 内置 Monitor 实时投影的写库责任：暂态故障后照样落库 / 长故障期间的事实恢复后全部补上且收尾计数完整 / "
+      + "流结束时库还坏着收尾有界放行、恢复后补上且不误收下一代 / 任务删除即销账 / 积压有上界 / 写不成的不堵队头 均受回归保护");
   }
 }
 
