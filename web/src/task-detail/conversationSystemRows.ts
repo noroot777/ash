@@ -5,6 +5,7 @@ import { verifyMarkOf } from "./conversationNotes.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import { isPreviewLifecycleNotice, noticeView, turnFailureView, type NoticeContext, type NoticeView } from "./timelineNoticeCopy.ts";
 import type { CrashedTurn } from "./turnFailure.ts";
+import { absorbs, noVerdictCauseView, noVerdictPartId, type LaneNoVerdict } from "./reviewNoVerdictCause.ts";
 import { composeFootnote, laneVerdictEvent, laneVerdictView, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 
 type EventItem = Extract<ConversationItem, { kind: "event" }>;
@@ -109,6 +110,8 @@ type Accessors<Row> = {
   laneOf?: (row: Row) => ConversationReviewLane | null;
   /** 这一行是你说的话：它后面的尾注都成了过去的事。 */
   yoursOf?: (row: Row) => boolean;
+  /** 这一轮审查没给出结论的原因（见 reviewNoVerdictCause）：贴在那颗结论气泡下面的第一句。 */
+  causeOf?: (lane: ConversationReviewLane) => LaneNoVerdict | undefined;
   /** 这一回合异常结束了：尾注里补「这一轮异常结束」（原文是退出码），记录里同样有一条。 */
   failureOf?: (turnId: string) => CrashedTurn | undefined;
   /** 认老记录时用得上的、这个任务自己的东西（见 timelineNoticeCopy 的 NoticeContext）。 */
@@ -143,8 +146,10 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
   let orphan: { row: ConversationFootnoteRow; parts: FootnotePart[] } | null = null;
   const orphans: Array<{ row: ConversationFootnoteRow; parts: FootnotePart[] }> = [];
   // 这一回合（或这一段还没有回合时）最近那一行审查结论：它之后要你知道的话贴在它下面。
-  let verdict: { row: ConversationVerdictRow; parts: FootnotePart[] } | null = null;
-  const verdicts: Array<{ row: ConversationVerdictRow; parts: FootnotePart[] }> = [];
+  // `cause`：它那一轮为什么没出结论（那一句同时在 parts 里，点开的说明可能晚一步才认到）。
+  type VerdictSlot = { row: ConversationVerdictRow; parts: FootnotePart[]; cause?: { entry: LaneNoVerdict; part: FootnotePart } };
+  let verdict: VerdictSlot | null = null;
+  const verdicts: VerdictSlot[] = [];
   const give = (id: string, list: TurnReceipt[]) => {
     if (list.length) receipts.set(id, [...receipts.get(id) ?? [], ...list]);
   };
@@ -191,6 +196,14 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
       }
       const receipt: TurnReceipt = { id: event.id, at: event.at, view, item: event };
       order.set(receipt.id, index);
+      // 结论气泡下面那一句原因已经说了这件事：原来说它的那一条只留在记录里。
+      const absorbed = verdict?.cause ? absorbs(verdict.cause.entry, event) : null;
+      if (absorbed && verdict?.cause) {
+        if (absorbed.detail && !verdict.cause.part.view.detail) verdict.cause.part.view = { ...verdict.cause.part.view, detail: absorbed.detail };
+        if (turn) give(turn, [receipt]);
+        else (orphan ?? openOrphan(receipt.id)).row.receipts.push(receipt);
+        return;
+      }
       if (view.tier !== "receipt") note({ kind: "event", id: event.id, at: event.at, view, item: event }, receipt);
       else if (turn) give(turn, [receipt]);
       else pending.push(receipt);
@@ -212,6 +225,12 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
         }
       }
       verdict = { row: { kind: "verdict", id: `verdict:${lane.id}`, lane, footnote: { id: `footnote:verdict:${lane.id}`, parts: [], live: false }, live: false }, parts: [] };
+      const cause = acc.causeOf?.(lane);
+      if (cause) {
+        const part: FootnotePart = { kind: "cause", id: noVerdictPartId(cause.runId, cause.round), at, view: noVerdictCauseView(cause.cause) };
+        verdict.parts.push(part);
+        verdict.cause = { entry: cause, part };
+      }
       verdicts.push(verdict);
       out.push(verdict.row);
       // 这一段还没有回合：没有「同一回合」可言，每一行结论都留着；删除照旧在原处那一份记录里。
@@ -282,7 +301,7 @@ function shown(item: ConversationItem): boolean {
 
 export function conversationSystemRows(
   rows: ConversationDebateFeedRow[],
-  options: { failures?: ReadonlyMap<string, CrashedTurn>; context?: NoticeContext } = {},
+  options: { failures?: ReadonlyMap<string, CrashedTurn>; context?: NoticeContext; causes?: ReadonlyMap<string, LaneNoVerdict> } = {},
 ): ConversationDisplay {
   type Grouped = ConversationDebateFeedRow | ConversationSystemActionRow;
   const display = attach<Grouped>(groupConflictHandoffs(rows.filter((row) => row.kind !== "item" || shown(row.item))), {
@@ -293,6 +312,7 @@ export function conversationSystemRows(
     laneOf: (row) => row.kind === "review-lane" && row.complete ? row : null,
     yoursOf: (row) => row.kind === "item" && row.item.kind === "user" && !row.item.bySystem,
     failureOf: (id) => options.failures?.get(id),
+    causeOf: (lane) => options.causes?.get(lane.id),
     context: options.context,
   });
   return display as ConversationDisplay;

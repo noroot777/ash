@@ -39,6 +39,7 @@ import {
 } from "./TurnReceipts.tsx";
 import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
 import { ReviewRetryCta } from "./ReviewRetryCta.tsx";
+import { laneNoVerdicts, noVerdictPartId } from "./reviewNoVerdictCause.ts";
 import type { ReviewRetryAction } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
@@ -379,9 +380,12 @@ export function ConversationFeed({
   const noticeContext: NoticeContext = {
     commands: task.workflow?.steps.flatMap((step) => step.kind === "command" ? [step.p.cmd] : []),
   };
+  const feedRows = conversationFeedRows(items, { reviews });
+  // 没出结论的那几轮为什么没出：按轮次身份从审查状态取，贴在那颗结论气泡下面（reviewNoVerdictCause）。
+  const causes = laneNoVerdicts(feedRows, reviews);
   const { rows, receipts, footnotes } = conversationSystemRows(
-    conversationDebateRows(conversationFeedRows(items, { reviews }), { reviews }),
-    { failures: crashed, context: noticeContext },
+    conversationDebateRows(feedRows, { reviews }),
+    { failures: crashed, context: noticeContext, causes },
   );
   // 审查卡里（正在跑的那张、审查结论气泡下面摊开的那一轮、记录里点开的那一轮）的旁注同样记在审查者
   // 那一回合上（见 laneReceipts）。
@@ -419,13 +423,17 @@ export function ConversationFeed({
       <Gavel size={11} weight="fill" aria-hidden="true" />去裁定
     </button>
   ) : null;
-  // 「这一轮审查为什么没结论」那句尾注后面挂「继续本轮审查」：那句话点名了这个动作。只挂在此刻
-  // 还能续的那一轮（同一场、同一轮）**最后一条**这样的尾注上 —— 续过了（round.retry 没了）、
-  // 另开了新链，`reviewRetry` 就换了人或者没了，这颗也就跟着不出。
-  const retryEventId = reviewRetry ? [...items].reverse().find((item) => item.kind === "event"
+  // 「这一轮审查为什么没结论」那一句后面挂「继续本轮审查」：只挂在此刻还能续的那一轮（同一场、同一轮）
+  // 上 —— 续过了（round.retry 没了）、另开了新链，`reviewRetry` 就换了人或者没了，这颗也就跟着不出。
+  // 那一句平时是结论气泡下面按轮次身份取的那一句（见 reviewNoVerdictCause）；会话里认不出那张卡时
+  // （没有「开始」那一条、拿不到审查状态的视图），才退回最后一条说这一轮原因的旁注。
+  const retryCauseId = reviewRetry ? noVerdictPartId(reviewRetry.review.runId, reviewRetry.review.round) : null;
+  const causeHostsRetry = !!retryCauseId && [...causes.values()].some((entry) => noVerdictPartId(entry.runId, entry.round) === retryCauseId);
+  const retryEventId = reviewRetry && !causeHostsRetry ? [...items].reverse().find((item) => item.kind === "event"
     && item.notice?.kind === "review.no_verdict"
     && item.notice.runId === reviewRetry.review.runId && item.notice.round === reviewRetry.review.round)?.id ?? null : null;
-  const isRetryable = (part: FootnotePart) => part.kind === "event" && !!retryEventId && part.item?.id === retryEventId;
+  const isRetryable = (part: FootnotePart) => (part.kind === "cause" && part.id === retryCauseId)
+    || (part.kind === "event" && !!retryEventId && part.item?.id === retryEventId);
   // 辩论条上的同一颗按钮：辩论就是为了裁定才开的，读完该能当场决定，而不是往上翻回
   // 那条旁注（用户 2026-09-27）。条件比旁注那颗更严一格——必须**这场辩论**辩的就是
   // 此刻待裁定的那条驳回，而且它已经说完了（还在跑时后端也会拒绝裁定）。
