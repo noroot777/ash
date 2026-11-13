@@ -33,7 +33,8 @@ const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.
 const { isTracelessState, reclaimState } = await import("../src/monitor-reclaim-evidence.js");
 const { killTree } = await import("../src/platform.js");
 
-const SUPERSEDED_NOTE = /原进程已不存在.*已被原进程之后才起来的另一个进程占用/;
+// 依据和**前提**都要写在戳上:「系统时钟没被拨动超过一小时」证不出来,是用户知情接受的。
+const SUPERSEDED_NOTE = /原进程已不存在.*已被原进程之后才起来的另一个进程占用.*前提：系统时钟没有被拨动超过一小时/;
 const HOUR = 3_600_000;
 
 /** 台子自己起的进程:各条用例结束各收各的,teardown 前再兜一遍。 */
