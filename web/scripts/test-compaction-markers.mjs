@@ -110,4 +110,19 @@ const agentItem = (segments, endedAt = null) => ({ kind: "agent", id: "a", markd
   assert.equal(liveLabel(events, false), COMPACT_SKIPPED, "进行条说被拦下，不说压缩了");
 }
 
-console.log("compaction markers ok: 只认结构化事件，直播与落盘正文一律原样（旧标记、分片、原型属性名），被拦下的压缩如实收口，压缩不算等上游");
+// ⑦ 审完以后：独立审查另开的会话排在会话流最后，信息格的上下文、「压缩设置」仍是任务执行者那条会话的。
+{
+  const own = { id: "s-own", role: "single", agentType: "claude", context: { used: 264270, window: 1000000 } };
+  const reviewer = { id: "s-rev", role: "reviewer", agentType: "codex", context: { used: 155683, window: 258400 } };
+  const bubble = (session, extra = {}) => ({ ...agentItem([], at(9)), sessionId: session?.id ?? "s-live", session, ...extra });
+  const facts = latestRunFacts([bubble(own), bubble(reviewer, { reviewer: { round: null } })]);
+  assert.equal(facts.session, own, "压缩设置指向任务自己的执行器");
+  assert.equal(facts.context.window, 1000000, "上下文是执行者的窗口，不是审查者的");
+  assert.equal(latestRunFacts([bubble(own), bubble(undefined, { reviewer: { round: null } })]).session, own, "直播里会话行还没到的审查回合同样不算");
+  assert.equal(latestRunFacts([bubble(own), bubble(reviewer, { reviewer: { round: 2 } })]).session, own, "reviewer 会话上的验证轮同样不算");
+  const inline = { ...bubble(own, { reviewer: { round: 1 } }), sessionContext: { used: 300000, window: 1000000 } };
+  assert.equal(latestRunFacts([bubble(own), inline]).context.used, 300000, "就地验证轮搭在任务自己的会话上，照常取最新那份");
+  assert.equal(latestRunFacts([bubble(reviewer, { reviewer: { round: null } })]).session, null, "只有审查者说过话就没有任务自己的上下文");
+}
+
+console.log("compaction markers ok: 只认结构化事件，直播与落盘正文一律原样（旧标记、分片、原型属性名），被拦下的压缩如实收口，压缩不算等上游，信息格不取审查者的会话");
