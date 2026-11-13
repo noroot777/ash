@@ -7,24 +7,27 @@
 | 结果 | 文件数 |
 |---|---|
 | 留给用户 | 1 |
-| 有意不跑 | 4 |
+| 有意不跑 | 6 |
 | 绿（已修） | 30 |
 | 绿（并发下闪红） | 8 |
-| 绿 | 666 |
-| 拆分模块 | 41 |
+| 绿（部分未执行） | 6 |
+| 绿 | 660 |
+| 拆分模块 | 40 |
 | 不是测试 | 1 |
-| 合计 | 751 |
+| 合计 | 752 |
+
+「绿」只说明这台 macOS 上实际执行的那部分是绿的，**不代表 Windows 通过**：测试文件里 `IS_WINDOWS` / `process.platform === "win32"` 的分支这一轮一个都没执行（`git grep -nE "IS_WINDOWS|process\.platform|win32" -- '*test-*'` 可列全）。整份或整块 Windows 专属、在 Mac 上空跑的单独记成「有意不跑」或「绿（部分未执行）」；只是文件内零散几节按平台分叉的，仍记「绿」。
 
 ## 怎么跑的
 
-- 枚举：root/server/web/mcp/mobile 所有 `test`/`test:*` 入口按 `scripts/test-runner.mjs` 的 `expandChain` 展开成叶子，再和盘上每个 `test-*` 文件逐个对上；没有 script 的按 `tsx`/`node` 直接跑；被别的测试 import 或当子进程起的算拆分模块，随父测试跑。
+- 枚举：root/server/web/mcp/mobile 所有 `test`/`test:*` 入口按 `scripts/test-runner.mjs` 的 `expandChain` 展开成叶子，再和盘上的测试文件逐个对上——测试文件取三者并集：`test-*`/`verify-*` 命名、`*.test.*`/`*.spec.*` 命名、导入 `node:test`/`vitest`/`@playwright/test`/`jest` 的文件（`git ls-files` + `git grep`，排除 `server/src` 里同名前缀的产品模块 `verify-override.ts`/`verify-until-known.ts`）。首轮只按 `test-*` 对账，漏了 `web/src/page-annotation/model.test.ts`，已补跑补记。没有 script 的按 `tsx`/`node` 直接跑；被别的测试 import 或当子进程起的算拆分模块，随父测试跑——父入口按平台条件 import 的，不算随父跑过。
 - 执行：和门禁同形（`sh -c` 当进程组组长、叶子是组内成员、环境去掉 ASH_DB/ASH_RUNS_DIR、web 叶子共用 dom-stage 的 Chrome 与 vite），6 路并行，单条 300s 上限；红的再单并发复跑区分闪红。
-- 防烧额度：整轮跑在 macOS `sandbox-exec` 里——禁执行真 claude/codex/opencode/kimi/gemini、禁外网（含本机代理端口）、禁连 :4317、禁写主仓 data/.git 与 ~/.claude、~/.codex 等。被沙箱本身打红的，换「放开执行真 CLI、仍禁外网」或「放开外网、仍禁真凭据」的档复核，结论写在说明里。
+- 防烧额度：整轮跑在 macOS `sandbox-exec` 里（所以这份清单只代表 macOS）——禁执行真 claude/codex/opencode/kimi/gemini、禁外网（含本机代理端口）、禁连 :4317、禁写主仓 data/.git 与 ~/.claude、~/.codex 等。被沙箱本身打红的，换「放开执行真 CLI、仍禁外网」或「放开外网、仍禁真凭据」的档复核，结论写在说明里。
 - 残留：每条叶子带归属记号，退出后查同组与带记号的进程，记下再收掉。
 
 ## 链外测试的纳入建议（只是建议，验收链没改）
 
-链外 + 无 script 共 456 个文件：
+链外 + 无 script 共 457 个文件：
 
 - **建议纳入**：377 个，单条 ≤15s、并行下稳定绿、不碰真 CLI，合计约 1353s CPU（按门禁 8 路并行约多 3 分钟墙钟；现在门禁 255 个文件约 3200s CPU）。
 - **可纳入（较慢）**：53 个，15–60s，合计约 1491s CPU；全部纳入的话门禁墙钟大约翻倍。
@@ -36,6 +39,7 @@
   - 慢（3）：test-scheduled-messages.ts、test-session-turn-identity.ts、test-chat-browser.mjs
   - 前置整包构建（2）：test-read-transcript.mjs、test-reconnect.mjs
   - 依赖 mobile 导出（2）：test-reply-command-ui.mjs、test-web-smoke.mjs
+  - Windows 专属、Mac 上空跑（1）：test-user-shell-powershell.ts
 
 「并发闪红」那几条进了并行门禁会偶发拦验收，得先查清再纳入：其中 launch-abandon-races 与 service-ports 两次都是**叶子所在进程组被整组发了信号**（SIGKILL / SIGTERM），说明被测代码或测试有一处会对不属于自己的组开枪，跟 11 月 2 日普查里 #481 同形。
 
@@ -95,8 +99,9 @@
 | `mobile/scripts/test-session-notices.mjs` | 链外 | 绿 | 1s |  | 建议纳入 |
 | `mobile/scripts/test-task-branches.mjs` | 链外 | 绿 | 13s |  | 建议纳入 |
 | `scripts/test-accept-test.mjs` | 链外 | 绿 | 20s |  | 可纳入（较慢） |
-| `scripts/test-codex-mcp-setup.mjs` | 链外 | 绿 | 1s |  | 建议纳入 |
+| `scripts/test-codex-mcp-setup.mjs` | 链外 | 绿（部分未执行） | 1s | 严格档禁执行真 codex，「问真 codex」那几条没拿到真 codex 的回答 | 建议纳入 |
 | `scripts/test-kimi-mcp.mjs` | 链外 | 绿 | 1s |  | 建议纳入 |
+| `web/src/page-annotation/model.test.ts` | 无 script | 绿 | 1s | 不叫 test-*，靠 `node:test`，首轮枚举漏了，补跑 5/5 过（`cd web && node --test src/page-annotation/model.test.ts`） | 建议纳入 |
 | `scripts/test-macos-client.mjs` | 无 script | 绿 | 18s |  | 可纳入（较慢） |
 | `scripts/test-process-identity.mjs` | 链外 | 绿 | 1s |  | 建议纳入 |
 | `scripts/test-process-register.cjs` | 无 script | 绿 | 1s |  | 建议纳入 |
@@ -110,7 +115,7 @@
 | `scripts/test-test-process-ownership.mjs` | 链外 | 绿 | 3s |  | 建议纳入 |
 | `scripts/test-test-process-resources.mjs` | 链外 | 绿 | 4s |  | 建议纳入 |
 | `scripts/test-test-process.mjs` | 链外 | 绿 | 22s |  | 可纳入（较慢） |
-| `scripts/test-windows-restart.mjs` | 链外 | 绿 | 1s |  | 建议纳入 |
+| `scripts/test-windows-restart.mjs` | 链外 | 绿（部分未执行） | 1s | 纯逻辑段绿；`IS_WINDOWS` 的原生 Windows 段与 preservation 子模块在 Mac 上未执行 | 建议纳入 |
 | `scripts/test-workspace-repair.mjs` | 链外 | 绿 | 2s |  | 建议纳入 |
 | `server/scripts/test-accept-auto-commit.ts` | 链内 | 绿 | 15s |  |  |
 | `server/scripts/test-accept-cleanup.ts` | 链内 | 绿 | 271s |  |  |
@@ -155,7 +160,7 @@
 | `server/scripts/test-ash-mcp-installer.ts` | 链外 | 绿 | 2s |  | 建议纳入 |
 | `server/scripts/test-ash-mcp-launch.ts` | 链外 | 绿 | 2s |  | 建议纳入 |
 | `server/scripts/test-ash-mcp-probe.ts` | 链外 | 绿 | 26s |  | 可纳入（较慢） |
-| `server/scripts/test-ash-mcp-reach.ts` | 链外 | 绿 | 2s |  | 建议纳入 |
+| `server/scripts/test-ash-mcp-reach.ts` | 链外 | 绿（部分未执行） | 2s | 严格档禁执行真 CLI，需要启动真 claude/codex 的几组用例没在真 CLI 上执行 | 建议纳入 |
 | `server/scripts/test-ash-mcp-registry.ts` | 链外 | 绿 | 2s |  | 建议纳入 |
 | `server/scripts/test-assistant.ts` | 链外 | 绿 | 2s |  | 建议纳入 |
 | `server/scripts/test-auto-title-run.ts` | 链外 | 绿 | 2s |  | 建议纳入 |
@@ -216,7 +221,7 @@
 | `server/scripts/test-cli-goal-lifecycle.ts` | 链外 | 绿 | 7s |  | 建议纳入 |
 | `server/scripts/test-cli-goal-queue.ts` | 链外 | 绿 | 20s |  | 可纳入（较慢） |
 | `server/scripts/test-cli-goal-recovery.ts` | 链外 | 绿 | 7s |  | 建议纳入 |
-| `server/scripts/test-cli-models.ts` | 链外 | 绿 | 5s |  | 建议纳入 |
+| `server/scripts/test-cli-models.ts` | 链外 | 绿（部分未执行） | 5s | 机制段绿；严格档禁执行真 CLI，⑥「本机真实探测」与 codex 档位实探、claude control 探针按「没装」跳过 | 建议纳入 |
 | `server/scripts/test-cli-overrides.ts` | 链外 | 绿 | 5s |  | 建议纳入 |
 | `server/scripts/test-cli-plan-scheduling.ts` | 链外 | 绿 | 3s |  | 建议纳入 |
 | `server/scripts/test-cli-state-scopes.ts` | 链外 | 绿 | 2s |  | 建议纳入 |
@@ -370,7 +375,7 @@
 | `server/scripts/test-pending-after.ts` | 链外 | 绿 | 3s |  | 建议纳入 |
 | `server/scripts/test-personal-cli-settings.ts` | 链内 | 绿 | 1s |  |  |
 | `server/scripts/test-post-merge-review.ts` | 链内 | 绿 | 2s |  |  |
-| `server/scripts/test-powershell-command.ts` | 链外 | 绿 | 1s |  | 建议纳入 |
+| `server/scripts/test-powershell-command.ts` | 链外 | 绿（部分未执行） | 1s | 开头 4 条 CLIXML 判错断言绿；PowerShell 语义段需 Windows 或 ASH_TEST_POWERSHELL，本机无 pwsh，未执行 | 建议纳入 |
 | `server/scripts/test-preview-annotation.ts` | 链外 | 绿 | 1s |  | 建议纳入 |
 | `server/scripts/test-preview-assist.ts` | 链外 | 绿 | 13s |  | 建议纳入 |
 | `server/scripts/test-preview-cache-path.ts` | 链外 | 绿 | 1s |  | 建议纳入 |
@@ -531,10 +536,10 @@
 | `server/scripts/test-user-cli-mcp.ts` | 链外 | 绿 | 2s |  | 建议纳入 |
 | `server/scripts/test-user-cli-write-identity.ts` | 链外 | 绿 | 1s |  | 建议纳入 |
 | `server/scripts/test-user-directives.ts` | 链外 | 绿 | 1s |  | 建议纳入 |
-| `server/scripts/test-user-shell-powershell.ts` | 链外 | 绿 | 1s |  | 建议纳入 |
+| `server/scripts/test-user-shell-powershell.ts` | 链外 | 有意不跑 | 1s | Windows 专属：非 Windows 只打印 `skipped: requires Windows` 就退出，全部用例在 else 里，Mac 上一条没执行；退出码 0 不算绿 | 留在链外 |
 | `server/scripts/test-verify-override.ts` | 链外 | 绿 | 2s |  | 建议纳入 |
 | `server/scripts/test-win-launch.ts` | 链外 | 绿 | 1s |  | 建议纳入 |
-| `server/scripts/test-windows-detached.ts` | 链外 | 绿 | 1s |  | 建议纳入 |
+| `server/scripts/test-windows-detached.ts` | 链外 | 绿（部分未执行） | 1s | 前半段（证据核对外壳身份）绿；`process.platform === "win32"` 的真进程清理段在 Mac 上未执行 | 建议纳入 |
 | `server/scripts/test-workflow-def.ts` | 链外 | 绿 | 1s |  | 建议纳入 |
 | `server/scripts/test-workflow-gate.ts` | 链外 | 绿 | 3s |  | 建议纳入 |
 | `server/scripts/test-workflow-library.ts` | 链外 | 绿 | 1s |  | 建议纳入 |
@@ -755,8 +760,8 @@
 | `scripts/test-process-cleanup.mjs` | 拆分模块 | 拆分模块 |  | 随 test-test-process-lifecycle.mjs 一起跑 |  |
 | `scripts/test-process-conventions.mjs` | 拆分模块 | 拆分模块 |  | 随 check-conventions.mjs、test-test-process-conventions.mjs 一起跑 |  |
 | `scripts/test-process-directory.mjs` | 拆分模块 | 拆分模块 |  | 随 test-process-job.mjs、test-process-ownership.mjs、test-process-posix.mjs 一起跑 |  |
-| `scripts/test-process-job.mjs` | 拆分模块 | 拆分模块 |  | 随 test-process-scope.mjs、test-test-process-cleanup.mjs、test-test-process-directory.mjs、test-test-process-lifecycle.mjs 一起跑 |  |
-| `scripts/test-process-native.cjs` | 拆分模块 | 拆分模块 |  | 随 test-process-job.mjs、test-process-scope.mjs、test-test-process-cleanup.mjs、test-test-process-directory.mjs、test-test-process-lifecycle.mjs、test-test-process-ownership.mjs 一起跑 |  |
+| `scripts/test-process-job.mjs` | 拆分模块 | 拆分模块 |  | Windows Job 执行域：Mac 上只经桩化的 native 跑模拟路径；随 test-process-scope.mjs、test-test-process-cleanup.mjs、test-test-process-directory.mjs、test-test-process-lifecycle.mjs 一起跑 |  |
+| `scripts/test-process-native.cjs` | 拆分模块 | 拆分模块 |  | Windows 原生 Job 工具：Mac 上父测试把 invoke/dispose/executable 换成桩，真实原生调用未执行；随 test-process-job.mjs、test-process-scope.mjs、test-test-process-cleanup.mjs、test-test-process-directory.mjs、test-test-process-lifecycle.mjs、test-test-process-ownership.mjs 一起跑 |  |
 | `scripts/test-process-posix.mjs` | 拆分模块 | 拆分模块 |  | 随 test-process-job.mjs、test-process-scope.mjs 一起跑 |  |
 | `scripts/test-process-probe.mjs` | 拆分模块 | 拆分模块 |  | 随 test-process-identity.mjs、test-process-posix.mjs、test-process-stop.mjs 一起跑 |  |
 | `scripts/test-process-registry.mjs` | 拆分模块 | 拆分模块 |  | 随 test-process-job.mjs、test-process-posix.mjs、test-process-scope.mjs 一起跑 |  |
@@ -766,7 +771,7 @@
 | `scripts/test-process-terminate.mjs` | 拆分模块 | 拆分模块 |  | 随 test-process-posix.mjs、test-process-stop.mjs 一起跑 |  |
 | `scripts/test-process.mjs` | 拆分模块 | 拆分模块 |  | 随 test-process-ownership.mjs、test-restart-options.mjs、test-restart.mjs、test-test-process-failures.mjs、test-test-process-lifecycle.mjs、test-test-process-ownership.mjs、test-test-process.mjs、test-windows-restart.mjs 一起跑 |  |
 | `scripts/test-runner-processes.mjs` | 拆分模块 | 拆分模块 |  | 随 test-runner.mjs 一起跑 |  |
-| `scripts/test-windows-restart-preservation.mjs` | 拆分模块 | 拆分模块 |  | 随 test-windows-restart.mjs 一起跑 |  |
+| `scripts/test-windows-restart-preservation.mjs` | 拆分模块 | 有意不跑 |  | Windows 专属：父入口 test-windows-restart.mjs 只在 `IS_WINDOWS` 时才 import 它，Mac 上没加载、没执行 |  |
 | `server/scripts/test-accept-dependencies.ts` | 拆分模块 | 拆分模块 |  | 随 test-accept-cleanup.ts 一起跑 |  |
 | `server/scripts/test-accept-finalize.ts` | 拆分模块 | 拆分模块 |  | 随 test-accept-cleanup.ts 一起跑 |  |
 | `server/scripts/test-accept-gate-forwarded.ts` | 拆分模块 | 拆分模块 |  | 随 test-accept-gate.ts 一起跑 |  |
