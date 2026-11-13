@@ -32,9 +32,19 @@ export function RemoteAccessCard({ notify }: { notify: (message: string) => void
   // 出码那一刻名册里已有的设备:之后多出来的那台就是刚扫进来的。
   const knownDevices = useRef<Set<string>>(new Set());
 
+  // 轮询的读和写操作各走各的请求，谁后回来谁落到界面上：一次读发出之后又有了更新的读、或者做成了
+  // 一次写（移除、换密钥），它带回来的就是旧的 —— 不丢掉的话，刚移除的设备、旧密钥会闪回来一下。
+  const epoch = useRef(0);
+  const settle = useCallback((next: RemoteAccessView) => {
+    epoch.current += 1;
+    setView(next);
+  }, []);
+
   const reload = useCallback(async () => {
+    const mine = ++epoch.current;
     try {
-      setView(await authApi.remoteAccess());
+      const next = await authApi.remoteAccess();
+      if (mine === epoch.current) setView(next);
     } catch {
       // 轮询失败不反复打扰;首次读不到时整张卡不出,下一轮自己补上。
     }
@@ -47,6 +57,7 @@ export function RemoteAccessCard({ notify }: { notify: (message: string) => void
     return () => {
       window.clearInterval(timer);
       window.removeEventListener(PAIR_REQUESTS_CHANGED_EVENT, reload);
+      epoch.current += 1;
     };
   }, [reload]);
 
@@ -213,7 +224,7 @@ export function RemoteAccessCard({ notify }: { notify: (message: string) => void
           danger
           busy={busy}
           onConfirm={() => void act(async () => {
-            setView(await authApi.rotateRemoteAccess());
+            settle(await authApi.rotateRemoteAccess());
             setShown(true);
             setConfirming(null);
           }, "重新生成失败")}
@@ -234,7 +245,7 @@ export function RemoteAccessCard({ notify }: { notify: (message: string) => void
               window.location.reload();
               return;
             }
-            setView(await authApi.removeDevice(confirming.id));
+            settle(await authApi.removeDevice(confirming.id));
             setConfirming(null);
           }, confirming.current ? "登出失败" : "移除失败")}
           onClose={() => setConfirming(null)}

@@ -17,7 +17,7 @@
 import { createHash, randomBytes, randomInt } from "node:crypto";
 import { networkInterfaces } from "node:os";
 import type { PairClaim, PairCode, PairRequestView, PairTicket } from "@ash/shared";
-import { enrollDevice } from "./remote-access.js";
+import { deviceByToken, enrollDevice } from "./remote-access.js";
 
 export const PAIR_REQUEST_TTL_MS = 10 * 60_000;
 const CODE_TTL_MS = 5 * 60_000;
@@ -34,6 +34,8 @@ interface PairRequest {
   code: string;
   createdAt: number;
   status: "pending" | "approved" | "denied";
+  /** 获准之后领走的那份凭证。留到申请过期:头一次的应答丢在路上时,设备凭同一个 secret 再领还是它。 */
+  token?: string;
 }
 
 const requests = new Map<string, PairRequest>();
@@ -109,17 +111,29 @@ export function decidePairRequest(id: string, approve: boolean, now = Date.now()
 }
 
 /**
- * 设备来领结果。获准的那一次才登记设备、发凭证,然后申请作废 —— 机主点了允许、设备却
- * 再没回来领的话,名册里不会多出一台从没连上过的设备。
+ * 设备来领结果。获准之后来领的那一次才登记设备、发凭证 —— 机主点了允许、设备却再没回来领
+ * 的话,名册里不会多出一台从没连上过的设备。
+ *
+ * 领可以重来:应答丢在路上(断网、页面正好刷新)的设备凭同一个 secret 再领,拿到的还是那一份,
+ * 不会落得「名册里登记了、设备手上却没有凭证」。那份凭证只在内存里陪这张申请到过期。登记
+ * 没落盘(抛错)时申请原样留着,下一次再领。
  */
 export function claimPairRequest(id: string, secret: string, address: string, now = Date.now()): PairClaim {
   sweep(now);
   const request = requests.get(id);
   if (!request || request.secretHash !== sha256(secret)) return { status: "gone" };
   if (request.status === "pending") return { status: "pending" };
-  requests.delete(id);
-  if (request.status === "denied") return { status: "denied" };
-  return { status: "approved", token: enrollDevice({ name: request.name, via: "approval", address }).token };
+  if (request.status === "denied") {
+    requests.delete(id);
+    return { status: "denied" };
+  }
+  // 领走之后那台设备又被请出去了(登出、移除):那份凭证已经作废,不再发第二遍。
+  if (request.token && !deviceByToken(request.token)) {
+    requests.delete(id);
+    return { status: "gone" };
+  }
+  request.token ??= enrollDevice({ name: request.name, via: "approval", address }).token;
+  return { status: "approved", token: request.token };
 }
 
 /** 机主出示一个一次性的码。 */
@@ -133,11 +147,14 @@ export function mintPairCode(now = Date.now()): PairCode {
   return { code, expiresAt: new Date(expiresAt).toISOString(), hosts: reachableHosts() };
 }
 
-/** 设备带着码来。兑一次就作废;不认的回 null。 */
+/** 设备带着码来。兑一次就作废;不认的回 null。登记没落盘(抛错)时码不算用掉。 */
 export function redeemPairCode(code: string, input: { name: string; address: string }, now = Date.now()): string | null {
   sweep(now);
-  if (!codes.delete(sha256(code.trim()))) return null;
-  return enrollDevice({ name: input.name, via: "code", address: input.address }).token;
+  const hash = sha256(code.trim());
+  if (!codes.has(hash)) return null;
+  const { token } = enrollDevice({ name: input.name, via: "code", address: input.address });
+  codes.delete(hash);
+  return token;
 }
 
 /**

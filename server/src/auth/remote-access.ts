@@ -28,6 +28,13 @@
 // 进程内派发(`app.fetch` 直接调,没有 socket)按本机算:它根本没经过网络。真正从外面
 // 转述进来的那一类(飞书通道)在这道判据之前就由 imGate 单独认了身份。
 //
+// ## 凭证作废,从它派生出去的东西一起作废
+//
+// 一件凭证(一台设备、那把访问密钥)名下不止有「下一次请求」:还有它开着的长连接(事件流),
+// 和凭它签发出去的预览凭证(preview-access.ts —— 那是地址里的一串随机数,自己不认设备)。
+// 这些都记在凭证的名字(`holder`)下,收回只有 `revoke` 一个出口:掐连接、通知派生授权的
+// 那一方。移除设备、设备自己登出、换密钥都走它,不靠各条路由各自记得多调一句。
+//
 // ## 凭证放哪
 //
 // `<db>.remote-access.json`(0600),与接力身份的私钥同一个道理(handoff-identity.ts):
@@ -37,6 +44,7 @@
 //   · 设备凭证只存 sha256:它发出去之后没有人需要再看一眼。
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import type { IncomingMessage } from "node:http";
 import { isIP, type Socket } from "node:net";
 import { hostname } from "node:os";
 import { dirname } from "node:path";
@@ -107,6 +115,26 @@ export function requestOrigin(c: Context): RequestOrigin {
 
 export const isLocalDirect = (c: Context): boolean => isLocalDirectOrigin(requestOrigin(c));
 
+/** 没经过 Hono 的请求(WebSocket 升级)的来源。 */
+export function originOfIncoming(incoming: IncomingMessage): RequestOrigin {
+  return {
+    remoteAddress: incoming.socket?.remoteAddress,
+    host: incoming.headers.host,
+    forwarded: FORWARDED_HEADERS.some((name) => incoming.headers[name] !== undefined),
+  };
+}
+
+/**
+ * ash 自己替别人转发时(预览代理)该盖在 `X-Forwarded-For` 上的值;请求本来就是本机直连的回
+ * null(不盖)。代理到上游走的是回环,被预览的服务又多半把 `/api` 转回这台 ash —— 不盖这个章,
+ * 别的设备经预览绕一圈回来就成了「本机直连」,拿到的比它自己的凭证还多(读得到访问密钥)。
+ */
+export function forwardedFor(origin: RequestOrigin): string | null {
+  if (isLocalDirectOrigin(origin)) return null;
+  const address = (origin.remoteAddress ?? "").replace(/^::ffff:/i, "");
+  return /^[0-9a-f:.]+$/i.test(address) ? address : "unknown";
+}
+
 // ── 落盘的那份状态:访问密钥 + 设备名册 ──────────────────────────────────────
 
 export interface RemoteDevice {
@@ -166,6 +194,7 @@ function loadState(): State {
   return state;
 }
 
+/** 落盘成功之后才换掉内存里那份:写不下去(盘满、权限)时进程里认的和重启后读到的不能是两套。 */
 function saveState(state: State): void {
   const path = stateFilePath();
   mkdirSync(dirname(path), { recursive: true });
@@ -185,16 +214,19 @@ function saveState(state: State): void {
   cached = { path, state };
 }
 
+/** 改一下状态:在副本上改、落盘,成了才生效。 */
+function update(change: (draft: State) => void): State {
+  const draft = structuredClone(loadState());
+  change(draft);
+  saveState(draft);
+  return draft;
+}
+
 // ── 访问密钥 ────────────────────────────────────────────────────────────────
 
 /** 现在这把密钥;还没有就发一把。只给「本机查看」那条路用 —— 验证方不该顺手造密钥。 */
 export function ensureRemoteAccessKey(): string {
-  const state = loadState();
-  if (!state.key) {
-    state.key = mintKey();
-    saveState(state);
-  }
-  return state.key;
+  return loadState().key ?? update((draft) => { draft.key = mintKey(); }).key!;
 }
 
 /**
@@ -203,14 +235,14 @@ export function ensureRemoteAccessKey(): string {
  * 「允许」或出示过二维码的那些设备不靠这把密钥,不受牵连。
  */
 export function rotateRemoteAccessKey(): string {
-  const state = loadState();
-  const dropped = state.devices.filter((d) => d.via === "key");
-  state.devices = state.devices.filter((d) => d.via !== "key");
-  state.key = mintKey();
-  saveState(state);
-  severConnections(KEY_HOLDER);
-  for (const device of dropped) severConnections(device.id);
-  return state.key;
+  const before = loadState();
+  const next = update((draft) => {
+    draft.devices = draft.devices.filter((d) => d.via !== "key");
+    draft.key = mintKey();
+  });
+  if (before.key) revoke(keyHolder(before.key));
+  for (const device of before.devices) if (device.via === "key") revoke(deviceHolder(device.id));
+  return next.key!;
 }
 
 export function remoteKeyMatches(candidate: string): boolean {
@@ -224,7 +256,6 @@ const hashToken = (token: string): string => createHash("sha256").update(token).
 
 /** 登记一台设备,回它的凭证(只此一次)。 */
 export function enrollDevice(input: { name: string; via: RemoteDeviceVia; address: string }): { device: RemoteDevice; token: string } {
-  const state = loadState();
   const token = `ashd_${randomBytes(32).toString("base64url")}`;
   const at = new Date().toISOString();
   const device: RemoteDevice = {
@@ -236,8 +267,7 @@ export function enrollDevice(input: { name: string; via: RemoteDeviceVia; addres
     lastSeenAt: at,
     address: input.address,
   };
-  state.devices.push(device);
-  saveState(state);
+  update((draft) => { draft.devices.push(device); });
   return { device, token };
 }
 
@@ -255,11 +285,9 @@ export function deviceByToken(token: string | undefined): RemoteDevice | null {
  * 就是它自己),掐了它这次应答就发不回去。
  */
 export function removeDevice(id: string, keep?: Socket | null): boolean {
-  const state = loadState();
-  if (!state.devices.some((d) => d.id === id)) return false;
-  state.devices = state.devices.filter((d) => d.id !== id);
-  saveState(state);
-  severConnections(id, keep);
+  if (!loadState().devices.some((d) => d.id === id)) return false;
+  update((draft) => { draft.devices = draft.devices.filter((d) => d.id !== id); });
+  revoke(deviceHolder(id), keep);
   return true;
 }
 
@@ -269,9 +297,13 @@ const SEEN_FLUSH_MS = 5 * 60_000;
 function noteSeen(device: RemoteDevice, address: string): void {
   const now = Date.now();
   if (device.address === address && now - Date.parse(device.lastSeenAt) < SEEN_FLUSH_MS) return;
-  device.lastSeenAt = new Date(now).toISOString();
-  device.address = address;
-  saveState(loadState());
+  // 记不上不拦这次请求:这只是给人看的。
+  try {
+    update((draft) => {
+      const entry = draft.devices.find((d) => d.id === device.id);
+      if (entry) Object.assign(entry, { lastSeenAt: new Date(now).toISOString(), address });
+    });
+  } catch { /* 下次再记 */ }
 }
 
 // ── 认得的访问名字 ───────────────────────────────────────────────────────────
@@ -309,15 +341,30 @@ export function knownHost(host: string | undefined): boolean {
 function rememberHost(host: string | undefined): void {
   const name = hostNameOf(host);
   if (!name || knownHost(host)) return;
-  const state = loadState();
-  state.hosts = [...state.hosts, name].slice(-MAX_HOSTS);
-  saveState(state);
+  // 记不上不拦这次请求:它已经凭凭证进来了,只是这个名字下次还不能直接申请配对。
+  try {
+    update((draft) => { draft.hosts = [...draft.hosts, name].slice(-MAX_HOSTS); });
+  } catch { /* 下次再记 */ }
 }
 
-// ── 凭证名下的活连接 ─────────────────────────────────────────────────────────
+// ── 凭证的名字、存活与收回 ───────────────────────────────────────────────────
 
-const KEY_HOLDER = "key";
+/** 本机直连背后没有哪件能收回的凭证。 */
+export const LOCAL_HOLDER = "local";
+const deviceHolder = (id: string): string => `device:${id}`;
+// 密钥的名字跟着密钥本身走:换一把之后,旧名字下的东西自然对不上。
+const keyHolder = (key: string): string => `key:${hashToken(key).slice(0, 16)}`;
+
+/** 这件凭证此刻还作不作数。派生出去的授权每次用之前都问一遍(preview-access.ts canUsePreview)。 */
+export function credentialAlive(holder: string): boolean {
+  if (holder === LOCAL_HOLDER) return true;
+  const { key, devices } = loadState();
+  if (holder.startsWith("device:")) return devices.some((d) => deviceHolder(d.id) === holder);
+  return !!key && keyHolder(key) === holder;
+}
+
 const connections = new Map<string, Set<Socket>>();
+const revocationListeners = new Set<(holder: string) => void>();
 
 function holdConnection(holder: string, socket: Socket | undefined | null): void {
   if (!socket || socket.destroyed) return;
@@ -331,9 +378,23 @@ function holdConnection(holder: string, socket: Socket | undefined | null): void
   });
 }
 
-function severConnections(holder: string, keep?: Socket | null): void {
+/** 凭证被收回时叫一声。给「凭它签发过别的授权」的那一方用,让那些授权跟着作废。 */
+export function onCredentialRevoked(listener: (holder: string) => void): () => void {
+  revocationListeners.add(listener);
+  return () => void revocationListeners.delete(listener);
+}
+
+/** 收回一件凭证名下的一切(文件头「凭证作废…」一节)。`keep` 见 `removeDevice`。 */
+function revoke(holder: string, keep?: Socket | null): void {
   for (const socket of connections.get(holder) ?? []) {
     if (socket !== keep) socket.destroy();
+  }
+  for (const listener of revocationListeners) {
+    try {
+      listener(holder);
+    } catch (error) {
+      console.error("[ash] 凭证收回的订阅方出错:", error);
+    }
   }
 }
 
@@ -342,21 +403,41 @@ export const connectionOf = (c: Context): Socket | null => socketOf(c) ?? null;
 
 // ── 判定 ────────────────────────────────────────────────────────────────────
 
+export interface OwnerProofResult {
+  how: OwnerProof;
+  deviceId: string | null;
+  /** 这次身份背后那件凭证的名字;凭这次请求签发出去的授权记下它(`credentialAlive`)。 */
+  holder: string;
+}
+
 /** 自用模式的身份判定:本机直连、放进来的设备、访问密钥。都不是就回 null(匿名)。 */
-export function ownerProof(c: Context, sessionCookie: string | undefined): { how: OwnerProof; deviceId: string | null } | null {
-  if (isLocalDirect(c)) return { how: "local", deviceId: null };
+export function ownerProof(c: Context, sessionCookie: string | undefined): OwnerProofResult | null {
+  if (isLocalDirect(c)) return { how: "local", deviceId: null, holder: LOCAL_HOLDER };
   const bearer = /^Bearer\s+(\S+)$/i.exec((c.req.header("authorization") ?? "").trim())?.[1];
   const host = requestOrigin(c).host;
-  if (bearer && remoteKeyMatches(bearer)) {
-    holdConnection(KEY_HOLDER, socketOf(c));
+  const socket = socketOf(c);
+  const { key } = loadState();
+  if (bearer && key && remoteKeyMatches(bearer)) {
+    holdConnection(keyHolder(key), socket);
     rememberHost(host);
-    return { how: "bearer", deviceId: null };
+    return { how: "bearer", deviceId: null, holder: keyHolder(key) };
   }
   const viaBearer = deviceByToken(bearer);
   const device = viaBearer ?? deviceByToken(sessionCookie);
   if (!device) return null;
-  holdConnection(device.id, socketOf(c));
+  holdConnection(deviceHolder(device.id), socket);
   rememberHost(host);
-  noteSeen(device, peerAddress(c));
-  return { how: viaBearer ? "bearer" : "cookie", deviceId: device.id };
+  // 经同机的一跳转进来的(反代、ash 自己的预览代理)对端是回环,不是这台设备在哪:不拿它盖掉原来记的。
+  noteSeen(device, socket && isLoopbackAddress(socket.remoteAddress) ? device.address : peerAddress(c));
+  return { how: viaBearer ? "bearer" : "cookie", deviceId: device.id, holder: deviceHolder(device.id) };
 }
+
+const HOLDER_KEY = "ashOwnerHolder";
+
+/** 闸认下这次请求之后记一笔它凭的是哪件凭证(middleware.ts)。 */
+export function noteOwnerHolder(c: Context, holder: string): void {
+  c.set(HOLDER_KEY as never, holder as never);
+}
+
+/** 这次请求凭的那件凭证;不是凭机主身份进来的(agent 回合凭证、多人模式)回 null。 */
+export const ownerHolderOf = (c: Context): string | null => (c.get(HOLDER_KEY as never) as string | undefined) ?? null;

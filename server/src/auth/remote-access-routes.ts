@@ -37,9 +37,6 @@ function viewFor(c: Context): RemoteAccessView {
   return { local, ...(local ? { key: ensureRemoteAccessKey() } : {}), devices, requests: pendingPairRequests() };
 }
 
-/** 已签发的预览凭证是地址里的一串随机数,不认设备:不一起作废,被请出去的那台还能顺着开着的预览页继续用。 */
-const revokePreviews = async (): Promise<void> => (await import("../preview-access.js")).revokePreviewGrants();
-
 export function mountRemoteAccessRoutes(api: Hono, issueSessionCookie: (c: Context, token: string) => void): void {
   // ── 设备那一侧 ─────────────────────────────────────────────────────────────
   // 这三条只对「还没进来」的请求有意义。已经进得来的(本机、已配对)来打一律拒:名册里
@@ -123,7 +120,6 @@ export function mountRemoteAccessRoutes(api: Hono, issueSessionCookie: (c: Conte
     const refused = await ownerRefusal(c);
     if (refused) return refused;
     if (!removeDevice(c.req.param("id"), connectionOf(c))) return c.json({ error: "这台设备已经不在了" }, 404);
-    await revokePreviews();
     return c.json(viewFor(c));
   });
 
@@ -138,7 +134,6 @@ export function mountRemoteAccessRoutes(api: Hono, issueSessionCookie: (c: Conte
     if (refused) return refused;
     if (!isLocalDirect(c)) return c.json({ error: "访问密钥只能在 ash 所在的那台机器上更换" }, 403);
     rotateRemoteAccessKey();
-    await revokePreviews();
     return c.json(viewFor(c));
   });
 }

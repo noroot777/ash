@@ -29,7 +29,7 @@ import { tasks } from "../db/schema.js";
 import { SINGLE_ACTOR, ANONYMOUS_ACTOR, setActor, type Actor } from "./context.js";
 import { imGate } from "./im-actor.js";
 import { isMultiUser } from "./mode.js";
-import { ownerProof } from "./remote-access.js";
+import { noteOwnerHolder, ownerProof } from "./remote-access.js";
 import { resolveSession, touchUser, findUserByKey } from "./store.js";
 
 export const SESSION_COOKIE = "ash_session";
@@ -285,7 +285,10 @@ export function authGate(): MiddlewareHandler {
       ambient = actor !== null;
     } else if (!actor) {
       const proof = ownerProof(c, getCookie(c, SESSION_COOKIE));
-      if (proof) actor = SINGLE_ACTOR;
+      if (proof) {
+        actor = SINGLE_ACTOR;
+        noteOwnerHolder(c, proof.holder);
+      }
       ambient = proof?.how === "local" || proof?.how === "cookie";
     }
 

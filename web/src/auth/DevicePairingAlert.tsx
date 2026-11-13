@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PairRequestView } from "@ash/shared";
 import { Check, Devices, Prohibit, SpinnerGap } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
@@ -17,9 +17,14 @@ export function DevicePairingAlert({ notify }: { notify: (message: string) => vo
   const [requests, setRequests] = useState<PairRequestView[]>([]);
   const [busy, setBusy] = useState(false);
 
+  // 处理掉一张申请之前发出的那次轮询回来得晚的话，会把它又带回来一下：只认最新的那次读。
+  const epoch = useRef(0);
+
   const reload = useCallback(async () => {
+    const mine = ++epoch.current;
     try {
-      setRequests((await authApi.pairRequests()).requests);
+      const next = (await authApi.pairRequests()).requests;
+      if (mine === epoch.current) setRequests(next);
     } catch {
       // 后台轮询失败不弹 toast;下一轮自己补上。
     }
@@ -37,6 +42,7 @@ export function DevicePairingAlert({ notify }: { notify: (message: string) => vo
       window.clearInterval(timer);
       window.removeEventListener(PAIR_REQUESTS_CHANGED_EVENT, reload);
       document.removeEventListener("visibilitychange", onVisible);
+      epoch.current += 1;
     };
   }, [multi, reload]);
 
@@ -47,6 +53,8 @@ export function DevicePairingAlert({ notify }: { notify: (message: string) => vo
     setBusy(true);
     try {
       await authApi.decidePair(request.id, decision);
+      epoch.current += 1;
+      setRequests((current) => current.filter((item) => item.id !== request.id));
       notify(decision === "approve" ? `「${request.name}」可以用这台 ash 了` : "已拒绝");
     } catch (error) {
       notify(error instanceof Error ? error.message : "处理失败");

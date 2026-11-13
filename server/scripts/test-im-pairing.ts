@@ -10,7 +10,8 @@
 // ⑧ 发出之后换了绑定（解绑重绑、换了人绑）：出口不再放行，收卡时换成中性的收起卡；
 // ⑨ 通道起来时按现状对：此刻等着、还没有卡的补上；
 // ⑩ 点下按钮时 ash 重启（信封占着没结局）：照实说申请作废了，不说「重新发命令」；
-// ⑪ 多人模式：不推卡，经飞书点也放不进设备。
+// ⑪ 多人模式：不推卡，经飞书点也放不进设备；
+// ⑫ 卡还没入队、申请就在别处处理掉了：不发那张废卡。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -150,6 +151,18 @@ try {
     assert.match(textOf(late.card?.data), /已经过期，或者在别处处理过了/, JSON.stringify(late));
     assert.equal(claimPairRequest(ticket.id, ticket.secret, "192.168.1.50").status, "approved", "先到的那个决定算数");
     assert.equal(listDevices().length, 2);
+  }
+
+  // ── ⑫ 卡还没入队，网页上已经处理了 ──────────────────────────────────────
+  {
+    fake.reset();
+    // 发卡之前要读几次库；这几下里申请已经被处理掉。那一次收卡排在入队前面、当时没有卡可收 ——
+    // 入队前不现核的话，之后发出去的就是一张没人收的废卡（要等申请原本的十分钟才收）。
+    const ticket = apply("Mac · Firefox", "192.168.1.55");
+    decidePairRequest(ticket.id, false);
+    await im.settle();
+    assert.equal(await cardOf(ticket.id, false), null, "申请已经处理掉：不再入队");
+    assert.equal(fake.sends().length, 0);
   }
 
   // ── ⑥ 申请到期 ──────────────────────────────────────────────────────────

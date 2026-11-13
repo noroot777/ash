@@ -30,6 +30,7 @@ type Decision = Extract<PairEvent, { kind: "decided" }>;
 export class PairingCards {
   private unsubscribe: (() => void) | null = null;
   private timers = new Set<ReturnType<typeof setTimeout>>();
+  private stopped = false;
 
   constructor(private readonly deps: { appId: string; reconciler: Reconciler }) {}
 
@@ -46,6 +47,7 @@ export class PairingCards {
   }
 
   stop(): void {
+    this.stopped = true;
     this.unsubscribe?.();
     this.unsubscribe = null;
     for (const timer of this.timers) clearTimeout(timer);
@@ -68,7 +70,9 @@ export class PairingCards {
         const known = await db.select({ id: imOutbox.id }).from(imOutbox).where(and(
           eq(imOutbox.appId, appId), eq(imOutbox.receiveId, dest.receiveId), eq(imOutbox.kind, PAIR_KIND), eq(imOutbox.subject, request.id),
         ));
-        if (known.length) return;
+        // 走到这里之前读了几次库：这段时间里申请可能已经在别处处理掉，通道也可能已经拆了。那一次收卡
+        // 排在这次入队前面、当时还没有卡可收 —— 现在再发就是一张没人收的废卡。
+        if (known.length || this.stopped || !pendingPairRequests().some((waiting) => waiting.id === request.id)) return;
         const rowId = nanoid(20);
         const envelope = await createEnvelope({
           outboxId: rowId, taskId: null, action: "confirm", payload: { command: "pair", requestId: request.id },

@@ -14,8 +14,9 @@
 //      一律 401,只碰得到免登录名单和 SPA 壳。
 //   ④ 访问密钥:Bearer 与网页登录(cookie)两条路都进得来;密钥只在本机读得到、换得了。
 //   ⑤ 浏览器自动带上的身份(本机直连、cookie)写操作要过跨站判定;Bearer 不用。
-//   ⑥ 配对:申请要机主点了「允许」才领得到凭证;一次性码只兑一次;放不放谁、名册里有谁
-//      匿名一概碰不到;移除一台设备,它的凭证和开着的长连接一起断。
+//   ⑥ 配对:申请要机主点了「允许」才领得到凭证(应答丢了凭同一个 secret 再领还是那一份,
+//      设备退出后不再发);一次性码只兑一次;放不放谁、名册里有谁匿名一概碰不到;移除一台
+//      设备,它的凭证和开着的长连接一起断。
 //   ⑦ 换密钥:旧密钥和凭它进来的设备当场失效,机主亲手放进来的不受牵连。
 //   ⑧ 免登录名单里「路由自己验凭证」的那条(/restart-impact):自用模式的匿名同样要验。
 //   ⑨ 多人模式没有设备配对。
@@ -302,10 +303,11 @@ try {
     (await call("/api/canary", { ...outsider, headers: { ...outsider.headers, authorization: `Bearer ${String(claimed.body.token)}` } })).status,
     200, "手机 app 带不了 cookie,同一把凭证当 Bearer 用",
   );
-  assert.equal(
-    (await call("/api/auth/pair/claim", { ...phone, method: "POST", body: ticketOf })).body.status, "gone",
-    "批准只兑一次凭证",
-  );
+  // 头一次的应答可能丢在路上:凭同一个 secret 再领,拿到的还是那一份,名册里不多出一台。
+  const reclaimed = await call("/api/auth/pair/claim", { ...phone, method: "POST", body: ticketOf });
+  assert.equal(reclaimed.body.status, "approved", reclaimed.text);
+  assert.equal(reclaimed.body.token, claimed.body.token, "再领还是同一份凭证");
+  assert.equal((await roster(paired)).filter((d) => d.via === "approval").length, 1, "批准只登记一台设备");
   assert.deepEqual(
     (await roster(paired)).filter((d) => d.current).map((d) => [d.name, d.via]), [["iPhone · Safari", "approval"]],
   );
@@ -413,6 +415,9 @@ try {
   assert.equal((await call("/api/auth/logout", { ...outsider, method: "POST", headers: paired })).status, 200);
   assert.equal((await call("/api/canary", { ...outsider, headers: paired })).status, 401);
   assert.deepEqual(await roster(), []);
+  const afterLogout = await call("/api/auth/pair/claim", { ...phone, method: "POST", body: ticketOf });
+  assert.equal(afterLogout.body.status, "gone", "设备退出之后,那张申请不再把作废的凭证发第二遍");
+  assert.equal(afterLogout.cookie, null);
 
   // ── ⑧ 名单只放行路径形状,凭证在路由里验 —— 自用模式的匿名也不例外 ─────────
   // /restart-impact 住在 routes.ts 自己身上,所以挂真的那张 `api`。进程内派发 + 非回环
