@@ -7,6 +7,7 @@ import type { Session, Task, TokenUsage } from "@ash/shared";
 import { addUsage, formatTokens, formatTokensExact, hasContext, hasUsage, usageTotal } from "@ash/shared/usage";
 import { taskCreationLabel } from "@ash/shared/task-origin";
 import { createPortal } from "react-dom";
+import { AgentIcon } from "../../components/AgentIcon.tsx";
 import { ContextMeterPanel, contextMeterView } from "../../components/ContextMeterChip.tsx";
 import { HoverTip, useHoverTip } from "../../components/HoverTip.tsx";
 import { InspCopy, InspRow } from "../../inspector/parts.tsx";
@@ -27,9 +28,10 @@ function Tipped({ tip, children, className = "" }: { tip: string; children: Reac
   );
 }
 
+// 面上只画智能体的标，执行器全名（claude@某台机器）指上去再说。
 // 「N 轮」只数真人/系统推着走的回合，被哨兵叫醒的那几轮扣掉，在悬停里另报。
 // 服务端在同一笔入账里数总轮数和唤醒轮数，唤醒本来就是总数的子集；token 仍按全部回合计。
-function UsageValue({ label, usage, wakes }: { label: string; usage: TokenUsage; wakes: number }) {
+function UsageValue({ label, agentType, usage, wakes }: { label: string; agentType: string; usage: TokenUsage; wakes: number }) {
   const total = usage.turns ?? 0;
   const woken = Math.min(wakes, total);
   const turns = total - woken;
@@ -39,7 +41,7 @@ function UsageValue({ label, usage, wakes }: { label: string; usage: TokenUsage;
       className="insp-cut"
       aria-label={[`${label} 累计 ${formatTokensExact(usageTotal(usage))} token`, total ? `${turns} 轮` : "", note].filter(Boolean).join("，")}
     >
-      <span className="insp-faint">{label}</span>{" "}
+      <Tipped tip={label} className="insp-agent"><AgentIcon agent={agentType} size={14} /></Tipped>
       <RollingNumber className="insp-num" value={usageTotal(usage)} format={formatTokens} />
       {total > 0 && (
         <span className="insp-faint">
@@ -112,15 +114,15 @@ export function InfoRunRows({ task, sessions, facts }: { task: Task; sessions: S
   // 多条会话（重跑、续跑各开一行）才合并 —— 那才是同一副账。哨兵唤醒的轮数跟着同一份
   // 分组累加：唤醒照样计费、照样算进轮数，只在悬停里拆开。
   const usageByExecutor = useMemo(() => {
-    const groups = new Map<string, { usage: TokenUsage; wakes: number }>();
+    const groups = new Map<string, { agentType: string; usage: TokenUsage; wakes: number }>();
     for (const session of sessions) {
       if (!session.usage) continue;
       const label = session.executor || session.agentType;
       const previous = groups.get(label);
       const wakes = session.monitorWakeTurns ?? 0;
       groups.set(label, previous
-        ? { usage: addUsage(previous.usage, session.usage), wakes: previous.wakes + wakes }
-        : { usage: session.usage, wakes });
+        ? { ...previous, usage: addUsage(previous.usage, session.usage), wakes: previous.wakes + wakes }
+        : { agentType: session.agentType, usage: session.usage, wakes });
     }
     return [...groups].filter(([, group]) => hasUsage(group.usage));
   }, [sessions]);
@@ -135,9 +137,9 @@ export function InfoRunRows({ task, sessions, facts }: { task: Task; sessions: S
           <Tipped tip={[range, duration.note].filter(Boolean).join(" · ") || duration.text} className="insp-num">{duration.text}</Tipped>
         </InspRow>
       )}
-      {usageByExecutor.map(([label, { usage, wakes }], index) => (
+      {usageByExecutor.map(([label, { agentType, usage, wakes }], index) => (
         <InspRow key={label} label={index === 0 ? "用量" : ""}>
-          <UsageValue label={label} usage={usage} wakes={wakes} />
+          <UsageValue label={label} agentType={agentType} usage={usage} wakes={wakes} />
         </InspRow>
       ))}
       {(hasContext(facts.context) || facts.compacting) && (

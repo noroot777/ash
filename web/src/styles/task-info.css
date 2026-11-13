@@ -86,6 +86,13 @@
   border-radius: 2px;
 }
 
+/* 用量行打头的智能体标，跟后面的数对齐在一条基线上 */
+.insp-agent {
+  display: inline-flex;
+  margin-right: 6px;
+  vertical-align: -2px;
+}
+
 /* 一行里可能很长的值（续跑指令）：最多三行 */
 .insp-clamp {
   display: -webkit-box;
