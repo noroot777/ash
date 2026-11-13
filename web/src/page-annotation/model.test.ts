@@ -60,7 +60,7 @@ test("文件名、目标和意见中的换行不会被现有附件解析器误�
 test("图片选择覆盖用户与执行器附件，去重并过滤不可访问的文件", () => {
   const items: ConversationItem[] = [
     { kind: "user", id: "u", text: "", attachments: ["/data/uploads/a.png", "/tmp/unavailable.png"] },
-    { kind: "agent", id: "a", sessionId: "session", label: "codex", markdown: "", segments: [{ id: "s", markdown: "", events: [], attachments: ["/data/uploads/b.jpg", "/data/uploads/manual.pdf"] }] },
+    { kind: "agent", id: "a", sessionId: "session", label: "codex", agentType: "codex", markdown: "", segments: [{ id: "s", markdown: "", events: [], attachments: ["/data/uploads/b.jpg", "/data/uploads/manual.pdf"] }] },
   ];
   assert.deepEqual(screenshotCandidates(items, ["/data/uploads/a.png"]).map((image) => image.path), ["/data/uploads/a.png", "/data/uploads/b.jpg"]);
   assert.equal(screenshotCandidates(items)[0]?.url, "/api/uploads/a.png");

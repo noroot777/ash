@@ -1,7 +1,8 @@
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import type { AgentExecutorProfile, AgentType, LlmProvider } from "@ash/shared";
-import { ArrowLeft, ArrowsClockwise, CaretRight, Robot, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { ArrowLeft, ArrowsClockwise, CaretRight, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { AgentIcon } from "../components/AgentIcon.tsx";
 import { useAgentModelCatalog } from "../lib/modelCatalog.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
@@ -167,7 +168,7 @@ export function AgentModelPicker({
           </button>
         )}
         <span className="agent-model-picker-crumb">
-          <Robot size={12} aria-hidden="true" />
+          <AgentIcon agent={stage === "model" ? agent : null} size={12} />
           {stage === "agent" && "选择智能体"}
           {stage === "model" && <>@{agent} <CaretRight size={9} weight="bold" aria-hidden="true" /> 选择模型</>}
         </span>
@@ -192,6 +193,7 @@ export function AgentModelPicker({
               onMouseEnter={() => setIndex(rowIndex)}
               onClick={() => openModels(row.agent)}
             >
+              <AgentIcon agent={row.agent} size={14} />
               <b>@{row.agent}</b>
               <span>{row.detail}</span>
               <CaretRight size={11} aria-hidden="true" />

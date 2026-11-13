@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, type ReactNode } from "react";
-import { CaretDown, CaretRight, File, FolderSimple, Robot } from "@phosphor-icons/react";
+import { CaretDown, CaretRight, File, FolderSimple } from "@phosphor-icons/react";
+import { AgentIcon } from "./AgentIcon.tsx";
 import type { FileMentionState } from "../lib/useFileMention.ts";
 import type { MentionTreeRow } from "../lib/fileMentionTree.ts";
 
@@ -133,7 +134,7 @@ export function MentionMenu({
           >
             {row.kind === "agent" ? (
               <>
-                <Robot size={14} aria-hidden="true" />
+                <AgentIcon agent={row.agent} size={14} />
                 <b>@{row.agent}</b>
                 {row.detail && <em>{row.detail}</em>}
               </>

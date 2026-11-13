@@ -4,6 +4,8 @@
 .task-message { position: relative; max-width: 790px; margin-bottom: 20px; }
 .task-message--agent { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; }
 .task-message-avatar { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; background: var(--overlay); color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
+/* 画的是那家的标：标自己就是个完整的形，不再垫一枚灰圆。 */
+.task-message-avatar.is-branded { background: transparent; }
 .task-message-content { min-width: 0; }
 .task-message header,
 .task-user-bubble header { display: flex; min-height: 20px; align-items: center; gap: 6px; color: var(--muted); font-size: var(--t-xs); }

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { AgentExecutorProfile, AgentType } from "@ash/shared";
-import { CaretDown, Robot } from "@phosphor-icons/react";
+import { CaretDown } from "@phosphor-icons/react";
+import { AgentIcon } from "./AgentIcon.tsx";
 import { reasoningEffortsFor } from "@ash/shared/cli-presets";
 import { AgentModelPicker } from "../task-detail/AgentModelPicker.tsx";
 import { EffortPicker } from "./EffortPicker.tsx";
@@ -116,7 +117,7 @@ export function RunTargetPicker({
           : `智能体：${unsetText}；点击更改`}
         onClick={() => setOpen((current) => (current === "agent" ? null : "agent"))}
       >
-        <Robot size={12} aria-hidden="true" />
+        <AgentIcon agent={selection?.agentType} size={12} />
         {selection ? <b>{selection.agentType}</b> : <span className="is-placeholder">{unsetText}</span>}
         {/* 执行器名是「选了哪个模型」的结果，挤在对话框底部那排时先让位给模型本身。 */}
         {selection && profile && variant === "field" && <span>{profile.name}</span>}
