@@ -182,29 +182,46 @@ export class ClaudeMonitorTrace {
   }
 
   /**
-   * 串到写库链上，**失败重试一次**。
+   * 串到写库链上，**落库成功才算交差**：失败的那一笔留在队头按阶梯退避重试，后面的事件
+   * 排在它后头等着。
    *
-   * 为什么要重试：这些 job 是「已经从事件流里消费掉的事实」——`tool_use`/`task_started` 一旦
-   * 处理过就从 `pending` 里删了，来源侧不会再发一遍。一次 SQLITE_BUSY 就只写一行日志的话，
-   * 那条投影在这个进程里再也没机会落库（第 5 轮审查按代码推断指出这一条）。
+   * 为什么非重试不可：这些 job 是「已经从事件流里消费掉的事实」——`tool_use`/`task_started`
+   * 一旦处理过就从 `pending` 里删了，来源侧不会再发一遍，库里也没有任何别的地方能把它补回来。
+   * 只试两次就放手的话，一次几百毫秒的 SQLITE_BUSY 就让面板永久少一张卡，回合收尾那条
+   * 「为什么没唤醒」的说明也跟着缺（它数的正是这些行，见 claude-monitor-reaped.ts）。
    *
-   * 只重试一次、而且隔一小会儿：BUSY 这类争用通常瞬间就过去了；真的是逻辑错误时重试也救不
-   * 回来，继续往下拖反而会积压事件流。重试仍失败就只留诊断：这是一份旁路投影，丢一张卡
-   * 不该拖垮事件流。
+   * 每个 job 都可以安全重跑：`open` 先按来源查重再插，`close` 是带旧状态的条件更新，回执
+   * 只覆写同几列。`finishAll` 排在同一条链上，所以收尾天然等前面的责任收口。
+   *
+   * **积压有上界**：阶梯总共约 5 秒，够盖住争用这类暂态。一笔把阶梯试满了就说明库是真的
+   * 坏了，这时进入熔断——后面的各试一次就放手，免得每条事件再排 5 秒、把流结束那一刻的
+   * 收尾拖成分钟级；有一笔写成了就恢复阶梯。放手的那几笔只留诊断：这是一份旁路投影，
+   * 库整个不可用的时候不该拖住 agent 的事件流。
    */
+  private static readonly RETRY_MS = [50, 250, 1_000, 4_000];
+  /** 熔断中：上一笔已经把阶梯试满还没写成。 */
+  private degraded = false;
+
   private queue(job: () => Promise<void>): void {
-    const once = async (): Promise<void> => {
-      try {
-        await job();
-      } catch (first) {
-        this.warn("记账失败，重试一次", first);
-        await new Promise((r) => setTimeout(r, 50));
-        await job();
+    const run = async (): Promise<void> => {
+      const ladder = this.degraded ? [] : ClaudeMonitorTrace.RETRY_MS;
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await job();
+          this.degraded = false;
+          return;
+        } catch (e) {
+          if (attempt >= ladder.length) {
+            this.degraded = true;
+            this.warn("记账退避重试后仍失败，这一条没有记上", e);
+            return;
+          }
+          if (attempt === 0) this.warn("记账失败，退避重试", e);
+          await new Promise((r) => setTimeout(r, ladder[attempt]));
+        }
       }
     };
-    this.chain = this.chain.then(once, once).catch((e) => {
-      this.warn("记账重试后仍失败，这一条没有记上", e);
-    });
+    this.chain = this.chain.then(run, run);
   }
 
   /**
@@ -619,7 +636,7 @@ export class ClaudeMonitorTrace {
       if (!cliSessionId) return;
       await reapClaudeMonitors(cliSessionId, await this.runOrigin(), this.openedAt);
     });
-    // 队列永不 reject（`queue` 的 catch 兜住），所以这里原样交出去就行。
+    // 队列永不 reject（`queue` 里每一笔自己兜住全部异常），所以这里原样交出去就行。
     return this.chain.then(() => undefined);
   }
 }

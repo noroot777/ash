@@ -54,13 +54,15 @@ const projected: TaskMonitor = {
 };
 
 
-function state(monitors: TaskMonitor[]): TaskMonitorsState {
+function state(monitors: TaskMonitor[], read: Partial<Pick<TaskMonitorsState, "ready" | "listed" | "error">> = {}): TaskMonitorsState {
   return {
     monitors,
     stoppingIds: new Set(),
     error: null,
     needsWakeTarget: false,
     ready: true,
+    listed: true,
+    ...read,
     start: async () => true,
     stop: async () => undefined,
     reload: async () => undefined,
@@ -76,10 +78,22 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null, wai
     />,
   );
 
-// ── 空面板只说一句，不带解释 ──────────────────────────────────────────────
+// ── 空面板只说一句，而且只在列表真读到之后说 ─────────────────────────────────
+//
+// 「这个任务上还没有哨兵」是强断言：还在读、或者读失败时手上那个空数组不是它的依据（第 1 轮
+// 审查 N1）。读取中留白；读失败只留报错那一条。
 {
   const empty = panel([]);
   assert.match(empty, /这个任务上还没有哨兵/, "确实没有时就直说");
+  const loading = renderToStaticMarkup(
+    <MonitorInspector monitors={state([], { ready: false, listed: false })} blockedReason={null} />,
+  );
+  assert.doesNotMatch(loading, /这个任务上还没有哨兵/, "还在读的时候不许断言「没有哨兵」");
+  const failed = renderToStaticMarkup(
+    <MonitorInspector monitors={state([], { listed: false, error: "读取失败：网络断了" })} blockedReason={null} />,
+  );
+  assert.match(failed, /读取失败：网络断了/, "读失败时如实说读失败");
+  assert.doesNotMatch(failed, /这个任务上还没有哨兵/, "读失败时不许跟着断言「没有哨兵」");
 }
 
 // ── 时长的说法不能进位成「X 分 60 秒」 ──────────────────────────────────────

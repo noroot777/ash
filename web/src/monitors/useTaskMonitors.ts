@@ -235,6 +235,11 @@ export function useTaskMonitors(taskId: string) {
     /** 真 = 上一次提交被「说不清叫谁」拒了:表单要让人指定一个唤醒目标再来。 */
     needsWakeTarget: failure?.taskId === taskId && failure.kind === "action" && !!failure.needsWake,
     ready,
+    /**
+     * 这一份列表**真读到了**（`ready` 只说这一轮结束了，读失败也算结束）。「这个任务上还没有
+     * 哨兵」是一句强断言：还在读、或者读失败了的时候，手上的空数组不是它的依据。
+     */
+    listed: ready && !(failure?.taskId === taskId && failure.kind === "list"),
     start,
     stop,
     reload,

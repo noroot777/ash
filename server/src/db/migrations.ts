@@ -422,6 +422,39 @@ async function relaxDebateRoundIndex(client: Client): Promise<void> {
   }
 }
 
+// 把**旧版本算法推算出来**的 claude 投影期限降回 unknown。纯 SQL，不读任何会话文件。
+//
+// 判据是 `lifetime_evidence IS NULL`:那一列是第 4 轮才加的,所以旧行必然为 NULL,而新代码
+// 落 bounded 时一定同时写 'receipt'(来源回执明说的)。于是「谁的期限没有事实依据」这个问题
+// 有了确定答案,不必去猜。
+//
+// **上一版的判据是错的**:它用 `cli_session_id IS NULL`,理由写的是「归属列和 source_lifetime
+// 同一批加入,早期代码不写它」—— 这条事实不成立。第 4 轮审查用 `git show` 核出:归属列在本
+// 功能第一个提交 `579e58dc` 就有,`source_lifetime` 到第 2 轮 `af4ea0e2` 才加。所以那批**带
+// 归属的**错期限行一条都没被纠正(实测 legacyLifetimes:一行 60 秒、一行假 5 分钟的持续监听)。
+//
+// 降下去就是「期限未知」，不会再被谁升回来：当初能重读来源回执把它升回去的历史扫描已经删了。
+// 宁可说不知道，也不把一个没有依据的「盯到 …」/「总共盯 X」端给用户。已经带 'receipt' 的行
+// 一条都不碰。
+//
+// 必须排在 `backfillMonitorTimeoutFromExpiry` 之前：那一步拿 `expires_at - started_at` 回算
+// 时长，不看证据列 —— 先降级，它才只给真正可信的期限回算。
+//
+// 幂等:降过之后 source_lifetime 不再是 'bounded',不会重复匹配。
+async function relaxUnfoundedClaudeMonitorLifetimes(client: Client): Promise<void> {
+  try {
+    await client.execute(
+      `UPDATE monitors SET source_lifetime='unknown'
+       WHERE kind='claude' AND source_lifetime<>'unknown' AND lifetime_evidence IS NULL`,
+    );
+  } catch (e) {
+    // **只吞「列还不存在」**(新库在 DDL 之前跑到这里)。原来 catch 是空的,于是权限、
+    // SQLITE_BUSY/FULL 这些真失败也被当成「列没有」静静放过,旧假期限留在库里而且没人知道
+    // (第 4 轮审查按代码推断指出)。真失败往外抛,由 runDataMigrations 的调用方处理。
+    if (!/no such column|no such table/i.test((e as Error | null)?.message ?? "")) throw e;
+  }
+}
+
 /**
  * 存量 `bounded` 行回算 `timeout_ms`（**时长**），起点证据一律不动。
  *
@@ -459,8 +492,8 @@ async function backfillMonitorTimeoutFromExpiry(client: Client): Promise<void> {
       });
     }
   } catch (e) {
-    // 只吞「列/表还不存在」（新库在 DDL 之前跑到这里）。原来 catch 是空的，权限、
-    // SQLITE_BUSY/FULL 这些真失败也被静静放过（第 4 轮审查）；真失败往外抛。
+    // 只吞「列/表还不存在」（新库在 DDL 之前跑到这里），真失败往外抛——理由同
+    // relaxUnfoundedClaudeMonitorLifetimes。
     if (!/no such column|no such table/i.test((e as Error | null)?.message ?? "")) throw e;
   }
 }
@@ -481,6 +514,9 @@ export async function runDataMigrations(client: Client): Promise<void> {
     console.warn("[ash] 已验收任务遗留预约清理失败,忽略:", e);
   }
   await reclaimOrphanOwnerGroups(client);
+  await relaxUnfoundedClaudeMonitorLifetimes(client);
+  // 必须排在 relax 之后：那一步先把「时长没有依据」的行降成 unknown，这一步才只给真正
+  // 可信的时长回算列值。
   await backfillMonitorTimeoutFromExpiry(client);
   await migrateSessionTurnIdentity(client);
   // 升上来的老实例不该被糊一屏首启向导。判据只在这一刻算一次,之后 `src/onboarding.ts`

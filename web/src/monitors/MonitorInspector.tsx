@@ -127,10 +127,13 @@ export function MonitorInspector({
       )}
       {rows.length === 0
         ? (
-          // 「哨兵是什么」那段解释收进 + 的悬停提示和起哨兵的表单里，空态只说一句。
-          <div className="monitor-inspector__empty">
-            <InspNone>这个任务上还没有哨兵。</InspNone>
-          </div>
+          // 「哨兵是什么」那段解释收进 + 的悬停提示和起哨兵的表单里，空态只说一句 —— 而且只在
+          // 列表真读到之后说：还在读就留白，读失败上面那条报错已经说了。
+          monitors.listed && (
+            <div className="monitor-inspector__empty">
+              <InspNone>这个任务上还没有哨兵。</InspNone>
+            </div>
+          )
         )
         : (
           <div className="monitor-inspector__groups">
