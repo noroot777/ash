@@ -72,7 +72,8 @@ export function appendTraceFragments(
       usage: traceUsage(entries),
       markdown: traceSegments.map((segment) => segment.markdown).join(""),
       segments: traceSegments,
-      sources: source ? [source] : [],
+      // 走到这里组里一定有可删事件（上面那道），出处一定有。
+      sources: [source!],
     });
   };
   for (const [traceTurn, entries] of [...traceGroups].sort(([left], [right]) => Date.parse(left) - Date.parse(right))) {

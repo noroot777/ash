@@ -24,7 +24,7 @@ const stage = mkdtempSync(join(tmpdir(), "ash-mid-turn-notes-"));
 process.env.ASH_DB = join(stage, "ash.db");
 process.env.ASH_RUNS_DIR = join(stage, "runs");
 process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
-const { redactTranscript, redactTrace, traceSpanWindow } = await import("../../server/src/conversation-redact.ts");
+const { RedactRefusal, redactTranscript, redactTrace, traceSpanWindow } = await import("../../server/src/conversation-redact.ts");
 
 type Agent = Extract<ConversationItem, { kind: "agent" }>;
 type Step =
@@ -249,13 +249,21 @@ function deleteBubble(
   const session = sessionOf(steps, false);
   const served = buildConversationItems([{ session, output, trace: [...trace, ...readSide(trace)] } as never], [session], []);
   const sources = pick(agents(served)).sources ?? [];
+  assert.ok(sources.length, "这颗气泡该有删除入口");
   const redacted = redactTranscript(output, sources.flatMap((source) => "index" in source ? [source] : []));
-  const windows = [
-    ...redacted.windows,
-    ...sources.flatMap((source) => "trace" in source ? [traceSpanWindow(traceRaw, source.trace)] : []),
-  ];
+  let windows;
+  try {
+    windows = [
+      ...redacted.windows,
+      ...sources.flatMap((source) => "trace" in source ? [traceSpanWindow(traceRaw, source.trace)] : []),
+    ];
+  } catch (error) {
+    // 服务端认定页面上那份跟盘上对不上，整次拒绝：什么都没动。
+    if (error instanceof RedactRefusal) return { refused: true as const, left: trace, items: [] as ConversationItem[] };
+    throw error;
+  }
   const left = redactTrace(traceRaw, windows).split("\n").filter(Boolean).map((line) => JSON.parse(line));
-  return { left, items: buildConversationItems([{ session, output: redacted.text, trace: left } as never], [session], []) };
+  return { refused: false as const, left, items: buildConversationItems([{ session, output: redacted.text, trace: left } as never], [session], []) };
 }
 {
   const { left, items } = deleteBubble(between, (bubbles) => bubbles[0]!);
@@ -299,6 +307,42 @@ const subagents: Step[] = [
     "跟读侧补出来的条目同一毫秒的真事件、盘上 status 为 unknown 的子智能体、只剩一张图的那一截，都得跟着回合删掉");
   assert.equal(agents(items).length, 0);
 }
+
+// ── 9) 删除出处：回合末尾盘上真有的子智能体事件 / 图，要么删干净、要么整次拒绝 ──────────
+// 这三种形状也可能是服务端读的时候补在末尾的（见 conversationTraceSources 的 readSideTail），
+// 页面靠推断认它们；盘上 trace 恰好以它们收尾（停止、异常退出、没收到用量）时就会认错。认错的
+// 那一条也必须照样落在删除时间段里：结局只许是删干净或服务端整次拒绝，不许「删好了」却留着原文；
+// 只有执行过程的那颗气泡也一样要有删除入口。
+const realTails: [string, Record<string, unknown>][] = [
+  ["status 为 unknown 的子智能体", { kind: "tool", name: "Agent", detail: "子智能体交回的正文 /tmp/private.txt",
+    nativeWork: { type: "agent", id: "real-agent", status: "unknown", result: "子智能体交回的正文 /tmp/private.txt" } }],
+  ["顶层附件", { kind: "attachment", path: "/tmp/private.png" }],
+  ["子智能体那一层的附件", { kind: "tool", name: "Agent", nativeWork: { type: "activity", id: "real-agent", event: { kind: "attachment", path: "/tmp/private-child.png" } } }],
+];
+for (const [label, event] of realTails) {
+  const tail: Step = { tool: label, at: "2026-11-13T03:46:20.000Z", event };
+  for (const [shapeLabel, steps] of [
+    ["正文回合", [
+      { turn: SESSION_AT },
+      { say: "先读文件。", at: "2026-11-13T03:45:00.000Z" },
+      { note: "后台还有子代理在跑", at: "2026-11-13T03:46:00.000Z" },
+      { tool: "pwd", at: "2026-11-13T03:46:10.000Z" },
+      tail,
+      { turnEnd: "2026-11-13T03:49:00.000Z" },
+    ]],
+    ["只有执行过程的回合", [{ turn: SESSION_AT }, { tool: "pwd", at: "2026-11-13T03:46:10.000Z" }, tail]],
+  ] as [string, Step[]][]) {
+    const result = deleteBubble(steps, (bubbles) => bubbles[0]!);
+    if (result.refused) continue;
+    assert.deepEqual(result.left.filter((entry) => !traceKeptOnDelete(entry.event.kind)), [],
+      `${shapeLabel}末尾是盘上真有的${label}：删除被接受了，就不许留下原文`);
+    assert.equal(agents(result.items).length, 0);
+  }
+}
+// 附件不进指纹，认错了也删得掉 —— 这一种不该被拒。
+assert.equal(deleteBubble([{ turn: SESSION_AT }, { say: "先读文件。", at: "2026-11-13T03:45:00.000Z" },
+  { note: "后台还有子代理在跑", at: "2026-11-13T03:46:00.000Z" }, { tool: "pwd", at: "2026-11-13T03:46:10.000Z" },
+  { tool: "shot", at: "2026-11-13T03:46:20.000Z", event: realTails[1]![1] }], (bubbles) => bubbles[0]!).refused, false);
 
 rmSync(stage, { recursive: true, force: true });
 console.log("conversation mid-turn notes tests passed");
