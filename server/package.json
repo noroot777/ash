@@ -270,6 +270,7 @@
     "test:ash-mcp-probe": "tsx scripts/test-ash-mcp-probe.ts",
     "test:ash-mcp-file": "tsx scripts/test-ash-mcp-file.ts",
     "test:ash-mcp-launch": "tsx scripts/test-ash-mcp-launch.ts",
+    "test:review-no-verdict": "tsx scripts/test-review-no-verdict.ts",
     "test:stall-journal": "tsx scripts/test-stall-journal.ts",
     "test:conversation-redact": "tsx scripts/test-conversation-redact.ts",
     "test:response-compression": "tsx scripts/test-response-compression.ts"
