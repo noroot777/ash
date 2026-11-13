@@ -232,7 +232,12 @@ try {
   {
     const { waitForGate } = await import("../src/duet/gates.js");
     const { nextGateVersion } = await import("../src/duet/gate-version.js");
+    const { claimOwnTurn, releaseTurn } = await import("../src/turn-lock.js");
     const ids = ["tg-kept", "tg-lost"];
+    // 跟生产一样:讨论在 runDuet 里占着回合锁等在门口(duet/index.ts acquireDuetTurn)。不占的话
+    // 放行之后内存里的门没了、状态还停在 awaiting_review、锁也空着 —— currentGateVersion 会把它读成
+    // 「重启丢了门、还等人按」,按钮收尾于是换新信封重渲染(warning),那不是这一幕要钉的情形。
+    const held = new Map(ids.map((id) => [id, claimOwnTurn(id, "duet")!]));
     await db.insert(tasks).values(ids.map((id) => task({ id, title: `闸口 ${id}`, mode: "duet", status: "awaiting_review" })) as never);
     const decisions = new Map<string, Promise<unknown>>();
     for (const id of ids) {
@@ -263,6 +268,7 @@ try {
     const reject = buttonsOf(lost).find((button) => button.value?.op === "reject")!;
     assert.equal((await im.click(OWNER, reject.value!)).toast?.type, "success", "打回终止照常能点");
     assert.deepEqual(await decisions.get("tg-lost"), { kind: "reject" });
+    for (const [id, turn] of held) releaseTurn(id, turn);
     await db.update(tasks).set({ status: "done" }).where(inArray(tasks.id, ids));
   }
 

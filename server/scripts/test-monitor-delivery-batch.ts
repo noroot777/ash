@@ -193,17 +193,19 @@ try {
       const first = await eventMessage(taskId, "ISOLATION_FIRST");
       const boundary = await eventMessage(taskId, "ISOLATION_BOUNDARY", change);
       const last = await eventMessage(taskId, "ISOLATION_LAST");
-      assert.deepEqual((await beginPendingBatch(first)).map((message) => message.id), [first.id]);
+      const claimed = await beginPendingBatch(first);
+      assert.deepEqual(claimed.map((message) => message.id), [first.id]);
       assert.equal((await rowOf(boundary)).deliveringSince, null);
       assert.equal((await rowOf(last)).deliveringSince, null);
-      await pending.abortDelivery(first);
+      await pending.abortDelivery(claimed);
       await cancelTaskMessages(taskId);
     }
     const taskId = await makeTask();
     const first = await eventMessage(taskId, "REVIEW_ROUND_ONE", { sessionRole: "reviewer", reviewRun: "same-run", reviewRound: 1 });
     await eventMessage(taskId, "REVIEW_ROUND_TWO", { sessionRole: "reviewer", reviewRun: "same-run", reviewRound: 2 });
-    assert.equal((await beginPendingBatch(first)).length, 1);
-    await pending.abortDelivery(first);
+    const sameRun = await beginPendingBatch(first);
+    assert.equal(sameRun.length, 1);
+    await pending.abortDelivery(sameRun);
     await cancelTaskMessages(taskId);
     console.log("PASS: role, review run/round, executor configuration, owner, attachments, timed and human-review boundaries");
   }
@@ -216,7 +218,8 @@ try {
     assert.deepEqual(attempts.flat().map((message) => message.id), [first.id, second.id]);
     await monitorEvents.cancelPendingMonitorEvents(taskId);
     assert.equal((await rowOf(first)).status, "pending", "批次内的已领取消息仍由投递者负责");
-    await pending.abortDelivery([first, second]);
+    // 归还要拿**领取那一刻**的行(带着这一次的租约值),领取前的快照写不中(delivery-fence.ts)。
+    await pending.abortDelivery(attempts.flat());
     const canceled = await eventMessage(taskId, "CLAIM_CANCELLED");
     await monitorEvents.cancelPendingMonitorEvents(taskId, { only: [canceled.origin!.slice(8)] });
     assert.equal((await rowOf(canceled)).status, "canceled");
@@ -227,13 +230,15 @@ try {
     assert.ok(leased);
     assert.deepEqual((await beginPendingBatch(first)).map((message) => message.id), [first.id]);
     await pending.reclaimStaleDeliveries();
-    assert.equal((await beginPendingBatch(first)).length, 2);
-    await pending.abortDelivery([first, second]);
+    const reclaimed = await beginPendingBatch(first);
+    assert.equal(reclaimed.length, 2);
+    await pending.abortDelivery(reclaimed);
     scheduleRedelivery(second, "定向测试：暂未到重试窗口");
     assert.ok(retryBlocked(second.id, Date.now()));
-    assert.equal((await beginPendingBatch(first)).length, 1);
+    const notRetried = await beginPendingBatch(first);
+    assert.equal(notRetried.length, 1);
     forgetRedelivery(second.id);
-    await pending.abortDelivery(first);
+    await pending.abortDelivery(notRetried);
     const transaction = dbClient.transaction;
     let injected = 0;
     dbClient.transaction = async function (...args) {
@@ -487,9 +492,11 @@ try {
     const first = await eventMessage(taskId, "COMPLETE_GATE_A");
     const second = await eventMessage(taskId, "COMPLETE_GATE_B");
     await db.update(monitors).set({ status: "exited" }).where(eq(monitors.taskId, taskId));
-    await beginPendingBatch(first);
+    const claimed = await beginPendingBatch(first);
+    assert.deepEqual(claimed.map((message) => message.id), [first.id, second.id]);
     assert.match((await monitorsBlockingComplete(taskId))!, /2 条哨兵结果/);
-    await pending.markSent([first, second]);
+    // 确认送达要拿领取那一刻的行(带着这一次的租约值),领取前的快照写不中(delivery-fence.ts)。
+    await pending.markSent(claimed);
     assert.equal(await monitorsBlockingComplete(taskId), null);
     console.log("PASS: completion gate sees every claimed result until the batch is acknowledged");
   }
