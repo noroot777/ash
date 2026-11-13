@@ -5,7 +5,9 @@ import {
   GitCommit,
   SpinnerGap,
   WarningCircle,
+  X,
 } from "@phosphor-icons/react";
+import { IconButton } from "../components/IconButton.tsx";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import { freeReviewBlockingLabel, freeReviewView } from "../free-workflow/freeReviewCopy.ts";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
@@ -45,12 +47,14 @@ export function TaskReviewWorkspace({
   onTaskUpdated,
   notify,
   onPostMergeReview,
+  onClose,
 }: {
   task: Task;
   allTasks: TaskListItem[];
   onTaskUpdated: (task: Task) => void;
   notify: (message: string) => void;
   onPostMergeReview?: () => void;
+  onClose: () => void;
 }) {
   const commitVersion = useWorkspaceCommitVersion(task.id);
   const [data, setData] = useState<ReviewData | null>(null);
@@ -136,13 +140,16 @@ export function TaskReviewWorkspace({
       {/* 和团队验收台同一副形状：顶栏一行放标题和验收动作，主体只铺这一屏独有的东西
           ——分支信息与 diff。任务标题、状态、目标正文在对话区和右侧 inspector 里各有一份，
           验证证据也在 inspector 里点得开，再套一张卡片铺一遍只会把真正要看的 diff 往下推。
-          返回口只留任务顶栏那一个（验收台开着时「验收」主按钮就变成「返回对话」），这里
-          不再重复第二个。 */}
+          返回口就在这一行的最右端，跟预览指正的关闭键同一个位置：任务顶栏那颗验收章开关
+          也能收起它，但章是个状态图标，看不出「点它回去」。 */}
       <header className="single-review-subbar acceptance-host">
         <div className="acceptance-host-title"><b>{sharedParent ? "共享执行者审查" : "改动与提交"}</b><small>{sharedParent ? "该执行者随父团队共享分支统一验收" : "验证证据见右侧审查记录；这里核对任务分支相对基线的提交与 diff"}</small></div>
         {sharedParent
           ? <span className="single-review-shared-badge">随团队验收</span>
           : <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} acceptanceBlock={acceptanceBlock} />}
+        <IconButton label="返回对话" className="acceptance-host-close" onClick={onClose}>
+          <X size={16} aria-hidden="true" />
+        </IconButton>
       </header>
       <div className="single-review-scroll">
         <div className="single-review-stack">
