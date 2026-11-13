@@ -8,6 +8,7 @@ import { conversationTailKey } from "./conversationModel.ts";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
+import { AgentIcon, hasAgentIcon } from "../components/AgentIcon.tsx";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -96,6 +97,8 @@ function AgentMessageView({
     duration && laneRole !== "lead" ? `${duration} 用时` : null,
   ].filter(Boolean).join(" · ");
   const live = !item.endedAt && taskActive;
+  // 认得出是哪家的就画那家的标，认不出（自定义 CLI）才退回执行器名的首字母。
+  const branded = !reviewer && hasAgentIcon(item.agentType);
   const head = showIdentity || showBadge || !!meta;
   // 看着它收口的那一下：尾栏淡入一次、约两秒后收回，过程摘要那一行淡入（run-5）。
   const justEnded = useJustEnded(live);
@@ -105,8 +108,8 @@ function AgentMessageView({
     >
       {/* 卡头左边已经有一颗同样的盾：卡里每条发言再挂一颗，只是把同一个身份画两遍。 */}
       {!laneRole && (
-        <span className="task-message-avatar" aria-hidden="true">
-          {item.continuation ? "" : reviewer ? <ShieldCheck size={13} weight="fill" /> : item.label.slice(0, 1).toUpperCase()}
+        <span className={`task-message-avatar${branded ? " is-branded" : ""}`} aria-hidden="true">
+          {item.continuation ? "" : reviewer ? <ShieldCheck size={13} weight="fill" /> : branded ? <AgentIcon agent={item.agentType} size={16} /> : item.label.slice(0, 1).toUpperCase()}
         </span>
       )}
       <div className="task-message-content">
@@ -148,7 +151,7 @@ export function sameSettledTurn(prev: AgentMessageProps, next: AgentMessageProps
   if (!settled(prev) || !settled(next)) return false;
   const a = prev.item;
   const b = next.item;
-  return a.id === b.id && a.endedAt === b.endedAt && a.markdown === b.markdown && a.label === b.label
+  return a.id === b.id && a.endedAt === b.endedAt && a.markdown === b.markdown && a.label === b.label && a.agentType === b.agentType
     && sameSegments(a.segments, b.segments)
     && a.continuation === b.continuation && a.wokenByMonitor === b.wokenByMonitor
     && a.reviewer?.round === b.reviewer?.round && a.run?.model === b.run?.model && a.run?.reasoningEffort === b.run?.reasoningEffort

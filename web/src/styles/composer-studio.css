@@ -12,9 +12,9 @@
 .composer-header > .composer-header-count { flex:none; margin-right:4px; }
 
 .composer-scroll { min-height:0; overflow-y:auto; background:var(--canvas); }
-/* 一条 960 的居中列（底排的选项入口 + 谁来做 + 发送键要能排成一行）。上边距是定值而不是算出来的居中：输入变高、下面多出列表时卡片不跳。
+/* 一条 1200 的居中列（底排的选项入口 + 谁来做 + 发送键要能排成一行）。上边距是定值而不是算出来的居中：输入变高、下面多出列表时卡片不跳。
    首页没有模式那一行，把那 40px 让出来，卡片在两面落在同一个位置。 */
-.is-studio .composer-inner { --top:clamp(56px,19vh,160px); width:min(960px,calc(100% - 48px)); margin:0 auto; padding:var(--top) 0 48px; }
+.is-studio .composer-inner { --top:clamp(56px,19vh,160px); width:min(1200px,calc(100% - 64px)); margin:0 auto; padding:var(--top) 0 48px; }
 .is-studio.is-home .composer-inner { padding-top:calc(var(--top) + 40px); }
 
 /* 卡片上方：三种模式，一组分段 */

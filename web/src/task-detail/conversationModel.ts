@@ -51,6 +51,8 @@ export type ConversationItem =
       id: string;
       sessionId: string;
       label: string;
+      /** 说这一回合的是哪家 CLI（头像画它的标）；label 是执行器名，可能是自定义的。 */
+      agentType?: string;
       at?: string | null;
       endedAt?: string | null;
       markerEndedAt?: string | null;
@@ -452,6 +454,7 @@ function appendPersistedSession(
         id: `persisted:agent:${session.id}:${index}`,
         sessionId: session.id,
         label: agentLabel(session),
+        agentType: session.agentType,
         at: turnStartedAt,
         endedAt: null,
         markerEndedAt: segment.endedAt ?? null,
