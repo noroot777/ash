@@ -130,6 +130,17 @@ try {
     chmodSync(stuckDir, 0o700);
   }
 
+  // ── 保留期 0 天：第一次看到了结就删，不等下一趟（第 3 轮审查 N1） ──
+  await task("zero", { stage: "accepted", acceptanceId: "zero" });
+  const zero = events("zero", 1);
+  process.env.ASH_TRACE_KEEP_DAYS = "0";
+  try {
+    await sweepRawTraces(t0);
+  } finally {
+    delete process.env.ASH_TRACE_KEEP_DAYS;
+  }
+  assert.equal(existsSync(zero), false);
+
   console.log("run trace retention: ok");
 } finally {
   rmSync(root, { recursive: true, force: true });

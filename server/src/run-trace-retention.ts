@@ -88,11 +88,11 @@ async function sweepTask(taskId: string, nowMs: number, grace: number): Promise<
     rmSync(stampPath, { force: true }); // 进行中：起点作废
     return { removed: 0, bytes: 0 };
   }
-  const observed = readStamp(stampPath, conclusion.key);
+  let observed = readStamp(stampPath, conclusion.key);
   if (observed === null) {
-    // 头一回看到这一次了结（或身份换了）：从此刻起算，这一趟一份不删。
+    // 头一回看到这一次了结（或身份换了）：从此刻起算。宽限期为 0 时这一趟就删，否则自然一份不删。
     writeFileSync(stampPath, `${JSON.stringify({ key: conclusion.key, at: new Date(nowMs).toISOString() })}\n`);
-    return { removed: 0, bytes: 0 };
+    observed = nowMs;
   }
   const since = Math.max(observed, conclusion.floorMs);
   let removed = 0;

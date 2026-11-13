@@ -3,9 +3,12 @@
 //   磁盘失败不算删除失败：接口照常 200，如实列出哪几个没收干净；
 //   账只在磁盘真收干净后销掉，收不掉记下次数和原因、后台重试；
 //   清理层出任何错（账写不上）都不改写已经提交的删除结果；
-//   同一个 id 又有了任务行（接力迁回本机）：账作废、目录一个字节不动。
+//   同一个 id 又有了任务行（接力迁回本机）：账作废、目录一个字节不动；
+//   旧清理和同编号的真实接力导入交错（第 3 轮审查 F1）：两种先后都不许删掉导入的正文。
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,6 +25,8 @@ try {
   const { projects, tasks, taskDiskCleanups } = await import("../src/db/schema.js");
   const { deleteTaskCompletely, mountTaskDeleteRoutes } = await import("../src/task-delete-routes.js");
   const { sweepPendingTaskDisk } = await import("../src/run-dir-reclaim.js");
+  const { importHandoff } = await import("../src/handoff-import.js");
+  const { withTaskDirLock } = await import("../src/task-dir-lock.js");
   const { eq } = await import("drizzle-orm");
   const { Hono } = await import("hono");
   await ensureSchema();
@@ -106,9 +111,74 @@ try {
   await task("returned");
   runDir("returned");
   await db.insert(taskDiskCleanups).values({ taskId: "returned", createdAt: stamp });
-  assert.equal(await sweepPendingTaskDisk(), 0);
+  assert.equal(await sweepPendingTaskDisk(), 1, "账作废也算了账");
   assert.equal(existsSync(join(runs, "returned", "session", "s.md")), true);
   assert.equal(await debt("returned"), undefined);
+
+  // ── 旧清理与同编号的真实接力导入交错 ──
+  const manifest = (id: string, sessionId: string, text: string) => ({ version: 1, sourceHost: "peer", sourcePort: null,
+    sourceFingerprint: "a".repeat(64), originFingerprint: "a".repeat(64), transferId: `transfer-${id}`,
+    targetProjectId: "p", autoResume: false, sourceWorkspace: null, git: null,
+    task: { id, title: id, body: "", status: "done", stage: null, labels: "[]", agentType: "claude", model: null,
+      reasoningEffort: null, autoTitle: false, useWorktree: false, worktreeBase: null, workflow: null, workflowMode: "free",
+      workflowAt: null, reviewStep: null, verifyRounds: 0, verifyStationRounds: 0, resumePrompt: null, question: null,
+      questionOptions: null, questionItems: null, pinnedAt: null, starredAt: null, createdAt: stamp, startedAt: stamp, endedAt: stamp },
+    sessions: [{ id: sessionId, role: "main", agentType: "claude", executor: "claude", startedAt: stamp, endedAt: stamp, cliSessionId: null }],
+    files: [{ kind: "run-artifact", rel: `${sessionId}.md`, dataBase64: Buffer.from(text).toString("base64") }],
+    freeWorkflow: null, uploads: [], messages: [], schedule: null });
+  /** 删一个任务并让它的目录先收不掉，留下一笔欠着的清理。 */
+  const owe = async (id: string) => {
+    await task(id);
+    lock(runDir(id));
+    assert.deepEqual((await del(id)).body.diskCleanupPending, [id]);
+    unlockAll();
+  };
+
+  // 先后一：旧清理已经进到删目录那一步，导入才来——导入要等它删完再写。
+  await owe("race-a");
+  const original = fsPromises.rm;
+  let reached!: () => void;
+  let resume!: () => void;
+  const atRm = new Promise<void>((resolve) => { reached = resolve; });
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  fsPromises.rm = (async (...args: Parameters<typeof original>) => {
+    if (String(args[0]) === join(runs, "race-a")) { reached(); await gate; }
+    return original(...args);
+  }) as typeof original;
+  syncBuiltinESMExports();
+  try {
+    const cleaning = sweepPendingTaskDisk();
+    await atRm;
+    const importing = importHandoff(manifest("race-a", "sa", "导入的正文 A\n"));
+    resume();
+    await cleaning;
+    const imported = await importing as { ok?: boolean };
+    assert.equal(imported.ok, true);
+  } finally {
+    fsPromises.rm = original;
+    syncBuiltinESMExports();
+  }
+  assert.equal(await taskRow("race-a"), 1);
+  assert.equal(readFileSync(join(runs, "race-a", "sa.md"), "utf8"), "导入的正文 A\n", "旧清理删完之后导入才写，正文在");
+  assert.equal(await debt("race-a"), undefined);
+  assert.equal(await sweepPendingTaskDisk(), 0);
+  assert.equal(existsSync(join(runs, "race-a", "sa.md")), true, "之后的清扫也不碰活任务的目录");
+
+  // 先后二：导入正在写（持锁），旧清理后到——清理要等导入建完行，然后作废这笔账。
+  await owe("race-b");
+  let finishImport!: () => void;
+  const importDone = new Promise<void>((resolve) => { finishImport = resolve; });
+  // 用目录锁卡住一个「正在导入」的窗口：真实导入排在它后面，清理再排在导入后面。
+  const holding = withTaskDirLock("race-b", () => importDone);
+  const importing = importHandoff(manifest("race-b", "sb", "导入的正文 B\n"));
+  const cleaning = sweepPendingTaskDisk();
+  finishImport();
+  await holding;
+  assert.equal((await importing as { ok?: boolean }).ok, true);
+  await cleaning;
+  assert.equal(await taskRow("race-b"), 1);
+  assert.equal(readFileSync(join(runs, "race-b", "sb.md"), "utf8"), "导入的正文 B\n", "导入先占住，清理排在后面、看到任务已回来");
+  assert.equal(await debt("race-b"), undefined);
 
   console.log("task delete disk: ok");
 } finally {
