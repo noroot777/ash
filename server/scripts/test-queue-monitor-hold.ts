@@ -17,8 +17,8 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import type { AgentEvent } from "@ash/shared";
 import {
-  db, insertMonitorRow, monitors, now, root, runs, scheduledMessages, schema, sleep, startMonitor,
-  tasks, teardown, until,
+  continueTask, db, dbClient, insertMonitorRow, monitors, now, reviewInFlight, root, runs, scheduledMessages, schema,
+  sleep, startMonitor, tasks, teardown, until,
 } from "./monitors-fixture.js";
 import type { RunHandle, RunOpts } from "../src/executors/types.js";
 
@@ -37,6 +37,7 @@ const { stopMonitorChecked } = await import("../src/monitor-stop.js");
 const { deliverResultHandoff } = await import("../src/monitor-events.js");
 const { reattachMonitors } = await import("../src/monitors.js");
 const { occupyResumePrompt } = await import("../src/task-resume-prompt.js");
+const { backfillMonitorHolds } = await import("../src/db/migrate-monitor-hold.js");
 
 const api = new Hono();
 mountTaskRunRoutes(api);
@@ -151,6 +152,9 @@ async function queuePair(name: string) {
 }
 
 const statusOf = async (taskId: string) => (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!.status;
+const holdOf = async (taskId: string) => (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!.monitorHoldAt;
+/** 升级前留下的行:状态一样,只是没有「这段暂停在等哨兵」那一笔。 */
+const asLegacy = (taskId: string) => db.update(tasks).set({ monitorHoldAt: null }).where(eq(tasks.id, taskId));
 const intentOf = async (queueId: string) => (await db.select().from(schema.queueAdvanceIntents)
   .where(eq(schema.queueAdvanceIntents.queueId, queueId))).at(0);
 const idle = (taskId: string) => !runs.isTurnClaimed(taskId) && !runs.isRunning(taskId);
@@ -197,6 +201,7 @@ try {
       monitorId = started.monitor.id;
     });
     await assertHeld(q, 1, "落 paused 的状态钩子");
+    assert.ok(await holdOf(q.a), "落 paused 那一笔同时记下「这段暂停在等哨兵」");
 
     await advanceQueue(q.queueId);
     await assertHeld(q, 1, "advanceQueue");
@@ -223,6 +228,7 @@ try {
     assert.ok(inputsOf(q.a)[1]!.includes(`HOLD_LIVE_${q.a}`), `叫醒的输入是哨兵结果:${inputsOf(q.a)[1]}`);
     assert.equal((await db.select().from(monitors).where(eq(monitors.id, monitorId)))[0]!.status, "exited");
     assert.equal(await intentOf(q.queueId), undefined, "推进意图照常了结");
+    assert.equal(await holdOf(q.a), null, "哨兵结果叫醒的那个执行回合把它消费掉");
     console.log("PASS: 挂着在跑的哨兵落 paused —— 六个自动推进入口都不续跑它;哨兵出结果叫醒一次,随后 B 起跑");
   }
 
@@ -311,8 +317,8 @@ try {
     console.log("PASS: 放弃已结束的哨兵 —— 队列随后按检查点续跑一次");
   }
 
-  // ⑥ 重启:没有意图行(升级前留下的现场),开机补办那一趟还撞上一次读失败,哨兵随后在接回时落 lost ——
-  //    队列照样不会永远停在它身上(第 3 轮审查 1:欠账不经过开机补办这一步)。
+  // ⑥ 重启:升级前留下的现场(没有意图行、也没有「在等」那一笔),开机补办那一趟还撞上一次读失败,
+  //    哨兵随后在接回时落 lost —— 队列照样不会永远停在它身上(第 3 轮审查 1)。
   {
     const q = await queuePair("restart");
     const dead = spawnSync("true").pid!;
@@ -322,6 +328,9 @@ try {
     });
     await assertHeld(q, 1, "重启之前");
     await db.delete(schema.queueAdvanceIntents).where(eq(schema.queueAdvanceIntents.queueId, q.queueId));
+    await asLegacy(q.a);
+    await backfillMonitorHolds(dbClient); // 开机 DDL 之后、任何恢复之前
+    assert.ok(await holdOf(q.a), "开机按哨兵行补记了存量的「在等」");
     failBootReads = 1;
     await recoverQueueAdvances().catch(() => undefined);
     assert.equal(failBootReads, 0, "开机补办确实撞上了那次注入");
@@ -465,6 +474,70 @@ try {
     await sweepReleasedQueueMembers();
     await assertHeld(q, 0, "静止检查点");
     console.log("PASS: 静止的检查点 —— 哨兵事件与巡检都不续跑它");
+  }
+
+  // ⑫ 等哨兵期间压缩一次上下文(旁路回合,复用同一条会话行),再放弃哨兵:照常续跑一次(第 4 轮审查 1A)
+  {
+    const q = await queuePair("compact");
+    let monitorId = "";
+    await firstTurnPaused(q, "RESUME_AFTER_COMPACT", async (taskId) => {
+      const started = await startMonitor({ taskId, command: "sleep 60", description: "压缩期间还在跑的哨兵" });
+      assert.ok(started.ok, JSON.stringify(started));
+      monitorId = started.monitor.id;
+    });
+    scripts.set(q.a, [async () => {}]);
+    assert.ok(await continueTask(q.a, "/compact"));
+    await until("压缩回合跑完", async () => inputsOf(q.a).length === 2 && idle(q.a) && await statusOf(q.a) === "paused");
+    const rows = await db.select().from(schema.sessions).where(eq(schema.sessions.taskId, q.a));
+    assert.ok(rows.length === 1 && rows[0]!.sideTurn, `压缩复用了那一条会话行,并把它标成旁路:${JSON.stringify(rows)}`);
+    await assertHeld(q, 2, "压缩之后");
+    assert.ok(await holdOf(q.a), "旁路回合进出不动「在等」那一笔");
+    assert.ok((await stopMonitorChecked(monitorId, "不等了")).ok);
+    await bothDone(q, "压缩后放弃哨兵");
+    assert.equal(inputsOf(q.a).length, 3, `A 恰好续跑一次:${JSON.stringify(inputsOf(q.a))}`);
+    assert.ok(inputsOf(q.a)[2]!.includes("RESUME_AFTER_COMPACT"), inputsOf(q.a)[2]);
+    console.log("PASS: 等哨兵期间压缩上下文、再放弃哨兵 —— 队列照常续跑一次");
+  }
+
+  // ⑬ 静止的检查点上停掉一条审查起的哨兵:它从来没挡过执行,停掉它不让队列续跑执行者(第 4 轮审查 1B)
+  {
+    const q = await queuePair("review-monitor");
+    await db.update(tasks).set({ status: "paused" }).where(eq(tasks.id, q.a));
+    await occupyResumePrompt(q.a, "RESUME_SHOULD_NOT_RUN", false);
+    await db.insert(schema.sessions).values({
+      id: `s-${q.a}`, taskId: q.a, role: "single", agentType: "claude", executor: "claude@fixture",
+      executorId: "qmh-claude", cliSessionId: `native-${q.a}`, cwd: root, startedAt: now(), turnStartedAt: now(), endedAt: now(),
+    });
+    await reviewInFlight(q.a, `run-${q.a}`, { live: false });
+    const monitorId = await insertMonitorRow(q.a, { status: "exited", reviewRun: `run-${q.a}`, round: 1 });
+    await db.update(monitors).set({ exitCode: 0, endedAt: now(), resultHandoffAt: now(), resultHandoffText: "审查那边的通知" })
+      .where(eq(monitors.id, monitorId));
+    await queueMembers(q.queueId); // 读一遍成员:审查哨兵不算「在等」,不补记
+    assert.equal(await holdOf(q.a), null);
+    assert.ok((await stopMonitorChecked(monitorId, "审查那边不要了")).ok);
+    await sleep(200);
+    await sweepReleasedQueueMembers();
+    await assertHeld(q, 0, "停掉审查哨兵之后");
+    console.log("PASS: 停掉审查起的哨兵 —— 静止的检查点不被续跑");
+  }
+
+  // ⑭ 存量行(没有「在等」那一笔)、开机补记也没赶上:队列读成员时看到在等就补上,放弃后照常续跑
+  {
+    const q = await queuePair("legacy-observe");
+    let monitorId = "";
+    await firstTurnPaused(q, "RESUME_LEGACY", async (taskId) => {
+      const started = await startMonitor({ taskId, command: "sleep 60", description: "存量的哨兵" });
+      assert.ok(started.ok, JSON.stringify(started));
+      monitorId = started.monitor.id;
+    });
+    await asLegacy(q.a);
+    await advanceQueue(q.queueId);
+    assert.ok(await holdOf(q.a), "队列读成员时补上了");
+    await assertHeld(q, 1, "补记之后");
+    assert.ok((await stopMonitorChecked(monitorId, "不等了")).ok);
+    await bothDone(q, "存量行放弃哨兵");
+    assert.equal(inputsOf(q.a).length, 2, `A 恰好续跑一次:${JSON.stringify(inputsOf(q.a))}`);
+    console.log("PASS: 存量行 —— 队列读成员时补记「在等」,放弃后续跑一次");
   }
 
   assert.deepEqual(turnErrors, [], "夹具回合里的 pause/complete 都该成功");

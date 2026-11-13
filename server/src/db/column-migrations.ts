@@ -419,4 +419,6 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE scheduled_messages ADD COLUMN answer_id TEXT",
   // 开工起点所在的分支名（见 db/schema.ts 同名列）。存量行 NULL = 没记过。
   "ALTER TABLE tasks ADD COLUMN worktree_base_branch TEXT",
+  // 这一段暂停在等哨兵(见 db/schema.ts 同名列)。存量行 NULL 由队列观察到在等时补上。
+  "ALTER TABLE tasks ADD COLUMN monitor_hold_at TEXT",
 ];
