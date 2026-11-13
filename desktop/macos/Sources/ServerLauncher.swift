@@ -97,21 +97,20 @@ final class ServerLauncher {
   private func spawnDetached() -> Spawned {
     let shell = Process()
     shell.executableURL = URL(fileURLWithPath: Self.loginShell())
-    // 路径借环境变量递进去免得拼引号，exec 之前清掉，不漏进 server 和它拉起的 agent。
+    // 登录 shell 只负责拼出 PATH、LANG 这些。.zprofile / .zshrc 跑在这段命令**之前**，里面给开发实例
+    // export 过的 ASH_DATA_DIR、PORT、ASH_LOCAL_ONLY 会盖掉事先放进环境的值 —— 所以 app 定下的这几样
+    // 写成命令里的字面量，由 `env` 在 exec 的边界上落定（shell 带来的 PORT 先清掉）。
     // ASH_DATA_DIR / ASH_LOCAL_ONLY 是给 server 的，它读完就从自己的环境里删掉（见
-    // server/src/paths.ts、local-only.ts），agent 同样拿不到。
-    shell.arguments = ["-ilc", #"node="$ASH_MAC_NODE" detach="$ASH_MAC_DETACH" entry="$ASH_MAC_ENTRY" log="$ASH_MAC_LOG" && unset ASH_MAC_NODE ASH_MAC_DETACH ASH_MAC_ENTRY ASH_MAC_LOG && cd "$ASH_DATA_DIR" && exec "$node" "$detach" "$log" "$node" "$entry""#]
-    var env = Self.terminalLikeEnvironment()
-    env["ASH_MAC_NODE"] = AshConfig.nodeURL.path
-    env["ASH_MAC_DETACH"] = AshConfig.detachScriptURL.path
-    env["ASH_MAC_ENTRY"] = AshConfig.serverEntryURL.path
-    env["ASH_MAC_LOG"] = logURL.path
-    env["ASH_DATA_DIR"] = AshConfig.dataURL.path
-    env["ASH_LOCAL_ONLY"] = "1"
+    // server/src/paths.ts、local-only.ts），agent 拿不到。`builtin cd`：rc 里常有 `alias cd=z`。
+    let data = Self.quoted(AshConfig.dataURL.path)
+    let node = Self.quoted(AshConfig.nodeURL.path)
     // 默认端口不传 PORT：server 的环境会一路继承给 agent 与应用内终端，多一个 PORT 会让
     // 里面起的前端 dev server 去抢 ash 的端口。
-    if AshConfig.port != 4317 { env["PORT"] = String(AshConfig.port) }
-    shell.environment = env
+    let port = AshConfig.port == 4317 ? "" : " PORT=\(AshConfig.port)"
+    let script = "builtin cd -- \(data) && exec /usr/bin/env -u PORT ASH_DATA_DIR=\(data) ASH_LOCAL_ONLY=1\(port) "
+      + "\(node) \(Self.quoted(AshConfig.detachScriptURL.path)) \(Self.quoted(logURL.path)) \(node) \(Self.quoted(AshConfig.serverEntryURL.path))"
+    shell.arguments = ["-ilc", script]
+    shell.environment = Self.terminalLikeEnvironment()
     let launchLog = AshConfig.logURL.appendingPathComponent("launch-\(UUID().uuidString).log")
     guard FileManager.default.createFile(atPath: launchLog.path, contents: nil),
           let output = try? FileHandle(forWritingTo: launchLog) else {
@@ -179,6 +178,11 @@ final class ServerLauncher {
     return env
   }
 
+  /// 单引号包起来：命令里只有这几段是外来的字符串，shell 不会再展开里面的任何东西。
+  private static func quoted(_ value: String) -> String {
+    "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+  }
+
   private static func loginShell() -> String {
     if let pw = getpwuid(getuid()), let shell = pw.pointee.pw_shell { return String(cString: shell) }
     return "/bin/zsh"
@@ -190,14 +194,12 @@ enum Occupant {
   static func otherAsh(_ instance: AshInstance) -> String {
     let port = AshConfig.port
     let who = instance.pid.map { "进程 \($0)" } ?? "进程号不明"
-    var lines = ["\(port) 端口上已经有一份 ash 在跑（\(who)），但它不是这个 app 的那份，所以没有连上去。"]
+    var lines = ["\(port) 端口上已经有一份 ash 在跑（\(who)），但它不是这个 app 起的那份，所以没有连上去。\(instance.mismatch ?? "")"]
     if let codeDir = instance.codeDir, let dataDir = instance.dataDir {
       lines.append("代码：\(codeDir)\n数据：\(dataDir)")
       if FileManager.default.fileExists(atPath: URL(fileURLWithPath: codeDir).appendingPathComponent(".git").path) {
         lines.append("这是仓库里起的开发实例（npm run restart）。")
       }
-    } else {
-      lines.append("它没报自己的代码和数据在哪（比这个 app 旧的版本），认不出来历。")
     }
     let stop = instance.pid.map { "kill \($0)" } ?? "lsof -nP -iTCP:\(port) -sTCP:LISTEN 找到它再停"
     lines.append("要用 app：先停掉它（\(stop)），再点「重试」。开发实例以后换个端口起，例如 PORT=14317 npm run restart。")

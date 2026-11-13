@@ -32,6 +32,8 @@ enum AshConfig {
   static var nodeURL: URL { runtimeURL.appendingPathComponent("node/bin/node") }
   static var serverEntryURL: URL { runtimeURL.appendingPathComponent("server/dist/index.js") }
   static var detachScriptURL: URL { runtimeURL.appendingPathComponent("scripts/start-detached.mjs") }
+  /// 导入旧数据时洗副本的那一段（server/src/import-snapshot.ts）。
+  static var importToolURL: URL { runtimeURL.appendingPathComponent("server/dist/import-snapshot-cli.js") }
 
   /// app 自己的那块地。
   static var supportURL: URL {

@@ -63,8 +63,12 @@ if mode == "health" {
 if mode == "import-inspect" || mode == "import" {
   do {
     let source = try DataImport.inspect(URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true))
-    if mode == "import" { try DataImport.run(source, into: AshConfig.dataURL) }
-    print("OK live=\(source.livePID.map(String.init) ?? "none")")
+    var held = ""
+    if mode == "import" {
+      let report = try DataImport.run(source, into: AshConfig.dataURL, lockTimeout: Double(CommandLine.arguments.dropFirst(3).first ?? "") ?? 60)
+      held = " held=\(report.held.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ",")) relocated=\(report.relocated)"
+    }
+    print("OK live=\(source.livePID.map(String.init) ?? "none")\(held)")
     exit(0)
   } catch {
     print("REFUSED: \(error.localizedDescription)")
