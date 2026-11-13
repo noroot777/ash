@@ -313,9 +313,42 @@ try {
       ["real/runner.sh/x", false],
       ["REAL/runner.sh", null],
       ["real", null],
-      [":!real/runner.sh", false],
+      [":!real/runner.sh", null],
     ] as const) {
       assert.equal(await entryInCommit(tree, "HEAD", file), expected, `目标树里核 ${file}`);
+    }
+    // 确定的有/没有必须等价于检出后的原样路径查找（第 2 轮审查 F1）。树直接用 mktree 拼：git 里的名字
+    // 是精确字节，不经过本机文件系统的折叠，才造得出 NFC/NFD、末尾点/空格这些检出后会撞名的条目。
+    const blob = execFileSync("git", ["-C", tree, "hash-object", "-w", "--stdin"], { input: "#!/bin/sh\n", encoding: "utf8" }).trim();
+    const mktree = (rows: [string, string, string][]) => execFileSync("git", ["-C", tree, "mktree", "-z"],
+      { input: rows.map(([mode, oid, name]) => `${mode} ${mode === "040000" ? "tree" : "blob"} ${oid}\t${name}\0`).join(""), encoding: "utf8" }).trim();
+    const dir = (...names: string[]) => mktree(names.map(name => ["100755", blob, name]));
+    const odd = mktree([
+      ["040000", dir("runner.sh"), "real"],
+      ["040000", dir("caf\u00e9.sh"), "uni"],
+      ["040000", dir("tool.sh."), "dotted"],
+      ["040000", dir("tool.sh "), "spaced"],
+      ["040000", dir("Tool.sh", "tool.sh"), "mixed"],
+      ["100755", blob, "aux.sh"],
+    ]);
+    for (const [file, expected, why] of [
+      ["real/runner.sh", true, "可移植的名字、精确命中、旁边没有可能撞名的：有"],
+      ["./real/runner.sh", true, "开头的 ./ 不改落点"],
+      ["real/gone.sh", false, "可移植的名字、整个目录都没有可能撞名的：确定没有"],
+      ["uni/cafe\u0301.sh", null, "NFD 问、树里存 NFC：macOS 检出后找得到，不许说没有"],
+      ["uni/caf\u00e9.sh", null, "不可移植的名字本身就证明不了"],
+      ["uni/other.sh", null, "目录里有不可移植的名字，就证明不了它不是别名"],
+      ["dotted/tool.sh", null, "Windows 检出会吃掉末尾的点"],
+      ["spaced/tool.sh", null, "Windows 检出会吃掉末尾的空格"],
+      ["mixed/tool.sh", null, "大小写撞名：不分大小写的检出上只留得下一个"],
+      ["aux.sh", null, "Windows 设备名"],
+      ["real/runner.sh/", null, "末尾 / 要求它是目录：shell 报 ENOTDIR，不许说有"],
+      ["real/runner.sh/.", null, "末尾 /. 同上"],
+      ["real//runner.sh", null, "空段不丢"],
+      ["real/./runner.sh", null, "中间的 . 不丢"],
+      ["./", null, "什么都没点名"],
+    ] as const) {
+      assert.equal(await entryInCommit(tree, odd, file), expected, `${why}：${JSON.stringify(file)}`);
     }
     // 落盘与读回：`file` 缺了就当没核过（去目标分支上核的就是它）；没有 `certain` 的旧行当核不准 ——
     // 那时还没有「不起跑」这一档，不能事后替它说「没起跑」。

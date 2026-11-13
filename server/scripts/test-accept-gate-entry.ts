@@ -76,9 +76,11 @@ export async function testGateEntry(ctx: Ctx): Promise<void> {
   assert.ok(prompt.includes(sentence), "入口那句话原样附上");
   assert.equal(JSON.parse(blocked.entryProbe ?? "null")?.target?.has, true, "目标分支上的情形起跑前一次定下、跟着这一行落盘");
   assert.match(readFileSync(blocked.logPath, "utf8"), new RegExp(sentence.slice(0, 20)), "日志里也写着这句");
+  assert.equal(/开跑/.test(readFileSync(blocked.logPath, "utf8")), false, "没起跑的那份日志从头到尾不说「开跑」（第 2 轮审查 N1）");
   if (!first.accepted) assert.ok(first.error?.includes(sentence), "MCP/HTTP 回执里也给出这句，不只甩原始报错");
   for (let i = 0; i < 200 && !/门禁交接/.test(timeline()); i++) await sleep(25);
   assert.ok(timeline().includes(sentence), "这句话进时间线");
+  assert.equal(/开跑/.test(timeline()), false, "时间线上也不先说「开跑」");
   assert.match(timeline(), /门禁交接：已叫醒该任务去看这条命令的入口为什么不在被测的树里/, "照常交回给任务");
 
   const again = async (command: string) => {

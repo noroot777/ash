@@ -263,14 +263,16 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     });
     inserted = true;
     const baselineNotice = gateBaselineNotice(plan.baseline);
-    appendGateLog(logPath, `[ash] ${startedAt} 验收前置命令开跑\n[ash] source: ${plan.cwd}\n[ash] snapshot: ${snapshotCwd}\n[ash] fingerprint: ${plan.source.fingerprint}\n`
+    // 这两句写在核入口、建快照之前，所以只说「准备」：核下来可能根本不起跑（entry_missing），也可能
+    // 起不来（spawn_failed），那时结算会接着说清；真起跑了，紧跟着的就是命令自己的输出。
+    appendGateLog(logPath, `[ash] ${startedAt} 验收前置命令准备起跑（先建快照、核入口）\n[ash] source: ${plan.cwd}\n[ash] snapshot: ${snapshotCwd}\n[ash] fingerprint: ${plan.source.fingerprint}\n`
       + (baselineNotice ? `[ash] baseline: ${baselineNotice}（预览基准 ${plan.baseline.targetBranch} = ${plan.baseline.previewBase}）\n` : "")
       + `[ash] $ ${plan.command}\n\n`);
     const executionNotice = gateExecutionNotice();
     if (executionNotice) appendGateLog(logPath, `[ash] ${executionNotice}\n`);
     await appendTaskTimeline(
       taskId,
-      receiptLine(`验收前置命令开跑：\`${plan.command}\`（独立快照 ${snapshotCwd}，源自 ${plan.cwd}）。rc=0 且进程监督收尾后才会继续合并；`
+      receiptLine(`验收前置命令准备起跑：\`${plan.command}\`（独立快照 ${snapshotCwd}，源自 ${plan.cwd}）。先核对入口，核过才起进程；rc=0 且进程监督收尾后才会继续合并；`
         + `绿了会自动把这次验收做完，红了会把日志交回这个任务去修。`
         + (executionNotice ? ` ${executionNotice}` : "")
         + (baselineNotice ? ` ${baselineNotice}。`
