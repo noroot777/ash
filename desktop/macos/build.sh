@@ -31,11 +31,11 @@ fi
 BUILD_NUMBER="${ASH_MAC_BUILD_NUMBER:-$(TZ=UTC date -r "$STAMP" +%Y%m%d.%H%M)}"
 BUNDLE_ID="${ASH_MAC_BUNDLE_ID:-dev.ash.mac}"
 
-# 更新源：release.json 里的发布仓库 → raw.githubusercontent 上那份 appcast.xml。
-read -r RELEASE_REPO RELEASE_BRANCH RELEASE_KEY < <(node -e '
+# 更新源：release.json 里的发布仓库 → raw.githubusercontent 上那份 appcast。
+read -r RELEASE_REPO RELEASE_BRANCH RELEASE_APPCAST RELEASE_KEY < <(node -e '
   const c = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  console.log(c.repo, c.branch || "main", c.publicKey || "-");' "$HERE/release.json")
-FEED_URL="${ASH_MAC_FEED_URL:-https://raw.githubusercontent.com/$RELEASE_REPO/$RELEASE_BRANCH/appcast.xml}"
+  console.log(c.repo, c.branch || "main", c.appcastPath || "appcast.xml", c.publicKey || "-");' "$HERE/release.json")
+FEED_URL="${ASH_MAC_FEED_URL:-https://raw.githubusercontent.com/$RELEASE_REPO/$RELEASE_BRANCH/$RELEASE_APPCAST}"
 ED_KEY="${ASH_MAC_ED_PUBLIC_KEY:-$RELEASE_KEY}"
 [[ "$ED_KEY" == "-" ]] && ED_KEY=""
 

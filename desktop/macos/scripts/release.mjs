@@ -2,9 +2,9 @@
 // 发一版 mac app：构建独立 app → 压 zip → EdDSA 签名 → 在发布仓库建 GitHub Release、传 zip →
 // 更新 appcast.xml（整份也签过）→ 提交并推送。已装的 app 定时拉那份 appcast，看到新版就提示安装。
 //
-//   npm run release:mac                         # 正式发版（要先 --keys、--init-repo 各做过一次）
+//   npm run release:mac                         # 正式发版（要先 --keys 做过一次）
 //   npm run release:mac -- --keys               # 生成 / 读出正式 EdDSA 密钥，公钥写进 release.json
-//   npm run release:mac -- --init-repo          # 建发布仓库（公开）
+//   npm run release:mac -- --init-repo          # release.json 的 repo 还不存在时建它（公开）
 //   npm run release:mac -- --local <目录> --app <Ash.app> --ed-key-file <私钥文件>
 //                                               # 演练：zip 和 appcast 写进本地目录，不碰 GitHub
 //
@@ -54,8 +54,11 @@ function publicKeyOfKeyFile(file) {
 }
 
 function readConfig() {
-  return JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+  const config = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+  return { branch: "main", appcastPath: "appcast.xml", tagPrefix: "v", ...config };
 }
+
+const feedOf = (config) => `https://raw.githubusercontent.com/${config.repo}/${config.branch}/${config.appcastPath}`;
 
 function infoOf(app) {
   const plist = join(app, "Contents", "Info.plist");
@@ -117,7 +120,7 @@ async function main() {
   }
   if (!local) {
     if (info.SUPublicEDKey !== config.publicKey) die("app 里的公钥和 release.json 的 publicKey 不一样：正式发版只能用 release.json 那一把。");
-    const feed = `https://raw.githubusercontent.com/${config.repo}/${config.branch}/appcast.xml`;
+    const feed = feedOf(config);
     if (info.SUFeedURL !== feed) die(`app 的更新源是 ${info.SUFeedURL}，不是 ${feed}：构建时是不是设了 ASH_MAC_FEED_URL？`);
   }
 
@@ -128,14 +131,16 @@ async function main() {
   } else {
     syncCheckout(config, checkout);
   }
-  const appcastPath = join(checkout, "appcast.xml");
+  // 本地演练的目录就是更新源本身，appcast 放在根上；正式发版放在发布仓库里 appcastPath 那个位置。
+  const appcastPath = local ? join(local, "appcast.xml") : join(checkout, config.appcastPath);
+  mkdirSync(dirname(appcastPath), { recursive: true });
   const items = parseItems(existsSync(appcastPath) ? readFileSync(appcastPath, "utf8") : "");
   const latest = latestVersion(items);
   if (items.some((item) => item.version === version)) die(`${version} 已经发过了（appcast 里有）。`);
   if (latest && compareVersions(version, latest) <= 0) die(`这一版 ${version} 不比 appcast 里最新的 ${latest} 新：Sparkle 不会把它当成更新。`);
 
   // ── 4. 压包、签名 ──
-  const tag = `v${shortVersion}-${version}`;
+  const tag = `${local ? "v" : config.tagPrefix}${shortVersion}-${version}`;
   // ASH_MAC_RELEASE_ARTIFACTS 只给回归测试换地方，免得演练的包落进 build/releases。
   const artifacts = join(process.env.ASH_MAC_RELEASE_ARTIFACTS || join(MAC, "build", "releases"), tag);
   mkdirSync(artifacts, { recursive: true });
@@ -183,21 +188,23 @@ async function main() {
   run(tool("sign_update"), [...keyArgs, appcastPath]);
   run(tool("sign_update"), [...keyArgs, "--verify", appcastPath]);
   if (!local) {
-    run("git", ["-C", checkout, "add", "appcast.xml"]);
-    run("git", ["-C", checkout, "commit", "-m", `ash ${shortVersion}（${version}）`]);
+    run("git", ["-C", checkout, "add", config.appcastPath]);
+    run("git", ["-C", checkout, "commit", "-m", `ash mac ${shortVersion}（${version}）`]);
     run("git", ["-C", checkout, "push", "origin", `HEAD:${config.branch}`], { stdio: ["ignore", "pipe", "pipe"] });
   }
   say(`✓ 已发 ${shortVersion}（${version}）`);
   say(`  包：${url}`);
-  say(`  appcast：${local ? appcastPath : `https://raw.githubusercontent.com/${config.repo}/${config.branch}/appcast.xml`}`);
+  say(`  appcast：${local ? appcastPath : feedOf(config)}`);
   if (!local) say("  （raw.githubusercontent 有几分钟缓存，已装的 app 下一次定时检查或点「检查更新…」时就能看到）");
 }
 
 function syncCheckout(config, checkout) {
   const remote = `https://github.com/${config.repo}.git`;
   if (!existsSync(join(checkout, ".git"))) {
-    run("git", ["clone", "--quiet", remote, checkout]);
+    // 发布仓库可能还放着别的大文件（素材库里有宣传片）：只拉 appcast 所在那个目录，其余的 blob 不下。
+    run("git", ["clone", "--quiet", "--filter=blob:none", "--sparse", remote, checkout]);
   }
+  run("git", ["-C", checkout, "sparse-checkout", "set", dirname(config.appcastPath) === "." ? "/appcast.xml" : dirname(config.appcastPath)]);
   // 这是脚本自己的一份检出，只放 appcast：每次都对齐远端，不留本地改动。
   run("git", ["-C", checkout, "fetch", "--quiet", "origin", config.branch]);
   run("git", ["-C", checkout, "checkout", "--quiet", "-B", config.branch, `origin/${config.branch}`]);
@@ -233,6 +240,13 @@ async function confirmDownloadable(url, zip, length) {
 }
 
 function makeKeys(config, tool) {
+  const existing = spawnSync(tool("generate_keys"), ["--account", config.keychainAccount, "-p"], { encoding: "utf8" });
+  if (existing.status !== 0 && config.publicKey) {
+    // 已经发过（或者至少定下了）一把公钥，钥匙串里却没有私钥：多半是换了电脑。新建一把只会得到
+    // 一把已装的 app 永远不认的钥匙。
+    die(`钥匙串里没有 ${config.keychainAccount} 的私钥，而 release.json 已经定了公钥 ${config.publicKey}。\n`
+      + `把备份导回来：${tool("generate_keys")} --account ${config.keychainAccount} -f <备份文件>`);
+  }
   say(`▶ generate_keys --account ${config.keychainAccount}（钥匙串里已有就沿用，没有才新建）`);
   const made = spawnSync(tool("generate_keys"), ["--account", config.keychainAccount], { stdio: "inherit" });
   if (made.status !== 0) die("generate_keys 失败");
@@ -240,7 +254,8 @@ function makeKeys(config, tool) {
   if (config.publicKey && config.publicKey !== publicKey) {
     die(`release.json 里已经是另一把公钥（${config.publicKey}），钥匙串里这把是 ${publicKey}。\n密钥永远不能换：去找回原来那把私钥（generate_keys --account ${config.keychainAccount} -f <备份文件>）。`);
   }
-  writeFileSync(CONFIG_PATH, `${JSON.stringify({ ...config, publicKey }, null, 2)}\n`);
+  // 按文件原样改这一项（config 里带着补上的缺省值，别把它们也写回去）。
+  writeFileSync(CONFIG_PATH, `${JSON.stringify({ ...JSON.parse(readFileSync(CONFIG_PATH, "utf8")), publicKey }, null, 2)}\n`);
   say(`✓ 公钥 ${publicKey} 已写进 ${CONFIG_PATH}（提交它）。`);
   say(`  现在就备份私钥：${tool("generate_keys")} --account ${config.keychainAccount} -x <放到钥匙串之外的地方>`);
   say("  私钥丢了，已经装了 app 的机器就再也收不到更新。");

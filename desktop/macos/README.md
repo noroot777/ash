@@ -33,7 +33,7 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Ash.
 
 ## 自更新
 
-用 [Sparkle](https://sparkle-project.org) 2（版本和 sha256 钉在 `scripts/sparkle.mjs`，框架原样放进 `Contents/Frameworks`）。菜单「ash → 检查更新…」，另外每 6 小时自己查一次。更新源是发布仓库里的 `appcast.xml`（`https://raw.githubusercontent.com/<release.json 的 repo>/main/appcast.xml`），zip 是那个仓库 GitHub Release 的附件。
+用 [Sparkle](https://sparkle-project.org) 2（版本和 sha256 钉在 `scripts/sparkle.mjs`，框架原样放进 `Contents/Frameworks`）。菜单「ash → 检查更新…」，另外每 6 小时自己查一次。更新包放在素材库 [noroot777/materials](https://github.com/noroot777/materials)（公开仓库，`release.json` 里配）：appcast 是 `ash/mac/appcast.xml`（app 拉的是它在 raw.githubusercontent 上的那份），zip 是 tag 为 `ash-mac-v<版本>-<构建号>` 的 GitHub Release 的附件。
 
 **只靠 EdDSA 签名校验**：app 是 ad-hoc 签名，没有能跨版本延续的 Apple 签名身份，而 Sparkle 的规则是「Apple 签名身份和 EdDSA 密钥至少一样不变」。所以 Info.plist 里的 `SUPublicEDKey` **永远不能换**，换了已装的 app 就再也装不上新版。appcast 本身也签（`SURequireSignedFeed`），zip 先验签再解压（`SUVerifyUpdateBeforeExtraction`）：被改过的 zip 或 appcast 一律拒装。公钥由 `build.sh` 从 `release.json` 写进 Info.plist；还没配公钥的构建不带更新源，菜单里也没有「检查更新…」。
 
@@ -54,7 +54,7 @@ server 一启动就做不可逆的迁移，所以闸在停掉服务之后、换 
 ```bash
 # 1. 退出 app，停掉服务（数据根里 ash.db.ash.lock 记着 pid）
 kill "$(node -p 'require(process.env.HOME + "/Library/Application Support/dev.ash.mac/ash.db.ash.lock").pid')"
-# 2. 从发布仓库的 Releases 里下回备份文件名里那个构建号的 zip，解开换掉 /Applications/Ash.app
+# 2. 从素材库的 Releases 里下回备份文件名里那个构建号的 zip（tag ash-mac-v…-<构建号>），解开换掉 /Applications/Ash.app
 # 3. 把备份放回去（先把现在这份挪开，别直接覆盖）
 cd ~/Library/Application\ Support/dev.ash.mac
 mkdir -p rolled-back && mv ash.db ash.db-wal ash.db-shm rolled-back/ 2>/dev/null
@@ -66,21 +66,15 @@ cp backups/<那一份>.db ash.db
 
 ## 发版
 
-一次性准备（这三步都对外可见或不可逆，第一次做之前想清楚）：
+**签名密钥**（2026-11-14 已生成，公钥已在 `release.json`）：私钥存在这台 Mac 的**登录钥匙串**里（「钥匙串访问」里搜 `dev.ash.mac`），不进任何仓库。生成时导出过一份备份，**必须放进密码管理器 / 离线介质**。私钥丢了，已经装了 app 的机器就**再也收不到更新**（公钥不能换，见上）。
 
 ```bash
-npm run release:mac -- --keys        # 生成正式 EdDSA 密钥（钥匙串里已有就沿用），公钥写进 release.json —— 提交它
-npm run release:mac -- --init-repo   # 建公开的发布仓库（release.json 的 repo）
+npm run release:mac -- --keys        # 钥匙串里已有就沿用、只核对 release.json；没有才新建（换电脑时先导回，别新建）
+desktop/macos/build/cache/Sparkle-*/bin/generate_keys --account dev.ash.mac -x <备份文件>   # 再导出一份备份
+desktop/macos/build/cache/Sparkle-*/bin/generate_keys --account dev.ash.mac -f <备份文件>   # 换电脑：导回钥匙串
 ```
 
-**私钥**：`--keys` 调的是 Sparkle 的 `generate_keys --account dev.ash.mac`，私钥存在**登录钥匙串**里（「钥匙串访问」里搜 `dev.ash.mac`），不进任何仓库。**生成完立刻备份**：
-
-```bash
-desktop/macos/build/cache/Sparkle-*/bin/generate_keys --account dev.ash.mac -x ~/ash-mac-eddsa.key
-# 把这个文件放进密码管理器 / 离线介质，然后删掉本地这份
-```
-
-私钥丢了，已经装了 app 的机器就**再也收不到更新**（公钥不能换，见上）。换电脑时：`generate_keys --account dev.ash.mac -f <备份文件>` 导回钥匙串。
+发版时 `generate_keys` / `sign_update` 读钥匙串，第一次会弹窗问能不能访问 `dev.ash.mac`：输登录密码、点「始终允许」。
 
 每发一版：
 
@@ -88,9 +82,9 @@ desktop/macos/build/cache/Sparkle-*/bin/generate_keys --account dev.ash.mac -x ~
 npm run release:mac
 ```
 
-从**干净的提交**构建（版本号取提交时间）→ 核对 app 里的公钥就是签名私钥的那一把、更新源就是发布仓库 → 版本号必须比 appcast 里最新的大 → 压 zip（`ditto`）、`sign_update` 签名 → 建 GitHub Release `v<版本>-<构建号>`、传 zip → 把包下回来核对 → 再更新 appcast（新的一项在前，旧的原样保留，整份重签）→ 提交并推送。先传包、确认下得下来才推 appcast，feed 不会指向一个还不存在的包；中途失败重跑，同一版沿用 `build/releases/` 里上次压好的 zip。更新说明默认是上一版以来的提交标题，`--notes` 可以换。
+从**干净的提交**构建（版本号取提交时间）→ 核对 app 里的公钥就是签名私钥的那一把、更新源就是素材库里那份 appcast → 版本号必须比 appcast 里最新的大 → 压 zip（`ditto`）、`sign_update` 签名 → 在素材库建 GitHub Release `ash-mac-v<版本>-<构建号>`、传 zip → 把包下回来核对 → 再更新 appcast（新的一项在前，旧的原样保留，整份重签）→ 提交并推送（素材库只稀疏检出 `ash/mac`，宣传片等大文件不下载）。先传包、确认下得下来才推 appcast，feed 不会指向一个还不存在的包；中途失败重跑，同一版沿用 `build/releases/` 里上次压好的 zip。更新说明默认是上一版以来的提交标题，`--notes` 可以换。
 
-GitHub 凭证按顺序找：`GH_TOKEN` / `GITHUB_TOKEN` → `gh auth token` → git 存在钥匙串里的 github.com 凭证（`git push` 用的那条）。都没有就报错并说怎么配。raw.githubusercontent 有几分钟缓存，推完稍等已装的 app 才看得到。
+GitHub 凭证按顺序找：`GH_TOKEN` / `GITHUB_TOKEN` → `gh auth token` → git 存在钥匙串里的 github.com 凭证（`git push` 用的那条）。都没有就报错并说怎么配。`--init-repo` 只在 `release.json` 的 repo 还不存在时才用得上（会建成公开仓库）。raw.githubusercontent 有几分钟缓存，推完稍等已装的 app 才看得到。
 
 ### 本地演练
 
@@ -160,7 +154,7 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 | `Sources/DatabaseBackup.swift` | SQLite 一致快照；更新前备份与保留 |
 | `scripts/sparkle.mjs` | 取固定版本的 Sparkle（框架 + 签名工具） |
 | `scripts/release.mjs`、`appcast.mjs`、`github.mjs` | 发版、appcast 读写、GitHub API |
-| `release.json` | 发布仓库、钥匙串条目名、EdDSA 公钥 |
+| `release.json` | 发布仓库与 appcast 路径、tag 前缀、钥匙串条目名、EdDSA 公钥 |
 | `Sources/AppDelegate.swift` | 生命周期与菜单（⌘C/⌘V 靠编辑菜单分发，不能省） |
 | `Sources/BrowserWindowController.swift` | 窗口、WKWebView、探活、菜单动作 |
 | `Sources/WindowChrome.swift` | 内容铺到窗口顶：量红绿灯、和页面的约定、拖窗口 |
