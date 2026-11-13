@@ -4,6 +4,7 @@ import type { Schedule } from "@ash/shared";
 import { ArrowsClockwise, Clock, Lightning, SpinnerGap } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { Button } from "./ui.tsx";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 export type ScheduleKind = "once" | "cron";
 export type ScheduleDraftKind = "none" | ScheduleKind;
@@ -79,9 +80,9 @@ export function scheduleSummary(schedule: Schedule | null): string {
   if (!schedule) return "未设置定时";
   if (!schedule.enabled) return schedule.kind === "once" ? "这次定时已执行；保存可重新启用" : "定时已停用";
   if (schedule.kind === "once") {
-    return schedule.at ? `将于 ${new Date(schedule.at).toLocaleString()} 运行一轮` : "一次性定时未填写时间";
+    return schedule.at ? `将于 ${localeDateTime(schedule.at)} 运行一轮` : "一次性定时未填写时间";
   }
-  const lastRun = schedule.lastRunAt ? ` · 上次 ${new Date(schedule.lastRunAt).toLocaleString()}` : "";
+  const lastRun = schedule.lastRunAt ? ` · 上次 ${localeDateTime(schedule.lastRunAt)}` : "";
   return `按本地时间运行 · ${schedule.cron ?? "未配置"}${lastRun}`;
 }
 

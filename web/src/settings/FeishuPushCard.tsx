@@ -2,6 +2,7 @@ import { useId, useState } from "react";
 import type { FeishuStatus, ImOptions, ProjectView } from "@ash/shared";
 import { Button, Checkbox, Toggle } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
+import { localeNumber } from "../lib/localeFormat.ts";
 import { HANDOFF_URL_RE, normalizeTargetUrl } from "./handoffTargetUi.ts";
 import { useServerDraft } from "./useServerDraft.ts";
 
@@ -126,7 +127,7 @@ export function FeishuPushCard({ status, projects, onStatus, notify }: {
             <small className={quotaInvalid ? "feishu-field-error" : undefined}>
               {quotaInvalid
                 ? "填一个正整数"
-                : `飞书开放平台给这个应用的月调用次数上限，从开发者后台的用量页抄过来（默认 ${DEFAULT_QUOTA.toLocaleString("zh-CN")}）。ash 按它算水位，接近上限时先少推不要紧的。`}
+                : `飞书开放平台给这个应用的月调用次数上限，从开发者后台的用量页抄过来（默认 ${localeNumber(DEFAULT_QUOTA, "zh-CN")}）。ash 按它算水位，接近上限时先少推不要紧的。`}
             </small>
           </span>
           {canManage && (

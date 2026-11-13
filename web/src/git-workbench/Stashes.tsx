@@ -5,6 +5,7 @@ import type { Workbench } from "./useWorkbench.ts";
 import type { AskAction } from "./ActionDialog.tsx";
 import { DiffView } from "./DiffView.tsx";
 import { workbenchApi } from "./api.ts";
+import { localeDate } from "../lib/localeFormat.ts";
 
 export function Stashes({
   projectId,
@@ -62,7 +63,7 @@ export function Stashes({
               </span>
             </button>
             <time className="branch-time">
-              {new Date(row.at).toLocaleDateString()}
+              {localeDate(row.at)}
             </time>
             <div className="gwb-row-actions">
               <button

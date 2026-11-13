@@ -3,6 +3,7 @@
 // 单独放一份是因为同一个状态会在好几张卡上出现（连接卡的状态点、绑定卡里「机器人还没连上」
 // 的提醒），文案抄两份迟早一边先漂。
 import type { ImApiKind, ImConnectionState, ImQuotaLevel } from "@ash/shared";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 type Tone = "neutral" | "green" | "amber" | "red";
 
@@ -77,7 +78,7 @@ export const API_KIND_LABELS: Record<ImApiKind, string> = {
   info: "查询机器人与群信息",
 };
 
-export const formatTime = (iso: string): string => new Date(iso).toLocaleString("zh-CN");
+export const formatTime = (iso: string): string => localeDateTime(iso, "zh-CN");
 
 /** 「3 分钟前」——最近一次收到事件这类时间，人关心的是隔了多久，不是几点几分。 */
 export function agoText(iso: string, now: number): string {
