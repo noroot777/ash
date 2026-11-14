@@ -1,32 +1,7 @@
 #!/usr/bin/env node
-// Ash MCP server — a THIN adapter that exposes the ash HTTP API as MCP
-// tools so an LLM agent (Claude Code / Desktop / Cursor / a spawned `claude`)
-// can orchestrate tasks natively. It holds no logic of its own: every tool just
-// calls an existing endpoint on the ash server (default http://localhost:4317,
-// override with ASH_URL). The Hono server stays the single source of truth.
-//
-// 这份文件只负责**接线**：起 server、挂上各组工具、连上 stdio。工具本体按作用对象分在
-// tools/ 下（orchestrate = 安排活，read-transcript = 旁观别的任务说过的话，task-turn =
-// 一条任务在自己回合里说的话，monitor = 挂一条长跑命令让它来叫我），传输层在
-// runtime.ts，共用入参形状在 schemas.ts。
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { holdCodeLease } from "@ash/shared/code-lease";
-import { BASE } from "./runtime.js";
-import { registerMonitorTools } from "./tools/monitor.js";
-import { registerOrchestrationTools } from "./tools/orchestrate.js";
-import { registerReadTranscriptTools } from "./tools/read-transcript.js";
-import { registerTaskTurnTools } from "./tools/task-turn.js";
+// ash MCP 入口，只做一件事：跑的是 mac app 里那份代码时先拿到代码锁（@ash/shared/code-lock），再加载本体
+// （main.ts）。拿锁之前一个业务模块都不读：换包那几秒里起来的进程等在锁上，等到之后读到的是一整份新代码。
+import { holdCodeLock } from "@ash/shared/code-lock";
 
-// 跑的是 app 里那份代码时登记一下，app 换包前据此知道还有 agent 用着它（code-lease.ts）。
-holdCodeLease("mcp");
-
-const server = new McpServer({ name: "ash", version: "0.1.0" });
-registerOrchestrationTools(server);
-registerReadTranscriptTools(server);
-registerTaskTurnTools(server);
-registerMonitorTools(server);
-
-const transport = new StdioServerTransport();
-await server.connect(transport);
-console.error(`[ash-mcp] connected — tools ready (ASH_URL=${BASE})`);
+holdCodeLock();
+await import("./main.js");

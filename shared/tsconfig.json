@@ -7,5 +7,5 @@
   },
   "include": ["src"],
   // 只给 node 进程用（server、mcp 的入口），由它们的编译带着 node 类型检查；前端不引用它。
-  "exclude": ["src/code-lease.ts"]
+  "exclude": ["src/code-lock.ts"]
 }

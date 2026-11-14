@@ -17,8 +17,9 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { testInstanceGuard } from "./macos-client-guard.mjs";
+import { testInstall } from "./macos-client-install.mjs";
 
 assert.equal(process.platform, "darwin", "macOS-only regression");
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -349,88 +350,9 @@ try {
   assert.equal(readFileSync(book, "utf8").trim(), ordered.at(-1), "the book keeps the largest number handed out");
   console.log("PASS: build numbers strictly increase across same-second, backdated and concurrent builds");
 
-  // ── 安装：旧 bundle 还有进程在用就不换（按真实文件身份认）；拷失败旧的原样不动；两个安装器排队 ──
-  const install = join(root, "desktop/macos/scripts/install-app.sh");
-  // 安装锁和代码登记都有固定位置，测试换成自己的临时目录，跑完一起清掉。
-  const leases = join(temporary, "code-leases");
-  const installEnv = { ASH_INSTALL_LOCKS: join(temporary, "install-locks"), ASH_CODE_LEASES: leases };
-  // 安装目录名里带正则字符，再给它一个软链别名：从哪个拼写拉起、从哪个拼写安装都得认出是同一个包。
-  const apps = join(temporary, "Apps [1]+ $x");
-  const appsAlias = join(temporary, "Applications-alias");
-  const fakeApp = (dir, version) => {
-    mkdirSync(join(dir, "Contents/Resources/app/server/dist"), { recursive: true });
-    writeFileSync(join(dir, "Contents/Resources/app/server/dist/index.js"), "setInterval(() => {}, 1000)");
-    writeFileSync(join(dir, "Contents/version"), version);
-    // 真的登记模块，入口照服务、MCP 那样启动时登记。
-    mkdirSync(join(dir, "Contents/Resources/app/shared/src"), { recursive: true });
-    copyFileSync(join(root, "shared/src/code-lease.ts"), join(dir, "Contents/Resources/app/shared/src/code-lease.ts"));
-    writeFileSync(join(dir, "Contents/Resources/app/server/dist/entry.mjs"),
-      'import { holdCodeLease } from "../../shared/src/code-lease.ts"; holdCodeLease("server"); setInterval(() => {}, 1000);');
-    writeFileSync(join(dir, "Contents/keepalive.mjs"), "setInterval(() => {}, 1000)");
-  };
-  const newApp = join(temporary, "build", "Ash.app");
-  const newerApp = join(temporary, "build-2", "Ash.app");
-  fakeApp(newApp, "new");
-  fakeApp(newerApp, "newer");
-  fakeApp(join(apps, "Ash.app"), "old");
-  symlinkSync(apps, appsAlias);
-  const installed = () => readFileSync(join(apps, "Ash.app/Contents/version"), "utf8");
-  const outside = join(temporary, "outside");
-  mkdirSync(outside);
-  symlinkSync(join(apps, "Ash.app/Contents/Resources/app/server/dist/entry.mjs"), join(outside, "run.mjs"));
-  // 系统 node 跑包里的脚本（脚本读完就关，只有命令行认得出），和包里的「node」本身在跑（可执行文件认得出；
-  // 拿一份 /bin/sleep 当它 —— 开发机上的 node 多半连着动态库，拷出来起不来）。
-  const bundledNode = join(apps, "Ash.app/Contents/Resources/node");
-  copyFileSync("/bin/sleep", bundledNode);
-  const users = [
-    ["script, started via the real path, installing via the alias", [process.execPath, join(apps, "Ash.app/Contents/Resources/app/server/dist/index.js")], appsAlias],
-    ["script, started via the alias, installing via the real path", [process.execPath, join(appsAlias, "Ash.app/Contents/Resources/app/server/dist/index.js")], apps],
-    // 命令行里一个 .app 都没有（相对路径起的），只能靠打开着的可执行文件认。
-    ["bundled executable started by a relative path", ["./node", "600"], apps,
-      join(appsAlias, "Ash.app/Contents/Resources")],
-    // 别处的 node 按相对路径跑包里的脚本，工作目录在包外（第 3 轮审查的复现）。
-    ["script by a relative path from outside the bundle", [process.execPath, "Apps [1]+ $x/Ash.app/Contents/keepalive.mjs"], appsAlias],
-    // 经包外的软链起 ash 的入口：命令行、可执行文件、工作目录都看不出它跟包有关，只有它自己的登记。
-    ["ash entry started through a symlink outside the bundle", [process.execPath, "run.mjs"], apps, outside],
-  ];
-  for (const [label, [command, ...args], into, cwd = temporary] of users) {
-    const user = spawn(command, args, { stdio: "ignore", cwd, env: { ...process.env, ASH_CODE_LEASES: leases } });
-    children.add(user);
-    await delay(600);
-    result = await launch("/bin/bash", [install, newApp, into], installEnv).done;
-    assert.equal(result.status, 1, `${label}: ${result.output}`);
-    assert.match(result.output, new RegExp(`${user.pid} `), `${label}: the process still using the old bundle is named`);
-    assert.equal(installed(), "old", `${label}: a bundle in use is not replaced`);
-    user.kill("SIGKILL");
-    await once(user, "exit");
-    children.delete(user);
-  }
-  rmSync(bundledNode);
-  assert.equal(readdirSync(leases).length, 1, "the killed entry left its lease behind (kill -9 skips exit hooks)");
-  result = await launch("/bin/bash", [install, join(temporary, "build", "missing.app"), apps], installEnv).done;
-  assert.equal(result.status, 1, result.output);
-  assert.equal(installed(), "old", "a failed install keeps the old app");
-  result = await launch("/bin/bash", [install, newApp, appsAlias], installEnv).done;
-  assert.equal(result.status, 0, result.output);
-  assert.equal(installed(), "new");
-  assert.deepEqual(readdirSync(apps), ["Ash.app"], "no staging or replaced copy is left behind");
-  // 两个安装器同时换同一个目录（一个经别名）：排队换，各自完整，不留嵌套的暂存包。
-  const installers = [launch("/bin/bash", [install, newerApp, apps], installEnv), launch("/bin/bash", [install, newApp, appsAlias], installEnv)];
-  for (const racer of installers) {
-    result = await racer.done;
-    assert.equal(result.status, 0, result.output);
-  }
-  assert.ok(["new", "newer"].includes(installed()), installed());
-  assert.deepEqual(readdirSync(apps), ["Ash.app"], "racing installs leave exactly one app");
-  assert.deepEqual(readdirSync(join(apps, "Ash.app")), ["Contents"], "no staging bundle nested inside the installed one");
-  // 正常退出的入口撤掉自己的登记。
-  const exiting = spawn(process.execPath, ["--input-type=module", "-e",
-    `import { holdCodeLease } from ${JSON.stringify(pathToFileURL(join(apps, "Ash.app/Contents/Resources/app/shared/src/code-lease.ts")).href)}; holdCodeLease("mcp"); setTimeout(() => process.exit(0), 300);`],
-  { stdio: "ignore", env: { ...process.env, ASH_CODE_LEASES: leases } });
-  await until(() => readdirSync(leases).some((name) => name === String(exiting.pid)), "an ash entry registers itself");
-  await once(exiting, "exit");
-  assert.ok(!readdirSync(leases).includes(String(exiting.pid)), "a normal exit withdraws the lease");
-  console.log("PASS: install refuses while anything still runs from the old bundle (ash entries by their own lease, others by real file identity, whatever path spelling started them), ignores dead leases, keeps the old app on failure, serialises racing installs, swaps in place otherwise");
+  // ── 安装：旧 bundle 还有进程在用就不换（scripts/macos-client-install.mjs）──
+  await testInstall({ root, temporary, launch, children, until, delay });
+  console.log("PASS: install refuses while anything still runs from the old bundle (ash entries by the code lock they hold, others by real file identity, whatever path spelling started them); an entry started mid-swap waits on the lock and then runs the whole new bundle; dead holders never block; no lock, no run and no install; keeps the old app on failure, serialises racing installs, still replaces a lockless older bundle");
 
   // ── 导入旧数据 ──
   // 假的洗副本工具：记下参数，在它拿到的库上留个记号，按约定回一行 JSON；摆了 import-fail 就失败。
