@@ -13,6 +13,10 @@ import { useAcceptCommitDefault } from "./useAcceptCommitDefault.ts";
  * 每次都让服务端**核对现场**：改动还躺着、已经提交了、还是被丢了。提交之后这一行就没了；任务头上
  * 那颗「待提交」徽记是刷新后仍看得出欠一步的那一处（对话区不另铺一张卡）。
  * 动作都由用户自己点：ash 不替他提交、不强删分支。
+ *
+ * 现场会在页面之外变：用户照这一行给的命令去终端里提交或丢弃。所以这一行在场时自己对账 ——
+ * 页面可见时每 15 秒核对一次、窗口回到前台时立刻核对一次（有界：现场一旦是「已提交」这一行就没了，
+ * 对账跟着停）。重读失败时手上那份照旧摆着，但说出来并给本行重试。
  */
 export function PendingMergeCheck({ task, notify, onTaskUpdated }: {
   task: TaskListItem | Task;
@@ -35,11 +39,34 @@ export function PendingMergeCheck({ task, notify, onTaskUpdated }: {
     if (!applicable) { setState(null); return; }
     let alive = true;
     api.pendingMerge(task.id).then(
-      (result) => { if (alive) { setState(result.state); setError(null); } },
+      (result) => {
+        if (!alive) return;
+        setState(result.state);
+        setError(null);
+        // 在页面之外收的尾：现场核对已经把它认成提交了，任务头上那颗「待提交」也该跟着摘掉。
+        if (result.state?.kind === "committed" && !task.acceptedMergeCommit && onTaskUpdated) {
+          void api.task(task.id).then(onTaskUpdated).catch(() => {});
+        }
+      },
       (reason: unknown) => { if (alive) setError(reason instanceof Error ? reason.message : String(reason)); },
     );
     return () => { alive = false; };
+    // onTaskUpdated 是宿主每次渲染给的新闭包，不作为重读的理由。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applicable, task.id, task.acceptedMergeCommit, attempt]);
+  const open = applicable && !!state && state.kind !== "committed";
+  useEffect(() => {
+    if (!open) return;
+    const again = () => { if (document.visibilityState === "visible") reload(); };
+    const timer = window.setInterval(again, 15_000);
+    window.addEventListener("focus", again);
+    document.addEventListener("visibilitychange", again);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", again);
+      document.removeEventListener("visibilitychange", again);
+    };
+  }, [open, reload]);
 
   if (!applicable) return null;
   if (error && !state) {
@@ -85,7 +112,8 @@ export function PendingMergeCheck({ task, notify, onTaskUpdated }: {
         check="pending-merge"
         tone="warn"
         text={text}
-        state={state.kind === "staged" && staged ? <>{staged} 个文件暂存在 <code>{target}</code></> : <code>{target}</code>}
+        state={error ? `现场待核对：${error}`
+          : state.kind === "staged" && staged ? <>{staged} 个文件暂存在 <code>{target}</code></> : <code>{target}</code>}
         detail={(
           <div className="acc-detail-text">
             <p>{state.message}</p>
@@ -94,11 +122,14 @@ export function PendingMergeCheck({ task, notify, onTaskUpdated }: {
             {commands.length > 0 && <><h4>也可以在终端里提交或丢弃</h4><FileList files={commands} /></>}
           </div>
         )}
-        tools={state.canCommit
-          ? <CheckAction busy={busy} onClick={() => setAction("commit")}>提交</CheckAction>
-          : state.canRemerge
-            ? <CheckAction busy={busy} onClick={() => { setCommitChoice(null); setAction("remerge"); }}>重新合一次</CheckAction>
-            : undefined}
+        tools={<>
+          {error && <CheckAction onClick={reload}>重试</CheckAction>}
+          {state.canCommit
+            ? <CheckAction busy={busy} onClick={() => setAction("commit")}>提交</CheckAction>
+            : state.canRemerge
+              ? <CheckAction busy={busy} onClick={() => { setCommitChoice(null); setAction("remerge"); }}>重新合一次</CheckAction>
+              : null}
+        </>}
       />
       {action === "commit" && (
         <ConfirmDialog

@@ -219,7 +219,7 @@ export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async
 }
 
 // 依赖那份事实是多处订阅者共用的一份（验收台、第一行走向、侧栏）：一次变化只发一次请求，旧响应不盖新结果，
-// 卸载后不再轮询；读失败那一行自带「重试」，后台静默重验失败一个字都不出。
+// 卸载后不再轮询；读失败那一行自带「重试」，后台重验失败只出一行不拦路的「待核对」，同样带重试。
 async function checkPlanSharing(page, fixtureUrl, checkpoint) {
   const d = acceptanceDesk(page, fixtureUrl);
   const { ensure, desk, row, main, idle, go, button, confirmLayer } = d;
@@ -295,21 +295,22 @@ async function checkPlanSharing(page, fixtureUrl, checkpoint) {
   await idle();
   ensure(await main.isEnabled(), "fresh task plan must restore acceptance");
 
-  // 后台自动重验（15 秒那个）失败时不许惊动版面：没有一行、不顶开前提列、不禁主按钮，手上那份依赖仍然有效。
-  // 先等失败真的落进共享状态（台子页另挂的订阅者念得出原因），再断言——反过来写可能抢在状态更新之前跑完、永远为真。
-  const checks = desk.getByRole("list", { name: "验收前提", exact: true });
-  const height = () => checks.evaluate(node => node.getBoundingClientRect().height);
-  const quietHeight = await height();
+  // 后台自动重验（15 秒那个）失败：手上那份依赖仍然有效，不拦主按钮、不弹 alert；但要说出「待核对」并给本行重试，
+  // 不然旧的「就绪」一直摆着，读失败了既看不出来也没处补。先等失败真的落进共享状态（台子页另挂的订阅者念得出原因），
+  // 再断言——反过来写可能抢在状态更新之前跑完、永远为真。
+  const stale = row("dependency-stale", "依赖待核对");
   await probe("下次依赖请求失败").click();
   await probe("轮询一次").click();
   await settled(12);
   await output("依赖后台重验失败").filter({ hasText: "测试读取失败" }).waitFor({ state: "visible" });
-  ensure(await row("dependency").count() === 0, "background revalidation failure must not raise a row");
+  await stale.waitFor({ state: "visible" });
+  ensure((await stale.innerText()).includes("测试读取失败"), "stale row must say why the last check failed");
+  ensure(await row("dependency").count() === 0, "background revalidation failure must not raise the blocking row");
   ensure(await desk.getByRole("alert").count() === 0, "background revalidation failure must not raise an alert");
-  ensure(await height() === quietHeight, "background revalidation failure must not reflow the checks");
   ensure(await main.isEnabled(), "background revalidation failure must not block acceptance");
-  await probe("模拟任务更新").click();
+  await button(stale, "重试").click();
   await settled(13);
+  await stale.waitFor({ state: "detached" });
   await output("依赖后台重验失败").filter({ hasText: /^$/ }).waitFor({ state: "attached" });
 }
 

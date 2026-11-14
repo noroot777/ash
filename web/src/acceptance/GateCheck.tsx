@@ -84,7 +84,9 @@ export function GateCheck({ task, gate, canManage, settled, atFinalGate, disable
 
   const notice = run?.executionNotice ?? null;
   const shownLog = log && log.runId === run?.id ? log.text : run?.logTail;
-  const detail = run && (run.logTail || run.logAvailable !== false) ? (
+  // 日志被清理了也照样展得开：运行号、起止时间、监督方式这些记录仍然作数，只是没有日志可读。
+  const logGone = run?.logAvailable === false && !run.logTail;
+  const detail = run ? (
     <div className="acc-log">
       <div className="acc-log-head">
         <span>
@@ -96,7 +98,7 @@ export function GateCheck({ task, gate, canManage, settled, atFinalGate, disable
           {run.logAvailable === false ? "日志已清理" : "全文"}
         </button>
       </div>
-      <pre ref={(node) => { if (node) node.scrollTop = node.scrollHeight; }}>{shownLog || "（日志为空）"}</pre>
+      {!logGone && <pre ref={(node) => { if (node) node.scrollTop = node.scrollHeight; }}>{shownLog || "（日志为空）"}</pre>}
       <HoverTip at={tip.at}>{notice}</HoverTip>
     </div>
   ) : undefined;

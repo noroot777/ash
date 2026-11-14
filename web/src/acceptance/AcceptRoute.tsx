@@ -42,8 +42,11 @@ export function AcceptRoute({ task, data, disabled, onTaskUpdated, notify }: {
   const locked = disabled || plan.loading || plan.refreshing || !!plan.error || !!task.archived
     || !!entry?.baseUpdatePending || ["running", "queued"].includes(task.status);
   const files = data.diff.files;
-  const add = files.reduce((sum, file) => sum + (file.additions ?? 0), 0);
-  const del = files.reduce((sum, file) => sum + (file.deletions ?? 0), 0);
+  // 数不出来的（二进制、被截断）后端给 null：全都数不出来就照实写「?」，同 diff 文件轨的口径。
+  const total = (side: "additions" | "deletions") => files.length && files.every((file) => file[side] == null)
+    ? "?" : files.reduce((sum, file) => sum + (file[side] ?? 0), 0);
+  const add = total("additions");
+  const del = total("deletions");
   const range = task.stage === "accepted" && task.acceptedBaseCommit && task.acceptedMergeCommit
     ? `${task.acceptedBaseCommit.slice(0, 8)}..${task.acceptedMergeCommit.slice(0, 8)}` : null;
   return (

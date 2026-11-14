@@ -78,6 +78,9 @@ export function DependencyChecks({ task, plan, checked, onChecked, disabled, not
     <>
       {error && <CheckRow check="dependency" tone="block" text="依赖读不出来" state={error}
         tools={<CheckAction onClick={() => void refresh()}>重试</CheckAction>} />}
+      {/* 后台自动重验没成功：手上那份依赖照旧作数、不拦验收，但要说出「这是上一次的」并给本行重试。 */}
+      {!error && plan.staleReason && <CheckRow check="dependency-stale" tone="idle" text="依赖待核对" state={plan.staleReason}
+        tools={<CheckAction busy={plan.refreshing} onClick={() => void refresh()}>重试</CheckAction>} />}
       {entry.blocker && <CheckRow check="blocker" tone="block" text={entry.blockerLabel ?? entry.blocker.split("\n")[0]}
         detail={entry.blockerLabel || entry.blocker.includes("\n") ? <p className="acc-detail-text">{entry.blocker}</p> : undefined} />}
       {dep && (

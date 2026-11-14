@@ -1,0 +1,191 @@
+import assert from "node:assert/strict";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
+
+// 验收台上的事实**属于哪一版**、读失败时**出路在哪一行**。钉的是第 1 轮审查拦下的几条：
+//
+// ① 走向与 diff 跟着任务版本走（useVersionedRead）。同一个任务更新了（合入目标换了、新提交），
+//    这一版又读不回来：顶行不许还摆着上一版的走向（确认层合的是新目标），diff 区明说「下面是上一版」
+//    并给本行重试；重试读到了，顶行换成这一版的目标。
+// ② 保留着旧结论的那几行重读失败时（这里是子任务合入时的工作区那一行）：结论照旧摆着，但状态换成
+//    「待核对」并给本行重试 —— 删掉常驻刷新之后，这就是唯一的补救。
+// ③ 「合并后不提交」那一行自己对账：用户在终端里提交了，窗口回到前台时那一行就收掉；重读失败时
+//    旧现场照旧摆着，但说出来并给本行重试。
+// ④ 从键下面点出来的那一层在矮窗口里整层收进视口：滚到底，确认键在屏幕里按得到。
+// ⑤ 团队验收台打回之后回到能看见那句话的对话：团队回调度台，独立执行者回它自己的会话。
+const web = await startWebServer();
+
+const DIFF = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,1 +1,1 @@\n-old\n+new\n";
+const entry = (taskId, more = {}) => ({
+  taskId, projectId: "proj-1", title: taskId, status: "done", stage: "awaiting_acceptance", startCommit: "0123456789abcdef",
+  targetBranch: "main", sourceCommit: "1111111111111111", targetCommit: "2222222222222222", strategy: "merge",
+  dependency: null, blocker: null, baseUpdatePending: false, fingerprint: `fp-${taskId}`, ...more,
+});
+const child = entry("child-task", { title: "子任务", targetTaskId: "single-task", targetBranch: "ash/single-task", stage: "awaiting_acceptance" });
+const scm = (taskId) => ({
+  root: { path: `/repo/.worktrees/${taskId}`, branch: `ash/${taskId}`, source: "worktree", gitRepo: true }, taskRunning: false, readOnly: null,
+  acceptanceCommitBlock: null, acceptanceAutoCommit: { action: "skip", reason: "项目未开启验收前自动提交" },
+  status: { branch: { head: `ash/${taskId}`, detached: false, oid: "abc", upstream: null, ahead: null, behind: null },
+    staged: [], unstaged: [], untracked: [], merge: [], operation: null, truncated: false },
+  commits: [],
+});
+const pendingState = (kind) => ({
+  taskId: "pending-task", kind, message: kind === "staged" ? "合并结果还暂存在 main 上" : "已提交", repoPath: "/repo",
+  targetBranch: "main", sourceBranch: "ash/pending-task", sourceBranchExists: true, commit: kind === "committed" ? "abcdef12" : null,
+  stagedFiles: kind === "staged" ? ["a.ts"] : [], dirtyFiles: [], canCommit: kind === "staged", canRemerge: false,
+});
+
+function api(store) {
+  return async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const reply = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    const fail = () => reply({ error: "测试读取失败" }, 503);
+    if (url.pathname === "/api/projects") {
+      return reply([{ id: "proj-1", name: "harness", repoPath: "/repo", myRole: "admin", acceptGateCommand: null, acceptCommit: true }]);
+    }
+    if (url.pathname === "/api/tasks/bodies" && request.method() === "POST") {
+      return reply(request.postDataJSON().taskIds.map((taskId) => ({ taskId, body: "" })));
+    }
+    const reject = /^\/api\/tasks\/([^/]+)\/reply$/.exec(url.pathname);
+    if (reject && request.method() === "POST") {
+      store.replies.push(reject[1]);
+      return reply({ ok: true });
+    }
+    const hit = /^\/api\/tasks\/([^/]+)(?:\/([a-z-]+))?$/.exec(url.pathname);
+    if (hit && request.method() === "GET") {
+      const [, taskId, what] = hit;
+      if (!what) {
+        store.taskFetches[taskId] = (store.taskFetches[taskId] ?? 0) + 1;
+        return reply({ id: taskId, title: taskId, projectId: "proj-1", status: "done", stage: "awaiting_acceptance", mode: "single",
+          useWorktree: true, archived: false, updatedAt: "2026-11-02T01:24:00.000Z" });
+      }
+      if (what === "branch-plan") return reply({ task: entry(taskId), descendants: taskId === "single-task" ? [child] : [] });
+      if (what === "accept-gate") return reply({ command: null, running: null, latest: null, basis: null });
+      if (what === "acceptance-check") return reply({ verification: null });
+      if (what === "scm") return reply(scm(taskId));
+      if (what === "sessions") return reply([]);
+      if (what === "workspace") return store.failWorkspace ? fail() : reply({ path: `/repo/.worktrees/${taskId}`, branch: `ash/${taskId}` });
+      if (what === "pending-merge") return store.failPending ? fail() : reply({ state: pendingState(store.pending) });
+      if (what === "commits") {
+        return store.failChanges ? fail() : reply({ branch: `ash/${taskId}`, commits: [{ sha: "1111111111111111", subject: "feat", at: "2026-11-02T01:20:00.000Z" }] });
+      }
+      if (what === "diff") {
+        return store.failChanges ? fail() : reply({ available: true, sourceBranch: `ash/${taskId}`, targetBranch: store.target, mergeBase: "0123456789abcdef",
+          diff: DIFF, files: [{ path: "a.ts", additions: 1, deletions: 1, origPath: null }], truncated: false, limitBytes: 1048576 });
+      }
+    }
+    store.unexpected.push(`${request.method()} ${url.pathname}`);
+    return reply({ error: "验证页面拒绝未声明的请求" }, 404);
+  };
+}
+
+const freshStore = () => ({ target: "main", failChanges: false, failWorkspace: false, failPending: false, pending: "staged",
+  replies: [], taskFetches: {}, unexpected: [] });
+
+let browser;
+try {
+  const fixture = `${web.origin}/scripts/fixtures/acceptance-freshness.html`;
+  browser = await launchChrome();
+
+  {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 1400 } });
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const store = freshStore();
+    await page.route((url) => url.pathname.startsWith("/api/"), api(store));
+    await page.goto(fixture);
+    const single = page.locator('[data-host="single"]');
+    const route = single.locator(".acc-bar .acc-route");
+    const release = single.locator('.acc-check[data-check="release"]');
+    await route.locator(".acc-target, .acc-dst").filter({ hasText: "main" }).waitFor();
+    await release.filter({ hasText: "工作区目录还占着它" }).waitFor();
+
+    // ① 同一个任务换了合入目标、改动这一版读不回来。
+    store.failChanges = true;
+    store.failWorkspace = true;
+    store.target = "other";
+    await page.evaluate(() => window.bumpSingle({ mergeTargetBranch: "other" }));
+    const lead = single.locator(".acc-bar .acc-lead-note").filter({ hasText: "改动读不出来" });
+    await lead.waitFor();
+    assert.equal(await route.count(), 0, "这一版读不回来时顶行不许摆上一版的走向");
+    const note = single.locator(".acc-changes-note");
+    await note.filter({ hasText: "下面是上一版" }).waitFor();
+    assert.equal(await single.locator(".single-review-diff-region .acc-stale").count(), 1, "上一版的 diff 压暗摆着，不冒充当前");
+    // ② 工作区那一行：旧结论还在，状态换成待核对，行尾有重试。
+    await release.filter({ hasText: "待核对" }).waitFor();
+    assert.equal(await release.getByRole("button", { name: "重试", exact: true }).count(), 1, "保留旧结论的那一行读失败要有本行重试");
+    store.failWorkspace = false;
+    await release.getByRole("button", { name: "重试", exact: true }).click();
+    await release.filter({ hasText: "工作区目录还占着它" }).waitFor();
+    assert.equal(await release.getByRole("button", { name: "重试", exact: true }).count(), 0);
+    // ① 重试读到了：顶行换成这一版的目标，diff 不再压暗，那句话收掉。
+    store.failChanges = false;
+    await lead.getByRole("button", { name: "重试", exact: true }).click();
+    await route.locator(".acc-target, .acc-dst").filter({ hasText: "other" }).waitFor();
+    assert.equal(await note.count(), 0);
+    assert.equal(await single.locator(".single-review-diff-region .acc-stale").count(), 0);
+
+    // ③ 「合并后不提交」：重读失败 → 旧现场照旧 + 待核对 + 重试；终端里提交了 → 窗口回到前台就收掉，并刷新任务。
+    const pending = page.locator('[data-host="pending"] .acc-check[data-check="pending-merge"]');
+    await pending.filter({ hasText: "合并结果还没提交" }).waitFor();
+    store.failPending = true;
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await pending.filter({ hasText: "现场待核对" }).waitFor();
+    assert.equal(await pending.filter({ hasText: "合并结果还没提交" }).count(), 1, "读失败时旧现场照旧摆着");
+    store.failPending = false;
+    await pending.getByRole("button", { name: "重试", exact: true }).click();
+    await pending.filter({ hasNotText: "现场待核对" }).waitFor();
+    store.pending = "committed";
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await pending.waitFor({ state: "detached" });
+    assert.ok((store.taskFetches["pending-task"] ?? 0) >= 1, "在页面之外收的尾，任务要跟着刷新（摘掉「待提交」）");
+
+    // ⑤ 团队：打回调度台 → 回到调度台；打回独立执行者 → 回到它自己的会话。
+    const team = page.locator('[data-host="team"]');
+    for (const [bar, id] of [[team.locator(".acc-desk > .acc-bar"), "team-lead"], [team.locator(".acc-record > .acc-bar"), "indie-worker"]]) {
+      await bar.getByRole("button", { name: "打回", exact: true }).click();
+      const layer = page.getByRole("dialog", { name: "打回", exact: true });
+      await layer.getByRole("textbox", { name: "打回意见" }).fill("再改一下");
+      await layer.getByRole("button", { name: "发给任务", exact: true }).click();
+      await page.waitForFunction((target) => window.returned.includes(target), id);
+      assert.ok(store.replies.includes(id), `${id}：意见发给了它自己`);
+    }
+    assert.deepEqual(store.unexpected, [], "页面发了未声明的请求");
+    assert.deepEqual(errors, [], "渲染报错");
+    await page.close();
+  }
+
+  // ④ 矮窗口：确认层上下都放不下，整层收进视口；滚到底，确认键整颗在屏幕里。
+  {
+    const page = await browser.newPage({ viewport: { width: 900, height: 150 } });
+    const store = freshStore();
+    await page.route((url) => url.pathname.startsWith("/api/"), api(store));
+    await page.goto(fixture);
+    const main = page.locator('[data-host="single"] .acc-bar button.acc-btn.is-primary');
+    await page.locator('[data-host="single"] .acc-bar .acc-route').waitFor();
+    await page.waitForFunction(() => {
+      const button = document.querySelector('[data-host="single"] .acc-bar button.acc-btn.is-primary');
+      return button && !button.disabled;
+    });
+    await main.click();
+    const layer = page.getByRole("dialog", { name: "确认验收" });
+    await layer.waitFor();
+    await page.waitForTimeout(50);
+    const box = await layer.evaluate((node) => {
+      node.scrollTop = node.scrollHeight;
+      const rect = node.getBoundingClientRect();
+      const confirm = [...node.querySelectorAll("footer button")].find((button) => button.textContent.includes("确认验收"));
+      const key = confirm.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom, viewport: window.innerHeight, scrollable: node.scrollHeight > node.clientHeight,
+        key: { top: key.top, bottom: key.bottom } };
+    });
+    assert.ok(box.scrollable, `这个窗口高度下确认层本该放不下、要在层里滚（${JSON.stringify(box)}）`);
+    assert.ok(box.top >= 0 && box.bottom <= box.viewport, `确认层越出了视口：${JSON.stringify(box)}`);
+    assert.ok(box.key.top >= 0 && box.key.bottom <= box.viewport, `滚到底确认键仍在屏幕外：${JSON.stringify(box)}`);
+    await page.close();
+  }
+  console.log("acceptance freshness: versioned route/diff with stale marking and retry, stale rows keep a retry, pending merge reconciles on focus, short-window layers stay in view, team rejections return to the conversation");
+} finally {
+  await browser?.close();
+  await web.close();
+}

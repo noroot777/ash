@@ -122,17 +122,19 @@ export async function testAcceptGateReceipts({ open, run, basis }) {
     await page.close();
   }
 
-  // 日志已迁走或清理：有末尾就照摆、「全文」灰着说清楚；连末尾都没有就不给展开。
+  // 日志已迁走或清理：「全文」灰着说清楚；有末尾就照摆。连末尾都没有也照样展得开 —— 运行号、
+  // 起止时间这些记录仍然作数，只是没有日志框。
   for (const logTail of ["", "last lines\n"]) {
     const moved = run({ logAvailable: false, logTail });
     const { page } = await open({ gate: { command: moved.command, running: null, latest: moved, basis: basis("passed", moved) }, query: "?stage=accepted" });
     const row = gateRow(page);
     assert.equal(await stateOf(row), "通过");
-    if (!logTail) assert.equal(await row.locator("button.acc-check-main").count(), 0);
+    await row.locator("button.acc-check-main").click();
+    const missing = row.getByRole("button", { name: "日志已清理", exact: true });
+    assert.equal(await missing.isDisabled(), true);
+    assert.match(await row.locator(".acc-log-head").innerText(), new RegExp(moved.id));
+    if (!logTail) assert.equal(await row.locator(".acc-log pre").count(), 0, "没有日志可读就不摆一个空日志框");
     else {
-      await row.locator(".acc-check-main").click();
-      const missing = row.getByRole("button", { name: "日志已清理", exact: true });
-      assert.equal(await missing.isDisabled(), true);
       assert.match(await row.locator(".acc-log pre").innerText(), /last lines/);
       if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/handoff-log-unavailable.png`, fullPage: true });
     }

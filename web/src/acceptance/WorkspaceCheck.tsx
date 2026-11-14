@@ -13,19 +13,22 @@ export function AutoCommitCheck({ outcome }: { outcome: AcceptanceAutoCommitOutc
 /**
  * 「任务工作区还有没提交的文件」那一行：它们不在任务分支上，不会随合并进去。状态那半句照抄服务端
  * 的预检（验收时会不会替你提交、为什么不会）；拿不准归属、有冲突、有嵌套仓库时「提交」灰着，
- * 原因在展开层里。
+ * 原因在展开层里。`error` 是提交失败；`readError` 是这一次重读失败（下面摆的还是上一次读到的），
+ * 那时行尾多一个「重试」，干净的工作区也照样出这一行 —— 不然读失败了既看不出来也没处补。
  */
-export function WorkspaceCommitRow({ overview, busy, disabled = false, error, onCommit }: {
+export function WorkspaceCommitRow({ overview, busy, disabled = false, error, readError = null, onCommit, onRetry }: {
   overview: ScmOverview;
   busy: boolean;
   disabled?: boolean;
   error: string | null;
+  readError?: string | null;
   onCommit: () => void;
+  onRetry?: () => void;
 }) {
   const paths = [...new Set([...overview.status.staged, ...overview.status.unstaged, ...overview.status.untracked, ...overview.status.merge]
     .map((change) => change.path))];
   const block = workspaceCommitBlock(overview);
-  if (!paths.length && !error) return null;
+  if (!paths.length && !error && !readError) return null;
   const precheck = overview.taskRunning ? "任务还在跑，结束后再提交"
     : overview.acceptanceAutoCommit
       ? `${overview.acceptanceAutoCommit.action === "skip" ? "验收时不会替你提交：" : ""}${overview.acceptanceAutoCommit.reason}`
@@ -33,17 +36,20 @@ export function WorkspaceCommitRow({ overview, busy, disabled = false, error, on
   return (
     <CheckRow
       check="workspace"
-      tone={error ? "block" : "warn"}
-      text={paths.length ? `${paths.length} 个文件未提交` : "正在核对提交结果"}
-      state={error ?? precheck}
-      detail={(
+      tone={error ? "block" : paths.length ? "warn" : "idle"}
+      text={paths.length ? `${paths.length} 个文件未提交` : readError ? "未提交改动待核对" : "正在核对提交结果"}
+      state={error ?? (readError ? `重读失败：${readError}` : precheck)}
+      detail={paths.length ? (
         <div className="acc-detail-text">
           {block && <p>{block}</p>}
           <p className="mono">{overview.root.path}</p>
           <FileList files={paths} />
         </div>
-      )}
-      tools={<CheckAction busy={busy} disabled={disabled || !!block || !paths.length} onClick={onCommit}>提交</CheckAction>}
+      ) : undefined}
+      tools={<>
+        {readError && onRetry && <CheckAction onClick={onRetry}>重试</CheckAction>}
+        {paths.length > 0 && <CheckAction busy={busy} disabled={disabled || !!block} onClick={onCommit}>提交</CheckAction>}
+      </>}
     />
   );
 }
@@ -105,6 +111,6 @@ export function WorkspaceCheck({ task, notify, disabled = false }: {
       : null;
   }
   return <WorkspaceCommitRow overview={current.overview} busy={busy} disabled={disabled}
-    error={commitError?.taskId === task.id ? commitError.message : current.error}
-    onCommit={() => void commit()} />;
+    error={commitError?.taskId === task.id ? commitError.message : null} readError={current.error}
+    onCommit={() => void commit()} onRetry={() => setAttempt((value) => value + 1)} />;
 }

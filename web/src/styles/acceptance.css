@@ -11,6 +11,10 @@
 .acc-lead:empty { display: none; }
 .acc-title { color: var(--ink); font-size: var(--t-sm); font-weight: var(--w-medium); }
 .acc-lead-note { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); font-size: var(--t-xs); }
+.acc-lead-note.is-error { color: var(--red); }
+.acc-changes-note { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px; border-radius: var(--r-md); background: var(--raised); padding: 6px 6px 6px 12px; color: var(--red); font-size: var(--t-xs); overflow-wrap: anywhere; }
+.acc-changes-note > button { flex: none; }
+.acc-stale { opacity: .5; transition: opacity var(--dur-2) var(--ease-out); }
 .acc-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; margin-left: auto; }
 .acc-done { display: inline-flex; align-items: center; gap: 4px; padding: 0 4px; color: var(--green); font-size: var(--t-xs); font-weight: var(--w-medium); white-space: nowrap; }
 
@@ -101,6 +105,7 @@ button.acc-check-main { margin-left: -8px; border-radius: var(--r-sm); padding-l
 .acc-log { overflow: hidden; border-radius: var(--r-md); background: var(--raised); }
 .acc-log-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 4px 0 12px; color: var(--faint); font-size: var(--t-xs); }
 .acc-log-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acc-log:not(:has(pre)) > .acc-log-head { padding-bottom: 4px; }
 .acc-log-note { border-bottom: 1px dotted var(--line2); }
 .acc-log pre { max-height: 180px; margin: 0; overflow: auto; padding: 4px 12px 10px; color: var(--muted); font-family: var(--font-mono); font-size: var(--t-xs); line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .acc-check.is-failed .acc-log pre { color: var(--ink); }

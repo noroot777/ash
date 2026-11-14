@@ -21,22 +21,29 @@ export function AcceptLayer({ open, anchorRef, onClose, label, role = "dialog", 
   children: ReactNode;
 }) {
   const layer = useRef<HTMLDivElement>(null);
-  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
+  const [at, setAt] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
   useDismissable({ enabled: open, containerRef: layer, onClose, restoreFocusRef: anchorRef });
-  // 开着就一直量：下面放不下、上面放得下就翻到上面；左右夹在视口里（窄屏、侧栏里的那几处）。
+  // 开着就一直量：下面放得下就放下面，不行而上面放得下就翻上去；上下都放不下（层高、窗口矮）就
+  // 整层收进视口、盖住那颗键 —— 决定键在层底，任何一边越出去都等于按不到。高度上限也按视口量，
+  // 不靠 CSS 的 100vh（手机浏览器里它比可见区高）。左右同样夹在视口里。
   useLayoutEffect(() => {
     if (!open) { setAt(null); return; }
     const place = () => {
       const anchor = anchorRef.current?.getBoundingClientRect();
       const panel = layer.current;
       if (!anchor || !panel) return;
+      const viewport = window.innerHeight;
+      const maxHeight = Math.max(0, viewport - 16);
       const width = panel.offsetWidth;
-      const height = panel.offsetHeight;
-      const room = window.innerHeight - anchor.bottom - 6;
-      const top = room < height && anchor.top - 6 >= height ? anchor.top - 6 - height : anchor.bottom + 6;
+      const height = Math.min(panel.offsetHeight, maxHeight);
+      const below = anchor.bottom + 6;
+      const above = anchor.top - 6 - height;
+      const top = below + height <= viewport - 8 ? below
+        : above >= 8 ? above
+        : Math.max(8, viewport - 8 - height);
       const wanted = align === "end" ? anchor.right - width : anchor.left;
       const left = Math.max(8, Math.min(wanted, window.innerWidth - width - 8));
-      setAt((prev) => prev && prev.top === top && prev.left === left ? prev : { top, left });
+      setAt((prev) => prev && prev.top === top && prev.left === left && prev.maxHeight === maxHeight ? prev : { top, left, maxHeight });
     };
     place();
     const observer = new ResizeObserver(place);
@@ -56,7 +63,7 @@ export function AcceptLayer({ open, anchorRef, onClose, label, role = "dialog", 
       role={role}
       aria-label={label}
       className={`acc-layer ${className}`}
-      style={at ? { top: at.top, left: at.left } : { top: -9999, left: -9999 }}
+      style={at ? { top: at.top, left: at.left, maxHeight: at.maxHeight } : { top: -9999, left: -9999 }}
     >
       {children}
     </div>,

@@ -10,7 +10,6 @@
 .team-review-record-title p { display: -webkit-box; overflow: hidden; margin: 5px 0 0; color: var(--muted); font-size: var(--t-xs); line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .team-review-record-body { display: grid; gap: 12px; border-top: .5px solid var(--line); background: color-mix(in oklab,var(--canvas) 72%,var(--panel)); padding: 12px; }
 .team-review-loading { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: var(--t-xs); }
-.team-review-loading.is-error { color: var(--red); }
 
 .team-review-evidence { overflow: hidden; border: 1px solid color-mix(in oklab,var(--ink) 20%,var(--line)); border-radius: 9px; background: color-mix(in oklab,var(--ink) 3%,var(--panel)); }
 .team-review-evidence > header { display: flex; min-height: 42px; align-items: center; border-bottom: .5px solid color-mix(in oklab,var(--ink) 14%,var(--line)); padding: 6px 10px; }

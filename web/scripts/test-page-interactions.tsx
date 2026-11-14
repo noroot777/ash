@@ -93,6 +93,17 @@ assert.doesNotMatch(failed, /项目未开启验收前自动提交/);
 // 归属拿不准（共用项目目录等）：「提交」灰着。
 assert.match(submitButton(notice({ ...overview, acceptanceCommitBlock: "共用项目目录，不属于任务独占工作区" })), /disabled=""/);
 assert.equal(notice({ ...overview, status: { ...overview.status, staged: [], unstaged: [], untracked: [] } }), "");
+// 重读失败（下面摆的还是上一次读到的）：状态说「重读失败」，行尾多一个「重试」；干净的工作区也照样出这一行，
+// 不然读失败了既看不出来也没处补。
+const stale = (value: ScmOverview) => renderToStaticMarkup(
+  <WorkspaceCommitRow overview={value} busy={false} error={null} readError="网络断了" onCommit={() => {}} onRetry={() => {}} />);
+assert.match(stale(overview), /重读失败：网络断了/);
+assert.match(stale(overview), />重试<\/button>/);
+assert.match(stale(overview), />提交<\/button>/);
+const cleanStale = stale({ ...overview, status: { ...overview.status, staged: [], unstaged: [], untracked: [] } });
+assert.match(cleanStale, /未提交改动待核对/);
+assert.match(cleanStale, />重试<\/button>/);
+assert.doesNotMatch(cleanStale, />提交<\/button>/);
 
 const message = (id: string): ScheduledMessage => ({ id, taskId: "task", text: id, attachments: [], agent: null,
   executorId: null, model: null, reasoningEffort: null, origin: null, sessionRole: null, mode: "queued",

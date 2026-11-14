@@ -351,7 +351,11 @@ export function TeamView({
           notify={notify}
         />
         {reviewOpen ? (
-          <TeamReviewWorkspace lead={task} workers={workers} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify} />
+          <TeamReviewWorkspace lead={task} workers={workers} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify}
+            onReturned={(target) => {
+              changeReviewOpen(false);
+              if (target.id !== task.id) selectWorker(target.id);
+            }} />
         ) : fileView.filePath ? (
           <FileViewer
             taskId={task.id}

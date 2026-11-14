@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
-import { GitBranch, SpinnerGap, X } from "@phosphor-icons/react";
+import { GitBranch, X } from "@phosphor-icons/react";
 import { IconButton } from "../components/IconButton.tsx";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import { AcceptanceControls } from "../acceptance/AcceptanceControls.tsx";
 import { AcceptRoute } from "../acceptance/AcceptRoute.tsx";
+import { ChangesLeadNote, ChangesNote } from "../acceptance/ChangesNotice.tsx";
+import { useVersionedRead } from "../acceptance/useVersionedRead.ts";
 import { ReviewDiffViewer } from "./ReviewDiffViewer.tsx";
 import { sharedTeamParent } from "./reviewModel.ts";
 import { useWorkspaceCommitVersion } from "./workspaceCommit.ts";
@@ -55,28 +56,13 @@ export function TaskReviewWorkspace({
   onClose?: () => void;
 }) {
   const commitVersion = useWorkspaceCommitVersion(task.id);
-  const [data, setData] = useState<ReviewData | null>(null);
-  const [sharedBranch, setSharedBranch] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const sharedParent = sharedTeamParent(task, allTasks);
-
-  useEffect(() => { setData(null); }, [task.id]);
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    setError(null);
-    setSharedBranch(null);
-    const request = sharedParent
-      ? api.taskCommits(sharedParent.id).then((commits) => { if (alive) setSharedBranch(commits.branch); })
-      : Promise.all([api.taskCommits(task.id), api.taskDiff(task.id)]).then(
-        ([commits, diff]) => { if (alive) setData({ branch: commits.branch, commits: commits.commits, diff }); });
-    request.then(
-      () => undefined,
-      (reason) => { if (alive) setError(reason instanceof Error ? reason.message : String(reason)); },
-    ).finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [sharedParent?.id, task.id, task.updatedAt, commitVersion]);
+  const version = `${task.updatedAt}|${commitVersion}`;
+  const changes = useVersionedRead<ReviewData>(task.id, version, () =>
+    Promise.all([api.taskCommits(task.id), api.taskDiff(task.id)])
+      .then(([commits, diff]) => ({ branch: commits.branch, commits: commits.commits, diff })), !sharedParent);
+  const shared = useVersionedRead<string | null>(`${task.id}>${sharedParent?.id ?? ""}`, version,
+    () => api.taskCommits(sharedParent!.id).then((commits) => commits.branch), !!sharedParent);
 
   const close = onClose && (
     <IconButton label="返回对话" className="acc-close" onClick={onClose}>
@@ -92,13 +78,16 @@ export function TaskReviewWorkspace({
         </header>
         <div className="single-review-scroll">
           <div className="single-review-stack">
-            <SharedWorkerFacts parent={sharedParent} branch={sharedBranch} />
-            {error && <p className="single-review-error">共享分支归属读取失败：{error}</p>}
+            <SharedWorkerFacts parent={sharedParent} branch={shared.current ?? shared.previous ?? null} />
+            {shared.error && <p className="single-review-error">共享分支归属读取失败：{shared.error}</p>}
           </div>
         </div>
       </section>
     );
   }
+  // 顶行只认这一版的走向；diff 区在这一版没到时可以摆上一版，但压暗，读失败还要明说是上一版。
+  const data = changes.current;
+  const shown = data ?? changes.previous;
   const route = data && {
     source: data.diff.sourceBranch || data.branch || "项目当前分支",
     target: data.diff.targetBranch || task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "验收时确定",
@@ -117,12 +106,12 @@ export function TaskReviewWorkspace({
         onReturned={onClose}
         lead={route
           ? <AcceptRoute task={task} data={route} disabled={!!task.archived} onTaskUpdated={onTaskUpdated} notify={notify} />
-          : loading ? <span className="acc-lead-note"><SpinnerGap size={12} className="is-spinning" aria-hidden="true" />汇总改动</span> : null}
+          : <ChangesLeadNote loading={changes.loading} error={changes.error} retry={changes.retry} />}
         trailing={close}
       />
       <div className="single-review-diff-region">
-        {!loading && error && <p className="single-review-error">提交与 diff 加载失败：{error}</p>}
-        {data && <ReviewDiffViewer result={data.diff} />}
+        <ChangesNote stale={!!changes.previous} error={changes.error} retry={changes.retry} />
+        {shown && <div className={data ? undefined : "acc-stale"} aria-busy={!data || undefined}><ReviewDiffViewer result={shown.diff} /></div>}
       </div>
     </section>
   );
