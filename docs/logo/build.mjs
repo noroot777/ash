@@ -1,5 +1,5 @@
 // 把标画成文件：跑 `node docs/logo/build.mjs` 重画同目录下的全部 SVG（node 22.18 之前要加
-// --experimental-strip-types）。几何不在这里 —— 点阵和动画的每一拍都在 web/src/brand/ashMark.ts，
+// --experimental-strip-types）。几何不在这里 —— 点阵和尾巴怎么摆都在 web/src/brand/ashMark.ts，
 // 前端的加载动画和标签页图标用的是同一份；这里只管排版、配色和 lockup 里那三个字母。
 //
 //   icon.svg          自带底色的应用图标
@@ -8,12 +8,12 @@
 //   lockup.svg        标 + ash，同上
 //   lockup-light.svg  定死浅色页配色的 lockup（README 用：GitHub 按自己的主题挑图，不看系统深浅色）
 //   lockup-dark.svg   定死深色页配色的 lockup
-//   loader.svg        动起来的标，循环播放
-//   frames.svg        动画一圈十四拍，一拍一格摆开
+//   loader.svg        动起来的标（甩尾巴），循环播放
+//   frames.svg        一个来回切成八张定格
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { LOADER_FRAMES, LOADER_STILL, LOADER_TICK_MS, MARK, MARK_SIZE, faviconSvg } from "../../web/src/brand/ashMark.ts";
+import { LOADER_STILL, LOADER_SWING_MS, LOADER_TAIL, MARK, MARK_SIZE, faviconSvg } from "../../web/src/brand/ashMark.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const n = (v) => +v.toFixed(2);
@@ -53,23 +53,55 @@ function lockup(style) {
   return svg(x - cell + left, 256, style + body);
 }
 
-// 动画：十四拍横着排成一卷，整卷一拍往左推一帧。和前端那份（web/src/styles/ash-loader.css）是同一种放法。
+// 动画：尾巴上的每一块在两头之间来回平移。和前端那份（web/src/styles/ash-loader.css）是同一种摆法。
+// 尾巴尖会摆出 8×8，所以这张图四周各留一格：摆出来看时宽度取 10 的倍数，格子才落在整像素上。
+const PAD = 1;
 function loader() {
-  const count = LOADER_FRAMES.length;
-  const reel = LOADER_FRAMES.map((frame, tick) => dots(frame, tick * MARK_SIZE, 0, 1)).join("");
+  const tail = LOADER_TAIL.map(
+    (d) =>
+      `<rect class="tail" x="${d.x}" y="${d.y}" width="1" height="1" style="fill:${d.accent ? "var(--live)" : "var(--ink)"};` +
+      `--dx:${d.dx};--dy:${d.dy};animation-delay:${d.lagMs - LOADER_SWING_MS / 2}ms"/>`,
+  ).join("");
   const motion =
-    `<style>.reel{animation:reel ${count * LOADER_TICK_MS}ms steps(${count}) infinite}` +
-    `@keyframes reel{to{transform:translateX(${-count * MARK_SIZE}px)}}</style>`;
+    `<style>.tail{animation:wag ${LOADER_SWING_MS}ms ease-in-out infinite alternate}` +
+    `@keyframes wag{from{transform:translate(calc(var(--dx)*-1px),calc(var(--dy)*-1px))}` +
+    `to{transform:translate(calc(var(--dx)*1px),calc(var(--dy)*1px))}}</style>`;
+  const side = MARK_SIZE + PAD * 2;
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${MARK_SIZE} ${MARK_SIZE}" width="256" height="256" shape-rendering="crispEdges">\n` +
-    `${adaptive}${motion}${dots(LOADER_STILL, 0, 0, 1)}<g class="reel">${reel}</g>\n</svg>\n`
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${-PAD} ${-PAD} ${side} ${side}" width="${side * 32}" height="${side * 32}" shape-rendering="crispEdges">\n` +
+    `${adaptive}${motion}${dots(LOADER_STILL, 0, 0, 1)}${tail}\n</svg>\n`
   );
 }
 
+// CSS 的 ease-in-out，即 cubic-bezier(.42, 0, .58, 1)：给进度 x 求 y。
+function easeInOut(x) {
+  const bez = (t, a, b) => 3 * (1 - t) * (1 - t) * t * a + 3 * (1 - t) * t * t * b + t * t * t;
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 30; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (bez(mid, 0.42, 0.58) < x) lo = mid;
+    else hi = mid;
+  }
+  return bez((lo + hi) / 2, 0, 1);
+}
+
+// 一个来回切成八张定格摆开：看得出身子不动、尾巴尖比尾巴根晚到。
 function frames() {
-  const cell = 8, gap = 3 * cell, step = MARK_SIZE * cell + gap;
-  const body = LOADER_FRAMES.map((frame, tick) => dots([...LOADER_STILL, ...frame], tick * step, 0, cell)).join("");
-  return svg(LOADER_FRAMES.length * step - gap, MARK_SIZE * cell, adaptive + body);
+  const cell = 8, shots = 8, step = (MARK_SIZE + PAD * 2 + 1) * cell;
+  let body = "";
+  for (let shot = 0; shot < shots; shot += 1) {
+    const at = (shot / shots) * LOADER_SWING_MS * 2;
+    const x0 = shot * step + PAD * cell, y0 = PAD * cell;
+    body += dots(LOADER_STILL, x0, y0, cell);
+    for (const d of LOADER_TAIL) {
+      const u = ((((at + LOADER_SWING_MS / 2 - d.lagMs) / LOADER_SWING_MS) % 2) + 2) % 2;
+      const swing = 2 * easeInOut(u <= 1 ? u : 2 - u) - 1;
+      // 定格里的尾巴不在整格上，按 crispEdges 画会被吸到最近的像素，位置就不准了。
+      body += dots([{ x: d.x + d.dx * swing, y: d.y + d.dy * swing, w: 1, accent: d.accent }], x0, y0, cell)
+        .replace('style="', 'style="shape-rendering:geometricPrecision;');
+    }
+  }
+  return svg(shots * step - cell, (MARK_SIZE + PAD * 2) * cell, adaptive + body);
 }
 
 const files = {
