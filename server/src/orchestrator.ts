@@ -605,7 +605,7 @@ export async function continueTask(
     // 于是 resume 回合被重启接管时会从字节 0 重放整轮输出。
     await consumeSingleRun({
       taskId, sessId, agentType: agent, ex, cwd,
-      handle, out, turnStart, cliSessionId, autoTitle: false, role: sessionRole,
+      handle, out, turnStart, cliSessionId, autoTitle: false, role: sessionRole, turn,
       nativeSteer: {
         prepare: (text) => withSkillInvocation({ agentType: agent, cwd, text, userId: runOwner }),
         record: (text, at) => recordUserConversationTurn({

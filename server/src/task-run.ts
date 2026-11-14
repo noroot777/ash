@@ -50,6 +50,7 @@ import { recordUserConversationTurn } from "./conversation-turn.js";
 import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
 import { turnIdentityEnv } from "./turn-identity.js";
 import { launchFields } from "./usage.js";
+import { withHeldTurn } from "./turn-entry-guard.js";
 
 // 单任务的 **fresh run**:从任务描述起一条全新会话。续聊/召唤那一路(resume 已有会话、
 // 把用户原话送进去)在 orchestrator.ts 的 continueTask —— 两条路的前置条件、prompt 拼法
@@ -65,6 +66,14 @@ export async function runTask(
   // turnHeld:入口占下的那把锁的**身份**(不是 true)—— 接管与释放都按它核,理由见
   // continueTask 同名选项与 turn-lock.ts 的 `endOwnTurn`。
   opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null } = {},
+): Promise<void> {
+  // 起跑前那几次读库(检查点恢复、任务头)抛错时,入口交来的锁也得还(见 withHeldTurn)。
+  return withHeldTurn(taskId, opts.turnHeld, () => runHeldTask(taskId, opts));
+}
+
+async function runHeldTask(
+  taskId: string,
+  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null },
 ): Promise<void> {
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) {
@@ -306,7 +315,7 @@ export async function runTask(
     }
     await consumeSingleRun({
       taskId, sessId, agentType, ex, cwd: ws.path,
-      handle, out, turnStart, cliSessionId, autoTitle,
+      handle, out, turnStart, cliSessionId, autoTitle, turn,
       nativeSteer: {
         prepare: (text) => withSkillInvocation({ agentType, cwd: ws.path, text, userId: runOwner }),
         record: (text, at) => recordUserConversationTurn({
