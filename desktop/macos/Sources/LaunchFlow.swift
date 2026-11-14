@@ -4,11 +4,13 @@ import AppKit
 extension BrowserWindowController {
   /// 本机地址先认清端口上是不是自己那份（不在就起，被别人占着就说明），确认了才载页面；
   /// 连别处的 ash 时直接载。
-  func loadHome() {
+  ///
+  /// `quietly`：不盖「正在启动」那一屏，眼下这一屏自己在说（首启那张卡上选中的那一项在转圈）。
+  func loadHome(quietly: Bool = false) {
     stopHealthPolling()
     stopInstanceGuard()
     guard AshConfig.isLocal else { loadPage(); return }
-    connect()
+    connect(quietly: quietly)
   }
 
   /// 页面载不进来（导航失败）。本机地址重走一遍 connect —— 服务可能挂了，也可能端口换了人。
@@ -21,7 +23,7 @@ extension BrowserWindowController {
     startHealthPolling()
   }
 
-  private func connect() {
+  private func connect(quietly: Bool = false) {
     if let note = ServerLauncher.shared.hold {
       showInstalling(note)
       // 维护在别的进程里（另开的一份 app 在装更新）：它完了不会通知这里，过一会儿再看一次。
@@ -35,7 +37,7 @@ extension BrowserWindowController {
       self?.offlineView.show(title: "正在启动 ash 服务…", detail: AshConfig.baseURL.absoluteString, busy: true)
     }
     pendingStartingScreen = starting
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: starting)
+    if !quietly { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: starting) }
     ServerLauncher.shared.ensureRunning { [weak self] outcome in
       starting.cancel()
       self?.present(outcome)
@@ -94,16 +96,21 @@ extension BrowserWindowController {
 
   // MARK: 首启：全新开始 / 导入已有数据
 
-  private func showFirstRun(note: String? = nil) {
-    var detail = "数据放在 \(AshConfig.dataURL.path)。\n已经在用 ash 的话，可以把那份数据导进来（只复制，原来那份不动）。"
-    if let note { detail = "\(note)\n\n\(detail)" }
-    offlineView.show(title: "第一次打开 ash", detail: detail, actions: [
-      OfflineView.Action(title: "导入已有数据…") { [weak self] in self?.chooseImport() },
-      OfflineView.Action(title: "全新开始") { [weak self] in
+  /// `problem`：上一次没成的原因（导入失败、选的目录不对），写在卡片上。
+  private func showFirstRun(problem: String? = nil) {
+    firstRunView.reset(dataPath: AshConfig.dataURL.path, problem: problem)
+    firstRunView.onChoose = { [weak self] choice in
+      guard let self else { return }
+      switch choice {
+      case .fresh:
+        self.firstRunView.setBusy(.fresh, detail: "正在启动 ash…")
         ServerLauncher.shared.freshStartApproved = true
-        self?.loadHome()
-      },
-    ])
+        self.loadHome(quietly: true)
+      case .importData:
+        self.chooseImport()
+      }
+    }
+    offlineView.show(panel: firstRunView)
   }
 
   private func chooseImport() {
@@ -126,7 +133,7 @@ extension BrowserWindowController {
     do {
       source = try DataImport.inspect(url)
     } catch {
-      showFirstRun(note: error.localizedDescription)
+      showFirstRun(problem: error.localizedDescription)
       return
     }
     guard let pid = source.livePID else { runImport(source); return }
@@ -142,14 +149,14 @@ extension BrowserWindowController {
   }
 
   private func runImport(_ source: DataImport.Source) {
-    offlineView.show(title: "正在导入…", detail: source.url.path, busy: true)
+    firstRunView.setBusy(.importData, detail: "正在导入 \((source.url.path as NSString).abbreviatingWithTildeInPath)…")
     DispatchQueue.global(qos: .userInitiated).async {
       let outcome = Result { try DataImport.run(source, into: AshConfig.dataURL) }
       DispatchQueue.main.async { [weak self] in
         switch outcome {
-        case .failure(let error): self?.showFirstRun(note: "导入没成功：\(error.localizedDescription)")
+        case .failure(let error): self?.showFirstRun(problem: "导入没成功：\(error.localizedDescription)")
         case .success(let report):
-          self?.loadHome()
+          self?.loadHome(quietly: true)
           self?.tellHeld(report)
         }
       }

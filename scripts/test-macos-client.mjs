@@ -41,7 +41,7 @@ copyFileSync(join(root, "scripts/start-detached.mjs"), join(runtime, "scripts/st
 
 const build = spawnSync("swiftc", ["-swift-version", "5",
   ...["AshConfig", "AshHealth", "DataImport", "DatabaseBackup", "DownloadTransaction", "ServerControl", "ServerStartLock", "ServerLauncher",
-    "WindowChrome", "BrowserWindowController", "WebViewBridge", "LaunchFlow", "OfflineView", "HostMcpSetup", "UpdateGate", "RestartImpact"]
+    "WindowChrome", "BrowserWindowController", "WebViewBridge", "LaunchFlow", "OfflineView", "FirstRunView", "AshPalette", "HostMcpSetup", "UpdateGate", "RestartImpact"]
     .map((name) => join(root, `desktop/macos/Sources/${name}.swift`)),
   ...["main", "WindowChromeProbe", "InstanceGuardProbe"].map((name) => join(root, `desktop/macos/Tests/${name}.swift`)),
   "-o", binary], { encoding: "utf8" });

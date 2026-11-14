@@ -5,6 +5,10 @@ import WebKit
 final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
   let webView: WKWebView
   let offlineView = OfflineView()
+  /// 数据根还空着时盖在 offlineView 上的那一屏（LaunchFlow 的首启）。
+  let firstRunView = FirstRunView()
+  /// 窗口这会儿是不是首次配置那扇小窗（见 `enterWelcome`）。
+  private(set) var welcoming = false
   var downloads: [ObjectIdentifier: DownloadTransaction] = [:]
   private var chrome: WindowChrome?
   private var observations: [NSKeyValueObservation] = []
@@ -17,6 +21,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   private(set) var boundInstance: String?
   /// 页面在的时候多久认一次人。测试把它调大，单独验导航那一道。
   static var instanceGuardInterval: TimeInterval = 1
+  /// 原生那一屏正等着交给页面（见 `Handoff`）。
+  private var handoff: Handoff?
+  /// 主框架换过几次文档（见 `Handoff.document`）。
+  private var documentSerial = 0
   /// 「正在启动」那一屏晚一点才盖上：服务本来就在时探一下只要几毫秒，不该闪一下。
   var pendingStartingScreen: DispatchWorkItem?
 
@@ -33,6 +41,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     webView.allowsMagnification = true
     // 出问题时 Safari「开发」菜单里能直接挂上检查器。
     webView.isInspectable = true
+    // 页面画出第一帧之前 WKWebView 先铺一层白：从原生那几屏（首启、启动中）切到页面时整窗闪一下白。
+    // 不画自己的底，透出窗口底色（跟页面的 theme-color 走，载进来之前是同色的 AshPalette.chrome）。
+    // 没有公开接口；这个键在哪一版没了就照旧画白底，不至于崩。
+    if webView.responds(to: NSSelectorFromString("_setDrawsBackground:")) {
+      webView.setValue(false, forKey: "drawsBackground")
+    }
 
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900),
@@ -49,9 +63,18 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     // 内容铺到窗口顶，红绿灯浮在页面上（见 WindowChrome）。窗口底色仍跟页面的 theme-color 走，
     // 页面还没画出来的那一瞬和占位页都是同一个底色。
     chrome = WindowChrome(window: window, webView: webView)
-    // 位置和大小记在 UserDefaults 里，下次原样打开。
-    window.setFrameAutosaveName("AshMainWindow")
-    if !window.setFrameUsingName("AshMainWindow") { window.center() }
+    chrome?.onWindowSize = { [weak self] size in
+      if size == "setup" { self?.enterWelcome() } else { self?.leaveWelcome() }
+      self?.pageDidPresent()
+    }
+    chrome?.onPageBroken = { [weak self] source in self?.pageDidBreak(source) }
+    // 位置和大小记在 UserDefaults 里，下次原样打开。数据根还空着就先开成首启那扇小窗。
+    if AshConfig.isLocal && !AshConfig.isDataInitialized {
+      enterWelcome()
+    } else {
+      window.setFrameAutosaveName(Self.frameName)
+      if !window.setFrameUsingName(Self.frameName) { window.center() }
+    }
 
     webView.navigationDelegate = self
     webView.uiDelegate = self
@@ -84,9 +107,69 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         self?.window?.title = title.isEmpty ? "ash" : title
       },
       webView.observe(\.themeColor, options: [.initial, .new]) { [weak self] view, _ in
-        self?.window?.backgroundColor = view.themeColor ?? .windowBackgroundColor
+        self?.window?.backgroundColor = view.themeColor ?? AshPalette.chrome
       },
     ]
+  }
+
+  // MARK: 首次配置那扇小窗
+
+  static let frameName = "AshMainWindow"
+  /// 首次配置时窗口开多大：原生那一屏（FirstRunView）和随后 web 的三步向导都正好铺满它。
+  static let welcomeSize = NSSize(width: 980, height: 660)
+  /// 工作窗第一次打开时的大小（之后按用户拖成的样子记住）。
+  static let workSize = NSSize(width: 1440, height: 900)
+
+  /// 首次配置不开一扇 1440 的大窗在正中摆几行字：从「数据从哪儿来」到 web 向导走完，都在一扇正好装下
+  /// 它们的小窗里；页面说进了工作台（WindowChrome.onWindowSize）才展开。数据根空着时一打开就是它，
+  /// 已经有数据、页面却还在向导里（上次走到一半退出了）时由页面叫回来。
+  /// 这期间不记窗口位置，免得之后工作窗也跟着开成这么小。仍然可以拉大 —— 万一页面没表态，人不至于被关在小窗里。
+  func enterWelcome() {
+    guard let window, !welcoming, !window.styleMask.contains(.fullScreen) else { return }
+    welcoming = true
+    window.setFrameAutosaveName("")
+    window.collectionBehavior.insert(.fullScreenNone)
+    let size = window.frameRect(forContentRect: NSRect(origin: .zero, size: Self.welcomeSize)).size
+    guard window.isVisible else {
+      window.setContentSize(Self.welcomeSize)
+      window.center()
+      return
+    }
+    // 已经开着的工作窗缩回来：以它的中心收拢。
+    let frame = NSRect(x: window.frame.midX - size.width / 2, y: window.frame.midY - size.height / 2,
+                       width: size.width, height: size.height)
+    window.setFrame(fitted(frame, in: window), display: true, animate: true)
+  }
+
+  /// 进了工作台：展开成工作窗。以前记过工作窗的位置就回到那里，没有就以小窗的中心展开、收在屏幕里。
+  func leaveWelcome() {
+    guard let window, welcoming else { return }
+    welcoming = false
+    window.collectionBehavior.remove(.fullScreenNone)
+    let target = Self.savedFrame() ?? NSRect(
+      x: window.frame.midX - Self.workSize.width / 2, y: window.frame.midY - Self.workSize.height / 2,
+      width: Self.workSize.width, height: Self.workSize.height)
+    window.setFrame(fitted(target, in: window), display: true, animate: true)
+    window.setFrameAutosaveName(Self.frameName)
+  }
+
+  /// 收进窗口所在屏幕的可用区域里。
+  private func fitted(_ frame: NSRect, in window: NSWindow) -> NSRect {
+    guard let visible = (window.screen ?? NSScreen.main)?.visibleFrame else { return frame }
+    var rect = frame
+    rect.size.width = min(rect.width, visible.width)
+    rect.size.height = min(rect.height, visible.height)
+    rect.origin.x = min(max(rect.minX, visible.minX), visible.maxX - rect.width)
+    rect.origin.y = min(max(rect.minY, visible.minY), visible.maxY - rect.height)
+    return rect
+  }
+
+  /// AppKit 记下的工作窗位置（`NSWindow Frame <名字>`，前四个数是 x y 宽 高）。
+  private static func savedFrame() -> NSRect? {
+    guard let raw = UserDefaults.standard.string(forKey: "NSWindow Frame \(frameName)") else { return nil }
+    let numbers = raw.split(separator: " ").compactMap { Double($0) }
+    guard numbers.count >= 4, numbers[2] > 0, numbers[3] > 0 else { return nil }
+    return NSRect(x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3])
   }
 
   // 进全屏在动画开始前就让页面收回留白，出全屏等红绿灯回来再让出来。
@@ -108,13 +191,77 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   }
 
   private func showPage() {
-    offlineView.isHidden = true
+    beginHandoff()
     // 失败页、撤下后的空白页之后 webView.url 不是 ash 的，此时回到撤下前的路由或首页；正常情况下
     // 原地重载保住当前路由。
     let target = [webView.url, resumeURL].compactMap { $0 }.first(where: AshConfig.isSameOrigin) ?? AshConfig.windowURL
     resumeURL = nil
     webView.load(URLRequest(url: target))
     startInstanceGuard()
+  }
+
+  // MARK: 原生那一屏交给页面
+
+  /// 服务通了只说明页面载得进来，不说明它已经画出来了：HTML、脚本、身份确认都还在路上，入口脚本也可能根本没载成。
+  /// 所以盖着的那一屏（首启卡上的转圈、「正在启动」）只交给**表了态的页面**：当前文档提交之后报了这一屏要多大的窗
+  /// （WindowChrome.onWindowSize —— 认约定的页面在身份确认、画出第一屏或报错屏时报；不认约定的文档读完 <head>
+  /// 时报，它的内容就在 HTML 里）。主文档载完、过了多久都不算数。
+  ///
+  /// 等不到就换上一屏持久的说明，给「重试」和「仍然显示页面」（后者给不报尺寸的旧版 ash 留一条明确的路），
+  /// 不把空页面放出来：入口脚本没载成（页面脚本报回来）当场换，一直没表态的等 `presentTimeout`。说明屏还认这一次
+  /// 交接，页面后来还是画出来了就照样接上。中途盖上了别的一屏（载入失败、又一次「正在启动」）不撤它，那一屏有自己的去处。
+  private struct Handoff {
+    /// 开始载入以来主框架第几次换文档（`documentSerial`）。表态和计时都只认当前这一份文档，
+    /// 上一份留下的（页面载完马上自己跳走时）作废。
+    var document: Int?
+    /// 到点该撤的是 offlineView 的哪一屏（`OfflineView.revision`）。
+    var screen: Int
+  }
+
+  /// 新文档提交后最多等它多久表态。认约定的页面身份确认通常在一秒内；再久就是出事了。
+  static var presentTimeout: TimeInterval = 15
+
+  private func beginHandoff() {
+    handoff = offlineView.isHidden ? nil : Handoff(document: nil, screen: offlineView.revision)
+  }
+
+  /// 主框架换上了新文档（WebViewBridge）。不比对是哪一次导航：页面自己的跳转顶掉了这一次也一样，
+  /// 等的是「窗口里这份文档表态」，计时从这份文档算起。
+  func pageDidCommit() {
+    documentSerial += 1
+    guard handoff != nil else { return }
+    let document = documentSerial
+    handoff?.document = document
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.presentTimeout) { [weak self] in
+      guard let self, self.handoff?.document == document else { return }
+      self.pageDidNotPresent("页面载进来了，但等了 \(Int(Self.presentTimeout)) 秒还没显示出来。")
+    }
+  }
+
+  private func pageDidPresent() {
+    guard let pending = handoff, pending.document == documentSerial else { return }
+    handoff = nil
+    if offlineView.revision == pending.screen { offlineView.isHidden = true }
+  }
+
+  /// 当前文档的脚本没载成（WindowChrome 报回来）：不再等它表态。
+  private func pageDidBreak(_ source: String) {
+    guard let pending = handoff, pending.document == documentSerial else { return }
+    let name = URL(string: source).map { $0.path.isEmpty ? source : $0.path } ?? source
+    pageDidNotPresent("页面的脚本（\(name)）没有载进来。")
+  }
+
+  private func pageDidNotPresent(_ reason: String) {
+    guard handoff != nil else { return }
+    offlineView.show(title: "页面没有显示出来", detail: "\(reason)\n可以重试；要先看看页面现在的样子也行。", actions: [
+      OfflineView.Action(title: "仍然显示页面") { [weak self] in
+        self?.handoff = nil
+        self?.offlineView.isHidden = true
+      },
+      OfflineView.Action(title: "重试") { [weak self] in self?.loadHome() },
+    ])
+    // 这一屏仍算这次交接要撤的那一屏：页面只是慢、后来还是画出来了，就照样接上。
+    handoff?.screen = offlineView.revision
   }
 
   /// 页面之后发的每个请求（fetch、SSE、页面本身、预览）都带着认过的那一份的实例号。窗口连的是这份
@@ -171,6 +318,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   /// 记下路由，回到 loadHome 认一遍 —— 被占着就盖上说明，自己那份回来了再载回去。
   func instanceLost() {
     stopInstanceGuard()
+    // 下面换上的空白文档也会「提交、载完」，别把它当成页面接上了。
+    handoff = nil
     if let url = webView.url, AshConfig.isSameOrigin(url) { resumeURL = url }
     webView.stopLoading()
     webView.loadHTMLString("", baseURL: nil)
