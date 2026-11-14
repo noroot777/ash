@@ -19,6 +19,7 @@ import {
   reviewerProfiles,
   schedules,
   taskMemos,
+  taskReadRevs,
   taskReads,
   tasks,
   teamPresets,
@@ -103,6 +104,8 @@ export async function claimExistingDataFor(userId: string): Promise<Record<strin
   // 侧栏绿点的已读记录:自用模式记在空串名下(schema-task-reads.ts),同样是他本人看过的。
   await take("taskReads", () =>
     db.update(taskReads).set({ owner: userId }).where(eq(taskReads.owner, "")));
+  await take("taskReadRevs", () =>
+    db.update(taskReadRevs).set({ owner: userId }).where(eq(taskReadRevs.owner, "")));
   await take("executors", () =>
     db.update(agents).set({ ownerUserId: userId }).where(isNull(agents.ownerUserId)));
   await take("providers", () =>

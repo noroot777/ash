@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
 import { teamNeverStarted, timeMs } from "@ash/shared/team";
-import { taskReadRound, trimTaskReads, type TaskReadEntry, type TaskReads } from "@ash/shared/task-reads";
+import { coversRead, taskReadRound, type TaskReadEntry, type TaskReads } from "@ash/shared/task-reads";
 import { getTaskReads, subscribeTaskReads, updateTaskReads } from "./taskReadSync.ts";
 import { deriveTaskStatusIndicator, taskLook, type TaskLook, type TaskStatusIndicator } from "./taskLook.ts";
 
@@ -56,22 +56,17 @@ export function readEventForTask(task: TaskListItem, workers: TaskListItem[] = [
   return task.mode === "team" && !task.parentId ? teamEvent(task, workers) : terminalEvent(task);
 }
 
-/** 「看过这一轮」该记下的那一条：event 判是不是同一轮，round 比新旧（shared/src/task-reads.ts）。 */
+/** 「看过这一轮」该记下的那一条：新旧只认 round（shared/src/task-reads.ts coversRead）。 */
 export function readMarkForTask(task: TaskListItem, workers: TaskListItem[] = []): TaskReadEntry | null {
   const event = readEventForTask(task, workers);
   return event ? { event, round: taskReadRound(task, workers) } : null;
-}
-
-/** 记下的那条已经覆盖到这一轮了吗。别处看过更新的一轮（这一页的任务数据还没跟上）也算。 */
-function hasRead(stored: TaskReadEntry | undefined, mark: TaskReadEntry): boolean {
-  return !!stored && (stored.round > mark.round || (stored.round === mark.round && stored.event === mark.event));
 }
 
 export function reconcileReadState(current: ReadState, tasks: TaskListItem[], selectedTaskId: string | null): ReadState {
   const index = buildTaskIndex(tasks);
   // 重启/重连时 SSE 可能先送来一条 task.updated，完整 GET 还在路上。此时 tasks
   // 非空却只是临时子集，拿它清理“不存在”的任务会把其余已读记录全删掉；完整列表
-  // 一到，那些历史任务就一起重新亮成未读。记录本身有 TASK_READS_MAX 上限，保留已
+  // 一到，那些历史任务就一起重新亮成未读。记录本身有上限（服务端按最近看到裁），保留已
   // 删除任务的少量陈旧项没有副作用；同 id 真有新一轮时 event 不同，照样会判未读。
   const next = { ...current };
   const selectedTask = selectedTaskId ? index.byId.get(selectedTaskId) : undefined;
@@ -79,9 +74,9 @@ export function reconcileReadState(current: ReadState, tasks: TaskListItem[], se
     const task = index.byId.get(taskId);
     if (!task) continue;
     const mark = readMarkForTask(task, index.workersByLead.get(task.id) ?? []);
-    if (mark && !hasRead(next[task.id], mark)) next[task.id] = mark;
+    if (mark && !coversRead(next[task.id], mark)) next[task.id] = mark;
   }
-  return trimTaskReads(next);
+  return next;
 }
 
 export function useTaskReadState(tasks: TaskListItem[], selectedTaskId: string | null) {
@@ -99,11 +94,11 @@ export function useTaskReadState(tasks: TaskListItem[], selectedTaskId: string |
         const target = index.byId.get(taskId);
         if (!target) continue;
         const mark = readMarkForTask(target, index.workersByLead.get(target.id) ?? []);
-        if (!mark || hasRead(next[target.id], mark)) continue;
+        if (!mark || coversRead(next[target.id], mark)) continue;
         if (next === current) next = { ...current };
         next[target.id] = mark;
       }
-      return next === current ? current : trimTaskReads(next);
+      return next;
     });
   }, [index]);
 
@@ -115,7 +110,7 @@ export function useTaskReadState(tasks: TaskListItem[], selectedTaskId: string |
   const lookForTask = useCallback<LookForTask>((task) => {
     const workers = index.workersByLead.get(task.id) ?? [];
     const mark = readMarkForTask(task, workers);
-    const unread = !!mark && !visibleTaskIds.has(task.id) && !hasRead(readState[task.id], mark);
+    const unread = !!mark && !visibleTaskIds.has(task.id) && !coversRead(readState[task.id], mark);
     return taskLook(task, workers, unread);
   }, [index, readState, visibleTaskIds]);
   const indicatorForTask = useCallback<IndicatorForTask>((task) => lookForTask(task).indicator, [lookForTask]);
