@@ -17,6 +17,9 @@ final class OfflineView: NSView {
   private let stack: NSStackView
   private var panel: NSView?
   private var actions: [Action] = []
+  /// 每换一次屏加一：页面接上时只撤自己开始载入那会儿盖着的那一屏（见 BrowserWindowController 的 `Handoff`），
+  /// 中途换上来的错误说明不跟着撤。
+  private(set) var revision = 0
 
   override init(frame: NSRect) {
     stack = NSStackView(views: [spinner, headline, detail, buttons])
@@ -51,6 +54,7 @@ final class OfflineView: NSView {
   required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
   func show(title: String, detail text: String, busy: Bool = false, actions: [Action] = []) {
+    revision += 1
     removePanel()
     stack.isHidden = false
     headline.stringValue = title
@@ -72,6 +76,7 @@ final class OfflineView: NSView {
 
   /// 换成一块自带内容的面板（首启那一屏），铺满；再 `show(title:…)` 时收走。
   func show(panel view: NSView) {
+    revision += 1
     if panel !== view {
       removePanel()
       view.translatesAutoresizingMaskIntoConstraints = false

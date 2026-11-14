@@ -21,6 +21,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   private(set) var boundInstance: String?
   /// 页面在的时候多久认一次人。测试把它调大，单独验导航那一道。
   static var instanceGuardInterval: TimeInterval = 1
+  /// 原生那一屏正等着交给页面（见 `Handoff`）。
+  private var handoff: Handoff?
+  private var handoffSerial = 0
   /// 「正在启动」那一屏晚一点才盖上：服务本来就在时探一下只要几毫秒，不该闪一下。
   var pendingStartingScreen: DispatchWorkItem?
 
@@ -61,6 +64,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     chrome = WindowChrome(window: window, webView: webView)
     chrome?.onWindowSize = { [weak self] size in
       if size == "setup" { self?.enterWelcome() } else { self?.leaveWelcome() }
+      self?.pageDidPresent()
     }
     // 位置和大小记在 UserDefaults 里，下次原样打开。数据根还空着就先开成首启那扇小窗。
     if AshConfig.isLocal && !AshConfig.isDataInitialized {
@@ -185,13 +189,55 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   }
 
   private func showPage() {
-    offlineView.isHidden = true
+    beginHandoff()
     // 失败页、撤下后的空白页之后 webView.url 不是 ash 的，此时回到撤下前的路由或首页；正常情况下
     // 原地重载保住当前路由。
     let target = [webView.url, resumeURL].compactMap { $0 }.first(where: AshConfig.isSameOrigin) ?? AshConfig.windowURL
     resumeURL = nil
     webView.load(URLRequest(url: target))
     startInstanceGuard()
+  }
+
+  // MARK: 原生那一屏交给页面
+
+  /// 服务通了只说明页面载得进来，不说明它已经画出来了：HTML、脚本、身份确认都还在路上，这时就撤掉原生那一屏
+  /// （首启卡上的转圈、「正在启动」），窗口会空着一整块等页面。所以盖着的那一屏留到页面自己表态为止 ——
+  /// 新文档提交之后报了这一屏要多大的窗（WindowChrome.onWindowSize：认约定的页面在身份确认、画出第一屏时报，
+  /// 不认约定的文档读完 <head> 时报）。认约定却始终不报的（旧版 ash）在载完后稍等一下照样接上，不至于一直盖着。
+  /// 中途盖上了别的一屏（载入失败的说明、又一次「正在启动」）就不撤它，那一屏有自己的去处。
+  private struct Handoff {
+    let id: Int
+    /// 开始载入时盖着的是 offlineView 的哪一屏（`OfflineView.revision`）。
+    let screen: Int
+    /// 新文档提交了没有。之前收到的表态出自上一份文档，不算。
+    var committed = false
+  }
+
+  private func beginHandoff() {
+    guard !offlineView.isHidden else { handoff = nil; return }
+    handoffSerial += 1
+    handoff = Handoff(id: handoffSerial, screen: offlineView.revision)
+  }
+
+  /// 主框架换上了新文档（WebViewBridge）。不比对是哪一次导航：页面自己的跳转顶掉了这一次也一样，
+  /// 等的只是「窗口里已经是新文档」。
+  func pageDidCommit() {
+    handoff?.committed = true
+  }
+
+  /// 主框架载完了。认约定的页面这时多半还在确认身份，表态马上就到；等不到就照样接上。
+  func pageDidFinish() {
+    guard let id = handoff?.id, handoff?.committed == true else { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+      guard self?.handoff?.id == id else { return }
+      self?.pageDidPresent()
+    }
+  }
+
+  private func pageDidPresent() {
+    guard let pending = handoff, pending.committed else { return }
+    handoff = nil
+    if offlineView.revision == pending.screen { offlineView.isHidden = true }
   }
 
   /// 页面之后发的每个请求（fetch、SSE、页面本身、预览）都带着认过的那一份的实例号。窗口连的是这份
@@ -248,6 +294,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   /// 记下路由，回到 loadHome 认一遍 —— 被占着就盖上说明，自己那份回来了再载回去。
   func instanceLost() {
     stopInstanceGuard()
+    // 下面换上的空白文档也会「提交、载完」，别把它当成页面接上了。
+    handoff = nil
     if let url = webView.url, AshConfig.isSameOrigin(url) { resumeURL = url }
     webView.stopLoading()
     webView.loadHTMLString("", baseURL: nil)

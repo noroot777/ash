@@ -66,3 +66,10 @@
   border-radius: 0;
   box-shadow: none;
 }
+
+/* 窄窗下左栏收成顶上一条，标识正好落在红绿灯底下：往右让出红绿灯那一块。 */
+@media (max-width: 760px) {
+  :root[data-window-shell="mac"] .onboarding-aside {
+    padding-left: max(16px, var(--window-controls-width, 0px));
+  }
+}
