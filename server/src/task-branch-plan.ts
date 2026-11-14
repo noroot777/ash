@@ -158,13 +158,13 @@ export async function branchDependency(task: BranchTask, repo: string, reads?: B
     if (!parent || branchRelationship(task, parent.id, branchName(target!)) !== "legacy") return null;
     // 旧任务直接合入父分支；ready 只代表无需等待父成果先进入另一条最终分支。
     return { taskId: parent.id, title: parent.title, state: "ready", legacyTarget: true,
-      message: `旧任务仍合入父分支 ${branchName(target!)}。若父工作区仍占用分支，请先在父任务的「派生与验收」中释放工作区目录（保留分支）；父任务执行中则先停止。释放后再验收子任务，最后继续完成并验收父任务。父子统一验收不适用于这条旧关系。` };
+      message: `旧任务仍合入父分支 ${branchName(target!)}。若父工作区仍占用分支，请先在父任务验收台的前提列里点「释放目录」（保留分支）；父任务执行中则先停止。释放后再验收子任务，最后继续完成并验收父任务。父子统一验收不适用于这条旧关系。` };
   }
   const parent = (await db.select().from(tasks).where(eq(tasks.id, task.baseTaskId))).at(0);
   const title = parent?.title ?? task.baseTaskId;
   const result = (state: BranchDependency["state"], message: string): BranchDependency =>
     ({ taskId: parent?.id ?? null, title, state, message });
-  if (!task.mergeTargetBranch) return result("unknown", "最终合入分支未确定，请在「派生与验收」中重设合入目标，再检查父成果依赖");
+  if (!task.mergeTargetBranch) return result("unknown", "最终合入分支未确定，请点验收台第一行的目标分支重设合入目标，再检查父成果依赖");
   if (!task.worktreeStartCommit) return result("unknown", "未记录继承的父提交，请恢复任务的开工记录后再验收");
   const inherited = (await inheritedParentCommit(task, repo, parent, reads))!;
   if (await contains(inherited, task.mergeTargetBranch)) {
@@ -176,7 +176,7 @@ export async function branchDependency(task: BranchTask, repo: string, reads?: B
       return result("needs_update", `「${title}」依赖的版本经提交历史调整后已合入 ${task.mergeTargetBranch}，需要更新子分支基线并核对验证结果`);
     }
   }
-  if (!parent) return result("unknown", "来源任务记录已不存在，且无法证明继承的代码已进入目标分支；请在「派生与验收」中重设合入目标，选择已包含继承提交的本地分支，再核对验收依赖。若尚无这样的分支，请先恢复父成果提交。");
+  if (!parent) return result("unknown", "来源任务记录已不存在，且无法证明继承的代码已进入目标分支；请点验收台第一行的目标分支重设合入目标，选择已包含继承提交的本地分支，再核对验收依赖。若尚无这样的分支，请先恢复父成果提交。");
   const merged = parent.acceptedMergeCommit && parent.acceptedBaseCommit
     && parent.acceptedMergeCommit !== parent.acceptedBaseCommit
     && await contains(parent.acceptedMergeCommit, task.mergeTargetBranch);
@@ -222,7 +222,7 @@ export async function dependentTasks(repo: string, projectId: string, taskId: st
 export async function branchDeletionRejection(repo: string, taskId: string, projectId?: string, deleteRefs = true): Promise<{ error: string; reason: "base_update_pending" | "dependent_tasks" } | null> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task && !projectId) return null;
-  if (task?.baseUpdateIntent) return { reason: "base_update_pending", error: "上次基线更新尚未结算，请在「派生与验收」中重试或点击「处理未完成的基线更新」，再删除或清理" };
+  if (task?.baseUpdateIntent) return { reason: "base_update_pending", error: "上次基线更新尚未结算，请在验收台上重试更新基线，或点那一行的「处理」，再删除或清理" };
   if (!deleteRefs) return null;
   const dependents = await dependentTasks(repo, task?.projectId || projectId!, taskId);
   return dependents.length

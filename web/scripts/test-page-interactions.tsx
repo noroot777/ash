@@ -4,7 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ScheduledMessage } from "@ash/shared";
 import { ScheduledMessageTray } from "../src/components/ScheduledMessageTray.tsx";
-import { AutoCommitOutcomeNotice, WorkspaceCommitNotice } from "../src/review/AcceptanceWorkspaceCommit.tsx";
+import { AutoCommitCheck, WorkspaceCommitRow } from "../src/acceptance/WorkspaceCheck.tsx";
 import { workspaceCommitBlock, workspaceCommitPaths } from "../src/review/workspaceCommit.ts";
 import type { ScmOverview, ScmChange } from "../src/lib/api.ts";
 import { api } from "../src/lib/api.ts";
@@ -49,29 +49,49 @@ assert.match(workspaceCommitBlock({ ...overview, readOnly: "已归档" })!, /归
 assert.match(workspaceCommitBlock({ ...overview, status: { ...overview.status, operation: "rebase" } })!, /Git 操作/);
 assert.match(workspaceCommitBlock({ ...overview, status: { ...overview.status, truncated: true } })!, /不完整/);
 assert.match(workspaceCommitBlock({ ...overview, status: { ...overview.status, untracked: [{ ...change("nested"), nested: true }] } })!, /嵌套/);
-const notice = (value: ScmOverview) => renderToStaticMarkup(<WorkspaceCommitNotice overview={value}
-  busy={false} error={null} onCommit={() => {}} onRefresh={() => {}} />);
-assert.match(notice(overview), /有 3 个文件尚未提交/);
-assert.match(notice(overview), /一键提交改动/);
+// 前提列里那一行（WorkspaceCommitRow）：文字是「N 个文件未提交」，状态那半句照抄服务端预检，行尾只有「提交」。
+// 展开层（为什么不能提交、文件清单）默认收着，静态渲染里不出现。
+const notice = (value: ScmOverview, props: { busy?: boolean; disabled?: boolean; error?: string | null } = {}) => renderToStaticMarkup(
+  <WorkspaceCommitRow overview={value} busy={props.busy ?? false} disabled={props.disabled} error={props.error ?? null} onCommit={() => {}} />);
+const submitButton = (html: string) => html.match(/<button[^>]*class="acc-btn is-sm"[^>]*>.*?<\/button>/)?.[0] ?? "";
+assert.match(notice(overview), /data-check="workspace"/);
+assert.match(notice(overview), /class="acc-check is-warn/);
+assert.match(notice(overview), /3 个文件未提交/);
+assert.match(submitButton(notice(overview)), />提交<\/button>/);
+assert.doesNotMatch(submitButton(notice(overview)), /disabled=""/);
 assert.match(notice(overview), /项目未开启验收前自动提交/);
 assert.match(notice({ ...overview, acceptanceAutoCommit: { action: "commit", reason: "预检通过，验收时将尝试提交" } }), /预检通过/);
 for (const reason of ["任务正在运行", "存在冲突", "存在未完成的 Git 操作", "文件列表不完整", "包含嵌套 Git 仓库", "不是独占工作区"]) {
   const html = notice({ ...overview, acceptanceAutoCommit: { action: "skip", reason } });
-  assert.match(html, /验收时将跳过自动提交/);
+  assert.match(html, /验收时不会替你提交/);
   assert.ok(html.includes(reason));
   assert.doesNotMatch(html, /会先提交|预检通过/);
 }
-assert.match(notice({ ...overview, acceptanceAutoCommit: undefined }), /尚未提供自动提交预检结果/);
-assert.match(renderToStaticMarkup(<AutoCommitOutcomeNotice outcome={{ status: "skipped", reason: "共用项目目录" }} />), /已跳过验收前自动提交：共用项目目录/);
-assert.match(notice({ ...overview, taskRunning: true }), /disabled=""/);
-assert.doesNotMatch(notice({ ...overview, taskRunning: true }), /提交中…|is-spinning|请先提交/);
-const disabledNotice = renderToStaticMarkup(<WorkspaceCommitNotice overview={overview} busy={false}
-  disabled error={null} onCommit={() => {}} onRefresh={() => {}} />);
-assert.match(disabledNotice, /disabled=""/);
-assert.doesNotMatch(disabledNotice, /提交中…|is-spinning/);
-const busyNotice = renderToStaticMarkup(<WorkspaceCommitNotice overview={overview} busy
-  error={null} onCommit={() => {}} onRefresh={() => {}} />);
-assert.match(busyNotice, /提交中…/);
+assert.match(notice({ ...overview, acceptanceAutoCommit: undefined }), /验收时会不会替你提交还没确认/);
+assert.match(renderToStaticMarkup(<AutoCommitCheck outcome={{ status: "skipped", reason: "共用项目目录" }} />), /已跳过验收前自动提交：共用项目目录/);
+assert.match(renderToStaticMarkup(<AutoCommitCheck outcome={{ status: "skipped", reason: "共用项目目录" }} />), /data-check="auto-commit"/);
+assert.match(renderToStaticMarkup(<AutoCommitCheck outcome={{ status: "committed", reason: "预检通过", sha: "abcdef1234567" }} />), /is-passed[^"]*"[^>]*>[\s\S]*abcdef12/);
+assert.match(renderToStaticMarkup(<AutoCommitCheck outcome={{ status: "failed", reason: "提交失败" }} />), /class="acc-check is-warn/);
+// 任务在跑：「提交」灰着，状态说清等它结束；灰着不是正在提交（不转圈、不 aria-busy）。
+const running = notice({ ...overview, taskRunning: true });
+assert.match(submitButton(running), /disabled=""/);
+assert.match(running, /任务还在跑，结束后再提交/);
+assert.doesNotMatch(running, /acc-spin|aria-busy/);
+const disabledNotice = notice(overview, { disabled: true });
+assert.match(submitButton(disabledNotice), /disabled=""/);
+assert.doesNotMatch(disabledNotice, /acc-spin|aria-busy/);
+// 正在提交：同一颗键转圈 + aria-busy，文字不变。
+const busyNotice = notice(overview, { busy: true });
+assert.match(submitButton(busyNotice), /aria-busy="true"/);
+assert.match(submitButton(busyNotice), /acc-spin/);
+assert.match(submitButton(busyNotice), />提交<\/button>/);
+// 提交失败：这一行变红，状态那半句换成失败原因。
+const failed = notice(overview, { error: "提交失败：请配置 Git 用户信息" });
+assert.match(failed, /class="acc-check is-block/);
+assert.match(failed, /请配置 Git 用户信息/);
+assert.doesNotMatch(failed, /项目未开启验收前自动提交/);
+// 归属拿不准（共用项目目录等）：「提交」灰着。
+assert.match(submitButton(notice({ ...overview, acceptanceCommitBlock: "共用项目目录，不属于任务独占工作区" })), /disabled=""/);
 assert.equal(notice({ ...overview, status: { ...overview.status, staged: [], unstaged: [], untracked: [] } }), "");
 
 const message = (id: string): ScheduledMessage => ({ id, taskId: "task", text: id, attachments: [], agent: null,

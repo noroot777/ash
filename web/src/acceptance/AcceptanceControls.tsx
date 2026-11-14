@@ -215,7 +215,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         <div className="acc-lead">{lead}</div>
         <div className="acc-actions">
           {settled ? <>
-            <span className="acc-done"><CheckCircle size={13} weight="fill" aria-hidden="true" />已验收</span>
+            <span className="acc-done"><CheckCircle size={13} weight="fill" aria-hidden="true" />{task.stage === "merged" ? "已合并" : "已验收"}</span>
             {onPostMergeReview && !pendingCommit && <button type="button" className="acc-link" onClick={onPostMergeReview}>{facts.postMergeLabel}</button>}
           </> : <>
             <button ref={rejectRef} type="button" className="acc-btn" aria-expanded={layer === "reject"} disabled={archived || inFlight || busy}
