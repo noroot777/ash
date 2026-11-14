@@ -83,9 +83,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [ignoreRoute]);
 
   // 这一屏要多大的窗，交给 macOS 壳（desktop/macos/Sources/WindowChrome.swift）：首次配置的两段向导是
-  // "setup"，壳开成一扇正好装下它的小窗；工作台和其它页是 "work"，壳展开成工作窗。身份还没确认时不表态，
-  // 壳保持原样。判据与下面的分支同序；浏览器里没人读它。
-  const windowSize = !state ? null
+  // "setup"，壳开成一扇正好装下它的小窗；工作台和其它页（包括下面「连不上服务端」那一屏）是 "work"，壳展开成工作窗。
+  // 壳还把这一下表态当成「页面画出来了」，撤掉它盖着的原生那一屏 —— 所以只要画出了东西就得表态；
+  // 身份还没确认、什么都没画时不表态，壳接着转圈。判据与下面的分支同序；浏览器里没人读它。
+  const windowSize = !state ? (error ? "work" : null)
     : !state.needsAccessKey && (state.needsSetup || (state.needsOnboarding && !(state.mode === "multi" && !state.user)))
       ? "setup" : "work";
   useEffect(() => {

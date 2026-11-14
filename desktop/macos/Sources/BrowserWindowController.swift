@@ -23,7 +23,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   static var instanceGuardInterval: TimeInterval = 1
   /// 原生那一屏正等着交给页面（见 `Handoff`）。
   private var handoff: Handoff?
-  private var handoffSerial = 0
+  /// 主框架换过几次文档（见 `Handoff.document`）。
+  private var documentSerial = 0
   /// 「正在启动」那一屏晚一点才盖上：服务本来就在时探一下只要几毫秒，不该闪一下。
   var pendingStartingScreen: DispatchWorkItem?
 
@@ -66,6 +67,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
       if size == "setup" { self?.enterWelcome() } else { self?.leaveWelcome() }
       self?.pageDidPresent()
     }
+    chrome?.onPageBroken = { [weak self] source in self?.pageDidBreak(source) }
     // 位置和大小记在 UserDefaults 里，下次原样打开。数据根还空着就先开成首启那扇小窗。
     if AshConfig.isLocal && !AshConfig.isDataInitialized {
       enterWelcome()
@@ -200,44 +202,66 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
   // MARK: 原生那一屏交给页面
 
-  /// 服务通了只说明页面载得进来，不说明它已经画出来了：HTML、脚本、身份确认都还在路上，这时就撤掉原生那一屏
-  /// （首启卡上的转圈、「正在启动」），窗口会空着一整块等页面。所以盖着的那一屏留到页面自己表态为止 ——
-  /// 新文档提交之后报了这一屏要多大的窗（WindowChrome.onWindowSize：认约定的页面在身份确认、画出第一屏时报，
-  /// 不认约定的文档读完 <head> 时报）。认约定却始终不报的（旧版 ash）在载完后稍等一下照样接上，不至于一直盖着。
-  /// 中途盖上了别的一屏（载入失败的说明、又一次「正在启动」）就不撤它，那一屏有自己的去处。
+  /// 服务通了只说明页面载得进来，不说明它已经画出来了：HTML、脚本、身份确认都还在路上，入口脚本也可能根本没载成。
+  /// 所以盖着的那一屏（首启卡上的转圈、「正在启动」）只交给**表了态的页面**：当前文档提交之后报了这一屏要多大的窗
+  /// （WindowChrome.onWindowSize —— 认约定的页面在身份确认、画出第一屏或报错屏时报；不认约定的文档读完 <head>
+  /// 时报，它的内容就在 HTML 里）。主文档载完、过了多久都不算数。
+  ///
+  /// 等不到就换上一屏持久的说明，给「重试」和「仍然显示页面」（后者给不报尺寸的旧版 ash 留一条明确的路），
+  /// 不把空页面放出来：入口脚本没载成（页面脚本报回来）当场换，一直没表态的等 `presentTimeout`。说明屏还认这一次
+  /// 交接，页面后来还是画出来了就照样接上。中途盖上了别的一屏（载入失败、又一次「正在启动」）不撤它，那一屏有自己的去处。
   private struct Handoff {
-    let id: Int
-    /// 开始载入时盖着的是 offlineView 的哪一屏（`OfflineView.revision`）。
-    let screen: Int
-    /// 新文档提交了没有。之前收到的表态出自上一份文档，不算。
-    var committed = false
+    /// 开始载入以来主框架第几次换文档（`documentSerial`）。表态和计时都只认当前这一份文档，
+    /// 上一份留下的（页面载完马上自己跳走时）作废。
+    var document: Int?
+    /// 到点该撤的是 offlineView 的哪一屏（`OfflineView.revision`）。
+    var screen: Int
   }
 
+  /// 新文档提交后最多等它多久表态。认约定的页面身份确认通常在一秒内；再久就是出事了。
+  static var presentTimeout: TimeInterval = 15
+
   private func beginHandoff() {
-    guard !offlineView.isHidden else { handoff = nil; return }
-    handoffSerial += 1
-    handoff = Handoff(id: handoffSerial, screen: offlineView.revision)
+    handoff = offlineView.isHidden ? nil : Handoff(document: nil, screen: offlineView.revision)
   }
 
   /// 主框架换上了新文档（WebViewBridge）。不比对是哪一次导航：页面自己的跳转顶掉了这一次也一样，
-  /// 等的只是「窗口里已经是新文档」。
+  /// 等的是「窗口里这份文档表态」，计时从这份文档算起。
   func pageDidCommit() {
-    handoff?.committed = true
-  }
-
-  /// 主框架载完了。认约定的页面这时多半还在确认身份，表态马上就到；等不到就照样接上。
-  func pageDidFinish() {
-    guard let id = handoff?.id, handoff?.committed == true else { return }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-      guard self?.handoff?.id == id else { return }
-      self?.pageDidPresent()
+    documentSerial += 1
+    guard handoff != nil else { return }
+    let document = documentSerial
+    handoff?.document = document
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.presentTimeout) { [weak self] in
+      guard let self, self.handoff?.document == document else { return }
+      self.pageDidNotPresent("页面载进来了，但等了 \(Int(Self.presentTimeout)) 秒还没显示出来。")
     }
   }
 
   private func pageDidPresent() {
-    guard let pending = handoff, pending.committed else { return }
+    guard let pending = handoff, pending.document == documentSerial else { return }
     handoff = nil
     if offlineView.revision == pending.screen { offlineView.isHidden = true }
+  }
+
+  /// 当前文档的脚本没载成（WindowChrome 报回来）：不再等它表态。
+  private func pageDidBreak(_ source: String) {
+    guard let pending = handoff, pending.document == documentSerial else { return }
+    let name = URL(string: source).map { $0.path.isEmpty ? source : $0.path } ?? source
+    pageDidNotPresent("页面的脚本（\(name)）没有载进来。")
+  }
+
+  private func pageDidNotPresent(_ reason: String) {
+    guard handoff != nil else { return }
+    offlineView.show(title: "页面没有显示出来", detail: "\(reason)\n可以重试；要先看看页面现在的样子也行。", actions: [
+      OfflineView.Action(title: "仍然显示页面") { [weak self] in
+        self?.handoff = nil
+        self?.offlineView.isHidden = true
+      },
+      OfflineView.Action(title: "重试") { [weak self] in self?.loadHome() },
+    ])
+    // 这一屏仍算这次交接要撤的那一屏：页面只是慢、后来还是画出来了，就照样接上。
+    handoff?.screen = offlineView.revision
   }
 
   /// 页面之后发的每个请求（fetch、SSE、页面本身、预览）都带着认过的那一份的实例号。窗口连的是这份

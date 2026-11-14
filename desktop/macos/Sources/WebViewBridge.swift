@@ -61,10 +61,6 @@ extension BrowserWindowController: WKNavigationDelegate, WKUIDelegate, WKDownloa
     pageDidCommit()
   }
 
-  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-    pageDidFinish()
-  }
-
   func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
     handleLoadFailure(error)
   }
