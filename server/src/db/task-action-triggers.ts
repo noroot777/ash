@@ -70,6 +70,8 @@ const TRIGGERS = [
   watch("free_review_rounds", roundTask),
   watch("free_review_debates", onTask),
   watch("free_workflow_states", onTask),
+  // 续跑交代的账本（启动类动作的 checkpointBlock）：交接、归还、租约、接管都落在这几列上。
+  watch("scheduled_messages", onTask, changed(["task_id", "status", "checkpoint_taken", "delivering_since", "delivering_owner", "origin"])),
   // 执行器 profile 改了 / 删了：重跑上一回合的保真前提（会话记下的指纹）全变，说不清是哪些任务。
   `
   CREATE TEMP TRIGGER IF NOT EXISTS ash_actions_agents_upd AFTER UPDATE ON agents BEGIN SELECT ash_actions_dirty('all', NULL); END;

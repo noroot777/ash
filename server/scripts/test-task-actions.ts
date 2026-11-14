@@ -12,7 +12,8 @@
 // 照样收得到(第 1 轮审查 F1–F3)。
 //
 // 覆盖任务 G4J3ykMmJHgC 列出的几处对不上:验证轮没结束时归档、队列挡路时运行、接力出去的任务、
-// 讨论排队中的停止、分组暂停时重跑上一回合、等答复时派验证;团队的停止全组与它的路由同源。
+// 讨论排队中的停止、分组暂停时重跑上一回合、等答复时派验证、续跑交代没交接完时的启动三档;团队的
+// 停止全组与它的路由同源。
 // 跑:npm -w server run test:task-actions
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -29,7 +30,7 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 
 const { ensureSchema, db } = await import("../src/db/index.js");
-const { groups, projects, queueItems, sessions, tasks } = await import("../src/db/schema.js");
+const { groups, projects, queueItems, scheduledMessages, sessions, tasks } = await import("../src/db/schema.js");
 const { createTasks } = await import("../src/task-store.js");
 const { claimTurn, releaseTurn } = await import("../src/runs.js");
 const { bus } = await import("../src/bus.js");
@@ -336,6 +337,44 @@ async function seedCrashedSession(taskId: string): Promise<string> {
     await db.delete(tasks).where(eq(tasks.id, "del-blocker"));
   }, "删掉挡路的前置任务");
   assert.ok((await actionsOf("del-follower")).primary?.ok, "前置删掉后重试可点");
+}
+
+// ── 续跑交代还没交接完:运行 / 继续 / 重试 / 重跑上一回合都灰着,路由同一句话(本轮审查 F1) ──────
+// 账本形状同审查现场:哨兵接走了续跑交代、投递租约挂着(不是本进程开的 checkpoint:resume 票,
+// 启动前那趟对账不碰它),点下去必被拒。交接落定(这一行没了)就收到失效,重取是能做。
+{
+  await createTasks([
+    { ...baseTask, id: "cp-resume", title: "停在检查点", status: "paused" },
+    { ...baseTask, id: "cp-retry", title: "失败了", status: "failed" },
+    { ...baseTask, id: "cp-turn", title: "续聊崩了" },
+  ]);
+  const turnSession = await seedCrashedSession("cp-turn");
+  const receipt = (taskId: string) => ({
+    id: `m-${taskId}`, taskId, text: "哨兵事件", origin: "monitor:smoke", mode: "queued", sendAt: stamp,
+    status: "pending", createdAt: stamp, deliveringSince: stamp, checkpointTaken: "接着做第二步",
+  });
+  for (const taskId of ["cp-resume", "cp-retry", "cp-turn"]) {
+    await expectStale(taskId, () => db.insert(scheduledMessages).values(receipt(taskId)), "哨兵接走续跑交代");
+  }
+  const resume = await actionsOf("cp-resume");
+  assert.equal(resume.primary?.kind, "resume");
+  assert.ok(resume.primary && !resume.primary.ok && !resume.primary.hidden, "继续:键在、灰着说原因");
+  assert.match(resume.primary && !resume.primary.ok ? resume.primary.reason : "", /续跑交代/);
+  await assertRefused(resume.primary, "/tasks/cp-resume/run");
+  const retry = await actionsOf("cp-retry");
+  assert.equal(retry.primary?.kind, "retry");
+  await assertRefused(retry.primary, "/tasks/cp-retry/retry");
+  const turn = await actionsOf("cp-turn");
+  assert.ok(turn.retryTurn && !turn.retryTurn.ok && !turn.retryTurn.hidden, "重跑上一回合:键在、灰着");
+  await assertRefused(turn.retryTurn, "/tasks/cp-turn/retry-turn", { sessionId: turnSession });
+
+  // 交接落定:账本那一行没了 → 失效,重取能做,路由只撞回合锁。
+  await expectStale("cp-resume", () => db.delete(scheduledMessages).where(eq(scheduledMessages.id, "m-cp-resume")), "交接落定");
+  await assertPassesVerdict("cp-resume", (await actionsOf("cp-resume")).primary, "/tasks/cp-resume/run", /回合正在进行/);
+  // 投递租约被收回(交代还在账本上、没人在送):启动前那一趟会把它归还回任务,所以这不挡 —— 下发能做。
+  await expectStale("cp-retry", () => db.update(scheduledMessages).set({ deliveringSince: null })
+    .where(eq(scheduledMessages.id, "m-cp-retry")), "投递租约收回");
+  assert.ok((await actionsOf("cp-retry")).primary?.ok, "没有租约的交代点下去会自己归还，不挡重试");
 }
 
 await releaseTmpDb();

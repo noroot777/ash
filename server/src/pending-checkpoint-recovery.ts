@@ -256,6 +256,32 @@ export async function pendingCheckpointBlockReason(
   return "未送达的续跑交代仍由消息账本保管，归还或完成交接后才能启动";
 }
 
+/**
+ * 启动前那道账本挡板的**只读**一问：下发「此刻能不能运行 / 继续 / 重试 / 重跑上一回合」用它
+ * （task-actions.ts 的 readActionFacts、task-retry-turn.ts 的 readRetryTurnFacts）。
+ *
+ * 答的跟 `preparePendingCheckpointStart` 是同一件事，只是一行账都不动：那边挡之前先把能自己了结的
+ * 凭证了结掉 —— 没有租约的归还回任务、本进程接管得了的在途 `checkpoint:resume` 票对账 —— 所以这两种
+ * 在这里算「点下去会自己让开」，剩下的才是点下去必被拒的那几张，原因用的是路由回的同一句。
+ * 拿那个有副作用的函数去算一颗按钮，等于每次重取都在改账本。
+ */
+export async function checkpointStartBlock(taskId: string): Promise<string | null> {
+  if (dbClient.closed) return "数据库正在关闭，续跑交代尚未交接";
+  try {
+    const receipts = await db.select().from(scheduledMessages).where(and(
+      eq(scheduledMessages.taskId, taskId), undeliveredCheckpoint(),
+    ));
+    const settlesItself = (receipt: typeof scheduledMessages.$inferSelect) => receipt.deliveringSince === null
+      || (receipt.origin === CHECKPOINT_RUN_ORIGIN && !deliveringNow.has(receipt.id)
+        && !!checkpointSeizureReason(receipt.deliveringOwner));
+    if (receipts.every(settlesItself)) return null;
+    return await pendingCheckpointBlockReason(taskId);
+  } catch (error) {
+    console.error(`[ash] 续跑交代挡板读取失败 task=${taskId}:`, error);
+    return "暂时无法确认续跑交代的持久归属，请稍后重试";
+  }
+}
+
 export async function preparePendingCheckpointStart(taskId: string): Promise<string | null> {
   try {
     if (dbClient.closed) return "数据库正在关闭，续跑交代尚未交接";

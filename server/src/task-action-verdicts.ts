@@ -41,6 +41,12 @@ export type ActionFacts = {
   freeReviewActive: boolean;
   /** 历史独立审查任务还有一轮没结束。 */
   legacyReviewActive: boolean;
+  /**
+   * 消息账本里还有没交接完、点下去也让不开的续跑交代（`checkpointStartBlock`）：启动类动作的路由在判据
+   * 之后还会跑一趟 `preparePendingCheckpointStart`（先了结能自己了结的，再挡剩下的），这一项是它的
+   * 只读预判，原因同一句。null = 没有。
+   */
+  checkpointBlock: string | null;
   /** 团队任务才有：名下每个执行者的状态、它所在的那一批（分组）有没有被停下。停止全组看整个团队。 */
   team: { workers: { status: string; groupPaused: boolean }[] } | null;
 };
@@ -82,7 +88,7 @@ export function runVerdict(f: ActionFacts): Verdict {
   if (!runnable) return hide("任务当前状态不可运行", { status: task.status });
   const settled = pendingSideState(task, verb);
   if (settled) return settled;
-  return queueVerdict(f);
+  return checkpointVerdict(f) ?? queueVerdict(f);
 }
 
 /** 重试（`POST /tasks/:id/retry`）：只有失败的任务。 */
@@ -94,7 +100,7 @@ export function retryVerdict(f: ActionFacts): Verdict {
   if (task.status !== "failed") return hide("只有失败的任务可以重试", { status: task.status });
   const settled = pendingSideState(task, "重试");
   if (settled) return settled;
-  return queueVerdict(f);
+  return checkpointVerdict(f) ?? queueVerdict(f);
 }
 
 function pendingSideState(task: ActionTask, verb: string): Verdict | null {
@@ -105,6 +111,10 @@ function pendingSideState(task: ActionTask, verb: string): Verdict | null {
   if (task.question) return hide(`任务在等你答复，先回答提问再${verb}`, { question: true });
   return null;
 }
+
+// 灰着说原因，不藏：这张凭证要等归还或交接完成，用户得看得见「为什么现在点不了」。
+const checkpointVerdict = (f: ActionFacts): Verdict | null =>
+  f.checkpointBlock ? block(f.checkpointBlock, { checkpoint: true }) : null;
 
 // 同队有人在跑、或前面还有没让位的：手动启动不得插队。这里是确定性的那一半，权威认领在
 // queue-seat.ts 的 seatThenStart（检查与占位同一临界区）。

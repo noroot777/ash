@@ -62,7 +62,7 @@ import { claimQueueSeat, queueClaimError, type QueueSeat } from "./queue-seat.js
 import { claimOwnTurn, releaseTurn } from "./runs.js";
 import { RESUME_PROMPT } from "./run-prompts.js";
 import { resumeOrRunTask } from "./task-resume.js";
-import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
+import { checkpointStartBlock, preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { readableRunPath, sessionTranscriptPath } from "./transcript.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
@@ -178,6 +178,8 @@ export type RetryTurnFacts = {
    * 判据是会话行里存的**环境指纹**，不是主键（见 `executors/index.ts` 的 profileDrift）。
    */
   profileDrift?: "missing" | "changed" | null;
+  /** 账本里点下去也让不开的续跑交代（`checkpointStartBlock`，同 /run 的 checkpointBlock）。 */
+  checkpointBlock?: string | null;
   /** 审查档专用：这条审查链能不能重跑（`freeReviewRetryBlocker` 的结论）。 */
   reviewBlocker?: string | null;
   /**
@@ -320,6 +322,7 @@ export function retryTurnRejection(facts: RetryTurnFacts): RetryTurnRejection | 
   if (kind === "review" && task.workflowMode !== "free") {
     return hiddenRejection("上一回合是审查旁路会话，重跑它请走审查那条路", { role: "reviewer" });
   }
+  if (facts.checkpointBlock) return { error: facts.checkpointBlock, detail: { checkpoint: true } };
   if (facts.groupPaused) return { error: "所在分组已暂停，先恢复分组再重试", detail: { groupPaused: true } };
   // 同 /run：任务的执行回合（续跑档、执行型重投），同队有人在执行、或前面还有没让位的，就
   // 不该抢跑 —— 少了这道闸，队里任务上的重试按钮就成了插队入口。其余不是执行：审查档是旁路
@@ -403,6 +406,7 @@ export async function readRetryTurnFacts(
       resend,
       blockedBy: retryTurnIsExecution(kind, resend) ? await queueBlockerDetails(taskId) : [],
       groupPaused: !!group?.paused,
+      checkpointBlock: await checkpointStartBlock(taskId),
       // 老会话行没记指纹（null）时返回 null = 无从核对，按老行为放行。
       profileDrift: latest ? await profileDrift(latest.executorId, latest.executorFingerprint) : null,
       reviewBlocker,
