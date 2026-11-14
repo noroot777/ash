@@ -236,7 +236,8 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
             detail={row.key === "host" && block?.detail ? <p className="acc-detail-text">{block.detail}</p> : undefined}
             tools={row.retry ? <CheckAction onClick={row.retry}>重试</CheckAction> : undefined} />
         ))}
-        {failure?.taskId === task.id && !settled && failure.reason !== issue?.reason && <FailureCheck failure={failure} gateReadable={!!gate.state && !gate.error} />}
+        {failure?.taskId === task.id && (!settled || !!failure.completedMerge || !!failure.completedTag)
+          && failure.reason !== issue?.reason && <FailureCheck failure={failure} gateReadable={!!gate.state && !gate.error} />}
         <PendingMergeCheck task={task} notify={notify} onTaskUpdated={onTaskUpdated} />
         {autoCommit?.taskId === task.id && <AutoCommitCheck outcome={autoCommit.outcome} />}
         {!midGate && !settled && <WorkspaceCheck key={task.id} task={task} notify={notify} disabled={rowDisabled} />}

@@ -137,9 +137,17 @@ assert.equal(line({ latest: run({ stale: true }) })!.word, "通过，但代码�
 }
 assert.equal(line({ latest: run({ status: "canceled" }) })!.tone, "stopped", "取消没有结论，不是红");
 
-// 13. 中途那道关口不预告「验收时运行」；没设命令也不出这一行。
+// 13. 中途那道关口不预告「验收时运行」；没设命令也不出这一行 —— 但上次读到「没设」、这次读不出来时
+//     主按钮照样锁着，这一行必须说出原因并给重试，否则按钮灰着、页面上找不到一个出路。
 assert.equal(line({ atFinalGate: false }), null);
 assert.equal(line({ state: state({ command: null }) }), null);
+{
+  const unread = line({ state: state({ command: null }), error: "500" })!;
+  assert.equal(unread.word, "状态读不出来");
+  assert.equal(unread.retry, true);
+}
+// 最近一次没过的是另一条命令：它的红说的不是现在这条。
+assert.equal(line({ latest: run({ status: "failed", exitCode: 1, command: "npm run old" }) })!.word, "验收时运行");
 
 // 14. 已验收：只认这一按自己的凭据，绝不拿「最近一次」反推。
 {

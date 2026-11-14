@@ -1,18 +1,21 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
-import { AcceptGateCard } from "../../src/review/AcceptGateCard.tsx";
+import { AcceptanceControls } from "../../src/acceptance/AcceptanceControls.tsx";
 import { AcceptGateWaitCard } from "../../src/review/AcceptGateWaitCard.tsx";
 import { TaskStatusDot } from "../../src/components/TaskStatusDot.tsx";
 import { useTasks } from "../../src/lib/useTasks.ts";
 import { deriveTaskStatusIndicator } from "../../src/lib/useTaskReadState.ts";
-import { AcceptanceControls } from "../../src/team/TeamReviewWorkspace.tsx";
 import "../../src/styles/global.css";
 
-// 验收前置命令那两处表面的测试舞台：验收台上那张卡，以及主会话页回复框上方那条折叠条
-// （`?wait=1`，摆在一条仿真的 .task-reply-rail 上（这条现在只放状态） —— 它的折叠/展开靠 flex 换行，脱离
-// 那条 rail 就验不出真实几何）。两者都自己拉状态、自己判要不要出现，把整个验收台搬进来
-// 只会把真正要验的东西埋在一堆无关请求里。
+// 验收前置命令那两处表面的测试舞台：验收台（默认，真的 AcceptanceControls —— 前置命令只是它前提列里
+// 的一行，要验「这一行红/在跑/读不出来时主按钮放不放」就得连主按钮和确认层一起摆上），以及主会话页
+// 回复框上方那条折叠条（`?wait=1`，摆在一条仿真的 .task-reply-rail 上 —— 它的折叠/展开靠 flex
+// 换行，脱离那条 rail 就验不出真实几何）。两者都自己拉状态、自己判要不要出现。
+//
+// 验收台这一侧没有「意图」回调了：跳过、重跑都是确认层里「运行」那一勾，测试直接看发给 /accept
+// 的请求体。`?stage=` 摆已验收的回执；「保护状态」切归档 / 任务在跑 / 宿主那道关（团队验收台的
+// 「共享执行者还没跑完」那一类）。
 const task = (over: Partial<Task>): Task => ({
   id: "gate-task",
   projectId: "proj-1",
@@ -27,6 +30,7 @@ const task = (over: Partial<Task>): Task => ({
   agentType: "claude",
   useWorktree: true,
   workflowMode: "free",
+  mergeTargetBranch: "main",
   createdAt: "2026-10-23T00:00:00.000Z",
   updatedAt: "2026-10-23T00:00:00.000Z",
   ...over,
@@ -47,32 +51,34 @@ function TaskDotsFixture() {
   </main>;
 }
 
+function DeskFixture({ params }: { params: URLSearchParams }) {
+  const [notice, setNotice] = useState("");
+  const [updated, setUpdated] = useState<Task | null>(null);
+  const [guard, setGuard] = useState(params.get("guard") ?? "none");
+  const current = updated ?? task({ stage: params.get("stage") ?? "verified" } as Partial<Task>);
+  return <main className="single-review-workspace" style={{ minHeight: "100vh" }}>
+    <AcceptanceControls
+      className="acc-desk"
+      task={{ ...current, archived: guard === "archived", status: guard === "running" ? "running" : current.status }}
+      onTaskUpdated={setUpdated}
+      notify={setNotice}
+      block={guard === "blocked" ? { text: "审查进行中" } : null}
+      lead={<b>验收台</b>}
+    />
+    <label>保护状态<select aria-label="保护状态" value={guard} onChange={event => setGuard(event.target.value)}>
+      <option value="none">正常</option><option value="archived">已归档</option>
+      <option value="running">执行中</option><option value="blocked">审查进行中</option>
+    </select></label>
+    <p role="status" aria-label="操作结果">{notice}</p>
+  </main>;
+}
+
 function Fixture() {
   const params = new URLSearchParams(location.search);
   const [notice, setNotice] = useState("");
-  const [intent, setIntent] = useState("");
   const [taskId, setTaskId] = useState("gate-task");
   const [mounted, setMounted] = useState(true);
-  const [acceptedTask, setAcceptedTask] = useState<Task | null>(null);
-  const [guard, setGuard] = useState("none");
   if (params.get("dots") === "1") return <TaskDotsFixture />;
-  if (params.get("controls") === "1") {
-    const current = acceptedTask ?? task({});
-    return <main className="single-review-workspace" style={{ minHeight: "100vh" }}>
-      <header className="single-review-subbar">
-        <div><b>改动与提交</b><small>验收前置命令失败后的恢复入口</small></div>
-        <AcceptanceControls
-          task={{ ...current, archived: guard === "archived", status: guard === "running" ? "running" : current.status }}
-          onTaskUpdated={setAcceptedTask} notify={setNotice} acceptanceBlock={guard === "blocked" ? "审查进行中" : null}
-        />
-      </header>
-      <label>保护状态<select aria-label="保护状态" value={guard} onChange={event => setGuard(event.target.value)}>
-        <option value="none">正常</option><option value="archived">已归档</option>
-        <option value="running">执行中</option><option value="blocked">审查进行中</option>
-      </select></label>
-      <p role="status" aria-label="操作结果">{notice}</p>
-    </main>;
-  }
   if (params.get("wait") === "1") {
     return <main style={{ maxWidth: 760, padding: 24, margin: "auto" }}>
       <h1>验收前置命令卡</h1>
@@ -87,17 +93,7 @@ function Fixture() {
       <p role="status" aria-label="操作结果">{notice}</p>
     </main>;
   }
-  return <main style={{ maxWidth: 760, padding: 24, margin: "auto" }}>
-    <h1>验收前置命令卡</h1>
-    <AcceptGateCard
-      task={task({ stage: params.get("stage") ?? "verified" } as Partial<Task>)}
-      notify={setNotice}
-      onIntent={(value) => setIntent(value)}
-      disabled={params.get("disabled") === "1"}
-    />
-    <p role="status" aria-label="操作结果">{notice}</p>
-    <output aria-label="验收意图">{intent}</output>
-  </main>;
+  return <DeskFixture params={params} />;
 }
 
 createRoot(document.getElementById("root")!).render(<StrictMode><Fixture /></StrictMode>);

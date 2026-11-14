@@ -9,6 +9,7 @@ import type { FreeWorkflowApiState } from "../../src/lib/api.ts";
 import { TaskReviewWorkspace } from "../../src/review/TaskReviewWorkspace.tsx";
 import { TaskHeader } from "../../src/task-detail/TaskHeader.tsx";
 import { syncComposerSendKey } from "../../src/lib/sendKey.ts";
+import { PostMergeVariants } from "./free-workflow-post-merge.tsx";
 import "../../src/styles/global.css";
 
 // 附言框里裸回车算不算提交跟着「输入框发送键」那一档走；没学到这一档时裸回车一律换行
@@ -441,8 +442,8 @@ window.fetch = (input, init) => {
       descendants: [],
     }), { status: 200, headers: { "content-type": "application/json" } }));
   }
-  // 验收台开屏要读两样：验收前置命令的状态、工作区有没有未提交改动。读不到时主按钮写「前置命令
-  // 状态待核对」并灰掉，所以台子得自己答：这几个任务所在的项目没设前置命令，工作区是干净的。
+  // 验收台开屏要读两样：验收前置命令的状态、工作区有没有未提交改动。读不到时主按钮转圈灰着、
+  // 前提列出一行红字，所以台子得自己答：这几个任务所在的项目没设前置命令，工作区是干净的。
   const acceptanceRead = /^\/api\/tasks\/(free-accept-ui|free-reviewing-ui|post-merge-ui)\/(accept-gate|scm)$/.exec(url.pathname);
   if (acceptanceRead && (init?.method ?? "GET") === "GET") {
     const body = acceptanceRead[2] === "accept-gate"
@@ -667,6 +668,7 @@ createRoot(document.getElementById("root")!).render(
       <AcceptanceFixture task={acceptanceTask} className="acceptance-fixture" />
       <AcceptanceFixture task={reviewingAcceptanceTask} className="acceptance-blocked-fixture" />
       <PostMergeFixture />
+      <PostMergeVariants onPostMergeReview={() => { (window as Window & { __variantReviewClicks?: number }).__variantReviewClicks = ((window as Window & { __variantReviewClicks?: number }).__variantReviewClicks ?? 0) + 1; }} />
       <aside className="inspector-host post-merge-inspector-fixture" style={{ width: 380, height: 420, marginTop: 20, marginLeft: "auto" }}>
         <FreeReviewPane task={postMergeTask} onOpenReview={() => undefined} onOpenTask={() => undefined} notify={() => undefined} />
       </aside>

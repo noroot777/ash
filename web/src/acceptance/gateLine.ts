@@ -58,12 +58,16 @@ export function gateLine(input: GateLineInput): GateLine | null {
   }
   if (settled) return receipt(state, latest, error);
   // 只是放行那一站：前置命令在最终验收时才跑。
-  if (!atFinalGate || !state.command) return null;
+  if (!atFinalGate) return null;
+  // 上次读到「没设」、这次读不出来：主按钮照样锁着，这一行得说出原因、给出重试。
+  if (!state.command) return error ? { ...base, tone: "block", command: null, word: "状态读不出来", retry: true } : null;
   const line = (tone: CheckTone, word: string, more: Partial<GateLine> = {}): GateLine =>
     ({ ...base, tone: error ? "idle" : tone, command: state.command, word: `${word}${unconfirmed}`, editable: true, retry: !!error, ...more });
   if (state.unavailable) return line("block", "本机能力不可用");
   if (state.sourceError) return line("block", "源码输入不可用");
   if (!latest) return line("idle", "验收时运行");
+  // 最近一次跑的是另一条命令：它的红说的不是现在这条（绿的那种由下面「命令变了」说）。日志还留着可看。
+  if (latest.status !== "passed" && latest.command !== state.command) return line("idle", "验收时运行", { run: latest });
   if (latest.status === "passed") {
     if (!latest.stale) return line("passed", `通过 · ${ago(latest.finishedAt ?? latest.startedAt, input.now)}`, { run: latest });
     return line("idle", `通过，但${staleReason(state, latest)}`, { run: latest });

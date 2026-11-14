@@ -47,6 +47,8 @@
 
 .acc-spin { display: inline-block; flex: none; width: 12px; height: 12px; border: 1.5px solid color-mix(in oklab, var(--on-action) 30%, transparent); border-top-color: var(--on-action); border-radius: 50%; animation: acc-spin .8s linear infinite; }
 .acc-btn:not(.is-primary) .acc-spin, .acc-spin.is-ink { border-color: var(--line2); border-top-color: var(--ink); }
+/* 主按钮转圈时跟对勾一样宽（13px），读取前后宽度不跳。 */
+.acc-btn.is-primary > .acc-spin { width: 13px; height: 13px; }
 
 /* 指上去才出（键盘聚焦、触屏同样看得见）。 */
 .acc-reveal { opacity: 0; }
@@ -167,6 +169,7 @@ p.acc-detail-text { white-space: pre-line; }
 .acc-close { flex: none; }
 .acc-record .acc-bar { align-items: flex-start; padding: 8px 10px 8px 12px; }
 .team-review-record-title { display: flex; min-width: 0; flex: 1; flex-wrap: wrap; align-items: center; gap: 4px 8px; border: 0; background: none; padding: 2px 0; color: inherit; text-align: left; }
+.team-review-record-title > span { min-width: 0; flex: 1 1 0; }
 .team-review-record-title > p { flex-basis: 100%; }
 .team-review-record-caret { flex: none; color: var(--faint); transition: transform var(--dur-2) var(--ease-out); }
 .team-review-record-title[aria-expanded="false"] > .team-review-record-caret { transform: rotate(-90deg); }
@@ -179,7 +182,7 @@ p.acc-detail-text { white-space: pre-line; }
 .duet-terminal-acceptance .acc-bar { min-height: 38px; padding: 4px 6px 4px 10px; }
 
 @media (max-width: 760px) {
-  .acc-bar { padding-left: 12px; }
+  .acc-bar { row-gap: 2px; padding: 6px 8px 6px 12px; }
   .acc-lead { flex-basis: 100%; }
   .acc-route { overflow-x: auto; }
   .acc-route > * { flex: none; }

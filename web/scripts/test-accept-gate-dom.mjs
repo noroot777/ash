@@ -1,453 +1,219 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { assertTone, basis, confirmLayer, deskSettled, gateRow, gateStage, mainButton, openConfirm, run, stateOf } from "./accept-gate-stage.mjs";
 import { testAcceptGateRecovery } from "./test-accept-gate-recovery.mjs";
 import { testAcceptGateActions } from "./test-accept-gate-actions.mjs";
 import { testAcceptGateWaitBar } from "./test-accept-gate-wait-bar.mjs";
+import { testAcceptGateReceipts } from "./test-accept-gate-receipt.mjs";
+import { testAcceptGateConfirm } from "./test-accept-gate-confirm.mjs";
 import { CATCH_UP_RETRY_MS } from "../src/lib/catchUp.ts";
-import { fetchesSettled, trackFetches, waitUntil } from "./wait-until.mjs";
+import { fetchesSettled, waitUntil } from "./wait-until.mjs";
 
-/** 页面上要记结算的读取：门禁状态（不含 /log、/cancel 这些子路径）、任务列表、项目（角色）。 */
-const TRACKED_READS = "/api/(tasks(/[^/]+/accept-gate)?|projects)$";
-
-// 验收台上那张「验收前置命令」卡。钉住的是四件在真实页面上才看得出来的事：
+// 验收台前提列里「验收前置命令」那一行（acceptance/GateCheck.tsx）。钉住的是在真实页面上才看得出来的事：
 //
 // ① **在这儿就能把命令设上**（用户 2026-10-23 要求）：想起这件事的时刻就是站在验收台
-//    前那一刻，为了设它跳去项目设置再找回来中间隔着三次跳转。所以没设命令时这张卡是
-//    一个入口，保存发的是**项目级** PATCH，提示要说破这一点。
-// ② 没有管理权限的人看不到这个入口：摆一颗必然 403 的按钮，点的人只会以为是自己点坏了。
-// ③ 正在跑的时候不给改：这一次用的是开跑时那条命令原文，改了也不作数。
-// ④ 红了之后那两条出路（重跑一次 / 这次跳过）走的是 onIntent，由验收控件接到同一道
-//    验收确认框上 —— 卡自己不许偷偷发起验收。
-// ⑤ 「交给智能体去修」这件事 ash 红了就**自动**做过一次，所以卡上要先说清它做没做成：
-//    做成了按钮改口「再交给智能体一次」，没做成就得直说「那条红现在没人在管」。
-// ⑥ 「上次那个绿灯还作不作数」有两种不作数（树变了 / 命令换了一条），出路一样但原因
+//    前那一刻。没设命令时前提列里不摆这一行（没东西可拦），入口在确认层的「设一条前置命令」，
+//    保存发的是**项目级** PATCH，设置层要说破这一点。
+// ② 没有管理权限的人看不到这个入口（确认层的链接、行尾的齿轮都没有）：摆一颗必然 403 的
+//    按钮，点的人只会以为是自己点坏了。
+// ③ 正在跑的时候不给改（没有齿轮）、只给「停止」，主按钮也锁着：这一次用的是开跑时那条命令原文。
+// ④ 红了之后不另摆「重跑 / 跳过」两颗键：它们都是确认层里「运行」那一勾（失败从不被沿用，
+//    所以默认勾着 = 重跑，取消 = 这次跳过，层里标出「上次未通过」）。日志默认展开。
+// ⑤ 「交给任务」这件事 ash 红了就**自动**做过一次，所以这一行先说清它做没做成：做成了
+//    就不再摆这颗键，没做成就得直说「没叫醒任务」。
+// ⑥ 「上次那个绿灯还作不作数」有几种不作数（代码变了 / 命令换了 / 准备命令换了），出路一样但原因
 //    完全不同，说错一种用户会去查错的地方。
-// ⑦ 取消和被打断**不是红**：没有结论，所以不套失败色、也没有「交给智能体去修」。
-// ⑧ **验收做完之后这张卡留着**（用户 2026-10-23）：它换成一张只读回执。原先在盖章那一
-//    刻整个消失，于是「门禁通过了」和「我明确跳过了那条红」在界面上长得一模一样 ——
-//    而两者的区别恰恰是这次合并到底有没有凭据。
-// ⑨ 回执**只认这一按自己的凭据**（`basis`），绝不拿「最近一次门禁」反推（第 1 轮审查
-//    F1 实测出一份假回执：命令在 A 上跑绿、代码改成 B、项目再撤掉命令，那时「最近一次」
-//    仍是那条绿的，而真正放行的理由是「现在没有门禁」）。
-// ⑩ 并发读取只有**最后发出**的那一次能落地（第 1 轮审查 F3）：迟到的旧响应会把已经结束
-//    的那次又写回「正在跑」，而此后没有任何事件会来纠正它。
-// ⑪ **权限读不到 ≠ 没有权限**（C3）：②那条「没权限就不摆入口」的前提是「已经读到了
-//    角色」。读取本身失败时上一版落的是 `false`，于是一次 503 被当成「已确认你不是管理员」
-//    —— 而「还没读到」和「确认没权限」在界面上长得一模一样，所以这个错判看都看不出来，
-//    服务端恢复了那颗按钮也不会自己回来。这一条钉的是：失败只是还没读到，它自己会重试到读到。
+// ⑦ 取消和被打断**不是红**：没有结论，所以不套失败色、也没有「交给任务」。
+// ⑧ 归档或任务在跑时「交给任务」跟着禁用 —— 它同样会真的去起一轮。
+// ⑨ 命令被撤掉了：这一按就是直接合并，这一行不出，确认层里也没有「运行」那一步。
+// ⑩ **权限读不到 ≠ 没有权限**（C3）：②那条「没权限就不摆入口」的前提是「已经读到了角色」。
+//    读取失败只是还没读到，它自己会重试到读到，入口随后自己回来。
 //
-// 姊妹文件装的是**另外几个表面**（这份贴着 700 行上限，按表面拆）：主会话页那条「正在跑」
-// 的折叠条在 test-accept-gate-wait-bar.mjs（⑩ 那条并发读取就在那边），断线重连与任务投影
-// 对账在 test-accept-gate-recovery.mjs，真人动作那一道闸在 test-accept-gate-actions.mjs。
+// 姊妹文件装的是**另外几个表面**（这份贴着 700 行上限，按表面拆）：已验收的回执在
+// test-accept-gate-receipt.mjs，确认层那几勾 ↔ 发给后端的参数、红行 ↔ 主按钮、基线冲突在
+// test-accept-gate-confirm.mjs，主会话页那条「正在跑」的折叠条在 test-accept-gate-wait-bar.mjs，
+// 断线重连与任务投影对账在 test-accept-gate-recovery.mjs，真人动作那一道闸在
+// test-accept-gate-actions.mjs（读取的并发在它调的 test-accept-gate-reads.mjs）。假服务端在
+// accept-gate-stage.mjs。
 const web = await startWebServer();
 
-const json = (route, body, status = 200) =>
-  route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
-
-const run = (over = {}) => ({
-  id: "run-1",
-  taskId: "gate-task",
-  command: "./kb.sh test full",
-  cwd: "/repo/.worktrees/gate-task",
-  status: "passed",
-  exitCode: 0,
-  failure: null,
-  startedAt: new Date(Date.now() - 90_000).toISOString(),
-  finishedAt: new Date().toISOString(),
-  sourceCommit: "abc12345",
-  targetBranch: "main",
-  targetCommit: "def67890",
-  fastForward: true,
-  stale: false,
-  logPath: "/runs/gate-task/accept-gate-run-1.log",
-  logTail: "640 passed\n",
-  handoff: null,
-  ...over,
-});
-
-/** 已验收那张回执的凭据。`passed` 要指着真的跑绿的那一次，不是「最近一次」。 */
-const basis = (mode, runRow = null) => ({ mode, run: runRow });
+const notice = (page) => page.getByRole("status", { name: "操作结果" });
 
 let browser;
 try {
   const base = `${web.origin}/scripts/fixtures/accept-gate.html`;
-
   browser = await launchChrome();
+  const open = gateStage({ browser, base });
 
-  // `states` 给的是**按请求次序**排好的几份响应（用来排并发/乱序那一类场面）：每份可以
-  // 带 status（直接给个 500）、after（扣住这一份，等第 after 次读取的响应**送出去**之后
-  // 才回 —— 乱序靠这个排，不靠「迟到多少毫秒」：满载时后一发可能比任何固定延迟都晚才到）
-  // 或 hold（扣到测试放行这个 promise 才回）。
-  // 不给就一直回 store.gate。`store.served(i)` 在第 i 次读取的响应送出（或因页面已 abort
-  // 而送不出）之后兑现；页面那一侧有没有消费完看 fetchesSettled（只记 TRACKED_READS）。
-  const open = async ({ gate, role = "admin", query = "", command, states, tasks = [], events = false, cancelOutcome = "canceled", projectDown = false } = {}) => {
-    const page = await browser.newPage({ viewport: { width: 980, height: 820 } });
-    if (events) await page.addInitScript(() => {
-      const streams = new Set();
-      window.EventSource = class {
-        constructor() { streams.add(this); queueMicrotask(() => this.onopen?.()); }
-        close() { streams.delete(this); }
-      };
-      window.emitGateEvent = event => {
-        for (const stream of streams) stream.onmessage?.({ data: JSON.stringify(event) });
-      };
-      // 断线与重连分两步给：连在一起发，React 会把 false→true 批成一次渲染，「断线作废」就不发生。
-      window.dropGateStream = () => { for (const stream of streams) stream.onerror?.(); };
-      window.reopenGateStream = () => { for (const stream of streams) stream.onopen?.(); };
-    });
-    await trackFetches(page, TRACKED_READS);
-    const served = [];
-    const servedAt = (index) => (served[index] ??= Promise.withResolvers());
-    const store = { patches: [], canceled: 0, handoffs: 0, reads: 0, tasks, taskReads: 0, taskPlan: null,
-      served: (index) => servedAt(index).promise,
-      requestIds: [], status: 0, logText: "checking 42 / 640", command: command === undefined ? gate?.command ?? null : command, gate,
-      projectReads: 0, projectDown };
-    await page.route("**/api/tasks", async route => {
-      const snapshot = store.tasks;
-      const plan = store.taskPlan;
-      store.taskPlan = null;
-      store.taskReads += 1;
-      // hold：这一发的快照在发出那一刻就定了，扣到测试放行才回 —— 用来造「旧快照迟到」。
-      if (plan?.hold) await plan.hold;
-      return json(route, snapshot);
-    });
-    await page.route("**/api/tasks/gate-task/accept-gate/log?*", route => route.fulfill({
-      status: 200, contentType: "text/plain", body: store.logText,
-    }));
-    // SSE 在这一屏里只负责「有变化就重读」，测试里不发事件，挂一条空流免得它反复重连。
-    await page.route("**/api/events", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }));
-    await page.route("**/api/projects", (route) => {
-      store.projectReads += 1;
-      if (store.projectDown) return json(route, { error: "数据库忙" }, 503);
-      return json(route, [{ id: "proj-1", name: "kb", repoPath: "/repo", myRole: role, acceptGateCommand: store.command }]);
-    });
-    await page.route("**/api/projects/proj-1", async (route) => {
-      store.patches.push(JSON.parse(route.request().postData() ?? "{}"));
-      store.command = store.patches.at(-1).acceptGateCommand;
-      store.gate = { ...store.gate, command: store.command };
-      return json(route, { id: "proj-1", name: "kb", repoPath: "/repo", myRole: role, acceptGateCommand: store.command });
-    });
-    await page.route("**/api/tasks/gate-task/accept-gate/cancel", (route) => {
-      store.canceled += 1;
-      assert.equal(JSON.parse(route.request().postData()).runId, store.gate.running.id);
-      if (cancelOutcome === "settlement_failed") return json(route, {
-        outcome: cancelOutcome, runId: store.gate.running.id, gate: store.gate.running,
-      });
-      if (cancelOutcome !== "canceled") {
-        const latest = run({ ...store.gate.running, status: "passed", exitCode: 0 });
-        store.gate = { ...store.gate, running: null, latest, basis: basis("passed", latest) };
-        return json(route, { outcome: cancelOutcome, runId: latest.id, gate: latest });
-      }
-      store.gate = { ...store.gate, running: null, latest: { ...store.gate.running, status: "canceled", failure: "canceled" } };
-      return json(route, { outcome: "canceled", runId: store.gate.latest.id, gate: store.gate.latest });
-    });
-    await page.route("**/api/tasks/gate-task/accept-gate/handoff", (route) => {
-      store.handoffs += 1;
-      store.gate = { ...store.gate, latest: { ...store.gate.latest, handoff: { at: new Date().toISOString(), error: null } } };
-      return json(route, { handedOff: true, gate: store.gate.latest });
-    });
-    await page.route("**/api/tasks/gate-task/accept-gate/force-release", route => {
-      const body = JSON.parse(route.request().postData());
-      assert.equal(body.runId, store.gate.running.id);
-      assert.equal(body.confirmation, "release-without-exit-proof");
-      store.released = (store.released ?? 0) + 1;
-      store.gate = { ...store.gate, running: null, latest: { ...store.gate.running,
-        status: "interrupted", failure: "ownership_waived", processPending: false } };
-      return json(route, { ok: true, gate: store.gate.latest });
-    });
-    await page.route("**/api/tasks/*/accept-gate", async (route) => {
-      const index = store.reads;
-      const plan = states?.[index] ?? null;
-      store.reads += 1;
-      store.requestIds.push(route.request().url().split("/").at(-2));
-      if (plan?.after !== undefined) await servedAt(plan.after).promise;
-      if (plan?.hold) await plan.hold;
-      const status = plan?.status || store.status;
-      // 被扣住的那一份送出去时，页面可能早已把这一发 abort 了（这正是被验的行为之一）。
-      await (status ? json(route, { error: "数据库忙" }, status) : json(route, plan?.body ?? store.gate)).catch(() => {});
-      servedAt(index).resolve();
-    });
-    await page.goto(`${base}${query}`);
-    if (!query.includes("wait=1") && !query.includes("dots=1")) {
-      await page.locator('.accept-gate-card:not([aria-busy="true"])').waitFor();
-    }
-    return { page, store };
-  };
-
-  // ① 没设命令：卡是一个入口，设完发的是项目级 PATCH，提示说破「对这个项目之后每一次验收生效」。
+  // ① 没设命令：入口在确认层，设完发的是项目级 PATCH，设置层说破「这是项目设置」。
   {
-    const { page, store } = await open({ gate: { command: null, running: null, latest: null } });
-    const card = page.locator(".accept-gate-card");
-    await card.waitFor();
-    assert.match(await card.textContent(), /没设验收前置命令/, "没设时要给一句说明");
-    assert.equal(await card.locator(".accept-gate-edit input").count(), 0, "没点之前不该直接摆输入框");
-
-    await card.getByRole("button", { name: "设一条" }).click();
+    const { page, store } = await open({ gate: { command: null, running: null, latest: null, basis: null } });
+    assert.equal(await gateRow(page).count(), 0, "没设命令时前提列里不摆这一行");
+    const layer = await openConfirm(page);
+    assert.equal(await layer.getByRole("checkbox", { name: "运行前置命令" }).count(), 0, "没设命令，这一按不会跑它");
+    await layer.getByRole("button", { name: "设一条前置命令", exact: true }).click();
+    const settings = page.getByRole("dialog", { name: "前置命令设置", exact: true });
+    await settings.waitFor();
+    assert.equal(await confirmLayer(page).count(), 0, "去设命令时确认层收起");
+    assert.match(await settings.innerText(), /项目设置/, "在任务页上改一个项目设置，必须说破它不只影响这一个任务");
     // 前置命令与准备命令一套改：两格同一颗「保存」，只发改了的那几项。
-    const input = card.locator(".accept-gate-edit input[aria-label='验收前置命令']");
-    await input.waitFor();
-    assert.match(await card.locator(".accept-gate-edit small").textContent(), /项目设置/,
-      "在任务页上改一个项目设置，必须说破它不只影响这一个任务");
-    await input.fill("  ./kb.sh test full  ");
-    await card.locator(".accept-gate-edit input[aria-label='准备命令']").fill("  npm ci --offline  ");
-    await card.getByRole("button", { name: "保存" }).click();
-
-    await page.locator("[aria-label='操作结果']", { hasText: "验收前置命令" }).waitFor();
+    await settings.getByLabel("验收前置命令", { exact: true }).fill("  ./kb.sh test full  ");
+    await settings.getByLabel("准备命令", { exact: true }).fill("  npm ci --offline  ");
+    await settings.getByRole("button", { name: "保存", exact: true }).click();
+    await notice(page).filter({ hasText: "验收前置命令" }).waitFor();
     assert.deepEqual(store.patches, [{ acceptGateCommand: "./kb.sh test full", acceptGatePrepare: "npm ci --offline" }],
       "两头空白要掐掉再发");
-    assert.equal(await card.locator(".accept-gate-edit input").count(), 0, "保存完要收起输入框");
+    await settings.waitFor({ state: "detached" });
+    await gateRow(page).filter({ hasText: "./kb.sh test full" }).waitFor();
+    assert.equal(await stateOf(gateRow(page)), "验收时运行");
     await page.close();
   }
 
-  // ② 成员能看见未设置的状态，但没有修改项目配置的入口。
-  {
-    const { page } = await open({ gate: { command: null, running: null, latest: null }, role: "member" });
-    // 「没有入口」只在**读到了** member 之后才有意义：等门禁和项目两发都落完再看。
-    await fetchesSettled(page, 2, "门禁状态与项目角色都已读到");
-    assert.match(await page.locator(".accept-gate-command").innerText(), /未设置/);
-    assert.equal(await page.getByRole("button", { name: "设一条" }).count(), 0);
+  // ② 成员：确认层里没有「设一条前置命令」，有命令时行尾也没有齿轮。
+  for (const command of [null, "./kb.sh test full"]) {
+    const { page } = await open({ gate: { command, running: null, latest: null, basis: null }, role: "member" });
+    // 「没有入口」只在**读到了** member 之后才有意义：open 已等门禁和项目两发都落完。
+    if (command) {
+      await gateRow(page).filter({ hasText: command }).waitFor();
+      assert.equal(await page.getByRole("button", { name: "前置命令设置", exact: true }).count(), 0);
+    }
+    const layer = await openConfirm(page);
+    assert.equal(await layer.getByRole("button", { name: "设一条前置命令", exact: true }).count(), 0);
     await page.close();
   }
 
-  // ⑪ 角色读失败只是「还没读到」：卡不许就此当成「你不是管理员」，它自己要重试到读到。
-  //    反过来说这一条也钉住了 ②：②那颗按钮之所以可以不摆，靠的是**读到了** member。
+  // ⑩ 角色读失败只是「还没读到」：不许就此当成「你不是管理员」，它自己要重试到读到。
   {
     const { page, store } = await open({ gate: { command: null, running: null, latest: null }, projectDown: true });
-    const card = page.locator(".accept-gate-card");
-    await card.waitFor();
-    assert.match(await card.textContent(), /没设验收前置命令/, "角色没读到不该连卡一起不显示");
     // 先证「它真的在自己重试」：不碰页面，等到读取次数自己涨过首发那一拨。
     const baseline = store.projectReads;
     await waitUntil(() => store.projectReads > baseline, { timeout: CATCH_UP_RETRY_MS + 10_000,
       message: `读失败要自己重试(间隔 ${CATCH_UP_RETRY_MS}ms)，不是等下一次交互` });
-    assert.equal(await card.getByRole("button", { name: "设一条" }).count(), 0, "还没读到角色时不摆必然 403 的按钮");
-    // 服务端恢复之后那颗按钮要自己回来 —— 旧实现把 503 记成 `false`，它永远不再出现。
+    const layer = await openConfirm(page);
+    assert.equal(await layer.getByRole("button", { name: "设一条前置命令", exact: true }).count(), 0, "还没读到角色时不摆必然 403 的入口");
+    // 服务端恢复之后入口要自己回来 —— 旧实现把 503 记成 `false`，它永远不再出现。
     store.projectDown = false;
-    await card.getByRole("button", { name: "设一条" }).waitFor({ timeout: CATCH_UP_RETRY_MS + 10_000 });
+    await layer.getByRole("button", { name: "设一条前置命令", exact: true }).waitFor({ timeout: CATCH_UP_RETRY_MS + 10_000 });
     await page.close();
   }
 
-  // ③ 正在跑：给的是「收掉它」，不给「改这条命令」。
+  // ③ 正在跑：给的是「停止」，不给改命令；主按钮锁着。
   {
     const running = run({ status: "running", exitCode: null, finishedAt: null, logTail: "正在跑 42/640\n" });
     const { page, store } = await open({ gate: { command: running.command, running, latest: running } });
-    const card = page.locator(".accept-gate-card");
-    await card.waitFor();
-    assert.match(await card.textContent(), /正在跑/);
-    assert.equal(await card.getByRole("button", { name: "改这条命令" }).count(), 0,
+    const row = gateRow(page);
+    await assertTone(row, "running");
+    assert.match(await stateOf(row), /^运行中 · \d+/);
+    assert.equal(await mainButton(page).isDisabled(), true, "命令占着工作区，这一按不许发");
+    assert.equal(await row.getByRole("button", { name: "前置命令设置", exact: true }).count(), 0,
       "跑着的那一次用的是开跑时那条命令，这时摆「改」只会让人以为能中途换一条");
-    await card.getByRole("button", { name: "不等了，收掉它" }).click();
-    await page.locator("[aria-label='操作结果']", { hasText: "已取消" }).waitFor();
+    await row.getByRole("button", { name: "停止", exact: true }).click();
+    await notice(page).filter({ hasText: "已取消" }).waitFor();
     assert.equal(store.canceled, 1);
+    await gateRow(page).filter({ hasText: "已取消" }).waitFor();
+    await deskSettled(page);
+    assert.equal(await mainButton(page).isEnabled(), true, "收掉之后这一按就放开了");
     await page.close();
   }
 
-  // ④ 红了：两条出路都只是上报意图，卡自己不发起验收。
+  // ④ 红了：日志就地展开；重跑 / 跳过都在确认层「运行」那一勾上，这一行自己不发起验收。
   {
     const failed = run({ status: "failed", exitCode: 3, failure: "exit_code", logTail: "2 failed\n" });
-    const { page } = await open({ gate: { command: failed.command, running: null, latest: failed } });
-    const card = page.locator(".accept-gate-card");
-    await card.waitFor();
-    assert.match(await card.textContent(), /未通过/);
-    assert.match(await card.textContent(), /即使代码没有变化，也不会直接复用这次失败/);
-    assert.match(await card.locator('[aria-label="验收命令运行记录"]').textContent(), /run-1.*开始于.*结束于/);
-    await card.getByRole("button", { name: "重跑一次" }).click();
-    assert.equal(await page.locator("[aria-label='验收意图']").textContent(), "rerun");
-    await card.getByRole("button", { name: "这次跳过它，直接合并" }).click();
-    assert.equal(await page.locator("[aria-label='验收意图']").textContent(), "skip");
-    // 红着也得能就地改命令（最常见的修法就是把命令本身改对）。
-    assert.equal(await card.getByRole("button", { name: "改这条命令" }).count(), 1);
-    await page.close();
-  }
-
-  // ⑤ 交给智能体去修：ash 已经自动交过一次要说出来，按钮跟着改口；那一次没叫醒它的话
-  //    这颗按钮是主操作 —— 那条红此刻没人在管，再不点就真的没人管了。
-  {
-    const failed = run({ status: "failed", exitCode: 3, failure: "exit_code" });
     const { page, store } = await open({ gate: { command: failed.command, running: null, latest: failed } });
-    const card = page.locator(".accept-gate-card");
-    await card.waitFor();
-    assert.match(await card.textContent(), /日志还没交给智能体/);
-    await card.getByRole("button", { name: "交给智能体去修" }).click();
-    await page.locator("[aria-label='操作结果']", { hasText: "交回给智能体" }).waitFor();
+    const row = gateRow(page);
+    await assertTone(row, "failed");
+    assert.equal(await stateOf(row), "未通过，还没交给任务");
+    assert.equal(await row.locator(".acc-check-main").getAttribute("aria-expanded"), "true", "红在哪一条就在最后几行：默认展开");
+    assert.match(await row.locator(".acc-log pre").innerText(), /2 failed/);
+    assert.match(await row.locator(".acc-log-head").innerText(), /run-1 · .+ 起 · .+ 止/);
+    // 红着也得能就地改命令（最常见的修法就是把命令本身改对）。
+    assert.equal(await row.getByRole("button", { name: "前置命令设置", exact: true }).count(), 1);
+    for (const name of ["重跑一次", "这次跳过它，直接合并"]) assert.equal(await page.getByRole("button", { name, exact: true }).count(), 0);
+    const layer = await openConfirm(page);
+    const runBox = layer.getByRole("checkbox", { name: "运行前置命令" });
+    assert.equal(await runBox.isChecked(), true, "失败从不被沿用：默认就是重跑");
+    await runBox.uncheck();
+    assert.match(await layer.innerText(), /上次未通过/);
+    await layer.getByRole("button", { name: "跳过并验收", exact: true }).waitFor();
+    await layer.getByRole("button", { name: "取消", exact: true }).click();
+    assert.equal(store.accepts.length, 0, "开确认层、动那一勾都不发验收");
+    await page.close();
+  }
+
+  // ⑤ 交给任务：交过之后这一行说「已交给任务修复」，那颗键收起。
+  for (const failure of ["exit_code", "entry_missing", "prepare_failed"]) {
+    const failed = run({ status: "failed", exitCode: 3, failure });
+    const { page, store } = await open({ gate: { command: failed.command, running: null, latest: failed } });
+    const row = gateRow(page);
+    const what = { exit_code: "未通过", entry_missing: "入口不在被测的树里", prepare_failed: "准备命令没过" }[failure];
+    assert.equal(await stateOf(row), `${what}，还没交给任务`);
+    await row.getByRole("button", { name: "交给任务", exact: true }).click();
+    await notice(page).filter({ hasText: failure === "entry_missing" ? "它会先看入口为什么不在被测的树里" : "已把这条红交给任务去修" }).waitFor();
     assert.equal(store.handoffs, 1);
-    // 交过之后卡上要说清「它已经在修了」，按钮改口成「再交给智能体一次」。
-    await card.getByRole("button", { name: "再交给智能体一次" }).waitFor();
-    assert.match(await card.textContent(), /已经交回这个任务的智能体去修/);
+    await gateRow(page).filter({ hasText: `${what}，已交给任务修复` }).waitFor();
+    assert.equal(await row.getByRole("button", { name: "交给任务", exact: true }).count(), 0, "已经在修了，不再摆这颗键");
     await page.close();
   }
 
-  // ⑥ 那次自动交接没叫醒它：卡上必须说破「这条红现在没人在管」。
+  // ⑤ 那次自动交接没叫醒它：这一行必须说破，「交给任务」照常摆着。
   {
-    const failed = run({
-      status: "failed", exitCode: 3, failure: "exit_code",
-      handoff: { at: "2026-10-23T02:00:00.000Z", error: "回合被其它执行抢占，消息未能投递" },
-    });
+    const failed = run({ status: "failed", exitCode: 3, failure: "exit_code",
+      handoff: { at: "2026-10-23T02:00:00.000Z", error: "回合被其它执行抢占，消息未能投递" } });
     const { page } = await open({ gate: { command: failed.command, running: null, latest: failed } });
-    const card = page.locator(".accept-gate-card");
-    await card.waitFor();
-    assert.match(await card.textContent(), /没叫醒它/);
-    assert.match(await card.textContent(), /没人在管/);
-    assert.equal(await card.getByRole("button", { name: "交给智能体去修" }).count(), 1, "没叫醒就还是「交给智能体去修」");
+    assert.equal(await stateOf(gateRow(page)), "未通过，没叫醒任务");
+    assert.equal(await gateRow(page).getByRole("button", { name: "交给任务", exact: true }).count(), 1);
     await page.close();
   }
 
-  // ⑥ 上一次的绿灯为什么不作数：树变了说树，命令换了说命令。
-  {
-    const passed = run({ stale: true, command: "./kb.sh test quick" });
-    const { page } = await open({
-      gate: { command: "./kb.sh test full", running: null, latest: passed },
-      command: "./kb.sh test full",
-    });
-    const card = page.locator(".accept-gate-card");
-    await card.waitFor();
-    const text = await card.textContent();
-    assert.match(text, /上次通过的不是现在这条命令/, "命令换了一条，就别说成「代码改过了」");
-    assert.match(text, /一次都没跑过/);
+  // ⑥ 上一次的绿灯为什么不作数：代码变了说代码，命令换了说命令，准备命令换了说准备命令。
+  for (const [latest, word] of [
+    [run({ stale: true, command: "./kb.sh test quick" }), "通过，但命令变了"],
+    [run({ stale: true }), "通过，但代码变了"],
+    [run({ stale: true, prepareCommand: "npm ci" }), "通过，但准备命令变了"],
+  ]) {
+    const { page } = await open({ gate: { command: "./kb.sh test full", running: null, latest } });
+    const row = gateRow(page);
+    assert.equal(await stateOf(row), word);
+    await assertTone(row, "idle", "不作数的绿既不是红也不是绿");
+    assert.match(await row.locator(".acc-check-text").innerText(), /\.\/kb\.sh test full/, "摆的是现在这条命令");
+    const layer = await openConfirm(page);
+    assert.equal(await layer.getByRole("checkbox", { name: "运行前置命令" }).isChecked(), true, "不作数就得重跑");
     await page.close();
   }
 
-  // ⑦ 被取消的那一次：没有结论 —— 不套失败色，也没有红可以交给智能体。
-  {
-    const canceled = run({ status: "canceled", exitCode: null, failure: "canceled" });
-    const { page } = await open({ gate: { command: canceled.command, running: null, latest: canceled } });
-    const card = page.locator(".accept-gate-card");
-    await card.waitFor();
-    assert.equal((await card.getAttribute("class")).includes("is-failed"), false, "取消不是红");
-    assert.equal(await card.getByRole("button", { name: "交给智能体去修" }).count(), 0,
-      "没有结论的那一次，没有「红」可以交给它修");
+  // ⑦ 被取消、被打断的那一次：没有结论 —— 不套失败色，也没有红可以交给任务。
+  for (const [status, word] of [["canceled", "已取消"], ["interrupted", "被打断"]]) {
+    const stopped = run({ status, exitCode: null, failure: status });
+    const { page } = await open({ gate: { command: stopped.command, running: null, latest: stopped } });
+    const row = gateRow(page);
+    assert.equal(await stateOf(row), word);
+    await assertTone(row, "stopped", "取消不是红");
+    assert.equal(await row.getByRole("button", { name: "交给任务", exact: true }).count(), 0, "没有结论的那一次，没有「红」可以交给它修");
     await page.close();
   }
 
-  // ⑧ 验收动作被禁用时（任务在跑/归档），「交给智能体去修」也得跟着禁用 —— 它同样会
-  //    真的去起一轮。
-  {
+  // ⑧ 归档、任务在跑：「交给任务」跟着禁用（它同样会真的去起一轮）。
+  for (const guard of ["archived", "running"]) {
     const failed = run({ status: "failed", exitCode: 3, failure: "exit_code" });
-    const { page, store } = await open({
-      gate: { command: failed.command, running: null, latest: failed }, query: "?disabled=1",
-    });
-    const card = page.locator(".accept-gate-card");
-    await card.waitFor();
-    assert.equal(await card.getByRole("button", { name: "交给智能体去修" }).isDisabled(), true);
+    const { page, store } = await open({ gate: { command: failed.command, running: null, latest: failed }, query: `?guard=${guard}` });
+    assert.equal(await gateRow(page).getByRole("button", { name: "交给任务", exact: true }).isDisabled(), true);
+    assert.equal(await mainButton(page).isDisabled(), true);
     assert.equal(store.handoffs, 0);
     await page.close();
   }
 
-  // ⑨ 命令被撤掉了：这一按就是直接合并，这张卡不该再摆「重跑 / 这次跳过」。
+  // ⑨ 命令被撤掉了：这一按就是直接合并，不摆这一行，确认层里也没有「运行」。
   {
     const { page } = await open({ gate: { command: null, running: null, latest: run() } });
-    await fetchesSettled(page, 2, "门禁状态与项目角色都已读到");
-    const card = page.locator(".accept-gate-card");
-    assert.match(await card.innerText(), /历史记录/);
-    assert.equal(await card.getByRole("button", { name: "设一条" }).count(), 1);
-    assert.equal(await card.getByRole("button", { name: "重跑一次" }).count(), 0);
-    await page.close();
-  }
-
-  // ⑩ 已经验收完、而且这一按**真的是拿一次跑绿放的行**：卡留着当回执（用户 2026-10-23），
-  //    但只读 —— 不再摆任何会改变状态的按钮（重跑/跳过/交给智能体/改这条命令）。
-  {
-    const evidence = run();
-    const { page } = await open({
-      gate: { command: "./kb.sh test full", running: null, latest: evidence, basis: basis("passed", evidence) },
-      query: "?stage=accepted",
-    });
-    const card = page.locator(".accept-gate-card");
-    await card.waitFor();
-    assert.match(await card.innerText(), /验收前置命令通过了/, "盖完章也得留下「这次是拿什么放的行」");
-    assert.match(await card.innerText(), /abc12345/, "回执要说清验的是哪棵树");
-    for (const name of ["重跑一次", "这次跳过它，直接合并", "交给智能体去修", "改这条命令"]) {
-      assert.equal(await card.getByRole("button", { name }).count(), 0, `验收做完之后不该还摆「${name}」`);
-    }
-    assert.equal(await card.getByRole("button", { name: "看完整日志" }).count(), 1);
-    assert.equal(await card.getByRole("button", { name: "刷新", exact: true }).count(), 1);
-    await page.close();
-  }
-
-  // ⑪ 已经验收完、凭据是「你明确跳过了它」：这一态原先和「门禁通过后验收完成」在界面上
-  //    完全同形 —— 那正是要补的那一行。
-  {
-    const failed = run({ status: "failed", exitCode: 1, failure: "exit_code", logTail: "1 failed\n" });
-    const { page } = await open({
-      gate: { command: "./kb.sh test full", running: null, latest: failed, basis: basis("skipped") },
-      query: "?stage=accepted",
-    });
-    const card = page.locator(".accept-gate-card");
-    await card.waitFor();
-    assert.match(await card.innerText(), /这次跳过了验收前置命令/);
-    assert.match(await card.innerText(), /验收是你明确选的/, "得说破验收没有测试凭据、是谁决定的");
-    assert.match(await card.innerText(), /那条红没有人修过/);
-    assert.equal(await card.evaluate((el) => el.classList.contains("is-skipped")), true, "跳过是琥珀不是红：此刻什么都没拦着");
-    assert.equal(await card.getByRole("button", { name: "交给智能体去修" }).count(), 0, "都合完了，这条红的出路是新开一个任务");
-    await page.close();
-  }
-
-  // ⑫ 命令后来被撤掉了，但这一按的凭据确实是那次跑绿：验收做完之后仍要留痕（⑨ 那条
-  //    早退只管「还没盖章」的任务 —— 那时摆出路才会误导）。
-  {
-    const evidence = run();
-    const { page } = await open({
-      gate: { command: null, running: null, latest: evidence, basis: basis("passed", evidence) },
-      query: "?stage=accepted", command: null,
-    });
-    const card = page.locator(".accept-gate-card");
-    await card.waitFor();
-    assert.match(await card.innerText(), /验收前置命令通过了/);
-    await page.close();
-  }
-
-  // ⑬ **第 1 轮审查 F1 的那份假回执**：命令在 A 上跑绿（latest 还是那条绿的、只是 stale），
-  //    代码改成了 B、项目又把命令撤掉，于是真正放行的理由是「那一刻没有门禁」。回执必须
-  //    照凭据说话 —— 一个字都不许出现「通过了 / 拿它放的行」。
-  {
-    const greenOnA = run({ stale: true });
-    const { page } = await open({
-      gate: { command: null, running: null, latest: greenOnA, basis: basis("unset") },
-      query: "?stage=accepted", command: null,
-    });
-    const card = page.locator(".accept-gate-card");
-    await card.waitFor();
-    const text = await card.innerText();
-    assert.match(text, /没有经过验收前置命令/);
-    assert.match(text, /本次验收没有经过这道测试/);
-    assert.doesNotMatch(text, /通过了/, "那条绿不是这次合并的凭据，说「通过了」就是给没测过的代码背书");
-    assert.doesNotMatch(text, /拿它放的行/);
-    assert.match(text, /不是这次验收的凭据/, "历史记录照常摆出来，但要标清它不是凭据");
-    await page.close();
-  }
-
-  // ⑭ 凭据是后来才开始记的：老数据如实说「查不到凭据」，不拿最近一次替它背书。
-  {
-    const { page } = await open({
-      gate: { command: "./kb.sh test full", running: null, latest: run(), basis: null },
-      query: "?stage=accepted",
-    });
-    const card = page.locator(".accept-gate-card");
-    await card.waitFor();
-    const text = await card.innerText();
-    assert.match(text, /没有留下门禁凭据/);
-    assert.match(text, /并不能证明本次验收前跑过它/);
+    assert.equal(await gateRow(page).count(), 0);
+    const layer = await openConfirm(page);
+    assert.equal(await layer.getByRole("checkbox", { name: "运行前置命令" }).count(), 0);
+    assert.equal(await layer.getByRole("button", { name: "设一条前置命令", exact: true }).count(), 1);
     await page.close();
   }
 
   await testAcceptGateWaitBar({ open, run });
 
-  for (const event of [
-    { type: "task.acceptGate", taskId: "gate-task" },
-    { type: "task.stage", taskId: "gate-task", stage: "accepted", updatedAt: new Date().toISOString() },
-    { type: "task.updated", task: { id: "gate-task", stage: "accepted" } },
-  ]) {
-    const passed = run();
-    const { page, store } = await open({ gate: { command: passed.command, running: null, latest: passed, basis: null },
-      query: "?stage=accepted", events: true });
-    const card = page.locator(".accept-gate-card");
-    await card.getByText(/这次验收没有留下门禁凭据/).waitFor();
-    store.gate = { ...store.gate, basis: basis("passed", passed) };
-    await page.evaluate(event => window.emitGateEvent(event), event);
-    await card.getByText(/本次验收前，验收前置命令通过了/).waitFor();
-    assert.doesNotMatch(await card.innerText(), /没有留下门禁凭据/);
-    await page.close();
-  }
   {
     const running = run({ status: "running", exitCode: null, finishedAt: null });
     const { page, store } = await open({ gate: { command: running.command, running, latest: running }, query: "?wait=1" });
@@ -475,6 +241,7 @@ try {
     assert.deepEqual(animations, [true, true, true, true]);
     await page.close();
   }
+  // 日志行里的监督方式说的是**那一次**：下一次的范围不冒充成这一次的；命令撤掉了就整行不出。
   {
     const historical = "历史 macOS 兼容监督，未观察后代可能无法识别";
     const upcoming = "当前平台的下次监督范围";
@@ -482,10 +249,16 @@ try {
       for (const executionNotice of [null, upcoming]) {
         const { page } = await open({ gate: { command, running: null,
           latest: run({ status: "failed", executionNotice: historical }), executionNotice } });
-        const card = page.getByRole("region", { name: "验收前置命令", exact: true });
-        await card.getByRole("note").filter({ hasText: `历史运行：${historical}` }).waitFor();
-        assert.equal(await card.getByRole("note").filter({ hasText: `下次运行：${upcoming}` }).count(), command && executionNotice ? 1 : 0);
-        if (process.env.ASH_TEST_ARTIFACTS && !command && !executionNotice) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/macos-withdrawn-history.png`, fullPage: true });
+        if (!command) assert.equal(await gateRow(page).count(), 0);
+        else {
+          // 最近一次没过的是另一条命令：这一行只说「验收时运行」，那次的日志收在展开层里。
+          assert.equal(await stateOf(gateRow(page)), "验收时运行");
+          await gateRow(page).locator("button.acc-check-main").click();
+          const note = gateRow(page).locator(".acc-log-note");
+          assert.equal(await note.innerText(), historical);
+          assert.equal(await note.getAttribute("aria-label"), historical);
+        }
+        assert.equal(await page.getByText(upcoming).count(), 0, "下一次的监督范围不写到这一次的日志头上");
         await page.close();
       }
     }
@@ -495,64 +268,58 @@ try {
     const { page } = await open({ gate: { command: running.command, running, latest: running },
       cancelOutcome: "already_finished", query: wait ? "?wait=1" : "?stage=accepted" });
     if (wait) await page.locator(".wait-bar__bar").click();
-    await page.getByRole("button", { name: "不等了，收掉它" }).click();
-    const notice = page.getByRole("status", { name: "操作结果" });
-    await notice.filter({ hasText: "已经结束" }).waitFor();
-    assert.doesNotMatch(await notice.innerText(), /没有合并|已取消|已收掉/);
-    if (!wait) assert.match(await page.locator(".accept-gate-card").innerText(), /本次验收就是拿它放的行/);
-    await page.close();
-  }
-  {
-    const { page } = await open({ gate: { command: null, running: null, latest: null, basis: basis("unset") },
-      query: "?stage=accepted" });
-    const card = page.locator(".accept-gate-card");
-    await card.waitFor();
-    assert.match(await card.innerText(), /本次验收没有经过验收前置命令/);
-    assert.doesNotMatch(await card.innerText(), /设一条之后|直接合了/);
+    await page.getByRole("button", { name: wait ? "不等了，收掉它" : "停止", exact: true }).click();
+    await notice(page).filter({ hasText: "已经结束" }).waitFor();
+    assert.doesNotMatch(await notice(page).innerText(), /没有合并|已取消|已收掉/);
+    if (!wait) {
+      await page.locator('.acc-check[data-check="gate"].is-passed').waitFor();
+      assert.equal(await stateOf(gateRow(page)), "通过", "跑完的那次就是这一按的凭据");
+    }
     await page.close();
   }
   for (const wait of [false, true]) {
     const pending = run({ status: "interrupted", processPending: true });
     const { page } = await open({ gate: { command: null, running: pending, latest: pending }, query: wait ? "?wait=1" : "" });
-    const card = page.locator(wait ? ".accept-gate-wait" : ".accept-gate-card");
-    await card.waitFor();
-    assert.match(await card.innerText(), /尚待停止/);
+    if (wait) {
+      await page.locator(".accept-gate-wait").waitFor();
+      assert.match(await page.locator(".accept-gate-wait").innerText(), /尚待停止/);
+    } else {
+      assert.equal(await stateOf(gateRow(page)), "进程还没退干净");
+      await assertTone(gateRow(page), "warn");
+      assert.equal(await mainButton(page).isDisabled(), true, "进程没退干净，工作区仍被占着");
+    }
     await page.close();
   }
   for (const wait of [false, true]) {
     const active = run({ status: "running", exitCode: null });
     const { page } = await open({ gate: { command: active.command, running: active, latest: active },
       query: wait ? "?wait=1" : "", cancelOutcome: "settlement_failed" });
-    const card = page.locator(wait ? ".accept-gate-wait" : ".accept-gate-card");
+    const card = wait ? page.locator(".accept-gate-wait") : gateRow(page);
+    const stop = wait ? "不等了，收掉它" : "停止";
     await card.waitFor();
     if (wait) await page.locator(".wait-bar__bar").click();
-    await card.getByRole("button", { name: "不等了，收掉它" }).click();
-    const notice = page.getByRole("status", { name: "操作结果" });
-    await notice.filter({ hasText: "取消结果保存失败" }).waitFor();
-    assert.match(await notice.innerText(), /重试取消/);
-    assert.doesNotMatch(await notice.innerText(), /已经结束|已取消这一次/);
-    await card.getByRole("button", { name: "不等了，收掉它" }).waitFor();
+    await card.getByRole("button", { name: stop }).click();
+    await notice(page).filter({ hasText: "取消结果保存失败" }).waitFor();
+    assert.match(await notice(page).innerText(), /重试取消/);
+    assert.doesNotMatch(await notice(page).innerText(), /已经结束|已取消这一次/);
+    await card.getByRole("button", { name: stop }).waitFor();
     if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/cancel-settlement-failed-${wait ? "wait" : "card"}.png`, fullPage: true });
     await page.close();
   }
-  {
-    const moved = run({ logAvailable: false, logTail: "" });
-    const { page } = await open({ gate: { command: moved.command, running: null, latest: moved, basis: basis("passed", moved) }, query: "?stage=accepted" });
-    const missing = page.getByRole("button", { name: "日志未迁入或已清理，当前不可查" });
-    await missing.waitFor();
-    assert.equal(await missing.isDisabled(), true);
-    if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/handoff-log-unavailable.png`, fullPage: true });
-    await page.close();
-  }
+  // 本机能力不可用：红行、不转圈、不交给任务；出路是确认层里取消「运行」（这次跳过）。
   {
     const { page, store } = await open({ gate: { command: "npm test", running: null, latest: null,
       unavailable: "监督能力不可用，本机未执行；请换机或明确跳过" } });
-    const card = page.locator(".accept-gate-card");
-    await card.getByText("验收前置命令未执行：本机能力不可用").waitFor();
-    assert.equal(await card.locator(".is-spinning").count(), 0);
+    const row = gateRow(page);
+    assert.equal(await stateOf(row), "本机能力不可用");
+    await assertTone(row, "block");
+    assert.equal(await row.locator(".acc-spin").count(), 0);
     assert.equal(store.handoffs, 0);
-    await card.getByRole("button", { name: "这次跳过它，直接合并" }).click();
-    assert.equal(await page.getByLabel("验收意图").innerText(), "skip");
+    const layer = await openConfirm(page);
+    await layer.getByRole("checkbox", { name: "运行前置命令" }).uncheck();
+    await layer.getByRole("button", { name: "跳过并验收", exact: true }).click();
+    await waitUntil(() => store.accepts.length === 1, "跳过那一按发出去");
+    assert.deepEqual(store.accepts, [{ confirmUnverified: false, commit: true, gate: "skip" }]);
     if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/supervision-unavailable.png`, fullPage: true });
     await page.close();
   }
@@ -562,10 +329,18 @@ try {
       const current = run({ status: query === "?wait=1" ? "running" : "passed", executionNotice });
       const { page, store } = await open({ gate: { command: current.command, running: query === "?wait=1" ? current : null,
         latest: current, executionNotice, basis: query === "?stage=accepted" ? basis("passed", current) : null }, query });
-      if (query === "?wait=1") await page.getByRole("button", { name: /验收前置命令在跑/ }).click();
-      await page.getByRole("note").filter({ hasText: executionNotice }).waitFor();
+      if (query === "?wait=1") {
+        await page.getByRole("button", { name: /验收前置命令在跑/ }).click();
+        await page.getByRole("note").filter({ hasText: executionNotice }).waitFor();
+      } else {
+        // 通过的那一次日志收着：点开这一行才看得到监督方式（只留名字，全文指上去看）。
+        await gateRow(page).locator(".acc-check-main").click();
+        const note = gateRow(page).locator(".acc-log-note");
+        assert.equal(await note.innerText(), "macOS 兼容监督");
+        assert.equal(await note.getAttribute("aria-label"), executionNotice);
+      }
       assert.equal(store.handoffs, 0);
-      assert.equal(await page.getByText("验收前置命令未执行：本机能力不可用").count(), 0);
+      assert.equal(await page.getByText("本机能力不可用").count(), 0);
       if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/macos-compatible-${query === "?wait=1" ? "running" : query ? "receipt" : "ready"}.png`, fullPage: true });
       await page.close();
     }
@@ -573,12 +348,15 @@ try {
   for (const wait of [false, true]) {
     const pending = run({ status: "failed", failure: "process_unconfirmed", processPending: true });
     const { page, store } = await open({ gate: { command: pending.command, running: pending, latest: pending }, query: wait ? "?wait=1" : "" });
-    const card = page.locator(wait ? ".accept-gate-wait" : ".accept-gate-card");
+    const card = wait ? page.locator(".accept-gate-wait") : gateRow(page);
     await card.waitFor();
     if (wait) {
       assert.match(await card.innerText(), /等待退出证据/);
       assert.equal(await card.locator(".is-spinning").count(), 0);
       await page.locator(".wait-bar__bar").click();
+    } else {
+      assert.equal(await stateOf(card), "进程还没退干净");
+      assert.equal(await card.locator(".acc-spin").count(), 0);
     }
     await card.getByRole("button", { name: "停止证据丢失？确认风险并强制释放…" }).click();
     assert.equal(store.released ?? 0, 0, "展开风险说明不是确认释放");
@@ -588,7 +366,7 @@ try {
     assert.match(await card.getByRole("alert").innerText(), /不等于停止或测试通过/);
     if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/force-release-confirm-${wait ? "wait" : "card"}.png`, fullPage: true });
     await card.getByRole("button", { name: "我确认风险，强制释放本次占用" }).click();
-    await page.getByRole("status", { name: "操作结果" }).filter({ hasText: "没有取得退出证据" }).waitFor();
+    await notice(page).filter({ hasText: "没有取得退出证据" }).waitFor();
     assert.equal(store.released, 1);
     assert.equal(store.gate.latest.failure, "ownership_waived");
     await page.close();
@@ -623,23 +401,28 @@ try {
     await assertDots("attention");
     await page.close();
   }
+  // 命令一换，那份绿立刻不作数；命令一撤，这一行就不出了。
   {
     const previous = run();
     const { page, store } = await open({ events: true, gate: { command: previous.command, running: null, latest: previous } });
-    await page.getByText("源码、依赖输入和命令仍与被测快照一致", { exact: false }).waitFor();
+    await assertTone(gateRow(page), "passed");
+    assert.match(await stateOf(gateRow(page)), /^通过 · /);
     store.gate = { command: "npm run replacement", running: null, latest: { ...previous, stale: true } };
     await page.evaluate(() => window.emitGateEvent({ type: "task.acceptGate", taskId: "gate-task" }));
-    await page.locator(".accept-gate-card").filter({ hasText: "npm run replacement" }).waitFor();
-    assert.doesNotMatch(await page.locator(".accept-gate-card").innerText(), /源码、依赖输入和命令仍与被测快照一致/);
+    await gateRow(page).filter({ hasText: "npm run replacement" }).waitFor();
+    assert.equal(await stateOf(gateRow(page)), "通过，但命令变了");
     if (process.env.ASH_BROWSER_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.ASH_BROWSER_EVIDENCE_DIR}/command-invalidated.png` });
     store.gate = { command: null, running: null, latest: previous };
     await page.evaluate(() => window.emitGateEvent({ type: "task.acceptGate", taskId: "gate-task" }));
-    await page.locator(".accept-gate-card").filter({ hasText: "历史记录" }).waitFor();
+    await gateRow(page).waitFor({ state: "detached" });
+    await fetchesSettled(page, 0, "撤掉命令那一发已被页面消费完");
     await page.close();
   }
+  await testAcceptGateReceipts({ open, run, basis });
+  await testAcceptGateConfirm({ open, run });
   await testAcceptGateRecovery({ open, run, basis });
-  await testAcceptGateActions({ browser, base, run });
-  console.log("accept gate card DOM regression passed");
+  await testAcceptGateActions({ open, run });
+  console.log("accept gate desk DOM regression passed");
 } finally {
   await browser?.close();
   await web.close();
