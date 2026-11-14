@@ -7,6 +7,7 @@ import type { useBranchPlan } from "../review/useBranchPlan.ts";
 import { BaseUpdateRecoveryControl } from "./BaseUpdateRecoveryControl.tsx";
 import { CheckAction, CheckRow } from "./CheckRow.tsx";
 import { ReleaseCheck } from "./ReleaseCheck.tsx";
+import { refreshTaskFacts } from "./taskFacts.ts";
 
 type Plan = ReturnType<typeof useBranchPlan>;
 
@@ -39,13 +40,14 @@ export function DependencyChecks({ task, plan, checked, onChecked, disabled, not
   onChecked: (ids: string[]) => void;
   disabled: boolean;
   notify: (message: string) => void;
-  onTaskUpdated?: (task: Task) => void;
+  onTaskUpdated: (task: Task) => void;
 }) {
   const [updating, setUpdating] = useState<BranchPlanView | null>(null);
   const [busy, setBusy] = useState(false);
   const { view, error, refresh } = plan;
   const settled = task.stage === "accepted" || task.stage === "merged";
-  const reloadTask = async () => { if (onTaskUpdated) await api.task(task.id).then(onTaskUpdated).catch(() => {}); };
+  // 动作成功之后的追平一律走 refreshTaskFacts：任务、走向、diff 一起作废重读，读失败由验收台那一行说出来。
+  const reloadTask = async () => { await refreshTaskFacts(task, onTaskUpdated); };
   if (!view) {
     return error
       ? <CheckRow check="dependency" tone="block" text="依赖读不出来" state={error}
@@ -61,17 +63,19 @@ export function DependencyChecks({ task, plan, checked, onChecked, disabled, not
   const updateBase = async () => {
     if (!updating?.task.sourceCommit) return;
     setBusy(true);
+    let updated = false;
     try {
       await api.updateTaskBase(task.id, updating.task.sourceCommit);
-      notify("基线已更新，请核对改动并按影响范围重新验证");
-      await reloadTask();
+      updated = true;
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(false);
       setUpdating(null);
-      await refresh();
     }
+    if (updated) notify("基线已更新，请核对改动并按影响范围重新验证");
+    // 两份重读同一刻起：先后排的话中间有一瞬两边都不在读，主按钮会先放开再锁上。
+    await Promise.all([refresh(), updated ? reloadTask() : null]);
   };
   const releases = descendants.some((row) => row.targetTaskId === task.id || (row.dependency?.legacyTarget && row.dependency.taskId === task.id));
   return (
@@ -100,12 +104,12 @@ export function DependencyChecks({ task, plan, checked, onChecked, disabled, not
         <CheckRow check="base-update" tone="block" text="上次基线更新没结算完"
           tools={<BaseUpdateRecoveryControl key={task.id} taskId={task.id} notify={notify}
             disabled={locked || task.handoff?.direction === "out"}
-            onAbandoned={async (message) => { notify(message); await refresh(); await reloadTask(); }} />} />
+            onAbandoned={async (message) => { notify(message); await Promise.all([refresh(), reloadTask()]); }} />} />
       )}
       {releases && <ReleaseCheck key={task.id} task={task} notify={notify}
         blocker={descendants.find((row) => row.targetTaskId === task.id && row.targetWorkspaceBlocker)?.targetWorkspaceRecovery ?? null}
         disabled={locked || task.handoff?.direction === "out" || entry.baseUpdatePending}
-        onReleased={async () => { await refresh(); await reloadTask(); }} />}
+        onReleased={async () => { await Promise.all([refresh(), reloadTask()]); }} />}
       {!settled && descendants.length > 0 && <>
         <div className="acc-check-lead" role="presentation">派生任务</div>
         {descendants.map((row) => (

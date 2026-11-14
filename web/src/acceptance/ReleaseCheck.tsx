@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { TaskListItem, TaskWorkspaceLeftover } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { CheckAction, CheckRow } from "./CheckRow.tsx";
+import { useRowRead } from "./useRowRead.ts";
 
 /**
  * 有子任务合入**这个任务的分支**时那一行：这个任务的工作区目录还占着那条分支，子任务就合不进来。
@@ -16,23 +17,19 @@ export function ReleaseCheck({ task, disabled, blocker, onReleased, notify }: {
   onReleased: () => Promise<void>;
   notify: (message: string) => void;
 }) {
-  const [workspace, setWorkspace] = useState<TaskWorkspaceLeftover | null>(null);
-  const [readError, setReadError] = useState<string | null>(null);
+  // 现场只有一条读法：首读、任务更新后的重读、本行重试、释放前后的核对都走它，读失败一律落在本行。
+  const read = useRowRead<TaskWorkspaceLeftover>(task.id, () => api.taskWorkspace(task.id), true, [task.updatedAt]);
+  const workspace = read.value;
   const [proposal, setProposal] = useState<{ workspace: TaskWorkspaceLeftover; fingerprint: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    let alive = true;
-    void api.taskWorkspace(task.id).then((value) => { if (alive) { setWorkspace(value); setReadError(null); } })
-      .catch((e) => { if (alive) setReadError(e instanceof Error ? e.message : String(e)); });
-    return () => { alive = false; };
-  }, [task.id, task.updatedAt, attempt]);
   const open = async () => {
     setBusy(true); setError("");
     try {
-      const [latest, view] = await Promise.all([api.taskWorkspace(task.id), api.branchPlan(task.id)]);
-      setWorkspace(latest);
+      // 按下那一刻再核对一次现场：摆在这一行的可能是几分钟前的样子。读不到就落回本行的待核对。
+      const latest = await read.reload();
+      if (!latest) return;
+      const view = await api.branchPlan(task.id);
       if (!latest.branch) { notify("任务分支不存在，请先恢复分支再释放目录。"); return; }
       if (latest.path) setProposal({ workspace: latest, fingerprint: view.task.fingerprint });
       else await onReleased();
@@ -44,21 +41,27 @@ export function ReleaseCheck({ task, disabled, blocker, onReleased, notify }: {
     setBusy(true); setError("");
     try {
       await api.releaseTaskWorkspace(task.id, proposal.fingerprint);
-      setProposal(null);
-      setWorkspace(await api.taskWorkspace(task.id));
-      await onReleased();
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(false); }
+    } catch (e) {
+      // 动作本身失败才留在确认框里说；框还开着，看得见。
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+      return;
+    }
+    // 释放已经生效：先收掉确认框，再核对现场。核对失败落在本行（待核对 + 重试），不跟着框一起消失。
+    setProposal(null);
+    setBusy(false);
+    notify("工作区目录已释放，分支保留");
+    await Promise.all([read.reload(), onReleased()]);
   };
   if (!workspace) {
-    return readError
-      ? <CheckRow check="release" tone="block" text="工作区读不出来" state={readError}
-        tools={<CheckAction onClick={() => setAttempt((n) => n + 1)}>重试</CheckAction>} />
+    return read.error
+      ? <CheckRow check="release" tone="block" text="工作区读不出来" state={read.error}
+        tools={<CheckAction onClick={() => void read.reload()}>重试</CheckAction>} />
       : null;
   }
   const released = !workspace.path && !!workspace.branch;
-  const stale = readError ? `待核对：${readError}` : null;
-  const retry = readError ? <CheckAction onClick={() => setAttempt((n) => n + 1)}>重试</CheckAction> : null;
+  const stale = read.error ? `待核对：${read.error}` : null;
+  const retry = read.error ? <CheckAction onClick={() => void read.reload()}>重试</CheckAction> : null;
   return (
     <>
       {released

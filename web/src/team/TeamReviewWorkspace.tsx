@@ -12,6 +12,7 @@ import { useWorkspaceCommitVersion } from "../review/workspaceCommit.ts";
 import { AcceptanceControls } from "../acceptance/AcceptanceControls.tsx";
 import { AcceptRoute, type RouteData } from "../acceptance/AcceptRoute.tsx";
 import { ChangesLeadNote, ChangesNote } from "../acceptance/ChangesNotice.tsx";
+import { useTaskFacts } from "../acceptance/taskFacts.ts";
 import { useVersionedRead } from "../acceptance/useVersionedRead.ts";
 import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
 
@@ -25,7 +26,8 @@ type ReviewData = {
 /** 走向、提交、diff 按这一版存（useVersionedRead）：上一版只能压暗参考，不顶替顶行的走向。 */
 function useReviewChanges(task: TaskListItem, enabled = true) {
   const commitVersion = useWorkspaceCommitVersion(task.id);
-  return useVersionedRead<ReviewData>(task.id, `${task.updatedAt}|${commitVersion}`, () =>
+  const factsVersion = useTaskFacts(task.id, task.updatedAt).version;
+  return useVersionedRead<ReviewData>(task.id, `${task.updatedAt}|${commitVersion}|${factsVersion}`, () =>
     Promise.all([api.taskCommits(task.id), api.taskDiff(task.id), api.sessions(task.id)])
       .then(([commits, diff, sessions]) => ({ commits: commits.commits, branch: commits.branch, diff, sessions })), enabled);
 }

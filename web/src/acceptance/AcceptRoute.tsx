@@ -6,6 +6,7 @@ import { openGitWorkbench } from "../git-workbench/navigation.ts";
 import { formatInstant } from "../task-detail/utils.ts";
 import { useBranchPlan } from "../review/useBranchPlan.ts";
 import { AcceptLayer } from "./AcceptLayer.tsx";
+import { refreshTaskFacts } from "./taskFacts.ts";
 
 export type RouteData = {
   source: string;
@@ -29,7 +30,7 @@ export function AcceptRoute({ task, data, disabled, onTaskUpdated, notify }: {
   task: TaskListItem;
   data: RouteData;
   disabled: boolean;
-  onTaskUpdated?: (task: Task) => void;
+  onTaskUpdated: (task: Task) => void;
   notify: (message: string) => void;
 }) {
   const settled = task.stage === "accepted" || task.stage === "merged";
@@ -72,8 +73,9 @@ export function AcceptRoute({ task, data, disabled, onTaskUpdated, notify }: {
           onChanged={async (branch) => {
             setLayer(null);
             notify(`合入目标已改为 ${branch}`);
-            await plan.refresh();
-            if (onTaskUpdated) await api.task(task.id).then(onTaskUpdated).catch(() => {});
+            // 改了目标：任务、走向、diff 一起作废重读（refreshTaskFacts），任务没追平之前主按钮锁着 ——
+            // 确认层里的目标是从任务推出来的，不能拿旧的那份去确认。
+            await Promise.all([plan.refresh(), refreshTaskFacts(task, onTaskUpdated)]);
           }}
           notify={notify} />
       )}

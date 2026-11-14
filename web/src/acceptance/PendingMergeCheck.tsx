@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type { PendingMergeState } from "@ash/shared/accept-pending";
 import type { Task, TaskListItem } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { CheckAction, CheckRow, FileList } from "./CheckRow.tsx";
+import { refreshTaskFacts } from "./taskFacts.ts";
 import { useAcceptCommitDefault } from "./useAcceptCommitDefault.ts";
+import { useRowRead } from "./useRowRead.ts";
 
 /**
  * 「合并后不提交」那一档验收完、还欠一步提交的那一行。
@@ -21,43 +23,34 @@ import { useAcceptCommitDefault } from "./useAcceptCommitDefault.ts";
 export function PendingMergeCheck({ task, notify, onTaskUpdated }: {
   task: TaskListItem | Task;
   notify: (message: string) => void;
-  onTaskUpdated?: (task: Task) => void;
+  onTaskUpdated: (task: Task) => void;
 }) {
   const applicable = task.acceptedMergeMethod === "no_commit";
-  const [state, setState] = useState<PendingMergeState | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // 现场只有一条读法（useRowRead）：首读、对账、本行重试、动作之后都走它；动作回执带回来的现场用 put
+  // 写进去，比它早发出的读取晚到了也盖不回来。跟着「收尾没收尾」变（acceptedMergeCommit），不跟着每一次
+  // 任务更新重跑一遍 git 核对。
+  const read = useRowRead<{ state: PendingMergeState | null }>(task.id, () => api.pendingMerge(task.id), applicable, [task.acceptedMergeCommit]);
+  const state = applicable ? read.value?.state ?? null : null;
+  const error = read.error;
   const [busy, setBusy] = useState(false);
   const [action, setAction] = useState<"commit" | "remerge" | null>(null);
   const [commitChoice, setCommitChoice] = useState<boolean | null>(null);
   const commitDefault = useAcceptCommitDefault(task.projectId, action === "remerge");
   const commitChecked = commitChoice ?? commitDefault.value ?? true;
-  const [attempt, setAttempt] = useState(0);
-  const reload = useCallback(() => setAttempt((n) => n + 1), []);
+  const reload = read.reload;
 
-  // 跟着「收尾没收尾」变（acceptedMergeCommit），不跟着每一次任务更新重跑一遍 git 核对。
+  // 在页面之外收的尾：现场核对已经把它认成提交了，任务头上那颗「待提交」也该跟着摘掉 —— 走动作成功
+  // 之后同一条追平（读失败时验收台上那一行说出来并给重试）。
+  const committedOutside = state?.kind === "committed" && !task.acceptedMergeCommit;
   useEffect(() => {
-    if (!applicable) { setState(null); return; }
-    let alive = true;
-    api.pendingMerge(task.id).then(
-      (result) => {
-        if (!alive) return;
-        setState(result.state);
-        setError(null);
-        // 在页面之外收的尾：现场核对已经把它认成提交了，任务头上那颗「待提交」也该跟着摘掉。
-        if (result.state?.kind === "committed" && !task.acceptedMergeCommit && onTaskUpdated) {
-          void api.task(task.id).then(onTaskUpdated).catch(() => {});
-        }
-      },
-      (reason: unknown) => { if (alive) setError(reason instanceof Error ? reason.message : String(reason)); },
-    );
-    return () => { alive = false; };
-    // onTaskUpdated 是宿主每次渲染给的新闭包，不作为重读的理由。
+    if (committedOutside) void refreshTaskFacts(task, onTaskUpdated);
+    // 只在「认出来了」那一刻追一次；task / onTaskUpdated 每次渲染都是新的。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [applicable, task.id, task.acceptedMergeCommit, attempt]);
+  }, [committedOutside, task.id]);
   const open = applicable && !!state && state.kind !== "committed";
   useEffect(() => {
     if (!open) return;
-    const again = () => { if (document.visibilityState === "visible") reload(); };
+    const again = () => { if (document.visibilityState === "visible") void reload(); };
     const timer = window.setInterval(again, 15_000);
     window.addEventListener("focus", again);
     document.addEventListener("visibilitychange", again);
@@ -71,7 +64,7 @@ export function PendingMergeCheck({ task, notify, onTaskUpdated }: {
   if (!applicable) return null;
   if (error && !state) {
     return <CheckRow check="pending-merge" tone="block" text="读不到那次合并的现场" state={error}
-      tools={<CheckAction onClick={reload}>重试</CheckAction>} />;
+      tools={<CheckAction onClick={() => void reload()}>重试</CheckAction>} />;
   }
   if (!state || state.kind === "committed") return null;
 
@@ -80,21 +73,22 @@ export function PendingMergeCheck({ task, notify, onTaskUpdated }: {
     if (kind === "remerge" && commitChoice === null && commitDefault.value === null) return;
     setAction(null);
     setBusy(true);
+    let result;
     try {
-      const result = kind === "commit"
+      result = kind === "commit"
         ? await api.commitPendingMerge(task.id)
         // 发的是框里看到的那个值，不让后端再读一次项目设置（与验收同口径）。
         : await api.remergePendingMerge(task.id, commitChoice ?? commitDefault.value ?? undefined);
-      setState(result.state);
-      setError(null);
-      notify(result.notices?.length ? `${result.message}（${result.notices.join("；")}）` : result.message);
-      if (onTaskUpdated) await api.task(task.id).then(onTaskUpdated).catch(() => {});
     } catch (reason) {
-      notify(reason instanceof Error ? reason.message : String(reason));
-      reload();
-    } finally {
       setBusy(false);
+      notify(reason instanceof Error ? reason.message : String(reason));
+      void reload();
+      return;
     }
+    read.put({ state: result.state });
+    setBusy(false);
+    notify(result.notices?.length ? `${result.message}（${result.notices.join("；")}）` : result.message);
+    await refreshTaskFacts(task, onTaskUpdated);
   };
 
   const target = state.targetBranch ?? "目标分支";
@@ -123,7 +117,7 @@ export function PendingMergeCheck({ task, notify, onTaskUpdated }: {
           </div>
         )}
         tools={<>
-          {error && <CheckAction onClick={reload}>重试</CheckAction>}
+          {error && <CheckAction onClick={() => void reload()}>重试</CheckAction>}
           {state.canCommit
             ? <CheckAction busy={busy} onClick={() => setAction("commit")}>提交</CheckAction>
             : state.canRemerge

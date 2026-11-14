@@ -5,6 +5,7 @@ import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import { AcceptanceControls } from "../acceptance/AcceptanceControls.tsx";
 import { AcceptRoute } from "../acceptance/AcceptRoute.tsx";
 import { ChangesLeadNote, ChangesNote } from "../acceptance/ChangesNotice.tsx";
+import { useTaskFacts } from "../acceptance/taskFacts.ts";
 import { useVersionedRead } from "../acceptance/useVersionedRead.ts";
 import { ReviewDiffViewer } from "./ReviewDiffViewer.tsx";
 import { sharedTeamParent } from "./reviewModel.ts";
@@ -57,7 +58,9 @@ export function TaskReviewWorkspace({
 }) {
   const commitVersion = useWorkspaceCommitVersion(task.id);
   const sharedParent = sharedTeamParent(task, allTasks);
-  const version = `${task.updatedAt}|${commitVersion}`;
+  // 动作成功之后本地推的那一格（taskFacts.ts）也算版本：改了合入目标，任务还没读回来，走向与 diff 也得作废重读。
+  const factsVersion = useTaskFacts(task.id, task.updatedAt).version;
+  const version = `${task.updatedAt}|${commitVersion}|${factsVersion}`;
   const changes = useVersionedRead<ReviewData>(task.id, version, () =>
     Promise.all([api.taskCommits(task.id), api.taskDiff(task.id)])
       .then(([commits, diff]) => ({ branch: commits.branch, commits: commits.commits, diff })), !sharedParent);

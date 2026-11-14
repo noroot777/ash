@@ -12,6 +12,8 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 //    旧现场照旧摆着，但说出来并给本行重试。
 // ④ 从键下面点出来的那一层在矮窗口里整层收进视口：滚到底，确认键在屏幕里按得到。
 // ⑤ 团队验收台打回之后回到能看见那句话的对话：团队回调度台，独立执行者回它自己的会话。
+// ⑥ 动作成功之后的读取失败（taskFacts.ts / useRowRead.ts）：改了合入目标而任务读不回来，主按钮锁着、那一行
+//    给重试；释放目录之后的核对读失败落在本行「待核对」，不跟着确认框一起消失。
 const web = await startWebServer();
 
 const DIFF = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,1 +1,1 @@\n-old\n+new\n";
@@ -46,6 +48,13 @@ function api(store) {
     if (url.pathname === "/api/tasks/bodies" && request.method() === "POST") {
       return reply(request.postDataJSON().taskIds.map((taskId) => ({ taskId, body: "" })));
     }
+    if (url.pathname === "/api/projects/proj-1/branches") return reply({ branches: ["main", "other"], current: "main" });
+    const post = /^\/api\/tasks\/([^/]+)\/(merge-target|release-workspace)$/.exec(url.pathname);
+    if (post && request.method() === "POST") {
+      if (post[2] === "merge-target") store.target = request.postDataJSON().branch;
+      else store.released = true;
+      return reply({ ok: true });
+    }
     const reject = /^\/api\/tasks\/([^/]+)\/reply$/.exec(url.pathname);
     if (reject && request.method() === "POST") {
       store.replies.push(reject[1]);
@@ -56,6 +65,7 @@ function api(store) {
       const [, taskId, what] = hit;
       if (!what) {
         store.taskFetches[taskId] = (store.taskFetches[taskId] ?? 0) + 1;
+        if (store.failTask) return fail();
         return reply({ id: taskId, title: taskId, projectId: "proj-1", status: "done", stage: "awaiting_acceptance", mode: "single",
           useWorktree: true, archived: false, updatedAt: "2026-11-02T01:24:00.000Z" });
       }
@@ -64,7 +74,9 @@ function api(store) {
       if (what === "acceptance-check") return reply({ verification: null });
       if (what === "scm") return reply(scm(taskId));
       if (what === "sessions") return reply([]);
-      if (what === "workspace") return store.failWorkspace ? fail() : reply({ path: `/repo/.worktrees/${taskId}`, branch: `ash/${taskId}` });
+      if (what === "workspace") {
+        return store.failWorkspace ? fail() : reply({ path: store.released ? null : `/repo/.worktrees/${taskId}`, branch: `ash/${taskId}` });
+      }
       if (what === "pending-merge") return store.failPending ? fail() : reply({ state: pendingState(store.pending) });
       if (what === "commits") {
         return store.failChanges ? fail() : reply({ branch: `ash/${taskId}`, commits: [{ sha: "1111111111111111", subject: "feat", at: "2026-11-02T01:20:00.000Z" }] });
@@ -79,7 +91,7 @@ function api(store) {
   };
 }
 
-const freshStore = () => ({ target: "main", failChanges: false, failWorkspace: false, failPending: false, pending: "staged",
+const freshStore = () => ({ target: "main", failChanges: false, failWorkspace: false, failPending: false, failTask: false, released: false, pending: "staged",
   replies: [], taskFetches: {}, unexpected: [] });
 
 let browser;
@@ -139,6 +151,39 @@ try {
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
     await pending.waitFor({ state: "detached" });
     assert.ok((store.taskFetches["pending-task"] ?? 0) >= 1, "在页面之外收的尾，任务要跟着刷新（摘掉「待提交」）");
+
+    // ⑥ 动作成功、紧接着的读取失败（第 2 轮审查）：
+    //    改合入目标 → 任务读不回来：走向与 diff 照新版本重读（指向 other），主按钮锁着、那一行说清楚并给重试，
+    //    重试读到了才放开 —— 确认层里的目标是从任务推出来的，旧任务不许拿去确认。
+    const main = single.locator(".acc-bar button.acc-btn.is-primary");
+    await page.waitForFunction(() => !document.querySelector('[data-host="single"] .acc-bar button.acc-btn.is-primary')?.disabled);
+    store.failTask = true;
+    await single.locator(".acc-target").click();
+    await page.getByRole("menuitemradio", { name: "main" }).waitFor();
+    store.target = "main";
+    await page.getByRole("menuitemradio", { name: "main" }).click();
+    await page.getByRole("menuitemradio", { name: "main" }).waitFor({ state: "detached" });
+    const factsRow = single.locator('.acc-check[data-check="task-facts"]');
+    await factsRow.filter({ hasText: "改动之后的任务状态没读到" }).waitFor();
+    assert.equal(await main.isDisabled(), true, "任务没追平之前不许确认");
+    await route.locator(".acc-target, .acc-dst").filter({ hasText: "main" }).waitFor();
+    store.failTask = false;
+    await factsRow.getByRole("button", { name: "重试", exact: true }).click();
+    await factsRow.waitFor({ state: "detached" });
+    await page.waitForFunction(() => !document.querySelector('[data-host="single"] .acc-bar button.acc-btn.is-primary')?.disabled);
+
+    //    释放目录成功 → 紧接着的核对读失败：确认框收掉，那一行说「待核对」并给重试，不再假装「还占着」。
+    await release.getByRole("button", { name: "释放目录", exact: true }).click();
+    const dialog = page.getByRole("dialog").filter({ hasText: "释放工作区目录？" });
+    await dialog.waitFor();
+    store.failWorkspace = true;
+    await dialog.getByRole("button", { name: "释放目录，保留分支", exact: true }).click();
+    await dialog.waitFor({ state: "detached" });
+    await release.filter({ hasText: "待核对" }).waitFor();
+    assert.equal(await release.getByRole("button", { name: "重试", exact: true }).count(), 1, "动作之后的核对失败要落在本行");
+    store.failWorkspace = false;
+    await release.getByRole("button", { name: "重试", exact: true }).click();
+    await release.filter({ hasText: "工作区目录已释放" }).waitFor();
 
     // ⑤ 团队：打回调度台 → 回到调度台；打回独立执行者 → 回到它自己的会话。
     const team = page.locator('[data-host="team"]');

@@ -20,6 +20,7 @@ import { GateCheck, useCanManage } from "./GateCheck.tsx";
 import { ago } from "./gateLine.ts";
 import { PendingMergeCheck } from "./PendingMergeCheck.tsx";
 import { useAcceptanceVerification } from "./useAcceptanceVerification.ts";
+import { refreshTaskFacts, useTaskFacts } from "./taskFacts.ts";
 import { useAcceptCommitDefault } from "./useAcceptCommitDefault.ts";
 import { useReviewFacts, type FactRow } from "./useReviewFacts.ts";
 import { AutoCommitCheck, WorkspaceCheck } from "./WorkspaceCheck.tsx";
@@ -77,7 +78,12 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
   const rejectRef = useRef<HTMLButtonElement>(null);
   const confirming = layer === "confirm";
   const verification = useAcceptanceVerification(task, confirming);
+  // 动作成功之后这个任务的事实要整份追平（taskFacts.ts）：追平之前不许确认，读失败那一行给重试。
+  const taskFacts = useTaskFacts(task.id, task.updatedAt);
+  const retryTaskFacts = () => void refreshTaskFacts(task, onTaskUpdated);
   useEffect(() => { setChecked([]); setFailure(null); setLayer(null); }, [task.id]);
+  // 版本一推，前置命令那份状态（基准对照的目标分支跟着合入目标走）也重读一次。
+  useEffect(() => { if (taskFacts.version) void gate.reload(); }, [taskFacts.version]);
 
   // —— 这一按此刻被什么挡着 ——
   const worktreeChecks = !midGate && !settled && !!task.useWorktree;
@@ -91,13 +97,14 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
     ...(archived ? [{ key: "archived", tone: "idle" as const, text: "已归档，只读" }] : []),
     ...(inFlight && !settled ? [{ key: "in-flight", tone: "live" as const, text: "任务在跑" }] : []),
     ...(block && !settled ? [{ key: "host", tone: "block" as const, text: block.text }] : []),
+    ...(taskFacts.error ? [{ key: "task-facts", tone: "block" as const, text: `改动之后的任务状态没读到：${taskFacts.error}`, retry: retryTaskFacts }] : []),
     ...facts.blocks,
   ];
   const blocked = factBlocks.length > 0
     || (worktreeChecks && dependencyBlocked(plan.view, plan.error))
     || !!selectionBlock
     || (!settled && gate.occupied);
-  const loading = busy || checkingDependencies || gateLoading || facts.loading;
+  const loading = busy || checkingDependencies || gateLoading || facts.loading || taskFacts.pending;
   const acceptDisabled = blocked || loading || gateUnread;
   useEffect(() => { if (blocked && confirming) setLayer(null); }, [blocked, confirming]);
 
@@ -133,15 +140,10 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
     if (!confirming) { setRunChoice(null); setCommitChoice(null); setFamilyAck(false); verification.setAcknowledged(false); }
   }, [confirming]);
 
-  // 动作已经生效之后的「再拉一遍任务」是另一件事：失败只在成功提示后面缀一句，绝不报成动作失败。
-  const refreshAfterMutation = async (): Promise<string> => {
-    try {
-      onTaskUpdated(await api.task(task.id));
-      return "";
-    } catch {
-      return "（动作已生效，但页面没能刷新，手动刷新可看到最新状态）";
-    }
-  };
+  // 动作已经生效之后的「再拉一遍任务」是另一件事：失败只在成功提示后面缀一句，绝不报成动作失败；
+  // 前提列里那一行（task-facts）会一直说着，直到追平。
+  const refreshAfterMutation = async (): Promise<string> =>
+    (await refreshTaskFacts(task, onTaskUpdated)) === null ? "" : "（动作已生效，但页面没能刷新，下面那一行可以重试）";
 
   const openConfirm = () => {
     if (acceptDisabled) return;
