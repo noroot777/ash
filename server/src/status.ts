@@ -14,6 +14,7 @@ import { releaseTerminalLanding } from "./task-complete.js";
 import { directionIdentityCleared } from "./task-direction-epoch.js";
 import { clearStallFailure } from "./turn-stall-verdict.js";
 import { monitorHoldPatch } from "./queue-monitor-hold.js";
+import { heldFollowUpPatch } from "./follow-up-held.js";
 
 const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 
@@ -77,6 +78,11 @@ export type SetTaskStatusOptions = {
    * 事务里写),结算侧照它对齐。类型只允许「清掉」那几个值:这个口子不是通用的字段补写入口。
    */
   consume?: { followUpFrom?: null; nativeTurn?: false; completeConfirmedAt?: null };
+  /**
+   * 续聊回合被哨兵闸拦成 paused 时,续聊前的那个状态:跟 paused 同一笔记下,下一个非旁路回合起跑时
+   * 接回续聊身份(follow-up-held.ts)。落终态 / backlog 的那一笔自动作废它。
+   */
+  holdFollowUp?: TaskStatus;
   /**
    * 这一笔落位**兑现掉**的熔断失败义务(会话 + 回合起点)。
    *
@@ -172,6 +178,7 @@ async function writeTaskStatus(
   // 回合输入事实跟着这一笔一起消费(见 `SetTaskStatusOptions.consume`):同一条 UPDATE,所以
   // 「落位写下了」和「输入被消费了」永远同时成立或同时不成立,中间没有可以崩进去的缝。
   if (opts?.consume) Object.assign(patch, opts.consume);
+  Object.assign(patch, heldFollowUpPatch(status, opts?.holdFollowUp));
   // 「这段暂停在等哨兵」跟状态同一笔落下、同一笔消费(queue-monitor-hold.ts)。
   Object.assign(patch, await monitorHoldPatch(taskId, cur, status, { quiet: !!quietAdvance, sideTurn: !!opts?.sideTurn }));
   // ── 条件写的那一条语句 ───────────────────────────────────────────────────────

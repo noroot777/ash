@@ -425,4 +425,6 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE sessions ADD COLUMN lead_holder TEXT",
   // 这一段暂停在等哨兵(见 db/schema.ts 同名列)。存量行 NULL 由队列观察到在等时补上。
   "ALTER TABLE tasks ADD COLUMN monitor_hold_at TEXT",
+  // 被哨兵隔开的续聊,续聊前的状态(见 db/schema.ts 同名列)。存量行 NULL:升级前已经落下的那些不追改。
+  "ALTER TABLE tasks ADD COLUMN follow_up_held_from TEXT",
 ];
