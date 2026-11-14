@@ -8,7 +8,8 @@
 // ③ 没开着的任务收到失效：一发都不取；再打开时取到的是新的那一份；
 // ④ 重取那一发掉了（503）：没有第二条失效、没有重连，它自己隔一会儿再试到读到；
 // ⑤ 「全部重取」：开着的都重取，没开着的不取；
-// ⑥ 先取到过、后来服务端说 404（任务没了、看不见了）：手上那份作废，键不再出，也不再重试。
+// ⑥ 先取到过、后来服务端说 404（任务没了、看不见了）：手上那份作废，键不再出，也不再重试；
+// ⑦ 服务重启过（换了进程、序号从头记）：新进程的结论比手上那份号小也照收（第 1 轮审查 N1）。
 // 跑：npm -w web run test:task-actions-stale
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
@@ -19,9 +20,11 @@ import { waitUntil } from "./wait-until.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const verdict = { ok: true };
-let seq = 0;
+// 服务进程身份和它的序号：⑦ 模拟一次重启（新进程从头记号，比页面手上那份还小）。
+let boot = "boot-1";
+let seq = 1000;
 const actions = (taskId, kind) => ({
-  taskId, seq: ++seq, primary: { kind, ...verdict }, stop: { ok: false, reason: "没有在跑", hidden: true },
+  taskId, boot, seq: ++seq, primary: { kind, ...verdict }, stop: { ok: false, reason: "没有在跑", hidden: true },
   archive: verdict, requeue: { ok: false, reason: "不在队列里", hidden: true }, retryTurn: null, verify: verdict,
 });
 
@@ -133,6 +136,17 @@ try {
   assert.equal(store.hits["t-1"], before["t-1"] + 1, "开着的任务重取一次");
   assert.equal(store.hits["t-2"], before["t-2"], "没开着的任务不取");
 
+  // ⑦ 换了服务进程：号从头记，照收
+  boot = "boot-2";
+  seq = 0;
+  store.primary["t-1"] = "retry";
+  emit({ type: "task.actions.stale", taskId: "t-1" });
+  await page.waitForSelector('[data-surface="t-1-head"][data-primary="retry"]');
+  // 新进程里接着往上记的号照常收下。
+  store.primary["t-1"] = "run";
+  emit({ type: "task.actions.stale", taskId: "t-1" });
+  await page.waitForSelector('[data-surface="t-1-head"][data-primary="run"]');
+
   // ⑥ 404：手上那份作废
   store.gone.add("t-1");
   emit({ type: "task.actions.stale", taskId: "t-1" });
@@ -143,7 +157,7 @@ try {
   assert.equal(store.hits["t-1"], afterGone, "404 不重试");
 
   assert.deepEqual(errors, [], "页面没有报错");
-  console.log("✓ task actions stale: 收到失效就重取、没开着的不取、读失败自己重试到读到、404 作废不重试");
+  console.log("✓ task actions stale: 收到失效就重取、没开着的不取、读失败自己重试到读到、404 作废不重试、换了服务进程照收");
 } finally {
   for (const stream of streams) stream.end();
   await browser?.close();

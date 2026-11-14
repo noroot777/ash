@@ -1,6 +1,7 @@
 // 任务「此刻能做什么」的下发通道：取事实 → 跑判据（task-action-verdicts.ts / task-retry-turn.ts
 // 的 `retryTurnRejection`）→ `GET /tasks/:id/actions`。结论只在这里算、只随请求下发；事实变了的时候
 // 服务端只广播「重取一下」（task-actions-feed.ts），算一遍的永远是开着那个任务的页面发来的这次请求。
+import { randomUUID } from "node:crypto";
 import type { Hono } from "hono";
 import type { PrimaryAction, RetryTurnAction, TaskActions } from "@ash/shared";
 import { eq } from "drizzle-orm";
@@ -12,6 +13,7 @@ import { canSeeProject } from "./auth/visibility.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
 import { latestRun, roundOf } from "./free-review-round.js";
 import { reviewRetryGeneration } from "./free-review-retry-identity.js";
+import { checkpointStartBlock } from "./pending-checkpoint-recovery.js";
 import { queueBlockerDetails } from "./queues.js";
 import { isRunning } from "./runs.js";
 import {
@@ -48,6 +50,7 @@ export async function readActionFacts(row: TaskRow): Promise<ActionFacts> {
     parentIsTeam: parent?.mode === "team",
     freeReviewActive: row.workflowMode === "free" ? await hasActiveFreeReview(row.id) : false,
     legacyReviewActive: legacy.some((review) => LEGACY_REVIEW_IN_FLIGHT.includes(review.status)),
+    checkpointBlock: await checkpointStartBlock(row.id),
     team,
   };
 }
@@ -80,9 +83,11 @@ async function retryTurnAction(row: TaskRow): Promise<RetryTurnAction | null> {
   return rejection ? { ...target, ok: false, reason: rejection.error } : { ...target, ok: true };
 }
 
-// 只增不减（跨重启也是：拿墙钟打底），前端据此丢掉迟到的旧结论。
+// 序号只在本进程里递增；跨重启靠 `boot` 分开，不拿墙钟打底 —— 系统时间回拨后重启，墙钟打底的号会
+// 比页面手上那份还小，新结论被当成迟到的旧结论丢掉（本轮审查 N1）。
+const BOOT = randomUUID();
 let lastSeq = 0;
-const nextSeq = () => (lastSeq = Math.max(Date.now(), lastSeq + 1));
+const nextSeq = () => ++lastSeq;
 
 export async function computeTaskActions(taskId: string): Promise<TaskActions | null> {
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -91,6 +96,7 @@ export async function computeTaskActions(taskId: string): Promise<TaskActions | 
   const primary: PrimaryAction | null = primaryAction(facts);
   return {
     taskId,
+    boot: BOOT,
     seq: nextSeq(),
     primary,
     // 团队的「停止」是停止全组（POST /tasks/:id/team/halt），判据按整个团队算。

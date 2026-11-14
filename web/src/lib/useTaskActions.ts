@@ -15,7 +15,7 @@ import { subscribeConnection, subscribeEvents } from "./events.ts";
 // 怎么读交给追平层（lib/catchUp.ts）：同一时刻只有一发在途、在途时又来了失效就落地后再补一趟、
 // 一发挂住到点就掐、没读到（网络抖了、服务端 500）就隔一会儿再试；连接断了作废、连上了每个开着的
 // 任务重对一遍账（断线窗口里的失效追不回来）。404 不重试 —— 任务没了、看不见了，或者服务端还是
-// 不认这个接口的旧版本。响应之间还有一层序号：比手上那份旧的一律丢掉。
+// 不认这个接口的旧版本。响应之间还有一层序号：同一个服务进程算出来的、比手上那份旧的一律丢掉。
 //
 // 还没取到时返回 null：这几颗键都不出，等结论到了再出 —— 不拿前端自己的猜测先垫一份，那正是这一层
 // 要消灭的东西。
@@ -29,7 +29,8 @@ function emit(): void {
 
 function put(actions: TaskActions): void {
   const current = store.get(actions.taskId);
-  if (current && current.seq >= actions.seq) return;
+  // 序号只在同一个服务进程里可比；换了进程（服务重启过）的直接收下 —— 旧进程那一发在断线时已经掐了。
+  if (current && current.boot === actions.boot && current.seq >= actions.seq) return;
   store.set(actions.taskId, actions);
   emit();
 }

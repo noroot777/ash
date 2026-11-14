@@ -46,7 +46,12 @@ export type RetryTurnAction = ActionVerdict & (
 
 export type TaskActions = {
   taskId: string;
-  /** 服务端计算序号，只增不减：前端据此丢掉迟到的旧结论。 */
+  /**
+   * 算出这一份的那个服务进程（每次开机一个新值）。序号只在同一个进程里可比：服务重启之后从头记，
+   * 前端遇到换了进程的就直接收下，不拿新进程的号去跟旧进程的比。
+   */
+  boot: string;
+  /** 同一个服务进程里只增不减的计算序号：前端据此丢掉迟到的旧结论。 */
   seq: number;
   /** null = 这个状态下没有「轮到你的那一步」（在跑、已完成、等裁决…）。 */
   primary: PrimaryAction | null;
