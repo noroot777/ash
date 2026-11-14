@@ -1,0 +1,101 @@
+/* 样机外面那一圈：页头、开关、说明。产品画面本身在 mock.css。 */
+:root {
+  color-scheme: light;
+  --chrome: lch(94.44% 0.5 282);
+  --canvas: lch(97.94% 0.5 282);
+  --panel: lch(100% 0 282);
+  --raised: lch(96.914% 0 282);
+  --overlay: lch(95.886% 0 282);
+  --line: lch(90.55% 0 282);
+  --line2: lch(86.5% 0 282);
+  --ink: lch(9.794% 0 282);
+  --muted: lch(39.176% 1.25 282);
+  --faint: lch(64.64% 1.25 282);
+  --green: #168466;
+  --green-bg: #e3f4ed;
+  --red: #d93d4c;
+  --amber: #b57b00;
+  --accent: #5e6ad2;
+  --cyan: #0e9db8;
+  --red-bg: color-mix(in oklab, var(--red) 9%, var(--panel));
+  --amber-bg: color-mix(in oklab, var(--amber) 10%, var(--panel));
+  --hover-bg: lch(91.64% 0.5 282);
+  --action: #000;
+  --action-hover: #262626;
+  --surface-shadow: lch(0 0 0 / 0.02) 0 3px 6px -2px, lch(0 0 0 / 0.04) 0 1px 1px;
+  --control-shadow: lch(0 0 0 / 0.103) 0 0 0 1px, var(--surface-shadow);
+  --control-hover-shadow: lch(0 0 0 / 0.147) 0 0 0 1px, var(--surface-shadow);
+  --menu-shadow: lch(0 0 0 / 0.1) 0 0 0 1px, lch(0 0 0 / 0.06) 0 8px 24px, lch(0 0 0 / 0.04) 0 2px 6px;
+  --sans: "Inter Variable", "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --dur-1: 120ms;
+  --dur-2: 200ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font: 400 14px/1.6 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+button, input, textarea { font: inherit; color: inherit; }
+button { border: 0; background: none; padding: 0; cursor: pointer; }
+button:disabled { cursor: default; }
+code, pre { font-family: var(--mono); }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.icon-library { position: absolute; width: 0; height: 0; }
+.icon { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 18px 24px 0;
+  font-size: 13px;
+}
+.wordmark { color: var(--ink); font-weight: 600; text-decoration: none; }
+
+.wordmark span { margin-left: 6px; color: var(--faint); font-weight: 400; }
+.page-tag { color: var(--faint); font-size: 12px; }
+
+.page { max-width: 1040px; margin: 0 auto; padding: 28px 24px 72px; }
+.intro h1 { margin: 0; font-size: 22px; font-weight: 600; line-height: 1.35; letter-spacing: -0.01em; }
+.intro p { max-width: 46em; margin: 8px 0 0; color: var(--muted); }
+
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 28px; margin: 28px 0 12px; }
+.control { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--muted); font-size: 13px; }
+.control > span { flex: none; white-space: nowrap; }
+.seg { display: flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: 10px; background: var(--chrome); }
+.seg button { height: 26px; padding: 0 10px; border-radius: 8px; color: var(--muted); font-size: 13px; white-space: nowrap; transition: background-color var(--dur-1), color var(--dur-1); }
+.seg button:hover { color: var(--ink); }
+.seg button[aria-pressed="true"] { background: var(--panel); color: var(--ink); font-weight: 500; box-shadow: var(--control-shadow); }
+.control[hidden] { display: none; }
+.play { display: inline-flex; align-items: center; gap: 6px; height: 28px; margin-left: auto; padding: 0 12px; border-radius: 8px; background: var(--action); color: #fff; font-size: 12px; font-weight: 500; }
+.play:hover { background: var(--action-hover); }
+.play .icon { width: 11px; height: 11px; fill: currentColor; stroke: none; }
+
+.moves { margin-top: 48px; }
+.moves h2 { margin: 0 0 14px; font-size: 14px; font-weight: 600; }
+.moves table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.moves tr { border-top: 1px solid var(--line); }
+.moves tr:last-child { border-bottom: 1px solid var(--line); }
+.moves th, .moves td { padding: 9px 0; vertical-align: top; text-align: left; }
+.moves th { width: 38%; padding-right: 24px; color: var(--muted); font-weight: 400; }
+
+@media (max-width: 760px) {
+  .page-head, .page { padding-left: 14px; padding-right: 14px; }
+  .play { margin-left: 0; }
+  .moves th, .moves td { display: block; width: auto; padding: 4px 0; }
+  .moves th { padding-top: 9px; }
+  .moves td { padding-bottom: 9px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+}
