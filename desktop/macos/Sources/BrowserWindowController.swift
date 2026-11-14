@@ -110,7 +110,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
   static let frameName = "AshMainWindow"
   /// 首次配置时窗口开多大：原生那一屏（FirstRunView）和随后 web 的三步向导都正好铺满它。
-  static let welcomeSize = NSSize(width: 900, height: 640)
+  static let welcomeSize = NSSize(width: 980, height: 660)
   /// 工作窗第一次打开时的大小（之后按用户拖成的样子记住）。
   static let workSize = NSSize(width: 1440, height: 900)
 

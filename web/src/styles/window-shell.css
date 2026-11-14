@@ -51,23 +51,18 @@
 }
 
 /* 首次配置（AuthGate 在 <html> 上写 data-window-size="setup"）时壳开的是一扇正好装下向导的小窗：
-   向导就是整扇窗，不在窗里再摆一张带边框的卡 —— 小窗四周再留一圈灰边，剩下的只是局促。
-   顶上让出红绿灯那一条（空白处照常能拖窗口），底栏压在窗底，中间那段装不下时自己滚。 */
+   两栏卡片就是整扇窗，不在窗里再摆一张带边框的卡 —— 小窗四周再留一圈灰边，剩下的只是局促。
+   左栏的黑底一直顶到窗口顶，红绿灯浮在它上面，和原生首启那一屏一模一样；空白处照常能拖窗口。 */
 :root[data-window-shell="mac"][data-window-size="setup"] .onboarding-shell {
-  place-items: stretch;
   padding: 0;
-  background: var(--panel);
+  place-items: stretch;
 }
 
 :root[data-window-shell="mac"][data-window-size="setup"] .onboarding-card {
   width: 100%;
-  min-height: 100%;
-  padding: calc(var(--window-titlebar-height, 0px) + 4px) 40px 24px;
+  height: 100dvh;
+  min-height: 0;
   border: 0;
   border-radius: 0;
   box-shadow: none;
-}
-
-:root[data-window-shell="mac"][data-window-size="setup"] .onboarding-body {
-  flex: 1;
 }

@@ -175,20 +175,28 @@ private final class BrandMark: NSView {
 private final class StepRow: NSStackView {
   init(label: String, current: Bool) {
     super.init(frame: .zero)
+    // 圆点摆在一个 14 的格子里：web 向导那边走过的站换成 14 的勾，两边字的起点要对齐，切屏时不跳。
+    let slot = NSView()
     let dot = NSView()
     dot.wantsLayer = true
     dot.layer?.cornerRadius = 4
     dot.layer?.backgroundColor = current ? NSColor.white.cgColor : nil
     dot.layer?.borderWidth = current ? 0 : 1
     dot.layer?.borderColor = NSColor.white.withAlphaComponent(0.4).cgColor
+    dot.translatesAutoresizingMaskIntoConstraints = false
+    slot.addSubview(dot)
     NSLayoutConstraint.activate([
+      slot.widthAnchor.constraint(equalToConstant: 14),
+      slot.heightAnchor.constraint(equalToConstant: 14),
       dot.widthAnchor.constraint(equalToConstant: 8),
       dot.heightAnchor.constraint(equalToConstant: 8),
+      dot.centerXAnchor.constraint(equalTo: slot.centerXAnchor),
+      dot.centerYAnchor.constraint(equalTo: slot.centerYAnchor),
     ])
     let name = NSTextField(labelWithString: label)
     name.font = .systemFont(ofSize: 13, weight: current ? .medium : .regular)
     name.textColor = current ? .white : NSColor.white.withAlphaComponent(0.45)
-    setViews([dot, name], in: .leading)
+    setViews([slot, name], in: .leading)
     orientation = .horizontal
     alignment = .centerY
     spacing = 12

@@ -2,12 +2,15 @@
    外壳沿用 auth.css 的那条路:**全屏单卡片**,不复用工作台布局 —— 那套的前提是
    「已经选好项目了」,而这一屏存在的理由正是还没有。
 
+   卡片分两栏,和 mac app 首启那一屏(desktop/macos/Sources/FirstRunView.swift)同一张脸:
+   左边一栏黑底 —— 标识、一句话、走到哪一站;右边是这一站。左栏宽、留白、字号与原生那边一致
+   (340 / 84 / 40),app 里两屏前后相接时左栏原地不动。装进 app 的小窗时整张卡铺满窗口,
+   那几条覆盖在 window-shell.css。
+
    配色只用 global.css `:root` 里真实存在的令牌(--chrome/--panel/--raised/--ink/
    --muted/--line/--accent),淡底一律 color-mix(in oklab, …) —— 理由见 auth.css 顶部
-   (--panel/--line 是零彩度的,在 lch 里混色会把一个没有意义的色相插值进来)。
-
-   卡片比登录那张宽(760 而不是 560):里面摊着的是设置页那几个真组件(供应商表单的
-   两列栅格、本地 CLI 检测的网格),挤在 560 里会把那两列压成一列。 */
+   (--panel/--line 是零彩度的,在 lch 里混色会把一个没有意义的色相插值进来)。左栏是唯一的
+   例外:黑底白字两种外观都一样,和 app 图标是同一块黑。 */
 
 .onboarding-shell {
   position: fixed;
@@ -21,73 +24,157 @@
 }
 
 .onboarding-card {
-  width: min(760px, 100%);
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  padding: 26px 28px 22px;
+  --onboarding-brand: #000;
+  width: min(980px, 100%);
+  height: min(660px, calc(100dvh - 64px));
+  min-height: 480px;
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
   border: 1px solid var(--line);
   border-radius: 14px;
+  overflow: hidden;
   background: var(--panel);
   box-shadow: var(--shadow);
+}
+
+/* 深色下比 --chrome 再压一档,不至于和右边连成一片(同原生 AshPalette.brand)。 */
+:root[data-theme="dark"] .onboarding-card {
+  --onboarding-brand: #0c0c0e;
+}
+
+.onboarding-aside {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 32px;
+  padding: 84px 40px 32px;
+  background: var(--onboarding-brand);
+  color: #fff;
+}
+
+.onboarding-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+/* 和 app 图标同一个字形,反过来:白底黑字。小写 a 按 x 高居中,行框里往上提一点。 */
+.onboarding-mark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding-bottom: 4px;
+  border-radius: 10px;
+  background: #fff;
+  color: #000;
+  font-size: 27px;
+  font-weight: var(--w-strong);
+  line-height: 1;
+}
+
+.onboarding-brand b {
+  margin-top: 22px;
+  font-size: 30px;
+  font-weight: var(--w-strong);
+  line-height: 1.2;
+}
+
+.onboarding-brand p {
+  margin: 7px 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: rgb(255 255 255 / 62%);
 }
 
 /* 导轨同时是「回上一步」的入口 —— 所以每一格都是按钮,而不是一排装饰圆点。
    这也是卡片里唯一的导航,底下不再另给一颗「上一步」。 */
 .onboarding-rail {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: flex-start;
 }
 
 .onboarding-rail-step {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 5px 11px 5px 6px;
-  border: 1px solid transparent;
-  border-radius: 999px;
+  gap: 12px;
+  padding: 6px 0;
+  border: 0;
   background: none;
-  color: var(--muted);
+  color: rgb(255 255 255 / 45%);
   font-size: var(--t-sm);
+  line-height: 18px;
+  text-align: left;
   cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+  transition: color var(--dur-1) var(--ease-out);
 }
 
+span.onboarding-rail-step {
+  cursor: default;
+}
+
+/* 圆点:没走到是空心,当前这站实心,走过的换成一个勾。三种都占同一个 14px 的位,字不跳。 */
 .onboarding-rail-step i {
   display: grid;
   place-items: center;
-  width: 19px;
-  height: 19px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--raised);
-  font-size: var(--t-xs);
+  width: 14px;
+  height: 14px;
   font-style: normal;
-  font-variant-numeric: tabular-nums;
 }
 
-.onboarding-rail-step:hover:not(.is-on) {
-  color: var(--ink);
+.onboarding-rail-step i::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border: 1px solid rgb(255 255 255 / 40%);
+  border-radius: 999px;
 }
 
-.onboarding-rail-step.is-on {
-  border-color: color-mix(in oklab, var(--ink) 40%, var(--line));
-  background: color-mix(in oklab, var(--ink) 8%, var(--panel));
-  color: var(--ink);
-  font-weight: var(--w-medium);
+.onboarding-rail-step.is-on i::before {
+  border-color: #fff;
+  background: #fff;
 }
 
 .onboarding-rail-step.is-done i {
-  border-color: color-mix(in oklab, var(--ink) 45%, var(--line));
-  background: color-mix(in oklab, var(--ink) 14%, var(--panel));
-  color: var(--ink);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 16%);
+  color: #fff;
+}
+
+.onboarding-rail-step.is-done i::before {
+  display: none;
+}
+
+button.onboarding-rail-step:hover:not(.is-on),
+.onboarding-rail-step.is-done {
+  color: rgb(255 255 255 / 72%);
+}
+
+.onboarding-rail-step.is-on {
+  color: #fff;
+  font-weight: var(--w-medium);
+}
+
+.onboarding-rail-step:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* 右边:抬头和底栏钉住,中间那段装不下时自己滚 —— 「下一步」永远在原处,不用往下找。 */
+.onboarding-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
 }
 
 .onboarding-head {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  padding: 64px 56px 20px;
 }
 
 .onboarding-head h1 {
@@ -104,9 +191,13 @@
 }
 
 .onboarding-body {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 14px;
+  padding: 4px 56px 20px;
+  overflow: auto;
 }
 
 .onboarding-muted {
@@ -257,8 +348,55 @@
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding-top: 16px;
+  margin: 0 56px;
+  padding: 16px 0 24px;
   border-top: 1px solid var(--line);
+}
+
+.onboarding-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
+
+/* 「跳过」随时能按:字用正文的墨色。照幽灵键默认的淡字,旁边那颗「下一步」没配好时也是淡字,
+   两颗看上去都像点不了。 */
+.onboarding-actions .ui-button--ghost:not(:disabled) {
+  color: var(--ink);
+}
+
+/* 项目那一站一个都没有时:整块就是「建第一个」。 */
+.onboarding-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 36px 24px 32px;
+  border: 1px dashed var(--line2);
+  border-radius: 12px;
+  text-align: center;
+}
+
+.onboarding-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 6px;
+  border-radius: 10px;
+  background: var(--raised);
+  color: var(--muted);
+}
+
+.onboarding-empty b {
+  font-size: var(--t-md);
+  font-weight: var(--w-medium);
+}
+
+.onboarding-empty p {
+  margin: 0 0 12px;
+  font-size: var(--t-sm);
+  color: var(--muted);
 }
 
 /* 供应商表单与本地 CLI 检测结果是设置页那两份原件(样式在 providers-settings.css /
@@ -273,14 +411,56 @@
   background: var(--raised);
 }
 
-@media (max-width: 640px) {
+/* 窄屏(手机浏览器):左栏收成顶上一条,只留标识和导轨。 */
+@media (max-width: 760px) {
+  .onboarding-shell {
+    padding: 0;
+  }
+
   .onboarding-card {
-    padding: 20px 16px 16px;
+    height: 100dvh;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    border: 0;
+    border-radius: 0;
+  }
+
+  .onboarding-aside {
+    flex-direction: row;
+    align-items: center;
+    padding: 14px 16px;
+  }
+
+  .onboarding-brand b,
+  .onboarding-brand p {
+    display: none;
+  }
+
+  .onboarding-mark {
+    width: 30px;
+    height: 30px;
+    padding-bottom: 3px;
+    border-radius: 8px;
+    font-size: 19px;
+  }
+
+  .onboarding-rail {
+    flex-direction: row;
+    gap: 14px;
+  }
+
+  .onboarding-head {
+    padding: 22px 16px 14px;
+  }
+
+  .onboarding-body {
+    padding: 4px 16px 16px;
   }
 
   .onboarding-foot {
-    flex-direction: column;
-    align-items: stretch;
+    margin: 0 16px;
+    padding-bottom: 16px;
   }
 
   .onboarding-provider-pick {
