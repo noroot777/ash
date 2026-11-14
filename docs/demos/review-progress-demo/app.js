@@ -27,7 +27,7 @@
     fail: { n: 1, text: "第 1 轮审查未通过，2 条意见", took: "6m 10s", at: "16:28", items: [["say", S1], ["ran", 12], ["say", S2], ["ran", 9], ["say", FAIL]] },
   };
 
-  const ui = { style: "new", moment: 2, bubble: "round", open: new Set(), cardCollapsed: false, tick: 0 };
+  const ui = { style: "new", moment: 2, bubble: "say", open: new Set(), cardCollapsed: false, tick: 0 };
   // 上一次画出来的字：只有真换了字的那一处才做换字的小动画，点开收起时别的地方不跟着闪。
   let shown = {};
 
@@ -68,7 +68,7 @@
     next[`n${round.n}`] = below;
     return `<div class="rv">
       <div class="rv-bubble">
-        <header><b>审查者</b><span> · codex@nodemach · gpt-6.1-sol · medium · 最多 7 轮 · 11/14 ${round.at}</span></header>
+        <header><b>审查者</b><span> · codex@nodemach · gpt-6.1-sol · medium · 第 ${round.n}/7 轮 · 11/14 ${round.at}</span></header>
         <button type="button" class="rv-text" data-act="lane:${round.n}" aria-expanded="${open}" aria-label="${label}，${open ? "收起" : "摊开"}这一轮的经过">
           <i class="run-dot"></i><span class="${inBubble === label ? "" : "rv-say-clamp"}${fresh(`b${round.n}`, inBubble)}">${esc(inBubble)}</span>
         </button>

@@ -42,7 +42,7 @@
         <button type="button" data-value="0">刚开始</button><button type="button" data-value="1">审到一半</button><button type="button" data-value="2">快审完</button><button type="button" data-value="3">通过</button><button type="button" data-value="4">没过，第 2 轮</button>
       </div></div>
       <div class="control" id="bubble-control"><span>气泡里写</span><div class="seg" data-key="bubble">
-        <button type="button" data-value="round">第几轮</button><button type="button" data-value="say">最新一句</button>
+        <button type="button" data-value="say">最新一句</button><button type="button" data-value="round">第几轮</button>
       </div></div>
       <button type="button" class="play" id="play"><svg class="icon"><use href="#i-play"/></svg>从头放一遍</button>
     </section>
@@ -69,9 +69,9 @@
         <tbody>
           <tr><th>卡片的边框、青色竖线、盾牌</th><td>去掉。「这是审查者」靠位置认：右边是对智能体说话的人</td></tr>
           <tr><th>「进行中」徽章</th><td>气泡里那颗会动的点，和侧栏在跑的任务是同一颗</td></tr>
-          <tr><th>「第 1/7 轮审查」</th><td>气泡里的字：第 1 轮审查中。出结论时只换最后两个字</td></tr>
+          <tr><th>「第 1/7 轮审查」</th><td>指到气泡时上方那一行里；出结论后气泡里写「第 1 轮审查通过」</td></tr>
           <tr><th>谁在审、模型、智能水平、开始时间</th><td>指到气泡，上方浮出一行，和结论气泡现在的做法相同</td></tr>
-          <tr><th>审查者说的话、跑的命令</th><td>气泡下面只留最新一句和用时；点气泡，整段经过在原处摊开</td></tr>
+          <tr><th>审查者说的话、跑的命令</th><td>气泡里是最新一句，下面一行是正在跑的命令和用时；点气泡，整段经过在原处摊开</td></tr>
           <tr><th>「收起」按钮</th><td>再点一下气泡</td></tr>
         </tbody>
       </table>
