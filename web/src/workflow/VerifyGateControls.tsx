@@ -26,6 +26,8 @@ import { nextAnchor, segmentAfter } from "@ash/shared/workflow-policy";
 import { MagnifyingGlass, SealCheck, SpinnerGap } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
+import { blocker, refreshTaskActions, shown, useTaskActions } from "../lib/useTaskActions.ts";
 
 /** 签完字之后这条线会做的事，按顺序念一遍。 */
 function forcePassMessage(def: WorkflowDef, stationId: string, task: Task): string {
@@ -179,8 +181,14 @@ export function VerifyGateControls({
 }) {
   const [busy, setBusy] = useState<"force" | "redo" | null>(null);
   const inFlight = task.status === "running" || task.status === "queued";
+  // 「再验一轮」出不出、点不点得了照服务端的判据（lib/useTaskActions.ts 的 `verify`），跟派审接口的
+  // 挡板同一个函数；强制通过是另一件事，还按上面那条「在跑就先灰掉」。
+  const verify = useTaskActions(task.id)?.verify;
+  const redoBlocked = blocker(verify);
+  const redoTip = useHoverTip();
 
   const redo = async () => {
+    if (!verify?.ok) return;
     setBusy("redo");
     try {
       // 不带任何 override：后端按**这一站**写的执行器与模型去验，跟自动那轮一模一样。
@@ -190,6 +198,7 @@ export function VerifyGateControls({
       notify(`已开始第 ${round} 轮验证`);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
+      void refreshTaskActions(task.id);
     } finally {
       setBusy(null);
     }
@@ -198,10 +207,15 @@ export function VerifyGateControls({
   return (
     <>
       <div className="wf-vactions">
-        <button type="button" disabled={inFlight || !!busy} onClick={() => void redo()}>
-          {busy === "redo" ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} />}
-          <span>{busy === "redo" ? "启动中" : inFlight ? "执行中" : "再验一轮"}</span>
-        </button>
+        {shown(verify) && (
+          <>
+            <button type="button" className={redoBlocked ? "is-disabled" : undefined} disabled={!!busy} aria-disabled={redoBlocked ? true : undefined} {...(redoBlocked ? redoTip.anchorProps : {})} onClick={() => void redo()}>
+              {busy === "redo" ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} />}
+              <span>{busy === "redo" ? "启动中" : inFlight ? "执行中" : "再验一轮"}</span>
+            </button>
+            {redoBlocked && <HoverTip at={redoTip.at}>{redoBlocked}</HoverTip>}
+          </>
+        )}
         <ForcePassVerifyButton
           task={task}
           def={def}

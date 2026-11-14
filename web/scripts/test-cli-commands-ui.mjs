@@ -166,7 +166,9 @@ try {
   await page.getByRole("button", { name: "发送回复", exact: true }).click();
   assert.equal((await (await response).json()).command, true);
   await page.getByText(/这是 ash 保存的目标快照/).first().waitFor();
-  assert.equal(await page.locator(".task-message--user").count(), 0);
+  // 原生命令不落成「你说的话」。任务原始需求自 eab6cf39 起是会话的第一颗你的气泡（data-conversation-input="requirement"），
+  // 不算这条命令的回显，排除在外。
+  assert.equal(await page.locator(".task-message--user:not(:has([data-conversation-input=\"requirement\"]))").count(), 0);
   const unchanged = await (await fetch(`${base}/api/tasks/claude-ui-task`)).json();
   assert.equal(unchanged.status, "done");
   assert.equal(unchanged.stage, "accepted");

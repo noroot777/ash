@@ -3,8 +3,7 @@ import { and, eq, isNotNull, or } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRounds, regressionEvidence, tasks } from "./db/schema.js";
 import type { RegressionFinalization, RegressionSettlement } from "./db/schema-regression-evidence.js";
-import { checkRegressionConclusion, evidenceState } from "./regression-evidence-lifecycle.js";
-import { RegressionConclusionRejected } from "./regression-conclusion-errors.js";
+import { evidenceState } from "./regression-evidence-lifecycle.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { isTurnClaimed, turnIdentity } from "./runs.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
@@ -147,19 +146,7 @@ export async function regressionSettlementConclusion(taskId: string, directory: 
     ...(input.fence ? { fence: input.fence } : {}),
   };
   if (stored.unknown) await appendTaskTimeline(taskId, alertLine("审查缺少持久保存的真实退出结果，不能因已有通过结论推定正常结束；本轮按异常结束处理。"));
-  if (outcome !== "done" || !checked.target) return checked;
-  try {
-    await checkRegressionConclusion(taskId, directory, conclusion ?? "", undefined, true);
-    return checked;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (error instanceof RegressionConclusionRejected) {
-      await appendTaskTimeline(taskId, alertLine(`通过结论的依据已失效：${message}`));
-      return { ...checked, conclusion: "verify_failed" };
-    }
-    await appendTaskTimeline(taskId, alertLine(`验证依据暂不可核验，保留结论及审查轮次，恢复后可重试：${message}`));
-    return null;
-  }
+  return checked;
 }
 
 export async function completeRegressionSettlement(directory: string, checked: CheckedSettlement,
@@ -182,8 +169,6 @@ export async function completeRegressionSettlement(directory: string, checked: C
       console.error(`[ash] 审查结算撤回 ${directory}：判断之后这条任务又起过回合`);
       return false;
     }
-    // 同上：存量 revoked=1 的旧轮次，没交依据就不许把通过结论落定（新轮次 revoked 恒为 0，这一支不触发）。
-    if (checked.target && checked.outcome === "done" && checked.conclusion === "verified" && state.revoked && !state.acceptedBasis) return false;
     const owner = (await transaction.select().from(tasks).where(eq(tasks.id, state.settlement.ownerTaskId)))[0];
     const ownsRound = owner && (await activeReviewScope(transaction, owner))?.directory === directory;
     const wait = ownsRound ? await reviewWaitForExit(transaction, owner, state) : undefined;

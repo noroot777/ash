@@ -10,6 +10,7 @@ import type {
   BatchCreateTasksBody,
   ExecutorDowngradeItem,
   FreeReviewDispatchInput,
+  FreeReviewExpiredScreenshots,
   FreeReviewRoundsInput,
   FreeReviewDisputeResolution,
   FreeReviewDisputeTarget,
@@ -131,7 +132,7 @@ export const api = {
     request(`/projects/${id(projectId)}/preview/detect`),
   updateProject: (
     projectId: string,
-    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "useWorktreeDefault" | "previewCommand" | "previewConfig" | "commandsConfig" | "acceptCommit" | "acceptAutoCommit" | "acceptGateCommand" | "acceptGateBaseline" | "browserCdpDomains">>,
+    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "useWorktreeDefault" | "previewCommand" | "previewConfig" | "commandsConfig" | "acceptCommit" | "acceptAutoCommit" | "acceptGateCommand" | "acceptGatePrepare" | "acceptGateBaseline" | "browserCdpDomains">>,
   ): Promise<ProjectView> => request(`/projects/${id(projectId)}`, json("PATCH", patch)),
   deleteProject: (projectId: string): Promise<{ deleted: true }> =>
     request(`/projects/${id(projectId)}`, { method: "DELETE" }),
@@ -204,7 +205,10 @@ export const api = {
 
   // 列表不带正文（见 shared 的 TaskListItem）；正文走 api.task(id)。
   tasks: (signal?: AbortSignal): Promise<TaskListItem[]> => request("/tasks", { signal }),
-  task: (taskId: string): Promise<Task> => request(`/tasks/${id(taskId)}`),
+  task: (taskId: string, signal?: AbortSignal): Promise<Task> => request(`/tasks/${id(taskId)}`, { signal }),
+  // 任务「此刻能做什么」（shared/src/task-actions.ts）：只经 useTaskActions 取，别处不直接调。
+  taskActions: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared").TaskActions> =>
+    request(`/tasks/${id(taskId)}/actions`, { signal }),
   taskQuestionHistory: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared/questions").QuestionRecord[]> =>
     request(`/tasks/${id(taskId)}/question-history`, { signal }),
   ...taskNoticeApi,
@@ -289,6 +293,8 @@ export const api = {
       sendAt?: string;
       /** 等这个任务完成后再发(与 sendAt 二选一)。 */
       afterTaskId?: string;
+      /** 页面先画出来的那份(乐观回显)的凭据:服务端落盘、播出时原样带回,页面凭它认回同一句。 */
+      clientKey?: string;
     },
   ): Promise<ReplyTaskResult> =>
     request(`/tasks/${id(taskId)}/reply`, json("POST", { text, ...options })),
@@ -379,6 +385,9 @@ export const api = {
     text: string; truncated: boolean; updatedAt: string | null;
     exists: boolean; running: boolean; starting: boolean; command: string | null; url: string | null;
   }> => request(`/tasks/${id(taskId)}/free-workflow/preview/log${serviceId ? `?service=${id(serviceId)}` : ""}`),
+  // 这个任务里过了保留期、已经删掉的审查截图（见 free-workflow/expiredEvidence）。
+  freeReviewExpiredScreenshots: (taskId: string): Promise<FreeReviewExpiredScreenshots> =>
+    request(`/tasks/${id(taskId)}/free-workflow/expired-screenshots`),
   freeReviewFileUrl: (taskId: string, runId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/free-workflow/review-file?run=${id(runId)}&round=${id(String(round))}&name=${id(name)}`),
   // 人工替这一站「自动验证」签字放行。**后端会接着把这一站之后那一段跑掉**——线上
@@ -427,6 +436,9 @@ export const api = {
   // 与再推一把（agent 那一轮跑完了还没修好）。
   rehandOffAcceptGate: (taskId: string): Promise<{ handedOff: true; gate: AcceptGateView }> =>
     request(`/tasks/${id(taskId)}/accept-gate/handoff`, json("POST", {})),
+  // 合并预览撞了冲突：不等验收，直接把冲突交给任务去解（与验收撞冲突时交的是同一份）。
+  handOffGateConflict: (taskId: string): Promise<{ ok: true; message: string }> =>
+    request(`/tasks/${id(taskId)}/accept-gate/conflict-handoff`, json("POST", {})),
   branchPlan: (taskId: string): Promise<BranchPlanView> => request(`/tasks/${id(taskId)}/branch-plan`),
   releaseTaskWorkspace: (taskId: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/release-workspace`, json("POST", { fingerprint })),
   changeMergeTarget: (taskId: string, branch: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/merge-target`, json("POST", { branch, fingerprint })),
@@ -574,7 +586,11 @@ export const api = {
   // 页面上那份正文旧了服务端会 409，而不是删错一段。
   deleteConversationSegments: (
     sessionId: string,
-    segments: Array<{ index: number; fingerprint: string; answerId?: string } | { trace: { from: string; to: string; fingerprint: string } }>,
+    segments: Array<
+      | { index: number; fingerprint: string; answerId?: string }
+      | { trace: { from: string; to: string; fingerprint: string } }
+      | { steps: { turnStartedAt: string; after: number | null; until: number | null; fingerprint: string } }
+    >,
   ): Promise<{ deleted: number }> =>
     humanAction(`/sessions/${id(sessionId)}/conversation/delete`, json("POST", { segments })),
   duetTranscript: (taskId: string): Promise<unknown[]> =>

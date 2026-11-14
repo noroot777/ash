@@ -34,7 +34,11 @@ const entries = (path: string | undefined) => (path ?? "").split(delimiter).filt
 
 try {
   const { turnIdentityEnv, withoutTurnIdentity } = await import("../src/turn-identity.js");
-  const basePath = process.env.PATH ?? "";
+  // 这条测试本身也可能是在某条 ash 任务的回合里被起来的(执行者跑自己的回归),继承来的 PATH
+  // 里就带着那条任务的身份目录 —— 设/清两侧照设计都会把它筛掉(下面「别人家那段」那一节钉的
+  // 就是这件事)。基线先洗掉它,「一段都不许动」比的才是同一份。
+  process.env.PATH = entries(process.env.PATH).filter((entry) => !isTurnIdentityPathEntry(entry)).join(delimiter);
+  const basePath = process.env.PATH;
 
   // ── ① 设:五个变量 + PATH 末尾多一段,文件内容与权限都对 ────────────────────
   {

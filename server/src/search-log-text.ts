@@ -1,6 +1,8 @@
 const METADATA_FIELDS = new Set([
   "type", "kind", "role", "t", "at", "agent", "timestamp", "created_at", "updated_at",
   "id", "uuid", "session_id", "tool_use_id", "parent_tool_use_id", "turn_id", "call_id",
+  // 会话记录的身份（回合起点、页面凭据），不是可搜的正文。
+  "turnStartedAt", "clientKey",
 ]);
 const ESCAPES: Record<string, string> = { n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", '"': '"', "\\": "\\", "/": "/" };
 type Frame = { object: boolean; key: string; expectKey: boolean; visible: boolean };

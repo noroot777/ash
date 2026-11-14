@@ -40,8 +40,8 @@ export function liveDeadline(
  * 「它是什么时候挂上的」那一段。
  *
  * **不能无脑写 `起于 ${startedAt}`**：那一列在历史投影上允许退化成占位值 —— 真实起点裁不
- * 出来时它退到那一整轮执行的开始时刻、甚至退到落库时刻（见 server/src/claude-monitor-commit.ts
- * 的 `anchor.startedAt ?? startedAtLow ?? fileStartedAt ?? now()`）。退化值仍然是一个**合法
+ * 出来时它退到那一整轮执行的开始时刻、甚至退到落库时刻（当年历史扫描的
+ * `anchor.startedAt ?? startedAtLow ?? fileStartedAt ?? now()`）。退化值仍然是一个**合法
  * 日期**，所以 `formatInstant` 的「坏日期不显示」一个字都挡不住它。第 1 轮审查用真实 backfill +
  * 真实 `listMonitors` 复现到的卡片，同一行先写「起于 10/19 10:00」再写「总共盯 10 分钟
  * （起点不确定）」—— 自相矛盾，而被当真的恰恰是前半句。

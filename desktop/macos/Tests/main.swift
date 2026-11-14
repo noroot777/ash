@@ -1,16 +1,9 @@
 import Foundation
 import Darwin
 
-enum AshConfig {
-  static let baseURL = URL(string: ProcessInfo.processInfo.environment["ASH_URL"]!)!
-  static var healthURL: URL { baseURL.appendingPathComponent("api/health") }
-  static var repoURL: URL? {
-    ProcessInfo.processInfo.environment["ASH_TEST_REPO"].map { URL(fileURLWithPath: $0) }
-  }
-  static var downloadJournalURL: URL {
-    URL(fileURLWithPath: ProcessInfo.processInfo.environment["ASH_TEST_JOURNAL"]!, isDirectory: true)
-  }
-}
+// scripts/test-macos-client.mjs 的驱动：编进来的是真的 AshConfig / AshHealth / ServerLauncher /
+// DataImport，配置全走环境变量（ASH_URL、ASH_DATA_DIR、ASH_MAC_RUNTIME、ASH_MAC_DOWNLOAD_JOURNAL），
+// 碰不到日常那一份 app 的数据。
 
 func require(_ condition: @autoclosure () -> Bool, _ message: String) {
   guard condition() else {
@@ -24,6 +17,12 @@ func outcomeCode(_ outcome: ServerLauncher.Outcome) -> Int32 {
   case .ready:
     print("READY")
     return 0
+  case .needsSetup:
+    print("NEEDS SETUP")
+    return 3
+  case .occupied(let explanation):
+    print("OCCUPIED: \(explanation)")
+    return 2
   case .failed(let reason):
     print("FAILED: \(reason)")
     return 1
@@ -31,14 +30,16 @@ func outcomeCode(_ outcome: ServerLauncher.Outcome) -> Int32 {
 }
 
 let mode = CommandLine.arguments[1]
-if mode == "start" {
+if mode == "start" || mode == "start-fresh" {
+  ServerLauncher.shared.freshStartApproved = mode == "start-fresh"
   exit(outcomeCode(ServerLauncher.shared.ensureRunningSync(timeout: Double(CommandLine.arguments[2])!)))
 }
 if mode == "coalesce" {
+  ServerLauncher.shared.freshStartApproved = true
   var received = 0
   var failed = false
   for _ in 0..<8 {
-    ServerLauncher.shared.ensureRunning(timeout: 1) { outcome in
+    ServerLauncher.shared.ensureRunning(timeout: 5) { outcome in
       failed = outcomeCode(outcome) != 0 || failed
       received += 1
     }
@@ -50,13 +51,30 @@ if mode == "coalesce" {
   exit(0)
 }
 if mode == "health" {
-  // 窗口从占位页恢复用的就是这一次不带 pid 的探测。
-  let done = DispatchSemaphore(value: 0)
-  var ready = false
-  AshHealth.probe { ready = $0; done.signal() }
-  done.wait()
-  print(ready ? "READY" : "NOT READY")
+  // 窗口从占位页恢复用的就是这一次探测 + isServing。
+  let probe = AshHealth.probeSync()
+  switch probe {
+  case .down: print("DOWN")
+  case .unreachable(let why): print("UNREACHABLE \(why)")
+  case .notAsh: print("NOT ASH")
+  case .ash: print(AshHealth.isServing(probe) ? "READY" : "FOREIGN")
+  }
   exit(0)
+}
+if mode == "import-inspect" || mode == "import" {
+  do {
+    let source = try DataImport.inspect(URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true))
+    var held = ""
+    if mode == "import" {
+      let report = try DataImport.run(source, into: AshConfig.dataURL, lockTimeout: Double(CommandLine.arguments.dropFirst(3).first ?? "") ?? 60)
+      held = " held=\(report.held.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ",")) relocated=\(report.relocated)"
+    }
+    print("OK live=\(source.livePID.map(String.init) ?? "none")\(held)")
+    exit(0)
+  } catch {
+    print("REFUSED: \(error.localizedDescription)")
+    exit(1)
+  }
 }
 if mode == "reclaim" {
   DownloadTransaction.reclaimAbandoned()
@@ -65,9 +83,8 @@ if mode == "reclaim" {
 if mode == "chrome" {
   runWindowChromeProbe()
 }
-if mode == "lock" {
-  print(try ServerStartLock.path(repo: AshConfig.repoURL!, port: AshConfig.baseURL.port!))
-  exit(0)
+if mode == "guard" {
+  runInstanceGuardProbe(mode: CommandLine.arguments[2])
 }
 
 let destination = URL(fileURLWithPath: CommandLine.arguments[2])

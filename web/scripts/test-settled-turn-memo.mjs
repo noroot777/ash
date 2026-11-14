@@ -30,7 +30,7 @@ const lane = (patch = {}) => ({
   kind: "review-lane", id: "l1", source: "free", round: 1, totalRounds: null, title: "第 1 轮审查",
   items: [{ kind: "event", id: "l1:end", text: "自由工作流第 1 轮审查通过", variant: "note", tone: "neutral" }],
   reviewerLabel: "5.5审查", reviewerModel: null, reviewerEffort: null, note: null, startedAt: null, endedAt: "2026-11-12T10:30:00.000Z",
-  conclusion: "verified", verdict: "passed", complete: true, reportAvailable: false, report: null, runId: null, defaultCollapsed: true, findings: null,
+  conclusion: "verified", verdict: "passed", complete: true, reportAvailable: false, report: null, runId: null, findings: null,
   ...patch,
 });
 const receipts = (lanePatch, viewPatch = {}) => [

@@ -12,8 +12,8 @@ import {
   type ExecutorSelection,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
+import { blocker, refreshTaskActions, shown, useTaskActions } from "../lib/useTaskActions.ts";
 
-const REVIEW_IN_FLIGHT = new Set(["backlog", "queued", "running", "paused"]);
 
 function reviewDefaults(task: TaskListItem, parentTask: TaskListItem | null): {
   selection: ExecutorSelection;
@@ -67,9 +67,12 @@ export function ReviewDispatchControl({
   const [effort, setEffort] = useState(defaults.effort);
   const [open, setOpen] = useState(prominent);
   const [dispatching, setDispatching] = useState(false);
-  // 验证轮不再是一个独立任务，所以「我刚点过」记的是轮次号：等这一轮出现在 rounds 里就解锁。
-  const [dispatchedRound, setDispatchedRound] = useState<number | null>(null);
   const workerTypes = useMemo(() => registeredAgentTypes(profiles), [profiles]);
+  // 能不能再验一轮照服务端的判据（lib/useTaskActions.ts 的 `verify`），跟派审接口的挡板同一个函数：
+  // 历史审查任务、团队/讨论、归档、交接中的不出；在跑、排队、等答复/续跑、还有一轮没收尾的灰着说原因。
+  // 这里不再按本地 rounds 另推一份「验证正在进行」：派出去之后服务端的结论自己会变成灰着（重取见
+  // dispatch 末尾），本地只管「这一发请求还在路上」（dispatching）。
+  const verify = useTaskActions(task.id)?.verify;
 
   useEffect(() => {
     let alive = true;
@@ -91,7 +94,6 @@ export function ReviewDispatchControl({
     setModel(defaults.model);
     setEffort(defaults.effort);
     setOpen(prominent);
-    setDispatchedRound(null);
   }, [defaults, prominent, task.id]);
 
   useEffect(() => {
@@ -104,28 +106,15 @@ export function ReviewDispatchControl({
     setEffort("");
   }, [defaults.selection.agentType, profiles, profilesReady, selection, workerTypes]);
 
-  useEffect(() => {
-    if (dispatchedRound !== null && rounds.some((round) => round.round === dispatchedRound)) {
-      setDispatchedRound(null);
-    }
-  }, [dispatchedRound, rounds]);
+  if (!shown(verify)) return null;
 
-  if (task.mode !== "single" || task.reviewOf || task.archived) return null;
-
-  const activeRound = rounds.find((round) => REVIEW_IN_FLIGHT.has(round.reviewTaskStatus));
-  // running/queued 之外，「停在待答/待续跑」同样派不动：startVerifyRound 明确拒绝
-  // question/resumePrompt 非空的任务（那两个字段会被验证结算当成「验证者本轮中途提问」，
-  // 派验证之前就存在的话这一轮永远收不了尾）。前端不同步这道门禁，暂停待答的任务上就会
-  // 出现一个可点但必失败的「开始验证」（审查实测）。判据与 server/src/review.ts 同源。
-  const pendingAnswer = !!task.question || !!task.resumePrompt;
-  const targetBusy = task.status === "running" || task.status === "queued" || pendingAnswer;
+  const blocked = blocker(verify);
+  const targetBusy = !!blocked;
   const availabilityPending = !profilesReady;
   const noExecutor = profilesReady && nothingRunnable(profiles);
   const selectionPickable = isExecutorPickable(selection, workerTypes, profiles);
   const locallyUnavailable = profilesReady && !selectionPickable;
-  const dispatchLocked = !!activeRound || dispatchedRound !== null;
   const canSend = !targetBusy
-    && !dispatchLocked
     && !dispatching
     && !availabilityPending
     && !noExecutor
@@ -153,12 +142,13 @@ export function ReviewDispatchControl({
         model: model.trim() || null,
         reasoningEffort: effort || null,
       });
-      setDispatchedRound(round);
       setOpen(false);
+      refreshTaskActions(task.id);
       await onRefresh();
       notify(`已开始第 ${round} 轮验证`);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
+      void refreshTaskActions(task.id);
       await onRefresh();
     } finally {
       setDispatching(false);
@@ -170,20 +160,20 @@ export function ReviewDispatchControl({
       <div className="review-dispatch-heading">
         <span><MagnifyingGlass size={13} weight="bold" /></span>
         <div>
-          <b>{dispatchLocked ? "验证正在进行" : actionLabel}</b>
-          <small>{pendingAnswer ? "任务正等待答复或续跑，处理完才能验证。" : targetBusy ? "目标仍在运行或排队，结束后才能验证。" : dispatchLocked ? "当前轮次结束后可再验一轮。" : `将就在这个任务上立即开始第 ${nextRound} 轮真实运行验证。`}</small>
+          <b>{actionLabel}</b>
+          <small>{blocked ?? `将就在这个任务上立即开始第 ${nextRound} 轮真实运行验证。`}</small>
         </div>
         <button
           type="button"
-          disabled={targetBusy || dispatchLocked || dispatching}
+          disabled={targetBusy || dispatching}
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
         >
-          {dispatchLocked || dispatching ? <SpinnerGap size={12} className="is-spinning" /> : <MagnifyingGlass size={12} />}
-          {dispatchLocked ? "验证进行中" : open ? "收起" : actionLabel}
+          {dispatching ? <SpinnerGap size={12} className="is-spinning" /> : <MagnifyingGlass size={12} />}
+          {open ? "收起" : actionLabel}
         </button>
       </div>
-      {open && !targetBusy && !dispatchLocked && (
+      {open && !targetBusy && (
         <form onSubmit={(event) => { event.preventDefault(); void dispatch(); }}>
           <fieldset disabled={dispatching}>
             <div className="review-dispatch-fields">

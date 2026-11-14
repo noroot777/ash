@@ -56,6 +56,8 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
   if (pathname === "/api/settings") return reply(DEFAULT_APP_SETTINGS);
   // 「默认规则」那一节底下还挂着接力设置，这几条空着它才渲染得出来。
   if (pathname === "/api/handoff/identity") return reply({ fingerprint: "", publicKey: "", addresses: [] });
+  // 「默认规则」那一页在自用模式下摆着远程访问卡（40ef64cd 起），兜底的 `{}` 喂给它缺字段。
+  if (pathname === "/api/remote-access") return reply({ local: true, devices: [], requests: [] });
   if (pathname === "/api/handoff/peers") return reply({ peers: [] });
   if (pathname === "/api/handoff/return-grants") return reply({ grants: [] });
   if (pathname === "/api/handoff/targets") return reply({ targets: [] });

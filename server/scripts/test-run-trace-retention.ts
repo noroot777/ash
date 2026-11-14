@@ -1,4 +1,4 @@
-// 原始事件流的保留期（run-trace-retention.ts）：任务了结（验收 / 归档）之后再等满宽限期才删，
+// 原始事件流的保留期（run-trace-retention.ts，判据与清扫在 run-retention.ts）：任务了结（验收 / 归档）之后再等满宽限期才删，
 // 别的一律不碰。宽限期从「这一次了结」起算——不是日志的修改时间（第 1 轮审查 F1：搁了一个月
 // 才验收的任务，一验收就被删），也不是很久以前那一次了结（第 2 轮审查 F1：两次清扫之间重新
 // 打开又验收、取回又归档，清扫一次都没看到中间状态）；保留天数填错按默认值，不能变成立刻删
@@ -16,7 +16,8 @@ delete process.env.ASH_TRACE_KEEP_DAYS;
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, tasks } = await import("../src/db/schema.js");
-  const { sweepRawTraces, traceKeepDays } = await import("../src/run-trace-retention.js");
+  const { sweepRunRetention, retentionKeepDays } = await import("../src/run-retention.js");
+  const sweepRawTraces = async (nowMs: number) => (await sweepRunRetention(nowMs)).traces;
   const { commitAcceptanceStage } = await import("../src/review-acceptance.js");
   const { commitReopenAcceptedStage } = await import("../src/task-stage.js");
   const { eq } = await import("drizzle-orm");
@@ -45,7 +46,7 @@ try {
   for (const [raw, days] of [[undefined, 7], ["", 7], ["  ", 7], ["7d", 7], ["-1", 7], ["NaN", 7], ["Infinity", 7], ["0", 0], ["3", 3]] as const) {
     if (raw === undefined) delete process.env.ASH_TRACE_KEEP_DAYS;
     else process.env.ASH_TRACE_KEEP_DAYS = raw;
-    assert.equal(traceKeepDays(), days, `ASH_TRACE_KEEP_DAYS=${JSON.stringify(raw)}`);
+    assert.equal(retentionKeepDays(), days, `ASH_TRACE_KEEP_DAYS=${JSON.stringify(raw)}`);
   }
   delete process.env.ASH_TRACE_KEEP_DAYS;
 

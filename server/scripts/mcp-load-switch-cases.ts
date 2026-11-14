@@ -14,7 +14,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileAshMcpVerdict } from "../src/ash-mcp-file.js";
 import { ASH_MCP_TABLE, ashMcpConfigDir } from "../src/mcp-registry/catalog.js";
 import { registerAshMcp } from "../src/mcp-registry/register.js";
 import {
@@ -51,25 +50,6 @@ const dotFile = (host: string, name: string) => join(host, ".opencode", name);
 const ocState = (env: NodeJS.ProcessEnv, host: string, cwd?: string) =>
   effectiveConfigState(ashMcpHostSources("opencode", env, host, cwd), readingFor(mech("opencode")));
 
-/**
- * 在假 HOME 底下跑一段断言。
- *
- * **判定那一档认的是真 `homedir()`**(`fileAshMcpVerdict` 不收 home 参数 —— 产品代码里它就
- * 该读真的那个),而本轮新增的 `extraDirs`(opencode 的 `~/.opencode/`)和一半家的默认目录都
- * 挂在 home 下面。不换 HOME 的话这些用例会去读**跑测试这台机器上真实的**那几份配置:今天
- * 这台机器恰好没有 `~/.opencode/` 就绿、换一台有的就红。
- */
-function withHome<T>(home: string, fn: () => T): T {
-  const before = process.env.HOME;
-  process.env.HOME = home;
-  try {
-    return fn();
-  } finally {
-    if (before === undefined) delete process.env.HOME;
-    else process.env.HOME = before;
-  }
-}
-
 /** 宿主那几份配置的字节快照 —— 补接走过一遍之后逐字节比对(「只在缺的时候追加」)。 */
 const snapshot = (files: string[]) => files.map((f) => readFileSync(f, "utf8"));
 
@@ -88,7 +68,6 @@ export async function checkLoadAndSwitches(bench: Bench, group: Group): Promise<
     const stA = ocState(envA, a.host);
     assert.equal(stA.state, "present", `只有 config.json 有 ash ⇒ present:${stA.detail}`);
     assert.deepEqual(stA.fact?.launch?.args, ["/CONFIGJSON.js"], "生效的就是它那条");
-    assert.equal(withHome(a.host, () => fileAshMcpVerdict("opencode", envA, [a.host])).state, "present", "派审判定也得是 present");
     const beforeA = snapshot([aFile]);
     const rA = await registerAshMcp({
       agentType: "opencode", dir: ashMcpConfigDir("opencode", envA, a.host)!, hostHome: a.host, env: envA,
@@ -124,7 +103,6 @@ export async function checkLoadAndSwitches(bench: Bench, group: Group): Promise<
     const stA = ocState(envA, a.host);
     assert.equal(stA.state, "present", `~/.opencode 那份也要算进来源:${stA.detail}`);
     assert.deepEqual(stA.fact?.launch?.args, ["/DOT.js"]);
-    assert.equal(withHome(a.host, () => fileAshMcpVerdict("opencode", envA, [a.host])).state, "present", "派审判定也得放行");
     const beforeA = snapshot([aFile]);
     const rA = await registerAshMcp({
       agentType: "opencode", dir: ashMcpConfigDir("opencode", envA, a.host)!, hostHome: a.host, env: envA,
@@ -178,47 +156,7 @@ export async function checkLoadAndSwitches(bench: Bench, group: Group): Promise<
     const withCwd = ocState(envA, a.host, work);
     assert.equal(withCwd.state, "present", `带上 cwd 就解得准:${withCwd.detail}`);
     assert.deepEqual(withCwd.fact?.launch?.args, ["/RELATIVE.js"]);
-    assert.equal(withHome(a.host, () => fileAshMcpVerdict("opencode", envA, [work])).state, "present",
-      "派审判定吃候选工作目录 —— 真 CLI 在那个目录里跑就是 connected");
-
-    // ⒤ 几个候选目录解出来结论不一致 ⇒ 看不准(那一轮到底跑在哪个目录,ash 定不了)。
-    const mixed = withHome(a.host, () => fileAshMcpVerdict("opencode", envA, [work, join(a.host, "elsewhere")]));
-    assert.equal(mixed.state, "unknown", `候选目录结论不一致 ⇒ 看不准:${JSON.stringify(mixed)}`);
-    assert.equal(mixed.state === "unknown" && mixed.tell, true, "这一档要当场说给用户听");
-    group("相对路径的配置变量:带 cwd 才解、解不出就看不准不写、候选不一致也看不准");
-  }
-
-  // ── 项目级那几份:`.opencode/opencode.jsonc` 也在保护集合里 ──────────────
-  {
-    const a = bench("load-project-jsonc");
-    write(globalFile(a.host, "opencode.json"), ocBody({}));
-    const work = join(a.host, "proj");
-    write(join(work, ".opencode", "opencode.jsonc"), ocBody({ ash: OC("PROJECT") }));
-    const v = withHome(a.host, () => fileAshMcpVerdict("opencode", ocEnv(a.host), [work]));
-    assert.equal(v.state, "unknown", `项目里配了 MCP ⇒ 不下硬结论:${JSON.stringify(v)}`);
-    assert.match(v.state === "unknown" ? v.why : "", /opencode\.jsonc/, "说清是哪一份");
-    group("项目级 .opencode/opencode.jsonc:进保护集合(真 CLI 读它,而且压过全局)");
-  }
-
-  // ── 没逐格实测过读取位置的家:「没找到」只能答看不准 ───────────────────────
-  {
-    const a = bench("load-unmeasured");
-    // kimi:配置读得通、里面确实没有 ash。站点上没有 `loadMeasured` ⇒ 不许下 absent。
-    write(join(a.host, ".kimi-code", "mcp.json"), `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
-    const envA = { HOME: a.host } as NodeJS.ProcessEnv;
-    const vK = withHome(a.host, () => fileAshMcpVerdict("kimi", envA, [a.host]));
-    assert.equal(vK.state, "unknown", `读取位置没实测全 ⇒ 不拦人:${JSON.stringify(vK)}`);
-    assert.equal(vK.state === "unknown" && vK.tell, true, "放行了也要当场说一句");
-    assert.match(vK.state === "unknown" ? vK.why : "", /没逐格实测/, "说清为什么不下硬结论");
-    assert.equal(mech("kimi").site.loadMeasured, undefined, "没实测过的家不许声明 loadMeasured");
-
-    // 同形输入的 opencode(实测过,站点上有 `loadMeasured`)⇒ 照旧答 absent、照旧拦得住。
-    const b = bench("load-measured-absent");
-    write(globalFile(b.host, "opencode.json"), ocBody({}));
-    assert.equal(mech("opencode").site.loadMeasured, true, "opencode 的读取位置本轮逐格实测过");
-    assert.equal(withHome(b.host, () => fileAshMcpVerdict("opencode", ocEnv(b.host), [b.host])).state, "absent",
-      "实测过读取位置的家:确实没有就是没有(absent 在派审里是硬拒)");
-    group("absent 的可证性闸:实测过读取位置的家才敢说没有,其余放行并说一句");
+    group("相对路径的配置变量:带 cwd 才解、解不出就看不准不写");
   }
 
   await checkSwitches(bench, group);
@@ -248,10 +186,6 @@ async function checkSwitches(bench: Bench, group: Group): Promise<void> {
       assert.equal(state.state, want, `${tag} ⇒ ${want}(真 gemini 0.60.0 实测):${state.detail}`);
       if (want !== "disabled") continue;
       assert.match(state.detail, /mcp\.(excluded|allowed)/, `说清是哪一行在挡:${state.detail}`);
-      // 预检这一档也得跟上(上一版 present、无提示放行,那一轮起来一个 ash 工具都没有)。
-      const v = withHome(b.host,
-        () => fileAshMcpVerdict("gemini", { GEMINI_CLI_HOME: b.dir } as NodeJS.ProcessEnv, [b.dir]));
-      assert.equal(v.state, "disabled", `派审判定也得是 disabled:${JSON.stringify(v)}`);
       // 安装器:不许替用户打开那两个名单。
       const before = readFileSync(file, "utf8");
       const r = await registerAshMcp({ agentType: "gemini", dir: b.dir, hostHome: b.host, env: {} });

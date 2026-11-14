@@ -4,9 +4,11 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Group, Task, TaskListItem } from "@ash/shared";
 import { Dropdown } from "../../components/Dropdown.tsx";
-import { InspButton, InspRow } from "../../inspector/parts.tsx";
+import { InspRow } from "../../inspector/parts.tsx";
+import { InspMainButton } from "../../inspector/InspHead.tsx";
 import { api } from "../../lib/api.ts";
 import { canJoinQueue, placeTaskAfter, queueAfterOptions } from "../../lib/queueAfter.ts";
+import { blocker, refreshTaskActions, shown, useTaskActions } from "../../lib/useTaskActions.ts";
 import { QueueDrawer } from "../QueueDrawer.tsx";
 
 export function InfoQueue({
@@ -45,10 +47,9 @@ export function InfoQueue({
     return () => { alive = false; };
   }, [task.id, task.queueId, task.queuePosition, queueSignature, queueOpen]);
 
-  const canRequeue = task.parentId === null
-    && !task.archived
-    && !!task.queueId
-    && (task.status === "failed" || task.status === "canceled");
+  // 出不出、点不点得了照服务端的判据（lib/useTaskActions.ts），跟任务头更多菜单里那一项同一份。
+  const requeueVerdict = useTaskActions(task.id)?.requeue;
+  const requeueBlocked = blocker(requeueVerdict);
 
   const requeue = async () => {
     if (!task.queueId) return;
@@ -60,6 +61,7 @@ export function InfoQueue({
       notify(response.movedToEnd ? "已重新排队并移到队尾" : "已重新排队");
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
+      void refreshTaskActions(task.id);
     } finally {
       setRequeueing(false);
     }
@@ -97,11 +99,9 @@ export function InfoQueue({
           </button>
         </InspRow>
         <InspRow label="下一个"><span className="insp-cut">{nextQueueItem?.title ?? "队尾"}</span></InspRow>
-        {canRequeue && (
+        {shown(requeueVerdict) && (
           <InspRow label="">
-            <InspButton size="sm" disabled={requeueing} onClick={() => void requeue()}>
-              {requeueing ? "处理中…" : "重新排队"}
-            </InspButton>
+            <InspMainButton size="sm" action={{ label: requeueing ? "处理中…" : "重新排队", disabled: requeueing, blocked: requeueBlocked, onClick: () => void requeue() }} />
           </InspRow>
         )}
         {/* 抽屉是盖住整页的一层，挂到 body 上：这里是一组 dt/dd 中间，不该夹一块别的东西。 */}

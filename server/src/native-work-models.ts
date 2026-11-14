@@ -40,7 +40,10 @@ export async function enrichNativeWorkModels(
         ? await readCodexAgentProfile(nativeId, parent, configDir)
         : await readClaudeAgentProfile(nativeId, parent, session.cwd || session.worktreePath || "", configDir);
       const event = nativeAgentProfile(id, profile);
-      return event?.kind === "tool" ? { ...entry, event: { ...event, nativeWork: { ...event.nativeWork!, at: entry.at } } } : null;
+      // 读的时候补出来的这一条盘上没有:只借它那一条的时刻与回合,不借记录号,标上来源(SessionTraceEntry.origin)。
+      return event?.kind === "tool"
+        ? { at: entry.at, turnStartedAt: entry.turnStartedAt, origin: "models" as const, event: { ...event, nativeWork: { ...event.nativeWork!, at: entry.at } } }
+        : null;
     }));
     for (const entry of batch) if (entry) additions.push(entry);
   }

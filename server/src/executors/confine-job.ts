@@ -234,7 +234,7 @@ function jobConfinement(name: string, reopened: boolean): Confinement {
     for (let waited = 0; waited < HELD_WAIT_MS; waited += 50) {
       if (existsSync(ready)) { held = true; return; }
       if (holderDead()) return;
-      await new Promise((r) => { setTimeout(r, 50); });   // 不 unref:见 ash-mcp-probe.ts 的 wait
+      await new Promise((r) => { setTimeout(r, 50); });   // 不 unref:事件循环里只剩它时 unref 掉的 timer 不保活
     }
   };
   /**

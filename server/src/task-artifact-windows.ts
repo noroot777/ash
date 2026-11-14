@@ -194,7 +194,11 @@ export async function runWindows(
     if (await lens.sameDir(recorded, root.path)) return "exact";
     if (await lens.underDir(recorded, root.path)) {
       const rel = relative(await lens.canonical(root.path), await lens.canonical(recorded));
-      return rel.split(sep).some((part) => part === ".worktrees" || part === ".claude") ? "elsewhere" : "exact";
+      if (!rel.split(sep).some((part) => part === ".worktrees" || part === ".claude")) return "exact";
+      // 隔离工作区那一支同样要分「还在 / 已删」：还在 = 那摊活的产物就在那儿看；已经删了 =
+      // 它降级到主仓展示的那种（下面 `stale` 一档说的正是它），不分的话已删 worktree 里跑过的
+      // 那几段整段丢掉，写死绝对路径落到主仓的产物三档一起空（test:task-artifact-scope 钉着）。
+      return (await lens.dirExists(recorded)) ? "elsewhere" : "stale";
     }
     if (!root.repo || !(await lens.underDir(recorded, root.repo))) return "elsewhere";
     return (await lens.dirExists(recorded)) ? "elsewhere" : "stale";

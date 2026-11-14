@@ -59,10 +59,10 @@ const ALERT_LEADS: readonly RegExp[] = [
   /^升级迁移：上一版(验收停在「合并进行中」|「合并&清理」失败)/, // db/migrations（要你重新验收的那两条；补上标记的那条是回执）
   /^冲突交接失败/, // accept-conflict
   // 验收前置命令（门禁）。摘要那一句的成败在命令后面，见 gateVerdict。
-  /^这条命令点名要跑的/, // accept-gate-miss（单独一条的归因）
-  /^起跑前在 /, // accept-gate-miss
-  /^日志里说 /, // accept-gate-miss
-  /^这一次红的原因看起来是有东西没解析出来/, // accept-gate-miss
+  /^这条命令点名要跑的/, // 已删除的门禁事后归因（只剩老记录）
+  /^起跑前在 /, // 同上
+  /^日志里说 /, // 同上
+  /^这一次红的原因看起来是有东西没解析出来/, // 同上
   /^验收前置命令未执行/, // accept-gate
   /^验收前置命令尚未确认整棵进程树退出/, // accept-gate-settle
   /^验收前置命令被打断/, // accept-gate-recover

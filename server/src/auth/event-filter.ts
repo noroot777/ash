@@ -16,7 +16,7 @@ import { eq } from "drizzle-orm";
 import type { ServerEvent } from "@ash/shared";
 import { db } from "../db/index.js";
 import { tasks } from "../db/schema.js";
-import type { Actor } from "./context.js";
+import { ownerIdOf, type Actor } from "./context.js";
 import { isMultiUser } from "./mode.js";
 import { visibleProjectIds } from "./visibility.js";
 
@@ -40,7 +40,7 @@ async function projectIdOf(taskId: string): Promise<string | null> {
   return row.projectId;
 }
 
-/** 事件挂在哪个任务上。除 project.updated 外,所有 ServerEvent 变体要么带 taskId,要么带整个 task。 */
+/** 事件挂在哪个任务上。除 project.updated、task.reads 外,所有 ServerEvent 变体要么带 taskId,要么带整个 task。 */
 function taskIdOf(ev: ServerEvent): string | null {
   if ("taskId" in ev && typeof ev.taskId === "string") return ev.taskId;
   if ("task" in ev && ev.task) {
@@ -83,9 +83,14 @@ export function makeEventFilter(actor: Actor): {
 
   return {
     allow(ev) {
+      // 挂在人身上的事件：只推给他本人。排在 unrestricted 之前 —— 实例管理员看得见所有项目，
+      // 却不该被别人的已读记录叫去重拉一遍自己那份。
+      if (ev.type === "task.reads") return ev.ownerUserId === ownerIdOf(actor);
       if (unrestricted) return true;
       // 挂在项目上、不挂在任务上的事件：直接按项目可见性判。
       if (ev.type === "project.updated") return !!visible?.has(ev.projectId);
+      // 「开着的任务都重取一下动作」：不带任何任务的信息，谁都可以收。
+      if (ev.type === "task.actions.stale.all") return true;
       const taskId = taskIdOf(ev);
       // 认不出归属的事件一律**不推**。宁可漏一条无害的广播,也好过默认放行 ——
       // 将来新增一种事件时,忘了在这里登记的后果是「少显示了点东西」而不是越权。

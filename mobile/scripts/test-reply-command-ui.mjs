@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { readFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { readFile, mkdir, mkdtemp, rm, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, extname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,11 @@ import { chromium } from "playwright-core";
 import { chromeLaunchOptions } from "../../web/scripts/chrome-path.mjs";
 
 const dist = fileURLToPath(new URL("../dist/", import.meta.url));
+// 页面来自 expo export 的产物；没导出时下面每个请求都会 500、按钮等满 30 秒才超时，先说清缺什么。
+await access(join(dist, "index.html")).catch(() => {
+  console.error(`没有导出产物 ${dist}index.html —— 先在仓库根跑 \`npm run build:mobile\``);
+  process.exit(1);
+});
 const root = await mkdtemp(join(tmpdir(), "ash-mobile-command-ui-"));
 const shots = process.env.ASH_MOBILE_SCREENSHOTS ?? join(root, "shots");
 await mkdir(shots, { recursive: true });

@@ -32,7 +32,7 @@ export function FootnoteDot({ tone, live }: { tone: NoticeView["tone"]; live: bo
  * - 删除不在这里：每一句同时也是「N 条记录」里的一条，删除在那儿。只有没有记录可去的地方
  *   （团队时间线）才给 `deletable`。
  *
- * 审查结论不在这里（它在会话右边自己占一行，见 ReviewVerdict）；贴在它下面的那几句也用这一句，
+ * 审查结论不在这里（它在会话右边自己占一行，见 ReviewBubble）；贴在它下面的那几句也用这一句，
  * `placement="trailing"`：靠右，时刻排在字前面——藏着的时刻若在字后面，靠右的那句字就对不齐气泡。
  */
 export function FootnoteLine({

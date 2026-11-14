@@ -61,6 +61,7 @@ import { bus } from "./bus.js";
 import { isRunning, isTurnClaimed } from "./runs.js";
 import { forceReleaseTurn, heldTurns } from "./turn-lock.js";
 import { noteSystemNotice } from "./user-action-rejection.js";
+import { stuckWindDownText, windDownStuck, heldFor, type WindDown } from "./turn-wind-down.js";
 
 /**
  * 一把「无句柄、无令牌」的锁占多久开始报可疑。
@@ -128,8 +129,7 @@ export function turnReclaimStatus(taskId: string, at = Date.now(), thresholdMs =
   return reason === null ? { kind: "eligible", turn } : { kind: "blocked", turn, reason };
 }
 
-// 不满一分钟就按秒说 —— 阈值被调低时(回归测试、临时排查)「约 0 分钟」读起来像没发生。
-const held = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)} 秒` : `${Math.round(ms / 60_000)} 分钟`);
+const held = heldFor;
 
 /**
  * 放开那一下的**副作用**,单独一句。
@@ -365,10 +365,18 @@ export async function releaseSuspectTurn(
 
 /** 没过判据时说清是哪一条没过 —— 否则 409 只是一句「不行」,用户无从判断下一步。 */
 function notSuspectReason(
-  current: { taskId: string; role: string; token: string | null; claimedAt: number },
+  current: { taskId: string; role: string; token: string | null; claimedAt: number; windDown?: WindDown },
   now: number,
   thresholdMs: number,
 ): string | null {
+  // 进了收尾段的锁(CLI 已经结束)由那一轮自己在出口放,不论绑没绑令牌、句柄在不在册 —— 从旁边
+  // 拿走它等于让那条还活着的调用链和下一轮并存(turn-wind-down.ts 文件头)。卡住了就照实说卡在
+  // 哪、出路是什么,跟巡检那条持久提示同一份话。
+  if (current.windDown) {
+    return windDownStuck(current.windDown, now)
+      ? stuckWindDownText(current.windDown, now)
+      : `这一轮的 CLI 已经结束，正在收尾（此刻在「${current.windDown.step}」），收完会自己放开占位，不需要手动放开`;
+  }
   if (UNBOUNDED_WAIT_ROLES.has(current.role)) {
     return `这个回合占位的身份是 ${current.role}，它正常就会长时间持有（等人工裁决、等仓库锁、等打包传输），`
       + "系统无法按「占了多久」判断它是不是卡住了，不提供手动放开；请等待原持有者结束，长期不结束时查看对应流程的日志";
@@ -380,3 +388,34 @@ function notSuspectReason(
   }
   return null;
 }
+
+// ── 收尾卡住:只报告,出路是重启 ───────────────────────────────────────────────
+// 进了收尾段的锁停在同一步超过阈值(turn-wind-down.ts 的 `windDownStuck`):写一条持久的任务提示,
+// 说清卡在哪一步、多久了、出路是重启 ash。**不提供手动放开**,理由见 turn-wind-down.ts 文件头;
+// 上面的人工放开对这类锁照样拒绝,拒绝的话就是同一段(`notSuspectReason` 第一支)。
+//
+// 去重按「哪一把锁的第几步」:同一步只报一次;收尾后来又往前走、又卡在下一步,那是新的一条。
+// 锁放掉之后提示照现有惯例留着(跟「回合占位占着不动」那条一样,是一条发生过的记录)。
+const toldStuck = new Set<string>();
+
+export async function reportStuckWindDowns(at = Date.now()): Promise<number> {
+  const turns = heldTurns();
+  const alive = new Set(turns.map((turn) => `${turn.taskId}:${turn.seq}`));
+  for (const key of toldStuck) if (!alive.has(key.slice(0, key.lastIndexOf(":")))) toldStuck.delete(key);
+  let reported = 0;
+  for (const turn of turns) {
+    const windDown = turn.windDown;
+    if (!windDown || !windDownStuck(windDown, at)) continue;
+    const key = `${turn.taskId}:${turn.seq}:${windDown.index}`;
+    if (toldStuck.has(key)) continue;
+    toldStuck.add(key);
+    const text = stuckWindDownText(windDown, at);
+    console.warn(`[ash] 回合收尾卡住 task=${turn.taskId}（停在「${windDown.step}」约 ${held(at - windDown.stepAt)}），出路是重启 ash`);
+    const persisted = await noteSystemNotice(turn.taskId, `stuck-wind-down:${turn.claimedAt}:${turn.seq}:${windDown.index}`,
+      "回合收尾卡住", text);
+    if (persisted) reported += 1;
+    else toldStuck.delete(key); // 没写进去,下一趟再试
+  }
+  return reported;
+}
+

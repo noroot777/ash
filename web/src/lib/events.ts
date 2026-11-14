@@ -36,7 +36,8 @@ function releaseConnection() {
   connected = false;
 }
 
-function subscribeEvents(listener: EventListener) {
+/** 不在组件里的订阅方（模块级的缓存）用这个；组件里用 useServerEvents。 */
+export function subscribeEvents(listener: EventListener) {
   eventListeners.add(listener);
   ensureConnection();
   return () => {
@@ -45,7 +46,8 @@ function subscribeEvents(listener: EventListener) {
   };
 }
 
-function subscribeConnection(listener: ConnectionListener) {
+/** 同上：连接断开 / 连上。订上那一刻先报一次当前状态。 */
+export function subscribeConnection(listener: ConnectionListener) {
   connectionListeners.add(listener);
   listener(connected);
   ensureConnection();

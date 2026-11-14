@@ -22,7 +22,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { RUNS_DIR } from "./paths.js";
 import { now } from "./util.js";
-import { execFileText as exec } from "./exec.js";
+import { execFileText as exec, ExecTimeout } from "./exec.js";
+import { WIND_DOWN_COMMAND_TIMEOUT_MS } from "./turn-wind-down.js";
 
 interface TurnStart {
   cwd: string;
@@ -39,9 +40,15 @@ async function git(cwd: string, args: string[]): Promise<string | null> {
   try {
     // diff 可以很大：默认 1MB 的 maxBuffer 会直接抛，那样这个探测在大改动的回合上
     // 永远取不到值 —— 而大改动的回合恰恰是最该提示「你有产出」的那些。
-    const { stdout } = await exec("git", ["-C", cwd, ...args], { maxBuffer: 64 * 1024 * 1024 });
+    //
+    // 时限:结算那一份在回合收尾里跑、回合锁还占着(turn-wind-down.ts),一条不返回的 git 就是锁
+    // 永远放不掉。到点按进程组杀掉,这条提示按「探测不到」闭嘴 —— 它只是一句提示,少了不影响落位。
+    const { stdout } = await exec("git", ["-C", cwd, ...args], {
+      maxBuffer: 64 * 1024 * 1024, timeoutMs: WIND_DOWN_COMMAND_TIMEOUT_MS,
+    });
     return stdout;
-  } catch {
+  } catch (error) {
+    if (error instanceof ExecTimeout) console.warn(`[ash] 回合产出探测放弃:${error.message}`);
     return null;
   }
 }

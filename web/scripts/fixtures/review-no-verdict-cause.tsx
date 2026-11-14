@@ -3,8 +3,8 @@
 //
 // 会话照 EhQtqns9fnG2 落盘的样子搭：实现会话里一条带 runId 的「开始」，审查者会话里审查者说过话、
 // 一条**不带 runId** 的「没有给出结论」，之后是那一轮的原因记录，再往后一条别的提醒（被挡回的
-// 「重跑上一回合」）。每一份都照 TaskDetail 那条链路从审查状态推出动作（freeReviewRetryIdentity →
-// turnRetryTarget → 审查档）：
+// 「重跑上一回合」）。能不能续是服务端判的（随「此刻能做什么」下发），每一份带着它那一刻服务端会给的
+// 结论，照 TaskDetail 那条链路接成动作（retryTurnActions → 审查档）：
 //   legacy   老记录：原因记录是老服务端那句「报告可能写完了…report_stage…」，服务端现算出了原因；
 //   typed    新记录：原因记录是带类型的 review.no_verdict；
 //   vague    类型不明（只说得出退出码）：原话直接摆出来；
@@ -13,12 +13,12 @@
 //   reported 先写了报告再断掉：审查格那一轮的记录里报告和原话都在。
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import type { FreeReviewRound, FreeReviewRun, Session, Task } from "@ash/shared";
+import type { FreeReviewRound, FreeReviewRun, RetryTurnAction, Session, Task } from "@ash/shared";
 import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
 import { FreeReviewPane } from "../../src/free-workflow/FreeReviewPane.tsx";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
-import { freeReviewRetryIdentity, turnRetryTarget, type ReviewRetryAction } from "../../src/task-detail/turnRetry.ts";
+import { retryTurnActions } from "../../src/task-detail/turnRetry.ts";
 import type { FreeWorkflowApiState } from "../../src/lib/api.ts";
 import "../../src/styles/global.css";
 
@@ -59,6 +59,15 @@ const STATES: Record<string, FreeWorkflowApiState> = {
   "t-reported": state("t-reported", [run("run-1", round("run-1", TYPED, true, START, "# 第 1 轮审查\n\n先看了 diff，写到一半。\n"))]),
 };
 
+/** 服务端此刻给的「继续本轮审查」：能续的那一场那一轮（另开了新链时是新那一场）；不能续的没有。 */
+const continuable = (runId: string): RetryTurnAction => ({
+  kind: "review", review: { runId, round: 1, generation: "g1", sessionId: "rev" }, ok: true,
+});
+const RETRY: Record<string, RetryTurnAction | undefined> = {
+  "t-legacy": continuable("run-1"), "t-typed": continuable("run-1"), "t-vague": continuable("run-1"),
+  "t-newchain": continuable("run-2"), "t-reported": continuable("run-1"),
+};
+
 const nativeFetch = window.fetch.bind(window);
 window.fetch = (input, init) => {
   const url = new URL(typeof input === "string" ? input : (input as Request).url, window.location.origin);
@@ -93,10 +102,7 @@ function Case({ id }: { id: keyof typeof STATES }) {
     { session: sessions[0]!, output: impl, trace: [] },
     { session: sessions[1]!, output: rev, trace: [] },
   ], sessions, [] as never);
-  const target = turnRetryTarget(task, items, { reviewRetry: freeReviewRetryIdentity(STATES[id]!.reviews), sessions });
-  const reviewRetry: ReviewRetryAction | null = target?.kind === "review"
-    ? { review: target.review, run: async () => { log.__retried.push(id); } }
-    : null;
+  const { review: reviewRetry } = retryTurnActions(RETRY[id], async () => { log.__retried.push(id); });
   return (
     <section className={`${id}-fixture`} style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 16, marginBottom: 24 }}>
       <div className="feed"><ConversationFeed task={task} items={items} sessions={sessions} questionHistory={[]} loading={false} error={null}

@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { regressionEvidence, tasks } from "./db/schema.js";
 import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
+import { heldFollowUpRestore } from "./follow-up-held.js";
 import { activeReviewEvidence, assertReviewAuthority, reviewDeliveryAuthority, reviewIdentityMatches, ReviewSuperseded } from "./review-ownership.js";
 import { directionIdentityCleared } from "./task-direction-epoch.js";
 import { recordTaskStatus } from "./task-start-status.js";
@@ -31,7 +32,7 @@ export async function restoreUndeliveredReviewStart(taskId: string, receipt: Rev
       if (start.phase === "uncertain") return { unchanged: true as const };
       if (!receipt.repair && !state.settlement) await transaction.update(regressionEvidence)
         .set({ continuation: { ...state.continuation, phase: "uncertain" } }).where(eq(regressionEvidence.directory, state.directory));
-      await transaction.update(tasks).set({ status: "paused", followUpFrom: null, nativeTurn: false,
+      await transaction.update(tasks).set({ status: "paused", followUpFrom: null, ...heldFollowUpRestore(start.priorStatus, task.followUpFrom), nativeTurn: false,
         completeConfirmedAt: null, updatedAt: now(), waitOwnership: { ...task.waitOwnership,
           start: { ...start, phase: "uncertain" } } }).where(eq(tasks.id, taskId));
       return { task, status: "paused" as const, uncertain: true, unchanged: false as const };
@@ -43,6 +44,7 @@ export async function restoreUndeliveredReviewStart(taskId: string, receipt: Rev
     }
     const status = ["running", "queued"].includes(start.priorStatus) ? "paused" as const : start.priorStatus;
     await transaction.update(tasks).set({ status, ...directionIdentityCleared(), followUpFrom: null, nativeTurn: false,
+      ...heldFollowUpRestore(status, task.followUpFrom),
       completeConfirmedAt: null, updatedAt: now(), waitOwnership: { ...task.waitOwnership, start: undefined },
     }).where(eq(tasks.id, taskId));
     return { task, status, uncertain: false, unchanged: false as const };

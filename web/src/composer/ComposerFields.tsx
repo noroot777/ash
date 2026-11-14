@@ -4,18 +4,16 @@ import type {
   AgentType,
   Group,
   TaskMode,
-  TaskWorkflowMode,
   TeamPresetConfig,
 } from "@ash/shared";
 import { ChatsCircle, Check, DotsThree, FolderSimple, GitBranch, Tag, UsersThree } from "@phosphor-icons/react";
-import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import { ComposerStarters } from "./ComposerStudio.tsx";
 import { ComposerPopover } from "./ComposerPopover.tsx";
 import { useRovingChoice } from "../lib/useRovingChoice.ts";
 import { MODES } from "./composerParts.tsx";
 import { parseExecutorValue } from "../lib/agentAvailability.ts";
 import { Dropdown } from "../components/Dropdown.tsx";
-import { PillTabs, Toggle } from "../components/ui.tsx";
+import { Toggle } from "../components/ui.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import type { ComposerExecutorConfigs, ComposerExecutorRole } from "./executorOverrides.ts";
 import { ExecutorPickerField } from "./ExecutorPickerField.tsx";
@@ -26,13 +24,13 @@ import { useProviders } from "../lib/modelCatalog.ts";
 /** 摆进新建卡片的几块：卡片上方的模式、输入区下面那排入口、右下角的「谁来做」。 */
 export type ComposerFieldParts = {
   modes: ReactNode;
+  /** work 只有团队/讨论有：单任务只剩自由工作流一种做法，没有可选的。 */
   options: { work: ReactNode; where: ReactNode; org: ReactNode; more: ReactNode };
   executorTools: ReactNode;
 };
 
 export function ComposerFields({
   mode,
-  singleRunSummary,
   profiles,
   workerTypes,
   leadTypes,
@@ -69,15 +67,11 @@ export function ComposerFields({
   labels,
   onLabelsChange,
   onCreateGroup,
-  workflowSlot,
-  workflowMode,
-  onWorkflowModeChange,
   onModeChange,
   onPickStarter,
   children,
 }: {
   mode: TaskMode;
-  singleRunSummary: ComposerRunSummary;
   profiles: AgentExecutorProfile[];
   workerTypes: AgentType[];
   leadTypes: AgentType[];
@@ -119,9 +113,6 @@ export function ComposerFields({
   labels: string[];
   onLabelsChange: (labels: string[]) => void;
   onCreateGroup: () => void;
-  workflowSlot?: ReactNode;
-  workflowMode: TaskWorkflowMode;
-  onWorkflowModeChange: (mode: TaskWorkflowMode) => void;
   onModeChange: (mode: TaskMode) => void;
   onPickStarter: (body: string, mode: TaskMode) => void;
   children: (parts: ComposerFieldParts) => ReactNode;
@@ -154,7 +145,6 @@ export function ComposerFields({
     onEffortChange={(effort) => onEffortChange(role, effort)} />;
   const single = mode === "single";
   const duet = mode === "duet";
-  const preset = single && workflowMode === "preset";
   const workspaceLabel = (on: boolean) => (on ? "独立 worktree" : "项目目录");
   // 这颗开关每次新建任务都要面对一遍，所以把「本项目默认是什么」和「把这次的选择变成本项目
   // 默认」就放在改它的地方 —— 手机端(mobile/src/app/new.tsx)早就是这样，桌面端此前只能翻到
@@ -180,14 +170,9 @@ export function ComposerFields({
   const directory = isRepo && useWorktree ? "独立 worktree" : "项目目录";
   const groupName = groups.find((group) => group.id === groupId)?.name;
   const organization = [!duet && groupName, labels.length > 0 && `${labels.length} 个标签`].filter(Boolean).join(" · ");
-  // 「谁来做」：单任务是底排那颗三段胶囊；按起手式走时由那条线的「让 AI 干活」一站决定，
-  // 这里只读；团队 / 讨论是一颗入口，点开是分工（团队另有组合预设）。
+  // 「谁来做」：单任务是底排那颗三段胶囊；团队 / 讨论是一颗入口，点开是分工（团队另有组合预设）。
   const executorTools = single
-    ? preset
-      ? <span className="studio-preset-run" aria-label={`起手式执行器：${singleRunSummary.provider} · ${singleRunSummary.model} · ${singleRunSummary.effort}`}>
-        <WorkflowIcon size={14} /><span>{singleRunSummary.model} · {singleRunSummary.effort}</span>
-      </span>
-      : <div className="studio-inline-executor">{picker("single", "任务执行器")}</div>
+    ? <div className="studio-inline-executor">{picker("single", "任务执行器")}</div>
     : <ComposerPopover key={mode} tone="opt" align="end" label="谁来做" value={duet ? `${nameFor("voiceA")} × ${nameFor("voiceB")}` : `${nameFor("lead")} 调度`}
       trigger={<>{duet ? <ChatsCircle size={14} /> : <UsersThree size={14} />}<span>{duet ? "讨论者" : "团队配置"}</span></>} wide>
       {mode === "team" && <PresetBar currentConfig={currentTeamConfig} profiles={profiles} onApply={onApplyTeamPreset} notify={notify} />}
@@ -211,15 +196,7 @@ export function ComposerFields({
     </button>; })}
   </div>;
   // 输入区下面那排入口：图标 + 当前值，点开才是开关和下拉。名字和次序照旧。
-  const work = single ? <ComposerPopover tone="opt" label="工作方式" value={preset ? "起手式" : "自由工作流"} wide={preset}
-    trigger={<><WorkflowIcon size={14} /><span>{preset ? "起手式" : "自由工作流"}</span></>}>
-    <section className="studio-workflow">
-      <PillTabs label="工作方式" value={workflowMode}
-        items={[{ value: "free", label: "自由工作流" }, { value: "preset", label: "起手式" }]} onChange={onWorkflowModeChange} />
-      {preset ? <>{runLine("让 AI 干活", singleRunSummary)}{workflowSlot}</>
-        : <><p className="studio-help">由输入框下方的任务执行器完成目标，按需派审和预览，完成后统一验收。</p>{runLine("任务执行器", singleRunSummary)}</>}
-    </section>
-  </ComposerPopover> : <ComposerPopover tone="opt" label="如何交付"
+  const work = single ? null : <ComposerPopover tone="opt" label="如何交付"
     value={duet ? `${rounds ? `最多 ${rounds} 轮` : "不限轮数"} · ${gate ? "需要确认共识" : "自动结束"}` : review ? "自动审查" : "按需审查"}
     trigger={<><Check size={14} /><span>{duet ? "讨论规则" : review ? "自动审查" : "按需审查"}</span></>}>
     {duet ? <div className="composer-option-grid">

@@ -5,6 +5,57 @@ export const ASH_MCP_SERVER_NAME = "ash";
 export const LEGACY_ASH_MCP_SERVER_NAME = "harness";
 
 /**
+ * ash MCP 注册的全部工具（`mcp/src` 里每一处 `registerTool` 逐个对得上，`test-ash-mcp-inject.ts`
+ * 静态核对）。执行器起跑后拿 CLI 报的工具清单跟它比：用户配置里的工具白/黑名单会把其中几样挡掉。
+ */
+export const ASH_MCP_TOOLS = [
+  "accept_task",
+  "answer_question",
+  "ask_question",
+  "batch_create_tasks",
+  "complete_task",
+  "create_group",
+  "create_queue",
+  "create_task_chain",
+  "debate_reply",
+  "dispatch",
+  "dispute_review",
+  "get_queue",
+  "get_task",
+  "list_groups",
+  "list_monitors",
+  "list_tasks",
+  "patch_task",
+  "pause_task",
+  "queue_insert",
+  "queue_remove",
+  "queue_reorder",
+  "read_task_transcript",
+  "report_stage",
+  "requeue_task",
+  "resolve_group",
+  "resolve_project",
+  "run_group",
+  "run_task",
+  "start_monitor",
+  "stop_monitor",
+  "stop_task",
+] as const;
+
+/**
+ * 回合靠它们**收尾**的那几样：缺一样，那一类回合就交不了卷（ash 的提示词按回合类型指名要它们）。
+ * 值 = 缺了它会怎样，原样进诊断。
+ */
+export const ASH_MCP_TURN_EXITS: Readonly<Record<string, string>> = {
+  complete_task: "需要确认完成的回合会记未完成",
+  pause_task: "要停在检查点等续跑的回合停不下来",
+  ask_question: "要等人拍板的回合问不出来",
+  report_stage: "审查回合报不上结论",
+  debate_reply: "辩论里交不了发言",
+  dispute_review: "驳不了审查意见",
+};
+
+/**
  * 回合身份(「这一句话是哪条任务的哪一回合说的」)进 MCP 子进程用的变量名。
  *
  * **为什么一个身份有两套名字**:有的 CLI 按**变量名**过滤交给 MCP 子进程的环境。

@@ -5,6 +5,7 @@
 import type { Hono } from "hono";
 import { acceptGateLogText } from "./accept-gate-process.js";
 import { acceptGateRunOf, acceptGateState, cancelAcceptGate, forceReleaseAcceptGate, rehandOffAcceptGate } from "./accept-gate.js";
+import { handOffPreviewConflict } from "./accept-gate-conflict.js";
 
 export function mountAcceptGateRoutes(api: Hono): void {
   api.post("/tasks/:id/accept-gate/force-release", async (c) => {
@@ -45,6 +46,12 @@ export function mountAcceptGateRoutes(api: Hono): void {
     const result = await rehandOffAcceptGate(c.req.param("id"));
     if (!result.ok) return c.json({ error: result.error }, 409);
     return c.json({ handedOff: true, gate: result.gate });
+  });
+
+  // 「让任务解决」：合并预览撞冲突时直接把那份冲突交给任务，不必先点验收再被拒（accept-gate-conflict.ts）。
+  api.post("/tasks/:id/accept-gate/conflict-handoff", async (c) => {
+    const result = await handOffPreviewConflict(c.req.param("id"));
+    return result.ok ? c.json(result) : c.json({ error: result.error }, 409);
   });
 
   // 不想等了：收掉它。取消是用户自己的动作，所以留下的是 canceled 而不是 failed ——

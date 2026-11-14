@@ -1,14 +1,14 @@
 // 尾注上挂着动作的那几句（footnoteActions），四种真实形状的会话。DOM 夹具（footnote-actions.tsx）照它们
-// 渲染 ConversationFeed；动作的可用性都照 TaskDetail 那条链路推（审查档：freeReviewRetryIdentity →
-// turnRetryTarget），不是手塞一个 prop。每一种都在挂动作的那一句后面又落了几句别的话：
+// 渲染 ConversationFeed；动作照 TaskDetail 那条链路接（服务端下发的 retryTurn → retryTurnActions），
+// 不是手塞一个 prop。每一种都在挂动作的那一句后面又落了几句别的话：
 //   lane-event   审查卡还没收口（结论那一条没到）：这一轮为什么断了的那条旁注 + 「继续本轮审查」，
 //                后面来一句「本回合没有交卷」——卡里的尾注同样不许挤掉它（第 1 轮审查第 1 条）；
 //   lane-cause   这一轮收了口、没出结论：结论气泡下面的原因句 + 「继续本轮审查」，后面又来三件不同的事；
 //   turn-live    开着页面看到的崩溃：直播的异常边界 + 「重试这一回合」，后面又来三件不同的事；
 //   turn-reload  刷新以后从会话行补出来的那一句 + 「重试这一回合」，后面同样三件事。
-import type { FreeReviewRound, FreeReviewRun, Session, TaskListItem } from "@ash/shared";
+import type { FreeReviewRound, FreeReviewRun, RetryTurnAction, Session, TaskListItem } from "@ash/shared";
 import { buildConversationItems, type ConversationItem, type TimelineEntry } from "../../src/task-detail/conversationModel.ts";
-import { freeReviewRetryIdentity, turnRetryTarget, type ReviewRetryAction, type TurnRetryAction } from "../../src/task-detail/turnRetry.ts";
+import { retryTurnActions, type ReviewRetryAction, type TurnRetryAction } from "../../src/task-detail/turnRetry.ts";
 
 export type FootnoteActionCase = {
   id: string;
@@ -58,10 +58,11 @@ const run = (only: FreeReviewRound): FreeReviewRun => ({
 function reviewCase(id: string, output: string, reviews: FreeReviewRun[], log: string[], sentence: RegExp): FootnoteActionCase {
   const sessions = [session("rev", { agentType: "codex", role: "main" } as Partial<Session>)];
   const items = buildConversationItems([{ session: sessions[0]!, output, trace: [] }], sessions, []);
-  const target = turnRetryTarget(task(id), items, { reviewRetry: freeReviewRetryIdentity(reviews), sessions });
+  // 服务端判的「这一轮能续」（task-retry-turn.ts），跟审查状态里那一轮的 retry 是同一份身份。
+  const retry: RetryTurnAction = { ok: true, kind: "review", review: { runId: "run-1", round: 1, generation: "g1", sessionId: "rev" } };
   return {
     id, task: task(id), items, sessions, reviews,
-    reviewRetry: target?.kind === "review" ? { review: target.review, run: async () => { log.push(id); } } : null,
+    reviewRetry: retryTurnActions(retry, async () => { log.push(id); }).review,
     turnRetry: null, sentence, action: "继续本轮审查",
   };
 }
@@ -83,7 +84,7 @@ export function footnoteActionCases(log: string[]): FootnoteActionCase[] {
   const reload: FootnoteActionCase = {
     id: "turn-reload", task: task("turn-reload"), sessions: [crashed], reviews: [], reviewRetry: null,
     items: buildConversationItems([{ session: crashed, output: [head, line({ t: "agentEnd", at: at(5) }), ...LATER(6)].join("\n"), trace: [] }], [crashed], []),
-    turnRetry: { sessionId: crashed.id, run: async () => { log.push("turn-reload"); } },
+    turnRetry: retryTurnActions({ ok: true, kind: "turn", sessionId: crashed.id }, async () => { log.push("turn-reload"); }).turn,
     sentence: /^这一轮异常结束$/, action: "重试这一回合",
   };
   const running = session("s-live", { endedAt: null } as Partial<Session>);
@@ -101,7 +102,7 @@ export function footnoteActionCases(log: string[]): FootnoteActionCase[] {
   const live: FootnoteActionCase = {
     id: "turn-live", task: task("turn-live"), sessions: [running], reviews: [], reviewRetry: null,
     items: buildConversationItems([{ session: running, output: head, trace: [] }], [running], timeline),
-    turnRetry: { sessionId: running.id, run: async () => { log.push("turn-live"); } },
+    turnRetry: retryTurnActions({ ok: true, kind: "turn", sessionId: running.id }, async () => { log.push("turn-live"); }).turn,
     sentence: /^这一轮异常结束$/, action: "重试这一回合",
   };
   return [laneEvent, laneCause, live, reload];

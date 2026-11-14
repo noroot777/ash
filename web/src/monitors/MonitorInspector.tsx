@@ -5,7 +5,7 @@
 // 下的；而回复框上方那条带每多一行，输入区就矮一行。
 import { useMemo, useRef, useState } from "react";
 import { Plus } from "@phosphor-icons/react";
-import { MONITOR_RECOVERY_LABEL, type MonitorKind, type TaskMonitor } from "@ash/shared/monitor";
+import type { MonitorKind, TaskMonitor } from "@ash/shared/monitor";
 import { InspectorHeadActions } from "../inspector/index.ts";
 import { useInspectorRequest } from "../inspector/nav.tsx";
 import { RequestMissNote } from "../inspector/RequestMissNote.tsx";
@@ -125,36 +125,15 @@ export function MonitorInspector({
           }}
         />
       )}
-      {/* 「还没读完」要跟「确实没有」分开说：两者都是空面板，但该做的事完全不同（一个等
-          一下再看，一个根本没用过哨兵）。有卡片时也要说——那份列表可能只是其中一部分。 */}
-      {monitors.recovery?.pending && (
-        <p className="insp-hint monitor-inspector__pending" role="status">
-          历史监听还没读完（{monitors.recovery.reasons.map((reason) => MONITOR_RECOVERY_LABEL[reason]).join("、")}），
-          {/* 重试预算用完之后**不能再说「正在自动继续」**——那时定时器已经停了（第 8 轮审查
-              不拦项 1）。但也不能说成「已停止」:读这份状态本身就是一次真实请求，它顺手
-              把预算还回去又推了一轮（面板开着时每约 9 分钟自己再走一遍阶梯，是有意的）。
-              所以这里只说那两件**都成立**的事实:试了很多次还没读完，而每次打开都会再推
-              一轮（第 9 轮审查不拦项 3:文案与重试策略要对齐）。 */}
-          {monitors.recovery.exhausted
-            ? "已重试多次仍没读完；每次打开这一格都会再推一轮。"
-            : "正在自动继续。"}
-        </p>
-      )}
       {rows.length === 0
         ? (
-          // 三种空态分开说：还没读完 / **不知道**（恢复状态自己都没读到）/ 确实没有。
-          // 第三句是一句很强的断言（「这个任务没用过哨兵」），拿不到依据时不许说它。
-          //
-          // 「哨兵是什么」那段解释收进 + 的悬停提示和起哨兵的表单里，空态只说一句。
-          <div className="monitor-inspector__empty">
-            <InspNone>
-              {monitors.recovery?.pending
-                ? "历史还没读完，先给你看现有的（暂时一条也没有）。"
-                : monitors.recovery === null
-                  ? "读不到这个任务的监听恢复状态，所以还不能说它没用过哨兵。"
-                  : "这个任务上还没有哨兵。"}
-            </InspNone>
-          </div>
+          // 「哨兵是什么」那段解释收进 + 的悬停提示和起哨兵的表单里，空态只说一句 —— 而且只在
+          // 列表真读到之后说：还在读就留白，读失败上面那条报错已经说了。
+          monitors.listed && (
+            <div className="monitor-inspector__empty">
+              <InspNone>这个任务上还没有哨兵。</InspNone>
+            </div>
+          )
         )
         : (
           <div className="monitor-inspector__groups">

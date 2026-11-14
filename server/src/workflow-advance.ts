@@ -28,7 +28,6 @@ import { verifyStationAction } from "./review-policy.js";
 import { advanceSegment, type SegmentOptions, type SegmentResult } from "./workflow-steps.js";
 import { now } from "./util.js";
 import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js";
-import { AshMcpUnreachable } from "./ash-mcp-launch-gate.js";
 import { leavesHumanGate, newHumanGate } from "./task-human-gate.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -120,8 +119,7 @@ async function atVerifyStation(
     const reason = error instanceof Error ? error.message : String(error);
     await appendTaskTimeline(
       task.id,
-      alertLine(`想在「${STEP_LABELS.verify}」这一站开一轮验证，但没开起来（${reason}）。`
-        + (error instanceof AshMcpUnreachable ? "线停在这一站：把 ash MCP 接好之后点「再验一轮」，会从这一站接着走。" : "")),
+      alertLine(`想在「${STEP_LABELS.verify}」这一站开一轮验证，但没开起来（${reason}）。`),
       { eventKey: `verify-start-failed:${station.id}:${rounds}:${task.endedAt ?? ""}:${reason}` },
     );
     return { ok: false, failed: station, reason };

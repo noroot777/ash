@@ -23,7 +23,7 @@ import { now } from "./util.js";
 // 先记录目标提交再移动 Git；中断后的重试只完成同一份意图，不再次 rebase。
 async function finishBaseUpdate(task: typeof tasks.$inferSelect, repo: string, held = false): Promise<{ ok: boolean; error?: string }> {
   const intent = parseBaseUpdateIntent(task.baseUpdateIntent!);
-  if (!intent) return { ok: false, error: "基线更新记录损坏，无法自动重试。请点击「处理未完成的基线更新」，核对现存备份与差异后手动解除挂起；当前代码未修改。" };
+  if (!intent) return { ok: false, error: "基线更新记录损坏，无法自动重试。请点验收台上这一行的「处理」，核对现存备份与差异后手动解除挂起；当前代码未修改。" };
   const path = worktreePathFor(repo, task.id);
   const peers = await workspaceParticipants(task, path);
   if (!held && peers.some(p => p.status === "running" || p.status === "queued")) return { ok: false, error: "工作区正在执行，无法恢复基线更新" };

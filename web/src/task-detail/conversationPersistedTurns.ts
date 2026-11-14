@@ -1,14 +1,19 @@
 // 落盘那一路：一条会话的 .md + trace 铺成气泡 —— 从 conversationModel.ts 拆出来（单文件 700 行的约定）。
 // 直播那一路在 conversationLiveTurns。
+//
+// **只给老记录**：没有身份（`seq`）的那一截 —— 升级前写下的、团队调度台与 duet 的会话。带身份的由
+// conversationAssembler 按身份归位，不走这里。下面那些按时刻切 trace、按旁注落点判并不并的推断，全是
+// 因为老记录没有身份才不得不猜的，别再往上加。
 import { ANSWER_PREFIX } from "@ash/shared";
-import { parseSessionOutput, segmentFingerprint } from "@ash/shared/session-output";
+import { segmentFingerprint, type ConvSeg } from "@ash/shared/session-output";
 import { addUsage } from "@ash/shared/usage";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
 import type { SessionTraceEntry } from "../lib/api.ts";
-import type { ConversationItem, PersistedConversation, PersistedOrigin } from "./conversationModel.ts";
+import type { Session } from "@ash/shared";
+import type { ConversationItem, PersistedOrigin } from "./conversationModel.ts";
 import { eventTone, isVerifyNote, verifyMark } from "./conversationNotes.ts";
 import { reviewerKeyOf, reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";
-import { contentSegments, markSegmentsAwaiting } from "./conversationSegments.ts";
+import { contentSegments } from "./conversationSegments.ts";
 import {
   groupedTrace,
   normalizedPersistedTrace,
@@ -21,7 +26,7 @@ import {
 import type { PersistedTurnTimes } from "./conversationTurnParts.ts";
 import { agentLabel, recordPersistedTurn, sessionRun } from "./conversationTurnParts.ts";
 import { appendTraceFragments } from "./conversationTraceFragments.ts";
-import { readSideTail, segmentTraceWindow, strayTraceSources } from "./conversationTraceSources.ts";
+import { readSideEntries, segmentTraceWindow, strayTraceSources } from "./conversationTraceSources.ts";
 import { persistedTurnFacts, tailTurnFacts } from "./turnFailure.ts";
 import { resumeNoteOf } from "./turnCause.ts";
 
@@ -80,22 +85,27 @@ function mergeTurnChunk(target: AgentItem, chunk: AgentItem): void {
   target.sources = [...target.sources ?? [], ...chunk.sources ?? []];
 }
 
-/** 把一条落盘会话（.md + trace）铺成气泡，追加到 `items` 末尾。 */
+/**
+ * 把一条落盘会话的老记录那一截（.md 的段 + 没有身份的 trace）铺成气泡，追加到 `items` 末尾。
+ *
+ * `segments` 是这条会话 .md 从头起的那一截（含删掉的段：序号是气泡的出处、回合边界按原位算，到
+ * buildConversationItems 收尾再拿掉）。
+ */
 export function appendPersistedSession(
   items: ConversationItem[],
-  { session, output, trace = [] }: PersistedConversation,
+  // indices：每一段在整份 .md 里的原始序号（删除拿它指名）。带身份的段分走以后这里拿到的不再是整份，
+  // 下标不能当序号用；缺省 = 拿到的就是整份。
+  { session, segments, indices, trace }: { session: Session; segments: readonly ConvSeg[]; indices?: readonly number[]; trace: SessionTraceEntry[] },
   persistedTurns: PersistedTurnTimes,
 ): void {
-  // 删掉的段也要：序号（气泡的出处）和回合边界都按原位算，到 buildConversationItems 收尾再拿掉。
-  const segments = parseSessionOutput(output, { keepDeleted: true });
   const origin = (index: number): PersistedOrigin => ({
-    sources: [{ sessionId: session.id, index, fingerprint: segmentFingerprint(segments[index]!) }],
+    sources: [{ sessionId: session.id, index: indices?.[index] ?? index, fingerprint: segmentFingerprint(segments[index]!) }],
     ...(segments[index]!.deleted ? { deleted: true as const } : {}),
   });
   const sessionTrace = normalizedPersistedTrace(trace, session);
   const traceGroups = groupedTrace(sessionTrace);
   // 服务端读的时候接在末尾补出来的几条，删除出处的指纹不数它们（见 conversationTraceSources）。
-  const readSide = readSideTail(sessionTrace);
+  const readSide = readSideEntries(sessionTrace, session);
   const consumedTrace = new Set<string>();
   // ── 一遍过认三件事：谁是旁注、哪条旁注要把上下两截并回一颗气泡、trace 从哪儿切开 ──
   //
@@ -323,20 +333,4 @@ export function appendPersistedSession(
   });
   // 没有正文、只剩执行过程的回合（conversationTraceFragments.ts）。
   appendTraceFragments(items, session, segments, traceGroups, consumedTrace, sessionTrace, readSide);
-
-  /* 「这条会话**此刻**还卡在上游等回话」是**服务端给的一位事实**(`Session.awaitingUpstream`,
-     判据见 server/src/session-waiting.ts),落在这条会话最后那颗气泡上 —— 折叠条读的就是
-     末段(见 markSegmentsAwaiting)。
-     为什么不自己从 trace 的末条推:**那两份文件的缓冲进度不一样**。正文攒在
-     `pendingTraceText` 里,要等下一条非 text 事件或回合收口才落 `.trace.jsonl`,而 `.md`
-     是边流边写。于是一场「重试过、随后正常答完」的回合,刷新时 `.md` 已经是完整答复、
-     trace 却还停在那条提示上,读者照它反推就会在答案上方永久挂着「正在重试」——正是这个
-     任务要修的那个现象,只是换到了重建这一路(第 5 轮审查 F2)。
-     直播那一路的来源是事件顺序(conversationLiveTurns 边到边记),刷新之后再到达的输出会
-     照常把这一位覆盖回去;还没恢复的则一直挂着,这正是要的 sticky。 */
-  if (session.awaitingUpstream) {
-    const latest = [...items].reverse()
-      .find((item): item is AgentItem => item.kind === "agent" && item.sessionId === session.id);
-    if (latest) markSegmentsAwaiting(latest.segments);
-  }
 }

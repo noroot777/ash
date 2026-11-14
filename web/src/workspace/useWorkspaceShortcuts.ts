@@ -62,7 +62,7 @@ function ownsArrowKeys(target: EventTarget | null): boolean {
 
 function clickVisibleRunAction(): void {
   // The page owns eligibility and busy state; R only activates its opted-in button.
-  const action = document.querySelector<HTMLButtonElement>("button[data-workspace-run-action]:not(:disabled)");
+  const action = document.querySelector<HTMLButtonElement>("button[data-workspace-run-action]:not(:disabled):not([aria-disabled=\"true\"])");
   action?.click();
 }
 

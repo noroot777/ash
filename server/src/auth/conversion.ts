@@ -8,7 +8,7 @@
 //
 // 实现方式是「把隐式本地用户实名化」:自用模式下所有归属列都是 null,转换时一次
 // UPDATE 把 null 填成管理员 id。这样读写点只有一套归属逻辑,不必到处写 `if (multi)`。
-import { isNull, sql } from "drizzle-orm";
+import { eq, isNull, sql } from "drizzle-orm";
 import { getAppSettings } from "../app-settings.js";
 import { db } from "../db/index.js";
 import {
@@ -19,6 +19,8 @@ import {
   reviewerProfiles,
   schedules,
   taskMemos,
+  taskReadRevs,
+  taskReads,
   tasks,
   teamPresets,
   userSettings,
@@ -99,6 +101,11 @@ export async function claimExistingDataFor(userId: string): Promise<Record<strin
   // 任务备忘跟随手记同一条轴:它是私有的个人批注,存量那几条也归初始管理员。
   await take("taskMemos", () =>
     db.update(taskMemos).set({ ownerUserId: userId }).where(isNull(taskMemos.ownerUserId)));
+  // 侧栏绿点的已读记录:自用模式记在空串名下(schema-task-reads.ts),同样是他本人看过的。
+  await take("taskReads", () =>
+    db.update(taskReads).set({ owner: userId }).where(eq(taskReads.owner, "")));
+  await take("taskReadRevs", () =>
+    db.update(taskReadRevs).set({ owner: userId }).where(eq(taskReadRevs.owner, "")));
   await take("executors", () =>
     db.update(agents).set({ ownerUserId: userId }).where(isNull(agents.ownerUserId)));
   await take("providers", () =>

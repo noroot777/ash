@@ -1,7 +1,5 @@
 import type { AgentExecutorProfile, LlmProvider } from "@ash/shared";
 import { executorProfileFor, executorRunSummary, type ExecutorSelection } from "../lib/agentAvailability.ts";
-import { useCliModelCatalog } from "../lib/cliModelCatalog.ts";
-import { useProviders } from "../lib/modelCatalog.ts";
 
 export type ComposerRunSummary = {
   executor: string;
@@ -27,13 +25,4 @@ export function composerRunSummary(
     model: run.model || provider?.model.trim() || defaultModel || "CLI 默认模型",
     effort: run.effort || "CLI 默认档位",
   };
-}
-
-export function useComposerRunSummary(
-  target: ExecutorSelection & { model: string | null; reasoningEffort: string | null },
-  profiles: AgentExecutorProfile[],
-): ComposerRunSummary {
-  const providers = useProviders();
-  const { catalog } = useCliModelCatalog(target.agentType);
-  return composerRunSummary(target, profiles, providers, catalog?.defaultModel ?? null);
 }

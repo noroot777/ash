@@ -1,42 +1,35 @@
 // **任务级删除门闸**：「这个任务还有没有资格被写入」只有这一个判据（第 14 轮审查 N3）。
 //
-// 上一版是在扫描开工时取一次「删除代次」，中途再对一次。那一道挡住的是**那一次 await 之前
-// 发生的删除**，而删除本身不是一个瞬间：`deleteTaskCompletely` 从停哨兵到删任务行有十几条
-// 语句、每条都 await，提交侧也是一行一行写的。于是真实交错里总有缝：
-//
-// · 删除删完 monitors、还没删 sessions 时，另一个请求进来的新扫描读得到旧会话，而它开工时
-//   取的代次已经是删除之后的值 —— 它不认为自己被撤销过，于是把那些行又写了回去；
-// · 在途那一轮的补偿清理（`purgeRevokedTask`）本身失败时，只打了一行 warn：任务已经没了，
-//   以后也没有任何入口会再清，孤儿行永久留着。
-//
-// 所以判据改成「任务级、覆盖整个删除期、全部 writer 都问它」：
+// 删除不是一个瞬间：`deleteTaskCompletely` 从停哨兵到删任务行要走好几步，每步都 await。
+// 只在写之前问一次「任务还在不在」挡不住中间那段缝，所以判据是「任务级、覆盖整个删除期、
+// 全部 writer 都问它」：
 //
 // ① 删除**一进门就关闸**（在第一条 DELETE 之前）；
-// ② 四个 writer（投影行、未决调用、读取位置、恢复账本）落库前都问一句，关着就不写；
-// ③ **闸的开和关都绑在删除的结果上**：删完了（任务行真的没了）才叫 `confirm`，删到一半失败、
-//    任务还在，就必须 `release` 并把它恢复成可重建的样子。只记「进程内记得删除过」是不够的
-//    ——第 5 轮审查实测：删除中途一条 DELETE 失败，任务还在列表里，而它的监听卡片从此再也
-//    打不开（回填入口早退、恢复责任也不登记），刷新也不回来。闸只能是**删除中**的临时状态
-//    或**已删除**的终态，不存在「关着但没人知道结果」这一档；
-// ④ 补偿清理失败不吞：留一笔**可推进的清理责任**，由退避重试推，进程没了还有启动期的孤儿
-//    清扫兜底（见 `sweepOrphanClaudeMonitors`）。**补偿只针对确认删除的任务**：任务还在就
-//    绝不许清它的数据（那正是上一条那个 bug 的另一半）。
+// ② 落库前都问一句，关着就不写 —— 内置 Monitor 的实时投影、claude 后台任务的留痕、
+//    ash 哨兵的创建（monitor-create.ts / monitor-session.ts）；
+// ③ **闸的开和关都绑在删除的结果上**：删完了（任务行真的没了）才 `confirm`，删到一半失败、
+//    任务还在，就必须 `release` —— 否则任务还在列表里，它却再也写不进任何监听（第 5 轮审查
+//    实测）。闸只能是**删除中**的临时状态或**已删除**的终态，不存在「关着但没人知道结果」
+//    这一档（收口在 `settleTaskRevocation`）。
 //
-// 为什么单独一个模块：这四个 writer 分别住在 commit / pending / cursors / recovery 四个文件
-// 里，而它们都被 backfill 导入 —— 判据放 backfill 里就是四条反向依赖（循环）。
+// 门闸只覆盖「删除期间别再写」；「问完之后、写之前任务删完了」那个窗口由落库资格跟插入
+// 同批提交兜住（claude-monitor-write.ts）。
+import { eq } from "drizzle-orm";
+import { db } from "./db/index.js";
+import { tasks } from "./db/schema.js";
 
 /**
  * 闸关着的任务 → 它现在处在哪一档。
  *
  * · `deleting`：删除正在走。写入一律挡住，但这是**临时**状态，必须由 `settle` 收口。
- * · `deleted`：任务行确认没了。写入继续挡住（到 TTL 为止），补偿清理也只认这一档。
+ * · `deleted`：任务行确认没了。写入继续挡住（到 TTL 为止）。
  */
 type Revocation = { state: "deleting" | "deleted"; at: number };
 const revoked = new Map<string, Revocation>();
 
 /**
- * 闸关多久。在途那一轮最多也就跑几十秒（单次读取窗口 + 几次写），所以十分钟足够覆盖
- * 「删除期 + 任何还没结束的在途回合」。留着不清会随删除次数无界增长。
+ * 确认删除之后闸再关多久。在途的写最多也就排几十秒，所以十分钟足够覆盖「删除期 + 任何
+ * 还没落库的在途写」。留着不清会随删除次数无界增长。
  */
 const GATE_MS = 10 * 60 * 1000;
 /** 同时最多记这么多条（极端情况下批量删任务）。超了先丢最老的。 */
@@ -60,7 +53,7 @@ export function beginTaskRevocation(taskId: string): void {
   prune();
 }
 
-/** 删完了：任务行确认不在了。闸继续关着，补偿清理从这一刻才被允许。 */
+/** 删完了：任务行确认不在了。闸继续关着，直到 TTL。 */
 export function confirmTaskRevocation(taskId: string): void {
   revoked.set(taskId, { state: "deleted", at: Date.now() });
 }
@@ -68,8 +61,7 @@ export function confirmTaskRevocation(taskId: string): void {
 /**
  * 删除没删成、任务还在：**把闸打开**。
  *
- * 调用方还要负责把它恢复成可重建的样子（丢掉进程内状态、作废读取位置）—— 删到一半的
- * 任务，行可能已经删了而位置还停在后面，光开闸它的卡也回不来（见 `settleTaskRevocation`）。
+ * 只由 `settleTaskRevocation` 按删除结果调用（回归里也拿它模拟「闸已失效」）。
  */
 export function releaseTaskRevocation(taskId: string): void {
   revoked.delete(taskId);
@@ -78,41 +70,31 @@ export function releaseTaskRevocation(taskId: string): void {
 /** 「这个任务正在删或已经删了，这一笔不许落库」。 */
 export const isTaskRevoked = (taskId: string): boolean => revoked.has(taskId);
 
-/** 「任务行确认已经没了」——补偿清理的唯一许可（任务还在时绝不许清它的数据）。 */
-export const isTaskDeleted = (taskId: string): boolean => revoked.get(taskId)?.state === "deleted";
-
-/** 清理还没做完的任务（补偿 DELETE 失败）。 */
-const unpurged = new Set<string>();
-
-/** 这些任务的残留还没清掉（只给回归和启动期清扫用）。 */
-export const pendingPurges = (): string[] => [...unpurged];
-
-export function notePurgeDone(taskId: string): void {
-  unpurged.delete(taskId);
-}
+/**
+ * 闸处在哪一档；没关就是 `null`。
+ *
+ * 只问「能不能写」的调用方用上面那个就够了（挡住、让调用方重来）。**手里压着一次性事实的**
+ * 写入方必须分开看：`deleting` 只是「先别写」—— 删除可能整批回滚、`settle` 再把闸打开，这时
+ * 放弃就是永久丢账；只有 `deleted` 才是「可以放弃了」（见 claude-monitor-write-queue.ts）。
+ */
+export const taskRevocation = (taskId: string): Revocation["state"] | null => revoked.get(taskId)?.state ?? null;
 
 /**
- * 清理失败：记一笔责任并按退避重试。
+ * 删除流程收口：**按「任务行还在不在」决定那道闸是关死还是打开**（第 5 轮审查 F1）。
  *
- * 退避阶梯短而有限（几十秒内试几次就够：这不是用户在等的事）；全试完还不行就留在
- * `unpurged` 里，由启动期的孤儿清扫收掉。
+ * 由 `deleteTaskCompletely` 的 finally 调用 —— 删除的全部语句（含任务行本身）都在它里面，
+ * 所以「行还在不在」在这一刻才是**删除的结果**，而不是中间态。
  */
-export function notePurgeFailed(taskId: string, retry: (taskId: string) => Promise<void>): void {
-  if (unpurged.has(taskId)) return;   // 已经在重试阶梯上了
-  unpurged.add(taskId);
-  const ladder = [1_000, 5_000, 20_000];
-  let step = 0;
-  const tick = (): void => {
-    if (!unpurged.has(taskId)) return;
-    if (step >= ladder.length) return;
-    const wait = ladder[step]!;
-    step += 1;
-    const timer = setTimeout(() => {
-      void retry(taskId).then(() => {
-        if (unpurged.has(taskId)) tick();   // 还没成功（retry 自己会销账）
-      }).catch(() => tick());
-    }, wait);
-    timer.unref?.();
-  };
-  tick();
+export async function settleTaskRevocation(taskId: string): Promise<void> {
+  let alive = true;
+  try {
+    alive = !!(await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId))).length;
+  } catch (e) {
+    // 连「它还在不在」都查不出来：按**还在**处理。把一个仍存在的任务永久封死是用户看得见
+    // 的损坏；反过来多开一会儿闸，最坏也只是几行孤儿（落库资格同批那一道仍然挡着）。
+    console.warn(`[ash] task=${taskId} 删除后核对任务是否还在失败，按「还在」放开闸:`, e);
+    alive = true;
+  }
+  if (alive) releaseTaskRevocation(taskId);
+  else confirmTaskRevocation(taskId);
 }

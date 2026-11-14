@@ -84,28 +84,31 @@ export type LaterSend = ReturnType<typeof useLaterSend>;
  *  的文案,免得设置藏在浮层里、按钮看上去还是「发送」。status 是此刻主按钮不在「发送」的
  *  那些情形(上传中、补全技能…),它优先,也不受「稍后」没配好的拦截。 */
 /**
- * 任务在跑时这颗键也是停止键（docs/ui-ux-audit reply-4）：输入框空着时主段就是停止；打了字
- * 主段要用来排队发送，停止挪到它左边一颗小键上——什么时候都停得下来。
+ * 有东西可停时这颗键也是停止键（docs/ui-ux-audit reply-4）：输入框空着时主段就是停止；打了字
+ * 主段要用来发送，停止挪到它左边一颗小键上——什么时候都停得下来。
  */
 export type SendStop = { label: string; busy?: boolean; onStop: () => void };
 
 /**
  * 回复框用的发送键：共用发送键（SendKey.tsx）+ 尖角里的「发送设置」三档。调用方只给事实
- * （空没空、任务在不在跑、在不在传附件、还有什么别的原因发不出去），这里翻成那颗键的长相：
- *  · 任务在跑、输入框空着、给了 onStop：主段就是停止键；
- *  · 任务在跑、打了字：键上写「排队发送」，左边多一颗小停止键；
+ * （空没空、回复会不会排队、在不在传附件、还有什么别的原因发不出去），这里翻成那颗键的长相：
+ *  · 给了 onStop、输入框空着：主段就是停止键；打了字：左边多一颗小停止键；
+ *  · 回复会排队（任务在跑 / 排着队）、打了字：键上写「排队发送」；
+ * 停止键出不出只看 onStop：给不给它由调用方按服务端的停止结论定（`stopBlocked` 是灰着时那句原因），
+ * 跟「回复会不会排队」是两件事 —— 停在检查点上、但有待启动请求的任务回复不排队，却有东西可停。
  *  · 选了「稍后」：键上写「定时发送 / 完成后发送」，尖角换时钟 / 沙漏；没配好时键淡、提示说缺什么；
  *  · 传附件：键上写进度，键淡；
  *  · `override` 给斜杠命令那类「这一下不是发送」的情形（补全、打开派生配置），它优先，也不受「稍后」拦。
  * 回车照旧走调用方自己的 send()，那里面要按 later.resolve() 再判一次。
  */
-export function LaterSendKey({ later, action = "发送", empty, running = false, uploading, blocked, busy = false,
-  override, onSend, onStop, stopTip = "停止这一轮", stopBusy = false, configDisabled = false, tasks, projectId, taskId, size = "sm" }: {
+export function LaterSendKey({ later, action = "发送", empty, queueing = false, uploading, blocked, busy = false,
+  override, onSend, onStop, stopTip = "停止这一轮", stopBlocked = null, stopBusy = false, configDisabled = false, tasks, projectId, taskId, size = "sm" }: {
   later: LaterSend;
   /** 立即那一档做的事，进读屏名和提示（「发送」「发送给调度者」）。 */
   action?: string;
   empty: boolean;
-  running?: boolean;
+  /** 这时发出去的回复会排队（这一轮结束后才送）。只管键上的字，不管停止。 */
+  queueing?: boolean;
   /** 正在传附件时键上的字（uploadingLabel 的结果）。 */
   uploading?: string | null;
   /** 别的发不出去的原因（只读、归档、正在派生…）。 */
@@ -115,6 +118,8 @@ export function LaterSendKey({ later, action = "发送", empty, running = false,
   onSend: () => void;
   onStop?: () => void;
   stopTip?: string;
+  /** 服务端说此刻停不了的那句原因：停止键照出、灰着，指上去说这句。 */
+  stopBlocked?: string | null;
   /** 停止请求还在路上：停止键点不动，免得连按出两次。 */
   stopBusy?: boolean;
   configDisabled?: boolean;
@@ -125,10 +130,10 @@ export function LaterSendKey({ later, action = "发送", empty, running = false,
 }) {
   const configured = later.kind !== "now";
   const target = tasks.find((task) => task.id === later.afterTaskId);
-  const stop: SendKeyStop | null = onStop ? { tip: stopTip, onStop, disabled: stopBusy } : null;
-  const stopping = running && empty && !uploading && !override && !!stop;
+  const stop: SendKeyStop | null = onStop ? { tip: stopBlocked ?? stopTip, onStop, disabled: stopBusy || !!stopBlocked } : null;
+  const stopping = empty && !uploading && !override && !!stop;
   const time = later.kind === "timed" && later.choice ? new Date(later.at) : null;
-  const text = uploading ?? override?.text ?? (configured ? later.submitLabel : running ? "排队发送" : "");
+  const text = uploading ?? override?.text ?? (configured ? later.submitLabel : queueing ? "排队发送" : "");
   const reason = uploading ? "附件传完才能发"
     : override ? blocked ?? null
       : empty ? "先写点内容"
@@ -136,7 +141,7 @@ export function LaterSendKey({ later, action = "发送", empty, running = false,
   const tip = override ? override.action
     : later.kind === "timed" && time ? `${localeDateTime(time, "zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} 自动发出`
       : later.kind === "after" && target ? `等「${target.title || "未命名任务"}」完成后发出`
-        : running ? "排队，这一轮结束后发出" : null;
+        : queueing ? "排队，这一轮结束后发出" : null;
   return (
     <SendKey
       size={size}
@@ -146,7 +151,7 @@ export function LaterSendKey({ later, action = "发送", empty, running = false,
       blocked={reason}
       busy={busy}
       stop={stopping ? stop : null}
-      halt={running && !stopping && stop ? stop : null}
+      halt={!stopping && stop ? stop : null}
       onSend={onSend}
       settings={{
         label: "发送设置",

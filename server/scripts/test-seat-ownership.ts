@@ -130,6 +130,17 @@ dbClient.execute = ((stmt: Parameters<Executor>[0]) => {
   }
   return out;
 }) as Executor;
+// 要推进队列的那一笔状态和推进凭据同一个事务提交(turn-release.ts `stageQueueAdvance`),它在
+// 事务入口(BEGIN 之前)就停在写门上,发不出 `update "tasks"` —— 所以「写到门口了」也认事务请求。
+const realTransaction = dbClient.transaction.bind(dbClient);
+dbClient.transaction = ((...args: Parameters<typeof dbClient.transaction>) => {
+  if (onTaskWrite) {
+    const notify = onTaskWrite;
+    onTaskWrite = null;
+    notify();
+  }
+  return realTransaction(...args);
+}) as typeof dbClient.transaction;
 
 // ── ① 条件写的语义 ───────────────────────────────────────────────────────────
 // 这是 F1 的根因层:认领、停止、回滚争的必须是**同一条可原子核验的语句**。再读一次库、
@@ -668,6 +679,7 @@ for (const firstWriter of ["claim", "reclaim"]) {
 
 for (const id of ["t-gate", "t-free"]) releaseTurn(id);
 dbClient.execute = realExecute as Executor;
+dbClient.transaction = realTransaction;
 await new Promise<void>((resolve) => setImmediate(resolve));
 await dbClient.close?.();
 console.log("seat-ownership regressions ok");

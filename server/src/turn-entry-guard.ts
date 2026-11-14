@@ -46,6 +46,22 @@ export async function withTurnPreflight<Result>(taskId: string, held: TurnOwner 
   }
 }
 
+/**
+ * 入口把占下的锁连同**整件事**交给 `run`:`run` 结束(返回或抛错)时这把锁还在,就由入口还掉。
+ *
+ * 跟 `withTurnPreflight` 的分工:那一个只包准备段,正常返回之后锁要原样交给后面的回合,所以只在
+ * 抛错时还;这一个包的是整次启动。交出去了的(continueTask / runTask 用同一个号接管)早在它们
+ * 自己的 finally 里还过,这里空转;**没交出去就正常返回**的那几条出路全靠这一还 —— 检查点凭证
+ * 失权不起跑、待发送交接「已由在途投递 / 另一个触发源接管」、起跑前的早退。从前这些出路各自
+ * 记得还或忘了还,忘了的那几条把锁留在内存里,之后 /run 一律 409,只能重启。
+ * 核验在 `releaseTurn` 里按号做,换了主人的锁碰不到。
+ */
+export async function withHeldTurn<Result>(taskId: string, held: TurnOwner | null | undefined,
+  run: () => Promise<Result>): Promise<Result> {
+  try { return await run(); }
+  finally { if (held) releaseTurn(taskId, held); }
+}
+
 export type TurnEntryInput = {
   taskId: string;
   /**

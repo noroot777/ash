@@ -1,8 +1,6 @@
 // 「这个 tool_use 块是一次内置 Monitor 调用吗、它在盯什么」—— 入参解析只此一份。
 //
-// 两边都要用同一份判据：实时投影（`claude-monitors.ts`，从事件流里现读）和历史扫描
-// （`claude-monitor-scan.ts`，从 run 文件里重读）。两份实现漂移的后果是同一条调用在两条路
-// 上一边认得出、一边认不出，于是卡片时有时无。
+// 调用点是实时投影（`claude-monitors.ts`，从事件流里现读）。
 
 /** 一个内置 Monitor 的入参，从它的 tool_use 块上摘下来。 */
 export type MonitorCall = { command: string; description: string };

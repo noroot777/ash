@@ -106,7 +106,12 @@ async function holdWorkspace(taskId: string, path: string | null): Promise<(() =
   if (!release) return null;
   // 占住之后再读一次 archived:等仓库锁的那段时间里用户可能已经在另一个页面点了取回,
   // 那就是「我还要用它」,这次清理作废。
-  const fresh = (await db.select({ archived: tasks.archived }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  // 这一读抛错时释放函数还没交到调用方手上,不在这里还就再没人还(整组共用者的锁一起泄漏)。
+  const fresh = await db.select({ archived: tasks.archived }).from(tasks).where(eq(tasks.id, taskId))
+    .then((rows) => rows.at(0), (error) => {
+      release();
+      throw error;
+    });
   if (!fresh?.archived) { release(); return null; }
   return release;
 }

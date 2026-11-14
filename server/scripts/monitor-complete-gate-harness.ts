@@ -3,8 +3,7 @@
 // 调用记录、排在托盘里没送到的哨兵事件）。
 //
 // 为什么单独成文件：那份用例连这套台子一起是 706 行，超过单文件 700 行的约定（全局约定）。
-// 拆法跟 `monitor-checkpoint-harness.ts` / `monitor-checkpoint-edges.ts` 一致 —— 台子一份，
-// 各节按职责分文件，由主脚本按顺序驱动。各节**必须共用同一份台子**：复制一份出去，改了
+// 台子一份，各节按职责分文件，由主脚本按顺序驱动。各节**必须共用同一份台子**：复制一份出去，改了
 // 形状只有一边跟着改，另一边悄悄测的是个过期现场。
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

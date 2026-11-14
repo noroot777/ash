@@ -9,7 +9,7 @@
 import { execFileSync } from "node:child_process";
 import { IS_WINDOWS, killTree } from "../platform.js";
 import { processGroupMembersSync } from "../process-generation.js";
-import { canShoot, killProvenUnit, reclaimState } from "../monitor-reclaim-evidence.js";
+import { canShoot, killProvenUnit, reclaimState, refutesRoot } from "../monitor-reclaim-evidence.js";
 import { signalMembers } from "./escapees.js";
 
 // 只有 pid 时的击杀(重启后接管的 agent 走这条 —— ChildProcess 句柄随上一个
@@ -33,7 +33,7 @@ export function killByPid(
   }
   // ①' **明确的反证不许被后面任何一条弱证据洗掉**(第 3 轮审查 F1 实测)。
   //
-  // 那七档不是一个梯度,是两类:`not-ours` 是**正面反证** —— ps 答出来了,这个号上现在是
+  // 那几档不是一个梯度,是两类:`not-ours`/`superseded` 是**正面反证** —— ps 答出来了,这个号上现在是
   // 另一个进程(启动时刻确实对不上,locale 差异由 `processIdentity` 在同一份快照上兜住)。
   // 其余几档是「这一问没答出来」。上一版把两类一视同仁地落进下面那个后备分支,于是
   // 「已经证明它不是我们的」被一条「它打开过我们的输出文件」顶掉,`killTree` 往它那一组
@@ -43,7 +43,7 @@ export function killByPid(
   // 为什么输出文件那条线索在这里不能当反驳:它最多证明「这个进程握着这个文件」,而我们要
   // 回答的是「这个号上的进程是不是当初那一个」—— 后者 ps 已经明确答了「不是」。一条更弱的
   // 证据推不翻一条更强的反证,何况下刀打的是**它那一组**。
-  if (state === "not-ours") {
+  if (refutesRoot(state)) {
     console.warn(
       `[ash] pid=${pid} 这个号上现在是另一个进程(记录在案的启动时刻对不上),`
       + "按「证不出就不下刀」处理:没有发送任何信号 —— 握着输出文件也不改变这个结论",
@@ -79,7 +79,7 @@ export function killByPid(
       // ①' 那条反证在这里**一样压过输出文件**(第 3 轮审查 F1:首刀与补刀是两个对称消费点,
       // 不许只有一个认这条反证):这两秒里 ps 可能已经答得出「这个号上现在是另一个进程」,
       // 那一刻即便文件那一问还说得通,也只说明有人握着这个文件,不说明这个号还是当初那个。
-      if (reclaimState(pid, startedAt ?? null, unit) === "not-ours") {
+      if (refutesRoot(reclaimState(pid, startedAt ?? null, unit))) {
         console.warn(`[ash] pid=${pid} 在这两秒里换了主人(记录在案的启动时刻对不上),补刀取消`);
         signalMembers(held.filter((m) => m.pid !== pid), "SIGKILL");
         return;

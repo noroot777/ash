@@ -226,9 +226,10 @@ async function takeOver(row: Row): Promise<"attached" | "lost" | "ended"> {
     return "attached";
   }
   // 剩下几档各有各的说法,**不能共用一句话**(措辞见 `offlineReason`):`traceless` 线索追空
-  // 了;`not-ours` 这个号现在是别人的(原来那个退没退证明不了);`suspected` 文本里还看得见
-  // 这次创建的记号、但证不出在谁身上;`ours-orphans` 组长退了、组里还有后代。除了第一档
-  // 都要先把回收责任记下来(判据见 reclaimMonitorProcess 那张表)。
+  // 了;`not-ours` 这个号现在是别人的(原来那个退没退证明不了),`superseded` 是其中剩下线索也
+  // 都空了的那一种;`suspected` 文本里还看得见这次创建的记号、但证不出在谁身上;`ours-orphans`
+  // 组长退了、组里还有后代。追空的两档留档收档,其余都要先把回收责任记下来(判据见
+  // reclaimMonitorProcess 那张表)。
   const outcome = await reclaimMonitorProcess({ ...row, pid: row.pid! }, "server 重启后它的身份对不上");
   // **先拿到最终 verdict,再写文案。** 这里不等补刀(deadline 0:只问一次状态,别把开机
   // 吊住),所以把它提到写卡片之前不会让启动变慢 —— 但顺序反过来就会写下一句假话:上一版
@@ -394,7 +395,7 @@ async function retryRecovery(monitorId: string, step: number): Promise<void> {
  */
 function offlineReason(state: ReclaimState, owing: string): string {
   if (state === "traceless") return "server 重启后这个进程已经不在了（它在停服期间跑完的，拿不到退出码）";
-  if (state === "not-ours") {
+  if (state === "not-ours" || state === "superseded") {
     return `server 重启后这个号已经是另一个进程了（原命令在停服期间结束，拿不到退出码）${owing}`;
   }
   if (state === "suspected") {

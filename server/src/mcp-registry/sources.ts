@@ -1,7 +1,7 @@
 // 「这家 CLI 会读哪几份配置、合起来最终生效的是哪一条」—— **读和判那一半**。
 //
-// 跟 `register.ts`(怎么把缺的那条补进去)分开住的理由:这一半有三个独立的消费者 ——
-// 派审预检(`ash-mcp-file.ts`)、设置页与起跑自检、以及补接流程本身,而它们一律只许走这里
+// 跟 `register.ts`(怎么把缺的那条补进去)分开住的理由:这一半有几个独立的消费者 ——
+// 设置页、启动自检、以及补接流程本身,而它们一律只许走这里
 // 的 `readingFor` + `resolveAshMcp`(本轮审查 F2:启停策略原先只进了其中一处,同一份配置
 // 在设置页上是「已接好」、在真 CLI 那边是 `Blocked`)。两个文件都已经接近单文件行数上限,
 // 本轮按这条缝拆开。
@@ -17,7 +17,7 @@ import type {
 
 /**
  * 「这家 CLI 的配置怎么读」—— **三个表面只许从这里取**(语义与病史见 `AshMcpReading`)。
- * 判定(`ash-mcp-file.ts`)、安装写入资格(`registerAshMcp`)、设置页与诊断文案全走它,
+ * 安装写入资格(`registerAshMcp`)、设置页与诊断文案全走它,
  * 所以逐家启停策略不可能只进其中一处。
  */
 export function readingFor(mechanism: Extract<AshMcpMechanism, { kind: "file" }>): AshMcpReading {
@@ -52,7 +52,7 @@ export function ashMcpConfigFile(dir: string, site: AshMcpConfigSite): string {
  * **宿主机上这家 CLI 真正读的那份配置文件 —— 写、判、提示只认这一处。**
  *
  * `dirEnv` 指到文件的那几家(opencode 的 `OPENCODE_CONFIG`、kilo 的 `KILO_CONFIG`)必须原样
- * 用那个路径。本轮审查 R4:上一版只有这里认得它,另外三处消费者(预检的 `fileAshMcpVerdict`、
+ * 用那个路径。本轮审查 R4:上一版只有这里认得它,另外几处消费者(当时的预检判定、
  * 启动自检的 `hostCliConfigFile`、自查文案的 `howToCheck`)各自先把文件名丢掉、再按默认名
  * 拼回来 —— 于是用自定义文件名的用户那边,真 CLI 连得上 ash、派审却报「没接好」,给出的
  * 路径还是另一份文件。声明了 `dirEnvIsFile` 之后不许任何消费者再自己恢复默认文件名。
@@ -204,8 +204,7 @@ export function ashMcpHostSources(
  * 一份来源扫出来的**逐名事实**(折叠和跨来源解析都建在它上面,见 `resolveAshMcp`)。
  *
  * 文件那一路先分清「没有这个文件」和「有但读不动」:下面的读取路径会把异常吞成「空」,
- * 于是一次 EACCES / EIO 会被说成「没有登记」,而 absent 是个会被用来拦人的结论
- * (`ash-mcp-reachability.ts` 的「向放行开」)。
+ * 于是一次 EACCES / EIO 会被说成「没有登记」—— 读不动不是没有。
  */
 export function sourceScan(source: AshMcpSource, reading: AshMcpReading): AshMcpNameScan {
   // 证不出来的那一档(相对路径没带 cwd):看不准,别当成「没有」。
@@ -422,8 +421,7 @@ export function ashMcpStateIn(
   const opaque = ashMcpOpaqueSibling(dir, mechanism.site);
   if (opaque) return unknownState(`${opaque} 这份配置 ${agentType} 也读，而 ash 读不了它的格式`);
   // **先分清「没有这个文件」和「有但读不动」**:下面的读取路径会把异常吞成「空」,于是一次
-  // EACCES / EIO 会被说成「没有登记」。absent 是个会被用来拦人的结论(`ash-mcp-reachability.ts`
-  // 的「向放行开」),只有确实没有文件才配得上它。
+  // EACCES / EIO 会被说成「没有登记」。只有确实没有文件才配得上 absent。
   return fileConfigState(file, readingFor(mechanism));
 }
 

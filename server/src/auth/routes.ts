@@ -32,6 +32,7 @@ import {
   toUserView,
   touchUser,
 } from "./store.js";
+import { LOCAL_ONLY, LOCAL_ONLY_REFUSAL } from "../local-only.js";
 import { needsOnboarding } from "../onboarding.js";
 import { connectionOf, deviceByToken, enrollDevice, peerAddress, remoteKeyMatches, removeDevice } from "./remote-access.js";
 import { mountRemoteAccessRoutes } from "./remote-access-routes.js";
@@ -70,6 +71,7 @@ async function stateFor(c: Context): Promise<AuthState> {
       rootDir: null,
       homeDir: null,
       needsOnboarding: locked ? false : await needsOnboarding(actor),
+      localOnly: LOCAL_ONLY,
     };
   }
   const user = actor.kind === "user" && actor.userId ? await getUser(actor.userId) : null;
@@ -85,6 +87,7 @@ async function stateFor(c: Context): Promise<AuthState> {
     homeDir: user ? await userHomeDir(user.dirName) : null,
     // 没登录就答不上「我还缺什么」,也不该答:那一屏是登录页。
     needsOnboarding: user ? await needsOnboarding(actor) : false,
+    localOnly: LOCAL_ONLY,
   };
 }
 
@@ -106,6 +109,8 @@ export function mountAuthRoutes(api: Hono): void {
     // 换出来的是这台设备自己的凭证 —— 机主在名册里看得到它、能单独移除。没有 users 行,
     // 所以没有 user 可回。
     if (!(await isMultiUser())) {
+      // 本机自用模式没有「放一台设备进来」这回事(身份判据见 remote-access.ts 的 ownerProof)。
+      if (LOCAL_ONLY) return c.json({ error: LOCAL_ONLY_REFUSAL }, 403);
       if (!remoteKeyMatches(key ?? "")) {
         return c.json({ error: "访问密钥不对。现在这一把在 ash 所在那台机器的「设置 → 默认规则 → 远程访问」里" }, 401);
       }
@@ -200,6 +205,8 @@ export function mountAuthRoutes(api: Hono): void {
       return c.json(await stateFor(c));
     }
     if (body.mode !== "multi") return c.json({ error: "mode 只能是 single 或 multi" }, 400);
+    // 排在建目录之前:拒绝就得一个字都不落盘(setInstanceMode 自己也拦,那一道太晚)。
+    if (LOCAL_ONLY) return c.json({ error: LOCAL_ONLY_REFUSAL }, 403);
 
     const adminName = (body.adminName ?? "").trim();
     if (!adminName) return c.json({ error: "管理员姓名必填" }, 400);
@@ -268,6 +275,7 @@ export function mountAuthRoutes(api: Hono): void {
   // 而多人模式下执行器是个人资源。不关的话,任何一个登录成员都能从这里读到管理员和
   // 其他人的执行器名字与总数(第 1 轮审查 P2)。首启/补做向导跑在 multi 之前,不受影响。
   api.get("/auth/setup/preflight", async (c) => {
+    if (LOCAL_ONLY) return c.json({ error: LOCAL_ONLY_REFUSAL }, 403);
     if (await isMultiUser()) {
       return c.json({ error: "这台 ash 已经是多人模式了，转换前的盘点只在转换那一刻有意义" }, 409);
     }

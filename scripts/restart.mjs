@@ -45,7 +45,6 @@ import { IS_WINDOWS, isNotListening, isPidAlive, killPid, killServerProcesses, l
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
 import { repairEmptyWorkspaces } from "./workspace-repair.mjs";
 import { parseRestartOptions, restartCommand, RESTART_USAGE } from "./restart-options.mjs";
-import { coordinateMacRestart } from "./macos-server-lock.mjs";
 
 let options;
 try {
@@ -63,7 +62,6 @@ const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
 
 const PORT = Number(process.env.PORT || 4317);
-coordinateMacRestart(REPO, PORT);
 const LOG = process.env.ASH_LOG || join(IS_WINDOWS ? (process.env.TEMP || ".") : "/tmp", `ash-${PORT}.log`);
 const START_TIMEOUT = Number(process.env.START_TIMEOUT || 30);
 const SERVER_NODE = process.env.SERVER_NODE || process.execPath;

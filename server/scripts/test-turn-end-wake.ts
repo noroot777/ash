@@ -13,12 +13,16 @@
 // 快的里 6 个中途重启过服务(内存里的去重标记跟着没了)、1 个恰好撞上 tick。
 // 根因:投递给任务挂的「在途」去重标记一直挂到**它送进去的那一回合跑完**(continueTask 等的是
 // 整个回合),于是那一回合结束时的扫描被自己的标记挡掉,标记摘掉之后也没人再扫。同一本账上的
-// 冷却窗口是同一个毛病的小号:挡下一扫,窗口过了没人补。
-// 现场一补上的「结算后登记唤醒」碰巧也能把长回合那一例送出去 —— 靠的是它那次重扫恰好排在摘
-// 标记之后,所以这里除了量延迟,还直接钉「回合起来了标记就得摘」。
+// 冷却窗口是同一个毛病的小号:挡下一扫,窗口过了要靠补扫定时器 —— 冷却护的那道缝早就不在了,
+// 连同补扫一起删掉(src/pending-in-flight.ts 文件头)。
+// 所以这里除了量延迟,还直接钉「回合起来了标记就得摘」。
+//
+// 两处现场的共同根因是:扫描与队列推进挂在**落状态那一刻**,而状态是持锁写的 —— 那一刻扫不到之后
+// 才入队的消息,推进也认领不到锁,于是各处各自登记「放开了再来一次」,漏一处就掉回 tick。现在两件
+// 事固定挂在放锁上(src/turn-release.ts),现场三钉的就是这条:持锁期间不推进,放锁那一刻推进。
 //
 // 走的都是真实收流(consumeSingleRun / continueTask)加上生产同款的「收流完再放锁」,而且**全程
-// 不起 scheduler**:这里能送出去,只可能是回合结束那一刻的唤醒。
+// 不起 scheduler**:这里能送出去、推得动,只可能是回合结束那一刻的唤醒。
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createWriteStream, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -38,7 +42,7 @@ delete process.env.ASH_ALLOW_REAL_AGENT;
 let failure: unknown = null;
 try {
   const { ensureSchema, db } = await import("../src/db/index.js");
-  const { agents, freeReviewRounds, freeReviewRuns, projects, reviewerProfiles, scheduledMessages, sessions, tasks } = await import("../src/db/schema.js");
+  const { agents, freeReviewRounds, freeReviewRuns, projects, queueItems, reviewerProfiles, scheduledMessages, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const { consumeSingleRun } = await import("../src/single-run.js");
   const { freeWorkflowState, reportFreeReviewConclusion } = await import("../src/free-workflow.js");
@@ -215,9 +219,63 @@ try {
   assert.ok(afterLongTurn < 2_000, `回合一结束就该送进去,实际隔了 ${afterLongTurn}ms —— 在途标记不许跟着挂到回合跑完`);
   console.log(`✓ 排队消息起的回合:回合一结束,中途到的下一条立刻送达(${afterLongTurn}ms),不等兜底 tick`);
 
-  // 短回合(起跑即失败、一两句话就答完):结束那一扫落在冷却窗口里,窗口一过要有人补扫。
+  // 短回合(起跑即失败、一两句话就答完):结束那一扫同样当场送出,不再被冷却挡下、等补扫定时器。
   const afterShortTurn = await lateArrival("dispatched-short", 100);
-  console.log(`✓ 排队消息起的短回合:冷却挡下的那一扫在窗口过后补上(${afterShortTurn}ms),不等兜底 tick`);
+  assert.ok(afterShortTurn < 2_000, `短回合一结束也该当场送进去,实际隔了 ${afterShortTurn}ms`);
+  console.log(`✓ 排队消息起的短回合:回合一结束,中途到的下一条立刻送达(${afterShortTurn}ms),不等补扫也不等兜底 tick`);
+
+  // ── 现场三:串行队列的下一位,在前一位放锁那一刻起跑 ──────────────────────────────────
+  // 前一位的状态是持锁写的。早先那一笔落库当场就推队列:下一位在前一位还没收完尾(注销句柄、
+  // 放锁)时就被拉起来。现在持锁期间一步都不推,锁一放当场推 —— 不等兜底 tick,也不等推进自己
+  // 的 1 秒退避重试(所以下面先空等 1.5 秒,再要求放锁后 1 秒内起跑)。
+  const head = "queue-head";
+  const next = "queue-next";
+  await createTasks([head, next].map((qid) => ({
+    id: qid, projectId: "p", title: qid, body: qid === next ? "NEXT-IN-QUEUE" : "test", mode: "single" as const,
+    status: qid === head ? "running" as const : "backlog" as const,
+    agentType: "codex" as const, executorId: "ex", autoTitle: false, workflowMode: "free" as const,
+    useWorktree: false, createdAt: at, updatedAt: at,
+  })));
+  await db.insert(queueItems).values([
+    { taskId: head, queueId: "q-release", position: 0, createdAt: at },
+    { taskId: next, queueId: "q-release", position: 1, createdAt: at },
+  ]);
+  const headSess = `${head}-single`;
+  await db.insert(sessions).values({
+    id: headSess, taskId: head, role: "single", agentType: "codex", executor: "test", cwd: root, startedAt: at, turnStartedAt: at,
+  });
+  const headTurn = claimOwnTurn(head, "single");
+  assert.ok(headTurn, "测试自身前提:队首这一轮应该占得到锁");
+  const headPath = sessionTranscriptPath(head, headSess);
+  mkdirSync(dirname(headPath), { recursive: true });
+  const headOut = createWriteStream(headPath, { flags: "a" });
+  const headClosed = once(headOut, "close");
+  const headHandle: RunHandle = {
+    sessionId: "", commandLine: "fixture", kill() {},
+    events: (async function* (): AsyncGenerator<AgentEvent> { yield { kind: "done", exitStatus: 1 }; })(),
+  };
+  await consumeSingleRun({
+    taskId: head, sessId: headSess, agentType: "codex", ex: { ...reviewer, run: () => headHandle }, cwd: root,
+    handle: headHandle, out: headOut, turnStart: at, cliSessionId: "", autoTitle: false, role: "single",
+  });
+  await headClosed;
+  const statusOfTask = async (taskId: string) => (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!.status;
+  assert.equal(await statusOfTask(head), "failed", "测试自身前提:队首这一轮已经落位(失败透明让位)");
+  await sleep(1_500);
+  assert.equal(got("NEXT-IN-QUEUE"), 0, "队首的锁还占着(收尾没走完),下一位不许被拉起来");
+  assert.equal(await statusOfTask(next), "backlog");
+
+  releaseTurn(head, headTurn);
+  const releasedAt = Date.now();
+  await waitFor(() => got("NEXT-IN-QUEUE") === 1, "队首放锁之后下一位没起跑 —— 推进只剩兜底 tick", 3_000);
+  const advancedIn = Date.now() - releasedAt;
+  assert.ok(advancedIn < 1_000, `放锁那一刻就该推进,实际隔了 ${advancedIn}ms`);
+  await waitFor(async () => {
+    const status = await statusOfTask(next);
+    return status !== "running" && status !== "queued" && !isTurnClaimed(next);
+  }, "下一位那一轮没有结算");
+  assert.equal(got("NEXT-IN-QUEUE"), 1, "下一位只起一次");
+  console.log(`✓ 串行队列:持锁期间不推进,队首放锁那一刻下一位起跑(${advancedIn}ms),不等兜底 tick`);
 } catch (error) {
   failure = error;
   console.error(error);

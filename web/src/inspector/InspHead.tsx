@@ -10,6 +10,7 @@ import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
 import { InspButton } from "./parts.tsx";
 import { DrawnCheck } from "../lib/motion/index.ts";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 
 export type InspTone = "ok" | "bad" | "stale" | "busy" | "hold" | "none";
 
@@ -19,6 +20,8 @@ export interface InspMainAction {
   /** 有事要你办的时候才是实心的。 */
   pri?: boolean;
   disabled?: boolean;
+  /** 服务端说此刻做不了的那句原因：键灰着，指上去说它（`aria-disabled`，`disabled` 上提示出不来）。 */
+  blocked?: string | null;
   pressed?: boolean;
   dialog?: boolean;
 }
@@ -46,17 +49,26 @@ export function InspConclusion({ tone, children }: { tone: InspTone; children: R
   );
 }
 
-export function InspMainButton({ action }: { action: InspMainAction }) {
+export function InspMainButton({ action, size }: { action: InspMainAction; size?: "md" | "sm" }) {
+  const hover = useHoverTip();
+  const blocked = action.blocked || null;
   return (
-    <InspButton
-      variant={action.pri ? "pri" : "default"}
-      disabled={action.disabled}
-      aria-pressed={action.pressed}
-      aria-haspopup={action.dialog ? "dialog" : undefined}
-      onClick={action.onClick}
-    >
-      {action.label}
-    </InspButton>
+    <>
+      <InspButton
+        variant={action.pri ? "pri" : "default"}
+        size={size}
+        disabled={action.disabled}
+        className={blocked ? "is-disabled" : ""}
+        aria-disabled={blocked ? true : undefined}
+        aria-pressed={action.pressed}
+        aria-haspopup={action.dialog ? "dialog" : undefined}
+        {...(blocked ? hover.anchorProps : {})}
+        onClick={() => { if (!blocked) action.onClick(); }}
+      >
+        {action.label}
+      </InspButton>
+      {blocked && <HoverTip at={hover.at}>{blocked}</HoverTip>}
+    </>
   );
 }
 

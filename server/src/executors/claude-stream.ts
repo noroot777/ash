@@ -25,6 +25,8 @@ import type { ConsumedOutput } from "./types.js";
 import { claudeRetryMessage, claudeRetryModel, isClaudeRetry } from "./claude-retry-notice.js";
 import { normalizeClaudeCliError, shortJson, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
 import { ClaudeRequestTimer } from "./request-timing.js";
+import { claudeAshMcpProblem } from "./ash-mcp-confirm.js";
+import type { ClaudeAshMcpInjection } from "./ash-mcp-inject.js";
 import { claudeApiStatus, modelFailureOf } from "./model-failure.js";
 
 // resident 非空 = 常驻模式:`result` 行只代表「一个回合说完了」(→ turnEnd),
@@ -57,6 +59,8 @@ export function parseClaudeStream(
   // 接管时上一个 ash 进程已经消费掉的那段原始输出(文件 + 字节水位)。先静音重放一遍,接回的
   // 状态才和不间断执行一致,见 ./claude-recovery.ts。
   consumed?: ConsumedOutput,
+  // 这一回合注入 ash MCP 的结果(只有 ClaudeExecutor 注入、才传):init 到了据此确认,见 ash-mcp-confirm.ts。
+  ashMcp?: ClaudeAshMcpInjection,
 ): AsyncIterable<AgentEvent> {
   // 正文里的图**不在这份解析里收**:它要按「一份文档」认身份,而这里一条模型消息就是
   // 一片碎片 —— 上一条消息给定义、下一条引用它时,按消息扫压根不认那张图(审查第 4 轮
@@ -67,7 +71,7 @@ export function parseClaudeStream(
   // 第 5 轮 R1)。所以 sink 在这里建好传进去,由 push 同步进账,这一层只负责收口。
   const images = markdownImageSink(cwd, accounting);
   return settleMarkdownImages(
-    claudeStreamEvents(child, resident, bin, calibrateAs, compact, onInitialized, waitNoticeMs, images, cliSessionId, cwd, consumed),
+    claudeStreamEvents(child, resident, bin, calibrateAs, compact, onInitialized, waitNoticeMs, images, cliSessionId, cwd, consumed, ashMcp),
     images,
   );
 }
@@ -84,6 +88,7 @@ async function* claudeStreamEvents(
   cliSessionId?: string,
   cwd?: string,
   consumed?: ConsumedOutput,
+  ashMcp?: ClaudeAshMcpInjection,
 ): AsyncIterable<AgentEvent> {
   // 队列、唤醒、收尾、增量合并、子活动合并和**图片记账的时点**都在这条共用流水线里
   // (见 event-queue.ts)。顺序是硬要求:字节在 `delta`/`push` 的那一刻就冻住,交代排在
@@ -252,6 +257,12 @@ async function* claudeStreamEvents(
     }
     if (ev.type === "system" && ev.session_id) {
       if (ev.subtype === "init" && !replaying) onInitialized();
+      // ash 的工具在不在,以 CLI 自己在 init 里报的为准(ash-mcp-confirm.ts)。只有注入过的那一回合
+      // 才问:复用这份解析的别家 CLI 不注入 ash,它们清单里有没有 ash 不归这里说。
+      if (ev.subtype === "init" && !replaying && ashMcp) {
+        const problem = claudeAshMcpProblem(ashMcp, ev.mcp_servers, ev.tools);
+        if (problem) push(problem);
+      }
       // init 事件白送一份**权威**技能清单(skills / slash_commands / cwd 都在里面),
       // 顺手校准 skills 模块的扫描结果 —— 这是唯一不用额外起一个 CLI 进程就能拿到
       // 「这个 CLI 自己认哪些技能」的机会,别浪费。纯旁路:失败也不能影响事件流。

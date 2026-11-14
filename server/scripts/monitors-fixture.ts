@@ -22,7 +22,7 @@ requireTmpDb("monitors");
 export const [
   { db, dbClient, ensureSchema }, schema, monitorsModule, createModule, monitorEvents, status,
   { isPidAlive, killTree }, pending,
-  { continueTask }, runs, taskRoutes, { stopAllMonitorRecovery }, { inspectProcess },
+  { continueTask }, runs, taskRoutes, { inspectProcess },
 ] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
@@ -35,7 +35,6 @@ export const [
   import("../src/orchestrator.js"),
   import("../src/runs.js"),
   import("../src/task-routes.js"),
-  import("../src/claude-monitor-recovery.js"),
   import("../src/proc.js"),
 ]);
 export const { mountTaskRoutes } = taskRoutes;
@@ -212,9 +211,6 @@ export async function teardown(): Promise<void> {
       .catch((e) => console.error(`[台子] 这个号收不掉 pid=${pid}:`, e));
   }
   spawnedByFixture.length = 0;
-  // 待恢复账本的退避定时器是 unref 过的（不会拖住进程），但留着会在后续用例里继续重试
-  // 刷日志——注入过读写失败的用例必然留下几条账。
-  stopAllMonitorRecovery();
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
 }

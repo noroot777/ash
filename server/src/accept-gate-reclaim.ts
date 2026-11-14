@@ -7,7 +7,8 @@
 // （实测每份 80M～1G，带 .venv / node_modules 的整仓副本，不到三周攒了 15G）。
 //
 // 回收点：验收落章、归档、删除各当场收一次；启动时和之后每 6 小时再整体扫一遍
-// （run-disk-maintenance.ts），补上存量和那几处没收成的。
+// （run-disk-maintenance.ts），补上存量和那几处没收成的。配了准备命令的那一档快照住在 RUNS_DIR 之外的
+// 独立根下（accept-gate-isolated.ts），两个根一起扫。
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -15,20 +16,25 @@ import { db } from "./db/index.js";
 import { acceptGateRuns, tasks } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
 import { removeGateSnapshot } from "./accept-gate-source.js";
+import { GATE_ISOLATED_DIR } from "./accept-gate-isolated.js";
 import { acceptGateLogPath, appendGateLog } from "./accept-gate-process.js";
 import { now } from "./util.js";
 
 const SNAPSHOT = /^accept-gate-(.+)\.source$/;
 
+const SNAPSHOT_ROOTS = [RUNS_DIR, GATE_ISOLATED_DIR];
+
 function snapshotRuns(taskId: string): string[] {
-  try {
-    return readdirSync(join(RUNS_DIR, taskId)).flatMap((name) => {
-      const run = SNAPSHOT.exec(name)?.[1];
-      return run && statSync(join(RUNS_DIR, taskId, name)).isDirectory() ? [run] : [];
-    });
-  } catch {
-    return [];
-  }
+  return [...new Set(SNAPSHOT_ROOTS.flatMap((root) => {
+    try {
+      return readdirSync(join(root, taskId)).flatMap((name) => {
+        const run = SNAPSHOT.exec(name)?.[1];
+        return run && statSync(join(root, taskId, name)).isDirectory() ? [run] : [];
+      });
+    } catch {
+      return [];
+    }
+  }))];
 }
 
 /** 任务还在不在需要快照的那段生命周期里：删了、归档了、验收了都算了结。 */
@@ -67,12 +73,9 @@ export async function reclaimGateSnapshots(taskId: string): Promise<number> {
 
 /** 启动时整体扫一遍：每个带快照的任务目录都按 reclaimGateSnapshots 的判据过一次。 */
 export async function sweepGateSnapshots(): Promise<number> {
-  let taskIds: string[];
-  try {
-    taskIds = readdirSync(RUNS_DIR);
-  } catch {
-    return 0;
-  }
+  const taskIds = [...new Set(SNAPSHOT_ROOTS.flatMap((root) => {
+    try { return readdirSync(root); } catch { return []; }
+  }))];
   let removed = 0;
   for (const taskId of taskIds) removed += await reclaimGateSnapshots(taskId);
   return removed;

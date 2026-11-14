@@ -7,7 +7,9 @@
 //     上一份的失败提示连同它的「重试」当场撤掉；第一次读就失败也说出来、能重试；
 //   · 认不出是哪一场的老卡、自由工作流里的就地验证卡不去审查格猜，在原处展开；
 //   · 审查记录还没读到时点过来，这份请求要等记录到了再办，不能切过去就算办完；
-//   · 就地验证的「第 N 轮验证」走验证记录那一格，同样展开那一轮。
+//   · 就地验证的「第 N 轮验证」走验证记录那一格，同样展开那一轮；
+//   · 去得了审查格的那一轮（审查格里没有经过）另有一颗经过键，在原处摊开，不往审查格发请求；
+//     一句话没说的那一轮不给；「N 条记录」里被盖过的那一条同样有。
 // 跑:npm -w web run test:review-navigation-dom
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -61,6 +63,32 @@ try {
     await page.locator(`[data-lane="${name}"] .review-verdict > .turn-footnote-lane`).waitFor();
     assert.equal(await page.evaluate(() => window.__pendingRequest.free()), null, `${name} 不往审查格发请求`);
   }
+
+  // ②'' 去得了审查格、说过话的那一轮：经过键在原处摊开，不往审查格发请求；没开口的那一轮不给这颗键。
+  const traced = page.locator('[data-lane="traced"] .review-verdict');
+  await traced.locator(".review-verdict-bubble").hover();
+  const traceKey = traced.locator(".review-verdict-bubble > header").getByRole("button", { name: "这一轮的经过" });
+  assert.equal(await traceKey.getAttribute("aria-expanded"), "false");
+  await traceKey.click();
+  await traced.locator(":scope > .turn-footnote-lane", { hasText: "这一轮的经过" }).waitFor();
+  assert.equal(await traceKey.getAttribute("aria-expanded"), "true");
+  assert.equal(await page.evaluate(() => window.__pendingRequest.trace()), null, "经过键不往审查格发请求");
+  await traceKey.click();
+  assert.equal(await traced.locator(":scope > .turn-footnote-lane").count(), 0, "再点一下收起");
+  assert.equal(await page.locator('[data-lane="silent"]').getByRole("button", { name: "这一轮的经过" }).count(), 0, "没开口的那一轮没有经过可摊");
+  // 点气泡本身照旧去审查格那一轮。
+  await traced.locator("button.review-verdict-text").click();
+  const traceRecord = await page.locator('[data-pane="trace"] [data-record^="old-run"]').first().getAttribute("data-record");
+  await waitUntil(async () => (await expanded("trace", traceRecord)) === "true", "点气泡照旧展开审查格那一轮");
+  // 「N 条记录」里被盖过的那一条：那一句去审查格，旁边的经过键就地摊开。
+  const receipt = page.locator('[data-receipts="trace"] .turn-receipt');
+  await page.locator('[data-receipts="trace"] .turn-receipts-toggle').click();
+  const receiptTrace = receipt.getByRole("button", { name: "这一轮的经过" });
+  await receiptTrace.click();
+  await receipt.locator(".turn-receipt-lane", { hasText: "这一轮的经过" }).waitFor();
+  assert.equal(await receiptTrace.getAttribute("aria-expanded"), "true");
+  await receiptTrace.click();
+  assert.equal(await receipt.locator(".turn-receipt-lane").count(), 0, "再点一下收起");
 
   // ④ 旧快照：手里那份只有旧那场，新一场的 GET 还在路上时点它——请求挂着，数据到了就展开。
   await page.locator('[data-pane="stale"] [data-record^="old-run"]').first().waitFor();
@@ -127,7 +155,7 @@ try {
   await page.locator('[data-pane="verify"] [role="alert"]', { hasText: "没找到要打开的第 3 轮验证" }).waitFor();
   assert.equal(await page.evaluate(() => window.__pendingRequest.verify()), null, "确认办不成才收下");
   assert.deepEqual(errors, [], "页面没有报错");
-  console.log("review navigation dom ok: 同号两场（含启动失败的旧卡、升级前没收尾的旧开始）认得出、认不出的在原处展开、记录没读到或是旧快照时请求等着、重读也没有就说出来并能重试、点了别的旧提示当场撤掉、第一次读就失败也能重试、就地验证也展开那一轮");
+  console.log("review navigation dom ok: 同号两场（含启动失败的旧卡、升级前没收尾的旧开始）认得出、认不出的在原处展开、记录没读到或是旧快照时请求等着、重读也没有就说出来并能重试、点了别的旧提示当场撤掉、第一次读就失败也能重试、就地验证也展开那一轮、去得了审查格的那一轮经过键就地摊开");
 } finally {
   await browser?.close();
   await web.close();

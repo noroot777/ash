@@ -25,15 +25,19 @@ export function recordUserConversationTurn(input: UserTurnOrigin & {
   eventKey?: string;
   /** 这一句承载的问答答复（ContinueTaskOptions.answerIds）：删除与问答卡按它认记录。 */
   answerIds?: readonly string[];
+  /** 页面发这一句时给的凭据（ContinueTaskOptions.clientKey）：页面先画出来的那份凭它认回这一条。 */
+  clientKey?: string;
 }): void {
   const answerIds = input.answerIds?.length ? { answerIds: [...input.answerIds] } : {};
-  writeTurn(input.out, {
+  const clientKey = input.clientKey ? { clientKey: input.clientKey } : {};
+  const identity = writeTurn(input.out, {
     t: "user",
     agent: input.agentType,
     text: input.text,
     ...(input.bySystem ? { by: "system" as const } : {}),
     ...(input.eventKey ? { eventKey: input.eventKey } : {}),
     ...answerIds,
+    ...clientKey,
     ...(isMonitorWakeTurn(input) ? { monitorWake: input.monitorWake } : {}),
   }, input.at);
   bus.publish({
@@ -47,6 +51,8 @@ export function recordUserConversationTurn(input: UserTurnOrigin & {
     ...(input.bySystem ? { bySystem: true as const } : {}),
     ...(isMonitorWakeTurn(input) ? { monitorWake: input.monitorWake } : {}),
     ...answerIds,
+    ...clientKey,
+    ...identity,
   });
 }
 
@@ -64,9 +70,10 @@ export function recordSystemResumeTurn(input: {
   at: string;
   resume: SystemResume;
 }): void {
-  writeTurn(input.out, { t: "system", agent: input.agentType, text: SYS_MARKER, resume: input.resume }, input.at);
+  const identity = writeTurn(input.out, { t: "system", agent: input.agentType, text: SYS_MARKER, resume: input.resume }, input.at);
   bus.publish({
     type: "agent.event", taskId: input.taskId, sessionId: input.sessionId, role: input.role, agentType: input.agentType,
+    ...identity,
     event: { kind: "system", text: SYS_MARKER, at: input.at, resume: input.resume },
   });
 }

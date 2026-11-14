@@ -5,7 +5,9 @@ import type { Session, Task } from "@ash/shared";
 import { readMonitorWake, type MonitorWakeData } from "@ash/shared/monitor-wake";
 import { ConversationFeed } from "../src/task-detail/ConversationFeed.tsx";
 import { buildConversationItems, type ConversationItem } from "../src/task-detail/conversationModel.ts";
+import { conversationFeedRows } from "../src/task-detail/conversationReviewLanes.ts";
 import { monitorWakeInput, monitorWakePreview, monitorWakeReplyIds } from "../src/task-detail/monitorWakeModel.ts";
+import { foldMonitorWakes } from "../src/task-detail/monitorWakeTurns.ts";
 import { SystemAuthoredMessage } from "../src/task-detail/SystemNotice.tsx";
 import { TeamFeed } from "../src/team/TeamFeed.tsx";
 import { teamFeedRows } from "../src/team/teamModel.ts";
@@ -190,10 +192,15 @@ assert.match(renderToStaticMarkup(<SystemAuthoredMessage item={user({ text: "【
   assert.equal(count(team, "team-feed-agent"), 3);
   assert.equal(count(team, "被哨兵叫醒"), 1);
 }
-const reviewerWake = renderTask([{ ...notice, text: "第 1 轮验证开始：就在这个任务的工作目录里跑。", verify: true }, user(output), { ...reply, reviewer: { round: 1 } }]);
-assert.ok(reviewerWake.includes('class="verify-lane"'));
-assert.equal(count(reviewerWake, 'class="monitor-wake-input '), 1);
-assert.equal(count(reviewerWake, 'class="monitor-wake-reply"'), 1);
+// 喂给审查者自己的叫醒留在那一轮里：会话主流上只有审查者那颗收着的气泡，叫醒那张卡和它醒来的回答
+// 都在点开以后的经过里（点开后的样子由 test-reviewer-turn-dom 钉住）。
+const reviewerWakeItems: ConversationItem[] = [{ ...notice, text: "第 1 轮验证开始：就在这个任务的工作目录里跑。", verify: true }, user(output), { ...reply, reviewer: { round: 1 } }];
+const reviewerWake = renderTask(reviewerWakeItems);
+assert.equal(count(reviewerWake, 'class="review-verdict is-pending"'), 1);
+assert.equal(count(reviewerWake, 'class="monitor-wake-input '), 0, "叫醒不掉进主流");
+assert.equal(count(reviewerWake, "task-message task-message--agent"), 0, "醒来的回答也在那一轮里");
+const reviewerLane = conversationFeedRows(foldMonitorWakes(reviewerWakeItems)).find((row) => row.kind === "review-lane");
+assert.deepEqual(reviewerLane?.kind === "review-lane" ? reviewerLane.items.map((item) => item.kind) : null, ["user", "agent"]);
 const session = { id: "session", taskId: task.id, agentType: "claude", role: "single", executor: "claude@nodemach", startedAt: "2026-10-21T04:18:00.000Z", endedAt: "2026-10-21T04:25:27.000Z" } as unknown as Session;
 const sentinel = `\n\x1e${JSON.stringify({ t: "user", ...combined, at, by: "system" })}\n`;
 const persisted = buildConversationItems([{ session, output: "等待全量回归。" + sentinel + "收到回归结果。", trace: [
@@ -215,4 +222,4 @@ for (const items of [persisted, live]) {
   if (items === persisted) assert.match(html, /等待全量回归。/);
   else assert.match(html, /被哨兵叫醒/);
 }
-console.log("monitor wake: structured provenance, hostile logs, legacy fallback, default-collapsed card (review session), task/team fold, live/reload passed");
+console.log("monitor wake: structured provenance, hostile logs, legacy fallback, default-collapsed card (review session, kept inside the review round), task/team fold, live/reload passed");

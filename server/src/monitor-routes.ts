@@ -21,8 +21,6 @@ import {
   monitorHookInternalError,
   type ClaudeMonitorHookInput,
 } from "./claude-monitor-hook.js";
-import { backfillClaudeMonitors } from "./claude-monitor-backfill.js";
-import { monitorRecoveryOf } from "./claude-monitor-recovery.js";
 
 /**
  * **这次创建请求是谁发起的** —— 核验在这里做,判归属在 `monitorSourceGate`(见那边的文件头)。
@@ -53,35 +51,7 @@ async function callerOf(c: Context, taskId: string, wake?: string | null): Promi
 }
 
 export function mountMonitorRoutes(api: Hono): void {
-  api.get("/tasks/:id/monitors", async (c) => {
-    const taskId = c.req.param("id");
-    // 先补历史再列：升级之前跑过的内置 Monitor 只存在于会话的 stdout 文件里，不补的话
-    // 用户打开老任务仍是「这个任务上还没有哨兵」——而这正是整个功能的起点那一幕。
-    // 按需、每进程每任务一次、幂等（见 claude-monitor-backfill.ts）。
-    await backfillClaudeMonitors(taskId);
-    return c.json(await listMonitors(taskId));
-  });
-
-  /**
-   * 「这个任务还有没读完/没落地的监听事实吗」。
-   *
-   * **故意是单独一条**而不是并进上面那个列表：列表的响应形状是一个数组，改成对象会让**旧
-   * 的 web/dist 配新 server** 那一刻整格面板崩掉（live 读的是主仓 dist，和 server 的重启
-   * 节奏本来就不同步）。单独一条的话旧前端根本不会去问。
-   *
-   * **但两条必须反映同一轮扫描**，所以这里也要先 `await` 同一个回填。上一版这条是纯内存
-   * 读：前端并行发两个请求，这一条可以在扫描记账**之前**就返回 `pending:false`，而列表
-   * 随后因为读失败返回 `[]`——两份不同时刻的快照被当成一份完成结果，页面于是写着「这个
-   * 任务上还没有哨兵」，而后台那一刻已经是 `pending:true / scan-failed`（第 7 轮审查用
-   * 真实页面复现）。回填本身有 inflight 合流，两个请求共享同一次扫描，不会多读一遍盘。
-   */
-  api.get("/tasks/:id/monitors/recovery", async (c) => {
-    const taskId = c.req.param("id");
-    await backfillClaudeMonitors(taskId);
-    return c.json(
-      monitorRecoveryOf(taskId) ?? { pending: false, reasons: [], attempts: 0, exhausted: false },
-    );
-  });
+  api.get("/tasks/:id/monitors", async (c) => c.json(await listMonitors(c.req.param("id"))));
 
   api.post("/tasks/:id/monitors", async (c) => {
     const taskId = c.req.param("id");

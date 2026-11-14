@@ -21,7 +21,8 @@ import {
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting, type MarkdownImageSink } from "./markdown-image-stream.js";
-import { codexAshMcpServerName } from "./codex-mcp.js";
+import { codexAshMcpArgs } from "./ash-mcp-inject.js";
+import { CodexExecAshMcp } from "./ash-mcp-confirm.js";
 import { TURN_IDENTITY_ENV_KEYS } from "../turn-identity.js";
 
 const ASH_MCP_IDENTITY_ENV_VARS = TURN_IDENTITY_ENV_KEYS;
@@ -108,13 +109,9 @@ export class CodexExecutor implements AgentExecutor {
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) common.push(...this.extraArgs);
     if (opts.extraArgs?.length) common.push(...opts.extraArgs);
-    // codex 默认会过滤 MCP stdio 子进程环境。env_vars 让它从父进程按**变量名**复制动态
-    // 身份：argv 里没有 token 值；放在用户 extraArgs 之后，避免白名单被同 key 覆盖。
-    const identityVars = ASH_MCP_IDENTITY_ENV_VARS.filter((key) => !!opts.env?.[key]);
-    if (identityVars.length) {
-      const serverName = codexAshMcpServerName(opts.env?.CODEX_HOME);
-      if (serverName) common.push("-c", `mcp_servers.${serverName}.env_vars=${JSON.stringify(identityVars)}`);
-    }
+    // ash 自己的 MCP 起跑时注入(ash-mcp-inject.ts),连同按**变量名**透传的回合身份(codex 默认
+    // 过滤 MCP 子进程环境;argv 里没有 token 值)。放在用户 extraArgs 之后,同 key 时以注入为准。
+    common.push(...codexAshMcpArgs(ASH_MCP_IDENTITY_ENV_VARS.filter((key) => !!opts.env?.[key])));
     return sessionId ? ["exec", ...common, "resume", sessionId, "-"] : ["exec", ...common, "-"];
   }
 
@@ -144,6 +141,8 @@ export class CodexExecutor implements AgentExecutor {
         // 这一轮真正生效的 CODEX_HOME(多用户模式由 auth/run-env.ts 注入),rollout 就写在
         // 它下面 —— 水位必须去同一个目录读。
         configDir: opts.env?.CODEX_HOME,
+        // 任务回合才要 ash 的工具交卷;exec 这条路 codex 不报 MCP 启动状态,按本回合记录判(ash-mcp-inject.ts)。
+        ashMcp: opts.env?.ASH_TASK_ID ? new CodexExecAshMcp() : undefined,
       }), { bin: this.bin, args: this.appServerArgs(opts).args, cwd: opts.cwd,
         env: { ...this.env(), ...opts.env } }, opts.sessionId, () => cleanupAfterRun(child)),
       kill: () => {
@@ -186,13 +185,8 @@ export class CodexExecutor implements AgentExecutor {
     const profile = appServerCompatibleArgs(this.extraArgs);
     const turn = appServerCompatibleArgs(opts.extraArgs ?? []);
     args.push(...profile.args, ...turn.args);
-    // App Server 同样由它自己拉起 MCP 子进程；身份变量仍只按名字进 TOML，真 token
-    // 留在父进程 env，既不进 commandLine，也不会被 Codex 的 MCP 环境过滤掉。
-    const identityVars = ASH_MCP_IDENTITY_ENV_VARS.filter((key) => !!opts.env?.[key]);
-    if (identityVars.length) {
-      const serverName = codexAshMcpServerName(opts.env?.CODEX_HOME);
-      if (serverName) args.push("-c", `mcp_servers.${serverName}.env_vars=${JSON.stringify(identityVars)}`);
-    }
+    // App Server 同样由它自己拉起 MCP 子进程:注入与身份透传同 exec(见 execArgs)。
+    args.push(...codexAshMcpArgs(ASH_MCP_IDENTITY_ENV_VARS.filter((key) => !!opts.env?.[key])));
     return { args, ignored: [...new Set([...profile.ignored, ...turn.ignored])] };
   }
 
@@ -325,7 +319,7 @@ export function parseCodexStream(
   child: ReturnType<typeof spawnAgent>,
   tracePaths: RunTracePaths | undefined,
   lifecycle: { stopRequested: boolean },
-  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string; images?: MarkdownImageAccounting },
+  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string; images?: MarkdownImageAccounting; ashMcp?: CodexExecAshMcp },
 ): AsyncIterable<AgentEvent> {
   // 正文里的图**不在这份解析里收**:一条 agent_message 只是一片碎片,上一条消息给定义、
   // 下一条引用它时按消息扫压根不认那张图(审查第 4 轮 R2)。统一由那一层按「一份文档」
@@ -345,7 +339,7 @@ async function* codexStreamEvents(
   // 目录)。不传就是宿主机默认那份 —— 读不到 rollout 时水位静默为空。
   // cwd = 这一轮干活的目录。正文里 `![](output/x.png)` 这种相对路径要靠它解成真文件
   // 才复制得进 uploads（见 ../agent-attachments.ts）。
-  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string },
+  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string; ashMcp?: CodexExecAshMcp },
   images: MarkdownImageSink,
 ): AsyncIterable<AgentEvent> {
   let turnCompleted = false;
@@ -394,6 +388,7 @@ async function* codexStreamEvents(
       push(codexTurnError(turnFailedMessage));
     } else if (ev.type === "item.completed" && ev.item) {
       const it = ev.item;
+      contextOptions.ashMcp?.item(it);
       // codex emits one complete agent_message / reasoning per turn (not token
       // deltas). The orchestrator no longer appends newlines — text pieces are
       // concatenated verbatim downstream — so carry the paragraph break here.
@@ -424,7 +419,10 @@ async function* codexStreamEvents(
     }
   });
 
-  child.stderr?.on("data", (d) => trace.stderr(d.toString()));
+  child.stderr?.on("data", (d) => {
+    trace.stderr(d.toString());
+    contextOptions.ashMcp?.stderr(d.toString());
+  });
   const finish = (opts: {
     exitStatus: number;
     exitSignal: NodeJS.Signals | null;
@@ -432,6 +430,8 @@ async function* codexStreamEvents(
     forceFinished?: boolean;
   }) => {
     if (events.closed) return;
+    const ashProblem = lifecycle.stopRequested || opts.spawnError ? null : contextOptions.ashMcp?.settle();
+    if (ashProblem) push(ashProblem);
     const diagnostics = trace.finish({
       ...opts,
       stopRequested: lifecycle.stopRequested,

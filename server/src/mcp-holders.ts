@@ -14,11 +14,11 @@
 // 来，但白名单只有三个工具，其余（dispatch/ask_question…）丢了就是丢了。能不掐
 // 断当然更好。
 import { join } from "node:path";
-import { REPO_DIR } from "./paths.js";
+import { CODE_DIR } from "./paths.js";
 import { boundaryKey, listProcesses } from "./platform.js";
 
-/** 本仓库那份 MCP 的入口路径。 */
-const MCP_ENTRY = join(REPO_DIR, "mcp", "dist", "index.js");
+/** 这份 ash 自带的 MCP 入口路径（仓库检出或独立 app 的 bundle 里）。 */
+const MCP_ENTRY = join(CODE_DIR, "mcp", "dist", "index.js");
 
 export type PsRow = { pid: number; ppid: number | null; command: string };
 

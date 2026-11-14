@@ -6,7 +6,7 @@
 // 网页读的也是那份。所以留着只是占地方。
 //
 // 不碰 codex-events.jsonl / stderr.log：它们是失败取证的现场，按「任务了结 + 宽限期」
-// 回收，规则在 run-trace-retention.ts。
+// 回收，规则在 run-retention.ts。
 import { readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { eq, isNull } from "drizzle-orm";

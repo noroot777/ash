@@ -1,199 +1,142 @@
+// 真人动作那一道闸：验收按下去被前置命令拦回来之后，这一屏怎么接着走。从 test-accept-gate-dom.mjs
+// 拆出来（那份贴着 700 行上限，按表面拆）。钉住的是：
+//
+// ⑰ 一按被 409 拦回来（门禁红了）**没有 SSE 也要把门禁那一行刷出来**：拦回来的那一刻就是用户最
+//    想看清「为什么」的时刻。门禁状态此刻读不出来时由「前置命令没通过，没有合并」那一行兜着，
+//    主按钮锁着（读不出来不放行），读到之后由门禁那一行接手。
+// ⑱ 归档 / 任务在跑 / 宿主那道关（审查进行中）任何一个在，主按钮都锁着，原因各自一行。
+// ⑲ 红了之后的两条出路都在确认层里，**打开确认层不动任何东西**：取消「运行」+ 取消「提交」
+//    发的是 {commit:false, gate:"skip"}；照常确认（失败从不被沿用）就是重跑，回执说「已开跑」
+//    之后那一行写「运行中」、主按钮锁着，确认层不留着。
+// ⑳ 门禁还在读的时候主按钮只转圈不放行（文字不变）；读到的命令是项目**现在**那一条，不是
+//    上一次跑的那一条；读出来是「没设」就没有这一行、确认层里也不跑；读失败不能被当成「没设」。
 import assert from "node:assert/strict";
+import { assertTone, checkRow, confirmLayer, deskSettled, gateRow, mainButton, openConfirm } from "./accept-gate-stage.mjs";
 import { testAcceptGateReads } from "./test-accept-gate-reads.mjs";
+import { waitUntil } from "./wait-until.mjs";
 
-export async function testAcceptGateActions({ browser, base, run }) {
-  const json = (route, body, status = 200) => route.fulfill({
-    status, contentType: "application/json", body: JSON.stringify(body),
-  });
+export async function testAcceptGateActions({ open, run }) {
   for (const projection of ["unset", "loaded", "error"]) {
-    const page = await browser.newPage({ viewport: { width: 1100, height: 820 } });
     const latest = run({ status: "failed", exitCode: 1, failure: "exit_code", logTail: "acceptance failed" });
-    const store = { requests: [], reads: 0, failed: false, running: false, reason: "accept_gate_failed" };
-    await page.addInitScript(() => {
-      window.EventSource = class {
-        constructor() { queueMicrotask(() => this.onopen?.()); }
-        close() {}
-      };
-    });
-    await page.route("**/api/**", async route => {
-      const pathname = new URL(route.request().url()).pathname;
-      if (pathname === "/api/projects") return json(route, [{ id: "proj-1", myRole: "member", acceptCommit: true }]);
-      if (pathname.endsWith("/branch-plan")) return json(route, { task: { blocker: null, dependency: null, strategy: "safe" } });
-      if (pathname.endsWith("/accept-gate")) {
-        store.reads++;
-        if (projection === "error" && store.failed) return json(route, { error: "状态暂时读不出来" }, 500);
-        const shown = store.running ? { ...latest, status: "running", exitCode: null } : latest;
-        return json(route, projection !== "loaded" && !store.failed
-          ? { command: null, latest: null, running: null, basis: null }
-          : { command: latest.command, latest: shown, running: store.running ? shown : null, basis: null });
+    const loaded = { command: latest.command, running: null, latest, basis: null };
+    const unset = { command: null, running: null, latest: null, basis: null };
+    let replies = 0;
+    const acceptReply = (body) => {
+      replies += 1;
+      if (replies === 1) {
+        // 第一按：门禁红了。此后读到的门禁是那份红（error 投影则读不出来）。
+        store.gate = loaded;
+        if (projection === "error") store.status = 500;
+        return { status: 409, body: { accepted: false, taskId: "gate-task", reason: "accept_gate_failed",
+          error: "验收前置命令未通过（rc=1），没有重跑，也没有合并。", gate: latest } };
       }
-      if (pathname.endsWith("/accept")) {
-        const request = JSON.parse(route.request().postData());
-        store.requests.push(request);
-        store.failed = true;
-        store.running = request.gate === "rerun";
-        return json(route, {
-          accepted: false, taskId: latest.taskId,
-          reason: store.running ? "accept_gate_running" : store.reason,
-          error: "验收前置命令未通过（rc=1），没有重跑，也没有合并。",
-          gate: store.running ? { ...latest, status: "running", exitCode: null } : latest,
-        }, 409);
-      }
-      return json(route, { error: `Unexpected request: ${pathname}` }, 404);
-    });
+      if (body.gate === "skip") return { status: 409, body: { accepted: false, taskId: "gate-task", reason: "target_unresolved", error: "模拟验收响应" } };
+      const view = { ...latest, status: "running", exitCode: null, finishedAt: null };
+      store.gate = { ...loaded, running: view, latest: view };
+      return { status: 409, body: { accepted: false, taskId: "gate-task", reason: "accept_gate_running", error: "已开跑", gate: view } };
+    };
+    const { page, store } = await open({ gate: projection === "loaded" ? loaded : unset, acceptReply });
     try {
-      await page.goto(`${base}?controls=1`);
-      await page.getByRole("button", { name: "验收通过", exact: true }).click();
-      await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
-      const failure = page.locator(".team-accept-failure, .accept-gate-card.is-failed");
-      await failure.getByRole("button", { name: "重跑一次", exact: true }).waitFor();
-      assert.equal(store.requests.length, 1);
-      assert.equal(store.requests[0].gate, undefined);
-      if (projection !== "error") {
-        await page.locator(".accept-gate-card").filter({ hasText: "acceptance failed" }).waitFor();
-      }
-      assert.equal(await page.getByRole("button", { name: "重跑一次", exact: true }).count(), 1);
-      assert.equal(await page.getByRole("button", { name: "这次跳过它，直接合并", exact: true }).count(), 1);
-      if (projection === "unset") assert.ok(store.reads >= 2, "409 without SSE must refresh the gate projection");
-
-      for (const guard of ["archived", "running", "blocked"]) {
-        await page.getByLabel("保护状态").selectOption(guard);
-        assert.equal(await failure.getByRole("button", { name: "重跑一次", exact: true }).isDisabled(), true);
-        assert.equal(await failure.getByRole("button", { name: "这次跳过它，直接合并" }).isDisabled(), true);
-      }
-      await page.getByLabel("保护状态").selectOption("none");
-      await failure.getByRole("button", { name: "这次跳过它，直接合并" }).click();
-      let dialog = page.getByRole("dialog");
-      assert.match(await dialog.innerText(), /这一次不跑.*上一次是红的/s);
-      assert.equal(store.requests.length, 1, "opening skip confirmation must not mutate anything");
-      await dialog.getByRole("button", { name: "取消", exact: true }).click();
+      await (await openConfirm(page)).getByRole("button", { name: "确认验收", exact: true }).click();
+      await waitUntil(() => store.accepts.length === 1, "第一按发出去");
+      assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: true }, `${projection}：第一按不带 gate`);
       if (projection === "error") {
-        // 门禁读不出来时主按钮不许把「没读到」当「没在跑」：禁用并改口待核对；跳过/重跑出口
-        // 自带上次那份现场，照常能用（下面接着点的就是它）。
-        assert.equal(await page.getByRole("button", { name: "前置命令状态待核对", exact: true }).isDisabled(), true);
-      } else {
-        await page.getByRole("button", { name: "验收通过", exact: true }).click();
-        dialog = page.getByRole("dialog");
-        assert.equal(await dialog.getByRole("button", { name: "跳过前置命令并验收" }).count(), 0);
-        await dialog.getByRole("button", { name: "取消", exact: true }).click();
+        // ⑰ 读不出来：由那一行兜着说「没通过」，主按钮锁着。
+        const failure = checkRow(page, "failure");
+        await failure.filter({ hasText: "前置命令没通过，没有合并" }).waitFor();
+        await assertTone(failure, "failed");
+        await deskSettled(page);
+        assert.equal(await mainButton(page).isDisabled(), true, "门禁读不出来时不放行");
+        // 服务端恢复：追平层自己退避重试读到，门禁那一行接手，兜底那一行收起。
+        store.status = 0;
+        await gateRow(page).filter({ hasText: "未通过" }).waitFor({ timeout: 25_000 });
+        await failure.waitFor({ state: "detached" });
       }
-      await failure.getByRole("button", { name: "这次跳过它，直接合并" }).click();
-      dialog = page.getByRole("dialog");
-      await dialog.getByRole("checkbox", { name: "合并后提交代码" }).uncheck();
-      await dialog.getByRole("button", { name: "跳过前置命令并验收" }).click();
-      await failure.getByRole("button", { name: "重跑一次", exact: true }).waitFor();
-      assert.deepEqual(store.requests[1], { confirmUnverified: false, commit: false, gate: "skip" });
+      const row = gateRow(page);
+      await row.filter({ hasText: "未通过，还没交给任务" }).waitFor();
+      assert.match(await row.locator(".acc-log pre").innerText(), /acceptance failed/, "红了日志就地展开");
+      if (projection === "unset") assert.ok(store.reads >= 2, "409 without SSE must refresh the gate projection");
+      assert.equal(await checkRow(page, "failure").count(), 0, "门禁那一行读得到时，不再另起一行重复说没通过");
 
-      await failure.getByRole("button", { name: "重跑一次", exact: true }).click();
-      dialog = page.getByRole("dialog");
-      assert.match(await dialog.innerText(), /从头跑一遍.*rc=0/s);
-      assert.equal(store.requests.length, 2);
-      await dialog.getByRole("button", { name: "重跑前置命令", exact: true }).click();
-      await failure.waitFor({ state: "hidden" });
-      assert.deepEqual(store.requests[2], { confirmUnverified: false, commit: true, gate: "rerun" });
-      if (projection !== "error") await page.locator(".accept-gate-card.is-running").waitFor();
-      assert.equal(await page.getByRole("dialog").count(), 0);
+      // ⑱ 三道闸：主按钮锁着、原因各自一行。
+      for (const [guard, key] of [["archived", "archived"], ["running", "in-flight"], ["blocked", "host"]]) {
+        await page.getByLabel("保护状态").selectOption(guard);
+        await checkRow(page, key).waitFor();
+        assert.equal(await mainButton(page).isDisabled(), true, `${guard}：主按钮锁着`);
+        if (guard !== "blocked") assert.equal(await row.getByRole("button", { name: "交给任务", exact: true }).isDisabled(), true);
+      }
+      assert.equal(await checkRow(page, "host").innerText(), "审查进行中");
+      await page.getByLabel("保护状态").selectOption("none");
+
+      // ⑲ 跳过且不提交：开层、动勾都不发东西。
+      let layer = await openConfirm(page);
+      await layer.getByRole("checkbox", { name: "运行前置命令" }).uncheck();
+      assert.match(await layer.innerText(), /上次未通过/);
+      await layer.getByRole("checkbox", { name: "合并后提交" }).uncheck();
+      assert.equal(store.accepts.length, 1, "opening skip confirmation must not mutate anything");
+      await layer.getByRole("button", { name: "跳过并验收", exact: true }).click();
+      await waitUntil(() => store.accepts.length === 2, "跳过那一按发出去");
+      assert.deepEqual(store.accepts[1], { confirmUnverified: false, commit: false, gate: "skip" });
+      await checkRow(page, "failure").filter({ hasText: "验收没完成" }).waitFor();
+
+      // ⑲ 照常确认 = 重跑：回执说已开跑，那一行换成「运行中」，主按钮锁着，层不留着。
+      layer = await openConfirm(page);
+      assert.equal(await layer.getByRole("checkbox", { name: "运行前置命令" }).isChecked(), true, "上一按的取消不该留到这一按");
+      await layer.getByRole("button", { name: "确认验收", exact: true }).click();
+      await waitUntil(() => store.accepts.length === 3, "重跑那一按发出去");
+      assert.deepEqual(store.accepts[2], { confirmUnverified: false, commit: true });
+      await gateRow(page).filter({ hasText: "运行中" }).waitFor();
+      await page.getByRole("status", { name: "操作结果" }).filter({ hasText: "已开跑" }).waitFor();
+      assert.equal(await mainButton(page).isDisabled(), true);
+      assert.equal(await confirmLayer(page).count(), 0);
     } finally {
       await page.close();
     }
   }
+
+  // ⑳ 还在读 → 读到现在那条命令 → 撤掉 → 读不出来。
   {
-    const page = await browser.newPage();
-    let release;
-    const waiting = new Promise(resolve => { release = resolve; });
-    let status = 200;
-    let gate = { command: "npm run current-check", running: null,
-      latest: run({ command: "npm run previous-check", status: "failed", exitCode: 1 }), basis: null };
-    await page.addInitScript(() => {
-      window.EventSource = class {
-        constructor() { queueMicrotask(() => this.onopen?.()); }
-        close() {}
-      };
-    });
-    await page.route("**/api/**", async route => {
-      const pathname = new URL(route.request().url()).pathname;
-      if (pathname === "/api/projects") return json(route, [{ id: "proj-1", myRole: "member", acceptCommit: true }]);
-      if (pathname.endsWith("/branch-plan")) return json(route, { task: { blocker: null, dependency: null, strategy: "safe" } });
-      if (pathname.endsWith("/accept-gate")) {
-        await waiting;
-        return json(route, status === 200 ? gate : { error: "读取失败，不能当作未设置" }, status);
-      }
-      return json(route, { error: "No mutation expected" }, 409);
-    });
+    const release = Promise.withResolvers();
+    const previous = run({ command: "npm run previous-check", status: "failed", exitCode: 1 });
+    const { page, store } = await open({ role: "member", hold: release.promise, ready: false,
+      gate: { command: "npm run current-check", running: null, latest: previous, basis: null } });
     try {
-      await page.goto(`${base}?controls=1`);
-      await page.locator('.accept-gate-card[aria-busy="true"]').waitFor();
-      assert.match(await page.getByRole("region", { name: "验收前置命令" }).innerText(), /正在读取/);
-      // 还没读到门禁时连确认框都不给开：主按钮禁用并说明在读，读到之后才变回「验收通过」。
-      assert.equal(await page.getByRole("button", { name: "读取前置命令状态", exact: true }).isDisabled(), true);
-      release();
-      await page.getByRole("button", { name: "验收通过", exact: true }).click();
-      await page.getByRole("dialog").getByText("npm run current-check", { exact: true }).waitFor();
-      await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
-      assert.match(await page.locator(".accept-gate-command").innerText(), /npm run current-check/);
-      assert.doesNotMatch(await page.locator(".accept-gate-command").innerText(), /previous-check/);
-      assert.match(await page.locator(".accept-gate-card").innerText(), /previous-check/);
-      gate = { command: null, running: null, latest: null, basis: null };
+      const main = page.locator(".acc-bar button.acc-btn.is-primary[aria-busy='true']");
+      await main.waitFor();
+      // 还没读到门禁时连确认层都不给开：主按钮禁用、转圈，字不变。
+      assert.equal(await main.isDisabled(), true);
+      assert.equal(await main.innerText(), "验收通过");
+      assert.equal(await gateRow(page).count(), 0, "读取中不出一行字（不让它闪进来又闪出去）");
+      store.hold = null;
+      release.resolve();
+      const layer = await openConfirm(page);
+      await layer.locator("code").filter({ hasText: "npm run current-check" }).waitFor();
+      await layer.getByRole("button", { name: "取消", exact: true }).click();
+      assert.match(await gateRow(page).locator(".acc-check-text").innerText(), /npm run current-check/);
+      assert.doesNotMatch(await gateRow(page).locator(".acc-check-text").innerText(), /previous-check/);
+
+      store.gate = { command: null, running: null, latest: null, basis: null };
       await page.reload();
-      await page.getByText("未设置（验收时不运行前置命令）", { exact: true }).waitFor();
-      assert.equal(await page.getByRole("button", { name: "设一条" }).count(), 0);
-      status = 500;
+      await deskSettled(page);
+      assert.equal(await gateRow(page).count(), 0, "没设就没有这一行");
+      const unsetLayer = await openConfirm(page);
+      assert.equal(await unsetLayer.getByRole("checkbox", { name: "运行前置命令" }).count(), 0);
+      assert.equal(await unsetLayer.getByRole("button", { name: "设一条前置命令", exact: true }).count(), 0, "成员没有入口");
+      await unsetLayer.getByRole("button", { name: "取消", exact: true }).click();
+
+      store.status = 500;
       await page.reload();
-      await page.getByRole("alert").filter({ hasText: "读取失败，不能当作未设置" }).waitFor();
-      assert.equal(await page.getByText("未设置（验收时不运行前置命令）", { exact: true }).count(), 0);
-      status = 200;
-      await page.getByRole("button", { name: "刷新", exact: true }).click();
-      await page.getByText("未设置（验收时不运行前置命令）", { exact: true }).waitFor();
+      await gateRow(page).filter({ hasText: "状态读不出来" }).waitFor();
+      assert.equal(await mainButton(page).isDisabled(), true, "读取失败不能当作未设置");
+      store.status = 0;
+      await gateRow(page).waitFor({ state: "detached", timeout: 25_000 });
+      await deskSettled(page);
+      assert.equal(await mainButton(page).isEnabled(), true);
     } finally {
-      release();
+      release.resolve();
       await page.close();
     }
   }
-  // 「跳过」这条出路不该等到红了才出现（用户 2026-10-31）：命令设着、这棵树上一次都没跑过
-  // 的时候，点验收就是眼看它烧十几分钟，而那正是最想直接合的时刻。判据是**这一按会不会真的
-  // 撞上这道门**，所以同一颗按钮在「没跑过」「绿了但过期了」都在，唯独在「有一次能原样复用
-  // 的绿」时不许出现 —— 那时跳过只会把一份真凭据换成一句「你明确跳过了」。
-  for (const [label, latest, offered] of [
-    ["一次都没跑过", null, true],
-    ["绿了但过期了", run({ stale: true }), true],
-    ["有一次能复用的绿", run(), false],
-  ]) {
-    const page = await browser.newPage({ viewport: { width: 1100, height: 820 } });
-    const store = { requests: [] };
-    await page.addInitScript(() => {
-      window.EventSource = class { constructor() { queueMicrotask(() => this.onopen?.()); } close() {} };
-    });
-    await page.route("**/api/**", route => {
-      const pathname = new URL(route.request().url()).pathname;
-      if (pathname === "/api/projects") return json(route, [{ id: "proj-1", myRole: "member", acceptCommit: true }]);
-      if (pathname.endsWith("/branch-plan")) return json(route, { task: { blocker: null, dependency: null, strategy: "safe" } });
-      if (pathname.endsWith("/accept-gate")) return json(route, { command: "./kb.sh test full", running: null, latest, basis: null });
-      if (pathname.endsWith("/accept")) {
-        store.requests.push(JSON.parse(route.request().postData()));
-        return json(route, { accepted: false, taskId: "gate-task", reason: "target_unresolved", error: "模拟验收响应" }, 409);
-      }
-      return json(route, { error: `Unexpected request: ${pathname}` }, 404);
-    });
-    try {
-      await page.goto(`${base}?controls=1`);
-      const card = page.locator(".accept-gate-card");
-      await card.locator(".accept-gate-command").getByText("./kb.sh test full", { exact: true }).waitFor();
-      const skip = card.getByRole("button", { name: "这次跳过它，直接合并", exact: true });
-      assert.equal(await skip.count(), offered ? 1 : 0, `${label}：跳过入口`);
-      // 「重跑一次」只在有一次结论摆着时才是一句话，没跑过时不许冒出来（点验收本来就会跑它）。
-      assert.equal(await card.getByRole("button", { name: "重跑一次", exact: true }).count(), 0, `${label}：没有红就没有「重跑一次」`);
-      if (!offered) continue;
-      await skip.click();
-      const dialog = page.getByRole("dialog");
-      assert.match(await dialog.innerText(), latest ? /这一次不跑.*不重新验它/s : /这一次不跑.*这一按等于这次不验它/s);
-      assert.equal(store.requests.length, 0, "打开确认框不动任何东西");
-      await dialog.getByRole("button", { name: "跳过前置命令并验收", exact: true }).click();
-      await page.locator(".team-accept-failure").filter({ hasText: "模拟验收响应" }).waitFor();
-      assert.deepEqual(store.requests, [{ confirmUnverified: false, commit: true, gate: "skip" }], `${label}：这一按要带 gate=skip`);
-    } finally {
-      await page.close();
-    }
-  }
-  await testAcceptGateReads({ browser, base });
-  console.log("accept gate failure actions: inline recovery, explicit confirmation, guards, pre-run skip entry and projection refresh covered");
+  await testAcceptGateReads({ open });
+  console.log("accept gate failure actions: 409 refresh, guards, skip/rerun through the confirm layer and read states covered");
 }

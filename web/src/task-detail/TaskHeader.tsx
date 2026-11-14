@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { Task, TaskListItem } from "@ash/shared";
-import { canArchive, hasPendingAcceptCommit } from "@ash/shared";
+import type { PrimaryActionKind, Task, TaskActions, TaskListItem } from "@ash/shared";
+import { hasPendingAcceptCommit } from "@ash/shared";
 import { taskCreationLabel } from "@ash/shared/task-origin";
 import {
   Archive,
@@ -23,23 +23,34 @@ import {
 import { TaskModeIcon, taskModeLabel, taskParentLink, taskParentRelation } from "../components/TaskOrigin.tsx";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { IconButton } from "../components/IconButton.tsx";
+import { ActionMenuItem } from "../components/ActionMenuItem.tsx";
+import { blocker, shown } from "../lib/useTaskActions.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { useLayoutMotion } from "../lib/motion/index.ts";
 import { TaskPinButton } from "./TaskPinButton.tsx";
-import { headSteps, sealState } from "./taskHeadSteps.ts";
+import { sealState } from "./taskHeadSteps.ts";
 import { safeDownloadName } from "./utils.ts";
 
 export type PrimaryAction = "run" | "retry" | "stop" | "accept" | "unarchive";
 
+const STEP: Record<PrimaryActionKind, { label: string; tip?: string }> = {
+  retry: { label: "重试", tip: "重试 · 从中断处接着跑" },
+  run: { label: "运行" },
+  // 它自己停在检查点上（多半在等哨兵）：继续就是拿它留下的那句续跑指令接着跑。
+  resume: { label: "继续" },
+};
+
 /**
  * 任务头：左边说「这是哪个任务」——类型（灰图标）、标题、来源（灰图标）、图钉；右边只有图标：
  * 此刻轮到你的那一步（重试 / 运行 / 继续）、验收的那枚章、更多、面板开关（docs/ui-ux-audit head-1）。
+ * 那一步出不出、点不点得了、重新排队与归档同理，都照服务端给的 `actions`（lib/useTaskActions.ts）。
  *
  * 状态词不在头上写：在跑看回复框那颗键（它就是停止），别的看侧栏那一行的点，右侧「信息」格里
  * 也有一行。时间住进右侧面板；「重新排队」进更多。
  */
 export function TaskHeader({
   task,
+  actions,
   allTasks,
   conversationMarkdown,
   busy,
@@ -61,6 +72,8 @@ export function TaskHeader({
   notify,
 }: {
   task: Task;
+  /** 服务端给的「此刻能做什么」；还没取到是 null，这几颗键都不出。 */
+  actions: TaskActions | null;
   allTasks: TaskListItem[];
   conversationMarkdown: string;
   busy: boolean;
@@ -91,13 +104,12 @@ export function TaskHeader({
   // 头上的图标多一颗少一颗时，留下的滑到新位置（run-6）。
   const acts = useRef<HTMLSpanElement>(null);
   useLayoutMotion(acts, ":scope > *");
-  const steps = headSteps(task);
+  // 在跑、在排队、在等你答复时没有这一步：停止是回复框那颗发送键，等答复要你做的是会话下面那张提问卡。
+  const step = shown(actions?.primary) ? actions!.primary! : null;
   const seal = sealState(task);
-  const canRequeue = task.parentId === null
-    && !task.archived
-    && task.handoff?.direction !== "out"
-    && !!task.queueId
-    && (task.status === "failed" || task.status === "canceled");
+  const stepBlocked = blocker(step);
+  const requeue = shown(actions?.requeue) ? actions!.requeue : null;
+  const archive = !task.archived && shown(actions?.archive) ? actions!.archive : null;
   // 「没交卷」记 failed 时，结算说明请用户「核对产物后直接标记完成」—— 那句话得有个真按得
   // 到的地方，否则它就是空头支票（在此之前，把状态改回 done 只有 API / MCP 能做）。放进
   // 更多菜单而不是顶栏：它是收拾残局用的低频动作，不该在每个失败任务上都摆一颗按钮。
@@ -183,21 +195,22 @@ export function TaskHeader({
       <span className="task-head-acts" ref={acts}>
         {/* 回合级的重来（上一回合崩了、任务却停在已完成）不在头上：它挂在会话里说这件事的那句话后面
             （「重试这一回合」/「继续本轮审查」，见 turnRetry.ts）。 */}
-        {steps.map((step) => (
+        {step && (
           <IconButton
             key={step.kind}
-            label={step.label}
-            tip={step.tip}
-            className="task-head-step"
+            label={STEP[step.kind].label}
+            tip={stepBlocked ?? STEP[step.kind].tip}
+            className={`task-head-step${stepBlocked ? " is-disabled" : ""}`}
             data-workspace-run-action={step.kind === "resume" ? "run" : step.kind}
             disabled={busy}
-            onClick={() => onPrimary(step.kind === "retry" ? "retry" : "run")}
+            aria-disabled={stepBlocked ? true : undefined}
+            onClick={() => { if (!stepBlocked) onPrimary(step.kind === "retry" ? "retry" : "run"); }}
           >
             {busy ? <SpinnerGap size={16} className="is-spinning" aria-hidden="true" />
               : step.kind === "retry" ? <ArrowCounterClockwise size={16} aria-hidden="true" />
                 : <Play size={16} aria-hidden="true" />}
           </IconButton>
-        ))}
+        )}
         {/* 「合并后不提交」那一档欠着的那一步。收尾的卡片只住在验收台里（用户 2026-09-15：
             那张卡不用在对话区永远铺着），所以头上留这一颗——一眼看得出还欠一步，点一下就进验收台。 */}
         {!reviewOpen && hasPendingAcceptCommit(task) && (
@@ -238,12 +251,12 @@ export function TaskHeader({
         </IconButton>
         {menu && (
           <div className="task-overflow-menu" role="menu">
-            {canRequeue && (
-              <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenu(false); onRequeue(); }}>
+            {requeue && (
+              <ActionMenuItem verdict={requeue} busy={busy} onSelect={() => { setMenu(false); onRequeue(); }}>
                 <ListNumbers size={14} />重新排队
-              </button>
+              </ActionMenuItem>
             )}
-            {canRequeue && <span role="separator" />}
+            {requeue && <span role="separator" />}
             {/* 正在读就把「刷新」禁掉，等于把唯一的恢复入口交给了它要恢复的那件事——
                 会话读取卡住时 refreshing 恰好一直是 true。重读本身是抢占式的（点它就
                 掐掉在途那一发重来，见 lib/useConversation.ts），连点无害，所以只留转圈
@@ -277,15 +290,15 @@ export function TaskHeader({
                 <CheckCircle size={14} />标记为已完成
               </button>
             )}
-            {task.parentId === null && <span role="separator" />}
-            {task.parentId === null && (
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => { setMenu(false); onArchive(); }}
-                disabled={!task.archived && !canArchive(task.status)}
-              >
-                <Archive size={14} />{task.archived ? "取消归档" : "归档任务"}
+            {(task.parentId === null || archive) && <span role="separator" />}
+            {archive && (
+              <ActionMenuItem verdict={archive} onSelect={() => { setMenu(false); onArchive(); }}>
+                <Archive size={14} />归档任务
+              </ActionMenuItem>
+            )}
+            {task.archived && task.parentId === null && (
+              <button type="button" role="menuitem" onClick={() => { setMenu(false); onArchive(); }}>
+                <Archive size={14} />取消归档
               </button>
             )}
             {task.parentId === null && (

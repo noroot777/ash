@@ -29,6 +29,7 @@ export type {
   FreeReviewDisputeResolution,
   FreeReviewDisputeTarget,
   FreeReviewExecutorOverride,
+  FreeReviewExpiredScreenshots,
   FreeReviewRound,
   FreeReviewRoundsInput,
   FreeReviewRun,
@@ -575,6 +576,9 @@ export type { NativeAgentActivity, NativeWorkEvent, NativeWorkStatus } from "./n
 // 子路径：本文件不能转发运行时函数）。老会话的「继续」标记仍从这里导出，web 有两处在读它。
 export const LEGACY_SYS_MARKER = "〔系统〕继续（从中断处）";
 export type { ConvSeg } from "./session-output.ts";
+export type {
+  ActionVerdict, PrimaryAction, PrimaryActionKind, ReviewRetryIdentity, RetryTurnAction, TaskActions,
+} from "./task-actions.ts";
 
 // 「答复」是回答 agent 提问的那条，走 /tasks/:id/answer 时由服务端加的前缀。
 export const ANSWER_PREFIX = "【答复】";
@@ -594,7 +598,9 @@ const LEGACY_SYSTEM_AUTHORED = [ANSWER_PREFIX, "【自动审查未通过", "【�
 export function isUserFollowUp(seg: { kind: string; text?: string | null; bySystem?: boolean }): boolean {
   const text = seg.text ?? "";
   if (seg.kind !== "user" || !text.trim() || seg.bySystem) return false;
-  return !LEGACY_SYSTEM_AUTHORED.some((prefix) => text.startsWith(prefix));
+  // 老答复有开头带空白的（legacyQuestionRecord 同样先 trim 再认前缀），两边认法要一致。
+  const head = text.trimStart();
+  return !LEGACY_SYSTEM_AUTHORED.some((prefix) => head.startsWith(prefix));
 }
 
 export type { BranchPlanEntry, BranchPlanView, BranchDependency, FamilyAcceptanceResult } from "./branch-plan.ts";

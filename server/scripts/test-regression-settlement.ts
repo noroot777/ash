@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync } from "node:fs";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
@@ -10,12 +9,9 @@ import { setupRegressionReviews, type ReviewMode } from "./regression-review-fix
 const { reconcileFreeReviews } = await import("../src/free-workflow.js");
 const { reconcileRegressionSettlements, regressionSettlementConclusion, completeRegressionSettlement } = await import("../src/regression-settlement.js");
 const { mountReviewRoutes } = await import("../src/review.js");
-const { reportTaskStage } = await import("../src/task-stage.js");
-const { checkRegressionConclusion } = await import("../src/regression-evidence-lifecycle.js");
 const { reopenFailedFreeReview } = await import("../src/free-review-round.js");
 const { createClient } = await import("../src/db/node-sqlite-client.js");
 const { ensureRegressionEvidenceSchema } = await import("../src/db/schema-regression-evidence.js");
-let restricted: string | null = null;
 try {
   const legacyDb = createClient({ url: join(root, "evidence-upgrade.db") });
   try {
@@ -38,23 +34,8 @@ try {
     for (const turnOk of [false, true]) {
       const review = await open(mode);
       assert.equal((await review.stage()).status, 200);
-      chmodSync(review.monitor.logPath, 0o000);
-      restricted = review.monitor.logPath;
       await review.settle(turnOk);
-      const deferred = await review.state();
-      assert.equal(deferred.settlement?.outcome, turnOk ? "done" : "failed");
-      assert.equal(deferred.settlement?.pending, turnOk, `${mode}: failed reviewer needs no evidence to fail`);
-      if (turnOk) {
-        if (mode === "preset" || mode === "legacy") await assert.rejects(reportTaskStage(review.taskId, "verifying"), /进入结算/);
-        const snapshot = await regressionSettlementConclusion(review.taskId, review.directory, {
-          outcome: "done", round: review.round, ownerTaskId: review.ownerTaskId,
-          ...(mode === "free" || mode === "accepted_merge" ? { freeRoundId: review.roundId } : {}),
-          acceptedMerge: mode === "accepted_merge",
-        });
-        assert.equal(snapshot, null, "repeated unreadable evidence preserves pending result");
-      }
-      chmodSync(review.monitor.logPath, 0o600);
-      restricted = null;
+      assert.equal((await review.state()).settlement?.outcome, turnOk ? "done" : "failed");
       runs.releaseTurn(review.ownerTaskId);
       await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, review.ownerTaskId));
       if (review.ownerTaskId !== review.taskId) await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, review.taskId));
@@ -88,21 +69,8 @@ try {
         assert.equal(presented.reviewTaskStatus, turnOk ? "done" : "failed");
         assert.equal(presented.conclusion, turnOk ? "verified" : null, "round presentation uses actual exit, not task done");
       }
-      console.log(`✓ ${mode}: ${turnOk ? "successful" : "failed"} exit survives EACCES, retry and separate-process recovery`);
+      console.log(`✓ ${mode}: ${turnOk ? "successful" : "failed"} exit survives retry and separate-process recovery`);
     }
-    const stopped = await open(mode);
-    assert.equal((await stopped.stage()).status, 200);
-    chmodSync(stopped.monitor.logPath, 0o000);
-    restricted = stopped.monitor.logPath;
-    await stopped.settle(true);
-    assert.equal((await stopped.state()).settlement?.pending, true);
-    await stopped.settle(false);
-    chmodSync(stopped.monitor.logPath, 0o600);
-    restricted = null;
-    await stopped.settle(true);
-    assert.equal((await stopped.state()).settlement?.outcome, "failed", "later retry cannot overwrite observed failure");
-    assert.equal((await stopped.state()).settlement?.pending, false);
-    runs.releaseTurn(stopped.ownerTaskId);
   }
   const unknown = await open("free");
   assert.equal((await unknown.stage()).status, 200);
@@ -119,18 +87,13 @@ try {
   assert(runs.isTurnClaimed(unknown.taskId), "restart delivery remains parked behind the caller's turn reservation");
   const restarted = await unknown.state();
   assert.notEqual(restarted.generation, previous.generation);
-  assert.equal(restarted.revoked, previous.revoked, "explicit restart never clears revocation");
   assert.equal(restarted.settlement, null, "explicit restart separates a new attempt from the old exit");
-  assert.equal(restarted.acceptedBasis, null);
-  assert(restarted.excludedMonitors.includes(unknown.monitor.id));
   let consumedOldAttempt = false;
   assert.equal(await completeRegressionSettlement(unknown.directory, { conclusion: "verified", outcome: "failed", generation: previous.generation }, async () => {
     consumedOldAttempt = true;
     return true;
   }), false);
   assert.equal(consumedOldAttempt, false, "old attempt cannot consume a new epoch");
-  await assert.rejects(checkRegressionConclusion(unknown.taskId, unknown.directory, "verified", unknown.basis), /依据无效/);
 } finally {
-  if (restricted) chmodSync(restricted, 0o600);
   await teardown();
 }

@@ -7,7 +7,7 @@
 // 共同的两条判据(三族一致,别在某一族悄悄放宽):
 //  ① **已有登记一律不覆盖**,含历史名 `harness` —— 用户可能自己改过路径或 URL;
 //  ② **「读不出来」绝不当成「没有」**:解析失败、写法超出认得的范围一律 unknown,
-//     因为 absent 是个会被用来拦人的结论(`ash-mcp-reachability.ts` 的「向放行开」)。
+//     因为拿「读不出来」当空去写,就是一份只剩 MCP 登记的新文件把用户整份配置盖掉。
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { extractTomlTables, scanCodexToml, tomlRootStringArray } from "../codex-toml.js";
 import { readJsonLoose, spliceJsonMember } from "./json-edit.js";

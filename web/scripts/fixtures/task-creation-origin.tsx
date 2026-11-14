@@ -25,6 +25,7 @@ function Fixture() {
           {/* 真的挂详情页顶栏：谁开的、从哪来都收在标题前那颗来源图标上，挪走了这里会立刻挂。 */}
           <TaskHeader
             task={{ ...selected, body: "" } as Task}
+            actions={null}
             allTasks={tasks}
             conversationMarkdown=""
             busy={false}

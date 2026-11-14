@@ -9,7 +9,7 @@
 import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Info, NotePencil } from "@phosphor-icons/react";
-import type { TaskListItem, TaskFollowUp } from "@ash/shared";
+import type { TaskListItem, TaskFollowUp, TaskFollowUpList } from "@ash/shared";
 import type { TaskMemoDigest } from "@ash/shared/task-memo";
 import { InspectorHost, type InspectorDescriptor } from "../../src/inspector/index.ts";
 import { MemoSelectionScope } from "../../src/task-memos/MemoSelectionScope.tsx";
@@ -224,10 +224,10 @@ function SpreadFixture() {
           <SpreadRowCells task={task(row.id)} ctx={ctx} onOpen={() => undefined} />
         </div>
       ))}
-      {/* 悬浮卡：备忘那一段必须排在追问正文**下面**。 */}
+      {/* 悬浮卡：备忘那一段必须排在追问正文**下面**。追问是卡片悬停时自己现取的全部追问
+          （f2eb0467 起不再拿铺开那一格的摘要顶），由下面那个 /follow-ups 的桩答。 */}
       <SpreadPeekCard
         peek={{ task: task("memo-newer"), kind: "last", rect: new DOMRect(40, 320, 200, 20) }}
-        last={followUp("memo-newer", OLD)}
         memo={memo("memo-newer", NEW, 3)}
         known
         body="原始需求"
@@ -245,6 +245,21 @@ declare global {
 window.__notices = [];
 
 const query = new URLSearchParams(window.location.search);
+
+// 铺开那一屏只有悬浮卡会发请求：读这个任务的全部追问。别的路径照常放行（这一屏不该再有别的）。
+if (query.has("spread")) {
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, window.location.origin);
+    const asked = /^\/api\/tasks\/([^/]+)\/follow-ups$/.exec(url.pathname);
+    const row = asked && ROWS.find((candidate) => candidate.id === decodeURIComponent(asked[1]!));
+    if (row) {
+      const list: TaskFollowUpList = { followUps: row.last ? [row.last] : [], complete: true };
+      return Promise.resolve(new Response(JSON.stringify(list), { status: 200, headers: { "content-type": "application/json" } }));
+    }
+    return nativeFetch(input, init);
+  };
+}
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

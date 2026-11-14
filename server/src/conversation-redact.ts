@@ -33,7 +33,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { and, eq, isNotNull } from "drizzle-orm";
 import type { QuestionRecord } from "@ash/shared/questions";
 import {
-  parseSessionSpans, segmentFingerprint, traceKeptOnDelete, traceSpanFingerprint, type ConvSeg,
+  parseSessionSpans, segmentFingerprint, traceKeptOnDelete, traceSpanFingerprint, traceStepsFingerprint, type ConvSeg,
+  type SessionSegmentSpan,
 } from "@ash/shared/session-output";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -44,11 +45,17 @@ import { publishTaskUpdated } from "./task-store.js";
 import { parseSessionTrace, sessionTracePath, sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { now } from "./util.js";
 
-/** 正文里的一段（序号 + 指纹），或一段只有执行过程的 trace（时间段 + 指纹）。 */
+/**
+ * 正文里的一段（序号 + 指纹），或一段只有执行过程的 trace：老记录按时间段指名（trace），带身份的按
+ * 回合 + 前后两句插话的记录号指名（steps：那个回合里号落在 (after, until) 之间的每一步，null = 不设限）。
+ */
 export type RedactTarget =
   // answerId：页面上这段答复对的是哪条问答记录。只给没有 answerIds 的老会话用，服务端核对过才认。
   | { index: number; fingerprint: string; answerId?: string }
-  | { trace: { from: string; to: string; fingerprint: string } };
+  | { trace: { from: string; to: string; fingerprint: string } }
+  | { steps: StepsSpan };
+
+export type StepsSpan = { turnStartedAt: string; after: number | null; until: number | null; fingerprint: string };
 
 /** 删除请求被拒或没做成（4xx：此刻不能删或页面上那份正文旧了；500：写盘失败，原样未动）。 */
 export class RedactRefusal extends Error {
@@ -59,8 +66,40 @@ export class RedactRefusal extends Error {
 
 const STALE = "会话内容已经变化，请刷新后再删除";
 
-/** 从 trace 里摘掉的时间段：(after, until]。 */
-type Window = { after: number; until: number };
+/**
+ * 从 trace 里摘掉的一截：老记录是时间段 (after, until]；带身份的是「这个回合里，号落在 (after, until)
+ * 之间的那几步」—— 一颗气泡的身份范围（同一回合、两句插话之间），不靠时间去框。
+ */
+type Window = { after: number; until: number } | { turnStartedAt: string; afterSeq: number; untilSeq: number };
+
+const inWindow = (entry: { at?: string; turnStartedAt?: string; seq?: number }, window: Window): boolean => {
+  if ("turnStartedAt" in window) {
+    return entry.turnStartedAt === window.turnStartedAt && typeof entry.seq === "number"
+      && entry.seq > window.afterSeq && entry.seq < window.untilSeq;
+  }
+  const at = time(entry.at);
+  return at > window.after && at <= window.until;
+};
+
+/**
+ * 带身份的一段正文删掉时摘哪几步：同一回合里、前后最近两句真人/系统代写输入（user 段，含已删的墓碑）
+ * 之间的每一步 —— 跟页面上这颗气泡的范围是同一个定义（web 的 conversationAssembler：输入把气泡切开，
+ * 同一回合的其余记录都归这颗）。
+ */
+function identityWindow(spans: readonly SessionSegmentSpan[], index: number, turnStartedAt: string): Window {
+  const userSeq = (span: SessionSegmentSpan | undefined) => span?.seg.kind === "user" && typeof span.seg.seq === "number" ? span.seg.seq : null;
+  let afterSeq = Number.NEGATIVE_INFINITY;
+  for (let at = index - 1; at >= 0; at -= 1) {
+    const seq = userSeq(spans[at]);
+    if (seq !== null) { afterSeq = seq; break; }
+  }
+  let untilSeq = Number.POSITIVE_INFINITY;
+  for (let at = index + 1; at < spans.length; at += 1) {
+    const seq = userSeq(spans[at]);
+    if (seq !== null) { untilSeq = seq; break; }
+  }
+  return { turnStartedAt, afterSeq, untilSeq };
+}
 
 const time = (at: string | undefined): number => {
   const parsed = at ? Date.parse(at) : Number.NaN;
@@ -69,7 +108,11 @@ const time = (at: string | undefined): number => {
 
 /** 删掉之后留在原位的那一行：只剩回合身份（谁、哪一刻、是不是旁注），正文与哨兵载荷全部去掉。 */
 function deletedLine(seg: ConvSeg, original: string): string {
-  if (seg.kind === "agent") return `${TURN_SENTINEL}${JSON.stringify({ t: "agent", deleted: true })}`;
+  // 正文的墓碑留着它那段的身份（号 + 回合 + 开头时刻）：删掉之后页面照样知道那一格属于哪颗气泡。
+  if (seg.kind === "agent") {
+    const identity = typeof seg.seq === "number" ? { seq: seg.seq, turnStartedAt: seg.turnStartedAt ?? null, ...(seg.at ? { at: seg.at } : {}) } : {};
+    return `${TURN_SENTINEL}${JSON.stringify({ t: "agent", ...identity, deleted: true })}`;
+  }
   let meta: Record<string, unknown> = {};
   if (original.startsWith(TURN_SENTINEL)) {
     try { meta = JSON.parse(original.slice(TURN_SENTINEL.length)) as Record<string, unknown>; } catch { /* 老格式 */ }
@@ -100,8 +143,10 @@ export function redactTranscript(raw: string, targets: readonly { index: number;
   for (const index of [...chosen].sort((left, right) => right - left)) {
     const { seg, first, last } = spans[index]!;
     if (seg.kind === "user") users.push({ index, seg });
-    if (seg.kind === "agent") {
-      // 窗口从前面最近的一处边界（插话时刻，或上一段正文的收口时刻）开始。
+    if (seg.kind === "agent" && typeof seg.seq === "number" && seg.turnStartedAt) {
+      windows.push(identityWindow(spans, index, seg.turnStartedAt));
+    } else if (seg.kind === "agent") {
+      // 老记录：窗口从前面最近的一处边界（插话时刻，或上一段正文的收口时刻）开始。
       const after = Math.max(Number.NEGATIVE_INFINITY, ...spans.slice(0, index)
         .map(({ seg: prev }) => time(prev.kind === "agent" ? prev.endedAt : prev.at))
         .filter(Number.isFinite));
@@ -131,16 +176,30 @@ export function traceSpanWindow(traceRaw: string | null, span: { from: string; t
   return { after: from - 1, until: to };
 }
 
+/** 纯函数：带身份的一截执行过程 → 那个回合里那段号。按盘上那份重算指纹，对不上就拒绝。 */
+export function traceStepsWindow(traceRaw: string | null, span: StepsSpan): Window {
+  if (traceRaw === null || !span.turnStartedAt) throw new RedactRefusal(STALE, 409);
+  const window: Window = {
+    turnStartedAt: span.turnStartedAt,
+    afterSeq: span.after ?? Number.NEGATIVE_INFINITY,
+    untilSeq: span.until ?? Number.POSITIVE_INFINITY,
+  };
+  const inside = parseSessionTrace(traceRaw).filter((entry) => inWindow(entry, window));
+  if (!inside.some((entry) => !traceKeptOnDelete(entry.event.kind)) || traceStepsFingerprint(inside) !== span.fingerprint) {
+    throw new RedactRefusal(STALE, 409);
+  }
+  return window;
+}
+
 /** 纯函数：从 trace 里摘掉落在时间窗里的执行事件（回合身份 run 与用量 usage 留着记账）。 */
 export function redactTrace(raw: string, windows: readonly Window[]): string {
   if (!windows.length) return raw;
   return raw.split("\n").filter((line) => {
     if (!line.trim()) return true;
-    let entry: { at?: string; event?: { kind?: string } };
+    let entry: { at?: string; turnStartedAt?: string; seq?: number; event?: { kind?: string } };
     try { entry = JSON.parse(line); } catch { return true; }
     if (traceKeptOnDelete(entry.event?.kind ?? "")) return true;
-    const at = time(entry.at);
-    return !windows.some((window) => at > window.after && at <= window.until);
+    return !windows.some((window) => inWindow(entry, window));
   }).join("\n");
 }
 
@@ -201,6 +260,7 @@ function planRewrite(mdPath: string, tracePath: string, targets: readonly Redact
   const windows = [
     ...redacted?.windows ?? [],
     ...targets.flatMap((target) => "trace" in target ? [traceSpanWindow(traceRaw, target.trace)] : []),
+    ...targets.flatMap((target) => "steps" in target ? [traceStepsWindow(traceRaw, target.steps)] : []),
   ];
   const named = new Map(segmentTargets.map((target) => [target.index, target.answerId]));
   return {

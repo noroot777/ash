@@ -7,7 +7,6 @@
    会自动把元素滚进视野，所以「停止能用」的验证照样通过，人却根本看不见那颗按钮。 */
 .monitor-inspector { min-width: 0; }
 .monitor-inspector__error,
-.monitor-inspector__pending { margin: 0 0 8px; }
 .monitor-inspector__blocked { margin: 0 0 10px; }
 .monitor-inspector__list { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .monitor-inspector__groups { display: grid; gap: 14px; }

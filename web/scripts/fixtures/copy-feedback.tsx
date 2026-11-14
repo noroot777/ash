@@ -67,8 +67,8 @@ const reviewOutput = "审查结论：改动符合预期，四处复制入口都�
 const items = buildConversationItems(
   [
     { session, output, trace: [] },
-    // trace 里的 run 事件带着轮号：审查卡靠它认出「这条发言属于第 1 轮」，卡内首条
-    // 气泡才会被判成 lead（头部整条省掉）。
+    // trace 里的 run 事件带着轮号：这一轮审查靠它认出「这条发言属于第 1 轮」，摊开后
+    // 首条发言才会被判成 lead（头部整条省掉）。
     {
       session: reviewSession,
       output: reviewOutput,

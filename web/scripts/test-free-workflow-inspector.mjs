@@ -259,10 +259,16 @@ try {
   await blockedAcceptance.getByRole("button", { name: "验收", exact: true }).click();
   const blockedWorkspace = blockedAcceptance.locator(".single-review-workspace");
   await blockedWorkspace.waitFor();
-  const blockedButton = blockedWorkspace.getByRole("button", { name: "审查进行中", exact: true });
-  await blockedButton.waitFor();
+  // 主按钮上永远只写动作名；挡住它的原因是前提列里自己那一行（审查在跑 = live 调子）。
+  const blockedRow = blockedWorkspace.locator('.acc-checks[aria-label="验收前提"] > .acc-check[data-check="review"]');
+  await blockedRow.waitFor();
+  assert.match(await blockedRow.getAttribute("class"), /\bis-live\b/, "审查进行中那一行是「正在替你办」的 live 调子");
+  assert.equal((await blockedRow.innerText()).trim(), "审查进行中", "挡路的原因写在前提列里");
+  const blockedButton = blockedWorkspace.locator(".acc-actions > button.acc-btn.is-primary");
+  assert.equal(await blockedButton.count(), 1);
+  assert.equal((await blockedButton.innerText()).trim(), "验收通过", "被挡住时主按钮仍写动作名，不换成原因");
   assert.equal(await blockedButton.isDisabled(), true, "自由审查进行中应在验收页禁用验收按钮");
-  assert.equal(await blockedWorkspace.getByRole("button", { name: "验收通过", exact: true }).count(), 0);
+  assert.equal(await blockedWorkspace.getByRole("button", { name: "审查进行中" }).count(), 0, "原因不再填进按钮");
 
   const postMergeFixture = page.locator(".post-merge-fixture");
   const postMergeHeader = postMergeFixture.locator(".task-detail-header");
@@ -282,15 +288,38 @@ try {
   await postMergeHeader.getByRole("button", { name: "更多任务操作" }).click();
   await postMergeHeader.getByRole("menuitem", { name: "查看改动与审查" }).click();
   const postMergeWorkspace = postMergeFixture.locator(".single-review-workspace");
-  await postMergeWorkspace.getByRole("region", { name: "验收合并快照" }).waitFor();
-  const snapshotLink = postMergeWorkspace.getByRole("button", { name: /审查本次合并/ });
-  assert.equal(await snapshotLink.count(), 1, "统一验收快照卡应提供低调文字入口");
+  // 已验收：第一行右边是「已验收」加一颗低调的文字键，验收快照卡已经没有了。
+  const postMergeActions = postMergeWorkspace.locator(".acc-bar .acc-actions");
+  await postMergeActions.locator(".acc-done", { hasText: "已验收" }).waitFor();
+  assert.equal(await postMergeWorkspace.getByRole("region", { name: "验收合并快照" }).count(), 0, "验收快照卡已删除");
+  assert.equal(await postMergeActions.locator("button.acc-btn").count(), 0, "已验收后不再摆打回 / 验收两颗键");
+  const snapshotLink = postMergeActions.getByRole("button", { name: "审查这次合并", exact: true });
+  await snapshotLink.waitFor();
+  assert.match(await snapshotLink.getAttribute("class"), /\bacc-link\b/, "合并审查入口是低调的文字键");
   await snapshotLink.click();
   await reviewDialog.getByRole("heading", { name: "审查合并结果" }).waitFor();
   await reviewDialog.locator(".free-review-reviewer .ui-dropdown-trigger").filter({ hasText: "Codex 审查" }).waitFor();
   await reviewDialog.getByRole("button", { name: "开始审查", exact: true }).click();
   await page.waitForFunction(() => window.__postMergeRequests === 1);
-  assert.equal(await page.evaluate(() => window.__postMergeRequests), 1, "快照入口应发起一次合并结果审查");
+  assert.equal(await page.evaluate(() => window.__postMergeRequests), 1, "第一行入口应发起一次合并结果审查");
+  // 审查一开起来，同一颗键就改说「合并审查中」（共享的自由工作流状态跟着刷新）。
+  await postMergeActions.getByRole("button", { name: "合并审查中", exact: true }).waitFor();
+  assert.equal(await postMergeActions.getByRole("button", { name: "审查这次合并", exact: true }).count(), 0);
+
+  // 上一次合并审查已经出了结论：同一颗键写「再审这次合并」。
+  const againActions = page.locator(".post-merge-again-ui-fixture .acc-bar .acc-actions");
+  await againActions.locator(".acc-done", { hasText: "已验收" }).waitFor();
+  const againLink = againActions.getByRole("button", { name: "再审这次合并", exact: true });
+  await againLink.waitFor();
+  await againLink.click();
+  assert.equal(await page.evaluate(() => window.__variantReviewClicks), 1, "「再审这次合并」接的是同一个入口");
+  // 「合并后不提交」还欠一步提交：那个合并提交还不存在，第一行不给审查入口；欠的那一步在前提列里。
+  const pendingFixture = page.locator(".post-merge-pending-ui-fixture");
+  await pendingFixture.locator('.acc-checks > .acc-check[data-check="pending-merge"]').waitFor();
+  const pendingActions = pendingFixture.locator(".acc-bar .acc-actions");
+  assert.equal(await pendingActions.locator(".acc-done", { hasText: "已验收" }).count(), 1);
+  assert.equal(await pendingActions.locator("button.acc-link").count(), 0, "欠提交时不出合并审查入口");
+  assert.equal(await pendingFixture.getByRole("button", { name: /审查这次合并|再审这次合并|合并审查中/ }).count(), 0);
 
   const postMergeInspector = page.locator(".post-merge-inspector-fixture");
   const postMergeHead = postMergeInspector.getByRole("region", { name: "合并结果审查", exact: true });

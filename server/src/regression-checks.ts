@@ -11,7 +11,7 @@ import {
   REVIEWER_REGRESSION_CLAUSE,
   regressionManifestEntry,
 } from "@ash/shared/free-workflow";
-import { RUNS_DIR } from "./paths.js";
+import { DATA_DIR, RUNS_DIR } from "./paths.js";
 import { previewShell } from "./preview-shell.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { replaceEvidenceFile, safeRunDirectory } from "./review-evidence.js";
@@ -30,7 +30,7 @@ export async function prepareRegressionCommand(taskId: string, monitorId: string
   const worker = existsSync(built) ? built : fileURLToPath(new URL("./regression-worker.ts", import.meta.url));
   const loader = existsSync(built) ? [] : ["--import", pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href];
   const script = `const result=require('node:child_process').spawnSync(${JSON.stringify(process.execPath)},` +
-    `${JSON.stringify([...loader, worker, monitorId])},{stdio:'inherit',env:{...process.env,ASH_DB:${JSON.stringify(resolveAshDbFile())}}});process.exit(result.status??1)`;
+    `${JSON.stringify([...loader, worker, monitorId])},{stdio:'inherit',env:{...process.env,ASH_DB:${JSON.stringify(resolveAshDbFile())},ASH_DATA_DIR:${JSON.stringify(DATA_DIR)}}});process.exit(result.status??1)`;
   const encoded = Buffer.from(script).toString("base64");
   await db.insert(regressionChecks).values({
     taskId, monitorId, role, command, cwd, inputIdentity: regressionInputIdentity(),

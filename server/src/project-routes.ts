@@ -136,6 +136,7 @@ export function mountProjectRoutes(api: Hono): void {
       acceptAutoCommit: false,
       // 新项目不设验收前置命令（= 老行为）。要设在项目设置 → 验收里填。
       acceptGateCommand: null,
+      acceptGatePrepare: null,
       acceptGateBaseline: "branch",
       // 新项目一律不授权浏览器登录态 —— 授权必须是用户明确开的那一下。
       browserCdpDomains: [],
@@ -214,6 +215,7 @@ export function mountProjectRoutes(api: Hono): void {
       acceptAutoCommit: false,
       // 新项目不设验收前置命令（= 老行为）。要设在项目设置 → 验收里填。
       acceptGateCommand: null,
+      acceptGatePrepare: null,
       acceptGateBaseline: "branch",
       // 新项目一律不授权浏览器登录态 —— 授权必须是用户明确开的那一下。
       browserCdpDomains: [],
@@ -323,6 +325,17 @@ export function mountProjectRoutes(api: Hono): void {
       }
       patch.acceptGateCommand = normalizeAcceptGateCommand(raw);
     }
+    // 准备命令与验收前置命令同一个口径：用户自己的 shell，空串/null = 不配，不校验能不能跑。
+    if (b.acceptGatePrepare !== undefined) {
+      if (b.acceptGatePrepare !== null && typeof b.acceptGatePrepare !== "string") {
+        return c.json({ error: "acceptGatePrepare 必须是字符串或 null" }, 400);
+      }
+      const raw = typeof b.acceptGatePrepare === "string" ? b.acceptGatePrepare.trim() : "";
+      if (raw && !normalizeAcceptGateCommand(raw)) {
+        return c.json({ error: `准备命令无效或过长（最多 ${MAX_ACCEPT_GATE_COMMAND} 字）` }, 400);
+      }
+      patch.acceptGatePrepare = normalizeAcceptGateCommand(raw);
+    }
     // 门禁基准。只收三档原文:这一位决定「门禁测哪一棵树」,一个认不出的值悄悄落回某一档,
     // 用户以为开着合并预览、实际跑的是分支快照,所以宁可 400。
     if (b.acceptGateBaseline !== undefined) {
@@ -342,8 +355,9 @@ export function mountProjectRoutes(api: Hono): void {
     }
     if (Object.keys(patch).length) await db.update(projects).set(patch).where(eq(projects.id, pid));
     const updated = (await db.select().from(projects).where(eq(projects.id, pid))).at(0)!;
-    // 命令或基准变了,验收台上那张门禁卡要重读:两处入口改的是同一份项目设置,另一处得立刻跟上。
+    // 命令、准备命令或基准变了,验收台上那张门禁卡要重读:两处入口改的是同一份项目设置,另一处得立刻跟上。
     if (normalizeAcceptGateCommand(updated.acceptGateCommand) !== normalizeAcceptGateCommand(existing.acceptGateCommand)
+      || normalizeAcceptGateCommand(updated.acceptGatePrepare) !== normalizeAcceptGateCommand(existing.acceptGatePrepare)
       || normalizeAcceptGateBaseline(updated.acceptGateBaseline) !== normalizeAcceptGateBaseline(existing.acceptGateBaseline)) {
       const affected = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.projectId, pid));
       for (const task of affected) bus.publish({ type: "task.acceptGate", taskId: task.id });

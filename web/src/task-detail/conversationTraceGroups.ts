@@ -46,9 +46,8 @@ function rederive(trace: SessionTraceEntry[]): SessionTraceEntry[] {
  *
  * - **codex**:7c274c0 之前的 trace 没有标记,存的是线程累计快照 —— 只有这一类要在读侧
  *   求差。有标记的(`incremental` / `delta` / `snapshot`)都是服务端已经结算过的本轮值。
- * - **claude**:全部照标记原样显示。口径修正之前的旧 trace 里存的确实是累计快照,但那批
- *   数据由**历史回填**(scripts/repair-claude-usage.ts)逐条改写成真实增量并补上 `delta`
- *   标记,不在这里猜。
+ * - **claude**:全部照标记原样显示。口径修正之前的旧 trace 里存的确实是累计快照,那段
+ *   历史不再修正(用户 2026-11-13 拍板放弃),也不在这里猜。
  *
  * **为什么 claude 不能照 codex 那样在读侧求差**:claude 的旧 trace 一条不缺地都标着
  * `incremental`,标记在这里没有分辨力。上一版曾改用数据自身的形状判(整串不下降 + 末条
@@ -56,7 +55,7 @@ function rederive(trace: SessionTraceEntry[]): SessionTraceEntry[] {
  * 随便续一轮新回合,汇总就不再等于末条,**整条历史的气泡会集体弹回累计值**(实测第 2 个
  * 气泡从正确的 81.9 万弹回 1726 万),而且跨 ash 会话行的线程永远凑不出这个恒等式。
  * 一条旧记录的含义不能随「以后会不会续聊」改变 —— 所以判据必须逐条落在数据里,
- * 由迁移去补,而不是在读侧推断。
+ * 而不是在读侧推断。
  */
 export function normalizedPersistedTrace(trace: SessionTraceEntry[], session: Session): SessionTraceEntry[] {
   return session.agentType === "codex" ? rederive(trace) : trace;

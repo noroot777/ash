@@ -12,7 +12,7 @@ import { restoreFollowUpAnswers } from "./legacy-answer-intent.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { replayQueueAdvances } from "./queue-advance-retry.js";
 import { sweepReleasedQueueMembers } from "./queue-monitor-hold.js";
-import { reportSuspectTurns } from "./turn-lock-reclaim.js";
+import { reportStuckWindDowns, reportSuspectTurns } from "./turn-lock-reclaim.js";
 
 // ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
 // Supports *, n, a-b, */n, and comma lists. No seconds, no names.
@@ -142,6 +142,8 @@ export async function tick() {
   // 那个开关都在 turn-lock-reclaim.ts。
   try {
     await reportSuspectTurns();
+    // 收尾卡住的那一档:同样只报告,出路是重启(turn-wind-down.ts)。
+    await reportStuckWindDowns();
   } catch (error) {
     console.error("[ash] 回合占位巡检这一趟出错:", error);
   }

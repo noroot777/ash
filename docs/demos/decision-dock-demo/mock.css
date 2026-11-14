@@ -1,0 +1,115 @@
+/* 产品画面：任务头 + 会话。尺寸和颜色照 web/src/styles 里会话那几份；回复框和浮层在 dock.css。 */
+.app { position: relative; display: flex; flex-direction: column; height: 700px; overflow: hidden; border-radius: 12px; background: var(--canvas); box-shadow: var(--control-shadow), lch(0 0 0 / 0.05) 0 12px 40px; font-size: 13px; line-height: 1.5; }
+
+.task-head { position: relative; display: flex; flex: none; align-items: center; gap: 10px; height: 44px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--line); color: var(--faint); }
+.task-head b { flex: 1; min-width: 0; overflow: hidden; color: var(--ink); font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.task-head-tools { display: flex; gap: 2px; }
+.head-icon { position: relative; display: grid; width: 28px; height: 28px; place-items: center; border-radius: 8px; color: var(--muted); }
+button.head-icon:hover, button.head-icon[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.head-icon .icon { width: 16px; height: 16px; }
+
+.feed { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 24px 14px; scroll-behavior: smooth; }
+.feed-col { max-width: 790px; margin: 0 auto; }
+
+/* —— 左边：智能体的回合 —— */
+.msg { position: relative; display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; margin-bottom: 20px; }
+.avatar { display: grid; width: 20px; height: 20px; place-items: center; color: #d97757; }
+.avatar .icon { width: 15px; height: 15px; stroke-width: 2.6; }
+.msg header { display: flex; align-items: center; gap: 8px; min-height: 20px; color: var(--muted); font-size: 12px; font-weight: 500; }
+.msg p { margin: 8px 0 0; line-height: 1.75; }
+.msg ul { margin: 6px 0 0; padding-left: 20px; line-height: 1.75; }
+.msg li::marker { color: var(--faint); }
+.msg code, .lane code { border-radius: 4px; background: var(--overlay); padding: 1px 4px; font-size: 12px; }
+.fold { display: flex; align-items: center; gap: 6px; min-height: 26px; margin-top: 4px; color: var(--muted); font-size: 13px; text-align: left; }
+button.fold:hover { color: var(--ink); }
+.fold .icon { width: 11px; height: 11px; color: var(--faint); transition: transform var(--dur-1) var(--ease-out); }
+.fold[aria-expanded="true"] .icon { transform: rotate(90deg); }
+.fold em { color: var(--faint); font-style: normal; font-variant-numeric: tabular-nums; }
+.fold time { color: var(--faint); font-variant-numeric: tabular-nums; }
+.msg .lane { margin: 4px 0 2px 5px; }
+/* 指到一段话才出的那几颗键（现有的复制 / 派生那一排的位置）。 */
+.keys { display: flex; gap: 2px; margin-left: auto; opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.msg:is(:hover, :focus-within) .keys, .me:is(:hover, :focus-within) .keys, .keys:has([aria-expanded="true"]) { opacity: 1; }
+.key { position: relative; display: grid; width: 22px; height: 22px; place-items: center; border-radius: 5px; color: var(--faint); }
+.key:hover, .key[aria-expanded="true"] { background: var(--raised); color: var(--ink); }
+.key .icon { width: 13px; height: 13px; }
+
+/* —— 右边：你 —— */
+.me { position: relative; display: flex; flex-direction: column; align-items: flex-end; margin: 0 0 20px; padding-left: 38px; }
+.me-bubble { max-width: min(640px, 88%); border-radius: 16px 6px 16px 16px; background: var(--overlay); padding: 9px 15px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.me .keys { margin: 4px 2px 0 0; }
+.me.is-new .me-bubble, .foot.is-new, .msg.is-new { animation: arrive 260ms var(--ease-out) backwards; }
+.me.is-leaving { opacity: 0; transform: translateY(-4px); transition: opacity 180ms, transform 180ms; }
+@keyframes arrive { from { opacity: 0; transform: translateY(6px); } }
+
+/* —— 右边：审查者。进行中和出结论是同一颗气泡（见 review-progress-demo）—— */
+.rv { display: flex; flex-direction: column; align-items: flex-end; margin: 26px 0 20px; padding-left: 38px; }
+.rv.is-tight { margin-top: 0; }
+.rv-bubble { position: relative; min-width: 0; max-width: min(640px, 88%); border: 1px solid var(--line2); border-radius: 16px 6px 16px 16px; transition: border-color var(--dur-1) var(--ease-out); }
+.rv-bubble:has(> .rv-text:hover) { border-color: color-mix(in oklab, var(--ink) 24%, var(--line2)); }
+.rv-bubble > header { position: absolute; right: 2px; bottom: 100%; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 0 4px; color: color-mix(in oklab, var(--muted) 72%, var(--faint)); font-size: 12px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity var(--dur-1) var(--ease-out); }
+.rv-bubble:is(:hover, :focus-within) > header { opacity: 1; pointer-events: auto; }
+.rv-bubble > header b { color: color-mix(in oklab, var(--ink) 70%, var(--muted)); font-weight: 500; }
+.rv-text { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 6px 15px 7px; border-radius: inherit; color: var(--muted); font-size: 12.500px; line-height: 1.6; text-align: left; overflow-wrap: anywhere; transition: color var(--dur-1) var(--ease-out); }
+.rv-text:hover, .rv-text[aria-expanded="true"] { color: var(--ink); }
+/* 辩论里的发言是说给你听的，字色用正文色；结论气泡仍是灰字。 */
+.rv.is-say .rv-text { color: var(--ink); font-size: 13px; line-height: 1.65; padding: 8px 15px 9px; }
+.run-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); transform-origin: center; animation: run-pulse 1.35s ease-in-out infinite; align-self: center; }
+@keyframes run-pulse { 50% { opacity: 0.4; transform: scale(0.78); } }
+
+/* 就地摊开的全文：占满正文宽度，左缘跟回合正文对齐。 */
+.lane { align-self: stretch; margin: 8px 0 4px -8px; border-left: 1px solid var(--line2); padding: 2px 0 2px 14px; color: var(--muted); animation: lane-unfold var(--dur-2) var(--ease-out) backwards; }
+.lane p { margin: 6px 0; line-height: 1.75; }
+.lane > :first-child { margin-top: 0; }
+.lane > :last-child { margin-bottom: 0; }
+@keyframes lane-unfold { from { opacity: 0; transform: translateY(-4px); } }
+
+/* —— ash 自己的话：回合下面一句小灰字。颜色只留给现在还成立的事 —— */
+.foot { margin: -12px 0 20px 30px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.foot.is-right { margin: -14px 2px 20px 0; text-align: right; }
+.foot.is-open { color: var(--amber); }
+.foot a { color: inherit; text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; }
+.run-line { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); }
+.run-line time { color: var(--faint); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 760px) {
+  .app { height: 640px; }
+  .feed { padding-left: 12px; padding-right: 12px; }
+  .rv, .me { padding-left: 10px; }
+  .rv-bubble, .me-bubble { max-width: 96%; }
+  .lane { margin-left: 0; }
+}
+@media (hover: none) {
+  .keys { opacity: 1; }
+  .rv { margin-top: 8px; }
+  .rv-bubble > header { position: static; height: auto; padding: 8px 15px 0; opacity: 1; pointer-events: auto; white-space: normal; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .run-dot { animation: none; }
+}
+
+/* 裁完之后收成一行的那场辩论。 */
+.fold.is-past { margin: -8px 0 20px 30px; }
+.past { margin-bottom: 4px; animation: lane-unfold var(--dur-2) var(--ease-out) backwards; }
+
+/* —— 「现在」的提示条：照线上样式重画的示意（task-detail.css / context-1m-notice.css / scheduled-message-tray.css / handoff.css）—— */
+.old-bar { display: flex; flex: none; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.6; color: var(--muted); }
+.old-bar span { flex: 1; min-width: 0; }
+.old-bar b { flex: none; align-self: flex-start; font-weight: 600; }
+.old-bar .icon { align-self: flex-start; margin-top: 3px; }
+.old-bar button { flex: none; height: 26px; padding: 0 10px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); color: var(--ink); font-size: 12px; white-space: nowrap; }
+.old-bar button.is-solid { border-color: transparent; background: var(--action); color: #fff; font-weight: 500; }
+.old-bar.is-accent { background: color-mix(in oklab, var(--accent) 8%, var(--panel)); }
+.old-bar.is-accent b { color: var(--accent); }
+.old-bar.is-plain { background: var(--raised); }
+.old-bar.is-amber { border: 1px solid color-mix(in oklab, var(--amber) 34%, var(--line)); border-radius: 8px; background: var(--amber-bg); color: color-mix(in oklab, var(--amber) 72%, var(--ink)); }
+.old-bar.is-inset, .old-tray { max-width: 790px; margin: 0 auto 8px; }
+.old-tray { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid color-mix(in oklab, var(--accent) 36%, var(--line)); border-radius: 10px; background: var(--panel); box-shadow: 0 4px 0 -2px var(--panel), 0 4px 0 -1px color-mix(in oklab, var(--accent) 22%, var(--line)), 0 8px 0 -4px var(--panel), 0 8px 0 -3px color-mix(in oklab, var(--accent) 14%, var(--line)); font-size: 12px; color: var(--muted); }
+.old-tray-mark { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 7px; background: color-mix(in oklab, var(--accent) 12%, var(--panel)); color: var(--accent); }
+.old-tray b { color: var(--ink); font-weight: 600; }
+.old-tray b i { margin-left: 2px; padding: 0 6px; border-radius: 999px; background: color-mix(in oklab, var(--accent) 12%, var(--panel)); color: var(--accent); font-style: normal; }
+.old-tray em { margin-left: auto; padding: 1px 8px; border-radius: 999px; background: var(--amber-bg); color: var(--amber); font-style: normal; }
+.old-tray button { height: 24px; padding: 0 8px; border: 1px solid var(--line2); border-radius: 6px; color: var(--muted); font-size: 12px; }
+.frame-note { margin: 10px 2px 0; color: var(--faint); font-size: 12px; }
+.avatar.is-codex { color: var(--accent); }
+.avatar.is-codex .icon { stroke-width: 1.9; }

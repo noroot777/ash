@@ -267,8 +267,6 @@ try {
   assert.ok(regressionArg.includes(REGRESSION_POLICY), "MCP 的回归开关说明也引同一份单源，不手抄");
   assert.match(regressionArg, /那一轮不跑回归，但构建、接口冒烟、浏览器真实点检照做/,
     "旁路回合的 409 要交代口径，但不能把「不跑回归」扩成「不跑任何测试」");
-  assert.doesNotMatch((registered.get("report_stage")!.inputSchema!.verificationBasis as { description: string }).description,
-    /撤销/, "撤销机制已退役，verificationBasis 的说明不能再拿它当触发条件");
   // ── 最终消息层的不变量（第 1 轮审查发现 2）───────────────────────────────────
   // 「每个表面都含新常量」证不出口径统一：真实任务书里完全可以前半句引了新常量、后半句还留着
   // 一句相反的旧要求（实测：语法审查开场「和相关测试」、逻辑审查「除编译与测试外」、审查者长任务

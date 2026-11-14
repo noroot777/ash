@@ -51,6 +51,7 @@ import { dirname } from "node:path";
 import type { Context } from "hono";
 import type { RemoteDeviceVia } from "@ash/shared";
 import { resolveAshDbFile } from "../db/path.js";
+import { LOCAL_ONLY } from "../local-only.js";
 import { isLoopbackAddress } from "../dir-picker.js";
 import { secretsEqual } from "../openai-converter/common.js";
 import { mintKey } from "./store.js";
@@ -422,9 +423,17 @@ export interface OwnerProofResult {
   holder: string;
 }
 
-/** 自用模式的身份判定:本机直连、放进来的设备、访问密钥。都不是就回 null(匿名)。 */
+/**
+ * 自用模式的身份判定:本机直连、放进来的设备、访问密钥。都不是就回 null(匿名)。
+ *
+ * 本机自用模式(local-only.ts)下**只认本机直连**:设备凭证和访问密钥是「从别处连进来」的
+ * 身份,这个模式下没有别处。只封配对入口是不够的 —— 从普通模式换到本机模式的那份数据里,
+ * 旧密钥、旧设备 cookie 都还在,经同机反代 / 隧道转进来的请求拿着它们照样会被认成机主。
+ * agent 的回合凭证不走这里(middleware.ts 里排在它前面),不受影响。
+ */
 export function ownerProof(c: Context, sessionCookie: string | undefined): OwnerProofResult | null {
   if (isLocalDirect(c)) return { how: "local", deviceId: null, holder: LOCAL_HOLDER };
+  if (LOCAL_ONLY) return null;
   const bearer = /^Bearer\s+(\S+)$/i.exec((c.req.header("authorization") ?? "").trim())?.[1];
   const host = requestOrigin(c).host;
   const socket = socketOf(c);

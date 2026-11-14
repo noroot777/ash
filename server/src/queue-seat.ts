@@ -31,6 +31,7 @@ import type { TurnOwner } from "./runs.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation, type TaskQueueReservation } from "./task-queue-reservation.js";
 import { waitForStartReceipt } from "./task-start-receipt.js";
+import { oweQueueAdvance } from "./turn-release.js";
 
 export type QueueSeat = {
   taskId: string;
@@ -48,27 +49,13 @@ export type QueueSeat = {
 // ② 推进挑中了一个刚恢复 paused、**旧回合锁还没释放**的成员 —— 先写 queued 再续跑
 //   会被 turn-entry-guard 挡回,占位没人回滚,任务永久卡「排队中」(第 4 轮问题 1)。
 //
-// 共同解法:记账的同时就把补办挂上 whenTurnIdle —— 回合锁一释放(结算收尾一定晚于
-// 状态恢复落库)回调重新 advanceQueue,那时成员已是干净的 paused,正常挑中续跑。
-// 消费不依赖结算代码的执行顺序,所以「清身份→恢复状态」间的任何窗口都塞不掉这笔账;
-// 期间没有任何推进事件的静止检查点依然无账,不会被一句追问续跑(第 2 轮语义保留)。
-// 回调里的 advanceQueue 进同一条认领链,幂等:多记几笔最多多跑几次空转判定。
-const missedAdvances = new Map<string, string>(); // 占着回合锁的成员 taskId → 它的 queueId
-
+// 共同解法:记一笔「这个成员放锁时推一次这条队列」(turn-release.ts 的欠账,放锁那一刻固定兑现)
+// —— 结算收尾一定晚于状态恢复落库,那时成员已是干净的 paused,正常挑中续跑。消费不依赖结算
+// 代码的执行顺序,所以「清身份→恢复状态」间的任何窗口都塞不掉这笔账;期间没有任何推进事件的
+// 静止检查点依然无账,不会被一句追问续跑(第 2 轮语义保留)。推进进同一条认领链,幂等:多记
+// 几笔最多多跑几次空转判定;锁此刻空着就当场推(排到链尾,不在临界区里等自己)。
 export function noteMissedAdvance(taskId: string, queueId: string): void {
-  const pending = missedAdvances.has(taskId);
-  missedAdvances.set(taskId, queueId);
-  if (pending) return; // 已有一个回调在等这次 turn 释放
-  whenTurnIdle(taskId, () => {
-    const owed = missedAdvances.get(taskId);
-    missedAdvances.delete(taskId);
-    if (!owed) return;
-    // 动态 import:scheduler 静态依赖本模块。void 不 await —— 本回调可能在推进的
-    // 临界区内同步触发(turn 恰好已空),advanceQueue 排到链尾即可,await 会死等自己。
-    void import("./scheduler.js").then(({ advanceQueue }) =>
-      advanceQueue(owed).catch((err) => console.error(`[ash] 补办队列推进(${taskId})失败:`, err)),
-    );
-  });
+  oweQueueAdvance(taskId, queueId);
 }
 
 export type QueueSeatClaim =

@@ -7,10 +7,9 @@ import type { TimelineNotice } from "@ash/shared/timeline-notice";
 import { applyVerifySpans, reviewerKey } from "./conversationReviewer.ts";
 import { markSystemResumes, type ResumeNote } from "./turnCause.ts";
 import type { AgentContentSegment } from "./conversationSegments.ts";
-import type { LiveAgentEvent, PersistedTurnTimes } from "./conversationTurnParts.ts";
+import type { LiveAgentEvent } from "./conversationTurnParts.ts";
 import { latestTurnStart } from "./conversationTurnParts.ts";
-import { appendLiveTimeline } from "./conversationLiveTurns.ts";
-import { appendPersistedSession } from "./conversationPersistedTurns.ts";
+import { assembleTimeline } from "./conversationTimeline.ts";
 import { contentVersion } from "../lib/useStickToBottom.ts";
 import { conversationItemSize } from "./conversationContentSize.ts";
 export { conversationToMarkdown } from "./conversationMarkdown.ts";
@@ -20,8 +19,10 @@ export type { AgentAuxEvent, AgentContentSegment, AttachmentSource } from "./con
 // 是公开类型,仍从这里转出去。
 export type { LiveAgentEvent } from "./conversationTurnParts.ts";
 
+// seq / turnStartedAt：服务端播出的那一句在盘上的身份（老服务端没有）；clientKey：页面发这一句时起的凭据，
+// 先画出来的那份和服务端播回来、落盘的那份凭它认成同一句（见 useConversation 的 mergeUserTimeline）。
 export type TimelineEntry =
-  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean; bySystem?: boolean; monitorWake?: MonitorWakeData; answerIds?: string[]; sessionId?: string; sessionRole?: string; source?: "optimistic" | "server" }
+  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean; bySystem?: boolean; monitorWake?: MonitorWakeData; answerIds?: string[]; sessionId?: string; sessionRole?: string; source?: "optimistic" | "server"; seq?: number; turnStartedAt?: string | null; clientKey?: string }
   | { kind: "server"; id: string; event: LiveAgentEvent };
 
 /** 落盘气泡出自哪条会话的哪几段 / 哪段执行过程（删除消息拿它指名，见 server/src/conversation-redact.ts）。 */
@@ -29,7 +30,9 @@ export type ConversationSource =
   // answerId：这段答复对的是哪条问答记录（问答卡认出来的那条，见 QuestionHistory.tsx）。
   | { sessionId: string; index: number; fingerprint: string; answerId?: string }
   // entangled：这段时间里夹着别的气泡的步子，删不开（见 conversationTraceSources 的 traceSpanSource）。
-  | { sessionId: string; trace: { from: string; to: string; fingerprint: string }; entangled?: true };
+  | { sessionId: string; trace: { from: string; to: string; fingerprint: string }; entangled?: true }
+  // 带身份的、只有执行过程的气泡：那个回合里号落在前后两句输入之间的每一步（见 conversationAssembler）。
+  | { sessionId: string; steps: { turnStartedAt: string; after: number | null; until: number | null; fingerprint: string } };
 // deleted：已删除的段排版时仍占原位（回合起止靠它推），buildConversationItems 收尾前拿掉。
 export type PersistedOrigin = { sources?: ConversationSource[]; deleted?: true };
 
@@ -73,6 +76,11 @@ export type ConversationItem =
        * 边界事件。两样都没有、收口纯靠下一条真人插话推断的，就是这里说的半截。
        */
       interrupted?: boolean;
+      /**
+       * 这颗气泡是带身份的记录拼成的（conversationAssembler）：归哪一回合、从哪一刻起、到哪一刻收口、
+       * 是不是被插话打断的半截，全是服务端给的事实，下面那几轮按插话时刻推起止的猜法不碰它。
+       */
+      recorded?: true;
       showSessionMeta?: boolean;
       /** 上一条说话的还是同一个会话、中间只隔着旁注：接着上一段说，不再重报头像和执行器名。 */
       continuation?: boolean;
@@ -199,11 +207,6 @@ function inferredRunEnd(itemAt: string | null | undefined, bounds?: SessionRunBo
   return bounds.nextStartedAt;
 }
 
-function conversationItemTime(item: ConversationItem): number {
-  const parsed = item.at ? Date.parse(item.at) : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
-}
-
 /**
  * 推断出来的收口时刻不能早于回合起点 —— 一条回合不可能在开始之前就结束了。
  *
@@ -239,19 +242,8 @@ export function buildConversationItems(
   sessions: Session[],
   timeline: TimelineEntry[],
 ): ConversationItem[] {
-  const items: ConversationItem[] = [];
-  const persistedTurns: PersistedTurnTimes = new Map();
-  const ordered = [...persisted].sort((left, right) =>
-    left.session.startedAt.localeCompare(right.session.startedAt));
-  for (const conversation of ordered) appendPersistedSession(items, conversation, persistedTurns);
-
-  // Sessions are reusable and can overlap: an older Claude session may resume
-  // after a newer @codex session has already finished. Grouping by session would
-  // pin that new Claude turn above Codex forever after refresh, so establish the
-  // persisted timeline by each turn's own timestamp before live arrivals append.
-  items.sort((left, right) => conversationItemTime(left) - conversationItemTime(right));
-
-  const liveContext = appendLiveTimeline(items, timeline, sessions, persistedTurns);
+  // 落盘排好序 + 直播按到达追加；带身份的记录已经由归并器按身份归位、定好起止（conversationTimeline）。
+  const { items, liveContext } = assembleTimeline(persisted, sessions, timeline);
 
   // 时间线到这里才排完（落盘排好序 + 直播按到达追加），身份也才补得齐。必须排在下面
   // 那轮 continuation 判定之前：那一轮拿 reviewer 当断点用。
@@ -278,6 +270,8 @@ export function buildConversationItems(
     const adjacentInterjectionAt = isTurnInterjection(previousItem) ? previousItem?.at ?? null : null;
     if (isTurnInterjection(item)) previousInterjectionAt = item.at ?? previousInterjectionAt;
     if (item.kind !== "agent") { previousItem = item; continue; }
+    // 带身份的气泡：起点是服务端给的（conversationAssembler），下面这套推断只给老记录。
+    if (item.recorded) { seenSessions.add(item.sessionId); previousItem = item; continue; }
     const firstTurn = !seenSessions.has(item.sessionId);
     seenSessions.add(item.sessionId);
     // 气泡自己记着回合就认自己的；会话行上的是**此刻最新**那一回合，拿它给上一回合的气泡
@@ -305,6 +299,7 @@ export function buildConversationItems(
   // 它们不带 at（收口时刻另有来源），所以得单独记一笔，不能靠 nextInterjectionAt 认。
   let closedBelow = false;
   let rightSessionId: string | undefined;
+  const lastOfTurn = new Set<string>();
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index]!;
     // 旁注不收回合：一条还在飞的回合被它按上结束时刻，就会当场折叠、还挂出「派生新任务」
@@ -324,6 +319,20 @@ export function buildConversationItems(
       interjectedByUser = false;
       closedBelow = false;
       rightSessionId = item.sessionId;
+    }
+    if (item.recorded) {
+      // 带身份的气泡：收口是服务端给的事实（conversationAssembler），只给它上面的老记录当个参照。
+      nextAgentAt = item.at ?? nextAgentAt;
+      closedBelow = false;
+      continue;
+    }
+    // 老记录里有回合行的那一回合：最后一颗气泡的收口就是回合行上那一刻（`Session.turnEnds`），不用推。
+    // 同一回合里在它之后、回合收口之前还有一句真人的话，说明它是被引导打断的前半截，那一刻不归它。
+    const turnEnd = item.turnKey && !item.deleted && !lastOfTurn.has(`${item.sessionId}\0${item.turnKey}`)
+      ? item.session?.turnEnds?.[item.turnKey] ?? null : null;
+    if (item.turnKey && !item.deleted) lastOfTurn.add(`${item.sessionId}\0${item.turnKey}`);
+    if (turnEnd && !(interjectedByUser && nextInterjectionAt && Date.parse(nextInterjectionAt) < Date.parse(turnEnd))) {
+      item.markerEndedAt = turnEnd;
     }
     // 推断分三档，**挨个试**，谁先满足「不早于回合起点」就用谁：一条回合不可能在开始之前
     // 就结束了。直接把不合格的那档判成 null 会把本来还有的后两档也一起丢掉（真实数据里有

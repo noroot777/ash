@@ -3,6 +3,7 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
+import { heldFollowUpRestore } from "./follow-up-held.js";
 import { directionIdentityCleared } from "./task-direction-epoch.js";
 import { taskStartStatus, recordTaskStatus } from "./task-start-status.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
@@ -57,6 +58,7 @@ export async function withdrawRepairStart(taskId: string, receipt: ReviewStartRe
       || task.activeDirectionToken !== receipt.identity.directionToken || task.directionEpoch !== receipt.identity.directionEpoch) return;
     const status = ["running", "queued"].includes(start.priorStatus) ? "paused" as const : start.priorStatus;
     await transaction.update(tasks).set({ status, ...directionIdentityCleared(), followUpFrom: null, nativeTurn: false,
+      ...heldFollowUpRestore(status, task.followUpFrom),
       completeConfirmedAt: null, updatedAt: now(), waitOwnership: { ...task.waitOwnership, start: undefined, repairDelivery: undefined },
       ...(["done", "failed", "canceled"].includes(status) ? { endedAt: now() } : {}),
     }).where(eq(tasks.id, taskId));

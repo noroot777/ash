@@ -63,7 +63,9 @@ import { now } from "./util.js";
 import { setWorkflowAt } from "./workflow-advance.js";
 import { railStalledAtRun, taskWorkflowDef } from "./workflows.js";
 import { discardTaskWorkspace } from "./workspace-cleanup.js";
-import { execFileText as exec } from "./exec.js";
+import { execFileText as exec, ExecTimeout } from "./exec.js";
+import { WIND_DOWN_COMMAND_TIMEOUT_MS } from "./turn-wind-down.js";
+import { withExternalWaitBound } from "./external-wait-bound.js";
 
 interface TurnBaseline {
   cwd: string;
@@ -104,8 +106,12 @@ const baselinePath = (taskId: string) => join(RUNS_DIR, taskId, "turn-baseline.j
 /**
  * 给工作目录拍一张照。取不到就返回 null —— 调用方一律按「变了」处理，
  * 因为「不知道有没有变」和「确实变了」的正确应对是同一个：让它重走流程。
+ *
+ * 每条 git 都有时限（`WIND_DOWN_COMMAND_TIMEOUT_MS`）：结算那一张拍在回合收尾里、回合锁还占着，
+ * 一条不返回的 git（读 stdin 的 hook、卡住的文件系统）就是锁永远放不掉。到点按进程组杀掉，
+ * 这张照按「取不到」处理，超时的那条命令记进 `timedOut` 交给调用方留痕。
  */
-async function fingerprint(cwd: string): Promise<string | null> {
+async function fingerprint(cwd: string, timedOut?: (what: string) => void): Promise<string | null> {
   if (!cwd || !existsSync(cwd)) return null;
   try {
     // 三段各自先写长度再写内容：不用分隔符，也就不会有「换个位置切开能拼出同样字节流」
@@ -118,13 +124,16 @@ async function fingerprint(cwd: string): Promise<string | null> {
       ["ls-files", "--others", "--exclude-standard"],
     ]) {
       // diff 可以很大；默认 1MB 的 maxBuffer 会直接抛，那样每次都判成「变了」。
-      const { stdout } = await exec("git", ["-C", cwd, ...args], { maxBuffer: 64 * 1024 * 1024 });
+      const { stdout } = await exec("git", ["-C", cwd, ...args], {
+        maxBuffer: 64 * 1024 * 1024, timeoutMs: WIND_DOWN_COMMAND_TIMEOUT_MS,
+      });
       hash.update(String(stdout.length));
       hash.update("\n");
       hash.update(stdout);
     }
     return hash.digest("hex");
-  } catch {
+  } catch (error) {
+    if (error instanceof ExecTimeout) timedOut?.(error.message);
     return null;
   }
 }
@@ -182,6 +191,10 @@ function takeTurnBaseline(taskId: string): TurnBaseline | null {
     return null;
   }
 }
+
+const timeoutNote = (what: string) =>
+  `收尾时给工作区拍照没能完成（${what}），按「这一轮改过代码」处理：回合开头清掉的验证与验收记录不放回，`
+  + "这一版要从头再走一遍流程。要是这一轮其实什么都没改，重新确认一次（验证 / 验收）就能补回来。";
 
 // 这行写在**回合开头**，那会儿还不知道 agent 会不会真动代码，所以措辞得是前瞻的：
 // 先说清「已经退回起点了」，再把「白退了会放回去」这条兜底讲明白。
@@ -284,6 +297,24 @@ async function restoreWorkflowLedger(taskId: string, ledger: LedgerSnapshot): Pr
  * 只在 `fresh`（目录和分支都没了、`-b` 现建的空壳）时拆；恢复出来的旧 worktree 里
  * 有真东西，一律不碰。不带 force，让 git 自己的安全检查当最后一道保险。
  */
+/**
+ * 在收尾里拆空壳:里面要排仓库锁、跑一串 git,回合锁这时还占着,所以整段圈上时限
+ * (external-wait-bound.ts)。到点由这一轮自己放弃这一步、说一句:目录留着,不影响任务落位。
+ */
+async function discardEmptyShellWithin(taskId: string): Promise<void> {
+  let gaveUp: string | null = null;
+  await withExternalWaitBound({ ms: WIND_DOWN_COMMAND_TIMEOUT_MS, onTimeout: (what) => { gaveUp ??= what; } },
+    () => discardEmptyShell(taskId)).catch((error) => {
+    if (!gaveUp) throw error;
+  });
+  if (gaveUp) {
+    await appendTaskTimeline(taskId, alertLine(
+      `这一轮没有产出任何改动，本该清理为它临时重建的空工作目录，但没能完成（${gaveUp}），目录先留着；`
+      + "它不影响任务本身，之后删除任务时会一并清理。",
+    ));
+  }
+}
+
 async function discardEmptyShell(taskId: string): Promise<void> {
   const task = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return;
@@ -315,7 +346,12 @@ export async function reconcileTurnBaseline(taskId: string, confirmedDone: boole
   const base = takeTurnBaseline(taskId);
   if (!base) return; // 这一轮没拍过照（系统续跑、验证轮、老任务）→ 维持原行为
   try {
-    const after = await fingerprint(base.cwd);
+    let timedOut: string | null = null;
+    const after = await fingerprint(base.cwd, (what) => { timedOut = what; });
+    // 拍照超时 = 这一轮自己放弃了这一步(回合锁还占着,不能干等)。后果按「改过」算 —— 开头清掉的
+    // 验证/验收进度不放回,这一版要从头再走一遍流程;任务落位已在上一步定了,不因此改。宁可多走
+    // 一遍流程,也不把没核实过的工作区当成「一个字节没改」把旧成绩挂回去。
+    if (timedOut) await appendTaskTimeline(taskId, alertLine(timeoutNote(timedOut)));
     const changed = base.fingerprint === null || after === null || after !== base.fingerprint;
     if (changed) {
       // 账开头就清了，这里什么都不用做。唯一的例外是 `ledger` 字段缺失 —— 那张基线是
@@ -343,7 +379,7 @@ export async function reconcileTurnBaseline(taskId: string, confirmedDone: boole
       ? await restoreTaskStage(taskId, stageBack, restoreStageNote(stageBack), base.acceptedSnapshot ?? null)
       : false;
     if (!staged && base.ledger) await appendTaskTimeline(taskId, receiptLine(RESTORE_NOTE));
-    if (base.fresh) await discardEmptyShell(taskId);
+    if (base.fresh) await discardEmptyShellWithin(taskId);
   } catch (error) {
     console.warn(`[ash] failed to reconcile turn baseline for ${taskId}:`, error);
   }

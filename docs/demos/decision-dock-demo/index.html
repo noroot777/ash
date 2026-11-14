@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext x='5' y='25' font-size='28' font-family='sans-serif' font-weight='bold' fill='%23111'%3Ea%3C/text%3E%3C/svg%3E">
+  <title>ash · 卡片和弹窗去哪了</title>
+  <link rel="stylesheet" href="page.css">
+  <link rel="stylesheet" href="mock.css">
+  <link rel="stylesheet" href="dock.css">
+</head>
+<body>
+  <svg class="icon-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7zM14 3v5h5M10 13h6m-6 4h6"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-seal" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.500 3 3 5-6"/></symbol>
+    <symbol id="i-dots" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.500v15l12-7.500z"/></symbol>
+    <symbol id="i-burst" viewBox="0 0 24 24"><path d="M12 2v20M2 12h20M4.900 4.900l14.200 14.200M19.100 4.900 4.900 19.100M7.500 2.800l9 18.400M16.500 2.800l-9 18.400M2.800 7.500l18.400 9M2.800 16.500l18.400-9"/></symbol>
+    <symbol id="i-codex" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.500"/><path d="m9 10 3 2-3 2m4.500 0H16"/></symbol>
+    <symbol id="i-clip" viewBox="0 0 24 24"><path d="m20 11.500-8.200 8.200a5 5 0 0 1-7.100-7.100l8.900-8.900a3.300 3.300 0 0 1 4.700 4.700l-8.800 8.800a1.700 1.700 0 0 1-2.400-2.400l8-8"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24"><path d="m4 20 1-4L16.500 4.500a2.100 2.100 0 0 1 3 3L8 19zM14 7l3 3"/></symbol>
+    <symbol id="i-quote" viewBox="0 0 24 24"><path d="M10 7H5v6h4c0 2-1 3.500-3 4m13-10h-5v6h4c0 2-1 3.500-3 4"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.500 4.500 4.500L19 7.500"/></symbol>
+    <symbol id="i-plane" viewBox="0 0 24 24"><path d="M21 3 3 10.500l7 2.500 2.500 7zM10 13l5-5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.500"/><path d="m16 16 4.500 4.500"/></symbol>
+    <symbol id="i-caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 1 2.300 5.700M4 18v-4.500h4.500"/></symbol>
+  </svg>
+
+  <header class="page-head">
+    <a class="wordmark" href="index.html">ash<span>/</span><span>交互实验室</span></a>
+    <span class="page-tag">HTML DEMO · 不连接真实任务</span>
+  </header>
+
+  <main class="page">
+    <section class="intro">
+      <h1>等你拍板的事，落在你说话的地方。</h1>
+      <p>提问、裁定、派审查、确认现在各有一张卡或一个弹窗。方案里它们回到回复框和被点的那颗键上；两方辩论本来就是对话，放回会话的左右两边；ash 的提示条缩成所属那颗键上的状态。</p>
+    </section>
+
+    <section class="controls" aria-label="演示开关">
+      <div class="control"><span>场面</span><div class="seg" data-key="scene">
+        <button type="button" data-value="ask">它问你</button><button type="button" data-value="rule">等你裁定</button><button type="button" data-value="review">派审查</button><button type="button" data-value="confirm">确认</button><button type="button" data-value="notice">提示条</button>
+      </div></div>
+      <div class="control"><span>画法</span><div class="seg" data-key="style">
+        <button type="button" data-value="old">现在</button><button type="button" data-value="new">方案</button>
+      </div></div>
+      <div class="control" data-for="ask"><span>问题</span><div class="seg" data-key="askKind">
+        <button type="button" data-value="one">一个</button><button type="button" data-value="many">三个</button>
+      </div></div>
+      <div class="control" data-for="rule"><span>时刻</span><div class="seg" data-key="moment">
+        <button type="button" data-value="open">刚驳回</button><button type="button" data-value="debating">辩论中</button><button type="button" data-value="debated">辩完了</button>
+      </div></div>
+      <div class="control" data-for="notice"><span>哪一条</span><div class="seg" data-key="notice">
+        <button type="button" data-value="plan">计划模式</button><button type="button" data-value="ctx">没开 1M</button><button type="button" data-value="queue">排着的输入</button><button type="button" data-value="moved">已接力走</button>
+      </div></div>
+      <button type="button" class="play" id="reset"><svg class="icon"><use href="#i-redo"/></svg>重来</button>
+    </section>
+
+    <section class="stage" id="stage"></section>
+
+    <section class="moves" id="moves"></section>
+
+    <section class="moves" id="census"></section>
+  </main>
+
+  <script src="data.js"></script>
+  <script src="parts.js"></script>
+  <script src="dock.js"></script>
+  <script src="scenes.js"></script>
+  <script src="census.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

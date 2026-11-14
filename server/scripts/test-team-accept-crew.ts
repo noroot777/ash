@@ -200,7 +200,8 @@ try {
       id: "W3", projectId: "p", parentId: "L3", title: "共享执行者", body: "", mode: "single", status: "done",
       useWorktree: false, endedAt: at, createdAt: at, updatedAt: at,
     } as never);
-    const { response, held } = await pausedCreate({ reviewOf: "W3", title: "审查" });
+    // reviewOf 这条路由不落库，建出来的是普通顶层单任务，只能走自由工作流（起手式已停止新建）。
+    const { response, held } = await pausedCreate({ reviewOf: "W3", title: "审查", workflowMode: "free" });
     const refused = await acceptTask("L3", "human", { expectedResultVersion: "-" });
     assert.equal(refused.accepted, false, "审查任务正要落库：它所属的团队不验收");
     assert.match(JSON.stringify(refused), /名下正在加入新的任务/);

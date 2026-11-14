@@ -49,3 +49,27 @@
 .workspace-main :is(.workspace-app-bar, .task-detail-header, .team-header, .duet-header, .chat-header, .composer-header) {
   --window-drag: drag;
 }
+
+/* 首次配置（AuthGate 在 <html> 上写 data-window-size="setup"）时壳开的是一扇正好装下向导的小窗：
+   两栏卡片就是整扇窗，不在窗里再摆一张带边框的卡 —— 小窗四周再留一圈灰边，剩下的只是局促。
+   左栏的黑底一直顶到窗口顶，红绿灯浮在它上面，和原生首启那一屏一模一样；空白处照常能拖窗口。 */
+:root[data-window-shell="mac"][data-window-size="setup"] .onboarding-shell {
+  padding: 0;
+  place-items: stretch;
+}
+
+:root[data-window-shell="mac"][data-window-size="setup"] .onboarding-card {
+  width: 100%;
+  height: 100dvh;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* 窄窗下左栏收成顶上一条，标识正好落在红绿灯底下：往右让出红绿灯那一块。 */
+@media (max-width: 760px) {
+  :root[data-window-shell="mac"] .onboarding-aside {
+    padding-left: max(16px, var(--window-controls-width, 0px));
+  }
+}

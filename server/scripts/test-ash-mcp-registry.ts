@@ -20,7 +20,6 @@ import { AGENT_TYPES, type AgentType } from "@ash/shared";
 import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { ensureAshMcp } from "../src/auth/user-cli-mcp.js";
 import { cliSpec } from "../src/executors/catalog/index.js";
-import { fileAshMcpVerdict } from "../src/ash-mcp-file.js";
 import { ASH_MCP_TABLE, ashMcpConfigDir, canRegisterAshMcp } from "../src/mcp-registry/catalog.js";
 import { ashMcpUnsupported, registerAshMcp } from "../src/mcp-registry/register.js";
 import { ashMcpConfigFile, ashMcpHostFile, ashMcpStateIn } from "../src/mcp-registry/sources.js";
@@ -555,8 +554,6 @@ try {
     assert.ok(merged.ok, merged.ok ? "" : merged.why);
     assert.equal(existsSync(custom), false, "全局那份已经有了,就不该再写变量那份");
     assert.equal(readFileSync(globalFile, "utf8"), globalBefore, "全局那份也一个字节都不许动");
-    assert.equal(fileAshMcpVerdict("opencode", env, [undefined]).state, "present",
-      "判定也得看全来源:全局有 ash 就是接好了,不许说 absent（absent 在预检里是硬拒）");
 
     // 全局那份**没有** ash 时:写的、判的、提示的都得是变量指的那一份。
     const c = bench("config-is-file-empty");
@@ -565,13 +562,10 @@ try {
     const emptyGlobal = join(c.host, ".config", "opencode", "opencode.json");
     mkdirSync(dirname(emptyGlobal), { recursive: true });
     writeFileSync(emptyGlobal, '{\n  "$schema": "x"\n}\n', "utf8");
-    assert.equal(fileAshMcpVerdict("opencode", env2, [undefined]).state, "absent",
-      "两份都确认没有,才配得上 absent");
     if (existsSync(ENTRY)) {           // 没 build 过 MCP 产物时通用补接器按设计拒写
       const r2 = await registerAshMcp({ agentType: "opencode", dir: dirOf(c.host, env2), hostHome: c.host, env: env2 });
       assert.ok(r2.ok, r2.ok ? "" : r2.why);
       assert.ok(existsSync(target), "写的就是变量指的那个文件");
-      assert.equal(fileAshMcpVerdict("opencode", env2, [undefined]).state, "present", "判的也是它");
     }
     group("覆盖变量的层级契约 + 指到文件的那家:来源看全、落点只有一个解析口");
   }

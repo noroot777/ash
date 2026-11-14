@@ -54,10 +54,15 @@ setInterval(() => {}, 1000);
   assert.match(row.endedReason ?? "", /等到了约定的那一行/, "结束原因要说清是等到了，不是被谁停的");
   assert.match(row.endedReason ?? "", /SWEEP_EXIT=0/, "把命中的那一行带上，省得还要去翻日志");
   // **命中那一行本身必须送到**：收工不能把结果一起吞掉——它正是 agent 要的东西。
-  const [queued] = await pendingOf(taskId);
+  // 同一条哨兵名下最多两行在等（积压 + 最新一批，见 monitor-events.ts `pushToTask`）：前两步
+  // 并成积压那一行，命中那一批单独占最新那一行，「结束」并进的也是它。
+  const rows = (await pendingOf(taskId)).sort((x, y) => x.createdAt.localeCompare(y.createdAt));
+  const queued = rows.at(-1);
   assert.ok(queued, "命中之后要留一条消息给 agent");
+  const joined = rows.map((m) => m.text).join("\n");
+  assert.ok(joined.includes("第 1 步") && joined.includes("第 2 步"), `命中之前的那几步一行都不能丢：${joined}`);
   assert.ok(queued!.text.includes("SWEEP_EXIT=0 全跑完了"), `命中的那一行要推给 agent：${queued!.text}`);
-  assert.ok(queued!.text.includes("【哨兵结束】"), "收尾通知紧跟在后面");
+  assert.ok(queued!.text.includes("【哨兵结束】"), "收尾通知紧跟在后面（并进最新那一行）");
   await until("进程真的被收掉", async () => !isPidAlive(pid));
   console.log("✓ 命中约定的那一行：那一行照常送达、哨兵当场收工、进程被收掉");
 }

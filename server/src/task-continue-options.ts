@@ -103,6 +103,11 @@ export type ContinueTaskOptions = {
    * 删除消息时按它清问答历史、问答卡按它认记录（shared/questions.ts `pairAnswerMessages`）。
    */
   answerIds?: readonly string[];
+  /**
+   * 页面发这一句时给的凭据（真人在输入框里打的、当场投递的那种）。原样落进会话里那条用户回合、
+   * 随实时事件出门：页面先画出来的那份（乐观回显）凭它认回服务端落下的那一条，不比原文和时刻。
+   */
+  clientKey?: string;
   pendingMessageIds?: readonly string[];
   /**
    * 这几条输入的**越线记号是必要凭据**,不是尽力而为的记账。

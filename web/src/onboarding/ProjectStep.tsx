@@ -47,10 +47,20 @@ export function ProjectStep({ projects, selectedId, onSelect, onCreate }: {
         </ul>
       )}
 
-      <Button className="onboarding-add" onClick={onCreate}>
-        <FolderPlus size={13} weight="bold" aria-hidden="true" />
-        新建项目
-      </Button>
+      {/* 一个项目都没有时,这一站整块就是「建第一个」:光秃秃一颗按钮躺在空白里,看不出这一站要干什么。 */}
+      {projects.length ? (
+        <Button className="onboarding-add" onClick={onCreate}>
+          <FolderPlus size={13} weight="bold" aria-hidden="true" />
+          新建项目
+        </Button>
+      ) : (
+        <div className="onboarding-empty">
+          <span className="onboarding-empty-icon" aria-hidden="true"><FolderPlus size={20} /></span>
+          <b>还没有项目</b>
+          <p>选一个本地目录，或者从远端克隆一个仓库。</p>
+          <Button variant="primary" onClick={onCreate}>新建项目</Button>
+        </div>
+      )}
     </>
   );
 }

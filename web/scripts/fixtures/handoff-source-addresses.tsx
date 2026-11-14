@@ -68,6 +68,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (path === "/api/handoff/identity" && method === "GET") {
     return response(200, { fingerprint: "f".repeat(64), short: "FFFF-FFFF-FFFF-FFFF-FFFF", host: "fixture-mac" });
   }
+  // 「默认规则」这一页在自用模式下还摆着远程访问卡（40ef64cd 起），开屏要读一次。
+  if (path === "/api/remote-access" && method === "GET") return response(200, { local: true, devices: [], requests: [] });
   if (path === "/api/handoff/peers" && method === "GET") return response(200, { peers: [] });
   if (path === "/api/handoff/return-grants" && method === "GET") return response(200, { grants: [] });
   if (path === "/api/handoff/targets" && method === "GET") return response(200, { targets: targets() });

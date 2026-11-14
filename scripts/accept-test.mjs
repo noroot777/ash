@@ -4,7 +4,7 @@ import { runSteps } from "./test-runner.mjs";
 const repo = fileURLToPath(new URL("..", import.meta.url));
 const environment = { ...process.env };
 for (const key of Object.keys(environment)) {
-  if (/^ASH_(?:DB|RUNS_DIR)$/i.test(key)) delete environment[key];
+  if (/^ASH_(?:DB|RUNS_DIR|DATA_DIR)$/i.test(key)) delete environment[key];
 }
 
 // 验收前置命令跑哪几条。加一条的判据：它拦的是**无声退化**——不跑就没有任何人会发现的

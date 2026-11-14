@@ -12,7 +12,7 @@ import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { type StopSettle } from "./runs.js";
+import { isTurnClaimed, type StopSettle } from "./runs.js";
 import { drainConfirmed } from "./task-confirmation.js";
 import { notifyTeamLead } from "./team/inbox.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
@@ -58,14 +58,13 @@ export async function afterSettlement(
     // never rewrite an already-settled worker/reviewer status.
     console.error(`[ash] review settlement hook failed for ${taskId}:`, error);
   } finally {
-    // 上面两个钩子会往托盘里放消息(审查未通过的修复指令、打回重做),而排队消息的「任务空下来」
-    // 扫描挂在**落状态那一刻**(status.ts) —— 比这里早,看不到它们;回合锁又要等调用方收完尾
-    // 才放。不在这里补登记,那条指令只能干等 30 秒一次的兜底 tick:用户看到「第 N 轮审查
-    // 未通过」之后执行者迟迟不动,库里 sent_at 全落在 tick 的相位上(2026-11-13 实测)。
-    // 动态 import 的理由同 status.ts:pending-messages 那条链会绕回本文件。
-    await import("./pending-messages.js")
-      .then(({ flushPendingWhenTurnIdle }) => flushPendingWhenTurnIdle(taskId))
-      .catch((error) => console.error(`[ash] 结算后的待发送唤醒登记失败 ${taskId}:`, error));
+    // 上面两个钩子会往托盘里放消息(审查未通过的修复指令、打回重做):平时由放锁那一刻的扫描送出去
+    // (turn-release.ts)。锁已经放了才结算的那一路(引导收尾期间被停止,task-steer.ts)后面没有
+    // 放锁了,当场扫一遍。动态 import 的理由同 status.ts:pending-messages 那条链会绕回本文件。
+    if (!isTurnClaimed(taskId)) {
+      await import("./pending-messages.js").then(({ flushPendingForTask }) => flushPendingForTask(taskId))
+        .catch((error) => console.error(`[ash] 结算后的待发送扫描失败 ${taskId}:`, error));
+    }
   }
 }
 
@@ -316,12 +315,18 @@ export async function settleTaskStatus(
       // 排着的结果作废,正是这条不变量要拦的),落 paused 让它醒得过来。交了卷与没交卷都走
       // 这一支 —— 对哨兵来说两者的落位后果一样。旁路身份要一起清掉,否则队列会继续把它
       // 当成一个「旁路回合」记账。
+      //
+      // **清的是队列眼里的身份,不是这次续聊**:原状态挪进 `follow_up_held_from`(`holdFollowUp`),
+      // 下一个非旁路回合起跑时接回来,醒来那一回合照旧按续聊结算(follow-up-held.ts)。上一版连它
+      // 一起清掉,醒来的回合就成了普通执行回合:驳回之后正常收尾被记成「本回合没有交卷」。
       const { serializeQueueClaims } = await import("./queue-seat.js");
       await serializeQueueClaims(async () => {
-        // 清旁路身份与写 paused 是**同一条 UPDATE**(`consume`,见 status.ts):分成两句的话,
+        // 清旁路身份、记下原状态与写 paused 是**同一条 UPDATE**(见 status.ts):分成两句的话,
         // 中间那条缝里进程一没,`followUpFrom` 已经消失而任务还是 running —— 重启后的对账再也
         // 拿不到「该回到哪个终态」这个事实(第 2 轮审查 F2)。
-        await setStatus(taskId, "paused", { consume: { followUpFrom: null } });
+        // 旁路回合(压缩、审查)没有接走那一列:那时它里面才是这次续聊真正的起点,留着它。
+        const holdFollowUp = (t.followUpHeldFrom as Parameters<typeof setStatus>[1] | null) ?? back;
+        await setStatus(taskId, "paused", { consume: { followUpFrom: null }, holdFollowUp });
       });
       await announceResumePrompt(taskId);
       return { status: "paused", note: hold, confirmedDone: false, nativeTurn };

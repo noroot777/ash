@@ -7,8 +7,12 @@
 // 目录里跑),按顺序问一遍比留三处空状态各喊一句都准。
 //
 // 每一步都**可以空着过**:CLI 自带订阅账号的人不需要供应商,这台机器还没装 CLI 的人
-// 注册不出执行器。所以向导里没有一处硬门禁,只有导轨上的勾和最后那行「还差什么」。
-// 真正的闸在工作台原有的位置上(派任务时的执行器闸、建任务时的项目闸)。
+// 注册不出执行器。所以每一站都有一颗「跳过」;「下一步」只在这一站真配好了才亮 —— 两颗键
+// 意思不重叠,点哪颗都知道自己做了什么。真正的闸在工作台原有的位置上(派任务时的执行器闸、
+// 建任务时的项目闸)。
+//
+// 版式和 mac app 首启那一屏(desktop/macos/Sources/FirstRunView.swift)是同一张脸:左边一栏
+// 黑底(标识、一句话、走到哪一站),右边是这一站。在 app 里两屏前后相接,左栏原地不动。
 //
 // 走完(或跳过)之后落 `onboardedAt`,判据与放行见 `server/src/onboarding.ts`。
 import { useCallback, useEffect, useState } from "react";
@@ -47,6 +51,9 @@ function headlineOf(step: FirstRunStep, isolated: boolean): { title: string; hin
     hint: "任务、随手记和分组都挂在项目下，项目目录就是任务的默认运行位置。",
   };
 }
+
+/** 在 mac app 里(壳在 UA 里留了 `AshMac/`):数据那一站已经在原生那一屏走过了,导轨上补一格打勾的。 */
+const IN_MAC_APP = typeof navigator !== "undefined" && navigator.userAgent.includes("AshMac/");
 
 export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
   const { toasts, notify, dismiss } = useToast();
@@ -99,7 +106,8 @@ export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
     setProviders(await api.llmProviders());
   }, []);
 
-  const finish = async () => {
+  /** `withProject`:跳过最后一站时不带项目进去,工作台照常落到它自己的默认项目。 */
+  const finish = async (withProject: boolean) => {
     setFinishing(true);
     try {
       // 用户表过态的凭据。写不进去就别往下走 —— 否则下次刷新向导又回来,而他以为自己
@@ -112,7 +120,7 @@ export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
     }
     // 刚挑的那个项目写进 URL:工作台的初始项目就是从 query 里读的(readUrlSelection),
     // 不写的话它会自己落到列表第一个,用户这一下就白点了。
-    if (projectId) window.history.replaceState(null, "", `/?project=${encodeURIComponent(projectId)}`);
+    if (withProject && projectId) window.history.replaceState(null, "", `/?project=${encodeURIComponent(projectId)}`);
     // 表态已经存下了,这一下只差「重新确认身份」。它失败就把按钮还给用户再按一次 ——
     // 把回执丢掉的那一版会永久停在「正在进入…」上,服务恢复了也动不了(见 authContext)。
     if (!(await onDone())) {
@@ -124,77 +132,101 @@ export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
   const index = FIRST_RUN_STEPS.indexOf(step);
   const last = index === FIRST_RUN_STEPS.length - 1;
   const settled = { providers, profiles, projects };
+  const ready = stepSettled(step, settled);
   // 最后一屏才报「还差什么」:中间几步报等于一路催着,而真正该说清后果的只有出口那一下。
   const pending = last
     ? FIRST_RUN_STEPS.map((candidate) => stepGap(candidate, settled)).filter((gap): gap is string => !!gap)
     : [];
+  const advance = (withThisStep: boolean) => {
+    if (last) void finish(withThisStep);
+    else setStep(FIRST_RUN_STEPS[index + 1]);
+  };
+  const { title, hint } = headlineOf(step, isolated);
 
   return (
     <div className="onboarding-shell">
       <div className="onboarding-card">
-        <nav className="onboarding-rail" aria-label="首次配置的三步">
-          {FIRST_RUN_STEPS.map((candidate, candidateIndex) => {
-            const done = stepSettled(candidate, settled);
-            return (
-              <button
-                key={candidate}
-                type="button"
-                className={`onboarding-rail-step${candidate === step ? " is-on" : ""}${done ? " is-done" : ""}`}
-                aria-current={candidate === step ? "step" : undefined}
-                onClick={() => setStep(candidate)}
-              >
-                <i aria-hidden="true">{done ? <Check size={11} weight="bold" /> : candidateIndex + 1}</i>
-                {STEP_LABEL[candidate]}
-              </button>
-            );
-          })}
-        </nav>
+        <aside className="onboarding-aside">
+          <div className="onboarding-brand">
+            <span className="onboarding-mark" aria-hidden="true">a</span>
+            <b>ash</b>
+            <p>把活派给本机的 claude、codex，<br />进度、审查、验收都在这一处。</p>
+          </div>
+          {/* 导轨同时是「回上一步」的入口,所以每一格都是按钮;app 里多出来的「数据」那格已经走完、回不去。 */}
+          <nav className="onboarding-rail" aria-label="首次配置">
+            {IN_MAC_APP && (
+              <span className="onboarding-rail-step is-done">
+                <i aria-hidden="true"><Check size={9} weight="bold" /></i>
+                数据
+              </span>
+            )}
+            {FIRST_RUN_STEPS.map((candidate) => {
+              const on = candidate === step;
+              const done = !on && stepSettled(candidate, settled);
+              return (
+                <button
+                  key={candidate}
+                  type="button"
+                  className={`onboarding-rail-step${on ? " is-on" : ""}${done ? " is-done" : ""}`}
+                  aria-current={on ? "step" : undefined}
+                  onClick={() => setStep(candidate)}
+                >
+                  <i aria-hidden="true">{done && <Check size={9} weight="bold" />}</i>
+                  {STEP_LABEL[candidate]}
+                </button>
+              );
+            })}
+          </nav>
+        </aside>
 
-        <header className="onboarding-head">
-          <h1>{headlineOf(step, isolated).title}</h1>
-          <p>{headlineOf(step, isolated).hint}</p>
-        </header>
+        <section className="onboarding-main">
+          <header className="onboarding-head">
+            <h1>{title}</h1>
+            <p>{hint}</p>
+          </header>
 
-        <div className="onboarding-body">
-          {loadFailed && !loading && (
-            <p className="onboarding-retry" role="status">
-              {loadFailed}
-              <Button onClick={() => setReloads((n) => n + 1)}>重试</Button>
+          <div className="onboarding-body">
+            {loadFailed && !loading && (
+              <p className="onboarding-retry" role="status">
+                {loadFailed}
+                <Button onClick={() => setReloads((n) => n + 1)}>重试</Button>
+              </p>
+            )}
+            {loading ? <p className="onboarding-muted">正在读取当前配置…</p> : step === "provider" ? (
+              <ProviderStep providers={providers} onChanged={reloadProviders} notify={notify} />
+            ) : step === "executor" ? (
+              <ExecutorStep
+                profiles={profiles}
+                providers={providers}
+                onProfileAdded={(profile) => setProfiles((current) => [...current, profile])}
+                onProfileChanged={(profile) => setProfiles((current) =>
+                  current.map((row) => row.id === profile.id ? profile : row))}
+                notify={notify}
+              />
+            ) : (
+              <ProjectStep
+                projects={projects}
+                selectedId={projectId}
+                onSelect={setProjectId}
+                onCreate={() => setCreating(true)}
+              />
+            )}
+          </div>
+
+          <footer className="onboarding-foot">
+            <p className="onboarding-muted" role="status">
+              {pending.length ? `${pending.join("；")}，之后可以在设置里补。` : ""}
             </p>
-          )}
-          {loading ? <p className="onboarding-muted">正在读取当前配置…</p> : step === "provider" ? (
-            <ProviderStep providers={providers} onChanged={reloadProviders} notify={notify} />
-          ) : step === "executor" ? (
-            <ExecutorStep
-              profiles={profiles}
-              providers={providers}
-              onProfileAdded={(profile) => setProfiles((current) => [...current, profile])}
-              onProfileChanged={(profile) => setProfiles((current) =>
-                current.map((row) => row.id === profile.id ? profile : row))}
-              notify={notify}
-            />
-          ) : (
-            <ProjectStep
-              projects={projects}
-              selectedId={projectId}
-              onSelect={setProjectId}
-              onCreate={() => setCreating(true)}
-            />
-          )}
-        </div>
-
-        <footer className="onboarding-foot">
-          <p className="onboarding-muted" role="status">
-            {pending.length ? `${pending.join("；")}，之后可以在设置里补。` : ""}
-          </p>
-          <Button
-            variant="primary"
-            disabled={loading || finishing}
-            onClick={() => last ? void finish() : setStep(FIRST_RUN_STEPS[index + 1])}
-          >
-            {last ? (finishing ? "正在进入…" : "进入 ash") : "下一步"}
-          </Button>
-        </footer>
+            <div className="onboarding-actions">
+              <Button variant="ghost" disabled={loading || finishing} onClick={() => advance(false)}>
+                跳过
+              </Button>
+              <Button variant="primary" disabled={loading || finishing || !ready} onClick={() => advance(true)}>
+                {last ? (finishing ? "正在进入…" : "进入 ash") : "下一步"}
+              </Button>
+            </div>
+          </footer>
+        </section>
       </div>
 
       {creating && (

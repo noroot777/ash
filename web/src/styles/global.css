@@ -48,7 +48,7 @@
 @import "./team-review.css";
 @import "./zoom-layer.css";
 @import "./review.css";
-@import "./branch-acceptance.css";
+@import "./acceptance.css";
 @import "./files.css";
 @import "./artifacts.css";
 @import "./scm.css";
@@ -93,7 +93,6 @@
 /* 验收动作宿主的形状。排在最后:它要压住的那几张状态卡(.accept-gate-card /
    .pending-merge-card / .team-accept-failure)自带 margin,选择器特异性跟它一样重,
    只有排在它们后面才算数。 */
-@import "./acceptance-host.css";
 /* 放在最后：它改的是前面各份里整页布局的上边距。 */
 @import "./window-shell.css";
 

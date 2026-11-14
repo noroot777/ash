@@ -105,9 +105,11 @@ try {
     const followup = await pending.enqueueMessage({ taskId, text: "再补一句" });
     assert.equal((await reviews.annotationReviewStatus(taskId)).canReopen, false);
     assert.equal((await store.getAnnotationBatch(taskId, batch.id))?.state, "modifying", "reviewable can return to modifying");
-    assert.ok(await pending.beginDelivery(followup.id), "抢到租约（现在回的是抢下那一刻的那一行）");
+    // markSent 只认领取那一刻的行(delivery-fence.ts):拿入队快照去确认,租约对不上、一行都写不中。
+    const followupLease = await pending.beginDelivery(followup.id);
+    assert.ok(followupLease, "抢到租约（现在回的是抢下那一刻的那一行）");
     assert.equal((await reviews.annotationReviewStatus(taskId)).canReopen, false, "delivery lease is still pending");
-    await pending.markSent(followup);
+    await pending.markSent(followupLease);
     runs.claimTurn(taskId);
     assert.equal((await reviews.annotationReviewStatus(taskId)).canReopen, false, "claim protects the next-run status gap");
     runs.releaseTurn(taskId);

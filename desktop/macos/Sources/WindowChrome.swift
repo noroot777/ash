@@ -9,6 +9,10 @@ import WebKit
 ///  · 壳在 `<html>` 上写 `data-window-shell="mac"`，外加两个长度：`--window-titlebar-height`
 ///    （红绿灯那一条多高）、`--window-controls-width`（红绿灯占掉左边多宽）。全屏时红绿灯收起、
 ///    退回普通标题栏时不压着页面，两个值都是 0。浏览器里没有这两个变量，页面按 0 排，和原来一样。
+///  · 这一屏要多大的窗也由页面说：`<html data-window-size="setup">` 是首次配置（壳开成一扇正好装下它的
+///    小窗），`"work"` 是工作台（展开成工作窗）。属性一变就转告 `onWindowSize`；不认这套约定的文档
+///    （上面那行 meta 都没有的）一律按 work。壳把「报了尺寸」当成这份文档已经画出来了（首启那一屏等到它才撤）。
+///  · 页面的 <script> 没载成时报 `broken:<地址>`，壳不再等它表态。
 ///  · 窗口从哪儿能拖：顶上 `--window-titlebar-height` 那一条里的空白处总是能拖，不用页面逐页配合；
 ///    页面再用 `--window-drag: drag` 把自己的顶栏整条划进来，`no-drag` 划出去。
 ///    按钮、链接、输入框、带手型或拉伸光标的东西永远不算空白。
@@ -28,6 +32,10 @@ final class WindowChrome: NSObject, WKScriptMessageHandler {
   private(set) var overlay = true
   /// 左键此刻是不是真按着。只有原生问得到；探针里没有真鼠标，换成它自己的回答。
   var isPrimaryButtonDown: () -> Bool = { NSEvent.pressedMouseButtons & 1 == 1 }
+  /// 页面说这一屏要多大的窗（"setup" / "work"）。
+  var onWindowSize: ((String) -> Void)?
+  /// 页面的脚本没载成（交出那个脚本的地址）。这时页面多半永远画不出来，也不会再表态。
+  var onPageBroken: ((String) -> Void)?
   private var zoomObservation: NSKeyValueObservation?
 
   init(window: NSWindow, webView: WKWebView) {
@@ -105,8 +113,11 @@ final class WindowChrome: NSObject, WKScriptMessageHandler {
 
   func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
     guard let window, message.frameInfo.isMainFrame, let kind = message.body as? String else { return }
+    if kind.hasPrefix("size:") { return onWindowSize?(String(kind.dropFirst(5))) ?? () }
+    if kind.hasPrefix("broken:") { return onPageBroken?(String(kind.dropFirst(7))) ?? () }
     switch kind {
     case "overlay", "titlebar":
+      if kind == "titlebar" { onWindowSize?("work") }
       guard overlay != (kind == "overlay") else { return }
       overlay = kind == "overlay"
       applyOverlay()
@@ -144,6 +155,14 @@ final class WindowChrome: NSObject, WKScriptMessageHandler {
     const declare = () => post(document.querySelector("meta[name='ash-window-chrome'][content='overlay']") ? "overlay" : "titlebar");
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", declare, { once: true });
     else declare();
+    // 这一屏要多大的窗：页面（AuthGate）写在 <html data-window-size> 上，变一次报一次。
+    new MutationObserver(() => {
+      if (root.dataset.windowSize) post("size:" + root.dataset.windowSize);
+    }).observe(root, { attributes: true, attributeFilter: ["data-window-size"] });
+    // 脚本没载成（入口 404/503、断在半路）不会让导航失败，页面却再也画不出来：报回去，壳不必干等。
+    window.addEventListener("error", (event) => {
+      if (event.target instanceof HTMLScriptElement) post("broken:" + (event.target.src || "inline"));
+    }, true);
     const ROLES = [
       "button", "link", "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "option", "treeitem", "switch",
       "checkbox", "radio", "slider", "separator", "scrollbar", "textbox", "searchbox", "combobox", "spinbutton",

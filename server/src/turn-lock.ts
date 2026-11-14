@@ -10,6 +10,7 @@
 // 依赖是单向的:这个文件不 import runs 的运行时(只借一个类型),所以 `claimReconcileTurn`
 // 那条要问「有没有句柄在册」的,住在 runs.ts 里。
 import type { StopSettle } from "./runs.js";
+import type { WindDown } from "./turn-wind-down.js";
 
 // ── 单飞锁与「这一轮跑完之后」────────────────────────────────────────────────
 // 一个任务同一时刻只跑一个回合。锁本身原来住在 orchestrator 里，挪到这个中立模块
@@ -70,6 +71,11 @@ export type TurnIdentity = {
    * 凭空失效,可疑锁反而永远拔不掉。
    */
   seq: number;
+  /**
+   * 这一轮进入收尾段之后走到了哪一步(CLI 已经结束、还在走收尾 await)。挂在身份上是为了跟锁
+   * 同生同死:放锁即带走,换了主人的锁上读不到。读写在 turn-wind-down.ts,巡检在 turn-lock-reclaim.ts。
+   */
+  windDown?: WindDown;
 };
 
 /**
@@ -273,6 +279,7 @@ export function reclaimTurn(taskId: string, owner: TurnOwner, role: string,
     token: held.token,
     claimedAt: held.claimedAt,
     seq: held.seq, // 同一把锁,不换号(见 `TurnIdentity.seq`)
+    windDown: held.windDown,
   };
   turns.set(taskId, identity);
   return identity;
@@ -451,10 +458,10 @@ function endOwnTurn(taskId: string, owner: TurnOwner, clearFreeze: boolean): Tur
   if (!held || held.seq !== owner.seq) return null;
   if (clearFreeze) startFreeze.delete(taskId);
   turns.delete(taskId);
-  const waiting = afterTurn.get(taskId);
-  if (!waiting) return held;
+  const waiting = afterTurn.get(taskId) ?? [];
   afterTurn.delete(taskId);
-  for (const fn of waiting) {
+  // 登记过的交接先走(它们多半同步占下一轮),固定后续排在最后 —— 见 `onTurnReleased`。
+  for (const fn of releaseFollowUp ? [...waiting, () => releaseFollowUp!(taskId)] : waiting) {
     try {
       fn();
     } catch (error) {
@@ -462,6 +469,19 @@ function endOwnTurn(taskId: string, owner: TurnOwner, clearFreeze: boolean): Tur
     }
   }
   return held;
+}
+
+let releaseFollowUp: ((taskId: string) => void) | null = null;
+
+/**
+ * **每一次放锁都固定要做的事**(扫待发送、补推队列),由 turn-release.ts 在加载时登记,只此一份。
+ *
+ * 和 `whenTurnIdle` 的区别:那是一次性登记,谁需要谁去挂,漏挂一处就只剩 30 秒兜底 tick;这一条
+ * 不靠任何人记得。做成登记而不是在这里直接 import,是因为那两件事要读库、要回头 import 结算链,
+ * 这个文件得保持无运行时依赖(只测锁的回归脚本不该因为放一次锁就去开库)。
+ */
+export function onTurnReleased(fn: (taskId: string) => void): void {
+  releaseFollowUp = fn;
 }
 
 /**

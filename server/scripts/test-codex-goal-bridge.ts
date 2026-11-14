@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import type { AgentEvent } from "@ash/shared";
 import { validateCliCommand, type CliGoal } from "@ash/shared/cli-commands";
-import { openCodexAppServer, readCodexAppServerState } from "../src/executors/codex-app-server.js";
+import { openCodexAppServer } from "../src/executors/codex-app-server.js";
+import { readCodexAppServerState } from "../src/executors/codex-app-server-state.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-goal-bridge-"));
 process.env.ASH_DB = join(root, "ash.db");

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { Group, Task, TaskListItem } from "@ash/shared";
-import { canArchive, taskDisplayStatus } from "@ash/shared";
-import { isTeamSettled, teamNeverStarted } from "@ash/shared/team";
+import type { Group, Task, TaskActions } from "@ash/shared";
+import { taskDisplayStatus } from "@ash/shared";
 import {
   Archive,
   ArrowCounterClockwise,
@@ -14,6 +13,9 @@ import {
   Trash,
 } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { blocker, shown } from "../lib/useTaskActions.ts";
+import { ActionMenuItem } from "../components/ActionMenuItem.tsx";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { TaskPinButton } from "../task-detail/TaskPinButton.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { TaskCreationBadge } from "../components/TaskOrigin.tsx";
@@ -23,7 +25,7 @@ import { safeDownloadName } from "../task-detail/utils.ts";
 
 export function TeamHeader({
   task,
-  workers,
+  actions,
   groups,
   haltedByHistory,
   conversationMarkdown,
@@ -42,7 +44,8 @@ export function TeamHeader({
   notify,
 }: {
   task: Task;
-  workers: TaskListItem[];
+  /** 「运行」「停止全组」「归档团队」出不出、点不点得了照服务端的判据（lib/useTaskActions.ts）；恢复全组是团队壳自己的事。 */
+  actions: TaskActions | null;
   groups: Group[];
   haltedByHistory: boolean;
   conversationMarkdown: string;
@@ -68,7 +71,10 @@ export function TeamHeader({
   const menuButton = useRef<HTMLButtonElement>(null);
   const pausedGroups = groups.filter((group) => group.paused);
   const stopped = pausedGroups.length > 0 || haltedByHistory;
-  const settled = isTeamSettled(task.status === "running", workers);
+  const runBlocked = blocker(actions?.primary);
+  const runTip = useHoverTip();
+  const haltBlocked = blocker(actions?.stop);
+  const haltTip = useHoverTip();
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const indicator = indicatorForTask(task);
 
@@ -136,14 +142,20 @@ export function TeamHeader({
           <button type="button" className={reviewOpen ? "is-primary" : ""} onClick={onReview}>
             <CheckCircle size={14} weight="fill" />{reviewOpen ? "返回协作" : "验收"}
           </button>
-          {!task.archived && !settled && !stopped && !teamNeverStarted(task.status) && (
-            <button type="button" className="is-danger" disabled={busy} onClick={() => setHaltOpen(true)}><Stop size={13} weight="fill" />停止全组</button>
+          {shown(actions?.stop) && (
+            <>
+              <button type="button" className={`is-danger${haltBlocked ? " is-disabled" : ""}`} disabled={busy} aria-disabled={haltBlocked ? true : undefined} {...(haltBlocked ? haltTip.anchorProps : {})} onClick={() => { if (!haltBlocked) setHaltOpen(true); }}><Stop size={13} weight="fill" />停止全组</button>
+              {haltBlocked && <HoverTip at={haltTip.at}>{haltBlocked}</HoverTip>}
+            </>
           )}
           {!task.archived && stopped && (
             <button type="button" className="is-primary" data-workspace-run-action="resume" disabled={busy} onClick={onResume}><Play size={13} weight="fill" />恢复全组</button>
           )}
-          {!task.archived && teamNeverStarted(task.status) && (
-            <button type="button" className="is-primary" data-workspace-run-action="run" disabled={busy} onClick={onRun}><Play size={13} weight="fill" />运行</button>
+          {shown(actions?.primary) && (
+            <>
+              <button type="button" className={`is-primary${runBlocked ? " is-disabled" : ""}`} data-workspace-run-action="run" disabled={busy} aria-disabled={runBlocked ? true : undefined} {...(runBlocked ? runTip.anchorProps : {})} onClick={() => { if (!runBlocked) onRun(); }}><Play size={13} weight="fill" />运行</button>
+              {runBlocked && <HoverTip at={runTip.at}>{runBlocked}</HoverTip>}
+            </>
           )}
           <div className="team-header-menu" ref={menuRoot}>
             <button ref={menuButton} type="button" aria-label="更多团队操作" aria-expanded={menu} onClick={() => setMenu((value) => !value)}><DotsThree size={18} weight="bold" /></button>
@@ -153,9 +165,11 @@ export function TeamHeader({
                 <button type="button" role="menuitem" disabled={!conversationMarkdown.trim()} onClick={download}><DownloadSimple size={14} />下载 Markdown</button>
                 <button type="button" role="menuitem" onClick={() => void copy(task.id, "已复制团队 ID")}><Copy size={14} />复制团队 ID</button>
                 <span role="separator" />
-                <button type="button" role="menuitem" disabled={!task.archived && !canArchive(task.status)} onClick={() => { setMenu(false); onArchive(); }}>
-                  {task.archived ? <ArrowCounterClockwise size={14} /> : <Archive size={14} />}{task.archived ? "取消归档" : "归档团队"}
-                </button>
+                {task.archived ? (
+                  <button type="button" role="menuitem" onClick={() => { setMenu(false); onArchive(); }}><ArrowCounterClockwise size={14} />取消归档</button>
+                ) : shown(actions?.archive) && (
+                  <ActionMenuItem verdict={actions!.archive} onSelect={() => { setMenu(false); onArchive(); }}><Archive size={14} />归档团队</ActionMenuItem>
+                )}
                 <button type="button" role="menuitem" className="is-danger" onClick={() => { setMenu(false); onDelete(); }}>
                   <Trash size={14} />删除团队
                 </button>
