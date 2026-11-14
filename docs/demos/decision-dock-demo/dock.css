@@ -1,0 +1,108 @@
+/* 回复框，以及挂在某颗键上的浮层。方案的全部新东西都在这一份里。 */
+.reply { position: relative; flex: none; padding: 0 24px 16px; }
+.rb { position: relative; max-width: 790px; margin: 0 auto; border: 1px solid var(--line2); border-radius: 12px; background: var(--panel); box-shadow: var(--surface-shadow); transition: border-color var(--dur-1), box-shadow var(--dur-1); }
+.rb:has(textarea:focus-visible) { border-color: color-mix(in oklab, var(--ink) 30%, var(--line2)); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ink) 6%, transparent), var(--surface-shadow); }
+.rb textarea { display: block; width: 100%; min-height: 52px; max-height: 150px; resize: none; border: 0; outline: 0; background: transparent; padding: 10px 12px 2px; font-size: 13px; line-height: 1.55; }
+.rb textarea::placeholder { color: var(--faint); }
+.rb-bar { display: flex; align-items: center; gap: 2px; min-height: 40px; padding: 0 7px 6px 6px; color: var(--muted); font-size: 12px; }
+.rb-gap { flex: 1; min-width: 4px; }
+.rb-act { position: relative; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 7px; border-radius: 6px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.rb-act:hover, .rb-act[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.rb-agent { padding: 0 8px; color: var(--faint); font: 12px var(--mono); white-space: nowrap; }
+.rb-send { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 29px; height: 29px; padding: 0; border-radius: 7px; background: var(--action); color: #fff; font-size: 12px; font-weight: 500; white-space: nowrap; transition: background-color var(--dur-1), padding var(--dur-1); }
+.rb-send:hover:not(:disabled) { background: var(--action-hover); }
+.rb-send:disabled { opacity: 0.35; }
+.rb-send.has-label { padding: 0 12px; }
+.rb-send .icon { width: 15px; height: 15px; stroke-width: 2; }
+
+/* —— 框顶：此刻等你回的那件事给出的现成答法。没有事在等，这一段不存在 —— */
+.rb-ask { border-bottom: 1px solid var(--line); animation: ask-in var(--dur-2) var(--ease-out) backwards; }
+@keyframes ask-in { from { opacity: 0; transform: translateY(4px); } }
+
+/* 它问你：一个建议答案一行，行首的数字就是快捷键。 */
+.ask-q { display: flex; align-items: baseline; gap: 10px; padding: 9px 12px 2px; line-height: 1.6; }
+.ask-q > span:first-child { flex: 1; min-width: 0; }
+.ask-step { display: flex; flex: none; gap: 2px; }
+.ask-step button { display: grid; min-width: 20px; height: 20px; place-items: center; border-radius: 5px; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ask-step button:hover { background: var(--raised); color: var(--ink); }
+.ask-step button.is-answered { color: var(--muted); }
+.ask-step button[aria-current="step"] { background: var(--overlay); color: var(--ink); font-weight: 500; }
+.ask-opts { display: grid; padding: 4px; }
+.ask-opt { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: baseline; gap: 8px; padding: 6px 8px; border-radius: 8px; color: var(--muted); line-height: 1.55; text-align: left; transition: background-color var(--dur-1), color var(--dur-1); }
+.ask-opt:hover { background: var(--raised); color: var(--ink); }
+.ask-opt[aria-pressed="true"] { color: var(--ink); }
+.ask-opt kbd { display: grid; width: 18px; height: 18px; place-items: center; border-radius: 5px; background: var(--overlay); color: var(--faint); font: 11px var(--mono); transform: translateY(2px); }
+.ask-opt[aria-pressed="true"] kbd { background: var(--action); color: #fff; }
+.ask-opt kbd .icon { width: 11px; height: 11px; stroke-width: 2.6; }
+
+/* 等你裁定：几种下一步排成一行。点一个，框就变成那一步的样子；再点一下回到普通回复。 */
+.rule-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 5px 6px; }
+.rule-opt { position: relative; height: 28px; padding: 0 10px; border-radius: 7px; color: var(--muted); font-size: 13px; white-space: nowrap; transition: background-color var(--dur-1), color var(--dur-1); }
+.rule-opt:hover { background: var(--raised); color: var(--ink); }
+.rule-opt[aria-pressed="true"] { background: var(--overlay); color: var(--ink); font-weight: 500; }
+.rule-live { display: flex; align-items: center; gap: 8px; padding: 9px 12px; color: var(--muted); }
+/* 指到某个下一步：它的后果浮在这一行上面，不占常驻位置。 */
+[data-tip]::after { content: attr(data-tip); position: absolute; z-index: 5; bottom: calc(100% + 8px); left: 0; width: max-content; max-width: 280px; padding: 6px 9px; border-radius: 8px; background: var(--ink); color: #fff; font-size: 12px; font-weight: 400; line-height: 1.5; white-space: normal; text-align: left; opacity: 0; pointer-events: none; transform: translateY(2px); transition: opacity var(--dur-1), transform var(--dur-1); }
+[data-tip]:is(:hover, :focus-visible)::after { opacity: 1; transform: none; transition-delay: 280ms; }
+.rb-rounds { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px 2px; color: var(--muted); }
+.rb-rounds .seg { background: var(--overlay); }
+.rb-rounds .seg button { min-width: 30px; font-variant-numeric: tabular-nums; }
+.rb-rounds small { color: var(--faint); font-size: 12px; }
+
+/* —— 挂在被点那颗键上的一层：确认、小表单、菜单同一种画法 —— */
+.pop { position: absolute; z-index: 10; width: max-content; max-width: min(300px, calc(100vw - 48px)); border-radius: 10px; background: var(--panel); box-shadow: var(--menu-shadow); padding: 10px; font-size: 13px; line-height: 1.55; color: var(--ink); text-align: left; cursor: default; animation: pop-in 140ms var(--ease-out) backwards; }
+@keyframes pop-in { from { opacity: 0; transform: translateY(3px) scale(0.985); } }
+.pop.is-above { bottom: calc(100% + 8px); }
+.pop.is-below { top: calc(100% + 6px); }
+.pop.is-right { right: 0; }
+.pop.is-left { left: 0; }
+.pop p { margin: 0 2px; color: var(--muted); }
+.pop-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.pop-foot small { margin-right: auto; padding-left: 2px; color: var(--faint); font-size: 12px; }
+.btn { display: inline-flex; align-items: center; justify-content: center; height: 28px; padding: 0 12px; border-radius: 7px; background: var(--action); color: #fff; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.btn:hover:not(:disabled) { background: var(--action-hover); }
+.btn:disabled { opacity: 0.35; }
+.pop.is-menu { min-width: 172px; padding: 4px; }
+.menu-item { display: flex; align-items: center; width: 100%; height: 30px; padding: 0 9px; border-radius: 6px; color: var(--ink); font-size: 13px; text-align: left; white-space: nowrap; }
+.menu-item:hover { background: var(--raised); }
+.menu-confirm { width: 244px; padding: 6px; }
+.field { display: flex; align-items: center; gap: 8px; margin: 0 2px; color: var(--muted); white-space: nowrap; }
+.pick { position: relative; display: inline-flex; flex: 1; align-items: center; justify-content: space-between; gap: 8px; min-width: 150px; height: 28px; padding: 0 8px 0 10px; border-radius: 7px; background: var(--panel); box-shadow: var(--control-shadow); color: var(--ink); font-size: 13px; }
+.pick:hover { box-shadow: var(--control-hover-shadow); }
+.pick .icon { width: 12px; height: 12px; color: var(--faint); }
+.pick-list { position: absolute; z-index: 2; top: calc(100% + 4px); left: 0; right: 0; border-radius: 8px; background: var(--panel); box-shadow: var(--menu-shadow); padding: 4px; }
+.check-line { display: flex; align-items: center; gap: 7px; min-height: 20px; margin: 9px 2px 0; color: var(--muted); font-size: 12px; }
+.check-line.is-bad { color: var(--red); }
+.check-line button { color: var(--ink); text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; }
+.bad-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--red); }
+
+@media (max-width: 760px) {
+  .reply { padding-left: 12px; padding-right: 12px; }
+  .rb-agent { display: none; }
+}
+
+/* —— 派审查的几项设置、提示条缩成的那几颗键 —— */
+.anchor { position: relative; display: inline-flex; }
+.rb-act[aria-pressed="true"] { background: var(--overlay); color: var(--ink); font-weight: 500; }
+.rb-act .icon { width: 14px; height: 14px; }
+.rb-act.is-warn, .fold em.is-warn { color: var(--amber); }
+.rule-opt.has-caret { display: inline-flex; align-items: center; gap: 4px; padding-right: 7px; color: var(--ink); }
+.rule-opt.has-caret .icon { width: 11px; height: 11px; color: var(--faint); }
+.stepper { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px; color: var(--muted); white-space: nowrap; }
+.stepper b { min-width: 12px; color: var(--ink); font-weight: 500; text-align: center; font-variant-numeric: tabular-nums; }
+.stepper button { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 5px; color: var(--muted); }
+.stepper button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.stepper button:disabled { opacity: 0.3; }
+/* 回复框正上方那一行：只放状态（现有的 .task-reply-rail）。 */
+.rb-rail { max-width: 790px; margin: 0 auto 4px; padding: 0 4px; }
+.rb-rail .fold { min-height: 24px; margin: 0; font-size: 12px; }
+.rail-rows { margin: 2px 0 6px 17px; padding: 0; list-style: none; animation: lane-unfold var(--dur-2) var(--ease-out) backwards; }
+.rail-rows li { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto 22px; align-items: center; gap: 8px; min-height: 28px; color: var(--muted); font-size: 12px; }
+.rail-rows b { color: var(--faint); font-weight: 400; }
+.rail-rows span { overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
+.rail-rows time { color: var(--faint); }
+.rail-rows .key { opacity: 0; }
+.rail-rows li:is(:hover, :focus-within) .key { opacity: 1; }
+.rb textarea:disabled { color: var(--faint); }
+@media (hover: none) { .rail-rows .key { opacity: 1; } }
+.rail-rows b.is-warn { color: var(--amber); }
