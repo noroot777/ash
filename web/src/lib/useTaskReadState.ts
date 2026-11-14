@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
 import { teamNeverStarted, timeMs } from "@ash/shared/team";
-import { trimTaskReads, type TaskReads } from "@ash/shared/task-reads";
+import { taskReadRound, trimTaskReads, type TaskReadEntry, type TaskReads } from "@ash/shared/task-reads";
 import { getTaskReads, subscribeTaskReads, updateTaskReads } from "./taskReadSync.ts";
 import { deriveTaskStatusIndicator, taskLook, type TaskLook, type TaskStatusIndicator } from "./taskLook.ts";
 
@@ -56,6 +56,17 @@ export function readEventForTask(task: TaskListItem, workers: TaskListItem[] = [
   return task.mode === "team" && !task.parentId ? teamEvent(task, workers) : terminalEvent(task);
 }
 
+/** 「看过这一轮」该记下的那一条：event 判是不是同一轮，round 比新旧（shared/src/task-reads.ts）。 */
+export function readMarkForTask(task: TaskListItem, workers: TaskListItem[] = []): TaskReadEntry | null {
+  const event = readEventForTask(task, workers);
+  return event ? { event, round: taskReadRound(task, workers) } : null;
+}
+
+/** 记下的那条已经覆盖到这一轮了吗。别处看过更新的一轮（这一页的任务数据还没跟上）也算。 */
+function hasRead(stored: TaskReadEntry | undefined, mark: TaskReadEntry): boolean {
+  return !!stored && (stored.round > mark.round || (stored.round === mark.round && stored.event === mark.event));
+}
+
 export function reconcileReadState(current: ReadState, tasks: TaskListItem[], selectedTaskId: string | null): ReadState {
   const index = buildTaskIndex(tasks);
   // 重启/重连时 SSE 可能先送来一条 task.updated，完整 GET 还在路上。此时 tasks
@@ -67,10 +78,8 @@ export function reconcileReadState(current: ReadState, tasks: TaskListItem[], se
   for (const taskId of selectedTask ? readTaskIds(selectedTask) : []) {
     const task = index.byId.get(taskId);
     if (!task) continue;
-    const event = readEventForTask(task, index.workersByLead.get(task.id) ?? []);
-    if (event && next[task.id]?.event !== event) {
-      next[task.id] = { event, readAt: Date.now() };
-    }
+    const mark = readMarkForTask(task, index.workersByLead.get(task.id) ?? []);
+    if (mark && !hasRead(next[task.id], mark)) next[task.id] = mark;
   }
   return trimTaskReads(next);
 }
@@ -86,14 +95,13 @@ export function useTaskReadState(tasks: TaskListItem[], selectedTaskId: string |
   const markTaskRead = useCallback((task: TaskListItem) => {
     updateTaskReads((current) => {
       let next = current;
-      const readAt = Date.now();
       for (const taskId of readTaskIds(task)) {
         const target = index.byId.get(taskId);
         if (!target) continue;
-        const event = readEventForTask(target, index.workersByLead.get(target.id) ?? []);
-        if (!event || next[target.id]?.event === event) continue;
+        const mark = readMarkForTask(target, index.workersByLead.get(target.id) ?? []);
+        if (!mark || hasRead(next[target.id], mark)) continue;
         if (next === current) next = { ...current };
-        next[target.id] = { event, readAt };
+        next[target.id] = mark;
       }
       return next === current ? current : trimTaskReads(next);
     });
@@ -106,8 +114,8 @@ export function useTaskReadState(tasks: TaskListItem[], selectedTaskId: string |
 
   const lookForTask = useCallback<LookForTask>((task) => {
     const workers = index.workersByLead.get(task.id) ?? [];
-    const event = readEventForTask(task, workers);
-    const unread = !!event && !visibleTaskIds.has(task.id) && readState[task.id]?.event !== event;
+    const mark = readMarkForTask(task, workers);
+    const unread = !!mark && !visibleTaskIds.has(task.id) && !hasRead(readState[task.id], mark);
     return taskLook(task, workers, unread);
   }, [index, readState, visibleTaskIds]);
   const indicatorForTask = useCallback<IndicatorForTask>((task) => lookForTask(task).indicator, [lookForTask]);

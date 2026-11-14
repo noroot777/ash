@@ -1,6 +1,7 @@
 // ── 任务「看过没有」：侧栏那颗「验收过、有没看的动态」绿点的判据 ──────────────────
-// 一行 = 这个人最后一次看这个任务时，它停在哪一轮（event，口径见 web/src/lib/useTaskReadState.ts
-// 的 readEventForTask）。前端拿任务此刻的 event 跟这里记的比，不一样就亮。
+// 一行 = 这个人看过这个任务的最新一轮：event 是那一轮的样子(口径见 web/src/lib/useTaskReadState.ts 的
+// readEventForTask)，round 是那一轮的时刻(shared/src/task-reads.ts taskReadRound)。前端拿任务此刻的轮次
+// 跟这里记的比，没看到这一轮就亮。round 只增不减：写进来的比已经记下的旧，就不写(迟到的重试、慢页面)。
 //
 // 为什么要进库：从前它只存在浏览器的 localStorage 里，于是每个浏览器各记一份 —— 飞书里点
 // 「在 ash 中打开」用的是飞书内置浏览器，存储跟桌面浏览器不通，桌面上看过的任务到那边全亮着，
@@ -17,7 +18,8 @@ export const taskReads = sqliteTable(
     owner: text("owner").notNull(),
     taskId: text("task_id").notNull(),
     event: text("event").notNull(),
-    /** 看的那一刻，epoch 毫秒（跟前端 ReadEntry.readAt 同一种形状，裁旧行按它排）。 */
+    round: integer("round").notNull().default(0),
+    /** 写进来的那一刻(服务端的钟，epoch 毫秒)，只留作排查，不参与新旧判断。 */
     readAt: integer("read_at").notNull(),
   },
   (t) => ({ pk: primaryKey({ columns: [t.owner, t.taskId] }) }),
@@ -27,8 +29,14 @@ export const taskReads = sqliteTable(
 export async function ensureTaskReadsSchema(client: Client): Promise<void> {
   await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS task_reads (
-      owner TEXT NOT NULL, task_id TEXT NOT NULL, event TEXT NOT NULL, read_at INTEGER NOT NULL,
+      owner TEXT NOT NULL, task_id TEXT NOT NULL, event TEXT NOT NULL,
+      round INTEGER NOT NULL DEFAULT 0, read_at INTEGER NOT NULL,
       PRIMARY KEY (owner, task_id)
     );
   `);
+  // 这张表的第一版没有 round(只在开发分支上跑过)：先问再补，理由同 schema-task-notice.ts。
+  const columns = await client.execute("PRAGMA table_info(task_reads);");
+  if (!columns.rows.some((row) => String((row as Record<string, unknown>).name) === "round")) {
+    await client.executeMultiple("ALTER TABLE task_reads ADD COLUMN round INTEGER NOT NULL DEFAULT 0;");
+  }
 }
