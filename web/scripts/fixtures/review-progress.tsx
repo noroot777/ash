@@ -8,7 +8,8 @@ import "../../src/styles/global.css";
 
 // 一轮自由派审正在跑：审查者说过两回合（中间挂过一次哨兵、被它叫醒），最新那一回合还在说、正在跑
 // 一条命令。`?phase=question|monitor|checkpoint` 把任务换成停在那儿等着的样子；`?opener=1` 接上
-// 右侧审查格（出了结论点气泡去那一轮）。window 上的几个钩子推进这一轮：再冒半句、说完一句、出结论。
+// 右侧审查格（出了结论点气泡去那一轮）；`?earlier=1` 同一回合之前已经审过一场（重新派审）。window 上的
+// 几个钩子推进这一轮：再冒半句、整段换成另一句、出结论。
 const params = new URLSearchParams(location.search);
 const started = "2026-11-14T08:22:00.000Z";
 const reviewer = (id: string, markdown: string, endedAt: string | null, events: { kind: "tool"; label: string; detail: string }[] = []) => ({
@@ -22,12 +23,23 @@ const reviewer = (id: string, markdown: string, endedAt: string | null, events: 
 const bash = (command: string) => ({ kind: "tool" as const, label: "Bash", detail: JSON.stringify({ command }) });
 const wake = wakePayload([outputEvent]);
 
+// 同一份产出之前那一场：开始、审查者说过话、通过。
+const earlier: ConversationItem[] = [
+  { kind: "event", id: "e-start", text: "自由工作流第 1 轮审查开始：老审查 · 逻辑检查。", at: "2026-11-14T08:21:10.000Z", aside: true, variant: "note" },
+  {
+    kind: "agent", id: "e-say", sessionId: "rs0", label: "codex@old", agentType: "codex", reviewer: { round: 1 }, at: "2026-11-14T08:21:20.000Z",
+    endedAt: "2026-11-14T08:21:40.000Z", markdown: "上一场看过了。", segments: [{ id: "e-say:0", markdown: "上一场看过了。", events: [], attachments: [] }],
+  },
+  { kind: "event", id: "e-end", text: "自由工作流第 1 轮审查通过（老审查）。", at: "2026-11-14T08:21:50.000Z", aside: true, variant: "note" },
+];
+
 const base: ConversationItem[] = [
   {
     kind: "agent", id: "impl", sessionId: "s1", label: "claude@nodemach", agentType: "claude", at: "2026-11-14T08:00:00.000Z",
     endedAt: "2026-11-14T08:21:00.000Z", markdown: "MCP 接入已经改成起跑时注入。",
     segments: [{ id: "impl:0", markdown: "MCP 接入已经改成起跑时注入。", events: [], attachments: [] }],
   },
+  ...(params.get("earlier") ? earlier : []),
   { kind: "event", id: "start", text: "自由工作流第 1 轮审查开始：5.5审查 · 逻辑检查。", at: started, aside: true, variant: "note" },
   reviewer("r1", "我先核对需求、实际改动和回归登记，再逐面审查。", "2026-11-14T08:23:00.000Z", [bash("npm test")]),
   { kind: "user", id: "wake", at: "2026-11-14T08:24:00.000Z", bySystem: true, attachments: [], sessionId: "rs", sessionRole: "reviewer", ...wake },
@@ -48,7 +60,7 @@ const facts: Record<string, Partial<Task>> = {
 };
 
 declare global {
-  interface Window { __stream: (text: string) => void; __conclude: () => void }
+  interface Window { __stream: (text: string) => void; __say: (text: string) => void; __conclude: () => void }
 }
 
 function Fixture() {
@@ -56,6 +68,7 @@ function Fixture() {
   const [concluded, setConcluded] = useState(false);
   useEffect(() => {
     window.__stream = (text) => setLive((value) => value + text);
+    window.__say = (text) => setLive(text);
     window.__conclude = () => setConcluded(true);
   }, []);
   const phase = params.get("phase");

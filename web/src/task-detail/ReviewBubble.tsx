@@ -55,9 +55,13 @@ export function ReviewBubble({
   // 没给此刻怎么样的（单摆一轮、拿不到任务的地方）按「还在审」画，跟原来那张卡的「进行中」一样。
   const state = pending ? progress ?? reviewProgress(lane, { status: "running" }, true) : null;
   const text = state ? state.text : view.text;
-  // 字真的换了才放一下换字的过渡：头一回画出来的那一句不动。
-  const [firstText] = useState(text);
-  const swapped = text !== firstText;
+  // 字真的换了才放一下换字的过渡：头一回画出来的那一句不动；跟上一句比，不跟第一句比（说回原来那句也是换了字）。
+  const [shownText, setShownText] = useState(text);
+  const [swapped, setSwapped] = useState(false);
+  if (text !== shownText) {
+    setShownText(text);
+    setSwapped(true);
+  }
   const reportUrl = lane.reportAvailable && lane.report && taskId ? laneReportUrl(taskId, lane.report) : null;
   const traceToggle = !pending && !!onOpenRound && !!renderLane && laneHasTrace(lane);
   // 进行中那一轮摊得开的：审查者说过话，或者带着附言（一句话没说的轮次摊开至少还看得见附言）。

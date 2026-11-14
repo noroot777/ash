@@ -149,6 +149,16 @@ button.review-verdict-text:hover,
   .review-verdict-bubble:is(:hover, :focus-within) > header { opacity: 1; pointer-events: auto; }
   .review-verdict-bubble > header button { width: 22px; height: 22px; }
 }
+/* 触屏上那一行常显在气泡里、窄屏上浮出的那一行被正文宽度卡住：不截断，整行换行，谁审的、第几轮、
+   什么时候、含不含附言都读得到。 */
+@media (hover: none), (max-width: 560px) {
+  .review-verdict-bubble > header { flex-wrap: wrap; white-space: normal; }
+  .review-verdict-meta { flex: 1 1 0; overflow: visible; overflow-wrap: anywhere; }
+}
+@media (hover: hover) and (max-width: 560px) {
+  /* 浮在气泡上方的那一行左缘跟正文对齐、往上长，不再只有气泡那么宽。 */
+  .review-verdict-bubble > header { left: auto; width: max-content; max-width: calc(100vw - 48px); height: auto; min-height: 26px; }
+}
 @media (max-width: 560px) {
   .review-verdict { padding-left: 10px; }
   .review-verdict-bubble { max-width: 96%; }

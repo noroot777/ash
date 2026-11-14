@@ -33,9 +33,9 @@ try {
   // 出了结论的轮次在会话里只剩一句：审查者那几段发言、报告都收在这一行后面。
   const messages = page.locator(".task-message--agent");
   await messages.first().waitFor();
-  assert.equal(await messages.count(), 2, "平时只看得见实现与修复这两段；审查发言收在各自那一轮里");
+  assert.equal(await messages.count(), 3, "平时只看得见实现与两段修复；审查发言收在各自那一轮里");
   assert.equal(await page.locator(".task-message--agent.is-reviewer").count(), 0);
-  for (const index of [0, 1]) {
+  for (const index of [0, 1, 2]) {
     assert.equal(await messages.nth(index).locator(".turn-head > b").count(), 1, `第 ${index + 1} 段该报身份`);
   }
 
@@ -46,7 +46,7 @@ try {
       : el.classList.contains("task-message--agent") ? "回合" : null).filter(Boolean));
   assert.deepEqual(
     order,
-    ["回合", "结论:第 2 轮验证未通过", "回合", "结论:第 1 轮审查通过", "未结:第 2 轮审查停了，没有给出结论"],
+    ["回合", "结论:第 2 轮验证未通过", "回合", "结论:第 1 轮审查通过", "回合", "未结:第 2 轮审查停了，没有给出结论"],
     "结论夹在被审回合和下一回合之间；自由派审不沿用就地验证的「验证」；重跑、重审过的不并排",
   );
   assert.equal(await page.locator(".task-conversation > .task-message--agent .turn-footnote").count(), 0, "被审回合下面不再说审查结论");
@@ -308,6 +308,10 @@ async function reviewProgress(browser) {
   await page.evaluate(() => window.__stream("没覆盖的启动路径。"));
   await page.waitForFunction(() => document.querySelector(".review-verdict-text")?.textContent === "再看一处没覆盖的启动路径。");
   assert.equal(await text.locator(".is-fresh").count(), 1, "字真的换了才过渡一下");
+  // 说回最初那一句也是换了字：跟上一句比，不跟第一句比。
+  await page.evaluate(() => window.__say("接下来验证配置冲突和启动状态误判。"));
+  await page.waitForFunction(() => document.querySelector(".review-verdict-text")?.textContent === "接下来验证配置冲突和启动状态误判。");
+  assert.equal(await text.locator(".is-fresh").count(), 1, "说回原来那句同样过渡一下");
   assert.ok(Math.abs((await bubble.locator(".review-verdict-bubble").boundingBox()).width - width) < 400);
 
   // 指到（键盘走进来）上方浮出「审查者 · 谁 · 模型 · 智能水平 · 第 N/M 轮 · 开始时刻 · 含附言」。
@@ -341,6 +345,24 @@ async function reviewProgress(browser) {
   await after.locator(".review-verdict-bubble").hover();
   assert.equal(await after.locator(".review-verdict-bubble > header").getByRole("button", { name: "这一轮的经过" }).getAttribute("aria-expanded"), "true");
   assert.equal(await after.locator(".workspace-status-dot").count(), 0, "出了结论就没有那颗点");
+
+  // 同一份产出之前已经审过一场（重新派审）：新的一轮一开始就占了那一行结论的位置，出结论时它上面
+  // 什么都不变，气泡（连同摊开着的经过）不跳。
+  await page.goto(`${web.origin}/scripts/fixtures/review-progress.html?opener=1&earlier=1`);
+  const again = page.locator(".task-conversation > .review-verdict");
+  await again.first().waitFor();
+  assert.equal(await again.count(), 1, "同一回合只留最近那一轮：上一场的结论此刻就让位，回到记录里");
+  assert.equal(await again.evaluate((el) => el.classList.contains("is-pending")), true);
+  await again.locator("button.review-verdict-text").click();
+  await again.locator(":scope > .turn-footnote-lane").waitFor();
+  await again.evaluate((el) => { el.dataset.same = "1"; });
+  const top = (await again.locator(".review-verdict-bubble").boundingBox()).y;
+  await page.evaluate(() => window.__conclude());
+  await page.waitForFunction(() => document.querySelector(".review-verdict-text")?.textContent === "第 1 轮审查通过");
+  assert.equal(await again.count(), 1);
+  assert.equal(await again.evaluate((el) => el.dataset.same), "1", "同一颗气泡");
+  assert.ok(Math.abs((await again.locator(".review-verdict-bubble").boundingBox()).y - top) <= 1, "出结论时位置不变");
+  assert.equal(await again.locator(":scope > .turn-footnote-lane").count(), 1, "摊开着的照旧摊开");
 
   // 不在往前走的几种：点不动（或没有），字说此刻等的是谁、等什么。
   for (const [phase, words, mark] of [
@@ -389,4 +411,24 @@ async function reviewProgress(browser) {
   });
   assert.ok(dark >= 4.5, `深色主题下那一句的对比度只有 ${dark.toFixed(2)}:1`);
   await page.close();
+
+  // 触屏（那一行常显在气泡里）和窄屏（指到才浮出）：谁审的、第几轮、什么时候、含附言一个字都不截。
+  const meta = /codex@nodemach · gpt-6\.1-sol · medium · 第 1\/7 轮审查 · 11\/14 \d\d:22 · 含附言/;
+  const readable = (el) => {
+    const box = el.getBoundingClientRect();
+    return { whole: el.scrollWidth <= el.clientWidth + 1, inside: box.left >= 0 && box.right <= window.innerWidth, opacity: getComputedStyle(el.parentElement).opacity };
+  };
+  const touch = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  await touch.goto(`${web.origin}/scripts/fixtures/review-progress.html`);
+  const touchMeta = touch.locator(".review-verdict-meta");
+  await touchMeta.waitFor();
+  assert.match(await touchMeta.textContent(), meta);
+  assert.deepEqual(await touchMeta.evaluate(readable), { whole: true, inside: true, opacity: "1" }, "触屏上那一行换行读全");
+  await touch.close();
+  const narrow = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await narrow.goto(`${web.origin}/scripts/fixtures/review-progress.html`);
+  await narrow.locator(".review-verdict-text").focus();
+  await narrow.waitForFunction(() => getComputedStyle(document.querySelector(".review-verdict-bubble > header")).opacity === "1");
+  assert.deepEqual(await narrow.locator(".review-verdict-meta").evaluate(readable), { whole: true, inside: true, opacity: "1" }, "窄屏浮出的那一行换行读全、不出屏");
+  await narrow.close();
 }
