@@ -68,29 +68,32 @@ enum SQLiteFile {
 /// 装新版之前给库留一份底：新版 server 一启动就做迁移，迁移不可逆，新版起不来时只有这份备份
 /// 配上旧版 app 能回去（步骤见 README「回到旧版」）。
 ///
-/// 放在 `<数据根>/backups/`，文件名 `<时间>-<旧构建号>.db`：时间在前，按名字排就是按时间排；
-/// 旧构建号说明该配哪一版 app。先写 `.partial` 再改名，中途失败不会留下一份看着完整的半截库；
-/// 同名的已经在就另起一个名字，绝不覆盖。
+/// 放在 `<数据根>/backups/`，文件名 `<时间>-<旧构建号>.db`，旧构建号说明该配哪一版 app。先写
+/// `.partial` 再改名，中途失败不会留下一份看着完整的半截库；同名的已经在就另起一个名字，绝不
+/// 覆盖。「新的在前」按文件生成的先后排，不按名字。
 ///
-/// **恢复点**：迁移前的那一份原件被固定下来（`recovery-point.json` 记着是哪个文件），直到新版的
-/// 服务真起来了（迁移跑完了，ServerLauncher 确认就绪时 `release`）才放开。固定着的时候：
-///  · 它不参与「只留最近几份」的轮换；
-///  · 起服务前不再补备份（ServerLauncher 据此认出原件已经留过了）—— 新版连着起不来时，每次重试
-///    抓到的都是被失败的迁移改过一半的库，要是照常备份、照常轮换，原件很快就被挤掉；
-///  · 再来一次更新前备份照做，但恢复点仍是最早那份原件。
-/// 恢复点写不进去就算备份失败：没有它就没人记得哪一份才是原件。
+/// **恢复点**：每一份更新前备份都先固定着（`recovery-points.json`），直到确认**之后有一份服务在
+/// 这份库上真起来过**（ServerRecord.confirmServing：端口上应答的就是记录里那个进程 —— 不管是谁
+/// 等到的、隔了多久才看到）。确认之前：
+///  · 它们不参与「只留最近几份」的轮换；
+///  · 起服务前按它们判断这一次是不是已经备过了（`covers`）。只认「留它的时候，库最后一次是交给
+///    哪一版起的」和现在一样的那份 —— 之后又有别的版本起过（哪怕没人看到它起来），那份就不是
+///    这一次的底了，照常再备一份。
+/// 确认之后它们作废：记录里留着确认时间，比它早的一律不算，删不掉那个文件也不会被误当成这一次
+/// 的底。恢复点写不进去就算备份失败：没有它就没人记得哪一份才是原件。
 enum DatabaseBackup {
   static let keep = 5
-  private static var pinURL: URL { AshConfig.backupURL.appendingPathComponent("recovery-point.json") }
+  private static var pinsURL: URL { AshConfig.backupURL.appendingPathComponent("recovery-points.json") }
 
   private struct Pin: Codable {
     let file: String
-    let fromVersion: String
+    /// 留它的时候库最后一次交给哪一版起（ServerRecord 的构建号；没有记录是 "unknown"）。
+    let lastServedBy: String
     let since: Date
   }
 
-  /// 备份当前数据根里的库，还没有恢复点就把这一份定为恢复点。数据根里还没有库（从没起过服务）
-  /// 就什么都不做，返回 nil。
+  /// 备份当前数据根里的库，固定成恢复点。`fromVersion` 只用来起文件名。数据根里还没有库（从没
+  /// 起过服务）就什么都不做，返回 nil。
   @discardableResult
   static func beforeUpdate(fromVersion: String, now: Date = Date()) throws -> URL? {
     let db = AshConfig.dataURL.appendingPathComponent("ash.db")
@@ -117,30 +120,45 @@ enum DatabaseBackup {
       try? FileManager.default.removeItem(at: partial)
       throw error
     }
-    if recoveryPoint() == nil {
-      let pin = Pin(file: target.lastPathComponent, fromVersion: fromVersion, since: now)
-      try JSONEncoder().encode(pin).write(to: pinURL, options: .atomic)
-    }
+    let pin = Pin(file: target.lastPathComponent, lastServedBy: ServerRecord.read()?.bundleVersion ?? "unknown", since: Date())
+    try JSONEncoder().encode(validPins() + [pin]).write(to: pinsURL, options: .atomic)
     prune(dir)
     return target
   }
 
-  /// 固定着的迁移前原件（新版还没确认起来过）。记录指向的文件不在了就当没有。
-  static func recoveryPoint() -> URL? {
-    guard let data = try? Data(contentsOf: pinURL), let pin = try? JSONDecoder().decode(Pin.self, from: data) else { return nil }
-    let url = AshConfig.backupURL.appendingPathComponent(pin.file)
-    return FileManager.default.fileExists(atPath: url.path) ? url : nil
+  /// 还固定着的恢复点（之后没有服务确认起来过），新的在前。第一个就是离现在最近的那次更新前的底。
+  static func recoveryPoints() -> [URL] {
+    validPins().reversed().map { AshConfig.backupURL.appendingPathComponent($0.file) }
   }
 
-  /// 新版的服务起来了（迁移跑完了）：恢复点回到普通轮换里。
-  static func releaseRecoveryPoint() {
-    try? FileManager.default.removeItem(at: pinURL)
+  /// 这一次（库最后交给 `lastServedBy` 那一版起）是不是已经备过了。
+  static func covers(lastServedBy version: String) -> Bool {
+    validPins().contains { $0.lastServedBy == version }
   }
 
-  /// 最近的几份备份，新的在前。
+  /// 有一份服务在这份库上真起来了（迁移跑完了）：恢复点回到普通轮换里。删不掉也不要紧 ——
+  /// 比确认时间早的恢复点本来就不算（见 `validPins`）。
+  static func releaseRecoveryPoints() {
+    try? FileManager.default.removeItem(at: pinsURL)
+  }
+
+  private static func validPins() -> [Pin] {
+    guard let data = try? Data(contentsOf: pinsURL), let pins = try? JSONDecoder().decode([Pin].self, from: data) else { return [] }
+    let confirmed = ServerRecord.read()?.confirmedAt ?? .distantPast
+    return pins.filter {
+      $0.since > confirmed && FileManager.default.fileExists(atPath: AshConfig.backupURL.appendingPathComponent($0.file).path)
+    }
+  }
+
+  /// 全部备份，新的在前（按生成先后；同一秒的几份名字排不出先后）。
   static func existing() -> [URL] {
-    let names = (try? FileManager.default.contentsOfDirectory(atPath: AshConfig.backupURL.path)) ?? []
-    return names.filter { $0.hasSuffix(".db") }.sorted(by: >).map { AshConfig.backupURL.appendingPathComponent($0) }
+    let dir = AshConfig.backupURL
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+    let made = { (url: URL) -> Date in (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast }
+    return names.filter { $0.hasSuffix(".db") }.map { dir.appendingPathComponent($0) }
+      .map { ($0, made($0)) }
+      .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.lastPathComponent > $1.0.lastPathComponent }
+      .map(\.0)
   }
 
   private static func prune(_ dir: URL) {
@@ -148,7 +166,7 @@ enum DatabaseBackup {
     for name in names where name.hasSuffix(".partial") {
       try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
     }
-    let pinned = recoveryPoint()
-    for old in existing().dropFirst(keep) where old != pinned { try? FileManager.default.removeItem(at: old) }
+    let pinned = Set(recoveryPoints())
+    for old in existing().dropFirst(keep) where !pinned.contains(old) { try? FileManager.default.removeItem(at: old) }
   }
 }

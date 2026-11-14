@@ -88,28 +88,40 @@ final class ServerLauncher {
     }
     switch spawnDetached() {
     case .failure(let reason): return .failed(reason)
-    case .success(let pid): return waitReady(pid: pid, timeout: timeout)
+    case .success(let pid):
+      // 进程一起来就记下 pid：这个启动器等不到它应答（被退掉、超时）也不要紧，之后谁看到它应答
+      // 都能认出是它、替它确认（见 settle）。
+      ServerRecord.write(pid: Int(pid))
+      return waitReady(pid: pid, timeout: timeout)
     }
   }
 
-  /// 这份库上一次是别的构建号的 app 起的服务在用（或者不知道是谁）：这一版的 server 一起来就可能
-  /// 迁移它，迁移不可逆。已经有固定着的恢复点（UpdateGate 装更新前留的，或者上一次在这里补的、
-  /// 新版还没起来过）就不再备 —— 那份才是原件，这会儿的库可能已经被失败的迁移改过一半了。没有
-  /// 的 —— 退出时没过闸就被 Sparkle 装上了、`build.sh --install`、手动换了 app —— 在这里补一份并
-  /// 固定下来。备份不成就不起：库原样留着，配上旧版 app 还能回去。返回 nil = 可以起。
+  /// 起服务之前：这份库上一次交给别的构建号的 app 起（或者不知道是谁），这一版的 server 一起来就
+  /// 可能迁移它，迁移不可逆，所以先留底。不用再留的两种：
+  ///  · 上一次交给的就是这一版 —— 这一版已经在这份库上起过（成了就没有迁移要做，没成的话它起之前
+  ///    已经留过底，这会儿的库可能已经被失败的迁移改过一半，再备就是拿半截库去挤原件）；
+  ///  · 这一次已经备过（UpdateGate 装更新前留的、仍固定着的恢复点，见 DatabaseBackup.covers）。
+  /// 其余的 —— 退出时没过闸就被 Sparkle 装上了、`build.sh --install`、手动换了 app、导入来的库 ——
+  /// 在这里补一份。备份不成、或者记不下「这一版要起了」就不起：库原样留着，配上旧版 app 还能回去。
+  /// 返回 nil = 可以起。
   private static func backUpBeforeMigration() -> String? {
     let db = AshConfig.dataURL.appendingPathComponent("ash.db")
     guard FileManager.default.fileExists(atPath: db.path) else { return nil }
-    let record = ServerRecord.read()
-    if record?.bundleVersion == AshConfig.bundleVersion { return nil }
-    if DatabaseBackup.recoveryPoint() != nil { return nil }
+    let lastServedBy = ServerRecord.read()?.bundleVersion ?? "unknown"
     do {
-      try DatabaseBackup.beforeUpdate(fromVersion: record?.bundleVersion ?? "unknown")
-      return nil
+      if lastServedBy != AshConfig.bundleVersion && !DatabaseBackup.covers(lastServedBy: lastServedBy) {
+        try DatabaseBackup.beforeUpdate(fromVersion: lastServedBy)
+      }
     } catch {
       return "这一版要在库上做迁移，迁移前先备份库没成功（\(error.localizedDescription)），所以没起服务、库没动过。\n"
         + "腾出空间 / 修好权限后点「重试」；要回到旧版，把旧版 app 装回来就行（README「回到旧版」）。"
     }
+    do {
+      try ServerRecord.writeAttempt()
+    } catch {
+      return "记不下这一次要起的是哪一版（\(AshConfig.dataURL.path)：\(error.localizedDescription)），所以没起服务、库没动过。修好权限 / 腾出空间后点「重试」。"
+    }
+    return nil
   }
 
   /// 探到的结果里哪些已经是结论：自己那份在 → ready；别人占着 → occupied；连不上 → nil（接着起）。
@@ -117,7 +129,11 @@ final class ServerLauncher {
     switch probe {
     case .down, .unreachable: return nil
     case .notAsh(let what): return .occupied(Occupant.notAsh(what))
-    case .ash(let instance): return AshHealth.isServing(probe) ? .ready : .occupied(Occupant.otherAsh(instance))
+    case .ash(let instance):
+      guard AshHealth.isServing(probe) else { return .occupied(Occupant.otherAsh(instance)) }
+      // 不管服务是谁起的、谁先看到它起来，确认都在这一处（窗口、登录项、另一个窗口的重试都经过这里）。
+      if AshConfig.isLocal { ServerRecord.confirmServing(pid: instance.pid) }
+      return .ready
     }
   }
 
@@ -177,9 +193,7 @@ final class ServerLauncher {
     while Date() < deadline {
       let probe = AshHealth.probeSync()
       if case .ash(let instance) = probe, instance.isOurs, instance.pid == Int(pid) {
-        ServerRecord.write(pid: Int(pid))
-        // 这一版的服务应答了 = 它的迁移跑完了：迁移前的原件不必再固定着。
-        DatabaseBackup.releaseRecoveryPoint()
+        ServerRecord.confirmServing(pid: Int(pid))
         return .ready
       }
       if case .ash(let instance) = probe, !instance.isOurs { return .occupied(Occupant.otherAsh(instance)) }

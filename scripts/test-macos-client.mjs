@@ -268,7 +268,7 @@ try {
   result = await launch(binary, ["start", "8"], env).done;
   assert.equal(result.status, 0, result.output);
   assert.equal(readdirSync(join(data, "backups")).filter((n) => n.endsWith(".db")).length, 1, "backed up before starting on an unknown database");
-  assert.equal(existsSync(join(data, "backups", "recovery-point.json")), false, "the recovery point is released once the service answers");
+  assert.equal(existsSync(join(data, "backups", "recovery-points.json")), false, "the recovery point is released once the service answers");
   await stopServers();
   console.log("PASS: lock timeout is failure, not success; explicit retry recovers; an unknown database is backed up first and released once up");
 

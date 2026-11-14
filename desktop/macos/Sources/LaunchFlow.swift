@@ -59,10 +59,15 @@ extension BrowserWindowController {
         actions.insert(OfflineView.Action(title: "日志") { NSWorkspace.shared.open(log) }, at: 0)
       }
       // 刚装完新版就起不来，多半是新版的迁移出了问题：指一下更新前的库备份在哪（怎么回到旧版见 README）。
-      // 有固定着的恢复点就指它 —— 那是迁移前的原件，之后的几份可能已经被失败的迁移改过。
+      // 有固定着的恢复点就指最近那个 —— 它是这一版迁移之前的库（之后没有服务起来过），再往后的
+      // 状态都可能是失败的迁移改出来的。更早的几个也还在（中间那几版可能也没起来过），提一句。
       var detail = reason
-      if let backup = DatabaseBackup.recoveryPoint() ?? DatabaseBackup.existing().first {
+      let points = DatabaseBackup.recoveryPoints()
+      if let backup = points.first ?? DatabaseBackup.existing().first {
         detail += "\n\n刚更新过的话：更新前的库备份在 \(backup.path)，配上那一版 app 能回到旧版。"
+        if points.count > 1 {
+          detail += "\n更早几次没确认起来过的更新前备份也还留着（同一目录，共 \(points.count) 份）。"
+        }
         actions.insert(OfflineView.Action(title: "更新前的备份") {
           NSWorkspace.shared.activateFileViewerSelecting([backup])
         }, at: 0)

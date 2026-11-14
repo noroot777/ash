@@ -113,7 +113,7 @@ case "record":
   ServerRecord.write(pid: Int(args[2])!)
   // 测试按需把构建号改成别的，模拟「旧版 app 起的」。
   if args.count > 3 {
-    let data = try! JSONEncoder().encode(ServerRecord(pid: Int(args[2])!, bundleVersion: args[3]))
+    let data = try! JSONEncoder().encode(ServerRecord(pid: Int(args[2])!, bundleVersion: args[3], confirmedAt: ServerRecord.read()?.confirmedAt))
     try! data.write(to: ServerRecord.url)
   }
   emit("STALE \(ServerRecord.staleVersion(servingPID: Int(args[2])!) ?? "none")")
@@ -127,13 +127,21 @@ case "backups":
     emit("MADE \(made?.lastPathComponent ?? "nil")")
   }
   emit("KEPT \(DatabaseBackup.existing().map(\.lastPathComponent).joined(separator: ","))")
-  emit("PINNED \(DatabaseBackup.recoveryPoint()?.lastPathComponent ?? "none")")
+  emit("PINS \(DatabaseBackup.recoveryPoints().map(\.lastPathComponent).joined(separator: ","))")
 
 case "backups-same-second":
+  // 同一秒连做十二份：名字各不相同，「最新」是最后做的那份（不是名字排在最前的那份）。
   let now = Date(timeIntervalSince1970: 1_900_000_000)
-  let first = try! DatabaseBackup.beforeUpdate(fromVersion: "same", now: now)!
-  let second = try! DatabaseBackup.beforeUpdate(fromVersion: "same", now: now)!
-  emit("SAME-SECOND \(first.lastPathComponent),\(second.lastPathComponent)")
+  var made: [String] = []
+  for _ in 0..<12 { made.append(try! DatabaseBackup.beforeUpdate(fromVersion: "same", now: now)!.lastPathComponent) }
+  emit("SAME-SECOND distinct=\(Set(made).count) last=\(made.last!) newest=\(DatabaseBackup.existing().first!.lastPathComponent)")
+
+case "pins":
+  emit("PINS \(DatabaseBackup.recoveryPoints().map(\.lastPathComponent).joined(separator: ","))")
+
+case "confirm":
+  ServerRecord.confirmServing(pid: Int(args[2])!)
+  emit("PINS \(DatabaseBackup.recoveryPoints().map(\.lastPathComponent).joined(separator: ","))")
 
 default:
   emit("unknown mode")

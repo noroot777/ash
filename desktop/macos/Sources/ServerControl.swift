@@ -1,27 +1,50 @@
 import Foundation
 import Darwin
 
-/// 「端口上那份服务是哪一版 app 起的」。app 起好服务后在数据根里记一笔 pid + 构建号；换了新版
-/// app（Sparkle 装完重开、`build.sh --install`）再连上时，pid 还是那个、构建号却不是自己 = 服务还在
-/// 跑旧版代码，而且它后面才加载的模块已经是新版的文件了 —— 两版混着跑。见 UpdateGate 的
-/// `.staleServer`。
+/// 「这份库最后交给哪一版 app 起、那一份起来过没有」。在数据根里记一笔 pid + 构建号：
 ///
-/// 记录里的 pid 对不上（服务是别处起的、比这版 app 旧的 app 起的）就是「不知道」，不当成旧版。
+///  · 起服务**之前**先记下构建号（pid 还是 0）—— 写不进去就不起：恢复点认「这一次备过没有」靠的
+///    就是它（DatabaseBackup.covers），起了却没记下，下一版就会把一份过时的底当成这一次的。
+///  · 进程起来了补上 pid。
+///  · 端口上应答的正是记录里那个进程（`confirmServing`）= 这一版在这份库上起来过、迁移跑完了：
+///    记下确认时间，恢复点随之作废。不管是起它的那个启动器等到的，还是之后重开 app、登录项、
+///    另一个窗口看到的，都走这一处。
+///
+/// 换了新版 app（Sparkle 装完重开、`build.sh --install`）再连上时，pid 还是那个、构建号却不是
+/// 自己 = 服务还在跑旧版代码，而且它后面才加载的模块已经是新版的文件了 —— 两版混着跑。见
+/// UpdateGate 的 `.staleServer`。记录里的 pid 对不上就是「不知道」，不当成旧版。
 struct ServerRecord: Codable {
   static let fileName = ".mac-server.json"
   static var url: URL { AshConfig.dataURL.appendingPathComponent(fileName) }
 
   let pid: Int
   let bundleVersion: String
+  /// 最近一次确认有服务在这份库上起来过的时间（比它早的恢复点作废）。
+  var confirmedAt: Date? = nil
+
+  /// 要起服务了：先记下是这一版。写不进去抛错，调用方就别起。
+  static func writeAttempt() throws {
+    try save(ServerRecord(pid: 0, bundleVersion: AshConfig.bundleVersion, confirmedAt: read()?.confirmedAt))
+  }
 
   static func write(pid: Int) {
-    let record = ServerRecord(pid: pid, bundleVersion: AshConfig.bundleVersion)
-    if let data = try? JSONEncoder().encode(record) { try? data.write(to: url, options: .atomic) }
+    try? save(ServerRecord(pid: pid, bundleVersion: AshConfig.bundleVersion, confirmedAt: read()?.confirmedAt))
+  }
+
+  /// 端口上自己那份应答了：是记录里那个进程，就确认它起来过。
+  static func confirmServing(pid: Int?) {
+    guard let pid, pid > 1, let record = read(), record.pid == pid else { return }
+    try? save(ServerRecord(pid: record.pid, bundleVersion: record.bundleVersion, confirmedAt: Date()))
+    DatabaseBackup.releaseRecoveryPoints()
   }
 
   static func read() -> ServerRecord? {
     guard let data = try? Data(contentsOf: url) else { return nil }
     return try? JSONDecoder().decode(ServerRecord.self, from: data)
+  }
+
+  private static func save(_ record: ServerRecord) throws {
+    try JSONEncoder().encode(record).write(to: url, options: .atomic)
   }
 
   /// 正在应答的这份（pid）是不是由别的构建号的 app 起的；是就返回那个构建号。
