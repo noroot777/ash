@@ -8,6 +8,7 @@ import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { motionReduced } from "../lib/useSwapText.ts";
 import { chatTailKey } from "../lib/chatTailKey.ts";
 import { useScrollEdges } from "../lib/useScrollEdges.ts";
+import { localeDate, localeTime } from "../lib/localeFormat.ts";
 
 export function ChatMessages({ snapshot, onTask, onMention }: { snapshot: ChatSnapshot; onTask: (task: TaskListItem) => void; onMention: (name: string) => void }) {
   const scroll = useRef<HTMLDivElement>(null);
@@ -30,13 +31,13 @@ export function ChatMessages({ snapshot, onTask, onMention }: { snapshot: ChatSn
       const task = snapshot.tasks.find((candidate) => candidate.id === message.taskId);
       const busy = message.status === "queued" || message.status === "running";
       const previous = snapshot.messages[index - 1];
-      const day = new Date(message.createdAt).toLocaleDateString(undefined, { month: "long", day: "numeric" });
+      const day = localeDate(message.createdAt, undefined, { month: "long", day: "numeric" });
       const showDate = !previous || new Date(previous.createdAt).toDateString() !== new Date(message.createdAt).toDateString();
       return <div key={message.id}>
         {showDate && <div className="chat-date"><span>{day}</span></div>}
         <article className={`chat-message ${message.role === "user" ? "is-user" : ""} is-${message.status}`}>
           <span className={`chat-avatar ${message.role === "user" ? "tone-user" : `tone-${Math.max(0, memberIndex) % 4}`}`}>{message.role === "user" ? "你" : message.author.slice(0, 1).toUpperCase()}</span>
-          <div className="chat-message-content"><header><strong>{message.role === "user" ? "你" : message.author}</strong>{message.role === "agent" && <span className="chat-bot-label">智能体</span>}<time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</time></header>
+          <div className="chat-message-content"><header><strong>{message.role === "user" ? "你" : message.author}</strong>{message.role === "agent" && <span className="chat-bot-label">智能体</span>}<time dateTime={message.createdAt}>{localeTime(message.createdAt, undefined, { hour: "2-digit", minute: "2-digit" })}</time></header>
             {busy ? <p className="chat-typing"><span><i /><i /><i /></span>{message.status === "queued" ? "已收到点名，等待回复" : "正在组织简短回复"}</p> : <p className="chat-message-body">{message.body.split(/(@[^\s@，。！？,:：;；]+)/gu).map((part, position) => part.startsWith("@") && (snapshot.room.members.some((member) => `@${member.name}` === part) || isAllMention(part.slice(1))) ? <mark key={position}>{part}</mark> : part)}</p>}
             {task && <button type="button" className={`chat-task-card ${task.status === "done" ? "is-done" : ""}`} onClick={() => onTask(task)}>
               <span className="chat-task-symbol">{task.status === "done" ? <CheckCircle size={23} weight="fill" /> : <Lightning size={23} weight="duotone" />}</span>

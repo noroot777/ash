@@ -72,12 +72,6 @@ try {
   assert.equal(plain.data, join(String(plain.code), "data"));
   assert.equal(plain.runs, join(String(plain.code), "data", "runs"));
 
-  // ── 回填脚本的资源判定认同一个数据根 ──
-  const { resolveRepairResources } = await import("../src/claude-usage-resources.js");
-  const repair = resolveRepairResources({ apply: false, env: { ASH_DATA_DIR: data } });
-  assert.equal(repair.runsDir, join(data, "runs"));
-  assert.equal(repair.productionDb, join(data, "ash.db"));
-
   // ── 本机自用开关：读到了、并且不往子进程传 ──
   const localOnly = probe({ ASH_LOCAL_ONLY: "1", ASH_DATA_DIR: data }, `
 const { LOCAL_ONLY } = await import(${JSON.stringify(new URL("local-only.js", src).href)});

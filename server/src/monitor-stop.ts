@@ -6,8 +6,8 @@ import type { TaskMonitor } from "@ash/shared/monitor";
 import { db } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
-import { reclaimState } from "./monitor-reclaim-evidence.js";
-import { detachMonitor, finish, serialize, toTaskMonitor } from "./monitors.js";
+import { isTracelessState, reclaimState } from "./monitor-reclaim-evidence.js";
+import { detachMonitor, finish, publish, serialize, toTaskMonitor } from "./monitors.js";
 import { appendTaskTimeline, noticeLine } from "./task-timeline.js";
 import { now } from "./util.js";
 
@@ -130,12 +130,15 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
     // **pid 还空着的那一行也要走这一趟**(第 19 轮审查 F2):那是创建意图行(身份先落库、进程
     // 后起、pid 回填),它的结局恰恰最没确认 —— 判据交给 `reclaimMonitorProcess`,它会先问
     // 一遍认领、再按档位决定记责任还是收档,真的没有落点时才返回 `closed`。
-    if (row.pid === null || reclaimState(row.pid, row.pidStartedAt, row) !== "traceless") {
+    if (row.pid === null || !isTracelessState(reclaimState(row.pid, row.pidStartedAt, row))) {
       const outcome = await reclaimMonitorProcess(row, `${reason}（创建期取消后补收）`);
       if (await settleReclaim(outcome) === "unaccounted") {
         console.error(`[ash] 创建期取消后补收:既没确认退出、责任也没落库 monitor=${monitorId} pid=${row.pid}`);
       }
     }
+    // 放弃凭证改了这条哨兵还欠不欠一份结果,而 `finish` 那条播报这一支走不到:不说一声,等它
+    // 结果的队列(queue-monitor-hold.ts)和界面上的卡片都不知道这件事。
+    publish(row.taskId);
     // 重读:放弃凭证刚写上去,照 `row` 返回等于把调用方刚做的那件事从响应里抹掉。
     const settled = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
     return toTaskMonitor(settled ?? row);

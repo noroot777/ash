@@ -15,12 +15,16 @@ import { ReviewNote } from "../review/ReviewNote.tsx";
 import { ReviewScreenshotStrip } from "../review/ReviewScreenshotStrip.tsx";
 import { FreeReviewDebateTranscript } from "./FreeReviewDebateTranscript.tsx";
 import { DISPUTE_PROSE_LABELS } from "./disputeCopy.ts";
-import { checkModeText, disputeStateText, missingReportText, recurrenceText, reviewRoundLabel, timeRange } from "./freeReviewRounds.ts";
+import {
+  checkModeText, disputeStateText, missingReportText, noVerdictSaidText, recurrenceText, reviewRoundLabel, timeRange,
+} from "./freeReviewRounds.ts";
+
+const hasScreenshots = (round: FreeReviewRound) => round.screenshots.length > 0 || !!round.expiredScreenshots?.length;
 
 function Screenshots({ taskId, run, round }: { taskId: string; run: FreeReviewRun; round: FreeReviewRound }) {
-  if (!round.screenshots.length) return null;
+  if (!hasScreenshots(round)) return null;
   return (
-    <ReviewScreenshotStrip items={round.screenshots.map((name) => ({
+    <ReviewScreenshotStrip expired={round.expiredScreenshots?.length} items={round.screenshots.map((name) => ({
       key: name,
       name,
       src: api.freeReviewFileUrl(taskId, run.id, round.round, name),
@@ -49,6 +53,11 @@ export function FreeReviewRoundContent({ taskId, run, round }: { taskId: string;
             )}
           />
         : <p className="insp-faint">{missingReportText(round)}</p>}
+      {/* 是什么错只有执行器自己说得出：没出结论的那一轮把它的原话摆出来 —— 跟报告写没写无关，
+          先写了报告再断掉的那一轮同样要知道断在哪儿。 */}
+      {round.status !== "reviewing" && noVerdictSaidText(round.noVerdict) && (
+        <p className="insp-faint review-round-said">{noVerdictSaidText(round.noVerdict)}</p>
+      )}
       {/* 驳回与辩论跟报告长在同一轮上，读结论的人必须在同一个地方读到「执行者不认这条、
           理由是什么」。这里只回放，裁定入口在审查格上面那张卡上（一个动作一个入口）。 */}
       {round.dispute && (
@@ -110,7 +119,7 @@ export function FreeReviewRoundDrawer({ taskId, run, round, anchorRef, keepOpenR
         title={drawerTitle(run, round)}
         subtitle={drawerSubtitle(run, round)}
         onClose={onClose}
-        footer={round.screenshots.length ? <Screenshots taskId={taskId} run={run} round={round} /> : undefined}
+        footer={hasScreenshots(round) ? <Screenshots taskId={taskId} run={run} round={round} /> : undefined}
       >
         <div className="review-round-body"><FreeReviewRoundContent taskId={taskId} run={run} round={round} /></div>
       </ReviewEvidenceDrawer>
@@ -132,7 +141,7 @@ export function FreeReviewRoundBody({ taskId, run, round, anchorRef }: {
       title={drawerTitle(run, round)}
       subtitle={drawerSubtitle(run, round)}
       anchorRef={anchorRef}
-      screenshots={round.screenshots.length ? <Screenshots taskId={taskId} run={run} round={round} /> : null}
+      screenshots={hasScreenshots(round) ? <Screenshots taskId={taskId} run={run} round={round} /> : null}
     >
       <FreeReviewRoundContent taskId={taskId} run={run} round={round} />
     </ReviewInlineReport>

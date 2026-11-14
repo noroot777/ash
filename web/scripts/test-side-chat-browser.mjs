@@ -110,8 +110,11 @@ try {
   assert.equal(await plain.getByRole("button", { name: "发给主任务", exact: true }).count(), 0, "送到了就不再给那颗键");
   await page.getByRole("button", { name: "切换主任务状态" }).click();
   assert.equal(await input.count(), 1, "主任务状态变化不抢走侧聊焦点");
+  // 等的是**新那条**回答上的回执：发出之后、新回答渲染之前，`.last()` 还是上面那条已经送达过的，
+  // 拿它等会立刻放行，下一句断言就读到投递之前的计数。
+  const answersBefore = await page.locator(".side-chat-message.is-agent").count();
   await input.fill("把结论告诉主任务，以后都按这个来"); await send.click();
-  await page.locator(".side-chat-message.is-agent").last().getByText("已送达主任务", { exact: true }).waitFor();
+  await page.locator(".side-chat-message.is-agent").nth(answersBefore).getByText("已送达主任务", { exact: true }).waitFor();
   assert.equal((await state()).delivered.length, 2);
   assert.equal((await state()).kills, 0);
   // 发出去的原文在回执的悬停提示里。

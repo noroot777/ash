@@ -33,7 +33,7 @@ import { cancelPendingMonitorEvents } from "./monitor-events.js";
 import {
   archiveTracelessIdentity, heldReclaimDebts, reclaimMonitorProcess, settleReclaim,
 } from "./monitor-reclaim-debts.js";
-import { reclaimState } from "./monitor-reclaim-evidence.js";
+import { isTracelessState, reclaimState } from "./monitor-reclaim-evidence.js";
 import { intentStillOpen } from "./monitor-adopt.js";
 import { isReviewSourceActive } from "./monitor-session.js";
 import { finish, isAshKind, serialize } from "./monitors.js";
@@ -191,7 +191,10 @@ async function accountForLiveProcesses(
   // running」。`unknown`(ps 这一问自己失败了)也在里面:它恰恰是最该留责任的一档,原来却被
   // 当成「没什么可收」放行了(第 6 轮审查 F1 实测的那条路)。
   const withPid = rows.filter((r): r is MonitorRow & { pid: number } => r.pid !== null);
-  const judged = withPid.map((r) => ({ row: r, traceless: reclaimState(r.pid, r.pidStartedAt, r) === "traceless" }));
+  const judged = withPid.map((r) => {
+    const state = reclaimState(r.pid, r.pidStartedAt, r);
+    return { row: r, state, traceless: isTracelessState(state) };
+  });
   // **pid 还空着的创建意图行是最该核的一档**(第 19 轮审查 F2):身份先落库、进程后起、pid
   // 回填(见 monitor-create.ts),ash 死在中间时库里剩下的就是这个样子 —— 它的结局恰恰从没被
   // 确认过。上一版这里一句 `r.pid !== null` 把它们整批滤掉,于是删除拿到「没什么要负责的」、
@@ -210,7 +213,7 @@ async function accountForLiveProcesses(
   // 真要消失的那一刻 —— 下面按 `fatal` 把它和「责任落不下来」一起抛回去。
   const lostIdentity: MonitorRow[] = [];
   await Promise.all(judged.filter((j) => j.traceless).map(async (j) => {
-    if (await archiveTracelessIdentity(j.row) === "failed") lostIdentity.push(j.row);
+    if (await archiveTracelessIdentity(j.row, j.state) === "failed") lostIdentity.push(j.row);
   }));
   const unaccounted: MonitorRow[] = [];
   if (!risky.length) return finishAccounting(unaccounted, lostIdentity, opts);
@@ -377,7 +380,7 @@ export async function reclaimUnconfirmedStops(): Promise<number> {
   // 「没有边条」,于是这一类行连开机这一问都捞不到)。
   const live = rows.filter((r) => (r.pid === null
     ? intentStillOpen(r.logPath)
-    : reclaimState(r.pid, r.pidStartedAt, r) !== "traceless"));
+    : !isTracelessState(reclaimState(r.pid, r.pidStartedAt, r))));
   if (!live.length) return 0;
   console.error(`[ash] 开机发现 ${live.length} 条「停了但退出从没被确认」的哨兵（进程组还活着，`
     + `或者 pid 还空着、创建意图没有结论），按责任重收一遍`);

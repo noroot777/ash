@@ -15,6 +15,7 @@ import { reclaimStrandedSeat, scheduleSeatReclaim } from "./queue-seat-reclaim.j
 import { waitForStartReceipt } from "./task-start-receipt.js";
 import { reportGroupStartFailure } from "./group-start-failure.js";
 import { clearQueueAdvanceIntent, recordQueueAdvanceIntent, refuseQueueAdvance } from "./queue-advance-admission.js";
+import { heldByMonitors, withMonitorHolds, type QueueRow } from "./queue-monitor-hold.js";
 
 const MAX_PARALLEL = 4;
 let pauseGeneration = 0;
@@ -40,6 +41,9 @@ export async function pauseGroup(groupId: string): Promise<void> {
     await transaction.update(tasks).set({ queueAdvanceRequest: null }).where(eq(tasks.groupId, groupId));
   }, { behavior: "immediate" });
   groupPauses.set(groupId, ++pauseGeneration);
+  // 没有成员在跑时暂停只改了 groups.paused,不会有任何任务换状态:托盘的等待说明得单独通知。
+  void import("./pending-wait.js").then(({ republishGroupWaits }) => republishGroupWaits(groupId))
+    .catch((err) => console.error(`[ash] republishGroupWaits(${groupId}) failed:`, err));
   const members = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
   for (const t of members) {
     // status 可能在队列推进/续聊交错时短暂失真；只要有活 handle，先杀进程永远优先。
@@ -84,7 +88,8 @@ export async function advanceQueueFromTask(taskId: string): Promise<void> {
 //   - awaiting_review → 停,审查门等用户
 //   - running / queued → 等已在跑的那个跑完
 //   - backlog → 拉起新 agent
-//   - paused → 用 resumePrompt 续跑(resumeOrRunTask 内部按 status 分流)
+//   - paused → 用 resumePrompt 续跑(resumeOrRunTask 内部按 status 分流);
+//     等答复、等 CLI 目标、等哨兵结果的 paused 例外:停,等它自己被叫醒
 // 每次推进只启动 head 一项;它跑完触发 advanceQueueFromTask 再推下一个。
 export async function advanceQueue(queueId: string, request?: QueueAdvanceRequest): Promise<void> {
   // **先把「这条队列该推进」这件事落下来,再开始推**。往下走的每一步都可能抛(推进请求那一笔
@@ -167,7 +172,7 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
       if (!target || target.queueAdvanceRequest?.id !== request.id
         || target.resumePromptGeneration !== request.resumePromptGeneration || target.archived
         || ["done", "failed", "canceled"].includes(target.status) || target.question || hasCliGoalHold(target.cliState)
-        || (target.groupId && await isPaused(target.groupId))) {
+        || target.monitorHold || (target.groupId && await isPaused(target.groupId))) {
         await clearQueueAdvance(request);
         return "paused";
       }
@@ -292,6 +297,8 @@ export type QueueMember = {
   // 非空 = 这一轮是「续聊」(终态任务的追加对话),队列按这个终态看待它。
   followUpFrom?: string | null;
   cliState?: string | null;
+  // paused 且名下还有没了结的哨兵(queue-monitor-hold.ts 标的)。
+  monitorHold?: boolean;
 };
 
 // 队列眼里的成员状态:终态任务的续聊回合虽然 status=running,但那一轮不是任务的
@@ -324,6 +331,8 @@ export function selectNextInQueue<T extends QueueMember>(rows: T[]): T | null {
     // 队列跟着等,绝不能在这里用「继续」把它空手叫醒(问题会白问)。
     if (s === "paused" && t.question) return null;
     if (s === "paused" && hasCliGoalHold(t.cliState)) return null;
+    // 等哨兵的暂停同理:叫醒它的是哨兵结果,这时空手续跑,它只能看一眼哨兵还在跑、再暂停一次。
+    if (s === "paused" && t.monitorHold) return null;
     return t; // backlog / paused
   }
   return null;
@@ -339,7 +348,7 @@ export async function pickNextLaunchable(queueId: string): Promise<typeof tasks.
 
 // queue 成员按 position 升序取出(一次批查,避免逐条查库)。归档成员仍占位置,
 // 所以照样取回来 —— 由 selectNextInQueue 决定怎么对待。
-export async function queueMembers(queueId: string): Promise<(typeof tasks.$inferSelect)[]> {
+export async function queueMembers(queueId: string): Promise<QueueRow[]> {
   const items = await db
     .select()
     .from(queueItems)
@@ -351,7 +360,7 @@ export async function queueMembers(queueId: string): Promise<(typeof tasks.$infe
     .from(tasks)
     .where(inArray(tasks.id, items.map((i) => i.taskId)));
   const byId = new Map(rows.map((r) => [r.id, r] as const));
-  return items.map((i) => byId.get(i.taskId)).filter((t): t is typeof tasks.$inferSelect => !!t);
+  return withMonitorHolds(items.map((i) => byId.get(i.taskId)).filter((t): t is typeof tasks.$inferSelect => !!t));
 }
 
 // Run an entire group. parallel mode:扫所有 backlog/paused,限流并行启动。
@@ -423,7 +432,7 @@ export async function runGroupInBackground(groupId: string): Promise<void> {
  * 把已完成、已归档、团队调度台、以及排在队列里还没轮到的成员算进来。
  */
 export async function groupLaunchTargets(groupId: string): Promise<string[]> {
-  const groupRows = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
+  const groupRows = await withMonitorHolds(await db.select().from(tasks).where(eq(tasks.groupId, groupId)));
   if (!groupRows.length) return [];
   const items = await db.select().from(queueItems)
     .where(inArray(queueItems.taskId, groupRows.map((t) => t.id)));
@@ -525,28 +534,27 @@ async function recoverQueueAdvance(queueId: string, accepted: AcceptedAdvance | 
 // 就破坏了 resume 顺序)。canceled / failed 也不在这里被
 // 批量唤起 —— 那是 P0d-fY_Zi4RC 那个事故的根因(DESIGN §0 #3)。
 // 例外:「组暂停打断」的 paused(无 resumePrompt 无 question——唯一来源就是
-// group pause 杀掉 running 任务),恢复分组时在这里续跑。
+// group pause 杀掉 running 任务),恢复分组时在这里续跑 —— 名下还有没了结的哨兵的除外:
+// 被打断时它可能正挂着哨兵,那就跟队列里等哨兵的成员一样,由哨兵结果叫醒(queue-monitor-hold.ts)。
 // 在 queue 里的任务(含 backlog)一律不在这里启动——parallel group 也可能
 // 挂着 queue(混合形态:queue 表达完成顺序,mode 表达初始启动方式,两者正交,
 // 见 migrateQueues),并行拉起会破坏队列顺序;统一交给末尾的 advanceQueue
 // 按位置逐个拉起。
 // 「这一次该被 parallel 拉起」的判据。抽成函数是为了让失败交代的扇出范围
 // (groupLaunchTargets)跟真正启动用的是同一把尺子,不会各自漂。
-function launchableMembers(
-  groupRows: (typeof tasks.$inferSelect)[], inQueue: ReadonlySet<string>,
-): (typeof tasks.$inferSelect)[] {
+function launchableMembers(groupRows: QueueRow[], inQueue: ReadonlySet<string>): QueueRow[] {
   return groupRows.filter(
     (t) =>
       !t.archived &&
       t.mode !== "team" && // 防御:团队任务不进组,也不该被分组批量拉起
       !inQueue.has(t.id) &&
       (t.status === "backlog" ||
-        (t.status === "paused" && !t.resumePrompt && !t.question && !hasCliGoalHold(t.cliState))),
+        (t.status === "paused" && !t.resumePrompt && !t.question && !hasCliGoalHold(t.cliState) && !t.monitorHold)),
   );
 }
 
 async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Promise<void> {
-  const groupRows = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
+  const groupRows = await withMonitorHolds(await db.select().from(tasks).where(eq(tasks.groupId, groupId)));
   const items = await db
     .select()
     .from(queueItems)
@@ -571,7 +579,7 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
       try {
         if (await preparePendingCheckpointStart(taskId)) return;
         const before = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-        if (!before || (before.status === "paused" && before.resumePrompt)) return;
+        if (!before || (before.status === "paused" && (before.resumePrompt || await heldByMonitors(taskId)))) return;
         const owner = claimOwnTurn(taskId);
         if (!owner) return;
         const reservation = taskQueueReservation(before);

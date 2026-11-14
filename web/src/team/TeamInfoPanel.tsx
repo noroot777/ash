@@ -97,7 +97,7 @@ export function TeamInfoPanel({ task, workers, sessions, notify }: {
       </InspKv>
 
       <InspKv label="执行信息">
-        <InfoRunRows task={task} sessions={sessions} facts={EMPTY_RUN_FACTS} />
+        <InfoRunRows task={task} sessions={sessions} facts={EMPTY_RUN_FACTS} notify={say} />
       </InspKv>
     </div>
   );

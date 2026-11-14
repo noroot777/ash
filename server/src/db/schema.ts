@@ -34,6 +34,9 @@ export const projects = sqliteTable("projects", {
   // null/空 = 这个项目不设门禁（默认，也是老行为）。为什么钉在验收那一刻，见
   // shared/src/accept-gate.ts 顶部；执行与判定在 server/src/accept-gate.ts。
   acceptGateCommand: text("accept_gate_command"),
+  // 门禁的「准备命令」：快照里先跑它把依赖装出来，再跑 accept_gate_command。null = 不配，
+  // 依赖照旧从工作区借用（accept-gate-deps.ts）。语义见 shared/src/project.ts 同名字段。
+  acceptGatePrepare: text("accept_gate_prepare"),
   // 门禁测哪一棵树(branch / contains_target / merge_preview),语义见 shared/src/accept-gate.ts 的
   // AcceptGateBaseline。读侧一律过 normalizeAcceptGateBaseline:认不出的值回到 branch(老行为)。
   acceptGateBaseline: text("accept_gate_baseline").notNull().default("branch"),
@@ -275,6 +278,9 @@ export const tasks = sqliteTable("tasks", {
   queueAdvanceRequest: text("queue_advance_request", { mode: "json" }).$type<{
     id: string; queueId: string; resumePromptGeneration: number; prevStatus: string;
   }>(),
+  // 这一段暂停在等哨兵(落 paused 那一笔同时写下,真正开跑执行回合时清掉)。哨兵了结后没结果
+  // 可送时,队列凭它补推一次 —— 语义与写入口见 queue-monitor-hold.ts。
+  monitorHoldAt: text("monitor_hold_at"),
   // 提问：agent 调 ask_question 时填进来。结算落 paused 且队列不自动续跑，
   // 等 answer_question 清空并带答复 resume（见 scheduler.pickNextLaunchable 的挡板）。
   question: text("question"),
@@ -290,6 +296,9 @@ export const tasks = sqliteTable("tasks", {
   // 任务之后的对话。开跑时把续聊前的终态记在这里（done/failed/canceled），队列一律
   // 按它看待该成员（既不挡后面的，也不会被当 backlog 拉起），结算后清空。
   followUpFrom: text("follow_up_from"),
+  // 续聊被哨兵隔开、落成 paused 期间,「续聊前是哪个状态」记在这里(follow_up_from 此时是空的,
+  // 队列照常把它看成在等哨兵的暂停)。下一个非旁路回合起跑时接回 follow_up_from —— 见 follow-up-held.ts。
+  followUpHeldFrom: text("follow_up_held_from"),
   // 完成确认（严格 done 协议）：agent 调 complete_task 时盖时间戳，settle 消费后清空。
   // 落库而不只放内存 —— 确认与结算若不在同一个进程里（历史事故：僵尸实例跑任务、
   // HTTP 打到监听进程），内存标记会静默丢掉，agent 明明确认了却记 failed。
@@ -443,6 +452,9 @@ export * from "./schema-free-workflow.js";
 // 被挡回的用户操作(不依赖 agent 会话的任务通知),表定义 + 建表都在
 // `schema-task-notice.ts`。整份原样再导出,理由同上。
 export * from "./schema-task-notice.js";
+
+// 任务「看过没有」(task_reads,侧栏绿点的已读记录),表定义 + 建表在 `schema-task-reads.ts`。
+export * from "./schema-task-reads.js";
 
 // 任务写过的位置(task_writes,生成物面板的并发裁决用),表定义 + 建表在 `schema-task-writes.ts`。
 export * from "./schema-task-writes.js";
@@ -666,33 +678,13 @@ export const taskBranchReceipts = sqliteTable("task_branch_receipts", {
   targetBranch: text("target_branch").notNull(),
 });
 
-/**
- * 「这条队列被请求推进过,还没有哪一次推进把它做完」—— 一次**已被接受的推进意图**。
- *
- * 为什么不能靠现场推断:推进请求(`tasks.queue_advance_request`)是写在**候选任务**那一行上的,
- * 那一笔写失败时,「这条队列该推进」这件事就只剩进程内存里的一个重试闭包,进程一消失就蒸发。
- * 重启后的恢复只能回头猜 —— 早先那条判据是「候选前面已经有成员落了终态」,可「请求是否已被
- * 接受」跟「现在还看不看得见一个终态前驱」根本不是同一件事:只有队首的队列、以及故障窗口里
- * 前驱被移走/归档的队列,一律猜不出来,于是永久停住(第 1 轮审查发现 3 跨进程复现)。
- *
- * 所以把意图本身落下来:推进一开始就记一行,这一趟不用再重试了才删。
- */
-export const queueAdvanceIntents = sqliteTable("queue_advance_intents", {
-  queueId: text("queue_id").primaryKey(),
-  acceptedAt: text("accepted_at").notNull(),
-  // **这一行代表的是哪一次接受。** 一条队列上同时只有一行意图,但先后被接受的两趟推进不是
-  // 同一份责任:后来那一趟只是借到了旧那行。了结因此必须条件写在这个代次上 —— 早先那趟做完
-  // 自己那份、按 queueId 裸删时,删掉的是**后来**那次接受的恢复责任,重启后于是没人补办
-  // (第 1 轮自由审查 F2 跨进程实测:新队首既无意图也无单任务请求,链永久停住)。
-  // 老库开出来的行没有代次(NULL):谁观察到它、谁就按「代次为 NULL」条件了结,口径在
-  // queue-advance-admission.ts。
-  generation: text("generation"),
-});
+// 推进意图表住在 schema-queue-advance.ts(本文件 700 行闸)。这里转发,导入路径不变。
+export { queueAdvanceIntents } from "./schema-queue-advance.js";
 
 // 接力的三张表住在 schema-handoff.ts（见那份的说明）。这里转发，导入路径不变。
 export { handoffPeers, handoffLocalPeerKeys, handoffLocalKeyRevisions } from "./schema-handoff.js";
 // 哨兵表住在隔壁（见 schema-monitors.ts 的说明）。这里转发，导入路径不变。
-export { monitors, monitorPendingCalls, monitorScanCursors, monitorReclaimDebts } from "./schema-monitors.js";
+export { monitors, monitorReclaimDebts } from "./schema-monitors.js";
 export { taskBackgroundRevisions } from "./schema-task-background.js";
 export { taskDiskCleanups } from "./schema-run-disk.js";
 export { regressionChecks } from "./schema-regression-checks.js";

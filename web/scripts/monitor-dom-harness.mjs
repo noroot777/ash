@@ -36,7 +36,7 @@ export const monitor = (id, taskId, over = {}) => ({
  * 起一份台子:`{ open, idsOf, waitIds, failures, close }`。
  *
  * `open(handler, query)` 开一个新页面并把 `/api/**` 全拦下来 —— `handler` 答得出的那几条按它
- * 的，剩下的落到这里的兜底（列表、恢复状态、日志）。页面里的 `pageerror` 一律记进 `failures`:
+ * 的，剩下的落到这里的兜底（列表、日志）。页面里的 `pageerror` 一律记进 `failures`:
  * 判据在**每次渲染**里同步跑,它一抛整棵树就卸载 —— 那种事只有真壳子看得见。
  *
  * 页面上每一发 `/api/` 请求都由 `trackFetches` 记着（见 wait-until.mjs）：负向断言（「迟到的
@@ -68,11 +68,6 @@ export async function openHarness() {
       if (handler && await handler(route, path)) return;
       const list = /^\/api\/tasks\/([^/]+)\/monitors$/.exec(path);
       if (list) return route.fulfill({ json: [monitor(`m-${list[1]}`, list[1])] });
-      // 恢复状态是单独一条端点（见 server/src/monitor-routes.ts：不动列表的响应形状，
-      // 否则旧 dist 配新 server 会整格崩）。这里一律答「没有待恢复的」。
-      if (/^\/api\/tasks\/[^/]+\/monitors\/recovery$/.test(path)) {
-        return route.fulfill({ json: { pending: false, reasons: [], attempts: 0, exhausted: false } });
-      }
       const log = /^\/api\/monitors\/([^/]+)\/log$/.exec(path);
       if (log) return route.fulfill({ json: { lines: [`${"x".repeat(400)}`, "第二行"], truncated: false } });
       failures.push(`unexpected API request: ${path}`);

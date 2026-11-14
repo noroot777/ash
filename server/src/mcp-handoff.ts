@@ -204,7 +204,7 @@ async function applyReplay(
       const { reportFreeReviewConclusion } = await import("./free-workflow.js");
       try {
         const freeReview = await reportFreeReviewConclusion(taskId, stage, { bySessionRecovery: true,
-          verificationBasis: call.args.verificationBasis, expectedDirectionToken: directionToken, recurs: call.args.recurs });
+          expectedDirectionToken: directionToken, recurs: call.args.recurs });
         if (freeReview) {
           return `自由审查结论（${stage}）当时因 MCP 通道中断没能写回，已补录到第 ${freeReview.round} 轮。`;
         }
@@ -217,8 +217,8 @@ async function applyReplay(
     const task = (await db.select({ workflowMode: tasks.workflowMode }).from(tasks)
       .where(eq(tasks.id, taskId))).at(0);
     if (task?.workflowMode === "free") return null; // 自由任务不写 preset stage
-    await reportTaskStage(taskId, stage, { verificationBasis: call.args.verificationBasis,
-      expectedDirectionToken: directionToken, bySessionRecovery: true, sourceTaskId: sourceSession?.taskId });
+    await reportTaskStage(taskId, stage, { expectedDirectionToken: directionToken, bySessionRecovery: true,
+      sourceTaskId: sourceSession?.taskId });
     return `验证结论（${stage}）当时因 MCP 通道中断没能写回，已从本回合的调用记录中补录。`;
   }
   if (call.tool === "complete_task") {

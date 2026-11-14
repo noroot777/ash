@@ -42,6 +42,7 @@ const { authGate } = await import("../src/auth/middleware.js");
 const { mountAuthRoutes } = await import("../src/auth/routes.js");
 const { isLocalDirectOrigin, isLoopbackHost } = await import("../src/auth/remote-access.js");
 const pairing = await import("../src/auth/remote-pairing.js");
+const { patchOptions: patchImOptions } = await import("../src/im/meta.js");
 
 await ensureSchema();
 
@@ -336,6 +337,16 @@ try {
   assert.equal((await call("/api/auth/pair", { ...rebound, method: "POST", body: {} })).status, 403, "别的域名照旧不认");
   const nameId = (await call("/api/remote-access", { headers: nameHeaders })).body.devices as Device[];
   assert.equal((await call(`/api/remote-access/devices/${nameId.find((d) => d.current)!.id}`, { method: "DELETE" })).status, 200);
+  // 机主填的对外地址(飞书链接指向它)不用先带凭证来过一次:从 ash 自己发出的链接打开就能申请。
+  const viaPublic = { headers: { ...phone.headers, host: `my-mac.tail-x.ts.net:${port}` } };
+  assert.equal((await call("/api/auth/pair", { ...viaPublic, method: "POST", body: {} })).status, 403);
+  assert.ok(!("error" in await patchImOptions({ publicBaseUrl: `http://My-Mac.tail-x.ts.net:${port}/` })));
+  const publicAsk = await call("/api/auth/pair", { ...viaPublic, method: "POST", body: {} });
+  assert.equal(publicAsk.status, 200, `机主配置的对外地址认得 ${publicAsk.text}`);
+  assert.equal((await call(`/api/remote-access/requests/${String(publicAsk.body.id)}/deny`, { method: "POST" })).status, 200);
+  assert.equal((await call("/api/auth/pair", { ...rebound, method: "POST", body: {} })).status, 403, "别的域名照旧不认");
+  assert.ok(!("error" in await patchImOptions({ publicBaseUrl: "" })));
+  assert.equal((await call("/api/auth/pair", { ...viaPublic, method: "POST", body: {} })).status, 403, "清掉之后不再认");
 
   // 拒绝。
   const refusedTicket = await call("/api/auth/pair", { ...phone, method: "POST", body: { name: "阿明的平板" } });

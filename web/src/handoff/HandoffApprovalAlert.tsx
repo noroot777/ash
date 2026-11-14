@@ -3,6 +3,7 @@ import type { HandoffPeer } from "@ash/shared";
 import { Check, Prohibit, ShieldWarning, SpinnerGap } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 const PEERS_CHANGED_EVENT = "ash:handoff-peers-changed";
 const POLL_MS = 4_000;
@@ -30,7 +31,7 @@ const seenLabel = (iso: string): string => {
   if (mins < 1) return "刚刚";
   if (mins < 60) return `${mins} 分钟前`;
   const hours = Math.floor(mins / 60);
-  return hours < 24 ? `${hours} 小时前` : new Date(at).toLocaleString();
+  return hours < 24 ? `${hours} 小时前` : localeDateTime(at);
 };
 
 export function HandoffApprovalAlert({

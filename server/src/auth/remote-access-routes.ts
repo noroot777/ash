@@ -10,6 +10,7 @@ import { getCookie } from "hono/cookie";
 import type { PairClaim, PairCode, PairRequestView, PairTicket, RemoteAccessView, RemoteDeviceView } from "@ash/shared";
 import { actorOf } from "./context.js";
 import { SESSION_COOKIE } from "./middleware.js";
+import { readOptions } from "../im/meta.js";
 import { isMultiUser } from "./mode.js";
 import { LOCAL_ONLY, LOCAL_ONLY_REFUSAL } from "../local-only.js";
 import {
@@ -60,7 +61,8 @@ export function mountRemoteAccessRoutes(api: Hono, issueSessionCookie: (c: Conte
     if (refused) return refused;
     // 只收从认得的名字打开的页面递来的申请(缘由见 remote-access.ts `knownHost`)。
     const host = requestOrigin(c).host;
-    if (!knownHost(host)) {
+    const publicBaseUrl = await readOptions().then((options) => options.publicBaseUrl, () => null);
+    if (!knownHost(host, [publicBaseUrl])) {
       return c.json({
         error: `ash 还不认得「${host ?? ""}」这个地址，从它打开的页面不能直接申请配对。`
           + "改用 IP 地址打开，或者在 ash 那台电脑上「扫码添加」、用访问密钥进来一次 —— 之后这个地址就认得了",

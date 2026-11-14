@@ -15,6 +15,7 @@ import { ensureRegressionEvidenceSchema } from "./schema-regression-evidence.js"
 import { ensureImSchema } from "./schema-im.js";
 import { ensurePageAnnotationSchema } from "./schema-page-annotation.js";
 import { ensureTaskNoticeSchema } from "./schema-task-notice.js";
+import { ensureTaskReadsSchema } from "./schema-task-reads.js";
 import { ensureTaskWritesSchema } from "./schema-task-writes.js";
 
 const dbFile = resolveAshDbFile();
@@ -205,19 +206,6 @@ export async function ensureSchema() {
       created_at TEXT NOT NULL, last_attempt_at TEXT,
       closed_at TEXT, closed_note TEXT, open_members TEXT
     );
-    CREATE TABLE IF NOT EXISTS monitor_pending_calls (
-      task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
-      command TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
-      at TEXT, source_run TEXT NOT NULL DEFAULT '', cli_session_id TEXT,
-      PRIMARY KEY (task_id, session_key, source_run, tool_use_id)
-    );
-    CREATE TABLE IF NOT EXISTS monitor_scan_cursors (
-      task_id TEXT NOT NULL, path TEXT NOT NULL,
-      file_size INTEGER NOT NULL DEFAULT 0, read_offset INTEGER NOT NULL DEFAULT 0,
-      probe INTEGER NOT NULL DEFAULT 0, gaps TEXT NOT NULL DEFAULT '[]',
-      source TEXT, semantics INTEGER,
-      PRIMARY KEY (task_id, path)
-    );
     CREATE TABLE IF NOT EXISTS llm_providers (
       id TEXT PRIMARY KEY, name TEXT NOT NULL,
       protocol TEXT NOT NULL DEFAULT 'openai', base_url TEXT NOT NULL,
@@ -362,7 +350,7 @@ export async function ensureSchema() {
   // 它们彼此之间仍然互斥（旧索引保证过的那部分唯一性一点不丢）。
   //
   // **来源不一定是个 CLI 会话号,也可以是「哪个 run 文件」。** 历史文件里有一类记录从头到尾
-  // 不报 session_id,这时归属只能留未知(claude-monitor-scan.ts)。按 COALESCE(cli,'') 建
+  // 不报 session_id,这时归属只能留未知。按 COALESCE(cli,'') 建
   // 身份的话,两个 run 文件里的同号监听又争同一个唯一键:第二张卡插不进去,而读取位置照常
   // 推到末尾 —— 那张卡再也不会出现(第 8 轮审查 N2)。所以未知归属时拿 `source_run` 顶上:
   // 一个 run 文件 = 一次进程启动 = 一个 CLI 会话,这是手上仅有、也足够的身份依据。
@@ -400,6 +388,7 @@ export async function ensureSchema() {
   await ensureChatSchema(client);
   await ensureFreeWorkflowSchema(client);
   await ensureTaskNoticeSchema(client);
+  await ensureTaskReadsSchema(client);
   await ensureTaskWritesSchema(client);
   await ensureAcceptGateSchema(client);
   await ensureTaskBackgroundSchema(client);

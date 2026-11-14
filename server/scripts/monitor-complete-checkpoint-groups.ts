@@ -4,7 +4,7 @@
 // 为什么跟 `test-monitor-complete-gate.ts` 分开：那份钉的是「什么情况下拦得住」，这份钉的是
 // 「拦下来之后写在任务行上的那段话归谁、什么时候失效」。两份共用同一套台子
 // （`monitor-complete-gate-harness.ts`），由那份脚本按顺序驱动 —— 合在一个文件里是 706 行，
-// 超过单文件 700 行的约定（全局约定；`monitor-checkpoint-edges.ts` 也是这条理由）。
+// 超过单文件 700 行的约定（全局约定）。
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
