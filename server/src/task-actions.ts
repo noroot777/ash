@@ -2,8 +2,8 @@
 // 的 `retryTurnRejection`）→ `GET /tasks/:id/actions`。结论只在这里算、只随请求下发；事实变了的时候
 // 服务端只广播「重取一下」（task-actions-feed.ts），算一遍的永远是开着那个任务的页面发来的这次请求。
 import type { Hono } from "hono";
-import type { PrimaryAction, RetryTurnAction, TaskActions, TaskStatus } from "@ash/shared";
-import { and, eq } from "drizzle-orm";
+import type { PrimaryAction, RetryTurnAction, TaskActions } from "@ash/shared";
+import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { groups, queueItems, tasks } from "./db/schema.js";
 import { actorOf } from "./auth/context.js";
@@ -34,10 +34,10 @@ export async function readActionFacts(row: TaskRow): Promise<ActionFacts> {
   const legacy = await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.reviewOf, row.id));
   const team = row.mode === "team"
     ? {
-      workers: (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.parentId, row.id)))
-        .map((worker) => ({ status: worker.status as TaskStatus })),
-      groupsPaused: (await db.select({ id: groups.id }).from(groups)
-        .where(and(eq(groups.ownerTaskId, row.id), eq(groups.paused, true)))).length > 0,
+      workers: (await db.select({ status: tasks.status, groupPaused: groups.paused }).from(tasks)
+        .leftJoin(groups, eq(groups.id, tasks.groupId))
+        .where(eq(tasks.parentId, row.id)))
+        .map((worker) => ({ status: worker.status, groupPaused: !!worker.groupPaused })),
     }
     : null;
   return {

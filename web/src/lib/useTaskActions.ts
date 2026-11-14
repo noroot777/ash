@@ -53,7 +53,10 @@ async function read(taskId: string, signal: AbortSignal): Promise<boolean> {
     return true;
   } catch (reason) {
     if (catchUpAbortKind(signal, reason) === "stale") return false;
-    return reason instanceof ApiError && reason.status === 404;
+    if (!(reason instanceof ApiError && reason.status === 404)) return false;
+    // 404 是服务端说了算的「没有」：手上那份先前取到的也作废，不留着当真。
+    drop(taskId);
+    return true;
   }
 }
 

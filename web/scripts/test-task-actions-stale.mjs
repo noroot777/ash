@@ -7,7 +7,8 @@
 // ② 收到它的失效：重取一次，两个表面一起变；
 // ③ 没开着的任务收到失效：一发都不取；再打开时取到的是新的那一份；
 // ④ 重取那一发掉了（503）：没有第二条失效、没有重连，它自己隔一会儿再试到读到；
-// ⑤ 「全部重取」：开着的都重取，没开着的不取。
+// ⑤ 「全部重取」：开着的都重取，没开着的不取；
+// ⑥ 先取到过、后来服务端说 404（任务没了、看不见了）：手上那份作废，键不再出，也不再重试。
 // 跑：npm -w web run test:task-actions-stale
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
@@ -25,7 +26,7 @@ const actions = (taskId, kind) => ({
 });
 
 /** 服务端这一侧：每个任务此刻的那一步、要掉几发、各收到几发 GET。 */
-const store = { primary: { "t-1": "run", "t-2": "run" }, failures: 0, hits: { "t-1": 0, "t-2": 0 } };
+const store = { primary: { "t-1": "run", "t-2": "run" }, failures: 0, gone: new Set(), hits: { "t-1": 0, "t-2": 0 } };
 const streams = new Set();
 const emit = (event) => {
   const line = `data: ${JSON.stringify(event)}\n\n`;
@@ -44,6 +45,11 @@ const server = await createServer({
         if (!hit) return next();
         const taskId = decodeURIComponent(hit[1]);
         store.hits[taskId] = (store.hits[taskId] ?? 0) + 1;
+        if (store.gone.has(taskId)) {
+          response.writeHead(404, { "content-type": "application/json" });
+          response.end(JSON.stringify({ error: "not found" }));
+          return;
+        }
         if (store.failures > 0) {
           store.failures -= 1;
           response.writeHead(503, { "content-type": "application/json" });
@@ -127,8 +133,17 @@ try {
   assert.equal(store.hits["t-1"], before["t-1"] + 1, "开着的任务重取一次");
   assert.equal(store.hits["t-2"], before["t-2"], "没开着的任务不取");
 
+  // ⑥ 404：手上那份作废
+  store.gone.add("t-1");
+  emit({ type: "task.actions.stale", taskId: "t-1" });
+  await page.waitForSelector('[data-surface="t-1-head"][data-primary="none"]');
+  assert.equal(await primaryOf("t-1-info"), "none", "两个表面一起作废");
+  const afterGone = store.hits["t-1"];
+  await new Promise((resolve) => setTimeout(resolve, CATCH_UP_RETRY_MS + 1000));
+  assert.equal(store.hits["t-1"], afterGone, "404 不重试");
+
   assert.deepEqual(errors, [], "页面没有报错");
-  console.log("✓ task actions stale: 收到失效就重取、没开着的不取、读失败自己重试到读到");
+  console.log("✓ task actions stale: 收到失效就重取、没开着的不取、读失败自己重试到读到、404 作废不重试");
 } finally {
   for (const stream of streams) stream.end();
   await browser?.close();

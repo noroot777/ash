@@ -8,7 +8,7 @@
 import type { ActionVerdict, PrimaryAction, TaskStatus } from "@ash/shared";
 import { canArchive, canSingleRun } from "@ash/shared";
 import { queueBlockedText, type QueueBlocker } from "@ash/shared/scheduled-message-wait";
-import { isTeamSettled, teamNeverStarted } from "@ash/shared/team";
+import { teamNeverStarted } from "@ash/shared/team";
 import { handoffBlockReason } from "./handoff-guard.js";
 
 /** 判据要的那几列（任务行的子集，回归脚本直接喂字面量）。 */
@@ -41,8 +41,8 @@ export type ActionFacts = {
   freeReviewActive: boolean;
   /** 历史独立审查任务还有一轮没结束。 */
   legacyReviewActive: boolean;
-  /** 团队任务才有：名下执行者各自的状态，和它派活建的分组有没有被停下（停止全组看整个团队）。 */
-  team: { workers: { status: TaskStatus }[]; groupsPaused: boolean } | null;
+  /** 团队任务才有：名下每个执行者的状态、它所在的那一批（分组）有没有被停下。停止全组看整个团队。 */
+  team: { workers: { status: string; groupPaused: boolean }[] } | null;
 };
 
 /** 路由那一侧多带两样：回给调用方的附加字段，和要不要往任务时间线留痕（`noted`）。 */
@@ -140,18 +140,26 @@ export function stopVerdict(f: ActionFacts): Verdict {
 }
 
 /**
- * 停止全组（`POST /tasks/:id/team/halt`；团队任务的「停止」就是它）：调度台在说话、或者还有执行者
- * 在跑 / 排队 / 停在检查点上，才有东西可停。已经停下了（分组暂停着）不再出这颗 —— 那时团队头出的
- * 是「恢复全组」，那是团队壳自己的事。
+ * 这个执行者还有没有要停的：在跑的一律算（停下那一批时它本该已经落成暂停，没落就得真停）；排着队、
+ * 停在检查点上的，只在它那一批还没被停下时才算 —— 那一批停下了，它就已经起不来了。
+ */
+const workerNeedsStop = (worker: { status: string; groupPaused: boolean }) =>
+  worker.status === "running" || ((worker.status === "queued" || worker.status === "paused") && !worker.groupPaused);
+
+/**
+ * 停止全组（`POST /tasks/:id/team/halt`；团队任务的「停止」就是它）。判的是整个团队此刻**还有没有
+ * 要停的**：调度台在说话，或者还有哪个执行者 `workerNeedsStop`。按一批一批看，不按「有没有哪一批
+ * 被停下」看 —— 只停下其中一批时，别的批次照样在跑、在排队，停止全组还得在（第 2 轮审查 F1）。
+ * 恢复全组是团队壳自己的事，两颗键可以同时在。
  */
 export function teamHaltVerdict(f: ActionFacts): Verdict {
   const { task, team } = f;
   if (task.mode !== "team" || !team) return hide("只有团队任务能停止全组", { mode: task.mode });
   if (task.archived) return hide("团队已归档");
   if (teamNeverStarted(task.status as TaskStatus)) return hide("团队还没开工，没有东西可停", { status: task.status });
-  if (team.groupsPaused) return hide("全组已经停下了，要接着干就恢复全组");
-  if (isTeamSettled(task.status === "running" || f.liveProcess, team.workers)) {
-    return hide("调度台和执行者都没有在跑，没有东西可停", { status: task.status });
+  const leadLive = task.status === "running" || f.liveProcess;
+  if (!leadLive && !team.workers.some(workerNeedsStop)) {
+    return hide("调度台和执行者都没有还要停的（在跑的、还会被拉起来的都没有）", { status: task.status });
   }
   return OK;
 }

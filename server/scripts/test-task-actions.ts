@@ -7,7 +7,8 @@
 //     判据,停在「撞车」那一道(回合正在进行)—— 证明它没被判据挡,又不真把 agent 拉起来。
 // 外加失效推送(task.actions.stale):判据依赖的事实一落库就发,谁写的都一样 —— 同队成员换了状态
 // (它自己的行一个字都不变)、归档 / 取回(那两条路不发任何任务事件)、直接写库的队列推进请求、
-// 团队执行者换了状态(停止全组看整个团队)。服务端不记谁在看谁:先取过七十多个别的任务,最早那个
+// 团队执行者换了状态、团队的某一批停下(停止全组看整个团队)、删掉挡路的前置任务(依赖边在删行那一刻
+// 记下)。服务端不记谁在看谁:先取过七十多个别的任务,最早那个
 // 照样收得到(第 1 轮审查 F1–F3)。
 //
 // 覆盖任务 G4J3ykMmJHgC 列出的几处对不上:验证轮没结束时归档、队列挡路时运行、接力出去的任务、
@@ -300,11 +301,41 @@ async function seedCrashedSession(taskId: string): Promise<string> {
   // 执行者排上队:调度台照样闲着,停止全组出来(它看的是整个团队,不只是调度台自己)。
   await expectStale("team-halt", () => db.update(tasks).set({ status: "queued" }).where(eq(tasks.id, "team-halt-w")), "执行者排上队");
   assert.ok((await actionsOf("team-halt")).stop.ok, "执行者在排队时能停止全组");
-  // 分组停下了:那时出的是恢复全组,停止全组不出,路由同一句话。
-  await expectStale("team-halt", () => db.update(groups).set({ paused: true }).where(eq(groups.id, "g-team")), "分组停下");
+  // 只停下另一批(已经收尾的旧批次):这一批的执行者还在排队,停止全组照样在(第 2 轮审查 F1)。
+  await db.insert(groups).values({ id: "g-team-old", projectId: "p1", name: "旧批次", mode: "parallel", paused: false,
+    ownerTaskId: "team-halt", createdAt: stamp });
+  await createTasks([{ ...baseTask, id: "team-halt-old", title: "旧执行者", parentId: "team-halt", groupId: "g-team-old", status: "done" }]);
+  await expectStale("team-halt", () => db.update(groups).set({ paused: true }).where(eq(groups.id, "g-team-old")), "旧批次停下");
+  assert.ok((await actionsOf("team-halt")).stop.ok, "只停下一批时，别的批次还在排队，停止全组还在");
+  // 排着队的那一批也停下了:没有还会被拉起来的,停止全组不出,路由同一句话。
+  await expectStale("team-halt", () => db.update(groups).set({ paused: true }).where(eq(groups.id, "g-team")), "这一批也停下");
   const halted = await actionsOf("team-halt");
-  assert.ok(!halted.stop.ok && halted.stop.hidden, "已经停下的团队不再出停止全组");
+  assert.ok(!halted.stop.ok && halted.stop.hidden, "所有批次都停下了不再出停止全组");
   await assertRefused(halted.stop, "/tasks/team-halt/team/halt");
+  // 删掉团队的一个空分组:分组行没了,它所属的团队照样收到失效(边在删行那一刻记下)。
+  await db.insert(groups).values({ id: "g-team-empty", projectId: "p1", name: "空批次", mode: "parallel", paused: true,
+    ownerTaskId: "team-halt", createdAt: stamp });
+  await expectStale("team-halt", () => db.delete(groups).where(eq(groups.id, "g-team-empty")), "删掉团队的空分组");
+}
+
+// ── 删掉挡路的前置任务:后面那个失败任务收到失效,重试可点(第 2 轮审查 F2) ─────────
+{
+  await createTasks([
+    { ...baseTask, id: "del-blocker", title: "挡路的前置", status: "backlog" },
+    { ...baseTask, id: "del-follower", title: "后面失败的", status: "failed" },
+  ]);
+  await db.insert(queueItems).values([
+    { taskId: "del-blocker", queueId: "q-del", position: 0, createdAt: stamp },
+    { taskId: "del-follower", queueId: "q-del", position: 1, createdAt: stamp },
+  ]);
+  const blocked = await actionsOf("del-follower");
+  assert.ok(blocked.primary && !blocked.primary.ok && !blocked.primary.hidden, "前置还在:重试灰着");
+  // 先删队列成员行再删任务行(删除路由就是这个顺序):删完库里已经查不到这两个曾经同队。
+  await expectStale("del-follower", async () => {
+    await db.delete(queueItems).where(eq(queueItems.taskId, "del-blocker"));
+    await db.delete(tasks).where(eq(tasks.id, "del-blocker"));
+  }, "删掉挡路的前置任务");
+  assert.ok((await actionsOf("del-follower")).primary?.ok, "前置删掉后重试可点");
 }
 
 await releaseTmpDb();

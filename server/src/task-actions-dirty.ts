@@ -5,6 +5,9 @@
 // 绕出环。
 export type TaskActionsDirtyMark =
   | { kind: "task"; taskId: string }
+  /** 这条队列上的所有人（队列挡路看的是别人的状态）。 */
+  | { kind: "queue"; queueId: string }
+  /** 这个分组的所有成员。 */
   | { kind: "group"; groupId: string }
   | { kind: "all" };
 
