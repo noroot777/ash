@@ -169,6 +169,10 @@ export type ServerEvent =
   // （toProject 的 role），广播一份给所有连接会把管理员才看得到的东西推给别人。开着的每个页面
   // 按它重拉项目列表 —— 门禁基准在验收台和项目设置两处都能改，另一个页面得跟上。
   | { type: "project.updated"; projectId: string }
+  // 某个人的「看过没有」记录变了（PUT /task-reads）。只发信号不带载荷：他开着的每个页面（另一台
+  // 设备、飞书内置浏览器）按它重拉 `/task-reads`，侧栏那几颗绿点跟着熄。ownerUserId = 那个人
+  // （自用模式 null），event-filter 只推给他本人。
+  | { type: "task.reads"; ownerUserId: string | null }
   | { type: "task.title"; taskId: string; title: string; updatedAt: string }
   // 提问态变化（§Team）：agent 调 ask_question 提问、或答复把它清空。task.status
   // 只带状态字段，question 不跟着走 —— 少了这条事件，卡片要等下次全量拉取才出现/

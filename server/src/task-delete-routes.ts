@@ -11,7 +11,7 @@ import { db } from "./db/index.js";
 import { latchWaitersOnDelete } from "./pending-after.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { republishWaitsOf } from "./pending-wait.js";
-import { acceptGateRuns, freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, taskMemos, taskNotices, taskWrites, tasks, teamInbound, taskBranchReceipts, taskDiskCleanups } from "./db/schema.js";
+import { acceptGateRuns, freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, taskMemos, taskNotices, taskReads, taskWrites, tasks, teamInbound, taskBranchReceipts, taskDiskCleanups } from "./db/schema.js";
 import { revokeTaskMonitors, settleTaskRevocation } from "./claude-monitor-backfill.js";
 import { clearScanCursorsStatement } from "./claude-monitor-cursors.js";
 import { stopMonitorsForTask } from "./monitor-reclaim.js";
@@ -135,6 +135,8 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     db.delete(noteTasks).where(eq(noteTasks.taskId, taskId)),
     // 任务备忘:只有这个任务一个入口能读到它,任务没了就是再也打不开的孤儿行。
     db.delete(taskMemos).where(eq(taskMemos.taskId, taskId)),
+    // 各人「看过没有」的记录(侧栏绿点):任务没了，这几行再没人会读。
+    db.delete(taskReads).where(eq(taskReads.taskId, taskId)),
     // 会话行、定时计划、队列位也一起收：孤儿 cron 每个 tick 都会被扫到再查不到任务，
     // 队列残位会顶住后续推进（审查实测：删除后 sessionRows/scheduleRows 各剩 1）。
     db.delete(sessions).where(eq(sessions.taskId, taskId)),

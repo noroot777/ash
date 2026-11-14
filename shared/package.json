@@ -6,6 +6,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./task-reads": {
+      "types": "./src/task-reads.ts",
+      "default": "./src/task-reads.ts"
+    },
     "./accept-workspace": {
       "types": "./src/accept-workspace.ts",
       "default": "./src/accept-workspace.ts"

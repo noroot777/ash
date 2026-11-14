@@ -36,7 +36,7 @@ function releaseConnection() {
   connected = false;
 }
 
-function subscribeEvents(listener: EventListener) {
+export function subscribeEvents(listener: EventListener) {
   eventListeners.add(listener);
   ensureConnection();
   return () => {
@@ -45,7 +45,7 @@ function subscribeEvents(listener: EventListener) {
   };
 }
 
-function subscribeConnection(listener: ConnectionListener) {
+export function subscribeConnection(listener: ConnectionListener) {
   connectionListeners.add(listener);
   listener(connected);
   ensureConnection();

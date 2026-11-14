@@ -447,6 +447,9 @@ export * from "./schema-free-workflow.js";
 // `schema-task-notice.ts`。整份原样再导出,理由同上。
 export * from "./schema-task-notice.js";
 
+// 任务「看过没有」(task_reads,侧栏绿点的已读记录),表定义 + 建表在 `schema-task-reads.ts`。
+export * from "./schema-task-reads.js";
+
 // 任务写过的位置(task_writes,生成物面板的并发裁决用),表定义 + 建表在 `schema-task-writes.ts`。
 export * from "./schema-task-writes.js";
 

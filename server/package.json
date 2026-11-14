@@ -20,6 +20,8 @@
     "build": "node ../scripts/check-cleanup-evidence.mjs && tsc -p tsconfig.json",
     "//test:task-memos": "任务备忘的后端:增删改、空白/超长/不存在任务的校验、单条端点一律挂在任务 id 下(换成全局 /memos/:id 就漏在横切闸外)、批量摘要的条数与「最新那条」。",
     "test:task-memos": "tsx scripts/test-task-memos.ts",
+    "//test:task-reads": "任务「看过没有」(侧栏绿点)的后端:按人存、后看的算数、钟快不写到未来、坏请求体不 500、裁到上限、信号只推给本人。",
+    "test:task-reads": "tsx scripts/test-task-reads.ts",
     "test:monitor-wake-data": "tsx scripts/test-monitor-wake-data.ts",
     "test:monitor-delivery-batch": "tsx scripts/test-monitor-delivery-batch.ts",
     "test:monitor-checkpoint-recovery": "tsx scripts/test-monitor-checkpoint-recovery.ts && tsx scripts/test-queue-monitor-hold.ts",

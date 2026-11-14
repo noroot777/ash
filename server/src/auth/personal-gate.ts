@@ -47,6 +47,7 @@ const PERSONAL_COLLECTIONS = new Set([
   "notes", // 随手记
   "settings", // 个人键(实例键另有管理员闸,叠加不冲突)
   "me", // 个人 CLI 环境与配置导入导出(personal-routes.ts 另有一份连读侧一起管)
+  "task-reads", // 看过哪些任务(侧栏绿点):回合凭证没有「看」这个动作,替人标已读就是替人熄灯
 ]);
 
 /**
