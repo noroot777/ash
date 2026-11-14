@@ -1,0 +1,76 @@
+/* 答题卡：有事等你回时，回复框整个长成这张卡。题目、选项、你的话、发送键都在这一个框里。 */
+.rb.is-sheet { border-color: color-mix(in oklab, var(--ink) 26%, var(--line2)); box-shadow: lch(0 0 0 / 0.09) 0 14px 34px -10px, lch(0 0 0 / 0.04) 0 2px 6px; animation: sheet-in 260ms var(--ease-out) backwards; }
+@keyframes sheet-in { from { opacity: 0; transform: translateY(12px); } }
+
+/* 题目：卡上最重的一行字。右边是题号和收起。 */
+.sheet-head { display: flex; align-items: flex-start; gap: 12px; padding: 13px 10px 2px 16px; }
+.sheet-q { flex: 1; min-width: 0; }
+.sheet-q p { margin: 0; font-size: 14px; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
+.sheet-q .sheet-intro { margin-bottom: 3px; color: var(--muted); font-size: 12.500px; font-weight: 400; }
+.sheet-head.is-folded .sheet-q p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet-tools { display: flex; flex: none; align-items: center; gap: 8px; min-height: 22px; }
+.key.sheet-fold[aria-expanded]:not(:hover) { background: none; color: var(--faint); }
+.sheet-fold .icon { transition: transform var(--dur-1) var(--ease-out); }
+.sheet-fold[aria-expanded="false"] .icon { transform: rotate(180deg); }
+.sheet-steps { display: flex; gap: 2px; }
+.sheet-steps button { display: grid; min-width: 22px; height: 22px; place-items: center; border-radius: 6px; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.sheet-steps button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.sheet-steps button.is-answered { color: var(--ink); }
+.sheet-steps button[aria-current="step"] { background: var(--action); color: #fff; font-weight: 500; }
+.sheet-live { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* 选项：一格一个，格子自己就是那颗键。行首的数字是快捷键，选中变成对勾。 */
+.sheet-opts { display: grid; gap: 6px; padding: 9px 12px 3px; }
+.sheet-opts.is-row { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.sheet-opt { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: baseline; gap: 10px; padding: 9px 12px; border-radius: 9px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line2); line-height: 1.55; text-align: left; transition: box-shadow var(--dur-1), background-color var(--dur-1); }
+.sheet-opt:hover:not(:disabled) { box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 38%, var(--line2)); }
+.sheet-opt[aria-pressed="true"] { background: var(--raised); box-shadow: inset 0 0 0 1.5px var(--ink); }
+.sheet-opt:disabled { color: var(--faint); }
+.sheet-opt kbd { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 6px; box-shadow: inset 0 0 0 1px var(--line2); color: var(--muted); font: 11px var(--mono); transform: translateY(2px); transition: background-color var(--dur-1), color var(--dur-1); }
+.sheet-opt[aria-pressed="true"] kbd { background: var(--action); box-shadow: none; color: #fff; }
+.sheet-opt kbd .icon { width: 12px; height: 12px; stroke-width: 2.600; }
+.rb.is-sheet textarea { padding: 9px 16px 2px; }
+.rb.is-sheet .rb-bar { padding-left: 10px; }
+
+/* 选了「让双方辩论」：输入框的位置换成来回数。 */
+.rb-rounds { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 8px 16px 2px; color: var(--muted); }
+.rb-rounds .seg { background: var(--overlay); }
+.rb-rounds .seg button { min-width: 30px; font-variant-numeric: tabular-nums; }
+.rb-rounds small { color: var(--faint); font-size: 12px; }
+
+/* —— 辩论记录：一块自己能滚的底色，左边写谁，右边是那一句。不是气泡，所以不会被当成会话 —— */
+.thread { max-height: 236px; margin: 9px 12px 2px; overflow-y: auto; overscroll-behavior: contain; border-radius: 9px; background: var(--raised); }
+.thread-seg { display: grid; grid-template-columns: 44px minmax(0, 1fr) 22px; gap: 10px; padding: 8px 8px 8px 12px; }
+.thread-seg + .thread-seg { border-top: 1px solid var(--line); }
+.thread-seg.is-new { animation: arrive 260ms var(--ease-out) backwards; }
+.thread-who { color: var(--muted); font-size: 12px; line-height: 21px; }
+.thread-stance { margin: 0 0 2px; color: var(--muted); font-size: 12px; line-height: 21px; }
+.thread-gist { display: block; width: 100%; margin: 0; line-height: 1.65; text-align: left; overflow-wrap: anywhere; }
+.thread-gist em { margin-left: 8px; color: var(--faint); font-size: 12px; font-style: normal; white-space: nowrap; }
+button.thread-gist:hover em, .thread-gist[aria-expanded="true"] em { color: var(--ink); }
+.thread-gist.is-live { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.thread-full { margin: 6px 0 2px; border-left: 1px solid var(--line2); padding-left: 12px; color: var(--muted); animation: lane-unfold var(--dur-2) var(--ease-out) backwards; }
+.thread-full p { margin: 6px 0; line-height: 1.75; }
+.thread-seg .key { opacity: 0; transition: opacity var(--dur-1); }
+.thread-seg:is(:hover, :focus-within) .key { opacity: 1; }
+
+/* 另一种放法：辩论在会话那一栏里，但是单独一块带框的记录，不是左右气泡。 */
+.thread-block { margin: 0 0 20px 30px; }
+.thread-block .thread { max-height: none; margin: 0; background: transparent; box-shadow: inset 0 0 0 1px var(--line2); border-radius: 12px; }
+
+/* 裁完以后整场记录的去处：右侧「审查」格。 */
+.side { position: absolute; z-index: 8; top: 44px; right: 0; bottom: 0; display: flex; flex-direction: column; gap: 10px; width: min(400px, 100%); padding: 12px 14px 18px; overflow-y: auto; border-left: 1px solid var(--line); background: var(--panel); box-shadow: lch(0 0 0 / 0.06) -14px 0 34px; animation: side-in 220ms var(--ease-out) backwards; }
+@keyframes side-in { from { opacity: 0; transform: translateX(18px); } }
+.side header { display: flex; align-items: center; justify-content: space-between; min-height: 24px; font-weight: 500; }
+.side-line { margin: 0 2px; color: var(--muted); font-size: 12.500px; line-height: 1.65; }
+.side-line a { color: inherit; text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; }
+.side .thread { flex: none; max-height: none; margin: 0; }
+
+@media (max-width: 760px) {
+  .sheet-head { padding-left: 12px; }
+  .sheet-opts { padding-left: 8px; padding-right: 8px; }
+  .thread { margin-left: 8px; margin-right: 8px; }
+  .thread-seg { grid-template-columns: 40px minmax(0, 1fr) 22px; gap: 8px; }
+  .thread-block { margin-left: 0; }
+}
+@media (hover: none) { .thread-seg .key { opacity: 1; } }

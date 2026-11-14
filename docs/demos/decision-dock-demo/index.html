@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext x='5' y='25' font-size='28' font-family='sans-serif' font-weight='bold' fill='%23111'%3Ea%3C/text%3E%3C/svg%3E">
-  <title>ash · 卡片和弹窗去哪了</title>
+  <title>ash · 等你回的事是一张答题卡</title>
   <link rel="stylesheet" href="page.css">
   <link rel="stylesheet" href="mock.css">
   <link rel="stylesheet" href="dock.css">
+  <link rel="stylesheet" href="sheet.css">
 </head>
 <body>
   <svg class="icon-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -30,6 +31,9 @@
     <symbol id="i-plane" viewBox="0 0 24 24"><path d="M21 3 3 10.500l7 2.500 2.500 7zM10 13l5-5"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.500"/><path d="m16 16 4.500 4.500"/></symbol>
     <symbol id="i-caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-steer" viewBox="0 0 24 24"><path d="M4 6h11v8H9l-3 3v-3H4zM15 10h5v8h-2v3l-3-3h-4v-2"/></symbol>
     <symbol id="i-redo" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 1 2.300 5.700M4 18v-4.500h4.500"/></symbol>
   </svg>
 
@@ -40,25 +44,28 @@
 
   <main class="page">
     <section class="intro">
-      <h1>等你拍板的事，落在你说话的地方。</h1>
-      <p>提问、裁定、派审查、确认现在各有一张卡或一个弹窗。方案里它们回到回复框和被点的那颗键上；两方辩论本来就是对话，放回会话的左右两边；ash 的提示条缩成所属那颗键上的状态。</p>
+      <h1>等你拍板的事，是回复框上的一张答题卡。</h1>
+      <p>第二版。提问和裁定是同一张卡：回复框自己长高，最上面是题目，中间是一格一格的选项，下面还是你打字的地方和那颗发送键。辩论只在裁定卡里，裁完进右侧的审查记录，会话里不多一个字。排着的输入是回复框上方一行，引导会话和撤回都在。</p>
     </section>
 
     <section class="controls" aria-label="演示开关">
       <div class="control"><span>场面</span><div class="seg" data-key="scene">
-        <button type="button" data-value="ask">它问你</button><button type="button" data-value="rule">等你裁定</button><button type="button" data-value="review">派审查</button><button type="button" data-value="confirm">确认</button><button type="button" data-value="notice">提示条</button>
+        <button type="button" data-value="ask">它问你</button><button type="button" data-value="rule">等你裁定</button><button type="button" data-value="queue">排着的输入</button><button type="button" data-value="plan">计划模式</button>
       </div></div>
       <div class="control"><span>画法</span><div class="seg" data-key="style">
         <button type="button" data-value="old">现在</button><button type="button" data-value="new">方案</button>
       </div></div>
       <div class="control" data-for="ask"><span>问题</span><div class="seg" data-key="askKind">
-        <button type="button" data-value="one">一个</button><button type="button" data-value="many">三个</button>
+        <button type="button" data-value="one">一个</button><button type="button" data-value="many">三个</button><button type="button" data-value="none">没给选项</button>
+      </div></div>
+      <div class="control" data-for="ask"><span>时刻</span><div class="seg" data-key="askMoment">
+        <button type="button" data-value="ready">等你答</button><button type="button" data-value="settling">它还没停稳</button>
       </div></div>
       <div class="control" data-for="rule"><span>时刻</span><div class="seg" data-key="moment">
-        <button type="button" data-value="open">刚驳回</button><button type="button" data-value="debating">辩论中</button><button type="button" data-value="debated">辩完了</button>
+        <button type="button" data-value="open">刚驳回</button><button type="button" data-value="debating">辩论中</button><button type="button" data-value="debated">辩完了</button><button type="button" data-value="ruled">裁完了</button>
       </div></div>
-      <div class="control" data-for="notice"><span>哪一条</span><div class="seg" data-key="notice">
-        <button type="button" data-value="plan">计划模式</button><button type="button" data-value="ctx">没开 1M</button><button type="button" data-value="queue">排着的输入</button><button type="button" data-value="moved">已接力走</button>
+      <div class="control" data-for="rule"><span>辩论放哪</span><div class="seg" data-key="place">
+        <button type="button" data-value="sheet">裁定卡里</button><button type="button" data-value="feed">会话里单独一块</button>
       </div></div>
       <button type="button" class="play" id="reset"><svg class="icon"><use href="#i-redo"/></svg>重来</button>
     </section>
@@ -73,6 +80,7 @@
   <script src="data.js"></script>
   <script src="parts.js"></script>
   <script src="dock.js"></script>
+  <script src="sheet.js"></script>
   <script src="scenes.js"></script>
   <script src="census.js"></script>
   <script src="app.js"></script>

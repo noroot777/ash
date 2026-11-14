@@ -23,6 +23,11 @@
     return `<div class="me${fresh ? " is-new" : ""}"${id ? ` data-me="${id}"` : ""}><div class="me-bubble">${esc(text)}</div>${keys ? `<span class="keys">${keys}</span>` : ""}</div>`;
   }
 
+  /** 答完的那张答题卡：题目和你的答案一起留在你这颗气泡里。pairs = [[题目, 答案], …] */
+  function qa(pairs, { fresh = false } = {}) {
+    return `<div class="me${fresh ? " is-new" : ""}"><div class="me-bubble is-qa">${pairs.map(([q, a]) => `<p class="qa-q">${esc(q)}</p><p class="qa-a">${esc(a)}</p>`).join("")}</div></div>`;
+  }
+
   /** 审查者的气泡。text 可点开 lane；live = 它正在说。 */
   function reviewer({ id, text, head, lane, open = false, live = false, say = false, tight = false, keys = "" }) {
     const inner = live ? `<span class="run-dot"></span><span>${esc(text)}</span>` : `<span>${esc(text)}</span>`;
@@ -39,5 +44,5 @@
 
   const key = (act, iconId, label, extra = "") => `<button type="button" class="key" data-act="${act}" aria-label="${label}" title="${label}" ${extra}>${icon(iconId)}</button>`;
 
-  window.P = { esc, icon, paras, turn, unfold, me, reviewer, foot, running, key };
+  window.P = { esc, icon, paras, turn, unfold, me, qa, reviewer, foot, running, key };
 })();

@@ -4,7 +4,7 @@
   const SCENES = window.SCENES;
   const stage = document.getElementById("stage");
   const moves = document.getElementById("moves");
-  const ui = { scene: "rule", style: "new", askKind: "one", moment: "open", notice: "plan" };
+  const ui = { scene: "ask", style: "new", askKind: "one", askMoment: "ready", moment: "open", place: "sheet" };
   let st = null;
   let timers = [];
   let wantFocus = false;
@@ -15,6 +15,7 @@
     later(fn, ms) { timers.push(setTimeout(fn, ms)); },
     render: () => { wantBottom = true; paint(); },
     focus() { wantFocus = true; },
+    bottom() { wantBottom = true; },
   };
 
   function reset() {
@@ -36,6 +37,7 @@
       ${old ? old.top : ""}
       <div class="feed" id="feed"><div class="feed-col" id="feed-col"></div></div>
       <div class="reply" id="reply"></div>
+      <div id="side"></div>
     </div>${old && old.note ? `<p class="frame-note">${esc(old.note)}</p>` : ""}`;
   }
 
@@ -47,9 +49,14 @@
     const before = new Set([...stage.querySelectorAll("[data-anim]")].map((el) => el.dataset.anim));
     if (!stage.querySelector(".app") || old) stage.innerHTML = frame(old);
     const feed = document.getElementById("feed");
+    // 辩论记录自己能滚：重画以后停在原处，来了新的一段才跟到底。
+    const threadTop = wantBottom ? null : document.getElementById("thread")?.scrollTop;
     document.getElementById("head-tools").innerHTML = headTools();
     document.getElementById("feed-col").innerHTML = scene().feed(st, ui);
     document.getElementById("reply").innerHTML = old ? `${old.rail}${old.dock}` : scene().dock(st, ui);
+    document.getElementById("side").innerHTML = !old && scene().side ? scene().side(st, ui) : "";
+    const thread = document.getElementById("thread");
+    if (thread) thread.scrollTop = threadTop ?? thread.scrollHeight;
     stage.querySelectorAll("[data-anim]").forEach((el) => { if (before.has(el.dataset.anim)) el.style.animation = "none"; });
     st.fresh = false;
     st.freshSeg = null;
@@ -62,7 +69,7 @@
     grow(text);
   }
 
-  const grow = (text) => { if (!text) return; text.style.height = "auto"; text.style.height = `${Math.min(150, Math.max(52, text.scrollHeight))}px`; };
+  const grow = (text) => { if (!text) return; text.style.height = "auto"; text.style.height = `${Math.min(150, Math.max(+text.dataset.min || 52, text.scrollHeight))}px`; };
 
   function table() {
     moves.innerHTML = `<h2>原来的每一样去了哪</h2><table><tbody>${scene().moves.map(([from, to]) => `<tr><th>${esc(from)}</th><td>${esc(to)}</td></tr>`).join("")}</tbody></table>`;
@@ -72,6 +79,7 @@
     const text = document.getElementById("rb-text");
     if (text && scene().sync) scene().sync(st, text.value);
     if (name === "toggle") { if (st.open.has(data.id)) st.open.delete(data.id); else st.open.add(data.id); }
+    else if (name === "fold") st.folded = !st.folded;
     else if (name !== "noop") {
       if (name === "send") wantBottom = true;
       scene().act(name, data, st, api);
@@ -100,7 +108,7 @@
     if (event.target.closest("a[href='#']")) event.preventDefault();
     const target = event.target.closest("[data-act]");
     if (target && !target.disabled) { act(target.dataset.act, target.dataset); return; }
-    if (!event.target.closest(".pop, .rb") && scene().dismiss && scene().dismiss(st)) paint();
+    if (!event.target.closest(".pop, .rb, .side") && scene().dismiss && scene().dismiss(st)) paint();
   });
   stage.addEventListener("submit", (event) => event.preventDefault());
   stage.addEventListener("input", (event) => {
@@ -108,9 +116,7 @@
     if (scene().sync) scene().sync(st, event.target.value);
     grow(event.target);
     const send = stage.querySelector(".rb-send");
-    if (send && !send.classList.contains("has-label")) {
-      send.disabled = !(ui.scene === "ask" && !st.sent ? st.answers.some((value) => value.trim()) : event.target.value.trim());
-    }
+    if (send) send.disabled = !scene().canSend(st, event.target.value, ui);
   });
   document.addEventListener("keydown", (event) => {
     if (ui.style === "old" || event.isComposing || !stage.querySelector(".app")) return;
@@ -128,7 +134,7 @@
       return;
     }
     if (!inText && scene().digit && /^[1-9]$/.test(event.key) && !event.metaKey && !event.ctrlKey && !event.altKey && !event.target.closest("input, textarea")) {
-      const hit = scene().digit(+event.key, st);
+      const hit = scene().digit(+event.key, st, ui);
       if (hit) { event.preventDefault(); act(hit.name, hit.data); }
     }
   });
