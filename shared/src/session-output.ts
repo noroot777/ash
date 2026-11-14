@@ -239,7 +239,9 @@ export function segmentFingerprint(seg: ConvSeg): string {
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
   const at = seg.kind === "agent" ? "" : seg.at ?? "";
-  return `${seg.kind}:${at}:${seg.text.length}:${hash.toString(16)}`;
+  // 带身份的那段把身份也算进去：两回合说了一模一样的话，指纹也不同，删这一段不会删到那一段。
+  const identity = typeof seg.seq === "number" ? `:${seg.seq}:${seg.turnStartedAt ?? ""}` : "";
+  return `${seg.kind}:${at}:${seg.text.length}:${hash.toString(16)}${identity}`;
 }
 
 /** trace 里不随删除摘掉的两种记账事件：回合身份 run、用量 usage。 */

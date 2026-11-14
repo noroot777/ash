@@ -35,7 +35,7 @@ export function assembleTimeline(
   const early = earlyInputs(splits, sessions, timeline);
   for (const split of splits) {
     const legacy: ConversationItem[] = [];
-    appendPersistedSession(legacy, { session: split.session, segments: split.legacySegments, trace: split.legacyTrace }, persistedTurns);
+    appendPersistedSession(legacy, { session: split.session, segments: split.legacySegments, indices: split.legacyIndices, trace: split.legacyTrace }, persistedTurns);
     for (const item of legacy) placed.push({ item, time: timeOf(item) });
     const recorded: ConversationItem[] = [];
     assembler.persisted(split, recorded, early.get(split.session.id));

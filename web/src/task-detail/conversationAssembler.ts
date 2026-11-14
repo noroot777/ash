@@ -43,6 +43,11 @@ type Bubble = {
   steps: StepRecord[];
   readSide: SessionTraceEntry[];
   incremental: boolean;
+  /**
+   * 排版时为了展示裁掉的正文末尾空白。实时增量按盘上原文的字数接（见 applyProse），所以接下一块之前
+   * 先把它补回去 —— 不然 `Hello ` + `world` 会接成 `Helloworld`、标题吞掉下一段。
+   */
+  trimmedTail: string;
 };
 
 // 开气泡的那几种（记账的 run / usage、跟 .md 重复的 trace 正文不开）。
@@ -92,7 +97,7 @@ export function createAssembler(sessions: readonly Session[]) {
       segments: [],
     };
     const key = keyOf(record.sessionId, record.turn, after);
-    const bubble: Bubble = { item, key, sessionId: record.sessionId, turn: record.turn, after, chunks: [], steps: [], readSide: [], incremental: !persistedPhase };
+    const bubble: Bubble = { item, key, sessionId: record.sessionId, turn: record.turn, after, chunks: [], steps: [], readSide: [], incremental: !persistedPhase, trimmedTail: "" };
     bubbles.set(key, bubble);
     out.push(item);
     for (const step of pending.get(key) ?? []) addStep(bubble, step);
@@ -100,8 +105,23 @@ export function createAssembler(sessions: readonly Session[]) {
     return bubble;
   }
 
+  /**
+   * 排过版的气泡要接实时增量了：先把排版时裁掉的末尾空白补回正文（整颗与末段两处）。末段若只挂着
+   * 执行过程、没有正文，那段空白落在更早一段的末尾、跟下一块之间本来就隔着段界，不补（补进去反倒让
+   * 一个空段「有内容」）。
+   */
+  function resumeRaw(bubble: Bubble): void {
+    const tail = bubble.trimmedTail;
+    bubble.trimmedTail = "";
+    const segment = bubble.item.segments.at(-1);
+    if (!tail || !segment?.markdown) return;
+    bubble.item.markdown += tail;
+    segment.markdown += tail;
+  }
+
   function addStep(bubble: Bubble, step: StepRecord): void {
     if (!bubble.incremental) { bubble.steps.push(step); return; }
+    resumeRaw(bubble);
     const { item } = bubble;
     const explicit = step.envelope && liveRun(step.envelope);
     if (explicit) item.run = explicit;
@@ -126,6 +146,7 @@ export function createAssembler(sessions: readonly Session[]) {
     const key = keyOf(record.sessionId, record.turn, inputBefore(record.sessionId, record.seq)?.seq ?? null);
     const bubble = bubbles.get(key) ?? open(record, out);
     if (bubble.incremental) {
+      resumeRaw(bubble);
       if (fresh) appendAgentText(bubble.item, fresh);
       const explicit = record.envelope && liveRun(record.envelope);
       if (explicit) bubble.item.run = explicit;
@@ -176,6 +197,8 @@ export function createAssembler(sessions: readonly Session[]) {
     const raw = live.map((chunk) => chunk.raw).join("");
     const markdown = raw.trim();
     item.markdown = markdown;
+    // 只有正文末尾那一段的空白要留着接下一块；正文整段是空白时什么都不留（也就没有可接的位置）。
+    bubble.trimmedTail = markdown ? raw.slice(raw.trimEnd().length) : "";
     item.segments = contentSegments(ordered, markdown, `${item.id}:segment`);
     item.run = traceRun(ordered) ?? item.run;
     item.reviewer = reviewerOf(traceVerifyRound(ordered), session?.role);

@@ -8,7 +8,7 @@
 //   ③ trace 盘上那一行带着 `origin` 不认（那是读的时候补出来的才有的）
 //   ④ 按身份删一截执行过程：指纹对不上（页面那份旧了）就拒绝，不多删一条
 //   ⑤ 恢复号段只认记录元数据：正文里的 `"seq":…` 示例、不安全的整数不算；读不出来、号顶到上限，这一回合整个
-//      不绑定（不带号）；绑定以后领号不会失败，一回合不会写到一半忽然不带号
+//      不带号，但正式流照样登记成写者、回合中间的旁注从它写；绑定以后领号不会失败，一回合不会写到一半忽然不带号
 //   ⑥ trace 只在这条会话有正式流时带号（团队调度台、duet 那种没走身份协议的写者整条都不带）；带身份的回合里
 //      执行诊断块不留下没号的正文
 //   ⑦ 谁是写者在锁里定：正式流登记时排在锁后面的旁注从正式流写；短命流不顶掉正式流的登记
@@ -158,10 +158,20 @@ function liveTurn(sessionId: string) {
   mkdirSync(sessionTranscriptPath(TASK, broken), { recursive: true }); // .md 那个路径是个目录：读不出来
   assert.equal(nextRecordSeq(TASK, broken), null, "读不出来：不发号，不从 0 接着发");
   const out = createWriteStream(join(stage, "degraded.md"));
-  assert.equal(await claimTranscript(out, { taskId: TASK, sessionId: broken, turnStartedAt: TURN }), false, "号段接不回来：这一回合不绑定");
+  assert.equal(await claimTranscript(out, { taskId: TASK, sessionId: broken, turnStartedAt: TURN }), false, "号段接不回来：这一回合不发号");
   assert.equal(writeTurn(out, { t: "system", agent: "codex", text: "x" }, at(3)), null, "这一回合的记录不带身份");
-  assert.equal(liveTranscript(broken), null, "也不登记成写者");
+  assert.equal(liveTranscript(broken), out, "但正式流照样登记成这条会话的写者");
+  // 回合中间来了旁注：从正式流写、照它的样子不带号。读故障这时恢复了也一样 —— 旁注不另开流去发号。
+  const during = await appendTranscriptLine(TASK, { id: broken, role: "single" }, (stream) => writeTurn(stream, { t: "system", agent: "codex", text: "旁注", aside: true }, at(4)));
+  assert.equal(during, null, "旁注从正式流写，不带号");
+  rmSync(sessionTranscriptPath(TASK, broken), { recursive: true, force: true });
+  const recovered = await appendTranscriptLine(TASK, { id: broken, role: "single" }, (stream) => writeTurn(stream, { t: "system", agent: "codex", text: "又一条旁注", aside: true }, at(5)));
+  assert.equal(recovered, null, "读故障恢复了，这一回合里的旁注也不从半路改成带号");
+  assert.equal(appendSessionTrace(TASK, broken, TURN, { kind: "tool", name: "bash", detail: "ls" }, at(6)), null, "trace 也不带号");
   await new Promise<void>((resolve) => out.end(resolve));
+  assert.equal(liveTranscript(broken), null, "回合收工以后不再是写者");
+  assert.deepEqual(parseSessionSpans(readFileSync(join(stage, "degraded.md"), "utf8")).map(({ seg }) => [seg.text, seg.seq ?? null]),
+    [["x", null], ["旁注", null], ["又一条旁注", null]], "这一回合的记录全都写进正式流、全都不带号");
   forgetRecordSeq(TASK, broken);
 
   // 绑定以后领号不会失败：盘上的文件这时读不出来了、内存里的号段被清了（模拟），这一回合照样每条都带号。
@@ -184,7 +194,7 @@ function liveTurn(sessionId: string) {
   forgetTaskRecordSeq(TASK);
   writeFileSync(path, sentinel({ t: "user", agent: "codex", text: "删了重来", seq: 1, at: at(0) }));
   assert.equal(nextRecordSeq(TASK, S), 2, "删任务时整组丢掉：再碰这条会话从盘上重新接");
-  ok("恢复号段只认 sentinel 与 trace 元数据上的安全整数；接不回来这一回合整个不绑定、不带号；绑定以后不会中途断号；删任务时整组丢掉");
+  ok("恢复号段只认 sentinel 与 trace 元数据上的安全整数；接不回来这一回合整个不带号、正式流照样是写者（旁注从它写）；绑定以后不会中途断号；删任务时整组丢掉");
 }
 
 // ── ⑥ trace 只在有正式流时带号 ───────────────────────────────────────────────

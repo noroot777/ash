@@ -93,11 +93,13 @@ function mergeTurnChunk(target: AgentItem, chunk: AgentItem): void {
  */
 export function appendPersistedSession(
   items: ConversationItem[],
-  { session, segments, trace }: { session: Session; segments: readonly ConvSeg[]; trace: SessionTraceEntry[] },
+  // indices：每一段在整份 .md 里的原始序号（删除拿它指名）。带身份的段分走以后这里拿到的不再是整份，
+  // 下标不能当序号用；缺省 = 拿到的就是整份。
+  { session, segments, indices, trace }: { session: Session; segments: readonly ConvSeg[]; indices?: readonly number[]; trace: SessionTraceEntry[] },
   persistedTurns: PersistedTurnTimes,
 ): void {
   const origin = (index: number): PersistedOrigin => ({
-    sources: [{ sessionId: session.id, index, fingerprint: segmentFingerprint(segments[index]!) }],
+    sources: [{ sessionId: session.id, index: indices?.[index] ?? index, fingerprint: segmentFingerprint(segments[index]!) }],
     ...(segments[index]!.deleted ? { deleted: true as const } : {}),
   });
   const sessionTrace = normalizedPersistedTrace(trace, session);

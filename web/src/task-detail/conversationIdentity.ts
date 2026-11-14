@@ -45,6 +45,8 @@ export type SplitSession = {
   session: Session;
   /** 老样子写的那几段（.md 里没号的，按原来的先后；整条会话都没有号就是全部）。 */
   legacySegments: ConvSeg[];
+  /** 它们各自在整份 .md 里的序号（删除按它指名，不能拿 legacySegments 的下标代替）。 */
+  legacyIndices: number[];
   legacyTrace: SessionTraceEntry[];
   /** 带身份的，按号排好。 */
   records: IdentityRecord[];
@@ -103,10 +105,11 @@ export function splitPersistedSession(
 ): SplitSession {
   const { spans, agentEnds } = parseSessionTranscript(output);
   const legacySegments: ConvSeg[] = [];
+  const legacyIndices: number[] = [];
   const records: IdentityRecord[] = [];
   const turns = new Set<string>();
   spans.forEach(({ seg }, index) => {
-    if (typeof seg.seq !== "number") { legacySegments.push(seg); return; }
+    if (typeof seg.seq !== "number") { legacySegments.push(seg); legacyIndices.push(index); return; }
     const seq = seg.seq;
     const turn = seg.turnStartedAt ?? null;
     if (turn) turns.add(turn);
@@ -138,7 +141,7 @@ export function splitPersistedSession(
     else legacyTrace.push(entry);
   }
   records.sort((left, right) => (left.seq ?? 0) - (right.seq ?? 0));
-  return { session, legacySegments, legacyTrace, records, readSide };
+  return { session, legacySegments, legacyIndices, legacyTrace, records, readSide };
 }
 
 /** 实时那一路的一句输入（服务端播回来、带号的那种）。 */

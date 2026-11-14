@@ -19,8 +19,9 @@
 // 实时事件都不带身份，trace 单独带号只会让页面以为整条会话都换了读法。
 //
 // **身份是按回合声明的，每条记录自己说明**（读的一头只认这个，不从会话的历史或这一份快照里有没有正文去猜）：
-// - 一回合带不带身份，在绑定那一刻定一次（`bindTranscript` 接号段，接不回来就不绑定，这一整个回合
-//   照老样子写）；绑定以后领号不会失败（session-seq.ts），一回合不会写到一半忽然不带号。
+// - 一回合带不带身份，在绑定那一刻定一次（`bindTranscript` 接号段，接不回来这一整个回合照老样子写，
+//   但正式流照样登记成写者）；绑定以后领号不会失败（session-seq.ts），一回合不会写到一半忽然不带号，
+//   也不会被回合外的追加者从半路改成带号。
 // - 带身份的回合里，每一条记录（.md 的 sentinel、正文标记行、trace 的每一行）都带号；实时事件也一样，
 //   不是记录的那几种（收口、水位、执行器簿记）不带号，信封上标 `identityTurn`（single-run-voice.ts），
 //   说明它属于带身份的回合。
@@ -52,23 +53,25 @@ const bindings = new WeakMap<NodeJS.WritableStream, Binding>();
 const live = new Map<string, NodeJS.WritableStream>();
 
 /**
- * 绑定一条流：之后从它写下的记录都带身份。号段接不回来就不绑定（返回 false）：这条流写的整个回合都
- * 不带身份。`register: false` = 回合外追加者那种短命流，只发号、不登记成这条会话的写者。正式流别直接
- * 调这个，走 claimTranscript（在锁里登记）。
+ * 绑定一条流。两件事分开：**登记成这条会话的写者**（`register`，正式流才登记；回合外追加者那种短命流
+ * 不登记）与**能不能发号**（号段接得回来才能，返回 true）。号段接不回来时正式流照样登记成写者 —— 这一
+ * 回合在跑，回合外的旁注就得从它写（照它的样子不带号），不能因为发不了号就当这条会话空着、另开一条流
+ * 自己去发号，把同一回合写成一半带号一半不带。正式流别直接调这个，走 claimTranscript（在锁里登记）。
  */
 export function bindTranscript(
   out: NodeJS.WritableStream,
   owner: { taskId: string; sessionId: string; turnStartedAt?: string | null },
   { register = true }: { register?: boolean } = {},
 ): boolean {
+  if (register) {
+    live.set(owner.sessionId, out);
+    const release = () => { if (live.get(owner.sessionId) === out) live.delete(owner.sessionId); };
+    out.once("finish", release);
+    out.once("close", release);
+  }
   const seq = recordSeq(owner.taskId, owner.sessionId);
   if (!seq) return false;
   bindings.set(out, { taskId: owner.taskId, sessionId: owner.sessionId, turnStartedAt: owner.turnStartedAt ?? null, prose: null, seq });
-  if (!register) return true;
-  live.set(owner.sessionId, out);
-  const release = () => { if (live.get(owner.sessionId) === out) live.delete(owner.sessionId); };
-  out.once("finish", release);
-  out.once("close", release);
   return true;
 }
 

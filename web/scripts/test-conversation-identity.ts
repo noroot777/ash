@@ -12,7 +12,8 @@
 //   ④ 页面发的那一句凭 clientKey 认回去，不比原文
 //   ⑤ 边界：分路逐条按记录自己说的算 —— 没走身份协议的写者（团队调度台）整条不带号、走老读法，快照之后没号的
 //      实时正文照常画；回合先动手后说话时快照里只有带号的执行过程，照样归身份这一路；接不回号段的那一回合整个
-//      照老样子写，开着页面和刷新以后都画在它自己那一回合；
+//      照老样子写，开着页面和刷新以后都画在它自己那一回合（中间的旁注也不劈开它），两路混着时删除按整份 .md
+//      的原始序号、同文不误删；中途打开时快照末尾的空白照原文接回；
 //      output 与 trace 不是同一刻读的、中间那句插话只在实时那一路，步骤照样归插话之后；快照里「在等上游」
 //      被之后的实时输出和此刻的会话列表覆盖；有身份与没身份的实时事件按到达顺序排
 //
@@ -22,7 +23,7 @@ import { chmodSync, createWriteStream, mkdtempSync, readFileSync, rmSync } from 
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { parseSessionSpans, traceSpanFingerprint } from "@ash/shared/session-output";
+import { parseSessionSpans, segmentFingerprint, traceSpanFingerprint } from "@ash/shared/session-output";
 import type { SessionTraceEntry } from "../src/lib/api.ts";
 import { buildConversationItems, type ConversationItem, type TimelineEntry } from "../src/task-detail/conversationModel.ts";
 import { awaitingUpstream } from "../src/task-detail/conversationSegments.ts";
@@ -326,7 +327,8 @@ ok("落盘重建、实时到达、中途打开（含重叠与半截正文）三�
   chmodSync(sessionTranscriptPath(TASK, S), 0o200);
   const second = turn(S, T(37), arrivals);
   chmodSync(sessionTranscriptPath(TASK, S), 0o600);
-  second.input("第二回合", T(37)).say("降级后的第二回合回复。").tool("bash", T(37, 30));
+  // 回合中间插进一条旁注：服务端从这一回合的正式流写（照它的样子不带号），不另开流去发号。
+  second.input("第二回合", T(37)).say("降级后的").note("预约审查已登记", T(37, 10)).say("第二回合回复。").tool("bash", T(37, 30));
   await second.end(T(38));
   const ends = { [T(35)]: T(36), [T(37)]: T(38) };
   const row = sessionRow(S, ends);
@@ -336,14 +338,67 @@ ok("落盘重建、实时到达、中途打开（含重叠与半截正文）三�
   const watched = buildConversationItems([], [row], arrivals);
   const refreshed = buildConversationItems([{ session: row, ...read(S) }], [row], []);
   for (const [name, items] of [["开着页面", watched], ["刷新以后", refreshed]] as const) {
-    const [reply] = replyOf(items, "降级后的第二回合回复");
+    const [reply] = replyOf(items, "降级后的");
     assert.ok(reply, `${name}：第二回合的回复画出来了`);
+    assert.equal(compact(reply!.markdown), "降级后的第二回合回复。", `${name}：旁注不把它劈成两颗`);
     assert.equal(replyOf(items, "第一回合的回复")[0]!.markdown.includes("降级"), false, `${name}：没接进第一回合那颗`);
     assert.ok((reply!.at ?? "") >= T(37), `${name}：归第二回合（从第二回合起）`);
   }
   // 结束时刻：刷新以后照回合行（开着页面时老读法那一路的实时气泡本来就等刷新才补收口时刻，跟升级前一样）。
-  assert.equal(replyOf(refreshed, "降级后的第二回合回复")[0]!.endedAt, T(38), "刷新以后收在第二回合的结束时刻");
-  ok("接不回号段的那一回合整个照老样子写：开着页面和刷新以后都画在自己那一回合，不接进前一回合");
+  assert.equal(replyOf(refreshed, "降级后的")[0]!.endedAt, T(38), "刷新以后收在第二回合的结束时刻");
+  ok("接不回号段的那一回合整个照老样子写：开着页面和刷新以后都画在自己那一回合，不接进前一回合；中间的旁注不劈开它");
+}
+
+{
+  // 两路混着的会话里删一条：带号的段分走以后，老读法那几段报的仍是它们在整份 .md 里的序号；两回合
+  // 说了一模一样的话，删哪条就是哪条。
+  const S = "s-same";
+  const arrivals: TimelineEntry[] = [];
+  const first = turn(S, T(40), arrivals);
+  first.input("第一回合", T(40)).say("收到");
+  await first.end(T(41));
+  forgetRecordSeq(TASK, S);
+  chmodSync(sessionTranscriptPath(TASK, S), 0o200);
+  const second = turn(S, T(42), arrivals);
+  chmodSync(sessionTranscriptPath(TASK, S), 0o600);
+  second.input("第二回合", T(42)).say("收到");
+  await second.end(T(43));
+  const row = sessionRow(S, { [T(40)]: T(41), [T(42)]: T(43) });
+  const { output, trace } = read(S);
+  const spans = parseSessionSpans(output);
+  const replies = agents(buildConversationItems([{ session: row, output, trace }], [row], [])).filter((item) => compact(item.markdown) === "收到");
+  assert.equal(replies.length, 2, "前提：两颗一模一样的回复，一颗带号、一颗不带");
+  const proseAt = spans.flatMap(({ seg }, index) => seg.kind === "agent" ? [index] : []);
+  for (const [which, reply] of replies.entries()) {
+    const targets = reply.sources!.flatMap((source) => "index" in source ? [{ index: source.index, fingerprint: source.fingerprint }] : []);
+    assert.deepEqual(targets.map((target) => target.index), [proseAt[which]], `第 ${which + 1} 颗报的是它在整份 .md 里的序号`);
+    const left = parseSessionSpans(redactTranscript(output, targets).text).filter(({ seg }) => seg.kind === "agent" && !seg.deleted);
+    assert.deepEqual(left.map(({ seg }) => seg.seq ?? null), which === 0 ? [null] : [spans[proseAt[0]!]!.seg.seq], `删第 ${which + 1} 颗只删它`);
+  }
+  assert.notEqual(segmentFingerprint(spans[proseAt[0]!]!.seg), segmentFingerprint(spans[proseAt[1]!]!.seg), "带号那段的指纹算上身份，跟同文的另一段不同");
+  ok("两路混着的会话按原始序号删、同文不误删");
+}
+
+{
+  // 正文写到一处空白时打开页面：快照为了展示裁掉末尾空白，后到的那一块照原文接上，不黏在一起。
+  const cases: [string, string][] = [["Hello ", "world"], ["# 标题\n\n", "正文"], ["```js\nconst a = 1;\n", "const b = 2;\n```"]];
+  for (const [index, [prefix, rest]] of cases.entries()) {
+    const S = `s-space-${index}`;
+    const arrivals: TimelineEntry[] = [];
+    const run = turn(S, T(45), arrivals);
+    run.input("写", T(45)).say(prefix);
+    await run.drain();
+    const snap = { output: readFileSync(sessionTranscriptPath(TASK, S), "utf8"), trace: [] as SessionTraceEntry[] };
+    const cut = arrivals.length;
+    run.say(rest).tool("edit", T(45, 30));
+    await run.end(T(46));
+    const row = sessionRow(S, { [T(45)]: T(46) });
+    const [opened] = agents(buildConversationItems([{ session: row, ...snap }], [row], arrivals.slice(cut)));
+    const [whole] = agents(buildConversationItems([{ session: row, ...read(S) }], [row], []));
+    assert.equal(opened!.markdown.trim(), (prefix + rest).trim(), `${JSON.stringify(prefix)}：接上的正文跟原文一样`);
+    assert.equal(opened!.segments.map((segment) => segment.markdown).join("").trim(), whole!.markdown.trim(), `${JSON.stringify(prefix)}：各段拼起来也一样`);
+  }
+  ok("中途打开时快照末尾的空白照原文接回，后到的正文不黏进前一个词、标题或代码行");
 }
 
 {
