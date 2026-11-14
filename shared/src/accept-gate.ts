@@ -265,4 +265,14 @@ export type AcceptGateState = {
   baselineTarget?: { branch: string; commit: string } | null;
   /** 按当前这一档,这一按会在门禁之前被拒的理由(没含目标分支 / 预演冲突);null = 不拦。 */
   baselineBlock?: string | null;
+  /**
+   * 同一件事的结构化那一份,验收台据它摆那一行和它的出路。`handedOffAt` = 这一份预演冲突已经
+   * 交给任务的时刻(任务分支头与目标分支头都没动才认);null = 还没交。
+   */
+  baselineIssue?: {
+    reason: "accept_gate_target_behind" | "merge_conflict" | "accept_gate_preview_unavailable";
+    targetBranch: string;
+    conflictFiles: string[];
+    handedOffAt: string | null;
+  } | null;
 };

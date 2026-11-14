@@ -49,6 +49,7 @@ import { probeGateEntryWithTarget } from "./accept-gate-entry-target.js";
 import { gateBaselineMatches, gateBaselineNotice, gateDriftBesidesTree, resolveGateBaseline, type GateBaselineBlock,
   type GateBaselinePlan } from "./accept-gate-baseline.js";
 import { handOffConflict } from "./accept-conflict.js";
+import { noteConflictHandoff } from "./accept-gate-conflict-registry.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type GateRow = typeof acceptGateRuns.$inferSelect;
@@ -133,7 +134,7 @@ export async function acceptGateCheck(
   // 门禁基准（项目级）：拦在一切复用与登记之前 —— 「没含目标分支」「预演冲突」这两种在跑之前就
   // 说得清，不该先烧十几分钟再告诉用户。明确跳过门禁的那一按不受它管：什么都不跑，就无所谓测哪棵。
   const baseline = opts.intent === "skip" ? null : await resolveGateBaseline(task, project, head, { cwd, dependencies: source.dependencies });
-  if (baseline?.block) return await baselineRefusal(task, baseline.block);
+  if (baseline?.block) return await baselineRefusal(task, baseline.block, head);
   const plan = baseline?.plan ?? null;
 
   // 门禁绿了之后系统自己接着做完的那一次：带着凭据进来，不再重判。
@@ -211,10 +212,11 @@ export async function acceptGateCheck(
  * 基准拦下来的那一按。冲突那一种**跟真合并撞冲突同一个口径**：同样的 reason / 冲突文件，同样把来源
  * 任务叫醒去解（交接在锁释放之后才真的发出，见 accept-conflict.ts）。
  */
-async function baselineRefusal(task: TaskRow, block: GateBaselineBlock): Promise<AcceptFailure> {
+async function baselineRefusal(task: TaskRow, block: GateBaselineBlock, head: string | null): Promise<AcceptFailure> {
   await appendTaskTimeline(task.id, alertLine(`验收未完成：${block.error}`));
   const conflictHandoff = block.reason === "merge_conflict"
     ? await handOffConflict(task, { ...block, preview: true }) : null;
+  if (conflictHandoff) noteConflictHandoff(task.id, head, block.targetCommit);
   return { accepted: false, httpStatus: 409, taskId: task.id, reason: block.reason, error: block.error,
     status: task.status, targetBranch: block.targetBranch, sourceBranch: block.sourceBranch,
     conflictFiles: block.conflictFiles, ...(conflictHandoff ? { conflictHandoff } : {}) };

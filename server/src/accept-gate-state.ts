@@ -13,6 +13,7 @@ import { gateDependencies, gateSnapshotPath, gateSourceMatches, readGateSource }
 import { gateBaselineMatches, resolveGateBaseline } from "./accept-gate-baseline.js";
 import { decodePhysical, type GatePhysical } from "./accept-gate-physical.js";
 import { decodeGateEntryProbe, gateEntryNote } from "./accept-gate-entry.js";
+import { conflictHandedAt } from "./accept-gate-conflict-registry.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
@@ -130,6 +131,28 @@ export async function acceptGateRunOf(taskId: string, runId: string): Promise<Ac
   return row && row.taskId === taskId ? gateView(row) : null;
 }
 
+/**
+ * 按项目当前的门禁基准，这一按此刻会不会在门禁之前被拦（没含目标分支 / 预演冲突）。状态接口和
+ * 「让任务解决」那条直达入口共用：两边判的必须是同一件事。
+ *
+ * 合并预览档要知道这次快照借哪几个依赖目录（与 acceptGateCheck 同一个入参）。这里只读登记
+ * （gateDependencies：树与文件系统），**不**读完整源码身份 —— 后者要比对整个工作区；不是这一档时
+ * 一行都不读。配了准备命令就一个都不借（accept-gate-source 的 GateSource.prepared）。
+ */
+export async function judgeGateBaseline(task: TaskRow, project: ProjectRow) {
+  const baseline = normalizeAcceptGateBaseline(project.acceptGateBaseline);
+  const prepared = !!acceptGatePrepareOf(project);
+  const head = await gateHead(task, project.repoPath);
+  const cwd = await existingTaskWorkspacePath(task, project.repoPath);
+  let sourceError: string | null = null;
+  const borrowed = !(baseline === "merge_preview" && cwd && head) ? undefined
+    : prepared ? { cwd, dependencies: [] }
+    : await gateDependencies(cwd, head).then(planned => ({ cwd, dependencies: planned.dependencies }),
+      (error) => { sourceError = String(error); return undefined; });
+  const judged = await resolveGateBaseline(task, project, head, borrowed);
+  return { head, cwd, judged, sourceError };
+}
+
 /** 界面要的那一份：这个项目设没设、上一次跑成什么样、这次结果还作不作数、凭据是什么。 */
 export async function acceptGateState(taskId: string): Promise<AcceptGateState> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -146,20 +169,15 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   const frozen = task.archived || task.stage === "accepted" || task.stage === "merged";
   const baseline = normalizeAcceptGateBaseline(project?.acceptGateBaseline);
   // 门禁基准此刻要对照的目标与它会不会拦下这一按。已验收的任务没有「下一按」，不去读 git。
-  const head = frozen || !project ? null : await gateHead(task, project.repoPath);
-  // 合并预览档的基准要知道这次快照借哪几个依赖目录（与 acceptGateCheck 同一个入参）。这里只读
-  // 登记（gateDependencies：树与文件系统），**不**读完整源码身份 —— 后者要比对整个工作区；没设门禁、
-  // 或者不是这一档时一行都不读。
-  const cwd = !frozen && project ? await existingTaskWorkspacePath(task, project.repoPath) : null;
-  let sourceError: string | null = null;
-  // 配了准备命令就一个都不借（accept-gate-source 的 GateSource.prepared）。
-  const borrowed = !(command && baseline === "merge_preview" && cwd && head) ? undefined
-    : prepared ? { cwd, dependencies: [] }
-    : await gateDependencies(cwd, head).then(planned => ({ cwd, dependencies: planned.dependencies }),
-      (error) => { sourceError = String(error); return undefined; });
-  const judged = command && project && !frozen ? await resolveGateBaseline(task, project, head, borrowed) : null;
+  const { head, cwd, judged, sourceError: dependencyError } = frozen || !project || !command
+    ? { head: null, cwd: !frozen && project ? await existingTaskWorkspacePath(task, project.repoPath) : null, judged: null, sourceError: null }
+    : await judgeGateBaseline(task, project);
+  let sourceError: string | null = dependencyError;
   const target = judged?.plan ?? judged?.block ?? null;
-  const baselineView = { baseline, baselineBlock: judged?.block?.error ?? null,
+  const block = judged?.block ?? null;
+  const baselineView = { baseline, baselineBlock: block?.error ?? null,
+    baselineIssue: block ? { reason: block.reason, targetBranch: block.targetBranch, conflictFiles: block.conflictFiles ?? [],
+      handedOffAt: block.reason === "merge_conflict" ? conflictHandedAt(task.id, head, block.targetCommit) : null } : null,
     baselineTarget: target?.targetBranch && target.targetCommit ? { branch: target.targetBranch, commit: target.targetCommit } : null };
   const latestRow = await latestRun(taskId);
   if (!latestRow) return { command, prepare, running: null, latest: null, basis, unavailable, sourceError, executionNotice, ...baselineView };
