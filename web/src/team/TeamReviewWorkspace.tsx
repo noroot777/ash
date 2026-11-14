@@ -10,6 +10,7 @@ import { parseAttachmentText } from "../task-detail/utils.ts";
 import { ReviewDiffViewer } from "../review/ReviewDiffViewer.tsx";
 import { useWorkspaceCommitVersion } from "../review/workspaceCommit.ts";
 import { AcceptanceControls } from "../acceptance/AcceptanceControls.tsx";
+import { routeTargetOf } from "../acceptance/acceptTarget.ts";
 import { AcceptRoute, type RouteData } from "../acceptance/AcceptRoute.tsx";
 import { ChangesLeadNote, ChangesNote } from "../acceptance/ChangesNotice.tsx";
 import { useTaskFacts } from "../acceptance/taskFacts.ts";
@@ -36,7 +37,7 @@ function routeOf(task: TaskListItem, data: ReviewData): RouteData {
   const session = data.sessions[data.sessions.length - 1];
   return {
     source: data.diff.sourceBranch || data.branch || session?.branch || "项目当前分支",
-    target: data.diff.targetBranch || task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "验收时确定",
+    target: routeTargetOf(task, data.diff.targetBranch),
     commits: data.commits,
     diff: data.diff,
   };

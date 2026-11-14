@@ -21,6 +21,7 @@ import { ago } from "./gateLine.ts";
 import { PendingMergeCheck } from "./PendingMergeCheck.tsx";
 import { useAcceptanceVerification } from "./useAcceptanceVerification.ts";
 import { refreshTaskFacts, useTaskFacts } from "./taskFacts.ts";
+import { acceptTargetOf, sameBranch } from "./acceptTarget.ts";
 import { useAcceptCommitDefault } from "./useAcceptCommitDefault.ts";
 import { useReviewFacts, type FactRow } from "./useReviewFacts.ts";
 import { AutoCommitCheck, WorkspaceCheck } from "./WorkspaceCheck.tsx";
@@ -95,19 +96,20 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
   const selectionBlock = worktreeChecks ? selectionBlockOf(plan.view, checked) : null;
   const family = worktreeChecks && checked.length > 0 && plan.view
     ? [plan.view.task, ...plan.view.descendants.filter((row) => checked.includes(row.taskId))] : [];
-  // 顶行的走向与 diff 来自重读回来的那一版，确认层的步骤来自宿主手上的任务：两份事实各有来源，合入目标
-  // 对不上就不许确认（确认层会写着另一个分支，而真正合到哪由服务端当前的任务决定）。
+  // 顶行的走向与 diff 按 routeTarget 算，这一按真正合到 acceptTarget（acceptTarget.ts，确认层也写它）：
+  // 对不上、或者还说不出合到哪，就不许确认。计划还在读时主按钮本来就在转圈，等它读到再判。
   const steps = acceptanceSteps(task, true);
-  const taskTarget = task.mergeTargetBranch || task.worktreeBase || null;
-  const targetMismatch = !settled && steps.kind === "merge" && !!routeTarget && !!taskTarget
-    && branchName(routeTarget) !== branchName(taskTarget);
+  const acceptTarget = acceptTargetOf(task, plan.view?.task);
+  const targetMismatch = !settled && steps.kind === "merge" && !!routeTarget && (!worktreeChecks || !!plan.view)
+    && (!acceptTarget || !sameBranch(routeTarget, acceptTarget));
   const factBlocks: FactRow[] = [
     ...(archived ? [{ key: "archived", tone: "idle" as const, text: "已归档，只读" }] : []),
     ...(inFlight && !settled ? [{ key: "in-flight", tone: "live" as const, text: "任务在跑" }] : []),
     ...(block && !settled ? [{ key: "host", tone: "block" as const, text: block.text }] : []),
     ...(taskFacts.error ? [{ key: "task-facts", tone: "block" as const, text: `改动之后的任务状态没读到：${taskFacts.error}`, retry: retryTaskFacts }] : []),
     ...(targetMismatch ? [{ key: "target-mismatch", tone: "block" as const,
-      text: `合入目标没对上：改动按 ${routeTarget} 算，验收会合到 ${taskTarget}`, retry: retryTaskFacts }] : []),
+      text: acceptTarget ? `合入目标没对上：改动按 ${routeTarget} 算，验收会合到 ${acceptTarget}，换一次合入目标再验收`
+        : "合入目标还没确定", retry: retryTaskFacts }] : []),
     ...facts.blocks,
   ];
   const blocked = factBlocks.length > 0
@@ -143,7 +145,8 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
     steps, gate: confirmGate, runChoice, commitChoosable, commitChoice, commitDefault: commitDefault.value,
     count: family.length ? merging.length : 1, verification: verifyState,
   });
-  const shownSteps = acceptanceSteps(task, view.commit);
+  const described = acceptanceSteps(task, view.commit);
+  const shownSteps = described.kind === "merge" && acceptTarget ? { ...described, target: acceptTarget } : described;
   // 关掉就回到默认：这几勾的语义都是「这一次」。
   useEffect(() => {
     if (!confirming) { setRunChoice(null); setCommitChoice(null); setFamilyAck(false); verification.setAcknowledged(false); }
@@ -293,6 +296,3 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
     </div>
   );
 }
-
-/** 分支名比对时去掉 `refs/heads/` 前缀（服务端解析合入目标时同样这么归一）。 */
-const branchName = (name: string) => name.trim().replace(/^refs\/heads\//, "");

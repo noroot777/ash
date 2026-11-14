@@ -3,6 +3,7 @@ import { GitBranch, X } from "@phosphor-icons/react";
 import { IconButton } from "../components/IconButton.tsx";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import { AcceptanceControls } from "../acceptance/AcceptanceControls.tsx";
+import { routeTargetOf } from "../acceptance/acceptTarget.ts";
 import { AcceptRoute } from "../acceptance/AcceptRoute.tsx";
 import { ChangesLeadNote, ChangesNote } from "../acceptance/ChangesNotice.tsx";
 import { useTaskFacts } from "../acceptance/taskFacts.ts";
@@ -93,7 +94,7 @@ export function TaskReviewWorkspace({
   const shown = data ?? changes.previous;
   const route = data && {
     source: data.diff.sourceBranch || data.branch || "项目当前分支",
-    target: data.diff.targetBranch || task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "验收时确定",
+    target: routeTargetOf(task, data.diff.targetBranch),
     commits: data.commits,
     diff: data.diff,
   };

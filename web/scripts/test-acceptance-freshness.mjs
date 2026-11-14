@@ -15,8 +15,11 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 // ⑥ 动作成功之后的读取失败（taskFacts.ts / useRowRead.ts）：改了合入目标而任务读不回来，主按钮锁着、那一行
 //    给重试；释放目录之后的核对读失败落在本行「待核对」，不跟着确认框一起消失。
 // ⑦ 那一次任务读取一直不回来（第 3、4 轮审查）：主按钮转圈，退出再打开照样在等；宿主收到一份早于这次写入
-//    的中间版本（比动作前新、目标还是旧的）不许放行，顶行与确认层目标对不上那一行也拦着；宿主收到更新的
+//    的中间版本（比动作前新、目标还是旧的）不许放行；宿主收到更新的
 //    快照时重发一次读取，由那一次的结果放行；再挂住一次，到期限转成「读取超时」并给重试，重试读到了才放开。
+// ⑧ 确认层与一致性核对用的是**这一按真正合到的目标**（第 5 轮审查）：上次验收失败冻结了 main、配置目标为空、
+//    项目检出换成了 other —— 顶行和 diff 按 other 算，验收会合到 main：拦住，且菜单里选 other 是一次真改动，
+//    换完两处对齐才放开；配置为空、由服务端解析出目标时，确认层写的是解析出来的那个分支，不是「未确定」。
 const web = await startWebServer();
 
 const DIFF = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,1 +1,1 @@\n-old\n+new\n";
@@ -54,7 +57,8 @@ function api(store) {
     if (url.pathname === "/api/projects/proj-1/branches") return reply({ branches: ["main", "other"], current: "main" });
     const post = /^\/api\/tasks\/([^/]+)\/(merge-target|release-workspace)$/.exec(url.pathname);
     if (post && request.method() === "POST") {
-      if (post[2] === "merge-target") store.target = request.postDataJSON().branch;
+      // 换合入目标会清掉上次验收失败时冻结的目标（task-branch-routes.ts 同样这么做）。
+      if (post[2] === "merge-target") { store.target = request.postDataJSON().branch; store.frozen = null; }
       else store.released = true;
       store.updatedAt = new Date().toISOString();
       return reply({ ok: true });
@@ -74,7 +78,11 @@ function api(store) {
         return reply({ id: taskId, title: taskId, projectId: "proj-1", status: "done", stage: "awaiting_acceptance", mode: "single",
           useWorktree: true, archived: false, updatedAt: store.updatedAt, ...(taskId === "single-task" ? { mergeTargetBranch: store.target } : {}) });
       }
-      if (what === "branch-plan") return reply({ task: entry(taskId), descendants: taskId === "single-task" ? [child] : [] });
+      // 计划里的目标与验收同口径：上次验收失败冻结的目标（frozen）优先，否则是配置的那一个。
+      if (what === "branch-plan") {
+        return reply({ task: entry(taskId, taskId === "single-task" ? { targetBranch: store.frozen ?? store.target } : {}),
+          descendants: taskId === "single-task" ? [child] : [] });
+      }
       if (what === "accept-gate") return reply({ command: null, running: null, latest: null, basis: null });
       if (what === "acceptance-check") return reply({ verification: null });
       if (what === "scm") return reply(scm(taskId));
@@ -96,7 +104,7 @@ function api(store) {
   };
 }
 
-const freshStore = () => ({ target: "main", updatedAt: "2026-11-02T01:24:00.000Z", failChanges: false, failWorkspace: false, failPending: false, failTask: false, released: false, pending: "staged",
+const freshStore = () => ({ target: "main", frozen: null, updatedAt: "2026-11-02T01:24:00.000Z", failChanges: false, failWorkspace: false, failPending: false, failTask: false, released: false, pending: "staged",
   replies: [], taskFetches: {}, unexpected: [] });
 
 let browser;
@@ -272,10 +280,10 @@ try {
     const fetched = store.taskFetches["single-task"] ?? 0;
     await page.evaluate(() => window.bumpSingle({ mergeTargetBranch: "main", updatedAt: "2026-11-10T00:00:00.000Z" }));
     const mismatch = single.locator('.acc-check[data-check="target-mismatch"]');
-    await mismatch.filter({ hasText: "改动按 other 算，验收会合到 main" }).waitFor();
+    for (let i = 0; i < 100 && (store.taskFetches["single-task"] ?? 0) <= fetched; i += 1) await page.waitForTimeout(50);
+    assert.ok((store.taskFetches["single-task"] ?? 0) > fetched, "宿主快照变新时要重发一次读取，由那一次结算");
     await page.waitForTimeout(200);
     assert.equal(await mainDisabled(), true, "中间版本不许放开确认");
-    assert.ok((store.taskFetches["single-task"] ?? 0) > fetched, "宿主快照变新时要重发一次读取，由那一次结算");
     // 网络恢复，宿主又收到一份更新的快照：重发的那一次读到了，才放开。
     store.failTask = false;
     await page.evaluate(() => window.bumpSingle({ mergeTargetBranch: "other" }));
@@ -300,7 +308,47 @@ try {
     await page.close();
   }
 
-  console.log("acceptance freshness: versioned route/diff with stale marking and retry, stale rows keep a retry, pending merge reconciles on focus, short-window layers stay in view, team rejections return to the conversation, a hung task read is only released by a read issued after the write (an intermediate snapshot keeps it locked) or times out into a retry");
+  // ⑧ 冻结目标 + 空配置目标。
+  {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 1400 } });
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const store = freshStore();
+    store.frozen = "main";
+    store.target = "other";
+    await page.route((url) => url.pathname.startsWith("/api/"), api(store));
+    await page.goto(fixture);
+    const single = page.locator('[data-host="single"]');
+    const route = single.locator(".acc-bar .acc-route");
+    const main = single.locator(".acc-bar button.acc-btn.is-primary");
+    const mismatch = single.locator('.acc-check[data-check="target-mismatch"]');
+    await page.evaluate(() => window.bumpSingle({ mergeTargetBranch: null, worktreeBase: null, acceptedTargetBranch: "main" }));
+    await route.locator(".acc-target, .acc-dst").filter({ hasText: "other" }).waitFor();
+    await mismatch.filter({ hasText: "改动按 other 算，验收会合到 main" }).waitFor();
+    await page.waitForTimeout(200);
+    assert.equal(await main.isDisabled(), true, "顶行与实际验收目标对不上时不许确认");
+    // 菜单里勾着的是真正要合到的 main；选 other 是一次真改动，服务端清掉冻结的目标。
+    await single.locator(".acc-target").click();
+    assert.equal(await page.getByRole("menuitemradio", { name: "main" }).getAttribute("aria-checked"), "true");
+    await page.getByRole("menuitemradio", { name: "other" }).click();
+    await page.getByRole("menuitemradio", { name: "other" }).waitFor({ state: "detached" });
+    assert.equal(store.frozen, null, "选 other 要真发出去");
+    await mismatch.waitFor({ state: "detached" });
+    await page.waitForFunction(() => !document.querySelector('[data-host="single"] .acc-bar button.acc-btn.is-primary')?.disabled);
+    // 配置目标为空、由服务端解析：确认层写解析出来的分支。
+    await page.evaluate(() => window.bumpSingle({ mergeTargetBranch: null, worktreeBase: null, acceptedTargetBranch: null }));
+    await page.waitForFunction(() => !document.querySelector('[data-host="single"] .acc-bar button.acc-btn.is-primary')?.disabled);
+    await main.click();
+    const layer = page.getByRole("dialog", { name: "确认验收" });
+    await layer.waitFor();
+    assert.match(await layer.innerText(), /→\s*other/, "确认层写的是这一按真正合到的分支");
+    assert.doesNotMatch(await layer.innerText(), /未确定/);
+    assert.deepEqual(store.unexpected, [], "页面发了未声明的请求");
+    assert.deepEqual(errors, [], "渲染报错");
+    await page.close();
+  }
+
+  console.log("acceptance freshness: versioned route/diff with stale marking and retry, stale rows keep a retry, pending merge reconciles on focus, short-window layers stay in view, team rejections return to the conversation, a hung task read is only released by a read issued after the write (an intermediate snapshot keeps it locked) or times out into a retry, the confirm layer and the route check use the target this acceptance really merges into");
 } finally {
   await browser?.close();
   await web.close();

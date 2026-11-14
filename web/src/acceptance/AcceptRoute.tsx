@@ -7,6 +7,7 @@ import { formatInstant } from "../task-detail/utils.ts";
 import { useBranchPlan } from "../review/useBranchPlan.ts";
 import { AcceptLayer } from "./AcceptLayer.tsx";
 import { refreshTaskFacts } from "./taskFacts.ts";
+import { acceptTargetOf } from "./acceptTarget.ts";
 
 export type RouteData = {
   source: string;
@@ -21,7 +22,9 @@ const TASK_BRANCH = /^(ash|harness)\//;
  * 第一行左半：任务分支 → 目标分支 · N 提交 · N 文件 +a −d。「我在看谁的什么改动」一句话说完，
  * 下面直接是 diff。
  *
- * 目标分支在没验收之前点得开（换合入目标，带指纹，和服务端「依赖与范围没变」那道校验同一口径）；
+ * 目标分支在没验收之前点得开（换合入目标，带指纹，和服务端「依赖与范围没变」那道校验同一口径）。菜单里
+ * 勾着的「当前」是这一按真正合到的那个（acceptTarget.ts）：上次验收失败冻结了 main、顶行按 other 算时，
+ * 选 other 是一次真改动（服务端会清掉冻结的目标），而不是「没变」；
  * 验收之后不再能点，后面跟着那次合并的区间（验收时冻结，后来分支再动也不改它）。
  * 「N 提交」点开是提交清单：diff 是分支相对基点的整体改动，不按单个提交切，所以每一条跳去 Git
  * 工作台看它自己的 diff，基点垫在最底下。
@@ -67,7 +70,7 @@ export function AcceptRoute({ task, data, disabled, onTaskUpdated, notify }: {
         onClick={() => setLayer(layer === "commits" ? null : "commits")}>{data.commits.length} 提交</button>
       <span className="acc-stat">{files.length} 文件 <b className="acc-add">+{add}</b> <b className="acc-del">−{del}</b></span>
       {layer === "target" && entry && (
-        <TargetMenu anchorRef={targetRef} taskId={task.id} projectId={entry.projectId} current={data.target}
+        <TargetMenu anchorRef={targetRef} taskId={task.id} projectId={entry.projectId} current={acceptTargetOf(task, entry) ?? data.target}
           source={entry.sourceBranch ?? data.source} fingerprint={entry.fingerprint} disabled={locked}
           onClose={() => setLayer(null)}
           onChanged={async (branch) => {
