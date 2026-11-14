@@ -1,5 +1,5 @@
-// 代码根与数据根的**纯解析**，不读也不冻结任何环境变量（那是 paths.js 的事），给需要在
-// paths.js 加载之前就算出数据根的地方用。
+// 代码根与数据根的**纯解析**：只看传进来的环境，不在加载时读 process.env（那是 paths.js 的事），
+// 所以要在 paths.js 冻成常量之前、或者替别的环境算数据根的地方也能用。
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 

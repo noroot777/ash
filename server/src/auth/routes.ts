@@ -109,6 +109,8 @@ export function mountAuthRoutes(api: Hono): void {
     // 换出来的是这台设备自己的凭证 —— 机主在名册里看得到它、能单独移除。没有 users 行,
     // 所以没有 user 可回。
     if (!(await isMultiUser())) {
+      // 本机自用模式没有「放一台设备进来」这回事(身份判据见 remote-access.ts 的 ownerProof)。
+      if (LOCAL_ONLY) return c.json({ error: LOCAL_ONLY_REFUSAL }, 403);
       if (!remoteKeyMatches(key ?? "")) {
         return c.json({ error: "访问密钥不对。现在这一把在 ash 所在那台机器的「设置 → 默认规则 → 远程访问」里" }, 401);
       }

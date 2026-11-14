@@ -72,7 +72,17 @@ export function AuthGate({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
-  if (route?.kind === "claim") return <ClaimPage token={route.token} onDone={leaveRoute} />;
+  // 本机自用模式没有邀请这回事:领取 / 加入链接一律回工作台。领取页因此要等身份状态到了
+  // 再出(多一个 RTT),否则本机模式下会先闪一下「领取你的 ash 账号」。
+  const ignoreRoute = route !== null && state?.localOnly === true;
+  useEffect(() => {
+    if (ignoreRoute) {
+      window.history.replaceState(null, "", "/");
+      setRoute(null);
+    }
+  }, [ignoreRoute]);
+
+  if (route?.kind === "claim" && state && !ignoreRoute) return <ClaimPage token={route.token} onDone={leaveRoute} />;
 
   if (!state) {
     // 连不上是**持久态**,得把话说全,所以照旧给整屏外壳。等待则相反(见上)。
@@ -112,7 +122,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     // 项目邀请链接只发给已有账号的人)。
     return <LoginPage pendingJoin={route?.kind === "join" ? route.token : null} onDone={refresh} />;
   }
-  if (route?.kind === "join") return <ProjectJoinPage token={route.token} onDone={leaveRoute} />;
+  if (route?.kind === "join" && !ignoreRoute) return <ProjectJoinPage token={route.token} onDone={leaveRoute} />;
 
   // 首启向导的后半段(供应商 / 执行器 / 项目)。它在 Provider **里面** —— 那三步都要
   // 读「我是谁」(多人模式下新建项目的路径前缀锁死在自己的目录里),而读 context 的前提
