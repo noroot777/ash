@@ -8,7 +8,8 @@
 // 不必记得去挂。
 //
 // 落状态那一笔(status.ts)只交代「这一笔该不该推进队列、该不该扫」:锁空着就当场做,锁占着
-// 就记一笔欠账(推进意图当场落库,见 `owedAdvance`),放锁时兑现。扫描每次放锁都做:它只读、幂等,判定与去重都在 pending-messages.ts。
+// 就记一笔欠账(推进意图当场落库,见 `owedAdvance`),放锁时兑现。扫描每次放锁都做:它只读、
+// 幂等,判定与去重都在 pending-messages.ts。
 // 30 秒兜底 tick(schedules.ts)不归这里:定时消息到期靠它,它也是最后一道保险。
 import { isTurnClaimed, onTurnReleased } from "./turn-lock.js";
 
