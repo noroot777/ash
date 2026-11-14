@@ -30,11 +30,11 @@
 // 所以每轮至多记一条合并说明：这一轮起了几个、它们现在全没了、以及唤醒该走哪条路。时间线
 // 这条是 `aside`（agent 看不见，见 task-timeline.ts 文件头），所以它只是说给用户听的记账，
 // 不构成对下一个 agent 的指令。
-import { and, desc, eq, gte, inArray, isNull, or } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
 import { CLAUDE_MONITOR_ENDED_REASON } from "@ash/shared/monitor-claude";
 import { bus } from "./bus.js";
 import type { MonitorRunOrigin } from "./claude-monitor-origin.js";
-import { isTaskRevoked } from "./claude-monitor-revoked.js";
+import { admitWrite } from "./claude-monitor-write-queue.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, sessions } from "./db/schema.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
@@ -72,6 +72,13 @@ const noticeScope = (origin: MonitorRunOrigin, openedAt: string) =>
   origin.runPath ? eq(monitors.sourceRun, origin.runPath) : gte(monitors.startedAt, openedAt);
 
 /**
+ * 写库队列没能记上的那几笔（积压溢出 / 注定写不成，见 claude-monitor-write-queue.ts）。
+ * `starts` 是确知起来过、却没能记成卡片的监听个数，**算进说明里的总数**；`updates` 是已有卡片
+ * 没能记上的状态变化，只说明「个别结局可能不准」。
+ */
+export type ReapMissed = { taskId: string; starts: number; updates: number };
+
+/**
  * 收这一代的尾。调用点是**流结束**那一刻（`executors/claude-stream.ts` 的 finally →
  * `ClaudeMonitorTrace.finishAll`）。
  *
@@ -81,9 +88,26 @@ const noticeScope = (origin: MonitorRunOrigin, openedAt: string) =>
  */
 export async function reapClaudeMonitors(
   cliSessionId: string, origin: MonitorRunOrigin, openedAt: string,
+  /**
+   * 流结束的那一刻。收尾通常就在这一刻跑，这道上界什么也不排除；库坏着、收尾排在写库队列
+   * 里晚了几分钟才跑时，同一条会话的下一代可能已经起了新的监听 —— 没有 run 凭据的会话
+   * （上面两个口径都退回「整条会话」/「流开始之后」）靠它才不会把那些一起收掉、一起数进去。
+   */
+  until?: string,
+  opts: {
+    /**
+     * 这一摊收尾的稳定身份。收尾排在写库队列上，**说明没写成就整笔重试**（返回 false 不算写成，
+     * 否则一次短暂故障就让这句话永久缺失）；带着它，重试时已经落下的那几条不会再落一遍。
+     */
+    eventKey?: string;
+    missed?: ReapMissed;
+  } = {},
 ): Promise<void> {
   if (dbClient.closed || !cliSessionId) return;
-  const ours = and(eq(monitors.kind, "claude"), eq(monitors.cliSessionId, cliSessionId));
+  const ours = and(
+    eq(monitors.kind, "claude"), eq(monitors.cliSessionId, cliSessionId),
+    until ? lte(monitors.startedAt, until) : undefined,
+  );
 
   const live = await db
     .select({ id: monitors.id, taskId: monitors.taskId })
@@ -103,7 +127,8 @@ export async function reapClaudeMonitors(
     .select({ taskId: monitors.taskId, status: monitors.status })
     .from(monitors)
     .where(and(ours, noticeScope(origin, openedAt)));
-  if (!all.length) return;
+  const { missed } = opts;
+  if (!all.length && !missed?.starts) return;
   const byTask = new Map<string, { total: number; finished: number }>();
   for (const row of all) {
     const entry = byTask.get(row.taskId) ?? { total: 0, finished: 0 };
@@ -113,9 +138,23 @@ export async function reapClaudeMonitors(
     if (row.status === "exited") entry.finished += 1;
     byTask.set(row.taskId, entry);
   }
+  if (missed?.starts) {
+    const entry = byTask.get(missed.taskId) ?? { total: 0, finished: 0 };
+    entry.total += missed.starts;
+    byTask.set(missed.taskId, entry);
+  }
   for (const [taskId, tally] of byTask) {
-    if (isTaskRevoked(taskId)) continue;
-    await appendTaskTimeline(taskId, receiptLine(reapedNotice(tally)), { sessionId: await sessionOf(cliSessionId, taskId) });
+    // 确认删掉了才跳过；正在删就抛出去等结果（删除回滚的话这句话还得落，见 `admitWrite`）。
+    // 已经落下的那几条由 eventKey 兜住，整笔重来不会重复。
+    if (!admitWrite(taskId)) continue;
+    const sessionId = await sessionOf(cliSessionId, taskId);
+    const text = reapedNotice(tally, missed?.taskId === taskId ? missed : undefined);
+    const written = await appendTaskTimeline(taskId, receiptLine(text), {
+      sessionId, ...(opts.eventKey ? { eventKey: `${opts.eventKey}:${taskId}` } : {}),
+    });
+    // 认得出会话却没写成 = 读库 / 写盘出了岔子，抛出去让队列重试。认不出会话时 false 也可能是
+    // 「这个任务压根没有会话」，那是确定的结论，重试一万次也一样，不抛。
+    if (!written && sessionId) throw new Error(`任务 ${taskId} 的收尾说明没写成`);
   }
 }
 
@@ -127,16 +166,19 @@ export async function reapClaudeMonitors(
  * 说错(第 4 轮审查 N1)。但**结论对两档都一样**——通知只注回智能体自己的会话，任务不会被
  * 唤醒；跑完了也只是「它自己可能看见了」，回合已经结束的话连它也没看见。
  */
-const reapedNotice = (tally: { total: number; finished: number }): string => {
+const reapedNotice = (tally: { total: number; finished: number }, missed?: ReapMissed): string => {
   const { total, finished } = tally;
+  // 没能记成卡片的那几个已经算进 total：数字要跟真实一致，少掉的那几张卡在这里说清。
+  const unrecorded = missed?.starts ? `（其中 ${missed.starts} 个赶上库长时间写不进去，没能记成卡片）` : "";
+  const inexact = missed?.updates ? "另有几条状态变化同样没能记上，个别卡片的结局可能不准。" : "";
   const how = finished === 0
     ? "回合结束时已全部失效"
     : finished === total
       ? "都在这一轮里自己跑完了"
       : `其中 ${finished} 个自己跑完了、剩下 ${total - finished} 个在回合结束时已经失效`;
-  return `本轮智能体自己起了 ${total} 个内置 Monitor，${how}——`
+  return `本轮智能体自己起了 ${total} 个内置 Monitor${unrecorded}，${how}——`
     + `它们的通知只注回智能体自己的会话（回合一结束，连它自己也看不到了），从来不会唤醒任务。`
-    + `要跨回合等一件事，得用 ash 的哨兵（start_monitor）并用 pause_task 收尾这一轮。`;
+    + `要跨回合等一件事，得用 ash 的哨兵（start_monitor）并用 pause_task 收尾这一轮。${inexact}`;
 };
 
 /**

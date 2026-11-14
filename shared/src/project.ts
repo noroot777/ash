@@ -36,6 +36,9 @@ export interface Project {
   // null = 这个项目不设门禁（默认，也是老行为）。为什么钉在验收那一刻而不是每轮收尾，
   // 见 shared/src/accept-gate.ts 顶部。
   acceptGateCommand: string | null;
+  // 门禁的「准备命令」：在独立快照里、验收前置命令之前先跑一遍，把依赖现装出来（如
+  // `npm ci --offline`）。配了它，快照就不再借用工作区/主检出的依赖目录；null = 老办法。
+  acceptGatePrepare?: string | null;
   // 门禁测哪一棵树(分支快照 / 要求已含目标分支 / 合并预览),语义见 shared/src/accept-gate.ts
   // 的 AcceptGateBaseline。缺省 = `branch`(老行为)。
   acceptGateBaseline?: AcceptGateBaseline;

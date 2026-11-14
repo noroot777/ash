@@ -1,8 +1,7 @@
 // 开机那一次清扫:**ash 自己重启了,得重新判一次谁还活着**。
 //
 // 从 claude-monitors.ts 拆出来,是因为那份文件顶到了 700 行上限,而这一段是其中最独立的
-// 一块:它不碰 `ClaudeMonitorTrace` 的任何内部状态,只在启动时被 index.ts 调一次,跟同样
-// 只在启动时跑的 `sweepOrphanClaudeMonitors`(claude-monitor-backfill.ts)是一对。
+// 一块:它不碰 `ClaudeMonitorTrace` 的任何内部状态,只在启动时被 index.ts 调一次。
 import { and, eq, inArray } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { createLivenessProbe } from "./claude-monitor-liveness.js";
@@ -16,8 +15,7 @@ import { now } from "./util.js";
  * 这些行没有 pid，`reattachMonitors` 按 `kind` 把它们整批跳过了（它只认 ash 自己起的
  * 进程），所以必须有人来管；但判据不能是「本进程的账本里没有它」—— **agent 活得过 ash
  * 重启**（detached，见 executors/detached.ts），无条件标 lost 会让用户看到「任务还在输出、
- * 哨兵却说进程已不在」。判据本体和它栽过的三次跟头都在 `claude-monitor-liveness.ts`，
- * 那边是回填与这里共用的唯一一份。
+ * 哨兵却说进程已不在」。判据本体和它栽过的几次跟头都在 `claude-monitor-liveness.ts`。
  *
  * 与 `finishAll()` 的分工：那边管「agent 进程正常结束」的常规路径，这边只兜「ash 自己重启
  * 了，得重新判一次谁还活着」。
@@ -36,8 +34,6 @@ export async function loseDeadClaudeMonitors(): Promise<{ kept: number; lost: nu
     .where(and(eq(monitors.kind, "claude"), eq(monitors.status, "running")));
   if (!rows.length) return { kept: 0, lost: 0 };
 
-  // 存活判据只有一份，住在 claude-monitor-liveness.ts——回填那边问的是同一个问题
-  // （「历史里没读到终态，是早就没了还是现在还在盯着」），两处必须给出同一个答案。
   const probe = createLivenessProbe();
 
   const dead: { id: string; taskId: string }[] = [];

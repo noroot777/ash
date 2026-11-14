@@ -34,6 +34,9 @@ export const projects = sqliteTable("projects", {
   // null/空 = 这个项目不设门禁（默认，也是老行为）。为什么钉在验收那一刻，见
   // shared/src/accept-gate.ts 顶部；执行与判定在 server/src/accept-gate.ts。
   acceptGateCommand: text("accept_gate_command"),
+  // 门禁的「准备命令」：快照里先跑它把依赖装出来，再跑 accept_gate_command。null = 不配，
+  // 依赖照旧从工作区借用（accept-gate-deps.ts）。语义见 shared/src/project.ts 同名字段。
+  acceptGatePrepare: text("accept_gate_prepare"),
   // 门禁测哪一棵树(branch / contains_target / merge_preview),语义见 shared/src/accept-gate.ts 的
   // AcceptGateBaseline。读侧一律过 normalizeAcceptGateBaseline:认不出的值回到 branch(老行为)。
   acceptGateBaseline: text("accept_gate_baseline").notNull().default("branch"),
@@ -678,7 +681,7 @@ export { queueAdvanceIntents } from "./schema-queue-advance.js";
 // 接力的三张表住在 schema-handoff.ts（见那份的说明）。这里转发，导入路径不变。
 export { handoffPeers, handoffLocalPeerKeys, handoffLocalKeyRevisions } from "./schema-handoff.js";
 // 哨兵表住在隔壁（见 schema-monitors.ts 的说明）。这里转发，导入路径不变。
-export { monitors, monitorPendingCalls, monitorScanCursors, monitorReclaimDebts } from "./schema-monitors.js";
+export { monitors, monitorReclaimDebts } from "./schema-monitors.js";
 export { taskBackgroundRevisions } from "./schema-task-background.js";
 export { taskDiskCleanups } from "./schema-run-disk.js";
 export { regressionChecks } from "./schema-regression-checks.js";

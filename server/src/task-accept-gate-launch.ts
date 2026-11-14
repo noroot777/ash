@@ -25,6 +25,8 @@ function gateOutcomeClause(gate: AcceptGateView): string {
   switch (gate.failure) {
     case "timeout": return `但它整条超时了（不是定位到某个断言失败）：${tail}`;
     case "spawn_failed": return `但它起不来：${tail}`;
+    case "prepare_failed": return `但准备命令没过${typeof gate.exitCode === "number" ? `（退出码 ${gate.exitCode}）` : ""}，测试没有开跑：${tail}`;
+    case "launcher_failed": return `但门禁启动器出了错，分不清停在准备命令还是前置命令，这次结果不算数：${tail}`;
     case "source_changed": return `但跑动期间被测的那棵树变了，这次结果不算数：${tail}`;
     case "process_unconfirmed": return `但没能确认它的进程全部退出，这次结果不算数：${tail}`;
     default: return `但它跑完是红的${typeof gate.exitCode === "number" ? `（退出码 ${gate.exitCode}）` : ""}：${tail}`;
