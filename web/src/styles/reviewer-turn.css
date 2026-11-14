@@ -141,7 +141,10 @@
   color: var(--muted);
   cursor: pointer;
 }
-.review-verdict-bubble > header button:hover { background: var(--raised); color: var(--ink); }
+/* 报告键、经过键并排靠右：只有第一颗把剩下的宽度吃掉。 */
+.review-verdict-bubble > header button + button { margin-left: 0; }
+.review-verdict-bubble > header button:hover,
+.review-verdict-bubble > header button[aria-expanded="true"] { background: var(--raised); color: var(--ink); }
 .review-verdict-bubble > header button:focus-visible,
 .review-verdict-text:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .review-verdict-text {

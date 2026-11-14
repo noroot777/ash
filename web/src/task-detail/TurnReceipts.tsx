@@ -1,8 +1,9 @@
 import { createContext, useContext, useId, useState, type ReactNode } from "react";
+import { ListBullets } from "@phosphor-icons/react";
 import type { ReviewTarget } from "../review/reviewTarget.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import type { TurnReceipt } from "./conversationSystemRows.ts";
-import { LaneBody } from "./ReviewVerdict.tsx";
+import { LaneBody, laneHasTrace } from "./ReviewVerdict.tsx";
 import { DeleteMessageButton } from "./MessageDelete.tsx";
 import { NoticeIconGlyph } from "./NoticeIconGlyph.tsx";
 import { laneReviewTarget } from "./reviewLaneLinks.ts";
@@ -40,8 +41,9 @@ function ReceiptEntry({ receipt, previousAt }: { receipt: TurnReceipt; previousA
   const time = clock(receipt.at, previousAt);
   const text = <span className="turn-receipt-text">{view.text}</span>;
   // 被同一回合后来那一轮盖过的审查：会话里不再画它的气泡，这一条就是它的入口——去审查格的那一轮，
-  // 认不出去哪儿就在下面摊开那一轮的经过。
+  // 认不出去哪儿就在下面摊开那一轮的经过。去审查格的那种另有一颗经过键（审查格里没有经过）。
   const go = lane && review ? review.reviewOpener?.(lane) : undefined;
+  const traceToggle = !!go && !!review?.renderLane && laneHasTrace(lane!);
   return (
     <li className={`turn-receipt tone-${view.tone}`}>
       {time && <time dateTime={receipt.at} aria-label={formatInstant(receipt.at)}>{time}</time>}
@@ -70,9 +72,21 @@ function ReceiptEntry({ receipt, previousAt }: { receipt: TurnReceipt; previousA
             {text}
           </button>
         ) : text}
+        {traceToggle && (
+          <button
+            type="button"
+            className="turn-receipt-trace"
+            aria-label="这一轮的经过"
+            aria-expanded={open}
+            aria-controls={detailId}
+            onClick={() => setOpen((value) => !value)}
+          >
+            <ListBullets size={12} aria-hidden="true" />
+          </button>
+        )}
         {receipt.item && <DeleteMessageButton item={receipt.item} />}
       </span>
-      {lane && review && !go && open && (
+      {lane && review && (!go || traceToggle) && open && (
         <div className="turn-receipt-lane">
           <LaneBody lane={lane} id={detailId} taskId={review.taskId} renderLane={review.renderLane} />
         </div>

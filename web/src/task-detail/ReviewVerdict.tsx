@@ -1,5 +1,5 @@
 import { useId, useState, type ReactNode } from "react";
-import { FileText } from "@phosphor-icons/react";
+import { FileText, ListBullets } from "@phosphor-icons/react";
 import { ReviewReportDialog } from "../components/MarkdownBody.tsx";
 import type { ReviewFileTarget } from "../components/markdownPolicy.ts";
 import { ReviewNote } from "../review/ReviewNote.tsx";
@@ -16,7 +16,8 @@ import { laneVerdictView, reviewLaneTail } from "./turnFootnote.ts";
  * - 平时只有一句结论。指到气泡（键盘走进来）才在它上方右侧浮出「审查者 · 谁审的 · 用时 · 时刻」，
  *   有报告时那一行里带一颗报告键；跟你的气泡那一行同一种做法，不占排版高度，触屏上常显在气泡里；
  * - 点气泡去右侧审查格的那一场那一轮（`onOpenRound`，认得出去哪儿才给），认不出就在气泡下面摊开
- *   那一轮的经过（`renderLane`），摊开的那一块占满正文宽度；
+ *   那一轮的经过（`renderLane`），摊开的那一块占满正文宽度；审查格里只有报告、截图和辩论，没有经过，
+ *   所以点气泡去审查格的那种，浮出的那一行里另有一颗经过键，在气泡下面摊开同一块；
  * - 它是会话里最后一件事、又不是好消息时（`live`），字前一颗小圆点，跟尾注同一套；
  * - 结论之后才发生的那几句（`trailing`）贴在气泡下面，靠右。
  */
@@ -42,6 +43,7 @@ export function ReviewVerdict({
   const view = laneVerdictView(lane);
   const tail = reviewLaneTail(lane);
   const reportUrl = lane.reportAvailable && lane.report && taskId ? laneReportUrl(taskId, lane.report) : null;
+  const traceToggle = !!onOpenRound && !!renderLane && laneHasTrace(lane);
   const urgent = live && (view.tone === "bad" || view.tone === "warn");
   return (
     <div className="review-verdict" role={urgent ? "status" : undefined}>
@@ -52,6 +54,11 @@ export function ReviewVerdict({
           {reportUrl && (
             <button type="button" aria-label="审查报告" onClick={() => setReport({ name: "report.md", url: reportUrl })}>
               <FileText size={14} aria-hidden="true" />
+            </button>
+          )}
+          {traceToggle && (
+            <button type="button" aria-label="这一轮的经过" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen((value) => !value)}>
+              <ListBullets size={14} aria-hidden="true" />
             </button>
           )}
         </header>
@@ -67,11 +74,16 @@ export function ReviewVerdict({
           <span data-selection-content="">{view.text}</span>
         </button>
       </div>
-      {!onOpenRound && open && <LaneBody lane={lane} id={bodyId} renderLane={renderLane} />}
+      {(!onOpenRound || traceToggle) && open && <LaneBody lane={lane} id={bodyId} renderLane={renderLane} />}
       {trailing}
       {report && <ReviewReportDialog target={report} onReviewReport={setReport} onClose={() => setReport(null)} />}
     </div>
   );
+}
+
+/** 这一轮有没有经过可摊：审查者一句话没说的轮次（起就失败）只有结论，不给经过键。 */
+export function laneHasTrace(lane: ConversationReviewLane): boolean {
+  return lane.items.length > 0;
 }
 
 /**
