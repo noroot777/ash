@@ -124,7 +124,7 @@ open /tmp/r/Ash.app                                                          # �
 
 ## 第一次打开
 
-数据根里还没有 `ash.db` 时，先问数据从哪来：
+数据根里还没有 `ash.db` 时，先问数据从哪来（`FirstRunView`：和随后 web 首启向导同一套底色与卡片，选了之后原地转圈直到页面接上，不换屏、不闪白）：
 
 - **全新开始**：起一份空的，进入首启向导（供应商 → 执行器 → 项目）。
 - **导入已有数据…**：选一份 ash 数据目录（比如仓库的 `data/`）。**只复制、不移动**，源目录一个文件都不多。库走 SQLite 在线备份（一致快照，源库正被另一份 server 写着也安全；它还开着时会先提醒），其余目录按文件复制（同一 APFS 卷上是克隆，不占第二份空间）；锁、在线标记、`deps/`、`tmp/`、源的 `logs/` 不搬。多人模式的数据、和 app 数据根互相包含的目录不能导。
@@ -183,6 +183,8 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 | `Sources/WebViewBridge.swift` | 外链、新窗口、选文件、下载、JS 对话框 |
 | `Sources/DownloadTransaction.swift` | 另存为的暂存、原子替换与中断后的回收 |
 | `Sources/OfflineView.swift` | 页面载不进来时的那一屏 |
+| `Sources/FirstRunView.swift` | 首启那张卡：全新开始 / 导入已有数据 |
+| `Sources/AshPalette.swift` | 原生几屏的颜色，取自 web 的浅 / 深两套令牌 |
 | `scripts/make-icon.swift` | 构建时现画图标 |
 
 卸载：菜单里先取消「登录时启动 ash 服务」，停掉服务，再删 /Applications/Ash.app；数据在 `~/Library/Application Support/dev.ash.mac/`。页面检查器：Safari →「开发」→ 本机 → ash。

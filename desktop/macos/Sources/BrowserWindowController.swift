@@ -5,6 +5,8 @@ import WebKit
 final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
   let webView: WKWebView
   let offlineView = OfflineView()
+  /// 数据根还空着时盖在 offlineView 上的那张卡（LaunchFlow 的首启）。
+  let firstRunView = FirstRunView()
   var downloads: [ObjectIdentifier: DownloadTransaction] = [:]
   private var chrome: WindowChrome?
   private var observations: [NSKeyValueObservation] = []
@@ -33,6 +35,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     webView.allowsMagnification = true
     // 出问题时 Safari「开发」菜单里能直接挂上检查器。
     webView.isInspectable = true
+    // 页面画出第一帧之前 WKWebView 先铺一层白：从原生那几屏（首启、启动中）切到页面时整窗闪一下白。
+    // 不画自己的底，透出窗口底色（跟页面的 theme-color 走，载进来之前是同色的 AshPalette.chrome）。
+    // 没有公开接口；这个键在哪一版没了就照旧画白底，不至于崩。
+    if webView.responds(to: NSSelectorFromString("_setDrawsBackground:")) {
+      webView.setValue(false, forKey: "drawsBackground")
+    }
 
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900),
@@ -84,7 +92,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         self?.window?.title = title.isEmpty ? "ash" : title
       },
       webView.observe(\.themeColor, options: [.initial, .new]) { [weak self] view, _ in
-        self?.window?.backgroundColor = view.themeColor ?? .windowBackgroundColor
+        self?.window?.backgroundColor = view.themeColor ?? AshPalette.chrome
       },
     ]
   }
