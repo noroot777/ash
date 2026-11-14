@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ash · logo</title>
+    <style>
+      :root { color-scheme: light; }
+      body {
+        margin: 0;
+        background: #f4f4f5;
+        color: #111113;
+        font: 400 14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+      }
+      main { max-width: 1120px; margin: 0 auto; padding: 56px 32px 96px; display: grid; gap: 72px; }
+      section { display: grid; grid-template-columns: 240px 1fr; gap: 20px 40px; align-items: start; }
+      h2 { margin: 0 0 6px; font-size: 20px; font-weight: 600; }
+      p { margin: 0; color: #5c5c63; }
+      .icon { grid-row: span 2; }
+      .icon > img { display: block; width: 240px; height: 240px; filter: drop-shadow(0 8px 20px rgb(0 0 0 / 0.16)); }
+      .ladder { display: flex; align-items: flex-end; gap: 20px; margin-top: 24px; }
+      .ladder img { display: block; }
+      /* 透明底的两份跟着所在色块的 color-scheme 换色，同一份文件在左右两块里各是一套。 */
+      .pair { display: grid; grid-template-columns: 1fr 1fr; border-radius: 14px; overflow: hidden; align-self: end; }
+      .pair > div { display: flex; align-items: center; gap: 28px; padding: 28px 32px; min-width: 0; }
+      .pair > div:first-child { color-scheme: light; background: #fff; }
+      .pair > div:last-child { color-scheme: dark; background: #151518; }
+      .pair img { display: block; height: 72px; min-width: 0; }
+      .pair img:first-child { height: 96px; }
+      @media (max-width: 860px) {
+        section { grid-template-columns: 1fr; }
+        .pair { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section>
+        <div class="icon">
+          <img src="fork/icon.svg" alt="分合" />
+          <div class="ladder">
+            <img src="fork/icon.svg" width="64" alt="" /><img src="fork/icon.svg" width="32" alt="" /><img src="fork/icon.svg" width="16" alt="" />
+          </div>
+        </div>
+        <div>
+          <h2>分合</h2>
+          <p>字母 A 就是一张调度图：顶点派活，两路并行，横杠接力，落地各一个结点。</p>
+        </div>
+        <div class="pair">
+          <div><img src="fork/mark.svg" alt="" /><img src="fork/lockup.svg" alt="" /></div>
+          <div><img src="fork/mark.svg" alt="" /><img src="fork/lockup.svg" alt="" /></div>
+        </div>
+      </section>
+
+      <section>
+        <div class="icon">
+          <img src="ember/icon.svg" alt="余烬" />
+          <div class="ladder">
+            <img src="ember/icon.svg" width="64" alt="" /><img src="ember/icon.svg" width="32" alt="" /><img src="ember/icon.svg" width="16" alt="" />
+          </div>
+        </div>
+        <div>
+          <h2>余烬</h2>
+          <p>灰里一点没灭的火：小写 a 的字碗是一圈灰，字腔里是还在烧的芯。</p>
+        </div>
+        <div class="pair">
+          <div><img src="ember/mark.svg" alt="" /><img src="ember/lockup.svg" alt="" /></div>
+          <div><img src="ember/mark.svg" alt="" /><img src="ember/lockup.svg" alt="" /></div>
+        </div>
+      </section>
+
+      <section>
+        <div class="icon">
+          <img src="pixel/icon.svg" alt="像素" />
+          <div class="ladder">
+            <img src="pixel/icon.svg" width="64" alt="" /><img src="pixel/icon.svg" width="32" alt="" /><img src="pixel/icon.svg" width="16" alt="" />
+          </div>
+        </div>
+        <div>
+          <h2>像素</h2>
+          <p>ash 也是一个 shell：一位图的字，后面跟着一块还在等输入的光标。</p>
+        </div>
+        <div class="pair">
+          <div><img src="pixel/mark.svg" alt="" /><img src="pixel/lockup.svg" alt="" /></div>
+          <div><img src="pixel/mark.svg" alt="" /><img src="pixel/lockup.svg" alt="" /></div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
