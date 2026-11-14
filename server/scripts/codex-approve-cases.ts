@@ -98,13 +98,14 @@ export async function checkCodexApprove(): Promise<void> {
 
   // ⑳ **判官是 codex 本人,而且问的是沙盘里的副本**（本轮审查 F1）：我们那份是**结构**扫描器，
   //    看得出新表头落进了文件里，证不了它在这份 TOML 上合法。这里拿一种真实形状把差别摆出来 ——
-  //    宿主那条登记的 env 值里有个不合法转义（`"http://bad\q"`），拼完扫描器照样答「ash 在、
-  //    启用着」，而真 codex 整份拒载（实测 rc=1 `missing escaped value`）。要的行为是：**一个
+  //    宿主那条登记里有个类型不对的值（`startup_timeout_sec = "soon"`），TOML 语法没毛病、扫描器
+  //    照样答「ash 在、启用着」，而真 codex 整份拒载（2026-11-14 codex 0.153.4 实测 rc=1，点名
+  //    `mcp_servers.ash.startup_timeout_sec`）。早先用的是 env 值里的不合法转义，那一种如今在搬登记
+  //    那一层（`mcp-registry/relocate.ts`）就被拦下、轮不到问 codex，测不到这里要钉的东西。要的行为是：**一个
   //    字节都不写**、如实报、给得出手工办法，而且同一份组合不再问第二遍（设置页每读一次、每条
   //    任务起跑都会走到这里，不该为同一个已知答案反复起进程）。
   {
-    const BAD_HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/x.js"]\n\n`
-      + `[mcp_servers.ash.env]\nASH_URL = "http://bad\\q"\n`;
+    const BAD_HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/x.js"]\nstartup_timeout_sec = "soon"\n`;
     const { host, dir } = bench({ codex: BAD_HOST });
     const file = join(dir, "config.toml");
     const before = `model = "gpt"\n`;
