@@ -17,6 +17,8 @@ const output = join(root, "mcp-env.json");
 const oldProbe = process.env.ASH_FAKE_MCP_PROBE;
 const oldOutput = process.env.ASH_FAKE_MCP_OUTPUT;
 const oldStatus = process.env.ASH_FAKE_MCP_STATUS;
+delete process.env.ASH_FAKE_MCP_TOOLS;
+delete process.env.ASH_FAKE_EXEC_CALL;
 
 try {
   assert.equal(ASH_MCP_SERVER_NAME, "ash", "安装器约定的规范 MCP 名必须是 ash");
@@ -76,6 +78,11 @@ if (args.includes("app-server")) {
     if (message.id === undefined) return;
     if (message.method === "initialize") send({ id: message.id, result: { userAgent: "fake" } });
     else if (message.method === "thread/archive") send({ id: message.id, result: {} });
+    else if (message.method === "mcpServerStatus/list") {
+      // ASH_FAKE_MCP_TOOLS = ash 这一回合真正暴露的工具(用户配置里的工具名单深合并保留下来之后)
+      const tools = (process.env.ASH_FAKE_MCP_TOOLS ?? "complete_task,pause_task,ask_question,report_stage").split(",");
+      send({ id: message.id, result: { data: [{ name: "ash", tools: Object.fromEntries(tools.map((t) => [t, {}])) }] } });
+    }
     else if (message.method === "thread/start") {
       send({ id: message.id, result: { thread: { id: "fake-thread" } } });
       send({ method: "thread/started", params: { thread: { id: "fake-thread" } } });
@@ -108,6 +115,9 @@ if (args.includes("app-server")) {
 } else {
   runProbe();
   process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "fake-thread" }) + "\\n");
+  if (process.env.ASH_FAKE_EXEC_CALL) process.stdout.write(JSON.stringify({ type: "item.completed", item: {
+    id: "item_1", type: "mcp_tool_call", server: "ash", tool: "complete_task", status: "completed",
+  } }) + "\\n");
   process.stdout.write(JSON.stringify({ type: "turn.completed" }) + "\\n");
 }
 `);
@@ -157,12 +167,26 @@ if (args.includes("app-server")) {
   delete process.env.ASH_FAKE_MCP_STATUS;
   rmSync(output, { force: true });
   const execHandle = executor.run({ cwd: root, prompt: "probe exec", env: identity });
-  await drain(execHandle.events);
+  const execEvents = await drain(execHandle.events);
   await execHandle.cleanup?.();
   const execEnv = JSON.parse(readFileSync(output, "utf8")) as Record<string, string>;
   assert.equal(execEnv.ASH_TURN_TOKEN, turnToken, "exec 那条路同样透传回合身份");
   assert.match(execHandle.commandLine, /mcp_servers\.ash=\{command=/);
   assert.ok(!execHandle.commandLine.includes(turnToken), "exec 那条路同样不得泄露 token");
+  // exec 这条路 codex 不报 MCP 启动状态:这一回合一次 ash 工具都没调成 ⇒ 一句「核实不了」(提示级)
+  const execNotice = execEvents.filter((e): e is Extract<AgentEvent, { kind: "error" }> => e.kind === "error" && /codex exec/.test(e.message));
+  assert.equal(execNotice.length, 1, `exec 回合没调成过 ash 的工具 ⇒ 一句核实不了:${JSON.stringify(execEvents.map((e) => e.kind))}`);
+  assert.equal(execNotice[0]!.level, "notice");
+  process.env.ASH_FAKE_EXEC_CALL = "1";
+  const execCalled = executor.run({ cwd: root, prompt: "probe exec called", env: identity });
+  const calledEvents = await drain(execCalled.events);
+  await execCalled.cleanup?.();
+  delete process.env.ASH_FAKE_EXEC_CALL;
+  assert.ok(!calledEvents.some((e) => e.kind === "error" && /ash/.test(e.message)), "调成过 ash 的工具 ⇒ 不出声");
+  const untracked = executor.run({ cwd: root, prompt: "probe exec chat", env: { CODEX_HOME: unconfigured } });
+  const untrackedEvents = await drain(untracked.events);
+  await untracked.cleanup?.();
+  assert.ok(!untrackedEvents.some((e) => e.kind === "error" && /codex exec/.test(e.message)), "不是任务回合(没有回合身份)不说这句");
 
   // codex 报 ash 启动失败 ⇒ 当场一条诊断(带上 codex 的原话),不改本回合成败。
   process.env.ASH_FAKE_MCP_STATUS = "failed";
@@ -173,6 +197,16 @@ if (args.includes("app-server")) {
   assert.match(failed[0]!.message, /codex 报告 ash MCP 启动失败：handshake closed/);
   assert.equal(failed[0]!.affectsTurn, false, "这条是诊断,成败照旧由交卷判");
 
+  // ready 了但用户配置里的工具名单把协议工具挡掉 ⇒ 经执行器问 mcpServerStatus/list 后出声。
+  process.env.ASH_FAKE_MCP_STATUS = "ready";
+  process.env.ASH_FAKE_MCP_TOOLS = "get_task,pause_task,ask_question,report_stage";
+  const narrowedHandle = executor.runSteerable({ cwd: root, prompt: "probe narrowed", env: identity });
+  const narrowed = ashProblems(await drain(narrowedHandle.events));
+  await narrowedHandle.cleanup?.();
+  delete process.env.ASH_FAKE_MCP_TOOLS;
+  assert.equal(narrowed.length, 1, "工具清单缺了 complete_task ⇒ 一条诊断");
+  assert.match(narrowed[0]!.message, /codex 连上了 ash，但 complete_task 不在 agent 手上/);
+
   // 一条状态都没报 ⇒ 回合收尾时说「没有加载」。
   delete process.env.ASH_FAKE_MCP_STATUS;
   const silentHandle = executor.runSteerable({ cwd: root, prompt: "probe silent", env: identity });
@@ -180,7 +214,7 @@ if (args.includes("app-server")) {
   await silentHandle.cleanup?.();
   assert.equal(silent.length, 1);
   assert.match(silent[0]!.message, /codex 这一回合没有加载 ash MCP/);
-  console.log("✓ Codex 起跑注入 ash MCP(不依赖配置登记)、env_vars 透传回合身份、argv 无 token,ash 没连上时如实出声");
+  console.log("✓ Codex 起跑注入 ash MCP(不依赖配置登记)、env_vars 透传回合身份、argv 无 token,ash 没连上 / 工具不全 / exec 核实不了时如实出声");
 } finally {
   if (oldProbe === undefined) delete process.env.ASH_FAKE_MCP_PROBE;
   else process.env.ASH_FAKE_MCP_PROBE = oldProbe;

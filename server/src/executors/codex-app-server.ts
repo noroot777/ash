@@ -410,7 +410,16 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
         push(reported.event);
         break;
       }
-      case "mcpServer/startupStatus/updated": { const problem = ashMcp?.update(p); if (problem) push(problem); break; }
+      case "mcpServer/startupStatus/updated": {
+        const problem = ashMcp?.update(p);
+        if (problem) push(problem);
+        // ready 只说明握手成了：用户配置里的工具白/黑名单会被深合并保留，协议工具在不在要另问一次。
+        if (ashMcp?.wantsToolList()) {
+          void request("mcpServerStatus/list", { threadId: p.threadId, limit: 100 }, 10_000)
+            .then((listed) => { const missing = ashMcp.tools(listed); if (missing) push(missing); }, () => {});
+        }
+        break;
+      }
       case "turn/completed": {
         const problem = ashMcp?.settle();
         if (problem) push(problem);

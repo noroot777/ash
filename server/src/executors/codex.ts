@@ -21,7 +21,7 @@ import {
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting, type MarkdownImageSink } from "./markdown-image-stream.js";
-import { codexAshMcpArgs } from "./ash-mcp-inject.js";
+import { codexAshMcpArgs, CodexExecAshMcp } from "./ash-mcp-inject.js";
 import { TURN_IDENTITY_ENV_KEYS } from "../turn-identity.js";
 
 const ASH_MCP_IDENTITY_ENV_VARS = TURN_IDENTITY_ENV_KEYS;
@@ -140,6 +140,8 @@ export class CodexExecutor implements AgentExecutor {
         // 这一轮真正生效的 CODEX_HOME(多用户模式由 auth/run-env.ts 注入),rollout 就写在
         // 它下面 —— 水位必须去同一个目录读。
         configDir: opts.env?.CODEX_HOME,
+        // 任务回合才要 ash 的工具交卷;exec 这条路 codex 不报 MCP 启动状态,按本回合记录判(ash-mcp-inject.ts)。
+        ashMcp: opts.env?.ASH_TASK_ID ? new CodexExecAshMcp() : undefined,
       }), { bin: this.bin, args: this.appServerArgs(opts).args, cwd: opts.cwd,
         env: { ...this.env(), ...opts.env } }, opts.sessionId, () => cleanupAfterRun(child)),
       kill: () => {
@@ -316,7 +318,7 @@ export function parseCodexStream(
   child: ReturnType<typeof spawnAgent>,
   tracePaths: RunTracePaths | undefined,
   lifecycle: { stopRequested: boolean },
-  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string; images?: MarkdownImageAccounting },
+  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string; images?: MarkdownImageAccounting; ashMcp?: CodexExecAshMcp },
 ): AsyncIterable<AgentEvent> {
   // 正文里的图**不在这份解析里收**:一条 agent_message 只是一片碎片,上一条消息给定义、
   // 下一条引用它时按消息扫压根不认那张图(审查第 4 轮 R2)。统一由那一层按「一份文档」
@@ -336,7 +338,7 @@ async function* codexStreamEvents(
   // 目录)。不传就是宿主机默认那份 —— 读不到 rollout 时水位静默为空。
   // cwd = 这一轮干活的目录。正文里 `![](output/x.png)` 这种相对路径要靠它解成真文件
   // 才复制得进 uploads（见 ../agent-attachments.ts）。
-  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string },
+  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string; ashMcp?: CodexExecAshMcp },
   images: MarkdownImageSink,
 ): AsyncIterable<AgentEvent> {
   let turnCompleted = false;
@@ -385,6 +387,7 @@ async function* codexStreamEvents(
       push(codexTurnError(turnFailedMessage));
     } else if (ev.type === "item.completed" && ev.item) {
       const it = ev.item;
+      contextOptions.ashMcp?.item(it);
       // codex emits one complete agent_message / reasoning per turn (not token
       // deltas). The orchestrator no longer appends newlines — text pieces are
       // concatenated verbatim downstream — so carry the paragraph break here.
@@ -415,7 +418,10 @@ async function* codexStreamEvents(
     }
   });
 
-  child.stderr?.on("data", (d) => trace.stderr(d.toString()));
+  child.stderr?.on("data", (d) => {
+    trace.stderr(d.toString());
+    contextOptions.ashMcp?.stderr(d.toString());
+  });
   const finish = (opts: {
     exitStatus: number;
     exitSignal: NodeJS.Signals | null;
@@ -423,6 +429,8 @@ async function* codexStreamEvents(
     forceFinished?: boolean;
   }) => {
     if (events.closed) return;
+    const ashProblem = lifecycle.stopRequested || opts.spawnError ? null : contextOptions.ashMcp?.settle();
+    if (ashProblem) push(ashProblem);
     const diagnostics = trace.finish({
       ...opts,
       stopRequested: lifecycle.stopRequested,

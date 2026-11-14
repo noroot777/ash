@@ -256,7 +256,7 @@ async function* claudeStreamEvents(
       // ash 的工具连没连上,以 CLI 自己在 init 里报的为准(ash-mcp-inject.ts)。只认 claude 本人:
       // 复用这份解析的别家 CLI 不注入 ash,它们清单里有没有 ash 不归这里说。
       if (ev.subtype === "init" && !replaying && calibrateAs === "claude") {
-        const problem = claudeAshMcpProblem(ev.mcp_servers);
+        const problem = claudeAshMcpProblem(ev.mcp_servers, ev.tools);
         if (problem) push(problem);
       }
       // init 事件白送一份**权威**技能清单(skills / slash_commands / cwd 都在里面),

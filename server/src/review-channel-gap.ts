@@ -185,7 +185,10 @@ export function codexMcpEvidence(text: string): Evidence {
 // claude / codex 的 ash MCP 是起跑时由 ash 注入的（executors/ash-mcp-inject.ts），用户配置里那条
 // 登记不再起作用 —— 自查要看的是 CLI 启动时自己报的原因，不是去翻配置。
 const INJECTED_CHECK = "看执行记录里那条红色的「ash 的工具在这一回合没接上」，括号里是 CLI 启动时自己报的原因";
-const HOW_TO_CHECK: Record<string, string> = { claude: INJECTED_CHECK, codex: INJECTED_CHECK };
+const HOW_TO_CHECK: Record<string, string> = {
+  claude: INJECTED_CHECK,
+  codex: `${INJECTED_CHECK}；走 codex exec 的回合 codex 不报启动状态，那里只有一句「核实不了」`,
+};
 
 /** 这一回合留在盘上的通道证据：claude 的 init 是第一条事件，codex 的诊断取 stderr 末尾。 */
 function turnEvidence(a: { taskId: string; sessId: string; turnStart: string; agentType: AgentType }): Evidence {
