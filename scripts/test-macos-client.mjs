@@ -262,10 +262,15 @@ try {
   process.kill(holderPID, "SIGTERM");
   await held.done;
   fixturePids.delete(holderPID);
+  // 顺带：库在、却没有服务记录（导入来的、旧版 app 没写过）→ 起之前先备份并固定成恢复点；
+  // 这一版的服务应答了（迁移跑完了）就放开它。
+  rmSync(join(data, ".mac-server.json"), { force: true });
   result = await launch(binary, ["start", "8"], env).done;
   assert.equal(result.status, 0, result.output);
+  assert.equal(readdirSync(join(data, "backups")).filter((n) => n.endsWith(".db")).length, 1, "backed up before starting on an unknown database");
+  assert.equal(existsSync(join(data, "backups", "recovery-point.json")), false, "the recovery point is released once the service answers");
   await stopServers();
-  console.log("PASS: lock timeout is failure, not success; explicit retry recovers");
+  console.log("PASS: lock timeout is failure, not success; explicit retry recovers; an unknown database is backed up first and released once up");
 
   // ── 进程起来就退：请求合并成一次，所有回调都拿到失败，不干等满时限 ──
   serviceSource({ exitAtOnce: true });
@@ -304,6 +309,7 @@ try {
   writeFileSync(join(source, "uploads", "a.png"), "png");
   writeFileSync(join(source, "ash.db.exits.jsonl"), "{}\n");
   writeFileSync(join(source, "ash.db.ash-online.123.json"), "{}");
+  writeFileSync(join(source, ".mac-maintenance.json"), JSON.stringify({ pid: process.pid, note: "源那边在装更新", since: 0 }));
   // 源库开着、WAL 模式、最后几笔还在 WAL 里没落进主文件 —— 跟正在跑的那份 server 一样。
   const live = new DatabaseSync(join(source, "ash.db"));
   live.exec("pragma journal_mode = wal; pragma wal_autocheckpoint = 0;");
@@ -323,7 +329,7 @@ try {
   assert.equal(readFileSync(join(data, "runs", "task-1", "transcript.jsonl"), "utf8"), "line\n");
   assert.equal(readFileSync(join(data, "uploads", "a.png"), "utf8"), "png");
   assert.equal(existsSync(join(data, "runs", "stale")), false, "leftovers of an unfinished import are replaced");
-  for (const skipped of ["deps", "tmp", "ash.db.ash.lock", "ash.db.ash-online.123.json", "ash.db-wal", "ash.db-shm", "ash.db.importing",
+  for (const skipped of ["deps", "tmp", "ash.db.ash.lock", "ash.db.ash-online.123.json", ".mac-maintenance.json", "ash.db-wal", "ash.db-shm", "ash.db.importing",
     "ash.db.importing-wal", "ash.db.importing-shm"]) {
     assert.equal(existsSync(join(data, skipped)), false, `${skipped} is not carried over`);
   }

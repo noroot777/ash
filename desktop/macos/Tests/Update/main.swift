@@ -127,6 +127,13 @@ case "backups":
     emit("MADE \(made?.lastPathComponent ?? "nil")")
   }
   emit("KEPT \(DatabaseBackup.existing().map(\.lastPathComponent).joined(separator: ","))")
+  emit("PINNED \(DatabaseBackup.recoveryPoint()?.lastPathComponent ?? "none")")
+
+case "backups-same-second":
+  let now = Date(timeIntervalSince1970: 1_900_000_000)
+  let first = try! DatabaseBackup.beforeUpdate(fromVersion: "same", now: now)!
+  let second = try! DatabaseBackup.beforeUpdate(fromVersion: "same", now: now)!
+  emit("SAME-SECOND \(first.lastPathComponent),\(second.lastPathComponent)")
 
 default:
   emit("unknown mode")

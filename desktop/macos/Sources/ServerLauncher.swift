@@ -93,19 +93,18 @@ final class ServerLauncher {
   }
 
   /// 这份库上一次是别的构建号的 app 起的服务在用（或者不知道是谁）：这一版的 server 一起来就可能
-  /// 迁移它，迁移不可逆。UpdateGate 装更新前已经备份过的就不再备一次；没备过的 —— 退出时没过闸
-  /// 就被 Sparkle 装上了、`build.sh --install`、手动换了 app —— 在这里补一份。备份不成就不起：
-  /// 库原样留着，配上旧版 app 还能回去。返回 nil = 可以起。
+  /// 迁移它，迁移不可逆。已经有固定着的恢复点（UpdateGate 装更新前留的，或者上一次在这里补的、
+  /// 新版还没起来过）就不再备 —— 那份才是原件，这会儿的库可能已经被失败的迁移改过一半了。没有
+  /// 的 —— 退出时没过闸就被 Sparkle 装上了、`build.sh --install`、手动换了 app —— 在这里补一份并
+  /// 固定下来。备份不成就不起：库原样留着，配上旧版 app 还能回去。返回 nil = 可以起。
   private static func backUpBeforeMigration() -> String? {
     let db = AshConfig.dataURL.appendingPathComponent("ash.db")
     guard FileManager.default.fileExists(atPath: db.path) else { return nil }
     let record = ServerRecord.read()
     if record?.bundleVersion == AshConfig.bundleVersion { return nil }
-    if let backup = record?.backup, FileManager.default.fileExists(atPath: backup) { return nil }
+    if DatabaseBackup.recoveryPoint() != nil { return nil }
     do {
-      if let backup = try DatabaseBackup.beforeUpdate(fromVersion: record?.bundleVersion ?? "unknown") {
-        ServerRecord.markBackedUp(backup)
-      }
+      try DatabaseBackup.beforeUpdate(fromVersion: record?.bundleVersion ?? "unknown")
       return nil
     } catch {
       return "这一版要在库上做迁移，迁移前先备份库没成功（\(error.localizedDescription)），所以没起服务、库没动过。\n"
@@ -179,6 +178,8 @@ final class ServerLauncher {
       let probe = AshHealth.probeSync()
       if case .ash(let instance) = probe, instance.isOurs, instance.pid == Int(pid) {
         ServerRecord.write(pid: Int(pid))
+        // 这一版的服务应答了 = 它的迁移跑完了：迁移前的原件不必再固定着。
+        DatabaseBackup.releaseRecoveryPoint()
         return .ready
       }
       if case .ash(let instance) = probe, !instance.isOurs { return .occupied(Occupant.otherAsh(instance)) }

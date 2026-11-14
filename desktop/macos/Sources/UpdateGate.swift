@@ -225,7 +225,6 @@ final class UpdateGate {
       logger.notice("服务已下线（进程 \(pid.map(String.init) ?? "本来就不在", privacy: .public)）")
       do {
         let backup = try DatabaseBackup.beforeUpdate(fromVersion: fromVersion)
-        if let backup { ServerRecord.markBackedUp(backup) }
         logger.notice("库已备份：\(backup?.path ?? "数据根里还没有库，不用备份", privacy: .public)")
         return .done(maintenance)
       } catch {

@@ -102,7 +102,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   func showInstalling(_ note: String) {
     stopHealthPolling()
     pendingStartingScreen?.cancel()
-    offlineView.show(title: note, detail: "在跑的任务不受影响，装好后自动接上。", busy: true)
+    offlineView.show(title: note, detail: "装好后自动接上。接管得了的任务照常在跑；点了「现在装」的话，刚才列出的那些会被打断。", busy: true)
   }
 
   /// 后台每 2 秒探一次 /api/health，自己那份通了就载回去 —— 服务也可能是别处（登录项、

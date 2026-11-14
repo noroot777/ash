@@ -13,20 +13,9 @@ struct ServerRecord: Codable {
 
   let pid: Int
   let bundleVersion: String
-  /// 停下这份服务之后给库做过的那份备份（UpdateGate 记）。新版起服务前据此知道迁移前的底已经
-  /// 留过了（见 ServerLauncher 的 `backUpBeforeMigration`）；下一次起服务时整条记录重写、它就没了。
-  var backup: String? = nil
 
   static func write(pid: Int) {
-    save(ServerRecord(pid: pid, bundleVersion: AshConfig.bundleVersion))
-  }
-
-  static func markBackedUp(_ backup: URL) {
-    guard let record = read() else { return }
-    save(ServerRecord(pid: record.pid, bundleVersion: record.bundleVersion, backup: backup.path))
-  }
-
-  private static func save(_ record: ServerRecord) {
+    let record = ServerRecord(pid: pid, bundleVersion: AshConfig.bundleVersion)
     if let data = try? JSONEncoder().encode(record) { try? data.write(to: url, options: .atomic) }
   }
 
@@ -124,7 +113,8 @@ final class Maintenance {
     let since: Date
   }
 
-  static var url: URL { AshConfig.dataURL.appendingPathComponent(".mac-maintenance.json") }
+  static let fileName = ".mac-maintenance.json"
+  static var url: URL { AshConfig.dataURL.appendingPathComponent(fileName) }
   private static let staleAfter: TimeInterval = 15 * 60
 
   private var lock: ServerStartLock?

@@ -60,7 +60,7 @@ enum DataImport {
   static func skipped(_ name: String) -> Bool {
     let exact: Set<String> = ["ash.db", "ash.db-wal", "ash.db-shm", "ash.db-journal", "ash.db.importing",
                               "deps", "tmp", "logs", "downloads", "backups",
-                              ".mac-launch.lock", ServerRecord.fileName, ".DS_Store"]
+                              ".mac-launch.lock", ServerRecord.fileName, Maintenance.fileName, ".DS_Store"]
     return exact.contains(name) || name.hasSuffix(".ash.lock") || name.contains(".ash-online.")
   }
 

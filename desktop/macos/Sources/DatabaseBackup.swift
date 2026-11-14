@@ -69,12 +69,28 @@ enum SQLiteFile {
 /// 配上旧版 app 能回去（步骤见 README「回到旧版」）。
 ///
 /// 放在 `<数据根>/backups/`，文件名 `<时间>-<旧构建号>.db`：时间在前，按名字排就是按时间排；
-/// 旧构建号说明该配哪一版 app。只留最近 `keep` 份。先写 `.partial` 再改名，中途失败不会留下
-/// 一份看着完整的半截库。
+/// 旧构建号说明该配哪一版 app。先写 `.partial` 再改名，中途失败不会留下一份看着完整的半截库；
+/// 同名的已经在就另起一个名字，绝不覆盖。
+///
+/// **恢复点**：迁移前的那一份原件被固定下来（`recovery-point.json` 记着是哪个文件），直到新版的
+/// 服务真起来了（迁移跑完了，ServerLauncher 确认就绪时 `release`）才放开。固定着的时候：
+///  · 它不参与「只留最近几份」的轮换；
+///  · 起服务前不再补备份（ServerLauncher 据此认出原件已经留过了）—— 新版连着起不来时，每次重试
+///    抓到的都是被失败的迁移改过一半的库，要是照常备份、照常轮换，原件很快就被挤掉；
+///  · 再来一次更新前备份照做，但恢复点仍是最早那份原件。
+/// 恢复点写不进去就算备份失败：没有它就没人记得哪一份才是原件。
 enum DatabaseBackup {
   static let keep = 5
+  private static var pinURL: URL { AshConfig.backupURL.appendingPathComponent("recovery-point.json") }
 
-  /// 备份当前数据根里的库。数据根里还没有库（从没起过服务）就什么都不做，返回 nil。
+  private struct Pin: Codable {
+    let file: String
+    let fromVersion: String
+    let since: Date
+  }
+
+  /// 备份当前数据根里的库，还没有恢复点就把这一份定为恢复点。数据根里还没有库（从没起过服务）
+  /// 就什么都不做，返回 nil。
   @discardableResult
   static func beforeUpdate(fromVersion: String, now: Date = Date()) throws -> URL? {
     let db = AshConfig.dataURL.appendingPathComponent("ash.db")
@@ -85,20 +101,40 @@ enum DatabaseBackup {
     stamp.locale = Locale(identifier: "en_US_POSIX")
     stamp.timeZone = TimeZone(identifier: "UTC")
     stamp.dateFormat = "yyyyMMdd-HHmmss"
-    let safeVersion = fromVersion.replacingOccurrences(of: "/", with: "_")
-    let target = dir.appendingPathComponent("\(stamp.string(from: now))-\(safeVersion).db")
+    let base = "\(stamp.string(from: now))-\(fromVersion.replacingOccurrences(of: "/", with: "_"))"
+    var target = dir.appendingPathComponent("\(base).db")
+    var attempt = 1
+    while FileManager.default.fileExists(atPath: target.path) {
+      attempt += 1
+      target = dir.appendingPathComponent("\(base)-\(attempt).db")
+    }
     let partial = target.appendingPathExtension("partial")
     try? FileManager.default.removeItem(at: partial)
     do {
       try SQLiteFile.snapshot(from: db, to: partial)
-      try? FileManager.default.removeItem(at: target)
       try FileManager.default.moveItem(at: partial, to: target)
     } catch {
       try? FileManager.default.removeItem(at: partial)
       throw error
     }
+    if recoveryPoint() == nil {
+      let pin = Pin(file: target.lastPathComponent, fromVersion: fromVersion, since: now)
+      try JSONEncoder().encode(pin).write(to: pinURL, options: .atomic)
+    }
     prune(dir)
     return target
+  }
+
+  /// 固定着的迁移前原件（新版还没确认起来过）。记录指向的文件不在了就当没有。
+  static func recoveryPoint() -> URL? {
+    guard let data = try? Data(contentsOf: pinURL), let pin = try? JSONDecoder().decode(Pin.self, from: data) else { return nil }
+    let url = AshConfig.backupURL.appendingPathComponent(pin.file)
+    return FileManager.default.fileExists(atPath: url.path) ? url : nil
+  }
+
+  /// 新版的服务起来了（迁移跑完了）：恢复点回到普通轮换里。
+  static func releaseRecoveryPoint() {
+    try? FileManager.default.removeItem(at: pinURL)
   }
 
   /// 最近的几份备份，新的在前。
@@ -112,6 +148,7 @@ enum DatabaseBackup {
     for name in names where name.hasSuffix(".partial") {
       try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
     }
-    for old in existing().dropFirst(keep) { try? FileManager.default.removeItem(at: old) }
+    let pinned = recoveryPoint()
+    for old in existing().dropFirst(keep) where old != pinned { try? FileManager.default.removeItem(at: old) }
   }
 }

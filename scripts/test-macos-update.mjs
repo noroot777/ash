@@ -9,8 +9,9 @@
 // 服务停不下来 → 不放行、不备份、松开启动闸；另一处攥着启动锁 → 不停服务；维护期里别的进程起
 // 不了服务、维护方没了就作废；端口上是别的 ash → 不碰它；退出那一档的取消 / 等 / 现在、备份失败
 // 时的说法；Sparkle 放弃（放行后 / 等待中）→ 闸收回、作废的安装回调不再跑、重试再备份；库上次是
-// 别的构建号在用、又没备份过 → 起服务前先备份，备份不成不起；备份只留最近 5 份；旧版 app 起的
-// 服务认得出来。
+// 别的构建号在用、又没备份过 → 起服务前先备份并固定成恢复点，备份不成不起；没有服务记录、新版连着
+// 起不来时重试不再备份，迁移前的原件一直留着；备份只留最近 5 份（恢复点另算、同一秒不覆盖）；旧版
+// app 起的服务认得出来。
 //
 // 发版：用演练密钥和一个假的 Ash.app 跑 `release.mjs --local`：zip 与 appcast 都验得过签、被篡改的
 // 包与 appcast 验不过；同一版、更旧的版本拒发；app 里的公钥和签名私钥不是一对时拒发；第二版排在
@@ -325,20 +326,54 @@ try {
   assert.match(result.out, /REPLY true/);
   console.log("PASS: a failed backup on quit says what quitting will and will not do");
 
-  // ── 库上次是别的构建号在用、又没备份过：起服务前先备份，备份不成不起 ──
+  // ── 库上次是别的构建号在用、又没备份过：起服务前先备份并固定成恢复点，备份不成不起 ──
+  const recoveryPoint = () => {
+    const file = join(data, "backups", "recovery-point.json");
+    return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")).file : null;
+  };
   rmSync(join(data, "backups"), { recursive: true, force: true });
   await drive(["record", "4242", "20000101.0000"]);
   result = await drive(["launch", "2"]);
   assert.match(result.out, /LAUNCH failed .*不完整/, result.out);
   assert.deepEqual(backups().map((n) => n.split("-").pop()), ["20000101.0000.db"], "backed up before a newer build may migrate it");
+  assert.equal(recoveryPoint(), backups()[0], "and pinned as the recovery point");
   result = await drive(["launch", "2"]);
   assert.equal(backups().length, 1, "a database already backed up for this switch is not backed up twice");
-  await drive(["record", "4242", "20000101.0000"]);
+  rmSync(join(data, "backups"), { recursive: true, force: true });
+  mkdirSync(join(data, "backups"));
   chmodSync(join(data, "backups"), 0o500);
   result = await drive(["launch", "2"]);
   chmodSync(join(data, "backups"), 0o700);
   assert.match(result.out, /LAUNCH failed .*迁移前先备份库没成功.*没起服务/, result.out);
   console.log("PASS: a launcher about to run a newer build on an un-backed-up database backs it up first, or does not start");
+
+  // ── 没有服务记录（导入来的、旧版 app 没写过）、新版连着起不来：迁移前的原件一直留着 ──
+  rmSync(join(data, "backups"), { recursive: true, force: true });
+  rmSync(join(data, ".mac-server.json"), { force: true });
+  db.exec("insert into tasks values ('before-migration')");
+  result = await drive(["launch", "2"]);
+  assert.match(result.out, /LAUNCH failed .*不完整/, result.out);
+  const original = backups()[0];
+  assert.equal(recoveryPoint(), original);
+  // 失败的迁移已经改过这份库；之后每一次重试都起不来。
+  db.exec("delete from tasks where id = 'before-migration'");
+  for (let i = 0; i < 6; i += 1) {
+    await delay(1100);
+    result = await drive(["launch", "2"]);
+    assert.match(result.out, /LAUNCH failed .*不完整/, result.out);
+  }
+  assert.deepEqual(backups(), [original], "retries of a failing new build never back up the half-migrated database over the original");
+  assert.equal(recoveryPoint(), original);
+  const kept0 = new DatabaseSync(join(data, "backups", original), { readOnly: true });
+  assert.equal(kept0.prepare("select count(*) as n from tasks where id = 'before-migration'").get().n, 1, "the recovery point is the pre-migration original");
+  kept0.close();
+  // 再来一次更新前备份（闸那一头）照做，但恢复点仍是原件，也不被轮换掉。
+  for (let i = 0; i < 6; i += 1) {
+    await drive(["backups", "1"]);
+  }
+  assert.equal(recoveryPoint(), original, "a later backup does not replace an unconfirmed recovery point");
+  assert.ok(backups().includes(original), "the recovery point is outside the rotation");
+  console.log("PASS: with no service record, repeated failed launches keep the pre-migration original pinned and never rotate it out");
 
   // ── 旧版 app 起的服务 ──
   result = await drive(["record", "4242"]);
@@ -354,15 +389,21 @@ try {
     "after replacing a stale service the gate opens again so the window starts the new one");
   console.log("PASS: a service started by an older build is recognised and replaced through the gate");
 
-  // ── 备份只留最近 5 份 ──
+  // ── 备份只留最近 5 份（外加固定着的恢复点），同一秒的两份不互相覆盖 ──
   rmSync(join(data, "backups"), { recursive: true, force: true });
   result = await drive(["backups", "7"]);
   const kept = result.out.match(/KEPT (.*)/)[1].split(",");
-  assert.equal(kept.length, 5, result.out);
-  assert.deepEqual(kept.map((n) => n.split("-").pop()), ["v6.db", "v5.db", "v4.db", "v3.db", "v2.db"], "newest first, oldest dropped");
-  assert.deepEqual(readdirSync(join(data, "backups")).sort(), [...kept].sort(), "no partial files left behind");
+  assert.equal(kept.length, 6, result.out);
+  assert.deepEqual(kept.map((n) => n.split("-").pop()), ["v6.db", "v5.db", "v4.db", "v3.db", "v2.db", "v0.db"],
+    "newest five, plus the first one, which is the pinned recovery point");
+  assert.match(result.out, /PINNED \d{8}-\d{6}-v0\.db/);
+  assert.deepEqual(readdirSync(join(data, "backups")).filter((n) => n !== "recovery-point.json").sort(), [...kept].sort(), "no partial files left behind");
+  result = await drive(["backups-same-second"]);
+  assert.match(result.out, /SAME-SECOND (\S+),(\S+)/);
+  const [a, b] = result.out.match(/SAME-SECOND (\S+),(\S+)/).slice(1);
+  assert.notEqual(a, b, "two backups in the same second get different names");
   db.close();
-  console.log("PASS: backups are consistent snapshots, newest five kept");
+  console.log("PASS: backups are consistent snapshots, newest five kept besides the recovery point, never overwritten");
 
   // ── 发版：本地演练 ──
   await releaseRehearsal();
