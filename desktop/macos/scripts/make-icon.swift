@@ -1,6 +1,23 @@
-// 画 app 图标：纯黑圆角方块 + 白色小写 a。用法：swift make-icon.swift <输出的 .iconset 目录>
+// 画 app 图标：米白圆角方块 + ash 的点阵标。用法：swift make-icon.swift <输出的 .iconset 目录>
 // 不入库位图，构建时现画，改样式只改这一份。
 import AppKit
+
+// 标本身：8×8 的一位图，# 是墨色，@ 是亮的那一格。这张图的出处是 web/src/brand/ashMark.ts，
+// Swift 够不着那边，这里是照着抄的 —— 改标的时候两处一起改（docs/logo/icon.svg 是同一张图，可以对着看）。
+let mark = [
+  ".......@",
+  "....#...",
+  "..#...#.",
+  "#..#.#..",
+  "###.#...",
+  "####..#.",
+  "#####...",
+  "#####.#.",
+]
+func gray(_ hex: Int) -> NSColor {
+  NSColor(deviceRed: CGFloat((hex >> 16) & 0xff) / 255, green: CGFloat((hex >> 8) & 0xff) / 255,
+          blue: CGFloat(hex & 0xff) / 255, alpha: 1)
+}
 
 let out = URL(fileURLWithPath: CommandLine.arguments[1])
 try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
@@ -21,16 +38,21 @@ func render(_ px: Int) -> Data {
   shadow.shadowBlurRadius = s * 0.02
   shadow.shadowOffset = NSSize(width: 0, height: -s * 0.01)
   shadow.set()
-  NSColor.black.setFill()
+  gray(0xeceae4).setFill()
   path.fill()
   NSShadow().set()
 
-  let font = NSFont.systemFont(ofSize: body.height * 0.62, weight: .semibold)
-  let text = NSAttributedString(string: "a", attributes: [.font: font, .foregroundColor: NSColor.white])
-  let size = text.size()
-  // 按 x 高居中，而不是按行高：小写字母按行高放会偏下。draw(at:) 的点是行框左下角，基线在它上方 |descender| 处。
-  let baseline = body.midY - font.xHeight / 2
-  text.draw(at: NSPoint(x: body.midX - size.width / 2, y: baseline + font.descender))
+  // 与 docs/logo/icon.svg 同一个比例：512 的底上一格 40，标占正中 320。格子和起点都取整到像素：
+  // 不取整的话相邻两格各自抗锯齿，中间会留一道发灰的缝，小尺寸上整张标是糊的。AppKit 的 y 朝上，行要倒着放。
+  let cell = max(1, (body.width * 40 / 512).rounded())
+  let left = (body.midX - cell * 4).rounded()
+  let top = (body.midY + cell * 4).rounded()
+  for (row, line) in mark.enumerated() {
+    for (col, dot) in line.enumerated() where dot != "." {
+      gray(dot == "@" ? 0x5e6ad2 : 0x111113).setFill()
+      NSRect(x: left + CGFloat(col) * cell, y: top - CGFloat(row + 1) * cell, width: cell, height: cell).fill()
+    }
+  }
   NSGraphicsContext.restoreGraphicsState()
   return rep.representation(using: .png, properties: [:])!
 }

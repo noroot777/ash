@@ -54,6 +54,7 @@ import { ReclaimTurnSwitch } from "./ReclaimTurnSwitch.tsx";
 import { DeleteMessageButton, MessageDeleteProvider, type DeletableItem } from "./MessageDelete.tsx";
 import { TurnActions } from "./TurnActions.tsx";
 import { ReuseInputButton, type ReusableInput } from "./ReuseInput.tsx";
+import { AshLoader } from "../brand/AshLoader.tsx";
 import { conversationInputAnchor, conversationInputs, REQUIREMENT_INPUT_ID, requirementAuthor } from "./conversationInputs.ts";
 
 // 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
@@ -606,7 +607,7 @@ export function ConversationFeed({
               <p>点击「运行」开始，执行输出会实时显示在这里。</p>
             </div>
           )}
-          {loading && !items.length && <p className="task-conversation-note">正在读取会话…</p>}
+          {loading && !items.length && <p className="task-conversation-note"><AshLoader />正在读取会话…</p>}
           {forkBlockedReason && <p className="task-conversation-error" role="status">{forkBlockedReason}</p>}
           {error && <p className="task-conversation-error">{error.message}</p>}
           {/* 回合占位占着不动时,界面上得真有那个开关 —— 不然诊断说了「手动放开」,用户

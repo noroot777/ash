@@ -155,18 +155,38 @@ private final class BrandPane: NSView {
   }
 }
 
-/// 和 app 图标同一个字形，反过来：白底黑字，放在黑栏上。画法同 scripts/make-icon.swift。
+/// 和 app 图标同一张图：米白底上的点阵标，放在黑栏上，一格 3pt（web 向导的 `.onboarding-mark` 是同一个画法）。
+/// 点阵的出处是 web/src/brand/ashMark.ts，这里和 scripts/make-icon.swift 都是照着抄的，改标时一起改。
 private final class BrandMark: NSView {
+  private static let mark = [
+    ".......@",
+    "....#...",
+    "..#...#.",
+    "#..#.#..",
+    "###.#...",
+    "####..#.",
+    "#####...",
+    "#####.#.",
+  ]
+  private static let cell: CGFloat = 3
+
   override var intrinsicContentSize: NSSize { NSSize(width: 44, height: 44) }
 
   override func draw(_ dirtyRect: NSRect) {
-    NSColor.white.setFill()
+    NSColor(srgbRed: 0xEC / 255.0, green: 0xEA / 255.0, blue: 0xE4 / 255.0, alpha: 1).setFill()
     NSBezierPath(roundedRect: bounds, xRadius: bounds.width * 0.225, yRadius: bounds.width * 0.225).fill()
-    let font = NSFont.systemFont(ofSize: bounds.height * 0.62, weight: .semibold)
-    let glyph = NSAttributedString(string: "a", attributes: [.font: font, .foregroundColor: NSColor.black])
-    // 按 x 高居中：小写字母按行高放会偏下。
-    let baseline = bounds.midY - font.xHeight / 2
-    glyph.draw(at: NSPoint(x: bounds.midX - glyph.size().width / 2, y: baseline + font.descender))
+    let ink = NSColor(srgbRed: 0x11 / 255.0, green: 0x11 / 255.0, blue: 0x13 / 255.0, alpha: 1)
+    let live = NSColor(srgbRed: 0x5E / 255.0, green: 0x6A / 255.0, blue: 0xD2 / 255.0, alpha: 1)
+    // 底色是定死的浅色，所以墨色也定死。AppKit 的 y 朝上，行要倒着放。
+    let left = bounds.midX - Self.cell * 4
+    let top = bounds.midY + Self.cell * 4
+    for (row, line) in Self.mark.enumerated() {
+      for (col, dot) in line.enumerated() where dot != "." {
+        (dot == "@" ? live : ink).setFill()
+        NSRect(x: left + CGFloat(col) * Self.cell, y: top - CGFloat(row + 1) * Self.cell,
+               width: Self.cell, height: Self.cell).fill()
+      }
+    }
   }
 }
 

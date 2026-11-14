@@ -47,6 +47,7 @@ import { buildDuetHandoffBody, latestDuetGate } from "./duetHandoff.ts";
 import { isOpenDuetGate, runCreatedHandoffFollowUps } from "./handoffPolicy.ts";
 import { latestActiveDuetTurn, type DuetTurn } from "./duetState.ts";
 import { useDuet } from "./useDuet.ts";
+import { AshLoader } from "../brand/AshLoader.tsx";
 
 function timeMs(value?: string | null): number {
   const parsed = value ? Date.parse(value) : NaN;
@@ -383,7 +384,7 @@ export function DuetView({
       <ImagePreviewGroup isolated>
         <div className="conversation-scroll-region">
           <div className="duet-stream" ref={scrollRef}>
-            {duet.loading && !turns.length && <p className="duet-empty"><SpinnerGap size={14} className="is-spinning" />正在读取讨论记录…</p>}
+            {duet.loading && !turns.length && <p className="duet-empty"><AshLoader />正在读取讨论记录…</p>}
             {!duet.loading && duet.error && !turns.length && <p className="duet-empty is-error">讨论记录读取失败：{duet.error}</p>}
             {!duet.loading && !duet.error && !turns.length && (activityPhase
               ? <RunActivity status={task.status} mode={task.mode} phase={activityPhase} queuePosition={task.queuePosition} />

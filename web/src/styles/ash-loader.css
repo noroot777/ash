@@ -1,0 +1,16 @@
+/* ash 的加载动画（brand/AshLoader.tsx）。图本身是一卷横着排开的胶片，这里只管放映：
+   一拍往左推一格（8 个单位 = 一帧宽），推完一圈跳回头。帧数和一拍多长由组件按
+   brand/ashMark.ts 写在元素上，这里不重复那两个数。
+   减少动效不用另写：全应用那一条（motion-text.css）让它跑一遍就停，停下来是第 0 帧，
+   也就是静止的标。 */
+.ash-loader {
+  flex: none;
+  display: inline-block;
+  vertical-align: -0.2em;
+}
+.ash-loader__reel {
+  animation: ash-loader-reel calc(var(--ash-loader-frames) * var(--ash-loader-tick)) steps(var(--ash-loader-frames)) infinite;
+}
+@keyframes ash-loader-reel {
+  to { transform: translateX(calc(var(--ash-loader-frames) * -8px)); }
+}

@@ -376,6 +376,7 @@ button.context-meter-chip.is-tight { background: color-mix(in oklab, var(--red) 
 .task-conversation-note,
 .task-conversation-error { margin: 8px 0; color: var(--muted); font-size: var(--t-xs); }
 .task-conversation-error { color: var(--red); }
+.task-conversation-note > .ash-loader { margin-inline-end: 7px; }
 .task-message-attachments,
 .task-upload-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
 .task-message-image,

@@ -58,19 +58,17 @@
   align-items: flex-start;
 }
 
-/* 和 app 图标同一个字形,反过来:白底黑字。小写 a 按 x 高居中,行框里往上提一点。 */
+/* 和 app 图标同一张图:米白底上的点阵标,一格 3px(原生首启页的 BrandMark 是同一个画法)。
+   底是定死的浅色,所以墨色和亮的那一格也定死,不跟主题走。 */
 .onboarding-mark {
   display: grid;
   place-items: center;
   width: 44px;
   height: 44px;
-  padding-bottom: 4px;
   border-radius: 10px;
-  background: #fff;
-  color: #000;
-  font-size: 27px;
-  font-weight: var(--w-strong);
-  line-height: 1;
+  background: #eceae4;
+  color: #111113;
+  --accent: #5e6ad2;
 }
 
 .onboarding-brand b {
@@ -440,9 +438,13 @@ button.onboarding-rail-step:hover:not(.is-on),
   .onboarding-mark {
     width: 30px;
     height: 30px;
-    padding-bottom: 3px;
     border-radius: 8px;
-    font-size: 19px;
+  }
+
+  /* 小块里标缩到一格 2px。 */
+  .onboarding-mark svg {
+    width: 16px;
+    height: 16px;
   }
 
   .onboarding-rail {

@@ -17,6 +17,7 @@ import { PairPage, dropPairCode } from "./PairPage.tsx";
 import { ProjectJoinPage } from "./ProjectJoinPage.tsx";
 import { SetupWizard } from "./SetupWizard.tsx";
 import { AuthContext } from "./authContext.ts";
+import { AshLoader } from "../brand/AshLoader.tsx";
 
 /** 领取链接与项目加入链接走真实路径,刷新后还在(邮件/群里发的就是这条 URL)。 */
 function routeOf(pathname: string): { kind: "claim" | "join"; token: string } | null {
@@ -111,7 +112,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       );
     }
     // `role="status"` 不是装饰:这一屏只剩一行字,没有它读屏用户在这段等待里什么都听不到。
-    return waitedLong ? <div className="auth-booting" role="status">正在确认身份…</div> : null;
+    return waitedLong ? <div className="auth-booting" role="status"><AshLoader size={32} />正在确认身份…</div> : null;
   }
 
   // 排在向导之前:没认出机主的时候,连「要不要首启」都不该由这个访客来答。

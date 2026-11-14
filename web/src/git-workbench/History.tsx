@@ -9,6 +9,7 @@ import { WorkbenchMenu } from "./WorkbenchMenu.tsx";
 import { RebaseDialog } from "./RebaseDialog.tsx";
 import { HistorySplit } from "./HistorySplit.tsx";
 import { localeDate, localeDateTime } from "../lib/localeFormat.ts";
+import { AshLoader } from "../brand/AshLoader.tsx";
 
 export function History({
   projectId,
@@ -336,7 +337,7 @@ export function History({
                 {error}
               </p>
             )}
-            {loading && <div className="gwb-empty">正在读取提交图…</div>}
+            {loading && <div className="gwb-empty"><AshLoader />正在读取提交图…</div>}
             {commits.map((commit, index) => {
               if (
                 search &&

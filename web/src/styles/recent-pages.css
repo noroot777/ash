@@ -80,11 +80,10 @@
   place-items: center;
   border: 1px solid rgb(255 255 255 / 18%);
   border-radius: 14px;
-  background: #f2b564;
-  color: #17191f;
-  font-size: 25px;
-  font-weight: var(--w-strong);
-  letter-spacing: -.08em;
+  /* 和 app 图标同一张图：米白底上的点阵标。底是定死的浅色，所以墨色和亮的那一格也定死，不跟主题走。 */
+  background: #eceae4;
+  color: #111113;
+  --accent: #5e6ad2;
   box-shadow: 0 12px 30px rgb(0 0 0 / 22%);
 }
 
