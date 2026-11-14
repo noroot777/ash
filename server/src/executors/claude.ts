@@ -19,6 +19,7 @@ import { monitorRedirectHook } from "../claude-monitor-hook.js";
 import { anthropicContext1mBaseUrl, modelUsesContext1m, withContext1mSuffix } from "../anthropic-context-1m.js";
 import { ClaudeControlBridge } from "./claude-control.js";
 import { parseClaudeStream } from "./claude-stream.js";
+import { claudeAshMcpArgs } from "./ash-mcp-inject.js";
 import { claudeGoalInvocation, cleanupClaudeGoalContext } from "./claude-goal.js";
 export { parseClaudeStream } from "./claude-stream.js";
 export { claudeEffortUnsupportedMessage, claudeRootBypassMessage, normalizeClaudeCliError, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
@@ -438,6 +439,8 @@ export class ClaudeExecutor implements AgentExecutor {
     // client sees nothing until a whole message lands, then the entire block
     // appears at once — the "laggy, dumps-in-one-go" feel. See parseClaudeStream.
     const args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--dangerously-skip-permissions"];
+    // ash 自己的 MCP 起跑时注入(ash-mcp-inject.ts)。`--mcp-config` 是变长参数,必须排在别的 flag 前面。
+    args.push(...claudeAshMcpArgs());
     // stdin 从「一次性 prompt」变成「一行行 JSON 消息」(CLI help 原文:realtime
     // streaming input),于是同一进程能连吃多个回合。
     if (resident) args.push("--input-format", "stream-json");

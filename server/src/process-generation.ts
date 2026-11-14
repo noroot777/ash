@@ -148,7 +148,7 @@ export function processGenerationsSync(
 
 /**
  * 同上的异步版:拼法逐字一致(同一个 `t:` 文本),只是 Windows 上那次进程表查询不再同步起
- * PowerShell。给事件循环上还有别的活要干的调用方用(派审预检,见 `ash-mcp-probe.ts`)。
+ * PowerShell。给事件循环上还有别的活要干的调用方用。
  */
 export async function processGenerationsAsync(
   pids: readonly number[],

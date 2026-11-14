@@ -35,7 +35,7 @@ export interface AshMcpConfigState {
   detail: string;
 }
 
-/** 「这条登记怎么起」—— 只拿来出提示,不参与拦/放(见 `ash-mcp-file.ts` 的 `launchHint`)。 */
+/** 「这条登记怎么起」—— 只拿来出提示、认「指没指向这里」(`host-setup.ts`),不参与写不写。 */
 export interface AshMcpLaunch {
   command?: string | null;
   args?: unknown;
@@ -288,25 +288,6 @@ export interface AshMcpConfigSite {
    * **只枚举真实存在的那几份,永远不当新建落点**:ash 不去给用户新造一个全局配置目录。
    */
   readonly extraDirs?: readonly ((env: NodeJS.ProcessEnv, home: string) => string)[];
-  /**
-   * 这家 CLI 的**全部读取位置**都本机逐格实测过、而且都在这张 site 上有对应声明。
-   *
-   * 这一位是「能不能下 absent 这个硬结论」的闸(本轮审查 F1):absent 在派审预检里是**硬拒**,
-   * 而「我枚举到的几份里都没有」只有在枚举本身可证完整时才等于「真的没有」。不置真的家
-   * 照样照常判 present / disabled,只是「都没找到」答 unknown(放行、不写、如实说一句),
-   * 因为那种「没找到」可能只是我们不知道它还读哪儿 —— 本轮三格实测里每一格都是这么错的。
-   *
-   * **安装器不看这一位**:它问的是「我看得见的来源里有没有」,追加一条不覆盖任何已有登记,
-   * 否则十三家 CLI 的 `npm run setup` 会一条都写不出来。
-   */
-  readonly loadMeasured?: boolean;
-  /**
-   * 这家 CLI 还会读的**项目级**配置(相对任务目录)。只给判据那一档用:这些文件里只要
-   * 提到 MCP,「用户级没有」就不再是个确定的结论 —— 按「向放行开」答 unknown,别拿
-   * 一份看不全的证据拦下一整轮审查(`ash-mcp-file.ts` 文件头)。ash 永远不写它们:
-   * 那是用户仓库里的文件,会被提交进去。
-   */
-  readonly projectRelative?: readonly (readonly string[])[];
   /**
    * 同样合法的其它文件名(kilo 的 `kilo.jsonc` / `config.json` / `opencode.json(c)`)——
    * **这一档是「没实测过同目录加载序」那种**:存在哪个就读写哪个(顺序就是我们猜的优先级),

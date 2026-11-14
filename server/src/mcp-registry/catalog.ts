@@ -52,7 +52,6 @@ export const ASH_MCP_TABLE = {
       dirEnv: "CODEX_HOME",
       defaultDir: underHome(".codex"),
       relative: ["config.toml"],
-      projectRelative: [[".codex", "config.toml"]],
     },
     // **没有 `switches`**:根级 `disabled_mcp_servers` 是 grok 专有的,codex 不认(2026-10-31
     // 实测 codex-cli 0.153.4:同一份配置里那个键 + 条目 `enabled = true` ⇒ `codex mcp list
@@ -76,7 +75,6 @@ export const ASH_MCP_TABLE = {
       dirEnv: "GEMINI_CLI_HOME",
       defaultDir: atHome,
       relative: [".gemini", "settings.json"],
-      projectRelative: [[".gemini", "settings.json"], [".mcp.json"]],
     },
     // 根级两个名单会直接把一条写得完全正确的登记打成 `Blocked`(2026-10-31 本机实测,
     // gemini 0.60.0:`mcp.excluded:["ash"]` ⇒ `⛔ ash … Blocked`;`mcp.allowed:["other"]`
@@ -101,7 +99,6 @@ export const ASH_MCP_TABLE = {
       dirEnv: "GROK_HOME",
       defaultDir: underHome(".grok"),
       relative: ["config.toml"],
-      projectRelative: [[".grok", "config.toml"]],
     },
     // 根级这个数组是**它专有**的:2026-10-31 同一份配置(条目 `enabled = true` + 根级
     // `disabled_mcp_servers = ["ash"]`)grok 1.0.41 打出 `(disabled)`,codex-cli 0.153.4
@@ -126,7 +123,6 @@ export const ASH_MCP_TABLE = {
       defaultDir: underHome(".kimi-code"),
       relative: ["mcp.json"],
       // 装好的二进制里原文列着这三档:user / projectRoot 的 `.mcp.json` / `<cwd>/.kimi-code/mcp.json`。
-      projectRelative: [[".mcp.json"], [".kimi-code", "mcp.json"]],
     },
     identity: "unknown",
     evidence: "tested",
@@ -158,11 +154,6 @@ export const ASH_MCP_TABLE = {
       // 同目录三个名字都读,顺序就是实测的加载序(`config.json` 这个名字**只在默认目录**算)。
       load: [["config.json"], ["opencode.json"], ["opencode.jsonc"]],
       extraDirs: [underHome(".opencode")],
-      projectRelative: [
-        ["opencode.json"], ["opencode.jsonc"],
-        [".opencode", "opencode.json"], [".opencode", "opencode.jsonc"],
-      ],
-      loadMeasured: true,
     },
     identity: "inherit",
     identityNote: "回合身份原样传到 MCP 子进程 —— 端到端那一条真跑出来的结论（交卷要带 turn/direction token，"
@@ -234,7 +225,6 @@ export const ASH_MCP_TABLE = {
       dirEnv: null,
       defaultDir: underHome(".cursor"),
       relative: ["mcp.json"],
-      projectRelative: [[".cursor", "mcp.json"]],
     },
     identity: "unknown",
     evidence: "docs",
@@ -256,7 +246,6 @@ export const ASH_MCP_TABLE = {
       dirEnv: "QWEN_HOME",
       defaultDir: underHome(".qwen"),
       relative: ["settings.json"],
-      projectRelative: [[".qwen", "settings.json"], [".mcp.json"], ["mcp.json"]],
     },
     identity: "unknown",
     evidence: "docs",
@@ -276,7 +265,6 @@ export const ASH_MCP_TABLE = {
       // 目录名本身可以被 `QODER_CONFIG_DIR_NAME` 换掉(bundle 里有这个分支)。
       defaultDir: (env, home) => join(home, env.QODER_CONFIG_DIR_NAME?.trim() || ".qoder"),
       relative: ["mcp.json"],
-      projectRelative: [[".mcp.json"], ["mcp.json"]],
     },
     identity: "unknown",
     evidence: "docs",
@@ -292,7 +280,6 @@ export const ASH_MCP_TABLE = {
       dirEnv: "COPILOT_HOME",
       defaultDir: underHome(".copilot"),
       relative: ["mcp-config.json"],
-      projectRelative: [[".mcp.json"], [".github", "mcp.json"]],
     },
     // 文件里本地服务的 `type` 叫 `local`(命令行那一侧才是 `--transport stdio`,两边不同名)。
     writeType: "local",
@@ -327,7 +314,6 @@ export const ASH_MCP_TABLE = {
       dirEnv: null,
       defaultDir: underHome(".kiro"),
       relative: ["settings", "mcp.json"],
-      projectRelative: [[".kiro", "settings", "mcp.json"]],
     },
     identity: "unknown",
     evidence: "docs",
@@ -348,7 +334,6 @@ export const ASH_MCP_TABLE = {
       defaultDir: xdgConfig("kilo"),
       relative: ["kilo.json"],
       alternates: [["kilo.jsonc"], ["config.json"], ["opencode.json"], ["opencode.jsonc"]],
-      projectRelative: [["kilo.json"], ["kilo.jsonc"], [".kilo", "kilo.json"], [".kilocode", "mcp.json"]],
     },
     identity: "unknown",
     evidence: "docs",
@@ -370,7 +355,6 @@ export const ASH_MCP_TABLE = {
       dirEnv: null,
       defaultDir: underHome(".gemini", "config"),
       relative: ["mcp_config.json"],
-      projectRelative: [[".agents", "mcp_config.json"]],
     },
     identity: "unknown",
     evidence: "docs",
@@ -387,7 +371,6 @@ export const ASH_MCP_TABLE = {
       dirEnv: "PI_CODING_AGENT_DIR",
       defaultDir: underHome(".pi", "agent"),
       relative: ["mcp.json"],
-      projectRelative: [[".pi", "mcp.json"]],
     },
     // pi-mcp 的 StdioTransport 默认 `{ ...process.env, ...options.env }`(inheritEnv 不为 false),
     // pi 自己没传 inheritEnv —— 所以起跑时注的回合身份进得去。
@@ -419,10 +402,6 @@ export const ASH_MCP_TABLE = {
       alternates: [[".mcp.json"]],
       // 同目录那三份它也读、而 JSON 族读不了(见 `AshMcpConfigSite.opaque`)。
       opaque: [["traecli.yaml"], ["mcp.yaml"], [".mcp.yaml"]],
-      projectRelative: [
-        [".trae", "traecli.yaml"], [".trae", "mcp.json"], [".trae", ".mcp.json"],
-        [".coco", "coco.yaml"], [".agents", "coco.yaml"],
-      ],
     },
     identity: "unknown",
     evidence: "docs",

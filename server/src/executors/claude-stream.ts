@@ -25,6 +25,7 @@ import type { ConsumedOutput } from "./types.js";
 import { claudeRetryMessage, claudeRetryModel, isClaudeRetry } from "./claude-retry-notice.js";
 import { normalizeClaudeCliError, shortJson, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
 import { ClaudeRequestTimer } from "./request-timing.js";
+import { claudeAshMcpProblem } from "./ash-mcp-inject.js";
 import { claudeApiStatus, modelFailureOf } from "./model-failure.js";
 
 // resident 非空 = 常驻模式:`result` 行只代表「一个回合说完了」(→ turnEnd),
@@ -252,6 +253,12 @@ async function* claudeStreamEvents(
     }
     if (ev.type === "system" && ev.session_id) {
       if (ev.subtype === "init" && !replaying) onInitialized();
+      // ash 的工具连没连上,以 CLI 自己在 init 里报的为准(ash-mcp-inject.ts)。只认 claude 本人:
+      // 复用这份解析的别家 CLI 不注入 ash,它们清单里有没有 ash 不归这里说。
+      if (ev.subtype === "init" && !replaying && calibrateAs === "claude") {
+        const problem = claudeAshMcpProblem(ev.mcp_servers);
+        if (problem) push(problem);
+      }
       // init 事件白送一份**权威**技能清单(skills / slash_commands / cwd 都在里面),
       // 顺手校准 skills 模块的扫描结果 —— 这是唯一不用额外起一个 CLI 进程就能拿到
       // 「这个 CLI 自己认哪些技能」的机会,别浪费。纯旁路:失败也不能影响事件流。

@@ -18,8 +18,6 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { BACKUP_SUFFIX } from "../src/auth/config-publish.js";
-import { fileAshMcpVerdict } from "../src/ash-mcp-file.js";
-import { howToCheck } from "../src/ash-mcp-reachability.js";
 import { registerAshMcp } from "../src/mcp-registry/register.js";
 import {
   ashMcpHostFile, ashMcpHostSources, effectiveConfigState, resolveAshMcp,
@@ -82,7 +80,6 @@ export async function checkSourceModel(
       "默认目录里存在的几份都要进来源集合(写入目标排最后)");
     assert.equal(effectiveConfigState(srcA, readingOf(site, shape)).state, "present",
       "另一份里有生效的 ash ⇒ 最终就是 present");
-    assert.equal(fileAshMcpVerdict("opencode", envA, [a.host]).state, "present", "判定也得是 present");
     const beforeA = [readFileSync(aJson, "utf8"), readFileSync(aJsonc, "utf8")];
     const rA = await registerAshMcp({ agentType: "opencode", dir: ashMcpConfigDir("opencode", envA, a.host)!, hostHome: a.host, env: envA });
     assert.ok(rA.ok, rA.ok ? "" : rA.why);
@@ -99,8 +96,6 @@ export async function checkSourceModel(
     const srcB = ashMcpHostSources("opencode", envB, b.host);
     assert.equal(effectiveConfigState(srcB, readingOf(site, shape)).state, "disabled",
       "高优先级那份关掉了 ⇒ 最终是 disabled");
-    const verdictB = fileAshMcpVerdict("opencode", envB, [b.host]);
-    assert.equal(verdictB.state, "disabled", `判定也得是 disabled:${JSON.stringify(verdictB)}`);
     const rB = await registerAshMcp({ agentType: "opencode", dir: ashMcpConfigDir("opencode", envB, b.host)!, hostHome: b.host, env: envB });
     assert.ok(!rB.ok && /没有替你打开/.test(rB.why), `不许替用户打开:${rB.ok ? "ok" : rB.why}`);
     assert.equal(readFileSync(bGlobal, "utf8"), WITH_ASH, "全局那份不许动");
@@ -125,8 +120,6 @@ export async function checkSourceModel(
     const srcD = ashMcpHostSources("opencode", envD, d.host);
     assert.equal(srcD.at(-1)!.file, null, "变量里那段是只读来源,没有文件可写");
     assert.equal(ashMcpHostFile("opencode", envD, d.host), dGlobal, "落点只能是可写的那一份");
-    assert.equal(fileAshMcpVerdict("opencode", envD, [d.host]).state, "present",
-      "只有变量里那段有 ash,真 CLI 也连得上 ⇒ present");
     const rD = await registerAshMcp({ agentType: "opencode", dir: ashMcpConfigDir("opencode", envD, d.host)!, hostHome: d.host, env: envD });
     assert.ok(rD.ok, rD.ok ? "" : rD.why);
     assert.equal(readFileSync(dGlobal, "utf8"), EMPTY, "全局那份一个字节都不许动");
@@ -167,7 +160,6 @@ export async function checkSourceModel(
     const stA = effectiveConfigState(srcA, { shape, merges });
     assert.equal(stA.state, "present", `两个名字各算一次,harness 那条是开着的:${stA.detail}`);
     assert.equal(stA.serverName, "harness", "说清生效的是哪一条(用户要去看的就是它)");
-    assert.equal(fileAshMcpVerdict("opencode", envA, [a.host]).state, "present", "派审门禁也得放行");
     const rA = await registerAshMcp({
       agentType: "opencode", dir: ashMcpConfigDir("opencode", envA, a.host)!, hostHome: a.host, env: envA,
     });
@@ -210,10 +202,6 @@ export async function checkSourceModel(
     const pick = resolveAshMcp(ashMcpHostSources("opencode", envC, c.host), { shape, merges });
     assert.equal(pick.state, "present");
     assert.deepEqual(pick.fact?.launch?.args, ["/live.js"], "解析层交出来的就是开着那条的启动方式");
-    const verdictC = fileAshMcpVerdict("opencode", envC, [c.host]);
-    assert.equal(verdictC.state, "present");
-    assert.match(verdictC.hint ?? "", /live\.js/, `提示要指到开着那条:${verdictC.hint}`);
-    assert.ok(!/old\.js/.test(verdictC.hint ?? ""), `关着那条不许拿去当提示:${verdictC.hint}`);
 
     // ⒟ 整份读不准的那一份:**不管它在哪一层**都只能说看不准。
     //    这一格原来分两档(高的拦、低的放行,理由是「低的盖不住高的」),2026-10-31 实测推翻了
@@ -240,18 +228,7 @@ export async function checkSourceModel(
     });
     assert.ok(!rE2.ok && /看不准/.test(rE2.why), `看不准就不写:${rE2.ok ? "ok" : rE2.why}`);
     assert.equal(readFileSync(lowBroken, "utf8"), '{"mcp": {', "坏的那份也不许动");
-
-    // ⒠ 缺登记时给的自查路径必须是**路径**(本轮审查 N1:上一版把来源对象直接拼进话里,
-    //    用户拿到的是 `看一眼 [object Object]`)。
-    const f = bench("n1-how-to-check");
-    const one = howToCheck("kimi", { KIMI_CODE_HOME: f.dir } as NodeJS.ProcessEnv);
-    assert.ok(!one.includes("[object Object]"), `单来源那家也得给出路径:${one}`);
-    assert.match(one, /mcp\.json/, `说清是哪一份:${one}`);
-    const many = howToCheck("opencode", ocEnv(f.host, { OPENCODE_CONFIG: join(f.dir, "my.json") }));
-    assert.ok(!many.includes("[object Object]"), `几份来源也得逐个给出路径:${many}`);
-    assert.match(many, /opencode\.json/, `默认目录那份要在:${many}`);
-    assert.match(many, /my\.json/, `变量指的那份也要在:${many}`);
-    group("逐名跨来源:两个兼容名各算一次、搬运与提示消费同一个选中结果、自查路径是路径");
+    group("逐名跨来源:两个兼容名各算一次、搬运与提示消费同一个选中结果");
   }
 
   // ── ⑲ 几份来源**合起来**算那一条(本轮审查 F1)────────────────────────────────
@@ -289,7 +266,6 @@ export async function checkSourceModel(
     const stA = effectiveConfigState(srcA, { shape, merges });
     assert.equal(stA.state, "present", `合起来是开着的:${stA.detail}`);
     assert.deepEqual(stA.fact?.launch?.args, ["/FILE.js"], "启动方式是低那份继承上来的");
-    assert.equal(fileAshMcpVerdict("opencode", envA, [a.host]).state, "present", "派审门禁也得放行");
     assert.equal(ashMcpHostFile("opencode", envA, a.host), aAlt, "落点是优先级最高的那份可写来源");
     const rA = await registerAshMcp({
       agentType: "opencode", dir: ashMcpConfigDir("opencode", envA, a.host)!, hostHome: a.host, env: envA,
@@ -327,7 +303,6 @@ export async function checkSourceModel(
     const stC = effectiveConfigState(ashMcpHostSources("opencode", envC, c.host), { shape, merges });
     assert.equal(stC.state, "present", stC.detail);
     assert.deepEqual(stC.fact?.launch?.args, ["/JSONC.js"], "同目录里 .jsonc 排在 .json 之后");
-    assert.match(fileAshMcpVerdict("opencode", envC, [c.host]).hint ?? "", /JSONC\.js/, "提示跟判定同源");
 
     // ⒟ 合的是**逐字段**:子对象按键合(低那份没被顶掉的键留着),数组整条换掉。
     const d = bench("f1-deep-merge");
@@ -443,7 +418,6 @@ export async function checkSourceModel(
     const stC = effectiveConfigState(srcC, { shape, merges });
     assert.equal(stC.state, "present", `再读那一遍把开关翻回来了:${stC.detail}`);
     assert.deepEqual(stC.fact?.launch?.args, ["/json.js"], "生效的是再读那一份里的命令");
-    assert.equal(fileAshMcpVerdict("opencode", envC, [c.host]).state, "present", "派审门禁要放行");
     assert.equal(ashMcpHostFile("opencode", envC, c.host), cJson, "落点也是最高那个阶段指的那份");
     //    反过来指回 `.jsonc`:那它就是最后一次加载 ⇒ 关着(同一条规则的另一面)。
     const d = bench("f1b-same-path-reversed");
@@ -478,8 +452,6 @@ export async function checkSourceModel(
       const envE = ocEnv(e.host, { OPENCODE_CONFIG: extra });
       const stE = effectiveConfigState(ashMcpHostSources("opencode", envE, e.host), { shape, merges });
       assert.equal(stE.state, "unknown", `${where}:有一份读不准 ⇒ 看不准(得到 ${stE.state})`);
-      assert.equal(fileAshMcpVerdict("opencode", envE, [e.host]).state, "unknown",
-        `${where}:预检也只能说看不准`);
       const rE = await registerAshMcp({
         agentType: "opencode", dir: ashMcpConfigDir("opencode", envE, e.host)!, hostHome: e.host, env: envE,
       });

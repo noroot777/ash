@@ -21,7 +21,7 @@ import {
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting, type MarkdownImageSink } from "./markdown-image-stream.js";
-import { codexAshMcpServerName } from "./codex-mcp.js";
+import { codexAshMcpArgs } from "./ash-mcp-inject.js";
 import { TURN_IDENTITY_ENV_KEYS } from "../turn-identity.js";
 
 const ASH_MCP_IDENTITY_ENV_VARS = TURN_IDENTITY_ENV_KEYS;
@@ -108,13 +108,9 @@ export class CodexExecutor implements AgentExecutor {
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) common.push(...this.extraArgs);
     if (opts.extraArgs?.length) common.push(...opts.extraArgs);
-    // codex 默认会过滤 MCP stdio 子进程环境。env_vars 让它从父进程按**变量名**复制动态
-    // 身份：argv 里没有 token 值；放在用户 extraArgs 之后，避免白名单被同 key 覆盖。
-    const identityVars = ASH_MCP_IDENTITY_ENV_VARS.filter((key) => !!opts.env?.[key]);
-    if (identityVars.length) {
-      const serverName = codexAshMcpServerName(opts.env?.CODEX_HOME);
-      if (serverName) common.push("-c", `mcp_servers.${serverName}.env_vars=${JSON.stringify(identityVars)}`);
-    }
+    // ash 自己的 MCP 起跑时注入(ash-mcp-inject.ts),连同按**变量名**透传的回合身份(codex 默认
+    // 过滤 MCP 子进程环境;argv 里没有 token 值)。放在用户 extraArgs 之后,同 key 时以注入为准。
+    common.push(...codexAshMcpArgs(ASH_MCP_IDENTITY_ENV_VARS.filter((key) => !!opts.env?.[key])));
     return sessionId ? ["exec", ...common, "resume", sessionId, "-"] : ["exec", ...common, "-"];
   }
 
@@ -186,13 +182,8 @@ export class CodexExecutor implements AgentExecutor {
     const profile = appServerCompatibleArgs(this.extraArgs);
     const turn = appServerCompatibleArgs(opts.extraArgs ?? []);
     args.push(...profile.args, ...turn.args);
-    // App Server 同样由它自己拉起 MCP 子进程；身份变量仍只按名字进 TOML，真 token
-    // 留在父进程 env，既不进 commandLine，也不会被 Codex 的 MCP 环境过滤掉。
-    const identityVars = ASH_MCP_IDENTITY_ENV_VARS.filter((key) => !!opts.env?.[key]);
-    if (identityVars.length) {
-      const serverName = codexAshMcpServerName(opts.env?.CODEX_HOME);
-      if (serverName) args.push("-c", `mcp_servers.${serverName}.env_vars=${JSON.stringify(identityVars)}`);
-    }
+    // App Server 同样由它自己拉起 MCP 子进程:注入与身份透传同 exec(见 execArgs)。
+    args.push(...codexAshMcpArgs(ASH_MCP_IDENTITY_ENV_VARS.filter((key) => !!opts.env?.[key])));
     return { args, ignored: [...new Set([...profile.ignored, ...turn.ignored])] };
   }
 
