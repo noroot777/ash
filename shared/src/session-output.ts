@@ -33,6 +33,23 @@ import { systemResumeOf, type SystemResume } from "./system-resume.ts";
  */
 export type RecordIdentity = { seq: number; turnStartedAt: string | null };
 
+/**
+ * 一步执行过程落在正文里的哪个位置：号为 `seq` 的那段正文写到第 `offset` 个字的时候（`offset` 跟实时正文
+ * 增量的 `textOffset` 同一个口径）。服务端落 trace 那一刻从正文流上取（server/src/transcript-identity.ts），
+ * trace 那一行与实时事件带同一个值；null = 这一回合还没写过正文。页面据此把步骤插回原文，不拿本地已经
+ * 读到了多少字去猜（正文与 trace 是分两次读的，读到的进度不一样）。
+ */
+export type TextAnchor = { seq: number; offset: number };
+
+/** 读一处 `textAt`：合法的锚点 / null（还没写过正文）/ undefined（没有这一位，或者写坏了）。 */
+export function textAnchorOf(value: unknown): TextAnchor | null | undefined {
+  if (value === null) return null;
+  if (!value || typeof value !== "object") return undefined;
+  const { seq, offset } = value as { seq?: unknown; offset?: unknown };
+  const safe = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
+  return safe(seq) && safe(offset) ? { seq, offset } : undefined;
+}
+
 // 身份那两位挂在每一种段上（老记录缺省）。agent 段的 `at` 是这段正文开头那一刻（标记行写下的），
 // `raw` 是盘上这段正文原样（没裁空白，`text` 是裁过的）：同一颗气泡被旁注劈开的几段按原样接回去，
 // 一个字不差；实时那一路的增量按它的字数认「哪些字盘上已经有了」。

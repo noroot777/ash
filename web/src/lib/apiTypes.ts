@@ -72,6 +72,8 @@ export type SessionTraceEntry = {
   turnStartedAt: string;
   /** 这条记录在会话里的号（同 shared/src/session-output.ts 的 RecordIdentity）。老记录、读侧补出来的没有。 */
   seq?: number;
+  /** 这一步落在正文的哪个位置（同 shared/src/session-output.ts 的 TextAnchor）。带号的才有。 */
+  textAt?: import("@ash/shared/session-output").TextAnchor | null;
   /** 服务端**读的时候**补出来的（盘上没有）：图片账本补回的图、子智能体的模型档案。删除指纹不数它们。 */
   origin?: "journal" | "models";
   event:

@@ -7,9 +7,9 @@ import { open, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { AgentEvent, AgentType } from "@ash/shared";
 import { isTokenUsage, isUsageAccountingMark } from "@ash/shared/usage";
-import type { RecordIdentity } from "@ash/shared/session-output";
+import { textAnchorOf, type RecordIdentity, type TextAnchor } from "@ash/shared/session-output";
 import { RUNS_DIR, RUNS_FALLBACK_DIR } from "./paths.js";
-import { closeProse, sentinelIdentity, traceRecordSeq } from "./transcript-identity.js";
+import { closeProse, sentinelIdentity, traceRecord } from "./transcript-identity.js";
 
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
 type TraceTextEvent = { kind: "text"; text: string };
@@ -27,6 +27,8 @@ export type SessionTraceEntry = {
   turnStartedAt: string;
   /** 这条会话的第几条记录（跟 .md 共用号段，见 session-seq.ts）。老记录没有。 */
   seq?: number;
+  /** 这一步落在正文的哪个位置（见 shared/src/session-output.ts 的 TextAnchor）。带号的才有。 */
+  textAt?: TextAnchor | null;
   /**
    * 盘上没有、服务端**读的时候**补出来的条目才有：journal = 图片账本补回的图（agent-image-journal.ts），
    * models = 子智能体的模型档案（native-work-models.ts）。页面删消息时按盘上那份核对指纹，凭它把
@@ -60,27 +62,27 @@ export function readableRunPath(path: string): string {
   return join(RUNS_FALLBACK_DIR, rel);
 }
 
-/** 落一条 trace，返回它领到的记录号（实时事件带上同一个号）。 */
+/** 落一条 trace，返回它领到的记录号与正文位置（实时事件带上同一份）。 */
 export function appendSessionTrace(
   taskId: string,
   sessionId: string,
   turnStartedAt: string,
   event: SessionTraceEvent,
   at = new Date().toISOString(),
-): number | null {
+): { seq: number; textAt: TextAnchor | null } | null {
   const path = sessionTracePath(taskId, sessionId);
   // 号在写盘之前领：写失败了实时那一路照样带着它，页面上那一步不会因为盘坏了变成另一条。
-  // 只有这条会话有正式流（单飞那一路）时才带号，见 transcript-identity.ts 的 traceRecordSeq。
-  const seq = traceRecordSeq(sessionId);
+  // 只有这条会话有正式流（单飞那一路）时才带号，见 transcript-identity.ts 的 traceRecord。
+  const record = traceRecord(sessionId);
   try {
     mkdirSync(dirname(path), { recursive: true });
-    appendFileSync(path, `${JSON.stringify({ at, turnStartedAt, ...(seq === null ? {} : { seq }), event } satisfies SessionTraceEntry)}\n`);
+    appendFileSync(path, `${JSON.stringify({ at, turnStartedAt, ...(record ?? {}), event } satisfies SessionTraceEntry)}\n`);
   } catch (error) {
     // Trace persistence is diagnostic UI state. A disk failure must not alter the
     // executor's outcome, but it must remain visible to operators.
     console.warn(`[ash] failed to persist session trace ${sessionId}:`, error);
   }
-  return seq;
+  return record;
 }
 
 // 只读尾巴：判据要的那条事件属于**最后一回合**，它一定贴在文件末尾；整份读进来对长会话
@@ -195,6 +197,11 @@ function parseTraceLine(line: string): SessionTraceEntry | null {
     if (entry.seq !== undefined && !(typeof entry.seq === "number" && Number.isSafeInteger(entry.seq) && entry.seq >= 0)) delete entry.seq;
     // 读的时候补出来的条目才带来源，盘上那一行带着它就是被写坏了（或者是谁手改的）：去掉，照盘上的算。
     if (entry.origin !== undefined) delete entry.origin;
+    if (entry.textAt !== undefined) {
+      const anchor = textAnchorOf(entry.textAt);
+      if (anchor === undefined || entry.seq === undefined) delete entry.textAt;
+      else entry.textAt = anchor;
+    }
     return validTraceEvent(entry.event) ? entry as SessionTraceEntry : null;
   } catch {
     return null;

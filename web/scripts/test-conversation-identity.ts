@@ -14,7 +14,7 @@
 //      实时正文照常画；回合先动手后说话时快照里只有带号的执行过程，照样归身份这一路；接不回号段的那一回合整个
 //      照老样子写，开着页面和刷新以后都画在它自己那一回合（中间的旁注也不劈开它），两路混着时删除按整份 .md
 //      的原始序号、同文不误删；正文写到空白 / 工具 / 旁注 / 未闭合代码块 / 只有缩进时打开页面，三路的正文、分段、
-//      复制与导出逐字相同（一颗气泡只有一份原文）；
+//      复制与导出逐字相同（一颗气泡只有一份原文）；正文与 trace 读到的进度不一样时，步骤照服务端记的正文位置插回；
 //      output 与 trace 不是同一刻读的、中间那句插话只在实时那一路，步骤照样归插话之后；快照里「在等上游」
 //      被之后的实时输出和此刻的会话列表覆盖；有身份与没身份的实时事件按到达顺序排
 //
@@ -62,7 +62,7 @@ function turn(sessionId: string, turnStartedAt: string, timeline: TimelineEntry[
   };
   onRecord(out, flush);
   const later: { text: string; at: string; identity: ReturnType<typeof reserveRecord> }[] = [];
-  const publish = (event: object, record?: { seq: number; textOffset?: number } | null) => timeline.push({
+  const publish = (event: object, record?: { seq: number; textOffset?: number; textAt?: unknown } | null) => timeline.push({
     kind: "server", id: `e${timeline.length}`,
     event: { type: "agent.event", taskId: TASK, sessionId, role: "single", agentType: "codex", model: "gpt-5.6", reasoningEffort: "high", turnStartedAt, ...(bound ? { identityTurn: true } : {}), ...(record ?? {}), event } as never,
   });
@@ -83,8 +83,7 @@ function turn(sessionId: string, turnStartedAt: string, timeline: TimelineEntry[
     },
     step(event: SessionTraceEntry["event"], at = clock) {
       flush();
-      const seq = appendSessionTrace(TASK, sessionId, turnStartedAt, event as never, at);
-      publish(event, seq === null ? null : { seq });
+      publish(event, appendSessionTrace(TASK, sessionId, turnStartedAt, event as never, at));
       return api;
     },
     tool(name: string, at = clock) { return api.step({ kind: "tool", name, detail: name }, at); },
@@ -426,6 +425,48 @@ ok("落盘重建、实时到达、中途打开（含重叠与半截正文）三�
     assert.deepEqual(view(buildConversationItems([snapshot], [session], arrivals)), refreshed, `${name}：中途打开（快照与实时全部重叠）也一样`);
   }
   ok("正文写到空白、工具、旁注、未闭合代码块、只有缩进时打开页面：三路的正文、分段、复制与导出逐字相同");
+}
+
+{
+  // 正文与 trace 读到的进度不一样（两次请求）：正文读得更新、已经有了这一步之后的字；或者反过来 trace 更新。
+  // 步骤的位置照服务端记的锚点（哪段正文写到第几个字），不照本地此刻读到了多少字。
+  const S = "s-anchor";
+  const at = T(50);
+  const session = sessionRow(S, { [at]: null });
+  const out = createWriteStream(sessionTranscriptPath(TASK, S), { flags: "a" });
+  await claimTranscript(out, { taskId: TASK, sessionId: S, turnStartedAt: at });
+  const voice = createRunVoice({ taskId: TASK, sessId: S, turnStart: at, role: "single", agentType: "codex", runMeta: { model: null, reasoningEffort: null }, out });
+  const arrivals: TimelineEntry[] = [];
+  const unsubscribe = bus.subscribe((event: { type: string; sessionId?: string }) => {
+    if (event.type === "agent.event" && event.sessionId === S) arrivals.push({ kind: "server", id: `${S}-${arrivals.length}`, event } as never);
+  });
+  const flushed = () => new Promise<void>((resolve) => out.write("", () => resolve()));
+  voice.emitText("    const first = 1;\n    const second = 2;\n步骤之前。");
+  voice.flushTraceText();
+  await flushed();
+  const early = { output: readFileSync(sessionTranscriptPath(TASK, S), "utf8"), trace: read(S).trace, cut: arrivals.length };
+  const tool = { kind: "tool", name: "bash", detail: "读取项目文件" } as const;
+  voice.publishEvent(tool, voice.persistTrace(tool, at));
+  voice.emitText("步骤之后。");
+  await flushed();
+  const lateOutput = readFileSync(sessionTranscriptPath(TASK, S), "utf8");
+  voice.flushTraceText();
+  const late = { output: lateOutput, trace: read(S).trace, cut: arrivals.length };
+  writeTurnEnd(out, T(51));
+  await new Promise<void>((resolve) => out.end(resolve));
+  unsubscribe();
+  const view = (items: ConversationItem[]) => agents(items).map((item) => ({ markdown: item.markdown, segments: item.segments.map((segment) => [segment.markdown, segment.events.map((event) => event.label)]) }));
+  const refreshed = view(buildConversationItems([{ session, ...read(S) }], [session], []));
+  assert.deepEqual(view(buildConversationItems([], [session], arrivals)), refreshed, "从头看实时与刷新同形");
+  for (const [name, output, trace, cut] of [
+    ["正文新、trace 旧", late.output, early.trace, early.cut],
+    ["正文旧、trace 新", early.output, late.trace, early.cut],
+  ] as const) {
+    for (const from of [0, cut]) {
+      assert.deepEqual(view(buildConversationItems([{ session, output, trace }], [session], arrivals.slice(from))), refreshed, `${name}（实时从第 ${from} 条起）：步骤位置跟刷新一样`);
+    }
+  }
+  ok("正文与 trace 读到的进度不一样时，步骤照服务端记的正文位置插回，跟刷新同形");
 }
 
 {

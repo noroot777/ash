@@ -231,6 +231,9 @@ export type ServerEvent =
       // 号，不是记录的那几种（收口、水位、簿记）不带号、靠这一位说明它归带身份那一路。没带号也没这一位 =
       // 老样子写的回合（团队调度台、duet、接不回号段的那一回合、老服务端）。
       identityTurn?: true;
+      // 执行过程那几种（工具、思考、异常、附件、用量）落在正文的哪个位置，跟 trace 那一行带的 `textAt` 同一个值
+      // （见 shared/src/session-output.ts 的 TextAnchor）。
+      textAt?: import("./session-output.ts").TextAnchor | null;
       event: AgentEvent;
     }
   // A user-channel turn after it has been persisted to the session transcript.

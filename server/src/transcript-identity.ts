@@ -15,7 +15,7 @@
 // 回合外的追加者在锁里查有没有正式流、没有才另开一条短命的流（task-timeline.ts 的 appendTranscriptLine）。
 // 短命流只为发号绑定，不登记成写者 —— 它写完一行就关，登记了只会把正式流顶掉。
 //
-// trace 也只在这条会话有正式流时才发号（traceRecordSeq）：没有正式流的写者（团队调度台、duet）正文与
+// trace 也只在这条会话有正式流时才发号（traceRecord）：没有正式流的写者（团队调度台、duet）正文与
 // 实时事件都不带身份，trace 单独带号只会让页面以为整条会话都换了读法。
 //
 // **身份是按回合声明的，每条记录自己说明**（读的一头只认这个，不从会话的历史或这一份快照里有没有正文去猜）：
@@ -31,7 +31,7 @@ import { RUNS_DIR } from "./paths.js";
 import { withRunFileLock } from "./run-file-lock.js";
 import { recordSeq, takeRecordSeq, type RecordSeq } from "./session-seq.js";
 import { now } from "./util.js";
-import type { RecordIdentity } from "@ash/shared/session-output";
+import type { RecordIdentity, TextAnchor } from "@ash/shared/session-output";
 
 type Binding = {
   taskId: string;
@@ -40,6 +40,8 @@ type Binding = {
   turnStartedAt: string | null;
   /** 正在写的那一段正文：它的号、已经写了多少字。sentinel 一写就收口。 */
   prose: { seq: number; offset: number } | null;
+  /** 最近写到的正文位置（那段收口了也留着）：trace 的每一步记它，页面据此把步骤插回原文。 */
+  lastProse: TextAnchor | null;
   /** 写下一行记录之前先做的事：单飞把 trace 里攒着的正文先落，两份文件在同一处切开。 */
   beforeRecord?: () => void;
   /** 这条会话的号段（绑定时接好的）。 */
@@ -71,7 +73,7 @@ export function bindTranscript(
   }
   const seq = recordSeq(owner.taskId, owner.sessionId);
   if (!seq) return false;
-  bindings.set(out, { taskId: owner.taskId, sessionId: owner.sessionId, turnStartedAt: owner.turnStartedAt ?? null, prose: null, seq });
+  bindings.set(out, { taskId: owner.taskId, sessionId: owner.sessionId, turnStartedAt: owner.turnStartedAt ?? null, prose: null, lastProse: null, seq });
   return true;
 }
 
@@ -116,11 +118,14 @@ export function reserveRecord(out: NodeJS.WritableStream, turnStartedAt?: string
   return { seq: takeRecordSeq(binding.seq), turnStartedAt: turnStartedAt === undefined ? binding.turnStartedAt : turnStartedAt };
 }
 
-/** trace 的一条要不要带号：这条会话此刻有正式流就从它那里领（同一个号段），没有就不带。 */
-export function traceRecordSeq(sessionId: string): number | null {
+/**
+ * trace 的一条要不要带号：这条会话此刻有正式流就从它那里领（同一个号段），连同它此刻落在正文的哪个位置
+ * （`textAt`）；没有就都不带。
+ */
+export function traceRecord(sessionId: string): { seq: number; textAt: TextAnchor | null } | null {
   const out = liveTranscript(sessionId);
   const binding = out ? bindings.get(out) : undefined;
-  return binding ? takeRecordSeq(binding.seq) : null;
+  return binding ? { seq: takeRecordSeq(binding.seq), textAt: binding.lastProse && { ...binding.lastProse } } : null;
 }
 
 /**
@@ -164,5 +169,6 @@ export function writeProse(out: NodeJS.WritableStream, text: string): { seq: num
   const offset = binding.prose.offset;
   out.write(text);
   binding.prose.offset += text.length;
+  binding.lastProse = { seq: binding.prose.seq, offset: binding.prose.offset };
   return { seq: binding.prose.seq, offset };
 }

@@ -8,7 +8,7 @@
 // 执行过程，它照样归身份这一路。没号的 trace 条目同样归老读法；服务端读的时候补出来的那几条（`origin`）
 // 例外：它们说的是带身份那几个回合的事，挂回那几个回合的气泡上。
 import { ANSWER_PREFIX, type Session } from "@ash/shared";
-import { parseSessionTranscript, segmentFingerprint, type ConvSeg } from "@ash/shared/session-output";
+import { parseSessionTranscript, segmentFingerprint, type ConvSeg, type TextAnchor } from "@ash/shared/session-output";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
 import type { TurnInterruption, TurnOutcome } from "@ash/shared";
 import type { SessionTraceEntry } from "../lib/api.ts";
@@ -23,7 +23,8 @@ type AgentSeg = Extract<ConvSeg, { kind: "agent" }>;
 type Base = { sessionId: string; turn: string | null };
 
 /** 一步执行过程：落盘那一路是 trace 条目，实时那一路是事件本身（连同它的信封：模型、轮次）。 */
-export type StepRecord = Base & { kind: "step"; seq: number; event: SessionTraceEntry["event"]; entry?: SessionTraceEntry; envelope?: LiveAgentEvent };
+// textAt：它落在正文的哪个位置（服务端给的，见 shared/src/session-output.ts 的 TextAnchor；缺省 = 没给）。
+export type StepRecord = Base & { kind: "step"; seq: number; event: SessionTraceEntry["event"]; textAt?: TextAnchor | null; entry?: SessionTraceEntry; envelope?: LiveAgentEvent };
 
 export type IdentityRecord =
   // 一句输入（真人的、系统代写的）：把这条会话上的气泡切开 —— 它之后的记录归下一颗。
@@ -137,7 +138,7 @@ export function splitPersistedSession(
   for (const entry of trace) {
     if (typeof entry.seq !== "number") continue;
     turns.add(entry.turnStartedAt);
-    records.push({ kind: "step", sessionId: session.id, turn: entry.turnStartedAt, seq: entry.seq, event: entry.event, entry });
+    records.push({ kind: "step", sessionId: session.id, turn: entry.turnStartedAt, seq: entry.seq, event: entry.event, ...(entry.textAt !== undefined ? { textAt: entry.textAt } : {}), entry });
   }
   for (const entry of trace) {
     if (typeof entry.seq === "number") continue;

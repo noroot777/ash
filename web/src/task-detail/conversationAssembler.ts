@@ -17,7 +17,7 @@
 // 删除按同一个定义指名（server/src/conversation-redact.ts 的 identityWindow / traceStepsWindow）：有正文的
 // 报正文那几段，只有执行过程的报「这个回合里号落在前后两句输入之间的那几步」。
 import type { ContextUsage, Session, TurnInterruption, TurnOutcome } from "@ash/shared";
-import { segmentFingerprint, traceKeptOnDelete, traceStepsFingerprint } from "@ash/shared/session-output";
+import { segmentFingerprint, traceKeptOnDelete, traceStepsFingerprint, type TextAnchor } from "@ash/shared/session-output";
 import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationItem, TimelineEntry } from "./conversationModel.ts";
@@ -42,11 +42,15 @@ type Bubble = {
   after: number | null;
   /** 这颗气泡的原文，按正文的号一段一段（盘上那段的原样字符，后面接实时到的增量）。 */
   chunks: { seq: number; raw: string; index?: number; seg?: Extract<IdentityRecord, { kind: "prose" }>["seg"] }[];
-  /** 执行过程，各自落在原文第几个字之后（见 conversationBubbleText）。 */
-  steps: PlacedStep[];
+  /**
+   * 执行过程，各自落在正文的哪个位置：服务端给的锚点（哪段正文写到第几个字，`textAt`），排版时换算成原文
+   * 第几个字（见 conversationBubbleText）。没给锚点的（锚点这一位出现之前写下的）落盘那一路按 trace 里它前面
+   * 的正文条目累计（`traced`），实时那一路跟在前一步后面。
+   */
+  steps: { entry: SessionTraceEntry; anchor?: TextAnchor | null; traced?: number }[];
   /** 这颗气泡里盘上 trace 的全部条目（含正文条目）连同实时到的步骤：删除时按号核对的那一份。 */
   traced: SessionTraceEntry[];
-  /** 盘上 trace 的正文条目累计到第几个字：落盘的那几步按它定位置。 */
+  /** 盘上 trace 的正文条目累计到第几个字（没给锚点的落盘步骤按它定位置）。 */
   tracedText: number;
   readSide: SessionTraceEntry[];
   /** 实时那一路带来的：执行器参数、审查轮次、此刻还在不在等上游（按事件顺序，最后一条说了算）。 */
@@ -107,8 +111,6 @@ export function createAssembler(sessions: readonly Session[]) {
     return bubble;
   }
 
-  const textLength = (bubble: Bubble) => bubble.chunks.reduce((sum, chunk) => sum + chunk.raw.length, 0);
-
   /** 实时那一路带来的气泡事实（盘上那一路这些从 trace 里读，见 layout）。 */
   function noteLive(bubble: Bubble, envelope: LiveAgentEvent, awaiting: boolean | undefined): void {
     const explicit = liveRun(envelope);
@@ -123,12 +125,12 @@ export function createAssembler(sessions: readonly Session[]) {
       bubble.traced.push(step.entry);
       // 盘上 trace 的正文条目只用来给步骤定位置：正文本身以 .md 那份为准。
       if (event.kind === "text") bubble.tracedText += event.text.length;
-      else bubble.steps.push({ entry: step.entry, at: bubble.tracedText });
+      else bubble.steps.push({ entry: step.entry, anchor: step.textAt, traced: bubble.tracedText });
       return;
     }
     const entry = { at: "", turnStartedAt: step.turn ?? "", seq: step.seq, event } as SessionTraceEntry;
     bubble.traced.push(entry);
-    bubble.steps.push({ entry, at: textLength(bubble) });
+    bubble.steps.push({ entry, anchor: step.textAt });
     // 此刻还在不在等上游：跟老读法实时那一路同一个口径（conversationLiveTurns 的 appendAgentAux 等）。
     const awaiting = event.kind === "usage" || event.kind === "attachment" ? false
       : event.kind === "tool" || event.kind === "thinking" || event.kind === "error"
@@ -182,7 +184,22 @@ export function createAssembler(sessions: readonly Session[]) {
   function layout(bubble: Bubble, awaitingSnapshot: boolean): void {
     const { item, sessionId, turn } = bubble;
     const session = sessionOf.get(sessionId);
-    const steps = [...bubble.steps];
+    const kept = bubble.chunks.filter((chunk) => !chunk.seg?.deleted);
+    // 锚点 → 原文第几个字：它那段之前各段的全长，加上它在那段里的位置。那段不在这颗里（这一回合还没写过
+    // 正文、或写在前一句输入之前）就只数前面的。
+    const placeOf = (anchor: TextAnchor | null): number => {
+      if (!anchor) return 0;
+      let at = 0;
+      for (const chunk of kept) {
+        if (chunk.seq < anchor.seq) at += chunk.raw.length;
+        else if (chunk.seq === anchor.seq) at += Math.min(anchor.offset, chunk.raw.length);
+      }
+      return at;
+    };
+    const steps: PlacedStep[] = bubble.steps.map((step) => ({
+      entry: step.entry,
+      at: step.anchor !== undefined ? placeOf(step.anchor) : step.traced ?? 0,
+    }));
     // 读侧补出来的那几条没有号，按时刻插回去、跟前一步落在同一个位置（它们只是附件和子智能体档案，位置
     // 只影响画在哪一段）。
     for (const extra of bubble.readSide) {
@@ -191,7 +208,6 @@ export function createAssembler(sessions: readonly Session[]) {
       steps.splice(index, 0, { entry: extra, at: steps[index - 1]?.at ?? 0 });
     }
     const entries = steps.map((step) => step.entry);
-    const kept = bubble.chunks.filter((chunk) => !chunk.seg?.deleted);
     // 被注记劈开的几段原样接回去：它们本来就是同一股正文流，一个字不差。
     const { markdown, segments } = bubbleText(kept.map((chunk) => chunk.raw).join(""), steps, `${item.id}:segment`);
     item.markdown = markdown;
@@ -284,7 +300,7 @@ export function createAssembler(sessions: readonly Session[]) {
       } else if (event.kind === "text") {
         apply({ kind: "prose", sessionId, turn, seq, raw: event.text, offset: envelope.textOffset ?? 0, envelope }, out);
       } else if (event.kind !== "done" && event.kind !== "turnEnd") {
-        apply({ kind: "step", sessionId, turn, seq, event: event as StepRecord["event"], envelope }, out);
+        apply({ kind: "step", sessionId, turn, seq, event: event as StepRecord["event"], ...(envelope.textAt !== undefined ? { textAt: envelope.textAt } : {}), envelope }, out);
       }
     },
     /**

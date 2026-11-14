@@ -5,7 +5,7 @@
 // 身份**（记录号 + 回合，见 shared/src/session-output.ts 的 RecordIdentity）。落进 trace 的那条、写进
 // .md 的那一行领的号，实时事件原样带出去；页面凭它认「这条实时事件就是盘上那条」，不比时间和文字。
 import type { AgentEvent, AgentType, SessionRole } from "@ash/shared";
-import type { RecordIdentity } from "@ash/shared/session-output";
+import type { RecordIdentity, TextAnchor } from "@ash/shared/session-output";
 import { bus } from "./bus.js";
 import { appendSessionTrace, writeTurn } from "./transcript.js";
 import { isIdentityStream, onRecord, reserveRecord, writeProse } from "./transcript-identity.js";
@@ -34,10 +34,14 @@ export function createRunVoice(a: {
   // 这一回合带身份时，不是记录的那几种（收口、水位、簿记）不带号，信封上标 identityTurn 说明它归哪一路
   // （见 transcript-identity.ts 文件头）。
   const identityTurn = isIdentityStream(out);
-  const publishEvent = (event: AgentEvent, record?: { seq: number; textOffset?: number } | null) => bus.publish({
+  const publishEvent = (event: AgentEvent, record?: { seq: number; textOffset?: number; textAt?: TextAnchor | null } | null) => bus.publish({
     type: "agent.event", taskId, sessionId: sessId, role, agentType, ...runMeta, turnStartedAt: turnStart,
     ...(identityTurn ? { identityTurn: true as const } : {}),
-    ...(record ? { seq: record.seq, ...(record.textOffset !== undefined ? { textOffset: record.textOffset } : {}) } : {}),
+    ...(record ? {
+      seq: record.seq,
+      ...(record.textOffset !== undefined ? { textOffset: record.textOffset } : {}),
+      ...(record.textAt !== undefined ? { textAt: record.textAt } : {}),
+    } : {}),
     event,
   });
   const flushTraceText = (at?: string) => {
@@ -70,8 +74,8 @@ export function createRunVoice(a: {
       pendingTraceText += text;
       publishEvent({ kind: "text", text }, prose && { seq: prose.seq, textOffset: prose.offset });
     },
-    // 返回落进 trace 的那条的号（没落就是 null），实时事件带上同一个。
-    persistTrace: (event: AgentEvent, at?: string): { seq: number } | null => {
+    // 返回落进 trace 的那条的号与正文位置（没落就是 null），实时事件带上同一份。
+    persistTrace: (event: AgentEvent, at?: string): { seq: number; textAt: TextAnchor | null } | null => {
       // `context` 刻意不进 trace：trace 是「按回合回放各自的气泡」，而水位属于整条会话的
       // 此刻、只有最后一个值有意义，它的家在 sessions 行上（setSessionContext）。
       if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error" || event.kind === "usage" || event.kind === "attachment") {
@@ -80,8 +84,7 @@ export function createRunVoice(a: {
         // 团队那条链的同一处在 team/session-consumer.ts 的 traceLead:改一处记得看另一处。
         noteAgentEventUpload(taskId, event);
         flushTraceText();
-        const seq = appendSessionTrace(taskId, sessId, turnStart, event, at);
-        return seq === null ? null : { seq };
+        return appendSessionTrace(taskId, sessId, turnStart, event, at);
       }
       if (event.kind === "done" || event.kind === "turnEnd") flushTraceText();
       return null;

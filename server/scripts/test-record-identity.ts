@@ -2,7 +2,8 @@
 //
 // 页面那一头（三路拼出来一样、删除指名）在 web/scripts/test-conversation-identity.ts，那边同样用这里的
 // 写法生成记录。这里只钉服务端自己的几条：
-//   ① 号在一条会话里单调递增，.md 与 trace 共用一个号段；进程重启（计数器清零）后从两份文件的尾巴接着发
+//   ① 号在一条会话里单调递增，.md 与 trace 共用一个号段；进程重启（计数器清零）后从两份文件的尾巴接着发；
+//      trace 的每一步记着它落在正文的哪个位置（哪段正文写到第几个字）
 //   ② 回合在跑时，回合外的追加者（时间线旁注）从同一条流写：正文在它那一处切开、各带自己的号，trace 里攒着的
 //      正文先落、在同一处切开；没有在跑的流时，单飞会话照样带号，团队调度台不带（它那一路还是老读法）
 //   ③ trace 盘上那一行带着 `origin` 不认（那是读的时候补出来的才有的）
@@ -65,7 +66,9 @@ function liveTurn(sessionId: string) {
   assert.equal(first!.seq, second!.seq, "中间只隔着一步工具：还是同一段正文");
   assert.deepEqual([first!.offset, second!.offset], [0, 3], "增量带着它在那段正文里从第几个字起");
   await run.end();
-  const seqs = [user!.seq, first!.seq, tool];
+  assert.deepEqual(tool?.textAt, { seq: first!.seq, offset: 3 }, "这一步落在第一段正文写到第 3 个字的时候（trace 那一行带着）");
+  assert.deepEqual(traceOf(S).find((entry) => entry.event.kind === "tool")?.textAt, { seq: first!.seq, offset: 3 });
+  const seqs = [user!.seq, first!.seq, tool!.seq];
   assert.deepEqual([...seqs].sort((a, b) => a - b), seqs, "号按写下的先后递增，.md 与 trace 共用一个号段");
   const { spans, agentEnds } = parseSessionTranscript(readFileSync(sessionTranscriptPath(TASK, S), "utf8"));
   const prose = spans.find(({ seg }) => seg.kind === "agent")!.seg as { raw?: string; seq?: number; turnStartedAt?: string };
@@ -188,7 +191,8 @@ function liveTurn(sessionId: string) {
   const step = appendSessionTrace(TASK, steady, TURN, { kind: "tool", name: "bash", detail: "ls" }, at(5));
   chmodSync(steadyPath, 0o600);
   await new Promise<void>((resolve) => stream.end(resolve));
-  assert.deepEqual([opening?.seq, note?.seq, closing?.seq, step], [1, 2, 3, 4], "一回合写到一半不会忽然不带号");
+  assert.deepEqual([opening?.seq, note?.seq, closing?.seq, step?.seq], [1, 2, 3, 4], "一回合写到一半不会忽然不带号");
+  assert.deepEqual(step?.textAt, { seq: 3, offset: 2 }, "正文位置记的是最近写到的那段");
   forgetRecordSeq(TASK, steady);
 
   forgetTaskRecordSeq(TASK);
