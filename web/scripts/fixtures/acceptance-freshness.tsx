@@ -4,6 +4,7 @@ import type { Task, TaskListItem } from "@ash/shared";
 import { AuthContext } from "../../src/auth/authContext.ts";
 import { TaskReviewWorkspace } from "../../src/review/TaskReviewWorkspace.tsx";
 import { TeamReviewWorkspace } from "../../src/team/TeamReviewWorkspace.tsx";
+import { mergeTaskSnapshotFields } from "../../src/lib/taskSnapshot.ts";
 import "../../src/styles/global.css";
 
 // 验收台的事实跟着任务版本走、出路都按得到（判据与来由见 test-acceptance-freshness.mjs）。
@@ -35,8 +36,11 @@ window.returned = [];
 
 function Single() {
   const [current, setCurrent] = useState(task("single-task", "验收台"));
-  window.bumpSingle = (patch) => setCurrent((value) => ({ ...value, ...patch, updatedAt: new Date().toISOString() }));
-  return <TaskReviewWorkspace task={current} allTasks={[current]} onTaskUpdated={() => {}} notify={() => {}} onClose={() => window.returned.push("single")} />;
+  // 宿主从别处收到一份任务快照（patch 里可以带 updatedAt，模拟一份早于某次写入的中间版本）。
+  window.bumpSingle = (patch) => setCurrent((value) => ({ ...value, updatedAt: new Date().toISOString(), ...patch }));
+  // 读回来的任务按产品同一条单调合并落进宿主：比手上旧的不覆盖。
+  const apply = (next: Task) => setCurrent((value) => mergeTaskSnapshotFields(value, { ...value, ...next }));
+  return <TaskReviewWorkspace task={current} allTasks={[current]} onTaskUpdated={apply} notify={() => {}} onClose={() => window.returned.push("single")} />;
 }
 
 function Fixture() {

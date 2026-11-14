@@ -42,13 +42,15 @@ const BASELINE_ISSUE = {
  * 主按钮上永远只写动作名；挡住它的原因各自一行，摆在下面那一列里，红的拦、琥珀的只提醒。
  * 读不出来的任何一份事实（自由工作流状态、门禁、依赖、提交默认）一律不放行。
  */
-export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, lead, trailing, onPostMergeReview, onOpenReview, onReturned, className = "" }: {
+export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, lead, trailing, routeTarget = null, onPostMergeReview, onOpenReview, onReturned, className = "" }: {
   task: TaskListItem;
   onTaskUpdated: (task: Task) => void;
   notify: (message: string) => void;
   block?: HostBlock | null;
   lead?: ReactNode;
   trailing?: ReactNode;
+  /** 宿主顶行那份走向（这一版 diff 读回来的）指向的合入目标；确认层的目标要跟它对得上才放行。 */
+  routeTarget?: string | null;
   onPostMergeReview?: () => void;
   /** 审查警示那一行的出路（打开审查记录）。 */
   onOpenReview?: () => void;
@@ -93,11 +95,19 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
   const selectionBlock = worktreeChecks ? selectionBlockOf(plan.view, checked) : null;
   const family = worktreeChecks && checked.length > 0 && plan.view
     ? [plan.view.task, ...plan.view.descendants.filter((row) => checked.includes(row.taskId))] : [];
+  // 顶行的走向与 diff 来自重读回来的那一版，确认层的步骤来自宿主手上的任务：两份事实各有来源，合入目标
+  // 对不上就不许确认（确认层会写着另一个分支，而真正合到哪由服务端当前的任务决定）。
+  const steps = acceptanceSteps(task, true);
+  const taskTarget = task.mergeTargetBranch || task.worktreeBase || null;
+  const targetMismatch = !settled && steps.kind === "merge" && !!routeTarget && !!taskTarget
+    && branchName(routeTarget) !== branchName(taskTarget);
   const factBlocks: FactRow[] = [
     ...(archived ? [{ key: "archived", tone: "idle" as const, text: "已归档，只读" }] : []),
     ...(inFlight && !settled ? [{ key: "in-flight", tone: "live" as const, text: "任务在跑" }] : []),
     ...(block && !settled ? [{ key: "host", tone: "block" as const, text: block.text }] : []),
     ...(taskFacts.error ? [{ key: "task-facts", tone: "block" as const, text: `改动之后的任务状态没读到：${taskFacts.error}`, retry: retryTaskFacts }] : []),
+    ...(targetMismatch ? [{ key: "target-mismatch", tone: "block" as const,
+      text: `合入目标没对上：改动按 ${routeTarget} 算，验收会合到 ${taskTarget}`, retry: retryTaskFacts }] : []),
     ...facts.blocks,
   ];
   const blocked = factBlocks.length > 0
@@ -110,7 +120,6 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
 
   // —— 确认层 ——
   const merging = family.filter((row) => row.stage !== "accepted" && row.strategy !== "tag");
-  const steps = acceptanceSteps(task, true);
   const commitChoosable = family.length ? merging.length > 0 : steps.kind === "merge" && steps.merge !== "tag";
   const commitDefault = useAcceptCommitDefault(task.projectId, commitChoosable && confirming);
   const latest = gate.latest;
@@ -284,3 +293,6 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
     </div>
   );
 }
+
+/** 分支名比对时去掉 `refs/heads/` 前缀（服务端解析合入目标时同样这么归一）。 */
+const branchName = (name: string) => name.trim().replace(/^refs\/heads\//, "");

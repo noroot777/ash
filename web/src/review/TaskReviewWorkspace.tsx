@@ -107,6 +107,7 @@ export function TaskReviewWorkspace({
         onPostMergeReview={onPostMergeReview}
         onOpenReview={onOpenReview}
         onReturned={onClose}
+        routeTarget={data?.diff.targetBranch ?? null}
         lead={route
           ? <AcceptRoute task={task} data={route} disabled={!!task.archived} onTaskUpdated={onTaskUpdated} notify={notify} />
           : <ChangesLeadNote loading={changes.loading} error={changes.error} retry={changes.retry} />}

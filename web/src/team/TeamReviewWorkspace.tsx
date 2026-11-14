@@ -89,6 +89,7 @@ function ReviewRecord({ task, parentTask, role, defaultOpen, onTaskUpdated, indi
         task={task}
         onTaskUpdated={onTaskUpdated}
         notify={notify}
+        routeTarget={data?.diff.targetBranch ?? null}
         onReturned={onReturned}
         lead={(
           <button type="button" className="team-review-record-title" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
@@ -152,6 +153,7 @@ export function TeamReviewWorkspace({
         onTaskUpdated={onTaskUpdated}
         notify={notify}
         block={block}
+        routeTarget={data?.diff.targetBranch ?? null}
         onReturned={onReturned && (() => onReturned(lead))}
         lead={data ? <AcceptRoute task={lead} data={routeOf(lead, data)} disabled={!!lead.archived} onTaskUpdated={onTaskUpdated} notify={notify} />
           : <><b className="acc-title">团队验收台</b><ChangesLeadNote loading={changes.loading} error={changes.error} retry={changes.retry} /></>}

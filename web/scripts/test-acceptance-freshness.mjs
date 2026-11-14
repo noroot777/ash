@@ -14,8 +14,9 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 // ⑤ 团队验收台打回之后回到能看见那句话的对话：团队回调度台，独立执行者回它自己的会话。
 // ⑥ 动作成功之后的读取失败（taskFacts.ts / useRowRead.ts）：改了合入目标而任务读不回来，主按钮锁着、那一行
 //    给重试；释放目录之后的核对读失败落在本行「待核对」，不跟着确认框一起消失。
-// ⑦ 那一次任务读取一直不回来（第 3 轮审查）：主按钮转圈，退出再打开照样在等；宿主拿到了更新过的任务
-//    就不再等；再挂住一次，到期限转成那一行「读取超时」并给重试，重试读到了才放开。
+// ⑦ 那一次任务读取一直不回来（第 3、4 轮审查）：主按钮转圈，退出再打开照样在等；宿主收到一份早于这次写入
+//    的中间版本（比动作前新、目标还是旧的）不许放行，顶行与确认层目标对不上那一行也拦着；宿主收到更新的
+//    快照时重发一次读取，由那一次的结果放行；再挂住一次，到期限转成「读取超时」并给重试，重试读到了才放开。
 const web = await startWebServer();
 
 const DIFF = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,1 +1,1 @@\n-old\n+new\n";
@@ -55,6 +56,7 @@ function api(store) {
     if (post && request.method() === "POST") {
       if (post[2] === "merge-target") store.target = request.postDataJSON().branch;
       else store.released = true;
+      store.updatedAt = new Date().toISOString();
       return reply({ ok: true });
     }
     const reject = /^\/api\/tasks\/([^/]+)\/reply$/.exec(url.pathname);
@@ -70,7 +72,7 @@ function api(store) {
         if (store.failTask === "hang") return new Promise(() => {});
         if (store.failTask) return fail();
         return reply({ id: taskId, title: taskId, projectId: "proj-1", status: "done", stage: "awaiting_acceptance", mode: "single",
-          useWorktree: true, archived: false, updatedAt: "2026-11-02T01:24:00.000Z" });
+          useWorktree: true, archived: false, updatedAt: store.updatedAt, ...(taskId === "single-task" ? { mergeTargetBranch: store.target } : {}) });
       }
       if (what === "branch-plan") return reply({ task: entry(taskId), descendants: taskId === "single-task" ? [child] : [] });
       if (what === "accept-gate") return reply({ command: null, running: null, latest: null, basis: null });
@@ -94,7 +96,7 @@ function api(store) {
   };
 }
 
-const freshStore = () => ({ target: "main", failChanges: false, failWorkspace: false, failPending: false, failTask: false, released: false, pending: "staged",
+const freshStore = () => ({ target: "main", updatedAt: "2026-11-02T01:24:00.000Z", failChanges: false, failWorkspace: false, failPending: false, failTask: false, released: false, pending: "staged",
   replies: [], taskFetches: {}, unexpected: [] });
 
 let browser;
@@ -266,10 +268,21 @@ try {
     await route.waitFor();
     await page.waitForTimeout(100);
     assert.equal(await mainDisabled(), true, "退出再打开，宿主手上还是旧任务：仍在等");
-    // 宿主从别处拿到了更新过的任务：那就是当前事实，不再等那一发。
+    // 一份早于这次写入的中间版本到了（比动作前新，目标还是 main）：它不覆盖这次写入，不许放行。
+    const fetched = store.taskFetches["single-task"] ?? 0;
+    await page.evaluate(() => window.bumpSingle({ mergeTargetBranch: "main", updatedAt: "2026-11-10T00:00:00.000Z" }));
+    const mismatch = single.locator('.acc-check[data-check="target-mismatch"]');
+    await mismatch.filter({ hasText: "改动按 other 算，验收会合到 main" }).waitFor();
+    await page.waitForTimeout(200);
+    assert.equal(await mainDisabled(), true, "中间版本不许放开确认");
+    assert.ok((store.taskFetches["single-task"] ?? 0) > fetched, "宿主快照变新时要重发一次读取，由那一次结算");
+    // 网络恢复，宿主又收到一份更新的快照：重发的那一次读到了，才放开。
+    store.failTask = false;
     await page.evaluate(() => window.bumpSingle({ mergeTargetBranch: "other" }));
     await mainFree();
     assert.equal(await factsRow.count(), 0);
+    assert.equal(await mismatch.count(), 0);
+    store.failTask = "hang";
 
     // 再挂住一次：到期限转成读失败，那一行给重试；重试读到了才放开。
     await changeTarget("main");
@@ -287,7 +300,7 @@ try {
     await page.close();
   }
 
-  console.log("acceptance freshness: versioned route/diff with stale marking and retry, stale rows keep a retry, pending merge reconciles on focus, short-window layers stay in view, team rejections return to the conversation, a hung task read gives way to a newer task or times out into a retry");
+  console.log("acceptance freshness: versioned route/diff with stale marking and retry, stale rows keep a retry, pending merge reconciles on focus, short-window layers stay in view, team rejections return to the conversation, a hung task read is only released by a read issued after the write (an intermediate snapshot keeps it locked) or times out into a retry");
 } finally {
   await browser?.close();
   await web.close();
