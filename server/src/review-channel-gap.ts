@@ -137,11 +137,11 @@ export function claudeMcpEvidence(text: string): Evidence {
       // **只说连上了，别替它断言工具在手**：init 事件写的是「server 连上没有」，不是
       // 「report_stage 暴露了没有」—— 执行器的工具白/黑名单能把具体工具挡掉，那时说
       // 「多半是它自己漏了上报」就是把限制归咎于审查者（第 2 位审查者 N2）。
-      ? { connected: true, definite: false, detail: `这条会话启动时 ash MCP 是连上的（兼容登记状态：${states}）。至于 report_stage 当时在不在它手里，init 事件没说（执行器若限制过工具清单，这里看不出来）。` }
+      ? { connected: true, definite: false, detail: `这条会话启动时 ash MCP 是连上的（claude 报告的状态：${states}）。至于 report_stage 当时在不在它手里，init 事件没说（执行器若限制过工具清单，这里看不出来）。` }
       : {
           connected: false,
           definite: mine.every((server) => typeof server.status === "string" && CLAUDE_FAILED_STATUSES.has(server.status)),
-          detail: `这条会话启动时 ash MCP 的兼容登记状态是「${states}」，没有报告 connected。`,
+          detail: `这条会话启动时 ash MCP 的状态是「${states}」，没有报告 connected。`,
         };
   }
   return null;
@@ -182,10 +182,10 @@ export function codexMcpEvidence(text: string): Evidence {
   };
 }
 
-const HOW_TO_CHECK: Record<string, string> = {
-  claude: "claude mcp get ash",
-  codex: "codex mcp list --json（看 ash 在不在、enabled 是不是 true）",
-};
+// claude / codex 的 ash MCP 是起跑时由 ash 注入的（executors/ash-mcp-inject.ts），用户配置里那条
+// 登记不再起作用 —— 自查要看的是 CLI 启动时自己报的原因，不是去翻配置。
+const INJECTED_CHECK = "看执行记录里那条红色的「ash 的工具在这一回合没接上」，括号里是 CLI 启动时自己报的原因";
+const HOW_TO_CHECK: Record<string, string> = { claude: INJECTED_CHECK, codex: INJECTED_CHECK };
 
 /** 这一回合留在盘上的通道证据：claude 的 init 是第一条事件，codex 的诊断取 stderr 末尾。 */
 function turnEvidence(a: { taskId: string; sessId: string; turnStart: string; agentType: AgentType }): Evidence {
@@ -280,7 +280,7 @@ export async function noteReviewerChannelGap(a: {
       ? `可以先点「继续本轮审查」让它接着上一次的上下文${finish}（不用重跑这一轮）；要是它说仍然没有这个工具，就去查执行器有没有限制工具清单。`
       // 证据说不了连上没有（codex 只看得到报错的那几份登记）：两条路都给，别替它断言得修。
       : evidence?.connected === null
-        ? `可以先点「继续本轮审查」让它接着上一次的上下文${finish}（不用重跑这一轮）；要是它说没有这个工具，按上面的自查把登记修好再来一次。`
+        ? `可以先点「继续本轮审查」让它接着上一次的上下文${finish}（不用重跑这一轮）；要是它说没有这个工具，按上面的自查修好再来一次。`
         : `修好之后点「继续本轮审查」，它会接着上一次的上下文${written ? "只补上报" : finish}，不用重跑这一轮。`;
     text = `${written ? "这一轮的审查报告已经写完了，只是结论没能上报到 ash。" : `这一轮回合正常收尾了，结论却没上报到 ash。${report}`}${why}${next}`;
   }
