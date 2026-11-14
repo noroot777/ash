@@ -5,6 +5,7 @@ import {
 import { ApiError, json, request } from "./apiClient.ts";
 import { subscribeConnection, subscribeEvents } from "./events.ts";
 import { readRenamedStorage } from "./renamedStorage.ts";
+import { safeStorage } from "./safeStorage.ts";
 import { createOutbox, type OutboxEntry } from "./taskReadOutbox.ts";
 
 // 「看过哪些任务」的那一份记录：真值在服务端（按人存，server/src/task-reads.ts），这里是它在本页的样子。
@@ -46,25 +47,21 @@ let pushing = false;
 let stopSync: (() => void) | null = null;
 let leaving = false;
 
-const storage = (): Storage | null => (typeof window === "undefined" ? null : window.localStorage);
 const ownerPrefix = (who: string) => `${PREFIX}${who || "local"}`;
 const knownKey = (who: string) => `${ownerPrefix(who)}:known`;
 
 function readJson(key: string): unknown {
   try {
-    const raw = storage()?.getItem(key);
+    const raw = safeStorage.get(key);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
   }
 }
 
+/** known 只是首屏缓存，写不进去下次首屏多亮一下，不丢东西。 */
 function writeJson(key: string, value: unknown) {
-  try {
-    storage()?.setItem(key, JSON.stringify(value));
-  } catch {
-    // known 只是首屏缓存，写不进去下次首屏多亮一下，不丢东西。
-  }
+  safeStorage.set(key, JSON.stringify(value));
 }
 
 /** 进库之前的老格式没有 round：从 event 里带的时刻还原（单飞是两个 ISO 时刻，团队是毫秒数）。 */
@@ -80,10 +77,10 @@ function takeLegacy(): Record<string, OutboxEntry> {
   let raw: string | null = null;
   try {
     raw = readRenamedStorage(LEGACY_KEY);
-    storage()?.removeItem(LEGACY_KEY);
   } catch {
     return {};
   }
+  safeStorage.remove(LEGACY_KEY);
   let parsed: unknown = null;
   try {
     parsed = raw ? JSON.parse(raw) : null;

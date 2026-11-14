@@ -5,6 +5,7 @@
 //  · 记录服务端还没拉回来时就看了一眼、随即刷新：那一眼当场落盘，重开以后照送（审查第 2 轮 F2）；
 //  · 几个标签页各看各的、都没送出去：落盘不互相盖掉，一页的回执也删不掉另一页送出之后才记下的（审查第 3 轮 F1）；
 //  · 浏览器存储写不进去：这一页照样送；写盘失败告警一次，之后再记时重试落盘（审查第 3 轮 F2）；
+//    连存储都拿不到（站点策略拒绝访问）也一样，不抛到页面上；盘上一条坏键只丢那一条（审查第 4 轮 F1）；
 //  · 满额之后看一个很老的任务：留得住，不当场被裁掉（审查第 2 轮 F3）；
 //  · 服务端已有新一轮 / 封顶 / 不存在：以服务端为准，不一直重送；拉失败了过一会儿自己再拉；
 //  · 不带账号的老缓存：自用模式补送，多人模式丢掉，都只处理一次。
@@ -16,17 +17,23 @@ let reloads = 0;
 /** 浏览器存储满了：待发队列的键一写就抛（known 缓存不受影响，它写不进去本来就不丢东西）。 */
 let quotaFull = false;
 const notify = (key, newValue) => { for (const listener of windowListeners) listener({ key, newValue }); };
+/** 站点策略拒绝访问存储：连 window.localStorage 这个 getter 都抛（审查第 4 轮 F1）。 */
+let storageDenied = false;
+const localStorage = {
+  get length() { return storage.size; },
+  key: (index) => [...storage.keys()][index] ?? null,
+  getItem: (key) => storage.get(key) ?? null,
+  setItem: (key, value) => {
+    if (quotaFull && key.includes(":p:")) throw new DOMException("quota", "QuotaExceededError");
+    storage.set(key, String(value));
+    notify(key, String(value));
+  },
+  removeItem: (key) => { if (storage.delete(key)) notify(key, null); },
+};
 globalThis.window = {
-  localStorage: {
-    get length() { return storage.size; },
-    key: (index) => [...storage.keys()][index] ?? null,
-    getItem: (key) => storage.get(key) ?? null,
-    setItem: (key, value) => {
-      if (quotaFull && key.includes(":p:")) throw new DOMException("quota", "QuotaExceededError");
-      storage.set(key, String(value));
-      notify(key, String(value));
-    },
-    removeItem: (key) => { if (storage.delete(key)) notify(key, null); },
+  get localStorage() {
+    if (storageDenied) throw new DOMException("Access is denied by browser policy", "SecurityError");
+    return localStorage;
   },
   addEventListener: (type, listener) => { if (type === "storage") windowListeners.add(listener); },
   removeEventListener: (type, listener) => { if (type === "storage") windowListeners.delete(listener); },
@@ -316,6 +323,33 @@ const look = (page, taskId, round) => page.updateTaskReads((current) => ({ ...cu
   assert.equal(server.of("").reads.get("quota")?.round, 4_500, "恢复以后送上去");
   assert.deepEqual(pendingOf(""), {});
   page.stop();
+}
+
+// ── 存储根本拿不到 / 盘上有坏键 ───────────────────────────────────────────────────
+{
+  server.tasks.set("denied", 5_000);
+  storageDenied = true;
+  const page = await openPage(""); // 绑定、订阅、拉取都不许抛
+  look(page, "denied", 5_000);
+  assert.ok(page.getTaskReads().denied, "这一页当场熄");
+  await settle();
+  assert.equal(server.of("").reads.get("denied")?.round, 5_000, "照样送上去");
+  assert.ok(page.getTaskReads().denied, "回执合进来也还在");
+  page.stop();
+  storageDenied = false;
+
+  server.tasks.set("after-bad", 5_000);
+  storage.set("ash:task-reads-v3:local:p:%:1", JSON.stringify({ event: "done:bad", round: 1, at: 1 }));
+  storage.set("ash:task-reads-v3:local:p:no-round", "{oops");
+  server.failPuts = true;
+  const other = await openPage("");
+  look(other, "after-bad", 5_000);
+  assert.equal(pendingOf("")["after-bad"]?.round, 5_000, "坏键不拖垮整份");
+  assert.equal(storage.has("ash:task-reads-v3:local:p:%:1") || storage.has("ash:task-reads-v3:local:p:no-round"), false, "坏键顺手删掉");
+  server.failPuts = false;
+  await settle(5_500);
+  assert.equal(server.of("").reads.get("after-bad")?.round, 5_000);
+  other.stop();
 }
 
 // ── 页面活着时另一个标签页换了人登录 ────────────────────────────────────────────────

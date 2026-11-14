@@ -1,5 +1,6 @@
 import type { TaskReadEntry, TaskReads } from "@ash/shared/task-reads";
 import { TASK_READS_MAX, coversRead, parseTaskReads } from "@ash/shared/task-reads";
+import { safeStorage } from "./safeStorage.ts";
 
 // 「看过、还没被服务端收下」的那几眼（lib/taskReadSync.ts 文件头 ②）。两条不变量，各守一类毛病：
 //
@@ -9,11 +10,10 @@ import { TASK_READS_MAX, coversRead, parseTaskReads } from "@ash/shared/task-rea
 //     也只删「送出去的那一轮及更早的」那几个键，别的页刚记下的更新一轮不受影响。
 //  ② **本页记的每一眼同时留在内存里，送没送出去不取决于写没写进磁盘。** 浏览器存储满了、被策略禁了，
 //     这一页照样送；写盘失败告警一次，之后每次再记、再收都重试落盘（审查第 3 轮 F2）。磁盘那份只为了
-//     「没送到就关了页面」时下次还能补。
+//     「没送到就关了页面」时下次还能补。所以磁盘的每一步都走 safeStorage：连存储对象都拿不到（审查第 4 轮
+//     F1，站点策略拒绝访问）也只是「磁盘上什么都没有」；单个坏键只丢那一条，不拖垮整份。
 
 export type OutboxEntry = TaskReadEntry & { at: number };
-
-const storage = (): Storage | null => (typeof window === "undefined" ? null : window.localStorage);
 
 export function createOutbox(prefix: string) {
   const keyPrefix = `${prefix}:p:`;
@@ -23,18 +23,12 @@ export function createOutbox(prefix: string) {
   let warned = false;
 
   function persist(key: string, entry: OutboxEntry): boolean {
-    try {
-      const store = storage();
-      if (!store) return false;
-      store.setItem(key, JSON.stringify(entry));
-      return true;
-    } catch (error) {
-      if (!warned) {
-        warned = true;
-        console.warn("[ash] 已读记录写不进浏览器存储：这一页照常同步，但没送到就关掉页面的那几眼补不回来了", error);
-      }
-      return false;
+    if (safeStorage.set(key, JSON.stringify(entry))) return true;
+    if (!warned) {
+      warned = true;
+      console.warn("[ash] 已读记录写不进浏览器存储：这一页照常同步，但没送到就关掉页面的那几眼补不回来了");
     }
+    return false;
   }
 
   function retryPersist() {
@@ -44,45 +38,33 @@ export function createOutbox(prefix: string) {
   /** 磁盘上这个人的全部那几眼（别的标签页记的也在）。 */
   function stored(): Map<string, { taskId: string; entry: OutboxEntry }> {
     const out = new Map<string, { taskId: string; entry: OutboxEntry }>();
-    const store = storage();
-    if (!store) return out;
-    const keys: string[] = [];
-    try {
-      for (let i = 0; i < store.length; i += 1) {
-        const key = store.key(i);
-        if (key?.startsWith(keyPrefix)) keys.push(key);
-      }
-    } catch {
-      return out;
-    }
-    for (const key of keys) {
-      const rest = key.slice(keyPrefix.length);
-      const cut = rest.lastIndexOf(":");
-      let raw: unknown = null;
-      try {
-        raw = JSON.parse(store.getItem(key) ?? "null");
-      } catch {
-        // 坏值当没有，下面顺手删掉
-      }
-      const taskId = cut > 0 ? decodeURIComponent(rest.slice(0, cut)) : "";
-      const entry = parseTaskReads({ [taskId || "_"]: raw })[taskId || "_"];
-      if (!taskId || !entry) {
-        remove(key);
-        continue;
-      }
-      const at = (raw as { at?: unknown }).at;
-      out.set(key, { taskId, entry: { ...entry, at: typeof at === "number" && Number.isFinite(at) ? at : 0 } });
+    for (const key of safeStorage.keys(keyPrefix)) {
+      const item = parseItem(key);
+      if (item) out.set(key, item);
+      else remove(key);
     }
     return out;
   }
 
+  /** 认不出来的键或值（坏 JSON、坏编码）返回 null，由调用方删掉这一条。 */
+  function parseItem(key: string): { taskId: string; entry: OutboxEntry } | null {
+    try {
+      const rest = key.slice(keyPrefix.length);
+      const cut = rest.lastIndexOf(":");
+      const taskId = cut > 0 ? decodeURIComponent(rest.slice(0, cut)) : "";
+      const raw: unknown = JSON.parse(safeStorage.get(key) ?? "null");
+      const entry = taskId ? parseTaskReads({ [taskId]: raw })[taskId] : undefined;
+      if (!entry) return null;
+      const at = (raw as { at?: unknown }).at;
+      return { taskId, entry: { ...entry, at: typeof at === "number" && Number.isFinite(at) ? at : 0 } };
+    } catch {
+      return null;
+    }
+  }
+
   function remove(key: string) {
     memory.delete(key);
-    try {
-      storage()?.removeItem(key);
-    } catch {
-      // 删不掉就留着：下次再表态时还会再删
-    }
+    safeStorage.remove(key);
   }
 
   function all() {
