@@ -46,7 +46,6 @@ export function assembleTimeline(
       placed.push({ item, time: floor });
     }
   }
-  assembler.endPersisted();
 
   // Sessions are reusable and can overlap: an older Claude session may resume
   // after a newer @codex session has already finished. Grouping by session would
@@ -66,11 +65,14 @@ export function assembleTimeline(
      这一位属于快照,所以落在快照铺完、实时增量到来**之前**:之后到达的输出照常把它覆盖回去
      (直播那一路的来源是事件顺序,conversationLiveTurns 边到边记);还没恢复的则一直挂着,这正是
      要的 sticky。读的是此刻的会话列表(`sessions`),快照里那份可能已经过时。 */
+  // 带身份那一路的气泡要到收尾才排版（见 conversationAssembler），这一位交给它在排完以后落。
+  const awaitingRecorded = new Set<ConversationItem>();
   for (const { session } of ordered) {
     const awaiting = sessions.find((current) => current.id === session.id)?.awaitingUpstream ?? session.awaitingUpstream;
     if (!awaiting) continue;
     const latest = items.findLast((item): item is AgentItem => item.kind === "agent" && item.sessionId === session.id);
-    if (latest) markSegmentsAwaiting(latest.segments);
+    if (latest?.recorded) awaitingRecorded.add(latest);
+    else if (latest) markSegmentsAwaiting(latest.segments);
   }
 
   const liveContext = new Map<string, ContextUsage>();
@@ -83,7 +85,7 @@ export function assembleTimeline(
     if (identity.has(entry)) assembler.live(entry, items, liveContext);
     else if (kept.has(entry)) appendLiveEntry(items, entry, sessions, liveContext);
   }
-  assembler.settle();
+  assembler.settle(awaitingRecorded);
   return { items, liveContext };
 }
 

@@ -13,19 +13,20 @@
 //   ⑤ 边界：分路逐条按记录自己说的算 —— 没走身份协议的写者（团队调度台）整条不带号、走老读法，快照之后没号的
 //      实时正文照常画；回合先动手后说话时快照里只有带号的执行过程，照样归身份这一路；接不回号段的那一回合整个
 //      照老样子写，开着页面和刷新以后都画在它自己那一回合（中间的旁注也不劈开它），两路混着时删除按整份 .md
-//      的原始序号、同文不误删；中途打开时快照末尾的空白照原文接回；
+//      的原始序号、同文不误删；正文写到空白 / 工具 / 旁注 / 未闭合代码块 / 只有缩进时打开页面，三路的正文、分段、
+//      复制与导出逐字相同（一颗气泡只有一份原文）；
 //      output 与 trace 不是同一刻读的、中间那句插话只在实时那一路，步骤照样归插话之后；快照里「在等上游」
 //      被之后的实时输出和此刻的会话列表覆盖；有身份与没身份的实时事件按到达顺序排
 //
 // 跑：npm -w web run test:conversation-identity
 import assert from "node:assert/strict";
-import { chmodSync, createWriteStream, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, createWriteStream, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseSessionSpans, segmentFingerprint, traceSpanFingerprint } from "@ash/shared/session-output";
 import type { SessionTraceEntry } from "../src/lib/api.ts";
-import { buildConversationItems, type ConversationItem, type TimelineEntry } from "../src/task-detail/conversationModel.ts";
+import { buildConversationItems, conversationToMarkdown, type ConversationItem, type TimelineEntry } from "../src/task-detail/conversationModel.ts";
 import { awaitingUpstream } from "../src/task-detail/conversationSegments.ts";
 import { mergeUserTimeline } from "../src/lib/useConversation.ts";
 
@@ -34,7 +35,9 @@ process.env.ASH_DB = join(stage, "ash.db");
 process.env.ASH_RUNS_DIR = join(stage, "runs");
 process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
 const { appendSessionTrace, sessionTracePath, sessionTranscriptPath, writeTurn, writeTurnEnd } = await import("../../server/src/transcript.ts");
-const { bindTranscript, onRecord, reserveRecord, writeProse } = await import("../../server/src/transcript-identity.ts");
+const { bindTranscript, claimTranscript, onRecord, reserveRecord, writeProse } = await import("../../server/src/transcript-identity.ts");
+const { createRunVoice } = await import("../../server/src/single-run-voice.ts");
+const { bus } = await import("../../server/src/bus.ts");
 const { forgetRecordSeq } = await import("../../server/src/session-seq.ts");
 const { redactTrace, redactTranscript, traceSpanWindow, traceStepsWindow } = await import("../../server/src/conversation-redact.ts");
 const ok = (message: string) => console.log("   ✓ " + message);
@@ -380,25 +383,49 @@ ok("落盘重建、实时到达、中途打开（含重叠与半截正文）三�
 }
 
 {
-  // 正文写到一处空白时打开页面：快照为了展示裁掉末尾空白，后到的那一块照原文接上，不黏在一起。
-  const cases: [string, string][] = [["Hello ", "world"], ["# 标题\n\n", "正文"], ["```js\nconst a = 1;\n", "const b = 2;\n```"]];
-  for (const [index, [prefix, rest]] of cases.entries()) {
-    const S = `s-space-${index}`;
+  // 正文写到一处空白时打开页面，之后接着写：用单飞真正的出口（single-run-voice）写盘、播事件。三路（从头看实时、
+  // 中途打开、刷新以后）的整颗正文、展示分段、复制与导出必须逐字相同 —— 不只是「看起来差不多」。
+  const cases = [
+    ["plain", "Hello ", "world", "none"],
+    ["tool-tail", "Hello ", "world", "tool"],
+    ["code-note", "```js\nconst value = 1;\n", "console.log(value);\n```", "note"],
+    ["open-code-tool", "```js\nconst value = 1;\n", "console.log(value);\n```", "tool"],
+    ["blank-prefix", "    ", "console.log(1);", "none"],
+    ["heading", "# 标题\n\n", "正文", "tool"],
+  ] as const;
+  const at = T(48);
+  for (const [name, prefix, suffix, barrier] of cases) {
+    const S = `s-raw-${name}`;
+    const session = sessionRow(S, { [at]: null });
+    const out = createWriteStream(sessionTranscriptPath(TASK, S), { flags: "a" });
+    await claimTranscript(out, { taskId: TASK, sessionId: S, turnStartedAt: at });
+    const voice = createRunVoice({ taskId: TASK, sessId: S, turnStart: at, role: "single", agentType: "codex", runMeta: { model: null, reasoningEffort: null }, out });
     const arrivals: TimelineEntry[] = [];
-    const run = turn(S, T(45), arrivals);
-    run.input("写", T(45)).say(prefix);
-    await run.drain();
-    const snap = { output: readFileSync(sessionTranscriptPath(TASK, S), "utf8"), trace: [] as SessionTraceEntry[] };
+    const unsubscribe = bus.subscribe((event: { type: string; sessionId?: string }) => {
+      if (event.type === "agent.event" && event.sessionId === S) arrivals.push({ kind: "server", id: `${S}-${arrivals.length}`, event } as never);
+    });
+    voice.emitText(prefix);
+    if (barrier === "tool") { const event = { kind: "tool", name: "bash", detail: "读取项目文件" } as const; voice.publishEvent(event, voice.persistTrace(event, at)); }
+    if (barrier === "note") { const identity = writeTurn(out, { t: "system", agent: "codex", text: "预览已开启", aside: true }, at); voice.publishEvent({ kind: "system", text: "预览已开启", aside: true, at }, identity); }
+    await new Promise<void>((resolve) => out.write("", () => resolve()));
+    const snapshot = { session, output: readFileSync(sessionTranscriptPath(TASK, S), "utf8"), trace: existsSync(sessionTracePath(TASK, S)) ? read(S).trace : [] };
     const cut = arrivals.length;
-    run.say(rest).tool("edit", T(45, 30));
-    await run.end(T(46));
-    const row = sessionRow(S, { [T(45)]: T(46) });
-    const [opened] = agents(buildConversationItems([{ session: row, ...snap }], [row], arrivals.slice(cut)));
-    const [whole] = agents(buildConversationItems([{ session: row, ...read(S) }], [row], []));
-    assert.equal(opened!.markdown.trim(), (prefix + rest).trim(), `${JSON.stringify(prefix)}：接上的正文跟原文一样`);
-    assert.equal(opened!.segments.map((segment) => segment.markdown).join("").trim(), whole!.markdown.trim(), `${JSON.stringify(prefix)}：各段拼起来也一样`);
+    voice.emitText(suffix);
+    voice.flushTraceText();
+    writeTurnEnd(out, T(49));
+    await new Promise<void>((resolve) => out.end(resolve));
+    unsubscribe();
+    const view = (items: ConversationItem[]) => ({
+      bubbles: agents(items).map((item) => ({ markdown: item.markdown, segments: item.segments.map((segment) => [segment.markdown, segment.events.map((event) => event.label)]) })),
+      exported: conversationToMarkdown(items, { title: "t", body: "" } as never),
+    });
+    const refreshed = view(buildConversationItems([{ session, ...read(S) }], [session], []));
+    assert.equal(refreshed.bubbles[0]!.markdown, (prefix + suffix).replace(/^(?:[ \t]*\n)+/, "").trimEnd(), `${name}：刷新以后就是原文`);
+    assert.deepEqual(view(buildConversationItems([], [session], arrivals)), refreshed, `${name}：从头看实时与刷新逐字相同`);
+    assert.deepEqual(view(buildConversationItems([snapshot], [session], arrivals.slice(cut))), refreshed, `${name}：中途打开与刷新逐字相同`);
+    assert.deepEqual(view(buildConversationItems([snapshot], [session], arrivals)), refreshed, `${name}：中途打开（快照与实时全部重叠）也一样`);
   }
-  ok("中途打开时快照末尾的空白照原文接回，后到的正文不黏进前一个词、标题或代码行");
+  ok("正文写到空白、工具、旁注、未闭合代码块、只有缩进时打开页面：三路的正文、分段、复制与导出逐字相同");
 }
 
 {

@@ -76,6 +76,13 @@ const identityFields = (identity: RecordIdentity | null): Identity => identity ?
 /** 一处 agentEnd（回合真正收口的那一刻）。新记录带着它是哪个回合的。 */
 export type AgentEndMark = Identity & { at?: string };
 
+/**
+ * 一段带身份、却只有空白的正文（一回合刚写下一个换行或几格缩进时）。它不成段（读正文的人看不见它），但
+ * 页面要拿它的原样字符接后到的增量 —— 少了它，后到那一块的 `textOffset` 就对不上盘上的字数，缩进和空行
+ * 跟着丢。
+ */
+export type BlankProse = RecordIdentity & { at?: string; raw: string };
+
 const noticeOf = (value: unknown): { notice?: TimelineNotice } => {
   const notice = timelineNoticeOf(value);
   return notice ? { notice } : {};
@@ -95,10 +102,11 @@ export function parseSessionSpans(out: string): SessionSegmentSpan[] {
   return parseSessionTranscript(out).spans;
 }
 
-/** 解析成段，外加每一处 agentEnd（回合收口时刻；页面拿它给没有回合行的回合兜底）。 */
-export function parseSessionTranscript(out: string): { spans: SessionSegmentSpan[]; agentEnds: AgentEndMark[] } {
+/** 解析成段，外加每一处 agentEnd（回合收口时刻；页面拿它给没有回合行的回合兜底）与只有空白的带身份正文。 */
+export function parseSessionTranscript(out: string): { spans: SessionSegmentSpan[]; agentEnds: AgentEndMark[]; blanks: BlankProse[] } {
   const spans: SessionSegmentSpan[] = [];
   const agentEnds: AgentEndMark[] = [];
+  const blanks: BlankProse[] = [];
   let buf: string[] = [];
   let bufFirst = -1;
   let bufLast = -1;
@@ -117,6 +125,8 @@ export function parseSessionTranscript(out: string): { spans: SessionSegmentSpan
         marker?.line ?? bufFirst,
         bufLast,
       );
+    } else if (marker && raw) {
+      blanks.push({ ...marker.identity, ...(marker.at ? { at: marker.at } : {}), raw });
     }
     buf = [];
     bufFirst = -1;
@@ -216,7 +226,7 @@ export function parseSessionTranscript(out: string): { spans: SessionSegmentSpan
     buf.push(line);
   });
   flush();
-  return { spans, agentEnds };
+  return { spans, agentEnds, blanks };
 }
 
 /**

@@ -10,21 +10,23 @@
 // - 收口（agentEnd / 实时的 done）不是一条记录，是这一回合的事实：结束时刻、结局、怎么断的挂在气泡上。
 //   有回合行的，结束时刻就是回合行上那一刻（`Session.turnEnds`）。
 //
+// - 正文只有一份原文（不裁空白），执行过程记着各自落在原文第几个字之后；落盘那一路、实时那一路都只往
+//   这里攒，所有气泡在收尾时（settle）一次排版成整颗正文与展示分段（conversationBubbleText）。没有「排过版
+//   以后往展示分段上边到边追加」那一步 —— 那样展示分段裁过的空白、切过的段界就会改写后到的字。
+//
 // 删除按同一个定义指名（server/src/conversation-redact.ts 的 identityWindow / traceStepsWindow）：有正文的
 // 报正文那几段，只有执行过程的报「这个回合里号落在前后两句输入之间的那几步」。
-import type { ContextUsage, Session, TokenUsage, TurnInterruption, TurnOutcome } from "@ash/shared";
+import type { ContextUsage, Session, TurnInterruption, TurnOutcome } from "@ash/shared";
 import { segmentFingerprint, traceKeptOnDelete, traceStepsFingerprint } from "@ash/shared/session-output";
 import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
-import { addUsage } from "@ash/shared/usage";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationItem, TimelineEntry } from "./conversationModel.ts";
 import { reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";
-import { contentSegments } from "./conversationSegments.ts";
+import { bubbleText, type PlacedStep } from "./conversationBubbleText.ts";
+import { auxEvent, awaitingAfterEvent, markSegmentsAwaiting, type AgentAuxEvent } from "./conversationSegments.ts";
 import { traceRun, traceUsage } from "./conversationTraceGroups.ts";
-import { agentLabel, sessionRun } from "./conversationTurnParts.ts";
-import {
-  appendAgentAttachment, appendAgentAux, appendAgentText, currentSegment, liveRun, liveSystemNote,
-} from "./conversationLiveTurns.ts";
+import { agentLabel, sessionRun, type LiveAgentEvent } from "./conversationTurnParts.ts";
+import { liveRun, liveSystemNote } from "./conversationLiveTurns.ts";
 import { liveInput, recordId, type IdentityRecord, type SplitSession, type StepRecord } from "./conversationIdentity.ts";
 
 type AgentItem = Extract<ConversationItem, { kind: "agent" }>;
@@ -38,16 +40,17 @@ type Bubble = {
   turn: string | null;
   /** 前一句输入的号（这颗气泡从它之后起）。null = 这条会话上还没有过输入。 */
   after: number | null;
-  /** 落盘那一路攒着、收尾时一次排版的；排过版（或本来就是实时开的）以后改成边到边追加。 */
+  /** 这颗气泡的原文，按正文的号一段一段（盘上那段的原样字符，后面接实时到的增量）。 */
   chunks: { seq: number; raw: string; index?: number; seg?: Extract<IdentityRecord, { kind: "prose" }>["seg"] }[];
-  steps: StepRecord[];
+  /** 执行过程，各自落在原文第几个字之后（见 conversationBubbleText）。 */
+  steps: PlacedStep[];
+  /** 这颗气泡里盘上 trace 的全部条目（含正文条目）连同实时到的步骤：删除时按号核对的那一份。 */
+  traced: SessionTraceEntry[];
+  /** 盘上 trace 的正文条目累计到第几个字：落盘的那几步按它定位置。 */
+  tracedText: number;
   readSide: SessionTraceEntry[];
-  incremental: boolean;
-  /**
-   * 排版时为了展示裁掉的正文末尾空白。实时增量按盘上原文的字数接（见 applyProse），所以接下一块之前
-   * 先把它补回去 —— 不然 `Hello ` + `world` 会接成 `Helloworld`、标题吞掉下一段。
-   */
-  trimmedTail: string;
+  /** 实时那一路带来的：执行器参数、审查轮次、此刻还在不在等上游（按事件顺序，最后一条说了算）。 */
+  live: { run?: AgentItem["run"]; verifyRound?: number; awaiting?: boolean };
 };
 
 // 开气泡的那几种（记账的 run / usage、跟 .md 重复的 trace 正文不开）。
@@ -62,7 +65,6 @@ export function createAssembler(sessions: readonly Session[]) {
   const pending = new Map<string, StepRecord[]>();
   const closes = new Map<string, Close>();
   const clientKeys = new Set<string>();
-  let persistedPhase = true;
 
   const inputsOf = (sessionId: string) => inputs.get(sessionId) ?? [];
   const inputBefore = (sessionId: string, seq: number): Input | null =>
@@ -97,7 +99,7 @@ export function createAssembler(sessions: readonly Session[]) {
       segments: [],
     };
     const key = keyOf(record.sessionId, record.turn, after);
-    const bubble: Bubble = { item, key, sessionId: record.sessionId, turn: record.turn, after, chunks: [], steps: [], readSide: [], incremental: !persistedPhase, trimmedTail: "" };
+    const bubble: Bubble = { item, key, sessionId: record.sessionId, turn: record.turn, after, chunks: [], steps: [], traced: [], tracedText: 0, readSide: [], live: {} };
     bubbles.set(key, bubble);
     out.push(item);
     for (const step of pending.get(key) ?? []) addStep(bubble, step);
@@ -105,35 +107,33 @@ export function createAssembler(sessions: readonly Session[]) {
     return bubble;
   }
 
-  /**
-   * 排过版的气泡要接实时增量了：先把排版时裁掉的末尾空白补回正文（整颗与末段两处）。末段若只挂着
-   * 执行过程、没有正文，那段空白落在更早一段的末尾、跟下一块之间本来就隔着段界，不补（补进去反倒让
-   * 一个空段「有内容」）。
-   */
-  function resumeRaw(bubble: Bubble): void {
-    const tail = bubble.trimmedTail;
-    bubble.trimmedTail = "";
-    const segment = bubble.item.segments.at(-1);
-    if (!tail || !segment?.markdown) return;
-    bubble.item.markdown += tail;
-    segment.markdown += tail;
+  const textLength = (bubble: Bubble) => bubble.chunks.reduce((sum, chunk) => sum + chunk.raw.length, 0);
+
+  /** 实时那一路带来的气泡事实（盘上那一路这些从 trace 里读，见 layout）。 */
+  function noteLive(bubble: Bubble, envelope: LiveAgentEvent, awaiting: boolean | undefined): void {
+    const explicit = liveRun(envelope);
+    if (explicit) bubble.live.run = explicit;
+    if (envelope.verifyRound) bubble.live.verifyRound = envelope.verifyRound;
+    if (awaiting !== undefined) bubble.live.awaiting = awaiting;
   }
 
   function addStep(bubble: Bubble, step: StepRecord): void {
-    if (!bubble.incremental) { bubble.steps.push(step); return; }
-    resumeRaw(bubble);
-    const { item } = bubble;
-    const explicit = step.envelope && liveRun(step.envelope);
-    if (explicit) item.run = explicit;
     const event = step.event;
-    if (event.kind === "usage") {
-      item.usage = item.usage ? addUsage(item.usage, event.usage as TokenUsage) : event.usage;
-      currentSegment(item).awaiting = false;
-    } else if (event.kind === "attachment") {
-      appendAgentAttachment(item, event);
-    } else if (event.kind === "tool" || event.kind === "thinking" || event.kind === "error") {
-      appendAgentAux(item, event as Parameters<typeof appendAgentAux>[1]);
+    if (step.entry) {
+      bubble.traced.push(step.entry);
+      // 盘上 trace 的正文条目只用来给步骤定位置：正文本身以 .md 那份为准。
+      if (event.kind === "text") bubble.tracedText += event.text.length;
+      else bubble.steps.push({ entry: step.entry, at: bubble.tracedText });
+      return;
     }
+    const entry = { at: "", turnStartedAt: step.turn ?? "", seq: step.seq, event } as SessionTraceEntry;
+    bubble.traced.push(entry);
+    bubble.steps.push({ entry, at: textLength(bubble) });
+    // 此刻还在不在等上游：跟老读法实时那一路同一个口径（conversationLiveTurns 的 appendAgentAux 等）。
+    const awaiting = event.kind === "usage" || event.kind === "attachment" ? false
+      : event.kind === "tool" || event.kind === "thinking" || event.kind === "error"
+        ? awaitingAfterEvent(auxEvent(event as Parameters<typeof auxEvent>[0]) as AgentAuxEvent) : undefined;
+    if (step.envelope) noteLive(bubble, step.envelope, awaiting);
   }
 
   /** 一段正文（或它的一小块增量）。盘上那份已经有了的字不再追加。 */
@@ -145,14 +145,10 @@ export function createAssembler(sessions: readonly Session[]) {
     if (!fresh && had) return;
     const key = keyOf(record.sessionId, record.turn, inputBefore(record.sessionId, record.seq)?.seq ?? null);
     const bubble = bubbles.get(key) ?? open(record, out);
-    if (bubble.incremental) {
-      resumeRaw(bubble);
-      if (fresh) appendAgentText(bubble.item, fresh);
-      const explicit = record.envelope && liveRun(record.envelope);
-      if (explicit) bubble.item.run = explicit;
-      return;
-    }
-    bubble.chunks.push({ seq: record.seq, raw: record.raw, index: record.index, seg: record.seg });
+    const chunk = bubble.chunks.find((candidate) => candidate.seq === record.seq);
+    if (chunk) chunk.raw += fresh;
+    else bubble.chunks.push({ seq: record.seq, raw: fresh, index: record.index, seg: record.seg });
+    if (record.envelope) noteLive(bubble, record.envelope, false);
   }
 
   function apply(record: IdentityRecord, out: ConversationItem[]): void {
@@ -182,38 +178,41 @@ export function createAssembler(sessions: readonly Session[]) {
     else pending.set(key, [...pending.get(key) ?? [], record]);
   }
 
-  /** 落盘那一路攒着的气泡一次排版（正文与执行过程对齐、出处、回合事实），之后改为边到边追加。 */
-  function layout(bubble: Bubble): void {
+  /** 一颗气泡一次排版：整颗正文与展示分段（同一份原文）、出处、执行器参数、用量。 */
+  function layout(bubble: Bubble, awaitingSnapshot: boolean): void {
     const { item, sessionId, turn } = bubble;
     const session = sessionOf.get(sessionId);
-    const ordered = bubble.steps.flatMap((step) => step.entry ? [step.entry] : []);
-    // 读侧补出来的那几条没有号，按时刻插回去（它们只是附件和子智能体档案，位置只影响画在哪一段）。
+    const steps = [...bubble.steps];
+    // 读侧补出来的那几条没有号，按时刻插回去、跟前一步落在同一个位置（它们只是附件和子智能体档案，位置
+    // 只影响画在哪一段）。
     for (const extra of bubble.readSide) {
-      const at = ordered.findIndex((entry) => entry.at > extra.at);
-      ordered.splice(at < 0 ? ordered.length : at, 0, extra);
+      const at = steps.findIndex((step) => step.entry.at !== "" && step.entry.at > extra.at);
+      const index = at < 0 ? steps.length : at;
+      steps.splice(index, 0, { entry: extra, at: steps[index - 1]?.at ?? 0 });
     }
-    const live = bubble.chunks.filter((chunk) => !chunk.seg?.deleted);
+    const entries = steps.map((step) => step.entry);
+    const kept = bubble.chunks.filter((chunk) => !chunk.seg?.deleted);
     // 被注记劈开的几段原样接回去：它们本来就是同一股正文流，一个字不差。
-    const raw = live.map((chunk) => chunk.raw).join("");
-    const markdown = raw.trim();
+    const { markdown, segments } = bubbleText(kept.map((chunk) => chunk.raw).join(""), steps, `${item.id}:segment`);
     item.markdown = markdown;
-    // 只有正文末尾那一段的空白要留着接下一块；正文整段是空白时什么都不留（也就没有可接的位置）。
-    bubble.trimmedTail = markdown ? raw.slice(raw.trimEnd().length) : "";
-    item.segments = contentSegments(ordered, markdown, `${item.id}:segment`);
-    item.run = traceRun(ordered) ?? item.run;
-    item.reviewer = reviewerOf(traceVerifyRound(ordered), session?.role);
-    item.usage = traceUsage(ordered);
+    item.segments = segments;
+    item.run = bubble.live.run ?? traceRun(entries) ?? item.run;
+    item.reviewer = reviewerOf(traceVerifyRound(entries) ?? bubble.live.verifyRound, item.sessionRole ?? session?.role);
+    item.usage = traceUsage(entries);
+    // 此刻还在不在等上游：实时那一路后来说过的照它；没说过的，照快照里服务端给的那一位（见 conversationTimeline）。
+    const last = segments.at(-1);
+    if (last && bubble.live.awaiting !== undefined) last.awaiting = bubble.live.awaiting;
+    else if (awaitingSnapshot) markSegmentsAwaiting(segments);
     if (bubble.chunks.length) {
       item.sources = bubble.chunks.flatMap((chunk) => chunk.seg && chunk.index !== undefined
         ? [{ sessionId, index: chunk.index, fingerprint: segmentFingerprint(chunk.seg) }] : []);
-      if (!live.length) item.deleted = true;
-    } else if (turn && ordered.some((entry) => typeof entry.seq === "number" && !traceKeptOnDelete(entry.event.kind))) {
+      if (!kept.length) item.deleted = true;
+    } else if (turn && bubble.traced.some((entry) => typeof entry.seq === "number" && !traceKeptOnDelete(entry.event.kind))) {
       item.sources = [{
         sessionId,
-        steps: { turnStartedAt: turn, after: bubble.after, until: inputAfter(sessionId, bubble.after)?.seq ?? null, fingerprint: traceStepsFingerprint(ordered) },
+        steps: { turnStartedAt: turn, after: bubble.after, until: inputAfter(sessionId, bubble.after)?.seq ?? null, fingerprint: traceStepsFingerprint(bubble.traced) },
       }];
     }
-    bubble.incremental = true;
   }
 
   return {
@@ -231,11 +230,6 @@ export function createAssembler(sessions: readonly Session[]) {
         const owner = candidates.findLast((bubble) => (bubble.item.at ?? "") <= extra.at) ?? candidates[0];
         owner?.readSide.push(extra);
       }
-    },
-    /** 落盘那一路铺完了：排版，之后到的都是实时增量。 */
-    endPersisted(): void {
-      for (const bubble of bubbles.values()) if (!bubble.incremental) layout(bubble);
-      persistedPhase = false;
     },
     /**
      * 实时事件的分派判据：归身份这一路（true）还是交回老读法。只判不做 —— 调用方先把整串分好（老读法那一路
@@ -293,9 +287,15 @@ export function createAssembler(sessions: readonly Session[]) {
         apply({ kind: "step", sessionId, turn, seq, event: event as StepRecord["event"], envelope }, out);
       }
     },
-    /** 收尾：每颗气泡的起止、是不是被打断的半截、回合事实。实时增量都到齐之后跑一次。 */
-    settle(): void {
-      for (const bubble of bubbles.values()) settleBubble(bubble);
+    /**
+     * 收尾：每颗气泡排版，再定起止、是不是被打断的半截、回合事实。实时增量都到齐之后跑一次。
+     * `awaiting`：快照里服务端说「此刻还在等上游」的那几颗（conversationTimeline 挑出来的，每条会话最后那颗）。
+     */
+    settle(awaiting: ReadonlySet<ConversationItem> = new Set()): void {
+      for (const bubble of bubbles.values()) {
+        layout(bubble, awaiting.has(bubble.item));
+        settleBubble(bubble);
+      }
     },
   };
 

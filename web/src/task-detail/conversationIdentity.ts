@@ -103,7 +103,7 @@ export function splitPersistedSession(
   { session, output, trace = [] }: { session: Session; output: string; trace?: SessionTraceEntry[] },
   persistedTurns: PersistedTurnTimes,
 ): SplitSession {
-  const { spans, agentEnds } = parseSessionTranscript(output);
+  const { spans, agentEnds, blanks } = parseSessionTranscript(output);
   const legacySegments: ConvSeg[] = [];
   const legacyIndices: number[] = [];
   const records: IdentityRecord[] = [];
@@ -124,6 +124,10 @@ export function splitPersistedSession(
       records.push({ ...base, kind: "prose", seq, raw: seg.raw ?? seg.text, offset: 0, at: seg.at, seg, index });
     }
   });
+  // 只有空白的那几段正文不成段，但它们是原文的一部分：后到的增量按盘上的字数接，少了它缩进和空行就丢了。
+  for (const blank of blanks) {
+    records.push({ kind: "prose", sessionId: session.id, turn: blank.turnStartedAt, seq: blank.seq, raw: blank.raw, offset: 0, at: blank.at });
+  }
   for (const end of agentEnds) {
     if (typeof end.seq !== "number") continue;
     records.push({ kind: "end", sessionId: session.id, turn: end.turnStartedAt ?? null, seq: end.seq, at: end.at });
