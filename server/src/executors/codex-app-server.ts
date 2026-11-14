@@ -31,6 +31,7 @@ import { readCodexTurnTiming } from "./codex-rollout-timing.js";
 import { codexChangeWrites, codexCommandCwd } from "./tool-writes.js";
 import { isGoalExecution } from "@ash/shared/cli-commands";
 import { codexTurnError } from "./model-failure.js";
+import { CodexAshMcpStatus } from "./ash-mcp-confirm.js";
 /** 一个 app-server 进程承载一个单飞回合，收尾归档后关闭；配置仍来自用户本机。 */
 export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const child = opts.startProcess?.()
@@ -72,6 +73,9 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   let lastEventSummary: string | null = null;
   let agentMessageCount = 0;
   const childEvents = new CodexChildActivity(opts.cwd);
+  // ash 的工具连没连上以 codex 自己推的启动状态为准(ash-mcp-inject.ts)。接管来的进程看不到
+  // 接管之前那几条通知,不在那里下「没加载」的结论。
+  const ashMcp = opts.reattach ? null : new CodexAshMcpStatus();
   const childImages = new Map<string, ImageStore>();
   const childModelReads = new Set<string>();
   const childModelVersions = new Map<string, number>();
@@ -314,6 +318,9 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     } else if (status === "interrupted" && !stopRequested && !native.expectedInterruption) {
       push({ kind: "error", message: "Codex 当前回合被意外中断" });
     }
+    // 本回合的 ash 工具在不在:清单那一问还没回来就有界地等一下,等不到就如实说核实不了(ash-mcp-confirm.ts)。
+    const ashProblem = stopRequested ? null : await ashMcp?.settle();
+    if (ashProblem) push(ashProblem);
     if (!(await native.afterTurn())) return;
     const timed = latestUsage && completedId
       ? await readCodexTurnTiming(threadId, { turnId: completedId }, opts.env?.CODEX_HOME, turnRequests)
@@ -404,6 +411,13 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
         if (!reported) break;
         if (reported.counted) structuredErrors.push(reported.event.message);
         push(reported.event);
+        break;
+      }
+      case "mcpServer/startupStatus/updated": {
+        const problem = ashMcp?.update(p);
+        if (problem) push(problem);
+        // ready 只说明握手成了：用户配置里的工具名单会被深合并保留，ash 的工具在不在要另问一次。
+        ashMcp?.checkTools(request, p.threadId, push);
         break;
       }
       case "turn/completed": void completeTurn(p.turn).catch((error) => finish(1, String(error))); break;

@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ProbeOutcome } from "../src/ash-mcp-probe.js";
+import type { CodexAskOutcome } from "../src/auth/codex-approve.js";
 import type { CodexAsk } from "../src/auth/user-cli-mcp.js";
 import { DATA_DIR, REPO_DIR } from "../src/paths.js";
 import { type Asked, bench, canned, ensure, askRealCodex, HAS_BUILT_MCP, HAS_CODEX, LISTS_ASH } from "./user-cli-mcp-bench.js";
@@ -43,7 +43,7 @@ export async function checkCodexApprove(): Promise<void> {
 
     // **没批准就一个字节都没写**:codex 看完候选说它仍然列不出 ash ⇒ 原文照旧、连 mtime
     // 都不变,原来压根没有那个文件时也不许被建出来(上一版是先建、再删)。
-    const stillBlind: ProbeOutcome = { kind: "answer", code: 0, stdout: "[]", stderr: "" };
+    const stillBlind: CodexAskOutcome = { kind: "answer", code: 0, stdout: "[]", stderr: "" };
     const refused = bench({ codex: `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n` });
     const refusedFile = join(refused.dir, "config.toml");
     writeFileSync(refusedFile, before, "utf8");
@@ -98,13 +98,14 @@ export async function checkCodexApprove(): Promise<void> {
 
   // ⑳ **判官是 codex 本人,而且问的是沙盘里的副本**（本轮审查 F1）：我们那份是**结构**扫描器，
   //    看得出新表头落进了文件里，证不了它在这份 TOML 上合法。这里拿一种真实形状把差别摆出来 ——
-  //    宿主那条登记的 env 值里有个不合法转义（`"http://bad\q"`），拼完扫描器照样答「ash 在、
-  //    启用着」，而真 codex 整份拒载（实测 rc=1 `missing escaped value`）。要的行为是：**一个
+  //    宿主那条登记里有个类型不对的值（`startup_timeout_sec = "soon"`），TOML 语法没毛病、扫描器
+  //    照样答「ash 在、启用着」，而真 codex 整份拒载（2026-11-14 codex 0.153.4 实测 rc=1，点名
+  //    `mcp_servers.ash.startup_timeout_sec`）。早先用的是 env 值里的不合法转义，那一种如今在搬登记
+  //    那一层（`mcp-registry/relocate.ts`）就被拦下、轮不到问 codex，测不到这里要钉的东西。要的行为是：**一个
   //    字节都不写**、如实报、给得出手工办法，而且同一份组合不再问第二遍（设置页每读一次、每条
   //    任务起跑都会走到这里，不该为同一个已知答案反复起进程）。
   {
-    const BAD_HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/x.js"]\n\n`
-      + `[mcp_servers.ash.env]\nASH_URL = "http://bad\\q"\n`;
+    const BAD_HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/x.js"]\nstartup_timeout_sec = "soon"\n`;
     const { host, dir } = bench({ codex: BAD_HOST });
     const file = join(dir, "config.toml");
     const before = `model = "gpt"\n`;
@@ -134,8 +135,8 @@ export async function checkCodexApprove(): Promise<void> {
   //    那一格。四种答不出来的收场在这里一次过齐，判据只有一条：**没批准就没写**。
   {
     const HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n`;
-    const cases: { why: string; outcome: ProbeOutcome; expect: RegExp }[] = [
-      { why: "起不来(macOS 上探测层弃权就是这一档)", outcome: { kind: "not-started", why: "内核圈定在这台机器上弃权" }, expect: /没法安全地起一次 codex/ },
+    const cases: { why: string; outcome: CodexAskOutcome; expect: RegExp }[] = [
+      { why: "起不来(没装 codex、spawn 失败)", outcome: { kind: "not-started", why: "这台机器上找不到 codex" }, expect: /起不了 codex/ },
       { why: "超时/被打断", outcome: { kind: "unqueryable" }, expect: /没给出一份能用的答案/ },
       { why: "退出码 0 但输出不是 JSON", outcome: { kind: "answer", code: 0, stdout: "Listing MCP servers…", stderr: "" }, expect: /输出看不懂/ },
       { why: "退出码 0、是列表但没列出 ash", outcome: { kind: "answer", code: 0, stdout: "[]", stderr: "" }, expect: /仍然没列出/ },
@@ -195,15 +196,17 @@ export async function checkCodexApprove(): Promise<void> {
       join("mcp-registry", "shapes.ts"),
       join("mcp-registry", "catalog.ts"),
     ];
-    for (const rel of CHAIN) {
-      const raw = readFileSync(join(REPO_DIR, "server", "src", rel), "utf8");
-      // 注释里会提到旧写法(「上一版用的是 spawnSync」),按行剥掉注释再看代码本身。
-      const code = raw.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
-      assert.ok(!/spawnSync\(|\bspawn\(|execFile|execSync/.test(code),
-        `${rel}：写入侧不许自己起进程 —— 走 probeCli（本轮审查 F2）`);
+    // 注释里会提到旧写法(「上一版用的是 spawnSync」),按行剥掉注释再看代码本身。
+    const codeOf = (rel: string) => readFileSync(join(REPO_DIR, "server", "src", rel), "utf8")
+      .split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    for (const rel of CHAIN.filter((r) => !r.endsWith("codex-approve.ts"))) {
+      assert.ok(!/spawnSync\(|\bspawn\(|execFile|execSync/.test(codeOf(rel)),
+        `${rel}：写入侧不许自己起进程 —— 问 codex 那一问只在 codex-approve.ts 里`);
     }
-    const askCode = readFileSync(join(REPO_DIR, "server", "src", "auth", "codex-approve.ts"), "utf8");
-    assert.ok(/probeCli\(/.test(askCode), "问 codex 本人那一问必须走探测执行层");
+    // 那一问本身:异步、带超时,命令经 resolveLaunch 解析(Windows 上的 .cmd 垫片由它决定怎么起)。
+    const askCode = codeOf(join("auth", "codex-approve.ts"));
+    assert.ok(!/spawnSync\(|execSync|execFileSync/.test(askCode), "问 codex 本人那一问不许同步起进程(会堵住事件循环)");
+    assert.ok(/resolveLaunch\(/.test(askCode) && /timeout:/.test(askCode), "问 codex 本人那一问要经 resolveLaunch、带超时");
   }
 
   // ㉔ **批准期间别人存了新东西,不许被盖掉**（第 2 轮审查 F1）：批准那一问要起一次 codex、
@@ -280,7 +283,7 @@ export async function checkCodexApprove(): Promise<void> {
     const file = join(dir, "config.toml");
     const before = `model = "gpt"\n`;
     writeFileSync(file, before, "utf8");
-    const noisy: ProbeOutcome = {
+    const noisy: CodexAskOutcome = {
       kind: "answer", code: 1, stdout: "",
       stderr: "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir\n"
         + "missing escaped value at line 7 column 12\n",
@@ -315,7 +318,7 @@ export async function checkCodexApprove(): Promise<void> {
   }
 
   // ㉙ **两种失败的记性不一样长**（第 2 轮审查 N6）：设置页每读一次、每条任务起跑都会走到这里,
-  //    同一个已知答案不该反复起 codex。但「问不出来」(没装 codex、超时、探测层弃权)是会自己好的 ——
+  //    同一个已知答案不该反复起 codex。但「问不出来」(没装 codex、超时)是会自己好的 ——
   //    记死了就等于装好 codex 也得重启 ash 才认。所以:**内容本身的毛病记死**(内容一变键就变了),
   //    **问不出来只记一小会儿**。这里把钟往前拨来跨过那一小会儿。
   {
@@ -328,7 +331,7 @@ export async function checkCodexApprove(): Promise<void> {
       {
         const { host, dir } = bench({ codex: HOST });
         writeFileSync(join(dir, "config.toml"), `model = "gpt"\n`, "utf8");
-        const bad: ProbeOutcome = { kind: "answer", code: 1, stdout: "", stderr: "missing escaped value\n" };
+        const bad: CodexAskOutcome = { kind: "answer", code: 1, stdout: "", stderr: "missing escaped value\n" };
         assert.equal((await ensure(dir, "codex", host, canned(bad))).configured, false);
         jump(86_400_000);
         const again = await ensure(dir, "codex", host, BOOM);
@@ -341,7 +344,7 @@ export async function checkCodexApprove(): Promise<void> {
         const { host, dir } = bench({ codex: HOST });
         const file = join(dir, "config.toml");
         writeFileSync(file, `model = "gpt"\n`, "utf8");
-        const dead: ProbeOutcome = { kind: "not-started", why: "内核圈定在这台机器上弃权" };
+        const dead: CodexAskOutcome = { kind: "not-started", why: "这台机器上找不到 codex" };
         assert.equal((await ensure(dir, "codex", host, canned(dead))).configured, false);
         assert.equal((await ensure(dir, "codex", host, BOOM)).configured, false, "紧接着再问一遍不该又起一次 codex");
         jump(120_000);

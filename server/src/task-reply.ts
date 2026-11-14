@@ -189,7 +189,7 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
       .catch((err) => console.error(`[ash] 回复续跑 ${taskId} 异常:`, err))
       .finally(async () => {
         if (seat) await seat.release().catch((err) => console.error(`[ash] 回复续跑 ${taskId} 释放执行位失败:`, err));
-        // 先放执行位再登记唤醒:扫描要重新认领它,自己还占着就会被当成「已有启动路径」挡回。
+        // 先放执行位再扫:扫描要重新认领它,自己还占着就会被当成「已有启动路径」挡回。
         if (stashed) flushPendingWhenTurnIdle(taskId);
       });
     return c.json({ started: true }, 202);

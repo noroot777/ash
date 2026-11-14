@@ -29,7 +29,8 @@ import {
   writePersonalSkill,
   PERSONAL_CLI_TYPES,
 } from "./user-cli.js";
-import { hostAshMcp } from "./user-cli-mcp.js";
+import { injectsAshMcp } from "../executors/ash-mcp-inject.js";
+import { hostAshMcp, INJECTED_ASH_MCP } from "./user-cli-mcp.js";
 import { ensureExecutorAshMcp, registeredExecutorAshMcp, storedExtraArgs } from "./executor-ash-mcp.js";
 
 /**
@@ -71,8 +72,11 @@ export function mountPersonalCliRoutes(api: Hono): void {
     const sharedHostCli = await isHostCliShared();
     // 共用档下真正生效的是**宿主机**那份配置,所以「ash MCP 登记了没有」这一问也得问
     // 到那边去(个人目录的答案在这一档下毫无意义)。只读:那是用户自己的 ~/.claude.json。
+    // 起跑时由 ash 注入的那几家不看配置(executors/ash-mcp-inject.ts)。
     const hostAsh = sharedHostCli
-      ? PERSONAL_CLI_TYPES.map((agentType) => ({ agentType, ...hostAshMcp(agentType) }))
+      ? PERSONAL_CLI_TYPES.map((agentType) => ({
+          agentType, ...(injectsAshMcp(agentType) ? INJECTED_ASH_MCP : hostAshMcp(agentType)),
+        }))
       : [];
     return c.json({ mode: "multi", sharedHostCli, hostAshMcp: hostAsh, envs: await listPersonalCliEnv(userId) });
   });

@@ -1,0 +1,94 @@
+/* 产品画面：任务头 + 会话 + 回复框。尺寸和颜色照 web/src/styles 里会话那几份。 */
+.app { display: flex; flex-direction: column; height: 660px; overflow: hidden; border-radius: 12px; background: var(--canvas); box-shadow: var(--control-shadow), lch(0 0 0 / 0.05) 0 12px 40px; font-size: 13px; line-height: 1.5; }
+
+.task-head { display: flex; flex: none; align-items: center; gap: 10px; height: 44px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--line); color: var(--faint); }
+.task-head b { flex: 1; min-width: 0; overflow: hidden; color: var(--ink); font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.task-head-tools { display: flex; gap: 2px; }
+.head-icon { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 8px; color: var(--muted); }
+.head-icon .icon { width: 16px; height: 16px; }
+
+.feed { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 24px 8px; scroll-behavior: smooth; }
+.feed-col { max-width: 790px; margin: 0 auto; }
+.reply { flex: none; padding: 0 24px 16px; }
+.reply-box { display: flex; align-items: flex-end; justify-content: space-between; max-width: 790px; height: 64px; margin: 0 auto; padding: 12px; border-radius: 14px; background: var(--panel); box-shadow: var(--control-shadow); color: var(--faint); }
+.reply-box i { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 8px; background: var(--action); color: #fff; }
+
+/* —— 左边：智能体的回合 —— */
+.msg { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; margin-bottom: 20px; }
+.avatar { display: grid; width: 20px; height: 20px; place-items: center; color: #d97757; }
+.avatar .icon { width: 15px; height: 15px; stroke-width: 2.6; }
+.msg header { display: flex; align-items: center; min-height: 20px; color: var(--muted); font-size: 12px; font-weight: 500; }
+.msg p { margin: 8px 0 0; line-height: 1.75; }
+.msg ul { margin: 6px 0 0; padding-left: 20px; line-height: 1.75; }
+.msg li::marker { color: var(--faint); }
+.msg code, .lane code { border-radius: 4px; background: var(--overlay); padding: 1px 4px; font-size: 12px; }
+.fold { display: flex; align-items: center; gap: 6px; min-height: 26px; margin-top: 4px; color: var(--muted); font-size: 13px; }
+.fold .icon { width: 11px; height: 11px; color: var(--faint); }
+.fold time, .fold .cmd { color: var(--faint); }
+.fold .cmd { min-width: 0; overflow: hidden; font: 12px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.fold time { flex: none; font-variant-numeric: tabular-nums; }
+
+/* —— 右边：审查者。进行中和出结论是同一颗气泡 —— */
+.rv { display: flex; flex-direction: column; align-items: flex-end; margin: 26px 0 20px; padding-left: 38px; }
+.rv-bubble { position: relative; min-width: 0; max-width: min(640px, 88%); border: 1px solid var(--line2); border-radius: 16px 6px 16px 16px; transition: border-color var(--dur-1) var(--ease-out); }
+.rv-bubble:has(> .rv-text:hover) { border-color: color-mix(in oklab, var(--ink) 24%, var(--line2)); }
+.rv-bubble > header { position: absolute; right: 2px; bottom: 100%; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 0 4px; color: color-mix(in oklab, var(--muted) 72%, var(--faint)); font-size: 12px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity var(--dur-1) var(--ease-out); }
+.rv-bubble:is(:hover, :focus-within) > header { opacity: 1; pointer-events: auto; }
+.rv-bubble > header b { color: color-mix(in oklab, var(--ink) 70%, var(--muted)); font-weight: 500; }
+.rv-bubble > header span { font-variant-numeric: tabular-nums; }
+.rv-key { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 5px; color: var(--muted); }
+.rv-key:hover, .rv-key[aria-expanded="true"] { background: var(--raised); color: var(--ink); }
+.rv-text { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 6px 15px 7px; border-radius: inherit; color: var(--muted); font-size: 12.500px; line-height: 1.6; text-align: left; overflow-wrap: anywhere; transition: color var(--dur-1) var(--ease-out); }
+.rv-text:hover, .rv-text[aria-expanded="true"] { color: var(--ink); }
+.rv-text > span.is-fresh, .rv-now > span.is-fresh { animation: rv-swap 320ms var(--ease-out); }
+.rv-say-clamp { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+/* 在跑的那颗点：和侧栏在跑的任务同一颗（主色、同一个节拍）。会动 = 它自己在往前走。 */
+.run-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); transform-origin: center; animation: run-pulse 1.35s ease-in-out infinite; align-self: center; }
+@keyframes run-pulse { 50% { opacity: 0.4; transform: scale(0.78); } }
+@keyframes rv-swap { from { opacity: 0; transform: translateY(2px); } }
+
+/* 气泡下面靠右的那一句：最新一句 + 用时。摊开经过之后它就不出现了，免得同一句写两遍。 */
+.rv-now { display: flex; align-items: baseline; justify-content: flex-end; gap: 10px; max-width: 100%; margin: 6px 2px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.rv-now > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-now code { font: 12px var(--mono); }
+.rv-now time { flex: none; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+/* 就地摊开的经过：占满正文宽度，左缘跟回合正文对齐（现有的 .turn-footnote-lane）。 */
+.lane { align-self: stretch; margin: 8px 0 4px -8px; border-left: 1px solid var(--line2); padding: 2px 0 2px 14px; animation: lane-unfold var(--dur-2) var(--ease-out) backwards; }
+.lane p { margin: 6px 0; line-height: 1.75; }
+.lane > :first-child { margin-top: 0; }
+.lane > :last-child { margin-bottom: 0; }
+@keyframes lane-unfold { from { opacity: 0; transform: translateY(-4px); } }
+
+/* —— 现在的画法：进行中那张卡（照 reviewer-turn.css 的 .verify-lane）—— */
+.card { position: relative; margin: 18px 0 22px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 1px 2px rgb(30 32 38 / 3%); }
+.card::before { content: ""; position: absolute; top: 8px; bottom: 8px; left: -1px; width: 2px; border-radius: 2px; background: color-mix(in oklab, var(--cyan) 55%, var(--line2)); }
+.card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 36px; padding: 7px 10px 7px 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.card.is-collapsed .card-head { border-bottom-color: transparent; }
+.card-mark { display: grid; width: 18px; height: 18px; place-items: center; border-radius: 50%; background: color-mix(in oklab, var(--cyan) 15%, var(--panel)); color: var(--cyan); }
+.card-mark .icon { width: 12px; height: 12px; stroke-width: 2; }
+.card-head b { color: color-mix(in oklab, var(--cyan) 72%, var(--ink)); font-weight: 600; }
+.card-by { color: var(--muted); }
+.card-state { border-radius: 999px; background: color-mix(in oklab, var(--cyan) 11%, var(--panel)); padding: 1px 7px; color: color-mix(in oklab, var(--cyan) 72%, var(--ink)); font-weight: 500; }
+.card-head time { margin-left: auto; color: var(--faint); font-variant-numeric: tabular-nums; }
+.card-head button { min-height: 24px; padding: 2px 8px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); color: var(--muted); font-size: 12px; }
+.card-head button:hover { background: var(--raised); color: var(--ink); }
+.card-body { padding: 14px 13px 10px; }
+.card-body p { margin: 6px 0; line-height: 1.75; }
+.card-body > :first-child { margin-top: 0; }
+
+@media (max-width: 760px) {
+  .app { height: 620px; }
+  .feed, .reply { padding-left: 12px; padding-right: 12px; }
+  .rv { padding-left: 10px; }
+  .rv-bubble { max-width: 96%; }
+  .lane { margin-left: 0; }
+  .card-head time { order: 2; margin-left: 26px; }
+}
+@media (hover: none) {
+  .rv { margin-top: 8px; }
+  .rv-bubble > header { position: static; height: auto; padding: 8px 15px 0; opacity: 1; pointer-events: auto; white-space: normal; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .run-dot { animation: none; }
+}

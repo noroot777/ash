@@ -12,7 +12,9 @@ import { TaskReviewRounds } from "../../src/review/TaskReviewRounds.tsx";
 import { reviewTargetRequest, type ReviewTarget } from "../../src/review/reviewTarget.ts";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
 import { conversationFeedRows, type ConversationReviewLane } from "../../src/task-detail/conversationReviewLanes.ts";
-import { ReviewerLane, laneRoundOpener } from "../../src/task-detail/ReviewerLane.tsx";
+import { ReviewBubble } from "../../src/task-detail/ReviewBubble.tsx";
+import { laneRoundOpener } from "../../src/task-detail/reviewLaneLinks.ts";
+import { ReceiptReviewContext, TurnReceipts } from "../../src/task-detail/TurnReceipts.tsx";
 import type { TaskReviewState } from "../../src/team/ReviewEvidence.tsx";
 import "../../src/styles/global.css";
 
@@ -136,6 +138,9 @@ serve(task.id, runs, true);
 // 已经读到过一份（只有旧那场）：新一场刚结束就点它，手里那份是旧快照。
 const staleTask = taskOf("nav-stale");
 serve(staleTask.id, runs.slice(0, 1), false);
+// 审查格里只有报告没有经过：去得了审查格、又说过话的那一轮另给一颗经过键，就地摊开。
+const traceTask = taskOf("nav-trace");
+serve(traceTask.id, runs, false);
 // 第一次读就失败：数据一直是空的，这份请求不能一声不响地挂着。
 const coldTask = taskOf("nav-cold");
 serve(coldTask.id, runs.slice(0, 1), true);
@@ -143,7 +148,7 @@ serve(coldTask.id, runs.slice(0, 1), true);
 const lane = (id: string, source: ConversationReviewLane["source"], runId: string | null, round: number, label: string): ConversationReviewLane => ({
   kind: "review-lane", id, source, round, totalRounds: null, title: `第 ${round} 轮`, items: [], reviewerLabel: label,
   reviewerModel: null, reviewerEffort: null, note: null, startedAt: null, endedAt: null, conclusion: "verified",
-  complete: true, reportAvailable: false, report: null, runId, defaultCollapsed: true, findings: null,
+  complete: true, reportAvailable: false, report: null, runId, findings: null,
 });
 
 const verifyInfo: TaskReviewInfo = {
@@ -153,11 +158,13 @@ const verifyInfo: TaskReviewInfo = {
 
 // 宿主那一份的语义（InspectorHost）：一份请求，收下（seq 对得上）才清掉。真实页面上一个任务只
 // 挂其中一种审查格，所以两种各给一个宿主。
-function Host({ name, lanes, names, workflowMode, children }: {
+function Host({ name, lanes, names, workflowMode, receipts = [], children }: {
   name: string;
   lanes: ConversationReviewLane[];
   names: string[];
   workflowMode: string;
+  /** 被后一轮盖过的那几轮：会话里只剩「N 条记录」里的一条。 */
+  receipts?: ConversationReviewLane[];
   children: ReactNode;
 }) {
   const [request, setRequest] = useState<InspectorNav["request"]>(null);
@@ -179,9 +186,25 @@ function Host({ name, lanes, names, workflowMode, children }: {
       <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
         <div>{lanes.map((item, index) => (
           <div key={item.id} data-lane={names[index]}>
-            <ReviewerLane taskId={task.id} lane={item} onOpenRound={laneRoundOpener(item, workflowMode, open)}><p>这一轮的经过</p></ReviewerLane>
+            <ReviewBubble taskId={task.id} lane={item} onOpenRound={laneRoundOpener(item, workflowMode, open)} renderLane={() => <p>这一轮的经过</p>} />
           </div>
-        ))}</div>
+        ))}
+        {receipts.length > 0 && (
+          <div data-receipts={name}>
+            <ReceiptReviewContext.Provider value={{
+              taskId: task.id,
+              reviewOpener: (item) => laneRoundOpener(item, workflowMode, open),
+              renderLane: () => <p>这一轮的经过</p>,
+            }}>
+              <TurnReceipts standalone receipts={receipts.map((item) => ({
+                id: item.id,
+                view: { tier: "receipt", tone: "plain", topic: "review", text: `${item.title}（${item.reviewerLabel}）`, icon: "review", detail: null, dispute: false },
+                lane: item,
+              } as never))} />
+            </ReceiptReviewContext.Provider>
+          </div>
+        )}
+        </div>
         <div data-pane={name}>{children}</div>
       </section>
     </InspectorNavProvider>
@@ -208,6 +231,15 @@ function Shell() {
         workflowMode="free"
       >
         <FreeReviewPane task={staleTask} notify={() => {}} />
+      </Host>
+      <Host
+        name="trace"
+        lanes={[{ ...lane("traced", "free", "old-run", 1, "说过话"), items: [{} as never] }, lane("silent", "free", "old-run", 1, "没开口")]}
+        names={["traced", "silent"]}
+        receipts={[{ ...lane("receipt-traced", "free", "old-run", 1, "被盖过"), items: [{} as never] }]}
+        workflowMode="free"
+      >
+        <FreeReviewPane task={traceTask} notify={() => {}} />
       </Host>
       <Host name="cold" lanes={[lane("cold", "free", "old-run", 1, "冷启动")]} names={["cold"]} workflowMode="free">
         <FreeReviewPane task={coldTask} notify={() => {}} />

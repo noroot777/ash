@@ -15,7 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ProbeOutcome } from "../src/ash-mcp-probe.js";
+import type { CodexAskOutcome } from "../src/auth/codex-approve.js";
 import { ensureAshMcp } from "../src/auth/user-cli-mcp.js";
 import { REPO_DIR } from "../src/paths.js";
 
@@ -25,7 +25,7 @@ const stage = mkdtempSync(join(tmpdir(), "ash-write-identity-"));
 process.on("exit", () => rmSync(stage, { recursive: true, force: true }));
 
 /** 「codex 收下了」—— 这几格钉的是**写出来那个文件的身份**,不是 codex 的判决。 */
-const LISTS_ASH: ProbeOutcome = {
+const LISTS_ASH: CodexAskOutcome = {
   kind: "answer", code: 0, stdout: JSON.stringify([{ name: "ash", enabled: true }]), stderr: "",
 };
 const HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n`;

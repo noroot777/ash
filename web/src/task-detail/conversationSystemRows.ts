@@ -108,6 +108,8 @@ type Accessors<Row> = {
   eventOf: (row: Row) => EventItem | null;
   /** 收了口的一轮审查（变成审查结论那一行，结论同时记进被审那一回合的记录）。 */
   laneOf?: (row: Row) => ConversationReviewLane | null;
+  /** 还没出结论的一轮审查：它一开始就占了这一回合审查结论的那个位置（见 attach 的说明）。 */
+  pendingLaneOf?: (row: Row) => boolean;
   /** 这一行是你说的话：它后面的尾注都成了过去的事。 */
   yoursOf?: (row: Row) => boolean;
   /** 这一轮审查没给出结论的原因（见 reviewNoVerdictCause）：贴在那颗结论气泡下面的第一句。 */
@@ -127,7 +129,9 @@ type Accessors<Row> = {
  *   回合跑完紧跟着的事（审查已预约、验收了），都是那一回合的后话；
  * - 审查结论自己占一行（ConversationVerdictRow），排在原处。它之后、下一个回合之前要你知道的那几句
  *   贴在它下面，不回到回合的尾注里。同一回合上又出了一次结论（重跑、重审），只留最近那一行：被盖过
- *   的那一行撤掉，贴在它下面的那几句发生在新结论之前，回到回合的尾注；被盖过的结论本身在记录里；
+ *   的那一行撤掉，贴在它下面的那几句发生在新结论之前，回到回合的尾注；被盖过的结论本身在记录里。
+ *   「被盖过」从新的一轮**开始**那一刻就算：进行中的那一轮和它出的结论是同一颗气泡，要是等它出了
+ *   结论才撤上面那一行，那颗气泡（连同摊开着的经过）就会在换字那一下整个往上跳；
  * - 段里还没有回合：回执等这一段的第一回合来认领（「意见已交给执行者」→ 按意见改的那一回合），
  *   等到段落结束也没有回合来认，就在原处留一颗「N 条记录」；要你知道的那几句不往后挂，在原处
  *   留一句同样的小灰字。
@@ -208,6 +212,13 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
       else if (turn) give(turn, [receipt]);
       else pending.push(receipt);
       return;
+    }
+    // 同一回合上新开的一轮：上一行结论此刻就让位（理由见上面的说明），它照样在这一回合的记录里。
+    if (turn && verdict && acc.pendingLaneOf?.(row)) {
+      out.splice(out.indexOf(verdict.row), 1);
+      verdicts.splice(verdicts.indexOf(verdict), 1);
+      parts.set(turn, [...parts.get(turn) ?? [], ...verdict.parts]);
+      verdict = null;
     }
     const lane = acc.laneOf?.(row);
     if (lane) {
@@ -306,10 +317,11 @@ export function conversationSystemRows(
   type Grouped = ConversationDebateFeedRow | ConversationSystemActionRow;
   const display = attach<Grouped>(groupConflictHandoffs(rows.filter((row) => row.kind !== "item" || shown(row.item))), {
     turnIdOf: (row) => row.kind === "item" && row.item.kind === "agent" ? row.item.id : null,
-    // 辩论分段；正在跑的审查卡不分（它收口以后就是被审那一回合后面那一行结论）。
+    // 辩论分段；还没出结论的那一轮审查不分（它收口以后就是被审那一回合后面那一行结论）。
     breaksSegment: (row) => row.kind === "debate-lane" || row.kind === "system-action" || (row.kind === "item" && row.item.kind === "user"),
     eventOf: (row) => row.kind === "item" && row.item.kind === "event" ? row.item : null,
     laneOf: (row) => row.kind === "review-lane" && row.complete ? row : null,
+    pendingLaneOf: (row) => row.kind === "review-lane" && !row.complete,
     yoursOf: (row) => row.kind === "item" && row.item.kind === "user" && !row.item.bySystem,
     failureOf: (id) => options.failures?.get(id),
     causeOf: (lane) => options.causes?.get(lane.id),
@@ -321,9 +333,9 @@ export function conversationSystemRows(
 export type LaneRow = { kind: "item"; item: ConversationItem } | ConversationFootnoteRow | ConversationReplyRow;
 
 /**
- * 同一套归属，用在一轮审查里：卡里的旁注同样不单独占行，记在审查者那一回合上。
+ * 同一套归属，用在一轮审查里：那一轮里的旁注同样不单独占行，记在审查者那一回合上。
  * 收了口的一轮，那条结论旁注就是审查结论那一行本身，不在摊开的经过里再说一遍。
- * 卡里的尾注不带颜色（那是过去的一轮，或者正在跑、还没有现在的结论）。
+ * 那一轮里的尾注不带颜色（那是过去的一轮，或者正在跑、还没有现在的结论）。
  */
 export function laneReceipts(lane: Pick<ConversationReviewLane, "items" | "complete">): {
   rows: LaneRow[];
@@ -345,4 +357,24 @@ export function laneReceipts(lane: Pick<ConversationReviewLane, "items" | "compl
   const rows = attached.rows.flatMap((row): LaneRow[] => row.kind === "verdict" ? []
     : row.kind === "footnote" ? [{ ...row, footnote: { ...row.footnote, live: false } }] : [row]);
   return { rows, receipts: attached.receipts, footnotes };
+}
+
+/**
+ * 一轮审查里**最后那件事**的那句尾注：停了、没给结论的那一轮收着时，原因和「继续本轮审查」这类键
+ * 就挂在气泡下面这一句上（ReviewBubble 的 trailing）。只看最后那一回合（或它后面那一句原处的小灰字）
+ * ——更早的尾注是更早的事，不替它说现在。
+ */
+export function laneTailFootnote(view: ReturnType<typeof laneReceipts>): TurnFootnote | null {
+  for (let index = view.rows.length - 1; index >= 0; index -= 1) {
+    const row = view.rows[index]!;
+    if (row.kind === "footnote") {
+      if (row.footnote.parts.length) return row.footnote;
+      continue;
+    }
+    if (row.kind === "item" && row.item.kind === "agent") {
+      const footnote = view.footnotes.get(row.item.id);
+      return footnote?.parts.length ? footnote : null;
+    }
+  }
+  return null;
 }

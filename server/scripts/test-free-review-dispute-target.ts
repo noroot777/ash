@@ -28,9 +28,7 @@ const root = mkdtempSync(join(tmpdir(), "ash-free-review-dispute-target-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.CODEX_HOME = join(root, "codex-home");
-// 辩论开场会核两边够不够得着 ash MCP（ash-mcp-launch-gate.ts），给一份接好了的最小配置。
 mkdirSync(process.env.CODEX_HOME);
-writeFileSync(join(process.env.CODEX_HOME, "config.toml"), '[mcp_servers.ash]\ncommand = "node"\n');
 const bin = join(root, "bin");
 mkdirSync(bin);
 writeFileSync(join(bin, "codex"), "#!/bin/sh\necho 'codex fixture'\nexit 89\n", { mode: 0o755 });

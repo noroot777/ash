@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ProbeOutcome } from "../src/ash-mcp-probe.js";
+import type { CodexAskOutcome } from "../src/auth/codex-approve.js";
 import { ensureAshMcp, type CodexAsk } from "../src/auth/user-cli-mcp.js";
 import { resolveLaunch } from "../src/executors/bin-resolve.js";
 import { REPO_DIR } from "../src/paths.js";
@@ -36,19 +36,17 @@ export const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"))
 
 // ── 「问 codex 本人」那一问的替身 ──────────────────────────────────────────
 //
-// 产品代码把这一问交给探测执行层(`probeCli`:异步、起之前先拿到内核圈定的归属、每条结束
-// 路径都收得回来)。**macOS 上那一层如实弃权**,于是产品在开发机上一律答「没问过 ⇒ 不补接」
-// —— 这几格要钉的却是「问出不同答案时各自怎么收场」,所以这里换替身把那几条路逐个驱动起来
-// (口子和理由同 `probeCli` 的 `openUnit`:生产代码里没有任何弱归属实现)。
+// 这几格要钉的是「codex 问出不同答案时各自怎么收场」,真 codex 只会给其中一种,所以这里换
+// 替身把那几条路逐个驱动起来。
 
 /** codex 收下了。多数格子钉的是**写出来的内容**,不是 codex 的判决,用这个。 */
-export const LISTS_ASH: ProbeOutcome = {
+export const LISTS_ASH: CodexAskOutcome = {
   kind: "answer", code: 0, stdout: JSON.stringify([{ name: "ash", enabled: true }]), stderr: "",
 };
 
 /** 按固定答案应付,并把「它拿什么去问的、问的时候用户那份文件长什么样」记下来。 */
 export type Asked = { sandbox: string; candidate: string; userFile: string | null };
-export function canned(outcome: ProbeOutcome, log?: Asked[], userFile?: string): CodexAsk {
+export function canned(outcome: CodexAskOutcome, log?: Asked[], userFile?: string): CodexAsk {
   return async (sandbox) => {
     log?.push({
       sandbox,

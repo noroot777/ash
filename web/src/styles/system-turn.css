@@ -237,6 +237,24 @@ button.turn-footnote-part:focus-visible { outline: 2px solid var(--focus-ring); 
 .turn-receipt-more:hover,
 .turn-receipt-more[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
 .turn-receipt-more:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* 去审查格的那一条旁边那颗经过键：审查格里没有经过，在这一条下面摊开。 */
+.turn-receipt-trace {
+  display: inline-grid;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  align-self: center;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  padding: 0;
+  color: var(--faint);
+  cursor: pointer;
+}
+.turn-receipt-trace:hover,
+.turn-receipt-trace[aria-expanded="true"] { background: var(--hover-bg); color: var(--ink); }
+.turn-receipt-trace:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .turn-receipt-lane { flex-basis: 100%; margin: 2px 0 6px; color: var(--muted); }
 .turn-receipt-detail {
   flex-basis: 100%;

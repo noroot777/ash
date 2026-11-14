@@ -10,9 +10,12 @@
 // 无法交卷,所有任务将显示为失败」,隔离档等于在用户不知情的情况下把一台**已经接入**的
 // 实例退回了那个状态。
 //
-// codex 侧同源、且更隐蔽:宿主 `~/.codex/config.toml` 有 `[mcp_servers.ash]`,而个人
-// `CODEX_HOME` 里连 `config.toml` 都没有,`codexAshMcpServerName()` 于是返回 null ——
-// 丢的不只是工具,连回合身份 `env_vars` 都跟着不注了。
+// codex 侧同源:宿主 `~/.codex/config.toml` 有 `[mcp_servers.ash]`,而个人 `CODEX_HOME`
+// 里连 `config.toml` 都没有。
+//
+// **2026-11-14 起 claude / codex 不再靠这里**:起跑时由 ash 注入自己的 MCP
+// (`executors/ash-mcp-inject.ts`),个人目录与宿主配置里有没有登记都不影响交卷。这一层
+// 留给不注入的那几家(注册执行器时补写)和独立 app 首启替本机 CLI 接 ash(`host-setup.ts`)。
 //
 // **这个文件现在只是个门面**:怎么判、怎么拼、怎么落盘都在 `mcp-registry/`(按 agentType
 // 的单源表 + 三个格式族 + 一份发布事务),2026-10-31 从这里搬出去的 —— 原来 claude 和 codex
@@ -29,6 +32,7 @@
 // 缺了才写。
 import { homedir } from "node:os";
 import type { PersonalAshMcp } from "@ash/shared";
+import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { ashMcpConfigDir } from "../mcp-registry/catalog.js";
 import { registerAshMcp } from "../mcp-registry/register.js";
 import { ashMcpHostFile, ashMcpStateIn } from "../mcp-registry/sources.js";
@@ -38,6 +42,9 @@ export { extractTomlTables } from "../codex-toml.js";
 export type { CodexAsk } from "./codex-approve.js";
 
 const ok = (serverName: string): PersonalAshMcp => ({ configured: true, serverName, problem: null });
+
+/** 起跑时由 ash 注入的那几家:配置目录里有没有登记都一样接得上。 */
+export const INJECTED_ASH_MCP: PersonalAshMcp = ok(ASH_MCP_SERVER_NAME);
 const fail = (problem: string): PersonalAshMcp => ({ configured: false, serverName: null, problem });
 
 /**
@@ -46,8 +53,8 @@ const fail = (problem: string): PersonalAshMcp => ({ configured: false, serverNa
  * `hostHome` 只为回归测试留:产品代码永远用真 `homedir()`,测试拿一个假 HOME 来跑,
  * 免得测试碰宿主机那份 `~/.claude.json`(那是用户的真配置,一个字节都不该动)。
  *
- * `ask` 同样只为回归测试留 —— macOS 上探测层如实弃权,codex 那几条路在开发机上一条都
- * 跑不了,所以测试拿一个替身把它们逐个驱动起来(理由同 `probeCli` 的 `openUnit`)。
+ * `ask` 同样只为回归测试留 —— 「codex 读不读得通 / 问不出来」那几条路要逐个驱动,
+ * 测试拿一个替身代替真 codex。
  */
 export async function ensureAshMcp(
   dir: string,
@@ -95,9 +102,8 @@ export type AshMcpRegistration = {
  *
  * 为什么 `PersonalAshMcp` 那两态不够用：它把「确实没有登记」和「文件读不出来」一起记成
  * `configured:false`，只有文案能把它们分开。设置页拿它显示没问题 —— 两种都该提示用户去看
- * 一眼。但起跑前的预检要据此**拦下一整轮审查**，而拦错的代价是一条根本跑不起来的链，
- * 所以这两种必须分得开，由调用方自己决定向哪边开（预检一律向放行开，见
- * `ash-mcp-reachability.ts`）。
+ * 一眼。但启动自检要据此**出声**，而「文件读不出来」不该被说成「没有登记」，
+ * 所以这两种必须分得开，由调用方自己决定向哪边开。
  */
 export function ashMcpRegistration(dir: string, agentType: string): AshMcpRegistration {
   const found = ashMcpStateIn(dir, agentType);

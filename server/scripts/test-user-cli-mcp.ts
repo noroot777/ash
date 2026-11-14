@@ -115,9 +115,6 @@ const HOST_CLAUDE = JSON.stringify({
   assert.ok(written.includes("[mcp_servers.ash]"), "主表要在");
   assert.ok(written.includes("[mcp_servers.ash.env]"), "子表也要跟着搬");
   assert.ok(!written.includes("projects"), "后面那张无关的表不许被带走");
-  // 执行器认不认,以它自己那份判据为准。
-  const { codexAshMcpServerName } = await import("../src/executors/codex-mcp.js");
-  assert.equal(codexAshMcpServerName(dir), ASH_MCP_SERVER_NAME, "执行器必须认得出这条登记");
 }
 
 // ⑨ codex 历史名:定义照搬,表头改成规范名。
@@ -201,8 +198,9 @@ const HOST_CLAUDE = JSON.stringify({
   assert.ok(!existsSync(join(bare.host, ".codex", "config.toml")), "codex 侧同理");
 }
 
-// ⑭ **档位是运行中能切的**:从「共用宿主机 CLI」切回隔离档那一下,就地补一遍。
-// 不能只靠启动自检 —— 切完到下次重启之间起跑的任务全都用个人目录,缺登记就全记 failed。
+// ⑭ **档位是运行中能切的**:从「共用宿主机 CLI」切回隔离档那一下,个人目录就地建出来。
+// 个人目录里**不再补** ash MCP 登记:有个人目录的 claude / codex 起跑时由 ash 注入自己的 MCP
+// (executors/ash-mcp-inject.ts),设置页照实说「接得上」。
 {
   process.env.ASH_DB ||= join(stage, "switch.db");
   requireTmpDb("test-user-cli-mcp");
@@ -228,11 +226,12 @@ const HOST_CLAUDE = JSON.stringify({
     { sharedHostCli: false },
   );
   assert.ok(existsSync(claudeDir), "切到隔离档就该把个人配置目录建出来");
-  // 这台机器上但凡有一处能取到定义(宿主装过 ash、或仓库 build 过 mcp),就必须补上。
-  const { hostAshMcp: hostCheck } = await import("../src/auth/user-cli-mcp.js");
-  if (hostCheck("claude").configured || HAS_BUILT_MCP) {
-    assert.equal(readAshMcp(claudeDir, "claude").configured, true, "切档那一下必须把 ash MCP 补上");
+  assert.equal(readAshMcp(claudeDir, "claude").configured, false, "切档不往个人目录里写 ash MCP 登记");
+  const { personalCliEnv } = await import("../src/auth/user-cli.js");
+  for (const agent of ["claude", "codex"] as const) {
+    assert.equal((await personalCliEnv(admin.id, agent)).ashMcp?.configured, true, `${agent}:起跑时注入,设置页说接得上`);
   }
+  assert.equal(readAshMcp(claudeDir, "claude").configured, false, "设置页那一问也不写");
 }
 
 // ⑮ 写那一侧跟读那一侧问同一个扫描器（新链第 2 轮审查第 5 条）：引号表头、缩进表头都算

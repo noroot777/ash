@@ -115,7 +115,7 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
           const route = { agent: agentType, executorId: session.executorId, actingUserId: userId };
           const text = `/goal clear --scope ${cliGoalScopeSelector(agentType, state)}`;
           if (await continueTask(task.id, text, route)) return;
-          // 回合又被别人占了:入队之后登记「放开了就送」(pending-messages.ts 文件头触发源③)。
+          // 回合又被别人占了:入队,它放锁时扫到(pending-messages.ts 文件头触发源②)。
           await enqueueMessage({ taskId: task.id, text, ...route, ownerUserId: userId });
           flushPendingWhenTurnIdle(task.id);
         })

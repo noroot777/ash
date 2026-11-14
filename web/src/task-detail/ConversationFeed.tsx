@@ -18,9 +18,8 @@ import { runActivityCopy, runActivityPhase, runActivityTail } from "@ash/shared/
 import { MessageAttachments } from "./Attachments.tsx";
 import { conversationFeedRows, reviewLaneMessageRoles, type ReviewLaneMessageRole } from "./conversationReviewLanes.ts";
 import { conversationDebateRows } from "./conversationDebateRows.ts";
-import { conversationSystemRows, laneReceipts, type ConversationFootnoteRow, type TurnReceipt } from "./conversationSystemRows.ts";
+import { conversationSystemRows, laneReceipts, laneTailFootnote, type ConversationFootnoteRow, type TurnReceipt } from "./conversationSystemRows.ts";
 import { DebateLane } from "./DebateLane.tsx";
-import { ReviewerLane } from "./ReviewerLane.tsx";
 import { laneRoundOpener } from "./reviewLaneLinks.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import type { ReviewTarget } from "../review/reviewTarget.ts";
@@ -28,7 +27,8 @@ import { CommandReply, SystemAuthoredMessage } from "./SystemNotice.tsx";
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
 import { isPreviewLifecycleNotice, noticeView, type NoticeContext } from "./timelineNoticeCopy.ts";
 import { FootnoteLine } from "./FootnoteLine.tsx";
-import { ReviewVerdict } from "./ReviewVerdict.tsx";
+import { ReviewBubble } from "./ReviewBubble.tsx";
+import { reviewProgress } from "./reviewProgress.ts";
 import { footnoteKey, receiptsKey, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 import { crashedTurns } from "./turnFailure.ts";
 import { QuestionDock } from "./QuestionDock.tsx";
@@ -86,7 +86,7 @@ function AgentMessageView({
   taskId: string;
   /** 紧邻的旁注已经显示了同一个时间。 */
   hideTime?: boolean;
-  /** 这条气泡在审查卡里的位置：卡头已经把身份（lead 还包括时间）说过一遍了。 */
+  /** 这条发言在一轮审查里的位置：审查者气泡上那一行已经把身份（lead 还包括时间）说过一遍了。 */
   laneRole?: ReviewLaneMessageRole;
   onFork?: () => void;
   onAskSideChat?: (quote: string) => void;
@@ -106,10 +106,10 @@ function AgentMessageView({
   const reviewer = item.reviewer;
   const showIdentity = !item.continuation && !laneRole;
   const cause = turnCauseText(item);
-  // 轮次徽标只是卡头标题（「第 N 轮审查」）的复读，卡里一律不出。
+  // 轮次徽标只是审查者气泡上「第 N 轮审查」的复读，摊开的那一轮里一律不出。
   const showBadge = !!reviewer && !item.continuation && !laneRole;
   // 回合头只留名字（docs/ui-ux-audit feed-1）：模型、智能水平、时间、用时排成一句，
-  // 指到这一回合才出现。审查卡头已经说过时间的那条（lead）不再说。
+  // 指到这一回合才出现。审查者气泡上已经说过时间的那条（lead）不再说。
   const meta = [
     showIdentity && item.run ? item.run.model || "CLI 默认" : null,
     showIdentity && item.run ? item.run.reasoningEffort || "默认" : null,
@@ -126,7 +126,7 @@ function AgentMessageView({
     <article
       className={`task-message task-message--agent${item.continuation ? " is-continuation" : ""}${reviewer ? " is-reviewer" : ""}${laneRole ? " is-lane-owned" : ""}${live ? " is-live" : ""}${justEnded ? " is-just-ended" : ""}`}
     >
-      {/* 卡头左边已经有一颗同样的盾：卡里每条发言再挂一颗，只是把同一个身份画两遍。 */}
+      {/* 摊开的那一轮就挂在审查者气泡下面：每条发言再挂一颗盾，只是把同一个身份画两遍。 */}
       {!laneRole && (
         <span className={`task-message-avatar${branded ? " is-branded" : ""}`} aria-hidden="true">
           {item.continuation ? "" : reviewer ? <ShieldCheck size={13} weight="fill" /> : branded ? <AgentIcon agent={item.agentType} size={16} /> : item.label.slice(0, 1).toUpperCase()}
@@ -385,13 +385,19 @@ export function ConversationFeed({
     commands: task.workflow?.steps.flatMap((step) => step.kind === "command" ? [step.p.cmd] : []),
   };
   const feedRows = conversationFeedRows(items, { reviews });
+  // 还没出结论的那一轮此刻怎么样（reviewProgress）：它是会话里最后一件事才算「此刻」。
+  const lastFeedRow = feedRows.at(-1);
+  const currentLaneId = lastFeedRow?.kind === "review-lane" && !lastFeedRow.complete ? lastFeedRow.id : null;
+  const progressOf = (lane: ConversationReviewLane) => reviewProgress(lane, task, lane.id === currentLaneId);
+  // 那颗气泡在跑时它就是此刻「活的」那一个：底下不再另起一行进行条。
+  const reviewRunning = lastFeedRow?.kind === "review-lane" && lastFeedRow.id === currentLaneId && progressOf(lastFeedRow).phase === "running";
   // 没出结论的那几轮为什么没出：按轮次身份从审查状态取，贴在那颗结论气泡下面（reviewNoVerdictCause）。
   const causes = laneNoVerdicts(feedRows, reviews);
   const { rows, receipts, footnotes } = conversationSystemRows(
     conversationDebateRows(feedRows, { reviews }),
     { failures: crashed, context: noticeContext, causes },
   );
-  // 审查卡里（正在跑的那张、审查结论气泡下面摊开的那一轮、记录里点开的那一轮）的旁注同样记在审查者
+  // 一轮审查里（审查者气泡下面摊开的那一轮、记录里点开的那一轮）的旁注同样记在审查者
   // 那一回合上（见 laneReceipts）。
   const shownLanes: ConversationReviewLane[] = [
     ...rows.flatMap((row) => row.kind === "review-lane" ? [row] : row.kind === "verdict" ? [row.lane] : []),
@@ -521,7 +527,7 @@ export function ConversationFeed({
   };
   // 「去裁定」挂在等你裁定的那半句后面（只有此刻还挂着的那一条）。
   const isRuled = (part: FootnotePart) => part.kind === "event" && !!disputeEventId && part.item?.id === disputeEventId;
-  // 审查结论那一轮就地摊开时的经过：卡里的旁注照样记在审查者那一回合上。
+  // 一轮审查就地摊开时的经过：那一轮里的旁注照样记在审查者那一回合上。
   const renderLaneRows = (lane: ConversationReviewLane) => {
     const roles = reviewLaneMessageRoles(lane);
     return lanes.get(lane.id)!.rows.map((entry) => entry.kind === "item"
@@ -567,8 +573,9 @@ export function ConversationFeed({
             if (row.kind === "footnote") return renderFootnoteRow(row);
             if (row.kind === "reply") return <CommandReply key={row.id} item={row.item} view={row.view} />;
             if (row.kind === "verdict") {
+              // 跟它还没出结论时是同一颗气泡（同一个 key）：原地换字，摊开着的照旧摊开。
               return (
-                <ReviewVerdict key={row.id} lane={row.lane} live={row.live} taskId={task.id}
+                <ReviewBubble key={row.lane.id} lane={row.lane} live={row.live} taskId={task.id}
                   onOpenRound={laneRoundOpener(row.lane, task.workflowMode, onOpenReviewPanel)} renderLane={renderLaneRows}
                   trailing={renderFootnote(settleDisputes(row.footnote)!, "trailing")} />
               );
@@ -587,15 +594,15 @@ export function ConversationFeed({
                 />
               );
             }
-            // 收了口的审查轮不在这里（它是上面那颗审查结论气泡）；走到这里的是还在跑的那张卡。
+            // 收了口的审查轮不在这里（它是上面那一行审查结论）；走到这里的是还没出结论的那一轮。
+            const tail = laneTailFootnote(lanes.get(row.id)!);
             return (
-              <ReviewerLane key={row.id} taskId={task.id} lane={row} onOpenRound={laneRoundOpener(row, task.workflowMode, onOpenReviewPanel)}>
-                {renderLaneRows(row)}
-              </ReviewerLane>
+              <ReviewBubble key={row.id} lane={row} progress={progressOf(row)} taskId={task.id} renderLane={renderLaneRows}
+                trailing={tail ? renderFootnote(settleDisputes(tail)!, "trailing") : undefined} />
             );
           })}
           {/* 等它开口的那一段只有一行进行条（run-2）；排着队时字不动，原因指上去看。 */}
-          {activityPhase && !loading && !error && (task.status === "queued"
+          {activityPhase && !loading && !error && !reviewRunning && (task.status === "queued"
             ? <LiveStrip still since={null} text={queuedCopy?.title ?? "排着队"} tip={queuedCopy?.detail} />
             : <LiveStrip since={task.liveSince} />)}
           {/* 正文一条都没读下来时这里是空的，但那不是「还没开始跑」——`forkBlockedReason`
