@@ -4,7 +4,7 @@ import { readSource } from "../../scripts/read-source.mjs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { ASH_MCP_SERVER_NAME, ASH_MCP_TOOLS } from "@ash/shared/mcp";
 import type { AgentEvent } from "@ash/shared";
 import { CodexExecutor } from "../src/executors/codex.js";
 import { IS_WINDOWS } from "../src/platform.js";
@@ -17,7 +17,7 @@ const output = join(root, "mcp-env.json");
 const oldProbe = process.env.ASH_FAKE_MCP_PROBE;
 const oldOutput = process.env.ASH_FAKE_MCP_OUTPUT;
 const oldStatus = process.env.ASH_FAKE_MCP_STATUS;
-delete process.env.ASH_FAKE_MCP_TOOLS;
+process.env.ASH_FAKE_MCP_TOOLS = JSON.stringify(ASH_MCP_TOOLS);
 delete process.env.ASH_FAKE_EXEC_CALL;
 
 try {
@@ -79,8 +79,10 @@ if (args.includes("app-server")) {
     if (message.method === "initialize") send({ id: message.id, result: { userAgent: "fake" } });
     else if (message.method === "thread/archive") send({ id: message.id, result: {} });
     else if (message.method === "mcpServerStatus/list") {
-      // ASH_FAKE_MCP_TOOLS = ash 这一回合真正暴露的工具(用户配置里的工具名单深合并保留下来之后)
-      const tools = (process.env.ASH_FAKE_MCP_TOOLS ?? "complete_task,pause_task,ask_question,report_stage").split(",");
+      // ASH_FAKE_MCP_TOOLS = ash 这一回合真正暴露的工具(用户配置里的工具名单深合并保留下来之后);
+      // "silent" = 这一问永远不答
+      if (process.env.ASH_FAKE_MCP_TOOLS === "silent") return;
+      const tools = JSON.parse(process.env.ASH_FAKE_MCP_TOOLS);
       send({ id: message.id, result: { data: [{ name: "ash", tools: Object.fromEntries(tools.map((t) => [t, {}])) }] } });
     }
     else if (message.method === "thread/start") {
@@ -199,13 +201,24 @@ if (args.includes("app-server")) {
 
   // ready 了但用户配置里的工具名单把协议工具挡掉 ⇒ 经执行器问 mcpServerStatus/list 后出声。
   process.env.ASH_FAKE_MCP_STATUS = "ready";
-  process.env.ASH_FAKE_MCP_TOOLS = "get_task,pause_task,ask_question,report_stage";
+  process.env.ASH_FAKE_MCP_TOOLS = JSON.stringify(ASH_MCP_TOOLS.filter((t) => t !== "complete_task"));
   const narrowedHandle = executor.runSteerable({ cwd: root, prompt: "probe narrowed", env: identity });
   const narrowed = ashProblems(await drain(narrowedHandle.events));
   await narrowedHandle.cleanup?.();
-  delete process.env.ASH_FAKE_MCP_TOOLS;
   assert.equal(narrowed.length, 1, "工具清单缺了 complete_task ⇒ 一条诊断");
   assert.match(narrowed[0]!.message, /codex 连上了 ash，但 complete_task 不在 agent 手上/);
+
+  // 清单那一问到回合收尾都没回来 ⇒ 有界地等一下,然后说核实不了(提示级),不折回没问题
+  process.env.ASH_FAKE_MCP_TOOLS = "silent";
+  const hungHandle = executor.runSteerable({ cwd: root, prompt: "probe hung", env: identity });
+  const hungEvents = await drain(hungHandle.events);
+  await hungHandle.cleanup?.();
+  const hung = hungEvents.filter((e): e is Extract<AgentEvent, { kind: "error" }> => e.kind === "error" && /核实不了/.test(e.message));
+  assert.equal(hung.length, 1, `清单没问到 ⇒ 一句核实不了:${JSON.stringify(hungEvents.map((e) => e.kind))}`);
+  assert.equal(hung[0]!.level, "notice");
+  assert.match(hung[0]!.message, /工具清单没拿到（到回合收尾还没问到）/);
+  assert.ok(hungEvents.some((e) => e.kind === "done" && e.exitStatus === 0), "核实不了不改本回合成败");
+  process.env.ASH_FAKE_MCP_TOOLS = JSON.stringify(ASH_MCP_TOOLS);
 
   // 一条状态都没报 ⇒ 回合收尾时说「没有加载」。
   delete process.env.ASH_FAKE_MCP_STATUS;

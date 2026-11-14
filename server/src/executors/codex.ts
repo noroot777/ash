@@ -21,7 +21,8 @@ import {
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting, type MarkdownImageSink } from "./markdown-image-stream.js";
-import { codexAshMcpArgs, CodexExecAshMcp } from "./ash-mcp-inject.js";
+import { codexAshMcpArgs } from "./ash-mcp-inject.js";
+import { CodexExecAshMcp } from "./ash-mcp-confirm.js";
 import { TURN_IDENTITY_ENV_KEYS } from "../turn-identity.js";
 
 const ASH_MCP_IDENTITY_ENV_VARS = TURN_IDENTITY_ENV_KEYS;
