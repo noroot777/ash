@@ -56,7 +56,7 @@ export async function holdTeamForAcceptance(taskId: string): Promise<() => void>
     released = true;
     if (holds.get(taskId) === hold) holds.delete(taskId);
     for (const release of hold.releases) release();
-    void afterHold(taskId, [...hold.members]);
+    void afterHold(taskId);
   };
   try {
     // 占住之后才记：从这一刻起，能改这一版成果的只剩调度台 CLI 自己起的回合（见文件头）。
@@ -102,11 +102,10 @@ export async function holdDrift(taskId: string): Promise<string | null> {
   return "验收途中团队又跑出了新的结果（多半是调度台自己起了一轮），这一次没有验收：看过最新的再验收";
 }
 
-async function afterHold(leadId: string, members: string[]): Promise<void> {
-  // 动态 import：这两条链路都会回头读任务/回合状态、再绕回验收这边，静态引会成环（同 acceptance-lock.ts）。
+// 占着的那几位一放锁，各自的待发送就由放锁那一刻的扫描补送（turn-release.ts），这里只管调度台。
+async function afterHold(leadId: string): Promise<void> {
+  // 动态 import：这条链路会回头读任务/回合状态、再绕回验收这边，静态引会成环（同 acceptance-lock.ts）。
   try {
-    const { flushPendingForTask } = await import("./pending-messages.js");
-    for (const taskId of members) if (taskId !== leadId) flushPendingForTask(taskId);
     const { resumeLeadAfterAcceptance } = await import("./team/session.js");
     await resumeLeadAfterAcceptance(leadId);
   } catch (error) {

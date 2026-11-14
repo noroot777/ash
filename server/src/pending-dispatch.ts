@@ -20,7 +20,7 @@ export async function dispatchPendingMessage(
     spans: { dueAt: number; busyMs: number; queuedAt: number };
     team?: boolean;
     seat?: QueueSeat;
-    onClaim: () => void;
+    onClaim?: () => void;
     /** 摘掉这一次的「在途」标记(pending-in-flight.ts):回合起来了、或这一次投递收场,先到先摘。 */
     release?: () => void;
   },
@@ -56,7 +56,7 @@ export async function dispatchPendingMessage(
   try {
     claimed = await beginPendingBatch(message);
     if (!claimed.length) return;
-    context.onClaim();
+    context.onClaim?.();
     const texts: string[] = [];
     try {
       for (const current of claimed) {

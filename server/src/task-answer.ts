@@ -115,9 +115,8 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
       .catch((err) => console.error(`[ash] 答复续跑 ${taskId} 异常:`, err))
       .finally(async () => {
         if (seat) await seat.release().catch((err) => console.error(`[ash] 答复续跑 ${taskId} 释放执行位失败:`, err));
-        // 占着回合的多半是**还在收尾**的提问那一轮(状态已落 paused、锁还没放):它落状态时那次
-        // 扫描看不到这一行,所以登记「锁一放就送」(pending-messages.ts 文件头触发源③),否则
-        // 答复要干等 30 秒兜底 tick。先放执行位再登记:扫描要重新认领它(同 task-reply.ts)。
+        // 占着回合的多半是**还在收尾**的提问那一轮(状态已落 paused、锁还没放):它放锁时会扫到这一行。
+        // 先放执行位再扫:扫描要重新认领它(同 task-reply.ts)。
         if (stashed) flushPendingWhenTurnIdle(taskId);
       });
     return c.json({ answered: true, resumed: true, record });

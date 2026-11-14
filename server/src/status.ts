@@ -15,6 +15,7 @@ import { directionIdentityCleared } from "./task-direction-epoch.js";
 import { clearStallFailure } from "./turn-stall-verdict.js";
 import { monitorHoldPatch } from "./queue-monitor-hold.js";
 import { heldFollowUpPatch } from "./follow-up-held.js";
+import { afterStatusLanded } from "./turn-release.js";
 
 const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 
@@ -220,7 +221,7 @@ async function writeTaskStatus(
     // 任务都 done 了还能起得来一个新哨兵,它一直盯到超时,推的每一条又都被终态挡回
     // (第 3 轮审查实测:natural-terminal-start-queue 里第二次创建 ok:true、任务 done)。
     //
-    // **必须 await**:下面那句 flushPendingForTask 会把排着队的消息立刻送进会话,清理要是
+    // **必须 await**:下面的待发送扫描会把排着队的消息立刻送进会话,清理要是
     // 还在路上,刚攒下的哨兵事件就会抢在它前面把这个已经 done 的任务重新拉起来跑一轮。
     await import("./monitor-reclaim.js")
       .then(({ stopMonitorsForTask }) => stopMonitorsForTask(taskId, `任务已${status}，哨兵一并收回`))
@@ -241,29 +242,17 @@ async function writeTaskStatus(
   void import("./pending-wait.js").then(({ republishWaitsAround }) => republishWaitsAround(taskId))
     .catch((err) => console.error(`[ash] republishWaitsAround(${taskId}) failed:`, err));
 
-  // 队列推进钩子(DESIGN §3):任务进 done / canceled / failed / paused 时,
-  // 如果它在某个 queue 里,触发那个 queue 的下一位推进。
-  // - done / canceled / failed = 透明,head 让位(failed 留在原地等用户处理,
-  //   但不挡后面的——一个环节挂了不拖整条流水线)
-  // - paused = 让上游(若也 paused)知道"我已经到位等续跑了",但只有当我
-  //   恰好是 head 的时候 advance 才会启动我;否则我继续静静等
-  // awaiting_review 不触发——审查门是明确的"等人"语义。
-  // 动态 import scheduler 以避免和 scheduler → status 的循环。
-  if (status === "done" || status === "canceled" || status === "failed" || (status === "paused" && !quietAdvance)) {
-    void import("./scheduler.js").then(({ advanceQueueFromTask }) =>
-      advanceQueueFromTask(taskId).catch((err) =>
-        console.error(`[ash] advanceQueueFromTask(${taskId}) failed:`, err),
-      ),
-    );
-  }
-
-  // 待发送消息钩子:任务一不在跑了,就把排着队的那条送进去(排队追问的正常触发源)。
-  // 只靠 scheduler 的 30s tick 的话,用户会对着一条本该立刻发出的消息干等最多半分钟,
-  // 界面上看起来就像「排队坏了」。paused 也算空闲——提问中的任务照样接得住回复。
-  // awaiting_review 是明确的"等人"语义,不在此列;判定与投递单点仍在 pending-messages.ts。
-  if (status !== "running" && status !== "queued" && status !== "awaiting_review") {
-    void import("./pending-messages.js").then(({ flushPendingForTask }) => flushPendingForTask(taskId));
-  }
+  // 队列推进(DESIGN §3)与待发送扫描。这里只定「该不该」,什么时候做归 turn-release.ts:锁空着
+  // 当场做;回合还占着锁(结算就是持锁写的这一笔)就留到放锁那一刻 —— 早了推进认领不到这把锁,
+  // 扫描也看不到结算钩子之后才入队的消息。
+  // - 推进:done / canceled / failed 透明让位(failed 留在原地等人处理,但不挡后面的);paused
+  //   让队列知道「我到位等续跑了」,只有恰好是 head 才会被启动;awaiting_review 是明确的「等人」。
+  // - 扫描:任务一不在跑就把排着的消息送进去(排队追问的正常触发源)。paused 也算空闲 ——
+  //   提问中的任务照样接得住回复;awaiting_review 不在此列。判定与投递单点在 pending-messages.ts。
+  afterStatusLanded(taskId, {
+    advance: status === "done" || status === "canceled" || status === "failed" || (status === "paused" && !quietAdvance),
+    flush: status !== "running" && status !== "queued" && status !== "awaiting_review",
+  });
   // 别的任务上「等它完成后发送」的消息:完成了就锁存并发;失败/取消了托盘要改口说在等什么。
   if (status === "done" || status === "canceled" || status === "failed") {
     void import("./pending-after.js").then(({ flushPendingAfterTask }) => flushPendingAfterTask(taskId))

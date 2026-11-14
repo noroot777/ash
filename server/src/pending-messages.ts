@@ -7,15 +7,13 @@
 //
 // 投递有两个触发源,都走这里:
 //   ① scheduler 的 30s tick(schedules.ts)——定时消息的正常到期路径,也是兜底
-//   ② 任务落终态时的钩子(status.ts)——排队消息的正常路径,做到「跑完立刻发出」,
-//      不让用户对着一条已经该发的消息干等最多 30 秒
+//   ② 回合锁放开那一刻(turn-release.ts;锁本来就空着时,是落到「不在跑」那一笔状态的当场)
+//      ——排队消息的正常路径,做到「跑完立刻发出」,不让用户对着一条已经该发的消息干等最多
+//      30 秒。挂在放锁上而不是落状态上:状态是持锁写的,结算钩子还要在那之后入队(审查修复
+//      指令),撞上收尾窗口的回复/答复也是,落状态那一刻扫不到它们。
 // 于是「排队」不需要第二套定时器:它就是一条永远已到期、但要等任务空闲的消息。
-//      ②靠得住有个前提:投递给任务挂的「在途」标记在它那一回合**起来时**就摘,冷却挡下的
-//      那一扫窗口一过有人补(pending-in-flight.ts)—— 否则排队消息起的回合,结束时这一扫
-//      会被上一次投递自己留下的去重账挡掉。
-//   ③ ②那次扫描**之后**、回合锁放开**之前**才入队的消息(结算钩子里入队的审查修复指令、
-//      撞上收尾窗口的回复/答复):②已经扫过、看不到它,所以入队方自己登记
-//      `flushPendingWhenTurnIdle` —— 锁一放就再扫一遍,不落回①。
+//      ②靠得住有个前提:投递给任务挂的「在途」标记在它那一回合**起来时**就摘(pending-in-flight.ts)
+//      —— 否则排队消息起的回合,结束时这一扫会被上一次投递自己留下的去重账挡掉。
 //
 // **②被挡回时不许退回去等①。** 投递有一串「一个字都没送出去」的出口(回合被抢占、
 // 验收互斥、调度台拒收),它们原本既不出声也不重排,结果就是消息静静躺在托盘里等那个
@@ -41,11 +39,11 @@ import { scheduledMessages, tasks } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
 import { claimQueueSeat, type QueueSeat } from "./queue-seat.js";
 import { taskStartStatus } from "./task-start-status.js";
-import { releaseTurn, turnSourceReview, whenTurnIdle } from "./runs.js";
+import { isTurnClaimed, releaseTurn, turnSourceReview, whenTurnIdle } from "./runs.js";
 import type { TurnIdentity, TurnSource } from "./runs.js";
 import { forgetStalled, forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, noteStalledPending, pendingMessageLabel, settleBusyAgain } from "./pending-delivery-timing.js";
 import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-redelivery.js";
-import { clearFired, cooling, deliveryInFlight, holdInFlight, noteFired } from "./pending-in-flight.js";
+import { deliveryInFlight, holdInFlight } from "./pending-in-flight.js";
 import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
@@ -182,7 +180,7 @@ export async function enqueueMessage(input: Parameters<typeof pendingMessageRow>
 // 判定所需的任务/消息形状与三档判定(deliveryVerdict)、到期判据(isDueForDelivery)
 // 都住在 pending-verdict.ts —— 纯函数,无账本。
 
-// 冷却窗口与「在途」标记(两本同进程去重账)住在 pending-in-flight.ts。
+// 「在途」标记(同进程去重账)住在 pending-in-flight.ts。
 
 // 挡回之后的主动重投(退避账本)住在 pending-redelivery.ts:挡回的每一条出口调
 // `scheduleRedelivery` 记账并自排重投;所有扫描触发源进场先问 `retryBlocked`。
@@ -202,7 +200,6 @@ function forgetDeliveryBookkeeping(messageId: string): void {
 export async function abortDelivery(message: Row | Row[]): Promise<void> {
   const messages = Array.isArray(message) ? message : [message];
   if (!messages.length) return;
-  clearFired(messages[0]!.taskId);
   await db
     .update(scheduledMessages)
     .set({ deliveringSince: null })
@@ -340,7 +337,7 @@ export async function reclaimStaleDeliveries(): Promise<number> {
 // 投递参数拼装(deliveryOptions)与哨兵唤醒的最后一道闸(monitorWakeGuard)也在
 // pending-verdict.ts。
 
-// 投递一批待发送消息。taskId 非空 = 只看这个任务(终态钩子用);为空 = 全表扫一遍
+// 投递一批待发送消息。taskId 非空 = 只看这个任务(放锁那一刻用);为空 = 全表扫一遍
 // (tick 用)。同任务每次只起一轮；兼容且连续的哨兵结果一起交付，其它消息继续排队。
 //
 // **扫描串行化**:两次并发扫描各自读「整队无人在跑」再各自安排投递,就是第 6 轮审查
@@ -402,8 +399,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
       // 还欠着一声「结束」的哨兵名下的行:等那一笔交接做完(monitor-end-owed.ts),它那边会再触发。
       // 这是它自己的等待语义,不是滞留。
       if (m.origin && owed.has(m.origin)) continue;
-      if (checkpointFailures.has(m.taskId) || fired.has(m.taskId) || deliveryInFlight(m.taskId) || hasPendingDeliveryRecovery(m.taskId)
-        || cooling(m.taskId, at.getTime(), () => flushPendingForTask(m.taskId))) continue;
+      if (checkpointFailures.has(m.taskId) || fired.has(m.taskId) || deliveryInFlight(m.taskId) || hasPendingDeliveryRecovery(m.taskId)) continue;
       // 下一次允许重试的时刻没到就不碰:退避只写在重投定时器上管不住别的触发源 ——
       // 失败结算钩子、队列唤醒触发的扫描会绕过它,形成「失败→结算唤醒→再失败」的
       // 自激循环(第 6 轮审查:目录不修复时 2 秒 24 次失败)。
@@ -443,16 +439,12 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
       if (t!.mode === "team") {
         await dispatchPendingMessage(m, {
           spans: { dueAt, busyMs, queuedAt }, team: true,
-          onClaim: () => {
-            fired.add(m.taskId);
-            noteFired(m.taskId);
-          },
+          onClaim: () => { fired.add(m.taskId); },
         });
       } else {
-        // 单任务必须等它**当前这一轮退干净**再送。两个触发源里的终态钩子
-        // (setTaskStatus → flushPendingForTask)是在 run loop 的 try 里调的,那一刻
-        // 单飞锁还锁着;直接 continueTask 会被静默挡回,消息就此蒸发。`whenTurnIdle`
-        // 由 releaseTurn 同一处排空,是结算钩子里给同一个任务续跑的唯一安全写法。
+        // 单任务必须等它**当前这一轮退干净**再送:tick 或别的入队方扫到它时,单飞锁可能还
+        // 锁着,直接 continueTask 会被静默挡回,消息就此蒸发。`whenTurnIdle` 由 releaseTurn
+        // 同一处排空,是给一个可能还占着锁的任务续跑的唯一安全写法。
         //
         // 开启执行回合的投递(执行型消息,或 paused/backlog 任务的排队回复 —— 即
         // needQueueCheck 那一类)先认领队列执行占位(claimQueueSeat):「整队无人在跑」
@@ -482,11 +474,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         }
         fired.add(m.taskId);
         const release = holdInFlight(m.taskId);
-        whenTurnIdle(m.taskId, () => void dispatchPendingMessage(m, {
-          spans: { dueAt, busyMs, queuedAt }, seat,
-          onClaim: () => { noteFired(m.taskId); },
-          release,
-        }));
+        whenTurnIdle(m.taskId, () => void dispatchPendingMessage(m, { spans: { dueAt, busyMs, queuedAt }, seat, release }));
       }
     } catch (error) {
       // 一条投递失败不影响其它任务,下一轮再来 —— 但**必须留下痕迹**:这里原来是空的
@@ -496,8 +484,8 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
   }
 }
 
-// 任务刚落到「不在跑」的状态时叫一次(status.ts 的钩子)。排队消息靠它做到
-// 「上一轮一结束就发出去」,而不是干等下一次 30s tick。
+// 回合锁放开那一刻叫一次(turn-release.ts,触发源②)。排队消息靠它做到「上一轮一结束就发出去」,
+// 而不是干等下一次 30s tick。重复触发无害:同一任务的投递有在途标记与租约兜着,只会多扫一遍。
 export function flushPendingForTask(taskId: string): void {
   void deliverPendingMessages(taskId).catch((err) => {
     // 查到一半库被关了(进程收尾)不是故障:开头那道守卫挡不住这个竞态,而一串
@@ -507,10 +495,11 @@ export function flushPendingForTask(taskId: string): void {
   });
 }
 
-// 触发源③(见文件头):任务空着就立刻扫,回合还占着就排到它放锁那一刻。重复触发无害 ——
-// 同一任务的投递有在途标记与租约兜着,只会多扫一遍。
+// 入队方在「回合没接下这句话」之后补的那一扫:回合还占着锁就什么都不做 —— 放锁那一刻固定会扫
+// (turn-release.ts);锁已经空了(放锁那一扫抢在这一行入队之前跑完了,或者挡回它的根本不是锁)
+// 才当场扫。
 export function flushPendingWhenTurnIdle(taskId: string): void {
-  whenTurnIdle(taskId, () => flushPendingForTask(taskId));
+  if (!isTurnClaimed(taskId)) flushPendingForTask(taskId);
 }
 
 // 让位交接(第 xNb655YqYzcA 链第 3 轮):队列推进 / 手动运行 / 重试要拉起一个任务时,
@@ -520,7 +509,7 @@ export function flushPendingWhenTurnIdle(taskId: string): void {
 // 一整轮)。调用方(task-resume.ts)在选默认 RESUME_PROMPT / fresh 之前先问这里。
 //
 // 记账走投递链路同一套:beginDelivery 租约 → onDelivered 落 sent → 挡回 abort + 重投,
-// 所以 tick / 终态钩子 / 重投定时器靠租约与在途标记去重,同一条不会发两遍。
+// 所以 tick / 放锁那一扫 / 重投定时器靠租约与在途标记去重,同一条不会发两遍。
 // 队列占位不在这里认领:调用链的上游已经持有 —— 队列推进/分组启动在拉起前 setQueued,
 // 手动运行//fire//retry/重跑上一回合在路由里 claimQueueSeat(queue-seat.ts),这里再占
 // 一次反而会被自己的 queued 挡住。
@@ -566,7 +555,6 @@ export async function handDuePendingMessageToRun(
   const claimed = await beginDelivery(due.id);
   if (!claimed) return true; // 另一个触发源刚抢走:由它开回合
   const release = holdInFlight(taskId);
-  noteFired(taskId);
   const queuedAt = Date.now();
   const dueAt = markDue(due.id, queuedAt);
   const busyMs = settleBusyAgain(due.id, queuedAt);
