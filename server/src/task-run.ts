@@ -51,6 +51,7 @@ import { recordUserConversationTurn } from "./conversation-turn.js";
 import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
 import { turnIdentityEnv } from "./turn-identity.js";
 import { launchFields } from "./usage.js";
+import { withHeldTurn } from "./turn-entry-guard.js";
 
 // 单任务的 **fresh run**:从任务描述起一条全新会话。续聊/召唤那一路(resume 已有会话、
 // 把用户原话送进去)在 orchestrator.ts 的 continueTask —— 两条路的前置条件、prompt 拼法
@@ -66,6 +67,14 @@ export async function runTask(
   // turnHeld:入口占下的那把锁的**身份**(不是 true)—— 接管与释放都按它核,理由见
   // continueTask 同名选项与 turn-lock.ts 的 `endOwnTurn`。
   opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null } = {},
+): Promise<void> {
+  // 起跑前那几次读库(检查点恢复、任务头)抛错时,入口交来的锁也得还(见 withHeldTurn)。
+  return withHeldTurn(taskId, opts.turnHeld, () => runHeldTask(taskId, opts));
+}
+
+async function runHeldTask(
+  taskId: string,
+  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null },
 ): Promise<void> {
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) {
@@ -129,7 +138,8 @@ export async function runTask(
       .update(tasks)
       // 方向身份那几列连同永不归零的世代一起走 `turnDirectionStart`:**新回合开跑也是一次新方
       // 向**,世代漏推的话,一轮完整跑完的回合在迟到回滚眼里什么都没发生过(见 task-direction-epoch.ts)。
-      .set({ followUpFrom: null, nativeTurn: false, goalTurn: false, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
+      // 被哨兵隔开的续聊(follow-up-held.ts)也到此为止:fresh run 是任务的执行,不是它的后半段。
+      .set({ followUpFrom: null, followUpHeldFrom: null, nativeTurn: false, goalTurn: false, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
       .where(eq(tasks.id, taskId));
     }, { behavior: "immediate" });
     // 跟 orchestrator 起一轮同一条规矩:令牌落库处顺手绑到内存里这一轮的身份上。
@@ -308,7 +318,7 @@ export async function runTask(
     }
     await consumeSingleRun({
       taskId, sessId, agentType, ex, cwd: ws.path,
-      handle, out, turnStart, cliSessionId, autoTitle,
+      handle, out, turnStart, cliSessionId, autoTitle, turn,
       nativeSteer: {
         prepare: (text) => withSkillInvocation({ agentType, cwd: ws.path, text, userId: runOwner }),
         record: (text, at) => recordUserConversationTurn({

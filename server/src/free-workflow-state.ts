@@ -3,6 +3,7 @@ import type {
   FreeReviewCheckMode,
   FreeReviewDebate,
   FreeReviewDispute,
+  FreeReviewExpiredScreenshots,
   FreeReviewRun,
   FreeReviewRound,
   FreeWorkflowExecution,
@@ -23,15 +24,17 @@ import {
   projects,
   tasks,
 } from "./db/schema.js";
-import { freeReviewScreenshots, readFreeReviewReport } from "./free-review-files.js";
+import { freeReviewExpiredScreenshots, freeReviewScreenshots, readExpiredReviewImages, readFreeReviewReport, taskExpiredScreenshots } from "./free-review-files.js";
 import { debateViews } from "./free-review-debate.js";
 import { hasDispute } from "./free-review-dispute.js";
 import { worktreePathFor } from "./git.js";
 import { workspaceSnapshot, type WorkspaceSnapshot } from "./workspace-fingerprint.js";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { previewState } from "./preview-public.js";
 import { reviewTurnInFlight } from "./review-turn.js";
 import { profilesOwnedBy } from "./auth/owned-executors.js";
+import { noVerdictCauses } from "./review-no-verdict-legacy.js";
 
 export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;
 
@@ -131,6 +134,29 @@ export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowApi
   return { ...last!, stateVersion: lastBefore };
 }
 
+// 只取「哪几张截图过了保留期」的那条轻量读取（引用它们的地方不一定订阅了整份状态，见前端
+// free-workflow/expiredEvidence.ts）。版本**必须跟整份状态同一个修订号、同一套前后相同判据**：
+// 前端两条来源落进同一份登记，靠修订号比新旧——各配各的号（或这条干脆不配号）就只能按到达
+// 顺序裁决，迟到的旧清单会把整份状态刚报出的过期抹掉（审查第 2 轮实测）。这条读到的清单
+// 跟它自己上次看到的不同，也推进修订号（同 freeWorkflowState 的证据指纹）：任何一条读取先
+// 看到磁盘变化，都会给新内容配上更大的号。
+const expiredFingerprints = new Map<string, string>();
+export function expiredScreenshotsState(taskId: string): FreeReviewExpiredScreenshots {
+  let last: FreeReviewExpiredScreenshots | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const before = revisionOf(taskId);
+    const rounds = taskExpiredScreenshots(taskId);
+    const fp = JSON.stringify(rounds);
+    if (expiredFingerprints.get(taskId) !== fp) {
+      expiredFingerprints.set(taskId, fp);
+      revisions.set(taskId, Math.max(revisionOf(taskId) + 1, Date.now()));
+    }
+    if (revisionOf(taskId) === before) return { stateVersion: before, rounds };
+    last = { stateVersion: before, rounds };
+  }
+  return last!;
+}
+
 async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiState> {
   const [task, state, runs, profileRows, eventRows] = await Promise.all([
     db.select().from(tasks).where(eq(tasks.id, taskId)).then((rows) => rows.at(0)),
@@ -174,6 +200,15 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
     const found = recurrences.get(recurrenceKey(runId, round));
     return found ? { recurrence: found.length } : {};
   };
+  const expiredImages = readExpiredReviewImages(taskId);
+  const screenshotsOf = (runId: string, round: number) => {
+    const screenshots = freeReviewScreenshots(taskId, runId, round);
+    const expired = freeReviewExpiredScreenshots(expiredImages, runId, round, screenshots);
+    return expired.length ? { screenshots, expiredScreenshots: expired } : { screenshots };
+  };
+  // 没给出结论的那几轮为什么没给：存过的照用，没存过的（那份记录上线之前断的）按盘上的事实现算。
+  // 只给此刻还是「error 且没结论」的：续过、又出了结论的那一轮，旧原因不再作数。
+  const noVerdicts = await noVerdictCauses(taskId, roundRows.filter((round) => round.status === "error" && !round.conclusion));
   const reviews: FreeReviewRun[] = runs.map((run) => ({
     id: run.id,
     reviewerId: run.reviewerId,
@@ -205,7 +240,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
       reviewedFingerprint: round.reviewedFingerprint,
       disputedFingerprint: round.disputedFingerprint,
       reportMarkdown: readFreeReviewReport(taskId, run.id, round.round),
-      screenshots: freeReviewScreenshots(taskId, run.id, round.round),
+      ...screenshotsOf(run.id, round.round),
       dispute: hasDispute(round)
         ? {
             summary: round.disputeSummary ?? null,
@@ -225,8 +260,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
       endedAt: round.endedAt,
       ...(awaiting.has(round.id) ? { awaitsInputDecision: true } : {}),
       ...(retry && round.id === retryRound?.id ? { retry } : {}),
-      // 只在这一轮此刻还是「error 且没结论」时给：续过、又出了结论的那一轮，旧原因不再作数。
-      ...(round.noVerdict && round.status === "error" && !round.conclusion ? { noVerdict: round.noVerdict } : {}),
+      ...(noVerdicts.has(round.id) ? { noVerdict: noVerdicts.get(round.id)! } : {}),
     })),
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
@@ -280,7 +314,13 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
   // 警示（审查实测）。版本在指纹核对后取——DB 读取期间的变更会由随后的事件 bump +
   // SSE 重取覆盖，方向自愈。reviewTurn 一并入指纹：它不落库、也不单独发事件，靠状态
   // 变更顺带 bump 的话，旁路回合起落那一下前端可能拿不到新版本。
-  const fp = `${workspace.head}|${workspace.dirty}|${workspace.fingerprint}|${task.status}|${reviewTurn}`;
+  // 证据目录里的东西（报告正文、截图、过了保留期删掉的那几张）是**读的时候现从磁盘取**的，
+  // 改它的一方不一定发事件：保留期清扫、接力把文件带回来、有人手动删。内容变了版本不变，前端
+  // 就会把这份新快照当成重复拒收（审查实测：清扫后开着的页面一直停在旧截图）。所以它们也进
+  // 指纹，跟工作区同一个道理。
+  const evidence = createHash("sha1").update(JSON.stringify(reviews.map((run) => run.rounds.map((round) =>
+    [run.id, round.round, round.reportMarkdown, round.screenshots, round.expiredScreenshots ?? []])))).digest("hex");
+  const fp = `${workspace.head}|${workspace.dirty}|${workspace.fingerprint}|${task.status}|${reviewTurn}|${evidence}`;
   if (workspaceFingerprints.get(taskId) !== fp) {
     workspaceFingerprints.set(taskId, fp);
     revisions.set(taskId, Math.max(revisionOf(taskId) + 1, Date.now()));

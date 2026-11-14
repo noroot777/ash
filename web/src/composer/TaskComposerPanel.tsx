@@ -8,7 +8,6 @@ import type {
   Task,
   TaskListItem,
   TaskMode,
-  TaskWorkflowMode,
   TeamPresetConfig,
 } from "@ash/shared";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
@@ -38,7 +37,6 @@ import { ASH_SLASH_ITEMS, SLASHES } from "./composerParts.tsx";
 import { useComposerDraft, type ComposerDraft } from "./composerDraft.ts";
 import { settleCreatedTask } from "./settleCreatedTask.ts";
 import { composerTaskInput } from "./composerTaskInput.ts";
-import { useComposerWorkflow } from "./ComposerWorkflow.tsx";
 import { ComposerLaunchControl, type LaunchMode } from "./ComposerLaunchControl.tsx";
 import { useQueueAfter } from "./useQueueAfter.tsx";
 import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
@@ -51,7 +49,6 @@ import {
   teamPresetExecutors,
   type ComposerExecutorRole,
 } from "./executorOverrides.ts";
-import { useComposerRunSummary } from "./composerRunSummary.ts";
 import { ComposerForkContext } from "./ComposerForkContext.tsx";
 import { ComposerExpand } from "./ComposerExpand.tsx";
 import { ComposerShortcutHelp } from "./ComposerShortcutHelp.tsx";
@@ -148,7 +145,6 @@ export function TaskComposerPanel({
   const { branches, base, setBase, automaticLabel, switching, isSwitching } = useComposerBranches(project, notify);
   const [busy, setBusy] = useState(false);
   const [launchMode, setLaunchMode] = useState<LaunchMode>("run");
-  const [workflowMode, setWorkflowMode] = useState<TaskWorkflowMode>("free");
   const [scheduleAt, setScheduleAt] = useState("");
   const [scheduleCron, setScheduleCron] = useState(DEFAULT_CRON);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
@@ -156,12 +152,6 @@ export function TaskComposerPanel({
   const [slashDismissed, setSlashDismissed] = useState(false);
   // 「创建并排队」(launchMode="queue"):目标选择、分组联动、入队动作都在这个 hook 里。
   const queueAfter = useQueueAfter({ tasks, groups, projectId: project.id, notify, onFollowGroup: setGroupId });
-  const workflow = useComposerWorkflow({
-    project,
-    isRepo: project.health.isRepo,
-    notify,
-    onWorkspace: setUseWorktree,
-  });
   const uploads = useAttachments({
     value: draft.attachments,
     onChange: draft.setAttachments,
@@ -190,12 +180,6 @@ export function TaskComposerPanel({
     // effect 会重跑，于是选择跟着新项目走而不是留着上一个项目的。
     setUseWorktree(project.health.isRepo && project.useWorktreeDefault);
     setWorktreeDefault(project.useWorktreeDefault);
-    api.settings().then((settings) => {
-      if (!alive) return;
-      workflow.setGlobalDefaultId(settings.defaultWorkflowId ?? "");
-    }).catch((error) => {
-      if (alive) notify(error instanceof Error ? error.message : "新建任务配置读取失败");
-    });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notify, project.health.isRepo, project.id]);
@@ -266,28 +250,12 @@ export function TaskComposerPanel({
     profiles,
     { agentType: "claude", executorId: null },
   );
-  const runStep = mode === "single" && workflowMode === "preset"
-    ? workflow.def?.steps.find((step) => step.kind === "run") ?? null
-    : null;
-  const runStepParams = runStep?.p as
-    { executorId: string | null; model: string | null; reasoningEffort: string | null } | undefined;
-  const runStepProfile = runStepParams?.executorId
-    ? profiles.find((profile) => profile.id === runStepParams.executorId) ?? null
-    : null;
-  const singleRun = runStepProfile
-    ? {
-      agentType: runStepProfile.type,
-      executorId: runStepProfile.id,
-      model: runStepParams?.model || null,
-      reasoningEffort: runStepParams?.reasoningEffort || null,
-    }
-    : {
-      agentType: singleExecutor.agentType,
-      executorId: singleExecutor.executorId,
-      model: executors.single.model || null,
-      reasoningEffort: executors.single.effort || null,
-    };
-  const singleRunSummary = useComposerRunSummary(singleRun, profiles);
+  const singleRun = {
+    agentType: singleExecutor.agentType,
+    executorId: singleExecutor.executorId,
+    model: executors.single.model || null,
+    reasoningEffort: executors.single.effort || null,
+  };
   const leadExecutor = parseExecutorValue(
     executors.lead.profile,
     profiles,
@@ -313,7 +281,7 @@ export function TaskComposerPanel({
     profiles,
     { agentType: "codex", executorId: null },
   );
-  // 正文最后是发给谁的,`/` 就补谁的技能:单任务给「让 AI 干活」那一站的执行器,
+  // 正文最后是发给谁的,`/` 就补谁的技能:单任务给任务执行器,
   // 团队给调度者。**讨论刻意不补**:同一段议题会同时发给两个不同的 CLI,只有一边
   // 装了的技能在另一边就是一句没人认的文本,那种「一半生效」比不提供更难查。
   const slashRun = mode === "team" ? leadExecutor : singleRun;
@@ -408,11 +376,7 @@ export function TaskComposerPanel({
     ? "还没有已注册执行器，暂不能创建任务；请先到执行器设置注册本地 CLI。"
     : unavailableRole
       ? mode === "single"
-        ? workflowMode === "free"
-          ? "当前任务执行器未注册，请在输入框下方换一个。"
-          : runStepParams?.executorId
-            ? "起手式「让 AI 干活」那一站选的执行器未注册，请打开「工作方式」并展开编排换一个。"
-            : "默认执行器未注册，请到执行器设置注册，或在起手式「让 AI 干活」那一站指定一个。"
+        ? "当前任务执行器未注册，请在输入框下方换一个。"
         : `${unavailableRole}当前未注册或不支持该角色，请打开输入框下方的「${mode === "team" ? "团队配置" : "讨论者"}」更换执行器。`
       : mode === "team" && detection.status === "loading"
         ? "正在确认已注册调度者的常驻会话能力…"
@@ -462,7 +426,7 @@ export function TaskComposerPanel({
       task = await api.createTask(composerTaskInput({
         mode, project, body, fork, groupId, labels, attachments: allAttachments, rounds, gate, review, useWorktree, base,
         executors, lead: leadExecutor, worker: workerExecutor, reviewer: reviewerExecutor, voiceA: voiceAExecutor, voiceB: voiceBExecutor,
-        singleRun, workflowMode, workflowId: workflow.workflowId, workflowDef: workflow.def,
+        singleRun,
       }));
     } catch (error) {
       notify(error instanceof Error ? error.message : "任务创建失败");
@@ -511,7 +475,6 @@ export function TaskComposerPanel({
           {forkError && <p role="alert" className="task-conversation-error">{forkError}</p>}
           <ComposerFields
             mode={mode}
-            singleRunSummary={singleRunSummary}
             profiles={profiles}
             workerTypes={workerTypes}
             leadTypes={leadTypes}
@@ -548,9 +511,6 @@ export function TaskComposerPanel({
             labels={labels}
             onLabelsChange={setLabels}
             onCreateGroup={() => setGroupDialogOpen(true)}
-            workflowSlot={mode === "single" && workflow.slot}
-            workflowMode={workflowMode}
-            onWorkflowModeChange={setWorkflowMode}
             onModeChange={onModeChange}
             onPickStarter={(text, nextMode) => {
               changeBody(body.trim() ? body + "\n\n" + text : text);

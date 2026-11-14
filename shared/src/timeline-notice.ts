@@ -33,7 +33,17 @@ export type ReviewWaitReason = "monitor" | "question" | "checkpoint" | "queued" 
  * unreported = 回合正常收尾了，结论却没上报到 ash。
  * `reason` 是一句短话（「模型上游连不上（503）」），展示端原样接在轮次后面，不再回头认原文。
  */
-export interface ReviewNoVerdict { kind: "interrupted" | "unreported"; reason: string }
+export interface ReviewNoVerdict {
+  kind: "interrupted" | "unreported";
+  reason: string;
+  /** 执行器原话截下的一句（第一行、网关错误页之前）。只有回合中断、执行器说过话时才有。 */
+  said?: string;
+  /**
+   * `reason` 只说得出它是怎么退的（「执行器异常退出（exit 1）」），说不出出了什么错 —— 是什么错
+   * 只在 `said` 里，展示端就把原话直接摆出来，不收进点开。
+   */
+  vague?: true;
+}
 
 export type TimelineNotice =
   // ── 里程碑 ──

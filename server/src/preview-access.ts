@@ -184,7 +184,8 @@ async function previewsOwnRepo(taskId: string): Promise<boolean> {
   const { projects } = await import("./db/schema.js");
   const { eq } = await import("drizzle-orm");
   const row = (await db.select().from(projects).where(eq(projects.id, projectId))).at(0);
-  return !!row?.repoPath && samePlace(row.repoPath, REPO_DIR);
+  // 代码根不是 git 检出（独立 app）时没有「自己的仓库」可言，一律不认。
+  return !!REPO_DIR && !!row?.repoPath && samePlace(row.repoPath, REPO_DIR);
 }
 
 export async function canUsePreview(grant: PreviewGrant): Promise<boolean> {

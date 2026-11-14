@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { repoKey } from "./git.js";
+import { externalWaitBound } from "./external-wait-bound.js";
 
 // ── 同一仓库的写型 git 操作必须串行 ─────────────────────────────────────────
 // 一个仓库的 `.git` 是所有 worktree 共用的单一状态机:ref、index.lock、
@@ -33,6 +34,24 @@ export type RepoLockWait = {
 };
 
 const NO_WAIT: RepoLockWait = { queued: false, waitedMs: 0 };
+
+/** 圈定了时限的段里等仓库锁等到了点。还没拿到锁,放弃没有副作用。 */
+export class RepoLockWaitTimeout extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RepoLockWaitTimeout";
+  }
+}
+
+async function arrivesWithin(previous: Promise<void>, ms: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), ms); });
+  try {
+    return await Promise.race([previous.then(() => true as const), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** 当前异步上下文是否已经持有该仓库的锁(供断言与测试使用)。 */
 export function holdsRepoLock(repoPath: string | null | undefined): boolean {
@@ -68,7 +87,20 @@ export async function withRepoLock<T>(
   queues.set(key, tail);
 
   const startedWaiting = Date.now();
-  if (previous) await previous;
+  // 没圈时限就照老样子一直等前一位 —— 互斥本身不随时限有无而变,时限只多给一条「等不及就走」的路。
+  const bound = previous ? externalWaitBound() : undefined;
+  if (previous && !bound) await previous;
+  if (previous && bound && !(await arrivesWithin(previous, bound.ms))) {
+    // 放弃排队(圈定了时限的收尾段,external-wait-bound.ts):这一位不执行 fn,但队里的位置得
+    // 原样让过去 —— 前一位一结束就放行后一位,不然排在后面的人会被一个已经走掉的号永远挡住。
+    void previous.then(() => {
+      release();
+      if (queues.get(key) === tail) queues.delete(key);
+    });
+    const what = `等仓库锁超过 ${Math.round(bound.ms / 1000)} 秒（${key} 前面有别的操作一直没结束），放弃排队`;
+    bound.onTimeout(what);
+    throw new RepoLockWaitTimeout(what);
+  }
   const waitedMs = Date.now() - startedWaiting;
   const wait: RepoLockWait = { queued: !!previous, waitedMs };
   if (waitedMs > 30_000) console.warn(`[repo-lock] ${key} 排队等待 ${(waitedMs / 1000).toFixed(1)}s`);

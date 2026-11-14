@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { AuthState } from "@ash/shared";
 import { authApi } from "../lib/authApi.ts";
 import { ApiError } from "../lib/apiClient.ts";
+import { bindTaskReadsOwner } from "../lib/taskReadSync.ts";
 import { FirstRunWizard } from "../onboarding/FirstRunWizard.tsx";
 import { AuthShell } from "./AuthShell.tsx";
 import { ClaimPage } from "./ClaimPage.tsx";
@@ -71,7 +72,17 @@ export function AuthGate({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
-  if (route?.kind === "claim") return <ClaimPage token={route.token} onDone={leaveRoute} />;
+  // 本机自用模式没有邀请这回事:领取 / 加入链接一律回工作台。领取页因此要等身份状态到了
+  // 再出(多一个 RTT),否则本机模式下会先闪一下「领取你的 ash 账号」。
+  const ignoreRoute = route !== null && state?.localOnly === true;
+  useEffect(() => {
+    if (ignoreRoute) {
+      window.history.replaceState(null, "", "/");
+      setRoute(null);
+    }
+  }, [ignoreRoute]);
+
+  if (route?.kind === "claim" && state && !ignoreRoute) return <ClaimPage token={route.token} onDone={leaveRoute} />;
 
   if (!state) {
     // 连不上是**持久态**,得把话说全,所以照旧给整屏外壳。等待则相反(见上)。
@@ -93,6 +104,17 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
 
   // 排在向导之前:没认出机主的时候,连「要不要首启」都不该由这个访客来答。
+  // 本机自用模式没有配对这回事:走到这里的只能是同机反代转进来的请求,说清楚就够了。
+  if (state.needsAccessKey && state.localOnly) {
+    return (
+      <AuthShell>
+        <div className="auth-card auth-card--service">
+          <h1>只接受本机访问</h1>
+          <p className="auth-note">请在 ash 所在的这台机器上直接打开。</p>
+        </div>
+      </AuthShell>
+    );
+  }
   if (state.needsAccessKey) return <PairPage onDone={refresh} />;
   if (state.needsSetup) return <SetupWizard state={state} onDone={refresh} />;
   if (state.mode === "multi" && !state.user) {
@@ -100,7 +122,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     // 项目邀请链接只发给已有账号的人)。
     return <LoginPage pendingJoin={route?.kind === "join" ? route.token : null} onDone={refresh} />;
   }
-  if (route?.kind === "join") return <ProjectJoinPage token={route.token} onDone={leaveRoute} />;
+  if (route?.kind === "join" && !ignoreRoute) return <ProjectJoinPage token={route.token} onDone={leaveRoute} />;
 
   // 首启向导的后半段(供应商 / 执行器 / 项目)。它在 Provider **里面** —— 那三步都要
   // 读「我是谁」(多人模式下新建项目的路径前缀锁死在自己的目录里),而读 context 的前提
@@ -113,5 +135,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     );
   }
 
+  // 工作台渲染之前把「这一页是谁」交给已读同步（lib/taskReadSync.ts）：此后看的每一眼都当场记在他名下。
+  bindTaskReadsOwner(state.mode === "multi" ? state.user!.id : "");
   return <AuthContext.Provider value={{ state, refresh }}>{children}</AuthContext.Provider>;
 }

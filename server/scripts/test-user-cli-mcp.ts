@@ -21,9 +21,11 @@ import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 import { bench, ensure, HAS_BUILT_MCP, readJson, stage } from "./user-cli-mcp-bench.js";
 
 
+// 宿主那条故意写成**用户自定义**的形状(不是 `node …/mcp/dist/index.js`):标准本机登记不照搬、
+// 按这份 ash 现拼,那一条钉在 test-data-root.ts。这里钉的是「用户的写法原样搬」。
 const HOST_CLAUDE = JSON.stringify({
   mcpServers: {
-    ash: { type: "stdio", command: "node", args: ["/opt/ash/mcp/dist/index.js"], env: { ASH_URL: "http://localhost:4317" } },
+    ash: { type: "stdio", command: "node", args: ["/opt/ash/custom/ash-mcp.js"], env: { ASH_URL: "http://localhost:4317" } },
     kb: { type: "stdio", command: "uv", args: ["run", "kb-mcp"], env: {} },
   },
 });
@@ -37,7 +39,7 @@ const HOST_CLAUDE = JSON.stringify({
   assert.equal(state.serverName, ASH_MCP_SERVER_NAME);
   const doc = readJson(join(dir, ".claude.json"));
   assert.equal(doc.hasCompletedOnboarding, true, "seed 里原有的键不能被冲掉");
-  assert.deepEqual(doc.mcpServers.ash.args, ["/opt/ash/mcp/dist/index.js"], "定义要照搬宿主那条");
+  assert.deepEqual(doc.mcpServers.ash.args, ["/opt/ash/custom/ash-mcp.js"], "定义要照搬宿主那条");
   assert.ok(!doc.mcpServers.kb, "只搬 ash 这一条,宿主的第三方 server 不许跟着过来");
 }
 
@@ -103,7 +105,7 @@ const HOST_CLAUDE = JSON.stringify({
 // ⑧ codex:整段 [mcp_servers.ash] 连子表一起搬,后面无关的表不许跟着过来。
 {
   const hostToml =
-    `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/ash/mcp/dist/index.js"]\n\n` +
+    `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/ash/custom/ash-mcp.js"]\n\n` +
     `[mcp_servers.ash.env]\nASH_URL = "http://localhost:4317"\n\n` +
     `[projects."/opt/ash"]\ntrust_level = "trusted"\n`;
   const { host, dir } = bench({ codex: hostToml });

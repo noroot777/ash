@@ -227,6 +227,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         cliSessionId: sess.cliSessionId ?? "",
         autoTitle: false, role: sess.role as SessionRole, // 标题在被打断之前那一段就已经解析过了
         adopted: true, // 静默档的参与证明只许本进程开的那一轮落(见 SingleRunArgs.adopted)
+        turn: claimedTurn,
         nativeSteer: {
           prepare: (text) => withSkillInvocation({ agentType: sess.agentType as AgentType, cwd: sess.cwd ?? "", text, userId: task.ownerUserId }),
           record: (text, at) => recordUserConversationTurn({

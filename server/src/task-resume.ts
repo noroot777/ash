@@ -17,7 +17,7 @@ import {
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { activeReviewEvidence } from "./review-continuation.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
-import { withTurnPreflight } from "./turn-entry-guard.js";
+import { withHeldTurn } from "./turn-entry-guard.js";
 import { checkpointWaitOrigin } from "./task-wait-ownership.js";
 import { releaseTurn } from "./runs.js";
 import type { TurnIdentity } from "./runs.js";
@@ -35,7 +35,8 @@ export async function resumeOrRunTask(
   // turnHeld:入口占下的那把锁的身份(不是 true),见 continueTask 同名选项。
   opts: { reason?: ResumeReason; turnHeld?: TurnIdentity | null; actingUserId?: string | null } = {},
 ): Promise<void> {
-  return withTurnPreflight(taskId, opts.turnHeld, () => resumeOrRunClaimedTask(taskId, opts));
+  // 返回时还没交出去的锁由这一层还(检查点凭证失权、待发送交接被别人接管那几条出路),见 withHeldTurn。
+  return withHeldTurn(taskId, opts.turnHeld, () => resumeOrRunClaimedTask(taskId, opts));
 }
 
 async function resumeOrRunClaimedTask(taskId: string,
