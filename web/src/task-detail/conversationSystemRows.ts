@@ -332,8 +332,9 @@ export type LaneRow = { kind: "item"; item: ConversationItem } | ConversationFoo
  * 同一套归属，用在一轮审查里：卡里的旁注同样不单独占行，记在审查者那一回合上。
  * 收了口的一轮，那条结论旁注就是审查结论那一行本身，不在摊开的经过里再说一遍。
  * 卡里的尾注不带颜色（那是过去的一轮，或者正在跑、还没有现在的结论）。
+ * `held` 跟外层同一份（footnoteActions）：卡里那句说这一轮为什么断了的旁注，此刻能续时同样不许挤掉。
  */
-export function laneReceipts(lane: Pick<ConversationReviewLane, "items" | "complete">): {
+export function laneReceipts(lane: Pick<ConversationReviewLane, "items" | "complete">, held?: ReadonlySet<string>): {
   rows: LaneRow[];
   receipts: ReadonlyMap<string, TurnReceipt[]>;
   footnotes: ReadonlyMap<string, TurnFootnote>;
@@ -346,6 +347,7 @@ export function laneReceipts(lane: Pick<ConversationReviewLane, "items" | "compl
       turnIdOf: (row) => row.item.kind === "agent" ? row.item.id : null,
       breaksSegment: (row) => row.item.kind === "user",
       eventOf: (row) => row.item.kind === "event" ? row.item : null,
+      held,
     },
   );
   const footnotes = new Map([...attached.footnotes].map(([id, footnote]) => [id, { ...footnote, live: false }]));

@@ -11,7 +11,10 @@
 //   ⑤ 拿不到审查状态的视图：按位置判，同样不被挤掉，但不挂按钮；
 //   ⑥ 开着页面实时看到的，和刷新后从落盘重建的，尾注一样；
 //   ⑦ 「继续本轮审查」两路（结论气泡下的原因句、退回的原因旁注）和「重试这一回合」两路（刷新后补的
-//      那一句、直播的异常边界）都不被盖过或截掉。
+//      那一句、直播的异常边界）都不被盖过或截掉——动作照 TaskDetail 那条链路推出来，认出来的那一句
+//      落在哪一层（回合尾注、结论气泡下面、审查卡里重新并成的那一句）就在哪一层留着；
+//   ⑧ 辩论条上的「去裁定」跟旁注那颗同一道判据：任务裁不了时不给。
+// 会话里渲染出来键挂在哪一句后面，见 test-footnote-actions-dom.mjs。
 // 跑：npm -w web run test:footnote-actions
 import assert from "node:assert/strict";
 import type { FreeReviewDispute, FreeReviewRun, Session, TaskListItem } from "@ash/shared";
@@ -19,7 +22,8 @@ import { buildConversationItems, type ConversationItem, type TimelineEntry } fro
 import { foldMonitorWakes } from "../src/task-detail/monitorWakeTurns.ts";
 import { conversationFeedRows } from "../src/task-detail/conversationReviewLanes.ts";
 import { conversationDebateRows } from "../src/task-detail/conversationDebateRows.ts";
-import { conversationSystemRows } from "../src/task-detail/conversationSystemRows.ts";
+import { conversationSystemRows, laneReceipts } from "../src/task-detail/conversationSystemRows.ts";
+import { footnoteActionCases } from "./fixtures/footnote-actions-cases.ts";
 import { laneNoVerdicts } from "../src/task-detail/reviewNoVerdictCause.ts";
 import { crashedTurns } from "../src/task-detail/turnFailure.ts";
 import { footnoteActions } from "../src/task-detail/footnoteActions.ts";
@@ -253,6 +257,57 @@ const part = (id: string, topic: FootnotePart["view"]["topic"], text: string, ki
   const failure = result.footnote?.parts.find((entry) => entry.id === result.actions.retryFailureId);
   assert(failure, `失败那一句在尾注里（实际：${JSON.stringify(texts(result.footnote))}）`);
   assert.equal(failure.view.topic, "failure");
+}
+
+// ⑦ 续：四种真实形状（footnote-actions-cases），动作照 TaskDetail 那条链路推出来，认出来的那一句在它所在
+// 那一层的尾注里留着；不给 held 时它确实会被后来的话挤掉（这几种夹具复现了要修的那件事）。
+{
+  const EXPECT: Record<string, keyof ReturnType<typeof footnoteActions>> = {
+    "lane-event": "retryEventId", "lane-cause": "retryCauseId", "turn-live": "retryFailureId", "turn-reload": "retryFailureId",
+  };
+  for (const entry of footnoteActionCases([])) {
+    const items = foldMonitorWakes(entry.items);
+    const crashed = crashedTurns(items, entry.turnRetry?.sessionId);
+    const feedRows = conversationFeedRows(items, { reviews: entry.reviews });
+    const causes = laneNoVerdicts(feedRows, entry.reviews);
+    const actions = footnoteActions({
+      items, task: entry.task, reviews: entry.reviews, canOpenReviews: true, causes, crashed,
+      reviewRetry: entry.reviewRetry, turnRetry: entry.turnRetry,
+    });
+    const id = actions[EXPECT[entry.id]!] as string | null;
+    assert(id, `${entry.id}：认出了挂动作的那一句（${EXPECT[entry.id]}）`);
+    assert(actions.held.has(id), `${entry.id}：那一句在 held 里`);
+    // 跟 ConversationFeed 一样：外层归属 + 每张审查卡里重新并成的那几句。
+    const shownParts = (held: ReadonlySet<string>) => {
+      const shown = conversationSystemRows(conversationDebateRows(feedRows, { reviews: entry.reviews }), { failures: crashed, causes, held });
+      const lanes = shown.rows.flatMap((row) => row.kind === "review-lane" ? [row] : row.kind === "verdict" ? [row.lane] : [])
+        .map((lane) => laneReceipts(lane, held));
+      return [
+        ...[...shown.footnotes.values()],
+        ...shown.rows.flatMap((row) => row.kind === "footnote" || row.kind === "verdict" ? [row.footnote] : []),
+        ...lanes.flatMap((lane) => [...lane.footnotes.values(), ...lane.rows.flatMap((row) => row.kind === "footnote" ? [row.footnote] : [])]),
+      ].flatMap((footnote) => footnote.parts);
+    };
+    const kept = shownParts(actions.held).find((candidate) => candidate.id === id);
+    assert(kept, `${entry.id}：后面又落了几句别的话，挂动作的那一句还在`);
+    assert.match(kept.view.text, entry.sentence, `${entry.id}：留下的就是说这件事的那一句`);
+    assert(!shownParts(new Set()).some((candidate) => candidate.id === id), `${entry.id}：不留位置时它会被挤掉（夹具复现了要修的那件事）`);
+  }
+}
+
+// ⑧ 辩论条上的「去裁定」：任务裁不了时同样不给（canRule 是两颗键共用的那道判据）。
+{
+  assert.equal(display(persisted(), { reviews: review(dispute()) }).actions.canRule, true, "能裁：辩论条上能给");
+  for (const task of [
+    { stage: "accepted", archived: false, handoff: null },
+    { stage: "merged", archived: false, handoff: null },
+    { stage: null, archived: true, handoff: null },
+    { stage: null, archived: false, handoff: { direction: "out" } },
+  ] as unknown as Task[]) {
+    assert.equal(display(persisted(), { reviews: review(dispute()), task }).actions.canRule, false, `${JSON.stringify(task)}：辩论条上不给`);
+  }
+  assert.equal(display(persisted(), { reviews: review(dispute()), canOpenReviews: false }).actions.canRule, false, "没有审查格可去：不给");
+  assert.equal(display(persisted(), { reviews: null }).actions.canRule, false, "拿不到审查状态：不给");
 }
 
 console.log("footnote actions tests passed");

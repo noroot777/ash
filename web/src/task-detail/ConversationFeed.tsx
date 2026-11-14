@@ -403,7 +403,7 @@ export function ConversationFeed({
     ...[...receipts.values(), ...rows.flatMap((row) => row.kind === "footnote" ? [row.receipts] : [])]
       .flatMap((list) => list.flatMap((receipt) => receipt.lane ? [receipt.lane] : [])),
   ];
-  const lanes = new Map(shownLanes.map((lane) => [lane.id, laneReceipts(lane)] as const));
+  const lanes = new Map(shownLanes.map((lane) => [lane.id, laneReceipts(lane, actions.held)] as const));
   const laneViews = [...lanes.values()];
   const receiptsOf = (id: string) => receipts.get(id) ?? laneViews.find((lane) => lane.receipts.has(id))?.receipts.get(id);
   const footnoteOf = (id: string) => footnotes.get(id) ?? laneViews.find((lane) => lane.footnotes.has(id))?.footnotes.get(id);
@@ -438,8 +438,8 @@ export function ConversationFeed({
     || turnRetryPartOf(footnote) === part;
   // 辩论条上的同一颗按钮：辩论就是为了裁定才开的，读完该能当场决定，而不是往上翻回
   // 那条旁注（用户 2026-09-27）。条件比旁注那颗更严一格——必须**这场辩论**辩的就是
-  // 此刻待裁定的那条驳回，而且它已经说完了（还在跑时后端也会拒绝裁定）。
-  const openDispute = onOpenReviewPanel ? openDisputeIn(reviews) : null;
+  // 此刻待裁定的那条驳回，而且它已经说完了（还在跑时后端也会拒绝裁定）；任务裁不了时同样不给。
+  const openDispute = actions.canRule ? openDisputeIn(reviews) : null;
   const resolvableDebateIds = new Set(
     (openDispute?.dispute?.debates ?? []).filter((debate) => debate.status !== "running").map((debate) => debate.id),
   );

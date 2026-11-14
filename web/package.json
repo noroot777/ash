@@ -69,7 +69,7 @@
     "test:free-review-delete": "node scripts/test-free-review-delete.mjs",
     "//test:dispute-timeline-cta": "时间线上「现在由你裁定」旁注的「去裁定」按钮:有未裁定驳回才出现、点了打开审查面板、裁定完消失、没有入口时不给、不落在 summary 里。",
     "test:dispute-timeline-cta": "node scripts/test-dispute-timeline-cta.mjs",
-    "test:footnote-actions": "tsx --import ./scripts/ignore-css-hooks.mjs scripts/test-footnote-actions.ts",
+    "test:footnote-actions": "tsx --import ./scripts/ignore-css-hooks.mjs scripts/test-footnote-actions.ts && node scripts/test-footnote-actions-dom.mjs",
     "test:review-no-verdict-retry": "node scripts/test-review-no-verdict-retry.mjs",
     "test:review-no-verdict-cause": "node scripts/test-review-no-verdict-cause.mjs",
     "test:turn-retry-cta": "node scripts/test-turn-retry-cta.mjs",

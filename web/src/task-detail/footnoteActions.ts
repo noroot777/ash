@@ -20,7 +20,9 @@ export type FootnoteActions = {
    * 这一句带颜色、占自己的位置；不在这里的驳回都是过去的事。
    */
   standingDisputeId: string | null;
-  /** 挂「去裁定」的那一条：同上，且审查格那张卡确实在（`openDisputeIn`，与审查面板同一口径）。 */
+  /** 此刻能去审查格裁定：有审查格可去、那张卡确实在（`openDisputeIn`，与审查面板同一口径）、任务还能裁。 */
+  canRule: boolean;
+  /** 挂「去裁定」的那一条：`canRule` 且它就是 `standingDisputeId`。 */
   ruleEventId: string | null;
   /** 结论气泡下面说「这一轮为什么没结论」的那一句，此刻能续时挂「继续本轮审查」。 */
   retryCauseId: string | null;
@@ -47,8 +49,10 @@ export function footnoteActions(options: {
   const { items, reviews, reviewRetry, turnRetry } = options;
   const lastDisputeId = items.findLast((item) => item.kind === "event" && noticeView(item).dispute)?.id ?? null;
   const open = !!openDisputeIn(reviews);
-  const standingDisputeId = !reviewLocked(options.task) && (reviews == null || open) ? lastDisputeId : null;
-  const ruleEventId = options.canOpenReviews && open ? standingDisputeId : null;
+  const locked = reviewLocked(options.task);
+  const standingDisputeId = !locked && (reviews == null || open) ? lastDisputeId : null;
+  const canRule = options.canOpenReviews && open && !locked;
+  const ruleEventId = canRule ? standingDisputeId : null;
 
   // 「继续本轮审查」只挂在此刻还能续的那一轮（同一场、同一轮）上。那一句平时是结论气泡下面按轮次
   // 身份取的那一句（reviewNoVerdictCause）；会话里认不出那张卡时（没有「开始」那一条、拿不到审查
@@ -72,6 +76,7 @@ export function footnoteActions(options: {
   const retryCauseId = causeHostsRetry ? retryCause : null;
   return {
     standingDisputeId,
+    canRule,
     ruleEventId,
     retryCauseId,
     retryEventId,
