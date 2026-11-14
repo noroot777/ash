@@ -12,7 +12,8 @@ import { TaskReviewRounds } from "../../src/review/TaskReviewRounds.tsx";
 import { reviewTargetRequest, type ReviewTarget } from "../../src/review/reviewTarget.ts";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
 import { conversationFeedRows, type ConversationReviewLane } from "../../src/task-detail/conversationReviewLanes.ts";
-import { ReviewerLane, laneRoundOpener } from "../../src/task-detail/ReviewerLane.tsx";
+import { ReviewBubble } from "../../src/task-detail/ReviewBubble.tsx";
+import { laneRoundOpener } from "../../src/task-detail/reviewLaneLinks.ts";
 import { ReceiptReviewContext, TurnReceipts } from "../../src/task-detail/TurnReceipts.tsx";
 import type { TaskReviewState } from "../../src/team/ReviewEvidence.tsx";
 import "../../src/styles/global.css";
@@ -147,7 +148,7 @@ serve(coldTask.id, runs.slice(0, 1), true);
 const lane = (id: string, source: ConversationReviewLane["source"], runId: string | null, round: number, label: string): ConversationReviewLane => ({
   kind: "review-lane", id, source, round, totalRounds: null, title: `第 ${round} 轮`, items: [], reviewerLabel: label,
   reviewerModel: null, reviewerEffort: null, note: null, startedAt: null, endedAt: null, conclusion: "verified",
-  complete: true, reportAvailable: false, report: null, runId, defaultCollapsed: true, findings: null,
+  complete: true, reportAvailable: false, report: null, runId, findings: null,
 });
 
 const verifyInfo: TaskReviewInfo = {
@@ -185,7 +186,7 @@ function Host({ name, lanes, names, workflowMode, receipts = [], children }: {
       <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
         <div>{lanes.map((item, index) => (
           <div key={item.id} data-lane={names[index]}>
-            <ReviewerLane taskId={task.id} lane={item} onOpenRound={laneRoundOpener(item, workflowMode, open)}><p>这一轮的经过</p></ReviewerLane>
+            <ReviewBubble taskId={task.id} lane={item} onOpenRound={laneRoundOpener(item, workflowMode, open)} renderLane={() => <p>这一轮的经过</p>} />
           </div>
         ))}
         {receipts.length > 0 && (

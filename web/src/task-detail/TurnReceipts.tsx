@@ -3,14 +3,14 @@ import { ListBullets } from "@phosphor-icons/react";
 import type { ReviewTarget } from "../review/reviewTarget.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import type { TurnReceipt } from "./conversationSystemRows.ts";
-import { LaneBody, laneHasTrace } from "./ReviewVerdict.tsx";
+import { LaneBody, laneHasTrace } from "./ReviewBubble.tsx";
 import { DeleteMessageButton } from "./MessageDelete.tsx";
 import { NoticeIconGlyph } from "./NoticeIconGlyph.tsx";
 import { laneReviewTarget } from "./reviewLaneLinks.ts";
 import { formatInstant } from "./utils.ts";
 
 /**
- * 记录里那一轮审查点开去哪儿：跟审查结论那颗气泡同一套（ReviewVerdict 的 onOpenRound / renderLane）。
+ * 记录里那一轮审查点开去哪儿：跟审查者那颗气泡同一套（ReviewBubble 的 onOpenRound / renderLane）。
  * 会话那一层给一份；没给的地方（团队时间线、单测里单摆的记录）那一条就只是一句字。
  */
 export type ReceiptReview = {

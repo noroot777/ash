@@ -306,7 +306,7 @@ export function conversationSystemRows(
   type Grouped = ConversationDebateFeedRow | ConversationSystemActionRow;
   const display = attach<Grouped>(groupConflictHandoffs(rows.filter((row) => row.kind !== "item" || shown(row.item))), {
     turnIdOf: (row) => row.kind === "item" && row.item.kind === "agent" ? row.item.id : null,
-    // 辩论分段；正在跑的审查卡不分（它收口以后就是被审那一回合后面那一行结论）。
+    // 辩论分段；还没出结论的那一轮审查不分（它收口以后就是被审那一回合后面那一行结论）。
     breaksSegment: (row) => row.kind === "debate-lane" || row.kind === "system-action" || (row.kind === "item" && row.item.kind === "user"),
     eventOf: (row) => row.kind === "item" && row.item.kind === "event" ? row.item : null,
     laneOf: (row) => row.kind === "review-lane" && row.complete ? row : null,
@@ -321,9 +321,9 @@ export function conversationSystemRows(
 export type LaneRow = { kind: "item"; item: ConversationItem } | ConversationFootnoteRow | ConversationReplyRow;
 
 /**
- * 同一套归属，用在一轮审查里：卡里的旁注同样不单独占行，记在审查者那一回合上。
+ * 同一套归属，用在一轮审查里：那一轮里的旁注同样不单独占行，记在审查者那一回合上。
  * 收了口的一轮，那条结论旁注就是审查结论那一行本身，不在摊开的经过里再说一遍。
- * 卡里的尾注不带颜色（那是过去的一轮，或者正在跑、还没有现在的结论）。
+ * 那一轮里的尾注不带颜色（那是过去的一轮，或者正在跑、还没有现在的结论）。
  */
 export function laneReceipts(lane: Pick<ConversationReviewLane, "items" | "complete">): {
   rows: LaneRow[];
@@ -345,4 +345,24 @@ export function laneReceipts(lane: Pick<ConversationReviewLane, "items" | "compl
   const rows = attached.rows.flatMap((row): LaneRow[] => row.kind === "verdict" ? []
     : row.kind === "footnote" ? [{ ...row, footnote: { ...row.footnote, live: false } }] : [row]);
   return { rows, receipts: attached.receipts, footnotes };
+}
+
+/**
+ * 一轮审查里**最后那件事**的那句尾注：停了、没给结论的那一轮收着时，原因和「继续本轮审查」这类键
+ * 就挂在气泡下面这一句上（ReviewBubble 的 trailing）。只看最后那一回合（或它后面那一句原处的小灰字）
+ * ——更早的尾注是更早的事，不替它说现在。
+ */
+export function laneTailFootnote(view: ReturnType<typeof laneReceipts>): TurnFootnote | null {
+  for (let index = view.rows.length - 1; index >= 0; index -= 1) {
+    const row = view.rows[index]!;
+    if (row.kind === "footnote") {
+      if (row.footnote.parts.length) return row.footnote;
+      continue;
+    }
+    if (row.kind === "item" && row.item.kind === "agent") {
+      const footnote = view.footnotes.get(row.item.id);
+      return footnote?.parts.length ? footnote : null;
+    }
+  }
+  return null;
 }
