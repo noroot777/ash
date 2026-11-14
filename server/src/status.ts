@@ -15,7 +15,7 @@ import { directionIdentityCleared } from "./task-direction-epoch.js";
 import { clearStallFailure } from "./turn-stall-verdict.js";
 import { monitorHoldPatch } from "./queue-monitor-hold.js";
 import { heldFollowUpPatch } from "./follow-up-held.js";
-import { afterStatusLanded } from "./turn-release.js";
+import { afterStatusLanded, stageQueueAdvance } from "./turn-release.js";
 
 const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 
@@ -186,11 +186,17 @@ async function writeTaskStatus(
   // 两档条件是两条独立链路各自带进来的,互不替代,这里取并集:
   //   · `expectStatus` —— 库里当前状态必须还是它列的那几个之一(执行占位认领)
   //   · `guard`      —— 调用方自带的归属谓词(队列预留、推进重放)
-  const written = await db
-    .update(tasks)
-    .set(patch)
-    .where(and(eq(tasks.id, taskId), opts?.guard, expect ? inArray(tasks.status, expect) : undefined))
-    .returning({ id: tasks.id });
+  //
+  // 要推进队列的那几种落位(DESIGN §3,判据见下面 `afterStatusLanded` 那段),推进凭据跟这一笔
+  // **同一个事务**提交:状态落了库,「该推进」就一定也在库里,重启能补(turn-release.ts 文件头)。
+  const advance = status === "done" || status === "canceled" || status === "failed" || (status === "paused" && !quietAdvance);
+  const where = and(eq(tasks.id, taskId), opts?.guard, expect ? inArray(tasks.status, expect) : undefined);
+  const { written, advanceQueueId } = advance
+    ? await db.transaction(async (tx) => {
+      const written = await tx.update(tasks).set(patch).where(where).returning({ id: tasks.id });
+      return { written, advanceQueueId: written.length ? await stageQueueAdvance(tx, taskId) : null };
+    })
+    : { written: await db.update(tasks).set(patch).where(where).returning({ id: tasks.id }), advanceQueueId: null };
   // 一行都没改到 = 要么状态在我读到它之后被别人改了、要么这一行已经不在了,这一笔过期。
   // **就此收手**:下面每一件事(撤落地闩、记状态、停哨兵、广播、推进队列、flush 待发送)
   // 都是「状态真的变了」的后果,过期的写发布它们就等于用一次没发生的变更去驱动整条链。
@@ -250,7 +256,7 @@ async function writeTaskStatus(
   // - 扫描:任务一不在跑就把排着的消息送进去(排队追问的正常触发源)。paused 也算空闲 ——
   //   提问中的任务照样接得住回复;awaiting_review 不在此列。判定与投递单点在 pending-messages.ts。
   afterStatusLanded(taskId, {
-    advance: status === "done" || status === "canceled" || status === "failed" || (status === "paused" && !quietAdvance),
+    advanceQueueId,
     flush: status !== "running" && status !== "queued" && status !== "awaiting_review",
   });
   // 别的任务上「等它完成后发送」的消息:完成了就锁存并发;失败/取消了托盘要改口说在等什么。
