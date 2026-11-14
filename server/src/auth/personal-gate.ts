@@ -29,7 +29,7 @@ import {
   issueHumanActionToken,
   markHumanActionVerified,
 } from "./human-action-token.js";
-import { WRITE_METHODS } from "./middleware.js";
+import { WRITE_METHODS, isPublicApiPath } from "./middleware.js";
 import { isMultiUser } from "./mode.js";
 import { humanRequestRejection, rejectHumanRequest } from "./human-request.js";
 export { AGENT_HUMAN_ONLY_REFUSAL } from "./human-request.js";
@@ -178,9 +178,15 @@ export function personalWriteGate(): MiddlewareHandler {
       issued = issueHumanActionToken();
     }
     if (!(await isMultiUser())) return handoff();
-    // 只放账号本人:真人(cookie / Bearer)本来就是,匿名早被 authGate 拦掉了。agent 回合凭证
-    // 与经飞书转述的 im 身份都不是本人 —— 后者原先按「不是 agent 就放」会穿过去。
-    if (isAccountHolder(actorOf(c))) return handoff();
+    // 只放账号本人:真人(cookie / Bearer)本来就是。agent 回合凭证与经飞书转述的 im 身份
+    // 都不是本人 —— 后者原先按「不是 agent 就放」会穿过去。
+    //
+    // 免登录名单上的匿名请求要单独放:落在个人面上的那几条恰好是供应商 relay
+    // (`/llm-providers/:id/{convert,context-1m}/v1/*`)—— 发请求的是 CLI 子进程,凭证是供应商
+    // 自己的 key,由路由内 `secretsEqual` 校验。这里按「不是本人」拦成 403 的话,多人模式下
+    // relay 整条走不通(test:multi-user ⑭ 钉的就是这件事)。名单判据跟 authGate 用同一份。
+    const actor = actorOf(c);
+    if (isAccountHolder(actor) || (actor.kind === "anonymous" && isPublicApiPath(c.req.path))) return handoff();
     if (!isPersonalWritePath(c.req.path)) return handoff();
     return c.json({ error: AGENT_PERSONAL_REFUSAL }, 403);
   };

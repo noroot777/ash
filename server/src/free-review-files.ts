@@ -100,3 +100,62 @@ function listFreeEvidence(taskId: string, runId: string, round: number, extensio
 export function freeReviewScreenshots(taskId: string, runId: string, round: number): string[] {
   return listFreeEvidence(taskId, runId, round, EVIDENCE_IMAGE_EXTENSIONS);
 }
+
+// 过了保留期被删掉的截图记在任务目录根上的这一份（review-image-retention.ts 删之前先写）：
+// `{ "<审查>/round-<N>": ["a.png", "shots/b.png"] }`。放在任务目录根而不是证据目录里——证据
+// 目录归审查者写，它在那儿放一份同名文件就能把一张从没存在过的图说成「过期了」。
+export const EXPIRED_REVIEW_IMAGES = ".expired-review-images.json";
+
+export function expiredRoundKey(runId: string, round: number): string {
+  return `${runId}/round-${round}`;
+}
+
+/**
+ * 证据身份的规范写法：轮次按数（`01`、`1.0` 都是第 1 轮，跟证据接口的 `Number(round)` 同一口径），
+ * 文件名按 `evidenceSegments` 拆段再用 `/` 拼（`shots\a.png` 就是 `shots/a.png`）。读文件和
+ * 判过期都过这一道，否则同一张图在一边认得、另一边认不得。
+ */
+export function evidenceName(name: string): string | null {
+  return evidenceSegments(name)?.join("/") ?? null;
+}
+
+/** 这个任务每一轮里过了保留期、已经删掉的截图（还在磁盘上的不算）。 */
+export function taskExpiredScreenshots(taskId: string): { runId: string; round: number; names: string[] }[] {
+  const out: { runId: string; round: number; names: string[] }[] = [];
+  const expired = readExpiredReviewImages(taskId);
+  for (const key of Object.keys(expired)) {
+    const match = /^(.+)\/round-([1-9]\d*)$/.exec(key);
+    if (!match) continue;
+    const [runId, round] = [match[1]!, Number(match[2])];
+    const names = freeReviewExpiredScreenshots(expired, runId, round, freeReviewScreenshots(taskId, runId, round));
+    if (names.length) out.push({ runId, round, names });
+  }
+  return out;
+}
+
+export function readExpiredReviewImages(taskId: string): Record<string, string[]> {
+  try {
+    const parsed = JSON.parse(readFileSync(join(RUNS_DIR, taskId, EXPIRED_REVIEW_IMAGES), "utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, string[]> = {};
+    for (const [key, names] of Object.entries(parsed)) {
+      if (Array.isArray(names)) out[key] = names.filter((name): name is string => typeof name === "string");
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 这一轮里**过了保留期、已经删掉**的截图。记过但此刻文件还在的不算（删失败了，或者接力又把
+ * 同名的图带了回来）——在不在以磁盘为准，记录只负责说清「不在」是哪一种不在。
+ */
+export function freeReviewExpiredScreenshots(
+  expired: Record<string, string[]>,
+  runId: string,
+  round: number,
+  present: readonly string[],
+): string[] {
+  return (expired[expiredRoundKey(runId, round)] ?? []).filter((name) => !present.includes(name));
+}

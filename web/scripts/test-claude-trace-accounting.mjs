@@ -5,9 +5,8 @@
 // **这个文件钉的是「读侧不许猜口径」。** 判据只能是逐条的 accounting 标记：
 // - 旧 codex trace 没有标记，存的是累计快照 → 只有这一类在读侧求差（这条老路不许走丢）；
 // - 有标记的（incremental / delta / snapshot）都是服务端结算过的本轮值 → 原样显示；
-// - claude 旧 trace 全都标着 incremental，标记在这里没有分辨力 → 那批数据由历史回填
-//   (server/scripts/repair-claude-usage.ts) 逐条改写成真实增量并补上 delta 标记，**不在
-//   读侧猜**。
+// - claude 旧 trace 全都标着 incremental，标记在这里没有分辨力 → 那段历史不再修正
+//   （用户 2026-11-13 拍板放弃），**不在读侧猜**。
 //
 // 为什么不能猜：上一版按数据形状判（整串不降 + 末条等于会话汇总），被第 1 轮审查当场
 // 证伪 —— 那个恒等式只对「已回填且此后没再续聊」的会话成立，随便续一轮新回合，汇总就
@@ -45,7 +44,7 @@ const summed = (series) => series.reduce((sum, usage) => ({
 }), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0, turns: 0 });
 const usages = (trace) => trace.flatMap((item) => (item.event.kind === "usage" ? [item.event.usage] : []));
 
-// 1. 回填改写过的 claude trace：每条本来就是真实增量 + delta 标记 → 原样显示。
+// 1. 带 delta 标记的 claude trace：每条本来就是真实增量 → 原样显示。
 {
   const deltas = [
     REAL[0],
@@ -75,8 +74,8 @@ const usages = (trace) => trace.flatMap((item) => (item.event.kind === "usage" ?
   );
 }
 
-// 3. 回填还没跑的 claude 旧 trace：全都标着 incremental，读侧判不出 → 原样返回（就是修
-//    这个功能之前的样子）。气泡上那个数由回填去修，不在这里猜。
+// 3. claude 旧 trace：全都标着 incremental，读侧判不出 → 原样返回（就是修这个功能之前的
+//    样子），不在这里猜。
 {
   const trace = traceOf(REAL);
   assert.equal(normalizedPersistedTrace(trace, session("claude", summed(REAL))), trace);

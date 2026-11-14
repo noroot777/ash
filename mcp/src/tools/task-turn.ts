@@ -40,18 +40,13 @@ server.registerTool(
     inputSchema: {
       taskId: z.string().describe("被验任务 id（就地验证时即当前任务；历史独立审查任务填被审任务 id）"),
       stage: TASK_STAGE.describe(`阶段：${STAGE_ORDER.join(" | ")}`),
-      verificationBasis: z.object({
-        kind: z.literal("independent"),
-        generation: z.string().min(1),
-        monitorIds: z.array(z.string().min(1)).min(1),
-      }).optional().describe("正常情况不要传。两种例外——① 上报被拒、说这是「口径切换前开的旧审查轮次」:按它说的交 monitorIds,**要的是一次本轮真实执行**(构建、冒烟、浏览器点检都算),不要为此去跑回归;② 重放旧回合那条没投递成功的 report_stage 时原样带回当时的值"),
       // 形状不对当场拒（见 `RECURS`）：拒的是这一次调用，审查者拿到错误同一回合里重发，结论不丢。
       recurs: RECURS.optional().describe(RECURS_FIELD_GUIDE),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
     },
   },
-  async ({ taskId, stage, directionToken, verificationBasis, recurs }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/stage`, { stage, verificationBasis, recurs }, directionToken)); }
+  async ({ taskId, stage, directionToken, recurs }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/stage`, { stage, recurs }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );

@@ -1,8 +1,7 @@
 // 新建面板「提交那一刻」要发给 POST /tasks 的那一份：三种模式各一种形状。
 // 从 TaskComposerPanel 拆出来纯粹是职责：面板管状态和门禁，这里只管把状态翻成请求体。
 import { DUET_DEFAULTS } from "@ash/shared/duet";
-import type { ProjectView, TaskMode, TaskWorkflowMode } from "@ash/shared";
-import type { WorkflowDef } from "@ash/shared/workflow";
+import type { ProjectView, TaskMode } from "@ash/shared";
 import type { api } from "../lib/api.ts";
 import type { ExecutorSelection } from "../lib/agentAvailability.ts";
 import { forkTaskBody, type ConversationFork } from "../task-detail/conversationFork.ts";
@@ -13,7 +12,7 @@ type RunTarget = ExecutorSelection & { model: string | null; reasoningEffort: st
 
 export function composerTaskInput({
   mode, project, body, fork, groupId, labels, attachments, rounds, gate, review, useWorktree, base,
-  executors, lead, worker, reviewer, voiceA, voiceB, singleRun, workflowMode, workflowId, workflowDef,
+  executors, lead, worker, reviewer, voiceA, voiceB, singleRun,
 }: {
   mode: TaskMode;
   project: ProjectView;
@@ -34,9 +33,6 @@ export function composerTaskInput({
   voiceA: ExecutorSelection;
   voiceB: ExecutorSelection;
   singleRun: RunTarget;
-  workflowMode: TaskWorkflowMode;
-  workflowId: string | null;
-  workflowDef: WorkflowDef | null;
 }): Parameters<typeof api.createTask>[0] {
   const text = forkTaskBody(fork, body);
   const common = {
@@ -106,13 +102,6 @@ export function composerTaskInput({
     executorId: singleRun.executorId,
     model: singleRun.model,
     reasoningEffort: singleRun.reasoningEffort,
-    workflowMode,
-    workflowId: workflowMode === "preset" ? workflowId : null,
-    // 送的是**快照**而不是引用：面板上看到的那条线,原样落进这个任务。
-    // workspace 以「任务选项」里的 worktree 开关为准 —— 那是同一件事的唯一开关,
-    // 起手式里带的那个只负责在挑中它的时候把开关拨过去(见 pickWorkflow)。
-    workflow: workflowMode === "preset" && workflowDef
-      ? { ...workflowDef, workspace: project.health.isRepo && useWorktree ? "isolated" : "shared" }
-      : null,
+    workflowMode: "free",
   };
 }

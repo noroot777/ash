@@ -88,8 +88,8 @@ export const toTaskMonitor = (r: Row): TaskMonitor => ({
    * 起点可不可信也**现算**，判据跟到期时刻那一半是同一个（`monitorStartTrusted`）。
    *
    * 这一列是对外契约的一部分而不是前端自己猜：库里明明记着「这个锚点有没有可重验的误差
-   * 界」，而 `started_at` 是 `NOT NULL` 列、历史投影允许它退化成整轮执行的开始时刻（见
-   * claude-monitor-commit.ts 那条 `?? fileStartedAt ?? now()`）。不把这份可信性带出去，
+   * 界」，而 `started_at` 是 `NOT NULL` 列、历史投影里它可能退化成整轮执行的开始时刻。
+   * 不把这份可信性带出去，
    * 读的人手上只剩一个合法日期字符串，只能当它是真的 —— 第 1 轮审查复现到的卡片就是这么
    * 把「那一轮几点开始的」写成了「这条哨兵几点挂上的」。
    */
@@ -274,7 +274,7 @@ function superviseLiveness(row: Row, rt: Runtime): void {
     if (state === "traceless") {
       settleInBackground(row.id, "exited",
         "命令已经不在了（server 重启期间跑完的，拿不到退出码）", null);
-    } else if (state === "not-ours") {
+    } else if (state === "not-ours" || state === "superseded") {
       settleInBackground(row.id, "exited",
         "这个号现在是另一个进程了（原命令在停服期间结束，拿不到退出码）", null);
     }

@@ -123,7 +123,7 @@ try {
         assert.equal(run.status, "failed");
       }
       assert.match(review.transcript(), /本轮结论未应用/);
-      const checkpoint = { kind: "checkpoint" as const, generation: missing === "identity" ? review.basis.generation : null,
+      const checkpoint = { kind: "checkpoint" as const, generation: missing === "identity" ? review.generation : null,
         text: "Resume this same historical review", promptGeneration: 7 };
       assert.equal(await continueTask(review.ownerTaskId, checkpoint.text, { turnSource: source(review), reviewDelivery: checkpoint }), false);
       assert.equal((await row(review.ownerTaskId)).directionEpoch, owner.directionEpoch);
@@ -241,7 +241,7 @@ try {
   await db.update(tasks).set({ question: "New checkpoint question" }).where(eq(tasks.id, newerPrompt.taskId));
   assert.equal(await retireHistoricalReview(oldPrompt), false);
   assert.equal(await continueTask(newerPrompt.taskId, "Same checkpoint text", { reviewDelivery: {
-    kind: "checkpoint", generation: newerPrompt.basis.generation, text: "Same checkpoint text", promptGeneration: oldPrompt.resumePromptGeneration,
+    kind: "checkpoint", generation: newerPrompt.generation, text: "Same checkpoint text", promptGeneration: oldPrompt.resumePromptGeneration,
   } }), false);
   assert.equal((await row(newerPrompt.taskId)).resumePrompt, "Same checkpoint text");
   assert.equal((await row(newerPrompt.taskId)).resumePromptGeneration, oldPrompt.resumePromptGeneration + 1);
