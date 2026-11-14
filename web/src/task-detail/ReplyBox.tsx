@@ -51,6 +51,7 @@ export function ReplyBox({
   hasConversation,
   onSend,
   onStop,
+  stopBlocked = null,
   onStandingExecutorChange,
   command,
   skills = EMPTY_SKILLS,
@@ -86,6 +87,8 @@ export function ReplyBox({
    * 另一面（docs/ui-ux-audit reply-4）。
    */
   onStop?: () => Promise<void>;
+  /** 服务端说此刻停不了的那句原因（停止结论 `blocker`）：给了 onStop 时停止键灰着说它。 */
+  stopBlocked?: string | null;
   /**
    * 点胶囊改执行器/模型/智能水平 = 改**这个任务以后都用谁**，由调用方写回任务
    * （PATCH /tasks/:id）。不传就只剩 `@` 那条一次性召唤，胶囊变成只读。
@@ -660,7 +663,7 @@ export function ReplyBox({
             later={later}
             action="发送回复"
             empty={!value.trim() && !uploads.attachments.length && !uploads.uploading}
-            running={queueing}
+            queueing={queueing}
             uploading={uploads.uploading ? uploadingLabel(uploads.pending) : null}
             // 敲着命令时这颗键干的是别的事：补全命令、打开派生配置。归档的任务也能派生，所以不受下面那条拦。
             override={menuCompletes ? { text: "补全", action: "把命令补进正文" }
@@ -672,7 +675,9 @@ export function ReplyBox({
               setStopping(true);
               void onStop().finally(() => setStopping(false));
             } : undefined}
-            stopTip={task.status === "queued" ? "不排了" : "停止这一轮"}
+            // 停止键出不出、能不能点只看服务端的停止结论（onStop / stopBlocked）；这里只挑提示里那句话。
+            stopTip={["queued", "paused", "backlog"].includes(task.status) ? "不排了" : "停止这一轮"}
+            stopBlocked={stopBlocked}
             stopBusy={stopping}
             configDisabled={disabled || sending || uploads.uploading || commandActive || mention.open}
             tasks={tasks}

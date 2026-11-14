@@ -9,8 +9,8 @@
 //     尖角照样点得动；
 //   · 不是马上发（`text`：排队发送 / 定时发送 / 完成后发送 / 上传中 37%）：键变宽写字，
 //     尖角换成时钟或沙漏（`settings.glyph`）；
-//   · 停止（`stop`）：任务在跑、输入框空着时主段就是停止键；
-//   · 排队发送时左边多一颗小停止键（`halt`）——任何时候都停得下来；
+//   · 停止（`stop`）：有东西可停、输入框空着时主段就是停止键；
+//   · 打了字时左边多一颗小停止键（`halt`）——任何时候都停得下来；
 //   · 在途（`busy`）：箭头换成转圈，不响应。
 // 回车走调用方自己的提交函数，提交函数里必须再判一次门禁（web/CLAUDE.md「主工作区」），
 // 这颗键的 `blocked` 只管点击和长相。
@@ -30,6 +30,7 @@ export type SendKeyStop = {
   /** 提示里那一句（「停止这一轮」「不排了」）。 */
   tip: string;
   onStop: () => void;
+  /** 点不动（在途、或服务端说此刻停不了 —— 那时 `tip` 就是原因）。键照出，指上去照样有提示。 */
   disabled?: boolean;
   /** 读屏名，缺省「停止」。 */
   label?: string;
@@ -120,8 +121,8 @@ export function SendKey({ action, text, tip, blocked, busy = false, stop, halt, 
 
   return (
     <span ref={root} className={`send-key${size === "md" ? " is-md" : ""}${dim ? " is-dim" : ""} ${className}`.trim()}>
-      {halt && <button type="button" className="send-key-halt" aria-label={halt.label ?? "停止"} disabled={halt.disabled}
-        onClick={halt.onStop} {...haltTip.anchorProps}><Stop size={14} weight="fill" /></button>}
+      {halt && <button type="button" className="send-key-halt" aria-label={halt.label ?? "停止"} aria-disabled={halt.disabled || undefined}
+        onClick={() => { if (!halt.disabled) halt.onStop(); }} {...haltTip.anchorProps}><Stop size={14} weight="fill" /></button>}
       <button ref={main} type="button" className={`send-key-main${label ? " has-text" : ""}`}
         aria-label={stopping ? stop!.label ?? "停止" : label || action}
         aria-disabled={stopping ? stop!.disabled || undefined : dim || undefined}

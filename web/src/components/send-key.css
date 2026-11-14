@@ -27,8 +27,8 @@
 
 /* 在跑、又打了字：主段要用来发，停止挪到它左边这一颗上。和主段同高，不抢实心色，指上去才是红的 */
 .send-key > .send-key-halt { width: var(--h); margin-right: 6px; border-radius: var(--r-md); background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); animation: send-key-halt-in var(--dur-2) var(--ease-out) both; }
-.send-key > .send-key-halt:hover:not(:disabled) { background: var(--hover-bg); color: var(--red); }
-.send-key > .send-key-halt:active:not(:disabled) { background: var(--sel-bg); }
+.send-key > .send-key-halt:hover:not([aria-disabled]) { background: var(--hover-bg); color: var(--red); }
+.send-key > .send-key-halt:active:not([aria-disabled]) { background: var(--sel-bg); }
 @keyframes send-key-halt-in { from { opacity: 0; transform: scale(0.9); } }
 
 /* 键上的字：只在「这一条不会马上发出去」时出现。换一句字时淡入 */

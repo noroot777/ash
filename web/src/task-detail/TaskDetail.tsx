@@ -44,7 +44,7 @@ import { useTaskReplyActions } from "./TaskReplyActions.tsx";
 import { useWaitingTitle } from "./useWaitingTitle.ts";
 import { FreeReviewDialog } from "../free-workflow/FreeReviewDialog.tsx";
 import { retryTurnActions, type TurnRetryTarget } from "./turnRetry.ts";
-import { refreshTaskActions, shown, useTaskActions } from "../lib/useTaskActions.ts";
+import { blocker, refreshTaskActions, shown, useTaskActions } from "../lib/useTaskActions.ts";
 import { useExecutorGate } from "./ExecutorGate.tsx";
 import type { ComposerDraft } from "../composer/composerDraft.ts";
 import { forkReadBlock, snapshotConversationFork } from "./conversationFork.ts";
@@ -570,6 +570,7 @@ export function TaskDetail({
                       moreRef={replyActions.moreRef}
                       skills={skills.skills}
                       onStop={shown(actions?.stop) ? () => perform("stop") : undefined}
+                      stopBlocked={blocker(actions?.stop)}
                       onStandingExecutorChange={async (next, label) => {
                         const updated = await api.patchTask(task.id, next);
                         onTaskUpdate(updated);

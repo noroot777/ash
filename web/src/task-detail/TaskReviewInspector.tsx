@@ -208,8 +208,8 @@ export function TaskReviewInspector({
     <section className="insp-head" aria-label="验证结论">
       <InspConclusion tone={now.tone}>{now.text}</InspConclusion>
       <InspActions>
-        {/* 在验的那一轮已经写在结论里了，键就不出。 */}
-        {!activeRound && shown(verify) && (
+        {/* 出不出、能不能点只看服务端的 verify：有一轮正在验时它灰着说原因（在验的那一轮写在结论里）。 */}
+        {shown(verify) && (
           <InspMainButton action={{
             label: dispatching ? "启动中…" : "验一轮",
             onClick: () => setDispatchOpen((open) => !open),
