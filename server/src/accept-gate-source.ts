@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { type CheckoutSettings, cloneSealedSnapshot, isSealedSnapshot, readOnlyGit, sealedGit } from "./accept-gate-preview.js";
 import { execFileText } from "./exec.js";
@@ -13,6 +14,7 @@ import { ambientDigest, DEPENDENCY_DIRS, dependencyDigest, dependencyMismatch,
 import { optionalRead, requiredRead } from "./accept-gate-fs.js";
 import { worktreeChanges } from "./accept-gate-status.js";
 import { dependencySupply, supplyRoots, type DependencySupply } from "./accept-gate-supply.js";
+import { ancestorDependencyDir, GATE_ISOLATED_DIR } from "./accept-gate-isolated.js";
 
 type SourceInput = { path: string; directory: boolean; dependency?: boolean };
 // 快照的 sidecar。非 Git 项目一直靠它把输入清单交给收尾核验,现在**依赖放置计划**也走这里:
@@ -68,8 +70,9 @@ const sourceHash = () => createHash("sha256").update("gate-snapshot-v3\0");
 const git = async (cwd: string, args: string[]) => (await readOnlyGit(cwd, args)).stdout;
 
 // 准备命令现装的快照里，依赖解析图只剩**执行位置向上那条链**（node 对没装进快照的包名照旧一级级
-// 往上找 node_modules）。源码那一侧（工作区，以及经由它够得着的主检出）不在快照的解析路径上，
-// 再摘它只会让无关的安装变化作废凭据。所以把执行位置的父目录同时当作两个根传进去。
+// 往上找 node_modules）。这一档的快照住在 ash 与项目目录树之外、起跑前还核过那条链上没有依赖树
+// （accept-gate-isolated.ts），源码那一侧（工作区、主检出）不在它的解析路径上，再摘它只会让无关的
+// 安装变化作废凭据。所以把执行位置的父目录同时当作两个根传进去。
 const gateAmbient = (cwd: string, executionCwd: string, roots: string[], prepared: boolean | undefined) =>
   prepared ? ambientDigest(dirname(executionCwd), executionCwd) : ambientDigest(cwd, executionCwd, roots);
 
@@ -318,7 +321,13 @@ export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, 
     ambient: await gateAmbient(cwd, executionCwd, supplyRoots(supplied), prepared), executionCwd, ...(prepared ? { prepared } : {}) };
 }
 
-export const gateSnapshotPath = (taskId: string, runId: string) => join(RUNS_DIR, taskId, `accept-gate-${runId}.source`);
+/** 快照住在哪。配了准备命令的那一档放在 ash 与项目目录树之外（理由见 accept-gate-isolated.ts）。 */
+export const gateSnapshotPath = (taskId: string, runId: string, prepared = false) =>
+  join(prepared ? GATE_ISOLATED_DIR : RUNS_DIR, taskId, `accept-gate-${runId}.source`);
+
+/** 这一次的快照此刻在哪个根下（两处都没有时给 RUNS_DIR 那一处）。只给日志里的说法用。 */
+export const existingGateSnapshotPath = (taskId: string, runId: string): string =>
+  existsSync(gateSnapshotPath(taskId, runId, true)) ? gateSnapshotPath(taskId, runId, true) : gateSnapshotPath(taskId, runId);
 
 /**
  * 合并预览档要在快照里合进来的那一份（见 accept-gate-baseline.ts）。`tree` 是仓库里预演出来的合并树：
@@ -332,6 +341,12 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
   await mkdir(target, { recursive: true });
   const roots = supplyRoots(source.supplied);
   try {
+    // 准备命令那一档的不变量：快照往上一级都找不到依赖树，漏装的包只能在快照里报找不到。
+    const inherited = source.prepared ? await ancestorDependencyDir(target) : null;
+    if (inherited) {
+      throw new Error(`测试快照 ${target} 往上能找到依赖目录 ${inherited}：准备命令漏装的包会从那里被解析到，`
+        + "测出来的不是准备命令装出来的那一份。把它移走，或用 ASH_GATE_ISOLATED_DIR 把快照根指到没有依赖目录的位置");
+    }
     if (await gateAmbient(cwd, target, roots, source.prepared) !== source.ambient) {
       // 对不上一律拒绝（这一条不打折），但**说法得对得上**，因为出路不是同一条：
       //
@@ -497,10 +512,15 @@ async function materializePreview(target: string, targetCommit: string, tree: st
   return commit;
 }
 
+/** 两个根都收：这一次是哪一档建的，调用方（结算、回收）不一定知道。 */
 export async function removeGateSnapshot(taskId: string, runId: string): Promise<void> {
-  const path = gateSnapshotPath(taskId, runId);
-  await rm(path, { recursive: true, force: true });
-  await rm(`${path}.inputs.json`, { force: true });
+  for (const prepared of [false, true]) {
+    const path = gateSnapshotPath(taskId, runId, prepared);
+    await rm(path, { recursive: true, force: true });
+    await rm(`${path}.inputs.json`, { force: true });
+  }
+  // 独立根下这个任务的目录空了就一并收掉；还有别的快照（或删不动）就留着。
+  await rmdir(join(GATE_ISOLATED_DIR, taskId)).catch(() => {});
 }
 
 export async function verifyGateSnapshot(cwd: string, source: GateSource): Promise<boolean> {

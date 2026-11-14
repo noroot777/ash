@@ -148,7 +148,10 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   if (!task) return { command: null, running: null, latest: null, basis: null };
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0) ?? null;
   const command = acceptGateCommandOf(project);
-  const prepare = command ? acceptGatePrepareOf(project) : null;
+  // 返回**保存着的**那一条，不随前置命令有没有设而投影成 null：卡片拿它当编辑初值、算差量，
+  // 投影掉了，留空的那一格就清不掉真实配置（第 1 轮审查 #2）。用不用它由 command 决定。
+  const prepare = acceptGatePrepareOf(project);
+  const prepared = !!command && !!prepare;
   const unavailable = command ? gateConfinementUnavailable() : null;
   const executionNotice = command ? gateExecutionNotice() : null;
   const basis = await acceptBasis(task);
@@ -163,7 +166,7 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   let sourceError: string | null = null;
   // 配了准备命令就一个都不借（accept-gate-source 的 GateSource.prepared）。
   const borrowed = !(command && baseline === "merge_preview" && cwd && head) ? undefined
-    : prepare ? { cwd, dependencies: [] }
+    : prepared ? { cwd, dependencies: [] }
     : await gateDependencies(cwd, head).then(planned => ({ cwd, dependencies: planned.dependencies }),
       (error) => { sourceError = String(error); return undefined; });
   const judged = command && project && !frozen ? await resolveGateBaseline(task, project, head, borrowed) : null;
@@ -179,7 +182,7 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   if (pending) return { command, prepare, running: gateView(pending), latest: view, basis, sourceError, executionNotice, ...baselineView };
   // 新鲜度按**现在**这棵树算：前端据它决定说「已通过，可以直接验收」还是「要重跑」。
   const frozenHead = task.acceptedSourceCommit ?? basis?.run?.sourceCommit ?? null;
-  const source = cwd && !unavailable ? await readGateSource(cwd, gateSnapshotPath(task.id, "identity"), !!prepare)
+  const source = cwd && !unavailable ? await readGateSource(cwd, gateSnapshotPath(task.id, "identity", prepared), prepared)
     .catch(error => { sourceError = String(error); return null; }) : null;
   // 基准也算进新鲜度：合并预览那份绿只对当时的目标分支尖端作数（被拦下的那一档没有 plan，旧绿同样不作数）。
   const stale = !sameGateRecipe(latestRow, command, prepare) || (frozen ? !frozenHead || frozenHead !== latestRow.sourceCommit

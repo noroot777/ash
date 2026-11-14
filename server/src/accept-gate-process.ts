@@ -12,7 +12,7 @@ import { MAC_GATE_ENV, macGateToken } from "./accept-gate-confinement-macos.js";
 import { gateDiagnosisFull, gateDiagnosisTail } from "./accept-gate-diagnosis.js";
 import { gateBootstrapEnvironment } from "./accept-gate-process-env.js";
 import { authorizeGateLaunch, finishGateLaunch, GATE_BOOTSTRAP, gateAbortPath, gateConfinement,
-  gateExitPath, gateGoPath, gateLaunchOf, gateLaunchPath, migrateGateLaunch, prepareGateLaunch, readGateLaunch, registerGateLaunch } from "./accept-gate-launch.js";
+  gateCommandPhasePath, gateExitPath, gateGoPath, gateLaunchOf, gateLaunchPath, migrateGateLaunch, prepareGateLaunch, readGateLaunch, registerGateLaunch } from "./accept-gate-launch.js";
 
 /** SIGTERM 之后等多久补一刀。给它收尾的时间，但不无限等。 */
 const KILL_GRACE_MS = 5_000;
@@ -56,6 +56,7 @@ export async function spawnAcceptGate(opts: {
   if (!existsSync(gateLaunchPath(opts.logPath))) prepareGateLaunch(opts.logPath);
   assertGateConfinementAvailable();
   rmSync(gateExitPath(opts.logPath), { force: true });
+  rmSync(gateCommandPhasePath(opts.logPath), { force: true });
   const fd = openSync(opts.logPath, "a");
   try {
     // 这里**只跑用户那条命令**。第 7 轮曾把「先问一句 runner 认不认这个脚本」的两条 npm
@@ -66,7 +67,7 @@ export async function spawnAcceptGate(opts: {
     const environment = gateBootstrapEnvironment(augmentedEnv());
     if (IS_MAC) environment.bootstrap[MAC_GATE_ENV] = macGateToken(opts.logPath);
     const config = Buffer.from(JSON.stringify({ ...launch, cwd: opts.cwd,
-      ...(opts.prepare ? { prepare: userShellLaunch(opts.prepare),
+      ...(opts.prepare ? { prepare: userShellLaunch(opts.prepare), commandPhase: gateCommandPhasePath(opts.logPath),
         prepared: `\n[ash] 准备命令通过，开跑验收前置命令\n[ash] $ ${opts.command}\n\n` } : {}),
       ...await gateSupervisorBootstrap(opts.logPath),
       restoreEnv: environment.restore,

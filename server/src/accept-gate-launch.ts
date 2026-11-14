@@ -22,11 +22,17 @@ export const gateAbortPath = (logPath: string): string => `${logPath}.abort`;
 export const gateGoPath = (logPath: string): string => `${logPath}.go`;
 /** 启动器替命令留下的退出结果（读口和可信条件在 accept-gate-exit.ts）。 */
 export const gateExitPath = (logPath: string): string => `${logPath}.exit.json`;
+/**
+ * 配了准备命令时，启动器**起前置命令之前**先落下的标记（落不下就不起）。退出档写不进去时，在场的 ash
+ * 只拿得到退出码，靠它分辨停在哪一段：没有它 = 前置命令一行都没跑（accept-gate-exit.ts 的 unrecordedGateExit）。
+ */
+export const gateCommandPhasePath = (logPath: string): string => `${logPath}.command`;
 
 export function prepareGateLaunch(logPath: string): void {
   mkdirSync(dirname(logPath), { recursive: true });
   // 同一路径上一次留下的退出档绝不能被这一次认领：它会把一次没跑完的运行结算成那一次的结果。
   rmSync(gateExitPath(logPath), { force: true });
+  rmSync(gateCommandPhasePath(logPath), { force: true });
   writeFileSync(gateLaunchPath(logPath), JSON.stringify({ version: 1, phase: "prepared" }), { flag: "wx" });
 }
 
@@ -138,6 +144,11 @@ function run(phase) {
     const rc = code ?? (signal ? 128 : 127);
     if (phase !== "prepare" || rc !== 0) return finish(rc, signal, phase);
     if (fs.existsSync(config.abort)) return finish(125, null, phase);
+    try { fs.writeFileSync(config.commandPhase, "command"); }
+    catch (error) {
+      fs.writeSync(2, "\n[ash] 准备命令通过了，但记不下「前置命令开跑」这一标记（" + error.message + "），没有起前置命令\n");
+      return finish(125, null, phase);
+    }
     fs.writeSync(1, config.prepared);
     run("command");
   });

@@ -37,7 +37,7 @@ import { abandonUnstartedGateProcess, attachGateProcess, claimGateProcess, hasOw
 import { prepareGateLaunch } from "./accept-gate-launch.js";
 import { gateConfinementUnavailable, gateExecutionNotice } from "./accept-gate-confinement.js";
 import { releaseGateOwnership } from "./accept-gate-release.js";
-import { gateExitOutcome, recordedGateExit } from "./accept-gate-exit.js";
+import { gateExitOutcome, recordedGateExit, unrecordedGateExit } from "./accept-gate-exit.js";
 import { announceGate, cleanupGateSnapshot, live, noteIfStillAlive, settleGate, superviseGate } from "./accept-gate-settle.js";
 export { whenAcceptGateSettled } from "./accept-gate-settle.js";
 export { recoverAcceptGates } from "./accept-gate-recover.js";
@@ -122,7 +122,7 @@ export async function acceptGateCheck(
 
   const cwd = await prepareGateCwd(task, project.repoPath);
   let source: GateSource;
-  try { source = await readGateSource(cwd, gateSnapshotPath(task.id, "identity"), !!prepare); }
+  try { source = await readGateSource(cwd, gateSnapshotPath(task.id, "identity", !!prepare), !!prepare); }
   catch (error) {
     if (opts.intent !== "skip") return { accepted: false, httpStatus: 409, taskId: task.id,
       reason: "accept_gate_source_unavailable", error: String(error), status: task.status };
@@ -245,7 +245,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
   if (hasOwnedGateProcess(taskId)) return null;
   const runId = newId();
   const logPath = acceptGateLogPath(taskId, runId);
-  const snapshotCwd = gateSnapshotPath(taskId, runId);
+  const snapshotCwd = gateSnapshotPath(taskId, runId, !!plan.prepare);
   claimGateProcess(runId, taskId, logPath);
   let inserted = false;
   try {
@@ -347,7 +347,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
       logPath,
       hold: true,
       // 先认启动器留下的退出档：它带着用时，过了时限的退出码按超时收（accept-gate-exit.ts）。
-      onExit: (exit) => void settleGate(runId, gateExitOutcome(recordedGateExit(logPath) ?? exit)),
+      onExit: (exit) => void settleGate(runId, gateExitOutcome(recordedGateExit(logPath) ?? unrecordedGateExit(logPath, exit, !!plan.prepare))),
     });
   } catch (error) {
     appendGateLog(logPath, `\n[ash] 起不来：${error instanceof Error ? error.message : String(error)}\n`);
@@ -431,7 +431,7 @@ export async function acceptGateWouldRun(task: TaskRow, project: ProjectRow | nu
   // （`acceptTask` 回 `accept_gate_source_unavailable`，一条运行记录都不建）。倒向 `true` 会让批量
   // 预判说「这一按要跑门禁」，而真按下去压根不会跑 —— `test-accept-gate-readonly.ts` 的
   // source-unavailable 夹具把这两边钉在一起。
-  const source = await readGateSource(cwd, gateSnapshotPath(task.id, "identity"), !!prepare).catch(() => null);
+  const source = await readGateSource(cwd, gateSnapshotPath(task.id, "identity", !!prepare), !!prepare).catch(() => null);
   if (!source) return false;
   // 基准拦得下的那一按同理倒向 `false`：真按下去会在门禁之前被拒（没含目标分支 / 预演冲突），
   // 一条运行记录都不建。复用判据也要连基准一起比 —— 预览基准过期的旧绿真按下去会重跑。

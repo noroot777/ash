@@ -264,7 +264,7 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
           />
         </label>
         <div className="settings-row"><div><small>
-          点「验收通过」之后，先在<b>这个任务自己的工作区</b>里跑一遍它，rc=0 才会继续合并：
+          点「验收通过」之后，先在这个任务的<b>独立源码快照</b>里跑一遍它，rc=0 才会继续合并：
           绿了这次验收自动做完，不用再点；红了不合并、不清理，日志会交回那个任务去修。
           命令可能要跑十几分钟，跑的过程中目标分支一个字节都不会动，验收台上能看状态、看日志、也能收掉它。
         </small></div></div>

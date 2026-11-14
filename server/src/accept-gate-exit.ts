@@ -24,7 +24,7 @@
 // 退出码一律不作数、按超时收。不然同一次运行，ash 在不在场就决定了它是「超时」还是「通过」。
 import { existsSync, readFileSync } from "node:fs";
 import type { AcceptGateFailure, AcceptGateStatus } from "@ash/shared/accept-gate";
-import { gateAbortPath, gateConfinement, gateExitPath, gateGoPath, readGateLaunch } from "./accept-gate-launch.js";
+import { gateAbortPath, gateCommandPhasePath, gateConfinement, gateExitPath, gateGoPath, readGateLaunch } from "./accept-gate-launch.js";
 import { isSameGateProcess, type GateExit } from "./accept-gate-process.js";
 import { gateTakeoverUnavailable } from "./accept-gate-confinement.js";
 import { gateTimeoutMs } from "./accept-gate-watch.js";
@@ -66,7 +66,9 @@ export function gateExitOutcome(exit: GateExit, timeoutMs = gateTimeoutMs()): Ga
   if (exit.elapsedMs !== undefined && exit.elapsedMs >= timeoutMs) return { status: "failed", exitCode: null, failure: "timeout",
     note: `命令跑了 ${minutes(exit.elapsedMs)} 分钟才退出（rc=${exit.code}），超过了 ${minutes(timeoutMs)} 分钟的上限，`
       + "按超时处理：过了时限的退出码不作数，不论那一刻 ash 在不在场。" };
-  if (exit.phase === "prepare" && exit.code !== 0) return { status: "failed", exitCode: exit.code, failure: "prepare_failed" };
+  if (exit.phase === "prepare" && exit.code !== 0 && exit.code !== null && !exit.signal) {
+    return { status: "failed", exitCode: exit.code, failure: "prepare_failed" };
+  }
   return exit.code === 0
     ? { status: "passed", exitCode: 0, failure: null }
     // 信号打死的那一条可能是取消/超时先发的刀 —— 那两条路自己会落更准的理由，
@@ -88,6 +90,15 @@ export function readGateExit(logPath: string, pid: number): GateExit | null {
     return { code: record.code as number, signal: null, elapsedMs: record.elapsedMs,
       ...(record.phase === "prepare" ? { phase: "prepare" as const } : {}) };
   } catch { return null; }
+}
+
+/**
+ * 退出档读不到（写盘失败、被删）时，在场的 ash 手里只有 `{code, signal}`。配了准备命令就按启动器落下的
+ * 「前置命令开跑」标记补上阶段：启动器起前置命令之前必先落下它、落不下就不起，所以没有它 = 前置命令
+ * 一行都没跑，这次的红只能记在准备那一段上，不能默认当成测试红去交修（第 1 轮审查 #3）。
+ */
+export function unrecordedGateExit(logPath: string, exit: GateExit, prepared: boolean): GateExit {
+  return prepared && !existsSync(gateCommandPhasePath(logPath)) ? { ...exit, phase: "prepare" } : exit;
 }
 
 /** 这条日志对应的启动器有没有留下退出档（pid 取自启动记录）。在场的 ash 收到退出回调时也先认它。 */
