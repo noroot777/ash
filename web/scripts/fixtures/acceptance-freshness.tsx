@@ -27,6 +27,7 @@ const workers = [task("indie-worker", "独立执行者", { parentId: "team-lead"
 declare global {
   interface Window {
     bumpSingle: (patch: Record<string, unknown>) => void;
+    remountSingle: () => void;
     returned: string[];
   }
 }
@@ -39,8 +40,11 @@ function Single() {
 }
 
 function Fixture() {
+  // 「退出再打开」：卸掉整个单飞验收台再装回来（宿主手上的任务也回到初始那一份）。
+  const [mount, setMount] = useState(0);
+  window.remountSingle = () => setMount((value) => value + 1);
   return <AuthContext.Provider value={{ state: { mode: "single", user: null, needsSetup: false }, refresh: async () => {} }}>
-    <div data-host="single" style={{ display: "flex", flexDirection: "column", height: 420 }}><Single /></div>
+    <div data-host="single" style={{ display: "flex", flexDirection: "column", height: 420 }}><Single key={mount} /></div>
     <div data-host="pending" style={{ display: "flex", flexDirection: "column", height: 320 }}>
       <TaskReviewWorkspace task={pending} allTasks={[pending]} onTaskUpdated={() => {}} notify={() => {}} />
     </div>

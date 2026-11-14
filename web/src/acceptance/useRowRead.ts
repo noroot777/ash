@@ -6,23 +6,28 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * 并给重试）。不许有哪条动作路径把读失败写进只在弹层里显示的状态 —— 弹层一关就没人看得见了。
  *
  * 防乱序：每次读取、每次 `put`（动作回执直接带回来的现场）都换一个序号，晚到的旧读取一律作废，
- * 不会把动作刚写进来的新现场又盖回去。换了 `scope`（另一个任务）旧值一并作废。
+ * 不会把动作刚写进来的新现场又盖回去。换了 `scope`（另一个任务）旧值一并作废，上一个 scope 留下的
+ * `reload` / `put`（比如动作回执晚到）一律不再写，也不动当前 scope 的序号。
  */
 export function useRowRead<T>(scope: string, read: () => Promise<T>, enabled = true, deps: readonly unknown[] = []) {
   const [state, setState] = useState<{ scope: string; value: T | null; error: string | null }>({ scope, value: null, error: null });
   const sequence = useRef(0);
   const reader = useRef(read);
   reader.current = read;
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
   /** 读到了就交回这一份（被更晚的读取或 put 顶掉的不算）；读失败交回 null，原因落在 error。 */
   const reload = useCallback(async (): Promise<T | null> => {
+    if (currentScope.current !== scope) return null;
     const mine = ++sequence.current;
+    const stale = () => sequence.current !== mine || currentScope.current !== scope;
     try {
       const value = await reader.current();
-      if (sequence.current !== mine) return null;
+      if (stale()) return null;
       setState({ scope, value, error: null });
       return value;
     } catch (reason) {
-      if (sequence.current !== mine) return null;
+      if (stale()) return null;
       const message = reason instanceof Error ? reason.message : String(reason);
       setState((current) => ({ scope, value: current.scope === scope ? current.value : null, error: message }));
       return null;
@@ -36,6 +41,7 @@ export function useRowRead<T>(scope: string, read: () => Promise<T>, enabled = t
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload, enabled, ...deps]);
   const put = useCallback((value: T) => {
+    if (currentScope.current !== scope) return;
     sequence.current += 1;
     setState({ scope, value, error: null });
   }, [scope]);

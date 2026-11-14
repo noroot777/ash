@@ -205,7 +205,7 @@ export const api = {
 
   // 列表不带正文（见 shared 的 TaskListItem）；正文走 api.task(id)。
   tasks: (signal?: AbortSignal): Promise<TaskListItem[]> => request("/tasks", { signal }),
-  task: (taskId: string): Promise<Task> => request(`/tasks/${id(taskId)}`),
+  task: (taskId: string, signal?: AbortSignal): Promise<Task> => request(`/tasks/${id(taskId)}`, { signal }),
   // 任务「此刻能做什么」（shared/src/task-actions.ts）：只经 useTaskActions 取，别处不直接调。
   taskActions: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared").TaskActions> =>
     request(`/tasks/${id(taskId)}/actions`, { signal }),

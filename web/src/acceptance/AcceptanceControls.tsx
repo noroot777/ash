@@ -240,7 +240,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         ))}
         {failure?.taskId === task.id && (!settled || !!failure.completedMerge || !!failure.completedTag)
           && failure.reason !== issue?.reason && <FailureCheck failure={failure} gateReadable={!!gate.state && !gate.error} />}
-        <PendingMergeCheck task={task} notify={notify} onTaskUpdated={onTaskUpdated} />
+        <PendingMergeCheck key={task.id} task={task} notify={notify} onTaskUpdated={onTaskUpdated} />
         {autoCommit?.taskId === task.id && <AutoCommitCheck outcome={autoCommit.outcome} />}
         {!midGate && !settled && <WorkspaceCheck key={task.id} task={task} notify={notify} disabled={rowDisabled} />}
         {!midGate && <GateCheck task={task} gate={gate} canManage={canManage} settled={settled} atFinalGate={!midGate}

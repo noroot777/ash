@@ -14,6 +14,8 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 // ⑤ 团队验收台打回之后回到能看见那句话的对话：团队回调度台，独立执行者回它自己的会话。
 // ⑥ 动作成功之后的读取失败（taskFacts.ts / useRowRead.ts）：改了合入目标而任务读不回来，主按钮锁着、那一行
 //    给重试；释放目录之后的核对读失败落在本行「待核对」，不跟着确认框一起消失。
+// ⑦ 那一次任务读取一直不回来（第 3 轮审查）：主按钮转圈，退出再打开照样在等；宿主拿到了更新过的任务
+//    就不再等；再挂住一次，到期限转成那一行「读取超时」并给重试，重试读到了才放开。
 const web = await startWebServer();
 
 const DIFF = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,1 +1,1 @@\n-old\n+new\n";
@@ -65,6 +67,7 @@ function api(store) {
       const [, taskId, what] = hit;
       if (!what) {
         store.taskFetches[taskId] = (store.taskFetches[taskId] ?? 0) + 1;
+        if (store.failTask === "hang") return new Promise(() => {});
         if (store.failTask) return fail();
         return reply({ id: taskId, title: taskId, projectId: "proj-1", status: "done", stage: "awaiting_acceptance", mode: "single",
           useWorktree: true, archived: false, updatedAt: "2026-11-02T01:24:00.000Z" });
@@ -229,7 +232,62 @@ try {
     assert.ok(box.key.top >= 0 && box.key.bottom <= box.viewport, `滚到底确认键仍在屏幕外：${JSON.stringify(box)}`);
     await page.close();
   }
-  console.log("acceptance freshness: versioned route/diff with stale marking and retry, stale rows keep a retry, pending merge reconciles on focus, short-window layers stay in view, team rejections return to the conversation");
+  // ⑦ 挂住的任务读取。
+  {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 1400 } });
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.clock.install();
+    const store = freshStore();
+    await page.route((url) => url.pathname.startsWith("/api/"), api(store));
+    await page.goto(fixture);
+    const single = page.locator('[data-host="single"]');
+    const route = single.locator(".acc-bar .acc-route");
+    const factsRow = single.locator('.acc-check[data-check="task-facts"]');
+    const mainFree = () => page.waitForFunction(() => {
+      const button = document.querySelector('[data-host="single"] .acc-bar button.acc-btn.is-primary');
+      return button && !button.disabled;
+    });
+    const mainDisabled = () => single.locator(".acc-bar button.acc-btn.is-primary").isDisabled();
+    const changeTarget = async (branch) => {
+      store.target = branch;
+      await single.locator(".acc-target").click();
+      await page.getByRole("menuitemradio", { name: branch }).click();
+      await page.getByRole("menuitemradio", { name: branch }).waitFor({ state: "detached" });
+    };
+    await route.locator(".acc-target, .acc-dst").filter({ hasText: "main" }).waitFor();
+    await mainFree();
+
+    store.failTask = "hang";
+    await changeTarget("other");
+    await route.locator(".acc-target, .acc-dst").filter({ hasText: "other" }).waitFor();
+    assert.equal(await mainDisabled(), true, "任务没追平之前不许确认");
+    await page.evaluate(() => window.remountSingle());
+    await route.waitFor();
+    await page.waitForTimeout(100);
+    assert.equal(await mainDisabled(), true, "退出再打开，宿主手上还是旧任务：仍在等");
+    // 宿主从别处拿到了更新过的任务：那就是当前事实，不再等那一发。
+    await page.evaluate(() => window.bumpSingle({ mergeTargetBranch: "other" }));
+    await mainFree();
+    assert.equal(await factsRow.count(), 0);
+
+    // 再挂住一次：到期限转成读失败，那一行给重试；重试读到了才放开。
+    await changeTarget("main");
+    await route.locator(".acc-target, .acc-dst").filter({ hasText: "main" }).waitFor();
+    assert.equal(await mainDisabled(), true);
+    await page.clock.fastForward(15_001);
+    await factsRow.filter({ hasText: "读取超时" }).waitFor();
+    assert.equal(await mainDisabled(), true, "读失败时主按钮仍锁着");
+    store.failTask = false;
+    await factsRow.getByRole("button", { name: "重试", exact: true }).click();
+    await factsRow.waitFor({ state: "detached" });
+    await mainFree();
+    assert.deepEqual(store.unexpected, [], "页面发了未声明的请求");
+    assert.deepEqual(errors, [], "渲染报错");
+    await page.close();
+  }
+
+  console.log("acceptance freshness: versioned route/diff with stale marking and retry, stale rows keep a retry, pending merge reconciles on focus, short-window layers stay in view, team rejections return to the conversation, a hung task read gives way to a newer task or times out into a retry");
 } finally {
   await browser?.close();
   await web.close();
