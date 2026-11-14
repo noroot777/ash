@@ -13,4 +13,4 @@ delete process.env.ASH_LOCAL_ONLY;
 
 export const LOCAL_ONLY_HOSTNAME = "127.0.0.1";
 
-export const LOCAL_ONLY_REFUSAL = "这台 ash 以本机自用模式启动（ASH_LOCAL_ONLY），不提供远程配对、多人和邀请";
+export const LOCAL_ONLY_REFUSAL = "这台 ash 以本机自用模式启动（ASH_LOCAL_ONLY）：只接受本机直连，不提供远程配对、多人和邀请";

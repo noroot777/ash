@@ -1,4 +1,5 @@
-// 代码根与数据根的**纯解析**（环境变量由调用方传进来）；paths.js 在它之上把结果定成常量。
+// 代码根与数据根的**纯解析**：只看传进来的环境，不在加载时读 process.env（那是 paths.js 的事），
+// 所以要在 paths.js 冻成常量之前、或者替别的环境算数据根的地方也能用。
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 
