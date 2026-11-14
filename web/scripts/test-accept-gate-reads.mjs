@@ -102,9 +102,10 @@ export async function testAcceptGateReads({ open }) {
     try {
       await (await openConfirm(page)).getByRole("button", { name: "确认验收", exact: true }).click();
       await page.getByRole("status", { name: "操作结果" }).filter({ hasText: error }).waitFor();
-      await page.locator(".acc-done").filter({ hasText: "已验收" }).waitFor();
+      // 清理没做完的那两档停在「已合并」，不能报成「已验收」。
+      await page.locator(".acc-done").filter({ hasText: entry.stage === "merged" ? "已合并" : "已验收" }).waitFor();
       await gateRow(page).filter({ hasText: "没留下验收凭据" }).waitFor();
-      assert.equal(store.taskFetches, 1, "合并已完成就把任务刷成已验收（只刷一次）");
+      assert.equal(store.taskFetches, 1, "合并已完成就把任务刷一次（只刷一次）");
       // 合并已完成、清理没做完：刷成已验收之后那一行仍在，挡路的文件展开就看得见。
       const failure = page.locator('[data-check="failure"]');
       await failure.filter({ hasText: entry.completedMerge ? "合并已完成，清理没做完" : "标签已打，清理没做完" }).waitFor();
