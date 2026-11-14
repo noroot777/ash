@@ -1,66 +1,79 @@
 import AppKit
 
-/// 第一次打开、数据根还空着时的那张卡：数据从哪儿来。
+/// 第一次打开、数据根还空着时的那一屏：铺满首次配置那扇小窗（`BrowserWindowController.welcomeSize`），
+/// 不是大窗正中摆一张卡。左边一栏是 ash 自己和首启要走的几步（第一步就是这里，后三步是 web 的首启
+/// 向导，名字和它导轨上的一致）；右边问数据从哪儿来。
 ///
-/// 和接下来 web 的首启向导是同一张脸（`web/src/auth/SetupWizard.tsx` 那张「这台 ash 给谁用？」：
-/// 灰底上一张白卡，两个整块可点的选项），点完接上页面时不跳样式。选了之后不换屏：选中的那一项
-/// 原地转圈，等页面载进来；出了错回到这张卡，原因写在选项底下。
+/// 选了之后不换屏：选中的那一项原地转圈，等页面载进来（窗口这时才展开成工作窗）；出了错回到这里，
+/// 原因写在选项底下。
 final class FirstRunView: NSView {
   enum Choice { case fresh, importData }
 
   var onChoose: ((Choice) -> Void)?
 
-  private static let width: CGFloat = 560
-  private static let padding: CGFloat = 28
+  static let brandWidth: CGFloat = 340
+  private static let inset: CGFloat = 56
+  /// 右边那一栏里内容的宽度：窗宽减左栏、减两边留白。
+  private static let columnWidth = BrowserWindowController.welcomeSize.width - brandWidth - inset * 2
 
-  private let icon = NSImageView()
-  private let note = NSTextField(wrappingLabelWithString: "")
+  private let brand = BrandPane()
   private let error = NSTextField(wrappingLabelWithString: "")
-  private let fresh = ChoiceButton(title: "全新开始", detail: "从空白开始，接着配好模型、执行器和项目。")
-  private let importer = ChoiceButton(title: "导入已有数据…", detail: "从另一份 ash 的数据目录复制过来，原来那份不动。")
+  private let location = NSTextField(wrappingLabelWithString: "")
+  private let fresh = ChoiceButton(title: "全新开始", detail: "从空白开始，接着配好供应商、执行器和项目。",
+                                   textWidth: columnWidth)
+  private let importer = ChoiceButton(title: "导入已有数据…", detail: "从另一份 ash 的数据目录复制过来，原来那份不动。",
+                                      textWidth: columnWidth)
 
   override init(frame: NSRect) {
     super.init(frame: frame)
     wantsLayer = true
-    layer?.cornerRadius = 14
-    layer?.borderWidth = 1
-    layer?.masksToBounds = false
 
-    icon.image = NSApp.applicationIconImage
-    icon.imageScaling = .scaleProportionallyUpOrDown
-    let title = NSTextField(labelWithString: "欢迎使用 ash")
-    title.font = .systemFont(ofSize: 20, weight: .semibold)
+    let title = NSTextField(labelWithString: "数据从哪儿来")
+    title.font = .systemFont(ofSize: 22, weight: .semibold)
     title.textColor = AshPalette.ink
-    for (label, color) in [(note, AshPalette.muted), (error, AshPalette.red)] {
-      label.font = .systemFont(ofSize: 13)
-      label.textColor = color
-      label.isSelectable = true
-      label.preferredMaxLayoutWidth = Self.width - Self.padding * 2
-    }
+    let note = NSTextField(labelWithString: "只在第一次打开时问这一次。")
+    note.font = .systemFont(ofSize: 13)
+    note.textColor = AshPalette.muted
+    error.font = .systemFont(ofSize: 13)
+    error.textColor = AshPalette.red
+    error.isSelectable = true
+    error.preferredMaxLayoutWidth = Self.columnWidth
     error.isHidden = true
+    location.font = .systemFont(ofSize: 12)
+    location.textColor = AshPalette.faint
+    location.isSelectable = true
+    location.preferredMaxLayoutWidth = Self.columnWidth
     fresh.onPress = { [weak self] in self?.onChoose?(.fresh) }
     importer.onPress = { [weak self] in self?.onChoose?(.importData) }
 
-    let stack = NSStackView(views: [icon, title, note, fresh, importer, error])
-    stack.orientation = .vertical
-    stack.alignment = .leading
-    stack.spacing = 14
-    stack.setCustomSpacing(16, after: icon)
-    stack.setCustomSpacing(6, after: title)
-    stack.setCustomSpacing(20, after: note)
-    stack.edgeInsets = NSEdgeInsets(top: Self.padding, left: Self.padding, bottom: Self.padding, right: Self.padding)
-    stack.translatesAutoresizingMaskIntoConstraints = false
-    addSubview(stack)
+    let column = NSStackView(views: [title, note, fresh, importer, error])
+    column.orientation = .vertical
+    column.alignment = .leading
+    column.spacing = 12
+    column.setCustomSpacing(8, after: title)
+    column.setCustomSpacing(28, after: note)
+    column.setCustomSpacing(16, after: importer)
+
+    for view in [brand, column, location] as [NSView] {
+      view.translatesAutoresizingMaskIntoConstraints = false
+      addSubview(view)
+    }
     NSLayoutConstraint.activate([
-      widthAnchor.constraint(equalToConstant: Self.width),
-      stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-      stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-      stack.topAnchor.constraint(equalTo: topAnchor),
-      stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-      icon.widthAnchor.constraint(equalToConstant: 52),
-      icon.heightAnchor.constraint(equalToConstant: 52),
-      fresh.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -Self.padding * 2),
-      importer.widthAnchor.constraint(equalTo: fresh.widthAnchor),
+      brand.leadingAnchor.constraint(equalTo: leadingAnchor),
+      brand.topAnchor.constraint(equalTo: topAnchor),
+      brand.bottomAnchor.constraint(equalTo: bottomAnchor),
+      brand.widthAnchor.constraint(equalToConstant: Self.brandWidth),
+
+      column.leadingAnchor.constraint(equalTo: brand.trailingAnchor, constant: Self.inset),
+      column.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.inset),
+      // 比正中略高一点：底下还压着一行数据位置。
+      column.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -12),
+      fresh.widthAnchor.constraint(equalTo: column.widthAnchor),
+      importer.widthAnchor.constraint(equalTo: column.widthAnchor),
+
+      location.leadingAnchor.constraint(equalTo: column.leadingAnchor),
+      location.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -Self.inset),
+      location.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -40),
     ])
   }
 
@@ -68,7 +81,7 @@ final class FirstRunView: NSView {
 
   /// 回到可选的样子。`problem` 是上一次没成的原因（导入失败、选的目录不对），写在选项底下。
   func reset(dataPath: String, problem: String? = nil) {
-    note.stringValue = "数据放在 \((dataPath as NSString).abbreviatingWithTildeInPath)。"
+    location.stringValue = "数据放在 \((dataPath as NSString).abbreviatingWithTildeInPath)"
     error.stringValue = problem ?? ""
     error.isHidden = problem == nil
     for button in [fresh, importer] { button.state = .idle }
@@ -82,25 +95,109 @@ final class FirstRunView: NSView {
     other.state = .disabled
   }
 
-  // 卡片的底、边和阴影都是 CALayer 上的颜色，不跟外观翻面；updateLayer 在当前外观下调用，切换时会重来。
   override var wantsUpdateLayer: Bool { true }
   override func updateLayer() {
-    guard let layer else { return }
-    layer.backgroundColor = AshPalette.panel.cgColor
-    layer.borderColor = AshPalette.line.cgColor
-    layer.shadowColor = NSColor.black.cgColor
-    layer.shadowOpacity = AshPalette.isDark(effectiveAppearance) ? 0.4 : 0.1
-    layer.shadowRadius = 22
-    layer.shadowOffset = NSSize(width: 0, height: -6)
-  }
-
-  override func layout() {
-    super.layout()
-    layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: 14, cornerHeight: 14, transform: nil)
+    layer?.backgroundColor = AshPalette.panel.cgColor
   }
 }
 
-/// 卡片里一整块可点的选项：粗一点的标题加一行说明（同 web 的 `.auth-choice`）。
+/// 左边那一栏：标识、一句话说 ash 是干什么的，底下是首启要走的几步。红绿灯浮在它上面。
+/// 黑底白字两种外观都一样，所以颜色是写死的白，只有底色跟外观走。
+private final class BrandPane: NSView {
+  static let steps = ["数据", "供应商", "执行器", "项目"]
+
+  override init(frame: NSRect) {
+    super.init(frame: frame)
+    wantsLayer = true
+
+    let name = NSTextField(labelWithString: "ash")
+    name.font = .systemFont(ofSize: 30, weight: .semibold)
+    name.textColor = .white
+    let pitch = NSTextField(wrappingLabelWithString: "")
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.lineSpacing = 5
+    pitch.attributedStringValue = NSAttributedString(
+      string: "把活派给本机的 claude、codex，\n进度、审查、验收都在这一处。",
+      attributes: [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.white.withAlphaComponent(0.62),
+                   .paragraphStyle: paragraph])
+    pitch.preferredMaxLayoutWidth = FirstRunView.brandWidth - 80
+
+    let head = NSStackView(views: [BrandMark(), name, pitch])
+    head.orientation = .vertical
+    head.alignment = .leading
+    head.spacing = 10
+    head.setCustomSpacing(22, after: head.views[0])
+
+    let path = NSStackView(views: Self.steps.enumerated().map { StepRow(label: $0.element, current: $0.offset == 0) })
+    path.orientation = .vertical
+    path.alignment = .leading
+    path.spacing = 14
+
+    for view in [head, path] {
+      view.translatesAutoresizingMaskIntoConstraints = false
+      addSubview(view)
+    }
+    NSLayoutConstraint.activate([
+      head.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 40),
+      head.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -40),
+      // 红绿灯底下留出一截再开始。
+      head.topAnchor.constraint(equalTo: topAnchor, constant: 84),
+      path.leadingAnchor.constraint(equalTo: head.leadingAnchor),
+      path.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -40),
+    ])
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+  override var wantsUpdateLayer: Bool { true }
+  override func updateLayer() {
+    layer?.backgroundColor = AshPalette.brand.cgColor
+  }
+}
+
+/// 和 app 图标同一个字形，反过来：白底黑字，放在黑栏上。画法同 scripts/make-icon.swift。
+private final class BrandMark: NSView {
+  override var intrinsicContentSize: NSSize { NSSize(width: 44, height: 44) }
+
+  override func draw(_ dirtyRect: NSRect) {
+    NSColor.white.setFill()
+    NSBezierPath(roundedRect: bounds, xRadius: bounds.width * 0.225, yRadius: bounds.width * 0.225).fill()
+    let font = NSFont.systemFont(ofSize: bounds.height * 0.62, weight: .semibold)
+    let glyph = NSAttributedString(string: "a", attributes: [.font: font, .foregroundColor: NSColor.black])
+    // 按 x 高居中：小写字母按行高放会偏下。
+    let baseline = bounds.midY - font.xHeight / 2
+    glyph.draw(at: NSPoint(x: bounds.midX - glyph.size().width / 2, y: baseline + font.descender))
+  }
+}
+
+/// 首次配置路上的一站：一个圆点加名字，当前这站点亮。不标序号：后三站在 web 向导的导轨上另有编号，
+/// 两边各数各的会打架。
+private final class StepRow: NSStackView {
+  init(label: String, current: Bool) {
+    super.init(frame: .zero)
+    let dot = NSView()
+    dot.wantsLayer = true
+    dot.layer?.cornerRadius = 4
+    dot.layer?.backgroundColor = current ? NSColor.white.cgColor : nil
+    dot.layer?.borderWidth = current ? 0 : 1
+    dot.layer?.borderColor = NSColor.white.withAlphaComponent(0.4).cgColor
+    NSLayoutConstraint.activate([
+      dot.widthAnchor.constraint(equalToConstant: 8),
+      dot.heightAnchor.constraint(equalToConstant: 8),
+    ])
+    let name = NSTextField(labelWithString: label)
+    name.font = .systemFont(ofSize: 13, weight: current ? .medium : .regular)
+    name.textColor = current ? .white : NSColor.white.withAlphaComponent(0.45)
+    setViews([dot, name], in: .leading)
+    orientation = .horizontal
+    alignment = .centerY
+    spacing = 12
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+}
+
+/// 一整块可点的选项：粗一点的标题加一行说明（同 web 的 `.auth-choice`）。
 /// 整块都是按钮：键盘 Tab 走得到、空格回车按得下，读屏读作按钮。
 final class ChoiceButton: NSControl {
   enum State: Equatable {
@@ -118,7 +215,8 @@ final class ChoiceButton: NSControl {
   private var hovering = false { didSet { needsDisplay = true } }
   private var pressing = false { didSet { needsDisplay = true } }
 
-  init(title text: String, detail description: String) {
+  /// `textWidth`：这一块的整宽，说明文字按它减掉两边留白和转圈的位置折行。
+  init(title text: String, detail description: String, textWidth: CGFloat) {
     idleDetail = description
     super.init(frame: .zero)
     wantsLayer = true
@@ -130,8 +228,7 @@ final class ChoiceButton: NSControl {
     title.textColor = AshPalette.ink
     detail.font = .systemFont(ofSize: 12.5)
     detail.textColor = AshPalette.muted
-    // 外层卡片 560 - 两边 28 - 选项自己两边 16 - 右边给转圈留的 28。
-    detail.preferredMaxLayoutWidth = 560 - 56 - 32 - 28
+    detail.preferredMaxLayoutWidth = textWidth - 32 - 28
     spinner.style = .spinning
     spinner.controlSize = .small
     spinner.isDisplayedWhenStopped = false

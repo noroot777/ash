@@ -10,8 +10,11 @@ enum AshPalette {
   static let line = color(light: 0xE4E4E4, dark: 0x313134)     // --line
   static let ink = color(light: 0x1B1B1B, dark: 0xE8E8EA)      // --ink
   static let muted = color(light: 0x5C5C5E, dark: 0xA2A3A8)    // --muted
+  static let faint = color(light: 0x9C9D9F, dark: 0x717277)    // --faint
   static let red = color(light: 0xD93D4C, dark: 0xEF6B7B)      // --red
   static let hover = color(light: 0xEDEDED, dark: 0x303033)    // ink 混进 panel 8%，同 `.auth-choice:hover`
+  /// 首启欢迎窗左边那一栏：和图标同一块黑（深色下比 --chrome 再压一档，不至于和右边连成一片）。
+  static let brand = color(light: 0x000000, dark: 0x0C0C0E)
 
   static func isDark(_ appearance: NSAppearance) -> Bool {
     appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua

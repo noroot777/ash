@@ -1,7 +1,7 @@
 import AppKit
 
 /// 页面载不进来时盖在上面的那一屏：启动中转圈；起不来、端口被占着就说原因。按钮由调用方给，
-/// 最后一个是默认按钮（回车）。首启那张卡（FirstRunView）也盖在这一层上，由 `show(panel:)` 摆上来。
+/// 最后一个是默认按钮（回车）。首启那一屏（FirstRunView）也盖在这一层上，由 `show(panel:)` 摆上来。
 /// 服务不在、端口被占着的那几种情形后台一直在探 /api/health，通了（或占着的那份停了）自动接上，
 /// 按钮只是给等不及的人用的。
 final class OfflineView: NSView {
@@ -70,15 +70,17 @@ final class OfflineView: NSView {
     isHidden = false
   }
 
-  /// 换成一块自带内容的面板（首启那张卡），居中摆着；再 `show(title:…)` 时收走。
+  /// 换成一块自带内容的面板（首启那一屏），铺满；再 `show(title:…)` 时收走。
   func show(panel view: NSView) {
     if panel !== view {
       removePanel()
       view.translatesAutoresizingMaskIntoConstraints = false
       addSubview(view)
       NSLayoutConstraint.activate([
-        view.centerXAnchor.constraint(equalTo: centerXAnchor),
-        view.centerYAnchor.constraint(equalTo: centerYAnchor),
+        view.leadingAnchor.constraint(equalTo: leadingAnchor),
+        view.trailingAnchor.constraint(equalTo: trailingAnchor),
+        view.topAnchor.constraint(equalTo: topAnchor),
+        view.bottomAnchor.constraint(equalTo: bottomAnchor),
       ])
       panel = view
     }

@@ -124,7 +124,8 @@ open /tmp/r/Ash.app                                                          # �
 
 ## 第一次打开
 
-数据根里还没有 `ash.db` 时，先问数据从哪来（`FirstRunView`：和随后 web 首启向导同一套底色与卡片，选了之后原地转圈直到页面接上，不换屏、不闪白）：
+数据根里还没有 `ash.db` 时，窗口开成一扇 900×640 的小窗（不是 1440 的大窗正中摆几行字），先问数据从哪来（`FirstRunView`：左边一栏是 ash 和首次配置要走的几站，右边是两个选项；选了之后原地转圈直到页面接上，不换屏、不闪白）。随后 web 的三步向导也在这扇小窗里、铺满整窗；页面说进了工作台才展开成工作窗。窗口大小由页面表态：`<html data-window-size="setup|work">`（`web/src/auth/AuthGate.tsx` 写，`WindowChrome` 转告）——数据已有、向导上次没走完时也会缩回小窗。首次配置期间不记窗口位置，工作窗照旧按上次拖成的样子打开。
+
 
 - **全新开始**：起一份空的，进入首启向导（供应商 → 执行器 → 项目）。
 - **导入已有数据…**：选一份 ash 数据目录（比如仓库的 `data/`）。**只复制、不移动**，源目录一个文件都不多。库走 SQLite 在线备份（一致快照，源库正被另一份 server 写着也安全；它还开着时会先提醒），其余目录按文件复制（同一 APFS 卷上是克隆，不占第二份空间）；锁、在线标记、`deps/`、`tmp/`、源的 `logs/` 不搬。多人模式的数据、和 app 数据根互相包含的目录不能导。
@@ -149,7 +150,7 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 
 ## 窗口
 
-内容铺到窗口顶，红绿灯浮在页面左上角，不单占一行标题栏。页面要给它让位，所以是页面先表态：`web/index.html` 里有 `<meta name="ash-window-chrome" content="overlay">` 才铺上去，没有这一行的文档（旧版本的 ash、同源的其它页面）仍是普通标题栏。壳把红绿灯的实际高宽量出来交给页面（`--window-titlebar-height` / `--window-controls-width`，全屏时为 0），页面这一半在 `web/src/styles/window-shell.css`：主工作区和设置页把那一条用起来，其它整页布局默认让开。顶上那一条的空白处、以及页面用 `--window-drag: drag` 划进来的顶栏都能拖窗口，双击跟随系统设置。
+内容铺到窗口顶，红绿灯浮在页面左上角，不单占一行标题栏（首次配置时窗口开多大见「第一次打开」）。页面要给它让位，所以是页面先表态：`web/index.html` 里有 `<meta name="ash-window-chrome" content="overlay">` 才铺上去，没有这一行的文档（旧版本的 ash、同源的其它页面）仍是普通标题栏。壳把红绿灯的实际高宽量出来交给页面（`--window-titlebar-height` / `--window-controls-width`，全屏时为 0），页面这一半在 `web/src/styles/window-shell.css`：主工作区和设置页把那一条用起来，其它整页布局默认让开。顶上那一条的空白处、以及页面用 `--window-drag: drag` 划进来的顶栏都能拖窗口，双击跟随系统设置。
 
 导出下载先写目标目录内的独立临时文件，完成后再原子替换目标文件。下载失败或在完成前退出不会删除已有文件。每笔下载在 `~/Library/Application Support/dev.ash.mac/downloads` 留一张带锁的登记；app 被强杀或断电留下的隐藏暂存目录（目标文件夹里的 `.ash-download-…`）下次启动时照登记回收，仍在写的下载持着锁、不会被碰。
 
@@ -183,7 +184,7 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 | `Sources/WebViewBridge.swift` | 外链、新窗口、选文件、下载、JS 对话框 |
 | `Sources/DownloadTransaction.swift` | 另存为的暂存、原子替换与中断后的回收 |
 | `Sources/OfflineView.swift` | 页面载不进来时的那一屏 |
-| `Sources/FirstRunView.swift` | 首启那张卡：全新开始 / 导入已有数据 |
+| `Sources/FirstRunView.swift` | 首启那一屏：全新开始 / 导入已有数据 |
 | `Sources/AshPalette.swift` | 原生几屏的颜色，取自 web 的浅 / 深两套令牌 |
 | `scripts/make-icon.swift` | 构建时现画图标 |
 

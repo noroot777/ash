@@ -82,6 +82,16 @@ export function AuthGate({ children }: { children: ReactNode }) {
     }
   }, [ignoreRoute]);
 
+  // 这一屏要多大的窗，交给 macOS 壳（desktop/macos/Sources/WindowChrome.swift）：首次配置的两段向导是
+  // "setup"，壳开成一扇正好装下它的小窗；工作台和其它页是 "work"，壳展开成工作窗。身份还没确认时不表态，
+  // 壳保持原样。判据与下面的分支同序；浏览器里没人读它。
+  const windowSize = !state ? null
+    : !state.needsAccessKey && (state.needsSetup || (state.needsOnboarding && !(state.mode === "multi" && !state.user)))
+      ? "setup" : "work";
+  useEffect(() => {
+    if (windowSize) document.documentElement.dataset.windowSize = windowSize;
+  }, [windowSize]);
+
   if (route?.kind === "claim" && state && !ignoreRoute) return <ClaimPage token={route.token} onDone={leaveRoute} />;
 
   if (!state) {

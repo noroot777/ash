@@ -5,8 +5,10 @@ import WebKit
 final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
   let webView: WKWebView
   let offlineView = OfflineView()
-  /// 数据根还空着时盖在 offlineView 上的那张卡（LaunchFlow 的首启）。
+  /// 数据根还空着时盖在 offlineView 上的那一屏（LaunchFlow 的首启）。
   let firstRunView = FirstRunView()
+  /// 窗口这会儿是不是首次配置那扇小窗（见 `enterWelcome`）。
+  private(set) var welcoming = false
   var downloads: [ObjectIdentifier: DownloadTransaction] = [:]
   private var chrome: WindowChrome?
   private var observations: [NSKeyValueObservation] = []
@@ -57,9 +59,16 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     // 内容铺到窗口顶，红绿灯浮在页面上（见 WindowChrome）。窗口底色仍跟页面的 theme-color 走，
     // 页面还没画出来的那一瞬和占位页都是同一个底色。
     chrome = WindowChrome(window: window, webView: webView)
-    // 位置和大小记在 UserDefaults 里，下次原样打开。
-    window.setFrameAutosaveName("AshMainWindow")
-    if !window.setFrameUsingName("AshMainWindow") { window.center() }
+    chrome?.onWindowSize = { [weak self] size in
+      if size == "setup" { self?.enterWelcome() } else { self?.leaveWelcome() }
+    }
+    // 位置和大小记在 UserDefaults 里，下次原样打开。数据根还空着就先开成首启那扇小窗。
+    if AshConfig.isLocal && !AshConfig.isDataInitialized {
+      enterWelcome()
+    } else {
+      window.setFrameAutosaveName(Self.frameName)
+      if !window.setFrameUsingName(Self.frameName) { window.center() }
+    }
 
     webView.navigationDelegate = self
     webView.uiDelegate = self
@@ -95,6 +104,66 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         self?.window?.backgroundColor = view.themeColor ?? AshPalette.chrome
       },
     ]
+  }
+
+  // MARK: 首次配置那扇小窗
+
+  static let frameName = "AshMainWindow"
+  /// 首次配置时窗口开多大：原生那一屏（FirstRunView）和随后 web 的三步向导都正好铺满它。
+  static let welcomeSize = NSSize(width: 900, height: 640)
+  /// 工作窗第一次打开时的大小（之后按用户拖成的样子记住）。
+  static let workSize = NSSize(width: 1440, height: 900)
+
+  /// 首次配置不开一扇 1440 的大窗在正中摆几行字：从「数据从哪儿来」到 web 向导走完，都在一扇正好装下
+  /// 它们的小窗里；页面说进了工作台（WindowChrome.onWindowSize）才展开。数据根空着时一打开就是它，
+  /// 已经有数据、页面却还在向导里（上次走到一半退出了）时由页面叫回来。
+  /// 这期间不记窗口位置，免得之后工作窗也跟着开成这么小。仍然可以拉大 —— 万一页面没表态，人不至于被关在小窗里。
+  func enterWelcome() {
+    guard let window, !welcoming, !window.styleMask.contains(.fullScreen) else { return }
+    welcoming = true
+    window.setFrameAutosaveName("")
+    window.collectionBehavior.insert(.fullScreenNone)
+    let size = window.frameRect(forContentRect: NSRect(origin: .zero, size: Self.welcomeSize)).size
+    guard window.isVisible else {
+      window.setContentSize(Self.welcomeSize)
+      window.center()
+      return
+    }
+    // 已经开着的工作窗缩回来：以它的中心收拢。
+    let frame = NSRect(x: window.frame.midX - size.width / 2, y: window.frame.midY - size.height / 2,
+                       width: size.width, height: size.height)
+    window.setFrame(fitted(frame, in: window), display: true, animate: true)
+  }
+
+  /// 进了工作台：展开成工作窗。以前记过工作窗的位置就回到那里，没有就以小窗的中心展开、收在屏幕里。
+  func leaveWelcome() {
+    guard let window, welcoming else { return }
+    welcoming = false
+    window.collectionBehavior.remove(.fullScreenNone)
+    let target = Self.savedFrame() ?? NSRect(
+      x: window.frame.midX - Self.workSize.width / 2, y: window.frame.midY - Self.workSize.height / 2,
+      width: Self.workSize.width, height: Self.workSize.height)
+    window.setFrame(fitted(target, in: window), display: true, animate: true)
+    window.setFrameAutosaveName(Self.frameName)
+  }
+
+  /// 收进窗口所在屏幕的可用区域里。
+  private func fitted(_ frame: NSRect, in window: NSWindow) -> NSRect {
+    guard let visible = (window.screen ?? NSScreen.main)?.visibleFrame else { return frame }
+    var rect = frame
+    rect.size.width = min(rect.width, visible.width)
+    rect.size.height = min(rect.height, visible.height)
+    rect.origin.x = min(max(rect.minX, visible.minX), visible.maxX - rect.width)
+    rect.origin.y = min(max(rect.minY, visible.minY), visible.maxY - rect.height)
+    return rect
+  }
+
+  /// AppKit 记下的工作窗位置（`NSWindow Frame <名字>`，前四个数是 x y 宽 高）。
+  private static func savedFrame() -> NSRect? {
+    guard let raw = UserDefaults.standard.string(forKey: "NSWindow Frame \(frameName)") else { return nil }
+    let numbers = raw.split(separator: " ").compactMap { Double($0) }
+    guard numbers.count >= 4, numbers[2] > 0, numbers[3] > 0 else { return nil }
+    return NSRect(x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3])
   }
 
   // 进全屏在动画开始前就让页面收回留白，出全屏等红绿灯回来再让出来。
