@@ -47,6 +47,13 @@ let xApiKey: string | null = null;
 let beta = "";
 let cacheControls: unknown[] = [];
 const upstream = createServer(async (req, res) => {
+  // CLI 起跑前会先对 base URL 发连通性探测（2.1.283 实测 `HEAD /api/hello`），不带正文；
+  // 只有消息请求才记头、解析正文。
+  if (req.method !== "POST" || !req.url?.startsWith("/v1/messages")) {
+    res.writeHead(200);
+    res.end();
+    return;
+  }
   authorization = req.headers.authorization ?? null;
   xApiKey = String(req.headers["x-api-key"] ?? "") || null;
   beta = String(req.headers["anthropic-beta"] ?? "");

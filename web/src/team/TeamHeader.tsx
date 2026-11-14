@@ -91,10 +91,10 @@ export function TeamHeader({
       notify(error instanceof Error ? error.message : String(error));
     }
   };
-  const copy = async () => {
+  const copy = async (text: string, message: string) => {
     try {
-      await navigator.clipboard.writeText(conversationMarkdown);
-      notify("已复制调度者的全部对话");
+      await navigator.clipboard.writeText(text);
+      notify(message);
     } catch {
       notify("复制失败，请检查浏览器剪贴板权限后重试");
     }
@@ -149,8 +149,9 @@ export function TeamHeader({
             <button ref={menuButton} type="button" aria-label="更多团队操作" aria-expanded={menu} onClick={() => setMenu((value) => !value)}><DotsThree size={18} weight="bold" /></button>
             {menu && (
               <div role="menu">
-                <button type="button" role="menuitem" disabled={!conversationMarkdown.trim()} onClick={() => void copy()}><Copy size={14} />复制全部对话</button>
+                <button type="button" role="menuitem" disabled={!conversationMarkdown.trim()} onClick={() => void copy(conversationMarkdown, "已复制调度者的全部对话")}><Copy size={14} />复制全部对话</button>
                 <button type="button" role="menuitem" disabled={!conversationMarkdown.trim()} onClick={download}><DownloadSimple size={14} />下载 Markdown</button>
+                <button type="button" role="menuitem" onClick={() => void copy(task.id, "已复制团队 ID")}><Copy size={14} />复制团队 ID</button>
                 <span role="separator" />
                 <button type="button" role="menuitem" disabled={!task.archived && !canArchive(task.status)} onClick={() => { setMenu(false); onArchive(); }}>
                   {task.archived ? <ArrowCounterClockwise size={14} /> : <Archive size={14} />}{task.archived ? "取消归档" : "归档团队"}

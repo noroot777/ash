@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { AuthState } from "@ash/shared";
 import { authApi } from "../lib/authApi.ts";
 import { ApiError } from "../lib/apiClient.ts";
+import { bindTaskReadsOwner } from "../lib/taskReadSync.ts";
 import { FirstRunWizard } from "../onboarding/FirstRunWizard.tsx";
 import { AuthShell } from "./AuthShell.tsx";
 import { ClaimPage } from "./ClaimPage.tsx";
@@ -124,5 +125,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     );
   }
 
+  // 工作台渲染之前把「这一页是谁」交给已读同步（lib/taskReadSync.ts）：此后看的每一眼都当场记在他名下。
+  bindTaskReadsOwner(state.mode === "multi" ? state.user!.id : "");
   return <AuthContext.Provider value={{ state, refresh }}>{children}</AuthContext.Provider>;
 }

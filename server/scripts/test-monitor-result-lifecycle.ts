@@ -121,11 +121,13 @@ const { takeResumePrompt } = await import("../src/task-resume-prompt.js");
   const gate = new Promise<void>((r) => { release = r; });
   let entered = false;
   const original = db.select;
+  // 按 `isReviewSourceActive` 那一问的投影形状认（monitor-session.ts）：它带上 taskId 之后（代次
+  // 那一位要按任务找证据行）只认 {status, round} 两字段就再也打不中，这一节会一直等锁。
   db.select = ((fields?: Record<string, unknown>) => {
-    const keys = fields ? Object.keys(fields) : [];
-    if (!entered && keys.length === 2 && keys.includes("status") && keys.includes("round")) {
+    const keys = fields ? Object.keys(fields).sort().join(",") : "";
+    if (!entered && keys === "round,status,taskId") {
       entered = true;
-      return { from: () => ({ where: async () => { await gate; return [{ status: "reviewing", round: 1 }]; } }) };
+      return { from: () => ({ where: async () => { await gate; return [{ status: "reviewing", round: 1, taskId }]; } }) };
     }
     return (original as (f?: unknown) => unknown).call(db, fields);
   }) as typeof db.select;

@@ -43,6 +43,7 @@ import { mountAnthropicContext1mRoutes, stripContext1mSuffix } from "./anthropic
 import { mountModelRoutes } from "./model-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
 import { mountTaskMemoRoutes } from "./task-memos.js";
+import { mountTaskReadRoutes } from "./task-reads.js";
 import { mountGroupRoutes } from "./group-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
 import { mountMonitorRoutes } from "./monitor-routes.js";
@@ -341,6 +342,8 @@ api.post("/groups/resolve", async (c) => {
 mountTaskRoutes(api);
 // 任务备忘:挂在任务上、不进任何 prompt 的手写条目(见 shared/src/task-memo.ts)。
 mountTaskMemoRoutes(api);
+// 看过哪些任务(侧栏绿点的已读记录,按人存,见 db/schema-task-reads.ts)。
+mountTaskReadRoutes(api);
 // 分组(批次容器)路由:列表/运行/暂停/批量建任务(从 task-routes.ts 拆出)。
 mountGroupRoutes(api);
 mountTaskRunRoutes(api);

@@ -18,9 +18,10 @@ import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { attachmentView } from "../task-detail/utils.ts";
 import { filterNotes, NOTE_CONVERSION_FILTERS, type NoteConversionFilter } from "./notesFilter.ts";
 import { uniquePaths, useNoteDrafts } from "./useNoteDrafts.ts";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 const titleOf = (body: string) => body.split(/\r?\n/).map((line) => line.trim()).find(Boolean)?.slice(0, 42) || "无标题随手记";
-const noteTime = (value: number) => new Date(value).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const noteTime = (value: number) => localeDateTime(value, "zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 type Position = { left: number; top: number };
 type DragState = {
@@ -345,7 +346,7 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
           </div></aside>
           <main className="note-editor">
             <div className="note-meta">
-              <span>{newDraft ? "新随手记" : active ? `创建于 ${new Date(active.createdAt).toLocaleString("zh-CN")} · ${saveStatus}` : "新随手记"}</span>
+              <span>{newDraft ? "新随手记" : active ? `创建于 ${localeDateTime(active.createdAt, "zh-CN")} · ${saveStatus}` : "新随手记"}</span>
               {active?.taskLinks.length ? (
                 <section className="note-task-links" aria-label={`已转任务，共 ${active.taskLinks.length} 个`}>
                   <b>已转任务（{active.taskLinks.length}）</b>

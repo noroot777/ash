@@ -8,6 +8,11 @@ export function installFakeClaude(root: string): string {
   writeFileSync(
     join(fakeBin, "fake-claude.js"),
     `const fs = require("fs");
+// 常驻档只在 stdin 结束时退出，而 detached 起法的壳用读写方式打开 fifo，stdin 永远等不到 EOF；
+// 测试中途收场时没人来关它，它就成了 PPID=1 的孤儿。测试收尾会删掉整个临时目录，所以以
+// 「日志所在目录没了」为准自行退出。
+const stage = process.env.ASH_TEST_LEAD_LOG && require("path").dirname(process.env.ASH_TEST_LEAD_LOG);
+if (stage) setInterval(() => { if (!fs.existsSync(stage)) process.exit(0); }, 500).unref();
 let buf = "";
 const resident = process.argv.includes("--input-format");
 let initialized = false;

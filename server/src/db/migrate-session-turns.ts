@@ -28,7 +28,8 @@ const TABLE_DDL = `CREATE TABLE session_turns_rebuilt (
   ended_at TEXT,
   outcome TEXT,
   stall_reason TEXT,
-  monitor_wake INTEGER NOT NULL DEFAULT 0
+  monitor_wake INTEGER NOT NULL DEFAULT 0,
+  interruption TEXT
 )`;
 
 async function hasTable(client: Client, table: string): Promise<boolean> {
@@ -52,13 +53,12 @@ async function rebuildWithNullableEnd(client: Client): Promise<void> {
   //
   // 别自己写 `BEGIN IMMEDIATE`/`COMMIT`：这个 client 自己管事务（`node-sqlite-client.ts`
   // 顶部那段），裸 BEGIN 会撞上它的长事务账目、等 5 秒然后报「数据库正在提交其它操作」,
-  // 于是整条迁移被 catch 成一句 warn、表还是老形状。`repairPendingCallKey` 那个重建就是
-  // 这么做的,照它来。
+  // 于是整条迁移被 catch 成一句 warn、表还是老形状。
   await client.batch([
     "DROP TABLE IF EXISTS session_turns_rebuilt",
     TABLE_DDL,
-    `INSERT INTO session_turns_rebuilt (id, session_id, task_id, cwd, started_at, ended_at, outcome, stall_reason, monitor_wake)
-       SELECT id, session_id, task_id, cwd, started_at, ended_at, outcome, stall_reason, monitor_wake FROM session_turns`,
+    `INSERT INTO session_turns_rebuilt (id, session_id, task_id, cwd, started_at, ended_at, outcome, stall_reason, monitor_wake, interruption)
+       SELECT id, session_id, task_id, cwd, started_at, ended_at, outcome, stall_reason, monitor_wake, interruption FROM session_turns`,
     "DROP TABLE session_turns",
     "ALTER TABLE session_turns_rebuilt RENAME TO session_turns",
     // 重建表会把它自己的索引一起带走,普通索引在这里补回来；唯一索引留给下一步(得先去重)。

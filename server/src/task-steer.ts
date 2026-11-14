@@ -20,7 +20,6 @@ import {
   reserveSteerTask,
   type NativeSteerReservation,
   type StopSettle,
-  turnRole,
 } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
@@ -28,8 +27,8 @@ import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { attachmentsPrompt, now } from "./util.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { nativeCliCommand } from "./skills.js";
-import { isAcceptingTask } from "./acceptance-lock.js";
 import { isUserAuthoredMessage } from "@ash/shared/scheduled-message-author";
+import { steerRefusal } from "./task-steer-gate.js";
 import { DIRECTION_PROTOCOL } from "./run-prompts.js";
 import {
   clearPreviousDirectionState, discardLateDirectionState, restorePreviousCompletionState,
@@ -274,58 +273,28 @@ async function finishStoppedSteer(
   }
 }
 
-function sideTurnReason(task: typeof tasks.$inferSelect): string | null {
-  if (task.verifyRound != null) return "当前正在进行验证回合，消息继续排队";
-  if (task.reviewOf) return "当前是审查任务回合，消息继续排队";
-  if (task.nativeTurn) return "当前正在执行 CLI 命令，消息继续排队";
-  const role = turnRole(task.id);
-  if (role && role !== "single") return "当前是审查或系统旁路回合，消息继续排队";
-  return null;
-}
-
 /** 升级队首 queued 消息；导出给回归测试，HTTP 端点只是薄封装。 */
 export async function steerQueuedMessage(messageId: string, options: { nativeOnly?: boolean } = {}): Promise<SteerQueuedMessageResult> {
   const message = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, messageId))).at(0);
   if (!message) return { ok: false, status: 404, error: "待发送消息不存在" };
-  if (message.status !== "pending" || message.mode !== "queued") {
-    return { ok: false, status: 409, error: "只有仍在排队的消息可以引导会话" };
-  }
-  const task = (await db.select().from(tasks).where(eq(tasks.id, message.taskId))).at(0);
-  if (!task) return { ok: false, status: 404, error: "任务不存在" };
-  if (task.mode !== "single") return { ok: false, status: 409, error: "只有单飞任务支持引导会话" };
-  if (task.archived) return { ok: false, status: 409, error: "任务已归档，消息继续保留在排队中" };
-  if (task.status !== "running" && task.status !== "queued") {
-    return { ok: false, status: 409, error: "当前回合已经结束，消息会按排队顺序自动发送" };
-  }
-  const blocked = sideTurnReason(task);
-  if (blocked) return { ok: false, status: 409, error: blocked };
-  if (isCanceling(task.id)) {
-    const error = "任务正在停止或所在分组正在暂停，消息继续排队";
-    await appendTaskTimeline(task.id, alertLine(`引导会话未执行：${error}`));
-    return { ok: false, status: 409, error };
-  }
-  if (isAcceptingTask(task.id)) {
-    return { ok: false, status: 409, error: "任务正在验收，引导未执行，消息继续排队" };
-  }
-
-  // 队首只在用户自己写的消息里排：排在前面的哨兵唤醒、审查交接不拦用户插话，它们等引导
-  // 出来的那一轮结束后照常投递；用户自己的几句话之间仍不许反序。
-  if (!isUserAuthoredMessage(message)) {
-    return { ok: false, status: 409, error: "只有你自己发的消息可以引导会话，这条会按排队顺序自动发送" };
-  }
+  const task = (await db.select().from(tasks).where(eq(tasks.id, message.taskId))).at(0) ?? null;
   const first = (await db
     .select({ id: scheduledMessages.id, origin: scheduledMessages.origin, sessionRole: scheduledMessages.sessionRole })
     .from(scheduledMessages)
     .where(and(
-      eq(scheduledMessages.taskId, task.id),
+      eq(scheduledMessages.taskId, message.taskId),
       eq(scheduledMessages.status, "pending"),
       eq(scheduledMessages.mode, "queued"),
     ))
     .orderBy(asc(scheduledMessages.sendAt), asc(scheduledMessages.createdAt), asc(scheduledMessages.id)))
     .find(isUserAuthoredMessage);
-  if (first?.id !== message.id) {
-    return { ok: false, status: 409, error: "只能按排队顺序引导你最早的一条消息" };
+  // 前置条件与托盘出不出这颗键是同一份判据(task-steer-gate.ts)。
+  const refused = steerRefusal(message, task, first?.id);
+  if (refused) {
+    if (refused.record) await appendTaskTimeline(message.taskId, alertLine(`引导会话未执行：${refused.error}`));
+    return { ok: false, status: refused.status, error: refused.error };
   }
+  if (!task) return { ok: false, status: 404, error: "任务不存在" };
 
   const native = reserveNativeSteerTask(task.id);
   if (native.kind === "busy") {

@@ -1,4 +1,4 @@
-import type { ContextUsage, Session, SessionRole, TokenUsage, TurnOutcome } from "@ash/shared";
+import type { ContextUsage, Session, SessionRole, TokenUsage, TurnInterruption, TurnOutcome } from "@ash/shared";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 import { addUsage, usageTotal } from "@ash/shared/usage";
 import type { SessionTraceEntry } from "../lib/api.ts";
@@ -82,6 +82,13 @@ export type ConversationItem =
       resumeCause?: { reason: ResumeNote["reason"] };
       /** 这一回合自己的结局（服务端按回合交出来的，见 turnFailure 的 turnFailed）。缺省/null = 不知道。 */
       turnOutcome?: TurnOutcome | null;
+      /** 同一回合怎么断的（`Session.turnInterruptions` 里这一回合那份），跟 `turnOutcome` 一起带。 */
+      turnInterruption?: TurnInterruption;
+      /**
+       * 上面两样是按哪个回合起点查的（落盘那一路，见 turnFailure 的 persistedTurnFacts）。跟 `turnStartedAt`
+       * 不是一回事：那一位只认服务端给这颗气泡的身份，没有就留空让别处由会话行推；这一位永远有值，三样同出一处。
+       */
+      turnKey?: string;
       session?: Session;
       run?: { model: string | null; reasoningEffort: string | null };
       /**
@@ -153,6 +160,8 @@ export type ConversationItem =
       aside?: boolean;
       /** 服务端给的「这是哪一类事」（shared/src/timeline-notice.ts）。老记录、非时间线旁注没有。 */
       notice?: TimelineNotice;
+      /** 直播那一路的异常回合边界：这一回合怎么断的（结尾 done 事件带的，见 Session.turnInterruptions）。 */
+      interruption?: TurnInterruption;
       /** 这条是系统续跑的开头（「〔系统〕继续（从中断处）」），连同缘由（见 turnCause）。 */
       resume?: ResumeNote;
       /** 缘由已经写在它起头的那一回合头上了：不再作为一条记录出现。 */

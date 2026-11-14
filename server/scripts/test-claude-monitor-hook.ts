@@ -350,9 +350,10 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
     // **生产装配点本身也要钉住**：这一段测的是「包起来之后对不对」，而包没包是另一件事
     // —— 漏了那一层，下面全绿而线上照旧 500→放行。顺序不必另测：包成装饰器之后只有一个
     // 注册点，「排错位置」那种形状根本写不出来（monitor-hook-failsafe.ts）。
-    const indexSrc = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
+    // 服务的装配在 main.ts（index.ts 只是先拿代码锁再加载它的入口）。
+    const indexSrc = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
     assert.match(indexSrc, /app\.use\("\*",\s*guardMonitorHook\(authGate\(\)\)\)/,
-      "index.ts 必须用 guardMonitorHook 把身份闸包起来（F3）");
+      "main.ts 必须用 guardMonitorHook 把身份闸包起来（F3）");
 
     const guarded = new Hono();
     guarded.use("*", guardMonitorHook(authGate()));

@@ -149,13 +149,18 @@ export function hasUsage(u: TokenUsage | null | undefined): u is TokenUsage {
   return !!u && usageTotal(u) > 0;
 }
 
+// 复用同一个格式器：在 JavaScriptCore（mac 版 ash 的页面）上 `toLocaleString("en-US")` 每调一次
+// 都现建一个 ICU 格式器，内存落在 GC 看不见的地方，列表里成片调用会把页面撑大（见
+// web/src/lib/localeFormat.ts 顶部）。
+const THOUSANDS = new Intl.NumberFormat("en-US");
+
 /**
  * 1234 → "1,234";12345 → "12.3k";1234567 → "1.23M";1234567890 → "1.23B"。给一眼扫的场合用:
  * 一万以下照写,往上收成 k / M / B。舍入后够到下一档就进位(999,960 写 "1.00M",不写 "1000.0k")。
  */
 export function formatTokens(n: number): string {
   if (!Number.isFinite(n) || n < 0) return "0";
-  if (n < 10_000) return Math.round(n).toLocaleString("en-US");
+  if (n < 10_000) return THOUSANDS.format(Math.round(n));
   const tiers = [
     { unit: "k", size: 1_000, digits: 1 },
     { unit: "M", size: 1_000_000, digits: 2 },
@@ -170,7 +175,7 @@ export function formatTokens(n: number): string {
 
 /** 精确值,给明细/无障碍标签用。 */
 export function formatTokensExact(n: number): string {
-  return Math.round(n).toLocaleString("en-US");
+  return THOUSANDS.format(Math.round(n));
 }
 
 /**

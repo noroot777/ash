@@ -25,6 +25,7 @@ import {
 import { HandoffPeerKeyField } from "./HandoffPeerKeyField.tsx";
 import { UserHandoffTargets } from "./UserHandoffTargets.tsx";
 import { HandoffSourceAddresses } from "./HandoffSourceAddresses.tsx";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 // 设置页的「任务接力」整段:本机身份 + 出站目标(含记住的对端指纹)+ 入站来源审批。
 //
@@ -428,7 +429,7 @@ export function HandoffSettings({
                 <small>
                   指纹 {peer.short}
                   {peer.lastAddr ? ` · 来自 ${peer.lastAddr}` : ""}
-                  {` · 最近 ${new Date(peer.lastSeenAt).toLocaleString()}`}
+                  {` · 最近 ${localeDateTime(peer.lastSeenAt)}`}
                   {peer.requestedByName ? ` · 冲着 ${peer.requestedByName} 来的` : ""}
                   {peer.approvedByName ? ` · 由 ${peer.approvedByName} 处理` : ""}
                 </small>
@@ -493,7 +494,7 @@ export function HandoffSettings({
                 <span className="handoff-peer-state">{grant.blocked ? "已撤销" : `可移回 ${grant.taskCount} 条任务`}</span>
               </b>
               <small>
-                指纹 {grant.short} · 最近授权 {new Date(grant.lastGrantedAt).toLocaleString()}
+                指纹 {grant.short} · 最近授权 {localeDateTime(grant.lastGrantedAt)}
               </small>
             </div>
             <div className="handoff-peer-actions">

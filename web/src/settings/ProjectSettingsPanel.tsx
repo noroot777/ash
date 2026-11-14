@@ -2,12 +2,10 @@ import { useEffect, useState } from "react";
 import type { ProjectView } from "@ash/shared";
 import { Button, Toggle } from "../components/ui.tsx";
 import { DirectoryPickerButton } from "../components/DirectoryPickerButton.tsx";
-import { useAuth } from "../auth/authContext.ts";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { PathHealthStatus, useDebouncedPathHealth } from "./PathHealthStatus.tsx";
 import { ProjectGitSettings } from "./ProjectGitSettings.tsx";
-import { WorkflowPicker, useWorkflows } from "../workflow/WorkflowPicker.tsx";
 import { ProjectPreviewSettings } from "./ProjectPreviewSettings.tsx";
 import { ProjectCommandsSettings } from "./ProjectCommandsSettings.tsx";
 import { ProjectBrowserAccessSettings } from "./ProjectBrowserAccessSettings.tsx";
@@ -15,7 +13,7 @@ import { AcceptGateBaselineChoice } from "../review/AcceptGateBaselineChoice.tsx
 import { ACCEPT_GATE_BASELINE_LABELS, acceptGateBaselineEffect, normalizeAcceptGateBaseline,
   type AcceptGateBaseline } from "@ash/shared/accept-gate";
 
-// 改名 / 改目录 / 默认起手式 / 删除项目都是**项目设置**,按权限表只给项目管理员与实例
+// 改名 / 改目录 / 删除项目都是**项目设置**,按权限表只给项目管理员与实例
 // 管理员(§四)。后端本来就会 403,但把必然失败的控件摆在成员面前,他只会以为是自己点坏了
 // —— 所以这一屏按 `project.myRole` 分两副面孔(第 6 轮审查 P3)。Git 那一段**同属这条线**:
 // 提交署名、SSH key、HTTPS 令牌改一次,所有人所有任务的 worktree 都跟着变,所以 canManage
@@ -28,26 +26,18 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
   onDeleted: () => void;
   notify: (message: string) => void;
 }) {
-  const { state } = useAuth();
   const canManage = project.myRole === "admin";
   const [name, setName] = useState(project.name);
   const [repoPath, setRepoPath] = useState(project.repoPath);
   const [busy, setBusy] = useState(false);
   const [gateCommand, setGateCommand] = useState(project.acceptGateCommand ?? "");
+  const [gatePrepare, setGatePrepare] = useState(project.acceptGatePrepare ?? "");
   const [confirmDelete, setConfirmDelete] = useState(false);
   // 路径体检只对**改得动路径的人**有意义:它探的是「你现在填的这条路走不走得通」。
   // 成员那边不但没有提交按钮,`/projects/check` 还会按路径钳制回 403(它是一台目录
   // 探测器,多人模式下必须钳),于是控制台落一条 403、界面挂一句「暂时无法检查目录;
   // **仍可尝试提交**」—— 对一个提交不了的人说的完全是反话。传空串 = 根本不发这个请求。
   const pathHealth = useDebouncedPathHealth(canManage ? repoPath : "");
-  const workflows = useWorkflows();
-  // 多人模式下项目默认起手式只收系统自带那几条:自建的是个人资源,别人看不见,设成项目
-  // 默认只会让别人的新任务**静默**落回系统默认(后端同样这么挡,见 project-routes.ts)。
-  const pickable = state.mode === "multi" ? workflows.filter((item) => item.builtin) : workflows;
-  // 项目行里设着一条**选不出来**的起手式:多数人解析不出它,新任务会静默落回系统默认。
-  // 库还没拉到之前(workflows 为空)不下这个结论,否则每次进页面都先闪一句假警报。
-  const legacyDefault = !!project.workflowId && workflows.length > 0
-    && !pickable.some((item) => item.id === project.workflowId);
   // 依赖是 **project.id**，不是整个 project：这三个输入框是编辑中的草稿，只有「换了一个
   // 项目」才该被冲掉。以整个对象为依赖时，任何一次**对象身份变化**都会重置它们 ——
   // WorkspaceShell 拿到项目健康结果就会 `{...project, health}` 换一个新对象，而那个请求
@@ -61,6 +51,7 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
     setName(project.name);
     setRepoPath(project.repoPath);
     setGateCommand(project.acceptGateCommand ?? "");
+    setGatePrepare(project.acceptGatePrepare ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
   const dirty = name.trim() !== project.name || repoPath.trim() !== project.repoPath;
@@ -71,14 +62,7 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
     catch (error) { notify(error instanceof Error ? error.message : "项目设置保存失败"); }
     finally { setBusy(false); }
   };
-  // 起手式是下拉即存的：它没有「改到一半」的中间态，攒进「保存更改」反而让人以为没生效。
-  const pickWorkflow = async (workflowId: string) => {
-    setBusy(true);
-    try { onUpdated(await api.updateProject(project.id, { workflowId: workflowId || null })); }
-    catch (error) { notify(error instanceof Error ? error.message : "默认起手式保存失败"); }
-    finally { setBusy(false); }
-  };
-  // worktree 默认值同理：拨一下就是最终意思，没有中间态。
+  // worktree 默认值拨完即存：拨一下就是最终意思，没有「改到一半」的中间态。
   const setWorktreeDefault = async (useWorktreeDefault: boolean) => {
     setBusy(true);
     try { onUpdated(await api.updateProject(project.id, { useWorktreeDefault })); }
@@ -106,11 +90,18 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
     finally { setBusy(false); }
   };
   // 这条是**要敲一长串的命令**，所以跟名称/目录一样攒着按钮存；空串 = 不设门禁。
+  // 准备命令跟它是一套（先装依赖、再跑它），同一颗按钮一起存。
+  const nextGatePrepare = gatePrepare.trim() || null;
+  const gateDirty = (gateCommand.trim() || null) !== (project.acceptGateCommand ?? null)
+    || nextGatePrepare !== (project.acceptGatePrepare ?? null);
   const saveGateCommand = async () => {
     const next = gateCommand.trim() || null;
     setBusy(true);
     try {
-      onUpdated(await api.updateProject(project.id, { acceptGateCommand: next }));
+      onUpdated(await api.updateProject(project.id, {
+        ...(next !== (project.acceptGateCommand ?? null) ? { acceptGateCommand: next } : {}),
+        ...(nextGatePrepare !== (project.acceptGatePrepare ?? null) ? { acceptGatePrepare: nextGatePrepare } : {}),
+      }));
       notify(next ? "以后验收会先跑这条命令，rc=0 才合并" : "已撤掉验收前置命令，验收恢复为直接合并");
     }
     catch (error) { notify(error instanceof Error ? error.message : "验收前置命令保存失败"); }
@@ -138,7 +129,7 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
         <section className="settings-section"><div className="settings-card">
           <div className="settings-row"><div>
             <b>你在这个项目里是成员</b>
-            <small>项目名称、工作目录、默认起手式、默认 worktree、预览命令、验收合并设置、Git 身份与凭证、删除项目只有项目管理员能改；下面按只读展示。要改就找一位项目管理员。</small>
+            <small>项目名称、工作目录、默认 worktree、预览命令、验收合并设置、Git 身份与凭证、删除项目只有项目管理员能改；下面按只读展示。要改就找一位项目管理员。</small>
           </div></div>
         </div></section>
       )}
@@ -147,31 +138,6 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
         <label className="settings-field"><span>工作目录</span><span className="path-field"><input className="mono" value={repoPath} readOnly={!canManage} onChange={(event) => setRepoPath(event.target.value)} />{canManage && <DirectoryPickerButton startIn={repoPath} onPick={setRepoPath} disabled={busy} notify={notify} />}</span></label>
         {canManage && <PathHealthStatus path={repoPath} state={pathHealth} />}
         {canManage && <div className="settings-card-foot"><span>修改目录不会移动磁盘文件，只会改变后续任务的 cwd。</span><Button variant="primary" disabled={!dirty || !name.trim() || !repoPath.trim() || busy} onClick={() => void save()}>{busy ? "保存中…" : "保存更改"}</Button></div>}
-      </div></section>
-      <section className="settings-section"><h2>默认起手式</h2><div className="settings-card">
-        <div className="settings-row">
-          <div>
-            <b>这个项目的新任务默认走哪条线</b>
-            <small>
-              {canManage && state.mode === "multi"
-                ? "没设就跟着系统默认走；只能选系统自带的那几条——自建起手式是个人资源，别人看不见，设成项目默认对他们不生效"
-                : "没设就跟着系统默认走；每张新任务仍可单独换，换了也只影响那一张"}
-            </small>
-            {/* 存量值:自用模式转过来的、或修复之前写进去的自建/别人的起手式。它对多数人
-                解析不出来,新任务会静默落回系统默认 —— 不说破的话,项目管理员会一直以为
-                这个项目统一走着那条线(第 6 轮审查 P1)。 */}
-            {legacyDefault && (
-              <small>当前这条已经不作数了：它不在可选清单里（自建或别人的个人起手式），大家的新任务实际走的是系统默认。{canManage ? "重新选一条即可修正。" : ""}</small>
-            )}
-          </div>
-          <WorkflowPicker
-            value={project.workflowId ?? ""}
-            items={pickable}
-            inheritLabel="跟着系统默认走"
-            disabled={busy || !canManage}
-            onChange={(workflowId) => void pickWorkflow(workflowId)}
-          />
-        </div>
       </div></section>
       {/* data-settings-anchor：文案里的「设置 → 项目设置 → 工作目录」照着它落点（见 sections.ts）。 */}
       <section className="settings-section" data-settings-anchor="worktree"><h2>工作目录</h2><div className="settings-card">
@@ -244,8 +210,18 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
             onChange={(event) => setGateCommand(event.target.value)}
           />
         </label>
+        <label className="settings-field">
+          <span>准备命令</span>
+          <input
+            className="mono"
+            value={gatePrepare}
+            readOnly={!canManage}
+            placeholder="例如 npm ci --offline（留空 = 借用工作区的依赖）"
+            onChange={(event) => setGatePrepare(event.target.value)}
+          />
+        </label>
         <div className="settings-row"><div><small>
-          点「验收通过」之后，先在<b>这个任务自己的工作区</b>里跑一遍它，rc=0 才会继续合并：
+          点「验收通过」之后，先在这个任务的<b>独立源码快照</b>里跑一遍它，rc=0 才会继续合并：
           绿了这次验收自动做完，不用再点；红了不合并、不清理，日志会交回那个任务去修。
           命令可能要跑十几分钟，跑的过程中目标分支一个字节都不会动，验收台上能看状态、看日志、也能收掉它。
         </small></div></div>
@@ -254,7 +230,7 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
             <span>改了只影响之后的验收；已经跑过的记录不受影响。</span>
             <Button
               variant="primary"
-              disabled={busy || (gateCommand.trim() || null) === (project.acceptGateCommand ?? null)}
+              disabled={busy || !gateDirty}
               onClick={() => void saveGateCommand()}
             >{busy ? "保存中…" : "保存命令"}</Button>
           </div>

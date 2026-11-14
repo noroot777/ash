@@ -12,8 +12,9 @@
 // 等它恢复」，用户照做只会再失败一次（审查 I2TbHFxtSVAv 第 1 轮第 1 条）。
 //
 // 这里只做事实整理，不碰落位：分类（`interruptionOf`）是纯函数，读盘（诊断文件、报告文件）
-// 各一个小工具，写进轮次那一列的是给页面用的结构（哪一类 + 一句话），时间线那句长话由
-// review-channel-gap.ts 拼。
+// 各一个小工具，写进轮次那一列的是给页面用的结构（哪一类 + 一句话 + 执行器原话），时间线那句长话由
+// review-channel-gap.ts 拼。这份结构出现之前断掉的轮次没存过原因，由 review-no-verdict-legacy.ts
+// 按盘上的事实用同一套判法现算。
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentEvent, ModelFailure } from "@ash/shared";
@@ -21,7 +22,8 @@ import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
 import type { RunDiagnostics } from "./executors/diagnostics.js";
 import { freeReviewFile } from "./free-review-files.js";
 import { RUNS_DIR } from "./paths.js";
-import { runTracePaths } from "./transcript.js";
+import { readableRunPath, runTracePaths } from "./transcript.js";
+import type { StallVerdictKind } from "./turn-stall-verdict.js";
 
 /** 这一回合**自己**异常结束的事实（single-run 收尾时手上那几样）。没异常结束就不给。 */
 export type TurnFailure = {
@@ -42,6 +44,13 @@ export type Interruption = {
   detail: string;
   /** 下一步：按断的原因说（等上游恢复 / 先修凭据 / 原样续还会撞上…）。 */
   next: string;
+  /** 执行器原话截下的那一句（`excerpt`）。什么都没说过就是 null。 */
+  quote: string | null;
+  /**
+   * `reason` 只说得出它是怎么退的（退出码、没带类型的熔断、一条没类型的执行故障），说不出出了
+   * 什么错：要知道是什么错只能看原话。
+   */
+  vague: boolean;
 };
 
 /** 执行器原话截一句：第一行、网页正文之前、200 字以内（网关错误页整段贴出来没人看得懂）。 */
@@ -89,11 +98,13 @@ function modelCopy(model: ModelFailure): { reason: string; fact: string; next: s
   }
 }
 
-const VERDICT_REASON: Record<string, string> = {
+// 穷举：加一种判决忘了写措辞就编译不过（tripped 归模型那一支）。
+const VERDICT_REASON: Record<Exclude<StallVerdictKind, "tripped">, string> = {
   unverified: "回合结局核实不了",
   background_timeout: "后台工作等到时限还没跑完",
   background_lost: "后台工作没跑完进程就没了",
   background_unverified: "后台工作跑没跑完核实不了",
+  wrapup_missing: "后台工作跑完了，智能体没开始整理结果",
 };
 
 /**
@@ -103,31 +114,43 @@ const VERDICT_REASON: Record<string, string> = {
  * 也可能根本没有错误（静默档），叫人干等就是替它编了一个会自己恢复的原因（第 3 轮审查第 1 条）。
  */
 export function interruptionOf(failure: TurnFailure, diagnostics: Pick<RunDiagnostics, "failureReason" | "exitSignal"> | null): Interruption {
-  const raw = failure.error?.message?.trim() || diagnostics?.failureReason?.trim() || failure.verdict?.reason?.trim() || "";
-  const said = raw ? `执行器的原话：「${excerpt(raw)}」` : "";
+  // 原话只认执行器自己说的（它报的错、诊断里记的那段）。判决的原文是 ash 自己的话（看门狗的熔断
+  // 诊断、核实不了的说明）：执行器一句都没说过的时候它照样进说明，但标明是谁说的，不进 `quote`。
+  const raw = failure.error?.message?.trim() || diagnostics?.failureReason?.trim() || "";
+  const quote = raw ? excerpt(raw) : null;
+  const judged = failure.verdict?.reason?.trim();
+  const said = quote ? `执行器的原话：「${quote}」` : judged ? `ash 的判断：「${excerpt(judged)}」` : "";
   const exit = failure.exitStatus !== 0 ? `执行器以 exit ${failure.exitStatus} 结束` : "";
   const model: ModelFailure | null = failure.error?.model ?? (failure.verdict?.kind === "tripped" ? failure.verdict.model ?? null : null);
   if (model) {
     const copy = modelCopy(model);
-    return { reason: copy.reason, detail: [copy.fact, exit, said].filter(Boolean).join("，"), next: copy.next };
+    return { reason: copy.reason, detail: [copy.fact, exit, said].filter(Boolean).join("，"), next: copy.next, quote, vague: false };
   }
   if (failure.verdict?.kind === "tripped") {
     const reason = "回合长时间没有进展，被自动终止";
-    return { reason, detail: [reason, exit, said].filter(Boolean).join("，"), next: `先看上面的原话弄清卡在哪里，处理好之后再${RESUME}` };
+    return {
+      reason, detail: [reason, exit, said].filter(Boolean).join("，"), next: `先看上面的${quote ? "原话" : "判断"}弄清卡在哪里，处理好之后再${RESUME}`,
+      quote, vague: true,
+    };
   }
   const signal = diagnostics?.exitSignal;
-  const reason = signal ? `执行器进程被 ${signal} 结束`
-    : (failure.verdict && VERDICT_REASON[failure.verdict.kind])
-      || (failure.exitStatus !== 0 ? `执行器异常退出（exit ${failure.exitStatus}）` : "执行器报了执行故障");
-  return { reason, detail: [reason, said].filter(Boolean).join("，"), next: RESUME };
+  const known = signal ? `执行器进程被 ${signal} 结束` : failure.verdict && (VERDICT_REASON as Record<string, string>)[failure.verdict.kind];
+  const reason = known || (failure.exitStatus !== 0 ? `执行器异常退出（exit ${failure.exitStatus}）` : "执行器报了执行故障");
+  return { reason, detail: [reason, said].filter(Boolean).join("，"), next: RESUME, quote, vague: !known };
 }
 
 /** codex 落的那一份诊断（executors/diagnostics.ts）。别的执行器没有，读不出来就当没有。 */
 export function readTurnDiagnostics(taskId: string, sessId: string, turnStart: string): RunDiagnostics | null {
-  const path = runTracePaths(join(RUNS_DIR, taskId), sessId, turnStart).diagnosticsPath;
+  const path = readableRunPath(runTracePaths(join(RUNS_DIR, taskId), sessId, turnStart).diagnosticsPath);
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<RunDiagnostics>;
-    return parsed && typeof parsed === "object" && parsed.version === 1 ? parsed as RunDiagnostics : null;
+    if (!parsed || typeof parsed !== "object" || parsed.version !== 1) return null;
+    // 这份文件只是佐证：用到的两格类型不对就当那一格没有，别让一份坏诊断把回合收尾打断。
+    return {
+      ...parsed,
+      failureReason: typeof parsed.failureReason === "string" ? parsed.failureReason : null,
+      exitSignal: typeof parsed.exitSignal === "string" ? parsed.exitSignal : null,
+    } as RunDiagnostics;
   } catch {
     return null;
   }
@@ -146,8 +169,14 @@ export function reviewReportWritten(taskId: string, runId: string, round: number
   }
 }
 
-/** 页面上那一份：哪一类 + 一句话。 */
+/** 页面上那一份：哪一类 + 一句话（+ 执行器原话、原因是不是笼统）。 */
 export function noVerdictCause(interruption: Interruption | null, reportWritten: boolean): ReviewNoVerdict {
-  if (interruption) return { kind: "interrupted", reason: interruption.reason };
+  if (interruption) {
+    return {
+      kind: "interrupted", reason: interruption.reason,
+      ...(interruption.quote ? { said: interruption.quote } : {}),
+      ...(interruption.vague ? { vague: true as const } : {}),
+    };
+  }
   return { kind: "unreported", reason: reportWritten ? "报告写完了，结论没报上来" : "回合收尾了，结论没报上来" };
 }

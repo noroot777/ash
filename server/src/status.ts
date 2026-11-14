@@ -13,6 +13,8 @@ import { recordTaskStatus } from "./task-start-status.js";
 import { releaseTerminalLanding } from "./task-complete.js";
 import { directionIdentityCleared } from "./task-direction-epoch.js";
 import { clearStallFailure } from "./turn-stall-verdict.js";
+import { monitorHoldPatch } from "./queue-monitor-hold.js";
+import { heldFollowUpPatch } from "./follow-up-held.js";
 
 const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 
@@ -62,6 +64,8 @@ export type SetTaskStatusOptions = {
    * 检查点,误做会。恢复终态不走这个口子:让位与待发送消息的 flush 都靠那次推进。
    */
   quietAdvance?: boolean;
+  /** 这一笔 running 开的是旁路回合(压缩、审查、就地验证…),不是任务的执行。 */
+  sideTurn?: boolean;
   /**
    * 这一笔落位**同时消费掉**的那几项回合输入事实(续聊前的原状态、原生回合标记、完成确认)。
    *
@@ -74,6 +78,11 @@ export type SetTaskStatusOptions = {
    * 事务里写),结算侧照它对齐。类型只允许「清掉」那几个值:这个口子不是通用的字段补写入口。
    */
   consume?: { followUpFrom?: null; nativeTurn?: false; completeConfirmedAt?: null };
+  /**
+   * 续聊回合被哨兵闸拦成 paused 时,续聊前的那个状态:跟 paused 同一笔记下,下一个非旁路回合起跑时
+   * 接回续聊身份(follow-up-held.ts)。落终态 / backlog 的那一笔自动作废它。
+   */
+  holdFollowUp?: TaskStatus;
   /**
    * 这一笔落位**兑现掉**的熔断失败义务(会话 + 回合起点)。
    *
@@ -169,6 +178,9 @@ async function writeTaskStatus(
   // 回合输入事实跟着这一笔一起消费(见 `SetTaskStatusOptions.consume`):同一条 UPDATE,所以
   // 「落位写下了」和「输入被消费了」永远同时成立或同时不成立,中间没有可以崩进去的缝。
   if (opts?.consume) Object.assign(patch, opts.consume);
+  Object.assign(patch, heldFollowUpPatch(status, opts?.holdFollowUp));
+  // 「这段暂停在等哨兵」跟状态同一笔落下、同一笔消费(queue-monitor-hold.ts)。
+  Object.assign(patch, await monitorHoldPatch(taskId, cur, status, { quiet: !!quietAdvance, sideTurn: !!opts?.sideTurn }));
   // ── 条件写的那一条语句 ───────────────────────────────────────────────────────
   // 两档条件是两条独立链路各自带进来的,互不替代,这里取并集:
   //   · `expectStatus` —— 库里当前状态必须还是它列的那几个之一(执行占位认领)
@@ -225,6 +237,9 @@ async function writeTaskStatus(
     .where(eq(sessions.taskId, taskId));
   const timing = runs.length ? runsTiming(runs) : {};
   bus.publish({ type: "task.status", taskId, status, updatedAt, startedAt, endedAt, ...timing });
+  // 托盘上「在等什么」读的就是这些状态(pending-wait.ts):本任务和同队挂着待发送消息的,通知重拉。
+  void import("./pending-wait.js").then(({ republishWaitsAround }) => republishWaitsAround(taskId))
+    .catch((err) => console.error(`[ash] republishWaitsAround(${taskId}) failed:`, err));
 
   // 队列推进钩子(DESIGN §3):任务进 done / canceled / failed / paused 时,
   // 如果它在某个 queue 里,触发那个 queue 的下一位推进。

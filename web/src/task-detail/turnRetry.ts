@@ -2,15 +2,16 @@ import type { FreeReviewRun, Session, TaskListItem } from "@ash/shared";
 import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
 import type { ConversationItem } from "./conversationModel.ts";
 
-// 「上一回合崩了」的判据，和会话尾栏那颗重试按钮共用一份。判据必须跟服务端
-// `server/src/task-retry-turn.ts` 的 `retryTurnRejection` 对齐 —— 两边说法不一样，
+// 「上一回合崩了、此刻能重来」的判据，页面上每一处回合级重来共用这一份：普通回合是失败那句话
+// 后面的「重试这一回合」，审查档是审查格结论行的主按钮和会话尾注后面的「继续本轮审查」。判据
+// 必须跟服务端 `server/src/task-retry-turn.ts` 的 `retryTurnRejection` 对齐 —— 两边说法不一样，
 // 按钮就成了「点了永远 409」。
 //
 // 存在的理由：续聊回合、自由工作流的自动修复回合与审查回合非正常结束时，任务状态**不变**
 // （服务端只在正文里留一句「续聊回合异常结束(退出码 N),任务状态保持「已完成」不变」）。于是
 // 任务停在 done，头部那颗「重试」不出现（它只认 failed），整页没有任何能重来的入口。
 //
-// 只挂在**最后一条 agent 气泡**上：会话尾巴才是「上一回合」，中间那些崩过的回合后面早
+// 普通回合只认**最后一条 agent 气泡**：会话尾巴才是「上一回合」，中间那些崩过的回合后面早
 // 已经跑过别的了，给它们按钮等于骗人。
 //
 // 服务端另有三道闸这里判不了（分组暂停、同队列前面还没跑完、上一回合那条执行器 profile
@@ -23,18 +24,20 @@ export type TurnRetryKind = "turn" | "review";
  */
 export type ReviewRetryIdentity = { runId: string; round: number; generation: string | null; sessionId: string | null };
 /**
- * 「继续本轮审查」这个动作本身：认的是哪一轮、点下去做什么。任务头那颗图标、审查格结论行的主按钮、
- * 会话里说这一轮为什么没结论的那句尾注，三处挂的是同一个 —— 可用性同一份（`turnRetryTarget` 的审查档），
- * 点下去都走 TaskDetail 的 `retryTurn`（换执行器的确认、点完之后那句提示都在那里）。
+ * 「继续本轮审查」这个动作本身：认的是哪一轮、点下去做什么。审查格结论行的主按钮、会话里说这一轮
+ * 为什么没结论的那句尾注，两处挂的是同一个 —— 可用性同一份（`turnRetryTarget` 的审查档），点下去
+ * 都走 TaskDetail 的 `retryTurn`（换执行器的确认、点完之后那句提示都在那里）。
  */
 export type ReviewRetryAction = { review: ReviewRetryIdentity; run: () => Promise<void> };
 /**
- * exitStatus 可能是 0/null：审查档不看退出码（见下），按钮文案据此换说法。
- * 审查档的 `sessionId` 只是「续哪条审查会话的上下文」，可能为 null（一条都没有）；认人靠 `review`。
+ * 「重试这一回合」这个动作本身：重跑的是哪条会话上的上一回合、点下去做什么。挂在会话里那一回合
+ * 失败那句话后面（ConversationFeed），可用性是 `turnRetryTarget` 的普通档，点下去同样走 `retryTurn`。
  */
+export type TurnRetryAction = { sessionId: string; run: () => Promise<void> };
+/** 审查档的 `sessionId` 只是「续哪条审查会话的上下文」，可能为 null（一条都没有）；认人靠 `review`。 */
 export type TurnRetryTarget =
-  | { kind: "turn"; sessionId: string; exitStatus: number | null }
-  | { kind: "review"; sessionId: string | null; exitStatus: number | null; review: ReviewRetryIdentity };
+  | { kind: "turn"; sessionId: string }
+  | { kind: "review"; sessionId: string | null; review: ReviewRetryIdentity };
 
 /**
  * 这条自由工作流的审查链此刻能不能「继续本轮审查」，能就给出那一轮的身份。
@@ -88,7 +91,7 @@ export function turnRetryTarget(
   const reviewer = sessionId ? opts.sessions?.find((session) => session.id === sessionId) : undefined;
   // 手动停掉的那一回合不是「没出结论」，入口是「运行」（服务端同样 409）。
   if (reviewer?.stoppedAs) return null;
-  return { kind: "review", sessionId, exitStatus: reviewer?.exitStatus ?? null, review: opts.reviewRetry };
+  return { kind: "review", sessionId, review: opts.reviewRetry };
 }
 
 /** 普通回合那一档：最后一条 agent 气泡的会话异常结束了。审查会话不归这里。 */
@@ -103,7 +106,6 @@ function crashedTurnTarget(task: TaskListItem, items: ConversationItem[], sessio
   // **主动停止/暂停也会留下非零退出码**（CLI 吃 SIGTERM 后按 signal 写 exit 1）。那不是崩溃，
   // 它们的入口是头部那颗「运行」；只有服务端记下的 stoppedAs 分得开这两者。
   if (session.stoppedAs) return null;
-  const exitStatus = session.exitStatus;
   // 审查会话归审查档：它**不看退出码**，审查链自己记着「这一轮有没有给出结论」才是权威判据。
   // CLI 打完「API Error: Connection lost mid-response」照样 exit 0，拿退出码当门槛的话，时间线
   // 上明写「未能正常给出结论，已停止自动链」，界面上却一个能重来的入口都没有（2026-09-11 实测）。
@@ -112,7 +114,7 @@ function crashedTurnTarget(task: TaskListItem, items: ConversationItem[], sessio
   // 优先级写在那里）。两边各写一份 if 就是在等下一次漂开 —— 审查 F2 要修的那一条恰恰是
   // 同一句判据在两端各错一次（都只看退出码，于是被看门狗终止、以 exit 0 收流的那一轮
   // 既没有按钮、点了也 409）。
-  if (!turnEndedAbnormally({ exitStatus, turnOutcome: session.turnOutcome, stoppedAs: session.stoppedAs })) {
+  if (!turnEndedAbnormally({ exitStatus: session.exitStatus, turnOutcome: session.turnOutcome, stoppedAs: session.stoppedAs })) {
     return null;
   }
   // 剩下的只放行普通实现回合：lead/voiceA/voiceB 这些身份连「上一回合」的形状都不同。
@@ -122,23 +124,6 @@ function crashedTurnTarget(task: TaskListItem, items: ConversationItem[], sessio
   if (session.sideTurn) return null;
   // failed 归头部那颗「重试」，canceled/paused/backlog 归「运行」。
   if (task.status !== "done") return null;
-  return { sessionId: session.id, kind: "turn", exitStatus };
+  return { sessionId: session.id, kind: "turn" };
 }
 
-/**
- * 任务头那颗回合级重来的名字和提示。
- *
- * 审查档跑的是**那一轮审查**（同一位审查者接着把这一轮做完），跟重投一句话不是一回事，名字
- * 必须分开写——用户点之前得知道自己要开的是哪台机器。写「继续」而不是「重跑」，因为服务端默认
- * 就是从中断处接着做；只有崩在 CLI 起来之前、无处可接时才退回重发任务书，那一种由点完之后的
- * 提示当面说明。
- *
- * 提示里那半句是**这颗图标为什么会出现**的证据，所以不能写死「exit N」：审查档认的是「这一轮
- * 没给出结论」，而 CLI 报完 API Error 照样 exit 0，写「exit 0」等于自相矛盾。
- */
-export function turnRetryCopy(target: TurnRetryTarget): { label: string; tip: string } {
-  const why = target.exitStatus != null && target.exitStatus !== 0 ? `上一回合 exit ${target.exitStatus}` : "上一轮未出结论";
-  return target.kind === "review"
-    ? { label: "继续本轮审查", tip: `继续本轮审查 · ${why}` }
-    : { label: "重试这一回合", tip: `重试这一回合 · ${why}` };
-}

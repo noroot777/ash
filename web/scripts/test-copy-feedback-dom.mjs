@@ -67,9 +67,10 @@ try {
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
 
   // 用户气泡那颗图标同源同款，一起钉住，免得下次只改一半。
-  const userBubble = page.locator(".task-user-bubble header").first();
+  // 那一行平时不画、也不接指针，指到气泡才在它上方浮出（940aa547）：先指气泡，再点那一行里的图标。
+  const userBubble = page.locator(".task-user-bubble").first();
   await userBubble.hover();
-  const userCopy = userBubble.locator("button.copy-button").first();
+  const userCopy = userBubble.locator("header button.copy-button").first();
   await userCopy.click();
   await copied(userCopy, "用户气泡的复制图标");
   assert.match(await userCopy.getAttribute("class"), /is-copied/, "用户气泡的复制图标同样要有反馈");

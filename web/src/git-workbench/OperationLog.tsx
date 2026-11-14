@@ -2,6 +2,7 @@ import { Lock } from "@phosphor-icons/react";
 import type { AskAction } from "./ActionDialog.tsx";
 import type { Workbench } from "./useWorkbench.ts";
 import { Backups } from "./Backups.tsx";
+import { localeTime } from "../lib/localeFormat.ts";
 
 const states = {
   queued: "排队中",
@@ -101,7 +102,7 @@ export function OperationLog({
               key={entry.id}
             >
               <time className="oplog-time">
-                {new Date(entry.at).toLocaleTimeString()}
+                {localeTime(entry.at)}
               </time>
               <span className="actor-chip actor-user">{entry.actor}</span>
               <div className="gwb-journal-body">

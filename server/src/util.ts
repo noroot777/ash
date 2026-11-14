@@ -39,8 +39,7 @@ export function runsTiming(
  * 的那条；想让「用过的」活得久一点就先 `delete` 再 `add`（下面就是这么做的）。
  *
  * **装一次性事实的缓冲不能用这个。** 那种东西来源侧不会重发，挤掉就是永久丢失；满了必须
- * 背压（停下来等它被消化），而不是淘汰——判据和经过见
- * `claude-monitor-scan.ts` 的 `LATE_CAP`。
+ * 背压（停下来等它被消化），而不是淘汰。
  */
 export function addCapped<T>(set: Set<T>, value: T, cap: number): void {
   set.delete(value);

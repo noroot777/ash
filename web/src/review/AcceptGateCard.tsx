@@ -10,6 +10,7 @@ import { useCatchUp } from "../lib/useCatchUp.ts";
 import { useAcceptGate } from "./useAcceptGate.ts";
 import { AcceptGateForceRelease } from "./AcceptGateForceRelease.tsx";
 import { AcceptGateBaselineChoice } from "./AcceptGateBaselineChoice.tsx";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 // 「验收前置命令」在验收台上的那张卡。它跟 PendingMergeCard 一样住在每个有验收动作的
 // 表面上，自己判要不要出现。
@@ -58,7 +59,8 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, a
   // null = 还没读到这个项目的管理权限。读到之前不摆「改这条命令」——摆一颗必然 403 的
   // 按钮，点的人只会以为是自己点坏了（同 ProjectSettingsPanel 那一屏的两副面孔）。
   const [canManage, setCanManage] = useState<boolean | null>(null);
-  const [draft, setDraft] = useState<string | null>(null);
+  // 就地改的是一套：前置命令 + 准备命令（同一颗「保存」一起存，和设置页同一个口径）。
+  const [draft, setDraft] = useState<{ command: string; prepare: string } | null>(null);
   const settled = task.stage === "accepted" || task.stage === "merged";
 
   // 能不能在这儿改这条命令 = 这个项目的管理权限。走列表接口而不是 `/projects/:id`
@@ -162,14 +164,9 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, a
       // 交回去的是那一行，照旧版就会把一条真红说成「不会为此改代码」。
       const handed = (await api.rehandOffAcceptGate(task.id)).gate;
       await reload();
-      // 提示要跟这一次交回去的那份输入对上（第 1 轮审查 N3）：两边说反了，用户看到的是两句
-      // 相反的话。「不会为此改代码」这句**已经没有了**（第 10 轮审查 F1 撤掉了免修那副面孔），
-      // 所以这里只按归因说它第一步会先看什么。归因非空 = 起跑前核到那个名字不在这份快照里。
-      notify(handed.missAttribution === null
-        ? "已把这条红交回给智能体去修；修完再点验收，会自动重跑一遍这条命令"
-        : handed.missAttribution === "mine"
-          ? "已把这条结论交回给智能体；结论指向是这次改动把命令弄没的，它会先核这件事"
-          : "已把这条结论交回给智能体；结论说这条命令起跑前就解析不出来，它会先核这件事");
+      notify(handed.failure === "entry_missing"
+        ? "已交回给智能体：它会先看入口为什么不在被测的树里；修完再点验收，会自动重跑一遍这条命令"
+        : "已把这条红交回给智能体去修；修完再点验收，会自动重跑一遍这条命令");
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -189,12 +186,17 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, a
   };
   // 就地改这条命令。它是**项目级**的，所以保存成功那句话必须把这点说破 —— 在一个任务
   // 的验收台上改一个项目设置，不说清就会被当成「只影响这一个任务」。
-  const saveCommand = async () => {    if (busy || draft === null) return;
-    const next = draft.trim() || null;
-    if (next === (state.command ?? null)) { setDraft(null); return; }
+  const saveCommand = async () => {
+    if (busy || draft === null) return;
+    const next = draft.command.trim() || null;
+    const prepare = draft.prepare.trim() || null;
+    if (next === (state.command ?? null) && prepare === (state.prepare ?? null)) { setDraft(null); return; }
     setBusy(true);
     try {
-      await api.updateProject(task.projectId, { acceptGateCommand: next });
+      await api.updateProject(task.projectId, {
+        ...(next !== (state.command ?? null) ? { acceptGateCommand: next } : {}),
+        ...(prepare !== (state.prepare ?? null) ? { acceptGatePrepare: prepare } : {}),
+      });
       setDraft(null);
       await reload();
       notify(next
@@ -264,7 +266,7 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, a
             : idle
             ? "本次验收不会运行前置命令。项目管理员可在这里或项目设置中配置。"
             : detail(state, running, latest, receipt, settled)}</p>
-          {shown && <p aria-label="验收命令运行记录">运行记录：{shown.id} · 开始于 {new Date(shown.startedAt).toLocaleString()}{shown.finishedAt ? ` · 结束于 ${new Date(shown.finishedAt).toLocaleString()}` : ""}</p>}
+          {shown && <p aria-label="验收命令运行记录">运行记录：{shown.id} · 开始于 {localeDateTime(shown.startedAt)}{shown.finishedAt ? ` · 结束于 ${localeDateTime(shown.finishedAt)}` : ""}</p>}
           {shown?.executionNotice && <p role="note">{running ? "本次运行：" : settled ? "本次验收运行：" : "历史运行："}{shown.executionNotice}</p>}
           {!settled && !running && state.command && state.executionNotice && state.executionNotice !== shown?.executionNotice
             && <p role="note">下次运行：{state.executionNotice}</p>}
@@ -279,6 +281,10 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, a
         <dl className="accept-gate-command">
           <dt>{running ? "本次正在运行" : stale ? "上次读取的项目命令" : "项目配置的前置命令"}</dt>
           <dd><code>{running?.command ?? state.command ?? (stale ? "当时未设置，当前配置待核对" : "未设置（验收时不运行前置命令）")}</code></dd>
+          {(running ? running.prepareCommand : state.command && state.prepare) && <>
+            <dt>准备命令</dt>
+            <dd><code>{running ? running.prepareCommand : state.prepare}</code></dd>
+          </>}
         </dl>
       )}
       {!settled && state.command && atFinalGate && (
@@ -294,25 +300,6 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, a
           {state.baselineBlock && !running && <p role="alert">{state.baselineBlock}</p>}
         </div>
       )}
-      {shown?.diagnosis && (
-        <div className="accept-gate-diagnosis" role="note">
-          <span>这条红是怎么来的</span>
-          {shown.diagnosis}
-        </div>
-      )}
-      {/*
-        旧判据那一代的结论。**不能当当前事实摆**（第 2 轮审查 F1）：它当时可能把一条真跑过
-        的红说成「一行都没跑到、不用改代码」。原文保留是为了让人核对当时到底说了什么，所以
-        标题和第一句都先把失效说破，再给原文。
-      */}
-      {shown?.legacyDiagnosis && (
-        <div className="accept-gate-diagnosis is-obsolete" role="note">
-          <span>历史结论（已失效，不是当前判断）</span>
-          {`这段是旧版本按已经撤回的判据写的，它可能把真跑过的红说成「没跑起来、不用改代码」。只留着给你核对当时的说法，请以日志为准。
-
-${shown.legacyDiagnosis}`}
-        </div>
-      )}
       {shown?.logTail && (
         <div className="accept-gate-log">
           <span>日志末尾{receipt?.run ? "（本次验收凭据那一次）" : settled || idle ? "（历史记录，不是本次凭据）" : ""}</span>
@@ -323,10 +310,19 @@ ${shown.legacyDiagnosis}`}
         <div className="accept-gate-edit">
           <input
             className="mono"
-            value={draft}
+            value={draft.command}
             autoFocus
+            aria-label="验收前置命令"
             placeholder="例如 ./kb.sh test full（留空 = 撤掉这条命令）"
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => setDraft({ ...draft, command: event.target.value })}
+            onKeyDown={(event) => { if (event.key === "Enter") void saveCommand(); }}
+          />
+          <input
+            className="mono"
+            value={draft.prepare}
+            aria-label="准备命令"
+            placeholder="准备命令，例如 npm ci --offline（留空 = 借用工作区的依赖）"
+            onChange={(event) => setDraft({ ...draft, prepare: event.target.value })}
             onKeyDown={(event) => { if (event.key === "Enter") void saveCommand(); }}
           />
           <small>
@@ -367,8 +363,7 @@ ${shown.legacyDiagnosis}`}
             {running && running.status !== "running" && running.processPending && <AcceptGateForceRelease key={running.id} taskId={task.id} runId={running.id} reload={reload} notify={notify} />}
             {state.command && latest?.status === "failed" && !running && !settled && !state.unavailable && (
               <button type="button" className={latest.handoff?.error ? "is-primary" : ""} disabled={busy || disabled} onClick={() => void handOff()}>
-                <ArrowUUpLeft size={13} />{latest.handoff && !latest.handoff.error ? "再交给智能体一次"
-                  : latest.missAttribution ? "把结论交给智能体" : "交给智能体去修"}
+                <ArrowUUpLeft size={13} />{latest.handoff && !latest.handoff.error ? "再交给智能体一次" : "交给智能体去修"}
               </button>
             )}
             {shown && (
@@ -379,7 +374,7 @@ ${shown.legacyDiagnosis}`}
             {/* 验收做完之后不摆「改这条命令」：改的是**项目**设置，而这张卡此刻是这一个
                 任务的历史回执，在这儿改会让人以为是在改这条记录。设置页那一份照常能改。 */}
             {canManage && !running && !settled && atFinalGate && (
-              <button type="button" className={idle ? "is-primary" : ""} disabled={busy} onClick={() => setDraft(state.command ?? "")}>
+              <button type="button" className={idle ? "is-primary" : ""} disabled={busy} onClick={() => setDraft({ command: state.command ?? "", prepare: state.prepare ?? "" })}>
                 <PencilSimple size={13} />{idle ? "设一条" : "改这条命令"}
               </button>
             )}
@@ -416,16 +411,14 @@ function heading(
   if (state.unavailable) return "验收前置命令未执行：本机能力不可用";
   if (state.sourceError) return "验收前置命令未执行：源码输入不可用";
   if (!latest) return "这个项目设了验收前置命令";
+  if (latest.failure === "prepare_failed") return "准备命令没过，测试没有开跑";
   if (latest.status === "passed") {
     if (!latest.stale) return "验收前置命令已通过";
-    return latest.command !== state.command ? "上次通过的不是现在这条命令" : "上次通过的不是现在这棵树";
+    return !sameRecipe(latest, state) ? "上次通过的不是现在这条命令" : "上次通过的不是现在这棵树";
   }
-  // 「起跑前核到这份快照里没有它」跟「某条断言红了」在卡上要分开说：出路完全不同，而原先
-  // 两者都只写「验收前置命令未通过」，于是用户只能去翻 npm 的原始报错自己猜。
-  //
-  // **但不说「没能启动」**（第 10 轮审查 F1）：那句话需要能绑到真跑那一次执行身份上的证据，
-  // ash 没有。所以这儿只陈述起跑前读到的那件事，归因非空就是它。
-  if (latest.missAttribution) return "验收前置命令没过：起跑前核到这份快照里没有它";
+  // 入口是具体文件、快照里没有它：命令没起跑（server/src/accept-gate-entry.ts）。跟「某条断言
+  // 红了」出路完全不同，标题就得说出来，不让人去翻原始报错自己猜。
+  if (latest.failure === "entry_missing") return "验收前置命令没有起跑：入口不在被测的树里";
   return `验收前置命令${ACCEPT_GATE_STATUS_LABELS[latest.status]}`;
 }
 
@@ -462,6 +455,10 @@ function detail(
     if (latest.command !== state.command) {
       return `那次跑的是另一条命令（\`${latest.command}\`）。现在这条 \`${state.command}\` 在这棵树上一次都没跑过——再点验收会跑它。`;
     }
+    if (!sameRecipe(latest, state)) {
+      return `那次的准备命令是 ${latest.prepareCommand ? `\`${latest.prepareCommand}\`` : "（没配）"}，现在是 `
+        + `${state.prepare ? `\`${state.prepare}\`` : "（没配）"}，装进快照的依赖可能不是同一份——再点验收会按现在这一套重跑。`;
+    }
     const moved = baselineMoved(state, latest);
     return moved
       ?? `那次跑的是 ${latest.sourceCommit?.slice(0, 8) ?? "另一份源码快照"}，当前源码或依赖输入已变化，或旧记录没有可核对的快照身份——再点验收会重跑一遍。`;
@@ -475,36 +472,19 @@ function detail(
       : latest.handoff.error
         ? `已经试过把日志交回这个任务的智能体，但没叫醒它（${latest.handoff.error}）——那条红现在没人在管。`
         : "日志已经交回这个任务的智能体去修了。";
-  // 起跑前核到这份快照里没有它的时候，用户最容易做的事是去按「重跑一次」。那一问的答案
-  // 这儿**不预测**（见下面那段注释），但要把「出路在结论里」说破，否则他只会按着按钮空转。
-  if (latest.missAttribution) {
-    // 交过去的面孔只有一副（去定位、去修，见 accept-gate-messages.ts），所以这句话只说
-    // 它第一步会先核什么。「被要求不要改代码」那句已经撤掉了（第 10 轮审查 F1）。
-    const charge = latest.missAttribution === "mine"
-      ? "（结论指向是这次改动把它弄没的，它会先核这件事）"
-      : "（它会先核这件事：结论证明不了这条命令一行都没跑到）";
-    const told = !latest.handoff ? "结论还没交给智能体。"
-      : latest.handoff.error ? `已经试过把结论交回这个任务的智能体，但没叫醒它（${latest.handoff.error}）。`
-        : `结论已经交回这个任务的智能体了${charge}。`;
-    // **这里不摆出路**（第 1 轮审查 F4）：出路取决于「目标分支上到底有没有这条命令」，
-    // 而那件事只有下面那段结论核对过。在这儿补一句「合进来就行」，就是一句没核过的保证。
-    // 同理，末句只说「核到哪一步写在结论里」，不替它声称两边都核过了。
-    //
-    // **不预测重跑的结果**（第 6 轮审查 N1 实测）：这一档说的是「起跑前核过、这份快照里没有
-    // 它」，而那一问的答案还取决于 runner 的有效配置 —— 审查只改了隔离的那份用户 `.npmrc`
-    // （仓库、命令、依赖一个字没动），同一条命令就从红变绿；而 `stale` 比的是命令加源码/
-    // 依赖指纹（accept-gate-source.ts），里面既没有用户 npmrc 也没有进程环境，照旧报「没过
-    // 期」。指纹盖不住的输入就不能拿它当「输入没变」的证明，所以这儿只陈述当次那件事，剩下
-    // 的留给下一次真的执行。
-    const changed = latest.command !== state.command
-      ? `那次跑的是另一条命令（\`${latest.command}\`）。现在这条 \`${state.command}\` 在这棵树上一次都没跑过。`
-      : latest.stale ? "当前源码或依赖输入已经变了。" : "";
-    const predicts = `${changed}再点验收会重新执行这条命令，不会复用这次的结论；`
-      + "出路以下面那段结论为准 —— 它写了核到哪一步、哪几件没核出来。";
-    return `${summarizeAcceptGate(latest)}。这次没有合并、也没有清理，目标分支一动没动。${told}${predicts}`;
-  }
-  return `${summarizeAcceptGate(latest)}。这次没有合并、也没有清理，目标分支一动没动。${handoff}`
-    + (latest.status === "failed" ? "重新点「验收通过」会重新执行命令，即使代码没有变化，也不会直接复用这次失败；确认这条红跟这次改动无关，也可以明确选择跳过。" : "重新点验收会从头跑一遍。");
+  // 入口那句话（起跑前核到的事实）就放在状态这一行里，紧跟摘要：核得准的那一档它本身就是原因，
+  // 摘要不再重复；核不准的那一档它跟下面的日志末尾并排，结论留给读的人。
+  const missing = latest.failure === "entry_missing";
+  const said = missing && latest.entryNote ? latest.entryNote
+    : `${summarizeAcceptGate(latest)}。${latest.entryNote ?? ""}`;
+  return `${said}这次没有合并、也没有清理，目标分支一动没动。${handoff}`
+    + (missing ? "重新点「验收通过」会再核一遍入口；也可以明确选择跳过。"
+      : latest.status === "failed" ? "重新点「验收通过」会重新执行命令，即使代码没有变化，也不会直接复用这次失败；确认这条红跟这次改动无关，也可以明确选择跳过。" : "重新点验收会从头跑一遍。");
+}
+
+/** 那一次跑的是不是现在这一套（前置命令 + 准备命令），与服务端 sameGateRecipe 同一个判据。 */
+function sameRecipe(latest: AcceptGateView, state: AcceptGateState): boolean {
+  return latest.command === state.command && (latest.prepareCommand ?? null) === (state.prepare ?? null);
 }
 
 /**

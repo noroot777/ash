@@ -539,6 +539,8 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
     // 这一段常驻实际注进去的 CLI 配置目录(`""` = 宿主机默认)。下一次接回时靠它判断
     // 「这条会话还接得上吗」—— 见 db/schema.ts 的 sessions.cli_config_dir。
     const leadConfigDir = await cliConfigDirColumn(task.ownerUserId, cfg.lead);
+    // 这一行从这一笔起归这台(见 sessions.lead_holder):接管同一行时,旧台之后晚到的写都按它被挡掉。
+    const holder = id();
     if (resuming) {
       // 接回同一行会话:除了回合时间戳,**执行器那一组字段必须整组刷新** —— 用户完全
       // 可以在两段常驻之间改掉团队的执行器 profile(换 CLI、换供应商、改 CLI 配置覆盖)。
@@ -555,6 +557,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
           executor: ex.label,
           runOwnerUserId: task.ownerUserId,
           cliConfigDir: leadConfigDir,
+          leadHolder: holder,
           ...ex.resumeFields(ws.path, cliSessionId),
         })
         .where(eq(sessions.id, sessId));
@@ -568,6 +571,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
         // 调度台恒按任务归属人跑(上面 spawn 用的 runEnvForTask 就是按它算的)。
         runOwnerUserId: task.ownerUserId,
         cliConfigDir: leadConfigDir,
+        leadHolder: holder,
         worktreePath: ws.isWorktree ? ws.path : null,
         branch: ws.branch,
         cwd: ws.path,
@@ -603,6 +607,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
       wantedStatus: null,
       statusTimer: null,
       retired: false,
+      holder,
       idleTimer: null,
       closing: null,
     };

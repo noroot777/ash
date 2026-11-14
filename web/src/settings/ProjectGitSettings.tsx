@@ -3,6 +3,7 @@ import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import type { GitConfigValue, ProjectGitConfig } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 // 项目设置页的 Git 一节。分成两张卡，因为两边**存在完全不同的地方**：
 //
@@ -185,7 +186,7 @@ export function ProjectGitSettings({ projectId, canManage, notify }: {
             <b>HTTPS 用户名与令牌</b>
             <small>
               {credential
-                ? `已配置：${credential.username}（${new Date(credential.updatedAt).toLocaleString()}）`
+                ? `已配置：${credential.username}（${localeDateTime(credential.updatedAt)}）`
                 : "未配置。这个项目走 HTTPS 拉取/推送时会用系统里的凭证"}
             </small>
           </div>

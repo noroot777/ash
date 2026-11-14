@@ -190,15 +190,6 @@
 .accept-gate-command dt { color: var(--muted); font-size: var(--t-xs); }
 .accept-gate-command dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
 .accept-gate-command code { white-space: pre-wrap; }
-/* 门禁归类结论：「这条命令在快照里不存在」那一类的出路。它是用户在这张卡上唯一能读到
-   「不用我修、该怎么办」的地方，所以不折起来。原文是**纯文本**（gateCommandMissNotice
-   不发 markdown：同一份字还要进门禁日志和 MCP 回执，星号反引号在那两处只会原样显示
-   —— 第 1 轮审查 N4），自带换行与序号，所以 pre-line。 */
-.accept-gate-diagnosis { border: 1px solid color-mix(in oklab,var(--amber) 34%,var(--line)); border-radius: 7px; background: color-mix(in oklab, var(--amber) 6%, transparent); padding: 7px 9px; color: var(--ink); line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
-.accept-gate-diagnosis > span { display: block; margin-bottom: 3px; color: var(--amber); font-size: var(--t-xs); font-weight: var(--w-medium); }
-/* 已失效的历史结论:虚线 + 灰调,一眼看出它跟上面那块当前结论不是同一回事。 */
-.accept-gate-diagnosis.is-obsolete { border-style: dashed; border-color: var(--line2); background: var(--panel); color: var(--muted); }
-.accept-gate-diagnosis.is-obsolete > span { color: var(--faint); }
 .accept-gate-log > span { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); }
 .accept-gate-log > span > button { border: 0; background: transparent; padding: 0; color: var(--ink); font-size: var(--t-xs); }
 .accept-gate-log pre { max-height: 180px; overflow: auto; margin: 4px 0 0; border-radius: 6px; background: var(--canvas); padding: 6px 8px; color: var(--muted); font-family: var(--font-mono); font-size: var(--t-xs); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }

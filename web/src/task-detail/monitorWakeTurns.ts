@@ -29,7 +29,7 @@ import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import type { AgentContentSegment, ConversationItem } from "./conversationModel.ts";
 import { monitorWakeInput, monitorWakePreview, type MonitorWakeInput } from "./monitorWakeModel.ts";
 import { claimStarts, claimWake, emptyClaims, ownsWake, type MonitorClaims } from "./monitorWakeOwner.ts";
-import { endsTurnAbnormally, turnFailed } from "./turnFailure.ts";
+import { endsTurnAbnormally, OPEN_TURN_FACTS, tailTurnFacts, turnFailed } from "./turnFailure.ts";
 import { MONITOR_WAKE_TOOL } from "../lib/toolPhrase.ts";
 import { durationBetween } from "./utils.ts";
 
@@ -150,7 +150,8 @@ function joinTurn(host: AgentItem, wake: UserItem, input: MonitorWakeInput, repl
       endedAt: settledAt,
       markerEndedAt: null,
       interrupted: false,
-      turnOutcome: null,
+      // 最后那一回合是叫醒起的、还开着：身份、结局、原因整组都是不知道，不留前一回合的（tailTurnFacts）。
+      ...OPEN_TURN_FACTS,
       sources: [...host.sources ?? [], ...wake.sources ?? []],
       segments,
     };
@@ -161,7 +162,8 @@ function joinTurn(host: AgentItem, wake: UserItem, input: MonitorWakeInput, repl
     endedAt: reply.endedAt,
     markerEndedAt: reply.markerEndedAt,
     interrupted: reply.interrupted,
-    turnOutcome: reply.turnOutcome,
+    // 最后那一回合是回复那一回合：身份、结局、原因整组换成它的（tailTurnFacts）。
+    ...tailTurnFacts(reply),
     usage: reply.usage ?? host.usage,
     sessionUsage: reply.sessionUsage ?? host.sessionUsage,
     sessionContext: reply.sessionContext ?? host.sessionContext,
