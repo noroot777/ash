@@ -16,7 +16,7 @@ import { FreeReviewDisputeCard } from "./FreeReviewDisputeCard.tsx";
 import { useFreeReviewRepair } from "./FreeReviewRepairButton.tsx";
 import { FreeReviewRoundBody } from "./FreeReviewRoundBody.tsx";
 import { FreeReviewRoundsDialog } from "./FreeReviewRoundsDialog.tsx";
-import { freeReviewView } from "./freeReviewCopy.ts";
+import { freeReviewView, reviewLocked } from "./freeReviewCopy.ts";
 import { deferOnly, durationText, noVerdictText, reviewKey, reviewRoundLabel, reviewRoundTone } from "./freeReviewRounds.ts";
 import type { ReviewRetryAction } from "../task-detail/turnRetry.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
@@ -76,8 +76,7 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
   const taskReady = task.status !== "backlog";
   // 接力出去的任务在本机是历史存档，后端一律 409 —— 判据必须与回复框那颗键完全一样，
   // 否则同一个派审动作会出现「那边灰、这里能点（点了吃 409）」。
-  const locked = task.stage === "accepted" || task.stage === "merged" || !!task.archived
-    || task.handoff?.direction === "out";
+  const locked = reviewLocked(task);
   const repair = useFreeReviewRepair({
     taskId: task.id,
     run: stoppedRun,

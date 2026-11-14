@@ -142,6 +142,14 @@ export function openDisputeEntryIn(
 }
 
 /**
+ * 这个任务此刻还能不能动审查：验收了、合并了、归档了，或者接力出去了（本机是历史存档，后端一律 409）。
+ * 审查格那几颗键、那张裁定卡的禁用，和会话里「等你裁定」那一句算不算现在的事，都认这一处。
+ */
+export function reviewLocked(task: Pick<Task, "stage" | "archived" | "handoff">): boolean {
+  return task.stage === "accepted" || task.stage === "merged" || !!task.archived || task.handoff?.direction === "out";
+}
+
+/**
  * 同上只取那一轮（会话那一侧只拿得到 `reviews`）。会话里那颗「去裁定」按钮和审查面板上
  * 那张卡必须同生共死，所以两边都从这一处取，各算各的就会出现「按钮还在、卡片没了」。
  */

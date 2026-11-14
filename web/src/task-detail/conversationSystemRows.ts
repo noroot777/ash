@@ -116,6 +116,8 @@ type Accessors<Row> = {
   failureOf?: (turnId: string) => CrashedTurn | undefined;
   /** 认老记录时用得上的、这个任务自己的东西（见 timelineNoticeCopy 的 NoticeContext）。 */
   context?: NoticeContext;
+  /** 此刻挂着动作、尾注里不许挤掉的那几句（见 footnoteActions）。 */
+  held?: ReadonlySet<string>;
 };
 
 /**
@@ -261,9 +263,9 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
   closeSegment();
 
   const footnotes = new Map<string, TurnFootnote>();
-  for (const [id, list] of parts) footnotes.set(id, { id: `footnote:${id}`, parts: composeFootnote(list), live: false });
-  for (const entry of orphans) entry.row.footnote = { ...entry.row.footnote, parts: composeFootnote(entry.parts) };
-  for (const entry of verdicts) entry.row.footnote = { ...entry.row.footnote, parts: composeFootnote(entry.parts) };
+  for (const [id, list] of parts) footnotes.set(id, { id: `footnote:${id}`, parts: composeFootnote(list, acc.held), live: false });
+  for (const entry of orphans) entry.row.footnote = { ...entry.row.footnote, parts: composeFootnote(entry.parts, acc.held) };
+  for (const entry of verdicts) entry.row.footnote = { ...entry.row.footnote, parts: composeFootnote(entry.parts, acc.held) };
   // 现在的事：会话里最后一个有话要说的回合（或审查结论、原处那一句），后面又没有你的话。
   for (let index = out.length - 1; index >= 0; index -= 1) {
     const row = out[index]!;
@@ -301,7 +303,12 @@ function shown(item: ConversationItem): boolean {
 
 export function conversationSystemRows(
   rows: ConversationDebateFeedRow[],
-  options: { failures?: ReadonlyMap<string, CrashedTurn>; context?: NoticeContext; causes?: ReadonlyMap<string, LaneNoVerdict> } = {},
+  options: {
+    failures?: ReadonlyMap<string, CrashedTurn>;
+    context?: NoticeContext;
+    causes?: ReadonlyMap<string, LaneNoVerdict>;
+    held?: ReadonlySet<string>;
+  } = {},
 ): ConversationDisplay {
   type Grouped = ConversationDebateFeedRow | ConversationSystemActionRow;
   const display = attach<Grouped>(groupConflictHandoffs(rows.filter((row) => row.kind !== "item" || shown(row.item))), {
@@ -314,6 +321,7 @@ export function conversationSystemRows(
     failureOf: (id) => options.failures?.get(id),
     causeOf: (lane) => options.causes?.get(lane.id),
     context: options.context,
+    held: options.held,
   });
   return display as ConversationDisplay;
 }

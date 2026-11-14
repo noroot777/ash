@@ -38,8 +38,9 @@ import {
   ReceiptReviewContext, TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts, type ReceiptReview,
 } from "./TurnReceipts.tsx";
 import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
+import { footnoteActions } from "./footnoteActions.ts";
 import { RetryCta } from "./RetryCta.tsx";
-import { laneNoVerdicts, noVerdictPartId } from "./reviewNoVerdictCause.ts";
+import { laneNoVerdicts } from "./reviewNoVerdictCause.ts";
 import type { ReviewRetryAction, TurnRetryAction } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
@@ -387,9 +388,13 @@ export function ConversationFeed({
   const feedRows = conversationFeedRows(items, { reviews });
   // 没出结论的那几轮为什么没出：按轮次身份从审查状态取，贴在那颗结论气泡下面（reviewNoVerdictCause）。
   const causes = laneNoVerdicts(feedRows, reviews);
+  // 此刻挂着动作的那几句（去裁定、继续本轮审查、重试这一回合）：尾注里各占一个位置，不被挤掉。
+  const actions = footnoteActions({
+    items, task, reviews, canOpenReviews: !!onOpenReviewPanel, causes, crashed, reviewRetry, turnRetry,
+  });
   const { rows, receipts, footnotes } = conversationSystemRows(
     conversationDebateRows(feedRows, { reviews }),
-    { failures: crashed, context: noticeContext, causes },
+    { failures: crashed, context: noticeContext, causes, held: actions.held },
   );
   // 审查卡里（正在跑的那张、审查结论气泡下面摊开的那一轮、记录里点开的那一轮）的旁注同样记在审查者
   // 那一回合上（见 laneReceipts）。
@@ -404,49 +409,32 @@ export function ConversationFeed({
   const footnoteOf = (id: string) => footnotes.get(id) ?? laneViews.find((lane) => lane.footnotes.has(id))?.footnotes.get(id);
   const wakeReplies = monitorWakeReplyIds(items);
   // 「执行者驳回了，现在由你裁定」那条旁注上挂一颗「去裁定」——那句话把出路列了出来，
-  // 却没给任何能点的东西（用户 2026-09-24：「直接给个按钮不行吗」）。
-  //
-  // 两个条件都要：**此刻真的挂着一条待裁定的驳回**（`openDisputeIn`，与审查面板同一口径），
-  // 以及**最后那条**这样的旁注。只认文本会在裁定完之后留下一颗按钮，指向一张已经不在的卡；
+  // 却没给任何能点的东西（用户 2026-09-24：「直接给个按钮不行吗」）。只挂在此刻真的等你裁定的
+  // 最后那一条上（footnoteActions）：只认文本会在裁定完之后留下一颗按钮，指向一张已经不在的卡；
   // 只认状态则会给历史上每一次驳回都挂一颗，而其中只有最后一条还作数。
   //
   // 按钮只把人送到那张卡跟前，不在这里复制四个出口：每个出口都带自己的确认框和说明
   // （「作废」和「转出去」的差别就写在那些文字里），复制一份必然漂成两套说法。
-  const lastDisputeId = [...items].reverse().find((item) => item.kind === "event" && noticeView(item).dispute)?.id ?? null;
-  const disputeEventId = onOpenReviewPanel && openDisputeIn(reviews) ? lastDisputeId : null;
-  // 尾注里「等你裁定」那一句的点只说现在：裁定过的（或者后来又驳回过一次的）就不再是要你拍板的事。
-  // 拿不到审查记录的视图不知道裁没裁，照位置判。
-  const disputeOpen = (part: FootnotePart) => part.kind === "event" && part.item?.id === lastDisputeId
-    && (reviews == null || !!openDisputeIn(reviews));
+  //
+  // 尾注里「等你裁定」那一句的点只说现在：裁定过的、后来又驳回过一次的、任务已经裁不了的，都不再是
+  // 要你拍板的事。
   const settleDisputes = (footnote: TurnFootnote | undefined): TurnFootnote | undefined => footnote && {
     ...footnote,
-    parts: footnote.parts.map((part) => part.view.dispute && !disputeOpen(part) ? { ...part, view: { ...part.view, tone: "neutral" as const } } : part),
+    parts: footnote.parts.map((part) => part.view.dispute && part.id !== actions.standingDisputeId
+      ? { ...part, view: { ...part.view, tone: "neutral" as const } } : part),
   };
-  const ruleAction = disputeEventId ? (
+  const ruleAction = actions.ruleEventId ? (
     <button type="button" className="system-event-cta" onClick={() => onOpenReviewPanel!()}>
       <Gavel size={11} weight="fill" aria-hidden="true" />去裁定
     </button>
   ) : null;
-  // 「这一轮审查为什么没结论」那一句后面挂「继续本轮审查」：只挂在此刻还能续的那一轮（同一场、同一轮）
-  // 上 —— 续过了（round.retry 没了）、另开了新链，`reviewRetry` 就换了人或者没了，这颗也就跟着不出。
-  // 那一句平时是结论气泡下面按轮次身份取的那一句（见 reviewNoVerdictCause）；会话里认不出那张卡时
-  // （没有「开始」那一条、拿不到审查状态的视图），才退回最后一条说这一轮原因的旁注。
-  const retryCauseId = reviewRetry ? noVerdictPartId(reviewRetry.review.runId, reviewRetry.review.round) : null;
-  const causeHostsRetry = !!retryCauseId && [...causes.values()].some((entry) => noVerdictPartId(entry.runId, entry.round) === retryCauseId);
-  const retryEventId = reviewRetry && !causeHostsRetry ? [...items].reverse().find((item) => item.kind === "event"
-    && item.notice?.kind === "review.no_verdict"
-    && item.notice.runId === reviewRetry.review.runId && item.notice.round === reviewRetry.review.round)?.id ?? null : null;
-  // 普通回合崩了、此刻能重试：「重试这一回合」挂在**那一回合**（会话里最后一条气泡，且就是要重跑的
-  // 那条会话）尾注里说它没办成的那半句后面 —— 直播那一路是异常回合边界，刷新以后是从会话行补出来的
-  // 那一句，两路都归「failure」这件事。那半句被别的几件事挤出了尾注（一回合最多三句），就挂在最后一句后面：
+  // 「重试这一回合」挂在那一回合尾注里说它没办成的那一句后面。认不出那一句时挂在最后一句后面：
   // 能重试时页面上一定要有这个入口。
-  const lastAgent = [...items].reverse().find((item) => item.kind === "agent");
-  const retryTurnFootnoteId = turnRetry && lastAgent?.kind === "agent" && lastAgent.session?.id === turnRetry.sessionId
-    ? `footnote:${lastAgent.id}` : null;
-  const turnRetryPartOf = (footnote: TurnFootnote) => footnote.id !== retryTurnFootnoteId ? null
-    : footnote.parts.findLast((part) => part.view.topic === "failure") ?? footnote.parts.at(-1) ?? null;
-  const isRetryable = (part: FootnotePart, footnote: TurnFootnote) => (part.kind === "cause" && part.id === retryCauseId)
-    || (part.kind === "event" && !!retryEventId && part.item?.id === retryEventId)
+  const turnRetryPartOf = (footnote: TurnFootnote) => footnote.id !== actions.retryTurnFootnoteId ? null
+    : footnote.parts.find((part) => part.id === actions.retryFailureId)
+      ?? footnote.parts.findLast((part) => part.view.topic === "failure") ?? footnote.parts.at(-1) ?? null;
+  const isRetryable = (part: FootnotePart, footnote: TurnFootnote) => (part.kind === "cause" && part.id === actions.retryCauseId)
+    || (part.kind === "event" && part.id === actions.retryEventId)
     || turnRetryPartOf(footnote) === part;
   // 辩论条上的同一颗按钮：辩论就是为了裁定才开的，读完该能当场决定，而不是往上翻回
   // 那条旁注（用户 2026-09-27）。条件比旁注那颗更严一格——必须**这场辩论**辩的就是
@@ -520,7 +508,7 @@ export function ConversationFeed({
     return renderFootnote({ id: item.id, live: false, parts: [{ kind: "event", id: item.id, at: item.at, view, item }] }, "standalone");
   };
   // 「去裁定」挂在等你裁定的那半句后面（只有此刻还挂着的那一条）。
-  const isRuled = (part: FootnotePart) => part.kind === "event" && !!disputeEventId && part.item?.id === disputeEventId;
+  const isRuled = (part: FootnotePart) => part.kind === "event" && part.id === actions.ruleEventId;
   // 审查结论那一轮就地摊开时的经过：卡里的旁注照样记在审查者那一回合上。
   const renderLaneRows = (lane: ConversationReviewLane) => {
     const roles = reviewLaneMessageRoles(lane);

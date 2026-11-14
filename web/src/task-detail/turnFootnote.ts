@@ -6,7 +6,8 @@
 // 这里只管「并成一句」：
 //   - 每件事只留最近一句（验收、异常结束、其余要你知道的各一句），被盖过的照样在「N 条记录」里；
 //   - 验收成了以后，它之前那些要你知道的（验收暂缓之类）退回记录；
-//   - 最多三句，按先后排。
+//   - 最多三句，按先后排；
+//   - 此刻挂着动作的那几句（去裁定、继续本轮审查、重试这一回合）各占一个位置，不被盖过也不被截掉。
 // 颜色只说现在的事：尾注所在的回合（或审查结论）是会话里最后一件事、后面又没有你的话，它才是
 // 「现在」，这时坏消息字前才有一颗小圆点（`live`）。
 import type { ConversationItem } from "./conversationModel.ts";
@@ -83,14 +84,22 @@ export function footnotePartTail(part: FootnotePart): string | null {
 
 const MAX_PARTS = 3;
 
-/** 同一回合上攒下的那几件事（按先后）→ 尾注里留下的那几句。 */
-export function composeFootnote(parts: readonly FootnotePart[]): FootnotePart[] {
-  const latest = new Map<NoticeTopic, number>();
-  parts.forEach((part, index) => latest.set(part.view.topic, index));
-  const acceptedAt = latest.get("accept") ?? -1;
-  return parts
-    .filter((part, index) => latest.get(part.view.topic) === index && (part.view.topic !== "other" || index > acceptedAt))
-    .slice(-MAX_PARTS);
+/**
+ * 同一回合上攒下的那几件事（按先后）→ 尾注里留下的那几句。
+ *
+ * `held`：此刻挂着动作的那几句（见 footnoteActions）。它们各占一个位置：不跟别的句子争同一件事的
+ * 那一个名额，不算进三句里，也不让它排挤掉的那几句——其余几句照旧按上面的规矩挑。
+ */
+export function composeFootnote(parts: readonly FootnotePart[], held: ReadonlySet<string> = new Set()): FootnotePart[] {
+  const ordinary = parts.filter((part) => !held.has(part.id));
+  const latest = new Map<NoticeTopic, FootnotePart>();
+  for (const part of ordinary) latest.set(part.view.topic, part);
+  const accepted = latest.get("accept");
+  const acceptedAt = accepted ? ordinary.indexOf(accepted) : -1;
+  const shown = new Set(ordinary
+    .filter((part, index) => latest.get(part.view.topic) === part && (part.view.topic !== "other" || index > acceptedAt))
+    .slice(-MAX_PARTS));
+  return parts.filter((part) => held.has(part.id) || shown.has(part));
 }
 
 /**

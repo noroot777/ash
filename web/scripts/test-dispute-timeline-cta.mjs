@@ -7,7 +7,9 @@
 //    只按文本匹配就会留下一颗点了什么也看不到的按钮；
 // ③ 没有 onOpenReviewPanel（只读会话视图、团队时间线）时一颗都不给；
 // ④ 它得长得像颗按钮：在那句话的同一行上、不被挤断行——①②③ 全过的那一版，按钮是竖着
-//    的三个字（用户 2026-09-24：「这个按钮做的也太儿戏了」）。
+//    的三个字（用户 2026-09-24：「这个按钮做的也太儿戏了」）；
+// ⑤ 驳回之后同一回合又落了别的话，驳回那一句和按钮都不被盖掉（R8M9Tsn2q0aj）；
+// ⑥ 任务已验收时，从没裁过的驳回不挂按钮、不带点。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
@@ -51,6 +53,27 @@ try {
   );
 
   assert.equal(await resolved.locator(".turn-footnote-dot").count(), 0, "裁定完了，那一句就是过去的事，不再带点");
+
+  // ⑤ 驳回之后同一回合又落了别的话（R8M9Tsn2q0aj：13 秒后「本回合没有交卷」）：驳回那一句和按钮都还在。
+  const held = page.locator(".held-fixture");
+  const heldNote = held.locator(".turn-footnote");
+  assert.match(await heldNote.innerText(), /第 2 轮审查意见被驳回，等你裁定[\s\S]*本回合没有交卷/, "两句都在尾注里，驳回那一句不被盖掉");
+  const heldCta = heldNote.getByRole("button", { name: "去裁定" });
+  assert.equal(await heldCta.count(), 1, "「去裁定」还挂在驳回那一句后面");
+  await heldCta.click();
+  assert.deepEqual(await page.evaluate(() => window.__opened), ["review", "held"], "点了去审查格那张卡");
+  assert.equal(await heldNote.locator(".turn-footnote-part").filter({ hasText: "等你裁定" }).locator(".turn-footnote-dot.is-warn").count(), 1,
+    "等你裁定的那一句仍带琥珀点");
+
+  // ⑥ 任务已验收：从没裁过的驳回也不再是等你裁定的事——不挂按钮、不带点，可以被后来的话盖过。
+  const accepted = page.locator(".accepted-fixture");
+  assert.equal(await accepted.getByRole("button", { name: "去裁定" }).count(), 0, "已验收的任务上不出「去裁定」");
+  assert.doesNotMatch(await accepted.locator(".turn-footnote").innerText(), /等你裁定/, "照普通规则被后来的结算说明盖过，退回记录");
+  // 后面没有别的话时那一句还在（MNW4en5L0iPP、WfLfTjaGzcA8 这种），只是按过去的事显示。
+  const acceptedAlone = page.locator(".accepted-alone-fixture");
+  assert.match(await acceptedAlone.locator(".turn-footnote").innerText(), /等你裁定/);
+  assert.equal(await acceptedAlone.getByRole("button", { name: "去裁定" }).count(), 0, "已验收：不出「去裁定」");
+  assert.equal(await acceptedAlone.locator(".turn-footnote-dot").count(), 0, "已验收：那一句不带点");
 
   // ③ 没有入口就一颗都不给。
   assert.equal(
