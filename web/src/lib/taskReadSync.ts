@@ -1,27 +1,29 @@
 import {
-  TASK_READS_MAX, coversRead, parseTaskReads,
-  type TaskReadEntry, type TaskReads, type TaskReadsSnapshot, type TaskReadsWrite, type TaskReadsWriteResult,
+  coversRead, parseTaskReads,
+  type TaskReads, type TaskReadsSnapshot, type TaskReadsWrite, type TaskReadsWriteResult,
 } from "@ash/shared/task-reads";
 import { ApiError, json, request } from "./apiClient.ts";
 import { subscribeConnection, subscribeEvents } from "./events.ts";
 import { readRenamedStorage } from "./renamedStorage.ts";
+import { createOutbox, type OutboxEntry } from "./taskReadOutbox.ts";
 
 // 「看过哪些任务」的那一份记录：真值在服务端（按人存，server/src/task-reads.ts），这里是它在本页的样子。
 // 从前只存 localStorage，每个浏览器各记各的 —— 飞书内置浏览器里打开 ash，桌面上看过的任务全亮着绿点。
 //
-// 本页的样子 = 服务端那份（known，按 rev 只认新回执）+ 还没被服务端收下的那几眼（pending）。
+// 本页的样子 = 服务端那份（known，按 rev 只认新回执）+ 还没被服务端收下的那几眼（待发队列）。
 //
 //  ① **一页只属于一个账号**。登录关口确认身份时就绑定（AuthGate → bindTaskReadsOwner），此前不看、不记、
 //     不送。往上送的每一批都写明账号，服务端认出来的人对不上就 409；回执里的账号对不上也一样 —— 都说明
 //     同一个浏览器另一个标签页换了人登录，这一页的一切（任务列表、实时连接）都还是上一个人的，整页重载。
 //     没送出去的那几眼留在上一个人名下，他回来登录时照送。
-//  ② **看的那一眼当场落盘**：pending 按账号存进 localStorage，每次读最新的那份、合进去再写回，几个标签页
-//     各写各的不会互相盖掉；收下以后才删。所以没送到就关页、刷新、断网重开，下次照送；哪一页先送都行。
+//  ② **看的那一眼当场记下**：记在待发队列（lib/taskReadOutbox.ts）—— 一眼一个键、本页的同时留在内存里，几个
+//     标签页同时记不会互相盖掉，存储写不进去也照样送；收下以后才删。所以没送到就关页、刷新、断网重开，下次
+//     照送；哪一页先送都行。
 //  ③ **新旧只认 round，回执新旧只认 rev**（shared/src/task-reads.ts 文件头）。先发后到的旧回执整份不认。
-//  ④ **容量由服务端按「最近看到」裁**，前端不裁 known；pending 只在攒到上限时丢最早看的那几眼。
+//  ④ **容量由服务端按「最近看到」裁**，前端不裁 known；待发队列只在攒到上限时丢最早看的那几眼。
 //
 // 跟上服务端的几条路：绑定后拉一次；服务端说这个人的记录变了（task.reads）再拉；断线重连再拉；拉失败过一会儿
-// 再拉；别的标签页往 pending 里记了一笔（storage 事件）也照着更新、顺手帮它送。
+// 再拉；别的标签页往待发队列里记了一笔（storage 事件）也照着更新、顺手帮它送。
 
 const PREFIX = "ash:task-reads-v3:";
 const LEGACY_KEY = "ash:task-read-state-v1";
@@ -29,22 +31,24 @@ const PUSH_DELAY_MS = 400;
 const RETRY_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 
-type Pending = Record<string, TaskReadEntry & { at: number }>;
-
 let owner: string | null = null;
+let outbox: ReturnType<typeof createOutbox> | null = null;
 /** 已经认过的最新一份回执的 rev；页面打开时从 -1 起，缓存里的 known 只拿来画首屏。 */
 let rev = -1;
 let known: TaskReads = {};
 let view: TaskReads = {};
 const listeners = new Set<() => void>();
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
+/** 已经排好的那一次推送什么时候发：再要求更早的就提前，不会被一个更晚的排期压着。 */
+let pushDue = 0;
 let pullTimer: ReturnType<typeof setTimeout> | null = null;
 let pushing = false;
 let stopSync: (() => void) | null = null;
 let leaving = false;
 
 const storage = (): Storage | null => (typeof window === "undefined" ? null : window.localStorage);
-const keyOf = (who: string, part: "known" | "pending") => `${PREFIX}${who || "local"}:${part}`;
+const ownerPrefix = (who: string) => `${PREFIX}${who || "local"}`;
+const knownKey = (who: string) => `${ownerPrefix(who)}:known`;
 
 function readJson(key: string): unknown {
   try {
@@ -55,39 +59,12 @@ function readJson(key: string): unknown {
   }
 }
 
-/** 这一页最后写进去的 pending：storage 事件带回来的若正是它，就是自己写的那一笔（同一页里的 iframe 也收得到）。 */
-let lastPendingWrite: string | null = null;
-
 function writeJson(key: string, value: unknown) {
   try {
-    const raw = JSON.stringify(value);
-    if (key.endsWith(":pending")) lastPendingWrite = raw;
-    storage()?.setItem(key, raw);
+    storage()?.setItem(key, JSON.stringify(value));
   } catch {
-    // 写不进去：这一页照样送，只是关掉之前没送到的那几眼补不回来了。
+    // known 只是首屏缓存，写不进去下次首屏多亮一下，不丢东西。
   }
-}
-
-function loadPending(who: string): Pending {
-  const raw = readJson(keyOf(who, "pending"));
-  const reads = parseTaskReads(raw);
-  const out: Pending = {};
-  for (const [taskId, entry] of Object.entries(reads)) {
-    const at = (raw as Record<string, { at?: unknown }>)[taskId]?.at;
-    out[taskId] = { ...entry, at: typeof at === "number" && Number.isFinite(at) ? at : 0 };
-  }
-  return out;
-}
-
-/** 读最新的那份 pending（可能刚被别的标签页改过），改完写回。 */
-function editPending(who: string, edit: (current: Pending) => Pending): Pending {
-  const next = edit(loadPending(who));
-  const entries = Object.entries(next);
-  const capped = entries.length > TASK_READS_MAX
-    ? Object.fromEntries(entries.sort((a, b) => b[1].at - a[1].at).slice(0, TASK_READS_MAX))
-    : next;
-  writeJson(keyOf(who, "pending"), capped);
-  return capped;
 }
 
 /** 进库之前的老格式没有 round：从 event 里带的时刻还原（单飞是两个 ISO 时刻，团队是毫秒数）。 */
@@ -99,7 +76,7 @@ function legacyRound(event: string): number | null {
 }
 
 /** 取走老缓存（取完就删）。它不带账号：只有自用模式（只有一个人）才认作他的。 */
-function takeLegacy(): Pending {
+function takeLegacy(): Record<string, OutboxEntry> {
   let raw: string | null = null;
   try {
     raw = readRenamedStorage(LEGACY_KEY);
@@ -113,7 +90,7 @@ function takeLegacy(): Pending {
   } catch {
     return {};
   }
-  const out: Pending = {};
+  const out: Record<string, OutboxEntry> = {};
   if (!parsed || typeof parsed !== "object") return out;
   for (const [taskId, value] of Object.entries(parsed)) {
     const event = (value as { event?: unknown } | null)?.event;
@@ -123,9 +100,9 @@ function takeLegacy(): Pending {
   return out;
 }
 
-function compose(pending: Pending) {
+function compose() {
   const next: TaskReads = { ...known };
-  for (const [taskId, { event, round }] of Object.entries(pending)) {
+  for (const [taskId, { event, round }] of Object.entries(outbox?.latest() ?? {})) {
     if (!coversRead(next[taskId], { event, round })) next[taskId] = { event, round };
   }
   view = next;
@@ -148,16 +125,11 @@ export function bindTaskReadsOwner(who: string) {
   if (owner === who) return;
   if (owner !== null) return identityChanged();
   owner = who;
+  outbox = createOutbox(ownerPrefix(who));
   const legacy = takeLegacy();
-  const pending = who === ""
-    ? editPending(who, (current) => {
-      const merged = { ...current };
-      for (const [taskId, entry] of Object.entries(legacy)) if (!coversRead(merged[taskId], entry)) merged[taskId] = entry;
-      return merged;
-    })
-    : loadPending(who);
-  known = parseTaskReads(readJson(keyOf(who, "known")));
-  compose(pending);
+  if (who === "") for (const [taskId, entry] of Object.entries(legacy)) outbox.add(taskId, entry, entry.at);
+  known = parseTaskReads(readJson(knownKey(who)));
+  compose();
   ensureSync();
 }
 
@@ -166,7 +138,11 @@ export function getTaskReads(): TaskReads {
 }
 
 function schedulePush(delay = PUSH_DELAY_MS) {
-  if (pushTimer || leaving || typeof window === "undefined") return;
+  if (leaving || typeof window === "undefined") return;
+  const due = Date.now() + delay;
+  if (pushTimer && pushDue <= due) return;
+  if (pushTimer) clearTimeout(pushTimer);
+  pushDue = due;
   pushTimer = setTimeout(() => { pushTimer = null; void push(); }, delay);
 }
 
@@ -175,34 +151,31 @@ function schedulePull() {
   pullTimer = setTimeout(() => { pullTimer = null; void pull(); }, RETRY_MS);
 }
 
-/** pending 里服务端还没收下的。 */
-const unsent = (pending: Pending): TaskReads =>
-  Object.fromEntries(Object.entries(pending)
-    .filter(([taskId, entry]) => !coversRead(known[taskId], entry))
-    .map(([taskId, { event, round }]) => [taskId, { event, round }]));
+/** 待发队列里服务端还没覆盖到的（每个任务取看到的最新一轮）。 */
+function unsent(): TaskReads {
+  const out: TaskReads = {};
+  for (const [taskId, { event, round }] of Object.entries(outbox?.latest() ?? {})) {
+    if (!coversRead(known[taskId], { event, round })) out[taskId] = { event, round };
+  }
+  return out;
+}
 
 /**
  * 服务端的回执合进来。rev 不比已经认过的新就不换 known（先发后到的旧回执）。送出去的那几条服务端都已经
- * 表了态（收下、已有更新的、封顶、裁掉、不存在），pending 里还是送出时那一条的，一律删掉，别一直重送。
+ * 表了态（收下、已有更新的、封顶、裁掉、不存在），待发队列里那一轮及更早的一律删掉，别一直重送；送出之后别的
+ * 标签页又记下的更新一轮不受影响。
  */
 function absorb(result: TaskReadsSnapshot, sent: TaskReads = {}) {
-  if (owner === null || leaving) return;
+  if (owner === null || outbox === null || leaving) return;
   if (result.owner !== owner) return identityChanged();
   if (typeof result.rev === "number" && result.rev >= rev) {
     rev = result.rev;
     known = parseTaskReads(result.reads);
-    writeJson(keyOf(owner, "known"), known);
+    writeJson(knownKey(owner), known);
   }
-  const pending = editPending(owner, (current) => {
-    const next: Pending = {};
-    for (const [taskId, entry] of Object.entries(current)) {
-      const answered = sent[taskId] && sent[taskId].round === entry.round && sent[taskId].event === entry.event;
-      if (!answered && !coversRead(known[taskId], entry)) next[taskId] = entry;
-    }
-    return next;
-  });
-  compose(pending);
-  if (Object.keys(unsent(pending)).length) schedulePush();
+  outbox.settle(sent, known);
+  compose();
+  if (Object.keys(unsent()).length) schedulePush();
 }
 
 async function pull() {
@@ -216,7 +189,7 @@ async function pull() {
 
 async function push() {
   if (pushing || owner === null || leaving) return;
-  const sent = unsent(loadPending(owner));
+  const sent = unsent();
   if (!Object.keys(sent).length) return;
   pushing = true;
   try {
@@ -242,11 +215,10 @@ function startSync(): () => void {
     wasConnected = connected;
   });
   const onStorage = (event: StorageEvent) => {
-    if (owner === null || event.key !== keyOf(owner, "pending") || event.newValue === lastPendingWrite) return;
-    const pending = loadPending(owner);
-    compose(pending);
+    if (!outbox?.owns(event.key)) return;
+    compose();
     // 记下那一笔的标签页可能马上就关了：这一页也帮着送（服务端收两遍是一样的）。
-    if (Object.keys(unsent(pending)).length) schedulePush(PUSH_DELAY_MS * 3);
+    if (Object.keys(unsent()).length) schedulePush(PUSH_DELAY_MS * 3);
   };
   window.addEventListener("storage", onStorage);
   return () => {
@@ -263,7 +235,7 @@ function ensureSync() {
   if (stopSync || owner === null || leaving || !listeners.size || typeof window === "undefined") return;
   stopSync = startSync();
   void pull();
-  if (Object.keys(unsent(loadPending(owner))).length) schedulePush();
+  if (Object.keys(unsent()).length) schedulePush();
 }
 
 export function subscribeTaskReads(listener: () => void) {
@@ -277,22 +249,15 @@ export function subscribeTaskReads(listener: () => void) {
   };
 }
 
-/** 本页看了一眼：比现在记下的新的那几条当场落盘，再攒一下送上去。账号还没确认的页面不记。 */
+/** 本页看了一眼：比现在记下的新的那几条当场记进待发队列，再攒一下送上去。账号还没确认的页面不记。 */
 export function updateTaskReads(update: (current: TaskReads) => TaskReads) {
-  if (owner === null || leaving) return;
+  if (owner === null || outbox === null || leaving) return;
   const current = view;
   const next = update(current);
   if (next === current) return;
   const changed = Object.entries(next).filter(([taskId, entry]) => !coversRead(current[taskId], entry));
   if (!changed.length) return;
-  const at = Date.now();
-  const pending = editPending(owner, (stored) => {
-    const merged = { ...stored };
-    for (const [taskId, entry] of changed) {
-      if (!coversRead(merged[taskId], entry)) merged[taskId] = { event: entry.event, round: entry.round, at };
-    }
-    return merged;
-  });
-  compose(pending);
+  for (const [taskId, entry] of changed) outbox.add(taskId, entry);
+  compose();
   schedulePush();
 }

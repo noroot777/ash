@@ -4,7 +4,7 @@
 //  · 一个人一份，回执带 owner；PUT 写明的账号跟认证出来的人对不上就 409、一条不写(审查第 2 轮 F1)；
 //    别人的读不到、也收不到别人的「记录变了」信号；
 //  · 回执带 rev，每写一次加一(前端据此丢先发后到的旧回执)；
-//  · 满额时留最近看到的：刚看过的旧任务留得住(审查第 2 轮 F3)；
+//  · 满额时留最近看到的：刚看过的旧任务留得住(审查第 2 轮 F3)；「最近」按人严格递增，同一毫秒也分得出先后；
 //  · 坏请求体不 500，删任务连这几行一起收。
 //
 // 跑：npx tsx server/scripts/test-task-reads.ts
@@ -162,6 +162,19 @@ await addTask("w1", T0 + 5_000, { parentId: "lead" });
   saved = await reads();
   assert.equal(Object.keys(saved).length, TASK_READS_MAX, "再写一条也不超");
   assert.ok(saved.ancient, "刚看过的旧任务留得住(它的 round 比谁都老)");
+  actor = context.SINGLE_ACTOR;
+}
+
+// ── 「最近看到」按人严格递增(审查第 3 轮不拦项：同一毫秒的两批满额时分不出先后) ─────────────────────────
+{
+  actor = userActor("dave");
+  const stamps: number[] = [];
+  for (const id of ["m0", "m1", "m2", "m3"]) {
+    await put({ reads: { [id]: { event: `done:${id}`, round: T0 } } });
+    const row = (await db.select().from(taskReads).where(eq(taskReads.owner, "dave"))).find((r) => r.taskId === id);
+    stamps.push(row!.readAt);
+  }
+  assert.ok(stamps.every((at, i) => i === 0 || at > stamps[i - 1]!), `连着写的几批 read_at 严格递增：${stamps.join(",")}`);
   actor = context.SINGLE_ACTOR;
 }
 

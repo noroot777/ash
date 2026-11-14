@@ -3,7 +3,8 @@
 //  · 页面活着时另一个标签页换了人登录：攒着的记录送上去服务端 409、一条没记到新人头上，这一页整页重载；
 //    回执里的账号对不上也一样（审查第 2 轮 F1）；
 //  · 记录服务端还没拉回来时就看了一眼、随即刷新：那一眼当场落盘，重开以后照送（审查第 2 轮 F2）；
-//  · 两个标签页各看各的、都没送出去：落盘不互相盖掉，任一页都能补送（同上）；
+//  · 几个标签页各看各的、都没送出去：落盘不互相盖掉，一页的回执也删不掉另一页送出之后才记下的（审查第 3 轮 F1）；
+//  · 浏览器存储写不进去：这一页照样送；写盘失败告警一次，之后再记时重试落盘（审查第 3 轮 F2）；
 //  · 满额之后看一个很老的任务：留得住，不当场被裁掉（审查第 2 轮 F3）；
 //  · 服务端已有新一轮 / 封顶 / 不存在：以服务端为准，不一直重送；拉失败了过一会儿自己再拉；
 //  · 不带账号的老缓存：自用模式补送，多人模式丢掉，都只处理一次。
@@ -12,24 +13,44 @@ import assert from "node:assert/strict";
 const storage = new Map();
 const windowListeners = new Set();
 let reloads = 0;
+/** 浏览器存储满了：待发队列的键一写就抛（known 缓存不受影响，它写不进去本来就不丢东西）。 */
+let quotaFull = false;
+const notify = (key, newValue) => { for (const listener of windowListeners) listener({ key, newValue }); };
 globalThis.window = {
   localStorage: {
+    get length() { return storage.size; },
+    key: (index) => [...storage.keys()][index] ?? null,
     getItem: (key) => storage.get(key) ?? null,
     setItem: (key, value) => {
+      if (quotaFull && key.includes(":p:")) throw new DOMException("quota", "QuotaExceededError");
       storage.set(key, String(value));
-      for (const listener of windowListeners) listener({ key, newValue: String(value) });
+      notify(key, String(value));
     },
-    removeItem: (key) => storage.delete(key),
+    removeItem: (key) => { if (storage.delete(key)) notify(key, null); },
   },
   addEventListener: (type, listener) => { if (type === "storage") windowListeners.add(listener); },
   removeEventListener: (type, listener) => { if (type === "storage") windowListeners.delete(listener); },
   location: { reload: () => { reloads += 1; } },
 };
-const pendingOf = (who) => JSON.parse(storage.get(`ash:task-reads-v3:${who || "local"}:pending`) ?? "{}");
+const warnings = [];
+console.warn = (...args) => { warnings.push(args); };
+/** 磁盘上这个人待发的那几眼：每个任务取看到的最新一轮。 */
+const pendingOf = (who) => {
+  const prefix = `ash:task-reads-v3:${who || "local"}:p:`;
+  const out = {};
+  for (const [key, value] of storage) {
+    if (!key.startsWith(prefix)) continue;
+    const rest = key.slice(prefix.length);
+    const taskId = decodeURIComponent(rest.slice(0, rest.lastIndexOf(":")));
+    const entry = JSON.parse(value);
+    if (!out[taskId] || entry.round > out[taskId].round) out[taskId] = entry;
+  }
+  return out;
+};
 const MAX = 500;
 
 // 服务端：语义照 server/src/task-reads.ts —— 账号对不上 409；round 只进不退、按任务轮次封顶；不存在的列进
-// rejected；每写一次 rev 加一；满额按最近看到裁。
+// rejected；每写一次 rev 加一、发 task.reads；满额按最近看到裁。
 let clock = 0;
 const server = {
   cookie: "", // 这个浏览器此刻登录的是谁
@@ -39,6 +60,8 @@ const server = {
   failGets: 0,
   failPuts: false,
   hold: null,
+  /** 扣住下一发 PUT 的回执（服务端已经写完，回执还在路上）。 */
+  holdPut: null,
   of(who = server.cookie) {
     if (!server.owners.has(who)) server.owners.set(who, { rev: 0, reads: new Map() });
     return server.owners.get(who);
@@ -68,7 +91,15 @@ globalThis.fetch = async (path, init = {}) => {
     const kept = [...mine.reads].sort((a, b) => b[1].readAt - a[1].readAt).slice(0, MAX);
     mine.reads = new Map(kept);
     mine.rev += 1;
-    return reply({ ...snapshotOf(), rejected });
+    const signal = { type: "task.reads", ownerUserId: server.cookie || null };
+    setTimeout(() => emit(signal), 0); // 写完叫这个人的其它页面重拉
+    const answer = { ...snapshotOf(), rejected };
+    if (server.holdPut) {
+      const gate = server.holdPut;
+      server.holdPut = null;
+      await gate;
+    }
+    return reply(answer);
   }
   if (server.failGets > 0) { server.failGets -= 1; throw new TypeError("network down"); }
   const body = snapshotOf(); // 回执按请求那一刻算
@@ -210,6 +241,81 @@ const look = (page, taskId, round) => page.updateTaskReads((current) => ({ ...cu
   assert.ok(server.of("").reads.get("tab-a") && server.of("").reads.get("tab-b"), "哪一页重开都能把两边的都补送上去");
   c.stop();
   await settle(5_500); // 等 a、b 的失败重试都过去，别搅了下面几段
+}
+
+// ── 两页交错着记、一页的回执晚到 ────────────────────────────────────────────────
+{
+  server.tasks.set("race", 2_000);
+  server.tasks.set("race-b", 2_000);
+  let release;
+  server.holdPut = new Promise((resolve) => { release = resolve; });
+  const a = await openPage("");
+  const b = await openPage("");
+  look(a, "race", 1_000);
+  await settle(); // a 那一批送到了，回执扣在路上
+  assert.equal(putsFor("race"), 1);
+  server.failPuts = true;
+  look(b, "race", 2_000); // 这时 b 看了同一个任务的新一轮、又看了另一个
+  look(b, "race-b", 2_000);
+  release();
+  await settle(50);
+  assert.equal(pendingOf("").race?.round, 2_000, "a 的回执只删它送出去的那一轮，b 后记的新一轮还在");
+  assert.ok(pendingOf("")["race-b"], "b 看的另一个任务也还在");
+  a.stop();
+  b.stop();
+
+  // 两页同时攒一大批：一眼一个键，谁也盖不掉谁。
+  const c = await openPage("");
+  const d = await openPage("");
+  for (let i = 0; i < 150; i += 1) {
+    server.tasks.set(`c${i}`, 3_000);
+    server.tasks.set(`d${i}`, 3_000);
+    look(c, `c${i}`, 3_000);
+    look(d, `d${i}`, 3_000);
+  }
+  const waiting = pendingOf("");
+  assert.equal(Array.from({ length: 150 }, (_, i) => waiting[`c${i}`] && waiting[`d${i}`]).filter(Boolean).length, 150, "300 眼都在盘上");
+  c.stop();
+  d.stop();
+  server.failPuts = false;
+  const e = await openPage("");
+  await settle();
+  const saved = server.of("").reads;
+  assert.ok(saved.get("race")?.round === 2_000 && saved.get("race-b"), "重开以后 b 的那两眼送上去了");
+  assert.equal(Array.from({ length: 150 }, (_, i) => saved.get(`c${i}`) && saved.get(`d${i}`)).filter(Boolean).length, 150, "两页的 300 眼都送上去了");
+  assert.deepEqual(pendingOf(""), {}, "送完清空");
+  e.stop();
+  await settle(5_500); // 等前面几页的失败重试都过去
+}
+
+// ── 浏览器存储写不进去 ──────────────────────────────────────────────────────────
+{
+  server.tasks.set("quota", 4_000);
+  server.tasks.set("quota-later", 4_000);
+  quotaFull = true;
+  const page = await openPage("");
+  look(page, "quota", 4_000);
+  assert.deepEqual(pendingOf(""), {}, "盘上确实没写进去");
+  assert.ok(page.getTaskReads().quota, "这一页当场熄");
+  await settle();
+  assert.equal(server.of("").reads.get("quota")?.round, 4_000, "网络正常：照样送上去");
+  assert.equal(warnings.length, 1, "写盘失败要告警");
+
+  // 写不进去、也送不出去：留在这一页内存里，存储腾出地方后再记一眼时一起落盘。
+  server.failPuts = true;
+  server.tasks.set("quota", 4_500);
+  look(page, "quota", 4_500);
+  await settle();
+  assert.ok(page.getTaskReads().quota.round === 4_500, "没送出去也照样熄着");
+  quotaFull = false;
+  look(page, "quota-later", 4_000);
+  assert.ok(pendingOf("").quota?.round === 4_500 && pendingOf("")["quota-later"], "腾出地方后之前没落盘的也补上了");
+  assert.equal(warnings.length, 1, "同一页只告警一次");
+  server.failPuts = false;
+  await settle(5_500);
+  assert.equal(server.of("").reads.get("quota")?.round, 4_500, "恢复以后送上去");
+  assert.deepEqual(pendingOf(""), {});
+  page.stop();
 }
 
 // ── 页面活着时另一个标签页换了人登录 ────────────────────────────────────────────────

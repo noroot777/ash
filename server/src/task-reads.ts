@@ -58,7 +58,9 @@ export function mountTaskReadRoutes(api: Hono): void {
     // 一次最多收上限那么多条(正常一批只有几条，多出来的是坏请求)。
     const incoming = Object.entries(parseTaskReads(body.reads)).slice(0, TASK_READS_MAX);
     const rounds = await currentRounds(await visibleTaskIds(actor, incoming.map(([taskId]) => taskId)));
-    const at = Date.now();
+    // 「最近看到」按人严格递增：同一毫秒里先后两批也分得出先后，满额裁的时候不会按 task_id 误伤刚看的那批。
+    const latest = (await db.select({ at: sql<number | null>`max(${taskReads.readAt})` }).from(taskReads).where(eq(taskReads.owner, owner))).at(0)?.at;
+    const at = Math.max(Date.now(), (latest ?? 0) + 1);
     const rows = incoming.flatMap(([taskId, entry]) => {
       const current = rounds.get(taskId);
       return current === undefined ? [] : [{ owner, taskId, event: entry.event, round: Math.min(entry.round, current), readAt: at }];
