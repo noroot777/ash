@@ -10,6 +10,7 @@ import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { latchWaitersOnDelete } from "./pending-after.js";
 import { publishPendingMessages } from "./pending-messages.js";
+import { republishWaitsOf } from "./pending-wait.js";
 import { acceptGateRuns, freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, taskMemos, taskNotices, taskWrites, tasks, teamInbound, taskBranchReceipts, taskDiskCleanups } from "./db/schema.js";
 import { beginTaskRevocation, settleTaskRevocation } from "./claude-monitor-revoked.js";
 import { stopMonitorsForTask } from "./monitor-reclaim.js";
@@ -95,6 +96,12 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   // 别的任务上「等它完成后发送」的消息:托盘要跟着改口,先记下是谁在等(只用于通知)。
   const waiters = await db.selectDistinct({ taskId: scheduledMessages.taskId }).from(scheduledMessages)
     .where(and(eq(scheduledMessages.afterTaskId, taskId), eq(scheduledMessages.status, "pending")));
+  // 同队成员托盘上可能正点名等着它(pending-wait.ts):删完通知它们重拉。
+  const queue = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
+  const queueMates = queue
+    ? (await db.select({ taskId: queueItems.taskId }).from(queueItems).where(eq(queueItems.queueId, queue.queueId)))
+      .map((m) => m.taskId).filter((id) => id !== taskId)
+    : [];
   await db.batch([
     // 已经等到的先锁存,删了就再也查不到它完成过 —— **跟删行同一批**:这一刻之前登记的都在,
     // 之后的登记在同一个 batch 里就看不到这个前置、落不下来(pending-after.ts 文件头)。
@@ -140,6 +147,7 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   // **只在确实删除时清**:暂停、失败、停止一律不清 —— 那几笔还是有效证据。
   forgetTaskUnconfirmed(taskId);
   for (const waiter of waiters) publishPendingMessages(waiter.taskId);
+  void republishWaitsOf(queueMates).catch((err) => console.error(`[ash] 删除 ${taskId} 后通知同队托盘失败:`, err));
 }
 
 // 删除任务。`worktree=1` / `branch=1` 表示用户在确认框里勾了「连 worktree 和分支

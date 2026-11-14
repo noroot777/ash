@@ -25,6 +25,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_tree TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_materialization TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_physical TEXT",
+  // 那一次在快照里先跑的准备命令。旧行 NULL = 没配过（依赖借用工作区那一份）。
+  "ALTER TABLE accept_gate_runs ADD COLUMN prepare_command TEXT",
   "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
   // 身份还没补全时,把「那一刻 spawn 的」这个时间锚留在债上:哨兵行和身份边条都可能先没了,
   // 而缺了锚,一次查询失败就被永久固化成「这条证不出身份」(第 10 轮审查 F2-B)。
@@ -330,6 +332,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE projects ADD COLUMN accept_auto_commit INTEGER NOT NULL DEFAULT 0",
   // 验收前置命令（点验收之后、动 git 之前跑，rc=0 才合并）。null = 不设门禁 = 老行为。
   "ALTER TABLE projects ADD COLUMN accept_gate_command TEXT",
+  // 门禁的准备命令（快照里先装依赖）。null = 不配 = 依赖照旧借用。
+  "ALTER TABLE projects ADD COLUMN accept_gate_prepare TEXT",
   // 门禁基准(分支快照 / 要求已含目标分支 / 合并预览)。存量项目落 branch = 老行为。
   "ALTER TABLE projects ADD COLUMN accept_gate_baseline TEXT NOT NULL DEFAULT 'branch'",
   // 那一按**实际**拿什么当凭据放的行（passed / skipped / unset + 真的跑绿的那一次）。
@@ -393,6 +397,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 这一回合是不是哨兵唤醒起的(见 schema-sessions.ts 同名列)。存量行由
   // monitor-wake-turns-backfill.ts 按转录回填一次。
   "ALTER TABLE session_turns ADD COLUMN monitor_wake INTEGER NOT NULL DEFAULT 0",
+  // 这一回合怎么断的(见 schema-sessions.ts 同名列)。存量行 NULL = 不知道,页面照老样子说。
+  "ALTER TABLE session_turns ADD COLUMN interruption TEXT",
   // usage_turns 里记在哨兵唤醒回合上的那几轮(见 schema-sessions.ts 同名列)。
   "ALTER TABLE sessions ADD COLUMN usage_monitor_wake_turns INTEGER",
   // 「等某任务完成后发送」的那个任务(mode=after)。存量行 NULL。
@@ -406,4 +412,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE scheduled_messages ADD COLUMN answer_id TEXT",
   // 开工起点所在的分支名（见 db/schema.ts 同名列）。存量行 NULL = 没记过。
   "ALTER TABLE tasks ADD COLUMN worktree_base_branch TEXT",
+  // 团队调度台这一行此刻归哪一台（见 schema-sessions.ts 同名列）。存量行 NULL。
+  "ALTER TABLE sessions ADD COLUMN lead_holder TEXT",
+  // 这一段暂停在等哨兵(见 db/schema.ts 同名列)。存量行 NULL 由队列观察到在等时补上。
+  "ALTER TABLE tasks ADD COLUMN monitor_hold_at TEXT",
 ];

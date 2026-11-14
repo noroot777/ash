@@ -1,15 +1,20 @@
-// 多人模式的 API 客户端。单独一份而不是塞进 `api.ts` —— 那份端点清单已经顶到 700 行
+// 身份这一组(多人模式的账号、自用模式的设备配对与访问密钥)的 API 客户端。单独一份而不是塞进 `api.ts` —— 那份端点清单已经顶到 700 行
 // 上限,而这一组的调用点也集中(登录页、向导、设置页的用户与个人 CLI 环境节)。
 import type {
   AuthState,
   ConfigBundle,
   ConfigBundleKind,
   InviteInfo,
+  PairClaim,
+  PairCode,
+  PairRequestView,
+  PairTicket,
   PersonalAshMcp,
   PersonalCliEnv,
   ProjectInviteInfo,
   ProjectMemberView,
   ProjectRole,
+  RemoteAccessView,
   UserRole,
   UserView,
 } from "@ash/shared";
@@ -35,8 +40,24 @@ export const authApi = {
   // 才开始问」的那一个 RTT。预热只兑现一次,之后每一次都是真请求。
   state: async () => (await takeAuthProbe()) ?? (await request<AuthState>("/auth/state")),
 
-  login: (key: string) => request<{ user: UserView }>("/auth/login", json("POST", { key })),
+  // 自用模式下粘的是访问密钥,那边没有 users 行,所以 user 为 null。
+  login: (key: string) => request<{ user: UserView | null }>("/auth/login", json("POST", { key })),
   logout: () => request<{ ok: true }>("/auth/logout", json("POST")),
+  // ── 自用模式:别的设备怎么进来 ────────────────────────────────────────────
+  // 设备那一侧(还没进来时打的):递申请 → 等机主点「允许」→ 来领;或者带着机主出示的码来。
+  openPair: () => request<PairTicket>("/auth/pair", json("POST", {})),
+  claimPair: (ticket: { id: string; secret: string }) =>
+    request<PairClaim>("/auth/pair/claim", json("POST", { id: ticket.id, secret: ticket.secret })),
+  redeemPair: (code: string) => request<{ token: string }>("/auth/pair/redeem", json("POST", { code })),
+  // 机主那一侧。访问密钥(给脚本用)只有在 ash 所在的那台机器上打开页面时才读得到、换得了。
+  remoteAccess: () => request<RemoteAccessView>("/remote-access"),
+  rotateRemoteAccess: () => request<RemoteAccessView>("/remote-access/rotate", json("POST")),
+  pairRequests: () => request<{ requests: PairRequestView[] }>("/remote-access/requests"),
+  decidePair: (requestId: string, decision: "approve" | "deny") =>
+    request<{ ok: true; name: string }>(`/remote-access/requests/${id(requestId)}/${decision}`, json("POST")),
+  removeDevice: (deviceId: string) =>
+    request<RemoteAccessView>(`/remote-access/devices/${id(deviceId)}`, { method: "DELETE" }),
+  pairCode: () => request<PairCode>("/remote-access/pair-code", json("POST")),
   rotateKey: () => request<{ key: string }>("/auth/rotate-key", json("POST")),
   recoveryHint: () => request<{ command: string; note: string }>("/auth/recovery-hint"),
 

@@ -13,6 +13,8 @@
 .scheduled-message-row > button:disabled { opacity: .48; }
 /* 审查链自己排的答复：只标出来，不给撤回按钮（那颗按钮的承诺在这里兑现不了）。 */
 .scheduled-message-row > .scheduled-message-managed { flex: 0 0 auto; color: var(--muted); font-size: var(--t-xs); white-space: nowrap; }
+/* 这一条在等什么(服务端下发);跟抬头那句一样时不出现。 */
+.scheduled-message-row > .scheduled-message-wait { max-width: 46%; flex: 0 1 auto; overflow: hidden; color: var(--muted); font-size: var(--t-xs); text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-message-row > .scheduled-message-guide { display: inline-flex; width: auto; height: 24px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--overlay); padding: 0 8px; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); white-space: nowrap; }
 .scheduled-message-guide > svg { color: var(--muted); }
 .scheduled-message-guide:hover:not(:disabled) { border-color: color-mix(in oklab, var(--ink) 38%, var(--line2)); background: var(--sel-bg); color: var(--ink); }

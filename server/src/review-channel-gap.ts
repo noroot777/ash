@@ -10,23 +10,27 @@
 // 那要靠 MCP server 的名字去认，而名字是各台机器自己配的（本仓历史名 `harness` 至今仍在
 // 用），认不出来就会把一轮正常通过的审查误报成「一次都没调」。
 //
-// 误报的另外两个口子各堵一道：
+// 误报的另外三个口子各堵一道：
 //  · **被停掉的回合不说话** —— 用户自己按的停，不是通道的问题。
 //  · **没产出过正文的回合不说话** —— CLI 压根没起来是另一回事（那有它自己的诊断），
 //    这时说「你没有 report_stage 工具」是误诊。
+//  · **回合自己中途断了的，说它怎么断的** —— 2026-11-13 那一轮是模型上游 503、报告一个字
+//    没写，这里却照旧推断成「报告写完了、只是没有 report_stage」（review-no-verdict.ts）。
 //
 // 证据尽力取，取不到也照说不误：claude 的 init 事件里直接写着每个 MCP server 连上没有，
 // 那是最硬的一手；codex 没有等价事件，只能从 stderr 里把跟 MCP 有关的报错行挑出来。
 import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentType } from "@ash/shared";
-import { eq } from "drizzle-orm";
+import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
+import { and, eq } from "drizzle-orm";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { db } from "./db/index.js";
-import { sessions } from "./db/schema.js";
+import { freeReviewRounds, freeReviewRuns, sessions } from "./db/schema.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
-import { appendTaskTimeline, alertLine } from "./task-timeline.js";
+import { interruptionOf, noVerdictCause, readTurnDiagnostics, reviewReportWritten, type TurnFailure } from "./review-no-verdict.js";
+import { appendTaskTimeline, alertLine, noticeLine } from "./task-timeline.js";
 import { turnProducedWork } from "./transcript.js";
 import type { TurnReview } from "./turn-lock.js";
 
@@ -192,29 +196,32 @@ function turnEvidence(a: { taskId: string; sessId: string; turnStart: string; ag
 }
 
 /**
- * 刚刚那一轮审查是不是**判成了无结论**（round 落 error、conclusion 为空）。
+ * 刚刚那一轮审查是不是**判成了无结论**（round 落 error、conclusion 为空）：是就交回那一轮的行。
  *
  * **按这一回合自己绑定的那一轮去查**，不按「这条任务最新的那次审查」：结算到这里之前，
  * 用户可能已经开出了下一轮（或者别的入口新建了一次审查），那时 `latestRun` 指的是新的
  * 那一次，它还没落 error，这句说明就悄悄不出现了（新链第 1 轮审查）。绑定拿不到的回合
  * （接回的老会话等）才退回 `latestRun`。
  */
-async function concludedNothing(taskId: string, review: TurnReview | null): Promise<boolean> {
+async function concludedNothing(taskId: string, review: TurnReview | null) {
   const { latestRun, roundOf } = await import("./free-review-round.js");
+  let round: typeof freeReviewRounds.$inferSelect | undefined;
   if (review) {
-    const { db } = await import("./db/index.js");
-    const { freeReviewRounds } = await import("./db/schema.js");
-    const { and, eq } = await import("drizzle-orm");
-    const round = (await db.select().from(freeReviewRounds).where(and(
+    round = (await db.select().from(freeReviewRounds).where(and(
       eq(freeReviewRounds.runId, review.run),
       eq(freeReviewRounds.round, review.round),
     ))).at(0);
-    return !!round && round.status === "error" && !round.conclusion;
+  } else {
+    const run = await latestRun(taskId);
+    round = run ? (await roundOf(run)) ?? undefined : undefined;
   }
-  const run = await latestRun(taskId);
-  if (!run) return false;
-  const round = await roundOf(run);
-  return !!round && round.status === "error" && !round.conclusion;
+  return round && round.status === "error" && !round.conclusion ? round : null;
+}
+
+/** 这一场是工作区审查还是合并结果审查：尾注里那一轮的叫法跟着它（「第 N 轮审查」/「合并结果审查」）。 */
+async function reviewSourceOf(runId: string): Promise<"free" | "merge"> {
+  const run = (await db.select({ targetKind: freeReviewRuns.targetKind }).from(freeReviewRuns).where(eq(freeReviewRuns.id, runId))).at(0);
+  return run?.targetKind === "accepted_merge" ? "merge" : "free";
 }
 
 /**
@@ -222,6 +229,14 @@ async function concludedNothing(taskId: string, review: TurnReview | null): Prom
  *
  * **排在 `afterSettlement` 之后调**：那一步里自由工作流才写下「未能正常给出结论，已停止
  * 自动链」，也是在那里把 round 落成 error —— 判据和那句话都得等它写完才成立。
+ *
+ * 两种没结论分开说（review-no-verdict.ts）：
+ *  · **回合自己中途断了**（`failure` 非空：非零退出、执行器报了故障、被看门狗终止）—— 说它
+ *    怎么断的、报告写没写、下一步。这时不推断上报通道：它压根没走到上报那一步。
+ *  · **回合正常收尾却没上报** —— 才是通道那套说法；「报告已经写完」只在文件确实在时说。
+ *
+ * 同一份原因按结构写进那一轮（`no_verdict` 列），页面据它换说法、摆「继续本轮审查」，不认文字。
+ * 不说话的两种（被停、没产出过）把那一列清掉：它记的是**这一轮最近那一回合**为什么没结论。
  */
 export async function noteReviewerChannelGap(a: {
   taskId: string;
@@ -231,29 +246,52 @@ export async function noteReviewerChannelGap(a: {
   stopped: boolean;
   /** 这一回合为哪一次审查的哪一轮而起（回合身份里那份）。拿不到给 null。 */
   review: TurnReview | null;
+  /** 这一回合自己异常结束的事实；正常收尾给 null。 */
+  failure: TurnFailure | null;
 }): Promise<boolean> {
-  if (a.stopped) return false;
-  if (!(await concludedNothing(a.taskId, a.review))) return false;
-  // 干过活才算数：CLI 没起来、起来就崩的那种另有诊断，这里插一句只会误导。
-  if (!(await turnProducedWork(a.taskId, a.sessId, a.turnStart))) return false;
-  const evidence = turnEvidence(a);
-  const check = HOW_TO_CHECK[a.agentType] ?? "检查该执行器的 ash MCP 登记";
-  const why = evidence
-    ? evidence.detail
-    // 没有证据时只能推断，措辞就得是推断：「最可能」而不是陈述一个原因。
-    : `这一轮没查到直接证据；最可能的原因是审查者手上根本没有 report_stage 这个工具（自查：${check}）：报告照样写得完整，只有最后一步上报做不到。`;
-  const next = evidence?.connected === true
-    ? "可以先点「继续本轮审查」让它接着上一次的上下文补上报（不用重跑这一轮）；要是它说仍然没有这个工具，就去查执行器有没有限制工具清单。"
-    // 证据说不了连上没有（codex 只看得到报错的那几份登记）：两条路都给，别替它断言得修。
-    : evidence?.connected === null
-      ? "可以先点「继续本轮审查」让它接着上一次的上下文补上报（不用重跑这一轮）；要是它说没有这个工具，按上面的自查把登记修好再来一次。"
-      : `修好之后点「继续本轮审查」，它会接着上一次的上下文只补上报，不用重跑这一轮。`;
+  const round = await concludedNothing(a.taskId, a.review);
+  if (!round) return false;
+  const record = (cause: ReviewNoVerdict | null) =>
+    db.update(freeReviewRounds).set({ noVerdict: cause }).where(eq(freeReviewRounds.id, round.id));
+  // 被停的不说话（用户自己按的停）；没干过活的也不说话（CLI 没起来、起来就崩的那种另有诊断）。
+  if (a.stopped || !(await turnProducedWork(a.taskId, a.sessId, a.turnStart))) {
+    await record(null);
+    return false;
+  }
+  const written = reviewReportWritten(a.taskId, round.runId, round.round);
+  const report = written
+    ? "这一轮的报告已经写好了，只差结论没报上来。"
+    : "这一轮的报告还没写。";
+  const interruption = a.failure
+    ? interruptionOf(a.failure, readTurnDiagnostics(a.taskId, a.sessId, a.turnStart))
+    : null;
+  let text: string;
+  if (interruption) {
+    text = `这一轮审查是中途断掉的：${interruption.detail}。${report}${interruption.next}`;
+  } else {
+    const evidence = turnEvidence(a);
+    const check = HOW_TO_CHECK[a.agentType] ?? "检查该执行器的 ash MCP 登记";
+    const why = evidence
+      ? evidence.detail
+      // 没有证据时只能推断，措辞就得是推断：「最可能」而不是陈述一个原因。
+      : `这一轮没查到直接证据；最可能的原因是审查者手上根本没有 report_stage 这个工具（自查：${check}）${written ? "：报告照样写得完整，只有最后一步上报做不到" : ""}。`;
+    const finish = written ? "补上报" : "把这一轮做完";
+    const next = evidence?.connected === true
+      ? `可以先点「继续本轮审查」让它接着上一次的上下文${finish}（不用重跑这一轮）；要是它说仍然没有这个工具，就去查执行器有没有限制工具清单。`
+      // 证据说不了连上没有（codex 只看得到报错的那几份登记）：两条路都给，别替它断言得修。
+      : evidence?.connected === null
+        ? `可以先点「继续本轮审查」让它接着上一次的上下文${finish}（不用重跑这一轮）；要是它说没有这个工具，按上面的自查把登记修好再来一次。`
+        : `修好之后点「继续本轮审查」，它会接着上一次的上下文${written ? "只补上报" : finish}，不用重跑这一轮。`;
+    text = `${written ? "这一轮的审查报告已经写完了，只是结论没能上报到 ash。" : `这一轮回合正常收尾了，结论却没上报到 ash。${report}`}${why}${next}`;
+  }
+  const cause = noVerdictCause(interruption, written);
+  await record(cause);
   // **显式绑定刚结束那条审查会话**：缺省会按 `sessions.startedAt` 挑最新建的那条，而一条
   // 任务上常有比它更新的别的会话（「继续本轮审查」复用的是**较早**那条审查会话），于是这句
   // 说明会落到另一位智能体名下 —— 看记录的人在审查者那边什么也看不到（第 1 轮审查 N3）。
   await appendTaskTimeline(
     a.taskId,
-    alertLine(`这一轮的审查报告可能已经写完了，只是结论没能上报到 ash。${why}${next}`),
+    noticeLine({ kind: "review.no_verdict", source: await reviewSourceOf(round.runId), runId: round.runId, round: round.round, cause }, text),
     { sessionId: a.sessId },
   );
   return true;

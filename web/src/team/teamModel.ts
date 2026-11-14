@@ -65,7 +65,9 @@ export function leadTurns(items: ConversationItem[]): LeadTurn[] {
  * 算说给调度者听的一次输入，打断一段。并完再跟派活卡按时间排在一起。
  */
 export function teamFeedRows(items: readonly ConversationItem[], batches: readonly Batch[]): TeamFeedRow[] {
-  const folded = foldMonitorWakes(items, { isInput: (item) => parseInbound(item.text) !== null });
+  const folded = foldMonitorWakes(items, { isInput: (item) => parseInbound(item.text) !== null })
+    // 系统续跑的缘由写在它起头的那一回合头上了（turnCause），那条记录不再单独画一行。
+    .filter((item) => item.kind !== "event" || !item.onTurnHead);
   return mergeFeed(folded, batches, teamFeedOptions());
 }
 

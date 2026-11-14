@@ -2,7 +2,7 @@
 // 各处写死，新增一个执行器后 MCP 侧会莫名 400（见下面那段注释）。
 import { z } from "zod";
 import { AGENT_TYPES, STAGE_ORDER } from "@ash/shared";
-import { RECURS_SHAPE_ERROR, TASK_WORKFLOW_MODES } from "@ash/shared/free-workflow";
+import { RECURS_SHAPE_ERROR } from "@ash/shared/free-workflow";
 
 export const AGENT_TYPE = z.enum(AGENT_TYPES);
 export const MODE = z.enum(["parallel", "serial"]);
@@ -31,14 +31,10 @@ export const RECURS = z.unknown().superRefine((value, ctx) => {
   if (!RECURS_SHAPE.safeParse(parsed).success) ctx.addIssue({ code: z.ZodIssueCode.custom, message: RECURS_SHAPE_ERROR });
 });
 
-// 工作方式。**措辞是给 agent 看的判据，不是字段说明**：它手上只有这段话能决定选哪个，
-// 说成「free / preset 二选一」它就会随便挑一个。所以直接写「默认 free，什么时候才该改」。
-export const WORKFLOW_MODE = z.enum(TASK_WORKFLOW_MODES).describe(
-  "工作方式,缺省 free。free=自由工作流:建完就跑,跑完由人在界面上随时派审查、开预览、" +
-  "驳回审查意见——**绝大多数活都该用这个**。preset=预设工作流:按固定站点线走" +
-  "(实现→验证→预览→人工→验收),只在你确实要那条线、或要指定 workflowId 起手式时才选;" +
-  "选了它界面上没有「派审查/打开预览」入口。",
-);
+// 工作方式。新建任务一律是自由工作流，起手式已停止新建，所以这里不再介绍 preset、也不在
+// 本地拦：传什么都原样转给服务端，由 `createWorkflowMode` 统一拒并说明原因。字段删掉的话
+// zod 会把旧调用方传的 `"preset"` 静默剥掉，它拿到一条自由工作流任务却以为是预设线。
+export const WORKFLOW_MODE = z.string().describe("缺省即可：新建任务一律是自由工作流");
 
 // One task spec, reused by batch_create_tasks and create_task_chain.
 // 注意:不再接受 dependsOn / resumeDependsOn —— 顺序依赖统一走 queue,

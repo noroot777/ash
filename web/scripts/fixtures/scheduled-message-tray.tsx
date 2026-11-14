@@ -21,6 +21,13 @@ function Fixture() {
       <button onClick={() => void scheduled.reload({ quiet: true })}>重新载入</button>
       <button onClick={() => setTaskId((current) => current === "task-a" ? "task-b" : "task-a")}>切换任务</button>
       <button onClick={() => setTeam((current) => !current)}>切换团队</button>
+      {/* 回复框发出一句后拿到的那份回执:只有这一行本身,没有服务端算的 wait / steerable。 */}
+      <button onClick={() => {
+        const shown = scheduled.messages.find((message) => message.steerable);
+        if (!shown) return;
+        const { wait: _wait, steerable: _steerable, ...receipt } = shown;
+        scheduled.add(receipt);
+      }}>模拟入队回执</button>
     </nav>
     <main className={team ? "team-flow-main" : "task-detail-main"} style={{ height: "calc(100dvh - 48px)", maxWidth: 1000, margin: "0 auto" }}>
       <div className="conversation-scroll-region"><section className={team ? "team-feed" : "task-conversation"}>

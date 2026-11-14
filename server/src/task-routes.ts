@@ -4,7 +4,7 @@ import { CliCommandValidationError } from "@ash/shared/cli-commands";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@ash/shared/cli-presets";
 import { inheritExecutorOverrides, sameExecutor } from "@ash/shared/executors";
 import { normalizeWorkflowDef } from "@ash/shared/workflow";
-import { TASK_WORKFLOW_MODES, freeWorkflowFits } from "@ash/shared/free-workflow";
+import { PRESET_CONVERSION_CLOSED, TASK_MODES, createWorkflowMode, workflowModeMisfit } from "@ash/shared/free-workflow";
 import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
@@ -160,7 +160,7 @@ api.post("/tasks", async (c) => {
     title: string;
     attachments?: string[];
     appendToQueue?: string; // 可选:把新任务追加到指定 queue 的尾部
-    workflowId?: string | null; // 挑哪条起手式;省略则按项目→全局默认解析
+    workflowId?: string | null; // 内部建的 preset 任务挑哪条起手式;省略则按项目→全局默认解析
   }>();
   // 建任务是**往一个项目里写东西**,所以先过可见性(§十二)。resourceGate 拦的是
   // `/tasks/:id/…`,建任务这条路上还没有 id,只有请求体里那个 projectId —— 漏了这一句,
@@ -175,14 +175,18 @@ api.post("/tasks", async (c) => {
   if (b.groupId && !(await groupInProject(b.groupId, b.projectId))) {
     return c.json({ error: "group not found", groupId: b.groupId }, 404);
   }
-  // 这条路由的请求体里一共四个资源 id:projectId、groupId、appendToQueue,加上这里这两个
+  // 空串的关联与省略同义:不归一的话 `parentId: ""` 会原样落库,而且下面的工作方式判据
+  // 会把它当成「挂在别人名下」放过 preset。
+  if (!b.parentId) b.parentId = null;
+  if (!b.reviewOf) b.reviewOf = null;
+  // 这条路由的请求体里一共四个资源 id:projectId、groupId、appendToQueue,加上这里这三个
   // **指向别的任务**的。它们同样得查归属,而且 parentId 比前几个更要紧 —— 下面那句
   // `inheritOwner` 按全库 id 查父任务的 ownerUserId,于是「猜中一个隐藏父任务」就能在自己
   // 项目里造出一条**别人 owner** 的任务:自动起跑没有 actingUserId 时退回 tasks.ownerUserId,
   // 烧的是那个人的 key、署的是那个人的名(第 3 轮审查 P1)。
   // 现有调用方(派生面板、duet 接手)一律传 `projectId: task.projectId` + 同项目的任务 id,
   // 所以这条判据就是它们本来满足的那个。
-  for (const [field, taskRef] of [["parentId", b.parentId], ["originTaskId", b.originTaskId]] as const) {
+  for (const [field, taskRef] of [["parentId", b.parentId], ["reviewOf", b.reviewOf], ["originTaskId", b.originTaskId]] as const) {
     if (taskRef && !(await taskInProject(taskRef, b.projectId))) {
       return c.json({ error: "task not found", [field]: taskRef }, 404);
     }
@@ -191,27 +195,17 @@ api.post("/tasks", async (c) => {
   if ((b.parentId && heldForAcceptance(b.parentId)) || (b.reviewOf && heldForAcceptance(b.reviewOf))) {
     return c.json({ error: "所属团队正在验收，结束后再建它名下的执行者或审查", parentId: b.parentId ?? null, reviewOf: b.reviewOf ?? null }, 409);
   }
-  // 没显式指定就按**这个请求配不配自由工作流**推导（`freeWorkflowFits` 与下面三条门禁
-  // 共用同一份判据）。以前这里写死 `preset`，于是同一件事从界面建和从 MCP/脚本建会落到
-  // 两种模式上：新建面板默认选的是 free（`TaskComposerPanel`），而调用方压根不知道有
-  // `workflowMode` 这个字段可传，只能拿到 preset —— 拿到的那种任务没有「派审查 / 开预览」
-  // 入口（`FreeWorkflowToolbar` 第一行就按 workflowMode 整条返回 null），用户在界面上看到
-  // 的是一个功能被剪掉的任务，却找不到原因。
-  //
-  // 反过来**不能无条件默认 free**：团队/讨论任务、派生执行者、审查任务、自带起手式的请求
-  // 都容不下它，默认给它们 free 等于让老调用方凭空吃 409。所以判据必须就是门禁那一份。
-  const workflowMode = b.workflowMode ?? (freeWorkflowFits(b) ? "free" : "preset");
-  if (!(TASK_WORKFLOW_MODES as readonly string[]).includes(workflowMode)) {
-    return c.json({ error: "workflowMode 只能是 free 或 preset" }, 400);
-  }
-  if (workflowMode === "free" && ((b.mode ?? "single") !== "single" || b.parentId != null || b.reviewOf != null)) {
-    return c.json({ error: "自由工作流只适用于普通单任务" }, 409);
-  }
-  if (workflowMode === "free" && (b.workflow != null || b.workflowId != null)) {
-    return c.json({ error: "自由工作流不能同时携带起手式" }, 400);
-  }
-  // 新建面板允许**就地改这条线**（挑一个起手式再动两下），改完的那份直接随任务提交，
-  // 不用先在库里存一条。收下来的仍然只是一份快照,跟 workflowId 那条路殊途同归。
+  // 默认值与门禁同出一份判据（`createWorkflowMode`）：顶层单任务只能是自由工作流，
+  // 团队/讨论、派生执行者在内部照旧落 preset。判的是**落库的那份身份**：`reviewOf` 这条
+  // 路由不落库（只拿去占验收的位），所以它不让任务变成审查任务，也就不给 preset 豁免。
+  const resolvedMode = createWorkflowMode({
+    mode: b.mode, parentId: b.parentId, reviewOf: null,
+    workflowMode: b.workflowMode, workflow: b.workflow, workflowId: b.workflowId,
+  });
+  if ("error" in resolvedMode) return c.json({ error: resolvedMode.error }, resolvedMode.status);
+  const { workflowMode } = resolvedMode;
+  // preset 任务可以随请求带一份就地改过的线，收下来的只是一份快照,跟 workflowId 那条路
+  // 殊途同归(顶层单任务带它已在上面被拒)。
   let inlineWorkflow: string | null = null;
   if (b.workflow !== undefined && b.workflow !== null) {
     const parsed = normalizeWorkflowDef(b.workflow);
@@ -592,7 +586,19 @@ api.patch("/tasks/:id", async (c) => {
   }
   if (b.model !== undefined || executorChanged) patch.model = patchedOverrides.model;
   if (b.reasoningEffort !== undefined || b.model !== undefined || executorChanged) patch.reasoningEffort = normalizedEffort;
-  if (b.mode !== undefined) patch.mode = b.mode;
+  // 改类型要按**改完的那份身份**重新过一遍工作方式判据（与新建同一份）：团队/讨论是 preset，
+  // 改成单任务就成了一条新的顶层起手式任务；自由工作流的单任务改成团队同样不成立。
+  // 只在类型真的变了时判 —— 历史起手式任务改标题、标签、执行器照常。
+  if (b.mode !== undefined && b.mode !== existing.mode) {
+    if (!(TASK_MODES as readonly string[]).includes(b.mode)) {
+      return c.json({ error: "mode 只能是 single、team 或 duet" }, 400);
+    }
+    const misfit = workflowModeMisfit({ ...existing, mode: b.mode });
+    if (misfit) {
+      return c.json({ error: misfit.kind === "preset-closed" ? PRESET_CONVERSION_CLOSED : misfit.error }, misfit.status);
+    }
+    patch.mode = b.mode;
+  }
   if (b.duet !== undefined) patch.duet = scopedDuet(scope, b.duet);
   // 注意:dependsOn / resumeDependsOn 不再可编辑:
   // 改顺序请用 /queues/:id/* 端点;调整队列归属请用 remove + insert/append。

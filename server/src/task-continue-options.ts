@@ -4,12 +4,12 @@ import type { AgentType } from "@ash/shared";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 import type { TurnIdentity, TurnSource } from "./runs.js";
 
-// Why a task is being (re)started — only used to label the resume; all reasons
-// behave the same (resume if there's a resumable session, else fresh). Note: a
-// scheduled cron fire is NOT here — it always starts a fresh run via runTask
-// (schedules.ts), so it never resumes. `wake` = an upstream task just settled
-// done and the settle hook is auto-resuming this paused dependent.
-export type ResumeReason = "group" | "run" | "retry" | "wake" | "queue";
+// Why a task is being (re)started — labels the resume (it rides on the 〔系统〕 record,
+// see @ash/shared/system-resume); all reasons behave the same (resume if there's a
+// resumable session, else fresh). Note: a scheduled cron fire is NOT here — it always
+// starts a fresh run via runTask (schedules.ts), so it never resumes.
+export type { ResumeReason } from "@ash/shared/system-resume";
+import type { ResumeReason } from "@ash/shared/system-resume";
 
 /**
  * **这一轮没能起跑,是哪一种**(`continueTask` 返回 false 时必定带一个)。

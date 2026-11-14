@@ -11,6 +11,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { api, type FileEntryOverview } from "../lib/api.ts";
+import { localeNumber } from "../lib/localeFormat.ts";
 import { useZoomLayer, ZoomToggle } from "../lib/zoomLayer.tsx";
 import { formatSize, siblingReel } from "./fileModel.ts";
 import { useDeleteEntry } from "./useDeleteEntry.tsx";
@@ -88,7 +89,7 @@ export function FolderViewer({
           <b>{overview?.target.name ?? path.split("/").pop()}</b>
           <small>
             {path}/
-            {stats ? ` · ${stats.files.toLocaleString()} 个文件 · ${formatSize(stats.bytes)}${stats.truncated ? "（还没数完）" : ""}` : ""}
+            {stats ? ` · ${localeNumber(stats.files)} 个文件 · ${formatSize(stats.bytes)}${stats.truncated ? "（还没数完）" : ""}` : ""}
           </small>
         </div>
         <button
@@ -168,11 +169,11 @@ export function FolderViewer({
           <div className="folder-viewer__body">
             <div className="folder-viewer__stats">
               <div className="folder-viewer__stat">
-                <b>{stats?.files.toLocaleString() ?? "—"}</b>
+                <b>{stats ? localeNumber(stats.files) : "—"}</b>
                 <span>个文件（含子目录）</span>
               </div>
               <div className="folder-viewer__stat">
-                <b>{stats?.dirs.toLocaleString() ?? "—"}</b>
+                <b>{stats ? localeNumber(stats.dirs) : "—"}</b>
                 <span>个子文件夹</span>
               </div>
               <div className="folder-viewer__stat">
@@ -180,11 +181,11 @@ export function FolderViewer({
                 <span>合计大小{stats?.truncated ? "（至少）" : ""}</span>
               </div>
               <div className="folder-viewer__stat" data-tone="dirty">
-                <b>{git?.dirty.toLocaleString() ?? "—"}</b>
+                <b>{git ? localeNumber(git.dirty) : "—"}</b>
                 <span>个有未提交改动</span>
               </div>
               <div className="folder-viewer__stat" data-tone="untracked">
-                <b>{git?.untracked.toLocaleString() ?? "—"}</b>
+                <b>{git ? localeNumber(git.untracked) : "—"}</b>
                 <span>个未跟踪（git 里没有备份）</span>
               </div>
             </div>
@@ -219,9 +220,9 @@ export function FolderViewer({
             <p className="folder-viewer__note">
               <Warning size={13} aria-hidden="true" />
               <span>
-                删除这个文件夹＝连同里面 {stats?.files.toLocaleString() ?? "所有"} 个文件一起删。
+                删除这个文件夹＝连同里面 {stats ? localeNumber(stats.files) : "所有"} 个文件一起删。
                 {git && git.untracked > 0
-                  ? `其中 ${git.untracked.toLocaleString()} 个未跟踪，git 里没有任何备份。`
+                  ? `其中 ${localeNumber(git.untracked)} 个未跟踪，git 里没有任何备份。`
                   : git?.tracked
                     ? "里面的文件都被 git 跟踪着，删完可以在「源代码管理」里丢弃那条 deleted 改动找回来。"
                     : ""}

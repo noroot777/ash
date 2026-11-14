@@ -24,7 +24,7 @@ import { acceptGateLogPath, appendGateLog, spawnAcceptGate } from "./accept-gate
 import { isAncestor } from "./git-accept.js";
 import { commitAt } from "./task-branch-plan.js";
 import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
-import { acceptGateCommandOf, gateView, latestRun, prepareGateCwd, runningRun } from "./accept-gate-state.js";
+import { acceptGateCommandOf, acceptGatePrepareOf, gateView, latestRun, prepareGateCwd, runningRun, sameGateRecipe } from "./accept-gate-state.js";
 import { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource, type GateSource } from "./accept-gate-source.js";
 import { readOnlyGit, snapshotMaterialization } from "./accept-gate-preview.js";
 import { checkoutDivergence, encodePhysical, snapshotPhysical } from "./accept-gate-physical.js";
@@ -37,7 +37,7 @@ import { abandonUnstartedGateProcess, attachGateProcess, claimGateProcess, hasOw
 import { prepareGateLaunch } from "./accept-gate-launch.js";
 import { gateConfinementUnavailable, gateExecutionNotice } from "./accept-gate-confinement.js";
 import { releaseGateOwnership } from "./accept-gate-release.js";
-import { gateExitOutcome, recordedGateExit } from "./accept-gate-exit.js";
+import { gateExitOutcome, recordedGateExit, unrecordedGateExit } from "./accept-gate-exit.js";
 import { announceGate, cleanupGateSnapshot, live, noteIfStillAlive, settleGate, superviseGate } from "./accept-gate-settle.js";
 export { whenAcceptGateSettled } from "./accept-gate-settle.js";
 export { recoverAcceptGates } from "./accept-gate-recover.js";
@@ -63,6 +63,8 @@ export type AcceptGateReason = "accept_gate_required" | "accept_gate_running" | 
 
 type PendingStart = {
   command: string;
+  /** 快照里先跑的准备命令（null = 没配，依赖借用工作区那一份）。 */
+  prepare: string | null;
   cwd: string;
   projectId: string;
   repoPath: string;
@@ -104,6 +106,7 @@ export async function acceptGateCheck(
   const recordBasis = (mode: AcceptGateBasisMode, runId: string | null) =>
     opts.onBasis({ acceptedGateMode: mode, acceptedGateRunId: runId });
   const command = acceptGateCommandOf(project);
+  const prepare = acceptGatePrepareOf(project);
   // 没设(或刚被撤掉):这一按直接合,凭据就是「那一刻没有这一关」。这一句**必须也写**——
   // 不写的话,上一次验收留下的那份 passed 会原地留着,给一份从没测过的代码背书(F1 实测)。
   if (!command || !project) {
@@ -119,7 +122,7 @@ export async function acceptGateCheck(
 
   const cwd = await prepareGateCwd(task, project.repoPath);
   let source: GateSource;
-  try { source = await readGateSource(cwd, gateSnapshotPath(task.id, "identity")); }
+  try { source = await readGateSource(cwd, gateSnapshotPath(task.id, "identity", !!prepare), !!prepare); }
   catch (error) {
     if (opts.intent !== "skip") return { accepted: false, httpStatus: 409, taskId: task.id,
       reason: "accept_gate_source_unavailable", error: String(error), status: task.status };
@@ -141,7 +144,7 @@ export async function acceptGateCheck(
   if (opts.passedRunId) {
     const row = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, opts.passedRunId))).at(0);
     if (row && row.taskId === task.id && row.status === "passed"
-      && row.command === command && gateSourceMatches(row, source)) {
+      && sameGateRecipe(row, command, prepare) && gateSourceMatches(row, source)) {
       // 合并预览档的凭据还要核基准：这一次绿的是「分支 + 当时的目标分支」，跑的那十几分钟里目标
       // 分支又进了别的合并，它就不是这一次要合出来的那棵树 —— 落到下面按新的目标分支重新预演。
       if (gateBaselineMatches(row, plan)) {
@@ -174,7 +177,7 @@ export async function acceptGateCheck(
 
   const previous = await latestRun(task.id);
   const sameTree = !!previous && gateSourceMatches(previous, source) && gateBaselineMatches(previous, plan)
-    && previous.command === command && opts.intent !== "rerun";
+    && sameGateRecipe(previous, command, prepare) && opts.intent !== "rerun";
   if (sameTree && previous!.status === "passed") {
     await noteTargetDrift(task, project.repoPath, previous!);
     await appendTaskTimeline(
@@ -187,7 +190,7 @@ export async function acceptGateCheck(
   // 走到这里一定不是 skip（那一档上面已经返回了），所以 plan 必在。
   const { targetBranch, targetCommit } = plan!;
   pendingStarts.set(task.id, {
-    command, cwd, projectId: project.id, repoPath: project.repoPath,
+    command, prepare, cwd, projectId: project.id, repoPath: project.repoPath,
     sourceCommit: head, source,
     targetBranch,
     targetCommit,
@@ -242,7 +245,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
   if (hasOwnedGateProcess(taskId)) return null;
   const runId = newId();
   const logPath = acceptGateLogPath(taskId, runId);
-  const snapshotCwd = gateSnapshotPath(taskId, runId);
+  const snapshotCwd = gateSnapshotPath(taskId, runId, !!plan.prepare);
   claimGateProcess(runId, taskId, logPath);
   let inserted = false;
   try {
@@ -251,7 +254,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     if (already) { abandonUnstartedGateProcess(runId); return gateView(already); }
     const startedAt = now();
     await db.insert(acceptGateRuns).values({
-      id: runId, taskId, projectId: plan.projectId, command: plan.command, cwd: snapshotCwd,
+      id: runId, taskId, projectId: plan.projectId, command: plan.command, prepareCommand: plan.prepare, cwd: snapshotCwd,
       status: "running", exitCode: null, failure: null, pid: null, processPending: true, logPath,
       executionMode: gateExecutionNotice() ? "macos-observed" : null,
       sourceCommit: plan.sourceCommit, targetBranch: plan.targetBranch, targetCommit: plan.targetCommit,
@@ -264,12 +267,13 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     const baselineNotice = gateBaselineNotice(plan.baseline);
     appendGateLog(logPath, `[ash] ${startedAt} 验收前置命令开跑\n[ash] source: ${plan.cwd}\n[ash] snapshot: ${snapshotCwd}\n[ash] fingerprint: ${plan.source.fingerprint}\n`
       + (baselineNotice ? `[ash] baseline: ${baselineNotice}（预览基准 ${plan.baseline.targetBranch} = ${plan.baseline.previewBase}）\n` : "")
-      + `[ash] $ ${plan.command}\n\n`);
+      + (plan.prepare ? `[ash] 准备命令（在快照里先装依赖）\n[ash] $ ${plan.prepare}\n\n` : `[ash] $ ${plan.command}\n\n`));
     const executionNotice = gateExecutionNotice();
     if (executionNotice) appendGateLog(logPath, `[ash] ${executionNotice}\n`);
     await appendTaskTimeline(
       taskId,
-      receiptLine(`验收前置命令开跑：\`${plan.command}\`（独立快照 ${snapshotCwd}，源自 ${plan.cwd}）。rc=0 且进程监督收尾后才会继续合并；`
+      receiptLine(`验收前置命令开跑：\`${plan.command}\`（独立快照 ${snapshotCwd}，源自 ${plan.cwd}`
+        + (plan.prepare ? `；先在快照里跑准备命令 \`${plan.prepare}\` 装依赖` : "") + "）。rc=0 且进程监督收尾后才会继续合并；"
         + `绿了会自动把这次验收做完，红了会把日志交回这个任务去修。`
         + (executionNotice ? ` ${executionNotice}` : "")
         + (baselineNotice ? ` ${baselineNotice}。`
@@ -321,7 +325,9 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     // 实测撤掉（答的是查询那一次的状态，还替用户多跑了两次项目代码）。因此它**不够**单独
     // 授权「测试没启动」，只是三件必要条件之一 —— 另两件在 accept-gate-miss.ts。
     await db.update(acceptGateRuns)
-      .set({ entryProbe: encodeGateEntryProbe(probeGateEntry(snapshotCwd, plan.command)), previewCommit,
+      // 配了准备命令就不核：命令起跑那一刻的快照是准备命令装完之后的样子，现在核到的是装之前，
+      // 「node_modules/.bin 里没有它」这种事实在那时并不成立，记下来只会变成一条反向的线索。
+      .set({ entryProbe: plan.prepare ? null : encodeGateEntryProbe(probeGateEntry(snapshotCwd, plan.command)), previewCommit,
         // 凭据记快照**实际**用的那一份，不是判定那一刻读到的：两者之间项目改了配置，记下的就是测过的。
         ...(plan.baseline.previewBase ? { previewMaterialization: await snapshotMaterialization(snapshotCwd), previewPhysical: physical } : {}) })
       .where(eq(acceptGateRuns.id, runId));
@@ -336,11 +342,12 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     }
     started = await spawnAcceptGate({
       command: plan.command,
+      prepare: plan.prepare,
       cwd: snapshotCwd,
       logPath,
       hold: true,
       // 先认启动器留下的退出档：它带着用时，过了时限的退出码按超时收（accept-gate-exit.ts）。
-      onExit: (exit) => void settleGate(runId, gateExitOutcome(recordedGateExit(logPath) ?? exit)),
+      onExit: (exit) => void settleGate(runId, gateExitOutcome(recordedGateExit(logPath) ?? unrecordedGateExit(exit, !!plan.prepare))),
     });
   } catch (error) {
     appendGateLog(logPath, `\n[ash] 起不来：${error instanceof Error ? error.message : String(error)}\n`);
@@ -414,6 +421,7 @@ export async function acceptGateWouldRun(task: TaskRow, project: ProjectRow | nu
   if (hasLiveAcceptGate(task.id)) return true;
   const command = acceptGateCommandOf(project);
   if (!command || !project) return false;
+  const prepare = acceptGatePrepareOf(project);
   if (gateConfinementUnavailable()) return false;
   if (await runningRun(task.id)) return true;
   const cwd = await existingTaskWorkspacePath(task, project.repoPath);
@@ -423,7 +431,7 @@ export async function acceptGateWouldRun(task: TaskRow, project: ProjectRow | nu
   // （`acceptTask` 回 `accept_gate_source_unavailable`，一条运行记录都不建）。倒向 `true` 会让批量
   // 预判说「这一按要跑门禁」，而真按下去压根不会跑 —— `test-accept-gate-readonly.ts` 的
   // source-unavailable 夹具把这两边钉在一起。
-  const source = await readGateSource(cwd, gateSnapshotPath(task.id, "identity")).catch(() => null);
+  const source = await readGateSource(cwd, gateSnapshotPath(task.id, "identity", !!prepare), !!prepare).catch(() => null);
   if (!source) return false;
   // 基准拦得下的那一按同理倒向 `false`：真按下去会在门禁之前被拒（没含目标分支 / 预演冲突），
   // 一条运行记录都不建。复用判据也要连基准一起比 —— 预览基准过期的旧绿真按下去会重跑。
@@ -431,7 +439,7 @@ export async function acceptGateWouldRun(task: TaskRow, project: ProjectRow | nu
   if (baseline.block) return false;
   const previous = await latestRun(task.id);
   return !(previous && previous.status === "passed"
-    && gateSourceMatches(previous, source) && gateBaselineMatches(previous, baseline.plan) && previous.command === command);
+    && gateSourceMatches(previous, source) && gateBaselineMatches(previous, baseline.plan) && sameGateRecipe(previous, command, prepare));
 }
 
 export async function cancelAcceptGate(taskId: string, reason = "你在验收台上取消了这一次", runId?: string): Promise<AcceptGateCancelResult> {

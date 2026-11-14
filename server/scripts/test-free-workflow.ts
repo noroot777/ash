@@ -533,7 +533,7 @@ try {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ projectId: "p", title: "mixed", workflowMode: "free", workflowId: "standard" }),
   });
-  assert.equal(mixed.status, 400, "自由工作流不能夹带起手式引用");
+  assert.equal(mixed.status, 409, "自由工作流不能夹带起手式引用：起手式已停止新建");
 
   const removedMerge = await api.request("/tasks/free-accept-task/free-workflow/merge", { method: "POST" });
   assert.equal(removedMerge.status, 404, "自由工作流专属合并接口应删除");
