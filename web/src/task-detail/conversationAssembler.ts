@@ -136,7 +136,9 @@ export function createAssembler(sessions: readonly Session[]) {
   }
 
   function apply(record: IdentityRecord, out: ConversationItem[]): void {
-    identitySessions.add(record.sessionId);
+    // 一条会话归身份这一路，只凭正文流（.md）上带号的记录：trace 带号、正文不带的写者协议不完整，
+    // 光凭一步带号的执行过程就把它整条认成带身份的，它没号的正文与实时事件就全丢了。
+    if (record.kind !== "step") identitySessions.add(record.sessionId);
     if (record.kind === "prose") { applyProse(record, out); return; }
     if (record.kind === "end") {
       const after = inputBefore(record.sessionId, record.seq ?? Number.POSITIVE_INFINITY)?.seq ?? null;
@@ -196,9 +198,15 @@ export function createAssembler(sessions: readonly Session[]) {
   }
 
   return {
-    /** 一条落盘会话带身份的那一截（会话之间按时刻排序由调用方做，这里只往 `out` 里按号铺）。 */
-    persisted(split: SplitSession, out: ConversationItem[]): void {
-      for (const record of split.records) apply(record, out);
+    /**
+     * 一条落盘会话带身份的那一截（会话之间按时刻排序由调用方做，这里只往 `out` 里按号铺）。`early`：实时那一路
+     * 已经到了、号却落在这份快照里面的输入（output 与 trace 不是同一刻读的，中间来的那句插话快照里没有，trace
+     * 里却已经有它之后的步骤）—— 跟快照一起按号铺，气泡的切分才由完整的输入集合决定，跟整份重新读一样。
+     */
+    persisted(split: SplitSession, out: ConversationItem[], early: IdentityRecord[] = []): void {
+      // 稳定排序：同一个号盘上那份在前（实时那份随后按号去重）。
+      const records = [...split.records, ...early].sort((left, right) => (left.seq ?? 0) - (right.seq ?? 0));
+      for (const record of records) apply(record, out);
       for (const extra of split.readSide) {
         const candidates = [...bubbles.values()].filter((bubble) => bubble.sessionId === split.session.id && bubble.turn === extra.turnStartedAt);
         const owner = candidates.findLast((bubble) => (bubble.item.at ?? "") <= extra.at) ?? candidates[0];
@@ -210,21 +218,44 @@ export function createAssembler(sessions: readonly Session[]) {
       for (const bubble of bubbles.values()) if (!bubble.incremental) layout(bubble);
       persistedPhase = false;
     },
-    /** 一条实时事件归不归身份这一路：归的话就地处理掉（返回 true），不归的交回老读法。 */
-    live(entry: TimelineEntry, out: ConversationItem[], liveContext: Map<string, ContextUsage>): boolean {
+    /**
+     * 实时事件的分派判据：归身份这一路（true）还是交回老读法。只判不做 —— 调用方先把整串分好（老读法那一路
+     * 要先整体筛掉重复拷贝），再按到达顺序逐条交给 `live` / 老读法，两路交错的先后不变。判据随前面认下的
+     * 记录变（一句带号的输入、一段带号的正文之后，这条会话没号的事件也归这一路），所以从此刻的状态起
+     * 拷一份往下推，跟 `live` 真处理时的状态走同一步。
+     */
+    router(): (entry: TimelineEntry) => boolean {
+      const knownSessions = new Set(identitySessions);
+      const knownKeys = new Set(clientKeys);
+      return (entry) => {
+        if (entry.kind === "user") {
+          if (entry.seq !== undefined && entry.sessionId) {
+            knownSessions.add(entry.sessionId);
+            if (entry.clientKey) knownKeys.add(entry.clientKey);
+            return true;
+          }
+          // 先画出来的那份：落盘那份（或服务端播回来的那份）已经凭同一个凭据到了，就不再画第二遍。
+          return !!entry.clientKey && knownKeys.has(entry.clientKey);
+        }
+        const { sessionId, seq, event } = entry.event;
+        if (seq === undefined) return knownSessions.has(sessionId);
+        if (event.kind === "system" || event.kind === "text") knownSessions.add(sessionId);
+        return true;
+      };
+    },
+    /** 一条归身份这一路的实时事件（`router` 认下的），就地处理掉。 */
+    live(entry: TimelineEntry, out: ConversationItem[], liveContext: Map<string, ContextUsage>): void {
       if (entry.kind === "user") {
         const record = liveInput(entry, sessions);
-        if (record) { apply(record, out); return true; }
-        // 先画出来的那份：落盘那份（或服务端播回来的那份）已经凭同一个凭据到了，就不再画第二遍。
-        return !!entry.clientKey && clientKeys.has(entry.clientKey);
+        if (record) apply(record, out);
+        return;
       }
       const envelope = entry.event;
       const event = envelope.event;
       const sessionId = envelope.sessionId;
       const seq = envelope.seq;
-      if (seq === undefined && !identitySessions.has(sessionId)) return false;
-      if (event.kind === "context") { liveContext.set(sessionId, event.context); return true; }
-      if (event.kind === "session") return true;
+      if (event.kind === "context") { liveContext.set(sessionId, event.context); return; }
+      if (event.kind === "session") return;
       const turn = envelope.turnStartedAt ?? null;
       if (seq === undefined) {
         // 带身份的会话上没带号的：回合收口记成事实；别的内容盘上没有对应的那条，刷新以后也不会有，不画。
@@ -238,18 +269,15 @@ export function createAssembler(sessions: readonly Session[]) {
             ...(event.kind === "done" && failed && event.interruption ? { interruption: event.interruption } : {}),
           }, out);
         }
-        return true;
+        return;
       }
       if (event.kind === "system") {
         apply({ kind: "note", sessionId, turn, seq, item: liveSystemNote(recordId(sessionId, seq), sessionId, event) }, out);
       } else if (event.kind === "text") {
         apply({ kind: "prose", sessionId, turn, seq, raw: event.text, offset: envelope.textOffset ?? 0, envelope }, out);
-      } else if (event.kind === "done" || event.kind === "turnEnd") {
-        return true;
-      } else {
+      } else if (event.kind !== "done" && event.kind !== "turnEnd") {
         apply({ kind: "step", sessionId, turn, seq, event: event as StepRecord["event"], envelope }, out);
       }
-      return true;
     },
     /** 收尾：每颗气泡的起止、是不是被打断的半截、回合事实。实时增量都到齐之后跑一次。 */
     settle(): void {

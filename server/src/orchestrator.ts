@@ -1,5 +1,5 @@
 import { mkdirSync, createWriteStream } from "node:fs";
-import { bindTranscript } from "./transcript-identity.js";
+import { claimTranscript } from "./transcript-identity.js";
 import { loadMarkdownImageSeed, markdownImageAccounting } from "./agent-image-journal.js";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -560,7 +560,7 @@ export async function continueTask(
     });
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
-    bindTranscript(out, { taskId, sessionId: sessId, turnStartedAt: turnStart });
+    await claimTranscript(out, { taskId, sessionId: sessId, turnStartedAt: turnStart });
     const noteTarget = { out, taskId, sessionId: sessId, role: sessionRole, agentType: agent, at: turnStart };
     if (opts.system) {
       // Backend-initiated 继续: a 〔系统〕 trace carrying who resumed it, NOT a 你→ reply.

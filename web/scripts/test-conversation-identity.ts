@@ -10,6 +10,9 @@
 //   ③ 删除：有正文的按段、只有执行过程的按「回合 + 前后两句输入的号」，用服务端真正的删除函数判；
 //      trace 以真有的 unknown 子智能体事件收尾也删得掉；读的时候补出来的（origin）不进指纹
 //   ④ 页面发的那一句凭 clientKey 认回去，不比原文
+//   ⑤ 边界：没走身份协议的写者（团队调度台：正文不带号、trace 带号）整条走老读法，快照之后没号的实时正文照常画；
+//      output 与 trace 不是同一刻读的、中间那句插话只在实时那一路，步骤照样归插话之后；快照里「在等上游」
+//      被之后的实时输出和此刻的会话列表覆盖；有身份与没身份的实时事件按到达顺序排
 //
 // 跑：npm -w web run test:conversation-identity
 import assert from "node:assert/strict";
@@ -20,6 +23,7 @@ import { dirname, join } from "node:path";
 import { parseSessionSpans, traceSpanFingerprint } from "@ash/shared/session-output";
 import type { SessionTraceEntry } from "../src/lib/api.ts";
 import { buildConversationItems, type ConversationItem, type TimelineEntry } from "../src/task-detail/conversationModel.ts";
+import { awaitingUpstream } from "../src/task-detail/conversationSegments.ts";
 import { mergeUserTimeline } from "../src/lib/useConversation.ts";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-conversation-identity-"));
@@ -260,6 +264,83 @@ ok("落盘重建、实时到达、中途打开（含重叠与半截正文）三�
   const items = buildConversationItems([{ session: sessionRow(S1, ends), ...disk }], [sessionRow(S1, ends)], [{ ...optimistic, text: "把首页改成两栏", clientKey: "k-first" }]);
   assert.equal(items.filter((item) => item.kind === "user").length, 3, "落盘那份凭据对上了，先画的那份不重复");
   ok("页面发的那一句凭 clientKey 认回去，不比原文和时刻");
+}
+
+// ── ⑤ 边界 ─────────────────────────────────────────────────────────────────
+{
+  // 团队调度台那种写者：正文流没绑定（不带号），trace 是升级中途写下的、带号（旧构建那样）。整条走老读法。
+  const LEAD = "s-lead";
+  const mdPath = sessionTranscriptPath(TASK, LEAD);
+  const out = createWriteStream(mdPath, { flags: "a" });
+  writeTurn(out, { t: "user", agent: "claude", text: "拆成三个任务" }, T(20));
+  out.write("我先派活。\n");
+  await new Promise<void>((resolve) => out.end(resolve));
+  const leadTrace: SessionTraceEntry[] = [
+    { at: T(20, 5), turnStartedAt: T(20), seq: 7, event: { kind: "tool", name: "dispatch", detail: "dispatch" } } as never,
+  ];
+  const row = sessionRow(LEAD, {}, { role: "lead", agentType: "claude" });
+  const output = readFileSync(mdPath, "utf8");
+  const withSeq = buildConversationItems([{ session: row, output, trace: leadTrace }], [row], []);
+  const withoutSeq = buildConversationItems([{ session: row, output, trace: leadTrace.map(({ seq: _seq, ...entry }) => entry as SessionTraceEntry) }], [row], []);
+  assert.deepEqual(shape(withSeq), shape(withoutSeq), "trace 带号、正文不带：跟整条没号一样走老读法");
+  assert.equal(agents(withSeq).length, 1, "工具与正文在同一颗气泡里，不拆出只有执行过程的那颗");
+  const later: TimelineEntry = { kind: "server", id: "lead-1", event: { type: "agent.event", taskId: TASK, sessionId: LEAD, role: "lead", agentType: "claude", event: { kind: "text", text: "新增文字" } } as never };
+  const after = buildConversationItems([{ session: row, output, trace: leadTrace }], [row], [later]);
+  assert.ok(agents(after).some((item) => item.markdown.includes("新增文字")), "快照之后没号的实时正文照常画");
+  ok("没走身份协议的写者整条走老读法，trace 带号也不切换；之后的实时正文照常画");
+}
+
+{
+  // output 先读（还没有那句插话），trace 后读（已经有插话之后的步骤）；插话只在实时那一路。
+  const S = "s-torn";
+  const arrivals: TimelineEntry[] = [];
+  const run = turn(S, T(30), arrivals);
+  run.input("开始", T(30)).at(T(30, 5)).say("前半段");
+  await run.drain();
+  const output = readFileSync(sessionTranscriptPath(TASK, S), "utf8");
+  const cut = arrivals.length;
+  run.input("插话", T(30, 20)).tool("after", T(30, 30));
+  await run.drain();
+  const trace = read(S).trace;
+  const row = sessionRow(S, { [T(30)]: null });
+  const torn = buildConversationItems([{ session: row, output, trace }], [row], arrivals.slice(cut));
+  const whole = buildConversationItems([{ session: row, ...read(S) }], [row], []);
+  assert.deepEqual(shape(torn), shape(whole), "跟整份重新读同形");
+  const [before, behind] = agents(torn);
+  assert.deepEqual(before!.segments.flatMap((segment) => segment.events.map((event) => event.label)), [], "插话之后的步骤不归它前面那颗");
+  assert.deepEqual(behind!.segments.flatMap((segment) => segment.events.map((event) => event.label)), ["after"]);
+  assert.ok(torn.findIndex((item) => item.kind === "user" && item.text === "插话") < torn.indexOf(behind!), "插话排在它之后那颗前面");
+  await run.end(T(31));
+  ok("快照不是同一刻读的：只在实时那一路的插话跟快照一起按号铺，步骤归插话之后");
+}
+
+{
+  // 快照里这条会话在等上游；之后实时来了正文 / 会话列表已经说不在等了。
+  const stale = sessionRow(S1, ends, { awaitingUpstream: true });
+  const fresh = sessionRow(S1, ends, { awaitingUpstream: false });
+  const lastOf = (items: ConversationItem[]) => agents(items).at(-1)!;
+  assert.equal(awaitingUpstream(lastOf(buildConversationItems([{ session: stale, ...disk }], [stale], [])).segments), true, "前提：快照里在等，就挂着");
+  assert.equal(awaitingUpstream(lastOf(buildConversationItems([{ session: stale, ...disk }], [fresh], [])).segments), false, "此刻的会话列表说不在等：不挂");
+  const resumed: TimelineEntry = {
+    kind: "server", id: "resumed",
+    event: { type: "agent.event", taskId: TASK, sessionId: S1, role: "single", agentType: "codex", turnStartedAt: T(5), seq: 10_000, textOffset: 0, event: { kind: "text", text: "上游回话了" } } as never,
+  };
+  const items = buildConversationItems([{ session: stale, ...disk }], [stale], [resumed]);
+  assert.ok(lastOf(items).markdown.includes("上游回话了"));
+  assert.equal(awaitingUpstream(lastOf(items).segments), false, "之后到的实时正文把快照那一位覆盖掉");
+  ok("快照里「在等上游」先落，之后的实时输出与此刻的会话列表覆盖它");
+}
+
+{
+  // 有身份（单飞会话的旁注）与没身份（调度台的正文）交错到达：按到达顺序排，不按来路重排。
+  const leadText: TimelineEntry = { kind: "server", id: "mix-1", event: { type: "agent.event", taskId: TASK, sessionId: "s-other-lead", role: "lead", agentType: "claude", event: { kind: "text", text: "调度台先说的" } } as never };
+  const note: TimelineEntry = { kind: "server", id: "mix-2", event: { type: "agent.event", taskId: TASK, sessionId: S1, role: "single", agentType: "codex", turnStartedAt: null, seq: 20_000, event: { kind: "system", text: "后到的旁注", at: T(40) } } as never };
+  const rows = [sessionRow(S1, ends), sessionRow("s-other-lead", {}, { role: "lead", agentType: "claude" })];
+  const items = buildConversationItems([], rows, [leadText, note]);
+  const leadAt = items.findIndex((item) => item.kind === "agent" && item.markdown.includes("调度台先说的"));
+  const noteAt = items.findIndex((item) => item.kind === "event" && item.text === "后到的旁注");
+  assert.ok(leadAt >= 0 && noteAt > leadAt, "先到的排前面");
+  ok("有身份与没身份的实时事件按到达顺序排");
 }
 
 assert.equal(parseSessionSpans(disk.output).every(({ seg }) => typeof seg.seq === "number"), true, "带身份的会话每一段都有号");

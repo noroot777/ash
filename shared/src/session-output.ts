@@ -64,7 +64,7 @@ type Sentinel = {
 
 /** sentinel 上的身份（形状不对就当没有：老记录、手改过的行）。 */
 export function recordIdentityOf(value: { seq?: unknown; turnStartedAt?: unknown }): RecordIdentity | null {
-  if (typeof value.seq !== "number" || !Number.isInteger(value.seq) || value.seq < 0) return null;
+  if (typeof value.seq !== "number" || !Number.isSafeInteger(value.seq) || value.seq < 0) return null;
   return { seq: value.seq, turnStartedAt: typeof value.turnStartedAt === "string" && value.turnStartedAt ? value.turnStartedAt : null };
 }
 

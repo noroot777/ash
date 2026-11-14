@@ -20,6 +20,7 @@ import { deleteTaskSideChats } from "./chat/lifecycle.js";
 import { branchDeletionRejection, deleteTaskBranchRefs } from "./task-branch-plan.js";
 import { taskBusyRejection } from "./task-busy.js";
 import { forgetTaskUnconfirmed } from "./session-turns.js";
+import { forgetTaskRecordSeq } from "./session-seq.js";
 import { withRepoLock } from "./repo-lock.js";
 import { reclaimDeletedTaskDisk } from "./run-dir-reclaim.js";
 import { now } from "./util.js";
@@ -153,6 +154,8 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   // 就再也不会有那一下,留着就是长命进程里只增不减的无主条目（第 1 轮审查 N3）。
   // **只在确实删除时清**:暂停、失败、停止一律不清 —— 那几笔还是有效证据。
   forgetTaskUnconfirmed(taskId);
+  // 同理：这个任务各条会话发到第几号（session-seq.ts）也不必再记。
+  forgetTaskRecordSeq(taskId);
   for (const waiter of waiters) publishPendingMessages(waiter.taskId);
   void republishWaitsOf(queueMates).catch((err) => console.error(`[ash] 删除 ${taskId} 后通知同队托盘失败:`, err));
 }

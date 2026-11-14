@@ -76,7 +76,8 @@ export function createRunVoice(a: {
         // 团队那条链的同一处在 team/session-consumer.ts 的 traceLead:改一处记得看另一处。
         noteAgentEventUpload(taskId, event);
         flushTraceText();
-        return { seq: appendSessionTrace(taskId, sessId, turnStart, event, at) };
+        const seq = appendSessionTrace(taskId, sessId, turnStart, event, at);
+        return seq === null ? null : { seq };
       }
       if (event.kind === "done" || event.kind === "turnEnd") flushTraceText();
       return null;

@@ -115,15 +115,30 @@ export async function appendTranscriptLine(
   if (running) return write(running);
   const transcriptPath = sessionTranscriptPath(taskId, session.id);
   mkdirSync(dirname(transcriptPath), { recursive: true });
-  return withRunFileLock([transcriptPath], () => new Promise<RecordIdentity | null>((resolve, reject) => {
+  return withRunFileLock([transcriptPath], () => {
+    // 排锁期间可能刚有一回合起跑、登记成了写者（claimTranscript 也在这把锁里登记）：拿到锁再看一次。
+    const claimed = liveTranscript(session.id);
+    if (claimed) return write(claimed);
+    return appendThroughOwnStream(taskId, session, transcriptPath, write);
+  });
+}
+
+/** 没有正式流时自己开一条短命的流写这一行：只发号，不登记成这条会话的写者（见 transcript-identity.ts）。 */
+function appendThroughOwnStream(
+  taskId: string,
+  session: { id: string; role: string },
+  transcriptPath: string,
+  write: (out: NodeJS.WritableStream) => RecordIdentity | null,
+): Promise<RecordIdentity | null> {
+  return new Promise<RecordIdentity | null>((resolve, reject) => {
     const out = createWriteStream(transcriptPath, { flags: "a" });
-    if (identityRole(session.role)) bindTranscript(out, { taskId, sessionId: session.id, turnStartedAt: null });
+    if (identityRole(session.role)) bindTranscript(out, { taskId, sessionId: session.id, turnStartedAt: null }, { register: false });
     let identity: RecordIdentity | null = null;
     out.once("error", reject);
     out.once("finish", () => resolve(identity));
     identity = write(out);
     out.end();
-  }));
+  });
 }
 
 /** 正文带身份的会话：单飞那一路写的那几种（团队调度台 lead、duet 的两位讨论者不算）。 */

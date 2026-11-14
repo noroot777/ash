@@ -9,8 +9,7 @@ import type { AgentEvent, AgentType } from "@ash/shared";
 import { isTokenUsage, isUsageAccountingMark } from "@ash/shared/usage";
 import type { RecordIdentity } from "@ash/shared/session-output";
 import { RUNS_DIR, RUNS_FALLBACK_DIR } from "./paths.js";
-import { nextRecordSeq } from "./session-seq.js";
-import { closeProse, sentinelIdentity } from "./transcript-identity.js";
+import { closeProse, sentinelIdentity, traceRecordSeq } from "./transcript-identity.js";
 
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
 type TraceTextEvent = { kind: "text"; text: string };
@@ -68,13 +67,14 @@ export function appendSessionTrace(
   turnStartedAt: string,
   event: SessionTraceEvent,
   at = new Date().toISOString(),
-): number {
+): number | null {
   const path = sessionTracePath(taskId, sessionId);
   // 号在写盘之前领：写失败了实时那一路照样带着它，页面上那一步不会因为盘坏了变成另一条。
-  const seq = nextRecordSeq(taskId, sessionId);
+  // 只有这条会话有正式流（单飞那一路）时才带号，见 transcript-identity.ts 的 traceRecordSeq。
+  const seq = traceRecordSeq(sessionId);
   try {
     mkdirSync(dirname(path), { recursive: true });
-    appendFileSync(path, `${JSON.stringify({ at, turnStartedAt, seq, event } satisfies SessionTraceEntry)}\n`);
+    appendFileSync(path, `${JSON.stringify({ at, turnStartedAt, ...(seq === null ? {} : { seq }), event } satisfies SessionTraceEntry)}\n`);
   } catch (error) {
     // Trace persistence is diagnostic UI state. A disk failure must not alter the
     // executor's outcome, but it must remain visible to operators.
@@ -191,7 +191,8 @@ function parseTraceLine(line: string): SessionTraceEntry | null {
   try {
     const entry = JSON.parse(line) as Partial<SessionTraceEntry>;
     if (typeof entry.at !== "string" || typeof entry.turnStartedAt !== "string") return null;
-    if (entry.seq !== undefined && (typeof entry.seq !== "number" || !Number.isInteger(entry.seq))) return null;
+    // 号不是安全整数就当没有（照老记录读），不为它丢掉整条记录。
+    if (entry.seq !== undefined && !(typeof entry.seq === "number" && Number.isSafeInteger(entry.seq) && entry.seq >= 0)) delete entry.seq;
     // 读的时候补出来的条目才带来源，盘上那一行带着它就是被写坏了（或者是谁手改的）：去掉，照盘上的算。
     if (entry.origin !== undefined) delete entry.origin;
     return validTraceEvent(entry.event) ? entry as SessionTraceEntry : null;

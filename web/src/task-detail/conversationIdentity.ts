@@ -2,8 +2,8 @@
 // agentEnd、trace）与实时到达（SSE 事件）。同一条记录两路带的是同一个身份（服务端发的号，见
 // shared/src/session-output.ts 的 RecordIdentity），归并器只认身份，不问它是从哪一路来的。
 //
-// 一条会话从它**第一条带号的记录**起算「带身份的那一截」；在那之前的是升级前写下的老记录，整截交给
-// 老读法（conversationPersistedTurns）。没有身份的 trace 条目同样归老读法 —— 服务端读的时候补出来的那几条
+// 一条会话从它 .md 里**第一条带号的记录**起算「带身份的那一截」；在那之前的是升级前写下的老记录，整截交给
+// 老读法（conversationPersistedTurns）。.md 里一条带号的都没有，整条会话都是老读法（trace 带号也一样）。没有身份的 trace 条目同样归老读法 —— 服务端读的时候补出来的那几条
 // （`origin`）例外：它们说的是带身份那几个回合的事，挂回那几个回合的气泡上。
 import { ANSWER_PREFIX, type Session } from "@ash/shared";
 import {
@@ -141,14 +141,17 @@ export function splitPersistedSession(
   }
   const legacyTrace: SessionTraceEntry[] = [];
   const readSide: SessionTraceEntry[] = [];
+  // 正文流（.md）上一条带号的记录都没有：这条会话的写者没走身份协议（团队调度台、duet），trace 里就算有带号的
+  // 条目也整份归老读法 —— 号只在两份文件、实时事件三处一起带的时候才说得清归属。
+  const identified = start >= 0;
   for (const entry of trace) {
-    if (typeof entry.seq === "number") {
+    if (identified && typeof entry.seq === "number") {
       turns.add(entry.turnStartedAt);
       records.push({ kind: "step", sessionId: session.id, turn: entry.turnStartedAt, seq: entry.seq, event: entry.event, entry });
     }
   }
   for (const entry of trace) {
-    if (typeof entry.seq === "number") continue;
+    if (identified && typeof entry.seq === "number") continue;
     if (entry.origin !== undefined && turns.has(entry.turnStartedAt)) readSide.push(entry);
     else legacyTrace.push(entry);
   }
@@ -157,7 +160,7 @@ export function splitPersistedSession(
 }
 
 /** 实时那一路的一句输入（服务端播回来、带号的那种）。 */
-export function liveInput(entry: Extract<TimelineEntry, { kind: "user" }>, sessions: readonly Session[]): IdentityRecord | null {
+export function liveInput(entry: Extract<TimelineEntry, { kind: "user" }>, sessions: readonly Session[]): Extract<IdentityRecord, { kind: "input" }> | null {
   if (entry.seq === undefined || !entry.sessionId) return null;
   return {
     kind: "input",

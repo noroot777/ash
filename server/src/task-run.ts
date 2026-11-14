@@ -1,5 +1,5 @@
 import { mkdirSync, createWriteStream } from "node:fs";
-import { bindTranscript } from "./transcript-identity.js";
+import { claimTranscript } from "./transcript-identity.js";
 import { markdownImageAccounting } from "./agent-image-journal.js";
 import { hintAshMcpForTurn } from "./ash-mcp-turn-hint.js";
 import { join } from "node:path";
@@ -295,7 +295,7 @@ export async function runTask(
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
     // 这一回合写下的每一行记录都带身份（transcript-identity.ts）。
-    bindTranscript(out, { taskId, sessionId: sessId, turnStartedAt: turnStart });
+    await claimTranscript(out, { taskId, sessionId: sessId, turnStartedAt: turnStart });
     const baseNote = baseFallbackNote(ws.baseFallback);
     if (baseNote) {
       // fresh run 也会撞上「登记的 base 已经没了」（任务验收合并后分支被删，用户又点了
