@@ -12,15 +12,23 @@
 //
 // 只认**记录本身的元数据**：`.md` 里的 sentinel 行（`\x1e` 开头的那种 JSON）、trace 每一行顶层的
 // `seq`。正文里的字（agent 写了一段带 `"seq":…` 的 JSON 示例）不算 —— 它们没有资格决定以后的号。
-// 号必须是安全整数；接不回来（读文件出错、号已经顶到安全整数上限）就**不发号**（返回 null）：
-// 宁可这条会话之后的记录不带身份、页面退回老读法，也不能从一个可能撞号的低位接着发。
+//
+// **能不能发号只在接号那一刻判一次**（`recordSeq`）：接不回来（读文件出错）、或接回来的号已经高到
+// 离安全整数上限不足一个余量（CEILING），就返回 null —— 调用方（transcript-identity.ts 绑定一条流时）
+// 据此让**这一整个回合**都不带身份。接上了之后发号（`takeRecordSeq`）只是内存里加一，不会失败：
+// 余量是 2^32 个号，一个进程活着的时候写不完。所以不会有「一回合写到一半忽然不带号」的记录。
 import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { RUNS_DIR } from "./paths.js";
 
-// 任务 → 会话 → 已经发到的号。按任务分组：删任务时整组丢掉（forgetTaskRecordSeq）。
-const counters = new Map<string, Map<string, number>>();
+/** 一条会话的号段：已经发到的最后一个号。绑定的流各自握着它（同一条会话共用同一个）。 */
+export type RecordSeq = { last: number };
 
+// 任务 → 会话 → 号段。按任务分组：删任务时整组丢掉（forgetTaskRecordSeq）。
+const counters = new Map<string, Map<string, RecordSeq>>();
+
+// 接回来的号不能高过这里：之后留 2^32 个号的余量，发号就不必再判上限。
+const CEILING = Number.MAX_SAFE_INTEGER - 2 ** 32;
 const TAIL_BYTES = 256 * 1024;
 const SENTINEL = "\x1e";
 
@@ -65,19 +73,41 @@ function recovered(taskId: string, sessionId: string): number | null {
   try {
     return Math.max(maxSeqInFile(join(dir, `${sessionId}.md`), "md"), maxSeqInFile(join(dir, `${sessionId}.trace.jsonl`), "trace"));
   } catch (error) {
-    console.warn(`[ash] 接回会话记录号失败 ${taskId}/${sessionId}，这条会话之后的记录不带身份:`, error);
+    console.warn(`[ash] 接回会话记录号失败 ${taskId}/${sessionId}，这一回合不带身份:`, error);
     return null;
   }
 }
 
-/** 这条会话的下一个记录号；接不回来、或已经发到安全整数上限时是 null（这条记录不带身份）。 */
-export function nextRecordSeq(taskId: string, sessionId: string): number | null {
-  const task = counters.get(taskId) ?? new Map<string, number>();
-  const last = task.get(sessionId) ?? recovered(taskId, sessionId);
-  if (last === null || last >= Number.MAX_SAFE_INTEGER) return null;
-  task.set(sessionId, last + 1);
+/**
+ * 这条会话的号段：内存里有就是它，没有就从盘上接。接不回来、或接回来的号已经顶到 CEILING，是 null
+ * （这一回合不带身份）。
+ */
+export function recordSeq(taskId: string, sessionId: string): RecordSeq | null {
+  const task = counters.get(taskId) ?? new Map<string, RecordSeq>();
+  const known = task.get(sessionId);
+  if (known) return known;
+  const last = recovered(taskId, sessionId);
+  if (last === null) return null;
+  if (last >= CEILING) {
+    console.warn(`[ash] 会话记录号已经接近上限 ${taskId}/${sessionId}（${last}），这条会话之后的回合不带身份`);
+    return null;
+  }
+  const counter = { last };
+  task.set(sessionId, counter);
   counters.set(taskId, task);
-  return last + 1;
+  return counter;
+}
+
+/** 从号段里领下一个号。号段到手以后不会失败（见文件头）。 */
+export function takeRecordSeq(counter: RecordSeq): number {
+  counter.last += 1;
+  return counter.last;
+}
+
+/** 接号 + 领号一步到位（测试与只领一个号的调用方用）。 */
+export function nextRecordSeq(taskId: string, sessionId: string): number | null {
+  const counter = recordSeq(taskId, sessionId);
+  return counter ? takeRecordSeq(counter) : null;
 }
 
 /** 内存里记着的号作废，下次从盘上重新接（测试模拟重启用）。 */

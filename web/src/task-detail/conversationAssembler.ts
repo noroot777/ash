@@ -56,7 +56,6 @@ export function createAssembler(sessions: readonly Session[]) {
   const bubbles = new Map<string, Bubble>();
   const pending = new Map<string, StepRecord[]>();
   const closes = new Map<string, Close>();
-  const identitySessions = new Set<string>();
   const clientKeys = new Set<string>();
   let persistedPhase = true;
 
@@ -136,9 +135,6 @@ export function createAssembler(sessions: readonly Session[]) {
   }
 
   function apply(record: IdentityRecord, out: ConversationItem[]): void {
-    // 一条会话归身份这一路，只凭正文流（.md）上带号的记录：trace 带号、正文不带的写者协议不完整，
-    // 光凭一步带号的执行过程就把它整条认成带身份的，它没号的正文与实时事件就全丢了。
-    if (record.kind !== "step") identitySessions.add(record.sessionId);
     if (record.kind === "prose") { applyProse(record, out); return; }
     if (record.kind === "end") {
       const after = inputBefore(record.sessionId, record.seq ?? Number.POSITIVE_INFINITY)?.seq ?? null;
@@ -220,27 +216,22 @@ export function createAssembler(sessions: readonly Session[]) {
     },
     /**
      * 实时事件的分派判据：归身份这一路（true）还是交回老读法。只判不做 —— 调用方先把整串分好（老读法那一路
-     * 要先整体筛掉重复拷贝），再按到达顺序逐条交给 `live` / 老读法，两路交错的先后不变。判据随前面认下的
-     * 记录变（一句带号的输入、一段带号的正文之后，这条会话没号的事件也归这一路），所以从此刻的状态起
-     * 拷一份往下推，跟 `live` 真处理时的状态走同一步。
+     * 要先整体筛掉重复拷贝），再按到达顺序逐条交给 `live` / 老读法，两路交错的先后不变。
+     * 判据是事件自己说的：带号的、或信封上标着出自带身份回合（`identityTurn`）的归这一路；都没有的是老样子
+     * 写的回合，不管这条会话以前有没有过带号的记录。唯一看前文的是先画出来的那句（乐观回显）：它带着的
+     * 凭据已经被服务端那份认领过，就归这一路（在这一路里不再画第二遍）。
      */
     router(): (entry: TimelineEntry) => boolean {
-      const knownSessions = new Set(identitySessions);
       const knownKeys = new Set(clientKeys);
       return (entry) => {
         if (entry.kind === "user") {
           if (entry.seq !== undefined && entry.sessionId) {
-            knownSessions.add(entry.sessionId);
             if (entry.clientKey) knownKeys.add(entry.clientKey);
             return true;
           }
-          // 先画出来的那份：落盘那份（或服务端播回来的那份）已经凭同一个凭据到了，就不再画第二遍。
           return !!entry.clientKey && knownKeys.has(entry.clientKey);
         }
-        const { sessionId, seq, event } = entry.event;
-        if (seq === undefined) return knownSessions.has(sessionId);
-        if (event.kind === "system" || event.kind === "text") knownSessions.add(sessionId);
-        return true;
+        return entry.event.seq !== undefined || entry.event.identityTurn === true;
       };
     },
     /** 一条归身份这一路的实时事件（`router` 认下的），就地处理掉。 */
@@ -258,7 +249,7 @@ export function createAssembler(sessions: readonly Session[]) {
       if (event.kind === "session") return;
       const turn = envelope.turnStartedAt ?? null;
       if (seq === undefined) {
-        // 带身份的会话上没带号的：回合收口记成事实；别的内容盘上没有对应的那条，刷新以后也不会有，不画。
+        // 带身份的回合里没带号的不是记录：回合收口记成事实；别的（执行器簿记）盘上没有，刷新以后也不会有，不画。
         if (event.kind === "done" || event.kind === "turnEnd") {
           const failed = event.kind === "done"
             ? turnEndedAbnormally({ exitStatus: event.exitStatus, turnOutcome: event.turnOutcome })

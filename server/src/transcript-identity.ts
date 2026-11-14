@@ -17,10 +17,18 @@
 //
 // trace 也只在这条会话有正式流时才发号（traceRecordSeq）：没有正式流的写者（团队调度台、duet）正文与
 // 实时事件都不带身份，trace 单独带号只会让页面以为整条会话都换了读法。
+//
+// **身份是按回合声明的，每条记录自己说明**（读的一头只认这个，不从会话的历史或这一份快照里有没有正文去猜）：
+// - 一回合带不带身份，在绑定那一刻定一次（`bindTranscript` 接号段，接不回来就不绑定，这一整个回合
+//   照老样子写）；绑定以后领号不会失败（session-seq.ts），一回合不会写到一半忽然不带号。
+// - 带身份的回合里，每一条记录（.md 的 sentinel、正文标记行、trace 的每一行）都带号；实时事件也一样，
+//   不是记录的那几种（收口、水位、执行器簿记）不带号，信封上标 `identityTurn`（single-run-voice.ts），
+//   说明它属于带身份的回合。
+// - 没带号、也没标 `identityTurn` 的，就是老样子写的（团队调度台、duet、接不回号段的那一回合、升级之前）。
 import { join } from "node:path";
 import { RUNS_DIR } from "./paths.js";
 import { withRunFileLock } from "./run-file-lock.js";
-import { nextRecordSeq } from "./session-seq.js";
+import { recordSeq, takeRecordSeq, type RecordSeq } from "./session-seq.js";
 import { now } from "./util.js";
 import type { RecordIdentity } from "@ash/shared/session-output";
 
@@ -33,8 +41,8 @@ type Binding = {
   prose: { seq: number; offset: number } | null;
   /** 写下一行记录之前先做的事：单飞把 trace 里攒着的正文先落，两份文件在同一处切开。 */
   beforeRecord?: () => void;
-  /** 发号失败过一次（号段接不回来）：这条流之后一律不带身份，不在一段正文中间忽然又带上。 */
-  degraded?: boolean;
+  /** 这条会话的号段（绑定时接好的）。 */
+  seq: RecordSeq;
 };
 
 // 同 transcript.ts 的 TURN_SENTINEL（那边 import 这里，反过来 import 就成环了）。
@@ -44,20 +52,24 @@ const bindings = new WeakMap<NodeJS.WritableStream, Binding>();
 const live = new Map<string, NodeJS.WritableStream>();
 
 /**
- * 绑定一条流：之后从它写下的记录都带身份。`register: false` = 回合外追加者那种短命流，只发号、不登记成
- * 这条会话的写者。正式流别直接调这个，走 claimTranscript（在锁里登记）。
+ * 绑定一条流：之后从它写下的记录都带身份。号段接不回来就不绑定（返回 false）：这条流写的整个回合都
+ * 不带身份。`register: false` = 回合外追加者那种短命流，只发号、不登记成这条会话的写者。正式流别直接
+ * 调这个，走 claimTranscript（在锁里登记）。
  */
 export function bindTranscript(
   out: NodeJS.WritableStream,
   owner: { taskId: string; sessionId: string; turnStartedAt?: string | null },
   { register = true }: { register?: boolean } = {},
-): void {
-  bindings.set(out, { taskId: owner.taskId, sessionId: owner.sessionId, turnStartedAt: owner.turnStartedAt ?? null, prose: null });
-  if (!register) return;
+): boolean {
+  const seq = recordSeq(owner.taskId, owner.sessionId);
+  if (!seq) return false;
+  bindings.set(out, { taskId: owner.taskId, sessionId: owner.sessionId, turnStartedAt: owner.turnStartedAt ?? null, prose: null, seq });
+  if (!register) return true;
   live.set(owner.sessionId, out);
   const release = () => { if (live.get(owner.sessionId) === out) live.delete(owner.sessionId); };
   out.once("finish", release);
   out.once("close", release);
+  return true;
 }
 
 /**
@@ -67,9 +79,14 @@ export function bindTranscript(
 export async function claimTranscript(
   out: NodeJS.WritableStream,
   owner: { taskId: string; sessionId: string; turnStartedAt?: string | null },
-): Promise<void> {
+): Promise<boolean> {
   // 跟 transcript.ts 的 sessionTranscriptPath 同一个路径（锁按路径字符串排队）。
-  await withRunFileLock([join(RUNS_DIR, owner.taskId, `${owner.sessionId}.md`)], () => bindTranscript(out, owner));
+  return withRunFileLock([join(RUNS_DIR, owner.taskId, `${owner.sessionId}.md`)], () => bindTranscript(out, owner));
+}
+
+/** 这条流写的回合带不带身份（实时事件据此在信封上标 `identityTurn`）。 */
+export function isIdentityStream(out: NodeJS.WritableStream): boolean {
+  return bindings.has(out);
 }
 
 /** 写下一行记录之前要先做的事（见 Binding.beforeRecord）。 */
@@ -92,23 +109,15 @@ export function liveTranscript(sessionId: string): NodeJS.WritableStream | null 
  */
 export function reserveRecord(out: NodeJS.WritableStream, turnStartedAt?: string | null): RecordIdentity | null {
   const binding = bindings.get(out);
-  const seq = binding ? allocate(binding) : null;
-  if (seq === null) return null;
-  return { seq, turnStartedAt: turnStartedAt === undefined ? binding!.turnStartedAt : turnStartedAt };
-}
-
-function allocate(binding: Binding): number | null {
-  if (binding.degraded) return null;
-  const seq = nextRecordSeq(binding.taskId, binding.sessionId);
-  if (seq === null) binding.degraded = true;
-  return seq;
+  if (!binding) return null;
+  return { seq: takeRecordSeq(binding.seq), turnStartedAt: turnStartedAt === undefined ? binding.turnStartedAt : turnStartedAt };
 }
 
 /** trace 的一条要不要带号：这条会话此刻有正式流就从它那里领（同一个号段），没有就不带。 */
 export function traceRecordSeq(sessionId: string): number | null {
   const out = liveTranscript(sessionId);
   const binding = out ? bindings.get(out) : undefined;
-  return binding ? allocate(binding) : null;
+  return binding ? takeRecordSeq(binding.seq) : null;
 }
 
 /**
@@ -145,11 +154,7 @@ export function writeProse(out: NodeJS.WritableStream, text: string): { seq: num
     return null;
   }
   if (!binding.prose) {
-    const seq = allocate(binding);
-    if (seq === null) {
-      out.write(text);
-      return null;
-    }
+    const seq = takeRecordSeq(binding.seq);
     out.write(`\n${TURN_SENTINEL}${JSON.stringify({ t: "agent", seq, turnStartedAt: binding.turnStartedAt, at: now() })}\n`);
     binding.prose = { seq, offset: 0 };
   }

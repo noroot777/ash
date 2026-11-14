@@ -10,13 +10,15 @@
 //   ③ 删除：有正文的按段、只有执行过程的按「回合 + 前后两句输入的号」，用服务端真正的删除函数判；
 //      trace 以真有的 unknown 子智能体事件收尾也删得掉；读的时候补出来的（origin）不进指纹
 //   ④ 页面发的那一句凭 clientKey 认回去，不比原文
-//   ⑤ 边界：没走身份协议的写者（团队调度台：正文不带号、trace 带号）整条走老读法，快照之后没号的实时正文照常画；
+//   ⑤ 边界：分路逐条按记录自己说的算 —— 没走身份协议的写者（团队调度台）整条不带号、走老读法，快照之后没号的
+//      实时正文照常画；回合先动手后说话时快照里只有带号的执行过程，照样归身份这一路；接不回号段的那一回合整个
+//      照老样子写，开着页面和刷新以后都画在它自己那一回合；
 //      output 与 trace 不是同一刻读的、中间那句插话只在实时那一路，步骤照样归插话之后；快照里「在等上游」
 //      被之后的实时输出和此刻的会话列表覆盖；有身份与没身份的实时事件按到达顺序排
 //
 // 跑：npm -w web run test:conversation-identity
 import assert from "node:assert/strict";
-import { createWriteStream, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, createWriteStream, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -32,6 +34,7 @@ process.env.ASH_RUNS_DIR = join(stage, "runs");
 process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
 const { appendSessionTrace, sessionTracePath, sessionTranscriptPath, writeTurn, writeTurnEnd } = await import("../../server/src/transcript.ts");
 const { bindTranscript, onRecord, reserveRecord, writeProse } = await import("../../server/src/transcript-identity.ts");
+const { forgetRecordSeq } = await import("../../server/src/session-seq.ts");
 const { redactTrace, redactTranscript, traceSpanWindow, traceStepsWindow } = await import("../../server/src/conversation-redact.ts");
 const ok = (message: string) => console.log("   ✓ " + message);
 
@@ -44,7 +47,8 @@ function turn(sessionId: string, turnStartedAt: string, timeline: TimelineEntry[
   const mdPath = sessionTranscriptPath(TASK, sessionId);
   mkdirSync(dirname(mdPath), { recursive: true });
   const out = createWriteStream(mdPath, { flags: "a" });
-  bindTranscript(out, { taskId: TASK, sessionId, turnStartedAt });
+  // 号段接不回来时不绑定：这一整个回合照老样子写（不带号、实时事件也不标 identityTurn）。
+  const bound = bindTranscript(out, { taskId: TASK, sessionId, turnStartedAt });
   let pending = "";
   let clock = turnStartedAt;
   const flush = () => {
@@ -56,7 +60,7 @@ function turn(sessionId: string, turnStartedAt: string, timeline: TimelineEntry[
   const later: { text: string; at: string; identity: ReturnType<typeof reserveRecord> }[] = [];
   const publish = (event: object, record?: { seq: number; textOffset?: number } | null) => timeline.push({
     kind: "server", id: `e${timeline.length}`,
-    event: { type: "agent.event", taskId: TASK, sessionId, role: "single", agentType: "codex", model: "gpt-5.6", reasoningEffort: "high", turnStartedAt, ...(record ?? {}), event } as never,
+    event: { type: "agent.event", taskId: TASK, sessionId, role: "single", agentType: "codex", model: "gpt-5.6", reasoningEffort: "high", turnStartedAt, ...(bound ? { identityTurn: true } : {}), ...(record ?? {}), event } as never,
   });
   const api = {
     out,
@@ -64,18 +68,19 @@ function turn(sessionId: string, turnStartedAt: string, timeline: TimelineEntry[
     run() { appendSessionTrace(TASK, sessionId, turnStartedAt, { kind: "run", model: "gpt-5.6", reasoningEffort: "high" }, turnStartedAt); return api; },
     input(text: string, at: string, extra: { bySystem?: true; clientKey?: string } = {}) {
       const identity = writeTurn(out, { t: "user", agent: "codex", text, ...(extra.bySystem ? { by: "system" as const } : {}), ...(extra.clientKey ? { clientKey: extra.clientKey } : {}) }, at);
-      timeline.push({ kind: "user", id: `u${timeline.length}`, text, attachments: [], at, sessionId, sessionRole: "single", source: "server", seq: identity!.seq, turnStartedAt: identity!.turnStartedAt, ...extra });
+      timeline.push({ kind: "user", id: `u${timeline.length}`, text, attachments: [], at, sessionId, sessionRole: "single", source: "server", ...(identity ?? {}), ...extra });
       return api;
     },
     say(text: string) {
-      const prose = writeProse(out, text)!;
+      const prose = writeProse(out, text);
       pending += text;
-      publish({ kind: "text", text }, { seq: prose.seq, textOffset: prose.offset });
+      publish({ kind: "text", text }, prose && { seq: prose.seq, textOffset: prose.offset });
       return api;
     },
     step(event: SessionTraceEntry["event"], at = clock) {
       flush();
-      publish(event, { seq: appendSessionTrace(TASK, sessionId, turnStartedAt, event as never, at) });
+      const seq = appendSessionTrace(TASK, sessionId, turnStartedAt, event as never, at);
+      publish(event, seq === null ? null : { seq });
       return api;
     },
     tool(name: string, at = clock) { return api.step({ kind: "tool", name, detail: name }, at); },
@@ -268,26 +273,77 @@ ok("落盘重建、实时到达、中途打开（含重叠与半截正文）三�
 
 // ── ⑤ 边界 ─────────────────────────────────────────────────────────────────
 {
-  // 团队调度台那种写者：正文流没绑定（不带号），trace 是升级中途写下的、带号（旧构建那样）。整条走老读法。
+  // 团队调度台那种写者：正文流不绑定，trace 在没有正式流时写（服务端照真的写法：都不带号）。整条走老读法。
   const LEAD = "s-lead";
   const mdPath = sessionTranscriptPath(TASK, LEAD);
   const out = createWriteStream(mdPath, { flags: "a" });
   writeTurn(out, { t: "user", agent: "claude", text: "拆成三个任务" }, T(20));
+  appendSessionTrace(TASK, LEAD, T(20), { kind: "tool", name: "dispatch", detail: "dispatch" }, T(20, 5));
   out.write("我先派活。\n");
   await new Promise<void>((resolve) => out.end(resolve));
-  const leadTrace: SessionTraceEntry[] = [
-    { at: T(20, 5), turnStartedAt: T(20), seq: 7, event: { kind: "tool", name: "dispatch", detail: "dispatch" } } as never,
-  ];
   const row = sessionRow(LEAD, {}, { role: "lead", agentType: "claude" });
-  const output = readFileSync(mdPath, "utf8");
-  const withSeq = buildConversationItems([{ session: row, output, trace: leadTrace }], [row], []);
-  const withoutSeq = buildConversationItems([{ session: row, output, trace: leadTrace.map(({ seq: _seq, ...entry }) => entry as SessionTraceEntry) }], [row], []);
-  assert.deepEqual(shape(withSeq), shape(withoutSeq), "trace 带号、正文不带：跟整条没号一样走老读法");
-  assert.equal(agents(withSeq).length, 1, "工具与正文在同一颗气泡里，不拆出只有执行过程的那颗");
+  const { output, trace } = read(LEAD);
+  assert.ok(trace.every((entry) => entry.seq === undefined) && parseSessionSpans(output).every(({ seg }) => seg.seq === undefined), "前提：调度台的记录一条都不带号");
+  const rebuiltLead = buildConversationItems([{ session: row, output, trace }], [row], []);
+  assert.equal(agents(rebuiltLead).length, 1, "工具与正文在同一颗气泡里");
   const later: TimelineEntry = { kind: "server", id: "lead-1", event: { type: "agent.event", taskId: TASK, sessionId: LEAD, role: "lead", agentType: "claude", event: { kind: "text", text: "新增文字" } } as never };
-  const after = buildConversationItems([{ session: row, output, trace: leadTrace }], [row], [later]);
+  const after = buildConversationItems([{ session: row, output, trace }], [row], [later]);
   assert.ok(agents(after).some((item) => item.markdown.includes("新增文字")), "快照之后没号的实时正文照常画");
-  ok("没走身份协议的写者整条走老读法，trace 带号也不切换；之后的实时正文照常画");
+  ok("没走身份协议的写者整条不带号、走老读法；之后的实时正文照常画");
+}
+
+{
+  // 新回合先动手、还没说话时打开页面：快照里 .md 一条带号的都没有，trace 里已经有带号的步骤。
+  const S = "s-first";
+  const arrivals: TimelineEntry[] = [];
+  const run = turn(S, T(25), arrivals);
+  run.run().tool("bash", T(25, 5));
+  await run.drain();
+  const snap = read(S);
+  const cut = arrivals.length;
+  run.say("看完了，开始改。").tool("edit", T(25, 20));
+  await run.end(T(26));
+  const row = sessionRow(S, { [T(25)]: T(26) });
+  const whole = buildConversationItems([{ session: row, ...read(S) }], [row], []);
+  const liveFirst = buildConversationItems([], [row], arrivals);
+  const opened = buildConversationItems([{ session: row, ...snap }], [row], arrivals.slice(cut));
+  const reopened = buildConversationItems([{ session: row, ...snap }], [row], arrivals.slice(cut - 1)); // 快照与实时重叠那一步
+  assert.equal(agents(whole).length, 1, "一回合一颗");
+  assert.deepEqual(shape(liveFirst), shape(whole), "从头接实时与刷新同形");
+  assert.deepEqual(shape(opened), shape(whole), "只动了手就打开页面：之后的正文接进同一颗");
+  assert.deepEqual(shape(reopened), shape(whole), "快照与实时重叠的那一步不重复");
+  ok("回合先动手后说话：快照里只有带号的执行过程也归身份这一路，跟刷新同形");
+}
+
+{
+  // 已有带身份的回合；重启后接号段读不出来（.md 只能写不能读）：下一回合整个照老样子写。
+  const S = "s-degraded";
+  const arrivals: TimelineEntry[] = [];
+  const first = turn(S, T(35), arrivals);
+  first.input("第一回合", T(35)).say("第一回合的回复。");
+  await first.end(T(36));
+  forgetRecordSeq(TASK, S);
+  chmodSync(sessionTranscriptPath(TASK, S), 0o200);
+  const second = turn(S, T(37), arrivals);
+  chmodSync(sessionTranscriptPath(TASK, S), 0o600);
+  second.input("第二回合", T(37)).say("降级后的第二回合回复。").tool("bash", T(37, 30));
+  await second.end(T(38));
+  const ends = { [T(35)]: T(36), [T(37)]: T(38) };
+  const row = sessionRow(S, ends);
+  const tail = arrivals.slice(arrivals.findIndex((entry) => entry.kind === "user" && entry.text === "第二回合"));
+  assert.ok(tail.every((entry) => entry.kind === "user" ? entry.seq === undefined : entry.event.seq === undefined && !entry.event.identityTurn), "前提：第二回合的实时事件不带号、不标 identityTurn");
+  const replyOf = (items: ConversationItem[], text: string) => agents(items).filter((item) => item.markdown.includes(text));
+  const watched = buildConversationItems([], [row], arrivals);
+  const refreshed = buildConversationItems([{ session: row, ...read(S) }], [row], []);
+  for (const [name, items] of [["开着页面", watched], ["刷新以后", refreshed]] as const) {
+    const [reply] = replyOf(items, "降级后的第二回合回复");
+    assert.ok(reply, `${name}：第二回合的回复画出来了`);
+    assert.equal(replyOf(items, "第一回合的回复")[0]!.markdown.includes("降级"), false, `${name}：没接进第一回合那颗`);
+    assert.ok((reply!.at ?? "") >= T(37), `${name}：归第二回合（从第二回合起）`);
+  }
+  // 结束时刻：刷新以后照回合行（开着页面时老读法那一路的实时气泡本来就等刷新才补收口时刻，跟升级前一样）。
+  assert.equal(replyOf(refreshed, "降级后的第二回合回复")[0]!.endedAt, T(38), "刷新以后收在第二回合的结束时刻");
+  ok("接不回号段的那一回合整个照老样子写：开着页面和刷新以后都画在自己那一回合，不接进前一回合");
 }
 
 {

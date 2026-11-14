@@ -182,7 +182,8 @@ function appendAgent(items: ConversationItem[], event: LiveAgentEvent, sessions:
   // 通知叫醒自己开下一轮时，中间既没有输入，也没有实时的回合边界（常驻台的 turnEnd 不往
   // 前端播），新一轮的话就会接进上一轮那颗、连开始时刻和用时都沿用上一轮的。
   // 会话行和事件都给不出回合时（找不到会话）才只认人，跟从前一样。
-  const joinable = (item: ConversationItem): item is AgentItem => sameSpeaker(item)
+  // 带身份那一路的气泡（`recorded`）不接：老样子写的回合跟它们是两路记录，混进去刷新以后就分不开了。
+  const joinable = (item: ConversationItem): item is AgentItem => sameSpeaker(item) && !item.recorded
     && (!turnStartedAt || (withinTurn(item, turnStartedAt) && !item.markerEndedAt));
   let current = last && joinable(last) ? last : undefined;
   // 旁注可能在一回合仍流式输出时插进来；跨过它找这条事件所在那一轮的气泡，这样工具、

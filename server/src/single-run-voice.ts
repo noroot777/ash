@@ -8,7 +8,7 @@ import type { AgentEvent, AgentType, SessionRole } from "@ash/shared";
 import type { RecordIdentity } from "@ash/shared/session-output";
 import { bus } from "./bus.js";
 import { appendSessionTrace, writeTurn } from "./transcript.js";
-import { onRecord, reserveRecord, writeProse } from "./transcript-identity.js";
+import { isIdentityStream, onRecord, reserveRecord, writeProse } from "./transcript-identity.js";
 import { noteAgentEventUpload } from "./uploads.js";
 import { now } from "./util.js";
 
@@ -31,8 +31,12 @@ export function createRunVoice(a: {
   const sessionNotices: { text: string; at: string; level?: "notice"; identity: RecordIdentity | null }[] = [];
 
   // record：这条事件在盘上那条记录的号（trace 落下的那条、.md 那一行），正文增量另带它在那段正文里的位置。
+  // 这一回合带身份时，不是记录的那几种（收口、水位、簿记）不带号，信封上标 identityTurn 说明它归哪一路
+  // （见 transcript-identity.ts 文件头）。
+  const identityTurn = isIdentityStream(out);
   const publishEvent = (event: AgentEvent, record?: { seq: number; textOffset?: number } | null) => bus.publish({
     type: "agent.event", taskId, sessionId: sessId, role, agentType, ...runMeta, turnStartedAt: turnStart,
+    ...(identityTurn ? { identityTurn: true as const } : {}),
     ...(record ? { seq: record.seq, ...(record.textOffset !== undefined ? { textOffset: record.textOffset } : {}) } : {}),
     event,
   });

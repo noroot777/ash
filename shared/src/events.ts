@@ -227,6 +227,10 @@ export type ServerEvent =
       // 回合结尾）或老服务端。
       seq?: number;
       textOffset?: number;
+      // 这条事件出自一个带身份的回合（见 server/src/transcript-identity.ts 文件头）：那种回合里的记录全带
+      // 号，不是记录的那几种（收口、水位、簿记）不带号、靠这一位说明它归带身份那一路。没带号也没这一位 =
+      // 老样子写的回合（团队调度台、duet、接不回号段的那一回合、老服务端）。
+      identityTurn?: true;
       event: AgentEvent;
     }
   // A user-channel turn after it has been persisted to the session transcript.

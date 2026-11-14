@@ -7,12 +7,14 @@
 //      正文先落、在同一处切开；没有在跑的流时，单飞会话照样带号，团队调度台不带（它那一路还是老读法）
 //   ③ trace 盘上那一行带着 `origin` 不认（那是读的时候补出来的才有的）
 //   ④ 按身份删一截执行过程：指纹对不上（页面那份旧了）就拒绝，不多删一条
-//   ⑤ 恢复号段只认记录元数据：正文里的 `"seq":…` 示例、不安全的整数不算；读不出来、号顶到上限就不发号
-//   ⑥ trace 只在这条会话有正式流时带号（团队调度台、duet 那种没走身份协议的写者整条都不带）
+//   ⑤ 恢复号段只认记录元数据：正文里的 `"seq":…` 示例、不安全的整数不算；读不出来、号顶到上限，这一回合整个
+//      不绑定（不带号）；绑定以后领号不会失败，一回合不会写到一半忽然不带号
+//   ⑥ trace 只在这条会话有正式流时带号（团队调度台、duet 那种没走身份协议的写者整条都不带）；带身份的回合里
+//      执行诊断块不留下没号的正文
 //   ⑦ 谁是写者在锁里定：正式流登记时排在锁后面的旁注从正式流写；短命流不顶掉正式流的登记
 // 跑:npm -w server run test:record-identity
 import assert from "node:assert/strict";
-import { appendFileSync, createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseSessionSpans, parseSessionTranscript, traceStepsFingerprint } from "@ash/shared/session-output";
@@ -25,7 +27,7 @@ process.env.ASH_RUNS_DIR = join(stage, "runs");
 process.env.ASH_UPLOADS_DIR = join(stage, "uploads");
 const ok = (message: string) => console.log("   ✓ " + message);
 
-const { appendSessionTrace, parseSessionTrace, sessionTracePath, sessionTranscriptPath, writeTurn, writeTurnEnd } = await import("../src/transcript.js");
+const { appendSessionTrace, parseSessionTrace, sessionTracePath, sessionTranscriptPath, writeRunError, writeTurn, writeTurnEnd } = await import("../src/transcript.js");
 const { bindTranscript, claimTranscript, liveTranscript, onRecord, writeProse } = await import("../src/transcript-identity.js");
 const { forgetRecordSeq, forgetTaskRecordSeq, nextRecordSeq } = await import("../src/session-seq.js");
 const { withRunFileLock } = await import("../src/run-file-lock.js");
@@ -156,15 +158,33 @@ function liveTurn(sessionId: string) {
   mkdirSync(sessionTranscriptPath(TASK, broken), { recursive: true }); // .md 那个路径是个目录：读不出来
   assert.equal(nextRecordSeq(TASK, broken), null, "读不出来：不发号，不从 0 接着发");
   const out = createWriteStream(join(stage, "degraded.md"));
-  bindTranscript(out, { taskId: TASK, sessionId: broken, turnStartedAt: TURN }, { register: false });
-  assert.equal(writeTurn(out, { t: "system", agent: "codex", text: "x" }, at(3)), null, "发不出号的流：这一行不带身份");
+  assert.equal(await claimTranscript(out, { taskId: TASK, sessionId: broken, turnStartedAt: TURN }), false, "号段接不回来：这一回合不绑定");
+  assert.equal(writeTurn(out, { t: "system", agent: "codex", text: "x" }, at(3)), null, "这一回合的记录不带身份");
+  assert.equal(liveTranscript(broken), null, "也不登记成写者");
   await new Promise<void>((resolve) => out.end(resolve));
   forgetRecordSeq(TASK, broken);
+
+  // 绑定以后领号不会失败：盘上的文件这时读不出来了、内存里的号段被清了（模拟），这一回合照样每条都带号。
+  const steady = "s-steady";
+  const steadyPath = sessionTranscriptPath(TASK, steady);
+  const stream = createWriteStream(steadyPath, { flags: "a" });
+  assert.equal(await claimTranscript(stream, { taskId: TASK, sessionId: steady, turnStartedAt: TURN }), true);
+  const opening = writeProse(stream, "开头");
+  await new Promise<void>((resolve) => stream.write("", () => resolve()));
+  chmodSync(steadyPath, 0o200);
+  forgetRecordSeq(TASK, steady);
+  const note = writeTurn(stream, { t: "system", agent: "codex", text: "中途" }, at(4));
+  const closing = writeProse(stream, "结尾");
+  const step = appendSessionTrace(TASK, steady, TURN, { kind: "tool", name: "bash", detail: "ls" }, at(5));
+  chmodSync(steadyPath, 0o600);
+  await new Promise<void>((resolve) => stream.end(resolve));
+  assert.deepEqual([opening?.seq, note?.seq, closing?.seq, step], [1, 2, 3, 4], "一回合写到一半不会忽然不带号");
+  forgetRecordSeq(TASK, steady);
 
   forgetTaskRecordSeq(TASK);
   writeFileSync(path, sentinel({ t: "user", agent: "codex", text: "删了重来", seq: 1, at: at(0) }));
   assert.equal(nextRecordSeq(TASK, S), 2, "删任务时整组丢掉：再碰这条会话从盘上重新接");
-  ok("恢复号段只认 sentinel 与 trace 元数据上的安全整数；接不回来就不发号；删任务时整组丢掉");
+  ok("恢复号段只认 sentinel 与 trace 元数据上的安全整数；接不回来这一回合整个不绑定、不带号；绑定以后不会中途断号；删任务时整组丢掉");
 }
 
 // ── ⑥ trace 只在有正式流时带号 ───────────────────────────────────────────────
@@ -173,6 +193,19 @@ function liveTurn(sessionId: string) {
   assert.equal(appendSessionTrace(TASK, S, TURN, { kind: "tool", name: "dispatch", detail: "x" }, at(1)), null, "没有正式流：不发号");
   assert.equal(traceOf(S)[0]?.seq, undefined, "盘上那一行也不带号（团队调度台、duet 整条会话都不带）");
   ok("trace 只在这条会话有正式流时带号");
+}
+
+{
+  // 执行诊断块不是会话里的话（解析时整块略过）：紧跟在一条注记后面也不会落成一段没号的正文。
+  const S = "s-diag";
+  const run = liveTurn(S);
+  writeTurn(run.out, { t: "system", agent: "codex", text: "开始" }, at(0));
+  writeRunError(run.out, "exit 1");
+  run.say("诊断之后");
+  await run.end();
+  const prose = parseSessionSpans(readFileSync(sessionTranscriptPath(TASK, S), "utf8")).filter(({ seg }) => seg.kind === "agent");
+  assert.deepEqual(prose.map(({ seg }) => [seg.text, typeof seg.seq === "number", seg.turnStartedAt]), [["诊断之后", true, TURN]], "诊断之后的正文另起一段、带号；诊断本身不成段");
+  ok("带身份的回合里执行诊断块不留下没号的正文");
 }
 
 // ── ⑦ 谁是写者在锁里定 ───────────────────────────────────────────────────────

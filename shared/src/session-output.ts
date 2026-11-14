@@ -18,6 +18,9 @@
 // 行带同一套身份（老解析器本来就跳过非删除的 `t:"agent"` 行，所以读者不受影响）。trace 的每一条
 // 与实时事件带的是同一个号（server/src/session-seq.ts 发号），页面据此归回合、去重，不再按时间
 // 和文字去猜。老记录没有这两位，读端照旧。
+// 身份是**一条条记录自己说明的**：带号的那条一定出自带身份的回合（写的一头按回合声明，回合中途不会
+// 断号，见 server/src/transcript-identity.ts 文件头），没号的那条就是老样子写的 —— 读端逐条按这个分路，
+// 不从别的记录、会话的历史去推。
 import type { MonitorWakeData } from "./monitor-wake.ts";
 import { timelineNoticeOf, type TimelineNotice } from "./timeline-notice.ts";
 import { LEGACY_SYS_MARKER } from "./index.ts";
