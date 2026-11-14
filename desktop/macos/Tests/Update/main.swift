@@ -1,8 +1,9 @@
 import Foundation
 
 // scripts/test-macos-update.mjs 的驱动：编进来的是真的 UpdateGate / RestartImpact / ServerShutdown /
-// DatabaseBackup / ServerRecord，问用户那一下换成照脚本作答（ANSWERS=wait,now,…），每一步打一行
-// 给测试读。配置全走环境变量（ASH_URL、ASH_DATA_DIR），碰不到日常那一份。
+// Maintenance / DatabaseBackup / ServerRecord / ServerLauncher，问用户那一下换成照脚本作答
+// （ANSWERS=wait,now,…），每一步打一行给测试读。配置全走环境变量（ASH_URL、ASH_DATA_DIR、
+// ASH_MAC_RUNTIME），碰不到日常那一份。
 
 let env = ProcessInfo.processInfo.environment
 var answers = (env["ANSWERS"] ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty }
@@ -21,6 +22,7 @@ func runUntil(_ seconds: Double, _ done: () -> Bool) -> Bool {
 let gate = UpdateGate.shared
 gate.pollInterval = 0.2
 gate.shutdownTimeout = Double(env["SHUTDOWN_TIMEOUT"] ?? "5")!
+gate.lockTimeout = Double(env["LOCK_TIMEOUT"] ?? "5")!
 gate.ask = { prompt in
   emit("ASK \(prompt.title) | \(prompt.detail.replacingOccurrences(of: "\n", with: " / ")) | \(prompt.buttons.joined(separator: ","))")
   guard !answers.isEmpty else {
@@ -60,6 +62,52 @@ case "quit":
   let untilDrained = args.count > 3 && args[3] == "drain"
   _ = runUntil(Double(args[2])!) { drained || (reply != nil && (reply == true || !untilDrained)) }
   exit(drained || reply == true ? 0 : 1)
+
+case "abandon-prepared":
+  // 放行之后 Sparkle 中止：闸收回、启动禁令解除；再要装时从头评估、再备份一次。
+  var proceeded = 0
+  gate.request(.update(version: "9.9")) { proceeded += 1; emit("PROCEED") }
+  _ = runUntil(Double(args[2])!) { proceeded == 1 }
+  gate.abandon("测试里的安装错误")
+  emit("PHASE \(gate.phase) PENDING \(gate.hasPending) LAUNCH-HOLD \(ServerLauncher.shared.hold ?? "none")")
+  _ = runUntil(1.1) { false }  // 备份文件名精确到秒：隔开一秒，看得出重试又备了一份
+  gate.request(.update(version: "9.9")) { proceeded += 1; emit("PROCEED") }
+  _ = runUntil(Double(args[2])!) { proceeded == 2 }
+  exit(proceeded == 2 ? 0 : 1)
+
+case "abandon-waiting":
+  // 在等任务跑完的时候 Sparkle 放弃了：排着的安装回调作废，之后排空了也不再放行。
+  var proceeded = false
+  gate.request(.update(version: "9.9")) { proceeded = true; emit("PROCEED") }
+  _ = runUntil(Double(args[2])!) { gate.phase == .waiting }
+  gate.abandon("测试里的下载错误")
+  emit("ABANDONED")
+  _ = runUntil(Double(args[3])!) { proceeded }
+  emit("PHASE \(gate.phase) PENDING \(gate.hasPending)")
+  exit(proceeded ? 1 : 0)
+
+case "stop":
+  // ServerShutdown 只停评估过的那一份：stop <ours:pid | absent | consented>
+  let spec = args[2]
+  let target: ServiceTarget? = spec == "absent" ? .absent : spec == "consented" ? nil : .ours(pid: Int(spec.dropFirst(5))!)
+  emit("STOP \(ServerShutdown.stop(expecting: target, timeout: 3))")
+
+case "maintain":
+  // 攥着维护期不放，直到被杀（看另一个进程里的启动器认不认它）。
+  let held = try! Maintenance.begin(note: "测试里的维护", timeout: 2)
+  emit("MAINTAINING")
+  _ = runUntil(Double(args[2])!) { false }
+  held.end()
+  emit("ENDED")
+
+case "launch":
+  ServerLauncher.shared.freshStartApproved = true
+  switch ServerLauncher.shared.ensureRunningSync(timeout: Double(args[2])!) {
+  case .ready: emit("LAUNCH ready")
+  case .needsSetup: emit("LAUNCH needs-setup")
+  case .occupied(let why): emit("LAUNCH occupied \(why)")
+  case .failed(let why): emit("LAUNCH failed \(why.replacingOccurrences(of: "\n", with: " / "))")
+  }
 
 case "record":
   ServerRecord.write(pid: Int(args[2])!)

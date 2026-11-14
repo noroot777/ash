@@ -7,8 +7,11 @@ import Foundation
 /// 以为在用 app，数据其实写进了另一份库。所以本机地址还要认**数据根**是不是本 app 那一个
 /// （`/api/health` 对本机直连会报 `instance.dataDir`）。
 enum AshProbe {
-  /// 连不上（没人听这个端口）。
+  /// 连不上：连接被拒，没人听这个端口。
   case down
+  /// 请求发出去了却没等到答复（超时、连接半路断了……）：可能没人，也可能有人在、只是这会儿答不上来。
+  /// 起服务的那几处跟 `.down` 一样对待；装更新那道闸把它当成「确认不了」（见 RestartImpactProbe）。
+  case unreachable(String)
   /// 有东西应答，但不是 ash。
   case notAsh(String)
   case ash(AshInstance)
@@ -28,8 +31,11 @@ struct AshInstance {
 }
 
 enum AshHealth {
-  static func classify(response: URLResponse?, data: Data?) -> AshProbe {
-    guard let http = response as? HTTPURLResponse else { return .down }
+  static func classify(response: URLResponse?, data: Data?, error: Error? = nil) -> AshProbe {
+    guard let http = response as? HTTPURLResponse else {
+      if let error = error as? URLError, error.code == .cannotConnectToHost { return .down }
+      return .unreachable(error?.localizedDescription ?? "没有答复")
+    }
     guard http.statusCode == 200, let data,
           let health = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           health["ok"] as? Bool == true else {
@@ -52,8 +58,8 @@ enum AshHealth {
   static func probe(completion: @escaping (AshProbe) -> Void) {
     var request = URLRequest(url: AshConfig.healthURL, timeoutInterval: 1.5)
     request.cachePolicy = .reloadIgnoringLocalCacheData
-    URLSession.shared.dataTask(with: request) { data, response, _ in
-      completion(classify(response: response, data: data))
+    URLSession.shared.dataTask(with: request) { data, response, error in
+      completion(classify(response: response, data: data, error: error))
     }.resume()
   }
 

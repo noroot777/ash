@@ -1,10 +1,12 @@
 // 发版脚本跟 GitHub 说话的那一层：有 gh 就用 gh 拿凭证，没有就退回环境变量和 git 自己存的凭证，
-// 一律直接打 REST API（不依赖 gh 的子命令行为）。
+// 一律直接打 REST API（不依赖 gh 的子命令行为）。传附件和改 appcast 都走这一张凭证 —— 不另起
+// git 子进程去推（那样用的是 git 自己的凭证，和这里查过权限的不是同一个身份）。
 import { spawnSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
 
-const API = "https://api.github.com";
+// ASH_MAC_GITHUB_API 只给回归测试指向一个本地假的 GitHub。
+const API = process.env.ASH_MAC_GITHUB_API || "https://api.github.com";
 
 /** 按顺序找：GH_TOKEN / GITHUB_TOKEN → `gh auth token` → git 凭证助手里 github.com 那一条。 */
 export function resolveToken() {
@@ -25,7 +27,7 @@ export function resolveToken() {
 }
 
 export const NO_TOKEN_HINT = [
-  "找不到能调 GitHub API 的凭证。任选一种：",
+  "找不到能调 GitHub API 的凭证。任选一种（传附件、改 appcast 都只用这一张）：",
   "  · 装 gh 并登录：brew install gh && gh auth login",
   "  · 或者给一个有该仓库 contents 写权限的 token：export GH_TOKEN=…（fine-grained token，仓库权限 Contents: Read and write）",
   "  · 或者让 git 记住 github.com 的凭证（git push 过一次、存进钥匙串的那种）",
@@ -56,6 +58,29 @@ export class GitHub {
 
   async repoExists(repo) {
     return (await this.call("GET", `/repos/${repo}`, { allow: [404] })).status !== 404;
+  }
+
+  /** 这张凭证能不能往仓库里写（传附件、改 appcast 都要）。 */
+  async canPush(repo) {
+    return Boolean((await this.call("GET", `/repos/${repo}`)).json?.permissions?.push);
+  }
+
+  /** 读分支上的一个文件：{ sha, text }；不存在是 null。 */
+  async readFile(repo, path, branch) {
+    const { status, json } = await this.call("GET", `/repos/${repo}/contents/${encodePath(path)}?ref=${encodeURIComponent(branch)}`, { allow: [404] });
+    if (status === 404) return null;
+    if (json.encoding !== "base64") throw new Error(`${repo}/${path} 太大，Contents API 不给内容（${json.size} 字节）`);
+    return { sha: json.sha, text: Buffer.from(json.content, "base64").toString("utf8") };
+  }
+
+  /**
+   * 在分支上提交一个文件的新内容。`sha` 是读出来时那一版（新文件不传）：这期间别人改过，
+   * GitHub 拒绝（409），不会盖掉别人的改动。
+   */
+  async writeFile(repo, { path, branch, text, sha, message }) {
+    return (await this.call("PUT", `/repos/${repo}/contents/${encodePath(path)}`, {
+      body: { message, branch, content: Buffer.from(text, "utf8").toString("base64"), ...(sha ? { sha } : {}) },
+    })).json;
   }
 
   /** 建公开仓库（带一个初始提交，这样 main 分支一开始就在）。 */
@@ -93,3 +118,5 @@ export class GitHub {
     })).json;
   }
 }
+
+const encodePath = (path) => path.split("/").map(encodeURIComponent).join("/");

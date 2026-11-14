@@ -5,18 +5,25 @@
 // 的答复从一个状态文件里读，收到 SIGTERM 才退），数据根里放一份 WAL 还没落盘的真 SQLite 库。
 // 覆盖：没人会被打断 → 不问、停服务、备份、放行；会打断（判失败 + 握着 MCP，同一个任务只算
 // 一次）→ 先问；选「等」→ 排空后自己放行；选「现在」→ 立刻放行；问不出来 → 当成会打断；
-// 服务停不下来 → 不放行、不备份、松开启动闸；端口上是别的 ash → 不碰它；退出那一档的取消 /
-// 等 / 现在；备份只留最近 5 份；旧版 app 起的服务认得出来。
+// 等的时候服务一时回 503 / 不应答 → 确认不了、接着等，不停服务；停服务只停评估过的那个进程；
+// 服务停不下来 → 不放行、不备份、松开启动闸；另一处攥着启动锁 → 不停服务；维护期里别的进程起
+// 不了服务、维护方没了就作废；端口上是别的 ash → 不碰它；退出那一档的取消 / 等 / 现在、备份失败
+// 时的说法；Sparkle 放弃（放行后 / 等待中）→ 闸收回、作废的安装回调不再跑、重试再备份；库上次是
+// 别的构建号在用、又没备份过 → 起服务前先备份，备份不成不起；备份只留最近 5 份；旧版 app 起的
+// 服务认得出来。
 //
 // 发版：用演练密钥和一个假的 Ash.app 跑 `release.mjs --local`：zip 与 appcast 都验得过签、被篡改的
 // 包与 appcast 验不过；同一版、更旧的版本拒发；app 里的公钥和签名私钥不是一对时拒发；第二版排在
-// 第一版前面、第一版原样保留。
+// 第一版前面、第一版原样保留；`--notes` 进 appcast（转义过）；同一构建号缓存的 zip 来自另一份 app
+// 时拒发。正式发版对着一个本地假 GitHub 跑：只给 GH_TOKEN，传包和提交 appcast 都走这一张凭证；
+// 凭证没有写权限时什么都不传。
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { once } from "node:events";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,9 +54,12 @@ async function freePort() {
 }
 
 const port = await freePort();
-const env = { ...process.env, ASH_URL: `http://127.0.0.1:${port}`, ASH_DATA_DIR: data };
+const env = { ...process.env, ASH_URL: `http://127.0.0.1:${port}`, ASH_DATA_DIR: data, ASH_MAC_RUNTIME: join(temporary, "no-runtime") };
 const impactFile = join(temporary, "impact.json");
 const setImpact = (value) => writeFileSync(impactFile, typeof value === "string" ? value : JSON.stringify(value));
+const healthFile = join(temporary, "health.txt");
+/** 假服务的 /api/health 怎么答：ok / 503 / hang（不应答）。 */
+const setHealth = (value) => writeFileSync(healthFile, value);
 const clear = { survives: [{ id: "s", title: "接管得了的", pid: 1 }], resumes: [{ id: "lead", title: "调度台" }], interrupted: [], mcpDisrupted: [] };
 
 /** 假 ash：独立进程，pid 就是它自己。stubborn = 不理 SIGTERM。 */
@@ -64,6 +74,9 @@ async function startFake({ dataDir = data, stubborn = false } = {}) {
         if (raw === 'refuse') { res.statusCode = 401; return res.end('{"error":"请先登录"}'); }
         return res.end(raw);
       }
+      const health = fs.existsSync(${JSON.stringify(healthFile)}) ? fs.readFileSync(${JSON.stringify(healthFile)}, 'utf8') : 'ok';
+      if (health === 'hang') return;
+      if (health === '503') { res.statusCode = 503; return res.end('{"ok":false}'); }
       res.end(JSON.stringify({ ok: true, pid: process.pid, instance: { dataDir: ${JSON.stringify(dataDir)}, codeDir: '/fake/' } }));
     }).listen(${port}, '127.0.0.1', () => console.log('LISTENING'));`;
   const child = spawn(process.execPath, ["-e", source], { stdio: ["ignore", "pipe", "inherit"] });
@@ -156,8 +169,82 @@ try {
   fake = await startFake();
   result = await drive(["update", "10"], { answers: "now" });
   assert.equal(result.status, 0, result.out);
-  assert.match(result.out, /ASK .*问不出重启会打断哪些任务（服务端回 401）/);
+  assert.match(result.out, /ASK .*确认不了重启会不会打断任务（服务端回 401）/);
   console.log("PASS: an unanswered impact question is treated as disruptive, not as none");
+
+  // ── 等的时候服务一时答不上来：确认不了，接着等；绝不停它 ──
+  for (const flaky of ["503", "hang"]) {
+    setImpact({ ...clear, interrupted: [{ id: "a", title: "排队的任务", reason: "排队中" }] });
+    setHealth("ok");
+    fake = await startFake();
+    const flakyWait = driveAsync(["update", "20"], "wait");
+    for (let i = 0; i < 100 && !flakyWait.output().includes("ASK"); i++) await delay(50);
+    assert.match(flakyWait.output(), /ASK/);
+    setHealth(flaky);
+    await delay(flaky === "hang" ? 4000 : 1200);
+    setHealth("ok");
+    await delay(600);
+    assert.equal(alive(fake), true, `a ${flaky} health answer while waiting is no reason to stop a service with tasks`);
+    assert.doesNotMatch(flakyWait.output(), /PROCEED/);
+    setImpact(clear);
+    result = await flakyWait.done;
+    assert.match(result.out, /PROCEED/, result.out);
+    await delay(100);
+    assert.equal(alive(fake), false);
+  }
+  console.log("PASS: while waiting, a 503 or an unanswered health check is 'cannot confirm', not 'nothing to protect'");
+
+  // ── 停服务只停评估过的那个进程 ──
+  fake = await startFake();
+  result = await drive(["stop", `ours:${fake.pid + 1}`]);
+  assert.match(result.out, /STOP changed/, result.out);
+  result = await drive(["stop", "absent"]);
+  assert.match(result.out, /STOP changed/, "a service that appeared after 'nobody is listening' is not stopped on that verdict");
+  setHealth("503");
+  result = await drive(["stop", "consented"]);
+  assert.match(result.out, /STOP changed/, "an unidentifiable answer stops nothing, even after consent");
+  setHealth("ok");
+  assert.equal(alive(fake), true);
+  result = await drive(["stop", `ours:${fake.pid}`]);
+  assert.match(result.out, new RegExp(`STOP stopped\\(Optional\\(${fake.pid}\\)\\)`), result.out);
+  await delay(100);
+  assert.equal(alive(fake), false);
+  result = await drive(["stop", "absent"]);
+  assert.match(result.out, /STOP stopped\(nil\)/);
+  console.log("PASS: shutdown is bound to the process that was assessed; anything else is re-assessed, not killed");
+
+  // ── 另一处攥着启动锁（正在起服务）：等不到就不停、不装 ──
+  setImpact(clear);
+  fake = await startFake();
+  const entered = join(temporary, "lock-entered");
+  const locker = spawn("/usr/bin/lockf", ["-k", join(data, ".mac-launch.lock"), process.execPath, "-e",
+    `require('node:fs').writeFileSync(${JSON.stringify(entered)},'1');setTimeout(()=>{},60000)`], { stdio: "ignore" });
+  fakes.add(locker);
+  for (let i = 0; i < 100 && !existsSync(entered); i++) await delay(50);
+  const backupsBefore = backups().length;
+  result = await drive(["update", "10"], { extraEnv: { LOCK_TIMEOUT: "1" } });
+  assert.equal(result.status, 1, result.out);
+  assert.match(result.out, /REPORT 另一处正在起 ash 服务/);
+  assert.equal(alive(fake), true, "the service is not stopped while someone else is starting one");
+  assert.equal(backups().length, backupsBefore);
+  locker.kill("SIGKILL");
+  await once(locker, "exit");
+  console.log("PASS: the gate takes the launch lock before stopping anything");
+
+  // ── 维护期跨进程：别的进程起不了服务；维护方没了就作废 ──
+  fake.kill("SIGKILL");
+  await once(fake, "exit");
+  const maintainer = driveAsync(["maintain", "30"], "");
+  for (let i = 0; i < 100 && !maintainer.output().includes("MAINTAINING"); i++) await delay(50);
+  result = await drive(["launch", "2"]);
+  assert.match(result.out, /LAUNCH failed 测试里的维护/, "a launcher in another process honours the maintenance marker");
+  const maintainerPid = Number(readFileSync(join(data, ".mac-maintenance.json"), "utf8").match(/"pid":(\d+)/)[1]);
+  process.kill(maintainerPid, "SIGKILL");
+  await maintainer.done;
+  result = await drive(["launch", "2"]);
+  assert.match(result.out, /LAUNCH failed .*不完整/, "once the holder is gone the marker is void (here the fixture has no runtime)");
+  assert.equal(existsSync(join(data, ".mac-maintenance.json")), false);
+  console.log("PASS: maintenance holds every launcher across processes, and dies with its holder");
 
   // ── 停不下来：不放行、不备份、松开启动闸 ──
   setImpact(clear);
@@ -206,6 +293,52 @@ try {
   await delay(100);
   assert.equal(alive(fake), false);
   console.log("PASS: quitting with a downloaded update goes through the same gate, with a cancel");
+
+  // ── Sparkle 放弃了：放行之后 → 闸收回、重试从头评估并再备份；等待中 → 排着的安装作废 ──
+  rmSync(join(data, "backups"), { recursive: true, force: true });
+  setImpact(clear);
+  fake = await startFake();
+  result = await drive(["abandon-prepared", "10"]);
+  assert.equal(result.status, 0, result.out);
+  assert.match(result.out, /PROCEED[\s\S]*RELEASE[\s\S]*PHASE idle PENDING false LAUNCH-HOLD none[\s\S]*HOLD 正在安装更新[\s\S]*PROCEED/,
+    "after an abort the launch hold is gone and a retry goes through the whole gate again");
+  assert.equal(backups().length, 2, "the retry backs up again");
+  setImpact({ ...clear, interrupted: [{ id: "a", title: "排队的任务", reason: "排队中" }] });
+  fake = await startFake();
+  const abandoned = driveAsync(["abandon-waiting", "10", "2"], "wait");
+  for (let i = 0; i < 100 && !abandoned.output().includes("ABANDONED"); i++) await delay(50);
+  setImpact(clear);
+  result = await abandoned.done;
+  assert.equal(result.status, 0, result.out);
+  assert.match(result.out, /PHASE idle PENDING false/);
+  assert.equal(alive(fake), true, "an abandoned update never stops the service later, even once drained");
+  fake.kill("SIGKILL");
+  await once(fake, "exit");
+  console.log("PASS: a Sparkle abort resets the gate: hold released, stale install callbacks dropped, retry re-assesses and re-backs up");
+
+  // ── 退出那一档备份失败：说清楚退出会发生什么 ──
+  mkdirSync(join(data, "backups"), { recursive: true });
+  chmodSync(join(data, "backups"), 0o500);
+  result = await drive(["quit", "10"], { answers: "now" });
+  chmodSync(join(data, "backups"), 0o700);
+  assert.match(result.out, /ASK 更新没装上 \| 更新前备份库没成功.*新版起服务之前会先备份库，备份不成就不起服务/, result.out);
+  assert.match(result.out, /REPLY true/);
+  console.log("PASS: a failed backup on quit says what quitting will and will not do");
+
+  // ── 库上次是别的构建号在用、又没备份过：起服务前先备份，备份不成不起 ──
+  rmSync(join(data, "backups"), { recursive: true, force: true });
+  await drive(["record", "4242", "20000101.0000"]);
+  result = await drive(["launch", "2"]);
+  assert.match(result.out, /LAUNCH failed .*不完整/, result.out);
+  assert.deepEqual(backups().map((n) => n.split("-").pop()), ["20000101.0000.db"], "backed up before a newer build may migrate it");
+  result = await drive(["launch", "2"]);
+  assert.equal(backups().length, 1, "a database already backed up for this switch is not backed up twice");
+  await drive(["record", "4242", "20000101.0000"]);
+  chmodSync(join(data, "backups"), 0o500);
+  result = await drive(["launch", "2"]);
+  chmodSync(join(data, "backups"), 0o700);
+  assert.match(result.out, /LAUNCH failed .*迁移前先备份库没成功.*没起服务/, result.out);
+  console.log("PASS: a launcher about to run a newer build on an un-backed-up database backs it up first, or does not start");
 
   // ── 旧版 app 起的服务 ──
   result = await drive(["record", "4242"]);
@@ -297,6 +430,8 @@ async function releaseRehearsal() {
   assert.deepEqual(versions, ["20000101.0002", "20000101.0001"], "newest first, the earlier item kept");
   assert.equal(appcast().match(/sparkle:edSignature="([^"]+)"/g).length, 2);
   assert.equal(verify(join(feed, "appcast.xml")), 0, "re-signed after adding the item");
+  const descriptions = [...appcast().matchAll(/<description>([^<]*)<\/description>/g)].map((m) => unescapeXml(m[1]));
+  assert.deepEqual(descriptions, ["<p>第二版</p>", "<p>演练</p>"], "--notes reaches the appcast");
 
   const second = join(feed, "Ash-0.2.0-20000101.0002.zip");
   const newest = appcast().match(/sparkle:edSignature="([^"]+)"/)[1];
@@ -304,5 +439,119 @@ async function releaseRehearsal() {
   assert.notEqual(verify(second, newest), 0, "a tampered zip fails verification");
   writeFileSync(join(feed, "appcast.xml"), appcast().replace("20000101.0002</sparkle:version>", "20990101.0002</sparkle:version>"));
   assert.notEqual(verify(join(feed, "appcast.xml")), 0, "a tampered appcast fails verification");
-  console.log("PASS: release --local signs zip and appcast, refuses re-releases, older versions and mismatched keys; tampering is detected");
+  // 同一构建号：上次压的 zip 来自另一份 app → 拒发
+  const cached = join(temporary, "artifacts", "v0.2.0-20990101.0003");
+  mkdirSync(cached, { recursive: true });
+  writeFileSync(join(cached, "Ash-0.2.0-20990101.0003.zip"), "zip of some other build");
+  writeFileSync(join(cached, "Ash-0.2.0-20990101.0003.zip.source"), "0000\n");
+  result = release(fakeApp("20990101.0003", key.publicKey), key.file);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /是上次从另一份 app 压的/, "a cached zip of a different app is never signed for this one");
+  console.log("PASS: release --local signs zip and appcast, refuses re-releases, older versions and mismatched keys; tampering is detected; notes kept; cached zip bound to its app");
+
+  await formalRehearsal(key, fakeApp);
+}
+
+function unescapeXml(text) {
+  return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&amp;/g, "&");
+}
+
+/** 本地假 GitHub：只认 `Bearer test-token`；记下每个请求。push=false 时这张凭证没有写权限。 */
+async function fakeGitHub({ push }) {
+  const state = { calls: [], files: new Map(), releases: [], downloads: new Map() };
+  let base = "";
+  const server = createHttpServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = Buffer.concat(chunks);
+    const url = new URL(req.url, base);
+    const json = (status, value) => { res.statusCode = status; res.setHeader("content-type", "application/json"); res.end(JSON.stringify(value)); };
+    if (req.method === "GET" && state.downloads.has(url.pathname)) return res.end(state.downloads.get(url.pathname));
+    state.calls.push(`${req.method} ${url.pathname}`);
+    if (req.headers.authorization !== "Bearer test-token") return json(401, { message: "Bad credentials" });
+    if (req.method === "GET" && url.pathname === "/repos/o/r") return json(200, { permissions: { push } });
+    const contents = url.pathname.match(/^\/repos\/o\/r\/contents\/(.+)$/);
+    if (contents) {
+      const path = decodeURIComponent(contents[1]);
+      const file = state.files.get(path);
+      if (req.method === "GET") return file ? json(200, { sha: file.sha, encoding: "base64", content: Buffer.from(file.text).toString("base64") }) : json(404, {});
+      const put = JSON.parse(body);
+      if (file?.sha !== put.sha) return json(409, { message: "sha does not match" });
+      const sha = createHash("sha1").update(put.content).digest("hex");
+      state.files.set(path, { sha, text: Buffer.from(put.content, "base64").toString("utf8"), branch: put.branch, message: put.message });
+      return json(200, { content: { sha } });
+    }
+    if (req.method === "GET" && url.pathname.startsWith("/repos/o/r/releases/tags/")) {
+      const found = state.releases.find((r) => r.tag_name === decodeURIComponent(url.pathname.split("/").pop()));
+      return found ? json(200, found) : json(404, {});
+    }
+    if (req.method === "POST" && url.pathname === "/repos/o/r/releases") {
+      const { tag_name: tag, body: notes } = JSON.parse(body);
+      const created = { tag_name: tag, body: notes, assets: [], upload_url: `${base}/uploads/${tag}{?name,label}` };
+      state.releases.push(created);
+      return json(201, created);
+    }
+    if (req.method === "POST" && url.pathname.startsWith("/uploads/")) {
+      const tag = url.pathname.split("/")[2];
+      const name = url.searchParams.get("name");
+      const asset = { name, size: body.length, browser_download_url: `${base}/download/${tag}/${name}` };
+      state.downloads.set(`/download/${tag}/${name}`, body);
+      state.releases.find((r) => r.tag_name === tag).assets.push(asset);
+      return json(201, asset);
+    }
+    json(404, {});
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  base = `http://127.0.0.1:${server.address().port}`;
+  return { state, base, close: () => new Promise((done) => { server.closeAllConnections(); server.close(done); }) };
+}
+
+async function formalRehearsal(key, fakeApp) {
+  const configFile = join(temporary, "release.json");
+  writeFileSync(configFile, JSON.stringify({ repo: "o/r", branch: "main", appcastPath: "ash/mac/appcast.xml", tagPrefix: "ash-mac-v",
+    keychainAccount: "unused", publicKey: key.publicKey }));
+  const app = fakeApp("20000102.0001", key.publicKey);
+  // 正式发版要求 app 的更新源就是 release.json 算出来的那一个。
+  const plist = join(app, "Contents/Info.plist");
+  writeFileSync(plist, readFileSync(plist, "utf8").replace("http://127.0.0.1:1/appcast.xml", "https://raw.githubusercontent.com/o/r/main/ash/mac/appcast.xml"));
+  const publish = async (github) => new Promise((done) => {
+    const child = spawn(process.execPath, [join(mac, "scripts/release.mjs"), "--app", app, "--ed-key-file", key.file, "--notes", "正式 & <b>演练</b>"], {
+      env: { ...process.env, GH_TOKEN: "test-token", GITHUB_TOKEN: "", ASH_MAC_GITHUB_API: github.base,
+        ASH_MAC_RELEASE_CONFIG: configFile, ASH_MAC_RELEASE_ARTIFACTS: join(temporary, "formal-artifacts") },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    child.stdout.on("data", (chunk) => { out += chunk; });
+    child.stderr.on("data", (chunk) => { out += chunk; });
+    child.once("close", (status) => done({ status, out }));
+  });
+
+  let github = await fakeGitHub({ push: false });
+  let result = await publish(github);
+  await github.close();
+  assert.notEqual(result.status, 0, result.out);
+  assert.match(result.out, /没有写权限/);
+  assert.deepEqual(github.state.calls.filter((c) => !c.startsWith("GET")), [], "nothing is published with a credential that cannot finish the job");
+
+  github = await fakeGitHub({ push: true });
+  result = await publish(github);
+  await github.close();
+  assert.equal(result.status, 0, result.out);
+  assert.match(result.out, /GitHub 凭证：GH_TOKEN/);
+  const order = github.state.calls.filter((c) => !c.startsWith("GET"));
+  assert.deepEqual(order.map((c) => c.split(" ")[0] + " " + c.split("/")[1]), ["POST repos", "POST uploads", "PUT repos"],
+    "release, then the zip, then the appcast — all through the API with the one token");
+  const committed = github.state.files.get("ash/mac/appcast.xml");
+  assert.equal(committed.branch, "main");
+  assert.match(committed.text, /<sparkle:version>20000102\.0001<\/sparkle:version>/);
+  assert.match(committed.text, new RegExp(`url="${github.base}/download/ash-mac-v0\\.2\\.0-20000102\\.0001/Ash-0\\.2\\.0-20000102\\.0001\\.zip"`));
+  writeFileSync(join(temporary, "committed-appcast.xml"), committed.text);
+  const sparkle = spawnSync(process.execPath, [join(mac, "scripts/sparkle.mjs")], { encoding: "utf8" }).stdout.trim();
+  assert.equal(spawnSync(join(sparkle, "bin/sign_update"), ["--verify", "--ed-key-file", key.file, join(temporary, "committed-appcast.xml")]).status, 0,
+    "the committed appcast is signed");
+  assert.equal(github.state.releases[0].body, "正式 & <b>演练</b>", "the release body is the notes as given");
+  assert.equal(unescapeXml(committed.text.match(/<description>([^<]*)<\/description>/)[1]), "<p>正式 &amp; &lt;b&gt;演练&lt;/b&gt;</p>",
+    "in the appcast the notes are HTML-escaped");
+  console.log("PASS: a formal release with only GH_TOKEN checks write access first, then uploads and commits the appcast with that same token");
 }

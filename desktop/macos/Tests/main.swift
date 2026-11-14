@@ -55,6 +55,7 @@ if mode == "health" {
   let probe = AshHealth.probeSync()
   switch probe {
   case .down: print("DOWN")
+  case .unreachable(let why): print("UNREACHABLE \(why)")
   case .notAsh: print("NOT ASH")
   case .ash: print(AshHealth.isServing(probe) ? "READY" : "FOREIGN")
   }

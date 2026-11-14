@@ -20,7 +20,14 @@ extension BrowserWindowController {
   }
 
   private func connect() {
-    if let note = ServerLauncher.shared.hold { showInstalling(note); return }
+    if let note = ServerLauncher.shared.hold {
+      showInstalling(note)
+      // 维护在别的进程里（另开的一份 app 在装更新）：它完了不会通知这里，过一会儿再看一次。
+      if !UpdateGate.shared.isHolding {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.loadHome() }
+      }
+      return
+    }
     pendingStartingScreen?.cancel()
     let starting = DispatchWorkItem { [weak self] in
       self?.offlineView.show(title: "正在启动 ash 服务…", detail: AshConfig.baseURL.absoluteString, busy: true)

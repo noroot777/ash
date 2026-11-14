@@ -57,11 +57,18 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate {
     return true
   }
 
+  /// Sparkle 放弃了一次更新周期。闸已经为它停了服务（准备中 / 已放行），或者错出在下载、解包、
+  /// 安装这几步 —— 这一份不会装了：作废闸里排着的一切，服务照常起（UpdateGate.abandon）。
+  /// 「没有新版」、拉 appcast 出错（1xxx）也走这里：那可能只是又一次定时检查失败，已经下好、
+  /// 退出时还会装的那一份还在，不能当它没了（不然退出就绕过闸了）。
   func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
     let code = (error as NSError).code
-    // 「没有新版」也走这里，那不算放弃了已经下好的那份。
-    if code != Int(SUError.noUpdateError.rawValue) { readyVersion = nil }
-    UpdateGate.logger.notice("Sparkle 中止：\(error.localizedDescription, privacy: .public)")
+    UpdateGate.logger.notice("Sparkle 中止（\(code, privacy: .public)）：\(error.localizedDescription, privacy: .public)")
+    let gate = UpdateGate.shared
+    let committed = gate.phase == .preparing || gate.phase == .prepared
+    guard code != Int(SUError.noUpdateError.rawValue), committed || code >= 2000 else { return }
+    readyVersion = nil
+    gate.abandon(error.localizedDescription)
   }
 
   private func label(_ item: SUAppcastItem) -> String {

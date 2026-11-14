@@ -116,6 +116,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
       AshHealth.probe { probe in
         var down = false
         if case .down = probe { down = true }
+        if case .unreachable = probe { down = true }
         guard AshHealth.isServing(probe) || (takeOverWhenFree && down) else { return }
         DispatchQueue.main.async { self?.loadHome() }
       }

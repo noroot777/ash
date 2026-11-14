@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // 发一版 mac app：构建独立 app → 压 zip → EdDSA 签名 → 在发布仓库建 GitHub Release、传 zip →
-// 更新 appcast.xml（整份也签过）→ 提交并推送。已装的 app 定时拉那份 appcast，看到新版就提示安装。
+// 更新 appcast.xml（整份也签过）→ 经 GitHub API 提交进发布仓库。已装的 app 定时拉那份 appcast，
+// 看到新版就提示安装。读写 GitHub 全程只用一张凭证，开传之前先确认它有写权限。
 //
 //   npm run release:mac                         # 正式发版（要先 --keys 做过一次）
 //   npm run release:mac -- --keys               # 生成 / 读出正式 EdDSA 密钥，公钥写进 release.json
@@ -15,11 +16,12 @@
 //  · 版本号（CFBundleVersion）必须比 appcast 里最新的一版大；正式发版要求工作区干净（版本号取
 //    提交时间，干净才可复现）。
 //  · 先传 zip、确认下得下来，再推 appcast：feed 永远不指向一个还不存在的包。没发完重跑时，同
-//    一版沿用上次压好的 zip（重压出来的字节不同，签名就和已传上去的那份对不上了）。
+//    一版沿用上次压好的 zip（重压出来的字节不同，签名就和已传上去的那份对不上了）—— 但只在
+//    这次给的 app 和压那个 zip 的是同一份时（旁边记着 app 的内容摘要），不是就拒发。
 import { spawnSync } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { compareVersions, latestVersion, parseItems, previousCommit, renderAppcast, renderItem } from "./appcast.mjs";
@@ -29,7 +31,8 @@ import { ensureSparkle } from "./sparkle.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MAC = resolve(HERE, "..");
 const REPO = resolve(MAC, "../..");
-const CONFIG_PATH = join(MAC, "release.json");
+// ASH_MAC_RELEASE_CONFIG 只给回归测试换一份发版配置（配合 github.mjs 的 ASH_MAC_GITHUB_API 演练正式发版）。
+const CONFIG_PATH = process.env.ASH_MAC_RELEASE_CONFIG || join(MAC, "release.json");
 
 const say = (line) => process.stdout.write(`${line}\n`);
 class Stop extends Error {}
@@ -94,6 +97,8 @@ async function main() {
     github = new GitHub(auth.token);
     if (values["init-repo"]) return initRepo(config, github);
     if (!(await github.repoExists(config.repo))) die(`发布仓库 ${config.repo} 还不存在：先跑一次 npm run release:mac -- --init-repo`);
+    // 传附件和改 appcast 用的是同一张凭证：在对外放出任何东西之前确认它两样都做得了。
+    if (!(await github.canPush(config.repo))) die(`这张凭证（${auth.source}）对 ${config.repo} 没有写权限：传不了包，也改不了 appcast。\n${NO_TOKEN_HINT}`);
   }
 
   // ── 1. 这次要发的 app ──
@@ -125,16 +130,13 @@ async function main() {
   }
 
   // ── 3. appcast 那一头 ──
-  const checkout = local ?? join(MAC, "build", "release-repo");
-  if (local) {
-    mkdirSync(local, { recursive: true });
-  } else {
-    syncCheckout(config, checkout);
-  }
-  // 本地演练的目录就是更新源本身，appcast 放在根上；正式发版放在发布仓库里 appcastPath 那个位置。
-  const appcastPath = local ? join(local, "appcast.xml") : join(checkout, config.appcastPath);
+  // 本地演练的目录就是更新源本身，appcast 放在根上；正式发版从发布仓库 appcastPath 读出现在那一版，
+  // 在本地拼好、签好，最后整份提交回去（带着读出时的 sha，这期间别人改过就拒）。
+  const remote = local ? null : await github.readFile(config.repo, config.appcastPath, config.branch);
+  const appcastPath = local ? join(local, "appcast.xml") : join(MAC, "build", "release-appcast", basename(config.appcastPath));
   mkdirSync(dirname(appcastPath), { recursive: true });
-  const items = parseItems(existsSync(appcastPath) ? readFileSync(appcastPath, "utf8") : "");
+  const current = local ? (existsSync(appcastPath) ? readFileSync(appcastPath, "utf8") : "") : remote?.text ?? "";
+  const items = parseItems(current);
   const latest = latestVersion(items);
   if (items.some((item) => item.version === version)) die(`${version} 已经发过了（appcast 里有）。`);
   if (latest && compareVersions(version, latest) <= 0) die(`这一版 ${version} 不比 appcast 里最新的 ${latest} 新：Sparkle 不会把它当成更新。`);
@@ -145,19 +147,27 @@ async function main() {
   const artifacts = join(process.env.ASH_MAC_RELEASE_ARTIFACTS || join(MAC, "build", "releases"), tag);
   mkdirSync(artifacts, { recursive: true });
   const zip = join(artifacts, `Ash-${shortVersion}-${version}.zip`);
+  const source = `${zip}.source`;
+  const digest = appDigest(app);
   if (existsSync(zip)) {
+    const packed = existsSync(source) ? readFileSync(source, "utf8").trim() : "（没有记录）";
+    if (packed !== digest) {
+      die(`${zip} 是上次从另一份 app 压的（内容摘要 ${packed}，这次是 ${digest}）：同一个构建号换了包。\n`
+        + `要发这次这份就换个构建号重新构建；确定上次那份没传出去，也可以删掉 ${artifacts} 再重跑。`);
+    }
     say(`▶ 沿用上次没发完的 ${zip}`);
   } else {
     say(`▶ 压包 ${zip}`);
     run("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", app, `${zip}.part`]);
+    writeFileSync(source, `${digest}\n`);
     run("mv", [`${zip}.part`, zip]);
   }
   const signature = run(tool("sign_update"), [...keyArgs, "-p", zip]);
   run(tool("sign_update"), [...keyArgs, "--verify", zip, signature]);
   const length = statSync(zip).size;
   const zipName = zip.split("/").pop();
-  const url = local ? new URL(zipName, info.SUFeedURL).href : `https://github.com/${config.repo}/releases/download/${tag}/${zipName}`;
-  const notes = values.notes ?? releaseNotes(items, commit);
+  let url = local ? new URL(zipName, info.SUFeedURL).href : null;
+  const notes = values.notes != null ? notesFromText(values.notes) : releaseNotes(items, commit);
 
   // ── 5. 先把包放上去 ──
   if (local) {
@@ -169,7 +179,7 @@ async function main() {
       release = await github.createRelease(config.repo, { tag, branch: config.branch, name: `ash ${shortVersion}（${version}）`, body: notes.text });
     }
     say(`▶ 传 ${zipName}（${(length / 1048576).toFixed(1)} MB）`);
-    await github.uploadAsset(release, zip);
+    url = (await github.uploadAsset(release, zip)).browser_download_url;
     await confirmDownloadable(url, zip, length);
   }
 
@@ -188,9 +198,15 @@ async function main() {
   run(tool("sign_update"), [...keyArgs, appcastPath]);
   run(tool("sign_update"), [...keyArgs, "--verify", appcastPath]);
   if (!local) {
-    run("git", ["-C", checkout, "add", config.appcastPath]);
-    run("git", ["-C", checkout, "commit", "-m", `ash mac ${shortVersion}（${version}）`]);
-    run("git", ["-C", checkout, "push", "origin", `HEAD:${config.branch}`], { stdio: ["ignore", "pipe", "pipe"] });
+    say(`▶ 提交 ${config.repo}/${config.appcastPath}`);
+    try {
+      await github.writeFile(config.repo, {
+        path: config.appcastPath, branch: config.branch, text: readFileSync(appcastPath, "utf8"), sha: remote?.sha,
+        message: `ash mac ${shortVersion}（${version}）`,
+      });
+    } catch (error) {
+      die(`appcast 没提交上：${error.message}\n包已经传好了；HTTP 409 / 422 是这期间 appcast 被别处改过，直接重跑（会沿用同一个包、重新读一遍 appcast）。`);
+    }
   }
   say(`✓ 已发 ${shortVersion}（${version}）`);
   say(`  包：${url}`);
@@ -198,17 +214,21 @@ async function main() {
   if (!local) say("  （raw.githubusercontent 有几分钟缓存，已装的 app 下一次定时检查或点「检查更新…」时就能看到）");
 }
 
-function syncCheckout(config, checkout) {
-  const remote = `https://github.com/${config.repo}.git`;
-  if (!existsSync(join(checkout, ".git"))) {
-    // 发布仓库可能还放着别的大文件（素材库里有宣传片）：只拉 appcast 所在那个目录，其余的 blob 不下。
-    run("git", ["clone", "--quiet", "--filter=blob:none", "--sparse", remote, checkout]);
-  }
-  run("git", ["-C", checkout, "sparse-checkout", "set", dirname(config.appcastPath) === "." ? "/appcast.xml" : dirname(config.appcastPath)]);
-  // 这是脚本自己的一份检出，只放 appcast：每次都对齐远端，不留本地改动。
-  run("git", ["-C", checkout, "fetch", "--quiet", "origin", config.branch]);
-  run("git", ["-C", checkout, "checkout", "--quiet", "-B", config.branch, `origin/${config.branch}`]);
-  run("git", ["-C", checkout, "reset", "--quiet", "--hard", `origin/${config.branch}`]);
+/** 一份 app 的内容摘要：每个文件的相对路径、可执行位、内容（软链记指向）。认「是不是同一份 app」用。 */
+function appDigest(app) {
+  const hash = createHash("sha256");
+  const walk = (dir) => {
+    for (const name of readdirSync(dir).sort()) {
+      const path = join(dir, name);
+      const rel = relative(app, path);
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) hash.update(`L ${rel} -> ${readlinkSync(path)}\n`);
+      else if (stat.isDirectory()) walk(path);
+      else hash.update(`F ${rel} ${stat.mode & 0o111 ? "x" : "-"} ${createHash("sha256").update(readFileSync(path)).digest("hex")}\n`);
+    }
+  };
+  walk(app);
+  return hash.digest("hex");
 }
 
 /** 更新说明：上一版以来这个仓库里的提交标题（上一版的提交找不到时取最近 15 条）。 */
@@ -221,6 +241,13 @@ function releaseNotes(items, commit) {
   const list = subjects.length ? subjects : ["小修小补"];
   const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   return { text: list.map((s) => `- ${s}`).join("\n"), html: `<ul>${list.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>` };
+}
+
+/** `--notes` 给的说明：和自动生成的一样，Release 用原文、appcast 用转义过的 HTML。 */
+function notesFromText(text) {
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const paragraphs = text.trim().split(/\n\s*\n/).map((p) => `<p>${esc(p).replace(/\n/g, "<br>")}</p>`);
+  return { text: text.trim(), html: paragraphs.join("") };
 }
 
 /** 传上去的包确实下得下来、大小和内容都对（feed 指向它之前最后一道确认）。 */

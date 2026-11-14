@@ -27,12 +27,8 @@ final class ServerLauncher {
 
   /// 正在换代码（UpdateGate 停了服务、在备份库、等 Sparkle 换 app）：这期间谁来要服务都不起，
   /// 否则窗口的探活一发现服务不在，就会拿**旧版**代码再起一份，迁移前的备份和新版都白做。
-  /// 值是说给用户听的那句话。
-  var hold: String? {
-    get { requests.lock(); defer { requests.unlock() }; return held }
-    set { requests.lock(); held = newValue; requests.unlock() }
-  }
-  private var held: String?
+  /// 记在数据根里（见 Maintenance），别的进程里的维护也算。值是说给用户听的那句话。
+  var hold: String? { Maintenance.activeNote() }
 
   var logURL: URL { AshConfig.serverLogURL }
 
@@ -70,6 +66,7 @@ final class ServerLauncher {
       let deadline = Date().addingTimeInterval(timeout)
       while try !lock.tryAcquire() {
         if let settled = Self.settle(AshHealth.probeSync()) { return settled }
+        if let hold { return .failed(hold) }
         guard Date() < deadline else { return .failed("等另一处启动 ash 服务超时。可以重试；服务起来后也会自动载入。") }
         Thread.sleep(forTimeInterval: 0.2)
       }
@@ -79,6 +76,7 @@ final class ServerLauncher {
     defer { withExtendedLifetime(lock) {} }
     if let settled = Self.settle(AshHealth.probeSync()) { return settled }
     if let hold { return .failed(hold) }
+    if let failure = Self.backUpBeforeMigration() { return .failed(failure) }
     let parts = [AshConfig.nodeURL, AshConfig.serverEntryURL, AshConfig.detachScriptURL]
     if let missing = parts.first(where: { !FileManager.default.fileExists(atPath: $0.path) }) {
       return .failed("app 里自带的 ash 不完整（缺 \(missing.path)）。重新装一次 Ash.app。")
@@ -94,10 +92,31 @@ final class ServerLauncher {
     }
   }
 
+  /// 这份库上一次是别的构建号的 app 起的服务在用（或者不知道是谁）：这一版的 server 一起来就可能
+  /// 迁移它，迁移不可逆。UpdateGate 装更新前已经备份过的就不再备一次；没备过的 —— 退出时没过闸
+  /// 就被 Sparkle 装上了、`build.sh --install`、手动换了 app —— 在这里补一份。备份不成就不起：
+  /// 库原样留着，配上旧版 app 还能回去。返回 nil = 可以起。
+  private static func backUpBeforeMigration() -> String? {
+    let db = AshConfig.dataURL.appendingPathComponent("ash.db")
+    guard FileManager.default.fileExists(atPath: db.path) else { return nil }
+    let record = ServerRecord.read()
+    if record?.bundleVersion == AshConfig.bundleVersion { return nil }
+    if let backup = record?.backup, FileManager.default.fileExists(atPath: backup) { return nil }
+    do {
+      if let backup = try DatabaseBackup.beforeUpdate(fromVersion: record?.bundleVersion ?? "unknown") {
+        ServerRecord.markBackedUp(backup)
+      }
+      return nil
+    } catch {
+      return "这一版要在库上做迁移，迁移前先备份库没成功（\(error.localizedDescription)），所以没起服务、库没动过。\n"
+        + "腾出空间 / 修好权限后点「重试」；要回到旧版，把旧版 app 装回来就行（README「回到旧版」）。"
+    }
+  }
+
   /// 探到的结果里哪些已经是结论：自己那份在 → ready；别人占着 → occupied；连不上 → nil（接着起）。
   static func settle(_ probe: AshProbe) -> Outcome? {
     switch probe {
-    case .down: return nil
+    case .down, .unreachable: return nil
     case .notAsh(let what): return .occupied(Occupant.notAsh(what))
     case .ash(let instance): return AshHealth.isServing(probe) ? .ready : .occupied(Occupant.otherAsh(instance))
     }

@@ -41,11 +41,16 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Ash.
 
 装新版 = 重启 app 里的服务。所以不管从哪条路装（点了「安装并重新启动」、勾了自动安装后 Sparkle 悄悄下好、下好了没装就按 ⌘Q），都先过 `UpdateGate`：
 
-1. 问 server 的 `/api/restart-impact`（与 `npm run restart` 的安全闸同一条口径）。`interrupted`（接不回来、会判失败）和 `mcpDisrupted`（活得过重启，但手里握着 ash MCP，服务换代码那会儿交卷可能失败）都算**会打断**，同一个任务只算一次；问不出来也按会打断对待。会被接管的、调度台会自动接回的不算。
-2. 不会打断任何任务 → 直接装。会打断 → 弹窗列出是哪几个、为什么，选「等它们跑完再装」或「现在装」（退出那一档多一个「取消」）。选了等，每 5 秒再问一次，排空了自己装；等的时候菜单里有「等任务跑完后安装更新…」，点它可以改成现在装。
-3. 放行后：停掉自己那份服务（SIGTERM；在跑的 agent 不随它死，新服务起来按 pid 接管）→ 备份库 → 交给 Sparkle 换 app、重开 → 新版起新服务。停服务到换完之间，任何入口都不会拿旧代码再起一份。停不下来或备份失败就不装，窗口把服务接回来，菜单里留「安装更新…」可以重试。
+1. 问 server 的 `/api/restart-impact`（与 `npm run restart` 的安全闸同一条口径）。`interrupted`（接不回来、会判失败）和 `mcpDisrupted`（活得过重启，但手里握着 ash MCP，服务换代码那会儿交卷可能失败）都算**会打断**，同一个任务只算一次。会被接管的、调度台会自动接回的不算。只有**确认**没人会被打断才自己往下走：连接被拒（确认没在跑）、端口上是报了别的数据根的 ash、或者问到了且是空的；服务一时没答复、回了 503、没报身份、restart-impact 问不出来，都是「确认不了」，按会打断对待。
+2. 不会打断任何任务 → 直接装。会打断 → 弹窗列出是哪几个、为什么，选「等它们跑完再装」或「现在装」（退出那一档多一个「取消」）。选了等，每 5 秒再问一次，确认排空了才自己装（中途一次探活失败只算确认不了，接着等）；等的时候菜单里有「等任务跑完后安装更新…」，点它可以改成现在装。
+3. 放行后：攥住启动锁、在数据根里写维护标记（`.mac-maintenance.json`）→ 停掉**评估过的那一份**服务（SIGTERM；在跑的 agent 不随它死，新服务起来按 pid 接管；这会儿端口上换了进程、或者认不出是谁，就不停、从头再评估）→ 备份库 → 交给 Sparkle 换 app、重开 → 新版起新服务。维护标记在的时候，任何入口（这个窗口、登录项的 `--start-server`、另开的一份 app）都不起服务；持有它的进程没了（装完被退掉、崩了）标记就作废。停不下来或备份失败就不装，窗口把服务接回来，菜单里留「安装更新…」可以重试。
+4. Sparkle 中途放弃了这次更新（安装出错、取消）：闸里排着的安装、轮询、维护标记全部作废，窗口把服务接回来；再装从头评估、再备份一次。
 
-勾了「自动下载并安装」的话，下好之后只要不会打断任务就直接装并重开（窗口会刷新一下）；ash 常驻不退出，等「退出时装」可能要等好几天。app 被强杀（`kill -9`、崩溃）时 Sparkle 照样会把下好的那份装上，这一刀绕过了闸，由新版打开时的「旧版服务」识别兜住（见「服务怎么起」）。
+**退出那一档的例外**：退出时备份不成（比如盘满了），弹窗给「不退出」和「仍然退出」。Sparkle 没有「撤销退出时安装」的接口，仍然退出就会换上新版 app —— 兜底在新版那头：**起服务之前，库上一次要是别的构建号在用、又没留过备份，先备份；备份不成就不起服务、不碰库**，装回旧版 app 就能回去。这一条同样兜住强杀后的安装、`build.sh --install` 和手动换 app。
+
+服务端那一侧还有一个窗口没封上：restart-impact 是一次快照，问完到 SIGTERM 之间（毫秒级）server 仍可能接新任务，要服务端提供「排空 → 停机」的维护事务才能彻底封住（`npm run restart` 有同样的缺口）。
+
+勾了「自动下载并安装」的话，下好之后只要不会打断任务就直接装并重开（窗口会刷新一下）；ash 常驻不退出，等「退出时装」可能要等好几天。app 被强杀（`kill -9`、崩溃）时 Sparkle 照样会把下好的那份装上，这一刀绕过了闸，由新版打开时的「旧版服务」识别（见「服务怎么起」）和起服务前的补备份兜住。
 
 ### 更新前的库备份、回到旧版
 
@@ -82,9 +87,9 @@ desktop/macos/build/cache/Sparkle-*/bin/generate_keys --account dev.ash.mac -f <
 npm run release:mac
 ```
 
-从**干净的提交**构建（版本号取提交时间）→ 核对 app 里的公钥就是签名私钥的那一把、更新源就是素材库里那份 appcast → 版本号必须比 appcast 里最新的大 → 压 zip（`ditto`）、`sign_update` 签名 → 在素材库建 GitHub Release `ash-mac-v<版本>-<构建号>`、传 zip → 把包下回来核对 → 再更新 appcast（新的一项在前，旧的原样保留，整份重签）→ 提交并推送（素材库只稀疏检出 `ash/mac`，宣传片等大文件不下载）。先传包、确认下得下来才推 appcast，feed 不会指向一个还不存在的包；中途失败重跑，同一版沿用 `build/releases/` 里上次压好的 zip。更新说明默认是上一版以来的提交标题，`--notes` 可以换。
+从**干净的提交**构建（版本号取提交时间）→ 核对 app 里的公钥就是签名私钥的那一把、更新源就是素材库里那份 appcast → 版本号必须比 appcast 里最新的大 → 压 zip（`ditto`）、`sign_update` 签名 → 在素材库建 GitHub Release `ash-mac-v<版本>-<构建号>`、传 zip → 把包下回来核对 → 再更新 appcast（新的一项在前，旧的原样保留，整份重签）→ 经 GitHub Contents API 提交回素材库（带着读出时的 sha，这期间别处改过就拒，重跑即可；不克隆素材库，宣传片等大文件一个字节都不下）。先传包、确认下得下来才提交 appcast，feed 不会指向一个还不存在的包；中途失败重跑，同一版沿用 `build/releases/` 里上次压好的 zip —— 只在这次的 app 和压那个 zip 的是同一份时（zip 旁边的 `.source` 记着 app 的内容摘要），同一个构建号换了包就拒发。更新说明默认是上一版以来的提交标题，`--notes` 可以换。
 
-GitHub 凭证按顺序找：`GH_TOKEN` / `GITHUB_TOKEN` → `gh auth token` → git 存在钥匙串里的 github.com 凭证（`git push` 用的那条）。都没有就报错并说怎么配。`--init-repo` 只在 `release.json` 的 repo 还不存在时才用得上（会建成公开仓库）。raw.githubusercontent 有几分钟缓存，推完稍等已装的 app 才看得到。
+GitHub 凭证按顺序找：`GH_TOKEN` / `GITHUB_TOKEN` → `gh auth token` → git 存在钥匙串里的 github.com 凭证（`git push` 用的那条）。都没有就报错并说怎么配。传包和提交 appcast 只用这一张，开传之前先确认它对素材库有写权限，没有就什么都不传。`--init-repo` 只在 `release.json` 的 repo 还不存在时才用得上（会建成公开仓库）。raw.githubusercontent 有几分钟缓存，推完稍等已装的 app 才看得到。
 
 ### 本地演练
 
@@ -126,7 +131,7 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 
 也可以 `defaults write dev.ash.mac AshDataDir <目录>` 换数据根、`defaults write dev.ash.mac AshURL http://192.168.1.187:4317` 连别的 ash（非本机地址不替它起服务，也不做身份判断）。
 
-定点回归（仅 macOS）：`node scripts/test-macos-update.mjs` 覆盖装之前那道闸（不会打断就不问；会打断先问、等到排空自己装、现在装；问不出来按会打断；停不下来不装也不备份；别的 ash 不碰；退出那一档；旧版服务识别）、库备份（WAL 里的写入、只留 5 份）和发版脚本（zip 与 appcast 的签名、篡改检测、重发 / 旧版本 / 钥匙不配对拒发）。`node scripts/test-macos-client.mjs`用真的 AshConfig / AshHealth / ServerLauncher / DataImport 加一份假的自带运行时，覆盖下载事务、红绿灯下的页面、「端口上是谁」的判据、空数据根不起、起服务的环境、占用提示、并发只起一份、锁超时、请求合并、起来就退、PID 核对、启动器报错、运行时缺件、导入（WAL 里的写入、只复制、多人库拒绝、残留替换）。server 那一半在 `npm -w server run test:host-ash-mcp`。
+定点回归（仅 macOS）：`node scripts/test-macos-update.mjs` 覆盖装之前那道闸（不会打断就不问；会打断先问、等到排空自己装、现在装；问不出来按会打断；等的时候一次 503 / 不应答不放行；只停评估过的那个进程；另一处在起服务时不停；维护标记跨进程生效、持有者没了作废；停不下来不装也不备份；别的 ash 不碰；退出那一档和它备份失败时的说法；Sparkle 放弃后闸收回、重试再备份；起服务前补备份；旧版服务识别）、库备份（WAL 里的写入、只留 5 份）和发版脚本（zip 与 appcast 的签名、篡改检测、重发 / 旧版本 / 钥匙不配对拒发、`--notes`、缓存 zip 认 app；对着本地假 GitHub 的正式发版：只给 GH_TOKEN 走完传包和提交 appcast、没写权限什么都不传）。`node scripts/test-macos-client.mjs`用真的 AshConfig / AshHealth / ServerLauncher / DataImport 加一份假的自带运行时，覆盖下载事务、红绿灯下的页面、「端口上是谁」的判据、空数据根不起、起服务的环境、占用提示、并发只起一份、锁超时、请求合并、起来就退、PID 核对、启动器报错、运行时缺件、导入（WAL 里的写入、只复制、多人库拒绝、残留替换）。server 那一半在 `npm -w server run test:host-ash-mcp`。
 
 ## 窗口
 
@@ -150,7 +155,7 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 | `Sources/Updater.swift` | 接 Sparkle：三条安装路径都交给 UpdateGate |
 | `Sources/UpdateGate.swift` | 装之前那道闸：问会打断谁、等或现在、停服务、备份 |
 | `Sources/RestartImpact.swift` | 读 `/api/restart-impact`，算出会打断哪几个 |
-| `Sources/ServerControl.swift` | 记下哪一版起的服务；让自己那份下线 |
+| `Sources/ServerControl.swift` | 记下哪一版起的服务；只让评估过的那份下线；维护期标记（跨进程不许起服务） |
 | `Sources/DatabaseBackup.swift` | SQLite 一致快照；更新前备份与保留 |
 | `scripts/sparkle.mjs` | 取固定版本的 Sparkle（框架 + 签名工具） |
 | `scripts/release.mjs`、`appcast.mjs`、`github.mjs` | 发版、appcast 读写、GitHub API |
