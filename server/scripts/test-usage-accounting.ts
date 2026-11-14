@@ -9,7 +9,7 @@
 // ③ 两种口径不能拿同一种 SQL 对付：`incremental` 逐轮加，`cumulative` 先跟上一份
 //    快照求差再加。**哪家 CLI 算哪一种，不在这个文件里**——这里钉的是两条 SQL 路径
 //    本身，以及启动迁移 repairLegacyUsageAccounting（v3）**只管 codex、一个字节都不碰
-//    claude**。claude 实际走累计口径这件事及其历史回填，见 test-claude-usage-accounting.ts。
+//    claude**。claude 实际走累计口径这件事，见 test-claude-usage-accounting.ts。
 // ④ **但上下文水位恰恰相反，是覆盖**：它是「此刻装了多少」，累加会得出一个没有
 //    物理意义的数（流水 18M 的会话水位可能才 12 万）。同一个文件里两种账并存，
 //    所以这条必须在测试里钉死。
@@ -262,9 +262,7 @@ try {
     "Codex 旧账应恢复成最后一份累计快照，而不是两份快照相加",
   );
   // **v3 必须一个字节都不碰 claude**，哪怕这条会话的账面(1/1/1/1)跟它 trace 里那两轮
-  // 明显对不上 —— 这个口子一开，claude 历史回填改好的账会被下一次启动按 trace 里的
-  // 累计值重新求和吹回去（回填若没能改写某份 trace，或跑了 --skip-traces，trace 里仍是
-  // 累计值）。claude 的账只许由 scripts/repair-claude-usage.ts 动。
+  // 明显对不上 —— claude 的旧 trace 里存的是累计值，按它重新求和只会把账吹大。
   assert.deepEqual(
     sessionUsage((await db.select().from(sessions).where(eq(sessions.id, legacyClaudeId)).get())!),
     { input: 1, output: 1, cacheRead: 1, cacheWrite: 1, reasoning: 0, costUsd: null, turns: 2 },

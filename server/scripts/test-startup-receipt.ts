@@ -141,6 +141,18 @@ console.log("② 续跑交代:协议层拒收、会话记账失败 → 交代原
   armed = true;
   await resumeOrRunTask(taskId);
   await settle(taskId);
+  // 归还不一定由这一趟自己做完：本进程的 finally 先交回投递登记、再取消凭证并回填，中间那几毫秒
+  // 里任务落终态触发的扫描(scanPendingMessages → reconcileLeasedCheckpoints)看见「有租约、
+  // 没人在送」，会按所有权协议接管这张票、由它来归还 —— 于是 resumeOrRunTask 返回时回填可能还
+  // 在那一路上。等到这张票不再挂着租约/账本(凭证了结)再看结果：真被消费了的话账本清空、交代
+  // 也回不来，下面照样红。
+  for (let i = 0; i < 150; i += 1) {
+    const slot = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
+    const open = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.taskId, taskId)))
+      .some((message) => message.deliveringSince !== null || message.checkpointTaken !== null);
+    if (slot.resumePrompt === prompt || !open) break;
+    await sleep(20);
+  }
   check(injected === 2, "前提:spawn 之后那一笔会话记账真的失败了");
   check(starts() === before, "前提:回合输入一个字都没出去(协议层拒收)");
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;

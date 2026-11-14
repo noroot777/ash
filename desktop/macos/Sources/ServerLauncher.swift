@@ -1,38 +1,42 @@
 import Foundation
 
-/// 服务没在跑时替用户把 :4317 起起来。
+/// 把自带的那份 ash 服务起起来：用 bundle 里的 node 跑 bundle 里的 server，数据根交给
+/// `ASH_DATA_DIR`，带 `ASH_LOCAL_ONLY=1`（只听 127.0.0.1、固定自用模式）。
 ///
-/// 起法与 `npm run restart` 的最后一步一致：在仓库根跑 `scripts/start-detached.mjs <日志> node
-/// server/dist/index.js`，server 进新会话、脱离本进程 —— 退出 app 不会带走服务，更不会带走
-/// 它名下在跑的 agent。这里**只负责起**，不 build、不杀旧进程：那是 restart.mjs 的事，两边各
-/// 做一半才不会抢。
+/// server 由 `scripts/start-detached.mjs` 放进自己的会话、脱离本进程 —— 关窗、退出 app 都不会
+/// 带走服务，更不会带走它名下在跑的 agent。这里**只负责起**：不杀旧进程、不守护。
 ///
-/// 环境走用户的交互式登录 shell（`zsh -ilc`）：从访达 / Dock 打开的 app 只有
-/// `/usr/bin:/bin` 这类最小 PATH，而 server 要拉起的 claude、codex、kimi 装在 Homebrew 与
-/// ~/.xxx/bin 里，PATH 在 .zprofile / .zshrc 里拼出来。跟终端里跑 restart 拿到的是同一份环境。
+/// 环境走用户的交互式登录 shell（`zsh -ilc`）：从访达 / Dock 打开的 app 只有 `/usr/bin:/bin`
+/// 这类最小 PATH，而 server 要拉起的 claude、codex、kimi 装在 Homebrew 与 ~/.xxx/bin 里，PATH 在
+/// .zprofile / .zshrc 里拼出来。node 不从这份 PATH 里找 —— 用的一律是 bundle 里那一个。
 final class ServerLauncher {
   enum Outcome {
     case ready
+    /// 数据根还是空的：等用户在首启那一屏选「全新开始」或「导入已有数据」。
+    case needsSetup
+    /// 端口被别的 ash / 别的程序占着。带着说给用户听的那段话：是谁、怎么办。
+    case occupied(String)
     case failed(String)
   }
 
   static let shared = ServerLauncher()
 
-  /// 自动起服务只对本机地址有意义；连局域网别的 ash 时这个启动器不出手。
-  var canLaunch: Bool {
-    guard let host = AshConfig.baseURL.host?.lowercased() else { return false }
-    return ["127.0.0.1", "localhost", "::1"].contains(host)
-  }
+  /// 用户在首启那一屏点了「全新开始」：空数据根也可以起（会建一份新库）。无窗口的
+  /// `--start-server` 永远不替用户做这个决定 —— 否则登录项抢先建出空库，导入的入口就没了。
+  var freshStartApproved = false
 
-  var logURL: URL {
-    URL(fileURLWithPath: "/tmp/ash-\(AshConfig.baseURL.port ?? 4317).log")
-  }
+  /// 正在换代码（UpdateGate 停了服务、在备份库、等 Sparkle 换 app）：这期间谁来要服务都不起，
+  /// 否则窗口的探活一发现服务不在，就会拿**旧版**代码再起一份，迁移前的备份和新版都白做。
+  /// 记在数据根里（见 Maintenance），别的进程里的维护也算。值是说给用户听的那句话。
+  var hold: String? { Maintenance.activeNote() }
+
+  var logURL: URL { AshConfig.serverLogURL }
 
   private let queue = DispatchQueue(label: "dev.ash.server-launcher")
   private let requests = NSLock()
   private var completions: [(Outcome) -> Void] = []
 
-  /// 确保服务在跑：通着就直接 ready；没通就起一个并等到 /api/health 应答。
+  /// 确保服务在跑：自己那份通着就直接 ready；没通就起一个并等它应答。同时来的请求合成一次。
   func ensureRunning(timeout: TimeInterval = 45, completion: @escaping (Outcome) -> Void) {
     requests.lock()
     completions.append(completion)
@@ -50,53 +54,119 @@ final class ServerLauncher {
   }
 
   func ensureRunningSync(timeout: TimeInterval) -> Outcome {
-    if Self.isHealthy() { return .ready }
-    guard canLaunch else { return .failed("\(AshConfig.baseURL.absoluteString) 不是本机地址，不会替它启动服务。") }
-    guard let repo = AshConfig.repoURL else {
-      return .failed("不知道 ash 仓库在哪。用 `defaults write dev.ash.mac AshRepoPath <仓库根>` 指一下。")
+    if let settled = Self.settle(AshHealth.probeSync()) { return settled }
+    if let hold { return .failed(hold) }
+    guard AshConfig.isLocal else {
+      return .failed("连不上 \(AshConfig.baseURL.absoluteString)。它不是本机地址，app 不会替它启动服务。")
     }
+    guard AshConfig.isDataInitialized || freshStartApproved else { return .needsSetup }
     let lock: ServerStartLock
     do {
-      lock = try ServerStartLock(repo: repo, port: AshConfig.baseURL.port ?? 4317)
+      lock = try ServerStartLock(dataDir: AshConfig.dataURL)
       let deadline = Date().addingTimeInterval(timeout)
       while try !lock.tryAcquire() {
-        if Self.isHealthy() { return .ready }
-        guard Date() < deadline else {
-          return .failed("等待同一仓库的服务启动或重启超时。可以重试；服务恢复后也会自动载入。")
-        }
+        if let settled = Self.settle(AshHealth.probeSync()) { return settled }
+        if let hold { return .failed(hold) }
+        guard Date() < deadline else { return .failed("等另一处启动 ash 服务超时。可以重试；服务起来后也会自动载入。") }
         Thread.sleep(forTimeInterval: 0.2)
       }
     } catch {
       return .failed("无法取得服务启动锁：\(error.localizedDescription)")
     }
     defer { withExtendedLifetime(lock) {} }
-    if Self.isHealthy() { return .ready }
-    let entry = repo.appendingPathComponent("server/dist/index.js")
-    guard FileManager.default.fileExists(atPath: entry.path) else {
-      return .failed("\(entry.path) 不存在：仓库还没构建过，先在仓库里跑一次 npm run restart。")
+    if let settled = Self.settle(AshHealth.probeSync()) { return settled }
+    if let hold { return .failed(hold) }
+    if let failure = Self.backUpBeforeMigration() { return .failed(failure) }
+    let parts = [AshConfig.nodeURL, AshConfig.serverEntryURL, AshConfig.detachScriptURL]
+    if let missing = parts.first(where: { !FileManager.default.fileExists(atPath: $0.path) }) {
+      return .failed("app 里自带的 ash 不完整（缺 \(missing.path)）。重新装一次 Ash.app。")
     }
+    do {
+      try FileManager.default.createDirectory(at: AshConfig.logURL, withIntermediateDirectories: true)
+    } catch {
+      return .failed("建不了日志目录 \(AshConfig.logURL.path)：\(error.localizedDescription)")
+    }
+    switch spawnDetached() {
+    case .failure(let reason): return .failed(reason)
+    case .success(let pid):
+      // 进程一起来就记下 pid：这个启动器等不到它应答（被退掉、超时）也不要紧，之后谁看到它应答
+      // 都能认出是它、替它确认（见 settle）。
+      ServerRecord.write(pid: Int(pid))
+      return waitReady(pid: pid, timeout: timeout)
+    }
+  }
 
+  /// 起服务之前：这份库上一次交给别的构建号的 app 起（或者不知道是谁），这一版的 server 一起来就
+  /// 可能迁移它，迁移不可逆，所以先留底。不用再留的两种：
+  ///  · 上一次交给的就是这一版 —— 这一版已经在这份库上起过（成了就没有迁移要做，没成的话它起之前
+  ///    已经留过底，这会儿的库可能已经被失败的迁移改过一半，再备就是拿半截库去挤原件）；
+  ///  · 这一次已经备过（UpdateGate 装更新前留的、仍固定着的恢复点，见 DatabaseBackup.covers）。
+  /// 其余的 —— 退出时没过闸就被 Sparkle 装上了、`build.sh --install`、手动换了 app、导入来的库 ——
+  /// 在这里补一份。备份不成、或者记不下「这一版要起了」就不起：库原样留着，配上旧版 app 还能回去。
+  /// 返回 nil = 可以起。
+  private static func backUpBeforeMigration() -> String? {
+    let db = AshConfig.dataURL.appendingPathComponent("ash.db")
+    guard FileManager.default.fileExists(atPath: db.path) else { return nil }
+    let lastServedBy = ServerRecord.read()?.bundleVersion ?? "unknown"
+    do {
+      if lastServedBy != AshConfig.bundleVersion && !DatabaseBackup.covers(lastServedBy: lastServedBy) {
+        try DatabaseBackup.beforeUpdate(fromVersion: lastServedBy)
+      }
+    } catch {
+      return "这一版要在库上做迁移，迁移前先备份库没成功（\(error.localizedDescription)），所以没起服务、库没动过。\n"
+        + "腾出空间 / 修好权限后点「重试」；要回到旧版，把旧版 app 装回来就行（README「回到旧版」）。"
+    }
+    do {
+      try ServerRecord.writeAttempt()
+    } catch {
+      return "记不下这一次要起的是哪一版（\(AshConfig.dataURL.path)：\(error.localizedDescription)），所以没起服务、库没动过。修好权限 / 腾出空间后点「重试」。"
+    }
+    return nil
+  }
+
+  /// 探到的结果里哪些已经是结论：自己那份在 → ready；别人占着 → occupied；连不上 → nil（接着起）。
+  static func settle(_ probe: AshProbe) -> Outcome? {
+    switch probe {
+    case .down, .unreachable: return nil
+    case .notAsh(let what): return .occupied(Occupant.notAsh(what))
+    case .ash(let instance):
+      guard AshHealth.isServing(probe) else { return .occupied(Occupant.otherAsh(instance)) }
+      // 不管服务是谁起的、谁先看到它起来，确认都在这一处（窗口、登录项、另一个窗口的重试都经过这里）。
+      if AshConfig.isLocal { ServerRecord.confirmServing(pid: instance.pid) }
+      return .ready
+    }
+  }
+
+  private enum Spawned { case success(Int32), failure(String) }
+
+  private func spawnDetached() -> Spawned {
     let shell = Process()
     shell.executableURL = URL(fileURLWithPath: Self.loginShell())
-    // 两个参数借环境变量递进去免得拼引号，exec 之前清掉，不漏进 server 和它拉起的 agent。
-    shell.arguments = ["-ilc", #"cd "$ASH_MAC_REPO" && log="$ASH_MAC_LOG" && unset ASH_MAC_REPO ASH_MAC_LOG && exec node scripts/start-detached.mjs "$log" node server/dist/index.js"#]
-    var env = Self.terminalLikeEnvironment()
-    env["ASH_MAC_REPO"] = repo.path
-    env["ASH_MAC_LOG"] = logURL.path
+    // 登录 shell 只负责拼出 PATH、LANG 这些。.zprofile / .zshrc 跑在这段命令**之前**，里面给开发实例
+    // export 过的 ASH_DATA_DIR、PORT、ASH_LOCAL_ONLY 会盖掉事先放进环境的值 —— 所以 app 定下的这几样
+    // 写成命令里的字面量，由 `env` 在 exec 的边界上落定（shell 带来的 PORT 先清掉）。
+    // ASH_DATA_DIR / ASH_LOCAL_ONLY / ASH_WINDOW_PORT（窗口专用端口）是给 server 的，它读完就从自己的
+    // 环境里删掉（见 server/src/paths.ts、local-only.ts、window-port.ts），agent 拿不到。`builtin cd`：rc 里常有 `alias cd=z`。
+    let data = Self.quoted(AshConfig.dataURL.path)
+    let node = Self.quoted(AshConfig.nodeURL.path)
     // 默认端口不传 PORT：server 的环境会一路继承给 agent 与应用内终端，多一个 PORT 会让
-    // 里面起的前端 dev server 去抢 ash 的端口。终端里跑 restart 时环境里也没有它。
-    if let port = AshConfig.baseURL.port, port != 4317 { env["PORT"] = String(port) }
-    shell.environment = env
-    let launchLog = URL(fileURLWithPath: "/tmp/ash-mac-launch-\(UUID().uuidString).log")
+    // 里面起的前端 dev server 去抢 ash 的端口。
+    let port = AshConfig.port == 4317 ? "" : " PORT=\(AshConfig.port)"
+    let script = "builtin cd -- \(data) && exec /usr/bin/env -u PORT ASH_DATA_DIR=\(data) ASH_LOCAL_ONLY=1"
+      + " ASH_WINDOW_PORT=\(AshConfig.windowPort)\(port) "
+      + "\(node) \(Self.quoted(AshConfig.detachScriptURL.path)) \(Self.quoted(logURL.path)) \(node) \(Self.quoted(AshConfig.serverEntryURL.path))"
+    shell.arguments = ["-ilc", script]
+    shell.environment = Self.terminalLikeEnvironment()
+    let launchLog = AshConfig.logURL.appendingPathComponent("launch-\(UUID().uuidString).log")
     guard FileManager.default.createFile(atPath: launchLog.path, contents: nil),
           let output = try? FileHandle(forWritingTo: launchLog) else {
-      return .failed("无法创建启动器日志。")
+      return .failure("无法创建启动器日志。")
     }
     defer { try? output.close() }
     shell.standardOutput = output
     shell.standardError = output
     shell.standardInput = FileHandle.nullDevice
-    do { try shell.run() } catch { return .failed("拉不起登录 shell：\(error.localizedDescription)") }
+    do { try shell.run() } catch { return .failure("拉不起登录 shell：\(error.localizedDescription)") }
 
     // .zshrc 里万一有等输入的东西，别让启动器一起卡死。
     let deadline = Date().addingTimeInterval(20)
@@ -106,39 +176,38 @@ final class ServerLauncher {
       Thread.sleep(forTimeInterval: 0.2)
       if shell.isRunning { kill(shell.processIdentifier, SIGKILL) }
       shell.waitUntilExit()
-      return .failed("登录 shell 20 秒没返回，可能是 .zshrc 在等输入。启动器日志：\(launchLog.path)")
+      return .failure("登录 shell 20 秒没返回，可能是 .zshrc 在等输入。启动器日志：\(launchLog.path)")
     }
     let text = (try? String(contentsOf: launchLog, encoding: .utf8)) ?? ""
-    let pid = text
-      .components(separatedBy: .whitespacesAndNewlines).last { !$0.isEmpty }
-    guard shell.terminationStatus == 0, let pid, let processID = Int(pid) else {
-      return .failed("启动命令失败（退出码 \(shell.terminationStatus)）：\(text.suffix(1600))\n启动器日志：\(launchLog.path)")
+    let last = text.components(separatedBy: .whitespacesAndNewlines).last { !$0.isEmpty }
+    guard shell.terminationStatus == 0, let last, let pid = Int32(last) else {
+      return .failure("启动命令失败（退出码 \(shell.terminationStatus)）：\(text.suffix(1600))\n启动器日志：\(launchLog.path)")
     }
     try? FileManager.default.removeItem(at: launchLog)
-    return waitHealthy(timeout: timeout, expectedPID: processID)
-      ? .ready
-      : .failed("服务进程 \(pid) 起了，但 \(Int(timeout)) 秒内没应答 /api/health。看日志 \(logURL.path)。")
+    return .success(pid)
   }
 
-  private func waitHealthy(timeout: TimeInterval, expectedPID: Int) -> Bool {
+  /// 等刚起的那个进程应答。它先退了、或者端口被别人抢先占上，都不必等满时限。
+  private func waitReady(pid: Int32, timeout: TimeInterval) -> Outcome {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
-      if Self.isHealthy(expectedPID: expectedPID) { return true }
+      let probe = AshHealth.probeSync()
+      if case .ash(let instance) = probe, instance.isOurs, instance.pid == Int(pid) {
+        ServerRecord.confirmServing(pid: Int(pid))
+        return .ready
+      }
+      if case .ash(let instance) = probe, !instance.isOurs { return .occupied(Occupant.otherAsh(instance)) }
+      if kill(pid, 0) != 0 && errno == ESRCH {
+        return .failed("服务进程 \(pid) 起来就退出了：\n\(logTail())\n完整日志：\(logURL.path)")
+      }
       Thread.sleep(forTimeInterval: 0.5)
     }
-    return false
+    return .failed("服务进程 \(pid) 起了，但 \(Int(timeout)) 秒内没应答 /api/health。看日志 \(logURL.path)。")
   }
 
-  /// 同步探一次（判据见 AshHealth）。只在后台队列上调。
-  static func isHealthy(expectedPID: Int? = nil) -> Bool {
-    let done = DispatchSemaphore(value: 0)
-    var ok = false
-    AshHealth.probe(expectedPID: expectedPID) { ready in
-      ok = ready
-      done.signal()
-    }
-    done.wait()
-    return ok
+  private func logTail() -> String {
+    guard let text = try? String(contentsOf: logURL, encoding: .utf8) else { return "（没有日志）" }
+    return String(text.suffix(1200)).trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   /// 从一份「刚打开终端」的底子开始，剩下的交给登录 shell 自己拼。不直接继承 app 的环境：
@@ -158,8 +227,37 @@ final class ServerLauncher {
     return env
   }
 
+  /// 单引号包起来：命令里只有这几段是外来的字符串，shell 不会再展开里面的任何东西。
+  private static func quoted(_ value: String) -> String {
+    "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+  }
+
   private static func loginShell() -> String {
     if let pw = getpwuid(getuid()), let shell = pw.pointee.pw_shell { return String(cString: shell) }
     return "/bin/zsh"
+  }
+}
+
+/// 「端口被占着」时说给用户听的那段话：是谁、怎么办。
+enum Occupant {
+  static func otherAsh(_ instance: AshInstance) -> String {
+    let port = AshConfig.port
+    let who = instance.pid.map { "进程 \($0)" } ?? "进程号不明"
+    var lines = ["\(port) 端口上已经有一份 ash 在跑（\(who)），但它不是这个 app 起的那份，所以没有连上去。\(instance.mismatch ?? "")"]
+    if let codeDir = instance.codeDir, let dataDir = instance.dataDir {
+      lines.append("代码：\(codeDir)\n数据：\(dataDir)")
+      if FileManager.default.fileExists(atPath: URL(fileURLWithPath: codeDir).appendingPathComponent(".git").path) {
+        lines.append("这是仓库里起的开发实例（npm run restart）。")
+      }
+    }
+    let stop = instance.pid.map { "kill \($0)" } ?? "lsof -nP -iTCP:\(port) -sTCP:LISTEN 找到它再停"
+    lines.append("要用 app：先停掉它（\(stop)），再点「重试」。开发实例以后换个端口起，例如 PORT=14317 npm run restart。")
+    return lines.joined(separator: "\n\n")
+  }
+
+  static func notAsh(_ what: String) -> String {
+    let port = AshConfig.port
+    return "\(port) 端口被别的程序占着（它应答了 \(what)，不是 ash），ash 服务起不来。\n\n"
+      + "看是谁：lsof -nP -iTCP:\(port) -sTCP:LISTEN；关掉它之后点「重试」。"
   }
 }

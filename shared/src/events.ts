@@ -131,12 +131,14 @@ export type AgentEvent =
   // 消费到它时已经开了新回合，它就过期了，不再据它收台或开始等。
   // `turnOutcome`(两种结尾都可能带)= 这一回合自己的结局,跟落进 `session_turns.outcome` 的同一份
   // (见 Session.turnOutcomes)。进程 exit 0 却被判失败的那种只有它说得清;缺省 = 不知道。
-  | { kind: "turnEnd"; background?: { agent: number; workflow: number; since?: string }; interrupted?: true; epoch?: number; turnOutcome?: TurnOutcome }
+  // `endedAt`(两种结尾都可能带)= 这一回合收口的时刻,跟落进 `session_turns.ended_at` 的同一份:直播那一路
+  // 的气泡结束时刻照它,刷新以后照会话行的 `turnEnds`,两路一个值。缺省 = 老服务端。
+  | { kind: "turnEnd"; background?: { agent: number; workflow: number; since?: string }; interrupted?: true; epoch?: number; turnOutcome?: TurnOutcome; endedAt?: string }
   // `unfinished` = 进程没了的那一刻名下还有后台子代理 / 工作流没跑完（单飞据此不按完成结算）；
   // `unknown` = 后台状态核实不了（重启接管时读不出之前的输出），计数只是已知的那部分。
   // `interruption` = 这一回合怎么断的(只在异常结束时带),跟落进 `session_turns.interruption` 的同一份
   // (见 Session.turnInterruptions):直播那一路的失败那句话照它说,刷新以后照会话行说,两路一个样。
-  | { kind: "done"; exitStatus: number; unfinished?: { agent: number; workflow: number; unknown?: true }; turnOutcome?: TurnOutcome; interruption?: TurnInterruption };
+  | { kind: "done"; exitStatus: number; unfinished?: { agent: number; workflow: number; unknown?: true }; turnOutcome?: TurnOutcome; interruption?: TurnInterruption; endedAt?: string };
 
 // synthesis = 收敛后的合稿轮(共同方案);impl/review are legacy transcript speakers
 export type DuetSpeaker = "A" | "B" | "synthesis" | "impl" | "review" | "user";
@@ -174,6 +176,10 @@ export type ServerEvent =
   // （toProject 的 role），广播一份给所有连接会把管理员才看得到的东西推给别人。开着的每个页面
   // 按它重拉项目列表 —— 门禁基准在验收台和项目设置两处都能改，另一个页面得跟上。
   | { type: "project.updated"; projectId: string }
+  // 某个人的「看过没有」记录变了（PUT /task-reads）。只发信号不带载荷：他开着的每个页面（另一台
+  // 设备、飞书内置浏览器）按它重拉 `/task-reads`，侧栏那几颗绿点跟着熄。ownerUserId = 那个人
+  // （自用模式 null），event-filter 只推给他本人。
+  | { type: "task.reads"; ownerUserId: string | null }
   | { type: "task.title"; taskId: string; title: string; updatedAt: string }
   // 提问态变化（§Team）：agent 调 ask_question 提问、或答复把它清空。task.status
   // 只带状态字段，question 不跟着走 —— 少了这条事件，卡片要等下次全量拉取才出现/
@@ -223,6 +229,20 @@ export type ServerEvent =
       // 开始，拿它去认上一回合的事件就认错了（不经重读接着看的页面，上一回合会被劈成两颗）。
       // 缺省 = 发出方不知道（回合外的旁注、老服务端），读端退回按会话行认。
       turnStartedAt?: string | null;
+      // 这条事件在盘上那条记录的号（`seq`，见 shared/src/session-output.ts 的 RecordIdentity）：落进
+      // trace 的那条、或 .md 里那一行带的是同一个值。页面拿它认「这条实时事件是不是盘上那条」，不比
+      // 时间和文字。正文增量（text）带的是它所在那段正文的号，外加 `textOffset` = 这一小块从那段正文
+      // 的第几个字起（盘上已经有的那几个字不再接一遍）。缺省 = 没有对应的落盘记录（context、session、
+      // 回合结尾）或老服务端。
+      seq?: number;
+      textOffset?: number;
+      // 这条事件出自一个带身份的回合（见 server/src/transcript-identity.ts 文件头）：那种回合里的记录全带
+      // 号，不是记录的那几种（收口、水位、簿记）不带号、靠这一位说明它归带身份那一路。没带号也没这一位 =
+      // 老样子写的回合（团队调度台、duet、接不回号段的那一回合、老服务端）。
+      identityTurn?: true;
+      // 执行过程那几种（工具、思考、异常、附件、用量）落在正文的哪个位置，跟 trace 那一行带的 `textAt` 同一个值
+      // （见 shared/src/session-output.ts 的 TextAnchor）。
+      textAt?: import("./session-output.ts").TextAnchor | null;
       event: AgentEvent;
     }
   // A user-channel turn after it has been persisted to the session transcript.
@@ -240,6 +260,11 @@ export type ServerEvent =
       monitorWake?: MonitorWakeData;
       /** 这一句承载的问答答复（记录 id，同 session-output.ts 的 ConvSeg）。 */
       answerIds?: string[];
+      /** 盘上那一行的身份（同 agent.event 的 seq / turnStartedAt）。缺省 = 老服务端。 */
+      seq?: number;
+      turnStartedAt?: string | null;
+      /** 页面发这一句时给的凭据：先画出来的那份（乐观回显）凭它认回这一条，不比原文。 */
+      clientKey?: string;
     }
   // 会话里有几段被用户删掉了（盘上已就地抹掉）：开着这个任务的页面整份重读正文。
   | { type: "conversation.redacted"; taskId: string; sessionId: string }

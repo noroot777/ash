@@ -28,7 +28,7 @@ try {
       const launch = userShellLaunch(record.command);
       const environment = { ...process.env };
       for (const key of Object.keys(environment)) {
-        if (/^ASH_(?:DB|RUNS_DIR)$/i.test(key)) delete environment[key];
+        if (/^ASH_(?:DB|RUNS_DIR|DATA_DIR)$/i.test(key)) delete environment[key];
       }
       code = await new Promise<number | null>((resolve, reject) => {
         const child = spawn(launch.file, launch.args, {

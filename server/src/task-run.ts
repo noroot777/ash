@@ -1,4 +1,5 @@
 import { mkdirSync, createWriteStream } from "node:fs";
+import { claimTranscript } from "./transcript-identity.js";
 import { markdownImageAccounting } from "./agent-image-journal.js";
 import { hintAshMcpForTurn } from "./ash-mcp-turn-hint.js";
 import { join } from "node:path";
@@ -50,6 +51,7 @@ import { recordUserConversationTurn } from "./conversation-turn.js";
 import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
 import { turnIdentityEnv } from "./turn-identity.js";
 import { launchFields } from "./usage.js";
+import { withHeldTurn } from "./turn-entry-guard.js";
 
 // 单任务的 **fresh run**:从任务描述起一条全新会话。续聊/召唤那一路(resume 已有会话、
 // 把用户原话送进去)在 orchestrator.ts 的 continueTask —— 两条路的前置条件、prompt 拼法
@@ -65,6 +67,14 @@ export async function runTask(
   // turnHeld:入口占下的那把锁的**身份**(不是 true)—— 接管与释放都按它核,理由见
   // continueTask 同名选项与 turn-lock.ts 的 `endOwnTurn`。
   opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null } = {},
+): Promise<void> {
+  // 起跑前那几次读库(检查点恢复、任务头)抛错时,入口交来的锁也得还(见 withHeldTurn)。
+  return withHeldTurn(taskId, opts.turnHeld, () => runHeldTask(taskId, opts));
+}
+
+async function runHeldTask(
+  taskId: string,
+  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null },
 ): Promise<void> {
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) {
@@ -128,7 +138,8 @@ export async function runTask(
       .update(tasks)
       // 方向身份那几列连同永不归零的世代一起走 `turnDirectionStart`:**新回合开跑也是一次新方
       // 向**,世代漏推的话,一轮完整跑完的回合在迟到回滚眼里什么都没发生过(见 task-direction-epoch.ts)。
-      .set({ followUpFrom: null, nativeTurn: false, goalTurn: false, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
+      // 被哨兵隔开的续聊(follow-up-held.ts)也到此为止:fresh run 是任务的执行,不是它的后半段。
+      .set({ followUpFrom: null, followUpHeldFrom: null, nativeTurn: false, goalTurn: false, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
       .where(eq(tasks.id, taskId));
     }, { behavior: "immediate" });
     // 跟 orchestrator 起一轮同一条规矩:令牌落库处顺手绑到内存里这一轮的身份上。
@@ -293,19 +304,21 @@ export async function runTask(
     await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
+    // 这一回合写下的每一行记录都带身份（transcript-identity.ts）。
+    await claimTranscript(out, { taskId, sessionId: sessId, turnStartedAt: turnStart });
     const baseNote = baseFallbackNote(ws.baseFallback);
     if (baseNote) {
       // fresh run 也会撞上「登记的 base 已经没了」（任务验收合并后分支被删，用户又点了
       // 一次运行）。这一档不像续聊那样起不来，但基线被换掉、甚至跟着改了任务登记值，
       // 只在日志里发生就等于没发生 —— 同样落一条持久可见的气泡。说不说由
       // baseFallbackNote 判（见 base-fallback-notice.ts），跟失败那条路共用一套。
-      writeTurn(out, { t: "system", agent: agentType, text: baseNote }, turnStart);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "system", text: baseNote, at: turnStart } });
+      const noted = writeTurn(out, { t: "system", agent: agentType, text: baseNote }, turnStart);
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, ...noted, event: { kind: "system", text: baseNote, at: turnStart } });
       baseFallbackTold = true;
     }
     await consumeSingleRun({
       taskId, sessId, agentType, ex, cwd: ws.path,
-      handle, out, turnStart, cliSessionId, autoTitle,
+      handle, out, turnStart, cliSessionId, autoTitle, turn,
       nativeSteer: {
         prepare: (text) => withSkillInvocation({ agentType, cwd: ws.path, text, userId: runOwner }),
         record: (text, at) => recordUserConversationTurn({

@@ -10,6 +10,7 @@ import type {
   BatchCreateTasksBody,
   ExecutorDowngradeItem,
   FreeReviewDispatchInput,
+  FreeReviewExpiredScreenshots,
   FreeReviewRoundsInput,
   FreeReviewDisputeResolution,
   FreeReviewDisputeTarget,
@@ -131,7 +132,7 @@ export const api = {
     request(`/projects/${id(projectId)}/preview/detect`),
   updateProject: (
     projectId: string,
-    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "useWorktreeDefault" | "previewCommand" | "previewConfig" | "commandsConfig" | "acceptCommit" | "acceptAutoCommit" | "acceptGateCommand" | "acceptGateBaseline" | "browserCdpDomains">>,
+    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "useWorktreeDefault" | "previewCommand" | "previewConfig" | "commandsConfig" | "acceptCommit" | "acceptAutoCommit" | "acceptGateCommand" | "acceptGatePrepare" | "acceptGateBaseline" | "browserCdpDomains">>,
   ): Promise<ProjectView> => request(`/projects/${id(projectId)}`, json("PATCH", patch)),
   deleteProject: (projectId: string): Promise<{ deleted: true }> =>
     request(`/projects/${id(projectId)}`, { method: "DELETE" }),
@@ -292,6 +293,8 @@ export const api = {
       sendAt?: string;
       /** 等这个任务完成后再发(与 sendAt 二选一)。 */
       afterTaskId?: string;
+      /** 页面先画出来的那份(乐观回显)的凭据:服务端落盘、播出时原样带回,页面凭它认回同一句。 */
+      clientKey?: string;
     },
   ): Promise<ReplyTaskResult> =>
     request(`/tasks/${id(taskId)}/reply`, json("POST", { text, ...options })),
@@ -382,6 +385,9 @@ export const api = {
     text: string; truncated: boolean; updatedAt: string | null;
     exists: boolean; running: boolean; starting: boolean; command: string | null; url: string | null;
   }> => request(`/tasks/${id(taskId)}/free-workflow/preview/log${serviceId ? `?service=${id(serviceId)}` : ""}`),
+  // 这个任务里过了保留期、已经删掉的审查截图（见 free-workflow/expiredEvidence）。
+  freeReviewExpiredScreenshots: (taskId: string): Promise<FreeReviewExpiredScreenshots> =>
+    request(`/tasks/${id(taskId)}/free-workflow/expired-screenshots`),
   freeReviewFileUrl: (taskId: string, runId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/free-workflow/review-file?run=${id(runId)}&round=${id(String(round))}&name=${id(name)}`),
   // 人工替这一站「自动验证」签字放行。**后端会接着把这一站之后那一段跑掉**——线上
@@ -577,7 +583,11 @@ export const api = {
   // 页面上那份正文旧了服务端会 409，而不是删错一段。
   deleteConversationSegments: (
     sessionId: string,
-    segments: Array<{ index: number; fingerprint: string; answerId?: string } | { trace: { from: string; to: string; fingerprint: string } }>,
+    segments: Array<
+      | { index: number; fingerprint: string; answerId?: string }
+      | { trace: { from: string; to: string; fingerprint: string } }
+      | { steps: { turnStartedAt: string; after: number | null; until: number | null; fingerprint: string } }
+    >,
   ): Promise<{ deleted: number }> =>
     humanAction(`/sessions/${id(sessionId)}/conversation/delete`, json("POST", { segments })),
   duetTranscript: (taskId: string): Promise<unknown[]> =>

@@ -116,3 +116,15 @@ export const directionIdentityRestored = (
   activeDirectionToken: preserveBarrier ? snapshot.clearedDirectionToken : snapshot.activeDirectionToken,
   activeDirectionVersion: preserveBarrier ? snapshot.clearedDirectionVersion : snapshot.activeDirectionVersion,
 });
+
+/**
+ * **导入的副本里，源实例发出过的方向身份一律作废**（`import-snapshot.ts`，跑在副本库上的原生 SQL）。
+ *
+ * 审查结算、收尾、修复投递、续审这些自动推进认的都是「任务还停在当初那个方向上」
+ * （`review-ownership.ts` 的 `reviewIdentityMatches`），副本里原样留着就会被当成自己的权限执行。
+ * 世代 +1 等于「之后又开过一个方向」，所有导入前记下的身份从此对不上；三列回合内身份照
+ * `directionIdentityCleared` 归零（副本里没有任何在跑的回合）。写成 SQL 是因为那一刻副本还没过迁移，
+ * 不能走 drizzle；放在这里是为了让方向身份的写法仍然只住一个文件。
+ */
+export const DIRECTION_REVOKED_SQL =
+  "direction_epoch = direction_epoch + 1, active_turn_token = NULL, active_direction_token = NULL, active_direction_version = 0";

@@ -29,6 +29,7 @@
     "build:mobile": "cd mobile && npx expo export -p web",
     "build:mac": "bash desktop/macos/build.sh",
     "install:mac": "bash desktop/macos/build.sh --install",
+    "release:mac": "node desktop/macos/scripts/release.mjs",
     "restart": "node scripts/restart.mjs",
     "setup": "node scripts/setup.mjs",
     "check:workspaces": "node scripts/workspace-check.mjs",

@@ -20,6 +20,8 @@ import { projects, regressionEvidence, tasks } from "./db/schema.js";
 import { augmentedEnv } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
+import { IS_WINDOWS } from "./platform-os.js";
+import { noteWindDownProgress } from "./turn-wind-down.js";
 import { readPreview, startPreview, beginPreviewStart, endPreviewStart, previewStartCanceled, PREVIEW_CANCELED, type PreviewStep } from "./preview.js";
 import { previewLaunchOf, previewProxyEnabled, type WorkspacePreviewInput } from "@ash/shared/preview";
 import { workspacePreviewDirectory } from "./preview-workspace.js";
@@ -38,6 +40,7 @@ import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js
 
 /** 一条命令最多跑多久。跑构建、跑测试都算在内，再久基本是卡住了。 */
 const COMMAND_TIMEOUT_MS = 20 * 60_000;
+const STATION_LABEL: Partial<Record<WorkflowStep["kind"], string>> = { command: "命令", preview: "预览", accept: "验收" };
 
 type TaskRow = typeof tasks.$inferSelect;
 type CommandStep = Extract<WorkflowStep, { kind: "command" }>;
@@ -102,7 +105,10 @@ async function runCommand(task: TaskRow, step: CommandStep, authority?: ReviewAu
       cwd,
       env: augmentedEnv(),
       windowsVerbatimArguments: launch.windowsVerbatimArguments,
-      timeout: COMMAND_TIMEOUT_MS,
+      // POSIX 上按进程组杀(exec.ts `timeoutMs`):Node 自带的 `timeout` 只给 shell 一个 SIGTERM,
+      // 然后还要等输出管道关上 —— 命令甩出去的后台进程攥着管道时这一站就永远不返回,而它常常
+      // 跑在回合收尾里、回合锁还占着(turn-wind-down.ts)。Windows 维持原样(不动 win32 的行为)。
+      ...(IS_WINDOWS ? { timeout: COMMAND_TIMEOUT_MS } : { timeoutMs: COMMAND_TIMEOUT_MS }),
       maxBuffer: 8 * 1024 * 1024,
     });
     await appendTaskTimeline(task.id, receiptLine(commandPassedNote(step.p.cmd, stdout, stderr)));
@@ -185,6 +191,8 @@ export async function runSegment(
   for (const step of segmentAfter(def, fromStepId)) {
     if (opts.skipStepIds?.has(step.id)) continue; // 崩溃补跑：这一站上次已经真的跑完了
     await opts.onStepStart?.(step.id);
+    // 在回合收尾里跑时,把「走到哪一站」记到那一轮名下(卡住时提示说得出是哪一站,turn-wind-down.ts)。
+    noteWindDownProgress(`结算后续:预设工作流「${STATION_LABEL[step.kind] ?? step.kind}」站(${step.id})`);
     await withReviewAuthority(opts.reviewAuthority, async () => {});
     const result = step.kind === "command"
       ? await runCommand(task, step, opts.reviewAuthority)

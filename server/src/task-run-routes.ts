@@ -564,7 +564,11 @@ api.post("/tasks/:id/retry", async (c) => {
   }
   // 占着回合再核是哪一次失败：占位之前读的那一行可能已经过时（别处刚重试过、又失败了一次）。
   if (expectedFailure !== undefined) {
-    const held = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    // 占着锁读库:抛错就得在这里还,否则它一直占着、之后 /run 一律 409(异常本身冒成 500)。
+    const held = await db.select().from(tasks).where(eq(tasks.id, taskId)).then((rows) => rows.at(0), (error) => {
+      releaseTurn(taskId, turn);
+      throw error;
+    });
     if (!held || held.status !== "failed" || failureVersionOf(held) !== expectedFailure) {
       releaseTurn(taskId, turn);
       return c.json(await noted(taskId, "重试", {

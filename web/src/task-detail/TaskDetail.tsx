@@ -14,6 +14,7 @@ import { useFileView } from "../files/useFileView.ts";
 import { ScmDiffViewer } from "../scm/ScmDiffViewer.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import { api } from "../lib/api.ts";
+import { createClientId } from "../lib/clientId.ts";
 import { toggleArchive } from "../lib/archive.ts";
 import type { Notify } from "../lib/notify.ts";
 import { useConversation } from "../lib/useConversation.ts";
@@ -583,7 +584,8 @@ export function TaskDetail({
                       }}
                       onSend={async (text, attachments, { executorLabel, ...options }) => {
                         if (!(await confirmExecutorSwap(task.id))) return null;
-                        const result = await api.replyTask(task.id, text, { attachments, ...options });
+                        const clientKey = createClientId();
+                        const result = await api.replyTask(task.id, text, { attachments, ...options, clientKey });
                         // 按**结果**分支而不是按请求参数:任务正在跑时后端会把这条落成
                         // 排队消息(前端没传 sendAt 也一样)。没真发出去就绝不能先贴进会话,
                         // 否则用户看到自己的话已在时间线上、agent 却还没收到。
@@ -603,7 +605,7 @@ export function TaskDetail({
                           notify(result.recorded ? "原生命令已执行，结果见会话记录" : result.text);
                           return result;
                         }
-                        conversation.addUser(text, attachments);
+                        conversation.addUser(text, attachments, { clientKey });
                         notify(options.agent
                           ? `已召唤 @${options.agent}${options.model ? ` · ${options.model}` : ""}${options.reasoningEffort ? ` · ${options.reasoningEffort}` : ""} 继续任务`
                           : "回复已发送");

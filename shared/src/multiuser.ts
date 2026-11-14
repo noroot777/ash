@@ -82,6 +82,11 @@ export interface AuthState {
    * 多人模式下没登录时恒为 false(那时该渲染登录页,「我还缺什么」也答不上)。
    */
   needsOnboarding: boolean;
+  /**
+   * 以本机自用模式启动(`ASH_LOCAL_ONLY`,独立 app 就这么起):只听 127.0.0.1、模式固定自用。
+   * 远程配对、转多人、邀请这些入口在界面上都不出现。
+   */
+  localOnly: boolean;
 }
 
 /**

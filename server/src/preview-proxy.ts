@@ -10,6 +10,7 @@ import { previewBase } from "./preview-public.js";
 import { rewritePreviewText, rewritePreviewUrl } from "./preview-proxy-rewrite.js";
 import { connectionOf, forwardedFor, originOfIncoming, requestOrigin } from "./auth/remote-access.js";
 import { grantFor, canUsePreview, claimGrant, forkGrant, holdPreviewChannel } from "./preview-access.js";
+import { addressedElsewhere, INSTANCE_HEADER } from "./instance-binding.js";
 import { attributeName, cookieAttribute, cookieHeaderFor, defaultPath, rememberCookie, type PreviewCookieJar } from "./preview-cookies.js";
 
 const httpAgent = new Agent({ keepAlive: true });
@@ -357,6 +358,11 @@ export function attachPreviewUpgrades(server: Server): void {
   server.on("upgrade", async (incoming, socket, head) => {
     if (!incoming.url?.startsWith("/preview/")) {
       if (server.listenerCount("upgrade") === 1) socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+      return;
+    }
+    // 升级不经过 Hono 那道 instanceBinding，同一个判据在这里再认一次。
+    if (addressedElsewhere(incoming.headers.cookie, incoming.headers[INSTANCE_HEADER] as string | undefined)) {
+      socket.end("HTTP/1.1 409 Conflict\r\nConnection: close\r\n\r\n");
       return;
     }
     try {

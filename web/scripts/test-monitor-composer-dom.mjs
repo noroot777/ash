@@ -175,8 +175,44 @@ try {
     await page.close();
   }
 
+  // ── 读失败之后起一个被拒：空态那句「还没有哨兵」不许冒出来 ───────────────────────
+  // 「读到过没有」是 hook 里单独存的事实，不是从报错反推（第 2 轮审查 N1 实测：起哨兵一开始
+  // 就清掉报错、被拒后写成自己那句，读失败的痕迹被盖掉，空态又冒出来）。所以这里走真 hook：
+  // 列表读一直 503，起一个被 403，然后看那句空态；最后放行列表，同一个页面上它才该出现 ——
+  // 那是正向对照，证明上面的「没有」不是因为选择器写错了。
+  {
+    let listOk = false;
+    const empty = "这个任务上还没有哨兵";
+    const page = await open(async (route, path) => {
+      if (path !== "/api/tasks/task-a/monitors") return false;
+      if (route.request().method() === "POST") {
+        await route.fulfill({ status: 403, json: { error: "不许起（测试桩）" } });
+      } else if (listOk) {
+        await route.fulfill({ json: [] });
+      } else {
+        await route.fulfill({ status: 503, json: { error: "列表暂时读不出来（测试桩）" } });
+      }
+      return true;
+    });
+    // 断言只看面板那一层：fixture 自己还在 data-testid 里抄着一份报错。
+    const alert = page.locator(".monitor-inspector__error");
+    const emptyState = page.locator(".monitor-inspector__empty", { hasText: empty });
+    await alert.waitFor();
+    assert.equal(await emptyState.count(), 0, "列表读失败时不许说「还没有哨兵」");
+    await page.getByRole("button", { name: "手动起一个哨兵" }).click();
+    await page.locator(".monitor-composer textarea").fill("echo review-smoke");
+    await page.getByRole("button", { name: "起一个哨兵", exact: true }).click();
+    await alert.filter({ hasText: "不许起（测试桩）" }).waitFor();
+    assert.equal(await emptyState.count(), 0, "起一个被拒之后，列表照样没读成功过，不许说「还没有哨兵」");
+    await page.getByRole("button", { name: "取消", exact: true }).click();
+    assert.equal(await emptyState.count(), 0, "收起表单之后也一样");
+    listOk = true;
+    await emptyState.waitFor();   // 追平层自己重读，读成功了这句才该出现
+    await page.close();
+  }
+
   assert.deepEqual(failures, []);
-  console.log("monitor composer dom: the end-condition field is always offered (forced choice only when this side alone proves the command never ends, radios on one line); anything resting on a premise the browser cannot check stays submittable with the premise spelled out");
+  console.log("monitor composer dom: the end-condition field is always offered (forced choice only when this side alone proves the command never ends, radios on one line); anything resting on a premise the browser cannot check stays submittable with the premise spelled out; a failed list read followed by a rejected start never claims the task has no monitors");
 } finally {
   await close();
 }

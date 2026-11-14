@@ -11,6 +11,7 @@ import { getAppSettings, writeSystemSetting } from "../app-settings.js";
 import { db } from "../db/index.js";
 import { users } from "../db/schema.js";
 import { expandHome } from "../git.js";
+import { LOCAL_ONLY, LOCAL_ONLY_REFUSAL } from "../local-only.js";
 import { isInsidePath, windowsPathRejection } from "../platform.js";
 import { setHostCliIsolatedFlag, setMultiUserFlag } from "./multi-flag.js";
 // 「登录得进来」的判据只有 store.ts 那一份 —— 这里和最后管理员保护问的是同一件事。
@@ -97,6 +98,7 @@ export async function rootDirOf(): Promise<string> {
 /**
  * 写定模式。**只允许 `"" → single`、`"" → multi`、`single → multi`,外加
  * `multi → multi` 的幂等补做**;多人转回自用永不提供(多人数据无法合并回单人,§二)。
+ * 本机自用开关(local-only.ts)打开时,一切 `→ multi` 都拒绝。
  *
  * 之所以要放行 multi→multi:转换中途崩掉的实例(模式已落、管理员没建出来)只能靠
  * 重走一遍向导救回来,而那一遍必然会再写一次同样的模式。根目录仍然锁死,所以这条
@@ -110,6 +112,7 @@ export async function setInstanceMode(
   rootDir: string,
   sharedHostCli?: boolean,
 ): Promise<void> {
+  if (LOCAL_ONLY && mode === "multi") throw Object.assign(new Error(LOCAL_ONLY_REFUSAL), { status: 403 });
   const current = await instanceConfig();
   if (current.mode === "multi" && mode !== "multi") throw new Error("多人模式不能转回自用模式");
   if (mode === "multi") {

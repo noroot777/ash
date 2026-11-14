@@ -10,6 +10,7 @@ export type SystemNoteTarget = {
 
 export function writeSystemNote(target: SystemNoteTarget, text: string): void {
   const { out, taskId, sessionId, role, agentType, at } = target;
-  writeTurn(out, { t: "system", agent: agentType, text }, at);
-  bus.publish({ type: "agent.event", taskId, sessionId, role, agentType, event: { kind: "system", text, at } });
+  // 盘上那一行的身份（号 + 回合）实时事件原样带上，页面凭它认出这是同一条。
+  const identity = writeTurn(out, { t: "system", agent: agentType, text }, at);
+  bus.publish({ type: "agent.event", taskId, sessionId, role, agentType, ...identity, event: { kind: "system", text, at } });
 }

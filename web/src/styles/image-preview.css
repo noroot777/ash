@@ -27,6 +27,13 @@
   touch-action: none;
 }
 
+/* 已过保留期的审查截图：原位一行字，不摆裂图。 */
+.image-preview-lightbox__gone {
+  margin: 0;
+  color: rgb(255 255 255 / 62%);
+  font-size: var(--t-sm);
+}
+
 .image-preview-lightbox > button {
   position: absolute;
   z-index: 1;

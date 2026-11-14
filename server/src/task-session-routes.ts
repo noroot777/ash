@@ -36,7 +36,7 @@ import { enrichNativeWorkModels } from "./native-work-models.js";
 async function toSession(
   r: typeof sessions.$inferSelect,
   run: { model: string | null; reasoningEffort: string | null } = { model: null, reasoningEffort: null },
-  { outcomes: turnOutcomes, interruptions }: SessionTurnFacts = { outcomes: {}, interruptions: {} },
+  { outcomes: turnOutcomes, interruptions, ends }: SessionTurnFacts = { outcomes: {}, interruptions: {}, ends: {} },
 ): Promise<Session> {
   // 版本得从**这条会话的 rollout 实际写在的那个目录**里读(会话行记着;老行按当时的
   // 规则解释)。按宿主机默认目录读的话,隔离档下列表恒为「读不出版本」,而起跑守卫那边
@@ -72,6 +72,10 @@ async function toSession(
     turnOutcomes,
     // 每个断过的回合怎么断的（turn-interruption.ts）：页面上失败那句话照它说，不认结算说明的字。
     turnInterruptions: interruptions,
+    // 每个回合的起止跟结局走同一条路(session_turns 那一行):页面上气泡的结束时刻和用时照它,
+    // 不再拿下一条插话、下一颗气泡去推。这一位出门同时说明 trace 里读的时候补出来的条目带着来源
+    // (SessionTraceEntry.origin),页面不必再按形状猜。
+    turnEnds: ends,
   };
 }
 
@@ -86,6 +90,7 @@ export async function sessionsForTask(taskId: string): Promise<Session[]> {
     db.select({
       sessionId: sessionTurns.sessionId,
       startedAt: sessionTurns.startedAt,
+      endedAt: sessionTurns.endedAt,
       outcome: sessionTurns.outcome,
       interruption: sessionTurns.interruption,
     }).from(sessionTurns).where(eq(sessionTurns.taskId, taskId)),
@@ -221,10 +226,16 @@ export function mountTaskSessionRoutes(api: Hono): void {
     if (!task || !(await canSeeProject(actorOf(c), task.projectId))) return c.json({ error: "not found" }, 404);
     const body = await c.req.json().catch(() => null) as { segments?: unknown } | null;
     const segments = Array.isArray(body?.segments) ? body.segments : [];
+    const seqBound = (value: unknown) => value === null || Number.isInteger(value);
     const targets = segments.filter((target): target is RedactTarget => {
-      const t = target as { index?: unknown; fingerprint?: unknown; answerId?: unknown; trace?: { from?: unknown; to?: unknown; fingerprint?: unknown } };
+      const t = target as {
+        index?: unknown; fingerprint?: unknown; answerId?: unknown;
+        trace?: { from?: unknown; to?: unknown; fingerprint?: unknown };
+        steps?: { turnStartedAt?: unknown; after?: unknown; until?: unknown; fingerprint?: unknown };
+      };
       return (Number.isInteger(t?.index) && typeof t.fingerprint === "string" && (t.answerId === undefined || typeof t.answerId === "string"))
-        || (typeof t?.trace?.from === "string" && typeof t.trace.to === "string" && typeof t.trace.fingerprint === "string");
+        || (typeof t?.trace?.from === "string" && typeof t.trace.to === "string" && typeof t.trace.fingerprint === "string")
+        || (typeof t?.steps?.turnStartedAt === "string" && seqBound(t.steps.after) && seqBound(t.steps.until) && typeof t.steps.fingerprint === "string");
     });
     if (!targets.length || targets.length !== segments.length) return c.json({ error: "segments 格式不对" }, 400);
     try {

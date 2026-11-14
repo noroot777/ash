@@ -301,7 +301,7 @@ const MODEL_FAILURE_KINDS: Record<ModelFailureKind, true> = {
  * 一律当没有 —— 判决本身照留，只是说不出是哪一类模型故障；放进去的话，下游按类型挑措辞那一步
  * 拿到一个不认得的类型就读挂了，这一轮连「怎么断的」都说不出（第 2 轮审查 N1）。
  */
-function trustedModel(value: unknown): ModelFailure | null {
+export function trustedModel(value: unknown): ModelFailure | null {
   const model = value as Partial<ModelFailure> | null | undefined;
   if (!model || typeof model.kind !== "string" || !Object.hasOwn(MODEL_FAILURE_KINDS, model.kind)) return null;
   return { kind: model.kind, status: typeof model.status === "number" ? model.status : null };

@@ -123,6 +123,9 @@ try {
         sessionId: "session-1",
         role: "single",
         agentType: "codex",
+        // 服务端广播 agent.event 时带上它所属回合的起点（855f91a5），前端按它认气泡；
+        // 自 d32c6cf3 起回合身份是接着写一颗气泡的必要条件，少了它这条正文认不回第二回合。
+        turnStartedAt: "2026-07-30T01:01:00.000Z",
         event: { kind: "text", text: " 已完成。" },
       },
     }],

@@ -10,6 +10,7 @@
 // 依赖是单向的:这个文件不 import runs 的运行时(只借一个类型),所以 `claimReconcileTurn`
 // 那条要问「有没有句柄在册」的,住在 runs.ts 里。
 import type { StopSettle } from "./runs.js";
+import type { WindDown } from "./turn-wind-down.js";
 
 // ── 单飞锁与「这一轮跑完之后」────────────────────────────────────────────────
 // 一个任务同一时刻只跑一个回合。锁本身原来住在 orchestrator 里，挪到这个中立模块
@@ -70,6 +71,11 @@ export type TurnIdentity = {
    * 凭空失效,可疑锁反而永远拔不掉。
    */
   seq: number;
+  /**
+   * 这一轮进入收尾段之后走到了哪一步(CLI 已经结束、还在走收尾 await)。挂在身份上是为了跟锁
+   * 同生同死:放锁即带走,换了主人的锁上读不到。读写在 turn-wind-down.ts,巡检在 turn-lock-reclaim.ts。
+   */
+  windDown?: WindDown;
 };
 
 /**
@@ -273,6 +279,7 @@ export function reclaimTurn(taskId: string, owner: TurnOwner, role: string,
     token: held.token,
     claimedAt: held.claimedAt,
     seq: held.seq, // 同一把锁,不换号(见 `TurnIdentity.seq`)
+    windDown: held.windDown,
   };
   turns.set(taskId, identity);
   return identity;

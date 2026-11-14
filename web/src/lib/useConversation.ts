@@ -12,6 +12,7 @@ import { createClientId } from "./clientId.ts";
 import { mergeSessions } from "./sessionMerge.ts";
 
 const settledStatuses = new Set(["done", "failed", "canceled", "idle"]);
+// 只给老记录：先画出来的那句跟服务端播回来的那句都没带凭据（clientKey）时，按原文 + 这个时间窗认同一句。
 const SAME_TURN_WINDOW_MS = 30_000;
 
 function userTurnSignature(entry: Extract<TimelineEntry, { kind: "user" }>): string {
@@ -24,6 +25,8 @@ function sameUserTurn(
   left: Extract<TimelineEntry, { kind: "user" }>,
   right: Extract<TimelineEntry, { kind: "user" }>,
 ): boolean {
+  // 两边都带着页面起的凭据：只认凭据。下面按原文 + 30 秒窗口去猜的那套只给没凭据的（老服务端、问答答复）。
+  if (left.clientKey && right.clientKey) return left.clientKey === right.clientKey;
   if (!!left.bySystem !== !!right.bySystem || userTurnSignature(left) !== userTurnSignature(right)) return false;
   const delta = Math.abs(Date.parse(left.at) - Date.parse(right.at));
   return Number.isFinite(delta) && delta <= SAME_TURN_WINDOW_MS;
@@ -266,6 +269,8 @@ export function useConversation(
           sessionId: event.sessionId,
           sessionRole: event.role,
           source: "server",
+          ...(event.seq !== undefined ? { seq: event.seq, turnStartedAt: event.turnStartedAt ?? null } : {}),
+          ...(event.clientKey ? { clientKey: event.clientKey } : {}),
         });
         refreshSessions();
       }
@@ -294,7 +299,9 @@ export function useConversation(
   const addUser = useCallback((
     text: string,
     attachments: string[] = [],
-    options: { answer?: boolean } = {},
+    // clientKey：这一句发给服务端时带的凭据（api.replyTask 的同名选项）。服务端播回来、落盘的那份带着它，
+    // 先画出来的这份凭它认回去，不比原文和时刻。
+    options: { answer?: boolean; clientKey?: string } = {},
   ) => {
     const entry: TimelineEntry = {
       kind: "user",
@@ -304,6 +311,7 @@ export function useConversation(
       at: new Date().toISOString(),
       isAnswer: options.answer,
       source: "optimistic",
+      ...(options.clientKey ? { clientKey: options.clientKey } : {}),
     };
     appendUserTurn(entry);
   }, [appendUserTurn]);

@@ -97,6 +97,8 @@
 .free-review-debate.is-reading .free-review-debate__pending { font-size:var(--t-xs); }
 .free-review-debate-exchanges { display:grid; gap:5px; padding:0 2px; }.free-review-debate-exchanges > b { color:var(--ink); font-size:var(--t-xs); }.free-review-debate-exchanges > div { display:flex; gap:5px; }.free-review-debate-exchanges > div > button { width:32px; height:28px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); color:var(--muted); font-size:var(--t-xs); }.free-review-debate-exchanges > div > button.is-selected { border-color:color-mix(in oklab,var(--ink) 40%,var(--line2)); background:color-mix(in oklab,var(--ink) 10%,var(--panel)); color:var(--ink); font-weight:var(--w-medium); }.free-review-debate-exchanges > small { color:var(--muted); font-size:var(--t-xs); line-height:1.5; }
 .review-round-dispute { margin-top:12px; border-top:1px solid var(--line); padding-top:10px; }.review-round-dispute > b { display:block; margin-bottom:6px; color:var(--amber); font-size:var(--t-xs); font-weight:var(--w-medium); }.review-round-dispute > .free-review-debate { margin-top:8px; }
+/* 执行器原话常是一长串不带空格的报错（地址、键名），照样折行，不撑宽审查格。 */
+.review-round-said { margin-top:4px; overflow-wrap:anywhere; }
 /* 历史记录里同样先摆那一句人话（和驳回卡一个读法），几千字依据折在它下面。 */
 .review-round-dispute__gist { margin:0 0 6px; color:var(--ink); font-size:var(--t-sm); line-height:1.6; }
 .review-round-dispute > .folded-prose { margin-top:6px; }

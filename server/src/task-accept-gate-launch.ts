@@ -25,6 +25,9 @@ function gateOutcomeClause(gate: AcceptGateView): string {
   switch (gate.failure) {
     case "timeout": return `但它整条超时了（不是定位到某个断言失败）：${tail}`;
     case "spawn_failed": return `但它起不来：${tail}`;
+    case "entry_missing": return "但它没有起跑。";
+    case "prepare_failed": return `但准备命令没过${typeof gate.exitCode === "number" ? `（退出码 ${gate.exitCode}）` : ""}，测试没有开跑：${tail}`;
+    case "launcher_failed": return `但门禁启动器出了错，分不清停在准备命令还是前置命令，这次结果不算数：${tail}`;
     case "source_changed": return `但跑动期间被测的那棵树变了，这次结果不算数：${tail}`;
     case "process_unconfirmed": return `但没能确认它的进程全部退出，这次结果不算数：${tail}`;
     default: return `但它跑完是红的${typeof gate.exitCode === "number" ? `（退出码 ${gate.exitCode}）` : ""}：${tail}`;
@@ -41,10 +44,10 @@ export async function finishAcceptanceGate(taskId: string, result: AcceptTaskRes
     return gate.status === "running"
       ? { ...result, reason: "accept_gate_running", gate,
         error: `${result.error} 已经在跑了（日志 ${gate.logPath}）。跑完如果是绿的，这次验收会自动接着做完，不用再点。` }
-      // 归类出了结论就**把结论也给上**：这条回执是 MCP/HTTP 调用方（多半是个 agent）唯一
-      // 读到的东西，只把 npm 的原始报错贴给它正是这次要修的那个毛病。
+      // 起跑前核到的那句事实**也给上**：这条回执是 MCP/HTTP 调用方（多半是个 agent）唯一
+      // 读到的东西，只贴原始报错，它读不出入口不在树里这件事。
       : { ...result, reason: "accept_gate_failed", gate,
         error: `${result.error} ${gateOutcomeClause(gate)}`
-          + (gate.diagnosis ? `\n${gate.diagnosis}` : "") };
+          + (gate.entryNote ? `\n${gate.entryNote}` : "") };
   } finally { if (!handedOff) dropPendingAcceptGate(taskId); }
 }

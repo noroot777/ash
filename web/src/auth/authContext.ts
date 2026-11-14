@@ -16,7 +16,7 @@ export interface AuthContextValue {
 // 自用模式的兜底值:`mode: "single"`、没有用户、已被认成机主。这样每个消费点都不必写
 // `?.` —— 「有没有多人这回事」用 `mode` 判断,而不是用「context 在不在」。
 const SINGLE: AuthContextValue = {
-  state: { mode: "single", needsSetup: false, needsAccessKey: false, user: null, rootDir: null, homeDir: null, needsOnboarding: false },
+  state: { mode: "single", needsSetup: false, needsAccessKey: false, user: null, rootDir: null, homeDir: null, needsOnboarding: false, localOnly: false },
   refresh: async () => true,
 };
 
@@ -30,6 +30,11 @@ export function useAuth(): AuthContextValue {
 export function useIsInstanceAdmin(): boolean {
   const { state } = useAuth();
   return state.mode !== "multi" || state.user?.role === "admin";
+}
+
+/** 本机自用模式(`ASH_LOCAL_ONLY`)吗。远程配对、转多人这些入口都看它藏起来。 */
+export function useIsLocalOnly(): boolean {
+  return useAuth().state.localOnly;
 }
 
 /** 现在处于多人模式吗。界面上一大堆「要不要显示这一块」都问它。 */

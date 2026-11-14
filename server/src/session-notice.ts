@@ -7,13 +7,10 @@
 // 判据只有 `scope === "session"` 一个（`shared/src/events.ts`），生产方是
 // `executors/codex.ts` 里的 poisoned 诊断。single-run / team / duet 三条链共用下面
 // 这两个函数，别再各自内联判断 —— duet 早先只在自己那条链上分流，另外两条漏了。
-import { createWriteStream, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { finished } from "node:stream/promises";
 import type { AgentEvent, AgentType, SessionRole } from "@ash/shared";
 import { bus } from "./bus.js";
-import { withRunFileLock } from "./run-file-lock.js";
-import { sessionTranscriptPath, writeTurn } from "./transcript.js";
+import { appendTranscriptLine } from "./task-timeline.js";
+import { writeTurn } from "./transcript.js";
 import { now } from "./util.js";
 
 // 刻意**不**写成类型守卫(`event is Extract<AgentEvent, { kind: "error" }>`):那样
@@ -91,15 +88,9 @@ export async function announceSessionNote(args: {
   publish?: boolean;
 }): Promise<string> {
   const at = now();
-  const transcriptPath = sessionTranscriptPath(args.taskId, args.sessionId);
-  mkdirSync(dirname(transcriptPath), { recursive: true });
-  // 与删除消息的改写排同一把锁（run-file-lock.ts）。
-  await withRunFileLock([transcriptPath], async () => {
-    const out = createWriteStream(transcriptPath, { flags: "a" });
-    writeTurn(out, { t: "system", agent: args.agentType, text: args.text }, at);
-    out.end();
-    await finished(out);
-  });
+  // 与删除消息的改写排同一把锁、有回合在跑就从那条流写（task-timeline.ts 的 appendTranscriptLine）。
+  const identity = await appendTranscriptLine(args.taskId, { id: args.sessionId, role: args.role },
+    (out) => writeTurn(out, { t: "system", agent: args.agentType, text: args.text }, at));
   if (args.publish !== false) {
     bus.publish({
       type: "agent.event",
@@ -107,6 +98,7 @@ export async function announceSessionNote(args: {
       sessionId: args.sessionId,
       role: args.role,
       agentType: args.agentType,
+      ...identity,
       event: { kind: "system", text: args.text, at },
     });
   }

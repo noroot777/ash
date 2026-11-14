@@ -189,7 +189,8 @@ const doneItems = buildConversationItems([{
   output: [
     turn("system", "第 1 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-11T06:00:00.000Z"),
     "审查正文。",
-    turn("system", "第 1 轮验证通过。", "2026-08-11T06:30:00.000Z"),
+    // 就地验证通过不写收尾旁注，结论来自审查者 report_stage 写下的阶段翻档（见 test-reviewer-turn）。
+    turn("system", "验收阶段更新：已验证（verified）", "2026-08-11T06:30:00.000Z"),
   ].join("\n"),
   trace: [laneRun("2026-08-11T06:00:00.000Z", 1)],
 } as never], [session], []);

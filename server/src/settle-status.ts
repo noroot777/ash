@@ -316,12 +316,18 @@ export async function settleTaskStatus(
       // 排着的结果作废,正是这条不变量要拦的),落 paused 让它醒得过来。交了卷与没交卷都走
       // 这一支 —— 对哨兵来说两者的落位后果一样。旁路身份要一起清掉,否则队列会继续把它
       // 当成一个「旁路回合」记账。
+      //
+      // **清的是队列眼里的身份,不是这次续聊**:原状态挪进 `follow_up_held_from`(`holdFollowUp`),
+      // 下一个非旁路回合起跑时接回来,醒来那一回合照旧按续聊结算(follow-up-held.ts)。上一版连它
+      // 一起清掉,醒来的回合就成了普通执行回合:驳回之后正常收尾被记成「本回合没有交卷」。
       const { serializeQueueClaims } = await import("./queue-seat.js");
       await serializeQueueClaims(async () => {
-        // 清旁路身份与写 paused 是**同一条 UPDATE**(`consume`,见 status.ts):分成两句的话,
+        // 清旁路身份、记下原状态与写 paused 是**同一条 UPDATE**(见 status.ts):分成两句的话,
         // 中间那条缝里进程一没,`followUpFrom` 已经消失而任务还是 running —— 重启后的对账再也
         // 拿不到「该回到哪个终态」这个事实(第 2 轮审查 F2)。
-        await setStatus(taskId, "paused", { consume: { followUpFrom: null } });
+        // 旁路回合(压缩、审查)没有接走那一列:那时它里面才是这次续聊真正的起点,留着它。
+        const holdFollowUp = (t.followUpHeldFrom as Parameters<typeof setStatus>[1] | null) ?? back;
+        await setStatus(taskId, "paused", { consume: { followUpFrom: null }, holdFollowUp });
       });
       await announceResumePrompt(taskId);
       return { status: "paused", note: hold, confirmedDone: false, nativeTurn };

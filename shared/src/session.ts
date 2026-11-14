@@ -87,6 +87,14 @@ export interface Session {
    */
   turnInterruptions?: Record<string, TurnInterruption>;
   /**
+   * 这条会话上**每一回合**收口的时刻(`session_turns.ended_at`),键跟 `turnOutcomes` 一样是回合起点;
+   * null = 还开着(或收口那一下没写成)。气泡的结束时刻与用时照它,不再拿下一条插话、下一颗气泡推。
+   *
+   * 缺省 = 这份快照来自不提供它的地方(老服务端、接力过来的远端快照):读端退回原来的推断。有这一位
+   * 同时说明服务端会给 trace 里读的时候补出来的条目标上来源(`SessionTraceEntry.origin`)。
+   */
+  turnEnds?: Record<string, string | null>;
+  /**
    * 这条会话**此刻**还卡在上游等回话吗 —— 服务端那份权威状态(server/src/session-waiting.ts)
    * 按回合身份判出来的一位,不是数据库里的列。
    *

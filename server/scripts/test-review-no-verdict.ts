@@ -18,6 +18,11 @@
 //   5. 看门狗熔断的原因取自熔断判据的同一批事件：穿过子智能体包装、只认最后那条、恢复过就不沿用
 //      （第 3 轮审查第 1 条）；判决没类型时不说成「上游连不上」
 //   6. 单飞收尾把「这一回合自己异常结束」的事实交进来（接线）
+//   7. 那份记录上线之前断掉、没存过原因的轮次：状态接口按盘上的事实现算（诊断文件、会话 trace、
+//      判决日志、会话与回合行、报告在不在）；原话进结构，只认执行器说的；类型只认当时挂上的，执行
+//      故障只认消费链收到过的（原始事件文件不读）；什么都读不到就不带。看门狗熔断的老回合：诊断里
+//      的停止请求不当成「你停的」（第 1 轮复审第 1 条）；熔断原因的类型只认判决日志里冻结的那份，
+//      不从执行过程反推（第 3～5 轮复审第 1 条）。子智能体线程的失败不算这一轮的执行故障（第 2 轮复审）
 //
 // 跑：npm -w server run test:review-no-verdict
 import assert from "node:assert/strict";
@@ -41,7 +46,7 @@ const UPSTREAM_503 = "unexpected status 503 Service Unavailable: auth_unavailabl
 try {
   const { ensureSchema, db } = await import("../src/db/index.js");
   await ensureSchema();
-  const { freeReviewRounds, freeReviewRuns, projects, sessions } = await import("../src/db/schema.js");
+  const { freeReviewRounds, freeReviewRuns, projects, sessions, sessionTurns } = await import("../src/db/schema.js");
   const { eq } = await import("drizzle-orm");
   const { createTasks } = await import("../src/task-store.js");
   const { appendSessionTrace, runTracePaths, sessionTranscriptPath } = await import("../src/transcript.js");
@@ -111,11 +116,17 @@ try {
       const path = sessionTranscriptPath(taskId, sessId);
       return existsSync(path) ? readFileSync(path, "utf8") : "";
     };
-    const cause = async () => (await db.select().from(freeReviewRounds).where(eq(freeReviewRounds.runId, runId)))[0]!.noVerdict;
+    const stored = async () => (await db.select().from(freeReviewRounds).where(eq(freeReviewRounds.runId, runId)))[0]!.noVerdict;
+    // 类别和那半句（原话另有断言）。
+    const cause = async () => {
+      const value = await stored();
+      return value ? { kind: value.kind, reason: value.reason } : value;
+    };
+    const api = async () => (await freeWorkflowState(taskId)).reviews[0]!.rounds[0]!.noVerdict;
     const note = (extra: Partial<Parameters<typeof noteReviewerChannelGap>[0]> = {}) => noteReviewerChannelGap({
       taskId, sessId, turnStart: at, agentType: "codex", stopped: false, review: { run: runId, round: 1 }, failure: null, ...extra,
     });
-    return { taskId, runId, timeline, cause, note };
+    return { taskId, runId, sessId, timeline, cause, stored, api, note };
   };
 
   // ── 0. 执行器归一层 ─────────────────────────────────────────────────────
@@ -185,6 +196,8 @@ try {
     assert.match(text, /"kind":"review\.no_verdict"/, "时间线那条带结构化 kind，展示端不认文字");
     assert.match(text, /"source":"free"/, "工作区审查的尾注带 source=free");
     assert.deepEqual(await s.cause(), { kind: "interrupted", reason: "模型上游连不上（503）" }, "写进轮次的原因是「回合中断」那一类");
+    assert.deepEqual(await s.stored(), { kind: "interrupted", reason: "模型上游连不上（503）",
+      said: "unexpected status 503 Service Unavailable: auth_unavailable: no auth available" }, "原话跟着进结构，类型明确就不标笼统");
 
     // 对话超出长度上限：原样续还会撞上，不叫人等上游（第 1 轮审查第 1 条）。
     const overflow = await scene();
@@ -209,13 +222,24 @@ try {
     const unknown = await scene();
     await unknown.note({ failure: { exitStatus: 1, verdict: null, error: { message: "MCP server \"linear\" failed: HTTP 403 Forbidden" } } });
     assert.deepEqual(await unknown.cause(), { kind: "interrupted", reason: "执行器异常退出（exit 1）" });
+    assert.deepEqual(await unknown.stored(), { kind: "interrupted", reason: "执行器异常退出（exit 1）",
+      said: "MCP server \"linear\" failed: HTTP 403 Forbidden", vague: true }, "只说得出退出码：标笼统，原话就是要看的");
     assert.doesNotMatch(unknown.timeline(), /上游|认证/, "不替来源不明的报错归因");
     // 看门狗熔断、判决没带类型：不知道卡在什么上，就不说成「上游连不上、等等就好」（第 3 轮审查第 1 条）。
     const tripped = await scene();
     await tripped.note({ failure: { exitStatus: 0, verdict: { kind: "tripped", reason: "15 分钟里只收到重试类错误" }, error: null } });
     assert.deepEqual(await tripped.cause(), { kind: "interrupted", reason: "回合长时间没有进展，被自动终止" });
     assert.doesNotMatch(tripped.timeline(), /上游连不上|等上游恢复|限流/, "类型缺了不替它编一个会自己恢复的原因");
-    assert.match(tripped.timeline(), /先看上面的原话弄清卡在哪里/);
+    // 执行器一句话都没说：熔断诊断是 ash 自己的判断，进说明但标明是谁说的，不当成执行器的原话。
+    assert.match(tripped.timeline(), /ash 的判断：「15 分钟里只收到重试类错误」/);
+    assert.match(tripped.timeline(), /先看上面的判断弄清卡在哪里/);
+    assert.doesNotMatch(tripped.timeline(), /执行器的原话/);
+    assert.equal((await tripped.stored())?.said, undefined, "结构里的原话只放执行器说的");
+    // 执行器说过话（诊断里记着）：原话是它的，判断不再另说。
+    const trippedSaid = await scene({ diagnostics: { failureReason: "stream disconnected before completion" } });
+    await trippedSaid.note({ failure: { exitStatus: 0, verdict: { kind: "tripped", reason: "15 分钟里只收到重试类错误" }, error: null } });
+    assert.match(trippedSaid.timeline(), /执行器的原话：「stream disconnected before completion」/);
+    assert.match(trippedSaid.timeline(), /先看上面的原话弄清卡在哪里/);
     // 判决带了类型（看门狗按熔断的同一批错误取的）：按它说，带状态码（第 2 轮审查 N1）。
     const trippedCode = await scene();
     await trippedCode.note({ failure: { exitStatus: 0, error: null,
@@ -280,7 +304,8 @@ try {
     const s = await scene();
     await s.note({ failure: { exitStatus: 1, verdict: null, error: codexErrorEvent({ error: { message: UPSTREAM_503 } })!.event } });
     const round = (await freeWorkflowState(s.taskId)).reviews[0]!.rounds[0]!;
-    assert.deepEqual(round.noVerdict, { kind: "interrupted", reason: "模型上游连不上（503）" }, "error 且没结论：带出原因");
+    assert.deepEqual(round.noVerdict, { kind: "interrupted", reason: "模型上游连不上（503）",
+      said: "unexpected status 503 Service Unavailable: auth_unavailable: no auth available" }, "error 且没结论：带出原因和原话");
     // 续过之后这一轮出了结论：旧原因不再作数，哪怕那一列还没被下一回合改写。
     await db.update(freeReviewRounds).set({ status: "done", conclusion: "verified" }).where(eq(freeReviewRounds.runId, s.runId));
     assert.equal((await freeWorkflowState(s.taskId)).reviews[0]!.rounds[0]!.noVerdict, undefined);
@@ -376,7 +401,215 @@ try {
       "带模型类型的那条不被后面的执行诊断汇总盖掉");
   }
 
-  console.log("✅ 审查没结论：中途断了说怎么断的、没上报才说通道、报告写没写看文件、原因按结构进轮次");
+  // ── 7. 没存过原因的老轮次：按盘上的事实现算 ────────────────────────────────────
+  {
+    const end = "2026-11-13T11:17:45.288Z";
+    // EhQtqns9fnG2 那份诊断文件的形状：非零退出、原话是 codex 的 503 加一段网关错误页。
+    const LIVE_DIAGNOSTICS = {
+      recordedAt: end, terminationKind: "nonzero_exit", failureKind: "nonzero_exit", failureReason: UPSTREAM_503,
+      sessionPoisonedReason: null, exitStatus: 1, exitSignal: null, stopRequested: false, turnCompleted: true, turnFailed: false,
+      agentMessageCount: 2, lastEventType: "thread/archived", lastEventSummary: null, stderrTail: "", structuredErrors: [UPSTREAM_503],
+      traceWriteError: null, eventsPath: null, stderrPath: null,
+    };
+    /** 审查者那一回合在库里的样子：回合行的结局、会话行的退出码。 */
+    const settle = async (s: Awaited<ReturnType<typeof scene>>, outcome: string | null, exitStatus: number | null, stoppedAs: string | null = null, stallReason: string | null = null) => {
+      await db.update(sessions).set({ endedAt: end, exitStatus, stoppedAs }).where(eq(sessions.id, s.sessId));
+      if (outcome) {
+        await db.insert(sessionTurns).values({ id: `${s.sessId}-turn`, sessionId: s.sessId, taskId: s.taskId, startedAt: at, endedAt: end, outcome, stallReason } as typeof sessionTurns.$inferInsert);
+      }
+    };
+    /** 执行器原始事件文件。这一版不读它：放在那儿是为了钉住「它里面有的、没进消费链的不算」。 */
+    const writeEvents = (s: Awaited<ReturnType<typeof scene>>, lines: unknown[]) => writeFileSync(
+      runTracePaths(join(RUNS_DIR, s.taskId), s.sessId, at).eventsPath,
+      `${lines.map((line) => typeof line === "string" ? line : JSON.stringify(line)).join("\n")}\n`,
+    );
+    /** 这一回合的执行过程（会话 trace）：消费链当场落下的事件，按落盘顺序。 */
+    const writeTrace = (s: Awaited<ReturnType<typeof scene>>, events: AgentEvent[]) => {
+      events.forEach((event, i) => appendSessionTrace(s.taskId, s.sessId, at, event as never, new Date(Date.parse(at) + 1000 * (i + 1)).toISOString()));
+    };
+    const { CodexChildActivity: ChildActivity } = await import("../src/executors/native-agent-activity.js");
+    const QUOTA_429 = "unexpected status 429 Too Many Requests: You exceeded your current quota (insufficient_quota)";
+    const RATE_429 = "exceeded retry limit, last status: 429 Too Many Requests";
+    const retry = (message: string) => codexErrorEvent({ willRetry: true, error: { message } })!.event;
+    const childRetry = (message: string) => new ChildActivity().notification("error", { threadId: "child-thread", willRetry: true, error: { message } })[0]!;
+    const childFailed = (message: string) => new ChildActivity().notification("error", { threadId: "child-thread", willRetry: false, error: { message } })[0]!;
+    assert.equal(childRetry(QUOTA_429).kind, "tool", "子线程的错误在 trace 里是包成子智能体活动的那一条");
+    assert.equal(childFailed(QUOTA_429).kind, "tool");
+    const EXPECTED_SAID = "unexpected status 503 Service Unavailable: auth_unavailable: no auth available";
+
+    // 只有诊断文件：说不出类型，照实说退出码，原话摆出来（不从原文里找 503）。
+    const legacy = await scene({ diagnostics: LIVE_DIAGNOSTICS });
+    await settle(legacy, "failed", 1);
+    assert.equal(await legacy.stored(), null, "库里那一列没有，也不去补写");
+    const derived = await legacy.api();
+    assert.deepEqual(derived, { kind: "interrupted", reason: "执行器异常退出（exit 1）", said: EXPECTED_SAID, vague: true },
+      "没存过原因的 error 轮次：带出「回合中断」那一类和执行器原话");
+    assert.match(derived!.said!, /503/);
+    assert.match(derived!.said!, /auth_unavailable/);
+    assert.equal(await legacy.stored(), null, "现算，不写库");
+
+    // 执行过程（trace）还在：照单飞收尾同一条挑法，类型是当时挂上的那个。
+    const replay = await scene({ diagnostics: LIVE_DIAGNOSTICS });
+    await settle(replay, "failed", 1);
+    writeTrace(replay, [
+      retry("Reconnecting... 5/5"),
+      codexTurnError(UPSTREAM_503),
+      { kind: "error", message: "执行诊断：unexpected status 503 Service Unavailable\n证据：类型 nonzero_exit" },
+    ]);
+    appendSessionTrace(replay.taskId, replay.sessId, at, "坏了的一行" as never);
+    assert.deepEqual(await replay.api(), { kind: "interrupted", reason: "模型上游连不上（503）", said: EXPECTED_SAID },
+      "消费过的那条带类型的执行故障：跟新断的轮次同一句，后面没类型的汇总盖不掉它");
+    // 当时没挂上类型（挂类型那一版之前落的 trace，EhQtqns9fnG2 就是）：不拿今天的归一从原话里另判，
+    // 照当场的挑法取最后那条（执行器的汇总），类型不明，原话摆出来。
+    const untypedTrace = await scene({ diagnostics: LIVE_DIAGNOSTICS });
+    await settle(untypedTrace, "failed", 1);
+    writeTrace(untypedTrace, [
+      { kind: "error", message: "Reconnecting... 5/5", level: "notice", affectsTurn: false },
+      { kind: "error", message: UPSTREAM_503 },
+      { kind: "error", message: `执行诊断：${UPSTREAM_503}` },
+    ]);
+    assert.deepEqual(await untypedTrace.api(), { kind: "interrupted", reason: "执行器异常退出（exit 1）", said: `执行诊断：${EXPECTED_SAID}`, vague: true });
+    // 原始事件文件里有、消费链没收到的（执行器收尾之后才到的那条）：不算这一轮的执行故障。
+    const unconsumed = await scene({ diagnostics: LIVE_DIAGNOSTICS });
+    await settle(unconsumed, "failed", 1);
+    writeTrace(unconsumed, [{ kind: "error", message: "Codex 当前回合被意外中断" }]);
+    writeEvents(unconsumed, [
+      { method: "turn/completed", params: { turn: { status: "interrupted" } } },
+      { method: "error", params: { willRetry: false, error: { message: QUOTA_429 } } },
+    ]);
+    assert.deepEqual(await unconsumed.api(), { kind: "interrupted", reason: "执行器异常退出（exit 1）", said: "Codex 当前回合被意外中断", vague: true },
+      "原始文件里没进消费链的终局错误不顶替消费过的那条");
+
+    // 盘上什么都没有（会话行没退出码、没有回合行、没有诊断）：不带，跟原来一样。
+    const bare = await scene();
+    assert.equal(await bare.api(), undefined, "什么都读不到：不带");
+    // 被停的：不替它编原因。
+    const stopped = await scene({ diagnostics: LIVE_DIAGNOSTICS });
+    await settle(stopped, "stopped", 143, "canceled");
+    assert.equal(await stopped.api(), undefined, "你停的那一回合不补原因");
+    // 正常收尾却没上报的老轮次：同那一类（报告在不在看文件）。
+    const quiet = await scene({ report: true });
+    await settle(quiet, "completed", 0);
+    assert.deepEqual(await quiet.api(), { kind: "unreported", reason: "报告写完了，结论没报上来" });
+
+    // 上一版写进库的（没有原话）：类别和那半句照库里的，原话从盘上补上。
+    const older = await scene({ diagnostics: LIVE_DIAGNOSTICS });
+    await settle(older, "failed", 1);
+    await db.update(freeReviewRounds).set({ noVerdict: { kind: "interrupted", reason: "模型上游连不上（503）" } }).where(eq(freeReviewRounds.runId, older.runId));
+    assert.deepEqual(await older.api(), { kind: "interrupted", reason: "模型上游连不上（503）", said: EXPECTED_SAID });
+    // 存过的「没上报」那一类原样给（第 2 节那几种不受影响）。
+    const unreported = await scene({ diagnostics: LIVE_DIAGNOSTICS });
+    await settle(unreported, "failed", 1);
+    await db.update(freeReviewRounds).set({ noVerdict: { kind: "unreported", reason: "回合收尾了，结论没报上来" } }).where(eq(freeReviewRounds.runId, unreported.runId));
+    assert.deepEqual(await unreported.api(), { kind: "unreported", reason: "回合收尾了，结论没报上来" });
+    // 看门狗熔断的老回合：终止是看门狗发的停止请求（诊断里 stopRequested=true），结局是 failed、
+    // 不是你停的（第 1 轮复审第 1 条）。原因的类型跟新断的轮次一样，只认**熔断那一刻**冻结的那条
+    // （第 1 轮复审第 3 条、第 3～5 轮复审第 1 条）：判决日志里记的；日志里没有就说类型不明。
+    const { appendStallVerdict } = await import("../src/turn-stall-journal.js");
+    const stallText = await import("../src/turn-stall-text.js");
+    const KILLED = { ...LIVE_DIAGNOSTICS, terminationKind: "manual_stop", failureKind: null, failureReason: null, stopRequested: true, exitStatus: 143, structuredErrors: [] };
+    const TRIP = "〔上游停滞·已自动终止本回合〕15 分钟里只收到重试类错误";
+    const facts = { taskId: "t-watchdog", sessionId: "s", turnStartedAt: at, since: at, elapsedMs: 300_000, errors: 5, retries: 5, childErrors: 0, lastMessage: null, lastModel: null } as never;
+    const verdict = { at, since: at, kind: "tripped", reason: TRIP, model: null } as never;
+    // 看门狗说的每一句都认得出是它说的（执行故障和熔断类型都得把它们拣出去）。
+    for (const text of [
+      stallText.stallWarningText(facts), stallText.stallTripText(facts), stallText.silentTurnWarningText(facts),
+      stallText.adoptedSilenceWarningText(facts), stallText.silentTurnTripText(facts), stallText.stallResumeText(verdict),
+      stallText.stallReconcileText(verdict), stallText.stallReconcileUnverifiableText("EACCES"), stallText.stallUnverifiableText("EACCES"),
+      stallText.progressUnreadableText(), stallText.stallEscalateText(facts, 60_000),
+    ]) assert.ok(stallText.isWatchdogText(text), `认得出看门狗的话：${text.slice(0, 20)}`);
+    assert.equal(stallText.isWatchdogText(UPSTREAM_503), false);
+    const warning = stallText.stallWarningText(facts);
+    const tripScene = async () => {
+      const s = await scene({ diagnostics: KILLED });
+      await settle(s, "failed", 143, null, TRIP);
+      return s;
+    };
+    const tripCause = async (s: Awaited<ReturnType<typeof scene>>) => {
+      const cause = await s.api();
+      return [cause?.kind, cause?.reason, cause?.vague];
+    };
+    const QUOTA_CAUSE = ["interrupted", "模型账户额度用完了（429）", undefined];
+    const UNKNOWN_CAUSE = ["interrupted", "回合长时间没有进展，被自动终止", true];
+
+    // 判决日志还在：照它冻结的类型说；执行过程里怎么排、原始事件里有什么，都改不了它。
+    const journaled = await tripScene();
+    appendStallVerdict({ at, sessionId: journaled.sessId, turnStartedAt: at, reason: TRIP, since: at, model: { kind: "quota_exhausted", status: 429 } });
+    writeTrace(journaled, [retry("Reconnecting... 1/5"), { kind: "error", message: TRIP }, retry("Reconnecting... 2/5"), childRetry(RATE_429)]);
+    writeEvents(journaled, [{ method: "error", params: { willRetry: true, error: { message: "Reconnecting... 2/5" } } }]);
+    assert.deepEqual(await tripCause(journaled), QUOTA_CAUSE, "看门狗发的停止请求不算你停的；类型取判决冻结的那条");
+    assert.equal((await journaled.api())?.said, undefined, "执行器一句话都没说：没有原话，熔断诊断是 ash 自己的话，不冒充");
+    // 判决日志里记的就是「没类型」：照它说类型不明，执行过程里的、消费之后才到的终局错误都盖不掉。
+    const journaledNone = await tripScene();
+    appendStallVerdict({ at, sessionId: journaledNone.sessId, turnStartedAt: at, reason: TRIP, since: at, model: null });
+    writeTrace(journaledNone, [retry(QUOTA_429), { kind: "error", message: TRIP }]);
+    writeEvents(journaledNone, [
+      { method: "turn/completed", params: { turn: { status: "interrupted" } } },
+      { method: "error", params: { willRetry: false, error: { message: QUOTA_429 } } },
+    ]);
+    assert.deepEqual(await tripCause(journaledNone), UNKNOWN_CAUSE, "执行器收尾之后才到的终局错误不盖过冻结的判决（第 4 轮复审 B）");
+    assert.equal((await journaledNone.api())?.said, undefined, "原话也不被它替换");
+
+    // 日志里没有冻结的那份（压缩掉了、或者是带类型那一格之前的旧记录）：执行过程里看得到什么都不反推。
+    // 前三种是第 3、4 轮反推被推翻的排法；最后两种是第 5 轮的：静默档熔断时一条错误都没有（冻结的是
+    // null），熔断之后才到的错误类型再一致也不是它；以及整回合只有一种类型的错误。
+    const SILENT_TRIP = stallText.silentTurnTripText(facts);
+    for (const [mode, reason, events] of [
+      ["触发那条没类型", TRIP, [retry(QUOTA_429), { kind: "error", message: TRIP }, retry("Reconnecting... 2/5")]],
+      ["触发那条是额度", TRIP, [retry("Reconnecting... 2/5"), { kind: "error", message: TRIP }, retry(QUOTA_429)]],
+      ["熔断后才到子线程 429", TRIP, [retry("Reconnecting... 2/5"), { kind: "error", message: TRIP }, childRetry(QUOTA_429)]],
+      ["静默熔断后才到子线程 429", SILENT_TRIP, [{ kind: "error", message: stallText.silentTurnWarningText(facts), level: "notice", affectsTurn: false },
+        { kind: "error", message: SILENT_TRIP }, childRetry(QUOTA_429)]],
+      ["整回合只有额度", TRIP, [childRetry(QUOTA_429), { kind: "error", message: warning, level: "notice", affectsTurn: false }, retry(QUOTA_429),
+        { kind: "error", message: TRIP }, retry(QUOTA_429)]],
+    ] as const) {
+      const s = await scene({ diagnostics: KILLED });
+      await settle(s, "failed", 143, null, reason);
+      appendStallVerdict({ at, sessionId: s.sessId, turnStartedAt: at, reason, since: at });
+      writeTrace(s, [...events]);
+      assert.deepEqual(await tripCause(s), UNKNOWN_CAUSE, `${mode}：证明不了冻结的是哪个，不猜`);
+    }
+    const noJournal = await tripScene();
+    writeTrace(noJournal, [retry(QUOTA_429), { kind: "error", message: TRIP }, retry(QUOTA_429)]);
+    assert.deepEqual(await tripCause(noJournal), UNKNOWN_CAUSE, "日志里压根没有这一回合：同样不猜");
+    // 日志里那一格类型不认得（异常写入、版本回退留下的）：跟装回内存时同一道校验，当没有。
+    const oddKind = await tripScene();
+    appendStallVerdict({ at, sessionId: oddKind.sessId, turnStartedAt: at, reason: TRIP, since: at, model: { kind: "overheated", status: 503 } as never });
+    assert.deepEqual(await tripCause(oddKind), UNKNOWN_CAUSE, "不认得的类型不往下游送");
+    const oddStatus = await tripScene();
+    appendStallVerdict({ at, sessionId: oddStatus.sessId, turnStartedAt: at, reason: TRIP, since: at, model: { kind: "quota_exhausted", status: "429" } as never });
+    assert.deepEqual(await tripCause(oddStatus), ["interrupted", "模型账户额度用完了", undefined], "状态码类型不对就当没有，类型照认");
+    // 别的回合的判决不算这一回合的。
+    const otherTurn = await tripScene();
+    appendStallVerdict({ at, sessionId: otherTurn.sessId, turnStartedAt: "2026-11-13T09:00:00.000Z", reason: TRIP, since: at, model: { kind: "quota_exhausted", status: 429 } });
+    assert.deepEqual(await tripCause(otherTurn), UNKNOWN_CAUSE, "只认这一回合（sessionId + turnStartedAt）的判决");
+
+    // 子智能体线程先报了额度用完、审查者接着干，最后主线程自己出了本地故障退出：说的是主线程那条，
+    // 原话也是它的（第 2 轮复审第 1 条）。子线程的失败在 trace 里是包成子智能体活动的那一条。
+    const PARENT = "failed to decode app server response: invalid frame";
+    const child = await scene({ diagnostics: { ...LIVE_DIAGNOSTICS, failureReason: PARENT, structuredErrors: [PARENT] } });
+    await settle(child, "failed", 1);
+    writeTrace(child, [childFailed(QUOTA_429), { kind: "text", text: "子任务失败，我接着审。" } as never, { kind: "error", message: PARENT }]);
+    assert.deepEqual(await child.api(), { kind: "interrupted", reason: "执行器异常退出（exit 1）", said: PARENT, vague: true },
+      "子线程的失败不算这一轮的执行故障，也不顶替主线程的原话");
+    // 看门狗的红字、过程提示都不是执行故障。
+    const ashSaid = await scene({ diagnostics: { ...LIVE_DIAGNOSTICS, failureReason: PARENT, structuredErrors: [PARENT] } });
+    await settle(ashSaid, "failed", 1);
+    writeTrace(ashSaid, [{ kind: "error", message: PARENT }, { kind: "error", message: stallText.progressUnreadableText() }, retry(QUOTA_429)]);
+    assert.deepEqual(await ashSaid.api(), { kind: "interrupted", reason: "执行器异常退出（exit 1）", said: PARENT, vague: true });
+
+    // 同一份诊断、但回合行说是你停的：不补。
+    const userStopped = await scene({ diagnostics: KILLED });
+    await settle(userStopped, "stopped", 143, "canceled");
+    assert.equal(await userStopped.api(), undefined);
+
+    // 出了结论的轮次：不现算。
+    const concluded = await scene({ diagnostics: LIVE_DIAGNOSTICS, status: "done", conclusion: "verified" });
+    await settle(concluded, "failed", 1);
+    assert.equal(await concluded.api(), undefined);
+  }
+
+  console.log("✅ 审查没结论：中途断了说怎么断的、没上报才说通道、报告写没写看文件、原因按结构进轮次、老轮次按盘上的事实现算");
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });

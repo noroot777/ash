@@ -27,8 +27,10 @@ try {
     })));
     assert.equal(geometry.length, 2);
     for (const editor of geometry) {
-      assert.equal(editor.height, 240);
-      assert.equal(editor.resize, "vertical");
+      // 自 ceed40be（feed-12）起是 AutoTextarea：随内容长高、没有拖拽角，空着时至少 rows 行。
+      // 「放大」那条（6664288b）仍然要守：内容很短时也不能矮回原来那种小框。
+      assert.ok(editor.height >= 240, `记忆编辑框只有 ${editor.height}px 高`);
+      assert.equal(editor.resize, "none");
       assert.equal(editor.fits, true);
     }
   }

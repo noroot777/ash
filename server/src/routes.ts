@@ -16,6 +16,12 @@ import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { listModels } from "./llm.js";
 import { previousResidualLockPublic } from "./singleton.js";
+import { CODE_DIR, DATA_DIR } from "./paths.js";
+import { LOCAL_ONLY } from "./local-only.js";
+import { INSTANCE_ID } from "./instance-binding.js";
+import { windowPort } from "./window-port.js";
+import { isLocalDirect } from "./auth/remote-access.js";
+import { mountHostAshMcpRoutes } from "./host-ash-mcp-routes.js";
 import { mountQueueRoutes } from "./queues.js";
 import { searchAll } from "./search.js";
 import { repoKey } from "./git.js";
@@ -37,6 +43,7 @@ import { mountAnthropicContext1mRoutes, stripContext1mSuffix } from "./anthropic
 import { mountModelRoutes } from "./model-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
 import { mountTaskMemoRoutes } from "./task-memos.js";
+import { mountTaskReadRoutes } from "./task-reads.js";
 import { mountGroupRoutes } from "./group-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
 import { mountMonitorRoutes } from "./monitor-routes.js";
@@ -88,6 +95,7 @@ mountProjectRoutes(api);
 mountProjectCloneRoutes(api);
 mountUploadRoutes(api);
 mountPageAnnotationRoutes(api);
+mountHostAshMcpRoutes(api);
 
 // ── health ───────────────────────────────────────────────────────────────
 // `pid` 是给 scripts/restart.mjs 认人用的:它重启完要确认「端口上应答的是我刚起的
@@ -109,6 +117,14 @@ api.get("/health", (c) => c.json({
   previousResidualLock: previousResidualLockPublic(),
   // 飞书长连接连没连上（只这一档，不带应用标识与错误原文：这个端点免登录）。
   feishu: feishuHealthPublic(),
+  // 「端口上这份是谁」：数据根和代码根。mac app 靠它认出 :4317 上是不是它自己起的那份（别的
+  // ash —— 比如仓库里的开发实例 —— 占着时不能悄悄连上去当成自己的）。路径只答本机直连：
+  // 这个端点免登录，别的机器不该从这里读到这台机器的目录结构。
+  // `id` 是这个进程的实例号：认过人的窗口拿它给页面请求打上记号，换了人的那一份据此拒收
+  // （instance-binding.ts）。
+  // `windowPort` 是 mac app 窗口专用、真正监听上了的那个端口（window-port.ts），没有就是 null。
+  ...(isLocalDirect(c) ? { instance: { id: INSTANCE_ID, dataDir: DATA_DIR, codeDir: CODE_DIR, localOnly: LOCAL_ONLY,
+    windowPort: windowPort() } } : {}),
 }));
 
 // 「现在重启会打断谁」。scripts/restart.mjs 的安全闸靠它决定拦不拦 —— 只数
@@ -326,6 +342,8 @@ api.post("/groups/resolve", async (c) => {
 mountTaskRoutes(api);
 // 任务备忘:挂在任务上、不进任何 prompt 的手写条目(见 shared/src/task-memo.ts)。
 mountTaskMemoRoutes(api);
+// 看过哪些任务(侧栏绿点的已读记录,按人存,见 db/schema-task-reads.ts)。
+mountTaskReadRoutes(api);
 // 分组(批次容器)路由:列表/运行/暂停/批量建任务(从 task-routes.ts 拆出)。
 mountGroupRoutes(api);
 mountTaskRunRoutes(api);

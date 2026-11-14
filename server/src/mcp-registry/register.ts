@@ -17,13 +17,16 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { byHand, type ApprovalVerdict } from "../auth/codex-approve.js";
 import { publishFresh } from "../auth/config-publish.js";
 import { currentListeningPort } from "../listening-port.js";
-import { REPO_DIR } from "../paths.js";
+import { resolveBin } from "../executors/bin-resolve.js";
+import { CODE_DIR } from "../paths.js";
+import { isInsidePath } from "../platform.js";
 import { ashMcpConfigDir, ashMcpMechanism } from "./catalog.js";
+import { relocateHostFact, type RelocateResult } from "./relocate.js";
 import {
   ashMcpHostSources, ashMcpOpaqueSibling, effectiveConfigState, readingFor, resolveAshMcp, siteFileFor,
 } from "./sources.js";
@@ -31,8 +34,8 @@ import type {
   AshMcpComposeOpts, AshMcpEntry, AshMcpMechanism, AshMcpNameFact, AshMcpShape,
 } from "./types.js";
 
-/** 本仓库这份 MCP 服务的入口。宿主没登记过时按它现拼一条。 */
-const MCP_ENTRY = join(REPO_DIR, "mcp", "dist", "index.js");
+/** 这份 ash 自带的 MCP 服务入口（仓库检出或独立 app 的 bundle 里）。宿主没登记过时按它现拼一条。 */
+const MCP_ENTRY = join(CODE_DIR, "mcp", "dist", "index.js");
 
 const NO_SOURCE =
   `宿主机的配置里没有 ash MCP，仓库里也没有 ${MCP_ENTRY}(先在仓库根跑一次 npm run build，` +
@@ -40,10 +43,30 @@ const NO_SOURCE =
 
 const localUrl = () => `http://127.0.0.1:${currentListeningPort() ?? 4317}`;
 
-/** 没得可搬时自己拼的那条。仓库里还没 build 出 MCP 产物就返回 null(别登记一个不存在的入口)。 */
-function builtinEntry(): AshMcpEntry | null {
+/**
+ * 没得可搬时自己拼的那条 —— 也就是「指向这份 ash 自己」的那条(host-setup.ts 拿它认「指没指向这里」)。
+ * 仓库里还没 build 出 MCP 产物就返回 null(别登记一个不存在的入口)。
+ */
+export function builtinEntry(): AshMcpEntry | null {
   if (!existsSync(MCP_ENTRY)) return null;
-  return { command: "node", args: [MCP_ENTRY], env: { ASH_URL: localUrl() } };
+  return { command: mcpNodeCommand(), args: [MCP_ENTRY], env: { ASH_URL: localUrl() } };
+}
+
+/**
+ * 登记里写哪个 node。三档：
+ *  · 正在跑 ash 的运行时**就在这份代码里**（独立 app 自带 node）→ 写它的绝对路径。那台机器上
+ *    很可能根本没装 node；而 bundle 的位置跟着 app 走，自更新换的是 bundle 内容、不换路径。
+ *  · 否则 PATH 上找得到 node → 照旧写 `node`。不写 `process.execPath` 是有意的：仓库实例多半
+ *    跑在 nvm 的某个版本目录里，升级后删掉旧版本，那个绝对路径就没了 —— 而「已有登记一律不
+ *    覆盖」意味着它会一直坏下去，`node` 则跟着 PATH 走到新版本。
+ *  · PATH 上也没有 → 能跑起来的只剩自己这一份，写绝对路径总比登记一个起不来的命令强。
+ */
+export function mcpNodeCommand(
+  runtime: string = process.execPath,
+  hasPathNode: () => boolean = () => resolveBin("node") !== null,
+): string {
+  if (isInsidePath(CODE_DIR, runtime, sep)) return runtime;
+  return hasPathNode() ? "node" : runtime;
 }
 
 
@@ -208,7 +231,9 @@ function composeEntry(
     enabled: mechanism.writeEnabled === true,
     ...(mechanism.writeType ? { type: mechanism.writeType } : {}),
   };
-  const host = hostFact(agentType, hostHome, env);
+  const moved = portableHostFact(hostFact(agentType, hostHome, env));
+  if ("why" in moved) return moved;
+  const host = moved.fact;
   if (blockShape(shape)) {
     // 宿主那段原样搬(连子表一起),没有就按一条登记现渲染一段。
     let block = host?.block ?? null;
@@ -259,6 +284,20 @@ function hostFact(agentType: string, hostHome: string, env: NodeJS.ProcessEnv): 
   const sources = ashMcpHostSources(agentType, env, hostHome);
   const found = resolveAshMcp(sources, readingFor(mechanism));
   return found.state === "present" ? found.fact ?? null : null;
+}
+
+/**
+ * 宿主那条登记搬进隔离档之前,把 ash 自己的安装位置(脚本入口、跑不起来的 node)改成这一份的;
+ * 用户写的其余字段一个不动,改不动就如实报失败。缘由见 relocate.ts。还没 build 出 MCP 就原样搬。
+ */
+function portableHostFact(fact: AshMcpNameFact | null): RelocateResult {
+  if (!existsSync(MCP_ENTRY)) return { fact };
+  return relocateHostFact(fact, {
+    entry: MCP_ENTRY,
+    node: mcpNodeCommand(),
+    // 和 PATH 查找同一套判据:绝对路径也要是**可执行文件**,光「在」不算(目录、丢了执行位的都起不来)。
+    runnable: (command) => resolveBin(command) !== null,
+  });
 }
 
 /**

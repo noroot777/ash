@@ -8,7 +8,13 @@ import { FreeReviewDialog } from "../../src/free-workflow/FreeReviewDialog.tsx";
 import type { FreeWorkflowApiState } from "../../src/lib/api.ts";
 import { TaskReviewWorkspace } from "../../src/review/TaskReviewWorkspace.tsx";
 import { TaskHeader } from "../../src/task-detail/TaskHeader.tsx";
+import { syncComposerSendKey } from "../../src/lib/sendKey.ts";
 import "../../src/styles/global.css";
+
+// 附言框里裸回车算不算提交跟着「输入框发送键」那一档走；没学到这一档时裸回车一律换行
+// （lib/sendKey.ts）。台子不去读 /settings（那会打到真后端、拿到谁的偏好都不一定），
+// 直接钉成默认的「回车直发」——学到了就不再读。
+syncComposerSendKey("enter");
 
 const state = {
   taskId: "free-task",
@@ -434,6 +440,23 @@ window.fetch = (input, init) => {
       },
       descendants: [],
     }), { status: 200, headers: { "content-type": "application/json" } }));
+  }
+  // 验收台开屏要读两样：验收前置命令的状态、工作区有没有未提交改动。读不到时主按钮写「前置命令
+  // 状态待核对」并灰掉，所以台子得自己答：这几个任务所在的项目没设前置命令，工作区是干净的。
+  const acceptanceRead = /^\/api\/tasks\/(free-accept-ui|free-reviewing-ui|post-merge-ui)\/(accept-gate|scm)$/.exec(url.pathname);
+  if (acceptanceRead && (init?.method ?? "GET") === "GET") {
+    const body = acceptanceRead[2] === "accept-gate"
+      ? { command: null, running: null, latest: null, basis: null }
+      : {
+        root: { path: "/repo", branch: "ash/free-accept-ui", source: "worktree", gitRepo: true }, taskRunning: false, readOnly: null,
+        acceptanceCommitBlock: null, acceptanceAutoCommit: { action: "skip", reason: "工作目录没有待提交改动" },
+        status: {
+          branch: { head: "ash/free-accept-ui", detached: false, oid: "abc", upstream: null, ahead: null, behind: null },
+          staged: [], unstaged: [], untracked: [], merge: [], operation: null, truncated: false,
+        },
+        commits: [],
+      };
+    return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } }));
   }
   if (url.pathname === "/api/reviewer-profiles") {
     return Promise.resolve(new Response(JSON.stringify([reviewer]), {

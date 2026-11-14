@@ -1,4 +1,5 @@
 import { mkdirSync, createWriteStream } from "node:fs";
+import { claimTranscript } from "./transcript-identity.js";
 import { loadMarkdownImageSeed, markdownImageAccounting } from "./agent-image-journal.js";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -11,6 +12,7 @@ import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStar
 import { forgetHeldTrigger } from "./free-review-reservations.js";
 import type { ContinueTaskOptions, TurnStartDecline } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
+import { heldFollowUpTaken, turnFollowUpFrom } from "./follow-up-held.js";
 import { trackRun, discardStartingRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn, turnSourceReview, turnSourceRole } from "./runs.js";
 import { turnDirectionStart } from "./task-direction-epoch.js";
 import { assertReviewTurnStart, beginReviewContinuation, commitReviewTurnDelivery } from "./review-continuation.js";
@@ -224,14 +226,11 @@ export async function continueTask(
     const execution = !!opts.system || !!opts.executionTurn || inputExecution;
     const checkpointFollowUp = !execution && !opts.byBackend
       && task.status === "paused" && !!task.resumePrompt;
-    const goalPriorStatus = startStatus;
-    const followUpFrom = goalExecution
-      ? !inputExecution && !opts.system && ["done", "failed", "canceled"].includes(goalPriorStatus) ? goalPriorStatus : null
-      : sideTurn
-        ? (task.status === "running" || task.status === "queued" ? null : task.status)
-        : !execution && (["done", "failed", "canceled"].includes(task.status) || checkpointFollowUp)
-          ? task.status
-          : null;
+    // 被哨兵隔开的那次续聊还没收口时,非旁路回合一律是它的后半段(follow-up-held.ts)。
+    const followUpFrom = turnFollowUpFrom(task, {
+      goalExecution, goalPriorStatus: startStatus, inputExecution, system: !!opts.system, sideTurn, execution, checkpointFollowUp,
+    });
+    const heldTaken = heldFollowUpTaken(task, followUpFrom);
     // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
     // nativeTurn 落库而不是只留在内存里:结算钩子跟这里可能不在同一个进程(重启后由
     // reattach 接着消费同一条流),内存标记会丢,而丢了就等于「压缩被算成一轮验证跑完」。
@@ -241,7 +240,7 @@ export async function continueTask(
       const reviewStart = await beginReviewContinuation(transaction, task, opts.turnSource ?? { role: "single" }, turnToken, directionToken, opts.reviewDelivery);
       await transaction.update(tasks)
         // 方向身份那几列同 task-run.ts:走 `turnDirectionStart`,世代跟着这一次起跑一起前进。
-        .set({ followUpFrom, nativeTurn: !!nativeCommand, goalTurn: goalExecution, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
+        .set({ followUpFrom, ...(heldTaken ? { followUpHeldFrom: null } : {}), nativeTurn: !!nativeCommand, goalTurn: goalExecution, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
         .where(eq(tasks.id, taskId));
       return reviewStart;
     }, { behavior: "immediate" });
@@ -275,7 +274,9 @@ export async function continueTask(
     if (planning) {
       sideTurn = true;
       if (sessionRole === "single") reclaimTurn(taskId, turn, "side");
-      await db.update(tasks).set({ nativeTurn: true, followUpFrom: ["running", "queued"].includes(task.status) ? null : task.status }).where(eq(tasks.id, taskId));
+      // 改成旁路回合:起跑那一笔接走的续聊原状态还回去,这次续聊没在这一轮收口。
+      await db.update(tasks).set({ nativeTurn: true, followUpFrom: ["running", "queued"].includes(task.status) ? null : task.status,
+        ...(heldTaken ? { followUpHeldFrom: task.followUpHeldFrom } : {}) }).where(eq(tasks.id, taskId));
     }
     // 真人消息会撤下上一轮没答的提问(task-question-supersede.ts),要等计划模式定完旁路身份再判;
     // 撤只在输入**确认送达**之后(拒收、结果不明都留着那道题),任何出口都由回执那一层兑现。
@@ -559,6 +560,7 @@ export async function continueTask(
     });
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
+    await claimTranscript(out, { taskId, sessionId: sessId, turnStartedAt: turnStart });
     const noteTarget = { out, taskId, sessionId: sessId, role: sessionRole, agentType: agent, at: turnStart };
     if (opts.system) {
       // Backend-initiated 继续: a 〔系统〕 trace carrying who resumed it, NOT a 你→ reply.
@@ -567,7 +569,7 @@ export async function continueTask(
     } else {
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
       // the human/backend turn as its own bubble; the matching event keeps every client live.
-      recordUserConversationTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text: userTurnText, at: turnStart, bySystem: opts.byBackend, monitorWake: opts.monitorWake, eventKey: opts.deliveryKey, answerIds: opts.answerIds });
+      recordUserConversationTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text: userTurnText, at: turnStart, bySystem: opts.byBackend, monitorWake: opts.monitorWake, eventKey: opts.deliveryKey, answerIds: opts.answerIds, clientKey: opts.clientKey });
     }
     // 上一回合尚未结算就收到回复时，消息会先排队，真正送达时任务已不再 paused；这条
     // 路径要在落盘后消费旧检查点，避免它继续挡完成与预约派审。若起点本来就是 paused，
@@ -605,7 +607,7 @@ export async function continueTask(
     // 于是 resume 回合被重启接管时会从字节 0 重放整轮输出。
     await consumeSingleRun({
       taskId, sessId, agentType: agent, ex, cwd,
-      handle, out, turnStart, cliSessionId, autoTitle: false, role: sessionRole,
+      handle, out, turnStart, cliSessionId, autoTitle: false, role: sessionRole, turn,
       nativeSteer: {
         prepare: (text) => withSkillInvocation({ agentType: agent, cwd, text, userId: runOwner }),
         record: (text, at) => recordUserConversationTurn({

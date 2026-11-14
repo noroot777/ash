@@ -586,6 +586,7 @@ export async function mergeImageJournal(
     || a.line.pos - b.line.pos);
   return [
     ...patched,
-    ...synth.map(({ line, event }) => ({ at: line.at, turnStartedAt: line.turnStartedAt, event })),
+    // 盘上没有这几条:标上来源,页面删消息时不拿它们去跟盘上那份对指纹(SessionTraceEntry.origin)。
+    ...synth.map(({ line, event }) => ({ at: line.at, turnStartedAt: line.turnStartedAt, origin: "journal" as const, event })),
   ];
 }
