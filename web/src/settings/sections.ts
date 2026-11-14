@@ -11,6 +11,7 @@ export type SettingsSection =
   | "providers"
   | "executors"
   | "modes"
+  // 起手式库：已停止新建起手式任务，导航里不再有它；只剩助手草案卡的「查看起手式库」还开得到。
   | "workflows"
   | "reviewers"
   | "cli-env"
@@ -38,7 +39,6 @@ export const SYSTEM_NAV: readonly NavItem[] = [
   { id: "providers", label: "供应商" },
   { id: "executors", label: "执行器" },
   { id: "modes", label: "执行模式" },
-  { id: "workflows", label: "起手式" },
   { id: "reviewers", label: "审查者" },
   { id: "cli-env", label: "个人 CLI 环境", requires: "multi" },
   // 不挂 requires：多人模式下每个人也要来这里绑自己的飞书，凭证/推送那几张卡由面板按
@@ -83,7 +83,7 @@ export function settingsSectionByLabel(label: string): SettingsSection | null {
 export const SECTION_ANCHORS: Partial<Record<SettingsSection, Record<string, string>>> = {
   // 「预览命令」是这张卡的旧名字，存量文案里还有（改成「自定义脚本 / 选择服务」之前的说法）。
   project: { 预览: "preview", 预览命令: "preview", 工作目录: "worktree", 常用命令: "commands" },
-  defaults: { 输入框: "send-key", 发送键: "send-key", 外观: "appearance", 深浅色: "appearance" },
+  defaults: { 输入框: "send-key", 发送键: "send-key", 外观: "appearance", 深浅色: "appearance", 远程访问: "remote-access" },
   // 服务端报错里写「设置 → 飞书 → 绑定」这类路径时，点一下就停在那张卡上。
   feishu: { 连接: "feishu-connection", 绑定: "feishu-binding", 推送: "feishu-push", 群: "feishu-groups" },
 };

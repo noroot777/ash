@@ -473,23 +473,17 @@ try {
   }
 
   // ── 断线重连之后必须重新对账：事件流没有历史回放 ───────────────────────────
-  // 断线期间起的哨兵、结束的哨兵、变化的恢复状态，服务端一条都不会补发（SSE 只订阅当前
+  // 断线期间起的哨兵、结束的哨兵，服务端一条都不会补发（SSE 只订阅当前
   // bus、不带事件 id）。所以「又连上了」不能当成「这份快照还完整」——上一版把
   // useServerEvents 返回的连接状态整个丢掉，页面停在旧列表上，手动刷新才对得上
   // （第 11 轮审查用真实 EventSource 自动重连实测：open 次数增加、请求数一条没多）。
   {
     let listCalls = 0;
-    let recoveryCalls = 0;
     const rows = [["m-task-a", "task-a"]];
     const page = await open(async (route, path) => {
       if (path === "/api/tasks/task-a/monitors" && route.request().method() === "GET") {
         listCalls += 1;
         await route.fulfill({ json: rows.map(([id, task]) => monitor(id, task)) });
-        return true;
-      }
-      if (path === "/api/tasks/task-a/monitors/recovery") {
-        recoveryCalls += 1;
-        await route.fulfill({ json: { pending: false, reasons: [], attempts: 0, exhausted: false } });
         return true;
       }
       return false;
@@ -502,7 +496,7 @@ try {
     await settlePage(page);
     await outlastPageTimers(page, 1);
     await fetchesSettled(page, 0, "首次连上的对账读取已被页面读完");
-    const before = { listCalls, recoveryCalls };
+    const before = { listCalls };
 
     // 断线期间服务端那边又起了一条（页面收不到任何事件）。
     rows.push(["m-task-a-late", "task-a"]);
@@ -519,8 +513,8 @@ try {
     await page.evaluate(() => { for (const source of window.__sources) source.onopen?.({}); });
     await waitIds(page, "m-task-a,m-task-a-late");
     assert.ok(
-      listCalls > before.listCalls && recoveryCalls > before.recoveryCalls,
-      `重连后要把列表和恢复状态都重读一遍（列表 ${before.listCalls}→${listCalls}、恢复 ${before.recoveryCalls}→${recoveryCalls}）`,
+      listCalls > before.listCalls,
+      `重连后要把列表重读一遍（${before.listCalls}→${listCalls}）`,
     );
     await page.close();
   }

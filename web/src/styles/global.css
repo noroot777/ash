@@ -94,6 +94,8 @@
    .pending-merge-card / .team-accept-failure)自带 margin,选择器特异性跟它一样重,
    只有排在它们后面才算数。 */
 @import "./acceptance-host.css";
+/* 放在最后：它改的是前面各份里整页布局的上边距。 */
+@import "./window-shell.css";
 
 @theme {
   --font-sans: "Inter Variable", "Inter", "SF Pro Display", -apple-system,

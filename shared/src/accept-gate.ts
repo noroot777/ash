@@ -64,7 +64,7 @@ export function normalizeAcceptGateBaseline(value: unknown): AcceptGateBaseline 
  * 这棵树里没有它(server/src/accept-gate-entry.ts)。npm 脚本那种核不准,照常起跑,不进这一档。
  * 旧记录里可能还存着撤掉的 `command_missing`,读的那几处都做了兜底。
  */
-export type AcceptGateFailure = "exit_code" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived" | "entry_missing";
+export type AcceptGateFailure = "exit_code" | "prepare_failed" | "launcher_failed" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived" | "entry_missing";
 
 export const ACCEPT_GATE_STATUS_LABELS: Record<AcceptGateStatus, string> = {
   running: "正在跑",
@@ -76,6 +76,8 @@ export const ACCEPT_GATE_STATUS_LABELS: Record<AcceptGateStatus, string> = {
 
 export const ACCEPT_GATE_FAILURE_LABELS: Record<AcceptGateFailure, string> = {
   exit_code: "命令退出码非 0",
+  prepare_failed: "准备命令失败，测试没有开跑",
+  launcher_failed: "门禁启动器出了错，分不清停在哪一段",
   timeout: "超时",
   spawn_failed: "命令起不来",
   server_restarted: "ash 重启,这次没跑完",
@@ -103,6 +105,8 @@ export interface AcceptGateView {
   taskId: string;
   /** 跑的那条命令原文(项目设置里改过的话,这里仍是**这一次**用的那条) */
   command: string;
+  /** 这一次在快照里先跑的准备命令原文;null = 没配,依赖按老办法从工作区借 */
+  prepareCommand?: string | null;
   /** 在哪儿跑的 */
   cwd: string;
   status: AcceptGateStatus;
@@ -211,9 +215,11 @@ export function summarizeAcceptGate(gate: AcceptGateView): string {
   // 不能让一条历史记录在界面上显示成 undefined。
   const why = (gate.failure
     ? (ACCEPT_GATE_FAILURE_LABELS as Record<string, string | undefined>)[gate.failure] : null) ?? "未通过";
-  return `${head} ${ACCEPT_GATE_STATUS_LABELS[gate.status]}：${why}${
-    gate.exitCode !== null && gate.failure === "exit_code" ? `（rc=${gate.exitCode}）` : ""
-  }`;
+  const rc = gate.exitCode !== null && (gate.failure === "exit_code" || gate.failure === "prepare_failed") ? `（rc=${gate.exitCode}）` : "";
+  if (gate.failure === "prepare_failed" && gate.prepareCommand) {
+    return `${head} ${ACCEPT_GATE_STATUS_LABELS[gate.status]}：准备命令 \`${gate.prepareCommand}\` 失败${rc}，测试没有开跑`;
+  }
+  return `${head} ${ACCEPT_GATE_STATUS_LABELS[gate.status]}：${why}${rc}`;
 }
 
 /**
@@ -243,6 +249,8 @@ export type AcceptGateState = {
   sourceError?: string | null;
   /** 项目设置里的那条命令;null = 这个项目没设门禁。 */
   command: string | null;
+  /** 项目设置里的准备命令(见 Project.acceptGatePrepare);null = 没配。 */
+  prepare?: string | null;
   running: AcceptGateView | null;
   /** 最近一次(可能就是 running 那条)。**不是本次验收的凭据**,见 basis。 */
   latest: AcceptGateView | null;

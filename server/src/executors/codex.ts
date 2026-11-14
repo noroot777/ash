@@ -27,6 +27,7 @@ import { TURN_IDENTITY_ENV_KEYS } from "../turn-identity.js";
 const ASH_MCP_IDENTITY_ENV_VARS = TURN_IDENTITY_ENV_KEYS;
 import { openCodexAppServer } from "./codex-app-server.js";
 import { readCodexAppServerState } from "./codex-app-server-state.js";
+import { codexTurnError } from "./model-failure.js";
 import { codexChangeWrites, codexCommandCwd } from "./tool-writes.js";
 
 // Drives the real `codex` CLI in non-interactive JSON mode (prompt via stdin, `-`).
@@ -390,7 +391,7 @@ async function* codexStreamEvents(
     } else if (ev.type === "turn.failed") {
       turnFailedMessage = eventErrorMessage(ev) ?? "Codex 返回 turn.failed，但没有附带错误说明。";
       structuredErrors.push(turnFailedMessage);
-      push({ kind: "error", message: turnFailedMessage });
+      push(codexTurnError(turnFailedMessage));
     } else if (ev.type === "item.completed" && ev.item) {
       const it = ev.item;
       // codex emits one complete agent_message / reasoning per turn (not token
@@ -419,7 +420,7 @@ async function* codexStreamEvents(
     } else if (ev.type === "error") {
       const message = eventErrorMessage(ev) ?? "Codex 返回 error 事件，但没有附带错误说明。";
       structuredErrors.push(message);
-      push({ kind: "error", message });
+      push(codexTurnError(message));
     }
   });
 

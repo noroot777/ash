@@ -253,11 +253,6 @@
 .task-message-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px; }
 .task-message-footer button { max-width: 240px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--muted); font-family: var(--font-mono); font-size: var(--t-xs); text-overflow: ellipsis; white-space: nowrap; }
 .task-message-footer button:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
-/* 「重跑上一回合」：同一行里唯一的**动作**，其余都是元信息，所以给它红色描边——
-   出现的前提本来就是「上一回合崩了」，不该跟会话 id 一样灰。 */
-.task-message-footer button.is-retry { display: inline-flex; align-items: center; gap: 3px; border-color: color-mix(in oklab, var(--red) 45%, var(--line)); color: var(--red); }
-.task-message-footer button.is-retry:hover { border-color: var(--red); background: color-mix(in oklab, var(--red) 12%, var(--raised)); color: var(--red); }
-.task-message-footer button.is-retry:disabled { opacity: 0.55; }
 .task-message-footer button.task-message-copy-action { display: inline-flex; align-items: center; gap: 3px; }
 /* 尾栏这几颗是描边胶囊，反馈得连边框一起变，只换字色在灰底上看不出来；
    同样要压过上面那条 :hover。 */

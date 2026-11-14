@@ -46,6 +46,7 @@ export function gateView(row: GateRow): AcceptGateView {
     id: row.id,
     taskId: row.taskId,
     command: row.command,
+    prepareCommand: row.prepareCommand ?? null,
     cwd: row.cwd,
     status: row.status as AcceptGateStatus,
     exitCode: row.exitCode ?? null,
@@ -96,6 +97,19 @@ export function acceptGateCommandOf(project: Pick<ProjectRow, "acceptGateCommand
   return normalizeAcceptGateCommand(project?.acceptGateCommand);
 }
 
+/** 准备命令（快照里先装依赖）。null = 没配，依赖照旧借用工作区那一份。 */
+export function acceptGatePrepareOf(project: Pick<ProjectRow, "acceptGatePrepare"> | null | undefined): string | null {
+  return normalizeAcceptGateCommand(project?.acceptGatePrepare);
+}
+
+/**
+ * 那一次跑的是不是现在这一套（准备命令 + 前置命令）。复用旧绿、批量预判、卡片新鲜度三处共用：
+ * 准备命令换了，装进快照的依赖就可能是另一份，那次的绿不再替现在这一套作证。
+ */
+export function sameGateRecipe(row: Pick<GateRow, "command" | "prepareCommand">, command: string | null, prepare: string | null): boolean {
+  return row.command === command && (row.prepareCommand ?? null) === prepare;
+}
+
 /**
  * 这一按**当初**拿什么放的行。没验收过 / 老数据没留 → null（如实的「不知道」）。
  *
@@ -122,6 +136,10 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   if (!task) return { command: null, running: null, latest: null, basis: null };
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0) ?? null;
   const command = acceptGateCommandOf(project);
+  // 返回**保存着的**那一条，不随前置命令有没有设而投影成 null：卡片拿它当编辑初值、算差量，
+  // 投影掉了，留空的那一格就清不掉真实配置（第 1 轮审查 #2）。用不用它由 command 决定。
+  const prepare = acceptGatePrepareOf(project);
+  const prepared = !!command && !!prepare;
   const unavailable = command ? gateConfinementUnavailable() : null;
   const executionNotice = command ? gateExecutionNotice() : null;
   const basis = await acceptBasis(task);
@@ -134,27 +152,28 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   // 或者不是这一档时一行都不读。
   const cwd = !frozen && project ? await existingTaskWorkspacePath(task, project.repoPath) : null;
   let sourceError: string | null = null;
-  const borrowed = command && baseline === "merge_preview" && cwd && head
-    ? await gateDependencies(cwd, head).then(planned => ({ cwd, dependencies: planned.dependencies }),
-      (error) => { sourceError = String(error); return undefined; })
-    : undefined;
+  // 配了准备命令就一个都不借（accept-gate-source 的 GateSource.prepared）。
+  const borrowed = !(command && baseline === "merge_preview" && cwd && head) ? undefined
+    : prepared ? { cwd, dependencies: [] }
+    : await gateDependencies(cwd, head).then(planned => ({ cwd, dependencies: planned.dependencies }),
+      (error) => { sourceError = String(error); return undefined; });
   const judged = command && project && !frozen ? await resolveGateBaseline(task, project, head, borrowed) : null;
   const target = judged?.plan ?? judged?.block ?? null;
   const baselineView = { baseline, baselineBlock: judged?.block?.error ?? null,
     baselineTarget: target?.targetBranch && target.targetCommit ? { branch: target.targetBranch, commit: target.targetCommit } : null };
   const latestRow = await latestRun(taskId);
-  if (!latestRow) return { command, running: null, latest: null, basis, unavailable, sourceError, executionNotice, ...baselineView };
+  if (!latestRow) return { command, prepare, running: null, latest: null, basis, unavailable, sourceError, executionNotice, ...baselineView };
   const view = gateView(latestRow);
   const pending = (await db.select().from(acceptGateRuns).where(and(eq(acceptGateRuns.taskId, taskId),
     or(eq(acceptGateRuns.status, "running"), eq(acceptGateRuns.processPending, true))))
     .orderBy(desc(acceptGateRuns.startedAt)).limit(1)).at(0);
-  if (pending) return { command, running: gateView(pending), latest: view, basis, sourceError, executionNotice, ...baselineView };
+  if (pending) return { command, prepare, running: gateView(pending), latest: view, basis, sourceError, executionNotice, ...baselineView };
   // 新鲜度按**现在**这棵树算：前端据它决定说「已通过，可以直接验收」还是「要重跑」。
   const frozenHead = task.acceptedSourceCommit ?? basis?.run?.sourceCommit ?? null;
-  const source = cwd && !unavailable ? await readGateSource(cwd, gateSnapshotPath(task.id, "identity"))
+  const source = cwd && !unavailable ? await readGateSource(cwd, gateSnapshotPath(task.id, "identity", prepared), prepared)
     .catch(error => { sourceError = String(error); return null; }) : null;
   // 基准也算进新鲜度：合并预览那份绿只对当时的目标分支尖端作数（被拦下的那一档没有 plan，旧绿同样不作数）。
-  const stale = latestRow.command !== command || (frozen ? !frozenHead || frozenHead !== latestRow.sourceCommit
+  const stale = !sameGateRecipe(latestRow, command, prepare) || (frozen ? !frozenHead || frozenHead !== latestRow.sourceCommit
     : !gateSourceMatches(latestRow, source) || !judged?.plan || !gateBaselineMatches(latestRow, judged.plan));
-  return { command, running: null, latest: { ...view, stale }, basis, unavailable, sourceError, executionNotice, ...baselineView };
+  return { command, prepare, running: null, latest: { ...view, stale }, basis, unavailable, sourceError, executionNotice, ...baselineView };
 }

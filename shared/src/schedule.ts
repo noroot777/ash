@@ -1,6 +1,7 @@
 // 定时重跑(Schedule)与待发送消息(ScheduledMessage)的形状。纯类型模块 —— 从 index.ts
 // 拆出来只是为了不让那个文件继续长,消费方仍从 "@ash/shared" 导入,路径不变。
 import type { AgentType } from "./index.ts";
+import type { ScheduledMessageWait } from "./scheduled-message-wait.ts";
 
 // Schedules attach to a Task. Once = fire at a timestamp then disable; cron =
 // recurring 5-field expression in local time. The scheduler only enqueues.
@@ -63,4 +64,10 @@ export interface ScheduledMessage {
   status: ScheduledMessageStatus;
   createdAt: string;
   sentAt: string | null;
+  // 下面两项只由 `GET /tasks/:id/scheduled-messages` 按此刻的事实算好带上（server/src/pending-wait.ts）；
+  // 入队回执、旧服务端都不带，缺席时托盘不说原因、也不给「引导会话」。
+  // 此刻在等什么；null = 没有挡着它的东西。
+  wait?: ScheduledMessageWait | null;
+  // 现在点「引导会话」能不能成（task-steer-gate.ts 的前置条件逐条过一遍）。
+  steerable?: boolean;
 }

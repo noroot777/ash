@@ -17,6 +17,8 @@ export const acceptGateRuns = sqliteTable(
     projectId: text("project_id").notNull(),
     /** 这一次用的命令原文：项目设置事后改了，历史记录里仍是当初真的跑过的那条。 */
     command: text("command").notNull(),
+    /** 这一次在快照里先跑的准备命令原文。null = 没配（依赖借用工作区那一份）。也是复用判据的一部分。 */
+    prepareCommand: text("prepare_command"),
     cwd: text("cwd").notNull(),
     /** running | passed | failed | interrupted | canceled */
     status: text("status").notNull(),
@@ -136,6 +138,7 @@ export async function ensureAcceptGateSchema(client: Client): Promise<void> {
     "ALTER TABLE accept_gate_runs ADD COLUMN preview_tree TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN preview_materialization TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN preview_physical TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN prepare_command TEXT",
   ]) {
     try { await client.execute(sql); } catch { /* column already exists */ }
   }

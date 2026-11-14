@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import type { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import type { Actor } from "./auth/context.js";
+import { credentialAlive, onCredentialRevoked, ownerHolderOf } from "./auth/remote-access.js";
 import { boundListeningPort, currentListeningPort } from "./listening-port.js";
 import { REPO_DIR } from "./paths.js";
 import { alive, readAnyPreview } from "./preview-store.js";
@@ -62,9 +63,24 @@ import { rememberCookie, type PreviewCookieJar } from "./preview-cookies.js";
  *
  * 剩下的代价说在明处：页面能借这条路用你的身份调 ash 的 API —— 包括那些会吐出凭证的端点
  * （`/api/auth/rotate-key` 换一把新 key 就是）。要再收窄只能给这一跳加白名单，那是另一件事。
+ *
+ * ## 凭证活不过签发它的那件凭证，连接活不过凭证
+ *
+ * 地址里那串随机数自己不认人：签发它的设备被请出去、登出了、那把访问密钥换了，它要是还作数，
+ * 开着预览页的那台设备就还在里面（预览的是 ash 自己时，能一路用到 `/api`）。所以自用模式下
+ * 每张 grant 记着签发它的那件凭证（`holder`，auth/remote-access.ts），两头都接上：
+ *  · **每次用之前现核**（`canUsePreview`）：那件凭证不在了，这张就不作数；
+ *  · **那件凭证一被收回就连根作废**（`onCredentialRevoked`），不等下一次请求。
+ * 光作废还不够 —— 升级完的 WebSocket、流式应答是建连接那一刻核过就一直通着的。所以借着一张
+ * grant 活着的连接都登记在它名下（`holdPreviewChannel`），grant 一没当场掐断；没有事件可等的
+ * 那些失效（过期、预览换了一代、多人模式下会话没了）由定时那一遍核出来，同样掐。
  */
 interface PreviewGrant {
   taskId: string; gen: string; actor: Actor; expires: number; session?: string; turn?: string; keyHash?: string | null;
+  /** 自用模式下签发这张凭证的那件机主凭证（见上面「活不过」一节）；不是凭机主身份开的没有。 */
+  holder: string | null;
+  /** 借着这张凭证活着的连接，各一个掐断它的函数。 */
+  live: Set<() => void>;
   jar: PreviewCookieJar; client: string | null; nav: string; content: string | null; forks: string[];
   /** 见上面「`/api` 单独走一跳」。null = 这一档不成立，`/api` 跟别的路径一样走被预览的服务。 */
   ownApi: { port: number; jar: PreviewCookieJar } | null;
@@ -75,13 +91,48 @@ const GRANT_LIMIT = 1000;
 /** 一张凭证同时留着的分叉上限，多了就回收最早的（见上面的说明）。 */
 export const FORK_LIMIT = 16;
 
-/** 一张 grant 占着两个 token，收的时候两个一起收，别留下半张。 */
+/** 一张 grant 占着两个 token，收的时候两个一起收，别留下半张；借它活着的连接一并掐断。 */
 function dropGrant(token: string): void {
   const grant = grants.get(token);
   grants.delete(token);
   if (!grant) return;
   grants.delete(grant.nav);
   if (grant.content) grants.delete(grant.content);
+  const live = [...grant.live];
+  grant.live.clear();
+  for (const close of live) close();
+}
+
+/** 签发的那件凭证被收回：它名下的 grant（连同分叉出去的，holder 是继承的）全部作废。 */
+onCredentialRevoked((holder) => {
+  for (const [token, grant] of [...grants]) if (grant.holder === holder) dropGrant(token);
+});
+
+const CHANNEL_SWEEP_MS = 10_000;
+let channelSweep: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * 一条连接借着这张 grant 活着（WebSocket、还在往外流的应答）：grant 一没就调 `close`。
+ * 回一个注销函数，连接自己结束时调。grant 已经不在了就当场掐。
+ */
+export function holdPreviewChannel(grant: PreviewGrant, close: () => void): () => void {
+  if (grants.get(grant.nav) !== grant) { close(); return () => {}; }
+  grant.live.add(close);
+  channelSweep ??= setInterval(() => void sweepChannels().catch((error) => console.error("[ash] 预览连接复核出错:", error)), CHANNEL_SWEEP_MS);
+  channelSweep.unref?.();
+  return () => void grant.live.delete(close);
+}
+
+/** 还挂着连接的 grant 逐张现核一遍，不作数的作废（连接随之掐断）。没有连接可看了就停表。 */
+export async function sweepChannels(): Promise<void> {
+  const busy = [...new Set(grants.values())].filter((grant) => grant.live.size);
+  for (const grant of busy) {
+    if (grant.expires <= Date.now() || readAnyPreview(grant.taskId)?.gen !== grant.gen || !(await canUsePreview(grant))) dropGrant(grant.nav);
+  }
+  if (channelSweep && ![...grants.values()].some((grant) => grant.live.size)) {
+    clearInterval(channelSweep);
+    channelSweep = null;
+  }
 }
 
 export function grantFor(token: string): PreviewGrant | null {
@@ -108,7 +159,7 @@ export function forkGrant(token: string): string | null {
   if (!grant) return null;
   if (grants.size >= GRANT_LIMIT) dropGrant(grants.keys().next().value!);
   const next = randomBytes(24).toString("hex");
-  grants.set(next, { ...grant, jar: new Map(), client: null, nav: next, content: null, forks: [], ownApi: null });
+  grants.set(next, { ...grant, jar: new Map(), client: null, nav: next, content: null, forks: [], ownApi: null, live: new Set() });
   grant.forks.push(next);
   while (grant.forks.length > FORK_LIMIT) dropGrant(grant.forks.shift()!);
   return next;
@@ -141,7 +192,8 @@ export async function canUsePreview(grant: PreviewGrant): Promise<boolean> {
   const { projectOfTask, canSeeProject } = await import("./auth/visibility.js");
   const project = await projectOfTask(grant.taskId);
   if (!project) return false;
-  if (!(await isMultiUser())) return true;
+  // 自用模式：凭机主身份开的，要签发它的那件凭证还在（文件顶部「活不过」一节）。
+  if (!(await isMultiUser())) return grant.actor.kind !== "single" || (!!grant.holder && credentialAlive(grant.holder));
   if (grant.actor.kind === "agent") {
     const { db } = await import("./db/index.js");
     const { tasks } = await import("./db/schema.js");
@@ -186,6 +238,7 @@ export function mountPreviewOpenRoutes(api: Hono): void {
       taskId, gen: record.gen, actor, expires: Date.now() + GRANT_LIFE,
       session: getCookie(c, SESSION_COOKIE), turn: c.req.header("x-ash-turn-token"),
       keyHash: actor.kind === "user" && c.req.header("authorization") ? (await getUser(actor.userId!))?.keyHash : undefined,
+      holder: ownerHolderOf(c), live: new Set(),
       jar: new Map(), client: null, nav: "", content: null, forks: [], ownApi: null,
     };
     if (!(await canUsePreview(grant))) return c.text("预览不存在或无权访问", 404);

@@ -1,10 +1,11 @@
-import type { ContextUsage, Session, SessionRole, TokenUsage, TurnOutcome } from "@ash/shared";
+import type { ContextUsage, Session, SessionRole, TokenUsage, TurnInterruption, TurnOutcome } from "@ash/shared";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 import { addUsage, usageTotal } from "@ash/shared/usage";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
 import type { TimelineNotice } from "@ash/shared/timeline-notice";
 import { applyVerifySpans, reviewerKey } from "./conversationReviewer.ts";
+import { markSystemResumes, type ResumeNote } from "./turnCause.ts";
 import type { AgentContentSegment } from "./conversationSegments.ts";
 import type { LiveAgentEvent, PersistedTurnTimes } from "./conversationTurnParts.ts";
 import { latestTurnStart } from "./conversationTurnParts.ts";
@@ -77,8 +78,17 @@ export type ConversationItem =
       continuation?: boolean;
       /** 这一回合是哨兵叫醒的、叫醒的那条哨兵不归前面那一段（比如等的时候你插过话），另起的一回合，见 monitorWakeTurns。 */
       wokenByMonitor?: boolean;
+      /** 这一回合是系统续跑起的头（见 turnCause）。reason=null：老记录没写缘由。 */
+      resumeCause?: { reason: ResumeNote["reason"] };
       /** 这一回合自己的结局（服务端按回合交出来的，见 turnFailure 的 turnFailed）。缺省/null = 不知道。 */
       turnOutcome?: TurnOutcome | null;
+      /** 同一回合怎么断的（`Session.turnInterruptions` 里这一回合那份），跟 `turnOutcome` 一起带。 */
+      turnInterruption?: TurnInterruption;
+      /**
+       * 上面两样是按哪个回合起点查的（落盘那一路，见 turnFailure 的 persistedTurnFacts）。跟 `turnStartedAt`
+       * 不是一回事：那一位只认服务端给这颗气泡的身份，没有就留空让别处由会话行推；这一位永远有值，三样同出一处。
+       */
+      turnKey?: string;
       session?: Session;
       run?: { model: string | null; reasoningEffort: string | null };
       /**
@@ -150,6 +160,12 @@ export type ConversationItem =
       aside?: boolean;
       /** 服务端给的「这是哪一类事」（shared/src/timeline-notice.ts）。老记录、非时间线旁注没有。 */
       notice?: TimelineNotice;
+      /** 直播那一路的异常回合边界：这一回合怎么断的（结尾 done 事件带的，见 Session.turnInterruptions）。 */
+      interruption?: TurnInterruption;
+      /** 这条是系统续跑的开头（「〔系统〕继续（从中断处）」），连同缘由（见 turnCause）。 */
+      resume?: ResumeNote;
+      /** 缘由已经写在它起头的那一回合头上了：不再作为一条记录出现。 */
+      onTurnHead?: true;
     };
 
 export type PersistedConversation = { session: Session; output: string; trace?: SessionTraceEntry[] };
@@ -240,6 +256,8 @@ export function buildConversationItems(
   // 时间线到这里才排完（落盘排好序 + 直播按到达追加），身份也才补得齐。必须排在下面
   // 那轮 continuation 判定之前：那一轮拿 reviewer 当断点用。
   applyVerifySpans(items);
+  // 审查者身份到这里才补齐：系统续跑认领回合要避开审查者那一侧。
+  markSystemResumes(items);
 
   const orderedSessions = [...sessions].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
   const runBounds = new Map<string, SessionRunBounds>();
@@ -355,7 +373,8 @@ export function buildConversationItems(
   for (const item of items) {
     if (item.kind === "user") { continuedSessionId = null; continue; }
     if (item.kind === "event") {
-      if (item.variant === "boundary") continuedSessionId = null;
+      // 系统续跑起了新一回合：它头上要写起因，不能被画成上一段话的下半截。
+      if (item.variant === "boundary" || item.onTurnHead) continuedSessionId = null;
       continue;
     }
     const turn = item.turnStartedAt ?? null;

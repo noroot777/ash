@@ -60,7 +60,8 @@ export const gateFailurePrompt = (details: GateFailureDetails) =>
  */
 export const gateFailureInputFor = (view: AcceptGateView, sourceCwd: string): string =>
   gateFailurePrompt({
-    command: view.command, summary: summarizeAcceptGate(view), logPath: view.logPath,
+    // 准备命令没过时要复现的是它：前置命令一行都没跑（摘要里已经说破）。
+    command: view.failure === "prepare_failed" && view.prepareCommand ? view.prepareCommand : view.command, summary: summarizeAcceptGate(view), logPath: view.logPath,
     failure: view.failure, entryNote: view.entryNote ?? null,
     tail: view.logTail, cwd: view.cwd, sourceCwd, executionNotice: view.executionNotice,
     preview: view.previewBase && view.targetBranch ? { branch: view.targetBranch, commit: view.previewBase } : null,

@@ -66,6 +66,8 @@ export interface Lead {
   wantedStatus: "running" | "idle" | null;
   statusTimer: NodeJS.Timeout | null;
   retired: boolean;
+  /** 这台在库里的持有者代次（`sessions.lead_holder`）：对会话行的每一笔写都带上它（lead-session-writes.ts 的 `ownRow`）。 */
+  holder: string;
   idleTimer: NodeJS.Timeout | null;
   closing: "recycle" | "halt" | "workspace" | null;
   closingSaidRotated?: boolean;

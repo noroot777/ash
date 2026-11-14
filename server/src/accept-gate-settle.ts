@@ -11,7 +11,7 @@ import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { gateView } from "./accept-gate-state.js";
 import { startGateWatch, type GateWatch } from "./accept-gate-watch.js";
-import { gateSnapshotPath, removeGateSnapshot, verifyGateSnapshot } from "./accept-gate-source.js";
+import { existingGateSnapshotPath, removeGateSnapshot, verifyGateSnapshot } from "./accept-gate-source.js";
 import { forgetGateProcess, stopGateRun } from "./accept-gate-ownership.js";
 import { readGateLaunch } from "./accept-gate-launch.js";
 import { gateScopeNotice } from "./accept-gate-confinement.js";
@@ -40,7 +40,7 @@ export async function cleanupGateSnapshot(taskId: string, runId: string): Promis
   const logPath = acceptGateLogPath(taskId, runId);
   const launch = readGateLaunch(logPath);
   if (launch?.confinementEnrolled && gateScopeNotice(launch.confinementId)) {
-    appendGateLog(logPath, `\n[ash] macOS 兼容监督已收尾；独立测试快照保留到任务验收、归档或删除：${gateSnapshotPath(taskId, runId)}\n`);
+    appendGateLog(logPath, `\n[ash] macOS 兼容监督已收尾；独立测试快照保留到任务验收、归档或删除：${existingGateSnapshotPath(taskId, runId)}\n`);
     return;
   }
   await removeGateSnapshot(taskId, runId);
@@ -165,7 +165,7 @@ export async function settleGate(
     // 删不掉快照是磁盘上的事（EACCES/EPERM 实测会发生），不该把一条已经判完的门禁连同
     // 它的结论、时间线、交接一起甩进 catch（第 3 轮审查 F1）。
     if (stopped) await cleanupGateSnapshot(row.taskId, runId).catch((error) => appendGateLog(row.logPath,
-      `\n[ash] 快照没能删掉，它还留在 ${gateSnapshotPath(row.taskId, runId)}：${String(error)}\n`));
+      `\n[ash] 快照没能删掉，它还留在 ${existingGateSnapshotPath(row.taskId, runId)}：${String(error)}\n`));
     if (watching?.runId === runId) { watching.watch.stop(); live.delete(row.taskId); }
     const settled = { ...row, ...outcome, finishedAt };
     const view = gateView(settled);

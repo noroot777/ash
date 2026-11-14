@@ -7,6 +7,7 @@ import { cliCatalogNote, useCliModelCatalog } from "../lib/cliModelCatalog.ts";
 import { api } from "../lib/api.ts";
 import { Button } from "../components/ui.tsx";
 import { AutoTextarea } from "../components/AutoTextarea.tsx";
+import { localeTime } from "../lib/localeFormat.ts";
 
 type RefreshResult = { text: string; error: boolean };
 
@@ -52,7 +53,7 @@ export function ClaudeModelsSettings({ notify }: { notify: (message: string) => 
     try {
       const catalog = await cli.refresh();
       if (catalog?.source === "docs") {
-        return { text: `已从官方更新模型目录 · ${catalog.models.length} 个候选 · ${new Date(catalog.probedAt ?? Date.now()).toLocaleTimeString()}`, error: false };
+        return { text: `已从官方更新模型目录 · ${catalog.models.length} 个候选 · ${localeTime(catalog.probedAt ?? Date.now())}`, error: false };
       }
       return { text: `官方目录未更新：${refreshFailure(catalog)}`, error: true };
     } catch (error) {

@@ -145,5 +145,16 @@ export async function testGateEntry(ctx: Ctx): Promise<void> {
     "起跑前看到：被测快照 package.json 的 scripts 里没有 test:accept（这一项核不准，npm 可能按配置去别处找）。");
   assert.match(script.view.logTail, /Missing script/, "原始报错就摆在旁边");
 
-  console.log("accept gate entry: 入口文件不在树里=不起跑+确定的一句话（目标分支有/没有）/ 入口在树里照常红 / 穿过软链的入口按内核解析 / 目标树里软链只说没读出来 / npm 脚本核不准照常跑、只并排摆事实 全部通过");
+  // ⑤ 配了准备命令就不核入口（准备命令可以生成它）：起跑前快照里没有的脚本照样起跑、照实红。
+  await db.update(projects).set({ acceptGatePrepare: "printf '#!/bin/sh\\nexit 6\\n' > made-by-prepare.sh && chmod +x made-by-prepare.sh" })
+    .where(eq(projects.id, projectId));
+  const prepared = await again("./made-by-prepare.sh");
+  assert.notEqual(prepared.row.pid, null, "准备命令生成的入口必须真的起跑");
+  assert.equal(prepared.row.entryProbe, null, "配了准备命令就不核");
+  assert.equal(prepared.row.failure, "exit_code");
+  assert.equal(prepared.row.exitCode, 6, "跑的就是准备命令生成的那个脚本");
+  assert.equal(prepared.view.entryNote, null);
+  await db.update(projects).set({ acceptGatePrepare: null }).where(eq(projects.id, projectId));
+
+  console.log("accept gate entry: 入口文件不在树里=不起跑+确定的一句话（目标分支有/没有）/ 入口在树里照常红 / 穿过软链的入口按内核解析 / 目标树里软链只说没读出来 / npm 脚本核不准照常跑、只并排摆事实 / 配了准备命令不核入口 全部通过");
 }

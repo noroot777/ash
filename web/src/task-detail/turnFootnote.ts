@@ -24,7 +24,9 @@ export type FootnotePart =
   /** 一条时间线记录（里程碑 / 要你知道的）。 */
   | { kind: "event"; id: string; at?: string; view: NoticeView; item?: EventItem }
   /** 这一轮异常结束（刷新以后从会话行认出来的，见 turnFailure）。 */
-  | { kind: "failure"; id: string; at?: string; view: NoticeView };
+  | { kind: "failure"; id: string; at?: string; view: NoticeView }
+  /** 一轮审查为什么没给出结论（按轮次身份从审查状态取的，见 reviewNoVerdictCause）。 */
+  | { kind: "cause"; id: string; at?: string; view: NoticeView };
 
 export type TurnFootnote = {
   id: string;

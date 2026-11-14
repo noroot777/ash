@@ -213,6 +213,17 @@ export async function monitorsBlockingComplete(taskId: string): Promise<string |
 }
 
 /**
+ * 名下还有没了结的哨兵吗 —— 跟完成闸拦的是**同一个集合**(四类、同一份审查豁免)。
+ *
+ * 第二个提问者是队列(queue-monitor-hold.ts):停在 paused 上、而这里答「有」的成员是在等哨兵,
+ * 不是在等续跑。两边问的是同一件事 ——「这个任务还有一份结果没收下」,所以不另写一份判据。
+ */
+export async function hasUnsettledMonitors(taskId: string): Promise<boolean> {
+  const { live, unread, inflight, handed } = await blockingSets(taskId);
+  return live.length + unread.length + inflight.length + handed.length > 0;
+}
+
+/**
  * 同上,外加「结果排着没送到」「交过、还没确认送到」两类各几条(完成那一刻要不要当场交给它,见
  * task-complete.ts)。`withHanded: false` = 刚交完、这一次返回正带着它们:那一类不算进这句话。
  */

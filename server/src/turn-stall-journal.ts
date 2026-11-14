@@ -42,6 +42,7 @@
 import {
   closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync,
 } from "node:fs";
+import type { ModelFailure } from "@ash/shared";
 import { resolveAshDbFile } from "./db/path.js";
 import { now } from "./util.js";
 
@@ -62,6 +63,8 @@ export interface StallVerdictRecord {
    * 读的一侧按可选处理:退回 `at` 是诚实的退路(撤不掉旧标记,但也碰不到别人的)。
    */
   since?: string;
+  /** 卡住它的那条错误的模型 API 类型(StallVerdict.model)。旧记录没有 = 认不出。 */
+  model?: ModelFailure | null;
 }
 
 /**

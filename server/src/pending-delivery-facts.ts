@@ -11,7 +11,7 @@ import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
 import { withAfterGates, type AfterGate } from "./pending-after.js";
 import { deliveryVerdict, pendingExecutionIntent, type DeliveryVerdict } from "./pending-verdict.js";
-import { queueBlockers } from "./queues.js";
+import { queueBlockerDetails, type QueueBlocker } from "./queues.js";
 import { reviewDeliveryBlocked, reviewDeliveryFrom } from "./review-ownership.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
@@ -23,6 +23,8 @@ export interface DeliveryFacts {
   /** 这一次投递会开执行回合，要认领队列执行占位。 */
   needQueueCheck: boolean;
   queueBlocked: boolean;
+  /** 挡路的是哪几条(带标题,在跑的排前);没问队列或没被挡时为空。托盘的等待说明点名用。 */
+  queueBlocking: QueueBlocker[];
   groupPaused: boolean;
 }
 
@@ -41,7 +43,8 @@ export async function deliveryVerdictOf(m: Row & AfterGate, t: TaskRow | null, a
   const needQueueCheck =
     t != null && t.mode === "single" && !checkpointFollowUp
     && (m.execution || t.status === "paused" || t.status === "backlog");
-  const queueBlocked = needQueueCheck ? (await queueBlockers(m.taskId)).length > 0 : false;
+  const queueBlocking = needQueueCheck ? await queueBlockerDetails(m.taskId) : [];
+  const queueBlocked = queueBlocking.length > 0;
   const groupPaused =
     t != null && t.mode === "single" && m.execution && t.groupId
       ? !!(await db.select().from(groups).where(eq(groups.id, t.groupId))).at(0)?.paused
@@ -56,7 +59,7 @@ export async function deliveryVerdictOf(m: Row & AfterGate, t: TaskRow | null, a
   const reviewBlocked = await reviewDeliveryBlocked(reviewDeliveryFrom(m), m.taskId);
   const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, monitorSource, reviewBlocked,
     reviewUncertain: t.waitOwnership?.start?.phase === "uncertain" } : null, at);
-  return { verdict, facts: { checkpointFollowUp, needQueueCheck, queueBlocked, groupPaused } };
+  return { verdict, facts: { checkpointFollowUp, needQueueCheck, queueBlocked, queueBlocking, groupPaused } };
 }
 
 /**

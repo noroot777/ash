@@ -55,14 +55,20 @@ export interface ProjectMemberView {
 
 /**
  * `GET /api/auth/state` 的应答。前端整个 SPA 的第一道分叉靠它:
- * - `mode==="single"` → 直接进,零鉴权(现状)
+ * - `needsAccessKey` → 自用模式的配对页(排在最前:没认出机主之前别的都不答)
  * - `needsSetup` → 首启向导
- * - `user===null` → 登录页
+ * - `mode==="multi"` 且 `user===null` → 登录页
+ * - `mode==="single"` → 直接进
  */
 export interface AuthState {
   mode: InstanceMode;
   /** 模式还没定过(首启)。single 模式选定后恒为 false。 */
   needsSetup: boolean;
+  /**
+   * 自用模式下这次请求没被认成机主:既不是从 ash 所在的那台机器直接发的,也不是放进来
+   * 的设备、没带访问密钥。多人模式恒为 false(那边看 `user`)。
+   */
+  needsAccessKey: boolean;
   user: UserView | null;
   /** 多人模式的根目录(仅管理员可见完整值;普通用户看到的是自己那一层)。 */
   rootDir: string | null;
@@ -76,6 +82,64 @@ export interface AuthState {
    * 多人模式下没登录时恒为 false(那时该渲染登录页,「我还缺什么」也答不上)。
    */
   needsOnboarding: boolean;
+}
+
+/**
+ * 一台设备是怎么被放进来的:机主点了「允许」/ 扫了机主出示的二维码 / 粘了访问密钥。
+ * 换访问密钥时只有最后一种跟着失效。
+ */
+export type RemoteDeviceVia = "approval" | "code" | "key";
+
+/** 自用模式下机主放进来的一台设备(浏览器或手机 app)。 */
+export interface RemoteDeviceView {
+  id: string;
+  name: string;
+  via: RemoteDeviceVia;
+  createdAt: string;
+  lastSeenAt: string;
+  address: string;
+  /** 发这次请求的就是这台。 */
+  current: boolean;
+}
+
+/** 一台还在等机主点头的设备。`code` 两边各显示一份,对得上才是同一台。 */
+export interface PairRequestView {
+  id: string;
+  name: string;
+  address: string;
+  code: string;
+  createdAt: string;
+}
+
+/**
+ * `GET /api/remote-access`:自用模式下「谁能从别处连进来」。`key`(给脚本用的访问密钥)
+ * 只在本机直连时给 —— 连进来的设备看不到它,也换不了它。
+ */
+export interface RemoteAccessView {
+  local: boolean;
+  key?: string;
+  devices: RemoteDeviceView[];
+  requests: PairRequestView[];
+}
+
+/** 设备那一侧:`POST /api/auth/pair` 开出的申请,`secret` 是之后来领结果的凭据。 */
+export interface PairTicket {
+  id: string;
+  secret: string;
+  code: string;
+  expiresAt: string;
+}
+
+/** `POST /api/auth/pair/claim`:`token` 给带不了 cookie 的客户端(手机 app)当 Bearer 用。 */
+export type PairClaim =
+  | { status: "pending" | "denied" | "gone" }
+  | { status: "approved"; token: string };
+
+/** 机主出示的一次性二维码。`hosts` 是这台机器在各张网卡上的地址,由前端拼成能扫的链接。 */
+export interface PairCode {
+  code: string;
+  expiresAt: string;
+  hosts: string[];
 }
 
 /** 领取邀请链接时先看到的说明页数据(还没生成 key)。 */

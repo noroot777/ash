@@ -2,6 +2,7 @@ import type { ScheduledMessage } from "@ash/shared";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { isUserAuthoredMessage } from "@ash/shared/scheduled-message-author";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
+import { scheduledWaitText } from "@ash/shared/scheduled-message-wait";
 
 export type ScheduledMessageFilter = "all" | "mine" | "monitor" | "managed" | "system" | "attention";
 
@@ -80,4 +81,24 @@ export function scheduledMessageCounts(messages: ScheduledMessage[]): Record<Sch
     system: messages.filter((message) => scheduledMessageMatches(message, "system")).length,
     attention: messages.filter((message) => scheduledMessageMatches(message, "attention")).length,
   };
+}
+
+/**
+ * 托盘抬头那一句「什么时候发」。全是定时 / 等前置任务的,按条件说;其余照**队首那条**此刻在等
+ * 什么说(服务端下发的 `wait`,见 server/src/pending-wait.ts)——托盘按顺序处理,队首不动后面都
+ * 不动。说不出原因(没有挡着它的东西、旧服务端没带)就不说,不拿「等待当前一轮结束」顶上。
+ */
+export function scheduledTrayPace(ordered: ScheduledMessage[]): string | null {
+  const timed = ordered.filter((message) => message.mode === "timed").length;
+  const after = ordered.filter((message) => message.mode === "after").length;
+  if (timed === ordered.length) return "按设定时间发送";
+  if (after === ordered.length) return "等前置任务完成后发送";
+  if (timed + after === ordered.length) return "按设定时间或前置任务发送";
+  return scheduledWaitText(ordered.find((message) => message.mode === "queued")?.wait);
+}
+
+/** 这一行自己的等待说明:跟抬头那一句一样就不重复写。 */
+export function scheduledRowWait(message: ScheduledMessage, pace: string | null): string | null {
+  const text = scheduledWaitText(message.wait);
+  return text && text !== pace ? text : null;
 }

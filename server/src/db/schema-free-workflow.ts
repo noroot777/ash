@@ -5,6 +5,7 @@
 // **整份仍由 schema.ts 原样再导出**:drizzle 的 `import * as schema` 必须看到全部表,
 // 拆文件不能拆掉那个视图。
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
 import type { Client } from "./node-sqlite-client.js";
 
 /**
@@ -207,6 +208,9 @@ export const freeReviewRounds = sqliteTable(
     carries: text("carries", { mode: "json" }).$type<{ finding: number; from: string }[]>(),
     /** 这一轮的熔断修复**正处在哪个方向世代**（`tasks.direction_epoch`）；提问格式闸只认这个世代（review-recurrence-gate.ts）。 */
     breakerEpoch: integer("breaker_epoch"),
+    // 这一轮落 error 且没结论时判出的原因（review-no-verdict.ts）。每个审查回合收尾都按那一回合
+    // 重写一次（续本轮之后又断了，原因换成新那一次的），null = 没判过 / 老行。
+    noVerdict: text("no_verdict", { mode: "json" }).$type<ReviewNoVerdict>(),
     startedAt: text("started_at").notNull(),
     endedAt: text("ended_at"),
   },
@@ -305,7 +309,7 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
       dispute_reason TEXT, dispute_defer_reason TEXT, dispute_at TEXT,
       dispute_resolution TEXT, dispute_resolved_at TEXT, dispute_resolution_note TEXT,
       dispute_deferred_task_id TEXT, dispute_superseded_at TEXT, dispatch TEXT,
-      history_refs TEXT, carries TEXT, breaker_epoch INTEGER,
+      history_refs TEXT, carries TEXT, breaker_epoch INTEGER, no_verdict TEXT,
       started_at TEXT NOT NULL, ended_at TEXT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS free_review_rounds_run_round_idx
@@ -372,6 +376,8 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
     "ALTER TABLE free_review_rounds ADD COLUMN history_refs TEXT",
     "ALTER TABLE free_review_rounds ADD COLUMN carries TEXT",
     "ALTER TABLE free_review_rounds ADD COLUMN breaker_epoch INTEGER",
+    // 这一轮没结论的原因（review-no-verdict.ts）；老行留 null，界面照老样子显示。
+    "ALTER TABLE free_review_rounds ADD COLUMN no_verdict TEXT",
     // 内容锚点（审查开始时 / 驳回时）；老行留 null = 退回只比 HEAD + 干净。
     "ALTER TABLE free_review_rounds ADD COLUMN reviewed_fingerprint TEXT",
     "ALTER TABLE free_review_rounds ADD COLUMN disputed_fingerprint TEXT",

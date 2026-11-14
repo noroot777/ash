@@ -47,6 +47,16 @@ assert.equal(
 // 检查点暂停(有 resumePrompt、无 question)该被续跑
 assert.equal(selectNextInQueue([m("01", "paused"), m("02", "backlog")])?.id, "01");
 
+// 等哨兵的暂停(名下还有没了结的哨兵):跟提问暂停一样链停 —— 既不空手续跑它,也不越过它
+// 去起后面的。2026-11-13 的现场就是这一条:队列把刚暂停等哨兵的成员一次次叫起来白跑。
+assert.equal(
+  selectNextInQueue([m("01", "paused", { monitorHold: true }), m("02", "backlog")]),
+  null,
+  "等哨兵的暂停不续跑,也不越过它",
+);
+assert.equal(selectNextInQueue([m("01", "done"), m("02", "paused", { monitorHold: true }), m("03", "backlog")]), null);
+assert.equal(selectNextInQueue([m("01", "paused", { monitorHold: false }), m("02", "backlog")])?.id, "01", "检查点暂停不是等哨兵");
+
 // 归档成员仍占位置但不参与调度;团队任务(无终态)防御性跳过
 assert.equal(selectNextInQueue([m("01", "backlog", { archived: true }), m("02", "backlog")])?.id, "02");
 assert.equal(selectNextInQueue([m("01", "running", { archived: true }), m("02", "backlog")])?.id, "02");

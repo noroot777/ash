@@ -29,6 +29,7 @@ import { FeishuWsClient, type ConnStatus, type FeishuEnvelope } from "./feishu/w
 import { InboundRouter, type MessageEvent } from "./inbound.js";
 import { readMeta, readOptions, writeMeta } from "./meta.js";
 import type { OutboxSender } from "./outbox.js";
+import { PairingCards } from "./pairing.js";
 import { QuotaMeter } from "./quota.js";
 import { Reconciler } from "./reconcile.js";
 import { RoomRelay } from "./relay.js";
@@ -51,6 +52,7 @@ interface Running extends FeishuRuntime {
   relay: RoomRelay;
   inbound: InboundRouter;
   actions: CardActions;
+  pairing: PairingCards;
   sweep: ReturnType<typeof setInterval>;
   unsubscribe: () => void;
 }
@@ -130,6 +132,7 @@ async function tearDown(): Promise<void> {
   clearInterval(current.sweep);
   current.ws.stop();
   current.relay.stop();
+  current.pairing.stop();
   current.reconciler.stop();
   current.sender.stop();
 }
@@ -156,6 +159,7 @@ async function bringUp(): Promise<void> {
   running.ws.start();
   running.sender.start();
   running.relay.start();
+  running.pairing.start();
   const self = running;
   // 三件事各自兜底：取机器人信息、接管按钮失败了也照样对账（对账不靠它们）。
   void (async () => {
@@ -184,6 +188,7 @@ function assemble(credentials: FeishuCredentials, fetch: AppFetch): Running {
   const commands = new CommandRunner({ appId, ash, reconciler });
   const actions = new CardActions({ appId, ash, reconciler, sender, commands });
   const relay = new RoomRelay({ appId, ash, commands });
+  const pairing = new PairingCards({ appId, reconciler });
   let runtime: Running | null = null;
   const inbound = new InboundRouter({ appId, api, ash, commands, relay, reconciler, botOpenId: () => runtime?.bot?.openId ?? null });
   const ws = new FeishuWsClient({
@@ -213,7 +218,7 @@ function assemble(credentials: FeishuCredentials, fetch: AppFetch): Running {
   const sweep = setInterval(() => void reconciler.full().catch((error) => console.error("[ash] 飞书定时对账出错:", error)), FULL_SWEEP_MS);
   sweep.unref?.();
   const config = { appId, domain: credentials.domain, updatedAt: credentials.updatedAt };
-  runtime = { appId, config, api, ws, sender, reconciler, relay, inbound, actions, bot: null, sweep, unsubscribe };
+  runtime = { appId, config, api, ws, sender, reconciler, relay, inbound, actions, pairing, bot: null, sweep, unsubscribe };
   return runtime;
 }
 

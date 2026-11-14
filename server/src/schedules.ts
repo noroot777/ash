@@ -8,8 +8,10 @@ import { schedules, tasks, groups } from "./db/schema.js";
 import { runTask } from "./orchestrator.js";
 import { runDuet } from "./duet/index.js";
 import { deliverPendingMessages, reclaimStaleDeliveries } from "./pending-messages.js";
+import { restoreFollowUpAnswers } from "./legacy-answer-intent.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { replayQueueAdvances } from "./queue-advance-retry.js";
+import { sweepReleasedQueueMembers } from "./queue-monitor-hold.js";
 import { reportSuspectTurns } from "./turn-lock-reclaim.js";
 
 // ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
@@ -150,6 +152,8 @@ export async function tick() {
   // 排队消息的正常触发源是任务落终态时的钩子,这里是定时消息的到期路径兼兜底。
   await deliverPendingMessages();
   await replayQueueAdvances();
+  // 等过哨兵、放开了却没人推的队列成员:事件那一路漏掉时由这里接住(queue-monitor-hold.ts)。
+  await sweepReleasedQueueMembers().catch((error) => console.error("[ash] 欠着的队列推进巡检出错:", error));
 }
 
 // Catch-up on startup: missed one-shots (at < now, never fired) fire once via the
@@ -158,8 +162,12 @@ export async function tick() {
 export function startScheduler(intervalMs = 30_000) {
   // 先回收上一个进程留下的投递租约,再跑第一次 tick:被重启掐在「已认领、还没送到」
   // 当口的排队/定时消息,靠这两步在开机后立刻补发出去(见 pending-messages.ts 的租约一节)。
+  // 中间那一步把旧版落下的、其实是续聊的执行型答复认回来(legacy-answer-intent.ts),
+  // 第一次 tick 就按续聊送出去,不再等整条队列。
   void reclaimStaleDeliveries()
     .catch((err) => console.error("[ash] reclaimStaleDeliveries failed:", err))
+    .then(() => restoreFollowUpAnswers())
+    .catch((err) => console.error("[ash] restoreFollowUpAnswers failed:", err))
     .then(() => tick());
   setInterval(() => void tick(), intervalMs);
   console.log("[ash] scheduler started");

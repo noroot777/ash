@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import { ACCEPT_GATE_FAILURE_LABELS } from "@ash/shared/accept-gate";
 import { db } from "./db/index.js";
 import { acceptGateRuns, type tasks } from "./db/schema.js";
 import { gateLogFileNames } from "./accept-gate-diagnosis.js";
@@ -11,7 +12,11 @@ export type HandoffGateRun = Pick<GateRow, "id" | "command" | "status" | "exitCo
   | "targetBranch" | "targetCommit" | "fastForward" | "startedAt" | "finishedAt" | "handoffAt" | "handoffError">
   // entryProbe 可选：旧 manifest 没有这个字段，迁入后按 null 处理（没核过）。卡片上入口那句话
   // 由它现算，不带上的话迁入之后那句话就没了。
-  & { executionMode?: GateRow["executionMode"]; entryProbe?: GateRow["entryProbe"] };
+  & { executionMode?: GateRow["executionMode"]; entryProbe?: GateRow["entryProbe"];
+    // 这一次先跑的准备命令。不搬的话迁入后那条「准备没过」读不出是哪条命令没过。旧 manifest 没有 → null。
+    prepareCommand?: GateRow["prepareCommand"] };
+/** 读得进来的失败类别：当前那一整套（跟着标签表走，加一类不会漏在这里）加上已经撤掉、旧 payload 里还可能有的。 */
+const IMPORTABLE_FAILURES: readonly (string | null)[] = [null, ...Object.keys(ACCEPT_GATE_FAILURE_LABELS), "command_missing"];
 const validId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 
 const ACCEPTANCE_FACTS = ["acceptedSourceCommit", "acceptedTargetBranch", "acceptedBaseCommit", "acceptedMergeCommit",
@@ -44,9 +49,9 @@ export function validateGatePayload(manifest: HandoffManifest): void {
       || typeof run.command !== "string" || typeof run.startedAt !== "string"
       // `command_missing` 这个类别已经撤掉了(第 10 轮审查 F1),但**旧机器导出的 payload 里
       // 可能还有**:读得进来、不许卡住导入;产生端再也不会写它。
-      || ![null, "exit_code", "timeout", "spawn_failed", "server_restarted", "canceled", "source_changed", "process_unconfirmed", "ownership_waived", "entry_missing", "command_missing"].includes(run.failure)
+      || !IMPORTABLE_FAILURES.includes(run.failure)
       || (run.exitCode != null && !Number.isInteger(run.exitCode))) throw new HandoffError("acceptGateRuns 记录非法");
-    for (const field of ["sourceCommit", "targetBranch", "targetCommit", "finishedAt", "handoffAt", "handoffError", "entryProbe"] as const) {
+    for (const field of ["sourceCommit", "targetBranch", "targetCommit", "finishedAt", "handoffAt", "handoffError", "entryProbe", "prepareCommand"] as const) {
       if (run[field] != null && typeof run[field] !== "string") throw new HandoffError(`acceptGateRuns.${field} 非法`);
     }
     if (run.fastForward != null && typeof run.fastForward !== "boolean") throw new HandoffError("acceptGateRuns.fastForward 非法");
@@ -73,7 +78,7 @@ export async function collectGateRuns(taskId: string): Promise<HandoffGateRun[]>
     failure: row.failure, sourceCommit: row.sourceCommit, targetBranch: row.targetBranch, targetCommit: row.targetCommit,
     fastForward: row.fastForward, startedAt: row.startedAt, finishedAt: row.finishedAt,
     handoffAt: row.handoffAt, handoffError: row.handoffError, executionMode: row.executionMode,
-    entryProbe: row.entryProbe }));
+    entryProbe: row.entryProbe, prepareCommand: row.prepareCommand }));
 }
 
 /**
@@ -104,6 +109,7 @@ export async function replaceGateRuns(store: Pick<typeof db, "select" | "delete"
     ...row, taskId: manifest.task.id, projectId: manifest.targetProjectId,
     cwd: "（跨机迁入的历史快照，当前机器不可重跑）", logPath: transferredLogPath(manifest, row.id),
     entryProbe: row.entryProbe ?? null,
+    prepareCommand: row.prepareCommand ?? null,
     sourceFingerprint: null, pid: null, pidStartedAt: null, processPending: false, acceptOptions: null,
   })));
 }
