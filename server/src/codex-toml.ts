@@ -24,10 +24,8 @@ export type CodexTomlScan = {
    * 某个值的写法不认识 —— 这些都让「这份配置里没有 ash」这句话说不出口，但**不影响**已经
    * 正面认出来的根级登记。
    *
-   * 分开这两档是第 2 轮审查 F1 打出来的：上一版 `codexInjectionTarget` 见 `doubt` 就不注
-   * 回合身份,而一份合法配置里只要有个叫 mcp_servers 的 profile(`[profiles.mcp_servers]`)
-   * 就会答 doubt —— 真 codex 列得出 ash、也接受那条 `-c` 覆盖,我们却把身份注入整个取消了:
-   * Windows 上派审当场被拒,mac 上审查跑完交不了卷。
+   * 分开这两档的理由:一份合法配置里只要有个叫 mcp_servers 的 profile(`[profiles.mcp_servers]`)
+   * 就会答 doubt,而真 codex 读得好好的 —— 拿 doubt 当 unreadable 会把一份能用的配置判成读不懂。
    */
   unreadable: string | null;
   /**
@@ -527,26 +525,6 @@ export function tomlRootStringArray(text: string, key: string): string[] | null 
     if (root && stmt.path.length === 1 && stmt.path[0] === key) return tomlStringArray(stmt.value);
   }
   return null;
-}
-
-/**
- * 执行器往哪个名字里注入 `-c mcp_servers.<名>.env_vars=…`（回合身份靠它进 MCP 子进程）。
- *
- * 只认扫描器**正面认出来**的登记 —— 往一个没声明的名字里塞 `-c`，codex 整份配置都起不来
- * （实测 codex-cli 0.153：`invalid transport in mcp_servers.harness`）。带引号的表头、内联表
- * 都接受不带引号的 `-c` 覆盖（同版本实测）。两个兼容名都在时取开着的那个，都开着取规范名。
- *
- * **切不开就什么都不注，但「哪里有疑问」不算切不开**（第 5 轮 F2 + 第 2 轮 F1）：只有
- * `unreadable`（连语句都切不开，认出来的可能是字符串里的示例）才取消注入；`doubt` 不行 ——
- * 它连「别的命名空间里恰好有个字段叫 mcp_servers」都算进去，而那种配置真 codex 读得好好的、
- * 也接受这条 `-c` 覆盖（第 2 轮 F1 真机取证：上一版在那里返回 null，Windows 上派审当场被
- * 拒、mac 上审查跑完交不了卷）。两档的区别见 `CodexTomlScan.unreadable`。
- */
-export function codexInjectionTarget(text: string): string | null {
-  const { servers, unreadable } = scanCodexToml(text);
-  if (unreadable) return null;
-  const names = WANTED.filter((n) => servers.has(n));
-  return names.find((n) => servers.get(n)!.enabled) ?? names[0] ?? null;
 }
 
 export type TomlPairSpan = { table: string[]; path: string[]; first: number; last: number; value: string };

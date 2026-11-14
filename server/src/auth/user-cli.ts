@@ -21,7 +21,8 @@ import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync
 import { join } from "node:path";
 import type { AgentType, PersonalCliEnv, PersonalSkill } from "@ash/shared";
 import { DATA_DIR } from "../paths.js";
-import { ensureAshMcp, ashMcpRegistration, hostCliConfigDir, hostCliConfigFile } from "./user-cli-mcp.js";
+import { injectsAshMcp } from "../executors/ash-mcp-inject.js";
+import { ensureAshMcp, ashMcpRegistration, hostCliConfigDir, hostCliConfigFile, INJECTED_ASH_MCP } from "./user-cli-mcp.js";
 
 /** 个人配置目录的根。刻意放 data/ 下 —— 见文件顶部。 */
 export const USER_CLI_ROOT = join(DATA_DIR, "user-cli");
@@ -65,32 +66,21 @@ export function userCliDir(userId: string, agentType: string): string {
 /**
  * 建目录并写下最小 seed。幂等 —— 已存在的文件一律不覆盖(用户可能已经改过)。
  *
- * seed 只有三样,都属于「确定无害」:
+ * seed 只有两样,都属于「确定无害」:
  *  · `skills/` 空目录:让「个人技能」这一层从第一天起就存在,不必等第一次上传。
  *  · claude 的 `.claude.json`:只写 onboarding 完成标记。CLI 首跑会自己在这个目录里
  *    生成这份文件(探针②),我们只是把「别再问一遍引导问题」这一位先摆好。
  *    **不预置任何 model / permissions / env** —— 那些会改变 CLI 行为,而探针③ 表明
  *    带 key 的首跑本来就有一个未定位的挂起,再加变量只会让排查更难。
- *  · **ash MCP 的登记**(`user-cli-mcp.ts`):它不是「改变 CLI 行为的开关」,而是完成
- *    协议本身 —— 没有它 agent 调不到 `complete_task`,干完的活一律显示成失败。缺了
- *    才写、已有不覆盖,所以对已经跑起来的目录也是安全的补做。
+ *
+ * **不写 ash MCP 登记**:有个人目录的这几家(claude / codex)起跑时由 ash 注入自己的 MCP
+ * (`executors/ash-mcp-inject.ts`),个人目录里有没有那条登记都不影响交卷。
  */
 export async function ensureUserCliDir(userId: string, agentType: AgentType): Promise<string | null> {
-  const dir = seedUserCliDir(userId, agentType);
-  if (!dir) return null;
-  await ensureAshMcp(dir, agentType);
-  return dir;
+  return seedUserCliDir(userId, agentType);
 }
 
-/**
- * 只建目录、只写 seed,**不碰 ash MCP 登记**。
- *
- * 为什么分出来:补登记那一步要把候选配置交给 CLI 本人解析一遍(`user-cli-mcp.ts` 的
- * `codexAccepts`),那是一次带归属的异步子进程 —— 于是 `ensureUserCliDir` 必须 await。
- * 而「存个人技能 / 存个人全局指令」这类调用只需要「目录在」,没有理由为此起一次 codex,
- * 所以它们走这一条同步的。**起跑前(`cliConfigEnvFor`)、设置页(`personalCliEnv`)、
- * 启动补做(`sweepPersonalAshMcp`)三处必须走上面那条**,登记缺了要在那三处补上。
- */
+/** 同 `ensureUserCliDir`,同步版。 */
 export function seedUserCliDir(userId: string, agentType: AgentType): string | null {
   if (!configDirEnvVar(agentType)) return null;
   const dir = userCliDir(userId, agentType);
@@ -188,8 +178,6 @@ export async function personalCliEnv(userId: string, agentType: AgentType): Prom
       ashMcp: null,
     };
   }
-  // 目录先建出来,登记那一问下面只走**一次**(`ensureUserCliDir` 自己也会补,在这儿调它就是
-  // 问两遍;这一屏正是用来看「补上了没有」的,所以答案要现问的那一份)。
   const dir = seedUserCliDir(userId, agentType)!;
   const memoryName = MEMORY_FILE[agentType] ?? null;
   const memoryFile = memoryName ? join(dir, memoryName) : null;
@@ -203,69 +191,43 @@ export async function personalCliEnv(userId: string, agentType: AgentType): Prom
     memoryName,
     hasMemory: !!memoryFile && existsSync(memoryFile),
     plugins: readPlugins(dir),
-    // 用户手工改完刷新页面就该看到新状态,所以这里是现问的,不是启动那次的缓存结果。
-    ashMcp: await ensureAshMcp(dir, agentType),
+    // 起跑时注入的那几家不看目录里的登记;其余的现问(用户手工改完刷新页面就该看到新状态)。
+    ashMcp: injectsAshMcp(agentType) ? INJECTED_ASH_MCP : await ensureAshMcp(dir, agentType),
   };
 }
 
 /**
  * 共用宿主 CLI 的那一档（含自用模式）：宿主配置里缺 ash MCP 时**出声，但一个字节都不改**。
  *
- * 边界见 `user-cli-mcp.ts` 开头那条：那些是用户自己的配置文件。但「不该改」不等于
- * 「不该说」—— 2026-10-28 现场正是一台 `~/.codex/config.toml` 里从来没有过
- * `[mcp_servers.ash]` 的机器：codex 任务干完活交不了卷、一律记 failed，一轮审查更是
- * 跑满 35 分钟写完报告，最后才发现没有 `report_stage` 可调，而 ash 全程一言不发。
+ * 只看**不注入**的那几家（claude / codex 起跑时由 ash 注入，见 `executors/ash-mcp-inject.ts`），
+ * 而且只读一次它们自己的配置文件、不起 CLI —— 那几家的退路就是自己配置里的登记，读出来
+ * 确实没有（或关着）才说一句。没装的 CLI 不报：配置文件不在、PATH 上也找不到它就跳过。
  */
 async function warnHostAshMcp(): Promise<void> {
-  const gaps: { line: string; basis: "cli" | "file"; agentType: string }[] = [];
-  // **逐家问,不再只问 claude / codex**(2026-10-31):另外十三家原来压根没有登记逻辑,
-  // 预检也一律放行,于是「换个 agent 跑任务全是 failed」这件事启动日志一个字都不说。
-  // 这台机器上没装的那几家不会出现在这里 —— `hostAshMcpGap` 找不到 CLI 就不报缺口。
+  const gaps: string[] = [];
   const { AGENT_TYPES } = await import("@ash/shared");
+  const { cliSpec } = await import("../executors/catalog/index.js");
+  const { resolveBin } = await import("../executors/bin-resolve.js");
   for (const agentType of AGENT_TYPES) {
+    if (injectsAshMcp(agentType)) continue;
     const file = hostCliConfigFile(agentType);
-    // **不拿「配置文件在不在」当「这个 CLI 用没用过」**：装了 codex、从没写过 config.toml 的
-    // 机器正是最该出声的那种 —— 派审那道门禁对同一个形状答的是「确实没有」（新链第 2 轮审查
-    // 第 3 条）。「这台机器上有没有这个 CLI」由 `hostAshMcpGap` 自己判（找不到 CLI 就不报缺口），
-    // 跟派审用同一份解析，这里不另起一份。
-    if (!file) continue;
     const dir = hostCliConfigDir(agentType);
-    // 两道判据，顺序有意：**先用配置文件快速放过**（已经接好的机器零开销），只有它说
-    // 「没有」或「关着」才去确认。快速通道**只许省掉那次确认，不许替它下「没问题」的结论**：
-    // 上一版只看「不是 absent」就放过，`enabled = false` 的登记读出来是「在」，于是那道
-    // 本来算得出「没启用」的 CLI 确认被跳过（新链第 1 轮审查第 2 条）。所以只有明确的
-    // present 才放过；读不出来（unknown）也放过 —— 那时确认那一道同样问不出结论。
-    const quick = dir ? ashMcpRegistration(dir, agentType).state : "unknown";
-    if (quick === "present" || quick === "unknown") continue;
-    const { hostAshMcpGap } = await import("../ash-mcp-reachability.js");
-    const gap = await hostAshMcpGap(agentType);
-    if (!gap) continue;
-    gaps.push({ line: `${agentType}（${file}）：${gap.problem}`, basis: gap.basis, agentType });
+    if (!file || !dir) continue;
+    if (!existsSync(file) && !cliSpec(agentType).bins.some((bin) => resolveBin(bin))) continue;
+    const found = ashMcpRegistration(dir, agentType);
+    if (found.state === "absent" || found.state === "disabled") gaps.push(`${agentType}（${file}）：${found.detail}`);
   }
   if (!gaps.length) return;
-  // 措辞里的「这台机器的默认配置下」不是客套：这里问的是**宿主默认上下文** ——
-  // `hostAshMcpGap` 没有任务目录、没有执行器 profile，而 claude 的项目级登记
-  // (`--scope local`)和 codex 的 `-c mcp_servers.…` 覆盖都能让某条具体任务照样有工具。
-  // 派审那道门禁(`ashMcpReachability`)才问得到那些,所以这行启动日志只敢说默认配置。
-  //
-  // 证据来源也要说实话：问不了 CLI 本人的机器上（macOS 等，见 ash-mcp-reachability.ts
-  // 「问不了 CLI 时」）结论来自配置文件，措辞降一档成「看配置像是没登记」。
-  const fromCli = gaps.every((g) => g.basis === "cli");
-  console.warn((fromCli
-    ? "[ash] 这些 CLI 在这台机器的默认配置下自己报告没有可用的 ash MCP 登记，"
-    : "[ash] 看这台机器的默认配置，这些 CLI 像是没有可用的 ash MCP 登记（读配置得出，没经 CLI 本人确认），")
-    + "这么跑起来的 agent 交不了卷"
-    + "（没有 complete_task，干完的活会记 failed；派出去的审查跑完也给不出结论）：");
-  for (const g of gaps) console.warn(`  · ${g.line}`);
-  const named = gaps.map((g) => g.agentType);
-  const selfCheck = [
-    named.includes("claude") ? "claude mcp get ash" : null,
-    named.includes("codex") ? "codex mcp list --json" : null,
-  ].filter(Boolean).join(" / ");
-  console.warn(`  自查：${selfCheck ? `${selfCheck}，其余几家看上面那几个路径。` : "看上面那几个路径。"}`
-    + "接法见 docs/install.md，或在仓库根跑一次 npm run setup（已有登记不会被覆盖）。");
+  console.warn("[ash] 看这台机器的默认配置，这些 CLI 没有可用的 ash MCP 登记（ash 不替它们注入），"
+    + "这么跑起来的 agent 交不了卷（没有 complete_task，干完的活会记 failed）：");
+  for (const line of gaps) console.warn(`  · ${line}`);
+  console.warn("  接法见 docs/install.md，或在仓库根跑一次 npm run setup（已有登记不会被覆盖）。");
 }
 
+/**
+ * 启动时那一趟：共用档提示宿主配置的缺口；隔离档的个人目录只有 claude / codex 两家，
+ * 都由 ash 起跑时注入，不需要补登记 —— 这里只把目录建好。
+ */
 export async function sweepPersonalAshMcp(): Promise<void> {
   // 动态 import:mode.ts / db 都在 auth 这一圈里绕回来,顶层导入会绕出一个环。
   const { isHostCliIsolated } = await import("./mode.js");
@@ -277,7 +239,7 @@ export async function sweepPersonalAshMcp(): Promise<void> {
   for (const row of rows) {
     for (const type of PERSONAL_CLI_TYPES) {
       const dir = await ensureUserCliDir(row.id, type);
-      if (!dir) continue;
+      if (!dir || injectsAshMcp(type)) continue;
       const state = await ensureAshMcp(dir, type);
       // 只取第一行:补不上时那句话里会带上「要手工加的那段」(整段 TOML),一台机器上每个用户
       // 都印一遍会把启动日志冲掉。完整的那一份在设置页/`GET /me/cli-env` 里。

@@ -234,6 +234,10 @@ factory: (opts) => new FooExecutor(opts),
 `pause_task` / `report_stage`)。一家 CLI 接不上它,用它跑的任务干完活也交不了卷,界面上只看得到
 「失败」—— 用户 2026-10-30 实测到的就是这个:claude / codex 之外的十三家压根没有注册逻辑。
 
+**claude / codex 不靠这张表**(2026-11-14 起):起跑时由 ash 把自己的 MCP 注入进去,连没连上
+以 CLI 启动时自己报的为准(`executors/ash-mcp-inject.ts`)。表里这两行只在独立 app 首启替本机
+CLI 接 ash 那一下用得到;其余十三家的退路仍是它们自己配置里的登记。
+
 **表本体是代码,不是这段文字**:`server/src/mcp-registry/catalog.ts`(`satisfies Record<AgentType,…>`
 保证新增执行器时编译不过,逼着当场给结论)。下面这张是给人读的同一份内容,
 `npm -w server run test:ash-mcp-registry` 会逐行比对它和代码里那张表,对不上就红。
@@ -278,7 +282,7 @@ factory: (opts) => new FooExecutor(opts),
     白名单里是常态,拿它判会把一份完全可用的配置说成关着的),而且绝不替用户改那两个名单。
   格式族只负责**结构读取**:条目上那两个布尔之外的开关一律由逐家声明进来(本轮审查 F2)。
 - **kimi 没有 `mcp` 子命令**(`kimi mcp add` 报 unknown command),只能我们写文件,也就没法拿它
-  自己的输出复核;预检对它只有「读配置」这一档依据。
+  自己的输出复核。
 - **opencode 会读好几份配置,判的是「几份合起来最终生效的那一条」**(真 CLI 逐格实测,全部
   记在那家的 `source` 里)。**六层**来源,优先级从低到高:默认目录(`config.json` <
   `opencode.json` < `opencode.jsonc`,**三份都读**;`config.json` 这个名字**只在默认目录**算)、
@@ -288,12 +292,11 @@ factory: (opts) => new FooExecutor(opts),
   `{"enabled": false}` ⇒ 命令留着、开关被关掉(真 CLI 报 `ash disabled`);嵌套的
   `environment` 按键合、数组整条替换。所以判据只能是 `resolveAshMcp`
   (`mcp-registry/register.ts`),而且必须是**合完那一条**——「任一份里有就算有」会把已经被
-  关掉的说成已接好;「只看写入目标那一份」会把本来连得上的判成 absent(预检里 absent 是硬拒);
+  关掉的说成已接好;「只看写入目标那一份」会把本来连得上的判成 absent;
   「挑一份赢家」会把跨来源继承来的启动命令整个丢掉(高优先级那份只写 `{"enabled": true}` 时,
   搬进隔离档的就只有这一个键,真 CLI 在那边一个服务都没有)。这件事由站点上的 `sourcesMerge`
   声明 ——它同时表示**加载序**和**逐字段合并**语义都实测过,**只给实测过的家置真**;kilo 的
-  `KILO_CONFIG` 形状一样但没真 CLI 可问,几份来源结论不一致时判定一律回 unknown(不写、也不
-  拦起跑)。合并还有三条实测约束,少一条就会把「连得上」和「连不上」算反:
+  `KILO_CONFIG` 形状一样但没真 CLI 可问,几份来源结论不一致时判定一律回 unknown(不写)。合并还有三条实测约束,少一条就会把「连得上」和「连不上」算反:
   ① **逐份投影**:条目是三支并集,没写 `type` 的那一支只认 `enabled` —— 哪一份来源写成开关就
   只贡献这一个键(低的那份、高的那份都一样),所以投影做在 `shapes.ts` 的 `opencodeFact` 里、
   `mergeFacts` 两边一视同仁;只过滤高的那份会让低那份里本该被丢掉的 `environment` 活下来,
@@ -308,13 +311,7 @@ factory: (opts) => new FooExecutor(opts),
   absent 并据此硬拒、安装器还新写一条把生效 `ASH_URL` 换掉了):
   ④ **指到文件的变量给相对路径时按 CLI 自己的工作目录解** —— 所以 `ashMcpHostSources` 吃一个
   `cwd`:知道那个目录就解准,不知道就把这份来源标成**证不出来**(`AshMcpSource.unprovable`),
-  整体回 unknown(不拦人、不写,也永不当写入落点)。判定那一档按**每个候选工作目录各解一遍**,
-  结论不一致同样回 unknown —— 那一轮究竟跑在哪个目录,ash 定不了。
-  ⑤ **「确定没有」要可证**:站点上的 `loadMeasured` 才是 absent 的闸(目前只有 opencode 置真)。
-  没逐格实测过读取位置的家,「枚举到的几份里都没有」只答 unknown、放行并在预检里说一句 ——
-  absent 在派审那一关是硬拒,而那种「没找到」可能只是我们不知道它还读哪儿。安装器**不看**这一位
-  (它问的是「看得见的里面有没有」,追加不覆盖任何已有登记),否则十三家的 `npm run setup` 一条
-  都写不出来。
+  整体回 unknown(不写,也永不当写入落点)。
 - **opencode / kilo 不是 `mcpServers` 那一族**:容器叫 `mcp`、`command` 是整条 argv 数组、环境
   变量键叫 `environment`。
 - **antigravity 别和 gemini 搞混**:两家都住 `~/.gemini` 下,但 gemini 读 `settings.json`、
