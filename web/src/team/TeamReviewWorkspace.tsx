@@ -1,32 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Session, Task, TaskListItem } from "@ash/shared";
-import { hasPendingAcceptCommit, taskDisplayStatus } from "@ash/shared";
-import { acceptPlan, isFinalHumanGate } from "@ash/shared/workflow-policy";
-import { acceptanceMessage, mergeTargetLabel } from "@ash/shared/accept-message";
-import { ArrowsClockwise, CaretDown, CheckCircle, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
+import { taskDisplayStatus } from "@ash/shared";
+import { CaretDown, SpinnerGap } from "@phosphor-icons/react";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
-import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
+import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { useTaskBody } from "../lib/useTaskBody.ts";
-import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
-import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
 import { parseAttachmentText } from "../task-detail/utils.ts";
-import { ChangeMetaBar, worktreeLabel } from "../review/ChangeMetaBar.tsx";
 import { ReviewDiffViewer } from "../review/ReviewDiffViewer.tsx";
-import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
-import { BranchAcceptancePanel } from "../review/BranchAcceptancePanel.tsx";
-import { useBranchPlan } from "../review/useBranchPlan.ts";
-import { UnexecutedVerificationNotice, useAcceptanceVerification } from "../review/UnexecutedVerificationNotice.tsx";
-import { AcceptCommitChoice, useAcceptCommitDefault } from "../review/AcceptCommitChoice.tsx";
-import { PendingMergeCard } from "../review/PendingMergeCard.tsx";
-import type { AcceptGateView } from "@ash/shared/accept-gate";
-import { ACCEPT_GATE_STATUS_LABELS } from "@ash/shared/accept-gate";
-import { AcceptGateCardView } from "../review/AcceptGateCard.tsx";
-import { useAcceptGate } from "../review/useAcceptGate.ts";
-import { AcceptanceWorkspaceCommit, AutoCommitOutcomeNotice } from "../review/AcceptanceWorkspaceCommit.tsx";
-import { acceptanceAutoCommitMessage, type AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
 import { useWorkspaceCommitVersion } from "../review/workspaceCommit.ts";
-import { AutoTextarea } from "../components/AutoTextarea.tsx";
+import { AcceptanceControls } from "../acceptance/AcceptanceControls.tsx";
+import { AcceptRoute, type RouteData } from "../acceptance/AcceptRoute.tsx";
+import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -35,394 +20,13 @@ type ReviewData = {
   sessions: Session[];
 };
 
-/**
- * 「这次跳过」在确认框里的那句话。**上一次跑成什么样，决定这一按到底意味着什么** ——
- * 四种结局四句话，少分一种就会出现自相矛盾的提示（原先把「上一次通过」也说成「没有跑出
- * 结论」）。一次都没跑过（null）是最常见的那一种：用户在卡上就决定这次不验它。
- */
-function skipConsequence(latest: AcceptGateView | null): string {
-  if (!latest) return "这一按等于这次不验它。";
-  if (latest.status === "failed") return "那条命令上一次是红的，这一按等于明确说「这条红跟这次改动无关」。";
-  if (latest.status === "passed") {
-    return latest.stale
-      ? "那条命令上一次虽然通过，但验的已经不是现在这棵树或这条命令，这一按等于这次不重新验它。"
-      : "那条命令上一次通过了，但跳过之后回执记的是「你明确跳过了」，不会拿那一次当这次验收的凭据。";
-  }
-  return `那条命令上一次${ACCEPT_GATE_STATUS_LABELS[latest.status]}、没有跑出结论，这一按等于这次不验它。`;
-}
-
-function AcceptanceFailureNotice({ failure, disabled, onGateIntent, onRefreshGate }: {
-  failure: AcceptTaskFailure;
-  disabled: boolean;
-  onGateIntent: (intent: "rerun" | "skip", latest: AcceptGateView | null) => void;
-  onRefreshGate: () => void;
-}) {
-  const handedOff = failure.reason === "merge_conflict" && failure.conflictHandoff?.notified === true;
-  const manualConflict = failure.reason === "merge_conflict" && !handedOff;
-  return (
-    <div className={`team-accept-failure${handedOff ? " is-handed-off" : ""}`} role={handedOff ? "status" : "alert"}>
-      <div className="team-accept-failure-heading">
-        <span>{handedOff ? <ArrowsClockwise size={14} weight="bold" /> : <WarningCircle size={14} weight="fill" />}</span>
-        <div>
-          <b>{handedOff ? "合并冲突已交给任务处理" : manualConflict ? "合并冲突，未能自动交接" : failure.completedMerge ? "合并已完成，清理未完成" : failure.completedTag ? "标签已创建，清理未完成" : "验收未完成"}</b>
-          {handedOff ? (
-            <>
-              {failure.conflictHandoff?.message && <p className="team-accept-handoff-message">{failure.conflictHandoff.message}</p>}
-              <p className="team-accept-failure-guidance">本次验收已安全停止，目标分支未被修改；等待任务处理完成后，再点一次「验收通过」。</p>
-            </>
-          ) : (
-            <>
-              {manualConflict && <p className="team-accept-failure-guidance">未能唤醒任务，请手动解决冲突并提交，然后重新验收。</p>}
-              {failure.conflictHandoff?.message && <p>{failure.conflictHandoff.message}</p>}
-              <p style={{ whiteSpace: "pre-line" }}>{failure.error}</p>
-              {failure.reason === "accept_gate_failed" && <p>以上是这次验收返回的失败信息，最新项目配置和运行状态尚未核对；可刷新重新读取。</p>}
-            </>
-          )}
-        </div>
-      </div>
-      {failure.reason === "accept_gate_failed" && !failure.gate?.processPending && (
-        <div className="pending-merge-actions">
-          <button type="button" disabled={disabled} onClick={() => onGateIntent("rerun", failure.gate ?? null)}>
-            <ArrowsClockwise size={13} />重跑一次
-          </button>
-          <button type="button" disabled={disabled} onClick={() => onGateIntent("skip", failure.gate ?? null)}>
-            这次跳过它，直接合并
-          </button>
-          <button type="button" onClick={onRefreshGate}>刷新前置命令状态</button>
-        </div>
-      )}
-      {/* 冲突文件和挡路文件是同一类信息——「验收停在这儿，该去动的是这几个文件」。前者来自
-          合并撞冲突，后者来自目标分支/任务 worktree 里还有没提交的东西，所以一副样子渲染。 */}
-      {([
-        ["冲突文件", failure.conflictFiles],
-        ["挡路的文件", failure.dirtyFiles],
-      ] as const).map(([label, files]) => files?.length ? (
-        <div key={label} className="team-accept-conflict-files">
-          <span>{label}（{files.length}）</span>
-          <ul>{files.map((file) => <li key={file}><code>{file}</code></li>)}</ul>
-        </div>
-      ) : null)}
-    </div>
-  );
-}
-
-export function AcceptanceControls({
-  task,
-  onTaskUpdated,
-  notify,
-  acceptanceBlock = null,
-}: {
-  task: TaskListItem;
-  onTaskUpdated: (task: Task) => void;
-  notify: (message: string) => void;
-  acceptanceBlock?: string | null;
-}) {
-  // 停在中途那道关口时，这一按是「放行」不是「验收」：按钮、确认框、提示三处一起改口，
-  // 只改一处就会出现「按钮写着验收通过、确认框说只是放行」的自相矛盾。
-  const midGate = !isFinalHumanGate(task.workflow, task.workflowAt);
-  const gate = useAcceptGate(task.id);
-  const branchPlan = useBranchPlan(task, !midGate && task.stage !== "accepted");
-  // 后台静默重验不算「正在检查」：branchPlan 每 15 秒重验一次，把它算进来会让这颗主按钮
-  // 每隔 15 秒把字换成「检查验收依赖」再换回去（宽度跟着变），点击也在那一瞬间被吞掉。
-  const checkingDependencies = !midGate && !!task.useWorktree && task.stage !== "accepted"
-    && (branchPlan.loading || branchPlan.refreshing || !branchPlan.view);
-  // 前置命令在跑（或还没确认整棵进程树退出）时，再点一次什么也推进不了：绿了会自动做完。
-  // 判据取同一份门禁状态（SSE 推着走），不等 branchPlan 15 秒一次的重验，也覆盖非 worktree 任务。
-  if (gate.occupied && task.stage !== "accepted") {
-    acceptanceBlock ??= gate.running && gate.running.status !== "running" ? "验收前置命令收尾中" : "验收前置命令运行中";
-  }
-  if (!midGate && task.useWorktree && task.stage !== "accepted") {
-    acceptanceBlock ??= branchPlan.error ? "验收依赖读取失败" : null;
-    acceptanceBlock ??= branchPlan.view?.task.blockerLabel ?? branchPlan.view?.task.blocker ?? null;
-    const dependency = branchPlan.view?.task.dependency;
-    if (dependency && dependency.state !== "ready" && branchPlan.view?.task.strategy !== "tag") acceptanceBlock ??=
-      dependency.state === "needs_update" ? "需更新子分支基线" : dependency.state === "waiting" ? "等待父成果合入" : "父成果依赖待处理";
-  }
-  const [action, setAction] = useState<"accept" | "return" | null>(null);
-  // 事实列判，不猜：no_commit + 还没记下合并提交 = 那份改动还躺在目标分支工作区里。
-  const pendingCommit = hasPendingAcceptCommit(task);
-  const verification = useAcceptanceVerification(task, action === "accept");
-  const needsVerificationConfirmation = !midGate && !!verification.verification;
-  // 本次验收「合并后提交代码」的选择。null = 没动过，跟项目设置走。项目默认没读到之前
-  // **不许确认**（见 AcceptCommitChoice 顶部：框里写的和后端要做的曾经能相反）。
-  const [commitChoice, setCommitChoice] = useState<boolean | null>(null);
-  const acceptPlanNow = acceptPlan(task.workflow, "human", task.workflowAt);
-  const canChooseCommit = !midGate && !!task.useWorktree && task.stage !== "accepted"
-    && !!acceptPlanNow.merge && acceptPlanNow.merge !== "tag";
-  const commitDefault = useAcceptCommitDefault(task.projectId, canChooseCommit && action === "accept");
-  const commitChecked = commitChoice ?? commitDefault.value ?? true;
-  const [feedback, setFeedback] = useState("");
-  // 这一按对验收前置命令的额外指令。只能由那张卡上的两颗按钮设进来,设完立刻打开同一道
-  // 验收确认框 —— 跳过门禁直接合并是不可逆动作,不该比正常验收少一道确认。
-  const [gateIntent, setGateIntent] = useState<"skip" | "rerun" | null>(null);
-  // 确认框要按**上一次跑成什么样**说话：红了和被取消是两句不同的话。
-  const [gateLatest, setGateLatest] = useState<AcceptGateView | null>(null);
-  const [busy, setBusy] = useState(false);
-  const confirmExecutorSwap = useExecutorGate();
-  const [failure, setFailure] = useState<AcceptTaskFailure | null>(null);
-  const [autoCommit, setAutoCommit] = useState<{ taskId: string; outcome: AcceptanceAutoCommitOutcome } | null>(null);
-  const gateFailure = failure?.taskId === task.id && failure.reason === "accept_gate_failed"
-    && task.stage !== "accepted" && task.stage !== "merged";
-  const gateFallback = gateFailure && !gate.running && (!gate.state || !!gate.error || !gate.latest);
-  const gateUnknown = !midGate && (!gate.state || !!gate.error) && !(gateIntent && gateLatest);
-  // 主按钮同样不能把「没读到门禁」当「没在跑」：刷新页面/换个实例后，开跑回执那份事实
-  // 已经不在了，此刻读不到就只能是待核对（第 2 轮审查）。跳过/重跑的出口不受它挡
-  // （它们自带上次那份现场，确认框按 gateIntent && gateLatest 放行），刷新与取消在门禁卡上。
-  const gateUnread = !midGate && (!gate.state || !!gate.error);
-  const openGateIntent = (intent: "skip" | "rerun", latest: AcceptGateView | null) => {
-    if (archived || inFlight || busy || checkingDependencies || acceptanceBlock) return;
-    setGateIntent(intent);
-    setGateLatest(latest);
-    setAction("accept");
-  };
-  const duet = task.mode === "duet";
-  const inFlight = task.status === "running" || task.status === "queued";
-  // Archived = frozen/read-only：后端验收/打回都会 409，按钮必须一致地禁掉，不给假按钮。
-  const archived = !!task.archived;
-  useEffect(() => {
-    if (acceptanceBlock && action === "accept") setAction(null);
-  }, [acceptanceBlock, action]);
-  // 关掉确认框就把这一次的选择还原成项目默认：这个勾的语义是「本次」，下次打开还留着
-  // 上次的选择，就成了一个没人记得自己设过的隐形开关。
-  useEffect(() => {
-    if (action !== "accept") { setCommitChoice(null); setGateIntent(null); }
-  }, [action]);
-
-  // 动作成功之后的「再拉一遍任务」是**另一件事**：POST 已经 200、合并/打回都已发生,
-  // 这一步只决定页面跟不跟得上。和 mutation 共用一个 try 就会把「已经打回」报成
-  // 「打回失败」——弹窗和意见都还留着,用户照提示一重试,同一条意见投递两遍
-  // (审查实测)。所以刷新单独 best-effort,失败只在成功提示后面缀一句。
-  const refreshAfterMutation = async (): Promise<string> => {
-    try {
-      onTaskUpdated(await api.task(task.id));
-      return "";
-    } catch {
-      return "（动作已生效，但页面没能刷新，手动刷新可看到最新状态）";
-    }
-  };
-  const accept = async () => {
-    if (checkingDependencies || acceptanceBlock || archived || inFlight || busy) return;
-    if (gateUnknown) return;
-    if (verification.loading || verification.error || (needsVerificationConfirmation && !verification.acknowledged)) return;
-    // 项目默认还没读到（或读失败）时绝不发：那一刻界面上那句话是没有依据的。
-    if (canChooseCommit && commitChoice === null && commitDefault.value === null) return;
-    // The confirmation is single-use. Keep progress on the action button so a
-    // typed acceptance failure can render unobscured in the review record.
-    setAction(null);
-    setBusy(true);
-    setFailure(null);
-    try {
-      const result = await api.acceptTask(
-        task.id,
-        needsVerificationConfirmation && verification.acknowledged,
-        // 发的是**用户在框里看到的那个值**，而不是让后端再读一次项目设置：他看见勾着
-        // 「会提交」就该提交，哪怕这中间有人改了项目设置。上面那道门禁保证了走到这里
-        // 一定已经读到默认值，所以这里不会退化成 undefined。
-        canChooseCommit ? commitChoice ?? commitDefault.value ?? undefined : undefined,
-        gateIntent ?? undefined,
-      );
-      setAutoCommit(result.autoCommit ? { taskId: task.id, outcome: result.autoCommit } : null);
-      if (!result.accepted) {
-        const gateReason = result.reason.startsWith("accept_gate");
-        setFailure(gateReason && result.reason !== "accept_gate_failed" ? null : result);
-        // 回执已经说「在跑」就先把这份事实留住，再解锁（finally 里的 setBusy(false)）：
-        // 只等 reload 不够，它在读失败/超时时同样兑现，按钮会在读不到状态时重新放开。
-        if (result.reason === "accept_gate_running") gate.holdRunning(result.gate?.status === "running" ? result.gate : null);
-        if (gateReason) await gate.reload();
-        if (result.confirmationRequired === "confirmUnverified") {
-          verification.setAcknowledged(false);
-          await refreshAfterMutation();
-          setAction("accept");
-          return;
-        }
-        if (gateReason) {
-          notify(result.reason === "accept_gate_running"
-            ? "验收前置命令已开跑；绿了这次验收会自动做完，不用再点"
-            : result.reason === "accept_gate_failed"
-              ? "验收前置命令没通过，没有合并；下方可重跑或选择这次跳过"
-              : result.error);
-          return;
-        }
-        const handedOff = result.reason === "merge_conflict" && result.conflictHandoff?.notified === true;
-        notify(handedOff
-          ? "合并冲突已交给任务处理"
-          : result.reason === "merge_conflict" ? "合并冲突，未能自动交接" : result.completedMerge || result.completedTag ? result.error : `验收未完成：${result.error}`);
-        if (result.completedMerge || result.completedTag) await refreshAfterMutation();
-        return;
-      }
-      setAction(null);
-      const stale = await refreshAfterMutation();
-      // 合并成了、但「点头之后」那一段（发布脚本之类）挂了，是两件事，得分开说：
-      // 只报一句「验收通过」，用户下次知道发布挂了就是在线上出事的时候。
-      notify((result.kind === "gate_released"
-        // 放行之后线没能走过去，服务端会带回 tail.ok=false：照实说停住了，别说「继续往下走」。
-        ? result.tail && !result.tail.ok
-          ? result.tail.movedOn
-            ? `已放行，但下一站「${result.tail.step ?? "验证"}」没开起来，线停在那一站，详情见任务时间线`
-            : `已放行，但线没能接着往下走${result.tail.step ? `：「${result.tail.step}」没跑过` : ""}，停在这一道上，详情见任务时间线`
-          : "已放行，这条线继续往下走"
-        : result.tail && !result.tail.ok
-          ? `已合并，但「${result.tail.step ?? "点头之后那一段"}」没跑过，详情见任务时间线`
-          // 不提交那一档必须在提示里就说破：否则用户看见「验收通过」就以为合完了，
-          // 而改动其实还躺在他的工作区里没提交。
-          : result.merge === "no_commit"
-            ? "验收通过：改动已合进目标分支工作区并暂存，还没提交"
-            : result.warnings?.length ? `验收通过，但有 ${result.warnings.length} 条清理警告` : "验收通过")
-        + (result.autoCommit ? `；${acceptanceAutoCommitMessage(result.autoCommit)}` : "") + stale);
-    } catch (reason) {
-      notify(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-  const returnTask = async () => {
-    const text = feedback.trim();
-    if (!text) return;
-    // 普通任务把意见送回原会话；讨论则让原来的双方沿现有记录回炉一轮。
-    if (!(await confirmExecutorSwap(task.id))) return;
-    setBusy(true);
-    try {
-      let result: Awaited<ReturnType<typeof api.replyTask>> | null = null;
-      if (duet) {
-        await api.gate(task.id, { kind: "inject", text: `【验收打回】请根据以下意见继续讨论，并重新形成可验收结论。\n\n${text}` });
-      } else {
-        result = await api.replyTask(task.id, `【验收打回】请继续修改并完成后重新提交验收。\n\n${text}`);
-      }
-      // 打回已经投递出去了:先把弹窗和已发出的意见收掉,再去刷新(见上面的注释)。
-      setAction(null);
-      setFeedback("");
-      const stale = await refreshAfterMutation();
-      // 任务这会儿还在跑的话,后端会把意见排队,等它这一轮结束再送进去——如实说清楚。
-      notify((duet
-        ? "已打回，意见已送回原讨论"
-        : result && "scheduled" in result
-        ? "已打回；任务还在跑，意见已排队，跑完自动送入会话"
-        : "已打回，意见已送入原任务会话") + stale);
-    } catch (reason) {
-      notify(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const acceptButton = (
-    <button type="button" className="is-primary" disabled={archived || inFlight || busy || checkingDependencies || !!acceptanceBlock || gateUnread} onClick={() => setAction("accept")}>
-      {busy ? <SpinnerGap size={13} className="is-spinning" /> : <CheckCircle size={13} weight="fill" />}
-      {busy ? (midGate ? "放行中" : "验收中") : archived ? "已归档（只读）" : inFlight ? "执行中" : acceptanceBlock ?? (checkingDependencies ? "检查验收依赖"
-        : gateUnread ? (gate.error ? "前置命令状态待核对" : "读取前置命令状态") : midGate ? "放行，继续下一站" : "验收通过")}
-    </button>
-  );
-  // 项目设了前置命令时，「验收通过」和「这次跳过它，直接合并」是同一个决定的两个答案，
-  // 所以主按钮住进门禁卡的按钮行，跟跳过、重跑排在一起；顶栏只留打回。门禁卡不在场
-  // （读不到、被失败详情顶替）或这一站只是放行时，主按钮仍在顶栏。
-  const acceptInGate = !midGate && task.stage !== "merged" && !gateFallback && !!gate.state?.command;
-  return (
-    <>
-      <div className="team-accept-actions">
-        {task.stage === "accepted" ? (
-          // 「合并后不提交」那一档欠着一步提交，这里跟正常验收长一个样就是把它藏起来
-          // （现场：用户因此完全看不出还欠一步）。详情与出路在下面那张常驻卡片里。
-          pendingCommit ? (
-            <span className="is-pending-commit"><WarningCircle size={13} weight="fill" />验收完成 · 待提交</span>
-          ) : <span><CheckCircle size={13} weight="fill" />验收完成</span>
-        ) : (
-          <>
-            {!acceptInGate && acceptButton}
-            <button type="button" disabled={archived || inFlight || busy} onClick={() => setAction("return")}><WarningCircle size={13} />{duet ? "打回再讨论" : "打回修改"}</button>
-          </>
-        )}
-      </div>
-      {failure?.taskId === task.id && (failure.reason !== "accept_gate_failed" || gateFallback) && (
-        <AcceptanceFailureNotice failure={failure} onGateIntent={openGateIntent}
-          onRefreshGate={() => void gate.reload()}
-          disabled={archived || inFlight || busy || checkingDependencies || !!acceptanceBlock} />
-      )}
-      {/* 「合并后不提交」那一档的常驻状态与出路。它自己判要不要出现（不适用就渲染 null），
-          所以每个有验收动作的表面都自动带上，不用各处再判一遍。 */}
-      <PendingMergeCard task={task} notify={notify} onTaskUpdated={onTaskUpdated} />
-      {autoCommit?.taskId === task.id && <AutoCommitOutcomeNotice outcome={autoCommit.outcome} />}
-      {!midGate && task.stage !== "accepted" && task.stage !== "merged" && <AcceptanceWorkspaceCommit key={task.id} task={task} notify={notify} disabled={archived || inFlight || busy} />}
-      {!gateFallback && <AcceptGateCardView
-        task={task}
-        notify={notify}
-        disabled={archived || inFlight || busy || checkingDependencies || !!acceptanceBlock}
-        gate={gate}
-        onIntent={openGateIntent}
-        acceptAction={acceptInGate ? acceptButton : undefined}
-      />}
-      {verification.verification && action !== "accept" && <UnexecutedVerificationNotice verification={verification.verification} continuing={midGate} />}
-      {action === "accept" && (
-        <ConfirmDialog
-          title={midGate ? "放行这一关？" : "确认验收通过？"}
-          message={midGate
-            ? acceptanceMessage(task)
-            : task.useWorktree
-              ? `${acceptanceMessage(task, commitChecked)} ${commitChecked ? "已执行的合并和删除不可逆。" : "已删除的 worktree 不可逆；合并结果会留在工作区等你自己提交或丢弃。"}`
-              : acceptanceMessage(task)}
-          confirmLabel={gateIntent === "skip"
-            ? "跳过前置命令并验收"
-            : gateIntent === "rerun"
-              ? "重跑前置命令"
-              : midGate ? "放行" : needsVerificationConfirmation ? "知情并验收" : commitChecked ? "验收通过" : "验收通过（不提交）"}
-          danger={!midGate && !!task.useWorktree}
-          busy={busy}
-          confirmDisabled={checkingDependencies || !!acceptanceBlock || archived || inFlight || gateUnknown || verification.loading || !!verification.error || (needsVerificationConfirmation && !verification.acknowledged) || commitDefault.pending}
-          onConfirm={() => void accept()}
-          onClose={() => setAction(null)}
-        >
-          {!midGate && (
-            <p role={gate.error ? "alert" : "status"}>
-              {gate.state && !(gate.stale && gateIntent && gateLatest)
-                ? <>{gate.stale ? "上次读取的项目命令" : "项目配置的前置命令"}：<code>{gate.state.command ?? "未设置"}</code>。
-                  {gateIntent === "skip" ? "本次明确跳过此命令。" : gateIntent === "rerun" ? "本次会从头重跑此命令。" : gate.state.command
-                    ? "是否重跑取决于当前源码和已有结果；未通过不会合并。" : "本次验收不会运行前置命令。"}
-                  {gate.stale && (gate.error ? `状态暂时无法核对：${gate.error}。可关闭后在下方卡片刷新重试。` : "正在后台核对配置；确认后服务端仍会再次校验。")}</>
-                : gateIntent && gateLatest
-                  ? <>上次验收使用的命令：<code>{gateLatest.command}</code>。当前配置尚未重新核对；本次{gateIntent === "skip" ? "明确跳过前置命令" : "按项目当前配置重跑前置命令"}。</>
-                  : gate.error ? `前置命令暂时无法读取：${gate.error}。可关闭后在下方卡片刷新重试。` : "正在读取本次验收的前置命令…"}
-            </p>
-          )}
-          {/* 这一按跟「普通的验收通过」不是一回事,得在按下去之前说破:一个是明知红着仍然合,
-              另一个是再烧十几分钟。 */}
-          {gateIntent === "skip" && (
-            <p role="alert">这一次<b>不跑</b>验收前置命令，直接按上面说的合并。{skipConsequence(gateLatest)}</p>
-          )}
-          {gateIntent === "rerun" && (
-            <p role="status">这一按先把验收前置命令从头跑一遍（它可能要跑十几分钟），rc=0 才会继续合并；跑的过程中目标分支一动不动。</p>
-          )}
-          {checkingDependencies && <p role="status">正在更新验收依赖，检查完成后可继续确认。</p>}
-          {verification.loading && <p role="status">正在核对独立验证执行记录…</p>}
-          {verification.error && <p role="alert">验证执行记录读取失败：{verification.error}。请关闭后重试。</p>}
-          {verification.verification && <UnexecutedVerificationNotice verification={verification.verification} continuing={midGate}
-            checked={verification.acknowledged} onChange={midGate ? undefined : verification.setAcknowledged} />}
-          {canChooseCommit && (
-            <AcceptCommitChoice
-              checked={commitChecked}
-              projectDefault={commitDefault.value}
-              error={commitDefault.error}
-              target={mergeTargetLabel(task)}
-              disabled={busy}
-              onChange={setCommitChoice}
-              onRetry={commitDefault.reload}
-            />
-          )}
-        </ConfirmDialog>
-      )}
-      {action === "return" && (
-        <ConfirmDialog title={duet ? "打回继续讨论？" : "打回继续修改？"} message={duet ? "这会把验收意见送回本次讨论，原来的两位讨论者会沿现有上下文继续形成结论。" : "这会把验收意见作为真人回复送入原任务会话，执行者会在原上下文继续处理。"} confirmLabel={duet ? "打回再讨论" : "打回修改"} busy={busy} onConfirm={() => void returnTask()} onClose={() => setAction(null)}>
-          <AutoTextarea className="team-return-feedback" value={feedback} autoFocus rows={5} placeholder={duet ? "写清需要补充讨论的问题与验收标准…" : "写清需要修改的内容与重新验收标准…"} onChange={(event) => setFeedback(event.target.value)} />
-        </ConfirmDialog>
-      )}
-    </>
-  );
-}
-
-function useReviewChanges(task: TaskListItem) {
+function useReviewChanges(task: TaskListItem, enabled = true) {
   const commitVersion = useWorkspaceCommitVersion(task.id);
   const [data, setData] = useState<ReviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
+    if (!enabled) return;
     let alive = true;
     setLoading(true);
     Promise.all([api.taskCommits(task.id), api.taskDiff(task.id), api.sessions(task.id)]).then(
@@ -434,66 +38,43 @@ function useReviewChanges(task: TaskListItem) {
       (reason) => { if (alive) setError(reason instanceof Error ? reason.message : String(reason)); },
     ).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [task.id, task.updatedAt, commitVersion]);
+  }, [task.id, task.updatedAt, commitVersion, enabled]);
   return { data, loading, error };
 }
 
-function ChangeSummary({ task, data, loading, error }: { task: TaskListItem; data: ReviewData | null; loading: boolean; error: string | null }) {
-  if (loading) return <p className="team-review-loading"><SpinnerGap size={13} className="is-spinning" />正在读取分支与提交…</p>;
-  if (error) return <p className="team-review-loading is-error">改动信息读取失败：{error}</p>;
-  if (!data) return null;
+function routeOf(task: TaskListItem, data: ReviewData): RouteData {
   const session = data.sessions[data.sessions.length - 1];
-  return (
-    <div className="team-review-change">
-      <ChangeMetaBar
-        source={data.diff.sourceBranch || data.branch || session?.branch || "项目当前分支"}
-        target={data.diff.targetBranch || task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "未确定（验收时解析）"}
-        where={session?.worktreePath
-          ? worktreeLabel(session.worktreePath)
-          : task.useWorktree ? "worktree 尚未记录" : "共享项目目录"}
-        commits={data.commits}
-        link={{ projectId: task.projectId, taskId: task.id }}
-      />
-      <ReviewDiffViewer result={data.diff} />
-    </div>
-  );
+  return {
+    source: data.diff.sourceBranch || data.branch || session?.branch || "项目当前分支",
+    target: data.diff.targetBranch || task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "验收时确定",
+    commits: data.commits,
+    diff: data.diff,
+  };
 }
 
-// 调度台这一份不再套「可折叠的记录卡」：标题、角色、状态、目标正文在团队视图和右侧审查
-// 侧边栏里各有一份，验证证据也在侧边栏点得开——铺在这里只是把真正要看的 diff 往下推。
-// 验收动作上提到了顶栏（那是这一屏唯一的动作，不该跟着卡片折叠一起消失），所以这里只剩
-// 它独有的东西：共享分支的改动本身。
-function LeadChanges({ task, onReadTask }: { task: Task; onReadTask: (task: Task) => void }) {
-  const { data, loading, error } = useReviewChanges(task);
-  useEffect(() => { onReadTask(task); }, [onReadTask, task]);
-  return <ChangeSummary task={task} data={data} loading={loading} error={error} />;
+function ChangesState({ loading, error }: { loading: boolean; error: string | null }) {
+  if (error) return <p className="team-review-loading is-error">改动信息读取失败：{error}</p>;
+  if (loading) return <p className="team-review-loading"><SpinnerGap size={13} className="is-spinning" />正在读取分支与提交…</p>;
+  return null;
 }
 
-function ReviewRecord({
-  task,
-  parentTask = null,
-  role,
-  actions = false,
-  defaultOpen = false,
-  onTaskUpdated,
-  indicatorForTask,
-  onReadTask,
-  notify,
-}: {
+/**
+ * 团队里每个独立 worktree 执行者一张记录：头一行就是它自己的验收台（标题在左、决定在右、前提在下），
+ * 展开是它的审查证据、走向与 diff。共享执行者不在这里逐个铺开 —— 它们的改动就在团队那份 diff 里。
+ */
+function ReviewRecord({ task, parentTask, role, defaultOpen, onTaskUpdated, indicatorForTask, onReadTask, notify }: {
   task: TaskListItem;
-  parentTask?: TaskListItem | null;
+  parentTask: TaskListItem;
   role: string;
-  actions?: boolean;
-  defaultOpen?: boolean;
+  defaultOpen: boolean;
   onTaskUpdated: (task: Task) => void;
   indicatorForTask: IndicatorForTask;
   onReadTask: (task: TaskListItem) => void;
   notify: (message: string) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const { data, loading, error } = useReviewChanges(task);
-  // 正文不在列表响应里，按需补（同一屏的多张卡合成一次请求）。没到手就不显示目标行，
-  // 而不是显示一条空的——空目标和还没读到是两回事。
+  const { data, loading, error } = useReviewChanges(task, open);
+  // 正文不在列表响应里，按需补。没到手就不显示目标行：空目标和还没读到是两回事。
   const full = useTaskBody(task);
   const objective = full ? parseAttachmentText(full.body).body : "";
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
@@ -504,19 +85,29 @@ function ReviewRecord({
   }, [onReadTask, open, task]);
   return (
     <article className="team-review-record">
-      <header className="acceptance-host">
-        <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}><CaretDown size={13} weight="bold" /></button>
-        {visibleIndicator && <TaskStatusDot indicator={visibleIndicator} surface="team" />}
-        <button type="button" className="team-review-record-title acceptance-host-title" onClick={() => setOpen((value) => !value)}>
-          <span><b>{task.title}</b><em>{role}</em><small>{display.label}</small></span>
-          {objective && <p>{objective}</p>}
-        </button>
-        {actions && <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} />}
-      </header>
+      <AcceptanceControls
+        className="acc-record"
+        task={task}
+        onTaskUpdated={onTaskUpdated}
+        notify={notify}
+        lead={(
+          <button type="button" className="team-review-record-title" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+            <CaretDown size={13} weight="bold" className="team-review-record-caret" aria-hidden="true" />
+            {visibleIndicator && <TaskStatusDot indicator={visibleIndicator} surface="team" />}
+            <span><b>{task.title}</b><em>{role}</em><small>{display.label}</small></span>
+            {objective && <p>{objective}</p>}
+          </button>
+        )}
+      />
       {open && (
         <div className="team-review-record-body">
           <DispatchReviewEvidence task={task} parentTask={parentTask} notify={notify} />
-          <ChangeSummary task={task} data={data} loading={loading} error={error} />
+          {data
+            ? <>
+              <div className="acc-route-line"><AcceptRoute task={task} data={routeOf(task, data)} disabled={!!task.archived} onTaskUpdated={onTaskUpdated} notify={notify} /></div>
+              <ReviewDiffViewer result={data.diff} />
+            </>
+            : <ChangesState loading={loading} error={error} />}
         </div>
       )}
     </article>
@@ -540,37 +131,37 @@ export function TeamReviewWorkspace({
 }) {
   const sharedWorkers = useMemo(() => workers.filter((worker) => !worker.useWorktree), [workers]);
   const independentWorkers = useMemo(() => workers.filter((worker) => worker.useWorktree), [workers]);
-  // 共享执行者不在这里逐个铺开——它们的改动就在上面这份共享分支 diff 里，逐个的轮次与
-  // 证据在右侧审查侧边栏。这里只留一句摘要，因为「按下验收会联动标记它们」是不可逆动作
-  // 的前提事实，用户在按之前该看得见（确认框里也说了同一件事）。
-  const sharedFailed = sharedWorkers.filter((worker) => worker.stage === "verify_failed").length;
-  // 后端 acceptanceGuard 对共享执行者的 running/queued/backlog/paused 一律 409(团队验收
-  // 会把它们的 stage 联动置 accepted,盖到没跑过/待续跑的活上就是伪造)。按钮不同步这道
-  // 门禁就是「可点但必失败」(审查实测)——判据与 server/src/task-accept-guard.ts 同源。
+  const { data, loading, error } = useReviewChanges(lead);
+  useEffect(() => { onReadTask(lead); }, [onReadTask, lead]);
+  // 后端 acceptanceGuard 对共享执行者的 running/queued/backlog/paused 一律 409（团队验收会把它们的
+  // stage 联动置 accepted，盖到没跑过、待续跑的活上就是伪造）。判据与 server/src/task-accept-guard.ts 同源。
   const unsettledShared = sharedWorkers.filter((worker) =>
     worker.status === "running" || worker.status === "queued" || worker.status === "backlog" || worker.status === "paused");
-  const leadAcceptanceBlock = unsettledShared.length ? `共享执行者未完成（${unsettledShared.length}）` : null;
-  const sharedNote = sharedWorkers.length
-    ? `共享分支上还有 ${sharedWorkers.length} 个执行者${sharedFailed ? `（${sharedFailed} 个验证未通过）` : ""}，随团队整体验收联动标记；逐个证据见右侧审查。${
-      unsettledShared.length ? `其中 ${unsettledShared.map((worker) => worker.title).join("、")} 还没跑完或没跑过，先处理完才能整体验收。` : ""}`
-    : "核对共享分支与独立 worktree 后分别验收或打回。";
+  const block = unsettledShared.length
+    ? { text: `共享执行者未完成（${unsettledShared.length}）`, detail: unsettledShared.map((worker) => worker.title).join("、") }
+    : null;
   return (
     <section className="team-review-workspace">
-      <header className="team-review-subbar acceptance-host">
-        <div className="acceptance-host-title"><b>团队验收台</b><small>{sharedNote}</small></div>
-        <AcceptanceControls task={lead} onTaskUpdated={onTaskUpdated} notify={notify} acceptanceBlock={leadAcceptanceBlock} />
-      </header>
+      <AcceptanceControls
+        className="acc-desk"
+        task={lead}
+        onTaskUpdated={onTaskUpdated}
+        notify={notify}
+        block={block}
+        lead={data ? <AcceptRoute task={lead} data={routeOf(lead, data)} disabled={!!lead.archived} onTaskUpdated={onTaskUpdated} notify={notify} />
+          : <b className="acc-title">团队验收台</b>}
+      />
       <div className="team-review-scroll">
         <div className="team-review-stack">
-          <BranchAcceptancePanel task={lead} notify={notify} onTaskUpdated={onTaskUpdated} />
-          <LeadChanges task={lead} onReadTask={onReadTask} />
-          {/* 没有独立 worktree 执行者时整节不出现：它的空态说的就是顶上那句「随团队整体验收
-              联动标记」，留一个 0 项的空壳只是把验收按钮往下推。有独立执行者时它才是唯一的
-              逐个合入/打回入口，那时必须在。 */}
+          {data ? <ReviewDiffViewer result={data.diff} /> : <ChangesState loading={loading} error={error} />}
+          {/* 没有独立 worktree 执行者时整节不出现；有的时候它是逐个合入、打回的唯一入口。 */}
           {independentWorkers.length > 0 && (
-            <section className="team-acceptance-queue">
-              <header><div><b>独立执行者待验收队列</b><small>每个显式 worktree 都有独立分支与合入动作，按执行者分别处理。</small></div><span>{independentWorkers.length} 项</span></header>
-              <div>{independentWorkers.map((worker, index) => <ReviewRecord key={worker.id} task={worker} parentTask={lead} role={`执行者 ${index + 1}`} actions defaultOpen={worker.stage === "awaiting_acceptance" || worker.stage === "verify_failed"} onTaskUpdated={onTaskUpdated} indicatorForTask={indicatorForTask} onReadTask={onReadTask} notify={notify} />)}</div>
+            <section className="team-acceptance-queue" aria-label="独立执行者">
+              {independentWorkers.map((worker, index) => (
+                <ReviewRecord key={worker.id} task={worker} parentTask={lead} role={`执行者 ${index + 1}`}
+                  defaultOpen={worker.stage === "awaiting_acceptance" || worker.stage === "verify_failed"}
+                  onTaskUpdated={onTaskUpdated} indicatorForTask={indicatorForTask} onReadTask={onReadTask} notify={notify} />
+              ))}
             </section>
           )}
         </div>

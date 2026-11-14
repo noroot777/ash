@@ -8,7 +8,7 @@ import { useCatchUp, useCatchUpLink } from "../lib/useCatchUp.ts";
 /**
  * 「这个任务的验收前置命令此刻怎么样」—— 两处表面共用的那一份状态。
  *
- * 验收台那张卡（`AcceptGateCard`）和主会话页输入框上方那条（`AcceptGateWaitCard`）要的
+ * 验收台上前置命令那一行（`acceptance/GateCheck.tsx`）和主会话页输入框上方那条（`AcceptGateWaitCard`）要的
  * 是同一件事实，而**对账逻辑一点都不能少**：事件流没有历史回放，断线那几十秒里「跑完了」
  * 这条事件没人接，卡就会永远停在「正在跑」—— 那正是这功能要消灭的幽灵状态。所以读取、
  * 订阅、每次重连都重新对一次账、以及让「已经 N 分 N 秒」自己走的那个秒表，统一写在这里，

@@ -3,10 +3,11 @@ import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 
-export function BaseUpdateRecoveryControl({ taskId, disabled, onAbandoned }: {
+export function BaseUpdateRecoveryControl({ taskId, disabled, onAbandoned, notify }: {
   taskId: string;
   disabled: boolean;
   onAbandoned: (message: string) => Promise<void>;
+  notify: (message: string) => void;
 }) {
   const [proposal, setProposal] = useState<BaseUpdateRecovery | null>(null);
   const [busy, setBusy] = useState(false);
@@ -16,7 +17,7 @@ export function BaseUpdateRecoveryControl({ taskId, disabled, onAbandoned }: {
     if (disabled || busy) return;
     setBusy(true); setError(""); setAcknowledged(false);
     try { setProposal(await api.baseUpdateRecovery(taskId)); }
-    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    catch (e) { notify(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
   const abandon = async () => {
@@ -30,9 +31,10 @@ export function BaseUpdateRecoveryControl({ taskId, disabled, onAbandoned }: {
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
-  return <div>
-    <button type="button" disabled={disabled || busy} onClick={() => void open()}>处理未完成的基线更新</button>
-    {error && !proposal && <p role="alert">{error}</p>}
+  return <>
+    <button type="button" className="acc-btn is-sm" disabled={disabled || busy} aria-busy={busy || undefined} onClick={() => void open()}>
+      {busy && !proposal && <i className="acc-spin" aria-hidden="true" />}处理
+    </button>
     {proposal && <ConfirmDialog title={proposal.resolution === "blocked" ? "暂时无法读取恢复差异" : proposal.resolution === "manual" ? "核对基点并手动解除挂起？" : proposal.resolution === "complete" ? "完成已生效的基线更新？" : "放弃本次基线更新？"}
       confirmLabel={proposal.resolution === "blocked" ? "暂时无法处理" : proposal.resolution === "manual" ? "保留代码并解除挂起" : proposal.resolution === "complete" ? "确认完成基线更新" : "确认放弃基线更新"}
       message={!proposal.currentCommit
@@ -67,5 +69,5 @@ export function BaseUpdateRecoveryControl({ taskId, disabled, onAbandoned }: {
       </section>}
       {error && <p role="alert">{error}</p>}
     </ConfirmDialog>}
-  </div>;
+  </>;
 }

@@ -40,7 +40,7 @@ import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
 import { turnImageMarkdown } from "../task-detail/turnImages.ts";
 import { conversationInputAnchor, conversationInputs } from "../task-detail/conversationInputs.ts";
 import { formatDuration, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
-import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
+import { AcceptanceControls } from "../acceptance/AcceptanceControls.tsx";
 import { DuetGateControls, DuetProgressBar } from "./DuetControls.tsx";
 import { DuetHandoffBar, DuetHandoffModal, type HandoffChoice } from "./DuetHandoff.tsx";
 import { buildDuetHandoffBody, latestDuetGate } from "./duetHandoff.ts";
@@ -437,10 +437,8 @@ export function DuetView({
         />
       ) : ["done", "failed", "canceled"].includes(task.status) ? (
         <div className="duet-terminal-handoff">
-          <div className="duet-terminal-acceptance acceptance-host">
-            <div className="acceptance-host-title"><b>讨论结论</b><small>确认这份结论，或带着意见让双方继续讨论。</small></div>
-            <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} />
-          </div>
+          <AcceptanceControls className="duet-terminal-acceptance" task={task} onTaskUpdated={onTaskUpdated} notify={notify}
+            lead={<b className="acc-title">讨论结论</b>} />
           <DuetHandoffBar
             linkedTeams={linkedTeams}
             busy={teamBusy}

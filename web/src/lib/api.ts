@@ -436,6 +436,9 @@ export const api = {
   // 与再推一把（agent 那一轮跑完了还没修好）。
   rehandOffAcceptGate: (taskId: string): Promise<{ handedOff: true; gate: AcceptGateView }> =>
     request(`/tasks/${id(taskId)}/accept-gate/handoff`, json("POST", {})),
+  // 合并预览撞了冲突：不等验收，直接把冲突交给任务去解（与验收撞冲突时交的是同一份）。
+  handOffGateConflict: (taskId: string): Promise<{ ok: true; message: string }> =>
+    request(`/tasks/${id(taskId)}/accept-gate/conflict-handoff`, json("POST", {})),
   branchPlan: (taskId: string): Promise<BranchPlanView> => request(`/tasks/${id(taskId)}/branch-plan`),
   releaseTaskWorkspace: (taskId: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/release-workspace`, json("POST", { fingerprint })),
   changeMergeTarget: (taskId: string, branch: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/merge-target`, json("POST", { branch, fingerprint })),
