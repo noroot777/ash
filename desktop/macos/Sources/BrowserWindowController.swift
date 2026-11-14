@@ -9,6 +9,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   private var chrome: WindowChrome?
   private var observations: [NSKeyValueObservation] = []
   private var healthTimer: Timer?
+  private var guardTimer: Timer?
+  private var guardProbing = false
+  /// 页面因为端口换了人被撤下时停在哪个路由，自己那份回来后回到那里。
+  private var resumeURL: URL?
+  /// 页面现在认的是哪一份服务（它的实例号已经作为 cookie 交给页面）。
+  private(set) var boundInstance: String?
+  /// 页面在的时候多久认一次人。测试把它调大，单独验导航那一道。
+  static var instanceGuardInterval: TimeInterval = 1
   /// 「正在启动」那一屏晚一点才盖上：服务本来就在时探一下只要几毫秒，不该闪一下。
   var pendingStartingScreen: DispatchWorkItem?
 
@@ -86,21 +94,93 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   func windowDidFailToEnterFullScreen(_ window: NSWindow) { chrome?.setFullScreen(false) }
   func windowDidExitFullScreen(_ notification: Notification) { chrome?.setFullScreen(false) }
 
-  /// 把页面直接载进来（端口上是谁已经认过了，或者连的本来就是别处的 ash）。
+  /// 把页面载进来。连别处的 ash 时直接载；本机地址先认一次人、把那一份的实例号交给页面再载。
   func loadPage() {
     stopHealthPolling()
-    offlineView.isHidden = true
-    // 失败页之后 webView.url 可能是 nil，此时回首页；正常情况下原地重载保住当前路由。
-    if let url = webView.url, AshConfig.isSameOrigin(url) {
-      webView.load(URLRequest(url: url))
-    } else {
-      webView.load(URLRequest(url: AshConfig.baseURL))
+    guard AshConfig.isLocal else { return showPage() }
+    AshHealth.probe(AshConfig.windowHealthURL) { probe in
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        guard let instance = AshHealth.ours(probe) else { return self.instanceLost() }
+        self.bind(instance) { self.showPage() }
+      }
     }
+  }
+
+  private func showPage() {
+    offlineView.isHidden = true
+    // 失败页、撤下后的空白页之后 webView.url 不是 ash 的，此时回到撤下前的路由或首页；正常情况下
+    // 原地重载保住当前路由。
+    let target = [webView.url, resumeURL].compactMap { $0 }.first(where: AshConfig.isSameOrigin) ?? AshConfig.windowURL
+    resumeURL = nil
+    webView.load(URLRequest(url: target))
+    startInstanceGuard()
+  }
+
+  /// 页面之后发的每个请求（fetch、SSE、页面本身、预览）都带着认过的那一份的实例号。窗口连的是这份
+  /// 服务专用的端口（AshConfig.windowPort），服务一停那个端口就空着，别的 ash 接不到窗口的请求；
+  /// 自己那份重起过、或者有谁照着同一个端口起了一份新版 ash，实例号对不上就不执行
+  /// （server/src/instance-binding.ts）。定时认人和导航前认人只负责撤页和说明。
+  func bind(_ instance: AshInstance, then: @escaping () -> Void) {
+    guard let id = instance.id, id != boundInstance else { return then() }
+    guard let host = AshConfig.windowURL.host,
+          let cookie = HTTPCookie(properties: [.name: Self.instanceCookie, .value: id, .domain: host, .path: "/"]) else {
+      return then()
+    }
+    webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie) { [weak self] in
+      self?.boundInstance = id
+      then()
+    }
+  }
+
+  static let instanceCookie = "ash_instance"
+
+  // MARK: 页面在的时候也一直认着人
+
+  /// 窗口只对认过的那一份服务开着页面。导航（刷新、前进后退、页面自己跳转）放行前各认一次
+  /// （WebViewBridge），已经载好的页面自己发的请求、SSE 不经过导航 —— 它们落到新来的那一份上会被
+  /// 实例号挡下（见 `bind`），但页面会一直报错。所以页面在的时候还要定时认：不是自己那份了就撤掉页面、说清楚。
+  private func startInstanceGuard() {
+    guard AshConfig.isLocal, guardTimer == nil else { return }
+    guardTimer = Timer.scheduledTimer(withTimeInterval: Self.instanceGuardInterval, repeats: true) { [weak self] _ in
+      self?.checkInstance()
+    }
+  }
+
+  func stopInstanceGuard() {
+    guardTimer?.invalidate()
+    guardTimer = nil
+  }
+
+  private func checkInstance() {
+    guard !guardProbing, guardTimer != nil else { return }
+    guardProbing = true
+    AshHealth.probe(AshConfig.windowHealthURL) { probe in
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.guardProbing = false
+        guard self.guardTimer != nil else { return }
+        guard let instance = AshHealth.ours(probe) else { return self.instanceLost() }
+        // 还是自己那份，但服务重起过（实例号换了）：页面手上的旧实例号会被拒，换上新的重载一遍。
+        if instance.id != self.boundInstance { self.bind(instance) { self.webView.reload() } }
+      }
+    }
+  }
+
+  /// 端口上不再是认过的那一份：页面连同它的轮询、SSE 一起撤掉（一个请求都不再发给新来的那份），
+  /// 记下路由，回到 loadHome 认一遍 —— 被占着就盖上说明，自己那份回来了再载回去。
+  func instanceLost() {
+    stopInstanceGuard()
+    if let url = webView.url, AshConfig.isSameOrigin(url) { resumeURL = url }
+    webView.stopLoading()
+    webView.loadHTMLString("", baseURL: nil)
+    loadHome()
   }
 
   /// 正在换代码（UpdateGate 停了服务）：盖上一屏、不探活，闸放开时 UpdateGate 会叫 loadHome。
   func showInstalling(_ note: String) {
     stopHealthPolling()
+    stopInstanceGuard()
     pendingStartingScreen?.cancel()
     offlineView.show(title: note, detail: "装好后自动接上。接管得了的任务照常在跑；点了「现在装」的话，刚才列出的那些会被打断。", busy: true)
   }
@@ -135,7 +215,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   }
 
   @objc func openInBrowser(_ sender: Any?) {
-    NSWorkspace.shared.open(webView.url ?? AshConfig.baseURL)
+    NSWorkspace.shared.open(webView.url.map(AshConfig.browserURL) ?? AshConfig.baseURL)
   }
 
   @objc func goBack(_ sender: Any?) { webView.goBack() }

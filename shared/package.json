@@ -14,6 +14,10 @@
       "types": "./src/accept-workspace.ts",
       "default": "./src/accept-workspace.ts"
     },
+    "./code-lock": {
+      "types": "./src/code-lock.ts",
+      "default": "./src/code-lock.ts"
+    },
     "./system-resume": {
       "types": "./src/system-resume.ts",
       "default": "./src/system-resume.ts"

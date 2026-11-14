@@ -13,8 +13,8 @@
 //
 // 几条不变量（README「发版」里有为什么）：
 //  · 发出去的 app 里的公钥必须就是签这一版的私钥对应的那把 —— 对不上直接拒，发出去谁都装不上。
-//  · 版本号（CFBundleVersion）必须比 appcast 里最新的一版大；正式发版要求工作区干净（版本号取
-//    提交时间，干净才可复现）。
+//  · 版本号（CFBundleVersion）必须比 appcast 里最新的一版大；正式发版要求工作区干净（发出去的包
+//    对得上一个提交）。
 //  · 先传 zip、确认下得下来，再推 appcast：feed 永远不指向一个还不存在的包。没发完重跑时，同
 //    一版沿用上次压好的 zip（重压出来的字节不同，签名就和已传上去的那份对不上了）—— 但只在
 //    这次给的 app 和压那个 zip 的是同一份时（旁边记着 app 的内容摘要），不是就拒发。
@@ -104,7 +104,7 @@ async function main() {
   // ── 1. 这次要发的 app ──
   let app = values.app ? resolve(values.app) : join(MAC, "build", "Ash.app");
   if (!values.app) {
-    if (run("git", ["status", "--porcelain"], { cwd: REPO })) die("工作区有没提交的改动：正式发版要从干净的提交构建（版本号取提交时间）。");
+    if (run("git", ["status", "--porcelain"], { cwd: REPO })) die("工作区有没提交的改动：正式发版要从干净的提交构建（发出去的包要对得上一个提交）。");
     say("▶ 构建独立 app");
     const build = spawnSync("bash", [join(MAC, "build.sh")], { stdio: "inherit" });
     if (build.status !== 0) die("构建失败");

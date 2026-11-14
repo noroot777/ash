@@ -57,7 +57,10 @@ async function freePort() {
 }
 
 const port = await freePort();
-const env = { ...process.env, ASH_URL: `http://127.0.0.1:${port}`, ASH_DATA_DIR: data, ASH_MAC_RUNTIME: join(temporary, "no-runtime") };
+const runtime = join(temporary, "no-runtime");
+const windowPort = await freePort();
+const env = { ...process.env, ASH_URL: `http://127.0.0.1:${port}`, ASH_DATA_DIR: data, ASH_MAC_RUNTIME: runtime,
+  ASH_MAC_WINDOW_PORT: String(windowPort) };
 const impactFile = join(temporary, "impact.json");
 const setImpact = (value) => writeFileSync(impactFile, typeof value === "string" ? value : JSON.stringify(value));
 const healthFile = join(temporary, "health.txt");
@@ -72,7 +75,10 @@ async function startFake({ dataDir = data, stubborn = false } = {}) {
     ${stubborn ? "process.on('SIGTERM', () => {});" : ""}
     http.createServer((req, res) => {
       res.setHeader('content-type', 'application/json');
+      const id = 'fake-' + process.pid;
       if (req.url.startsWith('/api/restart-impact')) {
+        // 和 server/src/instance-binding.ts 一样：点名要别的实例（或没点名）就不答，闸只能问认过的那一份。
+        if (req.headers['x-ash-instance'] !== id) { res.statusCode = 409; return res.end('{"error":"不是这一份"}'); }
         const raw = fs.readFileSync(${JSON.stringify(impactFile)}, 'utf8');
         if (raw === 'refuse') { res.statusCode = 401; return res.end('{"error":"请先登录"}'); }
         return res.end(raw);
@@ -80,7 +86,8 @@ async function startFake({ dataDir = data, stubborn = false } = {}) {
       const health = fs.existsSync(${JSON.stringify(healthFile)}) ? fs.readFileSync(${JSON.stringify(healthFile)}, 'utf8') : 'ok';
       if (health === 'hang') return;
       if (health === '503') { res.statusCode = 503; return res.end('{"ok":false}'); }
-      res.end(JSON.stringify({ ok: true, pid: process.pid, instance: { dataDir: ${JSON.stringify(dataDir)}, codeDir: '/fake/' } }));
+      res.end(JSON.stringify({ ok: true, pid: process.pid, instance: { id, dataDir: ${JSON.stringify(dataDir)},
+        codeDir: ${JSON.stringify(runtime)}, localOnly: true, windowPort: ${windowPort} } }));
     }).listen(${port}, '127.0.0.1', () => console.log('LISTENING'));`;
   const child = spawn(process.execPath, ["-e", source], { stdio: ["ignore", "pipe", "inherit"] });
   fakes.add(child);

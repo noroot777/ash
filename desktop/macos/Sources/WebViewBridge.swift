@@ -20,8 +20,23 @@ extension BrowserWindowController: WKNavigationDelegate, WKUIDelegate, WKDownloa
       return
     }
     let scheme = url.scheme?.lowercased() ?? ""
-    if ["about", "blob", "data"].contains(scheme) || AshConfig.isSameOrigin(url) {
+    if ["about", "blob", "data"].contains(scheme) || (AshConfig.isSameOrigin(url) && !AshConfig.isLocal) {
       decisionHandler(.allow)
+      return
+    }
+    if AshConfig.isSameOrigin(url) {
+      // 本机地址：端口上可能已经换了人，放行之前认一次（见 BrowserWindowController 的 instanceLost）。
+      AshHealth.probe(AshConfig.windowHealthURL) { probe in
+        DispatchQueue.main.async { [weak self] in
+          guard let self, let instance = AshHealth.ours(probe) else {
+            decisionHandler(.cancel)
+            self?.instanceLost()
+            return
+          }
+          // 自己那份重起过就先换上新的实例号，否则这一下载回来的是一张 409。
+          self.bind(instance) { decisionHandler(.allow) }
+        }
+      }
       return
     }
     // 外站、预览地址、mailto: 之类一律交给系统默认程序，壳里只留 ash 自己。

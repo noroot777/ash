@@ -75,15 +75,18 @@ enum RestartImpactProbe {
       return .clear(.foreign(pid: instance.pid))
     case .ash(let instance):
       guard let pid = instance.pid, pid > 1 else { return .unknown("服务没报自己的进程号") }
-      return askImpact(of: .ours(pid: pid))
+      return askImpact(of: .ours(pid: pid), instance: instance.id)
     }
   }
 
-  private static func askImpact(of target: ServiceTarget) -> ImpactVerdict {
+  /// 带着认过的那一份的实例号问：问到之前端口换了人，新来的那份不答（server/src/instance-binding.ts），
+  /// 闸拿不到别人的名单。
+  private static func askImpact(of target: ServiceTarget, instance: String?) -> ImpactVerdict {
     var request = URLRequest(url: AshConfig.baseURL.appendingPathComponent("api/restart-impact"), timeoutInterval: 8)
     request.cachePolicy = .reloadIgnoringLocalCacheData
     // 与 restart.mjs 同一张凭证：单实例锁里那串 token（文件 0600）。本机直连多半用不上，带着不吃亏。
     if let token = hostToken() { request.setValue(token, forHTTPHeaderField: "x-ash-host-token") }
+    if let instance { request.setValue(instance, forHTTPHeaderField: "x-ash-instance") }
     let done = DispatchSemaphore(value: 0)
     var verdict = ImpactVerdict.unknown("没有答复")
     URLSession.shared.dataTask(with: request) { data, response, error in

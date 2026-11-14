@@ -4,7 +4,7 @@
 # 里的 swiftc；打包那一步（scripts/bundle-runtime.mjs）要本机有 node 和 npm。
 #
 #   desktop/macos/build.sh             # 产物 desktop/macos/build/Ash.app
-#   desktop/macos/build.sh --install   # 装进 /Applications（不可写就 ~/Applications）并打开
+#   desktop/macos/build.sh --install   # 装进 /Applications（不可写就 ~/Applications）并打开；旧版还有进程在用就不装
 #   desktop/macos/build.sh --dmg       # 另出一份拖进「应用程序」安装的 build/Ash.dmg
 #
 # 自更新（Sparkle）的更新源和 EdDSA 公钥取自 release.json；公钥还空着时编出来的 app 不带更新源，
@@ -19,16 +19,20 @@ BUILD="$HERE/build"
 APP="$BUILD/Ash.app"
 # 给人看的版本。Sparkle 比的是下面的 CFBundleVersion。
 VERSION="0.2.0"
-# CFBundleVersion 必须单调递增：取这次构建所在提交的时间（UTC，日期.时分），同一个提交构建
-# 几次都是同一个号；工作区有没提交的改动时取当前时间，免得和那个提交的正式构建撞号。
-# 拆成两段是因为 12 位的整数在一些版本比较实现里会溢出。
+# CFBundleVersion 必须严格递增：账本记着这台机器上发过的最后一个号，新号一定比它大（规则见
+# scripts/build-number.mjs）。账本放在仓库的 git 公共目录里，各个 worktree 共用一本；不在仓库里构建时
+# 退回 build/ 下。
 cd "$HERE"
-if git diff --quiet HEAD 2>/dev/null && [[ -z "$(git ls-files --others --exclude-standard)" ]]; then
-  STAMP="$(git log -1 --format=%ct)"
+if COMMON="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
+  BOOK="$COMMON/ash-mac-build-number"
 else
-  STAMP="$(date +%s)"
+  BOOK="$BUILD/.build-number"
 fi
-BUILD_NUMBER="${ASH_MAC_BUILD_NUMBER:-$(TZ=UTC date -r "$STAMP" +%Y%m%d.%H%M)}"
+BOOK="${ASH_MAC_BUILD_NUMBER_FILE:-$BOOK}"
+mkdir -p "$(dirname "$BOOK")"
+touch "$BOOK"
+# ASH_MAC_BUILD_NUMBER 指定时不碰账本（演练造一新一旧两版用）。
+BUILD_NUMBER="${ASH_MAC_BUILD_NUMBER:-$(lockf -k "$BOOK" node "$HERE/scripts/build-number.mjs" "$BOOK")}"
 BUNDLE_ID="${ASH_MAC_BUNDLE_ID:-dev.ash.mac}"
 
 # 更新源：release.json 里的发布仓库 → raw.githubusercontent 上那份 appcast。
@@ -122,15 +126,16 @@ case "${1:-}" in
   --install)
     DEST_DIR="/Applications"
     [[ -w "$DEST_DIR" ]] || DEST_DIR="$HOME/Applications"
-    DEST="$DEST_DIR/Ash.app"
-    mkdir -p "$DEST_DIR"
     osascript -e 'tell application id "dev.ash.mac" to quit' >/dev/null 2>&1 || true
-    # 退出 app 不停服务：旧 app 起的那份 server 还在用旧 bundle 里的代码。新 app 打开时认得出它
-    # （数据根里的 .mac-server.json 记着是哪一版起的），会按「重启会不会打断任务」决定直接换还是先问。
-    rm -rf "$DEST"
-    ditto "$APP" "$DEST"
-    echo "✓ $DEST"
-    open "$DEST"
+    # 窗口退出要一会儿；服务和 agent 的 MCP 不随它退，install-app.sh 见到还有人在用就不装。
+    # 认的是可执行文件的真实路径（lsof 报解析后的路径），装在别名目录下、路径带特殊字符都认得出。
+    GUI="$(cd "$DEST_DIR/Ash.app/Contents/MacOS" 2>/dev/null && pwd -P)/Ash" || GUI=""
+    for _ in $(seq 1 50); do
+      [[ -n "$GUI" ]] && lsof -nP -w -a -d txt -c Ash -F n 2>/dev/null | grep -qxF "n$GUI" || break
+      sleep 0.2
+    done
+    bash "$HERE/scripts/install-app.sh" "$APP" "$DEST_DIR"
+    open "$DEST_DIR/Ash.app"
     ;;
   --dmg)
     STAGE="$BUILD/dmg"

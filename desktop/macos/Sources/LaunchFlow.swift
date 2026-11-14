@@ -6,12 +6,14 @@ extension BrowserWindowController {
   /// 连别处的 ash 时直接载。
   func loadHome() {
     stopHealthPolling()
+    stopInstanceGuard()
     guard AshConfig.isLocal else { loadPage(); return }
     connect()
   }
 
   /// 页面载不进来（导航失败）。本机地址重走一遍 connect —— 服务可能挂了，也可能端口换了人。
   func showOffline(_ error: Error) {
+    stopInstanceGuard()
     if AshConfig.isLocal { connect(); return }
     offlineView.show(title: "连不上 \(AshConfig.baseURL.absoluteString)",
                      detail: "\(error.localizedDescription)\n服务起来后会自动载入。",
@@ -130,8 +132,8 @@ extension BrowserWindowController {
     guard let pid = source.livePID else { runImport(source); return }
     let alert = NSAlert()
     alert.messageText = "这份数据正被另一份 ash 用着（进程 \(pid)）"
-    alert.informativeText = "导入的是它此刻的快照，之后它那边的变化不会过来；它手上在跑的任务也会在两边各记一份。"
-      + "稳妥的做法是先停掉它（kill \(pid)）再导入。"
+    alert.informativeText = "导入的是它此刻的快照，之后它那边的变化不会过来。它手上在跑的任务仍归它管，"
+      + "导进来的那一份只记作暂停，不会去接管。打算从此改用 app 的话，先停掉它（kill \(pid)）再导入更干净。"
     alert.addButton(withTitle: "仍然导入")
     alert.addButton(withTitle: "取消")
     alert.beginSheetModal(for: window) { [weak self] response in
@@ -142,16 +144,34 @@ extension BrowserWindowController {
   private func runImport(_ source: DataImport.Source) {
     offlineView.show(title: "正在导入…", detail: source.url.path, busy: true)
     DispatchQueue.global(qos: .userInitiated).async {
-      let failure: String?
-      do {
-        try DataImport.run(source, into: AshConfig.dataURL)
-        failure = nil
-      } catch {
-        failure = "导入没成功：\(error.localizedDescription)"
-      }
+      let outcome = Result { try DataImport.run(source, into: AshConfig.dataURL) }
       DispatchQueue.main.async { [weak self] in
-        if let failure { self?.showFirstRun(note: failure) } else { self?.loadHome() }
+        switch outcome {
+        case .failure(let error): self?.showFirstRun(note: "导入没成功：\(error.localizedDescription)")
+        case .success(let report):
+          self?.loadHome()
+          self?.tellHeld(report)
+        }
       }
     }
+  }
+
+  /// 导入时停下来的东西说一声：它们在源实例上可能还在跑，副本里只是记作暂停/停用，要接着做得自己点。
+  private func tellHeld(_ report: DataImport.Report) {
+    let labels: [(String, String)] = [
+      ("tasks", "个在跑或排队的任务，已暂停"),
+      ("monitors", "个在盯的哨兵，已结束"),
+      ("gates", "次在跑的验收前置命令，记为被打断"),
+      ("reviews", "个进行中的审查或辩论，已中止"),
+      ("schedules", "个定时任务，已停用"),
+      ("messages", "条还没发出的消息，已取消"),
+    ]
+    let lines = labels.compactMap { key, label in report.held[key].map { "· \($0) \(label)" } }
+    guard !lines.isEmpty, let window else { return }
+    let alert = NSAlert()
+    alert.messageText = "导入好了，有些事没有接着做"
+    alert.informativeText = "导入不是接管：原来那份 ash 手上的活仍归它，这里不会替它续跑。\n\n"
+      + lines.joined(separator: "\n") + "\n\n要在这里接着做，到对应的任务里继续或重新打开。"
+    alert.beginSheetModal(for: window)
   }
 }

@@ -16,6 +16,8 @@
 //   app/mcp/{package.json,dist}  ash MCP 的入口，首启接 MCP 时登记的就是它
 //   app/web/dist
 //   app/scripts/start-detached.mjs  app 起服务时让 server 进自己的会话
+//   app/.in-use                  代码锁：跑这份代码的服务、MCP 以共享锁拿着它，换包时安装器拿排他锁
+//                                （shared/src/code-lock.ts、scripts/install-app.sh）
 //
 // 下载的 node 包按写死在这里的 sha256 校验，不认就不用（缓存里的也每次重验）。依赖按
 // 「lockfile + 各 workspace 的 package.json + node 版本」缓存，没变就不再装一遍。
@@ -142,6 +144,7 @@ const copies = [
   "scripts/start-detached.mjs",
 ];
 for (const rel of copies) cpSync(join(REPO, rel), join(APP, rel), { recursive: true, verbatimSymlinks: true });
+writeFileSync(join(APP, ".in-use"), "");
 // web 不进生产依赖，它那条 workspace 软链指向一个没有 package.json 的目录，留着只会让人误会。
 rmSync(join(APP, "node_modules", "@ash", "web"), { force: true });
 

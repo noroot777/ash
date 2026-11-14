@@ -21,6 +21,33 @@ enum AshConfig {
   static var healthURL: URL { baseURL.appendingPathComponent("api/health") }
   static var port: Int { port(of: baseURL) }
 
+  /// 本机那份服务给窗口专用的端口（server/src/window-port.ts）。窗口只连它，4317 留给浏览器、CLI
+  /// 和 MCP：app 的服务一停，这个端口就空着，另一份 ash（不管新旧）接手的只会是 4317，页面在撤下
+  /// 之前发出的请求连不到它。按数据根的真实路径算一个固定值，避开系统的临时端口段（49152 起）：
+  /// 每次起服务都是同一个端口，页面的本地设置（主题、草稿）跟着这个地址留得住。
+  static let windowPort: Int = {
+    if let raw = env["ASH_MAC_WINDOW_PORT"], let port = Int(raw), (1...65535).contains(port) { return port }
+    var hash: UInt32 = 2_166_136_261
+    for byte in AshHealth.realPath(dataURL.path).utf8 { hash = (hash ^ UInt32(byte)) &* 16_777_619 }
+    return 42_000 + Int(hash % 6_000)
+  }()
+
+  /// 窗口载的地址：本机时是专用端口，连别处的 ash 时就是那个地址。
+  static var windowURL: URL {
+    guard isLocal else { return baseURL }
+    return URL(string: "http://127.0.0.1:\(windowPort)")!
+  }
+  static var windowHealthURL: URL { windowURL.appendingPathComponent("api/health") }
+
+  /// 窗口地址换回给浏览器用的地址（同一路由，4317 那一边）。
+  static func browserURL(for url: URL) -> URL {
+    guard isLocal, isSameOrigin(url), var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+    parts.scheme = baseURL.scheme
+    parts.host = baseURL.host
+    parts.port = baseURL.port
+    return parts.url ?? baseURL
+  }
+
   /// 本机地址才有「自己起、认是不是自己那份」这回事；连局域网别的 ash 时 app 只是个窗口。
   static var isLocal: Bool { loopback.contains(baseURL.host?.lowercased() ?? "") }
 
@@ -32,6 +59,8 @@ enum AshConfig {
   static var nodeURL: URL { runtimeURL.appendingPathComponent("node/bin/node") }
   static var serverEntryURL: URL { runtimeURL.appendingPathComponent("server/dist/index.js") }
   static var detachScriptURL: URL { runtimeURL.appendingPathComponent("scripts/start-detached.mjs") }
+  /// 导入旧数据时洗副本的那一段（server/src/import-snapshot.ts）。
+  static var importToolURL: URL { runtimeURL.appendingPathComponent("server/dist/import-snapshot-cli.js") }
 
   /// 正式那份是 dev.ash.mac。演练用的 app 换一个（build.sh 的 ASH_MAC_BUNDLE_ID），defaults、
   /// 数据根、登录项就都跟日常那份分开；测试驱动不是 bundle，退回正式那个名字。
@@ -74,14 +103,15 @@ enum AshConfig {
     return supportURL.appendingPathComponent("downloads", isDirectory: true)
   }
 
-  /// 同源判据：scheme + host + port。127.0.0.1 与 localhost 视为同一台，免得服务端回跳
-  /// 到另一种写法时被当成外链踢去浏览器。
+  /// 窗口的同源判据：scheme + host + port 跟窗口地址逐字一样。本机时**不认别名**：localhost、::1、
+  /// 4317 都不是窗口那一份，交给浏览器打开 —— 窗口只跟专用端口说话，实例号的 cookie 也只绑在这一处。
+  /// 连别处的 ash 时 127.0.0.1 与 localhost 视为同一台，免得服务端回跳到另一种写法时被踢去浏览器。
   static func isSameOrigin(_ url: URL) -> Bool {
-    guard let scheme = url.scheme?.lowercased(), scheme == baseURL.scheme?.lowercased() else { return false }
+    guard let scheme = url.scheme?.lowercased(), scheme == windowURL.scheme?.lowercased() else { return false }
     let host = url.host?.lowercased() ?? ""
-    let baseHost = baseURL.host?.lowercased() ?? ""
-    let hostMatches = host == baseHost || (loopback.contains(host) && loopback.contains(baseHost))
-    return hostMatches && port(of: url) == port(of: baseURL)
+    let windowHost = windowURL.host?.lowercased() ?? ""
+    let hostMatches = host == windowHost || (!isLocal && loopback.contains(host) && loopback.contains(windowHost))
+    return hostMatches && port(of: url) == port(of: windowURL)
   }
 
   private static let loopback: Set<String> = ["127.0.0.1", "localhost", "::1"]

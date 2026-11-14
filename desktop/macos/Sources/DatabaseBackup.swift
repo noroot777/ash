@@ -10,16 +10,49 @@ enum SQLiteFile {
     init(_ message: String) { errorDescription = message }
   }
 
+  /// 只读打开 WAL 模式的库要 -shm 在（或者能建）；源实例正常停掉之后 -wal、-shm 都收掉了，只读那一下
+  /// 就打不开。那时主文件已经是完整的一份，按 immutable 读（不建 -shm、不碰源目录）。
   static func open(_ url: URL, flags: Int32) throws -> OpaquePointer {
+    do {
+      return try openOnce(url.path, flags: flags)
+    } catch where flags & SQLITE_OPEN_READONLY != 0
+      && !FileManager.default.fileExists(atPath: url.path + "-wal") && FileManager.default.fileExists(atPath: url.path) {
+      var components = URLComponents()
+      components.scheme = "file"
+      components.path = url.path
+      components.queryItems = [URLQueryItem(name: "immutable", value: "1")]
+      return try openOnce(components.string ?? url.path, flags: flags | SQLITE_OPEN_URI, shown: url.path)
+    }
+  }
+
+  private static func openOnce(_ name: String, flags: Int32, shown: String? = nil) throws -> OpaquePointer {
     var handle: OpaquePointer?
-    let rc = sqlite3_open_v2(url.path, &handle, flags, nil)
+    let rc = sqlite3_open_v2(name, &handle, flags, nil)
     guard rc == SQLITE_OK, let handle else {
       let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "错误码 \(rc)"
       sqlite3_close(handle)
-      throw Failure("打不开 \(url.path)：\(message)")
+      throw Failure("打不开 \(shown ?? name)：\(message)")
     }
     sqlite3_busy_timeout(handle, 5000)
+    // 打开是惰性的：WAL 库只读打不开要到第一次读才报出来，这里当场读一下。
+    var statement: OpaquePointer?
+    let read = sqlite3_prepare_v2(handle, "pragma schema_version", -1, &statement, nil) == SQLITE_OK
+      && sqlite3_step(statement) == SQLITE_ROW
+    sqlite3_finalize(statement)
+    guard read else {
+      let message = String(cString: sqlite3_errmsg(handle))
+      sqlite3_close(handle)
+      throw Failure("读不出 \(shown ?? name)：\(message)")
+    }
     return handle
+  }
+
+  static func scalar(_ handle: OpaquePointer, _ sql: String) -> String? {
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK, sqlite3_step(statement) == SQLITE_ROW,
+          let text = sqlite3_column_text(statement, 0) else { return nil }
+    return String(cString: text)
   }
 
   /// 把 `source` 一致地拷成 `target`（target 不存在或可以覆盖），拷完跑一遍 quick_check。
@@ -55,11 +88,7 @@ enum SQLiteFile {
     guard sqlite3_exec(to, "pragma journal_mode = delete", nil, nil, nil) == SQLITE_OK else {
       throw Failure("备份库失败：\(String(cString: sqlite3_errmsg(to)))")
     }
-    var statement: OpaquePointer?
-    defer { sqlite3_finalize(statement) }
-    guard sqlite3_prepare_v2(to, "pragma quick_check", -1, &statement, nil) == SQLITE_OK,
-          sqlite3_step(statement) == SQLITE_ROW, let text = sqlite3_column_text(statement, 0),
-          String(cString: text) == "ok" else {
+    guard scalar(to, "pragma quick_check") == "ok" else {
       throw Failure("拷出来的库没通过完整性检查。")
     }
   }

@@ -20,16 +20,20 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Ash.
 
 下载的 node 和装好的依赖缓存在 `build/cache/`，lockfile、各 workspace 的 package.json 或 node 版本变了才重装。
 
-版本：`CFBundleShortVersionString` 是给人看的（`build.sh` 里的 `VERSION`）；`CFBundleVersion` 单调递增，取构建所在提交的时间（UTC `日期.时分`），工作区有未提交改动时取当前时间。
+版本：`CFBundleShortVersionString` 是给人看的（`build.sh` 里的 `VERSION`）；`CFBundleVersion` 严格递增：样子是 UTC `日期.时分秒`，但每次构建都要比账本里上一个号大，不比它大（同一秒、从旧提交重打、时钟回拨）就在它上面加一，并发构建按锁排队（`scripts/build-number.mjs`）。账本是仓库 git 公共目录下的 `ash-mac-build-number`，各个 worktree 共用。
 
 ## 服务怎么起
 
-- 打开 app 先探 `/api/health`。端口上是**自己那份**（health 报的数据根就是 app 的数据根）就直接载页面；没人就用自带 node 起自带 server，带 `ASH_DATA_DIR=<数据根>`、`ASH_LOCAL_ONLY=1`。环境取自交互式登录 shell（`zsh -ilc`），claude、codex 这些 CLI 的 PATH、LANG 与终端里一致；node 不从 PATH 找。
+- 打开 app 先探 `/api/health`。端口上是**自己那份**才载页面：health 报的数据根是 app 的数据根、代码目录是 app 自带的那份、开着本机自用模式，三样都对上（`AshHealth.swift`，只看数据根的话仓库里指着同一份数据的开发实例也会被认成自己）。没人就用自带 node 起自带 server，带 `ASH_DATA_DIR=<数据根>`、`ASH_LOCAL_ONLY=1`。环境取自交互式登录 shell（`zsh -ilc`），claude、codex 这些 CLI 的 PATH、LANG 与终端里一致；数据根、端口、本机模式写成命令里的字面量、由 `env` 在 exec 那一下落定，终端配置里给开发实例 export 的同名变量盖不掉它们。node 不从 PATH 找。
+- 窗口不连 4317，连这份服务**专用的端口**：app 按数据根的真实路径算出一个固定端口（42000–47999，`AshConfig.windowPort`；`ASH_MAC_WINDOW_PORT` 可指定），起服务时用 `ASH_WINDOW_PORT` 交给它，服务在 4317 之外再监听这个端口（只听 127.0.0.1），health 里报出来（`server/src/window-port.ts`）；health 报的专用端口对不上（没监听上、或者不是这一版 app 起的）也不算自己那份。4317 照旧给浏览器、CLI 和 MCP 用，「在浏览器中打开」换回 4317 的地址。这样自己那份一停，窗口的端口就空着：别的 ash 默认只会去占 4317，撤页之前页面还在发的请求连不上任何人。**剩余风险（用户 2026-11-14 选择接受）**：专用端口只是一个普通的本机端口，不归这份服务独占。有人特意把一份旧版 ash（不认实例号）用 `PORT` 起在这个端口上，而且恰好赶在窗口撤页之前那一两秒，页面在那一下发出的请求仍会被它执行；新版 ash 起在这个端口上则会因为实例号对不上而拒收。要彻底堵住得让窗口请求换成旧版接不住的形式（每次起服务都不同的地址前缀，或经 app 转发到只有新版才开的本机连接文件），改动大，没有做。代价：窗口和浏览器是两个来源，主题、草稿这些存在页面本地的设置各管各的。
+- 认过人之后，页面发的每个请求（页面本身、fetch、SSE、预览）还都带着那一份服务的实例号（cookie `ash_instance`，原生的补接请求放在请求头里）。实例号每次起服务都换；自家服务原地重起过、或者专用端口上换了一份新版 ash，见到别人的实例号一律 409、什么都不执行（`server/src/instance-binding.ts`）。
+- 页面在的时候也一直认着人：本机地址的刷新、前进后退、页面自己跳转放行前各认一次，页面在时每秒再认一次。窗口的端口上不再是自己那份（比如服务停了）就把整页撤成空白、盖上说明，自己那份回来后回到原来的路由；自己那份重起过（实例号换了）就换上新的重载一遍。这一道管的是提示和撤页，不是请求归属：撤页之前还在路上的请求由上面两条挡下。
 - server 进自己的会话，**关窗、退出 app 都不停服务**，也不带走在跑的 agent。app 只负责起，不杀、不守护。
 - 端口被**别的 ash** 占着（比如仓库里 `npm run restart` 起的开发实例）不会连上去，窗口里说清是哪个进程、代码和数据在哪、怎么停；对方一停 app 就接着起自己那份。端口被不是 ash 的程序占着也一样说明。仓库开发实例以后换端口、用临时库起。
 - 「ash → 登录时启动 ash 服务」（装进「应用程序」后第一次打开默认勾上）：`~/Library/LaunchAgents/dev.ash.server.plist`，登录时跑一次 `Ash --start-server`，同一套逻辑、不开窗口。数据根还是空的时它不起（首启要先问用户）。
 - 日志在**数据根下的 `logs/`**：`server.log`（服务）、`login.log`（登录项），跟着数据走。起不来时占位页上有「日志」按钮。
-- 换了新版 app 而服务还是旧版 app 起的（`install:mac`、Sparkle 在退出时装的那一档、app 被强杀时 Sparkle 照样装上的那一档）：app 起服务时在数据根里记一笔 pid + 构建号（`.mac-server.json`），新版打开时认得出，走下面「装之前那道闸」把服务换成新版。
+- 重装 app 不会重启已经在跑的服务，也不会换掉它脚下的代码：`install:mac` 先请窗口退出，再换包（`scripts/install-app.sh`）。换包和进程启动共用一把锁（`shared/src/code-lock.ts`）：跑包里代码的服务、ash MCP 在读任何业务代码之前，以共享锁拿着包里的 `Contents/Resources/app/.in-use`，一直拿到进程结束；安装器对它拿排他锁，从最后一次检查一直拿到两次改名换完——拿不到就是有人在用，不装、列出是谁；换包那几秒里新起来的进程等在锁上，等到时读到的是一整份新代码。锁在文件本身上，包改名、经软链或相对路径拉起都认得出；进程被强杀内核就放锁，不留死登记；锁文件缺了入口拒绝启动，不会悄悄变成「没人用」。锁管不到的（Ash 本身、别的程序拿包里的可执行文件或脚本跑）另按真实文件身份扫（`scripts/bundle-users.sh`）：可执行文件、映射进来的库、工作目录按 lsof 报的真实路径比，命令行里提到的 .app 逐个按真实路径解析。挑没有任务在跑的时候 `kill` 掉服务（agent 不跟着停），等 MCP 那几个任务这一轮结束，再装一次。同一个安装目录同一时刻只有一个安装在换（按目录真实路径加锁）；新版先拷到旁边再换上，拷失败、最后一步失败时旧的那份放回原处。已经装着的是还没有代码锁的旧版 app 时，那一次只能靠扫描。
+- 换了新版 app 而服务还是旧版 app 起的（app 被强杀时 Sparkle 照样装上的那一档、手动换 app）：app 起服务时在数据根里记一笔 pid + 构建号（`.mac-server.json`），新版打开时认得出，走下面「装之前那道闸」把服务换成新版。
 
 ## 自更新
 
@@ -45,6 +49,8 @@ bash desktop/macos/build.sh --dmg       # 另出一份拖拽安装的 build/Ash.
 2. 不会打断任何任务 → 直接装。会打断 → 弹窗列出是哪几个、为什么，选「等它们跑完再装」或「现在装」（退出那一档多一个「取消」）。选了等，每 5 秒再问一次，确认排空了才自己装（中途一次探活失败只算确认不了，接着等）；等的时候菜单里有「等任务跑完后安装更新…」，点它可以改成现在装。
 3. 放行后：攥住启动锁、在数据根里写维护标记（`.mac-maintenance.json`）→ 停掉**评估过的那一份**服务（SIGTERM；在跑的 agent 不随它死，新服务起来按 pid 接管；这会儿端口上换了进程、或者认不出是谁，就不停、从头再评估）→ 备份库 → 交给 Sparkle 换 app、重开 → 新版起新服务。维护标记在的时候，任何入口（这个窗口、登录项的 `--start-server`、另开的一份 app）都不起服务；持有它的进程没了（装完被退掉、崩了）标记就作废。停不下来或备份失败就不装，窗口把服务接回来，菜单里留「安装更新…」可以重试。
 4. Sparkle 中途放弃了这次更新（安装出错、取消）：闸里排着的安装、轮询、维护标记全部作废，窗口把服务接回来；再装从头评估、再备份一次。
+
+Sparkle 换包不经过 `install-app.sh` 那把代码锁：服务在闸里先停了；之后还拿着包里代码的只有在跑的 agent 拉起的 ash MCP，它们所在的任务都算在第 1 步的「会打断」里。选「等它们跑完再装」，换包时就没有人在用旧包；选「现在装」，列出的那几个任务的 MCP 会在新旧代码之间被换掉，可能失败。
 
 **退出那一档的例外**：退出时备份不成（比如盘满了），弹窗给「不退出」和「仍然退出」。Sparkle 没有「撤销退出时安装」的接口，仍然退出就会换上新版 app —— 兜底在新版那头：**起服务之前，库上一次要是交给别的构建号起的（或者没有服务记录、不知道是谁）、这一次又还没备过，先备份并固定成恢复点；备份不成就不起服务、不碰库**（判据见下一节），装回旧版 app 就能回去。这一条同样兜住强杀后的安装、`build.sh --install` 和手动换 app。
 
@@ -93,7 +99,7 @@ desktop/macos/build/cache/Sparkle-*/bin/generate_keys --account dev.ash.mac -f <
 npm run release:mac
 ```
 
-从**干净的提交**构建（版本号取提交时间）→ 核对 app 里的公钥就是签名私钥的那一把、更新源就是素材库里那份 appcast → 版本号必须比 appcast 里最新的大 → 压 zip（`ditto`）、`sign_update` 签名 → 在素材库建 GitHub Release `ash-mac-v<版本>-<构建号>`、传 zip → 把包下回来核对 → 再更新 appcast（新的一项在前，旧的原样保留，整份重签）→ 经 GitHub Contents API 提交回素材库（带着读出时的 sha，这期间别处改过就拒，重跑即可；不克隆素材库，宣传片等大文件一个字节都不下）。先传包、确认下得下来才提交 appcast，feed 不会指向一个还不存在的包；中途失败重跑，同一版沿用 `build/releases/` 里上次压好的 zip —— 只在这次的 app 和压那个 zip 的是同一份时（zip 旁边的 `.source` 记着 app 的内容摘要），同一个构建号换了包就拒发。更新说明默认是上一版以来的提交标题，`--notes` 可以换。
+从**干净的提交**构建（构建号由账本发，见上面「版本」）→ 核对 app 里的公钥就是签名私钥的那一把、更新源就是素材库里那份 appcast → 版本号必须比 appcast 里最新的大 → 压 zip（`ditto`）、`sign_update` 签名 → 在素材库建 GitHub Release `ash-mac-v<版本>-<构建号>`、传 zip → 把包下回来核对 → 再更新 appcast（新的一项在前，旧的原样保留，整份重签）→ 经 GitHub Contents API 提交回素材库（带着读出时的 sha，这期间别处改过就拒，重跑即可；不克隆素材库，宣传片等大文件一个字节都不下）。先传包、确认下得下来才提交 appcast，feed 不会指向一个还不存在的包；中途失败重跑，同一版沿用 `build/releases/` 里上次压好的 zip —— 只在这次的 app 和压那个 zip 的是同一份时（zip 旁边的 `.source` 记着 app 的内容摘要），同一个构建号换了包就拒发。更新说明默认是上一版以来的提交标题，`--notes` 可以换。
 
 GitHub 凭证按顺序找：`GH_TOKEN` / `GITHUB_TOKEN` → `gh auth token` → git 存在钥匙串里的 github.com 凭证（`git push` 用的那条）。都没有就报错并说怎么配。传包和提交 appcast 只用这一张，开传之前先确认它对素材库有写权限，没有就什么都不传。`--init-repo` 只在 `release.json` 的 repo 还不存在时才用得上（会建成公开仓库）。raw.githubusercontent 有几分钟缓存，推完稍等已装的 app 才看得到。
 
@@ -121,7 +127,9 @@ open /tmp/r/Ash.app                                                          # �
 数据根里还没有 `ash.db` 时，先问数据从哪来：
 
 - **全新开始**：起一份空的，进入首启向导（供应商 → 执行器 → 项目）。
-- **导入已有数据…**：选一份 ash 数据目录（比如仓库的 `data/`）。**只复制、不移动**。库走 SQLite 在线备份（一致快照，源库正被另一份 server 写着也安全；它还开着时会先提醒），其余目录按文件复制（同一 APFS 卷上是克隆，不占第二份空间）；锁、在线标记、`deps/`、`tmp/` 不搬。多人模式的数据不能导（app 只跑自用模式）。库最后落，中途失败下次打开还是这一屏。已知局限：库里有些历史记录写的是源目录的绝对路径（旧会话的输出文件、监控日志等），导入后它们仍指向源目录，源目录删了那几条就读不到。
+- **导入已有数据…**：选一份 ash 数据目录（比如仓库的 `data/`）。**只复制、不移动**，源目录一个文件都不多。库走 SQLite 在线备份（一致快照，源库正被另一份 server 写着也安全；它还开着时会先提醒），其余目录按文件复制（同一 APFS 卷上是克隆，不占第二份空间）；锁、在线标记、`deps/`、`tmp/`、源的 `logs/` 不搬。多人模式的数据、和 app 数据根互相包含的目录不能导。
+  - **导入不是重启**：发布前用自带 node 跑一遍 server 的 `import-snapshot`。副本里不留任何认得出源实例进程的线索（pid、启动时刻、进程记号、没收干净的清理责任），在跑或排队的任务落「暂停」，在盯的哨兵、在跑的验收前置命令、进行中的审查落「结束/被打断」，定时任务停用（定义留着）、没发出的消息取消、队列推进作废 —— 否则副本开机会去接管、甚至停掉源实例正在跑的 agent，或在同一个仓库里再起一份。审查链另有一套不认 pid、认「任务还停在那个方向上」的执行权限：每个任务的方向世代推进一格，导入前记下的方向身份一律作废；收尾计划落成已了结、待补的结算不再补、续审/派审/修复投递的凭据全部撤掉 —— 否则副本开机会替源实例重投修复、推后续站、清合并审查的工作区。停下了哪些，导入完弹窗说一声。同一趟把库里落在源数据根下的绝对路径（会话输出、哨兵日志、附件、证据目录……）逐字改到 app 的数据根（数据根路径里带 `$&` 之类也照原样写），源数据根以外的路径一个字不动。
+  - 和起服务**同一把锁**：先在数据根里一个只属于这一次的暂存目录备齐、洗好，再拿锁发布；锁里重查数据根还空着（另一个窗口或登录项可能刚点了「全新开始」，那时这次导入作罢、那份数据不碰）。数据根里有认不出来的东西也拒绝。库最后落，是提交点；挪到一半的条目记在清单里，下次导入先收掉。
 
 连上自己那份之后，app 替本机装了的 CLI 接 ash MCP（`POST /api/ash-mcp/host-setup`，同注册执行器那一下：缺了才写、已有登记一律不覆盖），写进去的是 app 自带的 node 和 `mcp/dist`。已有登记**指向别处**的（比如仓库的 `mcp/dist`）不替你改，弹窗列出现在指向哪、改成什么，改不改你定；没接上的（macOS 上 codex 那一家 ash 不替你写）给出手工加的那一段。每个数据根自动查一次，之后从菜单「检查 ash MCP 登记…」随时再查。
 
@@ -137,7 +145,7 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 
 也可以 `defaults write dev.ash.mac AshDataDir <目录>` 换数据根、`defaults write dev.ash.mac AshURL http://192.168.1.187:4317` 连别的 ash（非本机地址不替它起服务，也不做身份判断）。
 
-定点回归（仅 macOS）：`node scripts/test-macos-update.mjs` 覆盖装之前那道闸（不会打断就不问；会打断先问、等到排空自己装、现在装；问不出来按会打断；等的时候一次 503 / 不应答不放行；只停评估过的那个进程；另一处在起服务时不停；维护标记跨进程生效、持有者没了作废；停不下来不装也不备份；别的 ash 不碰；退出那一档和它备份失败时的说法；Sparkle 放弃后闸收回、重试再备份；起服务前补备份、没有服务记录时连着起不来也留住迁移前的原件、起它的启动器没等到时由之后看到它应答的那一处确认、下一版不拿上一次的底顶替、确认后旧恢复点作废；旧版服务识别）、库备份（WAL 里的写入、确认前不轮换、确认后只留 5 份、同一秒不覆盖且按生成先后认新旧）和发版脚本（zip 与 appcast 的签名、篡改检测、重发 / 旧版本 / 钥匙不配对拒发、`--notes`、缓存 zip 认 app；对着本地假 GitHub 的正式发版：只给 GH_TOKEN 走完传包和提交 appcast、没写权限什么都不传）。`node scripts/test-macos-client.mjs`用真的 AshConfig / AshHealth / ServerLauncher / DataImport 加一份假的自带运行时，覆盖下载事务、红绿灯下的页面、「端口上是谁」的判据、空数据根不起、起服务的环境、占用提示、并发只起一份、锁超时、请求合并、起来就退、PID 核对、启动器报错、运行时缺件、导入（WAL 里的写入、只复制、多人库拒绝、残留替换）。server 那一半在 `npm -w server run test:host-ash-mcp`。
+定点回归（仅 macOS）：`node scripts/test-macos-update.mjs` 覆盖装之前那道闸（不会打断就不问；会打断先问、等到排空自己装、现在装；问不出来按会打断；等的时候一次 503 / 不应答不放行；只停评估过的那个进程；另一处在起服务时不停；维护标记跨进程生效、持有者没了作废；停不下来不装也不备份；别的 ash 不碰；退出那一档和它备份失败时的说法；Sparkle 放弃后闸收回、重试再备份；起服务前补备份、没有服务记录时连着起不来也留住迁移前的原件、起它的启动器没等到时由之后看到它应答的那一处确认、下一版不拿上一次的底顶替、确认后旧恢复点作废；旧版服务识别）、库备份（WAL 里的写入、确认前不轮换、确认后只留 5 份、同一秒不覆盖且按生成先后认新旧）和发版脚本（zip 与 appcast 的签名、篡改检测、重发 / 旧版本 / 钥匙不配对拒发、`--notes`、缓存 zip 认 app；对着本地假 GitHub 的正式发版：只给 GH_TOKEN 走完传包和提交 appcast、没写权限什么都不传）。`node scripts/test-macos-client.mjs` 用真的 AshConfig / AshHealth / ServerLauncher / DataImport / BrowserWindowController 加一份假的自带运行时，覆盖下载事务、红绿灯下的页面、「端口上是谁」的判据（数据根 + 自带代码 + 本机模式）、窗口只连专用端口、在线后换人（自己那份停了、不认实例号的旧版 ash 接手 4317，页面持续写请求，一条都到不了 4317；导航与定时两道撤页；自家服务重起后换上新实例号）、空数据根不起、起服务的环境（终端配置盖不掉）、占用提示、并发只起一份、锁超时、请求合并、起来就退、PID 核对、启动器报错、运行时缺件、构建号、安装（别名目录、带正则字符的目录、相对路径起的包内可执行文件、包外软链起的入口靠它拿着的锁认出、最后检查之后改名之前起来的入口等在锁上并读到整份新包、锁文件缺了不启动不安装、两个安装器并发）、导入（WAL 里的写入、暂存里洗过再发布、和起服务互斥、失败与抢跑不留痕迹、残留清单、停掉的源、互相包含、多人库拒绝）。server 那一半：`npm -w server run test:host-ash-mcp`（MCP 登记归类）、`npm -w server run test:import-snapshot`（导入不是重启：真的接管入口对着洗过的库认不出活着的源进程；同一串开机对账对着没洗/洗过的副本各跑一遍，前者替源实例重投修复、后者一行不动；路径逐字重定位）、`npm -w server run test:instance-binding`（真服务：带着别人实例号的写请求、页面、预览与预览 WebSocket 一律 409 且不执行，health 照答；窗口专用端口上同一套判据，被占着时 health 报 null、服务照常起）。
 
 ## 窗口
 
@@ -150,12 +158,15 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 | 文件 | 管什么 |
 |---|---|
 | `scripts/bundle-runtime.mjs` | 把 node、产物、生产依赖装进 app |
+| `scripts/build-number.mjs` | 严格递增的 CFBundleVersion |
+| `scripts/install-app.sh` | 换进安装目录（按目录加锁）；旧包还有进程在用就不换 |
+| `scripts/bundle-users.sh` | 还有哪些进程在用某个 .app（按真实文件身份认） |
 | `Sources/AshConfig.swift` | 连哪台、自带运行时在哪、数据和日志放哪 |
-| `Sources/AshHealth.swift` | 「端口上是谁」的唯一判据 |
+| `Sources/AshHealth.swift` | 「端口上是谁」的唯一判据（数据根、自带代码、本机模式、窗口专用端口） |
 | `Sources/ServerLauncher.swift` | 起自带的服务；端口被占时说清是谁 |
 | `Sources/ServerStartLock.swift` | 同一数据根同时只有一处在起服务 |
 | `Sources/LaunchFlow.swift` | 窗口回到 ash 的那条路，首启的全新开始 / 导入 |
-| `Sources/DataImport.swift` | 导入旧数据 |
+| `Sources/DataImport.swift` | 导入旧数据：暂存、洗副本（`server/src/import-snapshot.ts`）、持锁发布 |
 | `Sources/HostMcpSetup.swift` | 替本机 CLI 接 ash MCP、把指向别处的摆给用户 |
 | `Sources/LoginService.swift` | 登录时启动的 LaunchAgent |
 | `Sources/Updater.swift` | 接 Sparkle：三条安装路径都交给 UpdateGate |
@@ -167,7 +178,7 @@ ASH_URL=http://127.0.0.1:14977 ASH_DATA_DIR=/tmp/ash-try HOME=/tmp/ash-home \
 | `scripts/release.mjs`、`appcast.mjs`、`github.mjs` | 发版、appcast 读写、GitHub API |
 | `release.json` | 发布仓库与 appcast 路径、tag 前缀、钥匙串条目名、EdDSA 公钥 |
 | `Sources/AppDelegate.swift` | 生命周期与菜单（⌘C/⌘V 靠编辑菜单分发，不能省） |
-| `Sources/BrowserWindowController.swift` | 窗口、WKWebView、探活、菜单动作 |
+| `Sources/BrowserWindowController.swift` | 窗口、WKWebView、探活、页面在时认人、菜单动作 |
 | `Sources/WindowChrome.swift` | 内容铺到窗口顶：量红绿灯、和页面的约定、拖窗口 |
 | `Sources/WebViewBridge.swift` | 外链、新窗口、选文件、下载、JS 对话框 |
 | `Sources/DownloadTransaction.swift` | 另存为的暂存、原子替换与中断后的回收 |

@@ -10,8 +10,14 @@ import Darwin
 /// 是某一时刻的一致快照），其余目录（runs、uploads……）按文件复制 —— 同一个 APFS 卷上是克隆，
 /// 几个 G 的 runs 也不占第二份空间。
 ///
-/// 库最后落、而且先写到旁边再改名：中途失败或被强退时数据根里仍然没有 `ash.db`，下次打开 app
-/// 还是首启那一屏，可以重来。
+/// 一致快照不等于独立实例的快照：库里还记着源实例手上的进程和它开机要接着做的事。发布之前用自带
+/// node 跑一遍 server 的 import-snapshot（洗掉进程身份、在飞的活落被打断、自动续跑停用，源数据根下
+/// 的路径改到这里），否则副本开机会去接管、甚至停掉源实例正在跑的 agent。
+///
+/// 两段：先在数据根里一个只属于这一次的暂存目录里把整份备齐，再拿着**和起服务同一把锁**发布。
+/// 锁里重查一次数据根还空着 —— 首启那一屏只是当时的一次判断，另一个窗口或登录项可能已经点了
+/// 「全新开始」。发布时库最后落，它就是提交点：之前的任何一步失败，数据根里都还没有 `ash.db`，
+/// 下次打开还是首启那一屏；挪了一半的条目记在一张清单里，下一次导入先按清单收掉。
 enum DataImport {
   struct Source {
     let url: URL
@@ -19,16 +25,31 @@ enum DataImport {
     let livePID: Int32?
   }
 
+  /// 洗副本时停下来的东西（import-snapshot 的 ImportPreparation）。
+  struct Report: Decodable {
+    let held: [String: Int]
+    let relocated: Int
+  }
+
   typealias Failure = SQLiteFile.Failure
 
-  /// 看一眼这份目录能不能导：有库、不是 app 自己的数据根、不是多人模式。
+  /// 数据根里本来就会有的 app 自己的东西：导入前它们可以在，源目录里同名的不搬。
+  static let appOwned: Set<String> = ["logs", "downloads", "backups", ".mac-launch.lock", ServerRecord.fileName,
+                                      Maintenance.fileName, ".DS_Store"]
+  private static let journalName = ".import-publishing.json"
+  private static let stagingPrefix = ".import-staging-"
+
+  /// 看一眼这份目录能不能导：有库、和 app 的数据根互不包含、不是多人模式。
   static func inspect(_ url: URL) throws -> Source {
     let db = url.appendingPathComponent("ash.db")
     guard FileManager.default.fileExists(atPath: db.path) else {
       throw Failure("\(url.path) 里没有 ash.db。要选的是 ash 的数据目录（仓库里是 data/）。")
     }
-    guard !AshHealth.samePath(url.path, AshConfig.dataURL.path) else {
-      throw Failure("这就是 app 自己的数据目录。")
+    let source = AshHealth.realPath(url.path), dest = AshHealth.realPath(AshConfig.dataURL.path)
+    guard source != dest else { throw Failure("这就是 app 自己的数据目录。") }
+    // 互相包含时，复制的一边会把另一边也卷进去（目标在源里面 = 把自己拷进自己）。
+    guard !contains(source, dest) && !contains(dest, source) else {
+      throw Failure("\(url.path) 和 app 的数据目录 \(AshConfig.dataURL.path) 一个在另一个里面，没法导入。")
     }
     // 多人模式的数据转不回自用（server 的 auth/mode.ts），而 app 只以本机自用模式起服务。
     if try instanceMode(of: db) == "multi" {
@@ -37,32 +58,130 @@ enum DataImport {
     return Source(url: url, livePID: livePID(lock: url.appendingPathComponent("ash.db.ash.lock")))
   }
 
-  /// 导进 `dest`（app 的数据根）。调用方保证 dest 里还没有 ash.db。
-  static func run(_ source: Source, into dest: URL) throws {
+  /// 导进 `dest`（app 的数据根）。数据根在这期间被别人用上了就整次作罢，那份数据一个字节不碰。
+  static func run(_ source: Source, into dest: URL, lockTimeout: TimeInterval = 60) throws -> Report {
     let fm = FileManager.default
     try fm.createDirectory(at: dest, withIntermediateDirectories: true)
+    // 先看一眼，省得白拷一趟；作数的那一次在锁里（publish）。锁外不收任何残留：另一处可能正在发布。
+    try requireNoDatabase(dest)
+    let staging = dest.appendingPathComponent("\(stagingPrefix)\(getpid())-\(UUID().uuidString)", isDirectory: true)
+    defer { try? fm.removeItem(at: staging) }
+    try fm.createDirectory(at: staging, withIntermediateDirectories: false)
     for name in try fm.contentsOfDirectory(atPath: source.url.path) where !skipped(name) {
-      let target = dest.appendingPathComponent(name)
-      // 只可能是上一次没导完留下的：数据根里还没有库，就还没有任何一份 server 用过它。
-      if fm.fileExists(atPath: target.path) || (try? fm.destinationOfSymbolicLink(atPath: target.path)) != nil {
-        try fm.removeItem(at: target)
-      }
-      try fm.copyItem(at: source.url.appendingPathComponent(name), to: target)
+      try fm.copyItem(at: source.url.appendingPathComponent(name), to: staging.appendingPathComponent(name))
     }
-    let staged = dest.appendingPathComponent("ash.db.importing")
-    try? fm.removeItem(at: staged)
-    try SQLiteFile.snapshot(from: source.url.appendingPathComponent("ash.db"), to: staged)
-    try fm.moveItem(at: staged, to: dest.appendingPathComponent("ash.db"))
+    let db = staging.appendingPathComponent("ash.db")
+    try SQLiteFile.snapshot(from: source.url.appendingPathComponent("ash.db"), to: db)
+    let report = try prepare(db, source: source.url, dest: dest)
+    try seal(db)
+
+    let lock = try ServerStartLock(dataDir: dest)
+    let deadline = Date().addingTimeInterval(lockTimeout)
+    while try !lock.tryAcquire() {
+      guard Date() < deadline else { throw Failure("另一处正在启动 ash 服务，等它超时了。这次没有导入，可以重试。") }
+      Thread.sleep(forTimeInterval: 0.2)
+    }
+    try withExtendedLifetime(lock) { try publish(staging, into: dest) }
+    return report
   }
 
-  /// 不跟着搬的：库文件本身（另走备份）和它的日志、别人的锁与在线标记、可以重建的缓存，
-  /// 以及 app 自己放在数据根里的东西。
+  /// 不跟着搬的：库文件本身（另走备份）和它的日志、别人的锁与在线标记、可以重建的缓存、
+  /// app 自己放在数据根里的东西，以及别的导入留下的暂存。
   static func skipped(_ name: String) -> Bool {
-    let exact: Set<String> = ["ash.db", "ash.db-wal", "ash.db-shm", "ash.db-journal", "ash.db.importing",
-                              "deps", "tmp", "logs", "downloads", "backups",
-                              ".mac-launch.lock", ServerRecord.fileName, Maintenance.fileName, ".DS_Store"]
-    return exact.contains(name) || name.hasSuffix(".ash.lock") || name.contains(".ash-online.")
+    let exact: Set<String> = ["ash.db", "ash.db-wal", "ash.db-shm", "ash.db-journal", "deps", "tmp", journalName]
+    return exact.contains(name) || appOwned.contains(name) || name.hasPrefix(stagingPrefix)
+      || name.hasSuffix(".ash.lock") || name.contains(".ash-online.")
   }
+
+  // MARK: 发布
+
+  /// 在锁里：数据根还空着才发布。挪进去的条目先记清单，库最后挪，挪完清单作废。
+  private static func publish(_ staging: URL, into dest: URL) throws {
+    let fm = FileManager.default
+    try requireEmpty(dest, except: staging.lastPathComponent)
+    // 库是单个文件（seal）；它旁边残留的 -shm 只是共享内存索引，不跟着挪。
+    let entries = try fm.contentsOfDirectory(atPath: staging.path).filter { !["ash.db", "ash.db-shm", "ash.db-journal"].contains($0) }
+    guard !entries.contains("ash.db-wal") else { throw Failure("导出来的库还没收成单个文件，没有导入。") }
+    let journal = dest.appendingPathComponent(journalName)
+    try JSONSerialization.data(withJSONObject: entries).write(to: journal, options: .atomic)
+    for name in entries {
+      try fm.moveItem(at: staging.appendingPathComponent(name), to: dest.appendingPathComponent(name))
+    }
+    try fm.moveItem(at: staging.appendingPathComponent("ash.db"), to: dest.appendingPathComponent("ash.db"))
+    try? fm.removeItem(at: journal)
+  }
+
+  /// 数据根里没有库、除了 app 自己的东西也没有别的。上一次挪到一半的（清单上那些）和已经没人在写的
+  /// 暂存目录是导入自己的残留，先收掉；剩下认不出来的一律不碰，改为拒绝导入。
+  private static func requireEmpty(_ dest: URL, except ownStaging: String) throws {
+    let fm = FileManager.default
+    try requireNoDatabase(dest)
+    let journal = dest.appendingPathComponent(journalName)
+    if let data = try? Data(contentsOf: journal), let names = try? JSONSerialization.jsonObject(with: data) as? [String] {
+      for name in names where !name.contains("/") && !appOwned.contains(name) {
+        try? fm.removeItem(at: dest.appendingPathComponent(name))
+      }
+      try fm.removeItem(at: journal)
+    }
+    var strangers: [String] = []
+    for name in try fm.contentsOfDirectory(atPath: dest.path) where !appOwned.contains(name) && name != ownStaging {
+      if name.hasPrefix(stagingPrefix), let pid = Int32(name.dropFirst(stagingPrefix.count).prefix { $0 != "-" }) {
+        if kill(pid, 0) != 0 && errno == ESRCH { try? fm.removeItem(at: dest.appendingPathComponent(name)) }
+        continue
+      }
+      strangers.append(name)
+    }
+    guard strangers.isEmpty else {
+      throw Failure("\(dest.path) 里已经有别的东西（\(strangers.sorted().prefix(6).joined(separator: "、"))），"
+        + "导入只往空的数据目录里放。先把它们挪走再导入。")
+    }
+  }
+
+  private static func requireNoDatabase(_ dest: URL) throws {
+    guard !FileManager.default.fileExists(atPath: dest.appendingPathComponent("ash.db").path) else {
+      throw Failure("\(dest.path) 里已经有一份 ash 数据了（可能另一个窗口或登录项刚点了「全新开始」）。这次没有导入，那份数据没有动。")
+    }
+  }
+
+  // MARK: 洗副本
+
+  /// 自带 node 跑 server 的 import-snapshot：源数据根按选的路径和它的真实路径各给一份。
+  private static func prepare(_ db: URL, source: URL, dest: URL) throws -> Report {
+    for part in [AshConfig.nodeURL, AshConfig.importToolURL] where !FileManager.default.fileExists(atPath: part.path) {
+      throw Failure("app 里自带的 ash 不完整（缺 \(part.path)）。重新装一次 Ash.app。")
+    }
+    let roots = Array(Set([source.standardizedFileURL.path, AshHealth.realPath(source.path)]))
+    let tool = Process()
+    tool.executableURL = AshConfig.nodeURL
+    tool.arguments = [AshConfig.importToolURL.path, db.path, dest.standardizedFileURL.path] + roots
+    tool.environment = ["PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory(), "LANG": "en_US.UTF-8"]
+    let output = Pipe(), errors = Pipe()
+    tool.standardOutput = output
+    tool.standardError = errors
+    tool.standardInput = FileHandle.nullDevice
+    try tool.run()
+    let printed = output.fileHandleForReading.readDataToEndOfFile()
+    let complaint = String(data: errors.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    tool.waitUntilExit()
+    guard tool.terminationStatus == 0, let report = try? JSONDecoder().decode(Report.self, from: printed) else {
+      throw Failure("整理导入的数据失败（退出码 \(tool.terminationStatus)）：\(complaint.suffix(600))")
+    }
+    return report
+  }
+
+  /// 发布前最后一道：库是好的，而且是单个文件（不带 -wal/-shm，挪一个文件就是整份）。
+  private static func seal(_ db: URL) throws {
+    let handle = try SQLiteFile.open(db, flags: SQLITE_OPEN_READWRITE)
+    defer { sqlite3_close(handle) }
+    guard SQLiteFile.scalar(handle, "pragma quick_check") == "ok" else {
+      throw Failure("导出来的库没通过完整性检查，没有导入。")
+    }
+    guard SQLiteFile.scalar(handle, "pragma journal_mode=DELETE")?.lowercased() == "delete" else {
+      throw Failure("导出来的库收不成单个文件：\(String(cString: sqlite3_errmsg(handle)))")
+    }
+  }
+
+  // MARK: SQLite
 
   private static func instanceMode(of db: URL) throws -> String {
     let handle = try SQLiteFile.open(db, flags: SQLITE_OPEN_READONLY)
@@ -76,6 +195,10 @@ enum DataImport {
     // 值是 JSON 编码的字符串（"\"single\""）。
     let raw = String(cString: text)
     return (try? JSONSerialization.jsonObject(with: Data(raw.utf8), options: .fragmentsAllowed) as? String) ?? raw
+  }
+
+  private static func contains(_ outer: String, _ inner: String) -> Bool {
+    inner.hasPrefix(outer.hasSuffix("/") ? outer : outer + "/")
   }
 
   /// server 的单实例锁是 JSON，`pid` 那一项还活着就是有人开着这份库。
