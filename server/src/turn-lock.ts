@@ -458,10 +458,10 @@ function endOwnTurn(taskId: string, owner: TurnOwner, clearFreeze: boolean): Tur
   if (!held || held.seq !== owner.seq) return null;
   if (clearFreeze) startFreeze.delete(taskId);
   turns.delete(taskId);
-  const waiting = afterTurn.get(taskId);
-  if (!waiting) return held;
+  const waiting = afterTurn.get(taskId) ?? [];
   afterTurn.delete(taskId);
-  for (const fn of waiting) {
+  // 登记过的交接先走(它们多半同步占下一轮),固定后续排在最后 —— 见 `onTurnReleased`。
+  for (const fn of releaseFollowUp ? [...waiting, () => releaseFollowUp!(taskId)] : waiting) {
     try {
       fn();
     } catch (error) {
@@ -469,6 +469,19 @@ function endOwnTurn(taskId: string, owner: TurnOwner, clearFreeze: boolean): Tur
     }
   }
   return held;
+}
+
+let releaseFollowUp: ((taskId: string) => void) | null = null;
+
+/**
+ * **每一次放锁都固定要做的事**(扫待发送、补推队列),由 turn-release.ts 在加载时登记,只此一份。
+ *
+ * 和 `whenTurnIdle` 的区别:那是一次性登记,谁需要谁去挂,漏挂一处就只剩 30 秒兜底 tick;这一条
+ * 不靠任何人记得。做成登记而不是在这里直接 import,是因为那两件事要读库、要回头 import 结算链,
+ * 这个文件得保持无运行时依赖(只测锁的回归脚本不该因为放一次锁就去开库)。
+ */
+export function onTurnReleased(fn: (taskId: string) => void): void {
+  releaseFollowUp = fn;
 }
 
 /**
