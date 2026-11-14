@@ -197,7 +197,7 @@ export function gateStage({ browser, base }) {
     });
     await page.route("**/api/tasks/gate-task/accept-gate/conflict-handoff", (route) => {
       store.conflictHandoffs += 1;
-      store.gate = { ...store.gate, baselineIssue: { ...store.gate.baselineIssue, handedOffAt: new Date().toISOString() } };
+      store.gate = { ...store.gate, baselineIssue: { ...store.gate.baselineIssue, handoff: { at: new Date().toISOString(), state: "working", note: null } } };
       return json(route, { ok: true, message: "已把合并冲突交给任务" });
     });
     await page.route("**/api/tasks/gate-task/accept-gate/force-release", route => {

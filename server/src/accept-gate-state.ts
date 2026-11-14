@@ -13,7 +13,7 @@ import { gateDependencies, gateSnapshotPath, gateSourceMatches, readGateSource }
 import { gateBaselineMatches, resolveGateBaseline } from "./accept-gate-baseline.js";
 import { decodePhysical, type GatePhysical } from "./accept-gate-physical.js";
 import { decodeGateEntryProbe, gateEntryNote } from "./accept-gate-entry.js";
-import { conflictHandedAt } from "./accept-gate-conflict-registry.js";
+import { conflictHandoffOf } from "./accept-gate-conflict-registry.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
@@ -177,7 +177,8 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   const block = judged?.block ?? null;
   const baselineView = { baseline, baselineBlock: block?.error ?? null,
     baselineIssue: block ? { reason: block.reason, targetBranch: block.targetBranch, conflictFiles: block.conflictFiles ?? [],
-      handedOffAt: block.reason === "merge_conflict" ? conflictHandedAt(task.id, head, block.targetCommit) : null } : null,
+      handoff: block.reason === "merge_conflict"
+        ? conflictHandoffOf(task.id, head, block.targetCommit, task.status === "running" || task.status === "queued") : null } : null,
     baselineTarget: target?.targetBranch && target.targetCommit ? { branch: target.targetBranch, commit: target.targetCommit } : null };
   const latestRow = await latestRun(taskId);
   if (!latestRow) return { command, prepare, running: null, latest: null, basis, unavailable, sourceError, executionNotice, ...baselineView };

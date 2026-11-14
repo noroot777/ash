@@ -140,7 +140,7 @@ export async function testAcceptGateConfirm({ open, run }) {
 
   // ⑯ 合并预览撞冲突：红行、不拦主按钮；让任务解决之后改口。
   {
-    const issue = { reason: "merge_conflict", targetBranch: "main", conflictFiles: ["a.ts"], handedOffAt: null };
+    const issue = { reason: "merge_conflict", targetBranch: "main", conflictFiles: ["a.ts"], handoff: null };
     const { page, store } = await open({ gate: { command: "./kb.sh test full", running: null, latest: null, basis: null,
       baseline: "merge_preview", baselineTarget: { branch: "main", commit: "def67890" }, baselineIssue: issue } });
     const row = checkRow(page, "baseline");
@@ -165,10 +165,39 @@ export async function testAcceptGateConfirm({ open, run }) {
     await page.close();
   }
 
+  // ⑯ 交出去之后照服务端报回的投递结局说：排着 / 正在解决收起按钮；没送到、那一轮没解掉都给「再交一次」。
+  for (const [handoff, text, state, button] of [
+    [{ state: "queued", note: null }, "已交给任务，等它接手", "main", null],
+    [{ state: "failed", note: "任务已归档，这一轮在启动前被撤回" }, "与 main 冲突", "没交出去", "再交一次"],
+    [{ state: "ended", note: null }, "与 main 冲突", "任务那一轮没解掉", "再交一次"],
+  ]) {
+    const issue = { reason: "merge_conflict", targetBranch: "main", conflictFiles: ["a.ts"], handoff: { at: "2026-11-14T10:00:00Z", ...handoff } };
+    const { page, store } = await open({ gate: { command: "./kb.sh test full", running: null, latest: null, basis: null,
+      baseline: "merge_preview", baselineTarget: { branch: "main", commit: "def67890" }, baselineIssue: issue } });
+    const row = checkRow(page, "baseline");
+    await row.filter({ hasText: text }).waitFor();
+    assert.equal(await stateOf(row), state, handoff.state);
+    assert.equal(await row.getByRole("button", { name: "让任务解决", exact: true }).count(), 0, handoff.state);
+    if (button) {
+      await assertTone(row, "block");
+      if (handoff.note) {
+        await row.locator(".acc-check-main").click();
+        await row.locator(".acc-check-detail").getByText(handoff.note).waitFor();
+      }
+      await row.getByRole("button", { name: button, exact: true }).click();
+      await waitUntil(() => store.conflictHandoffs === 1, `${handoff.state}：再交一次照样发 conflict-handoff`);
+      await row.filter({ hasText: "任务正在解决冲突" }).waitFor();
+    } else {
+      await assertTone(row, "live");
+      assert.equal(await row.locator(".acc-check-tools button").count(), 0, "排着的时候没有出路可按，也不该有");
+    }
+    await page.close();
+  }
+
   // ⑯ 另两种基准问题：同样是红行、不拦主按钮，没有直达出路。
   for (const [reason, text] of [["accept_gate_target_behind", "还没含有最新的 main"], ["accept_gate_preview_unavailable", "和 main 的合并预览做不出来"]]) {
     const { page } = await open({ gate: { command: "./kb.sh test full", running: null, latest: null, basis: null,
-      baselineIssue: { reason, targetBranch: "main", conflictFiles: [], handedOffAt: null } } });
+      baselineIssue: { reason, targetBranch: "main", conflictFiles: [], handoff: null } } });
     const row = checkRow(page, "baseline");
     assert.equal(await row.locator(".acc-check-text").innerText(), text);
     assert.equal(await row.getByRole("button").count(), 0);

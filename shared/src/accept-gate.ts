@@ -266,13 +266,15 @@ export type AcceptGateState = {
   /** 按当前这一档,这一按会在门禁之前被拒的理由(没含目标分支 / 预演冲突);null = 不拦。 */
   baselineBlock?: string | null;
   /**
-   * 同一件事的结构化那一份,验收台据它摆那一行和它的出路。`handedOffAt` = 这一份预演冲突已经
-   * 交给任务的时刻(任务分支头与目标分支头都没动才认);null = 还没交。
+   * 同一件事的结构化那一份,验收台据它摆那一行和它的出路。`handoff` = 这一份预演冲突交给任务
+   * 之后的实际结局(任务分支头与目标分支头都没动才认;null = 还没交):queued 排着还没送进去、
+   * working 送到了且那一轮在跑、ended 那一轮跑完冲突还在、failed 没送到(note 是原因)。
+   * 登记意图不算送到 —— 推进只认交接层的投递结局(server accept-gate-conflict-registry.ts)。
    */
   baselineIssue?: {
     reason: "accept_gate_target_behind" | "merge_conflict" | "accept_gate_preview_unavailable";
     targetBranch: string;
     conflictFiles: string[];
-    handedOffAt: string | null;
+    handoff: { at: string; state: "queued" | "working" | "ended" | "failed"; note: string | null } | null;
   } | null;
 };

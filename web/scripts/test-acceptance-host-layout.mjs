@@ -44,7 +44,7 @@ const PLANS = {
 const gateOf = (taskId) => ({
   command: taskId === "single-task" ? GATE_COMMAND : taskId === "conflict-task" ? "npm test" : null,
   running: null, latest: null, basis: null,
-  ...(taskId === "conflict-task" ? { baselineIssue: { reason: "merge_conflict", targetBranch: "main", conflictFiles: ["a.ts"], handedOffAt: null } } : {}),
+  ...(taskId === "conflict-task" ? { baselineIssue: { reason: "merge_conflict", targetBranch: "main", conflictFiles: ["a.ts"], handoff: null } } : {}),
 });
 const change = (path) => ({ path, status: "M" });
 const scmOf = (taskId) => ({

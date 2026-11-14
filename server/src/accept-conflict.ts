@@ -1,3 +1,5 @@
+import { bus } from "./bus.js";
+import { settleConflictHandoff } from "./accept-gate-conflict-registry.js";
 import { continueWhenIdle } from "./runs.js";
 import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 
@@ -72,12 +74,23 @@ export function flushConflictHandoff(taskId: string): void {
   const plan = pending.get(taskId);
   if (!plan) return;
   pending.delete(taskId);
-  // byBackend：占真人回合，但字是后端写的 —— 别混进「我发的追问」里。
-  continueWhenIdle(taskId, plan.prompt, { byBackend: true }, async (why) => {
+  // 验收台那一行（预演冲突的登记）只认这里报回去的结局：排进队列不等于送到。
+  const settle = (outcome: Parameters<typeof settleConflictHandoff>[1]) => {
+    if (settleConflictHandoff(taskId, outcome)) bus.publish({ type: "task.acceptGate", taskId });
+  };
+  const failed = async (why: string) => {
+    settle({ delivered: false, why });
     await appendTaskTimeline(
       taskId,
       alertLine(`冲突交接失败：没能叫醒该任务解冲突（${why}）。请手动点运行或直接回复它，` +
         `让它在 ${plan.sourceBranch} 上 \`git merge ${plan.targetBranch}\` 解掉冲突后再点验收。`),
     );
+  };
+  // byBackend：占真人回合，但字是后端写的 —— 别混进「我发的追问」里。
+  continueWhenIdle(taskId, plan.prompt, { byBackend: true }, failed, {
+    onAccepted: () => settle({ delivered: true }),
+    onRefused: () => failed("输入被拒收"),
+    // 说不清送没送到：不能当「正在解决」摆着，按没送到给出路（再交一次是幂等的一句话）。
+    onUnconfirmed: () => settle({ delivered: false, why: "没拿到任务收下的回执" }),
   });
 }
