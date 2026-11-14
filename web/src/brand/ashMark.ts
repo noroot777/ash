@@ -6,16 +6,17 @@
 // 这个文件不许有 import，也只用擦得掉的类型语法：docs/logo/build.mjs 是拿 node 直接读它的。
 //
 // 图是 8×8 的一位图，(x, y) 从左上角数：左下角一整块，右上那个角正在散，最远那块是亮的。
-// 动起来是甩尾巴 —— 身子不动，往右上去的那一撮（t 和 @）绕着身子里的一点左右摆。
+// 动起来是一道火从左下角烧到右上角：烧到哪条斜线，那条线上的格子亮一下、淡下去、再回来，
+// 火走到头就是一直亮着的那一格。
 
 export const MARK_SIZE = 8;
 
-// # 墨；t 也是墨，但属于尾巴；@ 亮的那一格，尾巴尖。
+// # 墨；@ 亮的那一格。
 const GRID = [
   ".......@",
-  "....t...",
-  "..#...t.",
-  "#..#.t..",
+  "....#...",
+  "..#...#.",
+  "#..#.#..",
   "###.#...",
   "####..#.",
   "#####...",
@@ -30,62 +31,35 @@ export interface Run {
   accent: boolean;
 }
 
-/** 尾巴上的一块：待在哪一格，往两边各摆出去多远（单位是格），比尾巴根晚多少毫秒动。 */
-export interface TailDot {
-  x: number;
-  y: number;
-  accent: boolean;
-  dx: number;
-  dy: number;
-  lagMs: number;
+/** 火同时烧到的一排格子：一条从左上到右下的斜线。step 是火从左下角出发第几拍烧到它。 */
+export interface BurnLine {
+  step: number;
+  cells: { x: number; y: number }[];
 }
 
-function runs(pick: (ch: string) => boolean): Run[] {
-  const out: Run[] = [];
-  GRID.forEach((row, y) => {
-    [...row].forEach((ch, x) => {
-      if (!pick(ch)) return;
-      const accent = ch === "@";
-      const last = out[out.length - 1];
-      if (last && last.y === y && last.accent === accent && last.x + last.w === x) last.w += 1;
-      else out.push({ x, y, w: 1, accent });
-    });
-  });
-  return out;
-}
-
-const isTail = (ch: string) => ch === "t" || ch === "@";
+const CELLS = GRID.flatMap((row, y) => [...row].flatMap((ch, x) => (ch === "." ? [] : [{ x, y, accent: ch === "@" }])));
 
 /** 静止的标。 */
-export const MARK: Run[] = runs((ch) => ch !== ".");
-/** 动画里不动的那部分：身子，和落在身子旁边的几粒。 */
-export const LOADER_STILL: Run[] = runs((ch) => ch === "#");
+export const MARK: Run[] = CELLS.reduce<Run[]>((runs, { x, y, accent }) => {
+  const last = runs[runs.length - 1];
+  if (last && last.y === y && last.accent === accent && last.x + last.w === x) last.w += 1;
+  else runs.push({ x, y, w: 1, accent });
+  return runs;
+}, []);
 
-/** 从一头摆到另一头多久；一个来回是它的两倍。 */
-export const LOADER_SWING_MS = 420;
-// 尾巴根在身子里面。每一块绕它转同一个角度，所以离得越远摆得越开；再让远的比近的晚一点动，
-// 整条尾巴才是甩出去的，不是一块板子在转。尾巴尖摆到头时会探出 8×8 的格子将近一格。
-const PIVOT = { x: 3, y: 5 };
-const SWING_RAD = 0.21;
-const LAG_MS_PER_CELL = 30;
+/** 墨色的格子按斜线分组，离左下角近的在前。 */
+export const LOADER_LINES: BurnLine[] = CELLS.filter((cell) => !cell.accent)
+  .reduce<BurnLine[]>((lines, { x, y }) => {
+    const step = x + (MARK_SIZE - 1 - y);
+    const line = lines.find((l) => l.step === step);
+    if (line) line.cells.push({ x, y });
+    else lines.push({ step, cells: [{ x, y }] });
+    return lines;
+  }, [])
+  .sort((a, b) => a.step - b.step);
 
-const round = (v: number) => Math.round(v * 100) / 100;
-
-const TAIL_CELLS = GRID.flatMap((row, y) =>
-  [...row].flatMap((ch, x) => (isTail(ch) ? [{ x, y, accent: ch === "@", rx: x + 0.5 - PIVOT.x, ry: y + 0.5 - PIVOT.y }] : [])),
-);
-const NEAREST = Math.min(...TAIL_CELLS.map((c) => Math.hypot(c.rx, c.ry)));
-
-/** 尾巴上的每一块。摆的时候只平移不旋转：方块得一直是正的。 */
-export const LOADER_TAIL: TailDot[] = TAIL_CELLS.map(({ x, y, accent, rx, ry }) => ({
-  x,
-  y,
-  accent,
-  // 转一个小角度，位移就是垂直于半径的那一段。
-  dx: round(-ry * SWING_RAD),
-  dy: round(rx * SWING_RAD),
-  lagMs: Math.round((Math.hypot(rx, ry) - NEAREST) * LAG_MS_PER_CELL),
-}));
+/** 一直亮着的那一格：火的终点，它自己不参加动画。 */
+export const LOADER_TIP = CELLS.find((cell) => cell.accent)!;
 
 /** 标签页图标：标铺满整张 8×8，在 16px 和 32px 上每格正好是整像素。墨色跟着浏览器的深浅色换。 */
 export function faviconSvg(): string {

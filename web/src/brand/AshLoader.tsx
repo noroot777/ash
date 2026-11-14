@@ -1,30 +1,21 @@
 import type { CSSProperties } from "react";
-import { markDots } from "./AshMark.tsx";
-import { LOADER_STILL, LOADER_SWING_MS, LOADER_TAIL, MARK_SIZE } from "./ashMark.ts";
+import { LOADER_LINES, LOADER_TIP, MARK_SIZE } from "./ashMark.ts";
 
-// 身子画一次不动；尾巴上的每一块各带自己的摆幅和起步时刻，怎么摆在样式那边（styles/ash-loader.css）。
-// 起步时刻往前拨半程，是让它一出现就从正中间那个姿势（静止的标）开始摆，而不是从一头开始。
-// 所有实例共用这一份元素。
-const STILL = markDots(LOADER_STILL);
-const TAIL = LOADER_TAIL.map((dot) => (
-  <rect
-    key={`${dot.x},${dot.y}`}
-    className="ash-loader__tail"
-    x={dot.x}
-    y={dot.y}
-    width={1}
-    height={1}
-    fill={dot.accent ? "var(--accent)" : "currentColor"}
-    style={{ "--dx": dot.dx, "--dy": dot.dy, animationDelay: `${dot.lagMs - LOADER_SWING_MS / 2}ms` } as CSSProperties}
-  />
+// 格子按「火同时烧到的那条斜线」分组，每组只带一个数：第几拍轮到它。怎么亮、怎么淡、
+// 一拍多长都在样式那边（styles/ash-loader.css）。所有实例共用这一份元素。
+const LINES = LOADER_LINES.map((line) => (
+  <g key={line.step} className="ash-loader__line" style={{ "--step": line.step } as CSSProperties}>
+    {line.cells.map((cell) => (
+      <rect key={`${cell.x},${cell.y}`} x={cell.x} y={cell.y} width={1} height={1} />
+    ))}
+  </g>
 ));
-const TIMING = { "--ash-loader-swing": `${LOADER_SWING_MS}ms` } as CSSProperties;
+const TIP = <rect className="ash-loader__tip" x={LOADER_TIP.x} y={LOADER_TIP.y} width={1} height={1} />;
 
 /**
- * ash 的标动起来：身子不动，右上那一撮像尾巴一样左右甩。等一块内容读出来的地方用它。
+ * ash 的标动起来：一道火从左下角烧到右上角，烧过的格子亮一下再淡回来。等一块内容读出来的地方用它。
  *
- * 墨色跟文字色走，亮的那一格是 --accent。size 取 8 的倍数（16 / 24 / 32），格子才落在整像素上；
- * 尾巴尖摆到头时会探出这个尺寸将近一格，紧贴着会裁切的边时留一点空。
+ * 墨色跟文字色走，亮色是 --accent。size 取 8 的倍数（16 / 24 / 32），格子才落在整像素上。
  * 旁边已经有一句「正在读取…」时不用给 label；它独自表示「在加载」时给一个，读屏才念得出来。
  */
 export function AshLoader({ size = 16, label, className }: { size?: number; label?: string; className?: string }) {
@@ -35,11 +26,10 @@ export function AshLoader({ size = 16, label, className }: { size?: number; labe
       height={size}
       viewBox={`0 0 ${MARK_SIZE} ${MARK_SIZE}`}
       shapeRendering="crispEdges"
-      style={TIMING}
       {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
     >
-      {STILL}
-      {TAIL}
+      {LINES}
+      {TIP}
     </svg>
   );
 }

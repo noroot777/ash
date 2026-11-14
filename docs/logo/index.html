@@ -29,8 +29,6 @@
       .still img:first-child { height: 96px; }
       .motion { grid-column: 1 / -1; }
       .motion > div { align-items: flex-end; }
-      .reel { grid-column: 1 / -1; padding: 24px 32px; border-radius: 14px; background: #fff; }
-      .reel img { width: 100%; height: auto; }
       @media (max-width: 860px) {
         section { grid-template-columns: 1fr; }
         .pair { grid-template-columns: 1fr; }
@@ -59,17 +57,16 @@
       <section>
         <div class="motion">
           <h2>加载动画</h2>
-          <p>身子不动，右上那一撮像尾巴一样左右甩，尾巴尖比尾巴根晚一点到。</p>
+          <p>一道火从左下角烧到右上角：烧到的格子亮一下，淡下去，再回来；火的终点是一直亮着的那一格。</p>
         </div>
         <div class="pair motion">
           <div>
-            <img src="loader.svg" width="160" alt="" /><img src="loader.svg" width="80" alt="" /><img src="loader.svg" width="40" alt="" /><img src="loader.svg" width="30" alt="" /><img src="loader.svg" width="20" alt="" />
+            <img src="loader.svg" width="128" alt="" /><img src="loader.svg" width="64" alt="" /><img src="loader.svg" width="32" alt="" /><img src="loader.svg" width="24" alt="" /><img src="loader.svg" width="16" alt="" />
           </div>
           <div>
-            <img src="loader.svg" width="160" alt="" /><img src="loader.svg" width="80" alt="" /><img src="loader.svg" width="40" alt="" /><img src="loader.svg" width="30" alt="" /><img src="loader.svg" width="20" alt="" />
+            <img src="loader.svg" width="128" alt="" /><img src="loader.svg" width="64" alt="" /><img src="loader.svg" width="32" alt="" /><img src="loader.svg" width="24" alt="" /><img src="loader.svg" width="16" alt="" />
           </div>
         </div>
-        <div class="reel"><img src="frames.svg" alt="一个来回的八张定格" /></div>
       </section>
     </main>
   </body>

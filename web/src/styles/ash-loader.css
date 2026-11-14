@@ -1,19 +1,27 @@
-/* ash 的加载动画（brand/AshLoader.tsx）：尾巴上的每一块在自己的两头之间来回平移，两头离正中
-   各 (--dx, --dy) 格，慢进慢出，像钟摆。摆幅、谁晚多久起步、一程多长都由组件按
-   brand/ashMark.ts 写在元素上，这里不重复那些数。
-   尾巴尖会摆出 8×8 的格子，所以这张图不裁切。
-   减少动效不用另写：全应用那一条（motion-text.css）让它跑一遍就停，停下来没有位移，
-   也就是静止的标。 */
+/* ash 的加载动画（brand/AshLoader.tsx）：一道火从左下角烧到右上角。
+   每条斜线是一组，带一个 --step（第几拍轮到它）。轮到时这一组亮成 --accent 一拍，接着两拍
+   从淡到浓回到墨色 —— 火头后面拖一截余烬。一圈 25 拍：火走完全程 15 拍，余下的歇着，
+   歇着的时候就是静止的标。全是整格整拍地变，没有补间。
+   docs/logo/build.mjs 把这个文件原样嵌进 loader.svg，所以这里只认 currentColor 和 --accent。
+   减少动效不用另写：全应用那一条（motion-text.css）让它跑一遍就停，停下来是静止的标。 */
 .ash-loader {
+  --ash-loader-tick: 60ms;
   flex: none;
   display: inline-block;
-  overflow: visible;
   vertical-align: -0.2em;
 }
-.ash-loader__tail {
-  animation: ash-loader-wag var(--ash-loader-swing) ease-in-out infinite alternate;
+.ash-loader__tip {
+  fill: var(--accent);
 }
-@keyframes ash-loader-wag {
-  from { transform: translate(calc(var(--dx) * -1px), calc(var(--dy) * -1px)); }
-  to { transform: translate(calc(var(--dx) * 1px), calc(var(--dy) * 1px)); }
+.ash-loader__line {
+  fill: currentColor;
+  animation: ash-loader-burn calc(25 * var(--ash-loader-tick)) step-end infinite;
+  animation-delay: calc(var(--step) * var(--ash-loader-tick));
+}
+/* 一拍是 4%。 */
+@keyframes ash-loader-burn {
+  0% { fill: var(--accent); opacity: 1; }
+  4% { fill: currentColor; opacity: 0.25; }
+  8% { fill: currentColor; opacity: 0.6; }
+  12%, 100% { fill: currentColor; opacity: 1; }
 }
