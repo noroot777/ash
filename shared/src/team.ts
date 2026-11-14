@@ -200,7 +200,7 @@ const ACTIVE_WORKER_STATUSES = new Set<TaskStatus>(["running", "queued", "paused
 
 // Settled is presentation-only: the lead is not speaking and no worker is live,
 // queued, or paused. It is intentionally independent from whether a group was halted.
-export function isTeamSettled(leadLive: boolean, workers: TaskListItem[]): boolean {
+export function isTeamSettled(leadLive: boolean, workers: readonly { status: TaskStatus }[]): boolean {
   return !leadLive && !workers.some((worker) => ACTIVE_WORKER_STATUSES.has(worker.status));
 }
 

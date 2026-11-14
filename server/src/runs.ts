@@ -4,6 +4,7 @@ import type { SteerText } from "./executors/types.js";
 import type { CliCommand, CliGoal } from "@ash/shared/cli-commands";
 import { RECONCILE_TURN_ROLE, claimNonTurn, whenTurnIdle } from "./turn-lock.js";
 import { acknowledgeStartReceipt, registerStartReceipt } from "./task-start-receipt.js";
+import { markTaskActionsDirty } from "./task-actions-dirty.js";
 
 // 回合占位锁那一半(单飞锁、几种不是回合的预占、起跑冻结、等这一轮跑完再续跑)住在
 // turn-lock.ts —— 两摊各自的使用方几乎不重叠,挤在一个文件里已经过了 700 行上限
@@ -68,6 +69,8 @@ export function trackRun(taskId: string, h: Killable): void {
   if (!set) handles.set(taskId, (set = new Set()));
   set.add(h);
   registerStartReceipt(taskId, h);
+  // 「有没有活进程」是「停止」的一样事实，却不在库里：触发器看不见，在这里自己记一笔。
+  if (set.size === 1) markTaskActionsDirty({ kind: "task", taskId });
 }
 
 export function nativeCommandRun(taskId: string): Killable | null {
@@ -80,7 +83,10 @@ export function untrackRun(taskId: string, h: Killable): void {
   const set = handles.get(taskId);
   if (!set) return;
   set.delete(h);
-  if (!set.size) handles.delete(taskId);
+  if (!set.size) {
+    handles.delete(taskId);
+    markTaskActionsDirty({ kind: "task", taskId });
+  }
 }
 
 // ── 一个「已经起来的 CLI 进程」有三种归属 ──────────────────────────────────────

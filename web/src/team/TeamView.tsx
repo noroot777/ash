@@ -333,7 +333,6 @@ export function TeamView({
         <TeamHeader
           task={task}
           actions={actions}
-          workers={workers}
           groups={teamGroups}
           haltedByHistory={teamGroups.length === 0 && (historyHalt || localHalted)}
           conversationMarkdown={markdown}

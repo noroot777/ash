@@ -206,7 +206,8 @@ export const api = {
   tasks: (signal?: AbortSignal): Promise<TaskListItem[]> => request("/tasks", { signal }),
   task: (taskId: string): Promise<Task> => request(`/tasks/${id(taskId)}`),
   // 任务「此刻能做什么」（shared/src/task-actions.ts）：只经 useTaskActions 取，别处不直接调。
-  taskActions: (taskId: string): Promise<import("@ash/shared").TaskActions> => request(`/tasks/${id(taskId)}/actions`),
+  taskActions: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared").TaskActions> =>
+    request(`/tasks/${id(taskId)}/actions`, { signal }),
   taskQuestionHistory: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared/questions").QuestionRecord[]> =>
     request(`/tasks/${id(taskId)}/question-history`, { signal }),
   ...taskNoticeApi,

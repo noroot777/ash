@@ -1,21 +1,13 @@
 // 任务「此刻能做什么」的下发通道：取事实 → 跑判据（task-action-verdicts.ts / task-retry-turn.ts
-// 的 `retryTurnRejection`）→ `GET /tasks/:id/actions` 取一次、`task.actions` 事件推送。
-//
-// **推给谁**：只推「有页面打开过」的那些任务（`watched`，按最近打开排、留最近的一批）。前端只有
-// 打开着的那个任务需要这份结论（详情头、回复框、信息格、审查格、命令面板都只看当前任务），给一千
-// 多行全量重算只是白费。
-//
-// **什么时候重算**：这个任务自己的事件（状态、阶段、提问、审查链、整行更新）；同队成员的这些事件
-// （队列挡路是别人的状态）；它的历史独立审查任务的事件（「已有一轮审查尚未结束」）；分组暂停 /
-// 恢复（`markGroupActionsDirty`）；执行器 profile 被改或删（重跑上一回合的保真前提）。同一拍里的
-// 多条事件合成一次。
+// 的 `retryTurnRejection`）→ `GET /tasks/:id/actions`。结论只在这里算、只随请求下发；事实变了的时候
+// 服务端只广播「重取一下」（task-actions-feed.ts），算一遍的永远是开着那个任务的页面发来的这次请求。
 import type { Hono } from "hono";
-import type { PrimaryAction, RetryTurnAction, ServerEvent, TaskActions } from "@ash/shared";
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
-import { bus } from "./bus.js";
+import type { PrimaryAction, RetryTurnAction, TaskActions, TaskStatus } from "@ash/shared";
+import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { queueItems, tasks } from "./db/schema.js";
+import { groups, queueItems, tasks } from "./db/schema.js";
 import { actorOf } from "./auth/context.js";
+import { rememberTaskProject } from "./auth/event-filter.js";
 import { canSeeProject } from "./auth/visibility.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
 import { latestRun, roundOf } from "./free-review-round.js";
@@ -23,10 +15,11 @@ import { reviewRetryGeneration } from "./free-review-retry-identity.js";
 import { queueBlockerDetails } from "./queues.js";
 import { isRunning } from "./runs.js";
 import {
-  archiveVerdict, primaryAction, publicVerdict, requeueVerdict, stopVerdict, verifyVerdict, type ActionFacts,
+  archiveVerdict, primaryAction, publicVerdict, requeueVerdict, stopVerdict, teamHaltVerdict, verifyVerdict,
+  type ActionFacts,
 } from "./task-action-verdicts.js";
 import { readRetryTurnFacts, retryTurnRejection, retryTurnTaskRejection } from "./task-retry-turn.js";
-import { onTaskActionsDirty } from "./task-actions-dirty.js";
+import { startTaskActionsFeed } from "./task-actions-feed.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -39,6 +32,14 @@ export async function readActionFacts(row: TaskRow): Promise<ActionFacts> {
     ? (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, row.parentId))).at(0)
     : undefined;
   const legacy = await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.reviewOf, row.id));
+  const team = row.mode === "team"
+    ? {
+      workers: (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.parentId, row.id)))
+        .map((worker) => ({ status: worker.status as TaskStatus })),
+      groupsPaused: (await db.select({ id: groups.id }).from(groups)
+        .where(and(eq(groups.ownerTaskId, row.id), eq(groups.paused, true)))).length > 0,
+    }
+    : null;
   return {
     task: row,
     inQueue,
@@ -47,6 +48,7 @@ export async function readActionFacts(row: TaskRow): Promise<ActionFacts> {
     parentIsTeam: parent?.mode === "team",
     freeReviewActive: row.workflowMode === "free" ? await hasActiveFreeReview(row.id) : false,
     legacyReviewActive: legacy.some((review) => LEGACY_REVIEW_IN_FLIGHT.includes(review.status)),
+    team,
   };
 }
 
@@ -91,7 +93,8 @@ export async function computeTaskActions(taskId: string): Promise<TaskActions | 
     taskId,
     seq: nextSeq(),
     primary,
-    stop: publicVerdict(stopVerdict(facts)),
+    // 团队的「停止」是停止全组（POST /tasks/:id/team/halt），判据按整个团队算。
+    stop: publicVerdict(row.mode === "team" ? teamHaltVerdict(facts) : stopVerdict(facts)),
     archive: publicVerdict(archiveVerdict(facts)),
     requeue: publicVerdict(requeueVerdict(facts)),
     retryTurn: await retryTurnAction(row),
@@ -99,97 +102,16 @@ export async function computeTaskActions(taskId: string): Promise<TaskActions | 
   };
 }
 
-// ── 推送 ─────────────────────────────────────────────────────────────────────
-
-const WATCH_LIMIT = 64;
-const watched = new Map<string, true>();
-
-function watch(taskId: string): void {
-  watched.delete(taskId);
-  watched.set(taskId, true);
-  while (watched.size > WATCH_LIMIT) watched.delete(watched.keys().next().value!);
-}
-
-const dirty = new Set<string>();
-const dirtyGroups = new Set<string>();
-let everything = false;
-let timer: ReturnType<typeof setTimeout> | null = null;
-
-function schedule(): void {
-  if (timer || !watched.size) return;
-  timer = setTimeout(() => { timer = null; void flush().catch((error) => console.error("[ash] 重算任务可做动作失败:", error)); }, 30);
-}
-
-const TRIGGERS = new Set<ServerEvent["type"]>(["task.created", "task.updated", "task.status", "task.stage", "task.question", "task.review"]);
-
-function eventTaskId(event: ServerEvent): string | null {
-  if (!TRIGGERS.has(event.type)) return null;
-  if ("task" in event && event.task) return event.task.id;
-  return "taskId" in event && typeof event.taskId === "string" ? event.taskId : null;
-}
-
-/** 这一批脏任务牵连到的、有页面在看的任务。 */
-async function affected(ids: string[], groupIds: string[], all: boolean): Promise<string[]> {
-  if (all) return [...watched.keys()];
-  const out = new Set(ids.filter((id) => watched.has(id)));
-  if (ids.length) {
-    const queues = await db.select({ queueId: queueItems.queueId }).from(queueItems).where(inArray(queueItems.taskId, ids));
-    if (queues.length) {
-      const mates = await db.select({ taskId: queueItems.taskId }).from(queueItems)
-        .where(inArray(queueItems.queueId, [...new Set(queues.map((q) => q.queueId))]));
-      for (const mate of mates) if (watched.has(mate.taskId)) out.add(mate.taskId);
-    }
-    const reviewed = await db.select({ reviewOf: tasks.reviewOf }).from(tasks)
-      .where(and(inArray(tasks.id, ids), isNotNull(tasks.reviewOf)));
-    for (const row of reviewed) if (row.reviewOf && watched.has(row.reviewOf)) out.add(row.reviewOf);
-  }
-  if (groupIds.length) {
-    const members = await db.select({ id: tasks.id }).from(tasks).where(inArray(tasks.groupId, groupIds));
-    for (const member of members) if (watched.has(member.id)) out.add(member.id);
-  }
-  return [...out];
-}
-
-async function flush(): Promise<void> {
-  const ids = [...dirty];
-  const groupIds = [...dirtyGroups];
-  const all = everything;
-  dirty.clear();
-  dirtyGroups.clear();
-  everything = false;
-  const targets = await affected(ids, groupIds, all);
-  for (const taskId of targets) {
-    const actions = await computeTaskActions(taskId);
-    if (actions) bus.publish({ type: "task.actions", taskId, actions });
-  }
-}
-
-let started = false;
-
-function startFeed(): void {
-  if (started) return;
-  started = true;
-  bus.subscribe((event) => {
-    const taskId = eventTaskId(event);
-    if (!taskId) return;
-    dirty.add(taskId);
-    schedule();
-  });
-  onTaskActionsDirty((mark) => {
-    if (mark.kind === "all") everything = true;
-    else dirtyGroups.add(mark.groupId);
-    schedule();
-  });
-}
-
 export function mountTaskActionRoutes(api: Hono): void {
-  startFeed();
+  startTaskActionsFeed();
   api.get("/tasks/:id/actions", async (c) => {
     const taskId = c.req.param("id");
     const row = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
     // 看不见的任务与不存在的任务回同一句话（同 GET /tasks/:id）。
     if (!row || !(await canSeeProject(actorOf(c), row.projectId))) return c.json({ error: "not found" }, 404);
-    watch(taskId);
+    // 多人模式下 SSE 过滤器按任务认项目、缓存没命中的第一条事件会丢：这里已经读到了，顺手记上，
+    // 免得这个任务的第一条失效信号送不到正开着它的这张页面。
+    rememberTaskProject(taskId, row.projectId);
     const actions = await computeTaskActions(taskId);
     return actions ? c.json(actions) : c.json({ error: "not found" }, 404);
   });

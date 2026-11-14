@@ -1,5 +1,5 @@
 // 任务「此刻能做什么」的判据本体：每个动作一个吃事实的纯函数。路由拿它挡请求，
-// `GET /tasks/:id/actions` 与 `task.actions` 事件拿它下发给前端 —— 同一个函数，不许两份
+// `GET /tasks/:id/actions` 拿它下发给前端 —— 同一个函数，不许两份
 // （为什么见 shared/src/task-actions.ts 的文件头）。重跑上一回合的判据住在 task-retry-turn.ts
 // （`retryTurnRejection`），形状与这里一样。
 //
@@ -8,7 +8,7 @@
 import type { ActionVerdict, PrimaryAction, TaskStatus } from "@ash/shared";
 import { canArchive, canSingleRun } from "@ash/shared";
 import { queueBlockedText, type QueueBlocker } from "@ash/shared/scheduled-message-wait";
-import { teamNeverStarted } from "@ash/shared/team";
+import { isTeamSettled, teamNeverStarted } from "@ash/shared/team";
 import { handoffBlockReason } from "./handoff-guard.js";
 
 /** 判据要的那几列（任务行的子集，回归脚本直接喂字面量）。 */
@@ -41,6 +41,8 @@ export type ActionFacts = {
   freeReviewActive: boolean;
   /** 历史独立审查任务还有一轮没结束。 */
   legacyReviewActive: boolean;
+  /** 团队任务才有：名下执行者各自的状态，和它派活建的分组有没有被停下（停止全组看整个团队）。 */
+  team: { workers: { status: TaskStatus }[]; groupsPaused: boolean } | null;
 };
 
 /** 路由那一侧多带两样：回给调用方的附加字段，和要不要往任务时间线留痕（`noted`）。 */
@@ -135,6 +137,23 @@ export function stopVerdict(f: ActionFacts): Verdict {
     && ["paused", "backlog", "queued", "running"].includes(task.status);
   if (pendingAdvance || f.liveProcess || live(task.status)) return OK;
   return hide("任务没有在运行的进程可停止", { status: task.status });
+}
+
+/**
+ * 停止全组（`POST /tasks/:id/team/halt`；团队任务的「停止」就是它）：调度台在说话、或者还有执行者
+ * 在跑 / 排队 / 停在检查点上，才有东西可停。已经停下了（分组暂停着）不再出这颗 —— 那时团队头出的
+ * 是「恢复全组」，那是团队壳自己的事。
+ */
+export function teamHaltVerdict(f: ActionFacts): Verdict {
+  const { task, team } = f;
+  if (task.mode !== "team" || !team) return hide("只有团队任务能停止全组", { mode: task.mode });
+  if (task.archived) return hide("团队已归档");
+  if (teamNeverStarted(task.status as TaskStatus)) return hide("团队还没开工，没有东西可停", { status: task.status });
+  if (team.groupsPaused) return hide("全组已经停下了，要接着干就恢复全组");
+  if (isTeamSettled(task.status === "running" || f.liveProcess, team.workers)) {
+    return hide("调度台和执行者都没有在跑，没有东西可停", { status: task.status });
+  }
+  return OK;
 }
 
 /**

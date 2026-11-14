@@ -105,6 +105,12 @@ export interface Client {
   atomicBatch(stmts: readonly InStatement[]): Promise<ResultSet[]>;
   migrate(stmts: readonly InStatement[]): Promise<ResultSet[]>;
   transaction(mode?: TransactionMode): Promise<Transaction>;
+  /**
+   * 在这条连接上登记一个 SQL 可调的 JS 函数（`node:sqlite` 的 `function`）。给 TEMP 触发器用：
+   * 「某几列一落库就告诉 JS 一声」只能做在这一层，路由、调度、MCP 谁写的都漏不掉。函数在语句
+   * 执行当中同步回调，只许做记账这种不碰库的事。
+   */
+  defineFunction(name: string, fn: (...args: SqlValue[]) => SqlValue): void;
   close(): void;
   readonly closed: boolean;
 }
@@ -459,6 +465,10 @@ class NodeSqliteClient implements Client {
     } finally {
       this.db.exec("PRAGMA foreign_keys = ON");
     }
+  }
+
+  defineFunction(name: string, fn: (...args: SqlValue[]) => SqlValue): void {
+    this.db.function(name, { varargs: true }, fn as (...args: unknown[]) => SqlValue);
   }
 
   close(): void {

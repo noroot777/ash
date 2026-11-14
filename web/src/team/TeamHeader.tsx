@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { Group, Task, TaskActions, TaskListItem } from "@ash/shared";
+import type { Group, Task, TaskActions } from "@ash/shared";
 import { taskDisplayStatus } from "@ash/shared";
-import { isTeamSettled, teamNeverStarted } from "@ash/shared/team";
 import {
   Archive,
   ArrowCounterClockwise,
@@ -27,7 +26,6 @@ import { safeDownloadName } from "../task-detail/utils.ts";
 export function TeamHeader({
   task,
   actions,
-  workers,
   groups,
   haltedByHistory,
   conversationMarkdown,
@@ -46,9 +44,8 @@ export function TeamHeader({
   notify,
 }: {
   task: Task;
-  /** 「运行」和「归档团队」出不出、点不点得了照服务端的判据（lib/useTaskActions.ts）；停止全组 / 恢复全组是团队壳自己的事。 */
+  /** 「运行」「停止全组」「归档团队」出不出、点不点得了照服务端的判据（lib/useTaskActions.ts）；恢复全组是团队壳自己的事。 */
   actions: TaskActions | null;
-  workers: TaskListItem[];
   groups: Group[];
   haltedByHistory: boolean;
   conversationMarkdown: string;
@@ -74,9 +71,10 @@ export function TeamHeader({
   const menuButton = useRef<HTMLButtonElement>(null);
   const pausedGroups = groups.filter((group) => group.paused);
   const stopped = pausedGroups.length > 0 || haltedByHistory;
-  const settled = isTeamSettled(task.status === "running", workers);
   const runBlocked = blocker(actions?.primary);
   const runTip = useHoverTip();
+  const haltBlocked = blocker(actions?.stop);
+  const haltTip = useHoverTip();
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const indicator = indicatorForTask(task);
 
@@ -144,8 +142,11 @@ export function TeamHeader({
           <button type="button" className={reviewOpen ? "is-primary" : ""} onClick={onReview}>
             <CheckCircle size={14} weight="fill" />{reviewOpen ? "返回协作" : "验收"}
           </button>
-          {!task.archived && !settled && !stopped && !teamNeverStarted(task.status) && (
-            <button type="button" className="is-danger" disabled={busy} onClick={() => setHaltOpen(true)}><Stop size={13} weight="fill" />停止全组</button>
+          {shown(actions?.stop) && (
+            <>
+              <button type="button" className={`is-danger${haltBlocked ? " is-disabled" : ""}`} disabled={busy} aria-disabled={haltBlocked ? true : undefined} {...(haltBlocked ? haltTip.anchorProps : {})} onClick={() => { if (!haltBlocked) setHaltOpen(true); }}><Stop size={13} weight="fill" />停止全组</button>
+              {haltBlocked && <HoverTip at={haltTip.at}>{haltBlocked}</HoverTip>}
+            </>
           )}
           {!task.archived && stopped && (
             <button type="button" className="is-primary" data-workspace-run-action="resume" disabled={busy} onClick={onResume}><Play size={13} weight="fill" />恢复全组</button>

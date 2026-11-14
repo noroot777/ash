@@ -5,11 +5,13 @@
 //  ① 下发说不能做 → 路由 409,原因一字不差;
 //  ② 下发说能做 → 路由不会因为确定性的事实拒绝。这里先占住回合锁再按:请求一路走过全部
 //     判据,停在「撞车」那一道(回合正在进行)—— 证明它没被判据挡,又不真把 agent 拉起来。
-// 外加两条推送:任务自己换了状态、同队成员换了状态,打开着的那个任务都会收到重算后的结论
-// (队列挡路是别人的状态,它自己的行一个字都不变)。
+// 外加失效推送(task.actions.stale):判据依赖的事实一落库就发,谁写的都一样 —— 同队成员换了状态
+// (它自己的行一个字都不变)、归档 / 取回(那两条路不发任何任务事件)、直接写库的队列推进请求、
+// 团队执行者换了状态(停止全组看整个团队)。服务端不记谁在看谁:先取过七十多个别的任务,最早那个
+// 照样收得到(第 1 轮审查 F1–F3)。
 //
 // 覆盖任务 G4J3ykMmJHgC 列出的几处对不上:验证轮没结束时归档、队列挡路时运行、接力出去的任务、
-// 讨论排队中的停止、分组暂停时重跑上一回合、等答复时派验证。
+// 讨论排队中的停止、分组暂停时重跑上一回合、等答复时派验证;团队的停止全组与它的路由同源。
 // 跑:npm -w server run test:task-actions
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -18,6 +20,7 @@ import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import type { ActionVerdict, ServerEvent, TaskActions } from "@ash/shared";
+import { setTimeout as sleep } from "node:timers/promises";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-task-actions-"));
@@ -28,7 +31,6 @@ const { ensureSchema, db } = await import("../src/db/index.js");
 const { groups, projects, queueItems, sessions, tasks } = await import("../src/db/schema.js");
 const { createTasks } = await import("../src/task-store.js");
 const { claimTurn, releaseTurn } = await import("../src/runs.js");
-const { setTaskStatus } = await import("../src/status.js");
 const { bus } = await import("../src/bus.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
 const { mountReviewRoutes } = await import("../src/review.js");
@@ -89,6 +91,21 @@ async function assertPassesVerdict(taskId: string, verdict: ActionVerdict | null
   }
 }
 
+/** 跑 `write`,等某个任务的失效信号(没等到就失败)。 */
+async function expectStale(taskId: string, write: () => Promise<unknown>, label: string): Promise<void> {
+  let hit = false;
+  const unsubscribe = bus.subscribe((event: ServerEvent) => {
+    if (event.type === "task.actions.stale" && event.taskId === taskId) hit = true;
+  });
+  try {
+    await write();
+    for (let i = 0; i < 100 && !hit; i++) await sleep(10);
+  } finally {
+    unsubscribe();
+  }
+  assert.ok(hit, `${label}:${taskId} 收到失效信号`);
+}
+
 async function seedCrashedSession(taskId: string): Promise<string> {
   const sessionId = `s-${taskId}`;
   await db.insert(sessions).values({ id: sessionId, taskId, role: "single", agentType: "claude", executor: "claude",
@@ -129,17 +146,45 @@ async function seedCrashedSession(taskId: string): Promise<string> {
   await assertRefused(next.primary, "/tasks/q-next/run");
   await assertPassesVerdict("q-head", (await actionsOf("q-head")).primary, "/tasks/q-head/run", /回合正在进行/);
 
-  // 推送:排头完成 → 排第二的那条收到重算后的结论,运行变得可点(它自己的行一个字没变)。
-  const seen: TaskActions[] = [];
-  const unsubscribe = bus.subscribe((event: ServerEvent) => {
-    if (event.type === "task.actions" && event.taskId === "q-next") seen.push(event.actions);
-  });
-  await setTaskStatus("q-head", "done");
-  for (let i = 0; i < 100 && !seen.some((a) => a.primary?.ok); i++) await new Promise((r) => setTimeout(r, 10));
-  unsubscribe();
-  const pushed = seen.at(-1);
-  assert.ok(pushed?.primary?.ok, "同队成员完成后，打开着的任务收到「现在可以运行」");
-  assert.ok(pushed.seq > next.seq, "推送的序号比先前取到的大，前端据此丢旧的");
+  // 推送:排头完成 → 排第二的那条收到失效(它自己的行一个字没变),重取就是「现在可以运行」。直接写库、
+  // 不走 setTaskStatus:那条会顺手推进队列把它拉起来(真起 agent),而这里要钉的是「落库即失效」本身。
+  await expectStale("q-next", () => db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "q-head")), "同队成员完成");
+  const pushed = await actionsOf("q-next");
+  assert.ok(pushed.primary?.ok, "同队成员完成后重取：现在可以运行");
+  assert.ok(pushed.seq > next.seq, "后取的序号比先前取到的大，前端据此丢旧的");
+}
+
+// ── 失效不靠「最近被取过」:先取七十多个别的任务,最早开着的那个照样收得到 ───────
+{
+  await createTasks([{ ...baseTask, id: "watch-first", title: "最早开着的", status: "backlog" }]);
+  assert.equal((await actionsOf("watch-first")).primary?.kind, "run");
+  const others = Array.from({ length: 70 }, (_, i) => ({ ...baseTask, id: `watch-other-${i}`, title: `别的 ${i}` }));
+  await createTasks(others);
+  for (const other of others) await actionsOf(other.id);
+  await expectStale("watch-first", () => db.update(tasks).set({ status: "failed" }).where(eq(tasks.id, "watch-first")), "看过很多别的任务之后");
+  assert.equal((await actionsOf("watch-first")).primary?.kind, "retry");
+}
+
+// ── 归档 / 取回:那两条路不发任务事件,失效照样到 ─────────────────────────────
+{
+  await createTasks([{ ...baseTask, id: "arch-flip", title: "归档又取回", status: "failed" }]);
+  assert.equal((await actionsOf("arch-flip")).primary?.kind, "retry");
+  await expectStale("arch-flip", () => post("/tasks/arch-flip/archive"), "归档");
+  const archived = await actionsOf("arch-flip");
+  assert.ok(archived.primary && !archived.primary.ok && archived.primary.hidden, "归档后重试不出");
+  await assertRefused(archived.primary, "/tasks/arch-flip/retry");
+  await expectStale("arch-flip", () => post("/tasks/arch-flip/unarchive"), "取回");
+  assert.ok((await actionsOf("arch-flip")).primary?.ok, "取回后重试回来了");
+}
+
+// ── 直接写库的事实(队列推进请求):不走任何路由,失效照样到 ────────────────────
+{
+  await createTasks([{ ...baseTask, id: "advance", title: "等队列拉起", status: "paused" }]);
+  assert.ok(!(await actionsOf("advance")).stop.ok, "没有推进请求时没东西可停");
+  await expectStale("advance", () => db.update(tasks)
+    .set({ queueAdvanceRequest: { id: "req-1", queueId: "qa", resumePromptGeneration: 0, prevStatus: "paused" } as never })
+    .where(eq(tasks.id, "advance")), "写入队列推进请求");
+  assert.ok((await actionsOf("advance")).stop.ok, "有推进请求就能停（撤销它）");
 }
 
 // ── 重试:失败的任务被队列挡住 ───────────────────────────────────────────────
@@ -237,10 +282,31 @@ async function seedCrashedSession(taskId: string): Promise<string> {
   const worker = await actionsOf("worker");
   assert.ok(!worker.archive.ok && worker.archive.hidden);
   await assertRefused(worker.archive, "/tasks/worker/archive");
-  // 起过的团队没有「运行」那一步(停 / 续是团队外壳自己的停止全组 / 恢复全组)。
+  // 起过的团队没有「运行」那一步(续是团队外壳自己的恢复全组)。
   assert.equal((await actionsOf("team-lead")).primary, null);
 }
 
+// ── 停止全组:按整个团队算,路由同一句话 ─────────────────────────────────────
+{
+  await createTasks([{ ...baseTask, id: "team-halt", title: "团队", mode: "team", status: "idle",
+    team: JSON.stringify({ lead: "claude", worker: "claude" }) }]);
+  await db.insert(groups).values({ id: "g-team", projectId: "p1", name: "团队派活", mode: "parallel", paused: false,
+    ownerTaskId: "team-halt", createdAt: stamp });
+  await createTasks([{ ...baseTask, id: "team-halt-w", title: "执行者", parentId: "team-halt", groupId: "g-team", status: "done" }]);
+  // 调度台闲着、执行者都收了尾:没东西可停,不出键,路由同一句话。
+  const settled = await actionsOf("team-halt");
+  assert.ok(!settled.stop.ok && settled.stop.hidden, "团队收了尾不出停止全组");
+  await assertRefused(settled.stop, "/tasks/team-halt/team/halt");
+  // 执行者排上队:调度台照样闲着,停止全组出来(它看的是整个团队,不只是调度台自己)。
+  await expectStale("team-halt", () => db.update(tasks).set({ status: "queued" }).where(eq(tasks.id, "team-halt-w")), "执行者排上队");
+  assert.ok((await actionsOf("team-halt")).stop.ok, "执行者在排队时能停止全组");
+  // 分组停下了:那时出的是恢复全组,停止全组不出,路由同一句话。
+  await expectStale("team-halt", () => db.update(groups).set({ paused: true }).where(eq(groups.id, "g-team")), "分组停下");
+  const halted = await actionsOf("team-halt");
+  assert.ok(!halted.stop.ok && halted.stop.hidden, "已经停下的团队不再出停止全组");
+  await assertRefused(halted.stop, "/tasks/team-halt/team/halt");
+}
+
 await releaseTmpDb();
-console.log("✓ task actions: 下发结论与路由挡板同源，推送随事实重算");
+console.log("✓ task actions: 下发结论与路由挡板同源，事实落库即发失效");
 process.exit(0);

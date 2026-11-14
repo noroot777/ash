@@ -31,7 +31,7 @@ import { queueClaimError, seatThenStart } from "./queue-seat.js";
 import { claimOwnTurn, heldForAcceptance, releaseTurn, stopTask, turnBusyText } from "./runs.js";
 import { noted, type RejectedAction } from "./user-action-rejection.js";
 import { readActionFacts, mountTaskActionRoutes } from "./task-actions.js";
-import { requeueVerdict, retryVerdict, runVerdict, stopVerdict, type Verdict } from "./task-action-verdicts.js";
+import { requeueVerdict, retryVerdict, runVerdict, stopVerdict, teamHaltVerdict, type Verdict } from "./task-action-verdicts.js";
 import { mountTurnReclaimRoutes } from "./turn-reclaim-routes.js";
 import { stopStartingTurn } from "./stop-starting-turn.js";
 import { handoffBlockReason } from "./handoff-guard.js";
@@ -422,6 +422,9 @@ api.post("/tasks/:id/team/halt", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.mode !== "team") return c.json({ error: "只有团队任务能停止全组", mode: r.mode }, 400);
+  // 有没有东西可停：判据见 teamHaltVerdict（团队头、命令面板那颗「停止全组」读同一份）。
+  const verdict = teamHaltVerdict(await readActionFacts(r));
+  if (!verdict.ok) return refuse(c, taskId, "停止全组", verdict);
   await haltTeam(taskId);
   return c.json({ halted: true });
 });

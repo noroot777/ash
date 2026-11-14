@@ -18,7 +18,6 @@ import { visibleProjectIds } from "./auth/visibility.js";
 import { executorScopeForOwner } from "./auth/owned-executors.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
 import { detachTaskRefs } from "./task-refs.js";
-import { markGroupActionsDirty } from "./task-actions-dirty.js";
 
 // ── groups (transient batch containers, §3) ─────────────────────────────────
 // 从 task-routes.ts 拆出的分组路由:列表/运行/暂停/批量建任务/编辑/删除。
@@ -62,7 +61,6 @@ api.post("/groups/:id/run", async (c) => {
     await db.update(groups).set({ paused: false }).where(eq(groups.id, gid));
     // 托盘上「分组已暂停」那几条要改口(pending-wait.ts)。
     void republishGroupWaits(gid).catch((err) => console.error(`[ash] republishGroupWaits(${gid}) failed:`, err));
-    markGroupActionsDirty(gid);
   }
   void runGroupInBackground(gid);
   return c.json({ started: true }, 202);
