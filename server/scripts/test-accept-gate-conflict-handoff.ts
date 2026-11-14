@@ -19,7 +19,7 @@ const { baselineHarness } = await import("./accept-gate-baseline-fixture.js");
 const h = await baselineHarness("ash-gate-conflict-handoff-");
 const { root, git, db, tasks, acceptGateState, runs, commitOnMain, fixture } = h;
 const { handOffPreviewConflict } = await import("../src/accept-gate-conflict.js");
-const { settleConflictHandoff } = await import("../src/accept-gate-conflict-registry.js");
+const { conflictHandoffTicket, settleConflictHandoff } = await import("../src/accept-gate-conflict-registry.js");
 const { claimOwnTurn, isTurnClaimed, releaseTurn } = await import("../src/turn-lock.js");
 // 占住回合让交接一直排着（真实投递要等它退出才走），放开之后等那条排队的交接把锁用完还回来。
 const drained = async (taskId: string) => {
@@ -72,12 +72,15 @@ try {
   assert.ok(again);
   assert.equal((await post(sample.taskId)).status, 200, "没送到的那份可以再交一次");
   assert.equal((await acceptGateState(sample.taskId)).baselineIssue?.handoff?.state, "queued");
-  assert.equal(settleConflictHandoff(sample.taskId, { delivered: true }), true);
+  const ticket = conflictHandoffTicket(sample.taskId);
+  assert.equal(settleConflictHandoff(sample.taskId, (ticket ?? 0) - 1, { delivered: false, why: "上一份的回执" }), false,
+    "早一份交接晚到的回执不许结算这一份");
+  assert.equal(settleConflictHandoff(sample.taskId, ticket, { delivered: true }), true);
   await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, sample.taskId));
   assert.equal((await acceptGateState(sample.taskId)).baselineIssue?.handoff?.state, "working");
   await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, sample.taskId));
   assert.equal((await acceptGateState(sample.taskId)).baselineIssue?.handoff?.state, "ended", "那一轮跑完冲突还在，不能还说「正在解决」");
-  assert.equal(settleConflictHandoff(sample.taskId, { delivered: false, why: "迟到的失败" }), false, "定论之后不翻盘");
+  assert.equal(settleConflictHandoff(sample.taskId, ticket, { delivered: false, why: "迟到的失败" }), false, "定论之后不翻盘");
   // 收掉排着的那条：归档撤回它，它的失败不再改已经落定的登记。
   await db.update(tasks).set({ archived: true }).where(eq(tasks.id, sample.taskId));
   releaseTurn(sample.taskId, again!);

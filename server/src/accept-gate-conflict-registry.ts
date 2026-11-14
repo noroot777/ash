@@ -16,17 +16,26 @@
 import type { AcceptGateState } from "@ash/shared/accept-gate";
 
 type Handoff = NonNullable<NonNullable<AcceptGateState["baselineIssue"]>["handoff"]>;
-type Handed = { at: string; head: string | null; targetCommit: string; phase: "queued" | "delivered" | "failed"; note: string | null };
+
+// 每一份登记有自己的编号（ticket）：两份验收台先后交接同一个任务时，后一份会盖掉前一份的登记，前一份
+// 那条交接晚到的回执只认它自己的编号，结算不到后一份头上。
+type Handed = { ticket: number; at: string; head: string | null; targetCommit: string; phase: "queued" | "delivered" | "failed"; note: string | null };
 const handed = new Map<string, Handed>();
+let tickets = 0;
 
 export function noteConflictHandoff(taskId: string, head: string | null, targetCommit: string): void {
-  handed.set(taskId, { at: new Date().toISOString(), head, targetCommit, phase: "queued", note: null });
+  handed.set(taskId, { ticket: ++tickets, at: new Date().toISOString(), head, targetCommit, phase: "queued", note: null });
 }
 
-/** 交接层报回来的结局。没登记过（真合并撞冲突那条路，不走预演）就什么都不做。 */
-export function settleConflictHandoff(taskId: string, outcome: { delivered: true } | { delivered: false; why: string }): boolean {
+/** 此刻这个任务上那一份登记的编号：投递发出去的那一刻取，回执带着它回来结算。 */
+export function conflictHandoffTicket(taskId: string): number | null {
+  return handed.get(taskId)?.ticket ?? null;
+}
+
+/** 交接层报回来的结局。没登记过（真合并撞冲突那条路，不走预演）、或者编号对不上就什么都不做。 */
+export function settleConflictHandoff(taskId: string, ticket: number | null, outcome: { delivered: true } | { delivered: false; why: string }): boolean {
   const row = handed.get(taskId);
-  if (!row || row.phase !== "queued") return false;
+  if (!row || row.ticket !== ticket || row.phase !== "queued") return false;
   if (outcome.delivered) handed.set(taskId, { ...row, phase: "delivered" });
   else handed.set(taskId, { ...row, phase: "failed", note: outcome.why });
   return true;

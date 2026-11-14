@@ -1,5 +1,5 @@
 import { bus } from "./bus.js";
-import { settleConflictHandoff } from "./accept-gate-conflict-registry.js";
+import { conflictHandoffTicket, settleConflictHandoff } from "./accept-gate-conflict-registry.js";
 import { continueWhenIdle } from "./runs.js";
 import { appendTaskTimeline, alertLine, receiptLine } from "./task-timeline.js";
 
@@ -74,9 +74,11 @@ export function flushConflictHandoff(taskId: string): void {
   const plan = pending.get(taskId);
   if (!plan) return;
   pending.delete(taskId);
-  // 验收台那一行（预演冲突的登记）只认这里报回去的结局：排进队列不等于送到。
-  const settle = (outcome: Parameters<typeof settleConflictHandoff>[1]) => {
-    if (settleConflictHandoff(taskId, outcome)) bus.publish({ type: "task.acceptGate", taskId });
+  // 验收台那一行（预演冲突的登记）只认这里报回去的结局：排进队列不等于送到。结算认的是发出这一刻
+  // 那份登记的编号 —— 之后又有一份交接盖上来，这一条的回执不许替它说话。
+  const ticket = conflictHandoffTicket(taskId);
+  const settle = (outcome: Parameters<typeof settleConflictHandoff>[2]) => {
+    if (settleConflictHandoff(taskId, ticket, outcome)) bus.publish({ type: "task.acceptGate", taskId });
   };
   const failed = async (why: string) => {
     settle({ delivered: false, why });
