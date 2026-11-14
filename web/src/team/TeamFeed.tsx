@@ -23,6 +23,7 @@ import { isReviewSystemPrompt } from "../task-detail/systemNoticeModel.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
 import { MonitorWakeReply } from "../task-detail/MonitorWakeInput.tsx";
+import { turnCauseText } from "../task-detail/turnCause.ts";
 import { monitorWakeReplyIds } from "../task-detail/monitorWakeModel.ts";
 import { conversationInputAnchor, conversationInputs, REQUIREMENT_INPUT_ID, requirementAuthor } from "../task-detail/conversationInputs.ts";
 import { ReuseInputButton, type ReusableInput } from "../task-detail/ReuseInput.tsx";
@@ -42,6 +43,7 @@ function AgentRow({
   if (row.kind !== "agent") return null;
   const duration = durationBetween(row.at, row.endedAt);
   const compactContinuation = !!row.continuation && !!hideTime && !duration;
+  const cause = turnCauseText(row);
   return (
     <article className={`team-feed-agent${row.continuation ? " is-continuation" : ""}`}>
       {!compactContinuation && (
@@ -49,7 +51,7 @@ function AgentRow({
           {!row.continuation && (
             <span className="agent-run-identity">
               <b>{row.label}</b>
-              {row.wokenByMonitor && <span className="turn-cause">被哨兵叫醒</span>}
+              {cause && <span className="turn-cause">{cause}</span>}
               <AgentRunMeta run={row.run} />
             </span>
           )}

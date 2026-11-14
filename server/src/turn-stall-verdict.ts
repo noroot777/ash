@@ -35,6 +35,7 @@
 // `stall_reason=NULL` 就把它解释成「没熔断过」。所以判决的事实落在一个不可能排在别人事务后面
 // 的地方(`turn-stall-journal.ts`:另一个文件、同步写、写完 fsync),库那一格降级成给界面和接口
 // 读的投影。这里只认一件事:**注册进来的那一半必须在返回之前把事实存住,并如实报它存住了没有**。
+import type { ModelFailure, ModelFailureKind } from "@ash/shared";
 import { now } from "./util.js";
 
 /**
@@ -83,6 +84,13 @@ export interface StallVerdict {
    * 都有资格问这一句,而「问得到」是它们能不能如实对用户说话的前提。
    */
   durable: boolean;
+  /**
+   * 熔断时卡住这一轮的那条错误**来自模型 API 的哪一类**(看门狗按它熔断的同一批事件取,见
+   * StallFacts.lastModel),认不出、或者不是看门狗判的就没有。说「为什么断了」的那一处据它说
+   * (review-no-verdict.ts),不另找一份重试记录 —— 另找的那份收的事件比熔断判据窄,子线程的
+   * 重试一律漏掉(审查 I2TbHFxtSVAv 第 3 轮第 1 条)。
+   */
+  model?: ModelFailure | null;
 }
 
 const failures = new Map<string, StallVerdict>();
@@ -174,18 +182,20 @@ export function markStallFailure(
   reason: string,
   /** 这一次停滞的起点。不给就按判决时刻算(纯状态机测试用不到它)。 */
   since?: string,
+  /** 卡住它的那条错误的模型 API 类型(见 StallVerdict.model)。 */
+  model: ModelFailure | null = null,
 ): StallDurability {
   const at = now();
   const durability = ((): StallDurability => {
     if (!persister) return "not-persisted";
     try {
-      return persister.append({ sessionId, turnStartedAt, reason, since: since ?? at, at }) ? "durable" : "lost-on-restart";
+      return persister.append({ sessionId, turnStartedAt, reason, since: since ?? at, at, model }) ? "durable" : "lost-on-restart";
     } catch (error) {
       console.warn(`[ash] 会话 ${sessionId} 回合 ${turnStartedAt} 的熔断判决没能存住:`, error);
       return "lost-on-restart";
     }
   })();
-  remember({ sessionId, turnStartedAt, kind: "tripped", reason, at, since: since ?? at, durable: durability === "durable" });
+  remember({ sessionId, turnStartedAt, kind: "tripped", reason, at, since: since ?? at, model, durable: durability === "durable" });
   return durability;
 }
 
@@ -281,6 +291,22 @@ export function __resetStallFailures(): void {
   failures.clear();
 }
 
+/** 认得的模型故障类型。写成全量表：shared 那边加一类，这里编译不过，不会悄悄当成不认得。 */
+const MODEL_FAILURE_KINDS: Record<ModelFailureKind, true> = {
+  context_overflow: true, quota_exhausted: true, invalid_request: true, auth: true, rate_limit: true, unavailable: true,
+};
+
+/**
+ * 盘上那份 `model` 只认形状完全对的：类型在表里、状态码是数或 null。别的（异常写入、版本回退留下的）
+ * 一律当没有 —— 判决本身照留，只是说不出是哪一类模型故障；放进去的话，下游按类型挑措辞那一步
+ * 拿到一个不认得的类型就读挂了，这一轮连「怎么断的」都说不出（第 2 轮审查 N1）。
+ */
+export function trustedModel(value: unknown): ModelFailure | null {
+  const model = value as Partial<ModelFailure> | null | undefined;
+  if (!model || typeof model.kind !== "string" || !Object.hasOwn(MODEL_FAILURE_KINDS, model.kind)) return null;
+  return { kind: model.kind, status: typeof model.status === "number" ? model.status : null };
+}
+
 /**
  * 启动时把**落盘的那些**装进内存(`turn-stall-persist.ts` 在模块加载时调一次)。
  *
@@ -292,13 +318,13 @@ export function __resetStallFailures(): void {
  * 已经在表里的不覆盖:那是本进程刚作出的判决,比盘上那份新。
  */
 export function loadStallFailures(
-  records: { sessionId: string; turnStartedAt: string; reason: string; at: string; since?: string }[],
+  records: { sessionId: string; turnStartedAt: string; reason: string; at: string; since?: string; model?: ModelFailure | null }[],
 ): number {
   let loaded = 0;
   for (const record of records) {
     const k = key(record.sessionId, record.turnStartedAt);
     if (failures.has(k)) continue;
-    failures.set(k, { kind: "tripped", reason: record.reason, at: record.at, since: record.since ?? record.at, durable: true });
+    failures.set(k, { kind: "tripped", reason: record.reason, at: record.at, since: record.since ?? record.at, model: trustedModel(record.model), durable: true });
     loaded += 1;
   }
   return loaded;

@@ -233,7 +233,7 @@ export class CardActions {
     return { run: prepared, taskId: view.task.id, link };
   }
 
-  /** /stop 的确认卡（还有升级前发出的 /new 确认卡），/new 的表单。 */
+  /** /stop 的确认卡（还有升级前发出的 /new 确认卡），/new 的表单，新设备的配对卡（pairing.ts）。 */
   private confirmJob(
     envelope: EnvelopeRow, payload: Record<string, unknown>, op: string, event: CallbackEvent, principal: ImPrincipal,
   ): Job | CallbackResponse {
@@ -246,6 +246,10 @@ export class CardActions {
       if (!Number.isInteger(form.project)) return toast("warning", "先选一个项目");
       if (!form.title && !form.body && typeof payload.body !== "string") return toast("warning", "写上要做什么");
       return { run: () => this.deps.commands.submitted(principal, envelope.id, payload, form), taskId: null, link: null };
+    }
+    if (payload.command === "pair") {
+      if (op !== "approve" && op !== "deny") return toast("error", "认不出这个按钮");
+      return { run: () => this.deps.commands.paired(principal, payload, op), taskId: null, link: null };
     }
     if (op === "cancel") return { run: async () => ({ ok: true, text: "已取消。", final: true, tone: "grey" }), taskId: null, link: null };
     if (op !== "confirm") return toast("error", "认不出这个按钮");
@@ -284,7 +288,10 @@ export class CardActions {
     const claim = claimOf(envelope);
     const row = (await db.select().from(imOutbox).where(eq(imOutbox.id, envelope.outboxId))).at(0) ?? null;
     if (envelope.action === "confirm") {
-      const text = "点下按钮时 ash 正好重启，不确定办成没有：请在 ash 里看一眼，需要的话重新发命令。";
+      // 配对申请只在内存里（auth/remote-pairing.ts）：重启之后那张申请不在了，点没点成都一样，设备那边得重新申请。
+      const text = commandOf(envelope) === "pair"
+        ? "点下按钮时 ash 正好重启，这张申请作废了：在那台设备上重新打开 ash 再申请一次。"
+        : "点下按钮时 ash 正好重启，不确定办成没有：请在 ash 里看一眼，需要的话重新发命令。";
       const content = row ? JSON.stringify(renderCard(settledCard(cardHeaderOf(row.content), text, { link: null }, "orange"))) : null;
       await commit(this.deps.reconciler, async (tx) => {
         if (!await finishEnvelope(tx, claim, "interrupted") || !row || !content) return;
@@ -476,6 +483,15 @@ export class CardActions {
     if (job.taskId) this.deps.reconciler.mark(job.taskId);
     const line = !verdict.ok ? "已处理。" : verdict.titleOnly ? outcome.brief ?? "已处理。" : said;
     return { toast: { type: renewed ? "warning" : "success", content: line.slice(0, 60) }, card: { type: "raw", data: shown } };
+  }
+}
+
+/** 确认卡是哪一种（信封里的 payload.command）；读不出来回 null。 */
+function commandOf(envelope: EnvelopeRow): unknown {
+  try {
+    return (JSON.parse(envelope.payload) as { command?: unknown } | null)?.command ?? null;
+  } catch {
+    return null;
   }
 }
 

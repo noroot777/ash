@@ -40,7 +40,7 @@ const QUOTA_RETRY_MS = 30 * 60_000;
 const TOKEN_RETRY_MS = 5 * 60_000;
 
 /** 决策卡（带按钮、要人拍板）的 kind。 */
-export const DECISION_OUTBOX_KINDS = ["question", "failed", "dispute", "duet_gate", "accept", "confirm", "summary"] as const;
+export const DECISION_OUTBOX_KINDS = ["question", "failed", "dispute", "duet_gate", "accept", "confirm", "summary", "pair"] as const;
 
 export function purposeOfKind(kind: string): ImPurpose {
   if ((DECISION_OUTBOX_KINDS as readonly string[]).includes(kind)) return "decision";

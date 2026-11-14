@@ -5,7 +5,7 @@ import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
 import type { TaskWorkflowMode } from "./free-workflow.ts";
 import type { HandoffAudit, TaskHandoff } from "./handoff.ts";
-export type { Session, SessionNotice, SessionRole, TurnOutcome } from "./session.ts";
+export type { Session, SessionNotice, SessionRole, TurnInterruption, TurnOutcome } from "./session.ts";
 // 归一化后的 token 用量。运行时函数(累加/格式化)走 "@ash/shared/usage" 子路径
 // 导出,这里同上只再导出类型。
 export type { ContextUsage, OutputTiming, TokenUsage, UsageAccountingMark } from "./usage.ts";
@@ -69,12 +69,19 @@ export type {
   HandoffPeerModeInfo,
   InstanceMode,
   InviteInfo,
+  PairClaim,
+  PairCode,
+  PairRequestView,
+  PairTicket,
   PersonalAshMcp,
   PersonalCliEnv,
   PersonalSkill,
   ProjectInviteInfo,
   ProjectMemberView,
   ProjectRole,
+  RemoteAccessView,
+  RemoteDeviceVia,
+  RemoteDeviceView,
   UserHandoffTarget,
   UserRole,
   UserStatus,
@@ -557,10 +564,11 @@ export type {
   ScheduledMessageSessionRole,
   ScheduledMessageStatus,
 } from "./schedule.ts";
+export type { QueueBlocker, ScheduledMessageWait } from "./scheduled-message-wait.ts";
 
 // ── HITL gates (§7) / Executor streaming events (§12) ───────────────────────
 // 形状住在 ./events.ts(纯类型,这里只再导出);拆分理由见那个文件的头部注释。
-export type { AgentEvent, CompactionPhase, DuetSpeaker, GateAction, GateName, GateRequest, ServerEvent, TurnImageRef, TurnTraceEvent } from "./events.ts";
+export type { AgentEvent, CompactionPhase, ModelFailure, ModelFailureKind, DuetSpeaker, GateAction, GateName, GateRequest, ServerEvent, TurnImageRef, TurnTraceEvent } from "./events.ts";
 export type { NativeAgentActivity, NativeWorkEvent, NativeWorkStatus } from "./native-work.ts";
 
 // ── Session-snapshot parsing ──────────────────────────────────────────────

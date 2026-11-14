@@ -17,32 +17,19 @@ export const acceptGateRuns = sqliteTable(
     projectId: text("project_id").notNull(),
     /** 这一次用的命令原文：项目设置事后改了，历史记录里仍是当初真的跑过的那条。 */
     command: text("command").notNull(),
+    /** 这一次在快照里先跑的准备命令原文。null = 没配（依赖借用工作区那一份）。也是复用判据的一部分。 */
+    prepareCommand: text("prepare_command"),
     cwd: text("cwd").notNull(),
     /** running | passed | failed | interrupted | canceled */
     status: text("status").notNull(),
     exitCode: integer("exit_code"),
-    /** exit_code | timeout | spawn_failed | server_restarted | canceled | …(旧记录可能还有 command_missing) */
+    /** exit_code | timeout | spawn_failed | entry_missing | …(旧记录可能还有 command_missing) */
     failure: text("failure"),
-    /**
-     * 这一次红了之后的归类结论（人话，见 accept-gate-miss.ts）。
-     *
-     * 为什么落盘：里面有几条**当时**的 git 事实（目标分支那会儿在哪个提交、落后几个），
-     * 而仓库此后还会动。现算会让一条已经结案的记录跟着漂，用户翻回来看到的就不是当时
-     * 那个结论了。
-     */
-    diagnosis: text("diagnosis"),
     // 起跑**前**核到的入口事实(accept-gate-entry.ts 的 GateEntryProbe,JSON)。必须落盘:
     // 结算可能发生在 server 重启之后,而跑完再核一次拿到的是跑完之后的状态 —— 第 2 轮
     // 审查那条「打印启动提示、删掉自己、再报断言失败」的脚本就是这么被说成「没启动」的。
+    // 卡片上入口那句话由它现算(核得准又不在时它还带着目标分支上的情形)。
     entryProbe: text("entry_probe"),
-    // 起跑前核到「这条命令点名的东西不在这份快照里」之后,这件事看起来是不是这次改动造成的
-    // (mine/unknown,两档都是「去核」)。**非空就等于起跑前核到它不在**,卡片据此分叉。
-    // 旧记录里可能还有 not-mine —— 那一档撤掉了(第 10 轮审查 F2),读的那几处都按 unknown 待。
-    missAttribution: text("miss_attribution"),
-    // 上面那两个结论(diagnosis / miss_attribution)是**哪一代判据**生成的,代号本体与为什么
-    // 需要它见 shared/src/accept-gate.ts 的 ACCEPT_GATE_DIAGNOSIS_GENERATION。空 = 旧代:
-    // 读侧一律不拿它当当前事实,只当历史原文摆出来(第 2 轮审查 F1)。
-    diagnosisGeneration: text("diagnosis_generation"),
     pid: integer("pid"),
     /**
      * 那个 pid 的**启动时间**：重启之后拿它核对「这个号还是不是当初那条命令」。
@@ -144,16 +131,14 @@ export async function ensureAcceptGateSchema(client: Client): Promise<void> {
     "ALTER TABLE accept_gate_runs ADD COLUMN source_fingerprint TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN source_ambient TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN execution_mode TEXT",
-    "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN entry_probe TEXT",
-    "ALTER TABLE accept_gate_runs ADD COLUMN miss_attribution TEXT",
-    "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis_generation TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN settlement TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN preview_base TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN preview_commit TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN preview_tree TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN preview_materialization TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN preview_physical TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN prepare_command TEXT",
   ]) {
     try { await client.execute(sql); } catch { /* column already exists */ }
   }

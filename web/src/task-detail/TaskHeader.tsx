@@ -26,16 +26,10 @@ import { IconButton } from "../components/IconButton.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { useLayoutMotion } from "../lib/motion/index.ts";
 import { TaskPinButton } from "./TaskPinButton.tsx";
-import { headSteps, sealState, type HeadStep } from "./taskHeadSteps.ts";
+import { headSteps, sealState } from "./taskHeadSteps.ts";
 import { safeDownloadName } from "./utils.ts";
 
 export type PrimaryAction = "run" | "retry" | "stop" | "accept" | "unarchive";
-
-/**
- * 头上一回合级别的「重来」：上一回合崩了、任务却停在终态（续聊回合、自由工作流的修复 / 审查
- * 回合异常结束不改任务状态），判据和动作都在 TaskDetail（turnRetry.ts），这里只摆那颗图标。
- */
-export type HeadTurnRetry = { label: string; tip: string; run: () => Promise<void> };
 
 /**
  * 任务头：左边说「这是哪个任务」——类型（灰图标）、标题、来源（灰图标）、图钉；右边只有图标：
@@ -51,7 +45,6 @@ export function TaskHeader({
   busy,
   refreshing,
   reviewOpen,
-  turnRetry,
   onTitle,
   onTogglePin,
   onPrimary,
@@ -73,7 +66,6 @@ export function TaskHeader({
   busy: boolean;
   refreshing: boolean;
   reviewOpen: boolean;
-  turnRetry?: HeadTurnRetry | null;
   onTitle: (title: string) => Promise<void>;
   onTogglePin: () => Promise<void>;
   onPrimary: (action: PrimaryAction) => void;
@@ -93,7 +85,6 @@ export function TaskHeader({
   const [title, setTitle] = useState(task.title);
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState(false);
-  const [retrying, setRetrying] = useState(false);
   const menuRoot = useRef<HTMLDivElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const pointerToggle = useRef(false);
@@ -159,17 +150,6 @@ export function TaskHeader({
     }
   };
 
-  const runTurnRetry = async () => {
-    if (!turnRetry) return;
-    setRetrying(true);
-    try { await turnRetry.run(); } finally { setRetrying(false); }
-  };
-
-  // 任务级的那一步优先：失败了是任务级重试；只有任务停在终态、上一回合却崩了，才轮到回合级那颗。
-  const stepButtons: { key: string; step: HeadStep | null }[] = steps.length
-    ? steps.map((step) => ({ key: step.kind, step }))
-    : turnRetry ? [{ key: "turn-retry", step: null }] : [];
-
   return (
     <header className="task-detail-header">
       <div className="task-head-name">
@@ -201,9 +181,11 @@ export function TaskHeader({
       </div>
       <span className="task-head-grow" />
       <span className="task-head-acts" ref={acts}>
-        {stepButtons.map(({ key, step }) => step ? (
+        {/* 回合级的重来（上一回合崩了、任务却停在已完成）不在头上：它挂在会话里说这件事的那句话后面
+            （「重试这一回合」/「继续本轮审查」，见 turnRetry.ts）。 */}
+        {steps.map((step) => (
           <IconButton
-            key={key}
+            key={step.kind}
             label={step.label}
             tip={step.tip}
             className="task-head-step"
@@ -214,17 +196,6 @@ export function TaskHeader({
             {busy ? <SpinnerGap size={16} className="is-spinning" aria-hidden="true" />
               : step.kind === "retry" ? <ArrowCounterClockwise size={16} aria-hidden="true" />
                 : <Play size={16} aria-hidden="true" />}
-          </IconButton>
-        ) : (
-          <IconButton
-            key={key}
-            label={turnRetry!.label}
-            tip={turnRetry!.tip}
-            className="task-head-step"
-            disabled={retrying}
-            onClick={() => void runTurnRetry()}
-          >
-            {retrying ? <SpinnerGap size={16} className="is-spinning" aria-hidden="true" /> : <ArrowCounterClockwise size={16} aria-hidden="true" />}
           </IconButton>
         ))}
         {/* 「合并后不提交」那一档欠着的那一步。收尾的卡片只住在验收台里（用户 2026-09-15：
@@ -296,6 +267,9 @@ export function TaskHeader({
             </button>
             <button type="button" role="menuitem" onClick={() => void copy(taskUrl, "已复制任务链接")}>
               <Copy size={14} />复制任务链接
+            </button>
+            <button type="button" role="menuitem" onClick={() => void copy(task.id, "已复制任务 ID")}>
+              <Copy size={14} />复制任务 ID
             </button>
             {canMarkDone && onMarkDone && <span role="separator" />}
             {canMarkDone && onMarkDone && (

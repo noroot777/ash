@@ -128,7 +128,8 @@ export async function runTask(
       .update(tasks)
       // 方向身份那几列连同永不归零的世代一起走 `turnDirectionStart`:**新回合开跑也是一次新方
       // 向**,世代漏推的话,一轮完整跑完的回合在迟到回滚眼里什么都没发生过(见 task-direction-epoch.ts)。
-      .set({ followUpFrom: null, nativeTurn: false, goalTurn: false, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
+      // 被哨兵隔开的续聊(follow-up-held.ts)也到此为止:fresh run 是任务的执行,不是它的后半段。
+      .set({ followUpFrom: null, followUpHeldFrom: null, nativeTurn: false, goalTurn: false, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
       .where(eq(tasks.id, taskId));
     }, { behavior: "immediate" });
     // 跟 orchestrator 起一轮同一条规矩:令牌落库处顺手绑到内存里这一轮的身份上。

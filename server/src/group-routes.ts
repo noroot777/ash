@@ -2,12 +2,12 @@ import type { AgentType, BatchCreateTasksBody, BatchTaskInput, Group, Task } fro
 import { AGENT_TYPES } from "@ash/shared";
 import { CliCommandValidationError } from "@ash/shared/cli-commands";
 import { inheritExecutorOverrides, pickExecutor } from "@ash/shared/executors";
-import type { TaskWorkflowMode } from "@ash/shared/free-workflow";
-import { TASK_WORKFLOW_MODES, freeWorkflowFits } from "@ash/shared/free-workflow";
+import { createWorkflowMode } from "@ash/shared/free-workflow";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { groups, projects, queueItems } from "./db/schema.js";
+import { republishGroupWaits } from "./pending-wait.js";
 import { repoKey } from "./git.js";
 import { pauseGroup, runGroupInBackground } from "./scheduler.js";
 import { createTasks } from "./task-store.js";
@@ -56,7 +56,11 @@ api.post("/groups/:id/run", async (c) => {
   const gid = c.req.param("id");
   const g = (await db.select().from(groups).where(eq(groups.id, gid))).at(0);
   if (!g) return c.json({ error: "not found" }, 404);
-  if (g.paused) await db.update(groups).set({ paused: false }).where(eq(groups.id, gid));
+  if (g.paused) {
+    await db.update(groups).set({ paused: false }).where(eq(groups.id, gid));
+    // 托盘上「分组已暂停」那几条要改口(pending-wait.ts)。
+    void republishGroupWaits(gid).catch((err) => console.error(`[ash] republishGroupWaits(${gid}) failed:`, err));
+  }
   void runGroupInBackground(gid);
   return c.json({ started: true }, 202);
 });
@@ -120,28 +124,15 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
     }
   }
 
-  // 这一批每个任务走哪种工作方式。判据与 `POST /tasks` 完全一样（`freeWorkflowFits`）：
-  // 批量这条路建出来的全是普通单任务，所以只剩「有没有自带起手式」这一条——省略
-  // workflowMode 时，没给 workflowId 的就是 free。
-  //
-  // 默认给 free 而不是 preset，是因为拿到 preset 的任务在界面上没有「派审查 / 开预览」
-  // 入口（`FreeWorkflowToolbar` 按 workflowMode 整条返回 null）。以前这条路根本收不下
-  // workflowMode，agent 建出来的任务一律落 preset，用户只看到一个功能被剪掉的任务。
-  const modeOf = (s: BatchTaskInput): TaskWorkflowMode => {
-    const workflowId = s.workflowId !== undefined ? s.workflowId : b.defaults?.workflowId ?? null;
-    return s.workflowMode ?? b.defaults?.workflowMode ?? (freeWorkflowFits({ workflowId }) ? "free" : "preset");
-  };
+  // 这一批每个任务走哪种工作方式。判据与 `POST /tasks` 是同一份（`createWorkflowMode`）：
+  // 批量这条路建出来的全是顶层单任务，所以一律是自由工作流；要 preset 或带起手式的整批打回，
+  // 不半插进去。
   for (const [i, s] of specs.entries()) {
-    const wm = modeOf(s);
-    if (!(TASK_WORKFLOW_MODES as readonly string[]).includes(wm)) {
-      return c.json({ error: `tasks[${i}].workflowMode 只能是 free 或 preset`, allowed: TASK_WORKFLOW_MODES }, 400);
-    }
-    // 显式的 free + 显式的起手式是自相矛盾的，不能静默丢掉其中一个：自由工作流没有
-    // 起手式这个概念（createTasks 会把 workflow 置空），丢了用户就拿到一条没有验证站
-    // 的任务而毫不知情。
-    if (wm === "free" && (s.workflowId ?? b.defaults?.workflowId) != null) {
-      return c.json({ error: `tasks[${i}]: 自由工作流不能同时携带起手式（workflowId）` }, 400);
-    }
+    const resolved = createWorkflowMode({
+      workflowMode: s.workflowMode ?? b.defaults?.workflowMode,
+      workflowId: s.workflowId !== undefined ? s.workflowId : b.defaults?.workflowId ?? null,
+    });
+    if ("error" in resolved) return c.json({ error: `tasks[${i}]: ${resolved.error}` }, resolved.status);
   }
 
   // 拒绝 legacy 字段:本版本不再接受 dependsOn / resumeDependsOn。
@@ -229,8 +220,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       worktreeBase:
         s.worktreeBase !== undefined ? s.worktreeBase : b.defaults?.worktreeBase ?? null,
       mergeTargetBranch: s.mergeTargetBranch ?? b.defaults?.mergeTargetBranch ?? null,
-      workflowId: s.workflowId !== undefined ? s.workflowId : b.defaults?.workflowId ?? null,
-      workflowMode: modeOf(s),
+      workflowMode: "free",
       ownerUserId: batchOwner,
     };
   });

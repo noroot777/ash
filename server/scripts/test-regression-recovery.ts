@@ -115,7 +115,7 @@ try {
   recoveryProcess(); await reconcileRegressionSettlements();
   const timelineEvents = readFileSync(join(root, "runs", timeline.taskId, `${timelineSession}.md`), "utf8").split("\n")
     .filter((line) => line.startsWith("\x1e")).map((line) => JSON.parse(line.slice(1)) as { eventKey?: string });
-  assert.equal(timelineEvents.filter((event) => event.eventKey === `${timeline.basis.generation}:timeline`).length, 1);
+  assert.equal(timelineEvents.filter((event) => event.eventKey === `${timeline.generation}:timeline`).length, 1);
   assert.equal((await timeline.state()).finalization?.completed, true);
   console.log("✓ timeline acknowledgement failure reuses the durable event identity without duplicate messages");
 
@@ -145,7 +145,7 @@ try {
   await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, repair.taskId));
   await reconcileRegressionSettlements(); await reconcileRegressionSettlements();
   const messages = await db.select().from(schema.scheduledMessages).where(and(eq(schema.scheduledMessages.taskId, repair.taskId),
-    eq(schema.scheduledMessages.origin, `review-settlement:${repair.basis.generation}`)));
+    eq(schema.scheduledMessages.origin, `review-settlement:${repair.generation}`)));
   assert.equal(messages.length, 1);
   assert.equal((await db.select().from(schema.freeWorkflowStates).where(eq(schema.freeWorkflowStates.taskId, repair.taskId)))[0]!.reviewRunId, repair.runId);
   assert.equal((await repair.state()).finalization?.completed, true);
@@ -169,7 +169,7 @@ try {
   await reconcileRegressionSettlements();
   assert.equal((await outdated.state()).finalization?.completed, true);
   assert.equal((await db.select().from(schema.scheduledMessages).where(eq(schema.scheduledMessages.origin,
-    `review-settlement:${outdated.basis.generation}`))).length, 0);
+    `review-settlement:${outdated.generation}`))).length, 0);
   assert.equal((await db.select().from(schema.freeWorkflowStates).where(eq(schema.freeWorkflowStates.taskId, outdated.taskId)))[0]!.reviewNote, "new-direction");
   console.log("✓ cleared turn tokens cannot revive an old repair after a later direction epoch has completed");
 

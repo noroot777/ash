@@ -3,6 +3,7 @@ import { HandPalm } from "@phosphor-icons/react";
 import { api, type LaunchResidueView } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import "./launch-abandon-dialog.css";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 // 「这次启动的管理责任我自己接手了」——一个**显式**出口。为什么非得有它、以及它跟「静默
 // 核销」的分界线在哪，写在 server/src/terminal-abandon.ts 的文件头（端口归属核不上时整条
@@ -18,7 +19,7 @@ import "./launch-abandon-dialog.css";
 // 期间这条命令又起了一份时后端回 409（签字针对的是用户刚看过的那条会话 id）——这里照实
 // 说一句并重新拉一遍残留，让他对着新的那一份重新决定。
 
-const when = (at: number) => new Date(at).toLocaleString("zh-CN");
+const when = (at: number) => localeDateTime(at, "zh-CN");
 
 export function LaunchAbandonDialog({ projectId, commandId, onClose, onDone, notify }: {
   projectId: string;

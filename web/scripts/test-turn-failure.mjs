@@ -1,5 +1,6 @@
 // 一轮异常结束以后会话里那一句（docs/ui-ux-audit run-8）：刷新以后从会话行认出来，补在那条会话
-// 最后一回合后面；直播那一路已经落了异常边界就不重复；正常收口、手动停、审查会话都不补。
+// 最后一回合后面（带上会话行上服务端判的怎么断的）；历史回合按它自己的结局和原因补；直播那一路已经落了
+// 异常边界就不重复；正常收口、手动停、审查会话都不补。
 // 跑:npm -w web run test:turn-failure
 import assert from "node:assert/strict";
 import { crashedTurns } from "../src/task-detail/turnFailure.ts";
@@ -13,8 +14,35 @@ assert.deepEqual(
   [["a2", { text: "执行异常结束 · exit 1", at: "2026-11-12T00:00:00.000Z" }]],
   "只补在这条会话的最后一回合后面；时刻是会话行收口的那一刻",
 );
+const cause = { reason: "模型上游连不上（503）", detail: "模型上游连不上（状态码 503）" };
+assert.deepEqual(crashedTurns([agent("a1", sess({ turnStartedAt: "T1", turnInterruptions: { T1: cause } }))]).get("a1")?.interruption, cause,
+  "服务端判的怎么断的跟着会话行带出来；老记录没有就不带（上一条）");
+{
+  // 同一条会话重试成功以后：前一回合按它自己的结局和原因补，成功的那一回合不补，会话行上那份不串过去。
+  const after = sess({ turnStartedAt: "T2", exitStatus: 0, turnOutcome: "completed", turnInterruptions: { T1: cause } });
+  const got = crashedTurns([
+    agent("a1", after, { turnStartedAt: "T1", turnOutcome: "failed", turnInterruption: cause }),
+    agent("a1b", after, { turnStartedAt: "T1", turnOutcome: "failed", turnInterruption: cause }),
+    agent("a2", after, { turnStartedAt: "T2", turnOutcome: "completed" }),
+  ]);
+  assert.deepEqual([...got], [["a1b", { text: "执行异常结束：这一轮没有正常收口", at: undefined, interruption: cause }]],
+    "历史回合补在它最后一颗气泡上，带它自己的原因；退出码、收尾时刻是最后一回合的，不借");
+  // 只有执行过程的兜底气泡：服务端身份没给（turnStartedAt 空），结局和原因是按 turnKey 查的，就按它认回合。
+  assert.deepEqual(crashedTurns([
+    agent("a1", after, { turnKey: "T1", turnOutcome: "failed", turnInterruption: cause }),
+    agent("a2", after, { turnStartedAt: "T2", turnOutcome: "completed" }),
+  ]).get("a1")?.interruption, cause, "只跑了工具的失败回合也补，带它自己的原因");
+  assert.equal(crashedTurns([
+    agent("a1", after, { turnStartedAt: "T1", turnOutcome: "failed" }), boundary("error"),
+    agent("a2", after, { turnStartedAt: "T2", turnOutcome: "completed" }),
+  ]).size, 0, "直播那一路历史回合后面已经有异常边界");
+}
 assert.equal(crashedTurns([agent("a1", sess({ exitStatus: 0 }))]).size, 0, "正常收口不补");
-assert.equal(crashedTurns([agent("a1", sess({ endedAt: null }))]).size, 0, "还在跑的会话不补");
+assert.equal(crashedTurns([agent("a1", sess({ endedAt: null }))]).size, 0, "还在跑的会话不补（不知道结局，会话行上的退出码是上一个进程的）");
+assert.equal(crashedTurns([agent("a1", sess({ endedAt: null, exitStatus: null, turnOutcome: "failed" }))]).size, 1,
+  "权威结局已是失败：会话行还没收尾也补（跟重试入口同一份判据）");
+assert.equal(crashedTurns([agent("a1", sess({ endedAt: null, exitStatus: null }))], "s1").size, 1, "此刻能重试的那条会话：必定补一句，入口挂在它后面");
+assert.equal(crashedTurns([agent("a1", sess({ endedAt: null, exitStatus: null }))], "other").size, 0, "别的会话能重试不算数");
 assert.equal(crashedTurns([agent("a1", sess({ stoppedAs: "user" }))]).size, 0, "手动停下的不算异常");
 assert.equal(crashedTurns([agent("a1", sess({ exitStatus: 0, turnOutcome: "failed" }))]).get("a1")?.text, "执行异常结束 · exit 0", "权威结局优先于退出码");
 assert.equal(crashedTurns([agent("a1", sess(), { reviewer: { round: 1 } })]).size, 0, "审查会话有自己的卡");

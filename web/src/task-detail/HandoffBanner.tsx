@@ -3,6 +3,7 @@ import type { Task, TaskHandoff } from "@ash/shared";
 import { PaperPlaneTilt, Warning } from "@phosphor-icons/react";
 import { api, ApiError } from "../lib/api.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 // 从 HandoffDialog.tsx 拆出来的原因只有一个:那份文件顶到了单文件 700 行的上限。
 // 两者是同一条链路的两半 —— 对话框负责「把任务交出去」,横幅负责「交出去之后这条
@@ -63,12 +64,12 @@ export function HandoffBanner({
         {out
           ? handoff.pending
             ? pendingReturn
-              ? `${new Date(handoff.at).toLocaleString()} 移回${peer}后没收到确认,原机可能已接回这份任务。原样再移回一次会自动幂等收口;需要留在本机时,系统会先向原机核验并登记撤销。`
-              : `${new Date(handoff.at).toLocaleString()} 接力到${peer}后没收到确认,对端可能已收到这份任务。原样再接力一次会自动幂等收口;需要留在本机时,系统会先向对端核验并登记撤销。`
-            : `${new Date(handoff.at).toLocaleString()} 已接力到${peer},本机这份只是历史存档。`
+              ? `${localeDateTime(handoff.at)} 移回${peer}后没收到确认,原机可能已接回这份任务。原样再移回一次会自动幂等收口;需要留在本机时,系统会先向原机核验并登记撤销。`
+              : `${localeDateTime(handoff.at)} 接力到${peer}后没收到确认,对端可能已收到这份任务。原样再接力一次会自动幂等收口;需要留在本机时,系统会先向对端核验并登记撤销。`
+            : `${localeDateTime(handoff.at)} 已接力到${peer},本机这份只是历史存档。`
           : returned
-            ? `${new Date(handoff.at).toLocaleString()} 已从${peer}移回本机，最新上下文已接回；现在可继续运行或再次接力。`
-            : `${new Date(handoff.at).toLocaleString()} 从${peer}接力而来(会话文件 ${handoff.sessions} 份,代码${handoff.git === "bundle" ? "已随分支带来" : "未随任务携带"})。`}
+            ? `${localeDateTime(handoff.at)} 已从${peer}移回本机，最新上下文已接回；现在可继续运行或再次接力。`
+            : `${localeDateTime(handoff.at)} 从${peer}接力而来(会话文件 ${handoff.sessions} 份,代码${handoff.git === "bundle" ? "已随分支带来" : "未随任务携带"})。`}
       </span>
       {out && handoff.pending && (
         <button

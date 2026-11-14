@@ -332,6 +332,31 @@ export function inspectProcessSync(pid: number): { startedAt: string | null; com
   }
 }
 
+/**
+ * 单个进程**已经跑了多少秒**(`ps -o etime=`)。查不到、win32 一律 null。
+ *
+ * 跟 `lstart` 的区别是它**不带时区**:`lstart` 是一段按当时 `TZ` 渲染、自己不写时区的展示文本,
+ * 换个时区重启,同一个进程读出来就差几个小时;「已运行时长」在哪个时区下读都是同一个数。
+ * 用 `Date.now()` 减掉它就是这个进程的绝对启动时刻(秒级,截断)。
+ */
+export function processElapsedSecondsSync(pid: number): number | null {
+  if (IS_WINDOWS || !Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    const out = execFileSync("ps", ["-p", String(pid), "-o", "etime="], {
+      encoding: "utf8",
+      env: { ...process.env, LC_ALL: "C", LANG: "C" },
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    // [[dd-]hh:]mm:ss
+    const m = /^(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)$/.exec(out);
+    if (!m) return null;
+    const [days, hours, minutes, seconds] = [m[1], m[2], m[3], m[4]].map((v) => Number(v ?? 0));
+    return ((days! * 24 + hours!) * 60 + minutes!) * 60 + seconds!;
+  } catch {
+    return null;
+  }
+}
+
 // ── 进程树击杀 ─────────────────────────────────────────────────────────────
 
 /**
