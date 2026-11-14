@@ -182,6 +182,38 @@ async function windDownTurn(taskId: string) {
   await within("放弃者之后的排队", 3_000, withRepoLock(repo, () => { after = true; }));
   assert.equal(after, true, "后来的排队照常拿到锁");
 }
+{
+  // 没圈时限的普通调用照样排队:前一位没出来之前进不去,出来之后队尾登记也不会被它提前删掉
+  // (否则再来一位、哪怕带时限,也读不到前一位而直接闯进去)。
+  const entered: string[] = [];
+  let releaseFirst!: () => void;
+  const first = withRepoLock(repo, async () => {
+    entered.push("first-enter");
+    await new Promise<void>((resolve) => { releaseFirst = resolve; });
+    entered.push("first-exit");
+  });
+  await waitFor("第一位进锁", () => entered.includes("first-enter"));
+  const second = withRepoLock(repo, () => { entered.push("second"); });
+  await sleep(50);
+  assert.deepEqual(entered, ["first-enter"], "第一位还占着时普通调用不进");
+  const third = withExternalWaitBound({ ms: 2_000, onTimeout: () => {} },
+    () => withRepoLock(repo, () => { entered.push("third"); }));
+  await sleep(50);
+  assert.deepEqual(entered, ["first-enter"], "带时限的第三位也排在后面");
+  releaseFirst();
+  await within("三位依次走完", 3_000, Promise.all([first, second, third]));
+  assert.deepEqual(entered, ["first-enter", "first-exit", "second", "third"]);
+}
+{
+  // 加了时限不改变输出额度的口径:跟 execFile 一样两条流各算各的,不是加起来算。
+  const script = "process.stdout.write('o'.repeat(600)); process.stderr.write('e'.repeat(600));";
+  for (const timeoutMs of [undefined, 5_000]) {
+    const { stdout, stderr } = await within("双流输出", 3_000,
+      execFileText(process.execPath, ["-e", script], { maxBuffer: 1024, timeoutMs }));
+    assert.equal(stdout.length, 600, `timeoutMs=${timeoutMs}`);
+    assert.equal(stderr.length, 600, `timeoutMs=${timeoutMs}`);
+  }
+}
 
 {
   // 时限只在那一段还没结束时有效:段里 void 出去、段结束之后才跑的后续工作不受它约束。

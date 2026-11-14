@@ -113,14 +113,15 @@ function spawnInOwnGroup(
     detached: true, stdio: ["pipe", "pipe", "pipe"],
   });
   const chunks = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
-  let size = 0;
+  // 跟 execFile 一样每条流各算各的额度,不是两条加起来 —— 加了时限不该改变命令成不成功。
+  const size = { stdout: 0, stderr: 0 };
   let failure: ExecFileException | null = null;
   const text = (stream: "stdout" | "stderr") => Buffer.concat(chunks[stream]).toString(encoding);
   for (const stream of ["stdout", "stderr"] as const) {
     child[stream]?.on("data", (chunk: Buffer) => {
       if (failure) return;
-      size += chunk.length;
-      if (size > maxBuffer) {
+      size[stream] += chunk.length;
+      if (size[stream] > maxBuffer) {
         failure = Object.assign(new RangeError(`${stream} maxBuffer length exceeded`),
           { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }) as unknown as ExecFileException;
         if (child.pid) killTree(child.pid, "SIGKILL");

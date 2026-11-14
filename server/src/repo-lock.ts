@@ -87,19 +87,19 @@ export async function withRepoLock<T>(
   queues.set(key, tail);
 
   const startedWaiting = Date.now();
-  if (previous) {
-    const bound = externalWaitBound();
-    if (bound && !(await arrivesWithin(previous, bound.ms))) {
-      // 放弃排队(圈定了时限的收尾段,external-wait-bound.ts):这一位不执行 fn,但队里的位置得
-      // 原样让过去 —— 前一位一结束就放行后一位,不然排在后面的人会被一个已经走掉的号永远挡住。
-      void previous.then(() => {
-        release();
-        if (queues.get(key) === tail) queues.delete(key);
-      });
-      const what = `等仓库锁超过 ${Math.round(bound.ms / 1000)} 秒（${key} 前面有别的操作一直没结束），放弃排队`;
-      bound.onTimeout(what);
-      throw new RepoLockWaitTimeout(what);
-    }
+  // 没圈时限就照老样子一直等前一位 —— 互斥本身不随时限有无而变,时限只多给一条「等不及就走」的路。
+  const bound = previous ? externalWaitBound() : undefined;
+  if (previous && !bound) await previous;
+  if (previous && bound && !(await arrivesWithin(previous, bound.ms))) {
+    // 放弃排队(圈定了时限的收尾段,external-wait-bound.ts):这一位不执行 fn,但队里的位置得
+    // 原样让过去 —— 前一位一结束就放行后一位,不然排在后面的人会被一个已经走掉的号永远挡住。
+    void previous.then(() => {
+      release();
+      if (queues.get(key) === tail) queues.delete(key);
+    });
+    const what = `等仓库锁超过 ${Math.round(bound.ms / 1000)} 秒（${key} 前面有别的操作一直没结束），放弃排队`;
+    bound.onTimeout(what);
+    throw new RepoLockWaitTimeout(what);
   }
   const waitedMs = Date.now() - startedWaiting;
   const wait: RepoLockWait = { queued: !!previous, waitedMs };
