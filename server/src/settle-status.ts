@@ -16,6 +16,7 @@ import { type StopSettle } from "./runs.js";
 import { drainConfirmed } from "./task-confirmation.js";
 import { notifyTeamLead } from "./team/inbox.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
+import { followUpQuestionNote, pausedQuestionNote } from "./question-settle-notes.js";
 import { announceResumePrompt, resumePromptVoidPatch } from "./task-resume-prompt.js";
 import { turnOutputHint } from "./turn-output.js";
 import { beginTerminalLanding } from "./task-complete.js";
@@ -354,7 +355,7 @@ export async function settleTaskStatus(
       // 提问照常通知/展示(问题卡片不看状态),但不把终态改成 paused —— 那会让它
       // 重新占住队列位置。答复走 /answer,又是一个续聊回合。
       notify("question", t.question);
-      return { status: back, note: `续聊回合以提问结束,等待答复:「${t.question}」(任务状态仍为「${label}」)`, confirmedDone: false, nativeTurn };
+      return { status: back, note: followUpQuestionNote(t.question, label), confirmedDone: false, nativeTurn };
     }
     if (stopped) {
       const why = stopped === "paused" ? "分组被暂停" : "被手动停止";
@@ -395,7 +396,7 @@ export async function settleTaskStatus(
     await setStatus(taskId, "paused");
     if (t?.question) {
       notify("question", t.question);
-      return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」`, confirmedDone: false, nativeTurn };
+      return { status: "paused", note: pausedQuestionNote(t.question), confirmedDone: false, nativeTurn };
     }
     return { status: "paused", note: GROUP_PAUSED_NOTE, confirmedDone: false, nativeTurn };
   }
@@ -429,7 +430,7 @@ export async function settleTaskStatus(
   if (t?.question) {
     await setStatus(taskId, "paused");
     notify("question", t.question);
-    return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」`, confirmedDone: false, nativeTurn };
+    return { status: "paused", note: pausedQuestionNote(t.question), confirmedDone: false, nativeTurn };
   }
   if (t?.resumePrompt) {
     await setStatus(taskId, "paused");

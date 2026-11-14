@@ -58,7 +58,7 @@ window.fetch = async (input, init) => {
 const message = (id: string, text: string): ScheduledMessage => ({ id, text, taskId: "demo", attachments: [], agent: null,
   executorId: null, model: null, reasoningEffort: null, sessionRole: null, origin: null, mode: "queued", status: "pending",
   sendAt: `2026-10-28T00:00:0${id}Z`, createdAt: `2026-10-28T00:00:0${id}Z`, sentAt: null });
-const initial = [message("1", "请先修复项目创建流程，再调整验收页面"), message("2", "补充：保留现在的工作区隔离方式")];
+const initial = [{ ...message("1", "请先修复项目创建流程，再调整验收页面"), steerable: true }, message("2", "补充：保留现在的工作区隔离方式")];
 function Fixture() {
   const [messages, setMessages] = useState(initial);
   const [dialog, setDialog] = useState(false);

@@ -29,6 +29,12 @@ import { ACCEPT_GATE_FAILURE_LABELS } from "@ash/shared/accept-gate";
 import { COMMAND_NOTE_HEAD } from "@ash/shared/command-note";
 
 /** 判法 1：只有提醒才这么起头（注释是写它的文件，便于对照）。 */
+/**
+ * 审查没结论时老服务端唯一会说的那句：一律推断成「报告可能写完了、只是手上没有 report_stage」。
+ * 回合其实是中途断掉的那几轮，这句话是错的（reviewNoVerdictCause 据此把它换掉）。
+ */
+export const CHANNEL_GAP_GUESS = /^这一轮的审查报告可能已经写完了，只是结论没能上报到 ash/;
+
 const ALERT_LEADS: readonly RegExp[] = [
   // 验收
   /^验收暂缓[：:]/, // task-accept
@@ -81,7 +87,7 @@ const ALERT_LEADS: readonly RegExp[] = [
   /^(合并结果|自由工作流第 \d+ 轮)审查(回合已结束，但任务书有没有送进审查者手里|的任务书被协议层明确拒收|的任务书有没有送进审查者手里，已经确认不了)/, // review-input-verdict
   /^服务在审查输入交付期间中断/, // review-start-retry
   /^审查已完成，但后续工作流/, // review-finalization
-  /^这一轮的审查报告可能已经写完了，只是结论没能上报到 ash/, // review-channel-gap
+  CHANNEL_GAP_GUESS, // review-channel-gap
   /^这一轮没交卷多半不是 agent 漏了/, // review-channel-gap
   /^想自动开一轮验证，但没开起来/, // review
   /^审查缺少持久保存的真实退出结果/, // regression-settlement
@@ -105,7 +111,7 @@ const ALERT_LEADS: readonly RegExp[] = [
   /^起跑预检提示/, // ash-mcp-launch-gate / ash-mcp-turn-hint
   /^本次启动失败，未能继续执行/, // queue-seat
   /^续聊未能启动/, // task-reply
-  /^重跑上一回合(未能启动：回合被其它执行抢占|启动失败：)/, // task-retry-turn
+  /^(重试这一回合|重跑上一回合)(未能启动：回合被其它执行抢占|启动失败：)/, // task-retry-turn（「重跑上一回合」是老记录的说法）
   /^这一轮在启动前被撤回/, // turn-freeze
   /^这一轮改了代码，但没有确认完成/, // turn-baseline
   /^〔上游停滞·(重启后按失败收尾|上一次运行的结局核实不了)〕/, // turn-stall-text（重启对账）

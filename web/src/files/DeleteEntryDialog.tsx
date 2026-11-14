@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { CheckCircle, GitBranch, SpinnerGap, Trash, Warning } from "@phosphor-icons/react";
 import { ApiError, api, type FileEntryOverview } from "../lib/api.ts";
+import { localeNumber } from "../lib/localeFormat.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { formatSize } from "./fileModel.ts";
 
@@ -68,7 +69,7 @@ export function DeleteEntryDialog({
   const needsTyping = typeToConfirmNeeded(overview, mode);
   const fileCount = stats ? stats.files : 1;
   const countText = stats
-    ? `${stats.files.toLocaleString()} 个文件、${stats.dirs.toLocaleString()} 个子文件夹，合计 ${formatSize(stats.bytes)}${stats.truncated ? "（还没数完，实际更多）" : ""}`
+    ? `${localeNumber(stats.files)} 个文件、${localeNumber(stats.dirs)} 个子文件夹，合计 ${formatSize(stats.bytes)}${stats.truncated ? "（还没数完，实际更多）" : ""}`
     : formatSize(target.size);
 
   const remove = async (force: boolean) => {
@@ -141,7 +142,7 @@ export function DeleteEntryDialog({
         <Fact tone="danger" icon={<Warning size={16} weight="fill" />} title="有未跟踪内容，git 里没有备份">
           <p>
             {isDir
-              ? `这个文件夹里有 ${git.untracked.toLocaleString()} 个未跟踪文件。`
+              ? `这个文件夹里有 ${localeNumber(git.untracked)} 个未跟踪文件。`
               : `${target.path} 还没进过任何提交。`}
             {noBackup}
           </p>
@@ -150,7 +151,7 @@ export function DeleteEntryDialog({
             <ul>
               {git.untrackedSamples.map((path) => <li key={path}>{path}</li>)}
               {git.untracked > git.untrackedSamples.length && (
-                <li>…… 还有 {(git.untracked - git.untrackedSamples.length).toLocaleString()} 个</li>
+                <li>…… 还有 {localeNumber(git.untracked - git.untrackedSamples.length)} 个</li>
               )}
             </ul>
           )}

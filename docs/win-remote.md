@@ -13,7 +13,9 @@ node scripts/win-remote.mjs test --all          # 跑三条 Windows 专属回归
 node scripts/win-remote.mjs test x --no-sync    # 跳过同步,重跑上次那份代码
 ```
 
-环境变量:`WIN_REMOTE_HOST`(默认 `http://192.168.1.187:4317`)、`WIN_REMOTE_SELF`(本机对外 IP,
+环境变量:`WIN_REMOTE_KEY`(对端 ash 的访问密钥——自用模式的 ash 对别处来的脚本只认这把密钥,
+不带就是 401;在那台 Windows 上打开 ash「设置 → 默认规则 → 远程访问」拿,或在它本机
+`curl http://127.0.0.1:4317/api/remote-access`)、`WIN_REMOTE_HOST`(默认 `http://192.168.1.187:4317`)、`WIN_REMOTE_SELF`(本机对外 IP,
 自动探测不准时用)、`WIN_REMOTE_PROJECT`(对端项目 id,自动按 `repoPath` 猜歪了时用;给了不存在的
 id 会把现有项目列出来)、`WIN_REMOTE_GIT_PORT`(钉死 git daemon 端口,默认每次现挑一个空闲的)、
 `WIN_REMOTE_WORKSPACE`(换个对端目录,默认 `.worktrees/win-remote`;**四个子命令一律跟着它走** ——
@@ -29,7 +31,8 @@ sync 检出、exec 的 cwd、test 的 cwd、doctor 的探针都取同一个来�
 
 那台机器只有两个入站端口:445(SMB,要凭证)和 4317(ash 自己)。装 OpenSSH Server 要点 UAC，
 无人值守时点不动 —— 所以**通道就是 ash 自己的终端 API**,不需要在 Windows 上装任何东西、
-也不需要管理员权限。
+也不需要管理员权限。终端 API 本身就是一个 shell,所以它和 ash 的其它接口一样要访问密钥
+(`WIN_REMOTE_KEY`),控制面的每一跳都带着它。
 
 ```
 开发机                                          Windows 192.168.1.187

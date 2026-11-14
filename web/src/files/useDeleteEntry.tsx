@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { api, type FileEntryOverview } from "../lib/api.ts";
+import { localeNumber } from "../lib/localeFormat.ts";
 import { DeleteEntryDialog } from "./DeleteEntryDialog.tsx";
 import { fileTreeChanged } from "./fileModel.ts";
 
@@ -53,7 +54,7 @@ export function useDeleteEntry({
         // 树上那一行必须当场消失，不等 5 秒轮询。
         fileTreeChanged(taskId);
         const scope = result.kind === "dir"
-          ? `${result.name}/（${result.files.toLocaleString()} 个文件）`
+          ? `${result.name}/（${localeNumber(result.files)} 个文件）`
           : result.name;
         notify(result.mode === "trash" ? `已把 ${scope} 移到废纸篓` : `已删除 ${scope}`);
         onDeleted({ path, kind: result.kind });

@@ -34,7 +34,7 @@ export function useTaskInspectorStack(
   // 见 task-memos/useTaskMemoTab.tsx：手写第一条的入口只在那一格里。
   const memoTab = useTaskMemoTab(monitorTab.inspectors, task.id);
   // 审查链状态在这一层订阅：竖轨上「审查」那一格的主色点要它（审查在跑），任务页别处
-  // （验收后快照入口、会话尾栏的异常回合重试）也用同一份，一个任务只挂一条 2.5s 轮询。
+  // （验收后快照入口、「继续本轮审查」的可用性）也用同一份，一个任务只挂一条 2.5s 轮询。
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const reviewing = task.workflowMode === "free"
     ? (free.state?.reviews ?? []).some((run) => run.status === "reviewing")

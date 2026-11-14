@@ -50,6 +50,7 @@ import {
   WORKSPACE_SIDEBAR_STORAGE_KEY,
 } from "./WorkspaceResizeHandle.tsx";
 import { pushTaskHistoryEntry, selectedTaskProjectId } from "./workspaceHistory.ts";
+import { DevicePairingAlert } from "../auth/DevicePairingAlert.tsx";
 import { HandoffApprovalAlert } from "../handoff/HandoffApprovalAlert.tsx";
 import { visibleOnThisMachine } from "./taskTreeModel.ts";
 import { HandoffDialog } from "../task-detail/HandoffDialog.tsx";
@@ -576,6 +577,7 @@ export function WorkspaceShell() {
   };
   const handoffAlert = (
     <div className="handoff-approval-slot">
+      <DevicePairingAlert notify={notify} />
       <HandoffApprovalAlert notify={notify} onOpenSettings={() => openSettings("defaults")} />
     </div>
   );

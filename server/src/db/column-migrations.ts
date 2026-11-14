@@ -410,6 +410,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 这一回合是不是哨兵唤醒起的(见 schema-sessions.ts 同名列)。存量行由
   // monitor-wake-turns-backfill.ts 按转录回填一次。
   "ALTER TABLE session_turns ADD COLUMN monitor_wake INTEGER NOT NULL DEFAULT 0",
+  // 这一回合怎么断的(见 schema-sessions.ts 同名列)。存量行 NULL = 不知道,页面照老样子说。
+  "ALTER TABLE session_turns ADD COLUMN interruption TEXT",
   // usage_turns 里记在哨兵唤醒回合上的那几轮(见 schema-sessions.ts 同名列)。
   "ALTER TABLE sessions ADD COLUMN usage_monitor_wake_turns INTEGER",
   // 「等某任务完成后发送」的那个任务(mode=after)。存量行 NULL。
@@ -423,4 +425,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE scheduled_messages ADD COLUMN answer_id TEXT",
   // 开工起点所在的分支名（见 db/schema.ts 同名列）。存量行 NULL = 没记过。
   "ALTER TABLE tasks ADD COLUMN worktree_base_branch TEXT",
+  // 团队调度台这一行此刻归哪一台（见 schema-sessions.ts 同名列）。存量行 NULL。
+  "ALTER TABLE sessions ADD COLUMN lead_holder TEXT",
+  // 这一段暂停在等哨兵(见 db/schema.ts 同名列)。存量行 NULL 由队列观察到在等时补上。
+  "ALTER TABLE tasks ADD COLUMN monitor_hold_at TEXT",
 ];

@@ -46,6 +46,8 @@ const row = (id: string, text: string, sendAt: string): ScheduledMessage => ({
 
 const renderTray = (messages: ScheduledMessage[]) => renderToStaticMarkup(<ScheduledMessageTray messages={messages}
   loading={false} error={null} cancelingIds={new Set()} onWithdraw={() => undefined} />);
+const renderSteerTray = (messages: ScheduledMessage[]) => renderToStaticMarkup(<ScheduledMessageTray messages={messages}
+  loading={false} error={null} cancelingIds={new Set()} onSteer={() => undefined} onWithdraw={() => undefined} />);
 const samples = Array.from({ length: 3 }, (_, index) => row(`sample-${index}`, `输入-${index}`, `2026-10-24T10:00:0${index}.000Z`));
 assert.equal(renderTray([]), "", "空队列不占回复区");
 for (const count of [1, 2]) {
@@ -87,7 +89,7 @@ const html = renderToStaticMarkup(
   <ScheduledMessageTray
     messages={[
       row("later", "第二条", "2026-08-25T10:00:01.000Z"),
-      row("first", "第一条", "2026-08-25T10:00:00.000Z"),
+      { ...row("first", "第一条", "2026-08-25T10:00:00.000Z"), steerable: true },
     ]}
     loading={false}
     error={null}
@@ -119,7 +121,7 @@ const managedHtml = renderToStaticMarkup(
   <ScheduledMessageTray
     messages={[
       { ...row("reviewer", "审查答复", "2026-08-25T10:00:00.000Z"), sessionRole: "reviewer" },
-      row("mine", "我写的", "2026-08-25T10:00:01.000Z"),
+      { ...row("mine", "我写的", "2026-08-25T10:00:01.000Z"), steerable: true },
     ]}
     loading={false}
     error={null}
@@ -143,6 +145,32 @@ assert.match(
   /scheduled-message-guide/,
   "带角色的消息被跳过后，引导动作要落到最早的那条用户消息上",
 );
+// 每条在等什么由服务端按结构给(wait),托盘照着说;不按 mode 写死「等待当前一轮结束」。
+// 2026-11-13 现场:任务早停了,真正挡着答复的是同队另一条在跑的任务,托盘却说在等这一轮。
+const blockedBy = { kind: "queue" as const, blockers: [{ id: "task-b", title: "整理发布说明", running: true }] };
+const queueBlocked = renderSteerTray([{ ...row("answer", "我的答复", "2026-11-13T13:25:51.000Z"), wait: blockedBy, steerable: false }]);
+assert.match(queueBlocked, /同一队列里「整理发布说明」正在运行，轮到本任务时发送/, "等同队任务时点名那个任务");
+assert.doesNotMatch(queueBlocked, /等待当前一轮结束|等本任务这一轮结束/);
+assert.doesNotMatch(queueBlocked, /引导会话/, "任务不在跑,点了必被拒的引导键不出现");
+const waitingEarlier = renderTray([{ ...row("answer", "我的答复", "2026-11-13T13:25:51.000Z"),
+  wait: { kind: "queue", blockers: [{ id: "task-b", title: "整理发布说明", running: false }] } }]);
+assert.match(waitingEarlier, /同一队列里排在前面的「整理发布说明」还没完成/);
+const ownTurn = renderSteerTray([{ ...row("next", "下一句", "2026-11-13T13:25:51.000Z"), wait: { kind: "turn" }, steerable: true }]);
+assert.match(ownTurn, /等本任务这一轮结束/, "等本任务这一轮是另一种原因");
+assert.match(ownTurn, />引导会话</, "本任务在跑、服务端说能引导,才给这颗键");
+assert.match(renderTray([{ ...row("paused", "暂停中", "2026-11-13T13:25:51.000Z"), wait: { kind: "groupPaused" } }]), /分组已暂停，恢复后发送/);
+const unknown = renderSteerTray([row("legacy", "旧服务端", "2026-11-13T13:25:51.000Z")]);
+assert.doesNotMatch(unknown, /等待当前一轮结束|scheduled-message-wait/, "说不出原因就不说");
+assert.doesNotMatch(unknown, /引导会话/, "服务端没下发能不能引导时不给这颗键");
+// 抬头照队首那条说;后面那条原因不同,在它自己那一行说,一样的不重复写。
+const mixedWaits = renderTray([
+  { ...row("head", "第一句", "2026-11-13T13:25:51.000Z"), wait: { kind: "turn" } },
+  { ...row("same", "第二句", "2026-11-13T13:25:52.000Z"), wait: { kind: "turn" } },
+  { ...row("other", "第三句", "2026-11-13T13:25:53.000Z"), wait: { kind: "groupPaused" } },
+]);
+assert.equal((mixedWaits.match(/等本任务这一轮结束/g) ?? []).length, 1, "跟抬头一样的那几行不再重复写");
+assert.match(mixedWaits, /scheduled-message-wait">分组已暂停，恢复后发送/);
+
 const annotationBatch: AnnotationBatch = {
   id: "batch", taskId: "task", createdAt: 1, gen: "gen", serviceId: "web", evidence: [],
   items: [{ id: "item", number: 1, comment: "把按钮加大", gen: "gen", serviceId: "web", documentId: "document", tool: "element",
@@ -319,7 +347,7 @@ assert.deepEqual(
   };
   const monitorHtml = renderToStaticMarkup(
     <ScheduledMessageTray
-      messages={[monitorRow, row("mine", "我自己写的", "2026-08-25T10:00:03.000Z")]}
+      messages={[monitorRow, { ...row("mine", "我自己写的", "2026-08-25T10:00:03.000Z"), steerable: true }]}
       loading={false}
       error={null}
       cancelingIds={new Set()}

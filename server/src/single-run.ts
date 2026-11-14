@@ -48,6 +48,7 @@ import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart } from "./turn-output.js";
 import { replayUndeliveredMcpCalls } from "./mcp-handoff.js";
 import { noteReviewerChannelGap, noteTurnChannelGap } from "./review-channel-gap.js";
+import { turnInterruptionOf } from "./turn-interruption.js";
 import { afterSettlement, settleTaskStatus } from "./settle-status.js";
 import { recordSessionUsageEvent, setSessionContext } from "./usage.js";
 import { markCliGoalStarted, persistRunGoal } from "./task-cli-state.js";
@@ -155,6 +156,8 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   // is_error/api_error_status 就是这种）。退出码只能说明进程活着走完，不能证明这一轮
   // 执行成功；自由工作流据此决定是否继续自动复审链。
   let sawExecutionError = false;
+  // 最后一条执行故障，审查没结论时据它说怎么断的（`model` = 执行器认出它来自模型 API 时挂的类型）。
+  let lastExecutionError: Extract<AgentEvent, { kind: "error" }> | null = null;
   // CLI 否认过这条会话，或 Codex stderr 证明 thread 已 poisoned 吗（见
   // executors/session-lost.ts）。认下来的话这一轮收尾时要把失效 id 从库里清掉，
   // 否则每一次重试都在 --resume 同一条坏会话。
@@ -456,7 +459,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
         if (emittedEvent.kind === "error" && !isExecutionNotice(emittedEvent)) {
           // 有些 error 是需要留在红色诊断块里的旁路故障，但不代表模型回合失败（目前的
           // 实例是 Claude 自动压缩失败：压缩没成，后续 result 仍明确为 success）。
-          if (emittedEvent.affectsTurn !== false) sawExecutionError = true;
+          if (emittedEvent.affectsTurn !== false) { sawExecutionError = true; if (!lastExecutionError?.model || emittedEvent.model) lastExecutionError = emittedEvent; }
           writeRunError(out, emittedEvent.message);
           sessionFault = mergeSessionResumeFault(sessionFault, emittedEvent.message);
         }
@@ -524,7 +527,9 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   const dropSession = !steered && shouldDropSession(sessionFault, exitStatus);
   const turnOutcome: TurnOutcome = steered || stopped ? "stopped" : executionFailed ? "failed" : "completed";
   await closeExecution(steered ? "canceled" : stopped ?? (executionFailed ? "failed" : "completed"), endIso);
-  await db
+  // 会话行的收尾**不在这里单独写**:它跟下面的回合收口同一个原子批落(`recordTurnSpan` 的
+  // `alongside`),页面一次读出来的两边才是同一刻的(第 1、2 轮审查第 1 条)。
+  const closeRow = db
     .update(sessions)
     .set({
       exitStatus,
@@ -556,6 +561,9 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   // 「非零退出 **或** 中途报过执行故障」= 失败)。读端据此给失败现场,不再去猜进程退出码
   // —— 单飞这一路恰好是反方向那半边:`exit 0` 却报过执行故障的回合从前一条现场都给不出
   // (第 5 轮审查 F3,见 db/schema-sessions.ts 的 sessionTurns.outcome)。
+  // 这一回合怎么断的（turn-interruption.ts）：跟结局一起落在回合上，也跟着下面那条结尾事件播出去。
+  const failure = executionFailed ? { exitStatus, verdict: watchdogFailure, error: lastExecutionError } : null;
+  const interruption = failure && turnOutcome === "failed" ? turnInterruptionOf(taskId, sessId, a.turnStart, failure) : null;
   await recordTurnSpan({
     sessionId: sessId,
     taskId,
@@ -563,6 +571,8 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     startedAt: a.turnStart,
     endedAt: endIso,
     outcome: turnOutcome,
+    interruption,
+    alongside: closeRow,
   });
   if (steered) {
     // 「引导会话」只截断旧回合：任务仍是 running，新消息已持有 scheduled_messages
@@ -579,7 +589,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   if (doneEvent) {
     // 结尾带上**同一份**结局:exit 0 却被判失败、留了续跑交代后崩掉(那一支不写结算说明)的回合,
     // 直播那一路只有它说得清(见 AgentEvent 的 done.turnOutcome)。
-    const done = { ...doneEvent, turnOutcome };
+    const done = { ...doneEvent, turnOutcome, ...(interruption ? { interruption } : {}) };
     persistTrace(done, endIso);
     publishEvent(done);
   }
@@ -645,7 +655,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       executionFailed,
     );
   }
-  // 审查旁路回合收尾了，却一次 ash MCP 都没调过：把原因说出来（review-channel-gap.ts）。
+  // 审查旁路回合没给出结论：把真实原因说出来（中途断了 / 收尾了却没上报，review-channel-gap.ts）。
   // **排在 afterSettlement 之后** —— 那一步里自由工作流才写下「未能正常给出结论，已停止
   // 自动链」，这一句紧跟其后才读得通（先结果、后原因）。说不出来就什么都不说，绝不因此
   // 影响这一轮的落位。
@@ -653,7 +663,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // 回合身份在结算期间还占着（orchestrator 在 consumeSingleRun 之后才 releaseTurn），
     // 这一轮绑的是哪一次审查就从那里整份读。
     const review = turnIdentity(taskId)?.review ?? null;
-    await noteReviewerChannelGap({ taskId, sessId, turnStart: a.turnStart, agentType, stopped: !!stopped, review })
+    await noteReviewerChannelGap({ taskId, sessId, turnStart: a.turnStart, agentType, stopped: !!stopped, review, failure })
       .catch((error) => { console.error(`[ash] noteReviewerChannelGap(${taskId}) failed:`, error); return false; });
   }
   if (settled.note) {

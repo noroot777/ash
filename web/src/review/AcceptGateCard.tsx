@@ -10,6 +10,7 @@ import { useCatchUp } from "../lib/useCatchUp.ts";
 import { useAcceptGate } from "./useAcceptGate.ts";
 import { AcceptGateForceRelease } from "./AcceptGateForceRelease.tsx";
 import { AcceptGateBaselineChoice } from "./AcceptGateBaselineChoice.tsx";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 // 「验收前置命令」在验收台上的那张卡。它跟 PendingMergeCard 一样住在每个有验收动作的
 // 表面上，自己判要不要出现。
@@ -270,7 +271,7 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, a
             : idle
             ? "本次验收不会运行前置命令。项目管理员可在这里或项目设置中配置。"
             : detail(state, running, latest, receipt, settled)}</p>
-          {shown && <p aria-label="验收命令运行记录">运行记录：{shown.id} · 开始于 {new Date(shown.startedAt).toLocaleString()}{shown.finishedAt ? ` · 结束于 ${new Date(shown.finishedAt).toLocaleString()}` : ""}</p>}
+          {shown && <p aria-label="验收命令运行记录">运行记录：{shown.id} · 开始于 {localeDateTime(shown.startedAt)}{shown.finishedAt ? ` · 结束于 ${localeDateTime(shown.finishedAt)}` : ""}</p>}
           {shown?.executionNotice && <p role="note">{running ? "本次运行：" : settled ? "本次验收运行：" : "历史运行："}{shown.executionNotice}</p>}
           {!settled && !running && state.command && state.executionNotice && state.executionNotice !== shown?.executionNotice
             && <p role="note">下次运行：{state.executionNotice}</p>}

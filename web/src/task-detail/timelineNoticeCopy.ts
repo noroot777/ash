@@ -15,7 +15,7 @@
 // 没有类型的老记录（这份类型出现之前落盘的、线上老服务端写的、以及回合里那几种不走时间线的
 // 系统注记）退回老读法：认原文里的几个固定说法，再按起头表（legacyNoticeTable）认要你知道的
 // 那几句，其余一律是回执。只有这一处还在读原文。
-import { LEGACY_SYS_MARKER, STAGE_LABELS, type TaskStage } from "@ash/shared";
+import { LEGACY_SYS_MARKER, STAGE_LABELS, type TaskStage, type TurnInterruption } from "@ash/shared";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
 import type { TimelineNotice, TimelineReviewSource } from "@ash/shared/timeline-notice";
 import { previewNoticeText } from "../lib/previewUrl.ts";
@@ -64,6 +64,7 @@ export type NoticeView = {
 type NoticeSource = {
   text: string;
   notice?: TimelineNotice;
+  interruption?: TurnInterruption;
   tone?: ConversationEventTone;
   variant?: ConversationEventVariant;
 };
@@ -162,6 +163,11 @@ function typedView(notice: TimelineNotice, raw: string): NoticeView {
       // 没能开始的那一轮不算「出了结论」，是出了岔子：同样进尾注，只是归明面那一档。
       return view(notice.verdict === "aborted" ? "alert" : "milestone", reviewVerdictTone(notice.verdict), "review", "review", text, raw);
     }
+    // 紧跟「没有给出结论」那句之后的原因：说它怎么没的（「第 1 轮审查中断：模型上游连不上（503）」），
+    // 经过、报告写没写、下一步都在原文里点开看。归明面：要用户知道、多半还要用户点「继续本轮审查」。
+    case "review.no_verdict":
+      return view("alert", "warn", "other", "review",
+        `${reviewRoundName(notice.source ?? "free", notice.round)}${notice.cause.kind === "interrupted" ? "中断" : "没上报结论"}：${notice.cause.reason}`, raw);
     case "accept.done":
       return accepted(raw, notice.target, !!notice.noCommit, notice.tag);
     // 不再靠认「现在由你裁定」那几个字找到它。
@@ -265,14 +271,20 @@ export function noticeView(item: NoticeSource, context: NoticeContext = {}): Not
   const raw = noticeRawText(item.text);
   // 回合边界（直播那一路的「本轮执行结束」「执行异常结束 · exit 1」）不走时间线：
   // 正常收口是回执，异常收口是那一回合尾注里的一句。
-  // 异常收口落定成一句「这一轮异常结束」，退出码点开再看（run-8）。
-  if (item.variant === "boundary") return item.tone === "error" ? turnFailureView(raw) : generic("receipt", "neutral", raw);
+  // 异常收口落定成一句「这一轮中断 · 原因」（老记录没有原因：「这一轮异常结束」），经过点开再看（run-8）。
+  if (item.variant === "boundary") return item.tone === "error" ? turnFailureView(raw, item.interruption) : generic("receipt", "neutral", raw);
   return item.notice ? typedView(item.notice, raw) : legacyView(item, raw, context);
 }
 
-/** 一轮异常结束的那一句（直播那一路的回合边界、刷新以后从会话行认出来的都用它）。 */
-export function turnFailureView(raw: string): NoticeView {
-  return view("alert", "bad", "failure", "alert", "这一轮异常结束", raw);
+/**
+ * 一轮异常结束的那一句（直播那一路的回合边界、刷新以后从会话行认出来的都用它）。服务端判了怎么断的
+ * 就照它说（跟审查那一档「第 N 轮中断 · 原因」同一套说法），点开是带执行器原话的经过；老记录没有，
+ * 就说「这一轮异常结束」，点开是退出码。
+ */
+export function turnFailureView(raw: string, interruption?: TurnInterruption): NoticeView {
+  return interruption
+    ? view("alert", "bad", "failure", "alert", `这一轮中断 · ${interruption.reason}`, interruption.detail)
+    : view("alert", "bad", "failure", "alert", "这一轮异常结束", raw);
 }
 
 /**

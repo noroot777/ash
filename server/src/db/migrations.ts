@@ -11,6 +11,7 @@
 // 入口只有一个:`runDataMigrations(client)`,由 `ensureSchema()` 在 DDL 之后调用。
 import { stampOnboardingBaseline } from "./migrate-onboarding.js";
 import { migrateSessionTurnIdentity } from "./migrate-session-turns.js";
+import { backfillMonitorHolds } from "./migrate-monitor-hold.js";
 import type { Client } from "./node-sqlite-client.js";
 import { markPendingCallKey, pendingCallKeyBlocker, pendingCallKeyLive } from "./schema-readiness.js";
 import { dropRetiredTables } from "./retired-schema.js";
@@ -658,6 +659,7 @@ export async function runDataMigrations(client: Client): Promise<void> {
   // 可信的时长回算列值。
   await backfillMonitorTimeoutFromExpiry(client);
   await migrateSessionTurnIdentity(client);
+  await backfillMonitorHolds(client);
   // 升上来的老实例不该被糊一屏首启向导。判据只在这一刻算一次,之后 `src/onboarding.ts`
   // 只读那条记录 —— 拿实时业务列表反推会把首装过程本身当成「早就配好了」。
   await stampOnboardingBaseline(client);

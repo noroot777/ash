@@ -8,7 +8,8 @@ import { getCookie } from "hono/cookie";
 import { alive, readAnyPreview } from "./preview-store.js";
 import { previewBase } from "./preview-public.js";
 import { rewritePreviewText, rewritePreviewUrl } from "./preview-proxy-rewrite.js";
-import { grantFor, canUsePreview, claimGrant, forkGrant } from "./preview-access.js";
+import { connectionOf, forwardedFor, originOfIncoming, requestOrigin } from "./auth/remote-access.js";
+import { grantFor, canUsePreview, claimGrant, forkGrant, holdPreviewChannel } from "./preview-access.js";
 import { attributeName, cookieAttribute, cookieHeaderFor, defaultPath, rememberCookie, type PreviewCookieJar } from "./preview-cookies.js";
 
 const httpAgent = new Agent({ keepAlive: true });
@@ -119,15 +120,22 @@ function sandboxOriginated(origin: string | undefined, site: string | undefined)
  *
  * **改写之前先把原样的 `Origin`/`Sec-Fetch-Site` 留给 `sandboxOriginated` 用**：鉴权头转不
  * 转发全靠这两个头认来源，归一化之后就再也分不出「预览页自己发的」和「ash 页面发的」了。
+ *
+ * **`client` 非空 = 这个请求不是本机直连进来的，如实盖上 `X-Forwarded-For`（值是我们自己看到的
+ * 对端地址）。** 客户端自己带的转发头照旧摘掉（那是它说的，不作数），但我们这一跳确实是在替别人转：到上游走的是回环，
+ * 被预览的服务又多半把 `/api` 再转回这台 ash，而 ash 自用模式下认「回环 + 没有转发头」为机主
+ * 本人（auth/remote-access.ts）。不盖这个章，别的设备经预览绕一圈回来就成了本机直连 —— 比它
+ * 自己的凭证拿到的还多。盖上之后那一跳只认它自己带得出的凭证（`/api` 直连那条路的罐子里是它
+ * 的设备凭证，设备被请出去就跟着失效）。本机直连的不盖：机主在自己机器上开预览，照旧。
  */
-function forwardedHeaders(input: Headers | IncomingHttpHeaders, jar: PreviewCookieJar, upstreamPath: string): Record<string, string> {
+function forwardedHeaders(input: Headers | IncomingHttpHeaders, jar: PreviewCookieJar, upstreamPath: string, client: string | null): Record<string, string> {
   const entries = input instanceof Headers ? [...input.entries()] : Object.entries(input).map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : v ?? ""]);
   const result: Record<string, string> = {};
   const pick = (name: string) => entries.find(([k]) => k.toLowerCase() === name)?.[1].trim();
   const connection = pick("connection")?.toLowerCase().split(",").map((s) => s.trim()) ?? [];
   for (const [key, value] of entries) {
     const k = key.toLowerCase();
-    if (HOP_HEADERS.has(k) || connection.includes(k) || ["host", "cookie", "authorization", "origin", "referer", "accept-encoding", "content-length", "sec-fetch-site"].includes(k) || k.startsWith("x-ash-") || k.startsWith("x-forwarded-") || k === "forwarded") continue;
+    if (HOP_HEADERS.has(k) || connection.includes(k) || ["host", "cookie", "authorization", "origin", "referer", "accept-encoding", "content-length", "sec-fetch-site"].includes(k) || k.startsWith("x-ash-") || k.startsWith("x-forwarded-") || k === "forwarded" || k === "x-real-ip") continue;
     result[k] = value;
   }
   const site = pick("sec-fetch-site");
@@ -142,6 +150,7 @@ function forwardedHeaders(input: Headers | IncomingHttpHeaders, jar: PreviewCook
   const cookie = cookieHeaderFor(jar, upstreamPath);
   if (cookie) result.cookie = cookie;
   result["accept-encoding"] = "identity";
+  if (client) result["x-forwarded-for"] = client;
   return result;
 }
 
@@ -266,10 +275,17 @@ export function mountPreviewProxy(app: Hono): void {
     const view = trusted && target.grant.content ? { ...target.record, proxyToken: target.grant.content } : target.record;
     const viewBase = previewBase(view, target.service.id);
     const safety = securityHeaders(externalOrigin, [target.base, viewBase]);
+    // 这一趟借着这张凭证活着：凭证一没（preview-access.ts「活不过」一节）当场掐断 —— 还没等到的应答、
+    // 正在往外流的应答（事件流）都跟着断。掐的是客户端那条连接：它一断，上游那一头由下面的 abort
+    // 和流的取消带走，和客户端自己走掉是同一条路；进程内派发没有连接可掐，才直接断上游。
+    let upstream: { destroy(): void } | null = null;
+    let streaming = false;
+    const client = connectionOf(c);
+    const release = holdPreviewChannel(target.grant, () => (client ?? upstream)?.destroy());
     try {
       const hostname = await loopback(target.port);
       if (!targetOf(requested.pathname)) return c.text("预览已关闭", 404);
-      const headers = forwardedHeaders(c.req.raw.headers, jar, target.path);
+      const headers = forwardedHeaders(c.req.raw.headers, jar, target.path, forwardedFor(requestOrigin(c)));
       headers.host = `localhost:${target.port}`;
       headers.origin = `${target.protocol}//localhost:${target.port}`;
       headers["x-forwarded-prefix"] = viewBase.slice(0, -1);
@@ -278,7 +294,8 @@ export function mountPreviewProxy(app: Hono): void {
         const req = (secure ? httpsRequest : httpRequest)({
           hostname, port: target.port, path: target.path + requested.search, method: c.req.method,
           headers, agent: secure ? httpsAgent : httpAgent,
-        }, (res) => { req.setTimeout(0); resolve(res); });
+        }, (res) => { req.setTimeout(0); upstream = res; resolve(res); });
+        upstream = req;
         req.once("error", reject);
         req.setTimeout(30_000, () => req.destroy(new Error("预览服务响应超时")));
         const abort = () => req.destroy();
@@ -322,12 +339,16 @@ export function mountPreviewProxy(app: Hono): void {
         result.delete("content-encoding"); result.delete("etag");
         return new Response(rewritePreviewText(data.toString("utf8"), type, viewBase, view, target.path, target.navBase), { status, headers: result });
       }
+      streaming = true;
+      response.once("close", release);
       return new Response(Readable.toWeb(response) as ReadableStream<Uint8Array>, { status, headers: result });
     } catch {
       // 这一趟没把暗号送出去，就别把凭证钉在一个收不到暗号的客户端上 —— 否则它下次导航
       // 会被当成「另一个客户端」分叉走。
       if (claim) target.grant.client = null;
       return c.text("预览服务无法连接或响应异常，请查看任务的预览日志。", 502);
+    } finally {
+      if (!streaming) release();
     }
   });
 }
@@ -349,7 +370,10 @@ export function attachPreviewUpgrades(server: Server): void {
       if (!targetOf(requested.pathname)) { socket.destroy(); return; }
       // 罐子只跟着内容 token 走：页面里的 WebSocket 地址是我们改写过的，走的就是内容那条道；
       // 拿地址栏那串来连的，配一个空罐子（升级请求带不回认领 cookie，验不了它是谁）。
-      const headers = forwardedHeaders(incoming.headers, target.lane === "content" ? target.ownApi?.jar ?? target.grant.jar : new Map(), target.path);
+      const headers = forwardedHeaders(
+        incoming.headers, target.lane === "content" ? target.ownApi?.jar ?? target.grant.jar : new Map(), target.path,
+        forwardedFor(originOfIncoming(incoming)),
+      );
       headers.host = `localhost:${target.port}`;
       headers.origin = `${target.protocol}//localhost:${target.port}`;
       headers.connection = "Upgrade"; headers.upgrade = "websocket";
@@ -369,6 +393,9 @@ export function attachPreviewUpgrades(server: Server): void {
       upstream.on("response", (res) => { res.resume(); socket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n"); });
       upstream.setTimeout(10_000, () => upstream.destroy());
       socket.once("close", () => upstream.destroy());
+      // 升级完的连接是建连接那一刻核过就一直通着的：登记在凭证名下，凭证一没连同上游那一头一起断
+      // （客户端这头一关，上面几行会把上游带走）。
+      socket.once("close", holdPreviewChannel(target.grant, () => socket.destroy()));
       upstream.end();
     } catch { socket.destroy(); }
   });

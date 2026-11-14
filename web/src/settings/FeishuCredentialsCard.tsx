@@ -4,6 +4,7 @@ import { Button, PillTabs } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { useServerDraft } from "./useServerDraft.ts";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 // 凭证卡：App ID / App Secret / 域名。
 //
@@ -135,7 +136,7 @@ export function FeishuCredentialsCard({ status, onStatus, notify }: {
         <div className="settings-card-foot">
           <span>
             {config
-              ? `上次保存：${new Date(config.updatedAt).toLocaleString("zh-CN")}。Secret 存进去就取不回来，只能换一把；保存后会立刻断开重连。`
+              ? `上次保存：${localeDateTime(config.updatedAt, "zh-CN")}。Secret 存进去就取不回来，只能换一把；保存后会立刻断开重连。`
               : "Secret 存进去就取不回来，只能换一把。保存后 ash 立刻去连飞书，等上面的状态变成「已连接」再去后台订阅事件。"}
           </span>
           <Button variant="primary" disabled={!canSave} onClick={() => void save()}>
