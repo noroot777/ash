@@ -12,6 +12,7 @@ import { useAuth } from "../auth/authContext.ts";
 import { Button } from "../components/ui.tsx";
 import "./project-members.css";
 import { Select, type SelectOption } from "../components/Select.tsx";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 const ROLE_LABEL: Record<ProjectRole, string> = {
   admin: "项目管理员",
@@ -192,7 +193,7 @@ export function ProjectMembersSettings({
           <p className="settings-hint">
             拿到这条链接的<b>任何已登录用户</b>点开就是成员 —— 跟一人一条的专属链接不是一回事。
             {invite?.active && invite.expiresAt
-              ? `当前有一条有效链接，${new Date(invite.expiresAt).toLocaleString()} 过期。`
+              ? `当前有一条有效链接，${localeDateTime(invite.expiresAt)} 过期。`
               : "当前没有有效链接。"}
           </p>
           {inviteUrl ? (

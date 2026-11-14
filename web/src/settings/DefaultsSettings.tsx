@@ -4,7 +4,6 @@ import { DEFAULT_APP_SETTINGS } from "@ash/shared";
 import type { ComposerSendKey } from "@ash/shared";
 import { useIsInstanceAdmin, useIsLocalOnly, useIsMultiUser } from "../auth/authContext.ts";
 import { api } from "../lib/api.ts";
-import { WorkflowPicker, useWorkflows } from "../workflow/WorkflowPicker.tsx";
 import { ColorThemeCard } from "./ColorThemeCard.tsx";
 import { ComposerSendKeyCard } from "./ComposerSendKeyCard.tsx";
 import { HandoffSettings } from "./HandoffSettings.tsx";
@@ -20,7 +19,6 @@ export function DefaultsSettings({ notify, onOpen }: {
 }) {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
   const [loading, setLoading] = useState(true);
-  const workflows = useWorkflows();
   // 多人模式下「任务默认值」是个人面(各存各的),而技能扫描间隔、接力那几项是实例面
   // (§八)。这里只负责别把改不动的东西显示成能改 —— 真正的闸在服务端。
   const isMulti = useIsMultiUser();
@@ -68,9 +66,6 @@ export function DefaultsSettings({ notify, onOpen }: {
       </header>
       <section className="settings-section">
         <h2>任务默认值</h2>
-        {isMulti && (
-          <p className="settings-note">这一节只对你生效，别人有各自的一份。</p>
-        )}
         {/* worktree 默认值曾经也在这一节。它搬去了项目级（2026-09-14）：一个项目吃不吃得住
             worktree 是项目自己的性质。这句留给照旧翻到这里找它的人 —— 一个设置项无声消失，
             用户只会以为是自己记错了或者功能没了。 */}
@@ -80,27 +75,6 @@ export function DefaultsSettings({ notify, onOpen }: {
             onOpen={onOpen}
           />
         </p>
-        <div className="settings-card">
-          <div className="settings-row">
-            <div>
-              <b>新任务默认走哪条起手式</b>
-              <small>项目可以再单独指一条；任务在创建那一刻把线拷进自己兜里，之后改这儿不影响它</small>
-            </div>
-            <WorkflowPicker
-              value={settings.defaultWorkflowId}
-              items={workflows}
-              inheritLabel="用系统推荐的那条"
-              disabled={loading}
-              onChange={async (workflowId) => {
-                try {
-                  setSettings(await api.patchSettings({ defaultWorkflowId: workflowId }));
-                } catch (error) {
-                  notify(error instanceof Error ? error.message : "默认规则保存失败");
-                }
-              }}
-            />
-          </div>
-        </div>
       </section>
       <ComposerSendKeyCard
         loading={loading}

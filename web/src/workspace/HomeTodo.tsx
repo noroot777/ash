@@ -6,6 +6,7 @@ import type { TaskListItem } from "@ash/shared";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { hasFailed, indexWorkers, spreadBucket, workersFrom } from "../lib/taskAttention.ts";
 import type { TaskStatusIndicator } from "../lib/useTaskReadState.ts";
+import { localeDate } from "../lib/localeFormat.ts";
 
 const SHOWN = 6;
 
@@ -23,7 +24,7 @@ function ago(iso: string, now: number): string {
   if (minutes < 1) return "刚刚";
   if (minutes < 60) return `${minutes} 分钟前`;
   if (minutes < 60 * 24) return `${Math.floor(minutes / 60)} 小时前`;
-  return new Date(iso).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
+  return localeDate(iso, "zh-CN", { month: "numeric", day: "numeric" });
 }
 
 /** `rows` 是这一档里的顶层任务（已按作用域筛过）；`all` 用来找团队的执行者。 */

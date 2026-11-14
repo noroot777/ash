@@ -116,7 +116,7 @@ export async function testAcceptGateRecovery({ open, run, basis }) {
       await capture(page, `withdrawn-${role}-${status}`);
       if (role === "admin") {
         await card.getByRole("button", { name: "设一条" }).click();
-        await card.locator("input").fill("npm run replacement");
+        await card.locator("input[aria-label='验收前置命令']").fill("npm run replacement");
         await card.getByRole("button", { name: "保存" }).click();
         await waitUntil(() => store.patches.length === 1, "保存发出项目级 PATCH");
         assert.deepEqual(store.patches, [{ acceptGateCommand: "npm run replacement" }]);

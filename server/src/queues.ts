@@ -9,6 +9,7 @@
 import type { Context, Hono } from "hono";
 import { eq, asc, inArray } from "drizzle-orm";
 import type { Task } from "@ash/shared";
+import { queueBlockedText, type QueueBlocker } from "@ash/shared/scheduled-message-wait";
 import { db } from "./db/index.js";
 import { tasks, queueItems } from "./db/schema.js";
 import { id, now } from "./util.js";
@@ -48,6 +49,9 @@ async function publishQueueMembers(taskIds: string[]): Promise<Map<string, Task>
   if (taskIds.length === 0) return new Map();
   await db.update(tasks).set({ updatedAt: now() }).where(inArray(tasks.id, taskIds));
   const published = await Promise.all(taskIds.map((taskId) => publishTaskUpdated(taskId)));
+  // 队列成员或顺序变了,托盘上「在等谁」也跟着变(pending-wait.ts)。
+  void import("./pending-wait.js").then(({ republishWaitsOf }) => republishWaitsOf(taskIds))
+    .catch((err) => console.error("[ash] 队列变更后通知托盘失败:", err));
   return new Map(published.filter((t): t is Task => t != null).map((t) => [t.id, t]));
 }
 
@@ -123,8 +127,8 @@ export function manualStartBlockers(
   return [...blockers];
 }
 
-/** 挡路的那一条:被挡回的那句话要说出是谁(标题),以及它是在跑还是排在前面没完。 */
-export type QueueBlocker = { id: string; title: string; running: boolean };
+// 挡路的那一条与被挡回时的那句话住在 shared:托盘说「在等谁」用的是同一套说法。
+export { queueBlockedText, type QueueBlocker };
 
 // 把 manualStartBlockers 给出的 id 配上标题与「在跑 / 前面没完」,在跑的排前、其余按队列
 // 位置 —— 那句话只点名第一条,该点的是用户最该去看的那一条。纯函数,认领占位的临界区里
@@ -142,20 +146,6 @@ export function describeQueueBlockers(
     })
     .sort((a, b) => Number(b.blocker.running) - Number(a.blocker.running) || a.position - b.position)
     .map(({ blocker }) => blocker);
-}
-
-// 被队列挡回时回给用户的那一句,/run、/fire、认领占位、重试这一回合共用。挡路的可能排在
-// 后面(manualStartBlockers 的第 ① 类),所以不说「队列前面」;说出是哪一条,用户才知道去
-// 等谁、处理谁。
-export function queueBlockedText(blockers: readonly QueueBlocker[]): string {
-  const [first] = blockers;
-  if (!first) return "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列";
-  if (blockers.length > 1) {
-    return `同一队列里「${first.title}」等 ${blockers.length} 条任务还没完成或正在运行，先等它们结束、处理完，或把本任务移出队列`;
-  }
-  return first.running
-    ? `同一队列里「${first.title}」正在运行，先等它结束，或把本任务移出队列`
-    : `同一队列里排在前面的「${first.title}」还没完成，先等它结束、处理完，或把本任务移出队列`;
 }
 
 // 队列前置检查(DB 包装):task 在某个 queue 里时,按 manualStartBlockers 的两类

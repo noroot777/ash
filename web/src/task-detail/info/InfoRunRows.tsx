@@ -107,8 +107,13 @@ function ContextValue({ facts }: { facts: InfoRunFacts }) {
   );
 }
 
-/** 来源、创建、用时、用量（一个执行器一行）、上下文。 */
-export function InfoRunRows({ task, sessions, facts }: { task: Task; sessions: Session[]; facts: InfoRunFacts }) {
+/** 任务号、来源、创建、用时、用量（一个执行器一行）、上下文。 */
+export function InfoRunRows({ task, sessions, facts, notify }: {
+  task: Task;
+  sessions: Session[];
+  facts: InfoRunFacts;
+  notify?: (message: string) => void;
+}) {
   // 一个 agent 一行，**不同 agent 绝不相加**：单价、上下文、缓存策略都不是一回事，
   // 加出来那个数不代表任何东西（用户 2026-08-07 明确要求分开看）。同一个执行器名下的
   // 多条会话（重跑、续跑各开一行）才合并 —— 那才是同一副账。哨兵唤醒的轮数跟着同一份
@@ -130,6 +135,11 @@ export function InfoRunRows({ task, sessions, facts }: { task: Task; sessions: S
   const range = formatInstantRange(task.startedAt, task.endedAt);
   return (
     <>
+      {/* 没有地址栏的窗口（mac 版）里，这一行是看见任务号的唯一地方。 */}
+      <InspRow label="ID">
+        <span className="insp-cut insp-mono">{task.id}</span>
+        <InspCopy text={task.id} label="复制任务 ID" onError={notify} />
+      </InspRow>
       <InspRow label="来源"><span className="insp-cut">{taskCreationLabel(task.creationOrigin)}</span></InspRow>
       <InspRow label="创建"><span className="insp-num">{formatInstant(task.createdAt)}</span></InspRow>
       {duration && (

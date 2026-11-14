@@ -25,8 +25,10 @@
 /* 返回口排在第一行最右：标题、验收动作、它三个一起提到 AcceptanceControls 带来的那串状态卡前面，
    否则它会按 DOM 次序落到最后一张卡底下。 */
 .single-review-subbar > :is(.acceptance-host-title, .team-accept-actions, .single-review-shared-badge, .acceptance-host-close) { order:-1; }
-/* 窄屏时动作簇自占一行靠右（team-review.css），返回口跟在它后面同一行，不单独掉到下一行最左。 */
-@media (max-width: 760px) { .single-review-subbar.acceptance-host > .team-accept-actions { width:auto; flex:1 0 auto; } }
+/* 窄屏时动作簇自占一行靠右（team-review.css），返回口跟在它后面同一行，不单独掉到下一行最左。
+   动作簇要能收缩：主按钮可能顶着整句受阻理由，不收缩就按 max-content 戳出顶栏右边；放不下
+   时它在这一行里自己换行（返回口这时掉到下一行），而不是溢出。 */
+@media (max-width: 760px) { .single-review-subbar.acceptance-host > .team-accept-actions { width:auto; flex:1 1 auto; } }
 .single-review-scroll,.team-review-scroll { min-height:0; flex:1; overflow-y:auto; padding:18px clamp(14px,3vw,34px) 38px; }
 .single-review-stack,.team-review-stack { display:flex; width:100%; max-width:1180px; margin:0 auto; flex-direction:column; gap:14px; }
 .single-review-shared-badge { display:inline-flex; height:27px; align-items:center; border:1px solid color-mix(in oklab,var(--cyan) 28%,var(--line)); border-radius:7px; background:color-mix(in oklab,var(--cyan) 6%,var(--panel)); padding:0 8px; color:var(--cyan); font-size:var(--t-xs); font-weight:var(--w-medium); }

@@ -17,7 +17,9 @@ const PROFILE = {
   id: "claude-official",
   name: "claude@官方·opus",
   type: "claude",
-  model: "opus-5",
+  // 带 [1m]：自 db67fc7d 起预览按 profile 自己的模型窗口算，不带的话 400k 会被提示「截到 200k」，
+  // 这里要量的是窗口原样生效时的触发水位（夹具里会话的 CLI 也报的是 1M 窗口）。
+  model: "opus-5[1m]",
   extraArgs: [],
   providerId: null,
   configOverrides: { autoCompactWindow: 400_000 },

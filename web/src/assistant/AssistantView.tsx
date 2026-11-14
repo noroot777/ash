@@ -26,6 +26,7 @@ import { WorkflowRail } from "../workflow/WorkflowRail.tsx";
 import type { SettingsSection } from "../settings/SettingsPage.tsx";
 import "./assistant.css";
 import { AutoTextarea } from "../components/AutoTextarea.tsx";
+import { localeDate, localeTime } from "../lib/localeFormat.ts";
 
 const STARTERS = [
   { label: "问用法", text: "任务显示失败，但智能体说已经做完了，该怎么排查？" },
@@ -44,7 +45,7 @@ function AssistantMessage({ message, snapshot, projects, onTask, onSave, saving,
   if (message.role === "system") return <p className="chat-history-note">{message.body}</p>;
   return <article className={`chat-message assistant-message is-${message.role} is-${message.status}`}>
     <span className={`chat-avatar ${message.role === "user" ? "tone-user" : "assistant-avatar"}`}>{message.role === "user" ? "你" : <AssistantIcon size={20} filled />}</span>
-    <div className="chat-message-content"><header><strong>{message.role === "user" ? "你" : "ash 助手"}</strong>{message.role === "agent" && <span className="chat-bot-label">智能体</span>}<time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></header>
+    <div className="chat-message-content"><header><strong>{message.role === "user" ? "你" : "ash 助手"}</strong>{message.role === "agent" && <span className="chat-bot-label">智能体</span>}<time dateTime={message.createdAt}>{localeTime(message.createdAt, [], { hour: "2-digit", minute: "2-digit" })}</time></header>
     {busy ? <p role="status" className="chat-typing"><span><i /><i /><i /></span>{message.status === "queued" ? "已收到，等待回复…" : "正在理解问题、查询资料…"}</p> : <div className="assistant-message-body"><MarkdownBody text={message.body} /></div>}
     {!!result?.queries.length && <p className="assistant-search-note"><MagnifyingGlass size={13} />已检索：{result.queries.join(" · ")}</p>}
     {!!linked.length && <div className="assistant-results" aria-label="相关任务">{linked.map((match) => {
@@ -116,7 +117,7 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit }:
         {!chat.ready && <p className="assistant-loading" role="status">正在读取助手对话…</p>}
         {configure && <AssistantConnection key={chat.room?.id ?? "new"} initial={chat.room?.members[0]} onSave={async (member) => { await chat.saveMember(member); setEditing(false); }} onCancel={() => setEditing(false)} onSettings={() => onSettings("executors")} />}
         {!configure && chat.snapshot && <div role="log" aria-label="助手对话" aria-live="polite">{chat.snapshot.messages.length >= 500 && <p className="chat-history-note">显示最近 500 条消息，更早内容仍保存在对话中。</p>}{chat.snapshot.messages.map((message, index, messages) => <div key={message.id}>
-          {message.role !== "system" && (!index || new Date(messages[index - 1]!.createdAt).toDateString() !== new Date(message.createdAt).toDateString()) && <div className="chat-date"><span>{new Date(message.createdAt).toLocaleDateString(undefined, { month: "long", day: "numeric" })}</span></div>}
+          {message.role !== "system" && (!index || new Date(messages[index - 1]!.createdAt).toDateString() !== new Date(message.createdAt).toDateString()) && <div className="chat-date"><span>{localeDate(message.createdAt, undefined, { month: "long", day: "numeric" })}</span></div>}
           <AssistantMessage message={message} snapshot={chat.snapshot!} projects={projects} onTask={openTask} onSave={() => void chat.saveWorkflow(message.id)} saving={chat.savingWorkflows.includes(message.id)} onWorkflows={() => onSettings("workflows")} />
         </div>)}</div>}
       </AssistantScroll>

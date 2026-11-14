@@ -13,6 +13,8 @@ private final class ProbeWindow: NSWindow {
   override func performDrag(with event: NSEvent) { drags += 1 }
   override func zoom(_ sender: Any?) { titlebarDoubleClicks += 1 }
   override func miniaturize(_ sender: Any?) { titlebarDoubleClicks += 1 }
+  // 带标题栏的窗口在 orderFront 时会被 AppKit 拉回屏幕内（摆在屏幕外的探针曾因此停在主屏左下角）。
+  override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
 private final class ProbeApplication: NSApplication {
@@ -47,6 +49,7 @@ func runWindowChromeProbe() -> Never {
   window.setFrameOrigin(NSPoint(x: -20000, y: -20000))
   window.orderFrontRegardless()
   window.makeKey()
+  require(!NSScreen.screens.contains { $0.frame.intersects(window.frame) }, "probe window stays off every screen (\(window.frame))")
 
   func spin(_ seconds: TimeInterval) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
   func js(_ source: String) -> String {

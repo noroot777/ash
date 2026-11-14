@@ -11,6 +11,7 @@ export type SettingsSection =
   | "providers"
   | "executors"
   | "modes"
+  // 起手式库：已停止新建起手式任务，导航里不再有它；只剩助手草案卡的「查看起手式库」还开得到。
   | "workflows"
   | "reviewers"
   | "cli-env"
@@ -38,7 +39,6 @@ export const SYSTEM_NAV: readonly NavItem[] = [
   { id: "providers", label: "供应商" },
   { id: "executors", label: "执行器" },
   { id: "modes", label: "执行模式" },
-  { id: "workflows", label: "起手式" },
   { id: "reviewers", label: "审查者" },
   { id: "cli-env", label: "个人 CLI 环境", requires: "multi" },
   // 不挂 requires：多人模式下每个人也要来这里绑自己的飞书，凭证/推送那几张卡由面板按

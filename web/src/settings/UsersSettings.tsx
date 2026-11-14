@@ -19,6 +19,7 @@ import { useAuth } from "../auth/authContext.ts";
 import { Button, TextInput } from "../components/ui.tsx";
 import "./users-settings.css";
 import { Select } from "../components/Select.tsx";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 function absoluteInvite(url: string): string {
   return new URL(url, window.location.origin).toString();
@@ -338,7 +339,7 @@ function UserRow({
         <div className="users-row-meta">
           目录 <code>{user.dirName}</code>
           {user.gitEmail ? <> · git {user.gitName || user.name} &lt;{user.gitEmail}&gt;</> : null}
-          {user.lastActiveAt ? <> · 最近活跃 {new Date(user.lastActiveAt).toLocaleString()}</> : null}
+          {user.lastActiveAt ? <> · 最近活跃 {localeDateTime(user.lastActiveAt)}</> : null}
         </div>
       </div>
 

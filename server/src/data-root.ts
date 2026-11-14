@@ -1,5 +1,5 @@
-// 代码根与数据根的**纯解析**。单独一个文件是因为有一个消费者不能 import paths.js
-// （claude-usage-resources.ts：它要在 paths.js 把环境变量读成常量**之前**决定该设什么）。
+// 代码根与数据根的**纯解析**：只看传进来的环境，不在加载时读 process.env（那是 paths.js 的事），
+// 所以要在 paths.js 冻成常量之前、或者替别的环境算数据根的地方也能用。
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 

@@ -4,6 +4,7 @@ import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import { CLI_MODEL_PRESETS, CLI_MODEL_PROBE_TYPES } from "@ash/shared/cli-presets";
 import { api } from "./api.ts";
 import { onHostCliPolicyChange } from "./hostCliPolicy.ts";
+import { localeTime } from "./localeFormat.ts";
 
 /**
  * 「CLI 官方账号」那一块的模型候选。跟 provider 的 `/models` 探测(见 modelCatalog.ts)
@@ -205,11 +206,11 @@ export function useCliModelCatalog(type: AgentType | null): {
 export function cliCatalogNote(catalog: CliModelCatalog | null): string {
   if (!catalog) return "";
   if (catalog.source === "probe") {
-    const when = catalog.probedAt ? new Date(catalog.probedAt).toLocaleTimeString() : "";
+    const when = catalog.probedAt ? localeTime(catalog.probedAt) : "";
     return `CLI 实时清单 · ${catalog.models.length} 个${when ? ` · ${when} 探测` : ""}`;
   }
   if (catalog.source === "docs") {
-    const when = catalog.probedAt ? new Date(catalog.probedAt).toLocaleTimeString() : "";
+    const when = catalog.probedAt ? localeTime(catalog.probedAt) : "";
     return `Anthropic 文档模型 ID + CLI 别名 · ${catalog.models.length} 个${when ? ` · ${when} 更新` : ""}（账号可用性以实际运行为准）`;
   }
   if (!catalog.models.length) return "该 CLI 未公布模型别名，可手填";

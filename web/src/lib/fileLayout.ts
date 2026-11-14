@@ -101,8 +101,10 @@ function emptyDir<T>(path: string, name: string): DirNode<T> {
   return { path, name, dirs: new Map(), files: [] };
 }
 
-const byName = (a: { name: string }, b: { name: string }) =>
-  a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+// 复用同一个 Collator：带参数的 localeCompare 在 JavaScriptCore 上每次都现建一个 ICU 排序器，
+// 排序比较器里一棵树要调上千次（见 localeFormat.ts 顶部）。
+const NAME_ORDER = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+const byName = (a: { name: string }, b: { name: string }) => NAME_ORDER.compare(a.name, b.name);
 
 /** 一个目录递归包含的全部条目，顺序跟展开后看到的一致。 */
 function collect<T>(dir: DirNode<T>): T[] {

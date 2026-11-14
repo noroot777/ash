@@ -112,6 +112,9 @@ const AGENT_SIZE: SizeTable<AgentItem> = {
   wokenByMonitor: () => 0,
   resumeCause: () => 0,
   turnOutcome: () => 0,
+  // 断过的回合尾上那句失败说明照它说（跟事件条目的 interruption 同一口径）。
+  turnInterruption: (value) => value ? value.reason.length + value.detail.length : 0,
+  turnKey: () => 0,
   session: () => 0,
   run: () => 0,
   reviewer: () => 0,
@@ -153,6 +156,8 @@ const EVENT_SIZE: SizeTable<EventItem> = {
   verify: () => 0,
   aside: () => 0,
   notice: () => 0,
+  // 失败那句话照它说、点开是它的经过：读得到的字。
+  interruption: (value) => value ? value.reason.length + value.detail.length : 0,
   resume: () => 0,
   onTurnHead: () => 0,
   text: (value) => value.length,

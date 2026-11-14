@@ -1,6 +1,7 @@
 // 自由审查各轮的叫法：右侧「审查」「工作流」两格和它们点开的正文共用这一份，免得同一轮
 // 在两处各说各的。
 import type { FreeReviewRound, FreeReviewRun } from "@ash/shared";
+import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";
 
 const TIME_FORMAT = new Intl.DateTimeFormat("zh-CN", {
   month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
@@ -65,18 +66,32 @@ function disputeSuffix(round: FreeReviewRound): string {
   return deferOnly(round) ? " · 执行者提出越界" : " · 执行者已驳回";
 }
 
-/**
- * 这一轮没给出结论是哪一类（服务端判的，见 `FreeReviewRound.noVerdict`）：回合中途断了 / 收尾了
- * 没上报。老记录没有这一项，照旧叫「异常」。
- */
-function noVerdictHead(round: FreeReviewRound): string {
-  if (!round.noVerdict) return "异常";
-  return round.noVerdict.kind === "interrupted" ? "中断" : "没上报结论";
+/** 没给出结论是哪一类：回合中途断了 / 收尾了没上报（服务端判的，见 `ReviewNoVerdict`）。 */
+function causeHead(cause: ReviewNoVerdict): string {
+  return cause.kind === "interrupted" ? "中断" : "没上报结论";
 }
 
-/** 结论行那一句里轮号后面的半句：「中断 · 模型上游连不上（503）」。老记录给「异常」。 */
+/**
+ * 这一轮没给出结论是哪一类（服务端判的，见 `FreeReviewRound.noVerdict`）：回合中途断了 / 收尾了
+ * 没上报。服务端也说不出来（盘上什么都没留下）就照旧叫「异常」。
+ */
+function noVerdictHead(round: FreeReviewRound): string {
+  return round.noVerdict ? causeHead(round.noVerdict) : "异常";
+}
+
+/** 「中断 · 模型上游连不上（503）」：审查格结论行和会话里那颗气泡下面同一句。 */
+export function noVerdictCauseText(cause: ReviewNoVerdict): string {
+  return `${causeHead(cause)} · ${cause.reason}`;
+}
+
+/** 执行器原话那一句。没有原话给 null。 */
+export function noVerdictSaidText(cause: ReviewNoVerdict | undefined): string | null {
+  return cause?.said ? `执行器的原话：「${cause.said}」` : null;
+}
+
+/** 结论行那一句里轮号后面的半句：「中断 · 模型上游连不上（503）」。说不出原因的给「异常」。 */
 export function noVerdictText(round: FreeReviewRound): string {
-  return round.noVerdict ? `${noVerdictHead(round)} · ${round.noVerdict.reason}` : noVerdictHead(round);
+  return round.noVerdict ? noVerdictCauseText(round.noVerdict) : noVerdictHead(round);
 }
 
 /** 点开那一轮、报告还没有时那一句：「这一轮中断：模型上游连不上（503），报告尚未生成。」 */

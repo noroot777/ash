@@ -1,5 +1,6 @@
 import type { HandoffAudit } from "@ash/shared";
 import { Warning } from "@phosphor-icons/react";
+import { localeDateTime } from "../lib/localeFormat.ts";
 
 export function HandoffAuditBanner({ audit }: { audit: HandoffAudit }) {
   const peer = audit.peerName ? `「${audit.peerName}」` : "对端机器";
@@ -7,7 +8,7 @@ export function HandoffAuditBanner({ audit }: { audit: HandoffAudit }) {
     <div className="task-handoff-banner is-pending" role="status">
       <Warning size={13} aria-hidden="true" />
       <span>
-        风险记录 · {new Date(audit.at).toLocaleString()}：
+        风险记录 · {localeDateTime(audit.at)}：
         {audit.returning
           ? `曾在无法核验原机状态时强制撤销移回，${peer}可能已有副本。`
           : `曾在无法核验目标机状态时强制恢复本机任务，${peer}可能已有副本。`}

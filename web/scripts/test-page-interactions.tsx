@@ -79,11 +79,12 @@ const message = (id: string): ScheduledMessage => ({ id, taskId: "task", text: i
   status: "pending", createdAt: "2026-10-28T00:00:00Z", sendAt: "2026-10-28T00:00:00Z", sentAt: null });
 const tray = (messages: ScheduledMessage[]) => renderToStaticMarkup(<ScheduledMessageTray messages={messages} loading={false}
   error={null} cancelingIds={new Set()} onSteer={() => {}} onWithdraw={() => {}} onCancel={() => {}} />);
-const mine = tray([message("mine")]);
+const mine = tray([{ ...message("mine"), steerable: true }]);
 assert.match(mine, /scheduled-message-previews/);
 assert.match(mine, /scheduled-message-guide/);
 assert.match(mine, /scheduled-message-withdraw/);
 assert.doesNotMatch(mine, /is-expanded/);
+assert.doesNotMatch(tray([message("idle")]), /scheduled-message-guide/, "服务端没说能引导(任务不在跑、旧服务端)就不给这颗键");
 const monitor = tray([{ ...message("monitor"), origin: "monitor:test", text: "【哨兵结束】检查，退出码 1。" }]);
 assert.doesNotMatch(monitor, /scheduled-message-guide|scheduled-message-withdraw/);
 assert.match(monitor, /取消哨兵事件/);
@@ -91,11 +92,11 @@ assert.match(monitor, /exit 1/);
 const managed = tray([{ ...message("review"), sessionRole: "reviewer" }]);
 assert.doesNotMatch(managed, /scheduled-message-guide|scheduled-message-withdraw|取消哨兵事件/);
 assert.match(managed, /由审查链投递/);
-const mixed = tray([{ ...message("0-monitor"), origin: "monitor:test" }, message("1-mine"), message("2-mine")]);
+const mixed = tray([{ ...message("0-monitor"), origin: "monitor:test" }, { ...message("1-mine"), steerable: true }, message("2-mine")]);
 assert.equal((mixed.match(/class="scheduled-message-guide"/g) ?? []).length, 1);
 assert.equal((mixed.match(/class="scheduled-message-withdraw"/g) ?? []).length, 2);
 const monitorFirst = tray([{ ...message("0-monitor"), origin: "monitor:test" },
-  { ...message("1-monitor"), origin: "monitor:test" }, message("2-mine")]);
+  { ...message("1-monitor"), origin: "monitor:test" }, { ...message("2-mine"), steerable: true }]);
 assert.match(monitorFirst, /scheduled-message-guide/);
 assert.match(monitorFirst, /scheduled-message-withdraw/);
 const css = readFileSync(new URL("../src/styles/scheduled-message-tray.css", import.meta.url), "utf8");

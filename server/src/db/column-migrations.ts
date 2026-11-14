@@ -11,12 +11,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 不匹配、各重跑一次 —— 那时「依赖没换过」证明不了。
   "ALTER TABLE accept_gate_runs ADD COLUMN source_ambient TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN execution_mode TEXT",
-  // 门禁红了之后的归类结论(「命令在快照里不存在」那一类的出路)。旧行 NULL = 当初没归类过。
-  "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN entry_probe TEXT",
-  "ALTER TABLE accept_gate_runs ADD COLUMN miss_attribution TEXT",
-  // 上面那两个结论是哪一代判据生成的。旧行 NULL = 旧代,读侧不拿它当当前事实(第 2 轮审查 F1)。
-  "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis_generation TEXT",
   // 结算认领下来、还没办完的那份结论。旧行 NULL = 没有欠着的事（见 schema-accept-gate.ts）。
   "ALTER TABLE accept_gate_runs ADD COLUMN settlement TEXT",
   // 合并预览档的两样事实(见 schema-accept-gate.ts 同名列)。旧行 NULL = 分支快照。
@@ -25,19 +20,9 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_tree TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_materialization TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_physical TEXT",
+  // 那一次在快照里先跑的准备命令。旧行 NULL = 没配过（依赖借用工作区那一份）。
+  "ALTER TABLE accept_gate_runs ADD COLUMN prepare_command TEXT",
   "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
-  // 读取层的两份独立状态:可续读位置 probe、永久缺口全集 gaps(JSON 数组)。
-  "ALTER TABLE monitor_scan_cursors ADD COLUMN probe INTEGER NOT NULL DEFAULT 0",
-  "ALTER TABLE monitor_scan_cursors ADD COLUMN gaps TEXT NOT NULL DEFAULT '[]'",
-  // 这个文件报的 CLI 身份:来源**全集**的持久依据(第 6 轮审查 N2)。旧行 NULL = 还没读到过,
-  // 那时「只有我这一个来源」证明不了,于是不认领无归属的存量行 —— 保守的那一边。
-  "ALTER TABLE monitor_scan_cursors ADD COLUMN source TEXT",
-  // 这份位置是哪一代消费语义下确认的（第 9/10 轮审查）。旧行 NULL = 第一代,没有当代戳的
-  // 一律重放一遍 —— 旧代确认掉的事实（被键挤掉的卡、没合并的终态）只能靠重读补回来。
-  "ALTER TABLE monitor_scan_cursors ADD COLUMN semantics INTEGER",
-  // 调用发生时那一行报的 CLI 身份。旧行 NULL = 当初没记,那时只能靠 source_run 自证来源
-  // (键的重建在 migrations.ts 的 repairPendingCallKey —— SQLite 改不了主键)。
-  "ALTER TABLE monitor_pending_calls ADD COLUMN cli_session_id TEXT",
   // 身份还没补全时,把「那一刻 spawn 的」这个时间锚留在债上:哨兵行和身份边条都可能先没了,
   // 而缺了锚,一次查询失败就被永久固化成「这条证不出身份」(第 10 轮审查 F2-B)。
   "ALTER TABLE monitor_reclaim_debts ADD COLUMN spawn_anchor_ms INTEGER",
@@ -61,8 +46,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE monitors ADD COLUMN timeout_ms INTEGER",
   // 起点锚点的误差界。存量行一律 NULL = 无法重验 ⇒ 对外只给时长（见 schema-monitors.ts）。
   "ALTER TABLE monitors ADD COLUMN start_anchor_width_ms INTEGER",
-  // 起它的那个 tool_use id。检查点的另一半:位置之前的配对关系靠它从库里重建
-  // （见 claude-monitor-commit.ts 的文件头）。存量行 NULL，读到回执时顺手补上。
+  // 起它的那个 tool_use id。存量行 NULL。
   "ALTER TABLE monitors ADD COLUMN tool_use_id TEXT",
   // 代次结论与起点下界的持久化依据(见 schema-monitors.ts)。存量行一律 NULL。
   "ALTER TABLE monitors ADD COLUMN source_run TEXT",
@@ -343,6 +327,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE projects ADD COLUMN accept_auto_commit INTEGER NOT NULL DEFAULT 0",
   // 验收前置命令（点验收之后、动 git 之前跑，rc=0 才合并）。null = 不设门禁 = 老行为。
   "ALTER TABLE projects ADD COLUMN accept_gate_command TEXT",
+  // 门禁的准备命令（快照里先装依赖）。null = 不配 = 依赖照旧借用。
+  "ALTER TABLE projects ADD COLUMN accept_gate_prepare TEXT",
   // 门禁基准(分支快照 / 要求已含目标分支 / 合并预览)。存量项目落 branch = 老行为。
   "ALTER TABLE projects ADD COLUMN accept_gate_baseline TEXT NOT NULL DEFAULT 'branch'",
   // 那一按**实际**拿什么当凭据放的行（passed / skipped / unset + 真的跑绿的那一次）。
@@ -406,6 +392,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 这一回合是不是哨兵唤醒起的(见 schema-sessions.ts 同名列)。存量行由
   // monitor-wake-turns-backfill.ts 按转录回填一次。
   "ALTER TABLE session_turns ADD COLUMN monitor_wake INTEGER NOT NULL DEFAULT 0",
+  // 这一回合怎么断的(见 schema-sessions.ts 同名列)。存量行 NULL = 不知道,页面照老样子说。
+  "ALTER TABLE session_turns ADD COLUMN interruption TEXT",
   // usage_turns 里记在哨兵唤醒回合上的那几轮(见 schema-sessions.ts 同名列)。
   "ALTER TABLE sessions ADD COLUMN usage_monitor_wake_turns INTEGER",
   // 「等某任务完成后发送」的那个任务(mode=after)。存量行 NULL。
@@ -419,4 +407,10 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE scheduled_messages ADD COLUMN answer_id TEXT",
   // 开工起点所在的分支名（见 db/schema.ts 同名列）。存量行 NULL = 没记过。
   "ALTER TABLE tasks ADD COLUMN worktree_base_branch TEXT",
+  // 团队调度台这一行此刻归哪一台（见 schema-sessions.ts 同名列）。存量行 NULL。
+  "ALTER TABLE sessions ADD COLUMN lead_holder TEXT",
+  // 这一段暂停在等哨兵(见 db/schema.ts 同名列)。存量行 NULL 由队列观察到在等时补上。
+  "ALTER TABLE tasks ADD COLUMN monitor_hold_at TEXT",
+  // 被哨兵隔开的续聊,续聊前的状态(见 db/schema.ts 同名列)。存量行 NULL:升级前已经落下的那些不追改。
+  "ALTER TABLE tasks ADD COLUMN follow_up_held_from TEXT",
 ];

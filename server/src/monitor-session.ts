@@ -208,7 +208,7 @@ export async function monitorSourceGate(
   // 真的没了之间有十几条语句,而「停完一遍哨兵」只证明那一刻扫干净了。这中间放一个新哨兵
   // 进来,它会被紧随其后的删除批次连行带 pid 一起抹掉 —— 进程却还在后台跑着,谁都再找不到
   // 它(实测 `lateCreationAccepted=true` + `aliveAfterDelete=true`)。
-  //   判据跟内置 Monitor 那四个 writer 共用同一份(claude-monitor-revoked.ts):撤销的是
+  //   判据跟内置 Monitor 那几个 writer 共用同一份(claude-monitor-revoked.ts):撤销的是
   // **这个任务的整个生命周期**,跟是谁要写、写哪张表无关。
   if (isTaskRevoked(task.id)) {
     return { blocked: TASK_REVOKED, role: null, reviewRun: null, reviewRound: null };
