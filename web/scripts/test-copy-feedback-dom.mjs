@@ -1,4 +1,4 @@
-// 会话流里那几颗复制按钮点完必须有**就地反馈**：回合尾的复制图标、审查卡里那一条的、
+// 会话流里那几颗复制按钮点完必须有**就地反馈**：回合尾的复制图标、摊开的那一轮审查里那一条的、
 // 用户气泡头部的。它们拿不到全局 toast，反馈全靠
 // 按钮自己变（components/CopyButton.tsx）——没有反馈时「点了没生效」和「点了已生效」
 // 长得一模一样，用户只能反复点。设 SHOT=<路径> 可以顺带截一张图自查版式。
@@ -53,12 +53,13 @@ try {
     "鼠标移开后反馈仍要看得见，否则等于没有反馈",
   );
 
-  // ② 审查卡内首条发言：头部被卡头顶替，复制入口同样在回合尾那一排。
-  const action = page.locator(".task-message--agent.is-lane-owned .turn-acts .ui-icon-button").first();
+  // ② 一轮审查里的首条发言：先点审查者那颗气泡摊开这一轮；头部由气泡上那一行顶替，复制入口同样在回合尾那一排。
+  await page.locator(".review-verdict.is-pending button.review-verdict-text").click();
+  const action = page.locator(".turn-footnote-lane .task-message--agent.is-lane-owned .turn-acts .ui-icon-button").first();
   await action.scrollIntoViewIfNeeded();
   await action.hover();
   await action.click();
-  await copied(action, "审查卡里的复制图标");
+  await copied(action, "摊开的那一轮审查里的复制图标");
   assert.match(await clipboard(), /审查结论/, "复制的是这条审查发言");
 
   // 会话号、resume 命令、用量、上下文不在回合尾了（docs/ui-ux-audit feed-2），住在右侧「信息」格。
@@ -83,7 +84,7 @@ try {
   assert.equal(await turnCopy.getAttribute("aria-label"), "复制这条回复", "反馈过后要自己退回常态");
   assert.doesNotMatch(await turnCopy.getAttribute("class"), /is-copied/);
 
-  console.log("copy feedback: 回合尾、审查卡、用户气泡三处点完都有就地反馈 ✔");
+  console.log("copy feedback: 回合尾、摊开的那一轮审查、用户气泡三处点完都有就地反馈 ✔");
 } finally {
   await browser?.close();
   await web.close();

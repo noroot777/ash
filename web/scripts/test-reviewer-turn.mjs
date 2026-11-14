@@ -83,7 +83,6 @@ assert.deepEqual(firstLane.items.map((item) => item.id), [verify.id, failNote.id
 assert.equal(firstLane.conclusion, "verify_failed");
 assert.equal(firstLane.complete, true);
 assert.equal(firstLane.reportAvailable, true, "跑完且审查者确实说过话，才有可看的 report.md");
-assert.equal(firstLane.defaultCollapsed, true, "出了结论就默认折叠，最新的那一轮也一样");
 
 const twoRoundItems = buildConversationItems([{
   session,
@@ -105,8 +104,6 @@ const twoRoundItems = buildConversationItems([{
 }], [session], []);
 const twoLanes = conversationFeedRows(twoRoundItems).filter((row) => row.kind === "review-lane");
 assert.equal(twoLanes.length, 2);
-assert.equal(twoLanes[0].defaultCollapsed, true, "有结论的历史卡默认折叠");
-assert.equal(twoLanes[1].defaultCollapsed, false, "还在跑的轮次仍默认展开，让用户跟着看进度");
 assert.equal(twoLanes[1].complete, false);
 assert.equal(twoLanes[1].reportAvailable, false, "进行中的报告尚未必写完，不给死入口");
 
@@ -123,9 +120,7 @@ const abandonedItems = buildConversationItems([{
 const abandonedLanes = conversationFeedRows(abandonedItems).filter((row) => row.kind === "review-lane");
 assert.equal(abandonedLanes[0].conclusion, "inconclusive", "被下一轮顶掉的旧轮不能继续显示进行中");
 assert.equal(abandonedLanes[0].complete, true);
-assert.equal(abandonedLanes[0].defaultCollapsed, true, "无结论旧轮同样是历史卡，应默认折叠");
 assert.equal(abandonedLanes[1].conclusion, null);
-assert.equal(abandonedLanes[1].defaultCollapsed, false);
 
 // —— 自由派审的独立审查回合：身份写在会话的 role 上，没有轮次号 ——
 const reviewSession = { ...session, id: "s2", role: "reviewer", startedAt: "2026-08-10T15:00:00.000Z" };
@@ -406,11 +401,6 @@ assert.deepEqual(
   "重开的审查从 1 轮重新数，配错的话点开是上一次审查的报告",
 );
 assert.deepEqual(multiLanes.map((lane) => lane.conclusion), ["verify_failed", "verified", "verified"]);
-assert.deepEqual(
-  multiLanes.map((lane) => lane.defaultCollapsed),
-  [true, true, true],
-  "出了结论的轮次一律默认折叠，最新那一张也不例外",
-);
 
 // —— 合并结果审查：跑在验收后的只读快照上，一次就是一次，没有轮号 ——
 assert.equal(isVerifyNote("合并结果审查开始：5.5审查 · feat/x@abc12345 · 逻辑检查。"), true);

@@ -6,8 +6,8 @@
    配色用 --cyan 而不是 --accent：靛蓝在这套界面里已经被「你（真人）」占着（用户气泡、
    系统代写消息的左竖线都是它），验证段再用会把「谁在说话」这条最要紧的线索搅混。
 
-   身份仍靠头像、徽标和青色来认。实现回合沿用普通会话原来的无卡片排版；审查泳道单独
-   用一张左对齐的中性卡片，角色色只落在左侧那一小段竖线上。 */
+   会话主流里审查者不靠颜色认：一轮审查从开始到出结论都是右边那一颗气泡（见下面的
+   .review-verdict），位置就是身份。头像和徽标只剩在别处单独摆出来的审查回合上。 */
 
 .task-message--agent.is-reviewer .task-message-avatar {
   background: color-mix(in oklab, var(--cyan) 13%, var(--overlay));
@@ -32,75 +32,15 @@
   white-space: nowrap;
 }
 
-/* 审查进行中的那一轮：一张卡，看得见审查者正在说什么。出了结论就在原处收成一颗审查结论气泡
-   （ReviewVerdict，样式见本文件末尾的 .review-verdict）。 */
-.verify-lane {
-  position: relative;
-  width: 100%;
-  max-width: 790px;
-  margin: 18px 0 22px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--panel);
-  box-shadow: 0 1px 2px rgb(30 32 38 / 3%);
-}
-.verify-lane::before { position: absolute; top: 8px; bottom: 8px; left: -1px; width: 2px; border-radius: 2px; background: color-mix(in oklab, var(--cyan) 55%, var(--line2)); content: ""; pointer-events: none; }
+/* 就地摊开的那一轮审查（审查者气泡下面、记录里点开的那一条）里，审查者的发言一样排。 */
+.turn-footnote-lane .task-message--agent { width: 100%; margin-left: 0; border: 0; border-radius: 0; background: transparent; padding: 0; box-shadow: none; }
+/* 身份由气泡上那一行代言的那几条连头像列一起收掉，正文顺势对齐那根细线。 */
+.turn-footnote-lane .task-message--agent.is-lane-owned { grid-template-columns: minmax(0, 1fr); gap: 0; }
+.turn-footnote-lane .task-message--agent::before { content: none; }
+.turn-footnote-lane .task-message--user.is-system-authored { padding-right: 0; padding-left: 0; }
 
-.verify-lane-head {
-  display: flex;
-  min-height: 36px;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  border-bottom: 1px solid var(--line);
-  padding: 7px 10px 7px 12px;
-  font-size: var(--t-xs);
-}
-
-.verify-lane.is-collapsed .verify-lane-head { border-bottom-color: transparent; }
-.verify-lane-mark { display: grid; width: 18px; height: 18px; flex: none; place-items: center; border-radius: 50%; background: color-mix(in oklab, var(--cyan) 15%, var(--panel)); color: var(--cyan); }
-.verify-lane-head > b { flex: none; color: color-mix(in oklab, var(--cyan) 72%, var(--ink)); font-size: var(--t-xs); font-weight: var(--w-strong); }
-/* 卡内首条气泡的头省掉之后，「谁在审、什么模型、什么智能水平」只剩这一行 ——
-   它不再是气泡里那份的影子，得按正文小字的对比度来（WCAG AA 4.5:1，由 DOM 测试钉住）。
-   同理它也不能被挤成省略号：窄工作区里宁可整行换到下一行，也不能把智能水平吃掉
-   （min-width 撑住内容宽 = 不压缩就换行；真长到一行装不下时仍由 ellipsis 兜底）。 */
-.verify-lane-by {
-  min-width: min(max-content, 100%);
-  overflow: hidden;
-  color: var(--muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.verify-lane-state { flex: none; border-radius: var(--r-full); padding: 1px 7px; font-size: var(--t-xs); font-weight: var(--w-medium); }
-.verify-lane-state.is-verified { background: color-mix(in oklab, var(--green) 11%, var(--panel)); color: var(--green); }
-.verify-lane-state.is-failed { background: color-mix(in oklab, var(--red) 11%, var(--panel)); color: var(--red); }
-.verify-lane-state.is-running { background: color-mix(in oklab, var(--cyan) 11%, var(--panel)); color: color-mix(in oklab, var(--cyan) 72%, var(--ink)); }
-.verify-lane-state.is-inconclusive { background: color-mix(in oklab, var(--amber) 11%, var(--panel)); color: var(--amber); }
-.verify-lane-time { margin-left: auto; color: var(--faint); font-size: var(--t-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.verify-lane-actions { display: inline-flex; flex: none; align-items: center; gap: 5px; margin-left: auto; }
-.verify-lane-time + .verify-lane-actions { margin-left: 0; }
-.verify-lane-actions > button { display: inline-flex; min-height: 24px; align-items: center; gap: 4px; border: 1px solid var(--line2); border-radius: var(--r-sm); background: var(--panel); padding: 2px 8px; color: var(--muted); font-size: var(--t-xs); transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
-.verify-lane-actions > button:hover { background: var(--raised); color: var(--ink); }
-.verify-lane-body { padding: 14px 13px 4px; }
-.verify-lane-body[hidden] { display: none; }
-.verify-lane-body > :first-child { margin-top: 0; }
-.verify-lane-body > :last-child { margin-bottom: 0; }
-/* 卡里（进行中）和就地摊开的那一轮（只读视图里点开的里程碑）里，审查者的发言一样排。 */
-:is(.verify-lane, .turn-footnote-lane) .task-message--agent { width: 100%; margin-left: 0; border: 0; border-radius: 0; background: transparent; padding: 0; box-shadow: none; }
-/* 身份由卡头代言的那几条连头像列一起收掉——盾形在卡头已经有一颗，正文顺势对齐卡内边距。 */
-:is(.verify-lane, .turn-footnote-lane) .task-message--agent.is-lane-owned { grid-template-columns: minmax(0, 1fr); gap: 0; }
-:is(.verify-lane, .turn-footnote-lane) .task-message--agent::before { content: none; }
-:is(.verify-lane, .turn-footnote-lane) .task-message--user.is-system-authored { padding-right: 0; padding-left: 0; }
-
-@media (max-width: 680px) {
-  .verify-lane-head { flex-wrap: wrap; }
-  .verify-lane-by { flex: 1 1 160px; }
-  .verify-lane-time { order: 2; margin-left: 26px; }
-  .verify-lane-actions { margin-left: auto; }
-  .verify-lane-time + .verify-lane-actions { margin-left: auto; }
-}
-
-/* 审查结论（ReviewVerdict）：审查者对执行者说的话，跟你的气泡同一列、同一种圆角。跟你的气泡分得开：
+/* 审查者那颗气泡（ReviewBubble）：从开始审到出结论一直是它，还没结论时多一个 .is-pending。
+   审查者对执行者说的话，跟你的气泡同一列、同一种圆角。跟你的气泡分得开：
    不垫底色只有一圈细边，字是次级灰，上下内边距小一档；不带图标、不带头像。整颗气泡就是那颗键
    （.review-verdict-text 撑满它）。「审查者 · 谁审的 · 用时 · 时刻」那一行的做法跟你的气泡那一行
    相同（见 task-conversation.css）：有悬停的设备上指到才在气泡上方右侧浮出，不占排版高度，位置是
@@ -115,7 +55,7 @@
   border-radius: 16px 6px 16px 16px;
   transition: border-color var(--dur-1) var(--ease-out);
 }
-.review-verdict-bubble:has(> .review-verdict-text:hover) { border-color: color-mix(in oklab, var(--ink) 24%, var(--line2)); }
+.review-verdict-bubble:has(> button.review-verdict-text:hover) { border-color: color-mix(in oklab, var(--ink) 24%, var(--line2)); }
 .review-verdict-bubble > header {
   display: flex;
   min-height: 20px;
@@ -164,8 +104,34 @@
   cursor: pointer;
   transition: color var(--dur-1) var(--ease-out);
 }
-.review-verdict-text:hover,
+button.review-verdict-text:hover,
 .review-verdict-text[aria-expanded="true"] { color: var(--ink); }
+.review-verdict-text.is-static { cursor: default; }
+/* 还没结论的那一颗：字前一颗点，跟侧栏行首那一套记号同一颗（task-status-dot.css，会动 = 真的在往前走），
+   对齐第一行的中线；审查者说的那一句最多两行。字真换了才淡入一下（.is-fresh）。 */
+.review-verdict.is-pending .review-verdict-text { display: flex; align-items: flex-start; gap: 8px; }
+.review-progress-dot { margin-top: calc(0.8em - 3.5px); }
+.review-progress-say { display: -webkit-box; min-width: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.review-verdict-text .is-fresh { animation: review-text-swap 320ms var(--ease-out); }
+@keyframes review-text-swap { from { opacity: 0; } }
+/* 收着时气泡下面靠右那一行：正在跑的那一步 + 这一轮的用时。摊开以后不出现，免得同一句写两遍。 */
+.review-progress-now {
+  display: flex;
+  max-width: 100%;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 10px;
+  margin: 6px 2px 0 0;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  line-height: 1.6;
+}
+.review-progress-step { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-progress-now time { flex: none; color: var(--faint); font-variant-numeric: tabular-nums; }
+:root[data-motion="reduce"] .review-verdict-text .is-fresh { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) .review-verdict-text .is-fresh { animation: none; }
+}
 .review-verdict > .turn-footnote-lane { align-self: stretch; margin-left: -8px; }
 @media (hover: hover) {
   .review-verdict { margin-top: var(--bubble-head-band); }
@@ -182,6 +148,16 @@
   }
   .review-verdict-bubble:is(:hover, :focus-within) > header { opacity: 1; pointer-events: auto; }
   .review-verdict-bubble > header button { width: 22px; height: 22px; }
+}
+/* 触屏上那一行常显在气泡里、窄屏上浮出的那一行被正文宽度卡住：不截断，整行换行，谁审的、第几轮、
+   什么时候、含不含附言都读得到。 */
+@media (hover: none), (max-width: 560px) {
+  .review-verdict-bubble > header { flex-wrap: wrap; white-space: normal; }
+  .review-verdict-meta { flex: 1 1 0; overflow: visible; overflow-wrap: anywhere; }
+}
+@media (hover: hover) and (max-width: 560px) {
+  /* 浮在气泡上方的那一行左缘跟正文对齐、往上长，不再只有气泡那么宽。 */
+  .review-verdict-bubble > header { left: auto; width: max-content; max-width: calc(100vw - 48px); height: auto; min-height: 26px; }
 }
 @media (max-width: 560px) {
   .review-verdict { padding-left: 10px; }

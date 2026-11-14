@@ -9,8 +9,8 @@ import {
   type ConversationReviewLane,
 } from "../src/task-detail/conversationReviewLanes.ts";
 import { ConversationFeed } from "../src/task-detail/ConversationFeed.tsx";
-import { ReviewerLane } from "../src/task-detail/ReviewerLane.tsx";
-import { ReviewVerdict } from "../src/task-detail/ReviewVerdict.tsx";
+import { ReviewBubble } from "../src/task-detail/ReviewBubble.tsx";
+import { lastSentence, reviewProgress } from "../src/task-detail/reviewProgress.ts";
 
 const session = {
   id: "presentation",
@@ -98,10 +98,13 @@ const emptyLane = conversationFeedRows(build([
 ])).find((row): row is ConversationReviewLane => row.kind === "review-lane");
 assert.ok(emptyLane);
 assert.equal(emptyLane.items.length, 0);
-const emptyMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={emptyLane}>{null}</ReviewerLane>);
-assert.match(emptyMarkup, /verify-lane is-collapsed/, "空正文卡按收起态绘制，不留分隔线");
-assert.doesNotMatch(emptyMarkup, />展开<|>收起</, "没有正文时不显示无效的展开按钮");
-assert.match(emptyMarkup, /class="verify-lane-body"[^>]*hidden=""/, "没有正文时 body 必须隐藏");
+// 还没开口的那一轮：右边一颗气泡，写「第 N 轮审查中」；没有可摊的，就不是一颗点了没反应的键。
+const emptyMarkup = renderToStaticMarkup(<ReviewBubble taskId="t1" lane={emptyLane} progress={reviewProgress(emptyLane, { status: "running" }, true)} />);
+assert.match(emptyMarkup, /<div class="review-verdict is-pending">/, "进行中也是右边那一颗气泡");
+assert.match(emptyMarkup, /workspace-status-dot--run[^"]*" aria-hidden="true"><\/span><span data-selection-content="">第 4 轮审查中<\/span>/, "没说话时气泡里写轮次，字前一颗会动的点");
+assert.doesNotMatch(emptyMarkup, /<button type="button" class="review-verdict-text"/, "没有正文时没有无效的展开键");
+assert.match(emptyMarkup, /class="review-verdict-text is-static" tabindex="0"/, "键盘照样走得进来，指到才出的那一行看得见");
+assert.doesNotMatch(emptyMarkup, /verify-lane|ShieldCheck|进行中/, "没有卡、没有盾、没有「进行中」徽章");
 
 // 派审附言是这一轮审查的输入，卡里必须看得见 —— 否则它写完就只剩派审对话框里那个
 // textarea 知道，用户读结论时无从核对「我要求重点看的那一点他看了没有」。
@@ -116,9 +119,9 @@ const noteLane = conversationFeedRows(protocolItems, { reviews: [{
   rounds: [{ round: 3, startedAt: "2026-08-11T02:00:00.000Z", reportMarkdown: "# 报告" }],
 }] as never }).find((row): row is ConversationReviewLane => row.kind === "review-lane");
 assert.ok(noteLane);
-assert.equal(noteLane.note, noteText, "附言从 run 上补进审查卡");
+assert.equal(noteLane.note, noteText, "附言从 run 上补进这一轮");
 // 收了口的一轮是一颗审查结论气泡：平时只有一句结论，附言、报告、证据都在右侧「审查」格那一轮里。
-const noteMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={noteLane}>{null}</ReviewerLane>);
+const noteMarkup = renderToStaticMarkup(<ReviewBubble taskId="t1" lane={noteLane} />);
 assert.match(noteMarkup, /class="review-verdict"/, "出了结论的一轮收成一颗气泡");
 assert.match(noteMarkup, /<button type="button" class="review-verdict-text"[^>]*><span data-selection-content="">第 3 轮审查未通过<\/span><\/button>/, "结论写在字里，不带颜色（单独摆的一轮是过去的事）");
 assert.doesNotMatch(noteMarkup, /turn-footnote-dot/, "过去的事不带点");
@@ -126,23 +129,78 @@ assert.match(noteMarkup, /<header><b>审查者<\/b><span class="review-verdict-m
 assert.match(noteMarkup, /<button type="button" aria-label="审查报告">/, "有报告时那一行里带一颗报告键");
 assert.equal((noteMarkup.match(/<svg/g) ?? []).length, 1, "气泡里唯一的图形是报告键");
 assert.doesNotMatch(noteMarkup, /重点看 SSE 断线重连/, "附言不摊在会话里");
-const opened: Array<number | null> = [];
-const linkedMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={noteLane} onOpenRound={(round) => opened.push(round)}>{null}</ReviewerLane>);
+const opened: Array<unknown> = [];
+const linkedMarkup = renderToStaticMarkup(<ReviewBubble taskId="t1" lane={noteLane} onOpenRound={(round) => opened.push(round)} />);
 assert.match(linkedMarkup, /aria-label="第 3 轮审查未通过，在右侧审查格里打开这一轮"/, "接上审查格时整颗气泡就是去那一轮的键");
-const liveMarkup = renderToStaticMarkup(<ReviewVerdict lane={noteLane} live />);
+const liveMarkup = renderToStaticMarkup(<ReviewBubble lane={noteLane} live />);
 assert.match(liveMarkup, /<div class="review-verdict" role="status">/, "还是现在的未通过：读屏听得到");
 assert.match(liveMarkup, /<span class="turn-footnote-dot is-bad" aria-hidden="true"><\/span><span data-selection-content="">第 3 轮审查未通过/, "字前一颗红点");
-assert.doesNotMatch(renderToStaticMarkup(<ReviewVerdict lane={{ ...noteLane, conclusion: "verified", verdict: "passed" }} live />), /turn-footnote-dot|role="status"/, "通过不带任何颜色");
-assert.match(renderToStaticMarkup(<ReviewVerdict lane={{ ...noteLane, conclusion: "inconclusive", verdict: "inconclusive" }} live />), /turn-footnote-dot is-warn/, "没有给出结论：琥珀点");
-assert.doesNotMatch(renderToStaticMarkup(<ReviewVerdict lane={noteLane} />), /aria-label="审查报告"/, "拿不到任务（报告地址挂在任务上）就不出报告键");
-// 还在跑的那一轮照旧是整张卡：附言是这一轮审查的输入，卡里必须看得见。
-const runningNoteLane = { ...noteLane, complete: false, conclusion: null, defaultCollapsed: false };
-const runningNoteMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={runningNoteLane}>{null}</ReviewerLane>);
-assert.match(runningNoteMarkup, /派审附言/, "卡内正文顶部摆出附言");
-assert.match(runningNoteMarkup, /重点看 SSE 断线重连/, "附言正文原样呈现");
-assert.match(runningNoteMarkup, /含附言/, "卡头留标记，折叠着也看得出这一轮带附言");
-const findingsMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={{ ...noteLane, findings: 2 }}>{null}</ReviewerLane>);
+assert.doesNotMatch(renderToStaticMarkup(<ReviewBubble lane={{ ...noteLane, conclusion: "verified", verdict: "passed" }} live />), /turn-footnote-dot|role="status"/, "通过不带任何颜色");
+assert.match(renderToStaticMarkup(<ReviewBubble lane={{ ...noteLane, conclusion: "inconclusive", verdict: "inconclusive" }} live />), /turn-footnote-dot is-warn/, "没有给出结论：琥珀点");
+assert.doesNotMatch(renderToStaticMarkup(<ReviewBubble lane={noteLane} />), /aria-label="审查报告"/, "拿不到任务（报告地址挂在任务上）就不出报告键");
+// 还在跑的那一轮：附言是这一轮审查的输入，收着时浮出那一行看得出「含附言」，摊开后在最前（DOM 测试里点开看）。
+const runningNoteLane = { ...noteLane, complete: false, conclusion: null, verdict: null, reportAvailable: false, report: null };
+const runningNoteMarkup = renderToStaticMarkup(<ReviewBubble taskId="t1" lane={runningNoteLane} progress={reviewProgress(runningNoteLane, { status: "running" }, true)} />);
+assert.match(runningNoteMarkup, /<span class="review-verdict-meta"> · 5\.5审查 · claude-opus-5 · 第 3\/3 轮审查 · [^<]* · 含附言<\/span>/, "浮出那一行：谁、模型、第几轮/最多几轮、开始时刻、含附言");
+assert.match(runningNoteMarkup, /aria-expanded="false"/, "默认收着");
+assert.doesNotMatch(runningNoteMarkup, /重点看 SSE 断线重连/, "收着时附言不摊开");
+const findingsMarkup = renderToStaticMarkup(<ReviewBubble taskId="t1" lane={{ ...noteLane, findings: 2 }} />);
 assert.match(findingsMarkup, />第 3 轮审查未通过，2 条意见</, "抽得出意见条数时写进那一句");
+
+// —— 气泡里写审查者最新说完的那一句；还在冒字的半句不算（逐字换字就是抖）——
+assert.equal(lastSentence("先核对需求。\n\n改动面已过一遍；接下来验证启动状态。", false), "接下来验证启动状态。");
+assert.equal(lastSentence("先核对需求。接下来验证启", true), "先核对需求。", "还在说的那一回合只认说完了的句子");
+assert.equal(lastSentence("## 结论\n\n- **两处**入口都按 `run` 事件判断。", false), "两处入口都按 run 事件判断。", "markdown 记号剥掉，标题不算一句");
+assert.equal(lastSentence("看一下：\n```sh\ngit status", true), "看一下：", "没闭合的代码块不算话");
+assert.equal(lastSentence("跑了 a.ts 和 b.ts", true), null, "文件名里的点不是句末");
+
+const said = (markdown: string, endedAt: string | null, segments?: unknown[]) => ({
+  kind: "agent", id: `r:${markdown.length}`, label: "5.5审查", agentType: "claude", reviewer: { round: 3 }, at: "2026-08-11T02:00:10.000Z", endedAt, markdown,
+  segments: segments ?? [{ id: "s0", markdown, events: [], attachments: [] }],
+}) as never;
+const speaking = { ...runningNoteLane, items: [
+  said("我先核对需求、实际改动和回归登记。", "2026-08-11T02:01:00.000Z"),
+  said("改动面已过一遍；接下来验证配置冲突。正在看", null, [
+    { id: "a", markdown: "改动面已过一遍；接下来验证配置冲突。正在看", events: [], attachments: [] },
+    { id: "b", markdown: "", events: [{ kind: "tool", label: "Bash", detail: JSON.stringify({ command: "git diff --stat" }) }], attachments: [] },
+  ]),
+] };
+const running = reviewProgress(speaking, { status: "running" }, true);
+assert.deepEqual(
+  { phase: running.phase, text: running.text, said: running.said },
+  { phase: "running", text: "接下来验证配置冲突。", said: true },
+  "气泡里是审查者最新说完的那一句",
+);
+assert.match(running.step ?? "", /git diff --stat/, "下面那一行是正在跑的那条命令");
+const runningMarkup = renderToStaticMarkup(<ReviewBubble taskId="t1" lane={speaking} progress={running} />);
+assert.match(runningMarkup, /class="review-progress-say"[^>]*>接下来验证配置冲突。<\/span>/, "那一句最多两行");
+assert.match(runningMarkup, /<p class="review-progress-now"><span class="review-progress-step">[^<]*git diff --stat[^<]*<\/span><time>/, "收着时气泡下面：在跑的命令 + 用时");
+assert.match(runningMarkup, /aria-label="第 3\/3 轮审查：接下来验证配置冲突。"/, "气泡是一颗有名字的键");
+
+// —— 在等、停了：点不动（或者没有），字说现在等的是谁、等什么 ——
+const phases = [
+  [{ status: "paused", question: "要不要连 Windows 一起验？" }, "question", "在等你答复它的提问", "workspace-status-dot--wait"],
+  [{ status: "paused", monitorRunning: true }, "monitor", "在等哨兵的结果", "workspace-status-dot--queue"],
+  [{ status: "paused" }, "checkpoint", "停在检查点，等续跑", "workspace-status-dot--wait"],
+  [{ status: "running", upstreamStalled: true }, "stalled", "在等模型上游回话", "workspace-status-dot--stalled"],
+  [{ status: "failed" }, "stopped", "第 3 轮审查停了，没有给出结论", null],
+] as const;
+for (const [facts, phase, text, dot] of phases) {
+  const progress = reviewProgress(speaking, facts as never, true);
+  assert.deepEqual({ phase: progress.phase, text: progress.text, step: progress.step }, { phase, text, step: null }, phase);
+  const markup = renderToStaticMarkup(<ReviewBubble taskId="t1" lane={speaking} progress={progress} />);
+  assert.doesNotMatch(markup, /workspace-status-dot--run/, `${phase}：点不动`);
+  if (dot) assert.match(markup, new RegExp(dot), `${phase}：静止的那一档记号`);
+  else assert.doesNotMatch(markup, /workspace-status-dot/, `${phase}：停了就没有点`);
+  assert.doesNotMatch(markup, /review-progress-step/, `${phase}：没有在跑的命令`);
+}
+assert.equal(reviewProgress(speaking, { status: "running" }, false).phase, "stopped", "后面有人接了话的那一轮不是「此刻」");
+// 停了的那一轮收着时，气泡下面是它最后那句尾注（原因、继续本轮审查）。
+const stoppedMarkup = renderToStaticMarkup(
+  <ReviewBubble taskId="t1" lane={speaking} progress={reviewProgress(speaking, { status: "failed" }, true)} trailing={<p className="cause">这一轮审查是中途断掉的</p>} />,
+);
+assert.match(stoppedMarkup, /<p class="cause">这一轮审查是中途断掉的<\/p>/);
+assert.doesNotMatch(stoppedMarkup, /review-progress-now/);
 
 // —— 卡内首条气泡的头曾经是卡头的逐字复读：审查者名、模型、轮次徽标、开始时间、用时
 // 全部在卡头上写过一遍。省掉整条头之后，模型旁边的智能水平只剩卡头这一处，必须补上。

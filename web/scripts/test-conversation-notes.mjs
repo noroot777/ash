@@ -197,7 +197,7 @@ const lane = (id, round, conclusion, extra = {}) => ({
   items: [{ kind: "event", id: `${id}:end`, text: `自由工作流第 ${round} 轮审查${conclusion === "verified" ? "通过" : "未通过"}`, at: `2026-11-13T0${round}:00:00.000Z`, variant: "note", tone: "neutral", notice: { kind: "review.verdict", source: "free", round, verdict: conclusion === "verified" ? "passed" : "failed" } }],
   reviewerLabel: "5.5审查", reviewerModel: null, reviewerEffort: null, note: null,
   startedAt: null, endedAt: `2026-11-13T0${round}:00:00.000Z`, conclusion, complete: true,
-  reportAvailable: false, report: null, runId: null, defaultCollapsed: true, findings: null, ...extra,
+  reportAvailable: false, report: null, runId: null, findings: null, ...extra,
 });
 const figure3 = conversationSystemRows([
   user("u0"),

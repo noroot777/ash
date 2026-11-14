@@ -30,10 +30,10 @@ export type ConversationReviewLane = {
   items: ConversationItem[];
   reviewerLabel: string | null;
   reviewerModel: string | null;
-  /** 卡内第一条气泡的头已经被卡头顶替，模型旁边的智能水平也得跟着搬上来，不然会丢。 */
+  /** 这一轮第一条发言的头由审查者气泡上那一行顶替，模型旁边的智能水平也得跟着搬上去，不然会丢。 */
   reviewerEffort: string | null;
   /**
-   * 派审时写的附言。它是这一轮审查的**输入**（每轮 prompt 都会带上），卡里摆出来才能
+   * 派审时写的附言。它是这一轮审查的**输入**（每轮 prompt 都会带上），摊开的经过里摆在最前才能
    * 拿它对着结论核对。只有自由派审 / 合并结果审查配得上 run 才知道；就地验证没有附言。
    */
   note: string | null;
@@ -55,7 +55,6 @@ export type ConversationReviewLane = {
    * 配不上 run 的为 null——那种点了就在原处展开，不去猜。
    */
   runId: string | null;
-  defaultCollapsed: boolean;
   /** 未通过时报告里有几条意见（服务端在结论旁注上给的）。老记录、通过的轮次是 null。 */
   findings: number | null;
 };
@@ -65,18 +64,18 @@ export type ConversationFeedRow =
   | ConversationReviewLane;
 
 /**
- * 卡内气泡跟卡头的关系：
+ * 摊开的那一轮里每条发言跟审查者气泡（ReviewBubble）上那一行的关系：
  * - `lead`  ——「这一轮审查的第一条发言」。谁在审、什么模型档位、什么时候开始跑了多久，
- *   卡头已经原样写了一遍，气泡再顶一行只是复读，整条头部省掉。
+ *   气泡上那一行已经原样写了一遍，发言再顶一行只是复读，整条头部省掉。
  * - `member` —— 同一个审查者的后续发言。身份仍然是复读，但时间和用时各不相同，留着。
- * - `null`  —— 卡里混进来的别人（inline 卡在审查者开口前会先收着主任务的气泡），照常显示。
+ * - `null`  —— 这一轮里混进来的别人（inline 那一轮在审查者开口前会先收着主任务的气泡），照常显示。
  */
 export type ReviewLaneMessageRole = "lead" | "member";
 
 function laneOwnMessage(lane: ConversationReviewLane, item: ConversationItem): boolean {
   if (item.kind !== "agent" || !item.reviewer || item.reviewer.round !== lane.round) return false;
   if (lane.reviewerLabel && item.label !== lane.reviewerLabel) return false;
-  // 中途换了模型或智能水平的那条不算「卡头说过了」——真换了就得让它自己说。
+  // 中途换了模型或智能水平的那条不算「气泡上说过了」——真换了就得让它自己说。
   const model = item.run?.model ?? null;
   const effort = item.run?.reasoningEffort ?? null;
   return (!model || model === lane.reviewerModel) && (!effort || effort === lane.reviewerEffort);
@@ -113,8 +112,8 @@ function repairHandoffKind(item: ConversationItem): RepairHandoffKind | null {
 }
 
 function visibleLaneItem(item: ConversationItem): boolean {
-  // 轮次、审查者与开始时间已经在卡头；正文再重复一遍「第 N 轮开始」只会制造双标题。
-  // checkpoint 标记只在审查卡内部降噪；普通任务仍靠它留下「曾经暂停并续跑」的持久痕迹。
+  // 轮次、审查者与开始时间已经在气泡上那一行；正文再重复一遍「第 N 轮开始」只会制造双标题。
+  // checkpoint 标记只在审查那一轮里降噪；普通任务仍靠它留下「曾经暂停并续跑」的持久痕迹。
   if (laneStart(item) !== null) return false;
   if (item.kind === "event" && item.text.includes(LEGACY_SYS_MARKER)) return false;
   return repairHandoffKind(item) === null;
@@ -405,7 +404,6 @@ export function conversationFeedRows(
         reportAvailable: false,
         report: null,
         runId: start.runId ?? null,
-        defaultCollapsed: false,
         findings: null,
         reviewerSpoke: false,
         reviewerSessionId: null,
@@ -422,13 +420,8 @@ export function conversationFeedRows(
   pushActive();
 
   const lanes = rows.filter((row): row is ConversationReviewLane => row.kind === "review-lane");
+  // 每一轮（进行中的也一样）在会话里默认都只是一颗收着的气泡，经过点开才摊（ReviewBubble）。
   attachReports(lanes, options?.reviews ?? []);
-  for (const lane of lanes) {
-    // 出了结论的轮次一律折起来（最新那轮也一样，用户 2026-09-02 要求）：结论、审查者和
-    // 报告入口在卡头上已经看得见，正文只在想细看时展开。还在跑的轮次保持展开，让用户
-    // 能跟着看进度。
-    lane.defaultCollapsed = lane.conclusion !== null;
-  }
   // 修复交接紧跟在被打回的卡后面。就地验证的整份内嵌报告一律由卡片入口替代；自由派审
   // 只有在 report.md 确实可打开时才隐藏原 prompt，没有报告就保留它作为证据目录兜底。
   let previousLane: ConversationReviewLane | null = null;
