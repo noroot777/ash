@@ -80,7 +80,7 @@ export type AcceptGateMissAttribution = "mine" | "unknown";
  * 结论(`diagnosis`),但失败类别照实留在它真实的那一档上(多半是 `exit_code`)。
  * 旧记录里可能还存着 `command_missing`,读的那几处都做了兜底。
  */
-export type AcceptGateFailure = "exit_code" | "prepare_failed" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived";
+export type AcceptGateFailure = "exit_code" | "prepare_failed" | "launcher_failed" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived";
 
 export const ACCEPT_GATE_STATUS_LABELS: Record<AcceptGateStatus, string> = {
   running: "正在跑",
@@ -93,6 +93,7 @@ export const ACCEPT_GATE_STATUS_LABELS: Record<AcceptGateStatus, string> = {
 export const ACCEPT_GATE_FAILURE_LABELS: Record<AcceptGateFailure, string> = {
   exit_code: "命令退出码非 0",
   prepare_failed: "准备命令失败，测试没有开跑",
+  launcher_failed: "门禁启动器出了错，分不清停在哪一段",
   timeout: "超时",
   spawn_failed: "命令起不来",
   server_restarted: "ash 重启,这次没跑完",

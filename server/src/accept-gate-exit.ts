@@ -24,7 +24,7 @@
 // 退出码一律不作数、按超时收。不然同一次运行，ash 在不在场就决定了它是「超时」还是「通过」。
 import { existsSync, readFileSync } from "node:fs";
 import type { AcceptGateFailure, AcceptGateStatus } from "@ash/shared/accept-gate";
-import { gateAbortPath, gateCommandPhasePath, gateConfinement, gateExitPath, gateGoPath, readGateLaunch } from "./accept-gate-launch.js";
+import { gateAbortPath, gateConfinement, gateExitPath, gateGoPath, readGateLaunch } from "./accept-gate-launch.js";
 import { isSameGateProcess, type GateExit } from "./accept-gate-process.js";
 import { gateTakeoverUnavailable } from "./accept-gate-confinement.js";
 import { gateTimeoutMs } from "./accept-gate-watch.js";
@@ -66,6 +66,7 @@ export function gateExitOutcome(exit: GateExit, timeoutMs = gateTimeoutMs()): Ga
   if (exit.elapsedMs !== undefined && exit.elapsedMs >= timeoutMs) return { status: "failed", exitCode: null, failure: "timeout",
     note: `命令跑了 ${minutes(exit.elapsedMs)} 分钟才退出（rc=${exit.code}），超过了 ${minutes(timeoutMs)} 分钟的上限，`
       + "按超时处理：过了时限的退出码不作数，不论那一刻 ash 在不在场。" };
+  if (exit.infra) return { status: "interrupted", exitCode: null, failure: "launcher_failed", note: exit.infra };
   if (exit.phase === "prepare" && exit.code !== 0 && exit.code !== null && !exit.signal) {
     return { status: "failed", exitCode: exit.code, failure: "prepare_failed" };
   }
@@ -84,21 +85,27 @@ export function gateExitOutcome(exit: GateExit, timeoutMs = gateTimeoutMs()): Ga
 export function readGateExit(logPath: string, pid: number): GateExit | null {
   try {
     const record = JSON.parse(readFileSync(gateExitPath(logPath), "utf8")) as
-      { version?: unknown; pid?: unknown; code?: unknown; elapsedMs?: unknown; phase?: unknown };
+      { version?: unknown; pid?: unknown; code?: unknown; elapsedMs?: unknown; phase?: unknown; infra?: unknown };
     if (record.version !== 1 || record.pid !== pid || !Number.isSafeInteger(record.code)
       || typeof record.elapsedMs !== "number" || !Number.isFinite(record.elapsedMs) || record.elapsedMs < 0) return null;
     return { code: record.code as number, signal: null, elapsedMs: record.elapsedMs,
-      ...(record.phase === "prepare" ? { phase: "prepare" as const } : {}) };
+      ...(record.phase === "prepare" ? { phase: "prepare" as const } : {}),
+      ...(record.infra === true ? { infra: "启动器自己出了错（日志里有它留下的那一句），没有拿到这一段命令的真实结论，这次不算数。" } : {}) };
   } catch { return null; }
 }
 
 /**
- * 退出档读不到（写盘失败、被删）时，在场的 ash 手里只有 `{code, signal}`。配了准备命令就按启动器落下的
- * 「前置命令开跑」标记补上阶段：启动器起前置命令之前必先落下它、落不下就不起，所以没有它 = 前置命令
- * 一行都没跑，这次的红只能记在准备那一段上，不能默认当成测试红去交修（第 1 轮审查 #3）。
+ * 退出档读不到（写盘失败、被删）时，在场的 ash 手里只有启动器的 `{code, signal}`。配了准备命令的那一档，
+ * 这个数说不清是准备命令的、前置命令的，还是启动器自己出错退的 —— 任何能补上阶段的旁证（标记文件、
+ * 日志）都要写盘，而退出档写不进去恰恰说明写盘这条路不可靠（第 1、2 轮审查 #3/#2：先后按「没标记 =
+ * 准备没过」「有标记 = 测试红」猜过，各被一种写盘故障打穿）。所以一律按「分不清」收：不判红、不交修。
+ * 被信号打死（取消、超时、外人动手）和起不来（code=null）照旧：那两种结论不依赖阶段。
+ * 没配准备命令的那一档原样按退出码说话，老路不变。
  */
-export function unrecordedGateExit(logPath: string, exit: GateExit, prepared: boolean): GateExit {
-  return prepared && !existsSync(gateCommandPhasePath(logPath)) ? { ...exit, phase: "prepare" } : exit;
+export function unrecordedGateExit(exit: GateExit, prepared: boolean): GateExit {
+  return prepared && exit.code !== null && !exit.signal
+    ? { ...exit, infra: "启动器没能留下退出记录（多半是写盘出了问题），分不清停在准备命令还是前置命令，这次不算数、也不交修；修好磁盘后再跑一次。" }
+    : exit;
 }
 
 /** 这条日志对应的启动器有没有留下退出档（pid 取自启动记录）。在场的 ash 收到退出回调时也先认它。 */

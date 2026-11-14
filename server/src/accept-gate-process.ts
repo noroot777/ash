@@ -11,8 +11,9 @@ import { assertGateConfinementAvailable, gateSupervisorBootstrap } from "./accep
 import { MAC_GATE_ENV, macGateToken } from "./accept-gate-confinement-macos.js";
 import { gateDiagnosisFull, gateDiagnosisTail } from "./accept-gate-diagnosis.js";
 import { gateBootstrapEnvironment } from "./accept-gate-process-env.js";
+import { isolatedGateEnv } from "./accept-gate-isolated.js";
 import { authorizeGateLaunch, finishGateLaunch, GATE_BOOTSTRAP, gateAbortPath, gateConfinement,
-  gateCommandPhasePath, gateExitPath, gateGoPath, gateLaunchOf, gateLaunchPath, migrateGateLaunch, prepareGateLaunch, readGateLaunch, registerGateLaunch } from "./accept-gate-launch.js";
+  gateExitPath, gateGoPath, gateLaunchOf, gateLaunchPath, migrateGateLaunch, prepareGateLaunch, readGateLaunch, registerGateLaunch } from "./accept-gate-launch.js";
 
 /** SIGTERM 之后等多久补一刀。给它收尾的时间，但不无限等。 */
 const KILL_GRACE_MS = 5_000;
@@ -32,7 +33,9 @@ export type GateExit = { code: number | null; signal: NodeJS.Signals | null;
   /** 启动器自己量的「起来到退出」用时（单调时钟，只有退出档里有）。时限按它判，见 accept-gate-exit.ts。 */
   elapsedMs?: number;
   /** 退在哪一段：`prepare` = 准备命令没过、前置命令根本没起（只有退出档里有）。 */
-  phase?: "prepare" | "command" };
+  phase?: "prepare" | "command";
+  /** 阶段说不清（启动器自己出错、或没留下退出档）时的那句理由；有它就不按退出码判红（accept-gate-exit.ts）。 */
+  infra?: string };
 
 /**
  * 起一条门禁命令。返回 pid 和它的**启动时间**（拿不到 pid 视为没起来，抛错）。
@@ -56,7 +59,6 @@ export async function spawnAcceptGate(opts: {
   if (!existsSync(gateLaunchPath(opts.logPath))) prepareGateLaunch(opts.logPath);
   assertGateConfinementAvailable();
   rmSync(gateExitPath(opts.logPath), { force: true });
-  rmSync(gateCommandPhasePath(opts.logPath), { force: true });
   const fd = openSync(opts.logPath, "a");
   try {
     // 这里**只跑用户那条命令**。第 7 轮曾把「先问一句 runner 认不认这个脚本」的两条 npm
@@ -64,10 +66,11 @@ export async function spawnAcceptGate(opts: {
     // 撤掉：那两次查询会把项目自己的 preload / 包装器初始化动作各跑一遍（一次验收 = 3 次
     // 项目代码，不插是 1 次），而诊断没有资格擅自增加用户代码的执行次数。
     const launch = userShellLaunch(opts.command);
-    const environment = gateBootstrapEnvironment(augmentedEnv());
+    // 配了准备命令：依赖只许来自快照里现装的那一份，执行环境同样不许带进外来依赖（accept-gate-isolated.ts）。
+    const environment = gateBootstrapEnvironment(opts.prepare ? isolatedGateEnv(augmentedEnv(), opts.cwd) : augmentedEnv());
     if (IS_MAC) environment.bootstrap[MAC_GATE_ENV] = macGateToken(opts.logPath);
     const config = Buffer.from(JSON.stringify({ ...launch, cwd: opts.cwd,
-      ...(opts.prepare ? { prepare: userShellLaunch(opts.prepare), commandPhase: gateCommandPhasePath(opts.logPath),
+      ...(opts.prepare ? { prepare: userShellLaunch(opts.prepare),
         prepared: `\n[ash] 准备命令通过，开跑验收前置命令\n[ash] $ ${opts.command}\n\n` } : {}),
       ...await gateSupervisorBootstrap(opts.logPath),
       restoreEnv: environment.restore,

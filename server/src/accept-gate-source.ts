@@ -14,7 +14,7 @@ import { ambientDigest, DEPENDENCY_DIRS, dependencyDigest, dependencyMismatch,
 import { optionalRead, requiredRead } from "./accept-gate-fs.js";
 import { worktreeChanges } from "./accept-gate-status.js";
 import { dependencySupply, supplyRoots, type DependencySupply } from "./accept-gate-supply.js";
-import { ancestorDependencyDir, GATE_ISOLATED_DIR } from "./accept-gate-isolated.js";
+import { ancestorDependencyDir, GATE_ENV_ISOLATION, GATE_ISOLATED_DIR } from "./accept-gate-isolated.js";
 
 type SourceInput = { path: string; directory: boolean; dependency?: boolean };
 // 快照的 sidecar。非 Git 项目一直靠它把输入清单交给收尾核验,现在**依赖放置计划**也走这里:
@@ -74,7 +74,9 @@ const git = async (cwd: string, args: string[]) => (await readOnlyGit(cwd, args)
 // （accept-gate-isolated.ts），源码那一侧（工作区、主检出）不在它的解析路径上，再摘它只会让无关的
 // 安装变化作废凭据。所以把执行位置的父目录同时当作两个根传进去。
 const gateAmbient = (cwd: string, executionCwd: string, roots: string[], prepared: boolean | undefined) =>
-  prepared ? ambientDigest(dirname(executionCwd), executionCwd) : ambientDigest(cwd, executionCwd, roots);
+  // 准备命令那一档的 ambient 连环境隔离口径一起记：口径换了，旧绿不再当这一份的证据。
+  prepared ? ambientDigest(dirname(executionCwd), executionCwd).then(digest => `${GATE_ENV_ISOLATION}:${digest}`)
+    : ambientDigest(cwd, executionCwd, roots);
 
 async function nonGitFiles(cwd: string): Promise<string[]> {
   return (await readdir(cwd)).filter(name => name !== ".git").sort();

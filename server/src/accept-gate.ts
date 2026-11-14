@@ -347,7 +347,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
       logPath,
       hold: true,
       // 先认启动器留下的退出档：它带着用时，过了时限的退出码按超时收（accept-gate-exit.ts）。
-      onExit: (exit) => void settleGate(runId, gateExitOutcome(recordedGateExit(logPath) ?? unrecordedGateExit(logPath, exit, !!plan.prepare))),
+      onExit: (exit) => void settleGate(runId, gateExitOutcome(recordedGateExit(logPath) ?? unrecordedGateExit(exit, !!plan.prepare))),
     });
   } catch (error) {
     appendGateLog(logPath, `\n[ash] 起不来：${error instanceof Error ? error.message : String(error)}\n`);
