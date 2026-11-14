@@ -296,6 +296,9 @@ export const tasks = sqliteTable("tasks", {
   // 任务之后的对话。开跑时把续聊前的终态记在这里（done/failed/canceled），队列一律
   // 按它看待该成员（既不挡后面的，也不会被当 backlog 拉起），结算后清空。
   followUpFrom: text("follow_up_from"),
+  // 续聊被哨兵隔开、落成 paused 期间,「续聊前是哪个状态」记在这里(follow_up_from 此时是空的,
+  // 队列照常把它看成在等哨兵的暂停)。下一个非旁路回合起跑时接回 follow_up_from —— 见 follow-up-held.ts。
+  followUpHeldFrom: text("follow_up_held_from"),
   // 完成确认（严格 done 协议）：agent 调 complete_task 时盖时间戳，settle 消费后清空。
   // 落库而不只放内存 —— 确认与结算若不在同一个进程里（历史事故：僵尸实例跑任务、
   // HTTP 打到监听进程），内存标记会静默丢掉，agent 明明确认了却记 failed。
