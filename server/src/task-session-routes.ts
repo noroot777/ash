@@ -5,19 +5,19 @@
 // 是里面唯一一块「只读、不碰回合所有权」的东西，切走对那边的并发不变量零影响。
 import { readFile } from "node:fs/promises";
 import { mergeImageJournal } from "./agent-image-journal.js";
-import type { Session, TurnOutcome } from "@ash/shared";
+import type { Session } from "@ash/shared";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { actorOf } from "./auth/context.js";
 import { canSeeProject } from "./auth/visibility.js";
 import { deleteConversationSegments, RedactRefusal, type RedactTarget } from "./conversation-redact.js";
 import { db } from "./db/index.js";
-import { sessions, tasks } from "./db/schema.js";
+import { sessionTurns, sessions, tasks } from "./db/schema.js";
 import { backfillArtifactUploads, eventAttachmentPath } from "./uploads.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
-import { turnOutcomesForTask } from "./session-turns.js";
+import { turnFactsOf, type SessionTurnFacts } from "./session-turns.js";
 import { failedTurnNotices, replaysFailureScene, sessionWaiting } from "./session-waiting.js";
 import { turnOutcome } from "./session-turns.js";
 import {
@@ -36,7 +36,7 @@ import { enrichNativeWorkModels } from "./native-work-models.js";
 async function toSession(
   r: typeof sessions.$inferSelect,
   run: { model: string | null; reasoningEffort: string | null } = { model: null, reasoningEffort: null },
-  turnOutcomes: Record<string, TurnOutcome | null> = {},
+  { outcomes: turnOutcomes, interruptions }: SessionTurnFacts = { outcomes: {}, interruptions: {} },
 ): Promise<Session> {
   // 版本得从**这条会话的 rollout 实际写在的那个目录**里读(会话行记着;老行按当时的
   // 规则解释)。按宿主机默认目录读的话,隔离档下列表恒为「读不出版本」,而起跑守卫那边
@@ -70,14 +70,29 @@ async function toSession(
     // 每一回合的也带上:会话一续跑,只剩最后一回合的那一位就答不了「前一回合崩没崩」,
     // 而哨兵叫醒并不并回要的正是它(见 Session.turnOutcomes)。
     turnOutcomes,
+    // 每个断过的回合怎么断的（turn-interruption.ts）：页面上失败那句话照它说，不认结算说明的字。
+    turnInterruptions: interruptions,
   };
 }
 
 
 export async function sessionsForTask(taskId: string): Promise<Session[]> {
-  const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
-  const [runMeta, outcomes] = await Promise.all([sessionRunMeta(taskId, rows), turnOutcomesForTask(taskId)]);
-  return Promise.all(rows.map((row) => toSession(row, runMeta.get(row.id), outcomes.get(row.id))));
+  // **会话行和回合行出自同一个原子读批**：两边是收尾那一个批一起写下的（`recordTurnSpan` 的
+  // `alongside`），分两条读，中间落下一次收口就拼出半截快照 —— 先读会话行是「回合已判失败、会话行
+  // 还没收尾」，先读回合是「会话行已收尾、回合结局还不知道」（exit 0 却判失败的那一轮连重试都给
+  // 不出），换顺序只是换一种半截（第 1、2 轮审查第 1 条）。
+  const [rows, turns] = await db.batch([
+    db.select().from(sessions).where(eq(sessions.taskId, taskId)),
+    db.select({
+      sessionId: sessionTurns.sessionId,
+      startedAt: sessionTurns.startedAt,
+      outcome: sessionTurns.outcome,
+      interruption: sessionTurns.interruption,
+    }).from(sessionTurns).where(eq(sessionTurns.taskId, taskId)),
+  ]);
+  const facts = turnFactsOf(turns);
+  const runMeta = await sessionRunMeta(taskId, rows);
+  return Promise.all(rows.map((row) => toSession(row, runMeta.get(row.id), facts.get(row.id))));
 }
 
 /**

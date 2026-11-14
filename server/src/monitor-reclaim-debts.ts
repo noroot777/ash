@@ -78,7 +78,7 @@ import { authorizeRecoveredIdentity } from "./monitor-identity-authz.js";
 import { clearSpawnIdentity, readSpawnIdentity } from "./monitor-spawn.js";
 import { now } from "./util.js";
 
-/** 进程内的重试梯子。跟 claude 投影那边的补偿清理同一个形状(claude-monitor-revoked.ts)。 */
+/** 进程内的重试梯子。 */
 const LADDER_MS = [1_000, 5_000, 20_000];
 const pending = new Set<string>();
 

@@ -7,7 +7,7 @@ import { db } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
 import { isTracelessState, reclaimState } from "./monitor-reclaim-evidence.js";
-import { detachMonitor, finish, serialize, toTaskMonitor } from "./monitors.js";
+import { detachMonitor, finish, publish, serialize, toTaskMonitor } from "./monitors.js";
 import { appendTaskTimeline, noticeLine } from "./task-timeline.js";
 import { now } from "./util.js";
 
@@ -136,6 +136,9 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
         console.error(`[ash] 创建期取消后补收:既没确认退出、责任也没落库 monitor=${monitorId} pid=${row.pid}`);
       }
     }
+    // 放弃凭证改了这条哨兵还欠不欠一份结果,而 `finish` 那条播报这一支走不到:不说一声,等它
+    // 结果的队列(queue-monitor-hold.ts)和界面上的卡片都不知道这件事。
+    publish(row.taskId);
     // 重读:放弃凭证刚写上去,照 `row` 返回等于把调用方刚做的那件事从响应里抹掉。
     const settled = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
     return toTaskMonitor(settled ?? row);

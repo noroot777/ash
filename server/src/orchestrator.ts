@@ -3,16 +3,15 @@ import { loadMarkdownImageSeed, markdownImageAccounting } from "./agent-image-jo
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
-import { isGoalRecovery } from "@ash/shared/cli-commands";
 import { deliverLeadInterjection } from "./team/lead-interjection.js";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
-import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields } from "./session-turns.js";
 import { forgetHeldTrigger } from "./free-review-reservations.js";
 import type { ContinueTaskOptions, TurnStartDecline } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
+import { heldFollowUpTaken, turnFollowUpFrom } from "./follow-up-held.js";
 import { trackRun, discardStartingRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn, turnSourceReview, turnSourceRole } from "./runs.js";
 import { turnDirectionStart } from "./task-direction-epoch.js";
 import { assertReviewTurnStart, beginReviewContinuation, commitReviewTurnDelivery } from "./review-continuation.js";
@@ -33,8 +32,9 @@ import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
 import { DeliveryCrossingUnwritable, recordDeliveryCrossing } from "./delivery-crossing.js";
 import { createTurnInputSettlement } from "./turn-input-settlement.js";
-import { writeTurn, runTracePaths } from "./transcript.js";
-import { isMonitorWakeTurn, recordUserConversationTurn } from "./conversation-turn.js";
+import { runTracePaths } from "./transcript.js";
+import { writeSystemNote } from "./turn-system-note.js";
+import { isMonitorWakeTurn, recordSystemResumeTurn, recordUserConversationTurn } from "./conversation-turn.js";
 import { workerPreambleFor } from "./team/dispatch.js";
 import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
 import { reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
@@ -60,7 +60,7 @@ import { takeResumePrompt } from "./task-resume-prompt.js";
 import { questionSupersededNote, supersedableQuestion, supersedeQuestion } from "./task-question-supersede.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
-  COLLAB_INVITE, SYS_MARKER,
+  COLLAB_INVITE,
   backgroundWaitFor, COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER, followUpRailNote, PLANNING_TURN,
   WORKSPACE_RESET, WORKSPACE_RESET_MARKER,
 } from "./run-prompts.js";
@@ -121,7 +121,7 @@ export async function continueTask(
     }
     return false;
   };
-  const { head, nativeCommand, slash, goalExecution, options, retired } = await withTurnPreflight(taskId, opts.turnHeld, async () => {
+  const { head, nativeCommand, slash, goalExecution, inputExecution, options, retired } = await withTurnPreflight(taskId, opts.turnHeld, async () => {
     const prepared = await prepareContinuationEntry(taskId, userText, opts);
     // **原生命令不退休任何审查轮**。退休要拦的是「新方向来了,旧轮次不许回来把它改回去」
     // (review-retirement.ts 顶部),而原生命令整条归 CLI 本地执行、不进模型,既不是执行也
@@ -222,17 +222,14 @@ export async function continueTask(
     if (sideTurn && sessionRole === "single") reclaimTurn(taskId, turn, nativeCommand ? "native" : "side");
     // 「这一回合是任务的执行」:system(后端代写的续跑)或 executionTurn(让位交接
     // 把用户回复当启动输入)。只影响续聊判定,输入来源各自另算(见 opts.executionTurn)。
-    const execution = !!opts.system || !!opts.executionTurn || isGoalRecovery(slash);
+    const execution = !!opts.system || !!opts.executionTurn || inputExecution;
     const checkpointFollowUp = !execution && !opts.byBackend
       && task.status === "paused" && !!task.resumePrompt;
-    const goalPriorStatus = startStatus;
-    const followUpFrom = goalExecution
-      ? !isGoalRecovery(slash) && !opts.system && ["done", "failed", "canceled"].includes(goalPriorStatus) ? goalPriorStatus : null
-      : sideTurn
-        ? (task.status === "running" || task.status === "queued" ? null : task.status)
-        : !execution && (["done", "failed", "canceled"].includes(task.status) || checkpointFollowUp)
-          ? task.status
-          : null;
+    // 被哨兵隔开的那次续聊还没收口时,非旁路回合一律是它的后半段(follow-up-held.ts)。
+    const followUpFrom = turnFollowUpFrom(task, {
+      goalExecution, goalPriorStatus: startStatus, inputExecution, system: !!opts.system, sideTurn, execution, checkpointFollowUp,
+    });
+    const heldTaken = heldFollowUpTaken(task, followUpFrom);
     // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
     // nativeTurn 落库而不是只留在内存里:结算钩子跟这里可能不在同一个进程(重启后由
     // reattach 接着消费同一条流),内存标记会丢,而丢了就等于「压缩被算成一轮验证跑完」。
@@ -242,7 +239,7 @@ export async function continueTask(
       const reviewStart = await beginReviewContinuation(transaction, task, opts.turnSource ?? { role: "single" }, turnToken, directionToken, opts.reviewDelivery);
       await transaction.update(tasks)
         // 方向身份那几列同 task-run.ts:走 `turnDirectionStart`,世代跟着这一次起跑一起前进。
-        .set({ followUpFrom, nativeTurn: !!nativeCommand, goalTurn: goalExecution, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
+        .set({ followUpFrom, ...(heldTaken ? { followUpHeldFrom: null } : {}), nativeTurn: !!nativeCommand, goalTurn: goalExecution, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
         .where(eq(tasks.id, taskId));
       return reviewStart;
     }, { behavior: "immediate" });
@@ -276,7 +273,9 @@ export async function continueTask(
     if (planning) {
       sideTurn = true;
       if (sessionRole === "single") reclaimTurn(taskId, turn, "side");
-      await db.update(tasks).set({ nativeTurn: true, followUpFrom: ["running", "queued"].includes(task.status) ? null : task.status }).where(eq(tasks.id, taskId));
+      // 改成旁路回合:起跑那一笔接走的续聊原状态还回去,这次续聊没在这一轮收口。
+      await db.update(tasks).set({ nativeTurn: true, followUpFrom: ["running", "queued"].includes(task.status) ? null : task.status,
+        ...(heldTaken ? { followUpHeldFrom: task.followUpHeldFrom } : {}) }).where(eq(tasks.id, taskId));
     }
     // 真人消息会撤下上一轮没答的提问(task-question-supersede.ts),要等计划模式定完旁路身份再判;
     // 撤只在输入**确认送达**之后(拒收、结果不明都留着那道题),任何出口都由回执那一层兑现。
@@ -302,7 +301,7 @@ export async function continueTask(
     baseFallback = resolvedFallback;
     // 执行回合开跑，被裁定闸按住的旧预约触发作废（旁路回合不改代码不算；理由见 forgetHeldTrigger ①）。
     if (!sideTurn) await forgetHeldTrigger(taskId);
-    await setTaskStatus(taskId, "running");
+    await setTaskStatus(taskId, "running", { sideTurn });
     // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。摘牌
     // 刻意排在**所有可能抛错的解析之后**(执行器解析、工作目录解析都会抛):解析失败时
     // 什么都还没破坏,catch 恢复 status 就是完整恢复(审查实测:claude+haiku+high 在
@@ -560,11 +559,11 @@ export async function continueTask(
     });
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
+    const noteTarget = { out, taskId, sessionId: sessId, role: sessionRole, agentType: agent, at: turnStart };
     if (opts.system) {
-      // Backend-initiated 继续: a 〔系统〕 trace (its own bubble), NOT a 你→ reply.
-      // Persist as a structured turn (reload) and emit a matching system event (live).
-      writeTurn(out, { t: "system", agent, text: SYS_MARKER }, turnStart);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: SYS_MARKER, at: turnStart } });
+      // Backend-initiated 继续: a 〔系统〕 trace carrying who resumed it, NOT a 你→ reply.
+      const resume = { reason: opts.system, ...(sideTurn ? { side: true as const } : {}) };
+      recordSystemResumeTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, at: turnStart, resume });
     } else {
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
       // the human/backend turn as its own bubble; the matching event keeps every client live.
@@ -590,16 +589,14 @@ export async function continueTask(
     if (workspaceReset) {
       // 让用户也看见:agent 这一轮是在一个空目录上重新开始的。只发 toast 不算数,
       // 刷新后仍要能看出来(见 AGENTS.md 关于持久可见状态的约定)。
-      writeTurn(out, { t: "system", agent, text: WORKSPACE_RESET_MARKER }, turnStart);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: WORKSPACE_RESET_MARKER, at: turnStart } });
+      writeSystemNote(noteTarget, WORKSPACE_RESET_MARKER);
     }
     const baseNote = baseFallbackNote(baseFallback);
     if (baseNote) {
       // 同上,这一条说的是「基线去哪了」:任务登记的 base 已经没了(验收合并后分支被删是
       // 最常见的一种)。工作目录是不是跟着新建了、是从谁起的、登记值有没有一并改掉,措辞
       // 里三件分开说 —— 紧挨着上面那条 WORKSPACE_RESET_MARKER,含糊一点两条就会互相打架。
-      writeTurn(out, { t: "system", agent, text: baseNote }, turnStart);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: baseNote, at: turnStart } });
+      writeSystemNote(noteTarget, baseNote);
       baseFallbackTold = true;
     }
 

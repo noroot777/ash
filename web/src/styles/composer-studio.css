@@ -56,7 +56,7 @@
   .composer-opts .composer-opt > span { display:none; }
 }
 
-/* 谁来做：单任务是一颗三段胶囊；按起手式走时只读 */
+/* 谁来做：单任务是一颗三段胶囊 */
 .studio-inline-executor { flex:0 1 auto; min-width:0; margin:0 4px; }
 .studio-inline-executor > .composer-field { gap:0; }
 .studio-inline-executor > .composer-field > span { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
@@ -65,9 +65,6 @@
 .studio-inline-executor .run-target-seg > b { font-size:var(--t-xs); }
 .studio-inline-executor .effort-picker-trigger { flex-shrink:0; white-space:nowrap; font-size:var(--t-xs); }
 .studio-inline-executor .composer-field-run.is-error { margin-top:4px; white-space:normal; }
-.studio-preset-run { display:inline-flex; min-width:0; align-items:center; gap:6px; margin:0 8px; color:var(--muted); font-size:var(--t-xs); }
-.studio-preset-run > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.studio-preset-run > svg { flex-shrink:0; }
 .composer-foot-run > .send-key { margin-left:4px; }
 
 /* 回复框旧的连体发送键里那半截「发送设置」（换成共用发送键之后就可以删） */
@@ -117,8 +114,6 @@
 .studio-popover .composer-queue-after { display:grid; gap:6px; margin-top:12px; font-size:var(--t-xs); color:var(--muted); }
 .studio-popover .composer-queue-after .ui-select-trigger { width:100%; }
 .studio-popover .composer-queue-after .studio-help { margin-top:0; }
-.studio-workflow > .is-workflow { padding:16px 0 0; }
-.studio-workflow .composer-wf-label { flex-wrap:wrap; }
 .studio-effective-run { margin:6px 0 0; color:var(--muted); font-size:var(--t-xs); overflow-wrap:anywhere; }
 .studio-effective-run b { font-weight:var(--w-regular); }
 .studio-executors { display:grid; gap:16px; }

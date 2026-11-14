@@ -23,8 +23,6 @@ try {
     if (path === "/api/llm-providers") data = [{ id: "provider-cpa", name: "CPA 中转", protocol: "anthropic", baseUrl: "https://example.invalid", model: "claude-opus-4.6", protocolConversionEnabled: false, modelListMode: "pinned", pinnedModels: ["claude-opus-4.6"], context1mModels: [], hasKey: true, createdAt: "2026-09-07T00:00:00.000Z" }];
     if (path === "/api/settings") data = { defaultWorkflowId: null };
     if (path === "/api/team-presets") teamPresetRequests += 1;
-    if (path === "/api/workflows") data = [{ id: "standard", name: "验证起手式", builtin: true, disabled: false,
-      def: { workspace: "isolated", steps: [{ id: "run", kind: "run", p: { executorId: "exec-claude", model: "test-model", reasoningEffort: null, instruction: null }, fail: null }] } }];
     if (path.endsWith("/branches")) data = { branches: ["main", "develop"], current: "main" };
     // 「设为本项目默认」写的是项目行本身，不是一份全局设置。
     if (path === "/api/projects/p1" && request.method() === "PATCH") {
@@ -74,6 +72,9 @@ try {
   assert.equal(await page.locator(".studio-starters:visible").count(), 0);
   assert.equal(await page.getByLabel("启动方式").isVisible(), false);
   assert.equal(await page.getByRole("tablist", { name: "任务模式" }).getByRole("tab").count(), 3);
+  // 单任务只剩自由工作流一种做法：「工作方式」这颗入口不再占位置。
+  const work = page.getByRole("button", { name: /^工作方式：/ });
+  assert.equal(await work.count(), 0, "单任务不该再有「工作方式」入口");
 
   await page.getByRole("button", { name: /^智能体：/ }).click();
   await page.keyboard.press("Escape");
@@ -167,6 +168,9 @@ try {
   assert.equal(created[0].worktreeBase, "develop");
   assert.deepEqual(created[0].labels, ["界面优化"]);
   assert.match(created[0].body, /^保留我写好的目标/);
+  assert.equal(created[0].workflowMode, "free", "新建单任务一律是自由工作流");
+  assert.equal(created[0].workflowId, undefined, "不能再带起手式");
+  assert.equal(created[0].workflow, undefined, "不能再带起手式快照");
 
   // 「创建并排队」：无目标禁提交；团队候选置灰；提交 = 建任务 + 建队列 + 重取入队后快照。
   await page.reload();
@@ -200,36 +204,6 @@ try {
   assert.equal(await page.getByRole("radio", { name: /创建并排队/ }).isDisabled(), true, "团队模式不提供排队");
   await page.keyboard.press("Escape");
 
-  await page.reload();
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await objective.fill("验证起手式配置");
-  await page.getByRole("button", { name: /^工作方式：/ }).click();
-  await page.getByRole("tab", { name: "起手式", exact: true }).click();
-  await page.getByRole("button", { name: "展开编排" }).waitFor();
-  assert.match(await page.locator(".studio-effective-run").innerText(), /test-model.*high/);
-  assert.equal(await page.locator(".studio-inline-executor").count(), 0);
-  assert.equal(await page.locator(".studio-workflow .is-workflow").count(), 1);
-  await page.getByRole("button", { name: "展开编排" }).click();
-  await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: /^工作方式：/ }).click();
-  assert.equal(await page.getByRole("button", { name: "收起", exact: true }).isVisible(), true, "折叠浮层保留编排展开状态");
-  await page.getByRole("tab", { name: "自由工作流", exact: true }).click();
-  assert.match(await page.locator(".studio-inline-executor").innerText(), /claude-opus-4\.6/);
-  await page.getByRole("tab", { name: "起手式", exact: true }).click();
-  assert.equal(await page.getByRole("button", { name: "展开编排" }).count(), 1);
-  for (const width of [320, 390]) {
-    await resizeViewport(page, { width, height: 700 });
-    const panel = page.getByRole("dialog", { name: "工作方式", exact: true });
-    assert.equal(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth), true, "workflow overflow at " + width);
-  }
-  await openLaunch();
-  await page.getByRole("radio", { name: "仅创建" }).click();
-  await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "创建任务", exact: true }).click();
-  await page.getByTestId("created").getByRole("listitem").waitFor();
-  assert.equal(created[2].executorId, "exec-claude");
-  assert.equal(created[2].model, "test-model");
-  assert.equal(created[2].workflowMode, "preset");
   // 「设为本项目默认」：写的是项目行，而且要**把新的项目行交回上层** —— 这块面板一关就
   // 整个卸载，下次打开是按 project 重新初始化的。只更新面板内部那份的话，用户刚设完默认、
   // 重开新建任务却还预填着旧值（第 1 轮审查 P1）。

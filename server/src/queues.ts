@@ -9,6 +9,7 @@
 import type { Context, Hono } from "hono";
 import { eq, asc, inArray } from "drizzle-orm";
 import type { Task } from "@ash/shared";
+import { queueBlockedText, type QueueBlocker } from "@ash/shared/scheduled-message-wait";
 import { db } from "./db/index.js";
 import { tasks, queueItems } from "./db/schema.js";
 import { id, now } from "./util.js";
@@ -48,6 +49,9 @@ async function publishQueueMembers(taskIds: string[]): Promise<Map<string, Task>
   if (taskIds.length === 0) return new Map();
   await db.update(tasks).set({ updatedAt: now() }).where(inArray(tasks.id, taskIds));
   const published = await Promise.all(taskIds.map((taskId) => publishTaskUpdated(taskId)));
+  // 队列成员或顺序变了,托盘上「在等谁」也跟着变(pending-wait.ts)。
+  void import("./pending-wait.js").then(({ republishWaitsOf }) => republishWaitsOf(taskIds))
+    .catch((err) => console.error("[ash] 队列变更后通知托盘失败:", err));
   return new Map(published.filter((t): t is Task => t != null).map((t) => [t.id, t]));
 }
 
@@ -123,9 +127,30 @@ export function manualStartBlockers(
   return [...blockers];
 }
 
+// 挡路的那一条与被挡回时的那句话住在 shared:托盘说「在等谁」用的是同一套说法。
+export { queueBlockedText, type QueueBlocker };
+
+// 把 manualStartBlockers 给出的 id 配上标题与「在跑 / 前面没完」,在跑的排前、其余按队列
+// 位置 —— 那句话只点名第一条,该点的是用户最该去看的那一条。纯函数,认领占位的临界区里
+// 手上已有整队的行,直接用。
+export function describeQueueBlockers(
+  members: { id: string; position: number; title: string; status: string; followUpFrom?: string | null }[],
+  blockerIds: readonly string[],
+): QueueBlocker[] {
+  const wanted = new Set(blockerIds);
+  return members
+    .filter((m) => wanted.has(m.id))
+    .map((m) => {
+      const s = queueStatus(m);
+      return { blocker: { id: m.id, title: m.title.trim() || m.id, running: s === "running" || s === "queued" }, position: m.position };
+    })
+    .sort((a, b) => Number(b.blocker.running) - Number(a.blocker.running) || a.position - b.position)
+    .map(({ blocker }) => blocker);
+}
+
 // 队列前置检查(DB 包装):task 在某个 queue 里时,按 manualStartBlockers 的两类
-// 口径找出挡路成员,/run、/fire、重试回合共用。返回挡路的任务 id。
-export async function queueBlockers(taskId: string): Promise<string[]> {
+// 口径找出挡路成员,/run、/fire、重试回合共用。不在队列 = 空数组。
+export async function queueBlockerDetails(taskId: string): Promise<QueueBlocker[]> {
   const myItem = (
     await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))
   ).at(0);
@@ -140,10 +165,13 @@ export async function queueBlockers(taskId: string): Promise<string[]> {
     .from(tasks)
     .where(inArray(tasks.id, items.map((i) => i.taskId)));
   const position = new Map(items.map((i) => [i.taskId, i.position]));
-  return manualStartBlockers(
-    rows.map((r) => ({ ...r, position: position.get(r.id) ?? 0 })),
-    taskId,
-  );
+  const members = rows.map((r) => ({ ...r, position: position.get(r.id) ?? 0 }));
+  return describeQueueBlockers(members, manualStartBlockers(members, taskId));
+}
+
+/** 只要挡路的任务 id(消息补投、回复排队这类只问「挡没挡」的调用方)。 */
+export async function queueBlockers(taskId: string): Promise<string[]> {
+  return (await queueBlockerDetails(taskId)).map((b) => b.id);
 }
 
 // ── 重新排队(requeue)的两个纯函数 ────────────────────────────────────────────

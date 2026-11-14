@@ -20,6 +20,7 @@ import "./preview-workspace.css";
 import "./annotation-review.css";
 import "./preview-launcher.css";
 import { AutoTextarea } from "../components/AutoTextarea.tsx";
+import { localeTime } from "../lib/localeFormat.ts";
 
 const tools = [
   { id: "element", label: "点选", icon: Cursor },
@@ -235,7 +236,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
             onChange={(event) => setItems((current) => current.map((item) => item.id === selected.id ? { ...item, comment: event.target.value } : item))} /></label>
           {!currentSelection && <p className="preview-workspace-memory">这是之前页面的标注，元素信息保留创建时的内容。</p>}
           <p className="preview-workspace-coordinates">{selected.context.route}<br />视口 {selected.context.viewport.width} × {selected.context.viewport.height}
-            <br />滚动 {Math.round(selected.context.scroll.x)}, {Math.round(selected.context.scroll.y)} · {new Date(selected.context.capturedAt).toLocaleTimeString()}
+            <br />滚动 {Math.round(selected.context.scroll.x)}, {Math.round(selected.context.scroll.y)} · {localeTime(selected.context.capturedAt)}
             <br />文档坐标 {Math.round(selected.points[0].x)}, {Math.round(selected.points[0].y)} · {selected.points.length} 个点</p>
           {selected.element && <ElementDetails card={selected.element} />}
           <button type="button" className="preview-workspace-remove" disabled={batch.locked} onClick={() => removeItem(selected)}><Trash size={13} />删除此标注</button>

@@ -131,7 +131,7 @@ export const api = {
     request(`/projects/${id(projectId)}/preview/detect`),
   updateProject: (
     projectId: string,
-    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "useWorktreeDefault" | "previewCommand" | "previewConfig" | "commandsConfig" | "acceptCommit" | "acceptAutoCommit" | "acceptGateCommand" | "acceptGateBaseline" | "browserCdpDomains">>,
+    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "useWorktreeDefault" | "previewCommand" | "previewConfig" | "commandsConfig" | "acceptCommit" | "acceptAutoCommit" | "acceptGateCommand" | "acceptGatePrepare" | "acceptGateBaseline" | "browserCdpDomains">>,
   ): Promise<ProjectView> => request(`/projects/${id(projectId)}`, json("PATCH", patch)),
   deleteProject: (projectId: string): Promise<{ deleted: true }> =>
     request(`/projects/${id(projectId)}`, { method: "DELETE" }),

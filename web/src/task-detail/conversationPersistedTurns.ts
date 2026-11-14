@@ -22,7 +22,8 @@ import type { PersistedTurnTimes } from "./conversationTurnParts.ts";
 import { agentLabel, recordPersistedTurn, sessionRun } from "./conversationTurnParts.ts";
 import { appendTraceFragments } from "./conversationTraceFragments.ts";
 import { readSideTail, segmentTraceWindow, strayTraceSources } from "./conversationTraceSources.ts";
-import { persistedTurnOutcome } from "./turnFailure.ts";
+import { persistedTurnFacts, tailTurnFacts } from "./turnFailure.ts";
+import { resumeNoteOf } from "./turnCause.ts";
 
 type AgentItem = Extract<ConversationItem, { kind: "agent" }>;
 
@@ -74,7 +75,8 @@ function mergeTurnChunk(target: AgentItem, chunk: AgentItem): void {
   target.markerEndedAt = chunk.markerEndedAt ?? target.markerEndedAt;
   target.usage = target.usage && chunk.usage ? addUsage(target.usage, chunk.usage) : chunk.usage ?? target.usage;
   target.run = target.run ?? chunk.run;
-  target.turnOutcome = chunk.turnOutcome ?? target.turnOutcome;
+  // 回合事实整组跟着知道结局的那一截走（tailTurnFacts）：后一截认不出结局，就留着前一截的那一整组。
+  Object.assign(target, tailTurnFacts(chunk.turnOutcome != null ? chunk : target));
   target.sources = [...target.sources ?? [], ...chunk.sources ?? []];
 }
 
@@ -239,6 +241,7 @@ export function appendPersistedSession(
       // 旧版轮换文案落在用户 .md 里的原文带 Markdown 标记、措辞也不一样；旁注是纯文本
       // 渲染，不归一就会把星号原样露出来（@ash/shared/session-notes）。
       const text = normalizeSessionNoteText(segment.text);
+      const resume = resumeNoteOf(text, segment.resume);
       items.push({
         kind: "event",
         id: `persisted:system:${session.id}:${index}`,
@@ -251,6 +254,7 @@ export function appendPersistedSession(
         verify: isVerifyNote(text, segment.notice),
         aside: asideAt.has(segment.at ?? ""),
         ...(segment.notice ? { notice: segment.notice } : {}),
+        ...(resume ? { resume } : {}),
         ...origin(index),
       });
       // 回合起点跟着**切点**走：切过的地方 trace 已经另成一组，下半截要靠这个起点认领
@@ -285,7 +289,7 @@ export function appendPersistedSession(
         turnStartedAt: traceEntries.at(-1)?.turnStartedAt ?? null,
         endedAt: null,
         markerEndedAt: segment.endedAt ?? null,
-        turnOutcome: persistedTurnOutcome(session, traceEntries, turnStartedAt),
+        ...persistedTurnFacts(session, traceEntries, turnStartedAt),
         session,
         run: traceRun(traceEntries) ?? sessionRun(session),
         reviewer: reviewerOf(traceVerifyRound(traceEntries), session?.role),

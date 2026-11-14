@@ -252,7 +252,7 @@ export async function reportFreeReviewConclusion(
   taskId: string,
   stage: string,
   opts: {
-    bySessionRecovery?: boolean; verificationBasis?: unknown; expectedTask?: ConclusionTask; expectedDirectionToken?: string | null;
+    bySessionRecovery?: boolean; expectedTask?: ConclusionTask; expectedDirectionToken?: string | null;
     /** report_stage 的 `recurs`（同类问题承接，见 review-recurrence.ts）：读不懂的一条都不落，从不因它拒收结论。 */
     recurs?: unknown;
   } = {},
@@ -287,8 +287,7 @@ export async function reportFreeReviewConclusion(
   const carries = stage === "verify_failed"
     ? parseCarries(opts.recurs, extractReportFindings(report).length, new Set(round.historyRefs ?? []))
     : [];
-  const checked = await checkRegressionConclusion(taskId, freeReviewEvidenceDir(taskId, run.id, run.currentRound), stage,
-    opts.verificationBasis);
+  const checked = await checkRegressionConclusion(taskId, freeReviewEvidenceDir(taskId, run.id, run.currentRound), stage);
   await commitRegressionConclusion(checked, async (transaction) => {
     await assertConclusionTask(transaction, task);
     const currentRun = (await transaction.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, run.id)))[0];

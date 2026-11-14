@@ -7,6 +7,8 @@
 // 判据那个文件已经贴着单文件上限(根 CLAUDE.md 700 行),合同留在里面只会把它顶破。
 //
 // 这里一行运行时代码都没有(纯 interface),所以从哪边 import 都不会制造循环。
+import type { ModelFailure } from "@ash/shared";
+
 /** 持有者 = 此刻在消费这条会话的那个实例本身(同 session-waiting.ts 的 WaitingOwner)。 */
 export type StallOwner = object;
 
@@ -25,6 +27,12 @@ export interface StallFacts {
   childErrors: number;
   /** 最后一条错误的原文(已截断)。 */
   lastMessage: string;
+  /**
+   * 最后一条错误**来自模型 API 的哪一类**(执行器挂上的 `ModelFailure`,穿过子智能体包装取),
+   * 没挂就是 null —— 不沿用更早那条的:熔断的原因只能是此刻卡住它的那一条(进展一来整份停滞
+   * 就解除了,所以也不会带到下一次停滞里)。
+   */
+  lastModel: ModelFailure | null;
   /**
    * 停滞**之前**这一轮最后那条正常事件是什么(`text`/`thinking`/`tool`/…),null = 这一轮从头
    * 到尾没有过正常事件。

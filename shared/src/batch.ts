@@ -21,10 +21,9 @@ export interface BatchTaskInput {
   useWorktree?: boolean; // overrides defaults.useWorktree; omitted follows the global setting
   worktreeBase?: string | null; // base ref when this task uses a worktree
   mergeTargetBranch?: string | null;
-  workflowId?: string | null; // 起手式 id；省略则按项目→全局默认解析，并拷成快照
-  // 走哪种工作方式。省略 = 按「配不配」推导（`freeWorkflowFits`）：这一批都是普通单任务，
-  // 所以只要没给 workflowId 就是 free。给了 workflowId 还写 free 会被整批打回——
-  // 自由工作流没有起手式这个概念。
+  // 这一批都是顶层单任务，一律走自由工作流：起手式已停止新建，传 preset 或 workflowId
+  // 会被整批打回（`createWorkflowMode`）。两个字段留着只为了能把旧调用方拒得明明白白。
+  workflowId?: string | null;
   workflowMode?: TaskWorkflowMode;
   labels?: string[];
   // Each entry is resolved against sibling `key`s first; anything that doesn't
@@ -45,8 +44,8 @@ export interface BatchCreateTasksBody {
     model?: string | null;
     reasoningEffort?: string | null;
     useWorktree?: boolean; // omitted follows the project's useWorktreeDefault
-    workflowId?: string | null; // 这一批默认走哪条起手式
-    workflowMode?: TaskWorkflowMode; // 这一批默认的工作方式；任务自身可覆盖
+    workflowId?: string | null; // 同上，只为拒绝
+    workflowMode?: TaskWorkflowMode;
     worktreeBase?: string | null;
     mergeTargetBranch?: string | null;
     labels?: string[];

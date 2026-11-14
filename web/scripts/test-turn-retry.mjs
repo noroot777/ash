@@ -15,7 +15,7 @@ const target = (t, items, opts) => turnRetryTarget(t, items, opts);
 // ── 普通回合 ────────────────────────────────────────────────────────────────
 assert.deepEqual(
   target(task(), [agentItem(sess())]),
-  { sessionId: "s1", kind: "turn", exitStatus: 1 },
+  { sessionId: "s1", kind: "turn" },
   "停在 done、上一回合非零退出 → 出按钮",
 );
 assert.equal(target(task(), [agentItem(sess({ exitStatus: 0 }))]), null, "正常结束不出");
@@ -26,12 +26,12 @@ assert.equal(target(task(), [agentItem(sess({ exitStatus: null }))]), null, "没
 // 终止」的同时却一个重跑入口都没有 —— 这颗按钮本来就是为了补这种洞才存在的。
 assert.deepEqual(
   target(task(), [agentItem(sess({ exitStatus: 0, turnOutcome: "failed" }))]),
-  { sessionId: "s1", kind: "turn", exitStatus: 0 },
+  { sessionId: "s1", kind: "turn" },
   "被看门狗终止的那一轮(exit 0 + 区间 failed)必须给重跑入口",
 );
 assert.deepEqual(
   target(task(), [agentItem(sess({ exitStatus: null, turnOutcome: "failed" }))]),
-  { sessionId: "s1", kind: "turn", exitStatus: null },
+  { sessionId: "s1", kind: "turn" },
   "退出码没来得及写、但 ash 已判这一轮失败,同样要给入口",
 );
 // 反方向不许放水:权威结局说这一轮好着呢,就别因为退出码非零冒出按钮之外的新口子。
@@ -75,7 +75,7 @@ assert.equal(
 const identity = { runId: "run-1", round: 2, generation: "g-2", sessionId: "rev" };
 const at = (id, role, t, over = {}) => sess({ id, role, startedAt: t, turnStartedAt: t, ...over });
 const free = task({ workflowMode: "free" });
-const reviewTarget = (sessionId, exitStatus = null, review = identity) => ({ kind: "review", sessionId, exitStatus, review });
+const reviewTarget = (sessionId, review = identity) => ({ kind: "review", sessionId, review });
 const impl = at("impl", "single", "2026-11-01T00:00:00Z", { exitStatus: 0 });
 const rev = at("rev", "reviewer", "2026-11-01T01:00:00Z", { exitStatus: null });
 const compact = at("compact", "single", "2026-11-01T02:00:00Z", { exitStatus: 0, sideTurn: true });
@@ -103,14 +103,14 @@ assert.equal(
 const fresh = { ...identity, runId: "run-2", round: 1, sessionId: null };
 const oldStopped = at("rev-old", "reviewer", "2026-11-01T05:00:00Z", { stoppedAs: "canceled" });
 assert.deepEqual(target(free, [agentItem(oldStopped)], { reviewRetry: fresh, sessions: [impl, oldStopped] }),
-  reviewTarget(null, null, fresh), "上一条链的审查会话被手动停过,也挡不住新这一轮的入口");
+  reviewTarget(null, fresh), "上一条链的审查会话被手动停过,也挡不住新这一轮的入口");
 const oldWorked = at("rev-old", "reviewer", "2026-11-01T05:00:00Z", { exitStatus: 0 });
 assert.equal(target(free, [agentItem(oldWorked)], { reviewRetry: fresh, sessions: [impl, oldWorked] })?.sessionId, null,
   "新这一轮没有会话 → 不借上一条链的(服务端从头交代任务书)");
 // 普通回合那颗「重试」排在审查档前面:上一回合是崩掉的普通回合时,那才是用户眼前那件事。
 const crashed = at("crash", "single", "2026-11-01T03:00:00Z", { exitStatus: 1 });
 assert.deepEqual(target(free, [agentItem(crashed)], { reviewRetry: identity, sessions: [rev, crashed] }),
-  { kind: "turn", sessionId: "crash", exitStatus: 1 }, "最近一次是崩掉的普通回合 → 出的是「重试」");
+  { kind: "turn", sessionId: "crash" }, "最近一次是崩掉的普通回合 → 出的是「重试」");
 // 反过来:崩掉的普通回合之后又起过一轮(没出声的审查),那条气泡就不是「上一回合」了。
 assert.deepEqual(target(free, [agentItem({ ...crashed, startedAt: "2026-11-01T00:30:00Z", turnStartedAt: "2026-11-01T00:30:00Z" })],
   { reviewRetry: identity, sessions: [{ ...crashed, startedAt: "2026-11-01T00:30:00Z", turnStartedAt: "2026-11-01T00:30:00Z" }, rev] }),

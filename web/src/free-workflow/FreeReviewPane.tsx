@@ -17,7 +17,8 @@ import { useFreeReviewRepair } from "./FreeReviewRepairButton.tsx";
 import { FreeReviewRoundBody } from "./FreeReviewRoundBody.tsx";
 import { FreeReviewRoundsDialog } from "./FreeReviewRoundsDialog.tsx";
 import { freeReviewView } from "./freeReviewCopy.ts";
-import { deferOnly, durationText, reviewKey, reviewRoundLabel, reviewRoundTone } from "./freeReviewRounds.ts";
+import { deferOnly, durationText, noVerdictText, reviewKey, reviewRoundLabel, reviewRoundTone } from "./freeReviewRounds.ts";
+import type { ReviewRetryAction } from "../task-detail/turnRetry.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 
 interface Conclusion {
@@ -42,11 +43,13 @@ function missedReview(params: InspectorRequest): string {
   return target.round == null ? "那一轮审查" : `第 ${target.round} 轮审查`;
 }
 
-export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify }: {
+export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewRetry }: {
   task: Task;
   onOpenReview?: () => void;
   onOpenTask?: (taskId: string) => void;
   notify?: (message: string) => void;
+  /** 此刻能「继续本轮审查」的那一轮和那个动作（会话尾注上那颗同一份）。不给 = 结论行不换主按钮。 */
+  reviewRetry?: ReviewRetryAction | null;
 }) {
   const free = useFreeWorkflowState(task.id);
   const state = free.state;
@@ -56,6 +59,7 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify }: {
   // 打开时定下是哪一扇（同回复框那颗键）：审查在跑 = 调轮数，否则 = 派审/预约。
   const [dialog, setDialog] = useState<"rounds" | "review" | "post" | null>(null);
   const [postRepairBusy, setPostRepairBusy] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   const all = useMemo(() => entries(state?.reviews ?? []), [state]);
   const workspace = all.filter((entry) => entry.run.target?.kind !== "accepted_merge");
@@ -155,6 +159,23 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify }: {
     }
   };
 
+  // 这一轮还能续（服务端给了 `round.retry`，经 turnRetryTarget 成了 `reviewRetry`）：主动作就是接着
+  // 把这一轮审完。按**轮次身份**认（哪一场、第几轮），工作区审查和合并结果审查一样；另开一场（「再审
+  // 一轮」/「再审一次」）是新会话从头审，退到更多里 —— 它摆在前面的话，续这一轮在审查格上就没有
+  // 明面上的入口了（合并结果审查还没开口就断了时，会话里也没有尾注可挂）。
+  const resumable = reviewRetry
+    ? all.find(({ run, round }) => run.id === reviewRetry.review.runId && round.round === reviewRetry.review.round)
+    : undefined;
+  const resume: InspMainAction | undefined = reviewRetry && resumable ? {
+    label: "继续本轮审查",
+    onClick: () => {
+      setRetrying(true);
+      void reviewRetry.run().finally(() => setRetrying(false));
+    },
+    pri: true,
+    disabled: retrying,
+  } : undefined;
+
   const conclude = (): Conclusion => {
     if (acceptedTarget) {
       const again = (): InspMainAction => ({ label: latestPost ? "再审一次" : "开始审查", onClick: () => setDialog("post"), disabled: !notify, dialog: true });
@@ -162,9 +183,21 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify }: {
         ? [{ key: "see", label: latestPost.status === "reviewing" ? "查看审查进度" : "查看审查结果", onSelect: () => reveal(reviewKey(latestPost.id, latestPostRound.round)) }]
         : [];
       if (!latestPost) return { tone: "ok", text: "已合并，合并结果还没审过", main: again(), more: openWorkspace };
+      if (resume && resumable?.run.id === latestPost.id) {
+        return {
+          tone: resumable.round.status === "reviewing" ? "busy" : "bad",
+          text: resumable.round.status === "reviewing" ? "合并结果审查中" : `合并结果审查${noVerdictText(resumable.round)}`,
+          main: resume,
+          more: [...see, { key: "again", label: "再审一次", onSelect: () => setDialog("post"), disabled: !notify }, ...openWorkspace],
+        };
+      }
       if (latestPost.status === "reviewing") return { tone: "busy", text: "合并结果审查中", more: [...see, ...openWorkspace] };
       if (latestPost.status === "passed") return { tone: "ok", text: "合并结果已通过", main: again(), more: [...see, ...openWorkspace] };
-      if (latestPost.status === "failed") return { tone: "bad", text: "合并结果审查异常停止", main: again(), more: [...see, ...openWorkspace] };
+      if (latestPost.status === "failed") {
+        // 没结论的那一轮带上服务端判的原因；老记录没有就照旧。
+        const why = latestPostRound?.noVerdict ? noVerdictText(latestPostRound) : "异常停止";
+        return { tone: "bad", text: `合并结果审查${why}`, main: again(), more: [...see, ...openWorkspace] };
+      }
       const fix: InspMainAction | undefined = postRepairTaskId && onOpenTask
         ? { label: "打开修复任务", onClick: () => onOpenTask(postRepairTaskId) }
         : onOpenTask ? { label: postRepairBusy ? "创建中…" : "创建修复任务", onClick: () => void createPostRepair(), pri: true, disabled: postRepairBusy } : undefined;
@@ -173,6 +206,15 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify }: {
         text: "合并结果未通过",
         main: fix ?? again(),
         more: [...see, ...(fix ? [{ key: "again", label: "再审一次", onSelect: () => setDialog("post"), disabled: !notify }] : []), ...openWorkspace],
+      };
+    }
+    if (resumable && resume && resumable.run.target?.kind !== "accepted_merge") {
+      const { round } = resumable;
+      return {
+        tone: round.status === "reviewing" ? "busy" : "bad",
+        text: `第 ${round.round} 轮${round.status === "reviewing" ? "审查中" : noVerdictText(round)}`,
+        main: resume,
+        more: [...dispatchItem(), ...openWorkspace],
       };
     }
     if (reviewing) {
@@ -229,7 +271,8 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify }: {
     const last = workspace.at(-1);
     if (stale) return { tone: "stale", text: `第 ${last?.round.round ?? 1} 轮已通过，之后代码有变化`, main: canDispatch ? dispatch(true) : undefined, more: openWorkspace };
     if (last) {
-      const label = reviewRoundLabel(last.round);
+      // 没结论的那一轮带上原因（服务端判的，老记录没有就照旧叫「异常」）。
+      const label = last.round.conclusion ? reviewRoundLabel(last.round) : noVerdictText(last.round);
       const unsure = view.freshness === "unknown" && latestRun?.status === "passed";
       return {
         tone: last.round.conclusion === "verified" ? "ok" : "bad",

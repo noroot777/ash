@@ -1,7 +1,7 @@
 import { and, desc, eq, or } from "drizzle-orm";
 import { gateConfinementUnavailable, gateExecutionNotice, gateScopeNotice } from "./accept-gate-confinement.js";
 import { readGateLaunch } from "./accept-gate-launch.js";
-import { ACCEPT_GATE_DIAGNOSIS_GENERATION, normalizeAcceptGateBaseline, normalizeAcceptGateCommand, normalizeAcceptGateFailure, type AcceptGateBasis, type AcceptGateBasisMode, type AcceptGateState, type AcceptGateStatus, type AcceptGateView } from "@ash/shared/accept-gate";
+import { normalizeAcceptGateBaseline, normalizeAcceptGateCommand, normalizeAcceptGateFailure, type AcceptGateBasis, type AcceptGateBasisMode, type AcceptGateState, type AcceptGateStatus, type AcceptGateView } from "@ash/shared/accept-gate";
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects, tasks } from "./db/schema.js";
 import { gateLogReadable } from "./accept-gate-diagnosis.js";
@@ -12,6 +12,7 @@ import { existingTaskWorkspacePath, taskWorkspace } from "./task-workspace.js";
 import { gateDependencies, gateSnapshotPath, gateSourceMatches, readGateSource } from "./accept-gate-source.js";
 import { gateBaselineMatches, resolveGateBaseline } from "./accept-gate-baseline.js";
 import { decodePhysical, type GatePhysical } from "./accept-gate-physical.js";
+import { decodeGateEntryProbe, gateEntryNote } from "./accept-gate-entry.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
@@ -32,37 +33,25 @@ export async function gateMergeSource(repoPath: string, basis: Pick<TaskRow, "ac
 }
 
 /**
- * 一行记录投影成界面/交接/回执共用的那一份。**所有消费点都从这里拿**，所以结论的
- * 有效性闸只需要设在这一处（第 2 轮审查 F1）。
+ * 一行记录投影成界面/交接/回执共用的那一份。**所有消费点都从这里拿。**
  *
- * 那一闸是这么回事：第 10 轮撤回了「这条命令一行都没跑到、不要为它改代码」这个结论，但
- * 撤回只管得住生成侧 —— 撤回**之前**落盘的那些结论，刷新页面、在验收台上再交一次、跨机
- * 迁入时照旧原样端出来，于是一句已经被证伪的话继续当今天的事实用。所以这里按代号分流：
- *
- *  - 代号是当代的 → 结论与归因照常承担当前事实；
- *  - 代号不是当代的（含旧行的 null）→ 结论降到 `legacyDiagnosis`（只给人查证，带失效说明，
- *    不进交给 agent 的正式输入），归因一并作废 —— 它跟那段文字是同一次推断出来的。
- *
- * `failure` 另外归一：撤掉的 `command_missing` 这类值本身就是旧判据的结论，认不出就报
- * 「未通过、没有具体分类」，而 exit_code / timeout 是真实观测，不受代号影响。
+ * `failure` 归一：撤掉的 `command_missing` 这类值本身就是旧判据的结论，认不出就报
+ * 「未通过、没有具体分类」。入口那句话由落盘的起跑前事实现算，不另存一份结论。
  */
 export function gateView(row: GateRow): AcceptGateView {
-  const current = row.diagnosisGeneration === ACCEPT_GATE_DIAGNOSIS_GENERATION;
   return {
-    executionNotice: gateScopeNotice(row.executionMode ?? readGateLaunch(row.logPath)?.confinementId),
+    // 执行方式只说真起过的那一次：没起跑（entry_missing）就没有「实际执行」可言。
+    executionNotice: row.failure === "entry_missing" ? null
+      : gateScopeNotice(row.executionMode ?? readGateLaunch(row.logPath)?.confinementId),
     id: row.id,
     taskId: row.taskId,
     command: row.command,
+    prepareCommand: row.prepareCommand ?? null,
     cwd: row.cwd,
     status: row.status as AcceptGateStatus,
     exitCode: row.exitCode ?? null,
     failure: normalizeAcceptGateFailure(row.failure),
-    diagnosis: current ? row.diagnosis ?? null : null,
-    legacyDiagnosis: current ? null : row.diagnosis ?? null,
-    // 归因同样只在当代有效；当代里认不出的值一律当 unknown —— 旧记录里可能存着已经撤掉的
-    // `not-mine`（第 10 轮审查 F2），而 unknown 的意思正是「先核一眼」，跟撤掉它的理由同向。
-    missAttribution: !current ? null
-      : row.missAttribution === "mine" ? "mine" : row.missAttribution ? "unknown" : null,
+    entryNote: gateEntryNote(decodeGateEntryProbe(row.entryProbe), row.status),
     startedAt: row.startedAt,
     finishedAt: row.finishedAt ?? null,
     sourceCommit: row.sourceCommit ?? null,
@@ -108,6 +97,19 @@ export function acceptGateCommandOf(project: Pick<ProjectRow, "acceptGateCommand
   return normalizeAcceptGateCommand(project?.acceptGateCommand);
 }
 
+/** 准备命令（快照里先装依赖）。null = 没配，依赖照旧借用工作区那一份。 */
+export function acceptGatePrepareOf(project: Pick<ProjectRow, "acceptGatePrepare"> | null | undefined): string | null {
+  return normalizeAcceptGateCommand(project?.acceptGatePrepare);
+}
+
+/**
+ * 那一次跑的是不是现在这一套（准备命令 + 前置命令）。复用旧绿、批量预判、卡片新鲜度三处共用：
+ * 准备命令换了，装进快照的依赖就可能是另一份，那次的绿不再替现在这一套作证。
+ */
+export function sameGateRecipe(row: Pick<GateRow, "command" | "prepareCommand">, command: string | null, prepare: string | null): boolean {
+  return row.command === command && (row.prepareCommand ?? null) === prepare;
+}
+
 /**
  * 这一按**当初**拿什么放的行。没验收过 / 老数据没留 → null（如实的「不知道」）。
  *
@@ -134,6 +136,10 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   if (!task) return { command: null, running: null, latest: null, basis: null };
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0) ?? null;
   const command = acceptGateCommandOf(project);
+  // 返回**保存着的**那一条，不随前置命令有没有设而投影成 null：卡片拿它当编辑初值、算差量，
+  // 投影掉了，留空的那一格就清不掉真实配置（第 1 轮审查 #2）。用不用它由 command 决定。
+  const prepare = acceptGatePrepareOf(project);
+  const prepared = !!command && !!prepare;
   const unavailable = command ? gateConfinementUnavailable() : null;
   const executionNotice = command ? gateExecutionNotice() : null;
   const basis = await acceptBasis(task);
@@ -146,27 +152,28 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   // 或者不是这一档时一行都不读。
   const cwd = !frozen && project ? await existingTaskWorkspacePath(task, project.repoPath) : null;
   let sourceError: string | null = null;
-  const borrowed = command && baseline === "merge_preview" && cwd && head
-    ? await gateDependencies(cwd, head).then(planned => ({ cwd, dependencies: planned.dependencies }),
-      (error) => { sourceError = String(error); return undefined; })
-    : undefined;
+  // 配了准备命令就一个都不借（accept-gate-source 的 GateSource.prepared）。
+  const borrowed = !(command && baseline === "merge_preview" && cwd && head) ? undefined
+    : prepared ? { cwd, dependencies: [] }
+    : await gateDependencies(cwd, head).then(planned => ({ cwd, dependencies: planned.dependencies }),
+      (error) => { sourceError = String(error); return undefined; });
   const judged = command && project && !frozen ? await resolveGateBaseline(task, project, head, borrowed) : null;
   const target = judged?.plan ?? judged?.block ?? null;
   const baselineView = { baseline, baselineBlock: judged?.block?.error ?? null,
     baselineTarget: target?.targetBranch && target.targetCommit ? { branch: target.targetBranch, commit: target.targetCommit } : null };
   const latestRow = await latestRun(taskId);
-  if (!latestRow) return { command, running: null, latest: null, basis, unavailable, sourceError, executionNotice, ...baselineView };
+  if (!latestRow) return { command, prepare, running: null, latest: null, basis, unavailable, sourceError, executionNotice, ...baselineView };
   const view = gateView(latestRow);
   const pending = (await db.select().from(acceptGateRuns).where(and(eq(acceptGateRuns.taskId, taskId),
     or(eq(acceptGateRuns.status, "running"), eq(acceptGateRuns.processPending, true))))
     .orderBy(desc(acceptGateRuns.startedAt)).limit(1)).at(0);
-  if (pending) return { command, running: gateView(pending), latest: view, basis, sourceError, executionNotice, ...baselineView };
+  if (pending) return { command, prepare, running: gateView(pending), latest: view, basis, sourceError, executionNotice, ...baselineView };
   // 新鲜度按**现在**这棵树算：前端据它决定说「已通过，可以直接验收」还是「要重跑」。
   const frozenHead = task.acceptedSourceCommit ?? basis?.run?.sourceCommit ?? null;
-  const source = cwd && !unavailable ? await readGateSource(cwd, gateSnapshotPath(task.id, "identity"))
+  const source = cwd && !unavailable ? await readGateSource(cwd, gateSnapshotPath(task.id, "identity", prepared), prepared)
     .catch(error => { sourceError = String(error); return null; }) : null;
   // 基准也算进新鲜度：合并预览那份绿只对当时的目标分支尖端作数（被拦下的那一档没有 plan，旧绿同样不作数）。
-  const stale = latestRow.command !== command || (frozen ? !frozenHead || frozenHead !== latestRow.sourceCommit
+  const stale = !sameGateRecipe(latestRow, command, prepare) || (frozen ? !frozenHead || frozenHead !== latestRow.sourceCommit
     : !gateSourceMatches(latestRow, source) || !judged?.plan || !gateBaselineMatches(latestRow, judged.plan));
-  return { command, running: null, latest: { ...view, stale }, basis, unavailable, sourceError, executionNotice, ...baselineView };
+  return { command, prepare, running: null, latest: { ...view, stale }, basis, unavailable, sourceError, executionNotice, ...baselineView };
 }

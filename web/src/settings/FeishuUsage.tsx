@@ -1,5 +1,6 @@
 import type { FeishuStatus, ImApiKind } from "@ash/shared";
 import { API_KIND_LABELS, QUOTA_LEVELS } from "./feishuText.ts";
+import { localeNumber } from "../lib/localeFormat.ts";
 
 // 本月调用额度与发件积压。只有管理员拿得到（非管理员 usage/outbox 为 null，不渲染）。
 //
@@ -28,7 +29,7 @@ export function FeishuUsage({ usage, outbox }: {
           </small>
         </div>
         <span className="feishu-usage-figure">
-          <b>{usage.calls.toLocaleString("zh-CN")}</b> / {usage.quota.toLocaleString("zh-CN")}
+          <b>{localeNumber(usage.calls, "zh-CN")}</b> / {localeNumber(usage.quota, "zh-CN")}
           <em>（{percent}%）</em>
         </span>
       </div>
@@ -52,7 +53,7 @@ export function FeishuUsage({ usage, outbox }: {
               {kinds.map((kind) => (
                 <tr key={kind}>
                   <th scope="row">{API_KIND_LABELS[kind]}</th>
-                  <td>{(usage.byKind[kind] ?? 0).toLocaleString("zh-CN")}</td>
+                  <td>{localeNumber(usage.byKind[kind] ?? 0, "zh-CN")}</td>
                 </tr>
               ))}
             </tbody>

@@ -169,7 +169,7 @@ export function TaskInspector({
       )}
 
       <InspKv label="执行信息">
-        <InfoRunRows task={task} sessions={sessions} facts={runFacts} />
+        <InfoRunRows task={task} sessions={sessions} facts={runFacts} notify={notify} />
         <TaskChangeSummary task={task} allTasks={allTasks} onOpenReview={onOpenReview} />
         <InfoSessionRows task={task} session={latestSession} notify={notify} />
       </InspKv>
