@@ -136,7 +136,11 @@ const toolCount = (item) => item.segments.reduce((total, segment) => total + seg
     const items = agents(buildConversationItems([{ session: row, output: phase.output, trace: phase.trace }], [row], []));
     const failed = items.filter((item) => item.segments.some((segment) => segment.events.some((event) => event.kind === "error")));
     assert.equal(failed.length, 1, `${phase.label}：历史错误应完整保留一次`);
-    assert.equal(failed[0].at, olderToolAt, `${phase.label}：旧重试碎片被挪到了新回合`);
+    // 回合中间那条重试记录不再把后面的工具与错误切成一颗只有过程的气泡（4293d526），它们并进
+    // 旧回合自己那颗，所以气泡的时刻是旧回合的起点。
+    assert.equal(failed[0].at, olderStart, `${phase.label}：旧重试碎片被挪到了新回合`);
+    assert.equal(failed[0].turnStartedAt, olderStart, `${phase.label}：旧重试碎片没认回自己的回合`);
+    assert.match(failed[0].markdown, /HTTP 502/, `${phase.label}：工具与错误应并进旧回合那颗带正文的气泡`);
     assert.equal(toolCount(failed[0]), 2, `${phase.label}：旧回合应只包含自己的工具和错误`);
     const current = items.find((item) => item.at === currentStart);
     assert.equal(!!current, phase.hasCurrentTurn, `${phase.label}：空回合不应因旧错误凭空生成气泡`);

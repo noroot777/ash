@@ -595,7 +595,9 @@ const LEGACY_SYSTEM_AUTHORED = [ANSWER_PREFIX, "【自动审查未通过", "【�
 export function isUserFollowUp(seg: { kind: string; text?: string | null; bySystem?: boolean }): boolean {
   const text = seg.text ?? "";
   if (seg.kind !== "user" || !text.trim() || seg.bySystem) return false;
-  return !LEGACY_SYSTEM_AUTHORED.some((prefix) => text.startsWith(prefix));
+  // 老答复有开头带空白的（legacyQuestionRecord 同样先 trim 再认前缀），两边认法要一致。
+  const head = text.trimStart();
+  return !LEGACY_SYSTEM_AUTHORED.some((prefix) => head.startsWith(prefix));
 }
 
 export type { BranchPlanEntry, BranchPlanView, BranchDependency, FamilyAcceptanceResult } from "./branch-plan.ts";
