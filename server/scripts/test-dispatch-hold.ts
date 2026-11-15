@@ -10,7 +10,8 @@
 //   · 分组暂停和它互不相干：两样都没按住才跑；派活的那条归档了照样能接着跑，被删了名下不再被按住；
 //   · 欠账只在真起跑时销：停完马上接着跑（进程还在退出）不丢那一次，被分组拦着的账留着；
 //   · 智能体的起跑过了入口检查才碰上停，起跑前最后一道闸照样拦下、记成欠账；
-//   · 先落「停着」再清点名下（清点途中新起跑的那一位逃不出去）。
+//   · 先落「停着」再清点名下（清点途中新起跑的那一位逃不出去）；
+//   · 到点启动的入口读到旧答案时，占位之后那一次复查拦下它、不消费班次，放开后照常开新的一轮。
 //
 // 走真实的调度链路（队列推进、分组运行、路由、结算钩子），只换掉「起一个 CLI」那一步：假执行器
 // 记下每一回合拿到的输入与续的是哪条原生会话，回合一直挂着，直到测试放它走或者它被停掉。
@@ -51,6 +52,7 @@ const { readRetryTurnFacts, retryTurnRejection } = await import("../src/task-ret
 const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
 const { resumeOrRunTask } = await import("../src/task-resume.js");
 const { holdDispatched } = await import("../src/dispatch-hold.js");
+const { tick } = await import("../src/schedules.js");
 await ensureSchema();
 
 const api = new Hono();
@@ -149,6 +151,10 @@ await db.insert(tasks).values([
   task("S2", { dispatchedBy: "H4" }),
   task("H5", { status: "done", title: "先落标记再清点" }),
   task("S3", { dispatchedBy: "H5" }),
+  // 到点启动：S4 离派活的 H6 隔着 30 层，入口那次判定要一层层往上读。
+  task("H6", { status: "done", title: "到点启动碰上停" }),
+  ...Array.from({ length: 30 }, (_, index) => task(`M${index + 1}`, { status: "done", dispatchedBy: index ? `M${index}` : "H6" })),
+  task("S4", { dispatchedBy: "M30" }),
 ]);
 await db.insert(schema.queueItems).values([
   { taskId: "A", queueId: "Q", position: 0, createdAt: at },
@@ -309,7 +315,7 @@ try {
   const agentTurn = runs.claimOwnTurn("S2");
   assert.ok(agentTurn);
   try {
-    await resumeOrRunTask("S2", { reason: "run", turnHeld: agentTurn, agent: true });
+    await resumeOrRunTask("S2", { origin: "agent", reason: "run", turnHeld: agentTurn });
   } finally {
     runs.releaseTurn("S2", agentTurn);
   }
@@ -339,6 +345,46 @@ try {
   }
   assert.equal(flagAtFirstRead.length, 1);
   assert.ok(flagAtFirstRead[0], "第一次读库（清点名下）之前，停着的标记已经落库");
+
+  // ── 到点启动：入口读祖先读到一半时按了停，入口拿到旧答案 —— 占位之后那一次复查拦下，不消费班次 ─────
+  // 入口那次判定读完 H6（真读数：此刻还没停）之后、交回入口之前，让一次「全部停下」整个做完 ——
+  // 等于停落在入口判定与占位之间。读数不伪造，判据、回合锁、起跑函数都是真的。
+  await db.insert(schema.schedules).values({ id: "once-S4", taskId: "S4", kind: "once", at: new Date(Date.now() - 1_000).toISOString(), createdAt: at });
+  const execute = dbClient.execute.bind(dbClient);
+  let armed = true;
+  const entryReads: unknown[] = [];
+  (dbClient as { execute: unknown }).execute = async (stmt: Parameters<typeof execute>[0]) => {
+    const result = await execute(stmt);
+    const text = typeof stmt === "string" ? stmt : stmt.sql;
+    const args = typeof stmt === "string" ? [] : Object.values(stmt.args ?? {});
+    if (text.includes('"dispatch_hold_at"') && text.includes('"dispatched_by"') && args.includes("H6")) {
+      entryReads.push(result.rows[0]?.[result.columns.indexOf("dispatch_hold_at")] ?? null);
+      if (armed) {
+        armed = false;
+        assert.deepEqual((await holdDispatched("H6")).tree.at(-1), "S4");
+      }
+    }
+    return result;
+  };
+  try {
+    await tick();
+  } finally {
+    (dbClient as { execute: unknown }).execute = execute;
+  }
+  assert.equal(entryReads[0], null, "复现成立：入口一路读到 H6 时还没读到停着");
+  assert.ok((await row("H6")).dispatchHoldAt, "停已经落下");
+  await sleep(200);
+  assert.equal(turnsOf("S4").length, 0, "到点启动没有穿过「全部停下」");
+  assert.equal(await statusOf("S4"), "backlog", "原样留着");
+  assert.equal((await row("S4")).holdOwedBy, null, "责任留在班次上，不另记欠账");
+  const shift = (await db.select().from(schema.schedules).where(eq(schema.schedules.id, "once-S4")))[0]!;
+  assert.equal(shift.enabled, true, "once 班次没被消费");
+  assert.equal(shift.lastRunAt, null);
+  assert.equal((await post("/tasks/H6/dispatched/release")).status, 200);
+  await tick();
+  await until("放开后下一个 tick 照常开新的一轮", () => turnsOf("S4").length === 1);
+  assert.equal(turnsOf("S4")[0]!.resume, undefined, "定时开的是新一轮，不续旧会话");
+  assert.equal((await db.select().from(schema.schedules).where(eq(schema.schedules.id, "once-S4")))[0]!.enabled, false, "这才消费班次");
 
   console.log("dispatch hold: ok");
 } catch (error) {

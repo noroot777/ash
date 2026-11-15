@@ -252,7 +252,7 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
   if (next === "paused") return;
   if (next && typeof next === "object") {
     const prevStatus = next.status as TaskStatus; // 临界区里读到的占位前状态
-    void waitForStartReceipt(next.id, () => resumeOrRunTask(next.id, { reason: "queue", turnHeld: next.turn })
+    void waitForStartReceipt(next.id, () => resumeOrRunTask(next.id, { origin: "auto", reason: "queue", turnHeld: next.turn })
       .catch((err) => {
         console.error(`[ash] 队列推进续跑(${next.id})失败:`, err);
         // 接管前就抛了(读库/取指令那串 await):turnHeld 的锁还挂在我们头上 —— 由认领方
@@ -602,7 +602,7 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
           // 分组的并发上限才还是「同时 N 个在跑」。
           let run!: Promise<void>;
           spawned = await waitForStartReceipt(taskId, () => {
-            run = resumeOrRunTask(taskId, { reason: "group", turnHeld: owner });
+            run = resumeOrRunTask(taskId, { origin: "auto", reason: "group", turnHeld: owner });
             run.catch(() => {}); // 只为了别在 await 之前变成 unhandled;原 promise 照旧抛给下面
             return run;
           });

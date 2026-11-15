@@ -10,10 +10,11 @@
 // 认这个判定的入口（任何会让一条任务**自己**起跑或续跑的地方）：
 //   · 队列推进挑人、推进请求落库与重放（scheduler.ts advanceQueueAttempt、queue-advance-retry.ts）；
 //   · 分组运行拉起成员（scheduler.ts runParallel）；
-//   · 起跑前最后一道闸（turn-freeze.ts freezeFacts：队列、分组、上游唤醒、接着跑、审查重跑）；
+//   · 起跑前最后一道闸（turn-freeze.ts freezeFacts）：查多少由起跑来源定（StartOrigin，起跑入口必填），
+//     无人值守的一律全查；
 //   · 待发送消息投递（pending-delivery-facts.ts → pending-verdict.ts）、托盘与滞留告警的说法；
 //   · 哨兵了结后的队列补推（queue-monitor-hold.ts）；
-//   · 定时触发（schedules.ts）、重跑上一回合（task-retry-turn.ts）、智能体调 run_task（task-run-routes.ts）。
+//   · 定时触发（schedules.ts：入口一次、占位后再认一次，拦下不消费班次）、重跑上一回合（task-retry-turn.ts）、智能体调 run_task（task-run-routes.ts）。
 // 用户自己点「运行 / 重试」不认（分组暂停一直如此：那是用户显式要它跑）。
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";

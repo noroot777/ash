@@ -122,7 +122,7 @@ api.post("/tasks/:id/run", async (c) => {
       releaseTurn(taskId, turn);
       return c.json(await noted(taskId, "运行", { error: "任务正在验收（含发布尾段），结束后再运行", status: r.status }), 409);
     }
-    void resumeOrRunTask(taskId, { reason: "run", turnHeld: turn, actingUserId: ownerIdOf(actorOf(c)) });
+    void resumeOrRunTask(taskId, { origin: "user", reason: "run", turnHeld: turn, actingUserId: ownerIdOf(actorOf(c)) });
     return c.json({ started: true }, 202);
   }
   // **最后一个 await 之后**原子占位再启动：只读预检查后的任何 await 间隙里另一次启动
@@ -146,7 +146,7 @@ api.post("/tasks/:id/run", async (c) => {
   const started = await seatThenStart(taskId, turn, () =>
     r.mode === "duet"
       ? runDuet(taskId, { turnHeld: turn, actingUserId: acting })
-      : resumeOrRunTask(taskId, { reason: "run", turnHeld: turn, actingUserId: acting, agent: fromAgent(c) }));
+      : resumeOrRunTask(taskId, { origin: fromAgent(c) ? "agent" : "user", reason: "run", turnHeld: turn, actingUserId: acting }));
   if (!started.ok) {
     return c.json(await noted(taskId, "运行", { error: queueClaimError(started), blockedBy: started.blockers }), 409);
   }
@@ -206,7 +206,7 @@ api.post("/tasks/:id/fire", async (c) => {
   const fired = await seatThenStart(taskId, turn, () =>
     r.mode === "duet"
       ? runDuet(taskId, { turnHeld: turn, actingUserId: firedBy })
-      : runTask(taskId, { turnHeld: turn, actingUserId: firedBy })); // 全新一轮,永不 resume
+      : runTask(taskId, { origin: "user", turnHeld: turn, actingUserId: firedBy })); // 全新一轮,永不 resume
   if (!fired.ok) {
     return c.json(await noted(taskId, "触发新一轮", { error: queueClaimError(fired), blockedBy: fired.blockers }), 409);
   }
@@ -590,7 +590,7 @@ api.post("/tasks/:id/retry", async (c) => {
   const started = await seatThenStart(taskId, turn, () =>
     r.mode === "duet"
       ? resumeDuet(taskId, { turnHeld: turn, actingUserId: acting })
-      : resumeOrRunTask(taskId, { reason: "retry", turnHeld: turn, actingUserId: acting }));
+      : resumeOrRunTask(taskId, { origin: "user", reason: "retry", turnHeld: turn, actingUserId: acting }));
   if (!started.ok) {
     return c.json(await noted(taskId, "重试", { error: queueClaimError(started), blockedBy: started.blockers }), 409);
   }

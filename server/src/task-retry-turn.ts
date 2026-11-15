@@ -582,7 +582,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       handoff(
         latest.executorId
           ? continueTask(taskId, RESUME_PROMPT, { ...route, actingUserId: acting, system: "retry", resumeSessionId: latest.id, turnHeld: turn, freezeGuard: true })
-          : resumeOrRunTask(taskId, { reason: "retry", turnHeld: turn, actingUserId: acting }),
+          : resumeOrRunTask(taskId, { origin: "user", reason: "retry", turnHeld: turn, actingUserId: acting }),
         action,
       );
       return c.json({ started: true, mode: "resume" }, 202);

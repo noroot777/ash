@@ -14,6 +14,8 @@ import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js"
 import { replayQueueAdvances } from "./queue-advance-retry.js";
 import { sweepReleasedQueueMembers } from "./queue-monitor-hold.js";
 import { sweepOwedStarts } from "./dispatch-hold.js";
+import { forgetHeldStart } from "./dispatch-hold-owed.js";
+import { turnFreezeReason } from "./turn-freeze.js";
 import { reportStuckWindDowns, reportSuspectTurns } from "./turn-lock-reclaim.js";
 
 // ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
@@ -96,13 +98,24 @@ async function fire(taskId: string): Promise<boolean> {
     releaseTurn(taskId, turn);
     return false;
   }
+  // 占到之后按持久事实再认一次:入口那次 taskHoldOf 是一层层 await 往上读的,读到一半别处按了
+  // 「全部停下」(或分组暂停),入口拿到的就是旧答案,而停的那一下清点时它还没占位、无从拦起
+  // (第 2 轮审查 F1)。认出来就退避、不消费班次 —— 这一班自己就是起跑的责任,放开之后下一个
+  // tick 照常开新的一轮;停的那一下若已经给它记了欠账就撤掉(兑现欠账是从原会话续,定时要的是
+  // 新一轮)。这之后才落下的停由 runTask 末端那道闸接住(origin auto),走欠账。
+  const frozen = await turnFreezeReason(taskId, true);
+  if (frozen) {
+    if (frozen.source === "dispatch-hold") await forgetHeldStart(taskId, frozen.byTaskId);
+    releaseTurn(taskId, turn);
+    return false;
+  }
   // 队列执行认领(queue-seat.ts):排在后面的任务到了定时启动时间,也得等前项结束 ——
   // 到点启动与手动运行/消息补投/队列推进争同一个占位,否则 fire 只占任务级回合锁、
   // 按自己的状态放行,同队前项还在跑就开了第二个(第 8 轮审查拦验收 1:once 到点
   // 双跑,且班次被消费)。被挡同样不消费班次:once 保持 enabled、不写 lastRunAt,
   // 前项结束后的下一个 tick 再试。seatThenStart 会给启动挂收尾,起跑失败按守卫回滚占位。
   const started = await seatThenStart(taskId, turn, () =>
-    t.mode === "duet" ? runDuet(taskId, { turnHeld: turn }) : runTask(taskId, { turnHeld: turn }));
+    t.mode === "duet" ? runDuet(taskId, { turnHeld: turn }) : runTask(taskId, { origin: "auto", turnHeld: turn }));
   if (!started.ok) {
     return false;
   }

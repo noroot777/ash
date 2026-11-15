@@ -192,7 +192,7 @@ async function startOwed(taskId: string): Promise<void> {
       await reserveQueuedTask(reservation);
       let run!: Promise<void>;
       await waitForStartReceipt(taskId, () => {
-        run = resumeOrRunTask(taskId, { reason: "hold", turnHeld: owner });
+        run = resumeOrRunTask(taskId, { origin: "auto", reason: "hold", turnHeld: owner });
         run.catch(() => {});
         return run;
       });

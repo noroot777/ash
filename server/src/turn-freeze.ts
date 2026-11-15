@@ -38,6 +38,21 @@ export type TurnFreeze = { reason: string } & (
  */
 export type FreezeGuard = boolean | "dispatch-hold";
 
+/**
+ * 这一次起跑是谁要的。起跑入口（task-run.ts runTask、task-resume.ts resumeOrRunTask）**必填**，末端那道
+ * 闸照它定查多少（startGuard）：
+ *   user  = 用户的显式动作（点运行、立即运行、重试）：不复查，入口已经判过、用户明知故点的照旧放行；
+ *   agent = 智能体要起的（调 run_task、群聊里模型建完顺手起跑）：单查「名下全部停下」；
+ *   auto  = 其余一切无人值守的起跑（队列推进、分组运行、到点启动、接着跑、上游叫醒、接力自动续跑）：全查。
+ * 以前这件事是调用方可选地传 freezeGuard，漏传就静默享了用户那份免检 —— 到点启动就是这么在
+ * 「全部停下」之后照样起跑的。现在不说清来源编译不过。
+ */
+export type StartOrigin = "user" | "agent" | "auto";
+
+export function startGuard(origin: StartOrigin): FreezeGuard {
+  return origin === "auto" ? true : origin === "agent" ? "dispatch-hold" : false;
+}
+
 export class FrozenTurn extends Error {
   constructor(reason: string) {
     super(`回合在启动前被撤回：${reason}`);
