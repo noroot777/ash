@@ -14,6 +14,7 @@ import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { MessageText } from "../components/MessageText.tsx";
 import { LiveStrip } from "../components/LiveStrip.tsx";
+import { PrerequisiteWait } from "./PrerequisiteWait.tsx";
 import { runActivityCopy, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import { MessageAttachments } from "./Attachments.tsx";
 import { conversationFeedRows, reviewLaneMessageRoles, type ReviewLaneMessageRole } from "./conversationReviewLanes.ts";
@@ -293,6 +294,7 @@ export function ConversationFeed({
   onAskSideChat,
   reviews,
   onOpenReviewPanel,
+  onOpenTask,
   reviewRetry,
   turnRetry,
   questionHistory,
@@ -324,6 +326,8 @@ export function ConversationFeed({
    * 都没有那块面板）就在气泡下面就地摊开，不给一颗点了没反应的键。
    */
   onOpenReviewPanel?: (target?: ReviewTarget) => void;
+  /** 「在等前置」那一行点名字时打开那条任务。 */
+  onOpenTask?: (taskId: string) => void;
   /** 此刻能「继续本轮审查」的那一轮和那个动作（审查格主按钮同一份）。不给 = 尾注上不挂。 */
   reviewRetry?: ReviewRetryAction | null;
   /** 此刻能「重试这一回合」的那条会话和那个动作（turnRetry.ts）。不给 = 失败那句话后面不挂。 */
@@ -570,7 +574,11 @@ export function ConversationFeed({
             : <LiveStrip since={task.liveSince} />)}
           {/* 正文一条都没读下来时这里是空的，但那不是「还没开始跑」——`forkBlockedReason`
               在场就说明读挂了，再劝用户点运行是把失败说成了空会话。 */}
-          {!items.length && !loading && !error && !forkBlockedReason && !activityPhase && (
+          {task.status === "backlog" && (task.prerequisites?.waiting || task.prerequisites?.blocked) && !activityPhase && (
+            <PrerequisiteWait view={task.prerequisites} onOpenTask={onOpenTask} />
+          )}
+          {!items.length && !loading && !error && !forkBlockedReason && !activityPhase
+            && !(task.status === "backlog" && (task.prerequisites?.waiting || task.prerequisites?.blocked)) && (
             <div className="task-conversation-empty">
               <File size={20} aria-hidden="true" />
               <p>点击「运行」开始，执行输出会实时显示在这里。</p>

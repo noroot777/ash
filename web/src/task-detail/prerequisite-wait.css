@@ -1,0 +1,6 @@
+/* 会话里「在等前置」那一行（PrerequisiteWait.tsx）：长相同进行条，只有要你动手的那几步是琥珀色。 */
+.prereq-wait { flex-wrap: wrap; column-gap: 12px; row-gap: 2px; }
+.prereq-wait-item { display: inline-flex; min-width: 0; align-items: baseline; gap: 4px; }
+.prereq-wait-link { border: 0; background: transparent; padding: 0; color: var(--ink); font: inherit; cursor: pointer; }
+.prereq-wait-link:hover { text-decoration: underline; }
+.prereq-wait-attn { color: var(--amber); }

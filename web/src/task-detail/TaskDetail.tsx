@@ -536,6 +536,7 @@ export function TaskDetail({
                       reviews={free.state?.reviews}
                       // 会话里那一句审查结论点过来：审查格展开那一轮（feed-10 / insp-5）。
                       onOpenReviewPanel={(target) => openTab("review", target ? reviewTargetRequest(target) : undefined)}
+                      onOpenTask={onOpenTask}
                     />
                     </MemoSelectionScope>
                     <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
