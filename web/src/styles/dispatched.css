@@ -14,11 +14,6 @@
   font-size: var(--t-xs);
 }
 
-.dispatched-head > span:first-child {
-  min-width: 0;
-  flex: 1;
-}
-
 .dispatched-list {
   margin: 0;
   padding: 0;

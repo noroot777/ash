@@ -21,14 +21,11 @@ export function DispatchedInspector({
   dispatched,
   openId,
   onOpen,
-  head,
 }: {
   dispatched: readonly TaskListItem[];
   /** 此刻在左边抽屉里开着的那一条。 */
   openId: string | null;
   onOpen: (taskId: string) => void;
-  /** 格头那一句之后跟着的东西（「全部停下」那颗键）。 */
-  head?: React.ReactNode;
 }) {
   const ticking = anyTicking(dispatched);
   const [now, setNow] = useState(() => Date.now());
@@ -40,10 +37,7 @@ export function DispatchedInspector({
   const order = dispatchedOrder(dispatched);
   return (
     <div className="dispatched-pane">
-      <p className="dispatched-head">
-        <span>{[`${dispatched.length} 个`, order].filter(Boolean).join(" · ")}</span>
-        {head}
-      </p>
+      <p className="dispatched-head">{[`${dispatched.length} 个`, order].filter(Boolean).join(" · ")}</p>
       <ul className="dispatched-list" aria-label="派出的任务">
         {dispatched.map((task) => {
           const { word, tone } = dispatchedWord(task);
