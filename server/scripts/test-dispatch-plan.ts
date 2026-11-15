@@ -11,6 +11,7 @@
 //   · 起跑不记派活单自己的账：该开工的几条（同时：每一条；一个接一个：队首）跟建任务同一笔挂上「等齐就起」，
 //     之后全是那一套——同组最多同时四条、腾出名额再起；排在名额后面被停掉的不起、开机补办不挂回；进程没了开机补办照样起；
 //     告诉智能体的是「已交给调度」，不是「已起跑」；
+//   · 一个接一个时前面的等后面的成果（队列与前置合起来互相等住）：摆单时拒；卡上改成一个接一个再派时拒，单子留着、不建；
 //   · 「派出去的活交给谁」：派活单上没指明的那几条默认交给它，智能体绕过派活单直接建任务没给执行器时也交给它。
 //
 // 跑的是 PATH 上的假 claude（scheduled-messages-fixture.ts），不起真实 CLI。
@@ -320,6 +321,32 @@ try {
   };
   const running = (ids: string[]) => ids.filter((id) => runs.isRunning(id));
   assert.ok(delivered().includes("已交给调度"), "告诉智能体的是「交给调度」，不是「已起跑」：可能还在等名额、等前置、排队");
+
+  // 一个接一个跟前置合在一起会互相等住（前面的等后面的成果，后面的又排不到）：摆单时就拒；摆成「同时」、卡上改成
+  // 「一个接一个」再派的，派出时拒，单子原样留着、一条不建；改回「同时」照常派。
+  const backward = [{ key: "use", title: "消费前置成果", body: HOLD, note: "", prerequisites: ["make"] }, { key: "make", title: "生产前置成果", body: HOLD, note: "" }];
+  const refusedSerial = await propose(P, await inTurn(P), { tasks: backward, order: "serial" });
+  assert.equal(refusedSerial.status, 400, JSON.stringify(refusedSerial.body));
+  assert.match(String(refusedSerial.body.error), /「消费前置成果」要等「生产前置成果」先完成.*互相等住/);
+  const crossed = await propose(P, await inTurn(P), { tasks: backward, order: "parallel" });
+  assert.equal(crossed.status, 200, JSON.stringify(crossed.body));
+  await endTurn(P);
+  const kidsBeforeCross = (await kidsOf(P)).length;
+  const crossPick = [0, 1].map((index) => ({ index, target: { agentType: "claude", executorId: null, model: null, reasoningEffort: null } }));
+  const flipped = await send("POST", `/tasks/${P}/dispatch-plan/launch`, { planId: crossed.body.planId, order: "serial", items: crossPick });
+  assert.equal(flipped.status, 409, JSON.stringify(flipped.body));
+  assert.match(String(flipped.body.error), /互相等住。改成「同时」再派/);
+  assert.equal((await kidsOf(P)).length, kidsBeforeCross, "一条都没建");
+  assert.equal(((await send("GET", `/tasks/${P}`)).body as unknown as Task).dispatchPlan?.id, crossed.body.planId, "单子原样还在");
+  const asParallel = await send("POST", `/tasks/${P}/dispatch-plan/launch`, { planId: crossed.body.planId, order: "parallel", items: crossPick });
+  assert.equal(asParallel.status, 200, JSON.stringify(asParallel.body));
+  const crossIds = (asParallel.body.tasks as { id: string }[]).map((kid) => kid.id);
+  await waitFor(() => delivered().includes(crossIds[1]!), "答复没有送进会话");
+  await waitFor(() => settled(P), "续上的那一轮没有结算");
+  await waitFor(() => runs.isRunning(crossIds[1]!), "同时派出：被等的那条照常起跑");
+  await stopAll([crossIds[1]!]);
+  await send("POST", `/tasks/${crossIds[0]}/stop`);
+  console.log("✓ 一个接一个时前面的等后面的：摆单就拒，卡上改成一个接一个再派也拒（单子留着、不建）；同时照常派");
 
   // 同时派出六条：同组同时最多四条，其余挂着请求等名额；用户停掉排在名额后面的那一条，腾出名额之后它不起，
   // 开机补办那一扫也不替它挂回去；剩下那一条照常接着起。

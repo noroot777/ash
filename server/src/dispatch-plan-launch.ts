@@ -32,7 +32,7 @@ import { deliverPendingMessages, pendingMessageRow, publishPendingMessages } fro
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
 import { createTasks, type TaskRow } from "./task-store.js";
 import { id, now, taskBody } from "./util.js";
-import { launchBubble, launchReply, type LaunchPick, type TargetLabel } from "./dispatch-plan.js";
+import { launchBubble, launchReply, serialOrderConflict, type LaunchPick, type TargetLabel } from "./dispatch-plan.js";
 import type { AgentType } from "@ash/shared";
 
 class PlanClaimLost extends Error {}
@@ -80,6 +80,11 @@ export async function launchDispatchPlan(c: Context, task: TaskRow, plan: Dispat
   const groupId = id();
   // 一条以上才谈得上「一个接一个」：单独一条的串行组没有队列，调度会退化成并行还打一句警告。
   const groupMode = picks.length > 1 ? order : "parallel";
+  // 卡上可以把「同时」改成「一个接一个」：照这个顺序排队会互相等住的，单子原样留着、说清楚，不建。
+  const deadlock = groupMode === "serial"
+    ? serialOrderConflict(picks.map((pick, at) => ({ title: plan.items[pick.index]!.title, ...specs[at]! })))
+    : null;
+  if (deadlock) return { status: 409, body: { error: `${deadlock}。改成「同时」再派，或者发回去让它调整顺序` } };
   const base = Date.now();
   const rows = picks.map((pick, at) => {
     const item = plan.items[pick.index]!;

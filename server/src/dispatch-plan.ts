@@ -53,6 +53,20 @@ export function normalizeTarget(raw: RawTarget, scope: ExecutorScope, where: str
 }
 
 /** 智能体交来的一批：逐条核，有一条不对整批退回，不半收。 */
+/**
+ * 一个接一个时，排在前面的那条不能等后面那条的成果：队列只放队首去跑，前面的等着后面的交成果，后面的又排不到，
+ * 两条互相等住、谁都不开工。前置图本身无环也会这样，所以摆单和派出（卡上可以把「同时」改成「一个接一个」）
+ * 都按这一处核。同批之外的已有任务不在队列里，不受影响。
+ */
+export function serialOrderConflict(items: { title: string; key?: string; prerequisites?: string[] }[]): string | null {
+  const position = new Map(items.flatMap((item, index) => (item.key ? [[item.key, index] as const] : [])));
+  for (const [index, item] of items.entries()) {
+    const later = item.prerequisites?.map((ref) => position.get(ref)).find((at) => at !== undefined && at > index);
+    if (later !== undefined) return `「${item.title}」要等「${items[later]!.title}」先完成，可一个接一个时它排在前面，两条会互相等住`;
+  }
+  return null;
+}
+
 export function normalizeProposal(
   body: { order?: unknown; tasks?: unknown },
   scope: ExecutorScope,
@@ -96,6 +110,8 @@ export function normalizeProposal(
       ...(prerequisites?.length ? { prerequisites } : {}),
     });
   }
+  const deadlock = order === "serial" ? serialOrderConflict(items) : null;
+  if (deadlock) return { error: `${deadlock}：改成 parallel，或把被等的那条排到前面` };
   return { order, items };
 }
 
