@@ -9,8 +9,8 @@
 // 每条前置贡献哪一版：
 //   · 站稳判定当时核实过的那一版（prerequisite-standing.ts 的 `commit`）—— 不在这里另读分支头，理由见那份文件头；
 //     用 worktree 的交出分支上的提交，不用 worktree 的交出项目目录当时检出的提交，一视同仁；
-//     判定没给出的（已验收的）取它的成果提交（分支头；分支被验收清理掉了就取验收时存下的那一版），
-//     取不到也没关系：已验收的成果在目标分支上；
+//     判定没给出的（已验收的）取它此刻读得到的成果提交（`deliveredCommit`）；读不到就不开工 ——
+//     「已验收」只说明它进过自己的目标分支，不说明下游的目标里有；
 //   · 这一版已经进了目标分支（前置已经合入，含压缩合入、经提交历史调整后合入 —— 判据是 task-branch-plan.ts
 //     `versionDelivery` 那一份，验收依赖问的也是它）→ 不再单独合，记成目标分支那一版。
 // 一条已经包含另一条的（它本来就建在那条上）只留包含者，不重复合；剩下好几条时在**不碰任何工作区**的
@@ -52,7 +52,10 @@ export type CertifiedPrerequisite = { task: TaskRow; commit: string | null };
 /** 起点候选：一个提交，和它代表谁（前置；`owners` 为空 = 目标分支）。 */
 type Pick = { commit: string; owners: TaskRow[]; target: boolean };
 
-const accepted = (task: TaskRow) => isAcceptedStage(task.stage as TaskStage | null);
+// 已验收的也一样：交出的那一版读不到，就证明不了下游拿得到它的代码（见 prerequisite-standing.ts `deliveredCommit`）。
+const missing = (task: TaskRow) => isAcceptedStage(task.stage as TaskStage | null)
+  ? `${label(task)}已经验收，但它交出的那一版在仓库里读不到了（分支、验收记下的提交都找不到），证明不了能拿到它的代码；恢复那些提交，或去掉这条前置`
+  : `${label(task)}的分支和成果提交都找不到了，拿不到它的代码`;
 
 export async function prerequisiteStart(repoPath: string, task: TaskRow, prerequisites: CertifiedPrerequisite[]): Promise<PrerequisiteStart> {
   const repo = expandHome(repoPath);
@@ -67,10 +70,7 @@ export async function prerequisiteStart(repoPath: string, task: TaskRow, prerequ
   };
   for (const { task: prerequisite, commit: certified } of prerequisites) {
     const result = certified ?? await deliveredCommit(repo, prerequisite);
-    if (!result) {
-      if (accepted(prerequisite) && targetHead) { inherited.set(prerequisite.id, targetHead); continue; }
-      return { ok: false, reason: `${label(prerequisite)}的分支和成果提交都找不到了，拿不到它的代码` };
-    }
+    if (!result) return { ok: false, reason: missing(prerequisite) };
     if (targetHead && target && await versionDelivery(repo, prerequisite.id, prerequisite, result, target) !== null) {
       inherited.set(prerequisite.id, targetHead);
       continue;
@@ -121,8 +121,8 @@ export async function prerequisiteStart(repoPath: string, task: TaskRow, prerequ
 
 /**
  * 不用 worktree 的下游在项目目录里干活：每条前置交出的那一版都得已经在那里检出的代码里，它才拿得到。
- * 判据跟验收依赖同一份（`versionDelivery`，对着项目目录的 HEAD 问）；已验收、又取不到成果提交的，
- * 认目标分支：项目目录没检出目标分支时照样要对得上。给出每条前置交给它的那一版。
+ * 判据跟验收依赖同一份（`versionDelivery`，对着项目目录的 HEAD 问）；交出的那一版读不到的不开工。
+ * 给出每条前置交给它的那一版。
  */
 export async function checkoutHasPrerequisites(repoPath: string, task: TaskRow, prerequisites: CertifiedPrerequisite[]): Promise<PrerequisiteStart> {
   const repo = expandHome(repoPath);
@@ -130,12 +130,8 @@ export async function checkoutHasPrerequisites(repoPath: string, task: TaskRow, 
   if (!head) return { ok: false, reason: "项目目录里还没有任何提交，没有可开工的起点" };
   const inherited = new Map<string, string>();
   for (const { task: prerequisite, commit: certified } of prerequisites) {
-    let result = certified ?? await deliveredCommit(repo, prerequisite);
-    if (!result && accepted(prerequisite)) {
-      const target = prerequisite.acceptedTargetBranch || prerequisite.mergeTargetBranch;
-      result = target ? await commitAt(repo, target) : null;
-    }
-    if (!result) return { ok: false, reason: `${label(prerequisite)}的分支和成果提交都找不到了，拿不到它的代码` };
+    const result = certified ?? await deliveredCommit(repo, prerequisite);
+    if (!result) return { ok: false, reason: missing(prerequisite) };
     if (await versionDelivery(repo, prerequisite.id, prerequisite, result, head) === null) {
       return { ok: false, reason: `${label(task)}不用独立工作区，项目目录当前检出的代码里还没有${label(prerequisite)}交出的那一版；把它合进项目目录当前的分支后会自动开工` };
     }

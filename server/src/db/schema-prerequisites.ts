@@ -29,6 +29,9 @@ export const taskPrerequisites = sqliteTable("task_prerequisites", {
  * - `launchedAt` 非空 = 开工起点已经按前置定下来了。之后的运行不再看前置，前置也不能再加减。
  * - `blocked` = 前置都站稳了却起不了跑的原因（几条前置的改动合不到一起），等用户处理；前置一变就重判。
  * - `actingUserId` = 当初要求起跑的人：等齐之后替他起跑，这一轮烧谁的额度照他。
+ * - `installJournal` = 开工判定**打算**把工作区换到的每一版（JSON 数组，只增不删），换之前先记、开工落定时清空。
+ *   换到一半断掉（哪怕连断几次、中间前置还动过）之后，工作区停在其中任何一版上都认得出是 ash 换的、
+ *   不是它自己的提交（../prerequisite-install.ts）。
  */
 export const taskPrerequisiteLaunches = sqliteTable("task_prerequisite_launches", {
   taskId: text("task_id").primaryKey(),
@@ -37,6 +40,7 @@ export const taskPrerequisiteLaunches = sqliteTable("task_prerequisite_launches"
   actingUserId: text("acting_user_id"),
   blocked: text("blocked"),
   launchedAt: text("launched_at"),
+  installJournal: text("install_journal", { mode: "json" }).$type<string[]>(),
 });
 
 export async function ensurePrerequisiteSchema(client: Client): Promise<void> {
@@ -48,7 +52,9 @@ export async function ensurePrerequisiteSchema(client: Client): Promise<void> {
     CREATE INDEX IF NOT EXISTS task_prerequisites_prerequisite_idx ON task_prerequisites (prerequisite_id);
     CREATE TABLE IF NOT EXISTS task_prerequisite_launches (
       task_id TEXT PRIMARY KEY, requested_at TEXT, source TEXT, acting_user_id TEXT,
-      blocked TEXT, launched_at TEXT
+      blocked TEXT, launched_at TEXT, install_journal TEXT
     );
   `);
+  // 这一列晚于表本身：早先建过表的库补上（已经有了就吞掉那句错）。
+  await client.execute("ALTER TABLE task_prerequisite_launches ADD COLUMN install_journal TEXT").catch(() => undefined);
 }

@@ -55,11 +55,21 @@ async function latestReview(taskId: string) {
   return { run, round };
 }
 
-/** 一条用 worktree 的任务交出来的那一版：分支头，分支没了取验收时存下的。 */
+/**
+ * 一条任务交出来的那一版，**此刻在仓库里读得到的**：分支头；分支没了取验收时存下的成果（私有 ref、成果提交）；
+ * 那些也读不到（换过克隆，`refs/ash/*` 和压缩前的源提交都不在了）就取验收合入的那个提交 —— 它在目标分支上，
+ * 内容里一定有这份成果。都读不到返回 null。
+ *
+ * **「已验收」本身不是证据**：它只说明某一版进过它自己的目标分支，不说明下游手里有。所以这里只交出读得到的
+ * 提交，有没有、要不要合，交给调用方按 `versionDelivery` 对着下游的目标判（prerequisite-start-point.ts）。
+ */
 export async function deliveredCommit(repo: string, task: TaskRow): Promise<string | null> {
+  const readable = (commit: string | null) => commit ? commitAt(repo, commit) : Promise.resolve(null);
+  const merged = task.acceptedMergeCommit && task.acceptedMergeCommit !== task.acceptedBaseCommit ? task.acceptedMergeCommit : null;
   return await commitAt(repo, await resolveWorktreeBranchName(repo, task.id))
     ?? await commitAt(repo, acceptedHeadRef(task.id))
-    ?? (task.acceptedSourceCommit ? await commitAt(repo, task.acceptedSourceCommit) : null);
+    ?? await readable(task.acceptedSourceCommit)
+    ?? await readable(merged);
 }
 
 /**

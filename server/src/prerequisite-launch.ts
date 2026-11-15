@@ -33,6 +33,7 @@ import { holdForPrerequisitesLocked, withPrerequisiteLock } from "./prerequisite
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { forgetStanding, isRepublishingView, republishPrerequisiteView } from "./prerequisite-view.js";
 import { freeSlot, onSlotFreed, takeSlot } from "./launch-slots.js";
+import type { TurnIdentity } from "./turn-lock.js";
 
 export { holdForPrerequisites, type LaunchSource, type PrerequisiteHold } from "./prerequisite-gate.js";
 
@@ -90,25 +91,33 @@ async function releaseOne(taskId: string): Promise<void> {
   try {
     const { claimOwnTurn, releaseTurn } = await import("./runs.js");
     const { isAcceptingTask } = await import("./acceptance-lock.js");
-    // 「请求还在 → 认领回合 → 定起点」在同一把锁里做完，跟停止键（withdrawPrerequisiteRequest）排成先后：
-    // 锁外读到的那份请求可能已经被撤回了，锁里重读一遍才算数；认领之后再来的停止，冻住的是这一次起跑。
-    const claimed = await withPrerequisiteLock(taskId, async () => {
-      const current = await launchRecord(taskId);
-      if (!current?.requestedAt) return null;
-      const turn = claimOwnTurn(taskId, "single");
-      if (!turn) return null;
-      if (isAcceptingTask(taskId) || await holdForPrerequisitesLocked(taskId, { source: "release", actingUserId: current.actingUserId })) {
-        releaseTurn(taskId, turn);
-        return null;
-      }
-      return { turn, actingUserId: current.actingUserId };
-    });
-    if (!claimed) return;
     const { seatThenStart } = await import("./queue-seat.js");
     const { resumeOrRunTask } = await import("./task-resume.js");
+    // 「请求还在 → 认领回合 → 定起点」在同一把锁里做完，跟停止键（withdrawPrerequisiteRequest）排成先后：
+    // 锁外读到的那份请求可能已经被撤回了，锁里重读一遍才算数；认领之后再来的停止，冻住的是这一次起跑。
+    //
+    // 回合从认领到交给 seatThenStart（之后由它负责还，queue-seat.ts）之间归这里：没交出去就退出 —— 不论
+    // 正常返回还是抛错（定起点要写 git、读写库，哪一步都可能失败）—— 一律按认领时的那一代身份还回去，
+    // 否则这条任务谁都起不了（第 3 轮审查实测）。
+    let owned: TurnIdentity | null = null;
+    let claimed: { turn: TurnIdentity; actingUserId: string | null } | null = null;
+    try {
+      claimed = await withPrerequisiteLock(taskId, async () => {
+        const current = await launchRecord(taskId);
+        if (!current?.requestedAt) return null;
+        owned = claimOwnTurn(taskId, "single");
+        if (!owned) return null;
+        if (isAcceptingTask(taskId) || await holdForPrerequisitesLocked(taskId, { source: "release", actingUserId: current.actingUserId })) return null;
+        return { turn: owned, actingUserId: current.actingUserId };
+      });
+    } finally {
+      if (owned && !claimed) releaseTurn(taskId, owned);
+    }
+    if (!claimed) return;
+    const { turn, actingUserId } = claimed;
     let run: Promise<void> | null = null;
-    const started = await seatThenStart(taskId, claimed.turn, () => {
-      run = resumeOrRunTask(taskId, { reason: "wake", turnHeld: claimed.turn, actingUserId: claimed.actingUserId });
+    const started = await seatThenStart(taskId, turn, () => {
+      run = resumeOrRunTask(taskId, { reason: "wake", turnHeld: turn, actingUserId });
       return run;
     });
     if (!started.ok) return;

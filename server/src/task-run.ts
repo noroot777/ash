@@ -107,8 +107,16 @@ async function runHeldTask(
   }
   // 有前置、还没开过工的：/fire、定时到点、重试这些程序化路径也汇到这里，前置没站齐就不起（请求已记下，
   // 等齐由放行那一路起），站齐了这一问顺手定下起点（prerequisite-gate.ts 文件头）。
-  const { holdForPrerequisites } = await import("./prerequisite-gate.js");
-  if (await holdForPrerequisites({ id: taskId }, { source: "turn", actingUserId: opts.actingUserId })) {
+  // 这一问要写 git、读写库，抛错时入口交进来的回合同样要还（不还就没人起得了它）。
+  let prerequisiteHold: { reason: string } | null;
+  try {
+    const { holdForPrerequisites } = await import("./prerequisite-gate.js");
+    prerequisiteHold = await holdForPrerequisites({ id: taskId }, { source: "turn", actingUserId: opts.actingUserId });
+  } catch (error) {
+    if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
+    throw error;
+  }
+  if (prerequisiteHold) {
     if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
     return;
   }

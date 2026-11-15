@@ -6,18 +6,21 @@
 //   · 都没有：起跑时按记下的起点新建，什么都不用做。
 // 里面已经有自己的改动或提交的，不替它做决定，挡住并说清楚。
 //
-// 「它从来没动过的提交」认两个：建任务时冻结的那个（`worktreeStartCommit`），和上一次开工判定写下的意图
-// （`baseRef`）。后者是给半路断掉的那一次留的：意图写下、目录已经换过去、开工还没落库时进程退出，
-// 重启后那个目录停在意图上，不能因此被当成「有自己的提交」永远挡住。
+// 「它从来没动过的提交」认：建任务时冻结的那个（`worktreeStartCommit`），和开工判定**打算换到过的每一版**
+// （`task_prerequisite_launches.install_journal`，只增不删）。后者是给半路断掉的那几次留的：记下、换过去、
+// 开工还没落库时进程退出，重启后前置又动了、这一次又记下新的一版、还没换又断了 —— 目录停在哪一版上，
+// 那一版都在日志里，认得出是 ash 换的。只记一个会被覆盖的意图做不到这一点：第二次断掉就丢了上一次的身份。
 //
-// 顺序（prerequisite-gate.ts）：先写意图 → 再换目录 / 挪分支 → 最后才落「已开工」。任何一步之后断掉，
-// 留下的都是「还没开工」，下一次判定从头核对；不会出现「库里说开工了、目录还是旧的」。
+// 顺序（prerequisite-gate.ts）：先记日志 → 再换目录 / 挪分支 → 最后才落「已开工」并清空日志。任何一步之后
+// 断掉，留下的都是「还没开工」，下一次判定从头核对；不会出现「库里说开工了、目录还是旧的」。
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { execFileText as exec } from "./exec.js";
 import { expandHome, resolveWorktreeBranchName, worktreePathFor } from "./git.js";
-import { baseRef, commitAt } from "./task-branch-plan.js";
-import type { tasks } from "./db/schema.js";
+import { commitAt } from "./task-branch-plan.js";
+import { db } from "./db/index.js";
+import { taskPrerequisiteLaunches, type tasks } from "./db/schema.js";
+import { launchRecord } from "./prerequisite-store.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -31,8 +34,8 @@ const label = (task: TaskRow) => `「${task.title || task.id}」`;
 /** 要把下游换到 `start` 得做什么；有它自己的东西挡着就给出原因。只读，不改任何东西。 */
 export async function planInstall(repoPath: string, task: TaskRow, start: string): Promise<{ ok: true; plan: InstallPlan } | { ok: false; reason: string }> {
   const repo = expandHome(repoPath);
-  const intent = await commitAt(repo, baseRef(task.id));
-  const untouched = (head: string | null) => !!head && (head === task.worktreeStartCommit || head === intent);
+  const journal = (await launchRecord(task.id))?.installJournal ?? [];
+  const untouched = (head: string | null) => !!head && (head === task.worktreeStartCommit || journal.includes(head));
   const path = worktreePathFor(repoPath, task.id);
   // 只认挂着 `.git` 的活工作树：清理留下的空壳里跑 git 会上溯到主仓，读到的是主仓的提交（git.ts worktreeLeftoverAt）。
   if (existsSync(join(path, ".git"))) {
@@ -57,4 +60,13 @@ export async function planInstall(repoPath: string, task: TaskRow, start: string
 export async function applyInstall(repoPath: string, plan: InstallPlan, start: string): Promise<void> {
   if (plan.kind === "directory") await exec("git", ["-C", plan.path, "reset", "--keep", start]);
   else if (plan.kind === "branch") await exec("git", ["-C", expandHome(repoPath), "update-ref", plan.ref, start, plan.from]);
+}
+
+/** 换之前先把这一版记进日志（见文件头）。已经记过的不重复记。 */
+export async function journalInstall(taskId: string, commit: string): Promise<void> {
+  const journal = (await launchRecord(taskId))?.installJournal ?? [];
+  if (journal.includes(commit)) return;
+  const next = [...journal, commit];
+  await db.insert(taskPrerequisiteLaunches).values({ taskId, installJournal: next })
+    .onConflictDoUpdate({ target: taskPrerequisiteLaunches.taskId, set: { installJournal: next } });
 }

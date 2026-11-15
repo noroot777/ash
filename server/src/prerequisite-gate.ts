@@ -30,7 +30,7 @@ import { baseRef, commitAt } from "./task-branch-plan.js";
 import { prerequisiteStandings, type PrerequisiteStanding } from "./prerequisite-standing.js";
 import { launchRecord, prerequisiteEdges } from "./prerequisite-store.js";
 import { checkoutHasPrerequisites, prerequisiteStart } from "./prerequisite-start-point.js";
-import { applyInstall, planInstall } from "./prerequisite-install.js";
+import { applyInstall, journalInstall, planInstall } from "./prerequisite-install.js";
 import { republishPrerequisiteView } from "./prerequisite-view.js";
 import { alertLine, appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -137,9 +137,10 @@ async function attemptGate(taskId: string, request: LaunchRequest): Promise<Prer
     // 定下之前再判一遍：这一段里有前置又动了（开了一轮、交出的版本变了），这一次作废重来。
     const again = await prerequisiteStandings(ids);
     if (ids.some((id) => !sameStanding(standings.get(id)?.standing, again.get(id)?.standing))) return RETRY;
-    // 先写意图、再把代码真的放到位、最后才落「已开工」（顺序的理由见 prerequisite-install.ts 文件头）。
+    // 先记日志、再把代码真的放到位、最后才落「已开工」（顺序的理由见 prerequisite-install.ts 文件头）。
     if (task.useWorktree) {
       const repo = expandHome(project.repoPath);
+      await journalInstall(taskId, start.commit);
       const before = await commitAt(repo, baseRef(task.id));
       await exec("git", ["-C", repo, "update-ref", baseRef(task.id), start.commit]);
       try {
@@ -165,14 +166,14 @@ async function attemptGate(taskId: string, request: LaunchRequest): Promise<Prer
       // 就此了结；放行那一路自己放出来的，要等真起跑了才了结（见 prerequisite-launch.ts releaseOne）——
       // 它只认已经挂着的那一笔，不新建：停止键撤回了的，不能被放行那一路复活。
       await tx.insert(taskPrerequisiteLaunches)
-        .values({ taskId, launchedAt: now(), blocked: null, requestedAt: null })
+        .values({ taskId, launchedAt: now(), blocked: null, requestedAt: null, installJournal: null })
         .onConflictDoUpdate({
           target: taskPrerequisiteLaunches.taskId,
-          set: { launchedAt: now(), blocked: null, ...(request.source === "release" ? {} : { requestedAt: null }) },
+          set: { launchedAt: now(), blocked: null, installJournal: null, ...(request.source === "release" ? {} : { requestedAt: null }) },
         });
       return true;
     });
-    // 边变了：工作区已经换到这次的起点、意图也记着它，下一次判定从这里接着核对（换过去的目录认得出没动过）。
+    // 边变了：工作区已经换到这次的起点、日志里记着它，下一次判定从这里接着核对（换过去的目录认得出没动过）。
     if (!committed) return RETRY;
     await appendTaskTimeline(taskId, receiptLine(`前置都站稳了，从 ${certified.map(({ task: p }) => label(p)).join("、")} 的代码开工。`));
     await republishPrerequisiteView([taskId]);
