@@ -26,6 +26,7 @@ import { CALL_COPY, DISPATCH_SLASH_ITEM, dispatchBaseOptions, parseDispatchComma
 import { useDispatchBaseContext, useReplyCall } from "./useReplyCall.ts";
 import { CallCancelKey, DispatchBaseSegment, ReplyCallDock } from "./ReplyCallDock.tsx";
 import { ReplySendKey } from "./ReplySendKey.tsx";
+import { DispatchDefaultRow, DispatchDefaultSegment } from "./ReplyDispatchDefault.tsx";
 import type { ReplyBoxProps } from "./replyBoxProps.ts";
 import { useStandingExecutor } from "./useStandingExecutor.ts";
 import { useExecutorProfiles } from "./useExecutorProfiles.ts";
@@ -68,6 +69,8 @@ export function ReplyBox({
   override,
   onAnswer,
   onDispatch,
+  onLaunchPlan,
+  onDispatchTargetChange,
   asking,
 }: ReplyBoxProps) {
   const draft = useTaskReplyDraft(task.id);
@@ -517,7 +520,7 @@ export function ReplyBox({
       {commandResult?.taskId === task.id && <p className="task-reply-command-result" role="status" aria-label="命令结果">{commandResult.text}</p>}
       {topRail}
       </div>
-      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} hostId={task.id} />}
+      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} onLaunchPlan={onLaunchPlan} hostId={task.id} />}
       {!covering && <div className="task-reply-box">
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />
         <AgentPlate name={activeAgent} />
@@ -626,7 +629,11 @@ export function ReplyBox({
             onEffortChange={target ? calling.commitEffort : commitStandingEffort}
             tail={call && dispatching && baseOptions.length > 1
               ? <DispatchBaseSegment options={baseOptions} value={call.base} disabled={configDisabled} onChange={calling.setBase} />
-              : undefined}
+              : !target && task.dispatchTarget ? <DispatchDefaultSegment value={task.dispatchTarget} profiles={profiles} /> : undefined}
+            // 没叫人时点开智能体那一段，列表下面一行「派出去的活交给谁」。
+            agentExtra={!target && onDispatchTargetChange ? <DispatchDefaultRow value={task.dispatchTarget ?? null}
+              here={standing.config} types={registeredTypes.length ? registeredTypes : [activeAgent]} profiles={profiles}
+              disabled={configDisabled} onChange={(next) => void onDispatchTargetChange(next).catch((error) => setSendError(error instanceof Error ? error.message : String(error)))} /> : undefined}
           />
           {target && <CallCancelKey agent={target.agent} onCancel={cancelCall} />}
           <ReplySendKey

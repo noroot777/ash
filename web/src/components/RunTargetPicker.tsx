@@ -43,6 +43,7 @@ export function RunTargetPicker({
   unsetText = "还没指定",
   effortFollowLabel,
   tail,
+  agentExtra,
   onCommit,
   onEffortChange,
 }: {
@@ -73,6 +74,8 @@ export function RunTargetPicker({
   effortFollowLabel?: string;
   /** 排在三段后面的那一段（回复框里派出去时的「从哪开工」）；用 `run-target-seg run-target-seg--tail`。 */
   tail?: ReactNode;
+  /** 点开智能体那一段，列表下面多出的一行（回复框里「派出去的活交给谁」）。 */
+  agentExtra?: ReactNode;
   onCommit: (next: AgentModelSelection) => void;
   /** 不传就只画前两段——讨论者那种服务端根本不收智能水平的表面。 */
   onEffortChange?: (effort: string) => void;
@@ -171,6 +174,7 @@ export function RunTargetPicker({
           currentExecutorId={selection?.executorId ?? null}
           triggerRef={agentRef}
           anchorRef={agentRef}
+          extra={agentExtra}
           onCommit={(next) => {
             // 点回同一个智能体 = 什么都没改。照常提交会把模型/智能水平当成「换了人」
             // 一并清掉，等于惩罚了「点开看看又关上」；但连续配置仍应向右打开模型。

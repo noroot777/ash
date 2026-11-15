@@ -29,6 +29,7 @@ import { ReplyBox } from "./ReplyBox.tsx";
 import { answerFromHost, useDispatchSignals } from "./dispatched/useDispatchSignals.tsx";
 import { replySend } from "./replySend.ts";
 import { replyDispatch } from "./replyDispatch.ts";
+import { launchPlanFromHost, saveDispatchTarget } from "./dispatchPlanActions.ts";
 import { dispatchNotes } from "./dispatchNotes.ts";
 import { DispatchNoteLine } from "./DispatchNoteLine.tsx";
 import { LeftDrawerProvider } from "../components/LeftDrawer.tsx";
@@ -579,6 +580,8 @@ export function TaskDetail({
                       // 名下派出的任务来问时这一格是它的卡，答复直接送给它（不经这条任务，也不叫醒它）。
                       asking={fromDispatched.asking}
                       onAnswer={answerFromHost(task.id, () => notify("已发送答复，任务正在续跑"))}
+                      onLaunchPlan={launchPlanFromHost(notify)}
+                      onDispatchTargetChange={task.mode === "single" && !task.parentId && !task.archived ? saveDispatchTarget(task, onTaskUpdate, notify) : undefined}
                       actions={replyActions.actions}
                       moreItems={replyActions.moreItems}
                       moreRef={replyActions.moreRef}

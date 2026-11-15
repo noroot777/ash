@@ -1,6 +1,7 @@
 import type { ReactNode, RefObject } from "react";
 import type { AgentType, SkillEntry, Task, TaskListItem } from "@ash/shared";
 import type { QuestionAnswerInput } from "@ash/shared/questions";
+import type { DispatchLaunchInput, DispatchRunTarget } from "@ash/shared/dispatch-plan";
 import type { IconMenuItem } from "../components/IconMenu.tsx";
 import type { ReplyTaskResult } from "../lib/api.ts";
 import type { ConversationItem } from "./conversationModel.ts";
@@ -69,6 +70,10 @@ export type ReplyBoxProps = {
   override?: ReplyOverride;
   /** 有问题在等时怎么答：给了，框那一格就由答题卡接管（QuestionSlot.tsx）。第三个参数是卡对的那一条。 */
   onAnswer?: (answer: string, input: QuestionAnswerInput, asking: TaskListItem) => Promise<void>;
+  /** 那一问是一张派活单时，「派出去」交给 ash 照卡建（DispatchPlanCard.tsx）。第二个参数是卡对的那一条。 */
+  onLaunchPlan?: (input: DispatchLaunchInput, asking: TaskListItem) => Promise<void>;
+  /** 「派出去的活交给谁」（胶囊点开那一层里的一行）：null = 同这里。不给就不出这一行。 */
+  onDispatchTargetChange?: (target: DispatchRunTarget | null) => Promise<void>;
   /** 这一格此刻是谁的卡；不给就是这条任务自己（名下派出的任务来问时由宿主给那一条）。 */
   asking?: TaskListItem | null;
   /**

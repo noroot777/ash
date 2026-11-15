@@ -282,6 +282,12 @@ export const api = {
   // `via`：在派它的那条任务里答的（答复照旧送给 taskId 这一条，那边只多留一颗「你」的气泡）。
   answerTask: (taskId: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput, via?: string): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input, ...(via ? { via } : {}) })),
+  // 派活单「派出去」：服务端照卡上此刻的样子建任务、挂在这条名下、起跑，再把清单作为答复续上会话。
+  launchDispatchPlan: (taskId: string, input: import("@ash/shared/dispatch-plan").DispatchLaunchInput): Promise<{ tasks: Task[] }> =>
+    request(`/tasks/${id(taskId)}/dispatch-plan/launch`, json("POST", input)),
+  // 「派出去的活交给谁」：null = 同这里。
+  setDispatchTarget: (taskId: string, target: import("@ash/shared/dispatch-plan").DispatchRunTarget | null): Promise<Task> =>
+    request(`/tasks/${id(taskId)}/dispatch-target`, json("PUT", { target })),
   replyTask: (
     taskId: string,
     text: string,
