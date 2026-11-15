@@ -121,6 +121,33 @@ const ids = (rows) => rows.map((row) => row.id);
   assert.equal(cyclic.needsYou("a"), true, "成环也走得完");
 }
 
+// —— 中间那条归档了：顺着关系往下走照样走得过去（归档不等于名下那几条跟上面断了），只是归档的
+//    那条自己不算数、不算要你处理。
+{
+  const bridged = [
+    task("a"),
+    task("b", { dispatchedBy: "a", archived: true }),
+    task("c", { dispatchedBy: "b", status: "failed", stage: null }),
+    task("d", { dispatchedBy: "a" }),
+  ];
+  const facts = dispatchFacts(bridged);
+  assert.equal(facts.count("a"), 1, "数只算没归档的直接那几条（跟右侧那一格一样）");
+  assert.equal(facts.needsYou("a"), true, "中间那条归档了，底下失败着的那条照样让最上面变色");
+  assert.equal(facts.count("b"), 1);
+  assert.equal(dispatchedOf(bridged, "a").length, 1);
+
+  const allArchived = dispatchFacts([
+    task("a"),
+    task("b", { dispatchedBy: "a", archived: true }),
+    task("c", { dispatchedBy: "b", status: "paused", stage: null, question: "？" }),
+  ]);
+  assert.equal(allArchived.count("a"), 0, "直接那几条全归档了，数是 0");
+  assert.equal(allArchived.needsYou("a"), true, "……底下还有一条在等你，照样变色");
+
+  const archivedFailure = dispatchFacts([task("a"), task("x", { dispatchedBy: "a", archived: true, status: "failed", stage: null })]);
+  assert.equal(archivedFailure.needsYou("a"), false, "归档了的失败是用户收起来的，不再算要你处理");
+}
+
 // —— 右侧那一格：名下有谁（没归档、不是执行者）、状态词、一行小字、一个接一个还是同时。
 {
   const all = [

@@ -61,6 +61,7 @@ export const DispatchOpenProvider = DispatchOpenContext.Provider;
 const NO_FACTS: DispatchFacts = { count: () => 0, needsYou: () => false };
 const DispatchFactsContext = createContext<DispatchFacts>(NO_FACTS);
 export const DispatchFactsProvider = DispatchFactsContext.Provider;
+export const useDispatchFacts = () => useContext(DispatchFactsContext);
 
 type RowProps = {
   task: TaskListItem;
@@ -80,7 +81,9 @@ export function DispatchAwareRow(props: RowProps) {
   const facts = useContext(DispatchFactsContext);
   const kids = props.forest.children.get(props.task.id) ?? [];
   const count = facts.count(props.task.id);
-  if (!kids.length && !count) {
+  const needs = facts.needsYou(props.task.id);
+  // 名下直接的那几条全归档了、底下还有一条在等你：数是 0，照样得有那个变色的提示。
+  if (!kids.length && !count && !needs) {
     return (
       <TaskRow
         task={props.task}
@@ -94,7 +97,7 @@ export function DispatchAwareRow(props: RowProps) {
       />
     );
   }
-  return <DispatcherRow {...props} kids={kids} count={count} needs={facts.needsYou(props.task.id)} />;
+  return <DispatcherRow {...props} kids={kids} count={count} needs={needs} />;
 }
 
 function DispatcherRow({ task, forest, allTasks, selectedTaskId, onTask, lookForTask, showProject = true, child = false, showOrigin = true, kids, count, needs }: RowProps & {

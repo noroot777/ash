@@ -24,7 +24,7 @@ import {
 } from "./useSidebarSpread.ts";
 import { buildTaskTree, groupTaskModeProjects, keepVisibleInPreview, orderedTopLevelTasks, previewProjectTasks, previewTasksByAge, revealToIndex, TASK_PREVIEW_MAX_AGE_MS } from "./taskTreeModel.ts";
 import { buildDispatchForest, forestRoot, keepForestVisible, sortRootsByLatest } from "./dispatchForest.ts";
-import { DispatchAwareRow, DispatchFactsProvider, DispatchOpenProvider, useDispatchOpenState } from "./DispatchTreeRows.tsx";
+import { DispatchAwareRow, DispatchFactsProvider, DispatchOpenProvider, useDispatchFacts, useDispatchOpenState } from "./DispatchTreeRows.tsx";
 import { dispatchFacts } from "../lib/dispatchTree.ts";
 import { OutboundStatusBar, type OutboundBar } from "./OutboundStatusBar.tsx";
 import { HandoffMachines } from "./HandoffMachines.tsx";
@@ -125,7 +125,12 @@ function ScopedTaskTree({
     }),
     [filteredBySection, forest],
   );
-  const keepVisible = useMemo(() => keepForestVisible(forest, keepRowVisible, TASK_PREVIEW_MAX_AGE_MS), [forest, keepRowVisible]);
+  // 名下（全量关系，不只画出来的那几行）有要你处理的，这一行跟它那个变色的数一样不进年龄闸。
+  const dispatchFactsNow = useDispatchFacts();
+  const keepVisible = useMemo(
+    () => keepForestVisible(forest, (task) => keepRowVisible(task) || dispatchFactsNow.needsYou(task.id), TASK_PREVIEW_MAX_AGE_MS),
+    [dispatchFactsNow, forest, keepRowVisible],
+  );
   // 真正画出来的一个个「行块」。分组与否只改这一层：下面的年龄闸、展开状态、选中揭示
   // 全按 group.key 走，所以两种排法共用同一套逻辑，不会一边修好另一边还漏着。
   //

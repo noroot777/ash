@@ -7,6 +7,8 @@
 //   · 搜索命中一条收着的任务（= 选中它）时，它上面那几层自己打开，看得见它。
 //   · 新派出去的任务不刷新就收进来。
 //   · 筛选把名下几条筛掉了（只看星标）：那个数和它的颜色照旧 —— 关系事实不随筛选变。
+//   · 中间那条归档了：底下还失败着的那条照样让最上面变色；名下直接的全归档了也一样，而且
+//     这一行不因为自己旧就被年龄闸折起来。
 //   · 团队和它的执行者照旧：执行者不平铺，团队行的箭头照旧展开执行者。
 // 跑：npm -w web run test:dispatch-tree-dom
 import assert from "node:assert/strict";
@@ -106,6 +108,30 @@ try {
   await page.evaluate(() => window.__filter("all"));
   await row("kid-run").waitFor();
   assert.equal(await lead.locator(".workspace-dispatch-count").textContent(), "4");
+
+  // —— 归档中间那一条：孙辈失败着，kid-mid 归档后它平铺出来，但最上面那个数照样变色。
+  await page.evaluate(() => window.__patch("kid-ask", { question: null, status: "running" }));
+  await page.evaluate(() => window.__patch("grand", { status: "failed", stage: null }));
+  await page.waitForFunction(() => document.querySelector('[data-task-id="lead"] .workspace-dispatch-count')?.classList.contains("is-warn"));
+  await page.evaluate(() => window.__patch("kid-mid", { archived: true }));
+  await page.waitForFunction(() => !document.querySelector('[data-task-id="kid-mid"]'));
+  assert.equal(await row("grand").count(), 1, "中间那条归档了，孙辈照常平铺");
+  assert.equal(await lead.locator(".workspace-dispatch-count").textContent(), "3", "数只算没归档的直接那几条");
+  assert.ok(await lead.locator(".workspace-dispatch-count").evaluate((node) => node.classList.contains("is-warn")), "孙辈还失败着，最上面照样变色");
+  assert.match(await page.getByRole("button", { name: /个派出的任务/ }).first().getAttribute("aria-label"), /3 个派出的任务，有要你处理的/);
+  await page.evaluate(() => window.__patch("grand", { status: "done", stage: "accepted" }));
+  await page.waitForFunction(() => !document.querySelector('[data-task-id="lead"] .workspace-dispatch-count')?.classList.contains("is-warn"));
+  await page.evaluate(() => window.__patch("kid-mid", { archived: false }));
+  await row("kid-mid").waitFor();
+
+  // —— 两天前那条：直接派出的全归档了、底下那条失败着。数是 0、变色，没有可展开的行；自己旧也不进年龄闸。
+  const oldLead = row("old-lead");
+  assert.equal(await oldLead.count(), 1, "名下有要你处理的，这一行不因为自己旧就被折起来");
+  const oldCount = oldLead.locator(".workspace-dispatch-count");
+  assert.equal(await oldCount.locator('[aria-hidden="true"]').textContent(), "0");
+  assert.equal(await color(oldCount), amber);
+  assert.equal(await oldLead.locator(".workspace-team-caret").count(), 0);
+  assert.equal(await oldCount.locator(".task-visually-hidden").textContent(), "0 个派出的任务，有要你处理的");
 
   // —— 派它的那条一归档，名下照常平铺（归档派它的那条不等于归档名下的）。
   await page.evaluate(() => window.__patch("lead", { archived: true }));

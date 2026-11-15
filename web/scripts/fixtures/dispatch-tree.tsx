@@ -37,6 +37,10 @@ const initial: Task[] = [
   task("grand", "孙辈任务", 10, { dispatchedBy: "kid-mid" }),
   task("gone-lead", "已经归档的派活人", 70, { archived: true }),
   task("orphan", "派它的那条已归档", 60, { dispatchedBy: "gone-lead" }),
+  // 一条两天前的派活任务：直接派出的那条已经归档，底下那条还失败着。
+  task("old-lead", "两天前的派活任务", 48 * 60),
+  task("old-mid", "两天前派出、已归档", 47 * 60, { dispatchedBy: "old-lead", archived: true }),
+  task("old-grand", "归档那条底下失败的", 46 * 60, { dispatchedBy: "old-mid", status: "failed", stage: null }),
   task("team", "一个团队", 80, { mode: "team", status: "idle", stage: null }),
   task("worker", "团队的执行者", 75, { parentId: "team", status: "done", stage: null }),
 ];
