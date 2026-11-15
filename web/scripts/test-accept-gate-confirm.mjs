@@ -14,8 +14,8 @@
 //    （统一验收不走「运行」那一勾）。
 // ⑭d 第 2 轮审查：项目默认重读失败、挂住时，手动改过「提交」也不许确认；勾照画、写明在读，读有上限，
 //    到点给「重试」。
-// ⑭e 第 3 轮审查：确认只记跟默认不一样的那一勾 —— 层里那份默认可能是旧的（重读还没回来），没动过的勾写回去
-//    会盖掉别处刚确认的新选择。
+// ⑭e 门禁状态（带着记住的「跳没跳过」）重读中，确认层勾照画、写明「读取运行状态」、确认锁着。
+// ⑭f 每一次有资格记的确认都登记，跟默认一样也登记（上一次保存超时、服务端稍后才做完时，靠它排上号）。
 // ⑮ 红行拦主按钮：前置命令在跑（gate.occupied）时主按钮 disabled、那一行写「运行中」；
 //    门禁状态读不出来（GET 503）时主按钮 disabled、那一行写「状态读不出来」带「重试」，点重试
 //    读到之后才放开 —— **读失败不放行**（「没读到」不等于「没在跑」）。
@@ -61,7 +61,7 @@ export async function testAcceptGateConfirm({ open, run }) {
     await layer.getByRole("button", { name: "跳过并验收", exact: true }).click();
     await accepted(store, 1);
     assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: true, gate: "skip" }, `${label}：这一按要带 gate=skip`);
-    assert.deepEqual(store.memory, [{ skipGate: true }], `${label}：确认时记下改过的那一勾（提交照项目设置，不写回）`);
+    assert.deepEqual(store.memory, [{ skipGate: true, commit: true }], `${label}：确认时记下层里看见的样子`);
     // 发出去就关层；回执（这里是一句「验收没完成」）留在前提列里，细节点开看。
     await confirmLayer(page).waitFor({ state: "detached" });
     const failure = checkRow(page, "failure");
@@ -126,7 +126,7 @@ export async function testAcceptGateConfirm({ open, run }) {
     await layer.getByRole("button", { name: "确认验收", exact: true }).click();
     await accepted(store, 1);
     assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: true, gate: "rerun" });
-    assert.deepEqual(store.memory, [], "重跑是一次性的：不送「跳没跳过」；提交照项目设置，也不写回");
+    assert.deepEqual(store.memory, [{ commit: true }], "重跑是一次性的：不送「跳没跳过」");
     assert.equal(store.gate.skipRemembered, true);
     layer = await openConfirm(page);
     assert.equal(await layer.getByRole("checkbox", { name: "运行前置命令" }).isChecked(), false, "重跑不记：下一次还是沿用");
@@ -230,28 +230,72 @@ export async function testAcceptGateConfirm({ open, run }) {
     await page.close();
   }
 
-  // ⑭e 第 3 轮审查：另一页刚确认成「要运行」，这一页的门禁状态重读还没回来，用户照着层里那份旧的「跳过」
-  //     确认（后台重读不灰确认键，见 test-accept-gate-reads.mjs ㉑）。这一按照看见的跳过，但没动过的那一勾
-  //     不写回 —— 另一页刚记下的「要运行」不被盖掉，重读回来就是它。
+  // ⑭e 另一页刚确认成「要运行」，这一页的门禁状态重读还没回来：勾照画、写明在读、确认锁着（用户 2026-11-15
+  //     选的：确认层开着时宁可灰一下），不许拿旧的「跳过」去确认；读到之后跟着变，确认照新的跑、照新的记。
   {
     const { page, store } = await open({ gate: { command: "./kb.sh test full", running: null, latest: null, basis: null, skipRemembered: true },
       events: true, acceptReply: () => ({ status: 200, body: { accepted: true, taskId: "gate-task" } }) });
     const layer = await openConfirm(page);
-    const skip = layer.getByRole("button", { name: "跳过并验收", exact: true });
-    await skip.and(page.locator("button:enabled")).waitFor();
+    const runBox = layer.getByRole("checkbox", { name: "运行前置命令" });
+    await layer.getByRole("button", { name: "跳过并验收", exact: true }).and(page.locator("button:enabled")).waitFor();
     let release;
     store.hold = new Promise((resolve) => { release = resolve; });
     store.gate = { ...store.gate, skipRemembered: false };
     const before = store.reads;
     await page.evaluate(() => window.emitGateEvent({ type: "task.acceptGate", taskId: "gate-task" }));
     await waitUntil(() => store.reads > before, "重读发出去了（被扣住）");
-    await skip.click();
-    await accepted(store, 1);
-    assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: true, gate: "skip" }, "发的是层里看见的");
-    assert.deepEqual(store.memory, [], "没动过的勾不写回旧快照");
-    assert.equal(store.gate.skipRemembered, false, "另一页刚记下的「要运行」还在");
+    await layer.getByText("读取运行状态").waitFor();
+    assert.equal(await runBox.count(), 1, "重读中勾照画");
+    assert.equal(await layer.locator("footer .is-primary").isEnabled(), false, "重读中不许拿旧的「跳过」确认");
     store.hold = null;
     release();
+    const confirm = layer.getByRole("button", { name: "确认验收", exact: true });
+    await confirm.and(page.locator("button:enabled")).waitFor();
+    assert.equal(await runBox.isChecked(), true, "读到之后跟着另一页刚确认的「要运行」");
+    await confirm.click();
+    await accepted(store, 1);
+    assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: true });
+    assert.deepEqual(store.memory, [{ skipGate: false, commit: true }]);
+    await page.close();
+  }
+
+  // ⑭e 重读失败：确认层里说「运行状态读不出来」带「重试」，确认锁着；点层里的重试读到了才放开。
+  {
+    const { page, store } = await open({ gate: { command: "./kb.sh test full", running: null, latest: null, basis: null }, events: true });
+    const layer = await openConfirm(page);
+    const confirm = layer.getByRole("button", { name: "确认验收", exact: true });
+    await confirm.and(page.locator("button:enabled")).waitFor();
+    store.status = 503;
+    await page.evaluate(() => window.emitGateEvent({ type: "task.acceptGate", taskId: "gate-task" }));
+    await layer.getByText("运行状态读不出来").waitFor();
+    assert.equal(await layer.locator("footer .is-primary").isEnabled(), false, "读不出来不放行");
+    await freezeAutoRetry(store);
+    store.status = 0;
+    const before = store.reads;
+    await layer.getByRole("button", { name: "重试", exact: true }).click();
+    await waitUntil(() => store.reads > before, "点层里的重试真的再读一次");
+    await confirm.and(page.locator("button:enabled")).waitFor();
+    assert.equal(await layer.getByText("运行状态读不出来").count(), 0);
+    await page.close();
+  }
+
+  // ⑭f 第 4 轮审查：上一次确认的保存超时了（服务端可能稍后才做完），这一次照默认确认 —— 跟默认一样也要登记，
+  //     服务端才排得上这一次的号，迟到的旧保存盖不过它（顺序本身由 test-accept-memory.ts 钉住）。
+  {
+    const { page, store } = await open({ gate: { command: null, running: null, latest: null, basis: null } });
+    store.memoryHold = new Promise(() => {});
+    let layer = await openConfirm(page);
+    await layer.getByRole("checkbox", { name: "合并后提交" }).uncheck();
+    await layer.getByRole("button", { name: "验收，不提交", exact: true }).click();
+    await waitUntil(() => store.accepts.length === 1, { message: "保存挂住也照常验收", timeout: 15_000 });
+    await page.getByRole("status", { name: "操作结果" }).filter({ hasText: "不一定记住了：保存超时" }).waitFor();
+    store.memoryHold = null;
+    await deskSettled(page);
+    layer = await openConfirm(page);
+    assert.equal(await layer.getByRole("checkbox", { name: "合并后提交" }).isChecked(), true, "项目设置还没变：默认还是提交");
+    await layer.getByRole("button", { name: "确认验收", exact: true }).click();
+    await waitUntil(() => store.accepts.length === 2, "第二次验收发出去了");
+    assert.deepEqual(store.memory, [{ commit: false }, { commit: true }], "照默认确认也登记");
     await page.close();
   }
 

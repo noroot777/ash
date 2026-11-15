@@ -6,7 +6,7 @@ import type { AcceptMemoryWrite } from "@ash/shared/accept-gate";
  * 「勾成这样 → 一步一行写什么、确认键叫什么、能不能按、发给后端的参数是什么」。
  *
  * 两个勾的默认是**上一次真的确认验收时的样子**（用户 2026-11-15 要的：别每个任务都重新去掉一次）。
- * 只开关这一层、动了勾又关掉不算；点确认才记（memory，只记跟默认不一样的那一勾），记住了什么前提列那一行照样说得出来（gateLine.ts），
+ * 只开关这一层、动了勾又关掉不算；点确认才记（memory），记住了什么前提列那一行照样说得出来（gateLine.ts），
  * 所以它不是一个没人记得设过的隐形开关。
  *  - 「运行」：已有一次还作数的绿时默认不勾（沿用那次），勾上 = 重跑，这两样都不改记住的值；否则默认跟
  *    上一次（skipRemembered：上次跳过就不勾），取消 = 这次跳过。
@@ -44,6 +44,12 @@ export type ConfirmInput = {
    * —— 读不出来说明这一刻连项目都可能对不上，不拿「用户动过」当豁免（第 2 轮审查 F2）。
    */
   commitDefaultPending?: boolean;
+  /**
+   * 前置命令那份状态（命令、上一次结果、记住的「跳没跳过」）正在重读或重读失败：手上那份只管画，读到之前
+   * 不许确认 —— 别处刚确认成「要运行」，这里拿旧的「跳过」去确认会照旧跳过、还把它写回去（第 3、4 轮审查；
+   * 用户 2026-11-15 选的：确认层开着时宁可灰一下）。与 commitDefaultPending 同一条不变量。
+   */
+  gatePending?: boolean;
   /** 一次验收几个任务（父任务 + 勾上的派生任务）；1 = 只验这一个。 */
   count: number;
   /** 独立验证尚未执行：要先勾「知情」。 */
@@ -60,14 +66,13 @@ export type ConfirmView = {
   /** 发给 /accept 的那两个参数。 */
   gateIntent: "skip" | "rerun" | undefined;
   commitParam: boolean | undefined;
-  /** 点确认时记下的那几勾（只有跟默认不一样的）；null = 这一按没什么可记（都照默认、放行、沿用或重跑、不合并）。 */
+  /** 点确认时记下的那几勾；null = 这一按没什么可记（放行、沿用或重跑、不合并）。 */
   memory: AcceptMemoryWrite | null;
 };
 
 export function confirmView(input: ConfirmInput): ConfirmView {
   const { steps, gate } = input;
-  const runsByDefault = gate ? !gate.reusable && !gate.skipRemembered : false;
-  const runs = gate ? input.runChoice ?? runsByDefault : false;
+  const runs = gate ? input.runChoice ?? (!gate.reusable && !gate.skipRemembered) : false;
   const gateIntent = !gate ? undefined : gate.reusable ? (runs ? "rerun" : undefined) : runs ? undefined : "skip";
   const commitKnown = input.commitDefault !== null && !input.commitDefaultPending;
   const commit = input.commitChoosable ? input.commitChoice ?? input.commitDefault ?? true : true;
@@ -77,14 +82,15 @@ export function confirmView(input: ConfirmInput): ConfirmView {
       : input.commitChoosable && !commit ? "验收，不提交"
         : "确认验收";
   const confirmDisabled = (input.commitChoosable && !commitKnown)
+    || input.gatePending === true
     || batchNeedsCommit
     || input.verification === "loading" || input.verification === "error" || input.verification === "unacknowledged";
-  // 只记这一按**跟默认不一样**的那一勾。跟默认一样 = 沿用记住的值（或项目设置），没有新东西可记；写回去
-  // 反而危险：层里那份默认可能是旧的 —— 别处刚确认成「要运行」，这一层的重读还没回来，没动过勾的这一按
-  // 若把旧的「跳过」写回去，就把别人刚记下的新选择盖掉了（第 3 轮审查）。
+  // **每一次**有资格记的确认都登记，跟默认一样也登记：服务端靠到达顺序挡住超时后迟到的旧保存，没登记的那次
+  // 确认它看不见，旧的就盖过来了（第 4 轮审查）。默认可能是旧快照这件事由 gatePending / commitDefaultPending
+  // 挡在确认之前，不靠「不发」来躲。
   const memory: AcceptMemoryWrite = steps.kind === "release" ? {} : {
-    ...(gate && !gate.reusable && runs !== runsByDefault ? { skipGate: !runs } : {}),
-    ...(input.commitChoosable && input.commitDefault !== null && commit !== input.commitDefault ? { commit } : {}),
+    ...(gate && !gate.reusable ? { skipGate: !runs } : {}),
+    ...(input.commitChoosable ? { commit } : {}),
   };
   return {
     runs,

@@ -145,9 +145,12 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
     : midGate ? "none"
       : verification.loading ? "loading" : verification.error ? "error"
         : verification.verification ? (verification.acknowledged ? "acknowledged" : "unacknowledged") : "none";
+  // 这一按要用前置命令那份状态（单任务验收）：它在重读、或重读失败，确认就等它（confirmPlan.ts gatePending）。
+  // 只管确认层：层没开时后台重读照旧不灰主按钮（test-accept-gate-reads.mjs ㉑）。
+  const gatePending = !midGate && !settled && !family.length && steps.kind !== "release" && gate.stale;
   const view = confirmView({
     steps, gate: confirmGate, runChoice, commitChoosable, commitChoice, commitDefault: commitDefault.value,
-    commitDefaultPending: commitDefault.pending, count: family.length ? merging.length : 1, verification: verifyState,
+    commitDefaultPending: commitDefault.pending, gatePending, count: family.length ? merging.length : 1, verification: verifyState,
   });
   const described = acceptanceSteps(task, view.commit);
   const shownSteps = described.kind === "merge" && acceptTarget ? { ...described, target: acceptTarget } : described;
@@ -303,6 +306,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
           gate={confirmGate}
           commitChoosable={commitChoosable}
           commitDefault={commitDefault}
+          gateRead={{ pending: gatePending, error: gate.error }}
           commitRemembered={canManage !== false}
           verification={{ state: verifyState, error: verification.error }}
           source={plan.view?.task.sourceBranch ?? "任务分支"}
@@ -313,6 +317,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
           onCommit={setCommitChoice}
           onAcknowledge={(value) => (family.length ? setFamilyAck(value) : verification.setAcknowledged(value))}
           onRetryDefault={commitDefault.reload}
+          onRetryGate={() => void gate.reload()}
           onRetryVerification={verification.reload}
           onSetGate={() => { setLayer(null); setEditGate(true); }}
           onConfirm={() => void accept()}

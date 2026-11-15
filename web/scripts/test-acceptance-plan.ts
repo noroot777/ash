@@ -43,30 +43,26 @@ const input = (over: Partial<ConfirmInput> = {}): ConfirmInput => ({
 }
 
 // 2b. 两勾的默认是上一次确认时的样子（用户 2026-11-15）：上次跳过，这次默认就不勾、确认键照样说破；
-//     点确认只记跟默认不一样的那一勾。有一次还作数的绿时，沿用和重跑都不改记住的「跳没跳过」。
+//     点确认记下的就是层里看见的样子 —— 跟默认一样也记（第 4 轮审查：每一次确认都要让服务端排上号）。
+//     有一次还作数的绿时，沿用和重跑都不改记住的「跳没跳过」。
 {
   const remembered = confirmView(input({ gate: gate({ skipRemembered: true }) }));
   assert.equal(remembered.runs, false, "上次跳过：这次默认不勾");
   assert.equal(remembered.gateIntent, "skip");
   assert.equal(remembered.confirmLabel, "跳过并验收");
   assert.equal(remembered.confirmDisabled, false, "照样要在层里按一下确认，不是自动跳过");
-  assert.equal(remembered.memory, null, "照默认确认：没有新东西可记");
+  assert.deepEqual(remembered.memory, { skipGate: true, commit: true });
   const back = confirmView(input({ gate: gate({ skipRemembered: true }), runChoice: true }));
   assert.equal(back.gateIntent, undefined, "重新勾上：照常跑");
-  assert.deepEqual(back.memory, { skipGate: false }, "确认之后记成新的");
-  assert.equal(confirmView(input({ gate: gate() })).memory, null);
-  assert.deepEqual(confirmView(input({ gate: gate(), runChoice: false })).memory, { skipGate: true });
-  // 第 3 轮审查：层里那份默认可能是旧的（别处刚确认成「要运行」、这里的重读还没回来）。没动过勾的这一按
-  // 不写回旧的「跳过」；动过又改回默认的也一样（跟默认一样就是沿用）。
-  assert.equal(confirmView(input({ gate: gate({ skipRemembered: true }), runChoice: false })).memory, null);
+  assert.deepEqual(back.memory, { skipGate: false, commit: true }, "确认之后记成新的");
+  assert.deepEqual(confirmView(input({ gate: gate() })).memory, { skipGate: false, commit: true });
   for (const runChoice of [null, true]) {
     const reuse = confirmView(input({ gate: gate({ reusable: true, skipRemembered: true }), runChoice }));
     assert.equal(reuse.runs, runChoice === true, "有作数的绿：默认沿用，记住的跳过不起作用");
-    assert.equal(reuse.memory, null, `沿用 / 重跑都不改记住的值（runChoice=${runChoice}）`);
+    assert.deepEqual(reuse.memory, { commit: true }, `沿用 / 重跑都不改记住的值（runChoice=${runChoice}）`);
   }
-  assert.equal(confirmView(input({ commitDefault: false })).memory, null, "照项目设置确认：不写回（可能是旧的）");
-  assert.deepEqual(confirmView(input({ commitDefault: true, commitChoice: false })).memory, { commit: false }, "改了就写回项目设置");
-  assert.equal(confirmView(input({ commitDefault: false, commitChoice: false })).memory, null);
+  assert.deepEqual(confirmView(input({ commitDefault: false })).memory, { commit: false }, "提交那一勾照层里看见的记");
+  assert.deepEqual(confirmView(input({ commitDefault: true, commitChoice: false })).memory, { commit: false });
   assert.equal(confirmView(input({ commitChoosable: false, commitDefault: null })).memory, null, "不合并、没命令：没什么可记");
   assert.equal(confirmView(input({ steps: { kind: "release", next: "自动验证" }, gate: gate(), commitChoosable: false })).memory, null,
     "只是放行：不记");
@@ -104,6 +100,17 @@ assert.equal(confirmView(input()).gateIntent, undefined);
   const settled = confirmView(input({ commitDefault: true, commitChoice: false }));
   assert.equal(settled.confirmDisabled, false);
   assert.equal(settled.commitParam, false, "读到之后照手动选的发");
+}
+
+// 5c. 前置命令那份状态（带着记住的「跳没跳过」）在重读或读失败：手上那份只管画，确认锁着（第 3、4 轮审查，
+//     用户 2026-11-15 选的）。动过这一勾也不是豁免。
+{
+  const gate = { command: "./t.sh", reusable: false, passedAgo: null, lastFailed: false, issue: null, skipRemembered: true };
+  const stale = confirmView(input({ gate, gatePending: true }));
+  assert.equal(stale.runs, false, "画的还是手上那份");
+  assert.equal(stale.confirmDisabled, true, "拿旧的「跳过」确认会照旧跳过、还把它写回去");
+  assert.equal(confirmView(input({ gate, gatePending: true, runChoice: true })).confirmDisabled, true);
+  assert.equal(confirmView(input({ gate })).confirmDisabled, false);
 }
 
 // 6. 一次多个任务又不提交：只能合一个，确认键灰着。

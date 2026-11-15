@@ -1,8 +1,9 @@
 // 门禁读取的并发与超时，在验收台上看是什么样。由 test-accept-gate-actions.mjs 调用。
 //
-// ㉑ 确认层开着时后台的重读（事件、任务更新、重连）**不许把确认键灰掉**：手上那份状态一直有效，
-//    读一次就锁一次，用户会在按下去那一刻撞上一颗刚变灰的键。被扣住的那一发由追平层的期限掐掉、
-//    补发的那一趟落地；这一按自己也不等后台那一发。
+// ㉑ 后台的重读（事件、任务更新、重连）不让主按钮转圈、不收起确认层。但确认层开着时，这一按要用的那份
+//    状态（命令、上一次结果、记住的「跳没跳过」）在重读，确认键就等它读到：勾照画、写明「读取运行状态」
+//    （用户 2026-11-15 选的：宁可灰一下，也不拿旧的「跳过」去确认 —— 别处刚确认成「要运行」时那会照旧跳过、
+//    还把它写回去）。被扣住的那一发由追平层的期限掐掉、补发的那一趟落地，确认键随之放开。
 // ㉒ 首读挂住：主按钮转圈、不出一行字；到了 15 秒期限就如实说「状态读不出来」带「重试」，主按钮
 //    仍锁着，之后自己退避重试读到才放开。
 // ㉓ 验收合并已完成、清理没做完（worktree / 预览 / 分支删不掉）：照实说一句（成果已合入、目录保留），
@@ -46,7 +47,8 @@ export async function testAcceptGateReads({ open }) {
             ? { type: trigger, task: { id: "gate-task" } } : { type: trigger, taskId: "gate-task" });
         }, trigger);
         await page.waitForFunction(reads => window.gateReadSignals.length > reads, reads);
-        assert.equal(await confirm.isEnabled(), true, `${trigger} must not disable confirmation during background reads`);
+        await layer.getByText("读取运行状态").waitFor();
+        assert.equal(await confirm.isEnabled(), false, `${trigger}：那份状态在重读，确认等它读到`);
         assert.equal(await mainButton(page).getAttribute("aria-busy"), null, `${trigger}：后台读取不让主按钮转圈`);
         assert.equal(await layer.getByRole("checkbox", { name: "运行前置命令" }).isChecked(), true, "层里那份状态照常摆着");
         const held = await page.evaluate(() => window.gateReadSignals.length - 1);
@@ -59,11 +61,11 @@ export async function testAcceptGateReads({ open }) {
         await page.waitForFunction(index => window.gateReadSignals[index].aborted, held, { timeout: CATCH_UP_DEADLINE_MS + WAIT_TIMEOUT_MS });
         await page.waitForFunction(index => window.gateReadSignals.length > index + 1, held);
         assert.equal(await confirmLayer(page).count(), 1, "后台读取不收起确认层");
+        await waitUntil(() => confirm.isEnabled(), `${trigger}：读到之后确认放开`);
       }
-      await page.evaluate(() => { window.holdGateReads = true; window.emitGateEvent({ type: "task.acceptGate", taskId: "gate-task" }); });
       await confirm.click();
       await checkRow(page, "failure").filter({ hasText: "验收没完成" }).waitFor();
-      assert.equal(store.accepts.length, 1, "the accept handler must also permit a background read");
+      assert.equal(store.accepts.length, 1, "读到之后这一按照常发出去");
     } finally { await page.close(); }
   }
 
