@@ -32,3 +32,8 @@ export function dispatchPauseSince(taskId: string, since: number): string | null
   const pause = taskPauses.get(taskId);
   return pause && pause.at > since ? pause.by : null;
 }
+
+/** 任务删了就不再记（task-delete-routes.ts）。 */
+export function forgetTaskPause(taskId: string): void {
+  taskPauses.delete(taskId);
+}

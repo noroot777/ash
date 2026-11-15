@@ -216,6 +216,11 @@ export function turnStartsOf(taskId: string): number {
 }
 const turnStarts = new Map<string, number>();
 
+/** 任务删了就不再记（task-delete-routes.ts）：还排着的请求轮到时读不到行，本来就不起。 */
+export function forgetTurnStarts(taskId: string): void {
+  turnStarts.delete(taskId);
+}
+
 /** 同 `claimOwnTurn`,但排队之后(`turnStartsOf` 读到 `seen` 之后)它已经起过一轮就不占、返回 null。 */
 export function claimOwnTurnUnlessStarted(taskId: string, seen: number, role = "single"): TurnIdentity | null {
   return turnStartsOf(taskId) === seen ? claimOwnTurn(taskId, role) : null;

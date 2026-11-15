@@ -9,7 +9,7 @@ import type { TurnIdentity } from "./runs.js";
 import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
-import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation, type TaskQueueReservation } from "./task-queue-reservation.js";
+import { reserveQueuedTask, taskQueueReservation, type TaskQueueReservation } from "./task-queue-reservation.js";
 import { clearQueueAdvance, deferQueueAdvance, isQueueAdvanceCanceling, requestQueueAdvance, type QueueAdvanceRequest } from "./queue-advance-retry.js";
 import { reclaimStrandedSeat, scheduleSeatReclaim } from "./queue-seat-reclaim.js";
 import { waitForStartReceipt } from "./task-start-receipt.js";
@@ -19,7 +19,8 @@ import { withMonitorHolds, type QueueRow } from "./queue-monitor-hold.js";
 import { currentPauseGeneration, dispatchPauseSince, notePauseOfGroup, pausedSince } from "./pause-generation.js";
 import { taskHoldOf, type TaskHold } from "./task-hold.js";
 import { oweHeldStart } from "./dispatch-hold-owed.js";
-import { MAX_PARALLEL, startMember } from "./group-slots.js";
+import { MAX_PARALLEL } from "./group-slots.js";
+import { startMember } from "./member-start.js";
 
 type QueueAdvanceAttempt = {
   request?: QueueAdvanceRequest;
@@ -590,12 +591,6 @@ function launchableMembers(groupRows: QueueRow[], inQueue: ReadonlySet<string>):
   );
 }
 
-/** 这一位此刻还该被分组运行拉起吗(launchableMembers 的单条版,重读队列归属与哨兵)。 */
-async function stillLaunchable(row: typeof tasks.$inferSelect): Promise<boolean> {
-  const queued = await db.select({ id: queueItems.taskId }).from(queueItems).where(eq(queueItems.taskId, row.id));
-  return launchableMembers(await withMonitorHolds([row]), new Set(queued.map((q) => q.id))).length > 0;
-}
-
 async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Promise<void> {
   const groupRows = await withMonitorHolds(await db.select().from(tasks).where(eq(tasks.groupId, groupId)));
   const items = await db
@@ -613,46 +608,41 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
     const pending = [...launchable];
     const inflight = new Map<string, Promise<void>>();
 
-    const launch = async (taskId: string, claim: () => TurnIdentity | null): Promise<void> => {
+    const launch = async (taskId: string): Promise<void> => {
       // 「这一位到底起没起来」只认**真实启动回执**(adoptRun 那一刻 acknowledge 的那张),
       // 不拿「resumeOrRunTask 抛没抛」当判据:它抛出来可能是根本没起来,也可能是起来之后
       // 跑挂了、或者收尾那几步(放回合锁、还占位)挂了 —— 后两种给人写一句「这一轮没能起跑」
       // 就是假的:那一位要么正在跑,要么已经跑完(第 1 轮审查发现 4)。
       let spawned = false;
       try {
-        if (await preparePendingCheckpointStart(taskId)) return;
-        // 轮到名额才重读、用挑人时那同一把尺子再量一遍:排队时能起,等名额那阵子它可能已经被
-        // 别处起过、跑完,或者改成等答复 / 进了队列(group-slots.ts startMember)。
-        const before = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-        if (!before || !(await stillLaunchable(before))) return;
-        // 分组没停、这一位却被上面派活的那条按住了:不起,记欠账(同队列推进那一处)。
-        const hold = await taskHoldOf(before);
-        if (hold) {
-          if (hold.kind === "dispatch") await oweHeldStart(taskId, hold.byTaskId);
-          return;
-        }
-        const owner = claim();
-        if (!owner) return;
-        const reservation = taskQueueReservation(before);
-        try {
-          await reserveQueuedTask(reservation);
-          // 回执先到就先记下 spawned;这一位整轮跑完(或抛出)仍由 `run` 等到底,
-          // 分组的并发上限才还是「同时 N 个在跑」。
-          let run!: Promise<void>;
-          spawned = await waitForStartReceipt(taskId, () => {
-            run = resumeOrRunTask(taskId, { origin: "auto", reason: "group", turnHeld: owner });
-            run.catch(() => {}); // 只为了别在 await 之前变成 unhandled;原 promise 照旧抛给下面
-            return run;
-          });
-          // 回执一到就退出扇出名单:这一位是**真的起跑了**,此后整组再出什么事都不该给它写
-          // 「这一轮没能起跑」—— 它那时多半还在跑(第 1 轮审查发现 4)。不等这一轮跑完才摘,
-          // 正是因为「还在跑」才是最容易被这句假话误伤的状态。
-          if (spawned) attempted?.owed.delete(taskId);
-          await run;
-        } finally {
-          releaseTurn(taskId, owner);
-          await restoreQueuedTask(reservation);
-        }
+        // 轮到名额才准入(member-start.ts):在哪、起没起过由那里重读,这里只答「按挑人时那同一把
+        // 尺子,它此刻还该被分组运行拉起吗」。等的期间进了队列的,由队列按位置起(入队那一下就推过)。
+        await startMember(groupId, taskId, {
+          prepare: () => preparePendingCheckpointStart(taskId),
+          eligible: async (row) => {
+            if (!launchableMembers(await withMonitorHolds([row]), new Set()).length) return false;
+            // 分组没停、这一位却被上面派活的那条按住了:不起,记欠账(同队列推进那一处)。
+            const hold = await taskHoldOf(row);
+            if (hold?.kind === "dispatch") await oweHeldStart(taskId, hold.byTaskId);
+            return !hold;
+          },
+          queued: async () => undefined,
+          start: async ({ owner }) => {
+            // 回执先到就先记下 spawned;这一位整轮跑完(或抛出)仍由 `run` 等到底,
+            // 分组的并发上限才还是「同时 N 个在跑」。
+            let run!: Promise<void>;
+            spawned = await waitForStartReceipt(taskId, () => {
+              run = resumeOrRunTask(taskId, { origin: "auto", reason: "group", turnHeld: owner });
+              run.catch(() => {}); // 只为了别在 await 之前变成 unhandled;原 promise 照旧抛给下面
+              return run;
+            });
+            // 回执一到就退出扇出名单:这一位是**真的起跑了**,此后整组再出什么事都不该给它写
+            // 「这一轮没能起跑」—— 它那时多半还在跑(第 1 轮审查发现 4)。不等这一轮跑完才摘,
+            // 正是因为「还在跑」才是最容易被这句假话误伤的状态。
+            if (spawned) attempted?.owed.delete(taskId);
+            await run;
+          },
+        });
       } catch (error) {
         if (spawned) {
           console.error(`[ash] 分组成员已起跑，随后失败 group=${groupId} task=${taskId}:`, error);
@@ -670,7 +660,7 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
       if (!(await isPaused(groupId))) {
         while (pending.length && inflight.size < MAX_PARALLEL) {
           const t = pending.shift()!;
-          const p = startMember(groupId, t.id, (claim) => launch(t.id, claim)).finally(() => inflight.delete(t.id));
+          const p = launch(t.id).finally(() => inflight.delete(t.id));
           inflight.set(t.id, p);
         }
       }

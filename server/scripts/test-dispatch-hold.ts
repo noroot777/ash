@@ -16,7 +16,7 @@
 //     整件事只跑一次；正常停下的那一笔不因为恰好有一班定时到期被吞掉，接着跑照样从原会话续；
 //   · 停到一半出错：「还没停完」留着，tick 接着停完；推进途中停了又放，这次起跑交成欠账不丢；
 //     一组被按住的接着跑时照样受分组并发上限管；同一位被分组运行和接着跑各排了一次名额，只起一遍；
-//     名额集中还回、又来新的，同组总数也不越过上限。
+//     名额集中还回、又来新的，同组总数也不越过上限；等名额期间进了队列的按队列顺序起、换了组的占新组的名额。
 //
 // 走真实的调度链路（队列推进、分组运行、路由、结算钩子），只换掉「起一个 CLI」那一步：假执行器
 // 记下每一回合拿到的输入与续的是哪条原生会话，回合一直挂着，直到测试放它走或者它被停掉。
@@ -59,7 +59,7 @@ const { resumeOrRunTask } = await import("../src/task-resume.js");
 const { holdDispatched } = await import("../src/dispatch-hold.js");
 const { tick } = await import("../src/schedules.js");
 const { serializeQueueClaims } = await import("../src/queue-seat.js");
-const { groupSlotUsage, startMember } = await import("../src/group-slots.js");
+const { acquireGroupSlot, groupSlotUsage, releaseGroupSlot } = await import("../src/group-slots.js");
 await ensureSchema();
 
 const api = new Hono();
@@ -136,6 +136,8 @@ await db.insert(schema.groups).values([
   { id: "G", projectId: "p", name: "共用的组", mode: "parallel", paused: false, createdAt: at },
   { id: "G2", projectId: "p", name: "另一个组", mode: "parallel", paused: false, createdAt: at },
   { id: "G3", projectId: "p", name: "六条的组", mode: "parallel", paused: false, createdAt: at },
+  { id: "G4", projectId: "p", name: "等名额时挪走的组", mode: "parallel", paused: false, createdAt: at },
+  { id: "G5", projectId: "p", name: "挪进来的组", mode: "parallel", paused: false, createdAt: at },
 ]);
 const task = (id: string, over: Partial<typeof tasks.$inferInsert> = {}): typeof tasks.$inferInsert => ({
   id, projectId: "p", title: `任务 ${id}`, body: id, status: "backlog", mode: "single", agentType: "claude",
@@ -176,6 +178,8 @@ await db.insert(tasks).values([
   task("B2", { dispatchedBy: "HB" }),
   task("HG", { status: "done", title: "一组六条" }),
   ...["G1", "G2x", "G3", "G4", "G5", "G6"].map((id) => task(id, { groupId: "G3", dispatchedBy: "HG" })),
+  task("HM", { status: "done", title: "等名额时被挪走" }),
+  ...["M61", "M62", "M63", "M64", "M65", "M66"].map((id) => task(id, { groupId: "G4", dispatchedBy: "HM" })),
 ]);
 await db.insert(schema.queueItems).values([
   { taskId: "A", queueId: "Q", position: 0, createdAt: at },
@@ -560,15 +564,42 @@ try {
   for (const id of [early[2]!, early[3]!, late[1]!]) finish(id);
   await rerun;
 
+  // ── 等名额的期间被挪走：进了队列的交回队列按位置起，换了组的按新组的名额起（第 3 轮复审 F1）──────
+  const sixM = ["M61", "M62", "M63", "M64", "M65", "M66"];
+  assert.equal((await post("/tasks/HM/dispatched/hold")).status, 200);
+  await runGroup("G4");
+  assert.equal((await post("/tasks/HM/dispatched/release")).status, 200);
+  await until("先起四条", () => sixM.filter((id) => turnsOf(id).length === 1).length === 4);
+  const [m0, m1, m2, m3] = sixM.filter((id) => turnsOf(id).length === 1);
+  const [queuedLate, movedLate] = sixM.filter((id) => turnsOf(id).length === 0);
+  // 照入队接口的落库：排到正在跑的 m0 后面；另一条挪进另一个组。
+  await db.insert(schema.queueItems).values([
+    { taskId: m0!, queueId: "Q6", position: 0, createdAt: at },
+    { taskId: queuedLate!, queueId: "Q6", position: 1, createdAt: at },
+  ]);
+  await db.update(tasks).set({ groupId: "G5" }).where(eq(tasks.id, movedLate!));
+  finish(m1!);
+  await until(`${movedLate} 按新组起跑`, () => turnsOf(movedLate!).length === 1);
+  await sleep(300);
+  assert.equal(turnsOf(queuedLate!).length, 0, "排在正在跑的那条后面，不抢跑");
+  assert.equal(groupSlotUsage("G4").used, 3, "旧组只剩还在跑的三条占名额");
+  assert.equal(groupSlotUsage("G5").used, 1, "挪过去的那条占的是新组的名额");
+  finish(m0!);
+  await until(`${queuedLate} 等前一条做完才起`, () => turnsOf(queuedLate!).length === 1);
+  assert.ok(!runs.isRunning(m0!));
+  for (const id of [m2!, m3!, movedLate!, queuedLate!]) finish(id);
+
   // ── 分组名额本身：集中还名额、再来新的，同组总数照样至多四个（第 2 轮复审 F2）────────────────
   let active = 0;
   let peak = 0;
   const holds: Array<() => void> = [];
-  const occupy = () => startMember("slot-probe", "slot-probe-task", async () => {
+  const occupy = async () => {
+    const slot = await acquireGroupSlot("slot-probe");
     peak = Math.max(peak, ++active);
     await new Promise<void>((resolve) => holds.push(resolve));
     active -= 1;
-  });
+    releaseGroupSlot("slot-probe", slot);
+  };
   const firstFour = [0, 1, 2, 3].map(occupy);
   const waiter = occupy();
   await sleep(10);
