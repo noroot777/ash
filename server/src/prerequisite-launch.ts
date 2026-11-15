@@ -29,7 +29,7 @@ import { groups, queueItems, scheduledMessages, taskPrerequisiteLaunches, tasks 
 import { bus } from "./bus.js";
 import { prerequisiteStandings } from "./prerequisite-standing.js";
 import { dependentEdges, launchRecord, prerequisiteEdges } from "./prerequisite-store.js";
-import { holdForPrerequisites, withPrerequisiteLock } from "./prerequisite-gate.js";
+import { holdForPrerequisitesLocked, withPrerequisiteLock } from "./prerequisite-gate.js";
 import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { forgetStanding, isRepublishingView, republishPrerequisiteView } from "./prerequisite-view.js";
 import { freeSlot, onSlotFreed, takeSlot } from "./launch-slots.js";
@@ -88,18 +88,27 @@ async function releaseOne(taskId: string): Promise<void> {
   if (!takeSlot(task.groupId, taskId)) return;
   let handed = false;
   try {
-    const hold = await holdForPrerequisites(task, { source: "release", actingUserId: launch.actingUserId });
-    if (hold) return;
     const { claimOwnTurn, releaseTurn } = await import("./runs.js");
     const { isAcceptingTask } = await import("./acceptance-lock.js");
-    const turn = claimOwnTurn(taskId, "single");
-    if (!turn) return;
-    if (isAcceptingTask(taskId)) { releaseTurn(taskId, turn); return; }
+    // 「请求还在 → 认领回合 → 定起点」在同一把锁里做完，跟停止键（withdrawPrerequisiteRequest）排成先后：
+    // 锁外读到的那份请求可能已经被撤回了，锁里重读一遍才算数；认领之后再来的停止，冻住的是这一次起跑。
+    const claimed = await withPrerequisiteLock(taskId, async () => {
+      const current = await launchRecord(taskId);
+      if (!current?.requestedAt) return null;
+      const turn = claimOwnTurn(taskId, "single");
+      if (!turn) return null;
+      if (isAcceptingTask(taskId) || await holdForPrerequisitesLocked(taskId, { source: "release", actingUserId: current.actingUserId })) {
+        releaseTurn(taskId, turn);
+        return null;
+      }
+      return { turn, actingUserId: current.actingUserId };
+    });
+    if (!claimed) return;
     const { seatThenStart } = await import("./queue-seat.js");
     const { resumeOrRunTask } = await import("./task-resume.js");
     let run: Promise<void> | null = null;
-    const started = await seatThenStart(taskId, turn, () => {
-      run = resumeOrRunTask(taskId, { reason: "wake", turnHeld: turn, actingUserId: launch.actingUserId });
+    const started = await seatThenStart(taskId, claimed.turn, () => {
+      run = resumeOrRunTask(taskId, { reason: "wake", turnHeld: claimed.turn, actingUserId: claimed.actingUserId });
       return run;
     });
     if (!started.ok) return;
@@ -114,22 +123,33 @@ async function releaseOne(taskId: string): Promise<void> {
 }
 
 /**
- * 停止键撤回「等齐就起」：还没起跑（backlog）、挂着请求的才撤。留一行时间线、页面上的「在等」随之消失，
- * 刷新之后也看得出停过。撤了返回 true。
+ * 停止键撤回「等齐就起」：还没起跑（backlog）、挂着请求的才撤。留一行记录、页面上的「在等」随之消失，
+ * 刷新之后也看得出停过 —— 从没跑过的任务没有会话可写时间线，记成任务历史里的一条。
+ *
+ * 放行那一路已经认领了回合、正要起跑的（锁里认领，见 releaseOne），把那一次起跑冻住：它在拉起执行器
+ * 之前的最后一道闸上撤回（turn-lock.ts `freezeStartingTurn`）。返回 `starting`，由调用方照「停一个正在
+ * 起跑的回合」那一套收尾；撤了、没在起跑返回 `withdrawn`；没有可撤的返回 null。
  */
-export async function withdrawPrerequisiteRequest(taskId: string): Promise<boolean> {
+export async function withdrawPrerequisiteRequest(taskId: string): Promise<"withdrawn" | "starting" | null> {
   return withPrerequisiteLock(taskId, async () => {
     const task = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-    if (task?.status !== "backlog" || !(await launchRecord(taskId))?.requestedAt) return false;
+    const record = await launchRecord(taskId);
+    if (task?.status !== "backlog" || !record?.requestedAt) return null;
+    const { freezeStartingTurn, isTurnClaimed } = await import("./runs.js");
+    const starting = isTurnClaimed(taskId) && freezeStartingTurn(taskId, "canceled");
     await db.update(taskPrerequisiteLaunches).set({ requestedAt: null, blocked: null }).where(eq(taskPrerequisiteLaunches.taskId, taskId));
     // 等着跟它一起开工的回复（执行型待发送）一并撤掉，否则下一次投递扫描又把请求挂回去；原文照抄进时间线。
     const { cancelPendingMessage } = await import("./pending-messages.js");
     const stashed = await db.select().from(scheduledMessages).where(and(eq(scheduledMessages.taskId, taskId),
       eq(scheduledMessages.status, "pending"), eq(scheduledMessages.execution, true), isNull(scheduledMessages.deliveringSince)));
     for (const message of stashed) await cancelPendingMessage(message, "停止了「前置站齐就开工」");
-    await appendTaskTimeline(taskId, receiptLine("已停止：不再等前置站齐自动开工。要开工再点运行。"));
+    const text = "已停止：不再等前置站齐自动开工。要开工再点运行。";
+    if (!await appendTaskTimeline(taskId, receiptLine(text))) {
+      const { noteSystemNotice } = await import("./user-action-rejection.js");
+      await noteSystemNotice(taskId, `prerequisite-withdrawn:${record.requestedAt}`, "停止", text);
+    }
     await republishPrerequisiteView([taskId]);
-    return true;
+    return starting ? "starting" : "withdrawn";
   });
 }
 

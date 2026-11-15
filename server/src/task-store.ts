@@ -11,7 +11,7 @@ import { admissionKeysOf, admitMembers, TeamAcceptingError } from "./team-admiss
 import { execFileText as exec } from "./exec.js";
 import { expandHome } from "./git.js";
 import { baseRef, initializeBranchPlan } from "./task-branch-plan.js";
-import { assertPrerequisiteEdges, insertPrerequisiteEdges, type EdgeTask, type PrerequisiteEdge } from "./prerequisite-store.js";
+import { assertPrerequisiteEdges, insertPrerequisiteEdges, withPrerequisiteGraph, type EdgeTask, type PrerequisiteEdge } from "./prerequisite-store.js";
 import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
 import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors.js";
@@ -351,9 +351,13 @@ export async function createTasks(
         if (!hadStart && row.worktreeStartCommit) pinned.push(row);
       }
       // 合入目标要等分支计划算出来才判得了（prerequisite-store.ts），所以排在它后面、落库前面。
-      await assertPrerequisiteEdges(prerequisites, normalizedRows.map(edgeTaskOf));
-      await db.insert(tasks).values(normalizedRows);
-      await insertPrerequisiteEdges(prerequisites);
+      // 判环与落边在整张图上排队（prerequisite-store.ts `withPrerequisiteGraph`）；不带前置的照旧直接落。
+      const land = async () => {
+        await assertPrerequisiteEdges(prerequisites, normalizedRows.map(edgeTaskOf));
+        await db.insert(tasks).values(normalizedRows);
+        await insertPrerequisiteEdges(prerequisites);
+      };
+      await (prerequisites.length ? withPrerequisiteGraph(land) : land());
     } catch (error) {
       for (const row of pinned) await exec("git", ["-C", expandHome(repoByProject.get(row.projectId)), "update-ref", "-d", baseRef(row.id), row.worktreeStartCommit!]).catch(() => {});
       throw error;

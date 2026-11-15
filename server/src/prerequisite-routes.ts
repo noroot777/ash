@@ -10,7 +10,7 @@ import { tasks } from "./db/schema.js";
 import { actorOf } from "./auth/context.js";
 import { visibleTaskIds } from "./auth/visibility.js";
 import {
-  assertPrerequisiteEdges, insertPrerequisiteEdges, PrerequisiteError, removePrerequisiteEdge, type PrerequisiteEdge,
+  assertPrerequisiteEdges, insertPrerequisiteEdges, PrerequisiteError, removePrerequisiteEdge, withPrerequisiteGraph, type PrerequisiteEdge,
 } from "./prerequisite-store.js";
 import { notePrerequisiteProgress } from "./prerequisite-launch.js";
 import { withPrerequisiteLock } from "./prerequisite-gate.js";
@@ -71,11 +71,12 @@ export function mountPrerequisiteRoutes(api: Hono): void {
     if (hidden) return c.json({ error: `前置任务 ${hidden} 不存在` }, 404);
     try {
       // 跟开工判定同一把锁：判定读完边、还没落定起点时加进来的边，会落到那次起点之外（prerequisite-gate.ts）。
-      await withPrerequisiteLock(taskId, async () => {
+      // 判环与落边在整张图上排队（prerequisite-store.ts `withPrerequisiteGraph`）。
+      await withPrerequisiteLock(taskId, () => withPrerequisiteGraph(async () => {
         const edges = ids.map((prerequisiteId) => ({ taskId, prerequisiteId }));
         await assertPrerequisiteEdges(edges);
         await insertPrerequisiteEdges(edges);
-      });
+      }));
     } catch (error) {
       const refused = failed(error);
       if (refused) return c.json(refused.body, refused.status);

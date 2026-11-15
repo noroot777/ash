@@ -227,7 +227,13 @@ api.post("/tasks/:id/stop", async (c) => {
   const verdict = stopVerdict(await readActionFacts(r));
   if (!verdict.ok) return refuse(c, taskId, "停止", verdict);
   if (await cancelQueueAdvance(taskId)) return c.json({ stopped: true, note: "已撤销待启动的队列运行请求" });
-  if (await withdrawPrerequisiteRequest(taskId)) return c.json({ stopped: true, note: "已撤销「前置站齐就开工」的请求" });
+  const withdrawn = await withdrawPrerequisiteRequest(taskId);
+  if (withdrawn === "withdrawn") return c.json({ stopped: true, note: "已撤销「前置站齐就开工」的请求" });
+  // 前置刚站齐、放行那一路已经在起跑：请求撤了、那一次起跑也冻住了，照下面「停一个正在起跑的回合」收尾。
+  if (withdrawn === "starting") {
+    await setTaskStatus(taskId, "canceled");
+    return c.json(await stopStartingTurn(taskId));
+  }
   if (stopTask(taskId)) return c.json({ stopped: true });
   if (r.status === "queued" || r.status === "running") {
     await setTaskStatus(taskId, "canceled");

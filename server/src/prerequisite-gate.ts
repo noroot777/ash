@@ -14,21 +14,23 @@
 //   起点就用那一版。整次判定在仓库锁里做，定下之前再判一遍，有一条变了就从头再来。
 // - **边集合与起点同一次落定**：加、去前置和这里共用同一把任务级锁（`withPrerequisiteLock`）；删前置任务
 //   不走这把锁，所以落库那一笔事务里再读一遍边，跟算起点时的不一样就从头再来。
-// - **工作目录真的换成了起点**：没开过工作区的照常按起点建；已经开过（比如先点过预览）而且原封未动的，
-//   就地换到起点；里面已经有改动或提交的，不替它做决定，挡住并说清原因。不用独立工作区的下游拿不到前置
-//   分支上的代码，建边时就拒（prerequisite-store.ts），这里再挡一次兜老数据。
-import { existsSync } from "node:fs";
+// - **代码真的到了下游干活的地方才算开工**：工作区 / 任务分支换到起点（prerequisite-install.ts）之后才落
+//   「已开工」，半路断掉留下的都是「还没开工」。不用独立工作区的下游在项目目录里干活，核对那里检出的代码里
+//   有每条前置交出的那一版（prerequisite-start-point.ts `checkoutHasPrerequisites`），没有就挡住说清。
+// - **停止键撤回的请求不复活**：放行那一路只认此刻还挂着的那一笔（prerequisite-launch.ts releaseOne 在锁里
+//   重读、认领回合，再进这里）。
 import { and, eq } from "drizzle-orm";
 import { prerequisiteStepText } from "@ash/shared/prerequisites";
 import { db } from "./db/index.js";
 import { projects, taskPrerequisiteLaunches, taskPrerequisites, tasks } from "./db/schema.js";
 import { execFileText as exec } from "./exec.js";
-import { expandHome, worktreePathFor } from "./git.js";
+import { expandHome } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { baseRef, commitAt } from "./task-branch-plan.js";
 import { prerequisiteStandings, type PrerequisiteStanding } from "./prerequisite-standing.js";
 import { launchRecord, prerequisiteEdges } from "./prerequisite-store.js";
-import { prerequisiteStart } from "./prerequisite-start-point.js";
+import { checkoutHasPrerequisites, prerequisiteStart } from "./prerequisite-start-point.js";
+import { applyInstall, planInstall } from "./prerequisite-install.js";
 import { republishPrerequisiteView } from "./prerequisite-view.js";
 import { alertLine, appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -50,6 +52,8 @@ export function withPrerequisiteLock<T>(taskId: string, work: () => Promise<T>):
 
 export async function recordRequest(taskId: string, request: LaunchRequest, blocked: string | null): Promise<void> {
   const existing = await launchRecord(taskId);
+  // 放行那一路只替已经挂着的请求办事：没有了（停止键撤回了）就不替谁新挂一笔。
+  if (request.source === "release" && !existing?.requestedAt) return;
   await db.insert(taskPrerequisiteLaunches)
     .values({ taskId, requestedAt: now(), source: request.source, actingUserId: request.actingUserId ?? null, blocked })
     .onConflictDoUpdate({
@@ -75,6 +79,11 @@ export async function recordRequest(taskId: string, request: LaunchRequest, bloc
  */
 export function holdForPrerequisites(task: { id: string }, request: LaunchRequest): Promise<PrerequisiteHold | null> {
   return withPrerequisiteLock(task.id, () => gate(task.id, request));
+}
+
+/** 同上，给已经拿着 `withPrerequisiteLock` 的调用方（锁不可重入）。 */
+export function holdForPrerequisitesLocked(taskId: string, request: LaunchRequest): Promise<PrerequisiteHold | null> {
+  return gate(taskId, request);
 }
 
 const RETRY = Symbol("retry");
@@ -118,28 +127,28 @@ async function attemptGate(taskId: string, request: LaunchRequest): Promise<Prer
       return found ? [{ task: found.task, commit: found.standing.commit }] : [];
     });
     const block = async (reason: string) => { await recordRequest(taskId, request, reason); return { reason }; };
-    const unreachable = !task.useWorktree && certified.find(({ task: p }) => p.useWorktree);
-    if (unreachable) return block(`${label(task)}不用独立工作区，拿不到${label(unreachable.task)}分支上的代码`);
-    const start = await prerequisiteStart(project.repoPath, task, certified);
+    // 用 worktree 的下游按起点建 / 换工作区；不用的在项目目录里干活，只能核对那里检出的代码里有没有前置的。
+    const start = task.useWorktree
+      ? await prerequisiteStart(project.repoPath, task, certified)
+      : await checkoutHasPrerequisites(project.repoPath, task, certified);
     if (!start.ok) return block(start.reason);
-    const repo = expandHome(project.repoPath);
-    const path = worktreePathFor(project.repoPath, task.id);
-    // 已经开过的工作区：原封未动（还在建任务时冻结的起点上、没有未提交改动）才能就地换到新起点。
-    let move = false;
-    if (task.useWorktree && existsSync(path)) {
-      const head = await commitAt(path, "HEAD");
-      if (head !== start.commit) {
-        const clean = !(await exec("git", ["-C", path, "status", "--porcelain"]).then((r) => r.stdout.trim(), () => "?"));
-        if (!clean || !head || head !== task.worktreeStartCommit) {
-          return block(`${label(task)}的工作区里已经有自己的改动或提交，换不成前置的代码；放弃那些改动后会自动开工`);
-        }
-        move = true;
-      }
-    }
+    const install = task.useWorktree ? await planInstall(project.repoPath, task, start.commit) : { ok: true as const, plan: { kind: "none" } as const };
+    if (!install.ok) return block(install.reason);
     // 定下之前再判一遍：这一段里有前置又动了（开了一轮、交出的版本变了），这一次作废重来。
     const again = await prerequisiteStandings(ids);
     if (ids.some((id) => !sameStanding(standings.get(id)?.standing, again.get(id)?.standing))) return RETRY;
-    if (task.useWorktree) await exec("git", ["-C", repo, "update-ref", baseRef(task.id), start.commit]);
+    // 先写意图、再把代码真的放到位、最后才落「已开工」（顺序的理由见 prerequisite-install.ts 文件头）。
+    if (task.useWorktree) {
+      const repo = expandHome(project.repoPath);
+      const before = await commitAt(repo, baseRef(task.id));
+      await exec("git", ["-C", repo, "update-ref", baseRef(task.id), start.commit]);
+      try {
+        await applyInstall(project.repoPath, install.plan, start.commit);
+      } catch (error) {
+        if (before) await exec("git", ["-C", repo, "update-ref", baseRef(task.id), before]).catch(() => undefined);
+        return block(`${label(task)}的工作区没能换到前置的代码（${error instanceof Error ? error.message.split("\n")[0] : String(error)}）`);
+      }
+    }
     const committed = await db.transaction(async (tx) => {
       const current = (await tx.select().from(taskPrerequisites).where(eq(taskPrerequisites.taskId, taskId))).map((edge) => edge.prerequisiteId);
       if (!sameEdges(current, ids)) return false;
@@ -153,32 +162,18 @@ async function attemptGate(taskId: string, request: LaunchRequest): Promise<Prer
           .where(and(eq(taskPrerequisites.taskId, taskId), eq(taskPrerequisites.prerequisiteId, id)));
       }
       // 起点定下了。别的入口起跑时，起不起得来由它自己负责（用户看得到结果、队列自己会重试），这一笔请求
-      // 就此了结；放行那一路自己放出来的，要等真起跑了才了结（见 prerequisite-launch.ts releaseOne）。
-      const launch = (await tx.select().from(taskPrerequisiteLaunches).where(eq(taskPrerequisiteLaunches.taskId, taskId))).at(0);
+      // 就此了结；放行那一路自己放出来的，要等真起跑了才了结（见 prerequisite-launch.ts releaseOne）——
+      // 它只认已经挂着的那一笔，不新建：停止键撤回了的，不能被放行那一路复活。
       await tx.insert(taskPrerequisiteLaunches)
-        .values({ taskId, launchedAt: now(), blocked: null, requestedAt: request.source === "release" ? launch?.requestedAt ?? now() : null })
+        .values({ taskId, launchedAt: now(), blocked: null, requestedAt: null })
         .onConflictDoUpdate({
           target: taskPrerequisiteLaunches.taskId,
           set: { launchedAt: now(), blocked: null, ...(request.source === "release" ? {} : { requestedAt: null }) },
         });
       return true;
     });
+    // 边变了：工作区已经换到这次的起点、意图也记着它，下一次判定从这里接着核对（换过去的目录认得出没动过）。
     if (!committed) return RETRY;
-    if (move) {
-      try {
-        await exec("git", ["-C", path, "reset", "--keep", start.commit]);
-      } catch (error) {
-        // 没换成：撤回这一次开工，工作区与登记都退回去，挡住并说清楚。
-        await db.transaction(async (tx) => {
-          await tx.update(tasks).set({ worktreeStartCommit: task.worktreeStartCommit, worktreeBaseBranch: task.worktreeBaseBranch, updatedAt: now() })
-            .where(eq(tasks.id, taskId));
-          await tx.update(taskPrerequisites).set({ inheritedCommit: null }).where(eq(taskPrerequisites.taskId, taskId));
-          await tx.update(taskPrerequisiteLaunches).set({ launchedAt: null }).where(eq(taskPrerequisiteLaunches.taskId, taskId));
-        });
-        if (task.worktreeStartCommit) await exec("git", ["-C", repo, "update-ref", baseRef(task.id), task.worktreeStartCommit]).catch(() => undefined);
-        return block(`${label(task)}的工作区没能换到前置的代码（${error instanceof Error ? error.message.split("\n")[0] : String(error)}）`);
-      }
-    }
     await appendTaskTimeline(taskId, receiptLine(`前置都站稳了，从 ${certified.map(({ task: p }) => label(p)).join("、")} 的代码开工。`));
     await republishPrerequisiteView([taskId]);
     return null;

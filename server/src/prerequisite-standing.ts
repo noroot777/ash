@@ -10,7 +10,8 @@
 //   ⑤ 审过的：最近那条审查链通过了，或者被用户裁定收场（「这一轮不用改了」「转为独立任务」），
 //      **并且审过的就是现在的代码**。新鲜度判据只认 shared 的 `reviewAnchorMatches` 那一份 —— 审查面板
 //      判「结论过期」用的也是它，两边说法不会对不上。
-//   ⑥ 工作区里有没提交的改动的不算：下游只能从提交拿代码，那些改动带不过去，等于没给全。
+//   ⑥ 工作区里有没提交的改动的不算：下游只能从提交拿代码，那些改动带不过去，等于没给全。不用 worktree 的
+//      前置同样如此（它的工作区就是项目目录，交出的是那里检出的提交）—— 它是代码前置，不是排先后的队列。
 //
 // **证明不了就不算**：工作区在、却读不出它此刻的提交或干不干净（`unreadable`），不能当成「没变」放行。
 // 工作区已经不在（被清理，代码只剩分支）时，审过的那一版只能拿审查锚定的提交去对分支头，对不上就是审查后又动过。
@@ -23,6 +24,7 @@
 //
 // 合并结果审查（`accepted_merge`）是验收之后的独立只读链，不参与：走到那一步的前置已经在 ① 里了。
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { isAcceptedStage, type TaskStage } from "@ash/shared";
 import type { PrerequisiteStep } from "@ash/shared/prerequisites";
@@ -36,7 +38,7 @@ import { workspaceSnapshot, type WorkspaceSnapshot } from "./workspace-fingerpri
 
 type TaskRow = typeof tasks.$inferSelect;
 
-/** `commit`：站稳时这次判定核实过、下游该拿的那一版；不用 worktree、已验收（交给目标分支判）的为 null。 */
+/** `commit`：站稳时这次判定核实过、下游该拿的那一版；已验收的（交给目标分支判）为 null。 */
 export type PrerequisiteStanding = { step: PrerequisiteStep; round: number | null; commit: string | null };
 
 const at = (step: PrerequisiteStep, round: number | null = null, commit: string | null = null): PrerequisiteStanding =>
@@ -73,7 +75,8 @@ async function workspaceProof(task: TaskRow): Promise<WorkspaceProof> {
   const repo = (await db.select({ repoPath: projects.repoPath }).from(projects).where(eq(projects.id, task.projectId))).at(0)?.repoPath;
   if (!repo) return { kind: "unreadable" };
   const path = task.useWorktree ? worktreePathFor(repo, task.id) : repo;
-  if (task.useWorktree && !existsSync(path)) return { kind: "gone", commit: await deliveredCommit(repo, task) };
+  // 目录在、却没有 `.git` 的是清理留下的空壳（git.ts worktreeLeftoverAt）：在里面读快照会上溯到主仓，读到的是主仓的提交。
+  if (task.useWorktree && !existsSync(join(path, ".git"))) return { kind: "gone", commit: await deliveredCommit(repo, task) };
   const snapshot = await workspaceSnapshot(path, { verify: true });
   return snapshot.head && snapshot.dirty !== null ? { kind: "live", snapshot } : { kind: "unreadable" };
 }
@@ -122,8 +125,8 @@ export async function prerequisiteStanding(task: TaskRow): Promise<PrerequisiteS
   }
   const { snapshot } = proof;
   if (reviewed && reviewAnchorMatches(reviewed, snapshot) !== true) return at("review_stale", round);
-  // 不用 worktree 的任务在项目目录里干活：那里的未提交改动不一定是它的，它也不交代码（只排先后），不拿这条拦它。
-  if (!task.useWorktree) return at("settled");
+  // 不用 worktree 的也一样：它交出的就是项目目录此刻检出的那个提交，没提交的改动带不过去。那些改动
+  // 是不是它的分不出来 —— 分不出来就是证明不了，等它们提交或清掉。
   if (snapshot.dirty) return at("dirty");
   return at("settled", null, snapshot.head);
 }

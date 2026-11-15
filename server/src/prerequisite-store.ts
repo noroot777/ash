@@ -85,6 +85,16 @@ async function graphWith(extra: PrerequisiteEdge[]): Promise<Map<string, string[
   return graph;
 }
 
+// 成环是整张图的性质：A→B 与 B→A 同时加，各自读到的旧图里都没有环，两条都落下就成了环。所以「判一批边、
+// 落这批边」在全局排成一条队（加边的入口只有建任务和建好之后加，两处都包在这里面）。只在真要加边时排，
+// 没有前置的建任务不受影响；去掉边不会成环，不进这条队。
+let graphChain: Promise<unknown> = Promise.resolve();
+export function withPrerequisiteGraph<T>(work: () => Promise<T>): Promise<T> {
+  const next = graphChain.catch(() => undefined).then(work);
+  graphChain = next.catch(() => undefined);
+  return next;
+}
+
 /**
  * 一批边能不能成立。`rows` 是这批里新建、还没落库的任务（建任务时逐条写前置走这里），其余的到库里取。
  * 不成立就抛 `PrerequisiteError`，一条都不落。
@@ -134,7 +144,7 @@ async function edgeProblem(task: EdgeTask, prerequisite: EdgeTask, known: Map<st
   return null;
 }
 
-/** 落边（调用方先过 `assertPrerequisiteEdges`）。重复的忽略。 */
+/** 落边（调用方先过 `assertPrerequisiteEdges`，两步包在同一次 `withPrerequisiteGraph` 里）。重复的忽略。 */
 export async function insertPrerequisiteEdges(edges: PrerequisiteEdge[]): Promise<void> {
   if (!edges.length) return;
   const at = now();
