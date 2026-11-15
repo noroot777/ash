@@ -182,7 +182,7 @@ try {
   assert.equal(await liveRows.count(), 2, "说完的一段 + 正在说的一段");
   assert.match(await liveRows.nth(1).innerText(), /执行者\s*正在组织发言…/);
   assert.equal(await page.evaluate(() => window.__opened_live ?? null), null, "辩论中点气泡不去审查格");
-  assert.equal(await page.locator(".live-fixture .ruling-row").count(), 0, "辩论中回复框就是平常的回复框");
+  assert.equal(await page.locator(".live-fixture .reply-dock-row").count(), 0, "辩论中回复框就是平常的回复框");
 
   // ① 裁完以后：缩成一行小灰字；概览里没有「用这段作要点」。
   assert.match(await settledBubble.getAttribute("class"), /\bis-settled\b/);
@@ -194,14 +194,14 @@ try {
   const ruling = page.locator(".settled-fixture .dispute-part[aria-label='裁定']");
   assert.match(await ruling.innerText(), /让它接着改/);
   assert.match(await ruling.innerText(), /附了一段要交代的话/);
-  assert.equal(await page.locator(".settled-fixture .ruling-row").count(), 0, "裁完了回复框顶上没有那一行");
+  assert.equal(await page.locator(".settled-fixture .reply-dock-row").count(), 0, "裁完了回复框顶上没有那一行");
 
   // ① 中途断了：断在哪一段、谁没能发言；回复框顶上那一行仍给「让双方辩论」。
   const failed = page.locator(".failed-fixture .debate-bubble");
   assert.match(await failed.getAttribute("class"), /\bis-failed\b/);
   assert.equal(await failed.locator(".debate-bubble-say").innerText(), "辩论断在第 2 段：执行者没能发言，前 1 段都在");
-  assert.equal(await page.locator(".failed-fixture .ruling-row").getByRole("button", { name: "让双方辩论" }).count(), 1, "上一场断了可以再辩");
-  assert.equal(await page.locator(".awaiting-fixture .ruling-row").getByRole("button", { name: "让双方辩论" }).count(), 0, "辩完的那条不再辩");
+  assert.equal(await page.locator(".failed-fixture .reply-dock-row").getByRole("button", { name: "让双方辩论" }).count(), 1, "上一场断了可以再辩");
+  assert.equal(await page.locator(".awaiting-fixture .reply-dock-row").getByRole("button", { name: "让双方辩论" }).count(), 0, "辩完的那条不再辩");
 
   // ⑥ 配不到落盘记录：原始行一条都不少。
   const fallback = page.locator(".fallback-fixture .debate-bubble");

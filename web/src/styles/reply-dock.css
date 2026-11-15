@@ -1,0 +1,58 @@
+/* 回复框顶上那一行（task-detail/ReplyDock.tsx）：几颗纯文字的切换键 + 顶替发送键的那颗。等你裁定、
+   `@` 了一个人之后它来做什么，两处同一副骨架、同一个位置。只用主题变量，浅色深色同一套。 */
+
+/* —— 那一行：没有事在等、也没叫人，这一段不存在 —— */
+.reply-dock { border-bottom: 1px solid var(--line); animation: reply-dock-in var(--dur-2) var(--ease-out) backwards; }
+@keyframes reply-dock-in { from { opacity: 0; transform: translateY(4px); } }
+.reply-dock-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 5px 6px; }
+.reply-dock-key {
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 0 10px;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--t-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.reply-dock-key:hover { background: var(--raised); color: var(--ink); }
+.reply-dock-key[aria-pressed="true"] { background: var(--overlay); color: var(--ink); font-weight: var(--w-medium); }
+/* 按不动（任务或审查正在跑）：键还在、指得到，为什么按不动写在浮出来的那一句里。 */
+.reply-dock-key[aria-disabled="true"] { color: var(--faint); cursor: default; }
+.reply-dock-key[aria-disabled="true"]:hover { background: transparent; color: var(--faint); }
+.reply-dock-key:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.reply-dock-error { margin: 0; padding: 0 12px 6px; color: var(--red); font-size: var(--t-xs); line-height: 1.5; overflow-wrap: anywhere; }
+
+/* 顶替发送键的那颗：写着这一按的名字。 */
+.reply-dock-send {
+  display: inline-flex;
+  flex: none;
+  height: 29px;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--action);
+  padding: 0 12px;
+  color: var(--on-action);
+  font: inherit;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out);
+}
+.reply-dock-send:hover:not(:disabled) { background: var(--action-hover); }
+.reply-dock-send:disabled { opacity: .4; cursor: default; }
+.reply-dock-send:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+@media (max-width: 760px) {
+  .reply-dock-key { padding: 0 8px; }
+}
+:root[data-motion="reduce"] .reply-dock { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) .reply-dock { animation: none; }
+}

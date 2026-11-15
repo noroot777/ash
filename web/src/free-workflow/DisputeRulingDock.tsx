@@ -1,12 +1,11 @@
 import { useId, useState } from "react";
 import type { FreeReviewDisputeTarget, FreeReviewRun, TaskListItem } from "@ash/shared";
 import { MAX_FREE_REVIEW_DEBATE_EXCHANGES } from "@ash/shared/free-workflow";
-import { SpinnerGap } from "@phosphor-icons/react";
-import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { useRovingChoice } from "../lib/useRovingChoice.ts";
 import { focusReplyInput } from "../task-detail/replyQuote.ts";
 import type { ReplyOverride } from "../task-detail/replyOverride.ts";
+import { ReplyDockRow, ReplyDockSend } from "../task-detail/ReplyDock.tsx";
 import {
   DEBATE_CHOICE, RESOLUTIONS, UPHELD_AFTER_DEBATE, choiceTip, exchangesText, resolvedText,
 } from "./disputeCopy.ts";
@@ -18,41 +17,10 @@ const EXCHANGES = Array.from({ length: MAX_FREE_REVIEW_DEBATE_EXCHANGES }, (_, i
 const choiceLabel = (choice: RulingChoice) => (choice === "debate" ? DEBATE_CHOICE.button : RESOLUTIONS[choice].button);
 const sendLabel = (choice: RulingChoice) => (choice === "debate" ? DEBATE_CHOICE.send : RESOLUTIONS[choice].send);
 
-function tipOf(choice: RulingChoice, context: RulingContext, held: string | null): string {
-  if (held) return held;
+function tipOf(choice: RulingChoice, context: RulingContext): string {
   if (choice === "debate") return DEBATE_CHOICE.tip;
   const tip = choiceTip(choice, context.target.round);
   return choice === "upheld" && context.debated ? `${tip}${UPHELD_AFTER_DEBATE}` : tip;
-}
-
-/** 框顶那一行里的一颗：纯文字的切换键；它什么时候该点、按下去会怎样，指到（键盘走到）才浮出来。 */
-function ChoiceKey({ choice, context, held, pressed, onPick }: {
-  choice: RulingChoice;
-  context: RulingContext;
-  /** 此刻按不动的原因（任务在跑、审查在进行、这一下正在交）；null = 能按。 */
-  held: string | null;
-  pressed: boolean;
-  onPick: () => void;
-}) {
-  const tip = useHoverTip({ placement: "above" });
-  const tipId = useId();
-  const text = tipOf(choice, context, held);
-  return (
-    <>
-      <button
-        type="button"
-        className="ruling-choice"
-        aria-pressed={pressed}
-        // 按不动时仍然指得到、走得进来：原因就在浮出来的那句里。
-        aria-disabled={held ? true : undefined}
-        aria-describedby={tipId}
-        onClick={() => { if (!held) onPick(); }}
-        {...tip.anchorProps}
-      >{choiceLabel(choice)}</button>
-      <span id={tipId} hidden>{text}</span>
-      <HoverTip at={tip.at}>{text}</HoverTip>
-    </>
-  );
 }
 
 /** 那一行真的画出来了才登记（答题卡展开时回复框不挂，它也就不在）；「用这段作要点」认这份登记。 */
@@ -155,15 +123,16 @@ export function useDisputeRulingDock({ task, reviews, known, onChanged, notify }
   };
 
   const head = (
-    <div className="ruling-dock" onKeyDown={(event) => { if (event.key === "Escape" && choice) { event.preventDefault(); cancel(); } }}>
+    <ReplyDockRow
+      label="怎么裁定这条驳回"
+      choices={context.choices.map((item) => ({ id: item, label: choiceLabel(item), tip: tipOf(item, context), held }))}
+      pressed={choice}
+      onPick={pick}
+      onEscape={choice ? cancel : undefined}
+      error={error}
+    >
       <DockPresence taskId={task.id} context={context} />
-      <div className="ruling-row" role="group" aria-label="怎么裁定这条驳回">
-        {context.choices.map((item) => (
-          <ChoiceKey key={item} choice={item} context={context} held={held} pressed={item === choice} onPick={() => pick(item)} />
-        ))}
-      </div>
-      {error && <p className="ruling-error" role="alert">{error}</p>}
-    </div>
+    </ReplyDockRow>
   );
 
   return {
@@ -180,12 +149,7 @@ export function useDisputeRulingDock({ task, reviews, known, onChanged, notify }
             onChange: (note) => update((current) => ({ ...current, note })),
           },
         },
-    send: choice ? (
-      <button type="button" className="ruling-send" disabled={busy || !!context.blocked} aria-busy={busy || undefined} onClick={() => void submit()}>
-        {busy && <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />}
-        {sendLabel(choice)}
-      </button>
-    ) : null,
+    send: choice ? <ReplyDockSend label={sendLabel(choice)} busy={busy} disabled={!!context.blocked} onSend={() => void submit()} /> : null,
     submit: () => void submit(),
     cancel,
   };
