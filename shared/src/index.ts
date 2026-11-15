@@ -382,6 +382,12 @@ export interface Task {
   // 派它的那条任务（普通任务里派出去的独立任务收在谁名下）。不是 parentId：那是团队执行者。
   // 随列表下发；建任务时可显式指定（用户从回复框派出去），不给就按创建来源认（server/src/task-dispatch.ts）。
   dispatchedBy?: string | null;
+  // 这一条名下全部停着（「派出的任务」格头按了「全部停下」的时刻）；null = 没停。名下的任务被谁按住，
+  // 前端顺着 dispatchedBy 往上找第一条带它的（web/src/lib/dispatchHold.ts）。
+  dispatchHoldAt?: string | null;
+  // 按了「全部停下」、名下还没停完（中途出错，服务端在补停）：页面说「正在停下」、给「再停一次」，
+  // 不说「已全部停下」也不给「接着跑」。停完清空。
+  dispatchHoldPendingAt?: string | null;
   // §Pause 检查点续跑指令；非空时结算 paused，恢复后清空。
   resumePrompt?: string | null;
   // 就地验证轮的轮次号；非空 = 这一轮验证还没出结论。任务此刻多半没有进程在跑

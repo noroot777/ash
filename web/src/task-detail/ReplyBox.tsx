@@ -62,6 +62,7 @@ export function ReplyBox({
   tasks = [],
   override,
   onAnswer,
+  onOpenTask,
   onDispatch,
   onDiscuss,
   discussHeld = null,
@@ -478,6 +479,7 @@ export function ReplyBox({
         onCancel={(messageId) => void scheduled.cancel(messageId)}
         tasks={tasks}
         onSendNow={(messageId) => void scheduled.sendNow(messageId)}
+        onOpenTask={onOpenTask}
       />
       {!covering && <UploadAttachmentList
         attachments={uploads.attachments}

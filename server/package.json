@@ -141,6 +141,7 @@
     "test:task-derivation": "tsx scripts/test-task-derivation-policy.ts",
     "test:task-creation-origin": "tsx scripts/test-task-creation-origin.ts",
     "test:task-dispatched-by": "tsx scripts/test-task-dispatched-by.ts",
+    "test:dispatch-hold": "tsx scripts/test-dispatch-hold.ts",
     "test:dispatch-signals": "tsx scripts/test-dispatch-signals.ts",
     "test:task-list-body": "tsx scripts/test-task-list-body.ts",
     "test:task-event-timestamps": "tsx scripts/test-task-event-timestamps.ts",

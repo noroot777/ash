@@ -196,6 +196,11 @@ export const api = {
     request(`/groups/${id(groupId)}/run`, { method: "POST" }),
   pauseGroup: (groupId: string): Promise<Group> =>
     request(`/groups/${id(groupId)}/pause`, { method: "POST" }),
+  // 「派出的任务」格头那一对键：这条任务名下全部停下 / 接着跑（server/src/dispatch-hold.ts）。
+  holdDispatched: (taskId: string): Promise<Task> =>
+    request(`/tasks/${id(taskId)}/dispatched/hold`, { method: "POST" }),
+  releaseDispatched: (taskId: string): Promise<Task> =>
+    request(`/tasks/${id(taskId)}/dispatched/release`, { method: "POST" }),
   createTasksBatch: (
     groupId: string,
     body: BatchCreateTasksBody,

@@ -12,7 +12,7 @@ import { markTaskActionsDirty } from "./task-actions-dirty.js";
 export {
   ACCEPT_HOLD_ROLE, bindTurnToken, claimAcceptanceHold, claimIdleWorkspaceTurns, claimOwnTurn, claimTurn, claimWakeTurn,
   claimWorkspaceTurn, freezeStartingTurn, heldForAcceptance, isTurnClaimed, reclaimTurn, turnBusyText,
-  releaseHeldTurn, releaseTurn, SEAT_ROLLBACK_ROLE, claimNonTurn, takeStartFreeze, turnIdentity,
+  releaseHeldTurn, releaseTurn, SEAT_ROLLBACK_ROLE, claimNonTurn, takeStartFreeze, takeStartFreezeDetail, turnIdentity,
   turnRole, turnSourceReview, turnSourceRole, waitForTurnIdle, whenTurnIdle,
 } from "./turn-lock.js";
 export type { TurnIdentity, TurnOwner, TurnReview, TurnSource } from "./turn-lock.js";

@@ -417,4 +417,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE task_memos ADD COLUMN attachments TEXT",
   // 派它的那条任务(见 db/schema.ts 同名列)。存量行由 migrate-dispatched-by.ts 按 creation_origin 回填。
   "ALTER TABLE tasks ADD COLUMN dispatched_by TEXT",
+  // 名下全部停着 / 欠一次起跑 / 停下还没做完(见 db/schema.ts 同名列)。存量行 NULL = 没停过。
+  "ALTER TABLE tasks ADD COLUMN dispatch_hold_at TEXT",
+  "ALTER TABLE tasks ADD COLUMN hold_owed_by TEXT",
+  "ALTER TABLE tasks ADD COLUMN dispatch_hold_pending_at TEXT",
 ];
