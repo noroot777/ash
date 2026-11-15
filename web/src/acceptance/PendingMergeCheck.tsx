@@ -142,15 +142,19 @@ export function PendingMergeCheck({ task, notify, onTaskUpdated }: {
           confirmDisabled={commitDefault.pending}
           onConfirm={() => void run("remerge")} onClose={() => { if (!busy) setAction(null); }}
         >
-          {commitDefault.value === null
-            ? <p role={commitDefault.error ? "alert" : "status"}>
+          {commitDefault.value !== null && (
+            <label className="acc-inline-check">
+              <input type="checkbox" checked={commitChecked} disabled={busy} onChange={(event) => setCommitChoice(event.target.checked)} />
+              合并后提交
+            </label>
+          )}
+          {/* 还没读到、重读中、重读失败：勾（读到过就留着）照画，确认键等它读到（与验收确认层同口径）。 */}
+          {commitDefault.pending && (
+            <p role={commitDefault.error ? "alert" : "status"}>
               {commitDefault.error ? <>项目默认读不出来：{commitDefault.error} <button type="button" className="acc-link" onClick={commitDefault.reload}>重试</button></>
                 : "正在读项目默认…"}
             </p>
-            : <label className="acc-inline-check">
-              <input type="checkbox" checked={commitChecked} disabled={busy} onChange={(event) => setCommitChoice(event.target.checked)} />
-              合并后提交
-            </label>}
+          )}
         </ConfirmDialog>
       )}
     </>

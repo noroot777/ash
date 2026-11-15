@@ -12,6 +12,8 @@
 // ⑭c 第 1 轮审查：层开着时项目默认被别处改了（project.updated / 断线重连），没手动动过的「提交」跟着变、
 //    动过的照旧；「记住」挂住不返回时最多等几秒就照常验收；勾上派生任务一起验收时前提列不预告跳过
 //    （统一验收不走「运行」那一勾）。
+// ⑭d 第 2 轮审查：项目默认重读失败、挂住时，手动改过「提交」也不许确认；勾照画、写明在读，读有上限，
+//    到点给「重试」。
 // ⑮ 红行拦主按钮：前置命令在跑（gate.occupied）时主按钮 disabled、那一行写「运行中」；
 //    门禁状态读不出来（GET 503）时主按钮 disabled、那一行写「状态读不出来」带「重试」，点重试
 //    读到之后才放开 —— **读失败不放行**（「没读到」不等于「没在跑」）。
@@ -184,7 +186,49 @@ export async function testAcceptGateConfirm({ open, run }) {
     await page.close();
   }
 
-  // ⑭c 「记住」挂住不返回：最多等几秒，照层里看见的值验收，提示里说没记住。
+  // ⑭d 第 2 轮审查：手动改过「提交」之后项目默认重读失败 —— 勾留着看得见，确认键锁着、给重试；
+  //     读到了才放开，发的是手动那一勾。
+  {
+    const { page, store } = await open({ gate: { command: null, running: null, latest: null, basis: null }, events: true,
+      acceptReply: () => { store.stage = "accepted"; return { status: 200, body: { accepted: true, taskId: "gate-task" } }; } });
+    const layer = await openConfirm(page);
+    const commitBox = layer.getByRole("checkbox", { name: "合并后提交" });
+    await commitBox.uncheck();
+    store.projectDown = true;
+    await page.evaluate(() => window.emitGateEvent({ type: "project.updated", projectId: "proj-1" }));
+    await layer.getByText("项目默认读不出来").waitFor();
+    assert.equal(await commitBox.isChecked(), false, "勾还在：看得见这一按会发什么");
+    const confirm = layer.getByRole("button", { name: "验收，不提交", exact: true });
+    assert.equal(await confirm.isEnabled(), false, "动过这一勾也不能绕过读不出来");
+    store.projectDown = false;
+    await layer.getByRole("button", { name: "重试", exact: true }).click();
+    await confirm.and(page.locator("button:enabled")).waitFor();
+    assert.equal(await commitBox.isChecked(), false, "读到了也不盖掉手动那一勾");
+    await confirm.click();
+    await accepted(store, 1);
+    assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: false });
+    await page.close();
+  }
+
+  // ⑭d 重读挂住不返回：层里写明在读，读有上限，到点落到「读不出来 · 重试」。
+  {
+    const { page, store } = await open({ gate: { command: null, running: null, latest: null, basis: null }, events: true });
+    const layer = await openConfirm(page);
+    const confirm = layer.getByRole("button", { name: "确认验收", exact: true });
+    await confirm.and(page.locator("button:enabled")).waitFor();
+    store.projectHold = new Promise(() => {});
+    await page.evaluate(() => window.emitGateEvent({ type: "project.updated", projectId: "proj-1" }));
+    await layer.getByText("读取项目默认").waitFor();
+    assert.equal(await confirm.isEnabled(), false, "重读中不许确认");
+    assert.equal(await layer.getByRole("checkbox", { name: "合并后提交" }).count(), 1, "重读中勾照画");
+    await layer.getByText("项目默认读不出来").waitFor({ timeout: 15_000 });
+    store.projectHold = null;
+    await layer.getByRole("button", { name: "重试", exact: true }).click();
+    await confirm.and(page.locator("button:enabled")).waitFor();
+    await page.close();
+  }
+
+  // ⑭c 「记住」挂住不返回：最多等几秒，照层里看见的值验收，提示里说不一定记住了。
   {
     const { page, store } = await open({ gate: { command: "./kb.sh test full", running: null, latest: null, basis: null } });
     store.memoryHold = new Promise(() => {});
@@ -193,7 +237,7 @@ export async function testAcceptGateConfirm({ open, run }) {
     await layer.getByRole("button", { name: "跳过并验收", exact: true }).click();
     await waitUntil(() => store.accepts.length === 1, { message: "挂住的保存不能把验收一直拦在后面", timeout: 15_000 });
     assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: true, gate: "skip" });
-    await page.getByRole("status", { name: "操作结果" }).filter({ hasText: "这次的选择没记住：保存超时" }).waitFor();
+    await page.getByRole("status", { name: "操作结果" }).filter({ hasText: "这次的选择不一定记住了：保存超时" }).waitFor();
     await deskSettled(page);
     assert.equal(await mainButton(page).isEnabled(), true, "验收走完之后主按钮放开");
     await page.close();

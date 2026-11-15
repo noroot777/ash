@@ -84,16 +84,21 @@ assert.equal(confirmView(input()).gateIntent, undefined);
 // 5. 项目默认没读到之前不许确认：那一刻层里写的「会提交」没有依据。
 {
   assert.equal(confirmView(input({ commitDefault: null })).confirmDisabled, true);
-  assert.equal(confirmView(input({ commitDefault: null, commitChoice: true })).confirmDisabled, false,
-    "用户自己勾过就有依据了");
+  assert.equal(confirmView(input({ commitDefault: null, commitChoice: true })).confirmDisabled, true,
+    "用户勾过也不算：项目默认读到之前一律不许确认（第 2 轮审查 F2）");
   assert.equal(confirmView(input({ commitChoosable: false, commitDefault: null })).confirmDisabled, false);
 }
 
-// 5b. 项目默认正在重读（别处刚改过、断线重连）：没手动改过「提交」就等读到再放行；手动改过的照它走。
+// 5b. 项目默认正在重读（别处刚改过、断线重连）或读失败：不论手动改没改过「提交」，读到之前都不放行；
+//     读到之后手动改过的照它走。
 {
   const refreshing = confirmView(input({ commitDefault: true, commitDefaultPending: true }));
   assert.equal(refreshing.confirmDisabled, true, "拿旧默认去确认，会把旧值发出去还写回项目设置（第 1 轮审查 F1）");
-  assert.equal(confirmView(input({ commitDefault: true, commitDefaultPending: true, commitChoice: false })).confirmDisabled, false);
+  const edited = confirmView(input({ commitDefault: true, commitDefaultPending: true, commitChoice: false }));
+  assert.equal(edited.confirmDisabled, true, "手动改过不是豁免：读失败时它会把看不见的值发出去（第 2 轮审查 F2）");
+  const settled = confirmView(input({ commitDefault: true, commitChoice: false }));
+  assert.equal(settled.confirmDisabled, false);
+  assert.equal(settled.commitParam, false, "读到之后照手动选的发");
 }
 
 // 6. 一次多个任务又不提交：只能合一个，确认键灰着。

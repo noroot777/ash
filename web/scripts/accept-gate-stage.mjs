@@ -102,7 +102,7 @@ export async function assertTone(row, tone, message) {
  * （缺省回一个 409 target_unresolved「模拟验收响应」：什么都没动）。确认层点确认时记下的那几勾
  * （PUT /accept-memory）按顺序记在 `store.memory`，照服务端那样落回门禁状态的 skipRemembered 与
  * 项目的 acceptCommit（`role` 不是 admin 时提交那一勾不写）；`store.memoryDown` 让它回 503，
- * `store.memoryHold` 给一个 promise 就扣住它（连接挂住、不报错）。`children` 给依赖计划挂派生任务。
+ * `store.memoryHold` 给一个 promise 就扣住它（连接挂住、不报错）；`store.projectHold` 同样扣住 GET /api/projects。`children` 给依赖计划挂派生任务。
  *
  * 其余开关：`status` 门禁读取一开始就回这个错误码；`hold` 一开始就扣住每一发门禁读取（见
  * store.hold）；`init(page)` 在打开页面之前往页面里塞东西；`clock` 打开之前装假时钟；
@@ -134,7 +134,7 @@ export function gateStage({ browser, base }) {
       served: (index) => servedAt(index).promise,
       requestIds: [], status, hold, logText: "checking 42 / 640", command: command === undefined ? gate?.command ?? null : command, gate,
       projectReads: 0, projectDown, accepts: [], acceptReply, stage: new URLSearchParams(query).get("stage") ?? "verified",
-      memory: [], memoryDown: false, memoryHold: null, acceptCommit,
+      memory: [], memoryDown: false, memoryHold: null, projectHold: null, acceptCommit,
       taskFetches: 0, unexpected: [] };
     // 优先级最低的兜底：没桩的请求一律 404 并记下来，免得落到 vite 上回一页 HTML。
     await page.route("**/api/**", (route) => {
@@ -170,8 +170,9 @@ export function gateStage({ browser, base }) {
     }));
     // SSE 在这一屏里只负责「有变化就重读」，测试里不发事件，挂一条空流免得它反复重连。
     await page.route("**/api/events", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }));
-    await page.route("**/api/projects", (route) => {
+    await page.route("**/api/projects", async (route) => {
       store.projectReads += 1;
+      if (store.projectHold) { await store.projectHold; return; }
       if (store.projectDown) return json(route, { error: "数据库忙" }, 503);
       return json(route, [{ id: "proj-1", name: "kb", repoPath: "/repo", myRole: role, acceptGateCommand: store.command,
         ...(store.acceptCommit === undefined ? {} : { acceptCommit: store.acceptCommit }) }]);

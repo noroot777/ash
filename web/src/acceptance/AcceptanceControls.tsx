@@ -176,8 +176,9 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
     setFailure(null);
     // 先记下这一次怎么勾的（下一个任务打开就是这个样子），再验收。记不住不拦验收：这一按用的是层里看到的值，
     // 记没记住在提示后面缀一句。
-    // 等它有上限（第 1 轮审查 F2）：连接挂住不报错时，不能让验收一直等在「记住」后面。到点就放弃这一份
-    // （中止请求：没送到的不会再落库，送到了的早已落完 —— 服务端那一下是一条语句，不会晚到盖掉下一次）。
+    // 等它有上限（第 1 轮审查 F2）：连接挂住不报错时，不能让验收一直等在「记住」后面。到点就不等了 ——
+    // 放弃等待不是取消，服务端那一下可能稍后才做完，所以提示只说「不一定记住了」；晚做完的它也盖不掉
+    // 之后再确认的那一次（服务端按到达顺序写，server/src/accept-order.ts）。
     let forgot = "";
     if (memory) {
       try {
@@ -187,9 +188,10 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         // 打开时以为有管理权限、确认那一刻已经没有了：照回执说，不拿打开时的角色推断（第 1 轮审查 N2）。
         if (memory.commit !== undefined && !saved.commitSaved && canManage !== false) forgot = "（「提交」那一勾只管了这一次：项目默认要管理员改）";
       } catch (reason) {
-        const why = reason instanceof DOMException && reason.name === "TimeoutError" ? "保存超时"
-          : reason instanceof Error ? reason.message : String(reason);
-        forgot = `（这次的选择没记住：${why}）`;
+        // 超时、连接断了：请求可能已经到了服务端，说不准；服务端回了错误：确实没写。
+        forgot = reason instanceof DOMException && reason.name === "TimeoutError" ? "（这次的选择不一定记住了：保存超时）"
+          : reason instanceof TypeError ? "（这次的选择不一定记住了：连接断了）"
+            : `（这次的选择没记住：${reason instanceof Error ? reason.message : String(reason)}）`;
       }
     }
     const say = (message: string) => notify(message + forgot);
