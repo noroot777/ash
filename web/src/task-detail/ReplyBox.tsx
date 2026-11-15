@@ -29,7 +29,7 @@ import { useStandingExecutor, type StandingExecutor } from "./useStandingExecuto
 import { useExecutorProfiles } from "./useExecutorProfiles.ts";
 import { ComposerInput } from "./ComposerInput.tsx";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
-import { overrideKeyDown, type ReplyOverride } from "./replyOverride.ts";
+import { overrideKeyDown, overrideTake, type ReplyOverride } from "./replyOverride.ts";
 import { ScreenshotAnnotation } from "../page-annotation/ScreenshotAnnotation.tsx";
 import { screenshotCandidates, type AnnotationReply } from "../page-annotation/model.ts";
 import type { ConversationItem } from "./conversationModel.ts";
@@ -176,8 +176,7 @@ export function ReplyBox({
     onPendingChange: draft.setPendingUploads,
   });
   // 借用中且选了一档：正文是那一档的话（或整块换成别的），斜杠、@ 这些都不出。
-  const take = override?.take ?? null;
-  const takeInput = take && "input" in take ? take.input : null;
+  const { take, takeInput } = overrideTake(override);
   // 任务正在跑不再是「不能说话」,而是「说了先排队」:发出去的消息落成一条待发送
   // 消息(mode=queued),这一轮一结束由服务端自动送进同一个会话。所以 disabled 只留
   // 真正没得说的情况——不是单任务、已归档、以及从没跑过因而没有会话可续。
@@ -574,6 +573,7 @@ export function ReplyBox({
           rows={3}
           hidden={!!take && !takeInput}
           disabled={inputDisabled && !takeInput}
+          readOnly={takeInput?.readOnly}
           placeholder={takeInput?.placeholder ?? placeholder}
           aria-label={takeInput?.label ?? "回复任务"}
           onChange={(event) => {

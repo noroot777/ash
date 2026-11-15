@@ -16,6 +16,9 @@ import { sameDisputeTarget, type RulingChoice } from "./disputeRuling.ts";
  * 按任务存在模块里，不在回复框的 state 里：会话里那几颗「用这段作要点」、审查格、左侧抽屉都要往里写，
  * 它们跟回复框不在同一棵子树上。
  *
+ * 交出去到回来之间这份草稿不收任何写入（`submitRuling`）：成功回来要按目标把它清掉，中间补写的字、
+ * 切的档、引的段都会跟着被清掉，又没发出去——所以那一段时间里框只读、键按不动、哪儿都引不进来。
+ *
  * 要点三档共用一份：用户在几档之间来回比的时候不该丢掉已经写的话。它跟平常回复的草稿是两份——
  * 不选任何一档时回复框照常发普通消息。
  */
@@ -27,6 +30,8 @@ export type RulingDraft = {
 };
 
 const drafts = new Map<string, RulingDraft>();
+/** 正在交的那几个任务：交出去到回来之间，草稿不收写入。 */
+const submitting = new Set<string>();
 const listeners = new Map<string, Set<() => void>>();
 
 function emit(taskId: string) {
@@ -74,9 +79,26 @@ export function useRulingDraft(taskId: string, target: FreeReviewDisputeTarget |
   }, [stale, stored, taskId]);
   const draft = stored && !stale ? stored : null;
   const update = useCallback((change: (draft: RulingDraft) => RulingDraft) => {
-    if (target) write(taskId, change(draftFor(taskId, target)));
+    if (target && !submitting.has(taskId)) write(taskId, change(draftFor(taskId, target)));
   }, [target?.runId, target?.round, taskId]);
-  return { draft, update };
+  return { draft, update, submitting: submitting.has(taskId) };
+}
+
+/**
+ * 交一次裁定 / 辩论：交出去到回来之间这个任务的草稿不收写入（见上）。同一个任务已经在交就不再交，
+ * 返回 false。`run` 里自己按结果清草稿（`clearRulingDraft`），那是这一次交付自己的收尾，不受这把锁挡。
+ */
+export async function submitRuling(taskId: string, run: () => Promise<void>): Promise<boolean> {
+  if (submitting.has(taskId)) return false;
+  submitting.add(taskId);
+  emit(taskId);
+  try {
+    await run();
+  } finally {
+    submitting.delete(taskId);
+    emit(taskId);
+  }
+  return true;
 }
 
 /** 交完了（或者用户换了主意）：这一条的草稿清掉；不是它的那份不碰。 */
@@ -119,20 +141,21 @@ export function quotedTurn(turn: Pick<FreeReviewDebateTurn, "side" | "seq" | "su
  * 落点是 upheld 那一档：引用一段发言的意思就是「照这个改」。
  */
 export function quoteIntoRuling(taskId: string, target: FreeReviewDisputeTarget, text: string) {
+  if (submitting.has(taskId)) return;
   const base = draftFor(taskId, target);
   write(taskId, { ...base, choice: "upheld", note: base.note.trim() ? `${base.note.trimEnd()}\n\n${text}` : text });
   focusReplyInput(taskId);
 }
 
 /**
- * 会话气泡、审查格、左侧抽屉三处「用这段作要点」共用这一个：那一行此刻画着、按得动、针对的就是
- * `target` 这一条才给；按了落进要点，左侧抽屉收起（它盖着回复框）。
+ * 会话气泡、审查格、左侧抽屉三处「用这段作要点」共用这一个：那一行此刻画着、按得动、没在交、针对的
+ * 就是 `target` 这一条才给；按了落进要点，左侧抽屉收起（它盖着回复框）。
  */
 export function useRulingQuote(taskId: string, target: FreeReviewDisputeTarget | null | undefined) {
   useTaskListener(taskId);
   const drawer = useLeftDrawer();
   const dock = docks.get(taskId);
-  if (!target || !dock || dock.blocked || !sameDisputeTarget(dock.target, target)) return undefined;
+  if (!target || !dock || dock.blocked || submitting.has(taskId) || !sameDisputeTarget(dock.target, target)) return undefined;
   return (turn: FreeReviewDebateTurn) => {
     quoteIntoRuling(taskId, target, quotedTurn(turn));
     drawer?.close();

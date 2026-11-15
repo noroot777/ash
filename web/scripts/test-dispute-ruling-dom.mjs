@@ -6,7 +6,9 @@
 // ② 选了一档回复框就成了那一步：提示换成那一档的选填说明，发送键写着这一按的名字；几档之间来回切
 //    写的字不丢；再点同一颗或 Esc 回到平常的回复框；不选就照常发普通消息；
 // ③ 选「让双方辩论」：正文换成「来回 1 2 3」+「审查者先说，共 N 段」，发送键「开始辩论」；
-// ④ 按下去直接发，不弹确认框；发出去的带着选的那一刻冻结的那一条；忙着时键按不动；失败时选择和字都留着；
+// ④ 按下去直接发，不弹确认框；发出去的带着选的那一刻冻结的那一条；失败时选择和字都留着；交出去到回来
+//    之间什么都写不进来（框只读、档切不了、Esc 退不掉、哪儿都引不进来）——成功回来会把草稿清掉，
+//    中间补的字没发出去，留着就是静默吞掉；
 // ⑤ 驳回换了一条（轮询带来新状态），选择和写的字跟着旧那条走掉，不落到新那条上；
 // ⑥ 审查格那一轮下面只有记录：驳回一句话 + 折着的依据（老驳回摊开）、裁定一句结果，没有裁定的按钮。
 import assert from "node:assert/strict";
@@ -188,6 +190,33 @@ try {
   await replace.locator(".ruling-send").click();
   await waitUntil(() => requests.length === 4, "发出裁定");
   assert.deepEqual(requests[3].body.target, { runId: "run-1", round: 2 }, "发出去的是新那条");
+
+  // ④ 交出去到回来之间什么都写不进来：成功回来草稿按目标清掉，中间补的字、切的档、引的段都会跟着没。
+  const debated = scope("debated");
+  const quotes = debated.locator(".fixture-inspector").getByRole("button", { name: "用这段作要点" });
+  assert.equal(await quotes.count(), 3, "等裁定时审查格里能引");
+  let landed;
+  respond = () => new Promise((done) => {
+    landed = () => done({ body: { resolution: "upheld", repairError: null, deferredTask: null, state: { reviews: [] } } });
+  });
+  await debated.getByRole("button", { name: "让它接着改" }).click();
+  await textarea("debated").fill("第一份已经点发送的要点");
+  await debated.locator(".ruling-send").click();
+  await waitUntil(() => requests.length === 5, "发出裁定");
+  assert.equal(requests[4].body.note, "第一份已经点发送的要点");
+  assert.equal(await textarea("debated").getAttribute("readonly"), "", "交着的时候框只读");
+  await textarea("debated").focus();
+  await page.keyboard.type("发送后又补写的这句话");
+  assert.equal(await textarea("debated").inputValue(), "第一份已经点发送的要点", "补写写不进来");
+  await waitUntil(async () => (await quotes.count()) === 0, "交着的时候哪儿都引不进来");
+  const other = debated.getByRole("button", { name: "这一轮不用改了" });
+  assert.equal(await other.getAttribute("aria-disabled"), "true", "交着的时候档切不了");
+  await other.click({ force: true });
+  await page.keyboard.press("Escape");
+  assert.equal(await debated.getByRole("button", { name: "让它接着改" }).getAttribute("aria-pressed"), "true", "切档、Esc 都退不掉这一档");
+  landed();
+  await debated.locator(".ruling-row").waitFor({ state: "detached" });
+  assert.equal(requests.length, 5, "只交了一次");
 
   // ⑥（续）老驳回、裁过的那一轮。
   const old = scope("old").locator(".dispute-record");

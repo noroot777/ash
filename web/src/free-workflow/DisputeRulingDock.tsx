@@ -11,30 +11,32 @@ import {
   DEBATE_CHOICE, RESOLUTIONS, UPHELD_AFTER_DEBATE, choiceTip, exchangesText, resolvedText,
 } from "./disputeCopy.ts";
 import { openDisputeTarget, rulingContext, sameDisputeTarget, type RulingChoice, type RulingContext } from "./disputeRuling.ts";
-import { clearRulingDraft, useRulingDockPresence, useRulingDraft } from "./disputeRulingStore.ts";
+import { clearRulingDraft, submitRuling, useRulingDockPresence, useRulingDraft } from "./disputeRulingStore.ts";
 
 const EXCHANGES = Array.from({ length: MAX_FREE_REVIEW_DEBATE_EXCHANGES }, (_, index) => String(index + 1));
 
 const choiceLabel = (choice: RulingChoice) => (choice === "debate" ? DEBATE_CHOICE.button : RESOLUTIONS[choice].button);
 const sendLabel = (choice: RulingChoice) => (choice === "debate" ? DEBATE_CHOICE.send : RESOLUTIONS[choice].send);
 
-function tipOf(choice: RulingChoice, context: RulingContext): string {
-  if (context.blocked) return context.blocked;
+function tipOf(choice: RulingChoice, context: RulingContext, held: string | null): string {
+  if (held) return held;
   if (choice === "debate") return DEBATE_CHOICE.tip;
   const tip = choiceTip(choice, context.target.round);
   return choice === "upheld" && context.debated ? `${tip}${UPHELD_AFTER_DEBATE}` : tip;
 }
 
 /** 框顶那一行里的一颗：纯文字的切换键；它什么时候该点、按下去会怎样，指到（键盘走到）才浮出来。 */
-function ChoiceKey({ choice, context, pressed, onPick }: {
+function ChoiceKey({ choice, context, held, pressed, onPick }: {
   choice: RulingChoice;
   context: RulingContext;
+  /** 此刻按不动的原因（任务在跑、审查在进行、这一下正在交）；null = 能按。 */
+  held: string | null;
   pressed: boolean;
   onPick: () => void;
 }) {
   const tip = useHoverTip({ placement: "above" });
   const tipId = useId();
-  const text = tipOf(choice, context);
+  const text = tipOf(choice, context, held);
   return (
     <>
       <button
@@ -42,9 +44,9 @@ function ChoiceKey({ choice, context, pressed, onPick }: {
         className="ruling-choice"
         aria-pressed={pressed}
         // 按不动时仍然指得到、走得进来：原因就在浮出来的那句里。
-        aria-disabled={context.blocked ? true : undefined}
+        aria-disabled={held ? true : undefined}
         aria-describedby={tipId}
-        onClick={() => { if (!context.blocked) onPick(); }}
+        onClick={() => { if (!held) onPick(); }}
         {...tip.anchorProps}
       >{choiceLabel(choice)}</button>
       <span id={tipId} hidden>{text}</span>
@@ -59,7 +61,12 @@ function DockPresence({ taskId, context }: { taskId: string; context: RulingCont
   return null;
 }
 
-function ExchangesPicker({ value, onChange, onCancel }: { value: number; onChange: (value: number) => void; onCancel: () => void }) {
+function ExchangesPicker({ value, busy, onChange, onCancel }: {
+  value: number;
+  busy: boolean;
+  onChange: (value: number) => void;
+  onCancel: () => void;
+}) {
   const roving = useRovingChoice(EXCHANGES, String(value), (next) => onChange(Number(next)));
   const labelId = useId();
   return (
@@ -67,7 +74,7 @@ function ExchangesPicker({ value, onChange, onCancel }: { value: number; onChang
       <span id={labelId}>来回</span>
       <div {...roving.groupProps} aria-labelledby={labelId} className="ruling-exchanges-seg">
         {EXCHANGES.map((count) => (
-          <button key={count} type="button" {...roving.itemProps(count)} onClick={() => onChange(Number(count))}>{count}</button>
+          <button key={count} type="button" {...roving.itemProps(count)} disabled={busy} onClick={() => onChange(Number(count))}>{count}</button>
         ))}
       </div>
       <small>{exchangesText(value)}</small>
@@ -101,13 +108,14 @@ export function useDisputeRulingDock({ task, reviews, known, onChanged, notify }
   onChanged: (state: FreeWorkflowApiState) => void;
   notify: (message: string) => void;
 }): ReplyOverride | undefined {
-  const { draft, update } = useRulingDraft(task.id, openDisputeTarget(reviews), known);
-  const [busy, setBusy] = useState(false);
+  // 交出去到回来之间（`busy`）草稿不收写入：框只读、键按不动、哪儿都引不进来，见 disputeRulingStore。
+  const { draft, update, submitting: busy } = useRulingDraft(task.id, openDisputeTarget(reviews), known);
   const [failure, setFailure] = useState<{ target: FreeReviewDisputeTarget; text: string } | null>(null);
   const context = rulingContext(reviews, task);
   if (!context) return undefined;
   const choice = draft?.choice && context.choices.includes(draft.choice) ? draft.choice : null;
   const error = failure && sameDisputeTarget(failure.target, context.target) ? failure.text : null;
+  const held = context.blocked ?? (busy ? "正在交，回来之前改不了" : null);
 
   const cancel = () => {
     update((current) => ({ ...current, choice: null }));
@@ -123,28 +131,27 @@ export function useDisputeRulingDock({ task, reviews, known, onChanged, notify }
     if (!draft || !choice || busy || context.blocked) return;
     // 提交只认选的那一刻定下的那一条；它已经不在等裁定时服务端如实拒，不替用户换人。
     const target = draft.target;
-    setBusy(true);
     setFailure(null);
-    try {
-      if (choice === "debate") {
-        const result = await api.startFreeReviewDebate(task.id, draft.exchanges, target);
-        onChanged(result.state);
-        // 辩完还是回到这一行拍板：写了一半的要点留着。
-        clearRulingDraft(task.id, target, true);
-        notify(`已开始辩论：审查者先说，共 ${draft.exchanges * 2 + 1} 段；说完还是由你裁定`);
-      } else {
-        const written = draft.note.trim();
-        const result = await api.resolveFreeReviewDispute(task.id, choice, written || null, target);
-        onChanged(result.state);
-        clearRulingDraft(task.id, target);
-        notify(resolvedText(choice, target.round, result, !!written));
+    await submitRuling(task.id, async () => {
+      try {
+        if (choice === "debate") {
+          const result = await api.startFreeReviewDebate(task.id, draft.exchanges, target);
+          onChanged(result.state);
+          // 辩完还是回到这一行拍板：写了一半的要点留着。
+          clearRulingDraft(task.id, target, true);
+          notify(`已开始辩论：审查者先说，共 ${draft.exchanges * 2 + 1} 段；说完还是由你裁定`);
+        } else {
+          const written = draft.note.trim();
+          const result = await api.resolveFreeReviewDispute(task.id, choice, written || null, target);
+          onChanged(result.state);
+          clearRulingDraft(task.id, target);
+          notify(resolvedText(choice, target.round, result, !!written));
+        }
+      } catch (reason) {
+        // 失败时选中的那一档和写的话原样留着，说清楚哪儿没成。
+        setFailure({ target, text: reason instanceof Error ? reason.message : choice === "debate" ? "发起辩论失败" : "裁定失败" });
       }
-    } catch (reason) {
-      // 失败时选中的那一档和写的话原样留着，说清楚哪儿没成。
-      setFailure({ target, text: reason instanceof Error ? reason.message : choice === "debate" ? "发起辩论失败" : "裁定失败" });
-    } finally {
-      setBusy(false);
-    }
+    });
   };
 
   const head = (
@@ -152,7 +159,7 @@ export function useDisputeRulingDock({ task, reviews, known, onChanged, notify }
       <DockPresence taskId={task.id} context={context} />
       <div className="ruling-row" role="group" aria-label="怎么裁定这条驳回">
         {context.choices.map((item) => (
-          <ChoiceKey key={item} choice={item} context={context} pressed={item === choice} onPick={() => pick(item)} />
+          <ChoiceKey key={item} choice={item} context={context} held={held} pressed={item === choice} onPick={() => pick(item)} />
         ))}
       </div>
       {error && <p className="ruling-error" role="alert">{error}</p>}
@@ -163,12 +170,13 @@ export function useDisputeRulingDock({ task, reviews, known, onChanged, notify }
     head,
     take: !choice ? null
       : choice === "debate"
-        ? { body: <ExchangesPicker value={draft?.exchanges ?? 1} onChange={(exchanges) => update((current) => ({ ...current, exchanges }))} onCancel={cancel} /> }
+        ? { body: <ExchangesPicker value={draft?.exchanges ?? 1} busy={busy} onChange={(exchanges) => update((current) => ({ ...current, exchanges }))} onCancel={cancel} /> }
         : {
           input: {
             value: draft?.note ?? "",
             placeholder: RESOLUTIONS[choice].placeholder,
             label: `${RESOLUTIONS[choice].button}：${RESOLUTIONS[choice].placeholder}`,
+            readOnly: busy,
             onChange: (note) => update((current) => ({ ...current, note })),
           },
         },

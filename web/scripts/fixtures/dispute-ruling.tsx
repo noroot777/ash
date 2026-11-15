@@ -109,7 +109,7 @@ createRoot(document.getElementById("root")!).render(
         <Stage name="replace" reviews={[runOf({})]} />
         {/* 老驳回：没有那一句、也没提转出。 */}
         <Stage name="old" reviews={[runOf({ summary: null, deferReason: "" })]} inspector />
-        <Stage name="debated" reviews={[runOf({ debates: [finishedDebate] })]} />
+        <Stage name="debated" reviews={[runOf({ debates: [finishedDebate] })]} inspector />
         <Stage name="running" task={{ status: "running" }} reviews={[runOf({})]} />
         <Stage name="reviewing" reviews={[reviewingRun, runOf({})]} />
         <Stage name="debating" reviews={[runOf({ debates: [runningDebate] })]} />

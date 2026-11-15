@@ -12,7 +12,7 @@ export type ReplyOverride = {
   head: ReactNode;
   /** 选了一档：正文换成那一档的话（`input`），或整块换掉（`body`，辩论的来回数）。 */
   take: null
-    | { input: { value: string; placeholder: string; label: string; onChange: (value: string) => void } }
+    | { input: { value: string; placeholder: string; label: string; readOnly?: boolean; onChange: (value: string) => void } }
     | { body: ReactNode };
   /** 选了一档时顶替发送键的那颗。 */
   send: ReactNode;
@@ -20,6 +20,12 @@ export type ReplyOverride = {
   /** Esc：回到平常的回复框。 */
   cancel: () => void;
 };
+
+/** 选了哪一档（`take`），以及那一档是不是借用框里的正文（`takeInput`）。 */
+export function overrideTake(override: ReplyOverride | undefined) {
+  const take = override?.take ?? null;
+  return { take, takeInput: take && "input" in take ? take.input : null };
+}
 
 /** 借用中、选了一档时框里的 Esc / 发送键归那一档：Esc 还回平常的框，发送键交那一档。接走了给 true。 */
 export function overrideKeyDown(override: ReplyOverride | undefined, event: KeyboardEvent<HTMLTextAreaElement>): boolean {
