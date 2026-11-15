@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { dispatchHolderOf, dispatchHoldKey, dispatchHoldPhrase, dispatchedLive } from "../src/lib/dispatchHold.ts";
 import { scheduledWaitText } from "../../shared/src/scheduled-message-wait.ts";
+import { leavesOnArchive } from "../src/lib/archivedSelection.ts";
 
 const task = (id, extra = {}) => ({
   id, title: `任务 ${id}`, parentId: null, dispatchedBy: null, dispatchHoldAt: null, status: "done", archived: false,
@@ -64,5 +65,19 @@ assert.equal(dispatchHoldPhrase({ title: "派活的那条" }), "「派活的那�
 assert.equal(dispatchHoldPhrase({ title: "" }), "「未命名任务」名下已全部停下");
 assert.equal(scheduledWaitText({ kind: "dispatchHeld", by: { id: "H", title: "派活的那条" } }), "「派活的那条」名下已全部停下，接着跑后发送");
 assert.equal(scheduledWaitText({ kind: "groupPaused" }), "分组已暂停，恢复后发送", "分组暂停的那一句不变");
+
+// —— 派活那条归档了：从按停者的链接 / 地址栏打开它照常开着（才按得到「接着跑」）；开着的时候被归档才退出。
+{
+  const archivedHolder = { id: "H", archived: true };
+  let verdict = leavesOnArchive(null, archivedHolder, false);
+  assert.equal(verdict.leave, false, "打开时就已归档的照常打开");
+  verdict = leavesOnArchive(verdict.seen, archivedHolder, false);
+  assert.equal(verdict.leave, false, "列表刷新之后还开着");
+  verdict = leavesOnArchive(null, { id: "X", archived: false }, false);
+  assert.equal(verdict.leave, false);
+  assert.equal(leavesOnArchive(verdict.seen, { id: "X", archived: true }, false).leave, true, "开着的时候被归档了才退出");
+  assert.equal(leavesOnArchive(verdict.seen, { id: "X", archived: true }, true).leave, false, "在归档设置里不退");
+  assert.equal(leavesOnArchive(verdict.seen, archivedHolder, false).leave, false, "换了一条重新认");
+}
 
 console.log("dispatch hold (web): ok");
