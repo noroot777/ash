@@ -5,7 +5,8 @@
 // ② 发起：@ 一个人、选「讨论」——发送键写「开始讨论」、占位写「要讨论什么…」；轮数那一段点一下换一档、下次记得；
 //    「和谁」那一段多选，再勾一个就是三方（中间不再摆一个人的模型）；@ 这条任务自己的执行器时「讨论」按不动；
 //    `/讨论` 叫上次那个人、停在「讨论」；任务正在跑时「开始讨论」按不动、说清为什么；发出去的是话题、轮数和叫的人；
-// ③ 会话里一场一颗气泡、跟在你发起时那一句后面（那一句带着发起时附的文件），段间流水一条不留；四种此刻（一段都
+// ③ 会话里一场一颗气泡、跟在你发起时那一句后面（那一句带着发起时附的文件；发起时读不到的旧记录在展开、审议格、
+//    完整记录三处都写一句），段间流水一条不留；四种此刻（一段都
 //    没交卷 / 在说 / 说完 / 断了）各写各的；在说时展开前后，谁在说第几段都在气泡下面；
 // ④ 点法：在说时点气泡 = 就地摊开、浮出那一行只有文档键；说完点气泡 = 「审议」格里打开这一场、滚过去亮一下，
 //    浮出那一行两颗键；「审议」格那一段和就地摊开的是同一个组件；文档键 / 点一行 = 左侧抽屉读完整记录。
@@ -183,6 +184,10 @@ try {
   const inlineRows = await done.locator(".debate-overview[aria-label='讨论概览'] .debate-row").allInnerTexts();
   assert.equal(paneRows.length, 3);
   assert.deepEqual(inlineRows, paneRows, "审议格那一段和就地摊开的是同一个组件");
+  const LOST = "发起时有 1 份之前的对话记录读不到（gemini），各方的背景里没有它们";
+  assert.equal(await done.locator(".discussion-lost").innerText(), LOST, "气泡展开：背景不全写在概览开头");
+  assert.equal(await record.locator(".discussion-lost").innerText(), LOST, "审议格那一场同样写");
+  assert.equal(await scope("live").locator(".discussion-lost").count(), 0, "背景是全的不写");
 
   // ④ 文档键 = 左侧抽屉读完整记录：一段一节，第一轮写明写的时候没看对方的。
   await pressKey(done, "讨论的完整记录");
@@ -193,6 +198,7 @@ try {
   assert.match(await drawer.locator('.debate-record-seg[data-seq="1"] > header').innerText(), /codex\s*第 1 段 · 写的时候没看对方的/);
   assert.doesNotMatch(await drawer.locator('.debate-record-seg[data-seq="3"] > header').innerText(), /没看/, "第二轮起不写");
   assert.match(await drawer.innerText(), /第 2 段的完整发言/, "抽屉里是完整发言");
+  assert.equal(await drawer.locator(".discussion-lost").innerText(), LOST, "完整记录开头也写背景不全");
   // 点审议格那一段的一行：抽屉换到那一段（同一屉，不叠两屉）。
   await record.locator("button.debate-row-gist").nth(1).click();
   await page.waitForFunction(() => {

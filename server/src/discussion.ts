@@ -174,6 +174,24 @@ async function launchSegment(task: TaskRow, talk: TalkRow, turn: TalkTurnRow): P
     (error) => failDiscussion(talk, turn, `${speaker.agentType} 第 ${turn.seq} 段没能起跑（${error}）`));
 }
 
+/**
+ * 推进这场讨论的一步（起第一段 / 换下一位 / 交给主执行器写合稿）。不变量：这一步要么真把下一回合交给了派发（之后
+ * 起不来由派发的失败回调收），要么这场讨论当场收掉、写明原因——库里写着「在说 / 在写合稿」、却不会有任何回合
+ * 来接的状态一刻都不留：它会一直占着这条任务（用户的话排着、再开讨论被拦），要等重启对账才收得掉。
+ * 准备材料写盘失败、读写库出错、派发前抛错，都走这一个出口。
+ */
+async function advance(talk: TalkRow, step: () => Promise<void>): Promise<void> {
+  try {
+    await step();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error(`[ash] 讨论 ${talk.id} 推进出错:`, error);
+    const fresh = (await db.select().from(freeReviewDebates).where(eq(freeReviewDebates.id, talk.id))).at(0) ?? talk;
+    if (fresh.status === "synthesizing") await closeSynthesis(fresh.id, fresh.taskId, `合稿没能准备好（${reason}）`);
+    else if (fresh.status === "running") await failDiscussion(fresh, await speakingTurnOf(fresh), `推进讨论时出错（${reason}）`);
+  }
+}
+
 async function failDiscussion(talk: TalkRow, turn: TalkTurnRow | null, reason: string): Promise<void> {
   await failTalk(talk, turn, { endedNote: reason });
   await note(talk, "aborted", `讨论已中止：${reason}。可以再发起一次。`);
@@ -231,13 +249,15 @@ export async function startDiscussion(
       };
       await db.insert(freeReviewDebates).values(talk);
       const row = { verdict: null, outcome: null, endedNote: null, ...talk } as TalkRow;
-      const turn = await openSegment(row, 1, speakerAt(order, 1).agentType);
-      // 会话里那颗气泡从这一句起头（web conversationDiscussionRows.ts 按它带的讨论身份认）。
-      // 读不到的旧记录写在这一句里：背景不全，用户得知道（各方的提示词里同样写明）。
-      const lost = background.filter((item) => !item.path).length;
-      await note(row, "start", `开始讨论：${pair(order)}，${discussionRoundsLabel(rounds)}。`
-        + (lost ? `之前有 ${lost} 份对话记录读不到，讨论的背景里没有它们。` : ""));
-      await launchSegment(task, row, turn);
+      // 落库之后的每一步都在推进护栏里：出了错这一场记成断了（气泡上写为什么），不留一场没人说话的讨论占着任务。
+      await advance(row, async () => {
+        // 会话里那颗气泡从这一句起头（web conversationDiscussionRows.ts 按它带的讨论身份认），所以排在最前：
+        // 后面哪一步出了错，中止那一句也落在这颗气泡里。读不到的旧记录在这一句里也写上。
+        const lost = background.filter((item) => !item.path).length;
+        await note(row, "start", `开始讨论：${pair(order)}，${discussionRoundsLabel(rounds)}。`
+          + (lost ? `之前有 ${lost} 份对话记录读不到，讨论的背景里没有它们。` : ""));
+        await launchSegment(task, row, await openSegment(row, 1, speakerAt(order, 1).agentType));
+      });
       return { discussionId: talk.id };
     } finally {
       releaseFreeWorkflowAction(taskId);
@@ -316,38 +336,42 @@ export async function settleDiscussionTurn(taskId: string, turnOk: boolean, role
   if (role === "reviewer") return false;
   const talk = await activeTalkOf(taskId, KIND, LIVE);
   if (!talk) return false;
+  await advance(talk, () => settleTalk(taskId, talk, turnOk));
+  return true;
+}
+
+async function settleTalk(taskId: string, talk: TalkRow, turnOk: boolean): Promise<void> {
   if (talk.status === "synthesizing") {
     await closeSynthesis(talk.id, taskId, turnOk ? null : "合稿没写完（被停下或异常结束）");
-    return true;
+    return;
   }
   const ending = await segmentEnding(talk, turnOk);
   if (ending.kind === "missing") {
     await failDiscussion(talk, null, "找不到正在说的那一段");
-    return true;
+    return;
   }
   const turn = ending.turn;
   if (ending.kind === "stopped") {
     await failDiscussion(talk, turn, `${turn.side} 第 ${turn.seq} 段被停下或异常结束`);
-    return true;
+    return;
   }
   if (ending.kind === "silent") {
     await failDiscussion(talk, turn, `${turn.side} 第 ${turn.seq} 段说完没有交卷`);
-    return true;
+    return;
   }
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task) return true;
+  if (!task) return;
   const order = participantsOf(talk);
   const turns = await talkTurnsOf(talk.id);
   const agreed = discussionAgreed(turns.map((item) => ({ seq: item.seq, speaker: item.side, agreed: item.agreed, status: item.status })),
     order.map((item) => item.agentType));
   if (agreed || turn.seq >= totalOf(talk)) {
     await finishTalking(task, talk, agreed, turns);
-    return true;
+    return;
   }
   const seq = turn.seq + 1;
   const next = await openSegment(talk, seq, speakerAt(order, seq).agentType);
   await launchSegment(task, { ...talk, currentSeq: seq }, next);
-  return true;
 }
 
 /**
@@ -374,6 +398,8 @@ export async function discussionViews(taskId: string): Promise<TaskDiscussion[]>
     rounds: roundsOf(talk),
     participants: participantsOf(talk),
     attachments: attachmentsOf(talk),
+    lostBackground: backgroundOf(talk.background).filter((item) => !item.path)
+      .map((item) => ({ agentType: item.agentType, role: item.role })),
     turns: (await talkTurnsOf(talk.id)).map((turn) => ({
       seq: turn.seq,
       speaker: turn.side as AgentType,

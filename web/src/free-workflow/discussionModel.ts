@@ -94,6 +94,17 @@ export function discussionMeta(discussion: TaskDiscussion): string {
   return `${discussionPair(discussion)} · ${discussionRoundsLabel(discussion.rounds)}`;
 }
 
+/**
+ * 发起那一刻读不到的旧对话记录：这场讨论的背景不全。气泡展开、「审议」格、完整记录三处都照这一句写（服务端在
+ * 发起时记下的，不靠各方自己在发言或合稿里提）。背景是全的为 null。
+ */
+export function discussionLostText(discussion: Pick<TaskDiscussion, "lostBackground">): string | null {
+  const lost = discussion.lostBackground ?? [];
+  if (!lost.length) return null;
+  const who = [...new Set(lost.map((item) => (item.role === "single" ? item.agentType : `${item.agentType}（${item.role}）`)))];
+  return `发起时有 ${lost.length} 份之前的对话记录读不到（${who.join("、")}），各方的背景里没有它们`;
+}
+
 /** 「审议」格那一行右边的状态字。 */
 export function discussionStatusLabel(discussion: TaskDiscussion): string {
   if (discussion.status === "running") return "讨论中";

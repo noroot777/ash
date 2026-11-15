@@ -217,6 +217,7 @@ try {
   assert.equal(finished.turns.at(-1)?.agreed, true);
   assert.equal(finished.rounds, 3);
   assert.deepEqual(finished.attachments, ["shot.png"], "发起时附的图记在这一场上（会话里发起那一句照它摆）");
+  assert.deepEqual(finished.lostBackground, [], "发起前的记录都读得到：没有缺的");
   assert.deepEqual(finished.participants.find((item) => item.host),
     { agentType: "claude", executorId: "claude-x", model: "opus-test", reasoningEffort: "max", host: true }, "主执行器的配置是发起那一刻的");
   // 时间线上讨论的那几句都带着是哪一场（会话里的气泡按它配记录）。

@@ -7,10 +7,12 @@
 //   · 讨论之前的背景是发起那一刻截下的副本：**每一方**拿到同一份完整清单（主执行器自己那份也在——它这一轮
 //     不一定接上了原来那条会话），读不到的旧记录写明；第一轮不告诉它实时记录在哪，说完副本也没变；
 //   · 第二轮起、合稿之前，本场前面各段的完整发言（含它自己的）有一份只读记录；
+//   · 推进出了错（准备下一段 / 合稿的材料写不进盘）：这一场当场收掉、写明原因，不一直占着任务；恢复后能再开一场；
+//   · 发起时读不到的旧记录，状态接口里有（页面三处照它写），不只是时间线里一句话；
 //   · 交卷认的是这一回合的身份（令牌 + 实际起跑的那一位），不按会话表里谁的时间最大认人：另一位的旧会话
 //     时间领先（接力过来、校过时）也不会把正常发言拒掉。
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -25,13 +27,16 @@ try {
   const { ensureSchema, db } = await import("../src/db/index.js");
   const { projects, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
-  const { discussionViews, startDiscussion, submitDiscussionStatement } = await import("../src/discussion.js");
+  const { discussionHolds, discussionViews, startDiscussion, submitDiscussionStatement } = await import("../src/discussion.js");
   // 先经执行器注册表进来：直接先载 generic.ts 会撞上 catalog 的循环引用。
   await import("../src/executors/index.js");
   const { GenericCliExecutor } = await import("../src/executors/generic.js");
 
   type Call = { taskId: string; agent: string; prompt: string; seq: number | null };
   const calls: Call[] = [];
+  /** 说完这一段就把这场讨论的目录改成只读：下一段（或合稿）的材料写不进去，模拟磁盘满 / 没权限。 */
+  const jamAfter = new Map<string, number>();
+  const discussionDir = (taskId: string, discussionId: string) => join(root, "runs", taskId, "discussions", discussionId);
   // 起跑的每一回合都记下来：谁、拿到的整段话、是讨论的第几段（合稿为 null）。讨论中就照常交一段卷。
   GenericCliExecutor.prototype.run = function (this: InstanceType<typeof GenericCliExecutor>, options) {
     const agent = this.type;
@@ -48,6 +53,10 @@ try {
           call.seq = discussion.turns.at(-1)!.seq;
           // 第一段说着的时候，用户把这条任务的执行器改成了 qwen。
           if (taskId === "t-switch" && call.seq === 1) await db.update(tasks).set({ agentType: "qwen" }).where(eq(tasks.id, taskId));
+          if (jamAfter.get(taskId) === call.seq) {
+            mkdirSync(discussionDir(taskId, discussion.id), { recursive: true });
+            chmodSync(discussionDir(taskId, discussion.id), 0o555);
+          }
           // 跟真 MCP 一样带上起跑时交给它的回合令牌。
           await submitDiscussionStatement(taskId, { summary: `${agent} 的看法`, statement: `${agent} 第 ${call.seq} 段：这么做，理由如下。` },
             { turnToken: options.env?.ASH_TURN_TOKEN ?? null });
@@ -77,7 +86,7 @@ try {
     mkdirSync(join(root, "runs", id), { recursive: true });
     writeFileSync(join(root, "runs", id, `${id}-gemini.md`), "用户补充：别动数据库结构\n");
   }
-  async function runThrough(id: string, guests: string[], rounds = 1) {
+  async function runThrough(id: string, guests: string[], rounds = 1, expected: "finished" | "failed" = "finished") {
     await startDiscussion(id, { topic: "按哪条路做", attachments: [attachment], rounds, guests: guests.map((agentType) => ({ agentType })) },
       { holdTurn: true });
     const deadline = Date.now() + 30_000;
@@ -86,7 +95,7 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 50));
       discussion = (await discussionViews(id)).at(-1)!;
     }
-    assert.equal(discussion.status, "finished", `${id}：一场走完（${discussion.note ?? ""}）`);
+    assert.equal(discussion.status, expected, `${id}：这一场收成 ${expected}（${discussion.note ?? ""}）`);
     return { discussion, mine: calls.filter((call) => call.taskId === id) };
   }
 
@@ -149,6 +158,33 @@ try {
   const runDir = join(root, "runs", "t-clock");
   const receipts = readdirSync(runDir).filter((name) => name.endsWith(".md")).map((name) => readFileSync(join(runDir, name), "utf8")).join("\n");
   assert.match(receipts, /之前有 1 份对话记录读不到/, "开始那一句写明背景不全");
+
+  assert.deepEqual(clock.discussion.lostBackground, [{ agentType: "kimi", role: "single" }],
+    "读不到的那条旧记录在状态接口里，页面照它写");
+  assert.deepEqual(three.discussion.lostBackground, [], "背景是全的就是空的");
+
+  // ── ④ 推进出错：换下一位之前材料写不进盘 ──
+  await seedTask("t-jam");
+  jamAfter.set("t-jam", 2);
+  const jammed = await runThrough("t-jam", ["opencode"], 2, "failed");
+  assert.match(jammed.discussion.note ?? "", /推进讨论时出错/, "断在哪、为什么写进记录（气泡读它）");
+  assert.deepEqual(jammed.mine.map((call) => call.seq), [1, 2], "第 3 段没起跑");
+  assert.equal(jammed.discussion.turns.some((turn) => turn.status === "speaking"), false, "不留一段「在说」却没人说");
+  assert.equal(await discussionHolds("t-jam"), false, "收掉了就不再占着这条任务");
+  chmodSync(discussionDir("t-jam", jammed.discussion.id), 0o755);
+  jamAfter.delete("t-jam");
+  await runThrough("t-jam", ["opencode"], 1);
+
+  // ── ⑤ 推进出错：交给主执行器写合稿之前材料写不进盘 ──
+  await seedTask("t-jam-synthesis");
+  jamAfter.set("t-jam-synthesis", 2);
+  const noSynthesis = await runThrough("t-jam-synthesis", ["opencode"], 1);
+  assert.match(noSynthesis.discussion.note ?? "", /合稿没能准备好/, "合稿没起来如实记下");
+  assert.equal(noSynthesis.mine.some((call) => call.seq === null), false, "没有起一个准备不全的合稿回合");
+  assert.equal(await discussionHolds("t-jam-synthesis"), false);
+  chmodSync(discussionDir("t-jam-synthesis", noSynthesis.discussion.id), 0o755);
+  jamAfter.delete("t-jam-synthesis");
+  await runThrough("t-jam-synthesis", ["opencode"], 1);
 
   console.log("discussion dispatch ok");
 } catch (error) {

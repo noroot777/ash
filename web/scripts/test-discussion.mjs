@@ -6,7 +6,7 @@
 // 交给主执行器写合稿的那句系统话不出现。
 import assert from "node:assert/strict";
 import {
-  discussionBubbleText, discussionNowText, discussionPair, discussionSegmentHead, discussionStatusLabel, discussionWaiting,
+  discussionBubbleText, discussionLostText, discussionNowText, discussionPair, discussionSegmentHead, discussionStatusLabel, discussionWaiting,
 } from "../src/free-workflow/discussionModel.ts";
 import { conversationDiscussionRows } from "../src/task-detail/conversationDiscussionRows.ts";
 
@@ -20,7 +20,7 @@ const turn = (seq, speaker, status, summary = null, agreed = null) => ({
   startedAt: at(seq), endedAt: status === "speaking" ? null : at(seq + 1),
 });
 const discussion = (patch) => ({
-  id: "d1", status: "running", topic: "幽灵回合锁走哪条路？", rounds: 2, participants, attachments: [], turns: [],
+  id: "d1", status: "running", topic: "幽灵回合锁走哪条路？", rounds: 2, participants, attachments: [], lostBackground: [], turns: [],
   outcome: null, note: null, startedAt: at(0), finishedAt: null, ...patch,
 });
 
@@ -58,6 +58,12 @@ assert.deepEqual(discussionBubbleText(stopped), { lead: null, text: "讨论中�
 assert.equal(discussionStatusLabel(stopped), "中止");
 assert.equal(discussionSegmentHead(live, 1), "写的时候没看对方的", "第一轮写明各写各的");
 assert.equal(discussionSegmentHead(live, 3), null);
+
+// —— 发起时读不到的旧记录：三处读者照同一句写 ——
+assert.equal(discussionLostText(discussion({})), null, "背景是全的不写");
+assert.equal(discussionLostText(discussion({ lostBackground: [
+  { agentType: "gemini", role: "single" }, { agentType: "codex", role: "reviewer" }, { agentType: "gemini", role: "single" },
+] })), "发起时有 3 份之前的对话记录读不到（gemini、codex（reviewer）），各方的背景里没有它们");
 
 // —— 会话里一场折成一行 ——
 const event = (id, text, minute, notice) => ({ kind: "event", id, text: `〔系统〕${text}`, at: at(minute), variant: "note", notice });

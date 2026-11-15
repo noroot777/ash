@@ -49,7 +49,7 @@ const turn = (seq: number, speaker: string, status: string, summary: string | nu
   startedAt: at(seq), endedAt: status === "speaking" ? null : at(seq + 1),
 });
 export const discussionOf = (id: string, patch: Partial<TaskDiscussion>): TaskDiscussion => ({
-  id, status: "running", topic: "幽灵回合锁走哪条路？手动放开还是让持有者自己有界？", rounds: 2, participants, attachments: [], turns: [],
+  id, status: "running", topic: "幽灵回合锁走哪条路？手动放开还是让持有者自己有界？", rounds: 2, participants, attachments: [], lostBackground: [], turns: [],
   outcome: null, note: null, startedAt: at(1), finishedAt: null, ...patch,
 } as TaskDiscussion);
 
@@ -66,7 +66,7 @@ const STAGES = {
   },
   done: {
     discussion: discussionOf("d-done", {
-      status: "finished", outcome: "agreed", finishedAt: at(9), attachments: ["/Users/u/ash/data/uploads/AbCdEfGhIjKl-方案草图.txt"],
+      status: "finished", outcome: "agreed", finishedAt: at(9), attachments: ["/Users/u/ash/data/uploads/AbCdEfGhIjKl-方案草图.txt"], lostBackground: [{ agentType: "gemini", role: "single" }],
       turns: [turn(1, "codex", "done", "让收尾每一步自己带时限"), turn(2, "claude", "done", "也不赞成手动放开"),
         turn(3, "codex", "done", "补一条先修那处泄漏", true)] as never,
     }),

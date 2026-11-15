@@ -104,6 +104,12 @@ export interface DiscussionTurn {
   endedAt: string | null;
 }
 
+/** 一份读不到的旧对话记录：是谁的（审查者那几条 role 不是 single）。 */
+export interface DiscussionLostRecord {
+  agentType: string;
+  role: string;
+}
+
 export interface TaskDiscussion {
   id: string;
   /**
@@ -117,6 +123,11 @@ export interface TaskDiscussion {
   participants: DiscussionParticipant[];
   /** 发起时附的图和文件：各方第一段都带上，会话里发起那一句也照它摆。 */
   attachments: string[];
+  /**
+   * 发起那一刻读不到的旧对话记录（被清理了，或没跟着任务搬过来）：讨论的背景里没有它们。各方的提示词里写明了，
+   * 用户这边由气泡展开、「审议」格和完整记录照它写一句，不靠各方自己在发言或合稿里转述。没有为空。
+   */
+  lostBackground: DiscussionLostRecord[];
   turns: DiscussionTurn[];
   outcome: DiscussionOutcome | null;
   /** 断了 / 合稿没写完时那一句；正常走完为 null。 */

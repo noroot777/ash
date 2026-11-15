@@ -23,6 +23,7 @@ export type {
   DiscussionRounds,
   DiscussionStartInput,
   DiscussionStatus,
+  DiscussionLostRecord,
   DiscussionTurn,
   DiscussionTurnStatus,
   TaskDiscussion,

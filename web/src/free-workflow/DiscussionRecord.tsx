@@ -1,7 +1,7 @@
 import type { TaskDiscussion, TaskListItem } from "@ash/shared";
 import type { LeftDrawerEntry } from "../components/LeftDrawer.tsx";
 import {
-  discussionLive, discussionPair, discussionSegmentHead, discussionSegments, discussionSpeaking, discussionTotal,
+  discussionLive, discussionLostText, discussionPair, discussionSegmentHead, discussionSegments, discussionSpeaking, discussionTotal,
   discussionWaiting,
 } from "./discussionModel.ts";
 import { TalkOverview } from "./TalkOverview.tsx";
@@ -14,14 +14,23 @@ import { useFreeWorkflowSnapshot } from "./useFreeWorkflowState.ts";
  */
 export function DiscussionOverview({ discussion, onOpen }: { discussion: TaskDiscussion; onOpen?: (seq: number) => void }) {
   return (
-    <TalkOverview
-      label="讨论概览"
-      className="is-named"
-      segments={discussionSegments(discussion)}
-      waiting={discussionWaiting(discussion)}
-      onOpen={onOpen}
-    />
+    <>
+      <DiscussionLost discussion={discussion} />
+      <TalkOverview
+        label="讨论概览"
+        className="is-named"
+        segments={discussionSegments(discussion)}
+        waiting={discussionWaiting(discussion)}
+        onOpen={onOpen}
+      />
+    </>
   );
+}
+
+/** 背景不全那一句（discussionLostText）：概览和完整记录的开头都摆它。 */
+function DiscussionLost({ discussion }: { discussion: TaskDiscussion }) {
+  const text = discussionLostText(discussion);
+  return text ? <p className="discussion-lost" role="note">{text}</p> : null;
 }
 
 export type DiscussionDrawerSource = {
@@ -54,12 +63,15 @@ function DiscussionRecordBody({ source }: { source: DiscussionDrawerSource }) {
   const discussion = useDiscussion(source);
   if (!discussion) return <p className="debate-record-missing">这场讨论的记录还没读到。</p>;
   return (
-    <TalkRecord
-      segments={discussionSegments(discussion)}
-      waiting={discussionWaiting(discussion)}
-      focus={source}
-      headOf={(segment) => discussionSegmentHead(discussion, segment.seq)}
-    />
+    <>
+      <DiscussionLost discussion={discussion} />
+      <TalkRecord
+        segments={discussionSegments(discussion)}
+        waiting={discussionWaiting(discussion)}
+        focus={source}
+        headOf={(segment) => discussionSegmentHead(discussion, segment.seq)}
+      />
+    </>
   );
 }
 

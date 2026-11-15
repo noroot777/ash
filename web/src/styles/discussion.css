@@ -20,6 +20,9 @@
   -webkit-line-clamp: 3;
 }
 
+/* 背景不全那一句：概览、完整记录的开头一行，琥珀色小字，不加框。 */
+.discussion-lost { margin: 0 0 6px; color: var(--amber); font-size: var(--t-xs); line-height: 1.6; overflow-wrap: anywhere; }
+
 /* 从会话里那颗气泡点过来：这一条亮一下再退掉。 */
 .insp-rec.is-here { border-radius: 8px; animation: talk-here 1.6s var(--ease-out) both; }
 @keyframes talk-here {
