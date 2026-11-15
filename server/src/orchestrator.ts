@@ -245,7 +245,7 @@ export async function continueTask(
     }, { behavior: "immediate" });
     // 令牌落库的同一处把它绑到这一轮的运行时身份上:来源核验要的是「库里的令牌」和
     // 「内存里这一轮」是同一件事,而不是两份各自独立的读(见 runs.ts `bindTurnToken`)。
-    bindTurnToken(taskId, turnToken);
+    bindTurnToken(taskId, turnToken, agent);
     await (await import("./review-recurrence-gate.js")).carryRecurrenceBreaker(taskId, { ...opts, native: !!nativeCommand });
 
     // 续聊/重跑同样按**这一回合是谁点的**解析执行器(§八)。跨人时降级到本人的默认

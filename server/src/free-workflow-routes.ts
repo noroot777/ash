@@ -177,7 +177,8 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
       const body = await c.req.json<ReplyBody>().catch(() => ({} as ReplyBody));
       // 讨论跟辩论共用这一个交卷口（MCP debate_reply）：这条任务上此刻在说的是讨论就交给讨论。
       if (await activeTalkOf(taskId, "discussion")) {
-        return c.json({ recorded: true, taskId, ...(await submitDiscussionStatement(taskId, body)) });
+        const turnToken = c.req.header("x-ash-turn-token") ?? null;
+        return c.json({ recorded: true, taskId, ...(await submitDiscussionStatement(taskId, body, { turnToken })) });
       }
       return c.json({ recorded: true, taskId, ...(await submitDebateStatement(taskId, body)) });
     } catch (error) { return c.json(errorBody(error), 409); }

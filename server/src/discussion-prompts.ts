@@ -25,15 +25,33 @@ function framing(input: { taskId: string; topic: string; order: readonly Discuss
     `=== 用户要讨论的 ===\n${input.topic.trim()}\n\n`;
 }
 
-/** 讨论之前的背景：发起那一刻截下的对话记录（不含它自己那份，那在它自己的上下文里）。 */
-function backgroundText(files: readonly BackgroundFile[], self: string): string {
-  const list = files.filter((item) => !(item.agentType === self && item.role === "single"));
-  if (!list.length) return "";
-  const lines = list.map((item) => `- ${item.agentType}${item.role === "single" ? "" : `（${item.role}）`}：${item.path}`);
+/**
+ * 讨论之前的背景：发起那一刻截下的对话记录，**整份**交给每一方——它自己那份也在里面：这一段不一定接上了它原来
+ * 那条会话（discussion-background.ts）。读不到的那几条也写明，不让它以为背景是全的。
+ */
+function backgroundText(files: readonly BackgroundFile[]): string {
+  if (!files.length) return "";
+  const who = (item: BackgroundFile) => `${item.agentType}${item.role === "single" ? "" : `（${item.role}）`}`;
+  const kept = files.filter((item) => item.path);
+  const lost = files.filter((item) => !item.path);
+  const lines = kept.map((item) => `- ${who(item)}：${item.path}`);
   return "=== 讨论之前的背景 ===\n" +
-    "发起这场讨论那一刻，本任务里的对话记录截成了下面这几份只读副本（之后不会再变，各方拿到的是同一份），" +
-    `包含用户说过的话。要了解之前聊过什么、用户补过哪些约束，就读它们：\n${lines.join("\n")}\n\n`;
+    (kept.length
+      ? "发起这场讨论那一刻，本任务里的对话记录截成了下面这几份只读副本（之后不会再变，各方拿到的是同一份），" +
+        "包含用户说过的话；你自己之前在本任务里的记录也在其中——别默认自己都记得。" +
+        `要了解之前聊过什么、用户补过哪些约束，就读它们：\n${lines.join("\n")}\n`
+      : "") +
+    (lost.length
+      ? `这几条之前的会话记录已经读不到了（被清理了，或没有一起搬过来），它们说过什么不在背景里，判断时把这一点算进去：` +
+        `${lost.map((item) => `${who(item)}（会话 ${item.sessionId}）`).join("、")}\n`
+      : "") +
+    "\n";
 }
+
+/** 本场前面各段的完整发言（含你自己的）：第二轮起、合稿之前给。 */
+const spokenText = (record: string | null) => record
+  ? `本场前面各段的完整发言（含你自己说过的）都在这份只读记录里：${record}。你的上下文里如果没有前面那几段，先读它。\n\n`
+  : "";
 
 const SPEAK_ONLY =
   "这一段只说话：可以读代码、跑只读的命令来核实，但不要改动任何文件、不要提交、不要跑会改变状态的命令——" +
@@ -54,17 +72,19 @@ export function discussionSegmentPrompt(input: {
   speaker: DiscussionParticipant;
   previous: readonly SpokenSegment[];
   background: readonly BackgroundFile[];
+  /** 本场到此为止各段的完整发言（writeSpokenRecord）；第一轮为 null。 */
+  record: string | null;
 }): string {
   const people = input.order.length;
   const blind = isBlindSeq(input.seq, people);
-  const head = framing(input) + backgroundText(input.background, input.speaker.agentType) +
+  const head = framing(input) + backgroundText(input.background) +
     `现在轮到你（${input.speaker.agentType}）说第 ${input.seq} 段（这一场最多 ${input.total} 段）。\n\n`;
   const body = blind
     ? "这是第一轮，各写各的：独立给出你自己的看法和依据（读了哪些代码、发现了什么、为什么这么判断），" +
       "主动写明它的风险、代价和不确定的假设。讨论之前的背景只读上面那几份副本；" +
       `本任务的实时对话记录（直接放在 ${join(RUNS_DIR, input.taskId)} 下的那几份 .md）这一轮不要去读，那里会有本场别人刚写的第一段，` +
       "也不要用别的办法打听别人这一场说了什么——两份真正独立的看法，才是后面讨论的原料。\n\n"
-    : `下面是你上一段之后其他各方的发言：\n\n${others(input.previous)}\n\n` +
+    : spokenText(input.record) + `下面是你上一段之后其他各方的发言：\n\n${others(input.previous)}\n\n` +
       "目标是合出比任何一方独自想出的都更好的方案，不是说服别人。先吸收：别人哪些点比你的好，直接采纳并说明；" +
       "再补强：别人的风险、遗漏或误判，指出来并给出补法；最后给出你此刻的完整看法（不只写差异）。" +
       "不要无原则附和，也不要为不同而不同，真实的分歧留着并写清取舍。\n\n" +
@@ -85,6 +105,8 @@ export function discussionSynthesisPrompt(input: {
   agreed: boolean;
   segments: number;
   previous: readonly SpokenSegment[];
+  background: readonly BackgroundFile[];
+  record: string | null;
 }): string {
   const head = input.agreed
     ? `【讨论说完了 · 写合稿】${names(input.order)} 谈了 ${input.segments} 段，各方表态谈拢了。`
@@ -93,6 +115,7 @@ export function discussionSynthesisPrompt(input: {
     ? `\n\n你上一段之后其他各方又说了这些，先读完再写：\n\n${others(input.previous)}`
     : "";
   return `${head}\n任务：${input.taskId}\n用户要讨论的：${input.topic.trim()}${latest}\n\n` +
+    backgroundText(input.background) + spokenText(input.record) +
     "现在照常回复用户一段，这段回复就是这场讨论的合稿，用户只读它：\n" +
     "1. 结论：融合各方之后的方案（不是你单方的最后一版），关键取舍和理由一并写；\n" +
     "2. 还留着的分歧：各方立场如实列出，没有就写「无」。没谈拢的绝不写成谈拢了。\n" +

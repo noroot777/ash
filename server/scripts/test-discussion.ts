@@ -4,7 +4,8 @@
 //   · 第一轮各写各的：那几段的提示词里没有别人的发言，第二轮起才带上；
 //   · 到了轮数收，或者**每一方**最新那段都表态谈拢才提前收；收完交给这条任务的执行器写合稿，合稿写完就结束——没有闸口；
 //   · 各方的配置发起时定死：中途改了任务的执行器，这一场照旧由原来那位说；交卷时核此刻在说的是不是这一段该说的人；
-//   · 发起时附的图和文件各方第一段都带上；讨论之前的背景是发起那一刻截下的只读副本，第一轮不告诉它实时记录在哪；
+//   · 发起时附的图和文件各方第一段都带上；讨论之前的背景是发起那一刻截下的只读副本、整份交给每一方，第一轮不告诉它实时记录在哪；
+//   · 交卷认回合身份：令牌是此刻这一回合的、实际起跑的是这一段该说的那一位；
 //   · 三方轮流：被叫来的人先、这条任务的执行器最后；
 //   · 「只说话不改文件」那一句进了每一方的每一段，合稿那段也有；
 //   · 停下、某一方没交卷：这一场记成断了，断在哪写进记录（刷新读的就是它），可以再发起一场；
@@ -31,7 +32,7 @@ try {
   const { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, projects, scheduledMessages, sessions, tasks } =
     await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
-  const { claimTurn } = await import("../src/runs.js");
+  const { bindTurnToken, claimTurn } = await import("../src/runs.js");
   const {
     discussionHolds, discussionViews, reconcileDiscussions, segmentPromptFor, segmentTurnOptions,
     settleDiscussionTurn, startDiscussion, submitDiscussionStatement,
@@ -64,8 +65,10 @@ try {
     }, message);
   };
   const talkOf = async (taskId: string) => (await activeTalkOf(taskId, "discussion", ["running", "synthesizing"]))!;
-  // 此刻在跑的是哪一位：最近开跑的那条会话（交卷时服务端按它核对是不是这一段该说的人）。
+  // 此刻在跑的是哪一位：起跑时跟令牌一起绑进回合身份（交卷时服务端按它核对是不是这一段该说的人）。
+  // 顺手留一条会话行：讨论之前的背景从会话记录里截。
   let tick = Date.parse(at);
+  let tokens = 0;
   async function running(taskId: string, agentType: string) {
     const id = `${taskId}-${agentType}`;
     const turnStartedAt = new Date(++tick).toISOString();
@@ -74,12 +77,15 @@ try {
     } else {
       await db.insert(sessions).values({ id, taskId, role: "single", agentType, executor: agentType, startedAt: turnStartedAt, turnStartedAt });
     }
+    const token = `turn-${++tokens}`;
+    bindTurnToken(taskId, token, agentType);
+    return token;
   }
   /** 这一段该说的人（或 `as` 指的那位）开口交卷。 */
   const say = async (taskId: string, summary: string, agreed?: boolean, as?: string) => {
     const turn = await speakingTurnOf(await talkOf(taskId));
-    await running(taskId, as ?? turn?.side ?? "claude");
-    return submitDiscussionStatement(taskId, { summary, statement: `${summary}——展开说：依据、代价和取舍。`, agreed });
+    const token = await running(taskId, as ?? turn?.side ?? "claude");
+    return submitDiscussionStatement(taskId, { summary, statement: `${summary}——展开说：依据、代价和取舍。`, agreed }, { turnToken: token });
   };
   const SPEAK_ONLY = "不要改动任何文件、不要提交、不要跑会改变状态的命令";
 
@@ -127,7 +133,7 @@ try {
   assert.equal((await speakingTurnOf(talk))?.side, "codex", "第 1 段轮到被叫来的人");
   // 发起之后任务的执行器被改了：这一场的主执行器仍是发起时那一位、那一套配置。
   await db.update(tasks).set({ agentType: "qwen", executorId: null, model: null, reasoningEffort: null }).where(eq(tasks.id, "t-two"));
-  const background = JSON.parse(talk.background ?? "[]") as { agentType: string; path: string }[];
+  const background = JSON.parse(talk.background ?? "[]") as { agentType: string; role: string; sessionId: string; path: string }[];
   assert.deepEqual(background.map((item) => item.agentType), ["claude"], "发起那一刻截下了本任务的对话记录");
   assert.equal(readFileSync(background[0]!.path, "utf8"), "用户补充：别动数据库结构\n", "副本就是发起那一刻的内容");
   assert.ok(readFileSync(liveTranscript, "utf8").includes("开始讨论"), "实时记录之后照常往下写");
@@ -150,6 +156,9 @@ try {
   assert.equal((later as { withholdPeerNotice?: boolean }).withholdPeerNotice, undefined);
 
   await rejects(() => say("t-two", "qwen 冒名", false, "qwen"), "轮到 codex 发言", "此刻在说的不是这一段该说的人，交不了卷");
+  await running("t-two", "codex");
+  await rejects(() => submitDiscussionStatement("t-two", { summary: "旧回合", statement: "上一回合留下的调用" }, { turnToken: "turn-old" }),
+    "轮到 codex 发言", "令牌不是此刻这一回合的，就算执行器对得上也交不了");
 
   const r1 = await say("t-two", "codex：让收尾每一步自己带时限", true);
   assert.equal(r1.blind, true);
@@ -166,7 +175,7 @@ try {
   assert.ok(!seg2.prompt.includes("让收尾每一步自己带时限"),
     "第一轮互相看不到：主执行器第一段的提示词里不许有 codex 第一段的发言");
   assert.ok(seg2.prompt.includes(SPEAK_ONLY), "只说话不改文件那一句送到了主执行器");
-  assert.ok(!seg2.prompt.includes(background[0]!.path), "它自己那份不用再给它（在它自己的上下文里）");
+  assert.ok(seg2.prompt.includes(background[0]!.path), "主执行器自己那份也给它：这一段不一定接上了它原来那条会话");
   const hostOptions = segmentTurnOptions(seg2.speaker, true, ["shot.png"]);
   assert.equal(hostOptions.agent, "claude", "主执行器按发起时那一位说，不跟任务此刻的执行器走");
   assert.equal(hostOptions.executorId, "claude-x");
@@ -229,7 +238,11 @@ try {
   const synthesis = discussionSynthesisPrompt({
     taskId: "t-two", topic: "幽灵回合锁走哪条路？", order: finished.participants, rounds: 2, agreed: false, segments: 4,
     previous: [{ seq: 4, speaker: "codex", statement: "时限按步骤分开定" }],
+    background: [...background, { agentType: "kimi", role: "single", sessionId: "s-lost", path: null }], record: "/runs/t-two/spoken.md",
   });
+  assert.ok(synthesis.includes(background[0]!.path!), "合稿也带着讨论之前的背景");
+  assert.match(synthesis, /读不到了[^\n]*kimi（会话 s-lost）/, "读不到的旧记录写明，不当成没有历史");
+  assert.ok(synthesis.includes("/runs/t-two/spoken.md"), "合稿带着本场各段的完整记录");
   assert.equal(readFileSync(background[0]!.path, "utf8"), "用户补充：别动数据库结构\n", "说完了副本还是发起那一刻的样子");
   assert.match(synthesis, /还没有谈拢/, "没谈拢如实写");
   assert.match(synthesis, /时限按步骤分开定/, "带上主执行器还没见过的那段");

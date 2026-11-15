@@ -23,16 +23,16 @@ import {
   discussionAgreed, discussionRoundsLabel, discussionRoundsOf, discussionTotalSegments, isBlindSeq,
   MAX_DISCUSSION_GUESTS, speakerAt, speakingOrder,
 } from "@ash/shared/discussion";
-import { asc, and, desc, eq } from "drizzle-orm";
+import { asc, and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
-import { freeReviewDebates, freeReviewRuns, sessions, tasks } from "./db/schema.js";
-import { backgroundOf, snapshotDiscussionBackground } from "./discussion-background.js";
+import { freeReviewDebates, freeReviewRuns, tasks } from "./db/schema.js";
+import { backgroundOf, snapshotDiscussionBackground, writeSpokenRecord } from "./discussion-background.js";
 import { discussionSegmentPrompt, discussionSynthesisPrompt, type SpokenSegment } from "./discussion-prompts.js";
 import { plainSummaryOf } from "./free-review-dispute.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
-import { claimOwnTurn, continueWhenIdle, releaseTurn, turnRole } from "./runs.js";
+import { claimOwnTurn, continueWhenIdle, releaseTurn, turnIdentity } from "./runs.js";
 import {
   activeTalkOf, commitSegment, failTalk, hangingTalks, openSegment, segmentEnding, speakingTurnOf,
   statementOf, talkOrphaned, talkTurnsOf, type TalkRow, type TalkTurnRow,
@@ -124,14 +124,23 @@ function spokenSince(turns: readonly TalkTurnRow[], speaker: string, before: num
     .map((turn) => ({ seq: turn.seq, speaker: turn.side, statement: turn.statement! }));
 }
 
+/** 本场 `before` 段之前说完的每一段（含说话人自己的）。 */
+function spokenBefore(turns: readonly TalkTurnRow[], before: number) {
+  return turns.filter((turn) => turn.status === "done" && turn.statement && turn.seq < before)
+    .map((turn) => ({ seq: turn.seq, speaker: turn.side, statement: turn.statement! }));
+}
+
 /** 第 seq 段交给谁说、交给它什么话。第一轮（各写各的）一律不带别人的发言。 */
 export async function segmentPromptFor(taskId: string, talk: TalkRow, turn: TalkTurnRow): Promise<{ speaker: DiscussionParticipant; prompt: string }> {
   const order = participantsOf(talk);
   const speaker = order.find((item) => item.agentType === turn.side)!;
+  const blind = isBlindSeq(turn.seq, order.length);
+  const turns = blind ? [] : await talkTurnsOf(talk.id);
   const prompt = discussionSegmentPrompt({
     taskId, topic: talk.topic ?? "", order, rounds: roundsOf(talk), seq: turn.seq, total: totalOf(talk), speaker,
-    previous: isBlindSeq(turn.seq, order.length) ? [] : spokenSince(await talkTurnsOf(talk.id), speaker.agentType, turn.seq),
+    previous: blind ? [] : spokenSince(turns, speaker.agentType, turn.seq),
     background: backgroundOf(talk.background),
+    record: blind ? null : await writeSpokenRecord(taskId, talk.id, String(turn.seq), spokenBefore(turns, turn.seq)),
   });
   return { speaker, prompt };
 }
@@ -224,7 +233,10 @@ export async function startDiscussion(
       const row = { verdict: null, outcome: null, endedNote: null, ...talk } as TalkRow;
       const turn = await openSegment(row, 1, speakerAt(order, 1).agentType);
       // 会话里那颗气泡从这一句起头（web conversationDiscussionRows.ts 按它带的讨论身份认）。
-      await note(row, "start", `开始讨论：${pair(order)}，${discussionRoundsLabel(rounds)}。`);
+      // 读不到的旧记录写在这一句里：背景不全，用户得知道（各方的提示词里同样写明）。
+      const lost = background.filter((item) => !item.path).length;
+      await note(row, "start", `开始讨论：${pair(order)}，${discussionRoundsLabel(rounds)}。`
+        + (lost ? `之前有 ${lost} 份对话记录读不到，讨论的背景里没有它们。` : ""));
       await launchSegment(task, row, turn);
       return { discussionId: talk.id };
     } finally {
@@ -242,6 +254,7 @@ export async function startDiscussion(
 export async function submitDiscussionStatement(
   taskId: string,
   input: { summary?: unknown; statement?: unknown; agreed?: unknown },
+  caller: { turnToken: string | null },
 ): Promise<{ seq: number; speaker: string; blind: boolean; agreed: boolean | null; agreedIgnored: boolean }> {
   const statement = statementOf(input.statement);
   const summary = plainSummaryOf(input.summary, "summary", "用户靠逐段的这一句看懂这场讨论谈到哪了，别让他为了一句结论去读完所有发言");
@@ -249,24 +262,16 @@ export async function submitDiscussionStatement(
   if (!talk) throw new Error("当前没有正在进行的讨论");
   const turn = await speakingTurnOf(talk);
   if (!turn || turn.status !== "speaking") throw new Error("这一段发言已经交过卷了");
-  // 每一段都是这条任务上的旁路回合（主执行器、被叫来的人都是），别的回合交不了这一段；旁路回合也得是
-  // 这一段该说话的那一位在说——记录上写的是谁，说话的就得是谁。
-  const role = turnRole(taskId);
-  const running = role === "side" ? await runningSpeaker(taskId) : null;
-  if (running !== turn.side) throw new Error(`这一段轮到 ${turn.side} 发言，只有它这一段的回合能交卷`);
+  // 交卷的必须是此刻这一回合（旁路回合、令牌对得上），而这一回合实际起跑的正是这一段该说的那一位——都读回合身份
+  // （起跑时和令牌一起绑上的，turn-lock.ts `bindTurnToken`），不去会话表里按时间排谁最近。
+  const current = turnIdentity(taskId);
+  const ours = !!current && current.role === "side" && !!current.token && current.token === caller.turnToken;
+  if (!ours || current!.agent !== turn.side) throw new Error(`这一段轮到 ${turn.side} 发言，只有它这一段的回合能交卷`);
   const blind = isBlindSeq(turn.seq, participantsOf(talk).length);
   const agreed = blind ? null : input.agreed === true;
   if (!await commitSegment(turn, { summary, statement, agreed })) throw new Error("这一段发言已经交过卷了");
   bus.publish({ type: "task.review", taskId });
   return { seq: turn.seq, speaker: turn.side, blind, agreed, agreedIgnored: blind && input.agreed !== undefined };
-}
-
-/** 此刻这条任务上在跑（或刚跑完）的那一回合是哪一位：回合是逐个来的，最近开跑的那条会话就是它。 */
-async function runningSpeaker(taskId: string): Promise<string | null> {
-  const [row] = await db.select({ agentType: sessions.agentType }).from(sessions)
-    .where(and(eq(sessions.taskId, taskId), eq(sessions.role, "single")))
-    .orderBy(desc(sessions.turnStartedAt), desc(sessions.startedAt)).limit(1);
-  return row?.agentType ?? null;
 }
 
 /** 说完了：记下怎么结束的，交给这条任务的执行器写合稿。 */
@@ -282,6 +287,8 @@ async function finishTalking(task: TaskRow, talk: TalkRow, agreed: boolean, turn
   const prompt = discussionSynthesisPrompt({
     taskId: task.id, topic: talk.topic ?? "", order, rounds: roundsOf(talk), agreed, segments: said,
     previous: spokenSince(turns, host.agentType, Number.MAX_SAFE_INTEGER),
+    background: backgroundOf(talk.background),
+    record: await writeSpokenRecord(task.id, talk.id, "synthesis", spokenBefore(turns, Number.MAX_SAFE_INTEGER)),
   });
   // 合稿也按主执行器发起时那一套配置写（同 segmentTurnOptions），不跟任务此刻的常设配置走。
   continueWhenIdle(task.id, prompt, segmentTurnOptions(host, false, []),

@@ -49,6 +49,12 @@ export type TurnIdentity = {
   review: TurnReview | null;
   token: string | null;
   /**
+   * 这一轮**实际起跑的是哪一位执行器**。跟令牌同一处绑上来(`bindTurnToken`):起跑那一刻已经
+   * 定了用谁、续哪条会话。要核「此刻说话的是谁」的(讨论的一段只认该说的那一位交卷)读它,
+   * 不去会话表里按时间排谁最近 —— 接力或校时之后,最近的那条可能是早已结束的另一位。
+   */
+  agent: string | null;
+  /**
    * 这把锁是**哪一刻**占下的（`Date.now()`）。占位转正(`reclaimTurn`)沿用原值 —— 转正不是
    * 重新占一次,把它刷新会让一把已经占了十分钟的锁每次转正都显得崭新。
    *
@@ -191,7 +197,7 @@ export function takeStartFreeze(taskId: string): StopSettle | null {
  */
 export function claimOwnTurn(taskId: string, role = "single", review: TurnReview | null = null): TurnIdentity | null {
   if (turns.has(taskId)) return null;
-  const identity: TurnIdentity = { role, review, token: null, claimedAt: Date.now(), seq: nextTurnSeq++ };
+  const identity: TurnIdentity = { role, review, token: null, agent: null, claimedAt: Date.now(), seq: nextTurnSeq++ };
   turns.set(taskId, identity);
   return identity;
 }
@@ -242,7 +248,7 @@ export function turnIdentity(taskId: string): TurnIdentity | null {
  * (orchestrator 起一轮、task-run 首跑、reattach 接回上一轮),这样「库里那个令牌」和
  * 「内存里这一轮」永远指同一件事 —— 来源核验据此只认一份事实。
  */
-export function bindTurnToken(taskId: string, token: string): void {
+export function bindTurnToken(taskId: string, token: string, agent: string): void {
   const held = turns.get(taskId);
   if (!held) {
     // 没占位就写令牌 = 调用顺序错了。不静默:来源核验会把这一轮当「不是当前这一轮」拒掉。
@@ -250,6 +256,7 @@ export function bindTurnToken(taskId: string, token: string): void {
     return;
   }
   held.token = token;
+  held.agent = agent ?? null;
 }
 
 /**
@@ -277,6 +284,7 @@ export function reclaimTurn(taskId: string, owner: TurnOwner, role: string,
     role,
     review: review === undefined ? held.review : review,
     token: held.token,
+    agent: held.agent,
     claimedAt: held.claimedAt,
     seq: held.seq, // 同一把锁,不换号(见 `TurnIdentity.seq`)
     windDown: held.windDown,
