@@ -81,15 +81,24 @@ export function pairAnswerMessages(records: readonly QuestionRecord[], messages:
 
 /**
  * 提问那一轮结算时落进会话的两句说明的起头（server 的 settle-status.ts 写，question-settle-notes.ts
- * 拼）。服务端靠它认「这道题是在哪种回合里问的」（legacy-answer-intent.ts）；界面靠它认出这句话、
- * 不再画——问题在等时就在答题卡上，答完跟着答案留在你的那颗气泡里，这里再抄一遍是第三次。
+ * 拼）。服务端靠它认「这道题是在哪种回合里问的」（legacy-answer-intent.ts）；界面靠它认出这句话问的
+ * 是哪道题——那道题此刻在答题卡上、或者已经跟着答案留在你那颗气泡里，这句就不再抄一遍（题目没别处
+ * 可看时照画，比如收起答题卡改发了一句别的、旧题被撤下）。
  */
 export const FOLLOW_UP_QUESTION_HEAD = "续聊回合以提问结束,等待答复:";
 export const PAUSED_QUESTION_HEAD = "本回合以提问暂停,等待答复:";
 
-export function isQuestionSettleNote(text: string): boolean {
-  const said = text.replace(/^〔系统〕/, "").trimStart();
-  return said.startsWith(PAUSED_QUESTION_HEAD) || said.startsWith(FOLLOW_UP_QUESTION_HEAD);
+/** 这句结算说明里问的那道题（原样），不是这两种说明就是 null。 */
+export function settleNoteQuestion(text: string): string | null {
+  const said = text.replace(/^〔系统〕/, "").trim();
+  if (said.startsWith(`${PAUSED_QUESTION_HEAD}「`) && said.endsWith("」")) {
+    return said.slice(PAUSED_QUESTION_HEAD.length + 1, -1);
+  }
+  const followUp = /」\(任务状态仍为「[^」]*」\)$/.exec(said);
+  if (said.startsWith(`${FOLLOW_UP_QUESTION_HEAD}「`) && followUp) {
+    return said.slice(FOLLOW_UP_QUESTION_HEAD.length + 1, followUp.index);
+  }
+  return null;
 }
 
 export function questionItems(source: QuestionSource): QuestionItem[] {

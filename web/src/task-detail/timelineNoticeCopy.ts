@@ -17,7 +17,7 @@
 // 那几句，其余一律是回执。只有这一处还在读原文。
 import { LEGACY_SYS_MARKER, STAGE_LABELS, type TaskStage, type TurnInterruption } from "@ash/shared";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
-import { isQuestionSettleNote } from "@ash/shared/questions";
+import { settleNoteQuestion, type QuestionRecord, type QuestionSource } from "@ash/shared/questions";
 import type { TimelineNotice, TimelineReviewSource } from "@ash/shared/timeline-notice";
 import { previewNoticeText } from "../lib/previewUrl.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
@@ -305,8 +305,21 @@ export function isPreviewLifecycleNotice(text: string): boolean {
 
 /**
  * 哪儿都不画的旁注：预览开关那几种老记录（上面），以及提问那一轮的结算说明（「本回合以提问暂停,
- * 等待答复:「<问题全文>」」）——问题在等时就在答题卡上，答完跟着答案留在你那颗气泡里。
+ * 等待答复:「<问题全文>」」）——但只在那道题此刻**另有一处看得见**时（`onScreen`，见 questionsOnScreen）：
+ * 在等时它在答题卡上，答完跟着答案留在你那颗气泡里。没被回答就撤下的旧题（收起卡改发了别的话）
+ * 没有别处可看，这句照画。不给 `onScreen` 就一律照画。
  */
-export function isUnshownNotice(text: string): boolean {
-  return isPreviewLifecycleNotice(text) || isQuestionSettleNote(text);
+export function isUnshownNotice(text: string, onScreen?: ReadonlySet<string>): boolean {
+  if (isPreviewLifecycleNotice(text)) return true;
+  const question = settleNoteQuestion(text);
+  return question !== null && !!onScreen?.has(question.trim());
+}
+
+/** 此刻界面上另有一处看得见的那几道题：在等的那一道（答题卡），以及答过的（问答记录跟着答案留在气泡里）。 */
+export function questionsOnScreen(
+  task: Pick<QuestionSource, "question">,
+  history: readonly QuestionRecord[] | null | undefined,
+): ReadonlySet<string> {
+  return new Set([task.question, ...(history ?? []).filter((record) => !record.deleted).map((record) => record.question)]
+    .map((question) => question?.trim()).filter((question): question is string => !!question));
 }

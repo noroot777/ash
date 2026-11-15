@@ -26,7 +26,6 @@ import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
 import { HandoffBanner } from "./HandoffBanner.tsx";
 import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
-import { QuestionSlot } from "./QuestionSlot.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
 import { TaskDerivationComposer } from "./TaskDerivationComposer.tsx";
 import { TaskHeader, type PrimaryAction } from "./TaskHeader.tsx";
@@ -556,10 +555,10 @@ export function TaskDetail({
                         />
                       )}
                       // 提问在等时，回复框那一格是答题卡（QuestionSlot）：全页只有一处打字、一颗发送键。
-                      boxSlot={(box) => <QuestionSlot task={task} box={box} onAnswer={async (answer, input) => {
+                      onAnswer={async (answer, input) => {
                         await api.answerTask(task.id, answer, input);
                         notify("已发送答复，任务正在续跑");
-                      }} />}
+                      }}
                       actions={replyActions.actions}
                       moreItems={replyActions.moreItems}
                       moreRef={replyActions.moreRef}

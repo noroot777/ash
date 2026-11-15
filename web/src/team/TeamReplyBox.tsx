@@ -3,7 +3,7 @@
 // 都刻意与它同构 —— 两边长得不一样会被当成 bug 报上来。
 //
 // 从 TeamView.tsx 搬出来独立成文件（那份已经顶到 700 行上限），搬的是整块、一字未改。
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ScheduledMessage, Task, TaskListItem } from "@ash/shared";
 import { cliCommandsForMode } from "@ash/shared/cli-commands";
 import { ScheduledMessageTray, useScheduledMessages } from "../components/ScheduledMessages.tsx";
@@ -20,7 +20,8 @@ import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import { useReplyLayout } from "../task-detail/useReplyLayout.ts";
 import { registerReplyInput } from "../task-detail/replyQuote.ts";
-import { keepReplyBox, type ReplyBoxElement } from "../task-detail/QuestionSlot.tsx";
+import { QuestionDock, useQuestionTakeover } from "../task-detail/QuestionSlot.tsx";
+import type { QuestionAnswerInput } from "@ash/shared/questions";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import {
   ReplyResizeHandle,
@@ -40,15 +41,15 @@ export function TeamReplyBox({
   task,
   tasks,
   onSend,
-  boxSlot,
+  onAnswer,
 }: {
   task: Task;
   /** 「等某任务完成后发送」的候选,以及托盘里报出在等谁。 */
   tasks: TaskListItem[];
   // 返回 null = 用户在确认闸上取消了:草稿和附件一个都别清(与 task-detail/ReplyBox 同口径)。
   onSend: (text: string, attachments: string[], options: LaterChoice) => Promise<ReplyTaskResult | null>;
-  /** 框那一格交给谁摆（答题卡）：拿到的是框本身，可以给它 `hidden`。 */
-  boxSlot?: (box: ReplyBoxElement) => ReactNode;
+  /** 调度者问你的时候怎么答：给了，框那一格就由答题卡接管（task-detail/QuestionSlot.tsx）。 */
+  onAnswer?: (answer: string, input: QuestionAnswerInput) => Promise<void>;
 }) {
   const draft = useTaskReplyDraft(task.id);
   const shellRef = useReplyLayout();
@@ -72,6 +73,9 @@ export function TeamReplyBox({
     onPendingChange: draft.setPendingUploads,
   });
   const disabled = !!task.archived;
+  // 答题卡展开着：框连同框外的补全、文件引用都退下，草稿原样留着（task-detail/QuestionSlot.tsx）。
+  const takeover = useQuestionTakeover(onAnswer ? task : null);
+  const covering = takeover.covering;
   // 技能按**调度者自己的执行器**算：这句话是发给调度台那个会话的，执行者手上装的
   // 技能跟它不是一回事（派活时该带什么由调度者自己在 dispatch 里写）。
   const skills = useSkills({
@@ -147,7 +151,7 @@ export function TeamReplyBox({
   };
   return (
     <div ref={shellRef} className="team-reply-shell">
-      {slash.open && (
+      {slash.open && !covering && (
         <SlashMenu
           className="team-reply-command-menu"
           ariaLabel="技能补全"
@@ -159,7 +163,7 @@ export function TeamReplyBox({
           onPick={slash.pick}
         />
       )}
-      {mention.open && !slash.open && (
+      {mention.open && !slash.open && !covering && (
         <FileMentionMenu mention={mention} label="引用工作区文件" className="team-reply-mention-menu" />
       )}
       <div className="reply-context">
@@ -183,9 +187,8 @@ export function TeamReplyBox({
       />
       {error && <p>{error}</p>}
       </div>
-      {/* 调度者问你的时候，这一格由答题卡占着（task-detail/QuestionSlot.tsx）。 */}
-      {(boxSlot ?? keepReplyBox)(
-      <div className="team-reply-box">
+      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} />}
+      <div className="team-reply-box" hidden={covering || undefined}>
         <ReplyResizeHandle targetRef={inputRef} {...replyHeight} />
         <textarea
           ref={inputRef}
@@ -217,8 +220,7 @@ export function TeamReplyBox({
             taskId={task.id}
           />
         </footer>
-      </div>,
-      )}
+      </div>
     </div>
   );
 }

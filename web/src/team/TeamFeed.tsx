@@ -18,6 +18,7 @@ import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "../task-detail/QuestionHistory.tsx";
 import { isQuestionAnswer } from "@ash/shared/questions";
+import { questionsOnScreen } from "../task-detail/timelineNoticeCopy.ts";
 import { SystemAuthoredMessage, SystemBoundary, SystemEventNote } from "../task-detail/SystemNotice.tsx";
 import { isReviewSystemPrompt } from "../task-detail/systemNoticeModel.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
@@ -234,6 +235,8 @@ export function TeamFeed({
   const wakeReplies = monitorWakeReplyIds(rows.flatMap((row) => row.kind === "conv" ? [row.item] : []));
   // 调度台的原始需求同样不在会话正文里（首条会话从调度者的拆解开始）：流的最顶上拿任务正文
   // 补画第一颗气泡，左侧导航也靠它排出第一格。
+  // 另有一处看得见的那几道题（答题卡、答过的气泡）：调度者提问那一轮的结算说明对的是它们时不再抄一遍。
+  const onScreen = questionsOnScreen(task, task.questionHistory);
   const inputs = useMemo(
     () => conversationInputs({ text: task.body, at: task.createdAt }, rows.flatMap((row) => row.kind === "conv" ? [row.item] : [])),
     [rows, task.body, task.createdAt],
@@ -300,7 +303,7 @@ export function TeamFeed({
             if (item.variant === "boundary") {
               return <SystemBoundary item={item} surface="team" key={row.key} />;
             }
-            return <SystemEventNote item={item} key={row.key} />;
+            return <SystemEventNote item={item} key={row.key} onScreen={onScreen} />;
           })}
           {historyReady && <QuestionHistoryRemainder />}
           {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadLabel(task)} queuePosition={task.queuePosition} />}

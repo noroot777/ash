@@ -120,6 +120,44 @@ try {
   await note.fill("ask-card");
   assert.equal(await send.isDisabled(), false);
 
+  // 收起再展开以后，多行补充照样跟着行数长高（输入框换了新节点，撑高的记账跟着重来）。
+  await page.getByRole("button", { name: "重置" }).click();
+  await card.waitFor();
+  const fits = () => note.evaluate((el) => el.clientHeight >= el.scrollHeight - 1);
+  await note.fill("第一行\n第二行\n第三行\n第四行");
+  assert.equal(await fits(), true, "多行补充撑开输入框");
+  await card.getByRole("button", { name: "收起答题卡，先看上文" }).click();
+  await card.locator(".question-card-peek").click();
+  assert.equal(await note.inputValue(), "第一行\n第二行\n第三行\n第四行");
+  assert.equal(await fits(), true, "展开后多行补充仍然撑开");
+  await note.press("End");
+  await note.pressSequentially("\n第五行");
+  assert.equal(await fits(), true, "展开后继续写还会长高");
+
+  // 答题卡接管的是整套输入：普通回复框里敲到一半的斜杠菜单，在卡展开时跟着退下，草稿原样留着。
+  await page.getByRole("button", { name: "撤下提问" }).click();
+  await card.waitFor({ state: "detached" });
+  await replyBox.fill("/te");
+  const slashMenu = page.locator(".task-reply-command-menu");
+  await slashMenu.waitFor();
+  await page.getByRole("button", { name: "单题" }).click();
+  await card.waitFor();
+  assert.equal(await slashMenu.isVisible(), false, "卡展开时普通回复框的补全菜单不能还挂着");
+  assert.equal(await visibleInputs(), 1);
+  await card.getByRole("button", { name: "收起答题卡，先看上文" }).click();
+  assert.equal(await replyBox.inputValue(), "/te", "收起后普通回复的草稿原样在");
+  await card.locator(".question-card-peek").click();
+
+  // 改发别的话把题撤下（不留问答记录）：那道题只剩会话里那句结算说明能看，它照画；
+  // 题目在答题卡上、或答完跟着气泡留着的那几道，结算说明不画。
+  await page.getByRole("button", { name: "重置" }).click();
+  await card.waitFor();
+  assert.equal(await page.locator(".turn-receipts-toggle").count(), 0, "题在卡上时那句结算说明不画");
+  await page.getByRole("button", { name: "撤下提问" }).click();
+  await card.waitFor({ state: "detached" });
+  await page.locator(".turn-receipts-toggle").click();
+  assert.match(await page.locator(".task-conversation").innerText(), /开始前，确认两个细节。/, "撤下的旧题仍能在会话里读到");
+
   // 窄屏不横向溢出。
   await page.setViewportSize({ width: 360, height: 720 });
   await page.getByRole("button", { name: "重置" }).click();

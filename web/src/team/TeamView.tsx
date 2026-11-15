@@ -20,7 +20,6 @@ import { useConversation } from "../lib/useConversation.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
-import { QuestionSlot } from "../task-detail/QuestionSlot.tsx";
 import { useReuseInput } from "../task-detail/ReuseInput.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
@@ -431,11 +430,11 @@ export function TeamView({
                 </div>
               )}
               {/* 调度者向你提问时，回复框那一格是答题卡（跟任务页同一副形状）。 */}
-              <TeamReplyBox task={task} tasks={allTasks} boxSlot={(box) => <QuestionSlot task={task} box={box} onAnswer={async (answer, input) => {
+              <TeamReplyBox task={task} tasks={allTasks} onAnswer={async (answer, input) => {
                 await api.answerTask(task.id, answer, input);
                 await refreshTask();
                 notify("已答复调度者，原会话正在续跑");
-              }} />} onSend={async (text, attachments, options) => {
+              }} onSend={async (text, attachments, options) => {
                 // 回复也会起一轮(与普通任务详情页同口径)。
                 if (!(await confirmExecutorSwap(task.id))) return null;
                 const result = await api.replyTask(task.id, text, { attachments, ...options });

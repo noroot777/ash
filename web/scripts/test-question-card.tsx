@@ -4,14 +4,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { Task } from "@ash/shared";
 import type { QuestionRecord } from "@ash/shared/questions";
 import { QuestionCard } from "../src/task-detail/QuestionCard.tsx";
-import { QuestionSlot } from "../src/task-detail/QuestionSlot.tsx";
-import { isUnshownNotice } from "../src/task-detail/timelineNoticeCopy.ts";
+import { QuestionDock, useQuestionTakeover } from "../src/task-detail/QuestionSlot.tsx";
+import { isUnshownNotice, questionsOnScreen } from "../src/task-detail/timelineNoticeCopy.ts";
 import { syncComposerSendKey } from "../src/lib/sendKey.ts";
 import { ConversationFeed } from "../src/task-detail/ConversationFeed.tsx";
 import { TeamFeed } from "../src/team/TeamFeed.tsx";
 import type { ConversationItem } from "../src/task-detail/conversationModel.ts";
 import { longAnswer, longLegacyReply, longQuestion } from "./fixtures/question-card-long-answer.ts";
-import { formatQuestionAnswers, joinQuestionAnswer, legacyQuestionRecord, questionOptionSelected } from "@ash/shared/questions";
+import { formatQuestionAnswers, joinQuestionAnswer, legacyQuestionRecord, questionOptionSelected, settleNoteQuestion } from "@ash/shared/questions";
 
 const task = { id: "question-card", title: "问答卡", body: "问答卡的原始需求", mode: "single", status: "paused", question: "两个细节", questionItems: [
   { question: "放在哪里？", options: ["会话里", "侧栏里"] },
@@ -81,14 +81,21 @@ syncComposerSendKey("mod-enter");
 assert.match(renderSingle(), /⌘ \/ Ctrl \+ Enter 发送/);
 syncComposerSendKey("enter");
 
-// 卡在回复框那一格：有问题在等时平常那个框还在（草稿都在），只是 hidden；没有问题时框原样摆着。
-const box = <div className="task-reply-box"><textarea aria-label="回复任务" /></div>;
-const slotted = renderToStaticMarkup(<QuestionSlot task={task} box={box} onAnswer={async () => undefined} />);
+// 卡在回复框那一格：有问题在等时宿主拿到 covering，平常那个框（草稿都在）hidden；没有问题、或宿主没有答复的路时不接管。
+function Host({ task: hosted, answerable = true }: { task: Task; answerable?: boolean }) {
+  const takeover = useQuestionTakeover(answerable ? hosted : null);
+  return <>
+    {answerable && <QuestionDock takeover={takeover} onAnswer={async () => undefined} />}
+    <div className="task-reply-box" hidden={takeover.covering || undefined}><textarea aria-label="回复任务" /></div>
+  </>;
+}
+const slotted = renderToStaticMarkup(<Host task={task} />);
 assert.match(slotted, /<div class="question-dock"><section class="question-card"/);
 assert.match(slotted, /<div class="task-reply-box" hidden="">/, "卡展开时不出现平常的回复框");
-const idle = renderToStaticMarkup(<QuestionSlot task={{ ...task, question: null, questionItems: null } as Task} box={box} onAnswer={async () => undefined} />);
+const idle = renderToStaticMarkup(<Host task={{ ...task, question: null, questionItems: null } as Task} />);
 assert.doesNotMatch(idle, /question-card|hidden/);
 assert.match(idle, /<div class="task-reply-box"><textarea/);
+assert.doesNotMatch(renderToStaticMarkup(<Host task={task} answerable={false} />), /question-card|hidden/, "没有答复的路就不接管");
 
 // 勾了就是选了：答复 = 勾了的那几项（按选项顺序一项一行）+ 补充的话；跟已答气泡认选项的口径兼容。
 const options = ["会话里", "侧栏里\n两行的选项", "都要"];
@@ -100,21 +107,35 @@ assert.equal(questionOptionSelected(joined, "会话里"), false);
 assert.equal(joinQuestionAnswer(options, new Set(), "  "), "", "什么都没答就是空的（记成未答）");
 assert.equal(formatQuestionAnswers([joinQuestionAnswer(options, new Set([0]), ""), ""]), "1. 会话里\n2. （未答）");
 
-// 问题只出现一次：提问那一轮的结算说明（带着问题全文）在会话里不画。
+// 问题只出现一次：提问那一轮的结算说明（带着问题全文），在那道题另有一处看得见时（答题卡上、答过的气泡里）不画；
+// 被撤下而没回答的旧题没有别处可看，照画。
 const settle = (text: string): ConversationItem => ({ kind: "event", id: `note:${text.slice(0, 6)}`, text, at: "2026-09-10T00:59:00Z", tone: "notice", variant: "note" });
 const turn = { kind: "agent", id: "turn", sessionId: "session", label: "codex", agentType: "codex", at: "2026-09-10T00:58:00Z",
   endedAt: "2026-09-10T00:59:00Z", markdown: "先问两件事", segments: [{ id: "turn:body", markdown: "先问两件事", events: [], attachments: [] }] } as unknown as ConversationItem;
-for (const note of ["本回合以提问暂停,等待答复:「独一无二的问题全文」", "续聊回合以提问结束,等待答复:「独一无二的问题全文」(任务状态仍为「已完成」)"]) {
-  assert.equal(isUnshownNotice(note), true);
-  assert.equal(isUnshownNotice(`〔系统〕${note}`), true);
-  const html = render([turn, settle(note)], []);
-  assert.doesNotMatch(html, /独一无二的问题全文/, `会话里不再抄一遍问题：${note.slice(0, 12)}`);
+const asked = "独一无二的「问题」全文";
+const answeredRecord: QuestionRecord = { ...record, id: "asked", question: asked, questionItems: undefined };
+for (const note of [`本回合以提问暂停,等待答复:「${asked}」`, `续聊回合以提问结束,等待答复:「${asked}」(任务状态仍为「已完成」)`]) {
+  assert.equal(settleNoteQuestion(note), asked, "引号套引号也认得出整道题");
+  assert.equal(settleNoteQuestion(`〔系统〕${note}`), asked);
+  const pending = questionsOnScreen({ question: asked }, []);
+  const answered = questionsOnScreen({ question: null }, [answeredRecord]);
+  const superseded = questionsOnScreen({ question: null }, [{ ...answeredRecord, question: "另一道" }]);
+  assert.equal(isUnshownNotice(note, pending), true, "在等的那道题在答题卡上");
+  assert.equal(isUnshownNotice(note, answered), true, "答过的那道题跟着答案留在气泡里");
+  assert.equal(isUnshownNotice(note, superseded), false, "撤下没答的旧题照画");
+  assert.equal(isUnshownNotice(note), false, "不知道界面上有什么就照画");
+  assert.equal(isUnshownNotice(note, questionsOnScreen({ question: null }, [{ ...answeredRecord, deleted: true }])), false, "删掉的答复不算看得见");
+  const html = renderToStaticMarkup(<ConversationFeed task={{ ...task, question: asked, questionItems: undefined } as Task}
+    items={[turn, settle(note)]} questionHistory={[]} sessions={[]} loading={false} error={null} />);
+  assert.doesNotMatch(html, /独一无二/, `会话里不再抄一遍问题：${note.slice(0, 12)}`);
   assert.match(html, /先问两件事/);
-  const teamHtml = renderToStaticMarkup(<TeamFeed task={{ ...task, mode: "team" }} rows={[{ kind: "conv", key: "note", item: settle(note) }]}
+  const team = (question: string | null) => renderToStaticMarkup(<TeamFeed task={{ ...task, mode: "team", question, questionItems: undefined, questionHistory: [] } as Task}
+    rows={[{ kind: "conv", key: "note", item: settle(note) }]}
     workers={[]} onOpenWorker={() => undefined} onAskLead={() => undefined} delegatingIds={new Set()} indicatorForTask={() => null} />);
-  assert.doesNotMatch(teamHtml, /独一无二的问题全文/, "团队页同样不画");
+  assert.doesNotMatch(team(asked), /独一无二/, "团队页同样不画");
+  assert.match(team(null), /独一无二/, "团队页撤下没答的旧题照画");
 }
-assert.equal(isUnshownNotice("本回合没有交卷,记为未完成"), false, "别的结算说明照旧");
+assert.equal(settleNoteQuestion("本回合没有交卷,记为未完成"), null, "别的结算说明照旧");
 const recorded = render([answer]);
 const recordClass = 'class="task-message task-message--user task-question-record"';
 assert.equal(count(recorded, recordClass), 1, "会话与数据库里的同一份答复只显示一个气泡");
@@ -169,4 +190,4 @@ assert.match(longHtml, /<\/button><p>A\n顺便/, "答案原样在引文下面");
 assert.doesNotMatch(longHtml, /你之前的提问/);
 assert.match(longHtml, /task-question-quote-text">[^<]*跨站那个问题/, "旧题干引在答案上面");
 assert.match(longHtml, /还是在 ash 上预览别的项目/);
-console.log("question card: one input + one send key, slot hides the reply box, picks join into compatible answers, settle note not drawn, collapsed/settling/no-option states, duplicate suppression and legacy/team rendering passed");
+console.log("question card: one input + one send key, slot hides the reply box, picks join into compatible answers, settle note hidden only while the question shows elsewhere, collapsed/settling/no-option states, duplicate suppression and legacy/team rendering passed");

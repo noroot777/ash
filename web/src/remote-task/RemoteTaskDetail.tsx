@@ -10,7 +10,7 @@ import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { ConversationFeed } from "../task-detail/ConversationFeed.tsx";
 import { buildConversationItems, type TimelineEntry } from "../task-detail/conversationModel.ts";
-import { QuestionSlot } from "../task-detail/QuestionSlot.tsx";
+import { QuestionDock, useQuestionTakeover } from "../task-detail/QuestionSlot.tsx";
 
 const POLL_MS = 2_000;
 
@@ -112,6 +112,9 @@ export function RemoteTaskDetail({
   const task = snapshot?.task ?? archive;
   const items = useMemo(() => buildConversationItems(snapshot?.persisted ?? [], snapshot?.sessions ?? [], timeline), [snapshot, timeline]);
   const canReply = task.mode === "single" || task.mode === "team";
+  // 提问在等时，回复框那一格是答题卡（跟任务页同一副形状，见 task-detail/QuestionSlot.tsx）：展开时框 hidden；
+  // 收起后框照它自己的条件能写能发——发出去的普通消息由远端照常撤下旧提问。
+  const takeover = useQuestionTakeover(task);
 
   const send = async () => {
     const message = text.trim();
@@ -204,19 +207,18 @@ export function RemoteTaskDetail({
           />
           <div className="task-reply-shell remote-task-reply">
             {sendError && <p className="task-reply-error">{sendError}</p>}
-            {/* 提问在等时，回复框那一格是答题卡（跟任务页同一副形状，见 task-detail/QuestionSlot.tsx）。 */}
-            <QuestionSlot task={task} onAnswer={async (answer, input) => {
+            <QuestionDock takeover={takeover} onAnswer={async (answer, input) => {
               await api.remoteTaskAnswer(archive.id, target.url, answer, input);
               notify("已发送答复，任务正在远端续跑");
               await refresh(true);
-            }} box={
-            <div className="task-reply-box">
+            }} />
+            <div className="task-reply-box" hidden={takeover.covering || undefined}>
               <textarea
                 ref={inputRef}
                 value={text}
                 rows={3}
-                disabled={!snapshot || sending || !canReply || Boolean(task.question)}
-                placeholder={task.question ? "先答复上面的问题" : canReply ? `回复将发送到 ${target.name} 执行` : "该类型任务暂不支持从代理视图回复"}
+                disabled={!snapshot || sending || !canReply}
+                placeholder={canReply ? `回复将发送到 ${target.name} 执行` : "该类型任务暂不支持从代理视图回复"}
                 aria-label="回复远程任务"
                 onChange={(event) => setText(event.target.value)}
                 onKeyDown={(event) => {
@@ -228,12 +230,11 @@ export function RemoteTaskDetail({
               />
               <div className="task-reply-actions">
                 <span>上下文与执行位置：{target.name} · {sendKeys.sendShort} 发送</span>
-                <button className="task-send-button" type="button" disabled={!snapshot || sending || !text.trim() || !canReply || Boolean(task.question)} onClick={() => void send()} aria-label="发送到远程任务">
+                <button className="task-send-button" type="button" disabled={!snapshot || sending || !text.trim() || !canReply} onClick={() => void send()} aria-label="发送到远程任务">
                   {sending ? <SpinnerGap size={15} className="is-spinning" /> : <ArrowUp size={15} weight="bold" />}
                 </button>
               </div>
             </div>
-            } />
           </div>
         </section>
       </div>

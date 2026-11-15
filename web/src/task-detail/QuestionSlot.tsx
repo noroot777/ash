@@ -1,10 +1,11 @@
-// 答题卡停在回复框那一格（三个宿主同一副形状：任务页、远程任务页、团队页的调度者提问）。
+// 答题卡停在回复框那一格（三个宿主同一副形状：任务页 ReplyBox、远程任务页、团队页 TeamReplyBox）。
 //
-// 有问题在等：展开着的时候卡就是回复框——平常那个框不出现（`hidden`，草稿、附件、拖出来的高度都在，
-// 只是不画），任何时候都只有一处打字的地方、一颗发送键；收起时卡缩成题目一行，平常的回复框回到它
-// 下面。卡从下面升上来，答完原路收回去；收回去那 200ms 里卡片还是答完那一刻的样子，但点不动
-// （inert），回复框等它走了才出来。
-import { cloneElement, useEffect, useState, type ReactElement } from "react";
+// 有问题在等：展开着的时候卡就是回复框——宿主照 `covering` 把平常那个框 `hidden`（草稿、附件、拖出来
+// 的高度都在，只是不画），框外挂着的补全、引用、选模型这些浮层也一并退下：接管的是整套输入工具，
+// 不只是框本体。任何时候都只有一处打字的地方、一颗发送键。收起时卡缩成题目一行，平常的回复框连同
+// 它的浮层回到它下面。卡从下面升上来，答完原路收回去；收回去那 200ms 里卡片还是答完那一刻的样子，
+// 但点不动（inert），回复框等它走了才出来。
+import { useEffect, useState } from "react";
 import type { TaskListItem } from "@ash/shared";
 import { questionKey, type QuestionAnswerInput } from "@ash/shared/questions";
 import { motionReduced } from "../lib/useSwapText.ts";
@@ -12,15 +13,19 @@ import { QuestionCard } from "./QuestionCard.tsx";
 
 const LEAVE_MS = 200;
 
-/** 平常那个回复框：卡展开时给它 `hidden`。 */
-export type ReplyBoxElement = ReactElement<{ hidden?: boolean }>;
+export type QuestionTakeover = {
+  /** 此刻画着的那一题（答完收回去的 200ms 里还是它）。 */
+  card: TaskListItem | null;
+  leaving: boolean;
+  collapsed: boolean;
+  setCollapsed: (collapsed: boolean) => void;
+  /** 卡展开着：平常的回复框和它的浮层都退下。 */
+  covering: boolean;
+};
 
-export function QuestionSlot({ task, onAnswer, box }: {
-  task: TaskListItem;
-  onAnswer: (answer: string, input: QuestionAnswerInput) => Promise<void>;
-  box: ReplyBoxElement;
-}) {
-  const asking = task.question ? task : null;
+/** `task` 给 null = 这个宿主不接答题卡（没有答复的路）。 */
+export function useQuestionTakeover(task: TaskListItem | null): QuestionTakeover {
+  const asking = task?.question ? task : null;
   const [shown, setShown] = useState<TaskListItem | null>(asking);
   const [leaving, setLeaving] = useState(false);
   // 收起记在这一次提问上：换了一道题（或换了任务）就重新展开。
@@ -40,19 +45,30 @@ export function QuestionSlot({ task, onAnswer, box }: {
     return () => window.clearTimeout(timer);
   }, [asking]);
   const card = asking ?? shown;
-  const key = card ? `${card.id}:${questionKey(card)}` : null;
+  const key = card ? cardKey(card) : null;
   const collapsed = !!key && collapsedKey === key;
-  const covering = !!card && !collapsed;
-  return <>
-    {card && (
-      <div className={`question-dock${leaving && !asking ? " is-leaving" : ""}`} inert={leaving && !asking ? true : undefined}>
-        <QuestionCard key={key} task={card} onAnswer={onAnswer} collapsed={collapsed}
-          onCollapsedChange={(next) => setCollapsedKey(next ? key : null)} />
-      </div>
-    )}
-    {cloneElement(box, { hidden: covering || undefined })}
-  </>;
+  return {
+    card,
+    leaving: leaving && !asking,
+    collapsed,
+    setCollapsed: (next) => setCollapsedKey(next ? key : null),
+    covering: !!card && !collapsed,
+  };
 }
 
-/** 没有答题卡的宿主：框原样摆在那一格。 */
-export const keepReplyBox = (box: ReplyBoxElement) => box;
+const cardKey = (task: TaskListItem) => `${task.id}:${questionKey(task)}`;
+
+/** 卡本身，摆在宿主的回复框紧上面（展开时框是 hidden 的，看上去就是卡占了那一格）。 */
+export function QuestionDock({ takeover, onAnswer }: {
+  takeover: QuestionTakeover;
+  onAnswer: (answer: string, input: QuestionAnswerInput) => Promise<void>;
+}) {
+  const { card, leaving } = takeover;
+  if (!card) return null;
+  return (
+    <div className={`question-dock${leaving ? " is-leaving" : ""}`} inert={leaving ? true : undefined}>
+      <QuestionCard key={cardKey(card)} task={card} onAnswer={onAnswer} collapsed={takeover.collapsed}
+        onCollapsedChange={takeover.setCollapsed} />
+    </div>
+  );
+}

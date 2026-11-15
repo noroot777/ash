@@ -25,7 +25,7 @@ import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import type { ReviewTarget } from "../review/reviewTarget.ts";
 import { CommandReply, SystemAuthoredMessage } from "./SystemNotice.tsx";
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
-import { isUnshownNotice, noticeView, type NoticeContext } from "./timelineNoticeCopy.ts";
+import { isUnshownNotice, noticeView, questionsOnScreen, type NoticeContext } from "./timelineNoticeCopy.ts";
 import { FootnoteLine } from "./FootnoteLine.tsx";
 import { ReviewBubble } from "./ReviewBubble.tsx";
 import { reviewProgress } from "./reviewProgress.ts";
@@ -390,9 +390,11 @@ export function ConversationFeed({
   const actions = footnoteActions({
     items, task, reviews, canOpenReviews: !!onOpenReviewPanel, causes, crashed, reviewRetry, turnRetry,
   });
+  // 另有一处看得见的那几道题：提问那一轮的结算说明对的是它们时就不再抄一遍（isUnshownNotice）。
+  const onScreen = questionsOnScreen(task, questionHistory);
   const { rows, receipts, footnotes } = conversationSystemRows(
     conversationDebateRows(feedRows, { reviews }),
-    { failures: crashed, context: noticeContext, causes, held: actions.held },
+    { failures: crashed, context: noticeContext, causes, held: actions.held, onScreen },
   );
   // 一轮审查里（审查者气泡下面摊开的那一轮、记录里点开的那一轮）的旁注同样记在审查者
   // 那一回合上（见 laneReceipts）。
@@ -487,7 +489,7 @@ export function ConversationFeed({
       return <UserMessage key={keys.get(item.id) ?? item.id} item={item} preserveSystemStyle={preserveSystemStyle} onReuse={onReuseInput} />;
     }
     // 辩论兜底那一路不经过 conversationSystemRows，不画的那几种旁注（isUnshownNotice）在这里同样拿掉。
-    if (isUnshownNotice(item.text)) return null;
+    if (isUnshownNotice(item.text, onScreen)) return null;
     if (preserveSystemStyle) {
       return (
         <p

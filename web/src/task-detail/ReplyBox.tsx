@@ -33,7 +33,8 @@ import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import { ScreenshotAnnotation } from "../page-annotation/ScreenshotAnnotation.tsx";
 import { screenshotCandidates, type AnnotationReply } from "../page-annotation/model.ts";
 import type { ConversationItem } from "./conversationModel.ts";
-import { keepReplyBox, type ReplyBoxElement } from "./QuestionSlot.tsx";
+import { QuestionDock, useQuestionTakeover } from "./QuestionSlot.tsx";
+import type { QuestionAnswerInput } from "@ash/shared/questions";
 import { parseAttachmentText } from "./utils.ts";
 import {
   attachmentsFromPaths,
@@ -64,7 +65,7 @@ export function ReplyBox({
   moreRef,
   conversationItems = [],
   tasks = [],
-  boxSlot,
+  onAnswer,
 }: {
   task: Task;
   hasConversation: boolean;
@@ -121,8 +122,8 @@ export function ReplyBox({
   conversationItems?: ConversationItem[];
   /** 「等某任务完成后发送」的候选,以及托盘里报出在等谁。 */
   tasks?: TaskListItem[];
-  /** 框那一格交给谁摆（答题卡，见 QuestionSlot.tsx）：拿到的是框本身，可以给它 `hidden`。 */
-  boxSlot?: (box: ReplyBoxElement) => ReactNode;
+  /** 有问题在等时怎么答：给了，框那一格就由答题卡接管（QuestionSlot.tsx）。 */
+  onAnswer?: (answer: string, input: QuestionAnswerInput) => Promise<void>;
 }) {
   const draft = useTaskReplyDraft(task.id);
   const shellRef = useReplyLayout();
@@ -232,7 +233,10 @@ export function ReplyBox({
   const ashItems: SlashItem[] = (command?.items ?? []).map((item) => ({ ...item, kind: "ash" }));
   const commandCandidates = (text: string) => mergeSlashItems(ashItems, skills, slashQuery(text));
   const candidates = commandCandidates(value);
-  const menuOpen = !menuDismissed && candidates.length > 0;
+  // 答题卡展开着：框连同框外的补全、引用、选模型、派生面板都退下，草稿原样留着（QuestionSlot.tsx）。
+  const takeover = useQuestionTakeover(onAnswer ? task : null);
+  const covering = takeover.covering;
+  const menuOpen = !covering && !menuDismissed && candidates.length > 0;
   const selectedIndex = Math.min(commandIndex, Math.max(0, candidates.length - 1));
   const commandMatch = !!command && command.matches(value);
   const selected = candidates[selectedIndex];
@@ -493,7 +497,7 @@ export function ReplyBox({
           onPick={pickCommand}
         />
       )}
-      {mention.open && !menuOpen && (
+      {mention.open && !menuOpen && !covering && (
         <MentionMenu
           className="task-reply-mention-menu"
           ariaLabel="召唤智能体或引用文件"
@@ -506,7 +510,7 @@ export function ReplyBox({
           onPick={mention.pick}
         />
       )}
-      {picker && (
+      {picker && !covering && (
         <AgentModelPicker
           types={registeredTypes.length ? registeredTypes : [activeAgent]}
           profiles={profiles}
@@ -523,7 +527,7 @@ export function ReplyBox({
         />
       )}
       <div className="reply-context">
-      {inlinePanel && !menuOpen && !mention.open && !picker && <div className="task-reply-inline-panel">{inlinePanel}</div>}
+      {inlinePanel && !covering && !menuOpen && !mention.open && !picker && <div className="task-reply-inline-panel">{inlinePanel}</div>}
       <ScheduledMessageTray
         key={task.id}
         messages={scheduled.messages}
@@ -548,9 +552,8 @@ export function ReplyBox({
       {commandResult?.taskId === task.id && <p className="task-reply-command-result" role="status" aria-label="命令结果">{commandResult.text}</p>}
       {topRail}
       </div>
-      {/* 有问题在等时，这一格由答题卡占着（QuestionSlot）。 */}
-      {(boxSlot ?? keepReplyBox)(
-      <div className="task-reply-box">
+      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} />}
+      <div className="task-reply-box" hidden={covering || undefined}>
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />
         <AgentPlate name={activeAgent} />
         <textarea
@@ -675,8 +678,7 @@ export function ReplyBox({
             taskId={task.id}
           />
         </div>
-      </div>,
-      )}
+      </div>
     </div>
   );
 }

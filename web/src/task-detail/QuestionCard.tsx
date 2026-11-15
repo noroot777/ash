@@ -4,7 +4,7 @@
 // 卡里不再套框：一块面板，细线分段；选项一行一个，行首一小格是数字（也是快捷键），勾上变成
 // 黑底对勾。勾了就是选了，不再把那句话抄进输入框；最后一行只写补充，发出去的是两者拼起来的
 // （joinQuestionAnswer，跟从前的答复文本同一种形状）。
-import { useId, useRef, useState, type KeyboardEvent } from "react";
+import { useId, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { QuestionItem, TaskListItem } from "@ash/shared";
 import { CaretDown, Check } from "@phosphor-icons/react";
 import {
@@ -29,6 +29,33 @@ export type QuestionCardProps = {
   collapsed: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
 };
+
+/**
+ * 最后一行那个输入框。单独成一个组件是为了让自动撑高跟着输入框本身挂载：收起时输入框卸掉、展开时
+ * 换了一个新节点，撑高的那份记账（上次写的高度、是否被拖过）得跟着重来，不然展开后的新框会被当成
+ * 「拖过了」，从此不再长高。
+ */
+function NoteField({ inputRef, value, disabled, label, placeholder, onChange, onCommit }: {
+  inputRef: RefObject<HTMLTextAreaElement | null>;
+  value: string;
+  disabled: boolean;
+  label: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+  onCommit: () => void;
+}) {
+  useAutoGrowTextarea(inputRef, { value, maxLines: 6 });
+  return (
+    <textarea ref={inputRef} value={value} rows={1} disabled={disabled} aria-label={label} placeholder={placeholder}
+      onChange={(event) => onChange(event.target.value)}
+      onKeyDown={(event) => {
+        if (!isSendKeyEvent(event)) return;
+        event.preventDefault();
+        onCommit();
+      }}
+    />
+  );
+}
 
 /** 引在收起那一行里的题目：一行纯文字，长了交给样式截。 */
 const plain = (text: string) => text.replace(/\s+/g, " ").trim();
@@ -65,7 +92,6 @@ export function QuestionCard({ task, onAnswer, collapsed, onCollapsedChange }: Q
   const clampable = context.length > CONTEXT_CLAMP_CHARS;
   // 最后一格的数字：有选项时它是下一格，按它光标落进去。9 以后没有数字键可按，就不写。
   const noteKey = options.length && options.length < 9 ? options.length + 1 : null;
-  useAutoGrowTextarea(input, { value: draft.note, maxLines: 6 });
 
   const update = (next: (draft: Draft) => Draft) =>
     setDrafts((list) => list.map((entry, i) => i === current ? next(entry ?? EMPTY) : entry));
@@ -190,15 +216,11 @@ export function QuestionCard({ task, onAnswer, collapsed, onCollapsedChange }: Q
       </small>}
       <div className="question-card-note">
         {!!options.length && <span className="question-card-key" aria-hidden="true">{noteKey ?? ""}</span>}
-        <textarea ref={input} value={draft.note} rows={1} disabled={unavailable}
-          aria-label={`答复：${plain(item.question)}`}
+        <NoteField inputRef={input} value={draft.note} disabled={unavailable}
+          label={`答复：${plain(item.question)}`}
           placeholder={settling ? "这一轮结束后即可答复" : options.length ? "自己写，或者补一句…" : "写下你的答案…"}
-          onChange={(event) => update((entry) => ({ ...entry, note: event.target.value }))}
-          onKeyDown={(event) => {
-            if (!isSendKeyEvent(event)) return;
-            event.preventDefault();
-            commit();
-          }}
+          onChange={(note) => update((entry) => ({ ...entry, note }))}
+          onCommit={commit}
         />
         <button type="button" className="question-card-send" disabled={unavailable || !answered}
           onClick={commit} aria-describedby={`${task.id}-answer-key`} {...sendTip.anchorProps}>
