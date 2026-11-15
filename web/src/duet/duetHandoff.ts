@@ -60,7 +60,7 @@ function transcriptLines(sessions: Session[]): string[] {
   }
   return [
     "## 完整讨论记录（执行前必读）",
-    "调度者：先完整阅读以下两份记录，再拆解任务并派发执行者。",
+    "先完整阅读以下两份记录，再动手落实。",
     `- 讨论者 A：\`${a.transcriptPath}\``,
     `- 讨论者 B：\`${b.transcriptPath}\``,
   ];
@@ -78,7 +78,7 @@ function lastText(turns: DuetTurn[], speaker: "A" | "B"): string {
   return [...turns].reverse().find((turn) => turn.speaker === speaker && turn.text.trim())?.text.trim() ?? "（尚无完整发言）";
 }
 
-// 收敛后的合稿(共同方案)是讨论的正式产出;有它就整段带给调度者,双方最后
+// 收敛后的合稿(共同方案)是讨论的正式产出;有它就整段带给接手的任务,双方最后
 // 发言只作过程证据。老讨论(改名前)没有合稿轮,退回结论两行 + 双方发言。
 // **过时的合稿不作数**:回炉后重新合稿失败时,留下的还是反馈前的旧方案,
 // 判据是合稿轮次不早于最后一次活动轮次。**用户介入也算活动**:意见落盘后讨论者

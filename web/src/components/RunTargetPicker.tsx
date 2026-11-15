@@ -44,7 +44,7 @@ export function RunTargetPicker({
   effortFollowLabel,
   tail,
   agentSegment,
-  agentOnly = false,
+  compact = false,
   onCommit,
   onEffortChange,
 }: {
@@ -77,8 +77,11 @@ export function RunTargetPicker({
   tail?: ReactNode;
   /** 顶替第一段（智能体）的那一段：回复框里讨论时是「和谁」，点开多选（task-detail/ReplyDiscussSegments.tsx）。 */
   agentSegment?: ReactNode;
-  /** 只摆智能体那一段（新建框里叫着人时，这条任务自己的执行器缩成一段排在被叫的人前面）。 */
-  agentOnly?: boolean;
+  /**
+   * 收着时只露智能体那一段（新建框里叫着人时，这条任务自己的执行器缩成一段排在被叫的人前面）。只管显示：
+   * 键盘进来或有一段开着时三段照常摆出来，选完智能体照常向右接着选模型、智能水平。
+   */
+  compact?: boolean;
   onCommit: (next: AgentModelSelection) => void;
   /** 不传就只画前两段——讨论者那种服务端根本不收智能水平的表面。 */
   onEffortChange?: (effort: string) => void;
@@ -96,7 +99,7 @@ export function RunTargetPicker({
   const empty = types.length + profiles.length === 0;
   const modelText = model?.trim() || "跟随执行器";
   const openAt = selection?.agentType ?? fallbackType ?? types[0] ?? profiles[0]?.type ?? "claude";
-  const shell = `run-target-picker is-${variant}${highlight ? " is-highlight" : ""}`;
+  const shell = `run-target-picker is-${variant}${highlight ? " is-highlight" : ""}${compact ? ` is-compact${open ? " is-open" : ""}` : ""}`;
 
   // 一个执行器都没有时三段全是空话：缩成一段把原因说清楚，别摆一排点不动的壳子。
   if (empty) {
@@ -133,7 +136,7 @@ export function RunTargetPicker({
         <CaretDown size={9} weight="bold" className="run-target-caret" aria-hidden="true" />
       </button>}
 
-      {!agentOnly && <button
+      <button
         ref={modelRef}
         type="button"
         className="run-target-seg run-target-seg--model"
@@ -148,9 +151,9 @@ export function RunTargetPicker({
       >
         <code>{modelText}</code>
         <CaretDown size={9} weight="bold" className="run-target-caret" aria-hidden="true" />
-      </button>}
+      </button>
 
-      {onEffortChange && !agentOnly && (
+      {onEffortChange && (
         <EffortPicker
           type={selection?.agentType ?? null}
           model={model}
@@ -181,7 +184,6 @@ export function RunTargetPicker({
             // 点回同一个智能体 = 什么都没改。照常提交会把模型/智能水平当成「换了人」
             // 一并清掉，等于惩罚了「点开看看又关上」；但连续配置仍应向右打开模型。
             if (!selection || next.agent !== selection.agentType) onCommit(next);
-            if (agentOnly) return close(agentRef);
             setModelAgent(next.agent);
             setOpen("model");
           }}

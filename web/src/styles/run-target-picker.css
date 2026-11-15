@@ -248,3 +248,12 @@
 }
 .effort-picker-hint.is-error { color: var(--red); }
 .effort-picker-hint > svg { flex: 0 0 auto; }
+
+/* 收着的胶囊（is-compact）：只露智能体那一段。另外两段只是收进视觉之外，仍在 Tab 顺序与读屏里——
+   键盘进来或有一段弹层开着（is-open，弹层要贴着那一段定位）时照常摆出来。不跟指针：它在靠右的那一组里，
+   一展开整组往左挪，指针落空又收回去，会来回抖；只认键盘焦点（focus-visible）也是这个缘故——鼠标按下那一下
+   就展开的话，抬起时按钮已经挪走，这一下点空。 */
+.run-target-picker.is-compact:not(.is-open):not(:has(:focus-visible)) > .run-target-seg--model,
+.run-target-picker.is-compact:not(.is-open):not(:has(:focus-visible)) > .effort-picker {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; padding: 0; border: 0;
+}

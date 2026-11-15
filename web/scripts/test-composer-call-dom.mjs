@@ -7,7 +7,11 @@
 // ② 问一句：建的是普通任务、执行器是胶囊上那个；第一回合是带着他的一次性召唤（reply 带 agent），不另起 run；
 // ③ 讨论：建的是普通任务；第一回合是一场讨论（discussions，各方是被叫的人），不另起 run、不发 reply；附件跟着话题走；
 // ④ 叫着人时排队、仅创建、定时都兑现不了，那几档置灰；
-// ⑤ 不叫了：写的字一个不丢，那一行收起，回到普通的创建并运行。
+// ⑤ 不叫了：写的字一个不丢，那一行收起，回到普通的创建并运行；
+// ⑥ 第一回合没被接下（问一句、讨论都一样）：任务已建好，字、叫的人原样留着，面板不收、写明原因；再按一次只对
+//    那一条重发，不再建一条，接下了才收尾；
+// ⑦ 叫的人跟正文一起存在草稿里：面板关了再开还在；
+// ⑧ 任务自己那颗胶囊收着时只露智能体；键盘进来就摆出模型、智能水平，照样能改；点智能体那段选完接着开模型。
 // 跑法：npm -w web run test:composer-call-dom
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -27,6 +31,8 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   const requests = [];
   let created = 0;
+  // 第一回合（reply / discussions）还要失败几次。
+  let failOpenings = 0;
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname.replace(/^\/api/, "");
@@ -46,6 +52,10 @@ try {
     const match = /^\/tasks\/([^/]+)\/(run|reply|discussions)$/.exec(path);
     if (match && request.method() === "POST") {
       requests.push({ kind: match[2], task: match[1], body: request.postDataJSON() });
+      if (match[2] !== "run" && failOpenings > 0) {
+        failOpenings -= 1;
+        return json({ error: "暂时不可用（夹具）" }, 503);
+      }
       return json(match[2] === "discussions" ? { discussionId: "d1", state: {} } : { started: true });
     }
     return json([]);
@@ -134,6 +144,71 @@ try {
   assert.deepEqual(first.body.attachments, ["/tmp/uploads/shot.png"], "附件跟着话题走");
   assert.deepEqual(rest, [], "讨论不再另起 run 或 reply");
   await page.getByText("提示：任务已创建，和 codex 的讨论开始了").waitFor();
+
+  // ⑥ 问一句的第一回合没被接下：任务建好了，字和叫的人都在，面板不收；再按一次只重发给那一条。
+  await objective.waitFor();
+  await call("第三条要问的 ", "codex");
+  failOpenings = 1;
+  start = requests.length;
+  const createdBefore = await page.getByTestId("created").getByRole("listitem").count();
+  await send.click();
+  const stuck = page.getByRole("alert").filter({ hasText: "第一回合没发出去" });
+  await stuck.waitFor();
+  assert.match(await stuck.innerText(), /暂时不可用（夹具）/, "写明没发出去的原因");
+  assert.deepEqual(since(start).map((item) => item.kind), ["create", "reply"]);
+  assert.equal(await objective.inputValue(), "第三条要问的 ", "字留着");
+  await row("codex").waitFor();
+  assert.equal(await page.getByTestId("created").getByRole("listitem").count(), createdBefore, "没办成就不收面板、不跳走");
+  await page.getByText("提示：任务已创建，但给 codex 的这一句没发出去：暂时不可用（夹具）。再按一次只重发这一下，不会再建一条").waitFor();
+  start = requests.length;
+  await send.click();
+  await page.getByText("提示：任务已创建，第一句交给 codex 答").nth(1).waitFor();
+  assert.deepEqual(since(start).map((item) => [item.kind, item.task]), [["reply", "task-3"]], "重发只对已建好的那一条，不再建一条");
+  assert.equal(await page.getByTestId("created").getByRole("listitem").count(), createdBefore + 1, "接下了才收尾");
+
+  // ⑥ 讨论同样：开不起来就留着，再按一次只对那一条开讨论。
+  await objective.waitFor();
+  await call("第四条要讨论的 ", "codex");
+  await key("codex", "讨论").click();
+  failOpenings = 1;
+  start = requests.length;
+  await send.click();
+  await page.getByRole("alert").filter({ hasText: "第一回合没发出去" }).waitFor();
+  assert.equal(await key("codex", "讨论").getAttribute("aria-pressed"), "true", "叫的人和做法都留着");
+
+  // ⑦ 面板关了再开：字、叫的人、做法、待重发的那条都还在。
+  await page.getByTestId("reopen").click();
+  await page.getByRole("alert").filter({ hasText: "第一回合没发出去" }).waitFor();
+  assert.equal(await objective.inputValue(), "第四条要讨论的 ");
+  assert.equal(await key("codex", "讨论").getAttribute("aria-pressed"), "true", "重开面板叫的人还在");
+  await send.click();
+  await page.getByText("提示：任务已创建，和 codex 的讨论开始了").nth(1).waitFor();
+  assert.deepEqual(since(start).map((item) => [item.kind, item.task]), [["create", undefined], ["discussions", "task-4"], ["discussions", "task-4"]],
+    "讨论也只建一次、对同一条重开");
+
+  // ⑧ 叫着人时任务自己的胶囊收着；键盘进来就摆出模型和智能水平，选得了；点智能体那段选完接着开模型。
+  await objective.waitFor();
+  await call("再问一句 ", "codex");
+  const own = page.locator(".studio-inline-executor > .composer-field .run-target-picker");
+  const ownAgent = own.getByRole("button", { name: /^智能体：/ });
+  const ownModel = own.getByRole("button", { name: /^模型：/ });
+  const width = (locator) => locator.evaluate((element) => element.getBoundingClientRect().width);
+  assert.equal(await width(ownModel) <= 1, true, "收着时只露智能体那一段");
+  await ownAgent.focus();
+  await page.keyboard.press("Tab");
+  assert.equal(await ownModel.evaluate((element) => element === document.activeElement), true, "模型那一段还在 Tab 顺序里");
+  assert.equal(await width(ownModel) > 1, true, "键盘进来就摆出模型那一段");
+  await page.keyboard.press("Enter");
+  await page.getByRole("listbox", { name: "可选模型" }).waitFor();
+  assert.equal(await width(ownModel) > 1, true, "弹层开着时那一段不收回去");
+  await page.keyboard.press("Escape");
+  await objective.focus();
+  await waitUntil(async () => (await width(ownModel)) <= 1, "离开就收回一段");
+  await ownAgent.click();
+  await page.getByRole("listbox", { name: "已注册的智能体" }).getByRole("option", { name: /claude/ }).first().click();
+  await page.getByRole("listbox", { name: "可选模型" }).waitFor();
+  assert.equal(await width(ownModel) > 1, true, "选完智能体照常向右接着选模型");
+  await page.keyboard.press("Escape");
 
   assert.deepEqual(errors, []);
   console.log("composer call dom test passed");

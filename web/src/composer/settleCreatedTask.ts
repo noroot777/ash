@@ -16,6 +16,10 @@ import type { ComposerOpening } from "./composerOpening.ts";
  *   任何变化(含改过又改回)都让旧提交失去清空资格;
  * - 随手记回链交**提交那一刻**捕获的 noteIds,不读完成时的(那可能是新面板的);
  * - ownsComposer 一并交给上层,上层只在它为 true 时收面板。
+ *
+ * 框里 `@` 了人时「启动」就是起第一回合(问一句 / 讨论)。它没被服务端接下,任务虽已建好,这次提交却没办成:
+ * 不收尾——草稿、叫的人原样留着,这条任务记进草稿(onOpeningFailed),再按一次只对它重发这一下,不再建一条。
+ * 返回值:这次提交办成了没有(没办成时调用方别把叫的人当「已发出」清掉)。
  */
 export async function settleCreatedTask(args: {
   task: Task;
@@ -24,6 +28,8 @@ export async function settleCreatedTask(args: {
   scheduleCron: string;
   /** 框里 `@` 了人：「创建并运行」那一下换成它起第一回合（只在 launchMode="run" 时有）。 */
   opening?: ComposerOpening | null;
+  /** 第一回合没被接下：把这条已建好的任务连同原因记下来，留给下一次提交重发。 */
+  onOpeningFailed?: (task: Task, error: string) => void;
   /** 提交那一刻的草稿对象(归属标识)与随手记回链。 */
   submitted: { draft: Draft; noteIds: string[] };
   /** 发起提交的那份面板此刻是否仍挂载。 */
@@ -34,7 +40,7 @@ export async function settleCreatedTask(args: {
   onCreated: (task: Task, noteIds: string[], ownsComposer: boolean) => void;
   onTasksSynced?: (tasks: Task[]) => void;
   notify: (message: string) => void;
-}): Promise<void> {
+}): Promise<boolean> {
   const { submitted, notify } = args;
   let task = args.task;
   // 创建成功了草稿才丢:中途任何一步失败都原样留着,用户回到面板还能接着改。
@@ -51,7 +57,7 @@ export async function settleCreatedTask(args: {
   if (args.launchMode === "create") {
     finishCreation();
     notify("任务已创建");
-    return;
+    return true;
   }
   if (args.launchMode === "queue") {
     // 创建成功后排队失败不回滚任务(enqueue 如实分开报两段结果);成功时 task
@@ -63,7 +69,7 @@ export async function settleCreatedTask(args: {
     finishCreation();
     if (result.members.length) args.onTasksSynced?.(result.members);
     notify(result.message);
-    return;
+    return true;
   }
   let launchError: unknown = null;
   try {
@@ -76,14 +82,21 @@ export async function settleCreatedTask(args: {
   } catch (error) {
     launchError = error;
   }
+  const reason = launchError instanceof Error ? launchError.message : "未知错误";
+  if (launchError && args.opening && args.onOpeningFailed) {
+    args.onOpeningFailed(task, reason);
+    notify(`任务已创建，但${args.opening.what}没发出去：${reason}。再按一次只重发这一下，不会再建一条`);
+    return false;
+  }
   finishCreation();
   if (launchError) {
-    notify(`任务已创建，但${args.launchMode === "run" ? "启动" : "定时设置"}失败：${launchError instanceof Error ? launchError.message : "未知错误"}`);
-    return;
+    notify(`任务已创建，但${args.launchMode === "run" ? "启动" : "定时设置"}失败：${reason}`);
+    return true;
   }
   notify(args.launchMode === "run"
     ? args.opening?.started ?? "任务已创建并启动"
     : args.launchMode === "once"
       ? "任务已创建，已设置一次性定时"
       : "任务已创建，已设置 Cron 定时");
+  return true;
 }

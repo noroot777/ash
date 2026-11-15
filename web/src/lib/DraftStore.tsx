@@ -13,6 +13,8 @@ import {
 import type { UploadAttachment, UploadingFile } from "../task-detail/Attachments.tsx";
 import type { ScreenshotDraft } from "../page-annotation/model.ts";
 import type { ReuseMark } from "../task-detail/withdrawDraft.ts";
+import type { ReplyCall } from "../task-detail/replyCall.ts";
+import type { Task } from "@ash/shared";
 
 // 「还没发出去的那份东西」统一放这里：对话框的回复草稿、主工作区新建任务框里的草稿，
 // 都是同一件事 —— 组件卸载（切任务、去设置、开聊天）不该把用户敲的字和粘的图弄丢。
@@ -42,7 +44,16 @@ export type Draft = {
   // 上一次「改了再发」放回的是哪一条、放完草稿是哪个版本；判连点用（见 withdrawDraft.ts 的
   // reuseDraft）。跟草稿放在同一份状态里，判定与更新一次完成。
   reuse?: ReuseMark | null;
+  // 新建任务框专用：框里 `@` 叫着的人、叫来做什么（问一句 / 讨论，composer/ComposerCall.tsx）。跟正文同生共死：
+  // 切走再回来正文还在、叫的人却没了，按下去就成了一条普通任务。
+  call?: ReplyCall | null;
+  // 新建任务框专用：任务已经建好、第一回合（问一句 / 讨论）还没被服务端接下的那一条，连同没接下的原因。
+  // 再按一次只对它重发这一下，不再建一条（composer/settleCreatedTask.ts）。
+  created?: ComposerCreated | null;
 };
+
+/** 已建好、第一回合还没送达的那条任务。 */
+export type ComposerCreated = { task: Task; error: string };
 
 let textVersions = 0;
 /** 一个新的正文版本。只比相等，跳号无所谓。 */
@@ -79,7 +90,7 @@ export function DraftProvider({ children }: { children: ReactNode }) {
       let next = update(previous);
       if (next.text !== previous.text && next.textVersion === previous.textVersion) next = { ...next, textVersion: nextTextVersion() };
       if (!next.text && next.attachments.length === 0 && next.pendingUploads.length === 0
-        && next.noteIds.length === 0 && !next.screenshot && !next.later) {
+        && next.noteIds.length === 0 && !next.screenshot && !next.later && !next.call && !next.created) {
         if (!(key in current)) return current;
         const { [key]: _removed, ...remaining } = current;
         return remaining;
@@ -90,6 +101,8 @@ export function DraftProvider({ children }: { children: ReactNode }) {
         && next.noteIds === previous.noteIds
         && next.screenshot === previous.screenshot
         && next.later === previous.later
+        && next.call === previous.call
+        && next.created === previous.created
         && next.textVersion === previous.textVersion
         && next.reuse === previous.reuse) return current;
       return { ...current, [key]: next };
@@ -131,6 +144,10 @@ export type DraftHandle = {
   setNoteIds: Dispatch<SetStateAction<string[]>>;
   later: LaterDraft | null;
   setLater: Dispatch<SetStateAction<LaterDraft | null>>;
+  call: ReplyCall | null;
+  setCall: Dispatch<SetStateAction<ReplyCall | null>>;
+  created: ComposerCreated | null;
+  setCreated: Dispatch<SetStateAction<ComposerCreated | null>>;
   /** 此刻这份草稿的不可变对象(引用即版本标识,提交时捕获、收尾时对比归属)。 */
   value: Draft;
   /**
@@ -195,6 +212,18 @@ export function useDraft(key: string): DraftHandle {
       later: typeof next === "function" ? next(current.later ?? null) : next,
     }));
   }, [key, updateDraft]);
+  const setCall = useCallback<Dispatch<SetStateAction<ReplyCall | null>>>((next) => {
+    updateDraft(key, (current) => ({
+      ...current,
+      call: typeof next === "function" ? next(current.call ?? null) : next,
+    }));
+  }, [key, updateDraft]);
+  const setCreated = useCallback<Dispatch<SetStateAction<ComposerCreated | null>>>((next) => {
+    updateDraft(key, (current) => ({
+      ...current,
+      created: typeof next === "function" ? next(current.created ?? null) : next,
+    }));
+  }, [key, updateDraft]);
   const clearIfUnchanged = useCallback((submitted: Draft) => {
     updateDraft(key, (current) => (current === submitted ? EMPTY_DRAFT : current));
   }, [key, updateDraft]);
@@ -220,6 +249,10 @@ export function useDraft(key: string): DraftHandle {
     setNoteIds,
     later: draft.later ?? null,
     setLater,
+    call: draft.call ?? null,
+    setCall,
+    created: draft.created ?? null,
+    setCreated,
     value: draft,
     clearIfUnchanged,
     clear,

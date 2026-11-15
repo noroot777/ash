@@ -16,6 +16,8 @@ export type ComposerOpening = {
   start: (task: Task) => Promise<unknown>;
   /** 起成了之后那一句提示。 */
   started: string;
+  /** 这一下叫什么（没送达时「……没发出去」）。 */
+  what: string;
 };
 
 export function composerOpening(call: ReplyCall, { body, fork, attachments }: {
@@ -39,6 +41,7 @@ export function composerOpening(call: ReplyCall, { body, fork, attachments }: {
         })),
       }),
       started: `任务已创建，和 ${people.map((person) => person.agent).join("、")} 的讨论开始了`,
+      what: "这场讨论",
     };
   }
   const { target } = call;
@@ -51,5 +54,6 @@ export function composerOpening(call: ReplyCall, { body, fork, attachments }: {
       reasoningEffort: target.reasoningEffort,
     }),
     started: `任务已创建，第一句交给 ${target.agent} 答`,
+    what: `给 ${target.agent} 的这一句`,
   };
 }

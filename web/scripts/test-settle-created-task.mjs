@@ -68,4 +68,37 @@ const baseArgs = (overrides) => {
   assert.equal(calls.clearIfUnchanged[0], submittedDraft);
 }
 
+// 框里 `@` 了人、第一回合没被接下:这次提交没办成——不清草稿、不回写 onCreated(面板不收),把已建好的任务
+// 连同原因交给 onOpeningFailed 记进草稿,下一次只对它重发。面板卸载了也一样(草稿库还在)。
+for (const mounted of [true, false]) {
+  const failed = [];
+  const { args, calls } = baseArgs({
+    launchMode: "run",
+    panelMounted: () => mounted,
+    opening: { start: async () => { throw new Error("暂时不可用"); }, started: "任务已创建，第一句交给 codex 答", what: "给 codex 的这一句" },
+    onOpeningFailed: (task, error) => failed.push({ task, error }),
+  });
+  assert.equal(await settleCreatedTask(args), false, "第一回合没送达就不算办成");
+  assert.equal(calls.clear, 0, "不清草稿");
+  assert.deepEqual(calls.clearIfUnchanged, [], "卸载了也不清");
+  assert.equal(calls.created.length, 0, "不回写 onCreated(不收面板、不跳走)");
+  assert.deepEqual(failed, [{ task: args.task, error: "暂时不可用" }], "已建好的任务连同原因记下来");
+  assert.match(calls.notices[0], /给 codex 的这一句没发出去：暂时不可用。再按一次只重发这一下，不会再建一条/);
+}
+
+// 第一回合接下了:照常收尾,返回办成。
+{
+  const started = [];
+  const { args, calls } = baseArgs({
+    launchMode: "run",
+    opening: { start: async (task) => { started.push(task.id); }, started: "任务已创建，和 codex 的讨论开始了", what: "这场讨论" },
+    onOpeningFailed: () => assert.fail("接下了就不该记失败"),
+  });
+  assert.equal(await settleCreatedTask(args), true);
+  assert.deepEqual(started, ["task-1"]);
+  assert.equal(calls.clear, 1);
+  assert.equal(calls.created.length, 1);
+  assert.deepEqual(calls.notices, ["任务已创建，和 codex 的讨论开始了"]);
+}
+
 console.log("settle-created-task: all assertions passed");

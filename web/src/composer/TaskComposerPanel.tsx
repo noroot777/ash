@@ -227,7 +227,7 @@ export function TaskComposerPanel({
     reasoningEffort: executors.single.effort || null,
   };
   // `@` 叫一个人（问一句 / 讨论，见 ComposerCall.tsx）。任务还是胶囊上那个执行器的。
-  const calling = useComposerCall({ host: singleRun.agentType, profiles });
+  const calling = useComposerCall({ host: singleRun.agentType, profiles, draft });
   const call = calling.call;
   // `/` 补的是这条任务执行器的技能：正文是发给它的。
   const skills = useSkills({ agentType: singleRun.agentType, projectId: project.id, enabled: true });
@@ -322,24 +322,28 @@ export function TaskComposerPanel({
     setBusy(true);
     // 提交那一刻叫着的那一版：发送途中再动它（换人、换做法）是下一句的设置，不该被这一次清掉（useReplyCall 的 sent）。
     const sentCall = call;
-    let task: Task;
-    try {
-      task = await api.createTask(composerTaskInput({
-        project, body, fork, groupId, labels, attachments: allAttachments, useWorktree, base, run: singleRun,
-      }));
-    } catch (error) {
-      notify(error instanceof Error ? error.message : "任务创建失败");
-      setBusy(false);
-      return;
+    // 上一次任务建好了、第一回合却没送达：这次只对那一条重发，不再建一条。
+    let task = draft.created?.task ?? null;
+    if (!task) {
+      try {
+        task = await api.createTask(composerTaskInput({
+          project, body, fork, groupId, labels, attachments: allAttachments, useWorktree, base, run: singleRun,
+        }));
+      } catch (error) {
+        notify(error instanceof Error ? error.message : "任务创建失败");
+        setBusy(false);
+        return;
+      }
     }
     // 创建成功后的收尾(草稿归属裁决、排队/启动/定时、onCreated 回写)整块在
     // settleCreatedTask.ts —— 归属判据与为什么要捕获提交那一刻的正文见那边注释。
-    await settleCreatedTask({
+    const settled = await settleCreatedTask({
       task,
       launchMode,
       scheduleAt,
       scheduleCron,
       opening: sentCall ? composerOpening(sentCall, { body, fork, attachments: allAttachments }) : null,
+      onOpeningFailed: (created, error) => draft.setCreated({ task: created, error }),
       submitted: { draft: draft.value, noteIds: draft.noteIds },
       panelMounted: () => mountedRef.current,
       draft,
@@ -349,6 +353,10 @@ export function TaskComposerPanel({
       onTasksSynced,
       notify,
     });
+    if (!settled) {
+      if (mountedRef.current) setBusy(false);
+      return;
+    }
     if (sentCall) calling.sent(sentCall);
   };
 
@@ -365,7 +373,7 @@ export function TaskComposerPanel({
         <span className="composer-header-grow" aria-hidden="true" />
         {/* 草稿是「关掉也留着」的，所以必须有一个明写的丢弃口 —— 否则上一次没写完的
             东西会一直顶在新建框里，用户只能自己全选删。 */}
-        {(!!body || uploads.attachments.length > 0 || uploads.uploading) && (
+        {(!!body || uploads.attachments.length > 0 || uploads.uploading || !!call || !!draft.created) && (
           <Button variant="ghost" onClick={() => { draft.clear(); textareaRef.current?.focus(); }}>清空草稿</Button>
         )}
         <Button variant="ghost" onClick={onCancel}>取消 Esc</Button>
@@ -374,6 +382,9 @@ export function TaskComposerPanel({
         <div className="composer-inner">
           {fork && <ComposerForkContext fork={fork} />}
           {forkError && <p role="alert" className="task-conversation-error">{forkError}</p>}
+          {draft.created && <p role="alert" className="task-conversation-error">
+            任务「{draft.created.task.title}」已按刚才的设置建好，第一回合没发出去：{draft.created.error}。再按一次只重发这一下，不会再建一条；不要了就清空草稿。
+          </p>}
           <ComposerFields
             profiles={profiles}
             types={types}

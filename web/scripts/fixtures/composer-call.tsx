@@ -38,6 +38,7 @@ function Fixture() {
         onProjectUpdated={() => {}}
         notify={notify}
       />
+      <button type="button" data-testid="reopen" onClick={() => setRound((current) => current + 1)}>重开面板</button>
       <ul data-testid="created">{created.map((title, index) => <li key={index}>{`已创建：${title}`}</li>)}</ul>
       <ul data-testid="notices">{notices.map((item, index) => <li key={index}>{`提示：${item}`}</li>)}</ul>
     </div>

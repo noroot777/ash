@@ -104,7 +104,7 @@ export function ComposerFields({
   // 「谁来做」：底排那颗三段胶囊。叫着人时它缩成一段（还看得见、改得了这条任务由谁跑），后面跟着被叫的人。
   const executorTools = <div className="studio-inline-executor">
     <ExecutorPickerField label="任务执行器" value={executor.profile} types={types} profiles={profiles} knownProfiles={profiles}
-      fallbackType={executorType} override={executor} agentOnly={!!call} onChange={onExecutorChange} onEffortChange={onEffortChange} />
+      fallbackType={executorType} override={executor} compact={!!call} onChange={onExecutorChange} onEffortChange={onEffortChange} />
     {call}
   </div>;
   // 输入区下面那排入口：图标 + 当前值，点开才是开关和下拉。名字和次序照旧。
