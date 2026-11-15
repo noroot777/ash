@@ -172,7 +172,3 @@
 .page-drawer-host .side-drawer > .inspector-layout > .inspector-host .inspector-host__resize-handle {
   display: none;
 }
-
-/* 派它的那条任务的会话里，派出的任务失败的那颗气泡（task-detail/dispatched/DispatchedBubble.tsx）：
-   审查者那颗的骨架，字前一颗红点。标题加重那一下照辩论气泡（.debate-bubble-say b）。 */
-.dispatched-bubble .review-verdict-text { display: flex; align-items: flex-start; gap: 8px; }

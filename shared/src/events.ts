@@ -198,10 +198,6 @@ export type ServerEvent =
   // 发出去了」，可排队消息一投递任务立刻又回到 running，中间那个空档常常一次都没
   // 被观察到，于是消息明明进了会话、托盘还挂着「排队中」(2026-08-13)。
   | { type: "task.pendingMessages"; taskId: string }
-  // 派它的那条任务名下有派出的任务失败了（server/src/dispatch-signals.ts）。
-  // 只是「去重读一次」的提示，内容走 GET /tasks/:id/dispatch-signals。taskId 是**派它的那条任务**：
-  // 事件过滤按 taskId 认归属，看得见那条任务的人才收得到。
-  | { type: "task.dispatchSignals"; taskId: string }
   // 哨兵列表有变化：起了一个、推了一批事件、结束了。界面按它重拉
   // `/tasks/:id/monitors` —— 只发信号不带载荷，跟托盘那条同一套理由。
   | { type: "task.monitors"; taskId: string }

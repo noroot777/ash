@@ -212,9 +212,6 @@ export const api = {
     request(`/tasks/${id(taskId)}/actions`, { signal }),
   taskQuestionHistory: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared/questions").QuestionRecord[]> =>
     request(`/tasks/${id(taskId)}/question-history`, { signal }),
-  // 这条任务名下派出的任务失败的那几刻（会话里那几颗气泡，server/src/dispatch-signals.ts）。
-  taskDispatchSignals: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared").DispatchSignal[]> =>
-    request(`/tasks/${id(taskId)}/dispatch-signals`, { signal }),
   ...taskNoticeApi,
   // 侧边栏铺开那一下才调：一批任务各自「我发的最后一条追问」。没有的任务不在返回里。
   followUps: (taskIds: string[]): Promise<TaskFollowUp[]> =>

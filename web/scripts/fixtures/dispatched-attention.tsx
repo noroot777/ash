@@ -1,18 +1,17 @@
-// 派出的任务来问 / 失败，在派它的那条任务那一头（test-dispatch-signals-dom.mjs）。
+// 派出的任务来问 / 失败，在派它的那条任务那一头（test-dispatched-attention-dom.mjs）。
 //
 // 挂的是线上那几样：侧栏（TaskTree）、详情页那一层的抽屉与 Inspector（useTaskDrawers：竖轨上那颗
-// 「派出的任务」键、右侧那一格、左边那一屉）、会话（ConversationFeed + useDispatchSignals 的失败气泡）、
-// 这条任务自己的回复框（ReplyBox）。左边那一屉里是那条派出的任务自己的回复框 —— 生产里是抽屉模式的
+// 「派出的任务」键、右侧那一格、左边那一屉）、会话（ConversationFeed，跟 TaskDetail 一样只插你派出去的
+// 那一句小灰字）、这条任务自己的回复框（ReplyBox）。左边那一屉里是那条派出的任务自己的回复框 —— 生产里是抽屉模式的
 // 完整 TaskDetail，这里只留它跟答复有关的那一半：它自己的提问占住它自己的回复框。
 //
 // 服务端那一半是这里的一份「库」（存在 localStorage 里，刷新后还在），接口走真实的 api.ts → fetch：
-//   · GET  /tasks/lead/dispatch-signals —— 读这一份失败记录；
 //   · POST /tasks/:id/answer            —— 记下请求，按服务端的做法撤下那一问；
 //   · POST /tasks/:id/reply             —— 记下请求。
-// window.__server 让回归像服务端那样改「库」：失败了。
+// window.__server 让回归像服务端那样改「库」：失败了（服务端那边除了任务状态什么都不记）。
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { DispatchSignal, ProjectView, Task, TaskListItem } from "@ash/shared";
+import type { ProjectView, Task, TaskListItem } from "@ash/shared";
 import { api } from "../../src/lib/api.ts";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import { InspectorHost } from "../../src/inspector/index.ts";
@@ -22,14 +21,15 @@ import type { SidebarSpread } from "../../src/workspace/useSidebarSpread.ts";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { ReplyBox } from "../../src/task-detail/ReplyBox.tsx";
 import { useTaskDrawers } from "../../src/task-detail/useTaskDrawers.tsx";
-import { useDispatchSignals } from "../../src/task-detail/dispatched/useDispatchSignals.tsx";
+import { dispatchNotes } from "../../src/task-detail/dispatchNotes.ts";
+import { DispatchNoteLine } from "../../src/task-detail/DispatchNoteLine.tsx";
 import type { TaskInspectorContext } from "../../src/task-detail/taskInspectors.tsx";
 import type { ConversationItem } from "../../src/task-detail/conversationModel.ts";
 import "../../src/styles/global.css";
 import "../../src/styles/workspace.css";
 import "../../src/styles/task-tree.css";
 
-const KEY = "ash-dispatch-signals-fixture";
+const KEY = "ash-dispatched-attention-fixture";
 const base = Date.now() - 60 * 60_000;
 const at = (minutes: number) => new Date(base + minutes * 60_000).toISOString();
 const project: ProjectView = {
@@ -44,7 +44,7 @@ function task(id: string, title: string, extra: Partial<Task> = {}): Task {
   } as Task;
 }
 
-type Db = { tasks: Task[]; signals: DispatchSignal[]; requests: { url: string; body: Record<string, unknown> | null }[]; seq: number };
+type Db = { tasks: Task[]; requests: { url: string; body: Record<string, unknown> | null }[] };
 const initial = (): Db => ({
   tasks: [
     task("lead", "拆活的分析任务"),
@@ -54,9 +54,7 @@ const initial = (): Db => ({
       question: "第二条的问题：要不要顺手改文档？", questionOptions: ["要", "不要"], updatedAt: at(6) }),
     task("kid-c", "第三条派出去的", { dispatchedBy: "lead", status: "running", executorLabel: "claude@nodemach", createdAt: at(3) }),
   ],
-  signals: [],
   requests: [],
-  seq: 0,
 });
 const load = (): Db => {
   try { const stored = localStorage.getItem(KEY); if (stored) return JSON.parse(stored) as Db; } catch { /* 空库 */ }
@@ -75,7 +73,6 @@ window.fetch = async (input, init) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   if (!url.includes("/api/")) return realFetch(input, init);
   const path = url.replace(/^.*\/api/, "");
-  if (path === "/tasks/lead/dispatch-signals") return Response.json(db.signals);
   if (path.startsWith("/tasks/bodies")) {
     const { taskIds } = JSON.parse(String(init?.body ?? "{}")) as { taskIds: string[] };
     return Response.json(taskIds.map((taskId) => ({ taskId, body: "" })));
@@ -100,18 +97,14 @@ window.fetch = async (input, init) => {
 declare global {
   interface Window {
     __server: {
-      fail: (id: string, reason: string, minute: number) => void;
+      fail: (id: string) => void;
       requests: () => Db["requests"];
       reset: () => void;
     };
   }
 }
 window.__server = {
-  fail: (id, reason, minute) => {
-    const seq = db.seq + 1;
-    commit({ ...db, seq, tasks: db.tasks.map((row) => row.id === id ? { ...row, status: "failed" } : row),
-      signals: [...db.signals, { seq, taskId: id, kind: "failed", at: at(minute), reason }] });
-  },
+  fail: (id) => commit({ ...db, tasks: db.tasks.map((row) => row.id === id ? { ...row, status: "failed" as const } : row) }),
   requests: () => db.requests,
   reset: () => { localStorage.removeItem(KEY); db = initial(); },
 };
@@ -149,7 +142,9 @@ function Fixture() {
     task: lead, allTasks: tasks, conversation, onOpenTask: () => {},
     renderTask: (child) => <DrawerTask key={child.id} task={child} />,
   });
-  const signals = useDispatchSignals({ task: lead, allTasks: tasks, dispatched: drawers.dispatched.state.tasks, onOpen: drawers.dispatched.state.open });
+  const asides = dispatchNotes(lead.id, tasks).map((note) => ({
+    key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={drawers.dispatched.state.open} />,
+  }));
   const descriptors = useMemo(() => drawers.inspectors.filter((descriptor) => descriptor.id === "dispatched"), [drawers.inspectors]);
   const context = { dispatched: drawers.dispatched.state } as unknown as TaskInspectorContext;
   return (
@@ -164,11 +159,11 @@ function Fixture() {
         />
       </nav>
       <LeftDrawerProvider value={drawers.leftDrawer.api}>
-        <InspectorHost contextKey="dispatch-signals-fixture" descriptors={descriptors} context={context} defaultVisible>
+        <InspectorHost contextKey="dispatched-attention-fixture" descriptors={descriptors} context={context} defaultVisible>
           {() => (
             <section className="task-detail" data-pane="lead" style={{ position: "relative", overflow: "hidden", flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
               <div className="task-detail-main" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-                <ConversationFeed task={lead} items={items} sessions={[]} loading={false} error={null} questionHistory={[]} asides={signals.asides} />
+                <ConversationFeed task={lead} items={items} sessions={[]} loading={false} error={null} questionHistory={[]} asides={asides} />
                 <ReplyBox task={lead} hasConversation onSend={(text) => api.replyTask(lead.id, text)} onStandingExecutorChange={async () => undefined}
                   onAnswer={async (answer, input) => { await api.answerTask(lead.id, answer, input); }} />
               </div>

@@ -575,7 +575,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   }
   await settleSingleRunTurn({
     taskId, sessId, agentType, role, turnStart: a.turnStart, handle: a.handle, out, endIso, exitStatus, stopped,
-    watchdogFailure, executionFailed, doneEvent, failure, interruption, noteSessionNotice, flushSessionNotices, step, turn: a.turn,
+    watchdogFailure, executionFailed, doneEvent, failure, noteSessionNotice, flushSessionNotices, step, turn: a.turn,
   });
   } finally {
     // 正常路径上上面那句已经把旁注清空了，这里是**异常路径**的保险：清库、重放、结算

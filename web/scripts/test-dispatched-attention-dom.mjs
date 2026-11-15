@@ -1,4 +1,5 @@
-// 派出的任务来问 / 失败，在派它的那条任务那一头（真浏览器）。判据本身在 test-dispatch-signals.mjs。
+// 派出的任务来问 / 失败，在派它的那条任务那一头（真浏览器）：会话里一律不出东西，提示只在侧栏、
+// 任务头那颗「派出的任务」键的数和右侧那一格里（判据 lib/dispatchTree.ts 的 dispatchNeedsYou）。
 //
 // 钉的是这几件事：
 //   · 名下派出的任务在问：派它的那条任务的回复框还是它自己的普通回复框，会话里没有那几条的气泡；
@@ -7,9 +8,9 @@
 //     写着「等你答复」。
 //   · 在哪答：点右侧那一行，左边那一屉里是那条任务自己的答题卡，答复送到它（不带别的任务）；
 //     名下都答完了，两处的数不用刷新就收回颜色。
-//   · 失败：会话里一颗气泡（标题 + 原因头一句），点它在左边打开那条任务；两处的数又变色。
-//   · 刷新后失败那颗还在，提问的气泡还是一颗都没有。
-// 跑：npm -w web run test:dispatch-signals
+//   · 失败：会话里同样什么都不出；两处的数又变色，右侧那一行写着失败（红），点它在左边打开那条任务。
+//   · 刷新后还是这样。
+// 跑：npm -w web run test:dispatched-attention
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { WAIT_TIMEOUT_MS } from "./wait-until.mjs";
@@ -22,7 +23,7 @@ try {
   const page = await browser.newPage();
   page.setDefaultTimeout(WAIT_TIMEOUT_MS);
   page.on("pageerror", (error) => failures.push(error.message));
-  await page.goto(`${web.origin}/scripts/fixtures/dispatch-signals.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/dispatched-attention.html`);
   await page.evaluate(() => window.__server.reset());
   await page.reload();
 
@@ -46,7 +47,6 @@ try {
   // —— 名下两条在问：这条任务的回复框是它自己的普通回复框，会话里没有那两条的气泡。
   await leadReply.waitFor();
   assert.equal(await leadPane.locator(".question-card").count(), 0, "派它的那条：回复框不长成那几条的答题卡");
-  assert.equal(await leadPane.locator(".dispatched-bubble").count(), 0, "会话里没有派出的任务来问的气泡");
   const feed = await leadFeed.innerText();
   assert.ok(!feed.includes("第一条的问题") && !feed.includes("第二条的问题"), "会话里一个字都不提那几问");
   assert.ok(!feed.includes("答复直接送到了"));
@@ -90,33 +90,31 @@ try {
   await bothWarn(false);
   assert.equal((await requests()).filter((request) => request.url.endsWith("/answer")).map((request) => request.url).join(),
     "/tasks/kid-b/answer,/tasks/kid-a/answer");
-  assert.equal(await leadPane.locator(".dispatched-bubble").count(), 0, "答完了会话里也什么都不多");
-  assert.ok(!(await leadFeed.innerText()).includes("答复直接送到了"));
+  assert.equal(await leadFeed.innerText(), feed, "答完了会话里也一个字都不多");
 
-  // —— 失败：一颗气泡（标题 + 原因头一句），不出答题卡；点它打开那条任务；数又变色。
-  await page.evaluate(() => window.__server.fail("kid-c", "模型上游连不上（503）。点重试会接着跑。", 18));
-  const failed = leadPane.locator(".dispatched-bubble.is-failed");
-  await failed.waitFor();
-  assert.match(await failed.locator(".debate-bubble-say").innerText(), /^第三条派出去的\s*模型上游连不上（503）。$/, "标题 + 原因头一句");
-  assert.match(await failed.locator(".review-verdict-meta").textContent(), /claude@nodemach · 失败了/);
-  assert.equal(await leadPane.locator(".question-card").count(), 0, "失败不出答题卡");
-  await bothWarn(true);
+  // —— 失败：会话里什么都不出；两处的数又变色，右侧那一行写着失败、带红；点它在左边打开那条任务。
   await drawerA.getByRole("button", { name: "关上派出的任务" }).click();
   await drawerA.waitFor({ state: "detached" });
-  await failed.locator("button.review-verdict-text").click();
+  const feedBefore = await leadFeed.innerText();
+  await page.evaluate(() => window.__server.fail("kid-c"));
+  await bothWarn(true);
+  const rowC = row("第三条派出去的");
+  await page.waitForFunction(() => [...document.querySelectorAll(".dispatched-pane em")].some((node) => node.className === "is-bad"));
+  assert.match(await rowC.locator("em").innerText(), /失败/, "右侧那一行写着失败");
+  assert.equal(await rowC.locator("em").getAttribute("class"), "is-bad");
+  assert.equal(await leadFeed.innerText(), feedBefore, "会话一个字都没多");
+  assert.equal(await leadPane.locator(".question-card").count(), 0);
+  await rowC.click();
   await drawer("第三条派出去的").waitFor();
-  const feedOrder = await leadFeed.innerText();
-  assert.ok(feedOrder.indexOf("第二条先别动数据库") < feedOrder.indexOf("模型上游连不上"), "按失败那一刻插在会话里");
 
-  // —— 刷新后失败那颗还在原来的位置，提问的气泡还是一颗都没有。
-  const before = await leadFeed.innerText();
+  // —— 刷新后还是这样：会话里什么都没有，两处的数仍是那个颜色。
   await page.reload();
-  await leadPane.locator(".dispatched-bubble.is-failed").waitFor();
-  assert.equal(await leadPane.locator(".dispatched-bubble").count(), 1, "只有失败的那一颗");
-  assert.equal(await leadFeed.innerText(), before, "刷新后在原来的位置");
+  await leadReply.waitFor();
+  await bothWarn(true);
+  assert.equal(await leadFeed.innerText(), feedBefore, "刷新后会话里还是没有");
 
   assert.deepEqual(failures, []);
-  console.log("✓ 派出的任务来问 / 失败：回复框只属于自己、会话里没有提问气泡、两处的数变色、抽屉里答掉收回、失败气泡与刷新");
+  console.log("✓ 派出的任务来问 / 失败：回复框只属于自己、会话里一律不出东西、两处的数变色、抽屉里答掉收回、失败写在右侧那一行、刷新后照旧");
 } finally {
   await browser?.close();
   await web.close();

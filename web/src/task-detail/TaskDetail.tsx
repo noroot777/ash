@@ -26,7 +26,6 @@ import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
 import { HandoffBanner } from "./HandoffBanner.tsx";
 import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
-import { useDispatchSignals } from "./dispatched/useDispatchSignals.tsx";
 import { replySend } from "./replySend.ts";
 import { replyDispatch } from "./replyDispatch.ts";
 import { replyDiscuss } from "./replyDiscuss.ts";
@@ -122,8 +121,6 @@ export function TaskDetail({
     task, allTasks, conversation, onOpenTask,
     renderTask: (child) => <TaskDetail key={child.id} task={child} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" notify={notify} />,
   });
-  // 名下派出的任务失败的那几刻：会话里那几颗气泡（dispatched/useDispatchSignals.tsx）。
-  const fromDispatched = useDispatchSignals({ task, allTasks, dispatched: dispatched.state.tasks, onOpen: dispatched.state.open });
   // 等你裁定时回复框顶上那一行（DisputeRulingDock）：选了一档，这一个框就成了那一步。
   const ruling = useDisputeRulingDock({ task, reviews: free.state?.reviews, known: !!free.state, onChanged: free.setState, notify });
   // 此刻能做什么（运行 / 停止 / 归档 / 重新排队 / 重跑上一回合 / 派验证）整份由服务端判，这里只照着画。
@@ -154,13 +151,10 @@ export function TaskDetail({
     : null;
   const derivationAllowed = canDeriveTask(task);
   // 你在回复框里派出去的那几条：会话里各留一句靠右的小灰字，点它在左抽屉打开（dispatchNotes.ts）。
-  // 跟派出的任务失败的那几颗气泡（useDispatchSignals）一起按时刻插进会话。
-  const asides = useMemo(() => [
-    ...fromDispatched.asides,
-    ...dispatchNotes(task.id, allTasks).map((note) => ({
-      key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={dispatched.state.open} />,
-    })),
-  ], [allTasks, dispatched.state.open, fromDispatched.asides, task.id]);
+  // 派出的任务后来来问、失败，这里一概不画：提示在侧栏和任务头那颗「派出的任务」键的数、右侧那一格里。
+  const asides = useMemo(() => dispatchNotes(task.id, allTasks).map((note) => ({
+    key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={dispatched.state.open} />,
+  })), [allTasks, dispatched.state.open, task.id]);
   // 接力入口:已接力出去的任务在本机是存档,除非那次还悬着(可以撤/重试)。
   const canHandoff = task.mode === "single" && task.parentId === null && !task.archived && task.queueId == null
     && (task.handoff?.direction !== "out" || !!task.handoff.pending);
