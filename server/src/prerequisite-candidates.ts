@@ -1,0 +1,79 @@
+// 「建在谁上面」那一格的候选：本项目的任务全部列出，能不能当前置、为什么不能，都问加边时的同一份判据
+// （prerequisite-store.ts `edgeProblem` / `subjectProblem` / 成环），界面上不另拄一份。
+//
+// 两种问法：
+//   · 已有的任务（`taskId`）：它还能不能加、能不能减，每条候选加上去成不成立；
+//   · 还没建的任务（新建面板）：按面板上此刻的工作目录选择拼一行假想的下游来判。它的合入分支跟着已选的前置走
+//     （`mergeTargetBranch`，面板建任务时照它写），所以「几条前置合入的分支不一样」在这里就判出来、置灰。
+//
+// 「已归档」只在这里挡：加边的判据不拦它，可归档的任务永远站不稳，选了只会一直等。
+import { desc, eq } from "drizzle-orm";
+import type { PrerequisiteCandidates } from "@ash/shared/prerequisites";
+import { db } from "./db/index.js";
+import { projects, tasks } from "./db/schema.js";
+import { projectHealthLight } from "./git.js";
+import {
+  cycleProblem, edgeProblem, graphWith, hasLaunched, launchedError, prerequisiteEdges, prerequisiteTarget, reaches, subjectProblem, type EdgeTask,
+} from "./prerequisite-store.js";
+import { cachedStanding } from "./prerequisite-view.js";
+
+/** 新建面板那一行：还没有 id，判据只用得到这几列。 */
+const DRAFT_ID = "__draft__";
+
+export type CandidateQuery =
+  | { kind: "task"; taskId: string }
+  | { kind: "draft"; useWorktree: boolean; selected: string[] };
+
+export async function prerequisiteCandidates(projectId: string, query: CandidateQuery, visible: (ids: string[]) => Promise<string[]>)
+  : Promise<PrerequisiteCandidates | null> {
+  const project = (await db.select().from(projects).where(eq(projects.id, projectId))).at(0);
+  if (!project) return null;
+  const rows = await db.select().from(tasks).where(eq(tasks.projectId, projectId)).orderBy(desc(tasks.updatedAt));
+  const shown = new Set(await visible(rows.map((row) => row.id)));
+  const known = new Map<string, EdgeTask>(rows.map((row) => [row.id, row]));
+
+  let subject: EdgeTask;
+  let locked: string | null = null;
+  let removable = true;
+  let taken = new Set<string>();
+  let graph: Map<string, string[]> | null = null;
+  let mergeTargetBranch: string | null = null;
+  if (query.kind === "task") {
+    const row = rows.find((item) => item.id === query.taskId);
+    if (!row) return null;
+    subject = row;
+    removable = !await hasLaunched(row.id, row.status);
+    locked = removable ? (await subjectProblem(row, known))?.message ?? null : launchedError(row).message;
+    // 加不了的不必再逐条判：界面上不出「建在某任务上面」那一行。
+    if (locked) return { locked, removable, mergeTargetBranch: row.mergeTargetBranch ?? null, candidates: [] };
+    taken = new Set((await prerequisiteEdges(row.id)).map((edge) => edge.prerequisiteId));
+    graph = await graphWith([]);
+    mergeTargetBranch = row.mergeTargetBranch ?? null;
+  } else {
+    const useWorktree = query.useWorktree && projectHealthLight(project.repoPath).isRepo;
+    const draft: EdgeTask = {
+      id: DRAFT_ID, projectId, title: "新任务", mode: "single", parentId: null, reviewOf: null, status: "backlog",
+      useWorktree, mergeTargetBranch: null, acceptedTargetBranch: null, baseTaskId: null, stage: null,
+    };
+    // 按选的先后，第一条有限制的前置定下合入分支；之后的每一条（含已选的）都拿它来比。
+    for (const id of query.selected) {
+      const picked = known.get(id);
+      const target = picked ? prerequisiteTarget(draft, picked) : null;
+      if (target) { mergeTargetBranch = target; break; }
+    }
+    subject = { ...draft, mergeTargetBranch };
+  }
+
+  const candidates = await Promise.all(rows.filter((row) => row.id !== subject.id && shown.has(row.id)).map(async (row) => {
+    const problem = taken.has(row.id) ? "已经是前置"
+      : row.archived ? "已归档"
+        : (await edgeProblem(subject, row, known))?.brief
+          ?? (graph && reaches(graph, row.id, subject.id) ? cycleProblem(subject, row).brief : null);
+    const standing = problem ? null : await cachedStanding(row);
+    return {
+      taskId: row.id, title: row.title || row.id, groupId: row.groupId ?? null,
+      problem, step: standing?.step ?? null, round: standing?.round ?? null,
+    };
+  }));
+  return { locked, removable, mergeTargetBranch, candidates };
+}

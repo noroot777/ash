@@ -83,3 +83,28 @@ export function prerequisiteStepText(link: Pick<PrerequisiteLink, "step" | "roun
     case "archived": return "已归档";
   }
 }
+
+/**
+ * 「建在谁上面」那一格的候选（`GET /projects/:id/prerequisite-candidates`）：本项目的任务全部列出，
+ * 能不能当前置、为什么不能，都按服务端加边时的同一份判据（prerequisite-store.ts `edgeProblem`）给出。
+ */
+export interface PrerequisiteCandidate {
+  taskId: string;
+  title: string;
+  groupId: string | null;
+  /** 不能当前置的原因（短话）；null = 能选。 */
+  problem: string | null;
+  /** 能选的那些此刻到哪一步了（同 `prerequisiteStepText`）；不能选的为 null。 */
+  step: PrerequisiteStep | null;
+  round: number | null;
+}
+
+export interface PrerequisiteCandidates {
+  /** 这条任务现在不能再加前置的原因；null = 能加。 */
+  locked: string | null;
+  /** 还能去掉前置吗（开工起点没定下来就能）。 */
+  removable: boolean;
+  /** 新建的任务要合入哪条分支才跟已选的前置对得上；没有限制为 null（照常按项目分支定）。 */
+  mergeTargetBranch: string | null;
+  candidates: PrerequisiteCandidate[];
+}

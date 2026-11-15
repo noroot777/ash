@@ -38,7 +38,8 @@ import { now } from "./util.js";
 /** 谁要求它起跑。`release` = 等齐之后由放行那一路自己起；`turn` = 底层起跑闸（见文件头）。 */
 export type LaunchSource = "run" | "queue" | "group" | "release" | "turn";
 export type LaunchRequest = { source: LaunchSource; actingUserId?: string | null };
-export type PrerequisiteHold = { reason: string };
+/** `blocked`：前置都站稳了却开不了工（记成了 `blocked`）；没有 = 还在等前置。 */
+export type PrerequisiteHold = { reason: string; blocked?: true };
 
 // 同一条任务的「开工判定」与「加减前置」串行：放行、点运行、改前置同时到时，边集合与起点只按一个顺序落定。
 const chains = new Map<string, Promise<unknown>>();
@@ -117,7 +118,7 @@ async function attemptGate(taskId: string, request: LaunchRequest): Promise<Prer
     const reason = await withRepoLock(project.repoPath, () => settleAbandonedInstall(project.repoPath, task));
     if (!reason) return null;
     await recordRequest(taskId, request, reason);
-    return { reason };
+    return { reason, blocked: true };
   }
   const ids = edges.map((edge) => edge.prerequisiteId);
   return withRepoLock(project.repoPath, async () => {
@@ -134,7 +135,7 @@ async function attemptGate(taskId: string, request: LaunchRequest): Promise<Prer
       const found = standings.get(id);
       return found ? [{ task: found.task, commit: found.standing.commit }] : [];
     });
-    const block = async (reason: string) => { await recordRequest(taskId, request, reason); return { reason }; };
+    const block = async (reason: string) => { await recordRequest(taskId, request, reason); return { reason, blocked: true as const }; };
     // 用 worktree 的下游按起点建 / 换工作区；不用的在项目目录里干活，只能核对那里检出的代码里有没有前置的。
     const start = task.useWorktree
       ? await prerequisiteStart(project.repoPath, task, certified)

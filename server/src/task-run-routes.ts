@@ -107,7 +107,7 @@ api.post("/tasks/:id/run", async (c) => {
   if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
   // 有前置、前置还没站齐：不起，记成等齐就起（prerequisite-launch.ts）。这一下是被接受了的请求，不是挡回。
   const prerequisiteHold = await holdForPrerequisites(r, { source: "run", actingUserId: ownerIdOf(actorOf(c)) });
-  if (prerequisiteHold) return c.json({ started: false, waiting: true, reason: prerequisiteHold.reason }, 202);
+  if (prerequisiteHold) return c.json({ started: false, waiting: true, reason: prerequisiteHold.reason, blocked: !!prerequisiteHold.blocked }, 202);
   // Fire-and-forget; progress streams over /api/events.
   // team 也走「先占位、再镜像查验收锁」这一套（占位对常驻调度台本身没用途,runTask 的
   // team 分支会立刻还回来）—— 它只为让 202 是真话:早先 team 分支排在这两道检查**之前**
@@ -185,7 +185,7 @@ api.post("/tasks/:id/fire", async (c) => {
     return c.json(await noted(taskId, "触发新一轮", { error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }), 409);
   // 同 /run：前置没站齐就只记下请求、如实答「在等」（底层 runTask 也会挡，但那样 202 就成了谎报）。
   const prerequisiteHold = await holdForPrerequisites(r, { source: "run", actingUserId: ownerIdOf(actorOf(c)) });
-  if (prerequisiteHold) return c.json({ started: false, waiting: true, reason: prerequisiteHold.reason }, 202);
+  if (prerequisiteHold) return c.json({ started: false, waiting: true, reason: prerequisiteHold.reason, blocked: !!prerequisiteHold.blocked }, 202);
   const blocking = await queueBlockerDetails(taskId);
   if (blocking.length) {
     return c.json(

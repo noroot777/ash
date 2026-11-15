@@ -1,4 +1,5 @@
-// 前置的加减接口：`POST /tasks/:id/prerequisites` 加（一条或几条），`DELETE /tasks/:id/prerequisites/:prerequisiteId` 去。
+// 前置的加减接口：`POST /tasks/:id/prerequisites` 加（一条或几条），`DELETE /tasks/:id/prerequisites/:prerequisiteId` 去；
+// `GET /projects/:id/prerequisite-candidates` 列候选（prerequisite-candidates.ts）。
 // 校验住在 prerequisite-store.ts，这里只做可见性、落库之后的通知。
 //
 // 去掉一条前置之后剩下的都站稳了、而它又挂着「等齐就起」的，当场就起（「不能出现永远在等、又没有任何
@@ -13,6 +14,7 @@ import {
   assertPrerequisiteEdges, insertPrerequisiteEdges, PrerequisiteError, removePrerequisiteEdge, withPrerequisiteGraph, type PrerequisiteEdge,
 } from "./prerequisite-store.js";
 import { notePrerequisiteProgress } from "./prerequisite-launch.js";
+import { prerequisiteCandidates } from "./prerequisite-candidates.js";
 import { withPrerequisiteLock } from "./prerequisite-gate.js";
 import { republishPrerequisiteView } from "./prerequisite-view.js";
 import { publishTaskUpdated } from "./task-store.js";
@@ -57,6 +59,16 @@ export const prerequisiteRefusal = (error: unknown) => error instanceof Prerequi
 const failed = prerequisiteRefusal;
 
 export function mountPrerequisiteRoutes(api: Hono): void {
+  // 已有的任务传 `taskId`；新建面板传 `useWorktree=1|0` 和已选的 `selected=a,b`（按选的先后）。
+  api.get("/projects/:id/prerequisite-candidates", async (c) => {
+    const taskId = c.req.query("taskId");
+    const selected = (c.req.query("selected") ?? "").split(",").filter(Boolean);
+    const result = await prerequisiteCandidates(c.req.param("id"),
+      taskId ? { kind: "task", taskId } : { kind: "draft", useWorktree: c.req.query("useWorktree") === "1", selected },
+      (ids) => visibleTaskIds(actorOf(c), ids));
+    return result ? c.json(result) : c.json({ error: "not found" }, 404);
+  });
+
   api.post("/tasks/:id/prerequisites", async (c) => {
     const taskId = c.req.param("id");
     const body = await c.req.json<{ prerequisiteId?: unknown; prerequisiteIds?: unknown }>().catch(() => ({} as never));
