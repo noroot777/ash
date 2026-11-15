@@ -3,6 +3,7 @@
 //
 // 还没开工的任务能在这里加减前置（能不能、候选能不能选，全听服务端：lib/prerequisiteOptions.ts 文件头）：
 // 「前置」那一组下面一颗「建在某任务上面…」，选一条加一条；每一行指到时出一颗叉，去掉那一条。开工之后两样都不出。
+// 「还没问到」「问失败了」「服务端说不能改」是三件事：问失败了不能当成不能改把入口藏掉，那一格写明读不到、给一颗重试。
 // 加减之后服务端重发这条任务的快照（prerequisite-view.ts），这几行、会话里「在等谁」、侧栏都跟着换。
 // 「下游」只看不改：要改去下游那条任务里改。
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -18,6 +19,7 @@ import { prerequisiteOptions } from "../../lib/prerequisiteOptions.ts";
 export function InfoPrerequisites({ task, groups, readOnly, onOpenTask, onTasksSynced, notify }: {
   task: Task;
   groups: Group[];
+  /** 不让改的任务（已归档）。能不能有前置另由服务端判：普通任务名下的子任务能有，团队执行者不能。 */
   readOnly: boolean;
   onOpenTask: (taskId: string) => void;
   onTasksSynced: (tasks: Task[]) => void;
@@ -35,18 +37,22 @@ export function InfoPrerequisites({ task, groups, readOnly, onOpenTask, onTasksS
   const load = useCallback(() => {
     const seq = ++latest.current;
     if (!askable) { setEdit(null); return; }
-    setFailed(false);
+    // 失败的那句留到重问成功才撤：重试那一下不闪掉。
     api.prerequisiteCandidates(task.projectId, { taskId: task.id }).then((result) => {
-      if (seq === latest.current) setEdit({ taskId: task.id, result });
+      if (seq !== latest.current) return;
+      setEdit({ taskId: task.id, result });
+      setFailed(false);
     }).catch(() => { if (seq === latest.current) setFailed(true); });
     // 前置那几条变了（signature）要重问：已经是前置的、会成环的跟着变。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [askable, task.id, task.projectId, signature]);
   useEffect(load, [load]);
+  useEffect(() => setFailed(false), [task.id]);
 
   const current = edit?.taskId === task.id ? edit.result : null;
   const addable = askable && !!current && !current.locked;
   const removable = askable && !!current?.removable;
+  const unread = askable && !current && failed;
 
   const change = async (run: () => Promise<Task>, done: string) => {
     setBusy(true);
@@ -67,7 +73,7 @@ export function InfoPrerequisites({ task, groups, readOnly, onOpenTask, onTasksS
   const remove = (prerequisiteId: string, title: string) =>
     void change(() => api.removePrerequisite(task.id, prerequisiteId), `已去掉前置「${title}」`);
 
-  if (!view && !addable) return null;
+  if (!view && !addable && !unread) return null;
   const link = (taskId: string, title: string) => (
     <button type="button" className="insp-val" aria-label={`打开「${title}」`} onClick={() => onOpenTask(taskId)}>
       <span className="insp-cut">{title}</span>
@@ -87,6 +93,12 @@ export function InfoPrerequisites({ task, groups, readOnly, onOpenTask, onTasksS
           )}
         </InspRow>
       ))}
+      {unread && (
+        <InspRow label={prerequisites.length ? "" : "前置"}>
+          <span className="insp-cut insp-attn">读不到能不能改前置</span>
+          <button type="button" className="insp-val is-end" onClick={load}>重试</button>
+        </InspRow>
+      )}
       {addable && (
         <InspRow label={prerequisites.length ? "" : "前置"}>
           <Dropdown

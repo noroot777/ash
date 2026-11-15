@@ -5,7 +5,8 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 // - 还没开工的任务：「前置」那一组下面一颗「建在某任务上面…」，候选照服务端置灰写原因；选一条加一条；
 // - 每一行指到时出一颗叉，键盘也够得着，读屏念「去掉前置：某某」；去掉一条；
 // - 加、减之后这几行、会话里「在等谁」、侧栏的画法不用刷新就跟着变；被拒时原样显示服务端那句；
-// - 起点已定的任务：没有加的下拉，也没有叉。
+// - 起点已定的任务：没有加的下拉，也没有叉；
+// - 头一次读候选失败时不当成「不能改」：写明读不到、给一颗重试，重试成功后入口回来。
 const web = await startWebServer();
 let browser;
 try {
@@ -20,6 +21,7 @@ try {
     updatedAt: "2026-11-15T06:00:00.000Z", backgroundRevision: revision,
     prerequisites: { prerequisites, dependents: [], waiting: true, blocked: null, launched: false },
   });
+  let candidatesDown = true;
   const adds = [];
   const removes = [];
   await page.route("**/api/**", async (route) => {
@@ -30,7 +32,10 @@ try {
     let status = 200;
     if (path.endsWith("/commits")) data = { branch: null, commits: [] };
     if (path.endsWith("/diff")) data = { available: false, files: [], sourceBranch: null };
-    if (path === "/api/projects/p1/prerequisite-candidates") {
+    if (path === "/api/projects/p1/prerequisite-candidates" && candidatesDown) {
+      status = 503;
+      data = { error: "服务暂时不可用" };
+    } else if (path === "/api/projects/p1/prerequisite-candidates") {
       data = url.searchParams.get("taskId") === "t-started"
         ? { locked: "「已开工的任务」已经开工，起点定下来之后不能再改前置", removable: false, mergeTargetBranch: null, candidates: [] }
         : { locked: null, removable: true, mergeTargetBranch: "main", candidates: [
@@ -62,7 +67,15 @@ try {
   const wait = page.getByTestId("wait");
   const row = (text) => page.locator(".ui-dropdown-row", { hasText: text });
   const removeA = page.getByRole("button", { name: "去掉前置：前置甲" });
+  // 头一次读候选失败：不是「不能改」，写明读不到、给一颗重试；重试成功后加减入口回来。
+  const retry = page.getByRole("button", { name: "重试", exact: true });
+  await retry.waitFor();
+  assert.match(await page.locator(".task-inspector").innerText(), /读不到能不能改前置/);
+  assert.equal(await add.count(), 0);
+  candidatesDown = false;
+  await retry.click();
   await add.waitFor();
+  assert.equal(await retry.count(), 0, "读到之后失败那一行撤掉");
   assert.match(await wait.innerText(), /在等\s*「前置甲」/);
   assert.equal(await page.getByTestId("look").innerText(), "waiting");
 

@@ -5,6 +5,8 @@
 //   · 已有的任务（`taskId`）：它还能不能加、能不能减，每条候选加上去成不成立；
 //   · 还没建的任务（新建面板）：按面板上此刻的工作目录选择拼一行假想的下游来判。它的合入分支跟着已选的前置走
 //     （`mergeTargetBranch`，面板建任务时照它写），所以「几条前置合入的分支不一样」在这里就判出来、置灰。
+//     只有**自己就能选**的已选项才参与定合入分支：已归档、不能当前置、已经不可见的那条不能反过来把别的挤掉。
+//     因为跟这个合入分支对不上才不能选的，标 `conflict`（单独拿出来是能选的）——面板恢复草稿时只去掉自己就不成立的。
 //
 // 「已归档」只在这里挡：加边的判据不拦它，可归档的任务永远站不稳，选了只会一直等。
 import { desc, eq } from "drizzle-orm";
@@ -38,6 +40,8 @@ export async function prerequisiteCandidates(projectId: string, query: Candidate
   let taken = new Set<string>();
   let graph: Map<string, string[]> | null = null;
   let mergeTargetBranch: string | null = null;
+  /** 新建面板那一行、还不带合入分支：判「它自己能不能选」用。已有的任务没有这一步。 */
+  let standalone: EdgeTask | null = null;
   if (query.kind === "task") {
     const row = rows.find((item) => item.id === query.taskId);
     if (!row) return null;
@@ -55,24 +59,32 @@ export async function prerequisiteCandidates(projectId: string, query: Candidate
       id: DRAFT_ID, projectId, title: "新任务", mode: "single", parentId: null, reviewOf: null, status: "backlog",
       useWorktree, mergeTargetBranch: null, acceptedTargetBranch: null, baseTaskId: null, stage: null,
     };
-    // 按选的先后，第一条有限制的前置定下合入分支；之后的每一条（含已选的）都拿它来比。
+    standalone = draft;
+    // 按选的先后，第一条自己就能选、又有限制的前置定下合入分支；之后的每一条（含已选的）都拿它来比。
     for (const id of query.selected) {
-      const picked = known.get(id);
-      const target = picked ? prerequisiteTarget(draft, picked) : null;
+      const picked = rows.find((row) => row.id === id);
+      if (!picked || !shown.has(id) || await ownProblem(draft, picked)) continue;
+      const target = prerequisiteTarget(draft, picked);
       if (target) { mergeTargetBranch = target; break; }
     }
     subject = { ...draft, mergeTargetBranch };
   }
 
+  async function ownProblem(task: EdgeTask, row: typeof rows[number]): Promise<string | null> {
+    if (taken.has(row.id)) return "已经是前置";
+    if (row.archived) return "已归档";
+    return (await edgeProblem(task, row, known))?.brief
+      ?? (graph && reaches(graph, row.id, task.id) ? cycleProblem(task, row).brief : null);
+  }
+
   const candidates = await Promise.all(rows.filter((row) => row.id !== subject.id && shown.has(row.id)).map(async (row) => {
-    const problem = taken.has(row.id) ? "已经是前置"
-      : row.archived ? "已归档"
-        : (await edgeProblem(subject, row, known))?.brief
-          ?? (graph && reaches(graph, row.id, subject.id) ? cycleProblem(subject, row).brief : null);
+    // 新建面板：先看它自己能不能选（不带合入分支），能选再拿已选定下的合入分支比。
+    const own = await ownProblem(standalone ?? subject, row);
+    const problem = own ?? (standalone ? await ownProblem(subject, row) : null);
     const standing = problem ? null : await cachedStanding(row);
     return {
       taskId: row.id, title: row.title || row.id, groupId: row.groupId ?? null,
-      problem, step: standing?.step ?? null, round: standing?.round ?? null,
+      problem, conflict: !own && !!problem, step: standing?.step ?? null, round: standing?.round ?? null,
     };
   }));
   return { locked, removable, mergeTargetBranch, candidates };

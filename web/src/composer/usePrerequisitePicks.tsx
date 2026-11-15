@@ -4,7 +4,8 @@
 // 候选和「能不能选、为什么」全听服务端（lib/prerequisiteOptions.ts 文件头）。已选的每一次变动都重问一遍：选了第一条，
 // 合入分支就跟着它走，合入别的分支的那些随即置灰；工作目录改了（不用 worktree 拿不到分支上的代码）也一样。
 // 已选里有一条此刻不成立的，不悄悄去掉，标出原因、发送键说得出差什么，由用户自己去掉；只有从草稿恢复回来的那一刻，
-// 失效的直接去掉（那是上一次留下的，用户此刻还没看过它们）。
+// 自己就失效的直接去掉（那是上一次留下的，用户此刻还没看过它们）。只是跟别的已选项合入分支对不上的（`conflict`）
+// 不去：两条都还能用，留哪条由用户定。恢复时判据用的工作目录选择跟已选的前置存在同一份草稿里（lib/DraftStore.tsx）。
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Group } from "@ash/shared";
 import type { PrerequisiteCandidate, PrerequisiteCandidates } from "@ash/shared/prerequisites";
@@ -28,8 +29,8 @@ export function usePrerequisitePicks({ draft, projectId, useWorktree, groups, en
   enabled: boolean;
   notify: (message: string) => void;
 }) {
-  const picks = draft.prerequisites ?? [];
-  const { setPrerequisites } = draft;
+  const picks = draft.prerequisites?.ids ?? [];
+  const setPicks = (ids: string[]) => draft.setPrerequisites((current) => current && { ...current, ids });
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [failed, setFailed] = useState(false);
   const latest = useRef(0);
@@ -58,9 +59,12 @@ export function usePrerequisitePicks({ draft, projectId, useWorktree, groups, en
   useEffect(() => {
     if (!current || !fresh || restored.current === projectId) return;
     restored.current = projectId;
-    const dropped = picks.filter((id) => byId.get(id)?.problem !== null);
+    const dropped = picks.filter((id) => {
+      const item = byId.get(id);
+      return !item || (!!item.problem && !item.conflict);
+    });
     if (!dropped.length) return;
-    setPrerequisites(picks.filter((id) => !dropped.includes(id)));
+    setPicks(picks.filter((id) => !dropped.includes(id)));
     const names = dropped.map((id) => byId.get(id)?.title).filter(Boolean).map((title) => `「${title}」`).join("");
     notify(names ? `草稿里的前置${names}已经不能选了，已去掉` : "草稿里有前置已经不在了，已去掉");
     // 只在拿到这一份候选的那一刻核一次。
@@ -77,9 +81,9 @@ export function usePrerequisitePicks({ draft, projectId, useWorktree, groups, en
             : picked.includes(null) ? "有一条前置已经不在了，去掉它才能创建" : null;
 
   const add = (taskId: string) => {
-    if (taskId && !picks.includes(taskId)) setPrerequisites([...picks, taskId]);
+    if (taskId && !picks.includes(taskId)) setPicks([...picks, taskId]);
   };
-  const remove = (taskId: string) => setPrerequisites(picks.filter((id) => id !== taskId));
+  const remove = (taskId: string) => setPicks(picks.filter((id) => id !== taskId));
 
   const slot = (
     <div className="composer-field composer-prerequisites">

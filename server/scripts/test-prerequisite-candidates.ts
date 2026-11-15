@@ -1,7 +1,8 @@
 // 「建在谁上面」的候选（prerequisite-candidates.ts）和界面那条建任务的路：
 //
 //  C1 新建面板问的：本项目的任务全部列出；团队任务、团队执行者、已归档的不能选，各写原因；能选的写它到哪一步了；
-//     选了一条之后合入分支跟着它走，合入别的分支的那条置灰；不用 worktree 时，代码还在分支上的前置置灰；
+//     选了一条之后合入分支跟着它走，合入别的分支的那条置灰并标成「对不上」；自己就不能选的已选项不参与定合入分支；
+//     不用 worktree 时，代码还在分支上的前置置灰；
 //  C2 已有的任务问的：已经是前置的、加上会成环的置灰；开工之后加不了也减不了（不再逐条判）；
 //  C3 建任务时一次请求写两条前置，要求运行时前置没齐：回「在等」、不是挡回，也不是「开不了工」。
 //
@@ -60,6 +61,17 @@ try {
     list = await candidates(p.key, `useWorktree=1&selected=${elsewhere},${a}`);
     assert.equal(list.mergeTargetBranch, "other", "按选的先后，第一条定下合入分支");
     assert.match(problemOf(list, a) ?? "", /合入 main，不是 other/, "已选里对不上的那条也如实标出");
+
+    assert.equal(list.candidates.find((item) => item.taskId === a)!.conflict, true, "单独拿出来能选：只是跟已选的对不上");
+    assert.equal(list.candidates.find((item) => item.taskId === shelved)!.conflict, false, "自己就不成立的不算对不上");
+
+    // 自己就不能选的已选项不参与定合入分支：已归档的那条不能把其余挤掉。
+    list = await candidates(p.key, `useWorktree=1&selected=${shelved},${elsewhere}`);
+    assert.equal(list.mergeTargetBranch, "other", "已归档的已选项不定合入分支");
+    assert.equal(problemOf(list, elsewhere), null, "仍能单独用的那条照旧能选");
+    assert.equal(problemOf(list, shelved), "已归档");
+    list = await candidates(p.key, `useWorktree=1&selected=${lead},${a}`);
+    assert.equal(list.mergeTargetBranch, "main", "不能当前置的已选项同样不参与");
 
     list = await candidates(p.key, "useWorktree=0");
     assert.match(problemOf(list, a) ?? "", /不用 worktree 拿不到/, "不用 worktree：代码还在分支上的前置拿不到");

@@ -19,6 +19,7 @@ try {
   const runs = [];
   const candidateQueries = [];
   const archived = new Set();
+  let conflictB = false;
   let refuseCreate = false;
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -34,15 +35,20 @@ try {
       const selected = (url.searchParams.get("selected") ?? "").split(",").filter(Boolean);
       candidateQueries.push({ useWorktree: url.searchParams.get("useWorktree"), selected });
       const picked = selected.length > 0;
+      // 照服务端判据：不用 worktree 时，代码还在分支上的甲、乙拿不到（面板按项目默认去问就会被这样判）。
+      const worktree = url.searchParams.get("useWorktree") === "1";
+      const branchOnly = worktree ? null : "代码在它的分支上，不用 worktree 拿不到";
+      const own = (problem, step, round = null) => ({ problem, conflict: false, step: problem ? null : step, round: problem ? null : round });
       data = {
-        locked: null, removable: true, mergeTargetBranch: picked ? "main" : null,
+        locked: null, removable: true, mergeTargetBranch: picked && worktree ? "main" : null,
         candidates: [
-          { taskId: "t-a", title: "前置甲", groupId: null, problem: null, step: "running", round: null },
-          { taskId: "t-b", title: "前置乙", groupId: null, problem: archived.has("t-b") ? "已归档" : null,
-            step: archived.has("t-b") ? null : "reviewing", round: archived.has("t-b") ? null : 1 },
-          { taskId: "t-team", title: "常驻团队任务", groupId: null, problem: "团队任务", step: null, round: null },
-          { taskId: "t-other", title: "别的分支任务", groupId: null, problem: picked ? "合入 other，不是 main" : null,
-            step: picked ? null : "not_started", round: null },
+          { taskId: "t-a", title: "前置甲", groupId: null, ...own(branchOnly, "running") },
+          { taskId: "t-b", title: "前置乙", groupId: null, ...(conflictB && worktree && !archived.has("t-b")
+            ? { problem: "合入 develop，不是 main", conflict: true, step: null, round: null }
+            : own(archived.has("t-b") ? "已归档" : branchOnly, "reviewing", 1)) },
+          { taskId: "t-team", title: "常驻团队任务", groupId: null, ...own("团队任务") },
+          { taskId: "t-other", title: "别的分支任务", groupId: null, ...(picked && worktree
+            ? { problem: "合入 other，不是 main", conflict: true, step: null, round: null } : own(null, "not_started")) },
         ],
       };
     }
@@ -115,7 +121,29 @@ try {
   assert.match(await space.getAttribute("aria-label"), /跟着前置走/);
   await page.keyboard.press("Escape");
 
-  // 草稿记得启动方式和已选的前置；恢复时已经不能选的那条被去掉。
+  // 草稿记得启动方式、已选的前置和这次的工作目录选择（项目默认是项目目录、这次改成了 worktree）：
+  // 重开后两条都还在，不会按项目默认去判、把本来能选的当成失效去掉。
+  const asked = candidateQueries.length;
+  await page.getByTestId("reopen").click();
+  await sendKey.waitFor();
+  assert.match(await space.getAttribute("aria-label"), /独立 worktree/, "工作目录选择随草稿回来");
+  await openLaunch();
+  await page.waitForFunction(() => document.querySelectorAll(".composer-prereq-list em:not(:empty)").length === 2);
+  assert.equal(await picked.count(), 2, "本来能选的前置一条不丢");
+  assert.ok(candidateQueries.slice(asked).every((query) => query.useWorktree === "1"), "恢复后按草稿里的工作目录去问");
+  await page.keyboard.press("Escape");
+  assert.doesNotMatch(await notices(), /已去掉/);
+
+  // 恢复时只是跟别的已选项合入分支对不上的不去掉：标出原因、发送键挡住，留哪条由用户定。
+  conflictB = true;
+  await page.getByTestId("reopen").click();
+  await sendKey.waitFor();
+  await page.waitForFunction(() => document.getElementById(document.querySelector(".studio-card .send-key-main")?.getAttribute("aria-describedby") ?? "")?.textContent?.includes("合入 develop"));
+  assert.match(await blockedReason(), /「前置乙」合入 develop，不是 main/);
+  assert.doesNotMatch(await notices(), /已去掉/, "对不上的不算失效");
+  conflictB = false;
+
+  // 恢复时自己就不能选的那条被去掉。
   archived.add("t-b");
   await page.getByTestId("reopen").click();
   await page.getByText(/草稿里的前置「前置乙」已经不能选了，已去掉/).waitFor();

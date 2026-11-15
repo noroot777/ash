@@ -136,7 +136,7 @@ export function TaskComposerPanel({
   const [gate, setGate] = useState(true);
   const [groupId, setGroupId] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
-  const [useWorktree, setUseWorktree] = useState(project.useWorktreeDefault);
+  const [ownUseWorktree, setOwnUseWorktree] = useState(project.useWorktreeDefault);
   // 项目那一份单独留着（而不是只拿它当初值）：工作目录弹层要能说出「你这次跟本项目的默认
   // 不一样」，并给一颗把本次选择写回项目的按钮 —— 否则用户只能每建一个任务翻一次开关。
   // 用本地 state 而不是直接读 project.useWorktreeDefault：`project` 由上层持有，写回之后
@@ -148,6 +148,12 @@ export function TaskComposerPanel({
   // 「创建并等前置」记在草稿里（已选的前置跟正文同生共死）：草稿里有它，启动方式就是它。
   const [otherLaunchMode, setLaunchMode] = useState<LaunchMode>("run");
   const launchMode: LaunchMode = draft.prerequisites ? "prerequisites" : otherLaunchMode;
+  // 「创建并等前置」时工作目录跟已选的前置存在同一份草稿里：前置能不能选要拿它判，恢复时两样一起回来。
+  const useWorktree = draft.prerequisites ? draft.prerequisites.useWorktree : ownUseWorktree;
+  const setUseWorktree = (value: boolean) => {
+    setOwnUseWorktree(value);
+    draft.setPrerequisites((current) => current && { ...current, useWorktree: value });
+  };
   const [scheduleAt, setScheduleAt] = useState("");
   const [scheduleCron, setScheduleCron] = useState(DEFAULT_CRON);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
@@ -183,7 +189,7 @@ export function TaskComposerPanel({
     });
     // worktree 默认值住在项目行上（随 project 一起到手），不必等任何请求；换项目时这个
     // effect 会重跑，于是选择跟着新项目走而不是留着上一个项目的。
-    setUseWorktree(project.health.isRepo && project.useWorktreeDefault);
+    setOwnUseWorktree(project.health.isRepo && project.useWorktreeDefault);
     setWorktreeDefault(project.useWorktreeDefault);
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -416,8 +422,11 @@ export function TaskComposerPanel({
   const canSubmit = !blockReason && !busy;
 
   const changeLaunchMode = (next: LaunchMode) => {
-    draft.setPrerequisites((current) => next === "prerequisites" ? current ?? [] : null);
-    if (next !== "prerequisites") setLaunchMode(next);
+    draft.setPrerequisites((current) => next === "prerequisites" ? current ?? { ids: [], useWorktree } : null);
+    if (next !== "prerequisites") {
+      setLaunchMode(next);
+      setOwnUseWorktree(useWorktree);
+    }
     if (next !== "queue") queueAfter.clear();
     if (next === "once" && !scheduleAt) setScheduleAt(defaultOnceTime());
   };

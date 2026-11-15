@@ -94,6 +94,8 @@ export interface PrerequisiteCandidate {
   groupId: string | null;
   /** 不能当前置的原因（短话）；null = 能选。 */
   problem: string | null;
+  /** 不能选只是因为跟已选的前置合入的分支对不上（单独拿出来是能选的）。 */
+  conflict: boolean;
   /** 能选的那些此刻到哪一步了（同 `prerequisiteStepText`）；不能选的为 null。 */
   step: PrerequisiteStep | null;
   round: number | null;
