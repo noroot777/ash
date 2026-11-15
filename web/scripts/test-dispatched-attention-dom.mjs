@@ -10,6 +10,8 @@
 //     名下都答完了，两处的数不用刷新就收回颜色。
 //   · 失败：会话里同样什么都不出；两处的数又变色，右侧那一行写着失败（红），点它在左边打开那条任务。
 //   · 刷新后还是这样。
+//   · 直接派出的那几条全归档了、再往下一层还在等答复：两处都是变色的 0（任务头那颗键照样冒出来），
+//     那一层答掉之后颜色收回、那颗键上的数也撤掉。
 // 跑：npm -w web run test:dispatched-attention
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -112,6 +114,20 @@ try {
   await leadReply.waitFor();
   await bothWarn(true);
   assert.equal(await leadFeed.innerText(), feedBefore, "刷新后会话里还是没有");
+
+  // —— 直接派出的全归档了、往下一层还在等：数是 0，两处照样变色；那一层答掉，颜色收回、键上的数撤掉。
+  await page.evaluate(() => {
+    for (const id of ["kid-a", "kid-b", "kid-c"]) window.__server.patch(id, { archived: true });
+    window.__server.add({ id: "kid-mid", title: "又派了一层的", dispatchedBy: "lead", archived: true });
+    window.__server.add({ id: "grand", title: "孙一层", dispatchedBy: "kid-mid", status: "paused", question: "孙一层的问题？" });
+  });
+  await bothWarn(true);
+  assert.equal(await sideCount.locator('[aria-hidden="true"]').innerText(), "0");
+  assert.equal((await railCount.locator("i").textContent())?.trim(), "0", "任务头那颗键：数是 0 也冒出来、带颜色");
+  assert.equal(await leadFeed.innerText(), feedBefore, "会话里还是什么都没有");
+  await page.evaluate(() => window.__server.patch("grand", { question: null, status: "running" }));
+  await page.waitForFunction(() => !document.querySelector('[data-task-id="lead"] .workspace-dispatch-count')?.classList.contains("is-warn"));
+  await railCount.waitFor({ state: "detached" });
 
   assert.deepEqual(failures, []);
   console.log("✓ 派出的任务来问 / 失败：回复框只属于自己、会话里一律不出东西、两处的数变色、抽屉里答掉收回、失败写在右侧那一行、刷新后照旧");

@@ -8,7 +8,8 @@
 // 服务端那一半是这里的一份「库」（存在 localStorage 里，刷新后还在），接口走真实的 api.ts → fetch：
 //   · POST /tasks/:id/answer            —— 记下请求，按服务端的做法撤下那一问；
 //   · POST /tasks/:id/reply             —— 记下请求。
-// window.__server 让回归像服务端那样改「库」：失败了（服务端那边除了任务状态什么都不记）。
+// window.__server 让回归像服务端那样改「库」：失败了（服务端那边除了任务状态什么都不记）、改一条、
+// 再派一层。
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { ProjectView, Task, TaskListItem } from "@ash/shared";
@@ -98,6 +99,8 @@ declare global {
   interface Window {
     __server: {
       fail: (id: string) => void;
+      patch: (id: string, patch: Partial<Task>) => void;
+      add: (row: Partial<Task> & { id: string; title: string }) => void;
       requests: () => Db["requests"];
       reset: () => void;
     };
@@ -105,6 +108,8 @@ declare global {
 }
 window.__server = {
   fail: (id) => commit({ ...db, tasks: db.tasks.map((row) => row.id === id ? { ...row, status: "failed" as const } : row) }),
+  patch: (id, patch) => commit({ ...db, tasks: db.tasks.map((row) => row.id === id ? { ...row, ...patch } : row) }),
+  add: (row) => commit({ ...db, tasks: [...db.tasks, task(row.id, row.title, { createdAt: at(30), updatedAt: at(30), ...row })] }),
   requests: () => db.requests,
   reset: () => { localStorage.removeItem(KEY); db = initial(); },
 };
