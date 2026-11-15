@@ -36,7 +36,7 @@ function meta(row: ConversationDebateRow, debate: FreeReviewDebate | null): stri
  *
  * 点法：
  * - 辩论中：点气泡 = 在下面就地摊开概览；浮出的那一行只有文档键；
- * - 辩完之后：点气泡 = 右侧「审查」格里打开那一场那一轮，停在它的辩论那一段（`onOpenRound`，认不出
+ * - 辩完之后：点气泡 = 右侧「审议」格里打开那一场那一轮，停在它的辩论那一段（`onOpenRound`，认不出
  *   去哪儿、没有审查格时不给，退回就地摊开——同审查气泡那条退路）；
  * - 浮出那一行右端两颗图标键：文档 = 左侧抽屉读完整记录；列表 = 在气泡下面就地摊开概览。
  *
@@ -119,7 +119,7 @@ export function DebateBubble({ row, fallback, task, reviews, awaiting, onOpenRou
       <button
         type="button"
         className="review-verdict-text"
-        aria-label={`${title}：${said.lead ? `${said.lead}，` : ""}${said.text}${goRound ? "，在右侧审查格里打开这一轮的辩论" : ""}`}
+        aria-label={`${title}：${said.lead ? `${said.lead}，` : ""}${said.text}${goRound ? "，在右侧审议格里打开这一轮的辩论" : ""}`}
         aria-expanded={goRound ? undefined : open}
         aria-controls={goRound ? undefined : bodyId}
         onClick={() => (goRound ? goRound() : toggle())}

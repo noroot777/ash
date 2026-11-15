@@ -1,5 +1,6 @@
 import type { DetectedPreviewService, PreviewServiceState } from "@ash/shared/preview";
 import type {
+  DiscussionStartInput,
   BranchPlanView,
   FamilyAcceptanceResult,
   AgentExecutorProfile,
@@ -377,6 +378,9 @@ export const api = {
     target: FreeReviewDisputeTarget,
   ): Promise<{ debateId: string; state: FreeWorkflowApiState }> =>
     request(`/tasks/${id(taskId)}/free-workflow/review/debate`, json("POST", { exchanges, target })),
+  // 回复框里 @ 了人、选「讨论」：各方来回几段，说完由这条任务的执行器在主会话里写合稿。
+  startDiscussion: (taskId: string, input: DiscussionStartInput): Promise<{ discussionId: string; state: FreeWorkflowApiState }> =>
+    request(`/tasks/${id(taskId)}/discussions`, json("POST", input)),
   reserveFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review-reservation`, json("PUT", input)),
   adjustFreeReviewRounds: (taskId: string, input: FreeReviewRoundsInput): Promise<FreeWorkflowApiState> =>

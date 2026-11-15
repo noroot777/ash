@@ -67,6 +67,11 @@ export type ContinueTaskOptions = {
   /** 旁路回合结束后恢复进入旁路前的任务状态。 */
   sideTurn?: boolean;
   /**
+   * 这一回合不告诉它「本任务还有谁、实时对话记录在哪」（peer-context.ts）。给讨论第一轮用：那几份实时
+   * 记录里会有本场别人刚写的第一段，讨论之前的背景另有一份发起时截下的副本（discussion-background.ts）。
+   */
+  withholdPeerNotice?: boolean;
+  /**
    * 这一回合的身份:**谁起的 + 为哪一次审查的哪一轮而起,一个对象**(见 runs.ts 的
    * `TurnSource`)。缺省 = `{ role: "single" }`。
    *

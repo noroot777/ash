@@ -1,5 +1,5 @@
 // 自由审查一轮点开后的正文：起止和检查类型一行、派审附言、报告、证据截图；有驳回的那一轮，报告之后
-// 依次是驳回、辩论、裁定（FreeReviewDisputeRecord）。右侧「审查」格里就地铺开（ReviewInlineReport），
+// 依次是驳回、辩论、裁定（FreeReviewDisputeRecord）。右侧「审议」格里就地铺开（ReviewInlineReport），
 // 读报告全文、「工作流」格点一轮审查，都是从左边推出来的那一屉（LeftDrawer）。
 import type { FreeReviewRound, FreeReviewRun } from "@ash/shared";
 import { Warning } from "@phosphor-icons/react";
@@ -111,7 +111,7 @@ export function freeReportEntry(taskId: string, runId: string, round: number, fa
   };
 }
 
-/** 「审查」格里就地铺开的那一份：报告，之后是驳回、辩论、裁定。 */
+/** 「审议」格里就地铺开的那一份：报告，之后是驳回、辩论、裁定。 */
 export function FreeReviewRoundBody({ taskId, run, round, dispute }: {
   taskId: string;
   run: FreeReviewRun;

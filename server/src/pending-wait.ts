@@ -22,6 +22,8 @@ async function waitOf(m: Row & AfterGate, t: TaskRow | null, at: Date): Promise<
   const { verdict, facts } = await deliveryVerdictOf({ ...m, execution: pendingExecutionIntent(m, t) }, t, at);
   if (verdict.action !== "wait" || !t) return null;
   if (!isDueForDelivery(m, at)) return { kind: "schedule" };
+  // 讨论期间每一段都是一轮,「等这一轮结束」会说错:它要等整场说完、合稿写完。
+  if (facts.discussing) return { kind: "discussion" };
   // 次序跟 deliveryVerdict 一致:先看本任务这一轮,再看队列与分组。
   if (t.mode === "single" && t.status === "running") return { kind: "turn" };
   if (facts.groupPaused) return { kind: "groupPaused" };

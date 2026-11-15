@@ -162,7 +162,7 @@ async function runHeldTask(
       .where(eq(tasks.id, taskId));
     }, { behavior: "immediate" });
     // 跟 orchestrator 起一轮同一条规矩:令牌落库处顺手绑到内存里这一轮的身份上。
-    bindTurnToken(taskId, turnToken);
+    bindTurnToken(taskId, turnToken, invocationAgent);
     // 执行回合开跑：被裁定闸按住的那次预约触发随之作废（见 free-review-reservations.ts
     // `forgetHeldTrigger` ①；与 orchestrator 续跑那一处对称）。
     await forgetHeldTrigger(taskId);

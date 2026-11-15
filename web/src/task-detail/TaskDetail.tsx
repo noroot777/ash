@@ -29,6 +29,7 @@ import { ReplyBox } from "./ReplyBox.tsx";
 import { answerFromHost, useDispatchSignals } from "./dispatched/useDispatchSignals.tsx";
 import { replySend } from "./replySend.ts";
 import { replyDispatch } from "./replyDispatch.ts";
+import { replyDiscuss } from "./replyDiscuss.ts";
 import { dispatchNotes } from "./dispatchNotes.ts";
 import { DispatchNoteLine } from "./DispatchNoteLine.tsx";
 import { LeftDrawerProvider } from "../components/LeftDrawer.tsx";
@@ -551,6 +552,7 @@ export function TaskDetail({
                       reviewRetry={reviewRetry}
                       turnRetry={crashedTurnRetry}
                       reviews={free.state?.reviews}
+                      discussions={free.state?.discussions}
                       asides={asides}
                       // 会话里那一句审查结论点过来：审查格展开那一轮（feed-10 / insp-5）。
                       onOpenReviewPanel={(target) => openTab("review", target ? reviewTargetRequest(target) : undefined)}
@@ -605,6 +607,11 @@ export function TaskDetail({
                       // 「派出去」只在普通的独立任务里有（团队执行者、审查任务各有归属，服务端也不收）。
                       onDispatch={derivationAllowed && task.mode === "single" && !task.archived
                         ? replyDispatch({ task, onCreated: onTaskUpdate, notify }) : undefined}
+                      // 「讨论」同样只在普通的独立任务里有，且只认自由工作流（服务端 discussionBlocker 同一口径）。
+                      onDiscuss={derivationAllowed && task.mode === "single" && !task.archived && task.workflowMode === "free"
+                        ? replyDiscuss({ task, onChanged: free.setState }) : undefined}
+                      discussHeld={(free.state?.discussions ?? []).some((item) => item.status === "running" || item.status === "synthesizing")
+                        ? "这条任务上正在讨论，说完再开下一场" : null}
                       override={ruling}
                       command={derivationAllowed ? {
                         matches: isTaskDerivationCommand,

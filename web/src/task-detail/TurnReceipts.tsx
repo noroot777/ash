@@ -54,7 +54,7 @@ function ReceiptEntry({ receipt, previousAt }: { receipt: TurnReceipt; previousA
           <button
             type="button"
             className="turn-receipt-more"
-            aria-label={go ? `${view.text}，在右侧审查格里打开这一轮` : undefined}
+            aria-label={go ? `${view.text}，在右侧审议格里打开这一轮` : undefined}
             aria-expanded={go ? undefined : open}
             aria-controls={go ? undefined : detailId}
             onClick={() => (go ? go(laneReviewTarget(lane)) : setOpen((value) => !value))}

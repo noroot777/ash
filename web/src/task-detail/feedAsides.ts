@@ -21,6 +21,7 @@ export function feedRowAt(row: ConversationDisplayRow): string | null {
     case "review-lane":
       return row.startedAt || (row.items[0]?.at ?? null);
     case "debate-lane":
+    case "discussion-lane":
       return row.startedAt || (row.items[0]?.at ?? null);
   }
 }

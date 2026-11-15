@@ -19,7 +19,7 @@ import { reviewTargetRequest } from "../review/reviewTarget.ts";
 // 开一眼看效果的看片器，开十次也不改变任务走到了哪儿，摆进这条线只会把真正的进展冲淡。
 //
 // 相邻的几段「任务执行」（中间没有审查隔开：续跑、被叫醒、你又说了一句）合成一条，右边是
-// 合计用时，点开才是一段一段的。审查那几行只说第几轮、结论如何，点了去「审查」格展开那一轮。
+// 合计用时，点开才是一段一段的。审查那几行只说第几轮、结论如何，点了去「审议」格展开那一轮。
 
 type Item =
   | { type: "runs"; key: string; at: string; runs: FreeWorkflowExecution[] }
@@ -131,7 +131,7 @@ function RunsRow({ runs }: { runs: FreeWorkflowExecution[] }) {
 export function FreeWorkflowInspector({ task }: { task: Task }) {
   const free = useFreeWorkflowState(task.id);
   const nav = useInspectorNav();
-  // 面板外单独渲染（没有「审查」格可去）时，点一轮审查退回从左边推出它的报告来看。
+  // 面板外单独渲染（没有「审议」格可去）时，点一轮审查退回从左边推出它的报告来看。
   const drawer = useLeftDrawer();
   const items = useMemo(() => timeline(free.state), [free.state]);
 

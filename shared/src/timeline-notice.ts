@@ -114,6 +114,12 @@ export type TimelineNotice =
   // ── 你那条命令的回答（常显：是你要看的东西）──
   /** 斜杠命令（/goal --scopes、/rename …）就地执行的结果。原文里带着命令本身和全部输出。 */
   | { kind: "command.output"; command: string }
+  // ── 讨论的结构（本身是回执，中止那一句归明面）──
+  /**
+   * 一场讨论开始了 / 轮到某一方说第几段 / 说完了 / 中止了（server/src/discussion.ts）。`discussionId` 认的是
+   * 哪一场：会话里那颗讨论气泡按它配落盘记录，配不上就把原文原样摆出来，不拿另一场顶替。
+   */
+  | { kind: "discussion"; discussionId: string; phase: "start" | "segment" | "end" | "aborted" }
   // ── 通用两档：原文就是它的话 ──
   | { kind: "receipt" }
   | { kind: "alert" };
@@ -124,7 +130,7 @@ const KINDS: ReadonlySet<string> = new Set<TimelineNoticeKind>([
   "review.verdict", "review.no_verdict", "accept.done", "review.dispute", "review.start", "review.repair", "stage",
   "review.reserved", "review.unreserved", "review.launch",
   "monitor.started", "monitor.finished", "monitor.released", "monitor.handed", "complete.held", "review.waiting",
-  "command.output", "receipt", "alert",
+  "command.output", "discussion", "receipt", "alert",
 ]);
 
 /**
@@ -134,5 +140,8 @@ const KINDS: ReadonlySet<string> = new Set<TimelineNoticeKind>([
 export function timelineNoticeOf(value: unknown): TimelineNotice | undefined {
   if (!value || typeof value !== "object") return undefined;
   const kind = (value as { kind?: unknown }).kind;
-  return typeof kind === "string" && KINDS.has(kind) ? value as TimelineNotice : undefined;
+  if (typeof kind !== "string" || !KINDS.has(kind)) return undefined;
+  // 讨论那几句靠讨论身份配记录：没带身份的当没有，退回按原文读（原文只是一句普通回执）。
+  if (kind === "discussion" && typeof (value as { discussionId?: unknown }).discussionId !== "string") return undefined;
+  return value as TimelineNotice;
 }

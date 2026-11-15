@@ -73,6 +73,7 @@ async function manualRepairSubject(taskId: string, target: RepairTarget | null):
   if (task.stage === "accepted" || task.stage === "merged") return "任务已进入验收结果";
   if (await reviewingRun(taskId)) return "审查回合正在进行";
   if (await activeDebateOf(taskId)) return "审查意见辩论正在进行，等它说完再决定";
+  if (await (await import("./discussion.js")).discussionHolds(taskId)) return "这条任务上正在讨论，等它说完再决定";
   let subject: RepairSubject | string;
   if (target) subject = await pinnedSubject(taskId, target);
   else {

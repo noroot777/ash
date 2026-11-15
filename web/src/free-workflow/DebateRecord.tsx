@@ -1,9 +1,8 @@
-import { useEffect, useRef } from "react";
 import type { FreeReviewDebate, FreeReviewDisputeTarget, FreeReviewRun, TaskListItem } from "@ash/shared";
-import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import type { LeftDrawerEntry } from "../components/LeftDrawer.tsx";
-import { DEBATE_SIDE_LABEL, DEBATE_VERDICT_LABEL, debateSpeaking, debateTotalSegments, turnGist } from "./debateModel.ts";
-import { QuoteKey, SpeakingLine } from "./DebateOverview.tsx";
+import { DEBATE_SIDE_LABEL, DEBATE_VERDICT_LABEL, debateSpeaking, debateTotalSegments } from "./debateModel.ts";
+import { QuoteKey } from "./TalkOverview.tsx";
+import { TalkRecord } from "./TalkRecord.tsx";
 import { useRulingQuote } from "./disputeRulingStore.ts";
 import { useFreeWorkflowSnapshot } from "./useFreeWorkflowState.ts";
 
@@ -51,40 +50,22 @@ function DebateRecordTitle({ source }: { source: DebateDrawerSource }) {
 function DebateRecordBody({ source }: { source: DebateDrawerSource }) {
   const reviews = useLiveReviews(source);
   const debate = findDebate(reviews, source.debateId);
-  const root = useRef<HTMLDivElement>(null);
   const quote = useRulingQuote(source.task.id, source.target);
-  useEffect(() => {
-    if (source.seq == null) return;
-    root.current?.querySelector(`[data-seq="${source.seq}"]`)?.scrollIntoView({ block: "start" });
-  }, [source]);
   if (!debate) return <p className="debate-record-missing">这场辩论的记录还没读到。</p>;
   const total = debateTotalSegments(debate);
-  const waiting = debate.status === "running" && !debate.turns.some((turn) => turn.status === "speaking") ? debateSpeaking(debate) : null;
+  const next = debate.status === "running" && !debate.turns.some((turn) => turn.status === "speaking") ? debateSpeaking(debate) : null;
   return (
-    <div className="debate-record" ref={root}>
-      {debate.turns.map((turn) => (
-        <section key={turn.seq} className="debate-record-seg" data-seq={turn.seq} aria-label={`${DEBATE_SIDE_LABEL[turn.side]}第 ${turn.seq} 段`}>
-          <header>
-            <b>{DEBATE_SIDE_LABEL[turn.side]}</b>
-            <span>第 {turn.seq} 段{turn.seq === total && debate.status === "finished"
-              ? ` · 收尾，它自己的立场：${debate.verdict ? DEBATE_VERDICT_LABEL[debate.verdict] : "没给"}` : ""}</span>
-            {quote && turn.statement && <QuoteKey onQuote={() => quote(turn)} />}
-          </header>
-          {turn.status === "speaking" ? <SpeakingLine className="debate-record-live" /> : (
-            <>
-              <p className="debate-record-gist">{turnGist(turn)}</p>
-              {turn.statement && <MarkdownBody text={turn.statement} />}
-            </>
-          )}
-        </section>
-      ))}
-      {waiting && (
-        <section className="debate-record-seg" data-seq={waiting.seq}>
-          <header><b>{DEBATE_SIDE_LABEL[waiting.side]}</b><span>第 {waiting.seq} 段</span></header>
-          <SpeakingLine className="debate-record-live" />
-        </section>
-      )}
-    </div>
+    <TalkRecord
+      segments={debate.turns.map((turn) => ({ ...turn, who: DEBATE_SIDE_LABEL[turn.side] }))}
+      waiting={next && { seq: next.seq, who: DEBATE_SIDE_LABEL[next.side] }}
+      focus={source}
+      headOf={(segment) => segment.seq === total && debate.status === "finished"
+        ? `收尾，它自己的立场：${debate.verdict ? DEBATE_VERDICT_LABEL[debate.verdict] : "没给"}` : null}
+      keyOf={(segment) => {
+        const turn = debate.turns.find((item) => item.seq === segment.seq);
+        return quote && turn?.statement ? <QuoteKey onQuote={() => quote(turn)} /> : null;
+      }}
+    />
   );
 }
 

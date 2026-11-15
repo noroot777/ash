@@ -1,14 +1,15 @@
 import { X } from "@phosphor-icons/react";
 import { ReplyDockRow } from "./ReplyDock.tsx";
-import { callChoices, type BaseOption, type CallVerb, type DispatchBase, type ReplyCall } from "./replyCall.ts";
+import { callChoices, type BaseOption, type CallAbility, type CallVerb, type DispatchBase, type ReplyCall } from "./replyCall.ts";
 
 /**
- * `@` 了一个人之后，回复框顶上那一行：它来做什么（问一句 / 派出去）。跟「等你裁定」那一行同一副骨架、
+ * `@` 了一个人之后，回复框顶上那一行：它来做什么（问一句 / 讨论 / 派出去）。跟「等你裁定」那一行同一副骨架、
  * 同一个位置；叫着人的时候框顶只有这一行，不叫了才换回裁定那一行（ReplyBox 里定谁让谁）。
  */
-export function ReplyCallDock({ call, self, onVerb, onCancel, baseError, onRetryBase }: {
+export function ReplyCallDock({ call, self, ability, onVerb, onCancel, baseError, onRetryBase }: {
   call: ReplyCall;
   self: boolean;
+  ability: CallAbility;
   onVerb: (verb: CallVerb) => void;
   onCancel: () => void;
   /** 派出去时没读到从哪开工（null = 读到了或还在读）。 */
@@ -19,7 +20,7 @@ export function ReplyCallDock({ call, self, onVerb, onCancel, baseError, onRetry
   return (
     <ReplyDockRow
       label={`叫 ${call.target.agent} 来做什么`}
-      choices={callChoices(self, true)}
+      choices={callChoices(self, ability)}
       pressed={call.verb}
       onPick={onVerb}
       onEscape={onCancel}

@@ -18,6 +18,17 @@ export type {
   TeamConfig,
 } from "./team.ts";
 export type {
+  DiscussionOutcome,
+  DiscussionParticipant,
+  DiscussionRounds,
+  DiscussionStartInput,
+  DiscussionStatus,
+  DiscussionLostRecord,
+  DiscussionTurn,
+  DiscussionTurnStatus,
+  TaskDiscussion,
+} from "./discussion.ts";
+export type {
   FreeReviewCheckMode,
   FreeReviewDebate,
   FreeReviewDebateSide,
