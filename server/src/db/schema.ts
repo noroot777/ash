@@ -129,6 +129,7 @@ export const taskMemos = sqliteTable(
     id: text("id").primaryKey(),
     taskId: text("task_id").notNull(),
     body: text("body").notNull(),
+    attachments: text("attachments"), // json string[],跟 notes 同一种存法;NULL = 没有
     // 跟随手记同一条:备忘是**私有**的个人批注(§八),归属列是可见性判据本身。
     ownerUserId: text("owner_user_id"),
     createdAt: text("created_at").notNull(),

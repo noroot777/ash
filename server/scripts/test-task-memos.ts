@@ -13,16 +13,19 @@ import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 const root = mkdtempSync(join(tmpdir(), "ash-task-memos-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
+process.env.ASH_UPLOADS_DIR = join(root, "uploads");
 requireTmpDb("task-memos");
 
 const [
-  { db, ensureSchema }, schema, memoRoutes, { TASK_MEMO_MAX_LEN, TASK_MEMO_MAX_COUNT }, { TASK_BATCH_LIMIT },
+  { db, ensureSchema }, schema, memoRoutes, { TASK_MEMO_MAX_LEN, TASK_MEMO_MAX_COUNT, TASK_MEMO_MAX_ATTACHMENTS }, { TASK_BATCH_LIMIT },
+  { UPLOADS_DIR },
 ] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/task-memos.js"),
   import("@ash/shared/task-memo"),
   import("@ash/shared"),
+  import("../src/paths.js"),
 ]);
 const { projects, taskMemos, tasks } = schema;
 
@@ -201,6 +204,80 @@ for (const id of ["t1", "t2"]) {
 
   // 满了之后再发照常 400。
   assert.equal((await post("/tasks/t-cap/memos", { body: "再来一条" })).status, 400);
+}
+
+// ── 附件：贴图的备忘 ────────────────────────────────────────────────────────
+{
+  const shot = join(UPLOADS_DIR, "AbCdEfGhIjKl-shot.png");
+  // 只贴图、一个字不写也是一条正经备忘；正文空白照样摘掉。
+  const imageOnly = await post("/tasks/t2/memos", { body: "  ", attachments: [shot, shot] });
+  assert.equal(imageOnly.status, 201, JSON.stringify(imageOnly.body));
+  assert.equal(imageOnly.body.body, "");
+  assert.deepEqual(imageOnly.body.attachments, [shot], "同一张图只留一份");
+  // 裸文件名也认，但一律落成本机绝对路径（前端靠 data/uploads/<名字> 换出图片地址）。
+  const bare = await post("/tasks/t2/memos", { body: "带图", attachments: ["AbCdEfGhIjKl-shot.png"] });
+  assert.deepEqual(bare.body.attachments, [shot]);
+
+  assert.equal((await post("/tasks/t2/memos", { body: "x", attachments: ["/etc/passwd"] })).status, 400, "uploads 之外的路径不收");
+  assert.equal((await post("/tasks/t2/memos", { body: "x", attachments: "a.png" })).status, 400, "必须是数组");
+  assert.equal((await post("/tasks/t2/memos", { attachments: [] })).status, 400, "没字也没图不算内容");
+  const tooMany = Array.from({ length: TASK_MEMO_MAX_ATTACHMENTS + 1 }, (_, at) => join(UPLOADS_DIR, `AbCdEfGhIj${String(at).padStart(2, "0")}-a.png`));
+  assert.equal((await post("/tasks/t2/memos", { body: "x", attachments: tooMany })).status, 400, "附件数有上限");
+
+  // 只改正文的老客户端不会把图清掉；显式传空数组才是摘掉。
+  const kept = await patch(`/tasks/t2/memos/${bare.body.id}`, { body: "改了字" });
+  assert.deepEqual(kept.body.attachments, [shot]);
+  const textOnly = await patch(`/tasks/t2/memos/${bare.body.id}`, { attachments: [] });
+  assert.equal(textOnly.status, 200);
+  assert.deepEqual(textOnly.body.attachments, []);
+  assert.equal(textOnly.body.body, "改了字");
+  // 图片那条把图摘光就什么都不剩了，跟清空正文一样是 400。
+  assert.equal((await patch(`/tasks/t2/memos/${imageOnly.body.id}`, { attachments: [] })).status, 400);
+  // 读回来带着附件。
+  const listed = (await call("/tasks/t2/memos")).body.find((memo: { id: string }) => memo.id === imageOnly.body.id);
+  assert.deepEqual(listed.attachments, [shot]);
+
+  // 侧栏摘要：只有图的那条用占位字，不能是一格空白。
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const latest = await post("/tasks/t2/memos", { body: "", attachments: [shot] });
+  const digest = (await post("/tasks/memos", { taskIds: ["t2"] })).body[0];
+  assert.equal(digest.text, "[图片]");
+  for (const id of [imageOnly.body.id, bare.body.id, latest.body.id]) {
+    assert.equal((await call(`/tasks/t2/memos/${id}`, { method: "DELETE" })).status, 200);
+  }
+}
+
+// ── 只改一样时不许盖掉别处刚存上的另一样（第 1 轮审查 F1）─────────────────
+{
+  const shot = join(UPLOADS_DIR, "AbCdEfGhIjKl-late.png");
+  // 慢的只改正文、快的加图：两发都 200，图得留下。
+  const a = await post("/tasks/t2/memos", { body: "原文" });
+  const slowText = await sendSplit(`/tasks/t2/memos/${a.body.id}`, "PATCH", { body: "改过的字" }, async () => {
+    assert.equal((await patch(`/tasks/t2/memos/${a.body.id}`, { attachments: [shot] })).status, 200);
+  });
+  assert.equal(slowText.status, 200);
+  assert.equal(slowText.body.body, "改过的字");
+  assert.deepEqual(slowText.body.attachments, [shot], `只改字的那一发不许把图撤掉：${JSON.stringify(slowText.body)}`);
+
+  // 反方向：慢的只改附件、快的改正文，新正文得留下。
+  const b = await post("/tasks/t2/memos", { body: "旧字" });
+  const slowFiles = await sendSplit(`/tasks/t2/memos/${b.body.id}`, "PATCH", { attachments: [shot] }, async () => {
+    assert.equal((await patch(`/tasks/t2/memos/${b.body.id}`, { body: "新字" })).status, 200);
+  });
+  assert.equal(slowFiles.status, 200);
+  assert.equal(slowFiles.body.body, "新字", `只改图的那一发不许把正文退回旧的：${JSON.stringify(slowFiles.body)}`);
+
+  // 「改完至少剩一样」也按写入那一刻判：慢的清空正文，期间别处把图摘光了，这一发得 400，库里还是有字的那版。
+  const c = await post("/tasks/t2/memos", { body: "有字", attachments: [shot] });
+  const slowClear = await sendSplit(`/tasks/t2/memos/${c.body.id}`, "PATCH", { body: "" }, async () => {
+    assert.equal((await patch(`/tasks/t2/memos/${c.body.id}`, { attachments: [] })).status, 200);
+  });
+  assert.equal(slowClear.status, 400, `会被清空成什么都没有的那一发要拒：${JSON.stringify(slowClear.body)}`);
+  const [kept] = await db.select().from(taskMemos).where(eq(taskMemos.id, c.body.id));
+  assert.equal(kept.body, "有字");
+  for (const id of [a.body.id, b.body.id, c.body.id]) {
+    assert.equal((await call(`/tasks/t2/memos/${id}`, { method: "DELETE" })).status, 200);
+  }
 }
 
 // ── 删 ──────────────────────────────────────────────────────────────────────
