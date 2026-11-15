@@ -113,3 +113,15 @@
   line-height: 12px;
   text-align: center;
 }
+
+/* 整页只有一屉（task-detail/useTaskDrawers.tsx）：「派出的任务」那一屉、里层推出来的那一屉都画在
+   这两层里，自己不占位置，定位基准仍是 .task-detail。里层推出东西时外层那一屉让出来 —— 藏起来，
+   不卸载（里层那一屉的内容就长在它里面），关上之后原样露回来。 */
+.page-drawer-slot,
+.page-drawer-layer {
+  display: contents;
+}
+
+.page-drawer-slot.is-covered {
+  visibility: hidden;
+}

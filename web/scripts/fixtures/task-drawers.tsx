@@ -2,8 +2,11 @@
 //
 // 挂的是 TaskDetail 自己用的那一个 hook（useTaskDrawers）：互斥的接线就在它里面，夹具不抄一份。
 // 三屉各从生产的入口打开：子智能体从 Inspector 里那一行，读全文从 LeftDrawer 的槽（审查格、
-// 辩论气泡就是这么开的），派出的任务从右侧那一格。抽屉里那条任务画成一行字（生产里是抽屉模式的
-// TaskDetail，跟团队执行者抽屉同一个）。
+// 辩论气泡就是这么开的），派出的任务从右侧那一格。
+//
+// 抽屉里那条任务是 NestedDetail：生产里是抽屉模式的完整 TaskDetail，这里只留它跟抽屉有关的那一半
+// —— 自己也调 useTaskDrawers、自己也有三屉（往下一层的派出任务、子智能体、读全文），三颗键各开
+// 一屉。整页只有一屉这条（往下一层看是替换、不叠出越来越窄的抽屉）就是靠它钉住的。
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { AgentEvent, Session, Task, TaskListItem } from "@ash/shared";
@@ -61,6 +64,29 @@ declare global {
   interface Window { __add: (row: Partial<Task> & { id: string; title: string }) => void }
 }
 
+function NestedDetail({ task, allTasks, onOpenTask }: { task: Task; allTasks: TaskListItem[]; onOpenTask: (id: string) => void }) {
+  const drawers = useTaskDrawers({
+    task, allTasks, conversation, onOpenTask,
+    renderTask: (child) => <NestedDetail key={child.id} task={child} allTasks={allTasks} onOpenTask={onOpenTask} />,
+  });
+  const agent = drawers.subagents.nativeWork.rows.find((row) => row.kind === "agent");
+  return (
+    <LeftDrawerProvider value={drawers.leftDrawer.api}>
+      <section className="task-detail" data-drawer-task={task.id} style={{ position: "relative", flex: 1, minHeight: 0 }}>
+        <p>{task.title} 的会话</p>
+        {drawers.dispatched.state.tasks.map((kid) => (
+          <button key={kid.id} type="button" onClick={() => drawers.dispatched.state.open(kid.id)}>在{task.title}里打开：{kid.title}</button>
+        ))}
+        <button type="button" onClick={() => agent && drawers.subagents.nativeWork.onOpenAgent(agent.id)}>在{task.title}里看子智能体</button>
+        <button type="button" onClick={() => drawers.leftDrawer.api.open({
+          key: `report-${task.id}`, kind: "审查报告", title: task.title, ariaLabel: `审查报告：${task.title}`, closeLabel: "关上审查报告", body: <p>{task.title} 的报告</p>,
+        })}>在{task.title}里读审查报告</button>
+        {drawers.drawers}
+      </section>
+    </LeftDrawerProvider>
+  );
+}
+
 function App() {
   const [tasks, setTasks] = useState(initial);
   const [opened, setOpened] = useState<string | null>(null);
@@ -69,7 +95,7 @@ function App() {
   }, []);
   const drawers = useTaskDrawers({
     task: lead, allTasks: tasks, conversation, onOpenTask: setOpened,
-    renderTask: (child) => <p data-drawer-task={child.id}>{child.title} 的会话</p>,
+    renderTask: (child) => <NestedDetail key={child.id} task={child} allTasks={tasks} onOpenTask={setOpened} />,
   });
   const descriptors = useMemo(
     () => drawers.inspectors.filter((descriptor) => descriptor.id === "subagents" || descriptor.id === "dispatched"),
