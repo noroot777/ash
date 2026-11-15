@@ -8,12 +8,11 @@
 
 .task-memo-inspector__list { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 
-/* ── 写一条 / 改一条：一个输入框，底下右边「取消 保存」 ─────────────────────────── */
+/* ── 写一条 / 改一条（MemoEditor）：输入框，贴进来的图，底下「回形针 … 取消 保存」 ── */
 
-.task-memo-composer,
-.task-memo-card__edit { display: grid; min-width: 0; gap: 8px; }
-.task-memo-composer textarea,
-.task-memo-card__edit textarea {
+.task-memo-editor { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.task-memo-editor .task-upload-list { margin-top: 0; }
+.task-memo-editor textarea {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid var(--line2);
@@ -27,9 +26,10 @@
   resize: none;
   transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
 }
-.task-memo-composer textarea::placeholder { color: var(--faint); }
-.task-memo-composer__actions,
-.task-memo-card__edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.task-memo-editor textarea::placeholder { color: var(--faint); }
+/* 回形针靠左，取消/保存靠右：附图是旁支动作，不跟提交挤在一起。 */
+.task-memo-editor__actions { display: flex; align-items: center; gap: 6px; }
+.task-memo-editor__actions > .insp-tool { margin-right: auto; }
 
 /* ── 一条备忘：正文，底下一行时间，编辑、删掉指到才出 ─────────────────────────── */
 
@@ -42,6 +42,15 @@
 /* 正文：保留用户自己排的版（换行、缩进），长单词/长路径强制断开，不许撑宽卡片。
    折叠靠内联的 max-height（行数写在 TaskMemoCard 里），这里只负责把裁口做得不突兀。 */
 .task-memo-card__body { overflow: hidden; overflow-wrap: anywhere; margin: 0; color: var(--ink); font-size: var(--t-sm); line-height: 1.6; white-space: pre-wrap; }
+
+/* 贴的图：宽度跟卡片走，高度封顶，太长的截图裁成上半截（点开看全图）。 */
+.task-memo-card__files { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); justify-items: start; gap: 6px; }
+.task-memo-card__body + .task-memo-card__files,
+.task-memo-card__more + .task-memo-card__files { margin-top: 8px; }
+.task-memo-card__files img { display: block; max-width: 100%; max-height: 220px; border: 1px solid var(--line); border-radius: var(--r-md); object-fit: cover; object-position: top; cursor: zoom-in; }
+.task-memo-card__file { display: inline-flex; max-width: 100%; align-items: center; gap: 6px; color: var(--muted); font-size: var(--t-xs); text-decoration: none; }
+.task-memo-card__file > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.task-memo-card__file:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
 
 .task-memo-card__more { margin-top: 4px; border: 0; border-radius: var(--r-sm); background: transparent; padding: 2px 4px; margin-left: -4px; color: var(--ink); font: inherit; font-size: var(--t-xs); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .task-memo-card__more:hover { background: var(--hover-bg); }

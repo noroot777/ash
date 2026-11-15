@@ -5,24 +5,15 @@
 // 指出刚进来的是哪条（justAddedId 的高亮）。
 import { useEffect, useState } from "react";
 import { Plus } from "@phosphor-icons/react";
-import { TASK_MEMO_MAX_LEN } from "@ash/shared/task-memo";
 import type { TaskMemo } from "@ash/shared/task-memo";
 import { InspectorHeadActions } from "../inspector/index.ts";
 import { InspButton, InspNone, InspNote, InspTool } from "../inspector/parts.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import type { Notify } from "../lib/notify.ts";
-import { isModEnterEvent } from "../lib/sendKey.ts";
+import { MemoEditor } from "./MemoEditor.tsx";
 import { TaskMemoCard } from "./TaskMemoCard.tsx";
 import { addTaskMemo, clearTaskMemoHighlight, editTaskMemo, removeTaskMemo, useTaskMemos } from "./taskMemoStore.ts";
-import {
-  beginMemoWrite,
-  finishMemoWrite,
-  setMemoComposerDraft,
-  setMemoEditDraft,
-  useTaskMemoDrafts,
-  type MemoSlot,
-} from "./taskMemoDrafts.ts";
-import { AutoTextarea } from "../components/AutoTextarea.tsx";
+import { beginMemoWrite, finishMemoWrite, setMemoDraft, useTaskMemoDrafts, type MemoSlot } from "./taskMemoDrafts.ts";
 
 const message = (reason: unknown) => (reason instanceof Error ? reason.message : String(reason));
 
@@ -33,8 +24,7 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
   // 「正在保存」跟着卸载重置更糟 —— 回来能接着写，先前那一发回来又把它清掉（第 3 轮
   // F1）。按任务分开存，所以也不会漂到下一条任务的面板上。
   const { composing, edits, busy, pendingOn } = useTaskMemoDrafts(taskId);
-  const draft = composing ?? "";
-  const setDraft = (text: string) => setMemoComposerDraft(taskId, text);
+  const compose = (open: boolean) => setMemoDraft(taskId, null, open ? { text: "", attachments: [] } : null);
   const [deleting, setDeleting] = useState<TaskMemo | null>(null);
 
   // 换任务只清「删哪条」这种一次性意图 —— 草稿按任务存，本来就不会串台。
@@ -68,9 +58,10 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
   };
 
   const submit = () => {
-    const text = draft.trim();
-    if (!text) return;
-    void write(null, async () => { await addTaskMemo(taskId, text); });
+    if (!composing) return;
+    const body = composing.text.trim();
+    if (!body && !composing.attachments.length) return;
+    void write(null, async () => { await addTaskMemo(taskId, { body, attachments: [...composing.attachments] }); });
   };
 
   return (
@@ -79,10 +70,10 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
         <InspTool
           label="写一条备忘"
           // 空态只留一句话，这一格是干什么的、还有哪个入口，指到这颗键上再说。
-          tip="只给你自己看，不进 agent 的上下文。会话里选中一段话，浮条上也有「添加到备忘」。"
+          tip="只给你自己看，不进 agent 的上下文。可以贴图；会话里选中一段话，浮条上也有「添加到备忘」。"
           aria-expanded={composing !== null}
           disabled={pendingOn(null)}
-          onClick={() => setMemoComposerDraft(taskId, composing === null ? "" : null)}
+          onClick={() => compose(composing === null)}
         >
           <Plus aria-hidden="true" />
         </InspTool>
@@ -91,36 +82,16 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
       {error && <InspNote tone="bad" role="alert">{error}</InspNote>}
 
       {composing !== null && (
-        <div className="task-memo-composer">
-          <AutoTextarea
-            autoFocus
-            value={draft}
-            rows={5}
-            maxLength={TASK_MEMO_MAX_LEN}
-            placeholder="这一轮为什么这么定、哪段输出要留着回头看、验收时记得查什么…"
-            aria-label="备忘内容"
-            disabled={pendingOn(null)}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (isModEnterEvent(event)) { event.preventDefault(); submit(); return; }
-              if (event.key !== "Escape") return;
-              event.stopPropagation();
-              if (!pendingOn(null)) setMemoComposerDraft(taskId, null);
-            }}
-          />
-          <div className="task-memo-composer__actions">
-            <InspButton variant="quiet" size="sm" disabled={pendingOn(null)} onClick={() => setMemoComposerDraft(taskId, null)}>取消</InspButton>
-            <InspButton
-              variant="pri"
-              size="sm"
-              disabled={pendingOn(null) || !draft.trim()}
-              aria-keyshortcuts="Meta+Enter Control+Enter"
-              onClick={() => submit()}
-            >
-              保存
-            </InspButton>
-          </div>
-        </div>
+        <MemoEditor
+          taskId={taskId}
+          slot={null}
+          draft={composing}
+          disabled={pendingOn(null)}
+          rows={5}
+          placeholder="这一轮为什么这么定、哪段输出要留着回头看、验收时记得查什么…"
+          onSave={submit}
+          onCancel={() => compose(false)}
+        />
       )}
 
       {memos.length > 0 ? (
@@ -131,16 +102,17 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
               memo={memo}
               busy={busy}
               highlight={memo.id === justAddedId}
+              taskId={taskId}
               draft={memo.id in edits ? edits[memo.id] : null}
-              onDraft={(next) => setMemoEditDraft(taskId, memo.id, next)}
-              onSave={(body) => write(memo.id, async () => { await editTaskMemo(taskId, memo.id, body); })}
+              onDraft={(next) => setMemoDraft(taskId, memo.id, next)}
+              onSave={(content) => write(memo.id, async () => { await editTaskMemo(taskId, memo.id, content); })}
               onDelete={() => setDeleting(memo)}
             />
           ))}
         </div>
       ) : composing === null && (
         // 读不到的时候说「还在读」，别把读取中伪装成「没有备忘」。
-        <InspNone action={loaded ? <InspButton onClick={() => setMemoComposerDraft(taskId, "")}>写一条</InspButton> : undefined}>
+        <InspNone action={loaded ? <InspButton onClick={() => compose(true)}>写一条</InspButton> : undefined}>
           {loaded ? "这个任务还没有备忘。" : loading ? "正在读备忘…" : "还没读到这个任务的备忘。"}
         </InspNone>
       )}
@@ -149,13 +121,15 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
         <ConfirmDialog
           danger
           title="删掉这条备忘"
-          message={`删掉之后找不回来了。这条写的是：「${deleting.body.slice(0, 60)}${deleting.body.length > 60 ? "…" : ""}」`}
+          message={deleting.body
+            ? `删掉之后找不回来了。这条写的是：「${deleting.body.slice(0, 60)}${deleting.body.length > 60 ? "…" : ""}」`
+            : "删掉之后找不回来了。"}
           confirmLabel="删掉"
           busy={busy}
           onConfirm={() => void write(deleting.id, async () => {
             await removeTaskMemo(taskId, deleting.id);
             // 这条没了，它的编辑草稿也不该留成孤儿（删除按钮只在读态可见，所以通常是空操作）。
-            setMemoEditDraft(taskId, deleting.id, null);
+            setMemoDraft(taskId, deleting.id, null);
             setDeleting(null);
           })}
           onClose={() => setDeleting(null)}

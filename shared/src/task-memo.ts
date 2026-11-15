@@ -18,13 +18,19 @@
 export interface TaskMemo {
   id: string;
   taskId: string;
+  /** 可以是空串 —— 只贴了一张图的备忘，图就是全部内容。 */
   body: string;
+  /** 贴进来的图片/文件：`POST /api/uploads` 回的绝对路径，跟随手记、回复框同一种形状。 */
+  attachments: string[];
   createdAt: string;
   updatedAt: string;
 }
 
 /** 单条正文上限。超了直接报错，不静默截断 —— 悄悄吞掉用户写的字是最坏的一种「成功」。 */
 export const TASK_MEMO_MAX_LEN = 20000;
+
+/** 单条最多挂几个附件。备忘是批注不是相册，这个数只拦失控写入。 */
+export const TASK_MEMO_MAX_ATTACHMENTS = 20;
 
 /** 一个任务最多存多少条。够用到离谱，只拦「脚本刷进来」这类失控写入。 */
 export const TASK_MEMO_MAX_COUNT = 500;
@@ -49,12 +55,26 @@ export interface TaskMemoDigest {
 
 export const TASK_MEMO_DIGEST_CAP = 1200;
 
-/** 摘要正文的截断：两处（批量摘要、将来别的概览）共用一份，省得各截各的。 */
-export function taskMemoDigestText(body: string): { text: string; truncated: boolean } {
-  const text = body.trim();
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
+
+/**
+ * 摘要正文的截断：两处（批量摘要、将来别的概览）共用一份，省得各截各的。
+ *
+ * 只有附件、没写字的那条拿「[图片]」占位：侧栏那一格要是空着，看着就是「没有备忘」。
+ */
+export function taskMemoDigestText(body: string, attachments: readonly string[] = []): { text: string; truncated: boolean } {
+  const text = body.trim() || attachmentsLabel(attachments);
   return text.length > TASK_MEMO_DIGEST_CAP
     ? { text: `${text.slice(0, TASK_MEMO_DIGEST_CAP)}…`, truncated: true }
     : { text, truncated: false };
+}
+
+function attachmentsLabel(attachments: readonly string[]): string {
+  if (!attachments.length) return "";
+  const images = attachments.every((path) => IMAGE_EXT.test(path));
+  const count = attachments.length;
+  if (images) return count > 1 ? `[${count} 张图片]` : "[图片]";
+  return count > 1 ? `[${count} 个附件]` : "[附件]";
 }
 
 /**

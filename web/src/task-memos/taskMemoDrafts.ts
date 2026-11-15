@@ -18,11 +18,15 @@
 // store），②​ 是不依赖 UI 的那道。判等用版本号而不是比对正文：改过又改回也算动过，
 // 跟 `lib/DraftStore.tsx` 拿对象引用当版本标识是同一个取舍。
 //
+// **贴进来的图也是草稿的一部分**，在途的上传同理：传一张截图要几秒，这期间面板被切走
+// 的话，传完那张图得落回原来那份草稿里，而不是跟着卸载的组件一起丢掉。
+//
 // 单独一份而不并进 `lib/DraftStore.tsx`：那份是 Context + Provider，形状按回复框/新建框
 // 定（正文 + 附件 + 在途上传 + 随手记回链）；这里要的是「新建那条的草稿 + 哪几条在编辑
 // + 哪几个位置有写在飞」。备忘的两个写入点本来就共用模块级 store（taskMemoStore.ts），
 // 放一块更一致。
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore, type SetStateAction } from "react";
+import type { UploadingFile } from "../task-detail/Attachments.tsx";
 
 /**
  * 一个写入位置：`null` = 新建那条，字符串 = 那条备忘。
@@ -34,17 +38,23 @@ export type MemoSlot = string | null;
 
 const keyOf = (slot: MemoSlot) => (slot === null ? "new" : `memo:${slot}`);
 
-/** 一格草稿：正文 + 版本号。每改一次版本 +1，提交时捕获、收尾时比对。 */
-type DraftSlot = { text: string; rev: number };
+/** 一份草稿：正文 + 贴进来的附件路径。 */
+export type MemoDraft = { text: string; attachments: readonly string[] };
+
+/** 一格草稿 + 版本号。正文或附件每改一次版本 +1，提交时捕获、收尾时比对。 */
+type DraftSlot = MemoDraft & { rev: number };
 
 type Entry = {
   composing: DraftSlot | null;
   edits: Readonly<Record<string, DraftSlot>>;
   /** 有写在飞的位置（keyOf 后的键）。跨面板卸载活着 —— 这就是「在途保存的所有权」。 */
   pending: ReadonlySet<string>;
+  /** 各位置在途的上传（keyOf 后的键）。同样跨卸载：传完要落回这一格的草稿。 */
+  uploads: Readonly<Record<string, readonly UploadingFile[]>>;
 };
 
-const EMPTY: Entry = { composing: null, edits: {}, pending: new Set() };
+const EMPTY: Entry = { composing: null, edits: {}, pending: new Set(), uploads: {} };
+const NO_UPLOADS: readonly UploadingFile[] = [];
 
 const entries = new Map<string, Entry>();
 const listeners = new Map<string, Set<() => void>>();
@@ -54,37 +64,68 @@ function snapshot(taskId: string): Entry {
 }
 
 function set(taskId: string, next: Entry): void {
-  // 空了就把整条记录删掉：Map 不该随着翻过的任务一直长。在途集合也要算进「空」的判据，
-  // 否则一发写飞着的任务会被当成没状态清掉，回来时占位已经没了。
-  const empty = next.composing === null && !Object.keys(next.edits).length && !next.pending.size;
+  // 空了就把整条记录删掉：Map 不该随着翻过的任务一直长。在途的写和上传都要算进「空」的
+  // 判据，否则一发飞着的任务会被当成没状态清掉，回来时占位已经没了。
+  const empty = next.composing === null && !Object.keys(next.edits).length && !next.pending.size
+    && !Object.keys(next.uploads).length;
   if (empty) entries.delete(taskId);
   else entries.set(taskId, next);
   for (const listener of listeners.get(taskId) ?? []) listener();
 }
 
-/** 下一个版本号。同一格每次改动都 +1，不复用旧号。 */
-const bump = (current: DraftSlot | undefined, text: string): DraftSlot => ({
-  text,
-  rev: (current?.rev ?? 0) + 1,
-});
+const slotOf = (entry: Entry, slot: MemoSlot): DraftSlot | undefined =>
+  (slot === null ? entry.composing ?? undefined : entry.edits[slot]);
 
-/** 新建那条的草稿。传 null = 收起 composer（取消，或者已经存上了）。 */
-export function setMemoComposerDraft(taskId: string, text: string | null): void {
-  const current = snapshot(taskId);
-  set(taskId, { ...current, composing: text === null ? null : bump(current.composing ?? undefined, text) });
+function withSlot(entry: Entry, slot: MemoSlot, next: DraftSlot | null): Entry {
+  if (slot === null) return { ...entry, composing: next };
+  const edits = { ...entry.edits };
+  if (next === null) delete edits[slot];
+  else edits[slot] = next;
+  return { ...entry, edits };
 }
 
-/** 某条的编辑草稿。传 null = 退出这条的编辑态（取消、Esc，或者已经存上了）。 */
-export function setMemoEditDraft(taskId: string, memoId: string, text: string | null): void {
-  const current = snapshot(taskId);
-  const edits = { ...current.edits };
-  if (text === null) delete edits[memoId];
-  else edits[memoId] = bump(current.edits[memoId], text);
-  set(taskId, { ...current, edits });
+function withUploads(entry: Entry, slot: MemoSlot, next: readonly UploadingFile[]): Entry {
+  const uploads = { ...entry.uploads };
+  if (next.length) uploads[keyOf(slot)] = next;
+  else delete uploads[keyOf(slot)];
+  return { ...entry, uploads };
 }
 
-const slotRev = (entry: Entry, slot: MemoSlot): number =>
-  (slot === null ? entry.composing?.rev : entry.edits[slot]?.rev) ?? 0;
+/**
+ * 设一格草稿。传 null = 收起这一格（取消、Esc，或者已经存上了）。
+ *
+ * 收起时这一格还在传的附件一并掐掉：草稿都不要了，传完也没处落；不掐的话它会在背后
+ * 把一份已经关掉的草稿又撑出来。
+ */
+export function setMemoDraft(taskId: string, slot: MemoSlot, draft: MemoDraft | null): void {
+  const current = snapshot(taskId);
+  if (draft === null) {
+    for (const upload of current.uploads[keyOf(slot)] ?? []) upload.abort();
+    return void set(taskId, withUploads(withSlot(current, slot, null), slot, []));
+  }
+  const rev = (slotOf(current, slot)?.rev ?? 0) + 1;
+  set(taskId, withSlot(current, slot, { text: draft.text, attachments: draft.attachments, rev }));
+}
+
+/** 只改这一格的附件（上传落地、摘掉一张）。这一格已经收起就什么都不做。 */
+export function updateMemoAttachments(
+  taskId: string,
+  slot: MemoSlot,
+  update: (current: readonly string[]) => readonly string[],
+): void {
+  const draft = slotOf(snapshot(taskId), slot);
+  if (!draft) return;
+  setMemoDraft(taskId, slot, { text: draft.text, attachments: update(draft.attachments) });
+}
+
+/** 这一格在途的上传。`useAttachments` 的 pending 受控于这里，所以面板卸载了也还在。 */
+export function setMemoUploads(taskId: string, slot: MemoSlot, update: SetStateAction<UploadingFile[]>): void {
+  const current = snapshot(taskId);
+  const before = [...(current.uploads[keyOf(slot)] ?? NO_UPLOADS)];
+  set(taskId, withUploads(current, slot, typeof update === "function" ? update(before) : update));
+}
+
+const slotRev = (entry: Entry, slot: MemoSlot): number => slotOf(entry, slot)?.rev ?? 0;
 
 /**
  * 占住一个位置准备写，返回**此刻的草稿版本号**（写完拿它调 `finishMemoWrite`）。
@@ -115,23 +156,23 @@ export function finishMemoWrite(taskId: string, slot: MemoSlot, rev: number, cle
   pending.delete(keyOf(slot));
   // 「这一版是我提交的那一版」才轮得到我清。
   const mine = clearDraft && slotRev(current, slot) === rev;
-  if (!mine) return void set(taskId, { ...current, pending });
-  if (slot === null) return void set(taskId, { ...current, pending, composing: null });
-  const edits = { ...current.edits };
-  delete edits[slot];
-  set(taskId, { ...current, pending, edits });
+  set(taskId, mine ? withSlot({ ...current, pending }, slot, null) : { ...current, pending });
 }
 
 export type TaskMemoDrafts = {
-  /** 新建那条的草稿。null = composer 没开；`""` = 开着但还没打字。 */
-  composing: string | null;
+  /** 新建那条的草稿。null = composer 没开；正文 `""` = 开着但还没打字。 */
+  composing: MemoDraft | null;
   /** memoId → 这条正在编辑的草稿。不在表里 = 这条是读态。 */
-  edits: Readonly<Record<string, string>>;
+  edits: Readonly<Record<string, MemoDraft>>;
   /** 有任何一发写在飞 —— 面板据此整体禁用（口径同原来的 busy，只是寿命跨卸载）。 */
   busy: boolean;
   /** 这个位置上有写在飞。 */
   pendingOn: (slot: MemoSlot) => boolean;
+  /** 这个位置上在途的上传。 */
+  uploadsOn: (slot: MemoSlot) => readonly UploadingFile[];
 };
+
+const draftOf = ({ text, attachments }: DraftSlot): MemoDraft => ({ text, attachments });
 
 export function useTaskMemoDrafts(taskId: string): TaskMemoDrafts {
   const entry = useSyncExternalStore(
@@ -147,11 +188,12 @@ export function useTaskMemoDrafts(taskId: string): TaskMemoDrafts {
     () => snapshot(taskId),
     () => EMPTY,
   );
-  // 版本号是内部记账，不往组件里漏：它们只要正文。
+  // 版本号是内部记账，不往组件里漏：它们只要正文和附件。
   return useMemo(() => ({
-    composing: entry.composing?.text ?? null,
-    edits: Object.fromEntries(Object.entries(entry.edits).map(([memoId, slot]) => [memoId, slot.text])),
+    composing: entry.composing ? draftOf(entry.composing) : null,
+    edits: Object.fromEntries(Object.entries(entry.edits).map(([memoId, slot]) => [memoId, draftOf(slot)])),
     busy: entry.pending.size > 0,
     pendingOn: (slot: MemoSlot) => entry.pending.has(keyOf(slot)),
+    uploadsOn: (slot: MemoSlot) => entry.uploads[keyOf(slot)] ?? NO_UPLOADS,
   }), [entry]);
 }
