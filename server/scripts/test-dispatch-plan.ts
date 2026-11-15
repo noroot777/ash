@@ -47,6 +47,7 @@ const [{ db, dbClient, ensureSchema }, schema, runs, runRoutes, groupRoutes, tas
   import("../src/dispatch-launch-start.js"),
 ]);
 const { DISPATCH_PLAN_RETURNED } = await import("../src/task-question-record.js");
+const { slotsTaken } = await import("../src/launch-slots.js");
 const { dispatchStartDebts, groups, projects, queueItems, sessions, taskPrerequisiteLaunches, taskPrerequisites, tasks } = schema;
 await ensureSchema();
 const api = new Hono();
@@ -382,6 +383,50 @@ try {
   assert.equal((await taskOf(WAITS)).status, "backlog");
   assert.equal((await taskOf(CUT)).status, "failed", "被打断判了失败的那条也没被补起");
   console.log("✓ 停掉在等前置的那条之后重启补起：不替它挂回开工请求，被打断的那条也不重跑");
+
+  // —— 首次派出同样认这一笔：五条一起派出，前四条占满同组名额，第五条（有前置）排在名额后面；用户先运行、再停掉它，
+  //    前四条腾出名额之后，首次那一趟轮到它时也不能把开工请求挂回去。
+  const HOLD = "保持运行等待引导"; // 假 claude 见到这句就一直跑，直到被停掉
+  const seedDispatched = async (groupId: string, count: number) => {
+    await db.insert(groups).values({ id: groupId, projectId, name: groupId, mode: "parallel", paused: false, createdAt: at });
+    const members = Array.from({ length: count }, (_, i) => `${groupId}-${i + 1}`);
+    await db.insert(tasks).values(members.map((id) => row(id, "backlog", { groupId, dispatchedBy: P, body: HOLD })));
+    await db.insert(dispatchStartDebts).values(members.map((taskId) => ({ taskId, groupId, leadTaskId: P, createdAt: at })));
+    return members;
+  };
+  const stopAll = async (members: string[]) => {
+    for (const id of members) runs.stopTask(id);
+    await waitFor(async () => (await Promise.all(members.map(settled))).every(Boolean), "停掉的假 CLI 没有收尾");
+  };
+  const first = await seedDispatched("dp-first", 5);
+  const fifth = first[4]!;
+  await db.insert(taskPrerequisites).values({ taskId: fifth, prerequisiteId: UP, createdAt: at });
+  const firstLaunch = launch.startDispatchedGroup("dp-first");
+  await waitFor(() => first.slice(0, 4).every((id) => runs.isRunning(id)), "前四条没有起跑");
+  assert.equal(slotsTaken("dp-first"), 4, "首次派出占满同组名额");
+  const fifthRequest = async () => (await db.select().from(taskPrerequisiteLaunches).where(eq(taskPrerequisiteLaunches.taskId, fifth))).at(0)?.requestedAt ?? null;
+  assert.equal((await send("POST", `/tasks/${fifth}/run`)).body.waiting, true, "第五条手动运行，挂在前置上");
+  assert.equal((await send("POST", `/tasks/${fifth}/stop`)).status, 200);
+  assert.equal(await fifthRequest(), null);
+  await stopAll(first.slice(0, 4));
+  await firstLaunch;
+  assert.equal(await fifthRequest(), null, "首次那一趟轮到停掉的那条时没有替它把开工请求挂回去");
+  assert.equal((await taskOf(fifth)).status, "backlog");
+  console.log("✓ 首次派出排在名额后面的那条被停掉：轮到它时也不起、不挂回开工请求");
+
+  // —— 补起守同组名额：六条欠着起跑的一起补起，同时在跑的不超过四条，前面的跑完再接着起。
+  const six = await seedDispatched("dp-six", 6);
+  await launch.recoverDispatchLaunchStarts();
+  await waitFor(() => six.filter((id) => runs.isRunning(id)).length === 4, "补起没有起满四条");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(six.filter((id) => runs.isRunning(id)).length, 4, "同时在跑的不超过同组名额");
+  assert.equal(slotsTaken("dp-six"), 4);
+  const firstFour = six.filter((id) => runs.isRunning(id));
+  await stopAll(firstFour);
+  const rest = six.filter((id) => !firstFour.includes(id));
+  await waitFor(() => rest.every((id) => runs.isRunning(id)), "前四条停下之后剩下的两条没有接着起");
+  await stopAll(rest);
+  console.log("✓ 重启补起六条：同时最多四条，腾出名额再起剩下的");
 } catch (error) {
   failure = error;
   console.error(error);

@@ -7,21 +7,13 @@
 //     删掉、整组被暂停（用户按的停，恢复全组时他自己会起）——都算还清；
 //   · **撤销是终局的**：用户对这一条按了停止，停止那一下就把它这一行划掉（`forgetDispatchStart`，跟开工判定同一把
 //     前置锁）。之后的退避重试、重启补起只认还在的行，不会从「它还是 backlog、还能起」反推用户仍要它开工；
-//   · **补起只起还欠着的那几条**，逐条起（排在队列里的推它那条队列），不重放整组：整组重放会把别的成员——包括被停掉
-//     的那条——一起重新挂回去。
+//   · **所有自动起跑都走同一条路**（`launchOwed`）：首次派出、退避重试、重启补起都照「运行分组」起，同组名额跟前置放行
+//     共用；每一条轮到时在开工判定那把前置锁里核它这一行还在（`stillOwed`）——没了就不起，不论它在名额后面排了多久。
 // 起一趟没还清（或数都没数成）就留账退避再起，几次都不成就留给下一次启动；重启那一扫读库失败同样退避重来。
 import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { dispatchStartDebts, groups, queueItems, taskPrerequisiteLaunches, tasks } from "./db/schema.js";
-import { isAcceptingTask } from "./acceptance-lock.js";
-import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
-import { holdForPrerequisitesLocked, withPrerequisiteLock } from "./prerequisite-gate.js";
-import { seatThenStart } from "./queue-seat.js";
-import { claimOwnTurn, releaseTurn } from "./runs.js";
-import { advanceQueue, groupLaunchTargets, runGroupInBackground } from "./scheduler.js";
-import { readActionFacts } from "./task-actions.js";
-import { runVerdict } from "./task-action-verdicts.js";
-import { resumeOrRunTask } from "./task-resume.js";
+import { dispatchStartDebts, groups, taskPrerequisiteLaunches } from "./db/schema.js";
+import { groupLaunchTargets, runGroupInBackground } from "./scheduler.js";
 
 /** 起一趟没还清时，隔多久再起（毫秒）；用完还没还清就等下一次启动。 */
 const START_RETRY_MS = [2_000, 10_000, 60_000, 300_000];
@@ -54,25 +46,23 @@ export async function owedDispatchStarts(groupId: string): Promise<string[]> {
   return owed;
 }
 
+/** 开工判定那把前置锁里问的那一句：这一条「派出去就开工」的那一笔还在不在（停止键在同一把锁里划掉它）。 */
+async function stillOwed(taskId: string): Promise<boolean> {
+  const [debt] = await db.select({ taskId: dispatchStartDebts.taskId }).from(dispatchStartDebts).where(eq(dispatchStartDebts.taskId, taskId));
+  return !!debt;
+}
+
 /**
- * 起一条还欠着的。判据同「运行」那颗键（runVerdict、前置、回合锁、验收锁、队列占位），只是「这一行还在」要跟开工判定
- * 在同一把前置锁里核：停止那一下先划掉这一行，这里就不会再替它挂一笔「前置站齐就开工」。
+ * 首次派出、退避重试、重启补起都走这一条：照「运行分组」起（同组同时在跑的名额、起跑回执、失败交代、队列推进都是
+ * 那一套，跟前置放行共用名额），每一条轮到时在前置锁里核它那一笔还在——被停掉的那条排在名额后面也不会被起。
+ * runGroupInBackground 要等组里的成员轮完才回来。
  */
-async function startOwedTask(taskId: string): Promise<void> {
-  const [queued] = await db.select({ queueId: queueItems.queueId }).from(queueItems).where(eq(queueItems.taskId, taskId));
-  if (queued) return advanceQueue(queued.queueId);
-  const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId));
-  if (!task || !runVerdict(await readActionFacts(task)).ok) return;
-  if (await preparePendingCheckpointStart(taskId)) return;
-  const hold = await withPrerequisiteLock(taskId, async () => {
-    const [debt] = await db.select({ taskId: dispatchStartDebts.taskId }).from(dispatchStartDebts).where(eq(dispatchStartDebts.taskId, taskId));
-    return debt ? holdForPrerequisitesLocked(taskId, { source: "group" }) : { reason: "已撤销" };
-  });
-  if (hold) return;
-  const turn = claimOwnTurn(taskId, "single");
-  if (!turn) return;
-  if (isAcceptingTask(taskId)) return releaseTurn(taskId, turn);
-  await seatThenStart(taskId, turn, () => resumeOrRunTask(taskId, { reason: "group", turnHeld: turn }));
+async function launchOwed(groupId: string): Promise<void> {
+  try {
+    await runGroupInBackground(groupId, stillOwed);
+  } catch (error) {
+    console.error(`[ash] 起派出的那一组出错 ${groupId}:`, error);
+  }
 }
 
 /** 核一遍这一组还欠谁；没还清（或核不了）就退避，起还欠着的那几条，再核。 */
@@ -92,7 +82,7 @@ async function settleDispatchStarts(groupId: string, attempt: number): Promise<v
   timer(wait, () => void relaunchOwed(groupId).then(() => settleDispatchStarts(groupId, attempt + 1)));
 }
 
-/** 逐条起这一组还欠着的（每条各自兜底，一条起不来不挡别的）。 */
+/** 还有人欠着才起一趟（退避、重启用；刚派出时全组都欠着，直接起）。 */
 async function relaunchOwed(groupId: string): Promise<void> {
   let owed: string[];
   try {
@@ -101,25 +91,17 @@ async function relaunchOwed(groupId: string): Promise<void> {
     console.error(`[ash] 读派出那一组还欠谁起跑失败 ${groupId}:`, error);
     return;
   }
-  await Promise.all(owed.map((taskId) => startOwedTask(taskId)
-    .catch((error) => console.error(`[ash] 补起派出的任务出错 ${taskId}:`, error))));
+  if (owed.length) await launchOwed(groupId);
 }
 
-/**
- * 刚派出：整组都是这一笔新建的、都欠着，照「运行分组」起一趟（并发上限、队列、前置全按它来）。runGroupInBackground
- * 要等组里的成员轮完才回来，回来之后核账。
- */
+/** 刚派出：整组都是这一笔新建的、都欠着，起一趟，轮完之后核账。 */
 export async function startDispatchedGroup(groupId: string): Promise<void> {
-  try {
-    await runGroupInBackground(groupId);
-  } catch (error) {
-    console.error(`[ash] 派出的那一组起跑出错 ${groupId}:`, error);
-  }
+  await launchOwed(groupId);
   await settleDispatchStarts(groupId, 0);
 }
 
 /**
- * 重启时补起：上一个进程派出了、还没还清起跑的那几条，逐条起（不重放整组）。只发起、不等——启动流程不能被它挂住。
+ * 重启时补起：上一个进程派出了、还没还清起跑的那几组，各起一趟（只有还欠着的会被起）。只发起、不等——启动流程不能被它挂住。
  * 读库失败退避再扫。
  */
 export async function recoverDispatchLaunchStarts(attempt = 0): Promise<void> {
