@@ -1,4 +1,4 @@
-/* 回复框，和它正上方那一行排着的输入。答题卡在 sheet.css。 */
+/* 回复框、等你裁定时框顶的那一行，和它正上方那一行排着的输入。答题卡在 sheet.css。 */
 .reply { position: relative; flex: none; padding: 0 24px 16px; }
 .rb { position: relative; max-width: 790px; margin: 0 auto; border: 1px solid var(--line2); border-radius: 12px; background: var(--panel); box-shadow: var(--surface-shadow); transition: border-color var(--dur-1), box-shadow var(--dur-1); }
 .rb:has(textarea:focus-visible) { border-color: color-mix(in oklab, var(--ink) 30%, var(--line2)); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ink) 6%, transparent), var(--surface-shadow); }
@@ -17,6 +17,18 @@
 .rb-send:disabled { opacity: 0.35; }
 .rb-send.has-label { padding: 0 12px; }
 .rb-send .icon { width: 15px; height: 15px; stroke-width: 2; }
+
+/* —— 等你裁定：几种下一步排成一行，在框顶。没有事在等，这一段不存在 —— */
+.rb-ask { border-bottom: 1px solid var(--line); animation: ask-in var(--dur-2) var(--ease-out) backwards; }
+@keyframes ask-in { from { opacity: 0; transform: translateY(4px); } }
+.rule-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 5px 6px; }
+.rule-opt { height: 28px; padding: 0 10px; border-radius: 7px; color: var(--muted); font-size: 13px; white-space: nowrap; transition: background-color var(--dur-1), color var(--dur-1); }
+.rule-opt:hover { background: var(--raised); color: var(--ink); }
+.rule-opt[aria-pressed="true"] { background: var(--overlay); color: var(--ink); font-weight: 500; }
+.rb-rounds { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px 2px; color: var(--muted); }
+.rb-rounds .seg { background: var(--overlay); }
+.rb-rounds .seg button { min-width: 30px; font-variant-numeric: tabular-nums; }
+.rb-rounds small { color: var(--faint); font-size: 12px; }
 
 /* 指到一颗键：它会做什么浮在上面，不占常驻位置。 */
 [data-tip] { position: relative; }

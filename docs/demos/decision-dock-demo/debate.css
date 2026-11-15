@@ -1,0 +1,37 @@
+/* 辩论：会话里的一块。气泡那种画法沿用审查结论那颗气泡（mock.css 的 .rv），这里只写它多出来的。 */
+.db[data-anim="debate"] { animation: arrive 260ms var(--ease-out) backwards; }
+.db-text .run-dot { align-self: flex-start; margin-top: 7px; }
+.db-say { min-width: 0; }
+.db-say b { margin-right: 8px; color: color-mix(in oklab, var(--ink) 70%, var(--muted)); font-weight: 500; }
+.db-say.is-new { animation: arrive 260ms var(--ease-out) backwards; }
+/* 辩的时候只留最新一句，最多两行：它一直在换，不往下长。 */
+.db.is-live .db-say { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.db-count { flex: none; margin-left: auto; padding-left: 4px; color: var(--faint); font-size: 12px; font-style: normal; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* 辩完了、还等你裁：这一句是结论，用正文的字。裁完它又回到小灰字。 */
+.db.is-done .db-text { padding: 8px 15px 9px; color: var(--ink); font-size: 13px; line-height: 1.65; }
+.db.is-done .db-say b { color: var(--ink); }
+
+/* 逐段记录：左边写谁，右边是那一句。两种画法共用。 */
+.db-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 22px; gap: 10px; padding: 4px 0; }
+.db-row.is-new { animation: arrive 260ms var(--ease-out) backwards; }
+.db-row p { margin: 0; }
+.db-who { color: var(--faint); font-size: 12px; line-height: 21px; white-space: nowrap; }
+.db-stance { color: var(--muted); font-size: 12px; line-height: 21px; }
+.db-gist { display: block; width: 100%; color: var(--ink); line-height: 1.65; text-align: left; overflow-wrap: anywhere; }
+.db-gist em { margin-left: 8px; color: var(--faint); font-size: 12px; font-style: normal; white-space: nowrap; }
+button.db-gist:hover em, .db-gist[aria-expanded="true"] em { color: var(--ink); }
+.db-gist.is-live { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.db-full { margin: 4px 0 6px; color: var(--muted); animation: lane-unfold var(--dur-2) var(--ease-out) backwards; }
+.db-full p { margin: 6px 0; line-height: 1.75; }
+.db-row .key { opacity: 0; transition: opacity var(--dur-1); }
+.db-row:is(:hover, :focus-within) .key { opacity: 1; }
+
+/* 一段缩进的记录：左缘跟回合正文对齐，一条细线，没有框。 */
+.db-block { margin: 0 0 20px 30px; border-left: 1px solid var(--line2); padding: 0 0 0 14px; animation: lane-unfold var(--dur-2) var(--ease-out) backwards; }
+.fold.is-past + .db-block { margin-top: -2px; }
+
+@media (max-width: 760px) {
+  .db-row { grid-template-columns: 40px minmax(0, 1fr) 22px; gap: 8px; }
+  .db-block { margin-left: 0; }
+}
+@media (hover: none) { .db-row .key { opacity: 1; } }

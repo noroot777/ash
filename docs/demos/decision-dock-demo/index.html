@@ -5,11 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext x='5' y='25' font-size='28' font-family='sans-serif' font-weight='bold' fill='%23111'%3Ea%3C/text%3E%3C/svg%3E">
-  <title>ash · 等你回的事是一张答题卡</title>
+  <title>ash · 等你回的事在回复框上</title>
   <link rel="stylesheet" href="page.css">
   <link rel="stylesheet" href="mock.css">
   <link rel="stylesheet" href="dock.css">
   <link rel="stylesheet" href="sheet.css">
+  <link rel="stylesheet" href="debate.css">
 </head>
 <body>
   <svg class="icon-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -44,8 +45,8 @@
 
   <main class="page">
     <section class="intro">
-      <h1>等你拍板的事，是回复框上的一张答题卡。</h1>
-      <p>第三版。提问和裁定是同一张卡：一块白底，用细线分成几段——题目、选项、你自己写的那一行，卡里不再套框。辩论是裁定卡里的一段记录，裁完进右侧的审查记录，会话里不多一个字。排着的输入是回复框上方一行，引导会话和撤回都在（已派 IEa3h1XX4Ax4）。</p>
+      <h1>等你拍板的事在回复框上；辩论是会话里的一块。</h1>
+      <p>第四版。它问你：答题卡定了，已派 Nk9PPhtTdRJf。等你裁定：回到第一版，几种下一步在回复框顶上；辩论留在会话里，但不是一段一段的气泡——整场是一块，辩的时候只写最新一句，辩完写结论，点开才是逐段记录。另一种画法是一段缩进的记录，用开关切。排着的输入已派 IEa3h1XX4Ax4。</p>
     </section>
 
     <section class="controls" aria-label="演示开关">
@@ -64,8 +65,8 @@
       <div class="control" data-for="rule"><span>时刻</span><div class="seg" data-key="moment">
         <button type="button" data-value="open">刚驳回</button><button type="button" data-value="debating">辩论中</button><button type="button" data-value="debated">辩完了</button><button type="button" data-value="ruled">裁完了</button>
       </div></div>
-      <div class="control" data-for="rule"><span>辩论放哪</span><div class="seg" data-key="place">
-        <button type="button" data-value="sheet">裁定卡里</button><button type="button" data-value="feed">会话里单独一块</button>
+      <div class="control" data-for="rule"><span>辩论的画法</span><div class="seg" data-key="debate">
+        <button type="button" data-value="bubble">一颗气泡</button><button type="button" data-value="block">一段记录</button>
       </div></div>
       <button type="button" class="play" id="reset"><svg class="icon"><use href="#i-redo"/></svg>重来</button>
     </section>
@@ -81,6 +82,7 @@
   <script src="parts.js"></script>
   <script src="dock.js"></script>
   <script src="sheet.js"></script>
+  <script src="debate.js"></script>
   <script src="scenes.js"></script>
   <script src="census.js"></script>
   <script src="app.js"></script>

@@ -1,4 +1,4 @@
-// 回复框本身，以及它正上方那一行排着的输入。有事等你回时它长成的答题卡在 sheet.js。
+// 回复框本身、等你裁定时框顶多出的那一行下一步，以及它正上方那一行排着的输入。它问你时长成的答题卡在 sheet.js。
 (() => {
   const { esc, icon, key } = window.P;
   const D = window.DEMO;
@@ -15,6 +15,24 @@
 
   function plain(placeholder, tools = "", value = "", agent) {
     return box(`${text(value, placeholder)}${bar({ send: sendKey("", !value.trim()), tools, agent })}`);
+  }
+
+  // —— 等你裁定：几种下一步排在框顶。点一个，框就变成那一步——要交代的话写在框里，发送键写着这一按的名字；再点一下回到平常的回复 ——
+  function rule(st) {
+    const R = D.rule;
+    // 辩论中、裁完以后都是平常的回复框：辩到哪了写在会话里那一块上，这里不再抄一遍。
+    if (st.phase === "ruled" || st.phase === "debating") return plain("回复…", "", st.note);
+    const kinds = ["upheld", "withdrawn", "deferred", ...(st.phase === "open" ? ["debate"] : [])];
+    const row = kinds.map((kind) => {
+      const choice = R.choices[kind];
+      return `<button type="button" class="rule-opt" data-act="choose" data-kind="${kind}" aria-pressed="${st.choice === kind}" data-tip="${esc(choice.tip)}">${esc(choice.label)}</button>`;
+    }).join("");
+    const chosen = st.choice ? R.choices[st.choice] : null;
+    const middle = st.choice === "debate"
+      ? `<div class="rb-rounds">来回<div class="seg">${[1, 2, 3].map((n) => `<button type="button" data-act="rounds" data-n="${n}" aria-pressed="${st.rounds === n}">${n}</button>`).join("")}</div><small>审查者先说，共 ${st.rounds * 2 + 1} 段</small></div>`
+      : text(st.note, chosen ? chosen.hint : "回复…");
+    const send = chosen ? sendKey(chosen.send, false) : sendKey("", !st.note.trim());
+    return box(`<div class="rb-ask" data-anim="ask"><div class="rule-row" role="group" aria-label="怎么裁定">${row}</div></div>${middle}${bar({ send })}`);
   }
 
   // —— 排着的输入：回复框上方一行。你自己最早那条和「引导会话」不用点开就在这一行上 ——
@@ -43,5 +61,5 @@
     return `${rail}${plain("回复…", "", st.draft, "codex · xhigh")}`;
   }
 
-  window.Dock = { sendKey, bar, text, box, plain, queue };
+  window.Dock = { sendKey, bar, text, box, plain, rule, queue };
 })();

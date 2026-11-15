@@ -1,9 +1,10 @@
 // 三个场面。每个场面给出：初始状态、会话怎么画、回复框怎么画、点了之后状态怎么变，以及现在线上的样子。
 (() => {
-  const { esc, icon, paras, turn, unfold, me, qa, reviewer, foot, running, key } = window.P;
+  const { esc, icon, paras, turn, unfold, me, qa, reviewer, foot, running } = window.P;
   const D = window.DEMO;
   const Dock = window.Dock;
   const Sheet = window.Sheet;
+  const Debate = window.Debate;
   const shot = (file, width, caption) => `<figure><img src="before/${file}.webp" width="${width}" alt="${esc(caption)}" loading="lazy"><figcaption>${esc(caption)}</figcaption></figure>`;
   const runLine = (label) => `<div class="run-line"><span class="run-dot"></span>${esc(label)}</div>`;
 
@@ -58,14 +59,11 @@
   // —— 等你裁定（含辩论）——
   const R = D.rule;
   const segsFor = (rounds) => [R.segs[0], R.segs[1], ...R.extra.slice(0, (rounds - 1) * 2), R.segs[2]];
-  const ruledLine = (st) => (st.ruled === "upheld" ? (st.sentNote ? "照你这段接着改" : "你让它照第 1 轮报告接着改")
-    : st.ruled === "withdrawn" ? "你裁定第 1、3 条作废，这一轮不用改了"
-      : `第 1、3 条转给了新任务「<a href="#">${esc(R.deferredTask)}</a>」，还没开工`);
   const rule = {
     init(ui, api) {
       const at = ui.moment;
       const st = { phase: at, shown: at === "debated" || at === "ruled" ? 3 : at === "debating" ? 1 : 0, choice: null, note: "", rounds: 1,
-        open: new Set(), ruled: at === "ruled" ? "upheld" : null, sentNote: "", said: [], folded: false, side: false };
+        open: new Set(), ruled: at === "ruled" ? "upheld" : null, sentNote: "", said: [] };
       if (st.phase === "debating") rule.play(st, api);
       return st;
     },
@@ -84,41 +82,30 @@
     feed(st, ui) {
       const segs = segsFor(st.rounds);
       const dispute = R.dispute;
-      // 会话里只有三样：它干的活、审查结论、它驳回时说的话。辩论一个字都不在这里。
       let html = turn({ agent: R.agent, fold: R.work.fold, body: paras(R.work.prose) })
         + reviewer({ id: "verdict", text: R.verdict.text, head: R.verdict.head })
         + turn({ agent: R.agent, fold: dispute.fold, body: `<p>${esc(dispute.gist)}</p>`
           + unfold({ id: "reason", ...dispute.reason, open: st.open.has("reason") })
           + unfold({ id: "defer", ...dispute.defer, open: st.open.has("defer") }) });
-      const inFeed = ui.place === "feed";
-      if (inFeed && st.phase === "ruled" && st.shown) {
-        const open = st.open.has("debate");
-        html += `<button type="button" class="fold is-past" data-act="toggle" data-id="debate" aria-expanded="${open}">${icon("chevron")}辩了 ${st.shown} 段</button>`;
-        if (open) html += `<div class="thread-block" data-anim="past">${Sheet.thread(st, segs)}</div>`;
-      } else if (inFeed && (st.shown || st.phase === "debating")) {
-        html += `<div class="thread-block">${Sheet.thread(st, segs, { quotable: st.phase === "debated", live: st.phase === "debating" })}</div>`;
-      }
+      if (st.phase !== "ruled") html += foot(esc(R.openNote), { tone: "open" });
+      // 整场辩论在会话里只占一块：辩的时候它在原地换字，不往下长；裁完缩成一行。
+      if (st.shown || st.phase === "debating") html += ui.debate === "block" ? Debate.block(st, segs) : Debate.bubble(st, segs);
       html += st.said.map((text) => me(text)).join("");
       if (st.phase === "ruled") {
-        // 裁完了：会话里只留你这一句。整场辩论和结论在右侧「审查」格的记录里。
-        const record = !inFeed && st.shown ? ` · <a href="#" data-act="side">辩了 ${st.shown} 段</a>` : "";
-        html += (st.sentNote ? me(st.sentNote, { fresh: st.fresh }) : "") + foot(ruledLine(st) + record, { right: true, fresh: st.fresh });
+        html += (st.sentNote ? me(st.sentNote, { fresh: st.fresh }) : "")
+          + foot(st.ruled === "upheld" ? (st.sentNote ? "照你这段接着改" : "你让它照第 1 轮报告接着改")
+            : st.ruled === "withdrawn" ? "你裁定第 1、3 条作废，这一轮不用改了"
+              : `第 1、3 条转给了新任务「<a href="#">${esc(R.deferredTask)}</a>」，还没开工`, { right: true, fresh: st.fresh });
         if (st.ruled === "upheld") html += running(R.agent, "正在读第 1 轮报告", st.fresh);
       }
       return html;
     },
-    side(st) {
-      if (!st.side) return "";
-      return `<aside class="side" data-anim="side" aria-label="审查记录"><header><b>第 1 轮审查</b>${key("side", "x", "关上")}</header>
-        <p class="side-line">${esc(R.record)}</p>${Sheet.thread(st, segsFor(st.rounds))}<p class="side-line">你裁定：${esc(R.choices[st.ruled].label)}</p></aside>`;
-    },
-    dock: (st, ui) => Sheet.rule(st, segsFor(st.rounds), ui),
+    dock: (st) => Dock.rule(st),
     sync: (st, value) => { st.note = value; },
-    canSend: (st, value) => (st.phase === "debating" ? false : !!st.choice || !!value.trim()),
+    canSend: (st, value) => !!st.choice || !!value.trim(),
     act(name, data, st, api) {
-      if (name === "choose") { st.choice = st.choice === data.kind ? null : data.kind; if (st.choice && st.choice !== "debate") api.focus(); }
+      if (name === "choose") { st.choice = st.choice === data.kind ? null : data.kind; if (st.choice !== "debate") api.focus(); }
       if (name === "rounds") st.rounds = +data.n;
-      if (name === "side") st.side = !st.side;
       if (name === "quote") {
         const seg = segsFor(st.rounds)[+data.i];
         const quoted = `〔${seg.side === "reviewer" ? "审查者" : "执行者"}第 ${+data.i + 1} 段〕${seg.gist}`;
@@ -127,17 +114,13 @@
         api.focus();
       }
       if (name === "send") {
-        if (st.phase === "ruled" || !st.choice) { if (st.note.trim()) { st.said.push(st.note.trim()); st.note = ""; } return; }
-        if (st.choice === "debate") { st.phase = "debating"; st.shown = 0; st.choice = null; rule.play(st, api); return; }
-        st.ruled = st.choice; st.sentNote = st.note.trim(); st.phase = "ruled"; st.choice = null; st.note = ""; st.fresh = true;
+        if (!st.choice) { if (st.note.trim()) { st.said.push(st.note.trim()); st.note = ""; } return; }
+        if (st.choice === "debate") { st.phase = "debating"; st.shown = 0; st.choice = null; st.open.delete("debate"); rule.play(st, api); return; }
+        // 裁完，摊开的逐段记录跟着收起：会话里只留那一行。
+        st.ruled = st.choice; st.sentNote = st.note.trim(); st.phase = "ruled"; st.choice = null; st.note = ""; st.fresh = true; st.open.delete("debate");
       }
     },
-    digit(n, st) {
-      if (st.folded || (st.phase !== "open" && st.phase !== "debated")) return null;
-      const kinds = ["upheld", "withdrawn", "deferred", ...(st.phase === "open" ? ["debate"] : [])];
-      return n <= kinds.length ? { name: "choose", data: { kind: kinds[n - 1] } } : null;
-    },
-    dismiss(st) { if (st.side) { st.side = false; return true; } if (st.choice) { st.choice = null; return true; } return false; },
+    dismiss(st) { if (st.choice) { st.choice = null; return true; } return false; },
     old: (ui) => (ui.moment === "open"
       ? `<div class="shots"><div class="shots-row">${shot("dispute-card", 420, "裁定在右侧「审查」格的这张卡上，会话里只有一颗「去裁定」把你送过来。四个出口各配一行说明。")}
           ${shot("debate-dialog", 500, "点「让双方辩论」弹出的确认框。")}</div>
@@ -146,15 +129,16 @@
           <div class="shots-row">${shot("dispute-card-debated", 420, "同一场辩论在「审查」格的裁定卡里又画一遍。这一栏太窄，所以还有一个「全宽阅读」。")}
           ${shot("debate-reader", 560, "「全宽阅读」是第三处：盖住整页的阅读层。")}</div></div>`),
     moves: [
-      ["会话里那颗「去裁定」，和右侧「审查」格里的裁定卡", "和提问是同一张答题卡：题目是「第 1、3 条它没改，接下来怎么办」，几种下一步横着排成一条"],
-      ["卡上执行者的那句话、两段折着的依据", "这是它自己那一回合说的话，留在会话左边；依据是正文下面两行可点开的字"],
-      ["四颗按钮各配一行「什么时候该点它」", "按钮原话不变；选中一格，那句话写在下面那一行的提示里"],
-      ["三个裁定确认框、框里的「要交代的话」", "选了哪一格，卡下面才多出一行：要交代的话写在这里，右边的键写着「发起修复」这类字"],
-      ["辩论确认框里的「辩几个来回」", "选「让双方辩论」，多出的那一行是 1 2 3 和「共几段」"],
-      ["会话里的辩论折叠卡、裁定卡里的回放、全宽阅读层", "只画一处：裁定卡里题目下面那一段浅底，左边写谁、右边是那一句，点开看全文。会话里一个字都不多"],
-      ["审查者收尾那段的自述立场", "记录的最后一段，那一句上面写着「收尾，它自己的立场：部分成立」"],
-      ["每段上的「用这段作要点」", "指到那一段才出的引号键，点了落进要交代的话并选中「让它接着改」"],
-      ["裁完之后", "卡收走。会话里只留右边一句「你让它接着改 · 辩了 3 段」；点「辩了 3 段」，整场记录和结论在右侧「审查」格里"],
+      ["会话里那颗「去裁定」，和右侧「审查」格里的裁定卡", "不用去别处：几种下一步就在回复框顶上，一直在，不会被后来的话挤掉"],
+      ["卡上执行者的那句话、两段折着的依据", "它说的话回到会话左边，是它那一回合的正文；依据是正文下面两行可点开的字"],
+      ["四颗按钮各配一行「什么时候该点它」", "按钮原话不变；那一行说明指到才浮出来，选中后写在输入框的提示里"],
+      ["三个裁定确认框、框里的「要交代的话」", "选一种下一步，回复框就变成它：要交代的话写在框里，发送键换成「发起修复」这类字"],
+      ["辩论确认框里的「辩几个来回」和那行说明", "选「让双方辩论」后，框里是 1 2 3 和「共几段」"],
+      ["会话里的辩论折叠卡（木槌、七格进度、徽章）", "会话里的一块，画法和审查结论那颗气泡一样。辩的时候它在原地换字：谁、刚说的那一句、第几段"],
+      ["裁定卡里的辩论回放、全宽阅读层", "只有这一块。点开它，逐段记录在它下面就地摊开：左边写谁，右边一句，再点看全文"],
+      ["审查者收尾那段的自述立场", "辩完以后，这一块上写的就是它：「审查者收尾 · 部分成立」和那一句建议"],
+      ["每段上的「用这段作要点」", "点开记录后，指到那一段才出的引号键，点了落进回复框并选中「让它接着改」"],
+      ["裁完之后", "这一块缩成一行小灰字「辩了 3 段，审查者收尾：部分成立」，还能点开；下面是你那一句裁定"],
       ["「时间线上这一档记作…」那行小字", "去掉了；记录里的叫法只在审查记录里出现"],
     ],
   };

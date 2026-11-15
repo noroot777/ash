@@ -4,7 +4,7 @@
   const SCENES = window.SCENES;
   const stage = document.getElementById("stage");
   const moves = document.getElementById("moves");
-  const ui = { scene: "ask", style: "new", askKind: "one", askMoment: "ready", moment: "open", place: "sheet" };
+  const ui = { scene: "ask", style: "new", askKind: "one", askMoment: "ready", moment: "open", debate: "bubble" };
   let st = null;
   let timers = [];
   let wantFocus = false;
@@ -37,7 +37,6 @@
       ${old ? old.top : ""}
       <div class="feed" id="feed"><div class="feed-col" id="feed-col"></div></div>
       <div class="reply" id="reply"></div>
-      <div id="side"></div>
     </div>${old && old.note ? `<p class="frame-note">${esc(old.note)}</p>` : ""}`;
   }
 
@@ -49,14 +48,9 @@
     const before = new Set([...stage.querySelectorAll("[data-anim]")].map((el) => el.dataset.anim));
     if (!stage.querySelector(".app") || old) stage.innerHTML = frame(old);
     const feed = document.getElementById("feed");
-    // 辩论记录自己能滚：重画以后停在原处，来了新的一段才跟到底。
-    const threadTop = wantBottom ? null : document.getElementById("thread")?.scrollTop;
     document.getElementById("head-tools").innerHTML = headTools();
     document.getElementById("feed-col").innerHTML = scene().feed(st, ui);
     document.getElementById("reply").innerHTML = old ? `${old.rail}${old.dock}` : scene().dock(st, ui);
-    document.getElementById("side").innerHTML = !old && scene().side ? scene().side(st, ui) : "";
-    const thread = document.getElementById("thread");
-    if (thread) thread.scrollTop = threadTop ?? thread.scrollHeight;
     stage.querySelectorAll("[data-anim]").forEach((el) => { if (before.has(el.dataset.anim)) el.style.animation = "none"; });
     st.fresh = false;
     st.freshSeg = null;
@@ -85,6 +79,18 @@
       scene().act(name, data, st, api);
     }
     paint();
+    if (name === "toggle" && st.open.has(data.id)) reveal(data.id);
+  }
+
+  // 就地摊开的那一段要是被回复框挡住了，会话往上让一让；它所属的那一块（比如辩论那颗气泡）不能被顶出去。
+  function reveal(id) {
+    const lane = stage.querySelector(`[data-anim="lane:${id}"]`);
+    const feed = document.getElementById("feed");
+    if (!lane || !feed) return;
+    const box = feed.getBoundingClientRect();
+    const over = lane.getBoundingClientRect().bottom + 12 - box.bottom;
+    const room = (lane.closest(".db") || lane.previousElementSibling || lane).getBoundingClientRect().top - 12 - box.top;
+    if (over > 0 && room > 0) feed.scrollTop += Math.min(over, room);
   }
 
   // —— 开关 ——
@@ -108,7 +114,7 @@
     if (event.target.closest("a[href='#']")) event.preventDefault();
     const target = event.target.closest("[data-act]");
     if (target && !target.disabled) { act(target.dataset.act, target.dataset); return; }
-    if (!event.target.closest(".pop, .rb, .side") && scene().dismiss && scene().dismiss(st)) paint();
+    if (!event.target.closest(".rb") && scene().dismiss && scene().dismiss(st)) paint();
   });
   stage.addEventListener("submit", (event) => event.preventDefault());
   stage.addEventListener("input", (event) => {
