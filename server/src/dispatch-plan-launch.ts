@@ -5,13 +5,12 @@
 // （createTasks 的 `atomic`）：认领那一问、分组、任务、前置、串行队列，加上
 //   · 答复：写成一条待发送消息（执行型，带答复身份），由待发送托盘送进会话——它本来就扛重启、扛「回合被
 //     占着」「同队前项还在跑」，这里不再自己 continueTask；
-//   · 起跑：dispatch_launch_starts 一行，这一组那一趟走完才删，进程没了重启补起（recoverDispatchLaunchStarts）。
+//   · 起跑：dispatch_launch_starts 一行，核实没人再欠起跑才销账，进程没了重启补起（dispatch-launch-start.ts）。
 // 任何一步失败整笔回滚：单子原样还在，一条任务都没留下，再按一次不会多建；认领落空同样整笔不落。所以没有
 // 「失败了把单子挂回去」的补偿写。开工起点这类仓库准备在事务之前做，失败时还没认领。
 //
 // 提交之后剩下的只是「让人看见」和「催一下」（读回、广播、通知派它的任务、前置视图、立刻起跑与投递），
 // 每一步各自兜底、互不挡路：任何一步抛错都不改变「已经派出」这个结果，也不挡后面的起跑。
-import { eq } from "drizzle-orm";
 import type { Context } from "hono";
 import type { DispatchPlan, DispatchPlanItem, DispatchRunTarget } from "@ash/shared/dispatch-plan";
 import { dispatchDefaultTarget, parseDispatchTarget } from "@ash/shared/dispatch-plan";
@@ -24,7 +23,7 @@ import { actorOf, ownerIdOf } from "./auth/context.js";
 import { visibleTaskIds } from "./auth/visibility.js";
 import { batchPrerequisiteEdges } from "./prerequisite-routes.js";
 import { republishPrerequisiteView } from "./prerequisite-view.js";
-import { runGroupInBackground } from "./scheduler.js";
+import { startDispatchedGroup } from "./dispatch-launch-start.js";
 import { answerRouteFor } from "./task-answer.js";
 import { claimQuestionAnswerWithin, type QuestionClaim } from "./task-question-record.js";
 import { deliverPendingMessages, pendingMessageRow, publishPendingMessages } from "./pending-messages.js";
@@ -158,28 +157,4 @@ export async function launchDispatchPlan(c: Context, task: TaskRow, plan: Dispat
     status: 200,
     body: { launched: true, answered: true, groupId, record, tasks: launched.map(({ id: taskId, title }) => ({ id: taskId, title })) },
   };
-}
-
-/**
- * 起这一组。runGroupInBackground 要等组里的成员轮完才回来（并发上限下排着的也算），那一趟走完（成没成都由它
- * 自己交代）才销掉「欠一次起跑」那一行——中途进程没了，重启补起时只会拉起还没起跑的那几位。
- */
-export async function startDispatchedGroup(groupId: string): Promise<void> {
-  try {
-    await runGroupInBackground(groupId);
-  } catch (error) {
-    console.error(`[ash] 派出的那一组起跑出错 ${groupId}:`, error);
-  }
-  await db.delete(dispatchLaunchStarts).where(eq(dispatchLaunchStarts.groupId, groupId))
-    .catch((error) => console.error(`[ash] 销掉派出那一组的起跑记录失败 ${groupId}（重启时会再起一次）:`, error));
-}
-
-/**
- * 重启时补起：上一个进程派出了、还没来得及起跑（或起跑那一趟没走完）的那几组。只发起、不等——每一组要等成员
- * 轮完才回来，启动流程不能被它挂住。
- */
-export async function recoverDispatchLaunchStarts(): Promise<void> {
-  const owed = await db.select().from(dispatchLaunchStarts);
-  for (const row of owed) void startDispatchedGroup(row.groupId);
-  if (owed.length) console.log(`[ash] 补起 ${owed.length} 组派出后没来得及起跑的任务`);
 }

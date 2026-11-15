@@ -198,8 +198,8 @@ async function initializeServer() {
     // running/queued 要先落 failed,这里读到的才是结算完的现场。
     await (await import("./scheduler.js")).recoverQueueAdvances()
       .catch((err) => console.error("[ash] 队列推进补办失败（不影响启动）:", err));
-    // 派活单派出了、还没来得及起跑的那几组补起（dispatch-plan-launch.ts）。同样排在 reconcileInterrupted 之后。
-    await (await import("./dispatch-plan-launch.js")).recoverDispatchLaunchStarts()
+    // 派活单派出了、还没还清起跑的那几组补起（dispatch-launch-start.ts）。同样排在 reconcileInterrupted 之后。
+    await (await import("./dispatch-launch-start.js")).recoverDispatchLaunchStarts()
       .catch((err) => console.error("[ash] 派出任务补起失败（不影响启动）:", err));
 
     // 哨兵接回来。它们的进程本来就没跟着死（那是整件事的全部意义），这里只是把 tail

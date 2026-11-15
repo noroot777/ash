@@ -9,6 +9,7 @@
 //   · 派出中途写库失败（队列那一笔）：整笔回滚，一条任务、一个分组都不留，单子原样还在；再按还是那样，修好再按只建一批；
 //   · 建好之后的「让人看见」出错（刷新前置视图写库失败）：照派出了报，那一组照常起跑，答复照常送进会话；
 //   · 「欠一次起跑」跟建任务同一笔落库：进程在起跑之前没了，重启补起（recoverDispatchLaunchStarts）；
+//     起组和失败交代都读库失败、起组函数照样「正常」回来时，账不销、退避再起；重启那一扫读库失败也退避再扫；
 //   · 「派出去的活交给谁」：派活单上没指明的那几条默认交给它，智能体绕过派活单直接建任务没给执行器时也交给它。
 //
 // 跑的是 PATH 上的假 claude（scheduled-messages-fixture.ts），不起真实 CLI。
@@ -32,7 +33,7 @@ process.env.ASH_ALLOW_REAL_AGENT = "1";
 process.env.ASH_TEST_LEAD_LOG = leadLog;
 process.env.PATH = `${installFakeClaude(root)}${delimiter}${originalPath ?? ""}`;
 
-const [{ db, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, question, settle, plan, launch] = await Promise.all([
+const [{ db, dbClient, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, question, settle, plan, launch] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/runs.js"),
@@ -42,7 +43,7 @@ const [{ db, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, q
   import("../src/task-question.js"),
   import("../src/settle-status.js"),
   import("../src/dispatch-plan.js"),
-  import("../src/dispatch-plan-launch.js"),
+  import("../src/dispatch-launch-start.js"),
 ]);
 const { DISPATCH_PLAN_RETURNED } = await import("../src/task-question-record.js");
 const { dispatchLaunchStarts, groups, projects, queueItems, sessions, taskPrerequisiteLaunches, tasks } = schema;
@@ -302,6 +303,59 @@ try {
   await waitFor(async () => !(await db.select().from(dispatchLaunchStarts).where(eq(dispatchLaunchStarts.groupId, "dp-orphan-group"))).length,
     "那一组那一趟跑完之后记录没有销掉");
   console.log("✓ 欠着的起跑扛得住重启：补起之后销账");
+
+  // —— 读库抖一下：起组读不到组、失败交代也读不到组，起组函数照样「正常」回来。账不能因此销掉：
+  //    核实还有人欠着就留账，退避再起，下一趟起成了才销。
+  const execute = dbClient.execute.bind(dbClient);
+  const failReads = (pattern: RegExp, times: number) => {
+    let left = times;
+    dbClient.execute = (async (statement: Parameters<typeof execute>[0], ...rest: unknown[]) => {
+      const text = typeof statement === "string" ? statement : statement.sql;
+      if (left > 0 && /^select\b/i.test(text) && pattern.test(text)) {
+        left -= 1;
+        throw new Error("simulated transient read failure");
+      }
+      return (execute as (...args: unknown[]) => ReturnType<typeof execute>)(statement, ...rest);
+    }) as typeof dbClient.execute;
+    return () => left;
+  };
+  const SHAKY = "dp-shaky";
+  await db.insert(groups).values({ id: "dp-shaky-group", projectId, name: "派出：读库抖了一下", mode: "parallel", paused: false, createdAt: at });
+  await db.insert(tasks).values(row(SHAKY, "backlog", { groupId: "dp-shaky-group", dispatchedBy: P }));
+  await db.insert(dispatchLaunchStarts).values({ groupId: "dp-shaky-group", taskId: P, createdAt: at });
+  const groupReadsLeft = failReads(/from\s+"groups"\s+where\s+"groups"\."id"/i, 2);
+  try {
+    await launch.startDispatchedGroup("dp-shaky-group");
+    assert.equal(groupReadsLeft(), 0, "起组和失败交代两次读组都撞上了失败");
+  } finally {
+    dbClient.execute = execute;
+  }
+  assert.equal((await taskOf(SHAKY)).status, "backlog", "这一趟确实没起来");
+  assert.equal((await db.select().from(dispatchLaunchStarts).where(eq(dispatchLaunchStarts.groupId, "dp-shaky-group"))).length, 1,
+    "起组函数回来了不等于有人接走了起跑：账留着");
+  await waitFor(async () => (await taskOf(SHAKY)).status !== "backlog", "退避之后没有再起");
+  await waitFor(() => settled(SHAKY), "再起的那条没有结算");
+  await waitFor(async () => !(await db.select().from(dispatchLaunchStarts).where(eq(dispatchLaunchStarts.groupId, "dp-shaky-group"))).length,
+    "再起成了之后账没有销");
+  console.log("✓ 起组和失败交代都读库失败：账不销，退避再起，起成了才销");
+
+  // —— 重启那一扫读库失败：退避再扫，不是记一句日志就没人管了。
+  const LATE = "dp-late";
+  await db.insert(groups).values({ id: "dp-late-group", projectId, name: "派出：重启那一扫读失败", mode: "parallel", paused: false, createdAt: at });
+  await db.insert(tasks).values(row(LATE, "backlog", { groupId: "dp-late-group", dispatchedBy: P }));
+  await db.insert(dispatchLaunchStarts).values({ groupId: "dp-late-group", taskId: P, createdAt: at });
+  const scanReadsLeft = failReads(/from\s+"dispatch_launch_starts"/i, 1);
+  try {
+    await launch.recoverDispatchLaunchStarts();
+    assert.equal(scanReadsLeft(), 0, "那一扫撞上了读失败");
+  } finally {
+    dbClient.execute = execute;
+  }
+  assert.equal((await taskOf(LATE)).status, "backlog");
+  await waitFor(async () => (await taskOf(LATE)).status !== "backlog", "那一扫读失败之后没有再扫");
+  await waitFor(() => settled(LATE), "补起的那条没有结算");
+  await waitFor(async () => !(await db.select().from(dispatchLaunchStarts)).length, "补起之后账没有销");
+  console.log("✓ 重启那一扫读库失败：退避再扫，照样补起、销账");
 } catch (error) {
   failure = error;
   console.error(error);
