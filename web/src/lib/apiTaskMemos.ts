@@ -7,8 +7,11 @@
 import { id, json, request } from "./apiClient.ts";
 import type { TaskMemo, TaskMemoDigest } from "@ash/shared/task-memo";
 
-/** 一条备忘写进去的内容：正文 + 附件路径（`POST /uploads` 回的 path）。 */
-export type TaskMemoContent = { body: string; attachments?: string[] };
+/**
+ * 一条备忘写进去的内容：正文 + 附件路径（`POST /uploads` 回的 path）。改的时候没给的那一样
+ * 服务端原样保留，所以编辑只发改了的字段。
+ */
+export type TaskMemoContent = { body?: string; attachments?: string[] };
 
 /**
  * 前端 build 落地即生效、服务端要等重启（两边不同时换代），这段时间里旧服务端回的备忘

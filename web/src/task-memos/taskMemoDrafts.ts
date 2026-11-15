@@ -19,7 +19,8 @@
 // 跟 `lib/DraftStore.tsx` 拿对象引用当版本标识是同一个取舍。
 //
 // **贴进来的图也是草稿的一部分**，在途的上传同理：传一张截图要几秒，这期间面板被切走
-// 的话，传完那张图得落回原来那份草稿里，而不是跟着卸载的组件一起丢掉。
+// 的话，传完那张图得落回原来那份草稿里，而不是跟着卸载的组件一起丢掉。传**失败**也一样
+// 要落在这里：只记「成功 / 在途」的话，失败那张从在途里一摘就跟没选过一样（第 1 轮审查 F2）。
 //
 // 单独一份而不并进 `lib/DraftStore.tsx`：那份是 Context + Provider，形状按回复框/新建框
 // 定（正文 + 附件 + 在途上传 + 随手记回链）；这里要的是「新建那条的草稿 + 哪几条在编辑
@@ -27,6 +28,7 @@
 // 放一块更一致。
 import { useCallback, useMemo, useSyncExternalStore, type SetStateAction } from "react";
 import type { UploadingFile } from "../task-detail/Attachments.tsx";
+import { createClientId } from "../lib/clientId.ts";
 
 /**
  * 一个写入位置：`null` = 新建那条，字符串 = 那条备忘。
@@ -41,6 +43,9 @@ const keyOf = (slot: MemoSlot) => (slot === null ? "new" : `memo:${slot}`);
 /** 一份草稿：正文 + 贴进来的附件路径。 */
 export type MemoDraft = { text: string; attachments: readonly string[] };
 
+/** 一张没传上去的。留着原文件，重试不用再选一遍。 */
+export type MemoUploadFailure = { id: string; file: File; message: string };
+
 /** 一格草稿 + 版本号。正文或附件每改一次版本 +1，提交时捕获、收尾时比对。 */
 type DraftSlot = MemoDraft & { rev: number };
 
@@ -51,10 +56,13 @@ type Entry = {
   pending: ReadonlySet<string>;
   /** 各位置在途的上传（keyOf 后的键）。同样跨卸载：传完要落回这一格的草稿。 */
   uploads: Readonly<Record<string, readonly UploadingFile[]>>;
+  /** 各位置传失败的（keyOf 后的键）。用户重试或移除之前一直在，这一格因此存不了。 */
+  failures: Readonly<Record<string, readonly MemoUploadFailure[]>>;
 };
 
-const EMPTY: Entry = { composing: null, edits: {}, pending: new Set(), uploads: {} };
+const EMPTY: Entry = { composing: null, edits: {}, pending: new Set(), uploads: {}, failures: {} };
 const NO_UPLOADS: readonly UploadingFile[] = [];
+const NO_FAILURES: readonly MemoUploadFailure[] = [];
 
 const entries = new Map<string, Entry>();
 const listeners = new Map<string, Set<() => void>>();
@@ -67,7 +75,7 @@ function set(taskId: string, next: Entry): void {
   // 空了就把整条记录删掉：Map 不该随着翻过的任务一直长。在途的写和上传都要算进「空」的
   // 判据，否则一发飞着的任务会被当成没状态清掉，回来时占位已经没了。
   const empty = next.composing === null && !Object.keys(next.edits).length && !next.pending.size
-    && !Object.keys(next.uploads).length;
+    && !Object.keys(next.uploads).length && !Object.keys(next.failures).length;
   if (empty) entries.delete(taskId);
   else entries.set(taskId, next);
   for (const listener of listeners.get(taskId) ?? []) listener();
@@ -76,12 +84,21 @@ function set(taskId: string, next: Entry): void {
 const slotOf = (entry: Entry, slot: MemoSlot): DraftSlot | undefined =>
   (slot === null ? entry.composing ?? undefined : entry.edits[slot]);
 
+/** 设一格草稿。收起（null）时这一格的失败记录跟着清掉：草稿都不要了，那几张也没处落。 */
 function withSlot(entry: Entry, slot: MemoSlot, next: DraftSlot | null): Entry {
-  if (slot === null) return { ...entry, composing: next };
-  const edits = { ...entry.edits };
+  const base = next === null ? withFailures(entry, slot, []) : entry;
+  if (slot === null) return { ...base, composing: next };
+  const edits = { ...base.edits };
   if (next === null) delete edits[slot];
   else edits[slot] = next;
-  return { ...entry, edits };
+  return { ...base, edits };
+}
+
+function withFailures(entry: Entry, slot: MemoSlot, next: readonly MemoUploadFailure[]): Entry {
+  const failures = { ...entry.failures };
+  if (next.length) failures[keyOf(slot)] = next;
+  else delete failures[keyOf(slot)];
+  return { ...entry, failures };
 }
 
 function withUploads(entry: Entry, slot: MemoSlot, next: readonly UploadingFile[]): Entry {
@@ -123,6 +140,24 @@ export function setMemoUploads(taskId: string, slot: MemoSlot, update: SetStateA
   const current = snapshot(taskId);
   const before = [...(current.uploads[keyOf(slot)] ?? NO_UPLOADS)];
   set(taskId, withUploads(current, slot, typeof update === "function" ? update(before) : update));
+}
+
+/**
+ * 记下一张没传上去的。挂在 store 上而不是编辑框的 state 里：失败到达时编辑框可能已经卸载、
+ * 甚至已经换成了重新挂载的另一个实例。这一格已经收起就不记（收起时在途的都被掐掉了）。
+ */
+export function addMemoUploadFailure(taskId: string, slot: MemoSlot, file: File, message: string): void {
+  const current = snapshot(taskId);
+  if (!slotOf(current, slot)) return;
+  const before = current.failures[keyOf(slot)] ?? NO_FAILURES;
+  set(taskId, withFailures(current, slot, [...before, { id: createClientId(), file, message }]));
+}
+
+/** 摘掉一条失败记录（用户点了移除，或者拿它重试）。 */
+export function dropMemoUploadFailure(taskId: string, slot: MemoSlot, id: string): void {
+  const current = snapshot(taskId);
+  const before = current.failures[keyOf(slot)] ?? NO_FAILURES;
+  set(taskId, withFailures(current, slot, before.filter((item) => item.id !== id)));
 }
 
 const slotRev = (entry: Entry, slot: MemoSlot): number => slotOf(entry, slot)?.rev ?? 0;
@@ -170,6 +205,8 @@ export type TaskMemoDrafts = {
   pendingOn: (slot: MemoSlot) => boolean;
   /** 这个位置上在途的上传。 */
   uploadsOn: (slot: MemoSlot) => readonly UploadingFile[];
+  /** 这个位置上传失败、还没处理的。 */
+  failuresOn: (slot: MemoSlot) => readonly MemoUploadFailure[];
 };
 
 const draftOf = ({ text, attachments }: DraftSlot): MemoDraft => ({ text, attachments });
@@ -195,5 +232,6 @@ export function useTaskMemoDrafts(taskId: string): TaskMemoDrafts {
     busy: entry.pending.size > 0,
     pendingOn: (slot: MemoSlot) => entry.pending.has(keyOf(slot)),
     uploadsOn: (slot: MemoSlot) => entry.uploads[keyOf(slot)] ?? NO_UPLOADS,
+    failuresOn: (slot: MemoSlot) => entry.failures[keyOf(slot)] ?? NO_FAILURES,
   }), [entry]);
 }

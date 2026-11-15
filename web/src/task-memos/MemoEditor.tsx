@@ -1,7 +1,8 @@
 // 写一条 / 改一条备忘的那个框：正文 + 贴进来的图。新建（composer）与卡片的编辑态共用它。
 //
-// 草稿和在途上传都受控于 taskMemoDrafts.ts（理由见那份文件开头）：`useAttachments` 的
-// 两份 state 在这里都接到 store 上，所以截图传到一半面板被切走，传完照样落回这份草稿。
+// 草稿、在途上传和传失败的那几张都受控于 taskMemoDrafts.ts（理由见那份文件开头）：
+// `useAttachments` 的状态在这里全接到 store 上，所以截图传到一半面板被切走，传完照样落回
+// 这份草稿；传失败了，切回来也还看得见、能重试或移除。
 import { useEffect, useRef, type SetStateAction } from "react";
 import { Paperclip } from "@phosphor-icons/react";
 import { TASK_MEMO_MAX_LEN } from "@ash/shared/task-memo";
@@ -11,6 +12,8 @@ import { AutoTextarea } from "../components/AutoTextarea.tsx";
 import { UploadAttachmentList, useAttachments, type UploadAttachment } from "../task-detail/Attachments.tsx";
 import { attachmentView } from "../task-detail/utils.ts";
 import {
+  addMemoUploadFailure,
+  dropMemoUploadFailure,
   setMemoDraft,
   setMemoUploads,
   updateMemoAttachments,
@@ -37,7 +40,8 @@ export function MemoEditor({ taskId, slot, draft, disabled, rows, placeholder, o
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
   const files = useRef<HTMLInputElement>(null);
-  const { uploadsOn } = useTaskMemoDrafts(taskId);
+  const { uploadsOn, failuresOn } = useTaskMemoDrafts(taskId);
+  const failures = failuresOn(slot);
   const uploads = useAttachments({
     value: draft.attachments.map(asUpload),
     onChange: (update: SetStateAction<UploadAttachment[]>) => updateMemoAttachments(taskId, slot, (paths) => {
@@ -46,6 +50,7 @@ export function MemoEditor({ taskId, slot, draft, disabled, rows, placeholder, o
     }),
     pending: [...uploadsOn(slot)],
     onPendingChange: (update) => setMemoUploads(taskId, slot, update),
+    onFailed: (file, message) => addMemoUploadFailure(taskId, slot, file, message),
   });
 
   // 光标落到末尾：改备忘九成是往后补一句，不是重写。重新挂载时也做（面板被自动切走又
@@ -57,9 +62,10 @@ export function MemoEditor({ taskId, slot, draft, disabled, rows, placeholder, o
     node.setSelectionRange(node.value.length, node.value.length);
   }, []);
 
-  // 图还在传就不让存：存下去的那一版里没有它，传完也落不进已经存好的那条。
+  // 图还在传、或者有传失败还没处理的，就不让存：存下去的那一版里没有它，悄悄存成一条
+  // 缺图的备忘，用户会以为图在里面。
   const empty = !draft.text.trim() && !draft.attachments.length;
-  const blocked = disabled || uploads.uploading;
+  const blocked = disabled || uploads.uploading || failures.length > 0;
 
   return (
     <div
@@ -97,6 +103,16 @@ export function MemoEditor({ taskId, slot, draft, disabled, rows, placeholder, o
         onRemove={uploads.remove}
         onCancel={uploads.cancel}
       />
+      {failures.map((failure) => (
+        <p key={failure.id} className="task-memo-editor__failed" role="alert">
+          <span>{`${failure.file.name || "粘贴的文件"} ${failure.message}`}</span>
+          <button type="button" disabled={disabled} onClick={() => {
+            dropMemoUploadFailure(taskId, slot, failure.id);
+            void uploads.addFiles([failure.file]);
+          }}>重试</button>
+          <button type="button" disabled={disabled} onClick={() => dropMemoUploadFailure(taskId, slot, failure.id)}>移除</button>
+        </p>
+      ))}
       <div className="task-memo-editor__actions">
         <InspTool
           label="附上图片或文件"

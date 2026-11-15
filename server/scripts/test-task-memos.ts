@@ -247,6 +247,39 @@ for (const id of ["t1", "t2"]) {
   }
 }
 
+// ── 只改一样时不许盖掉别处刚存上的另一样（第 1 轮审查 F1）─────────────────
+{
+  const shot = join(UPLOADS_DIR, "AbCdEfGhIjKl-late.png");
+  // 慢的只改正文、快的加图：两发都 200，图得留下。
+  const a = await post("/tasks/t2/memos", { body: "原文" });
+  const slowText = await sendSplit(`/tasks/t2/memos/${a.body.id}`, "PATCH", { body: "改过的字" }, async () => {
+    assert.equal((await patch(`/tasks/t2/memos/${a.body.id}`, { attachments: [shot] })).status, 200);
+  });
+  assert.equal(slowText.status, 200);
+  assert.equal(slowText.body.body, "改过的字");
+  assert.deepEqual(slowText.body.attachments, [shot], `只改字的那一发不许把图撤掉：${JSON.stringify(slowText.body)}`);
+
+  // 反方向：慢的只改附件、快的改正文，新正文得留下。
+  const b = await post("/tasks/t2/memos", { body: "旧字" });
+  const slowFiles = await sendSplit(`/tasks/t2/memos/${b.body.id}`, "PATCH", { attachments: [shot] }, async () => {
+    assert.equal((await patch(`/tasks/t2/memos/${b.body.id}`, { body: "新字" })).status, 200);
+  });
+  assert.equal(slowFiles.status, 200);
+  assert.equal(slowFiles.body.body, "新字", `只改图的那一发不许把正文退回旧的：${JSON.stringify(slowFiles.body)}`);
+
+  // 「改完至少剩一样」也按写入那一刻判：慢的清空正文，期间别处把图摘光了，这一发得 400，库里还是有字的那版。
+  const c = await post("/tasks/t2/memos", { body: "有字", attachments: [shot] });
+  const slowClear = await sendSplit(`/tasks/t2/memos/${c.body.id}`, "PATCH", { body: "" }, async () => {
+    assert.equal((await patch(`/tasks/t2/memos/${c.body.id}`, { attachments: [] })).status, 200);
+  });
+  assert.equal(slowClear.status, 400, `会被清空成什么都没有的那一发要拒：${JSON.stringify(slowClear.body)}`);
+  const [kept] = await db.select().from(taskMemos).where(eq(taskMemos.id, c.body.id));
+  assert.equal(kept.body, "有字");
+  for (const id of [a.body.id, b.body.id, c.body.id]) {
+    assert.equal((await call(`/tasks/t2/memos/${id}`, { method: "DELETE" })).status, 200);
+  }
+}
+
 // ── 删 ──────────────────────────────────────────────────────────────────────
 {
   const rows = (await call("/tasks/t1/memos")).body;

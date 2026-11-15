@@ -73,7 +73,9 @@ export function TaskMemoCard({ taskId, memo, busy, highlight, draft, onDraft, on
     const same = attachments.length === memo.attachments.length
       && attachments.every((path, at) => path === memo.attachments[at]);
     if (text === memo.body && same) { onDraft(null); return; }
-    await onSave({ body: text, attachments });
+    // 只发改了的那一样：没动的那一列交给服务端此刻的值，别拿进编辑态时的旧快照把别处
+    // 刚存上的改动盖回去（第 1 轮审查 F1）。
+    await onSave({ ...(text !== memo.body ? { body: text } : {}), ...(same ? {} : { attachments }) });
   };
 
   const edited = memo.updatedAt !== memo.createdAt;

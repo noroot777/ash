@@ -27,6 +27,11 @@
   transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
 }
 .task-memo-editor textarea::placeholder { color: var(--faint); }
+/* 传失败的那一张：一行红字说清是哪张、为什么，后面「重试 移除」。不处理掉就存不了。 */
+.task-memo-editor__failed { display: flex; min-width: 0; align-items: baseline; gap: 8px; margin: 0; color: var(--red); font-size: var(--t-xs); }
+.task-memo-editor__failed > span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.task-memo-editor__failed > button { flex: none; border: 0; background: transparent; padding: 0; color: var(--ink); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.task-memo-editor__failed > button:disabled { color: var(--faint); cursor: default; }
 /* 回形针靠左，取消/保存靠右：附图是旁支动作，不跟提交挤在一起。 */
 .task-memo-editor__actions { display: flex; align-items: center; gap: 6px; }
 .task-memo-editor__actions > .insp-tool { margin-right: auto; }

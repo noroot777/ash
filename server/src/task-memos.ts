@@ -13,7 +13,7 @@
 import { TASK_MEMO_MAX_ATTACHMENTS, TASK_MEMO_MAX_COUNT, TASK_MEMO_MAX_LEN, taskMemoDigestText } from "@ash/shared/task-memo";
 import type { TaskMemo, TaskMemoDigest } from "@ash/shared/task-memo";
 import { TASK_BATCH_LIMIT } from "@ash/shared";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { join } from "node:path";
 import { db } from "./db/index.js";
@@ -57,7 +57,8 @@ function toMemo(row: typeof taskMemos.$inferSelect): TaskMemo {
   };
 }
 
-type MemoContent = { body: string; attachments: string[] };
+/** 请求里**给了的**那几样内容;没给的字段是 undefined,不是「清空」。 */
+type MemoFields = { body?: string; attachments?: string[] };
 
 /**
  * 附件只收 `data/uploads` 直下的文件(就是 `POST /uploads` 刚回的那个路径):备忘的图由
@@ -78,28 +79,32 @@ function readAttachments(raw: unknown): { attachments: string[] } | { error: str
 }
 
 /**
- * 正文 + 附件校验。没给的那一样沿用 `base`(PATCH 只改正文的老客户端不会把图清掉)。
+ * 逐字段校验请求里给了的正文 / 附件,**不拿旧行补齐没给的那一样** —— 补齐之后整行回写,
+ * 就会把读旧行和写回之间别处刚存上的那一列盖回旧值(第 1 轮审查 F1:一边只改字、一边加图,
+ * 两边都回 200,图没了)。「至少剩一样内容」由调用方对着库里的最新值判。
  *
  * **空白不算内容**(全是空格的一条在列表里就是一行看不见的空行),但只贴一张图、一个字
  * 不写是正经的备忘。超长直接报错而不是截断 —— 悄悄吞掉用户写的几百字是最坏的一种「成功」。
  */
-function readContent(input: Partial<MemoBody>, base: MemoContent): MemoContent | { error: string } {
-  if (input.body !== undefined && typeof input.body !== "string") return { error: "备忘内容必须是文本" };
-  const raw = input.body ?? base.body;
-  if (raw.length > TASK_MEMO_MAX_LEN) {
-    return { error: `备忘内容最多 ${TASK_MEMO_MAX_LEN} 字,这条有 ${raw.length} 字` };
+function readFields(input: Partial<MemoBody>): MemoFields | { error: string } {
+  const fields: MemoFields = {};
+  if (input.body !== undefined) {
+    if (typeof input.body !== "string") return { error: "备忘内容必须是文本" };
+    if (input.body.length > TASK_MEMO_MAX_LEN) {
+      return { error: `备忘内容最多 ${TASK_MEMO_MAX_LEN} 字,这条有 ${input.body.length} 字` };
+    }
+    // 行内缩进是用户自己排的版,只摘首尾空白。
+    fields.body = input.body.trim();
   }
-  let attachments = base.attachments;
   if (input.attachments !== undefined) {
     const parsed = readAttachments(input.attachments);
     if ("error" in parsed) return parsed;
-    attachments = parsed.attachments;
+    fields.attachments = parsed.attachments;
   }
-  // 行内缩进是用户自己排的版,只摘首尾空白。
-  const body = raw.trim();
-  if (!body && !attachments.length) return { error: "备忘内容不能为空" };
-  return { body, attachments };
+  return fields;
 }
+
+const EMPTY_MEMO = "备忘内容不能为空";
 
 const storedAttachments = (attachments: string[]) => (attachments.length ? JSON.stringify(attachments) : null);
 
@@ -139,8 +144,10 @@ export function mountTaskMemoRoutes(api: Hono): void {
     // 任务可以在这期间被删掉,所以真正的保证在那个 batch 里(见下)。
     const task = (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) return c.json({ error: "任务不存在" }, 404);
-    const parsed = readContent(await bodyOf<MemoBody>(c), { body: "", attachments: [] });
-    if ("error" in parsed) return c.json({ error: parsed.error }, 400);
+    const fields = readFields(await bodyOf<MemoBody>(c));
+    if ("error" in fields) return c.json({ error: fields.error }, 400);
+    const parsed = { body: fields.body ?? "", attachments: fields.attachments ?? [] };
+    if (!parsed.body && !parsed.attachments.length) return c.json({ error: EMPTY_MEMO }, 400);
     const timestamp = now();
     const row: typeof taskMemos.$inferInsert = {
       id: id(),
@@ -200,10 +207,21 @@ export function mountTaskMemoRoutes(api: Hono): void {
     if (!existing || !(await canUseOwned(existing, actor))) return c.json({ error: "备忘不存在" }, 404);
     const input = await bodyOf<MemoBody>(c);
     // 两样都没给(包括 `null` / 数组这类非对象请求体)不是「什么都不改」,是请求形状错了。
-    if (input.body === undefined && input.attachments === undefined) return c.json({ error: "备忘内容不能为空" }, 400);
-    const parsed = readContent(input, toMemo(existing));
-    if ("error" in parsed) return c.json({ error: parsed.error }, 400);
-    const updated = { body: parsed.body, attachments: storedAttachments(parsed.attachments), updatedAt: now() };
+    if (input.body === undefined && input.attachments === undefined) return c.json({ error: EMPTY_MEMO }, 400);
+    const fields = readFields(input);
+    if ("error" in fields) return c.json({ error: fields.error }, 400);
+    // 只写请求给了的列,没给的那一列交给库里此刻的值(见 readFields)。
+    const updated: Partial<typeof taskMemos.$inferInsert> = { updatedAt: now() };
+    if (fields.body !== undefined) updated.body = fields.body;
+    if (fields.attachments !== undefined) updated.attachments = storedAttachments(fields.attachments);
+    // 「改完至少剩一样内容」也得对着**写入那一刻**的行判,所以放进同一条 UPDATE 的 WHERE:
+    // 给了非空的那一样就不用再看;给了空的,就要求没给的那一列在库里此刻非空。
+    const bodyLeft = fields.body ?? null;
+    const filesLeft = fields.attachments?.length ?? null;
+    if (bodyLeft === "" && filesLeft === 0) return c.json({ error: EMPTY_MEMO }, 400);
+    const keepsContent = bodyLeft || filesLeft
+      ? undefined
+      : bodyLeft === "" ? isNotNull(taskMemos.attachments) : ne(taskMemos.body, "");
     // 回执必须以**真的改到了那一行**为准,不能拿请求开始时读到的 `existing` 拼一个成功
     // 出来:这两步之间隔着 `await bodyOf`,正文上传期间这条备忘(或它挂的那个任务)可以被
     // 另一个窗口删掉,UPDATE 于是零行命中。回 200 的后果实测过 —— 前端按「存上了」退出
@@ -211,10 +229,13 @@ export function mountTaskMemoRoutes(api: Hono): void {
     // F1)。判据跟 POST 那边同源(「请求开始时查到过」不等于「写的时候还在」),只是那边靠
     // batch 里的条件删除,这边靠 `.returning()` 拿回真正命中的那一行。
     const [row] = await db.update(taskMemos).set(updated)
-      .where(and(eq(taskMemos.id, memoId), eq(taskMemos.taskId, taskId)))
+      .where(and(eq(taskMemos.id, memoId), eq(taskMemos.taskId, taskId), keepsContent))
       .returning();
-    if (!row) return c.json({ error: "备忘不存在" }, 404);
-    return c.json(toMemo(row));
+    if (row) return c.json(toMemo(row));
+    // 零行有两种:行没了(404),或者行还在、但这一改会把它清空(400)。
+    const still = keepsContent && (await db.select({ id: taskMemos.id }).from(taskMemos)
+      .where(and(eq(taskMemos.id, memoId), eq(taskMemos.taskId, taskId)))).at(0);
+    return still ? c.json({ error: EMPTY_MEMO }, 400) : c.json({ error: "备忘不存在" }, 404);
   });
 
   api.delete("/tasks/:id/memos/:memoId", async (c) => {
