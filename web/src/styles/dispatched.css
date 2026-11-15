@@ -170,3 +170,18 @@
 .page-drawer-host .side-drawer > .inspector-layout > .inspector-host .inspector-host__resize-handle {
   display: none;
 }
+
+/* 派它的那条任务的会话里，派出的任务来问 / 失败的那颗气泡（task-detail/dispatched/DispatchedBubble.tsx）：
+   审查者那颗的骨架；字前那颗点只在还在等、失败时出现。标题加重那一下照辩论气泡（.debate-bubble-say b）。 */
+.dispatched-bubble .review-verdict-text { display: flex; align-items: flex-start; gap: 8px; }
+.dispatched-bubble.is-waiting .review-verdict-text { color: var(--ink); }
+.dispatched-bubble.is-waiting .debate-bubble-say b { color: var(--ink); }
+
+/* 在这里答的那一题：你那颗气泡，下面靠右一句小灰字。 */
+.dispatched-answer { margin-bottom: 20px; }
+.dispatched-answer > .task-message { margin-bottom: 0; }
+.dispatched-answer > .turn-footnote.is-trailing { max-width: 790px; }
+
+/* 答题卡上是谁在问（名下派出的任务来问时）：题目前面那一句。 */
+.question-card-asker { margin: 0 0 2px; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); overflow-wrap: anywhere; }
+.question-card-peek .question-card-asker { margin: 0 4px 0 0; color: var(--muted); font-size: inherit; }

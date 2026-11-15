@@ -10,6 +10,7 @@ import { ensureHandoffTokenUnique } from "./handoff-token-index.js";
 import { ensureFreeWorkflowSchema } from "./schema-free-workflow.js";
 import { ensureAcceptGateSchema } from "./schema-accept-gate.js";
 import { ensureTaskBackgroundSchema } from "./schema-task-background.js";
+import { ensureDispatchSignalSchema } from "./schema-dispatch-signals.js";
 import { ensureRegressionChecksSchema } from "./schema-regression-checks.js";
 import { ensureRegressionEvidenceSchema } from "./schema-regression-evidence.js";
 import { ensureImSchema } from "./schema-im.js";
@@ -395,6 +396,7 @@ export async function ensureSchema() {
   await ensureTaskWritesSchema(client);
   await ensureAcceptGateSchema(client);
   await ensureTaskBackgroundSchema(client);
+  await ensureDispatchSignalSchema(client);
   await ensureRegressionChecksSchema(client);
   await ensureRegressionEvidenceSchema(client);
   await ensureImSchema(client);

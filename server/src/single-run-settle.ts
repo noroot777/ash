@@ -6,7 +6,7 @@
 // `step` 是收尾记步(turn-wind-down.ts):每个 await 之前报一声「走到这一步了」,卡住时巡检才
 // 说得出卡在哪一步。它不决定往不往下走 —— 锁只由这一轮自己放,别人拿不走。
 import type { WriteStream } from "node:fs";
-import type { AgentEvent, AgentType, SessionRole } from "@ash/shared";
+import type { AgentEvent, AgentType, SessionRole, TurnInterruption } from "@ash/shared";
 import { turnIdentity, type StopSettle } from "./runs.js";
 import type { RunHandle } from "./executors/types.js";
 import { writeTurnEnd } from "./transcript.js";
@@ -21,6 +21,7 @@ import { LONG_WIND_DOWN_STEP_MS, WIND_DOWN_SETTLEMENT_WAIT_MS, windDownWithin } 
 import { withExternalWaitBound } from "./external-wait-bound.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import type { TurnOwner } from "./turn-lock.js";
+import { noteDispatchFailureReason } from "./dispatch-signals.js";
 
 export type SingleRunSettlement = {
   taskId: string;
@@ -37,6 +38,8 @@ export type SingleRunSettlement = {
   executionFailed: boolean;
   doneEvent: Extract<AgentEvent, { kind: "done" }> | null;
   failure: Parameters<typeof noteReviewerChannelGap>[0]["failure"];
+  /** 这一回合怎么断的（turn-interruption.ts）；没断或判不出来为空。 */
+  interruption?: TurnInterruption | null;
   noteSessionNotice: (text: string, at?: string, level?: "notice") => void;
   flushSessionNotices: () => void;
   /** 收尾记步(见文件头)。 */
@@ -76,6 +79,14 @@ export async function settleSingleRunTurn(s: SingleRunSettlement): Promise<void>
     // 原因时漏掉就会被 `else` 静默吞掉(上一版就是那个形状)。
     watchdogFailure ? { kind: watchdogFailure.kind, detail: watchdogFailure.reason } : null);
   clearStallFailure(sessId, s.turnStart); // 这一轮结算完了,销账(见那个文件里的水位)
+  // 派出的任务失败了：派它的那条任务里那颗气泡要说得出为什么（那一行由触发器跟着状态写下，原因在这里补）。
+  // 先取「怎么断的」那句人话，其次是结算说明，再次是退出码。
+  if (settled.status === "failed") {
+    step("补上派出的任务的失败原因(noteDispatchFailureReason)");
+    const why = s.interruption?.reason || settled.note || (exitStatus !== 0 ? `执行异常结束（退出码 ${exitStatus}）` : null);
+    await noteDispatchFailureReason(taskId, why)
+      .catch((error) => console.error(`[ash] noteDispatchFailureReason(${taskId}) failed:`, error));
+  }
   clearTurnStart(taskId); // 只有「未确认 failed」那一支会读它,别的支路在这儿扔掉残页
   // 这一轮到底改没改东西:账在回合开头就清过了,这里只管「白清了要放回去」——
   // 一个字节没改就把游标/轮数/验收阶段原样放回,屋子是临时搭的还顺手拆掉。

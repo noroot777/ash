@@ -26,6 +26,7 @@ import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
 import { HandoffBanner } from "./HandoffBanner.tsx";
 import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
+import { useDispatchSignals } from "./dispatched/useDispatchSignals.tsx";
 import { replySend } from "./replySend.ts";
 import { LeftDrawerProvider } from "../components/LeftDrawer.tsx";
 import { useDisputeRulingDock } from "../free-workflow/DisputeRulingDock.tsx";
@@ -117,6 +118,8 @@ export function TaskDetail({
     task, allTasks, conversation, onOpenTask,
     renderTask: (child) => <TaskDetail key={child.id} task={child} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" notify={notify} />,
   });
+  // 名下派出的任务来问 / 失败：会话里那几颗气泡、回复框那一格轮到谁答（dispatched/useDispatchSignals.tsx）。
+  const fromDispatched = useDispatchSignals({ task, allTasks, dispatched: dispatched.state.tasks, onOpen: dispatched.state.open });
   // 等你裁定时回复框顶上那一行（DisputeRulingDock）：选了一档，这一个框就成了那一步。
   const ruling = useDisputeRulingDock({ task, reviews: free.state?.reviews, known: !!free.state, onChanged: free.setState, notify });
   // 此刻能做什么（运行 / 停止 / 归档 / 重新排队 / 重跑上一回合 / 派验证）整份由服务端判，这里只照着画。
@@ -532,6 +535,7 @@ export function TaskDetail({
                       reviewRetry={reviewRetry}
                       turnRetry={crashedTurnRetry}
                       reviews={free.state?.reviews}
+                      asides={fromDispatched.asides}
                       // 会话里那一句审查结论点过来：审查格展开那一轮（feed-10 / insp-5）。
                       onOpenReviewPanel={(target) => openTab("review", target ? reviewTargetRequest(target) : undefined)}
                     />
@@ -560,7 +564,13 @@ export function TaskDetail({
                         />
                       )}
                       // 提问在等时，回复框那一格是答题卡（QuestionSlot）：全页只有一处打字、一颗发送键。
-                      onAnswer={async (answer, input) => {
+                      // 名下派出的任务来问时这一格是它的卡，答复直接送给它（不经这条任务，也不叫醒它）。
+                      asking={fromDispatched.asking}
+                      onAnswer={async (answer, input, asking) => {
+                        if (asking.id !== task.id) {
+                          await api.answerTask(asking.id, answer, input, task.id);
+                          return;
+                        }
                         await api.answerTask(task.id, answer, input);
                         notify("已发送答复，任务正在续跑");
                       }}

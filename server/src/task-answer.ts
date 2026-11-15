@@ -15,8 +15,17 @@ import { claimQuestionAnswer, prepareQuestionRecord } from "./task-question-reco
 import { queueReviewAnswer } from "./review-continuation.js";
 import { ReviewSuperseded } from "./review-ownership.js";
 import { questionWaitOrigin } from "./task-wait-ownership.js";
+import { noteAnsweredFromDispatcher } from "./dispatch-signals.js";
 
-export type TaskAnswerBody = QuestionAnswerInput & { answer?: string; attachments?: string[] };
+export type TaskAnswerBody = QuestionAnswerInput & {
+  answer?: string;
+  attachments?: string[];
+  /**
+   * 在哪条任务的页面上答的：派它的那条任务（dispatched_by）里答派出的任务的提问时给。只决定那边的
+   * 会话里留不留「你」那颗气泡（dispatch-signals.ts）；答复照旧送给这条任务，不碰派它的那条。
+   */
+  via?: string;
+};
 
 /** 普通答复路由和远程接力代理共用的提问 CAS + 续会话实现。 */
 export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBody): Promise<Response> {
@@ -73,6 +82,10 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
     throw error;
   }
   bus.publish({ type: "task.question", taskId, updatedAt: record.answeredAt, question: null, questionOptions: null, questionItems: null, answeredQuestion: record });
+  if (b.via && b.via === task.dispatchedBy) {
+    await noteAnsweredFromDispatcher(task, record)
+      .catch((error) => console.error(`[ash] 记下在派它的任务里答的 ${taskId} 失败:`, error));
+  }
   if (reviewQueued) {
     publishPendingMessages(taskId);
     void deliverPendingMessages(taskId).catch((error) => console.error(`[ash] 审查答复待投递 ${taskId}:`, error));
