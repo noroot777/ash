@@ -61,6 +61,14 @@ assert.equal(headSentence(null), "");
   const sameMs = [question(7, "kid-late", 40), question(8, "kid-early", 40)];
   assert.deepEqual(ids(askingOrder(host, [early, late], sameMs)), ["kid-late", "kid-early"], "同一时刻按记录序号，不按派出的先后");
   assert.deepEqual(ids(askingOrder(host, [late, early], [question(9, "kid-early", 40), question(10, "kid-late", 40)])), ["kid-early", "kid-late"]);
+  // 升级时补录的那几行：序号是补录时排的，跟提问先后无关 —— 先问的序号反而大，照样按那一刻排。
+  const backfilled = [question(11, "kid-late", 50), question(12, "kid-early", 20)];
+  assert.deepEqual(ids(askingOrder(host, [early, late], backfilled)), ["kid-early", "kid-late"], "序号与时刻相反时按时刻");
+  assert.deepEqual(dispatchFeed(backfilled, [early, late]).bubbles.map((bubble) => bubble.taskId), ["kid-early", "kid-late"],
+    "会话里的气泡跟答题卡同一个先后");
+  // 同一条任务前后问了两次、读到的顺序被打乱：最近那一问仍按那一刻认。
+  const twice = [question(14, "kid-early", 60, { question: "第二问" }), question(13, "kid-early", 10)];
+  assert.deepEqual(dispatchFeed(twice, [early]).bubbles.map((bubble) => [bubble.text, bubble.state]), [["kid-early 的问题。", "closed"], ["第二问", "waiting"]]);
   assert.notEqual(dispatchedSignature([late]), dispatchedSignature([{ ...late, question: null }]), "撤下一问也要重读");
   assert.notEqual(dispatchedSignature([quiet]), dispatchedSignature([{ ...quiet, status: "failed" }]), "失败了也要重读");
 }

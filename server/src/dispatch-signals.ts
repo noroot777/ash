@@ -39,11 +39,14 @@ function toSignal(row: SignalRow): DispatchSignal {
   };
 }
 
-/** 一条任务名下记下的那几刻，按发生先后。「答过没有」读那一行自己记下的答复时刻。 */
+/**
+ * 一条任务名下记下的那几刻，按发生先后：(那一刻, 序号)，见 shared 那份类型的说明 —— 补录的那几行
+ * 序号是补录时排的，单按序号会把升级前后问的排反。「答过没有」读那一行自己记下的答复时刻。
+ */
 export async function listDispatchSignals(dispatcherId: string): Promise<DispatchSignal[]> {
   const rows = await db.select().from(dispatchSignals)
     .where(eq(dispatchSignals.dispatcherId, dispatcherId))
-    .orderBy(asc(dispatchSignals.seq));
+    .orderBy(asc(dispatchSignals.occurredAt), asc(dispatchSignals.seq));
   return rows.map(toSignal);
 }
 
@@ -87,6 +90,7 @@ export async function markDispatchQuestionAnswered(transaction: Transaction,
   record: QuestionRecord, via: string | undefined): Promise<string | null> {
   if (!task.dispatchedBy) return null;
   const fromDispatcher = !!via && via === task.dispatchedBy;
+  // 同一条任务自己的那几行按序号就是先后：它的提问只由触发器跟着那一笔记，补录只补从没记过的任务。
   const open = (await transaction.select({ seq: dispatchSignals.seq, answeredAt: dispatchSignals.answeredAt }).from(dispatchSignals)
     .where(and(eq(dispatchSignals.taskId, task.id), eq(dispatchSignals.kind, "question")))
     .orderBy(desc(dispatchSignals.seq)).limit(1)).at(0);

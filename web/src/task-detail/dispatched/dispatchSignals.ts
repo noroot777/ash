@@ -42,10 +42,20 @@ export function headSentence(text: string | null | undefined): string {
 
 export const taskTitle = (task: Pick<TaskListItem, "title"> | undefined) => task ? task.title || UNTITLED : FALLBACK_TITLE;
 
+/**
+ * 两条记录谁先发生：先比那一刻，同一刻（同一毫秒一起来）再比序号。序号单独不代表先后 —— 升级时补录的
+ * 那几行，序号是补录时才排的（shared 那份类型的说明）。气泡的位置、答题卡轮到谁都按这一条。
+ */
+export const signalOrder = (a: DispatchSignal, b: DispatchSignal) => a.at.localeCompare(b.at) || a.seq - b.seq;
+
 /** 每条任务最近那一问（只有它可能还在等）。 */
 function latestQuestions(signals: readonly DispatchSignal[]): Map<string, DispatchSignal> {
   const latest = new Map<string, DispatchSignal>();
-  for (const signal of signals) if (signal.kind === "question") latest.set(signal.taskId, signal);
+  for (const signal of signals) {
+    if (signal.kind !== "question") continue;
+    const seen = latest.get(signal.taskId);
+    if (!seen || signalOrder(seen, signal) < 0) latest.set(signal.taskId, signal);
+  }
   return latest;
 }
 
@@ -60,7 +70,7 @@ export function dispatchFeed(signals: readonly DispatchSignal[], tasks: readonly
   const latest = latestQuestions(signals);
   const bubbles: DispatchBubble[] = [];
   const answers: DispatchAnswer[] = [];
-  for (const signal of signals) {
+  for (const signal of [...signals].sort(signalOrder)) {
     const task = byId.get(signal.taskId);
     const base = {
       key: `dispatch:${signal.seq}`, at: signal.at, taskId: signal.taskId,
@@ -85,21 +95,21 @@ export function dispatchFeed(signals: readonly DispatchSignal[], tasks: readonly
 
 /**
  * 回复框那一格此刻轮到谁：这条任务自己在问就先答它自己的；否则名下派出的任务里在问的那几条，
- * 按提问先后一次一张：两条都有记录就按记录的序号（同一毫秒里一起来是常态，时刻分不出先后）；
- * 记录还没读到的那条按任务最后改动的时刻比，再分不出按派出的先后。
+ * 按提问先后一次一张：有记录的按 `signalOrder`（那一刻，同一刻再比序号）；记录还没读到的那条拿任务
+ * 最后改动的时刻跟别人比，再分不出按派出的先后。
  * 只看直接派出的那一层：再往下一层的提问冒在它自己的上一层。
  */
 export function askingOrder(host: TaskListItem, dispatched: readonly TaskListItem[], signals: readonly DispatchSignal[]): TaskListItem[] {
   const latest = latestQuestions(signals);
-  const askedAt = (task: TaskListItem) => latest.get(task.id)?.at ?? task.updatedAt;
-  const bySeq = (a: TaskListItem, b: TaskListItem) => {
-    const left = latest.get(a.id)?.seq;
-    const right = latest.get(b.id)?.seq;
-    return left !== undefined && right !== undefined ? left - right : null;
+  const asked = (a: TaskListItem, b: TaskListItem) => {
+    const left = latest.get(a.id);
+    const right = latest.get(b.id);
+    if (left && right) return signalOrder(left, right);
+    return (left?.at ?? a.updatedAt).localeCompare(right?.at ?? b.updatedAt);
   };
   const children = dispatched
     .filter((task) => task.id !== host.id && !!task.question && !task.archived)
-    .sort((a, b) => bySeq(a, b) ?? (askedAt(a).localeCompare(askedAt(b)) || a.createdAt.localeCompare(b.createdAt)));
+    .sort((a, b) => asked(a, b) || a.createdAt.localeCompare(b.createdAt));
   return host.question ? [host, ...children] : children;
 }
 

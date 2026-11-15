@@ -92,6 +92,7 @@ export async function ensureDispatchSignalSchema(client: Client): Promise<void> 
 /**
  * 升级那一刻已经在问的派出的任务：触发器装上之前问的，没有那一行，派它的那条任务里就看不到这一问
  * 是什么时候来的。按它最后一次改动的时刻补一行。只补「从来没记过一次提问」的，每次启动跑也不重复。
+ * 按那一刻的先后插：同一刻的几条靠序号分先后（shared 那份类型的说明），补录的序号也得跟着时刻走。
  * 排在 dispatched_by 回填之后（migrations.ts）：老任务的归属是那一步才认出来的。
  */
 export async function backfillOpenDispatchQuestions(client: Client): Promise<void> {
@@ -99,7 +100,8 @@ export async function backfillOpenDispatchQuestions(client: Client): Promise<voi
     await client.execute(`INSERT INTO dispatch_signals (dispatcher_id, task_id, kind, occurred_at, question, question_options, question_items)
       SELECT dispatched_by, id, 'question', updated_at, question, question_options, question_items FROM tasks
       WHERE question IS NOT NULL AND dispatched_by IS NOT NULL AND parent_id IS NULL
-        AND NOT EXISTS (SELECT 1 FROM dispatch_signals AS s WHERE s.task_id = tasks.id AND s.kind = 'question')`);
+        AND NOT EXISTS (SELECT 1 FROM dispatch_signals AS s WHERE s.task_id = tasks.id AND s.kind = 'question')
+      ORDER BY updated_at, created_at, id`);
   } catch (e) {
     console.warn("[ash] 补记升级前就在问的派出的任务失败，忽略(下次启动再补):", e);
   }

@@ -228,6 +228,15 @@ try {
   await backfillOpenDispatchQuestions(dbClient as never);
   await backfillOpenDispatchQuestions(dbClient as never);
   assert.equal((await signalsOf(P)).filter((signal) => signal.taskId === OLD).length, 1, "升级前就在问的补一行，只补一次");
+  // 升级前就有两条在问、表里的先后跟提问先后相反（后问的那条先建）：补录按那一刻插，读出来先问的在前。
+  const [LATER, EARLIER] = ["ds-old-later", "ds-old-earlier"];
+  const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
+  await db.insert(tasks).values(row(LATER, "paused", { dispatchedBy: P, question: "后问的：删不删备份？", updatedAt: minutesAgo(1) }));
+  await db.insert(tasks).values(row(EARLIER, "paused", { dispatchedBy: P, question: "先问的：留不留备份？", updatedAt: minutesAgo(3) }));
+  await backfillOpenDispatchQuestions(dbClient as never);
+  const olds = (await signalsOf(P)).filter((signal) => signal.taskId === LATER || signal.taskId === EARLIER);
+  assert.deepEqual(olds.map((signal) => signal.taskId), [EARLIER, LATER], "读出来按提问先后");
+  assert.ok(olds[0]!.seq < olds[1]!.seq, "补录的序号也跟着时刻走（同一刻靠序号分先后）");
 
   // —— 不是派出去的任务失败不记；删了任务连它的记录一起没。
   await db.update(tasks).set({ status: "failed" }).where(eq(tasks.id, SOLO));

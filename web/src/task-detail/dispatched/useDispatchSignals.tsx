@@ -67,6 +67,7 @@ export function useDispatchSignals({ task, allTasks, dispatched, onOpen }: {
         node: <AnsweredHere key={answer.key} record={answer.record} title={answer.title} />,
       });
     }
+    // 稳定排序：同一刻的气泡保留 dispatchFeed 按 signalOrder 排好的先后。
     return list.sort((a, b) => a.at.localeCompare(b.at));
   }, [allTasks, onOpen, signals]);
   return { asking, asides };
