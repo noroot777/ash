@@ -13,7 +13,7 @@ import { restoreFollowUpAnswers } from "./legacy-answer-intent.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { replayQueueAdvances } from "./queue-advance-retry.js";
 import { sweepReleasedQueueMembers } from "./queue-monitor-hold.js";
-import { sweepOwedStarts } from "./dispatch-hold.js";
+import { sweepOwedStarts, sweepPendingHolds } from "./dispatch-hold.js";
 import { markShiftAdmission } from "./dispatch-hold-owed.js";
 import { turnFreezeReason } from "./turn-freeze.js";
 import { reportStuckWindDowns, reportSuspectTurns } from "./turn-lock-reclaim.js";
@@ -178,6 +178,8 @@ export async function tick() {
   await replayQueueAdvances();
   // 等过哨兵、放开了却没人推的队列成员:事件那一路漏掉时由这里接住(queue-monitor-hold.ts)。
   await sweepReleasedQueueMembers().catch((error) => console.error("[ash] 欠着的队列推进巡检出错:", error));
+  // 按了「全部停下」、中途出错没停完的:接着停完(dispatch-hold.ts)。排在兑现欠账之前,停完记下的账同一趟就能兑现。
+  await sweepPendingHolds().catch((error) => console.error("[ash] 没停完的「全部停下」巡检出错:", error));
   await sweepOwedStarts().catch((error) => console.error("[ash] 欠着的起跑巡检出错:", error));
 }
 

@@ -23,7 +23,7 @@
 //
 // 派活的那条被删掉：停着的标记跟着那一行没了，名下的任务不再被按住；欠账一并清掉、原地留着
 // （已暂停 / 排着），不替用户把它们跑起来 —— 删一条任务不等于要它名下的活接着干。
-import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { hasCliGoalHold } from "@ash/shared/cli-commands";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
@@ -41,6 +41,7 @@ import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation } from "./ta
 import { waitForStartReceipt } from "./task-start-receipt.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { now } from "./util.js";
+import { withGroupSlot } from "./group-slots.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -70,10 +71,27 @@ export type HoldResult = { holdAt: string | null; tree: string[] };
  * 起跑都过 turn-freeze.ts 的持久复查，智能体的 run_task 也是），清点之前就在跑的一定在名单里 ——
  * 不会有落在两边之外的。反过来（先清点再落标记）的话，清点途中新派出、落标记前已经起跑的那一位
  * 两头都够不着。
+ *
+ * **「停着」和「停完了」是两件事**：标记跟「还没停完」（dispatch_hold_pending_at）一起落，清点、逐条
+ * 停掉都做完才清后者。中途哪一笔读写失败，路由报错，后者留着 —— 页面说「正在停下」、给「再停一次」，
+ * 调度 tick 也会接着把没停完的停完（sweepPendingHolds）；不会出现「格头说已全部停下、底下还在跑、
+ * 键却成了接着跑」（第 1 轮复审 F1）。
  */
 export async function holdDispatched(holderId: string): Promise<HoldResult> {
-  await db.update(tasks).set({ dispatchHoldAt: now() })
-    .where(and(eq(tasks.id, holderId), isNull(tasks.dispatchHoldAt)));
+  const pendingAt = now();
+  await db.update(tasks).set({ dispatchHoldAt: sql`coalesce(${tasks.dispatchHoldAt}, ${pendingAt})`, dispatchHoldPendingAt: pendingAt })
+    .where(eq(tasks.id, holderId));
+  try {
+    return await settleHold(holderId, pendingAt);
+  } catch (error) {
+    // 已经落下的「停着 / 还没停完」要让别的窗口也看见（它们据此说正在停下）。
+    await publishTaskUpdated(holderId).catch(() => undefined);
+    throw error;
+  }
+}
+
+/** 清点名下、逐条停掉；全做完了才清「还没停完」（只清自己那一次落的：期间又按了一次的那一笔归它自己）。 */
+async function settleHold(holderId: string, pendingAt: string): Promise<HoldResult> {
   const tree = await dispatchTree(holderId);
   if (tree.length) {
     await db.transaction(async (transaction) => {
@@ -83,7 +101,7 @@ export async function holdDispatched(holderId: string): Promise<HoldResult> {
       await transaction.update(tasks).set({ queueAdvanceRequest: null }).where(inArray(tasks.id, tree));
     }, { behavior: "immediate" });
   }
-  notePauseOfTasks(tree);
+  notePauseOfTasks(tree, holderId);
   const holder = (await db.select({ title: tasks.title, holdAt: tasks.dispatchHoldAt }).from(tasks)
     .where(eq(tasks.id, holderId))).at(0);
   const hold = { byTaskId: holderId, byTitle: holder?.title ?? "" };
@@ -92,7 +110,7 @@ export async function holdDispatched(holderId: string): Promise<HoldResult> {
     if (!row) continue;
     const live = isRunning(taskId) || isTurnClaimed(taskId) || row.status === "running" || row.status === "queued";
     if (!live) continue;
-    // 账先记、再停：停下这一刻起它就欠着，记不进去就别停（抛给路由，用户再按一次会再扫一遍）。
+    // 账先记、再停：停下这一刻起它就欠着，记不进去就别停（抛出去，「还没停完」留着，下一趟再来）。
     // 占着回合的是一班还没放行的到点启动：起跑的责任在班次上，只打撤回标记、不记账（dispatch-hold-owed.ts）。
     const shift = shiftAdmissionPending(taskId);
     if (!shift) await oweHeldStart(taskId, holderId);
@@ -106,8 +124,24 @@ export async function holdDispatched(holderId: string): Promise<HoldResult> {
     // 到头来什么都没停到（刚好跑完、占着的不是回合）：它不欠这一次。
     if (!stopped && !shift) await forgetHeldStart(taskId, holderId);
   }
+  await db.update(tasks).set({ dispatchHoldPendingAt: null })
+    .where(and(eq(tasks.id, holderId), eq(tasks.dispatchHoldPendingAt, pendingAt)));
   await settleAnnouncements(holderId, tree);
   return { holdAt: holder?.holdAt ?? null, tree };
+}
+
+/** 调度 tick 的兜底：按了停、没停完的（中途出错、服务正好重启），接着停完。 */
+export async function sweepPendingHolds(): Promise<void> {
+  if (dbClient.closed) return;
+  const pending = await db.select({ id: tasks.id, pendingAt: tasks.dispatchHoldPendingAt }).from(tasks)
+    .where(and(isNotNull(tasks.dispatchHoldPendingAt), isNotNull(tasks.dispatchHoldAt)));
+  for (const { id, pendingAt } of pending) {
+    try {
+      await settleHold(id, pendingAt!);
+    } catch (error) {
+      console.error(`[ash] 没停完的「全部停下」补停失败 holder=${id}(下一次 tick 再来):`, error);
+    }
+  }
 }
 
 /**
@@ -116,7 +150,7 @@ export async function holdDispatched(holderId: string): Promise<HoldResult> {
  * 没停着就只是再兑现一遍（两个窗口各按一次，第二次不多起任何东西：起跑那道锁只认一个）。
  */
 export async function releaseDispatched(holderId: string): Promise<HoldResult> {
-  await db.update(tasks).set({ dispatchHoldAt: null })
+  await db.update(tasks).set({ dispatchHoldAt: null, dispatchHoldPendingAt: null })
     .where(and(eq(tasks.id, holderId), isNotNull(tasks.dispatchHoldAt)));
   const tree = await dispatchTree(holderId);
   await settleAnnouncements(holderId, tree);
@@ -155,7 +189,9 @@ export async function honorOwedStart(taskId: string): Promise<void> {
   }
   if (starting.has(taskId)) return;
   starting.add(taskId);
-  void startOwed(taskId).finally(() => starting.delete(taskId));
+  // 组里的成员占分组的并发名额起（同分组运行），不然一组被按住的全部同时开跑（scheduler.ts withGroupSlot）。
+  const start = () => startOwed(taskId);
+  void (row.groupId ? withGroupSlot(row.groupId, start) : start()).finally(() => starting.delete(taskId));
 }
 
 /** 这一刻正在由本进程拉起的那几位：监听、巡检、接着跑同时来时只起一次。 */

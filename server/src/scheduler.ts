@@ -16,15 +16,17 @@ import { waitForStartReceipt } from "./task-start-receipt.js";
 import { reportGroupStartFailure } from "./group-start-failure.js";
 import { clearQueueAdvanceIntent, recordQueueAdvanceIntent, refuseQueueAdvance } from "./queue-advance-admission.js";
 import { heldByMonitors, withMonitorHolds, type QueueRow } from "./queue-monitor-hold.js";
-import { currentPauseGeneration, notePauseOfGroup, pausedSince } from "./pause-generation.js";
-import { taskHoldOf } from "./task-hold.js";
+import { currentPauseGeneration, dispatchPauseSince, notePauseOfGroup, pausedSince } from "./pause-generation.js";
+import { taskHoldOf, type TaskHold } from "./task-hold.js";
 import { oweHeldStart } from "./dispatch-hold-owed.js";
+import { MAX_PARALLEL, withGroupSlot } from "./group-slots.js";
 
-const MAX_PARALLEL = 4;
 type QueueAdvanceAttempt = {
   request?: QueueAdvanceRequest;
   candidate?: { taskId: string; generation: number };
   pauseGeneration: number;
+  /** 这一趟因「名下全部停下」作废、交成欠账的那一位：出了临界区当场兑现一次（按停那条可能已经放开）。 */
+  yielded?: string;
 };
 
 // 暂停整组(POST /groups/:id/pause 与团队的「停止全组」共用这一份):置 paused、
@@ -146,6 +148,28 @@ export function advanceQueueInBackground(queueId: string): void {
   void advanceQueue(queueId).catch((error) => console.error(`[ash] 后台队列推进失败 queue=${queueId}:`, error));
 }
 
+/**
+ * 推进因「按住」作废时，这次起跑不能跟着这一趟一起消失 —— 外层随后会把这条队列的推进意图当作了结
+ * 删掉（第 1 轮复审 F2：停完马上接着跑，这一趟才走到这里，队首那位从此没人起）。分组暂停不用交：
+ * 恢复分组时由分组那边重推整条队列。名下全部停下交给按停那一条的欠账，「接着跑」时由那边兑现；
+ * 那一条此刻已经放开了的，出了临界区当场兑现一次（kickOwedStart）。认谁按的：此刻还按着的那一条，
+ * 或者这一趟开始之后按过、已经放开的那一条（pause-generation.ts 记着）。
+ */
+async function yieldToHold(task: { id: string; groupId: string | null }, attempt: QueueAdvanceAttempt, hold?: TaskHold | null): Promise<"paused"> {
+  const current = hold === undefined ? await taskHoldOf(task) : hold;
+  const by = current ? (current.kind === "dispatch" ? current.byTaskId : null) : dispatchPauseSince(task.id, attempt.pauseGeneration);
+  if (by) {
+    await oweHeldStart(task.id, by);
+    attempt.yielded = task.id;
+  }
+  return "paused";
+}
+
+function kickOwedStart(taskId: string): void {
+  void import("./dispatch-hold.js").then(({ honorOwedStart }) => honorOwedStart(taskId))
+    .catch((error) => console.error(`[ash] 交给欠账的起跑当场兑现失败 task=${taskId}(tick 会再来):`, error));
+}
+
 async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt): Promise<void> {
   const request = attempt.request;
   // 「挑下一个」与「落 queued」收进队列认领临界区(queue-seat.ts,与手动运行/重跑/
@@ -167,15 +191,20 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
       && task.resumePromptGeneration === attempt.candidate!.generation)) {
       attempt.candidate = undefined;
     }
-    if (candidate && pausedSince(candidate, attempt.pauseGeneration)) return "paused";
+    if (candidate && pausedSince(candidate, attempt.pauseGeneration)) return yieldToHold(candidate, attempt);
     if (request) {
       const target = rows.find((task) => task.id === request.taskId);
       if (!target || target.queueAdvanceRequest?.id !== request.id
         || target.resumePromptGeneration !== request.resumePromptGeneration || target.archived
         || ["done", "failed", "canceled"].includes(target.status) || target.question || hasCliGoalHold(target.cliState)
-        || target.monitorHold || await taskHoldOf(target)) {
+        || target.monitorHold) {
         await clearQueueAdvance(request);
         return "paused";
+      }
+      const targetHold = await taskHoldOf(target);
+      if (targetHold) {
+        await clearQueueAdvance(request);
+        return yieldToHold(target, attempt, targetHold);
       }
       if (!candidate || candidate.id !== request.taskId) {
         deferQueueAdvance(queueId);
@@ -202,13 +231,11 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
     // 上面那条派活的任务按了「全部停下」同理(task-hold.ts):不起它、也不越过它,记一笔欠账,
     // 「接着跑」时由那边兑现(dispatch-hold.ts)。
     const hold = await taskHoldOf(candidate);
-    if (hold) {
-      if (hold.kind === "dispatch") await oweHeldStart(candidate.id, hold.byTaskId);
-      return "paused";
-    }
+    if (hold) return yieldToHold(candidate, attempt, hold);
     attempt.candidate ??= { taskId: candidate.id, generation: candidate.resumePromptGeneration };
     const advanceRequest = request ?? await requestQueueAdvance(queueId, candidate);
-    if (!advanceRequest) return "paused";
+    // 落请求那一刻（事务里再认一次）被按住了，同上交出去；别的原因（删了、归档、落了终态）不欠。
+    if (!advanceRequest) return yieldToHold(candidate, attempt);
     attempt.request = advanceRequest;
     deferQueueAdvance(queueId);
     if (await preparePendingCheckpointStart(candidate.id)) {
@@ -249,7 +276,10 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
     // 在其间把这把锁拔走、另一轮占上(本轮审查 F1)。
     return { ...candidate, reservation, advanceRequest, turn };
   });
-  if (next === "paused") return;
+  if (next === "paused") {
+    if (attempt.yielded) kickOwedStart(attempt.yielded);
+    return;
+  }
   if (next && typeof next === "object") {
     const prevStatus = next.status as TaskStatus; // 临界区里读到的占位前状态
     void waitForStartReceipt(next.id, () => resumeOrRunTask(next.id, { origin: "auto", reason: "queue", turnHeld: next.turn })
@@ -632,7 +662,7 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
       if (!(await isPaused(groupId))) {
         while (pending.length && inflight.size < MAX_PARALLEL) {
           const t = pending.shift()!;
-          const p = launch(t.id).finally(() => inflight.delete(t.id));
+          const p = withGroupSlot(groupId, () => launch(t.id)).finally(() => inflight.delete(t.id));
           inflight.set(t.id, p);
         }
       }

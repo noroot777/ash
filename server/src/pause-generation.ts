@@ -7,7 +7,8 @@
 // 另有各处的闸在读。
 let generation = 0;
 const groupPauses = new Map<string, number>();
-const taskPauses = new Map<string, number>();
+// 任务那一份还记着是谁按的（名下全部停下才有）：推进因它作废时，要把这次起跑交给那一条的欠账（scheduler.ts）。
+const taskPauses = new Map<string, { at: number; by: string | null }>();
 
 export const currentPauseGeneration = (): number => generation;
 
@@ -15,13 +16,19 @@ export function notePauseOfGroup(groupId: string): void {
   groupPauses.set(groupId, ++generation);
 }
 
-export function notePauseOfTasks(taskIds: readonly string[]): void {
+export function notePauseOfTasks(taskIds: readonly string[], by: string | null = null): void {
   const at = ++generation;
-  for (const taskId of taskIds) taskPauses.set(taskId, at);
+  for (const taskId of taskIds) taskPauses.set(taskId, { at, by });
 }
 
 /** 这一位（按任务本身、或按它所在的分组）在 `since` 那一代之后被停过吗。 */
 export function pausedSince(task: { id: string; groupId: string | null }, since: number): boolean {
   if (task.groupId && (groupPauses.get(task.groupId) ?? 0) > since) return true;
-  return (taskPauses.get(task.id) ?? 0) > since;
+  return (taskPauses.get(task.id)?.at ?? 0) > since;
+}
+
+/** `since` 那一代之后，按停这一位的是哪条派活的任务（不是被名下全部停下停的就是 null）。 */
+export function dispatchPauseSince(taskId: string, since: number): string | null {
+  const pause = taskPauses.get(taskId);
+  return pause && pause.at > since ? pause.by : null;
 }

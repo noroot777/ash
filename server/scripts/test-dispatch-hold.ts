@@ -13,7 +13,9 @@
 //   · 先落「停着」再清点名下（清点途中新起跑的那一位逃不出去）；
 //   · 到点启动的入口读到旧答案时，占位之后那一次复查拦下它、不消费班次，放开后照常开新的一轮；
 //     那次复查读库失败时把占位还掉，下一个 tick 照常起；放行之前按的停不记欠账（责任只在班次上），
-//     整件事只跑一次；正常停下的那一笔不因为恰好有一班定时到期被吞掉，接着跑照样从原会话续。
+//     整件事只跑一次；正常停下的那一笔不因为恰好有一班定时到期被吞掉，接着跑照样从原会话续；
+//   · 停到一半出错：「还没停完」留着，tick 接着停完；推进途中停了又放，这次起跑交成欠账不丢；
+//     一组被按住的接着跑时照样受分组并发上限管。
 //
 // 走真实的调度链路（队列推进、分组运行、路由、结算钩子），只换掉「起一个 CLI」那一步：假执行器
 // 记下每一回合拿到的输入与续的是哪条原生会话，回合一直挂着，直到测试放它走或者它被停掉。
@@ -55,6 +57,7 @@ const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
 const { resumeOrRunTask } = await import("../src/task-resume.js");
 const { holdDispatched } = await import("../src/dispatch-hold.js");
 const { tick } = await import("../src/schedules.js");
+const { serializeQueueClaims } = await import("../src/queue-seat.js");
 await ensureSchema();
 
 const api = new Hono();
@@ -130,6 +133,7 @@ await db.insert(schema.agents).values({ id: "fixture-claude", name: "claude@fixt
 await db.insert(schema.groups).values([
   { id: "G", projectId: "p", name: "共用的组", mode: "parallel", paused: false, createdAt: at },
   { id: "G2", projectId: "p", name: "另一个组", mode: "parallel", paused: false, createdAt: at },
+  { id: "G3", projectId: "p", name: "六条的组", mode: "parallel", paused: false, createdAt: at },
 ]);
 const task = (id: string, over: Partial<typeof tasks.$inferInsert> = {}): typeof tasks.$inferInsert => ({
   id, projectId: "p", title: `任务 ${id}`, body: id, status: "backlog", mode: "single", agentType: "claude",
@@ -164,10 +168,17 @@ await db.insert(tasks).values([
   task("H9", { status: "done", title: "停下的同时有定时到期" }),
   task("R1", { dispatchedBy: "H9" }),
   task("R2", { dispatchedBy: "H9" }),
+  task("HA", { status: "done", title: "停到一半出错" }),
+  task("P1", { dispatchedBy: "HA" }),
+  task("HB", { status: "done", title: "推进途中停了又放" }),
+  task("B2", { dispatchedBy: "HB" }),
+  task("HG", { status: "done", title: "一组六条" }),
+  ...["G1", "G2x", "G3", "G4", "G5", "G6"].map((id) => task(id, { groupId: "G3", dispatchedBy: "HG" })),
 ]);
 await db.insert(schema.queueItems).values([
   { taskId: "A", queueId: "Q", position: 0, createdAt: at },
   { taskId: "B", queueId: "Q", position: 1, createdAt: at },
+  { taskId: "B2", queueId: "Q2", position: 0, createdAt: at },
 ]);
 
 let failure: unknown = null;
@@ -475,6 +486,65 @@ try {
     await until(`${id} 真起跑后欠账销掉`, async () => (await row(id)).holdOwedBy === null);
     await db.delete(schema.schedules).where(eq(schema.schedules.id, `shift-${id}`));
   }
+
+  // ── 停到一半出错：「还没停完」留着，页面不说已全部停下；tick 接着停完，停完才清（第 1 轮复审 F1）──────
+  assert.equal((await post("/tasks/P1/run")).status, 202);
+  await running("P1");
+  let oweFailed = 0;
+  (dbClient as { execute: unknown }).execute = async (stmt: Parameters<typeof execute>[0]) => {
+    const text = typeof stmt === "string" ? stmt : stmt.sql;
+    const args = typeof stmt === "string" ? [] : Object.values(stmt.args ?? {});
+    if (!oweFailed && text.startsWith('update "tasks" set "hold_owed_by"') && args[0] === "HA" && args.includes("P1")) {
+      oweFailed += 1;
+      throw new Error("注入：记欠账那一笔写失败");
+    }
+    return execute(stmt);
+  };
+  let failedHold: Response;
+  try {
+    failedHold = await post("/tasks/HA/dispatched/hold");
+  } finally {
+    (dbClient as { execute: unknown }).execute = execute;
+  }
+  assert.equal(oweFailed, 1);
+  assert.notEqual(failedHold.status, 200, "这一次停没做完，如实报错");
+  assert.ok((await row("HA")).dispatchHoldAt, "停着的标记已经落下（新的起跑照样被拦）");
+  assert.ok((await row("HA")).dispatchHoldPendingAt, "「还没停完」留着：页面据它说正在停下、给再停一次");
+  assert.ok(runs.isRunning("P1"), "P1 还在跑（就是没停完的那一条）");
+  await tick();
+  await settled("P1", "paused");
+  assert.equal((await row("P1")).holdOwedBy, "HA", "补停之后记上欠账");
+  assert.equal((await row("HA")).dispatchHoldPendingAt, null, "停完了才清");
+  assert.equal((await post("/tasks/HA/dispatched/release")).status, 200);
+  await until("P1 接着跑", () => turnsOf("P1").length === 2);
+  assert.equal(turnsOf("P1")[1]!.resume, "native-P1");
+
+  // ── 推进已经接受、还没挑人时停了又马上放开：这一趟作废时把起跑交成欠账，放开后照样起（第 1 轮复审 F2）──
+  let unblock!: () => void;
+  const blocker = serializeQueueClaims(() => new Promise<void>((resolve) => { unblock = resolve; }));
+  const advancing = advanceQueue("Q2");
+  await until("推进意图落库", async () => (await db.select().from(schema.queueAdvanceIntents)
+    .where(eq(schema.queueAdvanceIntents.queueId, "Q2"))).length === 1);
+  await holdDispatched("HB");
+  assert.equal((await post("/tasks/HB/dispatched/release")).status, 200);
+  unblock();
+  await blocker;
+  await advancing;
+  await until("B2 照样起跑", () => turnsOf("B2").length === 1);
+
+  // ── 一组六条被按住、接着跑：照样受分组的并发上限管，同时至多四条（第 1 轮复审 F3）──────────────
+  const six = ["G1", "G2x", "G3", "G4", "G5", "G6"];
+  assert.equal((await post("/tasks/HG/dispatched/hold")).status, 200);
+  await runGroup("G3");
+  for (const id of six) assert.equal((await row(id)).holdOwedBy, "HG", `${id} 记着欠一次起跑`);
+  assert.equal((await post("/tasks/HG/dispatched/release")).status, 200);
+  await until("先起四条", () => six.filter((id) => turnsOf(id).length === 1).length === 4);
+  await sleep(400);
+  assert.equal(six.filter((id) => runs.isRunning(id)).length, 4, "同时至多四条在跑");
+  const first = six.find((id) => turnsOf(id).length === 1)!;
+  finish(first);
+  await until("一条做完，第五条补上", () => six.filter((id) => turnsOf(id).length === 1).length === 5);
+  assert.equal(six.filter((id) => runs.isRunning(id)).length, 4);
 
   console.log("dispatch hold: ok");
 } catch (error) {
