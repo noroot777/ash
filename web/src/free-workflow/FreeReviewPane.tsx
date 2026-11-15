@@ -55,7 +55,7 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
   const rootRef = useRef<HTMLDivElement>(null);
   const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(() => new Set());
   /** 展开之后要滚到的那一处（那一轮，或那一轮下面的辩论那一段）。 */
-  const [scrollTo, setScrollTo] = useState<string | null>(null);
+  const [scrollTo, setScrollTo] = useState<{ record: string; debate: string | null } | null>(null);
   // 打开时定下是哪一扇（同回复框那颗键）：审查在跑 = 调轮数，否则 = 派审/预约。
   const [dialog, setDialog] = useState<"rounds" | "review" | "post" | null>(null);
   const [postRepairBusy, setPostRepairBusy] = useState(false);
@@ -92,14 +92,22 @@ export function FreeReviewPane({ task, onOpenReview, onOpenTask, notify, reviewR
 
   useEffect(() => {
     if (!scrollTo) return;
-    rootRef.current?.querySelector(scrollTo)?.scrollIntoView({ block: "nearest" });
-    setScrollTo(null);
+    // 等刚展开的那一轮排版落定再滚：长报告量过高度之后才把自己夹短，早滚一帧，要停的那一段就被
+    // 顶出视野。从辩论气泡点过来停在那一轮的辩论那一段（顶到上沿）；认不出那一段就停在那一轮。
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        const debate = scrollTo.debate ? rootRef.current?.querySelector(`${scrollTo.record} [data-debate="${CSS.escape(scrollTo.debate)}"]`) : null;
+        if (debate) debate.scrollIntoView({ block: "start" });
+        else rootRef.current?.querySelector(scrollTo.record)?.scrollIntoView({ block: "nearest" });
+        setScrollTo(null);
+      });
+    });
+    return () => cancelAnimationFrame(frame);
   }, [scrollTo, openKeys]);
 
   const reveal = (key: string, debateId?: string | null) => {
     setOpenKeys((current) => new Set(current).add(key));
-    const record = `[data-record="${CSS.escape(key)}"]`;
-    setScrollTo(debateId ? `${record} [data-debate="${CSS.escape(debateId)}"]` : record);
+    setScrollTo({ record: `[data-record="${CSS.escape(key)}"]`, debate: debateId ?? null });
   };
   const toggle = (key: string) => setOpenKeys((current) => {
     const next = new Set(current);
