@@ -1,7 +1,7 @@
-import { memo, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useMemo, useRef, useState, type ReactNode } from "react";
 import { File, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
-import type { FreeReviewRun } from "@ash/shared";
+import type { FreeReviewRun, TaskDiscussion } from "@ash/shared";
 import type { TaskCreationOrigin } from "@ash/shared/task-origin";
 import type { ConversationItem, ConversationSource } from "./conversationModel.ts";
 import { conversationTailKey } from "./conversationModel.ts";
@@ -14,12 +14,15 @@ import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { MessageText } from "../components/MessageText.tsx";
 import { LiveStrip } from "../components/LiveStrip.tsx";
+import { PrerequisiteWait } from "./PrerequisiteWait.tsx";
 import { runActivityCopy, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import { MessageAttachments } from "./Attachments.tsx";
 import { conversationFeedRows, reviewLaneMessageRoles, type ReviewLaneMessageRole } from "./conversationReviewLanes.ts";
 import { conversationDebateRows } from "./conversationDebateRows.ts";
+import { conversationDiscussionRows } from "./conversationDiscussionRows.ts";
 import { conversationSystemRows, laneReceipts, laneTailFootnote, type ConversationFootnoteRow, type TurnReceipt } from "./conversationSystemRows.ts";
 import { DebateBubble } from "./DebateBubble.tsx";
+import { DiscussionBubble } from "./DiscussionBubble.tsx";
 import { laneRoundOpener } from "./reviewLaneLinks.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import { reviewPanelSources, reviewTargetLocatable, type ReviewTarget } from "../review/reviewTarget.ts";
@@ -28,6 +31,7 @@ import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
 import { isUnshownNotice, noticeView, questionsOnScreen, type NoticeContext } from "./timelineNoticeCopy.ts";
 import { FootnoteLine } from "./FootnoteLine.tsx";
 import { ReviewBubble } from "./ReviewBubble.tsx";
+import { feedRowAt, interleaveAsides, type FeedAside } from "./feedAsides.ts";
 import { reviewProgress } from "./reviewProgress.ts";
 import { footnoteKey, receiptsKey, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 import { crashedTurns } from "./turnFailure.ts";
@@ -292,7 +296,9 @@ export function ConversationFeed({
   onForkReply,
   onAskSideChat,
   reviews,
+  discussions,
   onOpenReviewPanel,
+  onOpenTask,
   reviewRetry,
   turnRetry,
   questionHistory,
@@ -301,6 +307,7 @@ export function ConversationFeed({
   bodyReady = true,
   onDeleteMessage,
   onReuseInput,
+  asides,
 }: {
   task: TaskListItem;
   /**
@@ -319,11 +326,15 @@ export function ConversationFeed({
   onAskSideChat?: (quote: string) => void;
   /** 自由派审的落盘记录：折叠卡靠它反查报告的 runId（旁注里只有轮号）。 */
   reviews?: readonly FreeReviewRun[] | null;
+  /** 这条任务上的讨论（落盘记录）：一场折成一颗讨论气泡，靠它配。 */
+  discussions?: readonly TaskDiscussion[] | null;
   /**
    * 打开右侧审查格的那一轮：会话里那颗审查结论 / 辩论气泡被点了。不给（只读的会话视图、团队时间线
    * 都没有那块面板）就在气泡下面就地摊开，不给一颗点了没反应的键。
    */
   onOpenReviewPanel?: (target?: ReviewTarget) => void;
+  /** 「在等前置」那一行点名字时打开那条任务。 */
+  onOpenTask?: (taskId: string) => void;
   /** 此刻能「继续本轮审查」的那一轮和那个动作（审查格主按钮同一份）。不给 = 尾注上不挂。 */
   reviewRetry?: ReviewRetryAction | null;
   /** 此刻能「重试这一回合」的那条会话和那个动作（turnRetry.ts）。不给 = 失败那句话后面不挂。 */
@@ -346,6 +357,8 @@ export function ConversationFeed({
   onDeleteMessage?: (sources: ConversationSource[]) => Promise<void>;
   /** 你发的那几句（含原始需求）放回对话框改了再发。不给就不出这颗键（没有对话框的视图）。 */
   onReuseInput?: (input: ReusableInput) => void;
+  /** 不在会话正文里、按时刻插进来的那几样（派出的任务来问的那颗气泡……，见 feedAsides.ts）。 */
+  asides?: readonly FeedAside[];
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   // 被挡回的用户操作合进同一条任务历史。正文读到手之后**无条件合** —— 「有没有正文」跟「这段历史该不该
@@ -392,7 +405,7 @@ export function ConversationFeed({
   const history = useQuestionHistory(task.id, questionHistory, liveQuestionHistory);
   const onScreen = questionsOnScreen(task, history.records);
   const { rows, receipts, footnotes } = conversationSystemRows(
-    conversationDebateRows(feedRows, { reviews }),
+    conversationDiscussionRows(conversationDebateRows(feedRows, { reviews }), { discussions }),
     { failures: crashed, context: noticeContext, causes, held: actions.held, onScreen },
   );
   // 一轮审查里（审查者气泡下面摊开的那一轮、记录里点开的那一轮）的旁注同样记在审查者
@@ -528,7 +541,8 @@ export function ConversationFeed({
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
           {requirement && inputs[0]?.id === REQUIREMENT_INPUT_ID && <RequirementMessage requirement={requirement} onReuse={onReuseInput} />}
-          {rows.map((row) => {
+          {interleaveAsides(rows, asides ?? [], feedRowAt).map(({ row, aside }) => {
+            if (aside) return <Fragment key={aside.key}>{aside.node}</Fragment>;
             if (row.kind === "item") return renderItem(row.item);
             if (row.kind === "system-action") {
               return <SystemAuthoredMessage key={row.id} item={row.item} related={row.related} />;
@@ -557,6 +571,17 @@ export function ConversationFeed({
                 />
               );
             }
+            if (row.kind === "discussion-lane") {
+              const topic = row.discussion?.topic;
+              return (
+                <Fragment key={row.id}>
+                  {topic && <UserBubble id={`${row.id}:topic`} author="你" text={topic} attachments={row.discussion!.attachments ?? []} at={row.discussion!.startedAt} />}
+                  <DiscussionBubble row={row} task={task} fallback={row.items.map((item) => renderItem(item, true))}
+                    onOpen={onOpenReviewPanel && panelSources.has("free")
+                      ? (discussionId) => onOpenReviewPanel({ source: "free", runId: null, round: null, discussionId }) : undefined} />
+                </Fragment>
+              );
+            }
             // 收了口的审查轮不在这里（它是上面那一行审查结论）；走到这里的是还没出结论的那一轮。
             const tail = laneTailFootnote(lanes.get(row.id)!);
             return (
@@ -570,7 +595,11 @@ export function ConversationFeed({
             : <LiveStrip since={task.liveSince} />)}
           {/* 正文一条都没读下来时这里是空的，但那不是「还没开始跑」——`forkBlockedReason`
               在场就说明读挂了，再劝用户点运行是把失败说成了空会话。 */}
-          {!items.length && !loading && !error && !forkBlockedReason && !activityPhase && (
+          {task.status === "backlog" && (task.prerequisites?.waiting || task.prerequisites?.blocked) && !activityPhase && (
+            <PrerequisiteWait view={task.prerequisites} onOpenTask={onOpenTask} />
+          )}
+          {!items.length && !asides?.length && !loading && !error && !forkBlockedReason && !activityPhase
+            && !(task.status === "backlog" && (task.prerequisites?.waiting || task.prerequisites?.blocked)) && (
             <div className="task-conversation-empty">
               <File size={20} aria-hidden="true" />
               <p>点击「运行」开始，执行输出会实时显示在这里。</p>

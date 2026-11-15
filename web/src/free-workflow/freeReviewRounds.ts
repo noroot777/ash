@@ -1,4 +1,4 @@
-// 自由审查各轮的叫法：右侧「审查」「工作流」两格和它们点开的正文共用这一份，免得同一轮
+// 自由审查各轮的叫法：右侧「审议」「工作流」两格和它们点开的正文共用这一份，免得同一轮
 // 在两处各说各的。
 import type { FreeReviewRound, FreeReviewRun } from "@ash/shared";
 import type { ReviewNoVerdict } from "@ash/shared/timeline-notice";

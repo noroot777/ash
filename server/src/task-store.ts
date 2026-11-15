@@ -12,6 +12,7 @@ import { admissionKeysOf, admitMembers, TeamAcceptingError } from "./team-admiss
 import { execFileText as exec } from "./exec.js";
 import { expandHome } from "./git.js";
 import { baseRef, initializeBranchPlan } from "./task-branch-plan.js";
+import { assertPrerequisiteEdges, insertPrerequisiteEdges, withPrerequisiteGraph, type EdgeTask, type PrerequisiteEdge } from "./prerequisite-store.js";
 import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
 import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors.js";
@@ -207,8 +208,11 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
           > coalesce(${sessions.turnStartedAt}, ${sessions.startedAt})))`.mapWith(Boolean),
   }).from(tasks).leftJoin(taskBackgroundRevisions, eq(tasks.id, taskBackgroundRevisions.taskId))
     .where(inArray(tasks.id, rows.map(row => row.id)))).map(row => [row.taskId, row]));
+  const { prerequisiteViews } = await import("./prerequisite-view.js");
+  const prerequisites = await prerequisiteViews(rows);
   return rows.map((r) => {
     const q = byQueueTask.get(r.id);
+    const view = prerequisites.get(r.id);
     return {
       ...toTask(r, profiles),
       ...runsTiming(byTask.get(r.id) ?? []),
@@ -218,6 +222,7 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
       acceptGateRunning: background.get(r.id)?.acceptGateRunning ?? false,
       monitorRunning: background.get(r.id)?.monitorRunning ?? false,
       upstreamStalled: background.get(r.id)?.upstreamStalled ?? false,
+      ...(view ? { prerequisites: view } : {}),
     };
   });
 }
@@ -295,6 +300,8 @@ export async function createTasks(
   beforeInsert?: () => Promise<void> | void,
   /** 行上没记、但这次创建也挂靠着的任务（POST /tasks 的 reviewOf）：一起占「加成员」的位。 */
   alsoAdmit: (string | null | undefined)[] = [],
+  /** 这一批里逐条写的前置（下游可以是这一批里的，前置也可以是已有的任务）。不成立就整批不建。 */
+  prerequisites: PrerequisiteEdge[] = [],
   joinQueue?: (tx: QueueJoinWriter) => Promise<void>,
 ): Promise<Task[]> {
   if (rows.length === 0) return [];
@@ -362,14 +369,23 @@ export async function createTasks(
         await initializeBranchPlan(row, repoByProject.get(row.projectId) || "");
         if (!hadStart && row.worktreeStartCommit) pinned.push(row);
       }
-      if (joinQueue) {
-        await serializeQueueClaims(() => db.transaction(async (tx) => {
-          await tx.insert(tasks).values(normalizedRows);
-          await joinQueue(tx);
-        }));
-      } else {
+      // 合入目标要等分支计划算出来才判得了（prerequisite-store.ts），所以排在它后面、落库前面。
+      // 判环与落边在整张图上排队（prerequisite-store.ts `withPrerequisiteGraph`）；不带前置的照旧直接落。
+      // 串进队列的：任务行、前置边、队列成员同一笔事务（见上面 joinQueue）。锁序是图 → 认领链：链上的人不会回头等图。
+      const land = async () => {
+        await assertPrerequisiteEdges(prerequisites, normalizedRows.map(edgeTaskOf));
+        if (joinQueue) {
+          await serializeQueueClaims(() => db.transaction(async (tx) => {
+            await tx.insert(tasks).values(normalizedRows);
+            await insertPrerequisiteEdges(prerequisites, tx);
+            await joinQueue(tx);
+          }));
+          return;
+        }
         await db.insert(tasks).values(normalizedRows);
-      }
+        await insertPrerequisiteEdges(prerequisites);
+      };
+      await (prerequisites.length ? withPrerequisiteGraph(land) : land());
     } catch (error) {
       for (const row of pinned) await exec("git", ["-C", expandHome(repoByProject.get(row.projectId)), "update-ref", "-d", baseRef(row.id), row.worktreeStartCommit!]).catch(() => {});
       throw error;
@@ -393,6 +409,13 @@ export async function createTasks(
 
 /** 串进队列那一笔事务里能用的读写(createTasks 的 joinQueue)。 */
 export type QueueJoinWriter = Pick<typeof db, "select" | "insert">;
+
+const edgeTaskOf = (row: typeof tasks.$inferInsert & { id: string }): EdgeTask => ({
+  id: row.id, projectId: row.projectId, title: row.title, mode: row.mode ?? "single", parentId: row.parentId ?? null,
+  reviewOf: row.reviewOf ?? null, status: row.status ?? "backlog", useWorktree: !!row.useWorktree,
+  mergeTargetBranch: row.mergeTargetBranch ?? null, acceptedTargetBranch: row.acceptedTargetBranch ?? null,
+  baseTaskId: row.baseTaskId ?? null, stage: row.stage ?? null,
+});
 
 export async function publishTaskUpdated(taskId: string): Promise<Task | null> {
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);

@@ -593,20 +593,22 @@ try {
   let active = 0;
   let peak = 0;
   const holds: Array<() => void> = [];
+  let probes = 0;
   const occupy = async () => {
-    const slot = await acquireGroupSlot("slot-probe");
+    const probe = `probe-${probes++}`;
+    await acquireGroupSlot("slot-probe", probe);
     peak = Math.max(peak, ++active);
     await new Promise<void>((resolve) => holds.push(resolve));
     active -= 1;
-    releaseGroupSlot("slot-probe", slot);
+    releaseGroupSlot("slot-probe", probe);
   };
-  const firstFour = [0, 1, 2, 3].map(occupy);
+  const firstFour = [0, 1, 2, 3].map(() => occupy());
   const waiter = occupy();
   await sleep(10);
   assert.equal(holds.length, 4);
   for (const resolve of holds.splice(0)) resolve();
   await Promise.all(firstFour);
-  const nextFour = [0, 1, 2, 3].map(occupy);
+  const nextFour = [0, 1, 2, 3].map(() => occupy());
   for (let i = 0; i < 6; i += 1) {
     await sleep(10);
     assert.ok(active <= 4, `同组同时 ${active} 个`);

@@ -8,6 +8,7 @@ import { execFileText as exec } from "./exec.js";
 import { expandHome, symbolicBranch, worktreePathFor, resolveWorktreeBranchName } from "./git.js";
 import { branchDependency, baseUpdateBackupPrefix, commitAt, inheritedParentCommit } from "./task-branch-plan.js";
 import { recordCompletedBaseUpdate } from "./task-base-record.js";
+import { startsFromPrerequisites } from "./prerequisite-dependency.js";
 import { parseBaseUpdateIntent } from "./task-base-intent.js";
 import { retainBaseUpdateBackups } from "./task-base-backups.js";
 import { withRepoLock } from "./repo-lock.js";
@@ -63,7 +64,8 @@ export async function updateTaskBase(taskId: string, expectedHead: string): Prom
       }
       const branch = await resolveWorktreeBranchName(repo, taskId);
       const parent = task.baseTaskId ? (await db.select().from(tasks).where(eq(tasks.id, task.baseTaskId))).at(0) : undefined;
-      const upstream = (await inheritedParentCommit(task, repo, parent))!;
+      // 按前置开工的：起点就是全部前置合在一起的那一版，只把这条任务自己的提交搬到目标分支上。
+      const upstream = await startsFromPrerequisites(taskId) ? task.worktreeStartCommit : (await inheritedParentCommit(task, repo, parent))!;
       const head = await commitAt(repo, branch);
       const target = await commitAt(repo, task.mergeTargetBranch);
       if (!head || !target || head !== expectedHead) return { ok: false, error: "任务提交已经变化，请刷新后重试" };

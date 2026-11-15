@@ -6,7 +6,7 @@ import type { Hono } from "hono";
 import type { PrimaryAction, RetryTurnAction, TaskActions } from "@ash/shared";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { groups, queueItems, tasks } from "./db/schema.js";
+import { groups, queueItems, taskPrerequisiteLaunches, tasks } from "./db/schema.js";
 import { actorOf } from "./auth/context.js";
 import { rememberTaskProject } from "./auth/event-filter.js";
 import { canSeeProject } from "./auth/visibility.js";
@@ -51,6 +51,8 @@ export async function readActionFacts(row: TaskRow): Promise<ActionFacts> {
     freeReviewActive: row.workflowMode === "free" ? await hasActiveFreeReview(row.id) : false,
     legacyReviewActive: legacy.some((review) => LEGACY_REVIEW_IN_FLIGHT.includes(review.status)),
     checkpointBlock: await checkpointStartBlock(row.id),
+    prerequisiteRequest: row.status === "backlog" && !!(await db.select({ at: taskPrerequisiteLaunches.requestedAt })
+      .from(taskPrerequisiteLaunches).where(eq(taskPrerequisiteLaunches.taskId, row.id))).at(0)?.at,
     team,
   };
 }

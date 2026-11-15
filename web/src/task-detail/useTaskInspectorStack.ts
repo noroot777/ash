@@ -14,7 +14,7 @@ import { surfaceTabWhenUsed } from "../inspector/index.ts";
 import { dispatchedOf } from "../lib/dispatchTree.ts";
 import { CountedIcon } from "./dispatched/CountedIcon.tsx";
 
-// 这几档 stage 下默认落在「审查」那一格：到了这一步，用户要看的就是审查那摊事。
+// 这几档 stage 下默认落在「审议」那一格：到了这一步，用户要看的就是审查那摊事。
 const REVIEW_FOCUS_STAGES = new Set(["verifying", "verified", "verify_failed", "awaiting_acceptance"]);
 
 export function useTaskInspectorStack(
@@ -43,7 +43,7 @@ export function useTaskInspectorStack(
   const dispatchedTab = useMemo(() => surfaceTabWhenUsed(memoTab, "dispatched", dispatchedCount > 0, (descriptor) => ({
     icon: dispatchedCount > 0 ? createElement(CountedIcon, { icon: descriptor.icon, count: dispatchedCount }) : descriptor.icon,
   })), [dispatchedCount, memoTab]);
-  // 审查链状态在这一层订阅：竖轨上「审查」那一格的主色点要它（审查在跑），任务页别处
+  // 审查链状态在这一层订阅：竖轨上「审议」那一格的主色点要它（审查在跑），任务页别处
   // （验收后快照入口、「继续本轮审查」的可用性）也用同一份，一个任务只挂一条 2.5s 轮询。
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const reviewing = task.workflowMode === "free"

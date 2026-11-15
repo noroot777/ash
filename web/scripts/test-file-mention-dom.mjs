@@ -189,8 +189,9 @@ try {
   assert.equal(await textarea.inputValue(), '读 @"docs/计划 A.md" ');
 
   // ⑤ 选中文件**不该**改这一回合的执行器：胶囊仍然是任务自己的那个，
-  //    也不该冒出「取消召唤」那颗按钮。
-  assert.equal(await page.getByRole("button", { name: /取消召唤/ }).count(), 0);
+  //    也不该冒出「不叫 xx 了」那颗小叉、框顶「它来做什么」那一行。
+  assert.equal(await page.getByRole("button", { name: /^不叫 .+ 了$/ }).count(), 0);
+  assert.equal(await page.locator(".reply-dock-row").count(), 0);
   const agentChip = page.getByRole("button", { name: /智能体：/ });
   assert.match(await agentChip.getAttribute("aria-label") ?? "", /智能体：codex/);
 

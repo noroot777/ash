@@ -4,6 +4,7 @@ type TaskSnapshot = {
   acceptGateRunning?: boolean;
   monitorRunning?: boolean;
   upstreamStalled?: boolean;
+  prerequisites?: import("@ash/shared/prerequisites").TaskPrerequisites;
 };
 
 export function mergeTaskSnapshotFields<T extends TaskSnapshot>(current: T, incoming: T, keepEqual = false): T {
@@ -13,5 +14,5 @@ export function mergeTaskSnapshotFields<T extends TaskSnapshot>(current: T, inco
   if (background.backgroundRevision === undefined) return base;
   return { ...base, backgroundRevision: background.backgroundRevision,
     acceptGateRunning: background.acceptGateRunning, monitorRunning: background.monitorRunning,
-    upstreamStalled: background.upstreamStalled };
+    upstreamStalled: background.upstreamStalled, prerequisites: background.prerequisites };
 }

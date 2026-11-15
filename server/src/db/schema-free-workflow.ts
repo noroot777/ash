@@ -236,6 +236,25 @@ export const freeReviewDebates = sqliteTable(
     startedAt: text("started_at").notNull(),
     updatedAt: text("updated_at").notNull(),
     finishedAt: text("finished_at"),
+    // ── 同一张表也装「讨论」（回复框里 @ 人来回几段，server/src/discussion.ts）。两者是同一副
+    // 底子（talk/segments.ts）：一场 = 若干段交替的旁路回合，每段交卷带一句摘要、结算里推进。
+    // 讨论不挂在任何一轮审查上：round_id / run_id 存空串、round 存 0，按 kind 分开读。
+    /** review = 审查意见辩论（老行一律是它）；discussion = 讨论。 */
+    kind: text("kind").notNull().default("review"),
+    /** 讨论：用户发起时写的那句话。 */
+    topic: text("topic"),
+    /** 讨论：各方，按发言顺序（JSON，`DiscussionParticipant[]`）；主执行器的配置也是发起那一刻的。 */
+    participants: text("participants"),
+    /** 讨论：发起时附的图和文件（JSON，路径数组）。各方第一段都带上。 */
+    attachments: text("attachments"),
+    /** 讨论：发起那一刻截下的本任务对话记录（JSON，`{ agentType, path }[]`，只读副本，见 discussion-background.ts）。 */
+    background: text("background"),
+    /** 讨论：选的是「谈拢为止」（exchanges 存的是封顶轮数）。 */
+    untilAgreed: integer("until_agreed", { mode: "boolean" }).notNull().default(false),
+    /** 讨论：怎么结束的（agreed / rounds）；没说完、断了为 null。 */
+    outcome: text("outcome"),
+    /** 讨论：断在哪、为什么（停下、没交卷、起不来），刷新后照样摆在气泡上；合稿没写完也记在这。 */
+    endedNote: text("ended_note"),
   },
   (t) => ({
     // 一轮意见可以留多条辩论记录：辩完的那条挡着再辩，中断的允许重开（判据在
@@ -260,6 +279,8 @@ export const freeReviewDebateTurns = sqliteTable(
     status: text("status").notNull(),
     startedAt: text("started_at").notNull(),
     endedAt: text("ended_at"),
+    /** 讨论：交卷时表态「我和各方最新的说法一致了」；辩论段与第一段（互相看不到）为 null。 */
+    agreed: integer("agreed", { mode: "boolean" }),
   },
   (t) => ({ debateSeqIdx: uniqueIndex("free_review_debate_turns_seq_idx").on(t.debateId, t.seq) }),
 );
@@ -382,6 +403,16 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
     "ALTER TABLE free_review_rounds ADD COLUMN reviewed_fingerprint TEXT",
     "ALTER TABLE free_review_rounds ADD COLUMN disputed_fingerprint TEXT",
     "ALTER TABLE free_review_debate_turns ADD COLUMN summary TEXT",
+    // 讨论跟辩论共用这两张表（见表定义上的说明）；老行一律是辩论。
+    "ALTER TABLE free_review_debates ADD COLUMN kind TEXT NOT NULL DEFAULT 'review'",
+    "ALTER TABLE free_review_debates ADD COLUMN topic TEXT",
+    "ALTER TABLE free_review_debates ADD COLUMN participants TEXT",
+    "ALTER TABLE free_review_debates ADD COLUMN until_agreed INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE free_review_debates ADD COLUMN outcome TEXT",
+    "ALTER TABLE free_review_debates ADD COLUMN ended_note TEXT",
+    "ALTER TABLE free_review_debates ADD COLUMN attachments TEXT",
+    "ALTER TABLE free_review_debates ADD COLUMN background TEXT",
+    "ALTER TABLE free_review_debate_turns ADD COLUMN agreed INTEGER",
   ]) {
     try {
       await client.execute(sql);

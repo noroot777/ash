@@ -223,7 +223,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
   {
     id: "review",
     cluster: 3,
-    title: "审查",
+    title: "审议",
     icon: <MagnifyingGlass size={14} />,
     defaultOpen: true,
     shortcut: "r",

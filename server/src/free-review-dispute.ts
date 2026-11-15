@@ -460,6 +460,12 @@ async function releaseHeldReservation(taskId: string): Promise<void> {
   }
 }
 
+/** 用户裁定收场（这一轮不用改了 / 转为独立任务）也是审查链走完的一种：建在它上面的任务重判一遍（prerequisite-launch.ts）。 */
+async function noteRulingSettled(taskId: string): Promise<void> {
+  const { notePrerequisiteProgress } = await import("./prerequisite-launch.js");
+  notePrerequisiteProgress(taskId);
+}
+
 /** 时间线里只放一句话的摘要，全文留在审查记录里（时间线不是正文的第二个家）。 */
 function summarize(reason: string): string {
   const line = reason.replace(/\s+/g, " ").trim();
@@ -549,11 +555,13 @@ export async function resolveFreeReviewDispute(
   const open = await targetedOpenDispute(taskId, target);
   const { activeDebateOf } = await import("./free-review-debate.js");
   if (await activeDebateOf(taskId)) throw new Error("辩论正在进行，等它结束再裁定");
+  if (await (await import("./discussion.js")).discussionHolds(taskId)) throw new Error("这条任务上正在讨论，说完再裁定");
 
   if (resolution === "deferred") {
     const { deferOpenDispute } = await import("./free-review-defer.js");
     const deferredTask = await deferOpenDispute(task, open, note);
     await releaseHeldReservation(taskId);
+    await noteRulingSettled(taskId);
     return { resolution, repairError: null, deferredTask };
   }
 
@@ -587,6 +595,7 @@ export async function resolveFreeReviewDispute(
     + (note ? `你写下的裁定要点：${summarize(note)}` : "")));
   bus.publish({ type: "task.review", taskId });
   if (resolution === "withdrawn") await releaseHeldReservation(taskId);
+  await noteRulingSettled(taskId);
 
   let repairError: string | null = null;
   if (resolution === "upheld") {

@@ -48,7 +48,10 @@
 }
 .run-target-seg--agent { flex: 0 1 auto; }
 .run-target-seg--model { flex: 1 1 auto; }
+/* 尾段（回复框里派出去时的「从哪开工」）：字放在 span 里，跟执行器名同一套省略（长分支名窄屏下先省略）。 */
+.run-target-seg--tail { flex: 0 1 auto; }
 .run-target-seg--model,
+.run-target-seg--tail,
 .run-target-picker .effort-picker-trigger { border-left: 1px solid var(--line); }
 
 .run-target-seg:hover:not(:disabled),
@@ -128,7 +131,9 @@
 .run-target-picker.is-chip .run-target-seg--agent { padding-left: 9px; }
 .run-target-picker.is-chip .effort-picker-trigger { padding-right: 9px; }
 .run-target-picker.is-chip .run-target-seg--model,
+.run-target-picker.is-chip .run-target-seg--tail,
 .run-target-picker.is-chip .effort-picker-trigger { border-left-color: var(--line2); }
+.run-target-picker.is-chip .run-target-seg--tail { padding-right: 9px; }
 .run-target-picker.is-chip .run-target-seg > b { font-family: var(--font-mono); font-size: var(--t-xs); font-weight: var(--w-medium); }
 .run-target-picker.is-chip .run-target-seg > code { font-size: var(--t-xs); }
 .run-target-picker.is-chip .effort-picker-trigger > em { font-size: var(--t-xs); }

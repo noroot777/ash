@@ -31,12 +31,16 @@ export interface BatchTaskInput {
   dependsOn?: string[];
   // Same resolution as dependsOn, but checked only when resuming a paused task.
   resumeDependsOn?: string[];
+  // 前置：这条任务建在哪几条上面（shared/src/prerequisites.ts）。先按同一批里的 `key` 认，认不出的当已有任务的 id。
+  prerequisites?: string[];
 }
 
 export interface BatchCreateTasksBody {
   tasks: BatchTaskInput[];
   chain?: boolean; // true → append the previous task's id to each task's deps (A→B→C→D)
   run?: boolean; // true → kick off the group (runGroup) right after creating
+  // true → 每一条建在上一条上（第 n 条的前置加上第 n-1 条）。跟 chain 是两件事：chain 只排先后，stack 传代码。
+  stack?: boolean;
   defaults?: {
     // applied to every task unless that task overrides the field
     agentType?: AgentType;

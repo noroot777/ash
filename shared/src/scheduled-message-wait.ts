@@ -19,7 +19,9 @@ export type ScheduledMessageWait =
   /** 定时消息没到点、等的前置任务没完成：托盘按钟点 / 前置任务另外说。 */
   | { kind: "schedule" }
   /** 已经在送了（投递租约挂着）。 */
-  | { kind: "delivering" };
+  | { kind: "delivering" }
+  /** 这条任务上正在讨论：说完、合稿写完才发（中间每一段都是一轮，等「这一轮」会说错）。 */
+  | { kind: "discussion" };
 
 /** 「挡路的是谁」那半句。被挡回时的完整话术（`queueBlockedText`）和托盘的等待说明共用它。 */
 export function queueBlockerPhrase(blockers: readonly QueueBlocker[]): string {
@@ -47,6 +49,7 @@ export function scheduledWaitText(wait: ScheduledMessageWait | null | undefined)
     case "groupPaused": return "分组已暂停，恢复后发送";
     case "dispatchHeld": return `「${wait.by.title || "未命名任务"}」名下已全部停下，接着跑后发送`;
     case "delivering": return "正在发送";
+    case "discussion": return "讨论说完、合稿写完后发送";
     default: return null;
   }
 }

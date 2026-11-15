@@ -118,7 +118,7 @@ export function stageOf(item: { text: string; notice?: TimelineNotice }): string
 export function eventTone(text: string, notice?: TimelineNotice, level?: "notice"): ConversationEventTone {
   if (level === "notice") return "notice";
   if (!notice) return noteTone(text);
-  if (notice.kind === "alert") return "error";
+  if (notice.kind === "alert" || (notice.kind === "discussion" && notice.phase === "aborted")) return "error";
   if (notice.kind === "review.verdict") return notice.verdict === "failed" || notice.verdict === "aborted" ? "error" : "neutral";
   return "neutral";
 }

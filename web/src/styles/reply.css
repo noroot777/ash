@@ -1,5 +1,5 @@
 /* 对话框底部那颗胶囊本体在 run-target-picker.css（`.run-target-picker.is-chip`）；这里只剩
-   「取消 @ 召唤」那颗小圆叉，它挂在胶囊外面，不属于三段中的任何一段。 */
+   「不叫 xx 了」那颗小圆叉，它挂在胶囊外面，不属于胶囊的任何一段。 */
 .task-reply-chip-reset { display: grid; width: 19px; height: 19px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--faint); }
 .task-reply-chip-reset:hover { background: var(--raised); color: var(--ink); }
 

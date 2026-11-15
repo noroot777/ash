@@ -2,6 +2,7 @@ import type { FreeReviewRun } from "@ash/shared";
 import type { ConversationItem } from "./conversationModel.ts";
 import type { ConversationFeedRow } from "./conversationReviewLanes.ts";
 import { debateCandidatesOf, type DebateCandidate } from "../free-workflow/debateModel.ts";
+import type { ConversationDiscussionRow } from "./conversationDiscussionRows.ts";
 
 /**
  * 时间线上的一整场辩论，折成一行。
@@ -30,7 +31,8 @@ export type ConversationDebateRow = {
   endedAt: string | null;
 };
 
-export type ConversationDebateFeedRow = ConversationFeedRow | ConversationDebateRow;
+/** 折过之后的一行：辩论、讨论各折成一行（讨论那一折在 conversationDiscussionRows.ts）。 */
+export type ConversationDebateFeedRow = ConversationFeedRow | ConversationDebateRow | ConversationDiscussionRow;
 
 const DEBATE_START = /^开始辩论第\s*(\d+)\s*轮审查意见/;
 // 收口的两句：好好辩完，或者某一段没能起跑而中止。两句都由 free-review-debate.ts 写。

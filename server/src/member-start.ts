@@ -39,7 +39,8 @@ export async function startMember(groupId: string | null, taskId: string, opts: 
   const seen = turnStartsOf(taskId);
   let group = groupId;
   for (;;) {
-    const slot = group ? await acquireGroupSlot(group) : null;
+    const slot = group;
+    if (slot) await acquireGroupSlot(slot, taskId);
     let verdict: Verdict;
     try {
       if (opts.prepare && await opts.prepare()) return;
@@ -55,7 +56,7 @@ export async function startMember(groupId: string | null, taskId: string, opts: 
         return;
       }
     } finally {
-      if (group && slot) releaseGroupSlot(group, slot);
+      if (slot) releaseGroupSlot(slot, taskId);
     }
     if (verdict.kind === "queue") return opts.queued(verdict.queueId);
     if (verdict.kind === "skip") return;

@@ -110,6 +110,21 @@ async function runHeldTask(
     if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
     return;
   }
+  // 有前置、还没开过工的：/fire、定时到点、重试这些程序化路径也汇到这里，前置没站齐就不起（请求已记下，
+  // 等齐由放行那一路起），站齐了这一问顺手定下起点（prerequisite-gate.ts 文件头）。
+  // 这一问要写 git、读写库，抛错时入口交进来的回合同样要还（不还就没人起得了它）。
+  let prerequisiteHold: { reason: string } | null;
+  try {
+    const { holdForPrerequisites } = await import("./prerequisite-gate.js");
+    prerequisiteHold = await holdForPrerequisites({ id: taskId }, { source: "turn", actingUserId: opts.actingUserId });
+  } catch (error) {
+    if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
+    throw error;
+  }
+  if (prerequisiteHold) {
+    if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
+    return;
+  }
   // turnHeld:入口已原子占位(见 continueTask 同名选项),接管而不是再抢。接管返回 null =
   // 那把锁已经不在手上(人工放开拔走之后另一轮占上),这一轮不起,也没有东西要还。
   const turn = opts.turnHeld ? reclaimTurn(taskId, opts.turnHeld, "single") : claimOwnTurn(taskId);
@@ -147,7 +162,7 @@ async function runHeldTask(
       .where(eq(tasks.id, taskId));
     }, { behavior: "immediate" });
     // 跟 orchestrator 起一轮同一条规矩:令牌落库处顺手绑到内存里这一轮的身份上。
-    bindTurnToken(taskId, turnToken);
+    bindTurnToken(taskId, turnToken, invocationAgent);
     // 执行回合开跑：被裁定闸按住的那次预约触发随之作废（见 free-review-reservations.ts
     // `forgetHeldTrigger` ①；与 orchestrator 续跑那一处对称）。
     await forgetHeldTrigger(taskId);

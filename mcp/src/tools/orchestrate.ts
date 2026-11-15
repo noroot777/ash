@@ -8,7 +8,17 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createWorkflowMode } from "@ash/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
-import { AGENT_TYPE, MODE, TASK_STATUS, WORKFLOW_MODE, taskShape } from "../schemas.js";
+import type { TaskPrerequisites } from "@ash/shared/prerequisites";
+import { prerequisiteStepText } from "@ash/shared/prerequisites";
+import { AGENT_TYPE, MODE, QUEUE_VS_PREREQUISITES, TASK_STATUS, WORKFLOW_MODE, taskShape } from "../schemas.js";
+
+// list_tasks 里那一格只留派活要看的：每条前置到哪一步（附一句人话），在不在等，卡在哪。
+const prerequisiteSummary = (view: TaskPrerequisites) => ({
+  prerequisites: view.prerequisites.map((link) => ({ taskId: link.taskId, step: link.step, text: prerequisiteStepText(link) })),
+  dependents: view.dependents.map((dependent) => dependent.taskId),
+  waiting: view.waiting,
+  blocked: view.blocked,
+});
 
 export function registerOrchestrationTools(server: McpServer): void {
 server.registerTool(
@@ -65,11 +75,12 @@ server.registerTool(
   "batch_create_tasks",
   {
     title: "批量建任务到已有分组",
-    description: "往一个已存在的分组里批量创建 single 任务。chain:true → 建一个 queue 把这批按数组顺序串成 A→B→C→D(前一个 done 后下一个自动起跑),**只能用于 serial group**,parallel group 返回 400;要真并行就别开 chain。run:true 建完立即开跑。",
+    description: `往一个已存在的分组里批量创建 single 任务。chain:true → 建一个 queue 把这批按数组顺序串成 A→B→C→D(前一个 done 后下一个自动起跑),**只能用于 serial group**,parallel group 返回 400;要真并行就别开 chain。run:true 建完立即开跑。\n${QUEUE_VS_PREREQUISITES}。`,
     inputSchema: {
       groupId: z.string(),
       tasks: z.array(taskShape).min(1),
       chain: z.boolean().optional().describe("按数组顺序串依赖 A→B→C→D"),
+      stack: z.boolean().optional().describe("每一条建在上一条上(第 n 条的前置加上第 n-1 条);跟 chain 可以同时用"),
       run: z.boolean().optional().describe("建完立即运行该分组"),
       defaults: z.object({
         agentType: AGENT_TYPE.optional(),
@@ -136,7 +147,7 @@ server.registerTool(
   "list_tasks",
   {
     title: "列出任务",
-    description: "列出任务,可按 projectId / groupId / parentId 过滤。团队调度者查「我的执行者现在都什么状态」用 parentId=自己的 taskId。默认隐藏已归档任务(includeArchived:true 才带上)。返回精简字段(id/title/status/archived/agentType/executorId/executorLabel/queueId/queuePosition/groupId/parentId/question)。",
+    description: "列出任务,可按 projectId / groupId / parentId 过滤。团队调度者查「我的执行者现在都什么状态」用 parentId=自己的 taskId。默认隐藏已归档任务(includeArchived:true 才带上)。返回精简字段(id/title/status/archived/agentType/executorId/executorLabel/queueId/queuePosition/groupId/parentId/question/prerequisites)。prerequisites 只在有前置关系时给:每条前置的 step(settled=站稳)、waiting=在等前置、blocked=开不了工的原因。",
     inputSchema: { projectId: z.string().optional(), groupId: z.string().optional(), parentId: z.string().optional().describe("只列这个任务的下属执行者(团队调度者用)"), includeArchived: z.boolean().optional().describe("默认 false:列表不含已归档任务") },
   },
   async ({ projectId, groupId, parentId, includeArchived }) => {
@@ -151,6 +162,7 @@ server.registerTool(
       );
       return ok(rows.map((t) => ({
         id: t.id, title: t.title, status: t.status, archived: t.archived, agentType: t.agentType, executorId: t.executorId, executorLabel: t.executorLabel, labels: t.labels, queueId: t.queueId, queuePosition: t.queuePosition, groupId: t.groupId, parentId: t.parentId, question: t.question,
+        ...(t.prerequisites ? { prerequisites: prerequisiteSummary(t.prerequisites as TaskPrerequisites) } : {}),
       })));
     } catch (e) { return fail(e); }
   },
@@ -160,7 +172,7 @@ server.registerTool(
   "get_task",
   {
     title: "查看任务",
-    description: "按 id 取单个任务的完整信息(含 status、queueId、queuePosition)。",
+    description: "按 id 取单个任务的完整信息(含 status、queueId、queuePosition、prerequisites)。",
     inputSchema: { taskId: z.string() },
   },
   async ({ taskId }) => {
@@ -202,13 +214,14 @@ server.registerTool(
   {
     title: "一步建任务批次",
     description:
-      "便利工具:按 repoPath 找到/创建项目 → 找到或复用分组 → 把一批任务建进去,一次调用搞定,多步编排首选。返回 {project, group, tasks}。chain 默认 true=建一个 queue 串成 A→B→C(前一个 done 后下一个自动起跑);要真并行就传 chain:false 并把 mode 设 parallel。run:true 立即开跑。",
+      `便利工具:按 repoPath 找到/创建项目 → 找到或复用分组 → 把一批任务建进去,一次调用搞定,多步编排首选。返回 {project, group, tasks}。chain 默认 true=建一个 queue 串成 A→B→C(前一个 done 后下一个自动起跑);要真并行就传 chain:false 并把 mode 设 parallel。run:true 立即开跑(有前置的等前置站稳才起)。\n${QUEUE_VS_PREREQUISITES};只用前置时传 chain:false + mode:parallel,两条只依赖同一条前置的才能同时起。`,
     inputSchema: {
       repoPath: z.string().describe("git 仓库绝对路径；项目按它找到或创建"),
       tasks: z.array(taskShape).min(1).describe("按顺序排列；chain 时即依赖链顺序"),
       groupName: z.string().optional().describe("分组名,缺省 task-chain。已存在同名分组会复用(不会重复建组)"),
       mode: MODE.optional(),
       chain: z.boolean().optional().describe("默认 true=创建 queue 串成依赖链(serial 才允许);false=互不依赖(配 mode=parallel 才真正并行)"),
+      stack: z.boolean().optional().describe("每一条建在上一条上(第 n 条的前置加上第 n-1 条)"),
       agentType: AGENT_TYPE.optional().describe("批次默认 agent（任务可逐个覆盖，下同）"),
       executorId: z.string().nullable().optional().describe("默认执行器 profile(agents.id)；为空/悬空按 agentType 默认执行器降级"),
       model: z.string().nullable().optional().describe("默认模型；缺省/null=跟随执行器"),
@@ -220,7 +233,7 @@ server.registerTool(
       run: z.boolean().optional(),
     },
   },
-  async ({ repoPath, tasks, groupName, mode, chain, agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch, workflowMode, run }) => {
+  async ({ repoPath, tasks, groupName, mode, chain, stack, agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch, workflowMode, run }) => {
     try {
       // 先用服务端那份判据（`createWorkflowMode`）预检一遍：批量接口才是拒绝的地方，但走到那一步
       // 之前项目和分组已经建好了，被拒时会留下一个空分组。
@@ -235,6 +248,7 @@ server.registerTool(
       };
       const batch = (await call("POST", `/groups/${group.id}/tasks/batch`, {
         chain: chain ?? true,
+        stack: !!stack,
         run: !!run,
         defaults: [agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch, workflowMode].some((v) => v !== undefined)
           ? { agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch, workflowMode }
@@ -292,7 +306,7 @@ server.registerTool(
   {
     title: "起跑/续跑一个任务",
     description:
-      "启动一个任务,或让一个停下来的任务从**它自己的 CLI 会话**续跑(比新建任务便宜:上下文都还在)。失败的执行者查明原因后用这个重试;backlog 的任务用这个开工。已经在跑的任务调用无副作用。",
+      "启动一个任务,或让一个停下来的任务从**它自己的 CLI 会话**续跑(比新建任务便宜:上下文都还在)。失败的执行者查明原因后用这个重试;backlog 的任务用这个开工。已经在跑的任务调用无副作用。前置没站稳的回 waiting:true,站稳后自动起跑。",
     inputSchema: { taskId: z.string().describe("要起跑/续跑的任务 id") },
   },
   async ({ taskId }) => {

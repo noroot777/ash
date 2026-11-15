@@ -1,5 +1,6 @@
 import type { DetectedPreviewService, PreviewServiceState } from "@ash/shared/preview";
 import type {
+  DiscussionStartInput,
   BranchPlanView,
   FamilyAcceptanceResult,
   AgentExecutorProfile,
@@ -216,6 +217,9 @@ export const api = {
     request(`/tasks/${id(taskId)}/actions`, { signal }),
   taskQuestionHistory: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared/questions").QuestionRecord[]> =>
     request(`/tasks/${id(taskId)}/question-history`, { signal }),
+  // 这条任务名下派出的任务来问 / 失败的那几刻（会话里那几颗气泡，server/src/dispatch-signals.ts）。
+  taskDispatchSignals: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared").DispatchSignal[]> =>
+    request(`/tasks/${id(taskId)}/dispatch-signals`, { signal }),
   ...taskNoticeApi,
   // 侧边栏铺开那一下才调：一批任务各自「我发的最后一条追问」。没有的任务不在返回里。
   followUps: (taskIds: string[]): Promise<TaskFollowUp[]> =>
@@ -281,8 +285,9 @@ export const api = {
     request(`/tasks/${id(taskId)}/archive`, { method: "POST" }),
   unarchiveTask: (taskId: string): Promise<{ task: Task; restoreNote: string | null }> =>
     request(`/tasks/${id(taskId)}/unarchive`, { method: "POST" }),
-  answerTask: (taskId: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput): Promise<unknown> =>
-    request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input })),
+  // `via`：在派它的那条任务里答的（答复照旧送给 taskId 这一条，那边只多留一颗「你」的气泡）。
+  answerTask: (taskId: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput, via?: string): Promise<unknown> =>
+    request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input, ...(via ? { via } : {}) })),
   replyTask: (
     taskId: string,
     text: string,
@@ -373,6 +378,9 @@ export const api = {
     target: FreeReviewDisputeTarget,
   ): Promise<{ debateId: string; state: FreeWorkflowApiState }> =>
     request(`/tasks/${id(taskId)}/free-workflow/review/debate`, json("POST", { exchanges, target })),
+  // 回复框里 @ 了人、选「讨论」：各方来回几段，说完由这条任务的执行器在主会话里写合稿。
+  startDiscussion: (taskId: string, input: DiscussionStartInput): Promise<{ discussionId: string; state: FreeWorkflowApiState }> =>
+    request(`/tasks/${id(taskId)}/discussions`, json("POST", input)),
   reserveFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review-reservation`, json("PUT", input)),
   adjustFreeReviewRounds: (taskId: string, input: FreeReviewRoundsInput): Promise<FreeWorkflowApiState> =>
