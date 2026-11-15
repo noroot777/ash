@@ -114,7 +114,7 @@ try {
   assert.deepEqual(
     launch.filter((item) => item.disabled).map((item) => item.value),
     ["queue"],
-    "台子上「创建并排队」是禁用的(团队任务不支持排队)",
+    "台子上「创建并排队」是禁用的(叫着人时只能创建并运行)",
   );
   await focusValue("启动方式", "run");
   await page.keyboard.press("ArrowRight");

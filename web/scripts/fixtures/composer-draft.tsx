@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Group, GroupMode, ProjectView, Task, TaskMode } from "@ash/shared";
+import type { Group, GroupMode, ProjectView, Task } from "@ash/shared";
 import { TaskComposerPanel } from "../../src/composer/TaskComposerPanel.tsx";
 import type { ComposerDraft } from "../../src/composer/composerDraft.ts";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
@@ -19,7 +19,6 @@ const project: ProjectView = {
 };
 
 function Ash() {
-  const [mode, setMode] = useState<TaskMode>("single");
   const [open, setOpen] = useState(true);
   const [seed, setSeed] = useState<ComposerDraft | null>(null);
   const [created, setCreated] = useState<string[]>([]);
@@ -45,8 +44,6 @@ function Ash() {
           groups={[] as Group[]}
           initialDraft={seed}
           onDraftSeeded={() => setSeed(null)}
-          mode={mode}
-          onModeChange={setMode}
           onCancel={() => setOpen(false)}
           onCreated={(task: Task) => {
             setCreated((current) => [...current, task.title]);

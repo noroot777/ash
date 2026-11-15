@@ -29,20 +29,14 @@ import { ReplyBox } from "./ReplyBox.tsx";
 import { answerFromHost, useDispatchSignals } from "./dispatched/useDispatchSignals.tsx";
 import { replySend } from "./replySend.ts";
 import { replyDispatch } from "./replyDispatch.ts";
+import { launchPlanFromHost, saveDispatchTarget } from "./dispatchPlanActions.ts";
 import { replyDiscuss } from "./replyDiscuss.ts";
 import { dispatchNotes } from "./dispatchNotes.ts";
 import { DispatchNoteLine } from "./DispatchNoteLine.tsx";
 import { LeftDrawerProvider } from "../components/LeftDrawer.tsx";
 import { useDisputeRulingDock } from "../free-workflow/DisputeRulingDock.tsx";
-import { TaskDerivationComposer } from "./TaskDerivationComposer.tsx";
 import { TaskHeader, type PrimaryAction } from "./TaskHeader.tsx";
-import {
-  canDeriveTask,
-  isTaskDerivationCommand,
-  parseTaskDerivationCommand,
-  TASK_DERIVATION_COMMANDS,
-  type TaskDerivationCommand,
-} from "./taskDerivation.ts";
+import { canDeriveTask } from "./taskDerivation.ts";
 import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
 import { reviewTargetRequest } from "../review/reviewTarget.ts";
 import { DerivedTaskLinks } from "../components/DerivedTaskLinks.tsx";
@@ -107,11 +101,6 @@ export function TaskDetail({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [markDoneOpen, setMarkDoneOpen] = useState(false);
   const [postMergeDialogOpen, setPostMergeDialogOpen] = useState(false);
-  const [derivation, setDerivation] = useState<{
-    command: TaskDerivationCommand;
-    committed: boolean;
-  } | null>(null);
-  const [derivationResetKey, setDerivationResetKey] = useState(0);
   // 刚发出去的那一回合由谁跑。会话行一落库就由它接管(见 runActivityExecutor),
   // 这里只补中间那一两秒;任务停下来就作废,免得下一次「运行」照抄旧目标。
   // 读过 / 没读过的账（侧栏那一行的点）随打开的任务对齐；头上不再画状态点，返回值这里用不上。
@@ -194,7 +183,6 @@ export function TaskDetail({
     setDeleteOpen(false);
     setMarkDoneOpen(false);
     setPostMergeDialogOpen(false);
-    setDerivation(null);
     fileView.close();
   }, [fileView.close, initialReviewOpen, task.id]);
 
@@ -206,11 +194,6 @@ export function TaskDetail({
       closeDrawers();
     }
     onReviewOpenChange?.(open);
-  };
-
-  const closeDerivation = () => {
-    setDerivation(null);
-    setDerivationResetKey((current) => current + 1);
   };
 
   const refreshTask = async () => {
@@ -586,6 +569,8 @@ export function TaskDetail({
                       // 名下派出的任务来问时这一格是它的卡，答复直接送给它（不经这条任务，也不叫醒它）。
                       asking={fromDispatched.asking}
                       onAnswer={answerFromHost(task.id, () => notify("已发送答复，任务正在续跑"))}
+                      onLaunchPlan={launchPlanFromHost(notify)}
+                      onDispatchTargetChange={task.mode === "single" && !task.parentId && !task.archived ? saveDispatchTarget(task, onTaskUpdate, notify) : undefined}
                       actions={replyActions.actions}
                       moreItems={replyActions.moreItems}
                       moreRef={replyActions.moreRef}
@@ -613,37 +598,6 @@ export function TaskDetail({
                       discussHeld={(free.state?.discussions ?? []).some((item) => item.status === "running" || item.status === "synthesizing")
                         ? "这条任务上正在讨论，说完再开下一场" : null}
                       override={ruling}
-                      command={derivationAllowed ? {
-                        matches: isTaskDerivationCommand,
-                        items: TASK_DERIVATION_COMMANDS,
-                        resetKey: derivationResetKey,
-                        onSubmit: (text) => {
-                          const parsed = parseTaskDerivationCommand(text);
-                          if (parsed) setDerivation({ command: parsed, committed: true });
-                        },
-                        onChange: (text) => {
-                          setDerivation((current) => {
-                            if (current?.committed) return current;
-                            const parsed = parseTaskDerivationCommand(text);
-                            return parsed ? { command: parsed, committed: false } : null;
-                          });
-                        },
-                        onCancel: closeDerivation,
-                      } : undefined}
-                      inlinePanel={derivationAllowed && derivation ? (
-                        <TaskDerivationComposer
-                          key={derivation.command.kind}
-                          task={task}
-                          command={derivation.command}
-                          live={!derivation.committed}
-                          onClose={closeDerivation}
-                          onCreated={(created) => {
-                            onTaskUpdate(created);
-                            onOpenTask(created.id);
-                          }}
-                          notify={notify}
-                        />
-                      ) : undefined}
                     />}
                   </section>
                 </div>

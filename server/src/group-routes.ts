@@ -238,10 +238,10 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
   const queueId = b.chain && specs.length > 1 ? id() : null;
   let created: Task[];
   try {
-    // 任务行与队列成员同一笔事务在链上落库(createTasks 的 joinQueue):先插行后串队的话,
+    // 任务行与队列成员同一笔事务在链上落库(createTasks 的 `atomic.after`):先插行后串队的话,
     // 中间那一拍里另一处分组运行就能把队尾那几条当独立任务先起了。
     created = await createTasks(rows, undefined, undefined, [], prerequisites.edges,
-      queueId ? joinQueueOnCreate(queueId, ids, { existing: false }) : undefined);
+      queueId ? { after: joinQueueOnCreate(queueId, ids, { existing: false }) } : undefined);
   } catch (error) {
     if (error instanceof CliCommandValidationError) return c.json({ error: error.message }, 400);
     const refused = prerequisiteRefusal(error);

@@ -54,6 +54,9 @@ try {
   const approve = page.getByRole("button", { name: "放行结束" });
   const reject = page.getByRole("button", { name: "打回终止" });
   await approve.waitFor();
+  // 讨论的结论交给一条普通任务落实，不再「接力成团」。
+  assert.equal(await page.getByRole("button", { name: "交给任务" }).count(), 1, "收敛门上有「交给任务」");
+  assert.equal(await page.getByText("接力成团").count(), 0, "收敛门上不再有「接力成团」");
 
   // ① 输入区里粘一张，传的过程中这道门不能被放行或打回关掉。
   await inject.click();

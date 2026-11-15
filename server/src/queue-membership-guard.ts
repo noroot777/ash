@@ -40,7 +40,7 @@ export async function groupMoveRefusal(taskId: string, groupId: string | null): 
 }
 
 /**
- * 建任务时串进队列的那一笔(createTasks 的 joinQueue):跟任务行同一笔事务、在链上执行,
+ * 建任务时串进队列的那一笔(createTasks 的 `atomic.after`):跟任务行同一笔事务、在链上执行,
  * 所以这里读到的候选就是刚插进去、还没有任何人见过的那几行,队里的成员也是此刻的。
  * `queueId` 已有成员 = 串到队尾;一个都没有 = 这是一条新队列(批量建任务、团队派活的串行批次)。
  */

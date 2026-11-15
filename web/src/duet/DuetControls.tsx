@@ -13,18 +13,18 @@ export function DuetGateControls({
   round,
   maxRounds,
   busy,
-  linkedTeams,
+  linkedTasks,
   onGate,
-  onOpenTeam,
+  onOpenHandoff,
   onOpenTask,
 }: {
   gate: DuetGate;
   round: number;
   maxRounds: number | null;
   busy: boolean;
-  linkedTeams: TaskListItem[];
+  linkedTasks: TaskListItem[];
   onGate: (action: GateAction) => Promise<void>;
-  onOpenTeam: () => void;
+  onOpenHandoff: () => void;
   onOpenTask: (task: TaskListItem) => void;
 }) {
   const [mode, setMode] = useState<"inject" | "ask" | null>(null);
@@ -47,7 +47,7 @@ export function DuetGateControls({
   };
   const consensus = !!gate.consensus;
   const consensusBy = gate.consensusBy ?? (consensus ? "both" : undefined);
-  const handedOff = !gateAllowsRevision(linkedTeams[0]);
+  const handedOff = !gateAllowsRevision(linkedTasks[0]);
   // 放行/打回都会终结这道门，而 approve/reject 这两个 GateAction 根本带不了附件
   // （见 shared 的 GateAction：只有 inject/ask 有 attachments），所以手上还捏着图的时候
   // 得先按住这两个按钮，并说清楚要怎么才能松开——不然刚粘的那张就这么无声没了。
@@ -60,7 +60,7 @@ export function DuetGateControls({
   return (
     <section className="duet-control-shell">
       <div className="duet-control-summary">
-        <span className={consensus ? "is-consensus" : "is-split"}>{consensus ? <CheckCircle size={13} weight="fill" /> : <WarningCircle size={13} weight="fill" />}{handedOff ? "结论已交给团队，讨论只剩收尾" : consensus ? (consensusBy === "both" ? "双方已收敛" : `讨论者 ${consensusBy} 声明一致`) : "双方仍有分歧"}</span>
+        <span className={consensus ? "is-consensus" : "is-split"}>{consensus ? <CheckCircle size={13} weight="fill" /> : <WarningCircle size={13} weight="fill" />}{handedOff ? "结论已交出去落实，讨论只剩收尾" : consensus ? (consensusBy === "both" ? "双方已收敛" : `讨论者 ${consensusBy} 声明一致`) : "双方仍有分歧"}</span>
         <small>第 {round}{maxRounds ? ` / ${maxRounds}` : ""} 轮 · {gate.gate} 收敛门</small>
       </div>
       {(gate.conclusionA || gate.conclusionB) && (
@@ -71,9 +71,9 @@ export function DuetGateControls({
       )}
       <div className="duet-control-actions">
         <DuetHandoffBar
-          linkedTeams={linkedTeams}
+          linkedTasks={linkedTasks}
           busy={busy}
-          onOpenTeam={onOpenTeam}
+          onOpenHandoff={onOpenHandoff}
           onOpenTask={onOpenTask}
         />
         <button type="button" className="is-approve" disabled={busy || !!hold} onClick={() => void onGate({ kind: "approve" })}>{handedOff ? "结束讨论" : "放行结束"}</button>

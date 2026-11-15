@@ -51,7 +51,7 @@ function Fixture() {
       <button onClick={() => { const long = reply("long", "长会话".repeat(50000)); setSeed(snapshotConversationFork(task, [long], "long")); setView("composer"); }}>超长派生</button></nav>
     {view === "incomplete" ? <IncompleteConversation /> : view === "feed" ? <ConversationFeed task={task} items={items} sessions={[]} loading={false} error={null}
       onForkReply={(id) => { setSeed(snapshotConversationFork(task, items, id)); setView("composer"); }} />
-      : <TaskComposerPanel project={project} groups={[]} mode="single" onModeChange={() => {}}
+      : <TaskComposerPanel project={project} groups={[]}
         initialDraft={seed} onDraftSeeded={() => setSeed(null)} onCancel={() => setView("feed")}
         onCreated={(next) => { setCreated(next); setSeed(null); setView("feed"); }}
         onCreateGroup={async () => { throw new Error("unused"); }} notify={setNotice} />}

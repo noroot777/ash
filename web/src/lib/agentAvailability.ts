@@ -22,9 +22,6 @@ export type ExecutorOption = {
 };
 
 const TYPE_PREFIX = "__type:";
-// 检测拿不到结果时的保守兜底:这两个类型的执行器实现了 openResident
-// (claude 进程级常驻、codex 会话级常驻),权威判断仍来自 detect 的 `resident`。
-const RESIDENT_CAPABLE: readonly AgentType[] = ["claude", "codex"];
 const LOADING: AgentDetection = { status: "loading", agents: [] };
 
 let cachedDetection: Promise<AgentDetection> | null = null;
@@ -78,27 +75,6 @@ export function availableAgentTypes(agents: DetectedAgent[]): AgentType[] {
 export function registeredAgentTypes(profiles: AgentExecutorProfile[]): AgentType[] {
   const registered = new Set(profiles.map((profile) => profile.type));
   return AGENT_TYPES.filter((type) => registered.has(type));
-}
-
-/** Types whose executor implementation can own a resident team session. */
-export function residentAgentTypes(agents: DetectedAgent[]): AgentType[] {
-  const resident = new Set<AgentType>(RESIDENT_CAPABLE);
-  for (const agent of agents) if (agent.resident) resident.add(agent.type);
-  return AGENT_TYPES.filter((type) => resident.has(type));
-}
-
-/** Worker/reviewer choices plus the resident-only subset for team leads. */
-export function teamExecutorCandidates(
-  detection: AgentDetection,
-  profiles: AgentExecutorProfile[],
-) {
-  const workerTypes = registeredAgentTypes(profiles);
-  const residentTypes = residentAgentTypes(detection.agents);
-  return {
-    workerTypes,
-    leadTypes: workerTypes.filter((type) => residentTypes.includes(type)),
-    leadProfiles: profiles.filter((profile) => residentTypes.includes(profile.type)),
-  };
 }
 
 export function isExecutorPickable(

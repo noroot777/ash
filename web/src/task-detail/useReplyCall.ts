@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import type { AgentExecutorProfile, AgentType, DiscussionRounds } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
 import { api } from "../lib/api.ts";
@@ -12,15 +12,18 @@ import {
  * 回复框里叫了谁、来做什么（纯逻辑在 replyCall.ts）。叫人只活在这一个框里：换任务、发出去、点小叉
  * 都清掉；正文、附件不归它管，换做法、取消叫人一个字都不动。
  */
-export function useReplyCall({ ownAgent, ability, profiles }: {
+export function useReplyCall({ ownAgent, ability, profiles, state }: {
   /** 这条任务自己的执行器：叫它只能派出去。 */
   ownAgent: AgentType;
   /** 这里能不能派出去、能不能开讨论（普通的独立任务才能）。 */
   ability: CallAbility;
   profiles: AgentExecutorProfile[];
+  /** 叫人的状态放在外面（新建框放进草稿，面板卸载了还在）；不给就活在这个组件里。 */
+  state?: [ReplyCall | null, Dispatch<SetStateAction<ReplyCall | null>>];
 }) {
   const { dispatchable } = ability;
-  const [call, setCall] = useState<ReplyCall | null>(null);
+  const local = useState<ReplyCall | null>(null);
+  const [call, setCall] = state ?? local;
   // 记下的执行器后来被删了：退回「这个执行器类型的默认」，别把一个不存在的 id 发出去。
   const known = (target: MentionTarget): MentionTarget => (
     target.executorId && profiles.length && !profiles.some((profile) => profile.id === target.executorId)
@@ -85,20 +88,32 @@ export function useReplyCall({ ownAgent, ability, profiles }: {
     pending.current = null;
     setCall(null);
   };
+  /** 这个人不再能叫了（新建框里胶囊换成了他，他就是跑这条任务的那个）：从叫着的人里拿掉，一个不剩就不叫了。 */
+  const drop = (agent: AgentType) => setCall((current) => {
+    if (!current) return current;
+    const rest = [current.target, ...current.others].filter((item) => item.agent !== agent);
+    if (rest.length === current.others.length + 1) return current;
+    return rest.length ? { ...current, target: rest[0]!, others: rest.slice(1) } : null;
+  });
   /**
    * 发出去了：记住叫的是谁、对他用的那一套，下次叫他（或 `/派`）先摆这一套。只清发出去的那一版——
    * 每一处改动（换人、换做法、换开工位置）都换一个新对象，发送途中动过就是下一句的设置，整份留着。
    */
-  const sent = (snapshot: ReplyCall) => {
+  const remember = (snapshot: ReplyCall) => {
     for (const other of snapshot.others) rememberCall(other);
     rememberCall(snapshot.target);
+  };
+  const sent = (snapshot: ReplyCall) => {
+    remember(snapshot);
     setCall((current) => (current === snapshot ? null : current));
   };
 
   return {
     call,
     self: !!call && (dispatchable || ability.discussable) && selfOf(call.target.agent),
-    start, pend, picking, restore, setVerb, setBase, togglePerson, setRounds, commitTarget, commitEffort, cancel, sent,
+    start, pend, picking, restore, setVerb, setBase, togglePerson, setRounds, commitTarget, commitEffort, cancel, drop, sent,
+    /** 只记住这一套、不动叫着的人（新建框：叫的人跟草稿一起由提交结算去清，见 DraftStore 的 settleSubmission）。 */
+    remember,
   };
 }
 

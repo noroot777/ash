@@ -7,6 +7,7 @@ import { buildConversationItems, conversationToMarkdown } from "../src/task-deta
 import { formatDurationShort, formatInstantRange, taskDurationInfo } from "../src/task-detail/utils.ts";
 import { sharedTeamParent } from "../src/review/reviewModel.ts";
 import { gateAllowsRevision, isOpenDuetGate, runCreatedHandoffFollowUps } from "../src/duet/handoffPolicy.ts";
+import { duetHandoffTaskInput } from "../src/duet/duetHandoff.ts";
 import { emptyComposerExecutorConfigs, patchComposerExecutor, setComposerExecutorProfile } from "../src/composer/executorOverrides.ts";
 import { activeGroupTasks, resumeQueueModel } from "../src/settings/groupQueueModel.ts";
 import { leadTurns, teamFeedOptions } from "../src/team/teamModel.ts";
@@ -14,7 +15,6 @@ import {
   executorRunSummary,
   executorOptions,
   registeredAgentTypes,
-  teamExecutorCandidates,
 } from "../src/lib/agentAvailability.ts";
 import { isLocalDiskImagePath, localDiskPath } from "../src/components/markdownPolicy.ts";
 import { createTerminalTab, withoutTerminalTab } from "../src/workspace/terminalTabs.ts";
@@ -531,12 +531,21 @@ try {
   const followUps = [];
   const failures = await runCreatedHandoffFollowUps({
     closeGate: async () => { followUps.push("gate"); throw new Error("gate failed"); },
-    startTeam: async () => { followUps.push("start"); throw new Error("start failed"); },
+    startTask: async () => { followUps.push("start"); throw new Error("start failed"); },
   });
   assert.deepEqual(followUps, ["gate", "start"]);
   assert.deepEqual(failures.map(({ phase }) => phase), ["gate", "start"]);
+  // 讨论收尾「交给任务落实」：建的是一条普通任务、挂回这场讨论，不再接力成团。
+  const handoffInput = duetHandoffTaskInput({ id: "duet-1", projectId: "p1", title: "缓存方案" }, "正文",
+    { note: "", executor: { agentType: "codex", executorId: "codex-local", model: "gpt-5.6-sol", effort: "high" } });
+  assert.equal(handoffInput.mode, "single");
+  assert.equal(handoffInput.workflowMode, "free");
+  assert.equal(handoffInput.originTaskId, "duet-1");
+  assert.equal("team" in handoffInput, false, "不再带团队配置");
+  assert.deepEqual([handoffInput.agentType, handoffInput.executorId, handoffInput.model, handoffInput.reasoningEffort],
+    ["codex", "codex-local", "gpt-5.6-sol", "high"]);
 
-  const roles = ["single", "lead", "worker", "reviewer"];
+  const roles = ["single"];
   for (const role of roles) {
     let executors = emptyComposerExecutorConfigs();
     // 换执行器时选择器算出来的覆盖就是这个空对象(= 跟随执行器);这里钉的是它**整份替换**
@@ -573,26 +582,16 @@ try {
     "失效的执行器引用应与服务端一致回退到类型默认值",
   );
   assert.deepEqual(registeredAgentTypes(registeredProfiles), ["codex", "qwen"]);
-  const candidates = teamExecutorCandidates({
-    status: "ready",
-    agents: [
-      { type: "claude", available: true, resident: true },
-      { type: "codex", available: true, resident: true },
-      { type: "qwen", available: true, resident: false },
-    ],
-  }, registeredProfiles);
-  assert.deepEqual(candidates.workerTypes, ["codex", "qwen"]);
-  assert.deepEqual(candidates.leadTypes, ["codex"]);
-  assert.deepEqual(candidates.leadProfiles.map(({ id }) => id), ["codex-local"]);
+  const candidateTypes = registeredAgentTypes(registeredProfiles);
   const executorLabels = executorOptions({
-    types: candidates.workerTypes,
+    types: candidateTypes,
     profiles: registeredProfiles,
   }).map(({ label }) => label);
   assert.equal(executorLabels.some((label) => label.startsWith("claude ·")), false);
   assert.equal(executorLabels.some((label) => label.startsWith("codex ·")), true);
   assert.equal(executorLabels.some((label) => label.startsWith("qwen ·")), true);
   const staleType = executorOptions({
-    types: candidates.workerTypes,
+    types: candidateTypes,
     profiles: registeredProfiles,
     selection: { agentType: "claude", executorId: null },
   }).find(({ value }) => value === "__type:claude");

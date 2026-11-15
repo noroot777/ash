@@ -157,9 +157,9 @@ export async function dispatchWorkers(
   });
   // serial 批次串成 A→B→C:头一个 done 后 advanceQueueFromTask 自动起下一个。
   const queueId = mode === "serial" && rows.length > 1 ? id() : null;
-  // 任务行与队列成员同一笔事务在链上落库(createTasks 的 joinQueue,理由同 group-routes.ts)。
+  // 任务行与队列成员同一笔事务在链上落库(createTasks 的 `atomic.after`,理由同 group-routes.ts)。
   const created = await createTasks(rows, undefined, undefined, [], [],
-    queueId ? joinQueueOnCreate(queueId, rows.map((r) => r.id), { existing: false }) : undefined);
+    queueId ? { after: joinQueueOnCreate(queueId, rows.map((r) => r.id), { existing: false }) } : undefined);
 
   // 调度者又派活了 = 这支队伍重新开工:已验收的团队 stage 清回「进行中」。
   // 执行者唤醒调度者后它自己派活,这条路不经过用户消息,所以要单独钩一下。

@@ -316,10 +316,10 @@ api.post("/tasks", async (c) => {
   let created: Task | undefined;
   try {
     // 上面那几句只是早点拒:隔着建任务的整段 await,队列可能已经没了、成员可能换了组。任务行与
-    // 队尾那一项同一笔事务在链上落库并重验(createTasks 的 joinQueue),不合法就整笔不落。
+    // 队尾那一项同一笔事务在链上落库并重验(createTasks 的 `atomic.after`),不合法就整笔不落。
     [created] = await createTasks([row], undefined, undefined, [b.reviewOf],
       prerequisiteIds.map((prerequisiteId) => ({ taskId, prerequisiteId })),
-      b.appendToQueue ? joinQueueOnCreate(b.appendToQueue, [taskId], { existing: true }) : undefined);
+      b.appendToQueue ? { after: joinQueueOnCreate(b.appendToQueue, [taskId], { existing: true }) } : undefined);
   } catch (error) {
     if (error instanceof CliCommandValidationError || error instanceof QueueJoinRefused) return c.json({ error: error.message }, 400);
     const refused = prerequisiteRefusal(error);

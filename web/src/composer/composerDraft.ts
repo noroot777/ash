@@ -25,15 +25,19 @@ export function useComposerDraft(
   const key = composerDraftKey(projectId);
   const draft = useDraft(seed?.fork ? `${key}:fork:${seed.fork.sourceTaskId}:${seed.fork.replyId}` : key);
   const seeded = useRef<ComposerDraft | null>(null);
-  const { setAttachments, setNoteIds, setText } = draft;
+  const { adopt } = draft;
   useEffect(() => {
     if (!seed || seeded.current === seed) return;
     seeded.current = seed;
-    setText((current) => joinDraftText(seed.body, current));
-    setAttachments((current) => mergeAttachments(attachmentsFromPaths(seed.attachments), current));
+    // 并进来的是另一件事：合并与断开旧提交（戳、待重发的那条）在草稿库里一次完成（DraftStore 的 adopt）。
     const noteIds = seed.noteIds ?? [];
-    if (noteIds.length) setNoteIds((current) => [...new Set([...current, ...noteIds])]);
+    adopt((current) => ({
+      ...current,
+      text: joinDraftText(seed.body, current.text),
+      attachments: mergeAttachments(attachmentsFromPaths(seed.attachments), current.attachments),
+      noteIds: noteIds.length ? [...new Set([...current.noteIds, ...noteIds])] : current.noteIds,
+    }));
     if (!seed.fork) onSeeded?.();
-  }, [onSeeded, seed, setAttachments, setNoteIds, setText]);
+  }, [adopt, onSeeded, seed]);
   return draft;
 }
