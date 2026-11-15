@@ -15,7 +15,8 @@
 //     那次复查读库失败时把占位还掉，下一个 tick 照常起；放行之前按的停不记欠账（责任只在班次上），
 //     整件事只跑一次；正常停下的那一笔不因为恰好有一班定时到期被吞掉，接着跑照样从原会话续；
 //   · 停到一半出错：「还没停完」留着，tick 接着停完；推进途中停了又放，这次起跑交成欠账不丢；
-//     一组被按住的接着跑时照样受分组并发上限管。
+//     一组被按住的接着跑时照样受分组并发上限管；同一位被分组运行和接着跑各排了一次名额，只起一遍；
+//     名额集中还回、又来新的，同组总数也不越过上限。
 //
 // 走真实的调度链路（队列推进、分组运行、路由、结算钩子），只换掉「起一个 CLI」那一步：假执行器
 // 记下每一回合拿到的输入与续的是哪条原生会话，回合一直挂着，直到测试放它走或者它被停掉。
@@ -58,6 +59,7 @@ const { resumeOrRunTask } = await import("../src/task-resume.js");
 const { holdDispatched } = await import("../src/dispatch-hold.js");
 const { tick } = await import("../src/schedules.js");
 const { serializeQueueClaims } = await import("../src/queue-seat.js");
+const { groupSlotUsage, startMember } = await import("../src/group-slots.js");
 await ensureSchema();
 
 const api = new Hono();
@@ -541,10 +543,47 @@ try {
   await until("先起四条", () => six.filter((id) => turnsOf(id).length === 1).length === 4);
   await sleep(400);
   assert.equal(six.filter((id) => runs.isRunning(id)).length, 4, "同时至多四条在跑");
-  const first = six.find((id) => turnsOf(id).length === 1)!;
-  finish(first);
-  await until("一条做完，第五条补上", () => six.filter((id) => turnsOf(id).length === 1).length === 5);
+  // 这时再运行一遍这组：没起的两条又排一次名额，排在欠账那两笔后面（第 2 轮复审 F1）。
+  const early = six.filter((id) => turnsOf(id).length === 1);
+  const late = six.filter((id) => !early.includes(id));
+  const rerun = runGroup("G3");
+  await sleep(100);
+  finish(early[0]!);
+  finish(early[1]!);
+  await until("欠着的两条补上", () => six.every((id) => turnsOf(id).length === 1));
   assert.equal(six.filter((id) => runs.isRunning(id)).length, 4);
+  finish(late[0]!);
+  await settled(late[0]!, "done");
+  await sleep(400);
+  assert.equal(turnsOf(late[0]!).length, 1, "已经做完的那条不被分组运行的旧请求再起一遍");
+  assert.equal(turnsOf(late[1]!).length, 1, "在跑的那条也不被再起");
+  for (const id of [early[2]!, early[3]!, late[1]!]) finish(id);
+  await rerun;
+
+  // ── 分组名额本身：集中还名额、再来新的，同组总数照样至多四个（第 2 轮复审 F2）────────────────
+  let active = 0;
+  let peak = 0;
+  const holds: Array<() => void> = [];
+  const occupy = () => startMember("slot-probe", "slot-probe-task", async () => {
+    peak = Math.max(peak, ++active);
+    await new Promise<void>((resolve) => holds.push(resolve));
+    active -= 1;
+  });
+  const firstFour = [0, 1, 2, 3].map(occupy);
+  const waiter = occupy();
+  await sleep(10);
+  assert.equal(holds.length, 4);
+  for (const resolve of holds.splice(0)) resolve();
+  await Promise.all(firstFour);
+  const nextFour = [0, 1, 2, 3].map(occupy);
+  for (let i = 0; i < 6; i += 1) {
+    await sleep(10);
+    assert.ok(active <= 4, `同组同时 ${active} 个`);
+    for (const resolve of holds.splice(0)) resolve();
+  }
+  await Promise.all([waiter, ...nextFour]);
+  assert.equal(peak, 4, "峰值就是四个");
+  assert.deepEqual(groupSlotUsage("slot-probe"), { used: 0, waiting: 0 }, "都还完了，记录也收掉");
 
   console.log("dispatch hold: ok");
 } catch (error) {

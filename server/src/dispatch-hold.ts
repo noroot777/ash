@@ -28,7 +28,7 @@ import { hasCliGoalHold } from "@ash/shared/cli-commands";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { queueItems, tasks } from "./db/schema.js";
-import { claimOwnTurn, freezeStartingTurn, isRunning, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
+import { freezeStartingTurn, isRunning, isTurnClaimed, releaseTurn, stopTask, type TurnIdentity } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { notePauseOfTasks } from "./pause-generation.js";
 import { forgetHeldStart, oweHeldStart, shiftAdmissionPending } from "./dispatch-hold-owed.js";
@@ -41,7 +41,7 @@ import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation } from "./ta
 import { waitForStartReceipt } from "./task-start-receipt.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { now } from "./util.js";
-import { withGroupSlot } from "./group-slots.js";
+import { startMember } from "./group-slots.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -189,9 +189,8 @@ export async function honorOwedStart(taskId: string): Promise<void> {
   }
   if (starting.has(taskId)) return;
   starting.add(taskId);
-  // 组里的成员占分组的并发名额起（同分组运行），不然一组被按住的全部同时开跑（scheduler.ts withGroupSlot）。
-  const start = () => startOwed(taskId);
-  void (row.groupId ? withGroupSlot(row.groupId, start) : start()).finally(() => starting.delete(taskId));
+  // 组里的成员占分组的并发名额起（同分组运行），不然一组被按住的全部同时开跑（group-slots.ts）。
+  void startMember(row.groupId, taskId, (claim) => startOwed(taskId, claim)).finally(() => starting.delete(taskId));
 }
 
 /** 这一刻正在由本进程拉起的那几位：监听、巡检、接着跑同时来时只起一次。 */
@@ -218,12 +217,15 @@ async function canResume(row: TaskRow): Promise<boolean> {
 }
 
 /** 不在队列里的那一位：照分组运行拉起成员的做法（scheduler.ts runParallel 的 launch）。 */
-async function startOwed(taskId: string): Promise<void> {
+async function startOwed(taskId: string, claim: () => TurnIdentity | null): Promise<void> {
   try {
     if (await preparePendingCheckpointStart(taskId)) return;
+    // 轮到名额才重读：账还挂着（没被别处的起跑销掉）、按住它的没再按、此刻接得上，才起。
     const before = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-    if (!before || !(await canResume(before))) return;
-    const owner = claimOwnTurn(taskId);
+    if (!before?.holdOwedBy || !(await canResume(before)) || await taskHoldOf(before)) return;
+    const holder = (await db.select({ holdAt: tasks.dispatchHoldAt }).from(tasks).where(eq(tasks.id, before.holdOwedBy))).at(0);
+    if (holder?.holdAt) return;
+    const owner = claim();
     if (!owner) return;
     const reservation = taskQueueReservation(before);
     try {

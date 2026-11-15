@@ -204,6 +204,24 @@ export function claimOwnTurn(taskId: string, role = "single", review: TurnReview
 }
 
 /**
+ * 这个任务在本进程里**真正起过几轮**(每写一次 `active_turn_token` 记一笔,见 `bindTurnToken`)。
+ *
+ * 给「先排队、后起跑」的入口用(分组名额 group-slots.ts):排队那一刻记下它,轮到时用
+ * `claimOwnTurnUnlessStarted` 占位。「此刻没有回合」只说明没人正在跑,说明不了「排队之后没人
+ * 替它跑过」—— 另一个入口先起了它、它已经跑完,旧请求再占位就是第二遍(第 2 轮复审 F1)。
+ * 只记内存:排着的请求也只活在内存里,重启之后两样一起没了。
+ */
+export function turnStartsOf(taskId: string): number {
+  return turnStarts.get(taskId) ?? 0;
+}
+const turnStarts = new Map<string, number>();
+
+/** 同 `claimOwnTurn`,但排队之后(`turnStartsOf` 读到 `seen` 之后)它已经起过一轮就不占、返回 null。 */
+export function claimOwnTurnUnlessStarted(taskId: string, seen: number, role = "single"): TurnIdentity | null {
+  return turnStartsOf(taskId) === seen ? claimOwnTurn(taskId, role) : null;
+}
+
+/**
  * 同上,但**只回答「抢到没抢到」**。
  *
  * 不交凭据,所以它只配得上一种形状:**同一段同步代码里 claim 完马上 release**(中间没有
@@ -257,6 +275,7 @@ export function bindTurnToken(taskId: string, token: string): void {
     return;
   }
   held.token = token;
+  turnStarts.set(taskId, turnStartsOf(taskId) + 1);
 }
 
 /**

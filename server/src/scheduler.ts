@@ -15,11 +15,11 @@ import { reclaimStrandedSeat, scheduleSeatReclaim } from "./queue-seat-reclaim.j
 import { waitForStartReceipt } from "./task-start-receipt.js";
 import { reportGroupStartFailure } from "./group-start-failure.js";
 import { clearQueueAdvanceIntent, recordQueueAdvanceIntent, refuseQueueAdvance } from "./queue-advance-admission.js";
-import { heldByMonitors, withMonitorHolds, type QueueRow } from "./queue-monitor-hold.js";
+import { withMonitorHolds, type QueueRow } from "./queue-monitor-hold.js";
 import { currentPauseGeneration, dispatchPauseSince, notePauseOfGroup, pausedSince } from "./pause-generation.js";
 import { taskHoldOf, type TaskHold } from "./task-hold.js";
 import { oweHeldStart } from "./dispatch-hold-owed.js";
-import { MAX_PARALLEL, withGroupSlot } from "./group-slots.js";
+import { MAX_PARALLEL, startMember } from "./group-slots.js";
 
 type QueueAdvanceAttempt = {
   request?: QueueAdvanceRequest;
@@ -590,6 +590,12 @@ function launchableMembers(groupRows: QueueRow[], inQueue: ReadonlySet<string>):
   );
 }
 
+/** 这一位此刻还该被分组运行拉起吗(launchableMembers 的单条版,重读队列归属与哨兵)。 */
+async function stillLaunchable(row: typeof tasks.$inferSelect): Promise<boolean> {
+  const queued = await db.select({ id: queueItems.taskId }).from(queueItems).where(eq(queueItems.taskId, row.id));
+  return launchableMembers(await withMonitorHolds([row]), new Set(queued.map((q) => q.id))).length > 0;
+}
+
 async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Promise<void> {
   const groupRows = await withMonitorHolds(await db.select().from(tasks).where(eq(tasks.groupId, groupId)));
   const items = await db
@@ -607,7 +613,7 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
     const pending = [...launchable];
     const inflight = new Map<string, Promise<void>>();
 
-    const launch = async (taskId: string): Promise<void> => {
+    const launch = async (taskId: string, claim: () => TurnIdentity | null): Promise<void> => {
       // 「这一位到底起没起来」只认**真实启动回执**(adoptRun 那一刻 acknowledge 的那张),
       // 不拿「resumeOrRunTask 抛没抛」当判据:它抛出来可能是根本没起来,也可能是起来之后
       // 跑挂了、或者收尾那几步(放回合锁、还占位)挂了 —— 后两种给人写一句「这一轮没能起跑」
@@ -615,15 +621,17 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
       let spawned = false;
       try {
         if (await preparePendingCheckpointStart(taskId)) return;
+        // 轮到名额才重读、用挑人时那同一把尺子再量一遍:排队时能起,等名额那阵子它可能已经被
+        // 别处起过、跑完,或者改成等答复 / 进了队列(group-slots.ts startMember)。
         const before = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-        if (!before || (before.status === "paused" && (before.resumePrompt || await heldByMonitors(taskId)))) return;
+        if (!before || !(await stillLaunchable(before))) return;
         // 分组没停、这一位却被上面派活的那条按住了:不起,记欠账(同队列推进那一处)。
         const hold = await taskHoldOf(before);
         if (hold) {
           if (hold.kind === "dispatch") await oweHeldStart(taskId, hold.byTaskId);
           return;
         }
-        const owner = claimOwnTurn(taskId);
+        const owner = claim();
         if (!owner) return;
         const reservation = taskQueueReservation(before);
         try {
@@ -662,7 +670,7 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
       if (!(await isPaused(groupId))) {
         while (pending.length && inflight.size < MAX_PARALLEL) {
           const t = pending.shift()!;
-          const p = withGroupSlot(groupId, () => launch(t.id)).finally(() => inflight.delete(t.id));
+          const p = startMember(groupId, t.id, (claim) => launch(t.id, claim)).finally(() => inflight.delete(t.id));
           inflight.set(t.id, p);
         }
       }
