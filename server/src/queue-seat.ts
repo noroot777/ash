@@ -40,6 +40,12 @@ export type QueueSeat = {
   prevStatus: string;
   /** 占位落空的兜底回滚(守卫判据见模块头)。送达/正常结算后调用是 no-op,可安全多调。 */
   release(): Promise<void>;
+  /**
+   * false = 不在队列的任务拿到的那一份:没落 queued,手里只有一份「正在起跑」的凭证
+   * (queue-claim-chain.ts)。它**起跑成功也要交回** —— 不交,这个任务就一直算在起跑、永远进不了队列;
+   * 落了 queued 的那种成功时由结算覆盖,不必交。
+   */
+  holdsQueued: boolean;
 };
 
 // ── 旁路回合欠下的队列推进(第 ln9Q6IJEgmWf 链第 3、4 轮)─────────────────────────
@@ -106,7 +112,7 @@ export async function claimQueueSeat(taskId: string, opts: { turnHeld?: TurnOwne
       const current = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
       if (!current) return { ok: false, blockers: ["任务已删除"] };
       const forget = opts.turnHeld ? () => undefined : noteSoloStart(taskId);
-      return { ok: true, seat: { taskId, prevStatus: current.status, release: async () => forget() } };
+      return { ok: true, seat: { taskId, prevStatus: current.status, holdsQueued: false, release: async () => forget() } };
     }
     // 成员与状态都在临界区里重读:链上前一次认领刚落的 queued,这里必须看得见。
     const items = await db
@@ -220,6 +226,7 @@ function makeSeat(reservation: TaskQueueReservation, queueId: string): QueueSeat
   return {
     taskId,
     prevStatus,
+    holdsQueued: true,
     async release() {
       if (released) return;
       released = true;

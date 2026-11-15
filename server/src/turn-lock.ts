@@ -200,22 +200,8 @@ export function claimOwnTurn(taskId: string, role = "single", review: TurnReview
   if (turns.has(taskId)) return null;
   const identity: TurnIdentity = { role, review, token: null, claimedAt: Date.now(), seq: nextTurnSeq++ };
   turns.set(taskId, identity);
-  lastClaimSeq.set(taskId, identity.seq);
   return identity;
 }
-
-/**
- * 「从某一刻起,这个任务有没有人占过回合锁」。`turnClaimWatermark()` 记下那一刻,之后拿它问
- * `claimedSince`:号码全进程单调,所以比大小就够了。给只活在内存里、要知道「起跑已经被一把
- * 回合锁接手了没有」的记账用(queue-claim-chain.ts 的起跑中标记)。
- */
-export function turnClaimWatermark(): number {
-  return nextTurnSeq;
-}
-export function claimedSince(taskId: string, watermark: number): boolean {
-  return (lastClaimSeq.get(taskId) ?? -1) >= watermark;
-}
-const lastClaimSeq = new Map<string, number>();
 
 /**
  * 这个任务在本进程里**真正起过几轮**(每写一次 `active_turn_token` 记一笔,见 `bindTurnToken`)。
@@ -233,7 +219,6 @@ const turnStarts = new Map<string, number>();
 /** 任务删了就不再记（task-delete-routes.ts）：还排着的请求轮到时读不到行，本来就不起。 */
 export function forgetTurnStarts(taskId: string): void {
   turnStarts.delete(taskId);
-  lastClaimSeq.delete(taskId);
 }
 
 /** 同 `claimOwnTurn`,但排队之后(`turnStartsOf` 读到 `seen` 之后)它已经起过一轮就不占、返回 null。 */

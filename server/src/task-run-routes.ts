@@ -641,11 +641,18 @@ api.post("/tasks/:id/requeue", async (c) => {
     const ordered = items
       .map((i) => byId.get(i.taskId))
       .filter((t): t is typeof tasks.$inferSelect => !!t);
-    if (!(await setTaskStatus(taskId, "backlog", { expectStatus: now.status as TaskStatus }))) {
-      return { refused: c.json({ error: "任务状态刚刚变了，这次没有重新排队", status: now.status }, 409) };
-    }
+    // 条件写 backlog 与挪到队尾同一笔事务:挪位失败,状态也不落,原入口照样能重试。
     const movedToEnd = isOvertaken(ordered, taskId);
-    if (movedToEnd) await repackQueue(myItem.queueId, tailOrder(ordered.map((t) => t.id), taskId));
+    const written = await setTaskStatus(taskId, "backlog", {
+      expectStatus: now.status as TaskStatus,
+      alsoInTx: movedToEnd ? (tx) => repackQueue(myItem.queueId, tailOrder(ordered.map((t) => t.id), taskId), tx) : undefined,
+    }).catch(async (error) => {
+      // 提交之后的附带读取(广播用的 timing)也会抛:那时状态和位置已经一起落了,按库里的结果认,
+      // 别让一次已经成功的重新排队报失败、还漏掉后面那一推。
+      if ((await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.status === "backlog") return true;
+      throw error;
+    });
+    if (!written) return { refused: c.json({ error: "任务状态刚刚变了，这次没有重新排队", status: now.status }, 409) };
     return { queueId: myItem.queueId, ordered, movedToEnd };
   });
   if ("refused" in placed) return placed.refused;

@@ -6,18 +6,18 @@ import { createWorkflowMode } from "@ash/shared/free-workflow";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { groups, projects, queueItems } from "./db/schema.js";
+import { groups, projects, tasks } from "./db/schema.js";
 import { serializeQueueClaims } from "./queue-claim-chain.js";
+import { joinQueueOnCreate } from "./queue-membership-guard.js";
 import { republishGroupWaits } from "./pending-wait.js";
 import { repoKey } from "./git.js";
 import { pauseGroup, runGroupInBackground } from "./scheduler.js";
 import { createTasks } from "./task-store.js";
-import { id, now, taskBody } from "./util.js";
+import { id, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { visibleProjectIds } from "./auth/visibility.js";
 import { executorScopeForOwner } from "./auth/owned-executors.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
-import { detachTaskRefs } from "./task-refs.js";
 
 // ── groups (transient batch containers, §3) ─────────────────────────────────
 // 从 task-routes.ts 拆出的分组路由:列表/运行/暂停/批量建任务/编辑/删除。
@@ -230,15 +230,10 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
   const queueId = b.chain && specs.length > 1 ? id() : null;
   let created: Task[];
   try {
-    // 串队是归属写方,进队列认领链(queue-claim-chain.ts)。
-    created = await createTasks(rows, queueId
-      ? () => serializeQueueClaims(async () => {
-          const qts = now();
-          await db.insert(queueItems).values(
-            ids.map((tid, i) => ({ taskId: tid, queueId, position: i, createdAt: qts })),
-          );
-        })
-      : undefined);
+    // 任务行与队列成员同一笔事务在链上落库(createTasks 的 joinQueue):先插行后串队的话,
+    // 中间那一拍里另一处分组运行就能把队尾那几条当独立任务先起了。
+    created = await createTasks(rows, undefined, undefined, [],
+      queueId ? joinQueueOnCreate(queueId, ids, { existing: false }) : undefined);
   } catch (error) {
     if (error instanceof CliCommandValidationError) return c.json({ error: error.message }, 400);
     throw error;
@@ -271,9 +266,13 @@ api.patch("/groups/:id", async (c) => {
 // Delete a group. Tasks are NOT deleted — they're just ungrouped (groupId null).
 api.delete("/groups/:id", async (c) => {
   const gid = c.req.param("id");
-  // 摘出分组 = 改 groupId,归属写方进队列认领链(queue-claim-chain.ts)。
-  await serializeQueueClaims(() => detachTaskRefs("groupId", gid));
-  await db.delete(groups).where(eq(groups.id, gid));
+  // 摘出分组 = 改 groupId,归属写方进队列认领链(queue-claim-chain.ts);摘出与删组同一笔事务,
+  // 链上改分组的那一笔(groupMoveRefusal 重验目标组还在)就不会落在两者之间、把任务挂回一个刚删掉的组。
+  // 跟 task-refs.ts 同一口径:摘出不碰 updatedAt。
+  await serializeQueueClaims(() => db.transaction(async (tx) => {
+    await tx.update(tasks).set({ groupId: null }).where(eq(tasks.groupId, gid));
+    await tx.delete(groups).where(eq(groups.id, gid));
+  }));
   return c.json({ deleted: true });
 });
 

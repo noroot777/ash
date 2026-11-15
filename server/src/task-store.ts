@@ -2,6 +2,7 @@ import { eq, inArray, sql } from "drizzle-orm";
 import { normalizeDuetConfig } from "@ash/shared/duet";
 import type { AgentType, QuestionItem, Task, TaskListItem, TaskStage, TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
+import { serializeQueueClaims } from "./queue-claim-chain.js";
 import { acceptGateRuns, agents, monitors, projects, queueItems, sessions, taskBackgroundRevisions, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { runsTiming } from "./util.js";
@@ -281,12 +282,20 @@ async function snapshotExecutor(row: NewTaskRow): Promise<string | null> {
 // 等锁可能等很久，等着的这段时间里委派来源可能已经不作数了（聊天派生的任务：群聊被删了），
 // 而 createTasks 一旦越过这里就只管把行插进去。抛出即取消创建，此时还没有分支计划、没有
 // 插入，无需回滚。放在这里而不是调用方 `await createTasks()` 之前——那太早，锁还没拿到。
+//
+// joinQueue 是**串进队列**的那一种挂靠，不能走 afterInsert：任务行一插进去，调度器（分组运行、
+// 队列推进）和改分组那些写方读库就看得见它，这时队列成员还没写，它就是一条可以被单独起跑、
+// 单独改组的独立任务 —— 随后再串进队列，挂上的是一条已经在跑、或者已经换了组的任务；串不进去
+// 时再删行，删掉的可能是一条已经被人接手跑起来的任务（第 2 轮审查实测三种）。所以任务行与队列
+// 成员在队列认领链上（queue-claim-chain.ts）**同一笔事务**落库：要么一起出现，要么都没有。
+// joinQueue 抛错即整笔回滚，不留任何一行。
 export async function createTasks(
   rows: NewTaskRow[],
   afterInsert?: () => Promise<void>,
   beforeInsert?: () => Promise<void> | void,
   /** 行上没记、但这次创建也挂靠着的任务（POST /tasks 的 reviewOf）：一起占「加成员」的位。 */
   alsoAdmit: (string | null | undefined)[] = [],
+  joinQueue?: (tx: QueueJoinWriter) => Promise<void>,
 ): Promise<Task[]> {
   if (rows.length === 0) return [];
   for (const row of rows) {
@@ -344,34 +353,30 @@ export async function createTasks(
       admitted();
     }
   };
-  const pinned: typeof normalizedRows = [];
-  const unpin = async () => {
-    for (const row of pinned) await exec("git", ["-C", expandHome(repoByProject.get(row.projectId)), "update-ref", "-d", baseRef(row.id), row.worktreeStartCommit!]).catch(() => {});
-  };
   const insertAdmitted = async (): Promise<void> => {
     await beforeInsert?.();
+    const pinned: typeof normalizedRows = [];
     try {
       for (const row of normalizedRows) {
         const hadStart = !!row.worktreeStartCommit;
         await initializeBranchPlan(row, repoByProject.get(row.projectId) || "");
         if (!hadStart && row.worktreeStartCommit) pinned.push(row);
       }
-      await db.insert(tasks).values(normalizedRows);
+      if (joinQueue) {
+        await serializeQueueClaims(() => db.transaction(async (tx) => {
+          await tx.insert(tasks).values(normalizedRows);
+          await joinQueue(tx);
+        }));
+      } else {
+        await db.insert(tasks).values(normalizedRows);
+      }
     } catch (error) {
-      await unpin();
+      for (const row of pinned) await exec("git", ["-C", expandHome(repoByProject.get(row.projectId)), "update-ref", "-d", baseRef(row.id), row.worktreeStartCommit!]).catch(() => {});
       throw error;
     }
   };
   await insert(0);
-  try {
-    await afterInsert?.();
-  } catch (error) {
-    // 挂靠那一步被拒(比如串到的队列在链上重验已不合法):这几行还没发过 task.created,
-    // 谁也没见过它们,原样撤掉,别留下一条「创建失败」却真实存在的任务。
-    await db.delete(tasks).where(inArray(tasks.id, normalizedRows.map((r) => r.id)));
-    await unpin();
-    throw error;
-  }
+  await afterInsert?.();
   const persisted = await db
     .select()
     .from(tasks)
@@ -385,6 +390,9 @@ export async function createTasks(
   for (const task of created) bus.publish({ type: "task.created", task });
   return created;
 }
+
+/** 串进队列那一笔事务里能用的读写(createTasks 的 joinQueue)。 */
+export type QueueJoinWriter = Pick<typeof db, "select" | "insert">;
 
 export async function publishTaskUpdated(taskId: string): Promise<Task | null> {
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);

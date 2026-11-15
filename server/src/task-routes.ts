@@ -10,7 +10,7 @@ import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { projects, queueItems, tasks } from "./db/schema.js";
 import { serializeQueueClaims } from "./queue-claim-chain.js";
-import { QueueJoinRefused, appendToQueue, groupMoveRefusal } from "./queue-membership-guard.js";
+import { QueueJoinRefused, groupMoveRefusal, joinQueueOnCreate } from "./queue-membership-guard.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { detectTaskWorkspace } from "./workspace-cleanup.js";
 import { allFollowUpsOf, followUpsFor } from "./task-follow-up.js";
@@ -385,12 +385,10 @@ api.post("/tasks", async (c) => {
   }
   let created: Task | undefined;
   try {
-    // 上面那几句只是早点拒:隔着建任务的整段 await,队列可能已经没了、成员可能换了组,
-    // 串进队尾时在链上重验一遍(queue-membership-guard.ts),不合法就连刚建的任务一起撤掉。
-    const queueId = b.appendToQueue;
-    [created] = await createTasks([row], queueId
-      ? () => appendToQueue(queueId, { id: taskId, projectId: row.projectId, groupId: row.groupId ?? null }, ts)
-      : undefined, undefined, [b.reviewOf]);
+    // 上面那几句只是早点拒:隔着建任务的整段 await,队列可能已经没了、成员可能换了组。任务行与
+    // 队尾那一项同一笔事务在链上落库并重验(createTasks 的 joinQueue),不合法就整笔不落。
+    [created] = await createTasks([row], undefined, undefined, [b.reviewOf],
+      b.appendToQueue ? joinQueueOnCreate(b.appendToQueue, [taskId], { existing: true }) : undefined);
   } catch (error) {
     if (error instanceof CliCommandValidationError || error instanceof QueueJoinRefused) return c.json({ error: error.message }, 400);
     // 上面那一句只是早点拒；真正关住窗口的是落库那一下（createTasks 占着「加成员」的位，team-admission.ts）。

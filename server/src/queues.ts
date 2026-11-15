@@ -21,13 +21,14 @@ import { handoffBlockReason, isHandoffPreparing } from "./handoff-guard.js";
 import { actorOf } from "./auth/context.js";
 import { visibleTaskIds } from "./auth/visibility.js";
 import { serializeQueueClaims, startingOutsideQueue } from "./queue-claim-chain.js";
+import type { StatusTxWriter } from "./status.js";
 
 // 内部:把 (queueId, [..items..]) 重排成 position 0..N-1,保持 dense。
-// 先全删再按新顺序插入,两步收在一笔事务里:不在链上的读者(托盘「在等谁」、
-// queueBlockers)在中间那一拍会读到「整队都不在队列里」。调用方须在 serializeQueueClaims 里。
-export async function repackQueue(queueId: string, orderedTaskIds: string[]): Promise<void> {
+// 先全删再按新顺序插入,两步收在一笔事务里,失败就整笔不动。调用方须在 serializeQueueClaims 里。
+// 传 `writer` = 调用方已经开着一笔事务(重新排队:挪位跟状态同一笔),直接写进去。
+export async function repackQueue(queueId: string, orderedTaskIds: string[], writer?: StatusTxWriter): Promise<void> {
   const ts = now();
-  await db.transaction(async (tx) => {
+  const write = async (tx: StatusTxWriter) => {
     await tx.delete(queueItems).where(eq(queueItems.queueId, queueId));
     if (orderedTaskIds.length === 0) return;
     await tx.insert(queueItems).values(
@@ -38,7 +39,8 @@ export async function repackQueue(queueId: string, orderedTaskIds: string[]): Pr
         createdAt: ts,
       })),
     );
-  });
+  };
+  await (writer ? write(writer) : db.transaction(write));
 }
 
 // 队列变更后给受影响的任务补发 task.updated:Task 的 queueId/queuePosition 是从
@@ -61,25 +63,35 @@ async function publishQueueMembers(taskIds: string[]): Promise<Map<string, Task>
   return new Map(published.filter((t): t is Task => t != null).map((t) => [t.id, t]));
 }
 
-// 校验:queue 里所有 task 必须同 group(或都无 group),而且必须**同项目**。
+type JoinRow = {
+  id: string; projectId: string; groupId: string | null; status: string;
+  archived: boolean; mode: string | null; followUpFrom?: string | null;
+};
+
+// 入队写方(插入、建队、建任务时串进队列)共用的那一份资格判断。参数都必须是**此刻在队列认领链上
+// 读到的行**(queue-claim-chain.ts):members = 队里现有成员,joining = 这次要加进来的。null = 能写。
 //
-// 只比 groupId 会漏掉一整类:两个项目里的无分组任务,`groupId` 都是 null,比出来「同组」
-// —— 于是一条队列能横跨两个项目。队列视图按 queueId 列内容、`advanceQueue` 按队列推进,
-// 混进来的任务对面刷新就看得见、还会被自动起跑(第 2 轮审查 P1)。项目这一条是主判据,
-// 分组那条是它的加细。
-async function assertSameGroup(queueId: string, candidateTaskId?: string): Promise<string | null> {
-  const items = await db.select().from(queueItems).where(eq(queueItems.queueId, queueId));
-  const taskIds = [...items.map((i) => i.taskId), ...(candidateTaskId ? [candidateTaskId] : [])];
-  if (taskIds.length === 0) return null;
-  const rows = await db.select().from(tasks).where(inArray(tasks.id, taskIds));
-  const projectIds = new Set(rows.map((r) => r.projectId));
-  if (projectIds.size > 1) {
-    return `跨项目不允许:queue ${queueId} 涉及多个项目`;
-  }
-  const groups = new Set(rows.map((r) => r.groupId));
-  if (groups.size > 1) {
-    return `跨 group 不允许:queue ${queueId} 涉及多个 group ${[...groups].join(", ")}`;
-  }
+// · 同项目 + 同组:只比 groupId 会漏掉一整类 —— 两个项目里的无分组任务 groupId 都是 null,比出来
+//   「同组」,一条队列就横跨了两个项目;队列视图按 queueId 列内容、advanceQueue 按队列推进,混进来的
+//   任务对面刷新就看得见、还会被自动起跑(第 2 轮审查 P1)。项目是主判据,分组是加细;
+// · 已结束的不进:队列对终态透明跳过,它不会执行,排在它后面的也不会等它;
+// · 正在以独立任务身份起跑的不进:库里还是 backlog/paused,只有内存看得见,队列推进只读库,放进去
+//   它就是一条 backlog,排在它前面的照样会被拉起来。已经落成 running 的不在此列,按下一条算;
+// · 在跑的加起来至多一个(不变量②)。
+export function queueJoinRefusal(members: JoinRow[], joining: JoinRow[]): { status: 400 | 409; error: string } | null {
+  const all = [...members, ...joining];
+  if (new Set(all.map((r) => r.projectId)).size > 1) return { status: 400, error: "跨项目不允许:同一条队列只能放一个项目的任务" };
+  const groups = new Set(all.map((r) => r.groupId ?? null));
+  if (groups.size > 1) return { status: 400, error: `跨 group 不允许:同一条队列涉及多个 group ${[...groups].join(", ")}` };
+  const finished = finishedMembers(joining);
+  if (finished.length) return { status: 409, error: `这些 task 已结束，不能加入队列: ${finished.join(", ")}。${FINISHED_HINT}` };
+  const starting = joining
+    .filter((t) => !t.archived && t.mode !== "team" && t.status !== "running" && t.status !== "queued")
+    .filter((t) => startingOutsideQueue(t.id))
+    .map((t) => t.id);
+  if (starting.length) return { status: 409, error: `这些 task 正在起跑，等它跑起来再排进队列: ${starting.join(", ")}` };
+  const running = runningMembers(all);
+  if (running.length > 1) return { status: 409, error: `同一条队列最多只能有一个在跑的成员,这些任务都在运行: ${running.join(", ")}` };
   return null;
 }
 
@@ -89,17 +101,6 @@ async function assertSameGroup(queueId: string, candidateTaskId?: string): Promi
 // 承诺是假的(审查真实复现:两个独立 running 任务入同队后仍同时运行)。口径与
 // selectNextInQueue 同源:archived 与 team 成员不算,状态过 queueStatus(终态
 // 任务的续聊回合按终态看)。返回「在跑」成员的 id,调用方按 >1 拒绝。
-// 写入口用:这次要入队的任务里,哪几条正以独立任务身份起跑 —— 库里还是 backlog/paused,只有内存
-// 看得见(queue-claim-chain.ts)。这种一律不放进队列:队列推进只读库,放进去它就是一条 backlog,
-// 排在它前面的照样会被拉起来。已经落成 running 的不在此列,按下面 runningMembers 的口径算。
-function startingOnJoin(joining: { id: string; status: string; archived: boolean; mode: string | null }[]): string[] {
-  return joining
-    .filter((t) => !t.archived && t.mode !== "team" && t.status !== "running" && t.status !== "queued")
-    .filter((t) => startingOutsideQueue(t.id))
-    .map((t) => t.id);
-}
-const STARTING_HINT = "正在起跑，等它跑起来再排进队列";
-
 export function runningMembers(
   rows: { id: string; status: string; archived: boolean; mode: string | null; followUpFrom?: string | null }[],
 ): string[] {
@@ -396,10 +397,6 @@ export function mountQueueRoutes(api: Hono): void {
         return c.json({ error: `task ${taskId} 不能加入队列:${handedOff}` }, 409);
       }
 
-      if (finishedMembers([tr]).length) {
-        return c.json({ error: `task ${taskId} 已结束，不能加入队列。${FINISHED_HINT}`, status: tr.status }, 409);
-      }
-
       // 候选 task 不能已在别的 queue 里(task_id PK 保证,但提前给个友好错误)
       const otherQueue = (
         await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))
@@ -408,21 +405,13 @@ export function mountQueueRoutes(api: Hono): void {
         return c.json({ error: `task 已在另一个 queue ${otherQueue.queueId}` }, 409);
       }
 
-      // 跨 group 校验
-      const violation = await assertSameGroup(qid, taskId);
-      if (violation) return c.json({ error: violation }, 400);
-
-      // 双跑防线:候选和既有成员里「在跑」的加起来超过一个就拒(按请求时刻的最新
-      // 状态读库判,不信页面快照——状态在途变化或并发入队时前端置灰会失守)。
+      // 同项目同组、已结束、正在起跑、双跑防线:按链上此刻的行判,不信页面快照(queueJoinRefusal)。
       const memberRows = await db
         .select()
         .from(tasks)
         .where(inArray(tasks.id, items.map((i) => i.taskId)));
-      if (startingOnJoin([tr]).length) return c.json({ error: `task ${taskId} ${STARTING_HINT}` }, 409);
-      const running = runningMembers([...memberRows, tr]);
-      if (running.length > 1) {
-        return c.json({ error: `同一条队列最多只能有一个在跑的成员,这些任务都在运行: ${running.join(", ")}` }, 409);
-      }
+      const refusal = queueJoinRefusal(memberRows, [tr]);
+      if (refusal) return c.json({ error: refusal.error }, refusal.status);
 
       let insertAt: number;
       if (b.afterTaskId) {
@@ -489,15 +478,6 @@ export function mountQueueRoutes(api: Hono): void {
           409,
         );
       }
-      const finished = finishedMembers(rows);
-      if (finished.length > 0) {
-        return c.json({ error: `这些 task 已结束，不能用来建队: ${finished.join(", ")}。${FINISHED_HINT}` }, 409);
-      }
-      // 同项目(主判据)+ 同 group(加细)—— 理由同 assertSameGroup 顶部。
-      const ps = new Set(rows.map((r) => r.projectId));
-      if (ps.size > 1) return c.json({ error: "跨项目不允许" }, 400);
-      const gs = new Set(rows.map((r) => r.groupId));
-      if (gs.size > 1) return c.json({ error: "跨 group 不允许" }, 400);
       // 任何一个 task 已在其他 queue?
       const occupied = await db.select().from(queueItems).where(inArray(queueItems.taskId, want));
       if (occupied.length > 0) {
@@ -506,13 +486,8 @@ export function mountQueueRoutes(api: Hono): void {
           409,
         );
       }
-      // 双跑防线(同 insert 端点):两个在跑的任务捆成一队,先后顺序是假的。
-      const starting = startingOnJoin(rows);
-      if (starting.length) return c.json({ error: `这些 task ${STARTING_HINT}: ${starting.join(", ")}` }, 409);
-      const running = runningMembers(rows);
-      if (running.length > 1) {
-        return c.json({ error: `同一条队列最多只能有一个在跑的成员,这些任务都在运行: ${running.join(", ")}` }, 409);
-      }
+      const refusal = queueJoinRefusal([], rows);
+      if (refusal) return c.json({ error: refusal.error }, refusal.status);
       const ts = now();
       await db.insert(queueItems).values(
         want.map((tid, i) => ({ taskId: tid, queueId: qid, position: i, createdAt: ts })),
