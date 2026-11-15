@@ -44,6 +44,11 @@ const NOTES = [
 ];
 let notesEnabled = false;
 let notesRequests = 0;
+// 随手记接口的两种异常：扣住不回（验晚到）、直接 503（验读取失败要说出来）。
+let notesOverride = null;
+let notesGate = null;
+let releaseNotes = () => {};
+let notesFail = false;
 
 let browser;
 let releaseSlow = () => {};
@@ -69,7 +74,9 @@ try {
     if (url.pathname.endsWith("/notes")) {
       notesRequests += 1;
       assert.equal(url.searchParams.get("projectId"), "project-1", "随手记按任务所在的项目取");
-      return json(notesEnabled ? NOTES : []);
+      if (notesGate) await notesGate;
+      if (notesFail) return route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"down"}' });
+      return json(notesOverride ?? (notesEnabled ? NOTES : []));
     }
     if (url.pathname.endsWith("/file-search")) {
       // `dir` = 树里展开一层：只回这个目录的直接子项，跟服务端一个口径。
@@ -329,9 +336,51 @@ try {
     (await page.locator("#log li").allTextContents()).at(-1),
     "send:先看 部署清单\n先跑迁移\n再重启服务 +data/uploads/deploy.png",
   );
+  // ⑮ 随手记晚到时**不许把高亮从用户看着的那一条上挪走**。（第 1 轮审查复现：`@README` 高亮着
+  //    README.md，随手记的结果后到、插在文件前面，同一个下标指到了随手记，回车插进去的是
+  //    一段随手记正文外加一张图。）上一次读到的随手记里没有命中 README 的，这一次的扣住。
+  notesGate = new Promise((resolve) => { releaseNotes = resolve; });
+  notesOverride = [{
+    id: "note-readme", projectId: "project-1", body: "README 部署说明：不要修改配置",
+    attachments: ["data/uploads/readme.png"], taskLinks: [], createdAt: 3, updatedAt: 3,
+  }];
+  await textarea.fill("");
+  await textarea.type("读 @README");
+  await settled(["README.md"]);
+  releaseNotes();
+  notesGate = null;
+  await settled(["README 部署说明", "README.md"]);
+  assert.equal(
+    await menu.locator('[aria-selected="true"]').textContent(),
+    "README.md",
+    "后到的候选插在前面，高亮也得留在原来那条上",
+  );
+  await page.keyboard.press("Enter");
+  assert.equal(await textarea.inputValue(), "读 @README.md ", "回车选的是用户看着的那条，不是后到的随手记");
+  notesOverride = null;
+
+  // ⑯ 随手记读不出来要说出来，不能说成「没有匹配」—— 那是没查成，不是查了没有。
+  notesFail = true;
+  await textarea.fill("");
+  await textarea.type("@不存在");
+  await page.waitForFunction(
+    () => document.querySelector(".mention-menu p")?.textContent?.includes("随手记读取失败"),
+    null,
+    { timeout: WAIT_TIMEOUT_MS },
+  );
+  // 手上有上一次读到的：照旧列出来，但要说这不是刚读的。
+  await textarea.fill("");
+  await textarea.type("@部署");
+  await page.waitForFunction(
+    () => document.querySelector(".mention-menu p")?.textContent?.includes("没能刷新"),
+    null,
+    { timeout: WAIT_TIMEOUT_MS },
+  );
+  assert.equal(await options.count(), 1, "刷新失败时上一次读到的随手记照样能选");
+  notesFail = false;
   notesEnabled = false;
 
-  // ⑮ 服务端还没更新时**必须说出来**。不说的话界面就是一列没有层级的文件，看着像
+  // ⑰ 服务端还没更新时**必须说出来**。不说的话界面就是一列没有层级的文件，看着像
   //    树压根没做 —— 这一条正是这么被误判过一次的（前端新、:4317 还是旧进程）。
   legacyServer = true;
   await textarea.fill("");
@@ -352,6 +401,7 @@ try {
   console.log("file-mention-dom: ok");
 } finally {
   releaseSlow();
+  releaseNotes();
   await browser?.close();
   await web.close();
 }

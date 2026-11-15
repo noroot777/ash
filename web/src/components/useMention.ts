@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import type { DraftHandle } from "../lib/DraftStore.tsx";
 import { fileMentionToken } from "../lib/fileMention.ts";
 import { firstSelectable, stepIndex } from "../lib/fileMentionTree.ts";
@@ -51,7 +51,10 @@ export function useMention({
   emptyStatus?: string;
   onPicked?: () => void;
 }) {
-  const [index, setIndex] = useState(0);
+  // 选中项按**身份**（行的 key）记，不按位置：这张列表由三路数据拼成，随手记、文件各自
+  // 异步到货，晚到的那一段插在前面就会把同一个下标指到另一条上 —— 用户看着 README.md
+  // 高亮，回车插进去的却是一段随手记（第 1 轮审查实测）。null = 还没落在哪一条上。
+  const [chosen, setChosen] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const raw = disabled || dismissed ? null : fileMentionToken(value);
   const token = raw ?? "";
@@ -69,13 +72,22 @@ export function useMention({
     ...fileMentionRows(files.rows),
   ];
   const fileOffset = agentHits.length + noteHits.length;
-  const selectable = (at: number) => {
-    const row = rows[at];
-    return !!row && (row.kind !== "file" || !row.row.label);
-  };
-  const clamped = Math.min(index, Math.max(0, rows.length - 1));
-  const selectedIndex = selectable(clamped) ? clamped : firstSelectable(rows.length, selectable);
+  const selectableRow = (row: MentionRow | undefined) => !!row && (row.kind !== "file" || !row.row.label);
+  const selectable = (at: number) => selectableRow(rows[at]);
+  const held = chosen === null ? -1 : rows.findIndex((row) => row.key === chosen && selectableRow(row));
+  // 选中的那条不在了（筛掉了、被删了）才另选，落回第一条能选的。
+  const selectedIndex = held >= 0 ? held : firstSelectable(rows.length, selectable);
   const selected = rows[selectedIndex];
+  // 默认高亮的那一条（没按过方向键、没指过）也要钉住：用户看着它高亮就会按回车，后到的
+  // 候选不能把高亮从它身上挪走。
+  const selectedKey = open ? selected?.key ?? null : null;
+  useEffect(() => {
+    if (selectedKey !== null && selectedKey !== chosen) setChosen(selectedKey);
+  }, [chosen, selectedKey]);
+  const setIndex = (at: number) => {
+    const row = rows[at];
+    if (selectableRow(row)) setChosen(row!.key);
+  };
   // 文件那半边还没回来时要说一句，否则「@ 了一下什么都没有」看着像功能坏了。
   const status = files.treeUnsupported ? TREE_UNSUPPORTED
     : files.loading && !files.rows.length
@@ -83,12 +95,15 @@ export function useMention({
       : files.failed ? "工作区文件读取失败，仍可直接手打路径"
         : rows.length === 0
           ? (notes.status === "loading" ? "正在读取随手记…"
-            : emptyStatus ?? (files.browsing ? "这个目录是空的" : "没有匹配的随手记或文件"))
-          : files.more ? "匹配的文件还有更多，再敲几个字缩小范围"
-            : notes.status === "failed" ? "随手记读取失败，文件照常可选" : null;
+            // 随手记没读出来就不能说「没有匹配」：那是没查成，不是查了没有。
+            : notes.status === "failed" ? "随手记读取失败，其余也没有匹配的"
+              : emptyStatus ?? (files.browsing ? "这个目录是空的" : "没有匹配的随手记或文件"))
+          : notes.status === "failed"
+            ? (notes.notes.length ? "随手记没能刷新，列的是上一次读到的" : "随手记读取失败，其余照常可选")
+            : files.more ? "匹配的文件还有更多，再敲几个字缩小范围" : null;
 
   const reset = () => {
-    setIndex(0);
+    setChosen(null);
     setDismissed(false);
   };
 

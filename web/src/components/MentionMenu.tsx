@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, type MouseEvent, type ReactNode } from "react";
 import type { Note } from "@ash/shared";
 import { CaretDown, CaretRight, File, FolderSimple, NotePencil } from "@phosphor-icons/react";
 import { AgentIcon } from "./AgentIcon.tsx";
@@ -112,6 +112,16 @@ export function MentionMenu({
 }) {
   const firstFileIndex = rows.findIndex((row) => row.kind === "file");
   const selectedRef = useRef<HTMLButtonElement>(null);
+  // 悬停只认**指针真的动了**：候选异步到货、树展开时整张列表会在静止的指针底下挪位，
+  // 浏览器照样补发 mouseenter/mousemove，按它选中就等于让「到货」替用户换了一条。第一下
+  // 只记位置：菜单弹在指针底下时补发的那一下同样没有「之前」可比。
+  const pointer = useRef<{ x: number; y: number } | null>(null);
+  const hover = (index: number, event: MouseEvent) => {
+    const last = pointer.current;
+    pointer.current = { x: event.clientX, y: event.clientY };
+    if (!last || (last.x === event.clientX && last.y === event.clientY)) return;
+    onHover?.(index);
+  };
   // 候选多到要滚时，↑↓ 走出视野的那条必须自己跟着滚进来，否则回车选中的是什么全靠猜。
   useEffect(() => {
     selectedRef.current?.scrollIntoView({ block: "nearest" });
@@ -145,7 +155,7 @@ export function MentionMenu({
             style={row.kind === "file" && row.row.depth
               ? { paddingLeft: `${8 + row.row.depth * 14}px` }
               : undefined}
-            onMouseEnter={() => onHover?.(index)}
+            onMouseMove={(event) => hover(index, event)}
             onClick={() => onPick(row)}
           >
             {row.kind === "agent" ? (
