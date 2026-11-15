@@ -9,6 +9,8 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { latchWaitersOnDelete } from "./pending-after.js";
+import { dependentEdges, prerequisiteDeletes } from "./prerequisite-store.js";
+import { notePrerequisiteProgress } from "./prerequisite-launch.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { republishWaitsOf } from "./pending-wait.js";
 import { acceptGateRuns, freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, taskMemos, taskNotices, taskReads, taskWrites, tasks, teamInbound, taskBranchReceipts, taskDiskCleanups } from "./db/schema.js";
@@ -23,6 +25,7 @@ import { forgetTaskRecordSeq } from "./session-seq.js";
 import { withRepoLock } from "./repo-lock.js";
 import { reclaimDeletedTaskDisk } from "./run-dir-reclaim.js";
 import { now } from "./util.js";
+import { alertLine, appendTaskTimeline } from "./task-timeline.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 
 // 删一个任务:关联状态 + 任务行本身,**一个出口、一个原子批**。自由审查链(run/round)、预约槽、
@@ -103,7 +106,11 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     ? (await db.select({ taskId: queueItems.taskId }).from(queueItems).where(eq(queueItems.queueId, queue.queueId)))
       .map((m) => m.taskId).filter((id) => id !== taskId)
     : [];
+  // 建在它上面的任务：关系跟着删行同一批解除，删完告诉它们（删了就查不到谁建在它上面了）。
+  const dependents = (await dependentEdges(taskId)).map((edge) => edge.taskId);
+  const deletedTitle = (await db.select({ title: tasks.title }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.title ?? taskId;
   await db.batch([
+    ...prerequisiteDeletes(taskId),
     // 已经等到的先锁存,删了就再也查不到它完成过 —— **跟删行同一批**:这一刻之前登记的都在,
     // 之后的登记在同一个 batch 里就看不到这个前置、落不下来(pending-after.ts 文件头)。
     latchWaitersOnDelete(taskId),
@@ -152,6 +159,10 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   // 同理：这个任务各条会话发到第几号（session-seq.ts）也不必再记。
   forgetTaskRecordSeq(taskId);
   for (const waiter of waiters) publishPendingMessages(waiter.taskId);
+  for (const dependent of dependents) {
+    void appendTaskTimeline(dependent, alertLine(`前置任务「${deletedTitle}」已删除，这条前置关系随之解除。`));
+  }
+  if (dependents.length) notePrerequisiteProgress(taskId, dependents);
   void republishWaitsOf(queueMates).catch((err) => console.error(`[ash] 删除 ${taskId} 后通知同队托盘失败:`, err));
 }
 

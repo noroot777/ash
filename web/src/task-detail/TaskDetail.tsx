@@ -26,6 +26,7 @@ import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
 import { HandoffBanner } from "./HandoffBanner.tsx";
 import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
+import { answerFromHost, useDispatchSignals } from "./dispatched/useDispatchSignals.tsx";
 import { replySend } from "./replySend.ts";
 import { replyDispatch } from "./replyDispatch.ts";
 import { dispatchNotes } from "./dispatchNotes.ts";
@@ -120,6 +121,8 @@ export function TaskDetail({
     task, allTasks, conversation, onOpenTask,
     renderTask: (child) => <TaskDetail key={child.id} task={child} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" notify={notify} />,
   });
+  // 名下派出的任务来问 / 失败：会话里那几颗气泡、回复框那一格轮到谁答（dispatched/useDispatchSignals.tsx）。
+  const fromDispatched = useDispatchSignals({ task, allTasks, dispatched: dispatched.state.tasks, onOpen: dispatched.state.open });
   // 等你裁定时回复框顶上那一行（DisputeRulingDock）：选了一档，这一个框就成了那一步。
   const ruling = useDisputeRulingDock({ task, reviews: free.state?.reviews, known: !!free.state, onChanged: free.setState, notify });
   // 此刻能做什么（运行 / 停止 / 归档 / 重新排队 / 重跑上一回合 / 派验证）整份由服务端判，这里只照着画。
@@ -150,9 +153,13 @@ export function TaskDetail({
     : null;
   const derivationAllowed = canDeriveTask(task);
   // 你在回复框里派出去的那几条：会话里各留一句靠右的小灰字，点它在左抽屉打开（dispatchNotes.ts）。
-  const notes = useMemo(() => dispatchNotes(task.id, allTasks).map((note) => ({
-    id: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={dispatched.state.open} />,
-  })), [allTasks, dispatched.state.open, task.id]);
+  // 跟派出的任务来问的那几颗气泡（useDispatchSignals）一起按时刻插进会话。
+  const asides = useMemo(() => [
+    ...fromDispatched.asides,
+    ...dispatchNotes(task.id, allTasks).map((note) => ({
+      key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={dispatched.state.open} />,
+    })),
+  ], [allTasks, dispatched.state.open, fromDispatched.asides, task.id]);
   // 接力入口:已接力出去的任务在本机是存档,除非那次还悬着(可以撤/重试)。
   const canHandoff = task.mode === "single" && task.parentId === null && !task.archived && task.queueId == null
     && (task.handoff?.direction !== "out" || !!task.handoff.pending);
@@ -480,7 +487,6 @@ export function TaskDetail({
                     >
                     <ConversationFeed
                       task={task}
-                      asides={notes}
                       requirement={{ text: task.body, at: task.createdAt, origin: task.creationOrigin }}
                       questionHistory={task.questionHistory}
                       liveQuestionHistory
@@ -540,8 +546,10 @@ export function TaskDetail({
                       reviewRetry={reviewRetry}
                       turnRetry={crashedTurnRetry}
                       reviews={free.state?.reviews}
+                      asides={asides}
                       // 会话里那一句审查结论点过来：审查格展开那一轮（feed-10 / insp-5）。
                       onOpenReviewPanel={(target) => openTab("review", target ? reviewTargetRequest(target) : undefined)}
+                      onOpenTask={onOpenTask}
                     />
                     </MemoSelectionScope>
                     <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
@@ -568,10 +576,9 @@ export function TaskDetail({
                         />
                       )}
                       // 提问在等时，回复框那一格是答题卡（QuestionSlot）：全页只有一处打字、一颗发送键。
-                      onAnswer={async (answer, input) => {
-                        await api.answerTask(task.id, answer, input);
-                        notify("已发送答复，任务正在续跑");
-                      }}
+                      // 名下派出的任务来问时这一格是它的卡，答复直接送给它（不经这条任务，也不叫醒它）。
+                      asking={fromDispatched.asking}
+                      onAnswer={answerFromHost(task.id, () => notify("已发送答复，任务正在续跑"))}
                       actions={replyActions.actions}
                       moreItems={replyActions.moreItems}
                       moreRef={replyActions.moreRef}

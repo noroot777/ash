@@ -208,6 +208,8 @@ export async function settleTaskStatus(
   stopped: StopSettle | null,
   sessionId?: string,
   reason?: SettleExecutionReason | null,
+  /** 这一回合怎么断的那句人话(turn-interruption.ts);落 failed 时记成失败原因,没有就按落位那一支说。 */
+  interruptedBecause?: string | null,
 ): Promise<{
   status: TaskStatus;
   note?: string;
@@ -265,6 +267,10 @@ export async function settleTaskStatus(
   // 执行者结算 → 按需唤醒团队调度者(§Team)。只有提问、失败、以及 reportBack 的
   // done 会投递;普通 done 静默(UI 自己会更新,不花一轮模型调用)。非团队任务
   // (parentId 空)里 notifyTeamLead 直接返回。
+  // 落 failed 那一笔带上的原因(派出的任务失败时,派它的那条任务里那颗气泡读它):先说「怎么断的」,
+  // 说不出来再用这一支自己的结论。续聊回到原来的失败不是又失败一次,那几支不传。
+  const failedBecause = (fallback: string) => ({ failedBecause: interruptedBecause || fallback });
+  const exitNote = `执行异常结束（退出码 ${exitStatus}）`;
   const notify = (kind: Parameters<typeof notifyTeamLead>[1], q?: string, extra?: string) => {
     if (!t) return;
     void notifyTeamLead(t, kind, q, extra).catch((err) =>
@@ -426,7 +432,7 @@ export async function settleTaskStatus(
     const landing = failedTurnLanding({
       ashFailed: true, followUpFrom: null, queueAdvancePrev: null, goalHeld: goalTurn,
     }) as Parameters<typeof setStatus>[1];
-    await setStatus(taskId, landing);
+    await setStatus(taskId, landing, failedBecause(ASH_FAILURE_NOTE[reason.kind]));
     notify("failed");
     return { status: landing, note: ASH_FAILURE_NOTE[reason.kind], confirmedDone: false, nativeTurn };
   }
@@ -457,11 +463,11 @@ export async function settleTaskStatus(
       }
     }
     const status = exitStatus === 0 ? "done" : "failed";
-    await setStatus(taskId, status);
+    await setStatus(taskId, status, failedBecause(exitNote));
     return { status, confirmedDone: false, nativeTurn };
   }
   if (exitStatus !== 0) {
-    await setStatus(taskId, "failed");
+    await setStatus(taskId, "failed", failedBecause(exitNote));
     notify("failed");
     return { status: "failed", confirmedDone: false, nativeTurn };
   }
@@ -490,7 +496,7 @@ export async function settleTaskStatus(
   // 记 failed 之前先看一眼这一轮到底有没有产出:有就在通知里直说「你有 N 个新提交」,
   // 比通用文案快得多地指到病灶(多半只是漏了交卷)。**只影响措辞,不改落位**。
   const hint = await turnOutputHint(taskId);
-  await setStatus(taskId, "failed");
+  await setStatus(taskId, "failed", failedBecause(UNCONFIRMED_NOTE + hint));
   notify("failed_unconfirmed", undefined, hint);
   return { status: "failed", note: UNCONFIRMED_NOTE + hint, confirmedDone: false, nativeTurn,
     failureReason: "missing_completion_confirmation" };

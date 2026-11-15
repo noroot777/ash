@@ -17,6 +17,8 @@ export type TaskStatusIndicator =
   | "active"
   /** 排在队里、还没轮到。归档仍是「在跑」（任务模式的口径），但样子跟真在跑的分开。 */
   | "queued"
+  /** 要它起跑了，在等前置站稳（shared/src/prerequisites.ts）。画法同排队：都是「轮到了自己会起」。 */
+  | "waiting"
   | "attention"
   /** 有东西在后台替它跑着、而且会自己回来：挂着的哨兵、正在跑的验收前置命令。 */
   | "working"
@@ -85,7 +87,11 @@ export function deriveTaskStatusIndicator(
   if (task.status === "paused") return "attention";
   if (runningNow(task)) return "active";
   if (task.status === "queued") return "queued";
-  if (task.status === "backlog") return "pending";
+  if (task.status === "backlog") {
+    // 前置都站稳了却开不了工（合不拢）：要你去处理；只是在等：跟没要求起跑的待办分开。
+    if (task.prerequisites?.blocked) return "attention";
+    return task.prerequisites?.waiting ? "waiting" : "pending";
+  }
   // 「干完了但我还没验收」是持久事实，不是未读提醒：已读之后仍要标出来，
   // 否则做完的任务全都塌成同一种样子，分不出哪些还等着我盖章。
   // 执行者不进这一档 —— 验收是顶层任务的事（accept_task 拒绝共享执行者）。
@@ -103,6 +109,7 @@ export type TaskMark = "run" | "queue" | "wait" | "breathe" | "stalled" | "open"
 export const TASK_LOOK: Record<TaskStatusIndicator, { mark: TaskMark | null; say: string }> = {
   active: { mark: "run", say: "运行中" },
   queued: { mark: "queue", say: "排队中" },
+  waiting: { mark: "queue", say: "在等前置任务" },
   attention: { mark: "wait", say: "需要人工输入" },
   working: { mark: "breathe", say: "有东西在后台跑着，它会自己回来" },
   stalled: { mark: "stalled", say: "在干等模型上游回话，没有任何输出" },
@@ -119,9 +126,9 @@ export type TaskLook = {
   say: string;
   /** 算进顶上那排筛选的哪一颗。判据本体是 lib/taskAttention 的 spreadBucket。 */
   bucket: SpreadBucket;
-  /** 行尾那两三个字（等什么）。只有明着等你答复时才有。 */
+  /** 行尾那两三个字（等什么）。只有明着等你答复、或前置齐了却开不了工时才有。 */
   word: string | null;
-  /** 指着那两三个字时多给的半句（问题本身）。 */
+  /** 指着那两三个字时多给的半句（问题本身 / 开不了工的原因）。 */
   detail: string | null;
 };
 
@@ -136,14 +143,16 @@ export function taskLook(task: TaskListItem, workers: TaskListItem[] = [], unrea
   const indicator = deriveTaskStatusIndicator(task, workers, unread);
   const row = indicator ? TASK_LOOK[indicator] : null;
   const mark = row?.mark ?? null;
-  const question = indicator === "attention" ? questionOf(task, workers) : null;
+  const asked = indicator === "attention" ? questionOf(task, workers) : null;
+  const blocked = indicator === "attention" && !asked ? task.prerequisites?.blocked ?? null : null;
+  const question = asked ?? blocked;
   const oneLine = question?.replace(/\s+/g, " ").trim() ?? "";
   return {
     indicator,
     mark,
     say: mark ? row!.say : "",
     bucket: spreadBucket(task, workers),
-    word: question ? "等你答复" : null,
+    word: asked ? "等你答复" : blocked ? "开不了工" : null,
     detail: oneLine ? (oneLine.length > DETAIL_MAX ? `${oneLine.slice(0, DETAIL_MAX)}…` : oneLine) : null,
   };
 }

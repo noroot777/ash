@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import {
   callChoices, dispatchBaseOptions, initialVerb, parseDispatchCommand, rememberedTarget, SELF_ASK_HELD,
 } from "../src/task-detail/replyCall.ts";
-import { dispatchNotes, displayRowAt, interleaveByTime } from "../src/task-detail/dispatchNotes.ts";
+import { dispatchNotes } from "../src/task-detail/dispatchNotes.ts";
+import { interleaveAsides } from "../src/task-detail/feedAsides.ts";
 import { buildDispatchBody, buildTaskDerivationBody } from "../src/task-detail/taskDerivation.ts";
 
 // —— 停在哪一种做法 ——
@@ -67,10 +68,9 @@ const notes = dispatchNotes("src", [
 assert.deepEqual(notes.map((note) => [note.id, note.title, note.agent]), [["early", "未命名任务", "codex"], ["late", "late", "codex"]],
   "只认你从回复框派的（用户建、挂在这条名下），按时间排");
 const rows = [{ at: "2026-11-15T01:00:00.000Z", id: "a" }, { at: null, id: "lane" }, { at: "2026-11-15T02:00:00.000Z", id: "b" }];
-assert.deepEqual(interleaveByTime(rows, (row) => row.at, notes).map((entry) => entry.kind === "row" ? entry.row.id : entry.aside.id),
-  ["a", "lane", "early", "b", "late"], "插在第一个比它晚的行前面；认不出时刻的行不当参照；最晚的跟在最后");
-assert.equal(displayRowAt({ kind: "item", item: { kind: "user", at: "x" } }), "x");
-assert.equal(displayRowAt({ kind: "footnote", footnote: { parts: [] } }), null);
+const asides = notes.map((note) => ({ key: note.id, at: note.at, node: null }));
+assert.deepEqual(interleaveAsides(rows, asides, (row) => row.at).map((entry) => entry.row ? entry.row.id : entry.aside.key),
+  ["a", "lane", "early", "b", "late"], "按派出去那一刻插进会话：排在第一个比它晚的行前面，最晚的跟在最后");
 
 // —— 派出去的新任务正文：写的那句在最前，后面带着这场对话（跟 /team、/duet 同一份带法）——
 const sourceTask = { id: "src", title: "登录页", body: "改成新样式", status: "running" };

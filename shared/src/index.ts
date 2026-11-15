@@ -1,6 +1,7 @@
 // Core domain types shared between server and web.
 import type { TeamConfig } from "./team.ts";
 import type { QuestionRecord } from "./questions.ts";
+export type { DispatchSignal } from "./dispatch-signals.ts";
 import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
 import type { TaskWorkflowMode } from "./free-workflow.ts";
@@ -403,6 +404,11 @@ export interface Task {
    * 不是「有东西会自己回来」,而是「它在干等,大概回不来」—— 所以圆点是另一档。
    */
   upstreamStalled?: boolean;
+  /**
+   * 前置（这条任务建在哪几条上面）与谁建在它上面；没有前置也没人建在它上面时省略。
+   * 后台事实：前置那边一变它就跟着变，随 `backgroundRevision` 一起刷新（server/src/prerequisite-view.ts）。
+   */
+  prerequisites?: import("./prerequisites.ts").TaskPrerequisites;
   backgroundRevision?: number;
 }
 

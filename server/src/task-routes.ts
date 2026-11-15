@@ -30,6 +30,8 @@ import { inheritOwner } from "./auth/run-env.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
 import { dispatcherRefusal } from "./task-dispatch.js";
 import { mountTaskDeleteRoutes } from "./task-delete-routes.js";
+import { mountPrerequisiteRoutes, prerequisiteRefusal, stringList } from "./prerequisite-routes.js";
+import { republishPrerequisiteView } from "./prerequisite-view.js";
 import { recentRejectionNotices } from "./user-action-rejection.js";
 import { suspectTurns } from "./turn-lock-reclaim.js";
 
@@ -39,6 +41,7 @@ export function mountTaskRoutes(api: Hono): void {
   // `mountTaskRoutes`。让它们各自再记得多挂一次,漏掉的那个不会编译报错,只会在某条
   // 用例里变成一个莫名其妙的 404。
   mountTaskDeleteRoutes(api);
+  mountPrerequisiteRoutes(api);
 
   // 一次最多问这么多任务的追问 / 正文（判据和常量本体在 shared 的 TASK_BATCH_LIMIT）：
   // 追问每个都要摸一次盘，别让一个手抖的请求把整个进程钉在 I/O 上。
@@ -162,6 +165,7 @@ api.post("/tasks", async (c) => {
     attachments?: string[];
     appendToQueue?: string; // 可选:把新任务追加到指定 queue 的尾部
     workflowId?: string | null; // 内部建的 preset 任务挑哪条起手式;省略则按项目→全局默认解析
+    prerequisites?: string[]; // 前置:这条任务建在哪几条已有任务上面(prerequisite-store.ts)
   }>();
   // 建任务是**往一个项目里写东西**,所以先过可见性(§十二)。resourceGate 拦的是
   // `/tasks/:id/…`,建任务这条路上还没有 id,只有请求体里那个 projectId —— 漏了这一句,
@@ -383,6 +387,12 @@ api.post("/tasks", async (c) => {
     }
     appendPosition = existing.length;
   }
+  const prerequisiteList = b.prerequisites === undefined ? [] : stringList(b.prerequisites);
+  if (!prerequisiteList) return c.json({ error: "prerequisites 要是字符串数组" }, 400);
+  const prerequisiteIds = [...new Set(prerequisiteList.filter(Boolean))];
+  if ((await visibleTaskIds(actorOf(c), prerequisiteIds)).length !== prerequisiteIds.length) {
+    return c.json({ error: "前置任务不存在" }, 404);
+  }
   let created: Task | undefined;
   try {
     [created] = await createTasks([row], b.appendToQueue && appendPosition !== null
@@ -394,13 +404,17 @@ api.post("/tasks", async (c) => {
             createdAt: ts,
           });
         }
-      : undefined, undefined, [b.reviewOf]);
+      : undefined, undefined, [b.reviewOf], prerequisiteIds.map((prerequisiteId) => ({ taskId, prerequisiteId })));
   } catch (error) {
     if (error instanceof CliCommandValidationError) return c.json({ error: error.message }, 400);
+    const refused = prerequisiteRefusal(error);
+    if (refused) return c.json(refused.body, refused.status);
     // 上面那一句只是早点拒；真正关住窗口的是落库那一下（createTasks 占着「加成员」的位，team-admission.ts）。
     if (error instanceof TeamAcceptingError) return c.json({ error: error.message, parentId: b.parentId ?? null, reviewOf: b.reviewOf ?? null }, 409);
     throw error;
   }
+  // 已有的前置那边也多了「谁建在它上面」（批量建任务那条路同样会发，group-routes.ts）。
+  if (prerequisiteIds.length) await republishPrerequisiteView(prerequisiteIds);
   if (b.appendToQueue) {
     // 追加到队尾后立刻推进:若前序全 done,新 task 应立刻起跑
     advanceQueueInBackground(b.appendToQueue);

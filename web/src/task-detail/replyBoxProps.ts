@@ -67,8 +67,10 @@ export type ReplyBoxProps = {
   tasks?: TaskListItem[];
   /** 这个框此刻被借用（等你裁定时框顶那一行）；见 replyOverride.ts。 */
   override?: ReplyOverride;
-  /** 有问题在等时怎么答：给了，框那一格就由答题卡接管（QuestionSlot.tsx）。 */
-  onAnswer?: (answer: string, input: QuestionAnswerInput) => Promise<void>;
+  /** 有问题在等时怎么答：给了，框那一格就由答题卡接管（QuestionSlot.tsx）。第三个参数是卡对的那一条。 */
+  onAnswer?: (answer: string, input: QuestionAnswerInput, asking: TaskListItem) => Promise<void>;
+  /** 这一格此刻是谁的卡；不给就是这条任务自己（名下派出的任务来问时由宿主给那一条）。 */
+  asking?: TaskListItem | null;
   /**
    * `@` 了人之后的「派出去」：开一条新任务交给他（replyDispatch.ts）。失败就抛，框里的人、做法和字都留着。
    * 不给 = 这里派不出去（团队执行者、审查任务），`@` 只剩问一句，框顶那一行不出。
