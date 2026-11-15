@@ -13,6 +13,7 @@ import { withAfterGates, type AfterGate } from "./pending-after.js";
 import { deliveryVerdict, pendingExecutionIntent, type DeliveryVerdict } from "./pending-verdict.js";
 import { queueBlockerDetails, type QueueBlocker } from "./queues.js";
 import { reviewDeliveryBlocked, reviewDeliveryFrom } from "./review-ownership.js";
+import { discussionHolds } from "./discussion.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
@@ -28,6 +29,8 @@ export interface DeliveryFacts {
   groupPaused: boolean;
   /** 这一次投递会开执行回合，而任务挂着「等前置站齐就起」：等放行那一路连同这条一起起（prerequisite-gate.ts）。 */
   prerequisiteWait: boolean;
+  /** 这条任务上正在讨论（连同写合稿）：讨论期间用户发的话一律排着，说完再发（discussion.ts）。 */
+  discussing: boolean;
 }
 
 /** m.execution 由调用方按 pendingExecutionIntent 定好再传进来（扫描会把它写回库，这里不写）。 */
@@ -62,8 +65,10 @@ export async function deliveryVerdictOf(m: Row & AfterGate, t: TaskRow | null, a
   const prerequisiteWait = needQueueCheck && await awaitingPrerequisites(m.taskId);
   const judged = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, monitorSource, reviewBlocked,
     reviewUncertain: t.waitOwnership?.start?.phase === "uncertain" } : null, at);
-  const verdict: DeliveryVerdict = prerequisiteWait && judged.action === "deliver" ? { action: "wait" } : judged;
-  return { verdict, facts: { checkpointFollowUp, needQueueCheck, queueBlocked, queueBlocking, groupPaused, prerequisiteWait } };
+  // 讨论只挡「送」：取消（任务没了、来源失效）照旧当场取消。托盘的等待说明也要它（任务在跑时同样在等讨论）。
+  const discussing = t?.mode === "single" && await discussionHolds(m.taskId);
+  const verdict: DeliveryVerdict = (prerequisiteWait || discussing) && judged.action === "deliver" ? { action: "wait" } : judged;
+  return { verdict, facts: { checkpointFollowUp, needQueueCheck, queueBlocked, queueBlocking, groupPaused, prerequisiteWait, discussing } };
 }
 
 /** 挂着「等齐就起」、起点还没定下：起跑要等放行那一路（见 prerequisite-launch.ts）。 */

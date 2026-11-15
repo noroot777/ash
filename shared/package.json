@@ -158,6 +158,10 @@
       "types": "./src/workflow-presets.ts",
       "default": "./src/workflow-presets.ts"
     },
+    "./discussion": {
+      "types": "./src/discussion.ts",
+      "default": "./src/discussion.ts"
+    },
     "./free-workflow": {
       "types": "./src/free-workflow.ts",
       "default": "./src/free-workflow.ts"

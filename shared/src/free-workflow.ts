@@ -1,4 +1,5 @@
 import type { AgentType } from "./index.ts";
+import type { TaskDiscussion } from "./discussion.ts";
 import type { PreviewServiceState } from "./preview.ts";
 import type { ReviewNoVerdict } from "./timeline-notice.ts";
 
@@ -655,6 +656,8 @@ export interface FreeWorkflowState {
   preview: FreeWorkflowPreviewState;
   executions: FreeWorkflowExecution[];
   reviews: FreeReviewRun[];
+  /** 这条任务上开过的讨论，按开始时间排（会话里的气泡、「审议」格里的那一段都读它）。 */
+  discussions: TaskDiscussion[];
 }
 
 export interface FreeReviewDispatchInput {

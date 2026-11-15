@@ -11,6 +11,8 @@ import {
   startManualFreeReviewRepair,
 } from "./free-workflow.js";
 import { startFreeReviewDebate, submitDebateStatement } from "./free-review-debate.js";
+import { startDiscussion, submitDiscussionStatement } from "./discussion.js";
+import { activeTalkOf } from "./talk/segments.js";
 import { adjustFreeReviewRounds } from "./free-review-rounds.js";
 import { noted } from "./user-action-rejection.js";
 import {
@@ -171,10 +173,25 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     const identity = await turnIdentityError(c, taskId, "辩论发言");
     if (identity) return c.json({ error: identity }, 409);
     try {
-      type ReplyBody = { summary?: unknown; statement?: unknown; verdict?: unknown };
+      type ReplyBody = { summary?: unknown; statement?: unknown; verdict?: unknown; agreed?: unknown };
       const body = await c.req.json<ReplyBody>().catch(() => ({} as ReplyBody));
+      // 讨论跟辩论共用这一个交卷口（MCP debate_reply）：这条任务上此刻在说的是讨论就交给讨论。
+      if (await activeTalkOf(taskId, "discussion")) {
+        return c.json({ recorded: true, taskId, ...(await submitDiscussionStatement(taskId, body)) });
+      }
       return c.json({ recorded: true, taskId, ...(await submitDebateStatement(taskId, body)) });
     } catch (error) { return c.json(errorBody(error), 409); }
+  });
+  // 回复框里 @ 了人、选「讨论」、按「开始讨论」（discussion.ts）。
+  api.post("/tasks/:id/discussions", async (c) => {
+    const blocked = await blockedByHandoff(c);
+    if (blocked) return blocked;
+    try {
+      type StartBody = { topic?: unknown; attachments?: unknown; rounds?: unknown; guests?: unknown };
+      const body = await c.req.json<StartBody>().catch(() => ({} as StartBody));
+      const started = await startDiscussion(c.req.param("id"), body, { holdTurn: true });
+      return c.json({ ...started, state: await freeWorkflowState(c.req.param("id")) }, 201);
+    } catch (error) { return c.json(await noted(c.req.param("id"), "开始讨论", errorBody(error)), 409); }
   });
   api.put("/tasks/:id/free-workflow/review-reservation", async (c) => {
     const blocked = await blockedByHandoff(c);

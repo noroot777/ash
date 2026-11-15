@@ -570,6 +570,8 @@ export async function startFreeReview(
     if (await reviewingRun(taskId)) throw new Error("审查回合正在进行，结束后再派审");
     // 辩论也是占着这条任务的旁路回合（段与段之间回合是空的，只查 turn 挡不住）。
     if (await activeDebateOf(taskId)) throw new Error("审查意见辩论正在进行，结束后再派审");
+    // 讨论同理（discussion.ts）：插进两段之间的审查回合会被当成讨论的一段结算。
+    if (await (await import("./discussion.js")).discussionHolds(taskId)) throw new Error("这条任务上正在讨论，说完再派审");
     const profile = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, input.reviewerId))).at(0);
     // 「不是我的」与「根本没有」报同一句话(owned.ts `notYours` 同一个理由)。
     if (!profile || (actor && !(await canUseOwned(profile, actor)))) throw new Error("所选审查者不存在");

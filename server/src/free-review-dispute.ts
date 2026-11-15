@@ -555,6 +555,7 @@ export async function resolveFreeReviewDispute(
   const open = await targetedOpenDispute(taskId, target);
   const { activeDebateOf } = await import("./free-review-debate.js");
   if (await activeDebateOf(taskId)) throw new Error("辩论正在进行，等它结束再裁定");
+  if (await (await import("./discussion.js")).discussionHolds(taskId)) throw new Error("这条任务上正在讨论，说完再裁定");
 
   if (resolution === "deferred") {
     const { deferOpenDispute } = await import("./free-review-defer.js");

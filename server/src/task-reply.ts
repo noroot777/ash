@@ -94,7 +94,10 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
     return c.json({ error: error instanceof Error ? error.message : String(error), started: false }, 409);
   }
 
-  const queueWhileRunning = !isTeam && (r.status === "running" || r.status === "queued");
+  // 讨论的两段之间回合是空的、状态也不是 running，照常直送就会插进去被当成讨论的一段（discussion.ts）：
+  // 讨论没说完（连同合稿）之前，这句话跟任务在跑时一样排着，说完自动发出。
+  const queueWhileRunning = !isTeam && (r.status === "running" || r.status === "queued"
+    || await (await import("./discussion.js")).discussionHolds(taskId));
   const goalCommand = parseCliCommand(b.agent ?? (r.agentType as AgentType) ?? "claude", b.text ?? "");
   const goalExecution = !isTeam && isGoalExecution(goalCommand);
   const goalRecovery = !isTeam && isGoalRecovery(goalCommand);
