@@ -16,52 +16,10 @@ import { sweepReleasedQueueMembers } from "./queue-monitor-hold.js";
 import { sweepOwedStarts } from "./dispatch-hold.js";
 import { forgetHeldStart } from "./dispatch-hold-owed.js";
 import { turnFreezeReason } from "./turn-freeze.js";
+import { shiftDue } from "./schedule-due.js";
 import { reportStuckWindDowns, reportSuspectTurns } from "./turn-lock-reclaim.js";
 
-// ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
-// Supports *, n, a-b, */n, and comma lists. No seconds, no names.
-function fieldMatches(field: string, value: number, min: number, max: number): boolean {
-  return field.split(",").some((part) => {
-    let step = 1;
-    let range = part;
-    const slash = part.indexOf("/");
-    if (slash !== -1) {
-      step = Number(part.slice(slash + 1)) || 1;
-      range = part.slice(0, slash);
-    }
-    let lo = min;
-    let hi = max;
-    if (range !== "*") {
-      const dash = range.indexOf("-");
-      if (dash !== -1) {
-        lo = Number(range.slice(0, dash));
-        hi = Number(range.slice(dash + 1));
-      } else {
-        lo = hi = Number(range);
-      }
-    }
-    if (value < lo || value > hi) return false;
-    return (value - lo) % step === 0;
-  });
-}
-
-export function cronMatches(expr: string, d: Date): boolean {
-  const parts = expr.trim().split(/\s+/);
-  if (parts.length !== 5) return false;
-  const [mi, ho, dom, mo, dow] = parts;
-  return (
-    fieldMatches(mi, d.getMinutes(), 0, 59) &&
-    fieldMatches(ho, d.getHours(), 0, 23) &&
-    fieldMatches(dom, d.getDate(), 1, 31) &&
-    fieldMatches(mo, d.getMonth() + 1, 1, 12) &&
-    fieldMatches(dow, d.getDay(), 0, 6)
-  );
-}
-
-const sameMinute = (a: string, b: Date) => {
-  const da = new Date(a);
-  return da.getFullYear() === b.getFullYear() && da.getMonth() === b.getMonth() && da.getDate() === b.getDate() && da.getHours() === b.getHours() && da.getMinutes() === b.getMinutes();
-};
+// cron 解析与「这一班还欠不欠着」住在 schedule-due.ts:兑现「接着跑」欠账的那一边也问它。
 
 // Fire a scheduled task = start a FRESH run (a schedule RE-RUNS its task).
 // Never resume the prior CLI session: a recurring cron must open a new run
@@ -138,17 +96,9 @@ export async function tick() {
     try {
       // 先问 fire 能不能跑、真跑了才记账:fire 决定与写 lastRunAt 之间没有 await 间隙,
       // 同一分钟 double-fire 的旧防线不受影响;被跳过的班次不消费,下个 tick 重试。
-      if (s.kind === "once") {
-        if (s.at && new Date(s.at) <= now && !s.lastRunAt && await fire(s.taskId)) {
-          await db.update(schedules).set({ lastRunAt: now.toISOString(), enabled: false }).where(eq(schedules.id, s.id));
-        }
-      } else if (s.kind === "cron" && s.cron && cronMatches(s.cron, now)) {
-        // guard against double-fire within the same minute (tick runs more often)
-        if (s.lastRunAt && sameMinute(s.lastRunAt, now)) continue;
-        if (await fire(s.taskId)) {
-          await db.update(schedules).set({ lastRunAt: now.toISOString() }).where(eq(schedules.id, s.id));
-        }
-      }
+      if (!shiftDue(s, now) || !await fire(s.taskId)) continue;
+      await db.update(schedules).set(s.kind === "once" ? { lastRunAt: now.toISOString(), enabled: false } : { lastRunAt: now.toISOString() })
+        .where(eq(schedules.id, s.id));
     } catch {
       /* keep ticking */
     }

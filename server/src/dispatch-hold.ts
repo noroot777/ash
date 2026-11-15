@@ -17,8 +17,8 @@
 // 分组运行、起跑前那道闸、智能体调 run_task），各在任务上记一笔「欠一次起跑」（tasks.hold_owed_by，
 // dispatch-hold-owed.ts）。接着跑时清掉停着的标记，把欠账逐条兑现：在队列里的推一下那条队列（按原
 // 顺序从队首续），不在队列里的照分组运行拉起成员的做法从原会话续。账在真起跑或落终态时才销，此刻
-// 起不来的由状态落位的监听与 tick 巡检接着兑现。没欠账的一条不碰 —— 停之前就在
-// 等答复、等哨兵、被用户单独停掉、已经取消或失败的，接着跑之后还是原样。分组暂停和它互不相干：
+// 起不来的由状态落位的监听与 tick 巡检接着兑现。同一次起跑还有一班定时欠着的，让给班次（schedule-due.ts）。
+// 没欠账的一条不碰 —— 停之前就在等答复、等哨兵、被用户单独停掉、已经取消或失败的，接着跑之后还是原样。分组暂停和它互不相干：
 // 兑现时分组还停着，起跑那道闸照样拦（分组恢复时由分组那边拉起）。
 //
 // 派活的那条被删掉：停着的标记跟着那一行没了，名下的任务不再被按住；欠账一并清掉、原地留着
@@ -33,6 +33,7 @@ import { setTaskStatus } from "./status.js";
 import { notePauseOfTasks } from "./pause-generation.js";
 import { forgetHeldStart, oweHeldStart } from "./dispatch-hold-owed.js";
 import { taskHoldOf } from "./task-hold.js";
+import { scheduleOwesStart } from "./schedule-due.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { republishWaitsOf } from "./pending-wait.js";
 import { heldByMonitors } from "./queue-monitor-hold.js";
@@ -145,6 +146,12 @@ export async function honorOwedStart(taskId: string): Promise<void> {
   if (!row?.holdOwedBy) return;
   const holder = (await db.select({ holdAt: tasks.dispatchHoldAt }).from(tasks).where(eq(tasks.id, row.holdOwedBy))).at(0);
   if (holder?.holdAt || !(await canResume(row)) || await taskHoldOf(row)) return;
+  // 同一次起跑只许一方去兑现：这条任务还有一班到了没跑的定时，就是那一班退避时没撤掉账（撤账写
+  // 失败）—— 让给班次，账撤掉（schedule-due.ts 文件头）。撤账再失败就整个留到下一次，仍旧不起。
+  if (await scheduleOwesStart(taskId)) {
+    await forgetHeldStart(taskId, row.holdOwedBy);
+    return;
+  }
   const item = (await db.select({ queueId: queueItems.queueId }).from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
   if (item) {
     const { advanceQueue, pickNextLaunchable } = await import("./scheduler.js");
