@@ -355,7 +355,9 @@ export function TaskComposerPanel({
     });
     // 办成了、面板也归这次提交时上层会收起它；草稿已经换了（面板留着）或没办成，这里就得把按键放回来。
     if (mountedRef.current) setBusy(false);
-    if (settled && sentCall) calling.sent(sentCall);
+    // 发出去了：只记住叫的是谁、用的哪一套。叫着的人不在这里清——草稿还是这一份时，结算已经连它一起清掉；
+    // 已经换了（清空另写、并进了随手记），眼前那份安排是新的那件事的，旧结果一点都不动它。
+    if (settled && sentCall) calling.remember(sentCall);
   };
 
   return (

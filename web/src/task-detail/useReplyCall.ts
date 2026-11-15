@@ -99,9 +99,12 @@ export function useReplyCall({ ownAgent, ability, profiles, state }: {
    * 发出去了：记住叫的是谁、对他用的那一套，下次叫他（或 `/派`）先摆这一套。只清发出去的那一版——
    * 每一处改动（换人、换做法、换开工位置）都换一个新对象，发送途中动过就是下一句的设置，整份留着。
    */
-  const sent = (snapshot: ReplyCall) => {
+  const remember = (snapshot: ReplyCall) => {
     for (const other of snapshot.others) rememberCall(other);
     rememberCall(snapshot.target);
+  };
+  const sent = (snapshot: ReplyCall) => {
+    remember(snapshot);
     setCall((current) => (current === snapshot ? null : current));
   };
 
@@ -109,6 +112,8 @@ export function useReplyCall({ ownAgent, ability, profiles, state }: {
     call,
     self: !!call && (dispatchable || ability.discussable) && selfOf(call.target.agent),
     start, pend, picking, restore, setVerb, setBase, togglePerson, setRounds, commitTarget, commitEffort, cancel, drop, sent,
+    /** 只记住这一套、不动叫着的人（新建框：叫的人跟草稿一起由提交结算去清，见 DraftStore 的 settleSubmission）。 */
+    remember,
   };
 }
 

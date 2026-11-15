@@ -2,6 +2,7 @@
 import { StrictMode, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Group, GroupMode, ProjectView, Task } from "@ash/shared";
+import type { ComposerDraft } from "../../src/composer/composerDraft.ts";
 import { TaskComposerPanel } from "../../src/composer/TaskComposerPanel.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import "../../src/styles/global.css";
@@ -22,6 +23,9 @@ function Fixture() {
   const notify = useCallback((message: string) => setNotices((current) => [...current, message]), []);
   // 真实工作区里建完这块面板就收起来了，再开是新的一份：用 key 复现那一下。
   const [round, setRound] = useState(0);
+  // 随手记转任务：工作区是带着一份种子重开新建框（WorkspaceShell 的 openComposer(draft)），并进去之后摘掉。
+  const [seed, setSeed] = useState<ComposerDraft | null>(null);
+  const seeded = useCallback(() => setSeed(null), []);
   return (
     <div style={{ display: "flex", height: "100vh", flexDirection: "column" }}>
       <TaskComposerPanel
@@ -29,6 +33,8 @@ function Fixture() {
         project={project}
         groups={[] as Group[]}
         tasks={[]}
+        initialDraft={seed}
+        onDraftSeeded={seeded}
         onCancel={() => {}}
         onCreated={(task: Task, _noteIds: string[], ownsComposer: boolean) => {
           setCreated((current) => [...current, task.title]);
@@ -40,6 +46,10 @@ function Fixture() {
         notify={notify}
       />
       <button type="button" data-testid="reopen" onClick={() => setRound((current) => current + 1)}>重开面板</button>
+      <button type="button" data-testid="convert-note" onClick={() => {
+        setSeed({ body: "随手记 B：新的一件事", attachments: [], noteIds: ["note-B"] });
+        setRound((current) => current + 1);
+      }}>随手记转任务</button>
       <ul data-testid="created">{created.map((title, index) => <li key={index}>{`已创建：${title}`}</li>)}</ul>
       <ul data-testid="notices">{notices.map((item, index) => <li key={index}>{`提示：${item}`}</li>)}</ul>
     </div>

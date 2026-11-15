@@ -54,8 +54,8 @@ export type Draft = {
   // 再按一次只对它重发这一下，不再建一条（composer/settleCreatedTask.ts）。
   created?: ComposerCreated | null;
   // 新建任务框专用：最近一次提交盖的戳（stampSubmission）。异步结果回来时凭它认这份草稿还是不是自己那一份：
-  // 中途清空过、换成了另一件事（含随手记转任务并进来一份），戳就没了或换了，迟到的结果——成功也好失败也好——
-  // 都不许动它（settleSubmission）。
+  // 中途清空过、换成了另一件事（含随手记转任务并进来一份，adopt），戳就没了或换了，迟到的结果——成功也好失败也好——
+  // 都不许动它的任何部分：正文、附件、叫的人、待重发的那条（settleSubmission 是唯一的口子）。
   submission?: string | null;
 };
 
@@ -165,8 +165,12 @@ export type DraftHandle = {
   created: ComposerCreated | null;
   /** 给这份草稿盖上这次提交的戳，返回盖完的那一份（提交那一刻的归属标识，见 settleSubmission）。 */
   stampSubmission: (token: string) => Draft;
-  /** 这份草稿不再是在途那次提交的了（并进了别处带来的另一份内容）：撕掉戳，迟到的结果一律不认。 */
-  disownSubmission: () => void;
+  /**
+   * 往新建框的草稿里并进别处带来的另一份内容（随手记转任务）。并进来就是另一件事，跟提交有关的旧状态在同一次
+   * 更新里一起断开：撕掉在途那次提交的戳（迟到的成功、失败都不再认这份草稿），解开「已建好、待重发」的那条
+   * （新内容再发是新建一条，不发进上一条任务；那条留在待办里）。叫的人是用户眼前的安排，留着。
+   */
+  adopt: (merge: (current: Draft) => Draft) => void;
   /**
    * 一次提交的结果回来了，由它来动草稿——成功清空（"clear"）、第一回合没送达挂上待重发的那条（{ created }）
    * 都只走这一个口子。草稿还盖着这次的戳才认；给了 unchangedSince 还要求自那一刻起**完全没动过**（对象引用
@@ -246,8 +250,8 @@ export function useDraft(key: string): DraftHandle {
     updateDraft(key, (current) => ({ ...current, submission: token }));
     return readDraft(key);
   }, [key, readDraft, updateDraft]);
-  const disownSubmission = useCallback(() => {
-    updateDraft(key, (current) => (current.submission ? { ...current, submission: null } : current));
+  const adopt = useCallback((merge: (current: Draft) => Draft) => {
+    updateDraft(key, (current) => ({ ...merge(current), submission: null, created: null }));
   }, [key, updateDraft]);
   const settleSubmission = useCallback((token: string, outcome: "clear" | { created: ComposerCreated }, unchangedSince?: Draft) => {
     let owned = false;
@@ -288,7 +292,7 @@ export function useDraft(key: string): DraftHandle {
     setExecutor,
     created: draft.created ?? null,
     stampSubmission,
-    disownSubmission,
+    adopt,
     settleSubmission,
     value: draft,
     clear,

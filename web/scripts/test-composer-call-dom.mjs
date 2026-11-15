@@ -15,7 +15,9 @@
 // ⑨ 结果迟到：等结果期间切走、清空草稿写了另一件事，上一条的失败不许挂到新草稿上，新的那件事照常新建；
 // ⑩ 换过任务执行器（codex）再叫 claude：没送达后关了再开，叫的人还在、胶囊还是 codex 且只读，重发仍是给 claude 的那一句；
 // ⑪ 上一条迟到的是**成功**：期间就在这块面板上清空草稿写了另一件事——新写的一个字不动、面板不收，那件事照常新建；
-// ⑫ 待重发时执行器配置读不到：只拦发送，叫的人不动；读得到了再按，仍只给 claude 重发那一句（不让 codex 直接跑）。
+// ⑫ 待重发时执行器配置读不到：只拦发送，叫的人不动；读得到了再按，仍只给 claude 重发那一句（不让 codex 直接跑）；
+// ⑬ 等结果期间把一条随手记转成任务（并进草稿就是另一件事）：上一条迟到的成功不动眼前叫的人；上一条已经没送达、
+//    在等重发时并进来，待重发的那条随之解开，新内容再发是新建一条，不发进上一条任务。
 // 跑法：npm -w web run test:composer-call-dom
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -330,6 +332,50 @@ try {
   await page.getByText("提示：任务已创建，第一句交给 claude 答").nth(1).waitFor();
   assert.deepEqual(since(start).map((item) => [item.kind, item.task, item.body?.agent]), [["reply", taskF, "claude"]],
     "读回来之后重发仍只给 claude 那一句");
+
+  // ⑬-1 上一条的成功迟到：期间随手记转任务并进了草稿。叫的人是眼前这件事的安排，旧成功不动它。
+  await objective.waitFor();
+  await call("事情 G ", "codex");
+  let releaseG;
+  holdOpening = new Promise((resolve) => { releaseG = resolve; });
+  start = requests.length;
+  await send.click();
+  await waitUntil(async () => since(start).some((item) => item.kind === "reply"), "G 的第一句已经发出去、还没回来");
+  await page.getByTestId("convert-note").click();
+  await waitUntil(async () => (await objective.inputValue()).startsWith("随手记 B：新的一件事"), "随手记并进草稿");
+  await row("codex").waitFor();
+  releaseG();
+  await page.getByText(/那份草稿已经换了，后来写的内容原样留着/).nth(1).waitFor();
+  await row("codex").waitFor();
+  assert.match(await send.innerText(), /问 codex/, "叫的人还在，发送键仍是问他");
+  start = requests.length;
+  await send.click();
+  await waitUntil(async () => since(start).length >= 2, "并进来的那件事新建并问 codex");
+  [create, first, ...rest] = since(start);
+  assert.equal(create.kind, "create", "新建一条");
+  assert.match(create.body.body, /^随手记 B：新的一件事/);
+  assert.deepEqual([first.kind, first.body.agent], ["reply", "codex"], "仍是问 codex 那一句，不是让任务直接跑");
+  assert.deepEqual(rest, []);
+
+  // ⑬-2 上一条没送达、在等重发时随手记转任务：待重发的那条解开，新内容新建一条。
+  await objective.waitFor();
+  await call("事情 H ", "codex");
+  failOpenings = 1;
+  start = requests.length;
+  await send.click();
+  await page.getByRole("alert").filter({ hasText: "第一回合没发出去" }).waitFor();
+  const taskH = since(start).find((item) => item.kind === "reply").task;
+  await page.getByTestId("convert-note").click();
+  await waitUntil(async () => (await objective.inputValue()).startsWith("随手记 B：新的一件事"), "随手记并进草稿");
+  assert.equal(await page.getByRole("alert").filter({ hasText: "第一回合没发出去" }).count(), 0, "待重发的那条解开了");
+  assert.equal(await page.getByRole("button", { name: /^工作目录：/ }).isDisabled(), false, "设置不再锁着");
+  start = requests.length;
+  await send.click();
+  await waitUntil(async () => since(start).length >= 2, "并进来的那件事新建并问 codex");
+  [create, first] = since(start);
+  assert.equal(create.kind, "create", "新建一条，不发进上一条");
+  assert.notEqual(first.task, taskH, "第一句交给新的那条");
+  assert.equal(first.body.agent, "codex");
 
   assert.deepEqual(errors, []);
   console.log("composer call dom test passed");
