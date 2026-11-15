@@ -22,7 +22,7 @@ function cachedStanding(task: TaskRow): Promise<PrerequisiteStanding> {
   const key = `${task.updatedAt}|${task.status}|${task.stage}|${task.archived}`;
   const hit = standingCache.get(task.id);
   if (hit && hit.key === key && Date.now() - hit.at < STANDING_TTL_MS) return hit.value;
-  const value = prerequisiteStanding(task).catch(() => ({ step: "running" as const, round: null }));
+  const value = prerequisiteStanding(task).catch((): PrerequisiteStanding => ({ step: "unreadable", round: null, commit: null }));
   standingCache.set(task.id, { key, at: Date.now(), value });
   if (standingCache.size > 2_000) standingCache.delete(standingCache.keys().next().value!);
   return value;

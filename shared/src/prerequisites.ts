@@ -26,6 +26,8 @@ export type PrerequisiteStep =
   | "review_stale"
   /** 工作区里有没提交的改动：下游只能从提交拿代码，这些改动带不过去。 */
   | "dirty"
+  /** 工作区在，却读不出它此刻的提交或干不干净：证明不了交出去的是哪一版，不算站稳。 */
+  | "unreadable"
   | "failed"
   | "canceled"
   | "archived";
@@ -56,7 +58,7 @@ export interface TaskPrerequisites {
 /** 这几步要用户出手，别的都会自己往下走。界面只给这几种上色。 */
 export function prerequisiteNeedsUser(step: PrerequisiteStep): boolean {
   return step === "question" || step === "review_failed" || step === "review_disputed"
-    || step === "review_stale" || step === "dirty" || step === "failed" || step === "canceled" || step === "archived";
+    || step === "review_stale" || step === "dirty" || step === "unreadable" || step === "failed" || step === "canceled" || step === "archived";
 }
 
 /** 一条前置此刻到哪一步了，一句话（不带任务名，任务名由调用方摆成链接）。 */
@@ -75,6 +77,7 @@ export function prerequisiteStepText(link: Pick<PrerequisiteLink, "step" | "roun
     case "review_disputed": return "审查意见被驳回，等你裁定";
     case "review_stale": return "审查后又改过，等重新审查";
     case "dirty": return "有没提交的改动";
+    case "unreadable": return "读不到它的工作区，确认不了代码";
     case "failed": return "失败了";
     case "canceled": return "已取消";
     case "archived": return "已归档";

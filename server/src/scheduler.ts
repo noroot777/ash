@@ -17,6 +17,7 @@ import { reportGroupStartFailure } from "./group-start-failure.js";
 import { clearQueueAdvanceIntent, recordQueueAdvanceIntent, refuseQueueAdvance } from "./queue-advance-admission.js";
 import { heldByMonitors, withMonitorHolds, type QueueRow } from "./queue-monitor-hold.js";
 import { holdForPrerequisites } from "./prerequisite-launch.js";
+import { freeSlot, takeSlot, whenSlotFrees } from "./launch-slots.js";
 
 const MAX_PARALLEL = 4;
 let pauseGeneration = 0;
@@ -619,15 +620,18 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
       }
     };
 
+    // 名额跟等齐就起共用一份（launch-slots.ts）：自己这一批没有在跑的、名额却被别人占满时，等有人跑完再接着起。
     while (pending.length || inflight.size) {
-      if (!(await isPaused(groupId))) {
-        while (pending.length && inflight.size < MAX_PARALLEL) {
+      const paused = await isPaused(groupId);
+      if (!paused) {
+        while (pending.length && inflight.size < MAX_PARALLEL && takeSlot(groupId, pending[0]!.id)) {
           const t = pending.shift()!;
-          const p = launch(t.id).finally(() => inflight.delete(t.id));
+          const p = launch(t.id).finally(() => { inflight.delete(t.id); freeSlot(groupId, t.id); });
           inflight.set(t.id, p);
         }
       }
       if (inflight.size) await Promise.race(inflight.values());
+      else if (!paused && pending.length) await whenSlotFrees();
       else break;
     }
     await parkQueued(groupId);

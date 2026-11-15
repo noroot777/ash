@@ -13,6 +13,7 @@ import {
   assertPrerequisiteEdges, insertPrerequisiteEdges, PrerequisiteError, removePrerequisiteEdge, type PrerequisiteEdge,
 } from "./prerequisite-store.js";
 import { notePrerequisiteProgress } from "./prerequisite-launch.js";
+import { withPrerequisiteLock } from "./prerequisite-gate.js";
 import { republishPrerequisiteView } from "./prerequisite-view.js";
 import { publishTaskUpdated } from "./task-store.js";
 
@@ -25,6 +26,7 @@ export function batchPrerequisiteEdges(
 ): { edges: PrerequisiteEdge[]; existing: string[] } | string {
   const byKey = new Map<string, string>();
   for (const [index, spec] of specs.entries()) {
+    if (spec.prerequisites !== undefined && !stringList(spec.prerequisites)) return `tasks[${index}].prerequisites 要是字符串数组`;
     if (!spec.key) continue;
     if (byKey.has(spec.key)) return `tasks[${index}].key「${spec.key}」跟前面的重复了`;
     byKey.set(spec.key, ids[index]!);
@@ -44,6 +46,11 @@ export function batchPrerequisiteEdges(
   return { edges, existing: [...existing] };
 }
 
+/** 请求体里的前置清单：字符串数组才收，别的形状回 null（调用方回 400）。 */
+export function stringList(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : null;
+}
+
 export const prerequisiteRefusal = (error: unknown) => error instanceof PrerequisiteError
   ? { body: { error: error.message }, status: error.status }
   : null;
@@ -52,17 +59,23 @@ const failed = prerequisiteRefusal;
 export function mountPrerequisiteRoutes(api: Hono): void {
   api.post("/tasks/:id/prerequisites", async (c) => {
     const taskId = c.req.param("id");
-    const body = await c.req.json<{ prerequisiteId?: string; prerequisiteIds?: string[] }>().catch(() => ({} as never));
-    const ids = [...new Set([...(body.prerequisiteIds ?? []), ...(body.prerequisiteId ? [body.prerequisiteId] : [])])]
-      .filter((value) => typeof value === "string" && value);
+    const body = await c.req.json<{ prerequisiteId?: unknown; prerequisiteIds?: unknown }>().catch(() => ({} as never));
+    const list = body.prerequisiteIds === undefined ? [] : stringList(body.prerequisiteIds);
+    if (!list || (body.prerequisiteId !== undefined && typeof body.prerequisiteId !== "string")) {
+      return c.json({ error: "prerequisiteId 要是字符串，prerequisiteIds 要是字符串数组" }, 400);
+    }
+    const ids = [...new Set([...list, ...(body.prerequisiteId ? [body.prerequisiteId as string] : [])])].filter(Boolean);
     if (!ids.length) return c.json({ error: "要给出 prerequisiteId 或 prerequisiteIds" }, 400);
     const visible = new Set(await visibleTaskIds(actorOf(c), ids));
     const hidden = ids.find((id) => !visible.has(id));
     if (hidden) return c.json({ error: `前置任务 ${hidden} 不存在` }, 404);
     try {
-      const edges = ids.map((prerequisiteId) => ({ taskId, prerequisiteId }));
-      await assertPrerequisiteEdges(edges);
-      await insertPrerequisiteEdges(edges);
+      // 跟开工判定同一把锁：判定读完边、还没落定起点时加进来的边，会落到那次起点之外（prerequisite-gate.ts）。
+      await withPrerequisiteLock(taskId, async () => {
+        const edges = ids.map((prerequisiteId) => ({ taskId, prerequisiteId }));
+        await assertPrerequisiteEdges(edges);
+        await insertPrerequisiteEdges(edges);
+      });
     } catch (error) {
       const refused = failed(error);
       if (refused) return c.json(refused.body, refused.status);
@@ -77,7 +90,7 @@ export function mountPrerequisiteRoutes(api: Hono): void {
     const prerequisiteId = c.req.param("prerequisiteId");
     if (!(await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId))).length) return c.json({ error: "not found" }, 404);
     try {
-      await removePrerequisiteEdge(taskId, prerequisiteId);
+      await withPrerequisiteLock(taskId, () => removePrerequisiteEdge(taskId, prerequisiteId));
     } catch (error) {
       const refused = failed(error);
       if (refused) return c.json(refused.body, refused.status);

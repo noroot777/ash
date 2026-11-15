@@ -6,7 +6,7 @@
 // 于是一条被分组暂停挡着、永远不会自己送出去的执行型消息，把失败卡撤掉了（第 1 轮审查实测）。
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { groups, scheduledMessages, tasks } from "./db/schema.js";
+import { groups, scheduledMessages, taskPrerequisiteLaunches, tasks } from "./db/schema.js";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
 import { withAfterGates, type AfterGate } from "./pending-after.js";
@@ -26,6 +26,8 @@ export interface DeliveryFacts {
   /** 挡路的是哪几条(带标题,在跑的排前);没问队列或没被挡时为空。托盘的等待说明点名用。 */
   queueBlocking: QueueBlocker[];
   groupPaused: boolean;
+  /** 这一次投递会开执行回合，而任务挂着「等前置站齐就起」：等放行那一路连同这条一起起（prerequisite-gate.ts）。 */
+  prerequisiteWait: boolean;
 }
 
 /** m.execution 由调用方按 pendingExecutionIntent 定好再传进来（扫描会把它写回库，这里不写）。 */
@@ -57,9 +59,17 @@ export async function deliveryVerdictOf(m: Row & AfterGate, t: TaskRow | null, a
     ? await monitorEventSourceState(m.origin)
     : undefined;
   const reviewBlocked = await reviewDeliveryBlocked(reviewDeliveryFrom(m), m.taskId);
-  const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, monitorSource, reviewBlocked,
+  const prerequisiteWait = needQueueCheck && await awaitingPrerequisites(m.taskId);
+  const judged = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, monitorSource, reviewBlocked,
     reviewUncertain: t.waitOwnership?.start?.phase === "uncertain" } : null, at);
-  return { verdict, facts: { checkpointFollowUp, needQueueCheck, queueBlocked, queueBlocking, groupPaused } };
+  const verdict: DeliveryVerdict = prerequisiteWait && judged.action === "deliver" ? { action: "wait" } : judged;
+  return { verdict, facts: { checkpointFollowUp, needQueueCheck, queueBlocked, queueBlocking, groupPaused, prerequisiteWait } };
+}
+
+/** 挂着「等齐就起」、起点还没定下：起跑要等放行那一路（见 prerequisite-launch.ts）。 */
+async function awaitingPrerequisites(taskId: string): Promise<boolean> {
+  const launch = (await db.select().from(taskPrerequisiteLaunches).where(eq(taskPrerequisiteLaunches.taskId, taskId))).at(0);
+  return !!launch?.requestedAt && !launch.launchedAt;
 }
 
 /**

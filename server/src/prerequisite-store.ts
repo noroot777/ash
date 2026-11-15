@@ -119,6 +119,10 @@ async function edgeProblem(task: EdgeTask, prerequisite: EdgeTask, known: Map<st
   if (await teamMember(task, known)) return `${name(task)}不是普通任务（团队、团队执行者、审查任务不能有前置）`;
   if (await teamMember(prerequisite, known)) return `${name(prerequisite)}不是普通任务（团队、团队执行者、审查任务不能当前置）`;
   if (task.baseTaskId) return `${name(task)}已经钉在父任务的分支上开工，不能再加前置`;
+  // 不用独立工作区的任务在项目目录里干活，拿不到还在前置分支上的代码（验收前它不在任何检出里）。
+  if (!task.useWorktree && prerequisite.useWorktree && !isAcceptedStage(prerequisite.stage as TaskStage | null)) {
+    return `${name(task)}不用独立工作区，拿不到${name(prerequisite)}分支上的代码；让它用独立工作区，或等${name(prerequisite)}合入后再开工`;
+  }
   if (task.useWorktree && prerequisite.useWorktree && !isAcceptedStage(prerequisite.stage as TaskStage | null)) {
     const mine = task.mergeTargetBranch;
     const theirs = prerequisite.acceptedTargetBranch || prerequisite.mergeTargetBranch;

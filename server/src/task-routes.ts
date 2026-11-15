@@ -29,7 +29,8 @@ import { executorDowngradePreflight } from "./auth/dispatch-gate.js";
 import { inheritOwner } from "./auth/run-env.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
 import { mountTaskDeleteRoutes } from "./task-delete-routes.js";
-import { mountPrerequisiteRoutes, prerequisiteRefusal } from "./prerequisite-routes.js";
+import { mountPrerequisiteRoutes, prerequisiteRefusal, stringList } from "./prerequisite-routes.js";
+import { republishPrerequisiteView } from "./prerequisite-view.js";
 import { recentRejectionNotices } from "./user-action-rejection.js";
 import { suspectTurns } from "./turn-lock-reclaim.js";
 
@@ -379,7 +380,9 @@ api.post("/tasks", async (c) => {
     }
     appendPosition = existing.length;
   }
-  const prerequisiteIds = [...new Set((b.prerequisites ?? []).filter((value) => typeof value === "string" && value))];
+  const prerequisiteList = b.prerequisites === undefined ? [] : stringList(b.prerequisites);
+  if (!prerequisiteList) return c.json({ error: "prerequisites 要是字符串数组" }, 400);
+  const prerequisiteIds = [...new Set(prerequisiteList.filter(Boolean))];
   if ((await visibleTaskIds(actorOf(c), prerequisiteIds)).length !== prerequisiteIds.length) {
     return c.json({ error: "前置任务不存在" }, 404);
   }
@@ -403,6 +406,8 @@ api.post("/tasks", async (c) => {
     if (error instanceof TeamAcceptingError) return c.json({ error: error.message, parentId: b.parentId ?? null, reviewOf: b.reviewOf ?? null }, 409);
     throw error;
   }
+  // 已有的前置那边也多了「谁建在它上面」（批量建任务那条路同样会发，group-routes.ts）。
+  if (prerequisiteIds.length) await republishPrerequisiteView(prerequisiteIds);
   if (b.appendToQueue) {
     // 追加到队尾后立刻推进:若前序全 done,新 task 应立刻起跑
     advanceQueueInBackground(b.appendToQueue);

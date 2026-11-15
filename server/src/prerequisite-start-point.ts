@@ -4,14 +4,17 @@
 // `worktreeStartCommit` 上：diff、审查、验收都以它为界，所以这条任务的改动里不含前置的。
 //
 // 每条前置贡献哪一版：
-//   · 它的成果提交（分支头；分支被验收清理掉了就取验收时存下的那一版）；
-//   · 这一版已经在目标分支上了（前置已经合入）→ 换成**目标分支最新一版**：既拿到它，也拿到别人后来合进去的；
+//   · 站稳判定当时核实过的那一版（prerequisite-standing.ts 的 `commit`）—— 不在这里另读分支头，理由见那份文件头；
+//     判定没给出的（已验收的）取它的成果提交（分支头；分支被验收清理掉了就取验收时存下的那一版）；
+//   · 这一版已经进了目标分支（前置已经合入，含压缩合入、经提交历史调整后合入 —— 判据是 task-branch-plan.ts
+//     `versionDelivery` 那一份，验收依赖问的也是它）→ 换成**目标分支最新一版**：既拿到它，也拿到别人后来合进去的；
 //   · 不用 worktree 的前置没有分支可拿，代码就在项目目录里，只贡献顺序，不贡献提交。
 // 一条已经包含另一条的（它本来就建在那条上）只留包含者，不重复合；剩下好几条时在**不碰任何工作区**的
 // 前提下合成一个提交（`git merge-tree --write-tree` + `commit-tree`），合不拢就说清是哪两条。
 import { execFileText as exec } from "./exec.js";
 import { expandHome, resolveTaskMergeTarget, resolveWorktreeBranchName } from "./git.js";
-import { acceptedHeadRef, commitAt, containsCommit } from "./task-branch-plan.js";
+import { commitAt, containsCommit, versionDelivery } from "./task-branch-plan.js";
+import { deliveredCommit } from "./prerequisite-standing.js";
 import type { tasks } from "./db/schema.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -21,13 +24,6 @@ export type PrerequisiteStart =
   | { ok: false; reason: string };
 
 const label = (task: TaskRow) => `「${task.title || task.id}」`;
-
-/** 前置交出来的那一版：分支头，分支没了取验收时存下的。 */
-async function resultCommit(repo: string, task: TaskRow): Promise<string | null> {
-  return await commitAt(repo, await resolveWorktreeBranchName(repo, task.id))
-    ?? await commitAt(repo, acceptedHeadRef(task.id))
-    ?? (task.acceptedSourceCommit ? await commitAt(repo, task.acceptedSourceCommit) : null);
-}
 
 /** 两版能不能干净地合在一起；能就给出合好的树。 */
 async function mergeTree(repo: string, ours: string, theirs: string): Promise<string | null> {
@@ -43,7 +39,10 @@ const ASH_IDENTITY = {
   GIT_COMMITTER_NAME: "ash", GIT_COMMITTER_EMAIL: "ash@localhost",
 };
 
-export async function prerequisiteStart(repoPath: string, task: TaskRow, prerequisites: TaskRow[]): Promise<PrerequisiteStart> {
+/** 一条前置，连同站稳判定核实过的那一版（没有就是 null）。 */
+export type CertifiedPrerequisite = { task: TaskRow; commit: string | null };
+
+export async function prerequisiteStart(repoPath: string, task: TaskRow, prerequisites: CertifiedPrerequisite[]): Promise<PrerequisiteStart> {
   const repo = expandHome(repoPath);
   const target = task.mergeTargetBranch || await resolveTaskMergeTarget(repo, null);
   const targetHead = target ? await commitAt(repo, target) : null;
@@ -54,14 +53,14 @@ export async function prerequisiteStart(repoPath: string, task: TaskRow, prerequ
     if (found) found.owners.push(owner);
     else picks.push({ commit, owners: [owner] });
   };
-  for (const prerequisite of prerequisites) {
+  for (const { task: prerequisite, commit: certified } of prerequisites) {
     if (!prerequisite.useWorktree) {
       if (targetHead) inherited.set(prerequisite.id, targetHead);
       continue;
     }
-    const result = await resultCommit(repo, prerequisite);
+    const result = certified ?? await deliveredCommit(repo, prerequisite);
     if (!result) return { ok: false, reason: `${label(prerequisite)}的分支和成果提交都找不到了，拿不到它的代码` };
-    const merged = !!targetHead && await containsCommit(repo, result, targetHead);
+    const merged = !!targetHead && !!target && await versionDelivery(repo, prerequisite.id, prerequisite, result, target) !== null;
     const commit = merged ? targetHead! : result;
     inherited.set(prerequisite.id, commit);
     pick(commit, prerequisite);
