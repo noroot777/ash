@@ -6,7 +6,7 @@ import type { AcceptMemoryWrite } from "@ash/shared/accept-gate";
  * 「勾成这样 → 一步一行写什么、确认键叫什么、能不能按、发给后端的参数是什么」。
  *
  * 两个勾的默认是**上一次真的确认验收时的样子**（用户 2026-11-15 要的：别每个任务都重新去掉一次）。
- * 只开关这一层、动了勾又关掉不算；点确认才记（memory），记住了什么前提列那一行照样说得出来（gateLine.ts），
+ * 只开关这一层、动了勾又关掉不算；点确认才记（memory，只记跟默认不一样的那一勾），记住了什么前提列那一行照样说得出来（gateLine.ts），
  * 所以它不是一个没人记得设过的隐形开关。
  *  - 「运行」：已有一次还作数的绿时默认不勾（沿用那次），勾上 = 重跑，这两样都不改记住的值；否则默认跟
  *    上一次（skipRemembered：上次跳过就不勾），取消 = 这次跳过。
@@ -60,13 +60,14 @@ export type ConfirmView = {
   /** 发给 /accept 的那两个参数。 */
   gateIntent: "skip" | "rerun" | undefined;
   commitParam: boolean | undefined;
-  /** 点确认时记下的那几勾；null = 这一按没什么可记（放行、沿用或重跑、不合并）。 */
+  /** 点确认时记下的那几勾（只有跟默认不一样的）；null = 这一按没什么可记（都照默认、放行、沿用或重跑、不合并）。 */
   memory: AcceptMemoryWrite | null;
 };
 
 export function confirmView(input: ConfirmInput): ConfirmView {
   const { steps, gate } = input;
-  const runs = gate ? input.runChoice ?? (!gate.reusable && !gate.skipRemembered) : false;
+  const runsByDefault = gate ? !gate.reusable && !gate.skipRemembered : false;
+  const runs = gate ? input.runChoice ?? runsByDefault : false;
   const gateIntent = !gate ? undefined : gate.reusable ? (runs ? "rerun" : undefined) : runs ? undefined : "skip";
   const commitKnown = input.commitDefault !== null && !input.commitDefaultPending;
   const commit = input.commitChoosable ? input.commitChoice ?? input.commitDefault ?? true : true;
@@ -78,9 +79,12 @@ export function confirmView(input: ConfirmInput): ConfirmView {
   const confirmDisabled = (input.commitChoosable && !commitKnown)
     || batchNeedsCommit
     || input.verification === "loading" || input.verification === "error" || input.verification === "unacknowledged";
+  // 只记这一按**跟默认不一样**的那一勾。跟默认一样 = 沿用记住的值（或项目设置），没有新东西可记；写回去
+  // 反而危险：层里那份默认可能是旧的 —— 别处刚确认成「要运行」，这一层的重读还没回来，没动过勾的这一按
+  // 若把旧的「跳过」写回去，就把别人刚记下的新选择盖掉了（第 3 轮审查）。
   const memory: AcceptMemoryWrite = steps.kind === "release" ? {} : {
-    ...(gate && !gate.reusable ? { skipGate: !runs } : {}),
-    ...(input.commitChoosable ? { commit } : {}),
+    ...(gate && !gate.reusable && runs !== runsByDefault ? { skipGate: !runs } : {}),
+    ...(input.commitChoosable && input.commitDefault !== null && commit !== input.commitDefault ? { commit } : {}),
   };
   return {
     runs,
