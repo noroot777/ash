@@ -115,7 +115,6 @@ api.handoffPeers = async () => [];
 api.settings = async () => ({ ...DEFAULT_APP_SETTINGS });
 api.agents = async () => [];
 api.workflows = async () => [];
-api.teamPresets = async () => [];
 api.task = async (id) => tasks.find((item) => item.id === id) ?? tasks[0]!;
 api.projectBranches = async () => ({ branches: ["main"], current: "main" });
 

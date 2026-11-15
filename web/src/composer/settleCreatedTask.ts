@@ -2,6 +2,7 @@ import type { Task } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import type { Draft, DraftHandle } from "../lib/DraftStore.tsx";
 import type { LaunchMode } from "./ComposerLaunchControl.tsx";
+import type { ComposerOpening } from "./composerOpening.ts";
 
 /**
  * 创建成功之后的收尾:草稿归属裁决 → 按启动方式排队/启动/定时 → 回写 onCreated。
@@ -21,6 +22,8 @@ export async function settleCreatedTask(args: {
   launchMode: LaunchMode;
   scheduleAt: string;
   scheduleCron: string;
+  /** 框里 `@` 了人：「创建并运行」那一下换成它起第一回合（只在 launchMode="run" 时有）。 */
+  opening?: ComposerOpening | null;
   /** 提交那一刻的草稿对象(归属标识)与随手记回链。 */
   submitted: { draft: Draft; noteIds: string[] };
   /** 发起提交的那份面板此刻是否仍挂载。 */
@@ -64,7 +67,7 @@ export async function settleCreatedTask(args: {
   }
   let launchError: unknown = null;
   try {
-    if (args.launchMode === "run") await api.runTask(task.id);
+    if (args.launchMode === "run") await (args.opening ? args.opening.start(task) : api.runTask(task.id));
     else if (args.launchMode === "once") {
       await api.setSchedule(task.id, { kind: "once", at: new Date(args.scheduleAt).toISOString(), cron: null });
     } else {
@@ -79,7 +82,7 @@ export async function settleCreatedTask(args: {
     return;
   }
   notify(args.launchMode === "run"
-    ? "任务已创建并启动"
+    ? args.opening?.started ?? "任务已创建并启动"
     : args.launchMode === "once"
       ? "任务已创建，已设置一次性定时"
       : "任务已创建，已设置 Cron 定时");

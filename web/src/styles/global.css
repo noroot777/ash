@@ -61,7 +61,7 @@
 @import "./settings-project-git.css";
 @import "./settings-path-link.css";
 @import "./settings-skill-scan.css";
-/* 供应商 / 执行模式 / 审查者共用的「清单 + 就地编辑」骨架（跟飞书页同一副）。 */
+/* 供应商 / 审查者共用的「清单 + 就地编辑」骨架（跟飞书页同一副）。 */
 @import "./settings-list.css";
 /* 供应商表单与本地 CLI 检测结果这两个组件被首启向导复用了(web/src/onboarding/),
    所以这三份从 SettingsPage.tsx 搬到这里 —— 挂在组件文件上的话,「谁先 import」
@@ -80,7 +80,6 @@
 @import "./quick-create.css";
 @import "./groups-panel.css";
 @import "./composer.css";
-@import "./composer-presets.css";
 @import "./schedule.css";
 @import "./reply.css";
 @import "./scheduled-message-tray.css";

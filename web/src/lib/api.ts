@@ -35,8 +35,6 @@ import type {
   TaskListItem,
   TaskReviewInfo,
   TaskWorkspaceDiscardResult,
-  TeamPreset,
-  TeamPresetConfig,
 } from "@ash/shared";
 
 import type { AcceptGateCancelResult, AcceptGateView, AcceptMemoryWrite, AcceptMemoryWriteResult } from "@ash/shared/accept-gate";
@@ -572,15 +570,6 @@ export const api = {
     request(`/workflows/${id(workflowId)}`, { method: "DELETE" }),
   restoreWorkflow: (workflowId: string): Promise<WorkflowItem> =>
     request(`/workflows/${id(workflowId)}/restore`, { method: "POST" }),
-
-  teamPresets: (): Promise<TeamPreset[]> => request("/team-presets"),  createTeamPreset: (name: string, config: TeamPresetConfig): Promise<TeamPreset> =>
-    request("/team-presets", json("POST", { name, config })),
-  patchTeamPreset: (
-    presetId: string,
-    patch: { name?: string; config?: TeamPresetConfig },
-  ): Promise<TeamPreset> => request(`/team-presets/${id(presetId)}`, json("PATCH", patch)),
-  deleteTeamPreset: (presetId: string): Promise<{ deleted: true }> =>
-    request(`/team-presets/${id(presetId)}`, { method: "DELETE" }),
 
   // signal：会话列表是排成一条链读的（见 lib/useConversation.ts），一发卡住就轮不到
   // 后面的，所以调用方要能给它设上限、也能在用户手动重读时把它掐掉。

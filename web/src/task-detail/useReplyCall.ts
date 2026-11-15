@@ -85,6 +85,13 @@ export function useReplyCall({ ownAgent, ability, profiles }: {
     pending.current = null;
     setCall(null);
   };
+  /** 这个人不再能叫了（新建框里胶囊换成了他，他就是跑这条任务的那个）：从叫着的人里拿掉，一个不剩就不叫了。 */
+  const drop = (agent: AgentType) => setCall((current) => {
+    if (!current) return current;
+    const rest = [current.target, ...current.others].filter((item) => item.agent !== agent);
+    if (rest.length === current.others.length + 1) return current;
+    return rest.length ? { ...current, target: rest[0]!, others: rest.slice(1) } : null;
+  });
   /**
    * 发出去了：记住叫的是谁、对他用的那一套，下次叫他（或 `/派`）先摆这一套。只清发出去的那一版——
    * 每一处改动（换人、换做法、换开工位置）都换一个新对象，发送途中动过就是下一句的设置，整份留着。
@@ -98,7 +105,7 @@ export function useReplyCall({ ownAgent, ability, profiles }: {
   return {
     call,
     self: !!call && (dispatchable || ability.discussable) && selfOf(call.target.agent),
-    start, pend, picking, restore, setVerb, setBase, togglePerson, setRounds, commitTarget, commitEffort, cancel, sent,
+    start, pend, picking, restore, setVerb, setBase, togglePerson, setRounds, commitTarget, commitEffort, cancel, drop, sent,
   };
 }
 

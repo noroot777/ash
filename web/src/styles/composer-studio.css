@@ -1,5 +1,5 @@
-/* 新建任务面板（TaskComposerPanel）。一张输入卡：卡片上方只有三种模式，输入区下面一排
-   「图标 + 当前值」的选项入口，谁来做和发送键守在右下角。点开的浮层是 .studio-popover。 */
+/* 新建任务面板（TaskComposerPanel）。一张输入卡：输入区下面一排「图标 + 当前值」的选项入口，
+   谁来做和发送键守在右下角。点开的浮层是 .studio-popover。 */
 
 .task-composer-panel { display:grid; width:100%; height:100%; min-height:0; grid-template-rows:46px minmax(0,1fr); background:var(--panel); }
 
@@ -12,18 +12,8 @@
 .composer-header > .composer-header-count { flex:none; margin-right:4px; }
 
 .composer-scroll { min-height:0; overflow-y:auto; background:var(--canvas); }
-/* 一条 960 的居中列（底排的选项入口 + 谁来做 + 发送键要能排成一行）。上边距是定值而不是算出来的居中：输入变高、下面多出列表时卡片不跳。
-   首页没有模式那一行，把那 40px 让出来，卡片在两面落在同一个位置。 */
+/* 一条 960 的居中列（底排的选项入口 + 谁来做 + 发送键要能排成一行）。上边距是定值而不是算出来的居中：输入变高、下面多出列表时卡片不跳。 */
 .is-studio .composer-inner { --top:clamp(56px,19vh,160px); width:min(960px,calc(100% - 48px)); margin:0 auto; padding:var(--top) 0 48px; }
-.is-studio.is-home .composer-inner { padding-top:calc(var(--top) + 40px); }
-
-/* 卡片上方：三种模式，一组分段 */
-.composer-modes { display:flex; height:28px; margin-bottom:12px; }
-.studio-mode-tabs { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; border-radius:var(--r-md); background:var(--overlay); }
-.studio-mode-tabs > button { display:inline-flex; height:24px; align-items:center; gap:6px; border:0; border-radius:var(--r-sm); padding:0 10px; background:transparent; color:var(--muted); font-size:var(--t-xs); font-weight:var(--w-regular); white-space:nowrap; transition:background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
-.studio-mode-tabs > button:hover { color:var(--ink); }
-.studio-mode-tabs > button[aria-selected="true"] { background:var(--lifted); box-shadow:var(--surface-shadow); color:var(--ink); }
-.studio-mode-tabs > button > svg { flex:0 0 auto; }
 
 /* 输入卡：外框、底色；聚焦时环用淡一档的墨色，不然一进页面就是一个黑框 */
 .studio-card { position:relative; border-radius:var(--r-lg); background:var(--panel); box-shadow:0 0 0 1px var(--line2), var(--surface-shadow); transition:box-shadow var(--dur-1) var(--ease-out); }
@@ -57,7 +47,7 @@
 }
 
 /* 谁来做：单任务是一颗三段胶囊 */
-.studio-inline-executor { flex:0 1 auto; min-width:0; margin:0 4px; }
+.studio-inline-executor { display:flex; flex:0 1 auto; min-width:0; align-items:center; gap:4px; margin:0 4px; }
 .studio-inline-executor > .composer-field { gap:0; }
 .studio-inline-executor > .composer-field > span { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 .studio-inline-executor .run-target-picker { height:28px; border-radius:var(--r-md); background:var(--panel); }
@@ -106,18 +96,12 @@
 .studio-popover .composer-option-grid { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; margin:0; }
 .studio-popover .composer-launch-mode { display:grid; gap:6px; }
 .studio-popover .composer-launch-mode > span { display:block; }
-.composer-launch-mode-grid { display:flex; flex-wrap:wrap; gap:5px; }
-.composer-launch-blocked { color:var(--muted); font-size:var(--t-xs); }
 .studio-popover .schedule-field { width:100%; margin-top:12px; }
 .studio-popover .composer-launch-error { display:block; margin-top:8px; white-space:normal; }
 /* 「创建并排队」的目标任务选择器(启动设置浮层内) */
 .studio-popover .composer-queue-after { display:grid; gap:6px; margin-top:12px; font-size:var(--t-xs); color:var(--muted); }
 .studio-popover .composer-queue-after .ui-select-trigger { width:100%; }
 .studio-popover .composer-queue-after .studio-help { margin-top:0; }
-.studio-effective-run { margin:6px 0 0; color:var(--muted); font-size:var(--t-xs); overflow-wrap:anywhere; }
-.studio-effective-run b { font-weight:var(--w-regular); }
-.studio-executors { display:grid; gap:16px; }
-.studio-executors .run-target-picker { min-width:0; }
 .studio-help { margin:12px 0 0; font-size:var(--t-xs); line-height:1.6; color:var(--muted); }
 .studio-help > svg { display:inline; margin-right:6px; vertical-align:-2px; }
 .composer-workspace-default-save { display:inline-flex; align-items:center; margin-left:6px; border:0; border-radius:var(--r-sm); padding:2px 8px; background:var(--raised); color:var(--ink); font-size:var(--t-xs); }

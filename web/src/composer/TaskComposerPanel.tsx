@@ -7,8 +7,6 @@ import type {
   ProjectView,
   Task,
   TaskListItem,
-  TaskMode,
-  TeamPresetConfig,
 } from "@ash/shared";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import {
@@ -21,19 +19,19 @@ import {
   isExecutorPickable,
   nothingRunnable,
   parseExecutorValue,
-  teamExecutorCandidates,
-  useAgentAvailability,
+  registeredAgentTypes,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
 import { applySlashPick, mergeSlashItems, slashQuery, type SlashItem } from "../lib/useSkills.ts";
-import { cliCommandsForMode } from "@ash/shared/cli-commands";
 import { useSkills } from "../lib/useSkills.ts";
 import { ComposerObjective } from "./ComposerObjective.tsx";
 import { InputMentionMenu } from "../components/MentionMenu.tsx";
 import { useMention } from "../components/useMention.ts";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { ComposerFields } from "./ComposerFields.tsx";
-import { ASH_SLASH_ITEMS, SLASHES } from "./composerParts.tsx";
+import { ComposerCallCapsule, ComposerCallDock, useComposerCall } from "./ComposerCall.tsx";
+import { composerOpening } from "./composerOpening.ts";
+import { CALL_COPY, discussPeople } from "../task-detail/replyCall.ts";
 import { useComposerDraft, type ComposerDraft } from "./composerDraft.ts";
 import { settleCreatedTask } from "./settleCreatedTask.ts";
 import { composerTaskInput } from "./composerTaskInput.ts";
@@ -46,8 +44,6 @@ import {
   patchComposerExecutor,
   reconcileComposerExecutors,
   setComposerExecutorProfile,
-  teamPresetExecutors,
-  type ComposerExecutorRole,
 } from "./executorOverrides.ts";
 import { ComposerForkContext } from "./ComposerForkContext.tsx";
 import { ComposerExpand } from "./ComposerExpand.tsx";
@@ -57,7 +53,7 @@ import { useComposerBranches } from "./useComposerBranches.ts";
 export type { ComposerDraft };
 
 /**
- * 首页形态：有项目、没选任务时主区就是这张卡（只建单任务）。和新建面板是**同一个组件
+ * 首页形态：有项目、没选任务时主区就是这张卡。和新建面板是**同一个组件
  * 实例**——WorkspaceShell 在两处用同一个 key 挂它，点「全部选项」展开成新建面板时，
  * 写到一半的正文、附件、选好的执行器和工作目录都原样带过去。
  */
@@ -78,8 +74,6 @@ export function TaskComposerPanel({
   tasks = [],
   initialDraft,
   onDraftSeeded,
-  mode,
-  onModeChange,
   onCancel,
   onCreated,
   onTasksSynced,
@@ -95,8 +89,6 @@ export function TaskComposerPanel({
   initialDraft?: ComposerDraft | null;
   // initialDraft 并进草稿之后回调一次，调用方据此把它摘掉（一次性投递，见 composerDraft.ts）。
   onDraftSeeded?: () => void;
-  mode: TaskMode;
-  onModeChange: (mode: TaskMode) => void;
   onCancel: () => void;
   /**
    * 创建(含排队)完成的回写。ownsComposer=false 表示发起提交的那份面板已经卸载——
@@ -130,9 +122,6 @@ export function TaskComposerPanel({
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [profilesReady, setProfilesReady] = useState(false);
   const [executors, setExecutors] = useState(emptyComposerExecutorConfigs);
-  const [review, setReview] = useState(true);
-  const [rounds, setRounds] = useState("3");
-  const [gate, setGate] = useState(true);
   const [groupId, setGroupId] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
   const [useWorktree, setUseWorktree] = useState(project.useWorktreeDefault);
@@ -158,11 +147,7 @@ export function TaskComposerPanel({
     pending: draft.pendingUploads,
     onPendingChange: draft.setPendingUploads,
   });
-  const detection = useAgentAvailability();
-  const { workerTypes, leadTypes, leadProfiles } = useMemo(
-    () => teamExecutorCandidates(detection, profiles),
-    [detection, profiles],
-  );
+  const types = useMemo(() => registeredAgentTypes(profiles), [profiles]);
 
   useEffect(() => {
     let alive = true;
@@ -223,26 +208,11 @@ export function TaskComposerPanel({
       setSavingWorktreeDefault(false);
     }
   };
-  const applySlash = (nextMode: TaskMode, rest = "") => {
-    onModeChange(nextMode);
-    setBody(rest);
+  const changeExecutor = (profile: string, override: { model: string; effort: string }) => {
+    setExecutors((current) => setComposerExecutorProfile(current, "single", profile, override));
   };
-  // 只认 single/team/duet:敲 `/team 目标…` 直接切模式并把命令摘掉(它是指令不是内容)。
-  // 技能走不到这里,所以 `/brandkit 做张图` 会原样留在正文里 —— 这正是要的。
-  const changeBody = (value: string) => {
-    const parsed = /^\s*\/(single|team|duet)\s+([\s\S]*)$/i.exec(value);
-    if (parsed) applySlash(parsed[1]!.toLowerCase() as TaskMode, parsed[2] ?? "");
-    else setBody(value);
-  };
-  const changeExecutor = (
-    role: ComposerExecutorRole,
-    profile: string,
-    override: { model: string; effort: string },
-  ) => {
-    setExecutors((current) => setComposerExecutorProfile(current, role, profile, override));
-  };
-  const changeEffort = (role: ComposerExecutorRole, effort: string) => {
-    setExecutors((current) => patchComposerExecutor(current, role, { effort }));
+  const changeEffort = (effort: string) => {
+    setExecutors((current) => patchComposerExecutor(current, "single", { effort }));
   };
 
   const singleExecutor = parseExecutorValue(
@@ -256,155 +226,79 @@ export function TaskComposerPanel({
     model: executors.single.model || null,
     reasoningEffort: executors.single.effort || null,
   };
-  const leadExecutor = parseExecutorValue(
-    executors.lead.profile,
-    profiles,
-    { agentType: "claude", executorId: null },
-  );
-  const workerExecutor = parseExecutorValue(
-    executors.worker.profile,
-    profiles,
-    { agentType: "codex", executorId: null },
-  );
-  const reviewerExecutor = parseExecutorValue(
-    executors.reviewer.profile,
-    profiles,
-    { agentType: workerExecutor.agentType, executorId: null },
-  );
-  const voiceAExecutor = parseExecutorValue(
-    executors.voiceA.profile,
-    profiles,
-    { agentType: "claude", executorId: null },
-  );
-  const voiceBExecutor = parseExecutorValue(
-    executors.voiceB.profile,
-    profiles,
-    { agentType: "codex", executorId: null },
-  );
-  // 正文最后是发给谁的,`/` 就补谁的技能:单任务给任务执行器,
-  // 团队给调度者。**讨论刻意不补**:同一段议题会同时发给两个不同的 CLI,只有一边
-  // 装了的技能在另一边就是一句没人认的文本,那种「一半生效」比不提供更难查。
-  const slashRun = mode === "team" ? leadExecutor : singleRun;
-  const skills = useSkills({
-    agentType: slashRun.agentType,
-    projectId: project.id,
-    enabled: mode !== "duet",
-  });
+  // `@` 叫一个人（问一句 / 讨论，见 ComposerCall.tsx）。任务还是胶囊上那个执行器的。
+  const calling = useComposerCall({ host: singleRun.agentType, profiles });
+  const call = calling.call;
+  // `/` 补的是这条任务执行器的技能：正文是发给它的。
+  const skills = useSkills({ agentType: singleRun.agentType, projectId: project.id, enabled: true });
   const slash = slashDismissed ? null : slashQuery(body);
-  const slashCandidates = mergeSlashItems(ASH_SLASH_ITEMS, cliCommandsForMode(skills.skills, slashRun.agentType, mode), slash);
-  // `@` 引用随手记或项目里的文件。文件：任务还不存在，所以按项目仓库搜，选中的路径原样
+  const slashCandidates = mergeSlashItems([], skills.skills, slash);
+  // `@` 还能引用随手记或项目里的文件。文件：任务还不存在，所以按项目仓库搜，选中的路径原样
   // 写进正文，跑起来之后 agent 在自己的工作目录（worktree 或主仓）里按同一条相对路径找得到；
   // 非 git 项目照样给，服务端那边会退回自己走一遍目录（file-search.ts 的 walk）。随手记：
   // 正文和附件带进草稿，并记进回链 —— 建好任务后它跟「转为新任务」一样显示「已转」。
   const mention = useMention({
     value: body,
-    setValue: (next) => { changeBody(next); setSlashIndex(0); },
+    setValue: (next) => { setBody(next); setSlashIndex(0); },
     draft,
     scope: { kind: "project", projectId: project.id },
     projectId: project.id,
     linkNotes: true,
-    label: "引用随手记或项目里的文件",
+    label: "叫一个智能体，或引用随手记、文件",
+    agents: {
+      match: (token) => (/^[a-z0-9_-]*$/i.test(token) ? calling.callable.filter((type) => type.startsWith(token.toLowerCase())) : []),
+      onPick: (agent) => pickAgent(agent as AgentType),
+    },
     onPicked: () => textareaRef.current?.focus(),
   });
+  // 选中一个智能体：把 @xxx 从正文里摘掉（它是指令不是内容），叫上他，框顶多出「他来做什么」那一行。讨论时再 @
+  // 是再叫一个（同回复框）。
+  const pickAgent = (agent: AgentType) => {
+    setBody((current) => current.replace(/@[^\s@]*$/, ""));
+    mention.reset();
+    if (call?.verb === "discuss") {
+      if (!discussPeople(call).some((person) => person.agent === agent)) calling.togglePerson(agent);
+    } else calling.start(agent, call?.verb ?? null);
+    textareaRef.current?.focus();
+  };
+  const cancelCall = () => {
+    calling.cancel();
+    textareaRef.current?.focus();
+  };
   const slashSelected = Math.min(slashIndex, Math.max(0, slashCandidates.length - 1));
   const pickSlash = (item: SlashItem) => {
-    const ash = SLASHES.find((entry) => entry.command === item.command);
-    if (ash && item.kind === "ash") {
-      applySlash(ash.mode);
-      return;
-    }
     // 技能只是补全:命令留在正文里，server 运行前据此注入 SKILL.md。
     setBody(applySlashPick(body, item.command));
     setSlashIndex(0);
   };
 
-  const executorTypes: Record<ComposerExecutorRole, AgentType> = {
-    single: singleExecutor.agentType,
-    lead: leadExecutor.agentType,
-    worker: workerExecutor.agentType,
-    reviewer: reviewerExecutor.agentType,
-    voiceA: voiceAExecutor.agentType,
-    voiceB: voiceBExecutor.agentType,
-  };
-
   useEffect(() => {
-    if (!profilesReady || detection.status === "loading") return;
-    setExecutors((current) => reconcileComposerExecutors(current, {
-      profiles,
-      workerTypes,
-      leadTypes,
-      leadProfiles,
-    }));
-  }, [
-    detection.status,
-    leadProfiles,
-    leadTypes,
-    profiles,
-    profilesReady,
-    workerTypes,
-  ]);
+    if (!profilesReady) return;
+    setExecutors((current) => reconcileComposerExecutors(current, { profiles, types }));
+  }, [profiles, profilesReady, types]);
 
-  const currentTeamConfig: TeamPresetConfig = {
-    lead: executorTypes.lead,
-    worker: executorTypes.worker,
-    leadExecutorId: leadExecutor.executorId,
-    workerExecutorId: workerExecutor.executorId,
-    leadModel: executors.lead.model || null,
-    leadReasoningEffort: executors.lead.effort || null,
-    workerModel: executors.worker.model || null,
-    workerReasoningEffort: executors.worker.effort || null,
-    review,
-    reviewerAgentType: executorTypes.reviewer,
-    reviewerExecutorId: reviewerExecutor.executorId,
-    reviewerModel: executors.reviewer.model || null,
-    reviewerReasoningEffort: executors.reviewer.effort || null,
-  };
-  const applyTeamPreset = (config: TeamPresetConfig) => {
-    setExecutors((current) => teamPresetExecutors(current, config, profiles));
-    setReview(config.review !== false);
-  };
   const noExecutor = profilesReady && nothingRunnable(profiles);
-  const unavailableRole = mode === "single"
-    ? !isExecutorPickable(
-      { agentType: singleRun.agentType, executorId: singleRun.executorId },
-      workerTypes,
-      profiles,
-    ) ? "执行器" : null
-    : mode === "duet"
-      ? !isExecutorPickable(voiceAExecutor, workerTypes, profiles) ? "讨论者 A"
-        : !isExecutorPickable(voiceBExecutor, workerTypes, profiles) ? "讨论者 B" : null
-      : !isExecutorPickable(leadExecutor, leadTypes, leadProfiles) ? "调度者"
-        : !isExecutorPickable(workerExecutor, workerTypes, profiles) ? "执行者"
-          : review && !isExecutorPickable(reviewerExecutor, workerTypes, profiles) ? "审查者" : null;
-  const roleBlocked = !!unavailableRole;
+  const executorBlocked = !isExecutorPickable({ agentType: singleRun.agentType, executorId: singleRun.executorId }, types, profiles);
   const availabilityMessage = noExecutor
     ? "还没有已注册执行器，暂不能创建任务；请先到执行器设置注册本地 CLI。"
-    : unavailableRole
-      ? mode === "single"
-        ? "当前任务执行器未注册，请在输入框下方换一个。"
-        : `${unavailableRole}当前未注册或不支持该角色，请打开输入框下方的「${mode === "team" ? "团队配置" : "讨论者"}」更换执行器。`
-      : mode === "team" && detection.status === "loading"
-        ? "正在确认已注册调度者的常驻会话能力…"
-        : mode === "team" && detection.status === "failed"
-          ? "常驻能力检测失败；调度者候选仅保留系统已知支持的已注册类型。"
-          : null;
-  const availabilityTone = mode === "team" && detection.status === "loading" ? "loading" as const
-    : noExecutor ? "empty" as const
-      : availabilityMessage ? "warning" as const : null;
+    : executorBlocked ? "当前任务执行器未注册，请在输入框下方换一个。" : null;
+  const availabilityTone = noExecutor ? "empty" as const : availabilityMessage ? "warning" as const : null;
   const scheduleError = launchMode === "once" || launchMode === "cron"
     ? scheduleValidationError(launchMode, scheduleAt, scheduleCron)
     : null;
   const queueTargetError = launchMode === "queue" && !queueAfter.afterTaskId ? "选择要接在哪个任务之后" : null;
   // 有图还在传就先不放行：附件路径是上传成功才有的，这时候创建等于把刚粘的那张图
-  // 悄悄扔掉。三种模式一视同仁——切走这个面板就没人接住在途的那张了。
+  // 悄悄扔掉——切走这个面板就没人接住在途的那张了。
   const waitingUploads = uploads.uploading;
   const forkError = forkBodyProblem(fork, body);
   // 此刻为什么发不出去：发送键淡下去时指上去说的就是这一句；提交函数里照样拦。
-  const blockReason = !(fork ? body.trim() : body.trim() || allAttachments.length > 0) ? "先写点内容"
+  // 叫着人时第一句是交给他答（或拿去讨论）的话：光有附件不够。
+  const blockReason = !(fork || call ? body.trim() : body.trim() || allAttachments.length > 0)
+    ? call ? `先写下${call.verb === "discuss" ? "要讨论什么" : `要问 ${call.target.agent} 什么`}` : "先写点内容"
     : forkError ? forkError
       : waitingUploads ? "附件传完才能创建"
         : switching ? "正在切换项目分支，切完才能创建"
-          : noExecutor || roleBlocked ? availabilityMessage ?? "执行器不可用"
+          : noExecutor || executorBlocked ? availabilityMessage ?? "执行器不可用"
             : scheduleError || queueTargetError || null;
   const canSubmit = !blockReason && !busy;
 
@@ -413,12 +307,12 @@ export function TaskComposerPanel({
     if (next !== "queue") queueAfter.clear();
     if (next === "once" && !scheduleAt) setScheduleAt(defaultOnceTime());
   };
-  // 团队任务不被普通队列调度(selectNextInQueue 按 mode !== "team" 过滤):团队模式
-  // 不提供「创建并排队」,已选了再切到团队时退回默认,不留一个兑现不了的承诺。
-  const queueUnavailable = mode === "team" ? "团队任务不参与普通队列" : null;
+  // 叫着人时第一回合就是他答这一句 / 这场讨论，当场起：排队、定时、仅创建都兑现不了，退回「创建并运行」。
+  const callHeld = call ? `叫着 ${call.target.agent} 时只能创建并运行` : null;
+  const unavailable = callHeld ? { queue: callHeld, create: callHeld, once: callHeld, cron: callHeld } : null;
   useEffect(() => {
-    if (queueUnavailable && launchMode === "queue") changeLaunchMode("run");
-  }, [queueUnavailable, launchMode]);
+    if (callHeld && launchMode !== "run") changeLaunchMode("run");
+  }, [callHeld, launchMode]);
   const changeGroup = (value: string, opts?: { silent?: boolean }) => {
     setGroupId(value);
     return queueAfter.onGroupChanged(value, opts);
@@ -426,12 +320,12 @@ export function TaskComposerPanel({
   const submit = async () => {
     if (!canSubmit || isSwitching()) return;
     setBusy(true);
+    // 提交那一刻叫着的那一版：发送途中再动它（换人、换做法）是下一句的设置，不该被这一次清掉（useReplyCall 的 sent）。
+    const sentCall = call;
     let task: Task;
     try {
       task = await api.createTask(composerTaskInput({
-        mode, project, body, fork, groupId, labels, attachments: allAttachments, rounds, gate, review, useWorktree, base,
-        executors, lead: leadExecutor, worker: workerExecutor, reviewer: reviewerExecutor, voiceA: voiceAExecutor, voiceB: voiceBExecutor,
-        singleRun,
+        project, body, fork, groupId, labels, attachments: allAttachments, useWorktree, base, run: singleRun,
       }));
     } catch (error) {
       notify(error instanceof Error ? error.message : "任务创建失败");
@@ -445,6 +339,7 @@ export function TaskComposerPanel({
       launchMode,
       scheduleAt,
       scheduleCron,
+      opening: sentCall ? composerOpening(sentCall, { body, fork, attachments: allAttachments }) : null,
       submitted: { draft: draft.value, noteIds: draft.noteIds },
       panelMounted: () => mountedRef.current,
       draft,
@@ -454,6 +349,7 @@ export function TaskComposerPanel({
       onTasksSynced,
       notify,
     });
+    if (sentCall) calling.sent(sentCall);
   };
 
   return (
@@ -479,26 +375,16 @@ export function TaskComposerPanel({
           {fork && <ComposerForkContext fork={fork} />}
           {forkError && <p role="alert" className="task-conversation-error">{forkError}</p>}
           <ComposerFields
-            mode={mode}
             profiles={profiles}
-            workerTypes={workerTypes}
-            leadTypes={leadTypes}
-            leadProfiles={leadProfiles}
-            executors={executors}
-            executorTypes={executorTypes}
+            types={types}
+            executor={executors.single}
+            executorType={singleRun.agentType}
+            call={call && <ComposerCallCapsule calling={calling} host={singleRun.agentType} profiles={profiles}
+              disabled={busy} onCancel={cancelCall} />}
             availabilityMessage={availabilityMessage}
             availabilityTone={availabilityTone}
             onExecutorChange={changeExecutor}
             onEffortChange={changeEffort}
-            currentTeamConfig={currentTeamConfig}
-            onApplyTeamPreset={applyTeamPreset}
-            notify={notify}
-            review={review}
-            onReviewChange={setReview}
-            rounds={rounds}
-            onRoundsChange={setRounds}
-            gate={gate}
-            onGateChange={setGate}
             isRepo={project.health.isRepo}
             useWorktree={useWorktree}
             onUseWorktreeChange={setUseWorktree}
@@ -516,25 +402,24 @@ export function TaskComposerPanel({
             labels={labels}
             onLabelsChange={setLabels}
             onCreateGroup={() => setGroupDialogOpen(true)}
-            onModeChange={onModeChange}
-            onPickStarter={(text, nextMode) => {
-              changeBody(body.trim() ? body + "\n\n" + text : text);
-              onModeChange(nextMode);
+            onPickStarter={(text) => {
+              setBody(body.trim() ? body + "\n\n" + text : text);
               textareaRef.current?.focus();
             }}
           >
-          {({ modes, options, executorTools }) => <>
-          {!home && <div className="composer-modes">{modes}</div>}
+          {({ options, executorTools }) => <>
           <div className="studio-card">
-          <ComposerObjective body={body} mode={mode} textareaRef={textareaRef} autoFocus={!home}
+          <ComposerCallDock calling={calling} onCancel={cancelCall} />
+          <ComposerObjective body={body} textareaRef={textareaRef} autoFocus={!home}
+            placeholder={call ? CALL_COPY[call.verb].placeholder(call.target.agent) : undefined}
             onEscape={home ? () => textareaRef.current?.blur() : undefined}
-            onChange={(value) => { changeBody(value); setSlashIndex(0); setSlashDismissed(false); mention.onValueChange(); }}
+            onChange={(value) => { setBody(value); setSlashIndex(0); setSlashDismissed(false); mention.onValueChange(); }}
             onPaste={uploads.onPaste} items={slashCandidates} selected={slashSelected} token={slash?.token ?? null}
             onSelect={setSlashIndex} onPick={pickSlash} onDismiss={() => setSlashDismissed(true)} onSubmit={() => void submit()}
             mention={{
               onKeyDown: mention.onKeyDown,
               menu: mention.open && (
-                <InputMentionMenu mention={mention} label="引用随手记或项目里的文件" className="composer-mention-menu" />
+                <InputMentionMenu mention={mention} label="叫一个智能体，或引用随手记、文件" className="composer-mention-menu" />
               ),
             }} />
           <ImagePreviewGroup isolated>
@@ -547,7 +432,7 @@ export function TaskComposerPanel({
             <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />
             <div className="composer-opts">{home
               ? <>{options.where}<ComposerExpand onExpand={home.onExpand} /></>
-              : <>{options.work}{options.where}{options.org}{options.more}</>}<ComposerShortcutHelp /></div>
+              : <>{options.where}{options.org}{options.more}</>}<ComposerShortcutHelp /></div>
             <div className="composer-foot-run">
               {executorTools}
               <ComposerLaunchControl
@@ -563,7 +448,8 @@ export function TaskComposerPanel({
                 onCronChange={setScheduleCron}
                 onSubmit={() => void submit()}
                 queueSlot={queueAfter.slot}
-                queueUnavailable={queueUnavailable}
+                unavailable={unavailable}
+                callText={call ? CALL_COPY[call.verb].send(call.target.agent) : null}
               />
             </div>
           </footer>

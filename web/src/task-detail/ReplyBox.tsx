@@ -44,7 +44,7 @@ import { clearSentDraft, dropSentAttachments, sentSelections, withdrawIntoBox } 
 
 const EMPTY_SKILLS: SkillEntry[] = [];
 // 菜单顶行只给第一组起名:原生命令和排在后面的技能各有 SlashMenu 画的分隔线。
-const MENU_HEADING: Record<SlashItem["kind"], string> = { ash: "派生命令 · ", native: "", skill: "技能 · " };
+const MENU_HEADING: Record<SlashItem["kind"], string> = { ash: "叫人 · ", native: "", skill: "技能 · " };
 
 export function ReplyBox({
   task,
@@ -53,9 +53,7 @@ export function ReplyBox({
   onStop,
   stopBlocked = null,
   onStandingExecutorChange,
-  command,
   skills = EMPTY_SKILLS,
-  inlinePanel,
   topRail,
   actions,
   moreItems = [],
@@ -134,10 +132,9 @@ export function ReplyBox({
   const cliCommand = parseCliCommand(target?.agent ?? standing.config.agentType, value);
   const scopeDiscovery = cliCommand?.name === "goal" && cliCommand.args === "--scopes";
   const disabled = task.mode !== "single" || task.archived || (!hasConversation && !queueing && !scopeDiscovery);
-  const inputDisabled = disabled && !command;
   // 占位只有「回复…」，水印透出来（reply-1）。快捷键在发送键的提示里，「可以粘贴」在附件键的
   // 提示里，「引导会话」在待发送那一条的键上；发不出去的原因指到发送键上才说。只有整个输入框
-  // 都用不了（不是单任务、归档了还没敲派生命令）时，原因才写在占位里——那时没有键可指。
+  // 都用不了（不是单任务、已归档、还没跑过）时，原因才写在占位里——那时没有键可指。
   const reason = task.mode !== "single"
     ? "请在对应的团队或讨论页面继续操作"
     : task.archived
@@ -145,7 +142,7 @@ export function ReplyBox({
       : !hasConversation && !queueing && !scopeDiscovery
         ? "先运行任务，再继续回复"
         : null;
-  const placeholder = inputDisabled && reason ? reason : call ? CALL_COPY[call.verb].placeholder(call.target.agent) : "回复…";
+  const placeholder = disabled && reason ? reason : call ? CALL_COPY[call.verb].placeholder(call.target.agent) : "回复…";
 
   const resetComposerState = () => {
     setCommandIndex(0);
@@ -160,15 +157,6 @@ export function ReplyBox({
     setCommandResult(null);
   }, [task.id]);
 
-  const commandReset = useRef({ taskId: task.id, key: command?.resetKey });
-  useEffect(() => {
-    const previous = commandReset.current;
-    commandReset.current = { taskId: task.id, key: command?.resetKey };
-    if (previous.taskId !== task.id || previous.key === command?.resetKey) return;
-    setValue("");
-    resetComposerState();
-  }, [command?.resetKey, task.id]);
-
   // 托盘该少一行由服务端的 task.pendingMessages 事件说了算（useScheduledMessages 里
   // 订阅）。这里只留一道兜底：SSE 断过线时，任务从「在跑」变成别的状态也重拉一次。
   const wasQueueing = useRef(queueing);
@@ -177,18 +165,17 @@ export function ReplyBox({
     wasQueueing.current = queueing;
   }, [queueing, scheduled.reload]);
 
-  // 派生命令(ash 自己的)排在技能前面,中间画一条线:前者换的是「谁来干」,
+  // 叫人的命令（`/讨论`、`/派`）排在技能前面,中间画一条线:前者换的是「谁来干」,
   // 后者只是给这一轮加一句提示词,点错的代价差着量级。
   const ashItems: SlashItem[] = [
     ...(ability.discussable ? [DISCUSS_SLASH_ITEM] : []),
     ...(dispatchable ? [DISPATCH_SLASH_ITEM] : []),
-    ...command?.items ?? [],
   ].map((item) => ({ ...item, kind: "ash" }));
   const commandCandidates = (text: string) => mergeSlashItems(ashItems, skills, slashQuery(text));
   const candidates = commandCandidates(value);
   // 答题卡展开着（连同它收回去那一下）：平常的框和它的全部浮层都不挂，草稿原样留着（QuestionSlot.tsx）。
   // 框里的工具（选执行器、发送设置、截图批注、更多）跟着框一起卸掉；框外这几层（补全、引用、`@`
-  // 之后选模型、派生面板）在下面逐个按 covering 让开。由宿主开着的那两层顺手关上，收起时不再自己弹回来。
+  // 之后选模型）在下面逐个按 covering 让开。由宿主开着的那两层顺手关上，收起时不再自己弹回来。
   const takeover = useQuestionTakeover(onAnswer ? asking === undefined ? task : asking : null);
   const covering = takeover.covering;
   useEffect(() => {
@@ -196,16 +183,15 @@ export function ReplyBox({
   }, [covering]);
   const menuOpen = !take && !covering && !menuDismissed && candidates.length > 0;
   const selectedIndex = Math.min(commandIndex, Math.max(0, candidates.length - 1));
-  const commandMatch = !take && !!command && command.matches(value);
   // 敲全了的 `/派 …`、`/讨论 …`：发送 = 叫上次那个人、停在那一种，后面那段留在框里。
   const typedCall = take || call ? null : parseCallCommand(value);
   const callTyped = !!typedCall && (typedCall.verb === "dispatch" ? dispatchable : ability.discussable);
   const selected = candidates[selectedIndex];
-  // 菜单开着时回车做什么:ash 命令打开派生配置;技能和原生命令补全进正文;
+  // 菜单开着时回车做什么:叫人的命令叫上次那个人;技能和原生命令补全进正文;
   // 原生命令已经敲全就直接发(它本来就是发给 CLI 的一句话)。
   const menuSends = menuOpen && slashSendsAsTyped(selected, value);
   const menuCompletes = menuOpen && !menuSends && selected?.kind !== "ash";
-  const commandActive = commandMatch || menuOpen || callTyped;
+  const commandActive = menuOpen || callTyped;
   const pickingCall = menuOpen ? callCommandVerb(selected?.command) : callTyped ? typedCall!.verb : null;
   // 选模型那个浮层和底部胶囊的候选都取它；`@` 那张菜单里的智能体候选在 replyMention.ts
   // 里自己算（它还要按 token 过滤）。
@@ -249,31 +235,21 @@ export function ReplyBox({
     ?? activeAgent;
   // 胶囊改的是「以后都用谁」，跟「现在能不能说话」是两件事：从没跑过的任务同样该能
   // 先把执行器挑好（详情页没有第二个入口，TaskInspector 那节是只读的）。所以这里
-  // 不跟着 disabled 走，只挡真正改不动的：非单飞、已归档、正在发送、正在配派生命令。
+  // 不跟着 disabled 走，只挡真正改不动的：非单飞、已归档、正在发送、正在敲命令。
   const configDisabled = task.mode !== "single" || task.archived || sending || commandActive
     || (!target && !onStandingExecutorChange);
 
   const pickCommand = (item: SlashItem) => {
-    // 技能不是派生命令:它只是**补全**。`/名字` 原样留在正文里跟着这一轮发下去,
+    // 技能不是命令:它只是**补全**。`/名字` 原样留在正文里跟着这一轮发下去,
     // server 会据此注入 SKILL.md，所以这里绝不能把它截走。
-    // 原生命令同理:`/compact` 是正文本身,发送时由 server 识别后交给 CLI 执行,
-    // 不是派生命令,交给 command.onSubmit 只会被它当成不认识的命令吞掉。
-    if (item.kind !== "ash") {
-      const next = applySlashPick(value, item.command);
-      setValue(next);
-      setCommandIndex(0);
-      setMenuDismissed(false);
-      command?.onChange?.(next);
-      textareaRef.current?.focus();
-      return;
-    }
-    const verb = callCommandVerb(item.command);
+    // 原生命令同理:`/compact` 是正文本身,发送时由 server 识别后交给 CLI 执行。
+    const verb = item.kind === "ash" ? callCommandVerb(item.command) : null;
     if (verb) return startCallCommand(verb, parseCallCommand(value)?.rest ?? "");
-    command?.onSubmit(item.command);
-    setValue("");
+    const next = applySlashPick(value, item.command);
+    setValue(next);
     setCommandIndex(0);
     setMenuDismissed(false);
-    calling.cancel();
+    textareaRef.current?.focus();
   };
 
   // `/派`、`/讨论`：叫上次叫过的那个人，停在那一种；后面写了话就留在框里。从没叫过人（或那个执行器已经
@@ -297,8 +273,6 @@ export function ReplyBox({
     setValue("");
     setCommandIndex(0);
     setMenuDismissed(true);
-    command?.onChange?.("");
-    command?.onCancel?.();
   };
 
   // 不叫人了：胶囊回到这条任务自己的执行器，框顶换回裁定那一行（有的话），写的字一个不动。
@@ -355,10 +329,6 @@ export function ReplyBox({
   const runSend = async (annotation?: AnnotationReply): Promise<boolean> => {
     if (!annotation && menuOpen && !menuSends) {
       pickCommand(candidates[selectedIndex]!);
-      return false;
-    }
-    if (!annotation && commandMatch) {
-      pickCommand({ command: value.trim(), label: "", kind: "ash" });
       return false;
     }
     if (!annotation && callTyped) {
@@ -496,7 +466,6 @@ export function ReplyBox({
         <InputMentionMenu mention={mention} label="召唤智能体或引用随手记、文件" className="task-reply-mention-menu" />
       )}
       <div className="reply-context">
-      {inlinePanel && !covering && !menuOpen && !mention.open && <div className="task-reply-inline-panel">{inlinePanel}</div>}
       <ScheduledMessageTray
         key={task.id}
         messages={scheduled.messages}
@@ -537,7 +506,7 @@ export function ReplyBox({
           quoteTarget={task.id}
           rows={3}
           hidden={!!take && !takeInput}
-          disabled={inputDisabled && !takeInput}
+          disabled={disabled && !takeInput}
           readOnly={takeInput?.readOnly}
           placeholder={takeInput?.placeholder ?? placeholder}
           aria-label={takeInput?.label ?? "回复任务"}
@@ -548,7 +517,6 @@ export function ReplyBox({
             setMenuDismissed(false);
             setCommandIndex(0);
             mention.onValueChange();
-            command?.onChange?.(commandCandidates(next).length > 0 ? "" : next);
           }}
           onPaste={take ? undefined : uploads.onPaste}
           onKeyDown={(event) => {
@@ -578,11 +546,6 @@ export function ReplyBox({
                 else setMenuDismissed(true);
                 return;
               }
-            }
-            if (event.key === "Escape" && commandMatch) {
-              event.preventDefault();
-              cancelCommand();
-              return;
             }
             if (mention.onKeyDown(event)) return;
             // 叫着人：空框里退格、或 Esc，就是不叫了（字一个不动）。Esc 只退这一层，外面的抽屉不跟着关。
@@ -649,10 +612,9 @@ export function ReplyBox({
             queueing={queueing}
             sending={sending}
             blocked={disabled ? reason ?? "现在发不出去" : null}
-            // 敲着命令时这颗键干的是别的事：补全命令、叫人派出去、打开派生配置。归档的任务也能派生，所以不受上面那条拦。
+            // 敲着命令时这颗键干的是别的事：补全命令、叫人派出去或讨论。
             override={menuCompletes ? { text: "补全", action: "把命令补进正文" }
-              : pickingCall ? { text: "叫人", action: `叫上次那个人，停在${CALL_COPY[pickingCall].label}` }
-                : commandActive && !menuSends ? { text: "配置", action: "打开派生配置" } : null}
+              : pickingCall ? { text: "叫人", action: `叫上次那个人，停在${CALL_COPY[pickingCall].label}` } : null}
             onSend={() => void send()}
             onStop={onStop ? () => {
               setStopping(true);

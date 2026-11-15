@@ -42,18 +42,9 @@ export type ReplyBoxProps = {
    * `label` 只是提示文案用的执行器名，别当业务字段使。
    */
   onStandingExecutorChange?: (next: StandingExecutor, label: string) => Promise<void>;
-  command?: {
-    matches: (text: string) => boolean;
-    onSubmit: (text: string) => void;
-    onChange?: (text: string) => void;
-    onCancel?: () => void;
-    resetKey?: number;
-    items: { command: string; label: string; hint?: string }[];
-  };
-  // 当前执行器已装的技能。选中只把 `/名字` 补进正文，不把它当派生命令截走；
+  // 当前执行器已装的技能。选中只把 `/名字` 补进正文，不把它当命令截走；
   // server 会在运行这一回合前注入对应 SKILL.md。
   skills?: SkillEntry[];
-  inlinePanel?: ReactNode;
   /** 框上方只放状态（验收前置命令在跑之类）；没有就不占地方。 */
   topRail?: ReactNode;
   /** 框里那一行左边、附件后面的动作（再审、打开预览、接力到…）（docs/ui-ux-audit reply-3）。 */
