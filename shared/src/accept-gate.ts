@@ -259,6 +259,11 @@ export type AcceptGateState = {
    * (老数据如实显示「没留下凭据」,不拿 latest 冒充)。
    */
   basis: AcceptGateBasis | null;
+  /**
+   * 问的这个人在这个项目里上一次确认验收时取消了「运行」(server accept-memory.ts)。只有验收台的
+   * 确认层拿它当「运行」那一勾的默认、前提列那一行跟着它说「验收时跳过」;验收接口本身不读它。
+   */
+  skipRemembered?: boolean;
   /** 项目当前的门禁基准(项目级设置)。 */
   baseline?: AcceptGateBaseline;
   /** 这一档此刻要对照的目标分支;null = 这个任务没有合并目标,三档都按分支快照跑。 */
@@ -278,3 +283,11 @@ export type AcceptGateState = {
     handoff: { at: string; state: "queued" | "working" | "ended" | "failed"; note: string | null } | null;
   } | null;
 };
+
+/**
+ * 验收确认层点确认时送去记住的那两勾(server accept-memory.ts)。只送这一按真做了选择的那几项:
+ * 有一次还作数的通过时「运行」默认是沿用、勾上是一次性重跑,都不送 skipGate。
+ */
+export type AcceptMemoryWrite = { skipGate?: boolean; commit?: boolean };
+/** 写完之后的样子;commitSaved=false = 没有项目管理权限,「提交」只管了这一次。 */
+export type AcceptMemoryWriteResult = { skipGate: boolean; commit: boolean; commitSaved: boolean };

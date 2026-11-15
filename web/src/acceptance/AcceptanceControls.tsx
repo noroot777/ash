@@ -29,6 +29,9 @@ import { AutoCommitCheck, WorkspaceCheck } from "./WorkspaceCheck.tsx";
 /** 宿主自己知道、这里不知道的那一道关（团队：共享执行者还没跑完）。 */
 export type HostBlock = { text: string; detail?: string };
 
+/** 记下这一次怎么勾的，最多等这么久；过了就照层里看见的值直接验收。 */
+const REMEMBER_TIMEOUT_MS = 5_000;
+
 const BASELINE_ISSUE = {
   merge_conflict: "会撞冲突",
   accept_gate_target_behind: "还没含最新的目标分支",
@@ -133,6 +136,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         passedAgo: latest?.status === "passed" ? ago(latest.finishedAt ?? latest.startedAt) : null,
         lastFailed: latest?.status === "failed",
         issue: issue ? BASELINE_ISSUE[issue.reason] : null,
+        skipRemembered: gate.state.skipRemembered === true,
       }
     : null;
   const unverified = family.filter((row) => row.unexecutedVerification);
@@ -141,13 +145,16 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
     : midGate ? "none"
       : verification.loading ? "loading" : verification.error ? "error"
         : verification.verification ? (verification.acknowledged ? "acknowledged" : "unacknowledged") : "none";
+  // 这一按要用前置命令那份状态（单任务验收）：它在重读、或重读失败，确认就等它（confirmPlan.ts gatePending）。
+  // 只管确认层：层没开时后台重读照旧不灰主按钮（test-accept-gate-reads.mjs ㉑）。
+  const gatePending = !midGate && !settled && !family.length && steps.kind !== "release" && gate.stale;
   const view = confirmView({
     steps, gate: confirmGate, runChoice, commitChoosable, commitChoice, commitDefault: commitDefault.value,
-    count: family.length ? merging.length : 1, verification: verifyState,
+    commitDefaultPending: commitDefault.pending, gatePending, count: family.length ? merging.length : 1, verification: verifyState,
   });
   const described = acceptanceSteps(task, view.commit);
   const shownSteps = described.kind === "merge" && acceptTarget ? { ...described, target: acceptTarget } : described;
-  // 关掉就回到默认：这几勾的语义都是「这一次」。
+  // 关掉就回到默认 —— 默认就是上一次确认时的样子（confirmPlan.ts），只开关不确认不会改它。「知情」那一勾不记。
   useEffect(() => {
     if (!confirming) { setRunChoice(null); setCommitChoice(null); setFamilyAck(false); verification.setAcknowledged(false); }
   }, [confirming]);
@@ -166,10 +173,31 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
   const accept = async () => {
     if (acceptDisabled || view.confirmDisabled) return;
     // 发的是**这一层里看到的那个值**（提交、运行与否），不让后端再读一次项目设置。
-    const { commitParam, gateIntent } = view;
+    const { commitParam, gateIntent, memory } = view;
     setLayer(null);
     setBusy(true);
     setFailure(null);
+    // 先记下这一次怎么勾的（下一个任务打开就是这个样子），再验收。记不住不拦验收：这一按用的是层里看到的值，
+    // 记没记住在提示后面缀一句。
+    // 等它有上限（第 1 轮审查 F2）：连接挂住不报错时，不能让验收一直等在「记住」后面。到点就不等了 ——
+    // 放弃等待不是取消，服务端那一下可能稍后才做完，所以提示只说「不一定记住了」；晚做完的它也盖不掉
+    // 之后再确认的那一次（服务端按到达顺序写，server/src/accept-order.ts）。
+    let forgot = "";
+    if (memory) {
+      try {
+        const saved = await api.rememberAccept(task.projectId, memory, AbortSignal.timeout(REMEMBER_TIMEOUT_MS));
+        // 前提列那一行跟着刚记下的说（服务端也会推一次，断线时不能只指望它）。
+        if (memory.skipGate !== undefined) void gate.reload();
+        // 打开时以为有管理权限、确认那一刻已经没有了：照回执说，不拿打开时的角色推断（第 1 轮审查 N2）。
+        if (memory.commit !== undefined && !saved.commitSaved && canManage !== false) forgot = "（「提交」那一勾只管了这一次：项目默认要管理员改）";
+      } catch (reason) {
+        // 超时、连接断了：请求可能已经到了服务端，说不准；服务端回了错误：确实没写。
+        forgot = reason instanceof DOMException && reason.name === "TimeoutError" ? "（这次的选择不一定记住了：保存超时）"
+          : reason instanceof TypeError ? "（这次的选择不一定记住了：连接断了）"
+            : `（这次的选择没记住：${reason instanceof Error ? reason.message : String(reason)}）`;
+      }
+    }
+    const say = (message: string) => notify(message + forgot);
     try {
       if (family.length && proposal) {
         const ids = new Set([proposal.task.taskId, ...checked]);
@@ -179,7 +207,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
           commitParam);
         setChecked([]);
         const stale = await refreshAfterMutation();
-        notify((result.ok ? `统一验收已完成，共 ${result.completed.length} 个任务`
+        say((result.ok ? `统一验收已完成，共 ${result.completed.length} 个任务`
           : `已完成 ${result.completed.length} 个任务；其余暂停：${result.error}`) + stale);
         await plan.refresh();
         return;
@@ -193,21 +221,22 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         if (result.reason === "accept_gate_running") gate.holdRunning(result.gate?.status === "running" ? result.gate : null);
         if (gateReason || result.reason === "merge_conflict") await gate.reload();
         if (result.confirmationRequired === "confirmUnverified") {
-          await refreshAfterMutation();
+          // 层要重新打开：「运行」的默认跟着刚记下的那一份走，先把它读回来。
+          await Promise.all([refreshAfterMutation(), memory?.skipGate === undefined ? null : gate.reload()]);
           setProposal(plan.view);
           setLayer("confirm");
           return;
         }
-        notify(gateReason ? gateNotice(result) : result.reason === "merge_conflict"
+        say(gateReason ? gateNotice(result) : result.reason === "merge_conflict"
           ? result.conflictHandoff?.notified ? "合并冲突已交给任务处理" : "合并冲突，没能交给任务"
           : result.completedMerge || result.completedTag ? result.error : `验收没完成：${result.error}`);
         if (result.completedMerge || result.completedTag) await refreshAfterMutation();
         return;
       }
       const stale = await refreshAfterMutation();
-      notify(acceptMessage(result) + stale);
+      say(acceptMessage(result) + stale);
     } catch (reason) {
-      notify(reason instanceof Error ? reason.message : String(reason));
+      say(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(false);
     }
@@ -255,7 +284,9 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         <PendingMergeCheck key={task.id} task={task} notify={notify} onTaskUpdated={onTaskUpdated} />
         {autoCommit?.taskId === task.id && <AutoCommitCheck outcome={autoCommit.outcome} />}
         {!midGate && !settled && <WorkspaceCheck key={task.id} task={task} notify={notify} disabled={rowDisabled} />}
+        {/* 这一按跳不跳过，前提列与确认层同一份推导（view）：统一验收不走「运行」那一勾，就不预告跳过。 */}
         {!midGate && <GateCheck task={task} gate={gate} canManage={canManage} settled={settled} atFinalGate={!midGate}
+          skipping={view.gateIntent === "skip"}
           disabled={rowDisabled} editRequested={editGate} onEditClosed={() => setEditGate(false)} notify={notify} />}
         {!midGate && !settled && issue && <BaselineCheck task={task} issue={issue} disabled={rowDisabled} reload={gate.reload} notify={notify} />}
         {worktreeChecks && <DependencyChecks task={task} plan={plan} checked={checked} onChecked={setChecked}
@@ -275,6 +306,8 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
           gate={confirmGate}
           commitChoosable={commitChoosable}
           commitDefault={commitDefault}
+          gateRead={{ pending: gatePending, error: gate.error }}
+          commitRemembered={canManage !== false}
           verification={{ state: verifyState, error: verification.error }}
           source={plan.view?.task.sourceBranch ?? "任务分支"}
           family={family.map((row) => row.title)}
@@ -284,6 +317,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
           onCommit={setCommitChoice}
           onAcknowledge={(value) => (family.length ? setFamilyAck(value) : verification.setAcknowledged(value))}
           onRetryDefault={commitDefault.reload}
+          onRetryGate={() => void gate.reload()}
           onRetryVerification={verification.reload}
           onSetGate={() => { setLayer(null); setEditGate(true); }}
           onConfirm={() => void accept()}
