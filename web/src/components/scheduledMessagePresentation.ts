@@ -1,13 +1,13 @@
-import type { ScheduledMessage } from "@ash/shared";
+import type { ScheduledMessage, TaskListItem } from "@ash/shared";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { isUserAuthoredMessage } from "@ash/shared/scheduled-message-author";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { scheduledWaitText } from "@ash/shared/scheduled-message-wait";
-
-export type ScheduledMessageFilter = "all" | "mine" | "monitor" | "managed" | "system" | "attention";
+import { sendAfterState } from "../lib/sendAfter.ts";
+import { formatInstant } from "../task-detail/utils.ts";
 
 /**
- * 这条待发送输入是谁放进队列的 —— 托盘的图标、标签、措辞和「能对它做什么」全看这一个判定。
+ * 这条待发送输入是谁放进队列的 —— 托盘那一行的来源、措辞和「能对它做什么」全看这一个判定。
  *
  * `origin` 不是「是不是哨兵」的同义词:这个字段早期只有哨兵唤醒在写,后来审查结算的修复
  * 交接、检查点续跑也开始写它。原先的 `!!message.origin` 于是把一条审查交接标成了哨兵,
@@ -63,42 +63,23 @@ export function scheduledMessageExitCode(message: ScheduledMessage): number | nu
   return codes.find((code) => code !== 0) ?? codes[0] ?? null;
 }
 
-export function scheduledMessageMatches(message: ScheduledMessage, filter: ScheduledMessageFilter): boolean {
-  if (filter === "all") return true;
-  if (filter === "attention") {
-    const exitCode = scheduledMessageExitCode(message);
-    return exitCode !== null && exitCode !== 0;
-  }
-  return scheduledMessageSource(message) === filter;
-}
-
-export function scheduledMessageCounts(messages: ScheduledMessage[]): Record<ScheduledMessageFilter, number> {
-  return {
-    all: messages.length,
-    mine: messages.filter((message) => scheduledMessageMatches(message, "mine")).length,
-    monitor: messages.filter((message) => scheduledMessageMatches(message, "monitor")).length,
-    managed: messages.filter((message) => scheduledMessageMatches(message, "managed")).length,
-    system: messages.filter((message) => scheduledMessageMatches(message, "system")).length,
-    attention: messages.filter((message) => scheduledMessageMatches(message, "attention")).length,
-  };
+/** 退出码非零的哨兵输入:托盘那一行上「N 条要留意」数的就是这些。 */
+export function scheduledMessageNeedsAttention(message: ScheduledMessage): boolean {
+  const exitCode = scheduledMessageExitCode(message);
+  return exitCode !== null && exitCode !== 0;
 }
 
 /**
- * 托盘抬头那一句「什么时候发」。全是定时 / 等前置任务的,按条件说;其余照**队首那条**此刻在等
- * 什么说(服务端下发的 `wait`,见 server/src/pending-wait.ts)——托盘按顺序处理,队首不动后面都
- * 不动。说不出原因(没有挡着它的东西、旧服务端没带)就不说,不拿「等待当前一轮结束」顶上。
+ * 这一条自己在等什么,写在它那一行的「什么时候发」一格:定时的写时刻,等前置任务的写在等谁,
+ * 排在这一轮后面的照服务端下发的 `wait` 说(server/src/pending-wait.ts)。说不出原因(没有挡着它
+ * 的东西、旧服务端没带)就空着,不拿「等待当前一轮结束」顶上。
  */
-export function scheduledTrayPace(ordered: ScheduledMessage[]): string | null {
-  const timed = ordered.filter((message) => message.mode === "timed").length;
-  const after = ordered.filter((message) => message.mode === "after").length;
-  if (timed === ordered.length) return "按设定时间发送";
-  if (after === ordered.length) return "等前置任务完成后发送";
-  if (timed + after === ordered.length) return "按设定时间或前置任务发送";
-  return scheduledWaitText(ordered.find((message) => message.mode === "queued")?.wait);
-}
-
-/** 这一行自己的等待说明:跟抬头那一句一样就不重复写。 */
-export function scheduledRowWait(message: ScheduledMessage, pace: string | null): string | null {
-  const text = scheduledWaitText(message.wait);
-  return text && text !== pace ? text : null;
+export function scheduledMessageWhen(message: ScheduledMessage, tasks?: TaskListItem[]): { text: string | null; stuck: boolean } {
+  if (message.mode === "timed") return { text: `${formatInstant(message.sendAt)} 发`, stuck: false };
+  if (message.mode === "after") {
+    const after = sendAfterState(tasks ? tasks.find((task) => task.id === message.afterTaskId)
+      : { title: "前置任务", status: "running", archived: false }, message.afterDoneAt);
+    return { text: after.label, stuck: after.stuck };
+  }
+  return { text: scheduledWaitText(message.wait), stuck: false };
 }

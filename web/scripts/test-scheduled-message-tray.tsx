@@ -10,9 +10,8 @@ import {
 } from "../src/components/ScheduledMessages.tsx";
 import {
   bySendTime,
-  scheduledMessageCounts,
   scheduledMessageExitCode,
-  scheduledMessageMatches,
+  scheduledMessageNeedsAttention,
   scheduledMessageSource,
   scheduledMessageSummary,
 } from "../src/components/scheduledMessagePresentation.ts";
@@ -44,27 +43,67 @@ const row = (id: string, text: string, sendAt: string): ScheduledMessage => ({
   sentAt: null,
 });
 
-const renderTray = (messages: ScheduledMessage[]) => renderToStaticMarkup(<ScheduledMessageTray messages={messages}
-  loading={false} error={null} cancelingIds={new Set()} onWithdraw={() => undefined} />);
-const renderSteerTray = (messages: ScheduledMessage[]) => renderToStaticMarkup(<ScheduledMessageTray messages={messages}
-  loading={false} error={null} cancelingIds={new Set()} onSteer={() => undefined} onWithdraw={() => undefined} />);
+type TrayExtra = Partial<React.ComponentProps<typeof ScheduledMessageTray>>;
+const renderTray = (messages: ScheduledMessage[], extra: TrayExtra = {}) => renderToStaticMarkup(<ScheduledMessageTray messages={messages}
+  loading={false} error={null} cancelingIds={new Set()} onWithdraw={() => undefined} {...extra} />);
+const renderSteerTray = (messages: ScheduledMessage[], extra: TrayExtra = {}) => renderTray(messages, { onSteer: () => undefined, ...extra });
+/** 点开后的那几行;每一段是一条(从它的 data-message-id 起)。 */
+const openRows = (markup: string) => markup.split('<div class="scheduled-message-item').slice(1);
+const rowOf = (markup: string, text: string) => openRows(markup).find((chunk) => chunk.includes(text)) ?? "";
+/** 「排着 N 条」那一行本身,到点开的列表(或读屏播报)为止。 */
+const line = (markup: string) => {
+  const start = markup.indexOf('class="scheduled-tray-line"');
+  const ends = [markup.indexOf('class="scheduled-tray-list"', start), markup.indexOf("scheduled-message-announcement", start)].filter((at) => at > 0);
+  return markup.slice(start, Math.min(...ends));
+};
 const samples = Array.from({ length: 3 }, (_, index) => row(`sample-${index}`, `输入-${index}`, `2026-10-24T10:00:0${index}.000Z`));
 assert.equal(renderTray([]), "", "空队列不占回复区");
-for (const count of [1, 2]) {
+
+// ── 收着:只有一行 ───────────────────────────────────────────────────────────
+for (const count of [1, 2, 3]) {
   const markup = renderTray(samples.slice(0, count));
-  assert.equal((markup.match(/class="scheduled-message-row"/g) ?? []).length, count);
-  assert.equal((markup.match(/class="scheduled-message-card/g) ?? []).length, 1, "一两条也统一在同一张卡片中");
-  assert.equal((markup.match(/class="scheduled-message-inspect"/g) ?? []).length, count, "每条预览都有完整输入入口");
-  assert.match(markup, new RegExp(`展开全部 ${count} 条`));
-  assert.doesNotMatch(markup, /scheduled-message-single|另有 [0-] 条/);
+  assert.equal((markup.match(/class="scheduled-tray-line"/g) ?? []).length, 1, "收着时只有一行");
+  assert.match(markup, new RegExp(`排着 ${count} 条`));
+  assert.match(markup, /aria-expanded="false"/);
+  assert.equal(openRows(markup).length, 0, "收着时不列出每一条");
+  assert.match(line(markup), /查看完整输入：输入-0/, "这一行上带着用户自己最早那条");
+  assert.doesNotMatch(line(markup), /输入-1/, "只带最早那一条");
 }
-const folded = renderTray(samples);
-assert.equal((folded.match(/class="scheduled-message-card/g) ?? []).length, 1);
-assert.equal((folded.match(/class="scheduled-message-row"/g) ?? []).length, 3);
-assert.match(folded, /展开全部 3 条/);
-assert.doesNotMatch(folded, /另有|scheduled-message-popover/);
-assert.match(folded, /输入-2/, "所有用户消息都能不展开直接撤回");
-assert.match(renderTray([{ ...samples[0], sessionRole: "reviewer", attachments: ["/tmp/review-notes.txt"] }]), /查看完整输入：输入-0/);
+const folded = renderSteerTray([{ ...samples[0], steerable: true }, samples[1]]);
+assert.doesNotMatch(folded, /scheduled-message-card|展开全部|收起列表|筛选|我的消息|#1|按发送时间和入队顺序处理|需留意</,
+  "卡片、来源统计、筛选键、序号、页脚、展开全部都去掉了");
+assert.match(line(folded), /scheduled-message-guide[\s\S]*>引导会话</, "最早那条能引导时,引导键就在这一行上");
+assert.match(line(folded), /用最早的排队消息“输入-0”引导会话/);
+assert.doesNotMatch(line(renderSteerTray(samples)), /scheduled-message-guide/, "服务端没说能引导,这一行上就没有引导键");
+assert.doesNotMatch(line(renderTray([{ ...samples[0], steerable: true }])), /scheduled-message-guide/, "团队回复框没有引导");
+const machineFirst = renderSteerTray([{ ...samples[0], origin: "monitor:m", text: "【哨兵事件】盯构建" },
+  { ...samples[1], sessionRole: "reviewer" }, { ...samples[2], steerable: true }]);
+assert.match(line(machineFirst), /查看完整输入：输入-2[\s\S]*引导会话/, "排在前面的是机器输入时,这一行带的仍是用户自己最早那条");
+const timedFirst = renderSteerTray([{ ...samples[0], mode: "timed" }, { ...samples[1], steerable: true }]);
+assert.match(line(timedFirst), /查看完整输入：输入-1[\s\S]*引导会话/, "定时的不按排队顺序发:那一行带的是下一个就发的那条");
+assert.match(line(renderTray([{ ...samples[0], mode: "timed" }])), /查看完整输入：输入-0/, "没有排队的才带定时那条");
+const machinesOnly = renderTray([{ ...samples[0], origin: "monitor:m", text: "【哨兵事件】盯构建" }, { ...samples[1], sessionRole: "reviewer" }]);
+assert.doesNotMatch(line(machinesOnly), /scheduled-tray-head|查看完整输入/, "没有自己的消息时这一行只说排着几条");
+// 要留意的条数:退出码非零的哨兵才算,是琥珀色的字。
+const attentionTray = renderTray([samples[0], { ...samples[1], origin: "monitor:a", text: "【哨兵结束】检查，退出码 2。" },
+  { ...samples[2], origin: "monitor:b", text: "【哨兵结束】检查，退出码 0。" }, { ...samples[0], id: "c", origin: "monitor:c", text: "REGRESSION_FINISHED exitCode=1" }]);
+assert.match(line(attentionTray), /class="scheduled-tray-attention"[^>]*>2 条要留意</);
+assert.match(attentionTray, /role="status">4 条待发送消息，2 条需留意</, "读屏播报照旧");
+assert.doesNotMatch(renderTray(samples), /scheduled-tray-attention/, "没有要留意的就不写");
+assert.match(renderTray(samples), /role="status">3 条待发送消息</);
+
+// ── 点开:每一条一行,谁排进来的 · 摘要 · 什么时候发 · 行尾的键 ─────────────────
+const opened = renderTray(samples, { defaultExpanded: true });
+assert.equal(openRows(opened).length, 3);
+assert.match(opened, /aria-label="排队输入完整列表"/);
+assert.doesNotMatch(line(opened), /scheduled-tray-head/, "点开后那一行不再重复带最早那条");
+assert.equal((opened.match(/class="scheduled-message-summary" aria-expanded="false"/g) ?? []).length, 3, "每条的摘要都能点开全文");
+assert.equal((opened.match(/class="scheduled-message-source">你</g) ?? []).length, 3);
+assert.match(renderTray([{ ...samples[0], sessionRole: "reviewer", attachments: ["/tmp/review-notes.txt"] }], { defaultExpanded: true }),
+  /aria-expanded="false"[^>]*>输入-0</, "审查答复也有全文入口");
+assert.match(renderTray([{ ...samples[0], agent: "codex" }], { defaultExpanded: true }), /scheduled-message-agent">@codex</, "指定了智能体的照旧带上");
+assert.match(renderTray([{ ...samples[0], mode: "timed", sendAt: "2026-10-24T10:30:00.000Z" }], { defaultExpanded: true }),
+  /scheduled-message-when">\d\d\/\d\d \d\d:\d\d 发</, "定时的写时刻");
 const equalTime = [samples[1], { ...samples[0], id: "z", sendAt: samples[1].sendAt }, { ...samples[0], sendAt: samples[1].sendAt }];
 assert.deepEqual(bySendTime(equalTime).map((message) => message.id), ["sample-0", "z", "sample-1"]);
 assert.equal(equalTime[0], samples[1], "展示排序不得改动消息原数组");
@@ -80,96 +119,74 @@ assert.equal(scheduledMessageExitCode(monitor("REGRESSION_FINISHED exitCode=1\n�
 assert.equal(scheduledMessageExitCode(monitor("exitCode=1 只是日志里的一段文本")), null);
 assert.equal(scheduledMessageExitCode(monitor("【哨兵结束】检查。进程已丢失")), null);
 assert.equal(scheduledMessageExitCode({ ...samples[0], text: "REGRESSION_FINISHED exitCode=1" }), null);
-assert.equal(scheduledMessageMatches(monitor("【哨兵结束】检查。进程已丢失"), "attention"), false);
-const countSamples = [samples[0], { ...samples[1], sessionRole: "reviewer" as const }, monitor("REGRESSION_FINISHED exitCode=1")];
-assert.deepEqual(scheduledMessageCounts(countSamples), { all: 3, mine: 1, managed: 1, monitor: 1, system: 0, attention: 1 });
-assert.match(renderTray(countSamples), /1 条需留意/);
+assert.equal(scheduledMessageNeedsAttention(monitor("【哨兵结束】检查。进程已丢失")), false);
+assert.equal(scheduledMessageNeedsAttention(monitor("REGRESSION_FINISHED exitCode=1")), true);
+assert.equal(scheduledMessageNeedsAttention(monitor("REGRESSION_FINISHED exitCode=0")), false);
+// 哨兵行:退出码非零时「哨兵」琥珀色并写出 exit N;是 0 的不写。
+const exitRows = renderTray([monitor("【哨兵结束】失败的检查，退出码 1。"), monitor("【哨兵结束】通过的检查，退出码 0。")],
+  { defaultExpanded: true, onCancel: () => undefined });
+assert.match(rowOf(exitRows, "失败的检查"), /scheduled-message-source is-attention">哨兵<span class="scheduled-message-exit">exit 1</);
+assert.doesNotMatch(rowOf(exitRows, "通过的检查"), /exit 0|is-attention/);
 
-const html = renderToStaticMarkup(
-  <ScheduledMessageTray
-    messages={[
-      row("later", "第二条", "2026-08-25T10:00:01.000Z"),
-      { ...row("first", "第一条", "2026-08-25T10:00:00.000Z"), steerable: true },
-    ]}
-    loading={false}
-    error={null}
-    cancelingIds={new Set()}
-    steeringIds={new Set()}
-    onSteer={() => undefined}
-    onWithdraw={() => undefined}
-  />,
-);
-
-assert.equal((html.match(/>引导会话</g) ?? []).length, 1, "两条 queued 只能显示一个托盘级引导动作");
+const html = renderSteerTray([
+  row("later", "第二条", "2026-08-25T10:00:01.000Z"),
+  { ...row("first", "第一条", "2026-08-25T10:00:00.000Z"), steerable: true },
+], { defaultExpanded: true, steeringIds: new Set() });
+assert.equal((html.match(/>引导会话</g) ?? []).length, 1, "两条 queued 只能显示一个引导动作");
 assert.match(html, /用最早的排队消息“第一条”引导会话/, "唯一动作必须指向队首消息");
-const firstRowStart = html.indexOf('<div class="scheduled-message-row">');
-const firstRowEnd = html.indexOf("</div>", firstRowStart);
-const firstRow = html.slice(firstRowStart, firstRowEnd);
-const secondRow = html.slice(html.indexOf('<div class="scheduled-message-row">', firstRowEnd));
-assert.match(firstRow, /scheduled-message-guide/, "引导动作应放在队首消息行内");
-assert.doesNotMatch(secondRow, /scheduled-message-guide/, "较晚消息行不得重复显示引导动作");
-assert.ok(
-  firstRow.indexOf("scheduled-message-guide") < firstRow.indexOf("撤回排队中的待发送消息"),
-  "引导动作应位于撤回按钮左侧",
-);
+const [firstRow, secondRow] = openRows(html);
+assert.match(firstRow!, /scheduled-message-guide/, "引导动作应放在队首消息行内");
+assert.doesNotMatch(secondRow!, /scheduled-message-guide/, "较晚消息行不得重复显示引导动作");
+assert.ok(firstRow!.indexOf("scheduled-message-guide") < firstRow!.indexOf("撤回排队中的待发送消息"), "引导动作应位于撤回按钮左侧");
 // 托盘上那颗按钮是**撤回**不是丢弃:标签既要点名是哪条,也要自己说清内容会回到输入框。
 assert.match(html, /aria-label="撤回排队中的待发送消息“第一条”，内容放回输入框"/, "撤回按钮要点名消息并写明内容会放回输入框");
-assert.equal((html.match(/scheduled-message-withdraw/g) ?? []).length, 2, "每条待发送消息各有一个撤回按钮");
+assert.equal((html.match(/scheduled-message-reveal scheduled-message-withdraw/g) ?? []).length, 2, "每条待发送消息各有一个撤回按钮");
+// 引导键带字、一直看得见;撤回是指到才出的图标键。
+assert.match(firstRow!, /<span>引导会话<\/span>/);
+assert.match(renderSteerTray([{ ...row("first", "第一条", "2026-08-25T10:00:00.000Z"), steerable: true }],
+  { defaultExpanded: true, steeringIds: new Set(["first"]) }), /<span>引导中<\/span>/, "引导中的忙碌态照旧");
 // 带会话角色的消息（审查链排给 reviewer 会话的答复）不归这个对话框管：撤回回来的正文
-// 再发一次只会走普通 /reply，角色就丢了。所以两个入口都不给它，只如实标出来。
-const managedHtml = renderToStaticMarkup(
-  <ScheduledMessageTray
-    messages={[
-      { ...row("reviewer", "审查答复", "2026-08-25T10:00:00.000Z"), sessionRole: "reviewer" },
-      { ...row("mine", "我写的", "2026-08-25T10:00:01.000Z"), steerable: true },
-    ]}
-    loading={false}
-    error={null}
-    cancelingIds={new Set()}
-    steeringIds={new Set()}
-    onSteer={() => undefined}
-    onWithdraw={() => undefined}
-  />,
-);
-const managedStart = managedHtml.indexOf('<div class="scheduled-message-row">');
-const mineStart = managedHtml.indexOf('<div class="scheduled-message-row">', managedStart + 1);
-assert.ok(managedStart >= 0 && mineStart > managedStart, "两条消息应各占一行");
-const managedRow = managedHtml.slice(managedStart, mineStart);
-assert.match(managedRow, /审查答复/, "取到的应当是审查会话那一行");
-assert.doesNotMatch(managedRow, /scheduled-message-withdraw/, "审查会话的答复不得挂撤回按钮：这个输入框重发不回它的会话");
-assert.doesNotMatch(managedRow, /scheduled-message-guide/, "审查会话的答复也不得被选作托盘引导目标");
-assert.match(managedRow, /scheduled-message-managed[^>]*>审查会话的答复 · 由审查链投递</, "要如实标出这条由谁投递");
-assert.equal((managedHtml.match(/scheduled-message-withdraw/g) ?? []).length, 1, "用户自己那条排队消息仍可撤回");
-assert.match(
-  managedHtml.slice(mineStart),
-  /scheduled-message-guide/,
-  "带角色的消息被跳过后，引导动作要落到最早的那条用户消息上",
-);
-// 每条在等什么由服务端按结构给(wait),托盘照着说;不按 mode 写死「等待当前一轮结束」。
+// 再发一次只会走普通 /reply，角色就丢了。所以行尾不给键，原来常驻的那两句小字也不再写。
+const managedHtml = renderSteerTray([
+  { ...row("reviewer", "审查答复", "2026-08-25T10:00:00.000Z"), sessionRole: "reviewer" },
+  { ...row("mine", "我写的", "2026-08-25T10:00:01.000Z"), steerable: true },
+], { defaultExpanded: true, onCancel: () => undefined });
+const [managedRow, mineRow] = openRows(managedHtml);
+assert.match(managedRow!, /scheduled-message-source">审查答复</, "取到的应当是审查会话那一行");
+assert.doesNotMatch(managedRow!, /<button(?![^>]*scheduled-message-summary)/, "审查会话的答复行尾没有键:这个输入框重发不回它的会话");
+assert.doesNotMatch(managedHtml, /由审查链投递|不可撤回/, "那两句说明不再常驻");
+assert.match(mineRow!, /scheduled-message-withdraw/, "用户自己那条排队消息仍可撤回");
+assert.match(mineRow!, /scheduled-message-guide/, "带角色的消息被跳过后，引导动作要落到最早的那条用户消息上");
+// 每条在等什么由服务端按结构给(wait),写在它自己那一行;不按 mode 写死「等待当前一轮结束」。
 // 2026-11-13 现场:任务早停了,真正挡着答复的是同队另一条在跑的任务,托盘却说在等这一轮。
 const blockedBy = { kind: "queue" as const, blockers: [{ id: "task-b", title: "整理发布说明", running: true }] };
-const queueBlocked = renderSteerTray([{ ...row("answer", "我的答复", "2026-11-13T13:25:51.000Z"), wait: blockedBy, steerable: false }]);
+const queueBlocked = renderSteerTray([{ ...row("answer", "我的答复", "2026-11-13T13:25:51.000Z"), wait: blockedBy, steerable: false }],
+  { defaultExpanded: true });
 assert.match(queueBlocked, /同一队列里「整理发布说明」正在运行，轮到本任务时发送/, "等同队任务时点名那个任务");
 assert.doesNotMatch(queueBlocked, /等待当前一轮结束|等本任务这一轮结束/);
 assert.doesNotMatch(queueBlocked, /引导会话/, "任务不在跑,点了必被拒的引导键不出现");
 const waitingEarlier = renderTray([{ ...row("answer", "我的答复", "2026-11-13T13:25:51.000Z"),
-  wait: { kind: "queue", blockers: [{ id: "task-b", title: "整理发布说明", running: false }] } }]);
+  wait: { kind: "queue", blockers: [{ id: "task-b", title: "整理发布说明", running: false }] } }], { defaultExpanded: true });
 assert.match(waitingEarlier, /同一队列里排在前面的「整理发布说明」还没完成/);
-const ownTurn = renderSteerTray([{ ...row("next", "下一句", "2026-11-13T13:25:51.000Z"), wait: { kind: "turn" }, steerable: true }]);
+const ownTurn = renderSteerTray([{ ...row("next", "下一句", "2026-11-13T13:25:51.000Z"), wait: { kind: "turn" }, steerable: true }],
+  { defaultExpanded: true });
 assert.match(ownTurn, /等本任务这一轮结束/, "等本任务这一轮是另一种原因");
 assert.match(ownTurn, />引导会话</, "本任务在跑、服务端说能引导,才给这颗键");
-assert.match(renderTray([{ ...row("paused", "暂停中", "2026-11-13T13:25:51.000Z"), wait: { kind: "groupPaused" } }]), /分组已暂停，恢复后发送/);
-const unknown = renderSteerTray([row("legacy", "旧服务端", "2026-11-13T13:25:51.000Z")]);
-assert.doesNotMatch(unknown, /等待当前一轮结束|scheduled-message-wait/, "说不出原因就不说");
+assert.match(renderTray([{ ...row("paused", "暂停中", "2026-11-13T13:25:51.000Z"), wait: { kind: "groupPaused" } }], { defaultExpanded: true }),
+  /分组已暂停，恢复后发送/);
+const unknown = renderSteerTray([row("legacy", "旧服务端", "2026-11-13T13:25:51.000Z")], { defaultExpanded: true });
+assert.doesNotMatch(unknown, /等待当前一轮结束|等本任务/, "说不出原因就不说");
+assert.match(unknown, /class="scheduled-message-when"><\/span>/, "说不出原因也占着那一格,后面的键才对得上列");
 assert.doesNotMatch(unknown, /引导会话/, "服务端没下发能不能引导时不给这颗键");
-// 抬头照队首那条说;后面那条原因不同,在它自己那一行说,一样的不重复写。
+// 抬头那句总的等待说明没有了:每一条写自己的。
 const mixedWaits = renderTray([
   { ...row("head", "第一句", "2026-11-13T13:25:51.000Z"), wait: { kind: "turn" } },
   { ...row("same", "第二句", "2026-11-13T13:25:52.000Z"), wait: { kind: "turn" } },
   { ...row("other", "第三句", "2026-11-13T13:25:53.000Z"), wait: { kind: "groupPaused" } },
-]);
-assert.equal((mixedWaits.match(/等本任务这一轮结束/g) ?? []).length, 1, "跟抬头一样的那几行不再重复写");
-assert.match(mixedWaits, /scheduled-message-wait">分组已暂停，恢复后发送/);
+], { defaultExpanded: true });
+assert.equal((mixedWaits.match(/等本任务这一轮结束/g) ?? []).length, 2, "每一条在自己那一行写它在等什么");
+assert.match(rowOf(mixedWaits, "第三句"), /scheduled-message-when">分组已暂停，恢复后发送/);
+assert.doesNotMatch(line(mixedWaits), /等本任务这一轮结束/, "那一行上不再单独写总的等待说明");
 
 const annotationBatch: AnnotationBatch = {
   id: "batch", taskId: "task", createdAt: 1, gen: "gen", serviceId: "web", evidence: [],
@@ -200,13 +217,17 @@ const source = readSource(new URL("../src/components/ScheduledMessages.tsx", imp
 const reloadSource = source.slice(source.indexOf("const reload"), source.indexOf("useEffect", source.indexOf("const reload")));
 assert.match(source, /const \[actionError, setActionError\]/, "动作错误必须与加载错误分开保存");
 assert.match(reloadSource, /retainScheduledMessageActionError/, "reload 必须按消息是否仍在队列决定错误存活");
-const css = readSource(new URL("../src/styles/reply.css", import.meta.url));
-assert.match(css, /@container \(max-width: 520px\)[\s\S]*scheduled-message-guide[\s\S]*display: none/, "窄托盘必须把引导按钮降级成纯图标");
+const css = readSource(new URL("../src/styles/scheduled-message-tray.css", import.meta.url));
+assert.match(css, /@container \(max-width: 480px\) \{[^}]*\}\s*\.scheduled-message-when \{ display: none; \}/, "窄了先让「什么时候发」那一格让位");
+assert.match(css, /@container \(max-width: 360px\)[\s\S]*\.scheduled-message-guide > span \{ display: none; \}/, "再窄,引导键降级成纯图标,但键还在");
+assert.match(css, /\.scheduled-message-row:focus-within \.scheduled-message-reveal/, "指到才出的键,键盘走到时也要出");
+assert.match(css, /@media \(hover: none\) \{ \.scheduled-message-reveal \{ opacity: 1; \} \}/, "触屏没有悬停,指到才出的键一直在");
+assert.doesNotMatch(readSource(new URL("../src/styles/reply.css", import.meta.url)), /scheduled-message/, "托盘的样式只在它自己那份文件里");
 const replySource = readSource(new URL("../src/task-detail/ReplyBox.tsx", import.meta.url));
 // 输入框里只写「回复…」（docs/ui-ux-audit reply-1）；队尾那颗引导键自己指上去说它做什么。
 assert.match(replySource, /: "回复…"/, "回复框占位只写「回复…」，原因只在发不出去时才写进去");
 assert.match(
-  readSource(new URL("../src/components/ScheduledMessageTray.tsx", import.meta.url)),
+  readSource(new URL("../src/components/ScheduledMessageRow.tsx", import.meta.url)),
   /不等这一轮结束，把这条直接接进正在进行的对话/,
   "队尾的引导键必须自己说清它做什么，用户才发现得了它",
 );
@@ -355,19 +376,21 @@ assert.deepEqual(
       onSteer={() => undefined}
       onWithdraw={() => undefined}
       onCancel={() => undefined}
+      defaultExpanded
     />,
   );
-  const rows = monitorHtml.split('<div class="scheduled-message-row">');
+  const rows = openRows(monitorHtml);
   const monitorMarkup = rows.find((chunk) => chunk.includes("哨兵事件")) ?? "";
   const mineMarkup = rows.find((chunk) => chunk.includes("我自己写的")) ?? "";
   assert.ok(monitorMarkup, "哨兵事件行应被渲染出来");
-  assert.match(monitorMarkup, /<em>哨兵<\/em>/, "哨兵行要标明这条是谁推的");
+  assert.match(monitorMarkup, /scheduled-message-source">哨兵</, "哨兵行要标明这条是谁推的");
   assert.match(monitorMarkup, /取消哨兵事件[\s\S]*这一次唤醒/, "哨兵行要给「取消这次唤醒」");
   assert.doesNotMatch(monitorMarkup, /放回输入框/, "哨兵事件不是用户写的，不得提供撤回");
   assert.doesNotMatch(monitorMarkup, /scheduled-message-guide/, "哨兵事件不得出现引导会话入口");
   assert.match(mineMarkup, /放回输入框/, "用户自己那条照旧可以撤回");
   // 队首是哨兵行时，引导入口必须落到用户自己最早的那条上，而不是整个消失。
   assert.match(mineMarkup, /scheduled-message-guide/, "引导入口应落到用户自己最早的那条排队消息上");
+  assert.match(monitorMarkup, /scheduled-message-reveal scheduled-message-cancel/, "取消这次唤醒是指到才出的叉");
 }
 
 // ── 带 origin 但不是哨兵的那几种 ────────────────────────────────────────────
@@ -386,17 +409,11 @@ assert.deepEqual(
     row("mine", "我写的", "2026-10-31T10:00:04.000Z")].map(scheduledMessageSource),
   ["monitor", "system", "system", "managed", "mine"], "来源判定:真哨兵 / 认不出的 origin 落中性 / 会话角色 / 用户自己");
   // 「哨兵」筛选器只许命中真哨兵，否则点进去看到的还是那条审查交接。
-  assert.equal(scheduledMessageMatches(repair, "monitor"), false, "审查结算不属于哨兵");
-  assert.equal(scheduledMessageMatches(resume, "monitor"), false, "检查点续跑不属于哨兵");
-  assert.equal(scheduledMessageMatches(real, "monitor"), true, "真哨兵仍归哨兵");
-  assert.equal(scheduledMessageMatches(repair, "mine"), false, "系统排入的不是用户自己的消息");
-  assert.equal(scheduledMessageMatches(repair, "system"), true);
-  assert.deepEqual(scheduledMessageCounts([real, repair, resume]),
-    { all: 3, mine: 0, managed: 0, monitor: 1, system: 2, attention: 1 }, "三条里只有一条是哨兵");
+  assert.deepEqual([real, repair, resume].map(scheduledMessageNeedsAttention), [true, false, false], "三条里只有哨兵那条算要留意");
   // 退出码是哨兵独有的概念:交接正文里引着的 REGRESSION_FINISHED 不许算成「需留意」。
   const quoted: ScheduledMessage = { ...repair, text: "【审查未通过】\nREGRESSION_FINISHED exitCode=1 monitor=m1" };
   assert.equal(scheduledMessageExitCode(quoted), null, "非哨兵来源不读退出码");
-  assert.equal(scheduledMessageMatches(quoted, "attention"), false);
+  assert.equal(scheduledMessageNeedsAttention(quoted), false);
   assert.equal(scheduledMessageExitCode(real), 1, "真哨兵的退出码照旧读得出来");
   // 哨兵格式那几刀也只许用在真哨兵上。
   assert.equal(scheduledMessageSummary({ ...repair, text: "审查未通过（monitorId=m1），退出码 1\n正文" }),
@@ -404,25 +421,22 @@ assert.deepEqual(
 
   const markup = renderToStaticMarkup(<ScheduledMessageTray messages={[real, repair, row("mine", "我写的", "2026-10-31T10:00:04.000Z")]}
     loading={false} error={null} cancelingIds={new Set()} steeringIds={new Set()}
-    onSteer={() => undefined} onWithdraw={() => undefined} onCancel={() => undefined} />);
-  const chunks = markup.split('<div class="scheduled-message-row">');
+    onSteer={() => undefined} onWithdraw={() => undefined} onCancel={() => undefined} defaultExpanded />);
+  const chunks = openRows(markup);
   const repairRow = chunks.find((chunk) => chunk.includes("自由工作流审查未通过")) ?? "";
   const monitorRow = chunks.find((chunk) => chunk.includes("盯构建")) ?? "";
   assert.ok(repairRow && monitorRow, "两行都应被渲染出来");
-  assert.doesNotMatch(repairRow, /<em>哨兵<\/em>/, "审查结算不得标成哨兵");
+  assert.doesNotMatch(repairRow, /哨兵/, "审查结算行一个哨兵字样都不许有");
   assert.doesNotMatch(repairRow, /取消哨兵事件|停止哨兵/, "审查结算不得套用哨兵的取消措辞");
   assert.doesNotMatch(repairRow, /放回输入框|scheduled-message-guide/, "系统排进来的不是用户打的字，撤回与引导都不给");
-  assert.match(repairRow, /<em>系统<\/em>/, "认不出来源时只说「系统」，不冒充哨兵");
-  assert.match(repairRow, /scheduled-message-managed[^>]*>由系统排入 · 不可撤回</, "要说清这行为什么没有按钮");
-  // 真哨兵那一行一个字都不变。
-  assert.match(monitorRow, /<em>哨兵<\/em>/);
+  assert.match(repairRow, /scheduled-message-source">系统</, "认不出来源时只说「系统」，不冒充哨兵");
+  assert.doesNotMatch(repairRow, /<button(?![^>]*scheduled-message-summary)/, "系统排进来的行尾没有键");
+  // 真哨兵那一行照旧。
+  assert.match(monitorRow, /scheduled-message-source is-attention">哨兵/);
   assert.match(monitorRow, /取消哨兵事件[\s\S]*这一次唤醒（仅移除本条输入，不执行停止哨兵操作）/);
-  // 头部计数与筛选器按来源分摊:只有真哨兵算进「哨兵 N」。
-  assert.match(markup, /我的消息 1 · 哨兵 1 · 系统 1/, "头部按真实来源分摊计数");
-  assert.doesNotMatch(markup, /哨兵 2/);
+  // 要留意的只数真哨兵:审查交接正文里引着的退出码不算。
+  assert.match(line(markup), />1 条要留意</);
 }
-// 展开后那排筛选器(含只在有系统输入时才多出来的「系统」)要真浏览器才摆得出来,
-// 钉在 test-scheduled-message-tray-dom.mjs 里。
 
 // 就一次都不做——只提示去网页端，绝不能从这个入口发出取消请求。真要扔掉走独立的丢弃。
 const mobileSource = readSource(new URL("../../mobile/src/components/PendingMessageTray.tsx", import.meta.url));

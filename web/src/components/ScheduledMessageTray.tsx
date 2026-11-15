@@ -1,14 +1,9 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { ScheduledMessage, TaskListItem } from "@ash/shared";
-import { ArrowUUpLeft, CaretDown, CaretUp, ChatsCircle, Clock, Hourglass, PaperPlaneRight, Pulse, Queue, SpinnerGap, Stack, Warning, X } from "@phosphor-icons/react";
-import { sendAfterState } from "../lib/sendAfter.ts";
+import { CaretDown, CaretRight } from "@phosphor-icons/react";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
-import { formatInstant } from "../task-detail/utils.ts";
-import { HoverTip, useHoverTip } from "./HoverTip.tsx";
-import {
-  bySendTime, scheduledMessageCounts, scheduledMessageExitCode, scheduledMessageMatches, scheduledMessageSource,
-  scheduledMessageSummary, scheduledMessageText, scheduledRowWait, scheduledTrayPace, type ScheduledMessageFilter,
-} from "./scheduledMessagePresentation.ts";
+import { ScheduledMessageRow, scheduledMessageLabel, SteerButton } from "./ScheduledMessageRow.tsx";
+import { bySendTime, scheduledMessageNeedsAttention, scheduledMessageSource, scheduledMessageText } from "./scheduledMessagePresentation.ts";
 
 type TrayProps = {
   messages: ScheduledMessage[];
@@ -16,6 +11,7 @@ type TrayProps = {
   error: string | null;
   cancelingIds: ReadonlySet<string>;
   steeringIds?: ReadonlySet<string>;
+  /** 团队回复框不给:调度台那一侧没有引导。 */
   onSteer?: (messageId: string) => void;
   onWithdraw: (message: ScheduledMessage) => void;
   onCancel?: (messageId: string) => void;
@@ -23,158 +19,80 @@ type TrayProps = {
   tasks?: TaskListItem[];
   /** 前置任务不会再完成时(失败/取消/删除/归档),那一行给的出口:不等了,直接发。 */
   onSendNow?: (messageId: string) => void;
+  /** 一开始就点开(回归脚本静态渲染点开后的那几行用)。 */
+  defaultExpanded?: boolean;
 };
 
-function MessageRow({ message, busy, steering, wait, onSteer, onWithdraw, onCancel, onInspect, previewIndex, tasks, onSendNow }: {
-  message: ScheduledMessage;
-  /** 这一行自己的等待说明;跟抬头一样时为 null。 */
-  wait: string | null;
-  tasks?: TaskListItem[];
-  onSendNow?: TrayProps["onSendNow"];
-  busy: boolean;
-  steering: boolean;
-  onSteer?: TrayProps["onSteer"];
-  onWithdraw: TrayProps["onWithdraw"];
-  onCancel?: TrayProps["onCancel"];
-  onInspect?: () => void;
-  previewIndex?: number;
-}) {
-  const steerTip = useHoverTip();
-  const displayText = scheduledMessageText(message);
-  const label = displayText || (message.attachments.length ? `[${message.attachments.length} 个附件]` : "[空消息]");
-  const summary = scheduledMessageSummary(message) || label;
-  const queued = message.mode === "queued";
-  // 哨兵口径（脉冲图标、「取消这次唤醒」、「不执行停止哨兵操作」）只许落在真哨兵上，
-  // 判据与后端同源，见 scheduledMessageSource。
-  const source = scheduledMessageSource(message);
-  const fromMonitor = source === "monitor";
-  const exitCode = scheduledMessageExitCode(message);
-  const after = message.mode === "after"
-    ? sendAfterState(tasks ? tasks.find((task) => task.id === message.afterTaskId) : { title: "前置任务", status: "running", archived: false },
-      message.afterDoneAt)
-    : null;
-  const when = queued ? "排队中" : after ? after.label : formatInstant(message.sendAt);
-  return <div className="scheduled-message-row">
-    {previewIndex !== undefined && <span className="scheduled-message-position">{previewIndex + 1}</span>}
-    {fromMonitor ? <Pulse size={12} aria-hidden="true" />
-      : queued ? <Queue size={12} aria-hidden="true" /> : after ? <Hourglass size={12} aria-hidden="true" /> : <Clock size={12} aria-hidden="true" />}
-    {fromMonitor ? <em>哨兵</em>
-      : source === "managed" ? <em>审查答复</em> : source === "system" ? <em>系统</em> : queued ? <em>我的消息</em>
-        : after ? <em className={`scheduled-message-after${after.stuck ? " is-stuck" : ""}`}>{after.label}</em>
-        : <time dateTime={message.sendAt}>{formatInstant(message.sendAt)}</time>}
-    {message.agent && <span className="scheduled-message-agent">@{message.agent}</span>}
-    <b>{onInspect ? <button type="button" className="scheduled-message-inspect" onClick={onInspect} aria-label={`查看完整输入：${summary}`}>{summary}</button> : summary}</b>
-    {wait && <small className="scheduled-message-wait">{wait}</small>}
-    {previewIndex !== undefined && exitCode !== null && <span className={`scheduled-message-preview-exit${exitCode !== 0 ? " is-attention" : ""}`}>exit {exitCode}</span>}
-    {/* 出不出这颗键由服务端按引导的前置条件判(server/src/task-steer-gate.ts):任务不在执行回合、
-        不是最早一条自己的消息,点了都必然被拒,就不出现。 */}
-    {source === "mine" && message.steerable === true && onSteer && <><button type="button" className="scheduled-message-guide" disabled={busy}
-      aria-label={`用最早的排队消息“${displayText || "附件"}”引导会话`} onClick={() => { steerTip.hide(); onSteer(message.id); }} {...steerTip.anchorProps}>
-      {steering ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" /> : <ChatsCircle size={13} weight="duotone" aria-hidden="true" />}
-      <span>{steering ? "引导中" : "引导会话"}</span>
-    </button><HoverTip at={steerTip.at}>不等这一轮结束，把这条直接接进正在进行的对话</HoverTip></>}
-    {after?.stuck && source === "mine" && onSendNow && <button type="button" className="scheduled-message-guide scheduled-message-send-now" disabled={busy}
-      aria-label={`不再等前置任务，把“${displayText || "附件"}”直接发出`} onClick={() => onSendNow(message.id)}>
-      <PaperPlaneRight size={12} aria-hidden="true" /><span>直接发送</span>
-    </button>}
-    {fromMonitor ? onCancel && <button type="button" disabled={busy}
-      aria-label={`取消哨兵事件“${displayText}”这一次唤醒（仅移除本条输入，不执行停止哨兵操作）`} onClick={() => onCancel(message.id)}>
-      {busy ? <SpinnerGap size={12} className="is-spinning" /> : <X size={12} weight="bold" />}
-    </button> : source === "managed" ? <small className="scheduled-message-managed">审查会话的答复 · 由审查链投递</small>
-      : source === "system" ? <small className="scheduled-message-managed">由系统排入 · 不可撤回</small>
-      : <button type="button" className="scheduled-message-withdraw" disabled={busy}
-        aria-label={`撤回${when}的待发送消息“${displayText || "附件"}”，内容放回输入框`} onClick={() => onWithdraw(message)}>
-        {busy ? <SpinnerGap size={12} className="is-spinning" /> : <ArrowUUpLeft size={12} weight="bold" />}
-      </button>}
-  </div>;
-}
-
+/**
+ * 回复框上方那一行「排着 N 条」,点开是按发送顺序排的几行。收着的时候这一行上直接带着用户自己最早
+ * 那条(和它能引导时的「引导会话」),其余动作都在点开后的那一行行尾。
+ */
 export function ScheduledMessageTray(props: TrayProps) {
   const { messages, loading, error, cancelingIds, steeringIds, onSteer, onWithdraw, onCancel, tasks, onSendNow } = props;
-  const [expanded, setExpanded] = useState(false);
-  const [filter, setFilter] = useState<ScheduledMessageFilter>("all");
+  const [expanded, setExpanded] = useState(!!props.defaultExpanded);
   const [pendingCancel, setPendingCancel] = useState<string | null>(null);
-  const [revealId, setRevealId] = useState<string | null>(null);
-  const [readableIds, setReadableIds] = useState<ReadonlySet<string>>(() => new Set());
-  const trayRef = useRef<HTMLDivElement>(null);
+  // 点开后要滚到哪一条;focus=true 时连焦点一起交给它那一行的摘要。
+  const [reveal, setReveal] = useState<{ id: string; focus: boolean } | null>(null);
+  // 全文摊开着的那几条。新输入进来、别的离队都不动它们。
+  const [openIds, setOpenIds] = useState<ReadonlySet<string>>(() => new Set());
   const listRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const listId = useId();
+  const bodyIdPrefix = useId();
   const ordered = bySendTime(messages);
-  const previews = ordered.filter((message, index) => index < 2 || scheduledMessageSource(message) === "mine");
-  const counts = scheduledMessageCounts(ordered);
-  const pace = scheduledTrayPace(ordered);
+  const attention = ordered.filter(scheduledMessageNeedsAttention);
+  // 收着那一行带的「自己最早那条」:排在这一轮后面、下一个就发的那条(服务端判引导找的也是它,
+  // server/src/task-steer-gate.ts);定时 / 等前置任务的不按这个顺序发,没有排队的才轮到它们。
+  const mine = ordered.filter((message) => scheduledMessageSource(message) === "mine");
+  const head = mine.find((message) => message.mode === "queued") ?? mine[0];
   const hasMessages = ordered.length > 0;
   const open = hasMessages && expanded;
   const cancelMessage = ordered.find((message) => message.id === pendingCancel);
 
   useEffect(() => {
-    if (!hasMessages) {
-      setExpanded(false);
-    }
-    if (!hasMessages || ((filter === "managed" || filter === "system") && !counts[filter])) setFilter("all");
+    if (!hasMessages) setExpanded(false);
     if (!cancelMessage) setPendingCancel(null);
-  }, [hasMessages, filter, counts.managed, counts.system, cancelMessage]);
+  }, [hasMessages, cancelMessage]);
 
   useEffect(() => {
-    setReadableIds((current) => {
+    setOpenIds((current) => {
       const next = new Set([...current].filter((messageId) => messages.some((message) => message.id === messageId)));
       return next.size === current.size ? current : next;
     });
   }, [messages]);
 
   useLayoutEffect(() => {
-    if (!open || !revealId || !listRef.current) return;
+    if (!open || !reveal || !listRef.current) return;
     const list = listRef.current;
-    const details = [...list.querySelectorAll<HTMLDetailsElement>("details[data-message-id]")]
-      .find((element) => element.dataset.messageId === revealId);
-    if (details) {
-      setReadableIds((current) => new Set(current).add(revealId));
-      list.scrollTop += details.getBoundingClientRect().top - list.getBoundingClientRect().top;
-      details.querySelector("summary")?.focus({ preventScroll: true });
+    // 每一条是 display: contents,自己没有方框;量它那一行的摘要。
+    const summary = [...list.querySelectorAll<HTMLElement>("[data-message-id]")].find((element) => element.dataset.messageId === reveal.id)
+      ?.querySelector<HTMLButtonElement>(".scheduled-message-summary");
+    if (summary) {
+      list.scrollTop += summary.getBoundingClientRect().top - list.getBoundingClientRect().top;
+      if (reveal.focus) summary.focus({ preventScroll: true });
     }
-    setRevealId(null);
-  }, [open, revealId]);
+    setReveal(null);
+  }, [open, reveal]);
 
   if (!loading && !error && !messages.length) return null;
   const collapse = () => {
     setExpanded(false);
-    setFilter("all");
     toggleRef.current?.focus({ preventScroll: true });
   };
-  const inspect = (messageId: string) => {
-    setFilter("all");
+  const show = (messageId: string, options: { readable: boolean }) => {
+    if (options.readable) setOpenIds((current) => new Set(current).add(messageId));
     setExpanded(true);
-    setRevealId(messageId);
+    setReveal({ id: messageId, focus: true });
   };
-  const row = (message: ScheduledMessage, previewIndex?: number) => <MessageRow key={message.id} message={message} previewIndex={previewIndex}
-    busy={cancelingIds.has(message.id) || !!steeringIds?.has(message.id)} steering={!!steeringIds?.has(message.id)}
-    wait={scheduledRowWait(message, pace)} onSteer={onSteer} onWithdraw={onWithdraw} tasks={tasks} onSendNow={onSendNow}
-    onCancel={onCancel ? setPendingCancel : undefined} onInspect={previewIndex !== undefined ? () => inspect(message.id) : undefined} />;
-  const details = (message: ScheduledMessage) => <details className="scheduled-message-details" data-message-id={message.id}
-    open={readableIds.has(message.id)} onToggle={(event) => {
-      const visible = event.currentTarget.open;
-      setReadableIds((current) => {
-        if (current.has(message.id) === visible) return current;
-        const next = new Set(current);
-        if (visible) next.add(message.id); else next.delete(message.id);
-        return next;
-      });
-    }}><summary>查看完整输入</summary>
-    <div className="scheduled-message-body">{scheduledMessageText(message) || "[无文字内容]"}</div>
-    {message.attachments.length > 0 && <ul aria-label="消息附件">{message.attachments.map((path, index) => <li key={`${index}:${path}`}>{path}</li>)}</ul>}
-  </details>;
-  const filters: [ScheduledMessageFilter, string][] = [["all", "全部"], ["mine", "我的消息"], ["monitor", "哨兵"],
-    ...(counts.managed ? [["managed", "审查答复"] as [ScheduledMessageFilter, string]] : []),
-    ...(counts.system ? [["system", "系统"] as [ScheduledMessageFilter, string]] : []), ["attention", "需留意"]];
-  const timed = ordered.filter((message) => message.mode === "timed").length;
-  const after = ordered.filter((message) => message.mode === "after").length;
-  const sources = [counts.mine ? `我的消息 ${counts.mine}` : "", counts.monitor ? `哨兵 ${counts.monitor}` : "",
-    counts.managed ? `审查答复 ${counts.managed}` : "", counts.system ? `系统 ${counts.system}` : "",
-    timed ? `含 ${timed} 条定时` : "", after ? `含 ${after} 条等任务` : ""].filter(Boolean).join(" · ");
+  const toggleBody = (messageId: string) => setOpenIds((current) => {
+    const next = new Set(current);
+    if (next.has(messageId)) next.delete(messageId); else next.add(messageId);
+    return next;
+  });
+  const busy = (message: ScheduledMessage) => cancelingIds.has(message.id) || !!steeringIds?.has(message.id);
 
   return <>
-    <div ref={trayRef} className="scheduled-message-tray" aria-label="待发送消息" onKeyDown={(event) => {
+    <div className={`scheduled-message-tray${open ? " is-expanded" : ""}`} aria-label="待发送消息" onKeyDown={(event) => {
       if (event.key === "Escape" && open) {
         event.preventDefault();
         event.stopPropagation();
@@ -183,41 +101,30 @@ export function ScheduledMessageTray(props: TrayProps) {
     }}>
       {loading && !messages.length && <small>正在加载待发送消息…</small>}
       {error && <p role="alert">待发送消息：{error}</p>}
-      {hasMessages && <section className={`scheduled-message-card${open ? " is-expanded" : ""}${ordered.length > 1 ? " has-stack" : ""}`} aria-label="排队输入">
-        <header className="scheduled-message-summary">
-          <span className="scheduled-message-stack"><Stack size={15} aria-hidden="true" /></span>
-          <div className="scheduled-message-summary-copy"><strong>排队输入 <span>{ordered.length}</span></strong>
-            <small>{sources}{pace && <><span> · </span>{pace}</>}</small></div>
-          {counts.attention > 0 && <button type="button" className="scheduled-message-attention" onClick={() => {
-            setFilter("attention"); setExpanded(true);
-            if (listRef.current) listRef.current.scrollTop = 0;
-          }} aria-label={`查看 ${counts.attention} 条退出码非零的输入`}><Warning size={12} aria-hidden="true" />{counts.attention} 条需留意</button>}
-          <button ref={toggleRef} type="button" className="scheduled-message-toggle" aria-expanded={open} aria-controls={listId}
-            onClick={() => { if (open) collapse(); else { setFilter("all"); setExpanded(true); } }}>
-            {open ? "收起列表" : `展开全部 ${ordered.length} 条`}{open ? <CaretDown size={12} /> : <CaretUp size={12} />}
-          </button>
-        </header>
-        {open ? <div id={listId} className="scheduled-message-expanded">
-          <div className="scheduled-message-filters" role="group" aria-label="筛选待发送消息">{filters.map(([key, label]) => <button key={key}
-            type="button" aria-pressed={filter === key} onClick={() => { setFilter(key); if (listRef.current) listRef.current.scrollTop = 0; }}>
-            {label} <span>{counts[key]}</span></button>)}</div>
-          <div ref={listRef} className="scheduled-message-items" role="region" aria-label="排队输入完整列表" tabIndex={0}>
-            {ordered.filter((message) => scheduledMessageMatches(message, filter)).map((message) => {
-              const exitCode = scheduledMessageExitCode(message);
-              return <article className="scheduled-message-item" key={message.id}>
-                <div className="scheduled-message-item-meta"><span>#{ordered.indexOf(message) + 1}</span>
-                  {exitCode !== null && <span className={exitCode !== 0 ? "is-attention" : undefined}>exit {exitCode}</span>}</div>
-                {row(message)}
-                {details(message)}
-              </article>;
-            })}
-            {!ordered.some((message) => scheduledMessageMatches(message, filter)) && <p className="scheduled-message-empty">这个分类下没有待发送输入。</p>}
-          </div>
-          <footer className="scheduled-message-footer">按发送时间和入队顺序处理；筛选不改变顺序。</footer>
-        </div> : <div id={listId} className="scheduled-message-previews">{previews.map(message => row(message, ordered.indexOf(message)))}
-          {ordered.length > previews.length && <small>另有 {ordered.length - previews.length} 条系统输入已收起 · 按原顺序等待处理</small>}</div>}
-      </section>}
-      <span className="scheduled-message-announcement" role="status">{ordered.length} 条待发送消息{counts.attention > 0 && `，${counts.attention} 条需留意`}</span>
+      {hasMessages && <div className="scheduled-tray-line">
+        <button ref={toggleRef} type="button" className="scheduled-tray-toggle" aria-expanded={open} aria-controls={listId}
+          onClick={() => { if (open) collapse(); else setExpanded(true); }}>
+          {open ? <CaretDown size={11} weight="bold" aria-hidden="true" /> : <CaretRight size={11} weight="bold" aria-hidden="true" />}
+          排着 {ordered.length} 条
+        </button>
+        {attention.length > 0 && <button type="button" className="scheduled-tray-attention" aria-label={`查看 ${attention.length} 条退出码非零的输入`}
+          onClick={() => show(attention[0]!.id, { readable: false })}>{attention.length} 条要留意</button>}
+        {!open && head && <>
+          <span className="scheduled-tray-head">
+            <span className="scheduled-message-source">你</span>
+            <button type="button" className="scheduled-tray-head-summary" aria-label={`查看完整输入：${scheduledMessageLabel(head)}`}
+              onClick={() => show(head.id, { readable: true })}>{scheduledMessageLabel(head)}</button>
+          </span>
+          {head.steerable === true && onSteer && <SteerButton message={head} busy={busy(head)} steering={!!steeringIds?.has(head.id)} onSteer={onSteer} />}
+        </>}
+      </div>}
+      {open && <div ref={listRef} id={listId} className="scheduled-tray-list" role="region" aria-label="排队输入完整列表" tabIndex={0}>
+        {ordered.map((message) => <ScheduledMessageRow key={message.id} message={message} busy={busy(message)}
+          steering={!!steeringIds?.has(message.id)} open={openIds.has(message.id)} bodyId={`${bodyIdPrefix}-${message.id}`}
+          tasks={tasks} onToggle={() => toggleBody(message.id)} onSteer={onSteer} onWithdraw={onWithdraw}
+          onCancel={onCancel ? setPendingCancel : undefined} onSendNow={onSendNow} />)}
+      </div>}
+      <span className="scheduled-message-announcement" role="status">{ordered.length} 条待发送消息{attention.length > 0 && `，${attention.length} 条需留意`}</span>
     </div>
     {cancelMessage && onCancel && <ConfirmDialog title="取消这次唤醒？" message="仅移除这条待发送输入，不执行停止哨兵操作。"
       confirmLabel="取消这次唤醒" cancelLabel="保留输入" busy={cancelingIds.has(cancelMessage.id)} danger
