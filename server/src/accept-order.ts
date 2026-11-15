@@ -5,21 +5,18 @@
 // 旧的随后醒来照写，下次打开就成了上一次的选择。所以每个写请求**一到就取号**（第一个 await 之前），
 // 写的时候跟库里那一笔的号比：比它早到的不写。号和值在同一笔事务里读写，谁先抢到写锁都一样。
 //
-// 号是「到达时刻（微秒）」，同一微秒内顺延一位：重启之后照样比重启前的大（单实例，见 singleton.ts）。
+// 号是「到达时刻（微秒）」，同一微秒内顺延一位；启动时用库里已有的最大号垫底，时钟往回校再重启也不回头
+// （db/arrival-seq.ts；单实例，见 singleton.ts）。
 // 写入方只有两处，都经这里：确认层（accept-memory.ts）和设置页（project-routes.ts PATCH）。
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
+import { nextArrivalSeq } from "./db/arrival-seq.js";
 import { acceptCommitOrder, projects } from "./db/schema.js";
 
 export type OrderTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-let last = 0;
-
 /** 这个请求的到达序号。必须在 handler 的第一个 await 之前取：之后的先后已经由写锁说了算，不是到达顺序。 */
-export function arrivalSeq(): number {
-  last = Math.max(Date.now() * 1000, last + 1);
-  return last;
-}
+export const arrivalSeq = nextArrivalSeq;
 
 /**
  * 按到达顺序写项目的「合并后提交」。比库里那一笔早到的不写（返回 null，那个更新的选择留着）；

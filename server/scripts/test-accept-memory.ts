@@ -5,6 +5,7 @@
 //  · 「提交」那一勾就是项目设置：管理员确认时写回 projects.accept_commit(变了才推 project.updated)，
 //    没有管理权限就不写、回执说 commitSaved:false；别处刚改过也照写（不凭早先的快照省掉赋值）；
 //    看不见项目 403，项目不在 404，含糊的真值 400；
+//  · 升级：审查中间版本的旧表补 seq 列、记忆不丢；发号用库里最大号垫底，时钟往回校再重启也不回头；
 //  · 后到的确认算数：服务端卡住、浏览器已经放弃的旧确认晚做完，也盖不掉之后那次确认或设置页的改动；
 //  · 回合凭证写不动它(个人面写闸)；验收接口和别的入口不读它(只有门禁状态那条 GET 读)。
 //
@@ -23,7 +24,7 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 requireTmpDb("accept-memory");
 
-const [{ db, ensureSchema }, schema, memory, gateRoutes, { bus }, context, mode, store, visibility, personalGate, projectRoutes] = await Promise.all([
+const [{ db, dbClient, ensureSchema }, schema, memory, gateRoutes, { bus }, context, mode, store, visibility, personalGate, projectRoutes, arrival] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/accept-memory.js"),
@@ -35,10 +36,21 @@ const [{ db, ensureSchema }, schema, memory, gateRoutes, { bus }, context, mode,
   import("../src/auth/visibility.js"),
   import("../src/auth/personal-gate.js"),
   import("../src/project-routes.js"),
+  import("../src/db/arrival-seq.js"),
 ]);
 const { projects, tasks } = schema;
 type Actor = import("../src/auth/context.js").Actor;
 
+// 升级前的样子（第 3 轮审查 N1、N2）：审查中间版本建出的 accept_memory 没有 seq；accept_commit_order 里留着一个
+// 比现在的时钟还大的号（时钟往回校过、又重启了）。启动之后旧记忆原样在、能接着写，新确认也不会被那个大号挡掉。
+const future = Date.now() * 1000 + 10 ** 12;
+await dbClient.executeMultiple(`
+  CREATE TABLE accept_memory (owner TEXT NOT NULL, project_id TEXT NOT NULL,
+    skip_gate INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY (owner, project_id));
+  INSERT INTO accept_memory VALUES ('', 'p-old', 1, '2026-11-15T00:00:00.000Z');
+  CREATE TABLE accept_commit_order (project_id TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+  INSERT INTO accept_commit_order VALUES ('p-old', ${future});
+`);
 await ensureSchema();
 
 let actor: Actor = context.SINGLE_ACTOR;
@@ -74,6 +86,16 @@ await addTask("t1", "p1", "verified");
 await addTask("t2", "p1", null);
 await addTask("t3", "p1", "accepted");
 await addTask("u1", "p2", "verified");
+
+// ── 升级：补列不丢记忆，发号不回头 ─────────────────────────────────────────────────
+{
+  await db.insert(projects).values({ id: "p-old", name: "旧", repoPath: repo, createdAt: at });
+  assert.equal(await memory.rememberedSkipGate(context.SINGLE_ACTOR, "p-old"), true, "补了 seq 列，记住的那一份还在");
+  assert.ok(arrival.nextArrivalSeq() > future, "启动时用库里最大的号垫底");
+  const res = await remember("p-old", { skipGate: false, commit: false });
+  assert.deepEqual(res.body, { skipGate: false, commit: false, commitSaved: true }, "时钟回退过也照写：不被旧的大号挡掉");
+  assert.equal(await acceptCommitOf("p-old"), false);
+}
 
 // ── 「运行」那一勾：按项目记，随门禁状态带出去 ─────────────────────────────────────
 {

@@ -11,6 +11,7 @@
 // seq / accept_commit_order：两份记忆各带一个「这一笔是哪一次确认写的」的到达序号（accept-order.ts）。
 // 浏览器等不及放弃了请求，服务端那一下照样会做完；有了序号，晚做完的旧确认就盖不掉新的（第 2 轮审查 F1）。
 import { integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { seedArrivalSeq } from "./arrival-seq.js";
 import type { Client } from "./node-sqlite-client.js";
 
 export const acceptMemory = sqliteTable(
@@ -41,4 +42,12 @@ export async function ensureAcceptMemorySchema(client: Client): Promise<void> {
     );
     CREATE TABLE IF NOT EXISTS accept_commit_order (project_id TEXT PRIMARY KEY, seq INTEGER NOT NULL);
   `);
+  // 这张表的头两版没有 seq（只在本任务的审查版本上跑过）：先问再补，记住的选择原样留着，理由同 schema-task-reads.ts。
+  const columns = await client.execute("PRAGMA table_info(accept_memory);");
+  if (!columns.rows.some((row) => String((row as Record<string, unknown>).name) === "seq")) {
+    await client.executeMultiple("ALTER TABLE accept_memory ADD COLUMN seq INTEGER NOT NULL DEFAULT 0;");
+  }
+  const top = await client.execute(
+    "SELECT max(seq) AS seq FROM (SELECT seq FROM accept_memory UNION ALL SELECT seq FROM accept_commit_order);");
+  seedArrivalSeq(Number((top.rows[0] as Record<string, unknown> | undefined)?.seq ?? 0));
 }
