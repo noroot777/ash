@@ -1,5 +1,7 @@
 /* 产品画面：任务头 + 会话。尺寸和颜色照 web/src/styles 里会话那几份；回复框和浮层在 dock.css。 */
-.app { position: relative; display: flex; flex-direction: column; height: 740px; overflow: hidden; border-radius: 12px; background: var(--canvas); box-shadow: var(--control-shadow), lch(0 0 0 / 0.05) 0 12px 40px; font-size: 13px; line-height: 1.5; }
+.app { position: relative; display: flex; height: 740px; overflow: hidden; border-radius: 12px; background: var(--canvas); box-shadow: var(--control-shadow), lch(0 0 0 / 0.05) 0 12px 40px; font-size: 13px; line-height: 1.5; }
+
+.app-main { position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; }
 
 .task-head { position: relative; display: flex; flex: none; align-items: center; gap: 10px; height: 44px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--line); color: var(--faint); }
 .task-head b { flex: 1; min-width: 0; overflow: hidden; color: var(--ink); font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }

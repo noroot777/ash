@@ -5,6 +5,7 @@
   const Dock = window.Dock;
   const Sheet = window.Sheet;
   const Debate = window.Debate;
+  const Inspector = window.Inspector;
   const shot = (file, width, caption) => `<figure><img src="before/${file}.webp" width="${width}" alt="${esc(caption)}" loading="lazy"><figcaption>${esc(caption)}</figcaption></figure>`;
   const runLine = (label) => `<div class="run-line"><span class="run-dot"></span>${esc(label)}</div>`;
 
@@ -101,13 +102,17 @@
       return html;
     },
     drawer: (st) => Debate.drawer(st, segsFor(st.rounds), R.verdict),
+    inspector: (st) => Inspector.review(st, segsFor(st.rounds), R),
     dock: (st) => Dock.rule(st),
     sync: (st, value) => { st.note = value; },
     canSend: (st, value) => !!st.choice || !!value.trim(),
     act(name, data, st, api) {
       if (name === "choose") { st.choice = st.choice === data.kind ? null : data.kind; if (st.choice !== "debate") api.focus(); }
       if (name === "rounds") st.rounds = +data.n;
-      // 抽屉：两颗气泡的全文都在这里。从气泡上方那颗文档键、摊开后右上那颗键打开；点辩论概览里某一句，就停在那一段。
+      // 审查格：点出了结论的气泡打开，停在那一颗对应的那一段。
+      if (name === "inspect") { st.inspector = true; st.inspectAt = data.at; }
+      if (name === "inspect-close") st.inspector = false;
+      // 抽屉：全文都在这里。从气泡上方的文档键、审查格里那颗展开键打开；点辩论里某一句，就停在那一段。
       if (name === "drawer") { st.drawer = data.what; st.drawerAt = data.i != null ? +data.i : null; }
       if (name === "drawer-close") st.drawer = false;
       if (name === "quote") {
@@ -116,6 +121,8 @@
         st.note = st.note.trim() ? `${st.note.trimEnd()}\n\n${quoted}` : quoted;
         st.choice = "upheld";
         st.drawer = false;
+        // 窄屏上审查格盖着会话：引完就收起它，回复框才看得见。
+        if (window.matchMedia("(max-width: 760px)").matches) st.inspector = false;
         api.focus();
       }
       if (name === "send") {
@@ -140,12 +147,12 @@
       ["三个裁定确认框、框里的「要交代的话」", "选一种下一步，回复框就变成它：要交代的话写在框里，发送键换成「发起修复」这类字"],
       ["辩论确认框里的「辩几个来回」和那行说明", "选「让双方辩论」后，框里是 1 2 3 和「共几段」"],
       ["会话里的辩论折叠卡（木槌、七格进度、徽章）", "会话里的一颗气泡，和审查结论那颗同一种。辩的时候它在原地换字：谁、刚说的那一句；下面一行小灰字是此刻谁在说第几段"],
-      ["审查气泡和辩论气泡各有一套点法", "同一套：点气泡 = 在下面就地摊开轻的那一层（审查是这一轮的经过，辩论是每段一句的概览）；气泡上方浮出的那一行右端一颗文档键 = 右侧抽屉读全文（审查是报告，辩论是完整记录）；摊开后右上角还有同一颗带字的键"],
-      ["审查气泡：点它跳去右侧审查格；另有报告键（居中弹窗）和经过键", "点它就地摊开经过，和它还在审的时候一样；经过键因此不要了；报告键还在，全文从居中弹窗改到右侧抽屉。审查格本身不动，还是从右边那一排进"],
-      ["裁定卡里的辩论回放、全宽阅读层", "辩论的概览在气泡下面就地摊开；完整记录在右侧抽屉。点概览里某一句，抽屉就停在那一段"],
+      ["审查气泡和辩论气泡各有一套点法", "辩论照审查那颗来，审查那颗不动：点气泡 = 在右侧「审查」格里打开那一轮；指到气泡浮出的那一行右端，文档键读全文、列表键在气泡下面就地摊开；还在辩的时候点气泡是就地摊开"],
+      ["右侧「审查」格里的裁定卡和辩论回放", "「审查」格不改名、不另开一格：一轮下面依次是报告、驳回、辩论、裁定。辩论那一段是每段一句；裁定不在这里按，在回复框顶上"],
+      ["全宽阅读层、审查报告的居中弹窗", "同一个抽屉：从左边推出来，只盖住中间那一栏，右侧的审查格还在——和子智能体那个抽屉同一个位置。审查报告、辩论的完整记录都在这里读"],
       ["审查者收尾那段的自述立场", "辩完以后，气泡上写的就是它：「审查者收尾 · 部分成立」和那一句建议"],
-      ["每段上的「用这段作要点」", "概览和抽屉里都有：指到那一段才出的引号键，点了落进回复框并选中「让它接着改」"],
-      ["裁完之后", "气泡缩成一行小灰字「辩了 3 段，审查者收尾：部分成立」，概览和抽屉都还打得开；下面是你那一句裁定"],
+      ["每段上的「用这段作要点」", "就地摊开的、审查格里的、抽屉里的每一段都有：指到才出的引号键，点了落进回复框并选中「让它接着改」"],
+      ["裁完之后", "气泡缩成一行小灰字「辩了 3 段，审查者收尾：部分成立」，点它照样去审查格；下面是你那一句裁定"],
       ["「时间线上这一档记作…」那行小字", "去掉了；记录里的叫法只在审查记录里出现"],
     ],
   };

@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="dock.css">
   <link rel="stylesheet" href="sheet.css">
   <link rel="stylesheet" href="debate.css">
+  <link rel="stylesheet" href="inspector.css">
 </head>
 <body>
   <svg class="icon-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -35,6 +36,8 @@
     <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
     <symbol id="i-steer" viewBox="0 0 24 24"><path d="M4 6h11v8H9l-3 3v-3H4zM15 10h5v8h-2v3l-3-3h-4v-2"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.500" cy="6" r="1"/><circle cx="4.500" cy="12" r="1"/><circle cx="4.500" cy="18" r="1"/></symbol>
     <symbol id="i-redo" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 1 2.300 5.700M4 18v-4.500h4.500"/></symbol>
   </svg>
 
@@ -45,8 +48,8 @@
 
   <main class="page">
     <section class="intro">
-      <h1>等你拍板的事在回复框上；辩论是会话里的一颗气泡。</h1>
-      <p>第六版。它问你：答题卡定了，已派 Nk9PPhtTdRJf。等你裁定：几种下一步在回复框顶上；辩论是会话里的一颗气泡。审查结论和辩论这两颗气泡现在是同一套点法：点气泡，下面就地摊开轻的那一层（审查是这一轮的经过，辩论是每段一句）；气泡上方浮出的那一行右端一颗文档键，在右侧抽屉里读全文（审查报告、辩论的完整记录）。排着的输入已派 IEa3h1XX4Ax4。</p>
+      <h1>等你拍板的事在回复框上；辩论是会话里的一颗气泡，归在「审查」里。</h1>
+      <p>第七版。它问你：答题卡定了，已派 Nk9PPhtTdRJf。等你裁定：几种下一步在回复框顶上；辩论是会话里的一颗气泡，点法照审查者那颗——点它在右侧「审查」格里打开那一轮（辩论就是那一轮下面的一段，不另开一格），浮出那一行的文档键读全文、列表键就地摊开。读全文的抽屉从左边推出来，和子智能体那个同一个位置。排着的输入已派 IEa3h1XX4Ax4。</p>
     </section>
 
     <section class="controls" aria-label="演示开关">
@@ -80,6 +83,7 @@
   <script src="dock.js"></script>
   <script src="sheet.js"></script>
   <script src="debate.js"></script>
+  <script src="inspector.js"></script>
   <script src="scenes.js"></script>
   <script src="census.js"></script>
   <script src="app.js"></script>

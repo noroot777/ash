@@ -1,0 +1,52 @@
+/* 右侧的「审查」格，和从左边推出来读全文的抽屉。位置和手感照线上：列表和概览留在右边，全文盖住中间那一栏。 */
+
+/* —— 审查格：一轮下面依次是报告、驳回、辩论、裁定；段和段之间只有一条细线 —— */
+#inspector { display: flex; flex: none; }
+#inspector:empty { display: none; }
+.insp { display: flex; flex-direction: column; width: 320px; border-left: 1px solid var(--line); background: var(--canvas); animation: insp-in 200ms var(--ease-out) backwards; }
+@keyframes insp-in { from { opacity: 0; transform: translateX(12px); } }
+.insp-head { display: flex; flex: none; align-items: center; justify-content: space-between; height: 44px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--line); }
+.insp-head b { font-size: 14px; font-weight: 500; }
+.insp-round { display: flex; flex: none; align-items: baseline; gap: 8px; padding: 12px 16px 10px; font-size: 12px; }
+.insp-round b { font-size: 13px; font-weight: 500; }
+.insp-round span { flex: 1; min-width: 0; color: var(--muted); }
+.insp-round em { color: var(--red); font-style: normal; }
+.insp-body { position: relative; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 16px 20px; }
+.insp-part { padding: 10px 0 12px; border-top: 1px solid var(--line); }
+.insp-part > header { display: flex; align-items: center; min-height: 22px; margin-bottom: 2px; color: var(--muted); font-size: 12px; }
+.insp-part > header b { flex: 1; font-weight: 500; }
+.insp-part > header i { margin-left: 8px; color: var(--faint); font-style: normal; font-weight: 400; font-variant-numeric: tabular-nums; }
+.insp-part > p { margin: 4px 0 0; line-height: 1.7; }
+.insp-part > ol { margin: 6px 0 0; padding-left: 18px; line-height: 1.7; }
+.insp-part li::marker { color: var(--faint); }
+.insp .db-row { grid-template-columns: 40px minmax(0, 1fr) 22px; gap: 8px; }
+
+/* —— 抽屉：从左边推出来，只盖住中间那一栏；右侧的审查格照样看得见、点得着 —— */
+.drawer-scrim { position: absolute; z-index: 7; inset: 0; background: rgb(35 37 44 / 0.28); animation: scrim-in 260ms var(--ease-out) backwards; }
+@keyframes scrim-in { from { opacity: 0; } }
+.drawer { position: absolute; z-index: 8; top: 0; bottom: 0; left: 0; display: flex; flex-direction: column; width: min(680px, 78%); overflow: hidden; border-right: 1px solid var(--line2); border-radius: 0 12px 12px 0; background: var(--panel); box-shadow: lch(0 0 0 / 0.1) 16px 0 40px; animation: drawer-in 260ms var(--ease-out) backwards; }
+@keyframes drawer-in { from { transform: translateX(-100%); } }
+.drawer-head { display: flex; flex: none; align-items: center; gap: 8px; height: 38px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--line); background: var(--raised); font-size: 12px; }
+.drawer-head em { flex: none; padding: 1px 6px; border-radius: 4px; background: var(--panel); color: var(--muted); font-style: normal; font-weight: 500; }
+.drawer-head b { flex: 1; min-width: 0; overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.drawer-body { position: relative; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 24px 28px; }
+.dr-seg { padding: 16px 0 18px; }
+.dr-seg + .dr-seg { border-top: 1px solid var(--line); }
+.dr-seg.is-new { animation: arrive 260ms var(--ease-out) backwards; }
+.dr-seg header { display: flex; align-items: center; gap: 8px; min-height: 22px; color: var(--muted); font-size: 12px; }
+.dr-seg header b { color: var(--ink); font-size: 13px; font-weight: 500; }
+.dr-seg header .key { margin-left: auto; opacity: 0; transition: opacity var(--dur-1); }
+.dr-seg:is(:hover, :focus-within) header .key { opacity: 1; }
+.dr-seg p { margin: 8px 0 0; line-height: 1.8; overflow-wrap: anywhere; }
+.dr-seg .dr-gist { font-weight: 500; }
+.dr-seg .dr-live { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+
+@media (max-width: 760px) {
+  /* 窄屏放不下两栏：审查格盖在会话上面，抽屉再盖在它上面。 */
+  #inspector { position: absolute; z-index: 6; inset: 0; }
+  .insp { width: 100%; border-left: 0; }
+  .drawer { z-index: 9; width: 92%; }
+  .drawer-scrim { z-index: 8; }
+  .drawer-body { padding-left: 16px; padding-right: 16px; }
+}
+@media (hover: none) { .dr-seg header .key { opacity: 1; } }

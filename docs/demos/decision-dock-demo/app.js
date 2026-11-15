@@ -1,4 +1,4 @@
-// 开关、重画、点击分发。画面分三块重画（任务头的键、会话、回复框），会话的滚动位置因此不动。
+// 开关、重画、点击分发。画面分几块重画（任务头的键、会话、回复框、左侧抽屉、右侧审查格），会话的滚动位置因此不动。
 (() => {
   const { esc, icon } = window.P;
   const SCENES = window.SCENES;
@@ -32,13 +32,13 @@
   const headTools = () => `${scene().head ? scene().head(st) : `<span class="head-icon">${icon("dots")}</span>`}<span class="head-icon">${icon("panel")}</span>`;
 
   function frame(old) {
-    return `<div class="app" aria-label="任务界面预览">
+    return `<div class="app" aria-label="任务界面预览"><div class="app-main">
       <header class="task-head">${icon("file")}<b>${esc(scene().title(st))}</b><span class="task-head-tools" id="head-tools"></span></header>
       ${old ? old.top : ""}
       <div class="feed" id="feed"><div class="feed-col" id="feed-col"></div></div>
       <div class="reply" id="reply"></div>
       <div id="drawer"></div>
-    </div>${old && old.note ? `<p class="frame-note">${esc(old.note)}</p>` : ""}`;
+    </div><div id="inspector"></div></div>${old && old.note ? `<p class="frame-note">${esc(old.note)}</p>` : ""}`;
   }
 
   function paint() {
@@ -49,17 +49,20 @@
     const before = new Set([...stage.querySelectorAll("[data-anim]")].map((el) => el.dataset.anim));
     if (!stage.querySelector(".app") || old) stage.innerHTML = frame(old);
     const feed = document.getElementById("feed");
-    // 抽屉自己能滚：重画以后停在原处；点某一段打开的就停在那一段，来了新的一段跟到底。
-    const drawerTop = document.getElementById("drawer-body")?.scrollTop;
+    // 抽屉和审查格自己能滚：重画以后停在原处；点某一段打开的就停在那一段，来了新的一段跟到底。
+    const kept = ["drawer-body", "insp-body"].map((id) => [id, document.getElementById(id)?.scrollTop]);
     document.getElementById("head-tools").innerHTML = headTools();
     document.getElementById("feed-col").innerHTML = scene().feed(st, ui);
     document.getElementById("reply").innerHTML = old ? `${old.rail}${old.dock}` : scene().dock(st, ui);
     document.getElementById("drawer").innerHTML = !old && scene().drawer ? scene().drawer(st, ui) : "";
-    const drawerBody = document.getElementById("drawer-body");
-    if (drawerBody) {
-      const mark = drawerBody.querySelector("[data-scroll-here]");
-      drawerBody.scrollTop = mark ? mark.offsetTop : drawerBody.dataset.follow != null && st.freshSeg != null ? drawerBody.scrollHeight : drawerTop ?? 0;
-    }
+    document.getElementById("inspector").innerHTML = !old && scene().inspector ? scene().inspector(st, ui) : "";
+    kept.forEach(([id, top]) => {
+      const body = document.getElementById(id);
+      if (!body) return;
+      const mark = body.querySelector("[data-scroll-here]");
+      body.scrollTop = mark ? mark.offsetTop : body.dataset.follow != null && st.freshSeg != null ? body.scrollHeight : top ?? 0;
+    });
+    st.inspectAt = null;
     st.drawerAt = null;
     stage.querySelectorAll("[data-anim]").forEach((el) => { if (before.has(el.dataset.anim)) el.style.animation = "none"; });
     st.fresh = false;
@@ -124,7 +127,7 @@
     if (event.target.closest("a[href='#']")) event.preventDefault();
     const target = event.target.closest("[data-act]");
     if (target && !target.disabled) { act(target.dataset.act, target.dataset); return; }
-    if (!event.target.closest(".rb, .drawer") && scene().dismiss && scene().dismiss(st)) paint();
+    if (!event.target.closest(".rb, .drawer, .insp") && scene().dismiss && scene().dismiss(st)) paint();
   });
   stage.addEventListener("submit", (event) => event.preventDefault());
   stage.addEventListener("input", (event) => {
