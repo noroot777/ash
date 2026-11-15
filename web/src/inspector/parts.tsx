@@ -183,10 +183,12 @@ export const InspRecord = forwardRef<HTMLDivElement, {
   open: boolean;
   onToggle: () => void;
   label?: string;
+  /** 别处点过来停在这一条时的 `is-here`（亮一下）。 */
+  className?: string;
   children?: ReactNode;
-} & { "data-record"?: string }>(function InspRecord({ title, sub, status, tone = "plain", open, onToggle, label, children, ...rest }, ref) {
+} & { "data-record"?: string }>(function InspRecord({ title, sub, status, tone = "plain", open, onToggle, label, className, children, ...rest }, ref) {
   return (
-    <div ref={ref} className={`insp-rec${open ? " is-open" : ""}`} data-record={rest["data-record"]}>
+    <div ref={ref} className={`insp-rec${open ? " is-open" : ""}${className ? ` ${className}` : ""}`} data-record={rest["data-record"]}>
       <InspGo
         aria-expanded={open}
         aria-label={label}

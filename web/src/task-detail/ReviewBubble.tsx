@@ -116,7 +116,7 @@ export function ReviewBubble({
         <button
           type="button"
           className="review-verdict-text"
-          aria-label={onOpenRound ? `${view.text}，在右侧审查格里打开这一轮` : undefined}
+          aria-label={onOpenRound ? `${view.text}，在右侧审议格里打开这一轮` : undefined}
           aria-expanded={onOpenRound ? undefined : open}
           aria-controls={onOpenRound ? undefined : bodyId}
           onClick={() => (onOpenRound ? onOpenRound(laneReviewTarget(lane)) : toggle())}

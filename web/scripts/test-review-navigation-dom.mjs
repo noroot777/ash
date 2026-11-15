@@ -58,7 +58,7 @@ try {
 
   // ②' 认不出的两张：不发请求，在原处展开这一轮的经过。
   for (const name of ["legacy", "inline-in-free"]) {
-    assert.doesNotMatch(await milestone(name).getAttribute("aria-label") ?? "", /审查格/, `${name} 不说要去审查格`);
+    assert.doesNotMatch(await milestone(name).getAttribute("aria-label") ?? "", /审议格/, `${name} 不说要去审议格`);
     assert.equal(await milestone(name).getAttribute("aria-expanded"), "false", `${name} 是就地摊开的键`);
     await milestone(name).click();
     await page.locator(`[data-lane="${name}"] .review-verdict > .turn-footnote-lane`).waitFor();

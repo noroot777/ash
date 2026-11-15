@@ -1,5 +1,5 @@
 import type { ReactNode, RefObject } from "react";
-import type { AgentType, SkillEntry, Task, TaskListItem } from "@ash/shared";
+import type { AgentType, DiscussionRounds, SkillEntry, Task, TaskListItem } from "@ash/shared";
 import type { QuestionAnswerInput } from "@ash/shared/questions";
 import type { IconMenuItem } from "../components/IconMenu.tsx";
 import type { ReplyTaskResult } from "../lib/api.ts";
@@ -76,4 +76,11 @@ export type ReplyBoxProps = {
    * 不给 = 这里派不出去（团队执行者、审查任务），`@` 只剩问一句，框顶那一行不出。
    */
   onDispatch?: (input: { text: string; attachments: string[]; target: MentionTarget; worktreeBase: string | null }) => Promise<void>;
+  /**
+   * `@` 了人之后的「讨论」：叫上的人（`people`，一到两个）和这条任务的执行器来回几段（replyDiscuss.ts）。失败就抛，
+   * 框里的人、轮数和字都留着。不给 = 这里开不了讨论（团队执行者、审查任务、预设工作流的任务）。
+   */
+  onDiscuss?: (input: { topic: string; attachments: string[]; rounds: DiscussionRounds; people: MentionTarget[] }) => Promise<void>;
+  /** 此刻开不了讨论的原因（任务正在跑…），指到「开始讨论」上说；null = 能开。 */
+  discussHeld?: string | null;
 };

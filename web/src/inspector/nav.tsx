@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState } from "react";
 
 /**
  * 面板里的东西要「切到别的格」时用的那条线：信息格里那行改动统计点了去「改动」，工作流里
- * 一行审查点了去「审查」并展开那一轮。宿主（InspectorHost）把自己的 openTab 放进来，
+ * 一行审查点了去「审议」并展开那一轮。宿主（InspectorHost）把自己的 openTab 放进来，
  * 面板里任意深度的组件都拿得到，不用一层层往下传回调。
  *
  * `request` 是这次打开要带给那一格的话（比如 `{ round: 3 }`：展开第 3 轮）。它只说一次：

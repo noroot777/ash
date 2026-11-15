@@ -1,7 +1,7 @@
 import { Fragment, memo, useMemo, useRef, useState, type ReactNode } from "react";
 import { File, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
-import type { FreeReviewRun } from "@ash/shared";
+import type { FreeReviewRun, TaskDiscussion } from "@ash/shared";
 import type { TaskCreationOrigin } from "@ash/shared/task-origin";
 import type { ConversationItem, ConversationSource } from "./conversationModel.ts";
 import { conversationTailKey } from "./conversationModel.ts";
@@ -19,8 +19,10 @@ import { runActivityCopy, runActivityPhase, runActivityTail } from "@ash/shared/
 import { MessageAttachments } from "./Attachments.tsx";
 import { conversationFeedRows, reviewLaneMessageRoles, type ReviewLaneMessageRole } from "./conversationReviewLanes.ts";
 import { conversationDebateRows } from "./conversationDebateRows.ts";
+import { conversationDiscussionRows } from "./conversationDiscussionRows.ts";
 import { conversationSystemRows, laneReceipts, laneTailFootnote, type ConversationFootnoteRow, type TurnReceipt } from "./conversationSystemRows.ts";
 import { DebateBubble } from "./DebateBubble.tsx";
+import { DiscussionBubble } from "./DiscussionBubble.tsx";
 import { laneRoundOpener } from "./reviewLaneLinks.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import { reviewPanelSources, reviewTargetLocatable, type ReviewTarget } from "../review/reviewTarget.ts";
@@ -294,6 +296,7 @@ export function ConversationFeed({
   onForkReply,
   onAskSideChat,
   reviews,
+  discussions,
   onOpenReviewPanel,
   onOpenTask,
   reviewRetry,
@@ -323,6 +326,8 @@ export function ConversationFeed({
   onAskSideChat?: (quote: string) => void;
   /** 自由派审的落盘记录：折叠卡靠它反查报告的 runId（旁注里只有轮号）。 */
   reviews?: readonly FreeReviewRun[] | null;
+  /** 这条任务上的讨论（落盘记录）：一场折成一颗讨论气泡，靠它配。 */
+  discussions?: readonly TaskDiscussion[] | null;
   /**
    * 打开右侧审查格的那一轮：会话里那颗审查结论 / 辩论气泡被点了。不给（只读的会话视图、团队时间线
    * 都没有那块面板）就在气泡下面就地摊开，不给一颗点了没反应的键。
@@ -400,7 +405,7 @@ export function ConversationFeed({
   const history = useQuestionHistory(task.id, questionHistory, liveQuestionHistory);
   const onScreen = questionsOnScreen(task, history.records);
   const { rows, receipts, footnotes } = conversationSystemRows(
-    conversationDebateRows(feedRows, { reviews }),
+    conversationDiscussionRows(conversationDebateRows(feedRows, { reviews }), { discussions }),
     { failures: crashed, context: noticeContext, causes, held: actions.held, onScreen },
   );
   // 一轮审查里（审查者气泡下面摊开的那一轮、记录里点开的那一轮）的旁注同样记在审查者
@@ -564,6 +569,17 @@ export function ConversationFeed({
                   onOpenRound={onOpenReviewPanel && target && reviewTargetLocatable({ source: "free", ...target }, panelSources) ? onOpenReviewPanel : undefined}
                   fallback={row.items.map((item) => renderItem(item, true))}
                 />
+              );
+            }
+            if (row.kind === "discussion-lane") {
+              const topic = row.discussion?.topic;
+              return (
+                <Fragment key={row.id}>
+                  {topic && <UserBubble id={`${row.id}:topic`} author="你" text={topic} attachments={[]} at={row.discussion!.startedAt} />}
+                  <DiscussionBubble row={row} task={task} fallback={row.items.map((item) => renderItem(item, true))}
+                    onOpen={onOpenReviewPanel && panelSources.has("free")
+                      ? (discussionId) => onOpenReviewPanel({ source: "free", runId: null, round: null, discussionId }) : undefined} />
+                </Fragment>
               );
             }
             // 收了口的审查轮不在这里（它是上面那一行审查结论）；走到这里的是还没出结论的那一轮。

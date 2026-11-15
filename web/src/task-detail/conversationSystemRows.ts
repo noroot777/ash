@@ -326,8 +326,8 @@ export function conversationSystemRows(
   type Grouped = ConversationDebateFeedRow | ConversationSystemActionRow;
   const display = attach<Grouped>(groupConflictHandoffs(rows.filter((row) => row.kind !== "item" || shown(row.item, options.onScreen))), {
     turnIdOf: (row) => row.kind === "item" && row.item.kind === "agent" ? row.item.id : null,
-    // 辩论分段；还没出结论的那一轮审查不分（它收口以后就是被审那一回合后面那一行结论）。
-    breaksSegment: (row) => row.kind === "debate-lane" || row.kind === "system-action" || (row.kind === "item" && row.item.kind === "user"),
+    // 辩论、讨论分段；还没出结论的那一轮审查不分（它收口以后就是被审那一回合后面那一行结论）。
+    breaksSegment: (row) => row.kind === "debate-lane" || row.kind === "discussion-lane" || row.kind === "system-action" || (row.kind === "item" && row.item.kind === "user"),
     eventOf: (row) => row.kind === "item" && row.item.kind === "event" ? row.item : null,
     laneOf: (row) => row.kind === "review-lane" && row.complete ? row : null,
     pendingLaneOf: (row) => row.kind === "review-lane" && !row.complete,

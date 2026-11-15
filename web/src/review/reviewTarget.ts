@@ -9,11 +9,24 @@ import type { InspectorRequest } from "../inspector/nav.tsx";
 
 export type ReviewTargetSource = "inline" | "free" | "merge";
 
-/** `debateId`：会话里那颗辩论气泡点过来，打开那一轮之后停在它的辩论那一段。 */
-export type ReviewTarget = { source: ReviewTargetSource; runId: string | null; round: number | null; debateId?: string | null };
+/**
+ * `debateId`：会话里那颗辩论气泡点过来，打开那一轮之后停在它的辩论那一段。
+ * `discussionId`：会话里那颗讨论气泡点过来，「审议」格里打开那一场讨论（不是哪一轮审查，runId/round 为空）。
+ */
+export type ReviewTarget = {
+  source: ReviewTargetSource;
+  runId: string | null;
+  round: number | null;
+  debateId?: string | null;
+  discussionId?: string | null;
+};
 
 export function reviewTargetRequest(target: ReviewTarget): InspectorRequest {
-  return { source: target.source, runId: target.runId, round: target.round, ...(target.debateId ? { debateId: target.debateId } : {}) };
+  return {
+    source: target.source, runId: target.runId, round: target.round,
+    ...(target.debateId ? { debateId: target.debateId } : {}),
+    ...(target.discussionId ? { discussionId: target.discussionId } : {}),
+  };
 }
 
 /**
