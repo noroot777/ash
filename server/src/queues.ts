@@ -89,16 +89,16 @@ async function assertSameGroup(queueId: string, candidateTaskId?: string): Promi
 // 承诺是假的(审查真实复现:两个独立 running 任务入同队后仍同时运行)。口径与
 // selectNextInQueue 同源:archived 与 team 成员不算,状态过 queueStatus(终态
 // 任务的续聊回合按终态看)。返回「在跑」成员的 id,调用方按 >1 拒绝。
-// 写入口用的完整口径:库里在跑的,加上这次要入队、正在以独立任务身份起跑的那几条(库里还是
-// backlog/paused,只有内存看得见,见 queue-claim-chain.ts)。既有成员不看内存:它们的起跑在链上
-// 落 queued,库里看得见;再看回合锁反而会把终态续聊这种不占队列的回合误算成在跑。
-function inFlightOnJoin<T extends Parameters<typeof runningMembers>[0][number]>(members: T[], joining: T[]): string[] {
-  const running = new Set(runningMembers([...members, ...joining]));
-  for (const t of joining) {
-    if (!t.archived && t.mode !== "team" && startingOutsideQueue(t.id)) running.add(t.id);
-  }
-  return [...running];
+// 写入口用:这次要入队的任务里,哪几条正以独立任务身份起跑 —— 库里还是 backlog/paused,只有内存
+// 看得见(queue-claim-chain.ts)。这种一律不放进队列:队列推进只读库,放进去它就是一条 backlog,
+// 排在它前面的照样会被拉起来。已经落成 running 的不在此列,按下面 runningMembers 的口径算。
+function startingOnJoin(joining: { id: string; status: string; archived: boolean; mode: string | null }[]): string[] {
+  return joining
+    .filter((t) => !t.archived && t.mode !== "team" && t.status !== "running" && t.status !== "queued")
+    .filter((t) => startingOutsideQueue(t.id))
+    .map((t) => t.id);
 }
+const STARTING_HINT = "正在起跑，等它跑起来再排进队列";
 
 export function runningMembers(
   rows: { id: string; status: string; archived: boolean; mode: string | null; followUpFrom?: string | null }[],
@@ -418,7 +418,8 @@ export function mountQueueRoutes(api: Hono): void {
         .select()
         .from(tasks)
         .where(inArray(tasks.id, items.map((i) => i.taskId)));
-      const running = inFlightOnJoin(memberRows, [tr]);
+      if (startingOnJoin([tr]).length) return c.json({ error: `task ${taskId} ${STARTING_HINT}` }, 409);
+      const running = runningMembers([...memberRows, tr]);
       if (running.length > 1) {
         return c.json({ error: `同一条队列最多只能有一个在跑的成员,这些任务都在运行: ${running.join(", ")}` }, 409);
       }
@@ -506,7 +507,9 @@ export function mountQueueRoutes(api: Hono): void {
         );
       }
       // 双跑防线(同 insert 端点):两个在跑的任务捆成一队,先后顺序是假的。
-      const running = inFlightOnJoin([], rows);
+      const starting = startingOnJoin(rows);
+      if (starting.length) return c.json({ error: `这些 task ${STARTING_HINT}: ${starting.join(", ")}` }, 409);
+      const running = runningMembers(rows);
       if (running.length > 1) {
         return c.json({ error: `同一条队列最多只能有一个在跑的成员,这些任务都在运行: ${running.join(", ")}` }, 409);
       }

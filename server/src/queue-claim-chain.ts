@@ -14,7 +14,7 @@
 //
 // 独立成一个小模块（只依赖回合锁）：queues.ts（写方）和 queue-seat.ts（认领方）互相引用，链放在
 // 任何一边都会让另一边背上一条循环 import。
-import { holdsRealTurn } from "./turn-lock.js";
+import { claimedSince, isTurnClaimed, turnClaimWatermark } from "./turn-lock.js";
 
 let chain: Promise<unknown> = Promise.resolve();
 
@@ -25,30 +25,44 @@ export function serializeQueueClaims<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
-// ── 不在队列的那一类起跑:库里看不见,写方得看内存 ─────────────────────────────────────
-// 队列成员的起跑在链上落 queued 占位,写方读库就看得见。独立任务没有同队语义,认领在「不在
-// 队列」那一支直接放行、不落占位(queue-seat.ts claimQueueSeat),从放行到状态落 running 之间
-// 库里还是 backlog/paused —— 写方按库判就会把一条正在起跑的任务插进有人在跑的队列。
-// 这段时间里能证明「它正在起」的只有两样:
-//   · 起跑那一轮占着的回合锁(/run、/fire、/retry、定时、重跑上一回合都是先占锁再认领,一直
-//     占到起跑落定之后;别的起跑方式也都在跑之前占上它);
-//   · 回复、答复、消息补投是认领放行之后才去占锁,中间那一拍只有这里记的一笔。
-// 那一笔自己有界(SOLO_ADMIT_GRACE_MS):正常几毫秒内就被回合锁接走,放行后没起成的也不会让
-// 它永远进不了队列;进程重启一并清空。
-const SOLO_ADMIT_GRACE_MS = 5_000;
-const soloAdmits = new Map<string, number>();
+// ── 不在队列的那一类起跑:库里看不见,只能看内存 ─────────────────────────────────────
+// 队列成员的起跑在链上落 queued 占位,写方和调度器读库都看得见。独立任务的起跑不落占位
+// (queue-seat.ts claimQueueSeat 不在队列那一支):它要是先落 queued,编排器就认不出「paused
+// 检查点上的追问」,一句「怎么样了」会被当成执行回合吞掉检查点(orchestrator.ts
+// checkpointFollowUp)。于是从放行到状态落 running 之间,库里还是 backlog/paused。
+//
+// 这段时间里的事实只有内存知道,而调度器不读内存 —— 所以写方对这种任务**一律不放进队列**
+// (不是「算一个在跑、不超过一个就行」:放进去之后队列推进看它是 backlog,照样起它前面那条)。
+// 等它落成 running,库里看得见了,再按常规口径入队。
+//
+// 「正在起跑」由两样组成,都有明确的终点,不靠时限:
+//   · 回合锁被占着:先占锁再认领的入口(/run、/fire、/retry、定时、重跑上一回合)一直占到起跑
+//     落定之后;别的起跑方式也都在跑之前占上它;
+//   · 认领放行、锁还没占上的那一拍(回复、答复、消息补投是先认领后占锁):放行时记一笔,
+//     **这之后任何人占上这个任务的回合锁**就由回合锁接手、这一笔作废;起跑没成、锁一次都没
+//     占上的,认领方交回的那份占位 release() 时撤掉。进程重启一并清空,删任务时一并忘掉。
+const soloStarts = new Map<string, number>();
 
-/** claimQueueSeat 在临界区里放行一个不在队列的任务时记一笔。 */
-export function noteSoloAdmit(taskId: string): void {
-  soloAdmits.set(taskId, Date.now());
+/** claimQueueSeat 在临界区里放行一个不在队列的任务时记一笔;返回撤掉这一笔的函数(只撤自己这一笔)。 */
+export function noteSoloStart(taskId: string): () => void {
+  const watermark = turnClaimWatermark();
+  soloStarts.set(taskId, watermark);
+  return () => {
+    if (soloStarts.get(taskId) === watermark) soloStarts.delete(taskId);
+  };
 }
 
-/** 写方在链上问:这条(还不在队列里的)任务此刻是不是正在起跑。 */
+/** 任务删了就不再记(task-delete-routes.ts)。 */
+export function forgetSoloStart(taskId: string): void {
+  soloStarts.delete(taskId);
+}
+
+/** 写方在链上问:这条库里还是 backlog/paused 的任务,此刻是不是正在起跑。 */
 export function startingOutsideQueue(taskId: string): boolean {
-  if (holdsRealTurn(taskId)) return true;
-  const at = soloAdmits.get(taskId);
-  if (at === undefined) return false;
-  if (Date.now() - at < SOLO_ADMIT_GRACE_MS) return true;
-  soloAdmits.delete(taskId);
+  if (isTurnClaimed(taskId)) return true;
+  const watermark = soloStarts.get(taskId);
+  if (watermark === undefined) return false;
+  if (!claimedSince(taskId, watermark)) return true;
+  soloStarts.delete(taskId);
   return false;
 }

@@ -344,9 +344,12 @@ export async function createTasks(
       admitted();
     }
   };
+  const pinned: typeof normalizedRows = [];
+  const unpin = async () => {
+    for (const row of pinned) await exec("git", ["-C", expandHome(repoByProject.get(row.projectId)), "update-ref", "-d", baseRef(row.id), row.worktreeStartCommit!]).catch(() => {});
+  };
   const insertAdmitted = async (): Promise<void> => {
     await beforeInsert?.();
-    const pinned: typeof normalizedRows = [];
     try {
       for (const row of normalizedRows) {
         const hadStart = !!row.worktreeStartCommit;
@@ -355,12 +358,20 @@ export async function createTasks(
       }
       await db.insert(tasks).values(normalizedRows);
     } catch (error) {
-      for (const row of pinned) await exec("git", ["-C", expandHome(repoByProject.get(row.projectId)), "update-ref", "-d", baseRef(row.id), row.worktreeStartCommit!]).catch(() => {});
+      await unpin();
       throw error;
     }
   };
   await insert(0);
-  await afterInsert?.();
+  try {
+    await afterInsert?.();
+  } catch (error) {
+    // 挂靠那一步被拒(比如串到的队列在链上重验已不合法):这几行还没发过 task.created,
+    // 谁也没见过它们,原样撤掉,别留下一条「创建失败」却真实存在的任务。
+    await db.delete(tasks).where(inArray(tasks.id, normalizedRows.map((r) => r.id)));
+    await unpin();
+    throw error;
+  }
   const persisted = await db
     .select()
     .from(tasks)

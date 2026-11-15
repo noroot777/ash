@@ -10,6 +10,7 @@ import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { projects, queueItems, tasks } from "./db/schema.js";
 import { serializeQueueClaims } from "./queue-claim-chain.js";
+import { QueueJoinRefused, appendToQueue, groupMoveRefusal } from "./queue-membership-guard.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { detectTaskWorkspace } from "./workspace-cleanup.js";
 import { allFollowUpsOf, followUpsFor } from "./task-follow-up.js";
@@ -384,17 +385,14 @@ api.post("/tasks", async (c) => {
   }
   let created: Task | undefined;
   try {
-    // 串进队尾是归属写方(queue-claim-chain.ts):队尾位置在链上现算,进门时读到的长度
-    // 隔着建任务的整段 await 早已过期,并发的重排会把按旧长度插进来的这一条抹掉。
+    // 上面那几句只是早点拒:隔着建任务的整段 await,队列可能已经没了、成员可能换了组,
+    // 串进队尾时在链上重验一遍(queue-membership-guard.ts),不合法就连刚建的任务一起撤掉。
     const queueId = b.appendToQueue;
     [created] = await createTasks([row], queueId
-      ? () => serializeQueueClaims(async () => {
-          const tail = await db.select({ taskId: queueItems.taskId }).from(queueItems).where(eq(queueItems.queueId, queueId));
-          await db.insert(queueItems).values({ taskId, queueId, position: tail.length, createdAt: ts });
-        })
+      ? () => appendToQueue(queueId, { id: taskId, projectId: row.projectId, groupId: row.groupId ?? null }, ts)
       : undefined, undefined, [b.reviewOf]);
   } catch (error) {
-    if (error instanceof CliCommandValidationError) return c.json({ error: error.message }, 400);
+    if (error instanceof CliCommandValidationError || error instanceof QueueJoinRefused) return c.json({ error: error.message }, 400);
     // 上面那一句只是早点拒；真正关住窗口的是落库那一下（createTasks 占着「加成员」的位，team-admission.ts）。
     if (error instanceof TeamAcceptingError) return c.json({ error: error.message, parentId: b.parentId ?? null, reviewOf: b.reviewOf ?? null }, 409);
     throw error;
@@ -645,9 +643,16 @@ api.patch("/tasks/:id", async (c) => {
     return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再改状态", status: existing.status }, 409);
   }
   try {
-    // 改 groupId 是分组归属写方,与起跑认领排同一条链(queue-claim-chain.ts)。
+    // 改 groupId 是分组归属写方:在起跑认领那条链上按此刻的库重验能不能改,再写(queue-membership-guard.ts)。
     const write = () => db.update(tasks).set(patch).where(updateWhere).returning({ id: tasks.id });
-    const written = await ("groupId" in patch ? serializeQueueClaims(write) : write());
+    const moved = "groupId" in patch
+      ? await serializeQueueClaims(async () => {
+        const refused = await groupMoveRefusal(tid, (patch.groupId as string | null) ?? null);
+        return refused ? { refused } : { written: await write() };
+      })
+      : { written: await write() };
+    if ("refused" in moved) return c.json({ error: moved.refused, groupId: existing.groupId }, 409);
+    const written = moved.written;
     if (!written.length) return c.json({ error: "任务或发起回合已经变化，PATCH 未写入" }, 409);
     // Status goes through the shared helper so manual changes maintain the run-time
     // columns (startedAt/endedAt) and broadcast them just like a real run does.

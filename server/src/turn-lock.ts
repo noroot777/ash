@@ -168,22 +168,14 @@ export const ACCEPT_HOLD_ROLE = "accept-hold";
  * 还写成「所在分组已暂停」——分组其实早恢复了（第 3 轮审查稳定复现）。
  */
 export function freezeStartingTurn(taskId: string, settle: StopSettle = "paused", hold?: StartFreeze["hold"]): boolean {
-  if (!holdsRealTurn(taskId)) return false;
+  const role = turns.get(taskId)?.role;
+  if (role === undefined || role === WORKSPACE_TURN_ROLE || role === WAKE_TURN_ROLE) return false;
+  if (role === RECONCILE_TURN_ROLE) return false; // 残留结算也不是回合,理由同上
+  if (role === SEAT_ROLLBACK_ROLE) return false; // 占位回滚也不是回合,理由同上
+  if (role === ACCEPT_HOLD_ROLE) return false; // 团队验收的占位也不是回合,理由同上
   startFreeze.set(taskId, hold ? { settle, hold } : { settle });
   return true;
 }
-
-/**
- * 锁上占着的是不是**一个回合**(有 agent 在起或在跑)。SCM、调度台唤醒、残留结算、占位回滚、
- * 团队验收这几种预占都不是,理由各写在它们的常量上。
- */
-export function holdsRealTurn(taskId: string): boolean {
-  const role = turns.get(taskId)?.role;
-  return role !== undefined && !NON_TURN_ROLES.has(role);
-}
-const NON_TURN_ROLES: ReadonlySet<string> = new Set([
-  WORKSPACE_TURN_ROLE, WAKE_TURN_ROLE, RECONCILE_TURN_ROLE, SEAT_ROLLBACK_ROLE, ACCEPT_HOLD_ROLE,
-]);
 
 /** 起跑前的最后一道闸消费它：非 null = 这一轮必须在 spawn 之前撤回，并按这个落位结算。 */
 export function takeStartFreeze(taskId: string): StopSettle | null {
@@ -208,8 +200,22 @@ export function claimOwnTurn(taskId: string, role = "single", review: TurnReview
   if (turns.has(taskId)) return null;
   const identity: TurnIdentity = { role, review, token: null, claimedAt: Date.now(), seq: nextTurnSeq++ };
   turns.set(taskId, identity);
+  lastClaimSeq.set(taskId, identity.seq);
   return identity;
 }
+
+/**
+ * 「从某一刻起,这个任务有没有人占过回合锁」。`turnClaimWatermark()` 记下那一刻,之后拿它问
+ * `claimedSince`:号码全进程单调,所以比大小就够了。给只活在内存里、要知道「起跑已经被一把
+ * 回合锁接手了没有」的记账用(queue-claim-chain.ts 的起跑中标记)。
+ */
+export function turnClaimWatermark(): number {
+  return nextTurnSeq;
+}
+export function claimedSince(taskId: string, watermark: number): boolean {
+  return (lastClaimSeq.get(taskId) ?? -1) >= watermark;
+}
+const lastClaimSeq = new Map<string, number>();
 
 /**
  * 这个任务在本进程里**真正起过几轮**(每写一次 `active_turn_token` 记一笔,见 `bindTurnToken`)。
@@ -227,6 +233,7 @@ const turnStarts = new Map<string, number>();
 /** 任务删了就不再记（task-delete-routes.ts）：还排着的请求轮到时读不到行，本来就不起。 */
 export function forgetTurnStarts(taskId: string): void {
   turnStarts.delete(taskId);
+  lastClaimSeq.delete(taskId);
 }
 
 /** 同 `claimOwnTurn`,但排队之后(`turnStartsOf` 读到 `seen` 之后)它已经起过一轮就不占、返回 null。 */

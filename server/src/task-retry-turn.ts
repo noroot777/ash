@@ -551,7 +551,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       // 执行型重投也照样占:只看「有原话可重投」就豁免,`/goal resume` 会绕过队列跟同队成员
       // 一起跑(本任务第 1 轮审查 F1,已实测)。
       if (retryTurnIsExecution(kind, resend)) {
-        const claim = await claimQueueSeat(taskId);
+        const claim = await claimQueueSeat(taskId, { turnHeld: turn });
         if (!claim.ok) {
           return c.json(await noted(taskId, action, { error: queueClaimError(claim), blockedBy: claim.blockers }), 409);
         }
