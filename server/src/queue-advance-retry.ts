@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
-import { groups, tasks } from "./db/schema.js";
+import { tasks } from "./db/schema.js";
+import { taskHoldOf } from "./task-hold.js";
 import { id } from "./util.js";
 import { freezeStartingTurn, stopTask } from "./runs.js";
 import { writeGuardedTaskStatus } from "./status.js";
@@ -42,10 +43,8 @@ export async function requestQueueAdvance(queueId: string, candidate: Task): Pro
   return db.transaction(async (transaction) => {
     const [task] = await transaction.select().from(tasks).where(eq(tasks.id, candidate.id));
     if (!task || task.archived || ["done", "failed", "canceled"].includes(task.status)) return null;
-    if (task.groupId) {
-      const [group] = await transaction.select().from(groups).where(eq(groups.id, task.groupId));
-      if (group?.paused) return null;
-    }
+    // 分组暂停、或上面派活的那条按了「全部停下」:不落请求(停的那一刻已经作废过一遍,见 task-hold.ts)。
+    if (await taskHoldOf(task, transaction)) return null;
     const previous = task.queueAdvanceRequest;
     const request = previous?.queueId === queueId && previous.resumePromptGeneration === task.resumePromptGeneration
       ? previous : { id: id(), queueId, resumePromptGeneration: task.resumePromptGeneration, prevStatus: candidate.status };

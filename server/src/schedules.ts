@@ -4,7 +4,8 @@ import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { claimOwnTurn, releaseTurn } from "./runs.js";
 import { seatThenStart } from "./queue-seat.js";
-import { schedules, tasks, groups } from "./db/schema.js";
+import { schedules, tasks } from "./db/schema.js";
+import { taskHoldOf } from "./task-hold.js";
 import { runTask } from "./orchestrator.js";
 import { runDuet } from "./duet/index.js";
 import { deliverPendingMessages, reclaimStaleDeliveries } from "./pending-messages.js";
@@ -81,10 +82,8 @@ async function fire(taskId: string): Promise<boolean> {
   // Respect a paused group: a pause means "halt this group", so the scheduler
   // must not sneak a group member past it. The task fires on the next due tick
   // once the group is resumed.
-  if (t.groupId) {
-    const g = (await db.select().from(groups).where(eq(groups.id, t.groupId))).at(0);
-    if (g?.paused) return false;
-  }
+  // 派它的那条（往上整条链）按了「全部停下」同理（task-hold.ts）。
+  if (await taskHoldOf(t)) return false;
   // 原子占位后启动:只读预检查在任何 await 之后都可能过期,占到才算这一班真的开跑
   // (审查实测:验收/turn 窗口里 once 被永久消费)。占位后再查验收锁——与验收侧
   // beginAccepting→isTurnClaimed 互为镜像,任意交错至少一方退避;退避不消费班次,

@@ -23,6 +23,7 @@ import { forgetTaskRecordSeq } from "./session-seq.js";
 import { withRepoLock } from "./repo-lock.js";
 import { reclaimDeletedTaskDisk } from "./run-dir-reclaim.js";
 import { now } from "./util.js";
+import { dispatchTree } from "./dispatch-hold.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 
 // 删一个任务:关联状态 + 任务行本身,**一个出口、一个原子批**。自由审查链(run/round)、预约槽、
@@ -103,6 +104,9 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     ? (await db.select({ taskId: queueItems.taskId }).from(queueItems).where(eq(queueItems.queueId, queue.queueId)))
       .map((m) => m.taskId).filter((id) => id !== taskId)
     : [];
+  // 它按着「全部停下」的话,名下那几条从此不再被按住(停着的标记跟这一行一起没了):托盘要跟着改口。
+  const heldTree = (await db.select({ holdAt: tasks.dispatchHoldAt }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.holdAt
+    ? await dispatchTree(taskId) : [];
   await db.batch([
     // 已经等到的先锁存,删了就再也查不到它完成过 —— **跟删行同一批**:这一刻之前登记的都在,
     // 之后的登记在同一个 batch 里就看不到这个前置、落不下来(pending-after.ts 文件头)。
@@ -140,6 +144,8 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     // 团队派活自建的内部组（groups.owner_task_id=本任务）：GET /groups 默认过滤掉它们，
     // 留下来就是永远不可见也没入口清理的孤儿（审查实测：删 lead 后两个内部组原样保留）。
     db.delete(groups).where(eq(groups.ownerTaskId, taskId)),
+    // 它按着「全部停下」时欠下的起跑:原地留着、不替用户兑现(dispatch-hold.ts 文件头)。
+    db.update(tasks).set({ holdOwedBy: null }).where(eq(tasks.holdOwedBy, taskId)),
     db.delete(tasks).where(eq(tasks.id, taskId)),
     // 磁盘清理的责任**跟删行同一批**落下（run-dir-reclaim.ts）：任务没了就一定有人接着收目录。
     db.insert(taskDiskCleanups).values({ taskId, createdAt: now() }).onConflictDoNothing(),
@@ -152,7 +158,7 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   // 同理：这个任务各条会话发到第几号（session-seq.ts）也不必再记。
   forgetTaskRecordSeq(taskId);
   for (const waiter of waiters) publishPendingMessages(waiter.taskId);
-  void republishWaitsOf(queueMates).catch((err) => console.error(`[ash] 删除 ${taskId} 后通知同队托盘失败:`, err));
+  void republishWaitsOf([...queueMates, ...heldTree]).catch((err) => console.error(`[ash] 删除 ${taskId} 后通知同队托盘失败:`, err));
 }
 
 // 删除任务。`worktree=1` / `branch=1` 表示用户在确认框里勾了「连 worktree 和分支

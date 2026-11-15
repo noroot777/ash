@@ -66,6 +66,7 @@ import { checkpointStartBlock, preparePendingCheckpointStart } from "./pending-c
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { readableRunPath, sessionTranscriptPath } from "./transcript.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
+import { dispatchHoldOf, dispatchHoldText, type DispatchHold } from "./task-hold.js";
 
 // 分档往回读会话正文，理由同 `task-follow-up.ts`：正文是一路追加的 Markdown，可能几 MB，
 // 而要找的那一段就在末尾附近；agent 一条回复动辄几十 KB，固定尾巴长度不够用。
@@ -173,6 +174,8 @@ export type RetryTurnFacts = {
   blockedBy?: QueueBlocker[];
   /** 所在分组被暂停（`scheduler.ts` 同样拒绝拉起暂停组的成员）。 */
   groupPaused?: boolean;
+  /** 上面派活的那条按了「全部停下」（task-hold.ts，同分组暂停一样不许从这里插队开跑）。 */
+  dispatchHold?: DispatchHold | null;
   /**
    * 上一回合那条 profile 后来被删了（missing）／被改过（changed）。
    * 判据是会话行里存的**环境指纹**，不是主键（见 `executors/index.ts` 的 profileDrift）。
@@ -324,6 +327,10 @@ export function retryTurnRejection(facts: RetryTurnFacts): RetryTurnRejection | 
   }
   if (facts.checkpointBlock) return { error: facts.checkpointBlock, detail: { checkpoint: true } };
   if (facts.groupPaused) return { error: "所在分组已暂停，先恢复分组再重试", detail: { groupPaused: true } };
+  if (facts.dispatchHold) {
+    return { error: `${dispatchHoldText(facts.dispatchHold)}，先到那一条里接着跑再重试`,
+      detail: { heldBy: facts.dispatchHold.byTaskId, heldByTitle: facts.dispatchHold.byTitle } };
+  }
   // 同 /run：任务的执行回合（续跑档、执行型重投），同队有人在执行、或前面还有没让位的，就
   // 不该抢跑 —— 少了这道闸，队里任务上的重试按钮就成了插队入口。其余不是执行：审查档是旁路
   // 回合（派审本来就不查队列），普通重投是终态任务的续聊（手打同一句话发出去也不受队列限制，
@@ -406,6 +413,7 @@ export async function readRetryTurnFacts(
       resend,
       blockedBy: retryTurnIsExecution(kind, resend) ? await queueBlockerDetails(taskId) : [],
       groupPaused: !!group?.paused,
+      dispatchHold: await dispatchHoldOf(taskId),
       checkpointBlock: await checkpointStartBlock(taskId),
       // 老会话行没记指纹（null）时返回 null = 无从核对，按老行为放行。
       profileDrift: latest ? await profileDrift(latest.executorId, latest.executorFingerprint) : null,

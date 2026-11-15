@@ -249,6 +249,12 @@ export const tasks = sqliteTable("tasks", {
   // 派它的那条任务：普通任务里（智能体经 MCP、或用户从回复框）派出去的独立任务。只管「收在谁名下」，
   // 不是 parentId —— 那一列是团队执行者，带着共用目录、跟团队一起验收的整套语义（见 task-dispatch.ts）。
   dispatchedBy: text("dispatched_by"),
+  // 这一条名下（dispatchedBy 整棵往下）全部停着：用户在「派出的任务」格头按了「全部停下」的那一刻。
+  // 空 = 没停。判据与停/续的手法见 dispatch-hold.ts。
+  dispatchHoldAt: text("dispatch_hold_at"),
+  // 这一条欠一次起跑，记的是按住它的那条任务：被「全部停下」停掉的、停着期间轮到却被拦下的。
+  // 「接着跑」只兑现这些，停之前就停着的不碰（dispatch-hold.ts）。
+  holdOwedBy: text("hold_owed_by"),
   // 检查点续跑：agent 调 pause_task 时填进来；下次 resume 时取出喂给 CLI 会话并清空。
   resumePrompt: text("resume_prompt"),
   /**

@@ -16,10 +16,11 @@ import { waitForStartReceipt } from "./task-start-receipt.js";
 import { reportGroupStartFailure } from "./group-start-failure.js";
 import { clearQueueAdvanceIntent, recordQueueAdvanceIntent, refuseQueueAdvance } from "./queue-advance-admission.js";
 import { heldByMonitors, withMonitorHolds, type QueueRow } from "./queue-monitor-hold.js";
+import { currentPauseGeneration, notePauseOfGroup, pausedSince } from "./pause-generation.js";
+import { taskHoldOf } from "./task-hold.js";
+import { oweHeldStart } from "./dispatch-hold-owed.js";
 
 const MAX_PARALLEL = 4;
-let pauseGeneration = 0;
-const groupPauses = new Map<string, number>();
 type QueueAdvanceAttempt = {
   request?: QueueAdvanceRequest;
   candidate?: { taskId: string; generation: number };
@@ -40,7 +41,7 @@ export async function pauseGroup(groupId: string): Promise<void> {
     await transaction.update(groups).set({ paused: true }).where(eq(groups.id, groupId));
     await transaction.update(tasks).set({ queueAdvanceRequest: null }).where(eq(tasks.groupId, groupId));
   }, { behavior: "immediate" });
-  groupPauses.set(groupId, ++pauseGeneration);
+  notePauseOfGroup(groupId);
   // 没有成员在跑时暂停只改了 groups.paused,不会有任何任务换状态:托盘的等待说明得单独通知。
   void import("./pending-wait.js").then(({ republishGroupWaits }) => republishGroupWaits(groupId))
     .catch((err) => console.error(`[ash] republishGroupWaits(${groupId}) failed:`, err));
@@ -101,7 +102,7 @@ export async function advanceQueue(queueId: string, request?: QueueAdvanceReques
   // 一次正常返回,而责任只活在这个进程的内存里(第 1 轮审查 F2 跨进程实测:同库两笔持久
   // 写入一起失败,推进责任彻底蒸发;准入口径见 queue-advance-admission.ts)。
   const intent = await recordQueueAdvanceIntent(queueId);
-  const attempt: QueueAdvanceAttempt = { request, pauseGeneration };
+  const attempt: QueueAdvanceAttempt = { request, pauseGeneration: currentPauseGeneration() };
   const done = await retryableQueueAdvance(queueId, attempt, intent);
   if (intent || done.ok) return;
   // 候选是临界区里挑出来的,挑到了才知道该把这句话写给谁(没挑到就只剩日志与抛出)。
@@ -166,13 +167,13 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
       && task.resumePromptGeneration === attempt.candidate!.generation)) {
       attempt.candidate = undefined;
     }
-    if (candidate?.groupId && (groupPauses.get(candidate.groupId) ?? 0) > attempt.pauseGeneration) return "paused";
+    if (candidate && pausedSince(candidate, attempt.pauseGeneration)) return "paused";
     if (request) {
       const target = rows.find((task) => task.id === request.taskId);
       if (!target || target.queueAdvanceRequest?.id !== request.id
         || target.resumePromptGeneration !== request.resumePromptGeneration || target.archived
         || ["done", "failed", "canceled"].includes(target.status) || target.question || hasCliGoalHold(target.cliState)
-        || target.monitorHold || (target.groupId && await isPaused(target.groupId))) {
+        || target.monitorHold || await taskHoldOf(target)) {
         await clearQueueAdvance(request);
         return "paused";
       }
@@ -198,7 +199,13 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
     // 检查放在这里而不是各调用方 —— 建队列/插入/重排/移除/终态钩子全走本函数,
     // 任何一个入口漏检都会撤销用户的暂停意图(第 1 轮审查实测:暂停组里入队,
     // 前驱当场被拉起)。成员同组是本文件的不变量,看 next 的 groupId 就够。
-    if (candidate.groupId && (await isPaused(candidate.groupId))) return "paused";
+    // 上面那条派活的任务按了「全部停下」同理(task-hold.ts):不起它、也不越过它,记一笔欠账,
+    // 「接着跑」时由那边兑现(dispatch-hold.ts)。
+    const hold = await taskHoldOf(candidate);
+    if (hold) {
+      if (hold.kind === "dispatch") await oweHeldStart(candidate.id, hold.byTaskId);
+      return "paused";
+    }
     attempt.candidate ??= { taskId: candidate.id, generation: candidate.resumePromptGeneration };
     const advanceRequest = request ?? await requestQueueAdvance(queueId, candidate);
     if (!advanceRequest) return "paused";
@@ -580,6 +587,12 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
         if (await preparePendingCheckpointStart(taskId)) return;
         const before = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
         if (!before || (before.status === "paused" && (before.resumePrompt || await heldByMonitors(taskId)))) return;
+        // 分组没停、这一位却被上面派活的那条按住了:不起,记欠账(同队列推进那一处)。
+        const hold = await taskHoldOf(before);
+        if (hold) {
+          if (hold.kind === "dispatch") await oweHeldStart(taskId, hold.byTaskId);
+          return;
+        }
         const owner = claimOwnTurn(taskId);
         if (!owner) return;
         const reservation = taskQueueReservation(before);

@@ -17,13 +17,17 @@
 
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { groups, tasks } from "./db/schema.js";
-import { markStopped, takeStartFreeze } from "./runs.js";
+import { tasks } from "./db/schema.js";
+import { markStopped, takeStartFreezeDetail } from "./runs.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
+import { dispatchHoldText, taskHoldOf } from "./task-hold.js";
+import { oweHeldStart } from "./dispatch-hold-owed.js";
 
 export type TurnFreeze = { reason: string } & (
   | { source: "stop"; settle: "canceled"; overrideRestorable: true }
   | { source: "group-pause"; settle: "paused"; overrideRestorable: false }
+  // 上面派活的那条按了「全部停下」(task-hold.ts):手法同分组暂停,另记一笔欠账等「接着跑」兑现。
+  | { source: "dispatch-hold"; settle: "paused"; overrideRestorable: false; byTaskId: string }
   | { source: "archive" | "delete"; settle: "canceled"; overrideRestorable: false }
 );
 
@@ -50,12 +54,10 @@ export async function freezeFacts(taskId: string, checkFacts = false): Promise<T
     .where(eq(tasks.id, taskId))).at(0);
   if (!task) return { reason: "任务已删除", source: "delete", settle: "canceled", overrideRestorable: false };
   if (task.archived) return { reason: "任务已归档", source: "archive", settle: "canceled", overrideRestorable: false };
-  if (task.groupId) {
-    const group = (await db
-      .select({ paused: groups.paused })
-      .from(groups)
-      .where(eq(groups.id, task.groupId))).at(0);
-    if (group?.paused) return { reason: "所在分组已暂停", source: "group-pause", settle: "paused", overrideRestorable: false };
+  const hold = await taskHoldOf({ id: taskId, groupId: task.groupId });
+  if (hold?.kind === "group") return { reason: "所在分组已暂停", source: "group-pause", settle: "paused", overrideRestorable: false };
+  if (hold?.kind === "dispatch") {
+    return { reason: dispatchHoldText(hold), source: "dispatch-hold", settle: "paused", overrideRestorable: false, byTaskId: hold.byTaskId };
   }
   return null;
 }
@@ -68,11 +70,13 @@ export async function freezeFacts(taskId: string, checkFacts = false): Promise<T
  * 之后收到的停止就会既杀不到也拦不住),而查库的那半边事实只能在它之前的 await 里取。
  */
 export function takeFreeze(taskId: string, facts: TurnFreeze | null = null): TurnFreeze | null {
-  const marked = takeStartFreeze(taskId);
+  const marked = takeStartFreezeDetail(taskId);
   if (marked) {
-    return marked === "canceled"
-      ? { reason: "这一轮已被停止", source: "stop", settle: marked, overrideRestorable: true }
-      : { reason: "所在分组已暂停", source: "group-pause", settle: marked, overrideRestorable: false };
+    if (marked.settle === "canceled") return { reason: "这一轮已被停止", source: "stop", settle: "canceled", overrideRestorable: true };
+    if (marked.hold) {
+      return { reason: dispatchHoldText(marked.hold), source: "dispatch-hold", settle: "paused", overrideRestorable: false, byTaskId: marked.hold.byTaskId };
+    }
+    return { reason: "所在分组已暂停", source: "group-pause", settle: "paused", overrideRestorable: false };
   }
   return facts;
 }
@@ -92,6 +96,7 @@ export async function abortFrozen(
   opts: { restorable?: boolean } = {},
 ): Promise<never> {
   await appendTaskTimeline(taskId, alertLine(`这一轮在启动前被撤回：${freeze.reason}。`)).catch(() => false);
+  if (freeze.source === "dispatch-hold") await oweHeldStart(taskId, freeze.byTaskId);
   if (!opts.restorable || freeze.overrideRestorable) markStopped(taskId, freeze.settle);
   throw new FrozenTurn(freeze.reason);
 }

@@ -47,6 +47,7 @@ import { handMonitorResultsOnPause, pauseHandedNote } from "./monitor-turn-hando
 import { receiptHands } from "./monitor-turn-ack.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { failureVersionOf } from "./task-result-version.js";
+import { agentRunHold } from "./dispatch-hold-routes.js";
 
 // 手动启动入口的队列认领失败话术(/run、/fire、/retry、重跑上一回合共用,
 // 本体在 queue-seat.ts 的 queueClaimError:transient 故障必须说真话)。
@@ -102,6 +103,10 @@ api.post("/tasks/:id/run", async (c) => {
   // 队列挡路：判据见 task-action-verdicts.ts 的 runVerdict，界面上那颗「运行 / 继续」读同一份。
   const verdict = runVerdict(await readActionFacts(r));
   if (!verdict.ok) return refuse(c, taskId, "运行", verdict);
+  // 智能体调 run_task 起一条被按住的任务（派它的那条按了「全部停下」）：不起，记欠账，「接着跑」
+  // 时兑现（task-hold.ts）。用户自己点「运行」照旧放行 —— 同分组暂停，那是人显式要它跑。
+  const agentHold = await agentRunHold(c, r);
+  if (agentHold) return c.json(await noted(taskId, "运行", agentHold), 409);
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
   // Fire-and-forget; progress streams over /api/events.

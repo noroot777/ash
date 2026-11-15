@@ -54,7 +54,7 @@ async function resumeOrRunClaimedTask(taskId: string,
   // 唯一可靠的是 spawn 前按持久事实复查(turn-freeze.ts 的 checkFacts);手动运行/重试
   // 是用户显式动作,照旧不加闸。
   const freezeGuard =
-    opts.reason === "queue" || opts.reason === "group" || opts.reason === "wake" ? true : undefined;
+    opts.reason === "queue" || opts.reason === "group" || opts.reason === "wake" || opts.reason === "hold" ? true : undefined;
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || task.mode !== "single") return runTask(taskId, { turnHeld: opts.turnHeld, freezeGuard, actingUserId: acting }); // duets/missing → unchanged path
   // 检查点续跑：resumePrompt 当 user 消息回灌同一会话，先清空避免再次 settle 时又认成

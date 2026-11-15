@@ -34,7 +34,8 @@ import { and, eq, isNull } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
-import { groups, queueItems, tasks } from "./db/schema.js";
+import { queueItems, tasks } from "./db/schema.js";
+import { taskHoldOf } from "./task-hold.js";
 import { now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -110,10 +111,8 @@ async function releaseIfOwed(taskId: string, queueId: string): Promise<void> {
     return;
   }
   if (!task.monitorHoldAt) return;
-  if (task.groupId) {
-    const group = (await db.select({ paused: groups.paused }).from(groups).where(eq(groups.id, task.groupId))).at(0);
-    if (group?.paused) return;
-  }
+  // 分组暂停 / 名下全部停下:不补推(放开之后 tick 的扫描会再走到这里)。
+  if (await taskHoldOf(task)) return;
   const { advanceQueue, pickNextLaunchable } = await import("./scheduler.js");
   if ((await pickNextLaunchable(queueId))?.id !== taskId) return;
   await advanceQueue(queueId);

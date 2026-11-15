@@ -111,7 +111,9 @@ const afterTurn = new Map<string, Array<() => void>>();
 // `tasks.status` 也可能还停在上一轮的终态 —— 只有回合锁看得见它，所以分组暂停既杀不到
 // 也拦不住（第 1 轮审查 finding 1：pause 已经 200 返回，重试仍把 CLI 拉起来了）。
 // 记在这里，由起跑前的最后一道闸在 spawn 之前消费（turn-freeze.ts）。
-const startFreeze = new Map<string, StopSettle>();
+// 「名下全部停下」打下的标记另带是谁按的（dispatch-hold.ts），撤回时那一句要指得到那条任务。
+type StartFreeze = { settle: StopSettle; hold?: { byTaskId: string; byTitle: string } };
+const startFreeze = new Map<string, StartFreeze>();
 
 /**
  * SCM 面板占住工作区时写进 `turns` 的身份。它**不是一个回合**：没有 agent、没有 spawn、
@@ -165,18 +167,23 @@ export const ACCEPT_HOLD_ROLE = "accept-hold";
  * 真回合的东西），标记会活到下一次真启动，把一次正常的「运行」莫名撤回成 paused，时间线
  * 还写成「所在分组已暂停」——分组其实早恢复了（第 3 轮审查稳定复现）。
  */
-export function freezeStartingTurn(taskId: string, settle: StopSettle = "paused"): boolean {
+export function freezeStartingTurn(taskId: string, settle: StopSettle = "paused", hold?: StartFreeze["hold"]): boolean {
   const role = turns.get(taskId)?.role;
   if (role === undefined || role === WORKSPACE_TURN_ROLE || role === WAKE_TURN_ROLE) return false;
   if (role === RECONCILE_TURN_ROLE) return false; // 残留结算也不是回合,理由同上
   if (role === SEAT_ROLLBACK_ROLE) return false; // 占位回滚也不是回合,理由同上
   if (role === ACCEPT_HOLD_ROLE) return false; // 团队验收的占位也不是回合,理由同上
-  startFreeze.set(taskId, settle);
+  startFreeze.set(taskId, hold ? { settle, hold } : { settle });
   return true;
 }
 
 /** 起跑前的最后一道闸消费它：非 null = 这一轮必须在 spawn 之前撤回，并按这个落位结算。 */
 export function takeStartFreeze(taskId: string): StopSettle | null {
+  return takeStartFreezeDetail(taskId)?.settle ?? null;
+}
+
+/** 同上，连「是谁按的」一起交出来（turn-freeze.ts 写撤回那一句用）。 */
+export function takeStartFreezeDetail(taskId: string): StartFreeze | null {
   const s = startFreeze.get(taskId) ?? null;
   startFreeze.delete(taskId);
   return s;
