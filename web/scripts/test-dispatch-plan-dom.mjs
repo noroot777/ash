@@ -23,7 +23,13 @@ try {
     status: 200, contentType: "application/json",
     body: new URL(route.request().url()).pathname.endsWith("/agents") ? JSON.stringify(PROFILES) : "[]",
   }));
+  // vite 冷启动时（没有预构建缓存）会在页面开着的时候补做依赖预构建、再整页重载，重载前那一页会报一句
+  // React 重复实例的错。先开一次让它把依赖备齐，重开之后清掉那段的报错再开始断言。
   await page.goto(`${web.origin}/scripts/fixtures/dispatch-plan.html`);
+  await page.locator(".question-card.dispatch-plan").waitFor().catch(() => {});
+  await page.waitForLoadState("networkidle");
+  await page.reload();
+  failures.length = 0;
 
   const card = page.locator(".question-card.dispatch-plan");
   const send = card.locator(".question-card-send");
@@ -34,8 +40,8 @@ try {
   const handed = async () => JSON.parse(await page.getByLabel("交出去的东西").innerText());
   const reset = async () => { await page.reload(); await card.waitFor(); };
 
-  // 卡停在回复框那一格，展开时平常那个框不出现：全页一处输入、一颗发送键。
   await card.waitFor();
+  // 卡停在回复框那一格，展开时平常那个框不出现：全页一处输入、一颗发送键。
   assert.equal(await page.locator(".task-reply-shell > .question-dock > .dispatch-plan").count(), 1);
   assert.equal(await replyBox.isVisible(), false);
   assert.equal(await page.locator("textarea:visible").count(), 1, "全页只有一处打字的地方");
