@@ -25,15 +25,17 @@ export function useComposerDraft(
   const key = composerDraftKey(projectId);
   const draft = useDraft(seed?.fork ? `${key}:fork:${seed.fork.sourceTaskId}:${seed.fork.replyId}` : key);
   const seeded = useRef<ComposerDraft | null>(null);
-  const { setAttachments, setNoteIds, setText } = draft;
+  const { disownSubmission, setAttachments, setNoteIds, setText } = draft;
   useEffect(() => {
     if (!seed || seeded.current === seed) return;
     seeded.current = seed;
+    // 并进来的是另一件事：在途那次提交的结果回来时不再认这份草稿（不清它、不往上挂待重发的那条）。
+    disownSubmission();
     setText((current) => joinDraftText(seed.body, current));
     setAttachments((current) => mergeAttachments(attachmentsFromPaths(seed.attachments), current));
     const noteIds = seed.noteIds ?? [];
     if (noteIds.length) setNoteIds((current) => [...new Set([...current, ...noteIds])]);
     if (!seed.fork) onSeeded?.();
-  }, [onSeeded, seed, setAttachments, setNoteIds, setText]);
+  }, [disownSubmission, onSeeded, seed, setAttachments, setNoteIds, setText]);
   return draft;
 }

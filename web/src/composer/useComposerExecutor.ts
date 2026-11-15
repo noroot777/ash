@@ -22,7 +22,7 @@ export function useComposerExecutor({ draft, profiles, profilesReady, types }: {
 }) {
   const stored = draft.executor;
   const createdTask = draft.created?.task ?? null;
-  // 没选过就用默认的那个；注册表读回来之后再拉回「当下真的能选」的（纯计算，不写回草稿）。
+  // 没选过就用默认的那个；注册表读回来之后再拉回「当下真的能选」的（纯计算，不写回草稿）。profilesReady 只认读成功。
   const chosen = useMemo<ComposerExecutorConfig>(() => {
     const base = stored ? { single: stored } : initialComposerExecutors(emptyComposerExecutorConfigs(), profiles);
     return (profilesReady ? reconcileComposerExecutors(base, { profiles, types }) : base).single;
@@ -32,7 +32,10 @@ export function useComposerExecutor({ draft, profiles, profilesReady, types }: {
     model: createdTask.model ?? "",
     effort: createdTask.reasoningEffort ?? "",
   } : chosen), [chosen, createdTask]);
-  const selection = parseExecutorValue(config.profile, profiles, { agentType: "claude", executorId: null });
+  // 已建好的那条：是谁就是谁，直接取它存着的，不拿注册表反查——注册表读不到、那个执行器后来删了，它也还是它。
+  const selection = createdTask
+    ? { agentType: createdTask.agentType ?? "claude", executorId: createdTask.executorId ?? null }
+    : parseExecutorValue(config.profile, profiles, { agentType: "claude", executorId: null });
   const run = {
     agentType: selection.agentType,
     executorId: selection.executorId,

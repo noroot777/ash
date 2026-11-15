@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentExecutorProfile, AgentType } from "@ash/shared";
 import { CaretDown } from "@phosphor-icons/react";
 import { AgentIcon } from "./AgentIcon.tsx";
@@ -88,6 +88,10 @@ export function RunTargetPicker({
 }) {
   const [open, setOpen] = useState<"agent" | "model" | "effort" | null>(null);
   const [modelAgent, setModelAgent] = useState<AgentType | null>(null);
+  // 被禁用时（比如新建框里任务已建好、胶囊锁住了）已经开着的那一段也收起，留着就还能改。
+  useEffect(() => {
+    if (disabled) setOpen(null);
+  }, [disabled]);
   const agentRef = useRef<HTMLButtonElement>(null);
   const modelRef = useRef<HTMLButtonElement>(null);
   const providers = useProviders();

@@ -2,7 +2,6 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -23,7 +22,7 @@ import type { ComposerExecutorConfig } from "../composer/executorOverrides.ts";
 // Draft 对象是**不可变**的:updateDraft 对任何实际变化都返回新对象、没变化保留原
 // 对象引用(见下方判等)。对象引用因此可以当「这份草稿的版本标识」用——异步收尾
 // 拿提交时刻的引用对比此刻的,引用相同 ⇔ 期间任何字段(正文、附件、在途上传、
-// 回链、截图)都没动过,改过又改回也算动过。clearIfUnchanged 靠这一点做原子的
+// 回链、截图)都没动过,改过又改回也算动过。settleSubmission 靠这一点和提交戳做原子的
 // 归属裁决。
 export type Draft = {
   screenshot?: ScreenshotDraft | null;
@@ -55,7 +54,8 @@ export type Draft = {
   // 再按一次只对它重发这一下，不再建一条（composer/settleCreatedTask.ts）。
   created?: ComposerCreated | null;
   // 新建任务框专用：最近一次提交盖的戳（stampSubmission）。异步结果回来时凭它认这份草稿还是不是自己那一份：
-  // 中途清空过、换成了另一件事，戳就没了或换了，迟到的结果不许挂上来（attachCreated）。
+  // 中途清空过、换成了另一件事（含随手记转任务并进来一份），戳就没了或换了，迟到的结果——成功也好失败也好——
+  // 都不许动它（settleSubmission）。
   submission?: string | null;
 };
 
@@ -87,12 +87,13 @@ export const composerDraftKey = (projectId: string) => `composer:${projectId}`;
 export function DraftProvider({ children }: { children: ReactNode }) {
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   // 异步提交的收尾(发送/创建完成)读「此刻」的草稿,不能用发起那一刻的闭包值:
-  // 组件可能早已卸载、草稿可能已被后来打开的面板改写。ref 镜像给 readDraft 用。
+  // 组件可能早已卸载、草稿可能已被后来打开的面板改写。ref 是权威的那一份:每次改动当场算好
+  // 写进 ref 再交给 React 渲染,所以 readDraft 和「判定 + 改写」读到的永远是最新的,不会落在
+  // setState 与 effect 同步之间的那个窗口里(那里读到旧值,归属就会判错)。
   const draftsRef = useRef(drafts);
-  useEffect(() => { draftsRef.current = drafts; }, [drafts]);
   const readDraft = useCallback((key: string) => draftsRef.current[key] ?? EMPTY_DRAFT, []);
   const updateDraft = useCallback((key: string, update: (current: Draft) => Draft) => {
-    setDrafts((current) => {
+    const apply = (current: Record<string, Draft>) => {
       const previous = current[key] ?? EMPTY_DRAFT;
       let next = update(previous);
       if (next.text !== previous.text && next.textVersion === previous.textVersion) next = { ...next, textVersion: nextTextVersion() };
@@ -115,7 +116,11 @@ export function DraftProvider({ children }: { children: ReactNode }) {
         && next.textVersion === previous.textVersion
         && next.reuse === previous.reuse) return current;
       return { ...current, [key]: next };
-    });
+    };
+    const next = apply(draftsRef.current);
+    if (next === draftsRef.current) return;
+    draftsRef.current = next;
+    setDrafts(next);
   }, []);
   // 正在飞的发送。它们结算时按「发送那一刻的那一份」摘草稿（clearSentDraft /
   // dropSentAttachments），所以对话框之外往草稿里放东西（撤回、会话里「改了再发」）排在它们
@@ -158,20 +163,19 @@ export type DraftHandle = {
   executor: ComposerExecutorConfig | null;
   setExecutor: Dispatch<SetStateAction<ComposerExecutorConfig | null>>;
   created: ComposerCreated | null;
-  /** 给这份草稿盖上这次提交的戳，返回盖完的那一份（提交那一刻的归属标识，见 clearIfUnchanged）。 */
+  /** 给这份草稿盖上这次提交的戳，返回盖完的那一份（提交那一刻的归属标识，见 settleSubmission）。 */
   stampSubmission: (token: string) => Draft;
-  /** 草稿还盖着这次提交的戳才挂上「已建好、待重发」的那条；返回挂没挂上。 */
-  attachCreated: (token: string, created: ComposerCreated) => boolean;
+  /** 这份草稿不再是在途那次提交的了（并进了别处带来的另一份内容）：撕掉戳，迟到的结果一律不认。 */
+  disownSubmission: () => void;
+  /**
+   * 一次提交的结果回来了，由它来动草稿——成功清空（"clear"）、第一回合没送达挂上待重发的那条（{ created }）
+   * 都只走这一个口子。草稿还盖着这次的戳才认；给了 unchangedSince 还要求自那一刻起**完全没动过**（对象引用
+   * 相同：发起的面板已经卸载时，任何字段变化——附件增删、在途上传、正文改过又改回——都让旧提交失去资格，
+   * 第 10 轮审查）。判定与改写在 Store 更新处一次完成；返回认没认。清空时掐掉此刻清单里的在途上传。
+   */
+  settleSubmission: (token: string, outcome: "clear" | { created: ComposerCreated }, unchangedSince?: Draft) => boolean;
   /** 此刻这份草稿的不可变对象(引用即版本标识,提交时捕获、收尾时对比归属)。 */
   value: Draft;
-  /**
-   * 只有草稿自提交那一刻起**完全没动过**(对象引用相同)才整份丢掉——异步创建的
-   * 收尾在面板卸载后用它,任何字段变化(附件增删、在途上传、正文改过又改回)都让
-   * 旧提交失去清空资格(第 10 轮审查:只比正文和回链漏掉了附件)。判定与清空在
-   * Store 更新处一次完成,纯函数,无竞态窗口。不掐在途上传:提交门禁保证提交时
-   * 没有在途,引用没变 ⇒ 此刻也没有。
-   */
-  clearIfUnchanged: (submitted: Draft) => void;
   /** 整份丢掉（发送/创建成功，或用户自己按了「清空」）。 */
   clear: () => void;
   /**
@@ -239,18 +243,22 @@ export function useDraft(key: string): DraftHandle {
     }));
   }, [key, updateDraft]);
   const stampSubmission = useCallback((token: string) => {
-    const base = readDraft(key);
-    const stamped = { ...base, submission: token };
-    updateDraft(key, (current) => (current === base ? stamped : { ...current, submission: token }));
-    return stamped;
+    updateDraft(key, (current) => ({ ...current, submission: token }));
+    return readDraft(key);
   }, [key, readDraft, updateDraft]);
-  const attachCreated = useCallback((token: string, created: ComposerCreated) => {
-    if (readDraft(key).submission !== token) return false;
-    updateDraft(key, (current) => (current.submission === token ? { ...current, created } : current));
-    return true;
-  }, [key, readDraft, updateDraft]);
-  const clearIfUnchanged = useCallback((submitted: Draft) => {
-    updateDraft(key, (current) => (current === submitted ? EMPTY_DRAFT : current));
+  const disownSubmission = useCallback(() => {
+    updateDraft(key, (current) => (current.submission ? { ...current, submission: null } : current));
+  }, [key, updateDraft]);
+  const settleSubmission = useCallback((token: string, outcome: "clear" | { created: ComposerCreated }, unchangedSince?: Draft) => {
+    let owned = false;
+    updateDraft(key, (current) => {
+      if (current.submission !== token || (unchangedSince && current !== unchangedSince)) return current;
+      owned = true;
+      if (outcome !== "clear") return { ...current, created: outcome.created };
+      for (const pending of current.pendingUploads) pending.abort();
+      return EMPTY_DRAFT;
+    });
+    return owned;
   }, [key, updateDraft]);
   // 在途上传一并掐掉：清空之后那几张图再传完也没有地方落，进度条却还挂在别处跑。
   // 按 Store 此刻的在途清单掐,不是 handle 创建那一刻的——clear 常在异步收尾里被调。
@@ -280,9 +288,9 @@ export function useDraft(key: string): DraftHandle {
     setExecutor,
     created: draft.created ?? null,
     stampSubmission,
-    attachCreated,
+    disownSubmission,
+    settleSubmission,
     value: draft,
-    clearIfUnchanged,
     clear,
     update,
     trackSend,

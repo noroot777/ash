@@ -30,9 +30,10 @@ function Fixture() {
         groups={[] as Group[]}
         tasks={[]}
         onCancel={() => {}}
-        onCreated={(task: Task) => {
+        onCreated={(task: Task, _noteIds: string[], ownsComposer: boolean) => {
           setCreated((current) => [...current, task.title]);
-          setRound((current) => current + 1);
+          // 跟工作区一样：面板不归这次提交（草稿已经换了）就不收。
+          if (ownsComposer) setRound((current) => current + 1);
         }}
         onCreateGroup={async (name: string, mode: GroupMode) => ({ id: "g1", projectId: project.id, name, mode, createdAt: project.createdAt })}
         onProjectUpdated={() => {}}

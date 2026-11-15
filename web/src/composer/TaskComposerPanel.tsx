@@ -18,6 +18,7 @@ import { Button } from "../components/ui.tsx";
 import {
   isExecutorPickable,
   nothingRunnable,
+  parseExecutorValue,
   registeredAgentTypes,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
@@ -113,7 +114,9 @@ export function TaskComposerPanel({
   const setBody = draft.setText;
   const fork = initialDraft?.fork;
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
+  // 注册表读成功了才算 ready；读失败另记原因（只拦发送，不拿空列表当「谁都没有」去改任何选择或叫的人）。
   const [profilesReady, setProfilesReady] = useState(false);
+  const [profilesError, setProfilesError] = useState<string | null>(null);
   const [groupId, setGroupId] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
   const [useWorktree, setUseWorktree] = useState(project.useWorktreeDefault);
@@ -144,13 +147,16 @@ export function TaskComposerPanel({
   useEffect(() => {
     let alive = true;
     setProfilesReady(false);
+    setProfilesError(null);
     api.agents().then((agents) => {
       if (!alive) return;
       setProfiles(agents);
+      setProfilesReady(true);
     }).catch((error) => {
-      if (alive) notify(error instanceof Error ? error.message : "执行器配置读取失败");
-    }).finally(() => {
-      if (alive) setProfilesReady(true);
+      if (!alive) return;
+      const message = error instanceof Error ? error.message : "执行器配置读取失败";
+      setProfilesError(message);
+      notify(message);
     });
     // worktree 默认值住在项目行上（随 project 一起到手），不必等任何请求；换项目时这个
     // effect 会重跑，于是选择跟着新项目走而不是留着上一个项目的。
@@ -203,8 +209,13 @@ export function TaskComposerPanel({
   const executor = useComposerExecutor({ draft, profiles, profilesReady, types });
   const singleRun = executor.run;
   // `@` 叫一个人（问一句 / 讨论，见 ComposerCall.tsx）。任务还是胶囊上那个执行器的。
-  const calling = useComposerCall({ host: singleRun.agentType, profiles, draft, ready: profilesReady });
+  const calling = useComposerCall({ host: singleRun.agentType, profiles, draft });
   const call = calling.call;
+  // 胶囊换成了叫着的那个人：他现在就是跑这条任务的那个，不再算被叫来的。只在这一下（用户亲手换）拿掉他。
+  const changeExecutor = (profile: string, override: { model: string; effort: string }) => {
+    executor.change(profile, override);
+    calling.drop(parseExecutorValue(profile, profiles, singleRun).agentType);
+  };
   // `/` 补的是这条任务执行器的技能：正文是发给它的。
   const skills = useSkills({ agentType: singleRun.agentType, projectId: project.id, enabled: true });
   const slash = slashDismissed ? null : slashQuery(body);
@@ -249,10 +260,15 @@ export function TaskComposerPanel({
   };
 
   const noExecutor = profilesReady && nothingRunnable(profiles);
-  const executorBlocked = !isExecutorPickable({ agentType: singleRun.agentType, executorId: singleRun.executorId }, types, profiles);
-  const availabilityMessage = noExecutor
-    ? "还没有已注册执行器，暂不能创建任务；请先到执行器设置注册本地 CLI。"
-    : executorBlocked ? "当前任务执行器未注册，请在输入框下方换一个。" : null;
+  const executorBlocked = profilesReady
+    && !isExecutorPickable({ agentType: singleRun.agentType, executorId: singleRun.executorId }, types, profiles);
+  // 叫着的人就是跑这条任务的那个（注册表变了、拉回的可选值恰好是他）：不替用户删人，先拦着，让他自己换。
+  const callsHost = !!call && [call.target, ...call.others].some((person) => person.agent === singleRun.agentType);
+  const availabilityMessage = profilesError
+    ? `执行器配置读取失败：${profilesError}。读不到就不知道这条任务交给谁，暂不能发送；关掉新建框再打开会重读，写的字和叫的人都留着。`
+    : noExecutor
+      ? "还没有已注册执行器，暂不能创建任务；请先到执行器设置注册本地 CLI。"
+      : executorBlocked ? "当前任务执行器未注册，请在输入框下方换一个。" : null;
   const availabilityTone = noExecutor ? "empty" as const : availabilityMessage ? "warning" as const : null;
   const scheduleError = launchMode === "once" || launchMode === "cron"
     ? scheduleValidationError(launchMode, scheduleAt, scheduleCron)
@@ -269,8 +285,10 @@ export function TaskComposerPanel({
     : forkError ? forkError
       : waitingUploads ? "附件传完才能创建"
         : switching ? "正在切换项目分支，切完才能创建"
-          : noExecutor || executorBlocked ? availabilityMessage ?? "执行器不可用"
-            : scheduleError || queueTargetError || null;
+          : !profilesReady ? profilesError ? "执行器配置读取失败，暂不能发送" : "正在读取执行器配置"
+            : noExecutor || executorBlocked ? availabilityMessage ?? "执行器不可用"
+              : callsHost ? `叫着的 ${singleRun.agentType} 就是跑这条任务的执行器：换一个人叫，或者不叫了`
+                : scheduleError || queueTargetError || null;
   const canSubmit = !blockReason && !busy;
 
   const changeLaunchMode = (next: LaunchMode) => {
@@ -295,6 +313,8 @@ export function TaskComposerPanel({
     if (kept) draft.setExecutor(kept);
     textareaRef.current?.focus();
   };
+  // 已建好、待重发的那条：工作目录、分组、标签都以它为准（锁着，见 ComposerFields 的 locked），不显示下一条的编辑值。
+  const shown = draft.created?.task ?? null;
   const submit = async () => {
     if (!canSubmit || isSwitching()) return;
     setBusy(true);
@@ -324,8 +344,7 @@ export function TaskComposerPanel({
       scheduleAt,
       scheduleCron,
       opening: sentCall ? composerOpening(sentCall, { body, fork, attachments: allAttachments }) : null,
-      onOpeningFailed: (created, error) => draft.attachCreated(token, { task: created, error }),
-      submitted: { draft: submittedDraft, noteIds: draft.noteIds },
+      submitted: { token, draft: submittedDraft, noteIds: draft.noteIds },
       panelMounted: () => mountedRef.current,
       draft,
       resetLabels: () => setLabels([]),
@@ -334,11 +353,9 @@ export function TaskComposerPanel({
       onTasksSynced,
       notify,
     });
-    if (!settled) {
-      if (mountedRef.current) setBusy(false);
-      return;
-    }
-    if (sentCall) calling.sent(sentCall);
+    // 办成了、面板也归这次提交时上层会收起它；草稿已经换了（面板留着）或没办成，这里就得把按键放回来。
+    if (mountedRef.current) setBusy(false);
+    if (settled && sentCall) calling.sent(sentCall);
   };
 
   return (
@@ -376,23 +393,23 @@ export function TaskComposerPanel({
               disabled={busy} onCancel={cancelCall} />}
             availabilityMessage={availabilityMessage}
             availabilityTone={availabilityTone}
-            onExecutorChange={executor.change}
+            onExecutorChange={changeExecutor}
             onEffortChange={executor.changeEffort}
             isRepo={project.health.isRepo}
-            useWorktree={useWorktree}
+            useWorktree={shown ? !!shown.useWorktree : useWorktree}
             onUseWorktreeChange={setUseWorktree}
             worktreeDefault={worktreeDefault}
             savingWorktreeDefault={savingWorktreeDefault}
             onSaveWorktreeDefault={saveWorktreeDefault}
             branches={branches}
-            base={base}
+            base={shown ? shown.worktreeBase ?? "" : base}
             automaticBaseLabel={automaticLabel}
             switchingBranch={switching}
             onBaseChange={setBase}
             groups={groups}
-            groupId={groupId}
+            groupId={shown ? shown.groupId ?? "" : groupId}
             onGroupChange={changeGroup}
-            labels={labels}
+            labels={shown ? shown.labels : labels}
             onLabelsChange={setLabels}
             onCreateGroup={() => setGroupDialogOpen(true)}
             onPickStarter={(text) => {
