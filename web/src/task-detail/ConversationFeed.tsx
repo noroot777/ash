@@ -43,6 +43,7 @@ import { laneNoVerdicts } from "./reviewNoVerdictCause.ts";
 import type { ReviewRetryAction, TurnRetryAction } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
+import { useQuestionHistory } from "./useQuestionHistory.ts";
 import { isQuestionAnswer, type QuestionRecord } from "@ash/shared/questions";
 import { canForkReply } from "./conversationFork.ts";
 import { MonitorWakeReply } from "./MonitorWakeInput.tsx";
@@ -391,7 +392,9 @@ export function ConversationFeed({
     items, task, reviews, canOpenReviews: !!onOpenReviewPanel, causes, crashed, reviewRetry, turnRetry,
   });
   // 另有一处看得见的那几道题：提问那一轮的结算说明对的是它们时就不再抄一遍（isUnshownNotice）。
-  const onScreen = questionsOnScreen(task, questionHistory);
+  // 跟答过的气泡读同一份合并后的问答历史，补读、推送、删除一到两边同时变（useQuestionHistory.ts）。
+  const history = useQuestionHistory(task.id, questionHistory, liveQuestionHistory);
+  const onScreen = questionsOnScreen(task, history.records);
   const { rows, receipts, footnotes } = conversationSystemRows(
     conversationDebateRows(feedRows, { reviews }),
     { failures: crashed, context: noticeContext, causes, held: actions.held, onScreen },
@@ -539,7 +542,7 @@ export function ConversationFeed({
   ) : <TurnReceipts key={row.id} receipts={row.receipts} standalone />;
 
   return (
-    <QuestionHistoryProvider key={task.id} taskId={task.id} history={questionHistory} live={liveQuestionHistory}
+    <QuestionHistoryProvider history={history}
       messages={items.flatMap((item) => item.kind === "user" ? [item] : [])}>
     <MessageDeleteProvider onDelete={onDeleteMessage}>
     <ReceiptReviewContext.Provider value={receiptReview}>

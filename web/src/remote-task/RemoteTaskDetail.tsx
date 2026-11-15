@@ -4,7 +4,7 @@ import { isAcceptedStage, TASK_STATUS_LABELS } from "@ash/shared";
 import { ArrowCounterClockwise, ArrowUp, DesktopTower, SpinnerGap } from "@phosphor-icons/react";
 import { api, type RemoteTaskSnapshot } from "../lib/api.ts";
 import type { RemoteReturns } from "./useRemoteReturns.ts";
-import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
+import { ComposerInput } from "../task-detail/ComposerInput.tsx";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
@@ -52,8 +52,6 @@ export function RemoteTaskDetail({
   const refreshVersion = useRef(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const sendKeys = useSendKeyLabels();
-  // 这个框沿用 .task-reply-box 的样式(resize: none,没有拖动条),高度就全交给行数自动撑。
-  useAutoGrowTextarea(inputRef, { value: text });
 
   const refresh = useCallback(async (quiet = false) => {
     const version = refreshVersion.current;
@@ -212,9 +210,11 @@ export function RemoteTaskDetail({
               notify("已发送答复，任务正在远端续跑");
               await refresh(true);
             }} />
-            <div className="task-reply-box" hidden={takeover.covering || undefined}>
-              <textarea
-                ref={inputRef}
+            {/* 答题卡展开着时平常的框不挂（task-detail/QuestionSlot.tsx）。这个框沿用 .task-reply-box 的
+                样式(resize: none,没有拖动条),高度就全交给行数自动撑。 */}
+            {!takeover.covering && <div className="task-reply-box">
+              <ComposerInput
+                inputRef={inputRef}
                 value={text}
                 rows={3}
                 disabled={!snapshot || sending || !canReply}
@@ -234,7 +234,7 @@ export function RemoteTaskDetail({
                   {sending ? <SpinnerGap size={15} className="is-spinning" /> : <ArrowUp size={15} weight="bold" />}
                 </button>
               </div>
-            </div>
+            </div>}
           </div>
         </section>
       </div>

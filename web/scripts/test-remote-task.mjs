@@ -25,7 +25,7 @@ assert.match(shell, /<RemoteTaskDetail/, "工作区主区应渲染远程任务�
 assert.match(detail, /上下文从该机器同步，回复也由该机器继续执行/, "远程位置与路由必须持续可见");
 assert.match(detail, /api\.remoteTaskReply/, "回复必须经本机代理发往远端");
 assert.match(detail, /<QuestionDock takeover=\{takeover\}/, "远程任务处于提问态时，回复框那一格是标准答题卡");
-assert.match(detail, /className="task-reply-box" hidden=\{takeover\.covering \|\| undefined\}/, "卡展开时远程回复框退下，收起后回来");
+assert.match(detail, /\{!takeover\.covering && <div className="task-reply-box">/, "卡展开时远程回复框整个不挂，收起后回来");
 // 收起答题卡后露出来的回复框照它自己的条件能写能发（跟任务页、团队页一样），不再因为「有题在等」整个灰掉。
 assert.doesNotMatch(detail, /Boolean\(task\.question\)/, "远程回复框的输入与发送不能再按「有题在等」禁用");
 assert.match(detail, /api\.remoteTaskAnswer/, "远程提问必须走 answer 代理而不是普通 reply");

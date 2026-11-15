@@ -5,8 +5,6 @@
 .question-dock.is-leaving { animation: question-dock-out 200ms var(--ease-in, ease-in) forwards; }
 @keyframes question-dock-in { from { opacity: 0; transform: translateY(16px); } }
 @keyframes question-dock-out { to { opacity: 0; transform: translateY(16px); } }
-/* 卡展开时平常那个框不画（草稿、附件、拖出来的高度都还在）。 */
-.task-reply-shell > .task-reply-box[hidden], .team-reply-shell > .team-reply-box[hidden] { display: none; }
 /* 收起时卡缩成一行，平常的回复框紧贴在它下面。 */
 .question-dock:has(.question-card.is-collapsed) { margin-bottom: 6px; }
 

@@ -242,6 +242,26 @@ try {
   assert.doesNotMatch(await tombstoned.page.locator("main").textContent(), /gone的答案/, "迟到的旧读取不能复活删掉的答复");
   await tombstoned.page.close();
 
+  // 提问那一轮的结算说明（题目全文在里面）画不画，跟答过的气泡读的是同一份问答历史：调用方给的快照是旧的
+  // （还没有这条记录），补读读到了，题目就只剩气泡那一处；推来一条删除，气泡没了，结算说明照画回来。
+  // 任务页、团队页一样。去重要是另读 props 快照，补读一到同一道题就画两遍。
+  for (const mode of ["", "mode=team&"]) {
+    const where = mode ? "团队页" : "任务页";
+    const deduped = await open(`${mode}history=empty&settle=task-a`, { respond: async () => ({ json: [record("task-a")] }) });
+    await count(deduped.page, 1);
+    const mentions = async () => {
+      // 任务页的结算说明收在「N 条记录」里：摊开再数。
+      for (const toggle of await deduped.page.locator(".turn-receipts-toggle[aria-expanded=false]").all()) await toggle.click();
+      return deduped.page.evaluate(() => document.querySelector("main").textContent.split("task-a的问题").length - 1);
+    };
+    assert.equal(await mentions(), 1, `${where}：补读到的答复和结算说明不能把同一道题画两遍`);
+    const tombstone = { ...record("task-a"), answer: "", reply: "", deleted: true };
+    await sse(deduped.page, "message", { type: "task.updated", task: { id: "history-a", questionHistory: [tombstone] } });
+    await count(deduped.page, 0);
+    await waitUntil(async () => await mentions() === 1, `${where}：答复删掉以后结算说明照画`);
+    await deduped.page.close();
+  }
+
   const snapshot = await open("mode=snapshot&history=seed");
   await count(snapshot.page, 1);
   assert.equal(await snapshot.page.evaluate(() => window.__sources.length), 0, "远端快照不订阅本地事件");
@@ -249,7 +269,7 @@ try {
   await snapshot.page.close();
 
   assert.deepEqual(failures, []);
-  console.log("question history DOM: seeded history, remount recovery, live receipts, single initial load, reconnect, stale responses, switching, retry/SSE recovery, snapshot passed (the answer card itself: test-question-card-dom)");
+  console.log("question history DOM: seeded history, remount recovery, live receipts, single initial load, reconnect, stale responses, switching, retry/SSE recovery, settle-note dedupe on the merged history, snapshot passed (the answer card itself: test-question-card-dom)");
 } finally {
   pending.forEach((release) => release());
   await browser?.close();

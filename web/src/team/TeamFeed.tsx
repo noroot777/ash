@@ -17,6 +17,7 @@ import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "../task-detail/QuestionHistory.tsx";
+import { useQuestionHistory } from "../task-detail/useQuestionHistory.ts";
 import { isQuestionAnswer } from "@ash/shared/questions";
 import { questionsOnScreen } from "../task-detail/timelineNoticeCopy.ts";
 import { SystemAuthoredMessage, SystemBoundary, SystemEventNote } from "../task-detail/SystemNotice.tsx";
@@ -236,7 +237,9 @@ export function TeamFeed({
   // 调度台的原始需求同样不在会话正文里（首条会话从调度者的拆解开始）：流的最顶上拿任务正文
   // 补画第一颗气泡，左侧导航也靠它排出第一格。
   // 另有一处看得见的那几道题（答题卡、答过的气泡）：调度者提问那一轮的结算说明对的是它们时不再抄一遍。
-  const onScreen = questionsOnScreen(task, task.questionHistory);
+  // 跟答过的气泡读同一份合并后的问答历史（useQuestionHistory.ts）。
+  const history = useQuestionHistory(task.id, task.questionHistory, true);
+  const onScreen = questionsOnScreen(task, history.records);
   const inputs = useMemo(
     () => conversationInputs({ text: task.body, at: task.createdAt }, rows.flatMap((row) => row.kind === "conv" ? [row.item] : [])),
     [rows, task.body, task.createdAt],
@@ -262,7 +265,7 @@ export function TeamFeed({
     runActivityTail(rows.map((row) => (row.kind === "conv" ? row.item : { kind: "batch" }))),
   );
   return (
-    <QuestionHistoryProvider key={task.id} taskId={task.id} history={task.questionHistory} live
+    <QuestionHistoryProvider history={history}
       messages={rows.flatMap((row) => row.kind === "conv" && row.item.kind === "user" ? [row.item] : [])}>
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region">

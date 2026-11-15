@@ -14,12 +14,11 @@ import type { ReplyTaskResult } from "../lib/api.ts";
 import { useSkills } from "../lib/useSkills.ts";
 import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
 import { useFileMention } from "../lib/useFileMention.ts";
-import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import { useReplyLayout } from "../task-detail/useReplyLayout.ts";
-import { registerReplyInput } from "../task-detail/replyQuote.ts";
+import { ComposerInput } from "../task-detail/ComposerInput.tsx";
 import { QuestionDock, useQuestionTakeover } from "../task-detail/QuestionSlot.tsx";
 import type { QuestionAnswerInput } from "@ash/shared/questions";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
@@ -60,11 +59,7 @@ export function TeamReplyBox({
   const later = useLaterSend(draft);
   const sendKeys = useSendKeyLabels();
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  // 跟着输入行数长高;顶边那条拖动条拖过之后以拖出来的高度为准——跟普通任务回复框
-  // 同一套(task-detail/ReplyResizeHandle.tsx),高度只有 useAutoGrowTextarea 一个写者,
-  // 所以 CSS 那边把原生右下角把手关掉了。
   const replyHeight = useReplyHeight(TEAM_REPLY_PIN);
-  useAutoGrowTextarea(inputRef, { value, pinned: replyHeight.height });
   const scheduled = useScheduledMessages(task.id);
   const uploads = useAttachments({
     value: draft.attachments,
@@ -73,7 +68,8 @@ export function TeamReplyBox({
     onPendingChange: draft.setPendingUploads,
   });
   const disabled = !!task.archived;
-  // 答题卡展开着：框连同框外的补全、文件引用都退下，草稿原样留着（task-detail/QuestionSlot.tsx）。
+  // 答题卡展开着（连同它收回去那一下）：平常的框连同发送设置、框外的补全和文件引用都不挂，草稿原样留着
+  // （task-detail/QuestionSlot.tsx）。
   const takeover = useQuestionTakeover(onAnswer ? task : null);
   const covering = takeover.covering;
   // 技能按**调度者自己的执行器**算：这句话是发给调度台那个会话的，执行者手上装的
@@ -95,8 +91,6 @@ export function TeamReplyBox({
   useEffect(() => {
     setError(null);
   }, [task.id]);
-  // 会话里「改了再发」放回草稿之后要把光标送进这个框（见 task-detail/replyQuote.ts）。
-  useEffect(() => registerReplyInput(task.id, inputRef.current), [task.id]);
   // 正在飞的那一次发送登记在草稿上；撤回、会话里「改了再发」排在它后面（见 DraftStore 的 afterSend）。
   const send = (): Promise<void> => {
     const run = runSend();
@@ -178,22 +172,27 @@ export function TeamReplyBox({
         tasks={tasks}
         onSendNow={(messageId) => void scheduled.sendNow(messageId)}
       />
-      <UploadAttachmentList
+      {!covering && <UploadAttachmentList
         attachments={uploads.attachments}
         pending={uploads.pending}
         error={uploads.error}
         onRemove={uploads.remove}
         onCancel={uploads.cancel}
-      />
+      />}
       {error && <p>{error}</p>}
       </div>
       {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} />}
-      <div className="team-reply-box" hidden={covering || undefined}>
+      {!covering && <div className="team-reply-box">
         <ReplyResizeHandle targetRef={inputRef} {...replyHeight} />
-        <textarea
-          ref={inputRef}
+        {/* 跟着输入行数长高;顶边那条拖动条拖过之后以拖出来的高度为准——跟普通任务回复框
+            同一套(task-detail/ReplyResizeHandle.tsx),高度只有 useAutoGrowTextarea 一个写者,
+            所以 CSS 那边把原生右下角把手关掉了。会话里「改了再发」放回草稿之后光标也送进这个框。 */}
+        <ComposerInput
+          inputRef={inputRef}
           rows={2}
           value={value}
+          pinned={replyHeight.height}
+          quoteTarget={task.id}
           disabled={disabled}
           placeholder={disabled ? "团队已归档（只读）" : task.status === "idle" ? `调度者待命中，说句话就接回同一会话…（${sendKeys.sendShort} 发送）` : `插一句话（改方向、加要求、直接替它拍板；${sendKeys.sendShort} 发送）…`}
           onChange={(event) => { setValue(event.target.value); slash.onValueChange(); mention.onValueChange(); }}
@@ -220,7 +219,7 @@ export function TeamReplyBox({
             taskId={task.id}
           />
         </footer>
-      </div>
+      </div>}
     </div>
   );
 }

@@ -148,6 +148,38 @@ try {
   assert.equal(await replyBox.inputValue(), "/te", "收起后普通回复的草稿原样在");
   await card.locator(".question-card-peek").click();
 
+  // 框里的工具开出来的浮层（选执行器、发送设置、截图批注）都 portal 在 body 上：卡展开时它们跟着框一起
+  // 不挂，不是框藏起来了、浮层还开着能打字。题是推来的（fixtureAsk）——点页面上任何一颗键都会先把浮层
+  // 点关，那样验不出来。收起以后浮层不自己弹回来，草稿原样在，换了新节点的输入框照样长高。
+  const composerLayers = ".agent-model-picker, .send-key-panel, .annotation-dialog";
+  const openThenAsk = async ({ input, open, layer, what }) => {
+    await page.getByRole("button", { name: "撤下提问" }).click();
+    await card.waitFor({ state: "detached" });
+    await input.fill("先写一半的话");
+    await open();
+    await page.locator(layer).waitFor();
+    await page.evaluate(() => window.fixtureAsk());
+    await card.waitFor();
+    assert.equal(await page.locator(composerLayers).count(), 0, `${what}：卡展开时普通回复框的浮层不能还挂着`);
+    assert.equal(await visibleInputs(), 1, `${what}：卡展开时全页仍只有一处打字的地方`);
+    assert.equal(await page.locator("button:visible", { hasText: /^(发送答复|下一题)$/ }).count(), 1, `${what}：只有一颗发送键`);
+    await card.getByRole("button", { name: "收起答题卡，先看上文" }).click();
+    await input.waitFor();
+    assert.equal(await page.locator(composerLayers).count(), 0, `${what}：收起后浮层不自己弹回来`);
+    assert.equal(await input.inputValue(), "先写一半的话", `${what}：草稿原样在`);
+    await input.fill("一\n二\n三\n四\n五\n六");
+    assert.equal(await input.evaluate((el) => el.clientHeight >= el.scrollHeight - 1), true, `${what}：收起后回来的输入框照样跟着行数长高`);
+    await input.fill("");
+  };
+  await openThenAsk({ input: replyBox, what: "选执行器",
+    open: () => page.locator(".task-reply-box").getByRole("button", { name: /^智能体：/ }).click(), layer: ".agent-model-picker" });
+  await openThenAsk({ input: replyBox, what: "发送设置",
+    open: () => page.locator(".task-reply-box .send-key-opt").click(), layer: ".send-key-panel" });
+  await openThenAsk({ input: replyBox, what: "截图批注", layer: ".annotation-dialog", open: async () => {
+    await page.locator(".task-reply-box .task-reply-more button").first().click();
+    await page.getByRole("menuitem", { name: "截图批注" }).click();
+  } });
+
   // 改发别的话把题撤下（不留问答记录）：那道题只剩会话里那句结算说明能看，它照画；
   // 题目在答题卡上、或答完跟着气泡留着的那几道，结算说明不画。
   await page.getByRole("button", { name: "重置" }).click();
@@ -164,8 +196,18 @@ try {
   await card.waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, "窄屏不横向溢出");
 
+  // 团队页同一副形状：TeamReplyBox 的发送设置开着时题到了，一样跟着框退下。
+  await page.goto(`${web.origin}/scripts/fixtures/question-card.html?host=team`);
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await card.waitFor();
+  assert.equal(await page.locator(".team-reply-box").count(), 0, "团队页卡展开时平常的框不挂");
+  assert.equal(await visibleInputs(), 1);
+  await openThenAsk({ input: page.locator(".team-reply-box textarea"), what: "团队页发送设置",
+    open: () => page.locator(".team-reply-box .send-key-opt").click(), layer: ".send-key-panel" });
+
   assert.deepEqual(failures, []);
-  console.log("question card DOM: docked in the reply slot, one input + one send key, picks not copied but sent, jump/next/send switch, digit keys + last cell, collapse shows the reply box, settling locked, failure keeps answers, question shown once, narrow screen passed");
+  console.log("question card DOM: docked in the reply slot, one input + one send key (composer portals unmounted in task and team hosts), picks not copied but sent, jump/next/send switch, digit keys + last cell, collapse shows the reply box, settling locked, failure keeps answers, question shown once, narrow screen passed");
 } finally {
   await browser?.close();
   await web.close();

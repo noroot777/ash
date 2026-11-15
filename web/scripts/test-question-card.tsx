@@ -81,21 +81,22 @@ syncComposerSendKey("mod-enter");
 assert.match(renderSingle(), /⌘ \/ Ctrl \+ Enter 发送/);
 syncComposerSendKey("enter");
 
-// 卡在回复框那一格：有问题在等时宿主拿到 covering，平常那个框（草稿都在）hidden；没有问题、或宿主没有答复的路时不接管。
+// 卡在回复框那一格：有问题在等时宿主拿到 covering，平常那个框（连同它 portal 出去的浮层）整个不挂；没有问题、
+// 或宿主没有答复的路时不接管。
 function Host({ task: hosted, answerable = true }: { task: Task; answerable?: boolean }) {
   const takeover = useQuestionTakeover(answerable ? hosted : null);
   return <>
     {answerable && <QuestionDock takeover={takeover} onAnswer={async () => undefined} />}
-    <div className="task-reply-box" hidden={takeover.covering || undefined}><textarea aria-label="回复任务" /></div>
+    {!takeover.covering && <div className="task-reply-box"><textarea aria-label="回复任务" /></div>}
   </>;
 }
 const slotted = renderToStaticMarkup(<Host task={task} />);
 assert.match(slotted, /<div class="question-dock"><section class="question-card"/);
-assert.match(slotted, /<div class="task-reply-box" hidden="">/, "卡展开时不出现平常的回复框");
+assert.doesNotMatch(slotted, /task-reply-box/, "卡展开时不出现平常的回复框");
 const idle = renderToStaticMarkup(<Host task={{ ...task, question: null, questionItems: null } as Task} />);
-assert.doesNotMatch(idle, /question-card|hidden/);
+assert.doesNotMatch(idle, /question-card/);
 assert.match(idle, /<div class="task-reply-box"><textarea/);
-assert.doesNotMatch(renderToStaticMarkup(<Host task={task} answerable={false} />), /question-card|hidden/, "没有答复的路就不接管");
+assert.doesNotMatch(renderToStaticMarkup(<Host task={task} answerable={false} />), /question-card/, "没有答复的路就不接管");
 
 // 勾了就是选了：答复 = 勾了的那几项（按选项顺序一项一行）+ 补充的话；跟已答气泡认选项的口径兼容。
 const options = ["会话里", "侧栏里\n两行的选项", "都要"];
