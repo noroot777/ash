@@ -15,6 +15,7 @@ import type { ScreenshotDraft } from "../page-annotation/model.ts";
 import type { ReuseMark } from "../task-detail/withdrawDraft.ts";
 import type { ReplyCall } from "../task-detail/replyCall.ts";
 import type { Task } from "@ash/shared";
+import type { ComposerExecutorConfig } from "../composer/executorOverrides.ts";
 
 // 「还没发出去的那份东西」统一放这里：对话框的回复草稿、主工作区新建任务框里的草稿，
 // 都是同一件事 —— 组件卸载（切任务、去设置、开聊天）不该把用户敲的字和粘的图弄丢。
@@ -47,9 +48,15 @@ export type Draft = {
   // 新建任务框专用：框里 `@` 叫着的人、叫来做什么（问一句 / 讨论，composer/ComposerCall.tsx）。跟正文同生共死：
   // 切走再回来正文还在、叫的人却没了，按下去就成了一条普通任务。
   call?: ReplyCall | null;
+  // 新建任务框专用：这条任务自己的执行器（胶囊上那一套）。跟叫的人一起存：叫谁算不算「叫自己」由它定，
+  // 重开面板时它要是退回默认值，叫来的人会被当成叫自己删掉。没选过 = 用默认的那个。
+  executor?: ComposerExecutorConfig | null;
   // 新建任务框专用：任务已经建好、第一回合（问一句 / 讨论）还没被服务端接下的那一条，连同没接下的原因。
   // 再按一次只对它重发这一下，不再建一条（composer/settleCreatedTask.ts）。
   created?: ComposerCreated | null;
+  // 新建任务框专用：最近一次提交盖的戳（stampSubmission）。异步结果回来时凭它认这份草稿还是不是自己那一份：
+  // 中途清空过、换成了另一件事，戳就没了或换了，迟到的结果不许挂上来（attachCreated）。
+  submission?: string | null;
 };
 
 /** 已建好、第一回合还没送达的那条任务。 */
@@ -90,7 +97,7 @@ export function DraftProvider({ children }: { children: ReactNode }) {
       let next = update(previous);
       if (next.text !== previous.text && next.textVersion === previous.textVersion) next = { ...next, textVersion: nextTextVersion() };
       if (!next.text && next.attachments.length === 0 && next.pendingUploads.length === 0
-        && next.noteIds.length === 0 && !next.screenshot && !next.later && !next.call && !next.created) {
+        && next.noteIds.length === 0 && !next.screenshot && !next.later && !next.call && !next.created && !next.executor) {
         if (!(key in current)) return current;
         const { [key]: _removed, ...remaining } = current;
         return remaining;
@@ -103,6 +110,8 @@ export function DraftProvider({ children }: { children: ReactNode }) {
         && next.later === previous.later
         && next.call === previous.call
         && next.created === previous.created
+        && next.executor === previous.executor
+        && next.submission === previous.submission
         && next.textVersion === previous.textVersion
         && next.reuse === previous.reuse) return current;
       return { ...current, [key]: next };
@@ -146,8 +155,13 @@ export type DraftHandle = {
   setLater: Dispatch<SetStateAction<LaterDraft | null>>;
   call: ReplyCall | null;
   setCall: Dispatch<SetStateAction<ReplyCall | null>>;
+  executor: ComposerExecutorConfig | null;
+  setExecutor: Dispatch<SetStateAction<ComposerExecutorConfig | null>>;
   created: ComposerCreated | null;
-  setCreated: Dispatch<SetStateAction<ComposerCreated | null>>;
+  /** 给这份草稿盖上这次提交的戳，返回盖完的那一份（提交那一刻的归属标识，见 clearIfUnchanged）。 */
+  stampSubmission: (token: string) => Draft;
+  /** 草稿还盖着这次提交的戳才挂上「已建好、待重发」的那条；返回挂没挂上。 */
+  attachCreated: (token: string, created: ComposerCreated) => boolean;
   /** 此刻这份草稿的不可变对象(引用即版本标识,提交时捕获、收尾时对比归属)。 */
   value: Draft;
   /**
@@ -218,12 +232,23 @@ export function useDraft(key: string): DraftHandle {
       call: typeof next === "function" ? next(current.call ?? null) : next,
     }));
   }, [key, updateDraft]);
-  const setCreated = useCallback<Dispatch<SetStateAction<ComposerCreated | null>>>((next) => {
+  const setExecutor = useCallback<Dispatch<SetStateAction<ComposerExecutorConfig | null>>>((next) => {
     updateDraft(key, (current) => ({
       ...current,
-      created: typeof next === "function" ? next(current.created ?? null) : next,
+      executor: typeof next === "function" ? next(current.executor ?? null) : next,
     }));
   }, [key, updateDraft]);
+  const stampSubmission = useCallback((token: string) => {
+    const base = readDraft(key);
+    const stamped = { ...base, submission: token };
+    updateDraft(key, (current) => (current === base ? stamped : { ...current, submission: token }));
+    return stamped;
+  }, [key, readDraft, updateDraft]);
+  const attachCreated = useCallback((token: string, created: ComposerCreated) => {
+    if (readDraft(key).submission !== token) return false;
+    updateDraft(key, (current) => (current.submission === token ? { ...current, created } : current));
+    return true;
+  }, [key, readDraft, updateDraft]);
   const clearIfUnchanged = useCallback((submitted: Draft) => {
     updateDraft(key, (current) => (current === submitted ? EMPTY_DRAFT : current));
   }, [key, updateDraft]);
@@ -251,8 +276,11 @@ export function useDraft(key: string): DraftHandle {
     setLater,
     call: draft.call ?? null,
     setCall,
+    executor: draft.executor ?? null,
+    setExecutor,
     created: draft.created ?? null,
-    setCreated,
+    stampSubmission,
+    attachCreated,
     value: draft,
     clearIfUnchanged,
     clear,

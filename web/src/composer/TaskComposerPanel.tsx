@@ -18,7 +18,6 @@ import { Button } from "../components/ui.tsx";
 import {
   isExecutorPickable,
   nothingRunnable,
-  parseExecutorValue,
   registeredAgentTypes,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
@@ -38,13 +37,7 @@ import { composerTaskInput } from "./composerTaskInput.ts";
 import { ComposerLaunchControl, type LaunchMode } from "./ComposerLaunchControl.tsx";
 import { useQueueAfter } from "./useQueueAfter.tsx";
 import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
-import {
-  emptyComposerExecutorConfigs,
-  initialComposerExecutors,
-  patchComposerExecutor,
-  reconcileComposerExecutors,
-  setComposerExecutorProfile,
-} from "./executorOverrides.ts";
+import { useComposerExecutor } from "./useComposerExecutor.ts";
 import { ComposerForkContext } from "./ComposerForkContext.tsx";
 import { ComposerExpand } from "./ComposerExpand.tsx";
 import { ComposerShortcutHelp } from "./ComposerShortcutHelp.tsx";
@@ -121,7 +114,6 @@ export function TaskComposerPanel({
   const fork = initialDraft?.fork;
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [profilesReady, setProfilesReady] = useState(false);
-  const [executors, setExecutors] = useState(emptyComposerExecutorConfigs);
   const [groupId, setGroupId] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
   const [useWorktree, setUseWorktree] = useState(project.useWorktreeDefault);
@@ -155,7 +147,6 @@ export function TaskComposerPanel({
     api.agents().then((agents) => {
       if (!alive) return;
       setProfiles(agents);
-      setExecutors((current) => initialComposerExecutors(current, agents));
     }).catch((error) => {
       if (alive) notify(error instanceof Error ? error.message : "执行器配置读取失败");
     }).finally(() => {
@@ -208,26 +199,11 @@ export function TaskComposerPanel({
       setSavingWorktreeDefault(false);
     }
   };
-  const changeExecutor = (profile: string, override: { model: string; effort: string }) => {
-    setExecutors((current) => setComposerExecutorProfile(current, "single", profile, override));
-  };
-  const changeEffort = (effort: string) => {
-    setExecutors((current) => patchComposerExecutor(current, "single", { effort }));
-  };
-
-  const singleExecutor = parseExecutorValue(
-    executors.single.profile,
-    profiles,
-    { agentType: "claude", executorId: null },
-  );
-  const singleRun = {
-    agentType: singleExecutor.agentType,
-    executorId: singleExecutor.executorId,
-    model: executors.single.model || null,
-    reasoningEffort: executors.single.effort || null,
-  };
+  // 这条任务由谁跑：存在草稿里，任务建好待重发时以那条任务为准（useComposerExecutor.ts）。
+  const executor = useComposerExecutor({ draft, profiles, profilesReady, types });
+  const singleRun = executor.run;
   // `@` 叫一个人（问一句 / 讨论，见 ComposerCall.tsx）。任务还是胶囊上那个执行器的。
-  const calling = useComposerCall({ host: singleRun.agentType, profiles, draft });
+  const calling = useComposerCall({ host: singleRun.agentType, profiles, draft, ready: profilesReady });
   const call = calling.call;
   // `/` 补的是这条任务执行器的技能：正文是发给它的。
   const skills = useSkills({ agentType: singleRun.agentType, projectId: project.id, enabled: true });
@@ -272,11 +248,6 @@ export function TaskComposerPanel({
     setSlashIndex(0);
   };
 
-  useEffect(() => {
-    if (!profilesReady) return;
-    setExecutors((current) => reconcileComposerExecutors(current, { profiles, types }));
-  }, [profiles, profilesReady, types]);
-
   const noExecutor = profilesReady && nothingRunnable(profiles);
   const executorBlocked = !isExecutorPickable({ agentType: singleRun.agentType, executorId: singleRun.executorId }, types, profiles);
   const availabilityMessage = noExecutor
@@ -317,11 +288,21 @@ export function TaskComposerPanel({
     setGroupId(value);
     return queueAfter.onGroupChanged(value, opts);
   };
+  // 「清空草稿」：正文、附件、叫的人、待重发的那条都丢掉；这条任务由谁跑是上次的选择，留着。
+  const clearDraft = () => {
+    const kept = draft.executor;
+    draft.clear();
+    if (kept) draft.setExecutor(kept);
+    textareaRef.current?.focus();
+  };
   const submit = async () => {
     if (!canSubmit || isSwitching()) return;
     setBusy(true);
     // 提交那一刻叫着的那一版：发送途中再动它（换人、换做法）是下一句的设置，不该被这一次清掉（useReplyCall 的 sent）。
     const sentCall = call;
+    // 给这份草稿盖上这次提交的戳：结果回来时凭它认草稿还是不是这一份（中途清空、换成别的事就不认）。
+    const token = `${Date.now()}:${Math.random()}`;
+    const submittedDraft = draft.stampSubmission(token);
     // 上一次任务建好了、第一回合却没送达：这次只对那一条重发，不再建一条。
     let task = draft.created?.task ?? null;
     if (!task) {
@@ -343,8 +324,8 @@ export function TaskComposerPanel({
       scheduleAt,
       scheduleCron,
       opening: sentCall ? composerOpening(sentCall, { body, fork, attachments: allAttachments }) : null,
-      onOpeningFailed: (created, error) => draft.setCreated({ task: created, error }),
-      submitted: { draft: draft.value, noteIds: draft.noteIds },
+      onOpeningFailed: (created, error) => draft.attachCreated(token, { task: created, error }),
+      submitted: { draft: submittedDraft, noteIds: draft.noteIds },
       panelMounted: () => mountedRef.current,
       draft,
       resetLabels: () => setLabels([]),
@@ -374,7 +355,7 @@ export function TaskComposerPanel({
         {/* 草稿是「关掉也留着」的，所以必须有一个明写的丢弃口 —— 否则上一次没写完的
             东西会一直顶在新建框里，用户只能自己全选删。 */}
         {(!!body || uploads.attachments.length > 0 || uploads.uploading || !!call || !!draft.created) && (
-          <Button variant="ghost" onClick={() => { draft.clear(); textareaRef.current?.focus(); }}>清空草稿</Button>
+          <Button variant="ghost" onClick={clearDraft}>清空草稿</Button>
         )}
         <Button variant="ghost" onClick={onCancel}>取消 Esc</Button>
       </header>}
@@ -388,14 +369,15 @@ export function TaskComposerPanel({
           <ComposerFields
             profiles={profiles}
             types={types}
-            executor={executors.single}
+            executor={executor.config}
+            locked={executor.locked}
             executorType={singleRun.agentType}
             call={call && <ComposerCallCapsule calling={calling} host={singleRun.agentType} profiles={profiles}
               disabled={busy} onCancel={cancelCall} />}
             availabilityMessage={availabilityMessage}
             availabilityTone={availabilityTone}
-            onExecutorChange={changeExecutor}
-            onEffortChange={changeEffort}
+            onExecutorChange={executor.change}
+            onEffortChange={executor.changeEffort}
             isRepo={project.health.isRepo}
             useWorktree={useWorktree}
             onUseWorktreeChange={setUseWorktree}

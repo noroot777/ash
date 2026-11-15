@@ -20,6 +20,7 @@ export function ComposerFields({
   types,
   executor,
   executorType,
+  locked,
   call,
   availabilityMessage,
   availabilityTone,
@@ -49,6 +50,8 @@ export function ComposerFields({
   types: AgentType[];
   executor: ComposerExecutorConfig;
   executorType: AgentType;
+  /** 任务已经建好、在等重发第一回合：它的执行器、工作目录、分组标签都定了，只看不改。 */
+  locked: boolean;
   /** 叫着人时排在任务自己那颗胶囊后面的那一颗（ComposerCall.tsx）；任务自己的那颗随之缩成一段。 */
   call: ReactNode;
   availabilityMessage: string | null;
@@ -104,15 +107,15 @@ export function ComposerFields({
   // 「谁来做」：底排那颗三段胶囊。叫着人时它缩成一段（还看得见、改得了这条任务由谁跑），后面跟着被叫的人。
   const executorTools = <div className="studio-inline-executor">
     <ExecutorPickerField label="任务执行器" value={executor.profile} types={types} profiles={profiles} knownProfiles={profiles}
-      fallbackType={executorType} override={executor} compact={!!call} onChange={onExecutorChange} onEffortChange={onEffortChange} />
+      fallbackType={executorType} override={executor} disabled={locked} compact={!!call} onChange={onExecutorChange} onEffortChange={onEffortChange} />
     {call}
   </div>;
   // 输入区下面那排入口：图标 + 当前值，点开才是开关和下拉。名字和次序照旧。
-  const where = <ComposerPopover tone="opt" label="工作目录" value={`${directory}${isRepo && useWorktree ? ` · ${base || automaticBaseLabel}` : ""}`}
+  const where = <ComposerPopover tone="opt" label="工作目录" disabled={locked} value={`${directory}${isRepo && useWorktree ? ` · ${base || automaticBaseLabel}` : ""}`}
     trigger={<>{isRepo && useWorktree ? <GitBranch size={14} /> : <FolderSimple size={14} />}<span>{directory}</span></>}>
     {isRepo ? workspaceEditor : <p className="studio-help">当前项目不是 Git 仓库，直接使用项目目录。</p>}
   </ComposerPopover>;
-  const org = <ComposerPopover tone="opt" label="组织与标签" value={organization || "无分组、无标签"} className={`is-org${organization ? " is-configured" : ""}`}
+  const org = <ComposerPopover tone="opt" label="组织与标签" disabled={locked} value={organization || "无分组、无标签"} className={`is-org${organization ? " is-configured" : ""}`}
     trigger={<><Tag size={14} /><span>{organization || "分组与标签"}</span></>}>
     <div className="composer-option-grid">
       <div className="composer-field"><span>分组</span><Dropdown label="分组" value={groupId}

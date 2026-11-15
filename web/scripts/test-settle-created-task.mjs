@@ -76,7 +76,7 @@ for (const mounted of [true, false]) {
     launchMode: "run",
     panelMounted: () => mounted,
     opening: { start: async () => { throw new Error("暂时不可用"); }, started: "任务已创建，第一句交给 codex 答", what: "给 codex 的这一句" },
-    onOpeningFailed: (task, error) => failed.push({ task, error }),
+    onOpeningFailed: (task, error) => { failed.push({ task, error }); return true; },
   });
   assert.equal(await settleCreatedTask(args), false, "第一回合没送达就不算办成");
   assert.equal(calls.clear, 0, "不清草稿");
@@ -84,6 +84,22 @@ for (const mounted of [true, false]) {
   assert.equal(calls.created.length, 0, "不回写 onCreated(不收面板、不跳走)");
   assert.deepEqual(failed, [{ task: args.task, error: "暂时不可用" }], "已建好的任务连同原因记下来");
   assert.match(calls.notices[0], /给 codex 的这一句没发出去：暂时不可用。再按一次只重发这一下，不会再建一条/);
+}
+
+// 等结果期间那份草稿被清空、换成了别的事(onOpeningFailed 回 false):这条任务不接管新草稿,也不回写、不清,
+// 只如实说它留在待办里。
+{
+  const { args, calls } = baseArgs({
+    launchMode: "run",
+    task: { id: "task-1", title: "上一件事", updatedAt: "2026-10-08T07:00:00.000Z" },
+    opening: { start: async () => { throw new Error("暂时不可用"); }, started: "", what: "给 codex 的这一句" },
+    onOpeningFailed: () => false,
+  });
+  assert.equal(await settleCreatedTask(args), false);
+  assert.equal(calls.clear, 0, "不清新草稿");
+  assert.deepEqual(calls.clearIfUnchanged, []);
+  assert.equal(calls.created.length, 0);
+  assert.deepEqual(calls.notices, ["任务「上一件事」已创建，但给 codex 的这一句没发出去：暂时不可用。那份草稿已经换了，这条任务留在待办里"]);
 }
 
 // 第一回合接下了:照常收尾,返回办成。

@@ -19,6 +19,8 @@ import type { ComposerOpening } from "./composerOpening.ts";
  *
  * 框里 `@` 了人时「启动」就是起第一回合(问一句 / 讨论)。它没被服务端接下,任务虽已建好,这次提交却没办成:
  * 不收尾——草稿、叫的人原样留着,这条任务记进草稿(onOpeningFailed),再按一次只对它重发这一下,不再建一条。
+ * 只记进**这次提交的那份**草稿:等结果期间草稿被清空、换成了别的事,onOpeningFailed 回 false,这条任务就
+ * 不去接管新草稿,只如实说一声它留在待办里。
  * 返回值:这次提交办成了没有(没办成时调用方别把叫的人当「已发出」清掉)。
  */
 export async function settleCreatedTask(args: {
@@ -28,8 +30,8 @@ export async function settleCreatedTask(args: {
   scheduleCron: string;
   /** 框里 `@` 了人：「创建并运行」那一下换成它起第一回合（只在 launchMode="run" 时有）。 */
   opening?: ComposerOpening | null;
-  /** 第一回合没被接下：把这条已建好的任务连同原因记下来，留给下一次提交重发。 */
-  onOpeningFailed?: (task: Task, error: string) => void;
+  /** 第一回合没被接下：把这条已建好的任务连同原因记进这次提交的草稿，留给下一次重发；草稿已经不是那一份就回 false。 */
+  onOpeningFailed?: (task: Task, error: string) => boolean;
   /** 提交那一刻的草稿对象(归属标识)与随手记回链。 */
   submitted: { draft: Draft; noteIds: string[] };
   /** 发起提交的那份面板此刻是否仍挂载。 */
@@ -84,8 +86,9 @@ export async function settleCreatedTask(args: {
   }
   const reason = launchError instanceof Error ? launchError.message : "未知错误";
   if (launchError && args.opening && args.onOpeningFailed) {
-    args.onOpeningFailed(task, reason);
-    notify(`任务已创建，但${args.opening.what}没发出去：${reason}。再按一次只重发这一下，不会再建一条`);
+    notify(args.onOpeningFailed(task, reason)
+      ? `任务已创建，但${args.opening.what}没发出去：${reason}。再按一次只重发这一下，不会再建一条`
+      : `任务「${task.title}」已创建，但${args.opening.what}没发出去：${reason}。那份草稿已经换了，这条任务留在待办里`);
     return false;
   }
   finishCreation();

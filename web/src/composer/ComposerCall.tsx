@@ -12,14 +12,19 @@ import { DiscussCapsule } from "../task-detail/ReplyDiscussSegments.tsx";
 import { useReplyCall } from "../task-detail/useReplyCall.ts";
 import { COMPOSER_CALL_ABILITY } from "./composerOpening.ts";
 
-export function useComposerCall({ host, profiles, draft }: {
+export function useComposerCall({ host, profiles, draft, ready }: {
+  /** 这条任务由谁跑（草稿里存着的那一套，任务已建好时是那条任务的）。 */
   host: AgentType;
   profiles: AgentExecutorProfile[];
   draft: Pick<DraftHandle, "call" | "setCall">;
+  /** 注册表读回来了：在那之前 host 可能只是还没拉回可选值的默认，不拿它删人。 */
+  ready: boolean;
 }) {
   const calling = useReplyCall({ ownAgent: host, ability: COMPOSER_CALL_ABILITY, profiles, state: [draft.call, draft.setCall] });
   // 胶囊换成了叫着的那个人：他现在就是跑这条任务的那个，不再算被叫来的。
-  useEffect(() => calling.drop(host), [host]);
+  useEffect(() => {
+    if (ready) calling.drop(host);
+  }, [host, ready]);
   // `@` 菜单里能叫的人：已注册的执行器里除了这条任务自己的那个（@ 它没有意义，它本来就是跑这条任务的）。
   const callable = registeredAgentTypes(profiles).filter((type) => type !== host);
   return { ...calling, callable };

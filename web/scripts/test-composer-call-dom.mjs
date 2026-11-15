@@ -11,7 +11,9 @@
 // ⑥ 第一回合没被接下（问一句、讨论都一样）：任务已建好，字、叫的人原样留着，面板不收、写明原因；再按一次只对
 //    那一条重发，不再建一条，接下了才收尾；
 // ⑦ 叫的人跟正文一起存在草稿里：面板关了再开还在；
-// ⑧ 任务自己那颗胶囊收着时只露智能体；键盘进来就摆出模型、智能水平，照样能改；点智能体那段选完接着开模型。
+// ⑧ 任务自己那颗胶囊收着时只露智能体；键盘进来就摆出模型、智能水平，照样能改；点智能体那段选完接着开模型；
+// ⑨ 结果迟到：等结果期间切走、清空草稿写了另一件事，上一条的失败不许挂到新草稿上，新的那件事照常新建；
+// ⑩ 换过任务执行器（codex）再叫 claude：没送达后关了再开，叫的人还在、胶囊还是 codex 且只读，重发仍是给 claude 的那一句。
 // 跑法：npm -w web run test:composer-call-dom
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -31,8 +33,9 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   const requests = [];
   let created = 0;
-  // 第一回合（reply / discussions）还要失败几次。
+  // 第一回合（reply / discussions）还要失败几次；hold 给了就先扣住下一发，等它放行再答。
   let failOpenings = 0;
+  let holdOpening = null;
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname.replace(/^\/api/, "");
@@ -52,6 +55,11 @@ try {
     const match = /^\/tasks\/([^/]+)\/(run|reply|discussions)$/.exec(path);
     if (match && request.method() === "POST") {
       requests.push({ kind: match[2], task: match[1], body: request.postDataJSON() });
+      if (match[2] !== "run" && holdOpening) {
+        const gate = holdOpening;
+        holdOpening = null;
+        await gate;
+      }
       if (match[2] !== "run" && failOpenings > 0) {
         failOpenings -= 1;
         return json({ error: "暂时不可用（夹具）" }, 503);
@@ -209,6 +217,61 @@ try {
   await page.getByRole("listbox", { name: "可选模型" }).waitFor();
   assert.equal(await width(ownModel) > 1, true, "选完智能体照常向右接着选模型");
   await page.keyboard.press("Escape");
+
+  // ⑨ 上一条的结果迟到：期间切走、清空草稿写了另一件事——失败只说一声，不接管新草稿；新的那件事照常新建。
+  await objective.waitFor();
+  await call("事情 A ", "codex");
+  let releaseA;
+  holdOpening = new Promise((resolve) => { releaseA = resolve; });
+  failOpenings = 1;
+  start = requests.length;
+  await send.click();
+  await waitUntil(async () => since(start).some((item) => item.kind === "reply"), "A 的第一句已经发出去、还没回来");
+  const taskA = since(start).find((item) => item.kind === "reply").task;
+  await page.getByTestId("reopen").click();
+  await page.getByRole("button", { name: "清空草稿" }).click();
+  await call("事情 B ", "codex");
+  releaseA();
+  await page.getByText(/那份草稿已经换了，这条任务留在待办里/).waitFor();
+  assert.equal(await page.getByRole("alert").filter({ hasText: "第一回合没发出去" }).count(), 0, "上一条的失败不挂到新草稿上");
+  assert.equal(await objective.inputValue(), "事情 B ");
+  start = requests.length;
+  await send.click();
+  await waitUntil(async () => since(start).length >= 2, "B 新建并起第一回合");
+  [create, first] = since(start);
+  assert.equal(create.kind, "create", "B 是新建的一条");
+  assert.equal(first.kind, "reply");
+  assert.notEqual(first.task, taskA, "B 不会发进 A");
+  assert.equal(first.body.text, "事情 B");
+
+  // ⑩ 任务换成 codex 跑、叫 claude 先答：没送达后关了再开，安排原样还在，重发仍是给 claude 的那一句。
+  await objective.waitFor();
+  const host = page.locator(".studio-inline-executor > .composer-field .run-target-picker");
+  await host.getByRole("button", { name: /^智能体：claude/ }).click();
+  await page.getByRole("listbox", { name: "已注册的智能体" }).getByRole("option", { name: /codex/ }).first().click();
+  await page.getByRole("listbox", { name: "可选模型" }).waitFor();
+  await page.keyboard.press("Escape");
+  await host.getByRole("button", { name: /^智能体：codex/ }).waitFor();
+  await call("让 claude 先答 ", "claude");
+  failOpenings = 1;
+  start = requests.length;
+  await send.click();
+  await page.getByRole("alert").filter({ hasText: "第一回合没发出去" }).waitFor();
+  [create, first] = since(start);
+  assert.equal(create.body.agentType, "codex", "任务归 codex");
+  assert.equal(first.body.agent, "claude", "第一句交给 claude");
+  await page.getByTestId("reopen").click();
+  await page.getByRole("alert").filter({ hasText: "第一回合没发出去" }).waitFor();
+  await row("claude").waitFor();
+  const reopenedHost = host.getByRole("button", { name: /^智能体：codex/ });
+  await reopenedHost.waitFor();
+  assert.equal(await reopenedHost.isDisabled(), true, "任务已建好：胶囊是那条任务的执行器，只看不改");
+  assert.equal(await page.getByRole("button", { name: /^工作目录：/ }).isDisabled(), true, "工作目录也定了");
+  start = requests.length;
+  await send.click();
+  await page.getByText("提示：任务已创建，第一句交给 claude 答").waitFor();
+  assert.deepEqual(since(start).map((item) => [item.kind, item.task, item.body?.agent]), [["reply", first.task, "claude"]],
+    "重发只对那一条、仍交给 claude，不是让 codex 直接跑");
 
   assert.deepEqual(errors, []);
   console.log("composer call dom test passed");
