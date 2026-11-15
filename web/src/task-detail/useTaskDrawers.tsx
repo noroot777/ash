@@ -11,7 +11,13 @@
 //   · 里层推子智能体 / 读全文 = 画在外层那一屉的位置上、一样宽，外层那一屉先让出来（藏起来，
 //     不卸载 —— 里层那一屉的内容就长在它里面），关上之后它原样露回来。
 // 团队执行者抽屉里的 TaskDetail 不在这层关系里（团队页这一轮不动），照旧各管各。
-import { createContext, useContext, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+//
+// **那一屉里得摆得下一整页**（会话 + 回复框，回复框那一行有附件、派审查、预览、接力、执行器胶囊、
+// 发送键）。平时它只盖中间那一栏、宽度跟着那一栏走（side-drawer.css 的 78%/92%）；窗口窄、右侧
+// Inspector 又开着时，中间那一栏剩下两百来像素，抽屉跟着窄、回复框那一行被截掉。所以中间那一栏
+// 窄到摆不下时（useDrawerRoom），派出的任务这一层（连同里层推出来的那一屉）改画到整个详情区上
+// —— 连 Inspector 一起盖住，跟窄屏下 Inspector 盖在内容上同一种做法；关上就回到原样。
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Task, TaskListItem } from "@ash/shared";
 import { useLeftDrawerHost } from "../components/LeftDrawer.tsx";
@@ -29,6 +35,29 @@ type PageDrawers = {
 };
 
 const PageDrawersContext = createContext<PageDrawers | null>(null);
+
+// 中间那一栏窄过这个数，抽屉（78%）就不到 360px：回复框那一行（收成图标之后）大约要 320px，
+// 加上左右留白就摆不下了。
+const MIN_CENTER_FOR_INLINE = 460;
+
+/**
+ * 摆不下时改画到哪：`anchor` 所在那一栏（.task-detail）的宽度够就是 null（照常画在那一栏里），
+ * 不够就是包住它和 Inspector 的那一层（.inspector-layout）。跟着窗口、Inspector 宽度实时变。
+ */
+function useDrawerRoom(anchor: HTMLElement | null): HTMLElement | null {
+  const [narrow, setNarrow] = useState(false);
+  const column = anchor?.parentElement ?? null;
+  useEffect(() => {
+    if (!column) return;
+    const measure = () => setNarrow(column.getBoundingClientRect().width < MIN_CENTER_FOR_INLINE);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(column);
+    return () => observer.disconnect();
+  }, [column]);
+  const wide = anchor?.closest<HTMLElement>(".inspector-layout") ?? null;
+  return narrow && wide && wide !== column ? wide : null;
+}
 
 export function useTaskDrawers({ task, allTasks, conversation, onOpenTask, renderTask }: {
   task: Task;
@@ -53,6 +82,8 @@ export function useTaskDrawers({ task, allTasks, conversation, onOpenTask, rende
   // 外层：给自己那一屉里的 TaskDetail 递位置；里层推出东西时这一屉让出来。
   const [layer, setLayer] = useState<HTMLElement | null>(null);
   const [covered, setCovered] = useState(false);
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const room = useDrawerRoom(page ? null : anchor);
   const openHere = dispatched.state.open;
   const pageValue = useMemo<PageDrawers>(() => ({ layer, openDispatched: openHere, setCovered }), [layer, openHere]);
 
@@ -75,11 +106,21 @@ export function useTaskDrawers({ task, allTasks, conversation, onOpenTask, rende
     : (
       <>
         {own}
-        <PageDrawersContext.Provider value={pageValue}>
-          <div className={`page-drawer-slot${covered ? " is-covered" : ""}`}>{dispatched.drawer}</div>
-        </PageDrawersContext.Provider>
-        <div className="page-drawer-layer" ref={setLayer} />
+        <span className="page-drawer-anchor" ref={setAnchor} hidden />
+        {room ? createPortal(<div className="page-drawer-overlay">{pageLayer(pageValue, covered, dispatched.drawer, setLayer)}</div>, room) : pageLayer(pageValue, covered, dispatched.drawer, setLayer)}
       </>
     );
   return { ...stack, leftDrawer, dispatched: { ...dispatched, state: dispatchedState }, closeDrawers, drawers };
+}
+
+/** 派出的任务那一屉 + 里层推出来的那一屉摆的位置。照常画在中间那一栏，或者摆不下时整层挪到详情区上。 */
+function pageLayer(value: PageDrawers, covered: boolean, drawer: ReactNode, setLayer: (node: HTMLElement | null) => void) {
+  return (
+    <>
+      <PageDrawersContext.Provider value={value}>
+        <div className={`page-drawer-slot${covered ? " is-covered" : ""}`}>{drawer}</div>
+      </PageDrawersContext.Provider>
+      <div className="page-drawer-layer" ref={setLayer} />
+    </>
+  );
 }

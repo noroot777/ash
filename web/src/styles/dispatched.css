@@ -125,3 +125,17 @@
 .page-drawer-slot.is-covered {
   visibility: hidden;
 }
+
+/* 中间那一栏窄到摆不下一整页（useTaskDrawers 的 useDrawerRoom）：这一层整个挪到详情区上，
+   连 Inspector 一起盖住，宽度按整个详情区算。 */
+.page-drawer-overlay {
+  display: contents;
+}
+
+.inspector-layout:has(> .page-drawer-overlay) {
+  position: relative;
+}
+
+.page-drawer-overlay .side-drawer {
+  width: min(680px, 92%);
+}

@@ -139,7 +139,43 @@ try {
   await only(dispatchedDrawer("第二条派出去的"), "外层换一条");
   assert.equal(await nestedReport.count(), 0, "外层换了一条，里层那一屉跟着走");
 
-  console.log("✓ 详情页：左边几屉互斥（整页只有一屉），右侧「派出的任务」那一格");
+  // —— 窄窗口、Inspector 开着：中间那一栏剩下的地方摆不下一整页。派出的任务那一屉改盖住整个详情区
+  //    （连 Inspector 一起），回复框那一行完整露在抽屉里；里层推出来的那一屉同样宽。
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector("aside.side-drawer"));
+  const center = page.locator("section.task-detail").first();
+  const rect = (locator) => locator.evaluate((node) => { const r = node.getBoundingClientRect(); return { left: r.left, right: r.right, width: r.width }; });
+  const settled = () => page.waitForFunction(() => !document.querySelector("aside.side-drawer.is-closing") && [...document.querySelectorAll("aside.side-drawer")].every((node) => node.getAnimations().every((animation) => animation.playState !== "running")));
+  await page.setViewportSize({ width: 760, height: 720 });
+  await page.waitForFunction(() => document.querySelector("section.task-detail").getBoundingClientRect().width < 460);
+  const narrowCenter = await rect(center);
+  await rowA.click();
+  await only(drawerA, "窄窗口下的派出任务");
+  await settled();
+  const narrowDrawer = await rect(drawerA);
+  assert.ok(narrowDrawer.width >= 360, `窄窗口下那一屉摆得下一整页（实际 ${narrowDrawer.width}px，中间那一栏只有 ${narrowCenter.width}px）`);
+  assert.ok(narrowDrawer.right > narrowCenter.right, "摆不下时连 Inspector 一起盖住，不挤在中间那一栏里");
+  const probe = await rect(drawerA.locator(".reply-row-probe"));
+  assert.ok(probe.right <= narrowDrawer.right, "回复框那一行整行在抽屉里，不被截掉");
+  await drawerA.getByRole("button", { name: "在第一条派出去的里读审查报告" }).click();
+  await only(nestedReport, "窄窗口下里层的读全文");
+  await settled();
+  assert.equal((await rect(nestedReport)).width, narrowDrawer.width, "里层推出来的那一屉跟它一样宽");
+  await nestedReport.getByRole("button", { name: "关上审查报告" }).click();
+  await only(drawerA, "窄窗口下关上里层之后");
+  assert.equal(await page.locator('[data-drawer-task="kid-a"]').count(), 1);
+
+  // —— 窗口拉回来：照常只盖中间那一栏，右侧 Inspector 不被盖住、点得着。
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.waitForFunction(() => document.querySelector("section.task-detail").getBoundingClientRect().width >= 460);
+  await only(drawerA, "宽窗口");
+  await settled();
+  const wideCenter = await rect(center);
+  assert.ok((await rect(drawerA)).right <= wideCenter.right + 0.5, "宽度够时只盖中间那一栏");
+  await rowB.click();
+  await only(dispatchedDrawer("第二条派出去的"), "宽窗口下 Inspector 里点另一条");
+
+  console.log("✓ 详情页：左边几屉互斥（整页只有一屉、窄窗口摆得下），右侧「派出的任务」那一格");
 } finally {
   await browser?.close();
   await web.close();

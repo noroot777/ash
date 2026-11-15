@@ -74,6 +74,8 @@ function NestedDetail({ task, allTasks, onOpenTask }: { task: Task; allTasks: Ta
     <LeftDrawerProvider value={drawers.leftDrawer.api}>
       <section className="task-detail" data-drawer-task={task.id} style={{ position: "relative", flex: 1, minHeight: 0 }}>
         <p>{task.title} 的会话</p>
+        {/* 回复框那一行（附件、派审查、预览、接力、执行器胶囊、发送键，收成图标之后）大约这么宽。 */}
+        <div className="reply-row-probe" style={{ width: 320, height: 4 }} aria-hidden="true" />
         {drawers.dispatched.state.tasks.map((kid) => (
           <button key={kid.id} type="button" onClick={() => drawers.dispatched.state.open(kid.id)}>在{task.title}里打开：{kid.title}</button>
         ))}
