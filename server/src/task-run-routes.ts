@@ -15,6 +15,7 @@ import { readDuetTurns } from "./duet/transcript-reads.js";
 import { mountDuetGateRoutes } from "./duet/gate-route.js";
 import { runTask } from "./orchestrator.js";
 import { resumeOrRunTask } from "./task-resume.js";
+import { holdForPrerequisites, withdrawPrerequisiteRequest } from "./prerequisite-launch.js";
 import { preparePendingCheckpointStart, recoverPendingCheckpoints } from "./pending-checkpoint-recovery.js";
 import { cancelQueueAdvance } from "./queue-advance-retry.js";
 import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
@@ -109,6 +110,9 @@ api.post("/tasks/:id/run", async (c) => {
   if (agentHold) return c.json(await noted(taskId, "运行", agentHold), 409);
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
+  // 有前置、前置还没站齐：不起，记成等齐就起（prerequisite-launch.ts）。这一下是被接受了的请求，不是挡回。
+  const prerequisiteHold = await holdForPrerequisites(r, { source: "run", actingUserId: ownerIdOf(actorOf(c)) });
+  if (prerequisiteHold) return c.json({ started: false, waiting: true, reason: prerequisiteHold.reason }, 202);
   // Fire-and-forget; progress streams over /api/events.
   // team 也走「先占位、再镜像查验收锁」这一套（占位对常驻调度台本身没用途,runTask 的
   // team 分支会立刻还回来）—— 它只为让 202 是真话:早先 team 分支排在这两道检查**之前**
@@ -184,6 +188,9 @@ api.post("/tasks/:id/fire", async (c) => {
   // runTask 遇验收锁/单飞锁会静默 return——202 就成了谎报「已触发一轮全新运行」（审查实测）。
   if (isAcceptingTask(taskId))
     return c.json(await noted(taskId, "触发新一轮", { error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }), 409);
+  // 同 /run：前置没站齐就只记下请求、如实答「在等」（底层 runTask 也会挡，但那样 202 就成了谎报）。
+  const prerequisiteHold = await holdForPrerequisites(r, { source: "run", actingUserId: ownerIdOf(actorOf(c)) });
+  if (prerequisiteHold) return c.json({ started: false, waiting: true, reason: prerequisiteHold.reason }, 202);
   const blocking = await queueBlockerDetails(taskId);
   if (blocking.length) {
     return c.json(
@@ -225,6 +232,13 @@ api.post("/tasks/:id/stop", async (c) => {
   const verdict = stopVerdict(await readActionFacts(r));
   if (!verdict.ok) return refuse(c, taskId, "停止", verdict);
   if (await cancelQueueAdvance(taskId)) return c.json({ stopped: true, note: "已撤销待启动的队列运行请求" });
+  const withdrawn = await withdrawPrerequisiteRequest(taskId);
+  if (withdrawn === "withdrawn") return c.json({ stopped: true, note: "已撤销「前置站齐就开工」的请求" });
+  // 前置刚站齐、放行那一路已经在起跑：请求撤了、那一次起跑也冻住了，照下面「停一个正在起跑的回合」收尾。
+  if (withdrawn === "starting") {
+    await setTaskStatus(taskId, "canceled");
+    return c.json(await stopStartingTurn(taskId));
+  }
   if (stopTask(taskId)) return c.json({ stopped: true });
   if (r.status === "queued" || r.status === "running") {
     await setTaskStatus(taskId, "canceled");

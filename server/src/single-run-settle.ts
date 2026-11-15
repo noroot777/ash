@@ -6,7 +6,7 @@
 // `step` 是收尾记步(turn-wind-down.ts):每个 await 之前报一声「走到这一步了」,卡住时巡检才
 // 说得出卡在哪一步。它不决定往不往下走 —— 锁只由这一轮自己放,别人拿不走。
 import type { WriteStream } from "node:fs";
-import type { AgentEvent, AgentType, SessionRole } from "@ash/shared";
+import type { AgentEvent, AgentType, SessionRole, TurnInterruption } from "@ash/shared";
 import { turnIdentity, type StopSettle } from "./runs.js";
 import type { RunHandle } from "./executors/types.js";
 import { writeTurnEnd } from "./transcript.js";
@@ -37,6 +37,8 @@ export type SingleRunSettlement = {
   executionFailed: boolean;
   doneEvent: Extract<AgentEvent, { kind: "done" }> | null;
   failure: Parameters<typeof noteReviewerChannelGap>[0]["failure"];
+  /** 这一回合怎么断的（turn-interruption.ts）；没断或判不出来为空。 */
+  interruption?: TurnInterruption | null;
   noteSessionNotice: (text: string, at?: string, level?: "notice") => void;
   flushSessionNotices: () => void;
   /** 收尾记步(见文件头)。 */
@@ -74,7 +76,8 @@ export async function settleSingleRunTurn(s: SingleRunSettlement): Promise<void>
   const settled = await settleTaskStatus(taskId, settleExit, stopped, sessId,
     // 原因原样交进去:判决自己带着种类,这里不做翻译 —— 两份同义枚举之间的手工映射,加一种
     // 原因时漏掉就会被 `else` 静默吞掉(上一版就是那个形状)。
-    watchdogFailure ? { kind: watchdogFailure.kind, detail: watchdogFailure.reason } : null);
+    watchdogFailure ? { kind: watchdogFailure.kind, detail: watchdogFailure.reason } : null,
+    s.interruption?.reason);
   clearStallFailure(sessId, s.turnStart); // 这一轮结算完了,销账(见那个文件里的水位)
   clearTurnStart(taskId); // 只有「未确认 failed」那一支会读它,别的支路在这儿扔掉残页
   // 这一轮到底改没改东西:账在回合开头就清过了,这里只管「白清了要放回去」——

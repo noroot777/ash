@@ -357,11 +357,12 @@ export function deliverPendingMessages(taskId?: string): Promise<void> {
 // 调用处刚刚查出来的,顺手拼起来比让判定多返回一个字段便宜。
 function waitReason(
   task: { status: string; mode: string | null } | null,
-  blockers: { queueBlocked: boolean; groupPaused: boolean; dispatchHold: DispatchHold | null },
+  blockers: { queueBlocked: boolean; groupPaused: boolean; dispatchHold: DispatchHold | null; prerequisiteWait?: boolean },
 ): string {
   if (!task) return "读不到任务当前状态";
   if (blockers.groupPaused) return "任务所在分组已暂停";
   if (blockers.dispatchHold) return dispatchHoldText(blockers.dispatchHold);
+  if (blockers.prerequisiteWait) return "在等前置任务站稳，齐了会连同这条一起开工";
   if (task.status === "running") return "任务正在运行，等它这一轮结束";
   // queued 单独说:它既可能是正常排队,也可能是一具没人回滚的占位遗留 —— 后者正是
   // 2026-10-26 那次卡死的形态,所以措辞里要给出下一步该看哪里。
@@ -414,7 +415,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         m.execution = execution;
       }
       // 判定要的那几样持久事实（队列占位、分组暂停、哨兵来源、审查归属）读齐了交给纯判定；飞书推卡按同一份判（pending-delivery-facts.ts）。
-      const { verdict, facts: { needQueueCheck, queueBlocked, groupPaused, dispatchHold } } = await deliveryVerdictOf(m, t, at);
+      const { verdict, facts: { needQueueCheck, queueBlocked, groupPaused, dispatchHold, prerequisiteWait } } = await deliveryVerdictOf(m, t, at);
       if (verdict.action === "wait") {
         // 还没到期(钟点未到、前置任务未完成)的等待是它自己的语义,不是滞留。
         if (!isDueForDelivery(m, at)) continue;
@@ -424,7 +425,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         // 「等」是正常的,**一直等**不是:久久发不出去要出声并留痕,否则它和「根本没这条
         // 消息」在日志与界面上长得一模一样(见 noteStalledPending)。判定本身不带 reason,
         // 在这里按刚查到的那几样组装一句人话 —— 用户想知道的就是「在等什么」。
-        noteStalledPending(stallView(m, at), waitReason(t, { queueBlocked, groupPaused, dispatchHold }), at.getTime());
+        noteStalledPending(stallView(m, at), waitReason(t, { queueBlocked, groupPaused, dispatchHold, prerequisiteWait }), at.getTime());
         continue;
       }
       if (verdict.action === "cancel") {

@@ -33,9 +33,9 @@ export function useReplyMention({
   profiles: AgentExecutorProfile[];
   profilesReady: boolean;
   profilesFailed: boolean;
-  /** 这会儿根本不该弹（非单飞 / 已归档 / 正在配派生命令 / 正在选模型）。 */
+  /** 这会儿根本不该弹（非单飞 / 已归档 / 正在配派生命令 / 框被裁定借着）。 */
   disabled: boolean;
-  /** 选中智能体：由调用方接着弹「选模型」那一步。 */
+  /** 选中智能体：由调用方叫上他（胶囊换成他，框顶多出「他来做什么」那一行）。 */
   onPickAgent: (agent: AgentType) => void;
   onPicked: () => void;
 }) {

@@ -61,7 +61,7 @@ const { holdDispatched } = await import("../src/dispatch-hold.js");
 const { oweHeldStart } = await import("../src/dispatch-hold-owed.js");
 const { tick } = await import("../src/schedules.js");
 const { serializeQueueClaims } = await import("../src/queue-seat.js");
-const { groupSlotUsage } = await import("../src/group-slots.js");
+const { slotsTaken } = await import("../src/launch-slots.js");
 await ensureSchema();
 
 const api = new Hono();
@@ -589,8 +589,8 @@ try {
   await until(`${movedLate} 按新组起跑`, () => turnsOf(movedLate!).length === 1);
   await sleep(300);
   assert.equal(turnsOf(queuedLate!).length, 0, "排在正在跑的那条后面，不抢跑");
-  assert.equal(groupSlotUsage("G4").used, 3, "旧组只剩还在跑的三条占名额");
-  assert.equal(groupSlotUsage("G5").used, 1, "挪过去的那条占的是新组的名额");
+  assert.equal(slotsTaken("G4"), 3, "旧组只剩还在跑的三条占名额");
+  assert.equal(slotsTaken("G5"), 1, "挪过去的那条占的是新组的名额");
   finish(m0!);
   await until(`${queuedLate} 等前一条做完才起`, () => turnsOf(queuedLate!).length === 1);
   assert.ok(!runs.isRunning(m0!));

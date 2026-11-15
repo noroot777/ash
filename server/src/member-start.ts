@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { queueItems, tasks } from "./db/schema.js";
-import { acquireGroupSlot, releaseGroupSlot } from "./group-slots.js";
+import { freeSlot, takeSlot, whenSlotFrees } from "./launch-slots.js";
 import { serializeQueueClaims } from "./queue-seat.js";
 import { releaseTurn, type TurnIdentity } from "./runs.js";
 import { reclaimStrandedSeat } from "./queue-seat-reclaim.js";
@@ -46,7 +46,8 @@ export async function startMember(groupId: string | null, taskId: string, opts: 
   const seen = turnStartsOf(taskId);
   let group = groupId;
   for (;;) {
-    const slot = group ? await acquireGroupSlot(group) : null;
+    const slotGroup = group;
+    if (slotGroup) await occupySlot(slotGroup, taskId);
     let verdict: Verdict = { kind: "changed" };
     try {
       if (opts.prepare && await opts.prepare()) return;
@@ -64,12 +65,21 @@ export async function startMember(groupId: string | null, taskId: string, opts: 
         return;
       }
     } finally {
-      if (group && slot) releaseGroupSlot(group, slot);
+      if (slotGroup) freeSlot(slotGroup, taskId);
     }
     if (verdict.kind === "queue") return opts.queued(verdict.queueId);
     if (verdict.kind !== "regroup") return;
     group = verdict.groupId;
   }
+}
+
+/**
+ * 占这一组的一个名额（launch-slots.ts，分组运行、等齐就起、接着跑兑现欠账共用的那一份），满了就等有人
+ * 还。占不到也可能是这一位的名额正被别的入口占着（它正由那一路起跑）：等那一路还了再进来，准入那里
+ * 会认出它这期间已经起过。没有分组的不占：只有同组的并发有上限。
+ */
+async function occupySlot(groupId: string, taskId: string): Promise<void> {
+  while (!takeSlot(groupId, taskId)) await whenSlotFrees();
 }
 
 function admit(taskId: string, group: string | null, seen: number, eligible: (row: TaskRow) => Promise<boolean>): Promise<Verdict> {

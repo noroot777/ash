@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import type { AgentType, ScheduledMessage, SkillEntry, Task, TaskListItem } from "@ash/shared";
+import { useEffect, useRef, useState } from "react";
+import type { AgentType, ScheduledMessage, SkillEntry } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
 import { parseCliCommand } from "@ash/shared/cli-commands";
-import { PencilSimple, X } from "@phosphor-icons/react";
-import { IconMenu, type IconMenuItem } from "../components/IconMenu.tsx";
+import { PencilSimple } from "@phosphor-icons/react";
+import { IconMenu } from "../components/IconMenu.tsx";
 import { ScheduledMessageTray, useScheduledMessages } from "../components/ScheduledMessages.tsx";
-import { LaterSendKey, useLaterSend } from "../components/LaterSend.tsx";
+import { useLaterSend } from "../components/LaterSend.tsx";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { AgentPlate } from "../components/AgentPlate.tsx";
 import {
@@ -16,25 +16,25 @@ import {
 import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { useReplyLayout } from "./useReplyLayout.ts";
 import { isMenuPickKeyEvent, isSendKeyEvent } from "../lib/sendKey.ts";
-import type { ReplyTaskResult } from "../lib/api.ts";
-import { useProviders } from "../lib/modelCatalog.ts";
-import { AgentModelPicker } from "./AgentModelPicker.tsx";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "./Attachments.tsx";
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { InputMentionMenu } from "../components/MentionMenu.tsx";
 import { useReplyMention } from "./replyMention.ts";
 import { applySlashPick, mergeSlashItems, slashQuery, slashSendsAsTyped, slashToken, type SlashItem } from "../lib/useSkills.ts";
-import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
-import { useStandingExecutor, type StandingExecutor } from "./useStandingExecutor.ts";
+import type { AgentModelSelection } from "./mentionPicker.ts";
+import { CALL_COPY, DISPATCH_SLASH_ITEM, dispatchBaseOptions, parseDispatchCommand, readCallMemory, type ReplyCall } from "./replyCall.ts";
+import { useDispatchBaseContext, useReplyCall } from "./useReplyCall.ts";
+import { CallCancelKey, DispatchBaseSegment, ReplyCallDock } from "./ReplyCallDock.tsx";
+import { ReplySendKey } from "./ReplySendKey.tsx";
+import type { ReplyBoxProps } from "./replyBoxProps.ts";
+import { useStandingExecutor } from "./useStandingExecutor.ts";
 import { useExecutorProfiles } from "./useExecutorProfiles.ts";
 import { ComposerInput } from "./ComposerInput.tsx";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
-import { overrideKeyDown, overrideTake, type ReplyOverride } from "./replyOverride.ts";
+import { overrideKeyDown, overrideTake } from "./replyOverride.ts";
 import { ScreenshotAnnotation } from "../page-annotation/ScreenshotAnnotation.tsx";
 import { screenshotCandidates, type AnnotationReply } from "../page-annotation/model.ts";
-import type { ConversationItem } from "./conversationModel.ts";
 import { QuestionDock, useQuestionTakeover } from "./QuestionSlot.tsx";
-import type { QuestionAnswerInput } from "@ash/shared/questions";
 import { parseAttachmentText } from "./utils.ts";
 import {
   attachmentsFromPaths,
@@ -68,69 +68,9 @@ export function ReplyBox({
   override,
   onAnswer,
   onOpenTask,
-}: {
-  task: Task;
-  hasConversation: boolean;
-  onSend: (
-    text: string,
-    attachments: string[],
-    options: {
-      agent?: AgentType;
-      executorId?: string | null;
-      model?: string | null;
-      reasoningEffort?: string | null;
-      sendAt?: string;
-      afterTaskId?: string;
-      // 只用于显示:这一回合会由谁跑。服务端不认这个字段(调用方要摘掉再发),
-      // 它补的是「消息已发出、会话行还没落库」那一两秒里横幅没名字可报的空窗。
-      executorLabel?: string | null;
-    },
-    // 返回 null = **这一句没送出去,而且不是错误**(典型:换执行器的确认框被取消)。
-    // 输入框里的字、附件、@选中的执行器全部原样留着，用户点一下就能重来。
-  ) => Promise<ReplyTaskResult | null>;
-  /**
-   * 停掉这一轮（在跑）或不排了（排着队）。给了才有停止键：任务头上不再有停止，它就是发送键的
-   * 另一面（docs/ui-ux-audit reply-4）。
-   */
-  onStop?: () => Promise<void>;
-  /** 服务端说此刻停不了的那句原因（停止结论 `blocker`）：给了 onStop 时停止键灰着说它。 */
-  stopBlocked?: string | null;
-  /**
-   * 点胶囊改执行器/模型/智能水平 = 改**这个任务以后都用谁**，由调用方写回任务
-   * （PATCH /tasks/:id）。不传就只剩 `@` 那条一次性召唤，胶囊变成只读。
-   * `label` 只是提示文案用的执行器名，别当业务字段使。
-   */
-  onStandingExecutorChange?: (next: StandingExecutor, label: string) => Promise<void>;
-  command?: {
-    matches: (text: string) => boolean;
-    onSubmit: (text: string) => void;
-    onChange?: (text: string) => void;
-    onCancel?: () => void;
-    resetKey?: number;
-    items: { command: string; label: string; hint?: string }[];
-  };
-  // 当前执行器已装的技能。选中只把 `/名字` 补进正文，不把它当派生命令截走；
-  // server 会在运行这一回合前注入对应 SKILL.md。
-  skills?: SkillEntry[];
-  inlinePanel?: ReactNode;
-  /** 框上方只放状态（验收前置命令在跑之类）；没有就不占地方。 */
-  topRail?: ReactNode;
-  /** 框里那一行左边、附件后面的动作（再审、打开预览、接力到…）（docs/ui-ux-audit reply-3）。 */
-  actions?: ReactNode;
-  /** 「更多」里除截图批注以外的项（预览日志）。 */
-  moreItems?: IconMenuItem[];
-  /** 「更多」那颗键：它里面开出的对话框关上以后焦点回到这里。 */
-  moreRef?: RefObject<HTMLButtonElement | null>;
-  conversationItems?: ConversationItem[];
-  /** 「等某任务完成后发送」的候选,以及托盘里报出在等谁。 */
-  tasks?: TaskListItem[];
-  /** 这个框此刻被借用（等你裁定时框顶那一行）；见 replyOverride.ts。 */
-  override?: ReplyOverride;
-  /** 有问题在等时怎么答：给了，框那一格就由答题卡接管（QuestionSlot.tsx）。 */
-  onAnswer?: (answer: string, input: QuestionAnswerInput) => Promise<void>;
-  /** 托盘里「某某名下已全部停下」点过去打开那一条。 */
-  onOpenTask?: (taskId: string) => void;
-}) {
+  onDispatch,
+  asking,
+}: ReplyBoxProps) {
   const draft = useTaskReplyDraft(task.id);
   const shellRef = useReplyLayout();
   const ownMoreRef = useRef<HTMLButtonElement>(null);
@@ -146,18 +86,11 @@ export function ReplyBox({
   currentTaskId.current = task.id;
   const [commandIndex, setCommandIndex] = useState(0);
   const [menuDismissed, setMenuDismissed] = useState(false);
-  // 一次性召唤：正文里 `@某个智能体` 选出来的「就这一句由谁跑」。只随这一次 reply
-  // 发出、发完即清，不落任务 —— 「以后都用谁」是另一件事，见下面的 standing。
-  const [target, setTarget] = useState<MentionTarget | null>(null);
-  // 只剩 `@` 那条路会开这个浮层：正文里选中智能体之后紧接着选模型。点胶囊改配置由
-  // 胶囊自己管（三段各开各的浮层，见 components/RunTargetPicker.tsx）。
-  const [picker, setPicker] = useState<{ agent: AgentType } | null>(null);
   const later = useLaterSend(draft);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // null = 没拖过,交给行数自动撑高(useAutoGrowTextarea)
   const replyHeight = useReplyHeight(SINGLE_REPLY_PIN);
   const { profiles, ready: profilesReady, failed: profilesFailed } = useExecutorProfiles();
-  const providers = useProviders();
   // 执行器名只用于提示文案：没钉 profile 时按「该类型的默认执行器」报，与运行侧
   // resolveExecutorFor 的降级口径一致，别让提示说出一个跑起来根本用不上的名字。
   const executorLabelOf = (agentType: AgentType, executorId: string | null) =>
@@ -171,6 +104,18 @@ export function ReplyBox({
       && ((next) => onStandingExecutorChange(next, executorLabelOf(next.agentType, next.executorId))),
     setSendError,
   );
+  // `@` 叫了谁、来做什么（问一句 / 派出去）。叫着人时胶囊上是他、框顶那一行是做法；问一句就是一次性
+  // 召唤 —— 只随这一次 reply 发出、发完即清，不落任务（「以后都用谁」是上面的 standing）。
+  const dispatchable = !!onDispatch;
+  const calling = useReplyCall({ ownAgent: standing.config.agentType, dispatchable, profiles });
+  const call = calling.call;
+  const target = call?.target ?? null;
+  const dispatching = call?.verb === "dispatch";
+  const baseContext = useDispatchBaseContext(task.projectId, dispatching);
+  const baseOptions = dispatchBaseOptions(task, baseContext.value);
+  const worktreeBase = baseOptions.find((option) => option.id === call?.base)?.worktreeBase ?? baseOptions[0]?.worktreeBase ?? null;
+  // 叫着人时框顶是做法那一行，裁定那一行让开（不叫了就换回来）：框顶任何时候只有一行。
+  const activeOverride = call && dispatchable ? undefined : override;
   const scheduled = useScheduledMessages(task.id);
   const uploads = useAttachments({
     value: draft.attachments,
@@ -179,7 +124,7 @@ export function ReplyBox({
     onPendingChange: draft.setPendingUploads,
   });
   // 借用中且选了一档：正文是那一档的话（或整块换成别的），斜杠、@ 这些都不出。
-  const { take, takeInput } = overrideTake(override);
+  const { take, takeInput } = overrideTake(activeOverride);
   // 任务正在跑不再是「不能说话」,而是「说了先排队」:发出去的消息落成一条待发送
   // 消息(mode=queued),这一轮一结束由服务端自动送进同一个会话。所以 disabled 只留
   // 真正没得说的情况——不是单任务、已归档、以及从没跑过因而没有会话可续。
@@ -198,14 +143,13 @@ export function ReplyBox({
       : !hasConversation && !queueing && !scopeDiscovery
         ? "先运行任务，再继续回复"
         : null;
-  const placeholder = inputDisabled && reason ? reason : "回复…";
+  const placeholder = inputDisabled && reason ? reason : call ? CALL_COPY[call.verb].placeholder(call.target.agent) : "回复…";
 
   const resetComposerState = () => {
     setCommandIndex(0);
     setMenuDismissed(false);
     mention.reset();
-    setTarget(null);
-    setPicker(null);
+    calling.cancel();
   };
 
   useEffect(() => {
@@ -233,28 +177,32 @@ export function ReplyBox({
 
   // 派生命令(ash 自己的)排在技能前面,中间画一条线:前者换的是「谁来干」,
   // 后者只是给这一轮加一句提示词,点错的代价差着量级。
-  const ashItems: SlashItem[] = (command?.items ?? []).map((item) => ({ ...item, kind: "ash" }));
+  const ashItems: SlashItem[] = [
+    ...(dispatchable ? [DISPATCH_SLASH_ITEM] : []),
+    ...command?.items ?? [],
+  ].map((item) => ({ ...item, kind: "ash" }));
   const commandCandidates = (text: string) => mergeSlashItems(ashItems, skills, slashQuery(text));
   const candidates = commandCandidates(value);
   // 答题卡展开着（连同它收回去那一下）：平常的框和它的全部浮层都不挂，草稿原样留着（QuestionSlot.tsx）。
   // 框里的工具（选执行器、发送设置、截图批注、更多）跟着框一起卸掉；框外这几层（补全、引用、`@`
   // 之后选模型、派生面板）在下面逐个按 covering 让开。由宿主开着的那两层顺手关上，收起时不再自己弹回来。
-  const takeover = useQuestionTakeover(onAnswer ? task : null);
+  const takeover = useQuestionTakeover(onAnswer ? asking === undefined ? task : asking : null);
   const covering = takeover.covering;
   useEffect(() => {
-    if (!covering) return;
-    setPicker(null);
-    setAnnotating(false);
+    if (covering) setAnnotating(false);
   }, [covering]);
   const menuOpen = !take && !covering && !menuDismissed && candidates.length > 0;
   const selectedIndex = Math.min(commandIndex, Math.max(0, candidates.length - 1));
   const commandMatch = !take && !!command && command.matches(value);
+  // 敲全了的 `/派 …`：发送 = 叫上次那个人、停在「派出去」，后面那段留在框里。
+  const dispatchTyped = !take && !call && dispatchable && parseDispatchCommand(value) !== null;
   const selected = candidates[selectedIndex];
   // 菜单开着时回车做什么:ash 命令打开派生配置;技能和原生命令补全进正文;
   // 原生命令已经敲全就直接发(它本来就是发给 CLI 的一句话)。
   const menuSends = menuOpen && slashSendsAsTyped(selected, value);
   const menuCompletes = menuOpen && !menuSends && selected?.kind !== "ash";
-  const commandActive = commandMatch || menuOpen;
+  const commandActive = commandMatch || menuOpen || dispatchTyped;
+  const pickingDispatch = menuOpen ? selected?.command === DISPATCH_SLASH_ITEM.command : dispatchTyped;
   // 选模型那个浮层和底部胶囊的候选都取它；`@` 那张菜单里的智能体候选在 replyMention.ts
   // 里自己算（它还要按 token 过滤）。
   const registeredTypes = registeredAgentTypes(profiles);
@@ -267,10 +215,12 @@ export function ReplyBox({
     profiles,
     profilesReady,
     profilesFailed,
-    disabled: disabled || commandActive || !!picker || !!take,
+    disabled: disabled || commandActive || !!take,
     onPickAgent: (agent) => pickMention(agent),
     onPicked: () => textareaRef.current?.focus(),
   });
+  // `/派` 先开菜单选人时那份「停在派出去」只活到这张菜单收起（useReplyCall 的 pend）。
+  useEffect(() => calling.picking(mention.open), [mention.open]);
 
   // 底部胶囊上显示的「这一回合会由谁、用什么模型跑」：@ 召唤过就是那一套（一次性），
   // 没召唤就是任务自己的常设配置（executorId 为空时按类型默认执行器降级，与服务端
@@ -313,11 +263,29 @@ export function ReplyBox({
       textareaRef.current?.focus();
       return;
     }
+    if (item.command === DISPATCH_SLASH_ITEM.command) return startDispatch(parseDispatchCommand(value) ?? "");
     command?.onSubmit(item.command);
     setValue("");
     setCommandIndex(0);
     setMenuDismissed(false);
-    setTarget(null);
+    calling.cancel();
+  };
+
+  // `/派`：叫上次叫过的那个人，停在「派出去」；后面写了话就留在框里。从没叫过人（或那个执行器已经
+  // 没了）就先开 `@` 菜单让选，选中的直接停在「派出去」。
+  const startDispatch = (rest: string) => {
+    setCommandIndex(0);
+    setMenuDismissed(false);
+    const last = readCallMemory().last;
+    if (last && registeredTypes.includes(last)) {
+      setValue(rest);
+      calling.start(last, "dispatch");
+    } else {
+      calling.pend("dispatch");
+      setValue(rest ? `${rest} @` : "@");
+      mention.onValueChange();
+    }
+    textareaRef.current?.focus();
   };
 
   const cancelCommand = () => {
@@ -328,42 +296,18 @@ export function ReplyBox({
     command?.onCancel?.();
   };
 
-  // 第一步选中智能体：把 @xxx 从正文里摘掉（它是指令不是内容），紧接着弹第二步选模型。
-  const pickMention = (agent: AgentType) => {
-    setValue((current) => current.replace(/@[^\s@]*$/, ""));
-    mention.reset();
-    setPicker({ agent });
-  };
-
-  // 选完智能体和模型：执行器没换就把已选的智能水平留着（用户只是换了个模型），
-  // 换了执行器才清成「跟随」——旧档位在新 CLI 上多半根本不存在。
-  const commitTarget = (next: AgentModelSelection) => {
-    setTarget((current) => {
-      const previous = {
-        agentType: current?.agent ?? activeAgent,
-        executorId: current ? current.executorId : standing.config.executorId,
-      };
-      const kept = current ? current.reasoningEffort : standing.config.reasoningEffort;
-      return {
-        ...next,
-        reasoningEffort: sameExecutor({ agentType: next.agent, executorId: next.executorId }, previous)
-          ? kept
-          : null,
-      };
-    });
-    setPicker(null);
+  // 不叫人了：胶囊回到这条任务自己的执行器，框顶换回裁定那一行（有的话），写的字一个不动。
+  const cancelCall = () => {
+    calling.cancel();
     textareaRef.current?.focus();
   };
 
-  // 只改智能水平也算「本回合这么跑」：没召唤过就以任务当前配置为底稿建一份覆盖，
-  // 免得用户点了档位却什么都没发生。
-  const commitEffort = (effort: string) => {
-    setTarget((current) => ({
-      agent: current?.agent ?? activeAgent,
-      executorId: current ? current.executorId : standing.config.executorId,
-      model: current ? current.model : standing.config.model,
-      reasoningEffort: effort || null,
-    }));
+  // 选中一个智能体：把 @xxx 从正文里摘掉（它是指令不是内容），叫上他——胶囊换成他（上次对他用的那一套），
+  // 框顶多出「他来做什么」那一行，默认停在「问一句」。叫着人时再 @ 只是换人，做法不变。
+  const pickMention = (agent: AgentType) => {
+    setValue((current) => current.replace(/@[^\s@]*$/, ""));
+    mention.reset();
+    calling.start(agent, call?.verb ?? null);
   };
 
   // 点胶囊改的是**任务以后都用谁**：写回任务本身，之后每一条消息（含排队的、队列
@@ -407,6 +351,14 @@ export function ReplyBox({
       pickCommand({ command: value.trim(), label: "", kind: "ash" });
       return false;
     }
+    if (!annotation && dispatchTyped) {
+      startDispatch(parseDispatchCommand(value) ?? "");
+      return false;
+    }
+    if (!annotation && call?.verb === "dispatch") return runDispatch(call);
+    // 截图批注是另一条入口：叫着人只在「问一句」时算数，派出去不经过这里。
+    const askCall = call?.verb === "ask" ? call : null;
+    const askTarget = askCall?.target ?? null;
     if (disabled || sending || uploads.uploading || (!annotation && !value.trim() && !uploads.attachments.length)) return false;
     const choice = annotation ? {} : later.resolve();
     // 选了「稍后」却没配好：拦下并说清，绝不悄悄退回立即发送。
@@ -439,10 +391,10 @@ export function ReplyBox({
         sentText,
         sentPaths,
         {
-          agent: target?.agent,
-          executorId: target?.executorId ?? null,
-          model: target?.model ?? null,
-          reasoningEffort: target?.reasoningEffort ?? null,
+          agent: askTarget?.agent,
+          executorId: askTarget?.executorId ?? null,
+          model: askTarget?.model ?? null,
+          reasoningEffort: askTarget?.reasoningEffort ?? null,
           sendAt: choice.sendAt,
           afterTaskId: choice.afterTaskId,
           executorLabel: activeExecutorLabel,
@@ -452,20 +404,48 @@ export function ReplyBox({
       if ("scheduled" in result) scheduled.add(result.message);
       if ("command" in result && !result.recorded && currentTaskId.current === task.id) setCommandResult({ taskId: task.id, text: result.text });
       if (!annotation) {
-        draft.update((current) => {
-          const text = clearSentDraft(current, draftAtSend);
-          return text === current.text ? current : { ...current, text };
-        });
-        draft.setAttachments((current) => dropSentAttachments(current, sentSelection));
-        uploads.clearError();
+        clearSent(draftAtSend, sentSelection);
         // 发送方式跟正文同口径：发送途中被改过就留着，那是下一条的设置。
         draft.setLater((current) => (current === laterAtSend ? null : current));
       }
-      setTarget(null);
+      if (askCall) calling.sent(askCall);
       return true;
     } catch (error) {
       setSendError(error instanceof Error ? error.message : String(error));
       if (annotation) throw error;
+      return false;
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // 发出去的是这一份：草稿还是这一份（字面和版本都没变）才清，动过就整份留着（withdrawDraft.ts）。
+  const clearSent = (draftAtSend: Parameters<typeof clearSentDraft>[1], sentSelection: ReturnType<typeof sentSelections>) => {
+    draft.update((current) => {
+      const text = clearSentDraft(current, draftAtSend);
+      return text === current.text ? current : { ...current, text };
+    });
+    draft.setAttachments((current) => dropSentAttachments(current, sentSelection));
+    uploads.clearError();
+  };
+
+  // 派出去：开一条新任务交给叫的那个人。这条任务的智能体不被叫醒、不占回合，所以它在跑时也照派不误
+  // （不排队）。失败时人、做法、正文和附件全留着，说清楚哪儿没成。
+  const runDispatch = async (current: ReplyCall): Promise<boolean> => {
+    const text = value.trim();
+    if (!onDispatch || disabled || sending || uploads.uploading || !text || baseContext.status !== "ready") return false;
+    setSending(true);
+    setSendError(null);
+    setCommandResult(null);
+    const draftAtSend = { text: value, textVersion: draft.value.textVersion };
+    const sentSelection = sentSelections(uploads.attachments);
+    try {
+      await onDispatch({ text, attachments: uploads.attachments.map((attachment) => attachment.path), target: current.target, worktreeBase });
+      clearSent(draftAtSend, sentSelection);
+      calling.sent(current);
+      return true;
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : String(error));
       return false;
     } finally {
       setSending(false);
@@ -484,7 +464,7 @@ export function ReplyBox({
     setValue((current) => joinDraftText(message.text, current));
     draft.setAttachments((current) => mergeAttachments(attachmentsFromPaths(message.attachments), current));
     if (message.agent) {
-      setTarget({
+      calling.restore({
         agent: message.agent,
         executorId: message.executorId,
         model: message.model,
@@ -512,24 +492,8 @@ export function ReplyBox({
       {mention.open && !menuOpen && !covering && (
         <InputMentionMenu mention={mention} label="召唤智能体或引用随手记、文件" className="task-reply-mention-menu" />
       )}
-      {picker && !covering && (
-        <AgentModelPicker
-          types={registeredTypes.length ? registeredTypes : [activeAgent]}
-          profiles={profiles}
-          providers={providers}
-          initialStage="model"
-          initialAgent={picker.agent}
-          currentExecutorId={activeExecutorId}
-          triggerRef={textareaRef}
-          onCommit={commitTarget}
-          onCancel={() => {
-            setPicker(null);
-            textareaRef.current?.focus();
-          }}
-        />
-      )}
       <div className="reply-context">
-      {inlinePanel && !covering && !menuOpen && !mention.open && !picker && <div className="task-reply-inline-panel">{inlinePanel}</div>}
+      {inlinePanel && !covering && !menuOpen && !mention.open && <div className="task-reply-inline-panel">{inlinePanel}</div>}
       <ScheduledMessageTray
         key={task.id}
         messages={scheduled.messages}
@@ -555,11 +519,14 @@ export function ReplyBox({
       {commandResult?.taskId === task.id && <p className="task-reply-command-result" role="status" aria-label="命令结果">{commandResult.text}</p>}
       {topRail}
       </div>
-      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} />}
+      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} hostId={task.id} />}
       {!covering && <div className="task-reply-box">
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />
         <AgentPlate name={activeAgent} />
-        {override?.head}
+        {call && dispatchable
+          ? <ReplyCallDock call={call} self={calling.self} onVerb={calling.setVerb} onCancel={cancelCall}
+            baseError={baseContext.error} onRetryBase={baseContext.retry} />
+          : activeOverride?.head}
         {/* 输入几行就撑几行高,撑到上限为止;拖过之后以拖出来的高度为准(拖动条自己的上限更宽)。 */}
         <ComposerInput
           inputRef={textareaRef}
@@ -583,7 +550,7 @@ export function ReplyBox({
           }}
           onPaste={take ? undefined : uploads.onPaste}
           onKeyDown={(event) => {
-            if (overrideKeyDown(override, event)) return;
+            if (overrideKeyDown(activeOverride, event)) return;
             if (menuOpen) {
               if (event.key === "ArrowDown") {
                 event.preventDefault();
@@ -616,6 +583,13 @@ export function ReplyBox({
               return;
             }
             if (mention.onKeyDown(event)) return;
+            // 叫着人：空框里退格、或 Esc，就是不叫了（字一个不动）。Esc 只退这一层，外面的抽屉不跟着关。
+            if (call && (event.key === "Escape" || (event.key === "Backspace" && !value && !event.repeat))) {
+              event.preventDefault();
+              event.stopPropagation();
+              cancelCall();
+              return;
+            }
             if (isSendKeyEvent(event)) {
               event.preventDefault();
               void send();
@@ -637,12 +611,11 @@ export function ReplyBox({
             disabled={disabled || sending || uploads.uploading || commandActive} queueing={queueing}
             executorLabel={activeExecutorLabel} onSend={(reply) => runSend(reply)} />
           <span className="task-reply-actions-gap" aria-hidden="true" />
-          {/* 一颗三段胶囊：智能体 · 模型 · 智能水平。可单独改任一段，也可选完前一段后
-              向右接着配置；跟新建面板、工作流站点用同一组件。
-              没在 @ 召唤时改它 = 改任务的常设配置，之后每条消息都按新的跑；正在召唤
-              （target 非空）时改的是这一次召唤本身，点 × 取消就回到常设配置。 */}
+          {/* 一颗三段胶囊：智能体 · 模型 · 智能水平。可单独改任一段，也可选完前一段后向右接着配置；跟新建
+              面板、工作流站点用同一组件。没叫人时改它 = 改任务的常设配置，之后每条消息都按新的跑；叫着人时
+              它就是被叫的那个人（改的是这一次），派出去时最后多一段「从哪开工」，小叉 = 不叫了。 */}
           <RunTargetPicker
-            label={target ? "本回合由谁来跑" : "这个任务以后由谁来跑"}
+            label={target ? `叫来的智能体：${target.agent}` : "这个任务以后由谁来跑"}
             types={registeredTypes.length ? registeredTypes : [activeAgent]}
             profiles={profiles}
             selection={{ agentType: activeAgent, executorId: activeExecutorId }}
@@ -651,30 +624,29 @@ export function ReplyBox({
             variant="chip"
             highlight={!!target}
             disabled={configDisabled}
-            onCommit={target ? commitTarget : commitStanding}
-            onEffortChange={target ? commitEffort : commitStandingEffort}
+            onCommit={target ? calling.commitTarget : commitStanding}
+            onEffortChange={target ? calling.commitEffort : commitStandingEffort}
+            tail={call && dispatching && baseOptions.length > 1
+              ? <DispatchBaseSegment options={baseOptions} value={call.base} disabled={configDisabled} onChange={calling.setBase} />
+              : undefined}
           />
-          {target && (
-            <button
-              type="button"
-              className="task-reply-chip-reset"
-              aria-label={`取消召唤 ${target.agent}，恢复任务默认`}
-              onClick={() => setTarget(null)}
-            >
-              <X size={10} weight="bold" />
-            </button>
-          )}
-          {take ? override!.send : <LaterSendKey
+          {target && <CallCancelKey agent={target.agent} onCancel={cancelCall} />}
+          <ReplySendKey
+            overrideSend={take ? activeOverride!.send : null}
+            call={call}
+            dispatchHeld={baseContext.status === "loading" ? "正在确认新任务从哪开工"
+              : baseContext.status === "failed" ? "确认不了新任务从哪开工，先重试" : null}
             later={later}
-            action="发送回复"
-            empty={!value.trim() && !uploads.attachments.length && !uploads.uploading}
-            queueing={queueing}
+            text={value}
+            attachments={uploads.attachments.length}
             uploading={uploads.uploading ? uploadingLabel(uploads.pending) : null}
-            // 敲着命令时这颗键干的是别的事：补全命令、打开派生配置。归档的任务也能派生，所以不受下面那条拦。
-            override={menuCompletes ? { text: "补全", action: "把命令补进正文" }
-              : commandActive && !menuSends ? { text: "配置", action: "打开派生配置" } : null}
+            queueing={queueing}
+            sending={sending}
             blocked={disabled ? reason ?? "现在发不出去" : null}
-            busy={sending}
+            // 敲着命令时这颗键干的是别的事：补全命令、叫人派出去、打开派生配置。归档的任务也能派生，所以不受上面那条拦。
+            override={menuCompletes ? { text: "补全", action: "把命令补进正文" }
+              : pickingDispatch ? { text: "叫人", action: "叫上次那个人，停在派出去" }
+                : commandActive && !menuSends ? { text: "配置", action: "打开派生配置" } : null}
             onSend={() => void send()}
             onStop={onStop ? () => {
               setStopping(true);
@@ -683,12 +655,12 @@ export function ReplyBox({
             // 停止键出不出、能不能点只看服务端的停止结论（onStop / stopBlocked）；这里只挑提示里那句话。
             stopTip={["queued", "paused", "backlog"].includes(task.status) ? "不排了" : "停止这一轮"}
             stopBlocked={stopBlocked}
-            stopBusy={stopping}
+            stopping={stopping}
             configDisabled={disabled || sending || uploads.uploading || commandActive || mention.open}
             tasks={tasks}
             projectId={task.projectId}
             taskId={task.id}
-          />}
+          />
         </div>
       </div>}
     </div>

@@ -45,7 +45,7 @@ export function useMention({
   disabled?: boolean;
   /** 这张菜单在这儿是干什么用的，进提示行。 */
   label: string;
-  /** 智能体那一段：按 token 给候选，选中由调用方接着走（单飞对话框弹「选模型」）。 */
+  /** 智能体那一段：按 token 给候选，选中由调用方接着走（单飞对话框里叫上他，框顶多出「他来做什么」那一行）。 */
   agents?: { match: (token: string) => string[]; onPick: (agent: string) => void };
   /** 三类都没有候选时说什么；缺省按「随手记或文件」说。 */
   emptyStatus?: string;
@@ -168,7 +168,7 @@ export function useMention({
 
   // 提示行跟着**选中的那一行**改口：同一颗回车在这张列表里做好几件事，不写清楚用户按下去
   // 才知道自己刚才干了什么。
-  const action = selected?.kind === "agent" ? "↑↓ 选择，回车后继续选模型"
+  const action = selected?.kind === "agent" ? "↑↓ 选择，回车叫它来"
     : selected?.kind === "note" ? "↑↓ 选择，回车带入正文和附件"
       : mentionHint(selected?.kind === "file" ? selected.row : undefined);
 

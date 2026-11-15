@@ -74,6 +74,8 @@ export async function reconcileInterrupted(): Promise<void> {
   wakeInterruptedLeads(teamIds);
 }
 
+const INTERRUPTED_BY_RESTART = "ash 服务中断，这一轮没跑完。点重试会从中断处接着跑。";
+
 // 一个被打断的任务怎么结算:状态回落、持续目标/续聊/原生回合各自的善后、基线消费。
 // 批量版(重启时扫全库)和单任务版(接管之后才暴露出来的那种中断)共用这一份。
 async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void> {
@@ -146,6 +148,8 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
     ...(consume ? { consume } : {}),
     // 失败义务在**这一笔**兑现:落位写进库了才销账,没写到行就一个字都不销。
     settleStallTurns: ashFailure.settled,
+    // 落 failed 时的原因跟这一笔一起写(派出的任务失败时,派它的那条任务里那颗气泡读它)。
+    failedBecause: ashFailure.note || INTERRUPTED_BY_RESTART,
   });
 }
 

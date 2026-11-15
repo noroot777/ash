@@ -206,7 +206,7 @@ export function claimOwnTurn(taskId: string, role = "single", review: TurnReview
 /**
  * 这个任务在本进程里**真正起过几轮**(每写一次 `active_turn_token` 记一笔,见 `bindTurnToken`)。
  *
- * 给「先排队、后起跑」的入口用(分组名额 group-slots.ts):排队那一刻记下它,轮到时用
+ * 给「先排队、后起跑」的入口用(分组名额 member-start.ts startMember):排队那一刻记下它,轮到时用
  * `claimOwnTurnUnlessStarted` 占位。「此刻没有回合」只说明没人正在跑,说明不了「排队之后没人
  * 替它跑过」—— 另一个入口先起了它、它已经跑完,旧请求再占位就是第二遍(第 2 轮复审 F1)。
  * 只记内存:排着的请求也只活在内存里,重启之后两样一起没了。

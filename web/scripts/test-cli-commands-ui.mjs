@@ -321,11 +321,14 @@ try {
   const summonCodex = async (text) => {
     await codexReply.fill(`${text} @codex`);
     await page.getByRole("option", { name: /@codex/ }).click();
-    await page.getByRole("listbox", { name: "可选模型" }).getByRole("option").first().click();
     assert.match(await agentPicker.getAttribute("aria-label"), /^智能体：codex/);
+    // 叫上人之后不再接着弹选模型：要定执行器和模型，点胶囊上被叫那个人的模型段（改的只是这一次）。
+    await page.getByRole("button", { name: /^模型：/ }).click();
+    await page.getByRole("listbox", { name: "可选模型" }).getByRole("option").first().click();
+    if (await page.getByRole("button", { name: /^智能水平/, expanded: true }).count()) await page.keyboard.press("Escape");
     const previousEnds = await sessionEnds("codex-ui-task");
     const response = page.waitForResponse((value) => value.url().endsWith("/tasks/codex-ui-task/reply") && value.request().method() === "POST");
-    await page.getByRole("button", { name: "发送回复", exact: true }).click();
+    await page.getByRole("button", { name: "问 codex", exact: true }).click();
     const replied = await response;
     assert.equal(replied.status(), 202);
     assert.equal(replied.request().postDataJSON().agent, "codex");

@@ -145,11 +145,14 @@ try {
     await page.getByRole("textbox", { name: "回复任务" }).fill(summon ? `${text} @${summon}` : `${text} `);
     if (summon) {
       await page.getByRole("option", { name: new RegExp(`@${summon}`) }).click();
+      // 叫上人之后不再接着弹选模型：点胶囊上被叫那个人的模型段来定执行器和模型（只作用于这一次）。
+      await page.getByRole("button", { name: /^模型：/ }).click();
       await page.getByRole("listbox", { name: "可选模型" }).getByRole("option").first().click();
+      if (await page.getByRole("button", { name: /^智能水平/, expanded: true }).count()) await page.keyboard.press("Escape");
     }
     const [response] = await Promise.all([
       page.waitForResponse((value) => value.url().endsWith(`/tasks/${taskId}/reply`) && value.request().method() === "POST"),
-      page.getByRole("button", { name: /^(发送回复|排队发送)$/ }).click(),
+      page.getByRole("button", { name: summon ? `问 ${summon}` : /^(发送回复|排队发送)$/ }).click(),
     ]);
     return response;
   };

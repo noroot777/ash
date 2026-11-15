@@ -60,17 +60,24 @@ export function useQuestionTakeover(task: TaskListItem | null): QuestionTakeover
 
 const cardKey = (task: TaskListItem) => `${task.id}:${questionKey(task)}`;
 
-/** 卡本身，摆在宿主的回复框那一格（展开时框不挂，卡就占了那一格；收起时框在它下面）。 */
-export function QuestionDock({ takeover, onAnswer }: {
+/**
+ * 卡本身，摆在宿主的回复框那一格（展开时框不挂，卡就占了那一格；收起时框在它下面）。
+ *
+ * 问的可以不是宿主自己：派它的那条任务里，名下派出的任务来问时这一格就是那一条的卡（`hostId` 是宿主，
+ * 卡上那条不是它时题目前面写上是谁在问）。答复交回给调用方时带上卡对的是哪一条，由它送到那一条去。
+ */
+export function QuestionDock({ takeover, onAnswer, hostId }: {
   takeover: QuestionTakeover;
-  onAnswer: (answer: string, input: QuestionAnswerInput) => Promise<void>;
+  onAnswer: (answer: string, input: QuestionAnswerInput, asking: TaskListItem) => Promise<void>;
+  hostId?: string;
 }) {
   const { card, leaving } = takeover;
   if (!card) return null;
+  const asker = hostId && card.id !== hostId ? card.title || "未命名任务" : undefined;
   return (
     <div className={`question-dock${leaving ? " is-leaving" : ""}`} inert={leaving ? true : undefined}>
-      <QuestionCard key={cardKey(card)} task={card} onAnswer={onAnswer} collapsed={takeover.collapsed}
-        onCollapsedChange={takeover.setCollapsed} />
+      <QuestionCard key={cardKey(card)} task={card} asker={asker} onAnswer={(answer, input) => onAnswer(answer, input, card)}
+        collapsed={takeover.collapsed} onCollapsedChange={takeover.setCollapsed} />
     </div>
   );
 }

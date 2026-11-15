@@ -76,7 +76,7 @@
 .team-status-dot { display: inline-block; box-sizing: border-box; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; font-style: normal; }
 .team-status-dot--pending { border: 1px dashed var(--muted); background: transparent; }
 .team-status-dot--active { background: var(--accent); animation: task-status-dot-pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
-.team-status-dot--queued { box-shadow: inset 0 0 0 1.5px var(--faint); }
+.team-status-dot--queued, .team-status-dot--waiting { box-shadow: inset 0 0 0 1.5px var(--faint); }
 .team-status-dot--attention { background: var(--amber); }
 /* 同 .workspace-status-dot--breathe：静止黄=等你说话，跳动的黄=等一件会自己回来的事。 */
 .team-status-dot--working { background: var(--amber); animation: task-status-dot-pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
