@@ -4,7 +4,7 @@
   const SCENES = window.SCENES;
   const stage = document.getElementById("stage");
   const moves = document.getElementById("moves");
-  const ui = { scene: "ask", style: "new", askKind: "one", askMoment: "ready", moment: "open", debate: "bubble" };
+  const ui = { scene: "ask", style: "new", askKind: "one", askMoment: "ready", moment: "open" };
   let st = null;
   let timers = [];
   let wantFocus = false;
@@ -37,6 +37,7 @@
       ${old ? old.top : ""}
       <div class="feed" id="feed"><div class="feed-col" id="feed-col"></div></div>
       <div class="reply" id="reply"></div>
+      <div id="drawer"></div>
     </div>${old && old.note ? `<p class="frame-note">${esc(old.note)}</p>` : ""}`;
   }
 
@@ -48,9 +49,18 @@
     const before = new Set([...stage.querySelectorAll("[data-anim]")].map((el) => el.dataset.anim));
     if (!stage.querySelector(".app") || old) stage.innerHTML = frame(old);
     const feed = document.getElementById("feed");
+    // 抽屉自己能滚：重画以后停在原处；点某一段打开的就停在那一段，来了新的一段跟到底。
+    const drawerTop = document.getElementById("drawer-body")?.scrollTop;
     document.getElementById("head-tools").innerHTML = headTools();
     document.getElementById("feed-col").innerHTML = scene().feed(st, ui);
     document.getElementById("reply").innerHTML = old ? `${old.rail}${old.dock}` : scene().dock(st, ui);
+    document.getElementById("drawer").innerHTML = !old && scene().drawer ? scene().drawer(st, ui) : "";
+    const drawerBody = document.getElementById("drawer-body");
+    if (drawerBody) {
+      const mark = drawerBody.querySelector("[data-scroll-here]");
+      drawerBody.scrollTop = mark ? mark.offsetTop : st.freshSeg != null ? drawerBody.scrollHeight : drawerTop ?? 0;
+    }
+    st.drawerAt = null;
     stage.querySelectorAll("[data-anim]").forEach((el) => { if (before.has(el.dataset.anim)) el.style.animation = "none"; });
     st.fresh = false;
     st.freshSeg = null;
@@ -114,7 +124,7 @@
     if (event.target.closest("a[href='#']")) event.preventDefault();
     const target = event.target.closest("[data-act]");
     if (target && !target.disabled) { act(target.dataset.act, target.dataset); return; }
-    if (!event.target.closest(".rb") && scene().dismiss && scene().dismiss(st)) paint();
+    if (!event.target.closest(".rb, .drawer") && scene().dismiss && scene().dismiss(st)) paint();
   });
   stage.addEventListener("submit", (event) => event.preventDefault());
   stage.addEventListener("input", (event) => {

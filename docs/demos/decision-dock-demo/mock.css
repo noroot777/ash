@@ -90,9 +90,6 @@ button.fold:hover { color: var(--ink); }
   .run-dot { animation: none; }
 }
 
-/* 裁完之后收成一行的那场辩论（「一段记录」那种画法）。 */
-.fold.is-past { margin: -8px 0 20px 30px; }
-.fold.is-past[aria-expanded="true"] { margin-bottom: 6px; }
 
 /* —— 「现在」的提示条：照线上样式重画的示意（task-detail.css / scheduled-message-tray.css）—— */
 .old-tray { max-width: 790px; margin: 0 auto 8px; }

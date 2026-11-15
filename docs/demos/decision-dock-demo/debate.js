@@ -1,19 +1,17 @@
-// 辩论。它在会话里，但不是一段一段的气泡：整场辩论是会话里的一块，辩到哪了、辩出了什么都写在这一块上。
-// 两种画法：一颗气泡（只写最新一句，点开才是逐段记录），或者一段缩进的记录（每段一句都摆着）。
+// 辩论。它在会话里，但不是一段一段的气泡：整场辩论是会话里的一颗气泡，辩到哪了、辩出了什么都写在它上面。
+// 点气泡，下面就地摊开一段概览（每段一句）；要读整场的完整发言，从概览打开右侧的抽屉。
 (() => {
   const { esc, icon, paras, key } = window.P;
   const who = (seg) => (seg.side === "reviewer" ? "审查者" : "执行者");
 
-  /** 逐段记录：左边写谁，右边是那一句，点开看全文。stance = 收尾那段上面要不要写它的立场（气泡上已经写了就不再写）。 */
-  function rows(st, segs, { quotable = false, live = false, stance = false } = {}) {
+  /** 概览：左边写谁，右边是那一段的一句话。点某一句，抽屉打开并停在那一段。 */
+  function rows(st, segs, { quotable = false, live = false } = {}) {
     const list = segs.slice(0, st.shown).map((seg, i) => {
-      const id = `seg${i}`;
-      const open = st.open.has(id);
       const say = seg.full
-        ? `<button type="button" class="db-gist" data-act="toggle" data-id="${id}" aria-expanded="${open}">${esc(seg.gist)}<em>全文 ${seg.chars} 字</em></button>${open ? `<div class="db-full" data-anim="lane:${id}">${paras(seg.full)}</div>` : ""}`
+        ? `<button type="button" class="db-gist" data-act="drawer" data-i="${i}">${esc(seg.gist)}<em>全文 ${seg.chars} 字</em></button>`
         : `<p class="db-gist">${esc(seg.gist)}</p>`;
       return `<div class="db-row${st.freshSeg === i ? " is-new" : ""}"><span class="db-who">${who(seg)}</span>
-        <div>${stance && seg.closing ? `<p class="db-stance">收尾，它自己的立场：${esc(seg.stance)}</p>` : ""}${say}</div>${quotable ? key("quote", "quote", "用这段作要点", `data-i="${i}"`) : "<span></span>"}</div>`;
+        <div>${say}</div>${quotable ? key("quote", "quote", "用这段作要点", `data-i="${i}"`) : "<span></span>"}</div>`;
     });
     if (live) list.push(`<div class="db-row"><span class="db-who">${who(segs[st.shown])}</span><div><p class="db-gist is-live"><span class="run-dot"></span>正在组织发言…</p></div><span></span></div>`);
     return list.join("");
@@ -35,16 +33,22 @@
     return `<div class="rv db${live ? " is-live" : done ? " is-done" : ""}" data-anim="debate"><div class="rv-bubble">
       <header><b>辩论</b><span>审查者和执行者 · ${(segs.length - 1) / 2} 个来回</span></header>
       <button type="button" class="rv-text db-text" data-act="toggle" data-id="debate" aria-expanded="${open}">${live ? '<span class="run-dot"></span>' : ""}<span class="db-say${st.freshSeg != null ? " is-new" : ""}">${say}</span>${count ? `<em class="db-count">${count}</em>` : ""}</button>
-    </div>${open ? `<div class="lane" data-anim="lane:debate">${rows(st, segs, { quotable: done, live })}</div>` : ""}</div>`;
+    </div>${open ? `<div class="lane" data-anim="lane:debate"><button type="button" class="db-whole" data-act="drawer">${icon("expand")}完整记录</button>${rows(st, segs, { quotable: done, live })}</div>` : ""}</div>`;
   }
 
-  /** 一段缩进的记录：每段一句都摆着，不用点。裁完收成一行。 */
-  function block(st, segs) {
-    if (st.phase !== "ruled") return `<div class="db-block" data-anim="debate">${rows(st, segs, { quotable: st.phase === "debated", live: st.phase === "debating", stance: true })}</div>`;
-    const open = st.open.has("debate");
-    return `<button type="button" class="fold is-past" data-act="toggle" data-id="debate" aria-expanded="${open}">${icon("chevron")}${past(st, segs)}</button>
-      ${open ? `<div class="db-block" data-anim="lane:debate">${rows(st, segs)}</div>` : ""}`;
+  /** 抽屉：整场辩论的完整发言，从右边滑出来，盖在会话上面。辩论还在进行时它跟着长。 */
+  function drawer(st, segs) {
+    if (!st.drawer) return "";
+    const live = st.phase === "debating";
+    const items = segs.slice(0, st.shown).map((seg, i) => `<section class="dr-seg${st.freshSeg === i ? " is-new" : ""}"${st.drawerAt === i ? " data-scroll-here" : ""}>
+      <header><b>${who(seg)}</b><span>第 ${i + 1} 段${seg.closing ? ` · 收尾，它自己的立场：${esc(seg.stance)}` : ""}</span>${st.phase === "debated" ? key("quote", "quote", "用这段作要点", `data-i="${i}"`) : ""}</header>
+      <p class="dr-gist">${esc(seg.gist)}</p>${seg.full ? paras(seg.full) : ""}</section>`);
+    if (live) items.push(`<section class="dr-seg"><header><b>${who(segs[st.shown])}</b><span>第 ${st.shown + 1} 段</span></header><p class="dr-live"><span class="run-dot"></span>正在组织发言…</p></section>`);
+    const state = live ? `<span class="run-dot"></span>第 ${st.shown + 1} / ${segs.length} 段` : `审查者和执行者 · ${st.shown} 段`;
+    return `<aside class="drawer" data-anim="drawer" role="dialog" aria-label="辩论的完整记录">
+      <header class="drawer-head"><b>辩论</b><span>${state}</span>${key("drawer-close", "x", "关上")}</header>
+      <div class="drawer-body" id="drawer-body">${items.join("")}</div></aside>`;
   }
 
-  window.Debate = { bubble, block };
+  window.Debate = { bubble, drawer };
 })();
