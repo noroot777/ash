@@ -43,11 +43,5 @@
     return `${rail}${plain("回复…", "", st.draft, "codex · xhigh")}`;
   }
 
-  // —— 计划模式：回复框里一颗亮着的键 ——
-  function plan(st) {
-    const toggle = `<button type="button" class="rb-act" data-act="plan-toggle" aria-pressed="${st.plan}" data-tip="${esc(D.plan.tip)}">计划模式</button>`;
-    return box(`${text("", st.plan ? "只聊方案…" : "回复…")}${bar({ send: sendKey("", true), tools: toggle, agent: "codex · xhigh" })}`);
-  }
-
-  window.Dock = { sendKey, bar, text, box, plain, queue, plan };
+  window.Dock = { sendKey, bar, text, box, plain, queue };
 })();
