@@ -1,0 +1,174 @@
+/* 驳回 → 裁定那一摊：回复框顶上那一行（DisputeRulingDock）、会话里辩论那颗气泡（DebateBubble）、
+   一场辩论的概览（DebateOverview）、左侧抽屉里的完整记录（DebateRecord），和审查格那一轮下面的
+   驳回 / 辩论 / 裁定（FreeReviewDisputeRecord）。只用主题变量，浅色深色同一套。 */
+
+/* —— 回复框顶上那一行：几种下一步，纯文字的切换键。没有事在等，这一段不存在 —— */
+.ruling-dock { border-bottom: 1px solid var(--line); animation: ruling-in var(--dur-2) var(--ease-out) backwards; }
+@keyframes ruling-in { from { opacity: 0; transform: translateY(4px); } }
+.ruling-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 5px 6px; }
+.ruling-choice {
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 0 10px;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--t-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.ruling-choice:hover { background: var(--raised); color: var(--ink); }
+.ruling-choice[aria-pressed="true"] { background: var(--overlay); color: var(--ink); font-weight: var(--w-medium); }
+/* 按不动（任务或审查正在跑）：键还在、指得到，为什么按不动写在浮出来的那一句里。 */
+.ruling-choice[aria-disabled="true"] { color: var(--faint); cursor: default; }
+.ruling-choice[aria-disabled="true"]:hover { background: transparent; color: var(--faint); }
+.ruling-choice:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.ruling-error { margin: 0; padding: 0 12px 6px; color: var(--red); font-size: var(--t-xs); line-height: 1.5; overflow-wrap: anywhere; }
+
+/* 选了「让双方辩论」：正文换成来回几次。 */
+.task-reply-box textarea[hidden] { display: none; }
+.ruling-exchanges { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px 2px; color: var(--muted); font-size: var(--t-sm); }
+.ruling-exchanges-seg { display: inline-flex; gap: 2px; border-radius: 8px; background: var(--overlay); padding: 2px; }
+.ruling-exchanges-seg > button {
+  min-width: 30px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.ruling-exchanges-seg > button:hover { color: var(--ink); }
+.ruling-exchanges-seg > button[aria-checked="true"] { background: var(--panel); color: var(--ink); font-weight: var(--w-medium); box-shadow: var(--surface-shadow); }
+.ruling-exchanges-seg > button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.ruling-exchanges small { color: var(--faint); font-size: var(--t-xs); }
+
+/* 顶替发送键的那颗：写着这一按的名字。 */
+.ruling-send {
+  display: inline-flex;
+  flex: none;
+  height: 29px;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--action);
+  padding: 0 12px;
+  color: var(--on-action);
+  font: inherit;
+  font-size: var(--t-xs);
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out);
+}
+.ruling-send:hover:not(:disabled) { background: var(--action-hover); }
+.ruling-send:disabled { opacity: .4; cursor: default; }
+.ruling-send:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* —— 会话里辩论那颗气泡：骨架是审查气泡那一副（reviewer-turn.css），这里只有它多出来的画法 —— */
+.review-verdict-bubble > header button[aria-pressed="true"] { background: var(--raised); color: var(--ink); }
+.debate-bubble-say { min-width: 0; }
+.debate-bubble-say b { margin-right: 8px; color: color-mix(in oklab, var(--ink) 70%, var(--muted)); font-weight: var(--w-medium); }
+/* 辩的时候只留最新一句，最多两行：它一直在换，不往下长。 */
+.debate-bubble.is-live .debate-bubble-say { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+/* 辩完了、还等你裁：这一句是结论，用正文的字。裁完它又回到小灰字。 */
+.debate-bubble.is-awaiting .review-verdict-text { color: var(--ink); font-size: var(--t-sm); line-height: 1.65; }
+.debate-bubble.is-awaiting .debate-bubble-say b { color: var(--ink); }
+.debate-bubble.is-failed .debate-bubble-say b { color: var(--red); }
+.debate-bubble-lane { padding: 6px 4px 2px; }
+
+/* —— 一场辩论的概览：一段一行，左边写谁，右边是那一句；点它，抽屉停在这一段 —— */
+.debate-overview { display: grid; margin: 0; padding: 0; list-style: none; }
+.debate-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 22px; gap: 10px; padding: 4px 0; animation: ruling-in var(--dur-2) var(--ease-out) backwards; }
+.debate-row > div { min-width: 0; }
+.debate-row-who { color: var(--faint); font-size: var(--t-xs); line-height: 21px; white-space: nowrap; }
+.debate-row-gist {
+  display: block;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--t-sm);
+  line-height: 1.65;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+button.debate-row-gist { cursor: pointer; }
+.debate-row-gist em { margin-left: 8px; color: var(--faint); font-size: var(--t-xs); font-style: normal; white-space: nowrap; }
+button.debate-row-gist:hover em { color: var(--ink); }
+button.debate-row-gist:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 4px; }
+.debate-row-gist.is-live,
+.debate-record-live { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+/* 「用这段作要点」：指到那一行才出，触屏常显。 */
+.debate-quote {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
+}
+.debate-quote:hover { background: var(--raised); color: var(--ink); }
+.debate-quote:focus-visible { opacity: 1; outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.debate-row:is(:hover, :focus-within) .debate-quote,
+.debate-record-seg:is(:hover, :focus-within) .debate-quote { opacity: 1; }
+@media (hover: none) { .debate-quote { opacity: 1; } }
+
+/* —— 左侧抽屉里的完整记录：一段一节，节和节之间一条细线 —— */
+.debate-record-seg { padding: 16px 0 18px; }
+.debate-record-seg + .debate-record-seg { border-top: 1px solid var(--line); }
+.debate-record-seg > header { display: flex; align-items: center; gap: 8px; min-height: 22px; color: var(--muted); font-size: var(--t-xs); }
+.debate-record-seg > header b { color: var(--ink); font-size: var(--t-sm); font-weight: var(--w-medium); }
+.debate-record-seg > header .debate-quote { margin-left: auto; }
+.debate-record-gist { margin: 8px 0 0; color: var(--ink); font-weight: var(--w-medium); line-height: 1.8; overflow-wrap: anywhere; }
+.debate-record-seg .task-markdown { margin-top: 8px; color: var(--ink); line-height: 1.8; }
+.debate-record-live { margin: 8px 0 0; }
+.debate-record-missing { margin: 16px 0; color: var(--muted); }
+
+/* —— 审查格那一轮下面：驳回、辩论、裁定。段和段之间只有一条细线，不套框，也没有裁定的按钮 —— */
+.dispute-record { margin-top: 12px; }
+.dispute-part { padding: 10px 0 12px; border-top: 1px solid var(--line); }
+.dispute-part > header { display: flex; align-items: center; min-height: 22px; margin-bottom: 2px; color: var(--muted); font-size: var(--t-xs); }
+.dispute-part > header b { flex: 1; min-width: 0; font-weight: var(--w-medium); }
+.dispute-part > header i { margin-left: 8px; color: var(--faint); font-style: normal; font-weight: 400; font-variant-numeric: tabular-nums; }
+.dispute-part-gist { margin: 4px 0 0; color: var(--ink); font-size: var(--t-xs); line-height: 1.7; overflow-wrap: anywhere; }
+.dispute-part > .folded-prose { margin-top: 6px; }
+.dispute-part .debate-row { grid-template-columns: 40px minmax(0, 1fr) 22px; gap: 8px; }
+.dispute-part .debate-row-gist { font-size: var(--t-xs); }
+.dispute-part-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 8px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--muted);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.dispute-part-link:hover { color: var(--ink); }
+
+@media (max-width: 760px) {
+  .debate-row { grid-template-columns: 40px minmax(0, 1fr) 22px; gap: 8px; }
+  .ruling-choice { padding: 0 8px; }
+}
+:root[data-motion="reduce"] :is(.ruling-dock, .debate-row) { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) :is(.ruling-dock, .debate-row) { animation: none; }
+}

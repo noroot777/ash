@@ -159,11 +159,11 @@ assert.equal(viewOf(disputeRun("withdrawn")).waivedRound?.round, 1, "采纳执�
 assert.equal(viewOf(disputeRun("deferred")).waivedRound?.round, 1, "转独立任务同样关掉修复入口");
 assert.equal(viewOf(disputeRun("upheld")).waivedRound, null, "维持意见恰恰是要照改，不能关掉修复入口");
 
-// 会话那一侧（时间线上的「去裁定」）只拿得到 reviews 列表，拿不到整个 FreeWorkflowState，
-// 所以它走 openDisputeIn。口径必须和上面 freeReviewView 那条完全一致——按钮和它指向的那
-// 张卡各算各的，就会出现「按钮还在、点进去什么也没有」。
-assert.equal(openDisputeIn([disputeRun(null)])?.round, 1, "挂着未裁定驳回 = 有卡可裁");
-assert.equal(openDisputeIn([disputeRun("deferred")]), null, "裁定完那张卡就没了");
+// 会话那一侧（回复框顶上那一行、时间线上「等你裁定」那一句）只拿得到 reviews 列表，拿不到整个
+// FreeWorkflowState，所以它走 openDisputeIn。口径必须和上面 freeReviewView 那条完全一致——两边各算
+// 各的，就会出现「这边说等你裁定、那边已经没有可裁的」。
+assert.equal(openDisputeIn([disputeRun(null)])?.round, 1, "挂着未裁定驳回 = 有可裁的");
+assert.equal(openDisputeIn([disputeRun("deferred")]), null, "裁定完就没有可裁的了");
 assert.equal(openDisputeIn([]), null);
 assert.equal(openDisputeIn(null), null);
 // 判据是任务级的：更新的一条链遮不住旧驳回（服务端裁定闸照样挡着预约，界面不能找不到那张卡）。

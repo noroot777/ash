@@ -160,7 +160,7 @@ try {
     "自由审查格应和普通任务一样按轮列出记录",
   );
   assert.equal(await reviewOnly.locator(".insp-rec__body").count(), 0, "审查正文默认收着");
-  assert.equal(await page.locator(".review-evidence-drawer").count(), 0, "审查正文默认不弹出");
+  assert.equal(await page.locator(".side-drawer").count(), 0, "审查正文默认不弹出");
   await reviewRounds.first().click();
 
   const inline = reviewOnly.locator(".insp-rec__body").first();
@@ -171,12 +171,13 @@ try {
   assert.equal(await inline.getByRole("heading", { name: "审查结论" }).count(), 1, "报告应就地按 Markdown 正文渲染");
   assert.equal(await inline.locator("pre").count(), 0, "报告不再退化成原始 pre 文本");
   assert.equal(await inline.locator(".review-screenshot-strip img[role=button]").count(), 6, "就地展开时截图也在");
-  assert.equal(await page.locator(".review-evidence-drawer").count(), 0, "就地展开不弹抽屉");
+  assert.equal(await page.locator(".side-drawer").count(), 0, "就地展开不弹抽屉");
 
-  // 嫌窄就点那一行末尾的图标：同一份正文装进贴着面板左边缘的抽屉里。
+  // 嫌窄就点那一行末尾的图标：同一份正文从主区左边推出来（读全文那一屉，LeftDrawer）。
   await inline.getByRole("button", { name: "在左侧铺开看" }).click();
-  const drawer = page.locator(".review-evidence-drawer");
+  const drawer = page.locator(".side-drawer");
   await drawer.waitFor();
+  assert.equal(await drawer.locator(".side-drawer__kind").innerText(), "审查报告");
   assert.match(await drawer.locator(".review-note").innerText(), /派审附言[\s\S]*重点核对退款分支的边界条件。/, "报告抽屉里要带出这一轮的附言");
   assert.equal(await drawer.getByRole("heading", { name: "审查结论" }).count(), 1, "报告应在左侧抽屉按 Markdown 正文渲染");
 
@@ -188,8 +189,10 @@ try {
 
   await drawer.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
   const drawerBox = await drawer.boundingBox();
-  const footerBox = await drawer.locator(".review-evidence-drawer__footer").boundingBox();
+  const footerBox = await drawer.locator(".side-drawer__footer").boundingBox();
   assert.ok(Math.abs(footerBox.y + footerBox.height - (drawerBox.y + drawerBox.height)) <= 1, "图片区应固定贴住抽屉底边");
+  const paneBox = await page.locator(".workflow-inspector-fixture").boundingBox();
+  assert.ok(drawerBox.x + drawerBox.width <= paneBox.x + 1, "抽屉只盖主区，不盖侧边栏");
 
   const pageCount = page.context().pages().length;
   await shots.locator("img[role=button]").first().click();
@@ -232,12 +235,12 @@ try {
   assert.equal(await drawer.count(), 0, "工作流中的审查正文默认也不弹出");
   await activities.nth(1).getByRole("button").click();
   await drawer.waitFor();
-  assert.equal(await drawer.locator("header b").innerText(), "第 1 轮审查", "点时间线审查节点应复用左侧抽屉");
+  assert.match(await drawer.locator("header b").innerText(), /^第 1 轮审查/, "点时间线审查节点应复用左侧抽屉");
   assert.equal(await drawer.getByRole("heading", { name: "审查结论" }).count(), 1);
 
   await activities.nth(3).getByRole("button").click();
   assert.equal(await drawer.locator(".review-round-body p").first().innerText(), "还在审，报告写完会出现在这里。", "点第二次审查应在同一抽屉切换记录（那一轮还在审）");
-  assert.equal(await drawer.locator(".review-evidence-drawer__footer").count(), 0, "没有截图的轮次不应留下空白底栏");
+  assert.equal(await drawer.locator(".side-drawer__footer:visible").count(), 0, "没有截图的轮次不应留下空白底栏");
   await activities.nth(3).getByRole("button").click();
   await drawer.waitFor({ state: "detached" });
 
@@ -357,20 +360,24 @@ try {
     "工作区没变过时不该凭空劝人再审一轮",
   );
 
-  // 裁定要点得在这一轮的审查记录里留一份：裁定一落，驳回卡就收了，用户自己写的那段话
-  // 除了时间线上那句摘要就再无去处。它是**用户**的话，所以跟驳回理由分块摆。
+  // 裁定要点得在这一轮的审查记录里留一份：裁定一落，回复框顶上那一行就收了，用户自己写的那段话
+  // 除了时间线上那句摘要就再无去处。它在这一轮下面「裁定」那一段里，折着、写明是附的话。
   const waivedFixture = page.locator(".waived-fresh-fixture");
   await waivedFixture.locator(".insp-rec > .insp-go").first().click();
   const waivedBody = waivedFixture.locator(".insp-rec__body").first();
   await waivedBody.waitFor();
-  const resolutionNote = waivedBody.locator(".review-round-dispute__note");
-  await resolutionNote.waitFor();
-  assert.match(await resolutionNote.innerText(), /你裁定时写的要点/, "要标明这段是用户自己写的");
+  const ruling = waivedBody.locator(".dispute-part[aria-label='裁定']");
+  await ruling.waitFor();
+  assert.match(await ruling.locator(".dispute-part-gist").innerText(), /^这一轮不用改了/, "裁定一句结果");
+  const resolutionNote = ruling.locator(".folded-prose");
+  assert.match(await resolutionNote.locator("button").innerText(), /附了一段理由/, "要标明这段是用户自己附的话");
+  await resolutionNote.locator("button").click();
   assert.match(
-    await resolutionNote.innerText(),
+    await resolutionNote.locator(".task-markdown").innerText(),
     /按辩论里达成的方案做/,
     "裁定要点原文要留在审查记录里，否则用户回头只剩时间线上那 60 字摘要",
   );
+  assert.equal(await waivedBody.getByRole("button", { name: /让它接着改|这一轮不用改了|转为独立任务|让双方辩论/ }).count(), 0, "审查格里没有裁定的按钮");
 
   // 裁定过的那几条，服务端派审时会自动讲给下一位审查者（free-review-settled.ts）。
   // 派审面上必须说出这件事：不说的话用户无从知道它已经自动化了，只会照旧每轮手打一句

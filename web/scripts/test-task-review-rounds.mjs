@@ -28,7 +28,8 @@ try {
   const tones = await rounds.locator(".insp-meta > span").evaluateAll((nodes) => nodes.map((node) => node.className || "plain"));
   assert.deepEqual(tones, ["insp-bad", "insp-live", "plain"]);
 
-  const drawer = page.locator(".review-evidence-drawer");
+  // 读全文那一屉：从左边推出来，跟子智能体那个抽屉同一个位置（LeftDrawer → SideDrawer）。
+  const drawer = page.locator(".side-drawer");
   assert.equal(await drawer.count(), 0, "进来时不该自动弹出验证内容");
 
   // 点一轮 → 就地展开，不弹抽屉。
@@ -41,20 +42,27 @@ try {
   await firstBody.getByRole("button", { name: "打开审查任务" }).click();
   assert.deepEqual(await page.evaluate(() => window.__openedTasks), ["rev-1"]);
 
-  // 嫌窄就点正文第一行的图标：左侧弹屉，标题和副标题照旧。
-  await firstBody.getByRole("button", { name: "在左侧铺开看" }).click();
+  // 嫌窄就点正文第一行的图标：左侧推出来，头上写着是哪一轮、什么结论、在哪验。
+  const expand = firstBody.getByRole("button", { name: "在左侧铺开看" });
+  await expand.click();
   await drawer.waitFor();
   await drawer.getByText("第 1 轮的验证报告").first().waitFor();
-  assert.equal(await page.locator(".review-evidence-drawer > header b").innerText(), "第 1 轮验证");
-  assert.equal(await page.locator(".review-evidence-drawer > header small").innerText(), "未通过 · 独立审查 · 完成");
+  assert.equal(await drawer.locator(".side-drawer__kind").innerText(), "验证报告");
+  assert.equal(await drawer.locator("header > b").innerText(), "第 1 轮验证 · 未通过 · 独立审查 · 完成");
+  assert.equal(await expand.getAttribute("aria-pressed"), "true", "开着的是它：那颗图标画「按下」");
 
-  // 抽屉贴在侧边栏左边缘，不盖住列表（等滑入动画落定再量）。
+  // 只盖住主区那一栏，侧边栏不被盖住、照样点得着（等滑入动画落定再量）。
   await drawer.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
   const host = await page.locator(".inspector-host").boundingBox();
+  const main = await page.locator(".task-detail").boundingBox();
   const box = await drawer.boundingBox();
-  assert.ok(Math.abs(box.x + box.width - host.x) <= 1, `抽屉右边缘该贴着侧边栏左边缘，实测 ${box.x + box.width} vs ${host.x}`);
-  assert.ok(Math.abs(box.height - host.height) <= 1, "抽屉该和侧边栏一样高");
-  assert.equal(box.width, host.width, "抽屉与侧边栏等宽");
+  assert.ok(box.x >= main.x - 1 && box.x + box.width <= host.x + 1, `抽屉收在主区里，实测 ${box.x}～${box.x + box.width} vs 侧边栏 ${host.x}`);
+  assert.ok(Math.abs(box.height - main.height) <= 1, "抽屉和主区一样高");
+  // 再点同一颗图标收起来；侧边栏里点别的一轮照样有反应（抽屉开着时也一样）。
+  await expand.click();
+  await drawer.waitFor({ state: "detached" });
+  await expand.click();
+  await drawer.waitFor();
 
   // 证据截图点开的大图 portal 到 body，DOM 上不在抽屉里：它必须登记进浮层那一摞，
   // 否则点大图会被抽屉读成「点了外面」、Esc 也会连抽屉一起关。
@@ -81,9 +89,11 @@ try {
   );
   await thirdBody.getByRole("button", { name: "在左侧铺开看" }).click();
   await drawer.waitFor();
-  assert.equal(await page.locator(".review-evidence-drawer > header b").innerText(), "第 3 轮验证");
+  assert.match(await drawer.locator("header > b").innerText(), /^第 3 轮验证/, "换成了这一轮：同一时刻只有一屉");
+  assert.equal(await drawer.count(), 1);
+  await drawer.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
   const drawerBox = await drawer.boundingBox();
-  const footerBox = await drawer.locator(".review-evidence-drawer__footer").boundingBox();
+  const footerBox = await drawer.locator(".side-drawer__footer").boundingBox();
   assert.ok(Math.abs(footerBox.y + footerBox.height - (drawerBox.y + drawerBox.height)) <= 1, "图片区应固定贴住抽屉底边");
   await page.keyboard.press("Escape");
   await drawer.waitFor({ state: "detached" });
@@ -97,24 +107,23 @@ try {
   await secondBody.getByText("验证报告尚未写入。").first().waitFor();
   await secondBody.getByRole("button", { name: "在左侧铺开看" }).click();
   await drawer.waitFor();
-  assert.equal(await drawer.locator(".review-evidence-drawer__footer").count(), 0, "没有截图的轮次不应留下空白底栏");
+  assert.equal(await drawer.locator(".side-drawer__footer:visible").count(), 0, "没有截图的轮次不应留下空白底栏");
   await page.keyboard.press("Escape");
   await drawer.waitFor({ state: "detached" });
 
-  // 手机和右侧 drawer 模式没有足够的左侧空间；此时证据抽屉必须转为视口内覆盖，
-  // 不能继续贴着 inspector 左边而只露出几十像素。
+  // 窄屏：侧边栏盖在主区上，那一屉得盖在侧边栏上面，而且留在视口内、给报告够读的宽度。
   await page.setViewportSize({ width: 390, height: 740 });
   await rounds.nth(2).click();
   await thirdBody.getByRole("button", { name: "在左侧铺开看" }).click();
   await drawer.waitFor();
   await drawer.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
   const mobileBox = await drawer.boundingBox();
-  assert.match(await drawer.getAttribute("class"), /is-overlay/, "窄屏应切换为视口内覆盖式抽屉");
-  assert.ok(mobileBox.x >= 11, `窄屏抽屉左边缘必须留在视口内，实测 ${mobileBox.x}`);
-  assert.ok(mobileBox.x + mobileBox.width <= 379, `窄屏抽屉右边缘必须留在视口内，实测 ${mobileBox.x + mobileBox.width}`);
-  assert.ok(mobileBox.width >= 360, `390px 视口下报告应获得可读宽度，实测 ${mobileBox.width}`);
-  assert.equal(await drawer.locator(".review-screenshot-strip img").count(), 8, "覆盖式抽屉仍须保留底部截图带");
-  await drawer.getByRole("button", { name: "关闭审查内容" }).click();
+  assert.ok(mobileBox.x >= 0 && mobileBox.x + mobileBox.width <= 390, `窄屏抽屉留在视口内，实测 ${mobileBox.x}～${mobileBox.x + mobileBox.width}`);
+  assert.ok(mobileBox.width >= 340, `390px 视口下报告应获得可读宽度，实测 ${mobileBox.width}`);
+  const onTop = await page.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest(".side-drawer"), { x: mobileBox.x + mobileBox.width / 2, y: mobileBox.y + mobileBox.height / 2 });
+  assert.ok(onTop, "窄屏时那一屉盖在侧边栏上面，不被它挡住");
+  assert.equal(await drawer.locator(".review-screenshot-strip img").count(), 8, "底部截图带照样在");
+  await drawer.getByRole("button", { name: "关闭验证报告" }).click();
   await drawer.waitFor({ state: "detached" });
 
   console.log("task review rounds test passed");

@@ -1,19 +1,19 @@
 // 尾注里此刻挂着动作的那几句不被挤掉（footnoteActions → composeFootnote 的 held）。
 //
 // 现场（2026-11-14，任务 R8M9Tsn2q0aj）：00:29:04.631 落下第 1 轮驳回，最后那一回合的尾注里是
-// 「第 1 轮审查意见被驳回，等你裁定」+「去裁定」；13 秒后同一回合落下结算说明「本回合没有交卷」，
-// 两句都是「其余要你知道的」，驳回那一句被盖掉，「去裁定」跟着没了——审查格那张卡却还在。
+// 「第 1 轮审查意见被驳回，等你裁定」；13 秒后同一回合落下结算说明「本回合没有交卷」，两句都是
+// 「其余要你知道的」，驳回那一句被盖掉——可那条驳回明明还等着裁定。裁定后来挪到了回复框顶上那一行
+// （用户 2026-11-15），这一句后面不再挂「去裁定」，但它说的仍是此刻的状态，要留到裁完为止。
 // 夹具照那条任务的会话录（审查者会话收口后才落的驳回、执行者那一回合收尾的结算说明）。这份回归盯：
-//   ① 驳回未裁：那一回合尾注里同时有驳回那一句（挂「去裁定」）和「本回合没有交卷」；
+//   ① 驳回未裁：那一回合尾注里同时有驳回那一句（带颜色）和「本回合没有交卷」；
 //   ② 驳回之后同一回合再落两三句别的：驳回那一句仍在，别的几句照旧每件事一句、最多三句；
-//   ③ 三种裁定任一种、被新驳回取代：驳回那一句不再占位置，被后来的话盖过，也不挂按钮；
-//   ④ 任务已验收 / 已合并 / 已归档 / 接力出去：不算「等你裁定」，不挂按钮，不占位置；
-//   ⑤ 拿不到审查状态的视图：按位置判，同样不被挤掉，但不挂按钮；
+//   ③ 三种裁定任一种、被新驳回取代：驳回那一句不再占位置，被后来的话盖过；
+//   ④ 任务已验收 / 已合并 / 已归档 / 接力出去：不算「等你裁定」，不占位置；
+//   ⑤ 拿不到审查状态的视图：按位置判，同样不被挤掉；
 //   ⑥ 开着页面实时看到的，和刷新后从落盘重建的，尾注一样；
 //   ⑦ 「继续本轮审查」两路（结论气泡下的原因句、退回的原因旁注）和「重试这一回合」两路（刷新后补的
 //      那一句、直播的异常边界）都不被盖过或截掉——动作照 TaskDetail 那条链路推出来，认出来的那一句
-//      落在哪一层（回合尾注、结论气泡下面、审查卡里重新并成的那一句）就在哪一层留着；
-//   ⑧ 辩论条上的「去裁定」跟旁注那颗同一道判据：任务裁不了时不给。
+//      落在哪一层（回合尾注、结论气泡下面、审查卡里重新并成的那一句）就在哪一层留着。
 // 会话里渲染出来键挂在哪一句后面，见 test-footnote-actions-dom.mjs。
 // 跑：npm -w web run test:footnote-actions
 import assert from "node:assert/strict";
@@ -116,7 +116,7 @@ const review = (value: FreeReviewDispute | null): FreeReviewRun[] => [{
 
 /** 跟 ConversationFeed 同一条链路：foldMonitorWakes → 审查段 → 辩论 → 归属与尾注。 */
 function display(raw: ConversationItem[], options: {
-  reviews: FreeReviewRun[] | null; task?: Task; canOpenReviews?: boolean;
+  reviews: FreeReviewRun[] | null; task?: Task;
   reviewRetry?: ReviewRetryAction | null; turnRetry?: TurnRetryAction | null;
 }) {
   const items = foldMonitorWakes(raw);
@@ -124,7 +124,7 @@ function display(raw: ConversationItem[], options: {
   const feedRows = conversationFeedRows(items, { reviews: options.reviews });
   const causes = laneNoVerdicts(feedRows, options.reviews);
   const actions = footnoteActions({
-    items, task: options.task ?? OPEN_TASK, reviews: options.reviews, canOpenReviews: options.canOpenReviews ?? true,
+    items, task: options.task ?? OPEN_TASK, reviews: options.reviews,
     causes, crashed, reviewRetry: options.reviewRetry, turnRetry: options.turnRetry,
   });
   const shown = conversationSystemRows(conversationDebateRows(feedRows, { reviews: options.reviews }), { failures: crashed, causes, held: actions.held });
@@ -135,14 +135,15 @@ function display(raw: ConversationItem[], options: {
 const texts = (footnote: TurnFootnote | undefined) => (footnote?.parts ?? []).map((part) => part.view.text);
 const RULING = "第 1 轮审查意见被驳回，等你裁定";
 const UNSUBMITTED_TEXT = "本回合没有交卷";
-const ruledPart = (result: ReturnType<typeof display>) => result.footnote?.parts.find((part) => part.id === result.actions.ruleEventId);
+// 「等你裁定」那一句：带颜色、留到裁完为止。裁定本身在回复框顶上那一行，这一句后面不再挂「去裁定」。
+const standingPart = (result: ReturnType<typeof display>) => result.footnote?.parts.find((part) => part.id === result.actions.standingDisputeId);
 
-// ① 驳回未裁：两句都在，驳回那一句挂「去裁定」。
+// ① 驳回未裁：两句都在，驳回那一句是「现在的事」。
 {
   const result = display(persisted(), { reviews: review(dispute()) });
   assert.deepEqual(texts(result.footnote), [RULING, UNSUBMITTED_TEXT], "驳回那一句不被 13 秒后的结算说明盖掉");
-  assert.equal(ruledPart(result)?.view.text, RULING, "「去裁定」挂在驳回那一句上");
-  assert.equal(result.actions.standingDisputeId, result.actions.ruleEventId, "带颜色的就是挂按钮的那一句");
+  assert.equal(standingPart(result)?.view.text, RULING, "带颜色的就是驳回那一句");
+  assert(!("ruleEventId" in result.actions), "不再认「去裁定」挂在哪一句：裁定在回复框顶上");
   // 改之前的样子：同一份记录不给 held，驳回那一句被盖掉——夹具确实复现了现场。
   const before = conversationSystemRows(conversationDebateRows(conversationFeedRows(result.items, { reviews: review(dispute()) }), { reviews: review(dispute()) }));
   assert.deepEqual(texts(before.footnotes.get(result.footnote!.id.replace(/^footnote:/, ""))), [UNSUBMITTED_TEXT], "夹具复现现场：不留位置时驳回那一句被盖掉");
@@ -158,7 +159,7 @@ const LATER = [
   const result = display(persisted(LATER), { reviews: review(dispute()) });
   const shown = texts(result.footnote);
   assert(shown.includes(RULING), `驳回那一句仍在（实际：${JSON.stringify(shown)}）`);
-  assert.equal(ruledPart(result)?.view.text, RULING, "「去裁定」仍挂在它上面");
+  assert.equal(standingPart(result)?.view.text, RULING, "它仍是「现在的事」");
   assert(!shown.includes(UNSUBMITTED_TEXT) && shown.some((text) => text.startsWith("验收暂缓")), "别的「要你知道的」照旧只留最近一句");
   assert(shown.length - 1 <= 3, "驳回那一句不占三句的名额，其余照旧最多三句");
 }
@@ -172,7 +173,6 @@ for (const patch of [
 ] as Partial<FreeReviewDispute>[]) {
   const name = JSON.stringify(patch);
   const result = display(persisted(), { reviews: review(dispute(patch)) });
-  assert.equal(result.actions.ruleEventId, null, `${name}：不挂「去裁定」`);
   assert.equal(result.actions.standingDisputeId, null, `${name}：那一句不再是现在的事（不带颜色）`);
   assert.deepEqual(texts(result.footnote), [UNSUBMITTED_TEXT], `${name}：可以被后来的话盖过，退回记录`);
 }
@@ -186,21 +186,16 @@ for (const task of [
 ] as unknown as Task[]) {
   const name = JSON.stringify(task);
   const result = display(persisted(), { reviews: review(dispute()), task });
-  assert.equal(result.actions.ruleEventId, null, `${name}：不挂「去裁定」`);
   assert.equal(result.actions.standingDisputeId, null, `${name}：那一句按过去的事显示`);
   assert.deepEqual(texts(result.footnote), [UNSUBMITTED_TEXT], `${name}：照普通规则可以被盖过`);
 }
 
-// ⑤ 拿不到审查状态：照位置判，同样不被挤掉；没有那张卡可去，不挂按钮。没有审查格可去时同样不挂。
+// ⑤ 拿不到审查状态：照位置判，同样不被挤掉。
 {
   const blind = display(persisted(), { reviews: null });
   assert.deepEqual(texts(blind.footnote), [RULING, UNSUBMITTED_TEXT], "拿不到审查状态：按位置判，驳回那一句不被挤掉");
-  assert.equal(blind.actions.ruleEventId, null, "拿不到审查状态：不挂按钮");
   assert.equal(display(persisted(), { reviews: null, task: { stage: "accepted", archived: false, handoff: null } as Task }).actions.standingDisputeId, null,
     "拿不到审查状态、但任务已验收：照样是过去的事");
-  const readonly = display(persisted(), { reviews: review(dispute()), canOpenReviews: false });
-  assert.equal(readonly.actions.ruleEventId, null, "没有审查格可去：不挂按钮");
-  assert.deepEqual(texts(readonly.footnote), [RULING, UNSUBMITTED_TEXT], "没有审查格可去：那一句照样在");
 }
 
 // ⑥ 实时到达和刷新后重建，两路一样。
@@ -208,8 +203,8 @@ for (const reviews of [review(dispute()), review(dispute({ resolution: "upheld",
   const reload = display(persisted(), { reviews });
   const watching = display(live(), { reviews });
   assert.deepEqual(texts(watching.footnote), texts(reload.footnote), "开着页面看到的尾注跟刷新后的一样");
-  assert.equal(!!watching.actions.ruleEventId, !!reload.actions.ruleEventId, "两路的「去裁定」一样");
-  assert.equal(!!ruledPart(watching), !!ruledPart(reload), "两路的按钮都挂在尾注里");
+  assert.equal(!!watching.actions.standingDisputeId, !!reload.actions.standingDisputeId, "两路的「等你裁定」一样");
+  assert.equal(!!standingPart(watching), !!standingPart(reload), "两路的那一句都在尾注里");
 }
 
 // ⑦ 其余挂着动作的那几句。
@@ -271,7 +266,7 @@ const part = (id: string, topic: FootnotePart["view"]["topic"], text: string, ki
     const feedRows = conversationFeedRows(items, { reviews: entry.reviews });
     const causes = laneNoVerdicts(feedRows, entry.reviews);
     const actions = footnoteActions({
-      items, task: entry.task, reviews: entry.reviews, canOpenReviews: true, causes, crashed,
+      items, task: entry.task, reviews: entry.reviews, causes, crashed,
       reviewRetry: entry.reviewRetry, turnRetry: entry.turnRetry,
     });
     const id = actions[EXPECT[entry.id]!] as string | null;
@@ -293,21 +288,6 @@ const part = (id: string, topic: FootnotePart["view"]["topic"], text: string, ki
     assert.match(kept.view.text, entry.sentence, `${entry.id}：留下的就是说这件事的那一句`);
     assert(!shownParts(new Set()).some((candidate) => candidate.id === id), `${entry.id}：不留位置时它会被挤掉（夹具复现了要修的那件事）`);
   }
-}
-
-// ⑧ 辩论条上的「去裁定」：任务裁不了时同样不给（canRule 是两颗键共用的那道判据）。
-{
-  assert.equal(display(persisted(), { reviews: review(dispute()) }).actions.canRule, true, "能裁：辩论条上能给");
-  for (const task of [
-    { stage: "accepted", archived: false, handoff: null },
-    { stage: "merged", archived: false, handoff: null },
-    { stage: null, archived: true, handoff: null },
-    { stage: null, archived: false, handoff: { direction: "out" } },
-  ] as unknown as Task[]) {
-    assert.equal(display(persisted(), { reviews: review(dispute()), task }).actions.canRule, false, `${JSON.stringify(task)}：辩论条上不给`);
-  }
-  assert.equal(display(persisted(), { reviews: review(dispute()), canOpenReviews: false }).actions.canRule, false, "没有审查格可去：不给");
-  assert.equal(display(persisted(), { reviews: null }).actions.canRule, false, "拿不到审查状态：不给");
 }
 
 console.log("footnote actions tests passed");

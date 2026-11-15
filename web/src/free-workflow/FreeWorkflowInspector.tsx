@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import type {
   FreeReviewRound,
   FreeReviewRun,
@@ -9,8 +9,9 @@ import { CaretRight } from "@phosphor-icons/react";
 import { useInspectorNav } from "../inspector/nav.tsx";
 import { InspNone } from "../inspector/parts.tsx";
 import type { FreeWorkflowApiState } from "../lib/api.ts";
-import { FreeReviewRoundDrawer } from "./FreeReviewRoundBody.tsx";
-import { recurrenceText, reviewKey, reviewRoundLabel, reviewRoundTone, timeText } from "./freeReviewRounds.ts";
+import { useLeftDrawer } from "../components/LeftDrawer.tsx";
+import { freeReportEntry } from "./FreeReviewRoundBody.tsx";
+import { recurrenceText, reviewRoundLabel, reviewRoundTone, timeText } from "./freeReviewRounds.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 import { reviewTargetRequest } from "../review/reviewTarget.ts";
 
@@ -130,37 +131,33 @@ function RunsRow({ runs }: { runs: FreeWorkflowExecution[] }) {
 export function FreeWorkflowInspector({ task }: { task: Task }) {
   const free = useFreeWorkflowState(task.id);
   const nav = useInspectorNav();
-  // 面板外单独渲染（没有「审查」格可去）时，点一轮审查退回弹抽屉看。
-  const [drawerKey, setDrawerKey] = useState<string | null>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLOListElement>(null);
+  // 面板外单独渲染（没有「审查」格可去）时，点一轮审查退回从左边推出它的报告来看。
+  const drawer = useLeftDrawer();
   const items = useMemo(() => timeline(free.state), [free.state]);
-  const opened = drawerKey
-    ? items.find((item): item is Extract<Item, { type: "review" }> => item.type === "review" && reviewKey(item.run.id, item.round.round) === drawerKey) ?? null
-    : null;
 
   if (free.loading && !free.state) return <div className="insp-pane"><InspNone>正在读取…</InspNone></div>;
   if (free.error && !free.state) return <div className="insp-pane"><InspNone>{free.error}</InspNone></div>;
 
   return (
-    <div className="insp-pane free-workflow-inspector" ref={rootRef} aria-label="工作流">
+    <div className="insp-pane free-workflow-inspector" aria-label="工作流">
       {items.length === 0
         ? <InspNone>还没有发生过什么。</InspNone>
         : (
-          <ol className="insp-tl free-workflow-generated" ref={listRef}>
+          <ol className="insp-tl free-workflow-generated">
             {items.map((item) => (
               <li key={item.key} className={`is-${tone(item)}`}>
                 {item.type === "runs" ? <RunsRow runs={item.runs} /> : (
                   <button
                     type="button"
                     className="insp-row insp-go"
-                    aria-expanded={nav ? undefined : drawerKey === reviewKey(item.run.id, item.round.round)}
+                    aria-pressed={nav || !drawer ? undefined : drawer.activeKey === freeReportEntry(task.id, item.run.id, item.round.round, null).key}
                     onClick={() => {
                       if (nav) nav.openTab("review", reviewTargetRequest({ source: item.run.target?.kind === "accepted_merge" ? "merge" : "free", runId: item.run.id, round: item.round.round }));
-                      else setDrawerKey((current) => {
-                        const key = reviewKey(item.run.id, item.round.round);
-                        return current === key ? null : key;
-                      });
+                      else if (drawer) {
+                        const entry = freeReportEntry(task.id, item.run.id, item.round.round, item);
+                        if (drawer.activeKey === entry.key) drawer.close();
+                        else drawer.open(entry);
+                      }
                     }}
                   >
                     <span className="insp-cut">
@@ -179,16 +176,6 @@ export function FreeWorkflowInspector({ task }: { task: Task }) {
             ))}
           </ol>
         )}
-      {opened && (
-        <FreeReviewRoundDrawer
-          taskId={task.id}
-          run={opened.run}
-          round={opened.round}
-          anchorRef={rootRef}
-          keepOpenRef={listRef}
-          onClose={() => setDrawerKey(null)}
-        />
-      )}
     </div>
   );
 }

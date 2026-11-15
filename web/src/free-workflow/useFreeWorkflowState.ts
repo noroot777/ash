@@ -107,3 +107,17 @@ export function useFreeWorkflowState(taskId: string, enabled = true) {
 
   return { state, setState, loading, error, reload };
 }
+
+/**
+ * 只跟着看、不另起轮询：左侧抽屉里那份报告 / 辩论记录要跟着长，而这个任务页上 useFreeWorkflowState
+ * 已经在拉（审查格的点、会话里的气泡都靠它）。没人在拉的地方（夹具、单摆的组件）退回开的那一刻
+ * 交过来的那一份。
+ */
+export function useFreeWorkflowSnapshot(taskId: string): FreeWorkflowApiState | null {
+  const [state, setState] = useState<FreeWorkflowApiState | null>(() => states.get(taskId) ?? null);
+  useEffect(() => {
+    setState(states.get(taskId) ?? null);
+    return subscribe(taskId, setState);
+  }, [taskId]);
+  return state;
+}

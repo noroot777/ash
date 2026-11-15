@@ -178,36 +178,15 @@
   font-size: var(--t-xs);
 }
 
-/* 折起来的长正文、辩论回放：在这一格里同样用正文字号 */
+/* 折起来的长正文：在这一格里同样用正文字号 */
 .review-pane .folded-prose > button,
-.review-pane .free-review-debate > header b,
-.review-pane .free-review-debate li > span b,
-.review-pane .free-review-debate__gist,
-.review-pane .free-review-debate__pending,
-.review-pane .free-review-debate-exchanges > b,
-.review-pane .free-review-debate-exchanges > div > button {
+.review-pane .folded-prose > button > em {
   font-size: var(--t-xs);
 }
 
-.review-pane .folded-prose > button > em,
-.review-pane .free-review-debate > header small,
-.review-pane .free-review-debate li > span em,
-.review-pane .free-review-debate__expand,
-.review-pane .free-review-debate__quote,
-.review-pane .free-review-debate-exchanges > small {
-  font-size: var(--t-xs);
-}
-
-.review-pane .folded-prose.is-open .task-markdown,
-.review-pane .free-review-debate .task-markdown {
+.review-pane .folded-prose.is-open .task-markdown {
   color: var(--ink);
   font-size: var(--t-xs);
-}
-
-.review-pane .free-review-debate-exchanges > div > button.is-selected {
-  background: var(--sel-bg);
-  color: var(--ink);
-  font-weight: var(--w-medium);
 }
 
 /* 预设工作流「验一轮」点开的那一块：一行执行器、一句说明、两颗键 */

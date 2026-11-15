@@ -56,7 +56,7 @@ export type NoticeView = {
   mono?: string;
   /** 点开再看的原文。跟 `text` 说的是同一句时为 null。 */
   detail: string | null;
-  /** 「执行者驳回了审查意见，等你裁定」——这一条上挂「去裁定」。 */
+  /** 「执行者驳回了审查意见，等你裁定」——这一句留到裁完为止（裁定在回复框顶上那一行）。 */
   dispute: boolean;
   /** 指到才出的那半句里、排在时刻前面的话（命令的回答：是哪条命令）。 */
   meta?: string;

@@ -29,6 +29,7 @@ import { useStandingExecutor, type StandingExecutor } from "./useStandingExecuto
 import { useExecutorProfiles } from "./useExecutorProfiles.ts";
 import { ComposerInput } from "./ComposerInput.tsx";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
+import { overrideKeyDown, overrideTake, type ReplyOverride } from "./replyOverride.ts";
 import { ScreenshotAnnotation } from "../page-annotation/ScreenshotAnnotation.tsx";
 import { screenshotCandidates, type AnnotationReply } from "../page-annotation/model.ts";
 import type { ConversationItem } from "./conversationModel.ts";
@@ -64,6 +65,7 @@ export function ReplyBox({
   moreRef,
   conversationItems = [],
   tasks = [],
+  override,
   onAnswer,
 }: {
   task: Task;
@@ -121,6 +123,8 @@ export function ReplyBox({
   conversationItems?: ConversationItem[];
   /** 「等某任务完成后发送」的候选,以及托盘里报出在等谁。 */
   tasks?: TaskListItem[];
+  /** 这个框此刻被借用（等你裁定时框顶那一行）；见 replyOverride.ts。 */
+  override?: ReplyOverride;
   /** 有问题在等时怎么答：给了，框那一格就由答题卡接管（QuestionSlot.tsx）。 */
   onAnswer?: (answer: string, input: QuestionAnswerInput) => Promise<void>;
 }) {
@@ -171,6 +175,8 @@ export function ReplyBox({
     pending: draft.pendingUploads,
     onPendingChange: draft.setPendingUploads,
   });
+  // 借用中且选了一档：正文是那一档的话（或整块换成别的），斜杠、@ 这些都不出。
+  const { take, takeInput } = overrideTake(override);
   // 任务正在跑不再是「不能说话」,而是「说了先排队」:发出去的消息落成一条待发送
   // 消息(mode=queued),这一轮一结束由服务端自动送进同一个会话。所以 disabled 只留
   // 真正没得说的情况——不是单任务、已归档、以及从没跑过因而没有会话可续。
@@ -237,9 +243,9 @@ export function ReplyBox({
     setPicker(null);
     setAnnotating(false);
   }, [covering]);
-  const menuOpen = !covering && !menuDismissed && candidates.length > 0;
+  const menuOpen = !take && !covering && !menuDismissed && candidates.length > 0;
   const selectedIndex = Math.min(commandIndex, Math.max(0, candidates.length - 1));
-  const commandMatch = !!command && command.matches(value);
+  const commandMatch = !take && !!command && command.matches(value);
   const selected = candidates[selectedIndex];
   // 菜单开着时回车做什么:ash 命令打开派生配置;技能和原生命令补全进正文;
   // 原生命令已经敲全就直接发(它本来就是发给 CLI 的一句话)。
@@ -258,7 +264,7 @@ export function ReplyBox({
     profiles,
     profilesReady,
     profilesFailed,
-    disabled: disabled || commandActive || !!picker,
+    disabled: disabled || commandActive || !!picker || !!take,
     onPickAgent: (agent) => pickMention(agent),
     onPicked: () => textareaRef.current?.focus(),
   });
@@ -549,26 +555,31 @@ export function ReplyBox({
       {!covering && <div className="task-reply-box">
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />
         <AgentPlate name={activeAgent} />
+        {override?.head}
         {/* 输入几行就撑几行高,撑到上限为止;拖过之后以拖出来的高度为准(拖动条自己的上限更宽)。 */}
         <ComposerInput
           inputRef={textareaRef}
-          value={value}
+          value={takeInput?.value ?? value}
           pinned={replyHeight.height}
           quoteTarget={task.id}
           rows={3}
-          disabled={inputDisabled}
-          placeholder={placeholder}
-          aria-label="回复任务"
+          hidden={!!take && !takeInput}
+          disabled={inputDisabled && !takeInput}
+          readOnly={takeInput?.readOnly}
+          placeholder={takeInput?.placeholder ?? placeholder}
+          aria-label={takeInput?.label ?? "回复任务"}
           onChange={(event) => {
             const next = event.target.value;
+            if (takeInput) return takeInput.onChange(next);
             setValue(next);
             setMenuDismissed(false);
             setCommandIndex(0);
             mention.onValueChange();
             command?.onChange?.(commandCandidates(next).length > 0 ? "" : next);
           }}
-          onPaste={uploads.onPaste}
+          onPaste={take ? undefined : uploads.onPaste}
           onKeyDown={(event) => {
+            if (overrideKeyDown(override, event)) return;
             if (menuOpen) {
               if (event.key === "ArrowDown") {
                 event.preventDefault();
@@ -607,8 +618,9 @@ export function ReplyBox({
             }
           }}
         />
+        {take && "body" in take && take.body}
         <div className="task-reply-actions">
-          <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending || commandActive} />
+          <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending || commandActive || !!take} />
           {actions}
           {/* 截图批注、预览日志用得少，收进「更多」。 */}
           <IconMenu side="above" buttonRef={moreButton} className="task-reply-more" items={[
@@ -648,7 +660,7 @@ export function ReplyBox({
               <X size={10} weight="bold" />
             </button>
           )}
-          <LaterSendKey
+          {take ? override!.send : <LaterSendKey
             later={later}
             action="发送回复"
             empty={!value.trim() && !uploads.attachments.length && !uploads.uploading}
@@ -672,7 +684,7 @@ export function ReplyBox({
             tasks={tasks}
             projectId={task.projectId}
             taskId={task.id}
-          />
+          />}
         </div>
       </div>}
     </div>

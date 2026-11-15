@@ -528,10 +528,13 @@ export function ReviewReportBody({ text, reportKey, conclusion, resolveFile }: {
   );
 }
 
-export function ReviewReportDialog({ target, onReviewReport, onClose }: {
+/**
+ * 一份**孤立的报告文件**（只有地址，没有它属于哪一轮）：取回来照报告的读法画。正文里点 report.md
+ * 弹出的那一层、会话里审查气泡那颗报告键打开的左侧抽屉（就地验证那一路）都是它。
+ */
+export function ReviewReportFile({ target, onReviewReport }: {
   target: ReviewFileTarget;
   onReviewReport: (target: ReviewFileTarget) => void;
-  onClose: () => void;
 }) {
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -552,7 +555,40 @@ export function ReviewReportDialog({ target, onReviewReport, onClose }: {
       });
     return () => controller.abort();
   }, [target.url]);
+  return (
+    <>
+      {text !== null ? (
+        <ImagePreviewGroup isolated>
+          {/* 手上没有它属于哪一轮，也就拿不到权威结论——按钮跟着什么都不宣称。 */}
+          {/* 相对路径按**这份报告自己所在的目录**解：手上只有它的地址，run/round 都没有。
+              子目录里的报告按它自己那一层解（`notes/supplement.md` 里的 `shot.png` =
+              `notes/shot.png`），归属判据与另外两处表面同一份，见 reportFileResolver。 */}
+          <TaskFileLinkBase dir={null}>
+            <ReviewReportSplit text={text} reportKey={target.url} conclusion={null} resolveFile={siblingResolverForUrl(target.url)} onReviewReport={onReviewReport} onActionError={setActionError} />
+          </TaskFileLinkBase>
+        </ImagePreviewGroup>
+      ) : error ? (
+        <p className="markdown-report-error">审查报告加载失败：{error}</p>
+      ) : (
+        <p className="markdown-report-loading">正在加载审查报告…</p>
+      )}
+      {actionError && <p className="markdown-action-error" role="status">本地文件打开失败：{actionError}</p>}
+    </>
+  );
+}
 
+/** 同上，报告里再点到别的报告就在原处换过去（左侧抽屉里那一份）。 */
+export function ReviewReportFileView({ target }: { target: ReviewFileTarget }) {
+  const [current, setCurrent] = useState(target);
+  useEffect(() => setCurrent(target), [target.url]);
+  return <ReviewReportFile target={current} onReviewReport={setCurrent} />;
+}
+
+export function ReviewReportDialog({ target, onReviewReport, onClose }: {
+  target: ReviewFileTarget;
+  onReviewReport: (target: ReviewFileTarget) => void;
+  onClose: () => void;
+}) {
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -580,23 +616,7 @@ export function ReviewReportDialog({ target, onReviewReport, onClose }: {
           <button type="button" autoFocus aria-label="关闭审查报告" onClick={onClose}><X size={16} /></button>
         </header>
         <div className="markdown-report-body">
-          {text !== null ? (
-            <ImagePreviewGroup isolated>
-              {/* 这个弹窗打开的是一份**孤立的报告文件**（正文里的 report.md 链接），手上
-                  没有它属于哪一轮，也就拿不到权威结论——按钮跟着什么都不宣称。 */}
-              {/* 相对路径按**这份报告自己所在的目录**解：弹窗手上只有它的地址，run/round 都没有。
-                  子目录里的报告按它自己那一层解（`notes/supplement.md` 里的 `shot.png` =
-                  `notes/shot.png`），归属判据与另外两处表面同一份，见 reportFileResolver。 */}
-              <TaskFileLinkBase dir={null}>
-                <ReviewReportSplit text={text} reportKey={target.url} conclusion={null} resolveFile={siblingResolverForUrl(target.url)} onReviewReport={onReviewReport} onActionError={setActionError} />
-              </TaskFileLinkBase>
-            </ImagePreviewGroup>
-          ) : error ? (
-            <p className="markdown-report-error">审查报告加载失败：{error}</p>
-          ) : (
-            <p className="markdown-report-loading">正在加载审查报告…</p>
-          )}
-          {actionError && <p className="markdown-action-error" role="status">本地文件打开失败：{actionError}</p>}
+          <ReviewReportFile target={target} onReviewReport={onReviewReport} />
         </div>
       </section>
     </div>,

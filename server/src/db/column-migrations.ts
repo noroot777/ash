@@ -413,4 +413,6 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN monitor_hold_at TEXT",
   // 被哨兵隔开的续聊,续聊前的状态(见 db/schema.ts 同名列)。存量行 NULL:升级前已经落下的那些不追改。
   "ALTER TABLE tasks ADD COLUMN follow_up_held_from TEXT",
+  // 备忘里贴的图(见 db/schema.ts 同名列)。存量行 NULL = 没有附件。
+  "ALTER TABLE task_memos ADD COLUMN attachments TEXT",
 ];
