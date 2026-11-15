@@ -13,14 +13,15 @@ const root = mkdtempSync(join(tmpdir(), "ash-dispatched-by-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
-const { projects, tasks, sessions } = await import("../src/db/schema.js");
-const { backfillDispatchedBy } = await import("../src/db/migrate-dispatched-by.js");
+const { projects, tasks, sessions, appSettings } = await import("../src/db/schema.js");
+const { backfillDispatchedBy, DISPATCHED_BY_BACKFILL_KEY } = await import("../src/db/migrate-dispatched-by.js");
 const { mountTaskRoutes } = await import("../src/task-routes.js");
 const { dispatchWorkers } = await import("../src/team/dispatch.js");
 await ensureSchema();
 const api = new Hono();
 mountTaskRoutes(api);
-const at = new Date().toISOString();
+const at = new Date(Date.now() - 60_000).toISOString();
+const backfillMark = async () => (await db.select().from(appSettings).where(eq(appSettings.key, DISPATCHED_BY_BACKFILL_KEY))).at(0)?.value ?? null;
 const origin = (taskId: string) => JSON.stringify({ kind: "agent", taskId, agentType: "claude" });
 const row = (id: string, extra: Partial<typeof tasks.$inferInsert> = {}) => ({
   id, projectId: "project", title: id, body: "", agentType: "claude" as const, createdAt: at, updatedAt: at, ...extra,
@@ -35,6 +36,9 @@ try {
   await db.insert(projects).values({ id: "project", name: "派活归属", repoPath: root, createdAt: at });
 
   // —— 存量：升级前派出去的任务只在 creation_origin 里记着来源，回填之后收在派它的那条下面。
+  // 空库首启时回填已经跑过一遍、记下了「已完成」；这里抹掉那条记录，当作老实例刚升级上来。
+  assert.match(String(await backfillMark()), /"done":true/, "空库首启也记下完成，之后启动不再碰任何一行");
+  await db.delete(appSettings).where(eq(appSettings.key, DISPATCHED_BY_BACKFILL_KEY));
   await db.insert(tasks).values([
     row("analysis"),
     row("legacy-1", { creationOrigin: origin("analysis") }),
@@ -50,6 +54,8 @@ try {
     row("user-made", { creationOrigin: JSON.stringify({ kind: "user" }) }),
     row("broken", { creationOrigin: "not json" }),
     row("already", { creationOrigin: origin("analysis"), dispatchedBy: "legacy-2" }),
+    row("team-exec", { parentId: "team", mode: "single" }),
+    row("exec-made", { creationOrigin: origin("team-exec") }),
   ]);
   await backfillDispatchedBy(dbClient as never);
   assert.equal(await dispatchedOf("legacy-1"), "analysis", "普通任务里派出去的存量任务认得出");
@@ -64,6 +70,7 @@ try {
   assert.equal(await dispatchedOf("user-made"), null);
   assert.equal(await dispatchedOf("broken"), null, "来源记录坏了也不报错");
   assert.equal(await dispatchedOf("already"), "legacy-2", "已经有归属的不覆盖");
+  assert.equal(await dispatchedOf("exec-made"), null, "团队执行者另建的任务不收：执行者详情里不冒出派出的任务");
   await backfillDispatchedBy(dbClient as never);
   assert.equal(await dispatchedOf("legacy-1"), "analysis", "幂等");
 
@@ -88,6 +95,29 @@ try {
   const workers = await dispatchWorkers("team", [{ title: "团队执行者", body: "test" }], { run: false });
   assert.equal(workers.tasks[0].parentId, "team");
   assert.equal(workers.tasks[0].dispatchedBy ?? null, null, "团队派执行者：parentId 照旧，不记派活人");
+  await db.update(tasks).set({ status: "running", activeTurnToken: "turn-e" }).where(eq(tasks.id, "team-exec"));
+  await db.insert(sessions).values({ id: "s-exec", taskId: "team-exec", role: "single", agentType: "claude", executor: "Claude", startedAt: at });
+  const fromExec = await (await create({ title: "执行者另建的" }, { "x-ash-source-task-id": "team-exec", "x-ash-turn-token": "turn-e" })).json();
+  assert.equal(fromExec.creationOrigin?.taskId, "team-exec");
+  assert.equal(fromExec.dispatchedBy, null, "团队执行者回合里建的任务不记在执行者名下");
+
+  // —— 明确选了不归属（dispatchedBy:null / ""）：重启（回填再跑一遍）之后也不会被挂回来源名下。
+  const optOut = await (await create({ title: "明确不归属", dispatchedBy: null }, { "x-ash-source-task-id": "analysis", "x-ash-turn-token": "turn-a" })).json();
+  assert.equal(optOut.creationOrigin?.taskId, "analysis");
+  assert.equal(optOut.dispatchedBy, null);
+  const optOutBlank = await (await create({ title: "空串也算不归属", dispatchedBy: "" }, { "x-ash-source-task-id": "analysis", "x-ash-turn-token": "turn-a" })).json();
+  assert.equal(optOutBlank.dispatchedBy, null);
+  await backfillDispatchedBy(dbClient as never);
+  assert.equal(await dispatchedOf(optOut.id), null, "重启之后，明确不归属的仍然不归属");
+  assert.equal(await dispatchedOf(optOutBlank.id), null);
+  // 上一次回填半路失败（只记下了边界、没记完成）：重试只碰边界之前的行，之后建的显式选择不动。
+  const cutoff = new Date(Date.parse(at) + 1_000).toISOString();
+  await db.update(appSettings).set({ value: JSON.stringify({ cutoff }) }).where(eq(appSettings.key, DISPATCHED_BY_BACKFILL_KEY));
+  await db.insert(tasks).values(row("legacy-late", { creationOrigin: origin("analysis") }));
+  await backfillDispatchedBy(dbClient as never);
+  assert.equal(await dispatchedOf("legacy-late"), "analysis", "边界之前漏掉的存量行，重试时补上");
+  assert.equal(await dispatchedOf(optOut.id), null, "边界之后建的、明确不归属的，重试也碰不到");
+  assert.match(String(await backfillMark()), /"done":true/);
 
   // —— 显式指定派活人（回复框派出去的入口，界面在后面的任务里接）。
   const explicit = await (await create({ title: "显式归属", dispatchedBy: "legacy-1" })).json();
@@ -100,8 +130,10 @@ try {
   assert.equal(asWorker.status, 400);
   const asDuet = await create({ title: "讨论挂进来", dispatchedBy: "analysis", mode: "duet" });
   assert.equal(asDuet.status, 400);
+  const toExec = await create({ title: "挂到团队执行者底下", dispatchedBy: "team-exec" });
+  assert.equal(toExec.status, 400, "团队执行者不当派活人");
 
-  console.log("✓ 派它的那条任务：存量回填、随列表下发、回合里新建自动记上、显式指定、团队那一套不碰");
+  console.log("✓ 派它的那条任务：存量回填只碰升级前的行、随列表下发、回合里新建自动记上、显式指定与明确不归属、团队（含执行者）那一套不碰");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
