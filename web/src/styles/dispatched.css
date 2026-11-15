@@ -171,9 +171,9 @@
   display: none;
 }
 
-/* 格头那颗「全部停下」（DispatchHoldKey）：没停着时指到这一格、或键盘走进来才出；触屏上常驻。
-   停着时它是「接着跑」，常驻。 */
-.inspector-host:not(:hover):not(:focus-within) .dispatched-hold-key:not(.is-held) {
+/* 格头那颗「全部停下」（DispatchHoldKey）：没停着时指到格头、或键盘走进格头才出；触屏上常驻。
+   停着时它是「接着跑」（没停完是「再停一次」），常驻。 */
+.inspector-host__panel-head:not(:hover):not(:focus-within) .dispatched-hold-key:not(.is-held) {
   opacity: 0;
 }
 
@@ -182,7 +182,7 @@
 }
 
 @media (hover: none) {
-  .inspector-host:not(:hover):not(:focus-within) .dispatched-hold-key:not(.is-held) {
+  .inspector-host__panel-head:not(:hover):not(:focus-within) .dispatched-hold-key:not(.is-held) {
     opacity: 1;
   }
 }

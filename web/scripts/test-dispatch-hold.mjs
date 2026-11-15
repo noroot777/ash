@@ -2,7 +2,7 @@
 // 判据跟服务端 server/src/task-hold.ts 同一个，服务端那一半的回归在 server 的 test:dispatch-hold。
 // 跑：npm -w web run test:dispatch-hold
 import assert from "node:assert/strict";
-import { dispatchHolderOf, dispatchHoldPhrase, dispatchedLive } from "../src/lib/dispatchHold.ts";
+import { dispatchHolderOf, dispatchHoldKey, dispatchHoldPhrase, dispatchedLive } from "../src/lib/dispatchHold.ts";
 import { scheduledWaitText } from "../../shared/src/scheduled-message-wait.ts";
 
 const task = (id, extra = {}) => ({
@@ -51,6 +51,13 @@ const byId = (rows) => new Map(rows.map((row) => [row.id, row]));
   assert.equal(dispatchedLive(rows, "H"), true, "排着的也算");
   assert.equal(dispatchedLive(rows, "D"), false);
 }
+
+// —— 格头那颗键：没停着看名下动不动；停完了是接着跑；按了停、没停完（服务端在补停）只给再停一次。
+assert.equal(dispatchHoldKey({ dispatchHoldAt: null, dispatchHoldPendingAt: null }, false), null, "没停着、名下也没在动：不出");
+assert.equal(dispatchHoldKey({ dispatchHoldAt: null, dispatchHoldPendingAt: null }, true), "hold");
+assert.equal(dispatchHoldKey({ dispatchHoldAt: "t", dispatchHoldPendingAt: null }, false), "release", "停完了：接着跑，名下动不动都在");
+assert.equal(dispatchHoldKey({ dispatchHoldAt: "t", dispatchHoldPendingAt: "t" }, true), "retry", "没停完：不给接着跑");
+assert.equal(dispatchHoldKey({ dispatchHoldAt: "t" }, false), "release", "老服务端不带这一列：按停完了算");
 
 // —— 说法：页面那一行、托盘那一句都说得出是谁按的。
 assert.equal(dispatchHoldPhrase({ title: "派活的那条" }), "「派活的那条」名下已全部停下");

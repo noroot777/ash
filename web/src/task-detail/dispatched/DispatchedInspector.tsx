@@ -31,7 +31,7 @@ export function DispatchedInspector({
   notify,
 }: {
   /** 派活的这一条（这一格挂在它的详情页上）。 */
-  task: Pick<TaskListItem, "id" | "dispatchHoldAt">;
+  task: Pick<TaskListItem, "id" | "dispatchHoldAt" | "dispatchHoldPendingAt">;
   allTasks: readonly TaskListItem[];
   dispatched: readonly TaskListItem[];
   /** 此刻在左边抽屉里开着的那一条。 */
@@ -53,7 +53,7 @@ export function DispatchedInspector({
   const byId = useMemo(() => new Map(allTasks.map((item) => [item.id, item] as const)), [allTasks]);
   const holder = dispatchHolderOf(task.id, byId);
   const live = useMemo(() => dispatchedLive(allTasks, task.id), [allTasks, task.id]);
-  const head = [`${dispatched.length} 个`, order, task.dispatchHoldAt ? "已全部停下" : null].filter(Boolean).join(" · ");
+  const head = [`${dispatched.length} 个`, order, task.dispatchHoldAt ? (task.dispatchHoldPendingAt ? "正在停下" : "已全部停下") : null].filter(Boolean).join(" · ");
   return (
     <div className={`dispatched-pane${task.dispatchHoldAt ? " is-held" : ""}`}>
       {!holder && <DispatchHoldKey task={task} live={live} onTaskUpdated={onTaskUpdated} notify={notify} />}

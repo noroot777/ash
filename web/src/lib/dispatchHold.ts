@@ -34,6 +34,15 @@ export function dispatchedLive(tasks: readonly TaskListItem[], taskId: string): 
   return dispatchSubtree(children, taskId).some((task) => task.status === "running" || task.status === "queued");
 }
 
+/**
+ * 格头那颗键此刻是哪一颗：hold = 全部停下、release = 接着跑、retry = 再停一次（按了停、还没停完，
+ * 服务端在补停 —— 这时给「接着跑」就是把没停下的当成停好了）；null = 不出（没停着、名下也没在动的）。
+ */
+export function dispatchHoldKey(task: Pick<TaskListItem, "dispatchHoldAt" | "dispatchHoldPendingAt">, live: boolean): "hold" | "release" | "retry" | null {
+  if (task.dispatchHoldAt) return task.dispatchHoldPendingAt ? "retry" : "release";
+  return live ? "hold" : null;
+}
+
 export function dispatchHoldPhrase(holder: Pick<TaskListItem, "title">): string {
   return `「${holder.title || "未命名任务"}」名下已全部停下`;
 }
