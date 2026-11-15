@@ -145,13 +145,13 @@ api.post("/tasks/:id/ask", async (c) => {
 // 「插话」走的是同一条路。挡住反而会让用户对着一个明明在线的调度台干等。
 api.post("/tasks/:id/answer", (c) => answerTask(c, c.req.param("id")));
 
-// 这条任务名下派出的任务来问 / 失败的那几刻（dispatch-signals.ts）：派它的那条任务的会话里那几颗气泡。
+// 这条任务名下派出的任务失败的那几刻（dispatch-signals.ts）：派它的那条任务的会话里那几颗气泡。
 api.get("/tasks/:id/dispatch-signals", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
   const signals = await listDispatchSignals(taskId);
-  // 派出的任务可以在别的项目里：那一条看不见，它的提问、失败也不给看。
+  // 派出的任务可以在别的项目里：那一条看不见，它的失败也不给看。
   const visible = await visibleProjectIds(actorOf(c));
   if (visible === null || !signals.length) return c.json(signals);
   const ids = [...new Set(signals.map((signal) => signal.taskId))];

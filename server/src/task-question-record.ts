@@ -8,7 +8,6 @@ import type { TaskRow } from "./task-store.js";
 import { now } from "./util.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { questionOccurrenceOf } from "./task-wait-ownership.js";
-import { announceDispatchSignalsTo, markDispatchQuestionAnswered } from "./dispatch-signals.js";
 
 export function prepareQuestionRecord(task: TaskRow, answer: string, input: QuestionAnswerInput): QuestionRecord {
   const source: QuestionSource = {
@@ -40,15 +39,9 @@ export function prepareQuestionRecord(task: TaskRow, answer: string, input: Ques
   };
 }
 
-/**
- * 整行条件写认领这一问。派出的任务的那一行提问记录（「答过了」、在派它的那条里答的那条答复，
- * dispatch-signals.ts）跟认领同一个事务：条件写命中才证明答的就是那一问。`via` 是答复者在哪条任务的
- * 页面里答的。
- */
 export async function claimQuestionAnswer(task: TaskRow, record: QuestionRecord,
-  onClaim?: (transaction: ConclusionTransaction) => Promise<void>, via?: string): Promise<boolean> {
-  let announce: string | null = null;
-  const claimed = await db.transaction(async (transaction) => {
+  onClaim?: (transaction: ConclusionTransaction) => Promise<void>): Promise<boolean> {
+  return db.transaction(async (transaction) => {
     const history: QuestionRecord[] = task.questionHistory ? JSON.parse(task.questionHistory) : [];
     const claimed = await transaction.update(tasks).set({
       question: null, questionOptions: null, questionItems: null,
@@ -63,10 +56,7 @@ export async function claimQuestionAnswer(task: TaskRow, record: QuestionRecord,
       task.mode === "team" ? undefined : eq(tasks.status, task.status),
     )).returning({ id: tasks.id });
     if (!claimed.length) return false;
-    announce = await markDispatchQuestionAnswered(transaction, task, record, via);
     await onClaim?.(transaction);
     return true;
   }, { behavior: "immediate" });
-  if (claimed) announceDispatchSignalsTo(announce);
-  return claimed;
 }

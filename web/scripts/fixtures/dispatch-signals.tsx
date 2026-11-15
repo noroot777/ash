@@ -1,52 +1,62 @@
-// 派出的任务来问 / 失败，在派它的那条任务里（test-dispatch-signals-dom.mjs）。
+// 派出的任务来问 / 失败，在派它的那条任务那一头（test-dispatch-signals-dom.mjs）。
 //
-// 挂的是 TaskDetail 自己用的那几样：useDispatchSignals（会话里那几颗气泡、回复框那一格轮到谁）、
-// answerFromHost（答复送到哪）、真的 ConversationFeed 与 ReplyBox。服务端那一半是这里的一份「库」
-// （存在 localStorage 里，刷新后还在），接口走真实的 api.ts → fetch，夹具在 fetch 这一层接住：
-//   · GET  /tasks/lead/dispatch-signals —— 读这一份记录；
-//   · POST /tasks/:id/answer            —— 记下请求，按服务端的做法撤下那一问、记下「你」那条答复。
-// window.__server 让回归像服务端那样改「库」：别处答了、又来问、失败了、自己也来问。
-import { useEffect, useState } from "react";
+// 挂的是线上那几样：侧栏（TaskTree）、详情页那一层的抽屉与 Inspector（useTaskDrawers：竖轨上那颗
+// 「派出的任务」键、右侧那一格、左边那一屉）、会话（ConversationFeed + useDispatchSignals 的失败气泡）、
+// 这条任务自己的回复框（ReplyBox）。左边那一屉里是那条派出的任务自己的回复框 —— 生产里是抽屉模式的
+// 完整 TaskDetail，这里只留它跟答复有关的那一半：它自己的提问占住它自己的回复框。
+//
+// 服务端那一半是这里的一份「库」（存在 localStorage 里，刷新后还在），接口走真实的 api.ts → fetch：
+//   · GET  /tasks/lead/dispatch-signals —— 读这一份失败记录；
+//   · POST /tasks/:id/answer            —— 记下请求，按服务端的做法撤下那一问；
+//   · POST /tasks/:id/reply             —— 记下请求。
+// window.__server 让回归像服务端那样改「库」：失败了。
+import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { DispatchSignal, Task, TaskListItem } from "@ash/shared";
-import type { QuestionRecord } from "@ash/shared/questions";
+import type { DispatchSignal, ProjectView, Task, TaskListItem } from "@ash/shared";
+import { api } from "../../src/lib/api.ts";
+import { DraftProvider } from "../../src/lib/DraftStore.tsx";
+import { InspectorHost } from "../../src/inspector/index.ts";
+import { LeftDrawerProvider } from "../../src/components/LeftDrawer.tsx";
+import { TaskTree } from "../../src/workspace/TaskTree.tsx";
+import type { SidebarSpread } from "../../src/workspace/useSidebarSpread.ts";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { ReplyBox } from "../../src/task-detail/ReplyBox.tsx";
-import { DraftProvider } from "../../src/lib/DraftStore.tsx";
-import { dispatchedOf } from "../../src/lib/dispatchTree.ts";
-import { answerFromHost, useDispatchSignals } from "../../src/task-detail/dispatched/useDispatchSignals.tsx";
+import { useTaskDrawers } from "../../src/task-detail/useTaskDrawers.tsx";
+import { useDispatchSignals } from "../../src/task-detail/dispatched/useDispatchSignals.tsx";
+import type { TaskInspectorContext } from "../../src/task-detail/taskInspectors.tsx";
 import type { ConversationItem } from "../../src/task-detail/conversationModel.ts";
 import "../../src/styles/global.css";
+import "../../src/styles/workspace.css";
+import "../../src/styles/task-tree.css";
 
 const KEY = "ash-dispatch-signals-fixture";
-const at = (minutes: number) => new Date(Date.parse("2026-11-15T10:00:00.000Z") + minutes * 60_000).toISOString();
+const base = Date.now() - 60 * 60_000;
+const at = (minutes: number) => new Date(base + minutes * 60_000).toISOString();
+const project: ProjectView = {
+  id: "p1", name: "ash", repoPath: "/tmp/ash", workflowId: null, useWorktreeDefault: false, createdAt: at(0),
+  health: { exists: true, isRepo: true },
+};
 function task(id: string, title: string, extra: Partial<Task> = {}): Task {
   return {
-    id, projectId: "p1", groupId: null, parentId: null, title, body: "", mode: "single", status: "done", stage: null,
-    labels: [], dependsOn: [], resumeDependsOn: [], workflowMode: "free", agentType: "claude", archived: false,
+    id, projectId: project.id, groupId: null, parentId: null, title, body: "", mode: "single", status: "done", stage: null,
+    labels: [], dependsOn: [], resumeDependsOn: [], workflowMode: "preset", agentType: "claude", archived: false,
     createdAt: at(0), updatedAt: at(0), ...extra,
   } as Task;
 }
 
-type Db = { tasks: Task[]; signals: DispatchSignal[]; requests: { url: string; body: unknown }[]; seq: number };
+type Db = { tasks: Task[]; signals: DispatchSignal[]; requests: { url: string; body: Record<string, unknown> | null }[]; seq: number };
 const initial = (): Db => ({
   tasks: [
     task("lead", "拆活的分析任务"),
-    // 先建的那条后问：答题卡按提问先后，不按派出的先后。
     task("kid-a", "第一条派出去的", { dispatchedBy: "lead", status: "paused", executorLabel: "codex@cpa", createdAt: at(1),
       question: "第一条的问题：先迁数据还是先改接口？", questionOptions: ["先迁数据", "先改接口"], updatedAt: at(12) }),
     task("kid-b", "第二条派出去的", { dispatchedBy: "lead", status: "paused", executorLabel: "claude@nodemach", createdAt: at(2),
-      question: "第二条的问题：要不要顺手改文档？后面这句不进气泡。", questionOptions: ["要", "不要"], updatedAt: at(6) }),
+      question: "第二条的问题：要不要顺手改文档？", questionOptions: ["要", "不要"], updatedAt: at(6) }),
     task("kid-c", "第三条派出去的", { dispatchedBy: "lead", status: "running", executorLabel: "claude@nodemach", createdAt: at(3) }),
-    // 孙一层在问：只冒到它的上一层（kid-c），不到这里。
-    task("grand", "孙一层", { dispatchedBy: "kid-c", status: "paused", createdAt: at(4), question: "孙一层的问题", updatedAt: at(5) }),
   ],
-  signals: [
-    { seq: 1, taskId: "kid-b", kind: "question", at: at(6), question: "第二条的问题：要不要顺手改文档？后面这句不进气泡。", questionOptions: ["要", "不要"], answered: false },
-    { seq: 2, taskId: "kid-a", kind: "question", at: at(12), question: "第一条的问题：先迁数据还是先改接口？", questionOptions: ["先迁数据", "先改接口"], answered: false },
-  ],
+  signals: [],
   requests: [],
-  seq: 2,
+  seq: 0,
 });
 const load = (): Db => {
   try { const stored = localStorage.getItem(KEY); if (stored) return JSON.parse(stored) as Db; } catch { /* 空库 */ }
@@ -59,40 +69,37 @@ const commit = (next: Db) => {
   localStorage.setItem(KEY, JSON.stringify(db));
   for (const listener of listeners) listener();
 };
-const unask = (id: string) => db.tasks.map((row) => row.id === id ? { ...row, question: null, questionOptions: null, questionItems: null, status: "running" as const } : row);
 
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input, init) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   if (!url.includes("/api/")) return realFetch(input, init);
-  if (url.endsWith("/tasks/lead/dispatch-signals")) return Response.json(db.signals);
-  const answered = url.match(/\/api\/tasks\/([^/]+)\/answer$/);
-  if (answered && init?.method === "POST") {
-    const body = JSON.parse(String(init.body)) as { answer: string; answers?: string[]; via?: string };
-    const id = answered[1]!;
-    const asking = db.tasks.find((row) => row.id === id)!;
-    const record: QuestionRecord = { id: `answer-${id}`, question: asking.question, questionOptions: asking.questionOptions,
-      answer: body.answer, answers: body.answers, reply: `【答复】\n${body.answer}`, answeredAt: at(20) };
-    const latest = db.signals.findLast((signal) => signal.taskId === id && signal.kind === "question");
+  const path = url.replace(/^.*\/api/, "");
+  if (path === "/tasks/lead/dispatch-signals") return Response.json(db.signals);
+  if (path.startsWith("/tasks/bodies")) {
+    const { taskIds } = JSON.parse(String(init?.body ?? "{}")) as { taskIds: string[] };
+    return Response.json(taskIds.map((taskId) => ({ taskId, body: "" })));
+  }
+  if (init?.method && init.method !== "GET") {
+    const body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null;
+    const answered = path.match(/^\/tasks\/([^/]+)\/answer$/)?.[1];
     commit({
       ...db,
-      requests: [...db.requests, { url: `/tasks/${id}/answer`, body }],
-      tasks: unask(id),
-      signals: db.signals.map((signal) => signal === latest
-        ? { ...signal, answered: true, ...(body.via === asking.dispatchedBy ? { answer: record } : {}) } : signal),
+      requests: [...db.requests, { url: path, body }],
+      tasks: answered ? db.tasks.map((row) => row.id === answered
+        ? { ...row, question: null, questionOptions: null, questionItems: null, status: "running" as const } : row) : db.tasks,
     });
-    return Response.json({ answered: true, resumed: true, record });
+    if (answered) return Response.json({ answered: true, resumed: true });
+    if (path.endsWith("/reply")) return Response.json({ started: true });
   }
-  // 别的写操作记下来（回归要证明这条任务自己一发都没收到）；读取照常给空。
-  if (init?.method && init.method !== "GET") db = { ...db, requests: [...db.requests, { url: url.replace(/^.*\/api/, ""), body: init.body ?? null }] };
+  // 侧栏的接力那一块按「没有这条接口」处理（同 dispatch-tree 夹具）；其余读取一律空表，各格自己画空态。
+  if (path.startsWith("/handoff")) return new Response("not found", { status: 404 });
   return Response.json([]);
 };
 
 declare global {
   interface Window {
     __server: {
-      answerElsewhere: (id: string) => void;
-      ask: (id: string, question: string, minute: number) => void;
       fail: (id: string, reason: string, minute: number) => void;
       requests: () => Db["requests"];
       reset: () => void;
@@ -100,19 +107,6 @@ declare global {
   }
 }
 window.__server = {
-  answerElsewhere: (id) => {
-    const latest = db.signals.findLast((signal) => signal.taskId === id && signal.kind === "question");
-    commit({ ...db, tasks: unask(id), signals: db.signals.map((signal) => signal === latest ? { ...signal, answered: true } : signal) });
-  },
-  ask: (id, question, minute) => {
-    const seq = db.seq + 1;
-    commit({
-      ...db, seq,
-      tasks: db.tasks.map((row) => row.id === id ? { ...row, question, questionOptions: null, status: "paused", updatedAt: at(minute) } : row),
-      // 只有派出去的任务来问才在 lead 名下记一行（自己来问的不记）。
-      signals: id === "lead" ? db.signals : [...db.signals, { seq, taskId: id, kind: "question", at: at(minute), question, answered: false }],
-    });
-  },
   fail: (id, reason, minute) => {
     const seq = db.seq + 1;
     commit({ ...db, seq, tasks: db.tasks.map((row) => row.id === id ? { ...row, status: "failed" } : row),
@@ -122,15 +116,28 @@ window.__server = {
   reset: () => { localStorage.removeItem(KEY); db = initial(); },
 };
 
-// 会话正文：两句，派出的任务来问的那几刻插在它们之间、之后。
 const items: ConversationItem[] = [
   { kind: "user", id: "u1", text: "按刚才的拆法派出去吧。", attachments: [], at: at(0) },
   { kind: "user", id: "u2", text: "第二条先别动数据库。", attachments: [], at: at(10) },
 ];
+const conversation = { items: [], sessions: [], refreshing: false, error: null, traceError: null, refetch: () => {} } as never;
+const idleSpread = {
+  open: false, laidOut: false, filter: "all", setFilter: () => {}, followUps: new Map(), loaded: new Set(),
+  toggle: () => {}, close: () => {},
+} as unknown as SidebarSpread;
+
+/** 左边那一屉里的那条派出的任务：它自己的回复框，它自己的提问占住它（生产里的 TaskDetail 同一句接线）。 */
+function DrawerTask({ task }: { task: Task }) {
+  return (
+    <section className="task-detail-main" data-drawer-task={task.id} style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+      <ReplyBox task={task} hasConversation onSend={(text) => api.replyTask(task.id, text)} onStandingExecutorChange={async () => undefined}
+        onAnswer={async (answer, input) => { await api.answerTask(task.id, answer, input); }} />
+    </section>
+  );
+}
 
 function Fixture() {
   const [, setVersion] = useState(0);
-  const [opened, setOpened] = useState("");
   useEffect(() => {
     const listener = () => setVersion((n) => n + 1);
     listeners.add(listener);
@@ -138,16 +145,39 @@ function Fixture() {
   }, []);
   const tasks: TaskListItem[] = db.tasks;
   const lead = db.tasks.find((row) => row.id === "lead")!;
-  const signals = useDispatchSignals({ task: lead, allTasks: tasks, dispatched: dispatchedOf(tasks, "lead"), onOpen: setOpened });
+  const drawers = useTaskDrawers({
+    task: lead, allTasks: tasks, conversation, onOpenTask: () => {},
+    renderTask: (child) => <DrawerTask key={child.id} task={child} />,
+  });
+  const signals = useDispatchSignals({ task: lead, allTasks: tasks, dispatched: drawers.dispatched.state.tasks, onOpen: drawers.dispatched.state.open });
+  const descriptors = useMemo(() => drawers.inspectors.filter((descriptor) => descriptor.id === "dispatched"), [drawers.inspectors]);
+  const context = { dispatched: drawers.dispatched.state } as unknown as TaskInspectorContext;
   return (
-    <main style={{ height: "100dvh", maxWidth: 960, margin: "0 auto", display: "flex", flexDirection: "column", background: "var(--canvas)" }}>
-      <output aria-label="左边抽屉里开着的">{opened}</output>
-      <div className="task-detail-main" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <ConversationFeed task={lead} items={items} sessions={[]} loading={false} error={null} questionHistory={[]} asides={signals.asides} />
-        <ReplyBox task={lead} hasConversation onSend={async () => ({ started: true })} onStandingExecutorChange={async () => undefined}
-          asking={signals.asking} onAnswer={answerFromHost(lead.id, () => undefined)} />
-      </div>
-    </main>
+    <div style={{ height: "100vh", display: "flex", overflow: "hidden", background: "var(--canvas)" }}>
+      <nav style={{ width: 300, flex: "0 0 auto", overflow: "auto" }}>
+        <TaskTree
+          projects={[project]} currentProjectId={project.id} scope={{ kind: "project", projectId: project.id }}
+          tasks={db.tasks} selectedTaskId="lead" selectedRemoteTaskId={null} spread={idleSpread}
+          onTask={() => {}} onRemoteTask={() => {}} onTaskStarred={() => {}} onHandoffFinished={() => {}} onQueueChanged={() => {}}
+          outbound={{ outboundCount: 0, offlinePeers: [], asked: true, refreshing: false, onRefresh: () => {} }}
+          notify={() => {}}
+        />
+      </nav>
+      <LeftDrawerProvider value={drawers.leftDrawer.api}>
+        <InspectorHost contextKey="dispatch-signals-fixture" descriptors={descriptors} context={context} defaultVisible>
+          {() => (
+            <section className="task-detail" data-pane="lead" style={{ position: "relative", overflow: "hidden", flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+              <div className="task-detail-main" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                <ConversationFeed task={lead} items={items} sessions={[]} loading={false} error={null} questionHistory={[]} asides={signals.asides} />
+                <ReplyBox task={lead} hasConversation onSend={(text) => api.replyTask(lead.id, text)} onStandingExecutorChange={async () => undefined}
+                  onAnswer={async (answer, input) => { await api.answerTask(lead.id, answer, input); }} />
+              </div>
+              {drawers.drawers}
+            </section>
+          )}
+        </InspectorHost>
+      </LeftDrawerProvider>
+    </div>
   );
 }
-createRoot(document.getElementById("root")!).render(<DraftProvider><Fixture /></DraftProvider>);
+createRoot(document.getElementById("root")!).render(<StrictMode><DraftProvider><Fixture /></DraftProvider></StrictMode>);

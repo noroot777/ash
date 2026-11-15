@@ -1,12 +1,12 @@
-// 派出的任务来问 / 失败，直接到用户手上（src/dispatch-signals.ts、db/schema-dispatch-signals.ts）：
-//   · 来问、失败的那一刻记在派它的那条任务名下，刷新（重读）后还在，原话、原因都在；
-//   · 只冒一层：派出的任务又派出的任务来问，记在它的上一层；不是派出去的任务不记；
-//   · 在派它的那条任务里答：答复送到的是提问的那一条、它接着跑，派它的那条一个回合都没多、状态不变；
-//   · 在别处答了：那一问照样认得出「答过了」，只是不留「你」那颗气泡；
-//   · 「答过了」绑在答的那一问上：答复者看到的那一问被换掉了，答复落空，新那一问不会被记成答过；
-//   · 失败原因跟落 failed 那一笔一起写进那一行：续聊回到原失败不碰旧行；启动对账落的失败也有原因；
+// 派出的任务来问 / 失败，在派它的那条任务那一头（src/dispatch-signals.ts、db/schema-dispatch-signals.ts）：
+//   · 来问不往派它的那条任务名下记任何东西、不通知它：答题卡只在提问的那条任务自己的页面上；
+//     早一版记下的提问行（升级前留在库里的）读的时候不给，提问触发器升级时拆掉；
+//   · 提问的那条自己答：答复送到它、它接着跑，派它的那条一个回合都没多、状态不变；
+//   · 名下有在问的时候，往派它的那条任务里说一句：送到的是它自己，提问的那条原样等着；
+//   · 失败的那一刻记在派它的那条任务名下，原因跟落 failed 那一笔一起写进那一行：续聊回到原失败
+//     不碰旧行；重试再失败再记一行；启动对账落的失败也有原因；只冒一层；
 //   · 事件挂在派它的那条任务上：多人模式下看得见它的人收得到，看不见的收不到；
-//   · 升级前就在问的补一行、只补一次；删了任务连它的记录一起没。
+//   · 刷新、重启后还在；删了任务连它的记录一起没。
 //
 // 跑的是 PATH 上的假 claude（scheduled-messages-fixture.ts），不起真实 CLI。
 // 跑：npm -w @ash/server run test:dispatch-signals
@@ -29,7 +29,7 @@ process.env.ASH_ALLOW_REAL_AGENT = "1";
 process.env.ASH_TEST_LEAD_LOG = leadLog;
 process.env.PATH = `${installFakeClaude(root)}${delimiter}${originalPath ?? ""}`;
 
-const [{ db, dbClient, ensureSchema }, schema, signalsSchema, runs, runRoutes, { bus }, question, { setTaskStatus }, record, reconcile] = await Promise.all([
+const [{ db, dbClient, ensureSchema }, schema, signalsSchema, runs, runRoutes, { bus }, question, { setTaskStatus }, reconcile] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/db/schema-dispatch-signals.js"),
@@ -38,11 +38,10 @@ const [{ db, dbClient, ensureSchema }, schema, signalsSchema, runs, runRoutes, {
   import("../src/bus.js"),
   import("../src/task-question.js"),
   import("../src/status.js"),
-  import("../src/task-question-record.js"),
   import("../src/task-reconcile.js"),
 ]);
 const { projects, scheduledMessages, sessions, sessionTurns, tasks } = schema;
-const { dispatchSignals, backfillOpenDispatchQuestions } = signalsSchema;
+const { dispatchSignals } = signalsSchema;
 await ensureSchema();
 const api = new Hono();
 runRoutes.mountTaskRunRoutes(api);
@@ -73,7 +72,6 @@ const waitFor = async (predicate: () => boolean | Promise<boolean>, message: str
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 };
-const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 const countIn = (needle: string) => (existsSync(leadLog) ? readFileSync(leadLog, "utf8") : "").split(needle).length - 1;
 const taskOf = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
 const settled = async (id: string) => {
@@ -85,13 +83,9 @@ const signalsOf = async (id: string) => {
   assert.equal(res.status, 200);
   return res.json() as Promise<DispatchSignal[]>;
 };
-const answer = async (id: string, body: Record<string, unknown>) => {
-  const res = await api.request(`/tasks/${id}/answer`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
-  });
-  assert.equal(res.status, 200, `${id} 的答复应被接住`);
-  return res.json() as Promise<{ resumed?: boolean; queued?: boolean }>;
-};
+const post = (path: string, body: Record<string, unknown>) => api.request(path, {
+  method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+});
 const footprint = async (id: string) => ({
   status: (await taskOf(id)).status,
   updatedAt: (await taskOf(id)).updatedAt,
@@ -99,6 +93,8 @@ const footprint = async (id: string) => ({
   turns: (await db.select().from(sessionTurns).where(eq(sessionTurns.taskId, id))).length,
   messages: (await db.select().from(scheduledMessages).where(eq(scheduledMessages.taskId, id))).length,
 });
+const triggers = async () => (await dbClient.execute("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'dispatch_signals%'"))
+  .rows.map((r) => String(r.name)).sort();
 
 const [P, D1, D2, G, SOLO, OLD] = ["ds-lead", "ds-kid-1", "ds-kid-2", "ds-grandkid", "ds-solo", "ds-old"];
 let failure: unknown = null;
@@ -110,55 +106,90 @@ try {
     row(D2, "running", { dispatchedBy: P }),
     row(G, "running", { dispatchedBy: D1 }),
     row(SOLO, "running"),
+    row(OLD, "failed", { dispatchedBy: P }),
   ]);
   for (const id of [P, D1, D2, G, SOLO]) await withSession(id);
-  const before = await footprint(P);
 
-  // —— 来问：记在派它的那条名下，按先后；原话（题目、选项）原样。
+  // —— 升级：早一版的表（带提问那几列）、早一版的提问触发器、早一版记下的提问行和失败行。
+  //    升级后提问触发器没了，提问行留在库里但读的时候不给，失败行照旧读得出原因。
+  await dbClient.executeMultiple(`
+    DROP TRIGGER IF EXISTS dispatch_signals_failed;
+    DROP TABLE dispatch_signals;
+    CREATE TABLE dispatch_signals (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      dispatcher_id TEXT NOT NULL, task_id TEXT NOT NULL, kind TEXT NOT NULL, occurred_at TEXT NOT NULL,
+      question TEXT, question_options TEXT, question_items TEXT, reason TEXT, answered_at TEXT, answer TEXT
+    );
+    CREATE TRIGGER dispatch_signals_question AFTER UPDATE OF question ON tasks
+      WHEN NEW.question IS NOT NULL AND NEW.dispatched_by IS NOT NULL
+    BEGIN
+      INSERT INTO dispatch_signals (dispatcher_id, task_id, kind, occurred_at, question)
+        VALUES (NEW.dispatched_by, NEW.id, 'question', NEW.updated_at, NEW.question);
+    END;
+    INSERT INTO dispatch_signals (dispatcher_id, task_id, kind, occurred_at, question, answered_at, answer)
+      VALUES ('${P}', '${OLD}', 'question', '${at}', '早一版记下的提问', '${at}', '{"answer":"在派它的那条里答的"}');
+    INSERT INTO dispatch_signals (dispatcher_id, task_id, kind, occurred_at, reason)
+      VALUES ('${P}', '${OLD}', 'failed', '${at}', '早一版记下的失败原因。');
+  `);
+  await ensureSchema();
+  assert.deepEqual(await triggers(), ["dispatch_signals_failed", "dispatch_signals_task_deleted"], "升级后提问触发器拆掉了");
+  let listed = await signalsOf(P);
+  assert.deepEqual(listed.map((signal) => [signal.taskId, signal.kind, signal.reason]), [[OLD, "failed", "早一版记下的失败原因。"]],
+    "早一版记下的提问不给（老会话里那颗提问气泡不再画），失败照旧");
+  assert.equal((await dbClient.execute("SELECT count(*) AS n FROM dispatch_signals WHERE kind = 'question'")).rows[0]!.n, 1,
+    "库里已有的提问记录原样留着，不删");
+  console.log("✓ 升级：提问触发器拆掉；早一版的提问行不读、不删；失败行照旧");
+
+  const before = await footprint(P);
+  // —— 来问：派它的那条名下什么都不记，也不通知它。
   assert.equal(await question.setTaskQuestion({ taskId: D1, question: "先改哪一块？前端还是服务端。", options: ["前端", "服务端"] }), true);
-  await tick();
-  assert.equal(await question.setTaskQuestion({
-    taskId: D2, question: "两件事要你定。", items: [{ question: "要不要迁数据？", options: ["要"] }, { question: "什么时候上？" }],
-  }), true);
-  await tick();
+  assert.equal(await question.setTaskQuestion({ taskId: D2, question: "要不要迁数据？" }), true);
   assert.equal(await question.setTaskQuestion({ taskId: G, question: "孙一层的提问" }), true);
   assert.equal(await question.setTaskQuestion({ taskId: SOLO, question: "没人派的任务来问" }), true);
   for (const id of [D1, D2, G, SOLO]) await db.update(tasks).set({ status: "paused" }).where(eq(tasks.id, id));
-  await waitFor(() => announced.filter((id) => id === P).length >= 2, "派出的任务来问时没有通知派它的那条去重读");
-  let listed = await signalsOf(P);
-  assert.deepEqual(listed.map((signal) => [signal.taskId, signal.kind]), [[D1, "question"], [D2, "question"]], "几条同时问：按提问先后");
-  assert.equal(listed[0]!.question, "先改哪一块？前端还是服务端。");
-  assert.deepEqual(listed[0]!.questionOptions, ["前端", "服务端"], "选项是原话");
-  assert.deepEqual(listed[1]!.questionItems, [{ question: "要不要迁数据？", options: ["要"] }, { question: "什么时候上？" }]);
-  assert.ok(listed.every((signal) => signal.answered === false && !signal.answer), "还没人答");
-  assert.ok(listed[0]!.at < listed[1]!.at, "时刻就是提问那一刻");
-  assert.deepEqual((await signalsOf(D1)).map((signal) => signal.taskId), [G], "只冒一层：孙一层的提问记在它的上一层");
-  assert.equal((await db.select().from(dispatchSignals)).length, 3, "不是派出去的任务来问不记");
-  console.log("✓ 来问：记在派它的那条名下、按先后、原话不改，只冒一层");
+  assert.deepEqual(await signalsOf(P), listed, "派出的任务来问：派它的那条名下不多一行");
+  assert.deepEqual(await signalsOf(D1), [], "孙一层来问：它的上一层名下也不记");
+  assert.equal((await db.select().from(dispatchSignals)).length, 2, "提问一行都不记");
+  assert.deepEqual(announced, [], "来问不通知派它的那条");
+  console.log("✓ 来问：派它的那条名下不记、不通知");
 
-  // —— 在派它的那条任务里答：答复送到的是提问的那一条，派它的那条一点没动。
+  // —— 名下有在问的时候，往派它的那条任务里说一句：送到的是它自己，提问的那几条原样等着。
+  const kidsBefore = await Promise.all([D1, D2].map(async (id) => ({ ...(await footprint(id)), question: (await taskOf(id)).question })));
+  const said = "这条任务自己听的话(ds-reply-lead)";
+  const replied = await post(`/tasks/${P}/reply`, { text: said });
+  assert.deepEqual(await replied.json(), { started: true }, "派它的那条接住这句话、开了它自己的一个回合");
+  await waitFor(() => countIn(said) > 0, "那句话没有送进派它的那条任务的会话");
+  await waitFor(() => settled(P), "派它的那条这一轮没有结算");
+  const afterReply = await footprint(P);
+  assert.ok(afterReply.turns > before.turns, "那句话是派它的那条自己的一个回合");
+  assert.deepEqual(await Promise.all([D1, D2].map(async (id) => ({ ...(await footprint(id)), question: (await taskOf(id)).question }))), kidsBefore,
+    "提问的那几条：问题还挂着、一个回合都没多");
+  assert.equal((await taskOf(D1)).questionHistory, null, "那句话没被当成答复");
+  console.log("✓ 名下有在问时往派它的那条说话：送到的是它自己，提问的那几条原样等着");
+
+  // —— 提问的那条自己答：答复送到它、它接着跑；派它的那条一点没动。
+  const settledLead = await footprint(P);
+  const trailLead = statusTrail.get(P)?.length ?? 0;
   const d1Answer = "先改前端(ds-answer-d1)";
-  assert.equal((await answer(D1, { answer: d1Answer, answers: [d1Answer], via: P })).resumed, true, "答复让提问的那条接着跑");
+  const answered = await post(`/tasks/${D1}/answer`, { answer: d1Answer, answers: [d1Answer] });
+  assert.equal(answered.status, 200);
+  assert.equal(((await answered.json()) as { resumed?: boolean }).resumed, true, "答复让提问的那条接着跑");
   await waitFor(() => countIn(d1Answer) > 0, "答复没有送进提问那条任务的会话");
-  assert.equal((await taskOf(D1)).question, null, "那一问撤下了：两处的卡都收走");
+  assert.equal((await taskOf(D1)).question, null, "那一问撤下了");
   await waitFor(() => settled(D1), "提问的那条续跑后没有结算");
-  listed = await signalsOf(P);
-  const d1 = listed.find((signal) => signal.taskId === D1 && signal.kind === "question")!;
-  assert.equal(d1.answered, true);
-  assert.equal(d1.answer?.answer, d1Answer, "在这里答的：留下那条问答记录（你那颗气泡）");
-  assert.deepEqual(await footprint(P), before, "派它的那条：没有多出回合、会话、待发消息，状态、更新时刻都没变");
-  assert.equal(statusTrail.get(P), undefined, "派它的那条一次状态都没广播过");
-  console.log("✓ 在派它的那条里答：送到的是提问的那一条，它接着跑；派它的那条一个回合都没多");
+  assert.deepEqual(await footprint(P), settledLead, "派它的那条：没有多出回合、会话、待发消息，状态、更新时刻都没变");
+  assert.equal(statusTrail.get(P)?.length ?? 0, trailLead, "派它的那条一次状态都没广播过");
+  console.log("✓ 提问的那条答了：它接着跑；派它的那条一个回合都没多");
 
-  // —— 失败：跟着状态那一笔记下，原因在结算之后补上。
+  // —— 失败：跟着状态那一笔记下，原因跟落位那一笔一起写进那一行。
   assert.equal((await taskOf(D1)).status, "failed", "前提：假 CLI 不交卷，这一轮记未完成");
-  listed = await signalsOf(P);
-  const failed = listed.filter((signal) => signal.taskId === D1 && signal.kind === "failed");
+  await waitFor(() => announced.includes(P), "派出的任务失败时没有通知派它的那条去重读");
+  const failedRows = async () => (await signalsOf(P)).filter((signal) => signal.taskId === D1);
+  const failed = await failedRows();
   assert.equal(failed.length, 1, "失败那一刻记了一行");
+  assert.equal(failed[0]!.kind, "failed");
   assert.match(failed[0]!.reason ?? "", /没有交卷/, "原因是结算那一句");
-  assert.ok(failed[0]!.at >= d1.answer!.answeredAt, "按失败那一刻排在答复之后");
   // 在失败的那条上续聊一句：收尾回到原来的「失败」不是又失败了一次 —— 也不把这一句原因写到上一次失败头上。
-  const failedRows = async () => (await signalsOf(P)).filter((signal) => signal.taskId === D1 && signal.kind === "failed");
   await db.update(tasks).set({ status: "running", followUpFrom: "failed" }).where(eq(tasks.id, D1));
   assert.equal(await setTaskStatus(D1, "failed", { consume: { followUpFrom: null }, failedBecause: "续聊这一轮的原因" }), true);
   assert.deepEqual((await failedRows()).map((signal) => signal.reason), [failed[0]!.reason], "续聊回到原终态不另记，上一次的原因不被改写");
@@ -166,44 +197,12 @@ try {
   await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, D1));
   assert.equal(await setTaskStatus(D1, "failed", { failedBecause: "重试那一轮：模型上游连不上（503）。" }), true);
   assert.deepEqual((await failedRows()).map((signal) => signal.reason), [failed[0]!.reason, "重试那一轮：模型上游连不上（503）。"], "重试再失败，再记一行");
-  console.log("✓ 失败：派它的那条名下有一行，原因跟落位那一笔一起写，续聊不碰旧行");
-
-  // —— 在别处答了（不经派它的那条、或者 via 对不上）：认得出答过了，不留你那颗气泡。
-  await answer(D2, { answer: "要(ds-answer-d2)；下周上", answers: ["要(ds-answer-d2)", "下周上"], via: G });
-  await waitFor(() => countIn("ds-answer-d2") > 0, "D2 的答复没有送进它的会话");
-  await waitFor(() => settled(D2), "D2 续跑后没有结算");
-  listed = await signalsOf(P);
-  const d2 = listed.find((signal) => signal.taskId === D2 && signal.kind === "question")!;
-  assert.equal(d2.answered, true, "在别处答了：那一问认得出已经答过");
-  assert.equal(d2.answer ?? null, null, "不是在派它的那条里答的，不留你那颗气泡");
-  // 同一条再问一次：新的一问还在等，上一问仍是答过了。
-  await tick();
-  await question.setTaskQuestion({ taskId: D2, question: "再确认一次？" });
-  listed = await signalsOf(P);
-  const d2Questions = listed.filter((signal) => signal.taskId === D2 && signal.kind === "question");
-  assert.deepEqual(d2Questions.map((signal) => signal.answered), [true, false], "再问一次是新的一问");
-  console.log("✓ 在别处答了：认得出答过了；再问一次是新的一行");
-
-  // —— 答复者看到的那一问被换掉了：答复落空，新那一问不会被记成答过（「答过了」绑在条件写命中的那一问上）。
-  const D3 = "ds-kid-3";
-  await db.insert(tasks).values(row(D3, "running", { dispatchedBy: P }));
-  await withSession(D3);
-  await question.setTaskQuestion({ taskId: D3, question: "第一问：用哪个库？" });
-  await db.update(tasks).set({ status: "paused" }).where(eq(tasks.id, D3));
-  const seen = await taskOf(D3);
-  await tick();
-  await db.update(tasks).set({ question: "第二问：换个问法，用哪个库？", updatedAt: new Date().toISOString() }).where(eq(tasks.id, D3));
-  const stale = record.prepareQuestionRecord(seen as never, "用 A", {});
-  assert.equal(await record.claimQuestionAnswer(seen as never, stale, undefined, P), false, "看到的那一问已经换了：落空");
-  let d3 = (await signalsOf(P)).filter((signal) => signal.taskId === D3);
-  assert.deepEqual(d3.map((signal) => [signal.question, signal.answered]), [["第一问：用哪个库？", false], ["第二问：换个问法，用哪个库？", false]],
-    "落空的答复一行都不标");
-  await answer(D3, { answer: "用 B(ds-answer-d3)", via: P });
-  d3 = (await signalsOf(P)).filter((signal) => signal.taskId === D3 && signal.kind === "question");
-  assert.deepEqual(d3.map((signal) => [signal.answered, signal.answer?.answer ?? null]), [[false, null], [true, "用 B(ds-answer-d3)"]],
-    "答复记在答的那一问上，被换掉的那一问只是不再等");
-  await waitFor(() => settled(D3), "D3 续跑后没有结算");
-  console.log("✓ 「答过了」绑在答的那一问上：看到的那一问被换掉时答复落空，不错记到新那一问");
+  // 只冒一层：孙一层失败记在它的上一层。
+  await db.update(tasks).set({ status: "running", question: null }).where(eq(tasks.id, G));
+  assert.equal(await setTaskStatus(G, "failed", { failedBecause: "孙一层失败了。" }), true);
+  assert.deepEqual((await signalsOf(D1)).map((signal) => signal.taskId), [G], "孙一层失败记在它的上一层");
+  assert.equal((await signalsOf(P)).some((signal) => signal.taskId === G), false, "不再往上冒");
+  console.log("✓ 失败：派它的那条名下有一行，原因跟落位那一笔一起写，续聊不碰旧行，只冒一层");
 
   // —— 启动对账落的失败（上一个进程跑到一半没了）：原因跟那一笔一起写下。
   const D4 = "ds-kid-4";
@@ -220,31 +219,15 @@ try {
   listed = await signalsOf(P);
   await ensureSchema();
   assert.deepEqual(await signalsOf(P), listed, "重启后读回同一份");
-  await db.update(tasks).set({ question: "再确认一次？", updatedAt: new Date().toISOString() }).where(eq(tasks.id, D2));
-  assert.equal((await signalsOf(P)).length, listed.length, "同一问只改了时刻不另记");
-
-  // —— 升级前就在问的：补一行，只补一次。
-  await db.insert(tasks).values(row(OLD, "paused", { dispatchedBy: P, question: "升级前就在问" }));
-  await backfillOpenDispatchQuestions(dbClient as never);
-  await backfillOpenDispatchQuestions(dbClient as never);
-  assert.equal((await signalsOf(P)).filter((signal) => signal.taskId === OLD).length, 1, "升级前就在问的补一行，只补一次");
-  // 升级前就有两条在问、表里的先后跟提问先后相反（后问的那条先建）：补录按那一刻插，读出来先问的在前。
-  const [LATER, EARLIER] = ["ds-old-later", "ds-old-earlier"];
-  const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
-  await db.insert(tasks).values(row(LATER, "paused", { dispatchedBy: P, question: "后问的：删不删备份？", updatedAt: minutesAgo(1) }));
-  await db.insert(tasks).values(row(EARLIER, "paused", { dispatchedBy: P, question: "先问的：留不留备份？", updatedAt: minutesAgo(3) }));
-  await backfillOpenDispatchQuestions(dbClient as never);
-  const olds = (await signalsOf(P)).filter((signal) => signal.taskId === LATER || signal.taskId === EARLIER);
-  assert.deepEqual(olds.map((signal) => signal.taskId), [EARLIER, LATER], "读出来按提问先后");
-  assert.ok(olds[0]!.seq < olds[1]!.seq, "补录的序号也跟着时刻走（同一刻靠序号分先后）");
+  assert.deepEqual(await triggers(), ["dispatch_signals_failed", "dispatch_signals_task_deleted"]);
 
   // —— 不是派出去的任务失败不记；删了任务连它的记录一起没。
   await db.update(tasks).set({ status: "failed" }).where(eq(tasks.id, SOLO));
   assert.equal((await db.select().from(dispatchSignals).where(eq(dispatchSignals.taskId, SOLO))).length, 0);
-  await db.delete(sessions).where(eq(sessions.taskId, D2));
-  await db.delete(tasks).where(eq(tasks.id, D2));
-  assert.equal((await signalsOf(P)).filter((signal) => signal.taskId === D2).length, 0, "删了任务，它的记录一起没");
-  console.log("✓ 刷新、重启后还在；升级前在问的补一行；删任务连记录一起删");
+  await db.delete(sessions).where(eq(sessions.taskId, D4));
+  await db.delete(tasks).where(eq(tasks.id, D4));
+  assert.equal((await signalsOf(P)).filter((signal) => signal.taskId === D4).length, 0, "删了任务，它的记录一起没");
+  console.log("✓ 刷新、重启后还在；删任务连记录一起删");
 
   // —— 多人模式：事件挂在派它的那条任务上，看得见那条任务的人收得到，看不见的收不到（放在最后：转不回自用）。
   const [{ setInstanceMode }, { createUser }, { addProjectMember }, { makeEventFilter }] = await Promise.all([
@@ -258,8 +241,9 @@ try {
   await Promise.all(filters.map((filter) => filter.refresh()));
   const events: import("@ash/shared").ServerEvent[] = [];
   const unsubscribe = bus.subscribe((event) => { if (event.type === "task.dispatchSignals") events.push(event); });
-  await question.setTaskQuestion({ taskId: OLD, question: "多人模式下又问了一次" });
-  await waitFor(() => events.length > 0, "又问了一次没有通知派它的那条");
+  await db.update(tasks).set({ status: "running", question: null }).where(eq(tasks.id, D2));
+  assert.equal(await setTaskStatus(D2, "failed", { failedBecause: "多人模式下失败了。" }), true);
+  await waitFor(() => events.length > 0, "失败了没有通知派它的那条");
   unsubscribe();
   const event = events.at(-1)!;
   for (const filter of filters) filter.allow(event); // 头一回只是把任务归属的项目补进缓存

@@ -26,7 +26,7 @@ import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
 import { HandoffBanner } from "./HandoffBanner.tsx";
 import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
-import { answerFromHost, useDispatchSignals } from "./dispatched/useDispatchSignals.tsx";
+import { useDispatchSignals } from "./dispatched/useDispatchSignals.tsx";
 import { replySend } from "./replySend.ts";
 import { replyDispatch } from "./replyDispatch.ts";
 import { replyDiscuss } from "./replyDiscuss.ts";
@@ -122,7 +122,7 @@ export function TaskDetail({
     task, allTasks, conversation, onOpenTask,
     renderTask: (child) => <TaskDetail key={child.id} task={child} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" notify={notify} />,
   });
-  // 名下派出的任务来问 / 失败：会话里那几颗气泡、回复框那一格轮到谁答（dispatched/useDispatchSignals.tsx）。
+  // 名下派出的任务失败的那几刻：会话里那几颗气泡（dispatched/useDispatchSignals.tsx）。
   const fromDispatched = useDispatchSignals({ task, allTasks, dispatched: dispatched.state.tasks, onOpen: dispatched.state.open });
   // 等你裁定时回复框顶上那一行（DisputeRulingDock）：选了一档，这一个框就成了那一步。
   const ruling = useDisputeRulingDock({ task, reviews: free.state?.reviews, known: !!free.state, onChanged: free.setState, notify });
@@ -154,7 +154,7 @@ export function TaskDetail({
     : null;
   const derivationAllowed = canDeriveTask(task);
   // 你在回复框里派出去的那几条：会话里各留一句靠右的小灰字，点它在左抽屉打开（dispatchNotes.ts）。
-  // 跟派出的任务来问的那几颗气泡（useDispatchSignals）一起按时刻插进会话。
+  // 跟派出的任务失败的那几颗气泡（useDispatchSignals）一起按时刻插进会话。
   const asides = useMemo(() => [
     ...fromDispatched.asides,
     ...dispatchNotes(task.id, allTasks).map((note) => ({
@@ -577,10 +577,12 @@ export function TaskDetail({
                           )}
                         />
                       )}
-                      // 提问在等时，回复框那一格是答题卡（QuestionSlot）：全页只有一处打字、一颗发送键。
-                      // 名下派出的任务来问时这一格是它的卡，答复直接送给它（不经这条任务，也不叫醒它）。
-                      asking={fromDispatched.asking}
-                      onAnswer={answerFromHost(task.id, () => notify("已发送答复，任务正在续跑"))}
+                      // 这条任务自己的提问在等时，回复框那一格是答题卡（QuestionSlot）：全页只有一处打字、一颗发送键。
+                      // 名下派出的任务来问不占这一格：那张卡在它自己的页面上（左抽屉里打开它也是）。
+                      onAnswer={async (answer, input) => {
+                        await api.answerTask(task.id, answer, input);
+                        notify("已发送答复，任务正在续跑");
+                      }}
                       actions={replyActions.actions}
                       moreItems={replyActions.moreItems}
                       moreRef={replyActions.moreRef}

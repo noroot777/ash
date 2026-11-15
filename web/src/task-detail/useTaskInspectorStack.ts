@@ -11,7 +11,7 @@ import { TASK_INSPECTORS } from "./taskInspectors.tsx";
 import type { useConversation } from "../lib/useConversation.ts";
 import { latestRunFacts } from "./info/infoRunFacts.ts";
 import { surfaceTabWhenUsed } from "../inspector/index.ts";
-import { dispatchedOf } from "../lib/dispatchTree.ts";
+import { dispatchFacts } from "../lib/dispatchTree.ts";
 import { CountedIcon } from "./dispatched/CountedIcon.tsx";
 
 // 这几档 stage 下默认落在「审议」那一格：到了这一步，用户要看的就是审查那摊事。
@@ -38,11 +38,17 @@ export function useTaskInspectorStack(
   // 备忘那一格只改标题/图标（有几条），开合仍按 TASK_INSPECTORS 的 defaultOpen —— 理由
   // 见 task-memos/useTaskMemoTab.tsx：手写第一条的入口只在那一格里。
   const memoTab = useTaskMemoTab(monitorTab.inspectors, task.id);
-  // 派出的任务：名下有才冒到图标条上，图标带个数（数据就是任务列表，派出去一条当场就有）。
-  const dispatchedCount = useMemo(() => dispatchedOf(allTasks, task.id).length, [allTasks, task.id]);
+  // 派出的任务：名下有才冒到图标条上，图标带个数（数据就是任务列表，派出去一条当场就有）。数和它
+  // 变不变色跟侧栏那一行行尾的数是同一份关系事实（dispatchFacts）：名下有在等答复、失败的就变色。
+  const { dispatchedCount, dispatchedWarn } = useMemo(() => {
+    const facts = dispatchFacts(allTasks);
+    return { dispatchedCount: facts.count(task.id), dispatchedWarn: facts.needsYou(task.id) };
+  }, [allTasks, task.id]);
   const dispatchedTab = useMemo(() => surfaceTabWhenUsed(memoTab, "dispatched", dispatchedCount > 0, (descriptor) => ({
-    icon: dispatchedCount > 0 ? createElement(CountedIcon, { icon: descriptor.icon, count: dispatchedCount }) : descriptor.icon,
-  })), [dispatchedCount, memoTab]);
+    icon: dispatchedCount > 0
+      ? createElement(CountedIcon, { icon: descriptor.icon, count: dispatchedCount, warn: dispatchedWarn })
+      : descriptor.icon,
+  })), [dispatchedCount, dispatchedWarn, memoTab]);
   // 审查链状态在这一层订阅：竖轨上「审议」那一格的主色点要它（审查在跑），任务页别处
   // （验收后快照入口、「继续本轮审查」的可用性）也用同一份，一个任务只挂一条 2.5s 轮询。
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");

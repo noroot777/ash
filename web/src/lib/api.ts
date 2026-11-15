@@ -212,7 +212,7 @@ export const api = {
     request(`/tasks/${id(taskId)}/actions`, { signal }),
   taskQuestionHistory: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared/questions").QuestionRecord[]> =>
     request(`/tasks/${id(taskId)}/question-history`, { signal }),
-  // 这条任务名下派出的任务来问 / 失败的那几刻（会话里那几颗气泡，server/src/dispatch-signals.ts）。
+  // 这条任务名下派出的任务失败的那几刻（会话里那几颗气泡，server/src/dispatch-signals.ts）。
   taskDispatchSignals: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared").DispatchSignal[]> =>
     request(`/tasks/${id(taskId)}/dispatch-signals`, { signal }),
   ...taskNoticeApi,
@@ -280,9 +280,8 @@ export const api = {
     request(`/tasks/${id(taskId)}/archive`, { method: "POST" }),
   unarchiveTask: (taskId: string): Promise<{ task: Task; restoreNote: string | null }> =>
     request(`/tasks/${id(taskId)}/unarchive`, { method: "POST" }),
-  // `via`：在派它的那条任务里答的（答复照旧送给 taskId 这一条，那边只多留一颗「你」的气泡）。
-  answerTask: (taskId: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput, via?: string): Promise<unknown> =>
-    request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input, ...(via ? { via } : {}) })),
+  answerTask: (taskId: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput): Promise<unknown> =>
+    request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input })),
   replyTask: (
     taskId: string,
     text: string,

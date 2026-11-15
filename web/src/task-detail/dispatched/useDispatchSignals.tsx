@@ -1,22 +1,19 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DispatchSignal, Task, TaskListItem } from "@ash/shared";
-import type { QuestionAnswerInput } from "@ash/shared/questions";
 import { api } from "../../lib/api.ts";
 import { useServerEvents } from "../../lib/events.ts";
 import { useCatchUp, useCatchUpLink } from "../../lib/useCatchUp.ts";
-import { AnsweredQuestionCard } from "../QuestionHistory.tsx";
 import type { FeedAside } from "../feedAsides.ts";
 import { DispatchedBubble } from "./DispatchedBubble.tsx";
-import { askingOrder, dispatchedSignature, dispatchFeed } from "./dispatchSignals.ts";
+import { dispatchBubbles, dispatchedSignature } from "./dispatchSignals.ts";
 
-// 派它的那条任务这一页上，派出的任务来问 / 失败的那一摊：会话里那几颗气泡（按那一刻插进会话），
-// 回复框那一格此刻轮到谁答。
+// 派它的那条任务这一页上，派出的任务失败的那几颗气泡（按那一刻插进会话）。
 //
 // 记录读服务端那一份（刷新后还在原来的位置），不靠页面开着时收到的实时事件来记；实时事件只是
 // 「去重读一次」的提示：服务端那一条 `task.dispatchSignals`，以及名下派出的任务此刻的样子变了
-// （来问、答了、失败）—— 后者跟着任务列表一起到，不多开一条订阅。
+// —— 后者跟着任务列表一起到，不多开一条订阅。
 //
-// 这些都不进这条任务的会话正文、不进它的上下文，也不叫醒它：用户定的是派出的任务直接问用户。
+// 这些都不进这条任务的会话正文、不进它的上下文，也不叫醒它。
 
 const NONE: DispatchSignal[] = [];
 
@@ -34,7 +31,7 @@ function useSignals(taskId: string, dispatched: readonly TaskListItem[]): Dispat
     if (event.type === "task.dispatchSignals" && event.taskId === taskId) void catchUp.run();
   });
   useCatchUpLink(catchUp, connected);
-  // 名下那几条变了样：来问的那一行跟着那一笔落库，答没答过也要重新认一遍。
+  // 名下那几条变了样：失败的那一行跟着那一笔落库，原因在同一个事务里写下。
   const signature = dispatchedSignature(dispatched);
   const seen = useRef(signature);
   useEffect(() => {
@@ -52,48 +49,10 @@ export function useDispatchSignals({ task, allTasks, dispatched, onOpen }: {
   dispatched: readonly TaskListItem[];
   /** 在左边抽屉里打开一条派出的任务。 */
   onOpen: (taskId: string) => void;
-}): { asking: TaskListItem | null; asides: FeedAside[] } {
+}): { asides: FeedAside[] } {
   const signals = useSignals(task.id, dispatched);
-  // 自己在问就是自己那一张（跟改之前同一份 task），否则名下来问的那几条按先后一次一张。
-  const asking = task.question ? task : askingOrder(task, dispatched, signals)[0] ?? null;
-  const asides = useMemo(() => {
-    const { bubbles, answers } = dispatchFeed(signals, allTasks);
-    const list: FeedAside[] = bubbles.map((bubble) => ({
-      key: bubble.key, at: bubble.at, node: <DispatchedBubble key={bubble.key} bubble={bubble} onOpen={onOpen} />,
-    }));
-    for (const answer of answers) {
-      list.push({
-        key: answer.key, at: answer.at,
-        node: <AnsweredHere key={answer.key} record={answer.record} title={answer.title} />,
-      });
-    }
-    // 稳定排序：同一刻的气泡保留 dispatchFeed 按 signalOrder 排好的先后。
-    return list.sort((a, b) => a.at.localeCompare(b.at));
-  }, [allTasks, onOpen, signals]);
-  return { asking, asides };
-}
-
-/**
- * 回复框那一格的答复送到哪：卡是这条任务自己的就答自己；是名下派出的那一条的，就直接送给那一条
- * （带上 via = 这条任务，那边只多留一颗「你」的气泡）—— 不经这条任务，也不叫醒它。
- */
-export function answerFromHost(hostId: string, onOwnAnswered: () => void) {
-  return async (answer: string, input: QuestionAnswerInput, asking: TaskListItem) => {
-    if (asking.id !== hostId) {
-      await api.answerTask(asking.id, answer, input, hostId);
-      return;
-    }
-    await api.answerTask(hostId, answer, input);
-    onOwnAnswered();
-  };
-}
-
-/** 在这里答的那一题：题目和答案留在你那颗气泡里，下面靠右一句小灰字说送到了谁那儿。 */
-function AnsweredHere({ record, title }: { record: Parameters<typeof AnsweredQuestionCard>[0]["record"]; title: string }): ReactNode {
-  return (
-    <div className="dispatched-answer">
-      <AnsweredQuestionCard record={record} />
-      <div className="turn-footnote is-trailing"><p className="turn-footnote-line">答复直接送到了「{title}」，它接着跑了</p></div>
-    </div>
-  );
+  const asides = useMemo(() => dispatchBubbles(signals, allTasks).map((bubble) => ({
+    key: bubble.key, at: bubble.at, node: <DispatchedBubble key={bubble.key} bubble={bubble} onOpen={onOpen} />,
+  })), [allTasks, onOpen, signals]);
+  return { asides };
 }

@@ -13,7 +13,6 @@ import { stampOnboardingBaseline } from "./migrate-onboarding.js";
 import { migrateSessionTurnIdentity } from "./migrate-session-turns.js";
 import { backfillMonitorHolds } from "./migrate-monitor-hold.js";
 import { backfillDispatchedBy } from "./migrate-dispatched-by.js";
-import { backfillOpenDispatchQuestions } from "./schema-dispatch-signals.js";
 import type { Client } from "./node-sqlite-client.js";
 import { dropRetiredTables } from "./retired-schema.js";
 
@@ -529,7 +528,6 @@ export async function runDataMigrations(client: Client): Promise<void> {
   await migrateSessionTurnIdentity(client);
   await backfillMonitorHolds(client);
   await backfillDispatchedBy(client);
-  await backfillOpenDispatchQuestions(client);
   // 升上来的老实例不该被糊一屏首启向导。判据只在这一刻算一次,之后 `src/onboarding.ts`
   // 只读那条记录 —— 拿实时业务列表反推会把首装过程本身当成「早就配好了」。
   await stampOnboardingBaseline(client);

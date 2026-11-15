@@ -114,6 +114,8 @@
   text-align: center;
 }
 
+.insp-counted-icon.is-warn > i { color: var(--amber); }
+
 /* 整页只有一屉（task-detail/useTaskDrawers.tsx）：「派出的任务」那一屉、里层推出来的那一屉都画在
    这两层里，自己不占位置，定位基准仍是 .task-detail。里层推出东西时外层那一屉让出来 —— 藏起来，
    不卸载（里层那一屉的内容就长在它里面），关上之后原样露回来。 */
@@ -171,17 +173,6 @@
   display: none;
 }
 
-/* 派它的那条任务的会话里，派出的任务来问 / 失败的那颗气泡（task-detail/dispatched/DispatchedBubble.tsx）：
-   审查者那颗的骨架；字前那颗点只在还在等、失败时出现。标题加重那一下照辩论气泡（.debate-bubble-say b）。 */
+/* 派它的那条任务的会话里，派出的任务失败的那颗气泡（task-detail/dispatched/DispatchedBubble.tsx）：
+   审查者那颗的骨架，字前一颗红点。标题加重那一下照辩论气泡（.debate-bubble-say b）。 */
 .dispatched-bubble .review-verdict-text { display: flex; align-items: flex-start; gap: 8px; }
-.dispatched-bubble.is-waiting .review-verdict-text { color: var(--ink); }
-.dispatched-bubble.is-waiting .debate-bubble-say b { color: var(--ink); }
-
-/* 在这里答的那一题：你那颗气泡，下面靠右一句小灰字。 */
-.dispatched-answer { margin-bottom: 20px; }
-.dispatched-answer > .task-message { margin-bottom: 0; }
-.dispatched-answer > .turn-footnote.is-trailing { max-width: 790px; }
-
-/* 答题卡上是谁在问（名下派出的任务来问时）：题目前面那一句。 */
-.question-card-asker { margin: 0 0 2px; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); overflow-wrap: anywhere; }
-.question-card-peek .question-card-asker { margin: 0 4px 0 0; color: var(--muted); font-size: inherit; }

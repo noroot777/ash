@@ -16,15 +16,7 @@ import { queueReviewAnswer } from "./review-continuation.js";
 import { ReviewSuperseded } from "./review-ownership.js";
 import { questionWaitOrigin } from "./task-wait-ownership.js";
 
-export type TaskAnswerBody = QuestionAnswerInput & {
-  answer?: string;
-  attachments?: string[];
-  /**
-   * 在哪条任务的页面上答的：派它的那条任务（dispatched_by）里答派出的任务的提问时给。只决定那边的
-   * 会话里留不留「你」那颗气泡（dispatch-signals.ts）；答复照旧送给这条任务，不碰派它的那条。
-   */
-  via?: string;
-};
+export type TaskAnswerBody = QuestionAnswerInput & { answer?: string; attachments?: string[] };
 
 /** 普通答复路由和远程接力代理共用的提问 CAS + 续会话实现。 */
 export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBody): Promise<Response> {
@@ -71,7 +63,7 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
     if (!await claimQuestionAnswer(task, record, async (transaction) => {
       reviewQueued = await queueReviewAnswer(transaction, task,
         pendingMessageRow({ taskId, text: answerText, ...attachments, ...route, ownerUserId: acting, answerId: record.id }));
-    }, typeof b.via === "string" ? b.via : undefined)) return c.json({ error: "问题已更新或已被答复，本次未投递，请刷新后查看" }, 409);
+    })) return c.json({ error: "问题已更新或已被答复，本次未投递，请刷新后查看" }, 409);
   } catch (error) {
     if (error instanceof ReviewSuperseded) {
       await (await import("./regression-settlement.js")).reconcileRegressionSettlements(taskId)

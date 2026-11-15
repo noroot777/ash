@@ -17,7 +17,6 @@ import { agents, sessions, tasks } from "./db/schema.js";
 import { now } from "./util.js";
 import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js";
 import { recordReviewWait } from "./review-wait.js";
-import { announceDispatchSignals } from "./dispatch-signals.js";
 
 export interface AskInput {
   waitOrigin?: "ordinary";
@@ -74,8 +73,6 @@ export async function setTaskQuestion(input: AskInput): Promise<boolean> {
     questionOptions: options.length ? options : null,
     questionItems: items,
   });
-  // 派出的任务来问：派它的那条任务的页面去重读那一刻的记录（触发器已经跟着这一笔写下了）。
-  void announceDispatchSignals(taskId).catch((error) => console.error(`[ash] 通知派它的任务 ${taskId} 失败:`, error));
   return true;
 }
 
