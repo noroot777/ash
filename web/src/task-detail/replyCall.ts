@@ -83,7 +83,8 @@ export type BaseOption = { id: DispatchBase; label: string; worktreeBase: string
  *   它就在项目目录里干活，就是项目目录此刻的 HEAD（null）；
  * - 从主分支开工：这条任务最终合进去的那条分支，没定就是项目目录检出的那条。
  * 新任务不开 worktree（不是仓库、项目默认关）时无从选，两种落到同一处时也不必选：都返回空，那一段不出。
- * 这条任务的分支已经没了，「接着这里」无从说起，同样不出，按默认从 HEAD 开。
+ * 这条任务的分支已经没了，「接着这里」无从说起，同样不出，按默认从 HEAD 开。只剩一种时返回那一种，
+ * 照它开工、那一段也不出。
  */
 export function dispatchBaseOptions(
   task: Pick<Task, "id" | "useWorktree" | "mergeTargetBranch">,
@@ -92,13 +93,12 @@ export function dispatchBaseOptions(
   if (!context?.isRepo || !context.worktreeDefault) return [];
   const source = sourceWorktreeBranch(task);
   if (source && !context.branches.includes(source)) return [];
+  const here: BaseOption = { id: "here", label: "接着这里的代码", worktreeBase: source };
   const trunk = task.mergeTargetBranch?.trim() || context.current;
-  if (!trunk || !context.branches.includes(trunk)) return [];
+  // 主分支那一头落不了地（合并目标不在本地了）：只剩「接着这里」，别连它一起丢掉。
+  if (!trunk || !context.branches.includes(trunk)) return source ? [here] : [];
   if (!source && context.current === trunk) return [];
-  return [
-    { id: "here", label: "接着这里的代码", worktreeBase: source },
-    { id: "trunk", label: `从 ${trunk} 开工`, worktreeBase: trunk },
-  ];
+  return [here, { id: "trunk", label: `从 ${trunk} 开工`, worktreeBase: trunk }];
 }
 
 // —— `/派`：叫上次那个人，停在「派出去」 ——

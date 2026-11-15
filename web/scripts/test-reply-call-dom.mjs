@@ -14,6 +14,10 @@
 //    答题卡展开着两者都不出；
 // ⑧ 派不出去的地方（团队执行者）：没有那一行，`@` 只是问一句；
 // ⑨ `/派`：从没叫过人就先开 `@` 菜单，选中的直接停在「派出去」；叫过就叫上次那个人，后面的话留在框里。
+//    那张菜单没选人就收起：「停在派出去」跟着作废，之后普通的 `@` 照旧停在「问一句」；
+// ⑩ 从哪开工没读到：不是「没得选」——拦着不让派、说清楚，给一颗重试，读到了照这条任务的分支开工；
+// ⑪ 派出去还没回来时又换了做法、写了下一句：回来只清发出去的那一版，下一句的人和做法留着；
+// ⑫ 叫着人派出去时敲命令：发送键照实写这一按干的事（叫人），不写「派出去」。
 // 跑法：npm -w web run test:reply-call-dom
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -30,12 +34,19 @@ try {
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
   const requests = [];
+  let branchesFail = true;
+  let releaseSlow;
+  const slowGate = new Promise((resolve) => { releaseSlow = resolve; });
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname.replace(/^\/api/, "");
     const json = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
     if (path === "/agents") return json(PROFILES);
-    if (path === "/projects") return json([{ id: "p1", name: "p1", useWorktreeDefault: true }]);
+    if (path === "/projects") return json([{ id: "p1", name: "p1", useWorktreeDefault: true }, { id: "p2", name: "p2", useWorktreeDefault: true }]);
+    if (path === "/projects/p2/health") return json({ isRepo: true });
+    if (path === "/projects/p2/branches") {
+      return branchesFail ? json({ error: "分支读取失败（夹具）" }, 503) : json({ branches: ["main", "ash/t-flaky"], current: "main" });
+    }
     if (path === "/projects/p1/health") return json({ isRepo: true });
     if (path === "/projects/p1/branches") return json({ branches: ["main", "ash/t-send", "ash/t-runnin", "ash/t-fail"], current: "main" });
     let match = /^\/tasks\/([^/]+)\/sessions$/.exec(path);
@@ -44,6 +55,7 @@ try {
       const body = JSON.parse(request.postData() ?? "{}");
       requests.push({ kind: "create", body });
       if (body.dispatchedBy === "t-fail") return json({ error: "建任务失败（夹具）" }, 500);
+      if (body.dispatchedBy === "t-slow") await slowGate;
       return json({ ...body, id: `child-${body.dispatchedBy}`, status: "backlog", createdAt: "2026-11-15T02:00:00.000Z", updatedAt: "2026-11-15T02:00:00.000Z" }, 201);
     }
     match = /^\/tasks\/([^/]+)\/(run|reply)$/.exec(path);
@@ -68,6 +80,20 @@ try {
     await row(name, agent).waitFor();
   };
   await input("ask").waitFor();
+
+  // ⑨-0 `/派`，还没叫过任何人，开了菜单却没选人就 Esc：「停在派出去」跟着作废。
+  await input("slash").fill("/派");
+  await scope("slash").getByRole("option", { name: /\/派/ }).waitFor();
+  await input("slash").press("Enter");
+  await scope("slash").getByRole("option", { name: /@codex/ }).waitFor();
+  await input("slash").press("Escape");
+  await waitUntil(async () => (await scope("slash").getByRole("option", { name: /@codex/ }).count()) === 0, "Esc 收起选人菜单");
+  await input("slash").fill("另问一件事 @co");
+  await scope("slash").getByRole("option", { name: /@codex/ }).click();
+  await row("slash", "codex").waitFor();
+  assert.equal(await key("slash", "codex", "问一句").getAttribute("aria-pressed"), "true", "放弃过的 /派 不留给之后的普通 @");
+  assert.equal(await scope("slash").getByRole("button", { name: "问 codex", exact: true }).count(), 1);
+  await scope("slash").getByRole("button", { name: "不叫 codex 了" }).click();
 
   // ⑨-a `/派`，还没叫过任何人：先开 `@` 菜单，选中的直接停在「派出去」。
   await input("slash").fill("/派");
@@ -215,6 +241,50 @@ try {
   await row("slash", "codex").waitFor();
   assert.equal(await key("slash", "codex", "派出去").getAttribute("aria-pressed"), "true");
   assert.equal(await input("slash").inputValue(), "写一份接口文档");
+
+  // ⑩ 从哪开工没读到：拦着不让派，给重试；读到了照这条任务的分支开工。
+  await call("flaky", "", "codex");
+  await key("flaky", "codex", "派出去").click();
+  await input("flaky").fill("接着这里补测试");
+  const baseError = scope("flaky").locator(".reply-dock-error");
+  await baseError.waitFor();
+  assert.match(await baseError.innerText(), /确认不了新任务从哪开工/);
+  const flakySend = scope("flaky").getByRole("button", { name: "派出去", exact: true }).last();
+  assert.equal(await flakySend.isDisabled(), true, "没读到从哪开工：不让派，不按默认悄悄从别处开工");
+  assert.equal(await scope("flaky").getByRole("button", { name: /^新任务从哪开工：/ }).count(), 0);
+  await key("flaky", "codex", "问一句").click();
+  await key("flaky", "codex", "派出去").click();
+  await baseError.waitFor();
+  assert.equal(await flakySend.isDisabled(), true, "读失败不缓存成「没得选」：再进来照样读、照样拦");
+  branchesFail = false;
+  await scope("flaky").getByRole("button", { name: "重试", exact: true }).click();
+  await scope("flaky").getByRole("button", { name: /^新任务从哪开工：/ }).waitFor();
+  assert.equal(await baseError.count(), 0);
+  await flakySend.click();
+  await waitUntil(async () => (await logged("__created_flaky")).length === 1, "读到之后派出去");
+  assert.equal(requests.find((item) => item.kind === "create" && item.body.dispatchedBy === "t-flaky").body.worktreeBase, "ash/t-flaky");
+
+  // ⑪ 派出去还没回来：换回问一句、写下一句；回来后下一句的人和做法都还在。
+  await call("slow", "", "codex");
+  await key("slow", "codex", "派出去").click();
+  await input("slow").fill("这一条先派出");
+  await scope("slow").getByRole("button", { name: "派出去", exact: true }).last().click();
+  await waitUntil(async () => requests.some((item) => item.kind === "create" && item.body.dispatchedBy === "t-slow"), "派出去的请求发出");
+  await key("slow", "codex", "问一句").click();
+  await input("slow").fill("这是下一句，要问 codex 的");
+  releaseSlow();
+  await waitUntil(async () => (await logged("__created_slow")).length === 1, "上一条派出去回来了");
+  await waitUntil(async () => await scope("slow").getByRole("button", { name: "问 codex", exact: true }).isEnabled(), "发送结束");
+  assert.equal(await input("slow").inputValue(), "这是下一句，要问 codex 的", "下一句的字留着");
+  assert.equal(await key("slow", "codex", "问一句").getAttribute("aria-pressed"), "true", "下一句的做法留着");
+  assert.match(await agentChip("slow").getAttribute("aria-label") ?? "", /^智能体：codex/, "下一句的人留着");
+
+  // ⑫ 叫着人派出去时敲命令：发送键写这一按干的事。
+  await key("slow", "codex", "派出去").click();
+  await input("slow").fill("/派");
+  await scope("slow").getByRole("option", { name: /\/派/ }).waitFor();
+  assert.equal(await scope("slow").getByRole("button", { name: "叫人", exact: true }).count(), 1, "这一按是叫人");
+  assert.equal(await scope("slow").getByRole("button", { name: "派出去", exact: true }).count(), 1, "只剩框顶那颗「派出去」");
 
   console.log("reply call dom test passed");
 } finally {

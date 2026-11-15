@@ -81,6 +81,8 @@ createRoot(document.getElementById("root")!).render(
         <Stage name="question" task={{ question: "先停一下吗？" } as Partial<Task>} />
         <Stage name="member" task={{ parentId: "team-1" }} dispatch={false} />
         <Stage name="slash" />
+        <Stage name="flaky" task={{ projectId: "p2" }} />
+        <Stage name="slow" />
       </main>
     </DraftProvider>
   </StrictMode>,

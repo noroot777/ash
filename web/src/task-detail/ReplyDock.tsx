@@ -38,7 +38,7 @@ function DockKey<T extends string>({ choice, pressed, onPick }: { choice: DockCh
   );
 }
 
-export function ReplyDockRow<T extends string>({ label, choices, pressed, onPick, onEscape, error, children }: {
+export function ReplyDockRow<T extends string>({ label, choices, pressed, onPick, onEscape, error, errorAction, children }: {
   /** 这一组的读屏名（「怎么裁定这条驳回」「叫 codex 来做什么」）。 */
   label: string;
   choices: readonly DockChoice<T>[];
@@ -47,6 +47,8 @@ export function ReplyDockRow<T extends string>({ label, choices, pressed, onPick
   /** 焦点在这一行里时按 Esc。 */
   onEscape?: () => void;
   error?: string | null;
+  /** 跟在那句错误后面的一颗键（「重试」）。 */
+  errorAction?: { label: string; onClick: () => void } | null;
   /** 这一行里不归切换键的东西（登记「画出来了」之类，不占位置）。 */
   children?: ReactNode;
 }) {
@@ -60,7 +62,12 @@ export function ReplyDockRow<T extends string>({ label, choices, pressed, onPick
           <DockKey key={choice.id} choice={choice} pressed={choice.id === pressed} onPick={() => onPick(choice.id)} />
         ))}
       </div>
-      {error && <p className="reply-dock-error" role="alert">{error}</p>}
+      {error && (
+        <p className="reply-dock-error" role="alert">
+          {error}
+          {errorAction && <button type="button" className="reply-dock-error-action" onClick={errorAction.onClick}>{errorAction.label}</button>}
+        </p>
+      )}
     </div>
   );
 }

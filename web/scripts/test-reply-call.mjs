@@ -41,6 +41,8 @@ assert.deepEqual(dispatchBaseOptions(source, context), [
   { id: "trunk", label: "从 main 开工", worktreeBase: "main" },
 ], "有自己的分支：接着它，或从项目检出的那条开工");
 assert.deepEqual(dispatchBaseOptions({ ...source, mergeTargetBranch: "dev" }, context)[1], { id: "trunk", label: "从 dev 开工", worktreeBase: "dev" }, "主分支取这条任务最终合进去的那条");
+assert.deepEqual(dispatchBaseOptions({ ...source, mergeTargetBranch: "gone" }, context), [{ id: "here", label: "接着这里的代码", worktreeBase: "ash/t-source" }],
+  "合并目标不在本地了：只剩接着这里，别连这条任务的分支一起丢掉");
 assert.deepEqual(dispatchBaseOptions({ ...source, useWorktree: false }, context), [], "在项目目录里干活、项目检出的就是主分支：两种一样，不必选");
 assert.deepEqual(dispatchBaseOptions({ ...source, useWorktree: false }, { ...context, current: "feat", branches: ["main", "feat"] }), [],
   "没定合并目标：主分支就是项目目录检出的那条，跟「接着这里」一样，不必选");

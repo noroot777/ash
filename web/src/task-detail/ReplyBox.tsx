@@ -22,7 +22,7 @@ import { InputMentionMenu } from "../components/MentionMenu.tsx";
 import { useReplyMention } from "./replyMention.ts";
 import { applySlashPick, mergeSlashItems, slashQuery, slashSendsAsTyped, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection } from "./mentionPicker.ts";
-import { CALL_COPY, DISPATCH_SLASH_ITEM, dispatchBaseOptions, parseDispatchCommand, readCallMemory, type CallVerb, type ReplyCall } from "./replyCall.ts";
+import { CALL_COPY, DISPATCH_SLASH_ITEM, dispatchBaseOptions, parseDispatchCommand, readCallMemory, type ReplyCall } from "./replyCall.ts";
 import { useDispatchBaseContext, useReplyCall } from "./useReplyCall.ts";
 import { CallCancelKey, DispatchBaseSegment, ReplyCallDock } from "./ReplyCallDock.tsx";
 import { ReplySendKey } from "./ReplySendKey.tsx";
@@ -109,8 +109,6 @@ export function ReplyBox({
   const call = calling.call;
   const target = call?.target ?? null;
   const dispatching = call?.verb === "dispatch";
-  // `/派` 时还没叫过人：先开 `@` 菜单让选，选中的那一个直接停在「派出去」。
-  const pendingVerb = useRef<CallVerb | null>(null);
   const baseContext = useDispatchBaseContext(task.projectId, dispatching);
   const baseOptions = dispatchBaseOptions(task, baseContext.value);
   const worktreeBase = baseOptions.find((option) => option.id === call?.base)?.worktreeBase ?? baseOptions[0]?.worktreeBase ?? null;
@@ -150,7 +148,6 @@ export function ReplyBox({
     setMenuDismissed(false);
     mention.reset();
     calling.cancel();
-    pendingVerb.current = null;
   };
 
   useEffect(() => {
@@ -220,6 +217,8 @@ export function ReplyBox({
     onPickAgent: (agent) => pickMention(agent),
     onPicked: () => textareaRef.current?.focus(),
   });
+  // `/派` 先开菜单选人时那份「停在派出去」只活到这张菜单收起（useReplyCall 的 pend）。
+  useEffect(() => calling.picking(mention.open), [mention.open]);
 
   // 底部胶囊上显示的「这一回合会由谁、用什么模型跑」：@ 召唤过就是那一套（一次性），
   // 没召唤就是任务自己的常设配置（executorId 为空时按类型默认执行器降级，与服务端
@@ -280,7 +279,7 @@ export function ReplyBox({
       setValue(rest);
       calling.start(last, "dispatch");
     } else {
-      pendingVerb.current = "dispatch";
+      calling.pend("dispatch");
       setValue(rest ? `${rest} @` : "@");
       mention.onValueChange();
     }
@@ -306,8 +305,7 @@ export function ReplyBox({
   const pickMention = (agent: AgentType) => {
     setValue((current) => current.replace(/@[^\s@]*$/, ""));
     mention.reset();
-    calling.start(agent, pendingVerb.current ?? call?.verb ?? null);
-    pendingVerb.current = null;
+    calling.start(agent, call?.verb ?? null);
   };
 
   // 点胶囊改的是**任务以后都用谁**：写回任务本身，之后每一条消息（含排队的、队列
@@ -357,7 +355,8 @@ export function ReplyBox({
     }
     if (!annotation && call?.verb === "dispatch") return runDispatch(call);
     // 截图批注是另一条入口：叫着人只在「问一句」时算数，派出去不经过这里。
-    const askTarget = call?.verb === "ask" ? call.target : null;
+    const askCall = call?.verb === "ask" ? call : null;
+    const askTarget = askCall?.target ?? null;
     if (disabled || sending || uploads.uploading || (!annotation && !value.trim() && !uploads.attachments.length)) return false;
     const choice = annotation ? {} : later.resolve();
     // 选了「稍后」却没配好：拦下并说清，绝不悄悄退回立即发送。
@@ -407,7 +406,7 @@ export function ReplyBox({
         // 发送方式跟正文同口径：发送途中被改过就留着，那是下一条的设置。
         draft.setLater((current) => (current === laterAtSend ? null : current));
       }
-      if (askTarget) calling.sent(askTarget);
+      if (askCall) calling.sent(askCall);
       return true;
     } catch (error) {
       setSendError(error instanceof Error ? error.message : String(error));
@@ -432,7 +431,7 @@ export function ReplyBox({
   // （不排队）。失败时人、做法、正文和附件全留着，说清楚哪儿没成。
   const runDispatch = async (current: ReplyCall): Promise<boolean> => {
     const text = value.trim();
-    if (!onDispatch || disabled || sending || uploads.uploading || !text || !baseContext.ready) return false;
+    if (!onDispatch || disabled || sending || uploads.uploading || !text || baseContext.status !== "ready") return false;
     setSending(true);
     setSendError(null);
     setCommandResult(null);
@@ -441,7 +440,7 @@ export function ReplyBox({
     try {
       await onDispatch({ text, attachments: uploads.attachments.map((attachment) => attachment.path), target: current.target, worktreeBase });
       clearSent(draftAtSend, sentSelection);
-      calling.sent(current.target);
+      calling.sent(current);
       return true;
     } catch (error) {
       setSendError(error instanceof Error ? error.message : String(error));
@@ -522,7 +521,8 @@ export function ReplyBox({
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />
         <AgentPlate name={activeAgent} />
         {call && dispatchable
-          ? <ReplyCallDock call={call} self={calling.self} onVerb={calling.setVerb} onCancel={cancelCall} />
+          ? <ReplyCallDock call={call} self={calling.self} onVerb={calling.setVerb} onCancel={cancelCall}
+            baseError={baseContext.error} onRetryBase={baseContext.retry} />
           : activeOverride?.head}
         {/* 输入几行就撑几行高,撑到上限为止;拖过之后以拖出来的高度为准(拖动条自己的上限更宽)。 */}
         <ComposerInput
@@ -631,7 +631,8 @@ export function ReplyBox({
           <ReplySendKey
             overrideSend={take ? activeOverride!.send : null}
             call={call}
-            dispatchReady={baseContext.ready}
+            dispatchHeld={baseContext.status === "loading" ? "正在确认新任务从哪开工"
+              : baseContext.status === "failed" ? "确认不了新任务从哪开工，先重试" : null}
             later={later}
             text={value}
             attachments={uploads.attachments.length}
