@@ -2,10 +2,36 @@
 // 同这里 = 这条任务自己的那一套；或者指定一个（同一颗三段胶囊）。派活单上没指明的那几条、智能体绕过派活单
 // 直接建任务又没给执行器的，都交给它（服务端 task-dispatch.ts `withDispatchDefaults`）。
 // 设成了非默认值时，底栏胶囊最后多一段「派活 codex」，不点开也看得出来。
-import type { AgentExecutorProfile, AgentType } from "@ash/shared";
-import type { DispatchRunTarget } from "@ash/shared/dispatch-plan";
+import type { AgentExecutorProfile, AgentType, Task, TaskListItem } from "@ash/shared";
+import type { DispatchLaunchInput, DispatchRunTarget } from "@ash/shared/dispatch-plan";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { executorRunSummary } from "../lib/agentAvailability.ts";
+import { useOrderedSave } from "./useOrderedSave.ts";
+
+const sameTarget = (a: DispatchRunTarget | null, b: DispatchRunTarget | null) =>
+  a === b || (!!a && !!b && a.agentType === b.agentType && a.executorId === b.executorId
+    && a.model === b.model && a.reasoningEffort === b.reasoningEffort);
+
+/**
+ * 这一行改的是一份完整配置，跟常设执行器同一套写回（useOrderedSave.ts）：按提交顺序落库、改的时候胶囊和卡上
+ * 都先显示刚选的；依赖它的两件事——发送（智能体可能直接建任务，服务端按它补执行器）和「派出去」——先等最后
+ * 一次写回落地，落不下去就不做。
+ */
+export function useDispatchDefault(
+  task: Task,
+  save: ((target: DispatchRunTarget | null) => Promise<void>) | undefined,
+  onError: (message: string) => void,
+) {
+  const saved = useOrderedSave(task.dispatchTarget ?? null, sameTarget, task.id, save, onError);
+  const failedText = (reason: string) => `「派出去的活交给谁」没能改过去（${reason}），先没发出去。重选一次再试。`;
+  const gateLaunch = (launch: ((input: DispatchLaunchInput, asking: TaskListItem) => Promise<void>) | undefined) =>
+    launch && (async (input: DispatchLaunchInput, asking: TaskListItem) => {
+      const failed = await saved.settle();
+      if (failed) throw new Error(failedText(failed));
+      await launch(input, asking);
+    });
+  return { ...saved, failedText, gateLaunch };
+}
 
 // 没指定执行器 = 那个 CLI 的默认执行器（服务端照这个解析），写它的名字。
 const nameOf = (target: DispatchRunTarget, profiles: AgentExecutorProfile[]) =>

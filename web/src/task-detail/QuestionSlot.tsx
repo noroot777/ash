@@ -9,7 +9,7 @@
 import { useEffect, useState } from "react";
 import type { TaskListItem } from "@ash/shared";
 import { questionKey, type QuestionAnswerInput } from "@ash/shared/questions";
-import { activeDispatchPlan, type DispatchLaunchInput } from "@ash/shared/dispatch-plan";
+import { activeDispatchPlan, type DispatchLaunchInput, type DispatchRunTarget } from "@ash/shared/dispatch-plan";
 import { motionReduced } from "../lib/useSwapText.ts";
 import { QuestionCard } from "./QuestionCard.tsx";
 import { DispatchPlanCard } from "./DispatchPlanCard.tsx";
@@ -69,7 +69,7 @@ const cardKey = (task: TaskListItem) => `${task.id}:${questionKey(task)}:${activ
  * 问的可以不是宿主自己：派它的那条任务里，名下派出的任务来问时这一格就是那一条的卡（`hostId` 是宿主，
  * 卡上那条不是它时题目前面写上是谁在问）。答复交回给调用方时带上卡对的是哪一条，由它送到那一条去。
  */
-export function QuestionDock({ takeover, onAnswer, onLaunchPlan, hostId }: {
+export function QuestionDock({ takeover, onAnswer, onLaunchPlan, hostId, hostDispatchTarget }: {
   takeover: QuestionTakeover;
   onAnswer: (answer: string, input: QuestionAnswerInput, asking: TaskListItem) => Promise<void>;
   /**
@@ -78,6 +78,8 @@ export function QuestionDock({ takeover, onAnswer, onLaunchPlan, hostId }: {
    */
   onLaunchPlan?: (input: DispatchLaunchInput, asking: TaskListItem) => Promise<void>;
   hostId?: string;
+  /** 宿主「派出去的活交给谁」此刻的值（刚改、还在写回的也算）：卡对的是宿主自己时，没指明的行跟它走。 */
+  hostDispatchTarget?: DispatchRunTarget | null;
 }) {
   const { card, leaving } = takeover;
   if (!card) return null;
@@ -86,7 +88,8 @@ export function QuestionDock({ takeover, onAnswer, onLaunchPlan, hostId }: {
   return (
     <div className={`question-dock${leaving ? " is-leaving" : ""}`} inert={leaving ? true : undefined}>
       {plan && onLaunchPlan
-        ? <DispatchPlanCard key={cardKey(card)} task={card} plan={plan} asker={asker}
+        ? <DispatchPlanCard key={cardKey(card)} plan={plan} asker={asker}
+          task={card.id === hostId && hostDispatchTarget !== undefined ? { ...card, dispatchTarget: hostDispatchTarget } : card}
           onLaunch={(input) => onLaunchPlan(input, card)} onAnswer={(answer, input) => onAnswer(answer, input, card)}
           collapsed={takeover.collapsed} onCollapsedChange={takeover.setCollapsed} />
         : <QuestionCard key={cardKey(card)} task={card} asker={asker} onAnswer={(answer, input) => onAnswer(answer, input, card)}

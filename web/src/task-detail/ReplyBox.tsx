@@ -26,7 +26,7 @@ import { CALL_COPY, DISPATCH_SLASH_ITEM, dispatchBaseOptions, parseDispatchComma
 import { useDispatchBaseContext, useReplyCall } from "./useReplyCall.ts";
 import { CallCancelKey, DispatchBaseSegment, ReplyCallDock } from "./ReplyCallDock.tsx";
 import { ReplySendKey } from "./ReplySendKey.tsx";
-import { DispatchDefaultRow, DispatchDefaultSegment } from "./ReplyDispatchDefault.tsx";
+import { DispatchDefaultRow, DispatchDefaultSegment, useDispatchDefault } from "./ReplyDispatchDefault.tsx";
 import type { ReplyBoxProps } from "./replyBoxProps.ts";
 import { useStandingExecutor } from "./useStandingExecutor.ts";
 import { useExecutorProfiles } from "./useExecutorProfiles.ts";
@@ -106,6 +106,7 @@ export function ReplyBox({
       && ((next) => onStandingExecutorChange(next, executorLabelOf(next.agentType, next.executorId))),
     setSendError,
   );
+  const dispatchDefault = useDispatchDefault(task, onDispatchTargetChange, setSendError);
   // `@` 叫了谁、来做什么（问一句 / 派出去）。叫着人时胶囊上是他、框顶那一行是做法；问一句就是一次性
   // 召唤 —— 只随这一次 reply 发出、发完即清，不落任务（「以后都用谁」是上面的 standing）。
   const dispatchable = !!onDispatch;
@@ -389,6 +390,12 @@ export function ReplyBox({
         if (annotation) throw new Error(standingError);
         return false;
       }
+      const dispatchError = await dispatchDefault.settle();
+      if (dispatchError) {
+        setSendError(dispatchDefault.failedText(dispatchError));
+        if (annotation) throw new Error(dispatchError);
+        return false;
+      }
       const result = await onSend(
         sentText,
         sentPaths,
@@ -520,7 +527,8 @@ export function ReplyBox({
       {commandResult?.taskId === task.id && <p className="task-reply-command-result" role="status" aria-label="命令结果">{commandResult.text}</p>}
       {topRail}
       </div>
-      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} onLaunchPlan={onLaunchPlan} hostId={task.id} />}
+      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} onLaunchPlan={dispatchDefault.gateLaunch(onLaunchPlan)}
+        hostId={task.id} hostDispatchTarget={dispatchDefault.value} />}
       {!covering && <div className="task-reply-box">
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />
         <AgentPlate name={activeAgent} />
@@ -629,11 +637,11 @@ export function ReplyBox({
             onEffortChange={target ? calling.commitEffort : commitStandingEffort}
             tail={call && dispatching && baseOptions.length > 1
               ? <DispatchBaseSegment options={baseOptions} value={call.base} disabled={configDisabled} onChange={calling.setBase} />
-              : !target && task.dispatchTarget ? <DispatchDefaultSegment value={task.dispatchTarget} profiles={profiles} /> : undefined}
+              : !target && dispatchDefault.value ? <DispatchDefaultSegment value={dispatchDefault.value} profiles={profiles} /> : undefined}
             // 没叫人时点开智能体那一段，列表下面一行「派出去的活交给谁」。
-            agentExtra={!target && onDispatchTargetChange ? <DispatchDefaultRow value={task.dispatchTarget ?? null}
+            agentExtra={!target && onDispatchTargetChange ? <DispatchDefaultRow value={dispatchDefault.value}
               here={standing.config} types={registeredTypes.length ? registeredTypes : [activeAgent]} profiles={profiles}
-              disabled={configDisabled} onChange={(next) => void onDispatchTargetChange(next).catch((error) => setSendError(error instanceof Error ? error.message : String(error)))} /> : undefined}
+              disabled={configDisabled} onChange={dispatchDefault.commit} /> : undefined}
           />
           {target && <CallCancelKey agent={target.agent} onCancel={cancelCall} />}
           <ReplySendKey

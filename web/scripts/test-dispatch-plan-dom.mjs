@@ -1,7 +1,8 @@
 // 派活单（task-detail/DispatchPlanCard.tsx + QuestionSlot.tsx）在真浏览器里：停在回复框那一格、全页一处输入；
 // 去掉一条、改交给谁、切「同时」以后派出去的就是卡上那个样子；失败了卡上的改动不丢；写了字那颗键变「发回去改」
 // 且交出去的是答复；全去掉时派不出去；那一轮没结束点不动；点标题在左抽屉里读全文；
-// 「派出去的活交给谁」在回复框胶囊点开那一层里，设了以后胶囊上看得见、卡上没指明的几行跟着它；窄屏不横向溢出。
+// 「派出去的活交给谁」在回复框胶囊点开那一层里，设了以后胶囊上看得见、卡上没指明的几行跟着它；连着改两次而先发的
+// 那笔慢到时按改的先后落库，紧接着派出要等写回落地；窄屏不横向溢出。
 // 跑法：npm -w web run test:dispatch-plan-dom
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -167,6 +168,29 @@ try {
   await page.waitForFunction(() => document.querySelector('[aria-label="交出去的东西"]')?.textContent === '{"kind":"target","target":null}');
   await page.keyboard.press("Escape");
   assert.equal(await standing.getByLabel(/^派出去的活交给 /).count(), 0);
+
+  // 连着改两次、先发的那笔慢到：落库按你改的先后（最后是「同这里」，不被先选的 codex 盖回去）；紧接着按「派出去」，
+  // 等两笔都落地才派，卡上没指明的那几行交的是最后选的。
+  await reset();
+  await page.getByLabel("第一笔写回慢").check();
+  await card.getByRole("button", { name: "收起派活单，先看上文" }).click();
+  await standing.getByRole("button", { name: /^智能体：/ }).click();
+  await defaults.getByRole("group").getByRole("button", { name: /^智能体：/ }).click();
+  await page.locator(".agent-model-picker").last().getByRole("option", { name: /@codex/ }).click();
+  for (let i = 0; i < 4 && await page.locator(".agent-model-picker").count(); i += 1) await page.keyboard.press("Escape");
+  assert.match(await standing.getByLabel("派出去的活交给 codex@local").innerText(), /codex@local/, "还在写回时胶囊上先显示刚选的");
+  await standing.getByRole("button", { name: /^智能体：/ }).click();
+  await page.getByRole("button", { name: "派出去的活交给谁：同这里" }).click();
+  await page.keyboard.press("Escape");
+  await card.locator(".question-card-peek").click();
+  await page.waitForFunction(() => document.querySelector('[aria-label^="第 1 条「服务端接口」交给 claude@local"]'));
+  await send.click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="写回记录"]')?.textContent?.includes("launch"));
+  assert.equal(await page.getByLabel("写回记录").innerText(), "save:codex save:same launch", "按改的先后落库，派出等它们都落地");
+  const late = await handed();
+  assert.equal(late.kind, "launch");
+  assert.deepEqual(late.items.map((item) => item.target.agentType), ["claude", "codex", "claude"], "没指明的交给最后选的「同这里」");
+  assert.equal(await standing.getByLabel(/^派出去的活交给 /).count(), 0, "胶囊上也是最后选的");
 
   // 窄屏：卡和整页都不横向溢出，行尾的胶囊换到下一行。
   await page.setViewportSize({ width: 360, height: 780 });
