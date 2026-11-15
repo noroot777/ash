@@ -1,5 +1,5 @@
 // 「一条任务在自己回合里对 ash 说的话」那一组工具：阶段上报、驳回审查意见（含把越界
-// 的那几条提出来转独立任务）、辩论发言、验收、确认完成、到检查点暂停、停止、提问与答复。
+// 的那几条提出来转独立任务）、辩论与讨论发言、验收、确认完成、到检查点暂停、停止、提问与答复。
 //
 // 这几段 description 是**注入给 agent 的规则本体**，不是文档：完成协议（exit 0 ≠ done）、
 // 驳回的三条出路、辩论只许说话不许改代码，全靠这里的措辞立住。所以它们单独成文件——
@@ -92,27 +92,27 @@ server.registerTool(
 server.registerTool(
   "debate_reply",
   {
-    title: "辩论发言(审查意见之争)",
+    title: "辩论 / 讨论发言",
     description:
-      "执行者驳回审查意见后,用户可以让双方各说几段。你收到【审查意见辩论】提示时,说完自己这一段就调用本工具交卷,然后结束回合——**发言只认这次调用**,写在输出文本里的内容不算数,没交卷这场辩论会按「没说话」中止。\n\n"
-      + "**summary 必填**(写法见该字段说明):用户会逐段只读这一句来判断辩到哪了。\n\n"
-      + "这一段只辩论:不要改动任何文件、不要提交、不要跑会改变状态的命令。收尾那一段(提示里会写明)必须同时给 verdict:upheld=维持原意见 / withdrawn=撤回原意见 / partial=部分成立;那只是你自己的立场,**最终由用户裁定**,不改变任何结论。非收尾段传 verdict 会被忽略。本回合不要调用 report_stage / complete_task / accept_task。",
+      "审查意见辩论、或用户在回复框里发起的讨论里,轮到你说一段时(提示里写明),说完调用本工具交卷再结束回合——**发言只认这次调用**,输出文本不算,没交卷这一场按「没说话」中止。summary 必填,用户逐段只读这一句。\n\n"
+      + "这一段只说话:不改文件、不提交、不跑会改变状态的命令。辩论收尾那一段必须给 verdict(只是你自己的立场,**最终由用户裁定**,不改变任何结论);讨论里确认和各方最新的说法已一致时给 agreed=true。本回合不要调用 report_stage / complete_task / accept_task。",
     inputSchema: {
-      taskId: z.string().describe("正在辩论的任务 id(提示里有)"),
+      taskId: z.string().describe("正在辩论 / 讨论的任务 id(提示里有)"),
       summary: z.string().min(1).describe(`这一段发言的一句话,写给**用户**看。${PLAIN_SUMMARY_GUIDE}`),
-      statement: z.string().min(1).describe("你这一段的完整发言:逐条说清坚持什么、接受什么、依据是什么"),
+      statement: z.string().min(1).describe("你这一段的完整发言:坚持什么、接受什么、依据是什么"),
       verdict: z
         .enum(["upheld", "withdrawn", "partial"])
         .optional()
-        .describe("仅收尾那一段需要:upheld=维持原意见 / withdrawn=撤回原意见 / partial=部分成立"),
+        .describe("仅辩论收尾段:upheld=维持原意见 / withdrawn=撤回原意见 / partial=部分成立"),
+      agreed: z.boolean().optional().describe("仅讨论第一轮之后:你此刻的看法和各方最新的一致、再谈只是重复时传 true"),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
     },
   },
-  async ({ taskId, summary, statement, verdict, directionToken }) => {
+  async ({ taskId, summary, statement, verdict, agreed, directionToken }) => {
     try {
       return ok(await call(
         "POST", `/tasks/${taskId}/free-workflow/review/debate/reply`,
-        { summary, statement, verdict }, directionToken,
+        { summary, statement, verdict, agreed }, directionToken,
       ));
     } catch (e) { return fail(e); }
   },

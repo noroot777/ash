@@ -420,4 +420,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 派活单与「派出去的活交给谁」(见 db/schema.ts 同名列)。存量行 NULL = 没摆单、同这里。
   "ALTER TABLE tasks ADD COLUMN dispatch_plan TEXT",
   "ALTER TABLE tasks ADD COLUMN dispatch_target TEXT",
+  // 名下全部停着 / 欠一次起跑 / 停下还没做完(见 db/schema.ts 同名列)。存量行 NULL = 没停过。
+  "ALTER TABLE tasks ADD COLUMN dispatch_hold_at TEXT",
+  "ALTER TABLE tasks ADD COLUMN hold_owed_by TEXT",
+  "ALTER TABLE tasks ADD COLUMN dispatch_hold_pending_at TEXT",
 ];

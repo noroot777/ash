@@ -1,5 +1,6 @@
 import type { DetectedPreviewService, PreviewServiceState } from "@ash/shared/preview";
 import type {
+  DiscussionStartInput,
   BranchPlanView,
   FamilyAcceptanceResult,
   AgentExecutorProfile,
@@ -197,6 +198,11 @@ export const api = {
     request(`/groups/${id(groupId)}/run`, { method: "POST" }),
   pauseGroup: (groupId: string): Promise<Group> =>
     request(`/groups/${id(groupId)}/pause`, { method: "POST" }),
+  // 「派出的任务」格头那一对键：这条任务名下全部停下 / 接着跑（server/src/dispatch-hold.ts）。
+  holdDispatched: (taskId: string): Promise<Task> =>
+    request(`/tasks/${id(taskId)}/dispatched/hold`, { method: "POST" }),
+  releaseDispatched: (taskId: string): Promise<Task> =>
+    request(`/tasks/${id(taskId)}/dispatched/release`, { method: "POST" }),
   createTasksBatch: (
     groupId: string,
     body: BatchCreateTasksBody,
@@ -378,6 +384,9 @@ export const api = {
     target: FreeReviewDisputeTarget,
   ): Promise<{ debateId: string; state: FreeWorkflowApiState }> =>
     request(`/tasks/${id(taskId)}/free-workflow/review/debate`, json("POST", { exchanges, target })),
+  // 回复框里 @ 了人、选「讨论」：各方来回几段，说完由这条任务的执行器在主会话里写合稿。
+  startDiscussion: (taskId: string, input: DiscussionStartInput): Promise<{ discussionId: string; state: FreeWorkflowApiState }> =>
+    request(`/tasks/${id(taskId)}/discussions`, json("POST", input)),
   reserveFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review-reservation`, json("PUT", input)),
   adjustFreeReviewRounds: (taskId: string, input: FreeReviewRoundsInput): Promise<FreeWorkflowApiState> =>

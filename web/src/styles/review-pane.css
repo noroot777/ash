@@ -1,4 +1,4 @@
-/* 右侧「审查」格（free-workflow/FreeReviewPane.tsx、task-detail/TaskReviewInspector.tsx）和各格共用的
+/* 右侧「审议」格（free-workflow/FreeReviewPane.tsx、task-detail/TaskReviewInspector.tsx）和各格共用的
    「顶上一句结论 + 一个主动作 + 更多」（inspector/InspHead.tsx）、点开就地看的记录（InspRecord）。
    公共件在 inspector-parts.css。 */
 

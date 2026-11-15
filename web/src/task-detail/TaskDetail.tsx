@@ -30,6 +30,7 @@ import { answerFromHost, useDispatchSignals } from "./dispatched/useDispatchSign
 import { replySend } from "./replySend.ts";
 import { replyDispatch } from "./replyDispatch.ts";
 import { launchPlanFromHost, saveDispatchTarget } from "./dispatchPlanActions.ts";
+import { replyDiscuss } from "./replyDiscuss.ts";
 import { dispatchNotes } from "./dispatchNotes.ts";
 import { DispatchNoteLine } from "./DispatchNoteLine.tsx";
 import { LeftDrawerProvider } from "../components/LeftDrawer.tsx";
@@ -60,6 +61,7 @@ import { MemoSelectionScope } from "../task-memos/MemoSelectionScope.tsx";
 import { stageSideChatQuote } from "../side-chat/sideChatQuote.ts";
 import { useAddReplyQuote } from "./replyQuote.ts";
 import { useReuseInput } from "./ReuseInput.tsx";
+import { DispatchHeldLine, useDispatchHolder } from "./dispatched/DispatchHeldLine.tsx";
 
 
 export function TaskDetail({
@@ -115,6 +117,8 @@ export function TaskDetail({
   // 这里只补中间那一两秒;任务停下来就作废,免得下一次「运行」照抄旧目标。
   // 读过 / 没读过的账（侧栏那一行的点）随打开的任务对齐；头上不再画状态点，返回值这里用不上。
   useTaskReadState(allTasks, task.id);
+  // 只在它确实停着（已暂停 / 排着）时说；已经做完的那几条不用解释为什么没在跑。
+  const holder = useDispatchHolder(task.id, allTasks, task.status === "paused" || task.status === "backlog");
   const conversation = useConversation(task.id);
   // 左边那几屉（子智能体 / 读全文 / 派出的任务，互斥）和 Inspector 栈，整块在 useTaskDrawers.tsx。
   // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点和验收后快照入口。
@@ -533,8 +537,10 @@ export function TaskDetail({
                       onReuseInput={task.mode === "single" && !task.archived && !handedOut && hasConversation ? reuseInput : undefined}
                       // 任务停下来等哨兵：会话最后多一行「在等哨兵…」（feed-7）。在跑的时候不出——
                       // 那时挂上的哨兵是执行过程里的一步，事件排着队等这一轮跑完。
-                      footer={task.status !== "running" && task.status !== "queued" && (liveMonitors.length || liveBuiltinCount) ? (
-                        <MonitorWaitLine
+                      // 被派它的那条按住了（名下全部停下）：同一处再多一行「是谁按的」，点过去接着跑。
+                      footer={task.status !== "running" && task.status !== "queued" && (holder || liveMonitors.length || liveBuiltinCount) ? (<>
+                        {holder && <DispatchHeldLine holder={holder} onOpen={onOpenTask} />}
+                        {(liveMonitors.length > 0 || liveBuiltinCount > 0) && <MonitorWaitLine
                           key={`monitor-wait:${task.id}`}
                           monitors={liveMonitors}
                           builtinCount={liveBuiltinCount}
@@ -542,11 +548,12 @@ export function TaskDetail({
                           reviewArmed={!!free.state?.reviewReservation.armed}
                           onOpenPanel={() => openTab("monitors", liveMonitors[0] ? { monitorId: liveMonitors[0].id } : undefined)}
                           notify={notify}
-                        />
-                      ) : undefined}
+                        />}
+                      </>) : undefined}
                       reviewRetry={reviewRetry}
                       turnRetry={crashedTurnRetry}
                       reviews={free.state?.reviews}
+                      discussions={free.state?.discussions}
                       asides={asides}
                       // 会话里那一句审查结论点过来：审查格展开那一轮（feed-10 / insp-5）。
                       onOpenReviewPanel={(target) => openTab("review", target ? reviewTargetRequest(target) : undefined)}
@@ -599,9 +606,15 @@ export function TaskDetail({
                           : `以后这个任务交给 ${run}`);
                       }}
                       onSend={replySend({ task, allTasks, conversation, confirmExecutorSwap, notify })}
+                      onOpenTask={onOpenTask}
                       // 「派出去」只在普通的独立任务里有（团队执行者、审查任务各有归属，服务端也不收）。
                       onDispatch={derivationAllowed && task.mode === "single" && !task.archived
                         ? replyDispatch({ task, onCreated: onTaskUpdate, notify }) : undefined}
+                      // 「讨论」同样只在普通的独立任务里有，且只认自由工作流（服务端 discussionBlocker 同一口径）。
+                      onDiscuss={derivationAllowed && task.mode === "single" && !task.archived && task.workflowMode === "free"
+                        ? replyDiscuss({ task, onChanged: free.setState }) : undefined}
+                      discussHeld={(free.state?.discussions ?? []).some((item) => item.status === "running" || item.status === "synthesizing")
+                        ? "这条任务上正在讨论，说完再开下一场" : null}
                       override={ruling}
                       command={derivationAllowed ? {
                         matches: isTaskDerivationCommand,

@@ -245,7 +245,7 @@ export async function continueTask(
     }, { behavior: "immediate" });
     // 令牌落库的同一处把它绑到这一轮的运行时身份上:来源核验要的是「库里的令牌」和
     // 「内存里这一轮」是同一件事,而不是两份各自独立的读(见 runs.ts `bindTurnToken`)。
-    bindTurnToken(taskId, turnToken);
+    bindTurnToken(taskId, turnToken, agent);
     await (await import("./review-recurrence-gate.js")).carryRecurrenceBreaker(taskId, { ...opts, native: !!nativeCommand });
 
     // 续聊/重跑同样按**这一回合是谁点的**解析执行器(§八)。跨人时降级到本人的默认
@@ -354,7 +354,7 @@ export async function continueTask(
     // agent 第一轮走 runTask 直接起跑、从没被「召唤」过，于是后来 @ 进来的同伴它
     // 一次都不会知道（正是 2026-08-04 那个「claude 自己考古 codex 会话」的现场）。
     // prev 必须是**更新 session 行之前**的快照：锚点取的 endedAt 会在 resume 时被清空。
-    const peerNotice = peerNoticeFor({ taskId, self: agent, all, prev });
+    const peerNotice = opts.withholdPeerNotice ? "" : peerNoticeFor({ taskId, self: agent, all, prev });
     // 「你被搬过机器了」——接力导入时挂在 handoff 标记上的一次性前言（不占 resume_prompt
     // 那一列，理由见 handoff-notice.ts）。只投给任务自己的正式回合：审查/验证/就地旁路
     // 回合吃掉它，任务本人就再也收不到了。
@@ -419,7 +419,7 @@ export async function continueTask(
     checkingReviewStart = false;
     // 顺序定死:查冻结事实(最后一个 await)→ 同步定论 → spawn。为什么只能这么排、以及
     // freezeGuard 为什么只在那几条路上查库,见 task-run.ts 同一段与 turn-freeze.ts。
-    const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
+    const frozen = await freezeFacts(taskId, opts.freezeGuard ?? false);
     // ↓ 这里往下到 `trackRun` 全同步(撤回那条岔路除外,它不起进程):暂停请求要么在
     // takeFreeze 被消费、要么之后才到 —— 那时已有 handle 可杀。
     const freeze = takeFreeze(taskId, frozen);

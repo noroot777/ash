@@ -1,24 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AgentExecutorProfile, AgentType } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType, DiscussionRounds } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
 import { api } from "../lib/api.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import {
-  initialVerb, isSelfCall, rememberCall, rememberedTarget,
-  type BaseContext, type CallVerb, type DispatchBase, type ReplyCall,
+  initialVerb, isSelfCall, readDiscussRounds, rememberCall, rememberDiscussRounds, rememberedTarget, toggleDiscussPerson,
+  type BaseContext, type CallAbility, type CallVerb, type DispatchBase, type ReplyCall,
 } from "./replyCall.ts";
 
 /**
  * 回复框里叫了谁、来做什么（纯逻辑在 replyCall.ts）。叫人只活在这一个框里：换任务、发出去、点小叉
  * 都清掉；正文、附件不归它管，换做法、取消叫人一个字都不动。
  */
-export function useReplyCall({ ownAgent, dispatchable, profiles }: {
+export function useReplyCall({ ownAgent, ability, profiles }: {
   /** 这条任务自己的执行器：叫它只能派出去。 */
   ownAgent: AgentType;
-  /** 这里能不能派出去（普通的独立任务才能）。 */
-  dispatchable: boolean;
+  /** 这里能不能派出去、能不能开讨论（普通的独立任务才能）。 */
+  ability: CallAbility;
   profiles: AgentExecutorProfile[];
 }) {
+  const { dispatchable } = ability;
   const [call, setCall] = useState<ReplyCall | null>(null);
   // 记下的执行器后来被删了：退回「这个执行器类型的默认」，别把一个不存在的 id 发出去。
   const known = (target: MentionTarget): MentionTarget => (
@@ -38,16 +39,28 @@ export function useReplyCall({ ownAgent, dispatchable, profiles }: {
     else if (current.opened) pending.current = null;
   };
 
+  const fresh = (target: MentionTarget, verb: CallVerb): ReplyCall => ({ target, verb, base: "here", others: [], rounds: readDiscussRounds() });
   const start = (agent: AgentType, prefer: CallVerb | null = null) => {
     const verb = pending.current?.verb ?? prefer;
     pending.current = null;
-    setCall({ target: known(rememberedTarget(agent)), verb: initialVerb(selfOf(agent), verb, dispatchable), base: "here" });
+    setCall(fresh(known(rememberedTarget(agent)), initialVerb(selfOf(agent), verb, ability)));
   };
   /** 撤回一条排着的召唤：放回当初叫的那一套。 */
-  const restore = (target: MentionTarget) => setCall({ target, verb: "ask", base: "here" });
+  const restore = (target: MentionTarget) => setCall(fresh(target, "ask"));
+  // 自己按不动「问一句」「讨论」（框顶那一行写着原因）；离开讨论就只剩胶囊上那一个人。
   const setVerb = (verb: CallVerb) => setCall((current) => (
-    !current || (verb === "ask" && dispatchable && selfOf(current.target.agent)) ? current : { ...current, verb }
+    !current || (selfOf(current.target.agent) && (verb === "discuss" || (verb === "ask" && dispatchable))) ? current
+      : { ...current, verb, others: verb === "discuss" ? current.others : [] }
   ));
+  /** 讨论时在「和谁」那一段里点一个人（加上 / 放掉，见 toggleDiscussPerson）。这条任务自己的执行器不算。 */
+  const togglePerson = (agent: AgentType) => setCall((current) => (
+    !current || selfOf(agent) ? current
+      : { ...current, ...toggleDiscussPerson(current, agent, (next) => known(rememberedTarget(next))) }
+  ));
+  const setRounds = (rounds: DiscussionRounds) => {
+    rememberDiscussRounds(rounds);
+    setCall((current) => (current ? { ...current, rounds } : current));
+  };
   const setBase = (base: DispatchBase) => setCall((current) => (current ? { ...current, base } : current));
   // 胶囊上换人 / 换模型：执行器没换就把已选的智能水平留着，换了执行器才清成「跟随」（旧档位在新 CLI 上
   // 多半根本不存在）。换成这条任务自己的执行器，就只剩「派出去」。
@@ -57,10 +70,12 @@ export function useReplyCall({ ownAgent, dispatchable, profiles }: {
       { agentType: next.agent, executorId: next.executorId },
       { agentType: current.target.agent, executorId: current.target.executorId },
     );
+    const self = dispatchable && selfOf(next.agent);
     return {
       ...current,
       target: { ...next, reasoningEffort: kept ? current.target.reasoningEffort : null },
-      verb: dispatchable && selfOf(next.agent) ? "dispatch" : current.verb,
+      verb: self ? "dispatch" : current.verb,
+      others: self ? [] : current.others.filter((item) => item.agent !== next.agent),
     };
   });
   const commitEffort = (effort: string) => setCall((current) => (
@@ -75,14 +90,15 @@ export function useReplyCall({ ownAgent, dispatchable, profiles }: {
    * 每一处改动（换人、换做法、换开工位置）都换一个新对象，发送途中动过就是下一句的设置，整份留着。
    */
   const sent = (snapshot: ReplyCall) => {
+    for (const other of snapshot.others) rememberCall(other);
     rememberCall(snapshot.target);
     setCall((current) => (current === snapshot ? null : current));
   };
 
   return {
     call,
-    self: !!call && dispatchable && selfOf(call.target.agent),
-    start, pend, picking, restore, setVerb, setBase, commitTarget, commitEffort, cancel, sent,
+    self: !!call && (dispatchable || ability.discussable) && selfOf(call.target.agent),
+    start, pend, picking, restore, setVerb, setBase, togglePerson, setRounds, commitTarget, commitEffort, cancel, sent,
   };
 }
 

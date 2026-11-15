@@ -1,4 +1,7 @@
+import type { ScheduledMessage } from "@ash/shared";
+import type { DraftHandle } from "../lib/DraftStore.tsx";
 import type { UploadAttachment } from "./Attachments.tsx";
+import type { MentionTarget } from "./mentionPicker.ts";
 import { attachmentView } from "./utils.ts";
 import { createClientId } from "../lib/clientId.ts";
 
@@ -163,4 +166,35 @@ export function dropSentAttachments(
 ): UploadAttachment[] {
   const gone = new Set(sent.map(selectionKey));
   return current.filter((attachment) => !gone.has(selectionKey(attachment)));
+}
+
+/**
+ * 撤回:先把消息从队列上取下来(失败就什么都不动,免得内容一式两份),成功后正文、附件、这条消息当初 @ 指派的
+ * 执行器配置一并放回对话框——发它时是什么样,撤回后就还是什么样,用户接着改就行。「稍后」的设定也留着(定时的
+ * 还没到点才留,等任务的原样留)。
+ *
+ * 有发送正在飞就先等它结算完:发送成功会把它自己那份草稿清掉,清完再并入撤回的内容。顺序一确定,两边都不必去猜
+ * 草稿里哪一段是谁的(靠猜会猜错,2026-08-27 审查实测)。
+ */
+export async function withdrawIntoBox(message: ScheduledMessage, box: {
+  cancel: (messageId: string) => Promise<boolean>;
+  draft: Pick<DraftHandle, "afterSend" | "setText" | "setAttachments">;
+  restoreCall: (target: MentionTarget) => void;
+  restoreLater: (message: ScheduledMessage) => void;
+  focus: () => void;
+}): Promise<void> {
+  if (!await box.cancel(message.id)) return;
+  await box.draft.afterSend();
+  box.draft.setText((current) => joinDraftText(message.text, current));
+  box.draft.setAttachments((current) => mergeAttachments(attachmentsFromPaths(message.attachments), current));
+  if (message.agent) {
+    box.restoreCall({
+      agent: message.agent,
+      executorId: message.executorId,
+      model: message.model,
+      reasoningEffort: message.reasoningEffort,
+    });
+  }
+  box.restoreLater(message);
+  box.focus();
 }

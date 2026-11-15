@@ -57,7 +57,7 @@ function RevealButton({ label, tip: tipText, busy, spinning, onClick, className,
   </>;
 }
 
-export function ScheduledMessageRow({ message, busy, steering, open, bodyId, tasks, onToggle, onSteer, onWithdraw, onCancel, onSendNow }: {
+export function ScheduledMessageRow({ message, busy, steering, open, bodyId, tasks, onToggle, onSteer, onWithdraw, onCancel, onSendNow, onOpenTask }: {
   message: ScheduledMessage;
   busy: boolean;
   steering: boolean;
@@ -71,6 +71,8 @@ export function ScheduledMessageRow({ message, busy, steering, open, bodyId, tas
   /** 哨兵那一行的叉:由托盘先弹确认框,这里只报「想取消哪条」。 */
   onCancel?: (messageId: string) => void;
   onSendNow?: (messageId: string) => void;
+  /** 「某某名下已全部停下」那一格点得过去：到那一条里按接着跑。 */
+  onOpenTask?: (taskId: string) => void;
 }) {
   const displayText = scheduledMessageText(message);
   // 哨兵口径(「取消这次唤醒」、「不执行停止哨兵操作」)只许落在真哨兵上,判据与后端同源,见 scheduledMessageSource。
@@ -78,6 +80,7 @@ export function ScheduledMessageRow({ message, busy, steering, open, bodyId, tas
   const exitCode = scheduledMessageExitCode(message);
   const attention = exitCode !== null && exitCode !== 0;
   const when = scheduledMessageWhen(message, tasks);
+  const heldBy = message.mode === "queued" && message.wait?.kind === "dispatchHeld" ? message.wait.by : null;
   const whenSpoken = message.mode === "queued" ? "排队中" : message.mode === "timed" ? formatInstant(message.sendAt) : when.text;
   return <div className={`scheduled-message-item${busy ? " is-busy" : ""}`} data-message-id={message.id}>
     <div className="scheduled-message-row">
@@ -89,7 +92,10 @@ export function ScheduledMessageRow({ message, busy, steering, open, bodyId, tas
         {scheduledMessageLabel(message)}
       </button>
       {/* 说不出在等什么也占着这一格:四格对成列,少一格后面的键就错到这一列上来。 */}
-      <span className={`scheduled-message-when${when.stuck ? " is-stuck" : ""}`}>{when.text}</span>
+      {heldBy && onOpenTask
+        ? <button type="button" className="scheduled-message-when is-link" aria-label={`${when.text}：打开「${heldBy.title || "未命名任务"}」`}
+          onClick={() => onOpenTask(heldBy.id)}>{when.text}</button>
+        : <span className={`scheduled-message-when${when.stuck ? " is-stuck" : ""}`}>{when.text}</span>}
       <span className="scheduled-message-actions">
         {source === "mine" && message.steerable === true && onSteer
           && <SteerButton message={message} busy={busy} steering={steering} onSteer={onSteer} />}

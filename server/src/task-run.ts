@@ -32,7 +32,7 @@ import { reopenAcceptedStage } from "./task-stage.js";
 import { reviewProtocolFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
 import { recordTurnStart } from "./turn-output.js";
-import { abortFrozen, freezeFacts, takeFreeze } from "./turn-freeze.js";
+import { abortFrozen, freezeFacts, startGuard, takeFreeze, type StartOrigin } from "./turn-freeze.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
 import { interruptCliGoal, preflightCliGoalCommand, prepareCliInvocation } from "./task-cli-state.js";
@@ -65,15 +65,20 @@ export async function runTask(
   taskId: string,
   // turnHeld:入口占下的那把锁的**身份**(不是 true)—— 接管与释放都按它核,理由见
   // continueTask 同名选项与 turn-lock.ts 的 `endOwnTurn`。
-  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null } = {},
+  // origin:这一次起跑是谁要的,必填 —— 末端那道闸照它定查多少(turn-freeze.ts StartOrigin)。
+  opts: RunTaskOptions,
 ): Promise<void> {
+  // server/scripts 里的老用例不过 tsc、有的不带参数直调:缺省按改造前的口径(不复查)。
+  const given: RunTaskOptions = opts ?? { origin: "user" };
   // 起跑前那几次读库(检查点恢复、任务头)抛错时,入口交来的锁也得还(见 withHeldTurn)。
-  return withHeldTurn(taskId, opts.turnHeld, () => runHeldTask(taskId, opts));
+  return withHeldTurn(taskId, given.turnHeld, () => runHeldTask(taskId, given));
 }
+
+export type RunTaskOptions = { turnHeld?: TurnIdentity | null; origin: StartOrigin; actingUserId?: string | null };
 
 async function runHeldTask(
   taskId: string,
-  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null },
+  opts: RunTaskOptions,
 ): Promise<void> {
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) {
@@ -157,7 +162,7 @@ async function runHeldTask(
       .where(eq(tasks.id, taskId));
     }, { behavior: "immediate" });
     // 跟 orchestrator 起一轮同一条规矩:令牌落库处顺手绑到内存里这一轮的身份上。
-    bindTurnToken(taskId, turnToken);
+    bindTurnToken(taskId, turnToken, invocationAgent);
     // 执行回合开跑：被裁定闸按住的那次预约触发随之作废（见 free-review-reservations.ts
     // `forgetHeldTrigger` ①；与 orchestrator 续跑那一处对称）。
     await forgetHeldTrigger(taskId);
@@ -238,7 +243,7 @@ async function runHeldTask(
     // 启动末段的顺序是**定死的**:查冻结事实(最后一个 await)→ 同步定论 → spawn。内存里的
     // 停止标记必须留到**同步段**消费。消费早了,之后到的停止既杀不到(还没 trackRun)也拦不住
     // (闸已经过了)—— 第 3 轮审查 P2 就是这么开出来的窗口。
-    const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
+    const frozen = await freezeFacts(taskId, startGuard(opts.origin ?? "user"));
     // ↓ 这里往下到 spawn 全同步(撤回那条岔路除外,它不起进程)。
     const freeze = takeFreeze(taskId, frozen);
     if (freeze) await abortFrozen(taskId, freeze);

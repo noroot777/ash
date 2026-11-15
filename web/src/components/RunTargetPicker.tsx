@@ -44,6 +44,7 @@ export function RunTargetPicker({
   effortFollowLabel,
   tail,
   agentExtra,
+  agentSegment,
   onCommit,
   onEffortChange,
 }: {
@@ -76,6 +77,8 @@ export function RunTargetPicker({
   tail?: ReactNode;
   /** 点开智能体那一段，列表下面多出的一行（回复框里「派出去的活交给谁」）。 */
   agentExtra?: ReactNode;
+  /** 顶替第一段（智能体）的那一段：回复框里讨论时是「和谁」，点开多选（task-detail/ReplyDiscussSegments.tsx）。 */
+  agentSegment?: ReactNode;
   onCommit: (next: AgentModelSelection) => void;
   /** 不传就只画前两段——讨论者那种服务端根本不收智能水平的表面。 */
   onEffortChange?: (effort: string) => void;
@@ -111,7 +114,7 @@ export function RunTargetPicker({
 
   return (
     <div className={shell} role="group" aria-label={label}>
-      <button
+      {agentSegment ?? <button
         ref={agentRef}
         type="button"
         className="run-target-seg run-target-seg--agent"
@@ -128,7 +131,7 @@ export function RunTargetPicker({
         {/* 执行器名是「选了哪个模型」的结果，挤在对话框底部那排时先让位给模型本身。 */}
         {selection && profile && variant === "field" && <span>{profile.name}</span>}
         <CaretDown size={9} weight="bold" className="run-target-caret" aria-hidden="true" />
-      </button>
+      </button>}
 
       <button
         ref={modelRef}

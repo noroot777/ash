@@ -284,6 +284,8 @@ async function initializeServer() {
     // 驳回后的辩论同理：`running` 落库，而推进它的投递链只活在内存里（见 free-review-debate.ts）。
     const { reconcileFreeReviewDebates } = await import("./free-review-debate.js");
     await reconcileFreeReviewDebates().catch((err) => console.error("[ash] 审查辩论对账失败（不影响启动）:", err));
+    const { reconcileDiscussions } = await import("./discussion.js");
+    await reconcileDiscussions().catch((err) => console.error("[ash] 讨论对账失败（不影响启动）:", err));
     // 裁定已落账、预约还没来得及当场兑现就重启了的那几条（见 free-review-ruling-release.ts）。
     // 排在审查对账之后：它要先看清哪些审查链还在 reviewing。
     const { releaseHeldReservations } = await import("./free-review-ruling-release.js");

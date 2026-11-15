@@ -131,6 +131,8 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   originTaskId: r.originTaskId ?? null,
   creationOrigin: parseTaskCreationOrigin(r.creationOrigin),
   dispatchedBy: r.dispatchedBy ?? null,
+  dispatchHoldAt: r.dispatchHoldAt ?? null,
+  dispatchHoldPendingAt: r.dispatchHoldPendingAt ?? null,
   resumePrompt: r.resumePrompt ?? null,
   verifyRound: r.verifyRound ?? null,
   question: r.question ?? null,

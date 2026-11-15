@@ -467,5 +467,15 @@ assert.ok(
   mobileRow.indexOf("审查会话 · 自动投递") < mobileRow.indexOf("void withdraw(m)"),
   "撤回与丢弃必须落在 sessionRole 为空的那个分支里",
 );
+// 「某某名下已全部停下」那一格：给了 onOpenTask 就是一颗键，点过去打开那一条；没给只是一句话。
+{
+  const held = { ...row("held", "停着时排的", "2026-10-24T10:00:00.000Z"),
+    wait: { kind: "dispatchHeld", by: { id: "H", title: "派活的那条" } } } as ScheduledMessage;
+  const opened: string[] = [];
+  const markup = renderTray([held], { defaultExpanded: true, onOpenTask: (taskId) => opened.push(taskId) });
+  assert.match(rowOf(markup, "停着时排的"), /<button type="button" class="scheduled-message-when is-link" aria-label="「派活的那条」名下已全部停下，接着跑后发送：打开「派活的那条」">/,
+    "被谁停下那一格点得过去");
+  assert.doesNotMatch(rowOf(renderTray([held], { defaultExpanded: true }), "停着时排的"), /is-link/, "没给去处就不是键");
+}
 console.log("✓ 撤回回填、发送减法、附件丢失防线、审查会话答复只读、哨兵事件只许取消、"
-  + "非哨兵 origin 不套哨兵口径、引导按钮位置、错误失效与窄托盘降级均受回归保护");
+  + "非哨兵 origin 不套哨兵口径、引导按钮位置、错误失效、窄托盘降级与「名下已全部停下」可点均受回归保护");

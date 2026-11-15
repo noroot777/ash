@@ -156,7 +156,7 @@ button.turn-footnote-part:focus-visible { outline: 2px solid var(--focus-ring); 
   white-space: pre-wrap;
   animation: notice-unfold var(--dur-2) var(--ease-out) backwards;
 }
-/* 一轮审查就地摊开（审查结论气泡、记录里那一条，没有右侧「审查」格可去时）。 */
+/* 一轮审查就地摊开（审查结论气泡、记录里那一条，没有右侧「审议」格可去时）。 */
 .turn-footnote-lane {
   margin: 6px 0 12px;
   border-left: 1px solid var(--line2);
