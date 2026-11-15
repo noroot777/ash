@@ -136,9 +136,10 @@ function useLaneReport(taskId: string | undefined, lane: ConversationReviewLane)
   const drawer = useLeftDrawer();
   const [dialog, setDialog] = useState<ReviewFileTarget | null>(null);
   const report = lane.reportAvailable && lane.report && taskId ? lane.report : null;
-  if (!report || !taskId) return { open: null, active: false, dialog: null };
+  if (!report || !taskId) return { open: null, active: undefined, dialog: null };
   const entry = drawer ? laneReportEntry(taskId, report) : null;
-  const active = !!entry && drawer?.activeKey === entry.key;
+  // 只有开的是左侧那一屉才谈得上「按下」；退回居中阅读层时这颗键只是打开它。
+  const active = entry ? drawer?.activeKey === entry.key : undefined;
   return {
     open: () => {
       if (drawer && entry) return active ? drawer.close() : drawer.open(entry);

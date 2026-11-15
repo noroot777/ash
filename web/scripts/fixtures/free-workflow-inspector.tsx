@@ -10,6 +10,7 @@ import { TaskReviewWorkspace } from "../../src/review/TaskReviewWorkspace.tsx";
 import { TaskHeader } from "../../src/task-detail/TaskHeader.tsx";
 import { syncComposerSendKey } from "../../src/lib/sendKey.ts";
 import { PostMergeVariants } from "./free-workflow-post-merge.tsx";
+import { ReadingStage } from "./reading-stage.tsx";
 import "../../src/styles/global.css";
 
 // 附言框里裸回车算不算提交跟着「输入框发送键」那一档走；没学到这一档时裸回车一律换行
@@ -656,15 +657,14 @@ createRoot(document.getElementById("root")!).render(
         <div className="toolbar-waiting-fixture"><FreeWorkflowToolbar task={waitingChatTask} notify={() => undefined} /></div>
         <div className="toolbar-paused-fixture"><FreeWorkflowToolbar task={pausedCheckpointTask} notify={() => undefined} /></div>
       </div>
-      <div style={{ display: "flex", gap: 20, height: 640 }}>
-        <div style={{ flex: 1 }} />
+      <ReadingStage resetKey={task.id}>
         <aside className="inspector-host workflow-inspector-fixture" style={{ width: 380, height: 640 }}>
           <FreeWorkflowInspector task={task} />
         </aside>
         <aside className="inspector-host review-only-fixture" style={{ width: 380, height: 640 }}>
           <FreeReviewPane task={task} onOpenReview={() => undefined} notify={() => undefined} />
         </aside>
-      </div>
+      </ReadingStage>
       <AcceptanceFixture task={acceptanceTask} className="acceptance-fixture" />
       <AcceptanceFixture task={reviewingAcceptanceTask} className="acceptance-blocked-fixture" />
       <PostMergeFixture />

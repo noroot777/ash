@@ -121,6 +121,7 @@ export function recurrenceText(round: FreeReviewRound): string | null {
 
 /** 这一轮的驳回是哪一种：谁不认什么（审查格那一轮下面「驳回」那一段的头）。 */
 export function disputeWho(round: FreeReviewRound): string {
-  return deferOnly(round) ? "执行者说这几条该另开任务改" : "执行者不认这一轮意见";
+  if (deferOnly(round)) return "执行者说这几条该另开任务改";
+  return round.dispute?.deferReason ? "执行者不认其中几条，另几条说该另开任务改" : "执行者不认这一轮意见";
 }
 

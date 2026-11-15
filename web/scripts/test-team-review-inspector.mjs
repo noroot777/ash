@@ -33,7 +33,8 @@ try {
   assert.equal(await page.getByText("2 项已验证 · 3 个审查对象", { exact: true }).count(), 1);
 
   // 抽屉默认不弹，也就不该为任何对象预拉记录。
-  const drawer = page.locator(".review-evidence-drawer");
+  // 读全文那一屉：从左边推出来，跟执行者详情、子智能体那个抽屉同一个位置（LeftDrawer → SideDrawer）。
+  const drawer = page.locator(".side-drawer");
   const asked = () => page.evaluate(() => window.__reviewFetches);
   assert.equal(await drawer.count(), 0, "进来时不该自动弹出审查内容");
   assert.deepEqual(await asked(), [], "没打开就不该请求审查记录");
@@ -43,16 +44,17 @@ try {
   await drawer.waitFor();
   await page.waitForFunction(() => window.__reviewFetches.at(-1) === "w1");
   await drawer.getByText("w1 的验证报告").first().waitFor();
-  assert.equal(await page.locator(".review-evidence-drawer > header b").innerText(), "做搜索");
-  assert.equal(await page.locator(".review-evidence-drawer > header small").innerText(), "审查 · 执行者 1");
+  assert.equal(await drawer.locator(".side-drawer__kind").innerText(), "审查记录");
+  assert.equal(await drawer.locator("header > b").innerText(), "做搜索 · 审查 · 执行者 1");
+  assert.equal(await targets.nth(1).getAttribute("aria-pressed"), "true", "列表里开着的那一行画「按下」");
 
-  // 抽屉贴在侧边栏左边缘，不盖住列表（等滑入动画落定再量）。
+  // 只盖住主区那一栏，侧边栏的列表不被盖住、照样点得着（等滑入动画落定再量）。
   await drawer.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
   const host = await page.locator(".inspector-host").boundingBox();
+  const main = await page.locator(".team-view").boundingBox();
   const box = await drawer.boundingBox();
-  assert.ok(Math.abs(box.x + box.width - host.x) <= 1, `抽屉右边缘该贴着侧边栏左边缘，实测 ${box.x + box.width} vs ${host.x}`);
-  assert.ok(Math.abs(box.height - host.height) <= 1, "抽屉该和侧边栏一样高");
-  assert.equal(box.width, host.width, "抽屉与侧边栏等宽");
+  assert.ok(box.x >= main.x - 1 && box.x + box.width <= host.x + 1, `抽屉收在主区里，实测 ${box.x}～${box.x + box.width} vs 侧边栏 ${host.x}`);
+  assert.ok(Math.abs(box.height - main.height) <= 1, "抽屉和主区一样高");
 
   // 证据截图点开的大图 portal 到 body，DOM 上不在抽屉里：它必须登记进浮层那一摞，
   // 否则点大图会被抽屉读成「点了外面」、Esc 也会连抽屉一起关。
@@ -77,6 +79,11 @@ try {
   await drawer.getByText("w2 的验证报告").first().waitFor();
   assert.equal(await drawer.count(), 1);
 
+  // 再点开着的那一行：收起来。
+  await targets.nth(2).click();
+  await drawer.waitFor({ state: "detached" });
+  await targets.nth(2).click();
+  await drawer.waitFor();
   await page.keyboard.press("Escape");
   await drawer.waitFor({ state: "detached" });
 
