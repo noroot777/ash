@@ -262,7 +262,7 @@ try {
     const family = await acceptFamily(s.parent.id, [view.task, ...view.descendants], acceptTask);
     assert.equal(family.ok, false);
     assert.deepEqual(family.completed, []);
-    assert.match(family.error!, /释放工作区目录（保留分支）/);
+    assert.match(family.error!, /释放目录」（保留分支）/);
     assert.equal(git(s.repo, "rev-parse", s.parentWs.branch!), s.parentCommit);
     const acceptBefore = await acceptTask(s.child.id);
     assert.equal(acceptBefore.accepted, false);
@@ -348,7 +348,7 @@ try {
     const blocked = (await readBranchPlan(s.child.id))!.task;
     assert.equal(blocked.targetTaskId, s.parent.id);
     assert.equal(blocked.startCommit, initial.startCommit);
-    assert.match(blocked.blocker!, /释放工作区目录（保留分支）/);
+    assert.match(blocked.blocker!, /释放目录」（保留分支）/);
     assert.ok(blocked.blocker!.includes(s.parentWs.path));
     const selected = (view: NonNullable<Awaited<ReturnType<typeof readBranchPlan>>>) => [view.task, ...view.descendants];
     const before = selected((await readBranchPlan(s.parent.id))!);
@@ -396,7 +396,7 @@ try {
     const view = (await readBranchPlan(other.id))!;
     assert.equal(view.descendants[0].taskId, s.child.id, "merge target ownership also works outside the base parent");
     assert.equal(view.descendants[0].targetTaskId, other.id);
-    assert.match(view.descendants[0].blocker!, /释放工作区目录/);
+    assert.match(view.descendants[0].blocker!, /释放目录」/);
     assert.match((await branchDeletionBlock(s.repo, other.id))!, /依赖/);
     console.log("✓ retargeting to another task exposes that owner's dependent and protects its branch");
   }
