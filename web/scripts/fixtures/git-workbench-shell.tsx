@@ -58,7 +58,6 @@ api.handoffPeers = async () => [];
 api.settings = async () => ({ ...DEFAULT_APP_SETTINGS });
 api.agents = async () => [];
 api.workflows = async () => [];
-api.teamPresets = async () => [];
 api.projectBranches = async (id) => {
   const state = id === secondProjectId ? secondData : data;
   return {

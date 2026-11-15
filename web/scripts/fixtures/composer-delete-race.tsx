@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Group, GroupMode, ProjectView, Task, TaskListItem, TaskMode } from "@ash/shared";
+import type { Group, GroupMode, ProjectView, Task, TaskListItem } from "@ash/shared";
 import { TaskComposerPanel } from "../../src/composer/TaskComposerPanel.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import { useTasks } from "../../src/lib/useTasks.ts";
@@ -28,7 +28,6 @@ const project: ProjectView = {
 } as unknown as ProjectView;
 
 function Ash() {
-  const [mode, setMode] = useState<TaskMode>("single");
   const { tasks, setTasks, refetch, confirmedDeleteIds } = useTasks();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notices, setNotices] = useState<string[]>([]);
@@ -75,8 +74,6 @@ function Ash() {
           project={project}
           groups={[] as Group[]}
           tasks={tasks}
-          mode={mode}
-          onModeChange={setMode}
           onCancel={() => setComposerOpen(false)}
           onCreated={createTask}
           onTasksSynced={applyTaskSnapshots}

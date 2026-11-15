@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Group, GroupMode, ProjectView, Task, TaskListItem, TaskMode } from "@ash/shared";
+import type { Group, GroupMode, ProjectView, Task, TaskListItem } from "@ash/shared";
 import { TaskComposerPanel } from "../../src/composer/TaskComposerPanel.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import "../../src/styles/global.css";
@@ -36,7 +36,6 @@ const listTasks: TaskListItem[] = [
 ];
 
 function Ash() {
-  const [mode, setMode] = useState<TaskMode>("single");
   const [created, setCreated] = useState<string[]>([]);
   const [notices, setNotices] = useState<string[]>([]);
   // 入队响应带回的全体成员快照(含前驱)是否整批上交(第 5 轮审查)。
@@ -55,8 +54,6 @@ function Ash() {
         project={project}
         groups={[] as Group[]}
         tasks={listTasks}
-        mode={mode}
-        onModeChange={setMode}
         onCancel={() => {}}
         onCreated={(task: Task) => {
           setCreated((current) => [...current, task.title]);

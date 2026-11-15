@@ -87,7 +87,7 @@ function Fixture() {
       <ComposerLaunchControl mode={launch} at="" cron="" busy={false} blocked={null}
         onModeChange={(mode) => { setLaunch(mode); note(`launch:${mode}`); }}
         onAtChange={() => {}} onCronChange={() => {}} onSubmit={() => {}}
-        queueUnavailable="团队任务不支持排队" />
+        unavailable={{ queue: "叫着人时只能创建并运行" }} />
     </section>
 
     <section className="settings-section">

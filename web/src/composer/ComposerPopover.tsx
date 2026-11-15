@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CaretDown, X } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
@@ -43,6 +43,10 @@ export function ComposerPopover({ label, value, trigger, children, wide = false,
   const tip = useHoverTip({ placement: "above" });
   const close = () => setOpen(false);
   useDismissable({ enabled: open, containerRef: panel, restoreFocusRef: anchor, onClose: close });
+  // 入口被禁用时（比如任务已建好、设置锁住了）已经开着的浮层也收起：留着就还能改那些不会生效的设置。
+  useEffect(() => {
+    if (disabled && open) close();
+  }, [disabled, open]);
 
   useLayoutEffect(() => {
     if (!open) return;

@@ -13,11 +13,11 @@ function Ash() {
         round={2}
         maxRounds={4}
         busy={false}
-        linkedTeams={[]}
+        linkedTasks={[]}
         allTasks={[]}
         iterationBusyId={null}
         onGate={async (action: GateAction) => { setGated((current) => [...current, action.kind]); }}
-        onOpenTeam={() => {}}
+        onOpenHandoff={() => {}}
         onOpenTask={() => {}}
         onIterateTeam={() => {}}
       />

@@ -19,7 +19,7 @@ export function replyDispatch({ task, onCreated, notify }: {
   notify: Notify;
 }): Dispatch {
   return async ({ text, attachments, target, worktreeBase }) => {
-    // 带着这场对话到此为止的背景：跟 `/team`、`/duet` 派生同一份带法（taskDerivation.ts）。
+    // 带着这场对话到此为止的背景（taskDerivation.ts）。
     const sessions = await api.sessions(task.id);
     const created = await api.createTask({
       projectId: task.projectId,

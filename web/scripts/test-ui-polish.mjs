@@ -139,7 +139,6 @@ try {
   await render(`
     <section class="notes-panel"><header>随手记</header><div class="notes-body"></div><footer></footer></section>
     <section class="groups-panel"><header>分组</header><div class="groups-panel-body"></div></section>
-    <section class="composer-preset-dialog"><header><span>◇</span><div><h2>保存当前组合</h2></div></header></section>
   `);
   for (const panel of [".notes-panel", ".groups-panel"]) {
     const geometry = await page.locator(panel).evaluate((node) => {
@@ -150,12 +149,6 @@ try {
     assert.ok(Math.abs(geometry.headerHeight - 56) < 1, `${panel} 头部轨道应接近焕新后的 56px：${JSON.stringify(geometry)}`);
     assert.ok(Math.abs(geometry.headerBottom - geometry.bodyTop) < 0.1, `${panel} 头部不应溢出并压住正文：${JSON.stringify(geometry)}`);
   }
-  const presetIcon = await page.locator(".composer-preset-dialog > header > span").evaluate((node) => {
-    const rect = node.getBoundingClientRect();
-    return { width: rect.width, height: rect.height };
-  });
-  assert.ok(Math.abs(presetIcon.width - presetIcon.height) < 0.1, `执行模式弹窗图标应保持正方形：${JSON.stringify(presetIcon)}`);
-  assert.ok(Math.abs(presetIcon.width - 42) < 1, `执行模式弹窗图标应接近 42px：${JSON.stringify(presetIcon)}`);
 
   await page.setViewportSize({ width: 1000, height: 700 });
   // 派审对话框的样式挂在组件上（free-review-dialog.css），不在 global.css 里，这里单独接进来。
