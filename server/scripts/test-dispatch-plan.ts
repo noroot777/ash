@@ -8,9 +8,9 @@
 //   · 派过一次的单子再按一次、拿着旧单子的号来按，都不再建；
 //   · 派出中途写库失败（队列那一笔）：整笔回滚，一条任务、一个分组都不留，单子原样还在；再按还是那样，修好再按只建一批；
 //   · 建好之后的「让人看见」出错（刷新前置视图写库失败）：照派出了报，那一组照常起跑，答复照常送进会话；
-//   · 「欠一次起跑」跟建任务同一笔落库：进程在起跑之前没了，重启补起（recoverDispatchLaunchStarts）；
-//     起组和失败交代都读库失败、起组函数照样「正常」回来时，账不销、退避再起；重启那一扫读库失败也退避再扫；
-//     用户对其中一条按了停止（撤掉「前置站齐就开工」），之后的补起不会替它把请求挂回去；
+//   · 起跑不记派活单自己的账：该开工的几条（同时：每一条；一个接一个：队首）跟建任务同一笔挂上「等齐就起」，
+//     之后全是那一套——同组最多同时四条、腾出名额再起；排在名额后面被停掉的不起、开机补办不挂回；进程没了开机补办照样起；
+//     告诉智能体的是「已交给调度」，不是「已起跑」；
 //   · 「派出去的活交给谁」：派活单上没指明的那几条默认交给它，智能体绕过派活单直接建任务没给执行器时也交给它。
 //
 // 跑的是 PATH 上的假 claude（scheduled-messages-fixture.ts），不起真实 CLI。
@@ -34,7 +34,7 @@ process.env.ASH_ALLOW_REAL_AGENT = "1";
 process.env.ASH_TEST_LEAD_LOG = leadLog;
 process.env.PATH = `${installFakeClaude(root)}${delimiter}${originalPath ?? ""}`;
 
-const [{ db, dbClient, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, question, settle, plan, launch] = await Promise.all([
+const [{ db, ensureSchema }, schema, runs, runRoutes, groupRoutes, taskRoutes, question, settle, plan, launch] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/runs.js"),
@@ -44,12 +44,13 @@ const [{ db, dbClient, ensureSchema }, schema, runs, runRoutes, groupRoutes, tas
   import("../src/task-question.js"),
   import("../src/settle-status.js"),
   import("../src/dispatch-plan.js"),
-  import("../src/dispatch-launch-start.js"),
+  import("../src/prerequisite-launch.js"),
 ]);
 const { DISPATCH_PLAN_RETURNED } = await import("../src/task-question-record.js");
-const { slotsTaken } = await import("../src/launch-slots.js");
-const { dispatchStartDebts, groups, projects, queueItems, sessions, taskPrerequisiteLaunches, taskPrerequisites, tasks } = schema;
+const { groups, projects, queueItems, sessions, taskPrerequisiteLaunches, taskPrerequisites, tasks } = schema;
 await ensureSchema();
+// 派出去之后的起跑全走「等齐就起」那一套：开机那一下挂上事件总线、名额空出来就补放（跟 main.ts 一样）。
+await launch.startPrerequisiteLaunches(60_000);
 const api = new Hono();
 runRoutes.mountTaskRunRoutes(api);
 groupRoutes.mountGroupRoutes(api);
@@ -268,6 +269,7 @@ try {
   assert.equal(serialRecord.answer, "派出这 2 个任务\n一个接一个", "跟单子一样就只说一个接一个");
   await waitFor(() => delivered().includes(serialKids[1]!.id), "续上的会话里没有建好的任务清单");
   await waitFor(() => settled(P), "续上的那一轮没有结算");
+  await waitFor(async () => (await taskOf(serialKids[0]!.id)).status !== "backlog", "队首没有起跑（它那笔请求经队列推进起跑）");
   console.log("✓ 一个接一个：一条队列；没改动时气泡里只有派出几个和怎么排");
 
   // —— 建好之后的「让人看见」出错：刷新已有前置的视图那一笔写库失败。照派出了报，起跑和答复都不受它挡。
@@ -294,139 +296,77 @@ try {
   await waitFor(() => settled(P), "续上的那一轮没有结算");
   console.log("✓ 建好之后刷新视图出错：照派出了报，那一组照常起跑、答复送进会话");
 
-  // —— 欠着的起跑扛得住重启：上一个进程派出了（任务、记录都落了）就没了，重启时补起。
+  // —— 派出去之后，派活单自己不记「起没起」：该开工的那几条各挂一笔「等齐就起」，之后全交给那一套。
+  //    这里的几条任务正文让假 claude 一直跑，直到被停掉，好占住同组名额。
+  const HOLD = "保持运行等待引导";
+  const requestOf = async (id: string) => (await db.select().from(taskPrerequisiteLaunches).where(eq(taskPrerequisiteLaunches.taskId, id))).at(0)?.requestedAt ?? null;
+  const dispatch = async (items: { title: string; body: string; prerequisites?: string[] }[], order: "serial" | "parallel") => {
+    const proposedNow = await propose(P, await inTurn(P), { tasks: items.map((item) => ({ ...item, note: "" })), order });
+    assert.equal(proposedNow.status, 200, JSON.stringify(proposedNow.body));
+    await endTurn(P);
+    const sent = await send("POST", `/tasks/${P}/dispatch-plan/launch`, {
+      planId: proposedNow.body.planId, order,
+      items: items.map((_item, index) => ({ index, target: { agentType: "claude", executorId: null, model: null, reasoningEffort: null } })),
+    });
+    assert.equal(sent.status, 200, JSON.stringify(sent.body));
+    const ids = (sent.body.tasks as { id: string }[]).map((kid) => kid.id);
+    await waitFor(() => delivered().includes(ids.at(-1)!), "答复没有送进会话");
+    await waitFor(() => settled(P), "续上的那一轮没有结算");
+    return { ids, groupId: String(sent.body.groupId) };
+  };
+  const stopAll = async (ids: string[]) => {
+    for (const id of ids) runs.stopTask(id);
+    await waitFor(async () => (await Promise.all(ids.map(settled))).every(Boolean), "停掉的假 CLI 没有收尾");
+  };
+  const running = (ids: string[]) => ids.filter((id) => runs.isRunning(id));
+  assert.ok(delivered().includes("已交给调度"), "告诉智能体的是「交给调度」，不是「已起跑」：可能还在等名额、等前置、排队");
+
+  // 同时派出六条：同组同时最多四条，其余挂着请求等名额；用户停掉排在名额后面的那一条，腾出名额之后它不起，
+  // 开机补办那一扫也不替它挂回去；剩下那一条照常接着起。
+  const six = await dispatch(Array.from({ length: 6 }, (_v, i) => ({ title: `占名额 ${i + 1}`, body: HOLD })), "parallel");
+  await waitFor(() => running(six.ids).length === 4, "没有起满同组四条");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(running(six.ids).length, 4, "同时在跑的不超过同组名额");
+  const behind = six.ids.filter((id) => !runs.isRunning(id));
+  assert.equal(behind.length, 2);
+  assert.ok(await requestOf(behind[0]!) && await requestOf(behind[1]!), "排在名额后面的两条挂着「等齐就起」");
+  const cut = await send("POST", `/tasks/${behind[0]}/stop`);
+  assert.equal(cut.status, 200, JSON.stringify(cut.body));
+  assert.equal(await requestOf(behind[0]!), null, "停止撤掉了那一笔");
+  await stopAll(running(six.ids));
+  await waitFor(() => runs.isRunning(behind[1]!), "腾出名额之后剩下那一条没有接着起");
+  await launch.sweepPrerequisiteLaunches(); // 开机补办那一扫
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(await requestOf(behind[0]!), null, "补办没有替停掉的那条挂回去");
+  assert.equal((await taskOf(behind[0]!)).status, "backlog", "停掉的那条没有被起");
+  await stopAll([behind[1]!]);
+  console.log("✓ 同时派出六条：同组最多四条，腾出名额再起；排在名额后面被停掉的那条不起、补办也不挂回");
+
+  // 重启扛得住：上一个进程把任务和请求都落了库就没了（名额、内存里什么都不剩），开机那一扫照样起。
   const ORPHAN = "dp-orphan";
   await db.insert(groups).values({ id: "dp-orphan-group", projectId, name: "派出：没来得及起跑", mode: "parallel", paused: false, createdAt: at });
   await db.insert(tasks).values(row(ORPHAN, "backlog", { groupId: "dp-orphan-group", dispatchedBy: P }));
-  await db.insert(dispatchStartDebts).values({ taskId: ORPHAN, groupId: "dp-orphan-group", leadTaskId: P, createdAt: at });
-  await launch.recoverDispatchLaunchStarts();
-  await waitFor(async () => (await taskOf(ORPHAN)).status !== "backlog", "重启后没有补起那一组");
+  await db.insert(taskPrerequisiteLaunches).values({ taskId: ORPHAN, requestedAt: at, source: "run", actingUserId: null });
+  await launch.sweepPrerequisiteLaunches();
+  await waitFor(async () => (await taskOf(ORPHAN)).status !== "backlog", "开机补办没有起那一条");
   await waitFor(() => settled(ORPHAN), "补起的那条没有结算");
-  await waitFor(async () => !(await db.select().from(dispatchStartDebts).where(eq(dispatchStartDebts.groupId, "dp-orphan-group"))).length,
-    "那一组那一趟跑完之后记录没有销掉");
-  console.log("✓ 欠着的起跑扛得住重启：补起之后销账");
+  assert.equal(await requestOf(ORPHAN), null, "起了之后那一笔了结");
+  console.log("✓ 派出后进程没了：开机补办照样起，起了就了结");
 
-  // —— 读库抖一下：起组读不到组、失败交代也读不到组，起组函数照样「正常」回来。账不能因此销掉：
-  //    核实还有人欠着就留账，退避再起，下一趟起成了才销。
-  const execute = dbClient.execute.bind(dbClient);
-  const failReads = (pattern: RegExp, times: number) => {
-    let left = times;
-    dbClient.execute = (async (statement: Parameters<typeof execute>[0], ...rest: unknown[]) => {
-      const text = typeof statement === "string" ? statement : statement.sql;
-      if (left > 0 && /^select\b/i.test(text) && pattern.test(text)) {
-        left -= 1;
-        throw new Error("simulated transient read failure");
-      }
-      return (execute as (...args: unknown[]) => ReturnType<typeof execute>)(statement, ...rest);
-    }) as typeof dbClient.execute;
-    return () => left;
-  };
-  const SHAKY = "dp-shaky";
-  await db.insert(groups).values({ id: "dp-shaky-group", projectId, name: "派出：读库抖了一下", mode: "parallel", paused: false, createdAt: at });
-  await db.insert(tasks).values(row(SHAKY, "backlog", { groupId: "dp-shaky-group", dispatchedBy: P }));
-  await db.insert(dispatchStartDebts).values({ taskId: SHAKY, groupId: "dp-shaky-group", leadTaskId: P, createdAt: at });
-  const groupReadsLeft = failReads(/from\s+"groups"\s+where\s+"groups"\."id"/i, 2);
-  try {
-    await launch.startDispatchedGroup("dp-shaky-group");
-    assert.equal(groupReadsLeft(), 0, "起组和失败交代两次读组都撞上了失败");
-  } finally {
-    dbClient.execute = execute;
-  }
-  assert.equal((await taskOf(SHAKY)).status, "backlog", "这一趟确实没起来");
-  assert.equal((await db.select().from(dispatchStartDebts).where(eq(dispatchStartDebts.groupId, "dp-shaky-group"))).length, 1,
-    "起组函数回来了不等于有人接走了起跑：账留着");
-  await waitFor(async () => (await taskOf(SHAKY)).status !== "backlog", "退避之后没有再起");
-  await waitFor(() => settled(SHAKY), "再起的那条没有结算");
-  await waitFor(async () => !(await db.select().from(dispatchStartDebts).where(eq(dispatchStartDebts.groupId, "dp-shaky-group"))).length,
-    "再起成了之后账没有销");
-  console.log("✓ 起组和失败交代都读库失败：账不销，退避再起，起成了才销");
-
-  // —— 重启那一扫读库失败：退避再扫，不是记一句日志就没人管了。
-  const LATE = "dp-late";
-  await db.insert(groups).values({ id: "dp-late-group", projectId, name: "派出：重启那一扫读失败", mode: "parallel", paused: false, createdAt: at });
-  await db.insert(tasks).values(row(LATE, "backlog", { groupId: "dp-late-group", dispatchedBy: P }));
-  await db.insert(dispatchStartDebts).values({ taskId: LATE, groupId: "dp-late-group", leadTaskId: P, createdAt: at });
-  const scanReadsLeft = failReads(/from\s+"dispatch_start_debts"/i, 1);
-  try {
-    await launch.recoverDispatchLaunchStarts();
-    assert.equal(scanReadsLeft(), 0, "那一扫撞上了读失败");
-  } finally {
-    dbClient.execute = execute;
-  }
-  assert.equal((await taskOf(LATE)).status, "backlog");
-  await waitFor(async () => (await taskOf(LATE)).status !== "backlog", "那一扫读失败之后没有再扫");
-  await waitFor(() => settled(LATE), "补起的那条没有结算");
-  await waitFor(async () => !(await db.select().from(dispatchStartDebts)).length, "补起之后账没有销");
-  console.log("✓ 重启那一扫读库失败：退避再扫，照样补起、销账");
-
-  // —— 撤销是终局的：同一批派出的两条，一条在等前置，另一条被重启打断（failed）。用户停掉在等前置的那条之后
-  //    重启补起，不能把「前置站齐就开工」替它挂回去。
-  const [UP, WAITS, CUT] = ["dp-upstream", "dp-waits", "dp-cut"];
-  await db.insert(groups).values({ id: "dp-stop-group", projectId, name: "派出：停掉一条", mode: "parallel", paused: false, createdAt: at });
-  await db.insert(tasks).values([row(UP, "backlog"), row(WAITS, "backlog", { groupId: "dp-stop-group", dispatchedBy: P }),
-    row(CUT, "failed", { groupId: "dp-stop-group", dispatchedBy: P })]);
-  await db.insert(taskPrerequisites).values({ taskId: WAITS, prerequisiteId: UP, createdAt: at });
-  await db.insert(dispatchStartDebts).values([WAITS, CUT].map((taskId) => ({ taskId, groupId: "dp-stop-group", leadTaskId: P, createdAt: at })));
-  const waiting = await send("POST", `/tasks/${WAITS}/run`);
-  assert.equal(waiting.body.waiting, true, `先挂在前置上：${JSON.stringify(waiting.body)}`);
-  const requestOf = async () => (await db.select().from(taskPrerequisiteLaunches).where(eq(taskPrerequisiteLaunches.taskId, WAITS))).at(0)?.requestedAt ?? null;
-  assert.ok(await requestOf());
-  const stopped = await send("POST", `/tasks/${WAITS}/stop`);
-  assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
-  assert.equal(await requestOf(), null, "停止撤掉了开工请求");
-  assert.equal((await db.select().from(dispatchStartDebts).where(eq(dispatchStartDebts.taskId, WAITS))).length, 0, "停止那一下划掉了它那笔派出请求");
-  await launch.recoverDispatchLaunchStarts();
-  await waitFor(async () => !(await db.select().from(dispatchStartDebts).where(eq(dispatchStartDebts.groupId, "dp-stop-group"))).length,
-    "那一组的账没有核清");
+  // 一个接一个：只有队首挂请求，后面的由队列推进；队首有没站稳的前置时等它，不越过去。
+  const UP = "dp-upstream";
+  await db.insert(tasks).values(row(UP, "backlog"));
+  const chain = await dispatch([{ title: "队首等前置", body: HOLD, prerequisites: [UP] }, { title: "排在后面", body: HOLD }], "serial");
+  assert.ok(await requestOf(chain.ids[0]!), "队首挂着请求");
+  assert.equal(await requestOf(chain.ids[1]!), null, "后面的不挂，由队列推进");
   await new Promise((resolve) => setTimeout(resolve, 300));
-  assert.equal(await requestOf(), null, "补起没有替停掉的那条把开工请求挂回去");
-  assert.equal((await taskOf(WAITS)).status, "backlog");
-  assert.equal((await taskOf(CUT)).status, "failed", "被打断判了失败的那条也没被补起");
-  console.log("✓ 停掉在等前置的那条之后重启补起：不替它挂回开工请求，被打断的那条也不重跑");
-
-  // —— 首次派出同样认这一笔：五条一起派出，前四条占满同组名额，第五条（有前置）排在名额后面；用户先运行、再停掉它，
-  //    前四条腾出名额之后，首次那一趟轮到它时也不能把开工请求挂回去。
-  const HOLD = "保持运行等待引导"; // 假 claude 见到这句就一直跑，直到被停掉
-  const seedDispatched = async (groupId: string, count: number) => {
-    await db.insert(groups).values({ id: groupId, projectId, name: groupId, mode: "parallel", paused: false, createdAt: at });
-    const members = Array.from({ length: count }, (_, i) => `${groupId}-${i + 1}`);
-    await db.insert(tasks).values(members.map((id) => row(id, "backlog", { groupId, dispatchedBy: P, body: HOLD })));
-    await db.insert(dispatchStartDebts).values(members.map((taskId) => ({ taskId, groupId, leadTaskId: P, createdAt: at })));
-    return members;
-  };
-  const stopAll = async (members: string[]) => {
-    for (const id of members) runs.stopTask(id);
-    await waitFor(async () => (await Promise.all(members.map(settled))).every(Boolean), "停掉的假 CLI 没有收尾");
-  };
-  const first = await seedDispatched("dp-first", 5);
-  const fifth = first[4]!;
-  await db.insert(taskPrerequisites).values({ taskId: fifth, prerequisiteId: UP, createdAt: at });
-  const firstLaunch = launch.startDispatchedGroup("dp-first");
-  await waitFor(() => first.slice(0, 4).every((id) => runs.isRunning(id)), "前四条没有起跑");
-  assert.equal(slotsTaken("dp-first"), 4, "首次派出占满同组名额");
-  const fifthRequest = async () => (await db.select().from(taskPrerequisiteLaunches).where(eq(taskPrerequisiteLaunches.taskId, fifth))).at(0)?.requestedAt ?? null;
-  assert.equal((await send("POST", `/tasks/${fifth}/run`)).body.waiting, true, "第五条手动运行，挂在前置上");
-  assert.equal((await send("POST", `/tasks/${fifth}/stop`)).status, 200);
-  assert.equal(await fifthRequest(), null);
-  await stopAll(first.slice(0, 4));
-  await firstLaunch;
-  assert.equal(await fifthRequest(), null, "首次那一趟轮到停掉的那条时没有替它把开工请求挂回去");
-  assert.equal((await taskOf(fifth)).status, "backlog");
-  console.log("✓ 首次派出排在名额后面的那条被停掉：轮到它时也不起、不挂回开工请求");
-
-  // —— 补起守同组名额：六条欠着起跑的一起补起，同时在跑的不超过四条，前面的跑完再接着起。
-  const six = await seedDispatched("dp-six", 6);
-  await launch.recoverDispatchLaunchStarts();
-  await waitFor(() => six.filter((id) => runs.isRunning(id)).length === 4, "补起没有起满四条");
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  assert.equal(six.filter((id) => runs.isRunning(id)).length, 4, "同时在跑的不超过同组名额");
-  assert.equal(slotsTaken("dp-six"), 4);
-  const firstFour = six.filter((id) => runs.isRunning(id));
-  await stopAll(firstFour);
-  const rest = six.filter((id) => !firstFour.includes(id));
-  await waitFor(() => rest.every((id) => runs.isRunning(id)), "前四条停下之后剩下的两条没有接着起");
-  await stopAll(rest);
-  console.log("✓ 重启补起六条：同时最多四条，腾出名额再起剩下的");
+  assert.deepEqual(chain.ids.map((id) => runs.isRunning(id)), [false, false], "前置没站稳：队首等着，后面的也不越过去");
+  const chainStop = await send("POST", `/tasks/${chain.ids[0]}/stop`);
+  assert.equal(chainStop.status, 200, JSON.stringify(chainStop.body));
+  assert.equal(await requestOf(chain.ids[0]!), null);
+  await launch.sweepPrerequisiteLaunches();
+  assert.equal(await requestOf(chain.ids[0]!), null, "停掉之后补办不挂回");
+  console.log("✓ 一个接一个：只给队首挂请求，前置没站稳就等；停掉之后补办不挂回");
 } catch (error) {
   failure = error;
   console.error(error);

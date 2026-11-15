@@ -681,7 +681,6 @@ export { handoffPeers, handoffLocalPeerKeys, handoffLocalKeyRevisions } from "./
 export { monitors, monitorReclaimDebts } from "./schema-monitors.js";
 export { taskBackgroundRevisions } from "./schema-task-background.js";
 export { taskPrerequisites, taskPrerequisiteLaunches } from "./schema-prerequisites.js";
-export { dispatchStartDebts } from "./schema-dispatch-launch.js";
 export { taskDiskCleanups } from "./schema-run-disk.js";
 export { regressionChecks } from "./schema-regression-checks.js";
 export { regressionEvidence } from "./schema-regression-evidence.js";

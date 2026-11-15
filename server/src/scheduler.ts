@@ -17,7 +17,6 @@ import { reportGroupStartFailure } from "./group-start-failure.js";
 import { clearQueueAdvanceIntent, recordQueueAdvanceIntent, refuseQueueAdvance } from "./queue-advance-admission.js";
 import { heldByMonitors, withMonitorHolds, type QueueRow } from "./queue-monitor-hold.js";
 import { holdForPrerequisites } from "./prerequisite-launch.js";
-import { holdForPrerequisitesLocked, withPrerequisiteLock } from "./prerequisite-gate.js";
 import { freeSlot, takeSlot, whenSlotFrees } from "./launch-slots.js";
 
 const MAX_PARALLEL = 4;
@@ -379,13 +378,7 @@ export async function queueMembers(queueId: string): Promise<QueueRow[]> {
  */
 export type GroupLaunchRoster = { selected: boolean; owed: Set<string> };
 
-/**
- * 「这一条还要不要起」的额外一问，在开工判定那把前置锁里问（停止键在同一把锁里撤销）。派活单派出的组用它核
- * 「派出去就开工」那一笔还在不在（dispatch-launch-start.ts）：不在了，排在名额后面的这一条轮到时也不起。
- */
-export type GroupLaunchConsent = (taskId: string) => Promise<boolean>;
-
-export async function runGroup(groupId: string, attempted?: GroupLaunchRoster, consent?: GroupLaunchConsent): Promise<void> {
+export async function runGroup(groupId: string, attempted?: GroupLaunchRoster): Promise<void> {
   const group = (await db.select().from(groups).where(eq(groups.id, groupId))).at(0);
   if (!group) throw new Error("group not found");
   if (group.paused) return;
@@ -403,7 +396,7 @@ export async function runGroup(groupId: string, attempted?: GroupLaunchRoster, c
       // 异常:serial group 却没 queue。可能是 group 后来才被设成 serial、
       // 或者迁移漏了。退化按 parallel 跑(用户至少能看见任务在动)。
       console.warn(`[scheduler] serial group ${groupId} 没有 queue,退化按 parallel 启动`);
-      return runParallel(groupId, attempted, consent);
+      return runParallel(groupId, attempted);
     }
     if (queueIds.length > 1) {
       // 违反不变量:同 group 多 queue。打 warn,仍尝试推进每个 queue。
@@ -414,10 +407,10 @@ export async function runGroup(groupId: string, attempted?: GroupLaunchRoster, c
   }
 
   // parallel
-  await runParallel(groupId, attempted, consent);
+  await runParallel(groupId, attempted);
 }
 
-export async function runGroupInBackground(groupId: string, consent?: GroupLaunchConsent): Promise<void> {
+export async function runGroupInBackground(groupId: string): Promise<void> {
   // 失败交代的扇出范围 = **这一轮还欠一次启动的那些成员**(必须修 2 + 第 1 轮审查发现 4)。
   // `runParallel` 一挑出 launchable 就往这个集合里记、一了结就摘掉,所以抛在半路时名单正好
   // 是还没着落的那几位;**还没挑到那一步**就抛(典型:读 group / 读成员那几句撞上数据库占用)
@@ -428,7 +421,7 @@ export async function runGroupInBackground(groupId: string, consent?: GroupLaunc
   // / 推队列)才抛的那一档,名单正该是空的 —— 此刻回头再算一次,等于把一批正在跑的任务重新
   // 算成「没能起跑」。
   const roster: GroupLaunchRoster = { selected: false, owed: new Set() };
-  try { await runGroup(groupId, roster, consent); }
+  try { await runGroup(groupId, roster); }
   catch (error) {
     if (!roster.selected) {
       for (const taskId of await groupLaunchTargets(groupId).catch(() => [])) roster.owed.add(taskId);
@@ -564,7 +557,7 @@ function launchableMembers(groupRows: QueueRow[], inQueue: ReadonlySet<string>):
   );
 }
 
-async function runParallel(groupId: string, attempted?: GroupLaunchRoster, consent?: GroupLaunchConsent): Promise<void> {
+async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Promise<void> {
   const groupRows = await withMonitorHolds(await db.select().from(tasks).where(eq(tasks.groupId, groupId)));
   const items = await db
     .select()
@@ -591,10 +584,7 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster, conse
         if (await preparePendingCheckpointStart(taskId)) return;
         const before = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
         if (!before || (before.status === "paused" && (before.resumePrompt || await heldByMonitors(taskId)))) return;
-        const held = consent
-          ? await withPrerequisiteLock(taskId, async () => await consent(taskId) ? holdForPrerequisitesLocked(taskId, { source: "group" }) : { reason: "已撤销" })
-          : await holdForPrerequisites(before, { source: "group" });
-        if (held) return;
+        if (await holdForPrerequisites(before, { source: "group" })) return;
         const owner = claimOwnTurn(taskId);
         if (!owner) return;
         const reservation = taskQueueReservation(before);

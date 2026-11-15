@@ -1,15 +1,17 @@
-// 派活单「派出去」那一下：按卡上此刻的样子建任务、挂在这条任务名下、起跑，再把建好的清单作为答复
+// 派活单「派出去」那一下：按卡上此刻的样子建任务、挂在这条任务名下、交给调度，再把建好的清单作为答复
 // 续上这条任务的会话。
 //
 // 一张单至多建一批，建了就一定有人去跑、有人把清单送回会话。所以「欠着的事」跟建任务同一笔提交
 // （createTasks 的 `atomic`）：认领那一问、分组、任务、前置、串行队列，加上
 //   · 答复：写成一条待发送消息（执行型，带答复身份），由待发送托盘送进会话——它本来就扛重启、扛「回合被
 //     占着」「同队前项还在跑」，这里不再自己 continueTask；
-//   · 起跑：dispatch_start_debts 每条任务一行，核实起了才销、用户按停就划掉，进程没了重启逐条补起（dispatch-launch-start.ts）。
+//   · 起跑：派活单不记自己的账、也没有自己的起跑入口。该开工的那几条（同时：每一条；一个接一个：队首，后面的由
+//     队列推进）各挂一笔「等齐就起」（task_prerequisite_launches.requested_at，prerequisite-launch.ts）——没有
+//     前置就是零条、立刻就齐。放行、同组名额、停止撤回、重启补办全是那一套。
 // 任何一步失败整笔回滚：单子原样还在，一条任务都没留下，再按一次不会多建；认领落空同样整笔不落。所以没有
 // 「失败了把单子挂回去」的补偿写。开工起点这类仓库准备在事务之前做，失败时还没认领。
 //
-// 提交之后剩下的只是「让人看见」和「催一下」（读回、广播、通知派它的任务、前置视图、立刻起跑与投递），
+// 提交之后剩下的只是「让人看见」和「催一下」（读回、广播、通知派它的任务、前置视图、催一下起跑与投递），
 // 每一步各自兜底、互不挡路：任何一步抛错都不改变「已经派出」这个结果，也不挡后面的起跑。
 import type { Context } from "hono";
 import type { DispatchPlan, DispatchPlanItem, DispatchRunTarget } from "@ash/shared/dispatch-plan";
@@ -17,13 +19,13 @@ import { dispatchDefaultTarget, parseDispatchTarget } from "@ash/shared/dispatch
 import type { QuestionRecord } from "@ash/shared/questions";
 import { nanoid } from "nanoid";
 import { db } from "./db/index.js";
-import { agents, dispatchStartDebts, groups, queueItems, scheduledMessages } from "./db/schema.js";
+import { agents, groups, queueItems, scheduledMessages, taskPrerequisiteLaunches } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { visibleTaskIds } from "./auth/visibility.js";
 import { batchPrerequisiteEdges } from "./prerequisite-routes.js";
 import { republishPrerequisiteView } from "./prerequisite-view.js";
-import { startDispatchedGroup } from "./dispatch-launch-start.js";
+import { sweepPrerequisiteLaunches } from "./prerequisite-launch.js";
 import { answerRouteFor } from "./task-answer.js";
 import { claimQuestionAnswerWithin, type QuestionClaim } from "./task-question-record.js";
 import { deliverPendingMessages, pendingMessageRow, publishPendingMessages } from "./pending-messages.js";
@@ -125,7 +127,8 @@ export async function launchDispatchPlan(c: Context, task: TaskRow, plan: Dispat
           await transaction.insert(queueItems).values(ids.map((taskId, position) => ({ taskId, queueId, position, createdAt: at })));
         }
         await transaction.insert(scheduledMessages).values(answer);
-        await transaction.insert(dispatchStartDebts).values(ids.map((taskId) => ({ taskId, groupId, leadTaskId: task.id, createdAt: at })));
+        const starters = groupMode === "serial" ? ids.slice(0, 1) : ids;
+        await transaction.insert(taskPrerequisiteLaunches).values(starters.map((taskId) => ({ taskId, requestedAt: at, source: "run", actingUserId: owner })));
       },
       onCommitted: () => { committed = true; },
     });
@@ -138,8 +141,7 @@ export async function launchDispatchPlan(c: Context, task: TaskRow, plan: Dispat
     console.error(`[ash] 派活单已派出，读回或广播新任务时出错 ${task.id}:`, error);
   }
 
-  // —— 提交之后：先起跑（它不等任何「让人看见」的事），其余各自兜底。
-  void startDispatchedGroup(groupId);
+  // —— 提交之后：只剩「让人看见」和「催一下」，各自兜底。
   const settle = (what: string, work: () => unknown) => {
     try {
       void Promise.resolve(work()).catch((error) => console.error(`[ash] 派活单已派出，${what}出错 ${task.id}:`, error));
@@ -153,6 +155,8 @@ export async function launchDispatchPlan(c: Context, task: TaskRow, plan: Dispat
   }));
   settle("送答复", () => { publishPendingMessages(task.id); return deliverPendingMessages(task.id); });
   if (prerequisites.existing.length) settle("刷新前置视图", () => republishPrerequisiteView(prerequisites.existing));
+  // 不等下一次扫描：挂着的请求当场判一遍，齐了、有名额的就起（错过了还有开机补办和每分钟那一扫）。
+  settle("催起跑", () => sweepPrerequisiteLaunches());
   return {
     status: 200,
     body: { launched: true, answered: true, groupId, record, tasks: launched.map(({ id: taskId, title }) => ({ id: taskId, title })) },
