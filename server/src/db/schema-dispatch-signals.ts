@@ -11,7 +11,9 @@
 //
 // 写入用触发器，不在各条路上逐个记：提问有 ask_question、工作流「问我一句」、续聊回合里提的问；
 // 失败有结算、启动对账、手改状态……漏一条就少一颗气泡。触发器跟那一笔状态改动在同一条语句里落库，
-// 状态变了就一定有这一行。失败原因要等结算说得出来才知道，由结算之后补上（../dispatch-signals.ts）。
+// 状态变了就一定有这一行。失败原因由落位那一笔在同一个事务里写进刚插入的这一行（status.ts 的
+// failedBecause）；「答过了」由答复那一笔在同一个事务里写（task-question-record.ts）—— 两件事都跟
+// 它们说的那一笔改动同生共死，不在事后按「最新一行」去猜是哪一次。
 //
 // 只往上冒一层：记的是这条任务**自己的** dispatched_by，再往上那一层看不见它。
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
@@ -35,6 +37,8 @@ export const dispatchSignals = sqliteTable(
     questionItems: text("question_items"),
     /** 失败的原因（一句人话），结算之后补。 */
     reason: text("reason"),
+    /** 这一问被答复的时刻（不管在哪答的）；撤下、改问而没答的一直空着。 */
+    answeredAt: text("answered_at"),
     /** 在派它的那条任务里答的：那条问答记录（json QuestionRecord）。在别处答的不记 —— 气泡只说「答过了」。 */
     answer: text("answer"),
   },
@@ -50,7 +54,7 @@ export async function ensureDispatchSignalSchema(client: Client): Promise<void> 
     CREATE TABLE IF NOT EXISTS dispatch_signals (
       seq INTEGER PRIMARY KEY AUTOINCREMENT,
       dispatcher_id TEXT NOT NULL, task_id TEXT NOT NULL, kind TEXT NOT NULL, occurred_at TEXT NOT NULL,
-      question TEXT, question_options TEXT, question_items TEXT, reason TEXT, answer TEXT
+      question TEXT, question_options TEXT, question_items TEXT, reason TEXT, answered_at TEXT, answer TEXT
     );
     CREATE INDEX IF NOT EXISTS dispatch_signals_dispatcher_idx ON dispatch_signals (dispatcher_id, seq);
     CREATE INDEX IF NOT EXISTS dispatch_signals_task_idx ON dispatch_signals (task_id, seq);
@@ -75,6 +79,14 @@ export async function ensureDispatchSignalSchema(client: Client): Promise<void> 
       DELETE FROM dispatch_signals WHERE task_id = OLD.id OR dispatcher_id = OLD.id;
     END;
   `);
+  // 早一版的表没有 answered_at：补上，在这里答过的那几行按答复记录里的时刻补。
+  const columns = await client.execute("PRAGMA table_info(dispatch_signals)");
+  if (!columns.rows.some((row) => row.name === "answered_at")) {
+    await client.executeMultiple(`
+      ALTER TABLE dispatch_signals ADD COLUMN answered_at TEXT;
+      UPDATE dispatch_signals SET answered_at = json_extract(answer, '$.answeredAt') WHERE answer IS NOT NULL;
+    `);
+  }
 }
 
 /**

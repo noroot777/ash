@@ -85,15 +85,21 @@ export function dispatchFeed(signals: readonly DispatchSignal[], tasks: readonly
 
 /**
  * 回复框那一格此刻轮到谁：这条任务自己在问就先答它自己的；否则名下派出的任务里在问的那几条，
- * 按提问先后一次一张（提问时刻取记录里最近那一问，记录还没读到就用任务最后改动的时刻）。
+ * 按提问先后一次一张：两条都有记录就按记录的序号（同一毫秒里一起来是常态，时刻分不出先后）；
+ * 记录还没读到的那条按任务最后改动的时刻比，再分不出按派出的先后。
  * 只看直接派出的那一层：再往下一层的提问冒在它自己的上一层。
  */
 export function askingOrder(host: TaskListItem, dispatched: readonly TaskListItem[], signals: readonly DispatchSignal[]): TaskListItem[] {
   const latest = latestQuestions(signals);
   const askedAt = (task: TaskListItem) => latest.get(task.id)?.at ?? task.updatedAt;
+  const bySeq = (a: TaskListItem, b: TaskListItem) => {
+    const left = latest.get(a.id)?.seq;
+    const right = latest.get(b.id)?.seq;
+    return left !== undefined && right !== undefined ? left - right : null;
+  };
   const children = dispatched
     .filter((task) => task.id !== host.id && !!task.question && !task.archived)
-    .sort((a, b) => askedAt(a).localeCompare(askedAt(b)) || a.createdAt.localeCompare(b.createdAt));
+    .sort((a, b) => bySeq(a, b) ?? (askedAt(a).localeCompare(askedAt(b)) || a.createdAt.localeCompare(b.createdAt)));
   return host.question ? [host, ...children] : children;
 }
 

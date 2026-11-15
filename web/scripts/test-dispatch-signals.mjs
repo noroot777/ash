@@ -57,6 +57,10 @@ assert.equal(headSentence(null), "");
   assert.deepEqual(ids(askingOrder(host, [early, late], [])), ["kid-late", "kid-early"], "记录还没读到：按任务最后改动的时刻");
   assert.deepEqual(ids(askingOrder({ ...host, question: "自己的" }, [early, late], signals)), ["lead", "kid-late", "kid-early"], "自己在问先答自己");
   assert.deepEqual(ids(askingOrder(host, [quiet], signals)), [], "没人在问");
+  // 同一毫秒里一起来（一批派出去的同时问）：时刻分不出先后，按记录的序号 —— 后派出的那条先问的，它先上。
+  const sameMs = [question(7, "kid-late", 40), question(8, "kid-early", 40)];
+  assert.deepEqual(ids(askingOrder(host, [early, late], sameMs)), ["kid-late", "kid-early"], "同一时刻按记录序号，不按派出的先后");
+  assert.deepEqual(ids(askingOrder(host, [late, early], [question(9, "kid-early", 40), question(10, "kid-late", 40)])), ["kid-early", "kid-late"]);
   assert.notEqual(dispatchedSignature([late]), dispatchedSignature([{ ...late, question: null }]), "撤下一问也要重读");
   assert.notEqual(dispatchedSignature([quiet]), dispatchedSignature([{ ...quiet, status: "failed" }]), "失败了也要重读");
 }

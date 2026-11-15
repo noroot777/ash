@@ -15,7 +15,6 @@ import { claimQuestionAnswer, prepareQuestionRecord } from "./task-question-reco
 import { queueReviewAnswer } from "./review-continuation.js";
 import { ReviewSuperseded } from "./review-ownership.js";
 import { questionWaitOrigin } from "./task-wait-ownership.js";
-import { noteAnsweredFromDispatcher } from "./dispatch-signals.js";
 
 export type TaskAnswerBody = QuestionAnswerInput & {
   answer?: string;
@@ -72,7 +71,7 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
     if (!await claimQuestionAnswer(task, record, async (transaction) => {
       reviewQueued = await queueReviewAnswer(transaction, task,
         pendingMessageRow({ taskId, text: answerText, ...attachments, ...route, ownerUserId: acting, answerId: record.id }));
-    })) return c.json({ error: "问题已更新或已被答复，本次未投递，请刷新后查看" }, 409);
+    }, typeof b.via === "string" ? b.via : undefined)) return c.json({ error: "问题已更新或已被答复，本次未投递，请刷新后查看" }, 409);
   } catch (error) {
     if (error instanceof ReviewSuperseded) {
       await (await import("./regression-settlement.js")).reconcileRegressionSettlements(taskId)
@@ -82,10 +81,6 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
     throw error;
   }
   bus.publish({ type: "task.question", taskId, updatedAt: record.answeredAt, question: null, questionOptions: null, questionItems: null, answeredQuestion: record });
-  if (b.via && b.via === task.dispatchedBy) {
-    await noteAnsweredFromDispatcher(task, record)
-      .catch((error) => console.error(`[ash] 记下在派它的任务里答的 ${taskId} 失败:`, error));
-  }
   if (reviewQueued) {
     publishPendingMessages(taskId);
     void deliverPendingMessages(taskId).catch((error) => console.error(`[ash] 审查答复待投递 ${taskId}:`, error));

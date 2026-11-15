@@ -31,7 +31,7 @@ function useSignals(taskId: string, dispatched: readonly TaskListItem[]): Dispat
   ), taskId);
   useEffect(() => { void catchUp.run(); }, [catchUp]);
   const connected = useServerEvents((event) => {
-    if (event.type === "task.dispatchSignals" && event.dispatcherId === taskId) void catchUp.run();
+    if (event.type === "task.dispatchSignals" && event.taskId === taskId) void catchUp.run();
   });
   useCatchUpLink(catchUp, connected);
   // 名下那几条变了样：来问的那一行跟着那一笔落库，答没答过也要重新认一遍。
