@@ -262,6 +262,43 @@ try {
     await deduped.page.close();
   }
 
+  // 删除不可逆，不管删除是从哪一路来的：这里它经调用方的快照到达（墓碑），下一份快照是不带问答历史的
+  // 列表投影，删除之前发出的那发旧读取这时才落地——删掉的答复不能回来。任务页、团队页一样。
+  for (const mode of ["", "mode=team&"]) {
+    const where = mode ? "团队页" : "任务页";
+    let releaseStale;
+    const stale = new Promise((resolve) => { releaseStale = resolve; });
+    pending.push(() => releaseStale({ json: [] }));
+    const removed = await open(`${mode}history=seed`, { respond: async () => stale });
+    await waitForCalls(removed, 1);
+    await count(removed.page, 1);
+    await removed.page.getByRole("button", { name: "快照里删掉" }).click();
+    await count(removed.page, 0);
+    await removed.page.getByRole("button", { name: "去掉快照" }).click();
+    releaseStale({ json: [record("seed")] });
+    await fetchesSettled(removed.page, 0, `${where}：删除之前那发旧读取已落地`);
+    assert.equal(await removed.page.locator(".task-question-record").count(), 0, `${where}：快照里删掉的答复不能被迟到的旧读取复活`);
+    await removed.page.close();
+  }
+
+  // 首次补读按任务算：A 连上过、读到过，事件流随后断了（普通请求还通），这时切到 B、再切回 A——
+  // 每一次都得自己补读一次，不能因为「之前连上过」就不读。任务页、团队页一样。
+  for (const mode of ["", "mode=team&"]) {
+    const where = mode ? "团队页" : "任务页";
+    const offline = await open(mode, { respond: async (path) => ({ json: [record(path.includes("history-b/") ? "task-b" : "task-a")] }) });
+    await waitForCalls(offline, 1);
+    await count(offline.page, 1);
+    await sse(offline.page, "error");
+    await offline.page.getByRole("button", { name: "切换任务" }).click();
+    await waitForCalls(offline, 2);
+    await waitUntil(async () => /task-b的问题/.test(await offline.page.locator("main").textContent()), `${where}：断线时切到 B，B 自己补读到`);
+    await offline.page.getByRole("button", { name: "切回任务" }).click();
+    await waitForCalls(offline, 3);
+    await waitUntil(async () => /task-a的问题/.test(await offline.page.locator("main").textContent()), `${where}：断线时切回 A，A 这一次照样补读`);
+    assert.equal(await offline.page.locator(".task-question-record").count(), 1);
+    await offline.page.close();
+  }
+
   const snapshot = await open("mode=snapshot&history=seed");
   await count(snapshot.page, 1);
   assert.equal(await snapshot.page.evaluate(() => window.__sources.length), 0, "远端快照不订阅本地事件");
@@ -269,7 +306,7 @@ try {
   await snapshot.page.close();
 
   assert.deepEqual(failures, []);
-  console.log("question history DOM: seeded history, remount recovery, live receipts, single initial load, reconnect, stale responses, switching, retry/SSE recovery, settle-note dedupe on the merged history, snapshot passed (the answer card itself: test-question-card-dom)");
+  console.log("question history DOM: seeded history, remount recovery, live receipts, single initial load, reconnect, stale responses, switching, retry/SSE recovery, settle-note dedupe on the merged history, snapshot tombstones kept, per-task first catch-up while disconnected, snapshot passed (the answer card itself: test-question-card-dom)");
 } finally {
   pending.forEach((release) => release());
   await browser?.close();

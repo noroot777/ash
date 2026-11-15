@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { QuestionRecord } from "@ash/shared/questions";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
-import { catchUpAbortKind } from "../lib/catchUp.ts";
+import { catchUpAbortKind, type CatchUp } from "../lib/catchUp.ts";
 import { useCatchUp, useCatchUpLink } from "../lib/useCatchUp.ts";
 
 export type QuestionHistoryState = { records: QuestionRecord[]; error?: string; retry?: () => void };
@@ -34,12 +34,22 @@ function mergeRecords(left: QuestionRecord[], right: QuestionRecord[]): Question
  * 不给 `live` 时：没有快照才自己去读。
  */
 export function useQuestionHistory(taskId: string, history?: QuestionRecord[], live = history === undefined): QuestionHistoryState {
-  // 读到的、推来的记在这里，并且记着是哪个任务的：换了任务，上一个任务的那份一条都不能混进来。
-  const [state, setState] = useState<{ taskId: string; records: QuestionRecord[]; error?: string }>({ taskId, records: NONE });
+  // 调用方给的快照、读到的、推来的，三路都累计在这里，并且记着是哪个任务的：换了任务，上一个任务的
+  // 那份一条都不能混进来。快照也必须累计进来，不能只在渲染时临时并一下——列表刷新给的任务投影不带
+  // 问答历史（server task-store 的 toTaskListItem），快照里那块墓碑要是只活在当次渲染，下一份不带
+  // 历史的快照一到它就没了，删除之前发出的那发旧读取一落地，删掉的答复又回来了。
+  const [state, setState] = useState<{ taskId: string; records: QuestionRecord[]; error?: string }>(
+    () => ({ taskId, records: history ?? NONE }),
+  );
   const own = (current: { taskId: string; records: QuestionRecord[] }) => current.taskId === taskId ? current.records : NONE;
-  // 连上过没有。连上过之后就不再走那条「没连上时延迟兜底读一次」的路 —— 断线期间读也读
-  // 不到,而追平那一层会自己重试到读到。
-  const connectedOnce = useRef(false);
+  useEffect(() => {
+    if (live && history !== undefined) setState((current) => ({ taskId, records: mergeRecords(own(current), history) }));
+  }, [taskId, history, live]);
+  // 这一代次连上过没有。连上过之后就不再走那条「没连上时延迟兜底读一次」的路 —— 断线期间读也
+  // 读不到,而追平那一层会自己重试到读到。记在**追平实例**上（它随 taskId 换代）：别的任务、或者
+  // 这个任务上一次被看的时候连上过都不算，断线时切过来，这一次的兜底读取照样要发，否则它的问答
+  // 历史就一直是空的（A→B→A 回到 A 时，累计里早已是 B 的那份）。
+  const connectedFor = useRef<CatchUp | null>(null);
   // 读取、重试、代次都交给追平层(lib/catchUp.ts):这个组件原先自己写了一套 generation +
   // connectedOnce + setTimeout,而读失败不重试、断线也不作废在途那一发(第 5 轮审查 N1 点到
   // 的五处写法之一)。`taskId` 作身份:它一变就是新一代次。
@@ -75,19 +85,20 @@ export function useQuestionHistory(taskId: string, history?: QuestionRecord[], l
   useEffect(() => {
     if (!live) return;
     if (connected) {
-      connectedOnce.current = true;
+      connectedFor.current = catchUp;
       return;
     }
-    if (connectedOnce.current) return;
+    if (connectedFor.current === catchUp) return;
     // 调用方快照可能早于最近一次答复;事件流还没连上时用一次轻量读取补齐。
     const timer = setTimeout(() => { void catchUp.run(); }, 1000);
     return () => clearTimeout(timer);
   }, [catchUp, connected, live]);
   const mine = state.taskId === taskId ? state : null;
-  const fetched = mine?.records ?? NONE;
+  const kept = mine?.records ?? NONE;
+  // 渲染时再并一次手上这份快照：上面那个 effect 把它记进累计之前的那一帧，也已经是它的样子。
   const records = useMemo(
-    () => live ? mergeRecords(fetched, history ?? NONE) : history ?? NONE,
-    [live, fetched, history],
+    () => live ? mergeRecords(kept, history ?? NONE) : history ?? NONE,
+    [live, kept, history],
   );
   return { records, error: live ? mine?.error : undefined, retry: live ? catchUp.runNow : undefined };
 }

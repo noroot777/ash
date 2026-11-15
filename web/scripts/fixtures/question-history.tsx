@@ -35,6 +35,10 @@ function Fixture() {
       <button onClick={() => setMounted((value) => !value)}>挂载切换</button>
       <button onClick={() => { setTaskId("history-b"); setHistory(undefined); }}>切换任务</button>
       <button onClick={() => setHistory([record])}>提供快照</button>
+      {/* 删除经快照到达（删除结果的完整任务），随后列表刷新换成不带问答历史的投影。 */}
+      <button onClick={() => setHistory([{ ...record, answer: "", reply: "", deleted: true }])}>快照里删掉</button>
+      <button onClick={() => setHistory(undefined)}>去掉快照</button>
+      <button onClick={() => { setTaskId("history-a"); setHistory(undefined); }}>切回任务</button>
       <output>{taskId}</output>
     </nav>
     {mounted && (mode === "snapshot"
