@@ -3,7 +3,7 @@ import type { ConversationDebateFeedRow } from "./conversationDebateRows.ts";
 import { conflictContextEvent, isConflictHandoff } from "./systemNoticeModel.ts";
 import { verifyMarkOf } from "./conversationNotes.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
-import { isPreviewLifecycleNotice, noticeView, turnFailureView, type NoticeContext, type NoticeView } from "./timelineNoticeCopy.ts";
+import { isUnshownNotice, noticeView, turnFailureView, type NoticeContext, type NoticeView } from "./timelineNoticeCopy.ts";
 import type { CrashedTurn } from "./turnFailure.ts";
 import { absorbs, noVerdictCauseView, noVerdictPartId, type LaneNoVerdict } from "./reviewNoVerdictCause.ts";
 import { composeFootnote, laneVerdictEvent, laneVerdictView, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
@@ -305,11 +305,11 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
 }
 
 /**
- * 认归属之前就拿掉、哪儿都不出现的：预览开关那几种老记录（见 isPreviewLifecycleNotice），以及
- * 缘由已经写到它起头的回合头上的系统续跑记录（见 turnCause）。
+ * 认归属之前就拿掉、哪儿都不出现的：预览开关那几种老记录、题目另有一处看得见的提问结算说明（见
+ * isUnshownNotice），以及缘由已经写到它起头的回合头上的系统续跑记录（见 turnCause）。
  */
-function shown(item: ConversationItem): boolean {
-  return item.kind !== "event" || (!item.onTurnHead && !isPreviewLifecycleNotice(item.text));
+function shown(item: ConversationItem, onScreen?: ReadonlySet<string>): boolean {
+  return item.kind !== "event" || (!item.onTurnHead && !isUnshownNotice(item.text, onScreen));
 }
 
 export function conversationSystemRows(
@@ -319,10 +319,12 @@ export function conversationSystemRows(
     context?: NoticeContext;
     causes?: ReadonlyMap<string, LaneNoVerdict>;
     held?: ReadonlySet<string>;
+    /** 此刻另有一处看得见的那几道题（questionsOnScreen）。 */
+    onScreen?: ReadonlySet<string>;
   } = {},
 ): ConversationDisplay {
   type Grouped = ConversationDebateFeedRow | ConversationSystemActionRow;
-  const display = attach<Grouped>(groupConflictHandoffs(rows.filter((row) => row.kind !== "item" || shown(row.item))), {
+  const display = attach<Grouped>(groupConflictHandoffs(rows.filter((row) => row.kind !== "item" || shown(row.item, options.onScreen))), {
     turnIdOf: (row) => row.kind === "item" && row.item.kind === "agent" ? row.item.id : null,
     // 辩论分段；还没出结论的那一轮审查不分（它收口以后就是被审那一回合后面那一行结论）。
     breaksSegment: (row) => row.kind === "debate-lane" || row.kind === "system-action" || (row.kind === "item" && row.item.kind === "user"),

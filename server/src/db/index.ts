@@ -16,6 +16,7 @@ import { ensureImSchema } from "./schema-im.js";
 import { ensurePageAnnotationSchema } from "./schema-page-annotation.js";
 import { ensureTaskNoticeSchema } from "./schema-task-notice.js";
 import { ensureTaskReadsSchema } from "./schema-task-reads.js";
+import { ensureAcceptMemorySchema } from "./schema-accept-memory.js";
 import { ensureTaskWritesSchema } from "./schema-task-writes.js";
 import { installTaskActionTriggers } from "./task-action-triggers.js";
 
@@ -390,6 +391,7 @@ export async function ensureSchema() {
   await ensureFreeWorkflowSchema(client);
   await ensureTaskNoticeSchema(client);
   await ensureTaskReadsSchema(client);
+  await ensureAcceptMemorySchema(client);
   await ensureTaskWritesSchema(client);
   await ensureAcceptGateSchema(client);
   await ensureTaskBackgroundSchema(client);

@@ -11,7 +11,7 @@ import type { ConversationItem } from "./conversationModel.ts";
 import { DeleteMessageButton } from "./MessageDelete.tsx";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 import { conflictFiles, isConflictHandoff, systemPromptBody, systemPromptSummary, systemPromptTitle } from "./systemNoticeModel.ts";
-import { isPreviewLifecycleNotice, noticeView, type NoticeView } from "./timelineNoticeCopy.ts";
+import { isUnshownNotice, noticeView, type NoticeView } from "./timelineNoticeCopy.ts";
 import { noticeTail } from "./turnFootnote.ts";
 
 type EventItem = Extract<ConversationItem, { kind: "event" }>;
@@ -36,8 +36,13 @@ export function CommandReply({ item, view }: { item: EventLike; view: NoticeView
  * 一条时间线旁注单独摆成一句（团队时间线上用：那里没有回合尾注可归、也没有「N 条记录」，
  * 所以删除留在这一句上）。长相跟任务会话里的尾注同一种小灰字。
  */
-export function SystemEventNote({ item, action }: { item: EventLike; action?: ReactNode }) {
-  if (isPreviewLifecycleNotice(item.text)) return null;
+export function SystemEventNote({ item, action, onScreen }: {
+  item: EventLike;
+  action?: ReactNode;
+  /** 此刻另有一处看得见的那几道题（questionsOnScreen）：提问结算说明对的是它们时不画。 */
+  onScreen?: ReadonlySet<string>;
+}) {
+  if (isUnshownNotice(item.text, onScreen)) return null;
   const view = noticeView(item);
   if (view.tier === "reply") return <CommandReply item={item} view={view} />;
   return (

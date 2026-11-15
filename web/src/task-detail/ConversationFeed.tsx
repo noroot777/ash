@@ -25,13 +25,12 @@ import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import { reviewPanelSources, reviewTargetLocatable, type ReviewTarget } from "../review/reviewTarget.ts";
 import { CommandReply, SystemAuthoredMessage } from "./SystemNotice.tsx";
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
-import { isPreviewLifecycleNotice, noticeView, type NoticeContext } from "./timelineNoticeCopy.ts";
+import { isUnshownNotice, noticeView, questionsOnScreen, type NoticeContext } from "./timelineNoticeCopy.ts";
 import { FootnoteLine } from "./FootnoteLine.tsx";
 import { ReviewBubble } from "./ReviewBubble.tsx";
 import { reviewProgress } from "./reviewProgress.ts";
 import { footnoteKey, receiptsKey, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 import { crashedTurns } from "./turnFailure.ts";
-import { QuestionDock } from "./QuestionDock.tsx";
 import { useJustEnded } from "./useJustEnded.ts";
 import { conversationKeys } from "./conversationKeys.ts";
 import {
@@ -45,6 +44,7 @@ import { laneNoVerdicts } from "./reviewNoVerdictCause.ts";
 import type { ReviewRetryAction, TurnRetryAction } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
+import { useQuestionHistory } from "./useQuestionHistory.ts";
 import { isQuestionAnswer, type QuestionRecord } from "@ash/shared/questions";
 import { canForkReply } from "./conversationFork.ts";
 import { MonitorWakeReply } from "./MonitorWakeInput.tsx";
@@ -289,7 +289,6 @@ export function ConversationFeed({
   error,
   forkBlockedReason,
   footer,
-  dock,
   onForkReply,
   onAskSideChat,
   reviews,
@@ -315,12 +314,6 @@ export function ConversationFeed({
   error: Error | null;
   forkBlockedReason?: string | null;
   footer?: React.ReactNode;
-  /**
-   * 停在会话下方、不跟着滚的一条：待答复的提问卡走这里。
-   * 跟 `footer` 的区别是它在滚动容器**外面**——问题一直在手边，
-   * 也不会被「回到底部」那颗浮动按钮压住。
-   */
-  dock?: React.ReactNode;
   onForkReply?: (replyId: string) => void;
   /** 回合尾「更多」里的「在侧聊里问这一段」。不给就没有这一项（没有侧聊的视图）。 */
   onAskSideChat?: (quote: string) => void;
@@ -394,9 +387,13 @@ export function ConversationFeed({
   const causes = laneNoVerdicts(feedRows, reviews);
   // 此刻挂着动作的那几句（等你裁定、继续本轮审查、重试这一回合）：尾注里各占一个位置，不被挤掉。
   const actions = footnoteActions({ items, task, reviews, causes, crashed, reviewRetry, turnRetry });
+  // 另有一处看得见的那几道题：提问那一轮的结算说明对的是它们时就不再抄一遍（isUnshownNotice）。
+  // 跟答过的气泡读同一份合并后的问答历史，补读、推送、删除一到两边同时变（useQuestionHistory.ts）。
+  const history = useQuestionHistory(task.id, questionHistory, liveQuestionHistory);
+  const onScreen = questionsOnScreen(task, history.records);
   const { rows, receipts, footnotes } = conversationSystemRows(
     conversationDebateRows(feedRows, { reviews }),
-    { failures: crashed, context: noticeContext, causes, held: actions.held },
+    { failures: crashed, context: noticeContext, causes, held: actions.held, onScreen },
   );
   // 一轮审查里（审查者气泡下面摊开的那一轮、记录里点开的那一轮）的旁注同样记在审查者
   // 那一回合上（见 laneReceipts）。
@@ -476,8 +473,8 @@ export function ConversationFeed({
     if (item.kind === "user") {
       return <UserMessage key={keys.get(item.id) ?? item.id} item={item} preserveSystemStyle={preserveSystemStyle} onReuse={onReuseInput} />;
     }
-    // 辩论兜底那一路不经过 conversationSystemRows，预览开关那几种老记录在这里同样拿掉。
-    if (isPreviewLifecycleNotice(item.text)) return null;
+    // 辩论兜底那一路不经过 conversationSystemRows，不画的那几种旁注（isUnshownNotice）在这里同样拿掉。
+    if (isUnshownNotice(item.text, onScreen)) return null;
     if (preserveSystemStyle) {
       return (
         <p
@@ -524,7 +521,7 @@ export function ConversationFeed({
   ) : <TurnReceipts key={row.id} receipts={row.receipts} standalone />;
 
   return (
-    <QuestionHistoryProvider key={task.id} taskId={task.id} history={questionHistory} live={liveQuestionHistory}
+    <QuestionHistoryProvider history={history}
       messages={items.flatMap((item) => item.kind === "user" ? [item] : [])}>
     <MessageDeleteProvider onDelete={onDeleteMessage}>
     <ReceiptReviewContext.Provider value={receiptReview}>
@@ -592,7 +589,6 @@ export function ConversationFeed({
         </div>
         <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={conversationTailKey(items)} inputs={inputs} revealReady={bodyReady} />
       </div>
-      <QuestionDock>{dock}</QuestionDock>
     </ImagePreviewGroup>
     </ReceiptReviewContext.Provider>
     </MessageDeleteProvider>

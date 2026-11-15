@@ -7,14 +7,14 @@ import { gateLine, type GateLineInput } from "../src/acceptance/gateLine.ts";
 // 验收台两份纯推导：确认层「勾成这样 → 发什么参数、确认键叫什么、能不能按」，以及前提列里
 // 前置命令那一行此刻怎么说。DOM 那头由 test-accept-gate-* 与 branch-acceptance 盯着画法，
 // 这里盯的是**不许漂的那几条**：发给后端的值就是层里看见的值、读不到就不放行、跳过与重跑
-// 仍然要经过确认。
+// 仍然要经过确认、默认跟上一次确认时的样子而前提列那一行跟它同一个口径。
 
 const merge: Extract<AcceptanceSteps, { kind: "merge" }> = {
   kind: "merge", scope: "single", merge: "squash", commit: true, target: "main", clean: "all",
   keepsBranch: true, offScript: null, team: false,
 };
 const gate = (over: Partial<ConfirmGate> = {}): ConfirmGate =>
-  ({ command: "npm test", reusable: false, passedAgo: null, lastFailed: false, issue: null, ...over });
+  ({ command: "npm test", reusable: false, passedAgo: null, lastFailed: false, issue: null, skipRemembered: false, ...over });
 const input = (over: Partial<ConfirmInput> = {}): ConfirmInput => ({
   steps: merge, gate: null, runChoice: null, commitChoosable: true, commitChoice: null, commitDefault: true,
   count: 1, verification: "none", ...over,
@@ -42,6 +42,32 @@ const input = (over: Partial<ConfirmInput> = {}): ConfirmInput => ({
   assert.equal(rerun.gateIntent, "rerun");
 }
 
+// 2b. 两勾的默认是上一次确认时的样子（用户 2026-11-15）：上次跳过，这次默认就不勾、确认键照样说破；
+//     点确认记下的就是层里看见的样子 —— 跟默认一样也记（第 4 轮审查：每一次确认都要让服务端排上号）。
+//     有一次还作数的绿时，沿用和重跑都不改记住的「跳没跳过」。
+{
+  const remembered = confirmView(input({ gate: gate({ skipRemembered: true }) }));
+  assert.equal(remembered.runs, false, "上次跳过：这次默认不勾");
+  assert.equal(remembered.gateIntent, "skip");
+  assert.equal(remembered.confirmLabel, "跳过并验收");
+  assert.equal(remembered.confirmDisabled, false, "照样要在层里按一下确认，不是自动跳过");
+  assert.deepEqual(remembered.memory, { skipGate: true, commit: true });
+  const back = confirmView(input({ gate: gate({ skipRemembered: true }), runChoice: true }));
+  assert.equal(back.gateIntent, undefined, "重新勾上：照常跑");
+  assert.deepEqual(back.memory, { skipGate: false, commit: true }, "确认之后记成新的");
+  assert.deepEqual(confirmView(input({ gate: gate() })).memory, { skipGate: false, commit: true });
+  for (const runChoice of [null, true]) {
+    const reuse = confirmView(input({ gate: gate({ reusable: true, skipRemembered: true }), runChoice }));
+    assert.equal(reuse.runs, runChoice === true, "有作数的绿：默认沿用，记住的跳过不起作用");
+    assert.deepEqual(reuse.memory, { commit: true }, `沿用 / 重跑都不改记住的值（runChoice=${runChoice}）`);
+  }
+  assert.deepEqual(confirmView(input({ commitDefault: false })).memory, { commit: false }, "提交那一勾照层里看见的记");
+  assert.deepEqual(confirmView(input({ commitDefault: true, commitChoice: false })).memory, { commit: false });
+  assert.equal(confirmView(input({ commitChoosable: false, commitDefault: null })).memory, null, "不合并、没命令：没什么可记");
+  assert.equal(confirmView(input({ steps: { kind: "release", next: "自动验证" }, gate: gate(), commitChoosable: false })).memory, null,
+    "只是放行：不记");
+}
+
 // 3. 没设命令：不碰前置命令。
 assert.equal(confirmView(input()).gateIntent, undefined);
 
@@ -59,9 +85,32 @@ assert.equal(confirmView(input()).gateIntent, undefined);
 // 5. 项目默认没读到之前不许确认：那一刻层里写的「会提交」没有依据。
 {
   assert.equal(confirmView(input({ commitDefault: null })).confirmDisabled, true);
-  assert.equal(confirmView(input({ commitDefault: null, commitChoice: true })).confirmDisabled, false,
-    "用户自己勾过就有依据了");
+  assert.equal(confirmView(input({ commitDefault: null, commitChoice: true })).confirmDisabled, true,
+    "用户勾过也不算：项目默认读到之前一律不许确认（第 2 轮审查 F2）");
   assert.equal(confirmView(input({ commitChoosable: false, commitDefault: null })).confirmDisabled, false);
+}
+
+// 5b. 项目默认正在重读（别处刚改过、断线重连）或读失败：不论手动改没改过「提交」，读到之前都不放行；
+//     读到之后手动改过的照它走。
+{
+  const refreshing = confirmView(input({ commitDefault: true, commitDefaultPending: true }));
+  assert.equal(refreshing.confirmDisabled, true, "拿旧默认去确认，会把旧值发出去还写回项目设置（第 1 轮审查 F1）");
+  const edited = confirmView(input({ commitDefault: true, commitDefaultPending: true, commitChoice: false }));
+  assert.equal(edited.confirmDisabled, true, "手动改过不是豁免：读失败时它会把看不见的值发出去（第 2 轮审查 F2）");
+  const settled = confirmView(input({ commitDefault: true, commitChoice: false }));
+  assert.equal(settled.confirmDisabled, false);
+  assert.equal(settled.commitParam, false, "读到之后照手动选的发");
+}
+
+// 5c. 前置命令那份状态（带着记住的「跳没跳过」）在重读或读失败：手上那份只管画，确认锁着（第 3、4 轮审查，
+//     用户 2026-11-15 选的）。动过这一勾也不是豁免。
+{
+  const gate = { command: "./t.sh", reusable: false, passedAgo: null, lastFailed: false, issue: null, skipRemembered: true };
+  const stale = confirmView(input({ gate, gatePending: true }));
+  assert.equal(stale.runs, false, "画的还是手上那份");
+  assert.equal(stale.confirmDisabled, true, "拿旧的「跳过」确认会照旧跳过、还把它写回去");
+  assert.equal(confirmView(input({ gate, gatePending: true, runChoice: true })).confirmDisabled, true);
+  assert.equal(confirmView(input({ gate })).confirmDisabled, false);
 }
 
 // 6. 一次多个任务又不提交：只能合一个，确认键灰着。
@@ -148,6 +197,23 @@ assert.equal(line({ state: state({ command: null }) }), null);
 }
 // 最近一次没过的是另一条命令：它的红说的不是现在这条。
 assert.equal(line({ latest: run({ status: "failed", exitCode: 1, command: "npm run old" }) })!.word, "验收时运行");
+
+// 13b. 上次跳过：不打开确认层也看得出这一按不会跑 —— 跟确认层「运行」那一勾的默认同一个口径。
+{
+  const skipped = (over: Partial<GateLineInput> = {}) => line({ skipping: true, ...over })!;
+  assert.equal(line({ state: state({ skipRemembered: true }) })!.word, "验收时运行",
+    "只认调用方按确认层推出来的那一份：统一验收不走「运行」那一勾，记着跳过也不预告（第 1 轮审查 F3）");
+  assert.equal(skipped().word, "验收时跳过");
+  assert.equal(skipped().tone, "skipped");
+  assert.equal(skipped({ latest: run({ stale: true }) }).word, "通过，但代码变了，验收时跳过");
+  assert.equal(skipped({ latest: run({ status: "failed", exitCode: 1 }) }).word, "未通过，还没交给任务，验收时跳过");
+  assert.equal(skipped({ latest: run({ status: "failed", exitCode: 1 }) }).tone, "failed", "红还是红");
+  assert.equal(skipped({ latest: run({ status: "canceled" }) }).word, "已取消，验收时跳过");
+  assert.equal(skipped({ latest: run() }).word, "通过 · 8 分钟前", "有作数的绿：这一按沿用它，不提跳过");
+  assert.equal(skipped({ atFinalGate: false }), null, "只是放行那一站：不预告");
+  assert.equal(line({ skipping: true, settled: true, state: state({ basis: { mode: "passed", run: run() } } as Partial<AcceptGateState>) })!.word,
+    "通过", "已验收：只认凭据");
+}
 
 // 14. 已验收：只认这一按自己的凭据，绝不拿「最近一次」反推。
 {

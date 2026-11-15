@@ -14,7 +14,6 @@ import {
   useReplyHeight,
 } from "./ReplyResizeHandle.tsx";
 import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailability.ts";
-import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { useReplyLayout } from "./useReplyLayout.ts";
 import { isMenuPickKeyEvent, isSendKeyEvent } from "../lib/sendKey.ts";
 import type { ReplyTaskResult } from "../lib/api.ts";
@@ -27,13 +26,15 @@ import { useReplyMention } from "./replyMention.ts";
 import { applySlashPick, mergeSlashItems, slashQuery, slashSendsAsTyped, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import { useStandingExecutor, type StandingExecutor } from "./useStandingExecutor.ts";
-import { registerReplyInput } from "./replyQuote.ts";
-import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
-import type { ReplyOverride } from "./replyOverride.ts";
 import { useExecutorProfiles } from "./useExecutorProfiles.ts";
+import { ComposerInput } from "./ComposerInput.tsx";
+import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
+import { overrideKeyDown, type ReplyOverride } from "./replyOverride.ts";
 import { ScreenshotAnnotation } from "../page-annotation/ScreenshotAnnotation.tsx";
 import { screenshotCandidates, type AnnotationReply } from "../page-annotation/model.ts";
 import type { ConversationItem } from "./conversationModel.ts";
+import { QuestionDock, useQuestionTakeover } from "./QuestionSlot.tsx";
+import type { QuestionAnswerInput } from "@ash/shared/questions";
 import { parseAttachmentText } from "./utils.ts";
 import {
   attachmentsFromPaths,
@@ -65,6 +66,7 @@ export function ReplyBox({
   conversationItems = [],
   tasks = [],
   override,
+  onAnswer,
 }: {
   task: Task;
   hasConversation: boolean;
@@ -123,6 +125,8 @@ export function ReplyBox({
   tasks?: TaskListItem[];
   /** 这个框此刻被借用（等你裁定时框顶那一行）；见 replyOverride.ts。 */
   override?: ReplyOverride;
+  /** 有问题在等时怎么答：给了，框那一格就由答题卡接管（QuestionSlot.tsx）。 */
+  onAnswer?: (answer: string, input: QuestionAnswerInput) => Promise<void>;
 }) {
   const draft = useTaskReplyDraft(task.id);
   const shellRef = useReplyLayout();
@@ -174,8 +178,6 @@ export function ReplyBox({
   // 借用中且选了一档：正文是那一档的话（或整块换成别的），斜杠、@ 这些都不出。
   const take = override?.take ?? null;
   const takeInput = take && "input" in take ? take.input : null;
-  // 输入几行就撑几行高,撑到上限为止;拖过之后以拖出来的高度为准(拖动条自己的上限更宽)。
-  useAutoGrowTextarea(textareaRef, { value: takeInput?.value ?? value, pinned: replyHeight.height });
   // 任务正在跑不再是「不能说话」,而是「说了先排队」:发出去的消息落成一条待发送
   // 消息(mode=queued),这一轮一结束由服务端自动送进同一个会话。所以 disabled 只留
   // 真正没得说的情况——不是单任务、已归档、以及从没跑过因而没有会话可续。
@@ -210,9 +212,6 @@ export function ReplyBox({
     setCommandResult(null);
   }, [task.id]);
 
-  // 会话里选中一段话点「添加到对话」时，浮条要把光标送回这个输入框（见 replyQuote.ts）。
-  useEffect(() => registerReplyInput(task.id, textareaRef.current), [task.id]);
-
   const commandReset = useRef({ taskId: task.id, key: command?.resetKey });
   useEffect(() => {
     const previous = commandReset.current;
@@ -235,7 +234,17 @@ export function ReplyBox({
   const ashItems: SlashItem[] = (command?.items ?? []).map((item) => ({ ...item, kind: "ash" }));
   const commandCandidates = (text: string) => mergeSlashItems(ashItems, skills, slashQuery(text));
   const candidates = commandCandidates(value);
-  const menuOpen = !take && !menuDismissed && candidates.length > 0;
+  // 答题卡展开着（连同它收回去那一下）：平常的框和它的全部浮层都不挂，草稿原样留着（QuestionSlot.tsx）。
+  // 框里的工具（选执行器、发送设置、截图批注、更多）跟着框一起卸掉；框外这几层（补全、引用、`@`
+  // 之后选模型、派生面板）在下面逐个按 covering 让开。由宿主开着的那两层顺手关上，收起时不再自己弹回来。
+  const takeover = useQuestionTakeover(onAnswer ? task : null);
+  const covering = takeover.covering;
+  useEffect(() => {
+    if (!covering) return;
+    setPicker(null);
+    setAnnotating(false);
+  }, [covering]);
+  const menuOpen = !take && !covering && !menuDismissed && candidates.length > 0;
   const selectedIndex = Math.min(commandIndex, Math.max(0, candidates.length - 1));
   const commandMatch = !take && !!command && command.matches(value);
   const selected = candidates[selectedIndex];
@@ -496,7 +505,7 @@ export function ReplyBox({
           onPick={pickCommand}
         />
       )}
-      {mention.open && !menuOpen && (
+      {mention.open && !menuOpen && !covering && (
         <MentionMenu
           className="task-reply-mention-menu"
           ariaLabel="召唤智能体或引用文件"
@@ -509,7 +518,7 @@ export function ReplyBox({
           onPick={mention.pick}
         />
       )}
-      {picker && (
+      {picker && !covering && (
         <AgentModelPicker
           types={registeredTypes.length ? registeredTypes : [activeAgent]}
           profiles={profiles}
@@ -526,7 +535,7 @@ export function ReplyBox({
         />
       )}
       <div className="reply-context">
-      {inlinePanel && !menuOpen && !mention.open && !picker && <div className="task-reply-inline-panel">{inlinePanel}</div>}
+      {inlinePanel && !covering && !menuOpen && !mention.open && !picker && <div className="task-reply-inline-panel">{inlinePanel}</div>}
       <ScheduledMessageTray
         key={task.id}
         messages={scheduled.messages}
@@ -540,24 +549,28 @@ export function ReplyBox({
         tasks={tasks}
         onSendNow={(messageId) => void scheduled.sendNow(messageId)}
       />
-      <UploadAttachmentList
+      {!covering && <UploadAttachmentList
         attachments={uploads.attachments}
         pending={uploads.pending}
         error={uploads.error}
         onRemove={uploads.remove}
         onCancel={uploads.cancel}
-      />
+      />}
       {sendError && <p className="task-reply-error">{sendError}</p>}
       {commandResult?.taskId === task.id && <p className="task-reply-command-result" role="status" aria-label="命令结果">{commandResult.text}</p>}
       {topRail}
       </div>
-      <div className="task-reply-box">
+      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} />}
+      {!covering && <div className="task-reply-box">
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />
         <AgentPlate name={activeAgent} />
         {override?.head}
-        <textarea
-          ref={textareaRef}
+        {/* 输入几行就撑几行高,撑到上限为止;拖过之后以拖出来的高度为准(拖动条自己的上限更宽)。 */}
+        <ComposerInput
+          inputRef={textareaRef}
           value={takeInput?.value ?? value}
+          pinned={replyHeight.height}
+          quoteTarget={task.id}
           rows={3}
           hidden={!!take && !takeInput}
           disabled={inputDisabled && !takeInput}
@@ -574,10 +587,7 @@ export function ReplyBox({
           }}
           onPaste={take ? undefined : uploads.onPaste}
           onKeyDown={(event) => {
-            if (take && (event.key === "Escape" || isSendKeyEvent(event))) {
-              event.preventDefault();
-              return event.key === "Escape" ? override!.cancel() : override!.submit();
-            }
+            if (overrideKeyDown(override, event)) return;
             if (menuOpen) {
               if (event.key === "ArrowDown") {
                 event.preventDefault();
@@ -684,7 +694,7 @@ export function ReplyBox({
             taskId={task.id}
           />}
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

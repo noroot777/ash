@@ -46,11 +46,13 @@ export const taskRow = (over = {}) => ({
   mergeTargetBranch: "main", createdAt: "2026-10-23T00:00:00Z", updatedAt: "2026-10-25T00:00:00Z", ...over,
 });
 
-/** 依赖那一份：不挡路、没有派生任务。 */
-export const branchPlan = () => ({
+/** 依赖那一份：不挡路，默认没有派生任务（`children` 给几个就挂几个能一起验收的派生任务）。 */
+export const branchPlan = (children = []) => ({
   task: { taskId: "gate-task", title: "门禁卡", projectId: "proj-1", stage: "verified", blocker: null, dependency: null,
     strategy: "safe", sourceBranch: "ash/gate-task", targetBranch: "main", fingerprint: "fp-1" },
-  descendants: [],
+  descendants: children.map((title, index) => ({ taskId: `child-${index + 1}`, title, projectId: "proj-1", stage: "verified",
+    blocker: null, dependency: null, strategy: "safe", sourceBranch: `ash/child-${index + 1}`, targetBranch: "main",
+    fingerprint: `fp-child-${index + 1}` })),
 });
 
 /** 自由工作流的审查状态：一轮审查都没有（不拦也不提醒）。 */
@@ -97,7 +99,10 @@ export async function assertTone(row, tone, message) {
  * 而送不出）之后兑现；页面那一侧有没有消费完看 fetchesSettled（只记 TRACKED_READS）。
  *
  * 发给 /accept 的请求体按顺序记在 `store.accepts`，回什么由 `store.acceptReply(body)` 定
- * （缺省回一个 409 target_unresolved「模拟验收响应」：什么都没动）。
+ * （缺省回一个 409 target_unresolved「模拟验收响应」：什么都没动）。确认层点确认时记下的那几勾
+ * （PUT /accept-memory）按顺序记在 `store.memory`，照服务端那样落回门禁状态的 skipRemembered 与
+ * 项目的 acceptCommit（`role` 不是 admin 时提交那一勾不写）；`store.memoryDown` 让它回 503，
+ * `store.memoryHold` 给一个 promise 就扣住它（连接挂住、不报错）；`store.projectHold` 同样扣住 GET /api/projects。`children` 给依赖计划挂派生任务。
  *
  * 其余开关：`status` 门禁读取一开始就回这个错误码；`hold` 一开始就扣住每一发门禁读取（见
  * store.hold）；`init(page)` 在打开页面之前往页面里塞东西；`clock` 打开之前装假时钟；
@@ -105,7 +110,7 @@ export async function assertTone(row, tone, message) {
  */
 export function gateStage({ browser, base }) {
   return async ({ gate, role = "admin", query = "", command, states, tasks = [], events = false, cancelOutcome = "canceled",
-    projectDown = false, acceptCommit, acceptReply, status = 0, hold = null, init = null, clock = false, ready = true } = {}) => {
+    projectDown = false, acceptCommit, acceptReply, children = [], status = 0, hold = null, init = null, clock = false, ready = true } = {}) => {
     const page = await browser.newPage({ viewport: { width: 980, height: 820 } });
     if (clock) await page.clock.install();
     if (init) await init(page);
@@ -129,6 +134,7 @@ export function gateStage({ browser, base }) {
       served: (index) => servedAt(index).promise,
       requestIds: [], status, hold, logText: "checking 42 / 640", command: command === undefined ? gate?.command ?? null : command, gate,
       projectReads: 0, projectDown, accepts: [], acceptReply, stage: new URLSearchParams(query).get("stage") ?? "verified",
+      memory: [], memoryDown: false, memoryHold: null, projectHold: null, acceptCommit,
       taskFetches: 0, unexpected: [] };
     // 优先级最低的兜底：没桩的请求一律 404 并记下来，免得落到 vite 上回一页 HTML。
     await page.route("**/api/**", (route) => {
@@ -148,7 +154,7 @@ export function gateStage({ browser, base }) {
       store.taskFetches += 1;
       return json(route, taskRow({ stage: store.stage }));
     });
-    await page.route("**/api/tasks/*/branch-plan", (route) => json(route, branchPlan()));
+    await page.route("**/api/tasks/*/branch-plan", (route) => json(route, branchPlan(children)));
     await page.route("**/api/tasks/*/free-workflow", (route) => json(route, freeWorkflow()));
     // 不是 git 仓库：「未提交改动」那一行不出（它有自己的回归）。
     await page.route("**/api/tasks/*/scm", (route) => json(route, { error: "不是 Git 仓库" }, 400));
@@ -164,11 +170,22 @@ export function gateStage({ browser, base }) {
     }));
     // SSE 在这一屏里只负责「有变化就重读」，测试里不发事件，挂一条空流免得它反复重连。
     await page.route("**/api/events", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }));
-    await page.route("**/api/projects", (route) => {
+    await page.route("**/api/projects", async (route) => {
       store.projectReads += 1;
+      if (store.projectHold) { await store.projectHold; return; }
       if (store.projectDown) return json(route, { error: "数据库忙" }, 503);
       return json(route, [{ id: "proj-1", name: "kb", repoPath: "/repo", myRole: role, acceptGateCommand: store.command,
-        ...(acceptCommit === undefined ? {} : { acceptCommit }) }]);
+        ...(store.acceptCommit === undefined ? {} : { acceptCommit: store.acceptCommit }) }]);
+    });
+    await page.route("**/api/accept-memory/proj-1", async (route) => {
+      const body = JSON.parse(route.request().postData() ?? "{}");
+      store.memory.push(body);
+      if (store.memoryHold) { await store.memoryHold; return; }
+      if (store.memoryDown) return json(route, { error: "数据库忙" }, 503);
+      if (typeof body.skipGate === "boolean") store.gate = { ...store.gate, skipRemembered: body.skipGate };
+      const commitSaved = typeof body.commit === "boolean" && role === "admin";
+      if (commitSaved) store.acceptCommit = body.commit;
+      return json(route, { skipGate: store.gate?.skipRemembered === true, commit: store.acceptCommit !== false, commitSaved });
     });
     await page.route("**/api/projects/proj-1", async (route) => {
       store.patches.push(JSON.parse(route.request().postData() ?? "{}"));

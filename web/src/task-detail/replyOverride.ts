@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
+import { isSendKeyEvent } from "../lib/sendKey.ts";
 
 /**
  * 回复框此刻被另一件事借用（等你裁定时框顶那一行，见 free-workflow/DisputeRulingDock.tsx）。
@@ -19,3 +20,12 @@ export type ReplyOverride = {
   /** Esc：回到平常的回复框。 */
   cancel: () => void;
 };
+
+/** 借用中、选了一档时框里的 Esc / 发送键归那一档：Esc 还回平常的框，发送键交那一档。接走了给 true。 */
+export function overrideKeyDown(override: ReplyOverride | undefined, event: KeyboardEvent<HTMLTextAreaElement>): boolean {
+  if (!override?.take || (event.key !== "Escape" && !isSendKeyEvent(event))) return false;
+  event.preventDefault();
+  if (event.key === "Escape") override.cancel();
+  else override.submit();
+  return true;
+}

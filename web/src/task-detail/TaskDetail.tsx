@@ -25,7 +25,6 @@ import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
 import { HandoffBanner } from "./HandoffBanner.tsx";
 import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
-import { QuestionCard } from "./QuestionCard.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
 import { replySend } from "./replySend.ts";
 import { LeftDrawerProvider, useLeftDrawerHost } from "../components/LeftDrawer.tsx";
@@ -537,18 +536,6 @@ export function TaskDetail({
                       reviews={free.state?.reviews}
                       // 会话里那一句审查结论点过来：审查格展开那一轮（feed-10 / insp-5）。
                       onOpenReviewPanel={(target) => openTab("review", target ? reviewTargetRequest(target) : undefined)}
-                      // 会话区底部的常驻卡。提问要人答，所以它留在会话里（答案就在那条
-                      // 对话上下文里）；哨兵是「它自己会回来」，一行就够，落在回复框上方
-                      // 那条 rail 上（见下面的 monitorWait）。
-                      dock={task.question ? (
-                        <QuestionCard
-                          task={task}
-                          onAnswer={async (answer, input) => {
-                            await api.answerTask(task.id, answer, input);
-                            notify("已发送答复，任务正在续跑");
-                          }}
-                        />
-                      ) : undefined}
                     />
                     </MemoSelectionScope>
                     <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
@@ -574,6 +561,11 @@ export function TaskDetail({
                           )}
                         />
                       )}
+                      // 提问在等时，回复框那一格是答题卡（QuestionSlot）：全页只有一处打字、一颗发送键。
+                      onAnswer={async (answer, input) => {
+                        await api.answerTask(task.id, answer, input);
+                        notify("已发送答复，任务正在续跑");
+                      }}
                       actions={replyActions.actions}
                       moreItems={replyActions.moreItems}
                       moreRef={replyActions.moreRef}
