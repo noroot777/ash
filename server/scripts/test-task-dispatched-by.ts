@@ -14,7 +14,8 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks, sessions, appSettings } = await import("../src/db/schema.js");
-const { backfillDispatchedBy, DISPATCHED_BY_BACKFILL_KEY } = await import("../src/db/migrate-dispatched-by.js");
+const { backfillDispatchedBy, backfillDispatchedByAfterCopy, DISPATCHED_BY_BACKFILL_KEY } = await import("../src/db/migrate-dispatched-by.js");
+const { createClient } = await import("../src/db/node-sqlite-client.js");
 const { mountTaskRoutes } = await import("../src/task-routes.js");
 const { dispatchWorkers } = await import("../src/team/dispatch.js");
 await ensureSchema();
@@ -36,8 +37,8 @@ try {
   await db.insert(projects).values({ id: "project", name: "派活归属", repoPath: root, createdAt: at });
 
   // —— 存量：升级前派出去的任务只在 creation_origin 里记着来源，回填之后收在派它的那条下面。
-  // 空库首启时回填已经跑过一遍、记下了「已完成」；这里抹掉那条记录，当作老实例刚升级上来。
-  assert.match(String(await backfillMark()), /"done":true/, "空库首启也记下完成，之后启动不再碰任何一行");
+  // 空库首启时回填已经跑过一遍、记下了边界；这里抹掉那条记录，当作老实例刚升级上来。
+  assert.match(String(await backfillMark()), /"cutoff":/, "空库首启也记下边界");
   await db.delete(appSettings).where(eq(appSettings.key, DISPATCHED_BY_BACKFILL_KEY));
   await db.insert(tasks).values([
     row("analysis"),
@@ -110,14 +111,31 @@ try {
   await backfillDispatchedBy(dbClient as never);
   assert.equal(await dispatchedOf(optOut.id), null, "重启之后，明确不归属的仍然不归属");
   assert.equal(await dispatchedOf(optOutBlank.id), null);
-  // 上一次回填半路失败（只记下了边界、没记完成）：重试只碰边界之前的行，之后建的显式选择不动。
-  const cutoff = new Date(Date.parse(at) + 1_000).toISOString();
-  await db.update(appSettings).set({ value: JSON.stringify({ cutoff }) }).where(eq(appSettings.key, DISPATCHED_BY_BACKFILL_KEY));
-  await db.insert(tasks).values(row("legacy-late", { creationOrigin: origin("analysis") }));
+  // 不经 createTasks 直接写进库的老行（预览测试库开局从主库拷来、旧备份恢复）：边界早就记下了，
+  // 下次启动照样认得出来；边界之后建的、明确不归属的，再跑多少遍都碰不到。
+  const boundary = String(await backfillMark());
+  await db.insert(tasks).values(row("copied-in", { creationOrigin: origin("analysis") }));
   await backfillDispatchedBy(dbClient as never);
-  assert.equal(await dispatchedOf("legacy-late"), "analysis", "边界之前漏掉的存量行，重试时补上");
-  assert.equal(await dispatchedOf(optOut.id), null, "边界之后建的、明确不归属的，重试也碰不到");
-  assert.match(String(await backfillMark()), /"done":true/);
+  assert.equal(await dispatchedOf("copied-in"), "analysis", "边界之前的老行后来才写进库，下次启动补上");
+  assert.equal(await dispatchedOf(optOut.id), null, "边界之后建的、明确不归属的，重跑也碰不到");
+  assert.equal(String(await backfillMark()), boundary, "边界只在第一次记，之后不挪");
+
+  // 预览测试库开局从主库拷任务：边界改用主库的。主库升级之后明确不归属的那条（晚于主库边界、
+  // 早于预览库自己开局那一刻），不能在预览库里被挂回去；主库升级之前的老行照样补上。
+  const offset = (seconds: number) => new Date(Date.parse(at) + seconds * 1000).toISOString();
+  const source = createClient({ url: join(root, "main.db") });
+  await source.execute("CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  await source.execute({ sql: "INSERT INTO app_settings (key, value) VALUES (?, ?)", args: [DISPATCHED_BY_BACKFILL_KEY, JSON.stringify({ cutoff: offset(10) })] });
+  await db.insert(tasks).values([
+    row("main-legacy", { creationOrigin: origin("analysis"), createdAt: offset(5) }),
+    row("main-opted-out", { creationOrigin: origin("analysis"), createdAt: offset(30) }),
+  ]);
+  assert.ok(boundary.includes("cutoff") && JSON.parse(boundary).cutoff > offset(30), "前提：预览库自己的边界晚于那条明确不归属的");
+  await backfillDispatchedByAfterCopy(dbClient as never, source as never);
+  source.close();
+  assert.equal(await dispatchedOf("main-legacy"), "analysis", "主库升级之前的老行补上");
+  assert.equal(await dispatchedOf("main-opted-out"), null, "主库升级之后明确不归属的，拷到预览库里也不被挂回去");
+  assert.equal(JSON.parse(String(await backfillMark())).cutoff, offset(10), "边界换成主库的");
 
   // —— 显式指定派活人（回复框派出去的入口，界面在后面的任务里接）。
   const explicit = await (await create({ title: "显式归属", dispatchedBy: "legacy-1" })).json();
