@@ -58,7 +58,7 @@
     const drawerBody = document.getElementById("drawer-body");
     if (drawerBody) {
       const mark = drawerBody.querySelector("[data-scroll-here]");
-      drawerBody.scrollTop = mark ? mark.offsetTop : st.freshSeg != null ? drawerBody.scrollHeight : drawerTop ?? 0;
+      drawerBody.scrollTop = mark ? mark.offsetTop : drawerBody.dataset.follow != null && st.freshSeg != null ? drawerBody.scrollHeight : drawerTop ?? 0;
     }
     st.drawerAt = null;
     stage.querySelectorAll("[data-anim]").forEach((el) => { if (before.has(el.dataset.anim)) el.style.animation = "none"; });

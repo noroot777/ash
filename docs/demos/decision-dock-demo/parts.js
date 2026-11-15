@@ -1,4 +1,4 @@
-// 会话里几种东西的画法：智能体的回合、你的气泡、审查者的气泡、ash 的尾注。只管出 HTML，不碰状态。
+// 会话里几种东西的画法：智能体的回合、你的气泡、ash 的尾注（右边审查和辩论那两颗气泡在 debate.js）。只管出 HTML，不碰状态。
 (() => {
   const esc = (text) => String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const icon = (id) => `<svg class="icon" aria-hidden="true"><use href="#i-${id}"/></svg>`;
@@ -28,15 +28,6 @@
     return `<div class="me${fresh ? " is-new" : ""}"><div class="me-bubble is-qa">${pairs.map(([q, a]) => `<p class="qa-q">${esc(q)}</p><p class="qa-a">${esc(a)}</p>`).join("")}</div></div>`;
   }
 
-  /** 审查者的气泡。text 可点开 lane；live = 它正在说。 */
-  function reviewer({ id, text, head, lane, open = false, live = false, say = false, tight = false, keys = "" }) {
-    const inner = live ? `<span class="run-dot"></span><span>${esc(text)}</span>` : `<span>${esc(text)}</span>`;
-    const body = lane && !live
-      ? `<button type="button" class="rv-text" data-act="toggle" data-id="${id}" aria-expanded="${open}">${inner}</button>`
-      : `<div class="rv-text">${inner}</div>`;
-    return `<div class="rv${say ? " is-say" : ""}${tight ? " is-tight" : ""}"><div class="rv-bubble"><header>${head}${keys}</header>${body}</div>${open && lane ? `<div class="lane" data-anim="lane:${id}">${paras(lane)}</div>` : ""}</div>`;
-  }
-
   const foot = (html, { tone = "", right = false, fresh = false } = {}) =>
     `<p class="foot${tone ? ` is-${tone}` : ""}${right ? " is-right" : ""}${fresh ? " is-new" : ""}">${html}</p>`;
 
@@ -44,5 +35,5 @@
 
   const key = (act, iconId, label, extra = "") => `<button type="button" class="key" data-act="${act}" aria-label="${label}" title="${label}" ${extra}>${icon(iconId)}</button>`;
 
-  window.P = { esc, icon, paras, turn, unfold, me, qa, reviewer, foot, running, key };
+  window.P = { esc, icon, paras, turn, unfold, me, qa, foot, running, key };
 })();

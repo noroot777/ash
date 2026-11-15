@@ -1,4 +1,13 @@
-/* 辩论：会话里的一块。气泡那种画法沿用审查结论那颗气泡（mock.css 的 .rv），这里只写它多出来的。 */
+/* 会话右边那两颗气泡（审查结论、辩论）共用的手势，和辩论那颗多出来的画法。气泡本身在 mock.css 的 .rv。 */
+/* 上方浮出的那一行右端：读全文的那颗键。 */
+.rv-bubble > header .key { margin: 0 -2px 0 2px; }
+/* 收着的时候，气泡下面靠右一行小灰字：此刻在干什么。 */
+.rv-now { margin: 4px 2px 0 0; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+/* 摊开以后右上角：同一颗键，带着字。 */
+.rv-full { display: flex; align-items: center; gap: 5px; height: 22px; margin: 0 0 2px auto; padding: 0 2px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.rv-full:hover { color: var(--ink); }
+.rv-full .icon { width: 12px; height: 12px; }
+.rv .lane .fold { margin-top: 0; }
 .db[data-anim="debate"] { animation: arrive 260ms var(--ease-out) backwards; }
 .db-text .run-dot { align-self: flex-start; margin-top: 7px; }
 .db-say { min-width: 0; }
@@ -6,15 +15,10 @@
 .db-say.is-new { animation: arrive 260ms var(--ease-out) backwards; }
 /* 辩的时候只留最新一句，最多两行：它一直在换，不往下长。 */
 .db.is-live .db-say { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.db-count { flex: none; margin-left: auto; padding-left: 4px; color: var(--faint); font-size: 12px; font-style: normal; font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* 辩完了、还等你裁：这一句是结论，用正文的字。裁完它又回到小灰字。 */
 .db.is-done .db-text { padding: 8px 15px 9px; color: var(--ink); font-size: 13px; line-height: 1.65; }
 .db.is-done .db-say b { color: var(--ink); }
 
-/* 概览：在气泡下面就地摊开，每段一句。右上那颗键打开完整记录的抽屉。 */
-.db-whole { display: flex; align-items: center; gap: 5px; height: 22px; margin: 0 0 2px auto; padding: 0 2px; color: var(--muted); font-size: 12px; white-space: nowrap; }
-.db-whole:hover { color: var(--ink); }
-.db-whole .icon { width: 12px; height: 12px; }
 /* 逐段：左边写谁，右边是那一句。点它，抽屉停在这一段。 */
 .db-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 22px; gap: 10px; padding: 4px 0; }
 .db-row.is-new { animation: arrive 260ms var(--ease-out) backwards; }
@@ -27,7 +31,7 @@ button.db-gist:hover em { color: var(--ink); }
 .db-row .key { opacity: 0; transition: opacity var(--dur-1); }
 .db-row:is(:hover, :focus-within) .key { opacity: 1; }
 
-/* —— 抽屉：整场辩论的完整发言。从右边滑出来盖在会话上；段和段之间只有一条细线 —— */
+/* —— 抽屉：读全文的地方（审查报告、辩论的完整记录）。从右边滑出来盖在会话上；段和段之间只有一条细线 —— */
 .drawer { position: absolute; z-index: 8; top: 0; right: 0; bottom: 0; display: flex; flex-direction: column; width: min(560px, 100%); border-left: 1px solid var(--line); background: var(--panel); box-shadow: lch(0 0 0 / 0.08) -16px 0 40px; animation: drawer-in 220ms var(--ease-out) backwards; }
 @keyframes drawer-in { from { opacity: 0; transform: translateX(20px); } }
 .drawer-head { display: flex; flex: none; align-items: center; gap: 10px; height: 44px; padding: 0 10px 0 20px; border-bottom: 1px solid var(--line); }
