@@ -161,9 +161,35 @@ try {
   await only(nestedReport, "窄窗口下里层的读全文");
   await settled();
   assert.equal((await rect(nestedReport)).width, narrowDrawer.width, "里层推出来的那一屉跟它一样宽");
+  // 窗口跨过那条线（窄 → 宽 → 窄）：只改位置和宽度，里面那一页不重挂，开着的读全文还开着。
+  await page.locator('[data-drawer-task="kid-a"]').evaluate((node) => { node.dataset.mark = "same-node"; });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.waitForFunction(() => document.querySelector("section.task-detail").getBoundingClientRect().width >= 600);
+  await settled();
+  assert.equal(await visibleDrawers(), 1);
+  assert.ok((await rect(nestedReport)).right <= (await rect(center)).right + 0.5, "宽窗口下回到只盖中间那一栏");
+  await page.setViewportSize({ width: 760, height: 720 });
+  await page.waitForFunction(() => document.querySelector("section.task-detail").getBoundingClientRect().width < 460);
+  await settled();
+  assert.equal((await rect(nestedReport)).width, narrowDrawer.width, "再窄回来，宽度跟着变回来");
+  assert.equal(await page.locator('[data-drawer-task="kid-a"][data-mark="same-node"]').count(), 1, "跨过那条线，里面那一页没有重挂（读全文也还开着）");
   await nestedReport.getByRole("button", { name: "关上审查报告" }).click();
   await only(drawerA, "窄窗口下关上里层之后");
   assert.equal(await page.locator('[data-drawer-task="kid-a"]').count(), 1);
+
+  // 在这一屉里开它自己的 Inspector：一律盖在内容上，会话和回复框那一行不被挤窄；叉是「收起，回到内容」。
+  const innerInspector = (await drawerA.locator(".inspector-host").count()) ? drawerA.locator(".inspector-host") : null;
+  assert.equal(innerInspector, null, "里面那一页的 Inspector 默认收着");
+  await drawerA.getByRole("button", { name: "显示 Inspector" }).click();
+  const inner = drawerA.locator(".inspector-host");
+  await inner.waitFor();
+  const innerContent = await rect(page.locator('[data-drawer-task="kid-a"]'));
+  const drawerNow = await rect(drawerA);
+  assert.ok(innerContent.width >= drawerNow.width - 1, `开着里面的 Inspector，内容那一栏照旧整屉宽（${innerContent.width} / ${drawerNow.width}）`);
+  assert.ok((await rect(inner)).width >= drawerNow.width - 1, "Inspector 盖在内容上，不并排");
+  await inner.getByRole("button", { name: "收起 Inspector" }).click();
+  await page.waitForFunction(() => !document.querySelector('aside.side-drawer[aria-label="派出的任务：第一条派出去的"] .inspector-host'));
+  assert.ok((await rect(drawerA.locator(".reply-row-probe"))).right <= drawerNow.right, "收起之后回到内容，回复框那一行完整");
 
   // —— 窗口拉回来：照常只盖中间那一栏，右侧 Inspector 不被盖住、点得着。
   await page.setViewportSize({ width: 1280, height: 720 });

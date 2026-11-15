@@ -126,16 +126,47 @@
   visibility: hidden;
 }
 
-/* 中间那一栏窄到摆不下一整页（useTaskDrawers 的 useDrawerRoom）：这一层整个挪到详情区上，
-   连 Inspector 一起盖住，宽度按整个详情区算。 */
-.page-drawer-overlay {
+/* 派出的任务这一层（task-detail/useTaskDrawers.tsx）：开着时挂在详情区那一层（.inspector-layout）里，
+   盖中间那一栏还是整个详情区、抽屉多宽，都由 useDrawerArea 量好写进这几个变量。 */
+.page-drawer-host {
   display: contents;
 }
 
-.inspector-layout:has(> .page-drawer-overlay) {
+.inspector-layout:has(> .page-drawer-host) {
   position: relative;
 }
 
-.page-drawer-overlay .side-drawer {
-  width: min(680px, 92%);
+.page-drawer-host .side-drawer-scrim {
+  inset: auto;
+  top: var(--page-area-top);
+  left: var(--page-area-left);
+  width: var(--page-area-width);
+  height: var(--page-area-height);
+}
+
+.page-drawer-host .side-drawer {
+  top: var(--page-area-top);
+  bottom: auto;
+  left: var(--page-area-left);
+  width: var(--page-drawer-width);
+  height: var(--page-area-height);
+}
+
+/* 这一屉里那一页自己的 Inspector 一律盖在内容上，不并排：抽屉最宽 680，并排之后内容那一栏到不了
+   回复框要的 420（同窄屏下 inspector.css 的做法，只是这里按抽屉而不是按窗口判）。 */
+.page-drawer-host .side-drawer > .inspector-layout {
+  position: relative;
+}
+
+.page-drawer-host .side-drawer > .inspector-layout > .inspector-host {
+  position: absolute;
+  z-index: 30;
+  inset: 0;
+  width: 100%;
+  min-width: 0;
+  border-left: 0;
+}
+
+.page-drawer-host .side-drawer > .inspector-layout > .inspector-host .inspector-host__resize-handle {
+  display: none;
 }

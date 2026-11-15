@@ -12,12 +12,17 @@
 //     不卸载 —— 里层那一屉的内容就长在它里面），关上之后它原样露回来。
 // 团队执行者抽屉里的 TaskDetail 不在这层关系里（团队页这一轮不动），照旧各管各。
 //
-// **那一屉里得摆得下一整页**（会话 + 回复框，回复框那一行有附件、派审查、预览、接力、执行器胶囊、
-// 发送键）。平时它只盖中间那一栏、宽度跟着那一栏走（side-drawer.css 的 78%/92%）；窗口窄、右侧
-// Inspector 又开着时，中间那一栏剩下两百来像素，抽屉跟着窄、回复框那一行被截掉。所以中间那一栏
-// 窄到摆不下时（useDrawerRoom），派出的任务这一层（连同里层推出来的那一屉）改画到整个详情区上
-// —— 连 Inspector 一起盖住，跟窄屏下 Inspector 盖在内容上同一种做法；关上就回到原样。
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+// **那一屉里得摆得下一整页**（会话 + 回复框；回复框那一行有附件、派审查、预览、接力、执行器
+// 胶囊、发送键）。在真实页面上量过：抽屉不到 340px 胶囊被挤出去点不着，420px 起智能体、模型的名字
+// 才看得清 —— 下限取 420。保证分三处，都只在这一层（团队执行者抽屉、页面自己那两屉不在里面）：
+//   · 外壳：平时只盖中间那一栏、宽度跟着那一栏走（78%，最宽 680）；那样摆不出 420 时（窗口窄、
+//     右侧 Inspector 又开着），改盖整个详情区（连 Inspector，92%），跟窄屏下 Inspector 盖在内容上
+//     同一种做法。算在 useDrawerArea 一处，经 CSS 变量交给样式，比例不在两边各写一份。
+//   · 里面那一页自己的 Inspector：抽屉最宽 680，减掉 Inspector 至少 300 就到不了 420，所以在这
+//     一屉里它**一律盖在内容上**（关上回到内容），从不并排挤内容（dispatched.css）。
+//   · 换位置不换宿主：这一层开着时一直挂在同一个容器（.inspector-layout）里，窗口跨过上面那条线
+//     只改位置和宽度，里面那一页（连同它里层推出来的读全文）不重挂、不丢状态。
+import { createContext, useContext, useLayoutEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Task, TaskListItem } from "@ash/shared";
 import { useLeftDrawerHost } from "../components/LeftDrawer.tsx";
@@ -36,27 +41,49 @@ type PageDrawers = {
 
 const PageDrawersContext = createContext<PageDrawers | null>(null);
 
-// 中间那一栏窄过这个数，抽屉（78%）就不到 360px：回复框那一行（收成图标之后）大约要 320px，
-// 加上左右留白就摆不下了。
-const MIN_CENTER_FOR_INLINE = 460;
+// 实测：抽屉到这个宽，回复框那一行（连执行器胶囊里的名字）才摆得开。
+const MIN_DRAWER_WIDTH = 420;
+const MAX_DRAWER_WIDTH = 680;
+
+type DrawerArea = { host: HTMLElement; wide: boolean; style: CSSProperties };
 
 /**
- * 摆不下时改画到哪：`anchor` 所在那一栏（.task-detail）的宽度够就是 null（照常画在那一栏里），
- * 不够就是包住它和 Inspector 的那一层（.inspector-layout）。跟着窗口、Inspector 宽度实时变。
+ * 派出的任务这一层摆在哪、多宽。`anchor` 所在那一栏是中间那一栏（.task-detail），`host` 是包住它和
+ * Inspector 的那一层：这一层始终挂在 host 里，只按量出来的尺寸决定盖中间那一栏还是整个详情区。
+ * 只在开着时量（active），跟着窗口、Inspector 宽度实时变。
  */
-function useDrawerRoom(anchor: HTMLElement | null): HTMLElement | null {
-  const [narrow, setNarrow] = useState(false);
-  const column = anchor?.parentElement ?? null;
-  useEffect(() => {
-    if (!column) return;
-    const measure = () => setNarrow(column.getBoundingClientRect().width < MIN_CENTER_FOR_INLINE);
+function useDrawerArea(anchor: HTMLElement | null, active: boolean): DrawerArea | null {
+  const center = anchor?.parentElement ?? null;
+  const host = anchor?.closest<HTMLElement>(".inspector-layout") ?? center;
+  const [measured, setMeasured] = useState<{ wide: boolean; style: CSSProperties; key: string } | null>(null);
+  useLayoutEffect(() => {
+    if (!active || !center || !host) return;
+    const measure = () => {
+      const c = center.getBoundingClientRect();
+      const h = host.getBoundingClientRect();
+      const wide = host !== center && Math.min(MAX_DRAWER_WIDTH, c.width * 0.78) < MIN_DRAWER_WIDTH;
+      const area = wide
+        ? { left: 0, top: 0, width: h.width, height: h.height }
+        : { left: c.left - h.left, top: c.top - h.top, width: c.width, height: c.height };
+      const drawer = Math.min(MAX_DRAWER_WIDTH, area.width * (wide ? 0.92 : 0.78));
+      const style = {
+        "--page-area-left": `${area.left}px`,
+        "--page-area-top": `${area.top}px`,
+        "--page-area-width": `${area.width}px`,
+        "--page-area-height": `${area.height}px`,
+        "--page-drawer-width": `${drawer}px`,
+      } as CSSProperties;
+      const key = `${wide}:${Object.values(style).join(",")}`;
+      setMeasured((prev) => (prev?.key === key ? prev : { wide, style, key }));
+    };
     measure();
     const observer = new ResizeObserver(measure);
-    observer.observe(column);
+    observer.observe(center);
+    observer.observe(host);
     return () => observer.disconnect();
-  }, [column]);
-  const wide = anchor?.closest<HTMLElement>(".inspector-layout") ?? null;
-  return narrow && wide && wide !== column ? wide : null;
+  }, [active, center, host]);
+  if (!active || !host || !measured) return null;
+  return { host, wide: measured.wide, style: measured.style };
 }
 
 export function useTaskDrawers({ task, allTasks, conversation, onOpenTask, renderTask }: {
@@ -83,7 +110,7 @@ export function useTaskDrawers({ task, allTasks, conversation, onOpenTask, rende
   const [layer, setLayer] = useState<HTMLElement | null>(null);
   const [covered, setCovered] = useState(false);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const room = useDrawerRoom(page ? null : anchor);
+  const area = useDrawerArea(page ? null : anchor, !!dispatched.drawer);
   const openHere = dispatched.state.open;
   const pageValue = useMemo<PageDrawers>(() => ({ layer, openDispatched: openHere, setCovered }), [layer, openHere]);
 
@@ -107,13 +134,18 @@ export function useTaskDrawers({ task, allTasks, conversation, onOpenTask, rende
       <>
         {own}
         <span className="page-drawer-anchor" ref={setAnchor} hidden />
-        {room ? createPortal(<div className="page-drawer-overlay">{pageLayer(pageValue, covered, dispatched.drawer, setLayer)}</div>, room) : pageLayer(pageValue, covered, dispatched.drawer, setLayer)}
+        {area && createPortal(
+          <div className={`page-drawer-host${area.wide ? " is-wide" : ""}`} style={area.style}>
+            {pageLayer(pageValue, covered, dispatched.drawer, setLayer)}
+          </div>,
+          area.host,
+        )}
       </>
     );
   return { ...stack, leftDrawer, dispatched: { ...dispatched, state: dispatchedState }, closeDrawers, drawers };
 }
 
-/** 派出的任务那一屉 + 里层推出来的那一屉摆的位置。照常画在中间那一栏，或者摆不下时整层挪到详情区上。 */
+/** 派出的任务那一屉 + 里层推出来的那一屉摆的位置（位置和宽度由外面那层 .page-drawer-host 的变量定）。 */
 function pageLayer(value: PageDrawers, covered: boolean, drawer: ReactNode, setLayer: (node: HTMLElement | null) => void) {
   return (
     <>

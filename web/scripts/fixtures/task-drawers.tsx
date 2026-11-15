@@ -64,15 +64,21 @@ declare global {
   interface Window { __add: (row: Partial<Task> & { id: string; title: string }) => void }
 }
 
+const NESTED_INSPECTORS = [{ id: "info", title: "信息", icon: <span aria-hidden="true">i</span>, render: () => <p>这条任务的信息</p> }];
+
 function NestedDetail({ task, allTasks, onOpenTask }: { task: Task; allTasks: TaskListItem[]; onOpenTask: (id: string) => void }) {
   const drawers = useTaskDrawers({
     task, allTasks, conversation, onOpenTask,
     renderTask: (child) => <NestedDetail key={child.id} task={child} allTasks={allTasks} onOpenTask={onOpenTask} />,
   });
   const agent = drawers.subagents.nativeWork.rows.find((row) => row.kind === "agent");
+  // 它自己的 Inspector（生产里是任务详情的那一栏）：在抽屉里开它，不能把会话和回复框挤成一条。
   return (
     <LeftDrawerProvider value={drawers.leftDrawer.api}>
+      <InspectorHost contextKey={`nested:${task.id}`} descriptors={NESTED_INSPECTORS} context={{}} defaultVisible={false}>
+      {({ toggleButton }) => (
       <section className="task-detail" data-drawer-task={task.id} style={{ position: "relative", flex: 1, minHeight: 0 }}>
+        {toggleButton}
         <p>{task.title} 的会话</p>
         {/* 回复框那一行（附件、派审查、预览、接力、执行器胶囊、发送键，收成图标之后）大约这么宽。 */}
         <div className="reply-row-probe" style={{ width: 320, height: 4 }} aria-hidden="true" />
@@ -85,6 +91,8 @@ function NestedDetail({ task, allTasks, onOpenTask }: { task: Task; allTasks: Ta
         })}>在{task.title}里读审查报告</button>
         {drawers.drawers}
       </section>
+      )}
+      </InspectorHost>
     </LeftDrawerProvider>
   );
 }

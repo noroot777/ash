@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type { Task, TaskListItem } from "@ash/shared";
 import { ArrowSquareOut } from "@phosphor-icons/react";
 import { SideDrawer } from "../../components/SideDrawer.tsx";
+import { InspectorOverlayProvider } from "../../inspector/index.ts";
 import { useTaskBody } from "../../lib/useTaskBody.ts";
 import { dispatchedOf } from "../../lib/dispatchTree.ts";
 
@@ -38,7 +39,8 @@ function DispatchedDrawer({ task, onClose, onGo, render }: {
       onClose={onClose}
       actions={<button type="button" onClick={onGo}><ArrowSquareOut size={13} aria-hidden="true" />到这个任务里去</button>}
     >
-      {full && render(full)}
+      {/* 这一屉摆不下内容加并排的一栏：里面那一页的 Inspector 一律盖在内容上（见 useTaskDrawers）。 */}
+      {full && <InspectorOverlayProvider value>{render(full)}</InspectorOverlayProvider>}
     </SideDrawer>
   );
 }
