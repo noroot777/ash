@@ -308,14 +308,47 @@
 
 .workspace-team-row:hover .workspace-team-caret:not(:disabled),
 .workspace-team-row:focus-within .workspace-team-caret:not(:disabled),
-.workspace-team-row.is-expanded .workspace-team-caret:not(:disabled) {
+.workspace-team-row.is-expanded .workspace-team-caret:not(:disabled),
+.workspace-dispatch-row:hover > .workspace-task-leading .workspace-team-caret,
+.workspace-dispatch-row:focus-within > .workspace-task-leading .workspace-team-caret,
+.workspace-dispatch-row.is-expanded > .workspace-task-leading .workspace-team-caret {
   opacity: 1;
 }
 
 .workspace-team-row:hover .workspace-team-leading > .workspace-status-dot,
 .workspace-team-row:focus-within .workspace-team-leading > .workspace-status-dot,
-.workspace-team-row.is-expanded .workspace-team-leading > .workspace-status-dot {
+.workspace-team-row.is-expanded .workspace-team-leading > .workspace-status-dot,
+.workspace-dispatch-row:hover > .workspace-task-leading .workspace-status-dot,
+.workspace-dispatch-row:focus-within > .workspace-task-leading .workspace-status-dot,
+.workspace-dispatch-row.is-expanded > .workspace-task-leading .workspace-status-dot {
   opacity: 0;
+}
+
+/* 触屏没有「指到」：箭头一直在（点得到它、也看得出这一行能展开）。 */
+@media (hover: none) {
+  .workspace-dispatch-row > .workspace-task-leading .workspace-team-caret { opacity: 1; }
+  .workspace-dispatch-row > .workspace-task-leading .workspace-status-dot { opacity: 0; }
+}
+
+/* 派出去的任务收在派它的那条下面：缩进一档、左边一道细线（同团队执行者那一列）。 */
+.workspace-dispatch-list {
+  margin: 1px 0 6px 10px;
+  border-left: 1px solid var(--line2);
+  padding-left: 4px;
+}
+
+/* 行尾那个数：名下几条。名下整棵有在等答复 / 失败的，变琥珀色。 */
+.workspace-dispatch-count {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-size: var(--t-xs);
+  font-style: normal;
+  font-weight: var(--w-regular);
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-dispatch-count.is-warn {
+  color: var(--amber);
 }
 
 .workspace-team-caret:hover:not(:disabled),

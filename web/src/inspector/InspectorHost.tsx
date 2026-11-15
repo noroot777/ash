@@ -1,5 +1,7 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useLayoutEffect,
@@ -30,6 +32,12 @@ import {
 import type { InspectorDescriptor, InspectorHostControls, InspectorTabPolicy } from "./types.ts";
 
 export { INSPECTOR_DEFAULT_WIDTH, INSPECTOR_MAX_WIDTH, INSPECTOR_MIN_WIDTH } from "./inspectorState.ts";
+
+// 摆不下并排一栏的容器（派出的任务那一屉，task-detail/useTaskDrawers.tsx）：里面的 InspectorHost
+// 跟窄屏一样当「盖在内容上的一层」—— 开关只算这一回、叉是「收起，回到内容」。判据按容器，不按窗口：
+// 窗口很宽、这一屉也摆不下内容加并排的一栏。样式在 dispatched.css，跟 inspector.css 的窄屏那段同一种做法。
+const InspectorOverlayContext = createContext(false);
+export const InspectorOverlayProvider = InspectorOverlayContext.Provider;
 
 function safeDomId(value: string) {
   return value.replace(/[^a-zA-Z0-9_-]/g, "-");
@@ -94,7 +102,9 @@ function InspectorHostState<Context>({
   const activeDescriptor = descriptorById.get(state.activeTab ?? "") ?? openedDescriptors[0] ?? null;
   // 窄屏上 Inspector 是盖在内容上的一层（inspector.css）：在手机上打开页面时不开，开关只算这一回，不改桌面上
   // 记着的开 / 关。开着的时候窗口被拉窄，就照样开着（变成盖在上面的一层），不让正看着的东西凭空消失。
-  const narrow = useNarrowScreen();
+  const overlayContainer = useContext(InspectorOverlayContext);
+  const narrowScreen = useNarrowScreen();
+  const narrow = narrowScreen || overlayContainer;
   const [narrowOpen, setNarrowOpen] = useState(false);
   const [narrowSeen, setNarrowSeen] = useState(narrow);
   if (narrow !== narrowSeen) {

@@ -29,6 +29,7 @@ import { resolve } from "node:path";
 import { createClient, type Client } from "./db/node-sqlite-client.js";
 import { dbClient } from "./db/index.js";
 import { resolveAshDbFile } from "./db/path.js";
+import { backfillDispatchedByAfterCopy } from "./db/migrate-dispatched-by.js";
 
 export type SeedMode = "snapshot" | "config";
 
@@ -216,6 +217,8 @@ export async function seedPreviewDb(sourceFile: string, mode: SeedMode = "snapsh
       const washed = await sanitizeSnapshot(dbClient);
       console.log(`[ash] 预览快照已洗掉运行态：${washed.join("、") || "无"}（定时任务与定时消息压根没搬）`);
     }
+    // 拷进来的任务没经过 createTasks，启动迁移那一遍又跑在拷之前：派活归属按主库的边界当场补上。
+    if (copied.tasks) await backfillDispatchedByAfterCopy(dbClient, source);
   } catch (e) {
     console.error("[ash] 预览播种失败（预览照常起，只是库是空的）:", e);
   } finally {

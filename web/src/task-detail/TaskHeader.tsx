@@ -18,6 +18,7 @@ import {
   SealCheck,
   SpinnerGap,
   Trash,
+  TreeStructure,
   UsersThree,
 } from "@phosphor-icons/react";
 import { TaskModeIcon, taskModeLabel, taskParentLink, taskParentRelation } from "../components/TaskOrigin.tsx";
@@ -342,7 +343,8 @@ function TaskSourceGlyph({ task, allTasks, onOpen }: { task: TaskListItem; allTa
   ].filter(Boolean).join("，");
   const glyph = link?.kind === "team" ? <UsersThree size={14} aria-hidden="true" />
     : creator ? <Robot size={14} aria-hidden="true" />
-      : <GitFork size={14} aria-hidden="true" />;
+      : link?.kind === "dispatch" ? <TreeStructure size={14} aria-hidden="true" />
+        : <GitFork size={14} aria-hidden="true" />;
   if (link?.task) {
     return (
       <IconButton label={said} size="sm" className="task-head-source" onClick={() => onOpen(link.taskId)}>

@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useMemo, useRef, useState, type ReactNode } from "react";
 import { File, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
@@ -29,6 +29,7 @@ import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
 import { isUnshownNotice, noticeView, questionsOnScreen, type NoticeContext } from "./timelineNoticeCopy.ts";
 import { FootnoteLine } from "./FootnoteLine.tsx";
 import { ReviewBubble } from "./ReviewBubble.tsx";
+import { feedRowAt, interleaveAsides, type FeedAside } from "./feedAsides.ts";
 import { reviewProgress } from "./reviewProgress.ts";
 import { footnoteKey, receiptsKey, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 import { crashedTurns } from "./turnFailure.ts";
@@ -303,6 +304,7 @@ export function ConversationFeed({
   bodyReady = true,
   onDeleteMessage,
   onReuseInput,
+  asides,
 }: {
   task: TaskListItem;
   /**
@@ -350,6 +352,8 @@ export function ConversationFeed({
   onDeleteMessage?: (sources: ConversationSource[]) => Promise<void>;
   /** 你发的那几句（含原始需求）放回对话框改了再发。不给就不出这颗键（没有对话框的视图）。 */
   onReuseInput?: (input: ReusableInput) => void;
+  /** 不在会话正文里、按时刻插进来的那几样（派出的任务来问的那颗气泡……，见 feedAsides.ts）。 */
+  asides?: readonly FeedAside[];
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   // 被挡回的用户操作合进同一条任务历史。正文读到手之后**无条件合** —— 「有没有正文」跟「这段历史该不该
@@ -532,7 +536,8 @@ export function ConversationFeed({
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
           {requirement && inputs[0]?.id === REQUIREMENT_INPUT_ID && <RequirementMessage requirement={requirement} onReuse={onReuseInput} />}
-          {rows.map((row) => {
+          {interleaveAsides(rows, asides ?? [], feedRowAt).map(({ row, aside }) => {
+            if (aside) return <Fragment key={aside.key}>{aside.node}</Fragment>;
             if (row.kind === "item") return renderItem(row.item);
             if (row.kind === "system-action") {
               return <SystemAuthoredMessage key={row.id} item={row.item} related={row.related} />;
@@ -577,7 +582,7 @@ export function ConversationFeed({
           {task.status === "backlog" && (task.prerequisites?.waiting || task.prerequisites?.blocked) && !activityPhase && (
             <PrerequisiteWait view={task.prerequisites} onOpenTask={onOpenTask} />
           )}
-          {!items.length && !loading && !error && !forkBlockedReason && !activityPhase
+          {!items.length && !asides?.length && !loading && !error && !forkBlockedReason && !activityPhase
             && !(task.status === "backlog" && (task.prerequisites?.waiting || task.prerequisites?.blocked)) && (
             <div className="task-conversation-empty">
               <File size={20} aria-hidden="true" />

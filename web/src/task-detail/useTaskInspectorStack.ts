@@ -1,7 +1,7 @@
 // 普通任务详情页的 Inspector 栈：**哪几格存在**（三层 hook 依次往描述符表上贴东西）
 // 和**默认开哪几格**（tabPolicy）。单独一个文件是为了守住 700 行，顺带把这条叠法
 // 集中到一处 —— 顺序错了症状很隐晦（下一层拿到的是上一层没加工过的表）。
-import { useMemo } from "react";
+import { createElement, useMemo } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
 import { useSubagents } from "./useSubagents.tsx";
 import { useMonitorInspector } from "../monitors/useMonitorInspector.tsx";
@@ -10,6 +10,9 @@ import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { TASK_INSPECTORS } from "./taskInspectors.tsx";
 import type { useConversation } from "../lib/useConversation.ts";
 import { latestRunFacts } from "./info/infoRunFacts.ts";
+import { surfaceTabWhenUsed } from "../inspector/index.ts";
+import { dispatchedOf } from "../lib/dispatchTree.ts";
+import { CountedIcon } from "./dispatched/CountedIcon.tsx";
 
 // 这几档 stage 下默认落在「审查」那一格：到了这一步，用户要看的就是审查那摊事。
 const REVIEW_FOCUS_STAGES = new Set(["verifying", "verified", "verify_failed", "awaiting_acceptance"]);
@@ -35,15 +38,20 @@ export function useTaskInspectorStack(
   // 备忘那一格只改标题/图标（有几条），开合仍按 TASK_INSPECTORS 的 defaultOpen —— 理由
   // 见 task-memos/useTaskMemoTab.tsx：手写第一条的入口只在那一格里。
   const memoTab = useTaskMemoTab(monitorTab.inspectors, task.id);
+  // 派出的任务：名下有才冒到图标条上，图标带个数（数据就是任务列表，派出去一条当场就有）。
+  const dispatchedCount = useMemo(() => dispatchedOf(allTasks, task.id).length, [allTasks, task.id]);
+  const dispatchedTab = useMemo(() => surfaceTabWhenUsed(memoTab, "dispatched", dispatchedCount > 0, (descriptor) => ({
+    icon: dispatchedCount > 0 ? createElement(CountedIcon, { icon: descriptor.icon, count: dispatchedCount }) : descriptor.icon,
+  })), [dispatchedCount, memoTab]);
   // 审查链状态在这一层订阅：竖轨上「审查」那一格的主色点要它（审查在跑），任务页别处
   // （验收后快照入口、「继续本轮审查」的可用性）也用同一份，一个任务只挂一条 2.5s 轮询。
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const reviewing = task.workflowMode === "free"
     ? (free.state?.reviews ?? []).some((run) => run.status === "reviewing")
     : task.stage === "verifying";
-  const inspectors = useMemo(() => memoTab.map((descriptor) => (descriptor.id === "review"
+  const inspectors = useMemo(() => dispatchedTab.map((descriptor) => (descriptor.id === "review"
     ? { ...descriptor, dot: reviewing ? "run" as const : null }
-    : descriptor)), [memoTab, reviewing]);
+    : descriptor)), [dispatchedTab, reviewing]);
 
   // 会话区那张卡把两种来源**分开**数（同 MonitorInspector 的分段）：ash 那几个才是「在等」
   // —— claude 内置 Monitor 的只读投影就算还显示 running 也唤不醒任何人（它的通知只注回那
@@ -70,7 +78,7 @@ export function useTaskInspectorStack(
     preserveActiveTabIds: ["side-chat", "memos"],
     // 顺序由 TASK_INSPECTORS 定，这里只说「默认哪几格开着」。
     //
-    // 子智能体和哨兵**故意不在这张表里**：那两格走「用过才浮现」（inspector/usedTabs.tsx），
+    // 子智能体、派出的任务和哨兵**故意不在这张表里**：那几格走「用过才浮现」（inspector/usedTabs.tsx），
     // 开合由各自的 hook 按本任务用没用过翻 `defaultOpen`，再由 InspectorHost 冒上来。写进
     // 这张表会让它们在每次语义换挡时被无条件并集回去，等于把那条规矩拆了。
     //

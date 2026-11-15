@@ -1,6 +1,7 @@
 // Core domain types shared between server and web.
 import type { TeamConfig } from "./team.ts";
 import type { QuestionRecord } from "./questions.ts";
+export type { DispatchSignal } from "./dispatch-signals.ts";
 import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
 import type { TaskWorkflowMode } from "./free-workflow.ts";
@@ -367,6 +368,9 @@ export interface Task {
   // Backlink used by duet ↔ team derivation chains.
   originTaskId?: string | null;
   creationOrigin?: import("./task-origin.ts").TaskCreationOrigin | null;
+  // 派它的那条任务（普通任务里派出去的独立任务收在谁名下）。不是 parentId：那是团队执行者。
+  // 随列表下发；建任务时可显式指定（用户从回复框派出去），不给就按创建来源认（server/src/task-dispatch.ts）。
+  dispatchedBy?: string | null;
   // §Pause 检查点续跑指令；非空时结算 paused，恢复后清空。
   resumePrompt?: string | null;
   // 就地验证轮的轮次号；非空 = 这一轮验证还没出结论。任务此刻多半没有进程在跑

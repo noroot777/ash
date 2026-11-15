@@ -26,8 +26,9 @@ import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
 import { HandoffBanner } from "./HandoffBanner.tsx";
 import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
+import { answerFromHost, useDispatchSignals } from "./dispatched/useDispatchSignals.tsx";
 import { replySend } from "./replySend.ts";
-import { LeftDrawerProvider, useLeftDrawerHost } from "../components/LeftDrawer.tsx";
+import { LeftDrawerProvider } from "../components/LeftDrawer.tsx";
 import { useDisputeRulingDock } from "../free-workflow/DisputeRulingDock.tsx";
 import { TaskDerivationComposer } from "./TaskDerivationComposer.tsx";
 import { TaskHeader, type PrimaryAction } from "./TaskHeader.tsx";
@@ -50,7 +51,7 @@ import { blocker, refreshTaskActions, shown, useTaskActions } from "../lib/useTa
 import { useExecutorGate } from "./ExecutorGate.tsx";
 import type { ComposerDraft } from "../composer/composerDraft.ts";
 import { forkReadBlock, snapshotConversationFork } from "./conversationFork.ts";
-import { useTaskInspectorStack } from "./useTaskInspectorStack.ts";
+import { useTaskDrawers } from "./useTaskDrawers.tsx";
 import { MemoSelectionScope } from "../task-memos/MemoSelectionScope.tsx";
 import { stageSideChatQuote } from "../side-chat/sideChatQuote.ts";
 import { useAddReplyQuote } from "./replyQuote.ts";
@@ -111,12 +112,14 @@ export function TaskDetail({
   // 读过 / 没读过的账（侧栏那一行的点）随打开的任务对齐；头上不再画状态点，返回值这里用不上。
   useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
-  // Inspector 栈（哪几格存在、默认开哪几格）整块在 useTaskInspectorStack.ts。
+  // 左边那几屉（子智能体 / 读全文 / 派出的任务，互斥）和 Inspector 栈，整块在 useTaskDrawers.tsx。
   // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点和验收后快照入口。
-  // 读全文的那一屉（审查报告、辩论记录）跟子智能体抽屉同一个位置，互斥：同一时刻左边只有一屉。
-  const leftDrawer = useLeftDrawerHost({ resetKey: task.id, onOpen: () => subagents.closeAgent() });
-  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount, free, runFacts } =
-    useTaskInspectorStack(task, allTasks, conversation, leftDrawer.close);
+  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount, free, runFacts, leftDrawer, dispatched, closeDrawers, drawers } = useTaskDrawers({
+    task, allTasks, conversation, onOpenTask,
+    renderTask: (child) => <TaskDetail key={child.id} task={child} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" notify={notify} />,
+  });
+  // 名下派出的任务来问 / 失败：会话里那几颗气泡、回复框那一格轮到谁答（dispatched/useDispatchSignals.tsx）。
+  const fromDispatched = useDispatchSignals({ task, allTasks, dispatched: dispatched.state.tasks, onOpen: dispatched.state.open });
   // 等你裁定时回复框顶上那一行（DisputeRulingDock）：选了一档，这一个框就成了那一步。
   const ruling = useDisputeRulingDock({ task, reviews: free.state?.reviews, known: !!free.state, onChanged: free.setState, notify });
   // 此刻能做什么（运行 / 停止 / 归档 / 重新排队 / 重跑上一回合 / 派验证）整份由服务端判，这里只照着画。
@@ -180,9 +183,6 @@ export function TaskDetail({
     fileView.close();
   }, [fileView.close, initialReviewOpen, task.id]);
 
-  // 中间那一栏换内容时，子智能体抽屉必须跟着收起来 —— 它盖在主区上面，不收的话用户
-  // 点了「审查」/ 文件 / diff 只会看到原来那份执行详情（与 TeamView 同一口径）。
-  const closeDrawers = () => { subagents.closeAgent(); leftDrawer.close(); };
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
     if (open) {
@@ -328,6 +328,7 @@ export function TaskDetail({
         descriptors={inspectors}
         context={{
           nativeWork: subagents.nativeWork,
+          dispatched: dispatched.state,
           monitors: monitorTab.monitors,
           task,
           groups,
@@ -534,6 +535,7 @@ export function TaskDetail({
                       reviewRetry={reviewRetry}
                       turnRetry={crashedTurnRetry}
                       reviews={free.state?.reviews}
+                      asides={fromDispatched.asides}
                       // 会话里那一句审查结论点过来：审查格展开那一轮（feed-10 / insp-5）。
                       onOpenReviewPanel={(target) => openTab("review", target ? reviewTargetRequest(target) : undefined)}
                       onOpenTask={onOpenTask}
@@ -563,10 +565,9 @@ export function TaskDetail({
                         />
                       )}
                       // 提问在等时，回复框那一格是答题卡（QuestionSlot）：全页只有一处打字、一颗发送键。
-                      onAnswer={async (answer, input) => {
-                        await api.answerTask(task.id, answer, input);
-                        notify("已发送答复，任务正在续跑");
-                      }}
+                      // 名下派出的任务来问时这一格是它的卡，答复直接送给它（不经这条任务，也不叫醒它）。
+                      asking={fromDispatched.asking}
+                      onAnswer={answerFromHost(task.id, () => notify("已发送答复，任务正在续跑"))}
                       actions={replyActions.actions}
                       moreItems={replyActions.moreItems}
                       moreRef={replyActions.moreRef}
@@ -649,9 +650,8 @@ export function TaskDetail({
                   notify={notify}
                 />
               )}
-              {/* 子智能体执行详情 / 读全文那一屉：盖住中间那一栏，右侧 Inspector 仍然看得见、点得着。 */}
-              {subagents.drawer}
-              {leftDrawer.drawer}
+              {/* 左边那一屉（子智能体 / 读全文 / 派出的任务）：盖住中间那一栏，右侧 Inspector 仍然看得见、点得着。 */}
+              {drawers}
             </div>
             {inspectorMode === "drawer" && inspectorToggleTarget
               ? createPortal(toggleButton, inspectorToggleTarget)

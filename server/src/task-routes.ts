@@ -28,6 +28,7 @@ import { executorScopeForOwner, type ExecutorScope } from "./auth/owned-executor
 import { executorDowngradePreflight } from "./auth/dispatch-gate.js";
 import { inheritOwner } from "./auth/run-env.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
+import { dispatcherRefusal } from "./task-dispatch.js";
 import { mountTaskDeleteRoutes } from "./task-delete-routes.js";
 import { mountPrerequisiteRoutes, prerequisiteRefusal, stringList } from "./prerequisite-routes.js";
 import { republishPrerequisiteView } from "./prerequisite-view.js";
@@ -195,6 +196,10 @@ api.post("/tasks", async (c) => {
       return c.json({ error: "task not found", [field]: taskRef }, 404);
     }
   }
+  {
+    const refused = await dispatcherRefusal(actorOf(c), b);
+    if (refused) return c.json(refused.body, refused.status);
+  }
   // 团队验收占着全队（team-acceptance-hold.ts）：这时加进来的执行者、审查任务不在占位里，能照常起跑、改共享目录。
   if ((b.parentId && heldForAcceptance(b.parentId)) || (b.reviewOf && heldForAcceptance(b.reviewOf))) {
     return c.json({ error: "所属团队正在验收，结束后再建它名下的执行者或审查", parentId: b.parentId ?? null, reviewOf: b.reviewOf ?? null }, 409);
@@ -337,6 +342,8 @@ api.post("/tasks", async (c) => {
     mergeTargetBranch: b.mergeTargetBranch ?? null,
     originTaskId: b.originTaskId ?? null,
     creationOrigin: await requestTaskCreationOrigin(c),
+    // 没给 = 按创建来源认（createTasks 里统一推导）；给了空串/null = 明说不归谁。
+    ...(b.dispatchedBy !== undefined ? { dispatchedBy: b.dispatchedBy || null } : {}),
     // createTasks 把它换成 tasks.workflow 里的快照（起手式是快照不是引用）。
     // 就地改过的线已经是快照了,直接落 workflow,createTasks 不会再去库里查。
     workflowId: b.workflowId ?? null,

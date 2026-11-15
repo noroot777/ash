@@ -188,7 +188,7 @@ export function CommandPalette({
         result.push({
           key: "task:parent",
           group: taskGroup,
-          label: `${parent.kind === "team" ? "打开所属团队" : `打开来源${taskModeLabel(taskParentMode(parent))}`} · ${parent.task.title}`,
+          label: `${parent.kind === "team" ? "打开所属团队" : parent.kind === "dispatch" ? "打开派它的任务" : `打开来源${taskModeLabel(taskParentMode(parent))}`} · ${parent.task.title}`,
           icon: <TaskModeIcon mode={taskParentMode(parent)} />,
           run: closeRun(() => onTask(parent.task!)),
         });

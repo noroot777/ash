@@ -1,0 +1,187 @@
+/* 右侧「派出的任务」那一格（task-detail/dispatched/DispatchedInspector.tsx）。
+   一行一个任务：状态点、标题、一行小字（执行器、用时），右端状态词。只有需要你处理的两种带颜色。 */
+.dispatched-pane {
+  padding: 2px 16px 20px;
+}
+
+.dispatched-head {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--t-xs);
+}
+
+.dispatched-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dispatched-list > li + li {
+  border-top: .5px solid var(--line);
+}
+
+.dispatched-row {
+  display: grid;
+  width: calc(100% + 16px);
+  min-height: 46px;
+  grid-template-columns: 7px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: 0 -8px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  padding: 6px 8px;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.dispatched-row:hover,
+.dispatched-row:focus-visible {
+  background: var(--hover-bg);
+}
+
+.dispatched-row.is-open {
+  background: var(--sel-bg);
+}
+
+.dispatched-row__mark {
+  display: grid;
+  width: 7px;
+  place-items: center;
+}
+
+.dispatched-row__main {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.dispatched-row__main > b {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: var(--w-regular);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dispatched-row__main > small {
+  overflow: hidden;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dispatched-row > em {
+  color: var(--muted);
+  font-size: var(--t-xs);
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.dispatched-row > em.is-ask { color: var(--amber); }
+.dispatched-row > em.is-bad { color: var(--red); }
+
+/* 竖轨图标右上角那个数（CountedIcon）。描一圈竖轨底色，跟图标线条分开。 */
+.insp-counted-icon {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+}
+
+.insp-counted-icon > i {
+  position: absolute;
+  top: -6px;
+  right: -9px;
+  min-width: 12px;
+  border-radius: var(--r-full);
+  background: var(--rail-bg, var(--panel));
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: var(--w-medium);
+  font-variant-numeric: tabular-nums;
+  line-height: 12px;
+  text-align: center;
+}
+
+/* 整页只有一屉（task-detail/useTaskDrawers.tsx）：「派出的任务」那一屉、里层推出来的那一屉都画在
+   这两层里，自己不占位置，定位基准仍是 .task-detail。里层推出东西时外层那一屉让出来 —— 藏起来，
+   不卸载（里层那一屉的内容就长在它里面），关上之后原样露回来。 */
+.page-drawer-slot,
+.page-drawer-layer {
+  display: contents;
+}
+
+.page-drawer-slot.is-covered {
+  visibility: hidden;
+}
+
+/* 派出的任务这一层（task-detail/useTaskDrawers.tsx）：开着时挂在详情区那一层（.inspector-layout）里，
+   盖中间那一栏还是整个详情区、抽屉多宽，都由 useDrawerArea 量好写进这几个变量。 */
+.page-drawer-host {
+  display: contents;
+}
+
+.inspector-layout:has(> .page-drawer-host) {
+  position: relative;
+}
+
+.page-drawer-host .side-drawer-scrim {
+  inset: auto;
+  top: var(--page-area-top);
+  left: var(--page-area-left);
+  width: var(--page-area-width);
+  height: var(--page-area-height);
+}
+
+.page-drawer-host .side-drawer {
+  top: var(--page-area-top);
+  bottom: auto;
+  left: var(--page-area-left);
+  width: var(--page-drawer-width);
+  height: var(--page-area-height);
+}
+
+/* 这一屉里那一页自己的 Inspector 一律盖在内容上，不并排：抽屉最宽 680，并排之后内容那一栏到不了
+   回复框要的 420（同窄屏下 inspector.css 的做法，只是这里按抽屉而不是按窗口判）。 */
+.page-drawer-host .side-drawer > .inspector-layout {
+  position: relative;
+}
+
+.page-drawer-host .side-drawer > .inspector-layout > .inspector-host {
+  position: absolute;
+  z-index: 30;
+  inset: 0;
+  width: 100%;
+  min-width: 0;
+  border-left: 0;
+}
+
+.page-drawer-host .side-drawer > .inspector-layout > .inspector-host .inspector-host__resize-handle {
+  display: none;
+}
+
+/* 派它的那条任务的会话里，派出的任务来问 / 失败的那颗气泡（task-detail/dispatched/DispatchedBubble.tsx）：
+   审查者那颗的骨架；字前那颗点只在还在等、失败时出现。标题加重那一下照辩论气泡（.debate-bubble-say b）。 */
+.dispatched-bubble .review-verdict-text { display: flex; align-items: flex-start; gap: 8px; }
+.dispatched-bubble.is-waiting .review-verdict-text { color: var(--ink); }
+.dispatched-bubble.is-waiting .debate-bubble-say b { color: var(--ink); }
+
+/* 在这里答的那一题：你那颗气泡，下面靠右一句小灰字。 */
+.dispatched-answer { margin-bottom: 20px; }
+.dispatched-answer > .task-message { margin-bottom: 0; }
+.dispatched-answer > .turn-footnote.is-trailing { max-width: 790px; }
+
+/* 答题卡上是谁在问（名下派出的任务来问时）：题目前面那一句。 */
+.question-card-asker { margin: 0 0 2px; color: var(--muted); font-size: var(--t-xs); font-weight: var(--w-medium); overflow-wrap: anywhere; }
+.question-card-peek .question-card-asker { margin: 0 4px 0 0; color: var(--muted); font-size: inherit; }

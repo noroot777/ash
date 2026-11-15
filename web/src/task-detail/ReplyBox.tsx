@@ -67,6 +67,7 @@ export function ReplyBox({
   tasks = [],
   override,
   onAnswer,
+  asking,
 }: {
   task: Task;
   hasConversation: boolean;
@@ -125,8 +126,10 @@ export function ReplyBox({
   tasks?: TaskListItem[];
   /** 这个框此刻被借用（等你裁定时框顶那一行）；见 replyOverride.ts。 */
   override?: ReplyOverride;
-  /** 有问题在等时怎么答：给了，框那一格就由答题卡接管（QuestionSlot.tsx）。 */
-  onAnswer?: (answer: string, input: QuestionAnswerInput) => Promise<void>;
+  /** 有问题在等时怎么答：给了，框那一格就由答题卡接管（QuestionSlot.tsx）。第三个参数是卡对的那一条。 */
+  onAnswer?: (answer: string, input: QuestionAnswerInput, asking: TaskListItem) => Promise<void>;
+  /** 这一格此刻是谁的卡；不给就是这条任务自己（名下派出的任务来问时由宿主给那一条）。 */
+  asking?: TaskListItem | null;
 }) {
   const draft = useTaskReplyDraft(task.id);
   const shellRef = useReplyLayout();
@@ -236,7 +239,7 @@ export function ReplyBox({
   // 答题卡展开着（连同它收回去那一下）：平常的框和它的全部浮层都不挂，草稿原样留着（QuestionSlot.tsx）。
   // 框里的工具（选执行器、发送设置、截图批注、更多）跟着框一起卸掉；框外这几层（补全、引用、`@`
   // 之后选模型、派生面板）在下面逐个按 covering 让开。由宿主开着的那两层顺手关上，收起时不再自己弹回来。
-  const takeover = useQuestionTakeover(onAnswer ? task : null);
+  const takeover = useQuestionTakeover(onAnswer ? asking === undefined ? task : asking : null);
   const covering = takeover.covering;
   useEffect(() => {
     if (!covering) return;
@@ -551,7 +554,7 @@ export function ReplyBox({
       {commandResult?.taskId === task.id && <p className="task-reply-command-result" role="status" aria-label="命令结果">{commandResult.text}</p>}
       {topRail}
       </div>
-      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} />}
+      {onAnswer && <QuestionDock takeover={takeover} onAnswer={onAnswer} hostId={task.id} />}
       {!covering && <div className="task-reply-box">
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />
         <AgentPlate name={activeAgent} />

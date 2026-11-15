@@ -167,6 +167,7 @@ export function TaskRow({
   leading,
   wrapperClassName = "",
   trailing,
+  tally,
 }: {
   task: TaskListItem;
   allTasks: TaskListItem[];
@@ -181,6 +182,8 @@ export function TaskRow({
   leading?: React.ReactNode;
   wrapperClassName?: string;
   trailing?: React.ReactNode;
+  // 行尾常驻的那个数（名下收着几条派出去的任务，见 DispatchTreeRows）。
+  tally?: React.ReactNode;
 }) {
   const selected = selectedTaskId === task.id;
   const look = lookForTask(task);
@@ -222,7 +225,7 @@ export function TaskRow({
   // 智能体开的、却查不到来源任务的（外部智能体自报、群聊委派）：没地方可去，就只画一颗看的
   // 机器人。查得到来源的那种由下面的 OriginTaskChip 画成能点的那一颗。
   const agentOnly = showOrigin && !hasOrigin && task.creationOrigin?.kind === "agent" ? taskCreationLabel(task.creationOrigin) : null;
-  const hasEnd = !!look.word || isTeam || pinned || !!agentOnly;
+  const hasEnd = !!look.word || isTeam || pinned || !!agentOnly || tally != null;
   return (
     <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${spreadCells && look.bucket === "todo" ? " is-todo" : ""}${hasEnd ? " has-end" : ""}${task.starredAt != null ? " has-star" : ""}${queueBadge ? " has-queue" : ""}${canStar ? " can-star" : ""}`}>
       <span className="workspace-task-leading">
@@ -244,6 +247,7 @@ export function TaskRow({
             {isTeam && <RowGlyph icon={UsersThree} label="团队任务" />}
             {agentOnly && <RowGlyph icon={Robot} label={agentOnly} />}
             {pinned && <RowGlyph icon={PushPin} label="已置顶" />}
+            {tally}
           </span>
         )}
         {hasMeta && (

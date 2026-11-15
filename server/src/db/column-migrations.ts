@@ -415,4 +415,6 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN follow_up_held_from TEXT",
   // 备忘里贴的图(见 db/schema.ts 同名列)。存量行 NULL = 没有附件。
   "ALTER TABLE task_memos ADD COLUMN attachments TEXT",
+  // 派它的那条任务(见 db/schema.ts 同名列)。存量行由 migrate-dispatched-by.ts 按 creation_origin 回填。
+  "ALTER TABLE tasks ADD COLUMN dispatched_by TEXT",
 ];
