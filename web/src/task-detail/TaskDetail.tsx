@@ -26,7 +26,7 @@ import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
 import { HandoffBanner } from "./HandoffBanner.tsx";
 import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
-import { useDispatchSignals } from "./dispatched/useDispatchSignals.tsx";
+import { answerFromHost, useDispatchSignals } from "./dispatched/useDispatchSignals.tsx";
 import { replySend } from "./replySend.ts";
 import { LeftDrawerProvider } from "../components/LeftDrawer.tsx";
 import { useDisputeRulingDock } from "../free-workflow/DisputeRulingDock.tsx";
@@ -566,14 +566,7 @@ export function TaskDetail({
                       // 提问在等时，回复框那一格是答题卡（QuestionSlot）：全页只有一处打字、一颗发送键。
                       // 名下派出的任务来问时这一格是它的卡，答复直接送给它（不经这条任务，也不叫醒它）。
                       asking={fromDispatched.asking}
-                      onAnswer={async (answer, input, asking) => {
-                        if (asking.id !== task.id) {
-                          await api.answerTask(asking.id, answer, input, task.id);
-                          return;
-                        }
-                        await api.answerTask(task.id, answer, input);
-                        notify("已发送答复，任务正在续跑");
-                      }}
+                      onAnswer={answerFromHost(task.id, () => notify("已发送答复，任务正在续跑"))}
                       actions={replyActions.actions}
                       moreItems={replyActions.moreItems}
                       moreRef={replyActions.moreRef}

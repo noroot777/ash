@@ -5,6 +5,10 @@
 // 题目的头一句、失败的原因都还读得出来。也不能写进派它的那条任务的会话正文：那份正文会进它的
 // 上下文（用户定的：这些问答不自动进它的上下文、不叫醒它、不算它的回合）。
 //
+// 失败只认执行回合落成的失败：续聊回合（follow_up_from 非空）收尾时回到原来那个「失败」不是又失败了一次
+// —— 用户在抽屉里跟一条失败的任务说一句话，派它的那条不该多出一颗气泡。重试是执行回合，照记。
+// 触发器每次启动先删再建：定义改了，存量库也跟着换（IF NOT EXISTS 只认名字）。
+//
 // 写入用触发器，不在各条路上逐个记：提问有 ask_question、工作流「问我一句」、续聊回合里提的问；
 // 失败有结算、启动对账、手改状态……漏一条就少一颗气泡。触发器跟那一笔状态改动在同一条语句里落库，
 // 状态变了就一定有这一行。失败原因要等结算说得出来才知道，由结算之后补上（../dispatch-signals.ts）。
@@ -50,7 +54,8 @@ export async function ensureDispatchSignalSchema(client: Client): Promise<void> 
     );
     CREATE INDEX IF NOT EXISTS dispatch_signals_dispatcher_idx ON dispatch_signals (dispatcher_id, seq);
     CREATE INDEX IF NOT EXISTS dispatch_signals_task_idx ON dispatch_signals (task_id, seq);
-    CREATE TRIGGER IF NOT EXISTS dispatch_signals_question AFTER UPDATE OF question, question_options, question_items ON tasks
+    DROP TRIGGER IF EXISTS dispatch_signals_question;
+    CREATE TRIGGER dispatch_signals_question AFTER UPDATE OF question, question_options, question_items ON tasks
       WHEN NEW.question IS NOT NULL AND NEW.dispatched_by IS NOT NULL AND NEW.parent_id IS NULL
         AND (OLD.question IS NULL OR OLD.question IS NOT NEW.question
           OR OLD.question_options IS NOT NEW.question_options OR OLD.question_items IS NOT NEW.question_items)
@@ -58,8 +63,10 @@ export async function ensureDispatchSignalSchema(client: Client): Promise<void> 
       INSERT INTO dispatch_signals (dispatcher_id, task_id, kind, occurred_at, question, question_options, question_items)
         VALUES (NEW.dispatched_by, NEW.id, 'question', ${AT}, NEW.question, NEW.question_options, NEW.question_items);
     END;
-    CREATE TRIGGER IF NOT EXISTS dispatch_signals_failed AFTER UPDATE OF status ON tasks
+    DROP TRIGGER IF EXISTS dispatch_signals_failed;
+    CREATE TRIGGER dispatch_signals_failed AFTER UPDATE OF status ON tasks
       WHEN NEW.status = 'failed' AND OLD.status IS NOT 'failed' AND NEW.dispatched_by IS NOT NULL AND NEW.parent_id IS NULL
+        AND OLD.follow_up_from IS NULL
     BEGIN
       INSERT INTO dispatch_signals (dispatcher_id, task_id, kind, occurred_at)
         VALUES (NEW.dispatched_by, NEW.id, 'failed', ${AT});

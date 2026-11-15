@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { DispatchSignal, Task, TaskListItem } from "@ash/shared";
+import type { QuestionAnswerInput } from "@ash/shared/questions";
 import { api } from "../../lib/api.ts";
 import { useServerEvents } from "../../lib/events.ts";
 import { useCatchUp, useCatchUpLink } from "../../lib/useCatchUp.ts";
@@ -69,6 +70,21 @@ export function useDispatchSignals({ task, allTasks, dispatched, onOpen }: {
     return list.sort((a, b) => a.at.localeCompare(b.at));
   }, [allTasks, onOpen, signals]);
   return { asking, asides };
+}
+
+/**
+ * 回复框那一格的答复送到哪：卡是这条任务自己的就答自己；是名下派出的那一条的，就直接送给那一条
+ * （带上 via = 这条任务，那边只多留一颗「你」的气泡）—— 不经这条任务，也不叫醒它。
+ */
+export function answerFromHost(hostId: string, onOwnAnswered: () => void) {
+  return async (answer: string, input: QuestionAnswerInput, asking: TaskListItem) => {
+    if (asking.id !== hostId) {
+      await api.answerTask(asking.id, answer, input, hostId);
+      return;
+    }
+    await api.answerTask(hostId, answer, input);
+    onOwnAnswered();
+  };
 }
 
 /** 在这里答的那一题：题目和答案留在你那颗气泡里，下面靠右一句小灰字说送到了谁那儿。 */
