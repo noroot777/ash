@@ -25,12 +25,12 @@
 // 下游自己被移进队列的，交给队列推进。
 import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
-import { groups, queueItems, scheduledMessages, taskPrerequisiteLaunches, tasks } from "./db/schema.js";
+import { groups, projects, queueItems, scheduledMessages, taskPrerequisiteLaunches, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { prerequisiteStandings } from "./prerequisite-standing.js";
 import { dependentEdges, launchRecord, prerequisiteEdges } from "./prerequisite-store.js";
 import { holdForPrerequisitesLocked, withPrerequisiteLock } from "./prerequisite-gate.js";
-import { appendTaskTimeline, receiptLine } from "./task-timeline.js";
+import { alertLine, appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { forgetStanding, isRepublishingView, republishPrerequisiteView } from "./prerequisite-view.js";
 import { freeSlot, onSlotFreed, takeSlot } from "./launch-slots.js";
 import type { TurnIdentity } from "./turn-lock.js";
@@ -59,7 +59,31 @@ async function progress(prerequisiteId: string, known?: string[]): Promise<void>
   const dependents = known ?? (await dependentEdges(prerequisiteId)).map((edge) => edge.taskId);
   if (!dependents.length) return;
   await republishPrerequisiteView(dependents);
-  for (const taskId of dependents) await releaseOne(taskId);
+  for (const taskId of dependents) {
+    await settleIfAbandoned(taskId);
+    await releaseOne(taskId);
+  }
+}
+
+/**
+ * 去掉 / 删掉了一条前置：下游要是一条都不剩、又有换到一半的安装，当场退回建任务时的起点，不等它下一次起跑
+ * （打开预览看到的就是对的代码）。走开工判定同一条路（holdForPrerequisites 没有前置时只做这件事），挡住了就
+ * 记在任务上。
+ */
+async function settleIfAbandoned(taskId: string): Promise<void> {
+  const record = await launchRecord(taskId);
+  if (!record?.installJournal?.length || record.launchedAt || (await prerequisiteEdges(taskId)).length) return;
+  await withPrerequisiteLock(taskId, async () => {
+    const current = await launchRecord(taskId);
+    if (!current?.installJournal?.length || current.launchedAt || (await prerequisiteEdges(taskId)).length) return;
+    const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    const project = task && (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
+    if (!task || !project) return;
+    const { settleAbandonedInstall } = await import("./prerequisite-install.js");
+    const { withRepoLock } = await import("./repo-lock.js");
+    const reason = await withRepoLock(project.repoPath, () => settleAbandonedInstall(project.repoPath, task));
+    if (reason) await appendTaskTimeline(taskId, alertLine(reason));
+  });
 }
 
 /** 一条挂着「等齐就起」的下游：齐了就起。不齐、分组暂停、名额满了、已经起过的都原样留着。 */

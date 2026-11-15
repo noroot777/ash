@@ -1,4 +1,4 @@
-// 前置的交付证明、起点、恢复与并发（审查第 2 轮 F1–F6、N1、N2，第 3 轮 1–3 那几类）。主场景在 test-prerequisites.ts，
+// 前置的交付证明、起点、恢复与并发（审查第 2 轮 F1–F6、N1、N2，第 3 轮 1–3，第 4 轮 1 那几类）。主场景在 test-prerequisites.ts，
 // 底层闸在 test-prerequisites-gate.ts。
 //
 //  R1 不用 worktree 的前置也要交出提交：项目目录有没提交的改动不算站稳；它在非目标分支上提交的，下游起点里有；
@@ -13,6 +13,8 @@
 //  R7 已验收不等于下游拿得到：换过克隆、分支和压缩前的源提交都没了，取验收合入的那个提交合进起点；
 //     连它也读不到的不开工、说清楚（第 3 轮审查 1）；
 //  R8 放行认领回合之后定起点抛错（ref 被锁住）：回合还回去，故障消失后照样起（第 3 轮审查 2）；
+//  R9 换到一半断掉之后前置一条都不剩了（去掉最后一条 / 前置任务被删）：工作区退回建任务时的起点再开工，
+//     不带着已经去掉的代码；只剩任务分支的同样退回（第 4 轮审查 1）；
 //  N1 「等齐就起」挂上 / 撤回时，那条任务的可用动作记脏（停止键跟着出现 / 消失）；
 //  N2 从没跑过的任务停止等待，任务历史里留一条。
 // 跑：npm -w server run test:prerequisites
@@ -231,6 +233,48 @@ try {
     await sweepPrerequisiteLaunches();
     await until("故障消失后照样起", () => hasStarted(b));
     console.log("✓ R8 放行认领回合后定起点抛错：回合归还，故障消失后照样起");
+  }
+
+  // ── R9 换到一半断掉、前置一条都不剩 ──────────────────────────────────────
+  {
+    const p = await project();
+    /** 一条下游：开过工作区，前置站稳后开工判定换到一半断掉（日志记了、目录 / 分支换了，开工没落库）。 */
+    const interrupted = async (suffix: string, opts: { dropDirectory?: boolean } = {}) => {
+      const a = await p.task(`${suffix}-a`);
+      const done = await p.finish(a, `${suffix}-removed.txt`);
+      const b = await p.task(suffix, { prerequisites: [a] });
+      const ws = await taskWorkspace(await row(b), p.repo);
+      await journalInstall(b, done.head);
+      git(p.repo, "update-ref", baseRef(b), done.head);
+      git(ws.path, "reset", "-q", "--keep", done.head);
+      if (opts.dropDirectory) git(p.repo, "worktree", "remove", "--force", ws.path);
+      return { a, b, ws, original: (await row(b)).worktreeStartCommit! };
+    };
+    const settled = async (b: string) => until("前置清空后换到一半的安装被收拾掉", async () => !(await launchRecord(b))?.installJournal);
+
+    const removed = await interrupted("x");
+    assert.ok(has(removed.ws.path, "x-removed.txt"));
+    assert.equal((await request("DELETE", `/tasks/${removed.b}/prerequisites/${removed.a}`)).status, 200);
+    await settled(removed.b);
+    assert.equal(git(removed.ws.path, "rev-parse", "HEAD"), removed.original, "去掉最后一条前置：退回建任务时的起点");
+    assert.equal(has(removed.ws.path, "x-removed.txt"), false, "已经去掉的前置的代码不在了");
+    assert.equal(git(p.repo, "rev-parse", baseRef(removed.b)), removed.original);
+    assert.equal(await holdReason(removed.b), null, "没有前置：照原路开工");
+
+    const deleted = await interrupted("y", { dropDirectory: true });
+    assert.equal((await request("DELETE", `/tasks/${deleted.a}`)).status, 200);
+    await settled(deleted.b);
+    const branch = git(p.repo, "rev-parse", `refs/heads/${deleted.ws.branch}`);
+    assert.equal(branch, deleted.original, "前置任务被删、只剩任务分支：分支也退回建任务时的起点");
+    const restored = await taskWorkspace(await row(deleted.b), p.repo);
+    assert.equal(has(restored.path, "y-removed.txt"), false);
+
+    // 不经事件、直接起跑的那一路：开工判定自己也会先收拾。
+    const direct = await interrupted("z");
+    await db.delete(taskPrerequisites).where(eq(taskPrerequisites.taskId, direct.b));
+    assert.equal(await holdReason(direct.b), null);
+    assert.equal(git(direct.ws.path, "rev-parse", "HEAD"), direct.original, "开工判定在没有前置时也先退回");
+    console.log("✓ R9 换到一半断掉后前置清空：工作区 / 任务分支退回建任务时的起点再开工");
   }
 
   // ── N1 / N2 停止键跟着请求走；从没跑过的停止留痕 ─────────────────────────────

@@ -30,7 +30,7 @@ import { baseRef, commitAt } from "./task-branch-plan.js";
 import { prerequisiteStandings, type PrerequisiteStanding } from "./prerequisite-standing.js";
 import { launchRecord, prerequisiteEdges } from "./prerequisite-store.js";
 import { checkoutHasPrerequisites, prerequisiteStart } from "./prerequisite-start-point.js";
-import { applyInstall, journalInstall, planInstall } from "./prerequisite-install.js";
+import { applyInstall, journalInstall, planInstall, settleAbandonedInstall } from "./prerequisite-install.js";
 import { republishPrerequisiteView } from "./prerequisite-view.js";
 import { alertLine, appendTaskTimeline, receiptLine } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -105,12 +105,20 @@ const sameStanding = (a: PrerequisiteStanding | undefined, b: PrerequisiteStandi
 
 async function attemptGate(taskId: string, request: LaunchRequest): Promise<PrerequisiteHold | null | typeof RETRY> {
   const edges = await prerequisiteEdges(taskId);
-  if (!edges.length) return null;
-  if ((await launchRecord(taskId))?.launchedAt) return null;
+  const record = await launchRecord(taskId);
+  if (record?.launchedAt) return null;
+  // 没有前置的任务照原路起跑 —— 除非上一次开工判定换到一半（日志非空）：那份代码得先退回去（prerequisite-install.ts）。
+  if (!edges.length && !record?.installJournal?.length) return null;
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return null;
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!project) return null;
+  if (!edges.length) {
+    const reason = await withRepoLock(project.repoPath, () => settleAbandonedInstall(project.repoPath, task));
+    if (!reason) return null;
+    await recordRequest(taskId, request, reason);
+    return { reason };
+  }
   const ids = edges.map((edge) => edge.prerequisiteId);
   return withRepoLock(project.repoPath, async () => {
     const standings = await prerequisiteStandings(ids);
