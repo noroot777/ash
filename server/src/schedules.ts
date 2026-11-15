@@ -88,27 +88,21 @@ async function fire(taskId: string): Promise<boolean> {
   // 派它的那条（往上整条链）按了「全部停下」同理（task-hold.ts）。
   if (await taskHoldOf(t)) return false;
   // 原子占位后启动:只读预检查在任何 await 之后都可能过期,占到才算这一班真的开跑
-  // (审查实测:验收/turn 窗口里 once 被永久消费)。占位后再查验收锁——与验收侧
-  // beginAccepting→isTurnClaimed 互为镜像,任意交错至少一方退避;退避不消费班次,
-  // 下个 tick 再试。duet 走同一把锁:它原来在占位之前就 fire-and-forget 并返回
+  // (审查实测:验收/turn 窗口里 once 被永久消费)。占位后再查验收锁与停着(admitClaimedFire);
+  // 退避不消费班次,下个 tick 再试。duet 走同一把锁:它原来在占位之前就 fire-and-forget 并返回
   // true,于是验收锁里的 duet 一步没跑、once 班次却被永久消费(审查实测)。
   const turn = claimOwnTurn(taskId, t.mode === "duet" ? "duet" : "single");
   if (!turn) return false;
-  if (isAcceptingTask(taskId)) {
-    releaseTurn(taskId, turn);
-    return false;
+  // 占到之后、交给 seatThenStart 之前这一段,锁归本函数管:不放行的每个出口 —— 退避,或者读库/
+  // 写库抛错 —— 都在这里还掉。tick 会吞掉异常,漏还一次,任务就永远「回合正在进行」,自动和
+  // 手动都起不来(第 3 轮审查 F1)。抛错同样不消费班次,下个 tick 重试。
+  let admitted = false;
+  try {
+    admitted = await admitClaimedFire(taskId);
+  } finally {
+    if (!admitted) releaseTurn(taskId, turn);
   }
-  // 占到之后按持久事实再认一次:入口那次 taskHoldOf 是一层层 await 往上读的,读到一半别处按了
-  // 「全部停下」(或分组暂停),入口拿到的就是旧答案,而停的那一下清点时它还没占位、无从拦起
-  // (第 2 轮审查 F1)。认出来就退避、不消费班次 —— 这一班自己就是起跑的责任,放开之后下一个
-  // tick 照常开新的一轮;停的那一下若已经给它记了欠账就撤掉(兑现欠账是从原会话续,定时要的是
-  // 新一轮)。这之后才落下的停由 runTask 末端那道闸接住(origin auto),走欠账。
-  const frozen = await turnFreezeReason(taskId, true);
-  if (frozen) {
-    if (frozen.source === "dispatch-hold") await forgetHeldStart(taskId, frozen.byTaskId);
-    releaseTurn(taskId, turn);
-    return false;
-  }
+  if (!admitted) return false;
   // 队列执行认领(queue-seat.ts):排在后面的任务到了定时启动时间,也得等前项结束 ——
   // 到点启动与手动运行/消息补投/队列推进争同一个占位,否则 fire 只占任务级回合锁、
   // 按自己的状态放行,同队前项还在跑就开了第二个(第 8 轮审查拦验收 1:once 到点
@@ -120,6 +114,21 @@ async function fire(taskId: string): Promise<boolean> {
     return false;
   }
   return true;
+}
+
+/** 已占位的这一班能不能开跑。不改锁:锁由调用方按结果还。 */
+async function admitClaimedFire(taskId: string): Promise<boolean> {
+  // 占位后再查验收锁——与验收侧 beginAccepting→isTurnClaimed 互为镜像,任意交错至少一方退避。
+  if (isAcceptingTask(taskId)) return false;
+  // 占到之后按持久事实再认一次:入口那次 taskHoldOf 是一层层 await 往上读的,读到一半别处按了
+  // 「全部停下」(或分组暂停),入口拿到的就是旧答案,而停的那一下清点时它还没占位、无从拦起
+  // (第 2 轮审查 F1)。认出来就退避、不消费班次 —— 这一班自己就是起跑的责任,放开之后下一个
+  // tick 照常开新的一轮;停的那一下若已经给它记了欠账就撤掉(兑现欠账是从原会话续,定时要的是
+  // 新一轮)。这之后才落下的停由 runTask 末端那道闸接住(origin auto),走欠账。
+  const frozen = await turnFreezeReason(taskId, true);
+  if (!frozen) return true;
+  if (frozen.source === "dispatch-hold") await forgetHeldStart(taskId, frozen.byTaskId);
+  return false;
 }
 
 export async function tick() {

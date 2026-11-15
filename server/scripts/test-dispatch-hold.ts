@@ -11,7 +11,8 @@
 //   · 欠账只在真起跑时销：停完马上接着跑（进程还在退出）不丢那一次，被分组拦着的账留着；
 //   · 智能体的起跑过了入口检查才碰上停，起跑前最后一道闸照样拦下、记成欠账；
 //   · 先落「停着」再清点名下（清点途中新起跑的那一位逃不出去）；
-//   · 到点启动的入口读到旧答案时，占位之后那一次复查拦下它、不消费班次，放开后照常开新的一轮。
+//   · 到点启动的入口读到旧答案时，占位之后那一次复查拦下它、不消费班次，放开后照常开新的一轮；
+//     那次复查读库失败时把占位还掉，下一个 tick 照常起。
 //
 // 走真实的调度链路（队列推进、分组运行、路由、结算钩子），只换掉「起一个 CLI」那一步：假执行器
 // 记下每一回合拿到的输入与续的是哪条原生会话，回合一直挂着，直到测试放它走或者它被停掉。
@@ -155,6 +156,8 @@ await db.insert(tasks).values([
   task("H6", { status: "done", title: "到点启动碰上停" }),
   ...Array.from({ length: 30 }, (_, index) => task(`M${index + 1}`, { status: "done", dispatchedBy: index ? `M${index}` : "H6" })),
   task("S4", { dispatchedBy: "M30" }),
+  task("H7", { status: "done", title: "到点启动读库失败" }),
+  task("S5", { dispatchedBy: "H7" }),
 ]);
 await db.insert(schema.queueItems).values([
   { taskId: "A", queueId: "Q", position: 0, createdAt: at },
@@ -385,6 +388,35 @@ try {
   await until("放开后下一个 tick 照常开新的一轮", () => turnsOf("S4").length === 1);
   assert.equal(turnsOf("S4")[0]!.resume, undefined, "定时开的是新一轮，不续旧会话");
   assert.equal((await db.select().from(schema.schedules).where(eq(schema.schedules.id, "once-S4")))[0]!.enabled, false, "这才消费班次");
+
+  // ── 到点启动占位之后那次复查读库失败一次：锁还掉、班次不消费，下一个 tick 照常起，手动也起得来 ─────
+  await db.insert(schema.schedules).values({ id: "once-S5", taskId: "S5", kind: "once", at: new Date(Date.now() - 1_000).toISOString(), createdAt: at });
+  let faulted = 0;
+  let claimedAtFault = false;
+  (dbClient as { execute: unknown }).execute = async (stmt: Parameters<typeof execute>[0]) => {
+    const text = typeof stmt === "string" ? stmt : stmt.sql;
+    const args = typeof stmt === "string" ? [] : Object.values(stmt.args ?? {});
+    if (!faulted && text.startsWith('select "archived", "group_id"') && args.includes("S5")) {
+      faulted += 1;
+      claimedAtFault = runs.isTurnClaimed("S5");
+      throw new Error("注入：一次临时读库失败");
+    }
+    return execute(stmt);
+  };
+  try {
+    await tick();
+  } finally {
+    (dbClient as { execute: unknown }).execute = execute;
+  }
+  assert.equal(faulted, 1, "故障打在占位之后那次复查上");
+  assert.ok(claimedAtFault, "出错那一刻锁确实占着");
+  assert.ok(!runs.isTurnClaimed("S5"), "出错之后锁还掉了");
+  assert.equal(turnsOf("S5").length, 0);
+  const faultShift = (await db.select().from(schema.schedules).where(eq(schema.schedules.id, "once-S5")))[0]!;
+  assert.equal(faultShift.enabled, true, "班次没被消费");
+  assert.equal(faultShift.lastRunAt, null);
+  await tick();
+  await until("故障过去后下一个 tick 照常起", () => turnsOf("S5").length === 1);
 
   console.log("dispatch hold: ok");
 } catch (error) {
