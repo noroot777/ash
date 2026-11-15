@@ -21,13 +21,15 @@ type Gate = ReturnType<typeof useAcceptGate>;
  * 跑了多久、怎么停；红了之后日志在哪、有没有交给任务。点这一行展开日志末尾；指上去才出设置键
  * （项目设置：和「设置 → 项目设置 → 验收」改的是同一组字段）。
  */
-export function GateCheck({ task, gate, canManage, settled, atFinalGate, disabled, editRequested, onEditClosed, notify }: {
+export function GateCheck({ task, gate, canManage, settled, atFinalGate, skipping, disabled, editRequested, onEditClosed, notify }: {
   task: TaskListItem;
   gate: Gate;
   /** 项目管理权限（useCanManage）；null = 还没读到，设置键先不出。 */
   canManage: boolean | null;
   settled: boolean;
   atFinalGate: boolean;
+  /** 这一按会跳过它（确认层「运行」那一勾此刻的样子，默认是上一次确认的）。 */
+  skipping: boolean;
   /** 归档、任务在跑、这一屏正忙：会真的起一轮的「交给任务」跟着禁用。 */
   disabled: boolean;
   /** 确认层里点了「设一条前置命令」：没有这一行时也得摆出来，好让设置层有地方挂。 */
@@ -41,7 +43,7 @@ export function GateCheck({ task, gate, canManage, settled, atFinalGate, disable
   const [log, setLog] = useState<{ runId: string; text: string } | null>(null);
   const gear = useRef<HTMLButtonElement>(null);
   const tip = useHoverTip();
-  const line = gateLine({ ...gate, settled, atFinalGate });
+  const line = gateLine({ ...gate, settled, atFinalGate, skipping });
   useEffect(() => { if (editRequested && canManage) setSettingsOpen(true); }, [editRequested, canManage]);
 
   const act = async (work: () => Promise<string | null>) => {

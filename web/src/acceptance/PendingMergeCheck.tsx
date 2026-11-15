@@ -70,7 +70,7 @@ export function PendingMergeCheck({ task, notify, onTaskUpdated }: {
 
   const run = async (kind: "commit" | "remerge") => {
     if (busy) return;
-    if (kind === "remerge" && commitChoice === null && commitDefault.value === null) return;
+    if (kind === "remerge" && commitDefault.pending) return;
     setAction(null);
     setBusy(true);
     let result;

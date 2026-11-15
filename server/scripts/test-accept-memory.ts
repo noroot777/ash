@@ -3,7 +3,8 @@
 //  · 「运行」那一勾按人、按项目各记一份，随门禁状态带出去(skipRemembered)；没记过 = 照常跑；
 //  · 写了它，这个项目下还没验收的任务各推一次 task.acceptGate(别的标签页、下一个任务立刻跟上)；
 //  · 「提交」那一勾就是项目设置：管理员确认时写回 projects.accept_commit(变了才推 project.updated)，
-//    没有管理权限就不写、回执说 commitSaved:false；看不见项目 403，项目不在 404，含糊的真值 400；
+//    没有管理权限就不写、回执说 commitSaved:false；别处刚改过也照写（不凭早先的快照省掉赋值）；
+//    看不见项目 403，项目不在 404，含糊的真值 400；
 //  · 回合凭证写不动它(个人面写闸)；验收接口和别的入口不读它(只有门禁状态那条 GET 读)。
 //
 // 跑：npx tsx server/scripts/test-accept-memory.ts
@@ -102,6 +103,17 @@ await addTask("u1", "p2", "verified");
   assert.equal(events.length, 0, "跟项目设置一样：什么都不推");
   await remember("p1", { commit: true, skipGate: false });
   assert.equal(await acceptCommitOf("p1"), true);
+  // 别处（设置页、另一个确认）刚把它改掉：这一次确认照样写进去，回执报实际存下的值（第 1 轮审查 F4）。
+  await db.update(projects).set({ acceptCommit: false }).where(eq(projects.id, "p1"));
+  events.length = 0;
+  assert.deepEqual((await remember("p1", { commit: true })).body, { skipGate: false, commit: true, commitSaved: true });
+  assert.equal(await acceptCommitOf("p1"), true, "比较和写入在同一条语句里，不凭早先读到的值省掉赋值");
+  assert.equal(events.filter((event) => event.type === "project.updated").length, 1);
+  // 两个确认几乎同时到：落库的是其中一个，回执各报各自存下的值，库里与最后落下的那一个一致。
+  const [a, b] = await Promise.all([remember("p1", { commit: false }), remember("p1", { commit: true })]);
+  assert.deepEqual([a.body.commit, b.body.commit], [false, true]);
+  assert.ok([false, true].includes(await acceptCommitOf("p1")));
+  await remember("p1", { commit: true });
 }
 
 // ── 坏请求 ───────────────────────────────────────────────────────────────────

@@ -29,6 +29,9 @@ import { AutoCommitCheck, WorkspaceCheck } from "./WorkspaceCheck.tsx";
 /** 宿主自己知道、这里不知道的那一道关（团队：共享执行者还没跑完）。 */
 export type HostBlock = { text: string; detail?: string };
 
+/** 记下这一次怎么勾的，最多等这么久；过了就照层里看见的值直接验收。 */
+const REMEMBER_TIMEOUT_MS = 5_000;
+
 const BASELINE_ISSUE = {
   merge_conflict: "会撞冲突",
   accept_gate_target_behind: "还没含最新的目标分支",
@@ -144,7 +147,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         : verification.verification ? (verification.acknowledged ? "acknowledged" : "unacknowledged") : "none";
   const view = confirmView({
     steps, gate: confirmGate, runChoice, commitChoosable, commitChoice, commitDefault: commitDefault.value,
-    count: family.length ? merging.length : 1, verification: verifyState,
+    commitDefaultPending: commitDefault.pending, count: family.length ? merging.length : 1, verification: verifyState,
   });
   const described = acceptanceSteps(task, view.commit);
   const shownSteps = described.kind === "merge" && acceptTarget ? { ...described, target: acceptTarget } : described;
@@ -173,14 +176,20 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
     setFailure(null);
     // 先记下这一次怎么勾的（下一个任务打开就是这个样子），再验收。记不住不拦验收：这一按用的是层里看到的值，
     // 记没记住在提示后面缀一句。
+    // 等它有上限（第 1 轮审查 F2）：连接挂住不报错时，不能让验收一直等在「记住」后面。到点就放弃这一份
+    // （中止请求：没送到的不会再落库，送到了的早已落完 —— 服务端那一下是一条语句，不会晚到盖掉下一次）。
     let forgot = "";
     if (memory) {
       try {
-        await api.rememberAccept(task.projectId, memory);
+        const saved = await api.rememberAccept(task.projectId, memory, AbortSignal.timeout(REMEMBER_TIMEOUT_MS));
         // 前提列那一行跟着刚记下的说（服务端也会推一次，断线时不能只指望它）。
         if (memory.skipGate !== undefined) void gate.reload();
+        // 打开时以为有管理权限、确认那一刻已经没有了：照回执说，不拿打开时的角色推断（第 1 轮审查 N2）。
+        if (memory.commit !== undefined && !saved.commitSaved && canManage !== false) forgot = "（「提交」那一勾只管了这一次：项目默认要管理员改）";
       } catch (reason) {
-        forgot = `（这次的选择没记住：${reason instanceof Error ? reason.message : String(reason)}）`;
+        const why = reason instanceof DOMException && reason.name === "TimeoutError" ? "保存超时"
+          : reason instanceof Error ? reason.message : String(reason);
+        forgot = `（这次的选择没记住：${why}）`;
       }
     }
     const say = (message: string) => notify(message + forgot);
@@ -270,7 +279,9 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         <PendingMergeCheck key={task.id} task={task} notify={notify} onTaskUpdated={onTaskUpdated} />
         {autoCommit?.taskId === task.id && <AutoCommitCheck outcome={autoCommit.outcome} />}
         {!midGate && !settled && <WorkspaceCheck key={task.id} task={task} notify={notify} disabled={rowDisabled} />}
+        {/* 这一按跳不跳过，前提列与确认层同一份推导（view）：统一验收不走「运行」那一勾，就不预告跳过。 */}
         {!midGate && <GateCheck task={task} gate={gate} canManage={canManage} settled={settled} atFinalGate={!midGate}
+          skipping={view.gateIntent === "skip"}
           disabled={rowDisabled} editRequested={editGate} onEditClosed={() => setEditGate(false)} notify={notify} />}
         {!midGate && !settled && issue && <BaselineCheck task={task} issue={issue} disabled={rowDisabled} reload={gate.reload} notify={notify} />}
         {worktreeChecks && <DependencyChecks task={task} plan={plan} checked={checked} onChecked={setChecked}

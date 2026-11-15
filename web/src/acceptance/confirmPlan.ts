@@ -39,6 +39,8 @@ export type ConfirmInput = {
   commitChoice: boolean | null;
   /** 项目默认；null = 还没读到（读到之前一律不许确认）。 */
   commitDefault: boolean | null;
+  /** 项目默认正在重读（别处刚改过、断线重连）：没手动改过「提交」时，读到之前不许确认。 */
+  commitDefaultPending?: boolean;
   /** 一次验收几个任务（父任务 + 勾上的派生任务）；1 = 只验这一个。 */
   count: number;
   /** 独立验证尚未执行：要先勾「知情」。 */
@@ -63,7 +65,7 @@ export function confirmView(input: ConfirmInput): ConfirmView {
   const { steps, gate } = input;
   const runs = gate ? input.runChoice ?? (!gate.reusable && !gate.skipRemembered) : false;
   const gateIntent = !gate ? undefined : gate.reusable ? (runs ? "rerun" : undefined) : runs ? undefined : "skip";
-  const commitKnown = input.commitChoice !== null || input.commitDefault !== null;
+  const commitKnown = input.commitChoice !== null || (input.commitDefault !== null && !input.commitDefaultPending);
   const commit = input.commitChoosable ? input.commitChoice ?? input.commitDefault ?? true : true;
   const batchNeedsCommit = input.commitChoosable && !commit && input.count > 1;
   const confirmLabel = steps.kind === "release" ? "放行"

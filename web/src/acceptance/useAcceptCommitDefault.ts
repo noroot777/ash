@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useServerEvents } from "../lib/events.ts";
 import { api } from "../lib/api.ts";
 
 // 「这一次合并完要不要替我提交」——确认层里「提交」那一勾（单任务、统一验收、重新合一次共用）。
@@ -17,20 +18,36 @@ import { api } from "../lib/api.ts";
 // 存在」），而列表本来就带着每个项目的全部设置，还顺带走了同一套可见性过滤。
 
 export type AcceptCommitDefault = {
-  /** 项目设置的当前值；null = 还没读到（读到之前一律不许确认） */
+  /**
+   * 项目设置最近读到的值；null = 还没读到或这一次读失败（读到之前一律不许确认）。重读期间留着上一份
+   * 给勾画出来，但 `pending` 为真，没手动改过这一勾的那一按不许确认。
+   */
   value: boolean | null;
   error: string | null;
-  /** 还在读、或读失败 —— 两种都不能按确认 */
+  /** 还在读、正在重读、或读失败 —— 都不能拿 value 当这一按的默认去确认 */
   pending: boolean;
   reload: () => void;
 };
 
+// 打开着的这一层也要追平：别处（设置页、另一个页面的确认层）改了这个项目的默认，没手动动过这一勾的
+// 确认层得跟着变，不能拿打开那一刻的旧值去验收、还把旧值写回去（第 1 轮审查 F1）。所以收到这个项目的
+// project.updated、或者断线重连之后，打开着的那几处（验收确认层、重新合一次）都重读一次。
 export function useAcceptCommitDefault(projectId: string, enabled: boolean): AcceptCommitDefault {
   const [state, setState] = useState<{ key: string; value: boolean | null; error: string | null }>(
     { key: "", value: null, error: null },
   );
   const [attempt, setAttempt] = useState(0);
   const key = `${projectId}:${enabled}:${attempt}`;
+  const bump = useCallback(() => setAttempt((n) => n + 1), []);
+  const connected = useServerEvents((event) => {
+    if (enabled && event.type === "project.updated" && event.projectId === projectId) bump();
+  });
+  const wasConnected = useRef(connected);
+  useEffect(() => {
+    // 断线期间漏掉的变化没有事件可等：连回来就当它变过。
+    if (connected && !wasConnected.current && enabled) bump();
+    wasConnected.current = connected;
+  }, [connected, enabled, bump]);
   useEffect(() => {
     if (!enabled) return;
     let alive = true;
@@ -49,11 +66,11 @@ export function useAcceptCommitDefault(projectId: string, enabled: boolean): Acc
   // 关掉就作废手上那份：确认时可能刚把它写回了项目设置（或者别处改了），下一次打开必须重读，
   // 不能先拿上一次读到的值放开确认键 —— key 在两次打开之间是同一个，光靠它分不出新旧。
   useEffect(() => { if (!enabled) setState({ key: "", value: null, error: null }); }, [enabled]);
-  const current = state.key === key ? state : { value: null, error: null };
+  const fresh = state.key === key;
   return {
-    value: current.value,
-    error: current.error,
-    pending: enabled && current.value === null,
-    reload: useCallback(() => setAttempt((n) => n + 1), []),
+    value: enabled ? state.value : null,
+    error: fresh ? state.error : null,
+    pending: enabled && (!fresh || state.value === null),
+    reload: bump,
   };
 }

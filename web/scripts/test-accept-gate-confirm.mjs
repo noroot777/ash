@@ -9,6 +9,9 @@
 //    关掉层（取消、Esc、再点主按钮）不记、回到记住的那个样子；记住跳过时前提列那一行先说「验收时跳过」，
 //    不打开层也看得出；「提交」记成项目设置本身，没有管理权限时层里说只管这一次；有一次作数的绿时
 //    沿用与重跑都不改记住的「跳没跳过」；记不住不拦验收、提示里说出来；「知情」那一勾不记。
+// ⑭c 第 1 轮审查：层开着时项目默认被别处改了（project.updated / 断线重连），没手动动过的「提交」跟着变、
+//    动过的照旧；「记住」挂住不返回时最多等几秒就照常验收；勾上派生任务一起验收时前提列不预告跳过
+//    （统一验收不走「运行」那一勾）。
 // ⑮ 红行拦主按钮：前置命令在跑（gate.occupied）时主按钮 disabled、那一行写「运行中」；
 //    门禁状态读不出来（GET 503）时主按钮 disabled、那一行写「状态读不出来」带「重试」，点重试
 //    读到之后才放开 —— **读失败不放行**（「没读到」不等于「没在跑」）。
@@ -153,6 +156,62 @@ export async function testAcceptGateConfirm({ open, run }) {
     await accepted(store, 1);
     assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: true, gate: "skip" });
     await page.getByRole("status", { name: "操作结果" }).filter({ hasText: "这次的选择没记住" }).waitFor();
+    await page.close();
+  }
+
+  // ⑭c 层开着时项目默认在别处被改：没动过的那一勾跟着变，动过的照旧；断线重连之后也重读。
+  {
+    const { page, store } = await open({ gate: { command: null, running: null, latest: null, basis: null }, events: true });
+    const layer = await openConfirm(page);
+    const commitBox = layer.getByRole("checkbox", { name: "合并后提交" });
+    assert.equal(await commitBox.isChecked(), true);
+    store.acceptCommit = false;
+    await page.evaluate(() => window.emitGateEvent({ type: "project.updated", projectId: "proj-1" }));
+    await layer.getByRole("button", { name: "验收，不提交", exact: true }).and(page.locator("button:enabled")).waitFor();
+    assert.equal(await commitBox.isChecked(), false, "没手动动过：跟最新的项目默认");
+    // 手动勾上之后：连回来重读、再来一次项目变化，都不盖掉这一次的选择。
+    await commitBox.check();
+    const before = store.projectReads;
+    await page.evaluate(() => { window.dropGateStream(); setTimeout(() => window.reopenGateStream(), 50); });
+    await waitUntil(() => store.projectReads > before, "连回来之后重读项目默认");
+    await page.evaluate(() => window.emitGateEvent({ type: "project.updated", projectId: "proj-1" }));
+    await waitUntil(() => store.projectReads > before + 1, "又一次项目变化");
+    await layer.getByRole("button", { name: "确认验收", exact: true }).and(page.locator("button:enabled")).waitFor();
+    assert.equal(await commitBox.isChecked(), true, "手动勾过的这一次选择不被别处的改动盖掉");
+    await layer.getByRole("button", { name: "确认验收", exact: true }).click();
+    await accepted(store, 1);
+    assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: true });
+    await page.close();
+  }
+
+  // ⑭c 「记住」挂住不返回：最多等几秒，照层里看见的值验收，提示里说没记住。
+  {
+    const { page, store } = await open({ gate: { command: "./kb.sh test full", running: null, latest: null, basis: null } });
+    store.memoryHold = new Promise(() => {});
+    const layer = await openConfirm(page);
+    await layer.getByRole("checkbox", { name: "运行前置命令" }).uncheck();
+    await layer.getByRole("button", { name: "跳过并验收", exact: true }).click();
+    await waitUntil(() => store.accepts.length === 1, { message: "挂住的保存不能把验收一直拦在后面", timeout: 15_000 });
+    assert.deepEqual(store.accepts[0], { confirmUnverified: false, commit: true, gate: "skip" });
+    await page.getByRole("status", { name: "操作结果" }).filter({ hasText: "这次的选择没记住：保存超时" }).waitFor();
+    await deskSettled(page);
+    assert.equal(await mainButton(page).isEnabled(), true, "验收走完之后主按钮放开");
+    await page.close();
+  }
+
+  // ⑭c 记着跳过，但勾上派生任务一起验收：统一验收不走「运行」那一勾，前提列就不预告跳过。
+  {
+    const { page } = await open({ gate: { command: "./kb.sh test full", running: null, latest: null, basis: null, skipRemembered: true },
+      children: ["派生甲"] });
+    assert.equal(await stateOf(gateRow(page)), "验收时跳过");
+    await checkRow(page, "child").getByRole("checkbox").check();
+    await mainButton(page).filter({ hasText: "验收 2 个任务" }).waitFor();
+    await gateRow(page).filter({ hasText: "验收时运行" }).waitFor();
+    const layer = await openConfirm(page);
+    assert.equal(await layer.getByRole("checkbox", { name: "运行前置命令" }).count(), 0, "确认层里本来就没有这一步");
+    await layer.getByRole("button", { name: "取消", exact: true }).click();
+    await checkRow(page, "child").getByRole("checkbox").uncheck();
+    await gateRow(page).filter({ hasText: "验收时跳过" }).waitFor();
     await page.close();
   }
 

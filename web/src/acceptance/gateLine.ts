@@ -39,6 +39,8 @@ export type GateLineInput = {
   settled: boolean;
   /** 停在中途那道关口：这一按只是放行，不预告「验收时运行」。 */
   atFinalGate: boolean;
+  /** 这一按会跳过它：和确认层「运行」那一勾同一份推导（confirmPlan.ts 的 gateIntent），不另凭记忆猜。 */
+  skipping?: boolean;
   now?: number;
 };
 
@@ -66,9 +68,9 @@ export function gateLine(input: GateLineInput): GateLine | null {
     ({ ...base, tone: error ? "idle" : tone, command: state.command, word: `${word}${unconfirmed}`, editable: true, retry: !!error, ...more });
   if (state.unavailable) return line("block", "本机能力不可用");
   if (state.sourceError) return line("block", "源码输入不可用");
-  // 上一次在这个项目里确认验收时取消了「运行」：确认层这次默认也不勾（confirmPlan.ts），这一行得先说出来，
-  // 不打开确认层也看得出这一按不会跑它。只有一次还作数的绿不受影响（那时默认是沿用）。
-  const skip = state.skipRemembered === true;
+  // 这一按会跳过（上一次在这个项目里确认验收时取消了「运行」，确认层这次默认也不勾）：这一行得先说出来，
+  // 不打开确认层也看得出这一按不会跑它。由调用方按确认层的推导给 —— 统一验收不走那一勾，就不说跳过。
+  const skip = input.skipping === true;
   const plan = (word: string) => (skip ? `${word}，验收时跳过` : word);
   const pending = (more: Partial<GateLine> = {}) => (skip ? line("skipped", "验收时跳过", more) : line("idle", "验收时运行", more));
   if (!latest) return pending();

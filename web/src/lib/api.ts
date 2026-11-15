@@ -419,8 +419,8 @@ export const api = {
     throw apiError(response, body);
   },
   // 确认层点确认时记下这一次怎么勾的（按人按项目；「提交」写回项目设置，要管理权限）。
-  rememberAccept: (projectId: string, write: AcceptMemoryWrite): Promise<AcceptMemoryWriteResult> =>
-    request(`/accept-memory/${id(projectId)}`, json("PUT", write)),
+  rememberAccept: (projectId: string, write: AcceptMemoryWrite, signal?: AbortSignal): Promise<AcceptMemoryWriteResult> =>
+    request(`/accept-memory/${id(projectId)}`, { ...json("PUT", write), signal }),
   acceptGate: (taskId: string, signal?: AbortSignal): Promise<AcceptGateState> => request(`/tasks/${id(taskId)}/accept-gate`, { signal }),
   // 整份日志单独取：状态接口每隔几秒拉一次，几十 MB 的回归输出不能搭在它上面。
   // runId 指定某一次（已验收那张回执看的是**凭据那一次**，不是最近一次）。

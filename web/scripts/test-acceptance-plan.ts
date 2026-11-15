@@ -89,6 +89,13 @@ assert.equal(confirmView(input()).gateIntent, undefined);
   assert.equal(confirmView(input({ commitChoosable: false, commitDefault: null })).confirmDisabled, false);
 }
 
+// 5b. 项目默认正在重读（别处刚改过、断线重连）：没手动改过「提交」就等读到再放行；手动改过的照它走。
+{
+  const refreshing = confirmView(input({ commitDefault: true, commitDefaultPending: true }));
+  assert.equal(refreshing.confirmDisabled, true, "拿旧默认去确认，会把旧值发出去还写回项目设置（第 1 轮审查 F1）");
+  assert.equal(confirmView(input({ commitDefault: true, commitDefaultPending: true, commitChoice: false })).confirmDisabled, false);
+}
+
 // 6. 一次多个任务又不提交：只能合一个，确认键灰着。
 {
   const batch = confirmView(input({ count: 2, commitChoice: false }));
@@ -176,7 +183,9 @@ assert.equal(line({ latest: run({ status: "failed", exitCode: 1, command: "npm r
 
 // 13b. 上次跳过：不打开确认层也看得出这一按不会跑 —— 跟确认层「运行」那一勾的默认同一个口径。
 {
-  const skipped = (over: Partial<GateLineInput> = {}) => line({ state: state({ skipRemembered: true }), ...over })!;
+  const skipped = (over: Partial<GateLineInput> = {}) => line({ skipping: true, ...over })!;
+  assert.equal(line({ state: state({ skipRemembered: true }) })!.word, "验收时运行",
+    "只认调用方按确认层推出来的那一份：统一验收不走「运行」那一勾，记着跳过也不预告（第 1 轮审查 F3）");
   assert.equal(skipped().word, "验收时跳过");
   assert.equal(skipped().tone, "skipped");
   assert.equal(skipped({ latest: run({ stale: true }) }).word, "通过，但代码变了，验收时跳过");
@@ -185,7 +194,7 @@ assert.equal(line({ latest: run({ status: "failed", exitCode: 1, command: "npm r
   assert.equal(skipped({ latest: run({ status: "canceled" }) }).word, "已取消，验收时跳过");
   assert.equal(skipped({ latest: run() }).word, "通过 · 8 分钟前", "有作数的绿：这一按沿用它，不提跳过");
   assert.equal(skipped({ atFinalGate: false }), null, "只是放行那一站：不预告");
-  assert.equal(line({ settled: true, state: state({ skipRemembered: true, basis: { mode: "passed", run: run() } } as Partial<AcceptGateState>) })!.word,
+  assert.equal(line({ skipping: true, settled: true, state: state({ basis: { mode: "passed", run: run() } } as Partial<AcceptGateState>) })!.word,
     "通过", "已验收：只认凭据");
 }
 

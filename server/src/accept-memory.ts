@@ -10,7 +10,7 @@
 //    提交与否照样按层里看见的值发给 /accept（那条不读这里）。
 import type { Hono } from "hono";
 import type { AcceptMemoryWriteResult } from "@ash/shared/accept-gate";
-import { and, eq, isNull, notInArray, or } from "drizzle-orm";
+import { and, eq, isNull, ne, notInArray, or } from "drizzle-orm";
 import { actorOf, authErrorResponse, ownerIdOf, type Actor } from "./auth/context.js";
 import { projectRoleOf, requireProjectAccess } from "./auth/visibility.js";
 import { bus } from "./bus.js";
@@ -61,15 +61,21 @@ export function mountAcceptMemoryRoutes(api: Hono): void {
     let commitSaved = false;
     if (typeof body.commit === "boolean") {
       commitSaved = (await projectRoleOf(actor, pid)) === "admin";
-      if (commitSaved && body.commit !== (project.acceptCommit !== false)) {
-        await db.update(projects).set({ acceptCommit: body.commit }).where(eq(projects.id, pid));
-        bus.publish({ type: "project.updated", projectId: pid });
+      if (commitSaved) {
+        // 比较和写入是**同一条语句**：不拿请求开头读到的项目行判「本来就是这个值、不用写」—— 中间别的
+        // 确认、设置页可能已经改过它，凭旧快照省掉这次赋值，最后确认的那一下就没记住（第 1 轮审查 F4）。
+        // 真改了一行才推项目变化。
+        const changed = await db.update(projects).set({ acceptCommit: body.commit })
+          .where(and(eq(projects.id, pid), ne(projects.acceptCommit, body.commit))).returning({ id: projects.id });
+        if (changed.length) bus.publish({ type: "project.updated", projectId: pid });
       }
     }
-    const current = (await db.select({ acceptCommit: projects.acceptCommit }).from(projects).where(eq(projects.id, pid))).at(0);
+    // 回执报这一次实际存下的值；没写的那一项才去读现在的样子。
+    const current = commitSaved ? null
+      : (await db.select({ acceptCommit: projects.acceptCommit }).from(projects).where(eq(projects.id, pid))).at(0);
     const result: AcceptMemoryWriteResult = {
-      skipGate: await rememberedSkipGate(actor, pid),
-      commit: current?.acceptCommit !== false,
+      skipGate: typeof body.skipGate === "boolean" ? body.skipGate : await rememberedSkipGate(actor, pid),
+      commit: commitSaved ? body.commit === true : current?.acceptCommit !== false,
       commitSaved,
     };
     return c.json(result);
