@@ -69,12 +69,13 @@ export function DiscussionBubble({ row, fallback, task, onOpen }: {
         {!live && <BubbleKey label="每段一句" expanded={open} controls={bodyId} onClick={toggle}><ListBullets size={14} aria-hidden="true" /></BubbleKey>}
       </>}
       below={<>
+        {/* 谁在说第几段：展开前后都紧贴在气泡下面。 */}
+        {live && <p className="review-progress-now"><span className="review-progress-step">{discussionNowText(discussion)}</span></p>}
         {open && (
           <div className="turn-footnote-lane debate-bubble-lane" id={bodyId}>
             <DiscussionOverview discussion={discussion} onOpen={drawer ? openRecord : undefined} />
           </div>
         )}
-        {live && !open && <p className="review-progress-now"><span className="review-progress-step">{discussionNowText(discussion)}</span></p>}
       </>}
     >
       <button

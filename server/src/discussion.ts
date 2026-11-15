@@ -5,6 +5,10 @@
 // 原样不动），发言用 `debate_reply` 交卷、带一句写给用户的摘要，推进只在结算里做，落在同一张表里
 // （kind=discussion）。谁在第几段说、什么算谈拢，按 @ash/shared/discussion 那几条规则算。
 //
+// 一场讨论的输入在发起那一刻就定死，之后每一段都只认它：各方是谁、按哪一套执行器配置说（主执行器也是，中途
+// 改了任务的执行器，这一场照旧由原来那位说完、写合稿）、附了哪些图和文件（各方第一段都带上）、讨论之前的
+// 背景（本任务对话记录的只读副本，见 discussion-background.ts）。交卷时再核一遍此刻在说的是不是这一段该说的人。
+//
 // 一场讨论的一生：
 //   发起 → 第 1 段 …… 第 N 段（每段一个旁路回合）→ 谈拢了 / 说满了轮数 → synthesizing：
 //   这条任务的执行器续它自己的会话写合稿（也是旁路回合，回复就落在主会话里）→ finished。
@@ -19,10 +23,11 @@ import {
   discussionAgreed, discussionRoundsLabel, discussionRoundsOf, discussionTotalSegments, isBlindSeq,
   MAX_DISCUSSION_GUESTS, speakerAt, speakingOrder,
 } from "@ash/shared/discussion";
-import { asc, and, eq } from "drizzle-orm";
+import { asc, and, desc, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
-import { freeReviewDebates, freeReviewRuns, tasks } from "./db/schema.js";
+import { freeReviewDebates, freeReviewRuns, sessions, tasks } from "./db/schema.js";
+import { backgroundOf, snapshotDiscussionBackground } from "./discussion-background.js";
 import { discussionSegmentPrompt, discussionSynthesisPrompt, type SpokenSegment } from "./discussion-prompts.js";
 import { plainSummaryOf } from "./free-review-dispute.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
@@ -32,7 +37,7 @@ import {
   activeTalkOf, commitSegment, failTalk, hangingTalks, openSegment, segmentEnding, speakingTurnOf,
   statementOf, talkOrphaned, talkTurnsOf, type TalkRow, type TalkTurnRow,
 } from "./talk/segments.js";
-import { alertLine, appendTaskTimeline, receiptLine } from "./task-timeline.js";
+import { alertLine, appendTaskTimeline, noticeLine } from "./task-timeline.js";
 import { id, now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -52,6 +57,20 @@ function participantsOf(talk: TalkRow): DiscussionParticipant[] {
   } catch {
     return [];
   }
+}
+
+function attachmentsOf(talk: TalkRow): string[] {
+  try {
+    const parsed = JSON.parse(talk.attachments ?? "[]") as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string" && !!item) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 讨论的结构那几句（开始 / 轮到谁 / 说完 / 中止）：带着是哪一场，会话里那颗气泡按它认（web conversationDiscussionRows.ts）。 */
+function note(talk: Pick<TalkRow, "id" | "taskId">, phase: "start" | "segment" | "end" | "aborted", text: string) {
+  return appendTaskTimeline(talk.taskId, noticeLine({ kind: "discussion", discussionId: talk.id, phase }, text));
 }
 
 function roundsOf(talk: TalkRow): DiscussionRounds {
@@ -112,41 +131,43 @@ export async function segmentPromptFor(taskId: string, talk: TalkRow, turn: Talk
   const prompt = discussionSegmentPrompt({
     taskId, topic: talk.topic ?? "", order, rounds: roundsOf(talk), seq: turn.seq, total: totalOf(talk), speaker,
     previous: isBlindSeq(turn.seq, order.length) ? [] : spokenSince(await talkTurnsOf(talk.id), speaker.agentType, turn.seq),
+    background: backgroundOf(talk.background),
   });
   return { speaker, prompt };
 }
 
 /**
- * 这一段的回合怎么起：一律是旁路回合（任务状态、验收阶段、审查链原样不动）。主执行器续任务自己的会话
- * （不带 agent，就是这条任务的常设配置）；被叫来的人照它被叫时的那一套（同「问一句」的 @），续它自己那条。
+ * 这一段（或合稿）的回合怎么起：一律是旁路回合（任务状态、验收阶段、审查链原样不动），一律按参与者记下的那一套
+ * 执行器配置起——主执行器也不例外，不跟着任务此刻的常设配置走。同一种执行器在一条任务里只有一条会话，所以
+ * 主执行器续的还是任务自己那条，被叫来的人续它自己那条。
+ *
+ * 第一轮（blind）：各方都还没见过发起时附的图和文件，一并带上；也不告诉它实时对话记录在哪——那里会有本场别人
+ * 刚写的第一段，背景另给发起时截下的副本（提示词里）。
  */
 export function segmentTurnOptions(speaker: DiscussionParticipant, blind: boolean, attachments: readonly string[]) {
   return {
     system: "run" as const,
     sideTurn: true,
-    // 第一轮各方都还没见过用户发起时附的图和文件。
-    ...(blind && attachments.length ? { attachments: [...attachments] } : {}),
-    ...(speaker.host ? {} : {
-      agent: speaker.agentType,
-      executorId: speaker.executorId,
-      model: speaker.model,
-      reasoningEffort: speaker.reasoningEffort,
-    }),
+    agent: speaker.agentType,
+    executorId: speaker.executorId,
+    model: speaker.model,
+    reasoningEffort: speaker.reasoningEffort,
+    ...(blind ? { withholdPeerNotice: true, ...(attachments.length ? { attachments: [...attachments] } : {}) } : {}),
   };
 }
 
 /** 起一段：按这一段该谁说挑执行器与会话。 */
-async function launchSegment(task: TaskRow, talk: TalkRow, turn: TalkTurnRow, attachments: string[]): Promise<void> {
+async function launchSegment(task: TaskRow, talk: TalkRow, turn: TalkTurnRow): Promise<void> {
   const { speaker, prompt } = await segmentPromptFor(task.id, talk, turn);
-  await appendTaskTimeline(task.id, receiptLine(`讨论第 ${turn.seq}/${totalOf(talk)} 段：轮到 ${speaker.agentType}。`));
+  await note(talk, "segment", `讨论第 ${turn.seq}/${totalOf(talk)} 段：轮到 ${speaker.agentType}。`);
   bus.publish({ type: "task.review", taskId: task.id });
-  continueWhenIdle(task.id, prompt, segmentTurnOptions(speaker, isBlindSeq(turn.seq, participantsOf(talk).length), attachments),
+  continueWhenIdle(task.id, prompt, segmentTurnOptions(speaker, isBlindSeq(turn.seq, participantsOf(talk).length), attachmentsOf(talk)),
     (error) => failDiscussion(talk, turn, `${speaker.agentType} 第 ${turn.seq} 段没能起跑（${error}）`));
 }
 
-async function failDiscussion(talk: TalkRow, turn: TalkTurnRow | null, note: string): Promise<void> {
-  await failTalk(talk, turn, { endedNote: note });
-  await appendTaskTimeline(talk.taskId, alertLine(`讨论已中止：${note}。可以再发起一次。`));
+async function failDiscussion(talk: TalkRow, turn: TalkTurnRow | null, reason: string): Promise<void> {
+  await failTalk(talk, turn, { endedNote: reason });
+  await note(talk, "aborted", `讨论已中止：${reason}。可以再发起一次。`);
   bus.publish({ type: "task.review", taskId: talk.taskId });
   // 讨论期间用户发的话一直排着（pending-delivery-facts.ts）；断了就该放出去。
   const { flushPendingWhenTurnIdle } = await import("./pending-messages.js");
@@ -190,18 +211,21 @@ export async function startDiscussion(
         .where(and(eq(freeReviewRuns.taskId, taskId), eq(freeReviewRuns.status, "reviewing")))).at(0);
       if (reviewing) throw new Error("审查正在进行，审完再开讨论");
 
+      const discussionId = id();
+      const background = await snapshotDiscussionBackground(taskId, discussionId);
       const at = now();
       const talk: typeof freeReviewDebates.$inferInsert = {
-        id: id(), kind: KIND, roundId: "", runId: "", round: 0, taskId, status: "running",
+        id: discussionId, kind: KIND, roundId: "", runId: "", round: 0, taskId, status: "running",
         exchanges: rounds === "agreed" ? 0 : rounds, untilAgreed: rounds === "agreed", currentSeq: 1,
-        topic, participants: JSON.stringify(order), startedAt: at, updatedAt: at, finishedAt: null,
+        topic, participants: JSON.stringify(order), attachments: JSON.stringify(attachments), background: JSON.stringify(background),
+        startedAt: at, updatedAt: at, finishedAt: null,
       };
       await db.insert(freeReviewDebates).values(talk);
       const row = { verdict: null, outcome: null, endedNote: null, ...talk } as TalkRow;
       const turn = await openSegment(row, 1, speakerAt(order, 1).agentType);
-      // 会话里那颗气泡从这一句起头（web conversationDiscussionRows.ts 按它认），措辞改了那边一起改。
-      await appendTaskTimeline(taskId, receiptLine(`开始讨论：${pair(order)}，${discussionRoundsLabel(rounds)}。`));
-      await launchSegment(task, row, turn, attachments);
+      // 会话里那颗气泡从这一句起头（web conversationDiscussionRows.ts 按它带的讨论身份认）。
+      await note(row, "start", `开始讨论：${pair(order)}，${discussionRoundsLabel(rounds)}。`);
+      await launchSegment(task, row, turn);
       return { discussionId: talk.id };
     } finally {
       releaseFreeWorkflowAction(taskId);
@@ -225,14 +249,24 @@ export async function submitDiscussionStatement(
   if (!talk) throw new Error("当前没有正在进行的讨论");
   const turn = await speakingTurnOf(talk);
   if (!turn || turn.status !== "speaking") throw new Error("这一段发言已经交过卷了");
-  // 每一段都是这条任务上的旁路回合（主执行器、被叫来的人都是），别的回合交不了这一段。
+  // 每一段都是这条任务上的旁路回合（主执行器、被叫来的人都是），别的回合交不了这一段；旁路回合也得是
+  // 这一段该说话的那一位在说——记录上写的是谁，说话的就得是谁。
   const role = turnRole(taskId);
-  if (role !== "side") throw new Error(`这一段轮到 ${turn.side} 发言，只有它这一段的回合能交卷`);
+  const running = role === "side" ? await runningSpeaker(taskId) : null;
+  if (running !== turn.side) throw new Error(`这一段轮到 ${turn.side} 发言，只有它这一段的回合能交卷`);
   const blind = isBlindSeq(turn.seq, participantsOf(talk).length);
   const agreed = blind ? null : input.agreed === true;
   if (!await commitSegment(turn, { summary, statement, agreed })) throw new Error("这一段发言已经交过卷了");
   bus.publish({ type: "task.review", taskId });
   return { seq: turn.seq, speaker: turn.side, blind, agreed, agreedIgnored: blind && input.agreed !== undefined };
+}
+
+/** 此刻这条任务上在跑（或刚跑完）的那一回合是哪一位：回合是逐个来的，最近开跑的那条会话就是它。 */
+async function runningSpeaker(taskId: string): Promise<string | null> {
+  const [row] = await db.select({ agentType: sessions.agentType }).from(sessions)
+    .where(and(eq(sessions.taskId, taskId), eq(sessions.role, "single")))
+    .orderBy(desc(sessions.turnStartedAt), desc(sessions.startedAt)).limit(1);
+  return row?.agentType ?? null;
 }
 
 /** 说完了：记下怎么结束的，交给这条任务的执行器写合稿。 */
@@ -242,23 +276,24 @@ async function finishTalking(task: TaskRow, talk: TalkRow, agreed: boolean, turn
   await db.update(freeReviewDebates).set({ status: "synthesizing", outcome: agreed ? "agreed" : "rounds", updatedAt: now() })
     .where(eq(freeReviewDebates.id, talk.id));
   // 气泡在这一句收口（web conversationDiscussionRows.ts 按它认），后面那段合稿是平常的一段回复。
-  await appendTaskTimeline(task.id, receiptLine(`讨论结束：${pair(order)} 谈了 ${said} 段，${agreed ? "谈拢了" : "没谈拢"}。`));
+  await note(talk, "end", `讨论结束：${pair(order)} 谈了 ${said} 段，${agreed ? "谈拢了" : "没谈拢"}。`);
   bus.publish({ type: "task.review", taskId: task.id });
   const host = order.find((item) => item.host)!;
   const prompt = discussionSynthesisPrompt({
     taskId: task.id, topic: talk.topic ?? "", order, rounds: roundsOf(talk), agreed, segments: said,
     previous: spokenSince(turns, host.agentType, Number.MAX_SAFE_INTEGER),
   });
-  continueWhenIdle(task.id, prompt, { system: "run", sideTurn: true },
+  // 合稿也按主执行器发起时那一套配置写（同 segmentTurnOptions），不跟任务此刻的常设配置走。
+  continueWhenIdle(task.id, prompt, segmentTurnOptions(host, false, []),
     (error) => closeSynthesis(talk.id, task.id, `合稿没能起跑（${error}）`));
 }
 
 /** 合稿那一回合收尾（或根本没起来）：这场讨论到此为止。 */
-async function closeSynthesis(talkId: string, taskId: string, note: string | null): Promise<void> {
+async function closeSynthesis(talkId: string, taskId: string, reason: string | null): Promise<void> {
   const at = now();
-  await db.update(freeReviewDebates).set({ status: "finished", endedNote: note, updatedAt: at, finishedAt: at })
+  await db.update(freeReviewDebates).set({ status: "finished", endedNote: reason, updatedAt: at, finishedAt: at })
     .where(eq(freeReviewDebates.id, talkId));
-  if (note) await appendTaskTimeline(taskId, alertLine(`${note}。讨论的记录都在，可以让它照着记录重写，或者再讨论一次。`));
+  if (reason) await appendTaskTimeline(taskId, alertLine(`${reason}。讨论的记录都在，可以让它照着记录重写，或者再讨论一次。`));
   bus.publish({ type: "task.review", taskId });
   const { flushPendingWhenTurnIdle } = await import("./pending-messages.js");
   flushPendingWhenTurnIdle(taskId);
@@ -296,14 +331,15 @@ export async function settleDiscussionTurn(taskId: string, turnOk: boolean, role
   if (!task) return true;
   const order = participantsOf(talk);
   const turns = await talkTurnsOf(talk.id);
-  const agreed = discussionAgreed(turns.map((item) => ({ seq: item.seq, agreed: item.agreed, status: item.status })), order.length);
+  const agreed = discussionAgreed(turns.map((item) => ({ seq: item.seq, speaker: item.side, agreed: item.agreed, status: item.status })),
+    order.map((item) => item.agentType));
   if (agreed || turn.seq >= totalOf(talk)) {
     await finishTalking(task, talk, agreed, turns);
     return true;
   }
   const seq = turn.seq + 1;
   const next = await openSegment(talk, seq, speakerAt(order, seq).agentType);
-  await launchSegment(task, { ...talk, currentSeq: seq }, next, []);
+  await launchSegment(task, { ...talk, currentSeq: seq }, next);
   return true;
 }
 
@@ -330,6 +366,7 @@ export async function discussionViews(taskId: string): Promise<TaskDiscussion[]>
     topic: talk.topic ?? "",
     rounds: roundsOf(talk),
     participants: participantsOf(talk),
+    attachments: attachmentsOf(talk),
     turns: (await talkTurnsOf(talk.id)).map((turn) => ({
       seq: turn.seq,
       speaker: turn.side as AgentType,

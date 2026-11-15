@@ -4,8 +4,8 @@
 // 服务端（server/src/discussion.ts）和网页（会话里那颗气泡、「审议」格里那一段、左抽屉的完整记录）
 // 都按这里的几条规则算：谁在第几段说话、哪几段是「各写各的」、什么时候算谈拢了。两边各算一份迟早对不上。
 //
-// 这几条的来历是原来的讨论模式（server/src/duet/）：第一段互相看不到、谈拢的判据、合稿怎么写——那条
-// 流水线已经想清楚了，这里只把做法搬过来，底子换成审查辩论那一套（server/src/talk/segments.ts）。
+// 这几条的来历是原来的讨论模式（server/src/duet/）：第一段互相看不到、合稿怎么写——做法搬过来，底子换成
+// 审查辩论那一套（server/src/talk/segments.ts）。谈拢的判据没照搬：那边一方认同就收，这里要各方都表态。
 import type { AgentType } from "./index.ts";
 
 /** 来回几轮：1 / 2 / 3 轮，或谈拢为止（封顶 `DISCUSSION_UNTIL_AGREED_CAP` 轮）。 */
@@ -38,11 +38,10 @@ export interface DiscussionParticipant {
 }
 
 /**
- * 各方按什么顺序说：被叫来的人先、这条任务的执行器最后，每一轮都是这个顺序。
+ * 各方按什么顺序说：被叫来的人先、这条任务的执行器最后，每一轮都是这个顺序（合稿由最后说话的主执行器接着写）。
  *
- * 被叫来的人第一次进这条任务时，「问一句」那一套会告诉它这里还有谁、对话记录在哪（peer-context.ts），
- * 它读到的应当正好是**发起讨论那一刻为止**的对话。主执行器先说的话，它那一段第一轮的发言就落进了
- * 那份记录，第一轮「互相看不到」就只剩一句提示词撑着。
+ * 发起之前的背景不靠这个顺序保证：发起那一刻把本任务的对话记录截成一份只读副本，各方拿的是同一份
+ * （server/src/discussion-background.ts）。
  */
 export function speakingOrder<T extends Pick<DiscussionParticipant, "host">>(participants: readonly T[]): T[] {
   return [...participants.filter((item) => !item.host), ...participants.filter((item) => item.host)];
@@ -64,21 +63,25 @@ export function isBlindSeq(seq: number, people: number): boolean {
 }
 
 /**
- * 说到这儿算不算谈拢了：第一轮之后，**最近连着 人数-1 段**都表态「和各方最新的说法一致」。
+ * 说到这儿算不算谈拢了：**每一方**最新交过的那一段都表态「和各方最新的说法一致」。
  *
- * 照原讨论模式的判据（duet/prompts.ts）：一方确认自己此刻的方案与对方一致，讨论就收敛，不必等对方
- * 再确认一遍——对方最新那一段就是它刚表态认同的东西。三方时要连着两段：第二个表态的人看得到第一个
- * 人的认同，剩下那一方最新的说法已经被两边都认了。第一轮各写各的，谈不上一致，那几段不算。
+ * 只看最近几段不够：两方时被叫来的人一表态就收，主执行器连表态的机会都没有；三方时两位客人认了、主执行器
+ * 最近明说不一致也照收。所以按人看——谁还没在第一轮之后说过话，或者最新那一段没表态认同，就还没谈拢。
+ * 第一轮各写各的，谈不上一致，那几段不算表态。
  */
 export function discussionAgreed(
-  turns: readonly { seq: number; agreed: boolean | null; status: string }[],
-  people: number,
+  turns: readonly { seq: number; speaker: string; agreed: boolean | null; status: string }[],
+  speakers: readonly string[],
 ): boolean {
-  const need = Math.max(1, people - 1);
-  const done = turns.filter((turn) => turn.status === "done").sort((a, b) => a.seq - b.seq);
-  const tail = done.slice(-need);
-  if (tail.length < need) return false;
-  return tail.every((turn) => !isBlindSeq(turn.seq, people) && turn.agreed === true);
+  const people = speakers.length;
+  if (!people) return false;
+  const latest = new Map<string, { seq: number; agreed: boolean | null }>();
+  for (const turn of turns) {
+    if (turn.status !== "done" || isBlindSeq(turn.seq, people)) continue;
+    const seen = latest.get(turn.speaker);
+    if (!seen || seen.seq < turn.seq) latest.set(turn.speaker, turn);
+  }
+  return speakers.every((speaker) => latest.get(speaker)?.agreed === true);
 }
 
 export type DiscussionStatus = "running" | "synthesizing" | "finished" | "failed";
@@ -110,8 +113,10 @@ export interface TaskDiscussion {
   status: DiscussionStatus;
   topic: string;
   rounds: DiscussionRounds;
-  /** 按发言顺序。 */
+  /** 按发言顺序。主执行器那一方的配置也是发起那一刻定下的：中途改了任务的执行器，这一场照旧由它说完、写合稿。 */
   participants: DiscussionParticipant[];
+  /** 发起时附的图和文件：各方第一段都带上，会话里发起那一句也照它摆。 */
+  attachments: string[];
   turns: DiscussionTurn[];
   outcome: DiscussionOutcome | null;
   /** 断了 / 合稿没写完时那一句；正常走完为 null。 */

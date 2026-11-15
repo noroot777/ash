@@ -30,7 +30,9 @@ const baseTask = {
   labels: [], dependsOn: [], resumeDependsOn: [], agentType: "claude", reviewOf: null, createdAt: at(0), updatedAt: at(30),
 } as unknown as Task;
 
-const note = (text: string, minute: number) => `\x1e${JSON.stringify({ t: "system", text, at: at(minute), aside: true })}`;
+const note = (text: string, minute: number, notice?: unknown) => `\x1e${JSON.stringify({ t: "system", text, at: at(minute), aside: true, notice })}`;
+/** 讨论的结构那几句：带着是哪一场（服务端 discussion.ts 就这么写）。 */
+const mark = (id: string, phase: string, text: string, minute: number) => note(text, minute, { kind: "discussion", discussionId: id, phase });
 /** 系统替你说的一句（每一段的提示词、交给主执行器写合稿的那一句），各起一个回合。 */
 const prompt = (text: string, minute: number) => `\n\x1e${JSON.stringify({ t: "user", text, at: at(minute), by: "system" })}\n`;
 const end = (minute: number) => `\n\x1e${JSON.stringify({ t: "agentEnd", at: at(minute) })}\n`;
@@ -47,31 +49,31 @@ const turn = (seq: number, speaker: string, status: string, summary: string | nu
   startedAt: at(seq), endedAt: status === "speaking" ? null : at(seq + 1),
 });
 export const discussionOf = (id: string, patch: Partial<TaskDiscussion>): TaskDiscussion => ({
-  id, status: "running", topic: "幽灵回合锁走哪条路？手动放开还是让持有者自己有界？", rounds: 2, participants, turns: [],
+  id, status: "running", topic: "幽灵回合锁走哪条路？手动放开还是让持有者自己有界？", rounds: 2, participants, attachments: [], turns: [],
   outcome: null, note: null, startedAt: at(1), finishedAt: null, ...patch,
 } as TaskDiscussion);
 
-const START = note("开始讨论：claude 和 codex，2 轮。", 1);
-const SEG = (seq: number, who: string, minute: number) => note(`讨论第 ${seq}/4 段：轮到 ${who}。`, minute);
+const START = (id: string) => mark(id, "start", "开始讨论：claude 和 codex，2 轮。", 1);
+const SEG = (id: string, seq: number, who: string, minute: number) => mark(id, "segment", `讨论第 ${seq}/4 段：轮到 ${who}。`, minute);
 const STAGES = {
   blind: {
     discussion: discussionOf("d-blind", { turns: [turn(1, "codex", "speaking")] as never }),
-    output: [START, SEG(1, "codex", 1), "（codex 在写第一段）"].join("\n"),
+    output: [START("d-blind"), SEG("d-blind", 1, "codex", 1), "（codex 在写第一段）"].join("\n"),
   },
   live: {
     discussion: discussionOf("d-live", { turns: [turn(1, "codex", "done", "让收尾每一步自己带时限"), turn(2, "claude", "speaking")] as never }),
-    output: [START, SEG(1, "codex", 1), "第 1 段已交卷。", SEG(2, "claude", 2), "我在看 turn-lock.ts"].join("\n"),
+    output: [START("d-live"), SEG("d-live", 1, "codex", 1), "第 1 段已交卷。", SEG("d-live", 2, "claude", 2), "我在看 turn-lock.ts"].join("\n"),
   },
   done: {
     discussion: discussionOf("d-done", {
-      status: "finished", outcome: "agreed", finishedAt: at(9),
+      status: "finished", outcome: "agreed", finishedAt: at(9), attachments: ["/Users/u/ash/data/uploads/AbCdEfGhIjKl-方案草图.txt"],
       turns: [turn(1, "codex", "done", "让收尾每一步自己带时限"), turn(2, "claude", "done", "也不赞成手动放开"),
         turn(3, "codex", "done", "补一条先修那处泄漏", true)] as never,
     }),
-    output: [START, SEG(1, "codex", 1), prompt("【讨论】第 1 段", 1), "第 1 段已交卷。", end(2),
-      SEG(2, "claude", 2), prompt("【讨论】第 2 段", 2), "第 2 段交了。", end(3),
-      SEG(3, "codex", 3), prompt("【讨论】第 3 段", 3), "交了。", end(4),
-      note("讨论结束：claude 和 codex 谈了 3 段，谈拢了。", 5),
+    output: [START("d-done"), SEG("d-done", 1, "codex", 1), prompt("【讨论】第 1 段", 1), "第 1 段已交卷。", end(2),
+      SEG("d-done", 2, "claude", 2), prompt("【讨论】第 2 段", 2), "第 2 段交了。", end(3),
+      SEG("d-done", 3, "codex", 3), prompt("【讨论】第 3 段", 3), "交了。", end(4),
+      mark("d-done", "end", "讨论结束：claude 和 codex 谈了 3 段，谈拢了。", 5),
       prompt("【讨论说完了 · 写合稿】claude、codex 谈了 3 段，各方表态谈拢了。", 5),
       "合稿：先修泄漏，再给收尾每一步加时限；还留着的分歧：无。", end(6)].join("\n"),
   },
@@ -80,8 +82,8 @@ const STAGES = {
       status: "failed", note: "claude 第 2 段被停下或异常结束", finishedAt: at(4),
       turns: [turn(1, "codex", "done", "让收尾每一步自己带时限"), turn(2, "claude", "error")] as never,
     }),
-    output: [START, SEG(1, "codex", 1), "第 1 段已交卷。", SEG(2, "claude", 2),
-      note("讨论已中止：claude 第 2 段被停下或异常结束。可以再发起一次。", 4)].join("\n"),
+    output: [START("d-failed"), SEG("d-failed", 1, "codex", 1), "第 1 段已交卷。", SEG("d-failed", 2, "claude", 2),
+      mark("d-failed", "aborted", "讨论已中止：claude 第 2 段被停下或异常结束。可以再发起一次。", 4)].join("\n"),
   },
 };
 store.__discussions = Object.fromEntries(Object.entries(STAGES).map(([name, stage]) => [`t-${name}`, stage.discussion]));

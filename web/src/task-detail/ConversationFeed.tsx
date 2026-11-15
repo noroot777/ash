@@ -575,7 +575,7 @@ export function ConversationFeed({
               const topic = row.discussion?.topic;
               return (
                 <Fragment key={row.id}>
-                  {topic && <UserBubble id={`${row.id}:topic`} author="你" text={topic} attachments={[]} at={row.discussion!.startedAt} />}
+                  {topic && <UserBubble id={`${row.id}:topic`} author="你" text={topic} attachments={row.discussion!.attachments ?? []} at={row.discussion!.startedAt} />}
                   <DiscussionBubble row={row} task={task} fallback={row.items.map((item) => renderItem(item, true))}
                     onOpen={onOpenReviewPanel && panelSources.has("free")
                       ? (discussionId) => onOpenReviewPanel({ source: "free", runId: null, round: null, discussionId }) : undefined} />

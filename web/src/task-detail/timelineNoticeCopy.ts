@@ -207,6 +207,9 @@ function typedView(notice: TimelineNotice, raw: string): NoticeView {
         .trim();
       return { tier: "reply", tone: "neutral", topic: "other", icon: "command", text: output || raw, detail: null, dispute: false, meta: notice.command };
     }
+    // 讨论这几句平时折进讨论气泡里，原文就是它的话；中止那一句要你知道。
+    case "discussion":
+      return notice.phase === "aborted" ? generic("alert", "warn", raw) : generic("receipt", "neutral", raw);
     case "receipt":
       return generic("receipt", "neutral", raw);
     case "alert":

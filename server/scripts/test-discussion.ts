@@ -2,7 +2,9 @@
 //
 // 盯的是这一场**停在哪、交给谁、落成什么样**，不是措辞：
 //   · 第一轮各写各的：那几段的提示词里没有别人的发言，第二轮起才带上；
-//   · 到了轮数收，或者各方表态谈拢提前收；收完交给这条任务的执行器写合稿，合稿写完就结束——没有闸口；
+//   · 到了轮数收，或者**每一方**最新那段都表态谈拢才提前收；收完交给这条任务的执行器写合稿，合稿写完就结束——没有闸口；
+//   · 各方的配置发起时定死：中途改了任务的执行器，这一场照旧由原来那位说；交卷时核此刻在说的是不是这一段该说的人；
+//   · 发起时附的图和文件各方第一段都带上；讨论之前的背景是发起那一刻截下的只读副本，第一轮不告诉它实时记录在哪；
 //   · 三方轮流：被叫来的人先、这条任务的执行器最后；
 //   · 「只说话不改文件」那一句进了每一方的每一段，合稿那段也有；
 //   · 停下、某一方没交卷：这一场记成断了，断在哪写进记录（刷新读的就是它），可以再发起一场；
@@ -13,7 +15,7 @@
 // 全程**一直占着回合**（同 test-free-review-dispute）：每一段都是 `continueWhenIdle` 起的，回合占着它就只
 // 排队不起跑——测试隔离环境本来也禁止真起执行器。占的身份是 side：讨论的每一段都是旁路回合。
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -26,7 +28,7 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 let failure: unknown = null;
 try {
   const { ensureSchema, db } = await import("../src/db/index.js");
-  const { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, projects, scheduledMessages, tasks } =
+  const { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, projects, scheduledMessages, sessions, tasks } =
     await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const { claimTurn } = await import("../src/runs.js");
@@ -62,26 +64,52 @@ try {
     }, message);
   };
   const talkOf = async (taskId: string) => (await activeTalkOf(taskId, "discussion", ["running", "synthesizing"]))!;
-  const say = (taskId: string, summary: string, agreed?: boolean) =>
-    submitDiscussionStatement(taskId, { summary, statement: `${summary}——展开说：依据、代价和取舍。`, agreed });
+  // 此刻在跑的是哪一位：最近开跑的那条会话（交卷时服务端按它核对是不是这一段该说的人）。
+  let tick = Date.parse(at);
+  async function running(taskId: string, agentType: string) {
+    const id = `${taskId}-${agentType}`;
+    const turnStartedAt = new Date(++tick).toISOString();
+    if ((await db.select().from(sessions).where(eq(sessions.id, id))).length) {
+      await db.update(sessions).set({ turnStartedAt }).where(eq(sessions.id, id));
+    } else {
+      await db.insert(sessions).values({ id, taskId, role: "single", agentType, executor: agentType, startedAt: turnStartedAt, turnStartedAt });
+    }
+  }
+  /** 这一段该说的人（或 `as` 指的那位）开口交卷。 */
+  const say = async (taskId: string, summary: string, agreed?: boolean, as?: string) => {
+    const turn = await speakingTurnOf(await talkOf(taskId));
+    await running(taskId, as ?? turn?.side ?? "claude");
+    return submitDiscussionStatement(taskId, { summary, statement: `${summary}——展开说：依据、代价和取舍。`, agreed });
+  };
   const SPEAK_ONLY = "不要改动任何文件、不要提交、不要跑会改变状态的命令";
 
   // ── 纯规则：谁先说、什么算谈拢 ──
   assert.deepEqual(speakingOrder([{ host: true, id: "claude" }, { host: false, id: "codex" }]).map((item) => item.id),
     ["codex", "claude"], "被叫来的人先说，这条任务的执行器最后：被叫的人读到的对话正好停在发起那一刻");
-  const done = (seq: number, agreed: boolean | null) => ({ seq, agreed, status: "done" });
-  assert.equal(discussionAgreed([done(1, null), done(2, null)], 2), false, "第一轮各写各的，谈不上一致");
-  assert.equal(discussionAgreed([done(1, null), done(2, null), done(3, true)], 2), true,
-    "两方时一方确认和对方最新的一致就收（对方最新的那段就是它刚认同的）");
-  assert.equal(discussionAgreed([done(1, null), done(2, null), done(3, null), done(4, true)], 3), false,
-    "三方时一段表态不够：还有一方的最新说法没人认过");
-  assert.equal(discussionAgreed([done(1, null), done(2, null), done(3, null), done(4, true), done(5, true)], 3), true,
-    "三方连着两段表态才算谈拢");
-  assert.equal(discussionAgreed([done(1, null), done(2, null), done(3, true), done(4, false)], 2), false,
-    "最新那段没表态就不算：谈拢看的是此刻");
+  const done = (seq: number, speaker: string, agreed: boolean | null) => ({ seq, speaker, agreed, status: "done" });
+  const two = ["codex", "claude"];
+  const three = ["codex", "gemini", "claude"];
+  assert.equal(discussionAgreed([done(1, "codex", null), done(2, "claude", null)], two), false, "第一轮各写各的，谈不上一致");
+  assert.equal(discussionAgreed([done(1, "codex", null), done(2, "claude", null), done(3, "codex", true)], two), false,
+    "两方时只有一方表态不算：主执行器还没表过态");
+  assert.equal(discussionAgreed([done(1, "codex", null), done(2, "claude", null), done(3, "codex", true), done(4, "claude", true)], two), true,
+    "两方都表态谈拢才收");
+  assert.equal(discussionAgreed([done(1, "codex", null), done(2, "gemini", null), done(3, "claude", null),
+    done(4, "codex", true), done(5, "gemini", true), done(6, "claude", false)], three), false,
+  "三方时两位客人认了、主执行器最新明说不一致，不算谈拢");
+  assert.equal(discussionAgreed([done(1, "codex", null), done(2, "gemini", null), done(3, "claude", null),
+    done(4, "codex", true), done(5, "gemini", true), done(6, "claude", true)], three), true, "三方各自最新那段都认了才算");
+  assert.equal(discussionAgreed([done(1, "codex", null), done(2, "claude", null), done(3, "codex", true), done(4, "claude", true),
+    done(5, "codex", false)], two), false, "谁最新那段改口了就不算：谈拢看的是此刻");
+  assert.equal(discussionAgreed([done(1, "codex", true), done(2, "claude", true)], two), false, "第一轮的表态不算");
 
-  // ── ① 两方 2 轮：发起、第一轮各写各的、谈拢提前结束、合稿、回到原样 ──
-  await seedTask("t-two", { stage: "awaiting_acceptance" });
+  // ── ① 两方 3 轮：发起、第一轮各写各的、两方都表态谈拢提前结束、合稿、回到原样 ──
+  await seedTask("t-two", { stage: "awaiting_acceptance", executorId: "claude-x", model: "opus-test", reasoningEffort: "max" });
+  // 讨论之前这条任务已经聊过：主执行器那份对话记录里有用户后来补的约束。
+  await running("t-two", "claude");
+  const liveTranscript = join(root, "runs", "t-two", "t-two-claude.md");
+  mkdirSync(join(root, "runs", "t-two"), { recursive: true });
+  writeFileSync(liveTranscript, "用户补充：别动数据库结构\n");
   await rejects(() => startDiscussion("t-two", { topic: "选哪条路", rounds: 2, guests: [{ agentType: "claude" }] }),
     "就是这条任务自己的执行器", "@ 自己的执行器不能讨论：一种执行器在一条任务里只有一条会话");
   await rejects(() => startDiscussion("t-two", { topic: "  ", rounds: 2, guests: [{ agentType: "codex" }] }),
@@ -89,7 +117,7 @@ try {
   await rejects(() => startDiscussion("t-two", { topic: "x", rounds: 5, guests: [{ agentType: "codex" }] }),
     "来回几轮", "轮数只有四档");
   const first = await startDiscussion("t-two", {
-    topic: "幽灵回合锁走哪条路？", rounds: 2,
+    topic: "幽灵回合锁走哪条路？", rounds: 3, attachments: ["shot.png"],
     guests: [{ agentType: "codex", executorId: "codex-x", model: "gpt-test", reasoningEffort: "high" }],
   });
   assert.equal(await discussionHolds("t-two"), true, "开了就占着这条任务的回合");
@@ -97,17 +125,31 @@ try {
   assert.equal(talk.id, first.discussionId);
   assert.equal(talk.kind, "discussion");
   assert.equal((await speakingTurnOf(talk))?.side, "codex", "第 1 段轮到被叫来的人");
+  // 发起之后任务的执行器被改了：这一场的主执行器仍是发起时那一位、那一套配置。
+  await db.update(tasks).set({ agentType: "qwen", executorId: null, model: null, reasoningEffort: null }).where(eq(tasks.id, "t-two"));
+  const background = JSON.parse(talk.background ?? "[]") as { agentType: string; path: string }[];
+  assert.deepEqual(background.map((item) => item.agentType), ["claude"], "发起那一刻截下了本任务的对话记录");
+  assert.equal(readFileSync(background[0]!.path, "utf8"), "用户补充：别动数据库结构\n", "副本就是发起那一刻的内容");
+  assert.ok(readFileSync(liveTranscript, "utf8").includes("开始讨论"), "实时记录之后照常往下写");
 
   const seg1 = await segmentPromptFor("t-two", talk, (await speakingTurnOf(talk))!);
   assert.equal(seg1.speaker.agentType, "codex");
   assert.match(seg1.prompt, /幽灵回合锁走哪条路？/, "每一段都带着用户发起时写的那句话");
   assert.match(seg1.prompt, /各写各的/, "第一轮明说各写各的");
+  assert.ok(seg1.prompt.includes(background[0]!.path), "被叫来的人拿到讨论之前的背景：那份副本");
+  assert.ok(seg1.prompt.includes(join(root, "runs", "t-two")), "第一轮点名别读的是实时记录那个目录");
   assert.ok(seg1.prompt.includes(SPEAK_ONLY), "只说话不改文件那一句送到了被叫来的人");
   const guestOptions = segmentTurnOptions(seg1.speaker, true, ["shot.png"]);
   assert.equal(guestOptions.sideTurn, true, "每一段都是旁路回合：任务状态与验收阶段原样不动");
   assert.equal((guestOptions as { agent?: string }).agent, "codex", "被叫来的人按它被叫时的那一套跑");
   assert.equal((guestOptions as { executorId?: string }).executorId, "codex-x");
   assert.deepEqual((guestOptions as { attachments?: string[] }).attachments, ["shot.png"], "第一轮带上用户附的图");
+  assert.equal((guestOptions as { withholdPeerNotice?: boolean }).withholdPeerNotice, true, "第一轮不告诉它实时记录在哪");
+  const later = segmentTurnOptions(seg1.speaker, false, ["shot.png"]);
+  assert.equal((later as { attachments?: string[] }).attachments, undefined, "第二轮起不再重发附件");
+  assert.equal((later as { withholdPeerNotice?: boolean }).withholdPeerNotice, undefined);
+
+  await rejects(() => say("t-two", "qwen 冒名", false, "qwen"), "轮到 codex 发言", "此刻在说的不是这一段该说的人，交不了卷");
 
   const r1 = await say("t-two", "codex：让收尾每一步自己带时限", true);
   assert.equal(r1.blind, true);
@@ -124,9 +166,15 @@ try {
   assert.ok(!seg2.prompt.includes("让收尾每一步自己带时限"),
     "第一轮互相看不到：主执行器第一段的提示词里不许有 codex 第一段的发言");
   assert.ok(seg2.prompt.includes(SPEAK_ONLY), "只说话不改文件那一句送到了主执行器");
-  const hostOptions = segmentTurnOptions(seg2.speaker, true, []);
-  assert.equal((hostOptions as { agent?: string }).agent, undefined, "主执行器续任务自己的会话，不带 agent");
+  assert.ok(!seg2.prompt.includes(background[0]!.path), "它自己那份不用再给它（在它自己的上下文里）");
+  const hostOptions = segmentTurnOptions(seg2.speaker, true, ["shot.png"]);
+  assert.equal(hostOptions.agent, "claude", "主执行器按发起时那一位说，不跟任务此刻的执行器走");
+  assert.equal(hostOptions.executorId, "claude-x");
+  assert.equal(hostOptions.model, "opus-test");
+  assert.equal(hostOptions.reasoningEffort, "max");
+  assert.deepEqual((hostOptions as { attachments?: string[] }).attachments, ["shot.png"], "主执行器第一段同样带上附件");
   assert.equal(hostOptions.sideTurn, true);
+  await rejects(() => say("t-two", "qwen 冒名", false, "qwen"), "轮到 claude 发言", "任务执行器改成了 qwen，它也替不了 claude 这一段");
 
   await say("t-two", "claude：也不赞成手动放开，卡住时留一条提示");
   await settleDiscussionTurn("t-two", true, "single");
@@ -141,7 +189,12 @@ try {
   await say("t-two", "codex：补一条先修那处泄漏，谈拢了", true);
   await settleDiscussionTurn("t-two", true, "single");
   talk = await talkOf("t-two");
-  assert.equal(talk.status, "synthesizing", "谈拢了就提前收（2 轮本该说 4 段，这里第 3 段收）");
+  assert.equal(talk.status, "running", "只有一方表态谈拢不收：主执行器还没表态");
+  assert.equal((await speakingTurnOf(talk))?.side, "claude");
+  await say("t-two", "claude：同意，谈拢了", true);
+  await settleDiscussionTurn("t-two", true, "single");
+  talk = await talkOf("t-two");
+  assert.equal(talk.status, "synthesizing", "两方都表态谈拢就提前收（3 轮本该说 6 段，这里第 4 段收）");
   assert.equal(talk.outcome, "agreed");
   assert.equal(await discussionHolds("t-two"), true, "写合稿时还占着回合：用户的话等合稿写完再发");
   assert.equal(await settleDiscussionTurn("t-two", true, "reviewer"), false, "审查者回合不归讨论");
@@ -150,10 +203,21 @@ try {
   const finished = (await discussionViews("t-two")).at(0)!;
   assert.equal(finished.status, "finished", "合稿写完就结束：没有闸口");
   assert.equal(finished.note, null);
-  assert.equal(finished.turns.length, 3);
-  assert.deepEqual(finished.turns.map((item) => item.speaker), ["codex", "claude", "codex"]);
+  assert.equal(finished.turns.length, 4);
+  assert.deepEqual(finished.turns.map((item) => item.speaker), ["codex", "claude", "codex", "claude"]);
   assert.equal(finished.turns.at(-1)?.agreed, true);
-  assert.equal(finished.rounds, 2);
+  assert.equal(finished.rounds, 3);
+  assert.deepEqual(finished.attachments, ["shot.png"], "发起时附的图记在这一场上（会话里发起那一句照它摆）");
+  assert.deepEqual(finished.participants.find((item) => item.host),
+    { agentType: "claude", executorId: "claude-x", model: "opus-test", reasoningEffort: "max", host: true }, "主执行器的配置是发起那一刻的");
+  // 时间线上讨论的那几句都带着是哪一场（会话里的气泡按它配记录）。
+  const notes = readdirSync(join(root, "runs", "t-two")).filter((name) => name.endsWith(".md"))
+    .flatMap((name) => readFileSync(join(root, "runs", "t-two", name), "utf8").split("\n"))
+    .filter((line) => line.includes('"kind":"discussion"'))
+    .map((line) => JSON.parse(line.slice(line.indexOf("{"))) as { at: string; notice: { discussionId: string; phase: string } })
+    .sort((a, b) => a.at.localeCompare(b.at));
+  assert.deepEqual([...new Set(notes.map((item) => item.notice.discussionId))], [first.discussionId]);
+  assert.deepEqual(notes.map((item) => item.notice.phase), ["start", "segment", "segment", "segment", "segment", "end"]);
   assert.equal(await discussionHolds("t-two"), false, "结束后回合还给任务");
   const after = (await db.select().from(tasks).where(eq(tasks.id, "t-two"))).at(0)!;
   assert.equal(after.status, "done", "讨论完任务还是原来的状态");
@@ -166,6 +230,7 @@ try {
     taskId: "t-two", topic: "幽灵回合锁走哪条路？", order: finished.participants, rounds: 2, agreed: false, segments: 4,
     previous: [{ seq: 4, speaker: "codex", statement: "时限按步骤分开定" }],
   });
+  assert.equal(readFileSync(background[0]!.path, "utf8"), "用户补充：别动数据库结构\n", "说完了副本还是发起那一刻的样子");
   assert.match(synthesis, /还没有谈拢/, "没谈拢如实写");
   assert.match(synthesis, /时限按步骤分开定/, "带上主执行器还没见过的那段");
   assert.match(synthesis, /还留着的分歧/);
@@ -192,11 +257,11 @@ try {
     speakers.push((await speakingTurnOf(current))!.side);
     const prompt = (await segmentPromptFor("t-three", current, (await speakingTurnOf(current))!)).prompt;
     assert.ok(prompt.includes(SPEAK_ONLY), `第 ${seq} 段的提示词里有「只说话不改文件」`);
-    await say("t-three", `第 ${seq} 段`, seq === 4);
+    await say("t-three", `第 ${seq} 段`, seq === 4 || seq === 5);
     await settleDiscussionTurn("t-three", true, "single");
   }
   assert.deepEqual(speakers, ["codex", "gemini", "claude", "codex", "gemini", "claude"],
-    "三方按被叫来的人先、主执行器最后轮流；一段表态不够三方提前收");
+    "三方按被叫来的人先、主执行器最后轮流；两位客人认了、主执行器没表态，不提前收");
   assert.equal((await talkOf("t-three")).outcome, "rounds");
   await rejects(() => startDiscussion("t-three", { topic: "四方", rounds: 1, guests: [{ agentType: "codex" }, { agentType: "gemini" }, { agentType: "grok" }] }),
     "最多再叫", "最多三方");

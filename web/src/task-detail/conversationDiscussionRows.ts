@@ -11,6 +11,9 @@ import type { ConversationDebateFeedRow } from "./conversationDebateRows.ts";
  * 执行器之后照常回的那一段，不折进来。
  *
  * 交给它写合稿的那一句提示（`【讨论说完了 · 写合稿】…`）也不出现：它是系统替你说的，气泡已经写着「在写合稿」。
+ *
+ * 哪一句属于哪一场只认那几句带的讨论身份：一场的开始那句读不出来（会话文件缺了一份、时间线没写进去），后面那场
+ * 也不会顶上来——配不上落盘记录就把原文原样摆出来。
  */
 export type ConversationDiscussionRow = {
   kind: "discussion-lane";
@@ -23,18 +26,13 @@ export type ConversationDiscussionRow = {
   endedAt: string | null;
 };
 
-const START = /^开始讨论[：:]/;
-const END = /^讨论结束[：:]|^讨论已中止[：:]/;
-const SEGMENT = /^讨论第\s*\d+(?:\/\d+)?\s*段[：:]/;
 const SYNTHESIS_PROMPT = /^【讨论说完了 · 写合稿】/;
 
-function noteKind(item: ConversationItem): "start" | "end" | "segment" | null {
-  if (item.kind !== "event") return null;
-  const text = item.text.replace(/^〔系统〕/, "").trim();
-  if (START.test(text)) return "start";
-  if (END.test(text)) return "end";
-  if (SEGMENT.test(text)) return "segment";
-  return null;
+/** 讨论的结构那几句（server/src/discussion.ts 写时带着 `discussion` 类型和是哪一场）；别的一律不认。 */
+function noteOf(item: ConversationItem): { id: string; phase: "start" | "segment" | "end" } | null {
+  if (item.kind !== "event" || item.notice?.kind !== "discussion") return null;
+  const { discussionId: id, phase } = item.notice;
+  return { id, phase: phase === "aborted" ? "end" : phase };
 }
 
 const synthesisPrompt = (item: ConversationItem) => item.kind === "user" && !!item.bySystem && SYNTHESIS_PROMPT.test(item.text.trim());
@@ -50,15 +48,14 @@ export function conversationDiscussionRows(
   rows: ConversationDebateFeedRow[],
   options?: { discussions?: readonly TaskDiscussion[] | null },
 ): ConversationDebateFeedRow[] {
-  // 第 k 句「开始讨论」配第 k 场（按开始时间）。
-  const records = [...options?.discussions ?? []].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
-  let taken = 0;
+  const records = new Map((options?.discussions ?? []).map((item) => [item.id, item]));
   const out: ConversationDebateFeedRow[] = [];
-  let open: ConversationDiscussionRow | null = null;
+  let open: (ConversationDiscussionRow & { discussionId: string }) | null = null;
   const flush = () => {
     if (!open) return;
-    if (open.discussion) open.items = open.items.filter((item) => noteKind(item) !== "segment");
-    out.push(open);
+    const { discussionId: _, ...lane } = open;
+    if (lane.discussion) lane.items = lane.items.filter((item) => noteOf(item)?.phase !== "segment");
+    out.push(lane);
     open = null;
   };
 
@@ -69,13 +66,14 @@ export function conversationDiscussionRows(
       continue;
     }
     if (synthesisPrompt(row.item)) continue;
-    const kind = noteKind(row.item);
-    if (kind === "start") {
+    const note = noteOf(row.item);
+    if (note?.phase === "start") {
       flush();
-      const discussion = records[taken++] ?? null;
+      const discussion = records.get(note.id) ?? null;
       open = {
         kind: "discussion-lane",
-        id: `discussion-lane:${discussion?.id ?? row.item.id}`,
+        id: `discussion-lane:${note.id}`,
+        discussionId: note.id,
         items: [row.item],
         discussion,
         startedAt: row.item.at ?? null,
@@ -83,18 +81,16 @@ export function conversationDiscussionRows(
       };
       continue;
     }
-    if (!open) {
-      out.push(row);
-      continue;
-    }
-    if (closeBefore(row.item)) {
+    // 别的场的那几句（开始那句没读到）不折进这一场，原样留着。
+    if (open && note && note.id !== open.discussionId) flush();
+    if (!open || closeBefore(row.item)) {
       flush();
       out.push(row);
       continue;
     }
     open.items.push(row.item);
     open.endedAt = itemEnd(row.item) ?? open.endedAt;
-    if (kind === "end") flush();
+    if (note?.phase === "end") flush();
   }
   flush();
   return out;

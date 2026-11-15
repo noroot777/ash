@@ -444,8 +444,13 @@ export function ReplyBox({
   // （不排队）。讨论：各方来回几段，开不开得了看 `discussHold`。失败时人、做法、正文和附件全留着，说清楚哪儿没成。
   const runDispatch = (current: ReplyCall) => !onDispatch || baseContext.status !== "ready" ? Promise.resolve(false)
     : runCall(current, (text, attachments) => onDispatch({ text, attachments, target: current.target, worktreeBase }));
+  // 讨论里这条任务的执行器按发起那一刻的常设配置说话（服务端记进参与者）：刚改完执行器就开，先等写回落地。
   const runDiscuss = (current: ReplyCall) => !onDiscuss || discussHold ? Promise.resolve(false)
-    : runCall(current, (topic, attachments) => onDiscuss({ topic, attachments, rounds: current.rounds, people: discussPeople(current) }));
+    : runCall(current, async (topic, attachments) => {
+      const standingError = await standing.settle();
+      if (standingError) throw new Error(`执行器没能改过去（${standingError}），讨论先没开。重选一次执行器再开。`);
+      await onDiscuss({ topic, attachments, rounds: current.rounds, people: discussPeople(current) });
+    });
   const runCall = async (current: ReplyCall, act: (text: string, attachments: string[]) => Promise<void>): Promise<boolean> => {
     const text = value.trim();
     if (disabled || sending || uploads.uploading || !text) return false;

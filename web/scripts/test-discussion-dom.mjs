@@ -5,8 +5,8 @@
 // ② 发起：@ 一个人、选「讨论」——发送键写「开始讨论」、占位写「要讨论什么…」；轮数那一段点一下换一档、下次记得；
 //    「和谁」那一段多选，再勾一个就是三方（中间不再摆一个人的模型）；@ 这条任务自己的执行器时「讨论」按不动；
 //    `/讨论` 叫上次那个人、停在「讨论」；任务正在跑时「开始讨论」按不动、说清为什么；发出去的是话题、轮数和叫的人；
-// ③ 会话里一场一颗气泡、跟在你发起时那一句后面，段间流水一条不留；四种此刻（一段都没交卷 / 在说 / 说完 / 断了）
-//    各写各的；
+// ③ 会话里一场一颗气泡、跟在你发起时那一句后面（那一句带着发起时附的文件），段间流水一条不留；四种此刻（一段都
+//    没交卷 / 在说 / 说完 / 断了）各写各的；在说时展开前后，谁在说第几段都在气泡下面；
 // ④ 点法：在说时点气泡 = 就地摊开、浮出那一行只有文档键；说完点气泡 = 「审议」格里打开这一场、滚过去亮一下，
 //    浮出那一行两颗键；「审议」格那一段和就地摊开的是同一个组件；文档键 / 点一行 = 左侧抽屉读完整记录。
 import assert from "node:assert/strict";
@@ -158,6 +158,7 @@ try {
   const liveOverview = live.locator(".debate-overview[aria-label='讨论概览']");
   await liveOverview.waitFor();
   assert.equal(await liveOverview.locator(".debate-row").count(), 2, "一段一行（说完的 + 正在说的）");
+  assert.equal(await scope("live").locator(".review-progress-now").innerText(), "claude 在说第 2 / 4 段", "展开之后谁在说第几段照样在气泡下面");
   assert.equal(await page.evaluate(() => window.__opened_live ?? null), null, "在说时点气泡不去审议格");
 
   // ③④ 说完：写谈了几段、谈拢了；点气泡去「审议」格那一场，滚过去亮一下。
@@ -165,6 +166,8 @@ try {
   assert.equal(await done.locator(".debate-bubble-say").innerText(), "claude 和 codex 谈了 3 段 · 谈拢了");
   const doneText = await scope("done").locator(".task-conversation").innerText();
   assert.match(doneText, /合稿：先修泄漏/, "合稿是主会话里照常的一段回复");
+  const topicBubble = scope("done").locator(".task-message--user", { hasText: "幽灵回合锁走哪条路" });
+  assert.equal(await topicBubble.getByRole("link", { name: "打开附件 方案草图.txt" }).count(), 1, "发起时附的文件在那一句上，点得开");
   assert.doesNotMatch(doneText, /写合稿】|【讨论】/, "系统替你说的那几句（每段的提示、写合稿那一句）不出现");
   assert.match(await done.locator(".review-verdict-text").getAttribute("aria-label"), /在右侧审议格里打开这场讨论$/, "读屏念得出点了去哪");
   const record = scope("done").locator('.fixture-inspector [data-record="discussion:d-done"]');

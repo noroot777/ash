@@ -243,8 +243,12 @@ export const freeReviewDebates = sqliteTable(
     kind: text("kind").notNull().default("review"),
     /** 讨论：用户发起时写的那句话。 */
     topic: text("topic"),
-    /** 讨论：各方，按发言顺序（JSON，`DiscussionParticipant[]`）。 */
+    /** 讨论：各方，按发言顺序（JSON，`DiscussionParticipant[]`）；主执行器的配置也是发起那一刻的。 */
     participants: text("participants"),
+    /** 讨论：发起时附的图和文件（JSON，路径数组）。各方第一段都带上。 */
+    attachments: text("attachments"),
+    /** 讨论：发起那一刻截下的本任务对话记录（JSON，`{ agentType, path }[]`，只读副本，见 discussion-background.ts）。 */
+    background: text("background"),
     /** 讨论：选的是「谈拢为止」（exchanges 存的是封顶轮数）。 */
     untilAgreed: integer("until_agreed", { mode: "boolean" }).notNull().default(false),
     /** 讨论：怎么结束的（agreed / rounds）；没说完、断了为 null。 */
@@ -406,6 +410,8 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
     "ALTER TABLE free_review_debates ADD COLUMN until_agreed INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE free_review_debates ADD COLUMN outcome TEXT",
     "ALTER TABLE free_review_debates ADD COLUMN ended_note TEXT",
+    "ALTER TABLE free_review_debates ADD COLUMN attachments TEXT",
+    "ALTER TABLE free_review_debates ADD COLUMN background TEXT",
     "ALTER TABLE free_review_debate_turns ADD COLUMN agreed INTEGER",
   ]) {
     try {
