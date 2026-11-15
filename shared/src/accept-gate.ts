@@ -259,6 +259,11 @@ export type AcceptGateState = {
    * (老数据如实显示「没留下凭据」,不拿 latest 冒充)。
    */
   basis: AcceptGateBasis | null;
+  /**
+   * 问的这个人在这个项目里上一次确认验收时取消了「运行」(server accept-memory.ts)。只有验收台的
+   * 确认层拿它当「运行」那一勾的默认、前提列那一行跟着它说「验收时跳过」;验收接口本身不读它。
+   */
+  skipRemembered?: boolean;
   /** 项目当前的门禁基准(项目级设置)。 */
   baseline?: AcceptGateBaseline;
   /** 这一档此刻要对照的目标分支;null = 这个任务没有合并目标,三档都按分支快照跑。 */

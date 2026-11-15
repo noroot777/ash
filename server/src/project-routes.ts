@@ -10,7 +10,7 @@ import type { Context, Hono } from "hono";
 import type { Project, ProjectRole, ProjectView } from "@ash/shared";
 import { isBuiltinKey } from "@ash/shared/workflow-presets";
 import { db } from "./db/index.js";
-import { projects, groups, tasks, notes, noteTasks } from "./db/schema.js";
+import { acceptMemory, projects, groups, tasks, notes, noteTasks } from "./db/schema.js";
 import { id, now } from "./util.js";
 import { expandHome, projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches, isGitRepo } from "./git.js";
 import { listWorkspaceDir, searchWorkspaceFiles } from "./file-search.js";
@@ -415,6 +415,7 @@ export function mountProjectRoutes(api: Hono): void {
       await deleteProjectGitCredential(pid);
       await deleteProjectMembers(pid);
       await deleteProjectInvites(pid);
+      await db.delete(acceptMemory).where(eq(acceptMemory.projectId, pid));
       await db.delete(projects).where(eq(projects.id, pid));
       deleted = true;
       return c.json({ deleted: true });
