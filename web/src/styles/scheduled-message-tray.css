@@ -4,15 +4,17 @@
 .scheduled-message-tray > small { padding: 0 6px; color: var(--muted); font-size: var(--t-xs); }
 .scheduled-message-tray > p { margin: 0; padding: 0 6px; color: var(--red); font-size: var(--t-xs); }
 .scheduled-message-tray { --queue-summary-min: 7em; }
-/* 放不下时折到下一行，而不是把摘要挤没：摘要那一段自己留着最小宽度。 */
-.scheduled-tray-line { display: flex; min-width: 0; min-height: 26px; flex-wrap: wrap; align-items: center; gap: 2px 10px; padding: 0 2px; color: var(--muted); font-size: var(--t-xs); }
+/* 收着永远只占一行：条数、要留意、引导键按自己的宽度一个不少，剩下的全给自己最早那条的摘要（截断）。
+   窄了先收间距、引导键只留图标，不折行。展开列表的摘要保底（--queue-summary-min）不用在这里。 */
+.scheduled-tray-line { display: flex; min-width: 0; min-height: 26px; flex-wrap: nowrap; align-items: center; gap: 10px; padding: 0 2px; color: var(--muted); font-size: var(--t-xs); }
 .scheduled-tray-line button, .scheduled-message-row > .scheduled-message-summary { border: 0; background: none; padding: 0; color: inherit; font: inherit; text-align: left; }
 .scheduled-tray-line > .scheduled-tray-toggle { display: inline-flex; height: 24px; flex: none; align-items: center; gap: 5px; border-radius: var(--r-sm); padding: 0 6px 0 4px; color: var(--ink); font-weight: var(--w-medium); white-space: nowrap; }
 .scheduled-tray-toggle > svg { color: var(--muted); }
 .scheduled-tray-line > .scheduled-tray-toggle:hover { background: var(--raised); }
 .scheduled-tray-line > .scheduled-tray-attention { flex: none; color: var(--amber); white-space: nowrap; }
 .scheduled-tray-attention:hover { text-decoration: underline; text-underline-offset: 2px; }
-.scheduled-tray-head { display: flex; min-width: var(--queue-summary-min); flex: 1 1 var(--queue-summary-min); align-items: center; gap: 8px; }
+.scheduled-tray-head { display: flex; min-width: 0; flex: 1 1 0; align-items: center; gap: 8px; }
+.scheduled-tray-head > .scheduled-message-source { flex: none; }
 .scheduled-tray-head > .scheduled-tray-head-summary { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-tray-head > .scheduled-tray-head-summary:hover { color: var(--ink); }
 
@@ -61,6 +63,8 @@
 }
 @container (max-width: 360px) {
   .scheduled-message-guide { width: 24px; justify-content: center; padding: 0; }
+  .scheduled-tray-line { gap: 6px; }
+  .scheduled-tray-head { gap: 5px; }
   .scheduled-tray-line > .scheduled-message-guide { padding: 0; }
   .scheduled-message-guide > span { display: none; }
 }

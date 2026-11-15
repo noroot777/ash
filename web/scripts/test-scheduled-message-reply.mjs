@@ -82,23 +82,56 @@ try {
     }
   }
   // 摘要那一列不许被挤没:一条长的等待说明(等同队任务)、一颗「直接发送」(前置任务已删)、一条审查答复
-  // 摆在一起,所有宽度下每条摘要都留着能读、能点的宽度,点下去摊开的是它的全文。收着那一行同理。
+  // 摆在一起,所有宽度下每条摘要都留着能读、能点的宽度,点下去摊开的是它的全文。
   // 2026-11-15 审查实测:540px 时四列网格把摘要列算成 0 宽,两个宿主都中。
+  // 收着那一行在任何宽度下都只占一行:摘要、要留意、引导键(任务侧)同排且够得着。第 2 轮审查实测:为保摘要
+  // 让那一行允许折行后,320px 下引导键掉到了第二行。
+  const failing = (id) => ({ ...messages[0], id, origin: `monitor:${id}`, text: `【哨兵结束】检查 ${id}，退出码 1。` });
   const mixed = [
-    { ...messages[0], id: "mine", origin: null, agent: "codex", text: "顺手调整上限",
+    { ...messages[0], id: "mine", origin: null, agent: "codex", text: "顺手调整上限", steerable: true,
       wait: { kind: "queue", blockers: [{ id: "other", title: "这是一个正常长度的正在运行的前置任务", running: true }] } },
     { ...messages[0], id: "review", origin: null, sessionRole: "reviewer", agent: "codex", text: "审查答复",
       wait: { kind: "queue", blockers: [{ id: "other", title: "这是一个正常长度的正在运行的前置任务", running: true }] } },
     { ...messages[0], id: "after", origin: null, agent: "codex", text: "无需再等的原话", mode: "after", afterTaskId: "deleted", afterDoneAt: null },
+    failing("fail-0"),
   ];
+  const crowded = [mixed[0], ...Array.from({ length: 99 }, (_, index) => failing(`fail-${index}`))];
+  /** 收着那一行:只占一行(各项同排、高度一行),摘要能读能点,任务侧引导键在、够得着。 */
+  const collapsedLine = (page) => page.evaluate(() => {
+    const line = document.querySelector(".scheduled-tray-line");
+    const items = [...line.children].map((element) => element.getBoundingClientRect());
+    const reach = (selector) => {
+      const element = line.querySelector(selector);
+      if (!element) return null;
+      const box = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + Math.min(box.width / 2, 10), box.top + box.height / 2);
+      return { width: Math.round(box.width), hit: element.contains(hit) };
+    };
+    return {
+      height: Math.round(line.getBoundingClientRect().height),
+      sameRow: items.every((box) => Math.abs(box.top + box.height / 2 - (items[0].top + items[0].height / 2)) < 2),
+      overflow: line.scrollWidth > line.clientWidth + 1,
+      summary: reach(".scheduled-tray-head-summary"),
+      guide: reach(".scheduled-message-guide"),
+      attention: reach(".scheduled-tray-attention"),
+    };
+  });
+  const assertOneLine = (state, variant, label) => {
+    assert.ok(state.height <= 30 && state.sameRow && !state.overflow, `${variant} ${label} 收着只占一行：${JSON.stringify(state)}`);
+    assert.ok(state.summary && state.summary.width >= 24 && state.summary.hit, `${variant} ${label} 收着那一行的摘要能读能点：${JSON.stringify(state)}`);
+    assert.ok(state.attention?.hit, `${variant} ${label} 要留意够得着：${JSON.stringify(state)}`);
+    if (variant === "single") assert.ok(state.guide?.hit, `${variant} ${label} 引导键在这一行上、够得着：${JSON.stringify(state)}`);
+    else assert.equal(state.guide, null, "团队回复框没有引导");
+  };
   for (const variant of ["single", "team"]) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 750 } });
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    await page.route("**/api/**", (route) => route.fulfill({ json: new URL(route.request().url()).pathname.endsWith("/scheduled-messages") ? mixed : [] }));
+    let pending = mixed;
+    await page.route("**/api/**", (route) => route.fulfill({ json: new URL(route.request().url()).pathname.endsWith("/scheduled-messages") ? pending : [] }));
     try {
       await page.goto(`${base}/scripts/fixtures/scheduled-message-reply.html?variant=${variant}`);
-      const toggle = page.getByRole("button", { name: "排着 3 条", exact: true });
+      const toggle = page.getByRole("button", { name: `排着 ${mixed.length} 条`, exact: true });
       await toggle.waitFor();
       const reachable = (selector) => page.evaluate((selector) => [...document.querySelectorAll(selector)].map((element) => {
         const box = element.getBoundingClientRect();
@@ -108,12 +141,11 @@ try {
       for (const width of [1280, 1024, 800, 640, 600, 560, 540, 500, 480, 420, 390, 360, 320]) {
         await resizeViewport(page, { width, height: 750 });
         if (await toggle.getAttribute("aria-expanded") === "true") await toggle.click();
-        const head = await reachable(".scheduled-tray-head-summary");
-        assert.ok(head.length === 1 && head[0].width >= 40 && head[0].hit, `${variant} ${width}px 收着那一行的摘要被挤没：${JSON.stringify(head)}`);
+        assertOneLine(await collapsedLine(page), variant, `${width}px`);
         await toggle.click();
         await page.locator(".scheduled-tray-list").waitFor();
         const summaries = await reachable(".scheduled-message-summary");
-        assert.equal(summaries.length, 3);
+        assert.equal(summaries.length, mixed.length);
         for (const summary of summaries) {
           assert.ok(summary.width >= 60 && summary.hit, `${variant} ${width}px 摘要「${summary.text}」能读能点：${JSON.stringify(summary)}`);
         }
@@ -124,8 +156,23 @@ try {
       await page.locator('[data-message-id="after"] .scheduled-message-full').waitFor();
       await resizeViewport(page, { width: 540, height: 750 });
       await page.screenshot({ path: `${artifacts}scheduled-message-reply-${variant}-mixed-540.png` });
+      // 多位数条数 + 多位数要留意:最挤的那种,收着仍是一行;点要留意再 Esc 收回来也一样。
+      pending = crowded;
+      await page.reload();
+      const crowdedToggle = page.getByRole("button", { name: "排着 100 条", exact: true });
+      await crowdedToggle.waitFor();
+      for (const width of [800, 480, 390, 360, 320, 300]) {
+        await resizeViewport(page, { width, height: 750 });
+        assertOneLine(await collapsedLine(page), variant, `${width}px / 100 条`);
+      }
+      await page.getByRole("button", { name: "查看 99 条退出码非零的输入" }).click();
+      await page.locator(".scheduled-tray-list").waitFor();
+      await page.keyboard.press("Escape");
+      assert.equal(await crowdedToggle.getAttribute("aria-expanded"), "false");
+      assertOneLine(await collapsedLine(page), variant, "300px / 100 条 Esc 收回后");
+      await page.screenshot({ path: `${artifacts}scheduled-message-reply-${variant}-crowded-300.png` });
       assert.deepEqual(errors, []);
-      console.log(`✓ ${variant} 混合输入：1280–320px 每条摘要都能读能点，收着那一行的摘要也在`);
+      console.log(`✓ ${variant} 混合输入：1280–300px 收着只占一行（含 100 条 / 99 条要留意）且摘要、引导够得着，点开后每条摘要都能读能点`);
     } finally {
       await page.close();
     }
