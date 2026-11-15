@@ -9,6 +9,7 @@ import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { projects, queueItems, tasks } from "./db/schema.js";
+import { serializeQueueClaims } from "./queue-claim-chain.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { detectTaskWorkspace } from "./workspace-cleanup.js";
 import { allFollowUpsOf, followUpsFor } from "./task-follow-up.js";
@@ -352,7 +353,6 @@ api.post("/tasks", async (c) => {
   };
   // 可选:追加到现有 queue 的尾部。要求:queue 已存在、跟新 task **同项目**,且新 task 跟
   // queue 已有任务的 groupId 一致(违反就 400/404,不静默)。
-  let appendPosition: number | null = null;
   if (b.appendToQueue) {
     // 同项目这一条排在最前面:queueId 也是请求体里的 id,横切闸看不见它 —— 少了这句,
     // 猜中一个别人项目的 queueId 就能把自己的任务串进那条队列,而队列视图只按 queueId
@@ -381,19 +381,17 @@ api.post("/tasks", async (c) => {
         400,
       );
     }
-    appendPosition = existing.length;
   }
   let created: Task | undefined;
   try {
-    [created] = await createTasks([row], b.appendToQueue && appendPosition !== null
-      ? async () => {
-          await db.insert(queueItems).values({
-            taskId,
-            queueId: b.appendToQueue!,
-            position: appendPosition!,
-            createdAt: ts,
-          });
-        }
+    // 串进队尾是归属写方(queue-claim-chain.ts):队尾位置在链上现算,进门时读到的长度
+    // 隔着建任务的整段 await 早已过期,并发的重排会把按旧长度插进来的这一条抹掉。
+    const queueId = b.appendToQueue;
+    [created] = await createTasks([row], queueId
+      ? () => serializeQueueClaims(async () => {
+          const tail = await db.select({ taskId: queueItems.taskId }).from(queueItems).where(eq(queueItems.queueId, queueId));
+          await db.insert(queueItems).values({ taskId, queueId, position: tail.length, createdAt: ts });
+        })
       : undefined, undefined, [b.reviewOf]);
   } catch (error) {
     if (error instanceof CliCommandValidationError) return c.json({ error: error.message }, 400);
@@ -647,7 +645,9 @@ api.patch("/tasks/:id", async (c) => {
     return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再改状态", status: existing.status }, 409);
   }
   try {
-    const written = await db.update(tasks).set(patch).where(updateWhere).returning({ id: tasks.id });
+    // 改 groupId 是分组归属写方,与起跑认领排同一条链(queue-claim-chain.ts)。
+    const write = () => db.update(tasks).set(patch).where(updateWhere).returning({ id: tasks.id });
+    const written = await ("groupId" in patch ? serializeQueueClaims(write) : write());
     if (!written.length) return c.json({ error: "任务或发起回合已经变化，PATCH 未写入" }, 409);
     // Status goes through the shared helper so manual changes maintain the run-time
     // columns (startedAt/endedAt) and broadcast them just like a real run does.

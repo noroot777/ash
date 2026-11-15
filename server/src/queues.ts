@@ -6,6 +6,8 @@
 //   ② 同一 queue 同一时刻至多一个成员在跑——守卫在 selectNextInQueue(scheduler.ts)。
 // 推进规则本身不在这里,统一由 scheduler.ts 的 advanceQueue 负责;本文件只做
 // 「改队列内容」并在改完推一把。
+// 改队列内容的每个端点都是归属写方:校验读和写入一起进 serializeQueueClaims,
+// publish/推进放在临界区外(理由见 queue-claim-chain.ts)。
 import type { Context, Hono } from "hono";
 import { eq, asc, inArray } from "drizzle-orm";
 import type { Task } from "@ash/shared";
@@ -18,21 +20,25 @@ import { publishTaskUpdated } from "./task-store.js";
 import { handoffBlockReason, isHandoffPreparing } from "./handoff-guard.js";
 import { actorOf } from "./auth/context.js";
 import { visibleTaskIds } from "./auth/visibility.js";
+import { serializeQueueClaims, startingOutsideQueue } from "./queue-claim-chain.js";
 
-// 内部:把 (queueId, [..items..]) 重排成 position 0..N-1,保持 dense
+// 内部:把 (queueId, [..items..]) 重排成 position 0..N-1,保持 dense。
+// 先全删再按新顺序插入,两步收在一笔事务里:不在链上的读者(托盘「在等谁」、
+// queueBlockers)在中间那一拍会读到「整队都不在队列里」。调用方须在 serializeQueueClaims 里。
 export async function repackQueue(queueId: string, orderedTaskIds: string[]): Promise<void> {
   const ts = now();
-  // 先全删,再按新顺序插入(libsql 没有 batch txn 暴露,但 queue 通常很小)
-  await db.delete(queueItems).where(eq(queueItems.queueId, queueId));
-  if (orderedTaskIds.length === 0) return;
-  await db.insert(queueItems).values(
-    orderedTaskIds.map((tid, i) => ({
-      taskId: tid,
-      queueId,
-      position: i,
-      createdAt: ts,
-    })),
-  );
+  await db.transaction(async (tx) => {
+    await tx.delete(queueItems).where(eq(queueItems.queueId, queueId));
+    if (orderedTaskIds.length === 0) return;
+    await tx.insert(queueItems).values(
+      orderedTaskIds.map((tid, i) => ({
+        taskId: tid,
+        queueId,
+        position: i,
+        createdAt: ts,
+      })),
+    );
+  });
 }
 
 // 队列变更后给受影响的任务补发 task.updated:Task 的 queueId/queuePosition 是从
@@ -83,6 +89,17 @@ async function assertSameGroup(queueId: string, candidateTaskId?: string): Promi
 // 承诺是假的(审查真实复现:两个独立 running 任务入同队后仍同时运行)。口径与
 // selectNextInQueue 同源:archived 与 team 成员不算,状态过 queueStatus(终态
 // 任务的续聊回合按终态看)。返回「在跑」成员的 id,调用方按 >1 拒绝。
+// 写入口用的完整口径:库里在跑的,加上这次要入队、正在以独立任务身份起跑的那几条(库里还是
+// backlog/paused,只有内存看得见,见 queue-claim-chain.ts)。既有成员不看内存:它们的起跑在链上
+// 落 queued,库里看得见;再看回合锁反而会把终态续聊这种不占队列的回合误算成在跑。
+function inFlightOnJoin<T extends Parameters<typeof runningMembers>[0][number]>(members: T[], joining: T[]): string[] {
+  const running = new Set(runningMembers([...members, ...joining]));
+  for (const t of joining) {
+    if (!t.archived && t.mode !== "team" && startingOutsideQueue(t.id)) running.add(t.id);
+  }
+  return [...running];
+}
+
 export function runningMembers(
   rows: { id: string; status: string; archived: boolean; mode: string | null; followUpFrom?: string | null }[],
 ): string[] {
@@ -264,34 +281,38 @@ export function mountQueueRoutes(api: Hono): void {
     const want = b.taskIds ?? [];
     if (!Array.isArray(want)) return c.json({ error: "taskIds 必须是数组" }, 400);
 
-    const current = await db.select().from(queueItems).where(eq(queueItems.queueId, qid));
-    if (current.length === 0) return c.json({ error: "queue not found" }, 404);
+    const refused = await serializeQueueClaims(async (): Promise<Response | null> => {
+      const current = await db.select().from(queueItems).where(eq(queueItems.queueId, qid));
+      if (current.length === 0) return c.json({ error: "queue not found" }, 404);
 
-    const haveSet = new Set(current.map((i) => i.taskId));
-    const wantSet = new Set(want);
-    if (haveSet.size !== wantSet.size || [...haveSet].some((id) => !wantSet.has(id))) {
-      return c.json(
-        {
-          error: "reorder 必须传 queue 的完整成员,不能漏或多",
-          have: [...haveSet],
-          got: [...wantSet],
-        },
-        400,
-      );
-    }
-
-    // running task 不能被移走/前面新插队
-    const taskRows = await db.select().from(tasks).where(inArray(tasks.id, want));
-    const runningId = taskRows.find((t) => t.status === "running" || t.status === "queued")?.id;
-    if (runningId) {
-      const oldPos = current.find((i) => i.taskId === runningId)!.position;
-      const newPos = want.indexOf(runningId);
-      if (oldPos !== newPos) {
-        return c.json({ error: `running/queued task ${runningId} 不能移动位置` }, 409);
+      const haveSet = new Set(current.map((i) => i.taskId));
+      const wantSet = new Set(want);
+      if (haveSet.size !== wantSet.size || [...haveSet].some((id) => !wantSet.has(id))) {
+        return c.json(
+          {
+            error: "reorder 必须传 queue 的完整成员,不能漏或多",
+            have: [...haveSet],
+            got: [...wantSet],
+          },
+          400,
+        );
       }
-    }
 
-    await repackQueue(qid, want);
+      // running task 不能被移走/前面新插队
+      const taskRows = await db.select().from(tasks).where(inArray(tasks.id, want));
+      const runningId = taskRows.find((t) => t.status === "running" || t.status === "queued")?.id;
+      if (runningId) {
+        const oldPos = current.find((i) => i.taskId === runningId)!.position;
+        const newPos = want.indexOf(runningId);
+        if (oldPos !== newPos) {
+          return c.json({ error: `running/queued task ${runningId} 不能移动位置` }, 409);
+        }
+      }
+
+      await repackQueue(qid, want);
+      return null;
+    });
+    if (refused) return refused;
     void publishQueueMembers(want);
     // reorder 后某个 backlog/paused 可能上位到 head,立刻推进一次
     advanceQueueInBackground(qid);
@@ -303,26 +324,32 @@ export function mountQueueRoutes(api: Hono): void {
     const qid = c.req.param("queueId");
     const b = await c.req.json<{ taskId?: string }>();
     if (!b.taskId) return c.json({ error: "taskId required" }, 400);
+    const taskId = b.taskId;
 
-    const items = await db
-      .select()
-      .from(queueItems)
-      .where(eq(queueItems.queueId, qid))
-      .orderBy(asc(queueItems.position));
-    if (items.length === 0) return c.json({ error: "queue not found" }, 404);
-    if (!items.some((i) => i.taskId === b.taskId)) {
-      return c.json({ error: "task 不在此 queue 里" }, 404);
-    }
+    const outcome = await serializeQueueClaims(async (): Promise<Response | { next: string[] }> => {
+      const items = await db
+        .select()
+        .from(queueItems)
+        .where(eq(queueItems.queueId, qid))
+        .orderBy(asc(queueItems.position));
+      if (items.length === 0) return c.json({ error: "queue not found" }, 404);
+      if (!items.some((i) => i.taskId === taskId)) {
+        return c.json({ error: "task 不在此 queue 里" }, 404);
+      }
 
-    // running task 不能拔
-    const tr = (await db.select().from(tasks).where(eq(tasks.id, b.taskId))).at(0);
-    if (tr && (tr.status === "running" || tr.status === "queued")) {
-      return c.json({ error: `task ${b.taskId} 正在跑,不能移出 queue` }, 409);
-    }
+      // running task 不能拔
+      const tr = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+      if (tr && (tr.status === "running" || tr.status === "queued")) {
+        return c.json({ error: `task ${taskId} 正在跑,不能移出 queue` }, 409);
+      }
 
-    const next = items.filter((i) => i.taskId !== b.taskId).map((i) => i.taskId);
-    await repackQueue(qid, next);
-    void publishQueueMembers([...next, b.taskId]);
+      const next = items.filter((i) => i.taskId !== taskId).map((i) => i.taskId);
+      await repackQueue(qid, next);
+      return { next };
+    });
+    if (outcome instanceof Response) return outcome;
+    const { next } = outcome;
+    void publishQueueMembers([...next, taskId]);
     // 移除后立刻推一下,看看后面的 task 是否能动了
     if (next.length > 0) advanceQueueInBackground(qid);
     return c.json({ ok: true });
@@ -336,77 +363,84 @@ export function mountQueueRoutes(api: Hono): void {
     const b = await c.req.json<{ taskId?: string; position?: number; afterTaskId?: string }>();
     if (!b.taskId) return c.json({ error: "taskId required" }, 400);
     const pos = typeof b.position === "number" ? Math.max(0, b.position | 0) : -1;
+    const taskId = b.taskId;
 
-    const items = await db
-      .select()
-      .from(queueItems)
-      .where(eq(queueItems.queueId, qid))
-      .orderBy(asc(queueItems.position));
-    if (items.length === 0) return c.json({ error: "queue not found" }, 404);
-    if (items.some((i) => i.taskId === b.taskId)) {
-      return c.json({ error: "task 已在此 queue 里" }, 409);
-    }
+    // 从读队列到 repack 整段在链上:下面「双跑防线」读到的状态,就是写入那一刻的状态。
+    const outcome = await serializeQueueClaims(async (): Promise<Response | { next: string[] }> => {
+      const items = await db
+        .select()
+        .from(queueItems)
+        .where(eq(queueItems.queueId, qid))
+        .orderBy(asc(queueItems.position));
+      if (items.length === 0) return c.json({ error: "queue not found" }, 404);
+      if (items.some((i) => i.taskId === taskId)) {
+        return c.json({ error: "task 已在此 queue 里" }, 409);
+      }
 
-    // 候选 task 必须先存在
-    const tr = (await db.select().from(tasks).where(eq(tasks.id, b.taskId))).at(0);
-    if (!tr) return c.json({ error: "task not found" }, 404);
-    // 看不见的任务 = 不存在(§十二):否则挨个 id 试就能问出「这个任务存在但不是我的」。
-    if ((await invisibleTaskIds(c, [b.taskId])).length) return c.json({ error: "task not found" }, 404);
+      // 候选 task 必须先存在
+      const tr = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+      if (!tr) return c.json({ error: "task not found" }, 404);
+      // 看不见的任务 = 不存在(§十二):否则挨个 id 试就能问出「这个任务存在但不是我的」。
+      if ((await invisibleTaskIds(c, [taskId])).length) return c.json({ error: "task not found" }, 404);
 
-    // 正在接力导出的任务不能入队:导出会把它结算成 canceled,队列对 canceled 透明跳过,
-    // 后继会被提前启动(TOCTOU 详见 handoff-guard.ts 接力准备 barrier 的注释)。
-    if (isHandoffPreparing(b.taskId)) {
-      return c.json({ error: `task ${b.taskId} 正在接力到另一台机器(导出准备中),不能加入队列` }, 409);
-    }
-    // 接力出去的任务(pending 或已确认)同样不能入队:barrier 只护住准备期,导出结束
-    // 就释放,之后靠持久 out 标记接棒——历史副本入队会被当 canceled 跳过,后继照样
-    // 提前启动(第 3 轮审查真机实测)。移除接力标记后才允许重新入队。
-    const handedOff = handoffBlockReason(tr.handoff);
-    if (handedOff) {
-      return c.json({ error: `task ${b.taskId} 不能加入队列:${handedOff}` }, 409);
-    }
+      // 正在接力导出的任务不能入队:导出会把它结算成 canceled,队列对 canceled 透明跳过,
+      // 后继会被提前启动(TOCTOU 详见 handoff-guard.ts 接力准备 barrier 的注释)。
+      if (isHandoffPreparing(taskId)) {
+        return c.json({ error: `task ${taskId} 正在接力到另一台机器(导出准备中),不能加入队列` }, 409);
+      }
+      // 接力出去的任务(pending 或已确认)同样不能入队:barrier 只护住准备期,导出结束
+      // 就释放,之后靠持久 out 标记接棒——历史副本入队会被当 canceled 跳过,后继照样
+      // 提前启动(第 3 轮审查真机实测)。移除接力标记后才允许重新入队。
+      const handedOff = handoffBlockReason(tr.handoff);
+      if (handedOff) {
+        return c.json({ error: `task ${taskId} 不能加入队列:${handedOff}` }, 409);
+      }
 
-    if (finishedMembers([tr]).length) {
-      return c.json({ error: `task ${b.taskId} 已结束，不能加入队列。${FINISHED_HINT}`, status: tr.status }, 409);
-    }
+      if (finishedMembers([tr]).length) {
+        return c.json({ error: `task ${taskId} 已结束，不能加入队列。${FINISHED_HINT}`, status: tr.status }, 409);
+      }
 
-    // 候选 task 不能已在别的 queue 里(task_id PK 保证,但提前给个友好错误)
-    const otherQueue = (
-      await db.select().from(queueItems).where(eq(queueItems.taskId, b.taskId))
-    ).at(0);
-    if (otherQueue && otherQueue.queueId !== qid) {
-      return c.json({ error: `task 已在另一个 queue ${otherQueue.queueId}` }, 409);
-    }
+      // 候选 task 不能已在别的 queue 里(task_id PK 保证,但提前给个友好错误)
+      const otherQueue = (
+        await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))
+      ).at(0);
+      if (otherQueue && otherQueue.queueId !== qid) {
+        return c.json({ error: `task 已在另一个 queue ${otherQueue.queueId}` }, 409);
+      }
 
-    // 跨 group 校验
-    const violation = await assertSameGroup(qid, b.taskId);
-    if (violation) return c.json({ error: violation }, 400);
+      // 跨 group 校验
+      const violation = await assertSameGroup(qid, taskId);
+      if (violation) return c.json({ error: violation }, 400);
 
-    // 双跑防线:候选和既有成员里「在跑」的加起来超过一个就拒(按请求时刻的最新
-    // 状态读库判,不信页面快照——状态在途变化或并发入队时前端置灰会失守)。
-    const memberRows = await db
-      .select()
-      .from(tasks)
-      .where(inArray(tasks.id, items.map((i) => i.taskId)));
-    const running = runningMembers([...memberRows, tr]);
-    if (running.length > 1) {
-      return c.json({ error: `同一条队列最多只能有一个在跑的成员,这些任务都在运行: ${running.join(", ")}` }, 409);
-    }
+      // 双跑防线:候选和既有成员里「在跑」的加起来超过一个就拒(按请求时刻的最新
+      // 状态读库判,不信页面快照——状态在途变化或并发入队时前端置灰会失守)。
+      const memberRows = await db
+        .select()
+        .from(tasks)
+        .where(inArray(tasks.id, items.map((i) => i.taskId)));
+      const running = inFlightOnJoin(memberRows, [tr]);
+      if (running.length > 1) {
+        return c.json({ error: `同一条队列最多只能有一个在跑的成员,这些任务都在运行: ${running.join(", ")}` }, 409);
+      }
 
-    let insertAt: number;
-    if (b.afterTaskId) {
-      const anchor = items.find((i) => i.taskId === b.afterTaskId);
-      if (!anchor) return c.json({ error: `前驱任务 ${b.afterTaskId} 不在此 queue 里` }, 409);
-      insertAt = items.indexOf(anchor) + 1;
-    } else {
-      insertAt = pos < 0 || pos > items.length ? items.length : pos;
-    }
-    const next = [
-      ...items.slice(0, insertAt).map((i) => i.taskId),
-      b.taskId,
-      ...items.slice(insertAt).map((i) => i.taskId),
-    ];
-    await repackQueue(qid, next);
+      let insertAt: number;
+      if (b.afterTaskId) {
+        const anchor = items.find((i) => i.taskId === b.afterTaskId);
+        if (!anchor) return c.json({ error: `前驱任务 ${b.afterTaskId} 不在此 queue 里` }, 409);
+        insertAt = items.indexOf(anchor) + 1;
+      } else {
+        insertAt = pos < 0 || pos > items.length ? items.length : pos;
+      }
+      const next = [
+        ...items.slice(0, insertAt).map((i) => i.taskId),
+        taskId,
+        ...items.slice(insertAt).map((i) => i.taskId),
+      ];
+      await repackQueue(qid, next);
+      return { next };
+    });
+    if (outcome instanceof Response) return outcome;
+    const { next } = outcome;
     // 等 publish 拿到 enriched 快照再应答:响应带上新成员的权威入队状态,客户端
     // 不必成功后再 GET(那条路的失败面见 publishQueueMembers 顶部注释)。
     const published = await publishQueueMembers(next);
@@ -417,7 +451,7 @@ export function mountQueueRoutes(api: Hono): void {
     // 只回新成员的话客户端拿不到前驱的新快照(第 5 轮审查:前驱无徽标、计数错位)。
     return c.json({
       ok: true,
-      task: published.get(b.taskId) ?? null,
+      task: published.get(taskId) ?? null,
       tasks: next.map((tid) => published.get(tid) ?? null),
     });
   });
@@ -429,55 +463,60 @@ export function mountQueueRoutes(api: Hono): void {
     if (!Array.isArray(want) || want.length === 0) {
       return c.json({ error: "taskIds 不能为空" }, 400);
     }
-    // 候选 task 都得存在
-    const rows = await db.select().from(tasks).where(inArray(tasks.id, want));
-    if (rows.length !== want.length) {
-      return c.json({ error: "部分 taskId 不存在" }, 400);
-    }
-    // 建队列时路径上还没有 queueId,横切闸看不到它 —— 看不见的任务在这里必须等于不存在,
-    // 否则「把别人的任务串成一条我的队列」就是一条现成的越权写入路径(第 1 轮审查 P1)。
-    const hidden = await invisibleTaskIds(c, want);
-    if (hidden.length) return c.json({ error: "部分 taskId 不存在" }, 400);
-    // 正在接力导出的任务不能入队(同 insert 端点,TOCTOU 见 handoff-guard.ts)
-    const preparing = want.filter((tid) => isHandoffPreparing(tid));
-    if (preparing.length > 0) {
-      return c.json({ error: `这些 task 正在接力到另一台机器(导出准备中),不能加入队列: ${preparing.join(", ")}` }, 409);
-    }
-    // 接力出去的任务(pending 或已确认)同样不能入队——理由同 insert 端点。
-    const handedOff = rows.filter((r) => handoffBlockReason(r.handoff) != null);
-    if (handedOff.length > 0) {
-      return c.json(
-        { error: `这些 task 已接力到另一台机器,历史副本不能加入队列: ${handedOff.map((r) => r.id).join(", ")}` },
-        409,
-      );
-    }
-    const finished = finishedMembers(rows);
-    if (finished.length > 0) {
-      return c.json({ error: `这些 task 已结束，不能用来建队: ${finished.join(", ")}。${FINISHED_HINT}` }, 409);
-    }
-    // 同项目(主判据)+ 同 group(加细)—— 理由同 assertSameGroup 顶部。
-    const ps = new Set(rows.map((r) => r.projectId));
-    if (ps.size > 1) return c.json({ error: "跨项目不允许" }, 400);
-    const gs = new Set(rows.map((r) => r.groupId));
-    if (gs.size > 1) return c.json({ error: "跨 group 不允许" }, 400);
-    // 任何一个 task 已在其他 queue?
-    const occupied = await db.select().from(queueItems).where(inArray(queueItems.taskId, want));
-    if (occupied.length > 0) {
-      return c.json(
-        { error: `这些 task 已在其他 queue: ${occupied.map((o) => o.taskId).join(", ")}` },
-        409,
-      );
-    }
-    // 双跑防线(同 insert 端点):两个在跑的任务捆成一队,先后顺序是假的。
-    const running = runningMembers(rows);
-    if (running.length > 1) {
-      return c.json({ error: `同一条队列最多只能有一个在跑的成员,这些任务都在运行: ${running.join(", ")}` }, 409);
-    }
     const qid = id();
-    const ts = now();
-    await db.insert(queueItems).values(
-      want.map((tid, i) => ({ taskId: tid, queueId: qid, position: i, createdAt: ts })),
-    );
+    // 状态相关的校验(已结束、已在别的队列、双跑防线)和写入一起在链上,理由同 insert。
+    const refused = await serializeQueueClaims(async (): Promise<Response | null> => {
+      // 候选 task 都得存在
+      const rows = await db.select().from(tasks).where(inArray(tasks.id, want));
+      if (rows.length !== want.length) {
+        return c.json({ error: "部分 taskId 不存在" }, 400);
+      }
+      // 建队列时路径上还没有 queueId,横切闸看不到它 —— 看不见的任务在这里必须等于不存在,
+      // 否则「把别人的任务串成一条我的队列」就是一条现成的越权写入路径(第 1 轮审查 P1)。
+      const hidden = await invisibleTaskIds(c, want);
+      if (hidden.length) return c.json({ error: "部分 taskId 不存在" }, 400);
+      // 正在接力导出的任务不能入队(同 insert 端点,TOCTOU 见 handoff-guard.ts)
+      const preparing = want.filter((tid) => isHandoffPreparing(tid));
+      if (preparing.length > 0) {
+        return c.json({ error: `这些 task 正在接力到另一台机器(导出准备中),不能加入队列: ${preparing.join(", ")}` }, 409);
+      }
+      // 接力出去的任务(pending 或已确认)同样不能入队——理由同 insert 端点。
+      const handedOff = rows.filter((r) => handoffBlockReason(r.handoff) != null);
+      if (handedOff.length > 0) {
+        return c.json(
+          { error: `这些 task 已接力到另一台机器,历史副本不能加入队列: ${handedOff.map((r) => r.id).join(", ")}` },
+          409,
+        );
+      }
+      const finished = finishedMembers(rows);
+      if (finished.length > 0) {
+        return c.json({ error: `这些 task 已结束，不能用来建队: ${finished.join(", ")}。${FINISHED_HINT}` }, 409);
+      }
+      // 同项目(主判据)+ 同 group(加细)—— 理由同 assertSameGroup 顶部。
+      const ps = new Set(rows.map((r) => r.projectId));
+      if (ps.size > 1) return c.json({ error: "跨项目不允许" }, 400);
+      const gs = new Set(rows.map((r) => r.groupId));
+      if (gs.size > 1) return c.json({ error: "跨 group 不允许" }, 400);
+      // 任何一个 task 已在其他 queue?
+      const occupied = await db.select().from(queueItems).where(inArray(queueItems.taskId, want));
+      if (occupied.length > 0) {
+        return c.json(
+          { error: `这些 task 已在其他 queue: ${occupied.map((o) => o.taskId).join(", ")}` },
+          409,
+        );
+      }
+      // 双跑防线(同 insert 端点):两个在跑的任务捆成一队,先后顺序是假的。
+      const running = inFlightOnJoin([], rows);
+      if (running.length > 1) {
+        return c.json({ error: `同一条队列最多只能有一个在跑的成员,这些任务都在运行: ${running.join(", ")}` }, 409);
+      }
+      const ts = now();
+      await db.insert(queueItems).values(
+        want.map((tid, i) => ({ taskId: tid, queueId: qid, position: i, createdAt: ts })),
+      );
+      return null;
+    });
+    if (refused) return refused;
     // 同 insert:响应带上各成员的 enriched 快照(按 taskIds 原序),排队主体的
     // 权威入队状态随响应到手,不必成功后再 GET。
     const published = await publishQueueMembers(want);

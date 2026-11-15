@@ -7,6 +7,7 @@ import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { groups, projects, queueItems } from "./db/schema.js";
+import { serializeQueueClaims } from "./queue-claim-chain.js";
 import { republishGroupWaits } from "./pending-wait.js";
 import { repoKey } from "./git.js";
 import { pauseGroup, runGroupInBackground } from "./scheduler.js";
@@ -229,13 +230,14 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
   const queueId = b.chain && specs.length > 1 ? id() : null;
   let created: Task[];
   try {
+    // 串队是归属写方,进队列认领链(queue-claim-chain.ts)。
     created = await createTasks(rows, queueId
-      ? async () => {
+      ? () => serializeQueueClaims(async () => {
           const qts = now();
           await db.insert(queueItems).values(
             ids.map((tid, i) => ({ taskId: tid, queueId, position: i, createdAt: qts })),
           );
-        }
+        })
       : undefined);
   } catch (error) {
     if (error instanceof CliCommandValidationError) return c.json({ error: error.message }, 400);
@@ -269,7 +271,8 @@ api.patch("/groups/:id", async (c) => {
 // Delete a group. Tasks are NOT deleted — they're just ungrouped (groupId null).
 api.delete("/groups/:id", async (c) => {
   const gid = c.req.param("id");
-  await detachTaskRefs("groupId", gid);
+  // 摘出分组 = 改 groupId,归属写方进队列认领链(queue-claim-chain.ts)。
+  await serializeQueueClaims(() => detachTaskRefs("groupId", gid));
   await db.delete(groups).where(eq(groups.id, gid));
   return c.json({ deleted: true });
 });

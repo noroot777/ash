@@ -13,6 +13,7 @@ import { TEAM_DEFAULTS } from "@ash/shared";
 import { inheritExecutorOverrides, pickExecutor } from "@ash/shared/executors";
 import { db } from "../db/index.js";
 import { tasks, groups, queueItems } from "../db/schema.js";
+import { serializeQueueClaims } from "../queue-claim-chain.js";
 import { id, now } from "../util.js";
 import { runGroupInBackground } from "../scheduler.js";
 import { TEAM_WORKER_PREAMBLE } from "./prompts.js";
@@ -156,12 +157,13 @@ export async function dispatchWorkers(
   });
   // serial 批次串成 A→B→C:头一个 done 后 advanceQueueFromTask 自动起下一个。
   const queueId = mode === "serial" && rows.length > 1 ? id() : null;
+  // 串队是归属写方,进队列认领链(queue-claim-chain.ts)。
   const created = await createTasks(rows, queueId
-    ? async () => {
+    ? () => serializeQueueClaims(async () => {
         await db.insert(queueItems).values(
           rows.map((r, i) => ({ taskId: r.id, queueId, position: i, createdAt: ts })),
         );
-      }
+      })
     : undefined);
 
   // 调度者又派活了 = 这支队伍重新开工:已验收的团队 stage 清回「进行中」。

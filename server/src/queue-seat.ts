@@ -32,6 +32,7 @@ import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation, type TaskQueueReservation } from "./task-queue-reservation.js";
 import { waitForStartReceipt } from "./task-start-receipt.js";
 import { oweQueueAdvance } from "./turn-release.js";
+import { noteSoloAdmit, serializeQueueClaims } from "./queue-claim-chain.js";
 
 export type QueueSeat = {
   taskId: string;
@@ -82,16 +83,10 @@ export function queueClaimError(r: { blockers: string[]; blocking?: readonly Que
     : queueBlockedText(r.blocking ?? []);
 }
 
-// 所有「检查整队 → 占位/落 queued」的临界区排在这一条链上依次执行。队列很小、临界区里
-// 只有几条 SQLite 查询,全局一条链足够;链上任何一次失败都不许断链(与 pending-messages
-// 的 scanChain 同款写法)。
-let chain: Promise<unknown> = Promise.resolve();
-
-export function serializeQueueClaims<T>(fn: () => Promise<T>): Promise<T> {
-  const next = chain.then(fn);
-  chain = next.catch(() => undefined);
-  return next;
-}
+// 所有「检查整队 → 占位/落 queued」的临界区,连同队列/分组归属的写方,排在同一条链上
+// 依次执行(为什么写方也得进来,见 queue-claim-chain.ts)。队列很小、临界区里只有几条
+// SQLite 查询,全局一条链足够。
+export { serializeQueueClaims };
 
 /**
  * 为 taskId 认领它所在队列的执行占位。认领到 = 任务已落 queued,调用方随后真正拉起它;
@@ -99,16 +94,20 @@ export function serializeQueueClaims<T>(fn: () => Promise<T>): Promise<T> {
  * 不在队列的任务直接放行(seat 为 null),独立任务没有同队互斥。
  */
 export async function claimQueueSeat(taskId: string): Promise<QueueSeatClaim> {
-  const item = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
-  if (!item) return { ok: true, seat: null };
   return serializeQueueClaims(async (): Promise<QueueSeatClaim> => {
+    // 「在不在队列」也只能在临界区里判:在外面读到「不在」就直接放行,入队请求恰好落在
+    // 这一读与真正起跑之间,它就带着独立任务的身份和同队在跑的那条一起跑。
+    const item = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
+    if (!item) {
+      noteSoloAdmit(taskId);
+      return { ok: true, seat: null };
+    }
     // 成员与状态都在临界区里重读:链上前一次认领刚落的 queued,这里必须看得见。
     const items = await db
       .select()
       .from(queueItems)
       .where(eq(queueItems.queueId, item.queueId))
       .orderBy(asc(queueItems.position));
-    if (!items.some((i) => i.taskId === taskId)) return { ok: true, seat: null }; // 排队间隙被移出了队列
     const rows = await db.select().from(tasks).where(inArray(tasks.id, items.map((i) => i.taskId)));
     const position = new Map(items.map((i) => [i.taskId, i.position]));
     const members = rows.map((r) => ({ ...r, position: position.get(r.id) ?? 0 }));
