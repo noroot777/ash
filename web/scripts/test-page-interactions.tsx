@@ -108,28 +108,28 @@ assert.doesNotMatch(cleanStale, />提交<\/button>/);
 const message = (id: string): ScheduledMessage => ({ id, taskId: "task", text: id, attachments: [], agent: null,
   executorId: null, model: null, reasoningEffort: null, origin: null, sessionRole: null, mode: "queued",
   status: "pending", createdAt: "2026-10-28T00:00:00Z", sendAt: "2026-10-28T00:00:00Z", sentAt: null });
-const tray = (messages: ScheduledMessage[]) => renderToStaticMarkup(<ScheduledMessageTray messages={messages} loading={false}
-  error={null} cancelingIds={new Set()} onSteer={() => {}} onWithdraw={() => {}} onCancel={() => {}} />);
+const tray = (messages: ScheduledMessage[], defaultExpanded = false) => renderToStaticMarkup(<ScheduledMessageTray messages={messages} loading={false}
+  error={null} cancelingIds={new Set()} onSteer={() => {}} onWithdraw={() => {}} onCancel={() => {}} defaultExpanded={defaultExpanded} />);
+// 收着:那一行上带着自己最早那条,能引导时引导键就在这一行上,不用先点开。
 const mine = tray([{ ...message("mine"), steerable: true }]);
-assert.match(mine, /scheduled-message-previews/);
+assert.match(mine, /scheduled-tray-head/);
 assert.match(mine, /scheduled-message-guide/);
-assert.match(mine, /scheduled-message-withdraw/);
-assert.doesNotMatch(mine, /is-expanded/);
+assert.doesNotMatch(mine, /is-expanded|scheduled-tray-list/);
+assert.match(tray([{ ...message("mine"), steerable: true }], true), /scheduled-message-withdraw/, "点开后自己的消息行尾有撤回");
 assert.doesNotMatch(tray([message("idle")]), /scheduled-message-guide/, "服务端没说能引导(任务不在跑、旧服务端)就不给这颗键");
-const monitor = tray([{ ...message("monitor"), origin: "monitor:test", text: "【哨兵结束】检查，退出码 1。" }]);
+const monitor = tray([{ ...message("monitor"), origin: "monitor:test", text: "【哨兵结束】检查，退出码 1。" }], true);
 assert.doesNotMatch(monitor, /scheduled-message-guide|scheduled-message-withdraw/);
 assert.match(monitor, /取消哨兵事件/);
 assert.match(monitor, /exit 1/);
-const managed = tray([{ ...message("review"), sessionRole: "reviewer" }]);
+const managed = tray([{ ...message("review"), sessionRole: "reviewer" }], true);
 assert.doesNotMatch(managed, /scheduled-message-guide|scheduled-message-withdraw|取消哨兵事件/);
-assert.match(managed, /由审查链投递/);
-const mixed = tray([{ ...message("0-monitor"), origin: "monitor:test" }, { ...message("1-mine"), steerable: true }, message("2-mine")]);
+assert.match(managed, /scheduled-message-source">审查答复</);
+const mixed = tray([{ ...message("0-monitor"), origin: "monitor:test" }, { ...message("1-mine"), steerable: true }, message("2-mine")], true);
 assert.equal((mixed.match(/class="scheduled-message-guide"/g) ?? []).length, 1);
-assert.equal((mixed.match(/class="scheduled-message-withdraw"/g) ?? []).length, 2);
+assert.equal((mixed.match(/class="scheduled-message-reveal scheduled-message-withdraw"/g) ?? []).length, 2);
 const monitorFirst = tray([{ ...message("0-monitor"), origin: "monitor:test" },
   { ...message("1-monitor"), origin: "monitor:test" }, { ...message("2-mine"), steerable: true }]);
-assert.match(monitorFirst, /scheduled-message-guide/);
-assert.match(monitorFirst, /scheduled-message-withdraw/);
+assert.match(monitorFirst, /查看完整输入：2-mine[\s\S]*scheduled-message-guide/, "排在前面的是哨兵时,那一行上带的还是自己最早那条和引导键");
 const css = readFileSync(new URL("../src/styles/scheduled-message-tray.css", import.meta.url), "utf8");
-assert.doesNotMatch(css, /\.scheduled-message-previews[^{}]*> button[^{}]*\{[^{}]*display:\s*none/);
+assert.doesNotMatch(css, /\.scheduled-message-actions[^{}]*\{[^{}]*display:\s*none/, "行尾的键在任何宽度下都在");
 console.log("page interactions: extracted SCM API routing, commit safety, collapsed user actions, monitor and review message compatibility passed");

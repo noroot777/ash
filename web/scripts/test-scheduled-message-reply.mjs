@@ -39,10 +39,11 @@ try {
         assert.equal(result.scrollTop, 0, `${variant} ${label}: 不能依赖页面滚动找回发送按钮`);
         return result;
       };
-      await page.getByRole("button", { name: "展开全部 10 条" }).waitFor();
+      const toggle = page.getByRole("button", { name: "排着 10 条", exact: true });
+      await toggle.waitFor();
       await input.fill("要发送的草稿");
       const before = await visibleSend("短窗口折叠");
-      await page.getByRole("button", { name: "展开全部 10 条" }).click();
+      await toggle.click();
       await settle();
       const after = await visibleSend("短窗口展开");
       assert.ok(Math.abs(after.bottom - before.bottom) < 1, `${variant}: 展开不将发送区向下推`);
@@ -67,7 +68,8 @@ try {
       }
       assert.equal(await input.inputValue(), Array.from({ length: 80 }, (_, index) => `保留草稿第 ${index} 行`).join("\n"), "调整布局不改动草稿");
       await page.getByRole("separator").press("Home");
-      await page.getByRole("button", { name: "收起列表", exact: true }).click();
+      await toggle.click();
+      assert.equal(await toggle.getAttribute("aria-expanded"), "false");
       await settle();
       await visibleSend("收起后");
       assert.deepEqual(errors, []);
