@@ -21,6 +21,8 @@ import { PresetBar } from "./PresetBar.tsx";
 import { composerRunSummary, type ComposerRunSummary } from "./composerRunSummary.ts";
 import { useProviders } from "../lib/modelCatalog.ts";
 
+const FOLLOW_PREREQUISITES = "跟着前置走（起跑时定）";
+
 /** 摆进新建卡片的几块：卡片上方的模式、输入区下面那排入口、右下角的「谁来做」。 */
 export type ComposerFieldParts = {
   modes: ReactNode;
@@ -61,6 +63,7 @@ export function ComposerFields({
   automaticBaseLabel,
   switchingBranch,
   onBaseChange,
+  followPrerequisites,
   groups,
   groupId,
   onGroupChange,
@@ -107,6 +110,11 @@ export function ComposerFields({
   automaticBaseLabel: string;
   switchingBranch: boolean;
   onBaseChange: (value: string) => void;
+  /**
+   * 启动方式是「创建并等前置」：起点在起跑那一刻按前置定，base 分支不可选；合入分支跟着前置走
+   * （`mergeTarget`，null = 前置不限制、照常按项目分支定）。
+   */
+  followPrerequisites?: { mergeTarget: string | null } | null;
   groups: Group[];
   groupId: string;
   onGroupChange: (value: string) => void;
@@ -149,12 +157,16 @@ export function ComposerFields({
   // 这颗开关每次新建任务都要面对一遍，所以把「本项目默认是什么」和「把这次的选择变成本项目
   // 默认」就放在改它的地方 —— 手机端(mobile/src/app/new.tsx)早就是这样，桌面端此前只能翻到
   // 设置页去改，用户只好每建一个任务手动拨一次。
+  const following = !!followPrerequisites && useWorktree;
   const workspaceEditor = <>
     <div className="composer-option-grid">
       <label className="composer-toggle-field"><span>worktree</span><Toggle checked={useWorktree} onChange={onUseWorktreeChange} label={useWorktree ? "独立 worktree" : "直接使用项目目录"} /></label>
-      <div className="composer-field"><span>base 分支</span><Dropdown label="base 分支" value={base}
-        options={[{ value: "", label: automaticBaseLabel }, ...branches.map((branch) => ({ value: branch, label: branch, mono: true }))]}
-        disabled={!useWorktree || switchingBranch} filterable={branches.length > 6} filterPlaceholder="筛选分支…" placeholder={automaticBaseLabel} onChange={onBaseChange} /></div>
+      <div className="composer-field"><span>base 分支</span><Dropdown label="base 分支" value={following ? "" : base}
+        options={[{ value: "", label: following ? FOLLOW_PREREQUISITES : automaticBaseLabel }, ...branches.map((branch) => ({ value: branch, label: branch, mono: true }))]}
+        disabled={!useWorktree || switchingBranch || following} filterable={branches.length > 6} filterPlaceholder="筛选分支…" placeholder={automaticBaseLabel} onChange={onBaseChange} /></div>
+      {following && <div className="composer-field"><span>合入分支</span><Dropdown label="合入分支" value=""
+        options={[{ value: "", label: followPrerequisites.mergeTarget ?? automaticBaseLabel, mono: !!followPrerequisites.mergeTarget }]}
+        disabled onChange={() => {}} /></div>}
     </div>
     {switchingBranch && <p className="studio-help" role="status">正在切换项目分支，完成后可创建任务。</p>}
     <p className="studio-help composer-workspace-default">
@@ -206,7 +218,7 @@ export function ComposerFields({
       <label className="composer-toggle-field"><span>共识闸门</span><Toggle checked={gate} onChange={onGateChange} label={gate ? "需要确认" : "自动结束"} /></label>
     </div> : <label className="composer-toggle-field"><span>自动审查</span><Toggle checked={review} onChange={onReviewChange} label={review ? "已开启" : "已关闭"} /></label>}
   </ComposerPopover>;
-  const where = duet ? null : <ComposerPopover tone="opt" label="工作目录" value={`${directory}${isRepo && useWorktree ? ` · ${base || automaticBaseLabel}` : ""}`}
+  const where = duet ? null : <ComposerPopover tone="opt" label="工作目录" value={`${directory}${isRepo && useWorktree ? ` · ${following ? FOLLOW_PREREQUISITES : base || automaticBaseLabel}` : ""}`}
     trigger={<>{isRepo && useWorktree ? <GitBranch size={14} /> : <FolderSimple size={14} />}<span>{directory}</span></>}>
     {isRepo ? workspaceEditor : <p className="studio-help">当前项目不是 Git 仓库，直接使用项目目录。</p>}
   </ComposerPopover>;

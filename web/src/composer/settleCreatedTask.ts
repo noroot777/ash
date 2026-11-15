@@ -31,6 +31,8 @@ export async function settleCreatedTask(args: {
   onCreated: (task: Task, noteIds: string[], ownsComposer: boolean) => void;
   onTasksSynced?: (tasks: Task[]) => void;
   notify: (message: string) => void;
+  /** 「创建并等前置」：已选里还没站稳的那几条的名字（提示「等谁」用）。 */
+  waitingFor?: () => string[];
 }): Promise<void> {
   const { submitted, notify } = args;
   let task = args.task;
@@ -63,8 +65,9 @@ export async function settleCreatedTask(args: {
     return;
   }
   let launchError: unknown = null;
+  let held: Awaited<ReturnType<typeof api.runTask>> | null = null;
   try {
-    if (args.launchMode === "run") await api.runTask(task.id);
+    if (args.launchMode === "run" || args.launchMode === "prerequisites") held = await api.runTask(task.id);
     else if (args.launchMode === "once") {
       await api.setSchedule(task.id, { kind: "once", at: new Date(args.scheduleAt).toISOString(), cron: null });
     } else {
@@ -75,10 +78,21 @@ export async function settleCreatedTask(args: {
   }
   finishCreation();
   if (launchError) {
-    notify(`任务已创建，但${args.launchMode === "run" ? "启动" : "定时设置"}失败：${launchError instanceof Error ? launchError.message : "未知错误"}`);
+    const what = args.launchMode === "run" || args.launchMode === "prerequisites" ? "启动" : "定时设置";
+    notify(`任务已创建，但${what}失败：${launchError instanceof Error ? launchError.message : "未知错误"}`);
     return;
   }
-  notify(args.launchMode === "run"
+  // 前置没齐时服务端不起跑、记成等齐就起：这是被接受了的请求，不是启动失败。
+  if (held?.waiting) {
+    if (held.blocked) {
+      notify(`任务已建好，前置都站稳了，但还开不了工：${held.reason ?? "原因未知"}`);
+      return;
+    }
+    const names = (args.waitingFor?.() ?? []).map((title) => `「${title}」`).join("");
+    notify(`任务已建好，等${names || "前置"}站稳后自动开始`);
+    return;
+  }
+  notify(args.launchMode === "run" || args.launchMode === "prerequisites"
     ? "任务已创建并启动"
     : args.launchMode === "once"
       ? "任务已创建，已设置一次性定时"

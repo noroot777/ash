@@ -48,6 +48,7 @@ import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, req
 import { readSettings, writeSettings } from "./settingsSync.ts";
 import { llmApi } from "./apiLlm.ts";
 import { monitorApi } from "./apiMonitors.ts";
+import { prerequisiteApi } from "./apiPrerequisites.ts";
 import { taskMemoApi } from "./apiTaskMemos.ts";
 import { previewAssistApi } from "./apiPreviewAssist.ts";
 import { handoffApi } from "./handoffApi.ts";
@@ -226,10 +227,12 @@ export const api = {
   taskBodies: (taskIds: string[]): Promise<{ taskId: string; body: string }[]> =>
     request("/tasks/bodies", json("POST", { taskIds })),
   createTask: (
-    task: Partial<Task> & {
+    task: Partial<Omit<Task, "prerequisites">> & {
       projectId: string;
       title: string;
       attachments?: string[];
+      /** 建在哪几条任务上面（和任务同一次请求写进去，服务端判不成立就整条不建）。 */
+      prerequisites?: string[];
       // 挑哪条起手式；task.workflow 非空时它已经是就地改过的快照，服务端直接落库
       workflowId?: string | null;
     },
@@ -250,7 +253,8 @@ export const api = {
     const query = params.toString();
     return request(`/tasks/${id(taskId)}${query ? `?${query}` : ""}`, { method: "DELETE" });
   },
-  runTask: (taskId: string): Promise<unknown> =>
+  /** 有前置、前置没齐时不起跑：`waiting` 为真，记成等齐就起；`blocked` = 前置都齐了却开不了工。 */
+  runTask: (taskId: string): Promise<{ started?: boolean; waiting?: boolean; blocked?: boolean; reason?: string }> =>
     request(`/tasks/${id(taskId)}/run`, { method: "POST" }),
   // 「我现在动它，会不会被换掉执行器」。列表:duet 两位讨论者各占一格。
   // 多人模式的共享项目里才可能非空；自用模式恒为空数组。
@@ -626,6 +630,7 @@ export const api = {
 
   // 哨兵那一组住在 apiMonitors.ts（同样是为了守住 700 行），调用点写法不变。
   ...monitorApi,
+  ...prerequisiteApi,
   // 直连 LLM 供应商那一组住在 apiLlm.ts，同理。
   ...llmApi,
   // 预览的「AI 协助」同理，住在 apiPreviewAssist.ts。

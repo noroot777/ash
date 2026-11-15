@@ -12,7 +12,7 @@ type RunTarget = ExecutorSelection & { model: string | null; reasoningEffort: st
 
 export function composerTaskInput({
   mode, project, body, fork, groupId, labels, attachments, rounds, gate, review, useWorktree, base,
-  executors, lead, worker, reviewer, voiceA, voiceB, singleRun,
+  executors, lead, worker, reviewer, voiceA, voiceB, singleRun, prerequisites,
 }: {
   mode: TaskMode;
   project: ProjectView;
@@ -33,6 +33,11 @@ export function composerTaskInput({
   voiceA: ExecutorSelection;
   voiceB: ExecutorSelection;
   singleRun: RunTarget;
+  /**
+   * 启动方式是「创建并等前置」时已选的前置（只有单任务有）。起点在起跑那一刻按前置定，所以不带 base；合入分支
+   * 跟着前置走（`mergeTargetBranch`，null = 不限制、照常按项目分支定）。
+   */
+  prerequisites?: { ids: string[]; mergeTargetBranch: string | null } | null;
 }): Parameters<typeof api.createTask>[0] {
   const text = forkTaskBody(fork, body);
   const common = {
@@ -95,9 +100,15 @@ export function composerTaskInput({
       },
     };
   }
+  const building = prerequisites && {
+    prerequisites: prerequisites.ids,
+    worktreeBase: null,
+    ...(workspace.useWorktree && prerequisites.mergeTargetBranch ? { mergeTargetBranch: prerequisites.mergeTargetBranch } : {}),
+  };
   return {
     ...common,
     ...workspace,
+    ...building,
     agentType: singleRun.agentType,
     executorId: singleRun.executorId,
     model: singleRun.model,

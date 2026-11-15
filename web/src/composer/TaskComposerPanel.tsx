@@ -39,6 +39,7 @@ import { settleCreatedTask } from "./settleCreatedTask.ts";
 import { composerTaskInput } from "./composerTaskInput.ts";
 import { ComposerLaunchControl, type LaunchMode } from "./ComposerLaunchControl.tsx";
 import { useQueueAfter } from "./useQueueAfter.tsx";
+import { usePrerequisitePicks } from "./usePrerequisitePicks.tsx";
 import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
 import {
   emptyComposerExecutorConfigs,
@@ -144,7 +145,9 @@ export function TaskComposerPanel({
   const [savingWorktreeDefault, setSavingWorktreeDefault] = useState(false);
   const { branches, base, setBase, automaticLabel, switching, isSwitching } = useComposerBranches(project, notify);
   const [busy, setBusy] = useState(false);
-  const [launchMode, setLaunchMode] = useState<LaunchMode>("run");
+  // 「创建并等前置」记在草稿里（已选的前置跟正文同生共死）：草稿里有它，启动方式就是它。
+  const [otherLaunchMode, setLaunchMode] = useState<LaunchMode>("run");
+  const launchMode: LaunchMode = draft.prerequisites ? "prerequisites" : otherLaunchMode;
   const [scheduleAt, setScheduleAt] = useState("");
   const [scheduleCron, setScheduleCron] = useState(DEFAULT_CRON);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
@@ -152,6 +155,8 @@ export function TaskComposerPanel({
   const [slashDismissed, setSlashDismissed] = useState(false);
   // 「创建并排队」(launchMode="queue"):目标选择、分组联动、入队动作都在这个 hook 里。
   const queueAfter = useQueueAfter({ tasks, groups, projectId: project.id, notify, onFollowGroup: setGroupId });
+  const prerequisitePicks = usePrerequisitePicks({ draft, projectId: project.id, useWorktree: project.health.isRepo && useWorktree,
+    groups, enabled: launchMode === "prerequisites", notify });
   const uploads = useAttachments({
     value: draft.attachments,
     onChange: draft.setAttachments,
@@ -394,7 +399,9 @@ export function TaskComposerPanel({
   const scheduleError = launchMode === "once" || launchMode === "cron"
     ? scheduleValidationError(launchMode, scheduleAt, scheduleCron)
     : null;
-  const queueTargetError = launchMode === "queue" && !queueAfter.afterTaskId ? "选择要接在哪个任务之后" : null;
+  // 这一档自己没配好的那一句（排队没选目标、前置没选或有一条不成立）；还在核对前置时只挡发送、不当成错写出来。
+  const launchTargetError = launchMode === "queue" && !queueAfter.afterTaskId ? "选择要接在哪个任务之后"
+    : prerequisitePicks.blockReason;
   // 有图还在传就先不放行：附件路径是上传成功才有的，这时候创建等于把刚粘的那张图
   // 悄悄扔掉。三种模式一视同仁——切走这个面板就没人接住在途的那张了。
   const waitingUploads = uploads.uploading;
@@ -405,20 +412,22 @@ export function TaskComposerPanel({
       : waitingUploads ? "附件传完才能创建"
         : switching ? "正在切换项目分支，切完才能创建"
           : noExecutor || roleBlocked ? availabilityMessage ?? "执行器不可用"
-            : scheduleError || queueTargetError || null;
+            : scheduleError || launchTargetError || null;
   const canSubmit = !blockReason && !busy;
 
   const changeLaunchMode = (next: LaunchMode) => {
-    setLaunchMode(next);
+    draft.setPrerequisites((current) => next === "prerequisites" ? current ?? [] : null);
+    if (next !== "prerequisites") setLaunchMode(next);
     if (next !== "queue") queueAfter.clear();
     if (next === "once" && !scheduleAt) setScheduleAt(defaultOnceTime());
   };
   // 团队任务不被普通队列调度(selectNextInQueue 按 mode !== "team" 过滤):团队模式
   // 不提供「创建并排队」,已选了再切到团队时退回默认,不留一个兑现不了的承诺。
   const queueUnavailable = mode === "team" ? "团队任务不参与普通队列" : null;
+  const prerequisiteUnavailable = mode === "single" ? null : `${mode === "team" ? "团队" : "讨论"}任务不能有前置`;
   useEffect(() => {
-    if (queueUnavailable && launchMode === "queue") changeLaunchMode("run");
-  }, [queueUnavailable, launchMode]);
+    if ((queueUnavailable && launchMode === "queue") || (prerequisiteUnavailable && launchMode === "prerequisites")) changeLaunchMode("run");
+  }, [queueUnavailable, prerequisiteUnavailable, launchMode]);
   const changeGroup = (value: string, opts?: { silent?: boolean }) => {
     setGroupId(value);
     return queueAfter.onGroupChanged(value, opts);
@@ -432,6 +441,8 @@ export function TaskComposerPanel({
         mode, project, body, fork, groupId, labels, attachments: allAttachments, rounds, gate, review, useWorktree, base,
         executors, lead: leadExecutor, worker: workerExecutor, reviewer: reviewerExecutor, voiceA: voiceAExecutor, voiceB: voiceBExecutor,
         singleRun,
+        prerequisites: launchMode === "prerequisites"
+          ? { ids: prerequisitePicks.picks, mergeTargetBranch: prerequisitePicks.mergeTargetBranch } : null,
       }));
     } catch (error) {
       notify(error instanceof Error ? error.message : "任务创建失败");
@@ -453,6 +464,7 @@ export function TaskComposerPanel({
       onCreated,
       onTasksSynced,
       notify,
+      waitingFor: prerequisitePicks.waitingTitles,
     });
   };
 
@@ -510,6 +522,7 @@ export function TaskComposerPanel({
             automaticBaseLabel={automaticLabel}
             switchingBranch={switching}
             onBaseChange={setBase}
+            followPrerequisites={launchMode === "prerequisites" ? { mergeTarget: prerequisitePicks.mergeTargetBranch } : null}
             groups={groups}
             groupId={groupId}
             onGroupChange={changeGroup}
@@ -557,13 +570,15 @@ export function TaskComposerPanel({
                 busy={busy}
                 blocked={blockReason}
                 uploading={uploads.uploading ? uploadingLabel(uploads.pending) : null}
-                error={scheduleError || queueTargetError}
+                error={scheduleError || (prerequisitePicks.checking ? null : launchTargetError)}
                 onModeChange={changeLaunchMode}
                 onAtChange={setScheduleAt}
                 onCronChange={setScheduleCron}
                 onSubmit={() => void submit()}
                 queueSlot={queueAfter.slot}
                 queueUnavailable={queueUnavailable}
+                prerequisiteSlot={prerequisitePicks.slot}
+                prerequisiteUnavailable={prerequisiteUnavailable}
               />
             </div>
           </footer>
