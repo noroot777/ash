@@ -11,7 +11,7 @@ import {
   DEBATE_CHOICE, RESOLUTIONS, UPHELD_AFTER_DEBATE, choiceTip, exchangesText, resolvedText,
 } from "./disputeCopy.ts";
 import { openDisputeTarget, rulingContext, sameDisputeTarget, type RulingChoice, type RulingContext } from "./disputeRuling.ts";
-import { clearRulingDraft, useRulingDraft } from "./disputeRulingStore.ts";
+import { clearRulingDraft, useRulingDockPresence, useRulingDraft } from "./disputeRulingStore.ts";
 
 const EXCHANGES = Array.from({ length: MAX_FREE_REVIEW_DEBATE_EXCHANGES }, (_, index) => String(index + 1));
 
@@ -53,6 +53,12 @@ function ChoiceKey({ choice, context, pressed, onPick }: {
   );
 }
 
+/** 那一行真的画出来了才登记（答题卡展开时回复框不挂，它也就不在）；「用这段作要点」认这份登记。 */
+function DockPresence({ taskId, context }: { taskId: string; context: RulingContext }) {
+  useRulingDockPresence(taskId, context.target, !!context.blocked);
+  return null;
+}
+
 function ExchangesPicker({ value, onChange, onCancel }: { value: number; onChange: (value: number) => void; onCancel: () => void }) {
   const roving = useRovingChoice(EXCHANGES, String(value), (next) => onChange(Number(next)));
   const labelId = useId();
@@ -82,11 +88,13 @@ function ExchangesPicker({ value, onChange, onCancel }: { value: number; onChang
  *   `DEFER_BOUNDARY_CRITERION`）。建一个待办派生任务把它带走。只在执行者逐条写明越界依据时才出现。
  * - 让双方辩论：先听几段再决定，**不改变任何结论**，辩完还是回到这一行拍板。
  *
- * 这一行出不出、出哪几颗见 `rulingContext`；选中的那一档和写的话连同它针对的那一条驳回一起存
+ * 这一行出不出、出哪几颗见 `rulingContext`。有问题在等时，答题卡展开着就占着回复框那一格，回复框连同
+ * 这一行一起不挂；收起后回复框带着它回来（ReplyBox 按 `covering` 卸框）——任何时候只有一处打字的地方。
+ * 选中的那一档和写的话连同它针对的那一条驳回一起存
  * （`disputeRulingStore`），驳回换了一条就跟着旧那条走掉。
  */
 export function useDisputeRulingDock({ task, reviews, known, onChanged, notify }: {
-  task: Pick<TaskListItem, "id" | "status" | "stage" | "archived" | "handoff" | "question">;
+  task: Pick<TaskListItem, "id" | "status" | "stage" | "archived" | "handoff">;
   reviews: readonly FreeReviewRun[] | null | undefined;
   /** 审查状态已经读到。 */
   known: boolean;
@@ -141,6 +149,7 @@ export function useDisputeRulingDock({ task, reviews, known, onChanged, notify }
 
   const head = (
     <div className="ruling-dock" onKeyDown={(event) => { if (event.key === "Escape" && choice) { event.preventDefault(); cancel(); } }}>
+      <DockPresence taskId={task.id} context={context} />
       <div className="ruling-row" role="group" aria-label="怎么裁定这条驳回">
         {context.choices.map((item) => (
           <ChoiceKey key={item} choice={item} context={context} pressed={item === choice} onPick={() => pick(item)} />

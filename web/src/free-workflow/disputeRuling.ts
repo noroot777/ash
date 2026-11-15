@@ -34,8 +34,9 @@ export type RulingContext = {
  * 回复框顶上那一行此刻是什么样（null = 不出现）。
  *
  * 不出现的几种：没有等裁定的驳回；任务锁住了（验收、合并、归档、接力出去，同审查格 `reviewLocked`）；
- * 辩论正在进行（那时回复框就是平常的回复框，辩到哪了写在会话里那颗气泡上）；它在问你（答题卡占着
- * 打字的地方，任何时候只有一处打字的地方、一颗发送键）。
+ * 辩论正在进行（那时回复框就是平常的回复框，辩到哪了写在会话里那颗气泡上）。它在问你不在这里判：
+ * 答题卡展开着占住回复框那一格时，回复框连同这一行一起不挂，收起就回来（ReplyBox 的 `covering`）——
+ * 问题在不在是任务上的事实，卡展没展开是回复框那一格的事，不能拿前者顶后者。
  *
  * 出现哪几颗照原来那张卡的判据，服务端同样会拒，这里不是唯一防线：「转为独立任务」只在执行者逐条写了
  * 越界依据时给——凭空给它就成了谁都能按的免修开关；「让双方辩论」只在没辩过、或上一场中断时给——辩完的
@@ -43,11 +44,11 @@ export type RulingContext = {
  */
 export function rulingContext(
   reviews: readonly FreeReviewRun[] | null | undefined,
-  task: Pick<TaskListItem, "status" | "stage" | "archived" | "handoff" | "question">,
+  task: Pick<TaskListItem, "status" | "stage" | "archived" | "handoff">,
 ): RulingContext | null {
   const entry = openDisputeEntryIn(reviews);
   const dispute = entry?.round.dispute;
-  if (!entry || !dispute || reviewLocked(task) || task.question) return null;
+  if (!entry || !dispute || reviewLocked(task)) return null;
   const latest = dispute.debates.at(-1) ?? null;
   if (latest?.status === "running") return null;
   const choices: RulingChoice[] = ["upheld", "withdrawn"];
@@ -66,9 +67,4 @@ export function rulingContext(
     blocked,
     debated: latest?.status === "finished",
   };
-}
-
-/** 「用这段作要点」此刻能不能按：那一行在、能按，而且引的就是它那一条驳回。 */
-export function canQuoteFor(context: RulingContext | null, target: FreeReviewDisputeTarget | null | undefined): boolean {
-  return !!context && !context.blocked && sameDisputeTarget(context.target, target);
 }

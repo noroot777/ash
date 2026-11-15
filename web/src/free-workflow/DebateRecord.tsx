@@ -1,17 +1,14 @@
 import { useEffect, useRef } from "react";
 import type { FreeReviewDebate, FreeReviewDisputeTarget, FreeReviewRun, TaskListItem } from "@ash/shared";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
-import { useLeftDrawer, type LeftDrawerEntry } from "../components/LeftDrawer.tsx";
+import type { LeftDrawerEntry } from "../components/LeftDrawer.tsx";
 import { DEBATE_SIDE_LABEL, DEBATE_VERDICT_LABEL, debateSpeaking, debateTotalSegments, turnGist } from "./debateModel.ts";
 import { QuoteKey, SpeakingLine } from "./DebateOverview.tsx";
-import { canQuoteFor, rulingContext } from "./disputeRuling.ts";
-import { quoteIntoRuling, quotedTurn } from "./disputeRulingStore.ts";
+import { useRulingQuote } from "./disputeRulingStore.ts";
 import { useFreeWorkflowSnapshot } from "./useFreeWorkflowState.ts";
 
-type RulingTask = Pick<TaskListItem, "id" | "status" | "stage" | "archived" | "handoff" | "question">;
-
 export type DebateDrawerSource = {
-  task: RulingTask;
+  task: Pick<TaskListItem, "id">;
   target: FreeReviewDisputeTarget;
   debateId: string;
   /** 同一条驳回辩过多次时的第几次（只有一次就是 null）。 */
@@ -48,15 +45,14 @@ function DebateRecordTitle({ source }: { source: DebateDrawerSource }) {
 
 /**
  * 辩论的完整记录：一段一节，节头是谁、第几段，收尾那段写明它自己的立场；下面先是那句摘要，再是完整
- * 发言。辩论中它跟着长。等裁定时每一节也有「用这段作要点」：点了落进回复框、选中「让它接着改」，
- * 抽屉收起。它取代了原来那个盖住整页的阅读层——位置跟子智能体那个抽屉一样，右边的审查格照样点得着。
+ * 发言。辩论中它跟着长。等裁定时每一节也有「用这段作要点」：点了那一句落进回复框、选中「让它接着改」，
+ * 抽屉收起（按不按得动跟回复框顶上那一行同一份登记，不看打开那一刻的任务）。它取代了原来那个盖住整页的阅读层——位置跟子智能体那个抽屉一样，右边的审查格照样点得着。
  */
 function DebateRecordBody({ source }: { source: DebateDrawerSource }) {
   const reviews = useLiveReviews(source);
   const debate = findDebate(reviews, source.debateId);
-  const drawer = useLeftDrawer();
   const root = useRef<HTMLDivElement>(null);
-  const quotable = canQuoteFor(rulingContext(reviews, source.task), source.target);
+  const quote = useRulingQuote(source.task.id, source.target);
   useEffect(() => {
     if (source.seq == null) return;
     root.current?.querySelector(`[data-seq="${source.seq}"]`)?.scrollIntoView({ block: "start" });
@@ -72,12 +68,7 @@ function DebateRecordBody({ source }: { source: DebateDrawerSource }) {
             <b>{DEBATE_SIDE_LABEL[turn.side]}</b>
             <span>第 {turn.seq} 段{turn.seq === total && debate.status === "finished"
               ? ` · 收尾，它自己的立场：${debate.verdict ? DEBATE_VERDICT_LABEL[debate.verdict] : "没给"}` : ""}</span>
-            {quotable && turn.statement && (
-              <QuoteKey onQuote={() => {
-                quoteIntoRuling(source.task.id, source.target, quotedTurn(turn));
-                drawer?.close();
-              }} />
-            )}
+            {quote && turn.statement && <QuoteKey onQuote={() => quote(turn)} />}
           </header>
           {turn.status === "speaking" ? <SpeakingLine className="debate-record-live" /> : (
             <>

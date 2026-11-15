@@ -5,7 +5,7 @@ import { useLeftDrawer } from "../components/LeftDrawer.tsx";
 import { DebateOverview } from "../free-workflow/DebateOverview.tsx";
 import { debateDrawerEntry, type DebateDrawerSource } from "../free-workflow/DebateRecord.tsx";
 import { DEBATE_SIDE_LABEL, debateBubbleText, debateNowText, debateTotalSegments, type DebateBubbleState } from "../free-workflow/debateModel.ts";
-import { quoteIntoRuling, quotedTurn } from "../free-workflow/disputeRulingStore.ts";
+import { useRulingQuote } from "../free-workflow/disputeRulingStore.ts";
 import type { ReviewTarget } from "../review/reviewTarget.ts";
 import { BubbleKey, BubbleShell } from "./BubbleShell.tsx";
 import type { ConversationDebateRow } from "./conversationDebateRows.ts";
@@ -42,15 +42,13 @@ function meta(row: ConversationDebateRow, debate: FreeReviewDebate | null): stri
  *
  * 配不到落盘记录（只读视图、快照还没跟上）时，照原来的兜底把原始那几行摆出来，宁可啰嗦也不凭空少一段。
  */
-export function DebateBubble({ row, fallback, task, reviews, awaiting, quotable, onOpenRound }: {
+export function DebateBubble({ row, fallback, task, reviews, awaiting, onOpenRound }: {
   row: ConversationDebateRow;
   fallback: ReactNode;
-  task: Pick<TaskListItem, "id" | "status" | "stage" | "archived" | "handoff" | "question">;
+  task: Pick<TaskListItem, "id">;
   reviews: readonly FreeReviewRun[] | null | undefined;
   /** 这场辩论辩的就是此刻等裁定的那一条驳回。 */
   awaiting: boolean;
-  /** 「用这段作要点」此刻能按（回复框顶上那一行在、能按、引的就是它那一条）。 */
-  quotable: boolean;
   onOpenRound?: (target: ReviewTarget) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -58,6 +56,8 @@ export function DebateBubble({ row, fallback, task, reviews, awaiting, quotable,
   const drawer = useLeftDrawer();
   const candidate = row.candidate;
   const debate = candidate?.debate ?? null;
+  // 「用这段作要点」跟回复框顶上那一行同生共死（那一行在、能按、引的就是它那一条）。
+  const quote = useRulingQuote(task.id, candidate && { runId: candidate.runId, round: candidate.round });
   const toggle = () => setOpen((value) => !value);
   const title = `第 ${row.round ?? "?"} 轮审查意见的辩论`;
   const state: DebateBubbleState = debate?.status === "running" ? "live"
@@ -109,10 +109,7 @@ export function DebateBubble({ row, fallback, task, reviews, awaiting, quotable,
             <DebateOverview
               debate={debate}
               onOpen={drawer ? openRecord : undefined}
-              onQuote={quotable ? (turn) => {
-                quoteIntoRuling(task.id, target, quotedTurn(turn));
-                drawer?.close();
-              } : undefined}
+              onQuote={quote}
             />
           </div>
         )}

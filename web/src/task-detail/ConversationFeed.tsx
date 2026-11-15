@@ -37,7 +37,7 @@ import {
   ReceiptReviewContext, TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts, type ReceiptReview,
 } from "./TurnReceipts.tsx";
 import { reviewLocked } from "../free-workflow/freeReviewCopy.ts";
-import { canQuoteFor, openDisputeTarget, rulingContext, sameDisputeTarget } from "../free-workflow/disputeRuling.ts";
+import { openDisputeTarget, sameDisputeTarget } from "../free-workflow/disputeRuling.ts";
 import { footnoteActions } from "./footnoteActions.ts";
 import { RetryCta } from "./RetryCta.tsx";
 import { laneNoVerdicts } from "./reviewNoVerdictCause.ts";
@@ -424,8 +424,7 @@ export function ConversationFeed({
   const isRetryable = (part: FootnotePart, footnote: TurnFootnote) => (part.kind === "cause" && part.id === actions.retryCauseId)
     || (part.kind === "event" && part.id === actions.retryEventId)
     || turnRetryPartOf(footnote) === part;
-  // 辩论气泡：辩的就是此刻等裁定的那一条时写「收尾 · 立场」那一句；「用这段作要点」跟回复框顶上那一行同生共死。
-  const ruling = rulingContext(reviews, task);
+  // 辩论气泡：辩的就是此刻等裁定的那一条时写「收尾 · 立场」那一句。
   const openTarget = reviewLocked(task) ? null : openDisputeTarget(reviews);
   const panelSources = reviewPanelSources(task.workflowMode);
   const hiddenTimes = new Set<string>();
@@ -553,7 +552,6 @@ export function ConversationFeed({
                   task={task}
                   reviews={reviews}
                   awaiting={sameDisputeTarget(openTarget, target)}
-                  quotable={canQuoteFor(ruling, target)}
                   onOpenRound={onOpenReviewPanel && target && reviewTargetLocatable({ source: "free", ...target }, panelSources) ? onOpenReviewPanel : undefined}
                   fallback={row.items.map((item) => renderItem(item, true))}
                 />

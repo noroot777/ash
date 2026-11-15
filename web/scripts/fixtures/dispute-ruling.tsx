@@ -3,7 +3,7 @@
 // 状态照样落回去——跟 TaskDetail 里 `free.setState` 一个路数。
 //
 // 右边那一条是审查格那一轮下面的驳回 / 辩论 / 裁定（FreeReviewDisputeRecord），用来钉「这里没有裁定的
-// 按钮」和驳回那一段的读法。
+// 按钮」和驳回那一段的读法。在问你的那一份跟任务页一样接着答题卡（给了 `onAnswer`）。
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { FreeReviewDebate, FreeReviewDispute, FreeReviewRun, Task } from "@ash/shared";
@@ -81,7 +81,8 @@ function Stage({ name, task: patch = {}, reviews: initial, inspector = false }: 
     <section className={`${name}-fixture`} style={{ display: "flex", gap: 16, margin: "0 0 28px", alignItems: "flex-start" }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <ReplyBox task={task} hasConversation override={override}
-          onSend={async (text) => { log(`__sent_${name}`, text); return { started: true } as never; }} />
+          onSend={async (text) => { log(`__sent_${name}`, text); return { started: true } as never; }}
+          onAnswer={task.question ? async (answer) => { log(`__answered_${name}`, answer); } : undefined} />
       </div>
       {inspector && reviews[0]?.rounds[0] && (
         <aside className="fixture-inspector" style={{ width: 320, flex: "none" }}>

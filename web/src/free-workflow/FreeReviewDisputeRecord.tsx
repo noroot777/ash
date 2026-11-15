@@ -7,12 +7,12 @@ import { DebateOverview } from "./DebateOverview.tsx";
 import { debateDrawerEntry, type DebateDrawerSource } from "./DebateRecord.tsx";
 import { debateSpeaking, debateTotalSegments } from "./debateModel.ts";
 import { DISPUTE_PROSE_LABELS, rulingNoteLabel, rulingText } from "./disputeCopy.ts";
-import { canQuoteFor, disputeTarget, rulingContext } from "./disputeRuling.ts";
-import { quoteIntoRuling, quotedTurn } from "./disputeRulingStore.ts";
+import { disputeTarget } from "./disputeRuling.ts";
+import { useRulingQuote } from "./disputeRulingStore.ts";
 import { disputeWho } from "./freeReviewRounds.ts";
 
 export type DisputeRecordHost = {
-  task: Pick<TaskListItem, "id" | "status" | "stage" | "archived" | "handoff" | "question">;
+  task: Pick<TaskListItem, "id">;
   reviews: readonly FreeReviewRun[] | null | undefined;
   onOpenTask?: (taskId: string) => void;
 };
@@ -31,9 +31,9 @@ export type DisputeRecordHost = {
 export function FreeReviewDisputeRecord({ run, round, host }: { run: FreeReviewRun; round: FreeReviewRound; host: DisputeRecordHost }) {
   const drawer = useLeftDrawer();
   const dispute = round.dispute;
-  if (!dispute) return null;
   const target = disputeTarget(run, round);
-  const quotable = canQuoteFor(rulingContext(host.reviews, host.task), target);
+  const quote = useRulingQuote(host.task.id, target);
+  if (!dispute) return null;
   const ruling = rulingText(dispute);
   const multiple = dispute.debates.length > 1;
   return (
@@ -71,7 +71,7 @@ export function FreeReviewDisputeRecord({ run, round, host }: { run: FreeReviewR
             <DebateOverview
               debate={debate}
               onOpen={drawer ? (seq) => drawer.open(debateDrawerEntry(source(seq))) : undefined}
-              onQuote={quotable ? (turn) => quoteIntoRuling(host.task.id, target, quotedTurn(turn)) : undefined}
+              onQuote={quote}
             />
           </section>
         );

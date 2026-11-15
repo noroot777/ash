@@ -5,7 +5,7 @@
 // 发言的开头顶上」。造一份短的假数据测不出这件事：真发言很长、而 agent 在对话里只交代了一句。
 //
 // 每一份都摆成线上的样子：中间那一栏（`.task-detail`，抽屉的定位基准）+ 右边一条审查格。
-import { StrictMode, type ReactNode } from "react";
+import { StrictMode, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import type { FreeReviewDebate, FreeReviewDispute, FreeReviewRun, Session, Task } from "@ash/shared";
 import { LeftDrawerProvider, useLeftDrawerHost } from "../../src/components/LeftDrawer.tsx";
@@ -114,7 +114,10 @@ function Stage({ name, task: base, output, reviews, panel = true, inspector = tr
   panel?: boolean;
   inspector?: boolean;
 }) {
-  const task = { ...base, id: `t-${name}` } as Task;
+  // 夹具上的一颗「任务状态变了」：另一个窗口把任务跑起来、归档这种事。
+  const [patch, setPatch] = useState<Partial<Task>>({});
+  (window as unknown as Record<string, unknown>)[`__task_${name}`] = setPatch;
+  const task = { ...base, ...patch, id: `t-${name}` } as Task;
   const host = useLeftDrawerHost({ resetKey: name });
   const run = reviews?.[0];
   const round = run?.rounds[0];

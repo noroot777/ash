@@ -7,7 +7,9 @@
 // ② 点法：辩论中点气泡 = 就地摊开概览；辩完点气泡 = 去审查格那一轮的辩论那一段；浮出那一行两颗键；
 // ③ 概览一段一行：老记录没有那一句时拿完整发言的开头顶上；点一行，左侧抽屉停在那一段；
 // ④ 左侧抽屉只盖中间那一栏，审查格照样点得着；同一时刻左边只有一屉（报告和辩论记录互相顶替）；
-// ⑤ 等你裁定时「用这段作要点」落进回复框、选中「让它接着改」，抽屉收起；
+// ⑤ 等你裁定时「用这段作要点」落进回复框的是概览上看到的那一句（不是整篇发言）、选中「让它接着改」；
+//    三处入口（会话气泡、审查格、左侧抽屉）引完抽屉都收起；按不按得动跟回复框顶上那一行走，抽屉开着
+//    时任务跑起来，抽屉里那几颗也跟着不给；
 // ⑥ 配不到落盘记录时原始行原样兜底，不凭空少一段。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
@@ -119,8 +121,13 @@ try {
   await quote.evaluate((el) => Promise.all(el.getAnimations().map((animation) => animation.finished)));
   assert.equal(await quote.evaluate((el) => getComputedStyle(el).opacity), "1", "指到那一行才出");
   assert.equal(await rows.nth(0).getByRole("button", { name: "用这段作要点" }).evaluate((el) => getComputedStyle(el).opacity), "0", "没指到的那几行不出");
+  // 概览上那一句（不连「全文 N 字」）：引的就是它。
+  const gistOf = (row) => row.locator(".debate-row-gist").evaluate((el) =>
+    [...el.childNodes].filter((node) => node.nodeName !== "EM").map((node) => node.textContent).join("").trim());
+  const gist7 = await gistOf(rows.nth(6));
   await quote.click();
-  await waitUntil(async () => /^〔审查者第 7 段〕\n我的最终立场是 upheld/.test(await textarea.inputValue()), "那一段落进回复框");
+  await waitUntil(async () => (await textarea.inputValue()) === `〔审查者第 7 段〕${gist7}`, "落进回复框的是那一句");
+  assert(gist7.length <= 81, `是一句，不是整篇发言（${gist7.length} 字）`);
   assert.equal(await awaiting.getByRole("button", { name: "让它接着改" }).getAttribute("aria-pressed"), "true", "选中「让它接着改」");
   assert.equal(await awaiting.getByRole("button", { name: "发起修复" }).count(), 1, "发送键写着这一按的名字");
   // 抽屉里那一节同样能引：往后追加，引完抽屉收起。
@@ -130,7 +137,27 @@ try {
   await seg.hover();
   await seg.getByRole("button", { name: "用这段作要点" }).click();
   await awaiting.locator(".side-drawer").waitFor({ state: "detached" });
-  await waitUntil(async () => /〔审查者第 7 段〕[\s\S]*\n\n〔审查者第 5 段〕\n/.test(await textarea.inputValue()), "已经写了字就往后追加，不覆盖");
+  const gist5 = await gistOf(rows.nth(4));
+  await waitUntil(async () => (await textarea.inputValue()) === `〔审查者第 7 段〕${gist7}\n\n〔审查者第 5 段〕${gist5}`, "已经写了字就往后追加，不覆盖");
+  // 审查格那一轮下面的概览同样能引：引完抽屉收起（它盖着回复框）。
+  await pressKey(bubble, "辩论的完整记录");
+  await drawer.waitFor();
+  const inspectorRow = inspectorDebate.locator(".debate-row").nth(0);
+  await inspectorRow.hover();
+  await inspectorRow.getByRole("button", { name: "用这段作要点" }).click();
+  await awaiting.locator(".side-drawer").waitFor({ state: "detached" });
+  await waitUntil(async () => (await textarea.inputValue()).endsWith(`\n\n〔审查者第 1 段〕${await gistOf(rows.nth(0))}`), "审查格里引的也是那一句");
+  // 抽屉开着时任务跑起来（另一个窗口点了续跑）：回复框顶上那一行按不动了，抽屉里那几颗也跟着不给；停下来又回来。
+  await pressKey(bubble, "辩论的完整记录");
+  await drawer.waitFor();
+  assert.equal(await drawer.getByRole("button", { name: "用这段作要点" }).count(), 7);
+  await page.evaluate(() => window.__task_awaiting({ status: "running" }));
+  await waitUntil(async () => (await drawer.getByRole("button", { name: "用这段作要点" }).count()) === 0, "任务跑起来，抽屉里不再给引");
+  assert.equal(await inspectorDebate.getByRole("button", { name: "用这段作要点" }).count(), 0, "审查格里同样不给");
+  await page.evaluate(() => window.__task_awaiting({}));
+  await waitUntil(async () => (await drawer.getByRole("button", { name: "用这段作要点" }).count()) === 7, "停下来又回来");
+  await page.keyboard.press("Escape");
+  await awaiting.locator(".side-drawer").waitFor({ state: "detached" });
 
   // ② 辩完以后点气泡：去审查格那一轮的辩论那一段。
   await bubble.locator(".review-verdict-text").click();

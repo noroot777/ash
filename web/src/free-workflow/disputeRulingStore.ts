@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useReducer } from "react";
 import type { FreeReviewDebateTurn, FreeReviewDisputeTarget } from "@ash/shared";
+import { useLeftDrawer } from "../components/LeftDrawer.tsx";
 import { focusReplyInput } from "../task-detail/replyQuote.ts";
-import { DEBATE_SIDE_LABEL } from "./debateModel.ts";
+import { DEBATE_SIDE_LABEL, turnGist } from "./debateModel.ts";
 import { sameDisputeTarget, type RulingChoice } from "./disputeRuling.ts";
 
 /**
@@ -38,6 +39,20 @@ function write(taskId: string, draft: RulingDraft | null) {
   emit(taskId);
 }
 
+/** 这个任务的草稿或那一行一变就重画。 */
+function useTaskListener(taskId: string) {
+  const [, rerender] = useReducer((value: number) => value + 1, 0);
+  useEffect(() => {
+    const set = listeners.get(taskId) ?? new Set();
+    set.add(rerender);
+    listeners.set(taskId, set);
+    return () => {
+      set.delete(rerender);
+      if (!set.size) listeners.delete(taskId);
+    };
+  }, [taskId]);
+}
+
 const fresh = (target: FreeReviewDisputeTarget): RulingDraft => ({ target, choice: null, note: "", exchanges: 1 });
 
 /** 这一条驳回的草稿：存的那份不是它的就当没有（也不拿来起头）。 */
@@ -51,16 +66,7 @@ function draftFor(taskId: string, target: FreeReviewDisputeTarget): RulingDraft 
  * 切走再切回来那一下草稿不能就这么被清掉）。
  */
 export function useRulingDraft(taskId: string, target: FreeReviewDisputeTarget | null, known: boolean) {
-  const [, rerender] = useReducer((value: number) => value + 1, 0);
-  useEffect(() => {
-    const set = listeners.get(taskId) ?? new Set();
-    set.add(rerender);
-    listeners.set(taskId, set);
-    return () => {
-      set.delete(rerender);
-      if (!set.size) listeners.delete(taskId);
-    };
-  }, [taskId]);
+  useTaskListener(taskId);
   const stored = drafts.get(taskId) ?? null;
   const stale = !!stored && (target ? !sameDisputeTarget(stored.target, target) : known);
   useEffect(() => {
@@ -80,13 +86,34 @@ export function clearRulingDraft(taskId: string, target: FreeReviewDisputeTarget
   write(taskId, keepNote ? { ...stored, choice: null } : null);
 }
 
-/** 「用这段作要点」落进去的那一段：谁的第几段 + 原文。 */
-export function quotedTurn(turn: Pick<FreeReviewDebateTurn, "side" | "seq" | "statement">): string {
-  return `〔${DEBATE_SIDE_LABEL[turn.side]}第 ${turn.seq} 段〕\n${turn.statement}`;
+/**
+ * 回复框顶上那一行此刻真的画着（以及它针对哪一条、按不按得动）。登记的是那一行自己：它挂在回复框里，
+ * 答题卡展开占着那一格时回复框连同它一起不挂，收起又回来——「用这段作要点」认的就是这份登记，
+ * 跟那一行同生共死，不用各处再拿任务和审查状态各算一遍（左侧抽屉里拿的还是打开那一刻的任务）。
+ */
+type Dock = { target: FreeReviewDisputeTarget; blocked: boolean };
+const docks = new Map<string, Dock>();
+
+export function useRulingDockPresence(taskId: string, target: FreeReviewDisputeTarget, blocked: boolean) {
+  useEffect(() => {
+    const dock = { target, blocked };
+    docks.set(taskId, dock);
+    emit(taskId);
+    return () => {
+      if (docks.get(taskId) !== dock) return;
+      docks.delete(taskId);
+      emit(taskId);
+    };
+  }, [taskId, target.runId, target.round, blocked]);
+}
+
+/** 「用这段作要点」落进去的那一句：谁的第几段 + 概览上看到的那一句（完整发言留在抽屉里读）。 */
+export function quotedTurn(turn: Pick<FreeReviewDebateTurn, "side" | "seq" | "summary" | "statement" | "status">): string {
+  return `〔${DEBATE_SIDE_LABEL[turn.side]}第 ${turn.seq} 段〕${turnGist(turn)}`;
 }
 
 /**
- * 「用这段作要点」：把那一段落进要点、选中「让它接着改」、光标送回回复框。
+ * 「用这段作要点」：把那一句落进要点、选中「让它接着改」、光标送回回复框。
  *
  * 已经写了字就往后追加而不是覆盖——用户可能先自己写了半句再想起来引用，覆盖掉等于把刚打的字吃了。
  * 落点是 upheld 那一档：引用一段发言的意思就是「照这个改」。
@@ -95,4 +122,19 @@ export function quoteIntoRuling(taskId: string, target: FreeReviewDisputeTarget,
   const base = draftFor(taskId, target);
   write(taskId, { ...base, choice: "upheld", note: base.note.trim() ? `${base.note.trimEnd()}\n\n${text}` : text });
   focusReplyInput(taskId);
+}
+
+/**
+ * 会话气泡、审查格、左侧抽屉三处「用这段作要点」共用这一个：那一行此刻画着、按得动、针对的就是
+ * `target` 这一条才给；按了落进要点，左侧抽屉收起（它盖着回复框）。
+ */
+export function useRulingQuote(taskId: string, target: FreeReviewDisputeTarget | null | undefined) {
+  useTaskListener(taskId);
+  const drawer = useLeftDrawer();
+  const dock = docks.get(taskId);
+  if (!target || !dock || dock.blocked || !sameDisputeTarget(dock.target, target)) return undefined;
+  return (turn: FreeReviewDebateTurn) => {
+    quoteIntoRuling(taskId, target, quotedTurn(turn));
+    drawer?.close();
+  };
 }

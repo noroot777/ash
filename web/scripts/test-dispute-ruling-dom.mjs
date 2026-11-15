@@ -1,7 +1,7 @@
 // 回复框顶上那一行：裁定在这里，不用去别处，也不弹确认框（用户 2026-11-15）。
 //
 // 盯的是：
-// ① 出不出、出哪几颗：没驳回 / 锁住 / 在问你 / 辩论中都不出；「转为独立任务」只在执行者写了越界依据时给；
+// ① 出不出、出哪几颗：没驳回 / 锁住 / 辩论中都不出；在问你时答题卡展开着就不出，收起后回复框带着它；「转为独立任务」只在执行者写了越界依据时给；
 //    「让双方辩论」只在没辩过或上一场断了时给；任务或审查正在跑时键还在但按不动，原因指到才浮出；
 // ② 选了一档回复框就成了那一步：提示换成那一档的选填说明，发送键写着这一按的名字；几档之间来回切
 //    写的字不丢；再点同一颗或 Esc 回到平常的回复框；不选就照常发普通消息；
@@ -41,10 +41,25 @@ try {
   assert.deepEqual(await keysOf("open"), ["让它接着改", "这一轮不用改了", "转为独立任务", "让双方辩论"], "两段理由都给时四颗并存");
   assert.deepEqual(await keysOf("old"), ["让它接着改", "这一轮不用改了", "让双方辩论"], "没写越界依据就没有「转为独立任务」");
   assert.deepEqual(await keysOf("debated"), ["让它接着改", "这一轮不用改了", "转为独立任务"], "辩完的那条不再辩");
-  for (const name of ["debating", "question", "locked", "ruled"]) {
+  for (const name of ["debating", "locked", "ruled"]) {
     assert.equal(await scope(name).locator(".ruling-row").count(), 0, `${name}：这一行不出，回复框就是平常的回复框`);
     assert.equal(await textarea(name).getAttribute("placeholder"), "回复…", `${name}：平常的回复框`);
   }
+  // 在问你：答题卡展开着占住回复框那一格，那一行连同平常的框都不在——只有一处打字的地方、一颗发送键；
+  // 收起答题卡，回复框带着那一行回来（问题还在，不拿「有问题」顶「卡展开着」）。
+  const question = scope("question");
+  await question.getByRole("region", { name: "等待答复的问题" }).waitFor();
+  assert.equal(await question.locator(".ruling-row").count(), 0, "question：答题卡展开时这一行不出");
+  assert.equal(await question.locator(".task-reply-box").count(), 0, "question：平常的框也不在");
+  await question.getByRole("button", { name: "收起答题卡，先看上文" }).click();
+  await question.locator(".ruling-row").waitFor();
+  assert.deepEqual(await keysOf("question"), ["让它接着改", "这一轮不用改了", "转为独立任务", "让双方辩论"], "question：收起后回复框带着这一行");
+  await question.getByRole("button", { name: "这一轮不用改了" }).click();
+  assert.equal(await textarea("question").getAttribute("placeholder"), "记一笔你的理由（选填）：不发给执行者，只留在审查记录里", "question：收起后照样能裁");
+  await question.getByRole("button", { name: "这一轮不用改了" }).click();
+  await question.locator(".question-card-peek").click();
+  await question.locator(".task-reply-box").waitFor({ state: "detached" });
+  assert.equal(await question.locator(".ruling-row").count(), 0, "question：再展开，这一行跟着框一起让开");
   // 任务或审查正在跑：键还在、按不动，为什么按不动指到才浮出来。
   for (const [name, why] of [["running", /任务正在跑，这一轮跑完再裁/], ["reviewing", /一轮审查正在进行，审完再裁/]]) {
     const key = scope(name).getByRole("button", { name: "让它接着改" });
