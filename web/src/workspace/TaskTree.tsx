@@ -24,7 +24,8 @@ import {
 } from "./useSidebarSpread.ts";
 import { buildTaskTree, groupTaskModeProjects, keepVisibleInPreview, orderedTopLevelTasks, previewProjectTasks, previewTasksByAge, revealToIndex, TASK_PREVIEW_MAX_AGE_MS } from "./taskTreeModel.ts";
 import { buildDispatchForest, forestRoot, keepForestVisible, sortRootsByLatest } from "./dispatchForest.ts";
-import { DispatchAwareRow, DispatchOpenProvider, useDispatchOpenState } from "./DispatchTreeRows.tsx";
+import { DispatchAwareRow, DispatchFactsProvider, DispatchOpenProvider, useDispatchOpenState } from "./DispatchTreeRows.tsx";
+import { dispatchFacts } from "../lib/dispatchTree.ts";
 import { OutboundStatusBar, type OutboundBar } from "./OutboundStatusBar.tsx";
 import { HandoffMachines } from "./HandoffMachines.tsx";
 import { useLayoutMotion } from "../lib/motion/index.ts";
@@ -358,6 +359,8 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
   const { lookForTask } = useTaskReadState(tasks, selectedTaskId);
   // 哪几条的「派出的任务」展开着（记在本机，刷新后还在）。
   const dispatchOpen = useDispatchOpenState();
+  // 行尾那个数和颜色：从全量任务算，筛选、置顶、作用域都改不了它（见 lib/dispatchTree 的 dispatchFacts）。
+  const dispatchFactsValue = useMemo(() => dispatchFacts(tasks), [tasks]);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
   // 主列表看哪些行只由作用域决定（scopeTasks 是唯一判据，跟计数、筛选、铺开取数同源）。
   const scopedTasks = useMemo(() => scopeTasks(activeTasks, scope), [activeTasks, scope]);
@@ -386,6 +389,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
   return (
     <TaskTreeActionsProvider value={treeActions}>
     <DispatchOpenProvider value={dispatchOpen}>
+    <DispatchFactsProvider value={dispatchFactsValue}>
     <SpreadRowProvider value={rowContext}>
       <nav ref={treeRef} className="workspace-task-tree" aria-label={taskMode ? "任务模式列表" : "任务树"} onScroll={hide}>
         <ScopedTaskTree
@@ -442,6 +446,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
         />
       )}
     </SpreadRowProvider>
+    </DispatchFactsProvider>
     </DispatchOpenProvider>
     </TaskTreeActionsProvider>
   );

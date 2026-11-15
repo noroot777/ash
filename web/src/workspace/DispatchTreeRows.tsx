@@ -2,15 +2,17 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { TaskListItem } from "@ash/shared";
 import { CaretRight } from "@phosphor-icons/react";
 import { type LookForTask } from "../lib/useTaskReadState.ts";
-import { dispatchSubtree } from "../lib/dispatchTree.ts";
-import { forestNeedsYou, type DispatchForest } from "./dispatchForest.ts";
+import { dispatchSubtree, type DispatchFacts } from "../lib/dispatchTree.ts";
+import { type DispatchForest } from "./dispatchForest.ts";
 import { RowMark, TaskRow } from "./TaskTreeRows.tsx";
 
 // 侧栏里派出去的任务收在派它的那条下面：那一行行首多一颗箭头（平时是状态点，指到、聚焦、
 // 展开时换成箭头 —— 跟团队行同一种做法），行尾一个数（名下几条）。名下整棵有在等答复或失败
 // 的，那个数变琥珀色。默认收着；开过的记在本机，刷新后还开着。
 //
-// 收在谁下面由 dispatchForest.ts 算（只在画出来的那批行之间收），这里只管画。
+// 收在谁下面由 dispatchForest.ts 算（只在画出来的那批行之间收）；那个数和它的颜色是关系事实，
+// 从全量任务算（dispatchFacts，经 DispatchFactsProvider 递下来）—— 筛选把名下几条筛掉了，数照旧、
+// 该变色照旧变色，只是没有可展开的行时不画箭头。这里只管画。
 
 const OPEN_STORAGE_KEY = "ash:task-tree:dispatch-open";
 // 记得住的上限：开过的 id 只增不减的话这份 localStorage 会一直长；超出就丢最早开的。
@@ -56,6 +58,10 @@ export function useDispatchOpenState(): DispatchOpen {
 
 export const DispatchOpenProvider = DispatchOpenContext.Provider;
 
+const NO_FACTS: DispatchFacts = { count: () => 0, needsYou: () => false };
+const DispatchFactsContext = createContext<DispatchFacts>(NO_FACTS);
+export const DispatchFactsProvider = DispatchFactsContext.Provider;
+
 type RowProps = {
   task: TaskListItem;
   forest: DispatchForest;
@@ -71,8 +77,10 @@ type RowProps = {
 
 /** 一行任务；名下收着派出去的任务时带箭头和数，展开后底下是它们。 */
 export function DispatchAwareRow(props: RowProps) {
-  const kids = props.forest.children.get(props.task.id);
-  if (!kids?.length) {
+  const facts = useContext(DispatchFactsContext);
+  const kids = props.forest.children.get(props.task.id) ?? [];
+  const count = facts.count(props.task.id);
+  if (!kids.length && !count) {
     return (
       <TaskRow
         task={props.task}
@@ -86,13 +94,19 @@ export function DispatchAwareRow(props: RowProps) {
       />
     );
   }
-  return <DispatcherRow {...props} kids={kids} />;
+  return <DispatcherRow {...props} kids={kids} count={count} needs={facts.needsYou(props.task.id)} />;
 }
 
-function DispatcherRow({ task, forest, allTasks, selectedTaskId, onTask, lookForTask, showProject = true, child = false, showOrigin = true, kids }: RowProps & { kids: TaskListItem[] }) {
+function DispatcherRow({ task, forest, allTasks, selectedTaskId, onTask, lookForTask, showProject = true, child = false, showOrigin = true, kids, count, needs }: RowProps & {
+  /** 这份列表里画在它底下的那几条（可能被筛得一条不剩）。 */
+  kids: TaskListItem[];
+  /** 名下直接派了几条、整棵有没有要你处理的：全量关系，不随筛选变。 */
+  count: number;
+  needs: boolean;
+}) {
   const state = useContext(DispatchOpenContext);
-  const expanded = state?.isOpen(task.id) ?? false;
-  const needs = forestNeedsYou(forest, task.id);
+  const expandable = kids.length > 0;
+  const expanded = expandable && (state?.isOpen(task.id) ?? false);
   // 选中的是收在底下的某一条（侧栏里点开过、搜索命中的、J/K 走到的）：把这一层打开，
   // 让它看得见。只在「选中落进来」那一刻开一次 —— 之后用户自己收起，不再顶开。
   const selectedInside = !!selectedTaskId && dispatchSubtree(forest.children, task.id).some((row) => row.id === selectedTaskId);
@@ -101,7 +115,7 @@ function DispatcherRow({ task, forest, allTasks, selectedTaskId, onTask, lookFor
     if (selectedInside) openRows?.([task.id]);
   }, [openRows, selectedInside, task.id]);
   const look = lookForTask(task);
-  const needsSaid = needs ? "，有要你处理的" : "";
+  const said = `${count} 个派出的任务${needs ? "，有要你处理的" : ""}`;
   return (
     <>
       <TaskRow
@@ -113,22 +127,28 @@ function DispatcherRow({ task, forest, allTasks, selectedTaskId, onTask, lookFor
         showProject={showProject}
         child={child}
         showOrigin={showOrigin}
-        wrapperClassName={`workspace-dispatch-row${expanded ? " is-expanded" : ""}`}
-        leading={
+        wrapperClassName={expandable ? `workspace-dispatch-row${expanded ? " is-expanded" : ""}` : undefined}
+        leading={expandable ? (
           <span className="workspace-team-leading">
             <RowMark look={look} />
             <button
               className="workspace-team-caret"
               type="button"
-              aria-label={`${expanded ? "收起" : "展开"} ${kids.length} 个派出的任务${needsSaid}`}
+              aria-label={`${expanded ? "收起" : "展开"} ${said}`}
               aria-expanded={expanded}
               onClick={() => state?.toggle(task.id)}
             >
               <CaretRight size={10} weight="bold" className={expanded ? "is-open" : ""} aria-hidden="true" />
             </button>
           </span>
+        ) : undefined}
+        tally={
+          // 有箭头时数和颜色由箭头那颗键念出来；名下几条都被筛掉了、没有箭头时，读屏得在这里听到。
+          <em className={`workspace-dispatch-count${needs ? " is-warn" : ""}`}>
+            <span aria-hidden="true">{count}</span>
+            {!expandable && <span className="task-visually-hidden">{said}</span>}
+          </em>
         }
-        tally={<em className={`workspace-dispatch-count${needs ? " is-warn" : ""}`} aria-hidden="true">{kids.length}</em>}
       />
       {expanded && (
         <div className="workspace-dispatch-list" role="group" aria-label={`${task.title || "未命名任务"} 派出的任务`}>

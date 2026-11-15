@@ -6,6 +6,7 @@
 //   · 派它的那条不在列表里（归档了），派出的任务照常平铺，不跟着消失。
 //   · 搜索命中一条收着的任务（= 选中它）时，它上面那几层自己打开，看得见它。
 //   · 新派出去的任务不刷新就收进来。
+//   · 筛选把名下几条筛掉了（只看星标）：那个数和它的颜色照旧 —— 关系事实不随筛选变。
 //   · 团队和它的执行者照旧：执行者不平铺，团队行的箭头照旧展开执行者。
 // 跑：npm -w web run test:dispatch-tree-dom
 import assert from "node:assert/strict";
@@ -90,6 +91,21 @@ try {
   // —— 等答复的那条答完了、名下再没有要你处理的：数回到不带颜色。
   await page.evaluate(() => window.__patch("kid-ask", { question: null, status: "running" }));
   await page.waitForFunction(() => !document.querySelector('[data-task-id="lead"] .workspace-dispatch-count')?.classList.contains("is-warn"));
+
+  // —— 只看星标：派它的那条加了星、名下没加。名下几条不在画出来的行里，但那个数照旧、等答复的
+  //    那条照旧让它变色；没有可展开的行，就不画箭头，数和颜色由读屏在这一行里念到。
+  await page.evaluate(() => window.__patch("kid-ask", { question: "还是选哪种？", status: "paused" }));
+  await page.waitForFunction(() => document.querySelector('[data-task-id="lead"] .workspace-dispatch-count')?.classList.contains("is-warn"));
+  await page.evaluate(() => { window.__patch("lead", { starredAt: Date.now() }); window.__filter("starred"); });
+  await page.waitForFunction(() => !document.querySelector('[data-task-id="kid-run"]'));
+  const starredCount = lead.locator(".workspace-dispatch-count");
+  assert.equal(await starredCount.locator('[aria-hidden="true"]').textContent(), "4", "名下几条被筛掉了，数照旧");
+  assert.equal(await color(starredCount), amber, "名下在等答复的那条被筛掉了，也照旧变色");
+  assert.equal(await lead.locator(".workspace-team-caret").count(), 0, "没有可展开的行，不画箭头");
+  assert.equal(await starredCount.locator(".task-visually-hidden").textContent(), "4 个派出的任务，有要你处理的");
+  await page.evaluate(() => window.__filter("all"));
+  await row("kid-run").waitFor();
+  assert.equal(await lead.locator(".workspace-dispatch-count").textContent(), "4");
 
   // —— 派它的那条一归档，名下照常平铺（归档派它的那条不等于归档名下的）。
   await page.evaluate(() => window.__patch("lead", { archived: true }));

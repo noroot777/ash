@@ -1,5 +1,5 @@
 import type { TaskListItem } from "@ash/shared";
-import { byCreated, dispatchNeedsYou, dispatchSubtree } from "../lib/dispatchTree.ts";
+import { byCreated, dispatchSubtree } from "../lib/dispatchTree.ts";
 
 // 侧栏里「派出去的任务收在派它的那条下面」这一层怎么排。
 //
@@ -11,6 +11,9 @@ import { byCreated, dispatchNeedsYou, dispatchSubtree } from "../lib/dispatchTre
 //
 // 收进去之后，派它的那条在列表里的先后、过不过 24 小时年龄闸，都按**整棵**算：名下有一条刚动过、
 // 刚摔了的，这一行就该在上面、看得见，而不是因为它自己旧就被折进「展开」里、连带名下一起藏起来。
+//
+// 这里只管「画哪几行、怎么排」。行尾那个数和它变不变色是关系事实，不随筛选变，从全量任务算
+// （lib/dispatchTree.ts 的 dispatchFacts）。
 
 export type DispatchForest<T extends TaskListItem = TaskListItem> = {
   /** 画在某一行下面的那几条（只含这份列表里在的）。 */
@@ -82,11 +85,6 @@ export function forestLatest(forest: Pick<DispatchForest, "children">, task: Tas
     (latest, row) => (row.updatedAt > latest ? row.updatedAt : latest),
     task.updatedAt,
   );
-}
-
-/** 名下整棵有没有要你处理的（在等答复、失败）。侧栏那个数据此变色。 */
-export function forestNeedsYou(forest: Pick<DispatchForest, "children">, taskId: string): boolean {
-  return dispatchSubtree(forest.children, taskId).some(dispatchNeedsYou);
 }
 
 /** 顶层那几行按整棵的最近动静排（置顶区另有先后，不经过这里）。 */

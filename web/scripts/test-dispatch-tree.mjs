@@ -4,9 +4,9 @@
 // 跑：npm -w web run test:dispatch-tree
 import assert from "node:assert/strict";
 import {
-  buildDispatchForest, forestLatest, forestNeedsYou, forestRoot, keepForestVisible, sortRootsByLatest,
+  buildDispatchForest, forestLatest, forestRoot, keepForestVisible, sortRootsByLatest,
 } from "../src/workspace/dispatchForest.ts";
-import { dispatchedOf, dispatchSubtree } from "../src/lib/dispatchTree.ts";
+import { dispatchedOf, dispatchFacts, dispatchSubtree } from "../src/lib/dispatchTree.ts";
 import { dispatchedMeta, dispatchedOrder, dispatchedWord } from "../src/task-detail/dispatched/dispatchedRows.ts";
 
 const HOUR = 60 * 60 * 1000;
@@ -87,15 +87,38 @@ const ids = (rows) => rows.map((row) => row.id);
   const grand = task("grand", { dispatchedBy: "kid", status: "paused", stage: null, question: "选哪个？" });
   const other = task("other", { updatedAt: ago(5) });
   const forest = buildDispatchForest([lead, busyKid, grand, other]);
-  assert.equal(forestNeedsYou(forest, "lead"), true, "孙辈在等答复，顶上那个数也得变色");
-  assert.equal(forestNeedsYou(forest, "grand"), false);
-  assert.equal(forestNeedsYou(buildDispatchForest([task("x"), task("y", { dispatchedBy: "x", status: "failed", stage: null })]), "x"), true, "失败也算");
-  assert.equal(forestNeedsYou(buildDispatchForest([task("x"), task("y", { dispatchedBy: "x", status: "running", stage: null })]), "x"), false, "在跑的不算要你处理");
+  const facts = dispatchFacts([lead, busyKid, grand, other]);
+  assert.equal(facts.needsYou("lead"), true, "孙辈在等答复，顶上那个数也得变色");
+  assert.equal(facts.needsYou("grand"), false);
+  assert.equal(dispatchFacts([task("x"), task("y", { dispatchedBy: "x", status: "failed", stage: null })]).needsYou("x"), true, "失败也算");
+  assert.equal(dispatchFacts([task("x"), task("y", { dispatchedBy: "x", status: "running", stage: null })]).needsYou("x"), false, "在跑的不算要你处理");
   assert.equal(forestLatest(forest, lead), ago(1));
   assert.deepEqual(ids(sortRootsByLatest(forest, [other, lead])), ["lead", "other"], "名下刚动过，这一行就排上来");
   const keep = keepForestVisible(forest, () => false, 24 * HOUR, () => NOW);
   assert.equal(keep(lead), true, "自己旧、名下新：不进年龄闸，名下才看得见");
   assert.equal(keep(task("stale")), false);
+}
+
+// —— 那个数和颜色是关系事实，从全量算：筛选（星标、状态）、置顶把名下几条从画出来的行里拿掉了，
+//    数照旧、该变色照旧变色。归档的、团队执行者不算。
+{
+  const lead = task("lead", { starredAt: 1 });
+  const failed = task("failed-kid", { dispatchedBy: "lead", status: "failed", stage: null });
+  const pinned = task("pinned-kid", { dispatchedBy: "lead", pinnedAt: 5 });
+  const all = [
+    lead, failed, pinned,
+    task("archived-kid", { dispatchedBy: "lead", archived: true, status: "failed", stage: null }),
+    task("worker", { dispatchedBy: "lead", parentId: "team", status: "failed", stage: null }),
+  ];
+  const starredOnly = buildDispatchForest(all.filter((row) => row.starredAt != null));
+  assert.equal(starredOnly.children.get("lead"), undefined, "星标筛选下名下几条都不在画出来的行里");
+  const facts = dispatchFacts(all);
+  assert.equal(facts.count("lead"), 2, "数不随筛选、置顶变（归档的、团队执行者不算）");
+  assert.equal(facts.needsYou("lead"), true, "名下失败的那条被筛掉了，也还得变色");
+  assert.equal(facts.count("lead"), dispatchedOf(all, "lead").length, "跟右侧那一格同一个口径");
+  assert.equal(facts.count("nobody"), 0);
+  const cyclic = dispatchFacts([task("a", { dispatchedBy: "b" }), task("b", { dispatchedBy: "a", status: "failed", stage: null })]);
+  assert.equal(cyclic.needsYou("a"), true, "成环也走得完");
 }
 
 // —— 右侧那一格：名下有谁（没归档、不是执行者）、状态词、一行小字、一个接一个还是同时。
