@@ -1,7 +1,7 @@
-import type { FreeReviewDebate, FreeReviewDebateSide, FreeReviewRun } from "@ash/shared";
+import type { FreeReviewDebate, FreeReviewDebateSide, FreeReviewDebateTurn, FreeReviewRun } from "@ash/shared";
 
 /**
- * 辩论的读取侧模型：时间线上那张折叠卡、审查面板里的驳回卡、全宽阅读态，三处共用。
+ * 辩论的读取侧模型：会话里那颗辩论气泡、审查格那一轮下面的辩论那一段、左侧抽屉里的完整记录，三处共用。
  *
  * 只有一件事值得说清楚：**一场辩论的记录是 `turn.statement`，不是 agent 在对话里说
  * 了什么。** 两侧发言都由 `debate_reply` 交卷落库（server/src/free-review-debate.ts），
@@ -27,26 +27,77 @@ export function debateTotalSegments(debate: Pick<FreeReviewDebate, "exchanges">)
   return debate.exchanges * 2 + 1;
 }
 
-export function debateStatusText(debate: FreeReviewDebate): string {
-  const total = debateTotalSegments(debate);
-  if (debate.status === "running") {
-    const speaking = debate.turns.find((turn) => turn.status === "speaking");
-    const who = debate.currentSide ? DEBATE_SIDE_LABEL[debate.currentSide] : "双方";
-    return `${who}发言中 · 第 ${speaking?.seq ?? debate.turns.length} / ${total} 段`;
-  }
-  if (debate.status === "failed") return "辩论中断 · 有一段没能发言";
-  // 审查者自述的立场**不是**裁定：措辞不能写成「结论是…」，那会让用户以为已经有人
-  // 替他签过字了。仍然由他在卡片上按下采纳或维持。
-  return debate.verdict ? `已结束 · 审查者自述：${DEBATE_VERDICT_LABEL[debate.verdict]}` : "已结束";
+/** 这一段的一句话：交卷时写的那句摘要；老记录没有就拿完整发言的开头顶上，不空着。 */
+export function turnGist(turn: Pick<FreeReviewDebateTurn, "summary" | "statement" | "status">): string {
+  if (turn.summary?.trim()) return turn.summary.trim();
+  const plain = (turn.statement ?? "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/[#>*_`~|-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (plain) return plain.length > GIST_LIMIT ? `${plain.slice(0, GIST_LIMIT)}…` : plain;
+  if (turn.status === "speaking") return "正在组织发言…";
+  return "这一段没能发言";
+}
+const GIST_LIMIT = 80;
+
+const said = (debate: FreeReviewDebate) => debate.turns.filter((turn) => turn.status === "done");
+
+/** 正在说的（或该轮到的）那一段：第几段、谁。 */
+export function debateSpeaking(debate: FreeReviewDebate): { seq: number; side: FreeReviewDebateSide } {
+  const speaking = debate.turns.find((turn) => turn.status === "speaking");
+  if (speaking) return { seq: speaking.seq, side: speaking.side };
+  const seq = debate.turns.length + 1;
+  return { seq, side: debate.currentSide ?? (seq % 2 === 1 ? "reviewer" : "executor") };
 }
 
-/** 卡头那颗状态胶囊：结论一眼可读，不用先数到第几段。 */
-export function debateVerdictBadge(debate: FreeReviewDebate): { text: string; tone: "running" | "failed" | "verdict" | "done" } {
-  if (debate.status === "running") return { text: debateStatusText(debate), tone: "running" };
-  if (debate.status === "failed") return { text: "辩论中断", tone: "failed" };
-  return debate.verdict
-    ? { text: `审查者自述：${DEBATE_VERDICT_LABEL[debate.verdict]}`, tone: "verdict" }
-    : { text: "已结束", tone: "done" };
+/** 中途断了：断在哪一段、哪一方没能发言。 */
+function debateBreak(debate: FreeReviewDebate): { seq: number; side: FreeReviewDebateSide } {
+  const broken = debate.turns.find((turn) => turn.status !== "done");
+  if (broken) return { seq: broken.seq, side: broken.side };
+  const seq = debate.turns.length + 1;
+  return { seq, side: seq % 2 === 1 ? "reviewer" : "executor" };
+}
+
+/** 收尾那一段（审查者自述立场的那段）；没说到那儿就是 null。 */
+export function closingTurn(debate: FreeReviewDebate): FreeReviewDebateTurn | null {
+  const total = debateTotalSegments(debate);
+  return debate.turns.find((turn) => turn.seq === total && turn.status === "done") ?? said(debate).at(-1) ?? null;
+}
+
+export type DebateBubbleState = "live" | "awaiting" | "settled" | "failed";
+
+/**
+ * 会话里那颗辩论气泡此刻写什么：
+ * - 辩论中（live）：谁 + 刚说完的那一段的一句话；一段都还没说完时「审查者在组织第 1 段」；
+ * - 辩完、还等裁定（awaiting）：「审查者收尾 · 部分成立」+ 它收尾那一段的一句话——这是用户据以裁定的；
+ * - 裁完以后、历史上的（settled）：缩成一句「辩了 3 段，审查者收尾：部分成立」；
+ * - 中途断了（failed）：断在哪一段、哪一方没能发言。
+ *
+ * 审查者自述的立场**不是**裁定：措辞不能写成「结论是…」，那会让用户以为已经有人替他签过字了。
+ */
+export function debateBubbleText(debate: FreeReviewDebate, state: DebateBubbleState): { lead: string | null; text: string } {
+  const last = said(debate).at(-1) ?? null;
+  if (state === "live") {
+    if (!last) return { lead: null, text: `${DEBATE_SIDE_LABEL.reviewer}在组织第 1 段` };
+    return { lead: DEBATE_SIDE_LABEL[last.side], text: turnGist(last) };
+  }
+  if (state === "failed") {
+    const broken = debateBreak(debate);
+    return { lead: null, text: `辩论断在第 ${broken.seq} 段：${DEBATE_SIDE_LABEL[broken.side]}没能发言${last ? `，前 ${said(debate).length} 段都在` : ""}` };
+  }
+  const closing = closingTurn(debate);
+  const stance = debate.verdict ? DEBATE_VERDICT_LABEL[debate.verdict] : "没给立场";
+  if (state === "awaiting") {
+    return { lead: `${DEBATE_SIDE_LABEL.reviewer}收尾 · ${stance}`, text: closing ? turnGist(closing) : "" };
+  }
+  return { lead: null, text: `辩了 ${said(debate).length} 段，${DEBATE_SIDE_LABEL.reviewer}收尾：${stance}` };
+}
+
+/** 辩论中收着时气泡下面那一行小灰字：此刻谁在说第几段。 */
+export function debateNowText(debate: FreeReviewDebate): string {
+  const speaking = debateSpeaking(debate);
+  return `${DEBATE_SIDE_LABEL[speaking.side]}在说第 ${speaking.seq} / ${debateTotalSegments(debate)} 段`;
 }
 
 export type DebateCandidate = {

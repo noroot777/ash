@@ -14,7 +14,6 @@ import { useFileView } from "../files/useFileView.ts";
 import { ScmDiffViewer } from "../scm/ScmDiffViewer.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import { api } from "../lib/api.ts";
-import { createClientId } from "../lib/clientId.ts";
 import { toggleArchive } from "../lib/archive.ts";
 import type { Notify } from "../lib/notify.ts";
 import { useConversation } from "../lib/useConversation.ts";
@@ -28,6 +27,9 @@ import { HandoffBanner } from "./HandoffBanner.tsx";
 import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
 import { QuestionCard } from "./QuestionCard.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
+import { replySend } from "./replySend.ts";
+import { LeftDrawerProvider, useLeftDrawerHost } from "../components/LeftDrawer.tsx";
+import { useDisputeRulingDock } from "../free-workflow/DisputeRulingDock.tsx";
 import { TaskDerivationComposer } from "./TaskDerivationComposer.tsx";
 import { TaskHeader, type PrimaryAction } from "./TaskHeader.tsx";
 import {
@@ -54,7 +56,6 @@ import { MemoSelectionScope } from "../task-memos/MemoSelectionScope.tsx";
 import { stageSideChatQuote } from "../side-chat/sideChatQuote.ts";
 import { useAddReplyQuote } from "./replyQuote.ts";
 import { useReuseInput } from "./ReuseInput.tsx";
-import { localeDateTime } from "../lib/localeFormat.ts";
 
 
 export function TaskDetail({
@@ -113,8 +114,12 @@ export function TaskDetail({
   const conversation = useConversation(task.id);
   // Inspector 栈（哪几格存在、默认开哪几格）整块在 useTaskInspectorStack.ts。
   // 审查链状态（free）也在那一层订阅：同时服务竖轨上审查格的点和验收后快照入口。
+  // 读全文的那一屉（审查报告、辩论记录）跟子智能体抽屉同一个位置，互斥：同一时刻左边只有一屉。
+  const leftDrawer = useLeftDrawerHost({ resetKey: task.id, onOpen: () => subagents.closeAgent() });
   const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount, free, runFacts } =
-    useTaskInspectorStack(task, allTasks, conversation);
+    useTaskInspectorStack(task, allTasks, conversation, leftDrawer.close);
+  // 等你裁定时回复框顶上那一行（DisputeRulingDock）：选了一档，这一个框就成了那一步。
+  const ruling = useDisputeRulingDock({ task, reviews: free.state?.reviews, known: !!free.state, onChanged: free.setState, notify });
   // 此刻能做什么（运行 / 停止 / 归档 / 重新排队 / 重跑上一回合 / 派验证）整份由服务端判，这里只照着画。
   const actions = useTaskActions(task.id);
   // 「上一回合崩了、任务却停在终态」的那颗重来落在说这件事的地方，带字：普通回合挂在会话里那一回合
@@ -178,12 +183,13 @@ export function TaskDetail({
 
   // 中间那一栏换内容时，子智能体抽屉必须跟着收起来 —— 它盖在主区上面，不收的话用户
   // 点了「审查」/ 文件 / diff 只会看到原来那份执行详情（与 TeamView 同一口径）。
+  const closeDrawers = () => { subagents.closeAgent(); leftDrawer.close(); };
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
     if (open) {
       setPreviewOpen(false);
       fileView.close();
-      subagents.closeAgent();
+      closeDrawers();
     }
     onReviewOpenChange?.(open);
   };
@@ -305,18 +311,19 @@ export function TaskDetail({
   const openFileInCenter = (path: string, reel?: readonly string[]) => {
     setPreviewOpen(false);
     fileView.openFile(path, reel);
-    subagents.closeAgent();
+    closeDrawers();
     if (reviewOpen) changeReviewOpen(false);
   };
   const openFolderInCenter = (path: string) => {
     setPreviewOpen(false);
     fileView.openFolder(path);
-    subagents.closeAgent();
+    closeDrawers();
     if (reviewOpen) changeReviewOpen(false);
   };
 
   return (
     <TaskFileLinks taskId={task.id} onOpenFile={openFileInCenter} onOpenFolder={openFolderInCenter} onOpenError={notify}>
+      <LeftDrawerProvider value={leftDrawer.api}>
       <InspectorHost
         contextKey={inspectorContextKey}
         descriptors={inspectors}
@@ -331,7 +338,7 @@ export function TaskDetail({
           runFacts,
           onOpenTask,
           onOpenReview: () => changeReviewOpen(true),
-          onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); fileView.close(); subagents.closeAgent(); },
+          onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); fileView.close(); closeDrawers(); },
           onTaskUpdated: onTaskUpdate,
           onPatch: patch,
           onQueueChanged: (updatedTask) => {
@@ -351,7 +358,7 @@ export function TaskDetail({
           onOpenScmDiff: (target: ScmDiffTarget) => {
             setPreviewOpen(false);
             fileView.openDiff(target);
-            subagents.closeAgent();
+            closeDrawers();
             if (reviewOpen) changeReviewOpen(false);
           },
           notify,
@@ -583,35 +590,8 @@ export function TaskDetail({
                           ? `以后这个任务交给 ${run}；当前这一轮跑完后生效`
                           : `以后这个任务交给 ${run}`);
                       }}
-                      onSend={async (text, attachments, { executorLabel, ...options }) => {
-                        if (!(await confirmExecutorSwap(task.id))) return null;
-                        const clientKey = createClientId();
-                        const result = await api.replyTask(task.id, text, { attachments, ...options, clientKey });
-                        // 按**结果**分支而不是按请求参数:任务正在跑时后端会把这条落成
-                        // 排队消息(前端没传 sendAt 也一样)。没真发出去就绝不能先贴进会话,
-                        // 否则用户看到自己的话已在时间线上、agent 却还没收到。
-                        if ("scheduled" in result) {
-                          // 同样按结果措辞:暂停/待办任务也会因排队未轮到被暂存(r3 审查),
-                          // 对它说「任务进行中」是错的。
-                          notify(result.message.mode === "queued"
-                            ? (task.status === "running" || task.status === "queued"
-                              ? "任务进行中，已排队；这一轮结束后自动发出"
-                              : "任务在队列中等待，已排队；轮到它时自动发出")
-                            : result.message.mode === "after"
-                              ? `已安排在「${allTasks.find((item) => item.id === result.message.afterTaskId)?.title || "所选任务"}」完成后发送`
-                              : `已安排 ${localeDateTime(result.message.sendAt)} 发送`);
-                          return result;
-                        }
-                        if ("command" in result) {
-                          notify(result.recorded ? "原生命令已执行，结果见会话记录" : result.text);
-                          return result;
-                        }
-                        conversation.addUser(text, attachments, { clientKey });
-                        notify(options.agent
-                          ? `已召唤 @${options.agent}${options.model ? ` · ${options.model}` : ""}${options.reasoningEffort ? ` · ${options.reasoningEffort}` : ""} 继续任务`
-                          : "回复已发送");
-                        return result;
-                      }}
+                      onSend={replySend({ task, allTasks, conversation, confirmExecutorSwap, notify })}
+                      override={ruling}
                       command={derivationAllowed ? {
                         matches: isTaskDerivationCommand,
                         items: TASK_DERIVATION_COMMANDS,
@@ -676,8 +656,9 @@ export function TaskDetail({
                   notify={notify}
                 />
               )}
-              {/* 子智能体执行详情：盖住中间那一栏，右侧 Inspector 的列表仍然看得见。 */}
+              {/* 子智能体执行详情 / 读全文那一屉：盖住中间那一栏，右侧 Inspector 仍然看得见、点得着。 */}
               {subagents.drawer}
+              {leftDrawer.drawer}
             </div>
             {inspectorMode === "drawer" && inspectorToggleTarget
               ? createPortal(toggleButton, inspectorToggleTarget)
@@ -685,6 +666,7 @@ export function TaskDetail({
           </>
         )}
       </InspectorHost>
+      </LeftDrawerProvider>
     </TaskFileLinks>
   );
 }

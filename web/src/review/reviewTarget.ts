@@ -9,10 +9,11 @@ import type { InspectorRequest } from "../inspector/nav.tsx";
 
 export type ReviewTargetSource = "inline" | "free" | "merge";
 
-export type ReviewTarget = { source: ReviewTargetSource; runId: string | null; round: number | null };
+/** `debateId`：会话里那颗辩论气泡点过来，打开那一轮之后停在它的辩论那一段。 */
+export type ReviewTarget = { source: ReviewTargetSource; runId: string | null; round: number | null; debateId?: string | null };
 
 export function reviewTargetRequest(target: ReviewTarget): InspectorRequest {
-  return { source: target.source, runId: target.runId, round: target.round };
+  return { source: target.source, runId: target.runId, round: target.round, ...(target.debateId ? { debateId: target.debateId } : {}) };
 }
 
 /**
@@ -37,5 +38,6 @@ export function reviewTargetOf(params: InspectorRequest): ReviewTarget {
     source,
     runId: typeof params.runId === "string" && params.runId ? params.runId : null,
     round: typeof params.round === "number" ? params.round : null,
+    debateId: typeof params.debateId === "string" && params.debateId ? params.debateId : null,
   };
 }

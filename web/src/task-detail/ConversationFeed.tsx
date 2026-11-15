@@ -1,5 +1,5 @@
 import { memo, useMemo, useRef, useState, type ReactNode } from "react";
-import { File, Gavel, ShieldCheck } from "@phosphor-icons/react";
+import { File, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import type { TaskCreationOrigin } from "@ash/shared/task-origin";
@@ -19,10 +19,10 @@ import { MessageAttachments } from "./Attachments.tsx";
 import { conversationFeedRows, reviewLaneMessageRoles, type ReviewLaneMessageRole } from "./conversationReviewLanes.ts";
 import { conversationDebateRows } from "./conversationDebateRows.ts";
 import { conversationSystemRows, laneReceipts, laneTailFootnote, type ConversationFootnoteRow, type TurnReceipt } from "./conversationSystemRows.ts";
-import { DebateLane } from "./DebateLane.tsx";
+import { DebateBubble } from "./DebateBubble.tsx";
 import { laneRoundOpener } from "./reviewLaneLinks.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
-import type { ReviewTarget } from "../review/reviewTarget.ts";
+import { reviewPanelSources, reviewTargetLocatable, type ReviewTarget } from "../review/reviewTarget.ts";
 import { CommandReply, SystemAuthoredMessage } from "./SystemNotice.tsx";
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
 import { isPreviewLifecycleNotice, noticeView, type NoticeContext } from "./timelineNoticeCopy.ts";
@@ -37,7 +37,8 @@ import { conversationKeys } from "./conversationKeys.ts";
 import {
   ReceiptReviewContext, TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts, type ReceiptReview,
 } from "./TurnReceipts.tsx";
-import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
+import { reviewLocked } from "../free-workflow/freeReviewCopy.ts";
+import { canQuoteFor, openDisputeTarget, rulingContext, sameDisputeTarget } from "../free-workflow/disputeRuling.ts";
 import { footnoteActions } from "./footnoteActions.ts";
 import { RetryCta } from "./RetryCta.tsx";
 import { laneNoVerdicts } from "./reviewNoVerdictCause.ts";
@@ -326,11 +327,8 @@ export function ConversationFeed({
   /** 自由派审的落盘记录：折叠卡靠它反查报告的 runId（旁注里只有轮号）。 */
   reviews?: readonly FreeReviewRun[] | null;
   /**
-   * 打开审查面板（那张裁定卡在里面）。不给就不出「去裁定」按钮——只读的会话视图、
-   * 团队时间线都没有那块面板，给一颗点了没反应的按钮比不给更糟。
-   *
-   * `round`：会话里那一行审查结论被点了，要在审查格里展开的是哪一轮（合并结果审查没有
-   * 轮号，给 null）；「去裁定」不带。
+   * 打开右侧审查格的那一轮：会话里那颗审查结论 / 辩论气泡被点了。不给（只读的会话视图、团队时间线
+   * 都没有那块面板）就在气泡下面就地摊开，不给一颗点了没反应的键。
    */
   onOpenReviewPanel?: (target?: ReviewTarget) => void;
   /** 此刻能「继续本轮审查」的那一轮和那个动作（审查格主按钮同一份）。不给 = 尾注上不挂。 */
@@ -394,10 +392,8 @@ export function ConversationFeed({
   const reviewRunning = lastFeedRow?.kind === "review-lane" && lastFeedRow.id === currentLaneId && progressOf(lastFeedRow).phase === "running";
   // 没出结论的那几轮为什么没出：按轮次身份从审查状态取，贴在那颗结论气泡下面（reviewNoVerdictCause）。
   const causes = laneNoVerdicts(feedRows, reviews);
-  // 此刻挂着动作的那几句（去裁定、继续本轮审查、重试这一回合）：尾注里各占一个位置，不被挤掉。
-  const actions = footnoteActions({
-    items, task, reviews, canOpenReviews: !!onOpenReviewPanel, causes, crashed, reviewRetry, turnRetry,
-  });
+  // 此刻挂着动作的那几句（等你裁定、继续本轮审查、重试这一回合）：尾注里各占一个位置，不被挤掉。
+  const actions = footnoteActions({ items, task, reviews, causes, crashed, reviewRetry, turnRetry });
   const { rows, receipts, footnotes } = conversationSystemRows(
     conversationDebateRows(feedRows, { reviews }),
     { failures: crashed, context: noticeContext, causes, held: actions.held },
@@ -414,14 +410,8 @@ export function ConversationFeed({
   const receiptsOf = (id: string) => receipts.get(id) ?? laneViews.find((lane) => lane.receipts.has(id))?.receipts.get(id);
   const footnoteOf = (id: string) => footnotes.get(id) ?? laneViews.find((lane) => lane.footnotes.has(id))?.footnotes.get(id);
   const wakeReplies = monitorWakeReplyIds(items);
-  // 「执行者驳回了，现在由你裁定」那条旁注上挂一颗「去裁定」——那句话把出路列了出来，
-  // 却没给任何能点的东西（用户 2026-09-24：「直接给个按钮不行吗」）。只挂在此刻真的等你裁定的
-  // 最后那一条上（footnoteActions）：只认文本会在裁定完之后留下一颗按钮，指向一张已经不在的卡；
-  // 只认状态则会给历史上每一次驳回都挂一颗，而其中只有最后一条还作数。
-  //
-  // 按钮只把人送到那张卡跟前，不在这里复制四个出口：每个出口都带自己的确认框和说明
-  // （「作废」和「转出去」的差别就写在那些文字里），复制一份必然漂成两套说法。
-  //
+  // 「执行者驳回了，现在由你裁定」那一句留到裁完为止：它说的是此刻的状态。裁定本身在回复框顶上那一行，
+  // 这里不再挂「去裁定」把人送去别处（用户 2026-11-15）。
   // 尾注里「等你裁定」那一句的点只说现在：裁定过的、后来又驳回过一次的、任务已经裁不了的，都不再是
   // 要你拍板的事。
   const settleDisputes = (footnote: TurnFootnote | undefined): TurnFootnote | undefined => footnote && {
@@ -429,11 +419,6 @@ export function ConversationFeed({
     parts: footnote.parts.map((part) => part.view.dispute && part.id !== actions.standingDisputeId
       ? { ...part, view: { ...part.view, tone: "neutral" as const } } : part),
   };
-  const ruleAction = actions.ruleEventId ? (
-    <button type="button" className="system-event-cta" onClick={() => onOpenReviewPanel!()}>
-      <Gavel size={11} weight="fill" aria-hidden="true" />去裁定
-    </button>
-  ) : null;
   // 「重试这一回合」挂在那一回合尾注里说它没办成的那一句后面。认不出那一句时挂在最后一句后面：
   // 能重试时页面上一定要有这个入口。
   const turnRetryPartOf = (footnote: TurnFootnote) => footnote.id !== actions.retryTurnFootnoteId ? null
@@ -442,13 +427,10 @@ export function ConversationFeed({
   const isRetryable = (part: FootnotePart, footnote: TurnFootnote) => (part.kind === "cause" && part.id === actions.retryCauseId)
     || (part.kind === "event" && part.id === actions.retryEventId)
     || turnRetryPartOf(footnote) === part;
-  // 辩论条上的同一颗按钮：辩论就是为了裁定才开的，读完该能当场决定，而不是往上翻回
-  // 那条旁注（用户 2026-09-27）。条件比旁注那颗更严一格——必须**这场辩论**辩的就是
-  // 此刻待裁定的那条驳回，而且它已经说完了（还在跑时后端也会拒绝裁定）；任务裁不了时同样不给。
-  const openDispute = actions.canRule ? openDisputeIn(reviews) : null;
-  const resolvableDebateIds = new Set(
-    (openDispute?.dispute?.debates ?? []).filter((debate) => debate.status !== "running").map((debate) => debate.id),
-  );
+  // 辩论气泡：辩的就是此刻等裁定的那一条时写「收尾 · 立场」那一句；「用这段作要点」跟回复框顶上那一行同生共死。
+  const ruling = rulingContext(reviews, task);
+  const openTarget = reviewLocked(task) ? null : openDisputeTarget(reviews);
+  const panelSources = reviewPanelSources(task.workflowMode);
   const hiddenTimes = new Set<string>();
   for (let index = 1; index < items.length; index += 1) {
     const item = items[index]!;
@@ -486,7 +468,7 @@ export function ConversationFeed({
           taskActive={task.status === "running" || task.status === "queued"}
           receipts={receiptsOf(item.id)}
           footnote={footnote?.parts.length
-            ? { node: renderFootnote(footnote), key: footnoteKey(footnote, footnote.parts.some(isRuled) ? "rule" : footnote.parts.some((part) => isRetryable(part, footnote)) ? "retry" : "") }
+            ? { node: renderFootnote(footnote), key: footnoteKey(footnote, footnote.parts.some((part) => isRetryable(part, footnote)) ? "retry" : "") }
             : undefined}
         />
       );
@@ -513,8 +495,6 @@ export function ConversationFeed({
     if (view.tier === "reply") return <CommandReply key={item.id} item={item} view={view} />;
     return renderFootnote({ id: item.id, live: false, parts: [{ kind: "event", id: item.id, at: item.at, view, item }] }, "standalone");
   };
-  // 「去裁定」挂在等你裁定的那半句后面（只有此刻还挂着的那一条）。
-  const isRuled = (part: FootnotePart) => part.kind === "event" && part.id === actions.ruleEventId;
   // 一轮审查就地摊开时的经过：那一轮里的旁注照样记在审查者那一回合上。
   const renderLaneRows = (lane: ConversationReviewLane) => {
     const roles = reviewLaneMessageRoles(lane);
@@ -526,8 +506,7 @@ export function ConversationFeed({
   };
   const renderFootnote = (footnote: TurnFootnote, placement?: "standalone" | "trailing") => (
     <FootnoteLine key={footnote.id} footnote={footnote} placement={placement}
-      actionFor={(part) => isRuled(part) ? ruleAction
-        : turnRetry && turnRetryPartOf(footnote) === part ? <RetryCta label="重试这一回合" run={turnRetry.run} blocked={turnRetry.blocked} />
+      actionFor={(part) => turnRetry && turnRetryPartOf(footnote) === part ? <RetryCta label="重试这一回合" run={turnRetry.run} blocked={turnRetry.blocked} />
           : isRetryable(part, footnote) && reviewRetry ? <RetryCta label="继续本轮审查" run={reviewRetry.run} blocked={reviewRetry.blocked} /> : null} />
   );
   // 「N 条记录」里那一轮审查点开去哪儿：跟审查结论那颗气泡同一套。
@@ -569,15 +548,16 @@ export function ConversationFeed({
               );
             }
             if (row.kind === "debate-lane") {
+              const target = row.candidate && { runId: row.candidate.runId, round: row.candidate.round };
               return (
-                <DebateLane
+                <DebateBubble
                   key={row.id}
                   row={row}
-                  onResolve={
-                    onOpenReviewPanel && row.candidate && resolvableDebateIds.has(row.candidate.debate.id)
-                      ? () => onOpenReviewPanel()
-                      : undefined
-                  }
+                  task={task}
+                  reviews={reviews}
+                  awaiting={sameDisputeTarget(openTarget, target)}
+                  quotable={canQuoteFor(ruling, target)}
+                  onOpenRound={onOpenReviewPanel && target && reviewTargetLocatable({ source: "free", ...target }, panelSources) ? onOpenReviewPanel : undefined}
                   fallback={row.items.map((item) => renderItem(item, true))}
                 />
               );

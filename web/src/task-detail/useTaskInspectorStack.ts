@@ -18,6 +18,8 @@ export function useTaskInspectorStack(
   task: Task,
   allTasks: TaskListItem[],
   conversation: ReturnType<typeof useConversation>,
+  /** 推出子智能体抽屉之前收起读全文那一屉（同一个位置，互斥）。 */
+  onOpenSubagent?: () => void,
 ) {
   // 子智能体：列表在 Inspector 里，执行详情从左侧抽屉推出来（与团队模式点执行者同一套外壳）。
   const subagents = useSubagents(TASK_INSPECTORS, {
@@ -27,7 +29,7 @@ export function useTaskInspectorStack(
     loading: conversation.refreshing,
     error: conversation.error ?? conversation.traceError,
     onRetry: conversation.refetch,
-  });
+  }, { onOpen: onOpenSubagent });
   // 哨兵那一格：数据在这一层拉（看的是别的面板时也要知道有几个在盯着，图标条上那点活信号靠它）。
   const monitorTab = useMonitorInspector(subagents.inspectors, task.id);
   // 备忘那一格只改标题/图标（有几条），开合仍按 TASK_INSPECTORS 的 defaultOpen —— 理由

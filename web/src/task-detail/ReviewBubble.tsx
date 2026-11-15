@@ -1,12 +1,15 @@
 import { useId, useState, type ReactNode } from "react";
 import { FileText, ListBullets } from "@phosphor-icons/react";
+import { useLeftDrawer } from "../components/LeftDrawer.tsx";
 import { ReviewReportDialog } from "../components/MarkdownBody.tsx";
 import type { ReviewFileTarget } from "../components/markdownPolicy.ts";
 import { useNow } from "../lib/useNow.ts";
 import { ReviewNote } from "../review/ReviewNote.tsx";
 import type { ReviewTarget } from "../review/reviewTarget.ts";
+import { BubbleKey, BubbleShell } from "./BubbleShell.tsx";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import { FootnoteDot } from "./FootnoteLine.tsx";
+import { laneReportEntry } from "./laneReportEntry.tsx";
 import { laneReportUrl, laneReviewTarget } from "./reviewLaneLinks.ts";
 import { reviewProgress, type ReviewProgress, type ReviewProgressPhase } from "./reviewProgress.ts";
 import { laneVerdictView, reviewLaneTail } from "./turnFootnote.ts";
@@ -25,7 +28,9 @@ import { durationBetween, formatDuration, formatInstant } from "./utils.ts";
  *   浮出的那一行里另有一颗经过键。它是会话里最后一件事、又不是好消息时（`live`），字前一颗小圆点；
  *   结论之后才发生的那几句（`trailing`）贴在气泡下面，靠右；
  * - 两种状态都是指到气泡（键盘走进来）才在它上方右侧浮出「审查者 · …」那一行，有报告时那一行里带一颗
- *   报告键；跟你的气泡那一行同一种做法，不占排版高度，触屏上常显在气泡里。
+ *   报告键（从左边推出报告全文，useLaneReport）；跟你的气泡那一行同一种做法，不占排版高度，触屏上常显在气泡里。
+ *
+ * 骨架跟辩论那颗气泡是同一副（BubbleShell）。
  */
 export function ReviewBubble({
   lane,
@@ -48,7 +53,7 @@ export function ReviewBubble({
   trailing?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const [report, setReport] = useState<ReviewFileTarget | null>(null);
+  const report = useLaneReport(taskId, lane);
   const bodyId = useId();
   const pending = !lane.complete;
   const view = laneVerdictView(lane);
@@ -62,7 +67,6 @@ export function ReviewBubble({
     setShownText(text);
     setSwapped(true);
   }
-  const reportUrl = lane.reportAvailable && lane.report && taskId ? laneReportUrl(taskId, lane.report) : null;
   const traceToggle = !pending && !!onOpenRound && !!renderLane && laneHasTrace(lane);
   // 进行中那一轮摊得开的：审查者说过话，或者带着附言（一句话没说的轮次摊开至少还看得见附言）。
   const hasBody = laneHasTrace(lane) || !!lane.note;
@@ -72,59 +76,77 @@ export function ReviewBubble({
   const words = <span key={text} className={wordsClass || undefined} data-selection-content="">{text}</span>;
   const tail = pending ? pendingTail(lane) : reviewLaneTail(lane);
   return (
-    <div className={`review-verdict${pending ? " is-pending" : ""}`} role={urgent ? "status" : undefined}>
-      <div className="review-verdict-bubble">
-        <header>
-          <b>审查者</b>
-          {tail && <span className="review-verdict-meta">{` · ${tail}`}</span>}
-          {reportUrl && (
-            <button type="button" aria-label="审查报告" onClick={() => setReport({ name: "report.md", url: reportUrl })}>
-              <FileText size={14} aria-hidden="true" />
-            </button>
-          )}
-          {traceToggle && (
-            <button type="button" aria-label="这一轮的经过" aria-expanded={open} aria-controls={bodyId} onClick={toggle}>
-              <ListBullets size={14} aria-hidden="true" />
-            </button>
-          )}
-        </header>
-        {state ? (
-          hasBody ? (
-            <button
-              type="button"
-              className="review-verdict-text"
-              aria-label={`${lane.title}：${text}`}
-              aria-expanded={open}
-              aria-controls={bodyId}
-              onClick={toggle}
-            >
-              <ProgressDot phase={state.phase} />{words}
-            </button>
-          ) : (
-            // 没有可摊的：不是一颗点了没反应的键；仍然走得进来，指到才出的那一行键盘也看得见。
-            <p className="review-verdict-text is-static" tabIndex={0}>
-              <ProgressDot phase={state.phase} />{words}
-            </p>
-          )
-        ) : (
+    <BubbleShell
+      className={pending ? "is-pending" : ""}
+      role={urgent ? "status" : undefined}
+      name="审查者"
+      meta={tail}
+      keys={<>
+        {report.open && <BubbleKey label="审查报告" pressed={report.active} onClick={report.open}><FileText size={14} aria-hidden="true" /></BubbleKey>}
+        {traceToggle && (
+          <BubbleKey label="这一轮的经过" expanded={open} controls={bodyId} onClick={toggle}><ListBullets size={14} aria-hidden="true" /></BubbleKey>
+        )}
+      </>}
+      below={<>
+        {open && (pending ? hasBody : !onOpenRound || traceToggle) && <LaneBody lane={lane} id={bodyId} renderLane={renderLane} />}
+        {state && !open && (state.phase === "stopped" ? trailing : <ProgressLine lane={lane} progress={state} />)}
+        {!state && trailing}
+        {report.dialog}
+      </>}
+    >
+      {state ? (
+        hasBody ? (
           <button
             type="button"
             className="review-verdict-text"
-            aria-label={onOpenRound ? `${view.text}，在右侧审查格里打开这一轮` : undefined}
-            aria-expanded={onOpenRound ? undefined : open}
-            aria-controls={onOpenRound ? undefined : bodyId}
-            onClick={() => (onOpenRound ? onOpenRound(laneReviewTarget(lane)) : toggle())}
+            aria-label={`${lane.title}：${text}`}
+            aria-expanded={open}
+            aria-controls={bodyId}
+            onClick={toggle}
           >
-            <FootnoteDot tone={view.tone} live={live} />{words}
+            <ProgressDot phase={state.phase} />{words}
           </button>
-        )}
-      </div>
-      {open && (pending ? hasBody : !onOpenRound || traceToggle) && <LaneBody lane={lane} id={bodyId} renderLane={renderLane} />}
-      {state && !open && (state.phase === "stopped" ? trailing : <ProgressLine lane={lane} progress={state} />)}
-      {!state && trailing}
-      {report && <ReviewReportDialog target={report} onReviewReport={setReport} onClose={() => setReport(null)} />}
-    </div>
+        ) : (
+          // 没有可摊的：不是一颗点了没反应的键；仍然走得进来，指到才出的那一行键盘也看得见。
+          <p className="review-verdict-text is-static" tabIndex={0}>
+            <ProgressDot phase={state.phase} />{words}
+          </p>
+        )
+      ) : (
+        <button
+          type="button"
+          className="review-verdict-text"
+          aria-label={onOpenRound ? `${view.text}，在右侧审查格里打开这一轮` : undefined}
+          aria-expanded={onOpenRound ? undefined : open}
+          aria-controls={onOpenRound ? undefined : bodyId}
+          onClick={() => (onOpenRound ? onOpenRound(laneReviewTarget(lane)) : toggle())}
+        >
+          <FootnoteDot tone={view.tone} live={live} />{words}
+        </button>
+      )}
+    </BubbleShell>
   );
+}
+
+/**
+ * 这一轮的报告键：从左边推出报告全文（同子智能体那个抽屉的位置，右边的审查格还点得着）。这一处没有
+ * 左侧抽屉可开（远程任务那种只读视图）才退回居中弹窗。没有报告就没有键。
+ */
+function useLaneReport(taskId: string | undefined, lane: ConversationReviewLane) {
+  const drawer = useLeftDrawer();
+  const [dialog, setDialog] = useState<ReviewFileTarget | null>(null);
+  const report = lane.reportAvailable && lane.report && taskId ? lane.report : null;
+  if (!report || !taskId) return { open: null, active: false, dialog: null };
+  const entry = drawer ? laneReportEntry(taskId, report) : null;
+  const active = !!entry && drawer?.activeKey === entry.key;
+  return {
+    open: () => {
+      if (drawer && entry) return active ? drawer.close() : drawer.open(entry);
+      setDialog({ name: "report.md", url: laneReportUrl(taskId, report) });
+    },
+    active,
+    dialog: dialog && <ReviewReportDialog target={dialog} onReviewReport={setDialog} onClose={() => setDialog(null)} />,
+  };
 }
 
 /** 进行中那一轮浮出的那一行：谁在审、模型、智能水平、第几轮、什么时候开始的；带附言的看得出来。 */
@@ -184,21 +206,17 @@ export function LaneBody({ lane, id, taskId, renderLane }: {
   taskId?: string;
   renderLane?: (lane: ConversationReviewLane) => ReactNode;
 }) {
-  const [report, setReport] = useState<ReviewFileTarget | null>(null);
+  const report = useLaneReport(taskId, lane);
   return (
     <div className="turn-footnote-lane" id={id}>
-      {lane.reportAvailable && lane.report && taskId && (
-        <button
-          type="button"
-          className="turn-footnote-report"
-          onClick={() => setReport({ name: "report.md", url: laneReportUrl(taskId, lane.report!) })}
-        >
+      {report.open && (
+        <button type="button" className="turn-footnote-report" aria-pressed={report.active} onClick={report.open}>
           <FileText size={12} aria-hidden="true" />审查报告
         </button>
       )}
       {lane.note && <ReviewNote text={lane.note} />}
       {renderLane?.(lane)}
-      {report && <ReviewReportDialog target={report} onReviewReport={setReport} onClose={() => setReport(null)} />}
+      {report.dialog}
     </div>
   );
 }

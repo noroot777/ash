@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import type { AgentExecutorProfile, AgentType, ScheduledMessage, SkillEntry, Task, TaskListItem } from "@ash/shared";
+import type { AgentType, ScheduledMessage, SkillEntry, Task, TaskListItem } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
 import { parseCliCommand } from "@ash/shared/cli-commands";
 import { PencilSimple, X } from "@phosphor-icons/react";
@@ -17,7 +17,7 @@ import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailabili
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { useReplyLayout } from "./useReplyLayout.ts";
 import { isMenuPickKeyEvent, isSendKeyEvent } from "../lib/sendKey.ts";
-import { api, type ReplyTaskResult } from "../lib/api.ts";
+import type { ReplyTaskResult } from "../lib/api.ts";
 import { useProviders } from "../lib/modelCatalog.ts";
 import { AgentModelPicker } from "./AgentModelPicker.tsx";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "./Attachments.tsx";
@@ -29,6 +29,8 @@ import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import { useStandingExecutor, type StandingExecutor } from "./useStandingExecutor.ts";
 import { registerReplyInput } from "./replyQuote.ts";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
+import type { ReplyOverride } from "./replyOverride.ts";
+import { useExecutorProfiles } from "./useExecutorProfiles.ts";
 import { ScreenshotAnnotation } from "../page-annotation/ScreenshotAnnotation.tsx";
 import { screenshotCandidates, type AnnotationReply } from "../page-annotation/model.ts";
 import type { ConversationItem } from "./conversationModel.ts";
@@ -62,6 +64,7 @@ export function ReplyBox({
   moreRef,
   conversationItems = [],
   tasks = [],
+  override,
 }: {
   task: Task;
   hasConversation: boolean;
@@ -118,6 +121,8 @@ export function ReplyBox({
   conversationItems?: ConversationItem[];
   /** 「等某任务完成后发送」的候选,以及托盘里报出在等谁。 */
   tasks?: TaskListItem[];
+  /** 这个框此刻被借用（等你裁定时框顶那一行）；见 replyOverride.ts。 */
+  override?: ReplyOverride;
 }) {
   const draft = useTaskReplyDraft(task.id);
   const shellRef = useReplyLayout();
@@ -144,9 +149,7 @@ export function ReplyBox({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // null = 没拖过,交给行数自动撑高(useAutoGrowTextarea)
   const replyHeight = useReplyHeight(SINGLE_REPLY_PIN);
-  const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
-  const [profilesReady, setProfilesReady] = useState(false);
-  const [profilesFailed, setProfilesFailed] = useState(false);
+  const { profiles, ready: profilesReady, failed: profilesFailed } = useExecutorProfiles();
   const providers = useProviders();
   // 执行器名只用于提示文案：没钉 profile 时按「该类型的默认执行器」报，与运行侧
   // resolveExecutorFor 的降级口径一致，别让提示说出一个跑起来根本用不上的名字。
@@ -168,8 +171,11 @@ export function ReplyBox({
     pending: draft.pendingUploads,
     onPendingChange: draft.setPendingUploads,
   });
+  // 借用中且选了一档：正文是那一档的话（或整块换成别的），斜杠、@ 这些都不出。
+  const take = override?.take ?? null;
+  const takeInput = take && "input" in take ? take.input : null;
   // 输入几行就撑几行高,撑到上限为止;拖过之后以拖出来的高度为准(拖动条自己的上限更宽)。
-  useAutoGrowTextarea(textareaRef, { value, pinned: replyHeight.height });
+  useAutoGrowTextarea(textareaRef, { value: takeInput?.value ?? value, pinned: replyHeight.height });
   // 任务正在跑不再是「不能说话」,而是「说了先排队」:发出去的消息落成一条待发送
   // 消息(mode=queued),这一轮一结束由服务端自动送进同一个会话。所以 disabled 只留
   // 真正没得说的情况——不是单任务、已归档、以及从没跑过因而没有会话可续。
@@ -224,29 +230,14 @@ export function ReplyBox({
     wasQueueing.current = queueing;
   }, [queueing, scheduled.reload]);
 
-  useEffect(() => {
-    let alive = true;
-    setProfilesReady(false);
-    setProfilesFailed(false);
-    api.agents().then(
-      (nextProfiles) => { if (alive) setProfiles(nextProfiles); },
-      () => {
-        if (!alive) return;
-        setProfiles([]);
-        setProfilesFailed(true);
-      },
-    ).finally(() => { if (alive) setProfilesReady(true); });
-    return () => { alive = false; };
-  }, []);
-
   // 派生命令(ash 自己的)排在技能前面,中间画一条线:前者换的是「谁来干」,
   // 后者只是给这一轮加一句提示词,点错的代价差着量级。
   const ashItems: SlashItem[] = (command?.items ?? []).map((item) => ({ ...item, kind: "ash" }));
   const commandCandidates = (text: string) => mergeSlashItems(ashItems, skills, slashQuery(text));
   const candidates = commandCandidates(value);
-  const menuOpen = !menuDismissed && candidates.length > 0;
+  const menuOpen = !take && !menuDismissed && candidates.length > 0;
   const selectedIndex = Math.min(commandIndex, Math.max(0, candidates.length - 1));
-  const commandMatch = !!command && command.matches(value);
+  const commandMatch = !take && !!command && command.matches(value);
   const selected = candidates[selectedIndex];
   // 菜单开着时回车做什么:ash 命令打开派生配置;技能和原生命令补全进正文;
   // 原生命令已经敲全就直接发(它本来就是发给 CLI 的一句话)。
@@ -263,7 +254,7 @@ export function ReplyBox({
     profiles,
     profilesReady,
     profilesFailed,
-    disabled: disabled || commandActive || !!picker,
+    disabled: disabled || commandActive || !!picker || !!take,
     onPickAgent: (agent) => pickMention(agent),
     onPicked: () => textareaRef.current?.focus(),
   });
@@ -563,23 +554,30 @@ export function ReplyBox({
       <div className="task-reply-box">
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />
         <AgentPlate name={activeAgent} />
+        {override?.head}
         <textarea
           ref={textareaRef}
-          value={value}
+          value={takeInput?.value ?? value}
           rows={3}
-          disabled={inputDisabled}
-          placeholder={placeholder}
-          aria-label="回复任务"
+          hidden={!!take && !takeInput}
+          disabled={inputDisabled && !takeInput}
+          placeholder={takeInput?.placeholder ?? placeholder}
+          aria-label={takeInput?.label ?? "回复任务"}
           onChange={(event) => {
             const next = event.target.value;
+            if (takeInput) return takeInput.onChange(next);
             setValue(next);
             setMenuDismissed(false);
             setCommandIndex(0);
             mention.onValueChange();
             command?.onChange?.(commandCandidates(next).length > 0 ? "" : next);
           }}
-          onPaste={uploads.onPaste}
+          onPaste={take ? undefined : uploads.onPaste}
           onKeyDown={(event) => {
+            if (take && (event.key === "Escape" || isSendKeyEvent(event))) {
+              event.preventDefault();
+              return event.key === "Escape" ? override!.cancel() : override!.submit();
+            }
             if (menuOpen) {
               if (event.key === "ArrowDown") {
                 event.preventDefault();
@@ -618,8 +616,9 @@ export function ReplyBox({
             }
           }}
         />
+        {take && "body" in take && take.body}
         <div className="task-reply-actions">
-          <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending || commandActive} />
+          <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending || commandActive || !!take} />
           {actions}
           {/* 截图批注、预览日志用得少，收进「更多」。 */}
           <IconMenu side="above" buttonRef={moreButton} className="task-reply-more" items={[
@@ -659,7 +658,7 @@ export function ReplyBox({
               <X size={10} weight="bold" />
             </button>
           )}
-          <LaterSendKey
+          {take ? override!.send : <LaterSendKey
             later={later}
             action="发送回复"
             empty={!value.trim() && !uploads.attachments.length && !uploads.uploading}
@@ -683,7 +682,7 @@ export function ReplyBox({
             tasks={tasks}
             projectId={task.projectId}
             taskId={task.id}
-          />
+          />}
         </div>
       </div>
     </div>

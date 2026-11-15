@@ -5,7 +5,8 @@ import { motionReduced } from "../lib/useSwapText.ts";
 // 样式在 styles/side-drawer.css，由 global.css 统一 @import：夹具里直接手写这套类名也得有样式。
 
 /**
- * 从左侧推出来的详情抽屉：团队模式的执行者详情和任务里的子智能体执行详情共用它。
+ * 从左侧推出来的详情抽屉：团队模式的执行者详情、任务里的子智能体执行详情，和读全文的那一屉
+ * （审查报告、辩论的完整记录，经 LeftDrawer.tsx 的槽开）共用它。
  *
  * 关闭动画得等 animationend 才真卸载，所以这里自己记一个 `closing`；
  * 减少动效时（`motionReduced()`，side-drawer.css 同一口径）动画被整个关掉、animationend 永远不来，那一路靠定时器收尾。
@@ -25,12 +26,12 @@ export function SideDrawer({
   children,
   onClose,
 }: {
-  variant: "worker" | "subagent";
+  variant: "worker" | "subagent" | "reading";
   /** 抽屉里装的是谁。换人时把正在播的关闭动画取消掉 —— 否则关到一半点开下一个，
       那次点击会被动画尾声吞掉（抽屉照旧滑走，新选的那个一起没了）。 */
   contentKey: string;
   kind: string;
-  title: string;
+  title: ReactNode;
   ariaLabel: string;
   closeLabel: string;
   actions?: ReactNode;

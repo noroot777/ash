@@ -1,10 +1,10 @@
-// 尾注里此刻挂着动作的那几句：「等你裁定」后面的「去裁定」、没出结论那一轮后面的「继续本轮审查」、
-// 崩了的那一回合后面的「重试这一回合」。
+// 尾注里此刻要你动手的那几句：「等你裁定」那一句（裁定在回复框顶上那一行）、没出结论那一轮后面的
+// 「继续本轮审查」、崩了的那一回合后面的「重试这一回合」。
 //
 // 尾注每件事只留最近一句、最多三句（composeFootnote）。这几句是现在就要你动手的事，一旦被后来的
-// 话盖过或者被三句截掉，动作就跟着没了地方挂——而审查格那张卡、任务的重试入口都还在（R8M9Tsn2q0aj：
-// 驳回落下 13 秒后同一回合又落了一句「本回合没有交卷」，「去裁定」就没了）。所以它们各占一个位置，
-// 不跟别的句子争（`held`）；动作没了（裁定了、续过了、重试过了），那一句就回到普通规则。
+// 话盖过或者被三句截掉就没了——而那件事还等着你（R8M9Tsn2q0aj：驳回落下 13 秒后同一回合又落了一句
+// 「本回合没有交卷」，「等你裁定」就被盖掉了）。所以它们各占一个位置，不跟别的句子争（`held`）；
+// 事情了了（裁定了、续过了、重试过了），那一句就回到普通规则。
 import type { FreeReviewRun, TaskListItem } from "@ash/shared";
 import { openDisputeIn, reviewLocked } from "../free-workflow/freeReviewCopy.ts";
 import type { ConversationItem } from "./conversationModel.ts";
@@ -15,15 +15,11 @@ import type { ReviewRetryAction, TurnRetryAction } from "./turnRetry.ts";
 
 export type FootnoteActions = {
   /**
-   * 会话里最后一条驳回，且它此刻真的等你裁定：没裁、没被新的驳回取代，任务也还能裁（没验收、没合并、
-   * 没归档，同审查格那张卡的 `locked`）。拿不到审查状态的视图不知道裁没裁，照位置判。
-   * 这一句带颜色、占自己的位置；不在这里的驳回都是过去的事。
+   * 会话里最后一条驳回，且它此刻真的等你裁定：没裁、没被新的驳回取代（`openDisputeIn`，与回复框顶上
+   * 那一行同一口径），任务也还能裁（没验收、没合并、没归档，`reviewLocked`）。拿不到审查状态的视图不知道
+   * 裁没裁，照位置判。这一句带颜色、占自己的位置；不在这里的驳回都是过去的事。
    */
   standingDisputeId: string | null;
-  /** 此刻能去审查格裁定：有审查格可去、那张卡确实在（`openDisputeIn`，与审查面板同一口径）、任务还能裁。 */
-  canRule: boolean;
-  /** 挂「去裁定」的那一条：`canRule` 且它就是 `standingDisputeId`。 */
-  ruleEventId: string | null;
   /** 结论气泡下面说「这一轮为什么没结论」的那一句，此刻能续时挂「继续本轮审查」。 */
   retryCauseId: string | null;
   /** 会话里认不出那张卡时，退回最后一条说这一轮原因的旁注，挂同一个动作。 */
@@ -39,8 +35,6 @@ export function footnoteActions(options: {
   items: readonly ConversationItem[];
   task: Pick<TaskListItem, "stage" | "archived" | "handoff">;
   reviews: readonly FreeReviewRun[] | null | undefined;
-  /** 有没有审查格可去：没有就一颗「去裁定」都不给（只读会话、团队时间线）。 */
-  canOpenReviews: boolean;
   causes: ReadonlyMap<string, LaneNoVerdict>;
   crashed: ReadonlyMap<string, CrashedTurn>;
   reviewRetry?: ReviewRetryAction | null;
@@ -51,8 +45,6 @@ export function footnoteActions(options: {
   const open = !!openDisputeIn(reviews);
   const locked = reviewLocked(options.task);
   const standingDisputeId = !locked && (reviews == null || open) ? lastDisputeId : null;
-  const canRule = options.canOpenReviews && open && !locked;
-  const ruleEventId = canRule ? standingDisputeId : null;
 
   // 「继续本轮审查」只挂在此刻还能续的那一轮（同一场、同一轮）上。那一句平时是结论气泡下面按轮次
   // 身份取的那一句（reviewNoVerdictCause）；会话里认不出那张卡时（没有「开始」那一条、拿不到审查
@@ -76,8 +68,6 @@ export function footnoteActions(options: {
   const retryCauseId = causeHostsRetry ? retryCause : null;
   return {
     standingDisputeId,
-    canRule,
-    ruleEventId,
     retryCauseId,
     retryEventId,
     retryTurnFootnoteId: retryTurn ? `footnote:${retryTurn.id}` : null,

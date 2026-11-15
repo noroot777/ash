@@ -119,15 +119,8 @@ export function recurrenceText(round: FreeReviewRound): string | null {
   return round.recurrence ? `同类问题第 ${round.recurrence} 轮未收口，已熔断` : null;
 }
 
-export function disputeStateText(round: FreeReviewRound): string {
-  const dispute = round.dispute;
-  if (!dispute) return "执行者驳回";
-  // 这一行是**历史记录**里的状态条，措辞跟着裁定屏走（用户 2026-10-20 要的是人话）：
-  // 说「谁不认什么、你当时怎么判的」，不说状态枚举的名字。
-  const who = deferOnly(round) ? "执行者说这几条该另开任务改" : "执行者不认这一轮意见";
-  if (dispute.resolution === "withdrawn") return `${who} · 你判了这一轮不用改`;
-  if (dispute.resolution === "deferred") return `${who} · 你把它转成了独立任务`;
-  if (dispute.resolution === "upheld") return `${who} · 你让它接着改了`;
-  if (dispute.supersededAt) return `${who} · 你没裁定，另派了一轮审查`;
-  return dispute.debates.at(-1)?.status === "running" ? `${who} · 双方辩论中` : `${who} · 等你拍板`;
+/** 这一轮的驳回是哪一种：谁不认什么（审查格那一轮下面「驳回」那一段的头）。 */
+export function disputeWho(round: FreeReviewRound): string {
+  return deferOnly(round) ? "执行者说这几条该另开任务改" : "执行者不认这一轮意见";
 }
+
