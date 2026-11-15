@@ -3,8 +3,10 @@ import { api } from "../lib/api.ts";
 
 // 「这一次合并完要不要替我提交」——确认层里「提交」那一勾（单任务、统一验收、重新合一次共用）。
 //
-// 它的默认值是**项目设置**（项目设置 → 验收 → 「验收合并后提交代码」）的当前值，在这儿
-// 改只管这一次，不回写设置。所以两件事必须同时说清：改了什么、改的是不是只有这次。
+// 它的默认值是**项目设置**（项目设置 → 验收 → 「验收合并后提交代码」）的当前值。验收确认层里
+// 点了确认，层里那一勾就写回这份设置（AcceptanceControls → api.rememberAccept，要项目管理权限；
+// 没有权限时层里写明只管这一次）——「上次怎么勾的」和「项目默认」是同一个值，不另存一份互相打架。
+// 「重新合一次」只读它、不写它：那不是一次验收确认。
 //
 // 读默认值走的是项目资源本身（GET /projects 里挑出这一个）而不是搭在验收检查上：这一勾
 // 对**任何会合并的任务**都要显示，而验收检查只在有验证站时才有活干。两者搅在一起的后果
@@ -44,6 +46,9 @@ export function useAcceptCommitDefault(projectId: string, enabled: boolean): Acc
     );
     return () => { alive = false; };
   }, [key, enabled, projectId]);
+  // 关掉就作废手上那份：确认时可能刚把它写回了项目设置（或者别处改了），下一次打开必须重读，
+  // 不能先拿上一次读到的值放开确认键 —— key 在两次打开之间是同一个，光靠它分不出新旧。
+  useEffect(() => { if (!enabled) setState({ key: "", value: null, error: null }); }, [enabled]);
   const current = state.key === key ? state : { value: null, error: null };
   return {
     value: current.value,

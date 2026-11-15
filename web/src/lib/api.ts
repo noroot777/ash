@@ -38,7 +38,7 @@ import type {
   TeamPresetConfig,
 } from "@ash/shared";
 
-import type { AcceptGateCancelResult, AcceptGateView } from "@ash/shared/accept-gate";
+import type { AcceptGateCancelResult, AcceptGateView, AcceptMemoryWrite, AcceptMemoryWriteResult } from "@ash/shared/accept-gate";
 import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
 import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
 import type { CliHostEnv } from "@ash/shared/cli-overrides";
@@ -418,6 +418,9 @@ export const api = {
     if (isAcceptTaskResult(body)) return body;
     throw apiError(response, body);
   },
+  // 确认层点确认时记下这一次怎么勾的（按人按项目；「提交」写回项目设置，要管理权限）。
+  rememberAccept: (projectId: string, write: AcceptMemoryWrite): Promise<AcceptMemoryWriteResult> =>
+    request(`/accept-memory/${id(projectId)}`, json("PUT", write)),
   acceptGate: (taskId: string, signal?: AbortSignal): Promise<AcceptGateState> => request(`/tasks/${id(taskId)}/accept-gate`, { signal }),
   // 整份日志单独取：状态接口每隔几秒拉一次，几十 MB 的回归输出不能搭在它上面。
   // runId 指定某一次（已验收那张回执看的是**凭据那一次**，不是最近一次）。

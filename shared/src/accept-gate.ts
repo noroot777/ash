@@ -283,3 +283,11 @@ export type AcceptGateState = {
     handoff: { at: string; state: "queued" | "working" | "ended" | "failed"; note: string | null } | null;
   } | null;
 };
+
+/**
+ * 验收确认层点确认时送去记住的那两勾(server accept-memory.ts)。只送这一按真做了选择的那几项:
+ * 有一次还作数的通过时「运行」默认是沿用、勾上是一次性重跑,都不送 skipGate。
+ */
+export type AcceptMemoryWrite = { skipGate?: boolean; commit?: boolean };
+/** 写完之后的样子;commitSaved=false = 没有项目管理权限,「提交」只管了这一次。 */
+export type AcceptMemoryWriteResult = { skipGate: boolean; commit: boolean; commitSaved: boolean };

@@ -5,9 +5,9 @@ import { cleanText, type ConfirmGate, type ConfirmView } from "./confirmPlan.ts"
 
 /**
  * 「这一按会做什么」：挂在主按钮下面的一层，一步一行。可以不做的那两步（运行、提交）前面带勾，
- * 取消了那一行自己写后果。事实来自 shared 的 acceptanceSteps —— 和飞书待验收卡那句话同源。
+ * 取消了那一行自己写后果；两勾打开时是上一次确认的样子，确认了就记成新的（confirmPlan.ts）。事实来自 shared 的 acceptanceSteps —— 和飞书待验收卡那句话同源。
  */
-export function AcceptConfirm({ anchorRef, steps, view, gate, commitChoosable, commitDefault, verification, source, family,
+export function AcceptConfirm({ anchorRef, steps, view, gate, commitChoosable, commitDefault, commitRemembered, verification, source, family,
   waiting, canSetGate, onRun, onCommit, onAcknowledge, onRetryDefault, onRetryVerification, onSetGate, onConfirm, onClose }: {
   anchorRef: RefObject<HTMLElement | null>;
   steps: AcceptanceSteps;
@@ -15,6 +15,8 @@ export function AcceptConfirm({ anchorRef, steps, view, gate, commitChoosable, c
   gate: ConfirmGate | null;
   commitChoosable: boolean;
   commitDefault: { value: boolean | null; error: string | null };
+  /** 确认时「提交」那一勾会写回项目设置（有项目管理权限）；false = 只管这一次。 */
+  commitRemembered: boolean;
   verification: { state: "none" | "loading" | "error" | "unacknowledged" | "acknowledged"; error: string | null };
   source: string;
   /** 一起验收的那几个任务（父任务在前）；只验一个时为空。 */
@@ -54,8 +56,9 @@ export function AcceptConfirm({ anchorRef, steps, view, gate, commitChoosable, c
             ? <><em className="is-red">项目默认读不出来</em><button type="button" className="acc-link" onClick={onRetryDefault}>重试</button></>
             : <em><i className="acc-spin is-ink" aria-hidden="true" />读取项目默认</em>} />
           : <Step verb="提交" checked={view.commit} onToggle={onCommit} label="合并后提交"
-            what={view.batchNeedsCommit ? <em className="is-red">不提交时一次只能合一个任务</em>
-              : !view.commit ? <em className="is-amber">改动留在 {merge.target} 工作区，这个仓库别的验收先被挡住</em> : null} />)}
+            what={<>{view.batchNeedsCommit ? <em className="is-red">不提交时一次只能合一个任务</em>
+              : !view.commit ? <em className="is-amber">改动留在 {merge.target} 工作区，这个仓库别的验收先被挡住</em> : null}
+              {!commitRemembered && view.commit !== commitDefault.value && <em>只管这一次，项目默认要管理员改</em>}</>} />)}
         {merge && <Step verb="清理" what={cleanText(merge, view.commit)} />}
         {steps.kind !== "release" && steps.team && <Step verb="联动" what="共享执行者一起标为验收完成" />}
         {verification.state === "loading" && <Step verb="验证" what={<em><i className="acc-spin is-ink" aria-hidden="true" />核对独立验证</em>} />}

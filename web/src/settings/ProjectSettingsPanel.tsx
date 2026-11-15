@@ -187,7 +187,7 @@ export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDele
                 任务分支一律保留，统一验收一次只合得了一个任务。
               </small>
             )}
-            <small>每次验收都能在确认框里单独改这一次，不改这里的默认。</small>
+            <small>在验收确认框里改了这一勾并确认，这里跟着变。</small>
           </div>
           <Toggle
             label={project.acceptCommit ? "提交" : "不提交"}

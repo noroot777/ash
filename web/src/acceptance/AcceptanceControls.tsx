@@ -133,6 +133,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         passedAgo: latest?.status === "passed" ? ago(latest.finishedAt ?? latest.startedAt) : null,
         lastFailed: latest?.status === "failed",
         issue: issue ? BASELINE_ISSUE[issue.reason] : null,
+        skipRemembered: gate.state.skipRemembered === true,
       }
     : null;
   const unverified = family.filter((row) => row.unexecutedVerification);
@@ -147,7 +148,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
   });
   const described = acceptanceSteps(task, view.commit);
   const shownSteps = described.kind === "merge" && acceptTarget ? { ...described, target: acceptTarget } : described;
-  // 关掉就回到默认：这几勾的语义都是「这一次」。
+  // 关掉就回到默认 —— 默认就是上一次确认时的样子（confirmPlan.ts），只开关不确认不会改它。「知情」那一勾不记。
   useEffect(() => {
     if (!confirming) { setRunChoice(null); setCommitChoice(null); setFamilyAck(false); verification.setAcknowledged(false); }
   }, [confirming]);
@@ -166,10 +167,23 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
   const accept = async () => {
     if (acceptDisabled || view.confirmDisabled) return;
     // 发的是**这一层里看到的那个值**（提交、运行与否），不让后端再读一次项目设置。
-    const { commitParam, gateIntent } = view;
+    const { commitParam, gateIntent, memory } = view;
     setLayer(null);
     setBusy(true);
     setFailure(null);
+    // 先记下这一次怎么勾的（下一个任务打开就是这个样子），再验收。记不住不拦验收：这一按用的是层里看到的值，
+    // 记没记住在提示后面缀一句。
+    let forgot = "";
+    if (memory) {
+      try {
+        await api.rememberAccept(task.projectId, memory);
+        // 前提列那一行跟着刚记下的说（服务端也会推一次，断线时不能只指望它）。
+        if (memory.skipGate !== undefined) void gate.reload();
+      } catch (reason) {
+        forgot = `（这次的选择没记住：${reason instanceof Error ? reason.message : String(reason)}）`;
+      }
+    }
+    const say = (message: string) => notify(message + forgot);
     try {
       if (family.length && proposal) {
         const ids = new Set([proposal.task.taskId, ...checked]);
@@ -179,7 +193,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
           commitParam);
         setChecked([]);
         const stale = await refreshAfterMutation();
-        notify((result.ok ? `统一验收已完成，共 ${result.completed.length} 个任务`
+        say((result.ok ? `统一验收已完成，共 ${result.completed.length} 个任务`
           : `已完成 ${result.completed.length} 个任务；其余暂停：${result.error}`) + stale);
         await plan.refresh();
         return;
@@ -193,21 +207,22 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
         if (result.reason === "accept_gate_running") gate.holdRunning(result.gate?.status === "running" ? result.gate : null);
         if (gateReason || result.reason === "merge_conflict") await gate.reload();
         if (result.confirmationRequired === "confirmUnverified") {
-          await refreshAfterMutation();
+          // 层要重新打开：「运行」的默认跟着刚记下的那一份走，先把它读回来。
+          await Promise.all([refreshAfterMutation(), memory?.skipGate === undefined ? null : gate.reload()]);
           setProposal(plan.view);
           setLayer("confirm");
           return;
         }
-        notify(gateReason ? gateNotice(result) : result.reason === "merge_conflict"
+        say(gateReason ? gateNotice(result) : result.reason === "merge_conflict"
           ? result.conflictHandoff?.notified ? "合并冲突已交给任务处理" : "合并冲突，没能交给任务"
           : result.completedMerge || result.completedTag ? result.error : `验收没完成：${result.error}`);
         if (result.completedMerge || result.completedTag) await refreshAfterMutation();
         return;
       }
       const stale = await refreshAfterMutation();
-      notify(acceptMessage(result) + stale);
+      say(acceptMessage(result) + stale);
     } catch (reason) {
-      notify(reason instanceof Error ? reason.message : String(reason));
+      say(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(false);
     }
@@ -275,6 +290,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
           gate={confirmGate}
           commitChoosable={commitChoosable}
           commitDefault={commitDefault}
+          commitRemembered={canManage !== false}
           verification={{ state: verifyState, error: verification.error }}
           source={plan.view?.task.sourceBranch ?? "任务分支"}
           family={family.map((row) => row.title)}

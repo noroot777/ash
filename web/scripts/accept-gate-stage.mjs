@@ -97,7 +97,9 @@ export async function assertTone(row, tone, message) {
  * 而送不出）之后兑现；页面那一侧有没有消费完看 fetchesSettled（只记 TRACKED_READS）。
  *
  * 发给 /accept 的请求体按顺序记在 `store.accepts`，回什么由 `store.acceptReply(body)` 定
- * （缺省回一个 409 target_unresolved「模拟验收响应」：什么都没动）。
+ * （缺省回一个 409 target_unresolved「模拟验收响应」：什么都没动）。确认层点确认时记下的那几勾
+ * （PUT /accept-memory）按顺序记在 `store.memory`，照服务端那样落回门禁状态的 skipRemembered 与
+ * 项目的 acceptCommit（`role` 不是 admin 时提交那一勾不写）；`store.memoryDown` 让它回 503。
  *
  * 其余开关：`status` 门禁读取一开始就回这个错误码；`hold` 一开始就扣住每一发门禁读取（见
  * store.hold）；`init(page)` 在打开页面之前往页面里塞东西；`clock` 打开之前装假时钟；
@@ -129,6 +131,7 @@ export function gateStage({ browser, base }) {
       served: (index) => servedAt(index).promise,
       requestIds: [], status, hold, logText: "checking 42 / 640", command: command === undefined ? gate?.command ?? null : command, gate,
       projectReads: 0, projectDown, accepts: [], acceptReply, stage: new URLSearchParams(query).get("stage") ?? "verified",
+      memory: [], memoryDown: false, acceptCommit,
       taskFetches: 0, unexpected: [] };
     // 优先级最低的兜底：没桩的请求一律 404 并记下来，免得落到 vite 上回一页 HTML。
     await page.route("**/api/**", (route) => {
@@ -168,7 +171,16 @@ export function gateStage({ browser, base }) {
       store.projectReads += 1;
       if (store.projectDown) return json(route, { error: "数据库忙" }, 503);
       return json(route, [{ id: "proj-1", name: "kb", repoPath: "/repo", myRole: role, acceptGateCommand: store.command,
-        ...(acceptCommit === undefined ? {} : { acceptCommit }) }]);
+        ...(store.acceptCommit === undefined ? {} : { acceptCommit: store.acceptCommit }) }]);
+    });
+    await page.route("**/api/accept-memory/proj-1", (route) => {
+      const body = JSON.parse(route.request().postData() ?? "{}");
+      store.memory.push(body);
+      if (store.memoryDown) return json(route, { error: "数据库忙" }, 503);
+      if (typeof body.skipGate === "boolean") store.gate = { ...store.gate, skipRemembered: body.skipGate };
+      const commitSaved = typeof body.commit === "boolean" && role === "admin";
+      if (commitSaved) store.acceptCommit = body.commit;
+      return json(route, { skipGate: store.gate?.skipRemembered === true, commit: store.acceptCommit !== false, commitSaved });
     });
     await page.route("**/api/projects/proj-1", async (route) => {
       store.patches.push(JSON.parse(route.request().postData() ?? "{}"));

@@ -23,6 +23,7 @@ const { mountTaskRoutes } = await import("../src/task-routes.js");
 const { mountTaskDiffRoutes } = await import("../src/task-diff-routes.js");
 const { mountTaskScheduleRoutes } = await import("../src/task-schedule-routes.js");
 const { mountProjectRoutes } = await import("../src/project-routes.js");
+const { mountAcceptMemoryRoutes } = await import("../src/accept-memory.js");
 const { branchDependency, branchDeletionBlock, dependentTasks, baseUpdateBackupPrefix } = await import("../src/task-branch-plan.js");
 const { readBranchPlan, acceptFamily } = await import("../src/task-branch-routes.js");
 const { updateTaskBase } = await import("../src/task-base-update.js");
@@ -41,6 +42,7 @@ mountTaskAcceptanceRoutes(api);
 mountTaskDiffRoutes(api);
 mountTaskScheduleRoutes(api);
 mountProjectRoutes(api);
+mountAcceptMemoryRoutes(api);
 let sequence = 0;
 const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id)))[0];
 const commit = (path: string, file: string, value: string) => {

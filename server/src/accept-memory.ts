@@ -9,6 +9,7 @@
 //    设置页会各说各的。所以它要项目管理权限：没有就不写、回执里说 commitSaved:false，这一次的
 //    提交与否照样按层里看见的值发给 /accept（那条不读这里）。
 import type { Hono } from "hono";
+import type { AcceptMemoryWriteResult } from "@ash/shared/accept-gate";
 import { and, eq, isNull, notInArray, or } from "drizzle-orm";
 import { actorOf, authErrorResponse, ownerIdOf, type Actor } from "./auth/context.js";
 import { projectRoleOf, requireProjectAccess } from "./auth/visibility.js";
@@ -26,8 +27,6 @@ export async function rememberedSkipGate(actor: Actor, projectId: string): Promi
     .where(and(eq(acceptMemory.owner, ownerKeyOf(actor)), eq(acceptMemory.projectId, projectId)))).at(0);
   return row?.skipGate === true;
 }
-
-export type AcceptMemoryWriteResult = { skipGate: boolean; commit: boolean; commitSaved: boolean };
 
 export function mountAcceptMemoryRoutes(api: Hono): void {
   api.put("/accept-memory/:projectId", async (c) => {
