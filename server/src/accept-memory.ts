@@ -8,9 +8,11 @@
 //  · commit：「提交」那一勾**就是项目设置**（projects.accept_commit），不另存一份默认，不然确认层和
 //    设置页会各说各的。所以它要项目管理权限：没有就不写、回执里说 commitSaved:false，这一次的
 //    提交与否照样按层里看见的值发给 /accept（那条不读这里）。
+//  · 两项都按到达顺序写：后到的确认算数，晚做完的旧确认盖不掉它（accept-order.ts）。
 import type { Hono } from "hono";
 import type { AcceptMemoryWriteResult } from "@ash/shared/accept-gate";
-import { and, eq, isNull, ne, notInArray, or } from "drizzle-orm";
+import { and, eq, isNull, notInArray, or } from "drizzle-orm";
+import { arrivalSeq, writeAcceptCommit } from "./accept-order.js";
 import { actorOf, authErrorResponse, ownerIdOf, type Actor } from "./auth/context.js";
 import { projectRoleOf, requireProjectAccess } from "./auth/visibility.js";
 import { bus } from "./bus.js";
@@ -30,6 +32,8 @@ export async function rememberedSkipGate(actor: Actor, projectId: string): Promi
 
 export function mountAcceptMemoryRoutes(api: Hono): void {
   api.put("/accept-memory/:projectId", async (c) => {
+    // 一到就取号，后到的确认算数（accept-order.ts）。
+    const seq = arrivalSeq();
     const pid = c.req.param("projectId");
     const actor = actorOf(c);
     const project = (await db.select().from(projects).where(eq(projects.id, pid))).at(0);
@@ -49,35 +53,35 @@ export function mountAcceptMemoryRoutes(api: Hono): void {
       return c.json({ error: "skipGate、commit 只能是布尔值" }, 400);
     }
     const owner = ownerKeyOf(actor);
-    if (typeof body.skipGate === "boolean") {
-      const skipGate = body.skipGate;
-      await db.insert(acceptMemory).values({ owner, projectId: pid, skipGate, updatedAt: now() })
-        .onConflictDoUpdate({ target: [acceptMemory.owner, acceptMemory.projectId], set: { skipGate, updatedAt: now() } });
+    const commitSaved = typeof body.commit === "boolean" && (await projectRoleOf(actor, pid)) === "admin";
+    // 两勾在同一笔事务里按号写：一次确认的两项要么都比库里新、各自落下，要么被更新的那次确认挡住，
+    // 不会出现旧确认的一半插在新确认中间。回执报写完之后库里的样子（被挡住时就是那次更新的选择）。
+    const { skipWritten, commitChanged, result } = await db.transaction(async (tx) => {
+      let skipWritten = false;
+      if (typeof body.skipGate === "boolean") {
+        const skipGate = body.skipGate;
+        const row = (await tx.select({ seq: acceptMemory.seq }).from(acceptMemory)
+          .where(and(eq(acceptMemory.owner, owner), eq(acceptMemory.projectId, pid)))).at(0);
+        if (!row || row.seq < seq) {
+          await tx.insert(acceptMemory).values({ owner, projectId: pid, skipGate, seq, updatedAt: now() })
+            .onConflictDoUpdate({ target: [acceptMemory.owner, acceptMemory.projectId], set: { skipGate, seq, updatedAt: now() } });
+          skipWritten = true;
+        }
+      }
+      const commitChanged = commitSaved ? (await writeAcceptCommit(tx, pid, body.commit === true, seq))?.changed === true : false;
+      const skip = (await tx.select({ skipGate: acceptMemory.skipGate }).from(acceptMemory)
+        .where(and(eq(acceptMemory.owner, owner), eq(acceptMemory.projectId, pid)))).at(0);
+      const current = (await tx.select({ acceptCommit: projects.acceptCommit }).from(projects).where(eq(projects.id, pid))).at(0);
+      const result: AcceptMemoryWriteResult = { skipGate: skip?.skipGate === true, commit: current?.acceptCommit !== false, commitSaved };
+      return { skipWritten, commitChanged, result };
+    });
+    if (skipWritten) {
       // 门禁状态里带着这一份：这个项目下还没验收的任务各自重读（别的标签页、下一个任务立刻跟上）。
       const open = await db.select({ id: tasks.id }).from(tasks)
         .where(and(eq(tasks.projectId, pid), or(isNull(tasks.stage), notInArray(tasks.stage, ["accepted", "merged"]))));
       for (const task of open) bus.publish({ type: "task.acceptGate", taskId: task.id });
     }
-    let commitSaved = false;
-    if (typeof body.commit === "boolean") {
-      commitSaved = (await projectRoleOf(actor, pid)) === "admin";
-      if (commitSaved) {
-        // 比较和写入是**同一条语句**：不拿请求开头读到的项目行判「本来就是这个值、不用写」—— 中间别的
-        // 确认、设置页可能已经改过它，凭旧快照省掉这次赋值，最后确认的那一下就没记住（第 1 轮审查 F4）。
-        // 真改了一行才推项目变化。
-        const changed = await db.update(projects).set({ acceptCommit: body.commit })
-          .where(and(eq(projects.id, pid), ne(projects.acceptCommit, body.commit))).returning({ id: projects.id });
-        if (changed.length) bus.publish({ type: "project.updated", projectId: pid });
-      }
-    }
-    // 回执报这一次实际存下的值；没写的那一项才去读现在的样子。
-    const current = commitSaved ? null
-      : (await db.select({ acceptCommit: projects.acceptCommit }).from(projects).where(eq(projects.id, pid))).at(0);
-    const result: AcceptMemoryWriteResult = {
-      skipGate: typeof body.skipGate === "boolean" ? body.skipGate : await rememberedSkipGate(actor, pid),
-      commit: commitSaved ? body.commit === true : current?.acceptCommit !== false,
-      commitSaved,
-    };
+    if (commitChanged) bus.publish({ type: "project.updated", projectId: pid });
     return c.json(result);
   });
 }

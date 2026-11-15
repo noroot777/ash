@@ -10,7 +10,8 @@ import type { Context, Hono } from "hono";
 import type { Project, ProjectRole, ProjectView } from "@ash/shared";
 import { isBuiltinKey } from "@ash/shared/workflow-presets";
 import { db } from "./db/index.js";
-import { acceptMemory, projects, groups, tasks, notes, noteTasks } from "./db/schema.js";
+import { arrivalSeq, writeAcceptCommit } from "./accept-order.js";
+import { acceptCommitOrder, acceptMemory, projects, groups, tasks, notes, noteTasks } from "./db/schema.js";
 import { id, now } from "./util.js";
 import { expandHome, projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches, isGitRepo } from "./git.js";
 import { listWorkspaceDir, searchWorkspaceFiles } from "./file-search.js";
@@ -228,6 +229,8 @@ export function mountProjectRoutes(api: Hono): void {
   });
 
   api.patch("/projects/:id", async (c) => {
+    // 「合并后提交」跟确认层按同一套到达顺序写（accept-order.ts）：一到就取号。
+    const seq = arrivalSeq();
     const pid = c.req.param("id");
     const actor = actorOf(c);
     const existing = (await db.select().from(projects).where(eq(projects.id, pid))).at(0);
@@ -307,7 +310,6 @@ export function mountProjectRoutes(api: Hono): void {
     // 一个含糊的真值转换(空串/0/"false")在这儿就是替他改 git 历史,宁可 400。
     if (b.acceptCommit !== undefined) {
       if (typeof b.acceptCommit !== "boolean") return c.json({ error: "acceptCommit 必须是布尔值" }, 400);
-      patch.acceptCommit = b.acceptCommit;
     }
     if (b.acceptAutoCommit !== undefined) {
       if (typeof b.acceptAutoCommit !== "boolean") return c.json({ error: "acceptAutoCommit 必须是布尔值" }, 400);
@@ -354,6 +356,11 @@ export function mountProjectRoutes(api: Hono): void {
       patch.browserCdpDomains = normalizeBrowserCdpDomains(b.browserCdpDomains);
     }
     if (Object.keys(patch).length) await db.update(projects).set(patch).where(eq(projects.id, pid));
+    // 比这一下晚到的确认已经写过了就不写：回给设置页的是库里实际的值。
+    if (typeof b.acceptCommit === "boolean") {
+      const acceptCommit = b.acceptCommit;
+      await db.transaction((tx) => writeAcceptCommit(tx, pid, acceptCommit, seq));
+    }
     const updated = (await db.select().from(projects).where(eq(projects.id, pid))).at(0)!;
     // 命令、准备命令或基准变了,验收台上那张门禁卡要重读:两处入口改的是同一份项目设置,另一处得立刻跟上。
     if (normalizeAcceptGateCommand(updated.acceptGateCommand) !== normalizeAcceptGateCommand(existing.acceptGateCommand)
@@ -416,6 +423,7 @@ export function mountProjectRoutes(api: Hono): void {
       await deleteProjectMembers(pid);
       await deleteProjectInvites(pid);
       await db.delete(acceptMemory).where(eq(acceptMemory.projectId, pid));
+      await db.delete(acceptCommitOrder).where(eq(acceptCommitOrder.projectId, pid));
       await db.delete(projects).where(eq(projects.id, pid));
       deleted = true;
       return c.json({ deleted: true });

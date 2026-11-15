@@ -5,6 +5,7 @@
 //  · 「提交」那一勾就是项目设置：管理员确认时写回 projects.accept_commit(变了才推 project.updated)，
 //    没有管理权限就不写、回执说 commitSaved:false；别处刚改过也照写（不凭早先的快照省掉赋值）；
 //    看不见项目 403，项目不在 404，含糊的真值 400；
+//  · 后到的确认算数：服务端卡住、浏览器已经放弃的旧确认晚做完，也盖不掉之后那次确认或设置页的改动；
 //  · 回合凭证写不动它(个人面写闸)；验收接口和别的入口不读它(只有门禁状态那条 GET 读)。
 //
 // 跑：npx tsx server/scripts/test-accept-memory.ts
@@ -22,7 +23,7 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 requireTmpDb("accept-memory");
 
-const [{ db, ensureSchema }, schema, memory, gateRoutes, { bus }, context, mode, store, visibility, personalGate] = await Promise.all([
+const [{ db, ensureSchema }, schema, memory, gateRoutes, { bus }, context, mode, store, visibility, personalGate, projectRoutes] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/accept-memory.js"),
@@ -33,6 +34,7 @@ const [{ db, ensureSchema }, schema, memory, gateRoutes, { bus }, context, mode,
   import("../src/auth/store.js"),
   import("../src/auth/visibility.js"),
   import("../src/auth/personal-gate.js"),
+  import("../src/project-routes.js"),
 ]);
 const { projects, tasks } = schema;
 type Actor = import("../src/auth/context.js").Actor;
@@ -107,13 +109,83 @@ await addTask("u1", "p2", "verified");
   await db.update(projects).set({ acceptCommit: false }).where(eq(projects.id, "p1"));
   events.length = 0;
   assert.deepEqual((await remember("p1", { commit: true })).body, { skipGate: false, commit: true, commitSaved: true });
-  assert.equal(await acceptCommitOf("p1"), true, "比较和写入在同一条语句里，不凭早先读到的值省掉赋值");
+  assert.equal(await acceptCommitOf("p1"), true, "写的时候才读库里的值，不凭早先读到的值省掉赋值");
   assert.equal(events.filter((event) => event.type === "project.updated").length, 1);
-  // 两个确认几乎同时到：落库的是其中一个，回执各报各自存下的值，库里与最后落下的那一个一致。
-  const [a, b] = await Promise.all([remember("p1", { commit: false }), remember("p1", { commit: true })]);
-  assert.deepEqual([a.body.commit, b.body.commit], [false, true]);
-  assert.ok([false, true].includes(await acceptCommitOf("p1")));
   await remember("p1", { commit: true });
+}
+
+// ── 后到的确认算数：晚做完的旧确认盖不掉它（第 2 轮审查 F1）────────────────────────────
+// 复现的是真实那一幕：A 先确认、服务端卡住（这里用慢请求体，审查用的是数据库写锁），浏览器等到超时
+// 放弃，用户又确认了一次 B；B 先落库，A 随后醒来做完。A 的两项都不能写进去，回执报库里实际的样子。
+{
+  const encoder = new TextEncoder();
+  const slowPut = (projectId: string, head: string, tail: string) => {
+    let finish!: () => void;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(head));
+        finish = () => { controller.enqueue(encoder.encode(tail)); controller.close(); };
+      },
+    });
+    const pending = api.request(new Request(`http://x/accept-memory/${projectId}`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body, duplex: "half",
+    } as RequestInit & { duplex: "half" })).then(async (response) => ({ status: response.status, body: await response.json() }));
+    return { finish, pending };
+  };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  await remember("p1", { skipGate: false, commit: true });
+  const older = slowPut("p1", '{"skipGate":true,', '"commit":false}');
+  await settle();
+  const newer = await remember("p1", { skipGate: false, commit: true });
+  assert.deepEqual(newer.body, { skipGate: false, commit: true, commitSaved: true });
+  events.length = 0;
+  older.finish();
+  const late = await older.pending;
+  assert.equal(late.status, 200);
+  assert.deepEqual(late.body, { skipGate: false, commit: true, commitSaved: true }, "旧确认被挡住：回执报那次更新的选择");
+  assert.equal(await acceptCommitOf("p1"), true, "提交：后到的那一次算数");
+  assert.equal(await skipShown("t1"), false, "运行：后到的那一次算数");
+  assert.equal(events.length, 0, "什么都没写就什么都不推");
+
+  // 更新的那次确认只送了「提交」：旧确认里「提交」那一半被挡住，「运行」那一半没有更新的选择，照写。
+  const half = slowPut("p1", '{"skipGate":true,', '"commit":false}');
+  await settle();
+  await remember("p1", { commit: true });
+  half.finish();
+  assert.deepEqual((await half.pending).body, { skipGate: true, commit: true, commitSaved: true });
+  assert.equal(await acceptCommitOf("p1"), true, "提交那一半被更新的确认挡住");
+  assert.equal(await skipShown("t1"), true, "运行那一半没人后来改过：这次确认的选择记住了");
+  await remember("p1", { skipGate: false });
+
+  // 没有更新的确认：等不及放弃了也照样记住 —— 那就是用户最后确认的选择。
+  const alone = slowPut("p1", '{"skipGate":true,', '"commit":false}');
+  await settle();
+  alone.finish();
+  assert.deepEqual((await alone.pending).body, { skipGate: true, commit: false, commitSaved: true });
+  assert.equal(await acceptCommitOf("p1"), false);
+
+  // 设置页是另一个写入方，同一套顺序：比它晚到的设置页改动算数，比它早到的旧确认盖不掉设置页。
+  const projectApi = new Hono();
+  projectApi.use("*", async (c, next) => { context.setActor(c, actor); await next(); });
+  projectRoutes.mountProjectRoutes(projectApi);
+  const patchCommit = async (acceptCommit: boolean) => {
+    const response = await projectApi.request("http://x/projects/p1", {
+      method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ acceptCommit }),
+    });
+    return { status: response.status, body: await response.json() as { acceptCommit: boolean } };
+  };
+  const beforeSettings = slowPut("p1", '{"commit":', "false}");
+  await settle();
+  const patched = await patchCommit(true);
+  assert.equal(patched.status, 200);
+  assert.equal(patched.body.acceptCommit, true);
+  beforeSettings.finish();
+  assert.equal((await beforeSettings.pending).body.commit, true, "早于设置页的确认被挡住");
+  assert.equal(await acceptCommitOf("p1"), true, "设置页后改的算数");
+  assert.equal((await patchCommit(false)).body.acceptCommit, false);
+  assert.equal(await acceptCommitOf("p1"), false, "设置页晚到：照写");
+  assert.equal((await remember("p1", { commit: true, skipGate: false })).body.commit, true, "设置页之后的确认算数");
 }
 
 // ── 坏请求 ───────────────────────────────────────────────────────────────────
