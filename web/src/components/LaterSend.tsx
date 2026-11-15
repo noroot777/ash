@@ -101,11 +101,13 @@ export type SendStop = { label: string; busy?: boolean; onStop: () => void };
  *  · `override` 给斜杠命令那类「这一下不是发送」的情形（补全、打开派生配置），它优先，也不受「稍后」拦。
  * 回车照旧走调用方自己的 send()，那里面要按 later.resolve() 再判一次。
  */
-export function LaterSendKey({ later, action = "发送", empty, queueing = false, uploading, blocked, busy = false,
+export function LaterSendKey({ later, action = "发送", label, empty, queueing = false, uploading, blocked, busy = false,
   override, onSend, onStop, stopTip = "停止这一轮", stopBlocked = null, stopBusy = false, configDisabled = false, tasks, projectId, taskId, size = "sm" }: {
   later: LaterSend;
   /** 立即那一档做的事，进读屏名和提示（「发送」「发送给调度者」）。 */
   action?: string;
+  /** 立即那一档键上写的字（叫了人时的「问 codex」）；不给就只画箭头。写着字时空框不变成停止键。 */
+  label?: string | null;
   empty: boolean;
   /** 这时发出去的回复会排队（这一轮结束后才送）。只管键上的字，不管停止。 */
   queueing?: boolean;
@@ -131,9 +133,9 @@ export function LaterSendKey({ later, action = "发送", empty, queueing = false
   const configured = later.kind !== "now";
   const target = tasks.find((task) => task.id === later.afterTaskId);
   const stop: SendKeyStop | null = onStop ? { tip: stopBlocked ?? stopTip, onStop, disabled: stopBusy || !!stopBlocked } : null;
-  const stopping = empty && !uploading && !override && !!stop;
+  const stopping = empty && !uploading && !override && !label && !!stop;
   const time = later.kind === "timed" && later.choice ? new Date(later.at) : null;
-  const text = uploading ?? override?.text ?? (configured ? later.submitLabel : queueing ? "排队发送" : "");
+  const text = uploading ?? override?.text ?? (configured ? later.submitLabel : label || (queueing ? "排队发送" : ""));
   const reason = uploading ? "附件传完才能发"
     : override ? blocked ?? null
       : empty ? "先写点内容"
@@ -145,7 +147,7 @@ export function LaterSendKey({ later, action = "发送", empty, queueing = false
   return (
     <SendKey
       size={size}
-      action={override?.action ?? action}
+      action={override?.action ?? label ?? action}
       text={text}
       tip={tip}
       blocked={reason}

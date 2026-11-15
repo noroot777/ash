@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useMemo, useRef, useState, type ReactNode } from "react";
 import { File, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
@@ -33,6 +33,7 @@ import { footnoteKey, receiptsKey, type FootnotePart, type TurnFootnote } from "
 import { crashedTurns } from "./turnFailure.ts";
 import { useJustEnded } from "./useJustEnded.ts";
 import { conversationKeys } from "./conversationKeys.ts";
+import { displayRowAt, interleaveByTime, type FeedAside } from "./dispatchNotes.ts";
 import {
   ReceiptReviewContext, TurnReceiptLog, TurnReceiptsToggle, TurnReceipts, useTurnReceipts, type ReceiptReview,
 } from "./TurnReceipts.tsx";
@@ -301,6 +302,7 @@ export function ConversationFeed({
   bodyReady = true,
   onDeleteMessage,
   onReuseInput,
+  asides = [],
 }: {
   task: TaskListItem;
   /**
@@ -346,6 +348,8 @@ export function ConversationFeed({
   onDeleteMessage?: (sources: ConversationSource[]) => Promise<void>;
   /** 你发的那几句（含原始需求）放回对话框改了再发。不给就不出这颗键（没有对话框的视图）。 */
   onReuseInput?: (input: ReusableInput) => void;
+  /** 按时刻插进会话里的旁白（派出去的那一句，dispatchNotes.ts）。 */
+  asides?: readonly FeedAside[];
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   // 被挡回的用户操作合进同一条任务历史。正文读到手之后**无条件合** —— 「有没有正文」跟「这段历史该不该
@@ -528,7 +532,9 @@ export function ConversationFeed({
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
           {requirement && inputs[0]?.id === REQUIREMENT_INPUT_ID && <RequirementMessage requirement={requirement} onReuse={onReuseInput} />}
-          {rows.map((row) => {
+          {interleaveByTime(rows, displayRowAt, asides).map((entry) => {
+            if (entry.kind === "aside") return <Fragment key={entry.aside.id}>{entry.aside.node}</Fragment>;
+            const { row } = entry;
             if (row.kind === "item") return renderItem(row.item);
             if (row.kind === "system-action") {
               return <SystemAuthoredMessage key={row.id} item={row.item} related={row.related} />;

@@ -27,6 +27,9 @@ import { HandoffBanner } from "./HandoffBanner.tsx";
 import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
 import { replySend } from "./replySend.ts";
+import { replyDispatch } from "./replyDispatch.ts";
+import { dispatchNotes } from "./dispatchNotes.ts";
+import { DispatchNoteLine } from "./DispatchNoteLine.tsx";
 import { LeftDrawerProvider } from "../components/LeftDrawer.tsx";
 import { useDisputeRulingDock } from "../free-workflow/DisputeRulingDock.tsx";
 import { TaskDerivationComposer } from "./TaskDerivationComposer.tsx";
@@ -146,6 +149,10 @@ export function TaskDetail({
     ? latestPostMerge?.status === "reviewing" ? "查看合并审查" : latestPostMerge ? "再次审查合并结果" : "审查合并结果"
     : null;
   const derivationAllowed = canDeriveTask(task);
+  // 你在回复框里派出去的那几条：会话里各留一句靠右的小灰字，点它在左抽屉打开（dispatchNotes.ts）。
+  const notes = useMemo(() => dispatchNotes(task.id, allTasks).map((note) => ({
+    id: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={dispatched.state.open} />,
+  })), [allTasks, dispatched.state.open, task.id]);
   // 接力入口:已接力出去的任务在本机是存档,除非那次还悬着(可以撤/重试)。
   const canHandoff = task.mode === "single" && task.parentId === null && !task.archived && task.queueId == null
     && (task.handoff?.direction !== "out" || !!task.handoff.pending);
@@ -473,6 +480,7 @@ export function TaskDetail({
                     >
                     <ConversationFeed
                       task={task}
+                      asides={notes}
                       requirement={{ text: task.body, at: task.createdAt, origin: task.creationOrigin }}
                       questionHistory={task.questionHistory}
                       liveQuestionHistory
@@ -581,6 +589,9 @@ export function TaskDetail({
                           : `以后这个任务交给 ${run}`);
                       }}
                       onSend={replySend({ task, allTasks, conversation, confirmExecutorSwap, notify })}
+                      // 「派出去」只在普通的独立任务里有（团队执行者、审查任务各有归属，服务端也不收）。
+                      onDispatch={derivationAllowed && task.mode === "single" && !task.archived
+                        ? replyDispatch({ task, onCreated: onTaskUpdate, notify }) : undefined}
                       override={ruling}
                       command={derivationAllowed ? {
                         matches: isTaskDerivationCommand,

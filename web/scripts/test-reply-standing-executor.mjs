@@ -62,12 +62,15 @@ try {
     // 发完不回弹：胶囊上还是刚选的那个，不必为下一句再选一次。
     assert.match(await agentTrigger.getAttribute("aria-label") ?? "", /智能体：claude/);
 
-    // ③ 正文里 `@` 召唤仍是一次性：随这一句发出，发完退回常设配置。
+    // ③ 正文里 `@` 召唤仍是一次性：随这一句发出，发完退回常设配置。选完人不再接着弹选模型，
+    //    要换模型照常点胶囊（这时胶囊上是被叫的那个人，改的只是这一次）；发送键写着「问 codex」。
     await textarea.fill("第二句 @codex");
     await page.getByRole("option", { name: /@codex/ }).click();
-    await page.getByRole("option", { name: /^gpt-5\.6-sol/ }).click();
     assert.match(await agentTrigger.getAttribute("aria-label") ?? "", /智能体：codex/);
-    await sendButton.click();
+    await page.getByRole("button", { name: /^模型：/ }).click();
+    await page.getByRole("option", { name: /^gpt-5\.6-sol/ }).click();
+    await page.keyboard.press("Escape"); // 选完模型会自动向右展开智能水平段，这里不选
+    await page.getByRole("button", { name: "问 codex", exact: true }).click();
     await page.locator("#log li").nth(3).waitFor();
     assert.deepEqual((await logLines()).slice(3), [
       // 任务常设仍是 claude，codex 只压在这一句上。
