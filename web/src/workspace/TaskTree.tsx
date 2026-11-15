@@ -7,7 +7,6 @@ import { RevealMore, useKeyedReveal, useReveal } from "./TaskReveal.tsx";
 import { SpreadPeekLayer, SpreadRowProvider, useSpreadPeek } from "./TaskSpread.tsx";
 import {
   TASK_PREVIEW_LIMIT,
-  TaskRow,
   TaskTreeActionsProvider,
   TeamRow,
   useCollapsedSections,
@@ -23,7 +22,9 @@ import {
   type SpreadFilter,
   type WorkerIndex,
 } from "./useSidebarSpread.ts";
-import { buildTaskTree, groupTaskModeProjects, keepVisibleInPreview, orderedTopLevelTasks, previewProjectTasks, previewTasksByAge, revealToIndex } from "./taskTreeModel.ts";
+import { buildTaskTree, groupTaskModeProjects, keepVisibleInPreview, orderedTopLevelTasks, previewProjectTasks, previewTasksByAge, revealToIndex, TASK_PREVIEW_MAX_AGE_MS } from "./taskTreeModel.ts";
+import { buildDispatchForest, forestRoot, keepForestVisible, sortRootsByLatest } from "./dispatchForest.ts";
+import { DispatchAwareRow, DispatchOpenProvider, useDispatchOpenState } from "./DispatchTreeRows.tsx";
 import { OutboundStatusBar, type OutboundBar } from "./OutboundStatusBar.tsx";
 import { HandoffMachines } from "./HandoffMachines.tsx";
 import { useLayoutMotion } from "../lib/motion/index.ts";
@@ -102,17 +103,28 @@ function ScopedTaskTree({
   // 年龄闸的豁免名单（星标 / 置顶 / 没盖的章 / 摔了的 / 等你指挥的），判据本体在
   // taskTreeModel 的 keepVisibleInPreview —— 跟 previewTasksByAge 挨着，测试也钉在那儿。
   // 团队的问题写在执行者身上，所以要把 workers 一起递进去。
-  const keepVisible = useCallback(
+  const keepRowVisible = useCallback(
     (task: TaskListItem) => keepVisibleInPreview(task, lookForTask(task).indicator, workersFrom(workerIndex, task.id)),
     [lookForTask, workerIndex],
   );
-  const keptBySection = useMemo(
+  const filteredBySection = useMemo(
     () => sections.map((section) => ({
       section,
       kept: section.tasks.filter((task) => matchesSpreadFilter(task, filter, workersFrom(workerIndex, task.id))),
     })),
     [filter, sections, workerIndex],
   );
+  // 派出去的任务收在派它的那条下面（dispatchForest.ts）。森林建在**筛完的**两节行上：派它的
+  // 那条被筛掉了，它就照常平铺。收进去的不再单独成行；「任务」那一节的先后、年龄闸都按整棵算。
+  const forest = useMemo(() => buildDispatchForest(filteredBySection.flatMap((entry) => entry.kept)), [filteredBySection]);
+  const keptBySection = useMemo(
+    () => filteredBySection.map(({ section, kept }) => {
+      const roots = kept.filter((task) => !forest.nested.has(task.id));
+      return { section, kept: section.key === "rest" ? sortRootsByLatest(forest, roots) : roots };
+    }),
+    [filteredBySection, forest],
+  );
+  const keepVisible = useMemo(() => keepForestVisible(forest, keepRowVisible, TASK_PREVIEW_MAX_AGE_MS), [forest, keepRowVisible]);
   // 真正画出来的一个个「行块」。分组与否只改这一层：下面的年龄闸、展开状态、选中揭示
   // 全按 group.key 走，所以两种排法共用同一套逻辑，不会一边修好另一边还漏着。
   //
@@ -126,7 +138,8 @@ function ScopedTaskTree({
         kept,
         grouped,
         groups: grouped
-          ? groupTaskModeProjects(kept, allTasks, sections.find((entry) => entry.key === "pinned")?.tasks ?? []).map((group) => ({
+          // 已经收在别人下面的不能再从「展开」里冒出来一份。
+          ? groupTaskModeProjects(kept, allTasks.filter((task) => !forest.nested.has(task.id)), sections.find((entry) => entry.key === "pinned")?.tasks ?? []).map((group) => ({
             key: `project:${group.projectId}`,
             project: projectIndex?.get(group.projectId) ?? null,
             tasks: group.tasks,
@@ -135,11 +148,12 @@ function ScopedTaskTree({
           : [{ key: section.key, project: null as ProjectView | null, tasks: kept, extraTasks: [] as TaskListItem[] }],
       };
     }),
-    [allTasks, keptBySection, projectIndex, sections],
+    [allTasks, forest, keptBySection, projectIndex, sections],
   );
   const hiddenSelection = useMemo(() => {
     if (!selectedTaskId) return null;
-    const selectedRootId = allTasks.find((task) => task.id === selectedTaskId)?.parentId ?? selectedTaskId;
+    // 执行者归它的团队、收着的派出任务归它最顶上那一条：藏在年龄闸里的是那一行。
+    const selectedRootId = allTasks.find((task) => task.id === selectedTaskId)?.parentId ?? forestRoot(forest, selectedTaskId);
     for (const entry of layout) {
       for (const group of entry.groups) {
         const hidden = previewTasksByAge(group.tasks, Date.now(), keepVisible).hidden;
@@ -148,7 +162,7 @@ function ScopedTaskTree({
       }
     }
     return null;
-  }, [allTasks, keepVisible, layout, selectedTaskId]);
+  }, [allTasks, forest, keepVisible, layout, selectedTaskId]);
   // 分页展开的计数按行块（分节 / 项目分组）各存一份。
   const { revealedIn, more: revealMoreIn, collapse: collapseReveal, revealAtLeast } = useKeyedReveal();
   // 选中的行藏在隐藏区里时，只放到**够看见它的那一页**为止 —— 从前这里是整块全展开，
@@ -192,7 +206,7 @@ function ScopedTaskTree({
               showProject={showProject}
             />
           ) : (
-            <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} lookForTask={lookForTask} showProject={showProject} />
+            <DispatchAwareRow key={task.id} task={task} forest={forest} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} lookForTask={lookForTask} showProject={showProject} />
           ),
         )}
         <RevealMore
@@ -286,7 +300,9 @@ function OtherProject({
   lookForTask: LookForTask;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const ordered = useMemo(() => orderedTopLevelTasks(tasks), [tasks]);
+  const all = useMemo(() => orderedTopLevelTasks(tasks), [tasks]);
+  const forest = useMemo(() => buildDispatchForest(all), [all]);
+  const ordered = useMemo(() => all.filter((task) => !forest.nested.has(task.id)), [all, forest]);
   const overflow = Math.max(0, ordered.length - TASK_PREVIEW_LIMIT);
   const { revealed, more, collapse } = useReveal(overflow);
   const visible = ordered.slice(0, TASK_PREVIEW_LIMIT + revealed);
@@ -305,7 +321,7 @@ function OtherProject({
       {expanded && (
         <div className="workspace-other-project-tasks">
           {visible.map((task) => (
-            <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} lookForTask={lookForTask} />
+            <DispatchAwareRow key={task.id} task={task} forest={forest} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} lookForTask={lookForTask} />
           ))}
           {ordered.length > TASK_PREVIEW_LIMIT && (
             <RevealMore revealed={revealed} total={overflow} onMore={more} onCollapse={collapse} />
@@ -340,6 +356,8 @@ function useOtherProjectsOpen() {
 
 export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTaskId, selectedRemoteTaskId, spread, onTask, onRemoteTask, onTaskStarred, onHandoffFinished, onQueueChanged, outbound, notify }: TaskTreeProps) {
   const { lookForTask } = useTaskReadState(tasks, selectedTaskId);
+  // 哪几条的「派出的任务」展开着（记在本机，刷新后还在）。
+  const dispatchOpen = useDispatchOpenState();
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
   // 主列表看哪些行只由作用域决定（scopeTasks 是唯一判据，跟计数、筛选、铺开取数同源）。
   const scopedTasks = useMemo(() => scopeTasks(activeTasks, scope), [activeTasks, scope]);
@@ -367,6 +385,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
   );
   return (
     <TaskTreeActionsProvider value={treeActions}>
+    <DispatchOpenProvider value={dispatchOpen}>
     <SpreadRowProvider value={rowContext}>
       <nav ref={treeRef} className="workspace-task-tree" aria-label={taskMode ? "任务模式列表" : "任务树"} onScroll={hide}>
         <ScopedTaskTree
@@ -423,6 +442,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
         />
       )}
     </SpreadRowProvider>
+    </DispatchOpenProvider>
     </TaskTreeActionsProvider>
   );
 }

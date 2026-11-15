@@ -15,6 +15,7 @@ import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
 import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors.js";
 import { parseTaskCreationOrigin } from "@ash/shared/task-origin";
+import { resolveDispatchedBy } from "./task-dispatch.js";
 import { CliCommandValidationError, readCliStateScopes, validateCliCommand } from "@ash/shared/cli-commands";
 
 export type TaskRow = typeof tasks.$inferSelect;
@@ -127,6 +128,7 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   workflowAt: r.workflowAt ?? null,
   originTaskId: r.originTaskId ?? null,
   creationOrigin: parseTaskCreationOrigin(r.creationOrigin),
+  dispatchedBy: r.dispatchedBy ?? null,
   resumePrompt: r.resumePrompt ?? null,
   verifyRound: r.verifyRound ?? null,
   question: r.question ?? null,
@@ -303,6 +305,11 @@ export async function createTasks(
     .where(inArray(projects.id, projectIds));
   const repoByProject = new Map(projectRows.map((project) => [project.id, project.repoPath] as const));
   const worktreeDefaultByProject = new Map(projectRows.map((project) => [project.id, project.useWorktreeDefault] as const));
+  // 收在谁名下（判据见 task-dispatch.ts）：显式给的优先，否则按创建来源认。
+  const dispatchedBy = await resolveDispatchedBy(rows.map((row) => ({
+    ...row,
+    creationOrigin: row.creationOrigin === undefined ? null : row.creationOrigin,
+  })));
   const normalizedRows = await Promise.all(rows.map(async (row): Promise<typeof tasks.$inferInsert & { id: string }> => {
     const requested = row.useWorktree ?? worktreeDefaultByProject.get(row.projectId) ?? false;
     const useWorktree = requested && projectHealthLight(repoByProject.get(row.projectId)).isRepo;
@@ -310,6 +317,7 @@ export async function createTasks(
     return {
       ...rest,
       creationOrigin: row.creationOrigin === undefined ? JSON.stringify({ kind: "system" }) : row.creationOrigin,
+      dispatchedBy: dispatchedBy.get(row.id) ?? null,
       useWorktree,
       worktreeBase: useWorktree ? row.worktreeBase ?? null : null,
       // 审查任务（reviewOf 非空）不拷线：它本身就是别人那条线上「验证」那一站长出来的

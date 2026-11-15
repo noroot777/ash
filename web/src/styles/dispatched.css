@@ -1,0 +1,120 @@
+/* 右侧「派出的任务」那一格（task-detail/dispatched/DispatchedInspector.tsx）。
+   一行一个任务：状态点、标题、一行小字（执行器、用时），右端状态词。只有需要你处理的两种带颜色。 */
+.dispatched-pane {
+  padding: 2px 16px 20px;
+}
+
+.dispatched-head {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--t-xs);
+}
+
+.dispatched-head > span:first-child {
+  min-width: 0;
+  flex: 1;
+}
+
+.dispatched-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dispatched-list > li + li {
+  border-top: .5px solid var(--line);
+}
+
+.dispatched-row {
+  display: grid;
+  width: calc(100% + 16px);
+  min-height: 46px;
+  grid-template-columns: 7px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: 0 -8px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  padding: 6px 8px;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.dispatched-row:hover,
+.dispatched-row:focus-visible {
+  background: var(--hover-bg);
+}
+
+.dispatched-row.is-open {
+  background: var(--sel-bg);
+}
+
+.dispatched-row__mark {
+  display: grid;
+  width: 7px;
+  place-items: center;
+}
+
+.dispatched-row__main {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.dispatched-row__main > b {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: var(--w-regular);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dispatched-row__main > small {
+  overflow: hidden;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dispatched-row > em {
+  color: var(--muted);
+  font-size: var(--t-xs);
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.dispatched-row > em.is-ask { color: var(--amber); }
+.dispatched-row > em.is-bad { color: var(--red); }
+
+/* 竖轨图标右上角那个数（CountedIcon）。描一圈竖轨底色，跟图标线条分开。 */
+.insp-counted-icon {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+}
+
+.insp-counted-icon > i {
+  position: absolute;
+  top: -6px;
+  right: -9px;
+  min-width: 12px;
+  border-radius: var(--r-full);
+  background: var(--rail-bg, var(--panel));
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: var(--w-medium);
+  font-variant-numeric: tabular-nums;
+  line-height: 12px;
+  text-align: center;
+}
