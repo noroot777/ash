@@ -3,29 +3,34 @@
 .scheduled-message-tray { container-type: inline-size; display: flex; margin-bottom: 6px; flex-direction: column; gap: 2px; }
 .scheduled-message-tray > small { padding: 0 6px; color: var(--muted); font-size: var(--t-xs); }
 .scheduled-message-tray > p { margin: 0; padding: 0 6px; color: var(--red); font-size: var(--t-xs); }
-.scheduled-tray-line { display: flex; min-width: 0; min-height: 26px; align-items: center; gap: 10px; padding: 0 2px; color: var(--muted); font-size: var(--t-xs); }
+.scheduled-message-tray { --queue-summary-min: 7em; }
+/* 放不下时折到下一行，而不是把摘要挤没：摘要那一段自己留着最小宽度。 */
+.scheduled-tray-line { display: flex; min-width: 0; min-height: 26px; flex-wrap: wrap; align-items: center; gap: 2px 10px; padding: 0 2px; color: var(--muted); font-size: var(--t-xs); }
 .scheduled-tray-line button, .scheduled-message-row > .scheduled-message-summary { border: 0; background: none; padding: 0; color: inherit; font: inherit; text-align: left; }
 .scheduled-tray-line > .scheduled-tray-toggle { display: inline-flex; height: 24px; flex: none; align-items: center; gap: 5px; border-radius: var(--r-sm); padding: 0 6px 0 4px; color: var(--ink); font-weight: var(--w-medium); white-space: nowrap; }
 .scheduled-tray-toggle > svg { color: var(--muted); }
 .scheduled-tray-line > .scheduled-tray-toggle:hover { background: var(--raised); }
 .scheduled-tray-line > .scheduled-tray-attention { flex: none; color: var(--amber); white-space: nowrap; }
 .scheduled-tray-attention:hover { text-decoration: underline; text-underline-offset: 2px; }
-.scheduled-tray-head { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 8px; }
+.scheduled-tray-head { display: flex; min-width: var(--queue-summary-min); flex: 1 1 var(--queue-summary-min); align-items: center; gap: 8px; }
 .scheduled-tray-head > .scheduled-tray-head-summary { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-tray-head > .scheduled-tray-head-summary:hover { color: var(--ink); }
 
 /* 点开后的几行：谁排进来的 · 摘要 · 什么时候发 · 行尾的键。四格对成列，所以每一条和它那一行都
-   display: contents，格子直接落在列表这张网格上；摊开的全文横跨整行。 */
-.scheduled-tray-list { display: grid; max-height: min(240px, 34dvh); grid-template-columns: max-content minmax(0, 1fr) auto auto; align-items: center; column-gap: 12px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 0 2px 4px 22px; }
+   display: contents，格子直接落在列表这张网格上；摊开的全文横跨整行。
+   宽度怎么分：行尾的键按自己的宽度一个不少；摘要保底 --queue-summary-min，再分剩下的；来源和「什么时候发」
+   最多各占一截、放不下就截断（它们 overflow: hidden，最小贡献是 0）。不这样分时，一条长的等待说明加一颗
+   「直接发送」就能把整列摘要挤成 0 宽、点不开全文。 */
+.scheduled-tray-list { display: grid; max-height: min(240px, 34dvh); grid-template-columns: fit-content(32%) minmax(var(--queue-summary-min), 1fr) fit-content(36%) auto; grid-auto-rows: minmax(28px, auto); align-items: center; column-gap: 12px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 0 2px 4px 22px; }
 .scheduled-message-item, .scheduled-message-row { display: contents; }
-.scheduled-message-row > * { min-height: 28px; }
-.scheduled-message-source { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); font-size: var(--t-xs); white-space: nowrap; }
+.scheduled-message-source { display: block; min-width: 0; overflow: hidden; color: var(--faint); font-size: var(--t-xs); text-overflow: ellipsis; white-space: nowrap; }
+.scheduled-message-source > span { margin-left: 6px; }
 .scheduled-message-source.is-attention { color: var(--amber); }
 .scheduled-message-exit { font-variant-numeric: tabular-nums; }
 .scheduled-message-agent { color: var(--faint); }
-.scheduled-message-row > .scheduled-message-summary { overflow: hidden; color: var(--ink); font-size: var(--t-xs); text-overflow: ellipsis; white-space: nowrap; }
+.scheduled-message-row > .scheduled-message-summary { min-width: 0; overflow: hidden; padding: 6px 0; color: var(--ink); font-size: var(--t-xs); text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-message-row > .scheduled-message-summary[aria-expanded="true"] { color: var(--ink); font-weight: var(--w-medium); }
-.scheduled-message-when { display: flex; max-width: 22em; align-items: center; overflow: hidden; color: var(--faint); font-size: var(--t-xs); text-overflow: ellipsis; white-space: nowrap; }
+.scheduled-message-when { display: block; min-width: 0; overflow: hidden; color: var(--faint); font-size: var(--t-xs); text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-message-when.is-stuck { color: var(--amber); }
 .scheduled-message-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .scheduled-message-reveal { display: grid; width: 22px; height: 22px; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); opacity: 0; transition: opacity var(--dur-1); }
@@ -51,7 +56,7 @@
 
 /* 窄了先让「什么时候发」那一格让位，键一直在；再窄，引导键只留图标（读屏名不变）。 */
 @container (max-width: 480px) {
-  .scheduled-tray-list { grid-template-columns: max-content minmax(0, 1fr) auto; column-gap: 10px; padding-left: 14px; }
+  .scheduled-tray-list { grid-template-columns: fit-content(32%) minmax(var(--queue-summary-min), 1fr) auto; column-gap: 10px; padding-left: 14px; }
   .scheduled-message-when { display: none; }
 }
 @container (max-width: 360px) {

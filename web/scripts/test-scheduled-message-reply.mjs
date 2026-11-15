@@ -81,6 +81,55 @@ try {
       await context.close();
     }
   }
+  // 摘要那一列不许被挤没:一条长的等待说明(等同队任务)、一颗「直接发送」(前置任务已删)、一条审查答复
+  // 摆在一起,所有宽度下每条摘要都留着能读、能点的宽度,点下去摊开的是它的全文。收着那一行同理。
+  // 2026-11-15 审查实测:540px 时四列网格把摘要列算成 0 宽,两个宿主都中。
+  const mixed = [
+    { ...messages[0], id: "mine", origin: null, agent: "codex", text: "顺手调整上限",
+      wait: { kind: "queue", blockers: [{ id: "other", title: "这是一个正常长度的正在运行的前置任务", running: true }] } },
+    { ...messages[0], id: "review", origin: null, sessionRole: "reviewer", agent: "codex", text: "审查答复",
+      wait: { kind: "queue", blockers: [{ id: "other", title: "这是一个正常长度的正在运行的前置任务", running: true }] } },
+    { ...messages[0], id: "after", origin: null, agent: "codex", text: "无需再等的原话", mode: "after", afterTaskId: "deleted", afterDoneAt: null },
+  ];
+  for (const variant of ["single", "team"]) {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 750 } });
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.route("**/api/**", (route) => route.fulfill({ json: new URL(route.request().url()).pathname.endsWith("/scheduled-messages") ? mixed : [] }));
+    try {
+      await page.goto(`${base}/scripts/fixtures/scheduled-message-reply.html?variant=${variant}`);
+      const toggle = page.getByRole("button", { name: "排着 3 条", exact: true });
+      await toggle.waitFor();
+      const reachable = (selector) => page.evaluate((selector) => [...document.querySelectorAll(selector)].map((element) => {
+        const box = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + Math.min(box.width / 2, 20), box.top + box.height / 2);
+        return { text: element.textContent, width: Math.round(box.width), hit: element.contains(hit) };
+      }), selector);
+      for (const width of [1280, 1024, 800, 640, 600, 560, 540, 500, 480, 420, 390, 360, 320]) {
+        await resizeViewport(page, { width, height: 750 });
+        if (await toggle.getAttribute("aria-expanded") === "true") await toggle.click();
+        const head = await reachable(".scheduled-tray-head-summary");
+        assert.ok(head.length === 1 && head[0].width >= 40 && head[0].hit, `${variant} ${width}px 收着那一行的摘要被挤没：${JSON.stringify(head)}`);
+        await toggle.click();
+        await page.locator(".scheduled-tray-list").waitFor();
+        const summaries = await reachable(".scheduled-message-summary");
+        assert.equal(summaries.length, 3);
+        for (const summary of summaries) {
+          assert.ok(summary.width >= 60 && summary.hit, `${variant} ${width}px 摘要「${summary.text}」能读能点：${JSON.stringify(summary)}`);
+        }
+        assert.equal(await page.locator(".scheduled-message-actions").getByRole("button", { name: /直接发出/ }).count(), 1, `${variant} ${width}px 直接发送还在`);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${variant} ${width}px 页面不横溢`);
+      }
+      await page.locator('[data-message-id="after"] .scheduled-message-summary').click();
+      await page.locator('[data-message-id="after"] .scheduled-message-full').waitFor();
+      await resizeViewport(page, { width: 540, height: 750 });
+      await page.screenshot({ path: `${artifacts}scheduled-message-reply-${variant}-mixed-540.png` });
+      assert.deepEqual(errors, []);
+      console.log(`✓ ${variant} 混合输入：1280–320px 每条摘要都能读能点，收着那一行的摘要也在`);
+    } finally {
+      await page.close();
+    }
+  }
   const page = await browser.newPage({ viewport: { width: 390, height: 700 } });
   const demo = fileURLToPath(new URL("../../docs/demos/pending-input-demo.html", import.meta.url));
   await page.goto(`${base}/@fs${demo}`);
