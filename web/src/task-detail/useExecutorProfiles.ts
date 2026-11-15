@@ -2,7 +2,10 @@ import { useEffect, useState } from "react";
 import type { AgentExecutorProfile } from "@ash/shared";
 import { api } from "../lib/api.ts";
 
-/** 回复框要的执行器 profile 清单：读没读完、读没读成都要分得清（`@` 菜单据此说「正在读取 / 读取失败」）。 */
+/**
+ * 回复框要的执行器 profile：胶囊、`@` 召唤、选模型浮层都取它。从 ReplyBox.tsx 搬出来（那份顶到
+ * 700 行上限），读法一字未改：读失败是空表 + `failed`，`ready` 说「读过了」（成没成都算）。
+ */
 export function useExecutorProfiles() {
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [ready, setReady] = useState(false);
@@ -12,7 +15,7 @@ export function useExecutorProfiles() {
     setReady(false);
     setFailed(false);
     api.agents().then(
-      (next) => { if (alive) setProfiles(next); },
+      (nextProfiles) => { if (alive) setProfiles(nextProfiles); },
       () => {
         if (!alive) return;
         setProfiles([]);
