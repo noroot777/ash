@@ -5,7 +5,7 @@
 // （createTasks 的 `atomic`）：认领那一问、分组、任务、前置、串行队列，加上
 //   · 答复：写成一条待发送消息（执行型，带答复身份），由待发送托盘送进会话——它本来就扛重启、扛「回合被
 //     占着」「同队前项还在跑」，这里不再自己 continueTask；
-//   · 起跑：dispatch_launch_starts 一行，核实没人再欠起跑才销账，进程没了重启补起（dispatch-launch-start.ts）。
+//   · 起跑：dispatch_start_debts 每条任务一行，核实起了才销、用户按停就划掉，进程没了重启逐条补起（dispatch-launch-start.ts）。
 // 任何一步失败整笔回滚：单子原样还在，一条任务都没留下，再按一次不会多建；认领落空同样整笔不落。所以没有
 // 「失败了把单子挂回去」的补偿写。开工起点这类仓库准备在事务之前做，失败时还没认领。
 //
@@ -17,7 +17,7 @@ import { dispatchDefaultTarget, parseDispatchTarget } from "@ash/shared/dispatch
 import type { QuestionRecord } from "@ash/shared/questions";
 import { nanoid } from "nanoid";
 import { db } from "./db/index.js";
-import { agents, dispatchLaunchStarts, groups, queueItems, scheduledMessages } from "./db/schema.js";
+import { agents, dispatchStartDebts, groups, queueItems, scheduledMessages } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { visibleTaskIds } from "./auth/visibility.js";
@@ -125,7 +125,7 @@ export async function launchDispatchPlan(c: Context, task: TaskRow, plan: Dispat
           await transaction.insert(queueItems).values(ids.map((taskId, position) => ({ taskId, queueId, position, createdAt: at })));
         }
         await transaction.insert(scheduledMessages).values(answer);
-        await transaction.insert(dispatchLaunchStarts).values({ groupId, taskId: task.id, createdAt: at });
+        await transaction.insert(dispatchStartDebts).values(ids.map((taskId) => ({ taskId, groupId, leadTaskId: task.id, createdAt: at })));
       },
       onCommitted: () => { committed = true; },
     });

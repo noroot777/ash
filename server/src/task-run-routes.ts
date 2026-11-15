@@ -16,6 +16,8 @@ import { mountDuetGateRoutes } from "./duet/gate-route.js";
 import { runTask } from "./orchestrator.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { holdForPrerequisites, withdrawPrerequisiteRequest } from "./prerequisite-launch.js";
+import { withPrerequisiteLock } from "./prerequisite-gate.js";
+import { forgetDispatchStart } from "./dispatch-launch-start.js";
 import { preparePendingCheckpointStart, recoverPendingCheckpoints } from "./pending-checkpoint-recovery.js";
 import { cancelQueueAdvance } from "./queue-advance-retry.js";
 import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
@@ -228,6 +230,9 @@ api.post("/tasks/:id/stop", async (c) => {
   // 有没有东西可停：判据见 stopVerdict（回复框、讨论页、命令面板那颗停止读同一份）。
   const verdict = stopVerdict(await readActionFacts(r));
   if (!verdict.ok) return refuse(c, taskId, "停止", verdict);
+  // 派活单派出、还欠着起跑的这一条：按停就是撤销那笔「派出去就开工」，之后的重试、重启补起都不再替它起
+  //（跟开工判定同一把前置锁，dispatch-launch-start.ts）。
+  await withPrerequisiteLock(taskId, () => forgetDispatchStart(taskId));
   if (await cancelQueueAdvance(taskId)) return c.json({ stopped: true, note: "已撤销待启动的队列运行请求" });
   const withdrawn = await withdrawPrerequisiteRequest(taskId);
   if (withdrawn === "withdrawn") return c.json({ stopped: true, note: "已撤销「前置站齐就开工」的请求" });
