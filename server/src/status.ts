@@ -264,6 +264,9 @@ async function writeTaskStatus(
     void import("./pending-after.js").then(({ flushPendingAfterTask }) => flushPendingAfterTask(taskId))
       .catch((err) => console.error(`[ash] flushPendingAfterTask(${taskId}) failed:`, err));
   }
+  // 建在它上面的任务：页面上那句「它到哪一步了」跟着变，等齐就起的重判一遍（prerequisite-launch.ts）。
+  void import("./prerequisite-launch.js").then(({ notePrerequisiteProgress }) => notePrerequisiteProgress(taskId))
+    .catch((err) => console.error(`[ash] notePrerequisiteProgress(${taskId}) failed:`, err));
   return true;
 }
 

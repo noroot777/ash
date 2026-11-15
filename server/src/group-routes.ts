@@ -13,7 +13,9 @@ import { pauseGroup, runGroupInBackground } from "./scheduler.js";
 import { createTasks } from "./task-store.js";
 import { id, now, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
-import { visibleProjectIds } from "./auth/visibility.js";
+import { visibleProjectIds, visibleTaskIds } from "./auth/visibility.js";
+import { batchPrerequisiteEdges, prerequisiteRefusal } from "./prerequisite-routes.js";
+import { republishPrerequisiteView } from "./prerequisite-view.js";
 import { executorScopeForOwner } from "./auth/owned-executors.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
 import { detachTaskRefs } from "./task-refs.js";
@@ -160,6 +162,12 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
 
   // Pre-generate ids (chain 用得到).
   const ids = specs.map(() => id());
+  // 前置：按 key 认同一批里的、认不出的当已有任务（prerequisite-routes.ts）。已有的要看得见。
+  const prerequisites = batchPrerequisiteEdges(specs, ids, !!b.stack);
+  if (typeof prerequisites === "string") return c.json({ error: prerequisites }, 400);
+  const visible = new Set(await visibleTaskIds(actorOf(c), prerequisites.existing));
+  const hidden = prerequisites.existing.find((taskId) => !visible.has(taskId));
+  if (hidden) return c.json({ error: `前置任务 ${hidden} 不存在（同一批里的请用 key 指）` }, 404);
 
   const firstLine = (body?: string) =>
     (body ?? "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 30) ?? "";
@@ -236,11 +244,15 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
             ids.map((tid, i) => ({ taskId: tid, queueId, position: i, createdAt: qts })),
           );
         }
-      : undefined);
+      : undefined, undefined, [], prerequisites.edges);
   } catch (error) {
     if (error instanceof CliCommandValidationError) return c.json({ error: error.message }, 400);
+    const refused = prerequisiteRefusal(error);
+    if (refused) return c.json(refused.body, refused.status);
     throw error;
   }
+  // 已有的前置那边也多了「谁建在它上面」。
+  if (prerequisites.existing.length) await republishPrerequisiteView(prerequisites.existing);
 
   if (b.run) void runGroupInBackground(groupId);
   return c.json(

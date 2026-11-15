@@ -42,6 +42,10 @@
       "types": "./src/scheduled-message-wait.ts",
       "default": "./src/scheduled-message-wait.ts"
     },
+    "./prerequisites": {
+      "types": "./src/prerequisites.ts",
+      "default": "./src/prerequisites.ts"
+    },
     "./branch-plan": {
       "types": "./src/branch-plan.ts",
       "default": "./src/branch-plan.ts"

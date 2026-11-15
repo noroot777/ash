@@ -150,7 +150,10 @@ export async function inheritedParentCommit(task: BranchTask, repo: string, pare
 }
 
 export async function branchDependency(task: BranchTask, repo: string, reads?: BranchPlanReads): Promise<BranchDependency | null> {
-  const contains = reads?.contains ?? ((ancestor: string, descendant: string) => containsCommit(repo, ancestor, descendant));
+  // 按前置开工的任务：每条前置各判一次，取最要紧的那条（prerequisite-dependency.ts）。
+  const { prerequisiteDependency } = await import("./prerequisite-dependency.js");
+  const viaPrerequisites = await prerequisiteDependency(task, repo, reads);
+  if (viaPrerequisites !== undefined) return viaPrerequisites;
   if (!task.baseTaskId) {
     if (task.mergeTargetBranch) return null;
     const target = task.acceptedTargetBranch || task.worktreeBase;
@@ -167,10 +170,24 @@ export async function branchDependency(task: BranchTask, repo: string, reads?: B
   if (!task.mergeTargetBranch) return result("unknown", "最终合入分支未确定，请点验收台第一行的目标分支重设合入目标，再检查父成果依赖");
   if (!task.worktreeStartCommit) return result("unknown", "未记录继承的父提交，请恢复任务的开工记录后再验收");
   const inherited = (await inheritedParentCommit(task, repo, parent, reads))!;
+  return inheritedDependency(task, repo, task.baseTaskId, parent, inherited, reads);
+}
+
+/**
+ * 「从 `parent` 继承来的那一版 `inherited` 进没进目标分支」。单父（`baseTaskId`）与多条前置
+ * （prerequisite-dependency.ts，每条前置一次）共用这一份判据。
+ */
+export async function inheritedDependency(task: BranchTask, repo: string, parentId: string, parent: BranchTask | undefined,
+  inherited: string, reads?: BranchPlanReads): Promise<BranchDependency> {
+  const contains = reads?.contains ?? ((ancestor: string, descendant: string) => containsCommit(repo, ancestor, descendant));
+  const title = parent?.title ?? parentId;
+  const result = (state: BranchDependency["state"], message: string): BranchDependency =>
+    ({ taskId: parent?.id ?? null, title, state, message });
+  if (!task.mergeTargetBranch) return result("unknown", "最终合入分支未确定，请点验收台第一行的目标分支重设合入目标，再检查父成果依赖");
   if (await contains(inherited, task.mergeTargetBranch)) {
     return result("ready", `继承的父成果已进入 ${task.mergeTargetBranch}`);
   }
-  const receipts = await db.select().from(taskBranchReceipts).where(eq(taskBranchReceipts.taskId, task.baseTaskId));
+  const receipts = await db.select().from(taskBranchReceipts).where(eq(taskBranchReceipts.taskId, parentId));
   for (const receipt of receipts) {
     if (await contains(inherited, receipt.sourceCommit) && await contains(receipt.mergeCommit, task.mergeTargetBranch)) {
       return result("needs_update", `「${title}」依赖的版本经提交历史调整后已合入 ${task.mergeTargetBranch}，需要更新子分支基线并核对验证结果`);
@@ -215,6 +232,11 @@ export async function dependentTasks(repo: string, projectId: string, taskId: st
     } else if (relationship === "legacy") {
       blocked.push(row);
     }
+  }
+  // 按前置开工、手里有这条任务的代码、而这份代码还没进目标分支的下游：删了它们就再也等不到它。
+  const { prerequisiteDependentsBlocking } = await import("./prerequisite-dependency.js");
+  for (const row of await prerequisiteDependentsBlocking(repo, taskId)) {
+    if (!blocked.some((existing) => existing.id === row.id)) blocked.push(row);
   }
   return blocked;
 }

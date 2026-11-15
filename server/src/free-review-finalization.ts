@@ -71,4 +71,7 @@ export async function finalizeFreeReview(state: typeof regressionEvidence.$infer
   }, `${text}${authority.target ? "" : "原提问随本轮终止失效。"}${recurrence ? recurrenceTimeline(recurrence.length) : ""}`),
     `${state.generation}:timeline`));
   await step("publish", async () => { bus.publish({ type: "task.review", taskId: run.taskId }); });
+  // 审查链在这里走完（通过 / 轮数用尽）：建在它上面的任务重判一遍站没站稳（prerequisite-launch.ts）。
+  const { notePrerequisiteProgress } = await import("./prerequisite-launch.js");
+  notePrerequisiteProgress(run.taskId);
 }

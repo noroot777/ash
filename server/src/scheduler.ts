@@ -16,6 +16,7 @@ import { waitForStartReceipt } from "./task-start-receipt.js";
 import { reportGroupStartFailure } from "./group-start-failure.js";
 import { clearQueueAdvanceIntent, recordQueueAdvanceIntent, refuseQueueAdvance } from "./queue-advance-admission.js";
 import { heldByMonitors, withMonitorHolds, type QueueRow } from "./queue-monitor-hold.js";
+import { holdForPrerequisites } from "./prerequisite-launch.js";
 
 const MAX_PARALLEL = 4;
 let pauseGeneration = 0;
@@ -199,6 +200,8 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
     // 任何一个入口漏检都会撤销用户的暂停意图(第 1 轮审查实测:暂停组里入队,
     // 前驱当场被拉起)。成员同组是本文件的不变量,看 next 的 groupId 就够。
     if (candidate.groupId && (await isPaused(candidate.groupId))) return "paused";
+    // 队首还在等前置站齐：不起，这一次「轮到它」已经记成等齐就起，齐了由那边再推这条队列。
+    if (await holdForPrerequisites(candidate, { source: "queue" })) return null;
     attempt.candidate ??= { taskId: candidate.id, generation: candidate.resumePromptGeneration };
     const advanceRequest = request ?? await requestQueueAdvance(queueId, candidate);
     if (!advanceRequest) return "paused";
@@ -580,6 +583,7 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
         if (await preparePendingCheckpointStart(taskId)) return;
         const before = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
         if (!before || (before.status === "paused" && (before.resumePrompt || await heldByMonitors(taskId)))) return;
+        if (await holdForPrerequisites(before, { source: "group" })) return;
         const owner = claimOwnTurn(taskId);
         if (!owner) return;
         const reservation = taskQueueReservation(before);

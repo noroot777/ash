@@ -139,7 +139,9 @@ const BUDGETS: Record<string, number> = {
   "mcp/get_task": 130,
   "mcp/list_groups": 360,
   "mcp/list_monitors": 430,
-  "mcp/list_tasks": 500,
+  // 2026-11-15 +100（500 → 590 实测）：返回字段里多了 prerequisites（前置到哪一步 / 在不在等），派活的
+  // 智能体靠它看一串任务卡在哪，不再在任务说明里让执行者「没合入就提问等着」。
+  "mcp/list_tasks": 600,
   "mcp/patch_task": 1100,
   "mcp/pause_task": 950,
   "mcp/queue_insert": 220,
@@ -154,7 +156,8 @@ const BUDGETS: Record<string, number> = {
   "mcp/resolve_group": 530,
   "mcp/resolve_project": 250,
   "mcp/run_group": 320,
-  "mcp/run_task": 340,
+  // 2026-11-15 +10：有前置没站稳时回 waiting 的那半句。
+  "mcp/run_task": 350,
   // 「怎么登记回归」的机制住在这里而不在每轮前言（见 mcp/src/tools/monitor.ts 文件头）：
   // 一份工具说明换掉每一轮都重发一遍，所以它大得有理由，但仍然要有个顶。
   "mcp/start_monitor": 5100,
