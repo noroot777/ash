@@ -24,7 +24,7 @@ assert.match(machines, /is-selected/, "远程任务行应有与普通侧栏一�
 assert.match(shell, /<RemoteTaskDetail/, "工作区主区应渲染远程任务代理视图");
 assert.match(detail, /上下文从该机器同步，回复也由该机器继续执行/, "远程位置与路由必须持续可见");
 assert.match(detail, /api\.remoteTaskReply/, "回复必须经本机代理发往远端");
-assert.match(detail, /<QuestionCard/, "远程任务处于提问态时应显示标准答复卡");
+assert.match(detail, /<QuestionSlot/, "远程任务处于提问态时，回复框那一格是标准答题卡");
 assert.match(detail, /api\.remoteTaskAnswer/, "远程提问必须走 answer 代理而不是普通 reply");
 assert.match(detail, /task\.question \? "等答复"/, "远程提问态的顶栏应明确显示等答复");
 assert.match(detail, /local\.handoff\?\.direction !== "out"/, "所有权回到本机后代理视图应自动退出");

@@ -3,7 +3,7 @@
 // 都刻意与它同构 —— 两边长得不一样会被当成 bug 报上来。
 //
 // 从 TeamView.tsx 搬出来独立成文件（那份已经顶到 700 行上限），搬的是整块、一字未改。
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ScheduledMessage, Task, TaskListItem } from "@ash/shared";
 import { cliCommandsForMode } from "@ash/shared/cli-commands";
 import { ScheduledMessageTray, useScheduledMessages } from "../components/ScheduledMessages.tsx";
@@ -20,6 +20,7 @@ import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import { useReplyLayout } from "../task-detail/useReplyLayout.ts";
 import { registerReplyInput } from "../task-detail/replyQuote.ts";
+import { keepReplyBox, type ReplyBoxElement } from "../task-detail/QuestionSlot.tsx";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import {
   ReplyResizeHandle,
@@ -39,12 +40,15 @@ export function TeamReplyBox({
   task,
   tasks,
   onSend,
+  boxSlot,
 }: {
   task: Task;
   /** 「等某任务完成后发送」的候选,以及托盘里报出在等谁。 */
   tasks: TaskListItem[];
   // 返回 null = 用户在确认闸上取消了:草稿和附件一个都别清(与 task-detail/ReplyBox 同口径)。
   onSend: (text: string, attachments: string[], options: LaterChoice) => Promise<ReplyTaskResult | null>;
+  /** 框那一格交给谁摆（答题卡）：拿到的是框本身，可以给它 `hidden`。 */
+  boxSlot?: (box: ReplyBoxElement) => ReactNode;
 }) {
   const draft = useTaskReplyDraft(task.id);
   const shellRef = useReplyLayout();
@@ -179,6 +183,8 @@ export function TeamReplyBox({
       />
       {error && <p>{error}</p>}
       </div>
+      {/* 调度者问你的时候，这一格由答题卡占着（task-detail/QuestionSlot.tsx）。 */}
+      {(boxSlot ?? keepReplyBox)(
       <div className="team-reply-box">
         <ReplyResizeHandle targetRef={inputRef} {...replyHeight} />
         <textarea
@@ -211,7 +217,8 @@ export function TeamReplyBox({
             taskId={task.id}
           />
         </footer>
-      </div>
+      </div>,
+      )}
     </div>
   );
 }

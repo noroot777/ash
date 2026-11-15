@@ -3,7 +3,7 @@ import type { ConversationDebateFeedRow } from "./conversationDebateRows.ts";
 import { conflictContextEvent, isConflictHandoff } from "./systemNoticeModel.ts";
 import { verifyMarkOf } from "./conversationNotes.ts";
 import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
-import { isPreviewLifecycleNotice, noticeView, turnFailureView, type NoticeContext, type NoticeView } from "./timelineNoticeCopy.ts";
+import { isUnshownNotice, noticeView, turnFailureView, type NoticeContext, type NoticeView } from "./timelineNoticeCopy.ts";
 import type { CrashedTurn } from "./turnFailure.ts";
 import { absorbs, noVerdictCauseView, noVerdictPartId, type LaneNoVerdict } from "./reviewNoVerdictCause.ts";
 import { composeFootnote, laneVerdictEvent, laneVerdictView, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
@@ -305,11 +305,11 @@ function attach<Row extends { kind: string }>(rows: Row[], acc: Accessors<Row>):
 }
 
 /**
- * 认归属之前就拿掉、哪儿都不出现的：预览开关那几种老记录（见 isPreviewLifecycleNotice），以及
+ * 认归属之前就拿掉、哪儿都不出现的：预览开关那几种老记录、提问那一轮的结算说明（见 isUnshownNotice），以及
  * 缘由已经写到它起头的回合头上的系统续跑记录（见 turnCause）。
  */
 function shown(item: ConversationItem): boolean {
-  return item.kind !== "event" || (!item.onTurnHead && !isPreviewLifecycleNotice(item.text));
+  return item.kind !== "event" || (!item.onTurnHead && !isUnshownNotice(item.text));
 }
 
 export function conversationSystemRows(

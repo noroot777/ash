@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import type { AgentExecutorProfile, AgentType, ScheduledMessage, SkillEntry, Task, TaskListItem } from "@ash/shared";
+import type { AgentType, ScheduledMessage, SkillEntry, Task, TaskListItem } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
 import { parseCliCommand } from "@ash/shared/cli-commands";
 import { PencilSimple, X } from "@phosphor-icons/react";
@@ -17,7 +17,7 @@ import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailabili
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { useReplyLayout } from "./useReplyLayout.ts";
 import { isMenuPickKeyEvent, isSendKeyEvent } from "../lib/sendKey.ts";
-import { api, type ReplyTaskResult } from "../lib/api.ts";
+import type { ReplyTaskResult } from "../lib/api.ts";
 import { useProviders } from "../lib/modelCatalog.ts";
 import { AgentModelPicker } from "./AgentModelPicker.tsx";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "./Attachments.tsx";
@@ -27,11 +27,13 @@ import { useReplyMention } from "./replyMention.ts";
 import { applySlashPick, mergeSlashItems, slashQuery, slashSendsAsTyped, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import { useStandingExecutor, type StandingExecutor } from "./useStandingExecutor.ts";
+import { useExecutorProfiles } from "./useExecutorProfiles.ts";
 import { registerReplyInput } from "./replyQuote.ts";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import { ScreenshotAnnotation } from "../page-annotation/ScreenshotAnnotation.tsx";
 import { screenshotCandidates, type AnnotationReply } from "../page-annotation/model.ts";
 import type { ConversationItem } from "./conversationModel.ts";
+import { keepReplyBox, type ReplyBoxElement } from "./QuestionSlot.tsx";
 import { parseAttachmentText } from "./utils.ts";
 import {
   attachmentsFromPaths,
@@ -62,6 +64,7 @@ export function ReplyBox({
   moreRef,
   conversationItems = [],
   tasks = [],
+  boxSlot,
 }: {
   task: Task;
   hasConversation: boolean;
@@ -118,6 +121,8 @@ export function ReplyBox({
   conversationItems?: ConversationItem[];
   /** 「等某任务完成后发送」的候选,以及托盘里报出在等谁。 */
   tasks?: TaskListItem[];
+  /** 框那一格交给谁摆（答题卡，见 QuestionSlot.tsx）：拿到的是框本身，可以给它 `hidden`。 */
+  boxSlot?: (box: ReplyBoxElement) => ReactNode;
 }) {
   const draft = useTaskReplyDraft(task.id);
   const shellRef = useReplyLayout();
@@ -144,9 +149,7 @@ export function ReplyBox({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // null = 没拖过,交给行数自动撑高(useAutoGrowTextarea)
   const replyHeight = useReplyHeight(SINGLE_REPLY_PIN);
-  const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
-  const [profilesReady, setProfilesReady] = useState(false);
-  const [profilesFailed, setProfilesFailed] = useState(false);
+  const { profiles, ready: profilesReady, failed: profilesFailed } = useExecutorProfiles();
   const providers = useProviders();
   // 执行器名只用于提示文案：没钉 profile 时按「该类型的默认执行器」报，与运行侧
   // resolveExecutorFor 的降级口径一致，别让提示说出一个跑起来根本用不上的名字。
@@ -223,21 +226,6 @@ export function ReplyBox({
     if (wasQueueing.current && !queueing) void scheduled.reload({ quiet: true });
     wasQueueing.current = queueing;
   }, [queueing, scheduled.reload]);
-
-  useEffect(() => {
-    let alive = true;
-    setProfilesReady(false);
-    setProfilesFailed(false);
-    api.agents().then(
-      (nextProfiles) => { if (alive) setProfiles(nextProfiles); },
-      () => {
-        if (!alive) return;
-        setProfiles([]);
-        setProfilesFailed(true);
-      },
-    ).finally(() => { if (alive) setProfilesReady(true); });
-    return () => { alive = false; };
-  }, []);
 
   // 派生命令(ash 自己的)排在技能前面,中间画一条线:前者换的是「谁来干」,
   // 后者只是给这一轮加一句提示词,点错的代价差着量级。
@@ -560,6 +548,8 @@ export function ReplyBox({
       {commandResult?.taskId === task.id && <p className="task-reply-command-result" role="status" aria-label="命令结果">{commandResult.text}</p>}
       {topRail}
       </div>
+      {/* 有问题在等时，这一格由答题卡占着（QuestionSlot）。 */}
+      {(boxSlot ?? keepReplyBox)(
       <div className="task-reply-box">
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />
         <AgentPlate name={activeAgent} />
@@ -685,7 +675,8 @@ export function ReplyBox({
             taskId={task.id}
           />
         </div>
-      </div>
+      </div>,
+      )}
     </div>
   );
 }

@@ -10,7 +10,7 @@ import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { ConversationFeed } from "../task-detail/ConversationFeed.tsx";
 import { buildConversationItems, type TimelineEntry } from "../task-detail/conversationModel.ts";
-import { QuestionCard } from "../task-detail/QuestionCard.tsx";
+import { QuestionSlot } from "../task-detail/QuestionSlot.tsx";
 
 const POLL_MS = 2_000;
 
@@ -201,26 +201,22 @@ export function RemoteTaskDetail({
             sessions={snapshot?.sessions ?? []}
             loading={loading}
             error={error}
-            dock={task.question ? (
-              <QuestionCard
-                task={task}
-                onAnswer={async (answer, input) => {
-                  await api.remoteTaskAnswer(archive.id, target.url, answer, input);
-                  notify("已发送答复，任务正在远端续跑");
-                  await refresh(true);
-                }}
-              />
-            ) : undefined}
           />
           <div className="task-reply-shell remote-task-reply">
             {sendError && <p className="task-reply-error">{sendError}</p>}
+            {/* 提问在等时，回复框那一格是答题卡（跟任务页同一副形状，见 task-detail/QuestionSlot.tsx）。 */}
+            <QuestionSlot task={task} onAnswer={async (answer, input) => {
+              await api.remoteTaskAnswer(archive.id, target.url, answer, input);
+              notify("已发送答复，任务正在远端续跑");
+              await refresh(true);
+            }} box={
             <div className="task-reply-box">
               <textarea
                 ref={inputRef}
                 value={text}
                 rows={3}
                 disabled={!snapshot || sending || !canReply || Boolean(task.question)}
-                placeholder={task.question ? "请先答复上方问题" : canReply ? `回复将发送到 ${target.name} 执行` : "该类型任务暂不支持从代理视图回复"}
+                placeholder={task.question ? "先答复上面的问题" : canReply ? `回复将发送到 ${target.name} 执行` : "该类型任务暂不支持从代理视图回复"}
                 aria-label="回复远程任务"
                 onChange={(event) => setText(event.target.value)}
                 onKeyDown={(event) => {
@@ -237,6 +233,7 @@ export function RemoteTaskDetail({
                 </button>
               </div>
             </div>
+            } />
           </div>
         </section>
       </div>

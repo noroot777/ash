@@ -25,13 +25,12 @@ import type { ConversationReviewLane } from "./conversationReviewLanes.ts";
 import type { ReviewTarget } from "../review/reviewTarget.ts";
 import { CommandReply, SystemAuthoredMessage } from "./SystemNotice.tsx";
 import { isReviewSystemPrompt } from "./systemNoticeModel.ts";
-import { isPreviewLifecycleNotice, noticeView, type NoticeContext } from "./timelineNoticeCopy.ts";
+import { isUnshownNotice, noticeView, type NoticeContext } from "./timelineNoticeCopy.ts";
 import { FootnoteLine } from "./FootnoteLine.tsx";
 import { ReviewBubble } from "./ReviewBubble.tsx";
 import { reviewProgress } from "./reviewProgress.ts";
 import { footnoteKey, receiptsKey, type FootnotePart, type TurnFootnote } from "./turnFootnote.ts";
 import { crashedTurns } from "./turnFailure.ts";
-import { QuestionDock } from "./QuestionDock.tsx";
 import { useJustEnded } from "./useJustEnded.ts";
 import { conversationKeys } from "./conversationKeys.ts";
 import {
@@ -288,7 +287,6 @@ export function ConversationFeed({
   error,
   forkBlockedReason,
   footer,
-  dock,
   onForkReply,
   onAskSideChat,
   reviews,
@@ -314,12 +312,6 @@ export function ConversationFeed({
   error: Error | null;
   forkBlockedReason?: string | null;
   footer?: React.ReactNode;
-  /**
-   * 停在会话下方、不跟着滚的一条：待答复的提问卡走这里。
-   * 跟 `footer` 的区别是它在滚动容器**外面**——问题一直在手边，
-   * 也不会被「回到底部」那颗浮动按钮压住。
-   */
-  dock?: React.ReactNode;
   onForkReply?: (replyId: string) => void;
   /** 回合尾「更多」里的「在侧聊里问这一段」。不给就没有这一项（没有侧聊的视图）。 */
   onAskSideChat?: (quote: string) => void;
@@ -494,8 +486,8 @@ export function ConversationFeed({
     if (item.kind === "user") {
       return <UserMessage key={keys.get(item.id) ?? item.id} item={item} preserveSystemStyle={preserveSystemStyle} onReuse={onReuseInput} />;
     }
-    // 辩论兜底那一路不经过 conversationSystemRows，预览开关那几种老记录在这里同样拿掉。
-    if (isPreviewLifecycleNotice(item.text)) return null;
+    // 辩论兜底那一路不经过 conversationSystemRows，不画的那几种旁注（isUnshownNotice）在这里同样拿掉。
+    if (isUnshownNotice(item.text)) return null;
     if (preserveSystemStyle) {
       return (
         <p
@@ -612,7 +604,6 @@ export function ConversationFeed({
         </div>
         <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={conversationTailKey(items)} inputs={inputs} revealReady={bodyReady} />
       </div>
-      <QuestionDock>{dock}</QuestionDock>
     </ImagePreviewGroup>
     </ReceiptReviewContext.Provider>
     </MessageDeleteProvider>

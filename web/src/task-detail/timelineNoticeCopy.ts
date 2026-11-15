@@ -17,6 +17,7 @@
 // 那几句，其余一律是回执。只有这一处还在读原文。
 import { LEGACY_SYS_MARKER, STAGE_LABELS, type TaskStage, type TurnInterruption } from "@ash/shared";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
+import { isQuestionSettleNote } from "@ash/shared/questions";
 import type { TimelineNotice, TimelineReviewSource } from "@ash/shared/timeline-notice";
 import { previewNoticeText } from "../lib/previewUrl.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
@@ -300,4 +301,12 @@ const PREVIEW_LIFECYCLE = /^(?:自由工作流预览已打开[（：]|预览已�
 
 export function isPreviewLifecycleNotice(text: string): boolean {
   return PREVIEW_LIFECYCLE.test(text.replace(/^〔系统〕/, "").trim());
+}
+
+/**
+ * 哪儿都不画的旁注：预览开关那几种老记录（上面），以及提问那一轮的结算说明（「本回合以提问暂停,
+ * 等待答复:「<问题全文>」」）——问题在等时就在答题卡上，答完跟着答案留在你那颗气泡里。
+ */
+export function isUnshownNotice(text: string): boolean {
+  return isPreviewLifecycleNotice(text) || isQuestionSettleNote(text);
 }
