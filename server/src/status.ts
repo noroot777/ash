@@ -14,6 +14,7 @@ import { releaseTerminalLanding } from "./task-complete.js";
 import { directionIdentityCleared } from "./task-direction-epoch.js";
 import { clearStallFailure } from "./turn-stall-verdict.js";
 import { monitorHoldPatch } from "./queue-monitor-hold.js";
+import { holdOwedPatch } from "./dispatch-hold-owed.js";
 import { heldFollowUpPatch } from "./follow-up-held.js";
 import { afterStatusLanded, stageQueueAdvance } from "./turn-release.js";
 
@@ -182,6 +183,8 @@ async function writeTaskStatus(
   Object.assign(patch, heldFollowUpPatch(status, opts?.holdFollowUp));
   // 「这段暂停在等哨兵」跟状态同一笔落下、同一笔消费(queue-monitor-hold.ts)。
   Object.assign(patch, await monitorHoldPatch(taskId, cur, status, { quiet: !!quietAdvance, sideTurn: !!opts?.sideTurn }));
+  // 「欠一次起跑」同理:真起跑了 / 落终态才销账(dispatch-hold-owed.ts)。
+  Object.assign(patch, holdOwedPatch(status, { sideTurn: !!opts?.sideTurn }));
   // ── 条件写的那一条语句 ───────────────────────────────────────────────────────
   // 两档条件是两条独立链路各自带进来的,互不替代,这里取并集:
   //   · `expectStatus` —— 库里当前状态必须还是它列的那几个之一(执行占位认领)

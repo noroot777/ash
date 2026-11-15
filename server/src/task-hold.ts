@@ -25,14 +25,15 @@ export type HoldReader = Pick<typeof db, "select">;
 export type DispatchHold = { byTaskId: string; byTitle: string };
 export type TaskHold = { kind: "group"; groupId: string } | ({ kind: "dispatch" } & DispatchHold);
 
-/** 链再长也是脏数据（正常的派活不会这么深），走到头就当没按住。 */
-const MAX_DEPTH = 64;
-
-/** 顺着 dispatched_by 往上，第一条按了「全部停下」的（不含自己）。成环时每条只走一次。 */
+/**
+ * 顺着 dispatched_by 往上，第一条按了「全部停下」的（不含自己）。一直走到头，不设层数上限 —— 前端
+ * （web/src/lib/dispatchHold.ts）和清点名下（dispatch-hold.ts dispatchTree）都走到头，这里截断就会
+ * 出现「界面说停着、服务端放行」。成环时每条只走一次。
+ */
 export async function dispatchHoldOf(taskId: string, reader: HoldReader = db): Promise<DispatchHold | null> {
   const seen = new Set([taskId]);
   let next = (await reader.select({ by: tasks.dispatchedBy }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.by ?? null;
-  for (let depth = 0; next && !seen.has(next) && depth < MAX_DEPTH; depth++) {
+  while (next && !seen.has(next)) {
     seen.add(next);
     const up = (await reader.select({ id: tasks.id, title: tasks.title, holdAt: tasks.dispatchHoldAt, by: tasks.dispatchedBy })
       .from(tasks).where(eq(tasks.id, next))).at(0);

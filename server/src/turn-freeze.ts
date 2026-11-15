@@ -20,7 +20,7 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { markStopped, takeStartFreezeDetail } from "./runs.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
-import { dispatchHoldText, taskHoldOf } from "./task-hold.js";
+import { dispatchHoldOf, dispatchHoldText, taskHoldOf } from "./task-hold.js";
 import { oweHeldStart } from "./dispatch-hold-owed.js";
 
 export type TurnFreeze = { reason: string } & (
@@ -30,6 +30,13 @@ export type TurnFreeze = { reason: string } & (
   | { source: "dispatch-hold"; settle: "paused"; overrideRestorable: false; byTaskId: string }
   | { source: "archive" | "delete"; settle: "canceled"; overrideRestorable: false }
 );
+
+/**
+ * 起跑前要不要按持久事实复查：true = 全查（无人值守的启动、重试、审查重跑）；`"dispatch-hold"` =
+ * 只查「名下全部停下」—— 智能体调 run_task：分组暂停对它照旧放行（同用户点运行），但派它的那条
+ * 按了停就不许起（task-hold.ts）。入口那道检查离 spawn 隔着一串 await，停在其间落下只有这里接得住。
+ */
+export type FreezeGuard = boolean | "dispatch-hold";
 
 export class FrozenTurn extends Error {
   constructor(reason: string) {
@@ -46,8 +53,14 @@ export class FrozenTurn extends Error {
  *   （重试按钮、自由审查重跑）。普通续聊不查：在一个 queued/暂停分组的任务上发消息本来
  *   就允许，那不是被冻结的启动。
  */
-export async function freezeFacts(taskId: string, checkFacts = false): Promise<TurnFreeze | null> {
+export async function freezeFacts(taskId: string, checkFacts: FreezeGuard = false): Promise<TurnFreeze | null> {
   if (!checkFacts) return null;
+  if (checkFacts === "dispatch-hold") {
+    const hold = await dispatchHoldOf(taskId);
+    return hold
+      ? { reason: dispatchHoldText(hold), source: "dispatch-hold", settle: "paused", overrideRestorable: false, byTaskId: hold.byTaskId }
+      : null;
+  }
   const task = (await db
     .select({ archived: tasks.archived, groupId: tasks.groupId })
     .from(tasks)
@@ -102,7 +115,7 @@ export async function abortFrozen(
 }
 
 /** 取事实 + 定论(不撤回)。给只要一个「现在该不该跑」答案的调用方。 */
-export async function turnFreezeReason(taskId: string, checkFacts = false): Promise<TurnFreeze | null> {
+export async function turnFreezeReason(taskId: string, checkFacts: FreezeGuard = false): Promise<TurnFreeze | null> {
   return takeFreeze(taskId, await freezeFacts(taskId, checkFacts));
 }
 

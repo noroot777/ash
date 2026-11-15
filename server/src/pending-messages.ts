@@ -63,6 +63,7 @@ import {
 } from "./pending-checkpoint-recovery.js";
 import { id, now } from "./util.js";
 import { dispatchHoldText, type DispatchHold } from "./task-hold.js";
+import type { FreezeGuard } from "./turn-freeze.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 
 // 判定与投递参数的无状态部分拆在 pending-verdict.ts(本文件顶过 700 行上限);
@@ -520,7 +521,7 @@ export function flushPendingWhenTurnIdle(taskId: string): void {
 export async function handDuePendingMessageToRun(
   taskId: string,
   // turnHeld:入口占下的那把锁的身份(不是 true),见 continueTask 同名选项。
-  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null } = {},
+  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: FreezeGuard; actingUserId?: string | null } = {},
 ): Promise<boolean> {
   if (dbClient.closed) return false;
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);

@@ -21,6 +21,7 @@ import { withHeldTurn } from "./turn-entry-guard.js";
 import { checkpointWaitOrigin } from "./task-wait-ownership.js";
 import { releaseTurn } from "./runs.js";
 import type { TurnIdentity } from "./runs.js";
+import type { FreezeGuard } from "./turn-freeze.js";
 
 // Decide between a fresh run and a resume when (re)starting a single task. A task
 // that was interrupted keeps a session row with a cliSessionId (server restart
@@ -33,14 +34,15 @@ import type { TurnIdentity } from "./runs.js";
 export async function resumeOrRunTask(
   taskId: string,
   // turnHeld:入口占下的那把锁的身份(不是 true),见 continueTask 同名选项。
-  opts: { reason?: ResumeReason; turnHeld?: TurnIdentity | null; actingUserId?: string | null } = {},
+  // agent:这一次是智能体调 run_task 要起的(task-run-routes.ts),起跑前单查一次「名下全部停下」。
+  opts: { reason?: ResumeReason; turnHeld?: TurnIdentity | null; actingUserId?: string | null; agent?: boolean } = {},
 ): Promise<void> {
   // 返回时还没交出去的锁由这一层还(检查点凭证失权、待发送交接被别人接管那几条出路),见 withHeldTurn。
   return withHeldTurn(taskId, opts.turnHeld, () => resumeOrRunClaimedTask(taskId, opts));
 }
 
 async function resumeOrRunClaimedTask(taskId: string,
-  opts: { reason?: ResumeReason; turnHeld?: TurnIdentity | null; actingUserId?: string | null }): Promise<void> {
+  opts: { reason?: ResumeReason; turnHeld?: TurnIdentity | null; actingUserId?: string | null; agent?: boolean }): Promise<void> {
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) throw new Error(checkpointBlocked);
   // `actingUserId` 一路原样往下传:它决定这一轮烧谁的 key(§八)。这里只是个中转,
@@ -52,9 +54,10 @@ async function resumeOrRunClaimedTask(taskId: string,
   // (队列推进/恢复分组/上游唤醒)从预检查到 spawn 隔着一串 await,用户可能在认领之前
   // 刚按下暂停 —— 那一刻既没有回合可打内存冻结标记、isPaused 预检查又已经读过旧值,
   // 唯一可靠的是 spawn 前按持久事实复查(turn-freeze.ts 的 checkFacts);手动运行/重试
-  // 是用户显式动作,照旧不加闸。
-  const freezeGuard =
-    opts.reason === "queue" || opts.reason === "group" || opts.reason === "wake" || opts.reason === "hold" ? true : undefined;
+  // 是用户显式动作,照旧不加闸;智能体调 run_task 起的,分组暂停照旧放行,只单查名下全部停下(turn-freeze.ts)。
+  const freezeGuard: FreezeGuard | undefined =
+    opts.reason === "queue" || opts.reason === "group" || opts.reason === "wake" || opts.reason === "hold" ? true
+      : opts.agent ? "dispatch-hold" : undefined;
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || task.mode !== "single") return runTask(taskId, { turnHeld: opts.turnHeld, freezeGuard, actingUserId: acting }); // duets/missing → unchanged path
   // 检查点续跑：resumePrompt 当 user 消息回灌同一会话，先清空避免再次 settle 时又认成

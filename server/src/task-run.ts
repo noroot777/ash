@@ -32,7 +32,7 @@ import { reopenAcceptedStage } from "./task-stage.js";
 import { reviewProtocolFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
 import { recordTurnStart } from "./turn-output.js";
-import { abortFrozen, freezeFacts, takeFreeze } from "./turn-freeze.js";
+import { abortFrozen, freezeFacts, takeFreeze, type FreezeGuard } from "./turn-freeze.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
 import { interruptCliGoal, preflightCliGoalCommand, prepareCliInvocation } from "./task-cli-state.js";
@@ -65,7 +65,7 @@ export async function runTask(
   taskId: string,
   // turnHeld:入口占下的那把锁的**身份**(不是 true)—— 接管与释放都按它核,理由见
   // continueTask 同名选项与 turn-lock.ts 的 `endOwnTurn`。
-  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null } = {},
+  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: FreezeGuard; actingUserId?: string | null } = {},
 ): Promise<void> {
   // 起跑前那几次读库(检查点恢复、任务头)抛错时,入口交来的锁也得还(见 withHeldTurn)。
   return withHeldTurn(taskId, opts.turnHeld, () => runHeldTask(taskId, opts));
@@ -73,7 +73,7 @@ export async function runTask(
 
 async function runHeldTask(
   taskId: string,
-  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null },
+  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: FreezeGuard; actingUserId?: string | null },
 ): Promise<void> {
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) {
@@ -223,7 +223,7 @@ async function runHeldTask(
     // 启动末段的顺序是**定死的**:查冻结事实(最后一个 await)→ 同步定论 → spawn。内存里的
     // 停止标记必须留到**同步段**消费。消费早了,之后到的停止既杀不到(还没 trackRun)也拦不住
     // (闸已经过了)—— 第 3 轮审查 P2 就是这么开出来的窗口。
-    const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
+    const frozen = await freezeFacts(taskId, opts.freezeGuard ?? false);
     // ↓ 这里往下到 spawn 全同步(撤回那条岔路除外,它不起进程)。
     const freeze = takeFreeze(taskId, frozen);
     if (freeze) await abortFrozen(taskId, freeze);

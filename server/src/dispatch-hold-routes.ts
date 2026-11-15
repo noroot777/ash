@@ -13,7 +13,7 @@ import { dispatchHoldOf, dispatchHoldText } from "./task-hold.js";
 type TaskRow = typeof tasks.$inferSelect;
 
 /** 这次调用是智能体发的（MCP 带着它那一回合的身份，或者 agent 令牌）。 */
-function fromAgent(c: Context): boolean {
+export function fromAgent(c: Context): boolean {
   return actorOf(c).kind === "agent" || c.req.header("x-ash-client") === "mcp";
 }
 

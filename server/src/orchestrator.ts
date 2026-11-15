@@ -419,7 +419,7 @@ export async function continueTask(
     checkingReviewStart = false;
     // 顺序定死:查冻结事实(最后一个 await)→ 同步定论 → spawn。为什么只能这么排、以及
     // freezeGuard 为什么只在那几条路上查库,见 task-run.ts 同一段与 turn-freeze.ts。
-    const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
+    const frozen = await freezeFacts(taskId, opts.freezeGuard ?? false);
     // ↓ 这里往下到 `trackRun` 全同步(撤回那条岔路除外,它不起进程):暂停请求要么在
     // takeFreeze 被消费、要么之后才到 —— 那时已有 handle 可杀。
     const freeze = takeFreeze(taskId, frozen);

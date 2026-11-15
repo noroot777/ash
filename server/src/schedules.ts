@@ -13,6 +13,7 @@ import { restoreFollowUpAnswers } from "./legacy-answer-intent.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { replayQueueAdvances } from "./queue-advance-retry.js";
 import { sweepReleasedQueueMembers } from "./queue-monitor-hold.js";
+import { sweepOwedStarts } from "./dispatch-hold.js";
 import { reportStuckWindDowns, reportSuspectTurns } from "./turn-lock-reclaim.js";
 
 // ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
@@ -155,6 +156,7 @@ export async function tick() {
   await replayQueueAdvances();
   // 等过哨兵、放开了却没人推的队列成员:事件那一路漏掉时由这里接住(queue-monitor-hold.ts)。
   await sweepReleasedQueueMembers().catch((error) => console.error("[ash] 欠着的队列推进巡检出错:", error));
+  await sweepOwedStarts().catch((error) => console.error("[ash] 欠着的起跑巡检出错:", error));
 }
 
 // Catch-up on startup: missed one-shots (at < now, never fired) fire once via the

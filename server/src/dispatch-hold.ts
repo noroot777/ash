@@ -6,8 +6,8 @@
 // 不了它；刷新、重启之后还是停着。
 //
 // **停的手法照抄分组暂停**（scheduler.ts pauseGroup，审查打磨过的那一套），不另起一套：
-//   ① 先把「停着」落库，再扫成员 —— 起跑前最后一道闸（turn-freeze.ts）读的是持久事实，扫描之后
-//      才起跑的那些在闸上被拦住；
+//   ① 先把「停着」落库，再清点、扫成员 —— 起跑前最后一道闸（turn-freeze.ts）读的是持久事实，清点
+//      之后才派出、才起跑的那些在闸上被拦住；
 //   ② 在跑的杀掉、**结算成 paused**（不是 canceled：canceled 会被串行队列透明跳过、起下一条，
 //      也接不回原会话）；排着的 queued 退回 backlog；回合已占位、进程还没起来的补一个起跑冻结
 //      标记，由最后一道闸消费；
@@ -16,7 +16,8 @@
 // **「接着跑」只兑现这次欠下的**：被上面那几步停掉的、以及停着期间轮到它却被闸拦下的（队列推进、
 // 分组运行、起跑前那道闸、智能体调 run_task），各在任务上记一笔「欠一次起跑」（tasks.hold_owed_by，
 // dispatch-hold-owed.ts）。接着跑时清掉停着的标记，把欠账逐条兑现：在队列里的推一下那条队列（按原
-// 顺序从队首续），不在队列里的照分组运行拉起成员的做法从原会话续。没欠账的一条不碰 —— 停之前就在
+// 顺序从队首续），不在队列里的照分组运行拉起成员的做法从原会话续。账在真起跑或落终态时才销，此刻
+// 起不来的由状态落位的监听与 tick 巡检接着兑现。没欠账的一条不碰 —— 停之前就在
 // 等答复、等哨兵、被用户单独停掉、已经取消或失败的，接着跑之后还是原样。分组暂停和它互不相干：
 // 兑现时分组还停着，起跑那道闸照样拦（分组恢复时由分组那边拉起）。
 //
@@ -24,12 +25,14 @@
 // （已暂停 / 排着），不替用户把它们跑起来 —— 删一条任务不等于要它名下的活接着干。
 import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { hasCliGoalHold } from "@ash/shared/cli-commands";
-import { db } from "./db/index.js";
+import { bus } from "./bus.js";
+import { db, dbClient } from "./db/index.js";
 import { queueItems, tasks } from "./db/schema.js";
-import { claimOwnTurn, freezeStartingTurn, releaseTurn, stopTask } from "./runs.js";
+import { claimOwnTurn, freezeStartingTurn, isRunning, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { notePauseOfTasks } from "./pause-generation.js";
-import { oweHeldStart } from "./dispatch-hold-owed.js";
+import { forgetHeldStart, oweHeldStart } from "./dispatch-hold-owed.js";
+import { taskHoldOf } from "./task-hold.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { republishWaitsOf } from "./pending-wait.js";
 import { heldByMonitors } from "./queue-monitor-hold.js";
@@ -60,19 +63,26 @@ export async function dispatchTree(holderId: string): Promise<string[]> {
 
 export type HoldResult = { holdAt: string | null; tree: string[] };
 
-/** 全部停下。已经停着再按一次 = 再扫一遍（新派出去、刚被别处拉起来的也停下），标记的时刻不变。 */
+/**
+ * 全部停下。已经停着再按一次 = 再扫一遍（新派出去、刚被别处拉起来的也停下），标记的时刻不变。
+ *
+ * **先落「停着」、再清点名下**：清点之后才派出、才起跑的那一位，起跑之前一定读得到这个事实（自动
+ * 起跑都过 turn-freeze.ts 的持久复查，智能体的 run_task 也是），清点之前就在跑的一定在名单里 ——
+ * 不会有落在两边之外的。反过来（先清点再落标记）的话，清点途中新派出、落标记前已经起跑的那一位
+ * 两头都够不着。
+ */
 export async function holdDispatched(holderId: string): Promise<HoldResult> {
+  await db.update(tasks).set({ dispatchHoldAt: now() })
+    .where(and(eq(tasks.id, holderId), isNull(tasks.dispatchHoldAt)));
   const tree = await dispatchTree(holderId);
-  const holdAt = now();
-  await db.transaction(async (transaction) => {
-    await transaction.update(tasks).set({ dispatchHoldAt: holdAt })
-      .where(and(eq(tasks.id, holderId), isNull(tasks.dispatchHoldAt)));
-    if (!tree.length) return;
-    // 推进请求落了库、还没起跑的那一位：请求作废（同 pauseGroup），但它本来就该起跑 —— 记欠账。
-    await transaction.update(tasks).set({ holdOwedBy: holderId })
-      .where(and(inArray(tasks.id, tree), isNotNull(tasks.queueAdvanceRequest)));
-    await transaction.update(tasks).set({ queueAdvanceRequest: null }).where(inArray(tasks.id, tree));
-  }, { behavior: "immediate" });
+  if (tree.length) {
+    await db.transaction(async (transaction) => {
+      // 推进请求落了库、还没起跑的那一位：请求作废（同 pauseGroup），但它本来就该起跑 —— 记欠账。
+      await transaction.update(tasks).set({ holdOwedBy: holderId })
+        .where(and(inArray(tasks.id, tree), isNotNull(tasks.queueAdvanceRequest)));
+      await transaction.update(tasks).set({ queueAdvanceRequest: null }).where(inArray(tasks.id, tree));
+    }, { behavior: "immediate" });
+  }
   notePauseOfTasks(tree);
   const holder = (await db.select({ title: tasks.title, holdAt: tasks.dispatchHoldAt }).from(tasks)
     .where(eq(tasks.id, holderId))).at(0);
@@ -80,6 +90,10 @@ export async function holdDispatched(holderId: string): Promise<HoldResult> {
   for (const taskId of tree) {
     const row = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!row) continue;
+    const live = isRunning(taskId) || isTurnClaimed(taskId) || row.status === "running" || row.status === "queued";
+    if (!live) continue;
+    // 账先记、再停：停下这一刻起它就欠着，记不进去就别停（抛给路由，用户再按一次会再扫一遍）。
+    await oweHeldStart(taskId, holderId);
     // 次序同 pauseGroup:status 可能在队列推进/续聊交错时短暂失真,有活 handle 就先杀。
     let stopped = stopTask(taskId, "paused");
     if (!stopped && row.status === "queued") {
@@ -87,26 +101,25 @@ export async function holdDispatched(holderId: string): Promise<HoldResult> {
       stopped = true;
     }
     if (!stopped) stopped = freezeStartingTurn(taskId, "paused", hold);
-    if (stopped) await oweHeldStart(taskId, holderId);
+    // 到头来什么都没停到（刚好跑完、占着的不是回合）：它不欠这一次。
+    if (!stopped) await forgetHeldStart(taskId, holderId);
   }
   await settleAnnouncements(holderId, tree);
   return { holdAt: holder?.holdAt ?? null, tree };
 }
 
-/** 接着跑。没停着就什么都不做（两个窗口各按一次，第二次是空操作）。 */
+/**
+ * 接着跑。只清停着的标记，**不销账**：欠账逐条去兑现，此刻起不来的（还在退出、回合锁被占、起跑抛错）
+ * 账还在，由状态落位的监听与调度 tick 的巡检接着兑现（dispatch-hold-owed.ts 文件头）。
+ * 没停着就只是再兑现一遍（两个窗口各按一次，第二次不多起任何东西：起跑那道锁只认一个）。
+ */
 export async function releaseDispatched(holderId: string): Promise<HoldResult> {
-  const owed = await db.transaction(async (transaction) => {
-    const cleared = await transaction.update(tasks).set({ dispatchHoldAt: null })
-      .where(and(eq(tasks.id, holderId), isNotNull(tasks.dispatchHoldAt))).returning({ id: tasks.id });
-    if (!cleared.length) return null;
-    const rows = await transaction.select().from(tasks).where(eq(tasks.holdOwedBy, holderId));
-    await transaction.update(tasks).set({ holdOwedBy: null }).where(eq(tasks.holdOwedBy, holderId));
-    return rows;
-  }, { behavior: "immediate" });
+  await db.update(tasks).set({ dispatchHoldAt: null })
+    .where(and(eq(tasks.id, holderId), isNotNull(tasks.dispatchHoldAt)));
   const tree = await dispatchTree(holderId);
-  if (owed === null) return { holdAt: null, tree };
   await settleAnnouncements(holderId, tree);
-  await honorOwedStarts(owed);
+  const owed = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.holdOwedBy, holderId));
+  for (const { id } of owed) await honorOwedStart(id);
   // 停着期间排下的执行型消息（停下之前在跑时用户排的话、答复）照常送：投递那边自己判轮没轮到。
   void import("./pending-messages.js").then(({ deliverPendingMessages }) =>
     Promise.all(tree.map((taskId) => deliverPendingMessages(taskId).catch(() => undefined))));
@@ -120,19 +133,43 @@ async function settleAnnouncements(holderId: string, tree: readonly string[]): P
 }
 
 /**
- * 欠账兑现。还能接着跑的：没归档、普通任务、停在 paused（不是在等答复、等 CLI 目标、等哨兵）或
- * backlog。在队列里的推那条队列（队首是谁由队列自己挑，原顺序不乱）；不在的从原会话续。
+ * 兑现一笔欠账：按住它的那条已经不停着、它此刻接得上，就去起它。起不来就留着账，下一次再来 ——
+ * 销账只在它真起跑或落终态那一刻（status.ts 经 holdOwedPatch）。
+ *
+ * 接得上 = 没归档、普通任务、停在 paused（不是在等答复、等 CLI 目标、等哨兵）或 backlog，也没被
+ * 别处按住（分组暂停 / 另一条派活的按着：那边放开时由那边起它）。在队列里的，只在轮到它时推那条
+ * 队列（原顺序不乱）；不在的照分组运行拉起成员的做法从原会话续。
  */
-async function honorOwedStarts(owed: readonly TaskRow[]): Promise<void> {
-  const { advanceQueueInBackground } = await import("./scheduler.js");
-  const queues = new Set<string>();
-  for (const row of owed) {
-    if (!(await canResume(row))) continue;
-    const item = (await db.select({ queueId: queueItems.queueId }).from(queueItems).where(eq(queueItems.taskId, row.id))).at(0);
-    if (item) queues.add(item.queueId);
-    else void startOwed(row.id);
+export async function honorOwedStart(taskId: string): Promise<void> {
+  const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!row?.holdOwedBy) return;
+  const holder = (await db.select({ holdAt: tasks.dispatchHoldAt }).from(tasks).where(eq(tasks.id, row.holdOwedBy))).at(0);
+  if (holder?.holdAt || !(await canResume(row)) || await taskHoldOf(row)) return;
+  const item = (await db.select({ queueId: queueItems.queueId }).from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
+  if (item) {
+    const { advanceQueue, pickNextLaunchable } = await import("./scheduler.js");
+    if ((await pickNextLaunchable(item.queueId))?.id === taskId) await advanceQueue(item.queueId);
+    return;
   }
-  for (const queueId of queues) advanceQueueInBackground(queueId);
+  if (starting.has(taskId)) return;
+  starting.add(taskId);
+  void startOwed(taskId).finally(() => starting.delete(taskId));
+}
+
+/** 这一刻正在由本进程拉起的那几位：监听、巡检、接着跑同时来时只起一次。 */
+const starting = new Set<string>();
+
+/** 调度 tick 的兜底：按住它的已经放开、账还挂着的，再兑现一次（重启之后同样由它接上）。 */
+export async function sweepOwedStarts(): Promise<void> {
+  if (dbClient.closed) return;
+  const owed = await db.select({ id: tasks.id }).from(tasks).where(isNotNull(tasks.holdOwedBy));
+  for (const { id } of owed) {
+    try {
+      await honorOwedStart(id);
+    } catch (error) {
+      console.error(`[ash] 欠着的起跑兑现失败 task=${id}(下一次 tick 再来):`, error);
+    }
+  }
 }
 
 async function canResume(row: TaskRow): Promise<boolean> {
@@ -165,6 +202,13 @@ async function startOwed(taskId: string): Promise<void> {
       await restoreQueuedTask(reservation);
     }
   } catch (error) {
-    console.error(`[ash] 接着跑没能拉起 task=${taskId}:`, error);
+    console.error(`[ash] 接着跑没能拉起 task=${taskId}(账还在，tick 会再试):`, error);
   }
 }
+
+// 被停下的那一位真正落到 paused / backlog 的那一刻（停止请求返回时它多半还在退出），按住它的那条
+// 可能已经放开了：当场兑现，不等下一次 tick。**加载本模块就装上**（路由与删除都静态依赖它）。
+bus.subscribe((event) => {
+  if (event.type !== "task.status" || (event.status !== "paused" && event.status !== "backlog")) return;
+  void honorOwedStart(event.taskId).catch((error) => console.error(`[ash] 欠着的起跑兑现失败 task=${event.taskId}:`, error));
+});

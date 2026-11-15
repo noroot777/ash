@@ -7,7 +7,10 @@
 //   · 排着的消息、哨兵了结后的补推、重跑上一回合都不会把被按住的任务叫起来；
 //   · 接着跑后按原顺序续、从原会话续；停之前就停着的没被叫起来；
 //   · 同组里不是这条名下的任务一条没受影响；名下再派出的也停了；
-//   · 分组暂停和它互不相干：两样都没按住才跑；派活的那条归档了照样能接着跑，被删了名下不再被按住。
+//   · 分组暂停和它互不相干：两样都没按住才跑；派活的那条归档了照样能接着跑，被删了名下不再被按住；
+//   · 欠账只在真起跑时销：停完马上接着跑（进程还在退出）不丢那一次，被分组拦着的账留着；
+//   · 智能体的起跑过了入口检查才碰上停，起跑前最后一道闸照样拦下、记成欠账；
+//   · 先落「停着」再清点名下（清点途中新起跑的那一位逃不出去）。
 //
 // 走真实的调度链路（队列推进、分组运行、路由、结算钩子），只换掉「起一个 CLI」那一步：假执行器
 // 记下每一回合拿到的输入与续的是哪条原生会话，回合一直挂着，直到测试放它走或者它被停掉。
@@ -15,6 +18,7 @@
 // 跑：npm -w server run test:dispatch-hold
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -45,6 +49,8 @@ const { deliverPendingMessages, enqueueMessage } = await import("../src/pending-
 const { pendingMessagePresence } = await import("../src/pending-wait.js");
 const { readRetryTurnFacts, retryTurnRejection } = await import("../src/task-retry-turn.js");
 const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
+const { resumeOrRunTask } = await import("../src/task-resume.js");
+const { holdDispatched } = await import("../src/dispatch-hold.js");
 await ensureSchema();
 
 const api = new Hono();
@@ -56,6 +62,8 @@ mountGroupRoutes(api);
 type Turn = { prompt: string; resume: string | undefined };
 const turns = new Map<string, Turn[]>();
 const gates = new Map<string, () => void>();
+/** 被停掉之后还要这么久才退干净（毫秒）：拿来复现「停止请求返回时进程还在退出」。 */
+const killDelay = new Map<string, number>();
 const turnsOf = (taskId: string) => turns.get(taskId) ?? [];
 
 const run = (opts: { prompt: string; sessionId?: string; env?: Record<string, string | undefined> }) => {
@@ -67,7 +75,11 @@ const run = (opts: { prompt: string; sessionId?: string; env?: Record<string, st
   gates.set(taskId, release);
   return {
     sessionId: native, commandLine: "dispatch hold fixture; no CLI",
-    kill() { release(); },
+    kill() {
+      const delay = killDelay.get(taskId);
+      if (delay) setTimeout(release, delay);
+      else release();
+    },
     events: (async function* (): AsyncGenerator<AgentEvent> {
       yield { kind: "session", cliSessionId: native };
       await ended;
@@ -131,6 +143,12 @@ await db.insert(tasks).values([
   task("P", { groupId: "G2", dispatchedBy: "H" }),
   task("H2", { status: "done", title: "会被删掉的派活人" }),
   task("K", { dispatchedBy: "H2" }),
+  task("H3", { status: "done", title: "停完马上接着跑" }),
+  task("S1", { dispatchedBy: "H3" }),
+  task("H4", { status: "done", title: "智能体晚到的起跑" }),
+  task("S2", { dispatchedBy: "H4" }),
+  task("H5", { status: "done", title: "先落标记再清点" }),
+  task("S3", { dispatchedBy: "H5" }),
 ]);
 await db.insert(schema.queueItems).values([
   { taskId: "A", queueId: "Q", position: 0, createdAt: at },
@@ -250,7 +268,8 @@ try {
   assert.equal((await row("E")).question, "要哪一种？");
   assert.equal(await statusOf("F"), "canceled", "停之前就取消了的 F 原样");
   assert.equal(turnsOf("P").length, 1, "P 所在分组还停着：名下接着跑了它也不跑");
-  for (const id of ["A", "C", "D", "N", "N2", "P"]) assert.equal((await row(id)).holdOwedBy, null, `${id} 的欠账清掉`);
+  for (const id of ["A", "C", "D", "N", "N2"]) assert.equal((await row(id)).holdOwedBy, null, `${id} 真起跑了，欠账销掉`);
+  assert.equal((await row("P")).holdOwedBy, "H", "P 被分组拦着没起跑：账还挂着");
   finish("A");
   await until("A 跑完后队列起 B", () => turnsOf("B").length === 1);
   assert.equal(await statusOf("A"), "done");
@@ -259,6 +278,7 @@ try {
   assert.equal((await post("/groups/G2/run")).status, 202);
   await until("P 随分组恢复续上", () => turnsOf("P").length === 2);
   assert.equal(turnsOf("P")[1]!.resume, "native-P");
+  await until("P 真起跑后欠账销掉", async () => (await row("P")).holdOwedBy === null);
 
   // ── 派活的那条被删掉：名下不再被按住，原地留着、不替用户跑起来 ───────────────────────
   assert.equal((await post("/tasks/H2/dispatched/hold")).status, 200);
@@ -270,6 +290,55 @@ try {
   await sleep(300);
   assert.equal(await statusOf("K"), "paused", "原地留着");
   assert.equal(turnsOf("K").length, 1, "不替用户跑起来");
+
+  // ── 停完马上接着跑：停止请求返回时进程还在退出，账不能在这一刻丢 ───────────────────────
+  assert.equal((await post("/tasks/S1/run")).status, 202);
+  await running("S1");
+  killDelay.set("S1", 400);
+  assert.equal((await post("/tasks/H3/dispatched/hold")).status, 200);
+  assert.equal((await post("/tasks/H3/dispatched/release")).status, 200);
+  assert.equal(await statusOf("S1"), "running", "放开那一刻 S1 还没退干净");
+  assert.equal((await row("S1")).holdOwedBy, "H3", "此刻接不上：账留着，不在放开时一把清掉");
+  await until("S1 退干净后接着跑", () => turnsOf("S1").length === 2);
+  assert.equal(turnsOf("S1")[1]!.resume, "native-S1", "从原会话续上");
+  await until("S1 真起跑后欠账销掉", async () => (await row("S1")).holdOwedBy === null);
+  killDelay.delete("S1");
+
+  // ── 智能体的起跑请求过了入口检查、之后才碰上停：起跑前最后一道闸照样拦 ─────────────────
+  assert.equal((await post("/tasks/H4/dispatched/hold")).status, 200);
+  const agentTurn = runs.claimOwnTurn("S2");
+  assert.ok(agentTurn);
+  try {
+    await resumeOrRunTask("S2", { reason: "run", turnHeld: agentTurn, agent: true });
+  } finally {
+    runs.releaseTurn("S2", agentTurn);
+  }
+  await sleep(200);
+  assert.equal(turnsOf("S2").length, 0, "晚到的智能体起跑没起来");
+  assert.equal(await statusOf("S2"), "paused");
+  assert.equal((await row("S2")).holdOwedBy, "H4", "被拦下的这一次记成欠账");
+  assert.equal((await post("/tasks/H4/dispatched/release")).status, 200);
+  await until("S2 接着跑时兑现", () => turnsOf("S2").length === 1);
+
+  // ── 先落标记再清点：清点名下的那一刻，派活那条已经是停着的 ─────────────────────────────
+  const peek = new DatabaseSync(process.env.ASH_DB!, { readOnly: true });
+  const select = db.select;
+  const flagAtFirstRead: unknown[] = [];
+  (db as { select: unknown }).select = function (this: unknown, ...args: unknown[]) {
+    if (!flagAtFirstRead.length) {
+      flagAtFirstRead.push((peek.prepare("SELECT dispatch_hold_at AS at FROM tasks WHERE id = 'H5'").get() as { at: unknown }).at);
+    }
+    return (select as (...a: unknown[]) => unknown).apply(this, args);
+  };
+  try {
+    // 直接调：路由在调它之前会先读一次派活的那条（找不找得到），那一次不算清点。
+    assert.deepEqual((await holdDispatched("H5")).tree, ["S3"]);
+  } finally {
+    (db as { select: unknown }).select = select;
+    peek.close();
+  }
+  assert.equal(flagAtFirstRead.length, 1);
+  assert.ok(flagAtFirstRead[0], "第一次读库（清点名下）之前，停着的标记已经落库");
 
   console.log("dispatch hold: ok");
 } catch (error) {

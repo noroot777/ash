@@ -47,7 +47,7 @@ import { handMonitorResultsOnPause, pauseHandedNote } from "./monitor-turn-hando
 import { receiptHands } from "./monitor-turn-ack.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { failureVersionOf } from "./task-result-version.js";
-import { agentRunHold } from "./dispatch-hold-routes.js";
+import { agentRunHold, fromAgent } from "./dispatch-hold-routes.js";
 
 // 手动启动入口的队列认领失败话术(/run、/fire、/retry、重跑上一回合共用,
 // 本体在 queue-seat.ts 的 queueClaimError:transient 故障必须说真话)。
@@ -146,7 +146,7 @@ api.post("/tasks/:id/run", async (c) => {
   const started = await seatThenStart(taskId, turn, () =>
     r.mode === "duet"
       ? runDuet(taskId, { turnHeld: turn, actingUserId: acting })
-      : resumeOrRunTask(taskId, { reason: "run", turnHeld: turn, actingUserId: acting }));
+      : resumeOrRunTask(taskId, { reason: "run", turnHeld: turn, actingUserId: acting, agent: fromAgent(c) }));
   if (!started.ok) {
     return c.json(await noted(taskId, "运行", { error: queueClaimError(started), blockedBy: started.blockers }), 409);
   }
